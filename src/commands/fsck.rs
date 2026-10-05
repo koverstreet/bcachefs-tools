@@ -1,5 +1,4 @@
 use std::ffi::CString;
-use std::fmt::Write;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::path::Path;
@@ -120,15 +119,9 @@ fn should_use_kernel_fsck(devs: &[String]) -> bool {
               (sb_version <= kernel_version && kernel_version < current);
 
     if ret {
-        let mut buf = Printbuf::new();
-        let _ = write!(buf, "fsck binary is version ");
-        buf.version(current as u32);
-        let _ = write!(buf, " but filesystem is ");
-        buf.version(sb_version as u32);
-        let _ = write!(buf, " and kernel is ");
-        buf.version(kernel_version as u32);
-        let _ = write!(buf, ", using kernel fsck");
-        println!("{}", buf);
+        let v = |v| c::bcachefs_metadata_version(v as u32);
+        println!("fsck binary is version {} but filesystem is {} and kernel is {}, using kernel fsck",
+                 v(current), v(sb_version), v(kernel_version));
     }
 
     ret

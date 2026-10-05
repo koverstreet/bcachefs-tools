@@ -20,7 +20,6 @@
 //! stripes and reported via the stripe entries.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt::Write as FmtWrite;
 
 use anyhow::{anyhow, Result};
 use clap::Parser;
@@ -231,15 +230,15 @@ fn domain_rows(e: &Exposure, devs: &[DevInfo]) -> Vec<Row> {
 fn header_to_text(out: &mut Printbuf, e: &Exposure, devs: &[DevInfo]) {
     let offline = devs.iter().filter(|d| !d.online).count();
 
-    write!(out, "Devices: {}", devs.len()).unwrap();
+    write!(out, "Devices: {}", devs.len());
     if offline != 0 {
-        write!(out, " ({} offline)", offline).unwrap();
+        write!(out, " ({} offline)", offline);
     }
-    writeln!(out).unwrap();
+    writeln!(out);
 
-    write!(out, "Data: ").unwrap();
+    write!(out, "Data: ");
     out.units_sectors(e.total);
-    writeln!(out).unwrap();
+    writeln!(out);
 }
 
 /// The same report as machine-readable JSON: what the tests and scripts
@@ -274,9 +273,9 @@ fn report_to_text(out: &mut Printbuf, e: &Exposure, devs: &[DevInfo]) {
     let rows = domain_rows(e, devs);
     let unlabeled = devs.iter().all(|d| d.failure_domain.is_none());
 
-    writeln!(out).unwrap();
+    writeln!(out);
     if unlabeled {
-        writeln!(out, "No failure domains configured: each device is its own failure domain").unwrap();
+        writeln!(out, "No failure domains configured: each device is its own failure domain");
     }
 
     /* The verdict: does any single domain failure lose data? */
@@ -284,31 +283,31 @@ fn report_to_text(out: &mut Printbuf, e: &Exposure, devs: &[DevInfo]) {
         let what = if unlabeled { "device" } else { "failure domain" };
 
         if worst.score.lost != 0 {
-            write!(out, "Failure domain separation violated: ").unwrap();
+            write!(out, "Failure domain separation violated: ");
             out.units_sectors(worst.score.lost);
-            writeln!(out, " lost if {} {} fails", what, worst.name).unwrap();
+            writeln!(out, " lost if {} {} fails", what, worst.name);
         } else {
-            writeln!(out, "All data survives losing any one {}", what).unwrap();
+            writeln!(out, "All data survives losing any one {}", what);
         }
     }
 
-    writeln!(out, "\nWhat losing each failure domain would cost:").unwrap();
+    writeln!(out, "\nWhat losing each failure domain would cost:");
     out.aligned(|sub| {
-        writeln!(sub, "domain\tdevices\rlost\rdegraded\r").unwrap();
+        writeln!(sub, "domain\tdevices\rlost\rdegraded\r");
 
         for r in rows {
-            write!(sub, "{}\t", r.name).unwrap();
+            write!(sub, "{}\t", r.name);
             /* online/total: */
             match (r.nr_devs, r.nr_offline) {
-                (Some(n), o) => write!(sub, "{}/{}", n - o, n).unwrap(),
+                (Some(n), o) => write!(sub, "{}/{}", n - o, n),
                 (None, 0)    => (),
-                (None, _)    => write!(sub, "0/1").unwrap(),
+                (None, _)    => write!(sub, "0/1"),
             }
-            write!(sub, "\r").unwrap();
+            write!(sub, "\r");
             sub.units_sectors(r.score.lost);
-            write!(sub, "\r").unwrap();
+            write!(sub, "\r");
             sub.units_sectors(r.score.degraded);
-            write!(sub, "\r\n").unwrap();
+            write!(sub, "\r\n");
         }
     });
 }
@@ -331,11 +330,11 @@ fn fs_failure_domains_to_text(out: &mut Printbuf, cli: &Cli, name_mode: DeviceNa
     if cli.json {
         let mut j = report_to_json(&e, &devs);
         j["filesystem"] = uuid.hyphenated().to_string().into();
-        writeln!(out, "{:#}", j).unwrap();
+        writeln!(out, "{:#}", j);
         return Ok(());
     }
 
-    writeln!(out, "Filesystem: {}", uuid.hyphenated()).unwrap();
+    writeln!(out, "Filesystem: {}", uuid.hyphenated());
     header_to_text(out, &e, &devs);
     report_to_text(out, &e, &devs);
     Ok(())
@@ -482,9 +481,9 @@ fn fs_failure_domains(cli: Cli) -> Result<()> {
 
         let e = Exposure::from_entries(entries);
         if cli.json {
-            writeln!(out, "{:#}", report_to_json(&e, &devs)).unwrap();
+            writeln!(out, "{:#}", report_to_json(&e, &devs));
         } else {
-            writeln!(out, "Demo scenario: {}", name).unwrap();
+            writeln!(out, "Demo scenario: {}", name);
             header_to_text(&mut out, &e, &devs);
             report_to_text(&mut out, &e, &devs);
         }

@@ -14,7 +14,7 @@ use crate::fs::Fs;
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
 use core::ffi::CStr;
-use core::fmt::{self, Write};
+use core::fmt;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -37,9 +37,9 @@ pub fn log(fs: &Fs, level: LogLevel, args: fmt::Arguments<'_>) {
     #[cfg(kernel)]
     {
         let name = unsafe { core::ffi::CStr::from_ptr(c::bch2_fs_name(fs.raw)) };
-        let _ = write!(buf, "bcachefs ({}): ", name.to_str().unwrap_or("?"));
+        write!(buf, "bcachefs ({}): ", name.to_str().unwrap_or("?"));
     }
-    let _ = buf.write_fmt(args);
+    buf.write_fmt(args);
     buf.newline();
 
     // KERN_SOH, level, then the message as data: a '%' in it is text.

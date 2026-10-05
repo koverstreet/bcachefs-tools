@@ -27,7 +27,7 @@ use crate::c::{bch_fsck_flags, bch_sb_error_id};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::util::Printbuf;
-use core::fmt::{self, Write};
+use core::fmt;
 
 /// The fsck error ids by their BCH_SB_ERRS() names: id::inode_wrong_nlink.
 pub mod id {
@@ -70,7 +70,7 @@ fn __fsck_err(
     msg:   fmt::Arguments<'_>,
 ) -> Result<bool, BchError> {
     let mut buf = Printbuf::new();
-    let _ = buf.write_fmt(msg);
+    buf.write_fmt(msg);
 
     let (fs, trans) = ctx.fsck_err_ptrs();
     let ret = unsafe {
@@ -159,7 +159,7 @@ pub fn fsck_err_flags(
 /// logged unless it's a repeat or being ratelimited.
 pub fn fsck_err_report(fs: &Fs, err: bch_sb_error_id, msg: fmt::Arguments<'_>) {
     let mut buf = Printbuf::new();
-    let _ = buf.write_fmt(msg);
+    buf.write_fmt(msg);
 
     if unsafe { c::__bch2_count_fsck_err(fs.raw, err, buf.as_raw()) } {
         crate::bch_err!(fs, "{}", buf);

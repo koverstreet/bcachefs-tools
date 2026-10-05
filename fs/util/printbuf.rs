@@ -47,6 +47,16 @@ impl Printbuf {
         }
     }
 
+    /// What's been written, as bytes - which needn't be UTF-8, after
+    /// write_bytes().
+    pub fn as_bytes(&self) -> &[u8] {
+        if self.0.buf.is_null() {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(self.0.buf as *const u8, self.0.pos as usize) }
+        }
+    }
+
     /// Add a tabstop at `spaces` columns from the previous tabstop.
     pub fn tabstop_push(&mut self, spaces: u32) {
         unsafe { c::bch2_printbuf_tabstop_push(&mut self.0, spaces) };
@@ -140,10 +150,6 @@ impl Printbuf {
     }
 
     /// Print a bcachefs metadata version number.
-    pub fn version(&mut self, v: u32) {
-        unsafe { c::bch2_version_to_text(&mut self.0, c::bcachefs_metadata_version(v)) };
-    }
-
     /// Print superblock contents.
     ///
     /// # Safety
@@ -164,6 +170,23 @@ impl Printbuf {
     /// Access the underlying `c::printbuf` for calling C prt_* functions.
     pub fn as_raw(&mut self) -> &mut c::printbuf {
         &mut self.0
+    }
+
+    /// What write!() and writeln!() call: as fmt::Write's, but infallible -
+    /// writing to a printbuf can't fail (allocation failure is recorded in
+    /// the printbuf, as C's prt_printf() does), so there's no Result to
+    /// discard. Inherent methods take precedence over trait methods, so this
+    /// is the one write!() finds.
+    pub fn write_fmt(&mut self, args: fmt::Arguments<'_>) {
+        let _ = fmt::Write::write_fmt(self, args);
+    }
+
+    /// Write @bytes as they are - a name, which needn't be UTF-8: as prt_bytes().
+    pub fn write_bytes(&mut self, bytes: &[u8]) {
+        unsafe {
+            c::bch2_prt_bytes_indented(&mut self.0, bytes.as_ptr() as *const core::ffi::c_char,
+                                       bytes.len() as core::ffi::c_uint);
+        }
     }
 }
 

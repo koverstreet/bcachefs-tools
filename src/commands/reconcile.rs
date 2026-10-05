@@ -1,4 +1,3 @@
-use std::fmt::Write;
 use std::io::{IsTerminal, Write as IoWrite};
 use std::time::Duration;
 use std::thread;
@@ -121,21 +120,21 @@ fn reconcile_status_to_text(
         }
     }
 
-    writeln!(out, "Scan pending:\t{}", scan_pending).unwrap();
-    write!(out, "\tdata\rmetadata\r\n").unwrap();
+    writeln!(out, "Scan pending:\t{}", scan_pending);
+    write!(out, "\tdata\rmetadata\r\n");
 
     let mut have_pending = scan_pending != 0;
 
     for t in display_types {
         let idx = t.as_c().0 as usize;
         if idx < nr {
-            write!(out, "  ").unwrap();
+            write!(out, "  ");
             bcachefs_kernel::opts::prt_reconcile_type(out, t.as_c());
-            write!(out, ":\t").unwrap();
+            write!(out, ":\t");
             out.units_sectors(v[idx][0]);
-            write!(out, "\r").unwrap();
+            write!(out, "\r");
             out.units_sectors(v[idx][1]);
-            write!(out, "\r\n").unwrap();
+            write!(out, "\r\n");
             if wait_types.contains(t) {
                 have_pending |= v[idx][0] != 0 || v[idx][1] != 0;
             }
@@ -166,7 +165,7 @@ fn cmd_reconcile_status(cli: StatusCli) -> Result<()> {
 
     // Append kernel reconcile_status from sysfs
     if let Ok(status) = std::fs::read_to_string(sysfs_path.join("reconcile_status")) {
-        write!(out, "{}", status).unwrap();
+        write!(out, "{}", status);
         out.newline();
     }
 

@@ -1,4 +1,3 @@
-use std::fmt::Write;
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::c;
@@ -321,7 +320,7 @@ fn journal_entry_header_to_text(
         u32::from_le(p.j.version),
         u64::from_le(p.j.last_seq),
         if jset_no_flush(&p.j) { 0 } else { 1 },
-    ).unwrap();
+    );
 
     unsafe {
         c::bch2_journal_ptrs_to_text(out.as_raw(), c_fs, p as *const _ as *mut _);
@@ -348,17 +347,17 @@ fn journal_entry_keys_noval_to_text(out: &mut Printbuf, entry: &c::jset_entry) {
         if entry_type_is_known(t) {
             unsafe { c::bch2_prt_jset_entry_type(out.as_raw(), t) };
         } else {
-            write!(out, "(unknown jset entry {})", entry.type_).unwrap();
+            write!(out, "(unknown jset entry {})", entry.type_);
         }
-        write!(out, ": ").unwrap();
+        write!(out, ": ");
         if let Some(btree) = entry_btree_id(entry) {
             unsafe {
                 c::bch2_btree_id_level_to_text(out.as_raw(), btree, entry.level as u32);
             }
         } else {
-            write!(out, "(unknown btree {})", entry.btree_id).unwrap();
+            write!(out, "(unknown btree {})", entry.btree_id);
         }
-        write!(out, " ").unwrap();
+        write!(out, " ");
         unsafe {
             c::bch2_bkey_to_text(out.as_raw(), &k.k);
         }
@@ -384,7 +383,7 @@ fn print_one_entry(
     let highlight = f.key.ranges.iter()
         .any(|(_, range)| entry_matches_range(entry, range));
     if highlight {
-        write!(out, "{RED}").unwrap();
+        write!(out, "{RED}");
     }
 
     let mut ind = out.indent(journal_entry_indent(entry));
@@ -394,7 +393,7 @@ fn print_one_entry(
         let entry_data = entry._data.as_ptr() as usize;
         let jset_data = p.j._data.as_ptr() as usize;
         let offset = (entry_data - jset_data) / 8;
-        write!(ind, "{offset:4} ").unwrap();
+        write!(ind, "{offset:4} ");
     }
 
     if !f.bkey_val && entry_is_print_key(entry) {
@@ -409,7 +408,7 @@ fn print_one_entry(
     drop(ind);
 
     if highlight {
-        write!(out, "{NORMAL}").unwrap();
+        write!(out, "{NORMAL}");
     }
 }
 
@@ -426,7 +425,7 @@ fn journal_replay_print(c_fs: *mut c::bch_fs, f: &JournalFilter, p: &c::journal_
             "{}journal entry     {:<8} ",
             if blacklisted { "blacklisted " } else { "" },
             seq,
-        ).unwrap();
+        );
 
         for entry in jset_entries(&p.j) {
             if entry_type(entry) == journal_entry_type::datetime {

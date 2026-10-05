@@ -9,7 +9,6 @@
 // keeps everything in Rust so the Vec is dropped with the correct
 // allocator.
 
-use std::fmt::Write;
 use std::path::PathBuf;
 
 use bch_bindgen::c;
@@ -59,15 +58,15 @@ unsafe fn print_one_member(
         .map(|(path, _)| path.to_string_lossy().into_owned())
         .unwrap_or_else(|| "(not found)".to_string());
 
-    write!(out, "Device {}:\t{}\t", idx, name_str).unwrap();
+    write!(out, "Device {}:\t{}\t", idx, name_str);
 
     if let Some((_, sb_handle)) = dev {
         use crate::wrappers::bdev;
         let fd = sb_handle.bdev().bd_fd;
         let model = bdev::fd_to_dev_model(fd);
-        write!(out, "{}", model).unwrap();
+        write!(out, "{}", model);
         if let Some(serial) = bdev::fd_to_dev_serial(fd) {
-            write!(out, "\tS/N: {}", serial).unwrap();
+            write!(out, "\tS/N: {}", serial);
         }
     }
     out.newline();

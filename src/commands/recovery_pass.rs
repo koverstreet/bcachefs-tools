@@ -1,4 +1,3 @@
-use std::fmt::Write;
 
 use anyhow::Result;
 use bcachefs_kernel::c;
@@ -72,7 +71,7 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
         drop(_sb_lock);
 
         let mut buf = Printbuf::new();
-        let _ = write!(buf, "Scheduled recovery passes: ");
+        write!(buf, "Scheduled recovery passes: ");
 
         if scheduled != 0 {
             buf.prt_bitflags(
@@ -80,7 +79,7 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
                 c::bch2_recovery_passes_from_stable(scheduled),
             );
         } else {
-            let _ = write!(buf, "(none)");
+            write!(buf, "(none)");
         }
 
         println!("{}", buf);
