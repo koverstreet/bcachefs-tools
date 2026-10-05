@@ -71,8 +71,19 @@ int bch2_extent_fallocate(struct btree_trans *trans,
 	/* data_replicas, less however many the reservation couldn't give us: */
 	unsigned nr_replicas = opts.data_replicas - (new_replicas - res.r.nr_replicas);
 
-	if (new_replicas)
-		sectors = div_u64(res.r.sectors, res.r.nr_replicas);
+	if (new_replicas) {
+		/*
+		 * A partial reservation is whatever was left: on a full
+		 * filesystem that can be less than a block per replica, and a
+		 * key that size would be empty or misaligned:
+		 */
+		sectors = round_down(div_u64(res.r.sectors, res.r.nr_replicas),
+				     block_sectors(c));
+		if (unlikely(!sectors)) {
+			ret = bch_err_throw(c, ENOSPC_disk_reservation);
+			goto err_noprint;
+		}
+	}
 
 	bch2_bkey_buf_reassemble(&old, k);
 
