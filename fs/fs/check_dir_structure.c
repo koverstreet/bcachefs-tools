@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "bcachefs.h"
 
+#include "btree/bkey_buf.h"
+
 #include "fs/check.h"
 #include "fs/namei.h"
 
@@ -92,6 +94,14 @@ static int check_subvol_path(struct btree_trans *trans, struct btree_iter *iter,
 
 	CLASS(btree_iter, parent_iter)(trans, BTREE_ID_subvolumes, POS_MIN, 0);
 
+	/*
+	 * Each step works on a copy of its subvolume key: from the second step
+	 * on, the key came from parent_iter, which holds its unpacked header -
+	 * and looking up the parent overwrites it.
+	 */
+	struct bkey_buf cur __cleanup(bch2_bkey_buf_exit);
+	bch2_bkey_buf_init(&cur);
+
 	subvol_inum start = {
 		.subvol = k.k->p.offset,
 		.inum	= le64_to_cpu(bkey_s_c_to_subvolume(k).v->inode),
@@ -100,7 +110,8 @@ static int check_subvol_path(struct btree_trans *trans, struct btree_iter *iter,
 	while (k.k->p.offset != BCACHEFS_ROOT_SUBVOL) {
 		try(darray_push(&subvol_path, k.k->p.offset));
 
-		struct bkey_s_c_subvolume s = bkey_s_c_to_subvolume(k);
+		bch2_bkey_buf_reassemble(&cur, k);
+		struct bkey_s_c_subvolume s = bkey_i_to_s_c_subvolume(cur.k);
 
 		struct bch_inode_unpacked subvol_root;
 		ret = bch2_inode_find_by_inum_trans(trans,
