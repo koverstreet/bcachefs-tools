@@ -63,6 +63,7 @@ pub mod init {
     #[path = "progress.rs"] pub mod progress;
 }
 #[path = "fs/inode.rs"]        pub mod inode;
+#[path = "fs/lostfound.rs"]    pub mod lostfound;
 #[path = "journal/read.rs"]     pub mod journal;
 #[path = "fs/namei.rs"]        pub mod namei;
 pub mod sb;

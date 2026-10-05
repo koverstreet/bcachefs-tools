@@ -9,15 +9,6 @@
  * a struct snapshots_seen * through, to __bch2_str_hash_check_key().
  */
 
-int bch2_reconstruct_inode(struct btree_trans *, enum btree_id, u32, u64);
-bool bch2_inode_should_reattach(struct bch_inode_unpacked *);
-
-void bch2_dirent_inode_mismatch_msg(struct printbuf *, struct bch_fs *,
-				    struct bkey_s_c_dirent,
-				    struct bch_inode_unpacked *);
-
-int bch2_reattach_inode(struct btree_trans *, struct bch_inode_unpacked *);
-
 /*
  * Recreate a missing subvolume key: (snapshot, subvol, root inum). Pass 0 for
  * the inum to have it found from the inode carrying bi_subvol.

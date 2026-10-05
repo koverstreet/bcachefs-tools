@@ -448,7 +448,7 @@ impl InodeWalker {
                 }
 
                 let Some(g) = good_ancestor else {
-                    reconstruct_inode(trans, btree, k.k.p.snapshot, k.k.p.inode)?;
+                    let t = reconstruct_inode(t, btree, k.k.p.snapshot, k.k.p.inode)?;
                     let t = t.commit(None, CommitFlags::NO_ENOSPC)?;
                     return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_commit));
                 };
@@ -597,14 +597,55 @@ impl Default for InodeWalker {
 
 /// Recreate missing inode @inum:@snapshot from the keys found in @btree -
 /// a directory for dirents, a file sized to its extents - for the caller to
-/// commit: as bch2_reconstruct_inode().
-pub fn reconstruct_inode(
-    trans:    &BtreeTrans<'_>,
+/// commit.
+pub fn reconstruct_inode<'a, 't>(
+    t:        TransAttempt<'a, 't>,
     btree:    c::btree_id,
     snapshot: u32,
     inum:     u64,
-) -> Result<(), BchError> {
-    ret_to_result(unsafe { c::bch2_reconstruct_inode(trans.raw(), btree, snapshot, inum) })
+) -> TransRet<'a, 't> {
+    let trans = t.trans();
+    let fs = trans.fs();
+
+    let (mode, size) = match btree {
+        c::btree_id::extents => {
+            let mut iter = BtreeIter::new(trans, c::btree_id::extents,
+                                          spos(inum, u64::MAX, snapshot), BtreeIterFlags::empty());
+            // may race with repair deleting the extents that triggered us:
+            let size = iter.peek_prev_min(pos(inum, 0))?.map_or(0, |k| k.k.p.offset << 9);
+            (c::S_IFREG, size)
+        }
+        c::btree_id::dirents => (c::S_IFDIR, 0),
+        c::btree_id::xattrs  => (c::S_IFREG, 0),
+        _ => unreachable!("reconstruct_inode() for btree {}", btree as u32),
+    };
+
+    let mut new = inode::init(fs, 0, 0, (mode | 0o600) as c::umode_t, 0, None);
+    new.bi_size     = size;
+    new.bi_inum     = inum;
+    new.bi_snapshot = snapshot;
+
+    // Recover the hash info if any version of this inode survives anywhere.
+    //
+    // bi_hash_seed and the str_hash type are the same in every snapshot
+    // version of an inode - repair_inode_hash_info() exists to enforce that -
+    // so a descendant will do when no ancestor is left. Btree node loss takes
+    // out one snapshot's inode key while leaving another's, and an
+    // ancestor-only search calls that unrecoverable and falls back to the
+    // random seed init() left in @new. That puts every dirent already under
+    // this directory at the wrong hash offset: lookups miss, so creates insert
+    // duplicates instead of overwriting, and the directory quietly becomes
+    // untraversable.
+    let hash_src = match inode::find_oldest_snapshot(trans, inum, snapshot) {
+        Err(e) if e.matches(c::ENOENT) => inode::find_any_snapshot(trans, inum),
+        r => r,
+    }.found()?;
+    if let Some(src) = hash_src {
+        new.bi_hash_seed = src.bi_hash_seed;
+        new.set_str_hash(src.str_hash());
+    }
+
+    inode::fsck_write(t, &mut new)
 }
 
 /// Recreate the missing subvolume key @subvol, at leaf @snapshot - pass 0
@@ -720,21 +761,6 @@ pub fn fsck_update_backpointers<'a, 't>(
             Ok(t)
         }
     }
-}
-
-/// Link @inode into lost+found: as bch2_reattach_inode().
-pub fn reattach_inode(
-    trans: &BtreeTrans<'_>,
-    inode: &mut c::bch_inode_unpacked,
-) -> Result<(), BchError> {
-    ret_to_result(unsafe { c::bch2_reattach_inode(trans.raw(), inode) })
-}
-
-/// Whether @inode is unreachable and has to be reattached: no backpointer,
-/// not unlinked, and not the root or an old version of a subvolume root: as
-/// bch2_inode_should_reattach().
-pub fn inode_should_reattach(inode: &c::bch_inode_unpacked) -> bool {
-    unsafe { c::bch2_inode_should_reattach(inode as *const _ as *mut _) }
 }
 
 impl Default for SnapshotsSeen {

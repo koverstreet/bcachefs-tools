@@ -42,7 +42,7 @@ use crate::fs::Fs;
 use crate::init::error::id;
 use crate::init::progress::Progress;
 use crate::snapshots::{snapshot, subvolume};
-use crate::{check, dirent, inode, namei};
+use crate::{dirent, inode, lostfound, namei};
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, bch_err_msg, bch_warn, c_function_name, inode_fsck_err};
@@ -90,7 +90,8 @@ fn remove_backpointer(
 }
 
 /// @root: the subvolume and its root inode.
-fn reattach_subvol(trans: &BtreeTrans<'_>, root: c::subvol_inum) -> Result<(), BchError> {
+fn reattach_subvol<'a, 't>(t: TransAttempt<'a, 't>, root: c::subvol_inum) -> TransRet<'a, 't> {
+    let trans = t.trans();
     let fs = trans.fs();
 
     let mut inode = inode::find_by_inum_trans(trans, root, c_function_name!())?;
@@ -101,7 +102,7 @@ fn reattach_subvol(trans: &BtreeTrans<'_>, root: c::subvol_inum) -> Result<(), B
     }
     ret?;
 
-    bch_err_msg!(fs, check::reattach_inode(trans, &mut inode),
+    bch_err_msg!(fs, lostfound::reattach_inode(t, &mut inode),
                  "reattaching inode {}", inode.bi_inum)
 }
 
@@ -157,7 +158,7 @@ fn check_subvol_path<'a, 't>(t: TransAttempt<'a, 't>, k: BkeySC<'_>) -> TransRet
             namei::inum_to_path(trans, start, &mut buf)?;
 
             if inode_fsck_err!(trans, inode_pos, id::subvol_loop, "{}", buf)? {
-                reattach_subvol(trans, root)?;
+                return reattach_subvol(t, root);
             }
             return Ok(t);
         }
@@ -170,7 +171,7 @@ fn check_subvol_path<'a, 't>(t: TransAttempt<'a, 't>, k: BkeySC<'_>) -> TransRet
             _ => {
                 if inode_fsck_err!(trans, inode_pos, id::subvol_unreachable,
                                    "unreachable subvolume {}", s.to_text(fs))? {
-                    reattach_subvol(trans, root)?;
+                    return reattach_subvol(t, root);
                 }
                 return Ok(t);
             }
@@ -343,9 +344,8 @@ fn check_path_loop<'a, 't>(t: TransAttempt<'a, 't>, inode_k: BkeySC<'_>) -> Tran
                 // Done with this path: it was a loop, there are no depths
                 // along it to renumber - and on error or restart, nothing more
                 // may run in this transaction.
-                bch_err_msg!(fs, check::reattach_inode(trans, &mut inode),
-                             "reattaching inode {}", inode.bi_inum)?;
-                return Ok(t);
+                return bch_err_msg!(fs, lostfound::reattach_inode(t, &mut inode),
+                                    "reattaching inode {}", inode.bi_inum);
             }
 
             break;

@@ -7,7 +7,6 @@ use crate::btree::iter::{
 use crate::c;
 use crate::errcode::{self, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
-use crate::printbuf_to_formatter;
 use crate::str_hash::HashTable;
 use core::fmt;
 use core::mem::size_of;
@@ -24,7 +23,7 @@ impl HashTable for Dirents {
 }
 
 /// How @k, a dirent, fails to match @inode, which it was expected to point
-/// at - for formatting with {}: as bch2_dirent_inode_mismatch_msg().
+/// at - for formatting with {}.
 pub fn inode_mismatch<'a, 'k>(
     fs:    &'a Fs,
     k:     BkeySC<'k>,
@@ -41,10 +40,8 @@ pub struct InodeMismatch<'a, 'k> {
 
 impl fmt::Display for InodeMismatch<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let d = self.k.to_c_dirent().expect("a dirent");
-        printbuf_to_formatter(f, |out| unsafe {
-            c::bch2_dirent_inode_mismatch_msg(out, self.fs.raw, d, self.inode as *const _ as *mut _)
-        })
+        write!(f, "inode points to dirent that does not point back:\n{}\n{}",
+               self.k.to_text(self.fs), self.inode)
     }
 }
 

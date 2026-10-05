@@ -26,7 +26,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::c::bch_inode_flags::BCH_INODE_unlinked;
-use crate::check::{self, inode_should_reattach};
+use crate::lostfound::{self, inode_should_reattach};
 use crate::errcode::{BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
@@ -347,7 +347,7 @@ fn check_unreachable_inode<'a, 't>(
     }
 
     if inode_fsck_err!(trans, pos, id::inode_unreachable, "unreachable inode:\n{u}")? {
-        check::reattach_inode(trans, &mut u)?;
+        return lostfound::reattach_inode(t, &mut u);
     }
 
     Ok(t)

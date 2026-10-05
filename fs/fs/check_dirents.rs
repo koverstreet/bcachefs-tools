@@ -329,7 +329,7 @@ fn maybe_reconstruct_inum<'a, 't>(
             return t.done(true);
         }
 
-        check::reconstruct_inode(trans, btree, snapshot, inum)?;
+        let t = check::reconstruct_inode(t, btree, snapshot, inum)?;
         let t = t.commit(None, CommitFlags::NO_ENOSPC)?;
         return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_commit));
     }
