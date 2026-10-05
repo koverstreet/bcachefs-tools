@@ -1035,43 +1035,68 @@ static struct dev_placeable dev_sectors_placeable(struct bch_dev *ca)
 /*
  * The free space distribution, as much as placeable() needs: the total and the
  * BCH_REPLICAS_MAX - 1 largest devices, and which devices those are.
+ *
+ * A copy on a device of durability d is min(d, n) of n replicas, so the total
+ * is kept at each n, counting each device's free space that many times. A
+ * device that can't hold a replica - durability 0, or not rw - isn't in it.
  */
 struct dev_free_dist {
-	u64		total;
+	u64		total[BCH_REPLICAS_MAX];
 	u64		largest[BCH_REPLICAS_MAX - 1];
+	unsigned	largest_dur[BCH_REPLICAS_MAX - 1];
 	unsigned	largest_dev[BCH_REPLICAS_MAX - 1];
 };
 
-static void dev_free_dist_add(struct dev_free_dist *d, u64 f, unsigned dev)
+static void dev_free_dist_add(struct dev_free_dist *d, u64 f, unsigned dur, unsigned dev)
 {
-	d->total += f;
+	if (!dur)
+		return;
+
+	for (unsigned n = 1; n <= BCH_REPLICAS_MAX; n++)
+		d->total[n - 1] += f * min(dur, n);
 
 	for (unsigned i = 0; i < ARRAY_SIZE(d->largest); i++)
 		if (f > d->largest[i]) {
 			swap(f, d->largest[i]);
+			swap(dur, d->largest_dur[i]);
 			swap(dev, d->largest_dev[i]);
 		}
 }
 
 /*
- * Physical sectors placeable at n replicas. A device holds at most one copy, so
- * of P sectors at n replicas the k largest devices hold at most kP/n, and the
- * rest have to hold what's left:
+ * Physical sectors placeable at n replicas. A device holds at most one copy -
+ * min(durability, n) of the n - so of P sectors at n replicas the k largest
+ * devices, holding h replicas between them, hold at most hP/n, and the rest
+ * have to hold what's left:
  *
- *	P(n - k)/n <= sum of all but the k largest	for k in 0..n-1
+ *	P(n - h)/n <= what the rest hold		for h < n
  *
  * [2T, 400G, 200G, 200G] at n=3: k=1 leaves 800G for two thirds, k=2 leaves
  * 400G for one third, so 1200G.
+ *
+ * Reservations are n sectors per sector of data whatever the copies land on -
+ * a durability > 1 device doesn't stretch them - so nothing is placeable at n
+ * that isn't at fewer: that's what keeps the partition below exclusive.
  */
 static u64 dev_free_dist_placeable(const struct dev_free_dist *d, unsigned n)
 {
-	u64 ret = d->total, sum = d->total;
+	u64 ret = n > 1 ? dev_free_dist_placeable(d, n - 1) : U64_MAX;
+	u64 sum = d->total[n - 1];
+	unsigned held = 0;
 
 	BUILD_BUG_ON(ARRAY_SIZE(d->largest) < BCH_REPLICAS_MAX - 1);
 
-	for (unsigned k = 1; k < n; k++) {
-		sum -= min(sum, d->largest[k - 1]);
-		ret = min(ret, mul_u64_u64_div_u64(sum, n, n - k));
+	ret = min(ret, sum);
+
+	for (unsigned k = 0; k < ARRAY_SIZE(d->largest); k++) {
+		unsigned dur = min(d->largest_dur[k], n);
+
+		held += dur;
+		if (held >= n)
+			break;
+
+		sum -= min(sum, d->largest[k] * dur);
+		ret = min(ret, mul_u64_u64_div_u64(sum, n, n - held));
 	}
 
 	return ret;
@@ -1104,24 +1129,33 @@ static bool dev_free_dist_required(const struct dev_free_dist *d, unsigned n,
 				   struct bch_devs_mask *required,
 				   u64 *allowance)
 {
-	u64 smaller = d->total;
+	unsigned held = 0;
 	bool ret = false;
 
 	memset(required, 0, sizeof(*required));
 	*allowance = U64_MAX;
 
-	for (unsigned i = 0; i + 1 < n; i++) {
+	for (unsigned i = 0; i < ARRAY_SIZE(d->largest); i++) {
 		u64 f = d->largest[i];
 		unsigned dev = d->largest_dev[i];
+		unsigned dur = min(d->largest_dur[i], n);
 
-		smaller -= min(smaller, f);
+		/* replicas each write still needs from smaller devices */
+		if (held + dur >= n)
+			break;
+		unsigned need = n - held - dur;
 
-		u64 have	= f * (n - 1 - i);
+		u64 smaller = d->total[need - 1];
+		for (unsigned j = 0; j <= i; j++)
+			smaller -= min(smaller, d->largest[j] * min(d->largest_dur[j], need));
+
+		u64 have	= f * need;
 		u64 engage	= smaller - (smaller >> PLACEMENT_ENGAGE_SHIFT);
 		u64 release	= smaller - (smaller >> PLACEMENT_RELEASE_SHIFT);
 
 		if (have > (test_bit(dev, was->d) ? release : engage)) {
 			__set_bit(dev, required->d);
+			held += dur;
 			ret = true;
 			continue;
 		}
@@ -1196,8 +1230,8 @@ static void __bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out, u64 *out_now
 		for_each_member_device_rcu(c, ca, NULL) {
 			struct dev_placeable f = dev_sectors_placeable(ca);
 
-			dev_free_dist_add(&eventual, f.eventual, ca->dev_idx);
-			dev_free_dist_add(&now, f.now, ca->dev_idx);
+			dev_free_dist_add(&eventual, f.eventual, bch2_dev_rw_durability(ca), ca->dev_idx);
+			dev_free_dist_add(&now, f.now, bch2_dev_rw_durability(ca), ca->dev_idx);
 		}
 
 	if (update_placement) {
