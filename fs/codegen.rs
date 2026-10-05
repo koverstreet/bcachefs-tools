@@ -1015,117 +1015,16 @@ fn generate_btree_ids_known(entries: &[Vec<String>]) -> String {
     out
 }
 
+/// The key types, for bkey.rs's bkey_types!(), which defines everything per
+/// type.
 fn generate_bkey_types(entries: &[Vec<String>]) -> String {
     let mut out = String::new();
     out.push_str("// Auto-generated from BCH_BKEY_TYPES() — do not edit\n\n");
-
+    out.push_str("bkey_types! {\n");
     for e in entries {
-        let name = &e[0];
-        let type_name = format!("Bkey{}", snake_to_pascal(name));
-        out.push_str(&format!("pub type {type_name} = Bkey<c::bkey_i_{name}>;\n"));
+        out.push_str(&format!("    {} = {},\n", e[0], e[1]));
     }
-    out.push('\n');
-
-    for e in entries {
-        let name = &e[0];
-        out.push_str(&format!(
-            "impl c::bkey_i_{name} {{\n\
-             \x20   pub fn k(&self) -> &c::bkey {{ unsafe {{ self.__bindgen_anon_1.k.as_ref() }} }}\n\
-             \x20   pub fn k_mut(&mut self) -> &mut c::bkey {{ unsafe {{ self.__bindgen_anon_1.k.as_mut() }} }}\n\
-             \x20   pub fn k_i(&self) -> &c::bkey_i {{ unsafe {{ self.__bindgen_anon_1.k_i.as_ref() }} }}\n\
-             \x20   pub fn k_i_mut(&mut self) -> &mut c::bkey_i {{ unsafe {{ self.__bindgen_anon_1.k_i.as_mut() }} }}\n\
-             }}\n\n"
-        ));
-    }
-
-    out.push_str("pub trait BkeyInit: Default {\n");
-    out.push_str("    fn init(&mut self);\n");
-    out.push_str("    fn k(&self) -> &c::bkey;\n");
-    out.push_str("    fn k_mut(&mut self) -> &mut c::bkey;\n");
-    out.push_str("    fn k_i(&self) -> &c::bkey_i;\n");
-    out.push_str("    fn k_i_mut(&mut self) -> &mut c::bkey_i;\n");
-    out.push_str("}\n\n");
-
-    for e in entries {
-        let name = &e[0];
-        out.push_str(&format!(
-            "impl BkeyInit for c::bkey_i_{name} {{\n\
-             \x20   fn init(&mut self) {{ unsafe {{ c::bkey_{name}_init(self.k_i_mut()) }}; }}\n\
-             \x20   fn k(&self) -> &c::bkey {{ c::bkey_i_{name}::k(self) }}\n\
-             \x20   fn k_mut(&mut self) -> &mut c::bkey {{ c::bkey_i_{name}::k_mut(self) }}\n\
-             \x20   fn k_i(&self) -> &c::bkey_i {{ c::bkey_i_{name}::k_i(self) }}\n\
-             \x20   fn k_i_mut(&mut self) -> &mut c::bkey_i {{ c::bkey_i_{name}::k_i_mut(self) }}\n\
-             }}\n\n"
-        ));
-    }
-
-    out.push_str("/// Typed dispatch for inline bkeys (`bkey_i`).\n");
-    out.push_str("pub enum BkeyValI<'a> {\n");
-    for e in entries { out.push_str(&format!("    {}(&'a c::bkey_i_{}),\n", e[0], e[0])); }
-    out.push_str("    unknown(&'a c::bkey_i),\n}\n\n");
-    out.push_str("impl<'a> BkeyValI<'a> {\n");
-    out.push_str("    #[allow(clippy::missing_transmute_annotations)]\n");
-    out.push_str("    pub fn from_bkey_i(k: &'a c::bkey_i) -> Self {\n");
-    out.push_str("        match k.k.type_ as u32 {\n");
-    for e in entries { out.push_str(&format!("            {} => BkeyValI::{}(unsafe {{ core::mem::transmute(k) }}),\n", e[1], e[0])); }
-    out.push_str("            _ => BkeyValI::unknown(k),\n        }\n    }\n}\n\n");
-
-    out.push_str("/// Typed dispatch for mutable inline bkeys (`bkey_i`).\n");
-    out.push_str("pub enum BkeyValIMut<'a> {\n");
-    for e in entries { out.push_str(&format!("    {}(&'a mut c::bkey_i_{}),\n", e[0], e[0])); }
-    out.push_str("    unknown(&'a mut c::bkey_i),\n}\n\n");
-    out.push_str("impl<'a> BkeyValIMut<'a> {\n");
-    out.push_str("    #[allow(clippy::missing_transmute_annotations)]\n");
-    out.push_str("    pub fn from_bkey_i(k: &'a mut c::bkey_i) -> Self {\n");
-    out.push_str("        let type_ = k.k.type_;\n");
-    out.push_str("        match type_ as u32 {\n");
-    for e in entries { out.push_str(&format!("            {} => BkeyValIMut::{}(unsafe {{ core::mem::transmute(k) }}),\n", e[1], e[0])); }
-    out.push_str("            _ => BkeyValIMut::unknown(k),\n        }\n    }\n}\n\n");
-
-    out.push_str("/// Typed dispatch for split-const bkey references.\n");
-    out.push_str("pub enum BkeyValSC<'a> {\n");
-    for e in entries { out.push_str(&format!("    {}(&'a c::bkey, &'a c::bch_{}),\n", e[0], e[0])); }
-    out.push_str("    unknown(&'a c::bkey, u8),\n}\n\n");
-    out.push_str("impl<'a> BkeyValSC<'a> {\n");
-    out.push_str("    #[allow(clippy::missing_transmute_annotations)]\n");
-    out.push_str("    pub fn from_bkey_i(k: &'a c::bkey_i) -> Self {\n");
-    out.push_str("        match k.k.type_ as u32 {\n");
-    for e in entries { out.push_str(&format!("            {} => BkeyValSC::{}(&k.k, unsafe {{ core::mem::transmute(&k.v) }}),\n", e[1], e[0])); }
-    out.push_str("            _ => BkeyValSC::unknown(&k.k, k.k.type_),\n        }\n    }\n\n");
-    out.push_str("    /// Construct from raw key and value references.\n");
-    out.push_str("    ///\n    /// # Safety\n");
-    out.push_str("    /// `val` must point to valid data for the bkey type indicated by `k.type_`.\n");
-    out.push_str("    #[allow(clippy::missing_transmute_annotations)]\n");
-    out.push_str("    pub unsafe fn from_raw(k: &'a c::bkey, val: &'a c::bch_val) -> Self {\n");
-    out.push_str("        match k.type_ as u32 {\n");
-    for e in entries { out.push_str(&format!("            {} => BkeyValSC::{}(k, unsafe {{ core::mem::transmute(val) }}),\n", e[1], e[0])); }
-    out.push_str("            _ => BkeyValSC::unknown(k, k.type_),\n        }\n    }\n}\n\n");
-
-    out.push_str("/// Typed dispatch for split-mutable bkey references.\n");
-    out.push_str("pub enum BkeyValS<'a> {\n");
-    for e in entries { out.push_str(&format!("    {}(&'a mut c::bkey, &'a mut c::bch_{}),\n", e[0], e[0])); }
-    out.push_str("    unknown(&'a mut c::bkey, u8),\n}\n\n");
-    out.push_str("impl<'a> BkeyValS<'a> {\n");
-    out.push_str("    #[allow(clippy::missing_transmute_annotations)]\n");
-    out.push_str("    pub fn from_bkey_i(k: &'a mut c::bkey_i) -> Self {\n");
-    out.push_str("        let type_ = k.k.type_;\n");
-    out.push_str("        match type_ as u32 {\n");
-    for e in entries { out.push_str(&format!("            {} => BkeyValS::{}(&mut k.k, unsafe {{ core::mem::transmute(&mut k.v) }}),\n", e[1], e[0])); }
-    out.push_str("            _ => BkeyValS::unknown(&mut k.k, type_),\n        }\n    }\n}\n");
-    out
-}
-
-fn snake_to_pascal(s: &str) -> String {
-    let mut out = String::new();
-
-    for word in s.split('_') {
-        let mut chars = word.chars();
-        if let Some(c) = chars.next() {
-            out.extend(c.to_uppercase());
-            out.push_str(chars.as_str());
-        }
-    }
-
+    out.push_str("}\n");
     out
 }
 

@@ -256,7 +256,165 @@ pub struct BkeySC<'a> {
     pub(crate) iter: PhantomData<&'a mut BtreeIter<'a>>,
 }
 
-// Typed bkey dispatch enums — generated from BCH_BKEY_TYPES() x-macro
+pub trait BkeyInit: Default {
+    fn init(&mut self);
+    fn k(&self) -> &c::bkey;
+    fn k_mut(&mut self) -> &mut c::bkey;
+    fn k_i(&self) -> &c::bkey_i;
+    fn k_i_mut(&mut self) -> &mut c::bkey_i;
+}
+
+/// Everything defined per key type: invoked with BCH_BKEY_TYPES(), as
+/// name = KEY_TYPE number, by codegen (bkey_types_gen.rs).
+macro_rules! bkey_types {
+    ($($name:ident = $nr:literal),* $(,)?) => { crate::paste! {
+        $(
+        pub type [<Bkey $name:camel>] = Bkey<c::[<bkey_i_ $name>]>;
+
+        impl c::[<bkey_i_ $name>] {
+            pub fn k(&self) -> &c::bkey { unsafe { self.__bindgen_anon_1.k.as_ref() } }
+            pub fn k_mut(&mut self) -> &mut c::bkey { unsafe { self.__bindgen_anon_1.k.as_mut() } }
+            pub fn k_i(&self) -> &c::bkey_i { unsafe { self.__bindgen_anon_1.k_i.as_ref() } }
+            pub fn k_i_mut(&mut self) -> &mut c::bkey_i { unsafe { self.__bindgen_anon_1.k_i.as_mut() } }
+        }
+
+        impl BkeyInit for c::[<bkey_i_ $name>] {
+            fn init(&mut self) { unsafe { c::[<bkey_ $name _init>](self.k_i_mut()) }; }
+            fn k(&self) -> &c::bkey { c::[<bkey_i_ $name>]::k(self) }
+            fn k_mut(&mut self) -> &mut c::bkey { c::[<bkey_i_ $name>]::k_mut(self) }
+            fn k_i(&self) -> &c::bkey_i { c::[<bkey_i_ $name>]::k_i(self) }
+            fn k_i_mut(&mut self) -> &mut c::bkey_i { c::[<bkey_i_ $name>]::k_i_mut(self) }
+        }
+        )*
+
+        /// Typed dispatch for inline bkeys (`bkey_i`).
+        pub enum BkeyValI<'a> {
+            $($name(&'a c::[<bkey_i_ $name>]),)*
+            unknown(&'a c::bkey_i),
+        }
+
+        impl<'a> BkeyValI<'a> {
+            #[allow(clippy::missing_transmute_annotations)]
+            pub fn from_bkey_i(k: &'a c::bkey_i) -> Self {
+                match k.k.type_ as u32 {
+                    $($nr => BkeyValI::$name(unsafe { core::mem::transmute(k) }),)*
+                    _ => BkeyValI::unknown(k),
+                }
+            }
+        }
+
+        /// Typed dispatch for mutable inline bkeys (`bkey_i`).
+        pub enum BkeyValIMut<'a> {
+            $($name(&'a mut c::[<bkey_i_ $name>]),)*
+            unknown(&'a mut c::bkey_i),
+        }
+
+        impl<'a> BkeyValIMut<'a> {
+            #[allow(clippy::missing_transmute_annotations)]
+            pub fn from_bkey_i(k: &'a mut c::bkey_i) -> Self {
+                match k.k.type_ as u32 {
+                    $($nr => BkeyValIMut::$name(unsafe { core::mem::transmute(k) }),)*
+                    _ => BkeyValIMut::unknown(k),
+                }
+            }
+        }
+
+        /// Typed dispatch for split-const bkey references.
+        pub enum BkeyValSC<'a> {
+            $($name(&'a c::bkey, &'a c::[<bch_ $name>]),)*
+            unknown(&'a c::bkey, u8),
+        }
+
+        impl<'a> BkeyValSC<'a> {
+            #[allow(clippy::missing_transmute_annotations)]
+            pub fn from_bkey_i(k: &'a c::bkey_i) -> Self {
+                match k.k.type_ as u32 {
+                    $($nr => BkeyValSC::$name(&k.k, unsafe { core::mem::transmute(&k.v) }),)*
+                    _ => BkeyValSC::unknown(&k.k, k.k.type_),
+                }
+            }
+
+            /// Construct from raw key and value references.
+            ///
+            /// # Safety
+            /// `val` must point to valid data for the bkey type indicated by `k.type_`.
+            #[allow(clippy::missing_transmute_annotations)]
+            pub unsafe fn from_raw(k: &'a c::bkey, val: &'a c::bch_val) -> Self {
+                match k.type_ as u32 {
+                    $($nr => BkeyValSC::$name(k, unsafe { core::mem::transmute(val) }),)*
+                    _ => BkeyValSC::unknown(k, k.type_),
+                }
+            }
+        }
+
+        /// Typed value access: the value if the key is that type, else None.
+        ///
+        /// XXX: unsound for a short value. The reference covers the whole
+        /// struct, but a key written before its type gained fields has a
+        /// value only min_val_size long - snapshot 24 of 64 bytes, subvolume
+        /// 16 of 48 - and reading a later field reads past the end of it.
+        /// Callers reading such fields use a padded copy instead (see
+        /// val_copy_pad(), snapshot::val(), subvolume::val()). The real fix
+        /// is capnproto-style accessors: per-field reads that check the
+        /// value's length and return zero past its end - ergonomic once Rust
+        /// has field projections.
+        impl<'a> BkeySC<'a> {
+            $(
+            pub fn [<as_ $name>](&self) -> Option<&'a c::[<bch_ $name>]> {
+                match self.v() { BkeyValSC::$name(_, v) => Some(v), _ => None }
+            }
+
+            /// The key as C's typed key, if it's that type, for C functions
+            /// that take one.
+            pub fn [<to_c_ $name>](&self) -> Option<c::[<bkey_s_c_ $name>]> {
+                self.[<as_ $name>]().map(|_| c::[<bkey_s_c_ $name>] {
+                    __bindgen_anon_1: c::[<bkey_s_c_ $name __bindgen_ty_1>] { s_c: self.to_raw() },
+                })
+            }
+            )*
+        }
+
+        /// Typed mutable value access: the value if the key is that type, else
+        /// None - for editing a key built from another, as bkey_reassemble()
+        /// gives.
+        impl c::bkey_i {
+            $(
+            pub fn [<as_mut_ $name>](&mut self) -> Option<&mut c::[<bch_ $name>]> {
+                match BkeyValIMut::from_bkey_i(self) {
+                    BkeyValIMut::$name(k) => Some(&mut k.v),
+                    _ => None,
+                }
+            }
+            )*
+        }
+
+        // C's typed keys - from a C lookup, say - as a plain bkey_s_c, for
+        // bkey_s_c_to_result(): they're a union over the same key and value.
+        $(
+        impl From<c::[<bkey_s_c_ $name>]> for c::bkey_s_c {
+            fn from(k: c::[<bkey_s_c_ $name>]) -> Self { unsafe { k.__bindgen_anon_1.s_c } }
+        }
+        )*
+
+        /// Typed dispatch for split-mutable bkey references.
+        pub enum BkeyValS<'a> {
+            $($name(&'a mut c::bkey, &'a mut c::[<bch_ $name>]),)*
+            unknown(&'a mut c::bkey, u8),
+        }
+
+        impl<'a> BkeyValS<'a> {
+            #[allow(clippy::missing_transmute_annotations)]
+            pub fn from_bkey_i(k: &'a mut c::bkey_i) -> Self {
+                let type_ = k.k.type_;
+                match type_ as u32 {
+                    $($nr => BkeyValS::$name(&mut k.k, unsafe { core::mem::transmute(&mut k.v) }),)*
+                    _ => BkeyValS::unknown(&mut k.k, type_),
+                }
+            }
+        }
+    }};
+}
+
 include!(concat!(env!("OUT_DIR"), "/bkey_types_gen.rs"));
 
 impl<'a> BkeySC<'a> {
