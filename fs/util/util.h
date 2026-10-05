@@ -951,4 +951,11 @@ static inline u64 system_totalram_bytes(void)
 	return i.totalram * i.mem_unit;
 }
 
+/*
+ * For Rust: the kernel's Rust allocator API has no __GFP_NOFAIL. Out of line,
+ * as util/locking.h's shims are, for the same reason.
+ */
+void *rust_kzalloc_nofail(size_t size);
+void rust_kfree(const void *p);
+
 #endif /* _BCACHEFS_UTIL_H */

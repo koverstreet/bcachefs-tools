@@ -1383,3 +1383,13 @@ __sched int bch2_bit_wait_io_timeout(struct wait_bit_key *word, int mode)
 
 	return 0;
 }
+
+void *rust_kzalloc_nofail(size_t size)
+{
+	return kzalloc(size, GFP_KERNEL|__GFP_NOFAIL);
+}
+
+void rust_kfree(const void *p)
+{
+	kfree(p);
+}
