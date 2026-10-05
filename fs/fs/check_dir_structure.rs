@@ -193,7 +193,7 @@ fn check_subvolume_structure(fs: &Fs) -> Result<(), BchError> {
         })
 }
 
-fn bch2_bi_depth_renumber_one<'a, 't>(
+fn bi_depth_renumber_one<'a, 't>(
     t:         TransAttempt<'a, 't>,
     inum:      u64,
     snapshot:  u32,
@@ -217,7 +217,7 @@ fn bch2_bi_depth_renumber_one<'a, 't>(
     Ok(t)
 }
 
-fn bch2_bi_depth_renumber<'a, 't>(
+fn bi_depth_renumber<'a, 't>(
     t:                TransAttempt<'a, 't>,
     path:             &[u64],
     snapshot:         u32,
@@ -231,7 +231,7 @@ fn bch2_bi_depth_renumber<'a, 't>(
     // can't see a restart those didn't.
     for &inum in path.iter().rev() {
         t = bch_err_fn!(fs,
-            t.nested(|t| Ok((bch2_bi_depth_renumber_one(t, inum, snapshot, new_bi_depth)?, ())))
+            t.nested(|t| Ok((bi_depth_renumber_one(t, inum, snapshot, new_bi_depth)?, ())))
         )?.0;
 
         new_bi_depth += 1;
@@ -357,7 +357,7 @@ fn check_path_loop<'a, 't>(t: TransAttempt<'a, 't>, inode_k: BkeySC<'_>) -> Tran
     }
 
     if redo_bi_depth {
-        return bch2_bi_depth_renumber(t, &path, snapshot, min_bi_depth);
+        return bi_depth_renumber(t, &path, snapshot, min_bi_depth);
     }
 
     Ok(t)
