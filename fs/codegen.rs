@@ -110,6 +110,7 @@ const DERIVE_READD: &[&str] = &[
     "bpos", "bbpos",
     "subvol_inum", "bch_opts",
     "bch_inode_unpacked", "u96",
+    "bch_hash_desc",
     "bch_ioctl_snapshot_node",
     "bch_ioctl_snapshot_node_v2",
 ];

@@ -6,8 +6,20 @@ use crate::c;
 use crate::errcode::{self, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::printbuf_to_formatter;
+use crate::str_hash::HashTable;
 use core::fmt;
 use core::mem::size_of;
+
+/// The dirents btree, as a hash table.
+pub struct Dirents;
+
+impl HashTable for Dirents {
+    type Key = c::qstr;
+
+    fn desc() -> &'static c::bch_hash_desc {
+        unsafe { &c::bch2_dirent_hash_desc }
+    }
+}
 
 /// How @k, a dirent, fails to match @inode, which it was expected to point
 /// at - for formatting with {}: as bch2_dirent_inode_mismatch_msg().

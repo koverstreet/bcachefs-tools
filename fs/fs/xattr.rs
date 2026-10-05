@@ -4,6 +4,23 @@ use core::ffi::{c_void, CStr};
 
 use crate::btree::iter::{TransAttempt, TransError};
 use crate::c;
+use crate::str_hash::HashTable;
+
+/// The xattrs btree, as a hash table.
+pub struct Xattrs;
+
+impl HashTable for Xattrs {
+    type Key = c::xattr_search_key;
+
+    fn desc() -> &'static c::bch_hash_desc {
+        unsafe { &c::bch2_xattr_hash_desc }
+    }
+}
+
+/// What an xattr lookup searches for, a type and name: C's X_SEARCH().
+pub fn search_key(type_: u32, name: &[u8]) -> c::xattr_search_key {
+    c::xattr_search_key { type_: type_ as u8, name: crate::dirent::qstr(name) }
+}
 
 pub fn set<'a, 't>(
     t:     TransAttempt<'a, 't>,

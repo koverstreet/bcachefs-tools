@@ -47,6 +47,7 @@ struct bch_hash_info {
 	SIPHASH_KEY	siphash_key;
 };
 
+struct bch_hash_info __bch2_hash_info_init(struct bch_fs *, const struct bch_inode_unpacked *);
 int bch2_hash_info_init(struct bch_fs *, const struct bch_inode_unpacked *, struct bch_hash_info *);
 
 struct bch_str_hash_ctx {

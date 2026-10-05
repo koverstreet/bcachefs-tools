@@ -11,7 +11,7 @@
 
 #include "snapshots/subvolume.h"
 
-static inline struct bch_hash_info
+struct bch_hash_info
 __bch2_hash_info_init(struct bch_fs *c, const struct bch_inode_unpacked *bi)
 {
 	struct bch_hash_info info = {

@@ -7,6 +7,7 @@ use crate::btree::iter::{BtreeIter, BtreeTrans};
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
+use crate::str_hash::HashTable;
 
 /// The snapshot IDs of the keys seen so far at one position, for deciding
 /// visibility while walking a btree in key order with all snapshots: a key
@@ -20,6 +21,10 @@ pub struct SnapshotsSeen(c::snapshots_seen);
 impl SnapshotsSeen {
     pub fn new() -> Self {
         SnapshotsSeen(unsafe { c::snapshots_seen_init() })
+    }
+
+    pub(crate) fn raw_mut(&mut self) -> *mut c::snapshots_seen {
+        &mut self.0
     }
 
     /// The IDs themselves, for C that takes a snapshot_id_list.
@@ -270,6 +275,20 @@ pub fn reconstruct_subvol(
     inum:     u64,
 ) -> Result<(), BchError> {
     ret_to_result(unsafe { c::bch2_reconstruct_subvol(trans.raw(), snapshot, subvol, inum) })
+}
+
+/// @new, a key just written to hash table @T, may have moved a dirent: point
+/// the backpointers of the inodes it names, in the snapshots that see it, at
+/// its new position: as bch2_fsck_update_backpointers().
+pub fn fsck_update_backpointers<T: HashTable>(
+    trans:     &BtreeTrans<'_>,
+    s:         &mut SnapshotsSeen,
+    hash_info: &mut c::bch_hash_info,
+    new:       &mut c::bkey_i,
+) -> Result<(), BchError> {
+    ret_to_result(unsafe {
+        c::bch2_fsck_update_backpointers(trans.raw(), &mut s.0, *T::desc(), hash_info, new)
+    })
 }
 
 /// Link @inode into lost+found: as bch2_reattach_inode().
