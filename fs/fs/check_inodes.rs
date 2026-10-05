@@ -324,7 +324,7 @@ fn check_inode<'a, 't>(
 
     if u.bi_hash_seed != st.snapshot_root.bi_hash_seed ||
        u.str_hash()   != st.snapshot_root.str_hash() {
-        str_hash::repair_inode_hash_info(trans, &mut u, &mut st.snapshot_root)?;
+        t = str_hash::repair_inode_hash_info(t, &mut u, &st.snapshot_root)?;
     }
 
     let mut changed = false;

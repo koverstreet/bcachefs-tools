@@ -367,17 +367,14 @@ int bch2_hash_delete(struct btree_trans *trans,
 	return bch2_hash_delete_at(trans, desc, info, &iter, 0);
 }
 
-int bch2_repair_inode_hash_info(struct btree_trans *,
-				struct bch_inode_unpacked *,
-				struct bch_inode_unpacked *);
-
+/* fsck repair of a key the check below finds out of place: in Rust, str_hash.rs */
 struct snapshots_seen;
 int __bch2_str_hash_check_key(struct btree_trans *,
 			      struct snapshots_seen *,
 			      const struct bch_hash_desc *,
 			      struct bch_hash_info *,
 			      struct bkey_s_c,
-			      bool *, bool *);
+			      bool *);
 
 static inline bool str_hash_key_needs_check(const struct bch_hash_desc *desc,
 					    struct bch_hash_info *info,
@@ -405,8 +402,7 @@ static inline int bch2_str_hash_check_key(struct btree_trans *trans,
 			    const struct bch_hash_desc *desc,
 			    struct bch_hash_info *hash_info,
 			    struct bkey_s_c hash_k,
-			    bool *updated_before_k_pos,
-			    bool *repaired_inode)
+			    bool *updated_before_k_pos)
 {
 	/*
 	 * `bcachefs dump --sanitize` scrubs dirent names in place without
@@ -420,7 +416,7 @@ static inline int bch2_str_hash_check_key(struct btree_trans *trans,
 
 	return str_hash_key_needs_check(desc, hash_info, hash_k)
 		? __bch2_str_hash_check_key(trans, s, desc, hash_info, hash_k,
-					    updated_before_k_pos, repaired_inode)
+					    updated_before_k_pos)
 		: 0;
 }
 

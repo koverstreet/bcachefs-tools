@@ -1052,11 +1052,6 @@ struct inode_walker_entry *bch2_walk_inode(struct btree_trans *trans,
 	return lookup_inode_for_snapshot(trans, w, k);
 }
 
-/*
- * Prefer to delete the first one, since that will be the one at the wrong
- * offset:
- * return value: 0 -> delete k1, 1 -> delete k2
- */
 int bch2_fsck_update_backpointers(struct btree_trans *trans,
 				  struct snapshots_seen *s,
 				  const struct bch_hash_desc desc,
