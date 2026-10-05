@@ -370,13 +370,13 @@ static struct bch_read_bio *promote_alloc(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 
-	bool self_healing = failed != NULL;
+	bool self_healing = have_io_error(failed);
 
 	/*
-	 * We're in the retry path, but we don't know what to repair yet, and we
-	 * don't want to do a promote here:
+	 * We're in the retry path, but we don't know what to repair yet. Only
+	 * the read-around retry may promote: it isn't an error retry.
 	 */
-	if (self_healing && !failed->nr)
+	if (failed && !failed->nr && !(flags & BCH_READ_may_promote))
 		return NULL;
 
 	/*
@@ -407,7 +407,8 @@ static struct bch_read_bio *promote_alloc(struct btree_trans *trans,
 				k.k->type == KEY_TYPE_reflink_v
 				? BTREE_ID_reflink
 				: BTREE_ID_extents,
-				k, pos, pick, flags, sectors, orig, failed);
+				k, pos, pick, flags, sectors, orig,
+				self_healing ? failed : NULL);
 	int ret = PTR_ERR_OR_ZERO(promote);
 	if (unlikely(ret)) {
 		/*
@@ -781,7 +782,8 @@ static void bch2_rbio_retry(struct work_struct *work)
 		rbio = bch2_rbio_free(rbio);
 
 		flags |= BCH_READ_in_retry;
-		flags &= ~BCH_READ_may_promote;
+		if (!read_around)
+			flags &= ~BCH_READ_may_promote;
 		flags &= ~BCH_READ_last_fragment;
 		flags |= BCH_READ_must_clone;
 
@@ -1623,12 +1625,19 @@ int __bch2_read_extent(struct btree_trans *trans,
 		return read_extent_pick_err(trans, orig, read_pos, data_btree, k, flags, ret);
 	ret = 0;
 
+	/*
+	 * A read-around is punted to the retry, which does the promote: the
+	 * rbio allocated here is freed unused.
+	 */
+	enum bch_read_flags punt_promote = 0;
+
 	if (pick.has_ec && !pick.do_ec_reconstruct) {
 		try(bch2_ec_read_around_pick(trans, &pick, failed, flags, dev));
 
-		/* The retry that does the read-around doesn't promote: */
-		if (pick.ec_read_around)
+		if (pick.ec_read_around && !(flags & BCH_READ_in_retry)) {
+			punt_promote = flags & BCH_READ_may_promote;
 			flags &= ~BCH_READ_may_promote;
+		}
 	}
 
 	if (bch2_csum_type_is_encryption(pick.crc.csum_type) &&
@@ -1752,6 +1761,7 @@ int __bch2_read_extent(struct btree_trans *trans,
 		trans->notrace_relock_fail = true;
 	} else {
 		if (!(flags & BCH_READ_in_retry)) {
+			rbio->flags |= punt_promote;
 			bch2_rbio_punt(rbio, bch2_rbio_retry, RBIO_CONTEXT_UNBOUND, system_dfl_wq);
 			return 0;
 		}
