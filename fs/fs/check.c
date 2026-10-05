@@ -57,17 +57,6 @@ static s64 bch2_count_subdirs(struct btree_trans *trans, u64 inum,
 	return ret ?: subdirs;
 }
 
-static int subvol_lookup(struct btree_trans *trans, u32 subvol,
-			 u32 *snapshot, u64 *inum)
-{
-	struct bch_subvolume s;
-	int ret = bch2_subvolume_get(trans, subvol, false, &s);
-
-	*snapshot = le32_to_cpu(s.snapshot);
-	*inum = le64_to_cpu(s.inode);
-	return ret;
-}
-
 static int lookup_dirent_in_snapshot(struct btree_trans *trans,
 			   struct bch_hash_info hash_info,
 			   subvol_inum dir, struct qstr *name,
@@ -2846,106 +2835,6 @@ int bch2_check_xattrs(struct bch_fs *c)
 		check_xattr(trans, &iter, k, &hash_info, &s, &inode);
 	}));
 	return ret;
-}
-
-static int check_root_trans(struct btree_trans *trans)
-{
-	struct bch_fs *c = trans->c;
-
-	u32 snapshot;
-	u64 inum;
-	int ret = subvol_lookup(trans, BCACHEFS_ROOT_SUBVOL, &snapshot, &inum);
-	if (ret && !bch2_err_matches(ret, ENOENT))
-		return ret;
-
-	/*
-	 * The missing subvolume key is not the only record of root's active
-	 * snapshot: snapshot nodes carry a subvol backref, so root's active
-	 * snapshot is the leaf claiming BCACHEFS_ROOT_SUBVOL. Only when no
-	 * node does (fresh filesystem, or the snapshots btree is gone too)
-	 * is U32_MAX - the initial snapshot id - correct; on a snapshotted
-	 * filesystem U32_MAX is an interior node, and a subvolume pointing
-	 * at it is subvol_snapshot_not_leaf, which has no repair.
-	 *
-	 * _norestart: we're inside the caller's commit_do(), so restarts must
-	 * propagate out to it:
-	 */
-	u32 root_snapshot = 0;
-	if (ret) {
-		struct bkey_s_c k;
-		int ret2 = 0;
-
-		for_each_btree_key_norestart(trans, iter, BTREE_ID_snapshots,
-					     POS_MIN, 0, k, ret2) {
-			if (k.k->type == KEY_TYPE_snapshot) {
-				struct bkey_s_c_snapshot s = bkey_s_c_to_snapshot(k);
-
-				if (le32_to_cpu(s.v->subvol) == BCACHEFS_ROOT_SUBVOL &&
-				    !s.v->children[0]) {
-					root_snapshot = k.k->p.offset;
-					break;
-				}
-			}
-		}
-		try(ret2);
-	}
-
-	if (mustfix_fsck_err_on(ret, trans, root_subvol_missing,
-				"root subvol missing")) {
-		struct bkey_i_subvolume *root_subvol =
-			errptr_try(bch2_trans_kmalloc(trans, sizeof(*root_subvol)));
-
-		snapshot	= root_snapshot ?: U32_MAX;
-		inum		= BCACHEFS_ROOT_INO;
-
-		bkey_subvolume_init(&root_subvol->k_i);
-		root_subvol->k.p.offset = BCACHEFS_ROOT_SUBVOL;
-		root_subvol->v.flags	= 0;
-		root_subvol->v.snapshot	= cpu_to_le32(snapshot);
-		root_subvol->v.inode	= cpu_to_le64(inum);
-		bch2_subvolume_state_set(&root_subvol->v, SUBVOLUME_STATE_live);
-		try(bch2_btree_insert_trans(trans, BTREE_ID_subvolumes, &root_subvol->k_i, 0));
-	}
-
-	struct bch_inode_unpacked root_inode;
-	ret = bch2_inode_find_by_inum_snapshot(trans, BCACHEFS_ROOT_INO, snapshot,
-					       &root_inode, 0);
-	if (ret && !bch2_err_matches(ret, ENOENT))
-		return ret;
-
-	if (mustfix_fsck_err_on(ret,
-				trans, root_dir_missing,
-				"root directory missing")) {
-		bch2_inode_init(c, &root_inode, 0, 0, S_IFDIR|0755,
-				0, NULL);
-		root_inode.bi_inum = inum;
-		root_inode.bi_snapshot = snapshot;
-
-		ret = __bch2_fsck_write_inode(trans, &root_inode);
-		bch_err_msg(c, ret, "writing root inode");
-	} else if (mustfix_fsck_err_on(!S_ISDIR(root_inode.bi_mode),
-				trans, root_inode_not_dir,
-				"root inode not a directory")) {
-		/*
-		 * The inode exists: fix only the mode. Reinitializing it
-		 * generates a fresh hash_seed - invalidating the hash offset
-		 * of every dirent in the root directory - and wipes bi_subvol:
-		 */
-		root_inode.bi_mode = S_IFDIR|0755;
-
-		ret = __bch2_fsck_write_inode(trans, &root_inode);
-		bch_err_msg(c, ret, "writing root inode");
-	}
-fsck_err:
-	return ret;
-}
-
-/* Get root directory, create if it doesn't exist: */
-int bch2_check_root(struct bch_fs *c)
-{
-	CLASS(btree_trans, trans)(c);
-	return commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
-			 check_root_trans(trans));
 }
 
 /* translate to return code of fsck commad - man(8) fsck */
