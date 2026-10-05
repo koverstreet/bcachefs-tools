@@ -12,6 +12,8 @@
 
 struct bch_fs;
 
+#define BCH_ENCODED_EXTENT_MAX SZ_2M
+
 extern const char * const bch2_error_actions[];
 extern const char * const bch2_degraded_actions[];
 extern const char * const bch2_write_degraded_actions[];
@@ -170,9 +172,9 @@ enum fsck_err_opts {
 	  BCH_SB_DATA_REPLICAS_WANT,	1,				\
 	  "#",		"Number of data replicas (erasure coding currently caps this at 3, RAID6)")\
 	x(encoded_extent_max,		u32,				\
-	  OPT_FS|OPT_FORMAT|						\
+	  OPT_FS|OPT_FORMAT|OPT_RUNTIME|				\
 	  OPT_HUMAN_READABLE|OPT_MUST_BE_POW_2|OPT_SB_FIELD_SECTORS|OPT_SB_FIELD_ILOG2,\
-	  OPT_UINT(4096, 2U << 20),					\
+	  OPT_UINT(4096, BCH_ENCODED_EXTENT_MAX),			\
 	  BCH_SB_ENCODED_EXTENT_MAX_BITS, 256 << 10,			\
 	  "size",	"Maximum size of checksummed/compressed extents")\
 	x(metadata_checksum,		u8,				\

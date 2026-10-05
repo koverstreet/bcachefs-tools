@@ -961,6 +961,7 @@ struct bch_sb_field_ext {
 	 * the check pass. Runtime copy: bch_sb.btrees_clean.
 	 */
 	__le64			btrees_clean;
+	__le64			encoded_extent_write_max;
 };
 
 LE64_BITMASK(BCH_SB_EXT_DEV_READAHEAD,		struct bch_sb_field_ext, flags0, 0, 20);

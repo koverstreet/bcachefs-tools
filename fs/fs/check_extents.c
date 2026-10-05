@@ -329,7 +329,7 @@ static int check_extent_overbig(struct btree_trans *trans, struct btree_iter *it
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	struct bch_extent_crc_unpacked crc;
 	const union bch_extent_entry *i;
-	unsigned encoded_extent_max_sectors = c->opts.encoded_extent_max >> 9;
+	unsigned encoded_extent_max_sectors = c->sb.encoded_extent_max >> 9;
 
 	bkey_for_each_crc(k.k, ptrs, crc, i)
 		if (crc_is_encoded(crc) &&
