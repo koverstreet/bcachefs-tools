@@ -38,9 +38,9 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     ".*bch2_.*", "rust_.*", "block_bytes", "match_string", "printbuf.*", "_bch2_err_matches",
     "bpos_.*", "bkey_init", "bkey_.*_init", "bkey_i_to_s", "bkey_i_to_s_c",
     "btree_iter_path", "extent_entry_u64s", "enumerated_ref_put",
-    // fsck's snapshots_seen: init/exit are static inlines over a darray, and
-    // C allocates it, so C has to free it.
-    "snapshots_seen_.*",
+    // fsck's snapshots_seen and inode_walker: init/exit are static inlines
+    // over darrays, and C allocates them, so C has to free them.
+    "snapshots_seen_.*", "inode_walker_.*",
     "bkey_is_inode", "bkey_inode_mode", "INODE_STR_HASH", "SET_INODE_STR_HASH", "journal_cur_seq",
     "dirent_copy_target",
     "bkey_extent_is_allocation", "bkey_extent_is_reservation", "crc_is_encoded",
