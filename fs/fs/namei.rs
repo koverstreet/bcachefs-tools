@@ -1,9 +1,51 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::iter::{TransAttempt, TransError};
+use crate::btree::iter::{BtreeTrans, TransAttempt, TransError};
 use crate::c;
+use crate::check::SnapshotsSeen;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
+use crate::util::Printbuf;
+
+/// Check BCH_INODE_has_case_insensitive on @inode against the casefolded
+/// directories on its path, as fsck: as bch2_check_inode_has_case_insensitive().
+/// @s's IDs are the snapshots seen at @inode's position. Sets @do_update if
+/// @inode was repaired; ENOENT for an inode that's not connected, which a
+/// later pass fixes.
+pub fn check_inode_has_case_insensitive(
+    trans:     &BtreeTrans<'_>,
+    inode:     &mut c::bch_inode_unpacked,
+    s:         &mut SnapshotsSeen,
+    do_update: &mut bool,
+) -> Result<(), BchError> {
+    ret_to_result_void(unsafe {
+        c::bch2_check_inode_has_case_insensitive(trans.raw(), inode, s.ids_raw_mut(), do_update)
+    })
+}
+
+/// Print @inum's path, through its dirents: as bch2_inum_to_path().
+pub fn inum_to_path(
+    trans: &BtreeTrans<'_>,
+    inum:  c::subvol_inum,
+    out:   &mut Printbuf,
+) -> Result<(), BchError> {
+    ret_to_result_void(unsafe { c::bch2_inum_to_path(trans.raw(), inum, out.as_raw()) })
+}
+
+/// Print the path of inode @inum as seen in @snapshot: as
+/// bch2_inum_snapshot_to_path(), without collecting the snapshots it passes
+/// through.
+pub fn inum_snapshot_to_path(
+    trans:    &BtreeTrans<'_>,
+    inum:     u64,
+    snapshot: u32,
+    out:      &mut Printbuf,
+) -> Result<(), BchError> {
+    ret_to_result_void(unsafe {
+        c::bch2_inum_snapshot_to_path(trans.raw(), inum, snapshot, core::ptr::null_mut(),
+                                      out.as_raw())
+    })
+}
 
 pub fn link_trans<'a, 't>(
     t:        TransAttempt<'a, 't>,
