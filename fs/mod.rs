@@ -50,6 +50,7 @@ pub mod debug {
 pub mod init {
     #[path = "damage.rs"] pub mod damage;
     #[path = "error.rs"] pub mod error;
+    #[path = "passes.rs"] pub mod passes;
     #[path = "progress.rs"] pub mod progress;
 }
 #[path = "fs/inode.rs"]        pub mod inode;
