@@ -1296,7 +1296,7 @@ int bch2_can_do_data_update(struct btree_trans *trans,
 		struct alloc_request *req __free(alloc_request_put) =
 			errptr_try(alloc_request_get(trans, data_opts->target, false, NULL,
 						     0,
-						     opts->data_replicas + data_opts->extra_replicas,
+						     opts->data_replicas,
 						     BCH_WATERMARK_normal, 0, NULL));
 		/*
 		 * alloc_request_get() allocates without zeroing, so anything it
