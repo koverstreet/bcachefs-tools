@@ -43,7 +43,7 @@ use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
 use bcachefs_kernel::btree::bkey_methods;
 use bcachefs_kernel::btree::iter::{
-    commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts,
+    commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
     TransBkey, TransError, UpdateTriggerFlags,
 };
 use bcachefs_kernel::c;
@@ -635,7 +635,7 @@ fn cmd_update(
     let commit = commit_do(
         &trans,
         None,
-        CommitOpts::new().flags(CommitFlags::NO_ENOSPC),
+        CommitFlags::NO_ENOSPC,
         |t| {
             let mut iter = BtreeIter::new(
                 t.trans(),
@@ -686,7 +686,7 @@ fn cmd_set(
     let commit = commit_do(
         &trans,
         None,
-        CommitOpts::new().flags(CommitFlags::NO_ENOSPC),
+        CommitFlags::NO_ENOSPC,
         |t| {
             // Deletion has two meanings. Raw (the default): remove this
             // exact key - a filtered iter would have bch2_trans_update()

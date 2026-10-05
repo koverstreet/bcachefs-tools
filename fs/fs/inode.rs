@@ -5,7 +5,7 @@ use crate::errcode::{self, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{
-    bkey_s_c_to_result, BtreeIter, BtreeIterFlags, BtreeTrans, CommitOpts, TransAttempt, TransRet,
+    bkey_s_c_to_result, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransRet,
 };
 use crate::{btree, btree_id, printbuf_to_formatter};
 use core::ffi::CStr;
@@ -308,7 +308,7 @@ pub fn write_cached(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchErr
             btree_id::inodes,
             packed.inode.__bindgen_anon_1.k_i.as_mut(),
             None,
-            CommitOpts::new(),
+            CommitFlags::empty(),
             BtreeIterFlags::CACHED,
         )
     }

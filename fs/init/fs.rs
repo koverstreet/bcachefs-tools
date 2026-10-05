@@ -434,7 +434,7 @@ impl Fs {
         btree_id:     c::btree_id,
         key:          &mut impl AsBkeyI,
         disk_res:     Option<&DiskReservation<'_>>,
-        commit_flags: CommitOpts,
+        commit_flags: impl Into<CommitOpts>,
         iter_flags:   BtreeIterFlags,
     ) -> Result<(), BchError> {
         let disk_res = disk_res
@@ -447,7 +447,7 @@ impl Fs {
                 btree_id,
                 key.as_bkey_i_mut(),
                 disk_res,
-                commit_flags.to_c(),
+                commit_flags.into().to_c(),
                 c::btree_iter_update_trigger_flags(iter_flags.bits()),
             )
         })

@@ -5,7 +5,7 @@ use crate::btree::bkey::{pos, spos, BkeyCookie, BkeyS, BkeySC, POS_MIN, SPOS_MAX
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
-    CommitFlags, CommitOpts, TransAttempt, TransRet, UpdateTriggerFlags,
+    CommitFlags, TransAttempt, TransRet, UpdateTriggerFlags,
 };
 use crate::data::extents::{
     bkey_extent_entries_mut, bkey_extent_entries_sc, bkey_ptrs_mut, entry_stripe_ptr_mut,
@@ -40,7 +40,7 @@ use bcachefs_shim as kernel;
 type TestRet = Result<(), BchError>;
 type TestFn = fn(&Fs, u64) -> TestRet;
 
-const NO_ENOSPC: CommitOpts = CommitOpts::new().flags(CommitFlags::NO_ENOSPC);
+const NO_ENOSPC: CommitFlags = CommitFlags::NO_ENOSPC;
 const INTERNAL_SNAPSHOT_NODE: UpdateTriggerFlags = UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE;
 
 fn error_ret(error: BchError) -> i32 {
@@ -87,7 +87,7 @@ fn insert_cookie(fs: &Fs, btree: c::btree_id, k: &mut BkeyCookie) -> TestRet {
         btree,
         k,
         Some(&res),
-        CommitOpts::new(),
+        CommitFlags::empty(),
         BtreeIterFlags::empty(),
     )
 }
@@ -378,7 +378,7 @@ fn test_extent_create_dup(fs: &Fs, inum: u64) -> TestRet {
     );
     let res = DiskReservation::new(fs);
 
-    let ret = commit_do(&trans, Some(&res), CommitOpts::new(), |t| {
+    let ret = commit_do(&trans, Some(&res), CommitFlags::empty(), |t| {
         let fs = t.fs();
         let k = fs.require(iter.peek_max(pos(inum, u64::MAX))?, ENOENT_bkey_type_mismatch)?;
         fs.ensure(k.k.key_type() == c::bch_bkey_type::KEY_TYPE_extent, ENOENT_bkey_type_mismatch)?;

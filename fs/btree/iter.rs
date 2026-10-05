@@ -155,13 +155,13 @@ impl<'f> BtreeTrans<'f> {
     pub fn commit(
         &self,
         disk_res: Option<&DiskReservation<'_>>,
-        flags: CommitOpts,
+        flags: impl Into<CommitOpts>,
     ) -> Result<(), BchError> {
         unsafe {
             (*self.raw).disk_res = disk_res.map_or(core::ptr::null_mut(), |r| r.as_mut_ptr());
         }
         let ret = unsafe {
-            c::__bch2_trans_commit(self.raw, flags.to_c(), false)
+            c::__bch2_trans_commit(self.raw, flags.into().to_c(), false)
         };
         crate::errcode::ret_to_result(ret).map(|_| ())
     }
@@ -330,24 +330,24 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn commit(
         self,
         disk_res: Option<&DiskReservation<'_>>,
-        flags:    CommitOpts,
+        flags:    impl Into<CommitOpts>,
     ) -> Result<Self, TransError> {
         unsafe {
             (*self.raw()).disk_res = disk_res.map_or(core::ptr::null_mut(), |r| r.as_mut_ptr());
         }
         // `lazy = false`: this is the regular commit, mirroring the C
         // bch2_trans_commit() inline (the lazy variant is a separate path).
-        let ret = unsafe { c::__bch2_trans_commit(self.raw(), flags.to_c(), false) };
+        let ret = unsafe { c::__bch2_trans_commit(self.raw(), flags.into().to_c(), false) };
         self.result(ret)
     }
 
     /// Commit what's queued, if anything - and having committed, return
     /// transaction_restart_commit, so the caller's loop re-runs against the
     /// committed state: as bch2_trans_commit_lazy().
-    pub fn commit_lazy(self, flags: CommitOpts) -> Result<Self, TransError> {
+    pub fn commit_lazy(self, flags: impl Into<CommitOpts>) -> Result<Self, TransError> {
         let ret = unsafe {
             c::bch2_trans_commit_lazy(self.raw(), core::ptr::null_mut(),
-                                      core::ptr::null_mut(), flags.to_c().0)
+                                      core::ptr::null_mut(), flags.into().to_c().0)
         };
         self.result(ret)
     }
@@ -356,10 +356,10 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// bch2_trans_commit_lazy_if_full(): for a key whose repairs are bounded
     /// only by something like snapshot count. A commit here restarts, and the
     /// re-drive has less to queue, so it converges.
-    pub fn commit_lazy_if_full(self, flags: CommitOpts) -> Result<Self, TransError> {
+    pub fn commit_lazy_if_full(self, flags: impl Into<CommitOpts>) -> Result<Self, TransError> {
         let ret = unsafe {
             c::bch2_trans_commit_lazy_if_full(self.raw(), core::ptr::null_mut(),
-                                              core::ptr::null_mut(), flags.to_c().0)
+                                              core::ptr::null_mut(), flags.into().to_c().0)
         };
         self.result(ret)
     }
@@ -748,7 +748,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         iter:          &mut BtreeIter<'t>,
         node:          BtreeNodeRef,
         key:           TransBkey<'_, 't>,
-        flags:         CommitOpts,
+        flags:         impl Into<CommitOpts>,
         iter_searched: bool,
     ) -> Result<Self, TransError> {
         let ret = unsafe {
@@ -757,7 +757,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 iter.raw_mut(),
                 node.as_ptr(),
                 key.as_ptr(),
-                flags.bits(),
+                flags.into().bits(),
                 iter_searched,
             )
         };
@@ -967,8 +967,9 @@ impl Watermark {
 }
 
 /// A commit-flags word, built from a [`Watermark`] (defaulting to `stripe`/0) and
-/// a set of [`CommitFlags`]. The watermark usually isn't set, so the common path
-/// is `CommitOpts::new()` or `CommitOpts::new().flags(...)`.
+/// a set of [`CommitFlags`]. The watermark usually isn't set, so the commit
+/// functions take `impl Into<CommitOpts>`: pass the [`CommitFlags`] alone, and
+/// build a `CommitOpts` only to set a watermark.
 #[derive(Clone, Copy, Default)]
 pub struct CommitOpts(u32);
 
@@ -997,6 +998,15 @@ impl CommitOpts {
     }
 }
 
+/// Flags alone, with the default watermark: what nearly every commit
+/// passes, so the commit functions take `impl Into<CommitOpts>` and a call
+/// reads as C's does - `t.commit(None, CommitFlags::NO_ENOSPC)`.
+impl From<CommitFlags> for CommitOpts {
+    fn from(flags: CommitFlags) -> Self {
+        CommitOpts::new().flags(flags)
+    }
+}
+
 pub fn lockrestart_do<'t, T, F>(trans: &BtreeTrans<'t>, mut f: F) -> Result<T, BchError>
 where
     F: for<'a> FnMut(TransAttempt<'a, 't>) -> TransResult<'a, 't, T>
@@ -1020,12 +1030,13 @@ where
 pub fn commit_do<'t, F>(
     trans: &BtreeTrans<'t>,
     disk_res: Option<&DiskReservation<'_>>,
-    flags: CommitOpts,
+    flags: impl Into<CommitOpts>,
     mut f: F,
 ) -> Result<(), BchError>
 where
     F: for<'a> FnMut(TransAttempt<'a, 't>) -> TransRet<'a, 't>,
 {
+    let flags = flags.into();
     lockrestart_do(trans, |t| {
         let t = f(t)?;
         let t = t.commit(disk_res, flags)?;
@@ -1039,7 +1050,7 @@ where
 pub fn trans_commit_do<'t, F>(
     fs: &'t Fs,
     disk_res: Option<&DiskReservation<'_>>,
-    flags: CommitOpts,
+    flags: impl Into<CommitOpts>,
     f: F,
 ) -> Result<(), BchError>
 where
@@ -1495,7 +1506,7 @@ impl<'t> BtreeIter<'t> {
         &mut self,
         trans:    &BtreeTrans<'t>,
         disk_res: Option<&DiskReservation<'_>>,
-        flags:    CommitOpts,
+        flags:    impl Into<CommitOpts>,
         f:        F,
     ) -> Result<(), BchError>
     where
@@ -1505,7 +1516,7 @@ impl<'t> BtreeIter<'t> {
             BkeySC<'k>,
         ) -> TransRet<'a, 't>,
     {
-        self.for_each_commit_inner(trans, disk_res, flags,
+        self.for_each_commit_inner(trans, disk_res, flags.into(),
             |raw| unsafe { c::bch2_btree_iter_peek(raw) },
             |raw| unsafe { c::bch2_btree_iter_advance(raw) },
             f)
@@ -1517,7 +1528,7 @@ impl<'t> BtreeIter<'t> {
         trans:    &BtreeTrans<'t>,
         min:      bpos,
         disk_res: Option<&DiskReservation<'_>>,
-        flags:    CommitOpts,
+        flags:    impl Into<CommitOpts>,
         f:        F,
     ) -> Result<(), BchError>
     where
@@ -1527,7 +1538,7 @@ impl<'t> BtreeIter<'t> {
             BkeySC<'k>,
         ) -> TransRet<'a, 't>,
     {
-        self.for_each_commit_inner(trans, disk_res, flags,
+        self.for_each_commit_inner(trans, disk_res, flags.into(),
             |raw| unsafe { c::bch2_btree_iter_peek_prev_min(raw, min) },
             |raw| unsafe { c::bch2_btree_iter_rewind(raw) },
             f)
@@ -1539,7 +1550,7 @@ impl<'t> BtreeIter<'t> {
         end:        bpos,
         iter_flags: BtreeIterFlags,
         disk_res:   Option<&DiskReservation<'_>>,
-        flags:      CommitOpts,
+        flags:      impl Into<CommitOpts>,
         f:          F,
     ) -> Result<(), BchError>
     where
@@ -1549,7 +1560,7 @@ impl<'t> BtreeIter<'t> {
             BkeySC<'k>,
         ) -> TransRet<'a, 't>,
     {
-        self.for_each_commit_inner(trans, disk_res, flags,
+        self.for_each_commit_inner(trans, disk_res, flags.into(),
             |raw| unsafe {
                 c::bch2_btree_iter_peek_max_type(
                     raw,

@@ -16,7 +16,7 @@ use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
 use bch_bindgen::data::io::{block_on, MAX_IO_SIZE};
 use bcachefs_kernel::btree;
-use bcachefs_kernel::btree::iter::{CommitFlags, CommitOpts};
+use bcachefs_kernel::btree::iter::CommitFlags;
 use bcachefs_kernel::data::io_misc;
 use bcachefs_kernel::{dirent, inode, namei, str_hash, xattr};
 use bcachefs_kernel::errcode::{ret_to_result_void as ret_to_result, BchError, bch_errcode};
@@ -157,7 +157,7 @@ fn unlink_and_rm(
     btree::iter::trans_commit_do(
         fs,
         None,
-        CommitOpts::new().flags(CommitFlags::NO_ENOSPC),
+        CommitFlags::NO_ENOSPC,
         |t| {
             namei::unlink_trans(
                 t,
@@ -213,7 +213,7 @@ fn create_or_update_link(
     btree::iter::trans_commit_do(
         fs,
         None,
-        CommitOpts::new(),
+        CommitFlags::empty(),
         |t| namei::link_trans(t, dir_inum, &mut dir_u, inum, &mut inode, &qstr),
     )
 }
@@ -258,7 +258,7 @@ fn create_or_update_file(
         btree::iter::trans_commit_do(
             fs,
             None,
-            CommitOpts::new(),
+            CommitFlags::empty(),
             |t| {
                 namei::create_trans(
                     t,
@@ -354,7 +354,7 @@ fn copy_xattrs(
         btree::iter::trans_commit_do(
             fs,
             None,
-            CommitOpts::new(),
+            CommitFlags::empty(),
             |t| {
                 xattr::set(
                     t,

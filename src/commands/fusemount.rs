@@ -66,7 +66,7 @@ use bch_bindgen::data::io::block_on;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::{accounting, btree, dirent, namei, str_hash};
-use bcachefs_kernel::btree::iter::{CommitFlags, CommitOpts};
+use bcachefs_kernel::btree::iter::CommitFlags;
 use bcachefs_kernel::inode;
 use bcachefs_kernel::opt_set;
 
@@ -249,7 +249,7 @@ fn fuse_create_inode(
     btree::iter::trans_commit_do(
         fs,
         None,
-        CommitOpts::new(),
+        CommitFlags::empty(),
         |t| {
             namei::create_trans(
                 t,
@@ -280,7 +280,7 @@ fn fuse_unlink(fs: &Fs, dir: c::subvol_inum, name: &[u8]) -> Result<c::bch_inode
     btree::iter::trans_commit_do(
         fs,
         None,
-        CommitOpts::new().flags(CommitFlags::NO_ENOSPC),
+        CommitFlags::NO_ENOSPC,
         |t| {
             namei::unlink_trans(
                 t,
@@ -309,7 +309,7 @@ fn fuse_link(
     btree::iter::trans_commit_do(
         fs,
         None,
-        CommitOpts::new(),
+        CommitFlags::empty(),
         |t| namei::link_trans(t, newparent, &mut dir_u, inum, &mut inode, &qstr),
     )?;
 
@@ -352,7 +352,7 @@ fn fuse_rename(
     btree::iter::trans_commit_do(
         fs,
         None,
-        CommitOpts::new(),
+        CommitFlags::empty(),
         |t| {
             namei::rename_trans(
                 t,
@@ -394,7 +394,7 @@ fn fuse_setattr(
     btree::iter::trans_commit_do(
         fs,
         None,
-        CommitOpts::new().flags(CommitFlags::NO_ENOSPC),
+        CommitFlags::NO_ENOSPC,
         |t| {
             let now = fs.current_time();
             let mut iter = btree::iter::BtreeIter::uninit();
@@ -497,7 +497,7 @@ fn fuse_touch_atime(fs: &Fs, opts: AtimeOpts, inum: c::subvol_inum, bi: &c::bch_
     let ret = btree::iter::trans_commit_do(
         fs,
         None,
-        CommitOpts::new().flags(CommitFlags::NO_ENOSPC),
+        CommitFlags::NO_ENOSPC,
         |t| {
             let now = fs.current_time();
             let mut iter = btree::iter::BtreeIter::uninit();
@@ -526,7 +526,7 @@ fn fuse_update_inode_after_write(fs: &Fs, inum: c::subvol_inum) -> Result<(), Bc
     btree::iter::trans_commit_do(
         fs,
         None,
-        CommitOpts::new().flags(CommitFlags::NO_ENOSPC),
+        CommitFlags::NO_ENOSPC,
         |t| {
             let now = fs.current_time();
             let mut iter = btree::iter::BtreeIter::uninit();
