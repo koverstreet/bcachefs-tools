@@ -1188,9 +1188,8 @@ void bch2_disk_label_ec_rw_member_devs(struct bch_fs *c, unsigned disk_label,
 
 	memset(devs, 0, sizeof(*devs));
 	for_each_member_device_rcu(c, ca, t)
-		if (ca->mi.state == BCH_MEMBER_STATE_rw &&
+		if (bch2_dev_rw_durability(ca) &&
 		    (ca->mi.data_allowed & BIT(BCH_DATA_user)) &&
-		    ca->mi.durability &&
 		    ca->mi.bucket_size == blocksize)
 			__set_bit(ca->dev_idx, devs->d);
 }

@@ -443,7 +443,7 @@ static bool can_use_btree_node(struct bch_fs *c,
 	for_each_set_bit(i, devs.d, BCH_SB_MEMBERS_MAX) {
 		struct bch_dev *ca = bch2_dev_rcu_noerror(c, i);
 		if (ca)
-			durability_available += ca->mi.durability;
+			durability_available += bch2_dev_rw_durability(ca);
 	}
 
 	return durability >= durability_available;

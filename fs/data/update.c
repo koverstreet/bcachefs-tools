@@ -1093,7 +1093,7 @@ static unsigned durability_available_on_target(struct bch_fs *c,
 
 		u64 free = dev_buckets_free(ca, watermark);
 		if (free)
-			durability += (write_flags & BCH_WRITE_cached) ? 1 : ca->mi.durability;
+			durability += (write_flags & BCH_WRITE_cached) ? 1 : bch2_dev_rw_durability(ca);
 		else if (bch2_copygc_can_make_progress(ca)) {
 			*need_copygc = true;
 			bch2_copygc_wakeup(c);
