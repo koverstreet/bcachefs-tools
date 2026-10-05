@@ -88,6 +88,22 @@ impl BchError {
     }
 }
 
+/// For a lookup where not finding anything is a normal answer: found() turns
+/// ENOENT - and every code derived from it - into Ok(None).
+pub trait Found<T> {
+    fn found(self) -> Result<Option<T>, BchError>;
+}
+
+impl<T> Found<T> for Result<T, BchError> {
+    fn found(self) -> Result<Option<T>, BchError> {
+        match self {
+            Ok(v)                           => Ok(Some(v)),
+            Err(e) if e.matches(c::ENOENT)  => Ok(None),
+            Err(e)                          => Err(e),
+        }
+    }
+}
+
 impl fmt::Display for BchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.msg())
