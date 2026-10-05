@@ -1,14 +1,171 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use crate::btree::bkey::BkeySC;
+use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt, TransBkey};
 use crate::c;
 use crate::errcode::{self, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
+use crate::printbuf_to_formatter;
+use core::fmt;
+use core::mem::size_of;
+
+/// How @k, a dirent, fails to match @inode, which it was expected to point
+/// at - for formatting with {}: as bch2_dirent_inode_mismatch_msg().
+pub fn inode_mismatch<'a, 'k>(
+    fs:    &'a Fs,
+    k:     BkeySC<'k>,
+    inode: &'a c::bch_inode_unpacked,
+) -> InodeMismatch<'a, 'k> {
+    InodeMismatch { fs, k, inode }
+}
+
+pub struct InodeMismatch<'a, 'k> {
+    fs:    &'a Fs,
+    k:     BkeySC<'k>,
+    inode: &'a c::bch_inode_unpacked,
+}
+
+impl fmt::Display for InodeMismatch<'_, '_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let d = self.k.to_c_dirent().expect("a dirent");
+        printbuf_to_formatter(f, |out| unsafe {
+            c::bch2_dirent_inode_mismatch_msg(out, self.fs.raw, d, self.inode as *const _ as *mut _)
+        })
+    }
+}
+
+/// Delete the dirent at @pos, as fsck repair: as bch2_fsck_remove_dirent().
+pub fn fsck_remove(trans: &BtreeTrans<'_>, pos: c::bpos) -> Result<(), BchError> {
+    ret_to_result(unsafe { c::bch2_fsck_remove_dirent(trans.raw(), pos) })
+}
+
+/// Check that @k, a dirent at @iter, and @target, the inode it points at,
+/// agree - the inode's backpointer and the dirent's d_type - repairing
+/// whichever is wrong, as fsck: as bch2_check_dirent_target().
+pub fn check_target(
+    trans:  &BtreeTrans<'_>,
+    iter:   &mut BtreeIter<'_>,
+    k:      BkeySC<'_>,
+    target: &mut c::bch_inode_unpacked,
+) -> Result<(), BchError> {
+    let d = k.to_c_dirent().expect("a dirent");
+    ret_to_result(unsafe { c::bch2_check_dirent_target(trans.raw(), iter.raw_mut(), d, target, true) })
+}
+
+/// What a dirent names, by d_type: for DT_SUBVOL, a subvolume (child) and
+/// the subvolume the dirent lives in (parent); otherwise an inode.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DirentTarget {
+    Inode(u64),
+    Subvol { child: u32, parent: u32 },
+}
 
 impl c::bch_dirent {
     /// The inode number the dirent points at. Meaningless for a DT_SUBVOL
     /// dirent, which keeps subvolume IDs in the same space.
     pub fn d_inum(&self) -> u64 {
         u64::from_le(unsafe { self.__bindgen_anon_1.d_inum })
+    }
+
+    /// The target, read through the half of the union d_type says is live.
+    pub fn target(&self) -> DirentTarget {
+        if self.d_type() as u32 == c::DT_SUBVOL {
+            let s = unsafe { self.__bindgen_anon_1.__bindgen_anon_1 };
+            DirentTarget::Subvol {
+                child:  u32::from_le(s.d_child_subvol),
+                parent: u32::from_le(s.d_parent_subvol),
+            }
+        } else {
+            DirentTarget::Inode(self.d_inum())
+        }
+    }
+
+    /// Set the subvolume a DT_SUBVOL dirent lives in.
+    pub fn set_parent_subvol(&mut self, subvol: u32) {
+        assert_eq!(self.d_type() as u32, c::DT_SUBVOL);
+        self.__bindgen_anon_1.__bindgen_anon_1.d_parent_subvol = subvol.to_le();
+    }
+}
+
+/// Whether @d names @inode - a DT_SUBVOL dirent by subvolume, any other by
+/// inode number: as dirent_points_to_inode_nowarn().
+pub fn points_to_inode(d: &c::bch_dirent, inode: &c::bch_inode_unpacked) -> bool {
+    match d.target() {
+        DirentTarget::Subvol { child, .. } => child == inode.bi_subvol,
+        DirentTarget::Inode(inum)          => inum == inode.bi_inum,
+    }
+}
+
+/// Whether directory @dir is empty as seen in @snapshot - in subvolume
+/// @subvol, or 0 to see subvolume dirents too: as bch2_empty_dir_snapshot().
+/// ENOTEMPTY_dir_not_empty if it isn't.
+pub fn empty_dir_snapshot(
+    trans:    &BtreeTrans<'_>,
+    dir:      u64,
+    subvol:   u32,
+    snapshot: u32,
+) -> Result<(), BchError> {
+    ret_to_result(unsafe { c::bch2_empty_dir_snapshot(trans.raw(), dir, subvol, snapshot) })
+}
+
+/// @k's name - @k a dirent: as bch2_dirent_get_name().
+pub fn name<'k>(k: BkeySC<'k>) -> &'k [u8] {
+    let q = unsafe { c::bch2_dirent_get_name(k.to_c_dirent().expect("a dirent")) };
+    let len = unsafe { q.__bindgen_anon_1.__bindgen_anon_1.len } as usize;
+    if len == 0 { &[] } else { unsafe { core::slice::from_raw_parts(q.name, len) } }
+}
+
+/// A dirent key at @pos with room for any name, to be filled in with
+/// copy_target() and init_name().
+pub fn alloc_max<'a, 't>(t: &TransAttempt<'a, 't>, pos: c::bpos)
+    -> Result<TransBkey<'a, 't>, BchError>
+{
+    const BKEY_U64S: usize = size_of::<c::bkey>() / size_of::<u64>();
+    t.bkey_alloc_init(u8::MAX as usize - BKEY_U64S,
+                      c::bch_bkey_type::KEY_TYPE_dirent.0 as u8, pos)
+}
+
+/// Point @dst, a dirent, at what @src points at: as dirent_copy_target().
+pub fn copy_target(dst: &mut TransBkey<'_, '_>, src: BkeySC<'_>) {
+    unsafe {
+        c::dirent_copy_target(dst.k_i_mut() as *mut c::bkey_i as *mut c::bkey_i_dirent,
+                              src.to_c_dirent().expect("a dirent"))
+    }
+}
+
+/// Give @new, a dirent, the name @name - hashed under @hash_info, which
+/// says whether to casefold it - and size it to fit: as
+/// bch2_dirent_init_name().
+pub fn init_name(
+    fs:        &Fs,
+    new:       &mut TransBkey<'_, '_>,
+    hash_info: &c::bch_hash_info,
+    name:      &[u8],
+) -> Result<(), BchError> {
+    let name = qstr(name);
+    ret_to_result(unsafe {
+        c::bch2_dirent_init_name(fs.raw,
+                                 new.k_i_mut() as *mut c::bkey_i as *mut c::bkey_i_dirent,
+                                 hash_info, &name, core::ptr::null())
+    })
+}
+
+/// A new dirent in directory @dir named @name, of type @d_type, pointing at
+/// @target - an inode, or for DT_SUBVOL a subvolume: as
+/// bch2_dirent_create_key(). Its position is for the caller to fill in.
+pub fn create_key<'a, 't>(
+    t:         &TransAttempt<'a, 't>,
+    hash_info: &c::bch_hash_info,
+    dir:       c::subvol_inum,
+    d_type:    u8,
+    name:      &[u8],
+    target:    u64,
+) -> Result<TransBkey<'a, 't>, BchError> {
+    let name = qstr(name);
+    unsafe {
+        let k = c::bch2_dirent_create_key(t.raw(), hash_info, dir, d_type, &name,
+                                          core::ptr::null(), target);
+        TransBkey::from_raw(t, k as *mut c::bkey_i)
     }
 }
 
