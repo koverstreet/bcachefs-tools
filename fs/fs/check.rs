@@ -8,51 +8,95 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::c;
-use crate::errcode::{bch_errcode, errptr_to_result, ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode;
 use crate::dirent::DirentTarget;
 use crate::errcode::Found;
 use crate::snapshots::{snapshot, subvolume};
+use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::Printbuf;
-use crate::{bch_err, inode_fsck_err};
+use crate::{bch_err, fsck_err_on, inode_fsck_err};
 use core::ops::ControlFlow;
 
 /// The snapshot IDs of the keys seen so far at one position, for deciding
 /// visibility while walking a btree in key order with all snapshots: a key
 /// in an ancestor snapshot is hidden from a descendant that overwrote it.
 ///
-/// The ID list is a darray C allocates, so C frees it. Transparent, so C can
-/// pass a struct snapshots_seen * as an Option<&mut SnapshotsSeen>.
-#[repr(transparent)]
-pub struct SnapshotsSeen(c::snapshots_seen);
+/// C knows the type only by name: it hands a pointer to one from Rust's
+/// check_key() back to Rust's __bch2_str_hash_check_key() without looking.
+pub struct SnapshotsSeen {
+    pos: c::bpos,
+    /// In the order seen - ascending, for a walk in key order - plus any a
+    /// repair added in order.
+    ids: KVVec<u32>,
+}
 
 impl SnapshotsSeen {
     pub fn new() -> Self {
-        SnapshotsSeen(unsafe { c::snapshots_seen_init() })
+        SnapshotsSeen { pos: Default::default(), ids: KVVec::new() }
     }
 
-    pub(crate) fn raw_mut(&mut self) -> *mut c::snapshots_seen {
-        &mut self.0
+    /// For C that takes a struct snapshots_seen * only to pass it back to
+    /// Rust.
+    pub(crate) fn as_opaque(&mut self) -> *mut c::snapshots_seen {
+        self as *mut Self as *mut c::snapshots_seen
     }
 
-    /// The IDs themselves, for C that takes a snapshot_id_list.
-    pub(crate) fn ids_raw_mut(&mut self) -> *mut c::snapshot_id_list {
-        &mut self.0.ids
+    /// The IDs as a C snapshot_id_list, for C that reads one: borrowed, so
+    /// C mustn't grow or free it.
+    pub(crate) fn ids_view(&mut self) -> c::snapshot_id_list {
+        let mut l: c::snapshot_id_list = Default::default();
+        l.data = self.ids.as_mut_ptr();
+        l.nr   = self.ids.len();
+        l.size = self.ids.len();
+        l
     }
 
     /// Record a key at @pos, starting the list over if @pos is a new
-    /// position: as bch2_snapshots_seen_update().
-    pub fn update(&mut self, fs: &Fs, btree: c::btree_id, pos: c::bpos) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_snapshots_seen_update(fs.raw, &mut self.0, btree, pos) })
+    /// position - inode and offset, the snapshot being what's recorded: as
+    /// bch2_snapshots_seen_update().
+    pub fn update(&mut self, pos: c::bpos) -> Result<(), BchError> {
+        if self.pos.inode != pos.inode || self.pos.offset != pos.offset {
+            self.ids.clear();
+        }
+        self.pos = pos;
+
+        if !self.has_id(pos.snapshot) {
+            self.ids.push(pos.snapshot, GFP_KERNEL)?;
+        }
+        Ok(())
+    }
+
+    /// Whether a key in snapshot @ancestor is visible in its descendant @id,
+    /// not overwritten by a key this list has seen: as
+    /// bch2_key_visible_in_snapshot().
+    pub fn key_visible(&self, trans: &BtreeTrans<'_>, id: u32, ancestor: u32) -> bool {
+        debug_assert!(id <= ancestor);
+
+        if id == ancestor {
+            return true;
+        }
+        if !snapshot::is_ancestor(trans, id, ancestor) {
+            return false;
+        }
+
+        // @id is a descendant of @ancestor: has a key been seen that
+        // overwrote @ancestor - also a descendant of @ancestor, and with @id
+        // as a descendant?
+        !self.ids.iter().any(|&i| i != ancestor && snapshot::is_ancestor(trans, id, i))
     }
 
     /// Whether a reference from a key in @src points at something visible in
     /// some snapshot as a key in @dst: as bch2_ref_visible(). Assumes the @src
     /// keys are being visited in key order, with this list recording them.
-    pub fn ref_visible(&mut self, trans: &BtreeTrans<'_>, src: u32, dst: u32) -> bool {
-        unsafe { c::bch2_ref_visible(trans.raw(), &mut self.0, src, dst) }
+    pub fn ref_visible(&self, trans: &BtreeTrans<'_>, src: u32, dst: u32) -> bool {
+        if dst <= src {
+            self.key_visible(trans, dst, src)
+        } else {
+            snapshot::is_ancestor(trans, src, dst)
+        }
     }
 
     /// The snapshots that have overwritten the key at @pos in @btree, as if
@@ -61,33 +105,51 @@ impl SnapshotsSeen {
     pub fn overwrites(trans: &BtreeTrans<'_>, btree: c::btree_id, pos: c::bpos)
         -> Result<Self, BchError>
     {
-        let mut s = Self::new();
-        s.0.pos = pos;
-        ret_to_result(unsafe {
-            c::bch2_get_snapshot_overwrites(trans.raw(), btree, pos, &mut s.0.ids)
+        let mut s = SnapshotsSeen { pos, ids: KVVec::new() };
+
+        if !snapshot::has_children(trans.fs(), pos.snapshot) {
+            return Ok(s);
+        }
+
+        // From the version before @pos's - in the snapshot with the next lower
+        // ID; @pos.snapshot has children, so it isn't 0 - down
+        let mut iter = BtreeIter::new(trans, btree, spos(pos.inode, pos.offset, pos.snapshot - 1),
+                                      BtreeIterFlags::ALL_SNAPSHOTS);
+        let ids = &mut s.ids;
+        iter.for_each_reverse_norestart(spos(pos.inode, pos.offset, 0), |_, k| {
+            let id = k.k.p.snapshot;
+            if snapshot::is_ancestor(trans, id, pos.snapshot) &&
+               !ids.iter().any(|&i| snapshot::is_ancestor(trans, id, i)) {
+                ids.push(id, GFP_KERNEL)?;
+            }
+            Ok(())
         })?;
         Ok(s)
     }
 
     /// Whether a key in snapshot @id has been seen at this position.
     pub fn has_id(&self, id: u32) -> bool {
-        unsafe { darray_slice(self.0.ids.data, self.0.ids.nr) }.contains(&id)
+        self.ids.contains(&id)
     }
 
-    /// A copy, to keep the list as it was at this key while the walk goes
-    /// on: as bch2_snapshots_seen_copy().
-    pub fn try_clone(&self, fs: &Fs) -> Result<Self, BchError> {
-        let mut new = Self::new();
-        ret_to_result(unsafe {
-            c::bch2_snapshots_seen_copy(fs.raw, &mut new.0, &self.0 as *const _ as *mut _)
-        })?;
-        Ok(new)
+    /// A copy, to keep the list as it was at this key while the walk goes on.
+    pub fn try_clone(&self) -> Result<Self, BchError> {
+        let mut ids = KVVec::with_capacity(self.ids.len(), GFP_KERNEL)?;
+        for &i in self.ids.iter() {
+            ids.push(i, GFP_KERNEL)?;
+        }
+        Ok(SnapshotsSeen { pos: self.pos, ids })
     }
 
     /// Record @id as seen, keeping the list sorted: for a key a repair
-    /// created at this position: as bch2_snapshots_seen_add_inorder().
-    pub fn add_inorder(&mut self, fs: &Fs, id: u32) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_snapshots_seen_add_inorder(fs.raw, &mut self.0, id) })
+    /// created at this position.
+    pub fn add_inorder(&mut self, id: u32) -> Result<(), BchError> {
+        match self.ids.iter().position(|&i| i >= id) {
+            Some(idx) if self.ids[idx] == id => {}
+            Some(idx) => kvvec_insert(&mut self.ids, idx, id)?,
+            None => self.ids.push(id, GFP_KERNEL)?,
+        }
+        Ok(())
     }
 }
 
@@ -97,39 +159,60 @@ impl SnapshotsSeen {
 pub fn ref_visible2(
     trans:    &BtreeTrans<'_>,
     src:      u32,
-    src_seen: &mut SnapshotsSeen,
+    src_seen: &SnapshotsSeen,
     dst:      u32,
-    dst_seen: &mut SnapshotsSeen,
+    dst_seen: &SnapshotsSeen,
 ) -> bool {
-    unsafe { c::bch2_ref_visible2(trans.raw(), src, &mut src_seen.0, dst, &mut dst_seen.0) != 0 }
-}
-
-/// A C darray's live elements.
-///
-/// # Safety
-/// @data and @nr are a darray's, and it outlives the slice unmodified.
-unsafe fn darray_slice<'a, T>(data: *mut T, nr: usize) -> &'a [T] {
-    if nr == 0 { &[] } else { unsafe { core::slice::from_raw_parts(data, nr) } }
-}
-
-/// As darray_slice(), mutably.
-///
-/// # Safety
-/// As darray_slice(), and nothing else references the elements.
-unsafe fn darray_slice_mut<'a, T>(data: *mut T, nr: usize) -> &'a mut [T] {
-    if nr == 0 { &mut [] } else { unsafe { core::slice::from_raw_parts_mut(data, nr) } }
+    if dst > src {
+        dst_seen.key_visible(trans, src, dst)
+    } else {
+        src_seen.key_visible(trans, dst, src)
+    }
 }
 
 /// Every snapshot version of the inode the keys being walked belong to, for
 /// the passes that walk a btree keyed by inode number (xattrs, dirents,
-/// extents) in key order with all snapshots: over C's struct inode_walker,
-/// whose internals - bch2_walk_inode(), bch2_get_visible_inodes() and the
-/// lookups under them - are still C.
+/// extents) in key order with all snapshots.
 ///
 /// The versions are cached between keys of the same inode, and refetched on
 /// the next inode or after a commit. walk() keeps the entries sorted by
 /// snapshot ID, and each carries a per-pass count (i_sectors, subdirectories).
-pub struct InodeWalker(c::inode_walker);
+pub struct InodeWalker {
+    first_this_inode: bool,
+    have_inodes:      bool,
+    recalculate_sums: bool,
+    last_pos:         c::bpos,
+    /// The versions are valid while the transaction's commit_count is this.
+    commit_count:     u32,
+    inodes:           KVVec<WalkerEntry>,
+    /// From get_visible(): snapshots where a whiteout hides older versions.
+    deletes:          KVVec<u32>,
+}
+
+/// One version of the walked inode - or a whiteout, where the inode was
+/// deleted in that snapshot - and what the pass has counted against it.
+#[derive(Clone, Copy)]
+pub struct WalkerEntry {
+    pub inode:    c::bch_inode_unpacked,
+    pub whiteout: bool,
+    pub count:    u64,
+}
+
+impl WalkerEntry {
+    fn new(fs: &Fs, k: BkeySC<'_>) -> Self {
+        let whiteout = !inode::bkey_is_inode(k.k);
+        let inode = if whiteout {
+            c::bch_inode_unpacked {
+                bi_inum:     k.k.p.offset,
+                bi_snapshot: k.k.p.snapshot,
+                ..Default::default()
+            }
+        } else {
+            inode::unpack(fs, k)
+        };
+        WalkerEntry { inode, whiteout, count: 0 }
+    }
+}
 
 /// The live inode version a key belongs to, from InodeWalker::walk().
 pub struct Walked<'w> {
@@ -141,7 +224,15 @@ pub struct Walked<'w> {
 
 impl InodeWalker {
     pub fn new() -> Self {
-        InodeWalker(Default::default())
+        InodeWalker {
+            first_this_inode: false,
+            have_inodes:      false,
+            recalculate_sums: false,
+            last_pos:         Default::default(),
+            commit_count:     0,
+            inodes:           KVVec::new(),
+            deletes:          KVVec::new(),
+        }
     }
 
     /// The live inode version @k belongs to, as bch2_walk_inode() and then
@@ -162,16 +253,16 @@ impl InodeWalker {
             Err(e) => {
                 // Keep last_pos on this inode: a retry that saw a new inode
                 // would have the caller check this one's sums half counted
-                self.0.last_pos = k.k.p;
+                self.last_pos = k.k.p;
                 self.invalidate();
                 return Err(e);
             }
         };
 
-        let Some(i) = i.filter(|&i| !self.inodes()[i].whiteout) else { return t.done(None) };
+        let Some(i) = i.filter(|&i| !self.inodes[i].whiteout) else { return t.done(None) };
 
-        let first_this_inode = core::mem::take(&mut self.0.first_this_inode);
-        t.done(Some(Walked { inode: &mut self.inodes_mut()[i].inode, first_this_inode }))
+        let first_this_inode = core::mem::take(&mut self.first_this_inode);
+        t.done(Some(Walked { inode: &mut self.inodes[i].inode, first_this_inode }))
     }
 
     /// The index of the version @k resolves to, if any.
@@ -181,11 +272,99 @@ impl InodeWalker {
         iter: &mut BtreeIter<'t>,
         k:    BkeySC<'_>,
     ) -> TransResult<'a, 't, Option<usize>> {
-        let i = errptr_to_result(unsafe { c::bch2_walk_inode(t.raw(), &mut self.0, k.to_raw()) })?;
-        let i = (!i.is_null()).then(|| unsafe { i.offset_from(self.0.inodes.data) } as usize);
+        let trans = t.trans();
 
+        if self.last_pos.inode != k.k.p.inode {
+            self.get_inodes_all_snapshots(trans, k.k.p.inode)?;
+        } else if self.commit_count != trans.commit_count() {
+            // A commit may have updated inodes we have cached: revalidate.
+            // We're mid way through walking this inode's keys, so per-inode
+            // accumulations (i_sectors, subdir counts) are now partial -
+            // recount instead of complaining:
+            self.get_inodes_all_snapshots(trans, k.k.p.inode)?;
+            self.recalculate_sums = true;
+        }
+
+        self.last_pos = k.k.p;
+
+        let (t, i) = self.lookup_inode_for_snapshot(t, k)?;
         let t = self.check_key_has_inode(t, iter, i, k)?;
         t.done(i)
+    }
+
+    /// Load every version of inode @inum, whiteouts included, in snapshot ID
+    /// order.
+    fn get_inodes_all_snapshots(&mut self, trans: &BtreeTrans<'_>, inum: u64) -> Result<(), BchError> {
+        let fs = trans.fs();
+
+        // We no longer have inodes for last_pos; clear this to avoid screwing
+        // up check_i_sectors/check_subdir_count if we take a transaction
+        // restart here:
+        self.have_inodes = false;
+        self.recalculate_sums = false;
+        self.inodes.clear();
+
+        let inodes = &mut self.inodes;
+        let mut iter = BtreeIter::new(trans, c::btree_id::inodes, pos(0, inum),
+                                      BtreeIterFlags::ALL_SNAPSHOTS);
+        iter.for_each_max_norestart(spos(0, inum, u32::MAX), |_, k| {
+            inodes.push(WalkerEntry::new(fs, k), GFP_KERNEL)?;
+            Ok(())
+        })?;
+
+        self.first_this_inode = true;
+        self.have_inodes = true;
+        self.commit_count = trans.commit_count();
+        Ok(())
+    }
+
+    /// The version @k belongs to: the first - in snapshot ID order, the
+    /// nearest - in its snapshot or an ancestor.
+    ///
+    /// That should be in @k's own snapshot, since a key's inode is always
+    /// updated when the key is; if it's an ancestor's, the inode is copied
+    /// (or the whiteout repeated) into @k's snapshot, committed, and a restart
+    /// returned.
+    fn lookup_inode_for_snapshot<'a, 't>(&mut self, t: TransAttempt<'a, 't>, k: BkeySC<'_>)
+        -> TransResult<'a, 't, Option<usize>>
+    {
+        let trans = t.trans();
+        let fs = trans.fs();
+        let snapshot = k.k.p.snapshot;
+        let k_snapshot = snapshot::redundant_interior(fs, snapshot).unwrap_or(snapshot);
+
+        let Some(i) = self.inodes.iter()
+            .position(|i| snapshot::is_ancestor(trans, k_snapshot, i.inode.bi_snapshot)) else {
+            return t.done(None);
+        };
+
+        let e = self.inodes[i];
+        let inode_snapshot = snapshot::redundant_interior(fs, e.inode.bi_snapshot)
+            .unwrap_or(e.inode.bi_snapshot);
+
+        if !fsck_err_on!(trans, k_snapshot != inode_snapshot, id::snapshot_key_missing_inode_snapshot,
+                         "have key for inode {}:{snapshot} but have inode in ancestor snapshot {}\n\
+                          unexpected because we should always update the inode when we update a key in that inode\n\
+                          {}",
+                         { self.last_pos.inode }, e.inode.bi_snapshot, k.to_text(fs))? {
+            return t.done(Some(i));
+        }
+
+        let t = if !e.whiteout {
+            let mut new = e.inode;
+            new.bi_snapshot = snapshot;
+            inode::fsck_write(t, &mut new)?
+        } else {
+            let whiteout = t.bkey_alloc_init(0, c::bch_bkey_type::KEY_TYPE_whiteout.0 as u8,
+                                             spos(0, e.inode.bi_inum, snapshot))?;
+            t.insert_with(c::btree_id::inodes, whiteout, BtreeIterFlags::CACHED,
+                          UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?
+        };
+        let t = t.commit(None, CommitFlags::empty())?;
+
+        // walk() invalidates on the restart: the retry refetches the versions,
+        // the one just written included
+        Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))
     }
 
     /// @k, in @iter's btree, has to belong to an inode of the matching type:
@@ -325,7 +504,7 @@ impl InodeWalker {
     /// walker revalidates when the transaction's commit_count moves on from
     /// the one it recorded, and the recorded count is never ahead of it.
     pub fn invalidate(&mut self) {
-        self.0.commit_count = self.0.commit_count.wrapping_sub(1);
+        self.commit_count = self.commit_count.wrapping_sub(1);
     }
 
     /// The versions visible to a key in @snapshot, as for_each_visible_inode:
@@ -334,14 +513,12 @@ impl InodeWalker {
     pub fn visible_mut<'a>(
         &'a mut self,
         trans:    &'a BtreeTrans<'_>,
-        s:        &'a mut SnapshotsSeen,
+        s:        &'a SnapshotsSeen,
         snapshot: u32,
-    ) -> impl Iterator<Item = &'a mut c::inode_walker_entry> {
-        self.inodes_mut().iter_mut()
+    ) -> impl Iterator<Item = &'a mut WalkerEntry> {
+        self.inodes.iter_mut()
             .take_while(move |i| i.inode.bi_snapshot <= snapshot)
-            .filter(move |i| unsafe {
-                c::bch2_key_visible_in_snapshot(trans.raw(), &mut s.0, i.inode.bi_snapshot, snapshot)
-            })
+            .filter(move |i| s.key_visible(trans, i.inode.bi_snapshot, snapshot))
     }
 
     /// Load the versions of inode @inum a key at @s's position refers to, as
@@ -352,52 +529,69 @@ impl InodeWalker {
     pub fn get_visible(
         &mut self,
         trans: &BtreeTrans<'_>,
-        s:     &mut SnapshotsSeen,
+        s:     &SnapshotsSeen,
         inum:  u64,
     ) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_get_visible_inodes(trans.raw(), &mut self.0, &mut s.0, inum) })
+        let fs = trans.fs();
+        let snapshot = s.pos.snapshot;
+
+        self.inodes.clear();
+        self.deletes.clear();
+
+        let (inodes, deletes) = (&mut self.inodes, &mut self.deletes);
+        let mut iter = BtreeIter::new(trans, c::btree_id::inodes, spos(0, inum, snapshot),
+                                      BtreeIterFlags::ALL_SNAPSHOTS);
+        iter.for_each_reverse_norestart(pos(0, inum), |_, k| {
+            let id = k.k.p.snapshot;
+
+            if !s.ref_visible(trans, snapshot, id) ||
+               deletes.iter().any(|&d| snapshot::is_ancestor(trans, id, d)) {
+                return Ok(());
+            }
+
+            if inode::bkey_is_inode(k.k) {
+                inodes.push(WalkerEntry::new(fs, k), GFP_KERNEL)?;
+            } else {
+                deletes.push(id, GFP_KERNEL)?;
+            }
+            Ok(())
+        })
     }
 
-    pub fn inodes(&self) -> &[c::inode_walker_entry] {
-        unsafe { darray_slice(self.0.inodes.data, self.0.inodes.nr) }
+    pub fn inodes(&self) -> &[WalkerEntry] {
+        &self.inodes
     }
 
-    pub fn inodes_mut(&mut self) -> &mut [c::inode_walker_entry] {
-        unsafe { darray_slice_mut(self.0.inodes.data, self.0.inodes.nr) }
+    pub fn inodes_mut(&mut self) -> &mut [WalkerEntry] {
+        &mut self.inodes
     }
 
     /// From get_visible(): snapshots where the inode was deleted.
     pub fn deletes(&self) -> &[u32] {
-        unsafe { darray_slice(self.0.deletes.data, self.0.deletes.nr) }
+        &self.deletes
     }
 
     /// The inode whose versions walk() has loaded, if any.
     pub fn cur_inum(&self) -> Option<u64> {
-        self.0.have_inodes.then_some(self.0.last_pos.inode)
+        self.have_inodes.then_some(self.last_pos.inode)
     }
 
     /// The versions were refetched partway through the inode, so its per-pass
     /// counts are partial: recount them rather than reporting a mismatch.
     pub fn recalculate_sums(&self) -> bool {
-        self.0.recalculate_sums
+        self.recalculate_sums
     }
 
     /// A repair changed what this inode's keys add up to: recount at the end
     /// of the inode instead of reporting the mismatch.
     pub fn set_recalculate_sums(&mut self) {
-        self.0.recalculate_sums = true;
+        self.recalculate_sums = true;
     }
 }
 
 impl Default for InodeWalker {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Drop for InodeWalker {
-    fn drop(&mut self) {
-        unsafe { c::inode_walker_exit(&mut self.0) }
     }
 }
 
@@ -546,11 +740,5 @@ pub fn inode_should_reattach(inode: &c::bch_inode_unpacked) -> bool {
 impl Default for SnapshotsSeen {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Drop for SnapshotsSeen {
-    fn drop(&mut self) {
-        unsafe { c::snapshots_seen_exit(&mut self.0) }
     }
 }

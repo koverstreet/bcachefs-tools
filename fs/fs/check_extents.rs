@@ -94,8 +94,8 @@ struct ExtentEnds {
 
 impl ExtentEnds {
     /// Record where @k ends.
-    fn at(&mut self, fs: &Fs, seen: &SnapshotsSeen, k: c::bpos) -> Result<(), BchError> {
-        let n = ExtentEnd { snapshot: k.snapshot, offset: k.offset, seen: seen.try_clone(fs)? };
+    fn at(&mut self, seen: &SnapshotsSeen, k: c::bpos) -> Result<(), BchError> {
+        let n = ExtentEnd { snapshot: k.snapshot, offset: k.offset, seen: seen.try_clone()? };
 
         match self.e.iter().position(|i| i.snapshot >= k.snapshot) {
             Some(idx) if self.e[idx].snapshot == k.snapshot => self.e[idx] = n,
@@ -286,7 +286,7 @@ fn overlapping_extents_found<'a, 't>(
         e1.offset = pos2.start_offset();
     } else if pos1.snapshot > pos2.p.snapshot {
         // We overwrote the first extent in pos2's snapshot:
-        e1.seen.add_inorder(fs, pos2.p.snapshot)?;
+        e1.seen.add_inorder(pos2.p.snapshot)?;
     } else {
         // We overwrote the second extent - restart check_extent() from the
         // top. (No need to say we fixed something: the retry's walk sees the
@@ -375,7 +375,7 @@ fn check_extent_past_end(
     }
 
     if let Some((inum, snapshot, last_block)) = punch {
-        st.s.add_inorder(fs, snapshot)?;
+        st.s.add_inorder(snapshot)?;
         io_misc::fpunch_snapshot(trans, spos(inum, last_block, snapshot), pos(inum, u64::MAX))?;
     }
 
@@ -402,7 +402,7 @@ fn check_extent<'a, 't>(
         t = check_i_sectors(t, &mut st.w)?;
     }
 
-    st.s.update(fs, c::btree_id::extents, k.k.p)?;
+    st.s.update(k.k.p)?;
 
     t = st.w.walk(t, iter, k)?.0;
 
@@ -437,7 +437,7 @@ fn check_extent<'a, 't>(
     }
 
     if !whiteout {
-        st.extent_ends.at(fs, &st.s, p)?;
+        st.extent_ends.at(&st.s, p)?;
     }
 
     Ok(t)

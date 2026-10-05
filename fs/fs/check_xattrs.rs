@@ -92,7 +92,7 @@ fn check_xattr<'a, 't>(
         return Ok(t);
     }
 
-    st.s.update(fs, c::btree_id::xattrs, k.k.p)?;
+    st.s.update(k.k.p)?;
 
     let (t, w) = st.inode.walk(t, iter, k)?;
     let Some(w) = w else { return Ok(t) };

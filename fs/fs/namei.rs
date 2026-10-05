@@ -18,8 +18,9 @@ pub fn check_inode_has_case_insensitive(
     s:         &mut SnapshotsSeen,
     do_update: &mut bool,
 ) -> Result<(), BchError> {
+    let mut ids = s.ids_view();
     ret_to_result_void(unsafe {
-        c::bch2_check_inode_has_case_insensitive(trans.raw(), inode, s.ids_raw_mut(), do_update)
+        c::bch2_check_inode_has_case_insensitive(trans.raw(), inode, &mut ids, do_update)
     })
 }
 

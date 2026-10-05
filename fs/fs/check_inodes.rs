@@ -307,7 +307,7 @@ fn check_inode<'a, 't>(
         return Ok(t);
     }
 
-    st.s.update(fs, c::btree_id::inodes, k.k.p)?;
+    st.s.update(k.k.p)?;
 
     if !inode::bkey_is_inode(k.k) {
         return Ok(t);

@@ -82,7 +82,7 @@ fn check_dir_nlink(
     trans:            &BtreeTrans<'_>,
     inum:             u64,
     recalculate_sums: bool,
-    i:                &mut c::inode_walker_entry,
+    i:                &mut check::WalkerEntry,
 ) -> Result<(), BchError> {
     let fs = trans.fs();
 
@@ -492,7 +492,7 @@ fn check_dirent<'a, 't>(
         return Ok(t);
     }
 
-    st.s.update(fs, c::btree_id::dirents, k.k.p)?;
+    st.s.update(k.k.p)?;
 
     if k.key_type() == c::bch_bkey_type::KEY_TYPE_whiteout {
         return Ok(t);

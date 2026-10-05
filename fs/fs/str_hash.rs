@@ -178,7 +178,7 @@ pub fn check_key<T: HashTable>(
 ) -> Result<(), BchError> {
     ret_to_result(unsafe {
         c::bch2_str_hash_check_key(trans.raw(),
-                                   s.map_or(core::ptr::null_mut(), |s| s.raw_mut()),
+                                   s.map_or(core::ptr::null_mut(), |s| s.as_opaque()),
                                    T::desc(), hash_info, k.to_raw(),
                                    updated_before_k_pos)
     })

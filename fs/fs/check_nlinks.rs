@@ -134,7 +134,7 @@ fn check_nlinks_walk_dirents(
     let mut iter = BtreeIter::new(&trans, c::btree_id::dirents, POS_MIN, iter_flags());
 
     let ret = iter.for_each(&trans, |_, k| {
-        s.update(fs, c::btree_id::dirents, k.k.p)?;
+        s.update(k.k.p)?;
 
         if let Some(d) = k.as_dirent() {
             let d_type = d.d_type() as u32;
