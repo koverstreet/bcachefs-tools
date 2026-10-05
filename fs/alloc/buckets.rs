@@ -45,6 +45,12 @@ impl<'f> DiskReservation<'f> {
         })
     }
 
+    /// Release what this reservation holds, keeping it usable: as
+    /// bch2_disk_reservation_put(). For a loop reserving per iteration.
+    pub fn put(&self) {
+        unsafe { c::bch2_disk_reservation_put(self.fs.raw, self.raw.get()) };
+    }
+
     pub fn as_ptr(&self) -> *const c::disk_reservation {
         self.raw.get()
     }
@@ -60,6 +66,6 @@ impl<'f> DiskReservation<'f> {
 
 impl Drop for DiskReservation<'_> {
     fn drop(&mut self) {
-        unsafe { c::bch2_disk_reservation_put(self.fs.raw, self.raw.get()) };
+        self.put();
     }
 }
