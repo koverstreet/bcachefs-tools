@@ -982,7 +982,8 @@ int bch2_bkey_get_io_opts(struct btree_trans *trans,
 		mode = IO_OPTS_metadata;
 	else if (bkey_is_indirect(k.k))
 		mode = IO_OPTS_reflink;
-	else if (bkey_is_user_data(k.k)) {
+	else if (bkey_is_user_data(k.k) ||
+		 k.k->type == KEY_TYPE_reflink_p) {
 		mode = IO_OPTS_user;
 
 		if (unlikely(!k.k->p.snapshot)) {
