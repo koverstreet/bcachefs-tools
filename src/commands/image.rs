@@ -190,7 +190,7 @@ fn get_nbuckets_used(fs: &Fs) -> Result<u64, anyhow::Error> {
         let (t, k) = t.result_value(iter.peek_prev())?;
         match k {
             Some(k) => t.done((k.k.type_, k.k.p.offset)),
-            None => Err(bcachefs_kernel::errcode::BchError::from_raw(libc::ENOENT).into()),
+            None => Err(bcachefs_kernel::errcode::BchError::from(libc::ENOENT).into()),
         }
     });
 

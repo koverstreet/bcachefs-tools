@@ -376,7 +376,7 @@ fn mount_legacy(
     // An interior NUL can't be expressed in a C string at all. Nothing has been
     // attempted at this point, so the errno is ours rather than the kernel's.
     let bad_arg = |what: &str| MountError {
-        code: BchError::from_raw(libc::EINVAL),
+        code: libc::EINVAL.into(),
         text: format!("{what} contains a NUL byte"),
     };
 
@@ -524,12 +524,12 @@ mod tests {
     /// straight through `?`, and behind a context someone adds later.
     #[test]
     fn splitbrain_is_recognised_through_anyhow() {
-        let sb = || BchError::from_errcode(c::bch_errcode::BCH_ERR_device_splitbrain);
+        let sb = || BchError::from(c::bch_errcode::BCH_ERR_device_splitbrain);
 
         assert!(is_splitbrain(&anyhow::Error::from(sb())));
         assert!(is_splitbrain(&anyhow::Error::from(sb()).context("scanning for devices")));
 
-        let other = BchError::from_errcode(c::bch_errcode::BCH_ERR_device_has_been_removed);
+        let other = BchError::from(c::bch_errcode::BCH_ERR_device_has_been_removed);
         assert!(!is_splitbrain(&anyhow::Error::from(other)));
         assert!(!is_splitbrain(&anyhow::anyhow!("not a bcachefs error at all")));
     }

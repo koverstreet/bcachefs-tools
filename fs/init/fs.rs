@@ -137,7 +137,7 @@ impl Fs {
     /// Throw @error, as C's bch_err_throw() does: counted in error_throw and
     /// traced, so errors started in Rust are as visible as errors started in C.
     /// Naming an error to compare or parse against isn't throwing it - that's
-    /// BchError::from_errcode().
+    /// BchError::from().
     pub fn err(&self, error: bch_errcode) -> BchError {
         BchError::from_raw(-unsafe { c::__bch2_err_throw(self.raw, -(error as i32)) })
     }

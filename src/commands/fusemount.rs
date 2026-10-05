@@ -325,7 +325,7 @@ fn dirent_exists(fs: &Fs, dir: c::subvol_inum, name: &[u8]) -> Result<bool, BchE
 
     match lookup {
         Ok(_) => Ok(true),
-        Err(e) if e.matches_errno(libc::ENOENT) => Ok(false),
+        Err(e) if e.matches(libc::ENOENT) => Ok(false),
         Err(e) => Err(e),
     }
 }
@@ -997,7 +997,7 @@ impl Filesystem for BcachefsFs {
             Err(e) => {
                 eprintln!("  lookup -> err {}", e);
                 // Negative dentry caching: return empty entry for ENOENT
-                if e.matches_errno(libc::ENOENT) {
+                if e.matches(libc::ENOENT) {
                     let attr = FileAttr {
                         ino: INodeNo(0),
                         size: 0, blocks: 0,

@@ -15,11 +15,23 @@ include!(concat!(env!("OUT_DIR"), "/errcodes_gen.rs"));
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct BchError(i32);
 
+// The bcachefs codes extend the errnos, so every errno is a BchError - as the
+// bindings spell them (u32) or as libc does (i32), positive either way.
+
+impl From<bch_errcode> for BchError {
+    fn from(code: bch_errcode) -> Self { Self(code as i32) }
+}
+
+impl From<u32> for BchError {
+    fn from(errno: u32) -> Self { Self(errno as i32) }
+}
+
+impl From<i32> for BchError {
+    fn from(errno: i32) -> Self { Self(errno) }
+}
+
 impl BchError {
     pub fn from_raw(code: i32) -> Self { Self(code) }
-
-    /// Construct from a `bch_errcode` enum value.
-    pub fn from_errcode(code: bch_errcode) -> Self { Self(code as i32) }
 
     pub fn raw(&self) -> i32 { self.0 }
 
@@ -47,17 +59,14 @@ impl BchError {
         self.0.unsigned_abs() < bch_errcode::BCH_ERR_MAX as u32
     }
 
-    /// Whether this error is @class, or derives from it.
+    /// Whether this error is @class, or derives from it: as bch2_err_matches().
+    /// @class is anything that converts: a bcachefs error code, or an errno.
     ///
     /// An unrecognised code is not a match: we can't see its parent chain, so
     /// there is nothing to answer with but "no".
-    pub fn matches(&self, class: bch_errcode) -> bool {
-        self.matches_errno(class as i32)
-    }
-
-    pub fn matches_errno(&self, class: i32) -> bool {
+    pub fn matches(&self, class: impl Into<BchError>) -> bool {
         if self.0 != 0 && self.known() {
-            unsafe { c::__bch2_err_matches(self.0, class) }
+            unsafe { c::__bch2_err_matches(self.0, class.into().0) }
         } else {
             false
         }

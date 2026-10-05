@@ -45,13 +45,13 @@ impl FromStr for c::btree_id {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = CString::new(s)
-            .map_err(|_| BchError::from_errcode(bch_errcode::BCH_ERR_EINVAL_parse_btree_id))?;
+            .map_err(|_| BchError::from(bch_errcode::BCH_ERR_EINVAL_parse_btree_id))?;
         let p = s.as_ptr();
 
         let v =
             unsafe { c::match_string(c::__bch2_btree_ids[..].as_ptr(), (-1_isize) as usize, p) };
         c::btree_id::from_raw(v as u32)
-            .ok_or(BchError::from_errcode(bch_errcode::BCH_ERR_EINVAL_parse_btree_id))
+            .ok_or(bch_errcode::BCH_ERR_EINVAL_parse_btree_id.into())
     }
 }
 
@@ -61,14 +61,14 @@ impl FromStr for c::bch_bkey_type {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = CString::new(s)
-            .map_err(|_| BchError::from_errcode(bch_errcode::BCH_ERR_EINVAL_parse_bkey_type))?;
+            .map_err(|_| BchError::from(bch_errcode::BCH_ERR_EINVAL_parse_bkey_type))?;
         let p = s.as_ptr();
 
         let v = unsafe { c::match_string(c::bch2_bkey_types[..].as_ptr(), (-1_isize) as usize, p) };
         if v >= 0 {
             Ok(c::bch_bkey_type(v as u32))
         } else {
-            Err(BchError::from_errcode(bch_errcode::BCH_ERR_EINVAL_parse_bkey_type))
+            Err(bch_errcode::BCH_ERR_EINVAL_parse_bkey_type.into())
         }
     }
 }

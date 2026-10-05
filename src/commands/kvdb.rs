@@ -462,7 +462,7 @@ fn cmd_read(fs: &Fs, op: ReadOp, btree: c::btree_id, pos: c::bpos, filtered: boo
                 // are the user's, not the transaction's: stash and abort
                 // the retry loop with a stand-in errcode.
                 user_err = Some(e);
-                BchError::from_errcode(bch_errcode::BCH_ERR_ENOENT_bkey_type_mismatch)
+                BchError::from(bch_errcode::BCH_ERR_ENOENT_bkey_type_mismatch)
             }),
             None => Ok("(no key)\n".to_string()),
         });
@@ -620,9 +620,7 @@ fn cmd_list_online(handle: &BcachefsHandle, fs: &Fs,
 }
 
 fn no_key_err() -> TransError {
-    TransError::from(BchError::from_errcode(
-        bch_errcode::BCH_ERR_ENOENT_bkey_type_mismatch,
-    ))
+    bch_errcode::BCH_ERR_ENOENT_bkey_type_mismatch.into()
 }
 
 fn cmd_update(

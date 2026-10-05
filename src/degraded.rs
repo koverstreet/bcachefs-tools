@@ -344,8 +344,8 @@ mod tests {
     /// that, before anything touches a terminal.
     #[test]
     fn only_the_two_refusals_we_know_about_are_ours_to_ask_about() {
-        let lost   = BchError::from_errcode(errcode::insufficient_devices_data_lost);
-        let intact = BchError::from_errcode(errcode::insufficient_devices_data_intact);
+        let lost   = BchError::from(errcode::insufficient_devices_data_lost);
+        let intact = BchError::from(errcode::insufficient_devices_data_intact);
 
         assert_eq!(Situation::of(&lost),   Some(Situation::DataLost));
         assert_eq!(Situation::of(&intact), Some(Situation::DataIntact));
@@ -353,11 +353,11 @@ mod tests {
         for e in [
             // The parent, which a kernel that hasn't got the split still
             // throws: we cannot tell which situation it is, so we don't ask.
-            BchError::from_errcode(errcode::insufficient_devices_to_start),
-            BchError::from_errcode(errcode::EINVAL_opt_parse_str_required),
+            BchError::from(errcode::insufficient_devices_to_start),
+            BchError::from(errcode::EINVAL_opt_parse_str_required),
             // A flattened errno, which is what the mount(2) fallback gives us:
             // the same EINVAL a typo'd option produces.
-            BchError::from_raw(libc::EINVAL),
+            BchError::from(libc::EINVAL),
             BchError::from_raw(0),
             // A code from a kernel module newer than this binary - the normal
             // state of affairs for a filesystem that ships DKMS-only. The

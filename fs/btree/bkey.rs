@@ -195,7 +195,7 @@ fn parse_bpos_u64(s: &str) -> Result<u64, BchError> {
     match s {
         "U64_MAX" => Ok(u64::MAX),
         "U32_MAX" => Ok(u32::MAX as u64),
-        _        => s.parse().map_err(|_| BchError::from_errcode(bch_errcode::BCH_ERR_EINVAL_parse_bpos)),
+        _        => s.parse().map_err(|_| BchError::from(bch_errcode::BCH_ERR_EINVAL_parse_bpos)),
     }
 }
 
@@ -204,7 +204,7 @@ fn parse_bpos_u64(s: &str) -> Result<u64, BchError> {
 fn parse_bpos_u32(s: &str) -> Result<u32, BchError> {
     match s {
         "U32_MAX" => Ok(u32::MAX),
-        _        => s.parse().map_err(|_| BchError::from_errcode(bch_errcode::BCH_ERR_EINVAL_parse_bpos)),
+        _        => s.parse().map_err(|_| BchError::from(bch_errcode::BCH_ERR_EINVAL_parse_bpos)),
     }
 }
 
@@ -225,7 +225,7 @@ impl FromStr for c::bpos {
             return Ok(SPOS_MAX);
         }
 
-        let err = || BchError::from_errcode(bch_errcode::BCH_ERR_EINVAL_parse_bpos);
+        let err = || BchError::from(bch_errcode::BCH_ERR_EINVAL_parse_bpos);
 
         let mut fields = s.split(':');
         let ino_str = fields.next().ok_or_else(err)?;

@@ -188,6 +188,12 @@ impl From<BchError> for TransError {
     }
 }
 
+impl From<bch_errcode> for TransError {
+    fn from(code: bch_errcode) -> Self {
+        BchError::from(code).into()
+    }
+}
+
 fn retry_restart<T>(result: Result<T, TransError>) -> Result<Option<T>, BchError> {
     match result {
         Ok(v)                       => Ok(Some(v)),
