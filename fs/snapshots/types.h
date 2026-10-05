@@ -27,12 +27,14 @@ DEFINE_DARRAY_NAMED(snapshot_id_list, u32);
  * Read under RCU; partial is_ancestor[] updates are tolerable since readers
  * fall back to the skiplist.
  */
+enum snapshot_id_state {
+	SNAPSHOT_ID_empty,
+	SNAPSHOT_ID_live,
+	SNAPSHOT_ID_deleted,
+};
+
 struct snapshot_t {
-	enum snapshot_id_state {
-		SNAPSHOT_ID_empty,
-		SNAPSHOT_ID_live,
-		SNAPSHOT_ID_deleted,
-	}			state;
+	enum snapshot_id_state	state;
 	u32			parent;
 	/* skiplist: random ancestors, sorted ascending; try [2] first */
 	u32			skip[3];

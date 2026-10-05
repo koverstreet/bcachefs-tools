@@ -577,11 +577,6 @@ fn main() {
         .blocklist_function("linux_shrinkers_init")
         .blocklist_function("rust_read_submit")
         .blocklist_function("rust_write_submit")
-        // wrap_static_fns can't emit a valid C wrapper for these: bindgen
-        // renames the returned `enum snapshot_id_state` to a name that isn't a
-        // real C type, so the wrapper's return type is incomplete. Unused from
-        // Rust, so just drop them.
-        .blocklist_function(".*bch2_snapshot_id_state")
         .blocklist_type("rhash_lock_head")
         .blocklist_type("rhash.*")
         .blocklist_type("srcu_struct")

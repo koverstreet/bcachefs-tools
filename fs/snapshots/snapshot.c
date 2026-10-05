@@ -425,6 +425,75 @@ u32 bch2_snapshot_redundant_interior(struct bch_fs *c, u32 id)
 	}
 }
 
+/* No NULL check, for the same reason as bch2_snapshot_depth(): */
+u32 bch2_snapshot_skiplist_get(struct bch_fs *c, u32 id)
+{
+	if (!id)
+		return 0;
+
+	guard(rcu)();
+	const struct snapshot_t *s = snapshot_t(c, id);
+	return s->parent
+		? bch2_snapshot_nth_parent(c, id, get_random_u32_below(s->depth))
+		: id;
+}
+
+/* The lowest numbered subvolume in @root's subtree, 0 if there's none: */
+u32 bch2_snapshot_oldest_subvol(struct bch_fs *c, u32 root)
+{
+	guard(rcu)();
+	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
+	u32 subvol = 0;
+
+	__for_each_snapshot_child(c, t, root, NULL, id) {
+		u32 s = __snapshot_t(t, id)->subvol;
+		if (s && (!subvol || s < subvol))
+			subvol = s;
+	}
+
+	return subvol;
+}
+
+/*
+ * The unique live node claiming an edge with @id - as its parent if @parent,
+ * else as its child - other than the nodes @s, @id's key, already points at
+ * (intact edges, stale entries for the disputed pointer, cycles). 0 if there's
+ * none, or more than one: fsck's edge repair must not guess.
+ *
+ * Live nodes only: a tombstone's child pointer is a splice breadcrumb, not a
+ * claim.
+ */
+u32 bch2_snapshot_table_find_edge(struct bch_fs *c, const struct bch_snapshot *s,
+				  u32 id, bool parent)
+{
+	guard(rcu)();
+	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
+	u32 found = 0;
+
+	for (size_t idx = 0; idx < t->nr; idx++) {
+		const struct snapshot_t *n = &t->s[idx];
+		u32 n_id = U32_MAX - idx;
+
+		if (n->state != SNAPSHOT_ID_live)
+			continue;
+
+		if (!(parent
+		      ? n->children[0] == id || n->children[1] == id
+		      : n->parent == id))
+			continue;
+
+		if (n_id == le32_to_cpu(s->parent) ||
+		    n_id == le32_to_cpu(s->children[0]) ||
+		    n_id == le32_to_cpu(s->children[1]))
+			continue;
+
+		if (found)
+			return 0;	/* ambiguous */
+		found = n_id;
+	}
+	return found;
+}
+
 static inline u32 get_ancestor_below(struct snapshot_table *t, u32 id, u32 ancestor)
 {
 	const struct snapshot_t *s = __snapshot_t(t, id);
@@ -600,6 +669,15 @@ struct snapshot_t *bch2_snapshot_t_mut(struct bch_fs *c, u32 id)
 		return &table->s[idx];
 
 	return __snapshot_t_mut(c, id);
+}
+
+/* Make sure the table has an entry for @id, for a node about to be created: */
+int bch2_snapshot_table_make_room(struct bch_fs *c, u32 id)
+{
+	guard(mutex)(&c->snapshots.table_lock);
+	return bch2_snapshot_t_mut(c, id)
+		? 0
+		: bch_err_throw(c, ENOMEM_mark_snapshot);
 }
 
 /* Snapshot node state */

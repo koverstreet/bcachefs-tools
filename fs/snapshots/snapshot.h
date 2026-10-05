@@ -123,6 +123,7 @@ static inline const struct snapshot_t *snapshot_t(struct bch_fs *c, u32 id)
 }
 
 struct snapshot_t *bch2_snapshot_t_mut(struct bch_fs *, u32);
+int bch2_snapshot_table_make_room(struct bch_fs *, u32);
 
 static inline u32 bch2_snapshot_tree(struct bch_fs *c, u32 id)
 {
@@ -187,6 +188,8 @@ static inline u32 bch2_snapshot_nth_parent(struct bch_fs *c, u32 id, u32 n)
 }
 
 u32 bch2_snapshot_skiplist_get(struct bch_fs *, u32);
+u32 bch2_snapshot_oldest_subvol(struct bch_fs *, u32);
+u32 bch2_snapshot_table_find_edge(struct bch_fs *, const struct bch_snapshot *, u32, bool);
 
 static inline u32 bch2_snapshot_root(struct bch_fs *c, u32 id)
 {

@@ -43,14 +43,6 @@
 #include "init/progress.h"
 #include "init/recovery.h"
 
-static int bch2_snapshot_table_make_room(struct bch_fs *c, u32 id)
-{
-	guard(mutex)(&c->snapshots.table_lock);
-	return bch2_snapshot_t_mut(c, id)
-		? 0
-		: bch_err_throw(c, ENOMEM_mark_snapshot);
-}
-
 static int bch2_snapshot_tree_create(struct btree_trans *trans,
 				u32 root_id, u32 subvol_id, u32 *tree_id)
 {
@@ -64,31 +56,6 @@ static int bch2_snapshot_tree_create(struct btree_trans *trans,
 	n_tree->v.root_snapshot	= cpu_to_le32(root_id);
 	*tree_id = n_tree->k.p.offset;
 	return 0;
-}
-
-static u32 bch2_snapshot_oldest_subvol(struct bch_fs *c, u32 snapshot_root,
-				       snapshot_id_list *skip)
-{
-	guard(rcu)();
-	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
-
-	while (true) {
-		u32 subvol = 0;
-
-		__for_each_snapshot_child(c, t, snapshot_root, NULL, id)  {
-			if (skip && snapshot_list_has_id(skip, id))
-				continue;
-
-			u32 s = __snapshot_t(t, id)->subvol;
-			if (s && (!subvol || s < subvol))
-				subvol = s;
-		}
-
-		if (subvol || !skip)
-			return subvol;
-
-		skip = NULL;
-	}
 }
 
 static int bch2_snapshot_tree_master_subvol(struct btree_trans *trans,
@@ -114,7 +81,7 @@ static int bch2_snapshot_tree_master_subvol(struct btree_trans *trans,
 	if (ret)
 		return ret;
 
-	*subvol_id = bch2_snapshot_oldest_subvol(c, snapshot_root, NULL);
+	*subvol_id = bch2_snapshot_oldest_subvol(c, snapshot_root);
 
 	struct bkey_i_subvolume *u =
 		errptr_try(bch2_bkey_get_mut_typed(trans, BTREE_ID_subvolumes, POS(0, *subvol_id),
@@ -260,19 +227,6 @@ static int snapshot_tree_ptr_good(struct btree_trans *trans,
 	return bch2_snapshot_is_ancestor_early(trans->c, snap_id, le32_to_cpu(s_t.root_snapshot));
 }
 
-/* No NULL check, for the same reason as bch2_snapshot_depth(): */
-u32 bch2_snapshot_skiplist_get(struct bch_fs *c, u32 id)
-{
-	if (!id)
-		return 0;
-
-	guard(rcu)();
-	const struct snapshot_t *s = snapshot_t(c, id);
-	return s->parent
-		? bch2_snapshot_nth_parent(c, id, get_random_u32_below(s->depth))
-		: id;
-}
-
 /*
  * snapshot_tree pointer was incorrect: look up root snapshot node, make sure
  * its snapshot_tree pointer is correct (allocate new one if necessary), then
@@ -301,7 +255,7 @@ static int snapshot_tree_ptr_repair(struct btree_trans *trans,
 			errptr_try(bch2_bkey_make_mut_typed(trans, &root_iter, &root.s_c, 0, snapshot));
 
 		try(bch2_snapshot_tree_create(trans, root_id,
-					      bch2_snapshot_oldest_subvol(c, root_id, NULL),
+					      bch2_snapshot_oldest_subvol(c, root_id),
 					      &tree_id));
 
 		u->v.tree = cpu_to_le32(tree_id);
@@ -548,42 +502,6 @@ static bool snapshot_node_points_back(const struct bch_snapshot *s, unsigned sid
 		? le32_to_cpu(s->children[0]) == other ||
 		  le32_to_cpu(s->children[1]) == other
 		: le32_to_cpu(s->parent) == other;
-}
-
-/*
- * Find the unique live node in role @side claiming an edge with @id,
- * excluding everything @s already references (intact edges, stale entries
- * for the disputed pointer, cycles):
- */
-static u32 snapshot_table_find_edge(struct bch_fs *c, const struct bch_snapshot *s,
-				    u32 id, unsigned side)
-{
-	guard(rcu)();
-	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
-	u32 found = 0;
-
-	for (size_t idx = 0; idx < t->nr; idx++) {
-		const struct snapshot_t *n = &t->s[idx];
-		u32 n_id = U32_MAX - idx;
-
-		if (n->state != SNAPSHOT_ID_live)
-			continue;
-
-		if (!(side == EDGE_PARENT
-		      ? n->children[0] == id || n->children[1] == id
-		      : n->parent == id))
-			continue;
-
-		if (n_id == le32_to_cpu(s->parent) ||
-		    n_id == le32_to_cpu(s->children[0]) ||
-		    n_id == le32_to_cpu(s->children[1]))
-			continue;
-
-		if (found)
-			return 0;	/* ambiguous */
-		found = n_id;
-	}
-	return found;
 }
 
 /*
@@ -1017,7 +935,7 @@ static int check_snapshot_edge(struct btree_trans *trans,
 	}
 
 	/* Or another node claims the edge and tree and depth agree - re-aim ours: */
-	u32 repl = snapshot_table_find_edge(c, s, id, !side);
+	u32 repl = bch2_snapshot_table_find_edge(c, s, id, side == EDGE_CHILD);
 
 	struct bkey_i_snapshot r;
 	bool repl_exists = false;
