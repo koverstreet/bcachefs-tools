@@ -12,8 +12,9 @@ use crate::errcode::{bch_errcode, errptr_to_result, ret_to_result_void as ret_to
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode;
-use crate::snapshots::snapshot;
-use crate::str_hash::HashTable;
+use crate::dirent::DirentTarget;
+use crate::errcode::Found;
+use crate::snapshots::{snapshot, subvolume};
 use crate::util::Printbuf;
 use crate::{bch_err, inode_fsck_err};
 use core::ops::ControlFlow;
@@ -122,8 +123,8 @@ unsafe fn darray_slice_mut<'a, T>(data: *mut T, nr: usize) -> &'a mut [T] {
 /// Every snapshot version of the inode the keys being walked belong to, for
 /// the passes that walk a btree keyed by inode number (xattrs, dirents,
 /// extents) in key order with all snapshots: over C's struct inode_walker,
-/// whose internals - bch2_walk_inode() and the lookups under it - are still
-/// C, as is bch2_fsck_update_backpointers(), which uses one too.
+/// whose internals - bch2_walk_inode(), bch2_get_visible_inodes() and the
+/// lookups under them - are still C.
 ///
 /// The versions are cached between keys of the same inode, and refetched on
 /// the next inode or after a commit. walk() keeps the entries sorted by
@@ -470,18 +471,61 @@ fn count_inode_keys(
     Ok(nr_keys)
 }
 
-/// @new, a key just written to hash table @T, may have moved a dirent: point
-/// the backpointers of the inodes it names, in the snapshots that see it, at
-/// its new position: as bch2_fsck_update_backpointers().
-pub fn fsck_update_backpointers<T: HashTable>(
-    trans:     &BtreeTrans<'_>,
-    s:         &mut SnapshotsSeen,
-    hash_info: &mut c::bch_hash_info,
-    new:       &mut c::bkey_i,
-) -> Result<(), BchError> {
-    ret_to_result(unsafe {
-        c::bch2_fsck_update_backpointers(trans.raw(), &mut s.0, *T::desc(), hash_info, new)
-    })
+/// @new, a key a hash table repair just wrote, may be a dirent at a new
+/// position: point what it names back at it - a subvolume's root inode, or
+/// the versions of an inode visible from it, by @s.
+pub fn fsck_update_backpointers<'a, 't>(
+    t:   TransAttempt<'a, 't>,
+    s:   &mut SnapshotsSeen,
+    new: &c::bkey_i,
+) -> TransRet<'a, 't> {
+    let trans = t.trans();
+    let Some(d) = BkeySC::from(new).as_dirent() else { return Ok(t) };
+    let (dir, offset) = (new.k.p.inode, new.k.p.offset);
+    let points_here = |i: &c::bch_inode_unpacked| i.bi_dir == dir && i.bi_dir_offset == offset;
+
+    match d.target() {
+        // A subvolume dirent's backpointer lives on the child subvolume's root
+        // inode, same as a regular inode - see bch2_inode_get_dirent(). A
+        // dangling subvol dirent (subvol or root inode gone) is
+        // check_subvols/check_dirents' problem, not ours.
+        DirentTarget::Subvol { child, .. } => {
+            let Some(subvol) = subvolume::get(trans, child, false).found()? else { return Ok(t) };
+            let Some(mut root) = inode::find_by_inum_snapshot(trans, u64::from_le(subvol.inode),
+                                                              u32::from_le(subvol.snapshot),
+                                                              BtreeIterFlags::empty()).found()? else {
+                return Ok(t);
+            };
+            if points_here(&root) {
+                return Ok(t);
+            }
+
+            root.bi_dir        = dir;
+            root.bi_dir_offset = offset;
+            inode::fsck_write(t, &mut root)
+        }
+        DirentTarget::Inode(inum) => {
+            let mut target = InodeWalker::new();
+            target.get_visible(trans, s, inum)?;
+
+            // A backpointer is the (bi_dir, bi_dir_offset) pair - compare and
+            // set both, or an offset match into the wrong directory skips a
+            // broken backpointer, and an offset-only write manufactures one.
+            //
+            // Skip before the write: fsck_write() allocates a bkey_inode_buf
+            // of trans mem per call, and this runs once per visible version
+            // in one transaction - an already-correct backpointer must cost
+            // nothing, both to bound trans mem and so a re-run over
+            // partially-repaired state shrinks instead of repeating the batch.
+            let mut t = t;
+            for i in target.inodes_mut().iter_mut().filter(|i| !points_here(&i.inode)) {
+                i.inode.bi_dir        = dir;
+                i.inode.bi_dir_offset = offset;
+                t = inode::fsck_write(t, &mut i.inode)?;
+            }
+            Ok(t)
+        }
+    }
 }
 
 /// Link @inode into lost+found: as bch2_reattach_inode().

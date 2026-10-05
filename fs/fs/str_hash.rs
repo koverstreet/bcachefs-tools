@@ -325,14 +325,14 @@ struct Repair<'r> {
 
 impl Repair<'_> {
     /// @new, at @pos, may be a dirent that moved: point its inodes at it.
-    fn update_backpointers<T: HashTable>(
+    fn update_backpointers<'a, 't, T: HashTable>(
         &mut self,
-        trans: &BtreeTrans<'_>,
-        pos:   c::bpos,
-        new:   &mut c::bkey_i,
-    ) -> Result<(), BchError> {
-        let s = self.s.get(trans, T::desc().btree_id, pos)?;
-        check::fsck_update_backpointers::<T>(trans, s, self.hash_info, new)
+        t:   TransAttempt<'a, 't>,
+        pos: c::bpos,
+        new: &c::bkey_i,
+    ) -> TransRet<'a, 't> {
+        let s = self.s.get(t.trans(), T::desc().btree_id, pos)?;
+        check::fsck_update_backpointers(t, s, new)
     }
 
     /// All versions of an inode must have the same hash seed and type: check
@@ -389,8 +389,7 @@ impl Repair<'_> {
                                                     UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)? {
                 None => {
                     *self.updated_before_k_pos |= new.k().p < old.k.p;
-                    self.update_backpointers::<Dirents>(trans, old.k.p, new.k_i_mut())?;
-                    return Ok(t);
+                    return self.update_backpointers::<Dirents>(t, old.k.p, new.k_i());
                 }
                 // name taken - record a sample of the dirents that hold them
                 Some(dup) if i < 10 => write!(collisions, "\n{}", dup.to_text(fs)),
@@ -483,7 +482,7 @@ impl Repair<'_> {
         t = t.iter_traverse(&mut k_iter)?;
         delete_at::<T>(trans, self.hash_info, &mut k_iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
-        self.update_backpointers::<T>(trans, k.k.p, new.k_i_mut())?;
+        t = self.update_backpointers::<T>(t, k.k.p, new.k_i())?;
         t.commit_lazy(CommitFlags::NO_ENOSPC)
     }
 

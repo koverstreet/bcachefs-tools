@@ -96,12 +96,6 @@ int bch2_reattach_inode(struct btree_trans *, struct bch_inode_unpacked *);
  */
 int bch2_reconstruct_subvol(struct btree_trans *, u32, u32, u64);
 
-int bch2_fsck_update_backpointers(struct btree_trans *,
-				  struct snapshots_seen *,
-				  const struct bch_hash_desc,
-				  struct bch_hash_info *,
-				  struct bkey_i *);
-
 int bch2_check_inodes(struct bch_fs *);
 int bch2_check_extents(struct bch_fs *);
 int bch2_check_indirect_extents(struct bch_fs *);
