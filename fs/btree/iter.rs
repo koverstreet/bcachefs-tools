@@ -1427,8 +1427,9 @@ impl<'t> BtreeIter<'t> {
         self.for_each_max(trans, SPOS_MAX, f)
     }
 
-    /// As for_each_inner(), committing @f's updates after each key. A restart
-    /// from @f or the commit retries the key.
+    /// As for_each_inner(), @f getting the attempt, and committing its updates
+    /// after each key when @commit says how (None: @f commits for itself). A
+    /// restart from @f or the commit retries the key.
     ///
     /// @f finishes a key in one of three ways:
     ///  - Ok(attempt): commit what it queued, and go on to the next key -
@@ -1443,11 +1444,10 @@ impl<'t> BtreeIter<'t> {
     /// passed up from a helper: they name *a* loop, and one that travels
     /// through a helper's own loop names the wrong one. Helpers return what
     /// happened; the body decides what that means for the walk.
-    fn for_each_commit_inner<P, S, F>(
+    fn for_each_attempt_inner<P, S, F>(
         &mut self,
         trans:    &BtreeTrans<'t>,
-        disk_res: Option<&DiskReservation<'_>>,
-        flags:    CommitOpts,
+        commit:   Option<(Option<&DiskReservation<'_>>, CommitOpts)>,
         mut peek: P,
         mut step: S,
         mut f:    F,
@@ -1490,8 +1490,14 @@ impl<'t> BtreeIter<'t> {
                 Err(TransError::Error(e)) => return Err(e),
             };
 
-            let Some(t) = retry_restart(t.commit(disk_res, flags))? else {
-                continue;
+            let t = match commit {
+                Some((disk_res, flags)) => {
+                    let Some(t) = retry_restart(t.commit(disk_res, flags))? else {
+                        continue;
+                    };
+                    t
+                }
+                None => t,
             };
 
             t.verify_not_restarted();
@@ -1500,6 +1506,25 @@ impl<'t> BtreeIter<'t> {
                 return Ok(());
             }
         }
+    }
+
+    /// Walk the keys from the iterator's position, @f getting each key's
+    /// attempt and committing for itself - for a body with work to do after
+    /// its commit, which a restart there would get wrong: as C's
+    /// for_each_btree_key() with a body that commits. Otherwise as
+    /// for_each_commit().
+    pub fn for_each_attempt<F>(&mut self, trans: &BtreeTrans<'t>, f: F) -> Result<(), BchError>
+    where
+        F: for<'a, 'k> FnMut(
+            TransAttempt<'a, 't>,
+            &mut BtreeIter<'t>,
+            BkeySC<'k>,
+        ) -> TransRet<'a, 't>,
+    {
+        self.for_each_attempt_inner(trans, None,
+            |raw| unsafe { c::bch2_btree_iter_peek(raw) },
+            |raw| unsafe { c::bch2_btree_iter_advance(raw) },
+            f)
     }
 
     pub fn for_each_commit<F>(
@@ -1516,7 +1541,7 @@ impl<'t> BtreeIter<'t> {
             BkeySC<'k>,
         ) -> TransRet<'a, 't>,
     {
-        self.for_each_commit_inner(trans, disk_res, flags.into(),
+        self.for_each_attempt_inner(trans, Some((disk_res, flags.into())),
             |raw| unsafe { c::bch2_btree_iter_peek(raw) },
             |raw| unsafe { c::bch2_btree_iter_advance(raw) },
             f)
@@ -1538,7 +1563,7 @@ impl<'t> BtreeIter<'t> {
             BkeySC<'k>,
         ) -> TransRet<'a, 't>,
     {
-        self.for_each_commit_inner(trans, disk_res, flags.into(),
+        self.for_each_attempt_inner(trans, Some((disk_res, flags.into())),
             |raw| unsafe { c::bch2_btree_iter_peek_prev_min(raw, min) },
             |raw| unsafe { c::bch2_btree_iter_rewind(raw) },
             f)
@@ -1560,7 +1585,7 @@ impl<'t> BtreeIter<'t> {
             BkeySC<'k>,
         ) -> TransRet<'a, 't>,
     {
-        self.for_each_commit_inner(trans, disk_res, flags.into(),
+        self.for_each_attempt_inner(trans, Some((disk_res, flags.into())),
             |raw| unsafe {
                 c::bch2_btree_iter_peek_max_type(
                     raw,
