@@ -112,8 +112,9 @@ unsafe fn darray_slice_mut<'a, T>(data: *mut T, nr: usize) -> &'a mut [T] {
 
 /// Every snapshot version of the inode the keys being walked belong to, for
 /// the passes that walk a btree keyed by inode number (xattrs, dirents,
-/// extents) in key order with all snapshots: as C's struct inode_walker,
-/// which check_extents.c still uses, so it's wrapped rather than rewritten.
+/// extents) in key order with all snapshots: over C's struct inode_walker,
+/// whose internals - bch2_walk_inode() and the lookups under it - are still
+/// C, as is bch2_fsck_update_backpointers(), which uses one too.
 ///
 /// The versions are cached between keys of the same inode, and refetched on
 /// the next inode or after a commit. walk() keeps the entries sorted by

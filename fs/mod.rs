@@ -48,6 +48,7 @@ pub mod debug {
 #[path = "fs/check_dir_structure.rs"] pub mod check_dir_structure;
 #[path = "fs/check_nlinks.rs"] pub mod check_nlinks;
 #[path = "fs/check_dirents.rs"] pub mod check_dirents;
+#[path = "fs/check_extents.rs"] pub mod check_extents;
 #[path = "fs/check_inodes.rs"] pub mod check_inodes;
 #[path = "fs/check_root.rs"]   pub mod check_root;
 #[path = "fs/check_unreachable_inodes.rs"] pub mod check_unreachable_inodes;
