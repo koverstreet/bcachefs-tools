@@ -33,10 +33,14 @@
 //!   subvolume 5. It compares DirentTargets now, and that's "points
 //!   elsewhere".
 //!
-//! XXX: this code has been troublesome, and wants error injection tests that
-//! hit every path: creating vs restoring lost+found, an adopted reattach
-//! dirent, a lost+found entry that points elsewhere, the descendant fixup
-//! with its whiteouts, and a fixup interrupted by the lazy commit.
+//! - A lost+found entry under the inode's name that points elsewhere was
+//!   fsck_repair_unimplemented, stopping fsck; the name is probed forward
+//!   ("<n>.1", ...) to the first that's ours or free.
+//!
+//! This code has been troublesome; fsck-inject has a test for each path:
+//! creating vs restoring lost+found, an adopted reattach dirent (the
+//! partial-commit re-drive), a taken name, the descendant fixup with its
+//! whiteouts.
 
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
@@ -420,27 +424,46 @@ pub fn reattach_inode<'a, 't>(t: TransAttempt<'a, 't>, inode: &mut c::bch_inode_
     // collision and re-bumping lost+found's nlink.
     let lostfound_hash = str_hash::hash_info_init(fs, &lostfound)?;
 
-    let mut d_iter = BtreeIter::uninit();
-    let existing = str_hash::lookup_in_snapshot::<Dirents>(
-        trans, &mut d_iter, &lostfound_hash,
-        c::subvol_inum { subvol: inode.bi_parent_subvol as u64, inum: lostfound.bi_inum },
-        &dirent::qstr(name.as_bytes()), BtreeIterFlags::empty(), dirent_snapshot).found()?;
-
-    let adopted = match existing {
-        Some(k) => {
-            if k.as_dirent().expect("a dirent").target() != inode.dirent_target() {
-                bch_err!(fs, "reattaching inode {}:{}: lost+found entry {name} exists but points elsewhere:\n{}",
-                         inode.bi_inum, inode.bi_snapshot, k.to_text(fs));
-                return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented).into());
-            }
-
-            inode.bi_dir        = lostfound.bi_inum;
-            inode.bi_dir_offset = k.k.p.offset;
-            true
+    //
+    // A name that's taken by something else - a file someone made in
+    // lost+found, or an entry an earlier repair left - isn't ours: try
+    // "<name>.1", "<name>.2", ..., adopting the first that points at us, or
+    // taking the first free one. Deterministic, so a re-drive probes the same
+    // names in the same order and finds what it made.
+    let base = name;
+    let mut adopted = false;
+    let mut chosen = None;
+    for i in 0..1000 {
+        let mut probe = Printbuf::new();
+        probe.write_bytes(base.as_bytes());
+        if i > 0 {
+            write!(probe, ".{i}");
         }
-        None => false,
+
+        let mut d_iter = BtreeIter::uninit();
+        let existing = str_hash::lookup_in_snapshot::<Dirents>(
+            trans, &mut d_iter, &lostfound_hash,
+            c::subvol_inum { subvol: inode.bi_parent_subvol as u64, inum: lostfound.bi_inum },
+            &dirent::qstr(probe.as_bytes()), BtreeIterFlags::empty(), dirent_snapshot).found()?;
+
+        match existing {
+            Some(k) if k.as_dirent().expect("a dirent").target() == inode.dirent_target() => {
+                inode.bi_dir        = lostfound.bi_inum;
+                inode.bi_dir_offset = k.k.p.offset;
+                adopted = true;
+            }
+            Some(_) => continue,
+            None    => {}
+        }
+        chosen = Some(probe);
+        break;
+    }
+
+    let Some(name) = chosen else {
+        bch_err!(fs, "reattaching inode {}:{}: lost+found entries {base} through {base}.999 all taken",
+                 inode.bi_inum, inode.bi_snapshot);
+        return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented).into());
     };
-    drop(d_iter);
 
     // is_subdir_for_nlink(), not is_dir(): a subvolume root is named by a
     // DT_SUBVOL dirent, which doesn't count towards its parent's link count.
