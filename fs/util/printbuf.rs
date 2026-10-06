@@ -8,6 +8,7 @@ use crate::c::bpos as Bpos;
 /// Rust wrapper around `c::printbuf` providing `fmt::Write` via
 /// `bch2_prt_bytes_indented`, which processes `\t`, `\r`, `\n` for
 /// tabstop and indent handling.
+#[repr(transparent)]
 pub struct Printbuf(c::printbuf);
 
 /// RAII guard for printbuf indentation — calls `indent_sub` on drop.
@@ -35,6 +36,15 @@ impl DerefMut for PrintbufIndent<'_> {
 impl Printbuf {
     pub fn new() -> Self {
         Printbuf(c::printbuf::new())
+    }
+
+    /// A C caller's printbuf, to write to - for a to_text C calls. Borrowed:
+    /// it's the caller's to free.
+    ///
+    /// # Safety
+    /// @raw is a valid printbuf nothing else touches for 'a.
+    pub unsafe fn borrow_raw<'a>(raw: *mut c::printbuf) -> &'a mut Printbuf {
+        unsafe { &mut *(raw as *mut Printbuf) }
     }
 
     pub fn as_str(&self) -> &str {
@@ -144,6 +154,17 @@ impl Printbuf {
         self.0.set_human_readable_units(v);
     }
 
+    /// Whether this message is not to be printed: C's printbuf.suppress, for
+    /// a message that's printed only if what it reports turns out to need
+    /// it - scheduling a recovery pass, for one, clears it.
+    pub fn is_suppressed(&self) -> bool {
+        self.0.suppress()
+    }
+
+    pub fn set_suppressed(&mut self, v: bool) {
+        self.0.set_suppress(v);
+    }
+
     /// Print a human-readable representation of a u64 value.
     pub fn human_readable_u64(&mut self, v: u64) {
         unsafe { c::bch2_prt_human_readable_u64(&mut self.0, v) };
@@ -181,11 +202,12 @@ impl Printbuf {
         let _ = fmt::Write::write_fmt(self, args);
     }
 
-    /// Write @bytes as they are - a name, which needn't be UTF-8: as prt_bytes().
+    /// Write @bytes as they are - a name, which needn't be UTF-8, and whose
+    /// newlines and tabs aren't indent or tabstops: as prt_bytes().
     pub fn write_bytes(&mut self, bytes: &[u8]) {
         unsafe {
-            c::bch2_prt_bytes_indented(&mut self.0, bytes.as_ptr() as *const core::ffi::c_char,
-                                       bytes.len() as core::ffi::c_uint);
+            c::prt_bytes(&mut self.0, bytes.as_ptr() as *const core::ffi::c_void,
+                         bytes.len() as core::ffi::c_uint);
         }
     }
 }

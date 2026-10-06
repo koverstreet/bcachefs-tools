@@ -41,7 +41,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "bpos_.*", "bkey_init", "bkey_.*_init", "bkey_i_to_s", "bkey_i_to_s_c",
     "btree_iter_path", "extent_entry_u64s", "enumerated_ref_put",
     "bkey_is_inode", "bkey_inode_mode", "INODE_STR_HASH", "SET_INODE_STR_HASH", "journal_cur_seq",
-    "dirent_copy_target",
+    "dirent_copy_target", "prt_bytes",
     "bkey_extent_is_allocation", "bkey_extent_is_reservation", "crc_is_encoded",
     // crypto helpers for the dump sanitize path (static inlines, not
     // bch2_-prefixed): nonce constructors + bset_encrypt, driven from Rust
