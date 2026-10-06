@@ -105,10 +105,20 @@ static void move_write(struct data_update *u)
 
 	if (ctxt->stats) {
 		/*
+		 * A poisoned extent is data we've already lost, even when it
+		 * reads back clean: a move gives it a new checksum over the bad
+		 * data. Not for the journal scrub, where uncorrected means a
+		 * rewind, and a rewind can't bring this back.
+		 */
+		bool poisoned = u->opts.type == BCH_DATA_UPDATE_scrub &&
+			(bch2_bkey_extent_flags(bkey_i_to_s_c(u->k.k)) &
+			 BIT_ULL(BCH_EXTENT_FLAG_poisoned));
+
+		/*
 		 * Not rbio->bvec_iter: that's only set when the read went
 		 * straight into this rbio, not through a bounce or a clone
 		 */
-		if (rbio->ret) {
+		if (rbio->ret || poisoned) {
 			atomic64_add(u->k.k->k.size,
 				     &ctxt->stats->sectors_error_uncorrected);
 			set_bit(rbio->pick.ptr.dev,
