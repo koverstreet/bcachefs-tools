@@ -1644,10 +1644,14 @@ static int do_reconcile_phys(struct bch_fs *c, unsigned reconcile_phase)
 		nr_started++;
 	}
 
-	/* The threads freeze in place, so our wait for them must be freezable too: */
+	/*
+	 * The threads freeze in place, so our wait for them must be freezable
+	 * too. TASK_IDLE: we sleep here for the whole pass, which on a large
+	 * rotational device can be hours - that's not a hung task:
+	 */
 	for (unsigned i = 0; i < nr_started; i++)
 		wait_for_completion_state(&thrs.data[i].done,
-					  TASK_UNINTERRUPTIBLE|TASK_FREEZABLE);
+					  TASK_IDLE|TASK_FREEZABLE);
 	return ret;
 }
 
