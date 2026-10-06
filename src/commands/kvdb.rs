@@ -116,8 +116,8 @@ Commands:
     peek_prev [-k] <btree> <pos>                   last key <= pos
     list      [-k] <btree> [start] [end]           keys in range
     update [-r] <btree> <pos> <field=val>...       modify fields of a key
-    set  [-s] <btree> <pos> <type> [field=val]...  insert a whole new key
-    copy      <btree> <pos> <new_pos>              duplicate a key elsewhere
+    set  [-s][-r] <btree> <pos> <type> [field=val]... insert a whole new key
+    copy [-r] <btree> <pos> <new_pos>              duplicate a key elsewhere
     sb get [-d <dev>] <field>                      read a superblock field
     sb set [-d <dev>] <field=val>                  write one
     snapshot  [<id>|none]                          session snapshot context
@@ -141,6 +141,10 @@ values set can't build, extents above all - at another position, which may
 be in another inode or another snapshot. The insert is raw: triggers run,
 but an extent copy overwrites nothing, so it can overlap the extents there;
 the destination slot must be empty. An extent's new_pos is its new end.
+
+`-r` on update, set and copy runs no triggers at all: nothing else is
+updated to match - not other btrees, not the accounting - for injecting a
+key the rest of the filesystem doesn't know about.
 
 The snapshot context. Snapshot visibility is the subtle dimension of every
 bcachefs lookup: a key at snapshot S is visible at S and its descendants
@@ -691,14 +695,7 @@ fn cmd_update(
 
             set_fields(fs, &mut new, assigns, raw, &mut user_err)?;
 
-            // raw: triggers would restamp what was just set (an inode's
-            // bi_journal_seq), or update other btrees to match it
-            let flags = if raw {
-                UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::NORUN
-            } else {
-                UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE
-            };
-            t.update(&mut iter, new, flags)
+            t.update(&mut iter, new, raw_flags(UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE, raw))
         },
     );
 
@@ -708,11 +705,21 @@ fn cmd_update(
     }
 }
 
+/// The -r writes: no triggers. They would restamp what was just set (an
+/// inode's bi_journal_seq), or update other btrees and the accounting to
+/// match - and a key the accounting doesn't know about is one of the states
+/// being injected.
+fn raw_flags(flags: UpdateTriggerFlags, raw: bool) -> UpdateTriggerFlags {
+    if raw { flags | UpdateTriggerFlags::NORUN } else { flags }
+}
+
 /// Duplicate the key at @pos at @new_pos, exactly as it is: a raw insert -
 /// triggers run, but an extent overwrites nothing, so the copy can overlap
 /// what's there - into a slot that must be empty. For an extent, @new_pos is
-/// the copy's end, its size unchanged.
-fn cmd_copy(fs: &Fs, btree: c::btree_id, pos: c::bpos, new_pos: c::bpos) -> Result<String> {
+/// the copy's end, its size unchanged. @raw: no triggers - see raw_flags().
+fn cmd_copy(fs: &Fs, btree: c::btree_id, pos: c::bpos, new_pos: c::bpos, raw: bool)
+    -> Result<String>
+{
     let trans = bcachefs_kernel::btree_trans!(fs);
     let mut user_err: Option<anyhow::Error> = None;
 
@@ -745,7 +752,7 @@ fn cmd_copy(fs: &Fs, btree: c::btree_id, pos: c::bpos, new_pos: c::bpos) -> Resu
             let mut new = t.bkey_reassemble(k).map_err(TransError::from)?;
             new.k_mut().p = new_pos;
 
-            t.update(&mut new_iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+            t.update(&mut new_iter, new, raw_flags(UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE, raw))
         },
     );
 
@@ -762,6 +769,7 @@ fn cmd_set(
     type_name: &str,
     assigns: &[(&str, &str)],
     in_snapshot: bool,
+    raw: bool,
 ) -> Result<String> {
     let ti = typeinfo::bkey_type_info_by_name(type_name)
         .ok_or_else(|| anyhow!("unknown key type '{type_name}'"))?;
@@ -788,6 +796,7 @@ fn cmd_set(
                 (RAW_EXACT | BtreeIterFlags::INTENT,
                  UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
             };
+            let update_flags = raw_flags(update_flags, raw);
             let mut iter = BtreeIter::new(
                 t.trans(),
                 btree,
@@ -888,12 +897,12 @@ update [-r] <btree> <pos> <field=val>...       modify fields of an existing key
           -r writes the value as stored, by its own struct's fields, and
           runs no triggers: states the inode packer or a trigger would
           correct (has_inode_opts, a future bi_journal_seq)
-set  [-s] <btree> <pos> <type> [field=val]...  insert a whole new key
+set  [-s][-r] <btree> <pos> <type> [field=val]... insert a whole new key
           values are integers; fields holding enum codewords (snapshot/
           subvolume state) also accept the value name, e.g. state=will_delete
           `set <pos> deleted` removes the exact key; with -s it deletes
           within pos's snapshot instead (whiteouts, like a runtime delete)
-copy <btree> <pos> <new_pos>                   duplicate a key, as it is, elsewhere
+copy [-r] <btree> <pos> <new_pos>              duplicate a key, as it is, elsewhere
           raw: an extent copy can overlap what's there; new_pos may be in
           another inode or snapshot, and must be empty. An extent's new_pos
           is its end
@@ -1011,10 +1020,10 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "update", aliases: &[], usage: "update [-r] <btree> <pos> <field=val>...",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: true, needs_journal: false, handler: h_update },
-    Cmd { name: "set", aliases: &[], usage: "set [-s] <btree> <pos> <type> [field=val]...",
+    Cmd { name: "set", aliases: &[], usage: "set [-s] [-r] <btree> <pos> <type> [field=val]...",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: true, needs_journal: false, handler: h_set },
-    Cmd { name: "copy", aliases: &[], usage: "copy <btree> <pos> <new_pos>",
+    Cmd { name: "copy", aliases: &[], usage: "copy [-r] <btree> <pos> <new_pos>",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: true, needs_journal: false, handler: h_copy },
     Cmd { name: "sb", aliases: &[], usage: "sb get [-d <dev>] <field> | sb set [-d <dev>] <field=val>",
@@ -1141,10 +1150,14 @@ fn h_update(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(),
 }
 
 fn h_set(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
-    let (in_snapshot, args) = match args {
-        ["-s", rest @ ..] => (true, rest),
-        _ => (false, args),
-    };
+    let (mut in_snapshot, mut raw, mut args) = (false, false, args);
+    loop {
+        match args {
+            ["-s", rest @ ..] => { in_snapshot = true; args = rest; }
+            ["-r", rest @ ..] => { raw = true;         args = rest; }
+            _ => break,
+        }
+    }
     let [btree, pos, type_name, assigns @ ..] = args else {
         bail!("usage: {}", cmd.usage);
     };
@@ -1159,11 +1172,15 @@ fn h_set(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), St
     let btree = parse_btree(btree)?;
     let ctx = repl.snapshot.filter(|_| btree_uses_snapshots(btree));
     Ok(ControlFlow::Continue(
-        cmd_set(fs, btree, parse_pos_ctx(pos, ctx)?, type_name, &assigns, in_snapshot)?,
+        cmd_set(fs, btree, parse_pos_ctx(pos, ctx)?, type_name, &assigns, in_snapshot, raw)?,
     ))
 }
 
 fn h_copy(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    let (raw, args) = match args {
+        ["-r", rest @ ..] => (true, rest),
+        _ => (false, args),
+    };
     let [btree, pos, new_pos] = args else {
         bail!("usage: {}", cmd.usage);
     };
@@ -1171,7 +1188,7 @@ fn h_copy(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), S
     let btree = parse_btree(btree)?;
     let ctx = repl.snapshot.filter(|_| btree_uses_snapshots(btree));
     Ok(ControlFlow::Continue(
-        cmd_copy(fs, btree, parse_pos_ctx(pos, ctx)?, parse_pos_ctx(new_pos, ctx)?)?,
+        cmd_copy(fs, btree, parse_pos_ctx(pos, ctx)?, parse_pos_ctx(new_pos, ctx)?, raw)?,
     ))
 }
 
