@@ -39,12 +39,6 @@ impl SnapshotsSeen {
         SnapshotsSeen { pos: Default::default(), ids: KVVec::new() }
     }
 
-    /// For C that takes a struct snapshots_seen * only to pass it back to
-    /// Rust.
-    pub(crate) fn as_opaque(&mut self) -> *mut c::snapshots_seen {
-        self as *mut Self as *mut c::snapshots_seen
-    }
-
     /// The IDs as a C snapshot_id_list, for C that reads one: borrowed, so
     /// C mustn't grow or free it.
     pub(crate) fn ids_view(&mut self) -> c::snapshot_id_list {

@@ -1126,12 +1126,15 @@ pub struct BtreeIter<'t> {
 /// stable, the loop returns the key through this, which gives it the
 /// lifetime the loop's caller borrowed the iterator for.
 ///
+/// The same goes for a function that returns a key it found on one path,
+/// and goes on to use the iterator on another.
+///
 /// Delete this once Polonius is stable: each use becomes a plain `k`.
 ///
 /// # Safety
 /// The iterator @k borrows mustn't be touched again before the caller
-/// returns @k - which ends the loop's use of it.
-unsafe fn polonius_key<'i>(k: BkeySC<'_>) -> BkeySC<'i> {
+/// returns @k - which ends its use of it.
+pub(crate) unsafe fn polonius_key<'i>(k: BkeySC<'_>) -> BkeySC<'i> {
     unsafe { core::mem::transmute::<BkeySC<'_>, BkeySC<'i>>(k) }
 }
 

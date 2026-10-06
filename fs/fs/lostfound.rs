@@ -54,7 +54,7 @@ use crate::namei;
 use crate::snapshots::{snapshot, subvolume};
 use crate::str_hash;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
-use crate::util::os_str::{qstr, OsStr, OsStrExt};
+use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_info, bch_notice, bch_verbose};
 use core::mem::size_of;
@@ -79,7 +79,7 @@ fn lostfound_dirent(
     let fs = t.fs();
     let mut iter = BtreeIter::uninit();
     let Some(k) = str_hash::lookup_in_snapshot::<Dirents>(t, &mut iter, root_hash, root,
-                                                           &qstr(OsStr::from_bytes(LOSTFOUND)),
+                                                           OsStr::from_bytes(LOSTFOUND),
                                                            BtreeIterFlags::empty(), snapshot)
         .found()? else { return Ok(None) };
 
@@ -429,7 +429,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
         let existing = str_hash::lookup_in_snapshot::<Dirents>(
             t, &mut d_iter, &lostfound_hash,
             c::subvol_inum { subvol: inode.bi_parent_subvol as u64, inum: lostfound.bi_inum },
-            &qstr(probe.as_os_str()), BtreeIterFlags::empty(), dirent_snapshot).found()?;
+            probe.as_os_str(), BtreeIterFlags::empty(), dirent_snapshot).found()?;
 
         match existing {
             Some(k) if k.as_dirent().expect("a dirent").target() == inode.dirent_target() => {

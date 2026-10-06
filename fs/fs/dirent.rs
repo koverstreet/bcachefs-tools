@@ -11,17 +11,48 @@ use crate::fs::Fs;
 use crate::str_hash::HashTable;
 use crate::typeinfo::AccessError;
 use crate::util::os_str::{qstr, qstr_name, OsStr, OsStrExt};
+use core::ffi::c_void;
 use core::fmt;
 use core::mem::size_of;
 
 /// The dirents btree, as a hash table.
 pub struct Dirents;
 
+/// Keys are looked up by the name they're hashed by - casefolded, in a
+/// casefolded directory. The hash and compare functions are still dirent.c's:
+/// its table's callbacks. C's cmp callbacks answer the opposite of a match.
 impl HashTable for Dirents {
-    type Key = c::qstr;
+    type Key<'k> = OsStr;
+
+    const BTREE:    c::btree_id      = c::btree_id::dirents;
+    const KEY_TYPE: c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_dirent;
 
     fn desc() -> &'static c::bch_hash_desc {
         unsafe { &c::bch2_dirent_hash_desc }
+    }
+
+    fn hash_key(info: &c::bch_hash_info, key: &OsStr) -> u64 {
+        let key = qstr(key);
+        let key = &key as *const c::qstr as *const c_void;
+        unsafe { (Self::desc().hash_key.expect("hash_key"))(info, key) }
+    }
+
+    fn hash_bkey(info: &c::bch_hash_info, k: BkeySC<'_>) -> u64 {
+        unsafe { (Self::desc().hash_bkey.expect("hash_bkey"))(info, k.to_raw()) }
+    }
+
+    fn matches(k: BkeySC<'_>, key: &OsStr) -> bool {
+        let key = qstr(key);
+        let key = &key as *const c::qstr as *const c_void;
+        unsafe { !(Self::desc().cmp_key.expect("cmp_key"))(k.to_raw(), key) }
+    }
+
+    fn same_name(a: BkeySC<'_>, b: BkeySC<'_>) -> bool {
+        unsafe { !(Self::desc().cmp_bkey.expect("cmp_bkey"))(a.to_raw(), b.to_raw()) }
+    }
+
+    fn is_visible(inum: c::subvol_inum, k: BkeySC<'_>) -> bool {
+        unsafe { (Self::desc().is_visible.expect("is_visible"))(inum, k.to_raw()) }
     }
 }
 
