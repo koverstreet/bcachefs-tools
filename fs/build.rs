@@ -12,6 +12,8 @@ include!("codegen.rs");
 
 include!("../clang_target.rs");
 
+include!("../build-link.rs");
+
 fn watch_dir(dir: &str) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
@@ -69,6 +71,16 @@ fn main() {
         w.flag(f);
     }
     w.compile("bcachefs_static_wrappers");
+
+    println!("cargo:rerun-if-changed=../build-link.rs");
+    let root = std::path::Path::new(&src)
+        .parent()
+        .expect("fs crate has a parent dir");
+    link_bcachefs(
+        &root.display().to_string(),
+        &root.join("libbcachefs.a").display().to_string(),
+        false,
+    );
 
     // dh-cargo Built-Using (Debian): point the path at the package root (the
     // workspace root, == the dpkg build's $PWD) so dh-cargo-built-using sees

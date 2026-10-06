@@ -1,20 +1,9 @@
-fn main() {
-    println!("cargo:rustc-link-search=.");
-    println!("cargo:rerun-if-changed=libbcachefs.a");
-    println!("cargo:rustc-link-lib=static:+whole-archive=bcachefs");
+include!("build-link.rs");
 
-    println!("cargo:rustc-link-lib=urcu");
-    println!("cargo:rustc-link-lib=zstd");
-    println!("cargo:rustc-link-lib=blkid");
-    println!("cargo:rustc-link-lib=uuid");
-    println!("cargo:rustc-link-lib=sodium");
-    println!("cargo:rustc-link-lib=z");
-    println!("cargo:rustc-link-lib=lz4");
-    println!("cargo:rustc-link-lib=zstd");
-    println!("cargo:rustc-link-lib=udev");
-    println!("cargo:rustc-link-lib=keyutils");
-    println!("cargo:rustc-link-lib=aio");
-    println!("cargo:rustc-link-lib=unwind");
+fn main() {
+    println!("cargo:rerun-if-changed=build-link.rs");
+    let root = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    link_bcachefs(&root, &format!("{root}/libbcachefs.a"), true);
 
     // Export static symbols for dladdr() in tools-side prt_addr_symbol
     println!("cargo:rustc-link-arg-bins=-rdynamic");

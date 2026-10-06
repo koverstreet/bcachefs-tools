@@ -291,7 +291,12 @@ static struct debugfs_dentry debugfs_root = (struct debugfs_dentry) {
 	.i.mode		= 0755|S_IFDIR,
 };
 
-extern void bch2_start_http_lazy(void);
+/*
+ * Defined in the tools binary (src/http.rs). A weak empty definition lets
+ * other links of this archive, such as the bcachefs-kernel crate tests,
+ * resolve the symbol. The tools binary's strong definition overrides it.
+ */
+__attribute__((weak)) void bch2_start_http_lazy(void) {}
 
 struct dentry *debugfs_create_file(const char *name, umode_t mode,
 				   struct dentry *d_parent, void *data,
