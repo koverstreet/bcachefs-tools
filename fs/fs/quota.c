@@ -356,14 +356,12 @@ int bch2_quota_transfer(struct bch_fs *c, unsigned qtypes,
 
 	for_each_set_qtype(c, i, q, qtypes) {
 		ret = bch2_quota_check_limit(c, i, dst_q[i], &msgs, Q_SPC,
-					     dst_q[i]->c[Q_SPC].v + space,
-					     mode);
+					     space, mode);
 		if (ret)
 			goto err;
 
 		ret = bch2_quota_check_limit(c, i, dst_q[i], &msgs, Q_INO,
-					     dst_q[i]->c[Q_INO].v + 1,
-					     mode);
+					     1, mode);
 		if (ret)
 			goto err;
 	}
