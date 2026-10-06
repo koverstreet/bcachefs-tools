@@ -44,6 +44,17 @@ pub fn get_snapshot(trans: &BtreeTrans<'_>, subvol: u32) -> Result<u32, BchError
     Ok(snapshot)
 }
 
+/// As get_snapshot(), for a caller that checks for a missing subvolume itself:
+/// not found isn't recorded as subvol_missing, and doesn't schedule
+/// check_inodes - as __bch2_subvolume_get_snapshot(..., warn = false).
+pub fn get_snapshot_nowarn(trans: &BtreeTrans<'_>, subvol: u32) -> Result<u32, BchError> {
+    let mut snapshot = 0;
+    ret_to_result_void(unsafe {
+        c::__bch2_subvolume_get_snapshot(trans.raw(), subvol, &mut snapshot, false)
+    })?;
+    Ok(snapshot)
+}
+
 /// Whether subvolume @subvol is in state unlinked - the only state in which
 /// its root may legitimately be an unlinked directory: as
 /// bch2_subvolume_is_unlinked().

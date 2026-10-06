@@ -176,7 +176,7 @@ fn check_dirent_parent_subvol<'a, 't>(
     let fs = trans.fs();
     let d_snapshot = k.k.p.snapshot;
 
-    let parent_snapshot = subvolume::get_snapshot(trans, parent).found()?;
+    let parent_snapshot = subvolume::get_snapshot_nowarn(trans, parent).found()?;
 
     // A reference to the root subvolume is never the broken side: subvol 1's
     // existence is an invariant, and check_root() recreates it if lost.
