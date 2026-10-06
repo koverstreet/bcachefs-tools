@@ -179,7 +179,7 @@ void bch2_recovery_pass_set_no_ratelimit(struct bch_fs *c,
 
 	struct recovery_pass_entry *e = bch2_sb_recovery_pass_entry(c, pass);
 	if (e && !BCH_RECOVERY_PASS_NO_RATELIMIT(e)) {
-		SET_BCH_RECOVERY_PASS_NO_RATELIMIT(e, false);
+		SET_BCH_RECOVERY_PASS_NO_RATELIMIT(e, true);
 		bch2_write_super(c);
 	}
 }
