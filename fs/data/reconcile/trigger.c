@@ -751,9 +751,14 @@ static int new_needs_rb_allowed(struct btree_trans *trans,
 	 *
 	 * Note that we can cache the existence of a cookie, but not the
 	 * non-existence, to avoid spurious false positives.
+	 *
+	 * Btree ptrs follow the metadata options, so their cookie is the metadata
+	 * one.
 	 */
 	int ret = check_reconcile_scan_cookie(trans, 0,			s ? &s->fs_scan_cookie : NULL) ?:
-		  check_reconcile_scan_cookie(trans, k.k->p.inode,	s ? &s->inum_scan_cookie : NULL);
+		  (bkey_is_btree_ptr(k.k)
+		   ? check_reconcile_scan_cookie(trans, RECONCILE_SCAN_COOKIE_metadata, NULL)
+		   : check_reconcile_scan_cookie(trans, k.k->p.inode,	s ? &s->inum_scan_cookie : NULL));
 	if (ret)
 		return min(ret, 0);
 
