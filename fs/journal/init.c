@@ -310,7 +310,34 @@ int bch2_fs_journal_alloc(struct bch_fs *c)
 }
 
 /*
- * Double the size of the journal pin fifo.
+ * The size the journal pin fifo should be: grown 4x while it's filling, up to
+ * JOURNAL_PIN_MAX; and over JOURNAL_PIN_MAX - a mount that found more dirty
+ * entries than that - back down to it, once the live entries fit.
+ *
+ * Returns the current size when there's nothing to do.
+ */
+static size_t journal_pin_fifo_want_size(struct journal *j)
+{
+	size_t size = j->pin.size;
+
+	if (size > JOURNAL_PIN_MAX)
+		return fifo_used(&j->pin) < JOURNAL_PIN_MAX / 2
+			? JOURNAL_PIN_MAX
+			: size;
+
+	if (size < JOURNAL_PIN_MAX && fifo_free(&j->pin) < size / 2)
+		return min_t(size_t, size * 4, JOURNAL_PIN_MAX);
+
+	return size;
+}
+
+bool bch2_journal_pin_fifo_want_resize(struct journal *j)
+{
+	return journal_pin_fifo_want_size(j) != j->pin.size;
+}
+
+/*
+ * Resize the journal pin fifo, to journal_pin_fifo_want_size().
  *
  * We can't just fifo_grow() — that bit-copies entries into both halves of the
  * new buffer, which corrupts journal_entry_pin_list's list_heads (the chain's
@@ -323,25 +350,20 @@ int bch2_fs_journal_alloc(struct bch_fs *c)
  * acquiring entry->lock and walking the per-type lists).
  *
  * Must NOT be called with j->lock held — alloc + percpu_down_write may sleep.
- *
- * Trigger: TODO — wire from journal_entry_open()'s journal_pin_full path
- * (workqueue, or wake journal_reclaim_thread with a "needs resize" flag).
- *
- * Reader-side wrapping: TODO — every site that accesses &j->pin needs
- * percpu_down_read(&j->pin_resize_lock) / percpu_up_read() around it.
- * `git grep 'j->pin\b' fs/journal/ fs/btree/` for the list.
+ * Called only from pin_resize_work, so resizes don't race each other.
  */
 int bch2_journal_pin_fifo_resize(struct journal *j)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 
-	size_t old_size		= j->pin.size;
-
 	/*
 	 * Resizing the journal pin fifo is particularly expensive, thanks to
-	 * the percpu rwsem - grow in bigger increments
+	 * the percpu rwsem - so it grows 4x at a time
 	 */
-	size_t new_size		= old_size * 4;
+	size_t new_size		= journal_pin_fifo_want_size(j);
+	if (new_size == j->pin.size)
+		return 0;
+
 	size_t new_buf_elems	= roundup_pow_of_two(new_size);
 	u64 new_mask		= new_buf_elems - 1;
 
@@ -362,6 +384,16 @@ int bch2_journal_pin_fifo_resize(struct journal *j)
 	}
 
 	percpu_down_write(&j->pin_resize_lock);
+
+	/*
+	 * Shrinking: entries opened since we decided may no longer fit - and
+	 * fifo_free() must never go negative
+	 */
+	if (fifo_used(&j->pin) > new_size) {
+		percpu_up_write(&j->pin_resize_lock);
+		kvfree(new_data);
+		return 0;
+	}
 
 	for (u64 seq = j->pin.front; seq != j->pin.back; seq++) {
 		struct journal_entry_pin_list *old_pin = &j->pin.data[seq & j->pin.mask];
@@ -390,8 +422,8 @@ int bch2_journal_pin_fifo_resize(struct journal *j)
 }
 
 /*
- * Worker for the pin fifo grow trigger — journal_entry_open queues this when
- * the fifo is approaching pin_full. Off the open path because the open is
+ * Worker for the pin fifo resize trigger — journal_entry_open queues this when
+ * bch2_journal_pin_fifo_want_resize(). Off the open path because the open is
  * sometimes called from NONBLOCK contexts holding btree locks, where we can't
  * sleep on percpu_down_write / kvmalloc.
  */
@@ -509,25 +541,30 @@ int bch2_fs_journal_start(struct journal *j, struct journal_start_info info)
 	u64 cur_seq	= info.cur_seq;
 	u64 last_seq	= info.last_seq ?: info.cur_seq;
 
+	/*
+	 * However many dirty entries there are, we have to replay them: no cap
+	 * here. Filesystems from before JOURNAL_PIN_MAX can have millions;
+	 * reclaim works them back down and the fifo shrinks to the ceiling
+	 * (bch2_journal_pin_fifo_resize()).
+	 */
 	u64 nr = cur_seq - last_seq;
-	if (nr * sizeof(struct journal_entry_pin_list) > 1U << 30) {
-		bch_err(c, "too many journal fifo entries (%llu open entries)", nr);
-		return bch_err_throw(c, ENOMEM_journal_pin_fifo);
-	}
 
 	/*
 	 * Extra fudge factor, in case we crashed when the journal pin fifo was
 	 * nearly or completely full. We'll need to be able to open additional
 	 * journal entries (at least a few) in order for journal replay to get
-	 * going:
+	 * going. Capped: rounded up to a power of two, 25% of millions of
+	 * entries can double an allocation that's already gigabytes.
 	 */
-	nr += nr / 4;
+	nr += min_t(u64, nr / 4, JOURNAL_PIN);
 
 	nr = max(nr, JOURNAL_PIN);
 
-	init_fifo(&j->pin, roundup_pow_of_two(nr), GFP_KERNEL);
+	init_fifo(&j->pin, roundup_pow_of_two(nr), GFP_KERNEL|__GFP_NOWARN);
 	if (!j->pin.data) {
-		bch_err(c, "error allocating journal fifo (%llu open entries)", nr);
+		bch_err(c, "error allocating journal pin fifo: %llu dirty journal entries (%llu-%llu), %zu bytes",
+			cur_seq - last_seq, last_seq, cur_seq,
+			(size_t) fifo_buf_size(&j->pin));
 		return bch_err_throw(c, ENOMEM_journal_pin_fifo);
 	}
 

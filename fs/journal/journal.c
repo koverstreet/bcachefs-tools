@@ -429,15 +429,16 @@ static int __journal_entry_open_one(struct journal *j)
 		return bch_err_throw(c, journal_pin_full);
 
 	/*
-	 * More than half full — kick off a fifo resize on the workqueue so
-	 * we grow capacity before we'd start throttling. By the time we hit
-	 * the low_on_pin watermark (3/4 full) the throttle has already
-	 * fired, so trigger earlier. queue_work is idempotent — subsequent
-	 * triggers while a resize is pending coalesce. Off the open path
-	 * because some callers hit it with btree locks held
-	 * (JOURNAL_RES_GET_NONBLOCK) and can't tolerate the alloc/sleep.
+	 * Grow the fifo when it's more than half full, before the low_on_pin
+	 * watermark (3/4 full) throttles - up to JOURNAL_PIN_MAX, past which
+	 * low_on_pin is all there is; or shrink an over-size one, from a mount
+	 * that found more than that dirty, once reclaim has caught up.
+	 * queue_work is idempotent — subsequent triggers while a resize is
+	 * pending coalesce. Off the open path because some callers hit it with
+	 * btree locks held (JOURNAL_RES_GET_NONBLOCK) and can't tolerate the
+	 * alloc/sleep.
 	 */
-	if (fifo_free(&j->pin) < j->pin.size / 2)
+	if (bch2_journal_pin_fifo_want_resize(j))
 		queue_work(j->wq, &j->pin_resize_work);
 
 	/*

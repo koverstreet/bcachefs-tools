@@ -88,7 +88,7 @@ void bch2_journal_set_watermark(struct journal *j)
 
 	bool low_on_space = j->space[journal_space_clean].total * 4 <=
 		j->space[journal_space_total].total;
-	bool low_on_pin = fifo_free(&j->pin) < j->pin.size / 4;
+	bool low_on_pin = fifo_used(&j->pin) > journal_pin_limit(j) / 4 * 3;
 	bool low_on_wb = bch2_btree_write_buffer_must_wait(c);
 
 	unsigned watermark = low_on_space || low_on_pin || low_on_wb
@@ -1000,7 +1000,7 @@ static u64 journal_seq_to_flush(struct journal *j)
 	/* Also flush if the pin fifo is more than half full */
 	return max_t(s64, seq_to_flush,
 		     (s64) journal_cur_seq(j) -
-		     (j->pin.size >> 1));
+		     (journal_pin_limit(j) >> 1));
 }
 
 /**
