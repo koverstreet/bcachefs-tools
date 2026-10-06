@@ -1434,6 +1434,7 @@ static long bch2_ioc_set_reflink_p_may_update_opts(struct bch_fs *c,
 	subvol_inum inum = inode_inum(inode);
 
 	CLASS(btree_trans, trans)(c);
+	CLASS(disk_reservation, res)(c);
 
 	return for_each_btree_key_in_subvolume_max(trans, iter,
 			BTREE_ID_extents,
@@ -1442,6 +1443,8 @@ static long bch2_ioc_set_reflink_p_may_update_opts(struct bch_fs *c,
 			inum.subvol,
 			BTREE_ITER_intent, k, ({
 		int ret = 0;
+		bch2_disk_reservation_put(c, &res.r);
+
 		if (k.k->type == KEY_TYPE_reflink_p &&
 		    !REFLINK_P_MAY_UPDATE_OPTIONS(bkey_s_c_to_reflink_p(k).v)) {
 			struct bkey_i_reflink_p *p =
@@ -1449,7 +1452,7 @@ static long bch2_ioc_set_reflink_p_may_update_opts(struct bch_fs *c,
 			ret = PTR_ERR_OR_ZERO(p);
 			if (!ret) {
 				SET_REFLINK_P_MAY_UPDATE_OPTIONS(&p->v, true);
-				ret = bch2_trans_commit(trans, NULL, NULL,
+				ret = bch2_trans_commit(trans, &res.r, NULL,
 							BCH_TRANS_COMMIT_no_enospc);
 			}
 			if (!ret) {
