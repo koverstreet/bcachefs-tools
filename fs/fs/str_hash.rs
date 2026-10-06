@@ -476,6 +476,8 @@ impl Repair<'_> {
             return self.dup_entries::<T>(t, k, dup);
         }
 
+        *self.updated_before_k_pos |= new.k().p < k.k.p;
+
         let mut t = t.insert_snapshot_whiteouts(btree, k.k.p, new.k().p)?;
 
         let mut k_iter = BtreeIter::new(trans, btree, k.k.p, BtreeIterFlags::SLOTS);
