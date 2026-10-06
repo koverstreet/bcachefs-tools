@@ -140,7 +140,7 @@ void bch2_mark_io_failure(struct bch_io_failures *failed,
 
 	f->tried |= BIT(p->mode);
 
-	if (p->mode == BCH_READ_MODE_ec)
+	if (p->mode != BCH_READ_MODE_direct)
 		f->ec_errcode = err;
 	else if (err == -BCH_ERR_data_read_retry_csum_err)
 		f->csum_nr++;

@@ -936,7 +936,7 @@ int bch2_ec_read_around_pick(struct btree_trans *trans,
 
 	if (failed &&
 	    bch2_read_mode_tried(bch2_dev_io_failures(failed, pick->ptr.dev),
-				 BCH_READ_MODE_ec))
+				 BCH_READ_MODE_ec_read_around))
 		return 0;
 
 	/*
@@ -1004,7 +1004,7 @@ int bch2_ec_read_around_pick(struct btree_trans *trans,
 			return 0;
 	}
 
-	pick->mode = BCH_READ_MODE_ec;
+	pick->mode = BCH_READ_MODE_ec_read_around;
 	return 0;
 }
 
@@ -1084,7 +1084,7 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 	bool skipped_failed_block = false;
 	u32 read_mask = EC_BLOCKS_ALL;
 	enum ec_stripe_buf_flags buf_flags = 0;
-	if (bch2_ec_read_optional(failed, &rbio->pick, rbio->flags)) {
+	if (rbio->pick.mode == BCH_READ_MODE_ec_read_around) {
 		u64 l_r;
 		read_mask = ec_read_around_blocks(c, &buf->key.v, block, failed, &l_r);
 		/* Raced with a device going offline: not worth a message */

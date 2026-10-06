@@ -931,7 +931,7 @@ static int bch2_rbio_error(struct bch_read_bio *rbio, int ret)
 
 	rbio->ret = ret;
 	/* A failed read-around isn't an error: the read goes to the device next */
-	if (!bch2_ec_read_optional(rbio->failed, &rbio->pick, rbio->flags))
+	if (rbio->pick.mode != BCH_READ_MODE_ec_read_around)
 		bch2_rbio_parent(rbio)->saw_error = true;
 
 	if (!(rbio->flags & BCH_READ_in_retry)) {
@@ -1637,7 +1637,7 @@ int __bch2_read_extent(struct btree_trans *trans,
 	if (pick.has_ec && pick.mode == BCH_READ_MODE_direct) {
 		try(bch2_ec_read_around_pick(trans, &pick, failed, flags, dev));
 
-		if (pick.mode == BCH_READ_MODE_ec) {
+		if (pick.mode == BCH_READ_MODE_ec_read_around) {
 			flags |= BCH_READ_ec_read_around;
 
 			if (!(flags & BCH_READ_in_retry)) {
@@ -1781,7 +1781,7 @@ int __bch2_read_extent(struct btree_trans *trans,
 		}
 		if (ret) {
 			/* Whatever went wrong, a read-around falls back to a direct read: */
-			if (bch2_ec_read_optional(failed, &rbio->pick, rbio->flags))
+			if (rbio->pick.mode == BCH_READ_MODE_ec_read_around)
 				ret = bch_err_throw(c, data_read_retry_ec_read_around);
 			bch2_rbio_error(rbio, ret);
 			goto out;
