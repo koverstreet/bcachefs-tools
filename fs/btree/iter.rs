@@ -13,6 +13,7 @@ use crate::printbuf_to_formatter;
 use crate::util::log::CFnName;
 use crate::SPOS_MAX;
 use bitflags::bitflags;
+use core::cell::UnsafeCell;
 use core::fmt;
 use core::marker::PhantomData;
 use core::mem::{size_of, ManuallyDrop, MaybeUninit};
@@ -651,7 +652,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         new:   BkeySC<'_>,
     ) -> Result<Self, TransError> {
         let ret = unsafe {
-            c::bch2_trans_update_extent_overwrite(self.raw(), &mut iter.raw,
+            c::bch2_trans_update_extent_overwrite(self.raw(), iter.raw_mut(),
                                                   c::btree_iter_update_trigger_flags(flags.bits()),
                                                   old.to_raw(), new.to_raw())
         };
@@ -664,16 +665,19 @@ impl<'a, 't> TransAttempt<'a, 't> {
         unsafe { c::bch2_trans_extra_disk_res_add(self.raw(), sectors, nr_replicas) }
     }
 
+    /// Queue @key as an update at @iter's position. Takes the iterator
+    /// shared: it doesn't move it - what it sets up there, the key cache
+    /// path, is the iterator's own business.
     pub fn update(
         self,
-        iter:  &mut BtreeIter<'t>,
+        iter:  &BtreeIter<'t>,
         key:   TransBkey<'_, 't>,
         flags: UpdateTriggerFlags,
     ) -> Result<Self, TransError> {
         let ret = unsafe {
             c::bch2_trans_update_buf(
                 self.raw(),
-                &mut iter.raw,
+                iter.raw(),
                 key.as_ptr(),
                 key.buf_u64s,
                 c::btree_iter_update_trigger_flags(flags.bits()),
@@ -1102,9 +1106,14 @@ where
     lockrestart_do(&trans, f)
 }
 
+/// A btree iterator. Its position, and the key a peek returned - whose
+/// header is in the iterator, iter->k - only change through &mut self;
+/// what changes through &self is internal state the outside world doesn't
+/// see, as an update setting up the iterator's key cache path. Hence the
+/// UnsafeCell.
 #[repr(transparent)]
 pub struct BtreeIter<'t> {
-    raw:   c::btree_iter,
+    raw:   UnsafeCell<c::btree_iter>,
     trans: PhantomData<&'t BtreeTrans<'t>>,
 }
 
@@ -1144,14 +1153,27 @@ impl<'t> BtreeIter<'t> {
     }
 
     pub fn uninit() -> BtreeIter<'t> {
+        Self::from_raw(Default::default())
+    }
+
+    fn from_raw(raw: c::btree_iter) -> BtreeIter<'t> {
         BtreeIter {
-            raw:   Default::default(),
+            raw:   UnsafeCell::new(raw),
             trans: PhantomData,
         }
     }
 
+    /// For C that takes the iterator without moving it - an update.
+    pub(crate) fn raw(&self) -> *mut c::btree_iter {
+        self.raw.get()
+    }
+
     pub(crate) fn raw_mut(&mut self) -> *mut c::btree_iter {
-        &mut self.raw
+        self.raw.get_mut()
+    }
+
+    fn r(&self) -> &c::btree_iter {
+        unsafe { &*self.raw.get() }
     }
 
     pub(crate) fn node_at_iter_level<'a>(
@@ -1167,23 +1189,23 @@ impl<'t> BtreeIter<'t> {
     }
 
     pub fn pos(&self) -> c::bpos {
-        self.raw.pos
+        self.r().pos
     }
 
     pub fn btree(&self) -> c::btree_id {
-        self.raw.btree_id()
+        self.r().btree_id()
     }
 
     pub fn set_pos(&mut self, pos: c::bpos) {
-        unsafe { c::bch2_btree_iter_set_pos(&mut self.raw, pos) };
+        unsafe { c::bch2_btree_iter_set_pos(self.raw.get_mut(), pos) };
     }
 
     pub fn set_pos_to_extent_start(&mut self) {
-        unsafe { c::bch2_btree_iter_set_pos_to_extent_start(&mut self.raw) };
+        unsafe { c::bch2_btree_iter_set_pos_to_extent_start(self.raw.get_mut()) };
     }
 
     pub fn set_snapshot(&mut self, snapshot: u32) {
-        unsafe { c::bch2_btree_iter_set_snapshot(&mut self.raw, snapshot) };
+        unsafe { c::bch2_btree_iter_set_snapshot(self.raw.get_mut(), snapshot) };
     }
 
     /// A second iterator at the same position, sharing this one's paths: as
@@ -1192,12 +1214,9 @@ impl<'t> BtreeIter<'t> {
         unsafe {
             let mut iter: MaybeUninit<c::btree_iter> = MaybeUninit::uninit();
 
-            c::bch2_trans_copy_iter(iter.as_mut_ptr(), &self.raw as *const _ as *mut _);
+            c::bch2_trans_copy_iter(iter.as_mut_ptr(), self.raw());
 
-            BtreeIter {
-                raw:   iter.assume_init(),
-                trans: PhantomData,
-            }
+            Self::from_raw(iter.assume_init())
         }
     }
 
@@ -1219,10 +1238,7 @@ impl<'t> BtreeIter<'t> {
                 0
             );
 
-            BtreeIter {
-                raw:   iter.assume_init(),
-                trans: PhantomData,
-            }
+            Self::from_raw(iter.assume_init())
         }
     }
 
@@ -1246,28 +1262,25 @@ impl<'t> BtreeIter<'t> {
                 c::btree_iter_update_trigger_flags(flags.bits())
             );
 
-            BtreeIter {
-                raw:   iter.assume_init(),
-                trans: PhantomData,
-            }
+            Self::from_raw(iter.assume_init())
         }
     }
 
     pub fn peek_max<'i>(&'i mut self, end: bpos) -> Result<Option<BkeySC<'i>>, BchError> {
         unsafe {
-            bkey_s_c_to_result(c::bch2_btree_iter_peek_max(&mut self.raw, &end))
+            bkey_s_c_to_result(c::bch2_btree_iter_peek_max(self.raw.get_mut(), &end))
         }
     }
 
     /// The key at the iterator's position, or a deleted key for a hole.
     pub fn peek_slot(&mut self) -> Result<Option<BkeySC<'_>>, BchError> {
-        unsafe { bkey_s_c_to_result(c::bch2_btree_iter_peek_slot(&mut self.raw)) }
+        unsafe { bkey_s_c_to_result(c::bch2_btree_iter_peek_slot(self.raw.get_mut())) }
     }
 
     /// The key at the iterator's position, if it's a @type: as C's
     /// bch2_bkey_get_typed() - ENOENT_bkey_type_mismatch if it isn't.
     pub fn peek_slot_typed(&mut self, type_: c::bch_bkey_type) -> Result<BkeySC<'_>, BchError> {
-        let k = bkey_s_c_to_result(unsafe { c::__bch2_bkey_get_typed(&mut self.raw, type_) })?;
+        let k = bkey_s_c_to_result(unsafe { c::__bch2_bkey_get_typed(self.raw.get_mut(), type_) })?;
         Ok(k.expect("a slot always has a key"))
     }
 
@@ -1275,13 +1288,13 @@ impl<'t> BtreeIter<'t> {
             Result<Option<BkeySC<'i>>, BchError> {
         unsafe {
             if flags.contains(BtreeIterFlags::SLOTS) {
-                if bkey_le(self.raw.pos, end) {
-                    bkey_s_c_to_result(c::bch2_btree_iter_peek_slot(&mut self.raw))
+                if bkey_le(self.r().pos, end) {
+                    bkey_s_c_to_result(c::bch2_btree_iter_peek_slot(self.raw.get_mut()))
                 } else {
                     Ok(None)
                 }
             } else {
-                bkey_s_c_to_result(c::bch2_btree_iter_peek_max(&mut self.raw, &end))
+                bkey_s_c_to_result(c::bch2_btree_iter_peek_max(self.raw.get_mut(), &end))
             }
         }
     }
@@ -1290,7 +1303,7 @@ impl<'t> BtreeIter<'t> {
             Result<Option<BkeySC<'i>>, BchError> {
         unsafe {
             bkey_s_c_to_result(c::bch2_btree_iter_peek_max_type(
-                &mut self.raw,
+                self.raw.get_mut(),
                 end,
                 c::btree_iter_update_trigger_flags(flags.bits()),
             ))
@@ -1303,7 +1316,7 @@ impl<'t> BtreeIter<'t> {
 
     pub fn peek_prev_min<'i>(&'i mut self, min: bpos) -> Result<Option<BkeySC<'i>>, BchError> {
         unsafe {
-            bkey_s_c_to_result(c::bch2_btree_iter_peek_prev_min(&mut self.raw, min))
+            bkey_s_c_to_result(c::bch2_btree_iter_peek_prev_min(self.raw.get_mut(), min))
         }
     }
 
@@ -1311,7 +1324,7 @@ impl<'t> BtreeIter<'t> {
             Result<Option<BkeySC<'i>>, BchError> {
         unsafe {
             bkey_s_c_to_result(c::bch2_btree_iter_peek_prev_type(
-                &mut self.raw,
+                self.raw.get_mut(),
                 c::btree_iter_update_trigger_flags(flags.bits()),
             ))
         }
@@ -1359,7 +1372,7 @@ impl<'t> BtreeIter<'t> {
         loop {
             let t = trans.begin();
 
-            let k = match bkey_s_c_to_result(peek(&mut self.raw)) {
+            let k = match bkey_s_c_to_result(peek(self.raw.get_mut())) {
                 Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
                 Err(e) => return Err(e),
                 Ok(None) => return Ok(Default::default()),
@@ -1377,7 +1390,7 @@ impl<'t> BtreeIter<'t> {
                 }
             }
 
-            if !step(&mut self.raw) {
+            if !step(self.raw.get_mut()) {
                 return Ok(Default::default());
             }
         }
@@ -1432,7 +1445,7 @@ impl<'t> BtreeIter<'t> {
         R: LoopControl,
     {
         loop {
-            let Some(k) = bkey_s_c_to_result(Self::peek_own_type(&mut self.raw, end))?
+            let Some(k) = bkey_s_c_to_result(Self::peek_own_type(self.raw.get_mut(), end))?
             else {
                 return Ok(Default::default());
             };
@@ -1456,7 +1469,7 @@ impl<'t> BtreeIter<'t> {
         R: LoopControl,
     {
         loop {
-            let Some(k) = bkey_s_c_to_result(unsafe { c::bch2_btree_iter_peek_prev_min(&mut self.raw, min) })?
+            let Some(k) = bkey_s_c_to_result(unsafe { c::bch2_btree_iter_peek_prev_min(self.raw.get_mut(), min) })?
             else {
                 return Ok(Default::default());
             };
@@ -1515,7 +1528,7 @@ impl<'t> BtreeIter<'t> {
         loop {
             let t = trans.begin();
 
-            let k = match bkey_s_c_to_result(peek(&mut self.raw)) {
+            let k = match bkey_s_c_to_result(peek(self.raw.get_mut())) {
                 Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
                 Err(e) => return Err(e),
                 Ok(None) => return Ok(()),
@@ -1529,7 +1542,7 @@ impl<'t> BtreeIter<'t> {
                 Err(TransError::Restart(_)) => continue,
                 Err(TransError::Error(e)) if e.matches(bch_errcode::BCH_ERR_fc_continue) => {
                     trans.verify_not_restarted(restart_count);
-                    if !step(&mut self.raw) {
+                    if !step(self.raw.get_mut()) {
                         return Ok(());
                     }
                     continue;
@@ -1553,7 +1566,7 @@ impl<'t> BtreeIter<'t> {
 
             t.verify_not_restarted();
 
-            if !step(&mut self.raw) {
+            if !step(self.raw.get_mut()) {
                 return Ok(());
             }
         }
@@ -1683,19 +1696,19 @@ impl<'t> BtreeIter<'t> {
 
     /// Step past the key just returned: false at the end of the btree.
     pub fn advance(&mut self) -> bool {
-        unsafe { c::bch2_btree_iter_advance(&mut self.raw) }
+        unsafe { c::bch2_btree_iter_advance(self.raw.get_mut()) }
     }
 
     /// Step back past the key just returned, for walking backwards: false at
     /// the start of the btree.
     pub fn rewind(&mut self) -> bool {
-        unsafe { c::bch2_btree_iter_rewind(&mut self.raw) }
+        unsafe { c::bch2_btree_iter_rewind(self.raw.get_mut()) }
     }
 }
 
 impl<'t> Drop for BtreeIter<'t> {
     fn drop(&mut self) {
-        unsafe { c::bch2_trans_iter_exit(&mut self.raw) }
+        unsafe { c::bch2_trans_iter_exit(self.raw.get_mut()) }
     }
 }
 
