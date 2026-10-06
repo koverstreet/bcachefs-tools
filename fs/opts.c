@@ -669,9 +669,13 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 		 * Only the label affects targeting - a failure domain change
 		 * only affects the spreading of future allocations, no rescan:
 		 */
-		if (id == Opt_label)
+		if (id == Opt_label) {
 			try(reconcile_scan_bracket(c,
 				(struct reconcile_scan) { .type = RECONCILE_SCAN_pending }, post, scope));
+			/* Data on the device may now be outside its target. */
+			try(reconcile_scan_bracket(c,
+				(struct reconcile_scan) { .type = RECONCILE_SCAN_device, .dev = ca->dev_idx }, post, scope));
+		}
 		break;
 	default:
 		break;
