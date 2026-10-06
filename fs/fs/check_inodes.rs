@@ -5,16 +5,16 @@
 //! they point at, and that what's derived from them - flags caching the
 //! answer to a question about other btrees - is right.
 //!
-//! In order, as C's check_inode():
+//! In order:
 //!  - hash info (seed and type) agrees with the version at the snapshot root;
 //!  - has_case_insensitive agrees with the casefolded directories above it;
+//!  - bi_parent_subvol is only set on a subvolume root;
 //!  - the backpointer (bi_dir, bi_dir_offset) names a dirent that points back;
 //!  - an unlinked directory is empty (rmdir'd, not yet reaped), or the root of
 //!    an unlinked subvolume;
 //!  - a directory has no i_size;
 //!  - has_child_snapshot agrees with the versions in descendant snapshots;
 //!  - an unlinked inode is on the deleted list (offline), or open (online);
-//!  - bi_parent_subvol is only set on a subvolume root;
 //!  - has_inode_opts agrees with the options set, and they've propagated;
 //!  - has_access_acl/has_default_acl have the ACL xattr they claim (the other
 //!    direction - an ACL xattr with the flag clear - is check_xattrs');
@@ -27,7 +27,9 @@
 //! non-empty directory's unlinked flag and set the deleted_inodes bit whether
 //! or not the fix was taken - and a missing subvolume no longer has its
 //! uninitialized value compared against the inode when inode_bi_subvol_missing
-//! is declined.
+//! is declined. And bi_parent_subvol is checked before the backpointer, which
+//! is looked up through it: the C cleared a good backpointer for a bogus one,
+//! for check_dirents to put back.
 
 use crate::btree::bkey::{spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
@@ -329,6 +331,16 @@ fn check_inode<'a, 't>(
     bch_err_msg!(fs, namei::check_inode_has_case_insensitive(trans, &mut u, &mut st.s, &mut changed)
                  .found(), "bch2_check_inode_has_case_insensitive()")?;
 
+    // Before the backpointer check: the dirent is looked up through
+    // bi_parent_subvol, and a bogus one makes a good backpointer look broken.
+    if fsck_err_on!(trans, u.bi_parent_subvol != 0 &&
+                    (u.bi_subvol == 0 || u.bi_subvol == c::BCACHEFS_ROOT_SUBVOL),
+                    id::inode_bi_parent_nonzero,
+                    "inode has nonzero bi_parent_subvol but is not a subvolume root\n{u}")? {
+        u.bi_parent_subvol = 0;
+        changed = true;
+    }
+
     if inode::has_backpointer(&u) {
         changed |= check_inode_dirent_inode(trans, &mut u)?;
     }
@@ -380,14 +392,6 @@ fn check_inode<'a, 't>(
                          "in fsck deleting inode")?;
             return Ok(t);
         }
-    }
-
-    if fsck_err_on!(trans, u.bi_parent_subvol != 0 &&
-                    (u.bi_subvol == 0 || u.bi_subvol == c::BCACHEFS_ROOT_SUBVOL),
-                    id::inode_bi_parent_nonzero,
-                    "inode has nonzero bi_parent_subvol but is not a subvolume root\n{u}")? {
-        u.bi_parent_subvol = 0;
-        changed = true;
     }
 
     let has_opts = u.has_opts();
