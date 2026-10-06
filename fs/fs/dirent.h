@@ -23,9 +23,22 @@ struct bch_fs;
 struct bch_hash_info;
 struct bch_inode_info;
 
+u64 bch2_dirent_hash(const struct bch_hash_info *, const struct qstr *);
+
 #if IS_ENABLED(CONFIG_UNICODE)
 int bch2_casefold(struct btree_trans *, const struct bch_hash_info *,
 		  const struct qstr *, struct qstr *);
+
+/*
+ * utf8_casefold() under @info's encoding, for Rust: kernel headers aren't
+ * bound in a kernel build, so it can't call utf8_casefold() itself.
+ */
+static inline int bch2_utf8_casefold(const struct bch_hash_info *info,
+				     const struct qstr *str,
+				     unsigned char *dest, size_t dlen)
+{
+	return utf8_casefold(info->cf_encoding, str, dest, dlen);
+}
 #else
 static inline int bch2_casefold(struct btree_trans *trans, const struct bch_hash_info *info,
 				const struct qstr *str, struct qstr *out_cf)
@@ -48,15 +61,6 @@ static inline int bch2_maybe_casefold(struct btree_trans *trans,
 
 struct qstr bch2_dirent_get_name(struct bkey_s_c_dirent);
 
-static inline unsigned dirent_val_u64s(unsigned len, unsigned cf_len)
-{
-	unsigned bytes = cf_len
-		? offsetof(struct bch_dirent, d_cf_name_block.d_names) + len + cf_len
-		: offsetof(struct bch_dirent, d_name) + len;
-
-	return DIV_ROUND_UP(bytes, sizeof(u64));
-}
-
 static inline struct bkey_s_c_dirent dirent_get_by_pos(struct btree_trans *trans,
 						struct btree_iter *iter,
 						struct bpos pos)
@@ -75,14 +79,6 @@ static inline void dirent_copy_target(struct bkey_i_dirent *dst,
 	dst->v.d_type = src.v->d_type;
 }
 
-int bch2_dirent_init_name(struct bch_fs *,
-			  struct bkey_i_dirent *,
-			  const struct bch_hash_info *,
-			  const struct qstr *,
-			  const struct qstr *);
-struct bkey_i_dirent *bch2_dirent_create_key(struct btree_trans *,
-				const struct bch_hash_info *, subvol_inum, u8,
-				const struct qstr *, const struct qstr *, u64);
 
 int bch2_dirent_create_snapshot(struct btree_trans *, u32, u32,
 				struct bch_inode_unpacked *dir_u,
@@ -118,16 +114,18 @@ int bch2_dirent_lookup_snapshot(struct btree_trans *,
 				const struct qstr *, subvol_inum *,
 				unsigned);
 
-int bch2_dirent_lookup_trans(struct btree_trans *, struct btree_iter *,
-			       subvol_inum, const struct bch_hash_info *,
-			       const struct qstr *, subvol_inum *, unsigned);
-u64 bch2_dirent_lookup(struct bch_fs *, subvol_inum,
+int bch2_dirent_lookup(struct bch_fs *, subvol_inum,
 		       const struct bch_hash_info *,
 		       const struct qstr *, subvol_inum *);
 
 int bch2_empty_dir_snapshot(struct btree_trans *, u64, u32, u32);
 int bch2_empty_dir_trans(struct btree_trans *, subvol_inum);
 int bch2_readdir(struct bch_fs *, subvol_inum, struct bch_hash_info *, struct dir_context *);
+
+/* readdir's VFS end, in C - fs/dirent.c: */
+void bch2_readdir_fault_in(struct dir_context *);
+int bch2_dir_emit(struct btree_trans *, struct dir_context *,
+		  struct bkey_s_c_dirent, subvol_inum);
 
 void bch2_dirent_init(void);
 void bch2_filldir64_specialization_to_text(struct printbuf *);

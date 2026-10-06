@@ -61,8 +61,8 @@ const ALLOWLIST_VAR: &[&str] = &["BCH_.*", "BTREE_MAX_DEPTH", "KEY_SPEC_.*", "bc
     "DT_SUBVOL",
     // errnos, for bch2_err_matches() against a bare errno, or returning one
     // as C does (darray_push()'s -ENOMEM); add as needed:
-    "ENOENT", "ENOMEM", "EINVAL", "ERANGE", "ENODATA", "E2BIG", "EACCES", "ECHILD",
-    "EIO", "ENOTEMPTY",
+    "ENOENT", "ENOMEM", "EINVAL", "ENAMETOOLONG", "ERANGE", "ENODATA", "E2BIG", "EACCES",
+    "ECHILD", "EIO", "ENOTEMPTY",
     "BCACHEFS_ROOT_SUBVOL", "BCACHEFS_ROOT_INO",
     "BLOCKDEV_INODE_MAX", "INODEv3_FIELDS_START_INITIAL",
     "KEY_TYPE_XATTR_INDEX_.*"];

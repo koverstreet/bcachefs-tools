@@ -4,11 +4,6 @@
 
 #include "str_hash.h"
 
-/*
- * snapshots_seen and the inode walker are Rust now (check.rs): C only passes
- * a struct snapshots_seen * through, to __bch2_str_hash_check_key().
- */
-
 int bch2_check_inodes(struct bch_fs *);
 int bch2_check_extents(struct bch_fs *);
 int bch2_check_indirect_extents(struct bch_fs *);

@@ -33,7 +33,8 @@ use crate::init::error::id;
 use crate::init::progress::Progress;
 use crate::snapshots::snapshot;
 use crate::{bch_err, inode_fsck_err};
-use crate::{dirent, inode};
+use crate::dirent::Dirent;
+use crate::{inode, namei};
 use core::ops::ControlFlow;
 
 /// Is this inode number a subvolume root? Answered once per inum, from the
@@ -151,7 +152,7 @@ fn find_attached_dirent_in_descendant<'a, 't>(
         return Ok(None);
     };
 
-    if !dirent::points_to_inode(d.as_dirent().expect("a dirent"), inode) {
+    if !namei::dirent_points_to_inode(Dirent::new(d).expect("a dirent"), inode) {
         return Ok(None);
     }
 
@@ -239,8 +240,8 @@ fn dst_slot(
     let mut vis_iter = BtreeIter::new(t, c::btree_id::dirents, pos, flags);
     let vis = vis_iter.peek_slot(t)?.expect("a slot always has a key");
 
-    if let Some(vis) = vis.as_dirent() {
-        return Ok(if dirent::points_to_inode(vis, inode) { DstSlot::Ours } else { DstSlot::Taken });
+    if let Some(vis) = Dirent::new(vis) {
+        return Ok(if namei::dirent_points_to_inode(vis, inode) { DstSlot::Ours } else { DstSlot::Taken });
     }
 
     let mut dst_iter = BtreeIter::new(t, c::btree_id::dirents, pos,

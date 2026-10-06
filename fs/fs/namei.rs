@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::iter::{BtreeTrans, TransAttempt};
+use crate::btree::bkey::BkeySC;
+use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt};
 use crate::c;
 use crate::check::SnapshotsSeen;
+use crate::dirent::{Dirent, DirentTarget};
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::util::os_str::{qstr, OsStr};
 use crate::util::Printbuf;
+use core::fmt;
 
 /// Check BCH_INODE_has_case_insensitive on @inode against the casefolded
 /// directories on its path, as fsck: as bch2_check_inode_has_case_insensitive().
@@ -158,4 +161,53 @@ pub fn create_trans<'a, 't>(
         )
     };
     t.result(ret)
+}
+
+// ── A dirent and the inode it names ──────────────────────────────────────
+
+/// Whether @d names @inode - a DT_SUBVOL dirent by subvolume, any other by
+/// inode number: as dirent_points_to_inode_nowarn().
+pub fn dirent_points_to_inode(d: Dirent<'_>, inode: &c::bch_inode_unpacked) -> bool {
+    match d.target() {
+        DirentTarget::Subvol { child, .. } => child == inode.bi_subvol,
+        DirentTarget::Inode(inum)          => inum == inode.bi_inum,
+    }
+}
+
+/// How @k, a dirent, fails to match @inode, which it was expected to point
+/// at - for formatting with {}.
+pub fn dirent_inode_mismatch<'a, 'k>(
+    fs:    &'a Fs,
+    k:     BkeySC<'k>,
+    inode: &'a c::bch_inode_unpacked,
+) -> DirentInodeMismatch<'a, 'k> {
+    DirentInodeMismatch { fs, k, inode }
+}
+
+pub struct DirentInodeMismatch<'a, 'k> {
+    fs:    &'a Fs,
+    k:     BkeySC<'k>,
+    inode: &'a c::bch_inode_unpacked,
+}
+
+impl fmt::Display for DirentInodeMismatch<'_, '_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "inode points to dirent that does not point back:\n{}\n{}",
+               self.k.to_text(self.fs), self.inode)
+    }
+}
+
+/// Check that @k, a dirent at @iter, and @target, the inode it points at,
+/// agree - the inode's backpointer and the dirent's d_type - repairing
+/// whichever is wrong, as fsck: as bch2_check_dirent_target().
+pub fn check_dirent_target(
+    trans:  &BtreeTrans<'_>,
+    iter:   &BtreeIter<'_>,
+    k:      BkeySC<'_>,
+    target: &mut c::bch_inode_unpacked,
+) -> Result<(), BchError> {
+    let d = k.to_c_dirent().expect("a dirent");
+    ret_to_result_void(unsafe {
+        c::bch2_check_dirent_target(trans.raw(), iter.raw(), d, target, true)
+    })
 }

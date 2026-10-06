@@ -7,7 +7,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::check::{self, SnapshotsSeen};
-use crate::dirent::{self, DirentTarget, Dirents};
+use crate::dirent::{self, Dirent, DirentTarget, Dirents};
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
@@ -16,9 +16,9 @@ use crate::printbuf_to_formatter;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::os_str::OsStrExt;
 use crate::util::Printbuf;
-use crate::xattr::Xattrs;
+
 use crate::{bch_err, fsck_err, fsck_err_on, inode_fsck_err};
-use core::ffi::{c_int, c_void};
+use core::ffi::c_void;
 use core::fmt;
 
 /// A btree that's a hash table keyed by name - dirents, xattrs: what C's
@@ -489,7 +489,7 @@ pub fn repair_inode_hash_info(
 /// Whether dirent @d points at something that exists, as seen from its
 /// snapshot: a subvolume, or an inode.
 fn dirent_has_target(t: &TransAttempt<'_, '_>, d: BkeySC<'_>) -> Result<bool, BchError> {
-    match d.as_dirent().expect("a dirent").target() {
+    match Dirent::new(d).expect("a dirent").target() {
         DirentTarget::Subvol { child, .. } =>
             Ok(subvolume::get(t, child, false).found()?.is_some()),
         DirentTarget::Inode(inum) => {
@@ -603,11 +603,12 @@ impl Repair<'_> {
         -> Result<(), BchError>
     {
         let fs = t.fs();
-        let old_name = dirent::name(old);
+        let old_d = Dirent::new(old).expect("a dirent");
+        let old_name = old_d.name();
         let dir = c::subvol_inum { subvol: 0, inum: old.k.p.inode };
 
         let mut new = dirent::alloc_max(t, old.k.p)?;
-        dirent::copy_target(&mut new, old);
+        dirent::copy_target(&mut new, old_d);
 
         // dirents already at each fsck_renamed-N name, gathered for diagnosis
         let mut collisions = Printbuf::new();
@@ -618,7 +619,7 @@ impl Repair<'_> {
             write!(name, ".fsck_renamed-{i}");
 
             new.k_mut().u64s = u8::MAX;
-            dirent::init_name(fs, &mut new, self.hash_info, name.as_os_str())?;
+            dirent::init_name(fs, new.k_i_mut(), self.hash_info, name.as_os_str(), None)?;
 
             let mut iter = BtreeIter::uninit();
             match set_or_get_in_snapshot::<Dirents>(t, &mut iter, self.hash_info, dir,
@@ -747,9 +748,9 @@ impl Repair<'_> {
     fn check_dirent(&mut self, t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchError> {
         let trans = t.trans();
         let fs = trans.fs();
-        let d = k.as_dirent().expect("a dirent");
+        let d = Dirent::new(k).expect("a dirent");
 
-        if !fsck_err_on!(trans, (d.d_casefold() != 0) != !self.hash_info.cf_encoding.is_null(),
+        if !fsck_err_on!(trans, (d.v().d_casefold() != 0) != !self.hash_info.cf_encoding.is_null(),
                          id::dirent_casefold_mismatch,
                          "dirent casefold does not match dir casefold\n{}", k.to_text(fs))? {
             return Ok(());
@@ -762,8 +763,8 @@ impl Repair<'_> {
                 (c::subvol_inum { subvol: 0, inum: 0 }, inum),
         };
 
-        let mut new = dirent::create_key(t, self.hash_info, dir, d.d_type(), dirent::name(k),
-                                         target)?;
+        let mut new = dirent::create_key(t, self.hash_info, dir, d.d_type(),
+                                         d.name(), None, target)?;
         new.k_mut().p.inode    = k.k.p.inode;
         new.k_mut().p.snapshot = k.k.p.snapshot;
 
@@ -813,45 +814,5 @@ impl Repair<'_> {
             self.check_dirent(t, hash_k)?;
         }
         Ok(())
-    }
-}
-
-/// For C's bch2_str_hash_check_key() - readdir's - once its quick test has
-/// found @hash_k out of place.
-///
-/// # Safety
-/// The arguments are the C function's: @trans live with an attempt in
-/// progress, @s NULL or a struct snapshots_seen nothing else is using, and
-/// the rest valid for the call.
-#[no_mangle]
-pub unsafe extern "C" fn __bch2_str_hash_check_key(
-    trans:                *mut c::btree_trans,
-    s:                    Option<&mut SnapshotsSeen>,
-    desc:                 &c::bch_hash_desc,
-    hash_info:            &mut c::bch_hash_info,
-    hash_k:               c::bkey_s_c,
-    updated_before_k_pos: &mut bool,
-) -> c_int {
-    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-    let t = trans.attempt_in_progress();
-    let k = BkeySC::from(&hash_k);
-
-    let s = match s {
-        Some(s) => Seen::Walk(s),
-        None    => Seen::Lazy(None),
-    };
-    let mut r = Repair { s, hash_info, updated_before_k_pos };
-
-    let ret = if core::ptr::eq(desc, Dirents::desc()) {
-        r.check_key::<Dirents>(&t, k)
-    } else if core::ptr::eq(desc, Xattrs::desc()) {
-        r.check_key::<Xattrs>(&t, k)
-    } else {
-        unreachable!("no hash table in btree {}", desc.btree_id as u32)
-    };
-
-    match ret {
-        Ok(())  => 0,
-        Err(e) => -e.raw(),
     }
 }

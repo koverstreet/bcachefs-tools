@@ -42,7 +42,8 @@ use crate::fs::Fs;
 use crate::init::error::id;
 use crate::init::progress::Progress;
 use crate::snapshots::{snapshot, subvolume};
-use crate::{dirent, inode, lostfound, namei};
+use crate::dirent::{self, Dirent};
+use crate::{inode, lostfound, namei};
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, bch_err_msg, bch_warn, c_function_name, inode_fsck_err};
@@ -53,13 +54,13 @@ fn dirent_points_to_inode(
     k:     BkeySC<'_>,
     inode: &mut c::bch_inode_unpacked,
 ) -> Result<(), BchError> {
-    let d = k.as_dirent().expect("dirent lookups only return dirents");
+    let d = Dirent::new(k).expect("dirent lookups only return dirents");
 
-    if dirent::points_to_inode(d, inode) {
+    if namei::dirent_points_to_inode(d, inode) {
         return Ok(());
     }
 
-    bch_warn!(fs, "{}", dirent::inode_mismatch(fs, k, inode));
+    bch_warn!(fs, "{}", namei::dirent_inode_mismatch(fs, k, inode));
     fs.throw(bch_errcode::BCH_ERR_ENOENT_dirent_doesnt_match_inode)
 }
 

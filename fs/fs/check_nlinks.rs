@@ -18,6 +18,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::check::SnapshotsSeen;
+use crate::dirent::{Dirent, DirentTarget};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::fsck_err_on;
@@ -136,12 +137,12 @@ fn check_nlinks_walk_dirents(
     let ret = iter.for_each(&trans, |_, k| {
         s.update(k.k.p)?;
 
-        if let Some(d) = k.as_dirent() {
-            let d_type = d.d_type() as u32;
-
-            if d_type != c::DT_DIR && d_type != c::DT_SUBVOL {
-                inc_link(&trans, &mut s, links, range_start, range_end,
-                         d.d_inum(), k.k.p.snapshot);
+        if let Some(d) = Dirent::new(k) {
+            match d.target() {
+                DirentTarget::Inode(inum) if d.d_type() as u32 != c::DT_DIR =>
+                    inc_link(&trans, &mut s, links, range_start, range_end,
+                             inum, k.k.p.snapshot),
+                _ => {}
             }
         }
 

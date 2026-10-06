@@ -35,7 +35,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::check::{self, InodeWalker, SnapshotsSeen};
-use crate::dirent::{self, DirentTarget, Dirents};
+use crate::dirent::{self, Dirent, DirentTarget, Dirents};
 use crate::errcode::{bch_errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
@@ -66,7 +66,7 @@ fn count_subdirs(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<u
                                   BtreeIterFlags::empty());
 
     iter.for_each_max_norestart(t, pos(inum, u64::MAX), |_, k| {
-        if k.as_dirent().is_some_and(|d| d.d_type() as u32 == c::DT_DIR) {
+        if Dirent::new(k).is_some_and(|d| d.d_type() as u32 == c::DT_DIR) {
             subdirs += 1;
         }
         Ok(())
@@ -296,7 +296,7 @@ fn check_dirent_to_subvol<'t>(
         inode::fsck_write(t, &mut subvol_root)?;
     }
 
-    dirent::check_target(trans, iter, k, &mut subvol_root)
+    namei::check_dirent_target(trans, iter, k, &mut subvol_root)
 }
 
 // ---------------------------------------------------------------------------
@@ -404,7 +404,7 @@ fn check_dirent_to_inode<'t>(
     st.target.get_visible(t, &mut st.s, inum)?;
 
     if st.target.inodes().is_empty() {
-        let d_type = k.as_dirent().expect("a dirent").d_type();
+        let d_type = Dirent::new(k).expect("a dirent").d_type();
         if maybe_reconstruct_inum(t, inum, d_snapshot, d_type)? {
             return Ok(true);
         }
@@ -441,7 +441,7 @@ fn check_dirent_to_inode<'t>(
         // the versions, and committed repairs no longer fire.
         t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
         check::own_version(trans, &mut i.inode, d_snapshot);
-        dirent::check_target(trans, iter, k, &mut i.inode)?;
+        namei::check_dirent_target(trans, iter, k, &mut i.inode)?;
     }
 
     for &snapshot in st.target.deletes() {
@@ -524,7 +524,7 @@ fn check_dirent<'t>(
         }
     }
 
-    let Some(d) = k.as_dirent() else { return Ok(()) };
+    let Some(d) = Dirent::new(k) else { return Ok(()) };
     let d_snapshot = k.k.p.snapshot;
     // Key values aren't valid after a commit without revalidating:
     let have_dir = d.d_type() as u32 == c::DT_DIR;

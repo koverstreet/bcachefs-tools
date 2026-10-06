@@ -49,7 +49,8 @@ use crate::snapshots::{snapshot, subvolume};
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::xattr::{self, Xattrs};
 use crate::{bch_err_msg, fsck_err, fsck_err_on, inode_fsck_err};
-use crate::{dirent, inode, namei, str_hash};
+use crate::dirent::{self, Dirent};
+use crate::{inode, namei, str_hash};
 use core::fmt;
 
 struct CheckInodes {
@@ -68,7 +69,7 @@ fn check_inode_dirent_inode(trans: &BtreeTrans<'_>, u: &mut c::bch_inode_unpacke
     let mut snapshot = u.bi_snapshot;
     let mut dirent_iter = BtreeIter::uninit();
     let d = inode::get_dirent(trans, &mut dirent_iter, u, &mut snapshot).found()?;
-    let points = d.is_some_and(|k| dirent::points_to_inode(k.as_dirent().expect("a dirent"), u));
+    let points = d.is_some_and(|k| namei::dirent_points_to_inode(Dirent::new(k).expect("a dirent"), u));
 
     if !points && u.bi_subvol != 0 && u.flag(BCH_INODE_has_child_snapshot) {
         // Older version of a renamed subvolume root: we won't have a correct
@@ -88,7 +89,7 @@ fn check_inode_dirent_inode(trans: &BtreeTrans<'_>, u: &mut c::bch_inode_unpacke
                             "inode points to missing dirent\n{u}")?,
         Some(k) if !points =>
             inode_fsck_err!(trans, pos, id::inode_points_to_wrong_dirent,
-                            "{}", dirent::inode_mismatch(fs, k, u))?,
+                            "{}", namei::dirent_inode_mismatch(fs, k, u))?,
         Some(_) => false,
     };
     if repair {

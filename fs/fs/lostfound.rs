@@ -47,7 +47,7 @@ use crate::btree::iter::{
     is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
 use crate::c;
-use crate::dirent::{self, DirentTarget, Dirents};
+use crate::dirent::{self, Dirent, DirentTarget, Dirents};
 use crate::errcode::{bch_errcode, BchError, Found};
 use crate::inode;
 use crate::namei;
@@ -83,12 +83,15 @@ fn lostfound_dirent(
                                                            BtreeIterFlags::empty(), snapshot)
         .found()? else { return Ok(None) };
 
-    let d = k.as_dirent().expect("a dirent");
-    if d.d_type() as u32 != c::DT_DIR {
-        bch_err!(fs, "lost+found in snapshot {snapshot} is not a directory:\n  {}", k.to_text(fs));
-        return Err(fs.err(bch_errcode::BCH_ERR_ENOENT_not_directory));
+    let d = Dirent::new(k).expect("a dirent");
+    match d.target() {
+        DirentTarget::Inode(inum) if d.d_type() as u32 == c::DT_DIR => Ok(Some(inum)),
+        _ => {
+            bch_err!(fs, "lost+found in snapshot {snapshot} is not a directory:\n  {}",
+                     k.to_text(fs));
+            Err(fs.err(bch_errcode::BCH_ERR_ENOENT_not_directory))
+        }
     }
-    Ok(Some(d.d_inum()))
 }
 
 /// Any subvolume in snapshot tree @tree - not master_subvol, which might
@@ -432,7 +435,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
             probe.as_os_str(), BtreeIterFlags::empty(), dirent_snapshot).found()?;
 
         match existing {
-            Some(k) if k.as_dirent().expect("a dirent").target() == inode.dirent_target() => {
+            Some(k) if Dirent::new(k).expect("a dirent").target() == inode.dirent_target() => {
                 inode.bi_dir        = lostfound.bi_inum;
                 inode.bi_dir_offset = k.k.p.offset;
                 adopted = true;

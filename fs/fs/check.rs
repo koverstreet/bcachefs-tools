@@ -11,7 +11,7 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode;
-use crate::dirent::DirentTarget;
+use crate::dirent::{Dirent, DirentTarget};
 use crate::errcode::Found;
 use crate::snapshots::{snapshot, subvolume};
 use crate::alloc::buckets::DiskReservation;
@@ -882,7 +882,7 @@ pub fn fsck_update_backpointers(
     new: &c::bkey_i,
 ) -> Result<(), BchError> {
     let trans = t.trans();
-    let Some(d) = BkeySC::from(new).as_dirent() else { return Ok(()) };
+    let Some(d) = Dirent::new(BkeySC::from(new)) else { return Ok(()) };
     let (dir, offset) = (new.k.p.inode, new.k.p.offset);
     let points_here = |i: &c::bch_inode_unpacked| i.bi_dir == dir && i.bi_dir_offset == offset;
 
