@@ -580,6 +580,10 @@ fn check_dirents(fs: &Fs) -> Result<(), BchError> {
         // restart it may end in retried here.
         lockrestart_do(&trans, |t| Ok((check_subdir_dirents_count(t, &mut st.dir)?, ())))?;
 
+        // A directory that's become a file, or the reverse, may have been
+        // counted in its parent before the walk got to it:
+        st.need_second_pass |= st.dir.take_changed_inode_type();
+
         if !st.need_second_pass {
             return Ok(());
         }

@@ -189,6 +189,8 @@ pub struct InodeWalker {
     inodes:           KVVec<WalkerEntry>,
     /// From get_visible(): snapshots where a whiteout hides older versions.
     deletes:          KVVec<u32>,
+    /// A repair changed an inode's type: see take_changed_inode_type().
+    changed_inode_type: bool,
 }
 
 /// One version of the walked inode - or a whiteout, where the inode was
@@ -234,6 +236,7 @@ impl InodeWalker {
             commit_count:     0,
             inodes:           KVVec::new(),
             deletes:          KVVec::new(),
+            changed_inode_type: false,
         }
     }
 
@@ -504,6 +507,7 @@ impl InodeWalker {
                 let inode = &mut self.inodes_mut()[l].inode;
                 inode.bi_mode = (inode.bi_mode & !(c::S_IFMT as c::umode_t)) | ty as c::umode_t;
                 inode.bi_size = inode.bi_size.max(size);
+                self.changed_inode_type = true;
                 l
             }
         };
@@ -606,6 +610,13 @@ impl InodeWalker {
     /// of the inode instead of reporting the mismatch.
     pub fn set_recalculate_sums(&mut self) {
         self.recalculate_sums = true;
+    }
+
+    /// Whether a repair has changed an inode's type since the last call. The
+    /// dirent pointing at it may already have been checked - its d_type, and
+    /// its directory's subdirectory count - under the old one.
+    pub fn take_changed_inode_type(&mut self) -> bool {
+        core::mem::take(&mut self.changed_inode_type)
     }
 }
 
