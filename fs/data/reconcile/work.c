@@ -1429,7 +1429,9 @@ static int do_reconcile_scan(struct moving_context *ctxt,
 					    r->scan_start.pos, r->scan_end.pos));
 	}
 
-	try(bch2_clear_reconcile_needs_scan(trans, cookie_pos, cookie));
+	/* do_reconcile() clears the pending cookie after the pending phases. */
+	if (s.type != RECONCILE_SCAN_pending)
+		try(bch2_clear_reconcile_needs_scan(trans, cookie_pos, cookie));
 
 	*sectors_scanned += atomic64_read(&r->scan_stats.sectors_seen);
 	/*
@@ -1971,7 +1973,9 @@ static int do_reconcile(struct moving_context *ctxt)
 			break;
 	}
 out:
-	if (!ret && !bkey_deleted(&pending_cookie.k))
+	if (!ret &&
+	    r->phase == ARRAY_SIZE(reconcile_phases) &&
+	    !bkey_deleted(&pending_cookie.k))
 		try(bch2_clear_reconcile_needs_scan(trans,
 				pending_cookie.k.p, pending_cookie.v.cookie));
 
