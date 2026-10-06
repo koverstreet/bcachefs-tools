@@ -453,7 +453,7 @@ impl InodeWalker {
                 }
 
                 let Some(g) = good_ancestor else {
-                    let t = reconstruct_inode(t, btree, k.k.p.snapshot, k.k.p.inode)?;
+                    let t = reconstruct_inode(t, btree, k.k.p.snapshot, k.k.p.inode, None)?;
                     let t = t.commit(None, CommitFlags::NO_ENOSPC)?;
                     return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_commit));
                 };
@@ -669,14 +669,24 @@ fn extents_end(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<u64, 
     Ok(iter.peek_prev_min(pos(inum, 0))?.map_or(0, |k| k.k.p.offset << 9))
 }
 
+/// The inode mode for dirent type @d_type, if it's a file type.
+fn d_type_mode(d_type: u8) -> Option<u32> {
+    let d_type = d_type as u32;
+    [c::DT_REG, c::DT_DIR, c::DT_LNK, c::DT_CHR, c::DT_BLK, c::DT_FIFO, c::DT_SOCK]
+        .contains(&d_type)
+        .then_some(d_type << 12)
+}
+
 /// Recreate missing inode @inum:@snapshot from the keys found in @btree -
 /// a directory for dirents, a file sized to its extents - for the caller to
-/// commit.
+/// commit. Xattrs don't say what the inode was: @d_type, from a dirent that
+/// names it, does if there is one; a regular file if not.
 pub fn reconstruct_inode<'a, 't>(
     t:        TransAttempt<'a, 't>,
     btree:    c::btree_id,
     snapshot: u32,
     inum:     u64,
+    d_type:   Option<u8>,
 ) -> TransRet<'a, 't> {
     let trans = t.trans();
     let fs = trans.fs();
@@ -685,7 +695,7 @@ pub fn reconstruct_inode<'a, 't>(
         // may race with repair deleting the extents that triggered us
         c::btree_id::extents => (c::S_IFREG, extents_end(trans, inum, snapshot)?),
         c::btree_id::dirents => (c::S_IFDIR, 0),
-        c::btree_id::xattrs  => (c::S_IFREG, 0),
+        c::btree_id::xattrs  => (d_type.and_then(d_type_mode).unwrap_or(c::S_IFREG), 0),
         _ => unreachable!("reconstruct_inode() for btree {}", btree as u32),
     };
 

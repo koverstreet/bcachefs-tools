@@ -306,17 +306,26 @@ fn check_dirent_to_subvol<'a, 't>(
 // ---------------------------------------------------------------------------
 // Dirents to inodes
 
-/// The dirent's target inode is missing, but @inum has extents or dirents in
-/// @snapshot: offer to recreate it. Returns whether the repair was declined -
-/// the dirent is then left alone, rather than removed as pointing at nothing.
+/// The dirent's target inode is missing, but @inum has extents, dirents or
+/// xattrs in @snapshot: offer to recreate it - as what its keys say it was,
+/// or, for xattrs, which don't say, what the dirent does (@d_type). Returns
+/// whether the repair was declined - the dirent is then left alone, rather
+/// than removed as pointing at nothing.
+///
+/// Xattrs too, or a file whose only contents are xattrs loses its name: the
+/// dirent goes as pointing at nothing, and check_xattrs reconstructs the
+/// inode after, for check_unreachable_inodes to file under lost+found.
 fn maybe_reconstruct_inum<'a, 't>(
     t:        TransAttempt<'a, 't>,
     inum:     u64,
     snapshot: u32,
+    d_type:   u8,
 ) -> TransResult<'a, 't, bool> {
     let trans = t.trans();
 
-    for (btree, type_) in [(c::btree_id::extents, "reg"), (c::btree_id::dirents, "dir")] {
+    for (btree, type_) in [(c::btree_id::extents, "reg"),
+                           (c::btree_id::dirents, "dir"),
+                           (c::btree_id::xattrs,  "with xattrs")] {
         let has_contents = {
             let mut iter = BtreeIter::new(trans, btree, spos(inum, 0, snapshot), BtreeIterFlags::empty());
             iter.peek_max(pos(inum, u64::MAX))?.is_some()
@@ -330,7 +339,7 @@ fn maybe_reconstruct_inum<'a, 't>(
             return t.done(true);
         }
 
-        let t = check::reconstruct_inode(t, btree, snapshot, inum)?;
+        let t = check::reconstruct_inode(t, btree, snapshot, inum, Some(d_type))?;
         let t = t.commit(None, CommitFlags::NO_ENOSPC)?;
         return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_commit));
     }
@@ -401,7 +410,8 @@ fn check_dirent_to_inode<'a, 't>(
     st.target.get_visible(trans, &mut st.s, inum)?;
 
     let t = if st.target.inodes().is_empty() {
-        let (t, declined) = maybe_reconstruct_inum(t, inum, d_snapshot)?;
+        let d_type = k.as_dirent().expect("a dirent").d_type();
+        let (t, declined) = maybe_reconstruct_inum(t, inum, d_snapshot, d_type)?;
         if declined {
             return t.done(true);
         }
