@@ -1051,32 +1051,23 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 		bch2_run_explicit_recovery_pass(c, &msg.m, BCH_RECOVERY_PASS_check_allocations, 0);
 	}
 
+	/*
+	 * The block is rebuilt from the others without reading it: it just
+	 * failed to read, or it's being read around. A read-around reads the k
+	 * fastest, and for a checksummed extent only the extent's range of each,
+	 * since the extent's checksum checks the result.
+	 */
 	unsigned block = rbio->pick.ec.block;
-	bool skipped_failed_block = false;
-	u32 read_mask = EC_BLOCKS_ALL;
-	if (rbio->pick.mode == BCH_READ_MODE_ec_read_around) {
+	bool read_around = rbio->pick.mode == BCH_READ_MODE_ec_read_around;
+	u32 read_mask = EC_BLOCKS_ALL & ~BIT(block);
+	if (read_around) {
 		u64 l_r;
 		ec_read_around_slow(c, &buf->key.v, BIT(block), failed, &read_mask, &l_r);
 		/* Raced with a device going offline: not worth a message */
 		if (!read_mask)
 			return bch_err_throw(c, stripe_reconstruct_insufficient_blocks);
 
-		/*
-		 * When the extent is checksummed, its checksum checks the
-		 * result, as it would a direct read, so read just the extent's
-		 * range of each block, without rounding to checksum granules.
-		 */
 		buf->unaligned = rbio->pick.crc.csum_type != 0;
-	} else if (bch2_read_mode_tried(bch2_dev_io_failures(failed, rbio->pick.ptr.dev),
-					BCH_READ_MODE_direct)) {
-		/*
-		 * The block just failed to read, so rebuild it from the
-		 * others: on a drive retrying a bad sector, reading it again
-		 * costs as long again. If the others can't rebuild it, it's
-		 * read after all, below.
-		 */
-		read_mask &= ~BIT(block);
-		skipped_failed_block = true;
 	}
 
 	/* Don't hold btree locks for stripe buffer allocations, or IO */
@@ -1100,13 +1091,13 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 	ret = bch2_stripe_buf_validate(c, buf, false, EC_BLOCKS_ALL);
 
 	/*
-	 * The rest of the stripe couldn't rebuild the block we failed to read:
-	 * another block is bad too. Our block's error may have been transient,
-	 * so read it after all before the data is given up on.
+	 * The others couldn't rebuild it, so read it after all before the data
+	 * is given up on: its error may have been transient. A read-around
+	 * falls back to a direct read instead.
 	 */
 	if (ret &&
 	    ret != -BCH_ERR_stripe_reconstruct_stale_race &&
-	    skipped_failed_block) {
+	    !read_around) {
 		memset(buf->err[STRIPE_BUF_POST_RECOV], 0, sizeof(buf->err[STRIPE_BUF_POST_RECOV]));
 		buf->err[STRIPE_BUF_PRE_RECOV][block] = 0;
 		bch2_ec_block_io(c, buf, REQ_OP_READ, block);
