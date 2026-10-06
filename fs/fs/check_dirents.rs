@@ -441,6 +441,7 @@ fn check_dirent_to_inode<'a, 't>(
         // by snapshot count. The re-drive converges: get_visible() rereads
         // the versions, and committed repairs no longer fire.
         t = t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
+        check::own_version(trans, &mut i.inode, d_snapshot);
         dirent::check_target(trans, iter, k, &mut i.inode)?;
     }
 

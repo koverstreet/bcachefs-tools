@@ -579,7 +579,28 @@ impl InodeWalker {
                 deletes.push(id, GFP_KERNEL)?;
             }
             Ok(())
-        })
+        })?;
+
+        // The scan is @snapshot and its descendants. With no version at
+        // @snapshot itself, @snapshot sees its nearest ancestor's - what a
+        // lookup there resolves to, and so what a reference there names. Just
+        // that one: any further up are shadowed by it. Normally there is a
+        // version at @snapshot, since whatever makes a dirent writes its
+        // inode there; this is for the dirents a repair or corruption left.
+        //
+        // First in the list, as the oldest. It's shared with the ancestor's
+        // other descendants: writers go through own_version().
+        if !self.inodes.iter().any(|i| i.inode.bi_snapshot == snapshot) &&
+           !self.deletes.contains(&snapshot) {
+            if let Some(u) = inode::find_by_inum_snapshot(trans, inum, snapshot,
+                                                          BtreeIterFlags::empty()).found()? {
+                if u.bi_snapshot != snapshot {
+                    let e = WalkerEntry { inode: u, whiteout: false, count: 0 };
+                    kvvec_insert(&mut self.inodes, 0, e)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn inodes(&self) -> &[WalkerEntry] {
@@ -838,6 +859,17 @@ fn count_inode_keys(
     Ok(nr_keys)
 }
 
+/// A repair to @inode made for a key at @snapshot: if @inode is a version in
+/// a strict ancestor - one get_visible() resolved @snapshot to - it's shared
+/// with the ancestor's other descendants, and the repair goes in @snapshot
+/// instead, as a version of its own. Written in place, it would change what
+/// every other view of the ancestor sees.
+pub fn own_version(trans: &BtreeTrans<'_>, inode: &mut c::bch_inode_unpacked, snapshot: u32) {
+    if inode.bi_snapshot != snapshot && snapshot::is_ancestor(trans, snapshot, inode.bi_snapshot) {
+        inode.bi_snapshot = snapshot;
+    }
+}
+
 /// @new, a key a hash table repair just wrote, may be a dirent at a new
 /// position: point what it names back at it - a subvolume's root inode, or
 /// the versions of an inode visible from it, by @s.
@@ -886,6 +918,7 @@ pub fn fsck_update_backpointers<'a, 't>(
             // partially-repaired state shrinks instead of repeating the batch.
             let mut t = t;
             for i in target.inodes_mut().iter_mut().filter(|i| !points_here(&i.inode)) {
+                own_version(trans, &mut i.inode, new.k.p.snapshot);
                 i.inode.bi_dir        = dir;
                 i.inode.bi_dir_offset = offset;
                 t = inode::fsck_write(t, &mut i.inode)?;
