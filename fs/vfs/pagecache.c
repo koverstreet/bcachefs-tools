@@ -372,8 +372,6 @@ int bch2_mark_pagecache_reserved(struct bch_inode_info *inode,
 
 			BUG_ON(end <= folio_start);
 
-			*start = min(end, folio_end);
-
 			struct bch_folio *s = bch2_folio(folio);
 			if (s) {
 				unsigned folio_offset = max(*start, folio_start) - folio_start;
@@ -387,6 +385,7 @@ int bch2_mark_pagecache_reserved(struct bch_inode_info *inode,
 				}
 			}
 
+			*start = min(end, folio_end);
 			folio_unlock(folio);
 		}
 		folio_batch_release(&fbatch);
