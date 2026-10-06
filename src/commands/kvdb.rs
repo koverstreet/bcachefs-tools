@@ -49,8 +49,9 @@ use bcachefs_kernel::btree::iter::{
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::{bch_errcode, BchError};
 use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::inode;
 use bcachefs_kernel::opt_set;
-use bcachefs_kernel::typeinfo::{self, FieldTarget};
+use bcachefs_kernel::typeinfo::{self, FieldTarget, StructInfo, TypeInfo};
 use bch_bindgen::c::bch_degraded_actions;
 use clap::Parser;
 
@@ -291,11 +292,27 @@ fn render_key(fs: &Fs, k: &BkeySC<'_>, key_only: bool) -> String {
 /// human-oriented to_text display. Whole arrays print space-separated.
 /// A field beyond the end of a short (older-format) value reads as zero,
 /// mirroring update's grow-zero-filled write semantics.
-fn render_key_fields(k: &BkeySC<'_>, paths: &[&str]) -> Result<String> {
+///
+/// Inodes are read through the decoded form, bch_inode_unpacked, as update
+/// writes them: the varint-packed fields have no fixed position.
+fn render_key_fields(fs: &Fs, k: &BkeySC<'_>, paths: &[&str]) -> Result<String> {
+    if inode::bkey_is_inode(k.k) {
+        let u = inode::unpack(fs, *k);
+        let bytes = unsafe {
+            core::slice::from_raw_parts(&u as *const _ as *const u8,
+                                        size_of::<c::bch_inode_unpacked>())
+        };
+        return render_fields(bytes, <c::bch_inode_unpacked as TypeInfo>::INFO, paths);
+    }
+
+    let info = typeinfo::bkey_val_info(k.k.type_ as u32)
+        .ok_or_else(|| anyhow!("unknown key type {}", k.k.type_))?;
+    render_fields(k.val_bytes(), info, paths)
+}
+
+fn render_fields(val: &[u8], info: &'static StructInfo, paths: &[&str]) -> Result<String> {
     use std::fmt::Write as _;
     use typeinfo::{AccessError, FieldKind, FieldRef};
-
-    let val = k.val_bytes();
 
     let read_int = |path: &str, r: &FieldRef| -> Result<String> {
         let v = match typeinfo::read_scalar(val, r) {
@@ -312,7 +329,7 @@ fn render_key_fields(k: &BkeySC<'_>, paths: &[&str]) -> Result<String> {
 
     let mut out = String::new();
     for path in paths {
-        let (r, bm) = resolve_field(k.k.type_, path)?;
+        let (r, bm) = typeinfo::resolve_with_bits(info, path).map_err(|e| anyhow!("{e}"))?;
         let line = match bm {
             Some(bm) => match typeinfo::read_bits(val, &r, bm) {
                 Ok(v) => v.to_string(),
@@ -350,13 +367,6 @@ fn render_key_fields(k: &BkeySC<'_>, paths: &[&str]) -> Result<String> {
         writeln!(out, "{line}").unwrap();
     }
     Ok(out)
-}
-
-/// Resolve a field-or-bit path against a key type's val struct.
-fn resolve_field(type_: u8, path: &str) -> Result<FieldTarget> {
-    let info = typeinfo::bkey_val_info(type_ as u32)
-        .ok_or_else(|| anyhow!("unknown key type {type_}"))?;
-    typeinfo::resolve_with_bits(info, path).map_err(|e| anyhow!("{e}"))
 }
 
 /// Room for whatever set() grows a value to: the largest key there is.
@@ -427,7 +437,7 @@ fn render_read(fs: &Fs, k: &BkeySC<'_>, how: Render<'_>) -> Result<String> {
             let (inode, offset, snapshot) = (k.k.p.inode, k.k.p.offset, k.k.p.snapshot);
             Err(anyhow!("no key at {inode}:{offset}:{snapshot}"))
         }
-        Render::Fields(paths) => render_key_fields(k, paths),
+        Render::Fields(paths) => render_key_fields(fs, k, paths),
     }
 }
 
