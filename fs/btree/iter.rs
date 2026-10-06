@@ -111,8 +111,20 @@ impl<'f> BtreeTrans<'f> {
         }
     }
 
-    fn begin_raw(&self) -> u32 {
+    /// bch2_trans_begin(), for a loop that tracks restarts itself: the new
+    /// restart count.
+    pub(crate) fn begin_raw(&self) -> u32 {
         unsafe { c::bch2_trans_begin(self.raw) }
+    }
+
+    pub(crate) fn restart_count(&self) -> u32 {
+        unsafe { (*self.raw).restart_count }
+    }
+
+    /// Take back the locks unlock() dropped: as bch2_trans_relock(). A
+    /// transaction restart if they've changed hands meanwhile.
+    pub fn relock(&self) -> Result<(), BchError> {
+        crate::errcode::ret_to_result(unsafe { c::bch2_trans_relock(self.raw) }).map(|_| ())
     }
 
     pub fn begin<'a>(&'a self) -> TransAttempt<'a, 'f> {
@@ -456,6 +468,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
     {
         f(self.trans)?;
         Ok(self)
+    }
+
+    /// @bytes of transaction memory, freed when the transaction next begins:
+    /// as bch2_trans_kmalloc().
+    pub fn kmalloc(&self, bytes: usize) -> Result<&'a mut [u8], BchError> {
+        let ptr = unsafe { c::bch2_trans_kmalloc(self.raw(), bytes) };
+        let ptr = errptr_to_result(ptr)? as *mut u8;
+        Ok(unsafe { core::slice::from_raw_parts_mut(ptr, bytes) })
     }
 
     pub fn bkey_alloc(&self, u64s: u32) -> Result<TransBkey<'a, 't>, BchError> {
@@ -1071,6 +1091,7 @@ where
     lockrestart_do(&trans, f)
 }
 
+#[repr(transparent)]
 pub struct BtreeIter<'t> {
     raw:   c::btree_iter,
     trans: PhantomData<&'t BtreeTrans<'t>>,
@@ -1101,6 +1122,16 @@ pub(crate) fn bkey_s_c_to_result<'i>(k: c::bkey_s_c) -> Result<Option<BkeySC<'i>
 }
 
 impl<'t> BtreeIter<'t> {
+    /// A C caller's iterator, for Rust that C calls with one: borrowed, so
+    /// it's still the caller's to exit.
+    ///
+    /// # Safety
+    /// @raw is an iterator, initialized or not, that nothing else touches
+    /// for 'a.
+    pub(crate) unsafe fn borrow_raw<'a>(raw: *mut c::btree_iter) -> &'a mut BtreeIter<'t> {
+        unsafe { &mut *(raw as *mut BtreeIter<'t>) }
+    }
+
     pub fn uninit() -> BtreeIter<'t> {
         BtreeIter {
             raw:   Default::default(),
@@ -1630,10 +1661,9 @@ impl<'t> BtreeIter<'t> {
             f)
     }
 
-    pub fn advance(&mut self) {
-        unsafe {
-            c::bch2_btree_iter_advance(&mut self.raw);
-        }
+    /// Step past the key just returned: false at the end of the btree.
+    pub fn advance(&mut self) -> bool {
+        unsafe { c::bch2_btree_iter_advance(&mut self.raw) }
     }
 
     /// Step back past the key just returned, for walking backwards: false at

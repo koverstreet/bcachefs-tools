@@ -517,7 +517,7 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
         match outcome {
             Some(true) => return Ok(()),
             Some(false) => return fs.throw(ENOENT_bkey_type_mismatch),
-            None => iter.advance(),
+            None => { iter.advance(); }
         }
     }
 }

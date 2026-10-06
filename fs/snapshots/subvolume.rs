@@ -3,9 +3,9 @@
 //! Subvolumes (snapshots/subvolume.h).
 
 use crate::btree::bkey::BkeySC;
-use crate::btree::iter::BtreeTrans;
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, LoopControl};
 use crate::c;
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
 
 /// Subvolume @subvol: as bch2_subvolume_get(). With
 /// @inconsistent_if_not_found, a missing subvolume is reported as
@@ -53,6 +53,60 @@ pub fn get_snapshot_nowarn(trans: &BtreeTrans<'_>, subvol: u32) -> Result<u32, B
         c::__bch2_subvolume_get_snapshot(trans.raw(), subvol, &mut snapshot, false)
     })?;
     Ok(snapshot)
+}
+
+/// Walk @iter to @end as subvolume @subvol sees it - at its snapshot, read
+/// again after every restart - calling @f on each key, until it says stop: as
+/// for_each_btree_key_in_subvolume_max_continue_in_trans().
+///
+/// In the caller's transaction, and @f may unlock it: each peek relocks. A
+/// restart begins the transaction again and retries the key it happened on,
+/// so @f must not restart after doing something it can't redo - which is
+/// why a callback that has unlocked returns, and leaves the relock to the
+/// next peek.
+pub fn for_each_in_subvolume_max_in_trans<F, R>(
+    trans:  &BtreeTrans<'_>,
+    iter:   &mut BtreeIter<'_>,
+    end:    c::bpos,
+    subvol: u32,
+    flags:  BtreeIterFlags,
+    mut f:  F,
+) -> Result<(), BchError>
+where
+    F: FnMut(BkeySC<'_>) -> Result<R, BchError>,
+    R: LoopControl,
+{
+    let mut restart_count = trans.restart_count();
+    let mut snapshot = 0;
+
+    loop {
+        let ret = (|| {
+            trans.relock()?;
+            if snapshot == 0 {
+                snapshot = get_snapshot(trans, subvol)?;
+                iter.set_snapshot(snapshot);
+            }
+            match iter.peek_max_type(end, flags)? {
+                Some(k) => f(k).map(|r| !r.stops()),
+                None    => Ok(false),
+            }
+        })();
+
+        match ret {
+            Ok(false) => return Ok(()),
+            Ok(true)  => {
+                trans.verify_not_restarted(restart_count);
+                if !iter.advance() {
+                    return Ok(());
+                }
+            }
+            Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => {
+                restart_count = trans.begin_raw();
+                snapshot = 0;
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 /// Whether subvolume @subvol is in state unlinked - the only state in which
