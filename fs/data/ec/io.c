@@ -190,10 +190,7 @@ void bch2_ec_stripe_buf_move(struct ec_stripe_buf *dst, struct ec_stripe_buf *sr
 	memset(src->data, 0, sizeof(src->data));
 }
 
-/*
- * Over ec_stripe_buf_limit, waits on @cl if given, fails if
- * EC_STRIPE_BUF_optional, and otherwise goes over it.
- */
+/* Over ec_stripe_buf_limit, waits on @cl if given, and otherwise goes over it */
 int __bch2_ec_stripe_buf_init(struct bch_fs *c,
 			      struct ec_stripe_buf *buf,
 			      unsigned offset, unsigned size,
@@ -212,15 +209,12 @@ int __bch2_ec_stripe_buf_init(struct bch_fs *c,
 
 	unsigned long buf_bytes = ((unsigned long)(end - offset) << 9) *
 		buf->key.v.nr_blocks;
-	unsigned long limit = (totalram_pages() << PAGE_SHIFT) / 100 *
-		c->opts.ec_stripe_buf_limit;
 
 	scoped_guard(spinlock, &c->ec.stripe_buf_lock) {
-		if ((cl || (flags & EC_STRIPE_BUF_optional)) &&
+		if (cl &&
 		    c->ec.stripe_buf_bytes &&
-		    c->ec.stripe_buf_bytes + buf_bytes > limit) {
-			if (cl)
-				closure_wait(&c->ec.stripe_buf_wait, cl);
+		    c->ec.stripe_buf_bytes + buf_bytes > bch2_ec_stripe_buf_limit(c)) {
+			closure_wait(&c->ec.stripe_buf_wait, cl);
 			return bch_err_throw(c, stripe_buf_mem_blocked);
 		}
 
@@ -991,6 +985,16 @@ int bch2_ec_read_around_pick(struct btree_trans *trans,
 		if (!ec_read_around_blocks(c, v, pick->ec.block, failed, &l_r))
 			return 0;
 
+		/*
+		 * Only if its stripe buffers fit under the limit now - not
+		 * worth going over it for. Racy: a read-around that loses the
+		 * race goes over a little.
+		 */
+		long bytes = ((long) pick->crc.compressed_size << 9) * v->nr_blocks;
+		long used = READ_ONCE(c->ec.stripe_buf_bytes);
+		if (used && used + bytes > bch2_ec_stripe_buf_limit(c))
+			return 0;
+
 		/* In ~us, so the squares fit: */
 		u64 d = min_t(u64, l_d >> 10, U32_MAX);
 		u64 r = min_t(u64, ec_read_around_cost(l_r, penalty) >> 10, U32_MAX);
@@ -1088,13 +1092,10 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 			return bch_err_throw(c, stripe_reconstruct_insufficient_blocks);
 
 		/*
-		 * A read-around is optional, so it doesn't go over the stripe
-		 * buffer limit; the read goes to the device instead. When the
-		 * extent is checksummed, its checksum checks the result, as
-		 * it would a direct read, so read just the extent's range of
-		 * each block, without rounding to checksum granules.
+		 * When the extent is checksummed, its checksum checks the
+		 * result, as it would a direct read, so read just the extent's
+		 * range of each block, without rounding to checksum granules.
 		 */
-		buf_flags |= EC_STRIPE_BUF_optional;
 		if (rbio->pick.crc.csum_type)
 			buf_flags |= EC_STRIPE_BUF_unaligned;
 	} else if (bch2_read_mode_tried(bch2_dev_io_failures(failed, rbio->pick.ptr.dev),
@@ -1114,8 +1115,6 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 
 	ret = __bch2_ec_stripe_buf_init(c, buf, offset, bio_sectors(&rbio->bio), NULL,
 					buf_flags);
-	if (bch2_err_matches(ret, BCH_ERR_stripe_buf_mem_blocked))
-		return ret;
 	if (ret) {
 		prt_printf(msg, "error allocating stripe data buffers\n");
 		bch2_bkey_val_to_text(msg, c, bkey_i_to_s_c(&buf->key.k_i));

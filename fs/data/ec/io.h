@@ -79,11 +79,14 @@ static inline u32 ec_failed_mask(struct ec_stripe_buf *buf,
 void __bch2_ec_stripe_buf_exit(struct ec_stripe_buf *);
 void bch2_ec_stripe_buf_exit(struct ec_stripe_buf *);
 void bch2_ec_stripe_buf_move(struct ec_stripe_buf *, struct ec_stripe_buf *);
+static inline unsigned long bch2_ec_stripe_buf_limit(struct bch_fs *c)
+{
+	return (totalram_pages() << PAGE_SHIFT) / 100 * c->opts.ec_stripe_buf_limit;
+}
+
 enum ec_stripe_buf_flags {
-	/* Fail if it would go over ec_stripe_buf_limit */
-	EC_STRIPE_BUF_optional	= BIT(0),
 	/* Exactly the range given, without rounding to the checksum granularity */
-	EC_STRIPE_BUF_unaligned	= BIT(1),
+	EC_STRIPE_BUF_unaligned	= BIT(0),
 };
 
 int __bch2_ec_stripe_buf_init(struct bch_fs *, struct ec_stripe_buf *, unsigned, unsigned,

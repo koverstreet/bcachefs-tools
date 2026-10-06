@@ -805,21 +805,16 @@ static void bch2_rbio_retry(struct work_struct *work)
 		/*
 		 * The read-around failed and the direct read after it didn't:
 		 * nothing was lost, and the device is fine. Say what was found,
-		 * unless it was only a race or the stripe buffer limit.
+		 * unless it was only a race.
 		 */
-		int read_around_err = 0;
-		if (flags & BCH_READ_ec_read_around)
-			darray_for_each(failed, f)
-				read_around_err = read_around_err ?: f->ec_errcode;
-
-		bool read_around_failed = !ret && !have_io_error(&failed) && read_around_err;
+		bool read_around_failed = !ret && !have_io_error(&failed) &&
+			(flags & BCH_READ_ec_read_around) && failed.nr;
 
 		if (read_around_failed) {
 			event_inc_trace(c, data_read_ec_read_around_fail, buf,
 					bch2_read_bio_to_text_atomic(&buf, rbio));
 
-			if (failed.ec_msg.pos ||
-			    read_around_err != -BCH_ERR_data_read_retry_ec_read_around) {
+			if (failed.ec_msg.pos) {
 				CLASS(bch_log_msg_level, msg)(c, LOGLEVEL_notice);
 				bch2_read_err_msg_trans(trans, &msg.m, rbio, read_pos);
 				prt_newline(&msg.m);
