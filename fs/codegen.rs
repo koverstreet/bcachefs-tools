@@ -73,6 +73,7 @@ const BITFIELD_ENUM: &[&str] = &[
     "btree_iter_update_trigger_flags",
     "bch_reservation_flags",
     "bch_trans_commit_flags",
+    "bch_validate_flags",
     "bch_write_flags",
 ];
 const RUSTIFIED_ENUM: &[&str] = &["fsck_err_opts", "bch_key_types"];

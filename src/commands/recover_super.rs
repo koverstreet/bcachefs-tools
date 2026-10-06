@@ -14,19 +14,6 @@ use bcachefs_kernel::sb::io::{SbBuf, SbParseError, BCACHE_MAGIC, BCHFS_MAGIC};
 use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::wrappers::super_io::{self, SUPERBLOCK_SIZE_DEFAULT};
 
-// bch2_sb_validate's flags parameter is a bch_validate_flags enum in bindgen,
-// but C passes 0 (no flags). Since 0 isn't a valid Rust enum variant, declare
-// our own FFI binding with the correct ABI type.
-extern "C" {
-    fn bch2_sb_validate(
-        sb: *mut c::bch_sb,
-        opts: *mut c::bch_opts,
-        offset: u64,
-        flags: u32,
-        err: *mut c::printbuf,
-    ) -> i32;
-}
-
 /// Attempt to recover an overwritten superblock from backups
 #[derive(Parser, Debug)]
 #[command(about = "Attempt to recover overwritten superblock from backups")]
@@ -77,7 +64,9 @@ fn sb_last_mount_time(sb: &c::bch_sb) -> u64 {
 fn validate_sb(sb: &mut c::bch_sb, offset_sectors: u64) -> (i32, Printbuf) {
     let mut err = Printbuf::new();
     let mut opts = c::bch_opts::default();
-    let ret = unsafe { bch2_sb_validate(sb, &mut opts, offset_sectors, 0, err.as_raw()) };
+    let ret = unsafe {
+        c::bch2_sb_validate(sb, &mut opts, offset_sectors, c::bch_validate_flags(0), err.as_raw())
+    };
     (ret, err)
 }
 
