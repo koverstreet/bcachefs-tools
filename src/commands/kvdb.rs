@@ -117,6 +117,7 @@ Commands:
     list      [-k] <btree> [start] [end]           keys in range
     update [-r] <btree> <pos> <field=val>...       modify fields of a key
     set  [-s] <btree> <pos> <type> [field=val]...  insert a whole new key
+    copy      <btree> <pos> <new_pos>              duplicate a key elsewhere
     sb get [-d <dev>] <field>                      read a superblock field
     sb set [-d <dev>] <field=val>                  write one
     snapshot  [<id>|none]                          session snapshot context
@@ -134,6 +135,12 @@ value names: state=will_delete. Values are decimal, 0x hex, or negative
 decimal. `set <btree> <pos> deleted` removes the exact key; with -s it
 deletes within pos's snapshot instead (inserting whiteouts, like a runtime
 delete).
+
+`copy <btree> <pos> <new_pos>` duplicates a key exactly as it is - for
+values set can't build, extents above all - at another position, which may
+be in another inode or another snapshot. The insert is raw: triggers run,
+but an extent copy overwrites nothing, so it can overlap the extents there;
+the destination slot must be empty. An extent's new_pos is its new end.
 
 The snapshot context. Snapshot visibility is the subtle dimension of every
 bcachefs lookup: a key at snapshot S is visible at S and its descendants
@@ -701,6 +708,53 @@ fn cmd_update(
     }
 }
 
+/// Duplicate the key at @pos at @new_pos, exactly as it is: a raw insert -
+/// triggers run, but an extent overwrites nothing, so the copy can overlap
+/// what's there - into a slot that must be empty. For an extent, @new_pos is
+/// the copy's end, its size unchanged.
+fn cmd_copy(fs: &Fs, btree: c::btree_id, pos: c::bpos, new_pos: c::bpos) -> Result<String> {
+    let trans = bcachefs_kernel::btree_trans!(fs);
+    let mut user_err: Option<anyhow::Error> = None;
+
+    let commit = commit_do(
+        &trans,
+        None,
+        CommitFlags::NO_ENOSPC,
+        |t| {
+            let mut iter = BtreeIter::new(t.trans(), btree, pos, RAW_EXACT);
+            let k = iter
+                .peek_max_flags(SPOS_MAX, BtreeIterFlags::SLOTS)
+                .map_err(TransError::from)?;
+            let Some(k) = k.filter(|k| !k.is_deleted()) else {
+                let (inode, offset, snapshot) = (pos.inode, pos.offset, pos.snapshot);
+                user_err = Some(anyhow!("no key at {inode}:{offset}:{snapshot}"));
+                return Err(no_key_err());
+            };
+
+            let mut new_iter = BtreeIter::new(t.trans(), btree, new_pos,
+                                              RAW_EXACT | BtreeIterFlags::INTENT);
+            let old = new_iter
+                .peek_max_flags(SPOS_MAX, BtreeIterFlags::SLOTS)
+                .map_err(TransError::from)?;
+            if old.is_some_and(|old| !old.is_deleted()) {
+                let (inode, offset, snapshot) = (new_pos.inode, new_pos.offset, new_pos.snapshot);
+                user_err = Some(anyhow!("{inode}:{offset}:{snapshot} is occupied"));
+                return Err(no_key_err());
+            }
+
+            let mut new = t.bkey_reassemble(k).map_err(TransError::from)?;
+            new.k_mut().p = new_pos;
+
+            t.update(&mut new_iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+        },
+    );
+
+    match commit {
+        Ok(()) => Ok(String::new()),
+        Err(e) => Err(user_err.unwrap_or_else(|| anyhow!("copy failed: {e}"))),
+    }
+}
+
 fn cmd_set(
     fs: &Fs,
     btree: c::btree_id,
@@ -839,6 +893,10 @@ set  [-s] <btree> <pos> <type> [field=val]...  insert a whole new key
           subvolume state) also accept the value name, e.g. state=will_delete
           `set <pos> deleted` removes the exact key; with -s it deletes
           within pos's snapshot instead (whiteouts, like a runtime delete)
+copy <btree> <pos> <new_pos>                   duplicate a key, as it is, elsewhere
+          raw: an extent copy can overlap what's there; new_pos may be in
+          another inode or snapshot, and must be empty. An extent's new_pos
+          is its end
 sb get [-d <dev>] <field>                      read a superblock field/flag
 sb set [-d <dev>] <field=val>                  write one, then bch2_write_super
           -d: that device's own superblock - only its per-device parts
@@ -956,6 +1014,9 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "set", aliases: &[], usage: "set [-s] <btree> <pos> <type> [field=val]...",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: true, needs_journal: false, handler: h_set },
+    Cmd { name: "copy", aliases: &[], usage: "copy <btree> <pos> <new_pos>",
+          completes_btree: true, subcommands: &[],
+          nostart_ok: false, needs_rw: true, needs_journal: false, handler: h_copy },
     Cmd { name: "sb", aliases: &[], usage: "sb get [-d <dev>] <field> | sb set [-d <dev>] <field=val>",
           completes_btree: false, subcommands: &["get", "set"],
           nostart_ok: true, needs_rw: false, needs_journal: false, handler: h_sb },
@@ -1099,6 +1160,18 @@ fn h_set(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), St
     let ctx = repl.snapshot.filter(|_| btree_uses_snapshots(btree));
     Ok(ControlFlow::Continue(
         cmd_set(fs, btree, parse_pos_ctx(pos, ctx)?, type_name, &assigns, in_snapshot)?,
+    ))
+}
+
+fn h_copy(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    let [btree, pos, new_pos] = args else {
+        bail!("usage: {}", cmd.usage);
+    };
+    let fs = repl.fs.offline()?;
+    let btree = parse_btree(btree)?;
+    let ctx = repl.snapshot.filter(|_| btree_uses_snapshots(btree));
+    Ok(ControlFlow::Continue(
+        cmd_copy(fs, btree, parse_pos_ctx(pos, ctx)?, parse_pos_ctx(new_pos, ctx)?)?,
     ))
 }
 
