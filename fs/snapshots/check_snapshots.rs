@@ -1586,6 +1586,12 @@ fn check_key_has_snapshot<'a, 't>(
     write!(buf, "{} {}", iter.btree_id(), k.to_text(fs));
 
     if state == IdState::SNAPSHOT_ID_deleted {
+        // Reached at runtime - data moves (bch2_data_update_init()) - not in
+        // fsck: check_allocations rebuilds the accounting from the keys first,
+        // so a deleted node with keys has data accounted, and check_snapshots
+        // undeletes it (snapshot_deleted_but_has_data) before any pass gets
+        // here. (fsck-inject test_deleted_interior_has_data.)
+        //
         // If there's no live descendant (a leaf, or an interior node whose
         // subtree is entirely deleted) the key is genuinely orphaned - nothing
         // can see it - so delete it. If there is a live descendant the key is

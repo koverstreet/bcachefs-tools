@@ -365,6 +365,9 @@ fn check_inode<'a, 't>(
             // have crashed in the middle of a truncate on an unlinked but open
             // file - so we want to let the delete_dead_inodes kill it after
             // resuming logged ops.
+            //
+            // (The online arm below isn't reached today: check_inodes isn't
+            // PASS_ONLINE.)
             if !on_deleted_list(trans, pos)? &&
                fsck_err!(trans, id::unlinked_inode_not_on_deleted_list,
                          "inode unlinked, but not on deleted list\n{u}")? {
