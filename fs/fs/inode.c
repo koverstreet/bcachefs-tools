@@ -545,8 +545,14 @@ int bch2_inode_find_oldest_snapshot(struct btree_trans *trans, u64 inum, u32 sna
 				    struct bch_inode_unpacked *root)
 {
 	struct bkey_s_c k;
+	bool found = false;
 	int ret;
 
+	/*
+	 * Ancestors have higher snapshot IDs: walking up from @snapshot, the
+	 * last version that's an ancestor is the oldest. The first is the
+	 * nearest - @snapshot's own, if it has one.
+	 */
 	for_each_btree_key_norestart(trans, iter, BTREE_ID_inodes,
 				     SPOS(0, inum, snapshot),
 				     BTREE_ITER_all_snapshots, k, ret) {
@@ -556,10 +562,10 @@ int bch2_inode_find_oldest_snapshot(struct btree_trans *trans, u64 inum, u32 sna
 		    !bch2_snapshot_is_ancestor(trans, snapshot, k.k->p.snapshot))
 			continue;
 		bch2_inode_unpack(trans->c, k, root);
-		return 0;
+		found = true;
 	}
 
-	return ret ?: bch_err_throw(trans->c, ENOENT_inode);
+	return ret ?: found ? 0 : bch_err_throw(trans->c, ENOENT_inode);
 }
 
 /*
