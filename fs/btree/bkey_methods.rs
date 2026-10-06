@@ -16,9 +16,8 @@
 //!    the key was, and can only produce what the packer produces:
 //!    has_inode_opts, for one, is recomputed. The key stays where it is -
 //!    bi_inum and bi_snapshot are just fields.
-//!  - dirents: the target is a union tagged by d_type, and d_type is a C
-//!    bitfield, so those fields are written by name - each one exactly, so
-//!    the tag and the target can be made to disagree.
+//!  - dirents: the target, d_type and the name aren't fields typeinfo can
+//!    reach - dirent::set_field().
 //!  - extents: not yet. An entry's position depends on the entries before
 //!    it, and the entries are C bitfields, which typeinfo doesn't describe.
 //!
@@ -29,7 +28,7 @@ use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::iter::TransBkey;
 use crate::c;
 use crate::fs::Fs;
-use crate::inode;
+use crate::{dirent, inode};
 use crate::snapshot_states::{SNAPSHOT_STATE_VALUES, SUBVOLUME_STATE_VALUES};
 use crate::typeinfo::{self, AccessError, FieldTarget, ResolveError, TypeInfo};
 use core::fmt;
@@ -46,6 +45,8 @@ pub enum SetError<'p> {
     BadValue { field: &'p str, val: &'p str, valid: Option<EnumValues> },
     /// The key's buffer can't hold the result.
     NoRoom { need_u64s: usize, have_u64s: usize },
+    /// A dirent name that isn't one: empty, or past BCH_NAME_MAX.
+    BadName { val: &'p str },
     Unsupported { type_: u8 },
 }
 
@@ -65,6 +66,8 @@ impl fmt::Display for SetError<'_> {
             }
             SetError::NoRoom { need_u64s, have_u64s } =>
                 write!(f, "key needs {need_u64s} u64s, buffer has {have_u64s}"),
+            SetError::BadName { val } =>
+                write!(f, "d_name: '{val}' isn't a valid dirent name"),
             SetError::Unsupported { type_ } =>
                 write!(f, "setting fields of key type {type_} isn't supported"),
         }
@@ -100,7 +103,9 @@ pub fn parse_int(s: &str) -> Option<u64> {
     }
 }
 
-fn parse_val<'p>(type_: u8, field: &'p str, val: &'p str) -> Result<u64, SetError<'p>> {
+/// A field's value from text: an integer, or the name of one of the field's
+/// enum codewords.
+pub(crate) fn parse_val<'p>(type_: u8, field: &'p str, val: &'p str) -> Result<u64, SetError<'p>> {
     if let Some(v) = parse_int(val) {
         return Ok(v);
     }
@@ -127,7 +132,7 @@ impl TransBkey<'_, '_> {
         if inode::bkey_is_inode(self.k()) {
             self.set_inode(fs, field, val)
         } else if self.k().type_ as u32 == c::bch_bkey_type::KEY_TYPE_dirent.0 {
-            self.set_dirent(field, val)
+            dirent::set_field(self, fs, field, val)
         } else {
             self.set_fixed(field, val)
         }
@@ -141,48 +146,9 @@ impl TransBkey<'_, '_> {
         self.set_fixed(field, val)
     }
 
-    /// The dirent's target is a union tagged by d_type - d_inum, or
-    /// (d_child_subvol, d_parent_subvol) for DT_SUBVOL - and d_type is a C
-    /// bitfield: typeinfo reaches neither. Each of these writes exactly the
-    /// field named, tag or not, so a test can make them disagree.
-    fn set_dirent<'p>(&mut self, field: &'p str, val: &'p str) -> Result<(), SetError<'p>> {
-        let overflow = |bytes, val| SetError::Access {
-            field,
-            err: AccessError::Overflow { bytes, val },
-        };
-
-        if !matches!(field, "d_type" | "d_inum" | "d_child_subvol" | "d_parent_subvol") {
-            return self.set_fixed(field, val);
-        }
-
-        let v = parse_val(self.k().type_, field, val)?;
-        let d = unsafe { &mut *(&mut self.k_i_mut().v as *mut c::bch_val as *mut c::bch_dirent) };
-
-        match field {
-            "d_type" => {
-                if v >= 1 << 5 {
-                    return Err(SetError::Access {
-                        field,
-                        err: AccessError::BitsOverflow { bits: 5, val: v },
-                    });
-                }
-                d.set_d_type(v as u8);
-            }
-            "d_inum" => d.__bindgen_anon_1.d_inum = v.to_le(),
-            _ => {
-                let v = u32::try_from(v).map_err(|_| overflow(4, v))?.to_le();
-                let s = unsafe { &mut d.__bindgen_anon_1.__bindgen_anon_1 };
-                if field == "d_child_subvol" {
-                    s.d_child_subvol = v;
-                } else {
-                    s.d_parent_subvol = v;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn set_fixed<'p>(&mut self, field: &'p str, val: &'p str) -> Result<(), SetError<'p>> {
+    /// A field of the value's own struct, written in place: the fallback for
+    /// the key types with their own set_field().
+    pub(crate) fn set_fixed<'p>(&mut self, field: &'p str, val: &'p str) -> Result<(), SetError<'p>> {
         let type_ = self.k().type_;
         let info = typeinfo::bkey_val_info(type_ as u32)
             .ok_or(SetError::Unsupported { type_ })?;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::bkey::BkeySC;
+use crate::btree::bkey_methods::{self, SetError};
 use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey, TransRet, UpdateTriggerFlags,
 };
@@ -8,6 +9,7 @@ use crate::c;
 use crate::errcode::{self, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::str_hash::HashTable;
+use crate::typeinfo::AccessError;
 use core::fmt;
 use core::mem::size_of;
 
@@ -159,6 +161,73 @@ pub fn init_name(
                                  new.k_i_mut() as *mut c::bkey_i as *mut c::bkey_i_dirent,
                                  hash_info, &name, core::ptr::null())
     })
+}
+
+/// Set @field of dirent @k to @val, from text, for TransBkey::set(): see
+/// btree/bkey_methods.rs.
+///
+/// The target is a union tagged by d_type - d_inum, or (d_child_subvol,
+/// d_parent_subvol) for DT_SUBVOL - and d_type is a C bitfield: typeinfo
+/// reaches neither. Each of these writes exactly the field named, tag or not,
+/// so a test can make them disagree. d_name rewrites the name, not casefolded,
+/// and leaves the key where it is - at the old name's offset, which is the
+/// point: a key at the wrong offset, or a duplicate of another name.
+pub fn set_field<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, field: &'p str, val: &'p str)
+    -> Result<(), SetError<'p>>
+{
+    let overflow = |bytes, val| SetError::Access {
+        field,
+        err: AccessError::Overflow { bytes, val },
+    };
+
+    if field == "d_name" {
+        return set_name(k, fs, val);
+    }
+
+    if !matches!(field, "d_type" | "d_inum" | "d_child_subvol" | "d_parent_subvol") {
+        return k.set_fixed(field, val);
+    }
+
+    let v = bkey_methods::parse_val(k.k().type_, field, val)?;
+    let d = unsafe { &mut *(&mut k.k_i_mut().v as *mut c::bch_val as *mut c::bch_dirent) };
+
+    match field {
+        "d_type" => {
+            if v >= 1 << 5 {
+                return Err(SetError::Access {
+                    field,
+                    err: AccessError::BitsOverflow { bits: 5, val: v },
+                });
+            }
+            d.set_d_type(v as u8);
+        }
+        "d_inum" => d.__bindgen_anon_1.d_inum = v.to_le(),
+        _ => {
+            let v = u32::try_from(v).map_err(|_| overflow(4, v))?.to_le();
+            let s = unsafe { &mut d.__bindgen_anon_1.__bindgen_anon_1 };
+            if field == "d_child_subvol" {
+                s.d_child_subvol = v;
+            } else {
+                s.d_parent_subvol = v;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn set_name<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, val: &'p str) -> Result<(), SetError<'p>> {
+    if val.is_empty() || val.len() > c::BCH_NAME_MAX as usize {
+        return Err(SetError::BadName { val });
+    }
+
+    // init_name() sizes the value down to the name, from whatever room the
+    // key claims:
+    let have_u64s = k.as_u64s().len();
+    k.k_mut().u64s = have_u64s.min(u8::MAX as usize) as u8;
+
+    // Only cf_encoding is read, and NULL means not casefolded:
+    let hash_info: c::bch_hash_info = unsafe { core::mem::zeroed() };
+    init_name(fs, k, &hash_info, val.as_bytes()).map_err(|_| SetError::BadName { val })
 }
 
 /// Create dirent @name in directory @dir, in subvolume @subvol at @snapshot,
