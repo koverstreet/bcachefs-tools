@@ -1117,6 +1117,30 @@ pub struct BtreeIter<'t> {
     trans: PhantomData<&'t BtreeTrans<'t>>,
 }
 
+/// XXX polonius: NLL problem case #3. A loop that returns the key it stops
+/// at, borrowed from its iterator, and advances otherwise:
+///
+/// ```ignore
+/// let (iter, k) = self.peek_with(..)?;
+/// if f(iter, k)? { return Ok(Some(k)) }
+/// self.advance();
+/// ```
+///
+/// is sound - the key's borrow is dead on the path that advances - but NLL
+/// sees a borrow returned on one path as live on all of them, and rejects
+/// it; Polonius accepts it (nightly does, as of 2026-10). Until it's
+/// stable, the loop returns the key through this, which gives it the
+/// lifetime the loop's caller borrowed the iterator for.
+///
+/// Delete this once Polonius is stable: each use becomes a plain `k`.
+///
+/// # Safety
+/// The iterator @k borrows mustn't be touched again before the caller
+/// returns @k - which ends the loop's use of it.
+unsafe fn polonius_key<'i>(k: BkeySC<'_>) -> BkeySC<'i> {
+    unsafe { core::mem::transmute::<BkeySC<'_>, BkeySC<'i>>(k) }
+}
+
 pub(crate) fn bkey_s_c_to_result<'i>(k: c::bkey_s_c) -> Result<Option<BkeySC<'i>>, BchError> {
     errptr_to_result_c(k.k).map(|_| {
         if !k.k.is_null() {
@@ -1206,6 +1230,13 @@ impl<'t> BtreeIter<'t> {
 
     pub fn set_snapshot(&mut self, snapshot: u32) {
         unsafe { c::bch2_btree_iter_set_snapshot(self.raw.get_mut(), snapshot) };
+    }
+
+    /// Turn on @flags: for walking an iterator with flags it wasn't made
+    /// with - the loops peek with the iterator's own - as C's _continue
+    /// loops pass theirs.
+    pub fn set_flags(&mut self, flags: BtreeIterFlags) {
+        self.raw.get_mut().flags |= flags.bits();
     }
 
     /// A second iterator at the same position, sharing this one's paths: as
@@ -1468,6 +1499,29 @@ impl<'t> BtreeIter<'t> {
             }
             if !self.advance() {
                 return Ok(Default::default());
+            }
+        }
+    }
+
+    /// As for_each_max_norestart(), stopping at the first key @f picks: that
+    /// key, borrowed from the iterator, which is left at it; None if @f
+    /// picks none. As Iterator::find().
+    pub fn find_max_norestart<'i, F>(&'i mut self, end: bpos, mut f: F)
+        -> Result<Option<BkeySC<'i>>, BchError>
+    where
+        F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<bool, BchError>,
+    {
+        loop {
+            let Some((iter, k)) = self.peek_with(&mut |raw| Self::peek_own_type(raw, end))?
+            else {
+                return Ok(None);
+            };
+
+            if f(iter, k)? {
+                return Ok(Some(unsafe { polonius_key(k) }));
+            }
+            if !self.advance() {
+                return Ok(None);
             }
         }
     }
