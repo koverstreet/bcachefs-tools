@@ -189,7 +189,6 @@ bcachefs-y		:=			\
 	sb/errors.o				\
 	sb/io.o					\
 	sb/members.o				\
-	snapshots/check_snapshots.o		\
 	snapshots/delete.o			\
 	snapshots/snapshot.o			\
 	snapshots/subvolume.o			\

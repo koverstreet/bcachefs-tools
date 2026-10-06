@@ -68,6 +68,7 @@ pub mod init {
 #[path = "fs/namei.rs"]        pub mod namei;
 pub mod sb;
 pub mod snapshots {
+    #[path = "check_snapshots.rs"] pub mod check_snapshots;
     #[path = "snapshot.rs"] pub mod snapshot;
     #[path = "subvolume.rs"] pub mod subvolume;
 }
