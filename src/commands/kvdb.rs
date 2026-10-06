@@ -111,11 +111,11 @@ in memory: listings then show a root inode that does not exist on disk.
 
 Commands:
 
-    get       [-k] <btree> <pos>                   exact lookup (slot iteration)
+    get    [-k|-r] <btree> <pos>                   exact lookup (slot iteration)
     peek      [-k] <btree> <pos>                   first key >= pos
     peek_prev [-k] <btree> <pos>                   last key <= pos
     list      [-k] <btree> [start] [end]           keys in range
-    update    <btree> <pos> <field=val>...         modify fields of a key
+    update [-r] <btree> <pos> <field=val>...       modify fields of a key
     set  [-s] <btree> <pos> <type> [field=val]...  insert a whole new key
     sb get [-d <dev>] <field>                      read a superblock field
     sb set [-d <dev>] <field=val>                  write one
@@ -182,8 +182,11 @@ snapshots.
 Fixed-layout values are fully editable. Inodes are too, by their unpacked
 field names (bi_dir, bi_nlink, ...): an edit unpacks, sets and repacks, so
 it rewrites the inode as inode_v3, and can only produce what the packer
-does. Entry-stream values (extents) are editable only up to their fixed
-header.
+does. `update -r` writes the value as stored instead, by its own struct's
+fields (an inode's bi_flags, bi_journal_seq, ...), and runs no triggers:
+for states the packer or a trigger would correct, such as has_inode_opts
+or a bi_journal_seq in the future. Entry-stream values (extents) are
+editable only up to their fixed header.
 ";
 
 /// Btree read/write REPL (debug)
@@ -305,6 +308,11 @@ fn render_key_fields(fs: &Fs, k: &BkeySC<'_>, paths: &[&str]) -> Result<String> 
         return render_fields(bytes, <c::bch_inode_unpacked as TypeInfo>::INFO, paths);
     }
 
+    render_raw_fields(k, paths)
+}
+
+/// Fields of the value as stored, by its own struct: get -r, for update -r.
+fn render_raw_fields(k: &BkeySC<'_>, paths: &[&str]) -> Result<String> {
     let info = typeinfo::bkey_val_info(k.k.type_ as u32)
         .ok_or_else(|| anyhow!("unknown key type {}", k.k.type_))?;
     render_fields(k.val_bytes(), info, paths)
@@ -372,15 +380,18 @@ fn render_fields(val: &[u8], info: &'static StructInfo, paths: &[&str]) -> Resul
 /// Room for whatever set() grows a value to: the largest key there is.
 const BKEY_VAL_U64S_MAX: usize = u8::MAX as usize - BKEY_U64S;
 
-/// Apply @assigns to @k, reporting the first failure through @user_err.
+/// Apply @assigns to @k, reporting the first failure through @user_err. @raw:
+/// to the value as stored - see TransBkey::set_raw().
 fn set_fields(
     fs:       &Fs,
     k:        &mut TransBkey<'_, '_>,
     assigns:  &[(&str, &str)],
+    raw:      bool,
     user_err: &mut Option<anyhow::Error>,
 ) -> Result<(), TransError> {
     for (field, val) in assigns {
-        if let Err(e) = k.set(fs, field, val) {
+        let ret = if raw { k.set_raw(field, val) } else { k.set(fs, field, val) };
+        if let Err(e) = ret {
             *user_err = Some(anyhow!("{e}"));
             return Err(no_key_err());
         }
@@ -421,23 +432,26 @@ fn iter_flags(base: BtreeIterFlags, filtered: bool) -> BtreeIterFlags {
 /// faithful display), the key alone (-k), or selected value fields as bare
 /// values (trailing field paths). A deleted slot is "no key" for a field
 /// read - scripts reading fields need the miss to fail, not to read zeros -
-/// while the display modes do show deleted slots and whiteouts.
+/// while the display modes do show deleted slots and whiteouts. RawFields
+/// (-r): the value as stored, by its own struct - what update -r writes.
 #[derive(Clone, Copy)]
 enum Render<'a> {
     Full,
     KeyOnly,
     Fields(&'a [&'a str]),
+    RawFields(&'a [&'a str]),
 }
 
 fn render_read(fs: &Fs, k: &BkeySC<'_>, how: Render<'_>) -> Result<String> {
     match how {
         Render::Full => Ok(render_key(fs, k, false)),
         Render::KeyOnly => Ok(render_key(fs, k, true)),
-        Render::Fields(_) if k.is_deleted() => {
+        Render::Fields(_) | Render::RawFields(_) if k.is_deleted() => {
             let (inode, offset, snapshot) = (k.k.p.inode, k.k.p.offset, k.k.p.snapshot);
             Err(anyhow!("no key at {inode}:{offset}:{snapshot}"))
         }
         Render::Fields(paths) => render_key_fields(fs, k, paths),
+        Render::RawFields(paths) => render_raw_fields(k, paths),
     }
 }
 
@@ -638,6 +652,7 @@ fn cmd_update(
     btree: c::btree_id,
     pos: c::bpos,
     assigns: &[(&str, &str)],
+    raw: bool,
 ) -> Result<String> {
     let trans = bcachefs_kernel::btree_trans!(fs);
     let mut user_err: Option<anyhow::Error> = None;
@@ -667,9 +682,16 @@ fn cmd_update(
                 .map_err(TransError::from)?;
             new.k_mut().u64s = k.k.u64s;
 
-            set_fields(fs, &mut new, assigns, &mut user_err)?;
+            set_fields(fs, &mut new, assigns, raw, &mut user_err)?;
 
-            t.update(&mut iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+            // raw: triggers would restamp what was just set (an inode's
+            // bi_journal_seq), or update other btrees to match it
+            let flags = if raw {
+                UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::NORUN
+            } else {
+                UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE
+            };
+            t.update(&mut iter, new, flags)
         },
     );
 
@@ -728,7 +750,7 @@ fn cmd_set(
                 .map_err(TransError::from)?;
             new.k_mut().u64s = (BKEY_U64S + ti.info.size.div_ceil(8)) as u8;
 
-            set_fields(fs, &mut new, assigns, &mut user_err)?;
+            set_fields(fs, &mut new, assigns, false, &mut user_err)?;
 
             t.update(&mut iter, new, update_flags)
         },
@@ -797,7 +819,7 @@ fn cmd_sb_set(fs: &Fs, dev: Option<u32>, field: &str, v: u64) -> Result<String> 
 // command dispatch + REPL
 
 const HELP: &str = "\
-get  [-k] <btree> <pos> [<field>..]            exact lookup (slot iteration)
+get  [-k|-r] <btree> <pos> [<field>..]         exact lookup (slot iteration)
 peek [-k] <btree> <pos> [<field>..]            first key >= pos
 peek_prev <btree> <pos> [<field>..]            last key <= pos ([-k] too)
 list [-k] <btree> [start] [end]                keys in range
@@ -806,7 +828,12 @@ list [-k] <btree> [start] [end]                keys in range
           line, instead of the display rendering - the same paths update
           takes (depth, btime.lo, skip[1]); a whole array prints its
           elements space-separated
-update    <btree> <pos> <field=val>...         modify fields of an existing key
+          -r reads fields of the value as stored, not an inode's unpacked
+          form - what update -r writes
+update [-r] <btree> <pos> <field=val>...       modify fields of an existing key
+          -r writes the value as stored, by its own struct's fields, and
+          runs no triggers: states the inode packer or a trigger would
+          correct (has_inode_opts, a future bi_journal_seq)
 set  [-s] <btree> <pos> <type> [field=val]...  insert a whole new key
           values are integers; fields holding enum codewords (snapshot/
           subvolume state) also accept the value name, e.g. state=will_delete
@@ -911,7 +938,7 @@ struct Cmd {
 }
 
 const COMMANDS: &[Cmd] = &[
-    Cmd { name: "get", aliases: &[], usage: "get [-k] <btree> <pos> [<field>..]",
+    Cmd { name: "get", aliases: &[], usage: "get [-k|-r] <btree> <pos> [<field>..]",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: false, needs_journal: false, handler: h_read },
     Cmd { name: "peek", aliases: &[], usage: "peek [-k] <btree> <pos> [<field>..]",
@@ -923,7 +950,7 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "list", aliases: &[], usage: "list [-k] <btree> [start] [end]",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: false, needs_journal: false, handler: h_list },
-    Cmd { name: "update", aliases: &[], usage: "update <btree> <pos> <field=val>...",
+    Cmd { name: "update", aliases: &[], usage: "update [-r] <btree> <pos> <field=val>...",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: true, needs_journal: false, handler: h_update },
     Cmd { name: "set", aliases: &[], usage: "set [-s] <btree> <pos> <type> [field=val]...",
@@ -974,18 +1001,21 @@ fn h_snapshot(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(
 }
 
 fn h_read(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
-    let (key_only, args) = match args {
-        ["-k", rest @ ..] => (true, rest),
-        _ => (false, args),
+    let (key_only, raw, args) = match args {
+        ["-k", rest @ ..] => (true, false, rest),
+        ["-r", rest @ ..] => (false, true, rest),
+        _ => (false, false, args),
     };
     let [btree, pos, fields @ ..] = args else {
         bail!("usage: {}", cmd.usage);
     };
-    let how = match (key_only, fields) {
-        (false, []) => Render::Full,
-        (true, []) => Render::KeyOnly,
-        (false, fields) => Render::Fields(fields),
-        (true, _) => bail!("-k and field selection are mutually exclusive"),
+    let how = match (key_only, raw, fields) {
+        (false, false, []) => Render::Full,
+        (true, _, []) => Render::KeyOnly,
+        (false, false, fields) => Render::Fields(fields),
+        (false, true, []) => bail!("-r reads fields: name them"),
+        (false, true, fields) => Render::RawFields(fields),
+        (true, _, _) => bail!("-k and field selection are mutually exclusive"),
     };
     let btree = parse_btree(btree)?;
     let ctx = repl.snapshot
@@ -1029,6 +1059,10 @@ fn h_list(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), S
 }
 
 fn h_update(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    let (raw, args) = match args {
+        ["-r", rest @ ..] => (true, rest),
+        _ => (false, args),
+    };
     let [btree, pos, assigns @ ..] = args else {
         bail!("usage: {}", cmd.usage);
     };
@@ -1042,7 +1076,7 @@ fn h_update(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(),
         .collect::<Result<Vec<_>>>()?;
     let btree = parse_btree(btree)?;
     let ctx = repl.snapshot.filter(|_| btree_uses_snapshots(btree));
-    Ok(ControlFlow::Continue(cmd_update(fs, btree, parse_pos_ctx(pos, ctx)?, &assigns)?))
+    Ok(ControlFlow::Continue(cmd_update(fs, btree, parse_pos_ctx(pos, ctx)?, &assigns, raw)?))
 }
 
 fn h_set(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {

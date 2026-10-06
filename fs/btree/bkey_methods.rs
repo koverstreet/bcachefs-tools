@@ -133,6 +133,14 @@ impl TransBkey<'_, '_> {
         }
     }
 
+    /// Set @field of the value as it's stored, by the value struct's own
+    /// field names - no unpack and repack for an inode, so what the packer
+    /// recomputes (has_inode_opts) can be set wrong. Only the fixed fields:
+    /// bi_flags, bi_journal_seq, ... of bch_inode_v3.
+    pub fn set_raw<'p>(&mut self, field: &'p str, val: &'p str) -> Result<(), SetError<'p>> {
+        self.set_fixed(field, val)
+    }
+
     /// The dirent's target is a union tagged by d_type - d_inum, or
     /// (d_child_subvol, d_parent_subvol) for DT_SUBVOL - and d_type is a C
     /// bitfield: typeinfo reaches neither. Each of these writes exactly the
