@@ -546,6 +546,7 @@ static int bch2_stripe_buf_validate(struct bch_fs *c, struct ec_stripe_buf *buf,
 {
 	closure_sync(&buf->io);
 
+	memset(buf->err[STRIPE_BUF_POST_RECOV], 0, sizeof(buf->err[STRIPE_BUF_POST_RECOV]));
 	bch2_ec_validate_checksums(c, buf, false, STRIPE_BUF_PRE_RECOV);
 	if (!ec_nr_failed(buf, STRIPE_BUF_PRE_RECOV))
 		return 0;
@@ -683,7 +684,18 @@ static void ec_block_endio(struct bio *bio)
 void bch2_ec_block_io(struct bch_fs *c, struct ec_stripe_buf *buf,
 		      blk_opf_t opf, unsigned idx)
 {
+	buf->err[STRIPE_BUF_PRE_RECOV][idx] = 0;
 	bch2_ec_block_io_range(c, buf, opf, idx, buf->offset, buf->size);
+}
+
+/* Blocks not read are erasures, rebuilt from the rest when they're needed */
+void bch2_stripe_buf_read(struct bch_fs *c, struct ec_stripe_buf *buf, u32 blocks)
+{
+	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++)
+		if (blocks & BIT(i))
+			bch2_ec_block_io(c, buf, REQ_OP_READ, i);
+		else
+			buf->err[STRIPE_BUF_PRE_RECOV][i] = -BCH_ERR_stripe_read_skipped;
 }
 
 void bch2_ec_block_io_range(struct bch_fs *c, struct ec_stripe_buf *buf,
@@ -1060,13 +1072,7 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 		return bch_err_throw(c, stripe_reconstruct_enomem);
 	}
 
-	/* Blocks not read are erasures, rebuilt with the target: */
-	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++)
-		if (read_mask & BIT(i))
-			bch2_ec_block_io(c, buf, REQ_OP_READ, i);
-		else
-			buf->err[STRIPE_BUF_PRE_RECOV][i] = -BCH_ERR_stripe_read_skipped;
-
+	bch2_stripe_buf_read(c, buf, read_mask);
 	ret = bch2_stripe_buf_validate(c, buf, false, EC_BLOCKS_ALL);
 
 	/*
@@ -1077,10 +1083,7 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 	if (ret &&
 	    ret != -BCH_ERR_stripe_reconstruct_stale_race &&
 	    !read_around) {
-		memset(buf->err[STRIPE_BUF_POST_RECOV], 0, sizeof(buf->err[STRIPE_BUF_POST_RECOV]));
-		buf->err[STRIPE_BUF_PRE_RECOV][block] = 0;
 		bch2_ec_block_io(c, buf, REQ_OP_READ, block);
-
 		ret = bch2_stripe_buf_validate(c, buf, false, EC_BLOCKS_ALL);
 	}
 

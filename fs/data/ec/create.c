@@ -2010,15 +2010,13 @@ static CLOSURE_CALLBACK(ec_old_stripe_fold)
 	}
 
 	/*
-	 * Data is only declared lost if it really can't be read: if anything we
-	 * did read is bad, or the rebuild doesn't check out, read the skipped
-	 * blocks too and start over.
+	 * Blocks skipped as slow are read after all if anything else is bad or
+	 * the rebuild doesn't check out: data is only declared lost if it
+	 * really can't be read.
 	 */
 	u32 skipped = s->old_stripe_skipped;
 	if (skipped) {
-		struct ec_stripe_buf *buf = &s->old_stripe;
-
-		if (bch2_stripe_buf_blocks_good(buf, (BIT(buf->key.v.nr_blocks) - 1) & ~skipped)) {
+		if (bch2_stripe_buf_blocks_good(&s->old_stripe, ~skipped)) {
 			ec_old_stripe_read_done(s);
 			if (!s->old_stripe_err) {
 				closure_return(cl);
@@ -2027,14 +2025,10 @@ static CLOSURE_CALLBACK(ec_old_stripe_fold)
 		}
 
 		s->old_stripe_skipped = 0;
-		s->old_stripe_err = 0;
 		s->old_stripe_lost_blocks = 0;
-		memset(buf->err[STRIPE_BUF_POST_RECOV], 0, sizeof(buf->err[STRIPE_BUF_POST_RECOV]));
-		for (unsigned i = 0; i < buf->key.v.nr_blocks; i++)
-			if (skipped & BIT(i)) {
-				buf->err[STRIPE_BUF_PRE_RECOV][i] = 0;
-				bch2_ec_block_io(s->c, buf, REQ_OP_READ, i);
-			}
+		for (unsigned i = 0; i < s->old_stripe.key.v.nr_blocks; i++)
+			if (skipped & BIT(i))
+				bch2_ec_block_io(s->c, &s->old_stripe, REQ_OP_READ, i);
 		continue_at(cl, ec_old_stripe_fold, system_dfl_wq);
 		return;
 	}
@@ -2058,20 +2052,13 @@ static void ec_old_stripe_read(struct bch_fs *c, struct ec_stripe_new *s)
 	closure_init(&s->cl, NULL);
 	closure_init(&s->old_stripe.io, &s->cl);
 
-	/*
-	 * A carried block on a device much slower than the rest of the stripe -
-	 * typically a failing drive being evacuated - is rebuilt from the
-	 * others instead:
-	 */
+	/* A carried block on a device much slower than the rest is rebuilt instead: */
 	u32 required = ec_old_stripe_required(s);
 	s->old_stripe_skipped = bch2_ec_read_around_skip(c, &s->old_stripe.key.v, required);
 	s->old_stripe_read_all = s->old_stripe_skipped != 0;
 
-	for (unsigned i = 0; i < s->old_stripe.key.v.nr_blocks; i++)
-		if (s->old_stripe_skipped & BIT(i))
-			s->old_stripe.err[STRIPE_BUF_PRE_RECOV][i] = -BCH_ERR_stripe_read_skipped;
-		else if (s->old_stripe_read_all || (required & BIT(i)))
-			bch2_ec_block_io(c, &s->old_stripe, REQ_OP_READ, i);
+	bch2_stripe_buf_read(c, &s->old_stripe,
+			     s->old_stripe_skipped ? ~s->old_stripe_skipped : required);
 
 	/*
 	 * Not stripe_create_wq: create waits on the fold, so running them on
@@ -2822,9 +2809,9 @@ static void stripe_repair_rebuild_abort(struct bch_fs *c, struct ec_stripe_new *
 
 /*
  * Read @s into @buf as ec_old_stripe_fold() would: the blocks in @required,
- * then the rest if one of those is bad (@read_all). A block in @required on a
- * device much slower than the rest of the stripe is rebuilt from the others
- * instead, and read after all if that doesn't check out. The caller has @s open.
+ * then the rest if one of those is bad (@read_all); a block in @required on a
+ * device much slower than the rest is rebuilt from the others instead. The
+ * caller has @s open.
  */
 static int stripe_repair_read(struct btree_trans *trans, struct bkey_s_c_stripe s,
 			      u32 required, struct ec_stripe_buf *buf, bool *read_all)
@@ -2849,38 +2836,23 @@ static int stripe_repair_read(struct btree_trans *trans, struct bkey_s_c_stripe 
 
 	u32 all = BIT(buf->key.v.nr_blocks) - 1;
 	u32 skipped = bch2_ec_read_around_skip(c, &buf->key.v, required);
-	unsigned long blocks = skipped ? all & ~skipped : required;
+	u32 read = skipped ? all & ~skipped : required;
 	unsigned i;
-	for_each_set_bit(i, &blocks, BCH_BKEY_PTRS_MAX)
-		bch2_ec_block_io(c, buf, REQ_OP_READ, i);
+
+	bch2_stripe_buf_read(c, buf, read);
 	closure_sync(&buf->io);
 
-	if (skipped) {
-		blocks = skipped;
-		for_each_set_bit(i, &blocks, BCH_BKEY_PTRS_MAX)
-			buf->err[STRIPE_BUF_PRE_RECOV][i] = -BCH_ERR_stripe_read_skipped;
-
-		if (bch2_stripe_buf_blocks_good(buf, all & ~skipped) &&
-		    !bch2_stripe_buf_validate_msg(c, buf, true, required)) {
-			*read_all = false;
-			return 0;
-		}
-
-		/* Data is only declared lost if it really can't be read: */
-		memset(buf->err[STRIPE_BUF_POST_RECOV], 0, sizeof(buf->err[STRIPE_BUF_POST_RECOV]));
-		for_each_set_bit(i, &blocks, BCH_BKEY_PTRS_MAX) {
-			buf->err[STRIPE_BUF_PRE_RECOV][i] = 0;
-			bch2_ec_block_io(c, buf, REQ_OP_READ, i);
-		}
-		closure_sync(&buf->io);
-
-		*read_all = !bch2_stripe_buf_blocks_good(buf, required);
+	if (skipped &&
+	    bch2_stripe_buf_blocks_good(buf, read) &&
+	    !bch2_stripe_buf_validate_msg(c, buf, true, required)) {
+		*read_all = false;
 		return 0;
 	}
 
-	*read_all = !bch2_stripe_buf_blocks_good(buf, required);
+	/* Blocks skipped as slow are read after all before data is declared lost: */
+	*read_all = skipped || !bch2_stripe_buf_blocks_good(buf, required);
 	if (*read_all) {
-		blocks = ~required & (BIT(buf->key.v.nr_blocks) - 1);
+		unsigned long blocks = all & ~read;
 		for_each_set_bit(i, &blocks, BCH_BKEY_PTRS_MAX)
 			bch2_ec_block_io(c, buf, REQ_OP_READ, i);
 		closure_sync(&buf->io);

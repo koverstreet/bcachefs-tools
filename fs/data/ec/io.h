@@ -99,6 +99,7 @@ int bch2_stripe_buf_validate_msg(struct bch_fs *, struct ec_stripe_buf *, bool, 
 void bch2_ec_block_io(struct bch_fs *, struct ec_stripe_buf *, blk_opf_t, unsigned);
 void bch2_ec_block_io_range(struct bch_fs *, struct ec_stripe_buf *, blk_opf_t, unsigned,
 			    unsigned, unsigned);
+void bch2_stripe_buf_read(struct bch_fs *, struct ec_stripe_buf *, u32);
 
 u32 bch2_ec_read_around_skip(struct bch_fs *, const struct bch_stripe *, u32);
 int bch2_ec_read_around_pick(struct btree_trans *, struct extent_ptr_decoded *,
