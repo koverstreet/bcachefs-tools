@@ -280,7 +280,7 @@ static struct bch_read_bio *__promote_alloc(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 
-	int ret = !failed
+	int ret = !have_io_error(failed)
 		? should_promote(c, k, orig->opts, flags)
 		: 0;
 	if (ret)
@@ -376,11 +376,8 @@ static struct bch_read_bio *promote_alloc(struct btree_trans *trans,
 
 	bool self_healing = have_io_error(failed);
 
-	/*
-	 * We're in the retry path, but we don't know what to repair yet. Only
-	 * the read-around retry may promote: it isn't an error retry.
-	 */
-	if (failed && !self_healing && !(flags & BCH_READ_may_promote))
+	/* A reconstruct is punted to the retry, which does the promote: */
+	if (pick->mode != BCH_READ_MODE_direct && !(flags & BCH_READ_in_retry))
 		return NULL;
 
 	/*
@@ -411,8 +408,7 @@ static struct bch_read_bio *promote_alloc(struct btree_trans *trans,
 				k.k->type == KEY_TYPE_reflink_v
 				? BTREE_ID_reflink
 				: BTREE_ID_extents,
-				k, pos, pick, flags, sectors, orig,
-				self_healing ? failed : NULL);
+				k, pos, pick, flags, sectors, orig, failed);
 	int ret = PTR_ERR_OR_ZERO(promote);
 	if (unlikely(ret)) {
 		/*
@@ -1594,12 +1590,6 @@ int __bch2_read_extent(struct btree_trans *trans,
 		return read_extent_pick_err(trans, orig, read_pos, data_btree, k, flags, ret);
 	ret = 0;
 
-	/*
-	 * A read-around is punted to the retry, which does the promote: the
-	 * rbio allocated here is freed unused.
-	 */
-	enum bch_read_flags punt_promote = 0;
-
 	if (pick.has_ec && pick.mode == BCH_READ_MODE_direct) {
 		try(bch2_ec_read_around_pick(trans, &pick, failed, flags, dev));
 
@@ -1611,8 +1601,6 @@ int __bch2_read_extent(struct btree_trans *trans,
 				bch2_read_bio_to_text_atomic(&buf, orig);
 			}));
 			flags |= BCH_READ_ec_read_around;
-			punt_promote = flags & BCH_READ_may_promote;
-			flags &= ~BCH_READ_may_promote;
 		}
 	}
 
@@ -1737,7 +1725,6 @@ int __bch2_read_extent(struct btree_trans *trans,
 		trans->notrace_relock_fail = true;
 	} else {
 		if (!(flags & BCH_READ_in_retry)) {
-			rbio->flags |= punt_promote;
 			bch2_rbio_punt(rbio, bch2_rbio_retry, RBIO_CONTEXT_UNBOUND, system_dfl_wq);
 			return 0;
 		}
