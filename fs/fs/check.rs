@@ -15,6 +15,7 @@ use crate::inode;
 use crate::dirent::DirentTarget;
 use crate::errcode::Found;
 use crate::snapshots::{snapshot, subvolume};
+use crate::alloc::buckets::DiskReservation;
 use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err};
@@ -445,7 +446,7 @@ impl InodeWalker {
                 }
 
                 if inode_looks_deleted {
-                    return t.delete_at(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE);
+                    return delete_stray_key(t, iter);
                 }
 
                 let Some(g) = good_ancestor else {
@@ -465,26 +466,44 @@ impl InodeWalker {
                 i
             }
             Some(l) => {
+                // Which is wrong, the inode's type or @k? If the inode has
+                // keys of its own type - in the btree its mode owns, if any -
+                // its type is right and @k is a stray. If it has none, its
+                // keys say what it is:
+                let mode = self.inodes()[l].inode.bi_mode;
+                let own_btree = [c::btree_id::extents, c::btree_id::dirents]
+                    .into_iter()
+                    .find(|&b| btree_matches_i_mode(b, mode));
+                let has_own_keys = match own_btree {
+                    Some(b) => count_inode_keys(trans, inode_pos, b, None)? != 0,
+                    None    => false,
+                };
+
+                if has_own_keys {
+                    write!(buf, "inode has keys of its own type: deleting this one\n");
+                } else {
+                    write!(buf, "inode has no keys of its own type: changing its type to match\n");
+                }
+
                 if !inode_fsck_err!(trans, k.k.p, id::key_in_wrong_inode_type, "{buf}")? {
                     return Ok(t);
                 }
 
-                let count = |b| if b == btree {
-                    Ok(nr_keys)
-                } else {
-                    count_inode_keys(trans, inode_pos, b, None)
-                };
-                let nr_extents = count(c::btree_id::extents)?;
-                let nr_dirents = count(c::btree_id::dirents)?;
-
-                if nr_extents != 0 && nr_dirents != 0 {
-                    bch_err!(fs, "have both extents and dirents for inode with bad mode, cannot repair");
-                    return Err(fs.err(bch_errcode::BCH_ERR_shutdown_with_errors_unfixed).into());
+                if has_own_keys {
+                    return delete_stray_key(t, iter);
                 }
 
+                // A file's i_size has to cover its data, or the extents are
+                // past the end and go next: as a directory, it had none
+                let (ty, size) = if btree == c::btree_id::dirents {
+                    (c::S_IFDIR, 0)
+                } else {
+                    (c::S_IFREG, extents_end(trans, k.k.p.inode, k.k.p.snapshot)?)
+                };
+
                 let inode = &mut self.inodes_mut()[l].inode;
-                let ty = if nr_dirents != 0 { c::S_IFDIR } else { c::S_IFREG };
                 inode.bi_mode = (inode.bi_mode & !(c::S_IFMT as c::umode_t)) | ty as c::umode_t;
+                inode.bi_size = inode.bi_size.max(size);
                 l
             }
         };
@@ -596,6 +615,28 @@ impl Default for InodeWalker {
     }
 }
 
+/// Delete @iter's key, a stray, and start the caller's key over: committed,
+/// and a restart, because the passes' per-key checks go on with the key they
+/// were handed - a deleted dirent would be rehashed back in, and have its
+/// target's backpointer pointed at it.
+///
+/// With a disk reservation: an extents update needs one to put whatever its
+/// triggers charge. A deletion charges nothing, so an empty one does.
+fn delete_stray_key<'a, 't>(t: TransAttempt<'a, 't>, iter: &mut BtreeIter<'t>) -> TransRet<'a, 't> {
+    let res = DiskReservation::new(t.trans().fs());
+    let t = t.delete_at(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+    let t = t.commit(Some(&res), CommitFlags::NO_ENOSPC)?;
+    Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_commit))
+}
+
+/// Where @inum's last extent, as @snapshot sees it, ends, in bytes: the
+/// i_size its data needs.
+fn extents_end(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<u64, BchError> {
+    let mut iter = BtreeIter::new(trans, c::btree_id::extents,
+                                  spos(inum, u64::MAX, snapshot), BtreeIterFlags::empty());
+    Ok(iter.peek_prev_min(pos(inum, 0))?.map_or(0, |k| k.k.p.offset << 9))
+}
+
 /// Recreate missing inode @inum:@snapshot from the keys found in @btree -
 /// a directory for dirents, a file sized to its extents - for the caller to
 /// commit.
@@ -609,13 +650,8 @@ pub fn reconstruct_inode<'a, 't>(
     let fs = trans.fs();
 
     let (mode, size) = match btree {
-        c::btree_id::extents => {
-            let mut iter = BtreeIter::new(trans, c::btree_id::extents,
-                                          spos(inum, u64::MAX, snapshot), BtreeIterFlags::empty());
-            // may race with repair deleting the extents that triggered us:
-            let size = iter.peek_prev_min(pos(inum, 0))?.map_or(0, |k| k.k.p.offset << 9);
-            (c::S_IFREG, size)
-        }
+        // may race with repair deleting the extents that triggered us
+        c::btree_id::extents => (c::S_IFREG, extents_end(trans, inum, snapshot)?),
         c::btree_id::dirents => (c::S_IFDIR, 0),
         c::btree_id::xattrs  => (c::S_IFREG, 0),
         _ => unreachable!("reconstruct_inode() for btree {}", btree as u32),
