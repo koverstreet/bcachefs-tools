@@ -1,8 +1,9 @@
 use crate::c;
 #[cfg(feature = "std")]
 use crate::errcode::{bch_errcode, BchError};
+use core::{ffi::CStr, fmt};
 #[cfg(feature = "std")]
-use std::{fmt, ffi::CString, ffi::CStr, str::FromStr};
+use std::{ffi::CString, str::FromStr};
 
 impl c::btree_id {
     /// Convert from raw u32. Returns None for unknown built-in btree IDs.
@@ -31,11 +32,10 @@ pub fn btree_id_str(id: u32) -> String {
     }
 }
 
-#[cfg(feature = "std")]
 impl fmt::Display for c::btree_id {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = unsafe { CStr::from_ptr(c::bch2_btree_id_str(*self)) };
-        f.write_str(&s.to_string_lossy())
+        f.write_str(s.to_str().unwrap_or("(invalid btree name)"))
     }
 }
 
