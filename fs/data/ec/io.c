@@ -1075,12 +1075,13 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 		bch2_run_explicit_recovery_pass(c, &msg.m, BCH_RECOVERY_PASS_check_allocations, 0);
 	}
 
+	unsigned block = rbio->pick.ec.block;
+	bool skipped_failed_block = false;
 	u32 read_mask = EC_BLOCKS_ALL;
 	enum ec_stripe_buf_flags buf_flags = 0;
 	if (rbio->pick.ec_read_around) {
 		u64 l_r;
-		read_mask = ec_read_around_blocks(c, &buf->key.v, rbio->pick.ec.block,
-						  failed, &l_r);
+		read_mask = ec_read_around_blocks(c, &buf->key.v, block, failed, &l_r);
 		/* Raced with a device going offline: not worth a message */
 		if (!read_mask)
 			return bch_err_throw(c, stripe_reconstruct_insufficient_blocks);
@@ -1099,9 +1100,11 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 		/*
 		 * The block just failed to read, so rebuild it from the
 		 * others: on a drive retrying a bad sector, reading it again
-		 * costs as long again.
+		 * costs as long again. If the others can't rebuild it, it's
+		 * read after all, below.
 		 */
-		read_mask &= ~BIT(rbio->pick.ec.block);
+		read_mask &= ~BIT(block);
+		skipped_failed_block = true;
 	}
 
 	/* Don't hold btree locks for stripe buffer allocations, or IO */
@@ -1125,11 +1128,27 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 		else
 			buf->err[STRIPE_BUF_PRE_RECOV][i] = -BCH_ERR_stripe_read_skipped;
 
+	ret = bch2_stripe_buf_validate(c, buf, false, EC_BLOCKS_ALL);
+
+	/*
+	 * The rest of the stripe couldn't rebuild the block we failed to read:
+	 * another block is bad too. Our block's error may have been transient,
+	 * so read it after all before the data is given up on.
+	 */
+	if (ret &&
+	    ret != -BCH_ERR_stripe_reconstruct_stale_race &&
+	    skipped_failed_block) {
+		memset(buf->err[STRIPE_BUF_POST_RECOV], 0, sizeof(buf->err[STRIPE_BUF_POST_RECOV]));
+		buf->err[STRIPE_BUF_PRE_RECOV][block] = 0;
+		bch2_ec_block_io(c, buf, REQ_OP_READ, block);
+
+		ret = bch2_stripe_buf_validate(c, buf, false, EC_BLOCKS_ALL);
+	}
+
 	/*
 	 * A block went stale under us: the stripe was deleted or replaced, so
 	 * the extent has changed. Retry as a direct read of a stale pointer is.
 	 */
-	ret = bch2_stripe_buf_validate(c, buf, false, EC_BLOCKS_ALL);
 	if (ret == -BCH_ERR_stripe_reconstruct_stale_race)
 		return rbio->flags & BCH_READ_retry_if_stale
 			? bch_err_throw(c, data_read_ptr_stale_retry)
@@ -1137,7 +1156,7 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 
 	if (!ret)
 		memcpy_to_bio(&rbio->bio, rbio->bio.bi_iter,
-			      buf->data[rbio->pick.ec.block] + ((offset - buf->offset) << 9));
+			      buf->data[block] + ((offset - buf->offset) << 9));
 
 	if (!ret && stripe_errs_only_dev_offline(buf))
 		return 0;
