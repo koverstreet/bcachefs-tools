@@ -519,8 +519,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     pub fn bkey_reassemble(&self, k: BkeySC<'_>) -> Result<TransBkey<'a, 't>, BchError> {
-        const BKEY_U64S: usize = size_of::<c::bkey>() / size_of::<u64>();
-
         let mut dst = self.bkey_alloc(k.k.u64s as u32)?;
         let dst_key: &mut c::bkey_i = dst.as_mut();
 
@@ -541,8 +539,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn bkey_reassemble_resized(&self, k: BkeySC<'_>, val_u64s: usize)
         -> Result<TransBkey<'a, 't>, BchError>
     {
-        const BKEY_U64S: usize = size_of::<c::bkey>() / size_of::<u64>();
-
         let mut dst = self.bkey_alloc((BKEY_U64S + val_u64s) as u32)?;
         dst.as_mut_u64s().fill(0);
 
@@ -565,8 +561,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn bkey_alloc_init(&self, val_u64s: usize, type_: u8, pos: c::bpos)
         -> Result<TransBkey<'a, 't>, BchError>
     {
-        const BKEY_U64S: usize = size_of::<c::bkey>() / size_of::<u64>();
-
         let mut k = self.bkey_alloc((BKEY_U64S + val_u64s) as u32)?;
         k.as_mut_u64s().fill(0);
         unsafe { c::bkey_init(k.k_mut()) };

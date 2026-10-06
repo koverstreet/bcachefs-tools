@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::alloc::buckets::DiskReservation;
-use crate::btree::bkey::{pos, spos, BkeyCookie, BkeyS, BkeySC, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, BkeyCookie, BkeyS, BkeySC, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
@@ -641,8 +641,6 @@ fn test_snapshots(fs: &Fs, _nr: u64) -> TestRet {
 
 /// Fill @buf with a key of its size, value words counting up from @seed.
 fn bkey_buf_test_key(buf: &mut [u64], seed: u64) -> BkeySC<'_> {
-    const BKEY_U64S: usize = core::mem::size_of::<c::bkey>() / 8;
-
     let u64s = buf.len();
     for (i, v) in buf[BKEY_U64S..].iter_mut().enumerate() {
         *v = seed + i as u64;

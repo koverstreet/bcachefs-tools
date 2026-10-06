@@ -15,6 +15,9 @@ use c::bpos as Bpos;
 
 use core::cmp::Ordering;
 
+/// The u64s of a key's header, struct bkey: as C's BKEY_U64s.
+pub const BKEY_U64S: usize = core::mem::size_of::<c::bkey>() / core::mem::size_of::<u64>();
+
 pub struct Bkey<K: BkeyInit> {
     raw: K,
 }
@@ -443,8 +446,6 @@ impl<'a> BkeySC<'a> {
     /// # Safety
     /// @T is the value type of this key's type: plain data, all-zeroes valid.
     pub(crate) unsafe fn val_copy_pad<T: Default>(&self) -> T {
-        const BKEY_U64S: usize = core::mem::size_of::<c::bkey>() / core::mem::size_of::<u64>();
-
         let mut v = T::default();
         let bytes = ((self.k.u64s as usize).saturating_sub(BKEY_U64S) * 8)
             .min(core::mem::size_of::<T>());

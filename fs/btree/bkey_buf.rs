@@ -11,13 +11,11 @@
 //! __GFP_NOFAIL, through rust_kzalloc_nofail() - the kernel's Rust allocator
 //! API doesn't offer it. Zeroed, so the whole buffer is initialized memory.
 
-use crate::btree::bkey::BkeySC;
+use crate::btree::bkey::{BkeySC, BKEY_U64S};
 use crate::c;
 use core::mem::size_of;
 use core::ptr::NonNull;
 use core::slice;
-
-const BKEY_U64S: usize = size_of::<c::bkey>() / size_of::<u64>();
 
 const ONSTACK_U64S: usize = 12;
 

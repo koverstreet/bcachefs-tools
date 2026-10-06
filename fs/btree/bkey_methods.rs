@@ -24,7 +24,7 @@
 //! A value is an integer (decimal, 0x hex, or negative), or for an
 //! enum-coded field the codeword's name.
 
-use crate::btree::bkey::{BkeyS, BkeySC};
+use crate::btree::bkey::{BkeyS, BkeySC, BKEY_U64S};
 use crate::btree::iter::{TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::fs::Fs;
@@ -33,8 +33,6 @@ use crate::snapshot_states::{SNAPSHOT_STATE_VALUES, SUBVOLUME_STATE_VALUES};
 use crate::typeinfo::{self, AccessError, FieldTarget, ResolveError, TypeInfo};
 use core::fmt;
 use core::mem::{size_of, MaybeUninit};
-
-const BKEY_U64S: usize = size_of::<c::bkey>() / size_of::<u64>();
 
 type EnumValues = &'static [(&'static str, u64)];
 
