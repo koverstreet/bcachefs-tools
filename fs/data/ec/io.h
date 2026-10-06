@@ -103,7 +103,7 @@ void bch2_stripe_buf_read(struct bch_fs *, struct ec_stripe_buf *, u32);
 
 u32 bch2_ec_read_around_skip(struct bch_fs *, const struct bch_stripe *, u32);
 int bch2_ec_read_around_pick(struct btree_trans *, struct extent_ptr_decoded *,
-			     struct bch_io_failures *, enum bch_read_flags, int);
+			     struct bch_io_failures *, enum bch_read_flags *, int);
 
 struct bch_read_bio;
 int bch2_ec_read_extent(struct btree_trans *, struct bch_read_bio *,

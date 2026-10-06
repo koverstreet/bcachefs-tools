@@ -158,11 +158,7 @@ static bool bch2_target_congested(struct bch_fs *c, u16 target)
 
 static inline bool have_io_error(struct bch_io_failures *failed)
 {
-	if (failed)
-		darray_for_each(*failed, f)
-			if (bch2_dev_io_failed(f))
-				return true;
-	return false;
+	return failed && darray_find_p(*failed, f, bch2_dev_io_failed(f));
 }
 
 static inline struct data_update *rbio_data_update(struct bch_read_bio *rbio)
@@ -1590,19 +1586,8 @@ int __bch2_read_extent(struct btree_trans *trans,
 		return read_extent_pick_err(trans, orig, read_pos, data_btree, k, flags, ret);
 	ret = 0;
 
-	if (pick.has_ec && pick.mode == BCH_READ_MODE_direct) {
-		try(bch2_ec_read_around_pick(trans, &pick, failed, flags, dev));
-
-		if (pick.mode == BCH_READ_MODE_ec_read_around &&
-		    !(flags & BCH_READ_in_retry)) {
-			event_inc_trace(c, data_read_ec_read_around, buf, ({
-				bch2_bkey_val_to_text(&buf, c, k);
-				prt_newline(&buf);
-				bch2_read_bio_to_text_atomic(&buf, orig);
-			}));
-			flags |= BCH_READ_ec_read_around;
-		}
-	}
+	if (pick.has_ec)
+		try(bch2_ec_read_around_pick(trans, &pick, failed, &flags, dev));
 
 	if (bch2_csum_type_is_encryption(pick.crc.csum_type) &&
 	    unlikely(!c->chacha20_key_set))

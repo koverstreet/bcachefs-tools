@@ -2009,11 +2009,7 @@ static CLOSURE_CALLBACK(ec_old_stripe_fold)
 		return;
 	}
 
-	/*
-	 * Blocks skipped as slow are read after all if anything else is bad or
-	 * the rebuild doesn't check out: data is only declared lost if it
-	 * really can't be read.
-	 */
+	/* Skipped blocks are read after all before any data is declared lost: */
 	u32 skipped = s->old_stripe_skipped;
 	if (skipped) {
 		if (bch2_stripe_buf_blocks_good(&s->old_stripe, ~skipped)) {
@@ -2809,9 +2805,7 @@ static void stripe_repair_rebuild_abort(struct bch_fs *c, struct ec_stripe_new *
 
 /*
  * Read @s into @buf as ec_old_stripe_fold() would: the blocks in @required,
- * then the rest if one of those is bad (@read_all); a block in @required on a
- * device much slower than the rest is rebuilt from the others instead. The
- * caller has @s open.
+ * then the rest if one of those is bad (@read_all). The caller has @s open.
  */
 static int stripe_repair_read(struct btree_trans *trans, struct bkey_s_c_stripe s,
 			      u32 required, struct ec_stripe_buf *buf, bool *read_all)
@@ -2834,9 +2828,8 @@ static int stripe_repair_read(struct btree_trans *trans, struct bkey_s_c_stripe 
 
 	bch2_trans_unlock_long(trans);
 
-	u32 all = BIT(buf->key.v.nr_blocks) - 1;
 	u32 skipped = bch2_ec_read_around_skip(c, &buf->key.v, required);
-	u32 read = skipped ? all & ~skipped : required;
+	u32 read = skipped ? ~skipped : required;
 	unsigned i;
 
 	bch2_stripe_buf_read(c, buf, read);
@@ -2849,10 +2842,10 @@ static int stripe_repair_read(struct btree_trans *trans, struct bkey_s_c_stripe 
 		return 0;
 	}
 
-	/* Blocks skipped as slow are read after all before data is declared lost: */
+	/* Skipped blocks are read after all before any data is declared lost: */
 	*read_all = skipped || !bch2_stripe_buf_blocks_good(buf, required);
 	if (*read_all) {
-		unsigned long blocks = all & ~read;
+		unsigned long blocks = ~read & (BIT(buf->key.v.nr_blocks) - 1);
 		for_each_set_bit(i, &blocks, BCH_BKEY_PTRS_MAX)
 			bch2_ec_block_io(c, buf, REQ_OP_READ, i);
 		closure_sync(&buf->io);
