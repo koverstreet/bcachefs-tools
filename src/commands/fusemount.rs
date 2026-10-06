@@ -896,12 +896,14 @@ impl BcachefsFs {
 
 /// Times before 1970 are valid on bcachefs: a timespec's tv_sec is then
 /// negative, with tv_nsec still counting forwards from it.
+// time_t is 32 bits on some targets (i586): the cast isn't a no-op there
+#[allow(clippy::unnecessary_cast)]
 fn ts_to_systime(ts: c::timespec) -> SystemTime {
     let nsec = Duration::from_nanos(ts.tv_nsec as u64);
     if ts.tv_sec >= 0 {
         UNIX_EPOCH + Duration::from_secs(ts.tv_sec as u64) + nsec
     } else {
-        UNIX_EPOCH - Duration::from_secs(ts.tv_sec.unsigned_abs()) + nsec
+        UNIX_EPOCH - Duration::from_secs((ts.tv_sec as i64).unsigned_abs()) + nsec
     }
 }
 
