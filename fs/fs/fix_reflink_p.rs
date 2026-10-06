@@ -15,7 +15,7 @@ use crate::fs::Fs;
 
 fn fix_reflink_p_key<'a, 't>(
     t:    TransAttempt<'a, 't>,
-    iter: &mut BtreeIter<'t>,
+    iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
 ) -> TransRet<'a, 't> {
     let Some(p) = k.as_reflink_p() else {

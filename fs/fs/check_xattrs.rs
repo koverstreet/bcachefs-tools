@@ -81,7 +81,7 @@ fn check_acl_flag<'a, 't>(
 
 fn check_xattr<'a, 't>(
     t:    TransAttempt<'a, 't>,
-    iter: &mut BtreeIter<'t>,
+    iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
     st:   &mut CheckXattrs,
 ) -> TransRet<'a, 't> {

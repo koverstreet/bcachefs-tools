@@ -384,7 +384,7 @@ fn check_extent_past_end(
 
 fn check_extent<'a, 't>(
     t:    TransAttempt<'a, 't>,
-    iter: &mut BtreeIter<'t>,
+    iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
     st:   &mut CheckExtents<'_>,
 ) -> TransRet<'a, 't> {

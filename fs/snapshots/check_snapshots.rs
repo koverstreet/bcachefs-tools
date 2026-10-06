@@ -161,7 +161,7 @@ fn tree_master_subvol(t: &TransAttempt<'_, '_>, root: u32) -> Result<Option<u32>
 /// a non-snapshot subvolume in the tree, or correct it to one.
 fn check_snapshot_tree<'a, 't>(
     t:    TransAttempt<'a, 't>,
-    iter: &mut BtreeIter<'t>,
+    iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
 ) -> TransRet<'a, 't> {
     let trans = t.trans();
@@ -237,7 +237,7 @@ crate::recovery_pass!(bch2_check_snapshot_trees => check_snapshot_trees);
 
 /// The node check_snapshot() is on: see the notes at the top.
 struct Node<'i, 'k, 'a, 't> {
-    iter: &'i mut BtreeIter<'t>,
+    iter: &'i BtreeIter<'t>,
     k:    BkeySC<'k>,
     /// The value as read, zero padded - until there's @u.
     v:    c::bch_snapshot,
@@ -246,7 +246,7 @@ struct Node<'i, 'k, 'a, 't> {
 }
 
 impl<'i, 'k, 'a, 't> Node<'i, 'k, 'a, 't> {
-    fn new(iter: &'i mut BtreeIter<'t>, k: BkeySC<'k>) -> Option<Self> {
+    fn new(iter: &'i BtreeIter<'t>, k: BkeySC<'k>) -> Option<Self> {
         let v = snapshot::val(k)?;
         Some(Node { iter, k, v, u: None })
     }
@@ -1225,7 +1225,7 @@ fn check_to_subvol<'a, 't>(t: TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>
 
 fn check_snapshot<'a, 't>(
     t:    TransAttempt<'a, 't>,
-    iter: &mut BtreeIter<'t>,
+    iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
 ) -> TransRet<'a, 't> {
     let trans = t.trans();

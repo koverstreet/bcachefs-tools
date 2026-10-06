@@ -57,12 +57,12 @@ pub fn fsck_remove(trans: &BtreeTrans<'_>, pos: c::bpos) -> Result<(), BchError>
 /// whichever is wrong, as fsck: as bch2_check_dirent_target().
 pub fn check_target(
     trans:  &BtreeTrans<'_>,
-    iter:   &mut BtreeIter<'_>,
+    iter:   &BtreeIter<'_>,
     k:      BkeySC<'_>,
     target: &mut c::bch_inode_unpacked,
 ) -> Result<(), BchError> {
     let d = k.to_c_dirent().expect("a dirent");
-    ret_to_result(unsafe { c::bch2_check_dirent_target(trans.raw(), iter.raw_mut(), d, target, true) })
+    ret_to_result(unsafe { c::bch2_check_dirent_target(trans.raw(), iter.raw(), d, target, true) })
 }
 
 /// What a dirent names, by d_type: for DT_SUBVOL, a subvolume (child) and

@@ -627,7 +627,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// with the commit.
     pub fn bkey_make_mut(
         &self,
-        iter:      &mut BtreeIter<'t>,
+        iter:      &BtreeIter<'t>,
         k:         BkeySC<'_>,
         flags:     UpdateTriggerFlags,
         type_:     c::bch_bkey_type,
@@ -635,7 +635,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     ) -> Result<TransBkey<'a, 't>, BchError> {
         let mut raw = k.to_raw();
         unsafe {
-            let k = c::__bch2_bkey_make_mut(self.raw(), iter.raw_mut(), &mut raw,
+            let k = c::__bch2_bkey_make_mut(self.raw(), iter.raw(), &mut raw,
                                             c::btree_iter_update_trigger_flags(flags.bits()),
                                             type_.0, min_bytes as u32);
             TransBkey::from_raw(self, k)
@@ -646,13 +646,13 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// @iter: as bch2_trans_update_extent_overwrite().
     pub fn update_extent_overwrite(
         self,
-        iter:  &mut BtreeIter<'t>,
+        iter:  &BtreeIter<'t>,
         flags: UpdateTriggerFlags,
         old:   BkeySC<'_>,
         new:   BkeySC<'_>,
     ) -> Result<Self, TransError> {
         let ret = unsafe {
-            c::bch2_trans_update_extent_overwrite(self.raw(), iter.raw_mut(),
+            c::bch2_trans_update_extent_overwrite(self.raw(), iter.raw(),
                                                   c::btree_iter_update_trigger_flags(flags.bits()),
                                                   old.to_raw(), new.to_raw())
         };
@@ -765,13 +765,13 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     pub fn delete_at(
         self,
-        iter:  &mut BtreeIter<'t>,
+        iter:  &BtreeIter<'t>,
         flags: UpdateTriggerFlags,
     ) -> Result<Self, TransError> {
         let ret = unsafe {
             c::bch2_btree_delete_at(
                 self.raw(),
-                iter.raw_mut(),
+                iter.raw(),
                 c::btree_iter_update_trigger_flags(flags.bits()),
             )
         };
@@ -1598,23 +1598,23 @@ impl<'t> BtreeIter<'t> {
         S: FnMut(*mut c::btree_iter) -> bool,
         F: for<'a, 'k> FnMut(
             TransAttempt<'a, 't>,
-            &mut BtreeIter<'t>,
+            &'k BtreeIter<'t>,
             BkeySC<'k>,
         ) -> TransRet<'a, 't>,
     {
         loop {
             let t = trans.begin();
 
-            let k = match unsafe { bkey_s_c_to_result(peek(self.raw.get_mut())) } {
+            let (iter, k) = match self.peek_with(&mut peek) {
                 Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
                 Err(e) => return Err(e),
                 Ok(None) => return Ok(()),
-                Ok(Some(k)) => k,
+                Ok(Some(ik)) => ik,
             };
 
             let restart_count = t.restart_count;
 
-            let t = match f(t, self, k) {
+            let t = match f(t, iter, k) {
                 Ok(t) => t,
                 Err(TransError::Restart(_)) => continue,
                 Err(TransError::Error(e)) if e.matches(bch_errcode::BCH_ERR_fc_continue) => {
@@ -1658,7 +1658,7 @@ impl<'t> BtreeIter<'t> {
     where
         F: for<'a, 'k> FnMut(
             TransAttempt<'a, 't>,
-            &mut BtreeIter<'t>,
+            &'k BtreeIter<'t>,
             BkeySC<'k>,
         ) -> TransRet<'a, 't>,
     {
@@ -1678,7 +1678,7 @@ impl<'t> BtreeIter<'t> {
     where
         F: for<'a, 'k> FnMut(
             TransAttempt<'a, 't>,
-            &mut BtreeIter<'t>,
+            &'k BtreeIter<'t>,
             BkeySC<'k>,
         ) -> TransRet<'a, 't>,
     {
@@ -1700,7 +1700,7 @@ impl<'t> BtreeIter<'t> {
     where
         F: for<'a, 'k> FnMut(
             TransAttempt<'a, 't>,
-            &mut BtreeIter<'t>,
+            &'k BtreeIter<'t>,
             BkeySC<'k>,
         ) -> TransRet<'a, 't>,
     {
@@ -1722,7 +1722,7 @@ impl<'t> BtreeIter<'t> {
     where
         F: for<'a, 'k> FnMut(
             TransAttempt<'a, 't>,
-            &mut BtreeIter<'t>,
+            &'k BtreeIter<'t>,
             BkeySC<'k>,
         ) -> TransRet<'a, 't>,
     {

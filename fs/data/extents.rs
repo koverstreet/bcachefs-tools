@@ -282,10 +282,10 @@ pub fn durability_safe(fs: &Fs, k: BkeySC<'_>) -> c::bkey_durability {
 /// bch2_bkey_drop_stale_ptrs().
 pub fn drop_stale_ptrs<'a, 't>(
     t:    TransAttempt<'a, 't>,
-    iter: &mut BtreeIter<'t>,
+    iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
 ) -> TransRet<'a, 't> {
-    let ret = unsafe { c::bch2_bkey_drop_stale_ptrs(t.raw(), iter.raw_mut(), k.to_raw()) };
+    let ret = unsafe { c::bch2_bkey_drop_stale_ptrs(t.raw(), iter.raw(), k.to_raw()) };
     t.result(ret)
 }
 

@@ -293,7 +293,7 @@ fn write_if_changed<'a, 't>(
 
 fn check_inode<'a, 't>(
     t:    TransAttempt<'a, 't>,
-    iter: &mut BtreeIter<'t>,
+    iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
     st:   &mut CheckInodes,
 ) -> TransRet<'a, 't> {

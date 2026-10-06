@@ -250,7 +250,7 @@ impl InodeWalker {
     pub fn walk<'a, 't, 'w>(
         &'w mut self,
         t:    TransAttempt<'a, 't>,
-        iter: &mut BtreeIter<'t>,
+        iter: &BtreeIter<'t>,
         k:    BkeySC<'_>,
     ) -> TransResult<'a, 't, Option<Walked<'w>>> {
         let (t, i) = match self.walk_and_check(t, iter, k) {
@@ -274,7 +274,7 @@ impl InodeWalker {
     fn walk_and_check<'a, 't>(
         &mut self,
         t:    TransAttempt<'a, 't>,
-        iter: &mut BtreeIter<'t>,
+        iter: &BtreeIter<'t>,
         k:    BkeySC<'_>,
     ) -> TransResult<'a, 't, Option<usize>> {
         let trans = t.trans();
@@ -380,7 +380,7 @@ impl InodeWalker {
     fn check_key_has_inode<'a, 't>(
         &mut self,
         t:    TransAttempt<'a, 't>,
-        iter: &mut BtreeIter<'t>,
+        iter: &BtreeIter<'t>,
         i:    Option<usize>,
         k:    BkeySC<'_>,
     ) -> TransRet<'a, 't> {
@@ -654,7 +654,7 @@ impl Default for InodeWalker {
 ///
 /// With a disk reservation: an extents update needs one to put whatever its
 /// triggers charge. A deletion charges nothing, so an empty one does.
-fn delete_stray_key<'a, 't>(t: TransAttempt<'a, 't>, iter: &mut BtreeIter<'t>) -> TransRet<'a, 't> {
+fn delete_stray_key<'a, 't>(t: TransAttempt<'a, 't>, iter: &BtreeIter<'t>) -> TransRet<'a, 't> {
     let res = DiskReservation::new(t.trans().fs());
     let t = t.delete_at(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
     let t = t.commit(Some(&res), CommitFlags::NO_ENOSPC)?;

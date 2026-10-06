@@ -39,9 +39,9 @@ impl<'f> Progress<'f> {
     pub fn update<'a, 't>(
         &self,
         t:    TransAttempt<'a, 't>,
-        iter: &mut BtreeIter<'t>,
+        iter: &BtreeIter<'t>,
     ) -> TransRet<'a, 't> {
-        let ret = unsafe { c::bch2_progress_update_iter(t.raw(), self.raw, iter.raw_mut()) };
+        let ret = unsafe { c::bch2_progress_update_iter(t.raw(), self.raw, iter.raw()) };
         t.result(ret)
     }
 }

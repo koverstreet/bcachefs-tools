@@ -162,10 +162,10 @@ pub fn tree_create<'a, 't>(t: &TransAttempt<'a, 't>) -> Result<TransBkey<'a, 't>
 /// bch2_check_key_has_snapshot().
 pub fn check_key_has_snapshot(
     trans: &BtreeTrans<'_>,
-    iter:  &mut BtreeIter<'_>,
+    iter:  &BtreeIter<'_>,
     k:     BkeySC<'_>,
 ) -> Result<bool, BchError> {
-    let ret = unsafe { c::bch2_check_key_has_snapshot(trans.raw(), iter.raw_mut(), k.to_raw()) };
+    let ret = unsafe { c::bch2_check_key_has_snapshot(trans.raw(), iter.raw(), k.to_raw()) };
     Ok(ret_to_result(ret)? > 0)
 }
 

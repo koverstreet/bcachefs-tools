@@ -168,7 +168,7 @@ fn find_snapshot_subvol(trans: &BtreeTrans<'_>, snapshot: u32) -> Result<Option<
 /// dirent's snapshot. Returns the subvolume, after any repair.
 fn check_dirent_parent_subvol<'a, 't>(
     t:      TransAttempt<'a, 't>,
-    iter:   &mut BtreeIter<'t>,
+    iter:   &BtreeIter<'t>,
     k:      BkeySC<'_>,
     parent: u32,
 ) -> TransResult<'a, 't, u32> {
@@ -237,7 +237,7 @@ fn check_dirent_parent_subvol<'a, 't>(
 
 fn check_dirent_to_subvol<'a, 't>(
     t:      TransAttempt<'a, 't>,
-    iter:   &mut BtreeIter<'t>,
+    iter:   &BtreeIter<'t>,
     k:      BkeySC<'_>,
     child:  u32,
     parent: u32,
@@ -398,7 +398,7 @@ fn move_dirent_to_inode_snapshots<'a, 't>(
 /// Returns whether the rest of the key is to be skipped.
 fn check_dirent_to_inode<'a, 't>(
     t:    TransAttempt<'a, 't>,
-    iter: &mut BtreeIter<'t>,
+    iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
     inum: u64,
     st:   &mut CheckDirents,
@@ -493,7 +493,7 @@ fn check_dirent_to_inode<'a, 't>(
 
 fn check_dirent<'a, 't>(
     t:    TransAttempt<'a, 't>,
-    iter: &mut BtreeIter<'t>,
+    iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
     st:   &mut CheckDirents,
 ) -> TransRet<'a, 't> {
