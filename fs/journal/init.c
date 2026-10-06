@@ -278,10 +278,7 @@ int bch2_dev_journal_alloc(struct bch_dev *ca, bool new_fs)
 	/* 1/128th of the device by default: */
 	nr = ca->mi.nbuckets >> 7;
 
-	/*
-	 * clamp journal size to 8192 buckets or 8GB (in sectors), whichever
-	 * is smaller:
-	 */
+	/* but no more than a quarter of RAM: */
 	nr = clamp_t(unsigned, nr,
 		     BCH_JOURNAL_BUCKETS_MIN,
 		     div64_u64(system_totalram_bytes() / 4, bucket_bytes(ca)));
