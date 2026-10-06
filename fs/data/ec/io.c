@@ -774,15 +774,13 @@ static inline u64 ec_dev_read_latency(struct bch_dev *ca)
 	return atomic64_read(&ca->cur_latency[READ]);
 }
 
-/*
- * The latency a read-around has to beat: that of its slowest device, @l, scaled
- * for reading k blocks instead of one, plus the least gain worth having.
- */
+/* What a read-around has to beat: its slowest device's latency @l, scaled */
 static inline u64 ec_read_around_cost(u64 l, unsigned penalty)
 {
 	return div_u64(l * penalty, 100) + EC_READ_AROUND_MIN_GAIN_NS;
 }
 
+/* On a tie the highest index is the slower: Q is left out before P before data */
 static unsigned ec_slowest_block(const struct bch_stripe *v, u32 mask, const u64 *lat)
 {
 	unsigned slowest = __ffs(mask);
@@ -794,21 +792,13 @@ static unsigned ec_slowest_block(const struct bch_stripe *v, u32 mask, const u64
 }
 
 /*
- * The blocks of @v far slower than the rest, by the read-around rule: slower
- * than the slowest device of @read, scaled by ec_read_around_penalty, plus
- * the least gain worth having. @read is the nr_data fastest of the blocks
- * that can be read now - those not in @skip, on online devices that aren't
- * stale or failed, with a latency sample - and what a read around any other
- * block reads instead; @l_r is the latency of its slowest device. If fewer
- * than nr_data can be read, @read is 0 and nothing is slow.
- *
- * On a tie the highest index is the slower, so Q is left out before P before
- * data: rebuilding a data block and Q is an XOR and a syndrome, no Galois
- * field recovery.
+ * The blocks of @v far slower than the rest: slower, by @cost at @penalty, than
+ * @read, the nr_data fastest blocks that can be read now (not in @skip, online,
+ * not stale, with a latency sample), which a read around any of them reads. If
+ * fewer than nr_data can be read, @read is 0 and nothing is slow.
  */
 static u32 ec_read_around_slow(struct bch_fs *c, const struct bch_stripe *v,
-			       u32 skip, struct bch_io_failures *failed,
-			       u32 *read, u64 *l_r)
+			       u32 skip, unsigned penalty, u32 *read, u64 *cost)
 {
 	unsigned nr_data = v->nr_blocks - v->nr_redundant;
 	u64 lat[BCH_BKEY_PTRS_MAX] = {};
@@ -820,8 +810,7 @@ static u32 ec_read_around_slow(struct bch_fs *c, const struct bch_stripe *v,
 			if ((skip & BIT(i)) ||
 			    !ca ||
 			    !bch2_dev_is_online(ca) ||
-			    dev_ptr_stale_rcu(ca, &v->ptrs[i]) ||
-			    (failed && bch2_dev_io_failed(bch2_dev_io_failures(failed, ca->dev_idx))))
+			    dev_ptr_stale_rcu(ca, &v->ptrs[i]))
 				continue;
 
 			lat[i] = ec_dev_read_latency(ca);
@@ -837,28 +826,27 @@ static u32 ec_read_around_slow(struct bch_fs *c, const struct bch_stripe *v,
 	if (!*read)
 		return 0;
 
-	*l_r = lat[ec_slowest_block(v, mask, lat)];
-	u64 cost = ec_read_around_cost(*l_r, c->opts.ec_read_around_penalty);
+	*cost = ec_read_around_cost(lat[ec_slowest_block(v, mask, lat)], penalty);
 
 	for (unsigned i = 0; i < v->nr_blocks; i++)
-		if ((usable & ~mask & BIT(i)) && lat[i] > cost)
+		if ((usable & ~mask & BIT(i)) && lat[i] > *cost)
 			slow |= BIT(i);
 	return slow;
 }
 
 /*
- * For stripe repair and reuse, which read @required of @v: when one of those
- * is far slower than the rest, the blocks to rebuild instead, from the rest,
- * which the caller reads. The read-around rule without the coin toss, for
- * background work. Skipped blocks that don't check out are read after all.
+ * For stripe repair and reuse, which read @required of @v: when one of those is
+ * far slower than the rest, the blocks to skip and rebuild from the others.
+ * The read-around rule without the coin toss, for background work.
  */
 u32 bch2_ec_read_around_skip(struct bch_fs *c, const struct bch_stripe *v, u32 required)
 {
+	unsigned penalty = c->opts.ec_read_around_penalty;
 	u32 read;
-	u64 l_r;
+	u64 cost;
 
-	if (!c->opts.ec_read_around_penalty ||
-	    !(ec_read_around_slow(c, v, 0, NULL, &read, &l_r) & required))
+	if (!penalty ||
+	    !(ec_read_around_slow(c, v, 0, penalty, &read, &cost) & required))
 		return 0;
 
 	return ~read & (BIT(v->nr_blocks) - 1);
@@ -866,23 +854,14 @@ u32 bch2_ec_read_around_skip(struct bch_fs *c, const struct bch_stripe *v, u32 r
 
 /*
  * Should a read of @pick, which bch2_bkey_pick_read_device() chose to read
- * directly, go around its device instead?
+ * directly, go around its device instead? Only when that's clearly faster: with
+ * d the device's read latency and r the cost of the reconstruct, never when
+ * d <= r, and otherwise with probability 1 - (r/d)^2, so the slow device keeps
+ * getting some reads and its latency estimate recovers when it does.
  *
- * A reconstruct reads k blocks instead of one, so only when that is clearly
- * faster. With d the device's read latency and r the cost of the reconstruct
- * (its slowest device's latency, scaled by ec_read_around_penalty, plus 1 ms):
- * never when d <= r - so never on a healthy pool - and otherwise with
- * probability 1 - (r/d)^2. The slow device keeps getting some reads, so its
- * latency estimate recovers when it does.
- *
- * Not for reads that must come from the device (scrub), or retries: a retry
- * after an error has its own reconstruct path, and the retry carrying a
- * read-around decision (BCH_READ_ec_read_around) doesn't roll again.
- *
- * Reconcile reads each device's data on that device's own thread, in LBA
- * order (soft_require_read_device). Those read around it only when it's far
- * slower: by 16x, the factor ptr_better() uses to keep replicated reads there
- * when the other replica is non-rotational.
+ * Reconcile reads each device's data on that device's own thread, in LBA order
+ * (soft_require_read_device); those read around it only when it's 16x slower,
+ * as ptr_better() keeps replicated reads there.
  *
  * Returns 0 or a transaction restart.
  */
@@ -893,21 +872,23 @@ int bch2_ec_read_around_pick(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 	unsigned penalty = c->opts.ec_read_around_penalty;
-	bool decided = flags & BCH_READ_ec_read_around;
 
 	if (!penalty ||
-	    (flags & BCH_READ_hard_require_read_device) ||
-	    ((flags & BCH_READ_in_retry) && !decided))
+	    (flags & BCH_READ_hard_require_read_device))
 		return 0;
+
+	/* Only the retry carrying a read-around decision reads around, and once */
+	if (flags & BCH_READ_in_retry) {
+		if ((flags & BCH_READ_ec_read_around) &&
+		    !bch2_read_mode_tried(bch2_dev_io_failures(failed, pick->ptr.dev),
+					  BCH_READ_MODE_ec_read_around))
+			pick->mode = BCH_READ_MODE_ec_read_around;
+		return 0;
+	}
 
 	if ((flags & BCH_READ_soft_require_read_device) &&
 	    pick->ptr.dev == preferred_dev)
 		penalty *= 16;
-
-	if (failed &&
-	    bch2_read_mode_tried(bch2_dev_io_failures(failed, pick->ptr.dev),
-				 BCH_READ_MODE_ec_read_around))
-		return 0;
 
 	/*
 	 * Finding the stripe's devices takes a stripes btree lookup, so first
@@ -934,46 +915,44 @@ int bch2_ec_read_around_pick(struct btree_trans *trans,
 	    l_d <= ec_read_around_cost(l_min, penalty))
 		return 0;
 
-	if (!decided) {
-		/* Data updates get here unlocked, by bch2_data_update_init(): */
-		try(bch2_trans_relock(trans));
+	/* Data updates get here unlocked, by bch2_data_update_init(): */
+	try(bch2_trans_relock(trans));
 
-		CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, pick->ec.idx), BTREE_ITER_slots);
-		struct bkey_s_c k = bch2_btree_iter_peek_slot(&iter);
-		int ret = bkey_err(k);
-		if (ret)
-			return bch2_err_matches(ret, BCH_ERR_transaction_restart) ? ret : 0;
+	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, pick->ec.idx), BTREE_ITER_slots);
+	struct bkey_s_c k = bch2_btree_iter_peek_slot(&iter);
+	int ret = bkey_err(k);
+	if (ret)
+		return bch2_err_matches(ret, BCH_ERR_transaction_restart) ? ret : 0;
 
-		if (k.k->type != KEY_TYPE_stripe)
-			return 0;
+	if (k.k->type != KEY_TYPE_stripe)
+		return 0;
 
-		const struct bch_stripe *v = bkey_s_c_to_stripe(k).v;
-		if (!bch2_ptr_matches_stripe(v, *pick))
-			return 0;
+	const struct bch_stripe *v = bkey_s_c_to_stripe(k).v;
+	if (!bch2_ptr_matches_stripe(v, *pick))
+		return 0;
 
-		u32 read;
-		u64 l_r;
-		if (!(ec_read_around_slow(c, v, 0, failed, &read, &l_r) & BIT(pick->ec.block)))
-			return 0;
+	u32 read;
+	u64 r;
+	if (!(ec_read_around_slow(c, v, 0, penalty, &read, &r) & BIT(pick->ec.block)))
+		return 0;
 
-		/*
-		 * Only if its stripe buffers fit under the limit now - not
-		 * worth going over it for. Racy: a read-around that loses the
-		 * race goes over a little.
-		 */
-		long bytes = ((long) pick->crc.compressed_size << 9) * v->nr_blocks;
-		long used = READ_ONCE(c->ec.stripe_buf_bytes);
-		if (used && used + bytes > bch2_ec_stripe_buf_limit(c))
-			return 0;
+	/*
+	 * Only if its stripe buffers fit under the limit now - not worth going
+	 * over it for. Racy: a read-around that loses the race goes over a
+	 * little.
+	 */
+	long bytes = ((long) pick->crc.compressed_size << 9) * v->nr_blocks;
+	long used = READ_ONCE(c->ec.stripe_buf_bytes);
+	if (used && used + bytes > bch2_ec_stripe_buf_limit(c))
+		return 0;
 
-		/* In ~us, so the squares fit: */
-		u64 d = min_t(u64, l_d >> 10, U32_MAX);
-		u64 r = min_t(u64, ec_read_around_cost(l_r, penalty) >> 10, U32_MAX);
+	/* In ~us, so the squares fit: */
+	u64 d = min_t(u64, l_d >> 10, U32_MAX);
+	r = min_t(u64, r >> 10, U32_MAX);
 
-		if (d <= r ||
-		    bch2_get_random_u64_below(d * d) < r * r)
-			return 0;
-	}
+	if (d <= r ||
+	    bch2_get_random_u64_below(d * d) < r * r)
+		return 0;
 
 	pick->mode = BCH_READ_MODE_ec_read_around;
 	return 0;
@@ -981,9 +960,8 @@ int bch2_ec_read_around_pick(struct btree_trans *trans,
 
 int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 			struct bkey_s_c orig_k,
-			struct bch_io_failures *failed)
+			struct printbuf *msg)
 {
-	struct printbuf *msg = &failed->ec_msg;
 	/*
 	 * We need the original extent to read to still be locked when we check
 	 * for non-spurious stale stripe pointers
@@ -1061,8 +1039,9 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 	bool read_around = rbio->pick.mode == BCH_READ_MODE_ec_read_around;
 	u32 read_mask = EC_BLOCKS_ALL & ~BIT(block);
 	if (read_around) {
-		u64 l_r;
-		ec_read_around_slow(c, &buf->key.v, BIT(block), failed, &read_mask, &l_r);
+		u64 cost;
+		ec_read_around_slow(c, &buf->key.v, BIT(block),
+				    c->opts.ec_read_around_penalty, &read_mask, &cost);
 		/* Raced with a device going offline: not worth a message */
 		if (!read_mask)
 			return bch_err_throw(c, stripe_reconstruct_insufficient_blocks);

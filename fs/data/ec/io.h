@@ -106,7 +106,7 @@ int bch2_ec_read_around_pick(struct btree_trans *, struct extent_ptr_decoded *,
 
 struct bch_read_bio;
 int bch2_ec_read_extent(struct btree_trans *, struct bch_read_bio *,
-			struct bkey_s_c, struct bch_io_failures *);
+			struct bkey_s_c, struct printbuf *);
 
 #endif /* _BCACHEFS_DATA_EC_IO_H */
 

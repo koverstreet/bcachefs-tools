@@ -274,11 +274,9 @@ int bch2_bkey_pick_read_device(struct bch_fs *c, struct bkey_s_c k,
 
 		struct bch_dev_io_failures *f =
 			unlikely(failed) ? bch2_dev_io_failures(failed, p.ptr.dev) : NULL;
-
-		p.has_ec &= !bch2_read_mode_tried(f, BCH_READ_MODE_ec);
-
 		if (unlikely(f)) {
 			p.crc_retry_nr	   = f->csum_nr;
+			p.has_ec	  &= !bch2_read_mode_tried(f, BCH_READ_MODE_ec);
 
 			if (ca) {
 				have_io_errors	|= f->errcode != 0;
