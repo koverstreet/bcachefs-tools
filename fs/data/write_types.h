@@ -29,7 +29,8 @@
 	x(replicas_best_effort)		\
 	x(in_worker)			\
 	x(submitted)			\
-	x(convert_unwritten)
+	x(convert_unwritten)		\
+	x(swap)
 
 enum __bch_write_flags {
 #define x(f)	__BCH_WRITE_##f,
@@ -162,6 +163,8 @@ struct bch_write_op {
 	 * last flush:
 	 */
 	struct bch_devs_mask	*devs_need_flush;
+
+	void			*prealloc_bkey_buf;
 
 	/* Must be last: */
 	struct bch_write_bio	wbio;
