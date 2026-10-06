@@ -337,8 +337,7 @@ static inline struct bkey_ptrs bch2_bkey_ptrs(struct bkey_s k)
 	__label__ out;							\
 									\
 	(_ptr).has_ec			= false;			\
-	(_ptr).do_ec_reconstruct	= false;			\
-	(_ptr).ec_read_around		= false;			\
+	(_ptr).mode			= BCH_READ_MODE_direct;		\
 	(_ptr).crc_retry_nr		= 0;				\
 									\
 	__bkey_extent_entry_for_each_from(_entry, _end, _entry)		\
@@ -424,6 +423,33 @@ void bch2_io_failures_to_text(struct printbuf *, struct bch_fs *,
 bool bch2_io_failures_all_dev_removed(struct bch_io_failures *);
 struct bch_dev_io_failures *bch2_dev_io_failures(struct bch_io_failures *, unsigned);
 struct bch_dev_io_failures *bch2_dev_io_failures_mut(struct bch_io_failures *, unsigned);
+
+/* Reading the device returned an error or bad data */
+static inline bool bch2_dev_io_failed(const struct bch_dev_io_failures *f)
+{
+	return f && (f->errcode || f->csum_nr);
+}
+
+static inline bool bch2_read_mode_tried(const struct bch_dev_io_failures *f,
+					enum bch_read_mode mode)
+{
+	return f && (f->tried & BIT(mode));
+}
+
+/*
+ * An ec read tried first, with a direct read still to come: it may give up,
+ * and if it fails the device hasn't failed.
+ */
+static inline bool bch2_ec_read_optional(struct bch_io_failures *failed,
+					 const struct extent_ptr_decoded *p,
+					 enum bch_read_flags flags)
+{
+	return p->mode == BCH_READ_MODE_ec &&
+		(flags & BCH_READ_ec_read_around) &&
+		!bch2_read_mode_tried(failed ? bch2_dev_io_failures(failed, p->ptr.dev) : NULL,
+				      BCH_READ_MODE_direct);
+}
+
 void bch2_mark_io_failure(struct bch_io_failures *, struct extent_ptr_decoded *, int);
 void bch2_mark_dev_io_failure(struct bch_io_failures *, unsigned, int);
 int bch2_bkey_pick_read_device(struct bch_fs *, struct bkey_s_c,

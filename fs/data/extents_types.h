@@ -19,32 +19,44 @@ struct bch_extent_crc_unpacked {
 	struct bch_csum		csum;
 };
 
+/*
+ * Read the device, or rebuild from the rest of its stripe. Each is tried at
+ * most once per device, in an order that depends on the read - ec first for a
+ * read-around - so what's been tried is tracked: bch_dev_io_failures.tried
+ */
+#define BCH_READ_MODES()	\
+	x(direct)		\
+	x(ec)
+
+enum bch_read_mode {
+#define x(n)	BCH_READ_MODE_##n,
+	BCH_READ_MODES()
+#undef x
+	BCH_READ_MODE_NR
+};
+
 struct extent_ptr_decoded {
 	bool				has_ec;
-	bool				do_ec_reconstruct;
-	bool				ec_read_around;
+	u8				mode;	/* enum bch_read_mode */
 	u8				crc_retry_nr;
 	struct bch_extent_crc_unpacked	crc;
 	struct bch_extent_ptr		ptr;
 	struct bch_extent_stripe_ptr	ec;
 };
 
+struct bch_dev_io_failures {
+	u8			dev;
+	u8			tried;		/* reads: BIT(enum bch_read_mode) */
+	unsigned		csum_nr:7;
+	s16			errcode;	/* direct read, or write */
+	s16			ec_errcode;
+};
+
 struct bch_io_failures {
-	u8			nr;
-	struct bch_dev_io_failures {
-		u8		dev;
-		unsigned	csum_nr:7;
-		s16		ec_errcode;
-		s16		errcode;
-	}			data[BCH_REPLICAS_MAX + 1];
+	u8				nr;
+	struct bch_dev_io_failures	data[BCH_REPLICAS_MAX + 1];
 
-	/*
-	 * A read-around failed: don't try another. Not a device error, so not
-	 * in data[] - those are what self healing rewrites.
-	 */
-	s16			ec_around_errcode;
-
-	struct printbuf		ec_msg;
+	struct printbuf			ec_msg;
 };
 
 #define BCH_READ_FLAGS()		\

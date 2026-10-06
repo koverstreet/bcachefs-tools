@@ -158,7 +158,11 @@ static bool bch2_target_congested(struct bch_fs *c, u16 target)
 
 static inline bool have_io_error(struct bch_io_failures *failed)
 {
-	return failed && failed->nr;
+	if (failed)
+		darray_for_each(*failed, f)
+			if (bch2_dev_io_failed(f))
+				return true;
+	return false;
 }
 
 static inline struct data_update *rbio_data_update(struct bch_read_bio *rbio)
@@ -297,7 +301,7 @@ static struct bch_read_bio *__promote_alloc(struct btree_trans *trans,
 		struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 		unsigned ptr_bit = 1;
 		bkey_for_each_ptr(ptrs, ptr) {
-			if (bch2_dev_io_failures(failed, ptr->dev) &&
+			if (bch2_dev_io_failed(bch2_dev_io_failures(failed, ptr->dev)) &&
 			    !ptr_being_rewritten(c, orig, ptr->dev)) {
 				update_opts.ptrs_io_error |= ptr_bit;
 				update_opts.ptrs_kill |= ptr_bit;
@@ -376,7 +380,7 @@ static struct bch_read_bio *promote_alloc(struct btree_trans *trans,
 	 * We're in the retry path, but we don't know what to repair yet. Only
 	 * the read-around retry may promote: it isn't an error retry.
 	 */
-	if (failed && !failed->nr && !(flags & BCH_READ_may_promote))
+	if (failed && !self_healing && !(flags & BCH_READ_may_promote))
 		return NULL;
 
 	/*
@@ -649,7 +653,7 @@ static void propagate_io_error_to_data_update(struct bch_fs *c,
 {
 	struct data_update *u = rbio_data_update(bch2_rbio_parent(rbio));
 
-	if (u && !pick->do_ec_reconstruct) {
+	if (u && pick->mode == BCH_READ_MODE_direct) {
 		struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(bkey_i_to_s_c(u->k.k));
 		unsigned ptr_bit = 1;
 		bkey_for_each_ptr(ptrs, ptr) {
@@ -743,13 +747,12 @@ static void bch2_rbio_retry(struct work_struct *work)
 	struct bpos read_pos = rbio->read_pos;
 	int orig_ret = rbio->ret;
 	/* Not an error: the read-around decision, punted here to do the reconstruct */
-	bool read_around = !orig_ret && rbio->pick.ec_read_around;
+	bool read_around = !orig_ret && (flags & BCH_READ_ec_read_around);
 	CLASS(bch_io_failures, failed)();
 
 	flags &= ~BCH_READ_hard_require_read_device;
 
 	if (read_around) {
-		flags |= BCH_READ_ec_read_around;
 		event_inc_trace(c, data_read_ec_read_around, buf,
 				bch2_read_bio_to_text_atomic(&buf, rbio));
 	} else {
@@ -804,14 +807,19 @@ static void bch2_rbio_retry(struct work_struct *work)
 		 * nothing was lost, and the device is fine. Say what was found,
 		 * unless it was only a race or the stripe buffer limit.
 		 */
-		bool read_around_failed = !ret && !failed.nr && failed.ec_around_errcode;
+		int read_around_err = 0;
+		if (flags & BCH_READ_ec_read_around)
+			darray_for_each(failed, f)
+				read_around_err = read_around_err ?: f->ec_errcode;
+
+		bool read_around_failed = !ret && !have_io_error(&failed) && read_around_err;
 
 		if (read_around_failed) {
 			event_inc_trace(c, data_read_ec_read_around_fail, buf,
 					bch2_read_bio_to_text_atomic(&buf, rbio));
 
 			if (failed.ec_msg.pos ||
-			    failed.ec_around_errcode != -BCH_ERR_data_read_retry_ec_read_around) {
+			    read_around_err != -BCH_ERR_data_read_retry_ec_read_around) {
 				CLASS(bch_log_msg_level, msg)(c, LOGLEVEL_notice);
 				bch2_read_err_msg_trans(trans, &msg.m, rbio, read_pos);
 				prt_newline(&msg.m);
@@ -825,7 +833,7 @@ static void bch2_rbio_retry(struct work_struct *work)
 				prt_str(&msg.m, "read device directly");
 				msg.m.suppress = bch2_ratelimit(c);
 			}
-		} else if (failed.nr || failed.ec_msg.pos || ret) {
+		} else if (have_io_error(&failed) || failed.ec_msg.pos || ret) {
 			struct printbuf *out;
 			CLASS(bch_log_msg, msg)(c);
 
@@ -868,7 +876,7 @@ static void bch2_rbio_retry(struct work_struct *work)
 		 * failure doesn't fail the read. Only user reads name an inum
 		 * (a data update read may be an indirect extent):
 		 */
-		if (!read_around_failed && (failed.nr || ret)) {
+		if (have_io_error(&failed) || ret) {
 			/* After a read-around, orig_ret is 0: the failures say what was recovered from */
 			bool csum = data_read_err_is_csum(orig_ret) ||
 				(read_around &&
@@ -928,7 +936,7 @@ static int bch2_rbio_error(struct bch_read_bio *rbio, int ret)
 
 	rbio->ret = ret;
 	/* A failed read-around isn't an error: the read goes to the device next */
-	if (!rbio->pick.ec_read_around)
+	if (!bch2_ec_read_optional(rbio->failed, &rbio->pick, rbio->flags))
 		bch2_rbio_parent(rbio)->saw_error = true;
 
 	if (!(rbio->flags & BCH_READ_in_retry)) {
@@ -1631,12 +1639,16 @@ int __bch2_read_extent(struct btree_trans *trans,
 	 */
 	enum bch_read_flags punt_promote = 0;
 
-	if (pick.has_ec && !pick.do_ec_reconstruct) {
+	if (pick.has_ec && pick.mode == BCH_READ_MODE_direct) {
 		try(bch2_ec_read_around_pick(trans, &pick, failed, flags, dev));
 
-		if (pick.ec_read_around && !(flags & BCH_READ_in_retry)) {
-			punt_promote = flags & BCH_READ_may_promote;
-			flags &= ~BCH_READ_may_promote;
+		if (pick.mode == BCH_READ_MODE_ec) {
+			flags |= BCH_READ_ec_read_around;
+
+			if (!(flags & BCH_READ_in_retry)) {
+				punt_promote = flags & BCH_READ_may_promote;
+				flags &= ~BCH_READ_may_promote;
+			}
 		}
 	}
 
@@ -1645,7 +1657,7 @@ int __bch2_read_extent(struct btree_trans *trans,
 		return read_extent_no_encryption_key(trans, orig, read_pos, k, flags);
 
 	struct bch_dev *ca =
-		likely(!pick.do_ec_reconstruct)
+		likely(pick.mode == BCH_READ_MODE_direct)
 		? bch2_dev_get_ioref(c, pick.ptr.dev, READ,
 				     BCH_DEV_READ_REF_io_read)
 		: NULL;
@@ -1725,7 +1737,7 @@ int __bch2_read_extent(struct btree_trans *trans,
 		return PTR_ERR(rbio);
 	}
 
-	if (likely(!rbio->pick.do_ec_reconstruct)) {
+	if (likely(rbio->pick.mode == BCH_READ_MODE_direct)) {
 		if (unlikely(!rbio->ca)) {
 			ret = bch2_rbio_error(rbio,
 				bch_err_throw(c, data_read_retry_device_offline));
@@ -1774,7 +1786,7 @@ int __bch2_read_extent(struct btree_trans *trans,
 		}
 		if (ret) {
 			/* Whatever went wrong, a read-around falls back to a direct read: */
-			if (rbio->pick.ec_read_around)
+			if (bch2_ec_read_optional(failed, &rbio->pick, rbio->flags))
 				ret = bch_err_throw(c, data_read_retry_ec_read_around);
 			bch2_rbio_error(rbio, ret);
 			goto out;

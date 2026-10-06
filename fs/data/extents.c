@@ -83,9 +83,6 @@ __cold void bch2_io_failures_to_text(struct printbuf *out,
 			prt_newline(out);
 		}
 
-	if (failed->ec_around_errcode)
-		prt_printf(out, "ec read-around: %s\n", bch2_err_str(failed->ec_around_errcode));
-
 	if (failed->ec_msg.pos) {
 		prt_printf(out, "ec reconstruct:\n");
 		guard(printbuf_indent)(out);
@@ -139,19 +136,25 @@ void bch2_mark_io_failure(struct bch_io_failures *failed,
 	BUG_ON(!err);
 	BUG_ON(bch2_err_matches(err, BCH_ERR_transaction_restart));
 
-	if (p->ec_read_around) {
-		failed->ec_around_errcode = err;
-		return;
-	}
-
 	struct bch_dev_io_failures *f = bch2_dev_io_failures_mut(failed, p->ptr.dev);
 
-	if (p->do_ec_reconstruct)
+	f->tried |= BIT(p->mode);
+
+	if (p->mode == BCH_READ_MODE_ec)
 		f->ec_errcode = err;
 	else if (err == -BCH_ERR_data_read_retry_csum_err)
 		f->csum_nr++;
 	else
 		f->errcode = err;
+}
+
+/* A direct read of @dev failed, outside the data read path (btree nodes): */
+void bch2_mark_dev_io_failure(struct bch_io_failures *failed, unsigned dev, int err)
+{
+	struct bch_dev_io_failures *f = bch2_dev_io_failures_mut(failed, dev);
+
+	f->tried |= BIT(BCH_READ_MODE_direct);
+	f->errcode = err;
 }
 
 static inline u64 dev_latency(struct bch_dev *ca)
@@ -176,10 +179,10 @@ static inline bool ptr_better(struct bch_fs *c,
 			      enum bch_read_flags flags)
 {
 	if (static_branch_unlikely(&bch2_force_reconstruct_read))
-		return p1.do_ec_reconstruct > p2.do_ec_reconstruct;
+		return p1.mode > p2.mode;
 
-	if (unlikely(p1.do_ec_reconstruct || p2.do_ec_reconstruct))
-		return p1.do_ec_reconstruct < p2.do_ec_reconstruct;
+	if (unlikely(p1.mode || p2.mode))
+		return p1.mode < p2.mode;
 
 	int delta = (int) p2.crc_retry_nr - (int) p1.crc_retry_nr;
 	if (unlikely(delta))
@@ -271,9 +274,11 @@ int bch2_bkey_pick_read_device(struct bch_fs *c, struct bkey_s_c k,
 
 		struct bch_dev_io_failures *f =
 			unlikely(failed) ? bch2_dev_io_failures(failed, p.ptr.dev) : NULL;
+
+		p.has_ec &= !bch2_read_mode_tried(f, BCH_READ_MODE_ec);
+
 		if (unlikely(f)) {
 			p.crc_retry_nr	   = f->csum_nr;
-			p.has_ec	  &= !f->ec_errcode;
 
 			if (ca) {
 				have_io_errors	|= f->errcode != 0;
@@ -281,11 +286,13 @@ int bch2_bkey_pick_read_device(struct bch_fs *c, struct bkey_s_c k,
 			}
 			have_csum_errors	|= f->csum_nr != 0;
 
-			if (p.has_ec && (f->errcode || f->csum_nr))
-				p.do_ec_reconstruct = true;
-			else if (f->errcode ||
-				 f->csum_nr > c->opts.checksum_err_retry_nr)
-				continue;
+			if (bch2_read_mode_tried(f, BCH_READ_MODE_direct)) {
+				if (p.has_ec)
+					p.mode = BCH_READ_MODE_ec;
+				else if (f->errcode ||
+					 f->csum_nr > c->opts.checksum_err_retry_nr)
+					continue;
+			}
 		}
 
 		have_missing_devs |= ca && !bch2_dev_is_online(ca);
@@ -293,11 +300,11 @@ int bch2_bkey_pick_read_device(struct bch_fs *c, struct bkey_s_c k,
 		if (!ca || !bch2_dev_is_online(ca)) {
 			if (!p.has_ec)
 				continue;
-			p.do_ec_reconstruct = true;
+			p.mode = BCH_READ_MODE_ec;
 		}
 
 		if (static_branch_unlikely(&bch2_force_reconstruct_read) && p.has_ec)
-			p.do_ec_reconstruct = true;
+			p.mode = BCH_READ_MODE_ec;
 
 		u64 p_latency = dev_latency(ca);
 		/*

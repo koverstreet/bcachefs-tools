@@ -177,8 +177,8 @@ static int __btree_err(enum bch_fsck_flags flags,
 		btree_err_msg(err_msg, c, ca, b, i, k, fmt, args);
 		va_end(args);
 
-		bch2_dev_io_failures_mut(failed, ca->dev_idx)->errcode =
-			bch_err_throw(c, btree_node_validate_err);
+		bch2_mark_dev_io_failure(failed, ca->dev_idx,
+					 bch_err_throw(c, btree_node_validate_err));
 
 		struct extent_ptr_decoded pick;
 		bool have_retry = bch2_bkey_pick_read_device(c,

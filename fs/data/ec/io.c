@@ -818,7 +818,7 @@ static u32 ec_read_around_blocks(struct bch_fs *c, const struct bch_stripe *v,
 			if (!ca ||
 			    !bch2_dev_is_online(ca) ||
 			    dev_ptr_stale_rcu(ca, &v->ptrs[i]) ||
-			    (failed && bch2_dev_io_failures(failed, ca->dev_idx)))
+			    (failed && bch2_dev_io_failed(bch2_dev_io_failures(failed, ca->dev_idx))))
 				continue;
 
 			lat[i] = ec_dev_read_latency(ca);
@@ -940,7 +940,9 @@ int bch2_ec_read_around_pick(struct btree_trans *trans,
 	    pick->ptr.dev == preferred_dev)
 		penalty *= 16;
 
-	if (failed && failed->ec_around_errcode)
+	if (failed &&
+	    bch2_read_mode_tried(bch2_dev_io_failures(failed, pick->ptr.dev),
+				 BCH_READ_MODE_ec))
 		return 0;
 
 	/*
@@ -998,8 +1000,7 @@ int bch2_ec_read_around_pick(struct btree_trans *trans,
 			return 0;
 	}
 
-	pick->do_ec_reconstruct = true;
-	pick->ec_read_around	= true;
+	pick->mode = BCH_READ_MODE_ec;
 	return 0;
 }
 
@@ -1079,7 +1080,7 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 	bool skipped_failed_block = false;
 	u32 read_mask = EC_BLOCKS_ALL;
 	enum ec_stripe_buf_flags buf_flags = 0;
-	if (rbio->pick.ec_read_around) {
+	if (bch2_ec_read_optional(failed, &rbio->pick, rbio->flags)) {
 		u64 l_r;
 		read_mask = ec_read_around_blocks(c, &buf->key.v, block, failed, &l_r);
 		/* Raced with a device going offline: not worth a message */
@@ -1096,7 +1097,8 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 		buf_flags |= EC_STRIPE_BUF_optional;
 		if (rbio->pick.crc.csum_type)
 			buf_flags |= EC_STRIPE_BUF_unaligned;
-	} else if (bch2_dev_io_failures(failed, rbio->pick.ptr.dev)) {
+	} else if (bch2_read_mode_tried(bch2_dev_io_failures(failed, rbio->pick.ptr.dev),
+					BCH_READ_MODE_direct)) {
 		/*
 		 * The block just failed to read, so rebuild it from the
 		 * others: on a drive retrying a bad sector, reading it again
