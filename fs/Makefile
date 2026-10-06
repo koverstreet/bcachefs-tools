@@ -503,6 +503,25 @@ ifeq ($(rustc-has-cjump-tables),y)
 KBUILD_RUSTFLAGS := $(patsubst -Zno-jump-tables,-Cjump-tables=n,$(KBUILD_RUSTFLAGS))
 endif
 
+# Module BTF and Rust debuginfo: the kernel itself only allows Rust together
+# with BTF when pahole can skip Rust compilation units and the kernel isn't
+# LTO-built (init/Kconfig: RUST depends on !DEBUG_INFO_BTF ||
+# (PAHOLE_HAS_LANG_EXCLUDE && !LTO)). A kernel outside that - e.g. a clang LTO
+# distro kernel - has no Rust of its own, so we bring the vendored stack, and
+# its DWARF then breaks the module's BTF generation:
+#
+#   BTF [M] src/fs/bcachefs/bcachefs.ko
+#   FAILED: load BTF from src/fs/bcachefs/bcachefs.ko.BTF.1: No such file or directory
+#
+# (#1086). Build our Rust without debuginfo there, so pahole sees only C.
+ifeq ($(bcachefs-vendor-rust),y)
+ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+ifneq ($(CONFIG_PAHOLE_HAS_LANG_EXCLUDE)$(CONFIG_LTO),y)
+KBUILD_RUSTFLAGS := $(filter-out $(DEBUG_RUSTFLAGS),$(KBUILD_RUSTFLAGS)) -Cdebuginfo=0
+endif
+endif
+endif
+
 # mod.rs keys on cfg(kernel) to source the kernel-compat types from the kernel
 # crate (vs bcachefs-shim in userspace); the kernel build doesn't set it on its
 # own, so do it here for every Rust object in this dir.
