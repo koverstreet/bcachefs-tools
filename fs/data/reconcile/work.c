@@ -1789,9 +1789,15 @@ static int do_reconcile_phase_iter(struct reconcile_pass *p, u32 kick,
 		if (bch2_err_matches(ret, BCH_ERR_data_update_fail_need_copygc)) {
 			bch2_trans_unlock_long(trans);
 			bch2_copygc_wakeup(c);
-			wait_event(c->copygc.running_wq,
-				   c->copygc.run_count != *p->copygc_run_count ||
-				   kthread_should_stop());
+			/*
+			 * Freezable: copygc freezes in place, so a plain
+			 * wait_event() here would stall the freezer. Idle: a
+			 * copygc run can take longer than the hung task timeout:
+			 */
+			wait_event_state(c->copygc.running_wq,
+					 c->copygc.run_count != *p->copygc_run_count ||
+					 kthread_should_stop(),
+					 TASK_IDLE|TASK_FREEZABLE);
 			*p->copygc_run_count = c->copygc.run_count;
 			ret = 0;
 			continue;
