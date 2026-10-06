@@ -191,17 +191,17 @@ void bch2_ec_stripe_buf_move(struct ec_stripe_buf *dst, struct ec_stripe_buf *sr
 }
 
 /* Over ec_stripe_buf_limit, waits on @cl if given, and otherwise goes over it */
-int __bch2_ec_stripe_buf_init(struct bch_fs *c,
-			      struct ec_stripe_buf *buf,
-			      unsigned offset, unsigned size,
-			      struct closure *cl, enum ec_stripe_buf_flags flags)
+int bch2_ec_stripe_buf_init(struct bch_fs *c,
+			    struct ec_stripe_buf *buf,
+			    unsigned offset, unsigned size,
+			    struct closure *cl)
 {
 	unsigned csum_granularity = 1U << buf->key.v.csum_granularity_bits;
 	unsigned end = offset + size;
 
 	BUG_ON(end > le16_to_cpu(buf->key.v.sectors));
 
-	if (!(flags & EC_STRIPE_BUF_unaligned)) {
+	if (!buf->unaligned) {
 		offset	= round_down(offset, csum_granularity);
 		end	= min_t(unsigned, le16_to_cpu(buf->key.v.sectors),
 				round_up(end, csum_granularity));
@@ -224,7 +224,6 @@ int __bch2_ec_stripe_buf_init(struct bch_fs *c,
 	buf->c		= c;
 	buf->offset	= offset;
 	buf->size	= end - offset;
-	buf->unaligned	= flags & EC_STRIPE_BUF_unaligned;
 
 	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++) {
 		buf->data[i] = kvmalloc(buf->size << 9, GFP_KERNEL);
@@ -1055,7 +1054,6 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 	unsigned block = rbio->pick.ec.block;
 	bool skipped_failed_block = false;
 	u32 read_mask = EC_BLOCKS_ALL;
-	enum ec_stripe_buf_flags buf_flags = 0;
 	if (rbio->pick.mode == BCH_READ_MODE_ec_read_around) {
 		u64 l_r;
 		ec_read_around_slow(c, &buf->key.v, BIT(block), failed, &read_mask, &l_r);
@@ -1068,8 +1066,7 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 		 * result, as it would a direct read, so read just the extent's
 		 * range of each block, without rounding to checksum granules.
 		 */
-		if (rbio->pick.crc.csum_type)
-			buf_flags |= EC_STRIPE_BUF_unaligned;
+		buf->unaligned = rbio->pick.crc.csum_type != 0;
 	} else if (bch2_read_mode_tried(bch2_dev_io_failures(failed, rbio->pick.ptr.dev),
 					BCH_READ_MODE_direct)) {
 		/*
@@ -1085,8 +1082,7 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 	/* Don't hold btree locks for stripe buffer allocations, or IO */
 	bch2_trans_unlock(trans);
 
-	ret = __bch2_ec_stripe_buf_init(c, buf, offset, bio_sectors(&rbio->bio), NULL,
-					buf_flags);
+	ret = bch2_ec_stripe_buf_init(c, buf, offset, bio_sectors(&rbio->bio), NULL);
 	if (ret) {
 		prt_printf(msg, "error allocating stripe data buffers\n");
 		bch2_bkey_val_to_text(msg, c, bkey_i_to_s_c(&buf->key.k_i));

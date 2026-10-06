@@ -26,7 +26,7 @@ struct ec_stripe_buf {
 	/* might not be buffering the entire stripe: */
 	unsigned		offset;
 	unsigned		size;
-	/* Not aligned to the checksum granularity, so the checksums aren't checked */
+	/* Set before init: exactly the range given, not checked by the stripe's checksums */
 	bool			unaligned;
 	s16			err[2][BCH_BKEY_PTRS_MAX];
 	void			*data[BCH_BKEY_PTRS_MAX];
@@ -84,20 +84,8 @@ static inline unsigned long bch2_ec_stripe_buf_limit(struct bch_fs *c)
 	return (totalram_pages() << PAGE_SHIFT) / 100 * c->opts.ec_stripe_buf_limit;
 }
 
-enum ec_stripe_buf_flags {
-	/* Exactly the range given, without rounding to the checksum granularity */
-	EC_STRIPE_BUF_unaligned	= BIT(0),
-};
-
-int __bch2_ec_stripe_buf_init(struct bch_fs *, struct ec_stripe_buf *, unsigned, unsigned,
-			      struct closure *, enum ec_stripe_buf_flags);
-
-static inline int bch2_ec_stripe_buf_init(struct bch_fs *c, struct ec_stripe_buf *buf,
-					  unsigned offset, unsigned size,
-					  struct closure *cl)
-{
-	return __bch2_ec_stripe_buf_init(c, buf, offset, size, cl, 0);
-}
+int bch2_ec_stripe_buf_init(struct bch_fs *, struct ec_stripe_buf *, unsigned, unsigned,
+			    struct closure *);
 
 DEFINE_FREE(ec_stripe_buf_free, struct ec_stripe_buf *, if (_T) { bch2_ec_stripe_buf_exit(_T); kfree(_T); });
 
