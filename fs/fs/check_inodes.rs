@@ -9,7 +9,8 @@
 //!  - hash info (seed and type) agrees with the version at the snapshot root;
 //!  - has_case_insensitive agrees with the casefolded directories above it;
 //!  - the backpointer (bi_dir, bi_dir_offset) names a dirent that points back;
-//!  - an unlinked directory is a subvolume root whose subvolume is unlinked;
+//!  - an unlinked directory is empty (rmdir'd, not yet reaped), or the root of
+//!    an unlinked subvolume;
 //!  - a directory has no i_size;
 //!  - has_child_snapshot agrees with the versions in descendant snapshots;
 //!  - an unlinked inode is on the deleted list (offline), or open (online);
@@ -27,18 +28,6 @@
 //! or not the fix was taken - and a missing subvolume no longer has its
 //! uninitialized value compared against the inode when inode_bi_subvol_missing
 //! is declined.
-//!
-//! XXX: an unlinked directory that isn't a subvolume root, and is empty, has
-//! its unlinked flag cleared with no error reported - and check_unreachable_
-//! inodes() then reattaches it in lost+found. But plain rmdir sets unlinked on
-//! a directory (bch2_inode_nlink_dec(): bi_nlink is the subdirectory count, 0
-//! for an empty one), and check_inodes runs before delete_dead_inodes: an
-//! rmdir'd directory that crashed before it was reaped, or online one that's
-//! still open, is resurrected. The rule this check enforces ("unlinked on a
-//! directory requires an unlinked subvolume", 6b943df68584) doesn't hold for
-//! that case; the empty-directory path dates to 2024. Unverified - needs a test
-//! (open a directory, rmdir, shut down, fsck) - and a decision on what the
-//! rule should be.
 
 use crate::btree::bkey::{spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
@@ -246,11 +235,16 @@ fn check_inode_subvol(
     Ok(SubvolCheck::Repaired)
 }
 
-/// BCH_INODE_unlinked on a directory is allowed only on a subvolume root whose
-/// subvolume is unlinked - the root is then legitimately non-empty, since the
-/// snapshot sweep is what deletes the contents. Anything else: clear the flag,
-/// so check_unreachable_inodes() reattaches it. Returns whether @u was
-/// changed. (XXX: see the file comment.)
+/// BCH_INODE_unlinked on a directory is allowed on the root of an unlinked
+/// subvolume - legitimately non-empty, since the snapshot sweep is what
+/// deletes the contents - and on an empty directory: rmdir sets it
+/// (bch2_inode_nlink_dec(); bi_nlink is the subdirectory count), and one
+/// that's still open, or not yet reaped at a crash, is waiting for deletion
+/// like any unlinked file - and is handled as one, on the deleted list.
+///
+/// A non-empty one is damage, rmdir only taking empty directories: clear the
+/// flag, so check_unreachable_inodes() reattaches it. Returns whether @u was
+/// changed.
 fn check_unlinked_dir(
     trans: &BtreeTrans<'_>,
     pos:   c::bpos,
@@ -261,14 +255,14 @@ fn check_unlinked_dir(
     }
 
     match dirent::empty_dir_snapshot(trans, pos.offset, 0, pos.snapshot) {
-        Ok(()) => {}
-        Err(e) if e.matches(bch_errcode::BCH_ERR_ENOTEMPTY_dir_not_empty) => {
-            if !inode_fsck_err!(trans, pos, id::inode_dir_unlinked_but_not_empty,
-                                "dir unlinked but not empty\n{u}")? {
-                return Ok(false);
-            }
-        }
+        Ok(()) => return Ok(false),
+        Err(e) if e.matches(bch_errcode::BCH_ERR_ENOTEMPTY_dir_not_empty) => {}
         Err(e) => return Err(e),
+    }
+
+    if !inode_fsck_err!(trans, pos, id::inode_dir_unlinked_but_not_empty,
+                        "dir unlinked but not empty\n{u}")? {
+        return Ok(false);
     }
 
     u.set_flag(BCH_INODE_unlinked, false);
