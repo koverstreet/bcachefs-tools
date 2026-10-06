@@ -745,20 +745,12 @@ static void bch2_rbio_retry(struct work_struct *work)
 		.inum	= rbio->read_pos.inode,
 	};
 	struct bpos read_pos = rbio->read_pos;
-	int orig_ret = rbio->ret;
-	/* Not an error: the read-around decision, punted here to do the reconstruct */
-	bool read_around = !orig_ret && (flags & BCH_READ_ec_read_around);
 	CLASS(bch_io_failures, failed)();
 
 	flags &= ~BCH_READ_hard_require_read_device;
 
-	if (read_around) {
-		event_inc_trace(c, data_read_ec_read_around, buf,
-				bch2_read_bio_to_text_atomic(&buf, rbio));
-	} else {
-		event_inc_trace(c, data_read_retry, buf,
-				bch2_read_bio_to_text_atomic(&buf, rbio));
-	}
+	event_inc_trace(c, data_read_retry, buf,
+			bch2_read_bio_to_text_atomic(&buf, rbio));
 
 	{
 		CLASS(btree_trans, trans)(c);
@@ -785,7 +777,8 @@ static void bch2_rbio_retry(struct work_struct *work)
 		rbio = bch2_rbio_free(rbio);
 
 		flags |= BCH_READ_in_retry;
-		if (!read_around)
+		/* A read-around is punted here without an error, and may promote */
+		if (!(flags & BCH_READ_ec_read_around))
 			flags &= ~BCH_READ_may_promote;
 		flags &= ~BCH_READ_last_fragment;
 		flags |= BCH_READ_must_clone;
@@ -846,12 +839,8 @@ static void bch2_rbio_retry(struct work_struct *work)
 		 * (a data update read may be an indirect extent):
 		 */
 		if (have_io_error(&failed) || ret) {
-			/* After a read-around, orig_ret is 0: the failures say what was recovered from */
-			bool csum = data_read_err_is_csum(orig_ret) ||
-				(read_around &&
-				 (bch2_io_failures_to_err_mask(&failed) & BCH_READ_ERR_checksum));
 			enum bch_sb_error_id e = !ret
-				? (csum
+				? (bch2_io_failures_to_err_mask(&failed) & BCH_READ_ERR_checksum
 				   ? BCH_FSCK_ERR_data_read_csum_err_recovered
 				   : BCH_FSCK_ERR_data_read_io_err_recovered)
 				: (data_read_err_is_csum(ret)
@@ -1614,13 +1603,16 @@ int __bch2_read_extent(struct btree_trans *trans,
 	if (pick.has_ec && pick.mode == BCH_READ_MODE_direct) {
 		try(bch2_ec_read_around_pick(trans, &pick, failed, flags, dev));
 
-		if (pick.mode == BCH_READ_MODE_ec_read_around) {
+		if (pick.mode == BCH_READ_MODE_ec_read_around &&
+		    !(flags & BCH_READ_in_retry)) {
+			event_inc_trace(c, data_read_ec_read_around, buf, ({
+				bch2_bkey_val_to_text(&buf, c, k);
+				prt_newline(&buf);
+				bch2_read_bio_to_text_atomic(&buf, orig);
+			}));
 			flags |= BCH_READ_ec_read_around;
-
-			if (!(flags & BCH_READ_in_retry)) {
-				punt_promote = flags & BCH_READ_may_promote;
-				flags &= ~BCH_READ_may_promote;
-			}
+			punt_promote = flags & BCH_READ_may_promote;
+			flags &= ~BCH_READ_may_promote;
 		}
 	}
 
