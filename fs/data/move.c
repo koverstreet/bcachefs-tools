@@ -104,13 +104,17 @@ static void move_write(struct data_update *u)
 	struct bch_read_bio *rbio = &u->rbio;
 
 	if (ctxt->stats) {
+		/*
+		 * Not rbio->bvec_iter: that's only set when the read went
+		 * straight into this rbio, not through a bounce or a clone
+		 */
 		if (rbio->ret) {
-			atomic64_add(u->rbio.bvec_iter.bi_size >> 9,
+			atomic64_add(u->k.k->k.size,
 				     &ctxt->stats->sectors_error_uncorrected);
 			set_bit(rbio->pick.ptr.dev,
 				ctxt->stats->devs_error_uncorrected.d);
 		} else if (rbio->saw_error)
-			atomic64_add(u->rbio.bvec_iter.bi_size >> 9,
+			atomic64_add(u->k.k->k.size,
 				     &ctxt->stats->sectors_error_corrected);
 	}
 
