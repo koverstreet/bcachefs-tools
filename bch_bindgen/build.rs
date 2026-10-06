@@ -385,13 +385,7 @@ fn watch_dir(dir: &str) {
     }
 }
 
-fn clang_target_for_rust_target(target: &str) -> &str {
-    match target {
-        "riscv64gc-unknown-linux-gnu" => "riscv64-unknown-linux-gnu",
-        "riscv32gc-unknown-linux-gnu" => "riscv32-unknown-linux-gnu",
-        _ => target,
-    }
-}
+include!("../clang_target.rs");
 
 /// One `#define BCH_IOCTL_* _IO*(0xbc, nr[, type])` from bcachefs_ioctl.h.
 ///
@@ -476,6 +470,7 @@ fn main() {
     use std::path::PathBuf;
 
     println!("cargo:rerun-if-changed=src/libbcachefs_wrapper.h");
+    println!("cargo:rerun-if-changed=../clang_target.rs");
     // Watch all C/H files that the wrapper might include, so bindgen
     // reruns when any header changes — not just the handful we used
     // to list explicitly.

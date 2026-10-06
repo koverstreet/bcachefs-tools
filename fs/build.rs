@@ -10,6 +10,8 @@
 
 include!("codegen.rs");
 
+include!("../clang_target.rs");
+
 fn watch_dir(dir: &str) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
@@ -40,6 +42,7 @@ fn main() {
     // The shared codegen logic is include!d, not a tracked source file — tell
     // cargo to rerun us when it changes.
     println!("cargo:rerun-if-changed=codegen.rs");
+    println!("cargo:rerun-if-changed=../clang_target.rs");
     // Rerun when any C/H file the wrapper might include changes.
     for dir in ["..", "../include"] {
         watch_dir(dir);
@@ -48,9 +51,10 @@ fn main() {
     let out = std::env::var("OUT_DIR").expect("OUT_DIR");
     let src = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"); // = fs/
     let target = std::env::var("TARGET").expect("TARGET");
+    let clang_target = clang_target_for_rust_target(&target);
     let ptr_width = std::env::var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap_or_default();
 
-    let clang_args = userspace_clang_args(&src, &target);
+    let clang_args = userspace_clang_args(&src, clang_target);
     let blocklist = default_blocklist(&src);
 
     run_bindgen(&out, &clang_args, &blocklist, &ptr_width);
