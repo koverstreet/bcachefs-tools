@@ -2060,8 +2060,8 @@ static void ec_old_stripe_read(struct bch_fs *c, struct ec_stripe_new *s)
 
 	/*
 	 * A carried block on a device much slower than the rest of the stripe -
-	 * typically a failing drive being evacuated - is rebuilt from the other
-	 * blocks instead, so read all of those now:
+	 * typically a failing drive being evacuated - is rebuilt from the
+	 * others instead:
 	 */
 	u32 required = ec_old_stripe_required(s);
 	s->old_stripe_skipped = bch2_ec_read_around_skip(c, &s->old_stripe.key.v, required);
