@@ -116,6 +116,7 @@ bool bch2_data_update_in_flight(struct bch_fs *, struct bbpos *,
 int bch2_data_update_index_update(struct bch_write_op *);
 
 void bch2_data_update_read_done(struct data_update *);
+bool bch2_data_update_read_err_benign(int);
 
 int bch2_can_do_data_update(struct btree_trans *, struct bch_inode_opts *,
 			    struct data_update_opts *, struct bkey_s_c,

@@ -669,6 +669,17 @@ void bch2_data_update_ec_alloc_failed(struct data_update *u)
 		u->op.error = bch_err_throw(c, ec_alloc_failed_pending_race);
 }
 
+/*
+ * The extent changed under the read: a retry found the key gone, or the
+ * bucket's gen moved while the read was in flight. The update is abandoned,
+ * and the data lives on wherever it went.
+ */
+bool bch2_data_update_read_err_benign(int ret)
+{
+	return bch2_err_matches(ret, BCH_ERR_data_read_key_overwritten) ||
+	       bch2_err_matches(ret, BCH_ERR_data_read_ptr_stale_race);
+}
+
 void bch2_data_update_read_done(struct data_update *u)
 {
 	struct bch_fs *c = u->op.c;
@@ -683,7 +694,8 @@ void bch2_data_update_read_done(struct data_update *u)
 	 * read.c has only read_pos, which for an indirect extent is a reflink
 	 * position - u->btree_id is what makes the narrowing exact.
 	 */
-	if (unlikely(rbio->ret)) {
+	if (unlikely(rbio->ret) &&
+	    !bch2_data_update_read_err_benign(rbio->ret)) {
 		if (u->opts.type == BCH_DATA_UPDATE_scrub_no_repair) {
 			/* the journal scrub can't commit: see bch2_scrub_journal_queue() */
 			bch2_scrub_journal_queue(c, u->btree_id, 0, u->k.k,
