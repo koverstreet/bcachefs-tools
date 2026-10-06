@@ -196,7 +196,8 @@ fn check_dirent_parent_subvol<'a, 't>(
     if new_parent.is_none() && fs.btree_lost_data(c::btree_id::subvolumes) {
         // No subvolume sees the dirent's snapshot - but we lost subvolumes,
         // so reconstruct the one it names:
-        check::reconstruct_subvol(trans, d_snapshot, parent, 0)?;
+        let root = check::reconstruct_subvol_root(trans, d_snapshot, parent, None)?;
+        let t = check::reconstruct_subvol(t, d_snapshot, parent, root)?;
         return t.done(parent);
     }
 

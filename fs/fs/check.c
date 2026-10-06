@@ -2,107 +2,16 @@
 #include "bcachefs.h"
 #include "bcachefs_ioctl.h"
 
-#include "btree/cache.h"
-#include "btree/update.h"
-
 #include "fs/check.h"
-#include "fs/inode.h"
 
 #include "init/error.h"
 #include "init/passes.h"
 #include "init/fs.h"
 
-#include "snapshots/snapshot.h"
-
 #include "vfs/fs.h"
 
 #include "util/darray.h"
 #include "util/thread_with_file.h"
-
-int bch2_reconstruct_subvol(struct btree_trans *trans, u32 snapshotid, u32 subvolid, u64 inum)
-{
-	struct bch_fs *c = trans->c;
-
-	if (!bch2_snapshot_is_leaf(c, snapshotid)) {
-		bch_err(c, "need to reconstruct subvol, but have interior node snapshot");
-		return bch_err_throw(c, fsck_repair_unimplemented);
-	}
-
-	/*
-	 * Without an inum from the caller, find the root inode rather than
-	 * minting one: the inode carrying bi_subvol == subvolid is the root,
-	 * and when it's the subvolume key that went missing that inode is
-	 * still there. Creating a second one would leave two claimants for the
-	 * same subvolume and the real contents orphaned behind the new empty
-	 * root.
-	 *
-	 * It can't be deferred to a later pass either - bch2_subvolume_validate()
-	 * rejects a subvolume key with inode == 0 (subvol_inode_bad), so the
-	 * key can't be written at all until we know it.
-	 */
-	if (!inum) {
-		struct bkey_s_c k;
-		int ret = 0;
-
-		for_each_btree_key_norestart(trans, iter, BTREE_ID_inodes, POS_MIN,
-					     BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k, ret) {
-			if (!bkey_is_inode(k.k))
-				continue;
-
-			struct bch_inode_unpacked candidate;
-			bch2_inode_unpack(c, k, &candidate);
-
-			if (candidate.bi_subvol == subvolid) {
-				inum = candidate.bi_inum;
-				break;
-			}
-		}
-		if (ret)
-			return ret;
-
-		if (!inum) {
-			bch_err(c, "no root inode found for subvol %u, can't reconstruct",
-				subvolid);
-			return bch_err_throw(c, fsck_repair_unimplemented);
-		}
-	}
-
-	bch_info(c, "reconstructing subvol %u with root inode %llu", subvolid, inum);
-
-	struct bkey_i_subvolume *new_subvol = errptr_try(bch2_trans_kmalloc(trans, sizeof(*new_subvol)));
-
-	bkey_subvolume_init(&new_subvol->k_i);
-	new_subvol->k.p.offset	= subvolid;
-	new_subvol->v.snapshot	= cpu_to_le32(snapshotid);
-	new_subvol->v.inode	= cpu_to_le64(inum);
-	bch2_subvolume_state_set(&new_subvol->v, SUBVOLUME_STATE_live);
-	try(bch2_btree_insert_trans(trans, BTREE_ID_subvolumes, &new_subvol->k_i, 0));
-
-	struct bkey_i_snapshot *s = bch2_bkey_get_mut_typed(trans,
-			BTREE_ID_snapshots, POS(0, snapshotid),
-			0, snapshot);
-	int ret = PTR_ERR_OR_ZERO(s);
-	bch_err_msg(c, ret, "getting snapshot %u", snapshotid);
-	if (ret)
-		return ret;
-
-	u32 snapshot_tree = le32_to_cpu(s->v.tree);
-
-	s->v.subvol = cpu_to_le32(subvolid);
-	bch2_snapshot_state_set(&s->v, SNAPSHOT_STATE_live);
-
-	struct bkey_i_snapshot_tree *st = bch2_bkey_get_mut_typed(trans,
-			BTREE_ID_snapshot_trees, POS(0, snapshot_tree),
-			0, snapshot_tree);
-	ret = PTR_ERR_OR_ZERO(st);
-	bch_err_msg(c, ret, "getting snapshot tree %u", snapshot_tree);
-	if (ret)
-		return ret;
-
-	if (!st->v.master_subvol)
-		st->v.master_subvol = cpu_to_le32(subvolid);
-	return 0;
-}
 
 /* translate to return code of fsck commad - man(8) fsck */
 int bch2_fs_fsck_errcode(struct bch_fs *c, struct printbuf *msg)

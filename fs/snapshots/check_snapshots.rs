@@ -1092,7 +1092,7 @@ fn check_skiplists<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't
 }
 
 /// The subvolume backref, against the subvolume it names.
-fn check_to_subvol<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>) -> Result<(), BchError> {
+fn check_to_subvol<'a, 't>(t: TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>) -> TransRet<'a, 't> {
     let trans = t.trans();
     let fs = trans.fs();
     let id = n.id();
@@ -1123,11 +1123,11 @@ fn check_to_subvol<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't
         // subvolume is a tombstoned deletion in flight, and rebuilding it
         // would revert it.
         if subvol.is_none() && !snap_deleting {
-            match check::reconstruct_subvol(trans, id, subvol_id, 0) {
-                Ok(()) => return Ok(()),
+            match check::reconstruct_subvol_root(trans, id, subvol_id, None) {
+                Ok(root) => return check::reconstruct_subvol(t, id, subvol_id, root),
                 // couldn't find a root inode for it - fall through and report
                 Err(e) if e.matches(bch_errcode::BCH_ERR_fsck_repair_unimplemented) => {}
-                Err(e) => return Err(e),
+                Err(e) => return Err(e.into()),
             }
         }
 
@@ -1141,13 +1141,13 @@ fn check_to_subvol<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't
                 fsck_err_report!(fs, id::snapshot_subvol_backref_wrong,
                                  "snapshot's subvolume doesn't point back at it:\n{}\n{}",
                                  n.to_text(fs), subvol_k.to_text(fs));
-                return Ok(());
+                return Ok(t);
             }
             None => {
                 fsck_err_report!(fs, id::snapshot_subvol_backref_wrong,
                                  "snapshot points to missing subvolume {subvol_id}:\n{}",
                                  n.to_text(fs));
-                return Ok(());
+                return Ok(t);
             }
         };
 
@@ -1159,12 +1159,12 @@ fn check_to_subvol<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't
         // exactly, while the reverse would have to guess between live and
         // unlinked.
         let subvol_deleted = subvol.state() == Some(c::bch_subvolume_state::SUBVOLUME_STATE_deleted);
-        if fsck_err_on!(t, snap_deleting != subvol_deleted, id::snapshot_subvol_state_mismatch,
+        if fsck_err_on!(&t, snap_deleting != subvol_deleted, id::snapshot_subvol_state_mismatch,
                         "snapshot {} but its subvolume is {}:\n{}\n{}",
                         if snap_deleting { "will_delete" } else { "live" },
                         if subvol_deleted { "deleted" } else { "not deleted" },
                         n.to_text(fs), subvol_k.to_text(fs))? {
-            n.v_mut(t)?.set_state(if subvol_deleted {
+            n.v_mut(&t)?.set_state(if subvol_deleted {
                 SNAPSHOT_STATE_will_delete
             } else {
                 SNAPSHOT_STATE_live
@@ -1177,24 +1177,24 @@ fn check_to_subvol<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't
         // fail-stop.) No claimant is an orphan leaf, whose repair (creating a
         // subvolume) is unimplemented, as above.
         if let Some(subvol) = subvol_claiming(trans, id)? {
-            if fsck_err!(t, id::snapshot_subvol_backref_wrong,
+            if fsck_err!(&t, id::snapshot_subvol_backref_wrong,
                          "snapshot leaf missing subvol backref, subvolume {subvol} points at it - restoring:\n{}",
                          n.to_text(fs))? {
-                let v = n.v_mut(t)?;
+                let v = n.v_mut(&t)?;
                 v.subvol = subvol.to_le();
                 v.set_subvol_obsolete(true);
             }
         }
     }
 
-    if fsck_err_on!(t, n.v().subvol() != 0 && !should_have_subvol, id::snapshot_should_not_have_subvol,
+    if fsck_err_on!(&t, n.v().subvol() != 0 && !should_have_subvol, id::snapshot_should_not_have_subvol,
                     "snapshot should not point to subvol:\n{}", n.to_text(fs))? {
         if n.v().children()[0] != 0 {
-            return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented));
+            return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented).into());
         }
 
         // XXX: DANGEROUS
-        n.v_mut(t)?.subvol = 0;
+        n.v_mut(&t)?.subvol = 0;
     }
 
     // Live nodes only: the _OBSOLETE flags are old-format compat bits, and
@@ -1214,13 +1214,13 @@ fn check_to_subvol<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't
             write!(msg, "\n{}", subvol_k.to_text(fs));
         }
 
-        if fsck_err!(t, id::snapshot_subvol_flag_wrong, "{msg}")? {
+        if fsck_err!(&t, id::snapshot_subvol_flag_wrong, "{msg}")? {
             let has_subvol = n.v().subvol() != 0;
-            n.v_mut(t)?.set_subvol_obsolete(has_subvol);
+            n.v_mut(&t)?.set_subvol_obsolete(has_subvol);
         }
     }
 
-    Ok(())
+    Ok(t)
 }
 
 fn check_snapshot<'a, 't>(
@@ -1259,8 +1259,7 @@ fn check_snapshot<'a, 't>(
 
     check_depth(&t, &mut n)?;
     check_skiplists(&t, &mut n)?;
-    check_to_subvol(&t, &mut n)?;
-    Ok(t)
+    check_to_subvol(t, &mut n)
 }
 
 fn check_snapshots_trans(trans: &BtreeTrans<'_>) -> Result<(), BchError> {

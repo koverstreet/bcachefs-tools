@@ -158,8 +158,10 @@ impl fmt::Display for MaybeSnapshot<'_> {
 enum SubvolCheck {
     Ok,
     Repaired,
-    /// The subvolume key was recreated: the C skips the rest of the checks.
-    Reconstructed,
+    /// The subvolume key needs recreating, with this root inode - the caller
+    /// has the attempt to do it with - and the C skips the rest of the
+    /// checks.
+    Reconstruct(u64),
 }
 
 /// bi_subvol: the subvolume has to exist and point back at this inode, at a
@@ -200,8 +202,8 @@ fn check_inode_subvol(
     });
 
     if subvol.is_none() && (fs.btree_lost_data(c::btree_id::subvolumes) || snapshot_agrees) {
-        check::reconstruct_subvol(trans, pos.snapshot, u.bi_subvol, u.bi_inum)?;
-        return Ok(SubvolCheck::Reconstructed);
+        let root = check::reconstruct_subvol_root(trans, pos.snapshot, u.bi_subvol, Some(u.bi_inum))?;
+        return Ok(SubvolCheck::Reconstruct(root));
     }
 
     // No exemption for a missing subvolume: an unlinked subvolume still
@@ -418,9 +420,12 @@ fn check_inode<'a, 't>(
 
     if u.bi_subvol != 0 {
         match check_inode_subvol(trans, pos, &mut u)? {
-            SubvolCheck::Ok            => {}
-            SubvolCheck::Repaired      => changed = true,
-            SubvolCheck::Reconstructed => return write_if_changed(t, &mut u, changed),
+            SubvolCheck::Ok                => {}
+            SubvolCheck::Repaired          => changed = true,
+            SubvolCheck::Reconstruct(root) => {
+                let t = check::reconstruct_subvol(t, pos.snapshot, u.bi_subvol, root)?;
+                return write_if_changed(t, &mut u, changed);
+            }
         }
     }
 

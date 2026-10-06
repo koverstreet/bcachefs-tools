@@ -8,7 +8,7 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode;
@@ -17,7 +17,8 @@ use crate::errcode::Found;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::Printbuf;
-use crate::{bch_err, fsck_err_on, inode_fsck_err};
+use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err};
+use core::mem::size_of;
 use core::ops::ControlFlow;
 
 /// The snapshot IDs of the keys seen so far at one position, for deciding
@@ -648,16 +649,100 @@ pub fn reconstruct_inode<'a, 't>(
     inode::fsck_write(t, &mut new)
 }
 
-/// Recreate the missing subvolume key @subvol, at leaf @snapshot - pass 0
-/// for @inum to have it found from the inode carrying bi_subvol: as
-/// bch2_reconstruct_subvol().
-pub fn reconstruct_subvol(
+/// The root inode for recreating missing subvolume @subvol at @snapshot:
+/// @inum if the caller knows it, else found. fsck_repair_unimplemented,
+/// logged, if it can't be done - for reconstruct_subvol(), and decided before
+/// anything is queued, so a caller can fall back to reporting.
+///
+/// @snapshot has to be a leaf: the key reconstruct_subvol() writes sets the
+/// snapshot's subvol backref, and bch2_snapshot_validate() rejects a subvol
+/// on a node with children.
+pub fn reconstruct_subvol_root(
     trans:    &BtreeTrans<'_>,
     snapshot: u32,
     subvol:   u32,
-    inum:     u64,
-) -> Result<(), BchError> {
-    ret_to_result(unsafe { c::bch2_reconstruct_subvol(trans.raw(), snapshot, subvol, inum) })
+    inum:     Option<u64>,
+) -> Result<u64, BchError> {
+    let fs = trans.fs();
+
+    if !snapshot::is_leaf(fs, snapshot)? {
+        bch_err!(fs, "need to reconstruct subvol {subvol}, but snapshot {snapshot} is an interior node");
+        return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented));
+    }
+
+    if let Some(inum) = inum {
+        return Ok(inum);
+    }
+
+    // Find the root inode rather than minting one: the inode carrying
+    // bi_subvol == @subvol is the root, and when it's the subvolume key that
+    // went missing that inode is still there. Creating a second one would
+    // leave two claimants for the same subvolume and the real contents
+    // orphaned behind the new empty root.
+    //
+    // It can't be deferred to a later pass either - bch2_subvolume_validate()
+    // rejects a subvolume key with inode == 0 (subvol_inode_bad), so the key
+    // can't be written at all until we know it.
+    let mut root = None;
+    let mut iter = BtreeIter::new(trans, c::btree_id::inodes, pos(0, 0),
+                                  BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
+    iter.for_each_norestart(|_, k| {
+        if inode::bkey_is_inode(k.k) {
+            let u = inode::unpack(fs, k);
+            if u.bi_subvol == subvol {
+                root = Some(u.bi_inum);
+                return Ok(ControlFlow::Break(()));
+            }
+        }
+        Ok(ControlFlow::Continue(()))
+    })?;
+
+    root.ok_or_else(|| {
+        bch_err!(fs, "no root inode found for subvol {subvol}, can't reconstruct");
+        fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented)
+    })
+}
+
+/// Recreate missing subvolume key @subvol, at leaf @snapshot with root inode
+/// @root - from reconstruct_subvol_root() - and point the snapshot, and its
+/// tree if it has no master subvolume, back at it.
+pub fn reconstruct_subvol<'a, 't>(
+    t:        TransAttempt<'a, 't>,
+    snapshot: u32,
+    subvol:   u32,
+    root:     u64,
+) -> TransRet<'a, 't> {
+    let fs = t.trans().fs();
+
+    bch_info!(fs, "reconstructing subvol {subvol} with root inode {root}");
+
+    let mut k = t.bkey_alloc_typed::<c::bkey_i_subvolume>()?;
+    k.k_mut().p = pos(0, subvol as u64);
+    let v = k.k_i_mut().as_mut_subvolume().expect("a subvolume key");
+    v.snapshot = snapshot.to_le();
+    v.inode    = root.to_le();
+    v.set_state(c::bch_subvolume_state::SUBVOLUME_STATE_live);
+    let t = t.insert(c::btree_id::subvolumes, k, UpdateTriggerFlags::empty())?;
+
+    let mut s = bch_err_msg!(fs,
+        t.bkey_get_mut(c::btree_id::snapshots, pos(0, snapshot as u64), UpdateTriggerFlags::empty(),
+                       c::bch_bkey_type::KEY_TYPE_snapshot, size_of::<c::bkey_i_snapshot>()),
+        "getting snapshot {snapshot}")?;
+    let s = s.k_i_mut().as_mut_snapshot().expect("a snapshot key");
+    let tree = s.tree();
+    s.subvol = subvol.to_le();
+    s.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
+
+    let mut st = bch_err_msg!(fs,
+        t.bkey_get_mut(c::btree_id::snapshot_trees, pos(0, tree as u64), UpdateTriggerFlags::empty(),
+                       c::bch_bkey_type::KEY_TYPE_snapshot_tree, size_of::<c::bkey_i_snapshot_tree>()),
+        "getting snapshot tree {tree}")?;
+    let st = st.k_i_mut().as_mut_snapshot_tree().expect("a snapshot tree key");
+    if st.master_subvol == 0 {
+        st.master_subvol = subvol.to_le();
+    }
+
+    Ok(t)
 }
 
 /// Whether an inode of mode @mode can own keys in @btree.

@@ -9,17 +9,6 @@
  * a struct snapshots_seen * through, to __bch2_str_hash_check_key().
  */
 
-/*
- * Recreate a missing subvolume key: (snapshot, subvol, root inum). Pass 0 for
- * the inum to have it found from the inode carrying bi_subvol.
- *
- * The snapshot must be a leaf - the key it writes sets that snapshot's subvol
- * backref, and bch2_snapshot_validate() rejects a subvol on a node with
- * children. check_snapshots() is the natural caller for that reason: the
- * snapshot it's holding claims the subvolume, so it's a leaf by construction.
- */
-int bch2_reconstruct_subvol(struct btree_trans *, u32, u32, u64);
-
 int bch2_check_inodes(struct bch_fs *);
 int bch2_check_extents(struct bch_fs *);
 int bch2_check_indirect_extents(struct bch_fs *);
