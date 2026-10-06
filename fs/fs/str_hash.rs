@@ -86,12 +86,12 @@ pub fn set_or_get_in_snapshot<'i, T: HashTable>(
     update_flags: UpdateTriggerFlags,
 ) -> Result<Option<BkeySC<'i>>, BchError> {
     let flags = iter_flags.bits() | update_flags.bits();
-    let k = unsafe {
-        c::bch2_hash_set_or_get_in_snapshot(trans.raw(), iter.raw_mut(), *T::desc(), hash_info,
-                                            inum, snapshot, insert,
-                                            c::btree_iter_update_trigger_flags(flags))
-    };
-    bkey_s_c_to_result(k)
+    unsafe {
+        let k = c::bch2_hash_set_or_get_in_snapshot(trans.raw(), iter.raw_mut(), *T::desc(),
+                                                    hash_info, inum, snapshot, insert,
+                                                    c::btree_iter_update_trigger_flags(flags));
+        bkey_s_c_to_result(k)
+    }
 }
 
 /// A str_hash type - INODE_STR_HASH() - for formatting with {}: as
@@ -128,11 +128,13 @@ pub fn lookup_in_snapshot<'i, T: HashTable>(
     snapshot:  u32,
 ) -> Result<BkeySC<'i>, BchError> {
     let k = unsafe {
-        c::bch2_hash_lookup_in_snapshot(trans.raw(), iter.raw_mut(), *T::desc(), hash_info, inum,
-                                        key as *const T::Key as *const c_void,
-                                        c::btree_iter_update_trigger_flags(flags.bits()), snapshot)
+        let k = c::bch2_hash_lookup_in_snapshot(trans.raw(), iter.raw_mut(), *T::desc(), hash_info,
+                                                inum, key as *const T::Key as *const c_void,
+                                                c::btree_iter_update_trigger_flags(flags.bits()),
+                                                snapshot);
+        bkey_s_c_to_result(k)?
     };
-    Ok(bkey_s_c_to_result(k)?.expect("a hash lookup returns a key or an error"))
+    Ok(k.expect("a hash lookup returns a key or an error"))
 }
 
 pub fn hash_info_init(

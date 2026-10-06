@@ -133,10 +133,13 @@ pub fn get_dirent<'i>(
     inode:    &c::bch_inode_unpacked,
     snapshot: &mut u32,
 ) -> Result<BkeySC<'i>, BchError> {
+    // 'i: the dirent is valid while @iter, which it came through, is borrowed
     let d = unsafe {
-        c::bch2_inode_get_dirent(trans.raw(), iter.raw_mut(), inode as *const _ as *mut _, snapshot)
-    };
-    Ok(bkey_s_c_to_result(d.into())?.expect("a dirent lookup returns a key or an error"))
+        let d = c::bch2_inode_get_dirent(trans.raw(), iter.raw_mut(), inode as *const _ as *mut _,
+                                         snapshot);
+        bkey_s_c_to_result(d.into())
+    }?;
+    Ok(d.expect("a dirent lookup returns a key or an error"))
 }
 
 /// Some version of @inum, in any snapshot: as bch2_inode_find_any_snapshot().

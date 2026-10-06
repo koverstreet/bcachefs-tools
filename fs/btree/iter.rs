@@ -1141,7 +1141,15 @@ unsafe fn polonius_key<'i>(k: BkeySC<'_>) -> BkeySC<'i> {
     unsafe { core::mem::transmute::<BkeySC<'_>, BkeySC<'i>>(k) }
 }
 
-pub(crate) fn bkey_s_c_to_result<'i>(k: c::bkey_s_c) -> Result<Option<BkeySC<'i>>, BchError> {
+/// A key C returned - a peek, a lookup - or its error.
+///
+/// # Safety
+/// The key's lifetime is whatever the caller says: 'i must be no longer than
+/// the key is valid - a borrow of the iterator it came through, during which
+/// nothing moves that iterator. Callers tie it to one in their signature.
+pub(crate) unsafe fn bkey_s_c_to_result<'i>(k: c::bkey_s_c)
+    -> Result<Option<BkeySC<'i>>, BchError>
+{
     errptr_to_result_c(k.k).map(|_| {
         if !k.k.is_null() {
             unsafe {
@@ -1311,7 +1319,7 @@ impl<'t> BtreeIter<'t> {
     /// The key at the iterator's position, if it's a @type: as C's
     /// bch2_bkey_get_typed() - ENOENT_bkey_type_mismatch if it isn't.
     pub fn peek_slot_typed(&mut self, type_: c::bch_bkey_type) -> Result<BkeySC<'_>, BchError> {
-        let k = bkey_s_c_to_result(unsafe { c::__bch2_bkey_get_typed(self.raw.get_mut(), type_) })?;
+        let k = unsafe { bkey_s_c_to_result(c::__bch2_bkey_get_typed(self.raw.get_mut(), type_)) }?;
         Ok(k.expect("a slot always has a key"))
     }
 
@@ -1436,7 +1444,8 @@ impl<'t> BtreeIter<'t> {
     where
         P: FnMut(*mut c::btree_iter) -> c::bkey_s_c,
     {
-        let k = bkey_s_c_to_result::<'a>(peek(self.raw.get_mut()))?;
+        // 'a: the key is valid while self is borrowed, and shared
+        let k = unsafe { bkey_s_c_to_result::<'a>(peek(self.raw.get_mut())) }?;
         Ok(k.map(|k| (&*self, k)))
     }
 
@@ -1596,7 +1605,7 @@ impl<'t> BtreeIter<'t> {
         loop {
             let t = trans.begin();
 
-            let k = match bkey_s_c_to_result(peek(self.raw.get_mut())) {
+            let k = match unsafe { bkey_s_c_to_result(peek(self.raw.get_mut())) } {
                 Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
                 Err(e) => return Err(e),
                 Ok(None) => return Ok(()),
