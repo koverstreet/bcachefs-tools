@@ -1622,7 +1622,15 @@ int bch2_delete_dead_inodes(struct bch_fs *c)
 			bch_verbose_ratelimited(c, "deleting unlinked inode %llu:%u",
 						k.k->p.offset, k.k->p.snapshot);
 
-			ret = bch2_inode_rm_snapshot(trans, k.k->p.offset, k.k->p.snapshot);
+			/*
+			 * may_delete_deleted_inode() can have queued updates - an
+			 * fsck error's log entry - and bch2_inode_rm_snapshot()
+			 * runs its own iterations: each begins by dropping them.
+			 * An inode with extents commits them with its first
+			 * deletion; one with nothing to delete there lost them:
+			 */
+			ret = bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
+				bch2_inode_rm_snapshot(trans, k.k->p.offset, k.k->p.snapshot);
 			/*
 			 * We don't want to loop here: a transaction restart
 			 * error here means we handled a transaction restart and
