@@ -118,7 +118,9 @@ static void move_write(struct data_update *u)
 		 * Not rbio->bvec_iter: that's only set when the read went
 		 * straight into this rbio, not through a bounce or a clone
 		 */
-		if (rbio->ret || poisoned) {
+		if (bch2_data_update_read_err_benign(rbio->ret)) {
+			/* nothing was read, and nothing was lost */
+		} else if (rbio->ret || poisoned) {
 			atomic64_add(u->k.k->k.size,
 				     &ctxt->stats->sectors_error_uncorrected);
 			set_bit(rbio->pick.ptr.dev,
