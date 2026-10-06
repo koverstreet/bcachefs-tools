@@ -35,6 +35,7 @@
 #include "vfs/buffered.h"
 #include "vfs/direct.h"
 #include "vfs/pagecache.h"
+#include "vfs/rust.h"
 
 #include <linux/aio.h>
 #include <linux/backing-dev.h>
@@ -3512,6 +3513,159 @@ int __init bch2_vfs_init(void)
 err:
 	bch2_vfs_exit();
 	return ret;
+}
+
+/* For Rust - see vfs/rust.h: */
+
+struct bch_inode_info *rust_to_bch_ei(struct inode *vinode)
+{
+	return to_bch_ei(vinode);
+}
+
+struct inode *rust_ei_vinode(struct bch_inode_info *inode)
+{
+	return &inode->v;
+}
+
+struct bch_fs *rust_ei_fs(struct bch_inode_info *inode)
+{
+	return inode->v.i_sb->s_fs_info;
+}
+
+struct bch_inode_unpacked *rust_ei_inode(struct bch_inode_info *inode)
+{
+	return &inode->ei_inode;
+}
+
+subvol_inum rust_ei_inum(struct bch_inode_info *inode)
+{
+	return inode_inum(inode);
+}
+
+void rust_ei_update_lock(struct bch_inode_info *inode)
+{
+	mutex_lock(&inode->ei_update_lock);
+}
+
+void rust_ei_update_unlock(struct bch_inode_info *inode)
+{
+	mutex_unlock(&inode->ei_update_lock);
+}
+
+int rust_ei_set_projid(struct bch_fs *c, struct bch_inode_info *inode, u32 projid)
+{
+	return bch2_set_projid(c, inode, projid);
+}
+
+struct bch_inode_info *rust_dentry_ei(struct dentry *dentry)
+{
+	return to_bch_ei(dentry->d_inode);
+}
+
+/*
+ * Inode option @id of @dentry's parent directory, in @v - false at the root,
+ * which has none.
+ */
+bool rust_dentry_parent_inode_opt(struct dentry *dentry, unsigned id, u64 *v)
+{
+	guard(spinlock)(&dentry->d_lock);
+	if (IS_ROOT(dentry))
+		return false;
+
+	*v = bch2_inode_opt_get(&to_bch_ei(d_inode(dentry->d_parent))->ei_inode, id);
+	return true;
+}
+
+void rust_dir_casefold_changed(struct dentry *dentry)
+{
+	bch2_dir_casefold_changed(dentry);
+}
+
+int rust_xattr_handler_flags(const struct xattr_handler *handler)
+{
+	return handler->flags;
+}
+
+/*
+ * A posix_acl of @count entries, unlocking @trans to allocate if it has to:
+ * NULL if that fails without an error to return.
+ */
+struct posix_acl *rust_posix_acl_alloc(struct btree_trans *trans, unsigned count)
+{
+	int ret;
+	struct posix_acl *acl = allocate_dropping_locks(trans, ret,
+					posix_acl_alloc(count, _gfp));
+	if (ret) {
+		kfree(acl);
+		return ERR_PTR(ret);
+	}
+	return acl;
+}
+
+unsigned rust_posix_acl_count(const struct posix_acl *acl)
+{
+	return acl->a_count;
+}
+
+/* Entry @i of @acl; @id is the uid or gid, for ACL_USER and ACL_GROUP: */
+void rust_posix_acl_entry(const struct posix_acl *acl, unsigned i,
+			  u16 *tag, u16 *perm, u32 *id)
+{
+	const struct posix_acl_entry *e = &acl->a_entries[i];
+
+	*tag	= e->e_tag;
+	*perm	= e->e_perm;
+
+	switch (e->e_tag) {
+	case ACL_USER:
+		*id = from_kuid(&init_user_ns, e->e_uid);
+		break;
+	case ACL_GROUP:
+		*id = from_kgid(&init_user_ns, e->e_gid);
+		break;
+	default:
+		*id = 0;
+	}
+}
+
+void rust_posix_acl_set_entry(struct posix_acl *acl, unsigned i,
+			      u16 tag, u16 perm, u32 id)
+{
+	struct posix_acl_entry *e = &acl->a_entries[i];
+
+	e->e_tag	= tag;
+	e->e_perm	= perm;
+
+	switch (tag) {
+	case ACL_USER:
+		e->e_uid = make_kuid(&init_user_ns, id);
+		break;
+	case ACL_GROUP:
+		e->e_gid = make_kgid(&init_user_ns, id);
+		break;
+	}
+}
+
+void rust_posix_acl_release(struct posix_acl *acl)
+{
+	posix_acl_release(acl);
+}
+
+void rust_set_cached_acl(struct inode *inode, int type, struct posix_acl *acl)
+{
+	set_cached_acl(inode, type, acl);
+}
+
+int rust_posix_acl_update_mode(struct mnt_idmap *idmap, struct inode *inode,
+			       umode_t *mode, struct posix_acl **acl)
+{
+	return posix_acl_update_mode(idmap, inode, mode, acl);
+}
+
+/* __posix_acl_chmod(), unlocking @trans to allocate if it has to: */
+int rust_posix_acl_chmod(struct btree_trans *trans, struct posix_acl **acl, umode_t mode)
+{
+	return allocate_dropping_locks_errcode(trans, __posix_acl_chmod(acl, _gfp, mode));
 }
 
 #endif /* NO_BCACHEFS_FS */

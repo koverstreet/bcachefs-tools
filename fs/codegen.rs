@@ -27,8 +27,8 @@ const HEADERS: &[&str] = &[
     "data/checksum.h", "data/ec/trigger.h", "data/extents.h", "data/io_misc.h", "data/move.h", "data/read.h", "data/update.h", "data/write.h",
     "debug/debug.h",
     "init/damage.h", "init/dev.h", "init/error.h", "init/fs.h", "init/passes.h", "init/recovery.h",
-    "fs/check.h", "fs/dirent.h", "fs/inode.h", "fs/inode_opts.h", "fs/namei.h", "fs/xattr.h",
-    "data/reconcile/work.h",
+    "fs/acl.h", "fs/check.h", "fs/dirent.h", "fs/inode.h", "fs/inode_opts.h", "fs/namei.h", "fs/xattr.h",
+    "data/reconcile/work.h", "vfs/rust.h",
     "journal/init.h", "journal/read.h", "journal/reclaim.h", "journal/seq_blacklist.h", "journal/validate.h",
     "sb/io.h", "sb/members.h",
     "util/varint.h",
@@ -61,7 +61,7 @@ const ALLOWLIST_VAR: &[&str] = &["BCH_.*", "BTREE_MAX_DEPTH", "KEY_SPEC_.*", "bc
     "DT_SUBVOL",
     // errnos, for bch2_err_matches() against a bare errno, or returning one
     // as C does (darray_push()'s -ENOMEM); add as needed:
-    "ENOENT", "ENOMEM", "EINVAL",
+    "ENOENT", "ENOMEM", "EINVAL", "ERANGE", "ENODATA", "E2BIG", "EACCES", "ECHILD",
     "BCACHEFS_ROOT_SUBVOL", "BCACHEFS_ROOT_INO",
     "KEY_TYPE_XATTR_INDEX_.*"];
 const ALLOWLIST_TYPE: &[&str] = &["bch_.*", "bkey_i_.*", "bkey_s_c_.*", "bkey_s_.*", "btree_flags", "disk_accounting_type", "fsck_err_opts", "nonce", "sb_names",
