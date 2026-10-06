@@ -367,6 +367,17 @@ fn copy_xattrs(
                 )
             },
         )?;
+
+        // bch2_get_acl() goes by these flags, not the xattrs: without them
+        // the ACLs are there and ignored. Written with the rest of the inode
+        // by the caller.
+        match xattr_type {
+            XATTR_INDEX_ACL_ACCESS  =>
+                dst.set_flag(c::bch_inode_flags::BCH_INODE_has_access_acl, true),
+            XATTR_INDEX_ACL_DEFAULT =>
+                dst.set_flag(c::bch_inode_flags::BCH_INODE_has_default_acl, true),
+            _ => {}
+        }
     }
 
     Ok(())
