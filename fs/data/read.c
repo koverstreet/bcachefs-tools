@@ -802,33 +802,7 @@ static void bch2_rbio_retry(struct work_struct *work)
 		     bch2_err_matches(ret, BCH_ERR_data_read_ptr_stale_race)))
 			ret = 0;
 
-		/*
-		 * The read-around failed and the direct read after it didn't:
-		 * nothing was lost, and the device is fine. Say what was found,
-		 * unless it was only a race.
-		 */
-		bool read_around_failed = !ret && !have_io_error(&failed) &&
-			(flags & BCH_READ_ec_read_around) && failed.nr;
-
-		if (read_around_failed) {
-			event_inc_trace(c, data_read_ec_read_around_fail, buf,
-					bch2_read_bio_to_text_atomic(&buf, rbio));
-
-			if (failed.ec_msg.pos) {
-				CLASS(bch_log_msg_level, msg)(c, LOGLEVEL_notice);
-				bch2_read_err_msg_trans(trans, &msg.m, rbio, read_pos);
-				prt_newline(&msg.m);
-
-				if (!bkey_deleted(&sk.k->k)) {
-					bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(sk.k));
-					prt_newline(&msg.m);
-				}
-
-				bch2_io_failures_to_text(&msg.m, c, &failed);
-				prt_str(&msg.m, "read device directly");
-				msg.m.suppress = bch2_ratelimit(c);
-			}
-		} else if (have_io_error(&failed) || failed.ec_msg.pos || ret) {
+		if (have_io_error(&failed) || failed.ec_msg.pos || ret) {
 			struct printbuf *out;
 			CLASS(bch_log_msg, msg)(c);
 
@@ -931,7 +905,10 @@ static int bch2_rbio_error(struct bch_read_bio *rbio, int ret)
 
 	rbio->ret = ret;
 	/* A failed read-around isn't an error: the read goes to the device next */
-	if (rbio->pick.mode != BCH_READ_MODE_ec_read_around)
+	if (rbio->pick.mode == BCH_READ_MODE_ec_read_around)
+		event_inc_trace(rbio->c, data_read_ec_read_around_fail, buf,
+				bch2_read_bio_to_text_atomic(&buf, rbio));
+	else
 		bch2_rbio_parent(rbio)->saw_error = true;
 
 	if (!(rbio->flags & BCH_READ_in_retry)) {
