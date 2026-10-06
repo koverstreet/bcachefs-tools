@@ -71,7 +71,7 @@ pub fn for_each_in_subvolume_max_in_trans<F, R>(
     subvol: u32,
     flags:  BtreeIterFlags,
     mut f:  F,
-) -> Result<(), BchError>
+) -> Result<R::Break, BchError>
 where
     F: FnMut(BkeySC<'_>) -> Result<R, BchError>,
     R: LoopControl,
@@ -80,24 +80,24 @@ where
     let mut snapshot = 0;
 
     loop {
-        let ret = (|| {
+        let ret = (|| -> Result<Option<R::Break>, BchError> {
             trans.relock()?;
             if snapshot == 0 {
                 snapshot = get_snapshot(trans, subvol)?;
                 iter.set_snapshot(snapshot);
             }
-            match iter.peek_max_type(end, flags)? {
-                Some(k) => f(k).map(|r| !r.stops()),
-                None    => Ok(false),
-            }
+            Ok(match iter.peek_max_type(end, flags)? {
+                Some(k) => f(k)?.into_break(),
+                None    => Some(Default::default()),
+            })
         })();
 
         match ret {
-            Ok(false) => return Ok(()),
-            Ok(true)  => {
+            Ok(Some(b)) => return Ok(b),
+            Ok(None)    => {
                 trans.verify_not_restarted(restart_count);
                 if !iter.advance() {
-                    return Ok(());
+                    return Ok(Default::default());
                 }
             }
             Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => {

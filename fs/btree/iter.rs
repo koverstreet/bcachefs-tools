@@ -264,19 +264,30 @@ impl From<TransError> for BchError {
     }
 }
 
-/// What a for_each body returns on success: whether the loop goes on. `()`
-/// for a body that always does - most of them, as a C loop body returns 0 -
-/// and `ControlFlow` for one that can stop early.
+/// What a for_each body returns on success: whether the loop goes on, and
+/// if not, what it stopped with. `()` for a body that always goes on - most
+/// of them, as a C loop body returns 0 - and `ControlFlow` for one that can
+/// stop early, breaking with what the loop returns.
+///
+/// A loop that runs to the end returns Break's default: `()`, `None`,
+/// `false` - nothing found.
 pub trait LoopControl {
-    fn stops(&self) -> bool;
+    type Break: Default;
+
+    /// What the body stopped with; None to go on.
+    fn into_break(self) -> Option<Self::Break>;
 }
 
 impl LoopControl for () {
-    fn stops(&self) -> bool { false }
+    type Break = ();
+
+    fn into_break(self) -> Option<()> { None }
 }
 
-impl LoopControl for ControlFlow<()> {
-    fn stops(&self) -> bool { self.is_break() }
+impl<B: Default> LoopControl for ControlFlow<B> {
+    type Break = B;
+
+    fn into_break(self) -> Option<B> { self.break_value() }
 }
 
 fn retry_restart<T>(result: Result<T, TransError>) -> Result<Option<T>, BchError> {
@@ -1323,9 +1334,10 @@ impl<'t> BtreeIter<'t> {
     ///
     /// @f's result is two things, kept apart: whether its work succeeded
     /// (`Result`), and whether to go on (LoopControl: `()` for a body that
-    /// always goes on, `ControlFlow` for one that can stop early). A
-    /// transaction restart, from the peek or from @f, retries the same
-    /// position; any other error is returned.
+    /// always goes on, `ControlFlow` for one that can stop early - what it
+    /// breaks with is what the loop returns). A transaction restart, from
+    /// the peek or from @f, retries the same position; any other error is
+    /// returned.
     ///
     /// @f gets the iterator too, as the C loop bodies do - to update at its
     /// position, or read where it is. As in C, the key points into the node
@@ -1337,7 +1349,7 @@ impl<'t> BtreeIter<'t> {
         mut peek: P,
         mut step: S,
         mut f:    F,
-    ) -> Result<(), BchError>
+    ) -> Result<R::Break, BchError>
     where
         P: FnMut(*mut c::btree_iter) -> c::bkey_s_c,
         S: FnMut(*mut c::btree_iter) -> bool,
@@ -1350,7 +1362,7 @@ impl<'t> BtreeIter<'t> {
             let k = match bkey_s_c_to_result(peek(&mut self.raw)) {
                 Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
                 Err(e) => return Err(e),
-                Ok(None) => return Ok(()),
+                Ok(None) => return Ok(Default::default()),
                 Ok(Some(k)) => k,
             };
 
@@ -1359,14 +1371,14 @@ impl<'t> BtreeIter<'t> {
                 Err(e) => return Err(e),
                 Ok(flow) => {
                     t.verify_not_restarted();
-                    if flow.stops() {
-                        return Ok(());
+                    if let Some(b) = flow.into_break() {
+                        return Ok(b);
                     }
                 }
             }
 
             if !step(&mut self.raw) {
-                return Ok(());
+                return Ok(Default::default());
             }
         }
     }
@@ -1384,7 +1396,7 @@ impl<'t> BtreeIter<'t> {
     }
 
     pub fn for_each_max<F, R>(&mut self, trans: &BtreeTrans<'_>, end: bpos, f: F)
-        -> Result<(), BchError>
+        -> Result<R::Break, BchError>
     where
         F: for<'a> FnMut(&mut BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
@@ -1403,7 +1415,7 @@ impl<'t> BtreeIter<'t> {
     /// attempt: as C's for_each_btree_key_norestart(). Unlike the rest of the
     /// family this doesn't begin or retry anything - a restart is returned,
     /// for the loop the caller is in.
-    pub fn for_each_norestart<F, R>(&mut self, f: F) -> Result<(), BchError>
+    pub fn for_each_norestart<F, R>(&mut self, f: F) -> Result<R::Break, BchError>
     where
         F: for<'a> FnMut(&mut BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
@@ -1413,7 +1425,8 @@ impl<'t> BtreeIter<'t> {
 
     /// As for_each_norestart(), up to and including @end: as C's
     /// for_each_btree_key_max_norestart().
-    pub fn for_each_max_norestart<F, R>(&mut self, end: bpos, mut f: F) -> Result<(), BchError>
+    pub fn for_each_max_norestart<F, R>(&mut self, end: bpos, mut f: F)
+        -> Result<R::Break, BchError>
     where
         F: for<'a> FnMut(&mut BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
@@ -1421,11 +1434,14 @@ impl<'t> BtreeIter<'t> {
         loop {
             let Some(k) = bkey_s_c_to_result(Self::peek_own_type(&mut self.raw, end))?
             else {
-                return Ok(());
+                return Ok(Default::default());
             };
 
-            if f(self, k)?.stops() || !unsafe { c::bch2_btree_iter_advance(&mut self.raw) } {
-                return Ok(());
+            if let Some(b) = f(self, k)?.into_break() {
+                return Ok(b);
+            }
+            if !self.advance() {
+                return Ok(Default::default());
             }
         }
     }
@@ -1433,7 +1449,8 @@ impl<'t> BtreeIter<'t> {
     /// As for_each_norestart(), backwards from the iterator's position down
     /// to @min: as C's for_each_btree_key_reverse_norestart(), with the
     /// bound.
-    pub fn for_each_reverse_norestart<F, R>(&mut self, min: bpos, mut f: F) -> Result<(), BchError>
+    pub fn for_each_reverse_norestart<F, R>(&mut self, min: bpos, mut f: F)
+        -> Result<R::Break, BchError>
     where
         F: for<'a> FnMut(&mut BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
@@ -1441,16 +1458,19 @@ impl<'t> BtreeIter<'t> {
         loop {
             let Some(k) = bkey_s_c_to_result(unsafe { c::bch2_btree_iter_peek_prev_min(&mut self.raw, min) })?
             else {
-                return Ok(());
+                return Ok(Default::default());
             };
 
-            if f(self, k)?.stops() || !unsafe { c::bch2_btree_iter_rewind(&mut self.raw) } {
-                return Ok(());
+            if let Some(b) = f(self, k)?.into_break() {
+                return Ok(b);
+            }
+            if !self.rewind() {
+                return Ok(Default::default());
             }
         }
     }
 
-    pub fn for_each<F, R>(&mut self, trans: &BtreeTrans<'_>, f: F) -> Result<(), BchError>
+    pub fn for_each<F, R>(&mut self, trans: &BtreeTrans<'_>, f: F) -> Result<R::Break, BchError>
     where
         F: for<'a> FnMut(&mut BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
@@ -1629,7 +1649,7 @@ impl<'t> BtreeIter<'t> {
     }
 
     pub fn for_each_reverse<F, R>(&mut self, trans: &BtreeTrans<'_>, min: bpos, f: F)
-        -> Result<(), BchError>
+        -> Result<R::Break, BchError>
     where
         F: for<'a> FnMut(&mut BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
@@ -1645,7 +1665,7 @@ impl<'t> BtreeIter<'t> {
         trans: &BtreeTrans<'_>,
         flags: BtreeIterFlags,
         f:     F,
-    ) -> Result<(), BchError>
+    ) -> Result<R::Break, BchError>
     where
         F: for<'a> FnMut(&mut BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
