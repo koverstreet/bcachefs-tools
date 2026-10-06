@@ -44,6 +44,7 @@ fn main() {
     // The shared codegen logic is include!d, not a tracked source file — tell
     // cargo to rerun us when it changes.
     println!("cargo:rerun-if-changed=codegen.rs");
+    println!("cargo:rerun-if-changed=build_config.rs");
     println!("cargo:rerun-if-changed=../clang_target.rs");
     // Rerun when any C/H file the wrapper might include changes.
     for dir in ["..", "../include"] {
@@ -59,6 +60,10 @@ fn main() {
     let clang_args = userspace_clang_args(&src, clang_target);
     let blocklist = default_blocklist(&src);
 
+    let root = std::path::Path::new(&src).parent().expect("fs crate has a parent dir");
+    rerun_if_userspace_config_changed(root);
+    emit_userspace_config_cfgs(root);
+
     run_bindgen(&out, &clang_args, &blocklist, &ptr_width);
     gen_xmacros(&src, &out);
 
@@ -73,9 +78,6 @@ fn main() {
     w.compile("bcachefs_static_wrappers");
 
     println!("cargo:rerun-if-changed=../build-link.rs");
-    let root = std::path::Path::new(&src)
-        .parent()
-        .expect("fs crate has a parent dir");
     link_bcachefs(
         &root.display().to_string(),
         &root.join("libbcachefs.a").display().to_string(),

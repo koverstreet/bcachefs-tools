@@ -386,6 +386,7 @@ fn watch_dir(dir: &str) {
 }
 
 include!("../clang_target.rs");
+include!("../fs/build_config.rs");
 
 /// One `#define BCH_IOCTL_* _IO*(0xbc, nr[, type])` from bcachefs_ioctl.h.
 ///
@@ -471,6 +472,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=src/libbcachefs_wrapper.h");
     println!("cargo:rerun-if-changed=../clang_target.rs");
+    println!("cargo:rerun-if-changed=../fs/build_config.rs");
     // Watch all C/H files that the wrapper might include, so bindgen
     // reruns when any header changes — not just the handful we used
     // to list explicitly.
@@ -484,6 +486,8 @@ fn main() {
     let top_dir: PathBuf = std::env::var_os("CARGO_MANIFEST_DIR")
         .expect("ENV Var 'CARGO_MANIFEST_DIR' Expected")
         .into();
+    let root = top_dir.parent().expect("bch_bindgen should have a parent dir");
+    rerun_if_userspace_config_changed(root);
 
     let urcu = pkg_config::probe_library("liburcu").expect("Failed to find urcu lib");
     // Tell bindgen/clang the target triple so it computes correct type
@@ -510,9 +514,7 @@ fn main() {
         .clang_arg("-I../fs")
         .clang_arg("-I../c_src")
         .clang_arg("-I../include")
-        .clang_arg("-DZSTD_STATIC_LINKING_ONLY")
-        .clang_arg("-DNO_BCACHEFS_FS")
-        .clang_arg("-D_GNU_SOURCE")
+        .clang_args(userspace_config_args(root))
         .clang_arg("-DRUST_BINDGEN")
         .clang_arg("-fkeep-inline-functions")
         .derive_debug(true)
@@ -679,12 +681,12 @@ fn main() {
         .include(top_dir.join("../fs"))
         .include(top_dir.join("../c_src"))
         .include(top_dir.join("../include"))
-        .define("ZSTD_STATIC_LINKING_ONLY", None)
-        .define("NO_BCACHEFS_FS", None)
-        .define("_GNU_SOURCE", None)
         .define("RUST_BINDGEN", None)
         .flag("-fkeep-inline-functions")
         .warnings(false);
+    for f in userspace_config_args(root) {
+        wrappers.flag(f);
+    }
     for p in &urcu.include_paths {
         wrappers.include(p);
     }

@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 include!("../clang_target.rs");
+include!("../fs/build_config.rs");
 
 fn main() {
     let out_dir: PathBuf = std::env::var_os("OUT_DIR")
@@ -27,6 +28,8 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", wrapper.display());
     println!("cargo:rerun-if-changed=../clang_target.rs");
+    println!("cargo:rerun-if-changed=../fs/build_config.rs");
+    rerun_if_userspace_config_changed(&root);
     println!("cargo:rerun-if-changed={}", include_dir.display());
 
     let urcu = pkg_config::probe_library("liburcu").expect("Failed to find urcu lib");
@@ -46,9 +49,7 @@ fn main() {
         .clang_arg(format!("-I{}", fs_dir.display()))
         .clang_arg(format!("-I{}", root.join("c_src").display()))
         .clang_arg(format!("-I{}", include_dir.display()))
-        .clang_arg("-DZSTD_STATIC_LINKING_ONLY")
-        .clang_arg("-DNO_BCACHEFS_FS")
-        .clang_arg("-D_GNU_SOURCE")
+        .clang_args(userspace_config_args(&root))
         .clang_arg("-DRUST_BINDGEN")
         .clang_arg("-fkeep-inline-functions")
         .derive_debug(true)
@@ -111,12 +112,12 @@ fn main() {
         .include(&fs_dir)
         .include(root.join("c_src"))
         .include(&include_dir)
-        .define("ZSTD_STATIC_LINKING_ONLY", None)
-        .define("NO_BCACHEFS_FS", None)
-        .define("_GNU_SOURCE", None)
         .define("RUST_BINDGEN", None)
         .flag("-fkeep-inline-functions")
         .warnings(false);
+    for f in userspace_config_args(&root) {
+        wrappers.flag(f);
+    }
     for p in &urcu.include_paths {
         wrappers.include(p);
     }

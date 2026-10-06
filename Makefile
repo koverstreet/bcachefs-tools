@@ -105,19 +105,13 @@ CFLAGS+=-std=gnu11 -O2 -g -MMD -MP -Wall -fPIC		\
 	-fno-strict-aliasing					\
 	-fno-delete-null-pointer-checks				\
 	-I. -Ic_src -Ifs -Iinclude -Iraid		\
-	-D_FILE_OFFSET_BITS=64					\
-	-D_GNU_SOURCE						\
-	-D_LGPL_SOURCE						\
-	-DRCU_MEMBARRIER					\
-	-DZSTD_STATIC_LINKING_ONLY				\
-	-DFUSE_USE_VERSION=35					\
-	-DNO_BCACHEFS_CHARDEV					\
-	-DNO_BCACHEFS_FS					\
-	-DCONFIG_DEBUG_FS					\
-	-DCONFIG_UNICODE					\
-	-DCONFIG_STACKTRACE					\
-	-D__SANE_USERSPACE_TYPES__				\
+	-include c_src/autoconf.h				\
 	$(EXTRA_CFLAGS)
+
+# The build configuration is c_src/autoconf.h, plus any -D/-U here - which the
+# cargo build scripts read too, so the Rust bindings see what C sees: see
+# fs/build_config.rs.
+export EXTRA_CFLAGS
 
 # Intenionally not doing the above to $(LDFLAGS) because we rely on
 # recursive expansion here (CFLAGS is not yet completely built by this line)
@@ -160,7 +154,6 @@ CFLAGS+=$(call cc-disable-warning, gnu-variable-sized-type-not-at-end)
 export RUSTFLAGS:=$(RUSTFLAGS) -C default-linker-libraries
 
 PKGCONFIG_LIBS="blkid uuid liburcu libsodium zlib liblz4 libzstd libudev libkeyutils libunwind"
-CFLAGS+=-DBCACHEFS_FUSE
 
 # Only query pkg-config for targets that compile or do a full install.
 # Targets like install_dkms and clean don't need build dependencies.

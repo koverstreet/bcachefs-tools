@@ -18,6 +18,8 @@
 
 use std::process::Command;
 
+include!("build_config.rs");
+
 const HEADERS: &[&str] = &[
     "bcachefs.h", "opts.h",
     "btree/cache.h", "btree/interior.h", "btree/iter.h", "btree/read.h",
@@ -212,7 +214,9 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String], 
 }
 
 /// Clang args for the userspace (tools) build: target + liburcu includes + the
-/// bcachefs -I/-D set. The kernel build supplies its own (Kbuild computes them).
+/// bcachefs -I set + the build configuration, as the Makefile's C compiles
+/// have it (build_config.rs). The kernel build supplies its own (Kbuild
+/// computes them).
 pub fn userspace_clang_args(src: &str, target: &str) -> Vec<String> {
     let root = parent(src);
     let include_dir = format!("{root}/include");
@@ -221,8 +225,8 @@ pub fn userspace_clang_args(src: &str, target: &str) -> Vec<String> {
     for d in [&root, &src.to_string(), &format!("{root}/c_src"), &include_dir] {
         a.push(format!("-I{d}"));
     }
-    for f in ["-DZSTD_STATIC_LINKING_ONLY", "-DNO_BCACHEFS_FS", "-D_GNU_SOURCE",
-              "-DRUST_BINDGEN", "-fkeep-inline-functions"] {
+    a.extend(userspace_config_args(std::path::Path::new(&root)));
+    for f in ["-DRUST_BINDGEN", "-fkeep-inline-functions"] {
         a.push(f.to_string());
     }
     a
