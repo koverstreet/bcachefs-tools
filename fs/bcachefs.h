@@ -702,6 +702,7 @@ struct journal_seq_blacklist_table {
 	x(node_rewrite)							\
 	x(stripe_create)						\
 	x(stripe_delete)						\
+	x(stripe_scrub)							\
 	x(reflink)							\
 	x(fallocate)							\
 	x(fsync)							\

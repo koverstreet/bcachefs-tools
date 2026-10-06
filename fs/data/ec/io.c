@@ -7,6 +7,7 @@
 #include "btree/iter.h"
 
 #include "data/checksum.h"
+#include "data/ec/create.h"
 #include "data/ec/io.h"
 #include "data/ec/trigger.h"
 #include "data/extents.h"
@@ -1078,6 +1079,14 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 		return rbio->flags & BCH_READ_retry_if_stale
 			? bch_err_throw(c, data_read_ptr_stale_retry)
 			: bch_err_throw(c, data_read_ptr_stale_race);
+
+	/* Blocks that don't match the stripe's checksums stay bad until scrubbed: */
+	u32 bad = 0;
+	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++)
+		if (buf->err[STRIPE_BUF_PRE_RECOV][i] == -BCH_ERR_stripe_read_csum_err)
+			bad |= BIT(i);
+	if (bad)
+		bch2_ec_stripe_scrub_queue(c, rbio->pick.ec.idx, bad);
 
 	if (!ret)
 		memcpy_to_bio(&rbio->bio, rbio->bio.bi_iter,

@@ -57,6 +57,16 @@ struct bch_fs_ec {
 
 	struct work_struct	stripe_delete_work;
 
+	/* Stripes a read found a bad block in, for bch2_ec_stripe_scrub_work(): */
+	spinlock_t		stripe_scrub_lock;
+	struct ec_stripe_scrub {
+		u64		idx;
+		u32		blocks;		/* 0 for a free slot */
+		bool		running;
+		unsigned long	done_at;	/* jiffies, 0 until scrubbed */
+	}			stripe_scrub[16];
+	struct work_struct	stripe_scrub_work;
+
 	struct bio_set		block_bioset;
 
 	GENRADIX(struct gc_stripe) gc_stripes;

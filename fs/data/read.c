@@ -33,6 +33,7 @@
 
 #include "data/checksum.h"
 #include "data/compress.h"
+#include "data/ec/create.h"
 #include "data/ec/io.h"
 #include "data/io_misc.h"
 #include "data/read.h"
@@ -886,10 +887,15 @@ static int bch2_rbio_error(struct bch_read_bio *rbio, int ret)
 
 	rbio->ret = ret;
 	/* A failed read-around isn't an error: the read goes to the device next */
-	if (rbio->pick.mode == BCH_READ_MODE_ec_read_around)
+	if (rbio->pick.mode == BCH_READ_MODE_ec_read_around) {
 		event_inc_trace(rbio->c, data_read_ec_read_around_fail, buf,
 				bch2_read_bio_to_text_atomic(&buf, rbio));
-	else
+
+		/* Its data failed the extent checksum: a block it read is bad, and nothing says which */
+		if (data_read_err_is_csum(ret))
+			bch2_ec_stripe_scrub_queue(rbio->c, rbio->pick.ec.idx,
+						   ~BIT(rbio->pick.ec.block));
+	} else
 		bch2_rbio_parent(rbio)->saw_error = true;
 
 	if (!(rbio->flags & BCH_READ_in_retry)) {

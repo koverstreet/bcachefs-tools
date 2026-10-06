@@ -172,6 +172,147 @@ void bch2_do_stripe_deletes(struct bch_fs *c)
 		enumerated_ref_put(&c->writes, BCH_WRITE_REF_stripe_delete);
 }
 
+/* stripe scrub, queued by the read path */
+
+#define STRIPE_SCRUB_INTERVAL	(60 * HZ)
+
+/*
+ * A read found a bad block in stripe @idx, one of @blocks: scrub them, which
+ * repairs the stripe. A stripe scrubbed in the last STRIPE_SCRUB_INTERVAL isn't
+ * queued again: a repair that narrows the stripe leaves the bad block in place
+ * until reconcile has evacuated it, and reads keep failing until then. When the
+ * queue is full, the next full scrub finds it.
+ */
+bool bch2_ec_stripe_scrub_queue(struct bch_fs *c, u64 idx, u32 blocks)
+{
+	struct bch_fs_ec *ec = &c->ec;
+	struct ec_stripe_scrub *slot = NULL;
+
+	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_stripe_scrub))
+		return false;
+
+	scoped_guard(spinlock, &ec->stripe_scrub_lock) {
+		for (struct ec_stripe_scrub *s = ec->stripe_scrub;
+		     s < ec->stripe_scrub + ARRAY_SIZE(ec->stripe_scrub);
+		     s++) {
+			bool expired = s->done_at &&
+				time_after_eq(jiffies, s->done_at + STRIPE_SCRUB_INTERVAL);
+
+			if (s->blocks && s->idx == idx && !expired) {
+				if (!s->running && !s->done_at)
+					s->blocks |= blocks;
+				slot = NULL;
+				break;
+			}
+
+			if (!slot && (!s->blocks || expired))
+				slot = s;
+		}
+
+		if (slot)
+			*slot = (struct ec_stripe_scrub) { .idx = idx, .blocks = blocks };
+	}
+
+	if (slot)
+		queue_work(c->write_ref_wq, &ec->stripe_scrub_work);
+	else
+		enumerated_ref_put(&c->writes, BCH_WRITE_REF_stripe_scrub);
+	return slot != NULL;
+}
+
+static int ec_stripe_scrub_get(struct bch_fs *c, u64 idx, struct bkey_buf *sk)
+{
+	CLASS(btree_trans, trans)(c);
+	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, idx), 0);
+	struct bkey_s_c k;
+
+	try(lockrestart_do(trans, bkey_err(k = bch2_btree_iter_peek_slot(&iter))));
+	bch2_bkey_buf_reassemble(sk, k);
+	return 0;
+}
+
+static int ec_stripe_scrub_pred(struct btree_trans *trans, void *arg,
+				enum btree_id btree, struct bkey_s_c k,
+				struct bch_inode_opts *io_opts,
+				struct data_update_opts *data_opts)
+{
+	return false;
+}
+
+/*
+ * A backpointer walk over a block's last sector finds its stripe backpointer
+ * and, with verify_stripes, checks and repairs the block as scrub does.
+ */
+static int ec_stripe_scrub(struct bch_fs *c, u64 idx, u32 blocks)
+{
+	struct bkey_buf sk __cleanup(bch2_bkey_buf_exit);
+	bch2_bkey_buf_init(&sk);
+
+	try(ec_stripe_scrub_get(c, idx, &sk));
+	if (sk.k->k.type != KEY_TYPE_stripe)
+		return 0;
+
+	const struct bch_stripe *v = &bkey_i_to_stripe(sk.k)->v;
+	struct bch_move_stats stats;
+	bch2_move_stats_init(&stats, "stripe_scrub");
+
+	for (unsigned i = 0; i < v->nr_blocks; i++)
+		if ((blocks & BIT(i)) && v->ptrs[i].dev != BCH_SB_MEMBER_INVALID) {
+			u64 end = v->ptrs[i].offset + le16_to_cpu(v->sectors);
+
+			try(bch2_move_data_phys(c, v->ptrs[i].dev, end - 1, end,
+						BIT(BCH_DATA_user)|BIT(BCH_DATA_parity),
+						NULL, &stats,
+						writepoint_hashed((unsigned long) current),
+						false, true, ec_stripe_scrub_pred, NULL));
+		}
+
+	/* The parity doesn't match the data, the stripe changed, or a block couldn't be read: */
+	if (!atomic64_read(&stats.sectors_error_corrected) &&
+	    !atomic64_read(&stats.sectors_error_uncorrected)) {
+		CLASS(bch_log_msg_ratelimited, msg)(c);
+		prt_printf(&msg.m, "stripe %llu: queued for scrub by a read, but no block it could read fails the stripe's checksums\n",
+			   idx);
+		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(sk.k));
+	}
+	return 0;
+}
+
+void bch2_ec_stripe_scrub_work(struct work_struct *work)
+{
+	struct bch_fs *c = container_of(work, struct bch_fs, ec.stripe_scrub_work);
+	struct bch_fs_ec *ec = &c->ec;
+
+	while (true) {
+		struct ec_stripe_scrub *s = NULL;
+
+		scoped_guard(spinlock, &ec->stripe_scrub_lock)
+			for (unsigned i = 0; i < ARRAY_SIZE(ec->stripe_scrub); i++)
+				if (ec->stripe_scrub[i].blocks &&
+				    !ec->stripe_scrub[i].running &&
+				    !ec->stripe_scrub[i].done_at) {
+					s = &ec->stripe_scrub[i];
+					s->running = true;
+					break;
+				}
+		if (!s)
+			break;
+
+		/* Going read-only: drop what's left. A running entry is only ours to change. */
+		int ret = test_bit(BCH_FS_going_ro, &c->flags)
+			? 0
+			: ec_stripe_scrub(c, s->idx, s->blocks);
+		if (ret && !bch2_err_matches(ret, EROFS))
+			bch_err_msg(c, ret, "scrubbing stripe %llu", s->idx);
+
+		scoped_guard(spinlock, &ec->stripe_scrub_lock) {
+			s->running	= false;
+			s->done_at	= jiffies ?: 1;
+		}
+		enumerated_ref_put(&c->writes, BCH_WRITE_REF_stripe_scrub);
+	}
+}
+
 /* stripe creation */
 
 static int ec_stripe_key_update(struct btree_trans *trans,
