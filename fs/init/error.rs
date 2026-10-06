@@ -20,7 +20,7 @@
 //! prefixing, ratelimiting and the superblock error counters stay
 //! __bch2_fsck_err()'s, as for C callers.
 
-use crate::btree::bkey::POS_MIN;
+use crate::btree::bkey::{BkeySC, POS_MIN};
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
 use crate::c::{bch_fsck_flags, bch_sb_error_id};
@@ -166,9 +166,66 @@ pub fn fsck_err_report(fs: &Fs, err: bch_sb_error_id, msg: fmt::Arguments<'_>) {
     }
 }
 
+/// A key being validated, and where it came from: what C's bkey_fsck_err()
+/// finds by name - c, k, from - in a key type's validate.
+pub struct BkeyValidate<'a, 'k> {
+    pub fs:   &'a Fs,
+    pub k:    BkeySC<'k>,
+    pub from: &'a c::bkey_validate_context,
+}
+
+/// Report @err in the key being validated, as C's bkey_fsck_err(): the error
+/// validate returns. fsck_delete_bkey if the key is to be dropped - fsck said
+/// fix or ignore, or the error is silenced - otherwise what stops us.
+pub fn bkey_fsck_err(
+    v:   &BkeyValidate<'_, '_>,
+    err: bch_sb_error_id,
+    msg: fmt::Arguments<'_>,
+) -> BchError {
+    let mut buf = Printbuf::new();
+    buf.write_fmt(msg);
+
+    let ret = unsafe {
+        c::__bch2_bkey_fsck_err(v.fs.raw, v.k.to_raw(), v.from, err,
+                                c"%s".as_ptr(), buf.as_raw().buf)
+    };
+    let e = BchError::from_raw(-ret);
+
+    if e.matches(bch_errcode::BCH_ERR_fsck_fix) || e.matches(bch_errcode::BCH_ERR_fsck_ignore) {
+        v.fs.err(bch_errcode::BCH_ERR_fsck_delete_bkey)
+    } else {
+        e
+    }
+}
+
+/// bkey_fsck_err() if @cond holds, as C's bkey_fsck_err_on(): the `?` on
+/// the result is C's goto fsck_err.
+pub fn bkey_fsck_err_on(
+    v:    &BkeyValidate<'_, '_>,
+    cond: bool,
+    err:  bch_sb_error_id,
+    msg:  fmt::Arguments<'_>,
+) -> Result<(), BchError> {
+    if cond { Err(bkey_fsck_err(v, err, msg)) } else { Ok(()) }
+}
+
 // The family as macros taking a format string, as C's do, so call sites read
 // like C's: the functions above, with the message's format_args!() written
 // for you.
+
+#[macro_export]
+macro_rules! bkey_fsck_err {
+    ($v:expr, $err:expr, $($msg:tt)*) => {
+        $crate::init::error::bkey_fsck_err($v, $err, format_args!($($msg)*))
+    };
+}
+
+#[macro_export]
+macro_rules! bkey_fsck_err_on {
+    ($v:expr, $cond:expr, $err:expr, $($msg:tt)*) => {
+        $crate::init::error::bkey_fsck_err_on($v, $cond, $err, format_args!($($msg)*))
+    };
+}
 
 #[macro_export]
 macro_rules! fsck_err {
