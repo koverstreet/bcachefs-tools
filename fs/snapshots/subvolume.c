@@ -26,7 +26,7 @@ static int bch2_subvolume_missing(struct bch_fs *c, u32 subvolid)
 {
 	CLASS(bch_log_msg, msg)(c);
 
-	prt_printf(&msg.m, "missing subvolume %u", subvolid);
+	prt_printf(&msg.m, "missing subvolume %u\n", subvolid);
 	msg.m.suppress = !bch2_count_fsck_err(c, subvol_missing, &msg.m);
 
 	return bch2_run_explicit_recovery_pass(c, &msg.m, BCH_RECOVERY_PASS_check_inodes, 0);
@@ -660,7 +660,7 @@ int __bch2_subvolume_get_snapshot(struct btree_trans *trans, u32 subvolid,
 	struct bkey_s_c_subvolume subvol = bch2_bkey_get_typed(&iter, subvolume);
 	int ret = bkey_err(subvol);
 
-	if (bch2_err_matches(ret, ENOENT))
+	if (warn && bch2_err_matches(ret, ENOENT))
 		ret = bch2_subvolume_missing(trans->c, subvolid) ?: ret;
 
 	if (likely(!ret))
