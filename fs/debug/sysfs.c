@@ -504,9 +504,12 @@ STORE(bch2_fs)
 
 	if (attr == &sysfs_logged_op_fail_next) {
 		unsigned type;
+		int ret = bch2_logged_op_fail_next_parse(buf, &type);
 
-		try(bch2_logged_op_fail_next_parse(buf, &type));
-		WRITE_ONCE(c->logged_op_fail_next, type);
+		if (ret)
+			size = ret;
+		else
+			WRITE_ONCE(c->logged_op_fail_next, type);
 	}
 
 	if (attr == &sysfs_trigger_delete_dead_snapshots) {
