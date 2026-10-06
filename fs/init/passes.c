@@ -862,7 +862,7 @@ int bch2_run_recovery_passes_startup(struct bch_fs *c, enum bch_recovery_pass fr
 	 * We can't allow set_may_go_rw to be excluded; that would cause us to
 	 * use the journal replay keys for updates where it's not expected.
 	 */
-	c->opts.recovery_passes_exclude &= ~BCH_RECOVERY_PASS_set_may_go_rw;
+	c->opts.recovery_passes_exclude &= ~BIT_ULL(BCH_RECOVERY_PASS_set_may_go_rw);
 	passes &= ~c->opts.recovery_passes_exclude;
 
 	passes &= ~(BIT_ULL(from) - 1);
