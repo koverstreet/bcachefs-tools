@@ -1353,9 +1353,10 @@ impl<'t> BtreeIter<'t> {
     /// returned.
     ///
     /// @f gets the iterator too, as the C loop bodies do - to update at its
-    /// position, or read where it is. As in C, the key points into the node
-    /// the iterator's path holds: it's not to be used once @f has moved the
-    /// iterator.
+    /// position, or read where it is - shared, borrowed with the key: the
+    /// key's header is in the iterator, and its value in the node the
+    /// iterator's path holds, so nothing may move the iterator while the key
+    /// is in use. A body that needs to move it is a loop of its own.
     fn for_each_inner<P, S, F, R>(
         &mut self,
         trans:    &BtreeTrans<'_>,
@@ -1366,20 +1367,20 @@ impl<'t> BtreeIter<'t> {
     where
         P: FnMut(*mut c::btree_iter) -> c::bkey_s_c,
         S: FnMut(*mut c::btree_iter) -> bool,
-        F: for<'a> FnMut(&mut BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
     {
         loop {
             let t = trans.begin();
 
-            let k = match bkey_s_c_to_result(peek(self.raw.get_mut())) {
+            let (iter, k) = match self.peek_with(&mut peek) {
                 Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
                 Err(e) => return Err(e),
                 Ok(None) => return Ok(Default::default()),
-                Ok(Some(k)) => k,
+                Ok(Some(ik)) => ik,
             };
 
-            match f(self, k) {
+            match f(iter, k) {
                 Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
                 Err(e) => return Err(e),
                 Ok(flow) => {
@@ -1394,6 +1395,18 @@ impl<'t> BtreeIter<'t> {
                 return Ok(Default::default());
             }
         }
+    }
+
+    /// Peek with @peek: the key, and the iterator it borrows, shared - both
+    /// from the one &mut borrow, so neither outlives it and nothing moves
+    /// the iterator while they're in use.
+    fn peek_with<'a, P>(&'a mut self, peek: &mut P)
+        -> Result<Option<(&'a BtreeIter<'t>, BkeySC<'a>)>, BchError>
+    where
+        P: FnMut(*mut c::btree_iter) -> c::bkey_s_c,
+    {
+        let k = bkey_s_c_to_result::<'a>(peek(self.raw.get_mut()))?;
+        Ok(k.map(|k| (&*self, k)))
     }
 
     /// The next key, up to @end, as the iterator's own flags say to peek: a
@@ -1411,7 +1424,7 @@ impl<'t> BtreeIter<'t> {
     pub fn for_each_max<F, R>(&mut self, trans: &BtreeTrans<'_>, end: bpos, f: F)
         -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&mut BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
     {
         self.for_each_inner(trans,
@@ -1430,7 +1443,7 @@ impl<'t> BtreeIter<'t> {
     /// for the loop the caller is in.
     pub fn for_each_norestart<F, R>(&mut self, f: F) -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&mut BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
     {
         self.for_each_max_norestart(SPOS_MAX, f)
@@ -1441,16 +1454,16 @@ impl<'t> BtreeIter<'t> {
     pub fn for_each_max_norestart<F, R>(&mut self, end: bpos, mut f: F)
         -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&mut BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
     {
         loop {
-            let Some(k) = bkey_s_c_to_result(Self::peek_own_type(self.raw.get_mut(), end))?
+            let Some((iter, k)) = self.peek_with(&mut |raw| Self::peek_own_type(raw, end))?
             else {
                 return Ok(Default::default());
             };
 
-            if let Some(b) = f(self, k)?.into_break() {
+            if let Some(b) = f(iter, k)?.into_break() {
                 return Ok(b);
             }
             if !self.advance() {
@@ -1465,16 +1478,17 @@ impl<'t> BtreeIter<'t> {
     pub fn for_each_reverse_norestart<F, R>(&mut self, min: bpos, mut f: F)
         -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&mut BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
     {
         loop {
-            let Some(k) = bkey_s_c_to_result(unsafe { c::bch2_btree_iter_peek_prev_min(self.raw.get_mut(), min) })?
+            let Some((iter, k)) =
+                self.peek_with(&mut |raw| unsafe { c::bch2_btree_iter_peek_prev_min(raw, min) })?
             else {
                 return Ok(Default::default());
             };
 
-            if let Some(b) = f(self, k)?.into_break() {
+            if let Some(b) = f(iter, k)?.into_break() {
                 return Ok(b);
             }
             if !self.rewind() {
@@ -1485,7 +1499,7 @@ impl<'t> BtreeIter<'t> {
 
     pub fn for_each<F, R>(&mut self, trans: &BtreeTrans<'_>, f: F) -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&mut BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
     {
         self.for_each_max(trans, SPOS_MAX, f)
@@ -1664,7 +1678,7 @@ impl<'t> BtreeIter<'t> {
     pub fn for_each_reverse<F, R>(&mut self, trans: &BtreeTrans<'_>, min: bpos, f: F)
         -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&mut BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
     {
         self.for_each_inner(trans,
@@ -1680,7 +1694,7 @@ impl<'t> BtreeIter<'t> {
         f:     F,
     ) -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&mut BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
     {
         self.for_each_inner(trans,
