@@ -6,6 +6,8 @@
 // exactly once.
 use std::path::PathBuf;
 
+include!("../clang_target.rs");
+
 fn main() {
     let out_dir: PathBuf = std::env::var_os("OUT_DIR")
         .expect("ENV Var 'OUT_DIR' Expected")
@@ -24,15 +26,17 @@ fn main() {
         .join("wrapper.h");
 
     println!("cargo:rerun-if-changed={}", wrapper.display());
+    println!("cargo:rerun-if-changed=../clang_target.rs");
     println!("cargo:rerun-if-changed={}", include_dir.display());
 
     let urcu = pkg_config::probe_library("liburcu").expect("Failed to find urcu lib");
     let target = std::env::var("TARGET").unwrap();
+    let clang_target = clang_target_for_rust_target(&target);
 
     let bindings = bindgen::builder()
         .formatter(bindgen::Formatter::Prettyplease)
         .header(wrapper.display().to_string())
-        .clang_arg(format!("--target={}", target))
+        .clang_arg(format!("--target={}", clang_target))
         .clang_args(
             urcu.include_paths
                 .iter()
