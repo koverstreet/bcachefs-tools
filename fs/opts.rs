@@ -1,4 +1,5 @@
 use crate::c;
+use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::util::printbuf::Printbuf;
 use core::ffi::CStr;
@@ -255,4 +256,130 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &c::bch_option, val: &core::ffi::CStr,
                           err.map_or(core::ptr::null_mut(), |e| e.as_raw()))
     };
     if ret < 0 { Err(ret) } else { Ok(v) }
+}
+
+/// Option @opt's value @v, as text: as bch2_opt_to_text(), without flags.
+pub fn opt_to_text(out: &mut Printbuf, fs: &Fs, opt: &c::bch_option, v: u64) {
+    unsafe { c::bch2_opt_to_text(out.as_raw(), fs.raw, fs.sb() as *const _ as *mut _, opt, v, 0) }
+}
+
+impl c::bch_opt_id {
+    /// Whether this is an option inodes can set: as bch2_opt_is_inode_opt().
+    pub fn is_inode_opt(self) -> bool {
+        unsafe { c::bch2_opt_is_inode_opt(self) }
+    }
+
+    /// The inode option this is, if it is one: as bch2_opt_to_inode_opt().
+    pub fn inode_opt(self) -> Option<InodeOpt> {
+        let id = unsafe { c::bch2_opt_to_inode_opt(self.0 as core::ffi::c_int) };
+        u32::try_from(id).ok().and_then(InodeOpt::from_index)
+    }
+}
+
+// ── Inode options ────────────────────────────────────────────────────────
+//
+// BCH_INODE_OPTS(): the options an inode can set for itself and what's
+// below it. On the inode they're stored with a +1 bias, so that 0 means
+// "not set" - inherited - and 1 an explicit "none"; bi_fields_set says
+// which were set on the inode itself, rather than propagated from a parent.
+
+/// An inode option: an inode_opt_id below Inode_opt_nr.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct InodeOpt(c::inode_opt_id);
+
+impl InodeOpt {
+    /// The inode option numbered @i, if there's one.
+    pub fn from_index(i: u32) -> Option<InodeOpt> {
+        // The enum is repr(u32), with a variant for every value below
+        // Inode_opt_nr:
+        (i < c::inode_opt_id::Inode_opt_nr as u32)
+            .then(|| InodeOpt(unsafe { core::mem::transmute::<u32, c::inode_opt_id>(i) }))
+    }
+
+    pub fn all() -> impl Iterator<Item = InodeOpt> {
+        (0..c::inode_opt_id::Inode_opt_nr as u32)
+            .map(|i| InodeOpt::from_index(i).expect("below Inode_opt_nr"))
+    }
+
+    pub fn id(self) -> c::inode_opt_id {
+        self.0
+    }
+
+    pub fn name(self) -> &'static CStr {
+        unsafe { CStr::from_ptr(*c::bch2_inode_opts.as_ptr().add(self.0 as usize)) }
+    }
+
+    /// Its value on @inode, biased: 0 for not set.
+    pub fn get(self, inode: &c::bch_inode_unpacked) -> u64 {
+        // Only reads @inode: C's signature isn't const.
+        unsafe { c::bch2_inode_opt_get(inode as *const _ as *mut _, self.0) }
+    }
+
+    /// Set its value on @inode - biased, 0 for not set.
+    pub fn set(self, inode: &mut c::bch_inode_unpacked, v: u64) {
+        unsafe { c::bch2_inode_opt_set(inode, self.0, v) }
+    }
+
+    /// Whether it's set on @inode itself, not inherited: bi_fields_set.
+    pub fn is_own(self, inode: &c::bch_inode_unpacked) -> bool {
+        inode.bi_fields_set & (1 << self.0 as u32) != 0
+    }
+
+    pub fn set_own(self, inode: &mut c::bch_inode_unpacked, own: bool) {
+        let bit = 1 << self.0 as u32;
+        if own {
+            inode.bi_fields_set |= bit;
+        } else {
+            inode.bi_fields_set &= !bit;
+        }
+    }
+}
+
+/// @inode's options as filesystem options - those it sets, with the +1 bias
+/// removed: as bch2_inode_opts_to_opts().
+pub fn inode_opts_to_opts(inode: &c::bch_inode_unpacked) -> c::bch_opts {
+    // Only reads @inode: C's signature isn't const.
+    unsafe { c::bch2_inode_opts_to_opts(inode as *const _ as *mut _) }
+}
+
+// ── Changing options ─────────────────────────────────────────────────────
+
+/// An option change in progress: the option change lock held, and the scope
+/// the pre-set hooks record what the change needs into - as C's
+/// guard(opt_change_lock) and CLASS(opt_change_scope). Both are released
+/// when this is dropped, the scope first.
+pub struct OptChange<'f> {
+    fs:    &'f Fs,
+    scope: c::opt_change_scope,
+}
+
+impl<'f> OptChange<'f> {
+    pub fn new(fs: &'f Fs) -> Self {
+        unsafe { c::bch2_opt_change_lock(fs.raw) };
+        OptChange { fs, scope: unsafe { c::bch2_opt_change_scope_init(fs.raw) } }
+    }
+
+    /// Before setting option @id to @v, for inode @inum - 0 for the
+    /// filesystem: what the change needs, and whether it may - as
+    /// bch2_opt_hook_pre_set().
+    pub fn pre_set(&mut self, inum: u64, id: c::bch_opt_id, v: u64) -> Result<(), BchError> {
+        ret_to_result(unsafe {
+            c::bch2_opt_hook_pre_set(self.fs.raw, core::ptr::null_mut(), inum, id, v, true,
+                                     &mut self.scope)
+        })
+    }
+
+    /// Having set it: as bch2_opt_hook_post_set().
+    pub fn post_set(&self, inum: u64, id: c::bch_opt_id, v: u64) {
+        unsafe { c::bch2_opt_hook_post_set(self.fs.raw, core::ptr::null_mut(), inum, id, v) }
+    }
+}
+
+impl Drop for OptChange<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            c::bch2_opt_change_scope_exit(&mut self.scope);
+            c::bch2_opt_change_unlock(self.fs.raw);
+        }
+    }
 }

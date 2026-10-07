@@ -28,6 +28,7 @@ const HEADERS: &[&str] = &[
     "debug/debug.h",
     "init/damage.h", "init/dev.h", "init/error.h", "init/fs.h", "init/passes.h", "init/recovery.h",
     "fs/check.h", "fs/dirent.h", "fs/inode.h", "fs/inode_opts.h", "fs/namei.h", "fs/xattr.h",
+    "data/reconcile/work.h",
     "journal/init.h", "journal/read.h", "journal/reclaim.h", "journal/seq_blacklist.h", "journal/validate.h",
     "sb/io.h", "sb/members.h",
 ];
