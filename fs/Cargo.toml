@@ -20,11 +20,14 @@ std = ["dep:zeroize"]
 
 [dependencies]
 bcachefs-shim = { path = "../bcachefs-shim" }
+bitfield-struct = { path = "vendor/bitfield-struct" }
 bcachefs-typeinfo-macros = { path = "typeinfo-macros" }
 bitfield = { path = "vendor/bitfield" }
 bitflags = { path = "vendor/bitflags" }
 paste    = { path = "vendor/paste" }
 uuid     = "1.2.2"
+# Endian-typed integers for the on-disk format: byteorder::{little,big}_endian.
+zerocopy = "0.8"
 zeroize  = { version = "1", optional = true, features = ["std", "zeroize_derive"] }
 
 [build-dependencies]
