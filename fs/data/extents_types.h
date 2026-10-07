@@ -20,13 +20,13 @@ struct bch_extent_crc_unpacked {
 };
 
 /*
- * Read the device, or rebuild from the rest of its stripe. Each is tried at
- * most once per device, in an order that depends on the read - ec first for a
- * read-around - so what's been tried is tracked: bch_dev_io_failures.tried
+ * How a pointer is read: each is tried at most once per device, in an order
+ * that depends on the read, so what's been tried is tracked.
  */
 #define BCH_READ_MODES()	\
 	x(direct)		\
-	x(ec)
+	x(ec)			\
+	x(ec_read_around)
 
 enum bch_read_mode {
 #define x(n)	BCH_READ_MODE_##n,

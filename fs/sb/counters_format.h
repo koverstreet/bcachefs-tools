@@ -42,6 +42,8 @@ enum bch_counters_flags {
 	  "Erasure coded reads reconstructed to avoid a slow device")	\
 	x(data_read_ec_read_around_fail,	139, TYPE_COUNTER,	\
 	  "Read-around reconstructs that failed and fell back to a direct read")\
+	x(data_read_ec_read_around_widen,	140, TYPE_COUNTER,	\
+	  "Read-arounds that read the block they left out after a failure")\
 	x(data_read_fail_and_poison,		95,  TYPE_COUNTER,	\
 	  "Read failures with poisoned pages")				\
 	x(data_read_narrow_crcs,		97,  TYPE_COUNTER,	\

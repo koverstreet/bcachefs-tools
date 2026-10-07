@@ -1987,60 +1987,34 @@ static void ec_old_stripe_read_done(struct ec_stripe_new *s)
 static CLOSURE_CALLBACK(ec_old_stripe_fold)
 {
 	closure_type(s, struct ec_stripe_new, old_stripe.io);
-
+	struct ec_stripe_buf *buf = &s->old_stripe;
 	u32 required = ec_old_stripe_required(s);
+	u32 unread = s->old_stripe_unread;
+	u32 failed = unread | bch2_stripe_buf_bad(buf, (BIT(buf->key.v.nr_blocks) - 1) & ~unread);
 
-	/*
-	 * Only the carried blocks were read. If one of them is bad, read the
-	 * rest so it can be reconstructed, and come back here:
-	 */
-	if (!s->old_stripe_read_all) {
-		if (bch2_stripe_buf_blocks_good(&s->old_stripe, required)) {
-			ec_old_stripe_carry(s);
+	if (unread && !(failed & required)) {
+		ec_old_stripe_carry(s);
+		closure_return(cl);
+		return;
+	}
+
+	/* Data is only declared lost if it really can't be read: */
+	u32 next = bch2_ec_read_next(s->c, &buf->key.v, unread, failed);
+	if (!next) {
+		ec_old_stripe_read_done(s);
+		if (!unread || !s->old_stripe_err) {
 			closure_return(cl);
 			return;
 		}
-
-		s->old_stripe_read_all = true;
-		for (unsigned i = 0; i < s->old_stripe.key.v.nr_blocks; i++)
-			if (!(required & BIT(i)))
-				bch2_ec_block_io(s->c, &s->old_stripe, REQ_OP_READ, i);
-		continue_at(cl, ec_old_stripe_fold, system_dfl_wq);
-		return;
+		next = unread;
 	}
 
-	/*
-	 * Data is only declared lost if it really can't be read: if anything we
-	 * did read is bad, or the rebuild doesn't check out, read the skipped
-	 * blocks too and start over.
-	 */
-	u32 skipped = s->old_stripe_skipped;
-	if (skipped) {
-		struct ec_stripe_buf *buf = &s->old_stripe;
-
-		if (bch2_stripe_buf_blocks_good(buf, (BIT(buf->key.v.nr_blocks) - 1) & ~skipped)) {
-			ec_old_stripe_read_done(s);
-			if (!s->old_stripe_err) {
-				closure_return(cl);
-				return;
-			}
-		}
-
-		s->old_stripe_skipped = 0;
-		s->old_stripe_err = 0;
-		s->old_stripe_lost_blocks = 0;
-		memset(buf->err[STRIPE_BUF_POST_RECOV], 0, sizeof(buf->err[STRIPE_BUF_POST_RECOV]));
-		for (unsigned i = 0; i < buf->key.v.nr_blocks; i++)
-			if (skipped & BIT(i)) {
-				buf->err[STRIPE_BUF_PRE_RECOV][i] = 0;
-				bch2_ec_block_io(s->c, buf, REQ_OP_READ, i);
-			}
-		continue_at(cl, ec_old_stripe_fold, system_dfl_wq);
-		return;
-	}
-
-	ec_old_stripe_read_done(s);
-	closure_return(cl);
+	s->old_stripe_unread &= ~next;
+	s->old_stripe_lost_blocks = 0;
+	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++)
+		if (next & BIT(i))
+			bch2_ec_block_io(s->c, buf, REQ_OP_READ, i);
+	continue_at(cl, ec_old_stripe_fold, system_dfl_wq);
 }
 
 static void ec_old_stripe_read(struct bch_fs *c, struct ec_stripe_new *s)
@@ -2058,20 +2032,13 @@ static void ec_old_stripe_read(struct bch_fs *c, struct ec_stripe_new *s)
 	closure_init(&s->cl, NULL);
 	closure_init(&s->old_stripe.io, &s->cl);
 
-	/*
-	 * A carried block on a device much slower than the rest of the stripe -
-	 * typically a failing drive being evacuated - is rebuilt from the other
-	 * blocks instead, so read all of those now:
-	 */
+	/* A carried block on a device much slower than the rest is rebuilt instead: */
 	u32 required = ec_old_stripe_required(s);
-	s->old_stripe_skipped = bch2_ec_read_around_skip(c, &s->old_stripe.key.v, required);
-	s->old_stripe_read_all = s->old_stripe_skipped != 0;
+	u32 all = BIT(s->old_stripe.key.v.nr_blocks) - 1;
+	s->old_stripe_unread = bch2_ec_read_around_skip(c, &s->old_stripe.key.v, required) ?:
+		all & ~required;
 
-	for (unsigned i = 0; i < s->old_stripe.key.v.nr_blocks; i++)
-		if (s->old_stripe_skipped & BIT(i))
-			s->old_stripe.err[STRIPE_BUF_PRE_RECOV][i] = -BCH_ERR_stripe_read_skipped;
-		else if (s->old_stripe_read_all || (required & BIT(i)))
-			bch2_ec_block_io(c, &s->old_stripe, REQ_OP_READ, i);
+	bch2_stripe_buf_read(c, &s->old_stripe, all & ~s->old_stripe_unread);
 
 	/*
 	 * Not stripe_create_wq: create waits on the fold, so running them on
@@ -2087,7 +2054,6 @@ static void ec_old_stripe_read(struct bch_fs *c, struct ec_stripe_new *s)
 static void ec_old_stripe_take(struct ec_stripe_new *s, struct ec_stripe_buf *read)
 {
 	s->old_stripe_read = true;
-	s->old_stripe_read_all = true;
 	closure_init(&s->cl, NULL);
 
 	bch2_ec_stripe_buf_move(&s->old_stripe, read);
@@ -2821,13 +2787,12 @@ static void stripe_repair_rebuild_abort(struct bch_fs *c, struct ec_stripe_new *
 }
 
 /*
- * Read @s into @buf as ec_old_stripe_fold() would: the blocks in @required,
- * then the rest if one of those is bad (@read_all). A block in @required on a
- * device much slower than the rest of the stripe is rebuilt from the others
- * instead, and read after all if that doesn't check out. The caller has @s open.
+ * Read @s into @buf as ec_old_stripe_fold() would, and rebuild what's bad if
+ * that's possible without reading the rest (@unread). With @unread 0, all of it
+ * was read and it's for the caller to validate. The caller has @s open.
  */
 static int stripe_repair_read(struct btree_trans *trans, struct bkey_s_c_stripe s,
-			      u32 required, struct ec_stripe_buf *buf, bool *read_all)
+			      u32 required, struct ec_stripe_buf *buf, u32 *unread)
 {
 	struct bch_fs *c = trans->c;
 
@@ -2848,45 +2813,28 @@ static int stripe_repair_read(struct btree_trans *trans, struct bkey_s_c_stripe 
 	bch2_trans_unlock_long(trans);
 
 	u32 all = BIT(buf->key.v.nr_blocks) - 1;
-	u32 skipped = bch2_ec_read_around_skip(c, &buf->key.v, required);
-	unsigned long blocks = skipped ? all & ~skipped : required;
-	unsigned i;
-	for_each_set_bit(i, &blocks, BCH_BKEY_PTRS_MAX)
-		bch2_ec_block_io(c, buf, REQ_OP_READ, i);
-	closure_sync(&buf->io);
+	*unread = bch2_ec_read_around_skip(c, &buf->key.v, required) ?: all & ~required;
+	bch2_stripe_buf_read(c, buf, all & ~*unread);
 
-	if (skipped) {
-		blocks = skipped;
-		for_each_set_bit(i, &blocks, BCH_BKEY_PTRS_MAX)
-			buf->err[STRIPE_BUF_PRE_RECOV][i] = -BCH_ERR_stripe_read_skipped;
+	while (1) {
+		closure_sync(&buf->io);
 
-		if (bch2_stripe_buf_blocks_good(buf, all & ~skipped) &&
-		    !bch2_stripe_buf_validate_msg(c, buf, true, required)) {
-			*read_all = false;
+		u32 failed = *unread | bch2_stripe_buf_bad(buf, all & ~*unread);
+		if (*unread && !(failed & required))
 			return 0;
+
+		u32 next = bch2_ec_read_next(c, &buf->key.v, *unread, failed);
+		if (!next) {
+			if (!*unread || !bch2_stripe_buf_validate_msg(c, buf, true, required))
+				return 0;
+			next = *unread;
 		}
 
-		/* Data is only declared lost if it really can't be read: */
-		memset(buf->err[STRIPE_BUF_POST_RECOV], 0, sizeof(buf->err[STRIPE_BUF_POST_RECOV]));
-		for_each_set_bit(i, &blocks, BCH_BKEY_PTRS_MAX) {
-			buf->err[STRIPE_BUF_PRE_RECOV][i] = 0;
-			bch2_ec_block_io(c, buf, REQ_OP_READ, i);
-		}
-		closure_sync(&buf->io);
-
-		*read_all = !bch2_stripe_buf_blocks_good(buf, required);
-		return 0;
+		*unread &= ~next;
+		for (unsigned i = 0; i < buf->key.v.nr_blocks; i++)
+			if (next & BIT(i))
+				bch2_ec_block_io(c, buf, REQ_OP_READ, i);
 	}
-
-	*read_all = !bch2_stripe_buf_blocks_good(buf, required);
-	if (*read_all) {
-		blocks = ~required & (BIT(buf->key.v.nr_blocks) - 1);
-		for_each_set_bit(i, &blocks, BCH_BKEY_PTRS_MAX)
-			bch2_ec_block_io(c, buf, REQ_OP_READ, i);
-		closure_sync(&buf->io);
-	}
-
-	return 0;
 }
 
 /*
@@ -3176,20 +3124,19 @@ static int stripe_repair_opened(struct moving_context *ctxt, struct bkey_s_c_str
 {
 	struct btree_trans *trans = ctxt->trans;
 	struct bch_fs *c = trans->c;
-	bool read_all;
+	u32 unread;
 
-	try(stripe_repair_read(trans, s, b.live, buf, &read_all));
+	try(stripe_repair_read(trans, s, b.live, buf, &unread));
 
 	/*
 	 * Too many blocks bad, or a reconstruct that still doesn't check out:
 	 * either way, rebuild around the blocks that read clean.
 	 */
-	if (read_all && bch2_stripe_buf_validate_msg(c, buf, true, b.live))
+	if (!unread && bch2_stripe_buf_validate_msg(c, buf, true, b.live))
 		return stripe_repair_unrebuildable(ctxt, h, buf, b);
 
 	/* a block that failed the read is rewritten, not carried: */
-	if (read_all)
-		b.bad |= ec_failed_mask(buf, STRIPE_BUF_PRE_RECOV);
+	b.bad |= ec_failed_mask(buf, STRIPE_BUF_PRE_RECOV) & ~unread;
 
 	struct bch_devs_mask devs;
 	unsigned need_evacuate = stripe_repair_need_evacuate(c, s.v, b, &devs);
