@@ -436,20 +436,6 @@ static inline bool bch2_read_mode_tried(const struct bch_dev_io_failures *f,
 	return f && (f->tried & BIT(mode));
 }
 
-/*
- * An ec read tried first, with a direct read still to come: it may give up,
- * and if it fails the device hasn't failed.
- */
-static inline bool bch2_ec_read_optional(struct bch_io_failures *failed,
-					 const struct extent_ptr_decoded *p,
-					 enum bch_read_flags flags)
-{
-	return p->mode == BCH_READ_MODE_ec &&
-		(flags & BCH_READ_ec_read_around) &&
-		!bch2_read_mode_tried(failed ? bch2_dev_io_failures(failed, p->ptr.dev) : NULL,
-				      BCH_READ_MODE_direct);
-}
-
 void bch2_mark_io_failure(struct bch_io_failures *, struct extent_ptr_decoded *, int);
 void bch2_mark_dev_io_failure(struct bch_io_failures *, unsigned, int);
 int bch2_bkey_pick_read_device(struct bch_fs *, struct bkey_s_c,

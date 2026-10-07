@@ -79,8 +79,7 @@ struct ec_stripe_new {
 	 */
 	int			old_stripe_err;
 	u32			old_stripe_lost_blocks;
-	/* Carried blocks on slow devices, rebuilt from the others */
-	u32			old_stripe_skipped;
+	u32			old_stripe_skipped;	/* slow, rebuilt from the others */
 
 	struct bch_devs_mask	devs;
 	enum bch_watermark	watermark;
@@ -243,6 +242,9 @@ static inline void ec_stripe_new_put(struct bch_fs *c, struct ec_stripe_new *s,
 }
 
 void bch2_ec_stripe_delete_work(struct work_struct *);
+
+bool bch2_ec_stripe_scrub_queue(struct bch_fs *, u64, u32);
+void bch2_ec_stripe_scrub_work(struct work_struct *);
 
 void bch2_new_stripes_to_text(struct printbuf *, struct bch_fs *);
 

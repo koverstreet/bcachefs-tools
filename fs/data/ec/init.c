@@ -403,6 +403,9 @@ void bch2_fs_ec_init_early(struct bch_fs *c)
 	init_waitqueue_head(&c->ec.stripe_new_wait);
 
 	INIT_WORK(&c->ec.stripe_delete_work, bch2_ec_stripe_delete_work);
+
+	spin_lock_init(&c->ec.stripe_scrub_lock);
+	INIT_WORK(&c->ec.stripe_scrub_work, bch2_ec_stripe_scrub_work);
 }
 
 int bch2_fs_ec_init(struct bch_fs *c)
