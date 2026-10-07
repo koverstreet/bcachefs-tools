@@ -43,7 +43,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "bpos_.*", "bkey_init", "bkey_.*_init", "bkey_i_to_s", "bkey_i_to_s_c",
     "btree_iter_path", "extent_entry_u64s", "enumerated_ref_put",
     "bkey_is_inode", "bkey_inode_mode", "INODE_STR_HASH", "SET_INODE_STR_HASH", "journal_cur_seq",
-    "dirent_copy_target", "prt_bytes",
+    "prt_bytes",
     "bkey_extent_is_allocation", "bkey_extent_is_reservation", "crc_is_encoded",
     // crypto helpers for the dump sanitize path (static inlines, not
     // bch2_-prefixed): nonce constructors + bset_encrypt, driven from Rust
@@ -62,7 +62,7 @@ const ALLOWLIST_VAR: &[&str] = &["BCH_.*", "BTREE_MAX_DEPTH", "KEY_SPEC_.*", "bc
     // errnos, for bch2_err_matches() against a bare errno, or returning one
     // as C does (darray_push()'s -ENOMEM); add as needed:
     "ENOENT", "ENOMEM", "EINVAL", "ENAMETOOLONG", "ERANGE", "ENODATA", "E2BIG", "EACCES",
-    "ECHILD", "EIO", "ENOTEMPTY",
+    "ECHILD", "EROFS", "EXDEV", "ENOTDIR", "EIO", "ENOTEMPTY",
     "BCACHEFS_ROOT_SUBVOL", "BCACHEFS_ROOT_INO",
     "BLOCKDEV_INODE_MAX", "INODEv3_FIELDS_START_INITIAL",
     "KEY_TYPE_XATTR_INDEX_.*"];

@@ -39,36 +39,9 @@ struct qstr bch2_dirent_get_name(struct bkey_s_c_dirent);
 struct bkey_s_c bch2_dirent_lookup_key(struct btree_trans *, struct btree_iter *,
 				       subvol_inum, const struct bch_hash_info *,
 				       const struct qstr *);
-int bch2_dirent_delete_at(struct btree_trans *, const struct bch_hash_info *,
-			  struct btree_iter *, enum btree_iter_update_trigger_flags);
-
-static inline struct bkey_s_c_dirent dirent_get_by_pos(struct btree_trans *trans,
-						struct btree_iter *iter,
-						struct bpos pos)
-{
-	bch2_trans_iter_init(trans, iter, BTREE_ID_dirents, pos, 0);
-	return bch2_bkey_get_typed(iter, dirent);
-}
 
 int bch2_dirent_read_target(struct btree_trans *, subvol_inum,
 			    struct bkey_s_c_dirent, subvol_inum *);
-
-static inline void dirent_copy_target(struct bkey_i_dirent *dst,
-				      struct bkey_s_c_dirent src)
-{
-	dst->v.d_inum = src.v->d_inum;
-	dst->v.d_type = src.v->d_type;
-}
-
-
-int bch2_dirent_create_snapshot(struct btree_trans *, u32, u32,
-				struct bch_inode_unpacked *dir_u,
-				u8, const struct qstr *, u64, u64 *,
-				enum btree_iter_update_trigger_flags);
-int bch2_dirent_create(struct btree_trans *, subvol_inum,
-		       struct bch_inode_unpacked *dir_u,
-		       u8, const struct qstr *, u64, u64 *,
-		       enum btree_iter_update_trigger_flags);
 
 static inline unsigned vfs_d_type(unsigned type)
 {
@@ -80,20 +53,6 @@ enum bch_rename_mode {
 	BCH_RENAME_OVERWRITE,
 	BCH_RENAME_EXCHANGE,
 };
-
-int bch2_dirent_rename(struct btree_trans *,
-		       subvol_inum, struct bch_hash_info *,
-		       subvol_inum, struct bch_hash_info *,
-		       const struct qstr *, subvol_inum *, u64 *,
-		       const struct qstr *, subvol_inum *, u64 *,
-		       enum bch_rename_mode);
-
-int bch2_dirent_lookup_snapshot(struct btree_trans *,
-				struct btree_iter *,
-				subvol_inum, u32,
-				const struct bch_hash_info *,
-				const struct qstr *, subvol_inum *,
-				unsigned);
 
 int bch2_dirent_lookup(struct bch_fs *, subvol_inum,
 		       const struct bch_hash_info *,
@@ -110,7 +69,5 @@ int bch2_dir_emit(struct btree_trans *, struct dir_context *,
 
 void bch2_dirent_init(void);
 void bch2_filldir64_specialization_to_text(struct printbuf *);
-
-int bch2_fsck_remove_dirent(struct btree_trans *, struct bpos);
 
 #endif /* _BCACHEFS_DIRENT_H */

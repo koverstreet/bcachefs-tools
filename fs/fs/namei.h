@@ -59,9 +59,6 @@ int bch2_rename_trans(struct btree_trans *,
 bool bch2_reinherit_attrs(struct bch_inode_unpacked *,
 			  struct bch_inode_unpacked *);
 
-struct bkey_s_c_dirent bch2_inode_get_dirent(struct btree_trans *, struct btree_iter *,
-					     struct bch_inode_unpacked *, u32 *);
-
 int bch2_inum_to_path(struct btree_trans *, subvol_inum, struct printbuf *);
 
 #define INUM_TO_PATH_FAIL_ON_ERR	(1 << 0)
@@ -110,7 +107,5 @@ static inline int bch2_check_dirent_target(struct btree_trans *trans,
 
 int bch2_maybe_propagate_has_case_insensitive(struct btree_trans *, subvol_inum,
 					      struct bch_inode_unpacked *);
-int bch2_check_inode_has_case_insensitive(struct btree_trans *, struct bch_inode_unpacked *,
-					  snapshot_id_list *, bool *);
 
 #endif /* _BCACHEFS_NAMEI_H */

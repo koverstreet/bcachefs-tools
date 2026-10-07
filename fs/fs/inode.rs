@@ -6,7 +6,7 @@ use crate::fs::Fs;
 use crate::dirent::DirentTarget;
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{
-    bkey_s_c_to_result, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
+    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
     UpdateTriggerFlags,
 };
 use crate::{btree, btree_id, printbuf_to_formatter};
@@ -125,24 +125,6 @@ pub fn flags(k: BkeySC<'_>) -> u32 {
 /// bch2_inode_has_backpointer().
 pub fn has_backpointer(inode: &c::bch_inode_unpacked) -> bool {
     unsafe { c::bch2_inode_has_backpointer(inode) }
-}
-
-/// The dirent naming @inode, looked up through @iter: as
-/// bch2_inode_get_dirent(). @snapshot is where to look, and on return where
-/// the lookup looked - a subvolume root is named in its parent subvolume.
-pub fn get_dirent<'i>(
-    trans:    &BtreeTrans<'_>,
-    iter:     &'i mut BtreeIter<'_>,
-    inode:    &c::bch_inode_unpacked,
-    snapshot: &mut u32,
-) -> Result<BkeySC<'i>, BchError> {
-    // 'i: the dirent is valid while @iter, which it came through, is borrowed
-    let d = unsafe {
-        let d = c::bch2_inode_get_dirent(trans.raw(), iter.raw_mut(), inode as *const _ as *mut _,
-                                         snapshot);
-        bkey_s_c_to_result(d.into())
-    }?;
-    Ok(d.expect("a dirent lookup returns a key or an error"))
 }
 
 /// Some version of @inum, in any snapshot: as bch2_inode_find_any_snapshot().

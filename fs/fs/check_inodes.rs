@@ -62,13 +62,14 @@ struct CheckInodes {
 
 /// The backpointer: the dirent @u names has to exist and name @u back.
 /// Returns whether @u was changed.
-fn check_inode_dirent_inode(trans: &BtreeTrans<'_>, u: &mut c::bch_inode_unpacked) -> Result<bool, BchError> {
+fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpacked) -> Result<bool, BchError> {
+    let trans: &BtreeTrans<'_> = t;
     let fs = trans.fs();
     let pos = spos(0, u.bi_inum, u.bi_snapshot);
 
     let mut snapshot = u.bi_snapshot;
     let mut dirent_iter = BtreeIter::uninit();
-    let d = inode::get_dirent(trans, &mut dirent_iter, u, &mut snapshot).found()?;
+    let d = namei::inode_get_dirent(t, &mut dirent_iter, u, &mut snapshot).found()?;
     let points = d.is_some_and(|k| namei::dirent_points_to_inode(Dirent::new(k).expect("a dirent"), u));
 
     if !points && u.bi_subvol != 0 && u.flag(BCH_INODE_has_child_snapshot) {
@@ -333,7 +334,7 @@ fn check_inode<'t>(
     let mut changed = false;
 
     // ENOENT: a disconnected inode, which a later pass fixes
-    bch_err_msg!(fs, namei::check_inode_has_case_insensitive(trans, &mut u, &mut st.s, &mut changed)
+    bch_err_msg!(fs, namei::check_inode_has_case_insensitive(t, &mut u, &mut changed)
                  .found(), "bch2_check_inode_has_case_insensitive()")?;
 
     // Before the backpointer check: the dirent is looked up through
@@ -347,7 +348,7 @@ fn check_inode<'t>(
     }
 
     if inode::has_backpointer(&u) {
-        changed |= check_inode_dirent_inode(trans, &mut u)?;
+        changed |= check_inode_dirent_inode(t, &mut u)?;
     }
 
     if u.is_dir() && u.flag(BCH_INODE_unlinked) {

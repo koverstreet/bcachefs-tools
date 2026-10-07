@@ -239,39 +239,6 @@ pub fn create_snapshot(
     ret
 }
 
-/// For C's create and link: bch2_dirent_create_snapshot().
-///
-/// # Safety
-/// The arguments are the C function's, valid for the call; @trans has an
-/// attempt in progress.
-#[no_mangle]
-pub unsafe extern "C" fn bch2_dirent_create_snapshot(
-    trans:      *mut c::btree_trans,
-    dir_subvol: u32,
-    snapshot:   u32,
-    dir_u:      *mut c::bch_inode_unpacked,
-    d_type:     u8,
-    name:       *const c::qstr,
-    dst_inum:   u64,
-    dir_offset: *mut u64,
-    flags:      c::btree_iter_update_trigger_flags,
-) -> c_int {
-    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-
-    let target = if d_type as u32 == c::DT_SUBVOL {
-        DirentTarget::Subvol { child: dst_inum as u32, parent: dir_subvol }
-    } else {
-        DirentTarget::Inode(dst_inum)
-    };
-
-    let ret = create_snapshot(&trans.attempt_in_progress(), dir_subvol, snapshot,
-                              unsafe { &*dir_u }, d_type, unsafe { qstr_name(&*name) }, target,
-                              unsafe { &mut *dir_offset },
-                              BtreeIterFlags::from_bits_retain(flags.0),
-                              UpdateTriggerFlags::from_bits_retain(flags.0));
-    ret_to_c(ret)
-}
-
 /// Create dirent @name in directory @dir, pointing at @target - for
 /// DT_SUBVOL, a subvolume: as bch2_dirent_create(). Where it went is returned
 /// in @dir_offset.
@@ -293,31 +260,6 @@ pub fn create(
     let ret = str_hash::set::<Dirents>(t, &hash_info, dir, &mut k, iter_flags, update_flags);
     *dir_offset = k.k().p.offset;
     ret
-}
-
-/// For C's create: bch2_dirent_create().
-///
-/// # Safety
-/// The arguments are the C function's, valid for the call; @trans has an
-/// attempt in progress.
-#[no_mangle]
-pub unsafe extern "C" fn bch2_dirent_create(
-    trans:      *mut c::btree_trans,
-    dir:        c::subvol_inum,
-    dir_u:      *mut c::bch_inode_unpacked,
-    d_type:     u8,
-    name:       *const c::qstr,
-    dst_inum:   u64,
-    dir_offset: *mut u64,
-    flags:      c::btree_iter_update_trigger_flags,
-) -> c_int {
-    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-
-    let ret = create(&trans.attempt_in_progress(), dir, unsafe { &*dir_u }, d_type,
-                     unsafe { qstr_name(&*name) }, dst_inum, unsafe { &mut *dir_offset },
-                     BtreeIterFlags::from_bits_retain(flags.0),
-                     UpdateTriggerFlags::from_bits_retain(flags.0));
-    ret_to_c(ret)
 }
 
 // ── Casefolding ──────────────────────────────────────────────────────────
@@ -453,31 +395,6 @@ pub fn lookup_snapshot<'t>(
     lookup_target(t, dir, k)
 }
 
-/// For C's unlink: bch2_dirent_lookup_snapshot().
-///
-/// # Safety
-/// The arguments are the C function's, valid for the call; @trans has an
-/// attempt in progress, and @iter is the caller's.
-#[no_mangle]
-#[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn bch2_dirent_lookup_snapshot(
-    trans:     *mut c::btree_trans,
-    iter:      *mut c::btree_iter,
-    dir:       c::subvol_inum,
-    snapshot:  u32,
-    hash_info: *const c::bch_hash_info,
-    name:      *const c::qstr,
-    inum:      *mut c::subvol_inum,
-    flags:     u32,
-) -> c_int {
-    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-
-    let ret = lookup_snapshot(&trans.attempt_in_progress(), unsafe { BtreeIter::borrow_raw(iter) },
-                              dir, snapshot, unsafe { &*hash_info },
-                              unsafe { qstr_name(&*name) }, BtreeIterFlags::from_bits_retain(flags));
-    ret_to_c(ret.map(|i| unsafe { *inum = i }))
-}
-
 /// The dirent @name in directory @dir, through @iter - looked up by its
 /// casefolded name, in a casefolded directory.
 pub fn lookup_key<'i, 't>(
@@ -517,26 +434,6 @@ pub unsafe extern "C" fn bch2_dirent_lookup_key(
             v: core::ptr::null(),
         },
     }
-}
-
-/// For C's unlink: delete the dirent at @iter, leaving a whiteout if a later
-/// one in the same probe sequence needs one - str_hash::delete_at().
-///
-/// # Safety
-/// The arguments are the C function's, valid for the call; @trans has an
-/// attempt in progress, and @iter is the caller's.
-#[no_mangle]
-pub unsafe extern "C" fn bch2_dirent_delete_at(
-    trans:     *mut c::btree_trans,
-    hash_info: *const c::bch_hash_info,
-    iter:      *mut c::btree_iter,
-    flags:     c::btree_iter_update_trigger_flags,
-) -> c_int {
-    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-
-    ret_to_c(str_hash::delete_at::<Dirents>(&trans.attempt_in_progress(), unsafe { &*hash_info },
-                                            unsafe { BtreeIter::borrow_raw(iter) },
-                                            UpdateTriggerFlags::from_bits_retain(flags.0)))
 }
 
 /// What @name in directory @dir points at: as bch2_dirent_lookup_trans().
@@ -905,45 +802,6 @@ pub fn rename(
     Ok(r)
 }
 
-/// For C's rename: bch2_dirent_rename().
-///
-/// # Safety
-/// The arguments are the C function's, valid for the call; @trans has an
-/// attempt in progress.
-#[no_mangle]
-#[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn bch2_dirent_rename(
-    trans:      *mut c::btree_trans,
-    src_dir:    c::subvol_inum,
-    src_hash:   *mut c::bch_hash_info,
-    dst_dir:    c::subvol_inum,
-    dst_hash:   *mut c::bch_hash_info,
-    src_name:   *const c::qstr,
-    src_inum:   *mut c::subvol_inum,
-    src_offset: *mut u64,
-    dst_name:   *const c::qstr,
-    dst_inum:   *mut c::subvol_inum,
-    dst_offset: *mut u64,
-    mode:       c::bch_rename_mode,
-) -> c_int {
-    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-
-    unsafe {
-        *src_inum = Default::default();
-        *dst_inum = Default::default();
-    }
-
-    let ret = rename(&trans.attempt_in_progress(), src_dir, unsafe { &*src_hash },
-                     dst_dir, unsafe { &*dst_hash },
-                     unsafe { qstr_name(&*src_name) }, unsafe { qstr_name(&*dst_name) }, mode);
-    ret_to_c(ret.map(|r| unsafe {
-        *src_inum   = r.src_inum;
-        *dst_inum   = r.dst_inum;
-        *src_offset = r.src_offset;
-        *dst_offset = r.dst_offset;
-    }))
-}
-
 // ── fsck ─────────────────────────────────────────────────────────────────
 
 /// The first version of inode @inum, in any snapshot.
@@ -976,14 +834,4 @@ pub fn fsck_remove(t: &TransAttempt<'_, '_>, pos: c::bpos) -> Result<(), BchErro
     iter.traverse(t)?;
     str_hash::delete_at::<Dirents>(t, &hash_info, &mut iter,
                                    UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
-}
-
-/// For C's namei fsck: bch2_fsck_remove_dirent().
-///
-/// # Safety
-/// @trans is valid for the call.
-#[no_mangle]
-pub unsafe extern "C" fn bch2_fsck_remove_dirent(trans: *mut c::btree_trans, pos: c::bpos) -> c_int {
-    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-    ret_to_c(fsck_remove(&trans.attempt_in_progress(), pos))
 }

@@ -161,7 +161,6 @@ bcachefs-y		:=			\
 	fs/inode.o				\
 	fs/inode_opts.o				\
 	fs/logged_ops.o				\
-	fs/namei.o				\
 	fs/quota.o				\
 	fs/str_hash.o				\
 	fs/xattr.o				\

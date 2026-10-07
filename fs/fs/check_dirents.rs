@@ -296,7 +296,7 @@ fn check_dirent_to_subvol<'t>(
         inode::fsck_write(t, &mut subvol_root)?;
     }
 
-    namei::check_dirent_target(trans, iter, k, &mut subvol_root)
+    namei::check_dirent_target(t, iter, Dirent::new(k).expect("a dirent"), &mut subvol_root, true)
 }
 
 // ---------------------------------------------------------------------------
@@ -441,7 +441,7 @@ fn check_dirent_to_inode<'t>(
         // the versions, and committed repairs no longer fire.
         t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
         check::own_version(trans, &mut i.inode, d_snapshot);
-        namei::check_dirent_target(trans, iter, k, &mut i.inode)?;
+        namei::check_dirent_target(t, iter, Dirent::new(k).expect("a dirent"), &mut i.inode, true)?;
     }
 
     for &snapshot in st.target.deletes() {

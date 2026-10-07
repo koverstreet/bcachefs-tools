@@ -39,16 +39,6 @@ impl SnapshotsSeen {
         SnapshotsSeen { pos: Default::default(), ids: KVVec::new() }
     }
 
-    /// The IDs as a C snapshot_id_list, for C that reads one: borrowed, so
-    /// C mustn't grow or free it.
-    pub(crate) fn ids_view(&mut self) -> c::snapshot_id_list {
-        let mut l: c::snapshot_id_list = Default::default();
-        l.data = self.ids.as_mut_ptr();
-        l.nr   = self.ids.len();
-        l.size = self.ids.len();
-        l
-    }
-
     /// Record a key at @pos, starting the list over if @pos is a new
     /// position - inode and offset, the snapshot being what's recorded: as
     /// bch2_snapshots_seen_update().

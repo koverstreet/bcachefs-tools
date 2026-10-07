@@ -151,6 +151,11 @@ pub fn to_text(out: &mut Printbuf, value: &[u8]) {
 #[cfg(kernel)]
 pub use vfs::*;
 
+/// struct posix_acl, in userspace: nothing makes one there - its shims are
+/// the VFS's - so there are none, and an Option<&PosixAcl> is always None.
+#[cfg(not(kernel))]
+pub enum PosixAcl {}
+
 /// struct posix_acl, and the VFS's entry points - kernel only, as C's
 /// #ifndef NO_BCACHEFS_FS.
 #[cfg(kernel)]
@@ -402,25 +407,6 @@ mod vfs {
             inode.bi_flags &= !inode_flag(type_);
         }
         Ok(())
-    }
-
-    /// For C's create: bch2_set_acl_trans().
-    ///
-    /// # Safety
-    /// The arguments are the C function's, valid for the call; @trans has an
-    /// attempt in progress.
-    #[no_mangle]
-    pub unsafe extern "C" fn bch2_set_acl_trans(
-        trans: *mut c::btree_trans,
-        inum:  c::subvol_inum,
-        inode: *mut c::bch_inode_unpacked,
-        acl:   *mut c::posix_acl,
-        type_: c_int,
-    ) -> c_int {
-        let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-        let acl = unsafe { PosixAcl::borrow_raw(acl) };
-        ret_to_c(set_acl_trans(&trans.attempt_in_progress(), inum, unsafe { &mut *inode },
-                               acl.as_deref(), type_))
     }
 
     /// For the VFS: ->set_acl(), bch2_set_acl().

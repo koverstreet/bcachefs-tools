@@ -148,7 +148,7 @@ fn find_attached_dirent_in_descendant<'a, 't>(
 
     let mut snapshot = child.bi_snapshot;
     let mut dirent_iter = BtreeIter::uninit();
-    let Some(d) = inode::get_dirent(trans, &mut dirent_iter, &child, &mut snapshot).found()? else {
+    let Some(d) = namei::inode_get_dirent(t, &mut dirent_iter, &child, &mut snapshot).found()? else {
         return Ok(None);
     };
 

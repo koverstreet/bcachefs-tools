@@ -83,7 +83,7 @@ fn remove_backpointer(
     //
     // Nothing to remove is success: the caller's next move is to reattach,
     // and it can't if we hand it an error.
-    let Some(k) = inode::get_dirent(trans, &mut iter, inode, &mut snapshot).found()? else {
+    let Some(k) = namei::inode_get_dirent(t, &mut iter, inode, &mut snapshot).found()? else {
         return Ok(());
     };
 
