@@ -24,7 +24,7 @@
 //! snapshot), the per-snapshot accounting (nothing we write deletes a node
 //! with data). Ambiguity fail-stops rather than guessing.
 //!
-//! The node being checked is a Node: one copy of its value, read by every
+//! The node being checked is a CowKey: one copy of its value, read by every
 //! check and written by every repair - the first repair makes it the node's
 //! queued update. The C kept a copy for reading and a mutable key, synced by
 //! hand, and some repairs made their own mutable copy from the original key:
@@ -43,7 +43,8 @@
 //!   errors are plain fixable fsck errors.
 
 use crate::accounting::{self, DiskAccountingKind};
-use crate::btree::bkey::{pos, BkeySC, BkeySCToText, POS_MAX, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
+use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
     commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransBkey,
     UpdateTriggerFlags,
@@ -64,7 +65,6 @@ use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err};
 use core::fmt;
-use core::marker::PhantomData;
 use core::mem::size_of;
 
 /// Snapshot node @id's key, None if there's no such node.
@@ -228,58 +228,9 @@ crate::recovery_pass!(bch2_check_snapshot_trees => check_snapshot_trees);
 /* check_snapshots: */
 
 /// The node check_snapshot() is on: see the notes at the top.
-struct Node<'i, 'k, 'a, 't> {
-    iter: &'i BtreeIter<'t>,
-    k:    BkeySC<'k>,
-    /// The value as read, zero padded - until there's @u.
-    v:    c::bch_snapshot,
-    /// The key as it will be written, once anything has been repaired.
-    u:    Option<TransBkey<'a, 't>>,
-}
-
-impl<'i, 'k, 'a, 't> Node<'i, 'k, 'a, 't> {
-    fn new(iter: &'i BtreeIter<'t>, k: BkeySC<'k>) -> Option<Self> {
-        let v = snapshot::val(k)?;
-        Some(Node { iter, k, v, u: None })
-    }
-
+impl CowKey<'_, '_, '_, '_, c::bkey_i_snapshot> {
     fn id(&self) -> u32 {
-        self.k.k.p.offset as u32
-    }
-
-    /// The node as it is now, repairs and all.
-    fn v(&self) -> &c::bch_snapshot {
-        match &self.u {
-            Some(u) => BkeySC::from(u.k_i()).as_snapshot().expect("a snapshot key"),
-            None    => &self.v,
-        }
-    }
-
-    /// The node's key, made mutable and queued as its update if it isn't yet.
-    fn u(&mut self, t: &TransAttempt<'a, 't>) -> Result<&mut TransBkey<'a, 't>, BchError> {
-        if self.u.is_none() {
-            self.u = Some(t.bkey_make_mut(self.iter, self.k, UpdateTriggerFlags::empty(),
-                                          c::bch_bkey_type::KEY_TYPE_snapshot,
-                                          size_of::<c::bkey_i_snapshot>())?);
-        }
-        Ok(self.u.as_mut().expect("just made"))
-    }
-
-    /// The node's value, to repair.
-    fn v_mut(&mut self, t: &TransAttempt<'a, 't>) -> Result<&mut c::bch_snapshot, BchError> {
-        Ok(snapshot_mut(self.u(t)?))
-    }
-
-    /// The key as it is now, to print.
-    fn key(&self) -> BkeySC<'_> {
-        match &self.u {
-            Some(u) => BkeySC::from(u.k_i()),
-            None    => BkeySC { k: self.k.k, v: self.k.v, iter: PhantomData },
-        }
-    }
-
-    fn to_text<'f>(&self, fs: &'f Fs) -> BkeySCToText<'_, 'f> {
-        self.key().to_text(fs)
+        self.pos().offset as u32
     }
 }
 
@@ -311,7 +262,10 @@ fn referenced(trans: &BtreeTrans<'_>, s: &c::bch_snapshot, id: u32) -> Result<bo
 /// Recover the state field itself: stamp it from the legacy flags when
 /// unset, decode a corrupted value back to the nearest codeword, and correct
 /// a state left stale by a legacy flags-only tombstone.
-fn check_state<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>) -> Result<(), BchError> {
+fn check_state<'a, 't>(
+    t: &TransAttempt<'a, 't>,
+    n: &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
+) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
 
@@ -415,9 +369,10 @@ fn check_state<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>) -
 /// splice. no_keys is only ever marked - it says "this node's keys have
 /// migrated down", and the node stays where it is - so there is nothing to
 /// relink and setting the state live is the whole repair.
-fn check_has_data<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>)
-    -> Result<(), BchError>
-{
+fn check_has_data<'a, 't>(
+    t: &TransAttempt<'a, 't>,
+    n: &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
+) -> Result<(), BchError> {
     let fs = t.trans().fs();
     let state = n.v().state_field();
 
@@ -447,7 +402,10 @@ fn check_has_data<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>
 
 /// A non-live state, checked against the child snapshots and the
 /// subvolume. True if the node is a settled tombstone: no further checking.
-fn check_deleted<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>) -> Result<bool, BchError> {
+fn check_deleted<'a, 't>(
+    t: &TransAttempt<'a, 't>,
+    n: &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
+) -> Result<bool, BchError> {
     let trans = t.trans();
     let fs = trans.fs();
     let id = n.id();
@@ -764,7 +722,7 @@ struct EdgeNodes<'n, 'f> {
 impl<'n, 'f> EdgeNodes<'n, 'f> {
     fn new(
         fs:       &'f Fs,
-        node:     &'n Node<'_, '_, '_, '_>,
+        node:     &'n CowKey<'_, '_, '_, '_, c::bkey_i_snapshot>,
         target:   Option<&'n c::bkey_i_snapshot>,
         claimant: Option<&'n c::bkey_i_snapshot>,
     ) -> Self {
@@ -827,7 +785,7 @@ enum EdgeRepair {
 /// pointer names: a repair, if it needs one and fsck says to make it.
 fn edge_repair(
     t:        &TransAttempt<'_, '_>,
-    n:        &Node<'_, '_, '_, '_>,
+    n:        &CowKey<'_, '_, '_, '_, c::bkey_i_snapshot>,
     role:     Role,
     other_id: u32,
 ) -> Result<Option<EdgeRepair>, BchError> {
@@ -961,7 +919,7 @@ fn edge_repair(
 /// which its pointer names.
 fn check_edge<'a, 't>(
     t:        &TransAttempt<'a, 't>,
-    n:        &mut Node<'_, '_, 'a, 't>,
+    n:        &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
     role:     Role,
     other_id: u32,
 ) -> Result<(), BchError> {
@@ -987,9 +945,12 @@ fn tree_ptr_good(trans: &BtreeTrans<'_>, id: u32, tree: u32) -> Result<bool, Bch
     Ok(snapshot::is_ancestor_early(trans.fs(), id, u32::from_le(st.root_snapshot)))
 }
 
-/// Node @n's tree pointer was wrong: make sure its root's is right -
+/// Snapshot node @n's tree pointer was wrong: make sure its root's is right -
 /// creating a tree if there isn't one for it - and point @n at that.
-fn tree_ptr_repair<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>) -> Result<(), BchError> {
+fn tree_ptr_repair<'a, 't>(
+    t: &TransAttempt<'a, 't>,
+    n: &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
+) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
     let id = n.id();
@@ -1021,7 +982,10 @@ fn tree_ptr_repair<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't
 }
 
 /// Depth is derived from the parent - and the parent was visited first.
-fn check_depth<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>) -> Result<(), BchError> {
+fn check_depth<'a, 't>(
+    t: &TransAttempt<'a, 't>,
+    n: &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
+) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
     let parent_id = n.v().parent();
@@ -1046,7 +1010,10 @@ fn check_depth<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>) -
 }
 
 /// Every skiplist entry is an ancestor - none, for a root.
-fn check_skiplists<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>) -> Result<(), BchError> {
+fn check_skiplists<'a, 't>(
+    t: &TransAttempt<'a, 't>,
+    n: &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
+) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
     let id = n.id();
@@ -1075,16 +1042,17 @@ fn check_skiplists<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't
     }
 
     // Kept sorted: is_ancestor() tries the highest first.
-    if n.u.is_some() {
+    if n.has_update() {
         n.v_mut(t)?.skip.sort_unstable_by_key(|s| u32::from_le(*s));
     }
     Ok(())
 }
 
 /// The subvolume backref, against the subvolume it names.
-fn check_to_subvol<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>)
-    -> Result<(), BchError>
-{
+fn check_to_subvol<'a, 't>(
+    t: &TransAttempt<'a, 't>,
+    n: &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
+) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
     let id = n.id();
@@ -1223,7 +1191,7 @@ fn check_snapshot<'a, 't>(
     let trans = t.trans();
     let fs = trans.fs();
 
-    let Some(mut n) = Node::new(iter, k) else { return Ok(()) };
+    let Some(mut n) = CowKey::<c::bkey_i_snapshot>::new(iter, k) else { return Ok(()) };
 
     check_state(t, &mut n)?;
     check_has_data(t, &mut n)?;
