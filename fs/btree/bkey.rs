@@ -290,13 +290,33 @@ pub type bkey_type = c::bch_bkey_type;
 
 /// A key and its value, borrowed: C's struct bkey_s_c, which it's laid out
 /// as - so a C entry point can take one by value where C passes a
-/// bkey_s_c.
-#[derive(Clone, Copy)]
+/// bkey_s_c. With a value type, the typed one: BkeySC<'a, bch_extent> is
+/// struct bkey_s_c_extent (btree/bkey_types.rs).
 #[repr(C)]
-pub struct BkeySC<'a> {
+pub struct BkeySC<'a, V = c::bch_val> {
     pub k:           &'a c::bkey,
-    pub v:           &'a c::bch_val,
+    pub v:           &'a V,
     pub(crate) iter: PhantomData<&'a mut BtreeIter<'a>>,
+}
+
+// References: Copy whatever V is, which a derive would require it to be.
+impl<V> Clone for BkeySC<'_, V> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<V> Copy for BkeySC<'_, V> {}
+
+/// A key with its value inline, of type V: C's struct bkey_i_<type>, whose
+/// k is also the bkey_i k_i - an empty value, there.
+///
+/// Not Clone or Copy: a key is its header and u64s of value, which can run
+/// past V - copying one is bkey_copy().
+#[derive(Default)]
+#[repr(C)]
+pub struct BkeyI<V> {
+    pub k: c::bkey,
+    pub v: V,
 }
 
 const _: () = {
@@ -648,9 +668,13 @@ impl<'a> From<&'a c::bkey_s_c> for BkeySC<'a> {
 /// handle, so it is deliberately not `Copy`; the extent iterators borrow it
 /// (`&mut BkeyS`), which lets a single handle be iterated more than once (e.g. a
 /// read scan then a rewrite pass) without ever aliasing `&mut`.
-pub struct BkeyS<'a> {
+///
+/// Laid out as C's struct bkey_s - and with a value type, the typed one:
+/// BkeyS<'a, bch_extent> is struct bkey_s_extent (btree/bkey_types.rs).
+#[repr(C)]
+pub struct BkeyS<'a, V = c::bch_val> {
     pub k: &'a mut c::bkey,
-    pub v: &'a mut c::bch_val,
+    pub v: &'a mut V,
 }
 
 impl<'a> BkeyS<'a> {
