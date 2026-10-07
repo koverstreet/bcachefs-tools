@@ -735,12 +735,14 @@ static int bch2_copygc_thread(void *arg)
 	set_freezable();
 
 	/*
-	 * Data move operations can't run until after check_snapshots has
-	 * completed, and bch2_snapshot_is_ancestor() is available - and until
-	 * the logged ops we could start ourselves (stripe creation) have been
-	 * resumed, or recovery would resume ours while we're running them.
+	 * We're started before recovery, so that mount can't fail later on
+	 * kthread_create(); we run from when the filesystem goes rw, through
+	 * journal replay: replay can need buckets that only we can free.
+	 * Moves don't need check_snapshots (bch2_snapshot_is_ancestor() walks
+	 * parent pointers until it's run), and recovery won't resume stripe
+	 * updates we start (bch2_logged_ops_note_unfinished()).
 	 */
-	kthread_wait_freezable(c->recovery.pass_done > BCH_RECOVERY_PASS_resume_logged_ops_early ||
+	kthread_wait_freezable(test_bit(BCH_FS_rw, &c->flags) ||
 			       kthread_should_stop());
 	if (kthread_should_stop())
 		goto out;

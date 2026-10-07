@@ -655,6 +655,8 @@ static int __bch2_fs_read_write(struct bch_fs *c, bool early)
 		return ret;
 	}
 
+	/* copygc was started before recovery, and waits for BCH_FS_rw: */
+	bch2_copygc_wakeup(c);
 	bch2_do_discards_async(c);
 	bch2_do_invalidates(c);
 	bch2_do_stripe_deletes(c);

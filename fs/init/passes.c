@@ -12,7 +12,6 @@
 #include "btree/check.h"
 #include "btree/node_scan.h"
 
-#include "data/copygc.h"
 #include "data/ec/init.h"
 #include "data/reconcile/check.h"
 #include "data/reconcile/work.h"
@@ -766,12 +765,10 @@ int bch2_run_recovery_passes(struct bch_fs *c, u64 orig_passes_to_run, bool fail
 		if (ret && failfast)
 			break;
 
-		/* the point they wait for - see bch2_copygc_thread() */
+		/* the point it waits for - see bch2_reconcile_thread() */
 		if (prev <= BCH_RECOVERY_PASS_resume_logged_ops_early &&
-		    pass > BCH_RECOVERY_PASS_resume_logged_ops_early) {
-			bch2_copygc_wakeup(c);
+		    pass > BCH_RECOVERY_PASS_resume_logged_ops_early)
 			bch2_reconcile_wakeup(c);
-		}
 
 		prev = pass;
 	}
