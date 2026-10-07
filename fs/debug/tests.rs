@@ -556,6 +556,9 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
 
         updater.unlock();
         if unsafe { c::bch2_trans_relock_notrace(updater.raw()) } != 0 {
+            // A failed relock leaves the transaction in restart: end it, as a
+            // restart loop would, before it's put.
+            updater.begin_raw();
             continue;
         }
         updater.unlock();
@@ -597,6 +600,8 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
                              idx);
             return fs.throw(bch_errcode::BCH_ERR_EINVAL_test_stripe_open_relock_not_invalidated);
         }
+        // The relock failed, as it should: in restart, as above.
+        updater.begin_raw();
         return Ok(());
     }
 
