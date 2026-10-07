@@ -26,7 +26,7 @@ use crate::inode;
 use crate::snapshots::subvolume;
 use crate::str_hash::{self, HashTable};
 use crate::util::os_str::{qstr, qstr_name, OsStr, OsStrExt};
-use core::ffi::{c_int, c_void};
+use core::ffi::c_int;
 use core::ops::ControlFlow;
 
 // ── The hash table ───────────────────────────────────────────────────────
@@ -74,50 +74,6 @@ impl HashTable for Dirents {
 pub fn hash(info: &c::bch_hash_info, name: &OsStr) -> u64 {
     str_hash::hash_parts(info, &[name.as_bytes()], true).max(2)
 }
-
-/// For C's rename: bch2_dirent_hash().
-///
-/// # Safety
-/// @info and @name valid for the call.
-#[no_mangle]
-pub unsafe extern "C" fn bch2_dirent_hash(info: *const c::bch_hash_info, name: *const c::qstr) -> u64 {
-    hash(unsafe { &*info }, unsafe { qstr_name(&*name) })
-}
-
-// The table as C's desc, for the C still using str_hash.h: the trait's
-// methods, with C's signatures. C's cmp callbacks answer the opposite of a
-// match.
-
-unsafe extern "C" fn dirent_hash_key(info: *const c::bch_hash_info, key: *const c_void) -> u64 {
-    Dirents::hash_key(unsafe { &*info }, unsafe { qstr_name(&*(key as *const c::qstr)) })
-}
-
-unsafe extern "C" fn dirent_hash_bkey(info: *const c::bch_hash_info, k: c::bkey_s_c) -> u64 {
-    Dirents::hash_bkey(unsafe { &*info }, BkeySC::from(&k))
-}
-
-unsafe extern "C" fn dirent_cmp_key(l: c::bkey_s_c, r: *const c_void) -> bool {
-    !Dirents::matches(BkeySC::from(&l), unsafe { qstr_name(&*(r as *const c::qstr)) })
-}
-
-unsafe extern "C" fn dirent_cmp_bkey(l: c::bkey_s_c, r: c::bkey_s_c) -> bool {
-    !Dirents::same_name(BkeySC::from(&l), BkeySC::from(&r))
-}
-
-unsafe extern "C" fn dirent_is_visible(inum: c::subvol_inum, k: c::bkey_s_c) -> bool {
-    Dirents::is_visible(inum, BkeySC::from(&k))
-}
-
-#[no_mangle]
-pub static bch2_dirent_hash_desc: c::bch_hash_desc = c::bch_hash_desc {
-    btree_id:   c::btree_id::dirents,
-    key_type:   c::bch_bkey_type::KEY_TYPE_dirent.0 as u8,
-    hash_key:   Some(dirent_hash_key),
-    hash_bkey:  Some(dirent_hash_bkey),
-    cmp_key:    Some(dirent_cmp_key),
-    cmp_bkey:   Some(dirent_cmp_bkey),
-    is_visible: Some(dirent_is_visible),
-};
 
 // ── Making dirents ───────────────────────────────────────────────────────
 
@@ -413,37 +369,6 @@ pub fn maybe_casefold<'a>(
     }
 }
 
-/// For C's bch2_maybe_casefold(): bch2_casefold(). Declared only with
-/// CONFIG_UNICODE; without it, C has a static inline that refuses.
-///
-/// # Safety
-/// The arguments are the C function's, valid for the call; @trans has an
-/// attempt in progress.
-#[cfg(CONFIG_UNICODE)]
-#[no_mangle]
-pub unsafe extern "C" fn bch2_casefold(
-    trans:  *mut c::btree_trans,
-    info:   *const c::bch_hash_info,
-    name:   *const c::qstr,
-    out_cf: *mut c::qstr,
-) -> c_int {
-    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-    let t = trans.attempt_in_progress();
-
-    let mut empty = qstr(OsStr::from_bytes(&[]));
-    empty.name = core::ptr::null();
-    unsafe { *out_cf = empty };
-
-    match casefold(&t, unsafe { &*info }, unsafe { qstr_name(&*name) }) {
-        Ok(cf) if !cf.is_empty() => {
-            unsafe { *out_cf = qstr(cf) };
-            0
-        }
-        Ok(_)  => 0,
-        Err(e) => -e.raw(),
-    }
-}
-
 // ── Reading dirents ──────────────────────────────────────────────────────
 
 /// For C: @d's name, as bch2_dirent_get_name().
@@ -553,6 +478,67 @@ pub unsafe extern "C" fn bch2_dirent_lookup_snapshot(
     ret_to_c(ret.map(|i| unsafe { *inum = i }))
 }
 
+/// The dirent @name in directory @dir, through @iter - looked up by its
+/// casefolded name, in a casefolded directory.
+pub fn lookup_key<'i, 't>(
+    t:         &'i TransAttempt<'_, 't>,
+    iter:      &'i mut BtreeIter<'t>,
+    dir:       c::subvol_inum,
+    hash_info: &c::bch_hash_info,
+    name:      &OsStr,
+    flags:     BtreeIterFlags,
+) -> Result<BkeySC<'i>, BchError> {
+    let lookup_name = maybe_casefold(t, hash_info, name)?;
+    str_hash::lookup::<Dirents>(t, iter, hash_info, dir, lookup_name, flags)
+}
+
+/// For C's VFS lookup, which goes on to check the dirent against its inode:
+/// lookup_key(), the key or an error.
+///
+/// # Safety
+/// The arguments are the C function's, valid for the call; @trans has an
+/// attempt in progress, and @iter is the caller's.
+#[no_mangle]
+pub unsafe extern "C" fn bch2_dirent_lookup_key(
+    trans:     *mut c::btree_trans,
+    iter:      *mut c::btree_iter,
+    dir:       c::subvol_inum,
+    hash_info: *const c::bch_hash_info,
+    name:      *const c::qstr,
+) -> c::bkey_s_c {
+    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
+
+    match lookup_key(&trans.attempt_in_progress(), unsafe { BtreeIter::borrow_raw(iter) }, dir,
+                     unsafe { &*hash_info }, unsafe { qstr_name(&*name) },
+                     BtreeIterFlags::empty()) {
+        Ok(k)  => k.to_raw(),
+        Err(e) => c::bkey_s_c {
+            k: (-(e.raw() as isize)) as *const c::bkey,
+            v: core::ptr::null(),
+        },
+    }
+}
+
+/// For C's unlink: delete the dirent at @iter, leaving a whiteout if a later
+/// one in the same probe sequence needs one - str_hash::delete_at().
+///
+/// # Safety
+/// The arguments are the C function's, valid for the call; @trans has an
+/// attempt in progress, and @iter is the caller's.
+#[no_mangle]
+pub unsafe extern "C" fn bch2_dirent_delete_at(
+    trans:     *mut c::btree_trans,
+    hash_info: *const c::bch_hash_info,
+    iter:      *mut c::btree_iter,
+    flags:     c::btree_iter_update_trigger_flags,
+) -> c_int {
+    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
+
+    ret_to_c(str_hash::delete_at::<Dirents>(&trans.attempt_in_progress(), unsafe { &*hash_info },
+                                            unsafe { BtreeIter::borrow_raw(iter) },
+                                            UpdateTriggerFlags::from_bits_retain(flags.0)))
+}
+
 /// What @name in directory @dir points at: as bch2_dirent_lookup_trans().
 /// @iter is left at the dirent.
 pub fn lookup_trans<'t>(
@@ -563,9 +549,7 @@ pub fn lookup_trans<'t>(
     name:      &OsStr,
     flags:     BtreeIterFlags,
 ) -> Result<c::subvol_inum, BchError> {
-    let lookup_name = maybe_casefold(t, hash_info, name)?;
-    let k = str_hash::lookup::<Dirents>(t, iter, hash_info, dir, lookup_name, flags)?;
-    lookup_target(t, dir, k)
+    lookup_target(t, dir, lookup_key(t, iter, dir, hash_info, name, flags)?)
 }
 
 /// What @name in directory @dir points at: as bch2_dirent_lookup().

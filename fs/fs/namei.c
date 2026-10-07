@@ -300,9 +300,8 @@ int bch2_unlink_trans(struct btree_trans *trans,
 	dir_u->bi_mtime = dir_u->bi_ctime = inode_u->bi_ctime = now;
 	dir_u->bi_nlink -= is_subdir_for_nlink(inode_u);
 
-	try(bch2_hash_delete_at(trans, bch2_dirent_hash_desc,
-				&dir_hash, &dirent_iter,
-				BTREE_UPDATE_internal_snapshot_node));
+	try(bch2_dirent_delete_at(trans, &dir_hash, &dirent_iter,
+				  BTREE_UPDATE_internal_snapshot_node));
 	try(bch2_inode_write(trans, &dir_iter, dir_u));
 	try(bch2_inode_write(trans, &inode_iter, inode_u));
 

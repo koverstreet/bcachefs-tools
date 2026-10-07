@@ -4,8 +4,6 @@
 
 #include "str_hash.h"
 
-extern const struct bch_hash_desc bch2_dirent_hash_desc;
-
 int bch2_dirent_validate(struct bch_fs *, struct bkey_s_c,
 			 const struct bkey_validate_context *);
 void bch2_dirent_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
@@ -23,12 +21,7 @@ struct bch_fs;
 struct bch_hash_info;
 struct bch_inode_info;
 
-u64 bch2_dirent_hash(const struct bch_hash_info *, const struct qstr *);
-
 #if IS_ENABLED(CONFIG_UNICODE)
-int bch2_casefold(struct btree_trans *, const struct bch_hash_info *,
-		  const struct qstr *, struct qstr *);
-
 /*
  * utf8_casefold() under @info's encoding, for Rust: kernel headers aren't
  * bound in a kernel build, so it can't call utf8_casefold() itself.
@@ -39,27 +32,15 @@ static inline int bch2_utf8_casefold(const struct bch_hash_info *info,
 {
 	return utf8_casefold(info->cf_encoding, str, dest, dlen);
 }
-#else
-static inline int bch2_casefold(struct btree_trans *trans, const struct bch_hash_info *info,
-				const struct qstr *str, struct qstr *out_cf)
-{
-	return bch_err_throw(trans->c, no_casefolding_without_utf8);
-}
 #endif
 
-static inline int bch2_maybe_casefold(struct btree_trans *trans,
-				      const struct bch_hash_info *info,
-				      const struct qstr *str, struct qstr *out_cf)
-{
-	if (likely(!info->cf_encoding)) {
-		*out_cf = *str;
-		return 0;
-	} else {
-		return bch2_casefold(trans, info, str, out_cf);
-	}
-}
-
 struct qstr bch2_dirent_get_name(struct bkey_s_c_dirent);
+
+struct bkey_s_c bch2_dirent_lookup_key(struct btree_trans *, struct btree_iter *,
+				       subvol_inum, const struct bch_hash_info *,
+				       const struct qstr *);
+int bch2_dirent_delete_at(struct btree_trans *, const struct bch_hash_info *,
+			  struct btree_iter *, enum btree_iter_update_trigger_flags);
 
 static inline struct bkey_s_c_dirent dirent_get_by_pos(struct btree_trans *trans,
 						struct btree_iter *iter,
