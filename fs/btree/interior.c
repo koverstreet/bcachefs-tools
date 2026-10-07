@@ -1599,7 +1599,7 @@ bch2_btree_update_start(struct btree_trans *trans, btree_path_idx_t path_idx,
 		 * XXX: this should probably be a separate BTREE_INSERT_NONBLOCK
 		 * flag
 		 */
-		if (bch2_err_matches(ret, ENOSPC) &&
+		if (bch2_err_matches(ret, EAGAIN) &&
 		    (commit_flags & BCH_TRANS_COMMIT_journal_reclaim) &&
 		    watermark < BCH_WATERMARK_reclaim) {
 			ret = bch_err_throw(c, journal_reclaim_would_deadlock);
