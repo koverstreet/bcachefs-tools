@@ -631,6 +631,25 @@ impl<'a, 't> TransAttempt<'a, 't> {
         })
     }
 
+    /// The value of the @K at @pos in @btree, zero padded:
+    /// ENOENT_bkey_type_mismatch if it isn't one - as bch2_bkey_get_val_typed().
+    pub fn bkey_get_val<K: TypedBkey>(&self, btree: c::btree_id, pos: bpos, flags: BtreeIterFlags)
+        -> Result<K::Val, BchError>
+    {
+        let mut iter = BtreeIter::new(self.trans, btree, pos, flags);
+        let k = iter.peek_slot_typed(self, K::TYPE)?;
+        Ok(K::val_copy_pad(k).expect("peek_slot_typed() checked the type"))
+    }
+
+    /// As bkey_get_val(), the whole key: as bch2_bkey_get_i_typed().
+    pub fn bkey_get_key<K: TypedBkey>(&self, btree: c::btree_id, pos: bpos, flags: BtreeIterFlags)
+        -> Result<K, BchError>
+    {
+        let mut iter = BtreeIter::new(self.trans, btree, pos, flags);
+        let k = iter.peek_slot_typed(self, K::TYPE)?;
+        Ok(K::from_key(k).expect("peek_slot_typed() checked the type"))
+    }
+
     /// The key at @pos in @btree, as a mutable copy already queued as its
     /// update - an error unless it's of @type_; at least @min_bytes: as
     /// __bch2_bkey_get_mut(), bch2_bkey_get_mut_typed(). @iter_flags for the

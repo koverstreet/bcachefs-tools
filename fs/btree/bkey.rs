@@ -327,6 +327,10 @@ pub trait TypedBkey {
     /// one: see val_copy_pad().
     fn val_copy_pad(k: BkeySC<'_>) -> Option<Self::Val>;
 
+    /// @k, if it's this type, as an owned key: the value zero padded, u64s as
+    /// on disk - as bch2_bkey_get_i_typed() copies it.
+    fn from_key(k: BkeySC<'_>) -> Option<Self> where Self: Sized;
+
     /// @k's value, if it's this type - whole, so not for a key read from the
     /// btree that may be short: see BkeySC's as_<name>().
     fn val(k: &c::bkey_i) -> Option<&Self::Val>;
@@ -363,6 +367,14 @@ macro_rules! bkey_types {
 
             fn val_copy_pad(k: BkeySC<'_>) -> Option<Self::Val> {
                 (k.k.type_ == $nr).then(|| unsafe { k.val_copy_pad() })
+            }
+
+            fn from_key(k: BkeySC<'_>) -> Option<Self> {
+                let v = Self::val_copy_pad(k)?;
+                let mut r = Self::default();
+                *r.k_mut() = *k.k;
+                r.v = v;
+                Some(r)
             }
 
             fn val(k: &c::bkey_i) -> Option<&Self::Val> {
