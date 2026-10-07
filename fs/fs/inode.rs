@@ -2169,3 +2169,106 @@ pub fn nlink_dec(trans: &BtreeTrans<'_>, inode: &mut c::bch_inode_unpacked) {
         inode.set_flag(c::bch_inode_flags::BCH_INODE_unlinked, true);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample() -> c::bch_inode_unpacked {
+        c::bch_inode_unpacked {
+            bi_inum:      4096,
+            bi_hash_seed: 0x0123_4567_89ab_cdef,
+            bi_size:      12345,
+            bi_mode:      0o100644,
+            bi_atime:     0x1234_5678_9abc,
+            bi_ctime:     7,
+            bi_uid:       1000,
+            bi_nlink:     3,
+            bi_dir:       4097,
+            bi_casefold:  1,
+            ..Default::default()
+        }
+    }
+
+    /// Set the key's value to @fields_bytes of packed fields, @nr_fields of
+    /// them.
+    fn set_fields_len(k: &mut c::bkey_inode_buf, fields_bytes: usize, nr_fields: u64) {
+        k.inode.k_mut().u64s = (BKEY_U64S + (V3_FIELDS_OFFSET + fields_bytes).div_ceil(8)) as u8;
+        k.inode.v.set_inodev3_nr_fields(nr_fields);
+    }
+
+    #[test]
+    fn pack_unpack_round_trip() {
+        let u = sample();
+        let packed = pack(&u);
+        let v = try_unpack(BkeySC::from(packed.inode.k_i())).expect("unpacks");
+
+        assert_eq!(v.bi_inum, u.bi_inum);
+        assert_eq!(v.bi_hash_seed, u.bi_hash_seed);
+        assert_eq!(v.bi_size, u.bi_size);
+        assert_eq!(v.bi_mode, u.bi_mode);
+        assert_eq!(v.bi_atime, u.bi_atime);
+        assert_eq!(v.bi_uid, u.bi_uid);
+        assert_eq!(v.bi_nlink, u.bi_nlink);
+        assert_eq!(v.bi_dir, u.bi_dir);
+        assert_eq!(v.bi_casefold, u.bi_casefold);
+        // An option field is set - bi_casefold - so pack sets has_inode_opts:
+        assert!(v.flag(c::bch_inode_flags::BCH_INODE_has_inode_opts));
+    }
+
+    /// A value cut off at a field: Err at that field, the fields before it
+    /// decoded, it and the rest zero, the fixed fields intact.
+    #[test]
+    fn unpack_truncated_field() {
+        let u = sample();
+        let mut packed = pack(&u);
+
+        // bi_atime: 45 bits, a 7 byte varint, then the high half's 1 byte -
+        // so the first u64 of fields holds exactly field 0:
+        let nr_fields = packed.inode.v.inodev3_nr_fields();
+        set_fields_len(&mut packed, 8, nr_fields);
+
+        let (v, fieldnr) = try_unpack(BkeySC::from(packed.inode.k_i()))
+            .expect_err("a truncated value doesn't unpack");
+
+        assert_eq!(fieldnr, 1);
+        assert_eq!(v.bi_atime, u.bi_atime);
+        assert_eq!(v.bi_ctime, 0);
+        assert_eq!(v.bi_uid, 0);
+        assert_eq!(v.bi_nlink, 0);
+        assert_eq!(v.bi_inum, u.bi_inum);
+        assert_eq!(v.bi_size, u.bi_size);
+        assert_eq!(v.bi_mode, u.bi_mode);
+    }
+
+    /// A field whose value doesn't fit it: Err at that field.
+    #[test]
+    fn unpack_field_too_big() {
+        let mut packed = pack(&c::bch_inode_unpacked { bi_inum: 4096, ..Default::default() });
+
+        // The four 96 bit timestamps, zero: two bytes each. Then bi_uid,
+        // 32 bits, given 2^40:
+        let mut len = 8;
+        packed._pad[..len].fill(0);
+        len += varint::encode(&mut packed._pad[len..], 1 << 40);
+        set_fields_len(&mut packed, len, 5);
+
+        let (v, fieldnr) = try_unpack(BkeySC::from(packed.inode.k_i()))
+            .expect_err("an oversized field doesn't unpack");
+        assert_eq!(fieldnr, 4);
+        assert_eq!(v.bi_uid, 0);
+    }
+
+    #[test]
+    fn v1_field_encodings() {
+        // One byte: high bit the marker, the rest the value.
+        assert_eq!(v1_field(&[0x85], 32), Some((5, 1)));
+        // Two bytes: the second highest bit is the marker.
+        assert_eq!(v1_field(&[0x41, 0x02], 32), Some((0x0102, 2)));
+        // Zero first byte: no marker.
+        assert_eq!(v1_field(&[0x00, 0x01], 32), None);
+        // A two byte field with one byte left.
+        assert_eq!(v1_field(&[0x41], 32), None);
+        assert_eq!(v1_field(&[], 32), None);
+    }
+}
