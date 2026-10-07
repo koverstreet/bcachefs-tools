@@ -728,6 +728,27 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.result(ret)
     }
 
+    /// Set or clear the bit at @pos in bitset btree @btree: as
+    /// bch2_btree_bit_mod().
+    pub fn bit_mod(&self, btree: c::btree_id, pos: bpos, set: bool) -> Result<(), BchError> {
+        let ret = unsafe { c::bch2_btree_bit_mod(self.raw(), btree, pos, set) };
+        self.result(ret)
+    }
+
+    /// Point @iter, intent locked, at the first empty slot in @btree between
+    /// @start and @end, after the last key: ENOSPC_btree_slot if there's none.
+    /// As bch2_bkey_get_empty_slot().
+    pub fn bkey_get_empty_slot(
+        &self,
+        iter:  &mut BtreeIter<'t>,
+        btree: c::btree_id,
+        start: bpos,
+        end:   bpos,
+    ) -> Result<(), BchError> {
+        let ret = unsafe { c::bch2_bkey_get_empty_slot(self.raw(), iter.raw(), btree, start, end) };
+        self.result(ret)
+    }
+
     /// Set or clear the bit at @pos in bitset btree @btree, through the
     /// write buffer: as bch2_btree_bit_mod_buffered().
     pub fn bit_mod_buffered(&self, btree: c::btree_id, pos: bpos, set: bool) -> Result<(), BchError> {

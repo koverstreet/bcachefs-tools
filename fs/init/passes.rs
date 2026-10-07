@@ -54,3 +54,9 @@ pub fn btree_is_clean(fs: &Fs, btree: c::btree_id) -> bool {
 pub fn set_btree_clean(fs: &Fs, btree: c::btree_id) {
     unsafe { c::bch2_set_btree_clean(fs.raw, btree) }
 }
+
+/// Btree @btree is being changed, so no longer known consistent: as
+/// bch2_clear_btree_clean().
+pub fn clear_btree_clean(fs: &Fs, btree: c::btree_id) {
+    unsafe { c::bch2_clear_btree_clean(fs.raw, btree) }
+}

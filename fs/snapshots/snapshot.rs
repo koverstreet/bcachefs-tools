@@ -199,6 +199,13 @@ pub fn val(k: BkeySC<'_>) -> Option<c::bch_snapshot> {
         .then(|| unsafe { k.val_copy_pad() })
 }
 
+/// Mark node @id will_delete, its subvolume being deleted - if it's live;
+/// otherwise it's already on its way: as bch2_snapshot_node_set_deleted().
+pub fn node_set_deleted(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
+    let ret = unsafe { c::bch2_snapshot_node_set_deleted(t.raw(), id) };
+    t.result(ret)
+}
+
 /// Put deleted node @u back in the tree, relinking it under its parent: as
 /// bch2_snapshot_node_undelete().
 pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't>)
