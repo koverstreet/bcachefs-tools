@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_ERRCODE_H
 #define _BCACHEFS_ERRCODE_H
 
+#include "enum_kind.h"
+
 /* we're getting away from reusing bi_status, this should go away */
 #define BLK_STS_REMOVED		((__force blk_status_t)128)
 
@@ -657,7 +659,7 @@ union bch_errcode_max {
 #undef x
 };
 
-enum bch_errcode {
+enum __enum_open bch_errcode {
 	BCH_ERR_START		= 2048,
 #define x(class, err, nr) BCH_ERR_##err = BCH_ERR_START + nr,
 	BCH_ERRCODES()

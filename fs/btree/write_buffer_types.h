@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_BTREE_WRITE_BUFFER_TYPES_H
 #define _BCACHEFS_BTREE_WRITE_BUFFER_TYPES_H
 
+#include "enum_kind.h"
+
 #include <linux/workqueue.h>
 
 #include "util/darray.h"
@@ -26,7 +28,7 @@
 	x(reconcile_hipri_phys)		\
 	x(stripe_backpointers)
 
-enum bch_wb_btree {
+enum __enum_closed bch_wb_btree {
 #define x(name)	BCH_WB_BTREE_##name,
 	BCH_WRITE_BUFFER_BTREES()
 #undef x
@@ -90,7 +92,7 @@ struct btree_write_buffer_keys {
 	x(maybe)			\
 	x(tryflush)
 
-enum wb_flush_caller {
+enum __enum_closed wb_flush_caller {
 #define x(n)	WB_FLUSH_##n,
 	WB_FLUSH_CALLERS()
 #undef x

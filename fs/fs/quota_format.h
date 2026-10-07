@@ -2,16 +2,18 @@
 #ifndef _BCACHEFS_QUOTA_FORMAT_H
 #define _BCACHEFS_QUOTA_FORMAT_H
 
+#include "enum_kind.h"
+
 /* KEY_TYPE_quota: */
 
-enum quota_types {
+enum __enum_open quota_types {
 	QTYP_USR		= 0,
 	QTYP_GRP		= 1,
 	QTYP_PRJ		= 2,
 	QTYP_NR			= 3,
 };
 
-enum quota_counters {
+enum __enum_open quota_counters {
 	Q_SPC			= 0,
 	Q_INO			= 1,
 	Q_COUNTERS		= 2,

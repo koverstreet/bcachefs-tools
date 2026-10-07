@@ -2,13 +2,15 @@
 #ifndef _BCACHEFS_QUOTA_TYPES_H
 #define _BCACHEFS_QUOTA_TYPES_H
 
+#include "enum_kind.h"
+
 #include <linux/generic-radix-tree.h>
 
 struct bch_qid {
 	u32		q[QTYP_NR];
 };
 
-enum quota_acct_mode {
+enum __enum_closed quota_acct_mode {
 	KEY_TYPE_QUOTA_PREALLOC,
 	KEY_TYPE_QUOTA_WARN,
 	KEY_TYPE_QUOTA_NOCHECK,

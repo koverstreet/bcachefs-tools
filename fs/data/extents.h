@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_EXTENTS_H
 #define _BCACHEFS_EXTENTS_H
 
+#include "enum_kind.h"
+
 #include "bcachefs.h"
 #include "alloc/check_data.h"
 #include "btree/bkey.h"
@@ -841,7 +843,7 @@ void bch2_ptr_swab(const struct bch_fs *, struct bkey_s);
 
 /* Generic extent code: */
 
-enum bch_extent_overlap {
+enum __enum_closed bch_extent_overlap {
 	BCH_EXTENT_OVERLAP_ALL		= 0,
 	BCH_EXTENT_OVERLAP_BACK		= 1,
 	BCH_EXTENT_OVERLAP_FRONT	= 2,

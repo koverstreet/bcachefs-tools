@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_BTREE_TYPES_H
 #define _BCACHEFS_BTREE_TYPES_H
 
+#include "enum_kind.h"
+
 #include <linux/list.h>
 #include <linux/rhashtable.h>
 
@@ -83,7 +85,7 @@ struct btree_bkey_cached_common {
  * See the DOC block at the top of btree/cache.c for the state machine and
  * the bookkeeping each state implies.
  */
-enum btree_node_cache_state {
+enum __enum_closed btree_node_cache_state {
 	BTREE_NODE_CACHE_NONE,		/* off all lists; not in cache (kzalloc default) */
 	BTREE_NODE_CACHE_FREED,		/* on bc->freed_{pcpu,nonpcpu}; no data buffer */
 	BTREE_NODE_CACHE_FREEABLE,	/* on bc->freeable; has data; not hashed */
@@ -190,7 +192,7 @@ struct btree {
 	enum btree_node_cache_state cache_state;
 };
 
-enum btree_node_sibling {
+enum __enum_closed btree_node_sibling {
 	btree_prev_sib,
 	btree_next_sib,
 };
@@ -210,7 +212,7 @@ enum btree_node_sibling {
 	x(will_make_reachable)			\
 	x(access_bit)
 
-enum bch_btree_cache_not_freed_reasons {
+enum __enum_closed bch_btree_cache_not_freed_reasons {
 #define x(n) BCH_BTREE_CACHE_NOT_FREED_##n,
 	BCH_BTREE_CACHE_NOT_FREED_REASONS()
 #undef x
@@ -395,7 +397,7 @@ struct btree_node_iter {
 	x(is_discard)				\
 	x(set_needs_reconcile_done)
 
-enum {
+enum __enum_closed {
 #define x(n) BTREE_ITER_FLAG_BIT_##n,
 	BTREE_ITER_FLAGS()
 	STR_HASH_FLAGS()
@@ -407,7 +409,7 @@ enum {
 /* iter flags must fit in struct btree_iter.flags: */
 static_assert(BTREE_ITER_FLAG_BIT_committed < 32);
 
-enum btree_iter_update_trigger_flags {
+enum __enum_flags btree_iter_update_trigger_flags {
 #define x(n) BTREE_ITER_##n	= 1U << BTREE_ITER_FLAG_BIT_##n,
 	BTREE_ITER_FLAGS()
 #undef x
@@ -846,7 +848,7 @@ static inline struct btree_path *btree_iter_key_cache_path(struct btree_trans *t
 	x(journal_reclaim,	3)					\
 	x(interior,		4)
 
-enum btree_write_type {
+enum __enum_closed btree_write_type {
 #define x(t, n) BTREE_WRITE_##t,
 	BCH_BTREE_WRITE_TYPES()
 #undef x
@@ -878,7 +880,7 @@ enum btree_write_type {
 	x(pinned)							\
 	x(permanent)
 
-enum btree_flags {
+enum __enum_closed btree_flags {
 	/* First bits for btree node write type */
 	BTREE_NODE_FLAGS_START = BTREE_WRITE_TYPE_BITS - 1,
 #define x(flag)	BTREE_NODE_##flag,
@@ -905,7 +907,7 @@ BTREE_FLAGS()
 	x(error)							\
 	x(ptr_written_zero)
 
-enum btree_node_rewrite_reason {
+enum __enum_closed btree_node_rewrite_reason {
 #define x(n)	BTREE_NODE_REWRITE_##n,
 	BTREE_NODE_REWRITE_REASON()
 #undef x
@@ -1118,7 +1120,7 @@ static inline unsigned bset_byte_offset(struct btree *b, void *i)
 
 /* Btree ID properties: */
 
-enum btree_node_type {
+enum __enum_closed btree_node_type {
 	BKEY_TYPE_btree,
 #define x(kwd, val, ...) BKEY_TYPE_##kwd = val + 1,
 	BCH_BTREE_IDS()

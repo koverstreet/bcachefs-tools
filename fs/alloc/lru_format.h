@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_LRU_FORMAT_H
 #define _BCACHEFS_LRU_FORMAT_H
 
+#include "enum_kind.h"
+
 struct bch_lru {
 	struct bch_val		v;
 	__le64			idx;
@@ -12,7 +14,7 @@ struct bch_lru {
 	x(fragmentation)	\
 	x(stripes)
 
-enum bch_lru_type {
+enum __enum_open bch_lru_type {
 #define x(n) BCH_LRU_##n,
 	BCH_LRU_TYPES()
 #undef x

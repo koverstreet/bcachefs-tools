@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_FS_IO_PAGECACHE_H
 #define _BCACHEFS_FS_IO_PAGECACHE_H
 
+#include "enum_kind.h"
+
 #include "vfs/io.h"
 
 #include <linux/pagemap.h>
@@ -45,7 +47,7 @@ static inline u64 folio_end_sector(struct folio *folio)
 	x(dirty_reserved)		\
 	x(allocated)
 
-enum bch_folio_sector_state {
+enum __enum_closed bch_folio_sector_state {
 #define x(n)	SECTOR_##n,
 	BCH_FOLIO_SECTOR_STATE()
 #undef x

@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_BSET_H
 #define _BCACHEFS_BSET_H
 
+#include "enum_kind.h"
+
 #include <linux/kernel.h>
 #include <linux/types.h>
 
@@ -147,7 +149,7 @@
  * first key in that range of bytes again.
  */
 
-enum bset_aux_tree_type {
+enum __enum_closed bset_aux_tree_type {
 	BSET_NO_AUX_TREE,
 	BSET_RO_AUX_TREE,
 	BSET_RW_AUX_TREE,

@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_DATA_COMPRESS_H
 #define _BCACHEFS_DATA_COMPRESS_H
 
+#include "enum_kind.h"
+
 #include "extents_types.h"
 
 static const unsigned __bch2_compression_opt_to_type[] = {
@@ -51,7 +53,7 @@ static inline enum bch_compression_type bch2_compression_opt_to_type(unsigned v)
 struct bbuf {
 	struct bch_fs	*c;
 	void		*b;
-	enum bbuf_type {
+	enum __enum_closed bbuf_type {
 		BB_none,
 		BB_vmap,
 		BB_kmalloc,

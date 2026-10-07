@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_EXTENTS_FORMAT_H
 #define _BCACHEFS_EXTENTS_FORMAT_H
 
+#include "enum_kind.h"
+
 /* DOC_LATEX(extent-checksums)
  *
  * \paragraph{Why checksums are stored with keys}
@@ -136,7 +138,7 @@
 	x(reconcile_bp,		8)
 #define BCH_EXTENT_ENTRY_MAX	9
 
-enum bch_extent_entry_type {
+enum __enum_open bch_extent_entry_type {
 #define x(f, n) BCH_EXTENT_ENTRY_##f = n,
 	BCH_EXTENT_ENTRY_TYPES()
 #undef x
@@ -258,7 +260,7 @@ struct bch_extent_stripe_ptr {
 #define BCH_EXTENT_FLAGS()		\
 	x(poisoned,		0)
 
-enum bch_extent_flags_e {
+enum __enum_open bch_extent_flags_e {
 #define x(n, v)	BCH_EXTENT_FLAG_##n = v,
 	BCH_EXTENT_FLAGS()
 #undef x

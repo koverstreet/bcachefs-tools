@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_JOURNAL_H
 #define _BCACHEFS_JOURNAL_H
 
+#include "enum_kind.h"
+
 /*
  * THE JOURNAL:
  *
@@ -379,7 +381,7 @@ static inline union journal_res_state journal_state_buf_put(struct journal *j, u
 	return s;
 }
 
-enum journal_cycle_flags {
+enum __enum_flags journal_cycle_flags {
 	JOURNAL_CYCLE_must_close	= BIT(0),
 	JOURNAL_CYCLE_must_open		= BIT(1),
 	JOURNAL_CYCLE_force_close	= BIT(2),
@@ -439,7 +441,7 @@ int bch2_journal_res_get_slowpath(struct journal *, struct journal_res *,
 				  unsigned, struct btree_trans *);
 
 /* First bits for BCH_WATERMARK: */
-enum journal_res_flags {
+enum __enum_closed journal_res_flags {
 	__JOURNAL_RES_GET_NONBLOCK	= BCH_WATERMARK_BITS,
 	__JOURNAL_RES_GET_CHECK,
 };

@@ -3,6 +3,8 @@
 #ifndef _BCACHEFS_DATA_UPDATE_H
 #define _BCACHEFS_DATA_UPDATE_H
 
+#include "enum_kind.h"
+
 #include "btree/bkey_buf.h"
 #include "btree/update.h"
 #include "data/read.h"
@@ -19,7 +21,7 @@ struct moving_context;
 	x(scrub)		\
 	x(scrub_no_repair)
 
-enum bch_data_update_types {
+enum __enum_closed bch_data_update_types {
 #define x(n)	BCH_DATA_UPDATE_##n,
 	BCH_DATA_UPDATE_TYPES()
 #undef x

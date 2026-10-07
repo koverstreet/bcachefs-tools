@@ -8,6 +8,8 @@
 #ifndef _BUCKETS_H
 #define _BUCKETS_H
 
+#include "enum_kind.h"
+
 #include "alloc/buckets_types.h"
 #include "alloc/format.h"
 #include "data/extents.h"
@@ -457,7 +459,7 @@ static inline void bch2_disk_reservation_put(struct bch_fs *c,
 	}
 }
 
-enum bch_reservation_flags {
+enum __enum_flags bch_reservation_flags {
 	BCH_DISK_RESERVATION_NOFAIL	= 1 << 0,
 	BCH_DISK_RESERVATION_PARTIAL	= 1 << 1,
 };

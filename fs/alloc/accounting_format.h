@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_DISK_ACCOUNTING_FORMAT_H
 #define _BCACHEFS_DISK_ACCOUNTING_FORMAT_H
 
+#include "enum_kind.h"
+
 #include "replicas_format.h"
 
 /*
@@ -66,7 +68,7 @@ struct bch_accounting {
 	x(unstriped,	10)		\
 	x(multiple,	11)
 
-enum bch_data_type {
+enum __enum_open bch_data_type {
 #define x(t, n) BCH_DATA_##t,
 	BCH_DATA_TYPES()
 #undef x
@@ -117,7 +119,7 @@ static inline bool data_type_is_hidden(enum bch_data_type type)
 	x(stripe_frag,		11,	2)	\
 	x(dev_stripe_frag,	12,	2)
 
-enum disk_accounting_type {
+enum __enum_open disk_accounting_type {
 #define x(f, nr, ...)	BCH_DISK_ACCOUNTING_##f	= nr,
 	BCH_DISK_ACCOUNTING_TYPES()
 #undef x

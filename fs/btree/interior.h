@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_BTREE_INTERIOR_H
 #define _BCACHEFS_BTREE_INTERIOR_H
 
+#include "enum_kind.h"
+
 #include "btree/cache.h"
 #include "btree/locking.h"
 #include "btree/update.h"
@@ -19,7 +21,7 @@ int bch2_btree_node_check_topology(struct btree_trans *, struct btree *);
 	x(root)			\
 	x(update)
 
-enum btree_update_mode {
+enum __enum_closed btree_update_mode {
 #define x(n)	BTREE_UPDATE_##n,
 	BTREE_UPDATE_MODES()
 #undef x
@@ -233,7 +235,7 @@ int bch2_btree_node_rewrite_pos(struct btree_trans *,
 				enum bch_trans_commit_flags,
 				enum bch_write_flags);
 
-enum async_btree_op {
+enum __enum_closed async_btree_op {
 	ASYNC_BTREE_rewrite,
 	ASYNC_BTREE_merge,
 	ASYNC_BTREE_merge_no_read,

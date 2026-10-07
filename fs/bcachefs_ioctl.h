@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_IOCTL_H
 #define _BCACHEFS_IOCTL_H
 
+#include "enum_kind.h"
+
 #include <linux/uuid.h>
 #include <asm/ioctl.h>
 #include "bcachefs_format.h"
@@ -277,7 +279,7 @@ struct bch_ioctl_disk_set_state_v2 {
 	x(rewrite_old_nodes,	3)	\
 	x(drop_extra_replicas,	4)
 
-enum bch_data_ops {
+enum __enum_open bch_data_ops {
 #define x(t, n) BCH_DATA_OP_##t = n,
 	BCH_DATA_OPS()
 #undef x
@@ -317,13 +319,13 @@ struct bch_ioctl_data {
 	};
 } __packed __aligned(8);
 
-enum bch_data_event {
+enum __enum_open bch_data_event {
 	BCH_DATA_EVENT_PROGRESS	= 0,
 	/* XXX: add an event for reporting errors */
 	BCH_DATA_EVENT_NR	= 1,
 };
 
-enum data_progress_data_type_special {
+enum __enum_open data_progress_data_type_special {
 	DATA_PROGRESS_DATA_TYPE_phys	= 254,
 	DATA_PROGRESS_DATA_TYPE_done	= 255,
 };
@@ -340,7 +342,7 @@ struct bch_ioctl_data_progress {
 	__u64			sectors_error_uncorrected;
 } __packed __aligned(8);
 
-enum bch_ioctl_data_event_ret {
+enum __enum_open bch_ioctl_data_event_ret {
 	BCH_IOCTL_DATA_EVENT_RET_done		= 1,
 	BCH_IOCTL_DATA_EVENT_RET_device_offline	= 2,
 };
@@ -770,7 +772,7 @@ struct bch_ioctl_snapshot_tree_query_v2 {
 	x(nodes,		0)	\
 	x(keys,			1)
 
-enum bch_progress_units {
+enum __enum_open bch_progress_units {
 #define x(n, v)	BCH_PROGRESS_UNITS_##n = v,
 	BCH_PROGRESS_UNITS()
 #undef x

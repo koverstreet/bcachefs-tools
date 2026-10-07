@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_OPTS_H
 #define _BCACHEFS_OPTS_H
 
+#include "enum_kind.h"
+
 #include <linux/bug.h>
 #include <linux/log2.h>
 #include <linux/sizes.h>
@@ -60,7 +62,7 @@ static inline const char *bch2_d_type_str(unsigned d_type)
  */
 
 /* When can be set: */
-enum opt_flags {
+enum __enum_flags opt_flags {
 	OPT_FS			= BIT(0),	/* Filesystem option */
 	OPT_DEVICE		= BIT(1),	/* Device option */
 	OPT_INODE		= BIT(2),	/* Inode option */
@@ -77,7 +79,7 @@ enum opt_flags {
 	OPT_NODOC		= BIT(13),	/* Omit from generated documentation */
 };
 
-enum opt_type {
+enum __enum_closed opt_type {
 	BCH_OPT_BOOL,
 	BCH_OPT_UINT,
 	BCH_OPT_STR,
@@ -130,7 +132,7 @@ struct bch_opt_fn {
 	x(no,	2)			\
 	x(ask,	3)
 
-enum fsck_err_opts {
+enum __enum_closed fsck_err_opts {
 #define x(t, n)	FSCK_FIX_##t,
 	BCH_FIX_ERRORS_OPTS()
 #undef x
@@ -658,7 +660,7 @@ enum fsck_err_opts {
 	  "%",		"Maximum percentage of total RAM for in-flight\n"\
 	  " EC stripe buffers")
 
-enum bch_opt_id {
+enum __enum_open bch_opt_id {
 #define x(_name, ...)	Opt_##_name,
 	BCH_OPTS()
 #undef x

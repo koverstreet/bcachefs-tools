@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_JOURNAL_TYPES_H
 #define _BCACHEFS_JOURNAL_TYPES_H
 
+#include "enum_kind.h"
+
 #include <linux/cache.h>
 #include <linux/workqueue.h>
 
@@ -97,7 +99,7 @@ struct journal_ringbuf {
  * flushed:
  */
 
-enum journal_pin_type {
+enum __enum_closed journal_pin_type {
 	JOURNAL_PIN_TYPE_btree3,
 	JOURNAL_PIN_TYPE_btree2,
 	JOURNAL_PIN_TYPE_btree1,
@@ -204,7 +206,7 @@ struct journal_space {
 	unsigned	total;
 };
 
-enum journal_space_from {
+enum __enum_closed journal_space_from {
 	journal_space_discarded,
 	journal_space_clean_ondisk,
 	journal_space_clean,
@@ -223,7 +225,7 @@ enum journal_space_from {
 	x(low_on_pin)			\
 	x(low_on_wb)
 
-enum journal_flags {
+enum __enum_closed journal_flags {
 #define x(n)	JOURNAL_##n,
 	JOURNAL_FLAGS()
 #undef x

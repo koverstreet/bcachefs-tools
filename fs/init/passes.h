@@ -1,6 +1,8 @@
 #ifndef _BCACHEFS_RECOVERY_PASSES_H
 #define _BCACHEFS_RECOVERY_PASSES_H
 
+#include "enum_kind.h"
+
 #include <linux/kthread.h>
 
 extern const char * const bch2_recovery_passes[];
@@ -14,7 +16,7 @@ u64 bch2_fsck_recovery_passes(void);
 
 void bch2_recovery_pass_set_no_ratelimit(struct bch_fs *, enum bch_recovery_pass);
 
-enum bch_run_recovery_pass_flags {
+enum __enum_flags bch_run_recovery_pass_flags {
 	RUN_RECOVERY_PASS_ratelimit	= BIT(0),
 	/*
 	 * Schedule in memory only, without taking sb_lock, so it's safe from

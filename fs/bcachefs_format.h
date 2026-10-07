@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_FORMAT_H
 #define _BCACHEFS_FORMAT_H
 
+#include "enum_kind.h"
+
 /*
  * bcachefs on disk data structures
  *
@@ -305,7 +307,7 @@ typedef struct {
 #define KEY_FORMAT_LOCAL_BTREE		0
 #define KEY_FORMAT_CURRENT		1
 
-enum bch_bkey_fields {
+enum __enum_closed bch_bkey_fields {
 	BKEY_FIELD_INODE,
 	BKEY_FIELD_OFFSET,
 	BKEY_FIELD_SNAPSHOT,
@@ -365,7 +367,7 @@ static inline void bkey_init(struct bkey *k)
 #define __BKEY_PADDED(key, pad)					\
 	struct bkey_i key; __u64 key ## _pad[pad]
 
-enum bch_bkey_type_flags {
+enum __enum_flags bch_bkey_type_flags {
 	BKEY_TYPE_strict_btree_checks	= BIT(0),
 };
 
@@ -482,7 +484,7 @@ enum bch_bkey_type_flags {
 	  "Logged propagation of inode io options to ancestor "		\
 	  "snapshot versions")
 
-enum bch_bkey_type {
+enum __enum_open bch_bkey_type {
 #define x(name, nr, ...) KEY_TYPE_##name	= nr,
 	BCH_BKEY_TYPES()
 #undef x
@@ -540,7 +542,7 @@ struct bch_error {
 	x(decompress_zstd_unknown,			17)	\
 	x(decompress_unknown,				18)
 
-enum bch_key_type_errors {
+enum __enum_open bch_key_type_errors {
 #define x(n, t)	KEY_TYPE_ERROR_##n = t,
 	KEY_TYPE_ERRORS()
 #undef x
@@ -652,7 +654,7 @@ struct bch_sb_field {
 	  "Persistent error log, v2: adds the time of "			\
 	  "first occurrence to each entry")
 
-enum btree_id_flags {
+enum __enum_flags btree_id_flags {
 	BTREE_IS_extents	= BIT(0),
 	BTREE_IS_snapshots	= BIT(1),
 	BTREE_IS_snapshot_field	= BIT(2),
@@ -803,7 +805,7 @@ enum btree_id_flags {
 	  BIT_ULL(KEY_TYPE_damage),						\
 	  "Inodes damaged by errors and repairs")				\
 
-enum btree_id {
+enum __enum_open btree_id {
 #define x(name, nr, ...) BTREE_ID_##name = nr,
 	BCH_BTREE_IDS()
 #undef x
@@ -833,7 +835,7 @@ enum btree_id {
 #include "sb/members_format.h"
 #include "snapshots/format.h"
 
-enum bch_sb_field_type {
+enum __enum_open bch_sb_field_type {
 #define x(f, nr, ...)	BCH_SB_FIELD_##f = nr,
 	BCH_SB_FIELDS()
 #undef x
@@ -902,7 +904,7 @@ struct bch_sb_field_crypt {
 
 LE64_BITMASK(BCH_CRYPT_KDF_TYPE,	struct bch_sb_field_crypt, flags, 0, 4);
 
-enum bch_kdf_types {
+enum __enum_open bch_kdf_types {
 	BCH_KDF_SCRYPT		= 0,
 	BCH_KDF_NR		= 1,
 };
@@ -1136,7 +1138,7 @@ LE64_BITMASK(BCH_SB_EXT_MISSING_DEV_TIMEOUT,	struct bch_sb_field_ext, flags0, 49
 	  "Per-device bucket fragmentation LRUs, so copygc can reason "		\
 	  "about fragmentation per device",			"2026-07")
 
-enum bcachefs_metadata_version {
+enum __enum_open bcachefs_metadata_version {
 	bcachefs_metadata_version_min = 9,
 #define x(t, n, ...)	bcachefs_metadata_version_##t = n,
 	BCH_METADATA_VERSIONS()
@@ -1397,7 +1399,7 @@ static inline void SET_BCH_SB_BACKGROUND_COMPRESSION_TYPE(struct bch_sb *sb, __u
 	 BIT_ULL(BCH_FEATURE_journal_no_flush)|		\
 	 BIT_ULL(BCH_FEATURE_incompat_version_field))
 
-enum bch_sb_feature {
+enum __enum_open bch_sb_feature {
 #define x(f, n) BCH_FEATURE_##f,
 	BCH_SB_FEATURES()
 #undef x
@@ -1413,7 +1415,7 @@ enum bch_sb_feature {
 	x(stripe_frag_accounting,		5)	\
 	x(inode_opts_propagated,		6)
 
-enum bch_sb_compat {
+enum __enum_open bch_sb_compat {
 #define x(f, n) BCH_COMPAT_##f,
 	BCH_SB_COMPAT()
 #undef x
@@ -1427,7 +1429,7 @@ enum bch_sb_compat {
 	x(incompatible,		1)	\
 	x(none,			2)
 
-enum bch_version_upgrade_opts {
+enum __enum_open bch_version_upgrade_opts {
 #define x(t, n) BCH_VERSION_UPGRADE_##t = n,
 	BCH_VERSION_UPGRADE_OPTS()
 #undef x
@@ -1452,7 +1454,7 @@ enum bch_version_upgrade_opts {
 	  "Emergency read-only, immediately halting any "		\
 	  "changes to the filesystem on disk")
 
-enum bch_error_actions {
+enum __enum_open bch_error_actions {
 #define x(t, n, ...) BCH_ON_ERROR_##t = n,
 	BCH_ERROR_ACTIONS()
 #undef x
@@ -1465,7 +1467,7 @@ enum bch_error_actions {
 	x(very,			2)	\
 	x(no,			3)
 
-enum bch_degraded_actions {
+enum __enum_open bch_degraded_actions {
 #define x(t, n) BCH_DEGRADED_##t = n,
 	BCH_DEGRADED_ACTIONS()
 #undef x
@@ -1488,7 +1490,7 @@ enum bch_degraded_actions {
 	x(yes,			1)	\
 	x(no,			2)
 
-enum bch_write_degraded_actions {
+enum __enum_open bch_write_degraded_actions {
 #define x(t, n) BCH_WRITE_DEGRADED_##t = n,
 	BCH_WRITE_DEGRADED_ACTIONS()
 #undef x
@@ -1501,7 +1503,7 @@ enum bch_write_degraded_actions {
 	x(siphash_old,		2)	\
 	x(siphash,		3)
 
-enum bch_str_hash_type {
+enum __enum_open bch_str_hash_type {
 #define x(t, n) BCH_STR_HASH_##t = n,
 	BCH_STR_HASH_TYPES()
 #undef x
@@ -1513,7 +1515,7 @@ enum bch_str_hash_type {
 	x(crc64,		1)	\
 	x(siphash,		2)
 
-enum bch_str_hash_opts {
+enum __enum_open bch_str_hash_opts {
 #define x(t, n) BCH_STR_HASH_OPT_##t = n,
 	BCH_STR_HASH_OPTS()
 #undef x
@@ -1530,7 +1532,7 @@ enum bch_str_hash_opts {
 	x(crc64,			6)	\
 	x(xxhash,			7)
 
-enum bch_csum_type {
+enum __enum_open bch_csum_type {
 #define x(t, n) BCH_CSUM_##t = n,
 	BCH_CSUM_TYPES()
 #undef x
@@ -1565,7 +1567,7 @@ static inline _Bool bch2_csum_type_is_encryption(enum bch_csum_type type)
 	x(crc64,		2)	\
 	x(xxhash,		3)
 
-enum bch_csum_opt {
+enum __enum_open bch_csum_opt {
 #define x(t, n) BCH_CSUM_OPT_##t = n,
 	BCH_CSUM_OPTS()
 #undef x
@@ -1580,7 +1582,7 @@ enum bch_csum_opt {
 	x(zstd,			4)	\
 	x(incompressible,	5)
 
-enum bch_compression_type {
+enum __enum_open bch_compression_type {
 #define x(t, n) BCH_COMPRESSION_TYPE_##t = n,
 	BCH_COMPRESSION_TYPES()
 #undef x
@@ -1593,7 +1595,7 @@ enum bch_compression_type {
 	x(gzip,		2)		\
 	x(zstd,		3)
 
-enum bch_compression_opts {
+enum __enum_open bch_compression_opts {
 #define x(t, n) BCH_COMPRESSION_OPT_##t = n,
 	BCH_COMPRESSION_OPTS()
 #undef x
@@ -1605,7 +1607,7 @@ enum bch_compression_opts {
 	x(no,		1)		\
 	x(always,	2)
 
-enum bch_scrub_journal_opts {
+enum __enum_open bch_scrub_journal_opts {
 #define x(t, n) BCH_SCRUB_JOURNAL_##t = n,
 	BCH_SCRUB_JOURNAL_OPTS()
 #undef x
@@ -1694,7 +1696,7 @@ static inline __u64 __bset_magic(struct bch_sb *sb)
 	  "Rewind in progress: keys from entries in this "	\
 	  "seq range use overwrite entries")
 
-enum bch_jset_entry_type {
+enum __enum_open bch_jset_entry_type {
 #define x(f, nr, ...)	BCH_JSET_ENTRY_##f	= nr,
 	BCH_JSET_ENTRY_TYPES()
 #undef x
@@ -1739,7 +1741,7 @@ struct jset_entry_blacklist_v2 {
 	x(inodes,		1)		\
 	x(key_version,		2)
 
-enum bch_fs_usage_type {
+enum __enum_open bch_fs_usage_type {
 #define x(f, nr)	BCH_FS_USAGE_##f	= nr,
 	BCH_FS_USAGE_TYPES()
 #undef x
@@ -1921,7 +1923,7 @@ static inline bool btree_id_recovers_from_scan(enum btree_id btree)
 	return btree == BTREE_ID_alloc || !btree_id_can_reconstruct(btree);
 }
 
-enum { BTREE_MAX_DEPTH = 4 };
+enum __enum_closed { BTREE_MAX_DEPTH = 4 };
 
 /* Btree nodes */
 

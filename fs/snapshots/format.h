@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_SNAPSHOT_FORMAT_H
 #define _BCACHEFS_SNAPSHOT_FORMAT_H
 
+#include "enum_kind.h"
+
 #define SUBVOL_POS_MIN		POS(0, 1)
 #define SUBVOL_POS_MAX		POS(0, S32_MAX)
 #define BCACHEFS_ROOT_SUBVOL	1
@@ -40,7 +42,7 @@ struct bch_subvolume {
 	x(unlinked,		0x2d358e8f)	\
 	x(deleted,		0x3c6b2d4c)
 
-enum bch_subvolume_state {
+enum __enum_open bch_subvolume_state {
 #define x(n, v) SUBVOLUME_STATE_##n = v,
 	BCH_SUBVOLUME_STATES()
 #undef x
@@ -111,7 +113,7 @@ struct bch_snapshot {
 	x(no_keys,		0x372b5a01)	\
 	x(deleted,		0x7cd4a225)
 
-enum bch_snapshot_state {
+enum __enum_open bch_snapshot_state {
 #define x(n, v) SNAPSHOT_STATE_##n = v,
 	BCH_SNAPSHOT_STATES()
 #undef x

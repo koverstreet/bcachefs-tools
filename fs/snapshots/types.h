@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_SNAPSHOT_TYPES_H
 #define _BCACHEFS_SNAPSHOT_TYPES_H
 
+#include "enum_kind.h"
+
 #include <linux/percpu-rwsem.h>
 #include <linux/rwsem.h>
 
@@ -27,7 +29,7 @@ DEFINE_DARRAY_NAMED(snapshot_id_list, u32);
  * Read under RCU; partial is_ancestor[] updates are tolerable since readers
  * fall back to the skiplist.
  */
-enum snapshot_id_state {
+enum __enum_closed snapshot_id_state {
 	SNAPSHOT_ID_empty,
 	SNAPSHOT_ID_live,
 	SNAPSHOT_ID_deleted,

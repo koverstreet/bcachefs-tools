@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_DATA_EC_CREATE_H
 #define _BCACHEFS_DATA_EC_CREATE_H
 
+#include "enum_kind.h"
+
 #include "io.h"
 #include "util/darray.h"
 
@@ -15,7 +17,7 @@ struct ec_dev_stripe_state {
 	struct dev_stripe_state	parity_stripe;
 };
 
-enum ec_stripe_ref {
+enum __enum_closed ec_stripe_ref {
 	STRIPE_REF_io,
 	STRIPE_REF_stripe,
 	STRIPE_REF_NR
@@ -41,7 +43,7 @@ enum ec_stripe_ref {
 	x(filling)				\
 	x(in_flight)
 
-enum ec_stripe_new_state {
+enum __enum_closed ec_stripe_new_state {
 #define x(n)	EC_STRIPE_NEW_##n,
 	EC_STRIPE_NEW_STATES()
 #undef x

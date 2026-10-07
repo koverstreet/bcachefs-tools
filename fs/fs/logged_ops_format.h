@@ -2,7 +2,9 @@
 #ifndef _BCACHEFS_LOGGED_OPS_FORMAT_H
 #define _BCACHEFS_LOGGED_OPS_FORMAT_H
 
-enum logged_ops_inums {
+#include "enum_kind.h"
+
+enum __enum_open logged_ops_inums {
 	LOGGED_OPS_INUM_logged_ops,
 	LOGGED_OPS_INUM_inode_cursors,
 };
@@ -15,7 +17,7 @@ struct bch_logged_op_truncate {
 	__le64			new_i_size;
 };
 
-enum logged_op_finsert_state {
+enum __enum_open logged_op_finsert_state {
 	LOGGED_OP_FINSERT_start,
 	LOGGED_OP_FINSERT_shift_extents,
 	LOGGED_OP_FINSERT_finish,

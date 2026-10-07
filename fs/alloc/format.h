@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_ALLOC_BACKGROUND_FORMAT_H
 #define _BCACHEFS_ALLOC_BACKGROUND_FORMAT_H
 
+#include "enum_kind.h"
+
 struct bch_alloc {
 	struct bch_val		v;
 	__u8			fields;
@@ -19,7 +21,7 @@ struct bch_alloc {
 	x(stripe,		32)		\
 	x(stripe_redundancy,	8)
 
-enum {
+enum __enum_closed {
 #define x(name, _bits) BCH_ALLOC_FIELD_V1_##name,
 	BCH_ALLOC_FIELDS_V1()
 #undef x

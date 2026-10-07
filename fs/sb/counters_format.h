@@ -2,7 +2,9 @@
 #ifndef _BCACHEFS_SB_COUNTERS_FORMAT_H
 #define _BCACHEFS_SB_COUNTERS_FORMAT_H
 
-enum bch_counters_flags {
+#include "enum_kind.h"
+
+enum __enum_flags bch_counters_flags {
 	TYPE_COUNTER	= BIT(0),	/* event counters */
 	TYPE_SECTORS	= BIT(1),	/* amount counters, the unit is sectors */
 };
@@ -290,7 +292,7 @@ enum bch_counters_flags {
 	x(error_throw,				93,  TYPE_COUNTER,	\
 	  "Errors thrown")
 
-enum bch_persistent_counters {
+enum __enum_closed bch_persistent_counters {
 #define x(t, n, ...) BCH_COUNTER_##t,
 	BCH_PERSISTENT_COUNTERS()
 #undef x
@@ -304,7 +306,7 @@ static const enum bch_counters_flags bch2_counter_flags[] = {
 #undef x
 };
 
-enum bch_persistent_counters_stable {
+enum __enum_open bch_persistent_counters_stable {
 #define x(t, n, ...) BCH_COUNTER_STABLE_##t = n,
 	BCH_PERSISTENT_COUNTERS()
 #undef x

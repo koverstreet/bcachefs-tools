@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_INODE_FORMAT_H
 #define _BCACHEFS_INODE_FORMAT_H
 
+#include "enum_kind.h"
+
 #define BLOCKDEV_INODE_MAX	4096
 #define BCACHEFS_ROOT_INO	4096
 
@@ -122,7 +124,7 @@ struct bch_inode_generation {
 	x(inodes_32bit,			8)	\
 	x(casefold,			8)
 
-enum inode_opt_id {
+enum __enum_open inode_opt_id {
 #define x(name, ...)				\
 	Inode_opt_##name,
 	BCH_INODE_OPTS()
@@ -187,13 +189,13 @@ enum inode_opt_id {
 
 /* bits 20+ reserved for packed fields below: */
 
-enum bch_inode_flags {
+enum __enum_flags bch_inode_flags {
 #define x(t, n)	BCH_INODE_##t = 1U << n,
 	BCH_INODE_FLAGS()
 #undef x
 };
 
-enum __bch_inode_flags {
+enum __enum_open __bch_inode_flags {
 #define x(t, n)	__BCH_INODE_##t = n,
 	BCH_INODE_FLAGS()
 #undef x

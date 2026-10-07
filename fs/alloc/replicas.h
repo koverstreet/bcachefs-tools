@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_REPLICAS_H
 #define _BCACHEFS_REPLICAS_H
 
+#include "enum_kind.h"
+
 #include "btree/bkey.h"
 #include "alloc/replicas_types.h"
 #include "util/eytzinger.h"
@@ -39,7 +41,7 @@ bool bch2_can_read_replicas_with_devs(struct bch_fs *, struct bch_devs_mask *,
 				      unsigned, struct printbuf *);
 bool bch2_can_read_fs_with_devs(struct bch_fs *, struct bch_devs_mask *,
 				unsigned, struct printbuf *);
-enum bch_write_check {
+enum __enum_closed bch_write_check {
 	/* Starting: is there anywhere to write each data type at all? */
 	BCH_WRITE_CHECK_start,
 	/*

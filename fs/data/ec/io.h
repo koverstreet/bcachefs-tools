@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_DATA_EC_IO_H
 #define _BCACHEFS_DATA_EC_IO_H
 
+#include "enum_kind.h"
+
 struct ec_bio {
 	struct bch_dev		*ca;
 	struct ec_stripe_buf	*buf;
@@ -11,7 +13,7 @@ struct ec_bio {
 	struct bio		bio;
 };
 
-enum bch_stripe_buf_err {
+enum __enum_closed bch_stripe_buf_err {
 	STRIPE_BUF_PRE_RECOV,
 	STRIPE_BUF_POST_RECOV,
 };

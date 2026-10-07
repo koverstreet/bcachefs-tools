@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_EXTENTS_TYPES_H
 #define _BCACHEFS_EXTENTS_TYPES_H
 
+#include "enum_kind.h"
+
 #include "bcachefs_format.h"
 
 struct bch_extent_crc_unpacked {
@@ -52,13 +54,13 @@ struct bch_io_failures {
 	x(in_retry)			\
 	x(no_poison_check)
 
-enum __bch_read_flags {
+enum __enum_closed __bch_read_flags {
 #define x(n)	__BCH_READ_##n,
 	BCH_READ_FLAGS()
 #undef x
 };
 
-enum bch_read_flags {
+enum __enum_flags bch_read_flags {
 #define x(n)	BCH_READ_##n = BIT(__BCH_READ_##n),
 	BCH_READ_FLAGS()
 #undef x

@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_SB_IO_H
 #define _BCACHEFS_SB_IO_H
 
+#include "enum_kind.h"
+
 #include "data/extents.h"
 #include "init/dev_types.h"
 #include "sb/members.h"
@@ -109,7 +111,7 @@ int bch2_read_super_silent(const char *, struct bch_opts *, struct bch_sb_handle
  * bringup: this write is part of bringing the filesystem up - allowed before
  * a start has begun, see __bch2_write_super()
  */
-enum bch_sb_write_flags {
+enum __enum_flags bch_sb_write_flags {
 	BCH_SB_WRITE_bringup	= BIT(0),
 };
 

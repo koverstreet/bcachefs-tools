@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_RECONCILE_WORK_H
 #define _BCACHEFS_RECONCILE_WORK_H
 
+#include "enum_kind.h"
+
 #include "data/compress.h"
 #include "alloc/disk_groups.h"
 
@@ -16,7 +18,7 @@ extern const char * const bch2_reconcile_opts[];
 	x(inum)
 
 struct reconcile_scan {
-	enum reconcile_scan_type {
+	enum __enum_closed reconcile_scan_type {
 #define x(t)	RECONCILE_SCAN_##t,
 		RECONCILE_SCAN_TYPES()
 #undef x

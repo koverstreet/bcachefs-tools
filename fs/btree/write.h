@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_BTREE_WRITE_H
 #define _BCACHEFS_BTREE_WRITE_H
 
+#include "enum_kind.h"
+
 #include "data/write_types.h"
 
 struct btree_write_bio {
@@ -19,7 +21,7 @@ struct btree_write_bio {
 
 bool bch2_btree_post_write_cleanup(struct bch_fs *, struct btree *);
 
-enum btree_write_flags {
+enum __enum_closed btree_write_flags {
 	__BTREE_WRITE_only_if_need = BTREE_WRITE_TYPE_BITS,
 	__BTREE_WRITE_already_started,
 };

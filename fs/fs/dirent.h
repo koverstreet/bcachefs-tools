@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_DIRENT_H
 #define _BCACHEFS_DIRENT_H
 
+#include "enum_kind.h"
+
 #include "str_hash.h"
 
 int bch2_dirent_validate(struct bch_fs *, struct bkey_s_c,
@@ -48,7 +50,7 @@ static inline unsigned vfs_d_type(unsigned type)
 	return type == DT_SUBVOL ? DT_DIR : type;
 }
 
-enum bch_rename_mode {
+enum __enum_closed bch_rename_mode {
 	BCH_RENAME,
 	BCH_RENAME_OVERWRITE,
 	BCH_RENAME_EXCHANGE,

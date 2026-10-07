@@ -4,6 +4,8 @@
 #ifndef _BCACHEFS_PRINTBUF_H
 #define _BCACHEFS_PRINTBUF_H
 
+#include "enum_kind.h"
+
 /*
  * Printbufs: Simple strings for printing to, with optional heap allocation
  *
@@ -67,7 +69,7 @@
 #include <linux/kernel.h>
 #include <linux/string.h>
 
-enum printbuf_si {
+enum __enum_closed printbuf_si {
 	PRINTBUF_UNITS_2,	/* use binary powers of 2^10 */
 	PRINTBUF_UNITS_10,	/* use powers of 10^3 (standard SI) */
 };

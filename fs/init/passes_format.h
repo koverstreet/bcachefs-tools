@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_RECOVERY_PASSES_FORMAT_H
 #define _BCACHEFS_RECOVERY_PASSES_FORMAT_H
 
+#include "enum_kind.h"
+
 #define PASS_SILENT		BIT(0)
 #define PASS_FSCK		BIT(1)
 #define PASS_UNCLEAN		BIT(2)
@@ -244,7 +246,7 @@
 	  "completing recovery")
 
 /* We normally enumerate recovery passes in the order we run them: */
-enum bch_recovery_pass {
+enum __enum_closed bch_recovery_pass {
 #define x(n, ...)	BCH_RECOVERY_PASS_##n,
 	BCH_RECOVERY_PASSES()
 #undef x
@@ -252,7 +254,7 @@ enum bch_recovery_pass {
 };
 
 /* But we also need stable identifiers that can be used in the superblock */
-enum bch_recovery_pass_stable {
+enum __enum_open bch_recovery_pass_stable {
 #define x(n, id, ...)	BCH_RECOVERY_PASS_STABLE_##n = id,
 	BCH_RECOVERY_PASSES()
 #undef x

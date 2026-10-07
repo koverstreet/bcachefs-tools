@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_BTREE_LOCKING_H
 #define _BCACHEFS_BTREE_LOCKING_H
 
+#include "enum_kind.h"
+
 /*
  * Only for internal btree use:
  *
@@ -121,7 +123,7 @@ static inline unsigned bch2_inode_shard_cpu(struct bch_fs *c)
 /* path lock state */
 
 /* matches six lock types */
-enum btree_node_locked_type {
+enum __enum_closed btree_node_locked_type {
 	BTREE_NODE_UNLOCKED		= -1,
 	BTREE_NODE_READ_LOCKED		= SIX_LOCK_read,
 	BTREE_NODE_INTENT_LOCKED	= SIX_LOCK_intent,

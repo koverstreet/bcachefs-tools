@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_FS_H
 #define _BCACHEFS_FS_H
 
+#include "enum_kind.h"
+
 #include "fs/inode.h"
 #include "fs/str_hash.h"
 #include "fs/quota_types.h"
@@ -135,7 +137,7 @@ static inline int ptrcmp(void *l, void *r)
 	return cmp_int(l, r);
 }
 
-enum bch_inode_lock_op {
+enum __enum_flags bch_inode_lock_op {
 	INODE_PAGECACHE_BLOCK	= (1U << 0),
 	INODE_UPDATE_LOCK	= (1U << 1),
 };

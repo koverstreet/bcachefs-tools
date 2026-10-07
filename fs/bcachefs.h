@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_H
 #define _BCACHEFS_H
 
+#include "enum_kind.h"
+
 /*
  * bcachefs: a COW filesystem built around a b-tree with snapshot support,
  * multiple devices, checksumming, compression, and encryption.
@@ -434,7 +436,7 @@ BCH_DEBUG_PARAMS_ALL()
 	  "Blocked: discard worker waiting for journal flush "		\
 	  "to advance rewind_seq and release buckets")
 
-enum bch_time_stats {
+enum __enum_closed bch_time_stats {
 #define x(name, ...) BCH_TIME_##name,
 	BCH_TIME_STATS()
 #undef x
@@ -474,7 +476,7 @@ struct io_count {
 	x(check_extent_checksums)			\
 	x(ec_block)
 
-enum bch_dev_read_ref {
+enum __enum_closed bch_dev_read_ref {
 #define x(n) BCH_DEV_READ_REF_##n,
 	BCH_DEV_READ_REFS()
 #undef x
@@ -493,7 +495,7 @@ enum bch_dev_read_ref {
 	x(ec_block)					\
 	x(ec_bucket_zero)
 
-enum bch_dev_write_ref {
+enum __enum_closed bch_dev_write_ref {
 #define x(n) BCH_DEV_WRITE_REF_##n,
 	BCH_DEV_WRITE_REFS()
 #undef x
@@ -513,7 +515,7 @@ struct bucket_bitmap {
 #define BCH_DEV_FLAGS()			\
 	x(unflushed_writes)
 
-enum bch_dev_flags {
+enum __enum_closed bch_dev_flags {
 #define x(n)		BCH_DEV_##n,
 	BCH_DEV_FLAGS()
 #undef x
@@ -677,7 +679,7 @@ struct bch_dev {
 	x(sb_dirty)			\
 	x(all_devs_rw)			\
 
-enum bch_fs_flags {
+enum __enum_closed bch_fs_flags {
 #define x(n)		BCH_FS_##n,
 	BCH_FS_FLAGS()
 #undef x
@@ -723,7 +725,7 @@ struct journal_seq_blacklist_table {
 	x(async_recovery_passes)					\
 	x(ioctl_data)
 
-enum bch_write_ref {
+enum __enum_closed bch_write_ref {
 #define x(n) BCH_WRITE_REF_##n,
 	BCH_WRITE_REFS()
 #undef x
@@ -1145,7 +1147,7 @@ static inline struct bch_log_msg bch2_log_msg_init(struct bch_fs *c,
 	};
 }
 
-enum kern_loglevels {
+enum __enum_closed kern_loglevels {
 	LOGLEVEL_emerg		= 0,
 	LOGLEVEL_alert		= 1,
 	LOGLEVEL_crit		= 2,

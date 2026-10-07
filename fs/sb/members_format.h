@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_SB_MEMBERS_FORMAT_H
 #define _BCACHEFS_SB_MEMBERS_FORMAT_H
 
+#include "enum_kind.h"
+
 /*
  * We refer to members with bitmasks in various places - but we need to get rid
  * of this limit:
@@ -25,7 +27,7 @@
 	x(randread,	2)			\
 	x(randwrite,	3)
 
-enum bch_iops_measurement {
+enum __enum_open bch_iops_measurement {
 #define x(t, n) BCH_IOPS_##t = n,
 	BCH_IOPS_MEASUREMENTS()
 #undef x
@@ -37,7 +39,7 @@ enum bch_iops_measurement {
 	x(write,	1)			\
 	x(checksum,	2)
 
-enum bch_member_error_type {
+enum __enum_open bch_member_error_type {
 #define x(t, n) BCH_MEMBER_ERROR_##t = n,
 	BCH_MEMBER_ERROR_TYPES()
 #undef x
@@ -127,7 +129,7 @@ LE64_BITMASK(BCH_MEMBER_NR_WRITE_ERRORS,struct bch_member, flags[1], 20, 40);
 	x(evacuating,	2)			\
 	x(spare,	3)
 
-enum bch_member_state {
+enum __enum_open bch_member_state {
 #define x(t, n) BCH_MEMBER_STATE_##t = n,
 	BCH_MEMBER_STATES()
 #undef x
@@ -141,7 +143,7 @@ enum bch_member_state {
 	x(pre_freespace_init,	3)		\
 	x(pre_journal_alloc,	4)
 
-enum bch_member_initialized {
+enum __enum_open bch_member_initialized {
 #define x(t, n) BCH_MEMBER_INITIALIZED_##t = n,
 	BCH_MEMBER_INITIALIZED_STATES()
 #undef x

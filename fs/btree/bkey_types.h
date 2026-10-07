@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_BKEY_TYPES_H
 #define _BCACHEFS_BKEY_TYPES_H
 
+#include "enum_kind.h"
+
 #include "bcachefs_format.h"
 
 /* DOC_LATEX(bkey-structures)
@@ -304,7 +306,7 @@ static inline struct bkey_i_##name *bkey_##name##_init(struct bkey_i *_k)\
 BCH_BKEY_TYPES();
 #undef x
 
-enum bch_validate_flags {
+enum __enum_flags bch_validate_flags {
 	BCH_VALIDATE_write		= BIT(0),
 	BCH_VALIDATE_commit		= BIT(1),
 	BCH_VALIDATE_silent		= BIT(2),
@@ -318,7 +320,7 @@ enum bch_validate_flags {
 	x(btree_node)			\
 	x(commit)
 
-enum bkey_validate_from {
+enum __enum_closed bkey_validate_from {
 #define x(n)	BKEY_VALIDATE_##n,
 	BKEY_VALIDATE_CONTEXTS()
 #undef x

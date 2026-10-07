@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_DISK_ACCOUNTING_H
 #define _BCACHEFS_DISK_ACCOUNTING_H
 
+#include "enum_kind.h"
+
 #include "btree/update.h"
 #include "sb/members.h"
 #include "util/eytzinger.h"
@@ -149,7 +151,7 @@ static inline int accounting_pos_cmp(const void *_l, const void *_r)
 	return bpos_cmp(*l, *r);
 }
 
-enum bch_accounting_mode {
+enum __enum_closed bch_accounting_mode {
 	BCH_ACCOUNTING_normal,
 	BCH_ACCOUNTING_gc,
 	BCH_ACCOUNTING_read,

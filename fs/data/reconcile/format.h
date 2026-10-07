@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_RECONCILE_FORMAT_H
 #define _BCACHEFS_RECONCILE_FORMAT_H
 
+#include "enum_kind.h"
+
 /*
  * rebalance on disk data structures:
  *
@@ -152,7 +154,7 @@ struct bch_extent_reconcile_bp {
 	x(background_target)			\
 	x(promote_target)
 
-enum bch_reconcile_opts {
+enum __enum_open bch_reconcile_opts {
 #define x(n)	BCH_RECONCILE_##n,
 	BCH_RECONCILE_OPTS()
 #undef x
@@ -168,7 +170,7 @@ enum bch_reconcile_opts {
 	x(pending,		6)		\
 	x(stripes,		7)
 
-enum bch_reconcile_accounting_type {
+enum __enum_open bch_reconcile_accounting_type {
 #define x(t, n) BCH_RECONCILE_ACCOUNTING_##t = n,
 	BCH_RECONCILE_ACCOUNTING()
 #undef x
@@ -181,7 +183,7 @@ enum bch_reconcile_accounting_type {
 	x(normal)				\
 	x(pending)
 
-enum reconcile_work_id {
+enum __enum_open reconcile_work_id {
 #define x(t)	RECONCILE_WORK_##t,
 	RECONCILE_WORK_IDS()
 #undef x

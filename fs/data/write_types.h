@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_IO_WRITE_TYPES_H
 #define _BCACHEFS_IO_WRITE_TYPES_H
 
+#include "enum_kind.h"
+
 #include "alloc/types.h"
 #include "btree/types.h"
 #include "alloc/buckets_types.h"
@@ -31,13 +33,13 @@
 	x(submitted)			\
 	x(convert_unwritten)
 
-enum __bch_write_flags {
+enum __enum_closed __bch_write_flags {
 #define x(f)	__BCH_WRITE_##f,
 	BCH_WRITE_FLAGS()
 #undef x
 };
 
-enum bch_write_flags {
+enum __enum_flags bch_write_flags {
 #define x(f)	BCH_WRITE_##f = BIT(__BCH_WRITE_##f),
 	BCH_WRITE_FLAGS()
 #undef x

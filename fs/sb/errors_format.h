@@ -2,7 +2,9 @@
 #ifndef _BCACHEFS_SB_ERRORS_FORMAT_H
 #define _BCACHEFS_SB_ERRORS_FORMAT_H
 
-enum bch_fsck_flags {
+#include "enum_kind.h"
+
+enum __enum_flags bch_fsck_flags {
 	FSCK_CAN_FIX		= BIT(0),
 	FSCK_CAN_IGNORE		= BIT(1),
 	FSCK_AUTOFIX		= BIT(2),
@@ -450,7 +452,7 @@ enum bch_fsck_flags {
 	x(device_bad_flush_repaired_from_replica,		436,	0)		\
 	x(MAX,							437,	0)
 
-enum bch_sb_error_id {
+enum __enum_open bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
 	BCH_SB_ERRS()
 #undef x

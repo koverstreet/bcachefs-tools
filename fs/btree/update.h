@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_BTREE_UPDATE_H
 #define _BCACHEFS_BTREE_UPDATE_H
 
+#include "enum_kind.h"
+
 #include "btree/iter.h"
 #include "journal/journal.h"
 #include "sb/io.h"
@@ -34,7 +36,7 @@ void bch2_btree_insert_key_leaf(struct btree_trans *, struct btree_path *,
 	x(journal_replay, "in journal replay")						\
 	x(skip_accounting_apply, "we're in journal replay - accounting updates have already been applied")
 
-enum __bch_trans_commit_flags {
+enum __enum_closed __bch_trans_commit_flags {
 	/* First bits for bch_watermark: */
 	__BCH_TRANS_COMMIT_FLAGS_START = BCH_WATERMARK_BITS,
 #define x(n, ...)	__BCH_TRANS_COMMIT_##n,
@@ -42,7 +44,7 @@ enum __bch_trans_commit_flags {
 #undef x
 };
 
-enum bch_trans_commit_flags {
+enum __enum_flags bch_trans_commit_flags {
 #define x(n, ...)	BCH_TRANS_COMMIT_##n = BIT(__BCH_TRANS_COMMIT_##n),
 	BCH_TRANS_COMMIT_FLAGS()
 #undef x

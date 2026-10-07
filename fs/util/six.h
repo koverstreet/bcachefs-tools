@@ -3,6 +3,8 @@
 #ifndef _LINUX_SIX_H
 #define _LINUX_SIX_H
 
+#include "enum_kind.h"
+
 /**
  * DOC: SIX locks overview
  *
@@ -130,7 +132,7 @@
 #include "util/fifo.h"
 #include "util/util.h"
 
-enum six_lock_type {
+enum __enum_closed six_lock_type {
 	SIX_LOCK_read,
 	SIX_LOCK_intent,
 	SIX_LOCK_write,
@@ -210,7 +212,7 @@ typedef int (*six_lock_should_sleep_fn)(struct six_lock *lock, struct six_lock_w
 
 void six_lock_exit(struct six_lock *lock);
 
-enum six_lock_init_flags {
+enum __enum_flags six_lock_init_flags {
 	SIX_LOCK_INIT_PCPU	= 1U << 0,
 };
 

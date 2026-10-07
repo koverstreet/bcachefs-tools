@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_BKEY_SORT_H
 #define _BCACHEFS_BKEY_SORT_H
 
+#include "enum_kind.h"
+
 #include "btree/interior.h"
 
 struct sort_iter {
@@ -58,7 +60,7 @@ void *bch2_btree_bounce_alloc_noprof(struct bch_fs *, size_t, bool *);
 #define bch2_btree_bounce_alloc(...)						\
 	alloc_hooks(bch2_btree_bounce_alloc_noprof(__VA_ARGS__))
 
-enum compact_mode {
+enum __enum_closed compact_mode {
 	COMPACT_LAZY,
 	COMPACT_ALL,
 };

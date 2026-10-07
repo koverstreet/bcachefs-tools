@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_ALLOC_TYPES_H
 #define _BCACHEFS_ALLOC_TYPES_H
 
+#include "enum_kind.h"
+
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
 
@@ -21,7 +23,7 @@
 	x(reclaim)			\
 	x(interior_updates)
 
-enum bch_watermark {
+enum __enum_closed bch_watermark {
 #define x(name)	BCH_WATERMARK_##name,
 	BCH_WATERMARKS()
 #undef x
@@ -96,7 +98,7 @@ struct dev_stripe_state {
 	x(runnable)			\
 	x(running)
 
-enum write_point_state {
+enum __enum_closed write_point_state {
 #define x(n)	WRITE_POINT_##n,
 	WRITE_POINT_STATES()
 #undef x

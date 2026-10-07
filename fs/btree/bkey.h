@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_BKEY_H
 #define _BCACHEFS_BKEY_H
 
+#include "enum_kind.h"
+
 #include <linux/bug.h>
 #include <linux/static_key.h>
 #include "bcachefs_format.h"
@@ -26,7 +28,7 @@ void bch2_bkey_packed_to_binary_text(struct printbuf *,
 				     const struct bkey_format *,
 				     const struct bkey_packed *);
 
-enum bkey_lr_packed {
+enum __enum_closed bkey_lr_packed {
 	BKEY_PACKED_BOTH,
 	BKEY_PACKED_RIGHT,
 	BKEY_PACKED_LEFT,
@@ -424,7 +426,7 @@ struct bpos __bkey_unpack_pos_b(const struct btree *,
 bool bch2_bkey_pack_key(struct bkey_packed *, const struct bkey *,
 		   const struct bkey_format *);
 
-enum bkey_pack_pos_ret {
+enum __enum_closed bkey_pack_pos_ret {
 	BKEY_PACK_POS_EXACT,
 	BKEY_PACK_POS_SMALLER,
 	BKEY_PACK_POS_FAIL,

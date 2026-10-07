@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_BTREE_GC_TYPES_H
 #define _BCACHEFS_BTREE_GC_TYPES_H
 
+#include "enum_kind.h"
+
 #include "btree/bbpos_types.h"
 
 #include <linux/generic-radix-tree.h>
@@ -12,7 +14,7 @@
 	x(sb)			\
 	x(btree)
 
-enum gc_phase {
+enum __enum_closed gc_phase {
 #define x(n)	GC_PHASE_##n,
 	GC_PHASES()
 #undef x

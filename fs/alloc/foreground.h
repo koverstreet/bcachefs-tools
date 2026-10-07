@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_ALLOC_FOREGROUND_H
 #define _BCACHEFS_ALLOC_FOREGROUND_H
 
+#include "enum_kind.h"
+
 #include "bcachefs.h"
 #include "alloc/buckets.h"
 #include "alloc/types.h"
@@ -96,7 +98,7 @@ struct alloc_request {
 	 */
 	u64			target_frac;
 
-	enum {
+	enum __enum_closed {
 				BTREE_BITMAP_NO,
 				BTREE_BITMAP_YES,
 				BTREE_BITMAP_ANY,

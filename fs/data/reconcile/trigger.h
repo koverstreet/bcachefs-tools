@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_RECONCILE_TRIGGER_H
 #define _BCACHEFS_RECONCILE_TRIGGER_H
 
+#include "enum_kind.h"
+
 #include "data/extents.h"
 
 int bch2_extent_reconcile_validate(struct bch_fs *, struct bkey_s_c,
@@ -124,7 +126,7 @@ static inline int bch2_trigger_extent_reconcile(struct btree_trans *trans,
 		: 0;
 }
 
-enum set_needs_reconcile_ctx {
+enum __enum_closed set_needs_reconcile_ctx {
 	SET_NEEDS_RECONCILE_opt_change,
 	SET_NEEDS_RECONCILE_opt_change_indirect,
 	SET_NEEDS_RECONCILE_foreground,
