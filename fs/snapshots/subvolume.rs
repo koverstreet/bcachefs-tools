@@ -63,6 +63,46 @@ pub fn is_ro_trans(trans: &BtreeTrans<'_>, subvol: u32) -> Result<u32, BchError>
     Ok(snapshot)
 }
 
+/// A new subvolume, as create() made it: its ID, its snapshot, and the
+/// subvolume itself.
+pub struct Created {
+    pub subvol:   u32,
+    pub snapshot: u32,
+    pub v:        c::bch_subvolume,
+}
+
+/// Create a subvolume whose root is inode @inode, in the filesystem tree
+/// under subvolume @parent - a snapshot of subvolume @src, unless @src is 0;
+/// read-only if @ro: as bch2_subvolume_create().
+pub fn create(
+    trans:  &BtreeTrans<'_>,
+    inode:  u64,
+    parent: u32,
+    src:    u32,
+    ro:     bool,
+) -> Result<Created, BchError> {
+    let mut new = Created { subvol: 0, snapshot: 0, v: Default::default() };
+    ret_to_result_void(unsafe {
+        c::bch2_subvolume_create(trans.raw(), inode, parent, src,
+                                 &mut new.subvol, &mut new.snapshot, &mut new.v, ro)
+    })?;
+    Ok(new)
+}
+
+/// Unlink subvolume @subvol: its state goes to unlinked, and when the
+/// transaction commits its deletion is queued, for once the pagecache is done
+/// with it - check_subvols finds one a crash left behind. As
+/// bch2_subvolume_unlink().
+pub fn unlink(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError> {
+    ret_to_result_void(unsafe { c::bch2_subvolume_unlink(trans.raw(), subvol) })
+}
+
+/// ENOTEMPTY_subvol_not_empty if subvolume @subvol has subvolumes under it:
+/// as bch2_subvol_has_children().
+pub fn require_no_children(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError> {
+    ret_to_result_void(unsafe { c::bch2_subvol_has_children(trans.raw(), subvol) })
+}
+
 /// Walk @iter to @end as subvolume @subvol sees it - at its snapshot, read
 /// again after every restart - calling @f on each key, until it says stop: as
 /// for_each_btree_key_in_subvolume_max_continue_in_trans().
