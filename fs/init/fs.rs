@@ -165,6 +165,12 @@ impl Fs {
         lost & (1u64 << id as u32) != 0
     }
 
+    /// Whether this is an image made with `bcachefs dump --sanitize`, which
+    /// scrubs dirent names without rehashing them: c->sb.dirents_sanitized.
+    pub fn dirents_sanitized(&self) -> bool {
+        unsafe { (*self.raw).sb.dirents_sanitized }
+    }
+
     /// Whether filesystem flag @f (BCH_FS_*) is set: C's test_bit() on
     /// c->flags. Other threads set and clear them, so it's an atomic load.
     pub fn flag(&self, f: c::bch_fs_flags) -> bool {
@@ -356,6 +362,12 @@ impl Fs {
     /// EROFS if @subvol is a read-only subvolume (a read-only snapshot).
     pub fn subvol_is_ro(&self, subvol: u32) -> Result<(), BchError> {
         ret_to_result(unsafe { c::bch2_subvol_is_ro(self.raw, subvol) })
+    }
+
+    /// Whether casefolding can be used: an error without CONFIG_UNICODE, or
+    /// with the casefold_disabled option - as bch2_fs_casefold_enabled().
+    pub fn casefold_enabled(&self) -> Result<(), BchError> {
+        ret_to_result(unsafe { c::bch2_fs_casefold_enabled(self.raw) })
     }
 
     /// Write superblock to disk (locked version). Caller must hold sb_lock.

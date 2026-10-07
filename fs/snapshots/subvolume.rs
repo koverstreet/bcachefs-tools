@@ -55,6 +55,14 @@ pub fn get_snapshot_nowarn(trans: &BtreeTrans<'_>, subvol: u32) -> Result<u32, B
     Ok(snapshot)
 }
 
+/// EROFS if subvolume @subvol is read-only - a snapshot; otherwise its
+/// snapshot: as bch2_subvol_is_ro_trans().
+pub fn is_ro_trans(trans: &BtreeTrans<'_>, subvol: u32) -> Result<u32, BchError> {
+    let mut snapshot = 0;
+    ret_to_result_void(unsafe { c::bch2_subvol_is_ro_trans(trans.raw(), subvol, &mut snapshot) })?;
+    Ok(snapshot)
+}
+
 /// Walk @iter to @end as subvolume @subvol sees it - at its snapshot, read
 /// again after every restart - calling @f on each key, until it says stop: as
 /// for_each_btree_key_in_subvolume_max_continue_in_trans().
