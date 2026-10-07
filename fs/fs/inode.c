@@ -1627,20 +1627,26 @@ int bch2_delete_dead_inodes(struct bch_fs *c)
 			 * fsck error's log entry - and bch2_inode_rm_snapshot()
 			 * runs its own iterations: each begins by dropping them.
 			 * An inode with extents commits them with its first
-			 * deletion; one with nothing to delete there lost them:
+			 * deletion; one with nothing to delete there lost them.
+			 *
+			 * A restart here is an ordinary one: nothing's been
+			 * deleted yet, so the loop retries this key.
 			 */
-			ret = bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
-				bch2_inode_rm_snapshot(trans, k.k->p.offset, k.k->p.snapshot);
-			/*
-			 * We don't want to loop here: a transaction restart
-			 * error here means we handled a transaction restart and
-			 * we're actually done, but if we loop we'll retry the
-			 * same key because the write buffer hasn't been flushed
-			 * yet
-			 */
-			if (bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
-				ret = 0;
-				continue;
+			ret = bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
+			if (!ret) {
+				ret = bch2_inode_rm_snapshot(trans, k.k->p.offset, k.k->p.snapshot);
+				/*
+				 * We don't want to loop here: a transaction
+				 * restart error here means we handled a
+				 * transaction restart and we're actually done,
+				 * but if we loop we'll retry the same key
+				 * because the write buffer hasn't been flushed
+				 * yet
+				 */
+				if (bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
+					ret = 0;
+					continue;
+				}
 			}
 		}
 
