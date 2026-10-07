@@ -1617,16 +1617,14 @@ fn check_key_has_snapshot(
 /// was repaired or can't be, for the caller to skip it.
 ///
 /// # Safety
-/// The arguments are C's: @trans live with an attempt in progress, @iter NULL
-/// - the promote path - or the iterator @k was read from.
+/// @iter NULL - the promote path - or the iterator @k was read from.
 #[no_mangle]
 pub unsafe extern "C" fn __bch2_check_key_has_snapshot(
-    trans: *mut c::btree_trans,
+    trans: &crate::util::ffi::Opaque<c::btree_trans>,
     iter:  Option<&mut c::btree_iter>,
-    k:     c::bkey_s_c,
+    k:     BkeySC<'_>,
 ) -> core::ffi::c_int {
-    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-    match check_key_has_snapshot(&trans.attempt_in_progress(), iter, BkeySC::from(&k)) {
+    match check_key_has_snapshot(&BtreeTrans::from_c(trans).attempt_in_progress(), iter, k) {
         Ok(handled) => handled as core::ffi::c_int,
         Err(e)      => -e.raw(),
     }
