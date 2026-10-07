@@ -31,6 +31,7 @@ const HEADERS: &[&str] = &[
     "data/reconcile/work.h",
     "journal/init.h", "journal/read.h", "journal/reclaim.h", "journal/seq_blacklist.h", "journal/validate.h",
     "sb/io.h", "sb/members.h",
+    "util/varint.h",
 ];
 
 // Translated 1:1 from the bindgen builder calls in build.rs.
