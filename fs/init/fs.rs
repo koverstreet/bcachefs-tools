@@ -4,6 +4,7 @@ use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError}
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
 use crate::util::locking::MemallocFlags;
+use crate::util::Printbuf;
 use core::ops::ControlFlow;
 
 /// RAII guard for a device reference. Calls bch2_dev_put on drop.
@@ -191,6 +192,14 @@ impl Fs {
         unsafe { c::journal_cur_seq(core::ptr::addr_of_mut!((*self.raw).journal)) }
     }
 
+    /// Go emergency read-only: the journal halts, so nothing more commits,
+    /// and the rest of going read-only is queued. As
+    /// bch2_fs_emergency_read_only(). Whether this call is what did it - if
+    /// so, @out says so, and is no longer suppressed.
+    pub fn emergency_read_only(&self, out: &mut Printbuf) -> bool {
+        unsafe { c::bch2_fs_emergency_read_only(self.raw, out.as_raw()) }
+    }
+
     /// Acquire the superblock lock, returning a guard that releases it on drop.
     pub fn sb_lock(&self) -> SbLockGuard<'_> {
         let _noio = MemallocFlags::noio();
@@ -368,6 +377,12 @@ impl Fs {
     /// EROFS if @subvol is a read-only subvolume (a read-only snapshot).
     pub fn subvol_is_ro(&self, subvol: u32) -> Result<(), BchError> {
         ret_to_result(unsafe { c::bch2_subvol_is_ro(self.raw, subvol) })
+    }
+
+    /// Mark the filesystem as using @feature, writing the superblock if it
+    /// wasn't already: as bch2_check_set_feature().
+    pub fn check_set_feature(&self, feature: c::bch_sb_feature) {
+        unsafe { c::bch2_check_set_feature(self.raw, feature as u32) }
     }
 
     /// Whether casefolding can be used: an error without CONFIG_UNICODE, or

@@ -161,9 +161,45 @@ pub fn fsck_err_report(fs: &Fs, err: bch_sb_error_id, msg: fmt::Arguments<'_>) {
     let mut buf = Printbuf::new();
     buf.write_fmt(msg);
 
-    if unsafe { c::__bch2_count_fsck_err(fs.raw, err, buf.as_raw()) } {
+    if count_fsck_err(fs, err, &mut buf) {
         crate::bch_err!(fs, "{}", buf);
     }
+}
+
+/// Count @err in the superblock, for message @msg: as bch2_count_fsck_err().
+/// Whether to log @msg - not if it's a repeat or being ratelimited; if this
+/// is where ratelimiting starts, @msg says so.
+pub fn count_fsck_err(fs: &Fs, err: bch_sb_error_id, msg: &mut Printbuf) -> bool {
+    unsafe { c::__bch2_count_fsck_err(fs.raw, err, msg.as_raw()) }
+}
+
+/// Count @err in the superblock's error counters, without a message: as
+/// bch2_sb_error_count().
+pub fn sb_error_count(fs: &Fs, err: bch_sb_error_id) {
+    unsafe { c::bch2_sb_error_count(fs.raw, err) }
+}
+
+/// As fs_inconsistent(), for an inconsistency found in a transaction: the
+/// message says what the transaction has queued. As
+/// bch2_trans_inconsistent() - but not from atomic context, as C's can be:
+/// the message is formatted here first, with an allocation that can sleep.
+pub fn trans_inconsistent(trans: &BtreeTrans<'_>, msg: fmt::Arguments<'_>) -> bool {
+    let mut buf = Printbuf::new();
+    buf.write_fmt(msg);
+
+    unsafe { c::bch2_trans_inconsistent(trans.raw(), c"%s".as_ptr(), buf.as_raw().buf) }
+}
+
+/// Report that the filesystem is inconsistent, and act on it as the errors
+/// option says - continue, go emergency read-only, or panic: as
+/// bch2_fs_inconsistent(). Whether the filesystem is going read-only. Not
+/// from atomic context, as C's can be: the message is formatted here first,
+/// with an allocation that can sleep.
+pub fn fs_inconsistent(fs: &Fs, msg: fmt::Arguments<'_>) -> bool {
+    let mut buf = Printbuf::new();
+    buf.write_fmt(msg);
+
+    unsafe { c::bch2_fs_inconsistent(fs.raw, c"%s".as_ptr(), buf.as_raw().buf) }
 }
 
 /// A key being validated, and where it came from: what C's bkey_fsck_err()
@@ -266,6 +302,20 @@ macro_rules! fsck_err_flags {
 macro_rules! fsck_err_report {
     ($fs:expr, $err:expr, $($msg:tt)*) => {
         $crate::init::error::fsck_err_report($fs, $err, format_args!($($msg)*))
+    };
+}
+
+#[macro_export]
+macro_rules! trans_inconsistent {
+    ($trans:expr, $($msg:tt)*) => {
+        $crate::init::error::trans_inconsistent($trans, format_args!($($msg)*))
+    };
+}
+
+#[macro_export]
+macro_rules! fs_inconsistent {
+    ($fs:expr, $($msg:tt)*) => {
+        $crate::init::error::fs_inconsistent($fs, format_args!($($msg)*))
     };
 }
 
