@@ -315,6 +315,25 @@ pub trait BkeyInit: Default {
     fn k_i_mut(&mut self) -> &mut c::bkey_i;
 }
 
+/// A key type, named by its C typed key (bkey_i_<name>): its value type, and
+/// typed access to it - for code generic over key types.
+pub trait TypedBkey {
+    /// The value: bch_<name>.
+    type Val;
+
+    const TYPE: c::bch_bkey_type;
+
+    /// @k's value if it's this type, zero padded past the end of a short
+    /// one: see val_copy_pad().
+    fn val_copy_pad(k: BkeySC<'_>) -> Option<Self::Val>;
+
+    /// @k's value, if it's this type - whole, so not for a key read from the
+    /// btree that may be short: see BkeySC's as_<name>().
+    fn val(k: &c::bkey_i) -> Option<&Self::Val>;
+
+    fn val_mut(k: &mut c::bkey_i) -> Option<&mut Self::Val>;
+}
+
 /// Everything defined per key type: invoked with BCH_BKEY_TYPES(), as
 /// name = KEY_TYPE number, by codegen (bkey_types_gen.rs).
 macro_rules! bkey_types {
@@ -335,6 +354,27 @@ macro_rules! bkey_types {
             fn k_mut(&mut self) -> &mut c::bkey { c::[<bkey_i_ $name>]::k_mut(self) }
             fn k_i(&self) -> &c::bkey_i { c::[<bkey_i_ $name>]::k_i(self) }
             fn k_i_mut(&mut self) -> &mut c::bkey_i { c::[<bkey_i_ $name>]::k_i_mut(self) }
+        }
+
+        impl TypedBkey for c::[<bkey_i_ $name>] {
+            type Val = c::[<bch_ $name>];
+
+            const TYPE: c::bch_bkey_type = c::bch_bkey_type::[<KEY_TYPE_ $name>];
+
+            fn val_copy_pad(k: BkeySC<'_>) -> Option<Self::Val> {
+                (k.k.type_ == $nr).then(|| unsafe { k.val_copy_pad() })
+            }
+
+            fn val(k: &c::bkey_i) -> Option<&Self::Val> {
+                match BkeyValI::from_bkey_i(k) {
+                    BkeyValI::$name(k) => Some(&k.v),
+                    _ => None,
+                }
+            }
+
+            fn val_mut(k: &mut c::bkey_i) -> Option<&mut Self::Val> {
+                k.[<as_mut_ $name>]()
+            }
         }
         )*
 
