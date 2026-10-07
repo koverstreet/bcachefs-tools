@@ -468,14 +468,14 @@ pub fn repair_inode_hash_info(
                   "inum {}: inode hash info in snapshots {}, {} mismatch\n{} {:x}\n{} {:x}\n\
                    setting the version in snapshot {} to the snapshot root's",
                   snapshot_root.bi_inum, bad_inode.bi_snapshot, snapshot_root.bi_snapshot,
-                  StrHashType(bad_inode.str_hash()), bad_inode.bi_hash_seed,
-                  StrHashType(snapshot_root.str_hash()), snapshot_root.bi_hash_seed,
+                  StrHashType(bad_inode.inode_str_hash()), bad_inode.bi_hash_seed,
+                  StrHashType(snapshot_root.inode_str_hash()), snapshot_root.bi_hash_seed,
                   bad_inode.bi_snapshot)? {
         return Ok(());
     }
 
     bad_inode.bi_hash_seed = snapshot_root.bi_hash_seed;
-    bad_inode.set_str_hash(snapshot_root.str_hash());
+    bad_inode.set_inode_str_hash(snapshot_root.inode_str_hash());
 
     inode::fsck_write(t, bad_inode)?;
     t.commit_lazy(CommitFlags::NO_ENOSPC)

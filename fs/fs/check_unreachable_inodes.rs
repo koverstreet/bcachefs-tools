@@ -205,7 +205,7 @@ fn attached_descendant_version(
         }
 
         let u = inode::unpack(fs, k);
-        if inode::has_backpointer(&u) && u.bi_parent_subvol == 0 {
+        if u.has_backpointer() && u.bi_parent_subvol == 0 {
             child = Some(u);
             return Ok(ControlFlow::Break(()));
         }

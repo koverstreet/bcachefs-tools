@@ -349,7 +349,7 @@ pub fn inode_should_reattach(inode: &c::bch_inode_unpacked) -> bool {
         return false;
     }
 
-    !inode::has_backpointer(inode) && !inode.flag(c::bch_inode_flags::BCH_INODE_unlinked)
+    !inode.has_backpointer() && !inode.flag(c::bch_inode_flags::BCH_INODE_unlinked)
 }
 
 /// Hide the dirent at @d_pos from @snapshot, a descendant of its snapshot,

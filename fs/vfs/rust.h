@@ -51,6 +51,7 @@ void bch2_inode_update_after_write(struct btree_trans *,
 				   unsigned);
 int __must_check bch2_write_inode(struct bch_fs *, struct bch_inode_info *,
 				  inode_set_fn, void *, unsigned);
+int bch2_inode_or_descendents_is_open(struct btree_trans *, struct bpos);
 
 /* xattr handlers: */
 int rust_xattr_handler_flags(const struct xattr_handler *);

@@ -11,8 +11,8 @@
 //!    field past the end of a short value (an older format version) grows the
 //!    value, zero-filled.
 //!  - inodes: the varint-packed fields have no fixed position, so set() goes
-//!    through the decoded form - bch2_inode_unpack(), assign in
-//!    bch_inode_unpacked, bch2_inode_pack(). That writes inode_v3 whatever
+//!    through the decoded form - inode::unpack(), assign in
+//!    bch_inode_unpacked, inode::pack(). That writes inode_v3 whatever
 //!    the key was, and can only produce what the packer produces:
 //!    has_inode_opts, for one, is recomputed. The key stays where it is -
 //!    bi_inum and bi_snapshot are just fields.
@@ -32,7 +32,7 @@ use crate::{dirent, inode};
 use crate::snapshot_states::{SNAPSHOT_STATE_VALUES, SUBVOLUME_STATE_VALUES};
 use crate::typeinfo::{self, AccessError, FieldTarget, ResolveError, TypeInfo};
 use core::fmt;
-use core::mem::{size_of, MaybeUninit};
+use core::mem::size_of;
 
 type EnumValues = &'static [(&'static str, u64)];
 
@@ -182,24 +182,21 @@ impl TransBkey<'_, '_> {
         };
         write(u_bytes, field, &target, v)?;
 
-        let mut packed: MaybeUninit<c::bkey_inode_buf> = MaybeUninit::zeroed();
-        unsafe { c::bch2_inode_pack(fs.raw, packed.as_mut_ptr(), &u) };
+        let mut packed = inode::pack(&u);
+        packed.inode.k_mut().p = self.k().p;
 
-        // bkey_inode_buf starts with the packed key, header first:
-        let packed_u64s = unsafe {
-            core::slice::from_raw_parts_mut(packed.as_mut_ptr() as *mut u64,
-                                            size_of::<c::bkey_inode_buf>() / size_of::<u64>())
-        };
-        let packed_k = unsafe { &mut *(packed_u64s.as_mut_ptr() as *mut c::bkey) };
-        packed_k.p = self.k().p;
-
-        let need_u64s = packed_k.u64s as usize;
+        let need_u64s = packed.inode.k().u64s as usize;
         let have_u64s = self.as_u64s().len();
         if need_u64s > have_u64s {
             return Err(SetError::NoRoom { need_u64s, have_u64s });
         }
 
-        self.as_mut_u64s()[..need_u64s].copy_from_slice(&packed_u64s[..need_u64s]);
+        // The packed key, header first - within the buffer pack() sized for it:
+        let packed_u64s = unsafe {
+            core::slice::from_raw_parts(packed.inode.k_i() as *const c::bkey_i as *const u64,
+                                        need_u64s)
+        };
+        self.as_mut_u64s()[..need_u64s].copy_from_slice(packed_u64s);
         Ok(())
     }
 }

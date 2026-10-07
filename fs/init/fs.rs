@@ -537,13 +537,6 @@ impl Fs {
         unsafe { c::block_bytes(self.raw) as u64 }
     }
 
-    /// Look up an inode by (subvol, inum).
-    pub fn inode_find_by_inum(&self, inum: c::subvol_inum) -> Result<c::bch_inode_unpacked, BchError> {
-        let mut bi: c::bch_inode_unpacked = Default::default();
-        ret_to_result(unsafe { c::bch2_inode_find_by_inum(self.raw, inum, &mut bi) })?;
-        Ok(bi)
-    }
-
     /// Convert a bcachefs internal time to a timespec.
     pub fn time_to_timespec(&self, time: i64) -> c::timespec64 {
         unsafe { c::bch2_time_to_timespec(self.raw, time) }
@@ -562,11 +555,6 @@ impl Fs {
     /// Short filesystem usage summary.
     pub fn usage_read_short(&self) -> c::bch_fs_usage_short {
         unsafe { c::bch2_fs_usage_read_short(self.raw) }
-    }
-
-    /// Get the link count for an inode.
-    pub fn inode_nlink_get(bi: &c::bch_inode_unpacked) -> u32 {
-        unsafe { c::bch2_inode_nlink_get(bi as *const _ as *mut _) }
     }
 
     /// Set the filesystem log level.

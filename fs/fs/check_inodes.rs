@@ -258,7 +258,7 @@ fn check_unlinked_dir(
     u:     &mut c::bch_inode_unpacked,
 ) -> Result<bool, BchError> {
     let trans: &BtreeTrans<'_> = t;
-    if inode::is_subvolume_root(u) && subvolume::is_unlinked(trans, u.bi_subvol)? {
+    if u.is_subvolume_root() && subvolume::is_unlinked(trans, u.bi_subvol)? {
         return Ok(false);
     }
 
@@ -324,7 +324,7 @@ fn check_inode<'t>(
     }
 
     if u.bi_hash_seed != st.snapshot_root.bi_hash_seed ||
-       u.str_hash()   != st.snapshot_root.str_hash() {
+       u.inode_str_hash() != st.snapshot_root.inode_str_hash() {
         str_hash::repair_inode_hash_info(t, &mut u, &st.snapshot_root)?;
     }
 
@@ -344,7 +344,7 @@ fn check_inode<'t>(
         changed = true;
     }
 
-    if inode::has_backpointer(&u) {
+    if u.has_backpointer() {
         changed |= check_inode_dirent_inode(t, &mut u)?;
     }
 
@@ -370,7 +370,7 @@ fn check_inode<'t>(
     // subvolume path (check_subvols() resumes it after a crash), not the inode
     // reaper or the deleted_inodes btree:
     if u.flag(BCH_INODE_unlinked) &&
-       !inode::is_subvolume_root(&u) &&
+       !u.is_subvolume_root() &&
        !u.flag(BCH_INODE_has_child_snapshot) {
         if !fs.flag(c::bch_fs_flags::BCH_FS_started) {
             // If we're not in online fsck, don't delete unlinked inodes, just

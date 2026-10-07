@@ -337,7 +337,7 @@ pub fn set_trans(
     subvolume::is_ro_trans(t, inum.subvol as u32)?;
 
     let mut inode_iter = BtreeIter::uninit();
-    inode::peek(t, &mut inode_iter, inode, inum, BtreeIterFlags::INTENT)?;
+    *inode = inode::peek(t, &mut inode_iter, inum, BtreeIterFlags::INTENT)?;
 
     // Besides the ctime update, extents, dirents and xattrs updates require
     // that an inode update also happens - to ensure that if a key exists in

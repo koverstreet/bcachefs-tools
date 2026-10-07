@@ -394,15 +394,8 @@ fn fuse_setattr(
         |t| {
             let now = fs.current_time();
             let mut iter = btree::iter::BtreeIter::uninit();
-            let mut inode_u: c::bch_inode_unpacked = Default::default();
-
-            inode::peek(
-                t,
-                &mut iter,
-                &mut inode_u,
-                inum,
-                btree::iter::BtreeIterFlags::INTENT,
-            )?;
+            let mut inode_u =
+                inode::peek(t, &mut iter, inum, btree::iter::BtreeIterFlags::INTENT)?;
 
             if let Some(mode) = mode {
                 inode_u.bi_mode = mode;
@@ -497,15 +490,8 @@ fn fuse_touch_atime(fs: &Fs, opts: AtimeOpts, inum: c::subvol_inum, bi: &c::bch_
         |t| {
             let now = fs.current_time();
             let mut iter = btree::iter::BtreeIter::uninit();
-            let mut inode_u: c::bch_inode_unpacked = Default::default();
-
-            inode::peek(
-                t,
-                &mut iter,
-                &mut inode_u,
-                inum,
-                btree::iter::BtreeIterFlags::INTENT,
-            )?;
+            let mut inode_u =
+                inode::peek(t, &mut iter, inum, btree::iter::BtreeIterFlags::INTENT)?;
             if !opts.needs_update(fs, &inode_u, now) {
                 return Ok(());
             }
@@ -526,15 +512,8 @@ fn fuse_update_inode_after_write(fs: &Fs, inum: c::subvol_inum) -> Result<(), Bc
         |t| {
             let now = fs.current_time();
             let mut iter = btree::iter::BtreeIter::uninit();
-            let mut inode_u: c::bch_inode_unpacked = Default::default();
-
-            inode::peek(
-                t,
-                &mut iter,
-                &mut inode_u,
-                inum,
-                btree::iter::BtreeIterFlags::INTENT,
-            )?;
+            let mut inode_u =
+                inode::peek(t, &mut iter, inum, btree::iter::BtreeIterFlags::INTENT)?;
             inode_u.bi_mtime = now;
             inode_u.bi_ctime = now;
             inode::write(t, &mut iter, &mut inode_u)
@@ -830,7 +809,7 @@ impl BcachefsFs {
             }
         };
 
-        if Fs::inode_nlink_get(&bi) != 0 || inode::is_subvolume_root(&bi) {
+        if bi.nlink() != 0 || bi.is_subvolume_root() {
             return;
         }
 
@@ -851,9 +830,7 @@ impl BcachefsFs {
     /// inode deleted and gets ENOENT (NodeMap::open()), as if the unlink had
     /// come before its lookup.
     fn inode_unlinked(&self, inum: c::subvol_inum, bi: &c::bch_inode_unpacked) {
-        if Fs::inode_nlink_get(bi) != 0 ||
-           (bi.bi_mode as u32 & libc::S_IFMT) == S_IFDIR ||
-           inode::is_subvolume_root(bi) {
+        if bi.nlink() != 0 || bi.is_dir() || bi.is_subvolume_root() {
             return;
         }
 
@@ -868,7 +845,7 @@ impl BcachefsFs {
         let ts_m = fs.time_to_timespec(bi.bi_mtime as i64);
         let ts_c = fs.time_to_timespec(bi.bi_ctime as i64);
         let blksize = fs.block_bytes() as u32;
-        let nlink = Fs::inode_nlink_get(bi);
+        let nlink = bi.nlink();
 
         FileAttr {
             ino: INodeNo(bi.bi_inum),

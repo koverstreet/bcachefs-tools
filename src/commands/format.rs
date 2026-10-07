@@ -632,9 +632,8 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
             256 << 10
         };
 
-        let bits = unsafe {
-            c::bch2_shard_inode_numbers_bits_default(nr_cpus, total_fs_size, btree_node_bytes)
-        } as u64;
+        let bits = bcachefs_kernel::inode::shard_bits_default(nr_cpus, total_fs_size,
+                                                              btree_node_bytes) as u64;
         bcachefs_kernel::opts::opt_set_by_id(
             &mut cfg.fs_opts,
             opt_id::shard_inode_numbers_bits,

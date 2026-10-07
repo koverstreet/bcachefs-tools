@@ -18,15 +18,6 @@ int bch2_inode_v3_validate(struct bch_fs *, struct bkey_s_c,
 			   const struct bkey_validate_context *);
 void bch2_inode_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
-int __bch2_inode_has_child_snapshots(struct btree_trans *, struct bpos);
-
-static inline int bch2_inode_has_child_snapshots(struct btree_trans *trans, struct bpos pos)
-{
-	return bch2_snapshot_is_leaf(trans->c, pos.snapshot) <= 0
-		? __bch2_inode_has_child_snapshots(trans, pos)
-		: 0;
-}
-
 int bch2_trigger_inode(struct btree_trans *, struct btree_trigger_op);
 
 #define bch2_bkey_ops_inode ((struct bkey_ops) {	\
@@ -118,24 +109,8 @@ struct bkey_i *bch2_inode_to_v3(struct btree_trans *, struct bkey_i *);
 
 void bch2_inode_unpacked_to_text(struct printbuf *, const struct bch_inode_unpacked *);
 
-int __bch2_inode_peek_snapshot(struct btree_trans *,
-			       struct btree_iter *,
-			       struct bch_inode_unpacked *,
-			       subvol_inum, u32, unsigned, const char *);
-
-#define bch2_inode_peek_snapshot(_trans, _iter, _inode, _inum, _snapshot, _flags)	\
-	__bch2_inode_peek_snapshot(_trans, _iter, _inode, _inum, _snapshot, _flags, __func__)
-
 int __bch2_inode_peek(struct btree_trans *, struct btree_iter *,
 		      struct bch_inode_unpacked *, subvol_inum, unsigned, const char *);
-
-static inline int bch2_inode_peek_nowarn(struct btree_trans *trans,
-					 struct btree_iter *iter,
-					 struct bch_inode_unpacked *inode,
-					 subvol_inum inum, unsigned flags)
-{
-	return __bch2_inode_peek(trans, iter, inode, inum, flags, NULL);
-}
 
 #define bch2_inode_peek(_trans, _iter, _inode, _inum, _flags)			\
 	__bch2_inode_peek(_trans, _iter, _inode, _inum, _flags, __func__)
@@ -162,11 +137,6 @@ static inline int bch2_inode_find_by_inum_nowarn_trans(struct btree_trans *trans
 int bch2_inode_find_by_inum(struct bch_fs *, subvol_inum,
 			    struct bch_inode_unpacked *);
 
-int bch2_inode_find_oldest_snapshot(struct btree_trans *trans, u64 inum, u32 snapshot,
-				    struct bch_inode_unpacked *root);
-int bch2_inode_find_any_snapshot(struct btree_trans *trans, u64 inum,
-				 struct bch_inode_unpacked *inode);
-
 int bch2_inode_write_flags(struct btree_trans *, struct btree_iter *,
 		     struct bch_inode_unpacked *, enum btree_iter_update_trigger_flags);
 
@@ -178,7 +148,6 @@ static inline int bch2_inode_write(struct btree_trans *trans,
 }
 
 int __bch2_fsck_write_inode(struct btree_trans *, struct bch_inode_unpacked *);
-int bch2_fsck_write_inode(struct btree_trans *, struct bch_inode_unpacked *);
 
 void bch2_inode_init_early(struct bch_fs *,
 			   struct bch_inode_unpacked *);
@@ -188,9 +157,6 @@ void bch2_inode_init_late(struct bch_fs *, struct bch_inode_unpacked *, u64,
 void bch2_inode_init(struct bch_fs *, struct bch_inode_unpacked *,
 		     uid_t, gid_t, umode_t, dev_t,
 		     struct bch_inode_unpacked *);
-
-int bch2_inode_create(struct btree_trans *, struct btree_iter *,
-		      struct bch_inode_unpacked *, u32, bool);
 
 void bch2_fs_inode_shard_cpu_init(struct bch_fs *);
 unsigned bch2_shard_inode_numbers_bits_default(unsigned nr_cpus, u64 fs_size, u64 btree_node_bytes);
@@ -208,45 +174,12 @@ static inline u8 inode_d_type(struct bch_inode_unpacked *inode)
 	return inode->bi_subvol ? DT_SUBVOL : mode_to_type(inode->bi_mode);
 }
 
-static inline u32 bch2_inode_flags(struct bkey_s_c k)
-{
-	switch (k.k->type) {
-	case KEY_TYPE_inode:
-		return le32_to_cpu(bkey_s_c_to_inode(k).v->bi_flags);
-	case KEY_TYPE_inode_v2:
-		return le64_to_cpu(bkey_s_c_to_inode_v2(k).v->bi_flags);
-	case KEY_TYPE_inode_v3:
-		return le64_to_cpu(bkey_s_c_to_inode_v3(k).v->bi_flags);
-	default:
-		return 0;
-	}
-}
-
-static inline unsigned bkey_inode_mode(struct bkey_s_c k)
-{
-	switch (k.k->type) {
-	case KEY_TYPE_inode:
-		return le16_to_cpu(bkey_s_c_to_inode(k).v->bi_mode);
-	case KEY_TYPE_inode_v2:
-		return le16_to_cpu(bkey_s_c_to_inode_v2(k).v->bi_mode);
-	case KEY_TYPE_inode_v3:
-		return INODEv3_MODE(bkey_s_c_to_inode_v3(k).v);
-	default:
-		return 0;
-	}
-}
-
 static inline bool bch2_inode_casefold(struct bch_fs *c, const struct bch_inode_unpacked *bi)
 {
 	/* inode opts are stored with a +1 bias: 0 means "unset, use fs opt" */
 	return bi->bi_casefold
 		? bi->bi_casefold - 1
 		: c->opts.casefold;
-}
-
-static inline bool bch2_inode_has_backpointer(const struct bch_inode_unpacked *bi)
-{
-	return bi->bi_dir || bi->bi_dir_offset;
 }
 
 /*
@@ -276,20 +209,6 @@ static inline unsigned bch2_inode_nlink_get(struct bch_inode_unpacked *bi)
 		  : bi->bi_nlink + nlink_bias(bi->bi_mode);
 }
 
-static inline void bch2_inode_nlink_set(struct bch_inode_unpacked *bi,
-					unsigned nlink)
-{
-	if (nlink) {
-		bi->bi_nlink = nlink - nlink_bias(bi->bi_mode);
-		bi->bi_flags &= ~BCH_INODE_unlinked;
-	} else {
-		bi->bi_nlink = 0;
-		bi->bi_flags |= BCH_INODE_unlinked;
-	}
-}
-
-int bch2_inode_nlink_inc(struct bch_inode_unpacked *);
-void bch2_inode_nlink_dec(struct btree_trans *, struct bch_inode_unpacked *);
 int bch2_inode_set_casefold(struct btree_trans *, subvol_inum,
 			    struct bch_inode_unpacked *, unsigned);
 
@@ -312,8 +231,6 @@ static inline bool subvol_inum_eq(subvol_inum a, subvol_inum b)
 	return a.subvol == b.subvol && a.inum == b.inum;
 }
 
-int rust_inode_or_descendents_is_open(struct btree_trans *, struct bpos);
-int bch2_inode_rm_snapshot(struct btree_trans *, u64, u32);
 int bch2_delete_dead_inodes(struct bch_fs *);
 int bch2_kill_i_generation_keys(struct bch_fs *);
 

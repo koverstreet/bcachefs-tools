@@ -158,7 +158,6 @@ bcachefs-y		:=			\
 	errcode.o				\
 	fs/check.o				\
 	fs/dirent.o				\
-	fs/inode.o				\
 	fs/inode_opts.o				\
 	fs/logged_ops.o				\
 	fs/quota.o				\

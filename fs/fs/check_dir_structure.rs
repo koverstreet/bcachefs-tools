@@ -69,7 +69,7 @@ fn remove_backpointer(
     inode: &mut c::bch_inode_unpacked,
 ) -> Result<(), BchError> {
     let trans: &BtreeTrans<'_> = t;
-    if !inode::has_backpointer(inode) {
+    if !inode.has_backpointer() {
         return Ok(());
     }
 
@@ -272,7 +272,7 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
     // If we're running full fsck, check_dirents() will have already ran, and we
     // shouldn't see any missing alloc/backpointers here - otherwise that's
     // handled separately, by check_unreachable_inodes
-    while inode.bi_subvol == 0 && inode::has_backpointer(&inode) {
+    while inode.bi_subvol == 0 && inode.has_backpointer() {
         let mut dirent_iter = BtreeIter::new(trans, c::btree_id::dirents,
                                              spos(inode.bi_dir, inode.bi_dir_offset, snapshot),
                                              BtreeIterFlags::empty());

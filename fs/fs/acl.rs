@@ -434,8 +434,7 @@ mod vfs {
             subvolume::is_ro_trans(t, inum.subvol as u32)?;
 
             let mut inode_iter = BtreeIter::uninit();
-            let mut inode = c::bch_inode_unpacked::default();
-            inode::peek(t, &mut inode_iter, &mut inode, inum, BtreeIterFlags::INTENT)?;
+            let mut inode = inode::peek(t, &mut inode_iter, inum, BtreeIterFlags::INTENT)?;
 
             // The mode can say all an access ACL would: then there's none.
             let mut mode = inode.bi_mode;

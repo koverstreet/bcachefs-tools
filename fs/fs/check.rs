@@ -709,7 +709,7 @@ pub fn reconstruct_inode(
     }.found()?;
     if let Some(src) = hash_src {
         new.bi_hash_seed = src.bi_hash_seed;
-        new.set_str_hash(src.str_hash());
+        new.set_inode_str_hash(src.inode_str_hash());
     }
 
     inode::fsck_write(t, &mut new)
