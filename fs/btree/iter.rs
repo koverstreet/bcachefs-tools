@@ -1200,11 +1200,22 @@ impl<'t> BtreeIter<'t> {
         unsafe { c::bch2_btree_iter_set_snapshot(self.raw.get_mut(), snapshot) };
     }
 
+    /// The snapshot it looks in.
+    pub fn snapshot(&self) -> u32 {
+        self.r().snapshot
+    }
+
     /// Turn on @flags: for walking an iterator with flags it wasn't made
     /// with - the loops peek with the iterator's own - as C's _continue
     /// loops pass theirs.
     pub fn set_flags(&mut self, flags: BtreeIterFlags) {
         self.raw.get_mut().flags |= flags.bits();
+    }
+
+    /// Turn off @flags: for an iterator going on with flags it was made
+    /// without.
+    pub fn clear_flags(&mut self, flags: BtreeIterFlags) {
+        self.raw.get_mut().flags &= !flags.bits();
     }
 
     /// A second iterator at the same position, sharing this one's paths: as
