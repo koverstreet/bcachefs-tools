@@ -215,7 +215,14 @@ static void bch2_inode_unpack_v2_error(struct bch_fs *c, struct bkey_s_c k,
 	CLASS(bch_log_msg, msg)(c);
 	msg.m.suppress = true;
 	prt_printf(&msg.m, "inode unpack error at field %u in ", fieldnr);
-	bch2_bkey_val_to_text(&msg.m, c, k);
+	/*
+	 * Not bch2_bkey_val_to_text(): an inode's val_to_text unpacks it,
+	 * failing at the same field and landing back here, until the stack
+	 * runs out. The key, and what did unpack - from @fieldnr on, zeroed:
+	 */
+	bch2_bkey_to_text(&msg.m, k.k);
+	prt_newline(&msg.m);
+	bch2_inode_unpacked_to_text(&msg.m, unpacked);
 
 	bch2_count_fsck_err(c, inode_unpack_error, &msg.m);
 
@@ -346,7 +353,14 @@ static void bch2_inode_unpack_v3_error(struct bch_fs *c, struct bkey_s_c k,
 	CLASS(bch_log_msg, msg)(c);
 	msg.m.suppress = true;
 	prt_printf(&msg.m, "inode unpack error at field %u in ", fieldnr);
-	bch2_bkey_val_to_text(&msg.m, c, k);
+	/*
+	 * Not bch2_bkey_val_to_text(): an inode's val_to_text unpacks it,
+	 * failing at the same field and landing back here, until the stack
+	 * runs out. The key, and what did unpack - from @fieldnr on, zeroed:
+	 */
+	bch2_bkey_to_text(&msg.m, k.k);
+	prt_newline(&msg.m);
+	bch2_inode_unpacked_to_text(&msg.m, unpacked);
 
 	bch2_count_fsck_err(c, inode_unpack_error, &msg.m);
 
