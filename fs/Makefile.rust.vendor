@@ -274,5 +274,5 @@ bcachefs-y += $(bch-vr-objs)
 targets += $(bch-vr-objs) \
 	vrust/libproc_macro2.rmeta vrust/libquote.rmeta vrust/libsyn.rmeta \
 	vrust/libmacros.so vrust/libpin_init_internal.so vrust/libzerocopy_derive.so \
-	rust/bindings/bindings_generated.rs rust/bindings/bindings_helpers_generated.rs \
-	rust/uapi/uapi_generated.rs $(addprefix rust/kernel/,$(addsuffix .rs,$(vr-arch-gen)))
+	vrust/rust/bindings/bindings_generated.rs vrust/rust/bindings/bindings_helpers_generated.rs \
+	vrust/rust/uapi/uapi_generated.rs $(addprefix vrust/rust/kernel/,$(addsuffix .rs,$(vr-arch-gen)))
