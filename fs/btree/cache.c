@@ -617,6 +617,21 @@ static inline struct btree *btree_cache_find(struct bch_fs_btree_cache *bc,
 
 /* Reclaim and shrinker */
 
+/*
+ * Dirty nodes are journal reclaim's to write - but during journal replay it
+ * can't flush the unreplayed entries' pins (journal_get_next_pin()), and replay
+ * can dirty more nodes than fit in memory: accounting replay on a filesystem
+ * with a big accounting btree dirtied 45k nodes, 11G, and went OOM with nothing
+ * ever writing one. So during replay the shrinker counts dirty nodes too, and
+ * what it can't free it writes (btree_cache_replay_write()).
+ */
+static bool btree_cache_replay_writeback(struct bch_fs *c)
+{
+	return !test_bit(JOURNAL_replay_done, &c->journal.flags) &&
+		test_bit(BCH_FS_rw, &c->flags) &&
+		!test_bit(BCH_FS_going_ro, &c->flags);
+}
+
 static inline size_t btree_cache_can_free(struct btree_cache_list *list)
 {
 	struct bch_fs_btree_cache *bc =
@@ -719,8 +734,9 @@ static int btree_node_reclaim(struct bch_fs *c, struct btree *b,
 	return 0;
 }
 
-static unsigned long bch2_btree_cache_scan(struct shrinker *shrink,
-					   struct shrink_control *sc)
+static unsigned long __bch2_btree_cache_scan(struct shrinker *shrink,
+					     struct shrink_control *sc,
+					     unsigned long *writeback_ret)
 {
 	struct btree_cache_list *list = shrink->private_data;
 	struct bch_fs_btree_cache *bc =
@@ -731,6 +747,7 @@ static unsigned long bch2_btree_cache_scan(struct shrinker *shrink,
 	unsigned long can_free = 0;
 	unsigned long freed = 0;
 	unsigned long touched = 0;
+	unsigned long writeback = 0;
 
 	if (static_branch_unlikely(&bch2_btree_shrinker_disabled))
 		return SHRINK_STOP;
@@ -747,7 +764,11 @@ static unsigned long bch2_btree_cache_scan(struct shrinker *shrink,
 	 */
 	can_free = btree_cache_can_free(list);
 	if (nr > can_free) {
-		bc->not_freed[BCH_BTREE_CACHE_NOT_FREED_cache_reserve] += nr - can_free;
+		/* during journal replay, dirty nodes get written instead: */
+		if (btree_cache_replay_writeback(c))
+			writeback = min_t(unsigned long, nr - can_free, list->nr_dirty);
+
+		bc->not_freed[BCH_BTREE_CACHE_NOT_FREED_cache_reserve] += nr - can_free - writeback;
 		nr = can_free;
 	}
 
@@ -799,14 +820,16 @@ static unsigned long bch2_btree_cache_scan(struct shrinker *shrink,
 		}
 	}
 out:
+	*writeback_ret = writeback;
+
 	bc->nr_freed		+= freed;
 	bc->nr_requested	+= nr;
 
 	bch2_time_stats_update(&c->times[BCH_TIME_btree_node_cache_scan], start_time);
 
 	event_inc_trace(c, btree_cache_scan, buf,
-		prt_printf(&buf, "scanned %li nodes, can free %li, freed %li",
-			   sc->nr_to_scan, can_free, freed));
+		prt_printf(&buf, "scanned %li nodes, can free %li, freed %li, writing %li",
+			   sc->nr_to_scan, can_free, freed, writeback));
 	return freed;
 }
 
@@ -814,11 +837,89 @@ static unsigned long bch2_btree_cache_count(struct shrinker *shrink,
 					    struct shrink_control *sc)
 {
 	struct btree_cache_list *list = shrink->private_data;
+	struct bch_fs_btree_cache *bc =
+		container_of(list, struct bch_fs_btree_cache, live[list->idx]);
+	struct bch_fs *c = container_of(bc, struct bch_fs, btree.cache);
 
 	if (static_branch_unlikely(&bch2_btree_shrinker_disabled))
 		return 0;
 
-	return btree_cache_can_free(list);
+	return btree_cache_can_free(list) +
+		(btree_cache_replay_writeback(c) ? READ_ONCE(list->nr_dirty) : 0);
+}
+
+/*
+ * A dirty node we can write for the shrinker, read locked. Round robin: every
+ * node looked at goes to the tail, so a pass doesn't keep finding the nodes
+ * already written - they stay on the dirty list until their write completes.
+ */
+static struct btree *btree_cache_replay_write_pick(struct bch_fs_btree_cache *bc)
+{
+	guard(mutex_noio)(&bc->lock);
+
+	for (unsigned i = 0; i < ARRAY_SIZE(bc->live); i++) {
+		struct list_head *dirty = &bc->live[i].dirty;
+		size_t nr = bc->live[i].nr_dirty;
+		struct btree *b, *t;
+
+		list_for_each_entry_safe(b, t, dirty, list) {
+			if (!nr--)
+				break;
+
+			list_move_tail(&b->list, dirty);
+
+			if (btree_node_dirty(b) &&
+			    !btree_node_will_make_reachable(b) &&
+			    !btree_node_write_blocked(b) &&
+			    six_trylock_read(&b->c.lock))
+				return b;
+		}
+	}
+
+	return NULL;
+}
+
+/*
+ * Kick writes on @nr dirty nodes the shrinker couldn't free during journal
+ * replay: see btree_cache_replay_writeback(). They come back clean when the
+ * writes complete, and a later scan frees them.
+ *
+ * Writes are queued on a btree_trans, and a task can't have two locked ones -
+ * fine here, as we never enter memory reclaim with btree locks held (lockdep
+ * checks that).
+ */
+static void btree_cache_replay_write(struct bch_fs *c, unsigned long nr)
+{
+	if (!nr)
+		return;
+
+	CLASS(btree_trans, trans)(c);
+
+	while (nr--) {
+		struct btree *b = btree_cache_replay_write_pick(&c->btree.cache);
+		if (!b)
+			break;
+
+		__bch2_btree_node_write(trans, b, BTREE_WRITE_cache_reclaim);
+		six_unlock_read(&b->c.lock);
+	}
+	/* putting the trans submits the writes queued on it */
+}
+
+static unsigned long bch2_btree_cache_scan(struct shrinker *shrink,
+					   struct shrink_control *sc)
+{
+	struct btree_cache_list *list = shrink->private_data;
+	struct bch_fs_btree_cache *bc =
+		container_of(list, struct bch_fs_btree_cache, live[list->idx]);
+	struct bch_fs *c = container_of(bc, struct bch_fs, btree.cache);
+	unsigned long writeback = 0;
+
+	unsigned long freed = __bch2_btree_cache_scan(shrink, sc, &writeback);
+
+	/* with bc->lock dropped: */
+	btree_cache_replay_write(c, writeback);
+	return freed;
 }
 
 #ifdef HAVE_SHRINKER_TO_TEXT
