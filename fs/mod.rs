@@ -80,6 +80,13 @@ pub mod snapshot_states {
 #[path = "fs/str_hash.rs"]     pub mod str_hash;
 pub mod typeinfo;
 pub mod util;
+/// The VFS, for its Rust entry points - kernel only, as C's
+/// #ifndef NO_BCACHEFS_FS.
+#[cfg(kernel)]
+pub mod vfs {
+    pub mod dentry;
+    pub mod inode;
+}
 #[path = "fs/xattr.rs"]        pub mod xattr;
 pub mod data {
     pub mod extents;

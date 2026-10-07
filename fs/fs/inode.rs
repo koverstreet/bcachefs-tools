@@ -176,6 +176,18 @@ pub fn write_flags<'a, 't>(
     t.result(ret)
 }
 
+/// Turn casefolding on for directory @inode, @inum, to @v: it has to be
+/// empty, and the filesystem able to casefold - as bch2_inode_set_casefold().
+pub fn set_casefold(
+    t:     &TransAttempt<'_, '_>,
+    inum:  c::subvol_inum,
+    inode: &mut c::bch_inode_unpacked,
+    v:     u32,
+) -> Result<(), BchError> {
+    let ret = unsafe { c::bch2_inode_set_casefold(t.raw(), inum, inode, v) };
+    t.result(ret)
+}
+
 /// The oldest version of @inum that a key in @snapshot sees - the version
 /// all the others take their hash info from: as
 /// bch2_inode_find_oldest_snapshot().

@@ -379,6 +379,15 @@ impl Fs {
         ret_to_result(unsafe { c::bch2_subvol_is_ro(self.raw, subvol) })
     }
 
+    /// Make the filesystem incompatible with versions before @version, if
+    /// it isn't already - an error if that isn't allowed: as
+    /// bch2_request_incompat_feature().
+    pub fn request_incompat_feature(&self, version: c::bcachefs_metadata_version)
+        -> Result<(), BchError>
+    {
+        ret_to_result(unsafe { c::bch2_request_incompat_feature(self.raw, version) })
+    }
+
     /// Mark the filesystem as using @feature, writing the superblock if it
     /// wasn't already: as bch2_check_set_feature().
     pub fn check_set_feature(&self, feature: c::bch_sb_feature) {
