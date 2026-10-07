@@ -6,7 +6,7 @@ use crate::fs::Fs;
 use crate::dirent::DirentTarget;
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{
-    bkey_s_c_to_result, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransRet,
+    bkey_s_c_to_result, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
     UpdateTriggerFlags,
 };
 use crate::{btree, btree_id, printbuf_to_formatter};
@@ -152,23 +152,23 @@ pub fn find_any_snapshot(trans: &BtreeTrans<'_>, inum: u64) -> Result<c::bch_ino
 /// Give @inode a free inode number in @snapshot - below 2^32, with @is_32bit -
 /// and queue its creation through @iter: as bch2_inode_create().
 pub fn create<'a, 't>(
-    t:        TransAttempt<'a, 't>,
+    t:        &TransAttempt<'a, 't>,
     iter:     &mut BtreeIter<'t>,
     inode:    &mut c::bch_inode_unpacked,
     snapshot: u32,
     is_32bit: bool,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let ret = unsafe { c::bch2_inode_create(t.raw(), iter.raw_mut(), inode, snapshot, is_32bit) };
     t.result(ret)
 }
 
 /// As write(), with update flags: as bch2_inode_write_flags().
 pub fn write_flags<'a, 't>(
-    t:     TransAttempt<'a, 't>,
+    t:     &TransAttempt<'a, 't>,
     iter:  &mut BtreeIter<'t>,
     inode: &mut c::bch_inode_unpacked,
     flags: UpdateTriggerFlags,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let ret = unsafe {
         c::bch2_inode_write_flags(t.raw(), iter.raw_mut(), inode,
                                   c::btree_iter_update_trigger_flags(flags.bits()))
@@ -311,9 +311,9 @@ impl c::bch_inode_unpacked {
 /// Queue writing back @inode, for fsck repair - the caller commits: as
 /// __bch2_fsck_write_inode().
 pub fn fsck_write<'a, 't>(
-    t:     TransAttempt<'a, 't>,
+    t:     &TransAttempt<'a, 't>,
     inode: &mut c::bch_inode_unpacked,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let ret = unsafe { c::__bch2_fsck_write_inode(t.raw(), inode) };
     t.result(ret)
 }
@@ -334,12 +334,12 @@ pub fn fsck_write_inode(
 }
 
 pub fn peek<'a, 't>(
-    t:     TransAttempt<'a, 't>,
+    t:     &TransAttempt<'a, 't>,
     iter:  &mut BtreeIter<'t>,
     inode: &mut c::bch_inode_unpacked,
     inum:  c::subvol_inum,
     flags: BtreeIterFlags,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let ret = unsafe {
         c::__bch2_inode_peek(
             t.raw(),
@@ -354,10 +354,10 @@ pub fn peek<'a, 't>(
 }
 
 pub fn write<'a, 't>(
-    t:     TransAttempt<'a, 't>,
+    t:     &TransAttempt<'a, 't>,
     iter:  &mut BtreeIter<'t>,
     inode: &mut c::bch_inode_unpacked,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let ret = unsafe {
         c::bch2_inode_write(t.raw(), iter.raw_mut(), inode)
     };

@@ -6,24 +6,24 @@
 
 use crate::btree::bkey::{BkeySC, POS_MIN};
 use crate::btree::iter::{
-    BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransRet,
+    BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
     UpdateTriggerFlags,
 };
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 
-fn fix_reflink_p_key<'a, 't>(
-    t:    TransAttempt<'a, 't>,
+fn fix_reflink_p_key<'t>(
+    t:    &TransAttempt<'_, 't>,
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let Some(p) = k.as_reflink_p() else {
-        return Ok(t);
+        return Ok(());
     };
 
     if p.front_pad == 0 && p.back_pad == 0 {
-        return Ok(t);
+        return Ok(());
     }
 
     let mut u = t.bkey_reassemble(k)?;
@@ -31,7 +31,7 @@ fn fix_reflink_p_key<'a, 't>(
     v.front_pad = 0;
     v.back_pad  = 0;
 
-    t.update(iter, u, UpdateTriggerFlags::NORUN)
+    t.update(iter, &u, UpdateTriggerFlags::NORUN)
 }
 
 fn fix_reflink_p(fs: &Fs) -> Result<(), BchError> {

@@ -34,7 +34,7 @@
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
-    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransRet,
+    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
 };
 use crate::c;
 use crate::errcode::{bch_errcode, BchError, Found};
@@ -64,9 +64,10 @@ fn dirent_points_to_inode(
 }
 
 fn remove_backpointer(
-    trans: &BtreeTrans<'_>,
+    t:     &TransAttempt<'_, '_>,
     inode: &mut c::bch_inode_unpacked,
 ) -> Result<(), BchError> {
+    let trans: &BtreeTrans<'_> = t;
     if !inode::has_backpointer(inode) {
         return Ok(());
     }
@@ -86,17 +87,17 @@ fn remove_backpointer(
     };
 
     dirent_points_to_inode(trans.fs(), k, inode)?;
-    dirent::fsck_remove(trans, k.k.p)
+    dirent::fsck_remove(t, k.k.p)
 }
 
 /// @root: the subvolume and its root inode.
-fn reattach_subvol<'a, 't>(t: TransAttempt<'a, 't>, root: c::subvol_inum) -> TransRet<'a, 't> {
+fn reattach_subvol(t: &TransAttempt<'_, '_>, root: c::subvol_inum) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
 
     let mut inode = inode::find_by_inum_trans(trans, root, c_function_name!())?;
 
-    let ret = remove_backpointer(trans, &mut inode);
+    let ret = remove_backpointer(t, &mut inode);
     if !matches!(&ret, Err(e) if e.matches(c::ENOENT)) {
         bch_err_msg!(fs, ret, "removing dirent")?;
     }
@@ -106,18 +107,18 @@ fn reattach_subvol<'a, 't>(t: TransAttempt<'a, 't>, root: c::subvol_inum) -> Tra
                  "reattaching inode {}", inode.bi_inum)
 }
 
-fn check_subvol_path<'a, 't>(t: TransAttempt<'a, 't>, k: BkeySC<'_>) -> TransRet<'a, 't> {
+fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
 
     let Some(start_sv) = subvolume::val(k) else {
-        return Ok(t);
+        return Ok(());
     };
 
     // Unlinking zeroes fs_path_parent: a subvolume on its way to deletion has
     // no path by design, and isn't ours to reattach.
     if start_sv.state() != Some(c::bch_subvolume_state::SUBVOLUME_STATE_live) {
-        return Ok(t);
+        return Ok(());
     }
 
     let mut subvol_path: KVVec<u32> = KVVec::new();
@@ -140,7 +141,7 @@ fn check_subvol_path<'a, 't>(t: TransAttempt<'a, 't>, k: BkeySC<'_>) -> TransRet
         let sv = subvolume::val(s).expect("cur only ever holds subvolume keys");
 
         if s.k.p.offset == c::BCACHEFS_ROOT_SUBVOL as u64 {
-            return Ok(t);
+            return Ok(());
         }
 
         subvol_path.push(s.k.p.offset as u32, GFP_KERNEL)?;
@@ -160,11 +161,11 @@ fn check_subvol_path<'a, 't>(t: TransAttempt<'a, 't>, k: BkeySC<'_>) -> TransRet
             if inode_fsck_err!(trans, inode_pos, id::subvol_loop, "{}", buf)? {
                 return reattach_subvol(t, root);
             }
-            return Ok(t);
+            return Ok(());
         }
 
         parent_iter.set_pos(pos(0, parent as u64));
-        match parent_iter.peek_slot()? {
+        match parent_iter.peek_slot(t)? {
             Some(pk) if pk.as_subvolume().is_some() => {
                 cur.reassemble(pk);
             }
@@ -173,7 +174,7 @@ fn check_subvol_path<'a, 't>(t: TransAttempt<'a, 't>, k: BkeySC<'_>) -> TransRet
                                    "unreachable subvolume {}", s.to_text(fs))? {
                     return reattach_subvol(t, root);
                 }
-                return Ok(t);
+                return Ok(());
             }
         }
     }
@@ -189,22 +190,22 @@ fn check_subvolume_structure(fs: &Fs) -> Result<(), BchError> {
 
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC,
         |t, iter, k| {
-            let t = progress.update(t, iter)?;
+            progress.update(t, iter)?;
             check_subvol_path(t, k)
         })
 }
 
-fn bi_depth_renumber_one<'a, 't>(
-    t:         TransAttempt<'a, 't>,
+fn bi_depth_renumber_one(
+    t:         &TransAttempt<'_, '_>,
     inum:      u64,
     snapshot:  u32,
     new_depth: u32,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let fs = t.trans().fs();
     let mut iter = BtreeIter::new(t.trans(), c::btree_id::inodes, spos(0, inum, snapshot),
                                   BtreeIterFlags::empty());
 
-    let Some(k) = iter.peek_slot()?.filter(|k| inode::bkey_is_inode(k.k)) else {
+    let Some(k) = iter.peek_slot(t)?.filter(|k| inode::bkey_is_inode(k.k)) else {
         return Err(bch_errcode::BCH_ERR_ENOENT_inode.into());
     };
 
@@ -212,36 +213,33 @@ fn bi_depth_renumber_one<'a, 't>(
 
     if inode.bi_depth != new_depth {
         inode.bi_depth = new_depth;
-        return inode::fsck_write(t, &mut inode)?.commit(None, CommitFlags::empty());
+        inode::fsck_write(t, &mut inode)?;
+        t.commit(None, CommitFlags::empty())?;
     }
 
-    Ok(t)
+    Ok(())
 }
 
-fn bi_depth_renumber<'a, 't>(
-    t:                TransAttempt<'a, 't>,
+fn bi_depth_renumber(
+    t:                &TransAttempt<'_, '_>,
     path:             &[u64],
     snapshot:         u32,
     mut new_bi_depth: u32,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let fs = t.trans().fs();
-    let mut t = t;
 
     // Each nested attempt that restarted ends with transaction_restart_nested,
     // as nested_lockrestart_do() did; the C's closing trans_was_restarted()
     // can't see a restart those didn't.
     for &inum in path.iter().rev() {
-        t = bch_err_fn!(fs,
-            t.nested(|t| Ok((bi_depth_renumber_one(t, inum, snapshot, new_bi_depth)?, ())))
-        )?.0;
-
+        bch_err_fn!(fs, t.nested(|t| bi_depth_renumber_one(t, inum, snapshot, new_bi_depth)))?;
         new_bi_depth += 1;
     }
 
-    Ok(t)
+    Ok(())
 }
 
-fn check_path_loop<'a, 't>(t: TransAttempt<'a, 't>, inode_k: BkeySC<'_>) -> TransRet<'a, 't> {
+fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
     let mut path: KVVec<u64> = KVVec::new();
@@ -278,7 +276,7 @@ fn check_path_loop<'a, 't>(t: TransAttempt<'a, 't>, inode_k: BkeySC<'_>) -> Tran
                                              spos(inode.bi_dir, inode.bi_dir_offset, snapshot),
                                              BtreeIterFlags::empty());
 
-        if let Err(e) = dirent_iter.peek_slot_typed(c::bch_bkey_type::KEY_TYPE_dirent) {
+        if let Err(e) = dirent_iter.peek_slot_typed(t, c::bch_bkey_type::KEY_TYPE_dirent) {
             if !e.matches(c::ENOENT) {
                 return Err(e.into());
             }
@@ -301,7 +299,7 @@ fn check_path_loop<'a, 't>(t: TransAttempt<'a, 't>, inode_k: BkeySC<'_>) -> Tran
 
         inode_iter.set_pos(spos(0, inode.bi_dir, snapshot));
         // Should have been caught in dirents pass
-        let parent_inode = bch_err_msg!(fs, match inode_iter.peek_slot() {
+        let parent_inode = bch_err_msg!(fs, match inode_iter.peek_slot(t) {
             Ok(Some(k)) if inode::bkey_is_inode(k.k) => Ok(inode::unpack(fs, k)),
             ret => Err(ret.err()
                 .unwrap_or(bch_errcode::BCH_ERR_ENOENT_inode.into())),
@@ -339,7 +337,7 @@ fn check_path_loop<'a, 't>(t: TransAttempt<'a, 't>, inode_k: BkeySC<'_>) -> Tran
 
             if inode_fsck_err!(trans, spos(0, inode.bi_inum, inode.bi_snapshot), id::dir_loop,
                                "{}", buf)? {
-                bch_err_msg!(fs, remove_backpointer(trans, &mut inode), "removing dirent")?;
+                bch_err_msg!(fs, remove_backpointer(t, &mut inode), "removing dirent")?;
 
                 // Done with this path: it was a loop, there are no depths
                 // along it to renumber - and on error or restart, nothing more
@@ -360,7 +358,7 @@ fn check_path_loop<'a, 't>(t: TransAttempt<'a, 't>, inode_k: BkeySC<'_>) -> Tran
         return bi_depth_renumber(t, &path, snapshot, min_bi_depth);
     }
 
-    Ok(t)
+    Ok(())
 }
 
 /// Check for loops in the directory structure: all other connectivity issues
@@ -374,7 +372,7 @@ fn check_directory_structure(fs: &Fs) -> Result<(), BchError> {
         CommitFlags::NO_ENOSPC,
         |t, _, k| {
             if inode::mode(k) & c::S_IFMT != c::S_IFDIR {
-                return Ok(t);
+                return Ok(());
             }
 
             // check_inodes has already stripped BCH_INODE_unlinked from every
@@ -382,7 +380,7 @@ fn check_directory_structure(fs: &Fs) -> Result<(), BchError> {
             // root ends every walk - so skipping these can't hide a directory
             // loop:
             if inode::flags(k) & c::bch_inode_flags::BCH_INODE_unlinked as u32 != 0 {
-                return Ok(t);
+                return Ok(());
             }
 
             check_path_loop(t, k)

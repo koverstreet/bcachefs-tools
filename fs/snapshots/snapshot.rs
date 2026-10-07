@@ -7,7 +7,7 @@
 //! no variant of the Rust enum, and fsck has to be able to look at it.
 
 use crate::btree::bkey::BkeySC;
-use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt, TransBkey, TransRet};
+use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt, TransBkey};
 use crate::c;
 use crate::c::bch_snapshot_state::*;
 use crate::errcode::{ret_to_result, ret_to_result_void, BchError};
@@ -193,7 +193,9 @@ pub fn val(k: BkeySC<'_>) -> Option<c::bch_snapshot> {
 
 /// Put deleted node @u back in the tree, relinking it under its parent: as
 /// bch2_snapshot_node_undelete().
-pub fn node_undelete<'a, 't>(t: TransAttempt<'a, 't>, u: &mut TransBkey<'_, 't>) -> TransRet<'a, 't> {
+pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't>)
+    -> Result<(), BchError>
+{
     let ret = unsafe { c::bch2_snapshot_node_undelete(t.raw(), u.as_ptr() as *mut c::bkey_i_snapshot) };
     t.result(ret)
 }
@@ -201,11 +203,11 @@ pub fn node_undelete<'a, 't>(t: TransAttempt<'a, 't>, u: &mut TransBkey<'_, 't>)
 /// Move @k, the key at @iter in a dead snapshot, to @live_child - or delete
 /// it, for 0: as bch2_delete_dead_snapshot_key().
 pub fn delete_dead_key<'a, 't>(
-    t:          TransAttempt<'a, 't>,
+    t:          &TransAttempt<'a, 't>,
     iter:       &mut c::btree_iter,
     k:          BkeySC<'_>,
     live_child: u32,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let ret = unsafe { c::bch2_delete_dead_snapshot_key(t.raw(), iter, k.to_raw(), live_child) };
     t.result(ret)
 }

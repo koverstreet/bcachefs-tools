@@ -54,6 +54,9 @@ impl Drop for SbLockGuard<'_> {
     }
 }
 
+/// Transparent: any `*mut bch_fs` in memory is an Fs in place - see
+/// BtreeTrans::borrow_raw().
+#[repr(transparent)]
 pub struct Fs {
     pub raw: *mut c::bch_fs,
 }

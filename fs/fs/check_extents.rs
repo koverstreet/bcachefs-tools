@@ -58,8 +58,8 @@
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::bkey::{bkey_extent_whiteout, bpos_gt, pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
-    lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransBkey,
-    TransResult, TransRet, UpdateTriggerFlags,
+    is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
+    TransBkey, UpdateTriggerFlags,
 };
 use crate::c;
 use crate::c::bch_inode_flags::BCH_INODE_i_sectors_dirty;
@@ -115,12 +115,12 @@ struct CheckExtents<'f> {
 
 /// The sectors allocated to inode @inum, as its version in @snapshot sees
 /// them.
-fn count_inode_sectors(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<u64, BchError> {
+fn count_inode_sectors(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<u64, BchError> {
     let mut sectors = 0;
-    let mut iter = BtreeIter::new(trans, c::btree_id::extents, spos(inum, 0, snapshot),
+    let mut iter = BtreeIter::new(t, c::btree_id::extents, spos(inum, 0, snapshot),
                                   BtreeIterFlags::empty());
 
-    iter.for_each_max_norestart(pos(inum, u64::MAX), |_, k| {
+    iter.for_each_max_norestart(t, pos(inum, u64::MAX), |_, k| {
         if extents::bkey_extent_is_allocation(k.k) {
             sectors += k.k.size as u64;
         }
@@ -132,7 +132,10 @@ fn count_inode_sectors(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Resu
 
 /// The inode just walked: i_sectors against the extents counted for each
 /// version. Repairs commit, each on its own.
-fn check_i_sectors_notnested(trans: &BtreeTrans<'_>, w: &mut InodeWalker) -> Result<(), BchError> {
+fn check_i_sectors_notnested(t: &TransAttempt<'_, '_>, w: &mut InodeWalker)
+    -> Result<(), BchError>
+{
+    let trans: &BtreeTrans<'_> = t;
     let fs = trans.fs();
     let Some(inum) = w.cur_inum() else { return Ok(()) };
     let recalculate_sums = w.recalculate_sums();
@@ -147,13 +150,13 @@ fn check_i_sectors_notnested(trans: &BtreeTrans<'_>, w: &mut InodeWalker) -> Res
         // i_sectors fixed
         if let Err(e) = namei::inum_snapshot_to_path(trans, i.inode.bi_inum, i.inode.bi_snapshot,
                                                      &mut buf) {
-            if e.matches(bch_errcode::BCH_ERR_transaction_restart) {
+            if is_restart(&e) {
                 return Err(e);
             }
         }
         write!(buf, "\n{}", i.inode);
 
-        let count2 = count_inode_sectors(trans, inum, i.inode.bi_snapshot)?;
+        let count2 = count_inode_sectors(t, inum, i.inode.bi_snapshot)?;
 
         if !recalculate_sums && i.count != count2 {
             bch_err_ratelimited!(fs, "fsck counted i_sectors wrong: got {} should be {}\n{}",
@@ -177,22 +180,22 @@ fn check_i_sectors_notnested(trans: &BtreeTrans<'_>, w: &mut InodeWalker) -> Res
 /// check_i_sectors_notnested() from inside the key's attempt: its repairs
 /// commit for themselves, spending the attempt - see self_committing() - and
 /// the key is retried after.
-fn check_i_sectors<'a, 't>(t: TransAttempt<'a, 't>, w: &mut InodeWalker) -> TransRet<'a, 't> {
+fn check_i_sectors(t: &TransAttempt<'_, '_>, w: &mut InodeWalker) -> Result<(), BchError> {
     let fs = t.trans().fs();
-    Ok(t.self_committing(|trans| bch_err_fn!(fs, check_i_sectors_notnested(trans, w)))?.0)
+    t.self_committing(|trans| bch_err_fn!(fs, check_i_sectors_notnested(trans, w)))
 }
 
 /// Overwrite @old, a copy of the extent at @iter, with @new where they
 /// overlap - or, if @old is an extent whiteout, turn it into a whiteout.
 fn overwrite_extent<'a, 't>(
-    t:       TransAttempt<'a, 't>,
+    t:       &TransAttempt<'a, 't>,
     iter:    &mut BtreeIter<'t>,
     mut old: TransBkey<'a, 't>,
     new:     BkeySC<'_>,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     if old.k().key_type() == c::bch_bkey_type::KEY_TYPE_extent_whiteout {
         old.k_mut().type_ = c::bch_bkey_type::KEY_TYPE_whiteout.0 as u8;
-        t.update(iter, old, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+        t.update(iter, &old, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
     } else {
         let d = extents::durability_safe(t.trans().fs(), new);
         t.extra_disk_res_add(d.sectors_compressed as u64, d.nr_replicas as u32);
@@ -205,16 +208,15 @@ fn overwrite_extent<'a, 't>(
 /// The extent that ended at @e1, in inode @inum, overlaps @pos2, the key
 /// being checked: report it, and overwrite one with the other. Returns
 /// whether it did.
-fn overlapping_extents_found<'a, 't>(
-    t:    TransAttempt<'a, 't>,
+fn overlapping_extents_found(
+    t:    &TransAttempt<'_, '_>,
     res:  &DiskReservation<'_>,
     e1:   &mut ExtentEnd,
     inum: u64,
     pos2: c::bkey,
-) -> TransResult<'a, 't, bool> {
+) -> Result<bool, BchError> {
     let trans = t.trans();
     let fs = trans.fs();
-    let mut t = t;
     let pos1 = spos(inum, e1.offset, e1.snapshot);
     let end = pos(inum, u64::MAX);
 
@@ -228,7 +230,7 @@ fn overlapping_extents_found<'a, 't>(
     write!(buf, "overlapping extents in ");
     namei::inum_snapshot_to_path(trans, inum, pos1.snapshot.min(pos2.p.snapshot), &mut buf)?;
 
-    let k1 = iter1.peek_max(end)?;
+    let k1 = iter1.peek_max(t, end)?;
     if let Some(k1) = k1 {
         write!(buf, "\n{}", k1.to_text(fs));
     }
@@ -239,16 +241,16 @@ fn overlapping_extents_found<'a, 't>(
     };
 
     // iter2 starts at k1 too, and walks forward to pos2:
-    iter2.peek_max(end)?;
+    iter2.peek_max(t, end)?;
     loop {
         iter2.advance();
-        match iter2.peek_max(end)? {
+        match iter2.peek_max(t, end)? {
             Some(k) if k.k.p < pos2.p => continue,
             _ => break,
         }
     }
 
-    let k2 = iter2.peek_max(end)?;
+    let k2 = iter2.peek_max(t, end)?;
     if let Some(k2) = k2 {
         write!(buf, "\n{}", k2.to_text(fs));
     }
@@ -265,20 +267,20 @@ fn overlapping_extents_found<'a, 't>(
     write!(buf, "\noverwriting {} extent", if first { "first" } else { "second" });
 
     if !inode_fsck_err!(trans, k1.k.p, id::extent_overlapping, "{buf}")? {
-        return t.done(false);
+        return Ok(false);
     }
 
     // The update goes through the overwritten key's iterator, which its key
     // borrows: copy it out first
-    t = if first {
+    if first {
         let old = t.bkey_make_mut_noupdate(k1)?;
-        overwrite_extent(t, &mut iter1, old, k2)?
+        overwrite_extent(t, &mut iter1, old, k2)?;
     } else {
         let old = t.bkey_make_mut_noupdate(k2)?;
-        overwrite_extent(t, &mut iter2, old, k1)?
-    };
+        overwrite_extent(t, &mut iter2, old, k1)?;
+    }
 
-    t = t.commit(Some(res), CommitFlags::NO_ENOSPC)?;
+    t.commit(Some(res), CommitFlags::NO_ENOSPC)?;
 
     if pos1.snapshot == pos2.p.snapshot {
         // We overwrote the first extent, and did the overwrite in the same
@@ -294,25 +296,24 @@ fn overlapping_extents_found<'a, 't>(
         return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested));
     }
 
-    t.done(true)
+    Ok(true)
 }
 
 /// Check @k against the extents before it that it could overlap. Returns
 /// whether any overlap was repaired.
-fn check_overlapping_extents<'a, 't>(
-    t:           TransAttempt<'a, 't>,
+fn check_overlapping_extents(
+    t:           &TransAttempt<'_, '_>,
     res:         &DiskReservation<'_>,
     s:           &mut SnapshotsSeen,
     extent_ends: &mut ExtentEnds,
     k:           BkeySC<'_>,
-) -> TransResult<'a, 't, bool> {
+) -> Result<bool, BchError> {
     let trans = t.trans();
-    let mut t = t;
     let mut fixed = false;
 
     // transaction restart, running again
     if extent_ends.last_pos == k.k.p {
-        return t.done(false);
+        return Ok(false);
     }
 
     if extent_ends.last_pos.inode != k.k.p.inode {
@@ -325,13 +326,11 @@ fn check_overlapping_extents<'a, 't>(
             continue;
         }
 
-        let (t2, f) = overlapping_extents_found(t, res, i, k.k.p.inode, *k.k)?;
-        t = t2;
-        fixed |= f;
+        fixed |= overlapping_extents_found(t, res, i, k.k.p.inode, *k.k)?;
     }
 
     extent_ends.last_pos = k.k.p;
-    t.done(fixed)
+    Ok(fixed)
 }
 
 /// Encoded (checksummed or compressed) extents are read whole, so they're
@@ -382,15 +381,14 @@ fn check_extent_past_end(
     Ok(())
 }
 
-fn check_extent<'a, 't>(
-    t:    TransAttempt<'a, 't>,
+fn check_extent<'t>(
+    t:    &TransAttempt<'_, 't>,
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
     st:   &mut CheckExtents<'_>,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
-    let mut t = t;
 
     // This walk can't use for_each_commit(): there's work to do after the
     // commit that can't handle a transaction restart
@@ -399,19 +397,16 @@ fn check_extent<'a, 't>(
     }
 
     if st.w.cur_inum().is_some_and(|inum| inum != k.k.p.inode) {
-        t = check_i_sectors(t, &mut st.w)?;
+        check_i_sectors(t, &mut st.w)?;
     }
 
     st.s.update(k.k.p)?;
 
-    t = st.w.walk(t, iter, k)?.0;
+    st.w.walk(t, iter, k)?;
 
-    if k.key_type() != c::bch_bkey_type::KEY_TYPE_whiteout {
-        let (t2, fixed) = check_overlapping_extents(t, &st.res, &mut st.s, &mut st.extent_ends, k)?;
-        t = t2;
-        if fixed {
-            st.w.set_recalculate_sums();
-        }
+    if k.key_type() != c::bch_bkey_type::KEY_TYPE_whiteout &&
+       check_overlapping_extents(t, &st.res, &mut st.s, &mut st.extent_ends, k)? {
+        st.w.set_recalculate_sums();
     }
 
     if !bkey_extent_whiteout(k.k) {
@@ -419,14 +414,14 @@ fn check_extent<'a, 't>(
     }
 
     check_extent_overbig(fs, k);
-    t = extents::drop_stale_ptrs(t, iter, k)?;
+    extents::drop_stale_ptrs(t, iter, k)?;
 
     let p          = k.k.p;
     let size       = k.k.size as u64;
     let allocation = extents::bkey_extent_is_allocation(k.k);
     let whiteout   = k.key_type() == c::bch_bkey_type::KEY_TYPE_whiteout;
 
-    t = t.commit(Some(&st.res), CommitFlags::NO_ENOSPC)?;
+    t.commit(Some(&st.res), CommitFlags::NO_ENOSPC)?;
 
     if allocation {
         for i in st.w.visible_mut(trans, &mut st.s, p.snapshot) {
@@ -440,7 +435,7 @@ fn check_extent<'a, 't>(
         st.extent_ends.at(&st.s, p)?;
     }
 
-    Ok(t)
+    Ok(())
 }
 
 /// Walk extents: verify that extents have a corresponding S_ISREG inode, and
@@ -466,14 +461,14 @@ fn check_extents(fs: &Fs) -> Result<(), BchError> {
 
     iter.for_each_attempt(&trans, |t, iter, k| {
         st.res.put();
-        let t = progress.update(t, iter)?;
+        progress.update(t, iter)?;
         check_extent(t, iter, k, &mut st)
     })?;
 
     // The last inode's i_sectors, as in the walk, with a restart retrying it
     // here: whatever it repaired is in memory, so the retry has nothing left
     // to do.
-    lockrestart_do(&trans, |t| Ok((check_i_sectors(t, &mut st.w)?, ())))
+    lockrestart_do(&trans, |t| check_i_sectors(t, &mut st.w))
 }
 
 fn check_indirect_extents(fs: &Fs) -> Result<(), BchError> {
@@ -487,7 +482,7 @@ fn check_indirect_extents(fs: &Fs) -> Result<(), BchError> {
 
     iter.for_each_commit(&trans, Some(&res), CommitFlags::NO_ENOSPC, |t, iter, k| {
         res.put();
-        let t = progress.update(t, iter)?;
+        progress.update(t, iter)?;
         check_extent_overbig(fs, k);
         extents::drop_stale_ptrs(t, iter, k)
     })

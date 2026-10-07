@@ -3,7 +3,7 @@
 use crate::btree::bkey::BkeySC;
 use crate::btree::bkey_methods::{self, SetError};
 use crate::btree::iter::{
-    BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey, TransRet, UpdateTriggerFlags,
+    BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey, UpdateTriggerFlags,
 };
 use crate::c;
 use crate::errcode::{self, ret_to_result_void as ret_to_result, BchError};
@@ -234,8 +234,8 @@ fn set_name<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, val: &'p str) -> Result<(), 
 /// pointing at @target: as bch2_dirent_create_snapshot(). Where it went is
 /// returned in @dir_offset.
 #[allow(clippy::too_many_arguments)]
-pub fn create_snapshot<'a, 't>(
-    t:            TransAttempt<'a, 't>,
+pub fn create_snapshot(
+    t:            &TransAttempt<'_, '_>,
     subvol:       u32,
     snapshot:     u32,
     dir:          &mut c::bch_inode_unpacked,
@@ -245,7 +245,7 @@ pub fn create_snapshot<'a, 't>(
     dir_offset:   &mut u64,
     iter_flags:   BtreeIterFlags,
     update_flags: UpdateTriggerFlags,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     // The C takes the subvolume or inode number, and gets which from @d_type;
     // a subvolume dirent's parent is @subvol.
     let target = match target {

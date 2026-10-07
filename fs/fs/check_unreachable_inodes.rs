@@ -21,7 +21,7 @@
 
 use crate::btree::bkey::{spos, POS_MIN};
 use crate::btree::iter::{
-    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransBkey, TransRet,
+    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransBkey,
     UpdateTriggerFlags,
 };
 use crate::c;
@@ -80,18 +80,19 @@ struct SubvolRootSeen {
 /// should do the reattach at the oldest version that needs to be reattached:
 /// walk @inode up to it.
 fn find_oldest_inode_needs_reattach(
-    trans: &BtreeTrans<'_>,
+    t:     &TransAttempt<'_, '_>,
     inode: &mut c::bch_inode_unpacked,
 ) -> Result<(), BchError> {
     // U32_MAX is a root: nothing is older
     let Some(start) = inode.bi_snapshot.checked_add(1) else { return Ok(()) };
 
+    let trans: &BtreeTrans<'_> = t;
     let fs = trans.fs();
     let inum = inode.bi_inum;
     let mut iter = BtreeIter::new(trans, c::btree_id::inodes, spos(0, inum, start),
                                   BtreeIterFlags::ALL_SNAPSHOTS);
 
-    iter.for_each_max_norestart(spos(0, inum, u32::MAX), |_, k| {
+    iter.for_each_max_norestart(t, spos(0, inum, u32::MAX), |_, k| {
         if !snapshot::is_ancestor(trans, inode.bi_snapshot, k.k.p.snapshot) {
             return Ok(ControlFlow::Continue(()));
         }
@@ -142,7 +143,7 @@ fn find_attached_dirent_in_descendant<'a, 't>(
         return Ok(None);
     }
 
-    let Some(child) = attached_descendant_version(trans, inode)? else { return Ok(None) };
+    let Some(child) = attached_descendant_version(t, inode)? else { return Ok(None) };
 
     let mut snapshot = child.bi_snapshot;
     let mut dirent_iter = BtreeIter::uninit();
@@ -159,7 +160,7 @@ fn find_attached_dirent_in_descendant<'a, 't>(
     // ancestry check is needed.)
     let dst = spos(d.k.p.inode, d.k.p.offset, inode.bi_snapshot);
 
-    match dst_slot(trans, dst, inode, BtreeIterFlags::empty())? {
+    match dst_slot(t, dst, inode, BtreeIterFlags::empty())? {
         DstSlot::Ours  => {}
         DstSlot::Taken => return Ok(None),
         // An insert also requires the parent directory to be visible and not
@@ -183,19 +184,20 @@ fn find_attached_dirent_in_descendant<'a, 't>(
 /// attached - has a backpointer, in its own subvolume: the first in key
 /// order, leaves first.
 fn attached_descendant_version(
-    trans: &BtreeTrans<'_>,
+    t:     &TransAttempt<'_, '_>,
     inode: &c::bch_inode_unpacked,
 ) -> Result<Option<c::bch_inode_unpacked>, BchError> {
     // Descendants have smaller IDs (and 0 is never one)
     let Some(end) = inode.bi_snapshot.checked_sub(1) else { return Ok(None) };
 
+    let trans: &BtreeTrans<'_> = t;
     let fs = trans.fs();
     let inum = inode.bi_inum;
     let mut child = None;
     let mut iter = BtreeIter::new(trans, c::btree_id::inodes, spos(0, inum, 0),
                                   BtreeIterFlags::ALL_SNAPSHOTS);
 
-    iter.for_each_max_norestart(spos(0, inum, end), |_, k| {
+    iter.for_each_max_norestart(t, spos(0, inum, end), |_, k| {
         if !inode::bkey_is_inode(k.k) ||
            !snapshot::is_ancestor(trans, k.k.p.snapshot, inode.bi_snapshot) {
             return Ok(ControlFlow::Continue(()));
@@ -229,21 +231,21 @@ enum DstSlot {
 }
 
 fn dst_slot(
-    trans: &BtreeTrans<'_>,
+    t:     &TransAttempt<'_, '_>,
     pos:   c::bpos,
     inode: &c::bch_inode_unpacked,
     flags: BtreeIterFlags,
 ) -> Result<DstSlot, BchError> {
-    let mut vis_iter = BtreeIter::new(trans, c::btree_id::dirents, pos, flags);
-    let vis = vis_iter.peek_slot()?.expect("a slot always has a key");
+    let mut vis_iter = BtreeIter::new(t, c::btree_id::dirents, pos, flags);
+    let vis = vis_iter.peek_slot(t)?.expect("a slot always has a key");
 
     if let Some(vis) = vis.as_dirent() {
         return Ok(if dirent::points_to_inode(vis, inode) { DstSlot::Ours } else { DstSlot::Taken });
     }
 
-    let mut dst_iter = BtreeIter::new(trans, c::btree_id::dirents, pos,
+    let mut dst_iter = BtreeIter::new(t, c::btree_id::dirents, pos,
                                       flags | BtreeIterFlags::ALL_SNAPSHOTS);
-    Ok(if dst_iter.peek_slot()?.expect("a slot always has a key").is_deleted() {
+    Ok(if dst_iter.peek_slot(t)?.expect("a slot always has a key").is_deleted() {
         DstSlot::Empty
     } else {
         DstSlot::Taken
@@ -254,31 +256,30 @@ fn dst_slot(
 /// moved to @inode's snapshot - or, if a matching dirent is already visible
 /// there, just point the backpointer at it.
 fn reattach_via_descendant_dirent<'a, 't>(
-    t:       TransAttempt<'a, 't>,
+    t:       &TransAttempt<'a, 't>,
     inode:   &mut c::bch_inode_unpacked,
     mut new: TransBkey<'a, 't>,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let trans = t.trans();
-    let mut t = t;
 
     new.k_mut().p.snapshot = inode.bi_snapshot;
     let pos = new.k().p;
 
     // Re-classify under the intent lock: the probe ran before fsck_err(),
     // which can cycle transaction locks, and this pass can run online.
-    match dst_slot(trans, pos, inode, BtreeIterFlags::INTENT)? {
+    match dst_slot(t, pos, inode, BtreeIterFlags::INTENT)? {
         DstSlot::Ours  => {}
         DstSlot::Empty => {
             let mut iter = BtreeIter::new(trans, c::btree_id::dirents, pos,
                                           BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::INTENT);
-            t = t.iter_traverse(&mut iter)?
-                 .update(&mut iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+            t.iter_traverse(&mut iter)?;
+            t.update(&iter, &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
         }
         DstSlot::Taken => {
             bch_err!(trans.fs(),
                      "not propagating dirent for inode {}:{}: destination {pos} now occupied",
                      inode.bi_inum, inode.bi_snapshot);
-            return Ok(t);
+            return Ok(());
         }
     }
 
@@ -287,15 +288,15 @@ fn reattach_via_descendant_dirent<'a, 't>(
     inode::fsck_write(t, inode)
 }
 
-fn check_unreachable_inode<'a, 't>(
-    t:    TransAttempt<'a, 't>,
+fn check_unreachable_inode(
+    t:    &TransAttempt<'_, '_>,
     k:    crate::btree::bkey::BkeySC<'_>,
     seen: &mut SubvolRootSeen,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let trans = t.trans();
 
     if !inode::bkey_is_inode(k.k) {
-        return Ok(t);
+        return Ok(());
     }
 
     let mut u = inode::unpack(trans.fs(), k);
@@ -307,7 +308,7 @@ fn check_unreachable_inode<'a, 't>(
     }
 
     if !inode_should_reattach(&u) {
-        return Ok(t);
+        return Ok(());
     }
 
     // Not for a subvolume root. A subvolume root has exactly one dirent, in
@@ -328,7 +329,7 @@ fn check_unreachable_inode<'a, 't>(
     // dirent and by the manufactured one, which is inode_dir_multiple_links
     // -> emergency read-only at runtime. (field report, 2026-08-04)
     if !seen.is_subvol_root {
-        find_oldest_inode_needs_reattach(trans, &mut u)?;
+        find_oldest_inode_needs_reattach(t, &mut u)?;
     }
 
     let pos = spos(0, u.bi_inum, u.bi_snapshot);
@@ -336,13 +337,13 @@ fn check_unreachable_inode<'a, 't>(
     // Attached in a descendant snapshot? Then this version has a proper home;
     // propagate the dirent up to our snapshot rather than manufacturing a
     // lost+found entry visible in every view below:
-    if let Some(d) = find_attached_dirent_in_descendant(&t, &u)? {
+    if let Some(d) = find_attached_dirent_in_descendant(t, &u)? {
         return if inode_fsck_err!(trans, pos, id::inode_unreachable_dirent_in_descendant,
                                   "unreachable inode with dirent in descendant snapshot {}, propagating:\n{u}",
                                   d.k().p.snapshot)? {
             reattach_via_descendant_dirent(t, &mut u, d)
         } else {
-            Ok(t)
+            Ok(())
         };
     }
 
@@ -350,7 +351,7 @@ fn check_unreachable_inode<'a, 't>(
         return lostfound::reattach_inode(t, &mut u);
     }
 
-    Ok(t)
+    Ok(())
 }
 
 fn check_unreachable_inodes(fs: &Fs) -> Result<(), BchError> {
@@ -363,7 +364,7 @@ fn check_unreachable_inodes(fs: &Fs) -> Result<(), BchError> {
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
 
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, k| {
-        let t = progress.update(t, iter)?;
+        progress.update(t, iter)?;
         check_unreachable_inode(t, k, &mut seen)
     })
 }

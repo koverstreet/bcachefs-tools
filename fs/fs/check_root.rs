@@ -13,8 +13,7 @@
 
 use crate::btree::bkey::{pos, POS_MIN};
 use crate::btree::iter::{
-    commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransRet,
-    UpdateTriggerFlags,
+    commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
 use crate::c;
 use crate::errcode::{BchError, Found};
@@ -28,36 +27,30 @@ use core::ops::ControlFlow;
 
 /// The leaf snapshot claiming the root subvolume, if any: 0 if none does.
 fn root_snapshot_from_snapshots(t: &TransAttempt<'_, '_>) -> Result<u32, BchError> {
-    let mut root_snapshot = 0;
     let mut iter = BtreeIter::new(t.trans(), c::btree_id::snapshots, POS_MIN,
                                   BtreeIterFlags::empty());
 
-    iter.for_each_norestart(|_, k| {
-        if let Some(s) = k.as_snapshot() {
-            if u32::from_le(s.subvol) == c::BCACHEFS_ROOT_SUBVOL && s.children[0] == 0 {
-                root_snapshot = k.k.p.offset as u32;
-                return Ok(ControlFlow::Break(()));
-            }
-        }
-        Ok(ControlFlow::Continue(()))
-    })?;
-
-    Ok(root_snapshot)
+    iter.for_each_norestart(t, |_, k| Ok(
+        match k.as_snapshot() {
+            Some(s) if u32::from_le(s.subvol) == c::BCACHEFS_ROOT_SUBVOL && s.children[0] == 0 =>
+                ControlFlow::Break(k.k.p.offset as u32),
+            _ => ControlFlow::Continue(()),
+        }))
 }
 
-fn check_root_trans<'a, 't>(t: TransAttempt<'a, 't>) -> TransRet<'a, 't> {
+fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
 
-    let (snapshot, inum, t) = match subvolume::get(trans, c::BCACHEFS_ROOT_SUBVOL, false).found()? {
-        Some(s) => (u32::from_le(s.snapshot), u64::from_le(s.inode), t),
+    let (snapshot, inum) = match subvolume::get(trans, c::BCACHEFS_ROOT_SUBVOL, false).found()? {
+        Some(s) => (u32::from_le(s.snapshot), u64::from_le(s.inode)),
         None => {
             // Inside the caller's commit_do(): restarts propagate out to it.
-            let root_snapshot = root_snapshot_from_snapshots(&t)?;
+            let root_snapshot = root_snapshot_from_snapshots(t)?;
 
             // mustfix: true, or an error - never left unfixed.
             if !mustfix_fsck_err!(trans, id::root_subvol_missing, "root subvol missing")? {
-                return Ok(t);
+                return Ok(());
             }
 
             let snapshot = if root_snapshot != 0 { root_snapshot } else { u32::MAX };
@@ -72,8 +65,8 @@ fn check_root_trans<'a, 't>(t: TransAttempt<'a, 't>) -> TransRet<'a, 't> {
             v.inode    = inum.to_le();
             v.set_state(c::bch_subvolume_state::SUBVOLUME_STATE_live);
 
-            let t = t.insert(c::btree_id::subvolumes, k, UpdateTriggerFlags::empty())?;
-            (snapshot, inum, t)
+            t.insert(c::btree_id::subvolumes, k, UpdateTriggerFlags::empty())?;
+            (snapshot, inum)
         }
     };
 
@@ -105,7 +98,7 @@ fn check_root_trans<'a, 't>(t: TransAttempt<'a, 't>) -> TransRet<'a, 't> {
         }
     }
 
-    Ok(t)
+    Ok(())
 }
 
 /// Get the root directory, creating it if it doesn't exist.

@@ -15,9 +15,7 @@
 //! the repair commits the walker refetches (see InodeWalker).
 
 use crate::btree::bkey::{pos, BkeySC};
-use crate::btree::iter::{
-    BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransRet,
-};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
 use crate::check::{InodeWalker, SnapshotsSeen};
 use crate::errcode::BchError;
@@ -50,21 +48,20 @@ fn acl_flag(x_type: u8)
     }
 }
 
-fn check_acl_flag<'a, 't>(
-    t:      TransAttempt<'a, 't>,
+fn check_acl_flag(
+    t:      &TransAttempt<'_, '_>,
     st:     &mut CheckXattrs,
     k:      BkeySC<'_>,
     x_type: u8,
-) -> TransRet<'a, 't> {
-    let Some((flag, err, an_acl, acl)) = acl_flag(x_type) else { return Ok(t) };
+) -> Result<(), BchError> {
+    let Some((flag, err, an_acl, acl)) = acl_flag(x_type) else { return Ok(()) };
     let trans = t.trans();
     let fs = trans.fs();
     let flag = flag as u32;
 
-    let mut t = t;
     for i in st.inode.visible_mut(trans, &mut st.s, k.k.p.snapshot) {
         // One repair per visible version, bounded only by snapshot count:
-        t = t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
+        t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
 
         if !i.whiteout &&
            fsck_err_on!(trans, i.inode.bi_flags & flag == 0, err,
@@ -72,47 +69,45 @@ fn check_acl_flag<'a, 't>(
                         i.inode, k.to_text(fs))? {
             let mut u = i.inode;
             u.bi_flags |= flag;
-            t = inode::fsck_write(t, &mut u)?;
+            inode::fsck_write(t, &mut u)?;
         }
     }
 
-    Ok(t)
+    Ok(())
 }
 
-fn check_xattr<'a, 't>(
-    t:    TransAttempt<'a, 't>,
+fn check_xattr<'t>(
+    t:    &TransAttempt<'_, 't>,
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
     st:   &mut CheckXattrs,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
 
     if snapshot::check_key_has_snapshot(trans, iter, k)? {
-        return Ok(t);
+        return Ok(());
     }
 
     st.s.update(k.k.p)?;
 
-    let (t, w) = st.inode.walk(t, iter, k)?;
-    let Some(w) = w else { return Ok(t) };
+    let Some(w) = st.inode.walk(t, iter, k)? else { return Ok(()) };
     if w.first_this_inode {
         st.hash_info = str_hash::hash_info_init(fs, w.inode)?;
     }
 
-    let t = match k.as_xattr() {
-        Some(x) => check_acl_flag(t, st, k, x.x_type)?,
-        None    => t,
-    };
+    if let Some(x) = k.as_xattr() {
+        check_acl_flag(t, st, k, x.x_type)?;
+    }
 
     if let Err(e) = str_hash::check_key::<Xattrs>(trans, None, &mut st.hash_info, k, &mut false) {
         // A hash info repair leaves the walker's inodes - and hash_info,
         // initialized from them - stale:
         st.inode.invalidate();
-        return Err(e.into());
+        return Err(e);
     }
 
-    Ok(t)
+    Ok(())
 }
 
 fn check_xattrs(fs: &Fs) -> Result<(), BchError> {
@@ -130,7 +125,7 @@ fn check_xattrs(fs: &Fs) -> Result<(), BchError> {
 
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC,
         |t, iter, k| {
-            let t = progress.update(t, iter)?;
+            progress.update(t, iter)?;
             check_xattr(t, iter, k, &mut st)
         })
 }

@@ -43,10 +43,10 @@
 //!   errors are plain fixable fsck errors.
 
 use crate::accounting::{self, DiskAccountingKind};
-use crate::btree::bkey::{pos, BkeySC, BkeySCToText, POS_MAX, POS_MIN};
+use crate::btree::bkey::{pos, BkeySC, BkeySCToText, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{
     commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransBkey,
-    TransResult, TransRet, UpdateTriggerFlags,
+    UpdateTriggerFlags,
 };
 use crate::c;
 use crate::c::bch_recovery_pass::*;
@@ -66,7 +66,6 @@ use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_f
 use core::fmt;
 use core::marker::PhantomData;
 use core::mem::size_of;
-use core::ops::ControlFlow;
 
 /// Snapshot node @id's key, None if there's no such node.
 ///
@@ -94,25 +93,18 @@ fn snapshot_mut<'k>(k: &'k mut TransBkey<'_, '_>) -> &'k mut c::bch_snapshot {
 /// The id - offset - of the first key in @btree @pred accepts: for the
 /// btrees keyed by id, subvolumes and snapshot trees.
 fn find_key(
-    trans:    &BtreeTrans<'_>,
+    t:        &TransAttempt<'_, '_>,
     btree:    c::btree_id,
     mut pred: impl FnMut(BkeySC<'_>) -> bool,
 ) -> Result<Option<u32>, BchError> {
-    let mut found = None;
-    let mut iter = BtreeIter::new(trans, btree, POS_MIN, BtreeIterFlags::empty());
-    iter.for_each_norestart(|_, k| {
-        if pred(k) {
-            found = Some(k.k.p.offset as u32);
-            return Ok(ControlFlow::Break(()));
-        }
-        Ok(ControlFlow::Continue(()))
-    })?;
-    Ok(found)
+    let mut iter = BtreeIter::new(t, btree, POS_MIN, BtreeIterFlags::empty());
+    Ok(iter.find_max_norestart(t, SPOS_MAX, |_, k| Ok(pred(k)))?
+       .map(|k| k.k.p.offset as u32))
 }
 
 /// A subvolume claiming snapshot @id - to restore a wiped backref.
-fn subvol_claiming(trans: &BtreeTrans<'_>, id: u32) -> Result<Option<u32>, BchError> {
-    find_key(trans, c::btree_id::subvolumes,
+fn subvol_claiming(t: &TransAttempt<'_, '_>, id: u32) -> Result<Option<u32>, BchError> {
+    find_key(t, c::btree_id::subvolumes,
              |k| subvolume::val(k).is_some_and(|s| s.snapshot() == id))
 }
 
@@ -138,7 +130,7 @@ fn tree_master_subvol(t: &TransAttempt<'_, '_>, root: u32) -> Result<Option<u32>
     let trans = t.trans();
     let fs = trans.fs();
 
-    let found = find_key(trans, c::btree_id::subvolumes, |k| {
+    let found = find_key(t, c::btree_id::subvolumes, |k| {
         subvolume::val(k).is_some_and(|s| snapshot::is_ancestor(trans, s.snapshot(), root) && !s.snap())
     })?;
     if found.is_some() {
@@ -159,15 +151,15 @@ fn tree_master_subvol(t: &TransAttempt<'_, '_>, root: u32) -> Result<Option<u32>
 /// Make sure tree key @k points to the root of a snapshot tree and that
 /// snapshot entry points back to it, or delete it. And make sure it points to
 /// a non-snapshot subvolume in the tree, or correct it to one.
-fn check_snapshot_tree<'a, 't>(
-    t:    TransAttempt<'a, 't>,
+fn check_snapshot_tree<'t>(
+    t:    &TransAttempt<'_, 't>,
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
 
-    let Some(st) = k.as_snapshot_tree() else { return Ok(t) };
+    let Some(st) = k.as_snapshot_tree() else { return Ok(()) };
     let root_id = u32::from_le(st.root_snapshot);
 
     let root = match snapshot::lookup_key(trans, root_id) {
@@ -185,7 +177,7 @@ fn check_snapshot_tree<'a, 't>(
             Err(e) => write!(found, "({})", e.msg()),
             Ok(r)  => write!(found, "{}", BkeySC::from(r.k_i()).to_text(fs)),
         }
-        if fsck_err!(&t, id::snapshot_tree_to_missing_snapshot,
+        if fsck_err!(t, id::snapshot_tree_to_missing_snapshot,
                      "snapshot tree points to missing/incorrect snapshot:\n{}\n{}",
                      k.to_text(fs), found)? {
             return t.delete_at(iter, UpdateTriggerFlags::empty());
@@ -194,33 +186,33 @@ fn check_snapshot_tree<'a, 't>(
 
     let master = u32::from_le(st.master_subvol);
     if master == 0 {
-        return Ok(t);
+        return Ok(());
     }
 
     let repair = match subvolume::get(trans, master, false).found()? {
-        None => fsck_err!(&t, id::snapshot_tree_to_missing_subvol,
+        None => fsck_err!(t, id::snapshot_tree_to_missing_subvol,
                           "snapshot tree points to missing subvolume:\n{}", k.to_text(fs))?,
         Some(s) =>
-            fsck_err_on!(&t, !snapshot::is_ancestor(trans, s.snapshot(), root_id),
+            fsck_err_on!(t, !snapshot::is_ancestor(trans, s.snapshot(), root_id),
                          id::snapshot_tree_to_wrong_subvol,
                          "snapshot tree points to subvolume that does not point to snapshot in this tree:\n{}",
                          k.to_text(fs))? ||
-            fsck_err_on!(&t, s.snap(), id::snapshot_tree_to_snapshot_subvol,
+            fsck_err_on!(t, s.snap(), id::snapshot_tree_to_snapshot_subvol,
                          "snapshot tree points to snapshot subvolume:\n{}", k.to_text(fs))?,
     };
     if !repair {
-        return Ok(t);
+        return Ok(());
     }
 
-    let Some(subvol) = bch_err_fn!(fs, tree_master_subvol(&t, root_id))? else {
-        return Ok(t);   /* nothing to be done here */
+    let Some(subvol) = bch_err_fn!(fs, tree_master_subvol(t, root_id))? else {
+        return Ok(());   /* nothing to be done here */
     };
 
     let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty(),
                                 c::bch_bkey_type::KEY_TYPE_snapshot_tree,
                                 size_of::<c::bkey_i_snapshot_tree>())?;
     u.k_i_mut().as_mut_snapshot_tree().expect("a snapshot tree key").master_subvol = subvol.to_le();
-    Ok(t)
+    Ok(())
 }
 
 fn check_snapshot_trees(fs: &Fs) -> Result<(), BchError> {
@@ -423,32 +415,33 @@ fn check_state<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>) -
 /// splice. no_keys is only ever marked - it says "this node's keys have
 /// migrated down", and the node stays where it is - so there is nothing to
 /// relink and setting the state live is the whole repair.
-fn check_has_data<'a, 't>(t: TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>) -> TransRet<'a, 't> {
+fn check_has_data<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>)
+    -> Result<(), BchError>
+{
     let fs = t.trans().fs();
     let state = n.v().state_field();
 
     if state != Some(SNAPSHOT_STATE_deleted) && state != Some(SNAPSHOT_STATE_no_keys) {
-        return Ok(t);
+        return Ok(());
     }
     let no_keys = state == Some(SNAPSHOT_STATE_no_keys);
 
     let mut breakdown = Printbuf::new();
     let (keys, sectors) = snapshot::accounting_totals(fs, n.id(), Some(&mut breakdown))?;
 
-    if !fsck_err_on!(&t, keys != 0 || sectors != 0, id::snapshot_deleted_but_has_data,
+    if !fsck_err_on!(t, keys != 0 || sectors != 0, id::snapshot_deleted_but_has_data,
                      "{} snapshot node has data accounted - {}:{}\n{}",
                      StateName(state),
                      if no_keys { "clearing state" } else { "undeleting" },
                      breakdown, n.to_text(fs))? {
-        return Ok(t);
+        return Ok(());
     }
 
     if no_keys {
-        n.v_mut(&t)?.set_state(SNAPSHOT_STATE_live);
-        Ok(t)
+        n.v_mut(t)?.set_state(SNAPSHOT_STATE_live);
+        Ok(())
     } else {
-        let u = n.u(&t)?;
-        undelete_owns_data(t, u)
+        undelete_owns_data(t, n.u(t)?)
     }
 }
 
@@ -644,9 +637,9 @@ fn has_accounting(fs: &Fs, id: u32) -> bool {
 /// Commit an edge repair, have the table rebuilt, and restart: decisions
 /// only see settled state. The commit first - the restart would discard the
 /// repair.
-fn edge_repair_commit<'a, 't>(t: TransAttempt<'a, 't>) -> TransRet<'a, 't> {
+fn edge_repair_commit(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
     let fs = t.trans().fs();
-    let t = t.commit(None, CommitFlags::NO_ENOSPC)?;
+    t.commit(None, CommitFlags::NO_ENOSPC)?;
     snapshot::set_need_table_rebuild(fs);
     Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))
 }
@@ -659,14 +652,16 @@ fn edge_repair_commit<'a, 't>(t: TransAttempt<'a, 't>) -> TransRet<'a, 't> {
 /// that shape outright.
 ///
 /// Otherwise it relinks through the parent, which has to be live first.
-fn undelete_owns_data<'a, 't>(t: TransAttempt<'a, 't>, u: &mut TransBkey<'_, 't>) -> TransRet<'a, 't> {
+fn undelete_owns_data<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't>)
+    -> Result<(), BchError>
+{
     let s = snapshot_mut(u);
     if s.children()[1] != 0 {
         s.set_state(SNAPSHOT_STATE_live);
-        return Ok(t);
+        return Ok(());
     }
 
-    let t = undelete_ancestors(t, s.parent())?;
+    undelete_ancestors(t, s.parent())?;
     snapshot::node_undelete(t, u)
 }
 
@@ -702,11 +697,11 @@ fn topmost_dead_ancestor(trans: &BtreeTrans<'_>, mut id: u32) -> Result<Option<u
 /// Nothing corroborates these ancestors - they are scaffolding, and stay
 /// only because the node below them ends up live. depth and the skiplists
 /// are left stale for snapshot_bad_depth/snapshot_bad_skiplist.
-fn undelete_ancestors<'a, 't>(t: TransAttempt<'a, 't>, id: u32) -> TransRet<'a, 't> {
-    let Some(topmost) = topmost_dead_ancestor(t.trans(), id)? else { return Ok(t) };
+fn undelete_ancestors(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
+    let Some(topmost) = topmost_dead_ancestor(t.trans(), id)? else { return Ok(()) };
 
-    let mut u = get_mut_node(&t, topmost)?;
-    let t = undelete_owns_data(t, &mut u)?;
+    let mut u = get_mut_node(t, topmost)?;
+    undelete_owns_data(t, &mut u)?;
     edge_repair_commit(t)
 }
 
@@ -728,7 +723,7 @@ fn undelete_ancestors<'a, 't>(t: TransAttempt<'a, 't>, id: u32) -> TransRet<'a, 
 /// The subvolume, if one claims this id, comes back with it: a subvolume
 /// whose snapshot went missing is exactly what a resurrected leaf should
 /// carry, and zeroing it would strand the subvolume instead.
-fn resurrect_child<'a, 't>(t: TransAttempt<'a, 't>, parent_id: u32, id: u32) -> TransRet<'a, 't> {
+fn resurrect_child(t: &TransAttempt<'_, '_>, parent_id: u32, id: u32) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
 
@@ -748,7 +743,7 @@ fn resurrect_child<'a, 't>(t: TransAttempt<'a, 't>, parent_id: u32, id: u32) -> 
         *skip = snapshot::skiplist_get(fs, parent_id).to_le();
     }
     v.skip.sort_unstable_by_key(|s| u32::from_le(*s));
-    v.subvol    = subvol_claiming(trans, id)?.unwrap_or(0).to_le();
+    v.subvol    = subvol_claiming(t, id)?.unwrap_or(0).to_le();
     v.set_state(SNAPSHOT_STATE_live);
 
     snapshot::table_make_room(fs, id)?;
@@ -965,28 +960,23 @@ fn edge_repair(
 /// Check, and repair, the edge between node @n, as @role, and @other_id,
 /// which its pointer names.
 fn check_edge<'a, 't>(
-    t:        TransAttempt<'a, 't>,
+    t:        &TransAttempt<'a, 't>,
     n:        &mut Node<'_, '_, 'a, 't>,
     role:     Role,
     other_id: u32,
-) -> TransRet<'a, 't> {
-    let Some(repair) = edge_repair(&t, n, role, other_id)? else { return Ok(t) };
+) -> Result<(), BchError> {
+    let Some(repair) = edge_repair(t, n, role, other_id)? else { return Ok(()) };
 
-    let t = match repair {
-        EdgeRepair::Undelete(id) => {
-            let mut u = get_mut_node(&t, id)?;
-            undelete_owns_data(t, &mut u)?
-        }
-        EdgeRepair::Retarget(new) => {
-            set_ptr(n.v_mut(&t)?, role, other_id, new);
-            t
-        }
-        EdgeRepair::Complete(old) => {
-            set_ptr(snapshot_mut(&mut get_mut_node(&t, other_id)?), role.other(), old, n.id());
-            t
-        }
-        EdgeRepair::Resurrect => resurrect_child(t, n.id(), other_id)?,
-    };
+    match repair {
+        EdgeRepair::Undelete(id) =>
+            undelete_owns_data(t, &mut get_mut_node(t, id)?)?,
+        EdgeRepair::Retarget(new) =>
+            set_ptr(n.v_mut(t)?, role, other_id, new),
+        EdgeRepair::Complete(old) =>
+            set_ptr(snapshot_mut(&mut get_mut_node(t, other_id)?), role.other(), old, n.id()),
+        EdgeRepair::Resurrect =>
+            resurrect_child(t, n.id(), other_id)?,
+    }
     edge_repair_commit(t)
 }
 
@@ -1075,7 +1065,7 @@ fn check_skiplists<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't
         if skip != 0 {
             let mut iter = BtreeIter::new(trans, c::btree_id::snapshots, pos(0, skip as u64),
                                           BtreeIterFlags::empty());
-            let skip_k = iter.peek_slot()?.expect("a slot always has a key");
+            let skip_k = iter.peek_slot(t)?.expect("a slot always has a key");
             write!(msg, "points to\n  {}\n", skip_k.to_text(fs));
         }
 
@@ -1092,7 +1082,9 @@ fn check_skiplists<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't
 }
 
 /// The subvolume backref, against the subvolume it names.
-fn check_to_subvol<'a, 't>(t: TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>) -> TransRet<'a, 't> {
+fn check_to_subvol<'a, 't>(t: &TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>)
+    -> Result<(), BchError>
+{
     let trans = t.trans();
     let fs = trans.fs();
     let id = n.id();
@@ -1109,7 +1101,7 @@ fn check_to_subvol<'a, 't>(t: TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>
         // and the message should show what's actually there.
         let mut iter = BtreeIter::new(trans, c::btree_id::subvolumes, pos(0, subvol_id as u64),
                                       BtreeIterFlags::empty());
-        let subvol_k = iter.peek_slot()?.expect("a slot always has a key");
+        let subvol_k = iter.peek_slot(t)?.expect("a slot always has a key");
         let subvol = subvolume::val(subvol_k);
 
         // A missing subvolume can be rebuilt from right here, and only from
@@ -1123,7 +1115,7 @@ fn check_to_subvol<'a, 't>(t: TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>
         // subvolume is a tombstoned deletion in flight, and rebuilding it
         // would revert it.
         if subvol.is_none() && !snap_deleting {
-            match check::reconstruct_subvol_root(trans, id, subvol_id, None) {
+            match check::reconstruct_subvol_root(t, id, subvol_id, None) {
                 Ok(root) => return check::reconstruct_subvol(t, id, subvol_id, root),
                 // couldn't find a root inode for it - fall through and report
                 Err(e) if e.matches(bch_errcode::BCH_ERR_fsck_repair_unimplemented) => {}
@@ -1141,13 +1133,13 @@ fn check_to_subvol<'a, 't>(t: TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>
                 fsck_err_report!(fs, id::snapshot_subvol_backref_wrong,
                                  "snapshot's subvolume doesn't point back at it:\n{}\n{}",
                                  n.to_text(fs), subvol_k.to_text(fs));
-                return Ok(t);
+                return Ok(());
             }
             None => {
                 fsck_err_report!(fs, id::snapshot_subvol_backref_wrong,
                                  "snapshot points to missing subvolume {subvol_id}:\n{}",
                                  n.to_text(fs));
-                return Ok(t);
+                return Ok(());
             }
         };
 
@@ -1159,12 +1151,12 @@ fn check_to_subvol<'a, 't>(t: TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>
         // exactly, while the reverse would have to guess between live and
         // unlinked.
         let subvol_deleted = subvol.state() == Some(c::bch_subvolume_state::SUBVOLUME_STATE_deleted);
-        if fsck_err_on!(&t, snap_deleting != subvol_deleted, id::snapshot_subvol_state_mismatch,
+        if fsck_err_on!(t, snap_deleting != subvol_deleted, id::snapshot_subvol_state_mismatch,
                         "snapshot {} but its subvolume is {}:\n{}\n{}",
                         if snap_deleting { "will_delete" } else { "live" },
                         if subvol_deleted { "deleted" } else { "not deleted" },
                         n.to_text(fs), subvol_k.to_text(fs))? {
-            n.v_mut(&t)?.set_state(if subvol_deleted {
+            n.v_mut(t)?.set_state(if subvol_deleted {
                 SNAPSHOT_STATE_will_delete
             } else {
                 SNAPSHOT_STATE_live
@@ -1176,25 +1168,25 @@ fn check_to_subvol<'a, 't>(t: TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>
         // minted one, still hits check_subvols' doesn't-point-back
         // fail-stop.) No claimant is an orphan leaf, whose repair (creating a
         // subvolume) is unimplemented, as above.
-        if let Some(subvol) = subvol_claiming(trans, id)? {
-            if fsck_err!(&t, id::snapshot_subvol_backref_wrong,
+        if let Some(subvol) = subvol_claiming(t, id)? {
+            if fsck_err!(t, id::snapshot_subvol_backref_wrong,
                          "snapshot leaf missing subvol backref, subvolume {subvol} points at it - restoring:\n{}",
                          n.to_text(fs))? {
-                let v = n.v_mut(&t)?;
+                let v = n.v_mut(t)?;
                 v.subvol = subvol.to_le();
                 v.set_subvol_obsolete(true);
             }
         }
     }
 
-    if fsck_err_on!(&t, n.v().subvol() != 0 && !should_have_subvol, id::snapshot_should_not_have_subvol,
+    if fsck_err_on!(t, n.v().subvol() != 0 && !should_have_subvol, id::snapshot_should_not_have_subvol,
                     "snapshot should not point to subvol:\n{}", n.to_text(fs))? {
         if n.v().children()[0] != 0 {
             return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented).into());
         }
 
         // XXX: DANGEROUS
-        n.v_mut(&t)?.subvol = 0;
+        n.v_mut(t)?.subvol = 0;
     }
 
     // Live nodes only: the _OBSOLETE flags are old-format compat bits, and
@@ -1210,55 +1202,54 @@ fn check_to_subvol<'a, 't>(t: TransAttempt<'a, 't>, n: &mut Node<'_, '_, 'a, 't>
         if v.subvol() != 0 {
             let mut iter = BtreeIter::new(trans, c::btree_id::subvolumes, pos(0, v.subvol() as u64),
                                           BtreeIterFlags::empty());
-            let subvol_k = iter.peek_slot()?.expect("a slot always has a key");
+            let subvol_k = iter.peek_slot(t)?.expect("a slot always has a key");
             write!(msg, "\n{}", subvol_k.to_text(fs));
         }
 
-        if fsck_err!(&t, id::snapshot_subvol_flag_wrong, "{msg}")? {
+        if fsck_err!(t, id::snapshot_subvol_flag_wrong, "{msg}")? {
             let has_subvol = n.v().subvol() != 0;
-            n.v_mut(&t)?.set_subvol_obsolete(has_subvol);
+            n.v_mut(t)?.set_subvol_obsolete(has_subvol);
         }
     }
 
-    Ok(t)
+    Ok(())
 }
 
 fn check_snapshot<'a, 't>(
-    t:    TransAttempt<'a, 't>,
+    t:    &TransAttempt<'a, 't>,
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
 
-    let Some(mut n) = Node::new(iter, k) else { return Ok(t) };
+    let Some(mut n) = Node::new(iter, k) else { return Ok(()) };
 
-    check_state(&t, &mut n)?;
-    let t = check_has_data(t, &mut n)?;
+    check_state(t, &mut n)?;
+    check_has_data(t, &mut n)?;
 
-    if check_deleted(&t, &mut n)? {
-        return Ok(t);
+    if check_deleted(t, &mut n)? {
+        return Ok(());
     }
 
-    let mut t = t;
     let parent = n.v().parent();
     if parent != 0 {
-        t = check_edge(t, &mut n, Role::Child, parent)?;
+        check_edge(t, &mut n, Role::Child, parent)?;
     }
     for child in n.v().children() {
         if child != 0 {
-            t = check_edge(t, &mut n, Role::Parent, child)?;
+            check_edge(t, &mut n, Role::Parent, child)?;
         }
     }
 
     if !tree_ptr_good(trans, n.id(), n.v().tree())? &&
-       fsck_err!(&t, id::snapshot_to_bad_snapshot_tree,
+       fsck_err!(t, id::snapshot_to_bad_snapshot_tree,
                  "snapshot points to missing/incorrect tree:\n{}", n.to_text(fs))? {
-        tree_ptr_repair(&t, &mut n)?;
+        tree_ptr_repair(t, &mut n)?;
     }
 
-    check_depth(&t, &mut n)?;
-    check_skiplists(&t, &mut n)?;
+    check_depth(t, &mut n)?;
+    check_skiplists(t, &mut n)?;
     check_to_subvol(t, &mut n)
 }
 
@@ -1278,8 +1269,7 @@ fn check_snapshots_trans(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
 /// @trans is a live transaction, with no attempt in progress.
 #[no_mangle]
 pub unsafe extern "C" fn bch2_check_snapshots_trans(trans: *mut c::btree_trans) -> core::ffi::c_int {
-    let fs = unsafe { Fs::borrow_raw((*trans).c) };
-    let trans = unsafe { BtreeTrans::borrow_raw(&fs, trans) };
+    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
 
     match check_snapshots_trans(&trans) {
         Ok(())  => 0,
@@ -1380,18 +1370,18 @@ fn add_nodup(ids: &mut KVVec<u32>, id: u32) -> Result<(), BchError> {
 
 /// Recreate missing node @id, a tree to itself: with a tree key, if there
 /// isn't one with it as the root.
-fn recreate_node<'a, 't>(t: TransAttempt<'a, 't>, id: u32) -> TransRet<'a, 't> {
+fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
 
-    let tree_id = find_key(trans, c::btree_id::snapshot_trees, |k| {
+    let tree_id = find_key(t, c::btree_id::snapshot_trees, |k| {
         k.as_snapshot_tree().is_some_and(|st| u32::from_le(st.root_snapshot) == id)
     })?;
 
     let tree_id = match tree_id {
         Some(tree_id) => tree_id,
         None => {
-            let mut tree = snapshot::tree_create(&t)?;
+            let mut tree = snapshot::tree_create(t)?;
             tree.k_i_mut().as_mut_snapshot_tree().expect("a snapshot tree key").root_snapshot =
                 id.to_le();
             tree.k().p.offset as u32
@@ -1404,7 +1394,7 @@ fn recreate_node<'a, 't>(t: TransAttempt<'a, 't>, id: u32) -> TransRet<'a, 't> {
     let v = snapshot_mut(&mut n);
     v.tree     = tree_id.to_le();
     v.btime.lo = fs.current_time().to_le();
-    v.subvol   = subvol_claiming(trans, id)?.unwrap_or(0).to_le();
+    v.subvol   = subvol_claiming(t, id)?.unwrap_or(0).to_le();
     v.set_state(SNAPSHOT_STATE_live);
 
     snapshot::table_make_room(fs, id)?;
@@ -1413,10 +1403,10 @@ fn recreate_node<'a, 't>(t: TransAttempt<'a, 't>, id: u32) -> TransRet<'a, 't> {
 
 /// Recreate node @id of @tree if it's missing - only if it's a tree to
 /// itself: one we can't place.
-fn reconstruct_node<'a, 't>(t: TransAttempt<'a, 't>, id: u32, tree: &[u32]) -> TransRet<'a, 't> {
+fn reconstruct_node(t: &TransAttempt<'_, '_>, id: u32, tree: &[u32]) -> Result<(), BchError> {
     let fs = t.trans().fs();
 
-    if fsck_err_on!(&t, snapshot::id_state(fs, id) == IdState::SNAPSHOT_ID_empty,
+    if fsck_err_on!(t, snapshot::id_state(fs, id) == IdState::SNAPSHOT_ID_empty,
                     id::snapshot_node_missing,
                     "snapshot node {id} from tree {} missing, recreate?", IdList(tree))? {
         if tree.len() > 1 {
@@ -1427,7 +1417,7 @@ fn reconstruct_node<'a, 't>(t: TransAttempt<'a, 't>, id: u32, tree: &[u32]) -> T
         return recreate_node(t, id);
     }
 
-    Ok(t)
+    Ok(())
 }
 
 fn reconstruct_snapshots(fs: &Fs) -> Result<(), BchError> {
@@ -1454,9 +1444,8 @@ fn reconstruct_snapshots(fs: &Fs) -> Result<(), BchError> {
         let mut iter = BtreeIter::new(&trans, btree, POS_MIN,
                                       BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::PREFETCH);
         iter.for_each_attempt(&trans, |t, iter, k| {
-            let t = progress.update(t, iter)?;
-            r.add(k.k.p)?;
-            Ok(t)
+            progress.update(t, iter)?;
+            r.add(k.k.p)
         })?;
 
         r.next()?;
@@ -1482,23 +1471,23 @@ crate::recovery_pass!(bch2_reconstruct_snapshots => reconstruct_snapshots);
 /// an ancestor of the descendant, copy it down. A genuinely missing inode is
 /// left for a full fsck to reconstruct; we don't do that or schedule passes
 /// here.
-fn key_has_inode_in_snapshot<'a, 't>(
-    t:        TransAttempt<'a, 't>,
+fn key_has_inode_in_snapshot(
+    t:        &TransAttempt<'_, '_>,
     btree:    c::btree_id,
     inum:     u64,
     snapshot: u32,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     match btree {
         c::btree_id::extents | c::btree_id::dirents | c::btree_id::xattrs => {}
-        _ => return Ok(t),
+        _ => return Ok(()),
     }
 
     let Some(mut inode) = inode::find_by_inum_snapshot(t.trans(), inum, snapshot,
                                                        BtreeIterFlags::empty()).found()? else {
-        return Ok(t);
+        return Ok(());
     };
     if inode.bi_snapshot == snapshot {
-        return Ok(t);
+        return Ok(());
     }
 
     inode.bi_snapshot = snapshot;
@@ -1508,19 +1497,19 @@ fn key_has_inode_in_snapshot<'a, 't>(
 /// Key @k is in a snapshot that's missing or dead: repair it - deleted, or
 /// moved to a live descendant - true if so, for the caller to skip it. With
 /// no @iter - the promote path - it can't be repaired, and is just skipped.
-fn check_key_has_snapshot<'a, 't>(
-    t:    TransAttempt<'a, 't>,
+fn check_key_has_snapshot(
+    t:    &TransAttempt<'_, '_>,
     iter: Option<&mut c::btree_iter>,
     k:    BkeySC<'_>,
-) -> TransResult<'a, 't, bool> {
+) -> Result<bool, BchError> {
     let trans = t.trans();
     let fs = trans.fs();
     let state = snapshot::id_state(fs, k.k.p.snapshot);
 
-    let Some(iter) = iter else { return t.done(true) };
+    let Some(iter) = iter else { return Ok(true) };
 
     if state == IdState::SNAPSHOT_ID_live {
-        return t.done(false);
+        return Ok(false);
     }
 
     let mut buf = Printbuf::new();
@@ -1607,24 +1596,24 @@ fn check_key_has_snapshot<'a, 't>(
         match snapshot::live_descendent(fs, k.k.p.snapshot)? {
             None => if inode_fsck_err!(trans, k.k.p, id::bkey_in_deleted_snapshot,
                                        "key in deleted snapshot {buf}, delete?")? {
-                let t = t.delete_at_raw(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
-                return t.done(true);
+                t.delete_at_raw(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+                return Ok(true);
             },
             Some(live_child) => if fsck_err!(trans, id::bkey_in_deleted_interior_snapshot,
                                              "key in deleted interior snapshot {buf}, migrating to live descendant {live_child}")? {
                 let (btree, inum) = (iter.btree_id(), k.k.p.inode);
-                let t = snapshot::delete_dead_key(t, iter, k, live_child)?;
-                let t = key_has_inode_in_snapshot(t, btree, inum, live_child)?;
-                return t.done(true);
+                snapshot::delete_dead_key(t, iter, k, live_child)?;
+                key_has_inode_in_snapshot(t, btree, inum, live_child)?;
+                return Ok(true);
             },
         }
     } else if inode_fsck_err!(trans, k.k.p, id::bkey_in_missing_snapshot,
                               "key in missing snapshot {buf}, delete?")? {
-        let t = t.delete_at_raw(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
-        return t.done(true);
+        t.delete_at_raw(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+        return Ok(true);
     }
 
-    t.done(false)
+    Ok(false)
 }
 
 /// check_key_has_snapshot(), for C's bch2_check_key_has_snapshot(): 1 if @k
@@ -1639,12 +1628,9 @@ pub unsafe extern "C" fn __bch2_check_key_has_snapshot(
     iter:  Option<&mut c::btree_iter>,
     k:     c::bkey_s_c,
 ) -> core::ffi::c_int {
-    let fs = unsafe { Fs::borrow_raw((*trans).c) };
-    let trans = unsafe { BtreeTrans::borrow_raw(&fs, trans) };
-    let t = trans.attempt_in_progress();
-
-    match check_key_has_snapshot(t, iter, BkeySC::from(&k)) {
-        Ok((_, handled)) => handled as core::ffi::c_int,
-        Err(e)           => -BchError::from(e).raw(),
+    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
+    match check_key_has_snapshot(&trans.attempt_in_progress(), iter, BkeySC::from(&k)) {
+        Ok(handled) => handled as core::ffi::c_int,
+        Err(e)      => -e.raw(),
     }
 }

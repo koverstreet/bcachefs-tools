@@ -5,7 +5,7 @@ use crate::btree::bkey::{pos, spos, BkeyCookie, BkeyS, BkeySC, POS_MIN, SPOS_MAX
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
-    CommitFlags, TransAttempt, TransRet, UpdateTriggerFlags,
+    CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
 use crate::data::extents::{
     bkey_extent_entries_mut, bkey_extent_entries_sc, bkey_ptrs_mut, entry_stripe_ptr_mut,
@@ -108,20 +108,20 @@ fn test_delete(fs: &Fs, _nr: u64) -> TestRet {
     );
 
     commit_do(&trans, None, NO_ENOSPC, |t| {
-        let mut k = trans_cookie_alloc(&t)?;
+        let mut k = trans_cookie_alloc(t)?;
         k.k_mut().set_snapshot(u32::MAX);
-        let t = iter.traverse(t)?;
-        t.update(&mut iter, k, UpdateTriggerFlags::empty())
+        iter.traverse(t)?;
+        t.update(&iter, &k, UpdateTriggerFlags::empty())
     })?;
 
     commit_do(&trans, None, NO_ENOSPC, |t| {
-        let t = iter.traverse(t)?;
-        t.delete_at(&mut iter, UpdateTriggerFlags::empty())
+        iter.traverse(t)?;
+        t.delete_at(&iter, UpdateTriggerFlags::empty())
     })?;
 
     commit_do(&trans, None, NO_ENOSPC, |t| {
-        let t = iter.traverse(t)?;
-        t.delete_at(&mut iter, UpdateTriggerFlags::empty())
+        iter.traverse(t)?;
+        t.delete_at(&iter, UpdateTriggerFlags::empty())
     })
 }
 
@@ -135,18 +135,18 @@ fn test_delete_written(fs: &Fs, _nr: u64) -> TestRet {
     );
 
     commit_do(&trans, None, NO_ENOSPC, |t| {
-        let mut k = trans_cookie_alloc(&t)?;
+        let mut k = trans_cookie_alloc(t)?;
         k.k_mut().set_snapshot(u32::MAX);
-        let t = iter.traverse(t)?;
-        t.update(&mut iter, k, UpdateTriggerFlags::empty())
+        iter.traverse(t)?;
+        t.update(&iter, &k, UpdateTriggerFlags::empty())
     })?;
 
     trans.unlock();
     fs.journal_flush_outstanding_pins();
 
     commit_do(&trans, None, NO_ENOSPC, |t| {
-        let t = iter.traverse(t)?;
-        t.delete_at(&mut iter, UpdateTriggerFlags::empty())
+        iter.traverse(t)?;
+        t.delete_at(&iter, UpdateTriggerFlags::empty())
     })
 }
 
@@ -289,9 +289,7 @@ fn test_peek_end_btree(fs: &Fs, btree: c::btree_id) -> TestRet {
     let mut iter = BtreeIter::new(&trans, btree, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
 
     for _ in 0..2 {
-        let empty = lockrestart_do(&trans, |t| {
-            t.done(iter.peek_max(pos(0, u64::MAX))?.is_none())
-        })?;
+        let empty = lockrestart_do(&trans, |t| Ok(iter.peek_max(t, pos(0, u64::MAX))?.is_none()))?;
         assert!(empty);
     }
 
@@ -349,7 +347,7 @@ fn insert_test_overlapping_extent(fs: &Fs, inum: u64, start: u64, len: u32, snap
     let res = DiskReservation::new(fs);
 
     commit_do(&trans, Some(&res), NO_ENOSPC, |t| {
-        let mut k = trans_cookie_alloc(&t)?;
+        let mut k = trans_cookie_alloc(t)?;
         k.k_mut().p.inode = inum;
         k.k_mut().p.offset = start + len as u64;
         k.k_mut().p.snapshot = snapid;
@@ -380,7 +378,7 @@ fn test_extent_create_dup(fs: &Fs, inum: u64) -> TestRet {
 
     let ret = commit_do(&trans, Some(&res), CommitFlags::empty(), |t| {
         let fs = t.fs();
-        let k = fs.require(iter.peek_max(pos(inum, u64::MAX))?, ENOENT_bkey_type_mismatch)?;
+        let k = fs.require(iter.peek_max(t, pos(inum, u64::MAX))?, ENOENT_bkey_type_mismatch)?;
         fs.ensure(k.k.key_type() == c::bch_bkey_type::KEY_TYPE_extent, ENOENT_bkey_type_mismatch)?;
 
         let mut dup = t.bkey_make_mut_noupdate(k)?;
@@ -399,10 +397,10 @@ fn test_extent_create_dup(fs: &Fs, inum: u64) -> TestRet {
     ret
 }
 
-fn test_btree_ptr_stale_dirty_key<'a, 't>(
-    t: TransAttempt<'a, 't>,
+fn test_btree_ptr_stale_dirty_key(
+    t: &TransAttempt<'_, '_>,
     k: BkeySC<'_>,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let mut iter = BtreeIter::new(
         t.trans(),
         c::btree_id::extents,
@@ -410,10 +408,10 @@ fn test_btree_ptr_stale_dirty_key<'a, 't>(
         BtreeIterFlags::INTENT,
     );
 
-    let t = iter.traverse(t)?;
+    iter.traverse(t)?;
     let fs = t.fs();
 
-    let b = fs.require(iter.node_at_iter_level(&t), ENOENT_bkey_type_mismatch)?;
+    let b = fs.require(iter.node_at_iter_level(t), ENOENT_bkey_type_mismatch)?;
     fs.ensure(b.level() == 0, ENOENT_bkey_type_mismatch)?;
 
     let mut update = t.bkey_make_mut_noupdate(b.key_sc())?;
@@ -457,7 +455,7 @@ fn test_btree_ptr_stale_dirty(fs: &Fs, _nr: u64) -> TestRet {
         let k = fs.require(iter.peek_max_type(SPOS_MAX, BtreeIterFlags::empty())?, ENOENT_bkey_type_mismatch)?;
         fs.ensure(k.is_btree_ptr(), ENOENT_bkey_type_mismatch)?;
 
-        test_btree_ptr_stale_dirty_key(t, k).map(|t| (t, ()))
+        test_btree_ptr_stale_dirty_key(t, k)
     })
 }
 
@@ -489,14 +487,14 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
 
     loop {
         let outcome = lockrestart_do(&trans, |t| {
-            let Some(k) = iter.peek_max(SPOS_MAX)? else {
-                return t.done(Some(false));
+            let Some(k) = iter.peek_max(t, SPOS_MAX)? else {
+                return Ok(Some(false));
             };
 
             let striped = bkey_extent_entries_sc(&k.v())
                 .any(|e| extent_entry_type(e) == STRIPE_PTR);
             if !striped {
-                return t.done(None);
+                return Ok(None);
             }
 
             let mut u = t.bkey_make_mut_noupdate(k)?;
@@ -509,9 +507,9 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
                 }
             }
 
-            let t = t.update(&mut iter, u, UpdateTriggerFlags::NORUN)?;
-            let t = t.commit(None, NO_ENOSPC)?;
-            t.done(Some(true))
+            t.update(&iter, &u, UpdateTriggerFlags::NORUN)?;
+            t.commit(None, NO_ENOSPC)?;
+            Ok(Some(true))
         })?;
 
         match outcome {
@@ -548,12 +546,12 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
 
         let idx = lockrestart_do(&updater, |t| {
             let fs = t.fs();
-            let k = fs.require(u_iter.peek_max(SPOS_MAX)?, ENOENT_bkey_type_mismatch)?;
+            let k = fs.require(u_iter.peek_max(t, SPOS_MAX)?, ENOENT_bkey_type_mismatch)?;
             let idx = k.k.p.offset;
 
             let u = t.bkey_make_mut_noupdate(k)?;
-            let t = t.update(&mut u_iter, u, UpdateTriggerFlags::NORUN)?;
-            t.done(idx)
+            t.update(&u_iter, &u, UpdateTriggerFlags::NORUN)?;
+            Ok(idx)
         })?;
 
         updater.unlock();
@@ -574,16 +572,15 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
             let mut attempt = 0;
             let opened = lockrestart_do(&opener, |t| {
                 let fs = t.fs();
-                fs.require(o_iter.peek_max(pos(0, idx))?, ENOENT_bkey_type_mismatch)?;
+                fs.require(o_iter.peek_max(t, pos(0, idx))?, ENOENT_bkey_type_mismatch)?;
 
                 attempt += 1;
                 assert!(handle.idx == 0,
                         "attempt {}: handle already claimed (idx {})", attempt, handle.idx);
 
-                let ret = unsafe {
+                ret_to_result(unsafe {
                     c::bch2_stripe_handle_tryget_existing(o_iter.raw_mut(), &mut handle)
-                };
-                t.result_value(ret_to_result(ret))
+                })
             })?;
 
             if opened != 1 {
@@ -616,7 +613,7 @@ fn test_snapshot_filter(fs: &Fs, snapid_lo: u32, snapid_hi: u32) -> TestRet {
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, snapid_lo), BtreeIterFlags::empty());
 
     let snapshot = lockrestart_do(&trans, |t| {
-        t.done(iter.peek_max(pos(0, u64::MAX))?.map_or(0, |k| k.k.p.snapshot))
+        Ok(iter.peek_max(t, pos(0, u64::MAX))?.map_or(0, |k| k.k.p.snapshot))
     })?;
 
     assert_eq!(snapshot, u32::MAX);
@@ -701,7 +698,7 @@ fn rand_insert(fs: &Fs, nr: u64) -> TestRet {
 
     for _ in 0..nr {
         commit_do(&trans, None, NO_ENOSPC, |t| {
-            let mut k = trans_cookie_alloc(&t)?;
+            let mut k = trans_cookie_alloc(t)?;
             k.k_mut().p.offset = test_rand();
             k.k_mut().p.snapshot = u32::MAX;
             t.insert(c::btree_id::xattrs, k, UpdateTriggerFlags::empty())
@@ -715,14 +712,14 @@ fn rand_insert_multi(fs: &Fs, nr: u64) -> TestRet {
     let trans = crate::btree_trans!(fs);
 
     for _ in (0..nr).step_by(8) {
-        commit_do(&trans, None, NO_ENOSPC, |mut t| {
+        commit_do(&trans, None, NO_ENOSPC, |t| {
             for _ in 0..8 {
-                let mut k = trans_cookie_alloc(&t)?;
+                let mut k = trans_cookie_alloc(t)?;
                 k.k_mut().p.offset = test_rand();
                 k.k_mut().p.snapshot = u32::MAX;
-                t = t.insert(c::btree_id::xattrs, k, UpdateTriggerFlags::empty())?;
+                t.insert(c::btree_id::xattrs, k, UpdateTriggerFlags::empty())?;
             }
-            Ok(t)
+            Ok(())
         })?;
     }
 
@@ -736,8 +733,8 @@ fn rand_lookup(fs: &Fs, nr: u64) -> TestRet {
     for _ in 0..nr {
         iter.set_pos(spos(0, test_rand(), u32::MAX));
         lockrestart_do(&trans, |t| {
-            iter.peek()?;
-            t.done(())
+            iter.peek(t)?;
+            Ok(())
         })?;
     }
 
@@ -750,18 +747,18 @@ fn rand_mixed(fs: &Fs, nr: u64) -> TestRet {
 
     for i in 0..nr {
         let rand = test_rand();
-        commit_do(&trans, None, NO_ENOSPC, |mut t| {
+        commit_do(&trans, None, NO_ENOSPC, |t| {
             iter.set_pos(spos(0, rand, u32::MAX));
 
-            let found = iter.peek()?.is_some();
+            let found = iter.peek(t)?.is_some();
 
             if (i & 3) == 0 && found {
-                let mut cookie = trans_cookie_alloc(&t)?;
+                let mut cookie = trans_cookie_alloc(t)?;
                 cookie.k_mut().p = iter.pos();
-                t = t.update(&mut iter, cookie, UpdateTriggerFlags::empty())?;
+                t.update(&iter, &cookie, UpdateTriggerFlags::empty())?;
             }
 
-            Ok(t)
+            Ok(())
         })?;
     }
 
@@ -786,7 +783,7 @@ fn seq_insert(fs: &Fs, nr: u64) -> TestRet {
 
     for i in 0..nr {
         commit_do(&trans, None, NO_ENOSPC, |t| {
-            let mut insert = trans_cookie_alloc(&t)?;
+            let mut insert = trans_cookie_alloc(t)?;
             insert.k_mut().p = spos(0, i, u32::MAX);
             t.insert(c::btree_id::xattrs, insert, UpdateTriggerFlags::empty())
         })?;
@@ -808,15 +805,14 @@ fn seq_overwrite(fs: &Fs, _nr: u64) -> TestRet {
 
     loop {
         let done = lockrestart_do(&trans, |t| {
-            let Some(k) = iter.peek()? else {
-                return t.done(true);
+            let Some(k) = iter.peek(t)? else {
+                return Ok(true);
             };
             let u = t.bkey_reassemble(k)?;
-            let t = t.update(&mut iter, u, UpdateTriggerFlags::empty())?;
-            let t = t.commit(None, NO_ENOSPC)?;
-            t.done(false)
-        })
-        ?;
+            t.update(&iter, &u, UpdateTriggerFlags::empty())?;
+            t.commit(None, NO_ENOSPC)?;
+            Ok(false)
+        })?;
 
         if done {
             break;

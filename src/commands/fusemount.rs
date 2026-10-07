@@ -400,7 +400,7 @@ fn fuse_setattr(
             let mut iter = btree::iter::BtreeIter::uninit();
             let mut inode_u: c::bch_inode_unpacked = Default::default();
 
-            let t = inode::peek(
+            inode::peek(
                 t,
                 &mut iter,
                 &mut inode_u,
@@ -436,9 +436,9 @@ fn fuse_setattr(
             // sends a ctime with the writeback cache, so it's ours to set:
             inode_u.bi_ctime = ctime.unwrap_or(now);
 
-            let t = inode::write(t, &mut iter, &mut inode_u)?;
+            inode::write(t, &mut iter, &mut inode_u)?;
             inode_out = inode_u;
-            Ok(t)
+            Ok(())
         },
     )?;
 
@@ -503,7 +503,7 @@ fn fuse_touch_atime(fs: &Fs, opts: AtimeOpts, inum: c::subvol_inum, bi: &c::bch_
             let mut iter = btree::iter::BtreeIter::uninit();
             let mut inode_u: c::bch_inode_unpacked = Default::default();
 
-            let t = inode::peek(
+            inode::peek(
                 t,
                 &mut iter,
                 &mut inode_u,
@@ -511,7 +511,7 @@ fn fuse_touch_atime(fs: &Fs, opts: AtimeOpts, inum: c::subvol_inum, bi: &c::bch_
                 btree::iter::BtreeIterFlags::INTENT,
             )?;
             if !opts.needs_update(fs, &inode_u, now) {
-                return Ok(t);
+                return Ok(());
             }
             inode_u.bi_atime = now;
             inode::write(t, &mut iter, &mut inode_u)
@@ -532,7 +532,7 @@ fn fuse_update_inode_after_write(fs: &Fs, inum: c::subvol_inum) -> Result<(), Bc
             let mut iter = btree::iter::BtreeIter::uninit();
             let mut inode_u: c::bch_inode_unpacked = Default::default();
 
-            let t = inode::peek(
+            inode::peek(
                 t,
                 &mut iter,
                 &mut inode_u,

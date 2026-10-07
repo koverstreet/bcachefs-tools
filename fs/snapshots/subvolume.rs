@@ -3,9 +3,9 @@
 //! Subvolumes (snapshots/subvolume.h).
 
 use crate::btree::bkey::BkeySC;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, LoopControl};
+use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, LoopControl};
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
+use crate::errcode::{ret_to_result_void, BchError};
 
 /// Subvolume @subvol: as bch2_subvolume_get(). With
 /// @inconsistent_if_not_found, a missing subvolume is reported as
@@ -64,9 +64,9 @@ pub fn get_snapshot_nowarn(trans: &BtreeTrans<'_>, subvol: u32) -> Result<u32, B
 /// so @f must not restart after doing something it can't redo - which is
 /// why a callback that has unlocked returns, and leaves the relock to the
 /// next peek.
-pub fn for_each_in_subvolume_max_in_trans<F, R>(
-    trans:  &BtreeTrans<'_>,
-    iter:   &mut BtreeIter<'_>,
+pub fn for_each_in_subvolume_max_in_trans<'t, F, R>(
+    trans:  &BtreeTrans<'t>,
+    iter:   &mut BtreeIter<'t>,
     end:    c::bpos,
     subvol: u32,
     flags:  BtreeIterFlags,
@@ -86,7 +86,10 @@ where
                 snapshot = get_snapshot(trans, subvol)?;
                 iter.set_snapshot(snapshot);
             }
-            Ok(match iter.peek_max_type(end, flags)? {
+            // This loop is its own driver - it begins again on a restart,
+            // below - so this attempt is the one it's in
+            let t = trans.attempt_in_progress();
+            Ok(match iter.peek_max_type(&t, end, flags)? {
                 Some(k) => f(k)?.into_break(),
                 None    => Some(Default::default()),
             })
@@ -100,7 +103,7 @@ where
                     return Ok(Default::default());
                 }
             }
-            Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => {
+            Err(e) if is_restart(&e) => {
                 restart_count = trans.begin_raw();
                 snapshot = 0;
             }

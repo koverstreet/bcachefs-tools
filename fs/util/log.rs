@@ -9,7 +9,7 @@
 //! bch2_log_msg() does under BCACHEFS_LOG_PREFIX; userspace prints it bare.
 
 use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
@@ -127,7 +127,7 @@ macro_rules! bch_info_ratelimited {
 
 /// As C's should_print_err(): a restart isn't an error worth reporting.
 pub fn should_print_err(err: &BchError) -> bool {
-    !err.matches(bch_errcode::BCH_ERR_transaction_restart)
+    !crate::btree::iter::is_restart(err)
 }
 
 #[macro_export]

@@ -33,7 +33,7 @@
 
 use crate::btree::bkey::{spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
-    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransRet,
+    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
 };
 use crate::c;
 use crate::c::bch_inode_flags::{
@@ -117,18 +117,20 @@ fn check_inode_dirent_inode(trans: &BtreeTrans<'_>, u: &mut c::bch_inode_unpacke
 }
 
 /// Whether the inode at @pos is on the deleted_inodes list.
-fn on_deleted_list(trans: &BtreeTrans<'_>, pos: c::bpos) -> Result<bool, BchError> {
-    let mut iter = BtreeIter::new(trans, c::btree_id::deleted_inodes, pos, BtreeIterFlags::empty());
-    Ok(iter.peek_slot()?.is_some_and(|k| k.key_type() == c::bch_bkey_type::KEY_TYPE_set))
+fn on_deleted_list(t: &TransAttempt<'_, '_>, pos: c::bpos) -> Result<bool, BchError> {
+    let mut iter = BtreeIter::new(t, c::btree_id::deleted_inodes, pos, BtreeIterFlags::empty());
+    Ok(iter.peek_slot(t)?.is_some_and(|k| k.key_type() == c::bch_bkey_type::KEY_TYPE_set))
 }
 
 /// Whether @u has an xattr of @x_type: what the has_*_acl flags record.
-fn has_xattr_type(trans: &BtreeTrans<'_>, u: &c::bch_inode_unpacked, x_type: u32) -> Result<bool, BchError> {
-    let hash = str_hash::hash_info_init(trans.fs(), u)?;
+fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &c::bch_inode_unpacked, x_type: u32)
+    -> Result<bool, BchError>
+{
+    let hash = str_hash::hash_info_init(t.fs(), u)?;
     let key = xattr::search_key(x_type, b"");
     let mut iter = BtreeIter::uninit();
 
-    Ok(str_hash::lookup_in_snapshot::<Xattrs>(trans, &mut iter, &hash,
+    Ok(str_hash::lookup_in_snapshot::<Xattrs>(t, &mut iter, &hash,
                                               c::subvol_inum { subvol: 0, inum: u.bi_inum },
                                               &key, BtreeIterFlags::empty(), u.bi_snapshot)
        .found()?.is_some())
@@ -168,10 +170,11 @@ enum SubvolCheck {
 /// subvolume's snapshot has to have this key's snapshot as an ancestor, which
 /// is the actual question leaf-ness was standing in for.
 fn check_inode_subvol(
-    trans: &BtreeTrans<'_>,
+    t:     &TransAttempt<'_, '_>,
     pos:   c::bpos,
     u:     &mut c::bch_inode_unpacked,
 ) -> Result<SubvolCheck, BchError> {
+    let trans: &BtreeTrans<'_> = t;
     let fs = trans.fs();
 
     let subvol   = subvolume::get(trans, u.bi_subvol, false).found()?;
@@ -193,7 +196,7 @@ fn check_inode_subvol(
     });
 
     if subvol.is_none() && (fs.btree_lost_data(c::btree_id::subvolumes) || snapshot_agrees) {
-        let root = check::reconstruct_subvol_root(trans, pos.snapshot, u.bi_subvol, Some(u.bi_inum))?;
+        let root = check::reconstruct_subvol_root(t, pos.snapshot, u.bi_subvol, Some(u.bi_inum))?;
         return Ok(SubvolCheck::Reconstruct(root));
     }
 
@@ -248,15 +251,16 @@ fn check_inode_subvol(
 /// flag, so check_unreachable_inodes() reattaches it. Returns whether @u was
 /// changed.
 fn check_unlinked_dir(
-    trans: &BtreeTrans<'_>,
+    t:     &TransAttempt<'_, '_>,
     pos:   c::bpos,
     u:     &mut c::bch_inode_unpacked,
 ) -> Result<bool, BchError> {
+    let trans: &BtreeTrans<'_> = t;
     if inode::is_subvolume_root(u) && subvolume::is_unlinked(trans, u.bi_subvol)? {
         return Ok(false);
     }
 
-    match dirent::empty_dir_snapshot(trans, pos.offset, 0, pos.snapshot) {
+    match dirent::empty_dir_snapshot(t, pos.offset, 0, pos.snapshot) {
         Ok(()) => return Ok(false),
         Err(e) if e.matches(bch_errcode::BCH_ERR_ENOTEMPTY_dir_not_empty) => {}
         Err(e) => return Err(e),
@@ -279,36 +283,35 @@ const ACL_FLAGS: [(c::bch_inode_flags, u32, c::bch_sb_error_id, &str); 2] = [
      id::inode_has_default_acl_flag_wrong, "default"),
 ];
 
-fn write_if_changed<'a, 't>(
-    t:       TransAttempt<'a, 't>,
+fn write_if_changed(
+    t:       &TransAttempt<'_, '_>,
     u:       &mut c::bch_inode_unpacked,
     changed: bool,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     if !changed {
-        return Ok(t);
+        return Ok(());
     }
     let fs = t.trans().fs();
     bch_err_msg!(fs, inode::fsck_write(t, u), "in fsck updating inode")
 }
 
-fn check_inode<'a, 't>(
-    t:    TransAttempt<'a, 't>,
+fn check_inode<'t>(
+    t:    &TransAttempt<'_, 't>,
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
     st:   &mut CheckInodes,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
-    let mut t = t;
 
     if snapshot::check_key_has_snapshot(trans, iter, k)? {
-        return Ok(t);
+        return Ok(());
     }
 
     st.s.update(k.k.p)?;
 
     if !inode::bkey_is_inode(k.k) {
-        return Ok(t);
+        return Ok(());
     }
 
     let pos = k.k.p;
@@ -322,7 +325,7 @@ fn check_inode<'a, 't>(
 
     if u.bi_hash_seed != st.snapshot_root.bi_hash_seed ||
        u.str_hash()   != st.snapshot_root.str_hash() {
-        t = str_hash::repair_inode_hash_info(t, &mut u, &st.snapshot_root)?;
+        str_hash::repair_inode_hash_info(t, &mut u, &st.snapshot_root)?;
     }
 
     let mut changed = false;
@@ -346,7 +349,7 @@ fn check_inode<'a, 't>(
     }
 
     if u.is_dir() && u.flag(BCH_INODE_unlinked) {
-        changed |= check_unlinked_dir(trans, pos, &mut u)?;
+        changed |= check_unlinked_dir(t, pos, &mut u)?;
     }
 
     if fsck_err_on!(trans, u.is_dir() && u.bi_size != 0, id::inode_dir_has_nonzero_i_size,
@@ -380,17 +383,17 @@ fn check_inode<'a, 't>(
             //
             // (The online arm below isn't reached today: check_inodes isn't
             // PASS_ONLINE.)
-            if !on_deleted_list(trans, pos)? &&
+            if !on_deleted_list(t, pos)? &&
                fsck_err!(trans, id::unlinked_inode_not_on_deleted_list,
                          "inode unlinked, but not on deleted list\n{u}")? {
-                t = t.bit_mod_buffered(c::btree_id::deleted_inodes, pos, true)?;
+                t.bit_mod_buffered(c::btree_id::deleted_inodes, pos, true)?;
             }
         } else if !inode::or_descendents_is_open(trans, pos)? &&
                   fsck_err!(trans, id::inode_unlinked_and_not_open,
                             "inode unlinked and not open\n{u}")? {
             bch_err_msg!(fs, inode::rm_snapshot(trans, u.bi_inum, pos.snapshot),
                          "in fsck deleting inode")?;
-            return Ok(t);
+            return Ok(());
         }
     }
 
@@ -412,7 +415,7 @@ fn check_inode<'a, 't>(
     // check_xattrs:
     for (flag, x_type, err, acl) in ACL_FLAGS {
         if u.flag(flag) &&
-           fsck_err_on!(trans, !has_xattr_type(trans, &u, x_type)?, err,
+           fsck_err_on!(trans, !has_xattr_type(t, &u, x_type)?, err,
                         "inode has BCH_INODE_has_{acl}_acl set but no acl xattr\n{u}")? {
             u.set_flag(flag, false);
             changed = true;
@@ -420,11 +423,11 @@ fn check_inode<'a, 't>(
     }
 
     if u.bi_subvol != 0 {
-        match check_inode_subvol(trans, pos, &mut u)? {
+        match check_inode_subvol(t, pos, &mut u)? {
             SubvolCheck::Ok                => {}
             SubvolCheck::Repaired          => changed = true,
             SubvolCheck::Reconstruct(root) => {
-                let t = check::reconstruct_subvol(t, pos.snapshot, u.bi_subvol, root)?;
+                check::reconstruct_subvol(t, pos.snapshot, u.bi_subvol, root)?;
                 return write_if_changed(t, &mut u, changed);
             }
         }
@@ -452,7 +455,7 @@ fn check_inodes(fs: &Fs) -> Result<(), BchError> {
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
 
     iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, k| {
-        let t = progress.update(t, iter)?;
+        progress.update(t, iter)?;
         check_inode(t, iter, k, &mut st)
     })
 }

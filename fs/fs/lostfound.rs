@@ -44,8 +44,7 @@
 
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
-    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransError, TransResult,
-    TransRet, UpdateTriggerFlags,
+    is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
 use crate::c;
 use crate::dirent::{self, DirentTarget, Dirents};
@@ -71,14 +70,14 @@ const CREATE: (BtreeIterFlags, UpdateTriggerFlags) =
 /// ENOENT_not_directory if it isn't a directory - an error, not a None: we'd
 /// fail to create one over it.
 fn lostfound_dirent(
-    trans:     &BtreeTrans<'_>,
+    t:         &TransAttempt<'_, '_>,
     root_hash: &c::bch_hash_info,
     root:      c::subvol_inum,
     snapshot:  u32,
 ) -> Result<Option<u64>, BchError> {
-    let fs = trans.fs();
+    let fs = t.fs();
     let mut iter = BtreeIter::uninit();
-    let Some(k) = str_hash::lookup_in_snapshot::<Dirents>(trans, &mut iter, root_hash, root,
+    let Some(k) = str_hash::lookup_in_snapshot::<Dirents>(t, &mut iter, root_hash, root,
                                                            &dirent::qstr(LOSTFOUND),
                                                            BtreeIterFlags::empty(), snapshot)
         .found()? else { return Ok(None) };
@@ -93,43 +92,35 @@ fn lostfound_dirent(
 
 /// Any subvolume in snapshot tree @tree - not master_subvol, which might
 /// have been deleted.
-fn find_snapshot_tree_subvol(trans: &BtreeTrans<'_>, tree: u32) -> Result<u32, BchError> {
-    let mut subvol = 0;
-    let mut iter = BtreeIter::new(trans, c::btree_id::snapshots, POS_MIN, BtreeIterFlags::empty());
-    iter.for_each_norestart(|_, k| {
-        if let Some(s) = k.as_snapshot() {
-            if u32::from_le(s.tree) == tree && s.subvol != 0 {
-                subvol = u32::from_le(s.subvol);
-                return Ok(ControlFlow::Break(()));
-            }
-        }
-        Ok(ControlFlow::Continue(()))
-    })?;
-
-    if subvol == 0 {
-        return Err(trans.fs().err(bch_errcode::BCH_ERR_ENOENT_no_snapshot_tree_subvol));
-    }
-    Ok(subvol)
+fn find_snapshot_tree_subvol(t: &TransAttempt<'_, '_>, tree: u32) -> Result<u32, BchError> {
+    let mut iter = BtreeIter::new(t, c::btree_id::snapshots, POS_MIN, BtreeIterFlags::empty());
+    iter.for_each_norestart(t, |_, k| Ok(
+        match k.as_snapshot() {
+            Some(s) if u32::from_le(s.tree) == tree && s.subvol != 0 =>
+                ControlFlow::Break(Some(u32::from_le(s.subvol))),
+            _ => ControlFlow::Continue(()),
+        }))?
+        .ok_or_else(|| t.fs().err(bch_errcode::BCH_ERR_ENOENT_no_snapshot_tree_subvol))
 }
 
 /// Name directory @inum lost+found in @root at @snapshot, logging @msg - what
 /// we're doing - at notice, or at err with the error if it fails.
-fn create_lostfound_dirent<'a, 't>(
-    t:          TransAttempt<'a, 't>,
+fn create_lostfound_dirent(
+    t:          &TransAttempt<'_, '_>,
     msg:        &mut Printbuf,
     root_inum:  c::subvol_inum,
     root_inode: &mut c::bch_inode_unpacked,
     snapshot:   u32,
     inum:       u64,
     dir_offset: &mut u64,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let fs = t.trans().fs();
     let r = dirent::create_snapshot(t, root_inum.subvol as u32, snapshot, root_inode,
                                     c::DT_DIR as u8, LOSTFOUND, DirentTarget::Inode(inum),
                                     dir_offset,
                                     CREATE.0, CREATE.1);
     match &r {
-        Err(TransError::Error(e)) => {
+        Err(e) if !is_restart(e) => {
             write!(msg, "\nerror creating dirent: {}", e.msg());
             bch_err!(fs, "{msg}");
         }
@@ -139,12 +130,12 @@ fn create_lostfound_dirent<'a, 't>(
 }
 
 /// Create lost+found in @snapshot, the snapshot tree's root.
-fn create_lostfound<'a, 't>(
-    t:          TransAttempt<'a, 't>,
+fn create_lostfound(
+    t:          &TransAttempt<'_, '_>,
     snapshot:   u32,
     root_inum:  c::subvol_inum,
     root_inode: &mut c::bch_inode_unpacked,
-) -> TransResult<'a, 't, c::bch_inode_unpacked> {
+) -> Result<c::bch_inode_unpacked, BchError> {
     let trans = t.trans();
     let fs = trans.fs();
 
@@ -160,18 +151,17 @@ fn create_lostfound<'a, 't>(
 
     let is_32bit = inode::opts_get_inode(fs, root_inode).inodes_32bit != 0;
     let mut iter = BtreeIter::uninit();
-    let t = inode::create(t, &mut iter, &mut lostfound, snapshot, is_32bit)?;
+    inode::create(t, &mut iter, &mut lostfound, snapshot, is_32bit)?;
 
     iter.set_snapshot(snapshot);
-    let t = t.iter_traverse(&mut iter)?;
+    t.iter_traverse(&mut iter)?;
 
     let inum = lostfound.bi_inum;
-    let t = create_lostfound_dirent(t, &mut msg, root_inum, root_inode, snapshot, inum,
-                                    &mut lostfound.bi_dir_offset)?;
+    create_lostfound_dirent(t, &mut msg, root_inum, root_inode, snapshot, inum,
+                            &mut lostfound.bi_dir_offset)?;
 
-    let t = inode::write_flags(t, &mut iter, &mut lostfound,
-                               UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
-    t.done(lostfound)
+    inode::write_flags(t, &mut iter, &mut lostfound, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+    Ok(lostfound)
 }
 
 /// The snapshot tree has a lost+found, but @snapshot hasn't: it was deleted
@@ -183,14 +173,14 @@ fn create_lostfound<'a, 't>(
 /// into the slot that was freed in the normal case, and probes past whatever
 /// took it otherwise. One inode with different dirent positions in different
 /// snapshots is what a directory renamed after a snapshot already looks like.
-fn restore_lostfound<'a, 't>(
-    t:             TransAttempt<'a, 't>,
+fn restore_lostfound(
+    t:             &TransAttempt<'_, '_>,
     snapshot:      u32,
     root_snapshot: u32,
     root_inum:     c::subvol_inum,
     root_inode:    &mut c::bch_inode_unpacked,
     inum:          u64,
-) -> TransResult<'a, 't, c::bch_inode_unpacked> {
+) -> Result<c::bch_inode_unpacked, BchError> {
     let trans = t.trans();
     let fs = trans.fs();
 
@@ -214,19 +204,19 @@ fn restore_lostfound<'a, 't>(
     lostfound.bi_dir      = root_inode.bi_inum;
     lostfound.bi_snapshot = snapshot;
 
-    let t = create_lostfound_dirent(t, &mut msg, root_inum, root_inode, snapshot, inum,
-                                    &mut lostfound.bi_dir_offset)?;
+    create_lostfound_dirent(t, &mut msg, root_inum, root_inode, snapshot, inum,
+                            &mut lostfound.bi_dir_offset)?;
 
-    let t = inode::fsck_write(t, &mut lostfound)?;
-    t.done(lostfound)
+    inode::fsck_write(t, &mut lostfound)?;
+    Ok(lostfound)
 }
 
 /// lost+found is a subdirectory of the root inode in @snapshot, so the root
 /// inode gains a link there. Take it on the version @snapshot sees and write
 /// it back at @snapshot: writing it where that version lives would hand the
 /// link to sibling branches that haven't got a lost+found.
-fn lostfound_dir_link<'a, 't>(t: TransAttempt<'a, 't>, dir_inum: u64, snapshot: u32)
-    -> TransRet<'a, 't>
+fn lostfound_dir_link(t: &TransAttempt<'_, '_>, dir_inum: u64, snapshot: u32)
+    -> Result<(), BchError>
 {
     let mut dir = inode::find_by_inum_snapshot(t.trans(), dir_inum, snapshot,
                                                BtreeIterFlags::empty())?;
@@ -239,14 +229,14 @@ fn lostfound_dir_link<'a, 't>(t: TransAttempt<'a, 't>, dir_inum: u64, snapshot: 
 /// tree, in the tree's root snapshot so that every branch inherits the same
 /// one, so either the tree hasn't got one at all or it has and it was deleted
 /// here.
-fn create_or_restore_lostfound<'a, 't>(
-    t:          TransAttempt<'a, 't>,
+fn create_or_restore_lostfound(
+    t:          &TransAttempt<'_, '_>,
     tree:       u32,
     snapshot:   u32,
     root_inum:  c::subvol_inum,
     root_inode: &mut c::bch_inode_unpacked,
     root_hash:  &c::bch_hash_info,
-) -> TransResult<'a, 't, c::bch_inode_unpacked> {
+) -> Result<c::bch_inode_unpacked, BchError> {
     let trans = t.trans();
     let fs = trans.fs();
 
@@ -271,33 +261,27 @@ fn create_or_restore_lostfound<'a, 't>(
     // to hash with it in another snapshot: fine, because all versions of an
     // inode must have the same hash seed and type, and check_dirents has
     // already run and repaired any that didn't.
-    let (t, lostfound, dirent_snapshot) =
-        match lostfound_dirent(trans, root_hash, root_inum, root_snapshot)? {
-            Some(inum) => {
-                let (t, l) = restore_lostfound(t, snapshot, root_snapshot, root_inum, root_inode,
-                                               inum)?;
-                (t, l, snapshot)
-            }
-            None => {
-                let (t, l) = create_lostfound(t, root_snapshot, root_inum, root_inode)?;
-                (t, l, root_snapshot)
-            }
+    let (lostfound, dirent_snapshot) =
+        match lostfound_dirent(t, root_hash, root_inum, root_snapshot)? {
+            Some(inum) => (restore_lostfound(t, snapshot, root_snapshot, root_inum, root_inode,
+                                             inum)?, snapshot),
+            None => (create_lostfound(t, root_snapshot, root_inum, root_inode)?, root_snapshot),
         };
 
-    let t = lostfound_dir_link(t, root_inum.inum, dirent_snapshot)?;
-    let t = t.commit_lazy(CommitFlags::NO_ENOSPC)?;
-    t.done(lostfound)
+    lostfound_dir_link(t, root_inum.inum, dirent_snapshot)?;
+    t.commit_lazy(CommitFlags::NO_ENOSPC)?;
+    Ok(lostfound)
 }
 
 /// lost+found as @snapshot sees it, created if it doesn't exist.
-fn lookup_lostfound<'a, 't>(t: TransAttempt<'a, 't>, snapshot: u32)
-    -> TransResult<'a, 't, c::bch_inode_unpacked>
+fn lookup_lostfound(t: &TransAttempt<'_, '_>, snapshot: u32)
+    -> Result<c::bch_inode_unpacked, BchError>
 {
     let trans = t.trans();
     let fs = trans.fs();
     let tree = snapshot::tree(fs, snapshot);
 
-    let subvolid = bch_err_msg!(fs, find_snapshot_tree_subvol(trans, tree),
+    let subvolid = bch_err_msg!(fs, find_snapshot_tree_subvol(t, tree),
                                 "finding subvol associated with snapshot tree {tree}")?;
     let subvol = bch_err_msg!(fs, subvolume::get_key(trans, subvolid, false),
                               "looking up subvol {subvolid} for snapshot {snapshot}")?;
@@ -314,7 +298,7 @@ fn lookup_lostfound<'a, 't>(t: TransAttempt<'a, 't>, snapshot: u32)
 
     let root_hash = str_hash::hash_info_init(fs, &root_inode)?;
 
-    let Some(inum) = bch_err_msg!(fs, lostfound_dirent(trans, &root_hash, root_inum, snapshot),
+    let Some(inum) = bch_err_msg!(fs, lostfound_dirent(t, &root_hash, root_inum, snapshot),
                                   "looking up lost+found")? else {
         // We always create lost+found in its own transaction; this will
         // return a transaction restart:
@@ -324,11 +308,10 @@ fn lookup_lostfound<'a, 't>(t: TransAttempt<'a, 't>, snapshot: u32)
     };
 
     // check_dirents has already run, dangling dirents shouldn't exist here
-    let lostfound = bch_err_msg!(fs,
+    bch_err_msg!(fs,
         inode::find_by_inum_snapshot(trans, inum, snapshot, BtreeIterFlags::empty()),
         "looking up lost+found {inum}:{snapshot} in (root inode {}, snapshot root {})",
-        root_inum.inum, snapshot::root(fs, snapshot))?;
-    t.done(lostfound)
+        root_inum.inum, snapshot::root(fs, snapshot))
 }
 
 /// Whether @inode is unreachable and has to be reattached: no backpointer,
@@ -366,15 +349,15 @@ pub fn inode_should_reattach(inode: &c::bch_inode_unpacked) -> bool {
 
 /// Hide the dirent at @d_pos from @snapshot, a descendant of its snapshot,
 /// if it's visible there.
-fn maybe_delete_dirent<'a, 't>(t: TransAttempt<'a, 't>, d_pos: c::bpos, snapshot: u32)
-    -> TransRet<'a, 't>
+fn maybe_delete_dirent(t: &TransAttempt<'_, '_>, d_pos: c::bpos, snapshot: u32)
+    -> Result<(), BchError>
 {
     let mut iter = BtreeIter::new(t.trans(), c::btree_id::dirents,
                                   spos(d_pos.inode, d_pos.offset, snapshot),
                                   BtreeIterFlags::INTENT);
-    let visible = iter.peek_slot()?.expect("a slot always has a key").k.p == d_pos;
+    let visible = iter.peek_slot(t)?.expect("a slot always has a key").k.p == d_pos;
     if !visible {
-        return Ok(t);
+        return Ok(());
     }
 
     // An explicit whiteout because delete_at() relies on
@@ -385,12 +368,12 @@ fn maybe_delete_dirent<'a, 't>(t: TransAttempt<'a, 't>, d_pos: c::bpos, snapshot
     // XXX: they do now, so delete_at() should be equivalent - switch once a
     // fault injection test covers this path.
     let whiteout = t.bkey_alloc_init(0, c::bch_bkey_type::KEY_TYPE_whiteout.0 as u8, iter.pos())?;
-    t.update(&mut iter, whiteout, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+    t.update(&iter, &whiteout, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
 /// Link @inode into lost+found.
-pub fn reattach_inode<'a, 't>(t: TransAttempt<'a, 't>, inode: &mut c::bch_inode_unpacked)
-    -> TransRet<'a, 't>
+pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked)
+    -> Result<(), BchError>
 {
     let trans = t.trans();
     let fs = trans.fs();
@@ -413,7 +396,7 @@ pub fn reattach_inode<'a, 't>(t: TransAttempt<'a, 't>, inode: &mut c::bch_inode_
         write!(name, "{}", inode.bi_inum);
     }
 
-    let (t, mut lostfound) = lookup_lostfound(t, dirent_snapshot)?;
+    let mut lostfound = lookup_lostfound(t, dirent_snapshot)?;
     bch_verbose!(fs, "got lostfound inum {}", lostfound.bi_inum);
 
     // Adopt instead of create: the child fixup loop below commits in chunks
@@ -442,7 +425,7 @@ pub fn reattach_inode<'a, 't>(t: TransAttempt<'a, 't>, inode: &mut c::bch_inode_
 
         let mut d_iter = BtreeIter::uninit();
         let existing = str_hash::lookup_in_snapshot::<Dirents>(
-            trans, &mut d_iter, &lostfound_hash,
+            t, &mut d_iter, &lostfound_hash,
             c::subvol_inum { subvol: inode.bi_parent_subvol as u64, inum: lostfound.bi_inum },
             &dirent::qstr(probe.as_bytes()), BtreeIterFlags::empty(), dirent_snapshot).found()?;
 
@@ -483,21 +466,21 @@ pub fn reattach_inode<'a, 't>(t: TransAttempt<'a, 't>, inode: &mut c::bch_inode_
     assert!(snapshot::is_ancestor(trans, dirent_snapshot, lostfound.bi_snapshot));
     lostfound.bi_snapshot = dirent_snapshot;
 
-    let mut t = inode::fsck_write(t, &mut lostfound)?;
+    inode::fsck_write(t, &mut lostfound)?;
 
     if !adopted {
         inode.bi_dir = lostfound.bi_inum;
 
         let d_type = inode.d_type();
         let target = inode.dirent_target();
-        t = bch_err_msg!(fs,
+        bch_err_msg!(fs,
             dirent::create_snapshot(t, inode.bi_parent_subvol, dirent_snapshot, &mut lostfound,
                                     d_type, name.as_bytes(), target, &mut inode.bi_dir_offset,
                                     CREATE.0, CREATE.1),
             "error creating dirent")?;
     }
 
-    t = inode::fsck_write(t, inode)?;
+    inode::fsck_write(t, inode)?;
 
     let mut path = Printbuf::new();
     namei::inum_snapshot_to_path(trans, inode.bi_inum, inode.bi_snapshot, &mut path)?;
@@ -511,14 +494,14 @@ pub fn reattach_inode<'a, 't>(t: TransAttempt<'a, 't>, inode: &mut c::bch_inode_
     // update the backpointer field, if they should not be we need to emit
     // whiteouts for the dirent we just created.
     if inode.bi_subvol != 0 || snapshot::is_leaf(fs, inode.bi_snapshot)? {
-        return Ok(t);
+        return Ok(());
     }
 
     let mut whiteouts_done: KVVec<u32> = KVVec::new();
     let mut iter = BtreeIter::new(trans, c::btree_id::inodes,
                                   spos(0, inode.bi_inum, inode.bi_snapshot - 1),
                                   BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::INTENT);
-    while let Some(k) = iter.peek_prev_min(pos(0, inode.bi_inum))? {
+    while let Some(k) = iter.peek_prev_min(t, pos(0, inode.bi_inum))? {
         let id = k.k.p.snapshot;
         let child = inode::bkey_is_inode(k.k).then(|| inode::unpack(fs, k));
 
@@ -527,7 +510,7 @@ pub fn reattach_inode<'a, 't>(t: TransAttempt<'a, 't>, inode: &mut c::bch_inode_
         // once substantial work has accumulated - the restart re-drives us,
         // the adopt path above resumes without duplicating the reattach
         // dirent, and already-fixed children are skipped below:
-        t = t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
+        t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
 
         let child = child.filter(|child| {
             snapshot::is_ancestor(trans, id, inode.bi_snapshot) &&
@@ -545,11 +528,11 @@ pub fn reattach_inode<'a, 't>(t: TransAttempt<'a, 't>, inode: &mut c::bch_inode_
                 iter.set_snapshot(id);
                 child.bi_dir        = inode.bi_dir;
                 child.bi_dir_offset = inode.bi_dir_offset;
-                t = inode::write_flags(t, &mut iter, &mut child,
-                                       UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+                inode::write_flags(t, &mut iter, &mut child,
+                                   UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
             } else {
-                t = maybe_delete_dirent(t, spos(lostfound.bi_inum, inode.bi_dir_offset,
-                                                dirent_snapshot), id)?;
+                maybe_delete_dirent(t, spos(lostfound.bi_inum, inode.bi_dir_offset,
+                                            dirent_snapshot), id)?;
                 whiteouts_done.push(id, GFP_KERNEL)?;
             }
         }
@@ -559,5 +542,5 @@ pub fn reattach_inode<'a, 't>(t: TransAttempt<'a, 't>, inode: &mut c::bch_inode_
         }
     }
 
-    Ok(t)
+    Ok(())
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::iter::{BtreeTrans, TransAttempt, TransRet};
+use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
 use crate::check::SnapshotsSeen;
 use crate::errcode::{ret_to_result_void, BchError};
@@ -49,13 +49,13 @@ pub fn inum_snapshot_to_path(
 }
 
 pub fn link_trans<'a, 't>(
-    t:        TransAttempt<'a, 't>,
+    t:        &TransAttempt<'a, 't>,
     dir_inum: c::subvol_inum,
     dir:      &mut c::bch_inode_unpacked,
     inum:     c::subvol_inum,
     inode:    &mut c::bch_inode_unpacked,
     name:     &c::qstr,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let ret = unsafe {
         c::bch2_link_trans(t.raw(), dir_inum, dir, inum, inode, name)
     };
@@ -63,14 +63,14 @@ pub fn link_trans<'a, 't>(
 }
 
 pub fn unlink_trans<'a, 't>(
-    t:        TransAttempt<'a, 't>,
+    t:        &TransAttempt<'a, 't>,
     dir_inum: c::subvol_inum,
     dir:      &mut c::bch_inode_unpacked,
     target:   c::subvol_inum,
     inode:    &mut c::bch_inode_unpacked,
     name:     &c::qstr,
     deleting: bool,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let ret = unsafe {
         c::bch2_unlink_trans(t.raw(), dir_inum, dir, target, inode, name, deleting)
     };
@@ -80,7 +80,7 @@ pub fn unlink_trans<'a, 't>(
 /// The opt changes are for rename_opt_changes_finish(), after the commit.
 #[allow(clippy::too_many_arguments)]
 pub fn rename_trans<'a, 't>(
-    t:              TransAttempt<'a, 't>,
+    t:              &TransAttempt<'a, 't>,
     src_dir:        c::subvol_inum,
     src_dir_u:      &mut c::bch_inode_unpacked,
     dst_dir:        c::subvol_inum,
@@ -92,7 +92,7 @@ pub fn rename_trans<'a, 't>(
     mode:           c::bch_rename_mode,
     src_opt_change: &mut c::inode_opt_change,
     dst_opt_change: &mut c::inode_opt_change,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let ret = unsafe {
         c::bch2_rename_trans(
             t.raw(),
@@ -125,7 +125,7 @@ pub fn rename_opt_changes_finish(
 
 #[allow(clippy::too_many_arguments)]
 pub fn create_trans<'a, 't>(
-    t:            TransAttempt<'a, 't>,
+    t:            &TransAttempt<'a, 't>,
     dir_inum:     c::subvol_inum,
     dir:          &mut c::bch_inode_unpacked,
     inode:        &mut c::bch_inode_unpacked,
@@ -137,7 +137,7 @@ pub fn create_trans<'a, 't>(
     rdev:         c::dev_t,
     snapshot_src: c::subvol_inum,
     flags:        u32,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let ret = unsafe {
         c::bch2_create_trans(
             t.raw(),

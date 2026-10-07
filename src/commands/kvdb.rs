@@ -44,7 +44,7 @@ use bcachefs_kernel::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
 use bcachefs_kernel::btree::bkey_methods;
 use bcachefs_kernel::btree::iter::{
     commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
-    TransBkey, TransError, UpdateTriggerFlags,
+    TransBkey, UpdateTriggerFlags,
 };
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::{bch_errcode, BchError};
@@ -399,7 +399,7 @@ fn set_fields(
     assigns:  &[(&str, &str)],
     raw:      bool,
     user_err: &mut Option<anyhow::Error>,
-) -> Result<(), TransError> {
+) -> Result<(), BchError> {
     for (field, val) in assigns {
         let ret = if raw { k.set_raw(field, val) } else { k.set(fs, field, val) };
         if let Err(e) = ret {
@@ -487,11 +487,11 @@ fn cmd_read(fs: &Fs, op: ReadOp, btree: c::btree_id, pos: c::bpos, filtered: boo
         };
         let mut iter = BtreeIter::new(t.trans(), btree, pos, iter_flags(base, filtered));
         let out = match op {
-            ReadOp::Get => iter.peek_max_flags(SPOS_MAX, BtreeIterFlags::SLOTS),
-            ReadOp::Peek => iter.peek(),
-            ReadOp::PeekPrev => iter.peek_prev(),
-        }
-        .and_then(|k| match k {
+            ReadOp::Get => iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS),
+            ReadOp::Peek => iter.peek(t),
+            ReadOp::PeekPrev => iter.peek_prev(t),
+        }?;
+        match out {
             Some(k) => render_read(fs, &k, how).map_err(|e| {
                 // Render errors (bad field path, no key for a field read)
                 // are the user's, not the transaction's: stash and abort
@@ -500,8 +500,7 @@ fn cmd_read(fs: &Fs, op: ReadOp, btree: c::btree_id, pos: c::bpos, filtered: boo
                 BchError::from(bch_errcode::BCH_ERR_ENOENT_bkey_type_mismatch)
             }),
             None => Ok("(no key)\n".to_string()),
-        });
-        t.result_value(out)
+        }
     });
     match user_err {
         Some(e) => Err(e),
@@ -654,7 +653,7 @@ fn cmd_list_online(handle: &BcachefsHandle, fs: &Fs,
     Ok(out)
 }
 
-fn no_key_err() -> TransError {
+fn no_key_err() -> BchError {
     bch_errcode::BCH_ERR_ENOENT_bkey_type_mismatch.into()
 }
 
@@ -679,9 +678,7 @@ fn cmd_update(
                 pos,
                 RAW_EXACT | BtreeIterFlags::INTENT,
             );
-            let k = iter
-                .peek_max_flags(SPOS_MAX, BtreeIterFlags::SLOTS)
-                .map_err(TransError::from)?;
+            let k = iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS)?;
             let Some(k) = k.filter(|k| !k.is_deleted()) else {
                 let (inode, offset, snapshot) = (pos.inode, pos.offset, pos.snapshot);
                 user_err = Some(anyhow!("no key at {inode}:{offset}:{snapshot}"));
@@ -689,13 +686,12 @@ fn cmd_update(
             };
 
             // A copy of the key, as it is, in a buffer set() can grow it into:
-            let mut new = t.bkey_reassemble_resized(k, BKEY_VAL_U64S_MAX)
-                .map_err(TransError::from)?;
+            let mut new = t.bkey_reassemble_resized(k, BKEY_VAL_U64S_MAX)?;
             new.k_mut().u64s = k.k.u64s;
 
             set_fields(fs, &mut new, assigns, raw, &mut user_err)?;
 
-            t.update(&mut iter, new, raw_flags(UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE, raw))
+            t.update(&iter, &new, raw_flags(UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE, raw))
         },
     );
 
@@ -729,9 +725,7 @@ fn cmd_copy(fs: &Fs, btree: c::btree_id, pos: c::bpos, new_pos: c::bpos, raw: bo
         CommitFlags::NO_ENOSPC,
         |t| {
             let mut iter = BtreeIter::new(t.trans(), btree, pos, RAW_EXACT);
-            let k = iter
-                .peek_max_flags(SPOS_MAX, BtreeIterFlags::SLOTS)
-                .map_err(TransError::from)?;
+            let k = iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS)?;
             let Some(k) = k.filter(|k| !k.is_deleted()) else {
                 let (inode, offset, snapshot) = (pos.inode, pos.offset, pos.snapshot);
                 user_err = Some(anyhow!("no key at {inode}:{offset}:{snapshot}"));
@@ -740,19 +734,17 @@ fn cmd_copy(fs: &Fs, btree: c::btree_id, pos: c::bpos, new_pos: c::bpos, raw: bo
 
             let mut new_iter = BtreeIter::new(t.trans(), btree, new_pos,
                                               RAW_EXACT | BtreeIterFlags::INTENT);
-            let old = new_iter
-                .peek_max_flags(SPOS_MAX, BtreeIterFlags::SLOTS)
-                .map_err(TransError::from)?;
+            let old = new_iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS)?;
             if old.is_some_and(|old| !old.is_deleted()) {
                 let (inode, offset, snapshot) = (new_pos.inode, new_pos.offset, new_pos.snapshot);
                 user_err = Some(anyhow!("{inode}:{offset}:{snapshot} is occupied"));
                 return Err(no_key_err());
             }
 
-            let mut new = t.bkey_reassemble(k).map_err(TransError::from)?;
+            let mut new = t.bkey_reassemble(k)?;
             new.k_mut().p = new_pos;
 
-            t.update(&mut new_iter, new, raw_flags(UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE, raw))
+            t.update(&new_iter, &new, raw_flags(UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE, raw))
         },
     );
 
@@ -803,19 +795,17 @@ fn cmd_set(
                 pos,
                 iter_flags,
             );
-            iter.peek_max_flags(SPOS_MAX, BtreeIterFlags::SLOTS)
-                .map_err(TransError::from)?;
+            iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS)?;
 
             // A zeroed value of the struct's fixed size, in a buffer set()
             // can grow it into - vartail elements (damage errors[n]) lie
             // beyond the struct:
-            let mut new = t.bkey_alloc_init(BKEY_VAL_U64S_MAX, ti.type_ as u8, pos)
-                .map_err(TransError::from)?;
+            let mut new = t.bkey_alloc_init(BKEY_VAL_U64S_MAX, ti.type_ as u8, pos)?;
             new.k_mut().u64s = (BKEY_U64S + ti.info.size.div_ceil(8)) as u8;
 
             set_fields(fs, &mut new, assigns, false, &mut user_err)?;
 
-            t.update(&mut iter, new, update_flags)
+            t.update(&iter, &new, update_flags)
         },
     );
 

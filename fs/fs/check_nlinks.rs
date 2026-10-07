@@ -14,7 +14,7 @@
 
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
-    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransRet,
+    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
 };
 use crate::c;
 use crate::check::SnapshotsSeen;
@@ -151,20 +151,20 @@ fn check_nlinks_walk_dirents(
     bch_err_fn!(fs, ret)
 }
 
-fn check_nlinks_update_inode<'a, 't>(
-    t:         TransAttempt<'a, 't>,
+fn check_nlinks_update_inode(
+    t:         &TransAttempt<'_, '_>,
     k:         BkeySC<'_>,
     links:     &[Nlink],
     idx:       &mut usize,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     if !inode::bkey_is_inode(k.k) {
-        return Ok(t);
+        return Ok(());
     }
 
     let mut u = inode::unpack(t.fs(), k);
 
     if is_dir(&u) || u.bi_nlink == 0 {
-        return Ok(t);
+        return Ok(());
     }
 
     // Every inode that got here is in the table - the first pass collected
@@ -178,14 +178,14 @@ fn check_nlinks_update_inode<'a, 't>(
     let nlink = u.nlink();
     let unlinked = u.bi_flags & c::bch_inode_flags::BCH_INODE_unlinked as u32 != 0;
 
-    if fsck_err_on!(&t, nlink != link.count || (unlinked && u.bi_nlink != 0),
+    if fsck_err_on!(t, nlink != link.count || (unlinked && u.bi_nlink != 0),
                     id::inode_wrong_nlink,
                     "inode has wrong i_nlink ({}, should be {})\n{}", nlink, link.count, u)? {
         u.set_nlink(link.count);
         return inode::fsck_write(t, &mut u);
     }
 
-    Ok(t)
+    Ok(())
 }
 
 fn check_nlinks_update_hardlinks(

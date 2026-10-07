@@ -3,7 +3,7 @@
 use crate::btree::bkey::{spos, BkeySC};
 use crate::btree::iter::{
     bkey_s_c_to_result, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
-    TransRet, UpdateTriggerFlags,
+    UpdateTriggerFlags,
 };
 use crate::c;
 use crate::check::{self, SnapshotsSeen};
@@ -75,9 +75,9 @@ impl PartialEq for c::bch_hash_info {
 /// @iter_flags. None if it was inserted (queued), else the key that was
 /// there, through @iter.
 #[allow(clippy::too_many_arguments)]
-pub fn set_or_get_in_snapshot<'i, T: HashTable>(
-    trans:        &BtreeTrans<'_>,
-    iter:         &'i mut BtreeIter<'_>,
+pub fn set_or_get_in_snapshot<'i, 't, T: HashTable>(
+    t:            &'i TransAttempt<'_, 't>,
+    iter:         &'i mut BtreeIter<'t>,
     hash_info:    &c::bch_hash_info,
     inum:         c::subvol_inum,
     snapshot:     u32,
@@ -87,7 +87,7 @@ pub fn set_or_get_in_snapshot<'i, T: HashTable>(
 ) -> Result<Option<BkeySC<'i>>, BchError> {
     let flags = iter_flags.bits() | update_flags.bits();
     unsafe {
-        let k = c::bch2_hash_set_or_get_in_snapshot(trans.raw(), iter.raw_mut(), *T::desc(),
+        let k = c::bch2_hash_set_or_get_in_snapshot(t.raw(), iter.raw_mut(), *T::desc(),
                                                     hash_info, inum, snapshot, insert,
                                                     c::btree_iter_update_trigger_flags(flags));
         bkey_s_c_to_result(k)
@@ -118,9 +118,9 @@ impl fmt::Display for StrHashType {
 /// Look up @key in hash table @T, in inode @inum as seen in @snapshot: as
 /// bch2_hash_lookup_in_snapshot(). The key found, through @iter; ENOENT if
 /// there is none.
-pub fn lookup_in_snapshot<'i, T: HashTable>(
-    trans:     &BtreeTrans<'_>,
-    iter:      &'i mut BtreeIter<'_>,
+pub fn lookup_in_snapshot<'i, 't, T: HashTable>(
+    t:         &'i TransAttempt<'_, 't>,
+    iter:      &'i mut BtreeIter<'t>,
     hash_info: &c::bch_hash_info,
     inum:      c::subvol_inum,
     key:       &T::Key,
@@ -128,7 +128,7 @@ pub fn lookup_in_snapshot<'i, T: HashTable>(
     snapshot:  u32,
 ) -> Result<BkeySC<'i>, BchError> {
     let k = unsafe {
-        let k = c::bch2_hash_lookup_in_snapshot(trans.raw(), iter.raw_mut(), *T::desc(), hash_info,
+        let k = c::bch2_hash_lookup_in_snapshot(t.raw(), iter.raw_mut(), *T::desc(), hash_info,
                                                 inum, key as *const T::Key as *const c_void,
                                                 c::btree_iter_update_trigger_flags(flags.bits()),
                                                 snapshot);
@@ -150,14 +150,14 @@ pub fn hash_info_init(
 
 /// Delete the key at @iter from hash table @T, leaving a whiteout if a later
 /// key in the same probe sequence needs one: as bch2_hash_delete_at().
-pub fn delete_at<T: HashTable>(
-    trans:     &BtreeTrans<'_>,
+pub fn delete_at<'t, T: HashTable>(
+    t:         &TransAttempt<'_, 't>,
     hash_info: &c::bch_hash_info,
-    iter:      &mut BtreeIter<'_>,
+    iter:      &mut BtreeIter<'t>,
     flags:     UpdateTriggerFlags,
 ) -> Result<(), BchError> {
     ret_to_result(unsafe {
-        c::bch2_hash_delete_at(trans.raw(), *T::desc(), hash_info, iter.raw_mut(),
+        c::bch2_hash_delete_at(t.raw(), *T::desc(), hash_info, iter.raw_mut(),
                                c::btree_iter_update_trigger_flags(flags.bits()))
     })
 }
@@ -213,11 +213,11 @@ pub fn check_key<T: HashTable>(
 
 /// Every version of an inode has the same hash seed and type: make
 /// @bad_inode's match @snapshot_root's.
-pub fn repair_inode_hash_info<'a, 't>(
-    t:             TransAttempt<'a, 't>,
+pub fn repair_inode_hash_info(
+    t:             &TransAttempt<'_, '_>,
     bad_inode:     &mut c::bch_inode_unpacked,
     snapshot_root: &c::bch_inode_unpacked,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let trans = t.trans();
 
     assert_eq!(bad_inode.bi_inum, snapshot_root.bi_inum);
@@ -230,26 +230,26 @@ pub fn repair_inode_hash_info<'a, 't>(
                   StrHashType(bad_inode.str_hash()), bad_inode.bi_hash_seed,
                   StrHashType(snapshot_root.str_hash()), snapshot_root.bi_hash_seed,
                   bad_inode.bi_snapshot)? {
-        return Ok(t);
+        return Ok(());
     }
 
     bad_inode.bi_hash_seed = snapshot_root.bi_hash_seed;
     bad_inode.set_str_hash(snapshot_root.str_hash());
 
-    let t = inode::fsck_write(t, bad_inode)?;
+    inode::fsck_write(t, bad_inode)?;
     t.commit_lazy(CommitFlags::NO_ENOSPC)
 }
 
 /// Whether dirent @d points at something that exists, as seen from its
 /// snapshot: a subvolume, or an inode.
-fn dirent_has_target(trans: &BtreeTrans<'_>, d: BkeySC<'_>) -> Result<bool, BchError> {
+fn dirent_has_target(t: &TransAttempt<'_, '_>, d: BkeySC<'_>) -> Result<bool, BchError> {
     match d.as_dirent().expect("a dirent").target() {
         DirentTarget::Subvol { child, .. } =>
-            Ok(subvolume::get(trans, child, false).found()?.is_some()),
+            Ok(subvolume::get(t, child, false).found()?.is_some()),
         DirentTarget::Inode(inum) => {
-            let mut iter = BtreeIter::new(trans, c::btree_id::inodes,
+            let mut iter = BtreeIter::new(t, c::btree_id::inodes,
                                           spos(0, inum, d.k.p.snapshot), BtreeIterFlags::empty());
-            Ok(inode::bkey_is_inode(iter.peek_slot()?.expect("a slot always has a key").k))
+            Ok(inode::bkey_is_inode(iter.peek_slot(t)?.expect("a slot always has a key").k))
         }
     }
 }
@@ -263,7 +263,7 @@ enum DupResolution {
     RenameK,
 }
 
-fn hash_pick_winner<T: HashTable>(trans: &BtreeTrans<'_>, k: BkeySC<'_>, dup: BkeySC<'_>)
+fn hash_pick_winner<T: HashTable>(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, dup: BkeySC<'_>)
     -> Result<DupResolution, BchError>
 {
     use DupResolution::*;
@@ -274,9 +274,9 @@ fn hash_pick_winner<T: HashTable>(trans: &BtreeTrans<'_>, k: BkeySC<'_>, dup: Bk
     } else if k.k.p.snapshot != dup.k.p.snapshot {
         // Delete the older key from the newer snapshot
         if k.k.p.snapshot < dup.k.p.snapshot { DeleteDup } else { DeleteK }
-    } else if T::desc().btree_id != c::btree_id::dirents || !dirent_has_target(trans, k)? {
+    } else if T::desc().btree_id != c::btree_id::dirents || !dirent_has_target(t, k)? {
         DeleteK
-    } else if !dirent_has_target(trans, dup)? {
+    } else if !dirent_has_target(t, dup)? {
         DeleteDup
     } else {
         RenameK
@@ -302,14 +302,14 @@ enum Seen<'r> {
 }
 
 impl Seen<'_> {
-    fn get(&mut self, trans: &BtreeTrans<'_>, btree: c::btree_id, pos: c::bpos)
+    fn get(&mut self, t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
         -> Result<&mut SnapshotsSeen, BchError>
     {
         match self {
             Seen::Walk(s) => Ok(s),
             Seen::Lazy(s) => {
                 if s.is_none() {
-                    *s = Some(SnapshotsSeen::overwrites(trans, btree, pos)?);
+                    *s = Some(SnapshotsSeen::overwrites(t, btree, pos)?);
                 }
                 Ok(s.as_mut().expect("just computed"))
             }
@@ -327,19 +327,19 @@ struct Repair<'r> {
 
 impl Repair<'_> {
     /// @new, at @pos, may be a dirent that moved: point its inodes at it.
-    fn update_backpointers<'a, 't, T: HashTable>(
+    fn update_backpointers<T: HashTable>(
         &mut self,
-        t:   TransAttempt<'a, 't>,
+        t:   &TransAttempt<'_, '_>,
         pos: c::bpos,
         new: &c::bkey_i,
-    ) -> TransRet<'a, 't> {
-        let s = self.s.get(t.trans(), T::desc().btree_id, pos)?;
+    ) -> Result<(), BchError> {
+        let s = self.s.get(t, T::desc().btree_id, pos)?;
         check::fsck_update_backpointers(t, s, new)
     }
 
     /// All versions of an inode must have the same hash seed and type: check
     /// the hash info in use is the snapshot root's, before repairing with it.
-    fn check_hash_info<'a, 't>(&mut self, t: TransAttempt<'a, 't>, inum: u64) -> TransRet<'a, 't> {
+    fn check_hash_info(&mut self, t: &TransAttempt<'_, '_>, inum: u64) -> Result<(), BchError> {
         let trans = t.trans();
         let fs = trans.fs();
         let hash_info = &*self.hash_info;
@@ -348,7 +348,7 @@ impl Repair<'_> {
         let hash_root = hash_info_init_unchecked(fs, &snapshot_root);
 
         if hash_info.type_ == hash_root.type_ && hash_info.siphash_key == hash_root.siphash_key {
-            return Ok(t);
+            return Ok(());
         }
 
         let mut bad_inode = inode::find_by_inum_snapshot(trans, inum, hash_info.inum_snapshot,
@@ -362,15 +362,14 @@ impl Repair<'_> {
     /// Give dirent @old a new name, "<name>.fsck_renamed-<n>", in the same
     /// directory and snapshot - to keep both of two valid dirents with the
     /// same name.
-    fn rename_dirent<'a, 't>(&mut self, t: TransAttempt<'a, 't>, old: BkeySC<'_>)
-        -> TransRet<'a, 't>
+    fn rename_dirent(&mut self, t: &TransAttempt<'_, '_>, old: BkeySC<'_>)
+        -> Result<(), BchError>
     {
-        let trans = t.trans();
-        let fs = trans.fs();
+        let fs = t.fs();
         let old_name = dirent::name(old);
         let dir = c::subvol_inum { subvol: 0, inum: old.k.p.inode };
 
-        let mut new = dirent::alloc_max(&t, old.k.p)?;
+        let mut new = dirent::alloc_max(t, old.k.p)?;
         dirent::copy_target(&mut new, old);
 
         // dirents already at each fsck_renamed-N name, gathered for diagnosis
@@ -385,7 +384,7 @@ impl Repair<'_> {
             dirent::init_name(fs, &mut new, self.hash_info, name.as_bytes())?;
 
             let mut iter = BtreeIter::uninit();
-            match set_or_get_in_snapshot::<Dirents>(trans, &mut iter, self.hash_info, dir,
+            match set_or_get_in_snapshot::<Dirents>(t, &mut iter, self.hash_info, dir,
                                                     old.k.p.snapshot, new.k_i_mut(),
                                                     BtreeIterFlags::STR_HASH_MUST_CREATE,
                                                     UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)? {
@@ -413,28 +412,27 @@ impl Repair<'_> {
 
     /// @k and @dup, ahead of it in its probe sequence, have the same name:
     /// delete one, or rename @k out of the way.
-    fn dup_entries<'a, 't, T: HashTable>(
+    fn dup_entries<T: HashTable>(
         &mut self,
-        t:   TransAttempt<'a, 't>,
+        t:   &TransAttempt<'_, '_>,
         k:   BkeySC<'_>,
         dup: BkeySC<'_>,
-    ) -> TransRet<'a, 't> {
+    ) -> Result<(), BchError> {
         let trans = t.trans();
         let fs = trans.fs();
-        let mut t = t;
 
-        let res = hash_pick_winner::<T>(trans, k, dup)?;
+        let res = hash_pick_winner::<T>(t, k, dup)?;
         let rename = matches!(res, DupResolution::RenameK);
 
         if !inode_fsck_err!(trans, k.k.p, id::hash_table_key_duplicate,
                             "duplicate hash table keys{}\n{}\n{}",
                             if rename { ", both point to valid inodes" } else { "" },
                             k.to_text(fs), dup.to_text(fs))? {
-            return Ok(t);
+            return Ok(());
         }
 
         if rename {
-            t = self.rename_dirent(t, k)?;
+            self.rename_dirent(t, k)?;
         }
 
         // @dup was found by a lookup from @k's snapshot, so if they're in
@@ -446,20 +444,20 @@ impl Repair<'_> {
         let mut iter = BtreeIter::new(trans, T::desc().btree_id,
                                       spos(loser.inode, loser.offset, k.k.p.snapshot),
                                       BtreeIterFlags::SLOTS);
-        t = t.iter_traverse(&mut iter)?;
-        delete_at::<T>(trans, self.hash_info, &mut iter, UpdateTriggerFlags::empty())?;
+        t.iter_traverse(&mut iter)?;
+        delete_at::<T>(t, self.hash_info, &mut iter, UpdateTriggerFlags::empty())?;
         t.commit_lazy(CommitFlags::NO_ENOSPC)
     }
 
     /// Put @k in its proper location - unless a key of the same name is
     /// there, or with @dup, already known to be ahead of it: then resolve the
     /// duplicate.
-    fn repair_key<'a, 't, T: HashTable>(
+    fn repair_key<T: HashTable>(
         &mut self,
-        t:   TransAttempt<'a, 't>,
+        t:   &TransAttempt<'_, '_>,
         k:   BkeySC<'_>,
         dup: Option<BkeySC<'_>>,
-    ) -> TransRet<'a, 't> {
+    ) -> Result<(), BchError> {
         let trans = t.trans();
         let btree = T::desc().btree_id;
 
@@ -471,7 +469,7 @@ impl Repair<'_> {
         let mut iter = BtreeIter::uninit();
         let dir = c::subvol_inum { subvol: 0, inum: k.k.p.inode };
 
-        if let Some(dup) = set_or_get_in_snapshot::<T>(trans, &mut iter, self.hash_info, dir,
+        if let Some(dup) = set_or_get_in_snapshot::<T>(t, &mut iter, self.hash_info, dir,
                                                        k.k.p.snapshot, new.k_i_mut(),
                                                        BtreeIterFlags::STR_HASH_MUST_CREATE,
                                                        UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)? {
@@ -480,36 +478,36 @@ impl Repair<'_> {
 
         *self.updated_before_k_pos |= new.k().p < k.k.p;
 
-        let mut t = t.insert_snapshot_whiteouts(btree, k.k.p, new.k().p)?;
+        t.insert_snapshot_whiteouts(btree, k.k.p, new.k().p)?;
 
         let mut k_iter = BtreeIter::new(trans, btree, k.k.p, BtreeIterFlags::SLOTS);
-        t = t.iter_traverse(&mut k_iter)?;
-        delete_at::<T>(trans, self.hash_info, &mut k_iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+        t.iter_traverse(&mut k_iter)?;
+        delete_at::<T>(t, self.hash_info, &mut k_iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
-        t = self.update_backpointers::<T>(t, k.k.p, new.k_i())?;
+        self.update_backpointers::<T>(t, k.k.p, new.k_i())?;
         t.commit_lazy(CommitFlags::NO_ENOSPC)
     }
 
     /// @k can't be found by lookup - it's before the slot @hash it hashes
     /// to, or there's a hole in between: move it.
-    fn bad_hash<'a, 't, T: HashTable>(&mut self, t: TransAttempt<'a, 't>, k: BkeySC<'_>, hash: u64)
-        -> TransRet<'a, 't>
+    fn bad_hash<T: HashTable>(&mut self, t: &TransAttempt<'_, '_>, k: BkeySC<'_>, hash: u64)
+        -> Result<(), BchError>
     {
         let trans = t.trans();
-        let t = self.check_hash_info(t, k.k.p.inode)?;
+        self.check_hash_info(t, k.k.p.inode)?;
 
         if fsck_err!(trans, id::hash_table_key_wrong_offset,
                      "hash table key at wrong offset: should be at {hash}\n{}",
                      k.to_text(trans.fs()))? {
             return self.repair_key::<T>(t, k, None);
         }
-        Ok(t)
+        Ok(())
     }
 
     /// A dirent's casefolding has to match its directory's: if it doesn't,
     /// recreate it with the directory's, and return str_hash_key_repaired - @k
     /// is gone.
-    fn check_dirent<'a, 't>(&mut self, t: TransAttempt<'a, 't>, k: BkeySC<'_>) -> TransRet<'a, 't> {
+    fn check_dirent(&mut self, t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchError> {
         let trans = t.trans();
         let fs = trans.fs();
         let d = k.as_dirent().expect("a dirent");
@@ -517,7 +515,7 @@ impl Repair<'_> {
         if !fsck_err_on!(trans, (d.d_casefold() != 0) != !self.hash_info.cf_encoding.is_null(),
                          id::dirent_casefold_mismatch,
                          "dirent casefold does not match dir casefold\n{}", k.to_text(fs))? {
-            return Ok(t);
+            return Ok(());
         }
 
         let (dir, target) = match d.target() {
@@ -527,13 +525,13 @@ impl Repair<'_> {
                 (c::subvol_inum { subvol: 0, inum: 0 }, inum),
         };
 
-        let mut new = dirent::create_key(&t, self.hash_info, dir, d.d_type(), dirent::name(k),
+        let mut new = dirent::create_key(t, self.hash_info, dir, d.d_type(), dirent::name(k),
                                          target)?;
         new.k_mut().p.inode    = k.k.p.inode;
         new.k_mut().p.snapshot = k.k.p.snapshot;
 
         let mut iter = BtreeIter::new(trans, c::btree_id::dirents, k.k.p, BtreeIterFlags::SLOTS);
-        delete_at::<Dirents>(trans, self.hash_info, &mut iter,
+        delete_at::<Dirents>(t, self.hash_info, &mut iter,
                              UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
         self.repair_key::<Dirents>(t, BkeySC::from(new.k_i()), None)?;
@@ -542,12 +540,11 @@ impl Repair<'_> {
 
     /// The rest of check_key(), for a key not at the offset it hashes to:
     /// walk its probe sequence for an empty slot or a duplicate.
-    fn check_key<'a, 't, T: HashTable>(&mut self, t: TransAttempt<'a, 't>, hash_k: BkeySC<'_>)
-        -> TransRet<'a, 't>
+    fn check_key<T: HashTable>(&mut self, t: &TransAttempt<'_, '_>, hash_k: BkeySC<'_>)
+        -> Result<(), BchError>
     {
         let trans = t.trans();
         let desc = T::desc();
-        let mut t = t;
 
         let hash = T::hash_bkey(self.hash_info, hash_k);
         if hash_k.k.p.offset < hash {
@@ -558,7 +555,7 @@ impl Repair<'_> {
         let mut iter = BtreeIter::new(trans, desc.btree_id,
                                       spos(hash_k.k.p.inode, hash, hash_k.k.p.snapshot),
                                       BtreeIterFlags::SLOTS);
-        iter.for_each_norestart(|_, k| {
+        iter.for_each_norestart(t, |_, k| {
             if k.k.p == hash_k.k.p {
                 return Ok(ControlFlow::Break(()));
             }
@@ -577,18 +574,18 @@ impl Repair<'_> {
             ProbeFound::Itself => {}
             ProbeFound::Hole => return self.bad_hash::<T>(t, hash_k, hash),
             ProbeFound::Dup(pos) => {
-                t = self.check_hash_info(t, hash_k.k.p.inode)?;
+                self.check_hash_info(t, hash_k.k.p.inode)?;
 
                 iter.set_pos(pos);
-                let dup = iter.peek_slot()?.expect("a slot always has a key");
-                t = self.repair_key::<T>(t, hash_k, Some(dup))?;
+                let dup = iter.peek_slot(t)?.expect("a slot always has a key");
+                self.repair_key::<T>(t, hash_k, Some(dup))?;
             }
         }
 
         if hash_k.key_type() == c::bch_bkey_type::KEY_TYPE_dirent {
-            t = self.check_dirent(t, hash_k)?;
+            self.check_dirent(t, hash_k)?;
         }
-        Ok(t)
+        Ok(())
     }
 }
 
@@ -608,8 +605,7 @@ pub unsafe extern "C" fn __bch2_str_hash_check_key(
     hash_k:               c::bkey_s_c,
     updated_before_k_pos: &mut bool,
 ) -> c_int {
-    let fs = unsafe { Fs::borrow_raw((*trans).c) };
-    let trans = unsafe { BtreeTrans::borrow_raw(&fs, trans) };
+    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
     let t = trans.attempt_in_progress();
     let k = BkeySC::from(&hash_k);
 
@@ -620,15 +616,15 @@ pub unsafe extern "C" fn __bch2_str_hash_check_key(
     let mut r = Repair { s, hash_info, updated_before_k_pos };
 
     let ret = if core::ptr::eq(desc, Dirents::desc()) {
-        r.check_key::<Dirents>(t, k)
+        r.check_key::<Dirents>(&t, k)
     } else if core::ptr::eq(desc, Xattrs::desc()) {
-        r.check_key::<Xattrs>(t, k)
+        r.check_key::<Xattrs>(&t, k)
     } else {
         unreachable!("no hash table in btree {}", desc.btree_id as u32)
     };
 
     match ret {
-        Ok(_)  => 0,
-        Err(e) => -BchError::from(e).raw(),
+        Ok(())  => 0,
+        Err(e) => -e.raw(),
     }
 }

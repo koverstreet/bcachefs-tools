@@ -1,5 +1,6 @@
 use crate::btree::bkey::{BkeyS, BkeySC, BkeyValSC};
-use crate::btree::iter::{BtreeIter, TransAttempt, TransRet};
+use crate::btree::iter::{BtreeIter, TransAttempt};
+use crate::errcode::BchError;
 use crate::c;
 use crate::fs::Fs;
 use core::marker::PhantomData;
@@ -281,10 +282,10 @@ pub fn durability_safe(fs: &Fs, k: BkeySC<'_>) -> c::bkey_durability {
 /// Drop @k's stale cached pointers, updating it through @iter: as
 /// bch2_bkey_drop_stale_ptrs().
 pub fn drop_stale_ptrs<'a, 't>(
-    t:    TransAttempt<'a, 't>,
+    t:    &TransAttempt<'a, 't>,
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
-) -> TransRet<'a, 't> {
+) -> Result<(), BchError> {
     let ret = unsafe { c::bch2_bkey_drop_stale_ptrs(t.raw(), iter.raw(), k.to_raw()) };
     t.result(ret)
 }
