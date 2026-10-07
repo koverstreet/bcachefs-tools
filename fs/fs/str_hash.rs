@@ -14,6 +14,7 @@ use crate::init::error::id;
 use crate::inode;
 use crate::printbuf_to_formatter;
 use crate::snapshots::{snapshot, subvolume};
+use crate::util::os_str::OsStrExt;
 use crate::util::Printbuf;
 use crate::xattr::Xattrs;
 use crate::{bch_err, fsck_err, fsck_err_on, inode_fsck_err};
@@ -377,11 +378,11 @@ impl Repair<'_> {
 
         for i in 0..1000 {
             let mut name = Printbuf::new();
-            name.write_bytes(old_name);
+            name.write_bytes(old_name.as_bytes());
             write!(name, ".fsck_renamed-{i}");
 
             new.k_mut().u64s = u8::MAX;
-            dirent::init_name(fs, &mut new, self.hash_info, name.as_bytes())?;
+            dirent::init_name(fs, &mut new, self.hash_info, name.as_os_str())?;
 
             let mut iter = BtreeIter::uninit();
             match set_or_get_in_snapshot::<Dirents>(t, &mut iter, self.hash_info, dir,
@@ -400,7 +401,7 @@ impl Repair<'_> {
 
         let mut buf = Printbuf::new();
         write!(buf, "couldn't rename dirent to resolve hash collision: all 1000 \"");
-        buf.write_bytes(old_name);
+        buf.write_bytes(old_name.as_bytes());
         write!(buf, ".fsck_renamed-N\" names in dir inum {} snapshot {} are taken\n\
                      renaming:\n  {}\ncollided with:",
                { old.k.p.inode }, { old.k.p.snapshot }, old.to_text(fs));

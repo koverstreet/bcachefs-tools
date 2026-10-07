@@ -6,6 +6,7 @@ pub mod ffi;
 pub mod kernel;
 pub mod locking;
 pub mod log;
+pub mod os_str;
 pub mod printbuf;
 pub mod vstructs;
 

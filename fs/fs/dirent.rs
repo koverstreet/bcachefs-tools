@@ -10,6 +10,7 @@ use crate::errcode::{self, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::str_hash::HashTable;
 use crate::typeinfo::AccessError;
+use crate::util::os_str::{qstr, qstr_name, OsStr, OsStrExt};
 use core::fmt;
 use core::mem::size_of;
 
@@ -122,10 +123,10 @@ pub fn empty_dir_snapshot(
 }
 
 /// @k's name - @k a dirent: as bch2_dirent_get_name().
-pub fn name<'k>(k: BkeySC<'k>) -> &'k [u8] {
+pub fn name<'k>(k: BkeySC<'k>) -> &'k OsStr {
     let q = unsafe { c::bch2_dirent_get_name(k.to_c_dirent().expect("a dirent")) };
-    let len = unsafe { q.__bindgen_anon_1.__bindgen_anon_1.len } as usize;
-    if len == 0 { &[] } else { unsafe { core::slice::from_raw_parts(q.name, len) } }
+    // The name is in @k's value:
+    unsafe { qstr_name(&q) }
 }
 
 /// A dirent key at @pos with room for any name, to be filled in with
@@ -153,7 +154,7 @@ pub fn init_name(
     fs:        &Fs,
     new:       &mut TransBkey<'_, '_>,
     hash_info: &c::bch_hash_info,
-    name:      &[u8],
+    name:      &OsStr,
 ) -> Result<(), BchError> {
     let name = qstr(name);
     ret_to_result(unsafe {
@@ -227,7 +228,8 @@ fn set_name<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, val: &'p str) -> Result<(), 
 
     // Only cf_encoding is read, and NULL means not casefolded:
     let hash_info: c::bch_hash_info = unsafe { core::mem::zeroed() };
-    init_name(fs, k, &hash_info, val.as_bytes()).map_err(|_| SetError::BadName { val })
+    init_name(fs, k, &hash_info, OsStr::from_bytes(val.as_bytes()))
+        .map_err(|_| SetError::BadName { val })
 }
 
 /// Create dirent @name in directory @dir, in subvolume @subvol at @snapshot,
@@ -240,7 +242,7 @@ pub fn create_snapshot(
     snapshot:     u32,
     dir:          &mut c::bch_inode_unpacked,
     d_type:       u8,
-    name:         &[u8],
+    name:         &OsStr,
     target:       DirentTarget,
     dir_offset:   &mut u64,
     iter_flags:   BtreeIterFlags,
@@ -270,7 +272,7 @@ pub fn create_key<'a, 't>(
     hash_info: &c::bch_hash_info,
     dir:       c::subvol_inum,
     d_type:    u8,
-    name:      &[u8],
+    name:      &OsStr,
     target:    u64,
 ) -> Result<TransBkey<'a, 't>, BchError> {
     let name = qstr(name);
@@ -281,27 +283,15 @@ pub fn create_key<'a, 't>(
     }
 }
 
-pub fn qstr(name: &[u8]) -> c::qstr {
-    c::qstr {
-        __bindgen_anon_1: c::qstr__bindgen_ty_1 {
-            __bindgen_anon_1: c::qstr__bindgen_ty_1__bindgen_ty_1 {
-                hash: 0,
-                len:  name.len() as u32,
-            },
-        },
-        name: name.as_ptr(),
-    }
-}
-
 pub fn lookup(
     fs:        &Fs,
     dir_inum:  c::subvol_inum,
     hash_info: &c::bch_hash_info,
-    name:      &c::qstr,
+    name:      &OsStr,
 ) -> Result<c::subvol_inum, BchError> {
     let mut inum: c::subvol_inum = Default::default();
     let ret = unsafe {
-        c::bch2_dirent_lookup(fs.raw, dir_inum, hash_info, name, &mut inum)
+        c::bch2_dirent_lookup(fs.raw, dir_inum, hash_info, &qstr(name), &mut inum)
     };
     errcode::ret_to_result(ret as i32)?;
     Ok(inum)

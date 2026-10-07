@@ -6,6 +6,7 @@ use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::errcode::BchError;
 use crate::str_hash::HashTable;
+use crate::util::os_str::{qstr, OsStr};
 
 /// The xattrs btree, as a hash table.
 pub struct Xattrs;
@@ -19,8 +20,8 @@ impl HashTable for Xattrs {
 }
 
 /// What an xattr lookup searches for, a type and name: C's X_SEARCH().
-pub fn search_key(type_: u32, name: &[u8]) -> c::xattr_search_key {
-    c::xattr_search_key { type_: type_ as u8, name: crate::dirent::qstr(name) }
+pub fn search_key(type_: u32, name: &OsStr) -> c::xattr_search_key {
+    c::xattr_search_key { type_: type_ as u8, name: qstr(name) }
 }
 
 pub fn set(

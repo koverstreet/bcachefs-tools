@@ -5,6 +5,7 @@ use crate::c;
 use crate::check::SnapshotsSeen;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
+use crate::util::os_str::{qstr, OsStr};
 use crate::util::Printbuf;
 
 /// Check BCH_INODE_has_case_insensitive on @inode against the casefolded
@@ -54,10 +55,10 @@ pub fn link_trans<'a, 't>(
     dir:      &mut c::bch_inode_unpacked,
     inum:     c::subvol_inum,
     inode:    &mut c::bch_inode_unpacked,
-    name:     &c::qstr,
+    name:     &OsStr,
 ) -> Result<(), BchError> {
     let ret = unsafe {
-        c::bch2_link_trans(t.raw(), dir_inum, dir, inum, inode, name)
+        c::bch2_link_trans(t.raw(), dir_inum, dir, inum, inode, &qstr(name))
     };
     t.result(ret)
 }
@@ -68,11 +69,11 @@ pub fn unlink_trans<'a, 't>(
     dir:      &mut c::bch_inode_unpacked,
     target:   c::subvol_inum,
     inode:    &mut c::bch_inode_unpacked,
-    name:     &c::qstr,
+    name:     &OsStr,
     deleting: bool,
 ) -> Result<(), BchError> {
     let ret = unsafe {
-        c::bch2_unlink_trans(t.raw(), dir_inum, dir, target, inode, name, deleting)
+        c::bch2_unlink_trans(t.raw(), dir_inum, dir, target, inode, &qstr(name), deleting)
     };
     t.result(ret)
 }
@@ -87,8 +88,8 @@ pub fn rename_trans<'a, 't>(
     dst_dir_u:      &mut c::bch_inode_unpacked,
     src_inode_u:    &mut c::bch_inode_unpacked,
     dst_inode_u:    &mut c::bch_inode_unpacked,
-    src_name:       &c::qstr,
-    dst_name:       &c::qstr,
+    src_name:       &OsStr,
+    dst_name:       &OsStr,
     mode:           c::bch_rename_mode,
     src_opt_change: &mut c::inode_opt_change,
     dst_opt_change: &mut c::inode_opt_change,
@@ -102,8 +103,8 @@ pub fn rename_trans<'a, 't>(
             dst_dir_u,
             src_inode_u,
             dst_inode_u,
-            src_name,
-            dst_name,
+            &qstr(src_name),
+            &qstr(dst_name),
             mode,
             src_opt_change,
             dst_opt_change,
@@ -130,7 +131,7 @@ pub fn create_trans<'a, 't>(
     dir:          &mut c::bch_inode_unpacked,
     inode:        &mut c::bch_inode_unpacked,
     subvol:       &mut c::bch_subvolume,
-    name:         &c::qstr,
+    name:         &OsStr,
     uid:          c::uid_t,
     gid:          c::gid_t,
     mode:         c::umode_t,
@@ -145,7 +146,7 @@ pub fn create_trans<'a, 't>(
             dir,
             inode,
             subvol,
-            name,
+            &qstr(name),
             uid,
             gid,
             mode,

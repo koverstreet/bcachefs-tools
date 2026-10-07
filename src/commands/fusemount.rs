@@ -235,11 +235,10 @@ fn fuse_create_inode(
     fs:    &Fs,
     req:   &Request,
     dir:   c::subvol_inum,
-    name:  &[u8],
+    name:  &OsStr,
     mode:  u16,
     rdev:  u64,
 ) -> Result<c::bch_inode_unpacked, BchError> {
-    let qstr = dirent::qstr(name);
     let mut dir_u: c::bch_inode_unpacked = Default::default();
     let mut inode: c::bch_inode_unpacked = Default::default();
     let mut subvol: c::bch_subvolume = Default::default();
@@ -257,7 +256,7 @@ fn fuse_create_inode(
                 &mut dir_u,
                 &mut inode,
                 &mut subvol,
-                &qstr,
+                name,
                 req.uid(),
                 req.gid(),
                 mode,
@@ -272,8 +271,7 @@ fn fuse_create_inode(
 }
 
 /// Returns the inode as the unlink left it.
-fn fuse_unlink(fs: &Fs, dir: c::subvol_inum, name: &[u8]) -> Result<c::bch_inode_unpacked, BchError> {
-    let qstr = dirent::qstr(name);
+fn fuse_unlink(fs: &Fs, dir: c::subvol_inum, name: &OsStr) -> Result<c::bch_inode_unpacked, BchError> {
     let mut dir_u: c::bch_inode_unpacked = Default::default();
     let mut inode: c::bch_inode_unpacked = Default::default();
 
@@ -288,7 +286,7 @@ fn fuse_unlink(fs: &Fs, dir: c::subvol_inum, name: &[u8]) -> Result<c::bch_inode
                 &mut dir_u,
                 c::subvol_inum::default(),
                 &mut inode,
-                &qstr,
+                name,
                 false,
             )
         },
@@ -300,9 +298,8 @@ fn fuse_link(
     fs:        &Fs,
     inum:      c::subvol_inum,
     newparent: c::subvol_inum,
-    name:      &[u8],
+    name:      &OsStr,
 ) -> Result<c::bch_inode_unpacked, BchError> {
-    let qstr = dirent::qstr(name);
     let mut dir_u: c::bch_inode_unpacked = Default::default();
     let mut inode: c::bch_inode_unpacked = Default::default();
 
@@ -310,18 +307,17 @@ fn fuse_link(
         fs,
         None,
         CommitFlags::empty(),
-        |t| namei::link_trans(t, newparent, &mut dir_u, inum, &mut inode, &qstr),
+        |t| namei::link_trans(t, newparent, &mut dir_u, inum, &mut inode, name),
     )?;
 
     Ok(inode)
 }
 
 /// Whether @name exists in @dir.
-fn dirent_exists(fs: &Fs, dir: c::subvol_inum, name: &[u8]) -> Result<bool, BchError> {
-    let qstr = dirent::qstr(name);
+fn dirent_exists(fs: &Fs, dir: c::subvol_inum, name: &OsStr) -> Result<bool, BchError> {
     let lookup = inode::find_by_inum(fs, dir)
         .and_then(|dir_u| str_hash::hash_info_init(fs, &dir_u))
-        .and_then(|hash_info| dirent::lookup(fs, dir, &hash_info, &qstr));
+        .and_then(|hash_info| dirent::lookup(fs, dir, &hash_info, name));
 
     match lookup {
         Ok(_) => Ok(true),
@@ -335,13 +331,11 @@ fn dirent_exists(fs: &Fs, dir: c::subvol_inum, name: &[u8]) -> Result<bool, BchE
 fn fuse_rename(
     fs:       &Fs,
     src_dir:  c::subvol_inum,
-    src_name: &[u8],
+    src_name: &OsStr,
     dst_dir:  c::subvol_inum,
-    dst_name: &[u8],
+    dst_name: &OsStr,
     mode:     c::bch_rename_mode,
 ) -> Result<c::bch_inode_unpacked, BchError> {
-    let src_qstr = dirent::qstr(src_name);
-    let dst_qstr = dirent::qstr(dst_name);
     let mut src_dir_u: c::bch_inode_unpacked = Default::default();
     let mut dst_dir_u: c::bch_inode_unpacked = Default::default();
     let mut src_inode_u: c::bch_inode_unpacked = Default::default();
@@ -362,8 +356,8 @@ fn fuse_rename(
                 &mut dst_dir_u,
                 &mut src_inode_u,
                 &mut dst_inode_u,
-                &src_qstr,
-                &dst_qstr,
+                src_name,
+                dst_name,
                 mode,
                 &mut src_opt_change,
                 &mut dst_opt_change,
@@ -968,7 +962,6 @@ impl Filesystem for BcachefsFs {
         eprintln!("fuse_lookup(dir={}, name={:?})", dir.inum, name);
 
         let fs = self.fs();
-        let qstr = dirent::qstr(name_bytes);
         let lookup = match name_bytes {
             // Only sent to resolve a file handle (FUSE_EXPORT_SUPPORT, see
             // init()); there are no dirents for them. The parent is
@@ -988,7 +981,7 @@ impl Filesystem for BcachefsFs {
             }),
             _ => inode::find_by_inum(&fs, dir)
                 .and_then(|dir_u| str_hash::hash_info_init(&fs, &dir_u))
-                .and_then(|hash_info| dirent::lookup(&fs, dir, &hash_info, &qstr))
+                .and_then(|hash_info| dirent::lookup(&fs, dir, &hash_info, name))
                 .and_then(|inum| inode::find_by_inum(&fs, inum).map(|bi| (inum, bi))),
         };
 
@@ -1156,11 +1149,10 @@ impl Filesystem for BcachefsFs {
     ) {
         ensure_thread_init();
         let dir = resolve!(self, parent, reply);
-        let name_bytes = name.as_bytes();
         eprintln!("fuse_mknod(dir={}, name={:?}, mode={:#o})", dir.inum, name, mode);
 
         let fs = self.fs();
-        let new_inode = match fuse_create_inode(&fs, req, dir, name_bytes, mode as u16, rdev as u64) {
+        let new_inode = match fuse_create_inode(&fs, req, dir, name, mode as u16, rdev as u64) {
             Ok(inode) => inode,
             Err(e)    => { reply.error(bch_err(&e)); return; }
         };
@@ -1186,11 +1178,10 @@ impl Filesystem for BcachefsFs {
     fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
         ensure_thread_init();
         let dir = resolve!(self, parent, reply);
-        let name_bytes = name.as_bytes();
         eprintln!("fuse_unlink(dir={}, name={:?})", dir.inum, name);
 
         let fs = self.fs();
-        match fuse_unlink(&fs, dir, name_bytes) {
+        match fuse_unlink(&fs, dir, name) {
             Ok(bi) => {
                 self.inode_unlinked(c::subvol_inum { subvol: dir.subvol, inum: bi.bi_inum }, &bi);
                 reply.ok()
@@ -1214,13 +1205,12 @@ impl Filesystem for BcachefsFs {
     ) {
         ensure_thread_init();
         let dir = resolve!(self, parent, reply);
-        let name_bytes = name.as_bytes();
         let link_bytes = link.as_os_str().as_bytes();
         eprintln!("fuse_symlink(dir={}, name={:?}, link={:?})", dir.inum, name, link);
 
         // Create the symlink inode
         let fs = self.fs();
-        let new_inode = match fuse_create_inode(&fs, req, dir, name_bytes, (S_IFLNK | 0o777) as u16, 0) {
+        let new_inode = match fuse_create_inode(&fs, req, dir, name, (S_IFLNK | 0o777) as u16, 0) {
             Ok(inode) => inode,
             Err(e)    => { reply.error(bch_err(&e)); return; }
         };
@@ -1268,8 +1258,6 @@ impl Filesystem for BcachefsFs {
         ensure_thread_init();
         let src_dir = resolve!(self, parent, reply);
         let dst_dir = resolve!(self, newparent, reply);
-        let src_bytes = name.as_bytes();
-        let dst_bytes = newname.as_bytes();
         eprintln!("fuse_rename(src_dir={}, {:?} -> dst_dir={}, {:?}, flags={})",
                src_dir.inum, name, dst_dir.inum, newname, flags);
 
@@ -1291,7 +1279,7 @@ impl Filesystem for BcachefsFs {
         // name with it inserts a second dirent of that name. The kernel holds
         // both directories locked for the whole request, so the target can't
         // appear or vanish between this lookup and the rename.
-        let dst_exists = match dirent_exists(&fs, dst_dir, dst_bytes) {
+        let dst_exists = match dirent_exists(&fs, dst_dir, newname) {
             Ok(v)  => v,
             Err(e) => { reply.error(bch_err(&e)); return; }
         };
@@ -1312,7 +1300,7 @@ impl Filesystem for BcachefsFs {
             c::bch_rename_mode::BCH_RENAME
         };
 
-        match fuse_rename(&fs, src_dir, src_bytes, dst_dir, dst_bytes, mode) {
+        match fuse_rename(&fs, src_dir, name, dst_dir, newname, mode) {
             Ok(dst_bi) => {
                 if mode == c::bch_rename_mode::BCH_RENAME_OVERWRITE {
                     self.inode_unlinked(c::subvol_inum { subvol: dst_dir.subvol, inum: dst_bi.bi_inum },
@@ -1335,7 +1323,6 @@ impl Filesystem for BcachefsFs {
         ensure_thread_init();
         let src_inum = resolve!(self, ino, reply);
         let parent = resolve!(self, newparent, reply);
-        let name_bytes = newname.as_bytes();
         eprintln!("fuse_link(ino={}, newparent={}, name={:?})",
                src_inum.inum, parent.inum, newname);
 
@@ -1346,7 +1333,7 @@ impl Filesystem for BcachefsFs {
         }
 
         let fs = self.fs();
-        let inode_u = match fuse_link(&fs, src_inum, parent, name_bytes) {
+        let inode_u = match fuse_link(&fs, src_inum, parent, newname) {
             Ok(inode) => inode,
             Err(e)    => { reply.error(bch_err(&e)); return; }
         };
@@ -1762,11 +1749,10 @@ impl Filesystem for BcachefsFs {
     ) {
         ensure_thread_init();
         let dir = resolve!(self, parent, reply);
-        let name_bytes = name.as_bytes();
         eprintln!("fuse_create(dir={}, name={:?}, mode={:#o})", dir.inum, name, mode);
 
         let fs = self.fs();
-        let new_inode = match fuse_create_inode(&fs, req, dir, name_bytes, mode as u16, 0) {
+        let new_inode = match fuse_create_inode(&fs, req, dir, name, mode as u16, 0) {
             Ok(inode) => inode,
             Err(e)    => {
                 eprintln!("  create -> err {}", e);

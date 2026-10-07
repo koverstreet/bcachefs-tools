@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! C's buffers, as slices: for entry points C calls with a pointer and a
-//! size.
+//! size. (Names are os_str.rs's.)
 //!
 //! Each is unsafe the same way: the pointer has to be what C says it is, for
 //! as long as the slice is used - which the entry point's own contract

@@ -9,7 +9,8 @@
 // Converted from c_src/posix_to_bcachefs.c.
 
 use std::collections::HashMap;
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, OsStr};
+use std::os::unix::ffi::OsStrExt;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
 use bch_bindgen::fs::FsExt;
@@ -151,7 +152,7 @@ fn unlink_and_rm(
     dir: &mut c::bch_inode_unpacked,
     child_name: &CStr,
 ) -> Result<(), BchError> {
-    let qstr = dirent::qstr(child_name.to_bytes());
+    let child_name = OsStr::from_bytes(child_name.to_bytes());
     let mut child: c::bch_inode_unpacked = Default::default();
 
     btree::iter::trans_commit_do(
@@ -165,7 +166,7 @@ fn unlink_and_rm(
                 dir,
                 zeroed_subvol_inum(),
                 &mut child,
-                &qstr,
+                child_name,
                 false,
             )
         },
@@ -192,9 +193,9 @@ fn create_or_update_link(
 ) -> Result<(), BchError> {
     let dir_hash = str_hash::hash_info_init(fs, dir)?;
 
-    let qstr = dirent::qstr(name.to_bytes());
+    let os_name = OsStr::from_bytes(name.to_bytes());
 
-    match dirent::lookup(fs, dir_inum, &dir_hash, &qstr) {
+    match dirent::lookup(fs, dir_inum, &dir_hash, os_name) {
         Err(e) if e.matches(bch_errcode::BCH_ERR_ENOENT_str_hash_lookup) => {
             // Fall through to create
         }
@@ -214,7 +215,7 @@ fn create_or_update_link(
         fs,
         None,
         CommitFlags::empty(),
-        |t| namei::link_trans(t, dir_inum, &mut dir_u, inum, &mut inode, &qstr),
+        |t| namei::link_trans(t, dir_inum, &mut dir_u, inum, &mut inode, os_name),
     )
 }
 
@@ -231,8 +232,8 @@ fn create_or_update_file(
 ) -> Result<c::bch_inode_unpacked, BchError> {
     let dir_hash = str_hash::hash_info_init(fs, dir)?;
 
-    let qname = dirent::qstr(name.to_bytes());
-    let child_inum = dirent::lookup(fs, dir_inum, &dir_hash, &qname);
+    let name = OsStr::from_bytes(name.to_bytes());
+    let child_inum = dirent::lookup(fs, dir_inum, &dir_hash, name);
 
     let mut child_inode: c::bch_inode_unpacked = Default::default();
     let mut child_subvol : c::bch_subvolume = Default::default();
@@ -266,7 +267,7 @@ fn create_or_update_file(
                     dir,
                     &mut child_inode,
                     &mut child_subvol,
-                    &qname,
+                    name,
                     uid,
                     gid,
                     mode as _,

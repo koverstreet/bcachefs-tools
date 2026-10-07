@@ -4,6 +4,7 @@ use core::ops::{Deref, DerefMut};
 
 use crate::c;
 use crate::c::bpos as Bpos;
+use crate::util::os_str::{OsStr, OsStrExt};
 
 /// Rust wrapper around `c::printbuf` providing `fmt::Write` via
 /// `bch2_prt_bytes_indented`, which processes `\t`, `\r`, `\n` for
@@ -65,6 +66,11 @@ impl Printbuf {
         } else {
             unsafe { core::slice::from_raw_parts(self.0.buf as *const u8, self.0.pos as usize) }
         }
+    }
+
+    /// What's been written, as a name: for building one.
+    pub fn as_os_str(&self) -> &OsStr {
+        OsStr::from_bytes(self.as_bytes())
     }
 
     /// Add a tabstop at `spaces` columns from the previous tabstop.

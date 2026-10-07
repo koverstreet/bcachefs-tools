@@ -54,6 +54,7 @@ use crate::namei;
 use crate::snapshots::{snapshot, subvolume};
 use crate::str_hash;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+use crate::util::os_str::{qstr, OsStr, OsStrExt};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_info, bch_notice, bch_verbose};
 use core::mem::size_of;
@@ -78,7 +79,7 @@ fn lostfound_dirent(
     let fs = t.fs();
     let mut iter = BtreeIter::uninit();
     let Some(k) = str_hash::lookup_in_snapshot::<Dirents>(t, &mut iter, root_hash, root,
-                                                           &dirent::qstr(LOSTFOUND),
+                                                           &qstr(OsStr::from_bytes(LOSTFOUND)),
                                                            BtreeIterFlags::empty(), snapshot)
         .found()? else { return Ok(None) };
 
@@ -116,7 +117,8 @@ fn create_lostfound_dirent(
 ) -> Result<(), BchError> {
     let fs = t.trans().fs();
     let r = dirent::create_snapshot(t, root_inum.subvol as u32, snapshot, root_inode,
-                                    c::DT_DIR as u8, LOSTFOUND, DirentTarget::Inode(inum),
+                                    c::DT_DIR as u8, OsStr::from_bytes(LOSTFOUND),
+                                    DirentTarget::Inode(inum),
                                     dir_offset,
                                     CREATE.0, CREATE.1);
     match &r {
@@ -427,7 +429,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
         let existing = str_hash::lookup_in_snapshot::<Dirents>(
             t, &mut d_iter, &lostfound_hash,
             c::subvol_inum { subvol: inode.bi_parent_subvol as u64, inum: lostfound.bi_inum },
-            &dirent::qstr(probe.as_bytes()), BtreeIterFlags::empty(), dirent_snapshot).found()?;
+            &qstr(probe.as_os_str()), BtreeIterFlags::empty(), dirent_snapshot).found()?;
 
         match existing {
             Some(k) if k.as_dirent().expect("a dirent").target() == inode.dirent_target() => {
@@ -475,7 +477,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
         let target = inode.dirent_target();
         bch_err_msg!(fs,
             dirent::create_snapshot(t, inode.bi_parent_subvol, dirent_snapshot, &mut lostfound,
-                                    d_type, name.as_bytes(), target, &mut inode.bi_dir_offset,
+                                    d_type, name.as_os_str(), target, &mut inode.bi_dir_offset,
                                     CREATE.0, CREATE.1),
             "error creating dirent")?;
     }

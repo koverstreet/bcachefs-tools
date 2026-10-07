@@ -46,6 +46,7 @@ use crate::fs::Fs;
 use crate::init::error::id;
 use crate::init::progress::Progress;
 use crate::snapshots::{snapshot, subvolume};
+use crate::util::os_str::{OsStr, OsStrExt};
 use crate::xattr::{self, Xattrs};
 use crate::{bch_err_msg, fsck_err, fsck_err_on, inode_fsck_err};
 use crate::{dirent, inode, namei, str_hash};
@@ -127,7 +128,7 @@ fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &c::bch_inode_unpacked, x_type: u
     -> Result<bool, BchError>
 {
     let hash = str_hash::hash_info_init(t.fs(), u)?;
-    let key = xattr::search_key(x_type, b"");
+    let key = xattr::search_key(x_type, OsStr::from_bytes(b""));
     let mut iter = BtreeIter::uninit();
 
     Ok(str_hash::lookup_in_snapshot::<Xattrs>(t, &mut iter, &hash,
