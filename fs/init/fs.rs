@@ -388,6 +388,13 @@ impl Fs {
         ret_to_result(unsafe { c::bch2_request_incompat_feature(self.raw, version) })
     }
 
+    /// Whether the filesystem uses @feature: c->sb.features, the in-memory
+    /// copy.
+    pub fn feature(&self, feature: c::bch_sb_feature) -> bool {
+        let features = unsafe { (*self.raw).sb.features };
+        features & (1u64 << feature as u32) != 0
+    }
+
     /// Mark the filesystem as using @feature, writing the superblock if it
     /// wasn't already: as bch2_check_set_feature().
     pub fn check_set_feature(&self, feature: c::bch_sb_feature) {

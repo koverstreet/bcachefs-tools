@@ -15,6 +15,14 @@ use crate::fs::Fs;
 use crate::util::Printbuf;
 use core::fmt;
 
+/// Snapshot @id's parent, if it has one: as bch2_snapshot_parent().
+pub fn parent(fs: &Fs, id: u32) -> Option<u32> {
+    match unsafe { c::bch2_snapshot_parent(fs.raw, id) } {
+        0      => None,
+        parent => Some(parent),
+    }
+}
+
 /// If @id is a redundant interior snapshot node - left by an interrupted
 /// deletion, to be collapsed into a live descendant - the live snapshot it
 /// collapses into: as bch2_snapshot_redundant_interior().
