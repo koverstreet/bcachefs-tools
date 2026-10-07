@@ -1,3 +1,4 @@
+use crate::btree::iter::BtreeTrans;
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
@@ -340,6 +341,49 @@ impl InodeOpt {
 pub fn inode_opts_to_opts(inode: &c::bch_inode_unpacked) -> c::bch_opts {
     // Only reads @inode: C's signature isn't const.
     unsafe { c::bch2_inode_opts_to_opts(inode as *const _ as *mut _) }
+}
+
+/// @dst takes on @src's inode options - those it didn't set itself, and
+/// casefolding only for a directory - as when it moves into directory @src:
+/// as bch2_reinherit_attrs(). Whether anything changed.
+pub fn reinherit_attrs(dst: &mut c::bch_inode_unpacked, src: &c::bch_inode_unpacked) -> bool {
+    // Only reads @src: C's signature isn't const.
+    unsafe { c::bch2_reinherit_attrs(dst, src as *const _ as *mut _) }
+}
+
+/// What changing an inode's options leaves for after the commit: a reconcile
+/// scan, if the options its data goes by changed, and pushing them up to the
+/// inode's older snapshots - the propagate logged op.
+impl c::inode_opt_change {
+    /// Nothing to do yet: as bch2_inode_opt_change_init().
+    pub fn new() -> Self {
+        let mut ch = Self::default();
+        unsafe { c::bch2_inode_opt_change_init(&mut ch) };
+        ch
+    }
+
+    /// @inode's options have changed, in @snapshot, from those that gave
+    /// reconcile options @old: if those changed, schedule the scan and start
+    /// the propagate - as bch2_inode_opt_change_trans().
+    pub fn record(
+        &mut self,
+        trans:    &BtreeTrans<'_>,
+        old:      &c::bch_extent_reconcile,
+        inode:    &c::bch_inode_unpacked,
+        snapshot: u32,
+    ) -> Result<(), BchError> {
+        // Only reads @old and @inode: C's signature isn't const.
+        ret_to_result(unsafe {
+            c::bch2_inode_opt_change_trans(trans.raw(), old as *const _ as *mut _,
+                                           inode as *const _ as *mut _, snapshot, self)
+        })
+    }
+
+    /// After the commit: finish the propagate, if one was started, and wake
+    /// reconcile, if there's a scan for it - as bch2_inode_opt_change_finish().
+    pub fn finish(&mut self, trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+        ret_to_result(unsafe { c::bch2_inode_opt_change_finish(trans.raw(), self) })
+    }
 }
 
 // ── Changing options ─────────────────────────────────────────────────────
