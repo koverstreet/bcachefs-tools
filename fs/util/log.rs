@@ -125,6 +125,13 @@ macro_rules! bch_info_ratelimited {
     };
 }
 
+#[macro_export]
+macro_rules! bch_verbose_ratelimited {
+    ($fs:expr, $($arg:tt)*) => {
+        $crate::bch_log_ratelimited!($fs, $crate::util::log::LogLevel::DEBUG, $($arg)*)
+    };
+}
+
 /// As C's should_print_err(): a restart isn't an error worth reporting.
 pub fn should_print_err(err: &BchError) -> bool {
     !crate::btree::iter::is_restart(err)
