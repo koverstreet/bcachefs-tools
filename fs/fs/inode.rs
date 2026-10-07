@@ -368,6 +368,69 @@ pub fn peek<'a, 't>(
     t.result(ret)
 }
 
+/// As peek(), as seen in @snapshot: as bch2_inode_peek_snapshot().
+pub fn peek_snapshot<'a, 't>(
+    t:        &TransAttempt<'a, 't>,
+    iter:     &mut BtreeIter<'t>,
+    inode:    &mut c::bch_inode_unpacked,
+    inum:     c::subvol_inum,
+    snapshot: u32,
+    flags:    BtreeIterFlags,
+) -> Result<(), BchError> {
+    let ret = unsafe {
+        c::__bch2_inode_peek_snapshot(
+            t.raw(),
+            iter.raw_mut(),
+            inode,
+            inum,
+            snapshot,
+            flags.bits(),
+            core::ptr::null(),
+        )
+    };
+    t.result(ret)
+}
+
+/// Fill in a new inode, made at @now, in directory @parent: it inherits
+/// @parent's inode options, and from a setgid @parent its group - and
+/// setgid itself, for a directory. As bch2_inode_init_late().
+#[allow(clippy::too_many_arguments)]
+pub fn init_late(
+    fs:     &Fs,
+    inode:  &mut c::bch_inode_unpacked,
+    now:    u64,
+    uid:    c::uid_t,
+    gid:    c::gid_t,
+    mode:   c::umode_t,
+    rdev:   c::dev_t,
+    parent: &c::bch_inode_unpacked,
+) {
+    unsafe {
+        c::bch2_inode_init_late(fs.raw, inode, now, uid, gid, mode, rdev,
+                                parent as *const _ as *mut _)
+    }
+}
+
+/// One more link to @inode - or none less, for an unlinked inode coming
+/// back: as bch2_inode_nlink_inc(). too_many_links at BCH_LINK_MAX.
+pub fn nlink_inc(inode: &mut c::bch_inode_unpacked) -> Result<(), BchError> {
+    ret_to_result(unsafe { c::bch2_inode_nlink_inc(inode) })
+}
+
+/// One link fewer to @inode - unlinked, when it had none left: as
+/// bch2_inode_nlink_dec(). An underflow is a transaction inconsistency.
+pub fn nlink_dec(trans: &BtreeTrans<'_>, inode: &mut c::bch_inode_unpacked) {
+    unsafe { c::bch2_inode_nlink_dec(trans.raw(), inode) }
+}
+
+/// @inode's reconcile options - the ones reconcile moves its data to match,
+/// and for each whether @inode set it or inherited it: as
+/// bch2_inode_reconcile_opts_get().
+pub fn reconcile_opts_get(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_extent_reconcile {
+    // Only reads @inode: C's signature isn't const.
+    unsafe { c::bch2_inode_reconcile_opts_get(fs.raw, inode as *const _ as *mut _) }
+}
+
 pub fn write<'a, 't>(
     t:     &TransAttempt<'a, 't>,
     iter:  &mut BtreeIter<'t>,
