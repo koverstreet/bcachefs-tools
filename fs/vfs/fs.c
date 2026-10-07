@@ -1426,7 +1426,7 @@ static int bch2_setattr_nonsize_trans(struct btree_trans *trans,
 				      struct bch_inode_info *inode,
 				      struct iattr *attr)
 {
-	struct posix_acl *acl __free(kfree) = NULL;
+	struct posix_acl *acl __free(posix_acl) = NULL;
 
 	CLASS(btree_iter_uninit, inode_iter)(trans);
 	struct bch_inode_unpacked inode_u;
@@ -1443,10 +1443,8 @@ static int bch2_setattr_nonsize_trans(struct btree_trans *trans,
 
 	bch2_inode_update_after_write(trans, inode, &inode_u, attr->ia_valid);
 
-	if (acl) {
+	if (acl)
 		set_cached_acl(&inode->v, ACL_TYPE_ACCESS, acl);
-		acl = NULL;
-	}
 
 	return 0;
 }
