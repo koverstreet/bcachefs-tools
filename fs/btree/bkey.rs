@@ -288,12 +288,24 @@ impl FromStr for c::bpos {
 
 pub type bkey_type = c::bch_bkey_type;
 
+/// A key and its value, borrowed: C's struct bkey_s_c, which it's laid out
+/// as - so a C entry point can take one by value where C passes a
+/// bkey_s_c.
 #[derive(Clone, Copy)]
+#[repr(C)]
 pub struct BkeySC<'a> {
     pub k:           &'a c::bkey,
     pub v:           &'a c::bch_val,
     pub(crate) iter: PhantomData<&'a mut BtreeIter<'a>>,
 }
+
+const _: () = {
+    use core::mem::{align_of, offset_of, size_of};
+    assert!(size_of::<BkeySC<'static>>() == size_of::<c::bkey_s_c>());
+    assert!(align_of::<BkeySC<'static>>() == align_of::<c::bkey_s_c>());
+    assert!(offset_of!(BkeySC<'static>, k) == offset_of!(c::bkey_s_c, k));
+    assert!(offset_of!(BkeySC<'static>, v) == offset_of!(c::bkey_s_c, v));
+};
 
 pub trait BkeyInit: Default {
     fn init(&mut self);
