@@ -948,8 +948,15 @@ int bch2_ec_read_around_pick(struct btree_trans *trans, struct extent_ptr_decode
 	if (l_min == U64_MAX || l_d <= ec_read_around_cost(l_min, penalty))
 		return 0;
 
-	/* Data updates get here unlocked, by bch2_data_update_init(): */
-	try(bch2_trans_relock(trans));
+	/*
+	 * Data updates get here unlocked, by bch2_data_update_init(). A relock
+	 * fails whenever another move committed to the same leaf meanwhile.
+	 */
+	if (!trans->locked) {
+		CLASS(btree_trans, t)(c);
+		return lockrestart_do(t, bch2_ec_read_around_pick(t, pick, failed, flags,
+								  preferred_dev));
+	}
 
 	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, pick->ec.idx), BTREE_ITER_slots);
 	struct bkey_s_c k = bch2_btree_iter_peek_slot(&iter);
