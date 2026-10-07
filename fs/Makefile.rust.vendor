@@ -255,7 +255,7 @@ $(VRD)/helpers.o: $(VENDOR)/helpers/helpers.c $(wildcard $(VENDOR)/helpers/*.c) 
 quiet_cmd_bch_vr_mod = VRUSTC M $@
       cmd_bch_vr_mod = RUSTC_BOOTSTRAP=1 OUT_DIR=$(abspath $(obj)/rust) \
 	OBJTREE=$(bch-vr-objtree) $(RUSTC) \
-	$(bch-vr-tflags) --edition=2021 --cfg kernel \
+	$(bch-vr-tflags) --edition=2021 --cfg kernel --cfg __KERNEL__ \
 	-Zcrate-attr=no_std \
 	-Zcrate-attr='feature($(rust_allowed_features))' \
 	--crate-type rlib --crate-name bcachefs_mod \

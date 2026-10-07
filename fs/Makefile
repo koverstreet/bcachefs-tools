@@ -519,6 +519,8 @@ endif
 # crate (vs bcachefs-shim in userspace); the kernel build doesn't set it on its
 # own, so do it here for every Rust object in this dir.
 rustflags-y += --cfg kernel
+# And __KERNEL__, which C has: types defined in Rust test it, as their C did.
+rustflags-y += --cfg __KERNEL__
 
 # Rust crates the kernel doesn't provide: the vendored paste (a proc-macro),
 # bitfield/bitflags/uuid (plain rlibs) under fs/vendor/, and our own

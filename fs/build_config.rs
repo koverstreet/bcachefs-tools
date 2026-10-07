@@ -54,7 +54,9 @@ fn emit_userspace_config_cfgs(root: &std::path::Path) {
         .lines()
         .filter_map(|l| l.trim().strip_prefix("#define"))
         .filter_map(|l| l.split_whitespace().next())
-        .filter(|n| n.starts_with("CONFIG_"))
+        // And NO_BCACHEFS_FS - no VFS layer in userspace - which the types
+        // defined in Rust test, as the C does.
+        .filter(|n| n.starts_with("CONFIG_") || *n == "NO_BCACHEFS_FS")
         .map(String::from)
         .collect();
     let mut names = set.clone();
