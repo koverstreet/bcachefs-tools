@@ -536,7 +536,7 @@ static ssize_t __bch2_folio_reservation_get(struct bch_fs *c,
 					      res->disk.nr_replicas,
 					      partial ? BCH_DISK_RESERVATION_PARTIAL : 0));
 
-		unsigned got = disk_res.r.sectors / disk_res.r.nr_replicas;
+		unsigned got = div_u64(disk_res.r.sectors, disk_res.r.nr_replicas);
 		if (unlikely(got < last - first)) {
 			/*
 			 * Make sure to get a reservation that's aligned to the
