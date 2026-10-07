@@ -1,4 +1,6 @@
+use crate::btree::iter::BtreeTrans;
 use crate::c;
+use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 
 pub use c::bch_data_type;
@@ -199,6 +201,21 @@ pub fn mem_read(fs: &Fs, pos: DiskAccountingPos, counters: &mut [u64]) {
             counters.len() as u32,
         );
     }
+}
+
+/// Add @d to accounting key @pos's counters, in @trans - the gc copy's, with
+/// @gc: as bch2_disk_accounting_mod(). For triggers.
+pub fn add(trans: &BtreeTrans<'_>, pos: DiskAccountingPos, d: &[i64], gc: bool)
+    -> Result<(), BchError>
+{
+    let mut acc = c::disk_accounting_pos::default();
+    unsafe { c::bpos_to_disk_accounting_pos(&mut acc, pos.as_bpos()) };
+
+    // Only reads @d: C's signature isn't const.
+    ret_to_result(unsafe {
+        c::bch2_disk_accounting_mod(trans.raw(), &mut acc, d.as_ptr() as *mut i64,
+                                    d.len() as u32, gc)
+    })
 }
 
 pub fn nr_inodes(fs: &Fs) -> u64 {
