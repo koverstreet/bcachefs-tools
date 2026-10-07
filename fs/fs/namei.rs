@@ -1391,7 +1391,6 @@ pub fn check_inode_has_case_insensitive(
     do_update: &mut bool,
 ) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut buf = Printbuf::new();
     let mut repairing_parents = false;
 
     if !inode.is_dir() {
@@ -1410,7 +1409,8 @@ pub fn check_inode_has_case_insensitive(
     }
 
     if casefold(fs, inode) && !inode.flag(BCH_INODE_has_case_insensitive) {
-        write!(buf, "casefolded dir with has_case_insensitive not set\ninum {}:{} ",
+        let mut buf = Printbuf::new();
+        write!(buf,"casefolded dir with has_case_insensitive not set\ninum {}:{} ",
                inode.bi_inum, inode.bi_snapshot);
 
         inum_snapshot_to_path(t, inode.bi_inum, inode.bi_snapshot, &mut buf)?;
@@ -1436,7 +1436,8 @@ pub fn check_inode_has_case_insensitive(
         dir = inode::find_by_inum_snapshot(t, dir.bi_dir, snapshot, BtreeIterFlags::empty())?;
 
         if !dir.flag(BCH_INODE_has_case_insensitive) {
-            writeln!(buf, "parent of casefolded dir with has_case_insensitive not set");
+            let mut buf = Printbuf::new();
+            writeln!(buf,"parent of casefolded dir with has_case_insensitive not set");
 
             inum_snapshot_to_path(t, dir.bi_inum, dir.bi_snapshot, &mut buf)?;
 
