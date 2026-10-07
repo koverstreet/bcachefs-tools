@@ -4,6 +4,9 @@
 
 #include <linux/bio.h>
 #include <linux/blkdev.h>
+#ifdef __KERNEL__
+#include <linux/capability.h>
+#endif
 #include <linux/errno.h>
 #include <linux/freezer.h>
 #include <linux/kernel.h>
@@ -460,6 +463,36 @@ static inline u64 bch2_local_clock(void)
 static inline void bch2_cond_resched(void)
 {
 	cond_resched();
+}
+
+static inline u64 bch2_get_random_u64(void)
+{
+	return get_random_u64();
+}
+
+#ifdef __KERNEL__
+#include <linux/cpumask.h>
+#include <linux/numa.h>
+
+/*
+ * For Rust: NUMA_NO_NODE is a macro, nr_cpu_ids a variable - or a macro,
+ * without SMP - neither of which bind.
+ */
+static inline unsigned bch2_cpumask_local_spread(unsigned i)
+{
+	return cpumask_local_spread(i, NUMA_NO_NODE);
+}
+
+static inline unsigned bch2_nr_cpu_ids(void)
+{
+	return nr_cpu_ids;
+}
+#endif
+
+/* capable() is a function in the kernel, a macro (true) in userspace's blkdev.h */
+static inline bool bch2_capable(int cap)
+{
+	return capable(cap);
 }
 
 /*
