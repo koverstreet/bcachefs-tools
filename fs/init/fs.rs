@@ -4,6 +4,7 @@ use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError}
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
 use crate::util::locking::MemallocFlags;
+use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use core::ops::ControlFlow;
 
@@ -566,6 +567,48 @@ impl Fs {
 impl Drop for Fs {
     fn drop(&mut self) {
         unsafe { c::bch2_fs_exit(self.raw); }
+    }
+}
+
+/// A write ref on @fs, of kind @idx: while one is held, the filesystem can't
+/// go read-only. Dropping it puts it.
+pub struct WriteRef<'f> {
+    fs:  &'f Fs,
+    idx: c::bch_write_ref,
+}
+
+impl Fs {
+    /// A write ref of kind @idx, unless the filesystem is going read-only: as
+    /// enumerated_ref_tryget(&c->writes, idx).
+    pub fn write_ref_tryget(&self, idx: c::bch_write_ref) -> Option<WriteRef<'_>> {
+        unsafe { c::enumerated_ref_tryget(&raw mut (*self.raw).writes, idx as u32) }
+            .then_some(WriteRef { fs: self, idx })
+    }
+}
+
+impl<'f> WriteRef<'f> {
+    /// Take ownership of a ref handed over without a WriteRef - by
+    /// queue_work(), to the work it queues.
+    ///
+    /// # Safety
+    /// The caller owns a write ref of kind @idx on @fs, and hands it over.
+    pub unsafe fn adopt(fs: &'f Fs, idx: c::bch_write_ref) -> Self {
+        WriteRef { fs, idx }
+    }
+
+    /// Queue @work on @fs's write_ref_wq, handing it this ref - its function
+    /// adopt()s it, and drops it when done. If @work is already queued, the
+    /// run that's pending has a ref, and this one is put.
+    pub fn queue_work(self, work: &Opaque<c::work_struct>) {
+        if unsafe { c::bch2_queue_work((*self.fs.raw).write_ref_wq, work.as_ptr()) } {
+            core::mem::forget(self);
+        }
+    }
+}
+
+impl Drop for WriteRef<'_> {
+    fn drop(&mut self) {
+        unsafe { c::enumerated_ref_put(&raw mut (*self.fs.raw).writes, self.idx as u32) };
     }
 }
 

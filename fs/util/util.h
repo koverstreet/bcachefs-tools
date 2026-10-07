@@ -470,6 +470,12 @@ static inline u64 bch2_get_random_u64(void)
 	return get_random_u64();
 }
 
+/* queue_work() is a static inline in the kernel, a function in userspace: */
+static inline bool bch2_queue_work(struct workqueue_struct *wq, struct work_struct *work)
+{
+	return queue_work(wq, work);
+}
+
 #ifdef __KERNEL__
 #include <linux/cpumask.h>
 #include <linux/numa.h>

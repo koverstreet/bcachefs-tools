@@ -41,7 +41,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     // convention as bch_bindgen's allowlist.
     ".*bch2_.*", "rust_.*", "block_bytes", "match_string", "printbuf.*", "_bch2_err_matches",
     "bpos_.*", "bkey_init", "bkey_.*_init", "bkey_i_to_s", "bkey_i_to_s_c",
-    "btree_iter_path", "extent_entry_u64s", "enumerated_ref_put",
+    "btree_iter_path", "extent_entry_u64s", "enumerated_ref_tryget", "enumerated_ref_put",
     "journal_cur_seq",
     "prt_bytes",
     "bkey_extent_is_allocation", "bkey_extent_is_reservation", "crc_is_encoded",
