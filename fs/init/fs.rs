@@ -341,11 +341,6 @@ impl Fs {
         ret_to_result(unsafe { c::bch2_truncate(self.raw, inum, new_i_size, &mut i_sectors_delta) })
     }
 
-    /// EROFS if @subvol is a read-only subvolume (a read-only snapshot).
-    pub fn subvol_is_ro(&self, subvol: u32) -> Result<(), BchError> {
-        crate::snapshots::subvolume::is_ro(self, subvol)
-    }
-
     /// Make the filesystem incompatible with versions before @version, if
     /// it isn't already - an error if that isn't allowed: as
     /// bch2_request_incompat_feature().

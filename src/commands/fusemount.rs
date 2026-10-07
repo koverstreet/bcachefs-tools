@@ -68,6 +68,7 @@ use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::{accounting, btree, dirent, namei, str_hash};
 use bcachefs_kernel::btree::iter::CommitFlags;
 use bcachefs_kernel::inode;
+use bcachefs_kernel::snapshots::subvolume;
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::util::vstructs::Ffi;
 
@@ -795,7 +796,7 @@ impl BcachefsFs {
     /// the kernel driver refuses in its VFS ops (bch2_open() and friends),
     /// which our handlers stand in for.
     fn subvol_writable(&self, subvol: u64) -> Result<(), Errno> {
-        self.fs().subvol_is_ro(subvol as u32).map_err(|e| bch_err(&e))
+        subvolume::is_ro(self.fs(), subvol as u32).map_err(|e| bch_err(&e))
     }
 
     /// forget: drop @nlookup references to @node; with the last, evict.
