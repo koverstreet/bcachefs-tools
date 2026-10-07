@@ -48,6 +48,15 @@ impl<T> KVVec<T> {
         Ok(())
     }
 
+    pub fn extend_from_slice(&mut self, other: &[T], _flags: Flags) -> Result<(), AllocError>
+    where
+        T: Clone,
+    {
+        self.0.try_reserve(other.len()).map_err(|_| AllocError)?;
+        self.0.extend_from_slice(other);
+        Ok(())
+    }
+
     pub fn clear(&mut self) {
         self.0.clear()
     }
