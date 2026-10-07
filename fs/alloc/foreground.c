@@ -288,19 +288,11 @@ static inline bool may_alloc_bucket_journal_seq(struct bch_fs *c,
 	return true;
 }
 
-static struct open_bucket *__try_alloc_bucket(struct bch_fs *c,
-					      struct alloc_request *req,
-					      u64 bucket, u8 gen)
+static struct open_bucket *try_alloc_bucket_locked(struct bch_fs *c,
+						   struct alloc_request *req,
+						   u64 bucket, u8 gen)
 {
 	struct bch_dev *ca = req->ca;
-
-	if (unlikely(is_superblock_bucket(c, ca, bucket)))
-		return NULL;
-
-	if (unlikely(bch2_bucket_nouse(ca, bucket))) {
-		req->counters.skipped_nouse++;
-		return NULL;
-	}
 
 	guard(spinlock)(&c->allocator.freelist_lock);
 
@@ -309,13 +301,9 @@ static struct open_bucket *__try_alloc_bucket(struct bch_fs *c,
 
 		if (req->cl) {
 			closure_wait(&c->allocator.open_buckets_wait, req->cl);
-			return ERR_PTR(alloc_trace_add(req, U8_MAX,
-					bch_err_throw(c, open_bucket_alloc_blocked),
-					0, 0, false));
+			return ERR_PTR(bch_err_throw(c, open_bucket_alloc_blocked));
 		} else {
-			return ERR_PTR(alloc_trace_add(req, U8_MAX,
-					bch_err_throw(c, open_buckets_empty),
-					0, 0, false));
+			return ERR_PTR(bch_err_throw(c, open_buckets_empty));
 		}
 	}
 
@@ -342,6 +330,28 @@ static struct open_bucket *__try_alloc_bucket(struct bch_fs *c,
 	track_event_change(&c->times[BCH_TIME_blocked_allocate_open_bucket], false);
 	track_event_change(&c->times[BCH_TIME_blocked_allocate], false);
 
+	return ob;
+}
+
+static struct open_bucket *__try_alloc_bucket(struct bch_fs *c,
+					      struct alloc_request *req,
+					      u64 bucket, u8 gen)
+{
+	struct bch_dev *ca = req->ca;
+
+	if (unlikely(is_superblock_bucket(c, ca, bucket)))
+		return NULL;
+
+	if (unlikely(bch2_bucket_nouse(ca, bucket))) {
+		req->counters.skipped_nouse++;
+		return NULL;
+	}
+
+	struct open_bucket *ob = try_alloc_bucket_locked(c, req, bucket, gen);
+
+	/* Not under freelist_lock: the trace is a darray, and pushing can allocate */
+	if (IS_ERR(ob))
+		alloc_trace_add(req, U8_MAX, PTR_ERR(ob), 0, 0, false);
 	return ob;
 }
 
