@@ -4,6 +4,7 @@
 
 #include "init/progress.h"
 #include "passes_format.h"
+#include "util/darray.h"
 
 struct bch_fs_recovery {
 	/*
@@ -55,6 +56,13 @@ struct bch_fs_recovery {
 	struct recovery_pass_entry passes_failing_ratelimit[BCH_RECOVERY_PASS_NR];
 	/* Consecutive failures, for exponential backoff; zeroed on success */
 	u8			passes_failing_nr[BCH_RECOVERY_PASS_NR];
+
+	/*
+	 * Logged ops in the btree when we went rw - the ones from before this
+	 * mount, which recovery resumes. Positions in BTREE_ID_logged_ops,
+	 * ascending: see bch2_logged_ops_note_unfinished().
+	 */
+	DARRAY(u64)		logged_ops_unfinished;
 
 	spinlock_t		lock;
 	struct mutex		run_lock;

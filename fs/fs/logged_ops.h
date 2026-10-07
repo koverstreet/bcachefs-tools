@@ -6,9 +6,10 @@
 
 /*
  * @early: background work that runs during recovery (copygc, reconcile) can
- * start these, so they're resumed by resume_logged_ops_early, before that work
- * may run - any found after that could be live. The rest are only started from
- * userspace, and are resumed after fsck has repaired what they walk.
+ * start these, so they're resumed by resume_logged_ops_early. The rest are only
+ * started from userspace, and are resumed after fsck has repaired what they
+ * walk. Either pass resumes only the ops from before this mount: see
+ * bch2_logged_ops_note_unfinished().
  */
 #define BCH_LOGGED_OPS()			\
 	x(truncate,		false)		\
@@ -47,6 +48,7 @@ extern const char * const bch2_logged_ops[];
 int bch2_logged_op_fail_next_parse(const char *, unsigned *);
 void bch2_logged_op_fail_next_to_text(struct printbuf *, struct bch_fs *);
 
+int bch2_logged_ops_note_unfinished(struct bch_fs *);
 int bch2_resume_logged_ops_early(struct bch_fs *);
 int bch2_resume_logged_ops(struct bch_fs *);
 int __bch2_logged_op_start(struct btree_trans *, struct bkey_i *);

@@ -704,6 +704,7 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_btree_write_buffer_stop(c);
 	bch2_free_pending_node_rewrites(c);
 	bch2_free_fsck_errs(c);
+	darray_exit(&c->recovery.logged_ops_unfinished);
 	bch2_fs_vfs_exit(c);
 	bch2_fs_snapshots_exit(c);
 	bch2_fs_replicas_exit(c);
