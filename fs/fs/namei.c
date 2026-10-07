@@ -1067,6 +1067,7 @@ int bch2_check_inode_has_case_insensitive(struct btree_trans *trans,
 			if (fsck_err(trans, inode_parent_has_case_insensitive_not_set, "%s", buf.buf)) {
 				dir.bi_flags |= BCH_INODE_has_case_insensitive;
 				try(__bch2_fsck_write_inode(trans, &dir));
+				repairing_parents = true;
 			}
 		}
 
