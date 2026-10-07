@@ -25,7 +25,9 @@ use crate::fs::Fs;
 use crate::inode;
 use crate::snapshots::subvolume;
 use crate::str_hash::{self, HashTable};
+use crate::util::ffi::Opaque;
 use crate::util::os_str::{qstr, qstr_name, OsStr, OsStrExt};
+use core::mem::MaybeUninit;
 use core::ffi::c_int;
 use core::ops::ControlFlow;
 
@@ -345,21 +347,20 @@ pub fn read_target(
 /// doesn't list.
 ///
 /// # Safety
-/// The arguments are the C function's, valid for the call; @d is from the
-/// btree.
+/// @d a dirent from the btree, valid for the call.
 #[no_mangle]
 pub unsafe extern "C" fn bch2_dirent_read_target(
-    trans:  *mut c::btree_trans,
+    trans:  &Opaque<c::btree_trans>,
     dir:    c::subvol_inum,
     d:      c::bkey_s_c_dirent,
-    target: *mut c::subvol_inum,
+    target: &mut MaybeUninit<c::subvol_inum>,
 ) -> c_int {
-    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
     let k = c::bkey_s_c::from(d);
 
-    match read_target(&trans, dir, Dirent::new(BkeySC::from(&k)).expect("a dirent")) {
+    match read_target(&BtreeTrans::from_c(trans), dir,
+                      Dirent::new(BkeySC::from(&k)).expect("a dirent")) {
         Ok(Some(t)) => {
-            unsafe { *target = t };
+            target.write(t);
             0
         }
         Ok(None) => 1,
@@ -413,21 +414,17 @@ pub fn lookup_key<'i, 't>(
 /// lookup_key(), the key or an error.
 ///
 /// # Safety
-/// The arguments are the C function's, valid for the call; @trans has an
-/// attempt in progress, and @iter is the caller's.
+/// @name valid for the call.
 #[no_mangle]
 pub unsafe extern "C" fn bch2_dirent_lookup_key(
-    trans:     *mut c::btree_trans,
-    iter:      *mut c::btree_iter,
+    trans:     &Opaque<c::btree_trans>,
+    iter:      &mut Opaque<c::btree_iter>,
     dir:       c::subvol_inum,
-    hash_info: *const c::bch_hash_info,
-    name:      *const c::qstr,
+    hash_info: &c::bch_hash_info,
+    name:      &c::qstr,
 ) -> c::bkey_s_c {
-    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-
-    match lookup_key(&trans.attempt_in_progress(), unsafe { BtreeIter::borrow_raw(iter) }, dir,
-                     unsafe { &*hash_info }, unsafe { qstr_name(&*name) },
-                     BtreeIterFlags::empty()) {
+    match lookup_key(&BtreeTrans::from_c(trans).attempt_in_progress(), BtreeIter::from_c(iter),
+                     dir, hash_info, unsafe { qstr_name(name) }, BtreeIterFlags::empty()) {
         Ok(k)  => k.to_raw(),
         Err(e) => c::bkey_s_c {
             k: (-(e.raw() as isize)) as *const c::bkey,
@@ -467,18 +464,17 @@ pub fn lookup(
 /// For C's VFS and ioctls: bch2_dirent_lookup().
 ///
 /// # Safety
-/// The arguments are the C function's, valid for the call.
+/// @name valid for the call.
 #[no_mangle]
 pub unsafe extern "C" fn bch2_dirent_lookup(
-    c:         *mut c::bch_fs,
+    c:         &Opaque<c::bch_fs>,
     dir:       c::subvol_inum,
-    hash_info: *const c::bch_hash_info,
-    name:      *const c::qstr,
-    inum:      *mut c::subvol_inum,
+    hash_info: &c::bch_hash_info,
+    name:      &c::qstr,
+    inum:      &mut MaybeUninit<c::subvol_inum>,
 ) -> c_int {
-    let fs = unsafe { Fs::borrow_raw(c) };
-    ret_to_c(lookup(&fs, dir, unsafe { &*hash_info }, unsafe { qstr_name(&*name) })
-             .map(|i| unsafe { *inum = i }))
+    ret_to_c(lookup(&Fs::from_c(c), dir, hash_info, unsafe { qstr_name(name) })
+             .map(|i| { inum.write(i); }))
 }
 
 /// Whether directory @dir is empty as seen in @snapshot - subvolume
@@ -581,16 +577,15 @@ pub fn readdir(
 /// For C's VFS and FUSE: bch2_readdir().
 ///
 /// # Safety
-/// The arguments are the C function's, valid for the call.
+/// @ctx the VFS's (or FUSE's), its actor valid for the call.
 #[no_mangle]
 pub unsafe extern "C" fn bch2_readdir(
-    c:         *mut c::bch_fs,
+    c:         &Opaque<c::bch_fs>,
     dir:       c::subvol_inum,
-    hash_info: *mut c::bch_hash_info,
-    ctx:       *mut c::dir_context,
+    hash_info: &mut c::bch_hash_info,
+    ctx:       &mut c::dir_context,
 ) -> c_int {
-    let fs = unsafe { Fs::borrow_raw(c) };
-    ret_to_c(readdir(&fs, dir, unsafe { &mut *hash_info }, unsafe { &mut *ctx }))
+    ret_to_c(readdir(&Fs::from_c(c), dir, hash_info, ctx))
 }
 
 // ── Rename ───────────────────────────────────────────────────────────────

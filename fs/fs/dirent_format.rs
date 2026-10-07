@@ -19,6 +19,7 @@
 use crate::btree::bkey::BkeySC;
 use crate::btree::bkey_methods::{self, SetError};
 use crate::btree::iter::TransBkey;
+use crate::util::ffi::Opaque;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::bkey_fsck_err_on;
 use crate::c;
@@ -245,18 +246,14 @@ pub fn d_type_str(d_type: u8) -> &'static str {
 }
 
 /// For C's bkey_ops: bch2_dirent_to_text().
-///
-/// # Safety
-/// The arguments are the C function's: @out a printbuf nothing else is
-/// using, @k a dirent at least min_val_size long.
 #[no_mangle]
 #[cold]
-pub unsafe extern "C" fn bch2_dirent_to_text(
-    out: *mut c::printbuf,
-    _c:  *mut c::bch_fs,
-    k:   c::bkey_s_c,
+pub extern "C" fn bch2_dirent_to_text(
+    out: &mut Printbuf,
+    _c:  &Opaque<c::bch_fs>,
+    k:   BkeySC<'_>,
 ) {
-    to_text(unsafe { Printbuf::borrow_raw(out) }, BkeySC::from(&k))
+    to_text(out, k)
 }
 
 // ── Validate: where a dirent becomes trusted ─────────────────────────────
@@ -314,18 +311,14 @@ pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<Dirent<'k>, BchError> {
 }
 
 /// For C's bkey_ops: bch2_dirent_validate().
-///
-/// # Safety
-/// The arguments are the C function's: @c a live filesystem, @k a dirent at
-/// least min_val_size long, @from valid for the call.
 #[no_mangle]
-pub unsafe extern "C" fn bch2_dirent_validate(
-    c:    *mut c::bch_fs,
-    k:    c::bkey_s_c,
+pub extern "C" fn bch2_dirent_validate(
+    c:    &Opaque<c::bch_fs>,
+    k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
 ) -> c_int {
-    let fs = unsafe { Fs::borrow_raw(c) };
-    let v = BkeyValidate { fs: &fs, k: BkeySC::from(&k), from };
+    let fs = Fs::from_c(c);
+    let v = BkeyValidate { fs: &fs, k, from };
 
     match validate(&v) {
         Ok(_)  => 0,
