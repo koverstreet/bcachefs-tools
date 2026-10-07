@@ -786,7 +786,8 @@ pub fn reconstruct_subvol(
     t.insert(c::btree_id::subvolumes, k, UpdateTriggerFlags::empty())?;
 
     let mut s = bch_err_msg!(fs,
-        t.bkey_get_mut(c::btree_id::snapshots, pos(0, snapshot as u64), UpdateTriggerFlags::empty(),
+        t.bkey_get_mut(c::btree_id::snapshots, pos(0, snapshot as u64), BtreeIterFlags::empty(),
+                       UpdateTriggerFlags::empty(),
                        c::bch_bkey_type::KEY_TYPE_snapshot, size_of::<c::bkey_i_snapshot>()),
         "getting snapshot {snapshot}")?;
     let s = s.k_i_mut().as_mut_snapshot().expect("a snapshot key");
@@ -795,7 +796,8 @@ pub fn reconstruct_subvol(
     s.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
 
     let mut st = bch_err_msg!(fs,
-        t.bkey_get_mut(c::btree_id::snapshot_trees, pos(0, tree as u64), UpdateTriggerFlags::empty(),
+        t.bkey_get_mut(c::btree_id::snapshot_trees, pos(0, tree as u64), BtreeIterFlags::empty(),
+                       UpdateTriggerFlags::empty(),
                        c::bch_bkey_type::KEY_TYPE_snapshot_tree, size_of::<c::bkey_i_snapshot_tree>()),
         "getting snapshot tree {tree}")?;
     let st = st.k_i_mut().as_mut_snapshot_tree().expect("a snapshot tree key");

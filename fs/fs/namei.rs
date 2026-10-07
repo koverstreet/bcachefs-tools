@@ -511,7 +511,7 @@ fn subvol_update_parent(t: &TransAttempt<'_, '_>, subvol: u32, new_parent: u32)
     -> Result<(), BchError>
 {
     let mut s = t.bkey_get_mut(c::btree_id::subvolumes, pos(0, subvol as u64),
-                               UpdateTriggerFlags::from_bits_retain(BtreeIterFlags::CACHED.bits()),
+                               BtreeIterFlags::CACHED, UpdateTriggerFlags::empty(),
                                c::bch_bkey_type::KEY_TYPE_subvolume,
                                size_of::<c::bkey_i_subvolume>())?;
     s.k_i_mut().as_mut_subvolume().expect("a subvolume").fs_path_parent = new_parent.to_le();

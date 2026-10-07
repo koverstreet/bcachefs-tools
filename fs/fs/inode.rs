@@ -1058,7 +1058,7 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
     let cursor_pos = pos(c::logged_ops_inums::LOGGED_OPS_INUM_inode_cursors as u64, idx);
 
     let mut cursor = match t.bkey_get_mut(c::btree_id::logged_ops, cursor_pos,
-                                          UpdateTriggerFlags::from_bits_retain(BtreeIterFlags::CACHED.bits()),
+                                          BtreeIterFlags::CACHED, UpdateTriggerFlags::empty(),
                                           c::bch_bkey_type::KEY_TYPE_inode_alloc_cursor,
                                           size_of::<c::bkey_i_inode_alloc_cursor>()).found()? {
         Some(cursor) => cursor,

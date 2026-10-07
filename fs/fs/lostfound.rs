@@ -389,7 +389,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
         inode.bi_parent_subvol = c::BCACHEFS_ROOT_SUBVOL;
 
         let mut s = t.bkey_get_mut(c::btree_id::subvolumes, pos(0, inode.bi_subvol as u64),
-                                   UpdateTriggerFlags::empty(),
+                                   BtreeIterFlags::empty(), UpdateTriggerFlags::empty(),
                                    c::bch_bkey_type::KEY_TYPE_subvolume,
                                    size_of::<c::bkey_i_subvolume>())?;
         s.k_i_mut().as_mut_subvolume().expect("a subvolume").fs_path_parent =

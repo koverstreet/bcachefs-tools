@@ -82,7 +82,8 @@ fn lookup_node(trans: &BtreeTrans<'_>, id: u32) -> Result<Option<c::bkey_i_snaps
 
 /// Snapshot node @id's key, as a mutable copy queued for the commit.
 fn get_mut_node<'a, 't>(t: &TransAttempt<'a, 't>, id: u32) -> Result<TransBkey<'a, 't>, BchError> {
-    t.bkey_get_mut(c::btree_id::snapshots, pos(0, id as u64), UpdateTriggerFlags::empty(),
+    t.bkey_get_mut(c::btree_id::snapshots, pos(0, id as u64), BtreeIterFlags::empty(),
+                   UpdateTriggerFlags::empty(),
                    c::bch_bkey_type::KEY_TYPE_snapshot, size_of::<c::bkey_i_snapshot>())
 }
 
@@ -139,7 +140,7 @@ fn tree_master_subvol(t: &TransAttempt<'_, '_>, root: u32) -> Result<Option<u32>
 
     let Some(oldest) = snapshot::oldest_subvol(fs, root) else { return Ok(None) };
     let Some(mut u) = t.bkey_get_mut(c::btree_id::subvolumes, pos(0, oldest as u64),
-                                     UpdateTriggerFlags::empty(),
+                                     BtreeIterFlags::empty(), UpdateTriggerFlags::empty(),
                                      c::bch_bkey_type::KEY_TYPE_subvolume,
                                      size_of::<c::bkey_i_subvolume>()).found()? else {
         return Ok(None);

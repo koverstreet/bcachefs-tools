@@ -633,18 +633,21 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     /// The key at @pos in @btree, as a mutable copy already queued as its
     /// update - an error unless it's of @type_; at least @min_bytes: as
-    /// __bch2_bkey_get_mut(), bch2_bkey_get_mut_typed().
+    /// __bch2_bkey_get_mut(), bch2_bkey_get_mut_typed(). @iter_flags for the
+    /// lookup - BtreeIterFlags::CACHED, for a btree read through the key
+    /// cache - and @flags for the update: C passes both in one enum.
     pub fn bkey_get_mut(
         &self,
-        btree:     c::btree_id,
-        pos:       bpos,
-        flags:     UpdateTriggerFlags,
-        type_:     c::bch_bkey_type,
-        min_bytes: usize,
+        btree:      c::btree_id,
+        pos:        bpos,
+        iter_flags: BtreeIterFlags,
+        flags:      UpdateTriggerFlags,
+        type_:      c::bch_bkey_type,
+        min_bytes:  usize,
     ) -> Result<TransBkey<'a, 't>, BchError> {
         unsafe {
             let k = c::__bch2_bkey_get_mut(self.raw(), btree, pos,
-                                           c::btree_iter_update_trigger_flags(flags.bits()),
+                                           c::btree_iter_update_trigger_flags(iter_flags.bits() | flags.bits()),
                                            type_.0, min_bytes as u32);
             TransBkey::from_raw(self, k)
         }
