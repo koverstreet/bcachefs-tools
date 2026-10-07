@@ -480,6 +480,14 @@ STORE(bch2_fs)
 	if (attr == &sysfs_trigger_reconcile_pending_wakeup)
 		bch2_reconcile_pending_wakeup(c);
 
+	/* Only arms the knob, so no write ref - and it can fail: */
+	if (attr == &sysfs_logged_op_fail_next) {
+		unsigned type;
+
+		try(bch2_logged_op_fail_next_parse(buf, &type));
+		WRITE_ONCE(c->logged_op_fail_next, type);
+	}
+
 	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_sysfs))
 		return -EROFS;
 
@@ -501,13 +509,6 @@ STORE(bch2_fs)
 
 	if (attr == &sysfs_trigger_gc)
 		bch2_gc_gens(c);
-
-	if (attr == &sysfs_logged_op_fail_next) {
-		unsigned type;
-
-		try(bch2_logged_op_fail_next_parse(buf, &type));
-		WRITE_ONCE(c->logged_op_fail_next, type);
-	}
 
 	if (attr == &sysfs_trigger_delete_dead_snapshots) {
 		/* debug force: bypass auto_snapshot_deletion; serialize via run_lock */
