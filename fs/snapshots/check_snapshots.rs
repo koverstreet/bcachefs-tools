@@ -1271,10 +1271,7 @@ fn check_snapshots_trans(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
 pub unsafe extern "C" fn bch2_check_snapshots_trans(trans: *mut c::btree_trans) -> core::ffi::c_int {
     let trans = unsafe { BtreeTrans::borrow_raw(trans) };
 
-    match check_snapshots_trans(&trans) {
-        Ok(())  => 0,
-        Err(e)  => -e.raw(),
-    }
+    crate::errcode::ret_to_c(check_snapshots_trans(&trans))
 }
 
 fn check_snapshots(fs: &Fs) -> Result<(), BchError> {

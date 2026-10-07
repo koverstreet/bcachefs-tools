@@ -35,6 +35,12 @@ impl BchError {
 
     pub fn raw(&self) -> i32 { self.0 }
 
+    /// The plain errno this is a case of, negative, for what goes back to
+    /// the VFS or userspace: as bch2_err_class() - errno(), negated.
+    pub fn class(&self) -> c_int {
+        -self.errno()
+    }
+
     /// Get the error message string.
     ///
     /// Returns a static string since bch2_err_str() returns strings
@@ -156,6 +162,14 @@ pub fn ret_to_result(ret: c_int) -> Result<c_int, BchError> {
 
 pub fn ret_to_result_void(ret: c_int) -> Result<(), BchError> {
     ret_to_result(ret).map(|_| ())
+}
+
+/// The other way: a result as C's int, 0 or -errcode - for Rust that C calls.
+pub fn ret_to_c<E: Into<BchError>>(ret: Result<(), E>) -> c_int {
+    match ret {
+        Ok(())  => 0,
+        Err(e)  => -e.into().raw(),
+    }
 }
 
 pub fn errptr_to_result<T>(p: *mut T) -> Result<*mut T, BchError> {

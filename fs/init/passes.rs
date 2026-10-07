@@ -16,10 +16,7 @@ macro_rules! recovery_pass {
         pub unsafe extern "C" fn $name(c: *mut $crate::c::bch_fs) -> core::ffi::c_int {
             let fs = unsafe { $crate::fs::Fs::borrow_raw(c) };
 
-            match $pass(&fs) {
-                Ok(())  => 0,
-                Err(e)  => -$crate::errcode::BchError::from(e).raw(),
-            }
+            $crate::errcode::ret_to_c($pass(&fs))
         }
     };
 }
