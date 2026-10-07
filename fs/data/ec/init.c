@@ -497,21 +497,20 @@ static int check_bucket_to_stripe_ref(struct btree_trans *trans, struct bpos ref
 	struct bpos bucket = u64_to_bucket(ref.inode);
 	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, ref.offset), 0);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
-	int ret = 0;
 
-	if (fsck_err_on(k.k->type != KEY_TYPE_stripe,
-			trans, bucket_stripe_ref_to_missing_stripe,
-			"bucket %llu:%llu points to missing stripe %llu",
-			bucket.inode, bucket.offset, ref.offset))
+	if (ret_fsck_err_on(k.k->type != KEY_TYPE_stripe,
+			    trans, bucket_stripe_ref_to_missing_stripe,
+			    "bucket %llu:%llu points to missing stripe %llu",
+			    bucket.inode, bucket.offset, ref.offset))
 		return bucket_stripe_ref_mod(trans, bucket, ref.offset, false);
 
-	if (fsck_err_on(!bucket_matches_stripe(trans->c, bucket, bkey_s_c_to_stripe(k).v),
-			trans, bucket_stripe_ref_to_incorrect_stripe,
-			"bucket %llu:%llu doesn't match stripe %llu",
-			bucket.inode, bucket.offset, ref.offset))
+	if (ret_fsck_err_on(!bucket_matches_stripe(trans->c, bucket, bkey_s_c_to_stripe(k).v),
+			    trans, bucket_stripe_ref_to_incorrect_stripe,
+			    "bucket %llu:%llu doesn't match stripe %llu",
+			    bucket.inode, bucket.offset, ref.offset))
 		return bucket_stripe_ref_mod(trans, bucket, ref.offset, false);
-fsck_err:
-	return ret;
+
+	return 0;
 }
 
 int bch2_bucket_nr_stripes(struct btree_trans *trans, struct bpos bucket)
