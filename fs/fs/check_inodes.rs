@@ -40,7 +40,7 @@ use crate::c::bch_inode_flags::{
     BCH_INODE_has_access_acl, BCH_INODE_has_child_snapshot, BCH_INODE_has_default_acl,
     BCH_INODE_has_inode_opts, BCH_INODE_unlinked,
 };
-use crate::check::{self, SnapshotsSeen};
+use crate::check;
 use crate::errcode::{bch_errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
@@ -54,7 +54,6 @@ use crate::{inode, namei, str_hash};
 use core::fmt;
 
 struct CheckInodes {
-    s:             SnapshotsSeen,
     /// The oldest version of the inode being walked that the current key
     /// sees - the one every version takes its hash info from.
     snapshot_root: c::bch_inode_unpacked,
@@ -311,8 +310,6 @@ fn check_inode<'t>(
         return Ok(());
     }
 
-    st.s.update(k.k.p)?;
-
     if !inode::bkey_is_inode(k.k) {
         return Ok(());
     }
@@ -450,7 +447,6 @@ fn check_inodes(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     let progress = Progress::recovery(fs, c"bch2_check_inodes", &[c::btree_id::inodes], &[]);
     let mut st = CheckInodes {
-        s:             SnapshotsSeen::new(),
         snapshot_root: Default::default(),
     };
 
