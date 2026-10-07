@@ -136,6 +136,12 @@ impl Fs {
         core::mem::ManuallyDrop::new(Fs { raw })
     }
 
+    /// As borrow_raw(), for an entry point C calls with its filesystem:
+    /// safe, as an Opaque is always a live one.
+    pub fn from_c(c: &crate::util::ffi::Opaque<c::bch_fs>) -> core::mem::ManuallyDrop<Fs> {
+        unsafe { Self::borrow_raw(c.as_ptr()) }
+    }
+
     /// Access the superblock handle.
     pub fn sb_handle(&self) -> &c::bch_sb_handle {
         unsafe { &(*self.raw).disk_sb }

@@ -10,6 +10,7 @@ use crate::errcode::{
 };
 use crate::fs::Fs;
 use crate::printbuf_to_formatter;
+use crate::util::ffi::Opaque;
 use crate::util::log::CFnName;
 use crate::SPOS_MAX;
 use bitflags::bitflags;
@@ -97,6 +98,12 @@ impl<'f> BtreeTrans<'f> {
     pub unsafe fn borrow_raw(raw: *mut c::btree_trans) -> ManuallyDrop<BtreeTrans<'f>> {
         let fs = unsafe { &*(&raw const (*raw).c as *const Fs) };
         ManuallyDrop::new(BtreeTrans { raw, fs })
+    }
+
+    /// As borrow_raw(), for an entry point C calls with a transaction: safe,
+    /// as an Opaque is always a live one, and lives as long as the borrow.
+    pub fn from_c(trans: &'f Opaque<c::btree_trans>) -> ManuallyDrop<BtreeTrans<'f>> {
+        unsafe { Self::borrow_raw(trans.as_ptr()) }
     }
 
     /// How many times this transaction has committed: what's cached from the
@@ -1169,6 +1176,12 @@ impl<'t> BtreeIter<'t> {
     /// for 'a.
     pub(crate) unsafe fn borrow_raw<'a>(raw: *mut c::btree_iter) -> &'a mut BtreeIter<'t> {
         unsafe { &mut *(raw as *mut BtreeIter<'t>) }
+    }
+
+    /// As borrow_raw(), for an entry point C calls with an iterator: safe,
+    /// as an Opaque is always C's, and the &mut says nothing else is using it.
+    pub fn from_c<'a>(iter: &'a mut Opaque<c::btree_iter>) -> &'a mut BtreeIter<'t> {
+        unsafe { Self::borrow_raw(iter.as_ptr()) }
     }
 
     pub fn uninit() -> BtreeIter<'t> {
