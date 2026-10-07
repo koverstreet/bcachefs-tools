@@ -35,10 +35,15 @@ fn extra_cflags_defines() -> Vec<String> {
         .collect()
 }
 
+/// The CONFIG_* names a build can add through EXTRA_CFLAGS - make debug's -
+/// declared as cfgs whether or not this one does, so code conditional on
+/// them builds without them.
+const PER_BUILD_CONFIG: &[&str] = &["CONFIG_BCACHEFS_DEBUG", "CONFIG_VALGRIND"];
+
 /// Make the configuration's CONFIG_* defines Rust cfgs, as the kernel's
 /// rustc_cfg does for a kernel build: cfg(CONFIG_UNICODE) where C has
 /// CONFIG_UNICODE. Every name autoconf.h or EXTRA_CFLAGS mentions is
-/// declared, set or not.
+/// declared, set or not, and so is PER_BUILD_CONFIG.
 #[allow(dead_code)]
 fn emit_userspace_config_cfgs(root: &std::path::Path) {
     let header = root.join("c_src/autoconf.h");
@@ -53,6 +58,7 @@ fn emit_userspace_config_cfgs(root: &std::path::Path) {
         .map(String::from)
         .collect();
     let mut names = set.clone();
+    names.extend(PER_BUILD_CONFIG.iter().map(|n| n.to_string()));
 
     for f in extra_cflags_defines() {
         let (undef, def) = match f.strip_prefix("-U") {
