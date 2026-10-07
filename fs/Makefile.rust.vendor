@@ -17,11 +17,6 @@ RUST_LIB_SRC := $(shell $(RUSTC) --print sysroot)/lib/rustlib/src/rust/library
 # wouldn't be here. Redo for $(RUSTC) what the kernel decided by its version.
 # KBUILD_RUSTFLAGS is rewritten in place: every rule expands it lazily.
 
-# As CONFIG_RUSTC_VERSION: 1.85.0 is 108500.
-bch-vr-rustc-version := $(shell $(RUSTC) --version 2>/dev/null | \
-	awk '{ split($$2, v, "."); print v[1] * 100000 + v[2] * 100 + v[3] }')
-bch-vr-rustc-min = $(shell [ $(bch-vr-rustc-version) -ge $(1) ] && echo y)
-
 bch-rust-L := -L$(VRD)
 
 # target.json, where the kernel's flags use one (x86; the other architectures
@@ -37,7 +32,7 @@ $(shell	mkdir -p '$(VRD_ABS)' &&						\
 	  $(HOSTRUSTC) --edition=2021 -Copt-level=0			\
 	    '$(objtree)/scripts/generate_rust_target.rs' -o '$(VRD_ABS)/generate_rust_target'; } && \
 	{ grep -v '^CONFIG_RUSTC_VERSION=' '$(objtree)/include/config/auto.conf'; \
-	  echo CONFIG_RUSTC_VERSION=$(bch-vr-rustc-version); } |	\
+	  echo CONFIG_RUSTC_VERSION=$(bch-rustc-version); } |	\
 	'$(VRD_ABS)/generate_rust_target' > '$(bch-target-json).tmp' &&	\
 	{ cmp -s '$(bch-target-json).tmp' '$(bch-target-json)' && rm -f '$(bch-target-json).tmp' || \
 	  mv '$(bch-target-json).tmp' '$(bch-target-json)'; } ||		\
@@ -50,12 +45,13 @@ endif
 endif
 
 # rustc_cfg: the kernel's, with its CONFIG_RUSTC_HAS_* replaced by ours, at
-# init/Kconfig's thresholds.
+# init/Kconfig's thresholds. Its own mkdir: target.json's above is x86 only.
 bch-vr-rustc-has := SPAN_FILE:108800 UNNECESSARY_TRANSMUTES:108800 FILE_WITH_NUL:108900 \
 	FILE_AS_C_STR:109100 SUSPICIOUS_RUNTIME_SYMBOL_DEFINITIONS:109800
 bch-rustc-cfg := $(VRD_ABS)/rustc_cfg
-$(shell { grep -v '^--cfg=CONFIG_RUSTC_' '$(objtree)/include/generated/rustc_cfg'; \
-	$(foreach h,$(bch-vr-rustc-has),$(if $(call bch-vr-rustc-min,$(lastword $(subst :, ,$(h)))),\
+$(shell mkdir -p '$(VRD_ABS)' && \
+	{ grep -v '^--cfg=CONFIG_RUSTC_' '$(objtree)/include/generated/rustc_cfg'; \
+	$(foreach h,$(bch-vr-rustc-has),$(if $(call bch-rustc-min,$(lastword $(subst :, ,$(h)))),\
 		echo --cfg=CONFIG_RUSTC_HAS_$(firstword $(subst :, ,$(h)));)) } > '$(bch-rustc-cfg)')
 
 # -Zno-jump-tables became -Cjump-tables=n in 1.93: pass whichever we take.
@@ -71,7 +67,7 @@ endif
 bch-vr-fp-flag := -Zllvm_module_flag=frame-pointer:u32:2:max
 bch-vr-uwt-flag := -Zllvm_module_flag=uwtable:u32:2:max
 KBUILD_RUSTFLAGS := $(filter-out $(bch-vr-fp-flag) $(bch-vr-uwt-flag),$(KBUILD_RUSTFLAGS)) \
-	$(if $(call bch-vr-rustc-min,109800),,\
+	$(if $(call bch-rustc-min,109800),,\
 		$(if $(filter -Cforce-frame-pointers=y,$(KBUILD_RUSTFLAGS)),$(bch-vr-fp-flag)) \
 		$(if $(filter arm64,$(SRCARCH)),$(if $(filter -Cforce-unwind-tables=y,$(KBUILD_RUSTFLAGS)),$(bch-vr-uwt-flag))))
 
@@ -90,13 +86,13 @@ endif
 ifneq ($(CONFIG_CC_IS_CLANG),y)
 RUSTFLAGS_KASAN :=
 else ifdef CONFIG_KASAN_SW_TAGS
-RUSTFLAGS_KASAN := $(if $(call bch-vr-rustc-min,109600),$(RUSTFLAGS_KASAN))
+RUSTFLAGS_KASAN := $(if $(call bch-rustc-min,109600),$(RUSTFLAGS_KASAN))
 endif
 
 # AutoFDO's debuginfo flag, spelled for our rustc (renamed in 1.98).
 ifdef CONFIG_AUTOFDO_CLANG
 RUSTFLAGS_AUTOFDO_CLANG := $(filter-out -Zdebuginfo-for-profiling -Zdebug-info-for-profiling,$(RUSTFLAGS_AUTOFDO_CLANG)) \
-	$(if $(call bch-vr-rustc-min,109800),-Zdebuginfo-for-profiling,-Zdebug-info-for-profiling)
+	$(if $(call bch-rustc-min,109800),-Zdebuginfo-for-profiling,-Zdebug-info-for-profiling)
 endif
 
 # ---- the vendored crates ---------------------------------------------------
@@ -116,44 +112,15 @@ quiet_cmd_bch_vr_bindgen = BINDGEN $@
 	--no-debug '.*' --enable-function-attribute-detection -o $@ \
 	-- $(bch-vr-bindgen-cflags) $(rs-bindgen-cflags) $(rs-post)
 
-# proc-macro2, quote, syn: host rlibs, for the proc-macros.
-quiet_cmd_bch_vr_host = RUSTC H  $@
-      cmd_bch_vr_host = $(RUSTC) $(filter-out --edition=%,$(rust_common_flags)) \
-	$(bch-edition) $(rs-flags) --cap-lints=allow -L$(VRD) \
-	--crate-type rlib --crate-name $(bch-crate) --emit=dep-info=$(depfile) \
-	--emit=metadata=$@ --emit=link=$(VRD)/lib$(bch-crate).rlib $<
+# The proc-macros, on Makefile.rust's host crates:
+$(VRD)/libmacros.so $(VRD)/libzerocopy_derive.so: private rs-flags := $(bch-pmac)
+$(VRD)/libpin_init_internal.so: private rs-flags := $(bch-pmac) --cfg kernel --cfg USE_RUSTC_FEATURES
 
-$(VRD)/libproc_macro2.rmeta: private rs-flags := --cfg 'feature="proc-macro"' \
-	--cfg wrap_proc_macro \
-	$(if $(call bch-vr-rustc-min,108800),--cfg proc_macro_span_file --cfg proc_macro_span_location)
-$(VRD)/libproc_macro2.rmeta: $(VENDOR)/proc-macro2/lib.rs FORCE
-	$(call if_changed_dep,bch_vr_host)
-
-$(VRD)/libquote.rmeta: private rs-edition := 2018
-$(VRD)/libquote.rmeta: private rs-flags := --cfg 'feature="proc-macro"' \
-	--extern proc_macro2=$(VRD)/libproc_macro2.rlib
-$(VRD)/libquote.rmeta: $(VENDOR)/quote/lib.rs $(VRD)/libproc_macro2.rmeta FORCE
-	$(call if_changed_dep,bch_vr_host)
-
-$(VRD)/libsyn.rmeta: private rs-flags := $(foreach f,clone-impls derive full parsing \
-	printing proc-macro visit visit-mut,--cfg 'feature="$(f)"') \
-	--extern proc_macro2=$(VRD)/libproc_macro2.rlib --extern quote=$(VRD)/libquote.rlib
-$(VRD)/libsyn.rmeta: $(VENDOR)/syn/lib.rs $(VRD)/libquote.rmeta FORCE
-	$(call if_changed_dep,bch_vr_host)
-
-# The proc-macros:
-vr-pmac := --cap-lints=allow -L$(VRD) --extern proc_macro2=$(VRD)/libproc_macro2.rlib \
-	--extern quote=$(VRD)/libquote.rlib --extern syn=$(VRD)/libsyn.rlib
-vr-pmac-deps := $(VRD)/libsyn.rmeta FORCE
-
-$(VRD)/libmacros.so $(VRD)/libzerocopy_derive.so: private rs-flags := $(vr-pmac)
-$(VRD)/libpin_init_internal.so: private rs-flags := $(vr-pmac) --cfg kernel --cfg USE_RUSTC_FEATURES
-
-$(VRD)/libmacros.so: $(VENDOR)/macros/lib.rs $(vr-pmac-deps)
+$(VRD)/libmacros.so: $(VENDOR)/macros/lib.rs $(bch-pmac-deps)
 	$(call if_changed_dep,bch_procmacro)
-$(VRD)/libzerocopy_derive.so: $(VENDOR)/zerocopy-derive/lib.rs $(vr-pmac-deps)
+$(VRD)/libzerocopy_derive.so: $(VENDOR)/zerocopy-derive/lib.rs $(bch-pmac-deps)
 	$(call if_changed_dep,bch_procmacro)
-$(VRD)/libpin_init_internal.so: $(VENDOR)/pin-init/internal/src/lib.rs $(vr-pmac-deps)
+$(VRD)/libpin_init_internal.so: $(VENDOR)/pin-init/internal/src/lib.rs $(bch-pmac-deps)
 	$(call if_changed_dep,bch_procmacro)
 
 # core, our rustc's own, at its own edition; the soft-float and u128
@@ -266,14 +233,15 @@ quiet_cmd_bch_vr_mod = RUSTC M  $@
 	--crate-type rlib --crate-name bcachefs_mod \
 	--extern core=$(VRD)/libcore.rmeta --extern kernel=$(VRD)/libkernel.rmeta \
 	--extern pin_init=$(VRD)/libpin_init.rmeta --extern bindings=$(VRD)/libbindings.rmeta \
+	--extern zerocopy=$(VRD)/libzerocopy.rmeta \
 	--emit=obj=$@ $<
-$(obj)/mod.o: $(src)/mod.rs $(obj)/rust/bcachefs.rs $(VRD)/kernel.o FORCE
+$(obj)/mod.o: $(src)/mod.rs $(obj)/rust/bcachefs.rs $(VRD)/kernel.o $(VRD)/zerocopy.o FORCE
 	$(call if_changed,bch_vr_mod)
 
 bch-vr-objs := $(addprefix vrust/,core.o compiler_builtins.o ffi.o build_error.o \
 	zerocopy.o pin_init.o bindings.o uapi.o kernel.o helpers.o)
 bcachefs-y += $(bch-vr-objs)
-targets += $(bch-vr-objs) $(addprefix vrust/,libproc_macro2.rmeta libquote.rmeta \
-	libsyn.rmeta libmacros.so libpin_init_internal.so libzerocopy_derive.so) \
+targets += $(bch-vr-objs) $(addprefix vrust/,libmacros.so libpin_init_internal.so \
+	libzerocopy_derive.so) \
 	$(patsubst $(obj)/%,%,$(vr-arch-gen-rs) $(addprefix $(VRD)/rust/,\
 	bindings/bindings_generated.rs bindings/bindings_helpers_generated.rs uapi/uapi_generated.rs))

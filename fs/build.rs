@@ -41,6 +41,8 @@ fn main() {
     // `kernel` cfg selects kernel vs. bcachefs-shim types in mod.rs; cargo never
     // sets it, so declare it to avoid the unexpected-cfg warning.
     println!("cargo::rustc-check-cfg=cfg(kernel)");
+    // The build whose object rust_types_gen reads - see types/lib.rs.
+    println!("cargo::rustc-check-cfg=cfg(bch_cstruct_records)");
     // The kernel build's, as for C; types defined in Rust test it.
     println!("cargo::rustc-check-cfg=cfg(__KERNEL__)");
     // The shared codegen logic is include!d, not a tracked source file — tell

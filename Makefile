@@ -107,7 +107,7 @@ CFLAGS+=-std=gnu11 -O2 -g -MMD -MP -Wall -fPIC		\
 	-Wno-deprecated-declarations				\
 	-fno-strict-aliasing					\
 	-fno-delete-null-pointer-checks				\
-	-I. -Ic_src -Ifs -Iinclude -Iraid		\
+	-I. -Ic_src -Ifs -Iinclude -Iraid -Ibuild	\
 	-include c_src/autoconf.h				\
 	$(EXTRA_CFLAGS)
 
@@ -126,6 +126,8 @@ endif
 
 override CARGO_ARGS+=${CARGO_TOOLCHAIN}
 CARGO=cargo $(CARGO_ARGS)
+HOSTRUSTC?=rustc
+OBJCOPY?=objcopy
 CARGO_PROFILE=release
 # CARGO_PROFILE=debug
 
@@ -319,6 +321,55 @@ version.h: force
 
 .PHONY: generate_version
 generate_version: .version version.h
+
+# The C of the types defined in Rust (fs/types/lib.rs): foo/types_gen.h for
+# fs/foo/types.rs, which the headers include - so before any C. Each is
+# replaced only when it changes, as version.h is. In build/, not fs/:
+# install_dkms copies fs/'s headers, and the module build generates its own.
+#
+# Its source is the fs crate built for the target with
+# --cfg bch_cstruct_records: one object, whose .discard.bch_cstruct section has a
+# record of each type, its layout evaluated by rustc. That object is never
+# linked or run, so cross builds work as native ones do. Its own target dir,
+# so switching between it and the tools build doesn't rebuild the crate each
+# time. One codegen unit, not incremental, so it's one object: in RUSTFLAGS,
+# because cargo puts those last, and a codegen-units there would win.
+build/cstruct/fs.o: force
+	$(Q)mkdir -p $(dir $@)
+	$(Q)CARGO_INCREMENTAL=0 RUSTFLAGS="$$RUSTFLAGS -C codegen-units=1" \
+		$(CARGO) rustc $(CARGO_BUILD_ARGS) -q \
+		--target-dir build/gen-headers -p bcachefs-kernel --lib -- \
+		--cfg bch_cstruct_records --emit=obj=$(abspath $@)
+
+# rust_types_gen runs on the build host: no dependencies, plain rustc. Rebuilt
+# when the host rustc changes, as cargo would - a ktest VM builds in this tree
+# too, and its binary doesn't run on the host, nor the host's in the VM.
+build/hostrustc-version: force
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(HOSTRUSTC) -vV > $@.new
+	$(Q)cmp -s $@.new $@ || mv $@.new $@
+
+build/rust_types_gen: fs/types/main.rs fs/types/cstruct.rs build/hostrustc-version
+	@echo "    [RUSTC]  $@"
+	$(Q)$(HOSTRUSTC) --edition 2021 -O -o $@ $<
+
+# Each record is a section of its own, all of the same name: ld -r makes them
+# one, which objcopy extracts.
+build/cstruct/stamp: build/cstruct/fs.o build/rust_types_gen
+	@echo "    [GEN]    build/*_gen.h"
+	$(Q)$(LD) -r -o build/cstruct/records.o $<
+	$(Q)$(OBJCOPY) -O binary -j .discard.bch_cstruct build/cstruct/records.o build/cstruct/records.bin
+	$(Q)build/rust_types_gen build/cstruct/records.bin fs build
+	$(Q)touch $@
+
+$(OBJS): | build/cstruct/stamp
+
+# The headers come from the stamp's recipe: without saying so, make reads their
+# times before it runs - an object whose header just changed isn't rebuilt
+# until the next make. The generator rewrites only the headers that changed,
+# and make looks again after this, so only their objects are.
+build/%_gen.h: build/cstruct/stamp
+	@:
 
 .PHONY: dkms/dkms.conf
 dkms/dkms.conf: dkms/dkms.conf.in version.h

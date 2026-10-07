@@ -98,9 +98,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "bcachefs-cstruct-macros"
+version = "0.1.0"
+
+[[package]]
 name = "bcachefs-kernel"
 version = "0.1.0"
 dependencies = [
+ "bcachefs-cstruct-macros",
  "bcachefs-shim",
  "bcachefs-typeinfo-macros",
  "bitfield 0.14.0",

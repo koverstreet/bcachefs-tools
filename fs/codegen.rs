@@ -250,7 +250,9 @@ pub fn userspace_clang_args(src: &str, target: &str) -> Vec<String> {
     let include_dir = format!("{root}/include");
     let mut a = vec![format!("--target={target}")];
     a.extend(pkg_config_includes("liburcu"));
-    for d in [&root, &src.to_string(), &format!("{root}/c_src"), &include_dir] {
+    // build/: generated headers (rust_types_gen.h), as for the C compiles
+    for d in [&root, &src.to_string(), &format!("{root}/c_src"), &include_dir,
+              &format!("{root}/build")] {
         a.push(format!("-I{d}"));
     }
     a.extend(userspace_config_args(std::path::Path::new(&root)));

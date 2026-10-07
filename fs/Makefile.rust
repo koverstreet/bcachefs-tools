@@ -33,6 +33,12 @@ else
 bcachefs-kernel-rust-why := $(if $(shell command -v $(BINDGEN) 2>/dev/null),,bindgen ($(BINDGEN)) not found)
 endif
 
+# The on-disk format's endian integers are zerocopy's, which the kernel's Rust
+# has only had since 7.2:
+ifeq ($(bcachefs-kernel-rust-why),)
+bcachefs-kernel-rust-why := $(if $(wildcard $(objtree)/rust/libzerocopy.rmeta),,kernel $(KERNELVERSION)'s Rust has no zerocopy)
+endif
+
 ifneq ($(bcachefs-kernel-rust-why),)
 bcachefs-vendor-rust-probe := $(call bch-rust-available,vendored)
 ifeq ($(bcachefs-vendor-rust-probe),y)
@@ -84,7 +90,7 @@ bcachefs-codegen-cflags := \
 	$(LINUXINCLUDE) $(KBUILD_CPPFLAGS) \
 	$(filter-out -funsigned-char $(bcachefs-codegen-skip-cflags),$(KBUILD_CFLAGS)) \
 	$(bcachefs-config-cppflags) \
-	-I$(src) -include $(srctree)/include/linux/compiler_types.h \
+	-I$(src) -I$(obj)/rust -include $(srctree)/include/linux/compiler_types.h \
 	-w -D__BINDGEN__ -DRUST_BINDGEN
 
 # Types from outside fs/ are blocklisted, and come from kernel::bindings (as
@@ -168,15 +174,63 @@ quiet_cmd_bch_procmacro = RUSTC P  $@
 	--extern proc_macro --crate-type proc-macro --crate-name $(bch-crate) \
 	--emit=dep-info=$(depfile) --emit=link=$@ $<
 
+# Our rustc's version, as CONFIG_RUSTC_VERSION has it: 1.85.0 is 108500.
+bch-rustc-version := $(shell $(RUSTC) --version 2>/dev/null | \
+	awk '{ split($$2, v, "."); print v[1] * 100000 + v[2] * 100 + v[3] }')
+bch-rustc-min = $(shell [ "$(bch-rustc-version)" -ge $(1) ] 2>/dev/null && echo y)
+
+# proc-macro2, quote, syn: host rlibs, for the proc-macros - bitfield-struct's
+# here, the vendored stack's in Makefile.rust.vendor - with either Rust: the
+# kernel doesn't ship its own built for the host. From the vendored stack's
+# sources.
+bch-host := $(obj)/rust-host
+bch-host-src := $(src)/vendor/kernel-rust
+
+quiet_cmd_bch_host = RUSTC H  $@
+      cmd_bch_host = $(RUSTC) $(filter-out --edition=%,$(rust_common_flags)) \
+	$(bch-edition) $(rs-flags) --cap-lints=allow -L$(bch-host) \
+	--crate-type rlib --crate-name $(bch-crate) --emit=dep-info=$(depfile) \
+	--emit=metadata=$@ --emit=link=$(bch-host)/lib$(bch-crate).rlib $<
+
+$(bch-host)/libproc_macro2.rmeta: private rs-flags := --cfg 'feature="proc-macro"' \
+	--cfg wrap_proc_macro \
+	$(if $(call bch-rustc-min,108800),--cfg proc_macro_span_file --cfg proc_macro_span_location)
+$(bch-host)/libproc_macro2.rmeta: $(bch-host-src)/proc-macro2/lib.rs FORCE
+	$(call if_changed_dep,bch_host)
+
+$(bch-host)/libquote.rmeta: private rs-edition := 2018
+$(bch-host)/libquote.rmeta: private rs-flags := --cfg 'feature="proc-macro"' \
+	--extern proc_macro2=$(bch-host)/libproc_macro2.rlib
+$(bch-host)/libquote.rmeta: $(bch-host-src)/quote/lib.rs $(bch-host)/libproc_macro2.rmeta FORCE
+	$(call if_changed_dep,bch_host)
+
+$(bch-host)/libsyn.rmeta: private rs-flags := $(foreach f,clone-impls derive extra-traits \
+	full parsing printing proc-macro visit visit-mut,--cfg 'feature="$(f)"') \
+	--extern proc_macro2=$(bch-host)/libproc_macro2.rlib --extern quote=$(bch-host)/libquote.rlib
+$(bch-host)/libsyn.rmeta: $(bch-host-src)/syn/lib.rs $(bch-host)/libquote.rmeta FORCE
+	$(call if_changed_dep,bch_host)
+
+# The proc-macros on them:
+bch-pmac := --cap-lints=allow -L$(bch-host) --extern proc_macro2=$(bch-host)/libproc_macro2.rlib \
+	--extern quote=$(bch-host)/libquote.rlib --extern syn=$(bch-host)/libsyn.rlib
+bch-pmac-deps := $(bch-host)/libsyn.rmeta FORCE
+
 # Vendored crates get --cap-lints=allow: the kernel's lints are about how our
 # own code is written, not whether someone else's is correct (as cargo does for
 # dependencies) - and a rustc bump would otherwise break the build (#830).
-# typeinfo-macros is ours, and gets the lints.
+# typeinfo-macros and cstruct-macros are ours, and get the lints.
 $(obj)/libpaste.so $(obj)/bitfield.o $(obj)/bitflags.o $(obj)/uuid.o: private rs-flags := --cap-lints=allow
+$(obj)/libbitfield_struct.so: private rs-flags := $(bch-pmac)
 
 $(obj)/libpaste.so: $(src)/vendor/paste/src/lib.rs FORCE
 	$(call if_changed_dep,bch_procmacro)
 $(obj)/libtypeinfo_macros.so: $(src)/typeinfo-macros/src/lib.rs FORCE
+	$(call if_changed_dep,bch_procmacro)
+# cstruct-macros include!s its parser from types/cstruct.rs: the dep-info
+# tracks it.
+$(obj)/libcstruct_macros.so: $(src)/cstruct-macros/src/lib.rs FORCE
+	$(call if_changed_dep,bch_procmacro)
+$(obj)/libbitfield_struct.so: $(src)/vendor/bitfield-struct/src/lib.rs $(bch-pmac-deps)
 	$(call if_changed_dep,bch_procmacro)
 
 $(obj)/bitfield.o: $(src)/vendor/bitfield/src/lib.rs FORCE
@@ -189,22 +243,64 @@ $(obj)/uuid.o: $(src)/vendor/uuid/src/lib.rs FORCE
 # mod.o gets them as externs, and the codegen output via OUT_DIR, as in
 # userspace.
 bch-externs := paste:libpaste.so typeinfo_macros:libtypeinfo_macros.so \
+	cstruct_macros:libcstruct_macros.so bitfield_struct:libbitfield_struct.so \
 	bitfield:libbitfield.rmeta bitflags:libbitflags.rmeta uuid:libuuid.rmeta
 RUSTFLAGS_mod.o += $(foreach e,$(bch-externs),--extern $(subst :,=$(obj)/,$(e)))
 $(obj)/mod.o: export OUT_DIR := $(abspath $(obj)/rust)
 $(obj)/mod.o: $(obj)/rust/bcachefs.rs $(obj)/libpaste.so $(obj)/libtypeinfo_macros.so \
+	$(obj)/libcstruct_macros.so $(obj)/libbitfield_struct.so \
 	$(obj)/bitfield.o $(obj)/bitflags.o $(obj)/uuid.o
 
-targets += codegen rust/bcachefs.rs libpaste.so libtypeinfo_macros.so bitfield.o bitflags.o uuid.o
-bcachefs-y += mod.o rust/extern.o bitfield.o bitflags.o uuid.o
+# mod.o carries the records of the types defined in Rust that C shares
+# (types/lib.rs), in .discard.bch_cstruct: the headers are generated from them,
+# and linking the module discards them.
+RUSTFLAGS_mod.o += --cfg bch_cstruct_records
+
+targets += codegen rust/bcachefs.rs libpaste.so libtypeinfo_macros.so \
+	libcstruct_macros.so libbitfield_struct.so bitfield.o bitflags.o uuid.o \
+	$(addprefix rust-host/,libproc_macro2.rmeta libquote.rmeta libsyn.rmeta)
+bcachefs-rust-y := mod.o bitfield.o bitflags.o uuid.o
+bcachefs-y += $(bcachefs-rust-y) rust/extern.o
 
 # And what those rules write besides their targets: the rest of the codegen's
 # output, the rlibs' metadata, and the vendored stack's directory - here, as
 # clean doesn't always read Makefile.rust.vendor.
-clean-files += rust vrust lib*.rmeta
+clean-files += rust rust-host vrust lib*.rmeta
 
 # Makefile.rust.vendor builds mod.o against the vendored stack; otherwise kbuild
 # builds it.
 ifeq ($(bcachefs-vendor-rust),y)
 include $(src)/Makefile.rust.vendor
 endif
+
+# ---- the C of the types defined in Rust ------------------------------------
+# foo/types_gen.h for foo/types.rs (types/lib.rs), written from mod.o's
+# records by rust_types_gen, a host program. In $(obj)/rust, never $(src):
+# userspace generates its own. Every C object waits for them; mod.o and the
+# bindings it's built from can't - they come first.
+#
+# Each record is a section of its own, all of the same name: ld -r makes them
+# one, which objcopy extracts.
+$(obj)/rust_types_gen: $(src)/types/main.rs $(src)/types/cstruct.rs FORCE
+	$(call if_changed,bch_codegen_host)
+
+quiet_cmd_bch_cstruct_gen = GEN     $(obj)/rust/*_gen.h
+      cmd_bch_cstruct_gen = $(LD) -r -o $(obj)/rust/cstruct.o $< && \
+	$(OBJCOPY) -O binary -j .discard.bch_cstruct $(obj)/rust/cstruct.o $(obj)/rust/cstruct.bin && \
+	$(obj)/rust_types_gen $(obj)/rust/cstruct.bin $(src) $(obj)/rust && \
+	touch $@
+
+$(obj)/rust/cstruct.stamp: $(obj)/mod.o $(obj)/rust_types_gen FORCE
+	$(call if_changed,bch_cstruct_gen)
+
+targets += rust_types_gen rust/cstruct.stamp
+
+# After the vendored stack's include: its objects are in bcachefs-y by now.
+subdir-ccflags-y += -I$(obj)/rust
+$(addprefix $(obj)/,$(filter-out $(bcachefs-rust-y) vrust/%,$(bcachefs-y))): | $(obj)/rust/cstruct.stamp
+
+# The headers come from the stamp's recipe: without saying so, make reads their
+# times before it runs, and an object whose header just changed isn't rebuilt.
+# rust_types_gen rewrites only the headers that changed.
+$(obj)/rust/%_gen.h: $(obj)/rust/cstruct.stamp
+	@:

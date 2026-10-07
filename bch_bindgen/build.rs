@@ -514,6 +514,8 @@ fn main() {
         .clang_arg("-I../fs")
         .clang_arg("-I../c_src")
         .clang_arg("-I../include")
+        // generated headers - rust_types_gen.h - as for the C compiles:
+        .clang_arg("-I../build")
         .clang_args(userspace_config_args(root))
         .clang_arg("-DRUST_BINDGEN")
         .clang_arg("-fkeep-inline-functions")
@@ -681,6 +683,7 @@ fn main() {
         .include(top_dir.join("../fs"))
         .include(top_dir.join("../c_src"))
         .include(top_dir.join("../include"))
+        .include(top_dir.join("../build"))
         .define("RUST_BINDGEN", None)
         .flag("-fkeep-inline-functions")
         .warnings(false);

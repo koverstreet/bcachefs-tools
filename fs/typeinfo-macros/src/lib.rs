@@ -295,8 +295,9 @@ fn classify(ty: &[TokenTree]) -> String {
         "usize" | "c_ulong" => ("", "Native", false),
         "isize" | "c_long" => ("", "Native", true),
         other => {
-            // Nested struct/union/enum we also derive on?
-            if derives_type_info(other) {
+            // Nested struct/union/enum we also derive on? Not a generic -
+            // a container of one, DArray<bch_foo>: that's opaque.
+            if derives_type_info(other) && !full.contains('<') {
                 return format!(
                     "crate::typeinfo::FieldKind::Struct(\
                          <{full} as crate::typeinfo::TypeInfo>::INFO)"
