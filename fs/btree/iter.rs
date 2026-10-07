@@ -1888,7 +1888,7 @@ impl<'t> BtreeNodeIter<'t> {
             if end == SPOS_MAX {
                 return Ok(());
             }
-            unsafe { c::bch2_btree_iter_set_pos(raw, c::bpos_successor(end)) };
+            unsafe { c::bch2_btree_iter_set_pos(raw, end.successor()) };
         }
     }
 }

@@ -196,6 +196,36 @@ pub const POS_MIN: Bpos = spos(0, 0, 0);
 pub const POS_MAX: Bpos = spos(u64::MAX, u64::MAX, 0);
 pub const SPOS_MAX: Bpos = spos(u64::MAX, u64::MAX, u32::MAX);
 
+impl c::bpos {
+    /// The next position, snapshot field first: as bpos_successor(). There's
+    /// none after SPOS_MAX - panics, as C BUG()s.
+    pub fn successor(self) -> Self {
+        let (inode, offset, snapshot) = (self.inode, self.offset, self.snapshot);
+
+        if let Some(snapshot) = snapshot.checked_add(1) {
+            spos(inode, offset, snapshot)
+        } else if let Some(offset) = offset.checked_add(1) {
+            spos(inode, offset, 0)
+        } else {
+            spos(inode.checked_add(1).expect("no position after SPOS_MAX"), 0, 0)
+        }
+    }
+
+    /// The previous position, snapshot field first: as bpos_predecessor().
+    /// There's none before POS_MIN - panics, as C BUG()s.
+    pub fn predecessor(self) -> Self {
+        let (inode, offset, snapshot) = (self.inode, self.offset, self.snapshot);
+
+        if let Some(snapshot) = snapshot.checked_sub(1) {
+            spos(inode, offset, snapshot)
+        } else if let Some(offset) = offset.checked_sub(1) {
+            spos(inode, offset, u32::MAX)
+        } else {
+            spos(inode.checked_sub(1).expect("no position before POS_MIN"), u64::MAX, u32::MAX)
+        }
+    }
+}
+
 /// Parse a bpos field that holds a u64 (inode, offset). Accepts the literal
 /// tokens "U64_MAX" / "U32_MAX" as their respective sentinel values, matching
 /// how positions are printed in dmesg / bcachefs_to_text output.
@@ -760,4 +790,36 @@ pub fn bkey_is_btree_ptr(k: &c::bkey) -> bool {
         c::bch_bkey_type(k.type_ as u32),
         c::bch_bkey_type::KEY_TYPE_btree_ptr | c::bch_bkey_type::KEY_TYPE_btree_ptr_v2
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bpos_successor_predecessor_carry() {
+        let cases = [
+            (spos(1, 2, 3),               spos(1, 2, 4)),
+            (spos(1, 2, u32::MAX),        spos(1, 3, 0)),
+            (spos(1, u64::MAX, u32::MAX), spos(2, 0, 0)),
+            (POS_MIN,                     spos(0, 0, 1)),
+        ];
+
+        for (p, next) in cases {
+            assert_eq!(p.successor(), next, "successor of {p}");
+            assert_eq!(next.predecessor(), p, "predecessor of {next}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "no position after SPOS_MAX")]
+    fn bpos_successor_of_max() {
+        SPOS_MAX.successor();
+    }
+
+    #[test]
+    #[should_panic(expected = "no position before POS_MIN")]
+    fn bpos_predecessor_of_min() {
+        POS_MIN.predecessor();
+    }
 }
