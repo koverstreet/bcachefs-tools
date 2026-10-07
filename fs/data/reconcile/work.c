@@ -1797,7 +1797,7 @@ static int do_reconcile_phase_iter(struct reconcile_pass *p, u32 kick,
 			wait_event_state(c->copygc.running_wq,
 					 c->copygc.run_count != *p->copygc_run_count ||
 					 kthread_should_stop(),
-					 TASK_IDLE|TASK_FREEZABLE);
+					 (TASK_IDLE|TASK_FREEZABLE));
 			*p->copygc_run_count = c->copygc.run_count;
 			ret = 0;
 			continue;
