@@ -93,7 +93,7 @@ s64 bch2_ec_scrub_block(struct bch_fs *, struct ec_stripe_buf *, unsigned);
 void bch2_ec_generate_ec(struct ec_stripe_buf *);
 void bch2_ec_generate_checksums(struct ec_stripe_buf *);
 
-bool bch2_stripe_buf_blocks_good(struct ec_stripe_buf *, u32);
+u32 bch2_stripe_buf_bad(struct ec_stripe_buf *, u32);
 int bch2_stripe_buf_validate_msg(struct bch_fs *, struct ec_stripe_buf *, bool, u32);
 
 void bch2_ec_block_io(struct bch_fs *, struct ec_stripe_buf *, blk_opf_t, unsigned);
@@ -101,6 +101,7 @@ void bch2_ec_block_io_range(struct bch_fs *, struct ec_stripe_buf *, blk_opf_t, 
 			    unsigned, unsigned);
 void bch2_stripe_buf_read(struct bch_fs *, struct ec_stripe_buf *, u32);
 
+u32 bch2_ec_read_next(struct bch_fs *, const struct bch_stripe *, u32, u32);
 u32 bch2_ec_read_around_skip(struct bch_fs *, const struct bch_stripe *, u32);
 int bch2_ec_read_around_pick(struct btree_trans *, struct extent_ptr_decoded *,
 			     struct bch_io_failures *, enum bch_read_flags *, int);

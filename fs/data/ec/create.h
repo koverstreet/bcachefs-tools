@@ -79,7 +79,7 @@ struct ec_stripe_new {
 	 */
 	int			old_stripe_err;
 	u32			old_stripe_lost_blocks;
-	u32			old_stripe_skipped;	/* slow, rebuilt from the others */
+	u32			old_stripe_unread;
 
 	struct bch_devs_mask	devs;
 	enum bch_watermark	watermark;
@@ -90,7 +90,6 @@ struct ec_stripe_new {
 	bool			allocated:1;
 	bool			mem_allocated:1;
 	bool			old_stripe_read:1;
-	bool			old_stripe_read_all:1;
 
 	unsigned long		blocks_gotten[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)];
 	unsigned long		blocks_allocated[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)];

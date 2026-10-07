@@ -379,20 +379,22 @@ s64 bch2_ec_scrub_block(struct bch_fs *c, struct ec_stripe_buf *buf, unsigned bl
 }
 
 /*
- * Were the blocks in @mask read without error, and do they match the stripe's
- * checksums? Doesn't record anything: a failure here is followed by a full
- * read and bch2_stripe_buf_validate_msg(), which does.
+ * The blocks in @mask that failed the read or don't match the stripe's
+ * checksums. Doesn't record anything: bch2_stripe_buf_validate_msg() does.
  */
-bool bch2_stripe_buf_blocks_good(struct ec_stripe_buf *buf, u32 mask)
+u32 bch2_stripe_buf_bad(struct ec_stripe_buf *buf, u32 mask)
 {
 	unsigned csum_granularity = 1U << buf->key.v.csum_granularity_bits;
+	u32 bad = 0;
 
 	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++) {
 		if (!(mask & BIT(i)))
 			continue;
 
-		if (buf->err[STRIPE_BUF_PRE_RECOV][i])
-			return false;
+		if (buf->err[STRIPE_BUF_PRE_RECOV][i]) {
+			bad |= BIT(i);
+			continue;
+		}
 
 		if (!buf->key.v.csum_type)
 			continue;
@@ -403,12 +405,14 @@ bool bch2_stripe_buf_blocks_good(struct ec_stripe_buf *buf, u32 mask)
 			unsigned j = offset >> buf->key.v.csum_granularity_bits;
 
 			if (bch2_crc_cmp(stripe_csum_get(&buf->key.v, i, j),
-					 ec_block_checksum(buf, i, offset)))
-				return false;
+					 ec_block_checksum(buf, i, offset))) {
+				bad |= BIT(i);
+				break;
+			}
 		}
 	}
 
-	return true;
+	return bad;
 }
 
 void bch2_ec_generate_ec(struct ec_stripe_buf *buf)
@@ -826,6 +830,22 @@ static int ec_fastest_block(struct bch_fs *c, const struct bch_stripe *v, u32 ma
 		if ((mask & BIT(i)) && (fastest < 0 || lat[i] < lat[fastest]))
 			fastest = i;
 	return fastest;
+}
+
+/*
+ * For a rebuild of @v, with @unread not read yet and @failed the blocks unread
+ * or bad: what to read before trying it. Nothing if it can work now; one block
+ * short of that, the fastest of @unread; otherwise all of them.
+ */
+u32 bch2_ec_read_next(struct bch_fs *c, const struct bch_stripe *v, u32 unread, u32 failed)
+{
+	if (!unread || hweight32(failed) <= v->nr_redundant)
+		return 0;
+
+	int next = hweight32(failed) == v->nr_redundant + 1
+		? ec_fastest_block(c, v, unread)
+		: -1;
+	return next >= 0 ? BIT(next) : unread;
 }
 
 /*
