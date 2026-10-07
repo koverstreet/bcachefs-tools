@@ -1375,17 +1375,7 @@ pub fn trigger(trans: &BtreeTrans<'_>, op: &mut TriggerOp<'_>) -> Result<(), Bch
     Ok(())
 }
 
-/// For C's bkey_ops: bch2_trigger_inode().
-///
-/// # Safety
-/// @op the update the transaction is triggering for, in its commit.
-#[no_mangle]
-pub unsafe extern "C" fn bch2_trigger_inode(
-    trans:  &Opaque<c::btree_trans>,
-    mut op: c::btree_trigger_op,
-) -> core::ffi::c_int {
-    ret_to_c(trigger(&BtreeTrans::from_c(trans), &mut unsafe { TriggerOp::from_raw(&mut op) }))
-}
+crate::key_trigger!(bch2_trigger_inode => trigger);
 
 // ── Deleting inodes ──────────────────────────────────────────────────────
 //

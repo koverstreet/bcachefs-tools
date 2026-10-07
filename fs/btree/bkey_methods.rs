@@ -232,3 +232,26 @@ impl<'a> TriggerOp<'a> {
         }
     }
 }
+
+/// Export @trigger, a `fn(&BtreeTrans, &mut TriggerOp) -> Result<(), E>`
+/// (or taking `&TriggerOp`) with E converting to BchError, as the key type
+/// trigger C's bkey_ops calls @name:
+///
+/// `key_trigger!(bch2_trigger_inode => trigger);`
+#[macro_export]
+macro_rules! key_trigger {
+    ($name:ident => $trigger:path) => {
+        /// # Safety
+        /// @op is the update the transaction is triggering for, in its
+        /// commit: bkey_ops' caller.
+        #[no_mangle]
+        pub unsafe extern "C" fn $name(
+            trans:  &$crate::util::ffi::Opaque<$crate::c::btree_trans>,
+            mut op: $crate::c::btree_trigger_op,
+        ) -> core::ffi::c_int {
+            let mut op = unsafe { $crate::btree::bkey_methods::TriggerOp::from_raw(&mut op) };
+
+            $crate::errcode::ret_to_c($trigger(&$crate::btree::iter::BtreeTrans::from_c(trans), &mut op))
+        }
+    };
+}
