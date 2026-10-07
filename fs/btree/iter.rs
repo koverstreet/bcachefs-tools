@@ -105,6 +105,39 @@ impl<'f> BtreeTrans<'f> {
         unsafe { (*self.raw).commit_count }
     }
 
+    /// The journal sequence number the commit in progress is going into: for
+    /// atomic triggers, which run with the journal reservation held.
+    pub fn journal_res_seq(&self) -> u64 {
+        unsafe { (*self.raw).journal_res.seq }
+    }
+
+    /// Delete [@start, @end) in @btree, committing as it goes: as
+    /// bch2_btree_delete_range_trans(). It drives its own begin and commit
+    /// loop, so it's on the transaction, not an attempt -
+    /// transaction_restart_nested if it restarted along the way, for a caller
+    /// in an attempt to begin again.
+    pub fn delete_range(
+        &self,
+        btree: c::btree_id,
+        start: bpos,
+        end:   bpos,
+        flags: UpdateTriggerFlags,
+    ) -> Result<(), BchError> {
+        crate::errcode::ret_to_result(unsafe {
+            c::bch2_btree_delete_range_trans(self.raw, btree, start, end,
+                                             c::btree_iter_update_trigger_flags(flags.bits()))
+        }).map(|_| ())
+    }
+
+    /// Flush the btree write buffer, through to the journal sequence number
+    /// being written: as bch2_btree_write_buffer_flush_sync(). It leaves the
+    /// transaction unlocked - the next btree access has to begin it again.
+    pub fn write_buffer_flush_sync(&self) -> Result<(), BchError> {
+        crate::errcode::ret_to_result(unsafe {
+            c::bch2_btree_write_buffer_flush_sync(self.raw)
+        }).map(|_| ())
+    }
+
     /// The attempt C began, for Rust that C calls partway through one.
     pub(crate) fn attempt_in_progress<'a>(&'a self) -> TransAttempt<'a, 'f> {
         TransAttempt {
@@ -1203,6 +1236,12 @@ impl<'t> BtreeIter<'t> {
     /// The snapshot it looks in.
     pub fn snapshot(&self) -> u32 {
         self.r().snapshot
+    }
+
+    /// Whether it walks extents - keys covering a range, ending at their
+    /// position.
+    pub fn is_extents(&self) -> bool {
+        self.r().flags & BtreeIterFlags::IS_EXTENTS.bits() != 0
     }
 
     /// Turn on @flags: for walking an iterator with flags it wasn't made

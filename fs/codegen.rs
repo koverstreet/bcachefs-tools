@@ -22,7 +22,7 @@ include!("build_config.rs");
 
 const HEADERS: &[&str] = &[
     "bcachefs.h", "opts.h",
-    "btree/cache.h", "btree/interior.h", "btree/iter.h", "btree/read.h",
+    "btree/cache.h", "btree/interior.h", "btree/iter.h", "btree/read.h", "btree/write_buffer.h",
     "alloc/accounting.h", "alloc/background.h", "alloc/buckets.h", "alloc/disk_groups.h",
     "data/checksum.h", "data/ec/trigger.h", "data/extents.h", "data/io_misc.h", "data/move.h", "data/read.h", "data/update.h", "data/write.h",
     "debug/debug.h",

@@ -111,6 +111,12 @@ impl c::bkey {
         self.size = size;
     }
 
+    /// Make an extent @new_size long, from where it starts now - its end,
+    /// its position, moves: as bch2_key_resize().
+    pub fn resize(&mut self, new_size: u32) {
+        unsafe { c::bch2_key_resize(self, new_size) }
+    }
+
     pub fn set_range(&mut self, inode: u64, start: u64, end: u64, snapshot: u32) {
         self.p = spos(inode, end, snapshot);
         self.size = (end - start) as u32;

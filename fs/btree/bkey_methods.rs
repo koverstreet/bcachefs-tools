@@ -25,7 +25,7 @@
 //! enum-coded field the codeword's name.
 
 use crate::btree::bkey::{BkeyS, BkeySC};
-use crate::btree::iter::TransBkey;
+use crate::btree::iter::{TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::fs::Fs;
 use crate::{dirent, inode};
@@ -203,5 +203,37 @@ impl TransBkey<'_, '_> {
 
         self.as_mut_u64s()[..need_u64s].copy_from_slice(&packed_u64s[..need_u64s]);
         Ok(())
+    }
+}
+
+// ── Triggers ─────────────────────────────────────────────────────────────
+
+/// What a key type's trigger is called with: an update to @btree at @level,
+/// as the key it overwrites and the key going in - as struct
+/// btree_trigger_op. @new is mutable: an atomic trigger can edit the key
+/// going in, in place.
+pub struct TriggerOp<'a> {
+    pub btree: c::btree_id,
+    pub level: u32,
+    pub old:   BkeySC<'a>,
+    pub new:   BkeyS<'a>,
+    pub flags: UpdateTriggerFlags,
+}
+
+impl<'a> TriggerOp<'a> {
+    /// The op C called a trigger with.
+    ///
+    /// # Safety
+    /// @op is the one the trigger was called with: both keys valid, and @new
+    /// the trigger's to edit, for 'a.
+    pub unsafe fn from_raw(op: &'a mut c::btree_trigger_op) -> Self {
+        let new = unsafe { &mut op.new.__bindgen_anon_1.__bindgen_anon_1 };
+        TriggerOp {
+            btree: op.btree,
+            level: op.level,
+            old:   BkeySC::from(&op.old),
+            new:   BkeyS { k: unsafe { &mut *new.k }, v: unsafe { &mut *new.v } },
+            flags: UpdateTriggerFlags::from_bits_retain(op.flags.0),
+        }
     }
 }
