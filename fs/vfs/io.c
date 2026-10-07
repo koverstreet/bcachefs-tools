@@ -171,9 +171,10 @@ void __bch2_i_sectors_acct(struct bch_fs *c, struct bch_inode_info *inode,
 	inode->v.i_blocks += sectors;
 
 #ifdef CONFIG_BCACHEFS_QUOTA
-	if (quota_res &&
-	    !test_bit(EI_INODE_SNAPSHOT, &inode->ei_flags) &&
-	    sectors > 0) {
+	if (test_bit(EI_INODE_SNAPSHOT, &inode->ei_flags))
+		return;
+
+	if (quota_res && sectors > 0) {
 		BUG_ON(sectors > quota_res->sectors);
 		BUG_ON(sectors > inode->ei_quota_reserved);
 

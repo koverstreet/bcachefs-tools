@@ -218,11 +218,13 @@ int bch2_fs_quota_transfer(struct bch_fs *c,
 
 	guard(mutex)(&inode->ei_quota_lock);
 
-	int ret = bch2_quota_transfer(c, qtypes, new_qid,
-				  inode->ei_qid,
-				  inode->v.i_blocks +
-				  inode->ei_quota_reserved,
-				  mode);
+	/* Quotas don't count snapshot inodes: only the qid changes. */
+	int ret = test_bit(EI_INODE_SNAPSHOT, &inode->ei_flags) ? 0 :
+		bch2_quota_transfer(c, qtypes, new_qid,
+				    inode->ei_qid,
+				    inode->v.i_blocks +
+				    inode->ei_quota_reserved,
+				    mode);
 	if (!ret)
 		for (unsigned i = 0; i < QTYP_NR; i++)
 			if (qtypes & (1 << i))
@@ -777,6 +779,9 @@ __bch2_create(struct mnt_idmap *idmap,
 retry:
 	bch2_trans_begin(trans);
 
+	bool quota = !test_bit(EI_INODE_SNAPSHOT, &dir->ei_flags) &&
+		!(flags & BCH_CREATE_SNAPSHOT);
+
 	ret   = bch2_create_trans(trans,
 				  inode_inum(dir), &dir_u, &inode_u, &subvol,
 				  !(flags & BCH_CREATE_TMPFILE)
@@ -785,8 +790,8 @@ retry:
 				  from_kgid(i_user_ns(&dir->v), kgid),
 				  mode, rdev,
 				  default_acl, acl, snapshot_src, flags) ?:
-		bch2_quota_acct(c, bch_qid(&inode_u), Q_INO, 1,
-				KEY_TYPE_QUOTA_PREALLOC);
+		(quota ? bch2_quota_acct(c, bch_qid(&inode_u), Q_INO, 1,
+					 KEY_TYPE_QUOTA_PREALLOC) : 0);
 	if (unlikely(ret))
 		goto err_before_quota;
 
@@ -807,8 +812,9 @@ retry:
 					 inum, &inode_u, flags) ?:
 		bch2_trans_commit(trans, NULL, NULL, 0);
 	if (unlikely(ret)) {
-		bch2_quota_acct(c, bch_qid(&inode_u), Q_INO, -1,
-				KEY_TYPE_QUOTA_WARN);
+		if (quota)
+			bch2_quota_acct(c, bch_qid(&inode_u), Q_INO, -1,
+					KEY_TYPE_QUOTA_WARN);
 err_before_quota:
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 			goto retry;
@@ -1320,8 +1326,9 @@ retry:
 					from_kgid(i_user_ns(&src_dir->v), current_fsgid()),
 					S_IFCHR|WHITEOUT_MODE, 0,
 					NULL, NULL, (subvol_inum) { 0 }, 0) ?:
-		      bch2_quota_acct(c, bch_qid(whiteout_inode_u), Q_INO, 1,
-				      KEY_TYPE_QUOTA_PREALLOC);
+		      (!test_bit(EI_INODE_SNAPSHOT, &src_dir->ei_flags)
+		       ? bch2_quota_acct(c, bch_qid(whiteout_inode_u), Q_INO, 1,
+					 KEY_TYPE_QUOTA_PREALLOC) : 0);
 		if (unlikely(ret))
 			goto err_tx_restart;
 	}
@@ -2539,10 +2546,12 @@ static void bch2_evict_inode(struct inode *vinode)
 	BUG_ON(!is_bad_inode(&inode->v) && inode->ei_quota_reserved);
 
 	if (delete) {
-		bch2_quota_acct(c, inode->ei_qid, Q_SPC, -((s64) inode->v.i_blocks),
-				KEY_TYPE_QUOTA_WARN);
-		bch2_quota_acct(c, inode->ei_qid, Q_INO, -1,
-				KEY_TYPE_QUOTA_WARN);
+		if (!test_bit(EI_INODE_SNAPSHOT, &inode->ei_flags)) {
+			bch2_quota_acct(c, inode->ei_qid, Q_SPC, -((s64) inode->v.i_blocks),
+					KEY_TYPE_QUOTA_WARN);
+			bch2_quota_acct(c, inode->ei_qid, Q_INO, -1,
+					KEY_TYPE_QUOTA_WARN);
+		}
 		bch2_inode_rm(c, inode_inum(inode));
 
 		/*
