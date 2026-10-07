@@ -420,6 +420,20 @@ macro_rules! bkey_types {
                     _ => BkeyValS::unknown(&mut k.k, type_),
                 }
             }
+
+            /// Construct from raw key and value references: as
+            /// BkeyValSC::from_raw(), mutably.
+            ///
+            /// # Safety
+            /// `val` must point to valid data for the bkey type indicated by `k.type_`.
+            #[allow(clippy::missing_transmute_annotations)]
+            pub unsafe fn from_raw(k: &'a mut c::bkey, val: &'a mut c::bch_val) -> Self {
+                let type_ = k.type_;
+                match type_ as u32 {
+                    $($nr => BkeyValS::$name(k, unsafe { core::mem::transmute(val) }),)*
+                    _ => BkeyValS::unknown(k, type_),
+                }
+            }
         }
     }};
 }
@@ -560,6 +574,11 @@ impl<'a> BkeyS<'a> {
 
     pub fn key_type(&self) -> c::bch_bkey_type {
         c::bch_bkey_type(self.k.type_ as u32)
+    }
+
+    /// The value, by the key's type, mutably: as BkeySC::v().
+    pub fn v_mut(&mut self) -> BkeyValS<'_> {
+        unsafe { BkeyValS::from_raw(self.k, self.v) }
     }
 
     /// The value bytes, mutably. Length is derived from the key's `u64s`; the
