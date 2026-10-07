@@ -481,6 +481,50 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(unsafe { core::slice::from_raw_parts_mut(ptr, bytes) })
     }
 
+    /// Run @f in this attempt's commit, under its btree write locks: as
+    /// bch2_trans_commit_hook(). It runs before the commit is certain - what
+    /// follows can still fail it - and a restart drops it, with the rest of
+    /// the attempt's memory.
+    ///
+    /// That memory is freed without running destructors, so @f is Copy; and
+    /// it outlives this call, so 'static.
+    pub fn commit_hook<F>(&self, f: F) -> Result<(), BchError>
+    where
+        F: Fn(&BtreeTrans<'_>) -> Result<(), BchError> + Copy + 'static,
+    {
+        #[repr(C)]
+        struct Hook<F> {
+            h: c::btree_trans_commit_hook,
+            f: F,
+        }
+
+        unsafe extern "C" fn run<F>(
+            trans: *mut c::btree_trans,
+            h:     *mut c::btree_trans_commit_hook,
+        ) -> core::ffi::c_int
+        where
+            F: Fn(&BtreeTrans<'_>) -> Result<(), BchError>,
+        {
+            // SAFETY: @h is the first field of the Hook<F> commit_hook() queued.
+            let hook = unsafe { &*(h as *const Hook<F>) };
+            let trans = unsafe { BtreeTrans::borrow_raw(trans) };
+            crate::errcode::ret_to_c((hook.f)(&trans))
+        }
+
+        // bch2_trans_kmalloc() gives 8 byte alignment:
+        const { assert!(core::mem::align_of::<Hook<F>>() <= 8) };
+
+        let hook = self.kmalloc(size_of::<Hook<F>>())?.as_mut_ptr() as *mut Hook<F>;
+        unsafe {
+            hook.write(Hook {
+                h: c::btree_trans_commit_hook { fn_: Some(run::<F>), next: core::ptr::null_mut() },
+                f,
+            });
+            c::bch2_trans_commit_hook(self.raw(), &raw mut (*hook).h);
+        }
+        Ok(())
+    }
+
     pub fn bkey_alloc(&self, u64s: u32) -> Result<TransBkey<'a, 't>, BchError> {
         let bytes = u64s as usize * size_of::<u64>();
         let ptr = unsafe { c::bch2_trans_kmalloc(self.raw(), bytes) };
