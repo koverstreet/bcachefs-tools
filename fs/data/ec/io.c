@@ -798,6 +798,36 @@ static unsigned ec_slowest_block(const struct bch_stripe *v, u32 mask, const u64
 	return slowest;
 }
 
+/* The blocks of @v that can be read now: online, not stale, with a latency sample */
+static u32 ec_block_latencies(struct bch_fs *c, const struct bch_stripe *v, u64 *lat)
+{
+	u32 usable = 0;
+
+	guard(rcu)();
+	for (unsigned i = 0; i < v->nr_blocks; i++) {
+		struct bch_dev *ca = bch2_dev_rcu_noerror(c, v->ptrs[i].dev);
+		lat[i] = ca && bch2_dev_is_online(ca) && !dev_ptr_stale_rcu(ca, &v->ptrs[i])
+			? atomic64_read(&ca->cur_latency[READ])
+			: 0;
+		if (lat[i])
+			usable |= BIT(i);
+	}
+	return usable;
+}
+
+/* The fastest of @mask's blocks that can be read now, or -1 */
+static int ec_fastest_block(struct bch_fs *c, const struct bch_stripe *v, u32 mask)
+{
+	u64 lat[BCH_BKEY_PTRS_MAX];
+	int fastest = -1;
+
+	mask &= ec_block_latencies(c, v, lat);
+	for (unsigned i = 0; i < v->nr_blocks; i++)
+		if ((mask & BIT(i)) && (fastest < 0 || lat[i] < lat[fastest]))
+			fastest = i;
+	return fastest;
+}
+
 /*
  * The blocks of @v slower by @cost than @read, the nr_data fastest that can be
  * read now (not in @skip, online, not stale, with a latency sample), which a
@@ -807,22 +837,8 @@ static u32 ec_read_around_slow(struct bch_fs *c, const struct bch_stripe *v,
 			       u32 skip, unsigned penalty, u32 *read, u64 *cost)
 {
 	unsigned nr_data = v->nr_blocks - v->nr_redundant;
-	u64 lat[BCH_BKEY_PTRS_MAX] = {};
-	u32 usable = 0, slow = 0;
-
-	scoped_guard(rcu)
-		for (unsigned i = 0; i < v->nr_blocks; i++) {
-			struct bch_dev *ca = bch2_dev_rcu_noerror(c, v->ptrs[i].dev);
-			if ((skip & BIT(i)) ||
-			    !ca ||
-			    !bch2_dev_is_online(ca) ||
-			    dev_ptr_stale_rcu(ca, &v->ptrs[i]))
-				continue;
-
-			lat[i] = atomic64_read(&ca->cur_latency[READ]);
-			if (lat[i])
-				usable |= BIT(i);
-		}
+	u64 lat[BCH_BKEY_PTRS_MAX];
+	u32 usable = ec_block_latencies(c, v, lat) & ~skip, slow = 0;
 
 	u32 mask = usable;
 	while (hweight32(mask) > nr_data)
@@ -956,6 +972,64 @@ int bch2_ec_read_around_pick(struct btree_trans *trans, struct extent_ptr_decode
 	return 0;
 }
 
+static bool ec_read_around_csum_good(struct bch_fs *c, struct bch_read_bio *rbio,
+				     struct ec_stripe_buf *buf)
+{
+	struct bch_extent_crc_unpacked crc = rbio->pick.crc;
+
+	return !bch2_crc_cmp(crc.csum,
+			     bch2_checksum(c, crc.csum_type, extent_nonce(rbio->version, crc),
+					   buf->data[rbio->pick.ec.block], buf->size << 9));
+}
+
+/*
+ * A read-around that failed may have read a bad block: before falling back to
+ * the device, read the block it left out if that's faster, and rebuild without
+ * each block in turn until the extent's checksum checks out.
+ */
+static int ec_read_around_widen(struct bch_fs *c, struct bch_read_bio *rbio,
+				struct ec_stripe_buf *buf, u32 read, int ret)
+{
+	struct bch_stripe *v = &buf->key.v;
+	int block = rbio->pick.ec.block;
+	int next = ec_fastest_block(c, v, (BIT(v->nr_blocks) - 1) & ~read);
+
+	if (next < 0 || next == block ||
+	    ret == -BCH_ERR_stripe_reconstruct_stale_race ||
+	    (!ret && ec_read_around_csum_good(c, rbio, buf)))
+		return ret;
+
+	event_inc_trace(c, data_read_ec_read_around_widen, msg,
+			bch2_bkey_val_to_text(&msg, c, bkey_i_to_s_c(&buf->key.k_i)));
+	bch2_ec_block_io(c, buf, REQ_OP_READ, next);
+	if (!buf->unaligned)
+		return bch2_stripe_buf_validate(c, buf, false, EC_BLOCKS_ALL);
+	closure_sync(&buf->io);
+
+	u32 failed = ec_failed_mask(buf, STRIPE_BUF_PRE_RECOV) & ~BIT(block);
+	void *tmp __free(kvfree) = kvmalloc(buf->size << 9, GFP_KERNEL);
+	if (!tmp)
+		return ret ?: bch_err_throw(c, stripe_reconstruct_enomem);
+
+	for (int j = 0; j < v->nr_blocks; j++) {
+		if (j == block || (failed & ~BIT(j)))
+			continue;
+
+		void *d[BCH_BKEY_PTRS_MAX];
+		int ir[2] = { min(block, j), max(block, j) };
+
+		/* raid_rec() writes the erased blocks, and P only as it was read: */
+		memcpy(d, buf->data, sizeof(d));
+		d[j] = tmp;
+		raid_rec(2, ir, v->nr_blocks - v->nr_redundant, v->nr_redundant,
+			 buf->size << 9, d);
+		if (ec_read_around_csum_good(c, rbio, buf))
+			return 0;
+	}
+
+	return ret ?: bch_err_throw(c, stripe_read_csum_err);
+}
+
 int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 			struct bkey_s_c orig_k,
 			struct printbuf *msg)
@@ -1059,6 +1133,8 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 
 	bch2_stripe_buf_read(c, buf, read_mask);
 	ret = bch2_stripe_buf_validate(c, buf, false, EC_BLOCKS_ALL);
+	if (read_around)
+		ret = ec_read_around_widen(c, rbio, buf, read_mask, ret);
 
 	/*
 	 * Read it after all before giving up: its error may have been transient.
