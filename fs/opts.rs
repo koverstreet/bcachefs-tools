@@ -5,7 +5,7 @@ use crate::fs::Fs;
 use crate::util::printbuf::Printbuf;
 use core::ffi::CStr;
 #[cfg(feature = "std")]
-use core::ffi::c_char;
+use crate::util::ffi::c_char;
 #[cfg(feature = "std")]
 use std::ffi::CString;
 
@@ -47,7 +47,7 @@ macro_rules! opt_set {
     ($opts:ident, $n:ident, $v:expr) => {
         bcachefs_kernel::paste! {
             $opts.$n = $v;
-            $opts.[<set_ $n _defined>](1)
+            $opts.[<set_ $n _defined>](true)
         }
     };
 }
@@ -64,7 +64,7 @@ macro_rules! opt_defined {
 #[macro_export]
 macro_rules! opt_get {
     ($opts:ident, $n:ident) => {
-        if bcachefs_kernel::opt_defined!($opts, $n) == 0 {
+        if !bcachefs_kernel::opt_defined!($opts, $n) {
             bcachefs_kernel::paste! {
                 unsafe {
                     bcachefs_kernel::c::bch2_opts_default.$n
@@ -124,9 +124,7 @@ impl c::bch_option {
         if self.attr.name.is_null() {
             return None;
         }
-        // attr is the kernel's struct attribute; its `name` is `*const u8` in
-        // kernel::bindings (kernel builds char unsigned), so cast to c_char.
-        unsafe { CStr::from_ptr(self.attr.name as *const core::ffi::c_char) }
+        unsafe { CStr::from_ptr(self.attr.name.cast()) }
             .to_str()
             .ok()
     }
@@ -138,7 +136,7 @@ impl c::bch_option {
         if self.hint.is_null() {
             return None;
         }
-        unsafe { CStr::from_ptr(self.hint) }
+        unsafe { CStr::from_ptr(self.hint.cast()) }
             .to_str()
             .ok()
     }
@@ -150,7 +148,7 @@ impl c::bch_option {
         if self.help.is_null() {
             return None;
         }
-        unsafe { CStr::from_ptr(self.help) }
+        unsafe { CStr::from_ptr(self.help.cast()) }
             .to_str()
             .ok()
     }
@@ -238,7 +236,7 @@ pub fn prt_reconcile_type(out: &mut Printbuf, t: c::bch_reconcile_accounting_typ
 
 /// Look up an option by name. The typed id plus the table entry.
 pub fn opt_lookup(name: &core::ffi::CStr) -> Option<(c::bch_opt_id, &'static c::bch_option)> {
-    let id = unsafe { c::bch2_opt_lookup(name.as_ptr()) };
+    let id = unsafe { c::bch2_opt_lookup(name.as_ptr().cast()) };
     if id < 0 || id as usize >= opt_table().len() {
         return None;
     }
@@ -252,7 +250,7 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &c::bch_option, val: &core::ffi::CStr,
     let mut v = 0u64;
     let ret = unsafe {
         c::bch2_opt_parse(fs.map_or(core::ptr::null_mut(), |f| f.raw),
-                          opt, val.as_ptr(), &mut v,
+                          opt, val.as_ptr().cast(), &mut v,
                           err.map_or(core::ptr::null_mut(), |e| e.as_raw()))
     };
     if ret < 0 { Err(ret) } else { Ok(v) }
@@ -306,7 +304,7 @@ impl InodeOpt {
     }
 
     pub fn name(self) -> &'static CStr {
-        unsafe { CStr::from_ptr(*c::bch2_inode_opts.as_ptr().add(self.0.0 as usize)) }
+        unsafe { CStr::from_ptr((*c::bch2_inode_opts.as_ptr().add(self.0.0 as usize)).cast()) }
     }
 
     /// Its value on @inode, biased: 0 for not set.

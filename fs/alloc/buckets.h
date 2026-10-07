@@ -8,8 +8,8 @@
 #ifndef _BUCKETS_H
 #define _BUCKETS_H
 
-#include "alloc/buckets_types.h"
-#include "alloc/format.h"
+#include "alloc/buckets_gen.h"
+#include "alloc/format_gen.h"
 #include "data/extents.h"
 #include "sb/members.h"
 
@@ -457,7 +457,7 @@ static inline void bch2_disk_reservation_put(struct bch_fs *c,
 	}
 }
 
-#include "alloc/buckets_defs.h"
+#include "alloc/buckets_defs_gen.h"
 
 int bch2_disk_reservation_add_slowpath(struct bch_fs *, struct disk_reservation *,
 				       u64, enum bch_reservation_flags);

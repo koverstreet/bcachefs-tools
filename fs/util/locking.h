@@ -12,7 +12,7 @@
 #include <linux/percpu-rwsem.h>
 #include <linux/sched/mm.h>
 
-#include "util/locking_types.h"
+#include "util/locking_gen.h"
 
 static inline void mutex_noio_init(struct mutex_noio *m)
 {

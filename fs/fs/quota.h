@@ -3,7 +3,7 @@
 #define _BCACHEFS_QUOTA_H
 
 #include "inode.h"
-#include "quota_types.h"
+#include "fs/quota_gen.h"
 
 extern const struct bch_sb_field_ops bch_sb_field_ops_quota;
 

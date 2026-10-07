@@ -25,7 +25,6 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::c;
-use crate::c::bch_inode_flags::BCH_INODE_unlinked;
 use crate::lostfound::{self, inode_should_reattach};
 use crate::errcode::{BchError, Found};
 use crate::fs::Fs;
@@ -172,7 +171,7 @@ fn find_attached_dirent_in_descendant<'a, 't>(
         DstSlot::Empty => {
             let dir = inode::find_by_inum_snapshot(trans, d.k.p.inode, inode.bi_snapshot,
                                                    BtreeIterFlags::empty()).found()?;
-            if !dir.is_some_and(|dir| !dir.flag(BCH_INODE_unlinked)) {
+            if !dir.is_some_and(|dir| !dir.flag(c::bch_inode_flags::BCH_INODE_unlinked)) {
                 return Ok(None);
             }
         }

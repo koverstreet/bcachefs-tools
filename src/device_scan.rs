@@ -404,7 +404,7 @@ fn have_every_device(sbs: &[(PathBuf, bch_sb_handle)]) -> bool {
 /// since every filesystem written before the option existed reads back zero, so
 /// it falls through to the same built-in as having found nothing at all.
 fn missing_dev_timeout(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> Duration {
-    if opt_defined!(cli_opts, missing_dev_timeout) != 0 {
+    if opt_defined!(cli_opts, missing_dev_timeout) {
         return Duration::from_secs(opt_get!(cli_opts, missing_dev_timeout) as u64);
     }
 

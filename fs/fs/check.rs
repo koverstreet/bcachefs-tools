@@ -760,8 +760,8 @@ pub fn reconstruct_subvol(
     let mut k = t.bkey_alloc_typed::<c::bkey_i_subvolume>()?;
     k.k_mut().p = pos(0, subvol as u64);
     let v = k.k_i_mut().as_mut_subvolume().expect("a subvolume key");
-    v.snapshot = snapshot.to_le();
-    v.inode    = root.to_le();
+    v.snapshot = snapshot.into();
+    v.inode    = root.into();
     v.set_state(c::bch_subvolume_state::SUBVOLUME_STATE_live);
     t.insert(c::btree_id::subvolumes, k, UpdateTriggerFlags::empty())?;
 
@@ -772,7 +772,7 @@ pub fn reconstruct_subvol(
         "getting snapshot {snapshot}")?;
     let s = s.k_i_mut().as_mut_snapshot().expect("a snapshot key");
     let tree = s.tree();
-    s.subvol = subvol.to_le();
+    s.subvol = subvol.into();
     s.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
 
     let mut st = bch_err_msg!(fs,
@@ -782,7 +782,7 @@ pub fn reconstruct_subvol(
         "getting snapshot tree {tree}")?;
     let st = st.k_i_mut().as_mut_snapshot_tree().expect("a snapshot tree key");
     if st.master_subvol == 0 {
-        st.master_subvol = subvol.to_le();
+        st.master_subvol = subvol.into();
     }
 
     Ok(())
@@ -865,8 +865,8 @@ pub fn fsck_update_backpointers(
         // check_subvols/check_dirents' problem, not ours.
         DirentTarget::Subvol { child, .. } => {
             let Some(subvol) = subvolume::get(trans, child, false).found()? else { return Ok(()) };
-            let Some(mut root) = inode::find_by_inum_snapshot(trans, u64::from_le(subvol.inode),
-                                                              u32::from_le(subvol.snapshot),
+            let Some(mut root) = inode::find_by_inum_snapshot(trans, subvol.inode.get(),
+                                                              subvol.snapshot.get(),
                                                               BtreeIterFlags::empty()).found()? else {
                 return Ok(());
             };

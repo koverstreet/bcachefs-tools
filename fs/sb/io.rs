@@ -1,7 +1,6 @@
 use crate::c;
 use crate::c::{bch_member, bch_sb, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
 use crate::sb::members;
-use crate::bitmask_accessors;
 
 /// Marker trait connecting an sb field struct to its field type enum.
 ///
@@ -58,11 +57,10 @@ impl bch_sb {
     /// Get the nonce used to encrypt the superblock
     pub fn nonce(&self) -> nonce {
         let [a, b, c, d, e, f, g, h, _rest @ ..] = self.uuid.b;
-        // nonce.d is __le32, so keep the raw bytes.
-        let dword1 = u32::from_ne_bytes([a, b, c, d]);
-        let dword2 = u32::from_ne_bytes([e, f, g, h]);
+        // nonce.d is __le32: the raw bytes, as they are.
+        use zerocopy::byteorder::little_endian::U32;
         nonce {
-            d: [0, 0, dword1, dword2],
+            d: [U32::ZERO, U32::ZERO, U32::from_bytes([a, b, c, d]), U32::from_bytes([e, f, g, h])],
         }
     }
 }
@@ -120,27 +118,27 @@ impl bch_sb_handle {
 
     /// Find a disk path (label group) by name.
     pub fn disk_path_find(&mut self, name: &core::ffi::CStr) -> Option<u32> {
-        let v = unsafe { c::bch2_disk_path_find(self, name.as_ptr()) };
+        let v = unsafe { c::bch2_disk_path_find(self, name.as_ptr().cast()) };
         (v >= 0).then_some(v as u32)
     }
 
     /// Find or create a disk path; Err(errno) on failure.
     pub fn disk_path_find_or_create(&mut self, name: &core::ffi::CStr) -> Result<u32, i32> {
-        let v = unsafe { c::bch2_disk_path_find_or_create(self, name.as_ptr()) };
+        let v = unsafe { c::bch2_disk_path_find_or_create(self, name.as_ptr().cast()) };
         if v >= 0 { Ok(v as u32) } else { Err(-v) }
     }
 
     /// The superblock's full vstruct extent as bytes.
     pub fn sb_bytes(&self) -> &[u8] {
         let bytes = core::mem::size_of::<bch_sb>()
-            + u32::from_le(self.sb().u64s) as usize * 8;
+            + (self.sb().u64s).get() as usize * 8;
         unsafe { core::slice::from_raw_parts(self.sb as *const u8, bytes) }
     }
 
     /// The superblock's full vstruct extent, mutably.
     pub fn sb_bytes_mut(&mut self) -> &mut [u8] {
         let bytes = core::mem::size_of::<bch_sb>()
-            + u32::from_le(self.sb().u64s) as usize * 8;
+            + (self.sb().u64s).get() as usize * 8;
         unsafe { core::slice::from_raw_parts_mut(self.sb as *mut u8, bytes) }
     }
 
@@ -250,26 +248,6 @@ pub fn sb_field_get_minsize<F: SbField>(
     }
 }
 
-// Safe wrappers over the hand-rolled v2 error entry accessors
-// (sb/errors_format.h): they only read through the pointer.
-impl c::bch_sb_field_error_entry_v2 {
-    pub fn id(&self) -> u16 {
-        unsafe { c::BCH_SB_ERROR_ENTRY_V2_ID(self) as u16 }
-    }
-
-    pub fn nr(&self) -> u64 {
-        unsafe { c::BCH_SB_ERROR_ENTRY_V2_NR(self) }
-    }
-
-    pub fn first_error_time(&self) -> u64 {
-        unsafe { c::BCH_SB_ERROR_ENTRY_V2_FIRST(self) }
-    }
-
-    pub fn last_error_time(&self) -> u64 {
-        unsafe { c::BCH_SB_ERROR_ENTRY_V2_LAST(self) }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Raw-buffer superblock views
 //
@@ -339,7 +317,7 @@ fn sb_parse_checks(buf: &[u8]) -> Result<usize, SbParseError> {
         return Err(SbParseError::BadMagic);
     }
 
-    let bytes = hdr + u32::from_le(sb.u64s) as usize * 8;
+    let bytes = hdr + sb.u64s.get() as usize * 8;
     if bytes > buf.len() {
         return Err(SbParseError::ExtentBeyondBuffer { need: bytes, have: buf.len() });
     }
@@ -351,7 +329,7 @@ fn sb_parse_checks(buf: &[u8]) -> Result<usize, SbParseError> {
         }
         /* field header extent just validated: */
         let f = unsafe { &*(buf.as_ptr().add(off) as *const c::bch_sb_field) };
-        let f_u64s = u32::from_le(f.u64s) as u64;
+        let f_u64s = f.u64s.get() as u64;
         if f_u64s == 0 {
             return Err(SbParseError::FieldBadU64s { field_offset: off });
         }
@@ -490,33 +468,4 @@ impl SbAccess for SbBuf {
     fn sb(&self) -> &bch_sb { SbBuf::sb(self) }
     fn sb_mut(&mut self) -> &mut bch_sb { SbBuf::sb_mut(self) }
     fn sb_bytes(&self) -> &[u8] { SbBuf::bytes(self) }
-}
-
-// LE64_BITMASK accessors — pure Rust replacements for C shims in rust_shims.c.
-// Each field is defined by: struct type, flags field + index, C constant prefix.
-
-bitmask_accessors! {
-    bch_sb, flags[0],
-        BCH_SB_INITIALIZED        => (sb_initialized, set_sb_initialized),
-        BCH_SB_CLEAN              => (sb_clean, set_sb_clean),
-        BCH_SB_CSUM_TYPE          => (sb_csum_type, set_sb_csum_type),
-        BCH_SB_BTREE_NODE_SIZE    => (sb_btree_node_size, set_sb_btree_node_size);
-
-    bch_sb, flags[1],
-        BCH_SB_ENCRYPTION_TYPE    => (sb_encryption_type, set_sb_encryption_type),
-        BCH_SB_META_REPLICAS_REQ  => (sb_meta_replicas_req, set_sb_meta_replicas_req),
-        BCH_SB_DATA_REPLICAS_REQ  => (sb_data_replicas_req, set_sb_data_replicas_req),
-        BCH_SB_PROMOTE_TARGET     => (sb_promote_target, set_sb_promote_target),
-        BCH_SB_FOREGROUND_TARGET  => (sb_foreground_target, set_sb_foreground_target),
-        BCH_SB_BACKGROUND_TARGET  => (sb_background_target, set_sb_background_target);
-
-    bch_sb, flags[3],
-        BCH_SB_METADATA_TARGET    => (sb_metadata_target, set_sb_metadata_target),
-        BCH_SB_MULTI_DEVICE       => (sb_multi_device, set_sb_multi_device);
-
-    bch_sb, flags[5],
-        BCH_SB_VERSION_INCOMPAT_ALLOWED => (sb_version_incompat_allowed, set_sb_version_incompat_allowed);
-
-    bch_sb, flags[6],
-        BCH_SB_EXTENT_BP_SHIFT    => (sb_extent_bp_shift, set_sb_extent_bp_shift);
 }

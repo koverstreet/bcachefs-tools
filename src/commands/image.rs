@@ -88,10 +88,10 @@ fn set_data_allowed_for_image_update(fs: &Fs) {
     let _lock = fs.sb_lock();
 
     let m0 = unsafe { fs.member_mut(0) };
-    m0.set_member_data_allowed(data_type::user.bit());
+    m0.set_data_allowed(data_type::user.bit());
 
     let m1 = unsafe { fs.member_mut(1) };
-    m1.set_member_data_allowed(
+    m1.set_data_allowed(
         data_type::journal.bit()
             | data_type::btree.bit(),
     );
@@ -352,8 +352,8 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     {
         let _lock = fs.sb_lock();
         let m = unsafe { fs.member_mut(0) };
-        let allowed = m.member_data_allowed() | data_type::btree.bit();
-        m.set_member_data_allowed(allowed);
+        let allowed = m.data_allowed() | data_type::btree.bit();
+        m.set_data_allowed(allowed);
         fs.write_super();
     }
 
@@ -392,16 +392,16 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
 
     // Allow journal on primary device
     let m = unsafe { fs.member_mut(0) };
-    let allowed = m.member_data_allowed() | data_type::journal.bit();
-    m.set_member_data_allowed(allowed);
+    let allowed = m.data_allowed() | data_type::journal.bit();
+    m.set_data_allowed(allowed);
 
     // Set nbuckets
-    unsafe { fs.member_mut(0) }.nbuckets = nbuckets.to_le();
+    unsafe { fs.member_mut(0) }.nbuckets = nbuckets.into();
 
     // Set resize_on_mount for all online members
     let _ = fs.for_each_online_member(|ca| {
         let m = unsafe { fs.member_mut(ca.dev_idx as u32) };
-        m.set_member_resize_on_mount(1);
+        m.set_resize_on_mount(true);
         std::ops::ControlFlow::Continue(())
     });
 
@@ -412,12 +412,12 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     // Resize members_v2 to contain only one device
     let mi: &c::bch_sb_field_members_v2 = disk_sb.field()
         .expect("members_v2 field missing");
-    let member_bytes = u16::from_le(mi.member_bytes);
+    let member_bytes = mi.member_bytes.get();
     let u64s = (std::mem::size_of::<c::bch_sb_field_members_v2>() as u32 + member_bytes as u32)
         .div_ceil(8) as u32;
     sb::io::sb_field_resize::<c::bch_sb_field_members_v2>(disk_sb, u64s);
     disk_sb.sb_mut().nr_devices = 1;
-    disk_sb.sb_mut().set_sb_multi_device(0);
+    disk_sb.sb_mut().set_multi_device(false);
 
     fs.write_super();
 
@@ -700,11 +700,11 @@ fn image_update_inner(
 
 fn image_create_usage() {
     let fs_opts = opts_usage_str(
-        c::opt_flags::OPT_FORMAT as u32 | c::opt_flags::OPT_FS as u32,
-        c::opt_flags::OPT_DEVICE as u32,
+        c::opt_flags::OPT_FORMAT.bits() as u32 | c::opt_flags::OPT_FS.bits() as u32,
+        c::opt_flags::OPT_DEVICE.bits() as u32,
     );
     let dev_opts = opts_usage_str(
-        c::opt_flags::OPT_DEVICE as u32,
+        c::opt_flags::OPT_DEVICE.bits() as u32,
         0,
     );
 
@@ -742,9 +742,9 @@ Report bugs to <linux-bcachefs@vger.kernel.org>
 }
 
 fn cmd_image_create(argv: Vec<String>) -> Result<()> {
-    let opt_flags = c::opt_flags::OPT_FORMAT as u32
-        | c::opt_flags::OPT_FS as u32
-        | c::opt_flags::OPT_DEVICE as u32;
+    let opt_flags = c::opt_flags::OPT_FORMAT.bits() as u32
+        | c::opt_flags::OPT_FS.bits() as u32
+        | c::opt_flags::OPT_DEVICE.bits() as u32;
 
     let mut source: Option<String> = None;
     let mut keep_alloc = false;
@@ -787,7 +787,7 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
             let name = raw_name.replace('-', "_");
 
             if let Some((opt_id, opt, negated)) = bch_opt_lookup_negated(&name) {
-                if opt.flags as u32 & opt_flags != 0 {
+                if opt.flags.bits() as u32 & opt_flags != 0 {
                     let val_str = if negated {
                         "0".to_string()
                     } else if let Some(v) = inline_val {
@@ -801,9 +801,9 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                     match parse_opt_val(opt, &val_str)? {
                         None => deferred_opts.push((opt_id, val_str)),
                         Some(v) => {
-                            if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
+                            if opt.flags.bits() as u32 & c::opt_flags::OPT_DEVICE.bits() as u32 != 0 {
                                 bcachefs_kernel::opts::opt_set_by_id(&mut dev_opts, opt_id, v);
-                            } else if opt.flags as u32 & c::opt_flags::OPT_FS as u32 != 0 {
+                            } else if opt.flags.bits() as u32 & c::opt_flags::OPT_FS.bits() as u32 != 0 {
                                 bcachefs_kernel::opts::opt_set_by_id(&mut fs_opts, opt_id, v);
                             }
                         }

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use bch_bindgen::c::{
     bch_ioctl_dev_usage, bch_ioctl_dev_usage_v2,
-    bch_ioctl_dev_usage_bch_ioctl_dev_usage_type,
+    bch_ioctl_dev_usage_type,
     bch_ioctl_disk, bch_ioctl_disk_v2,
     bch_ioctl_disk_set_state, bch_ioctl_disk_set_state_v2,
     bch_ioctl_disk_resize, bch_ioctl_disk_resize_v2,
@@ -499,14 +499,14 @@ impl BcachefsHandle {
             return Err(Errno(libc::EIO));
         }
         let sb = unsafe { &*(buf.as_ptr() as *const bch_sb) };
-        Ok(sb.version)
+        Ok(sb.version.get())
     }
 
     /// Query device usage (v2 with flex array, v1 fallback).
     pub(crate) fn dev_usage(&self, dev_idx: u32) -> Result<DevUsage, Errno> {
         let nr_data_types = data_type::nr.0 as usize;
 
-        let mut buf = IoctlBuf::<bch_ioctl_dev_usage_v2>::new::<bch_ioctl_dev_usage_bch_ioctl_dev_usage_type>(nr_data_types);
+        let mut buf = IoctlBuf::<bch_ioctl_dev_usage_v2>::new::<bch_ioctl_dev_usage_type>(nr_data_types);
         let hdr = buf.hdr_mut();
         hdr.dev = dev_idx as u64;
         hdr.flags = BCH_BY_INDEX;
@@ -524,7 +524,7 @@ impl BcachefsHandle {
                 state: hdr.state,
                 bucket_size: hdr.bucket_size,
                 nr_buckets: hdr.nr_buckets,
-                data_types: unsafe { hdr.d.as_slice(nr) }.iter()
+                data_types: unsafe { std::slice::from_raw_parts(hdr.d.as_ptr(), nr) }.iter()
                     .map(|d| DevUsageType { buckets: d.buckets, sectors: d.sectors, fragmented: d.fragmented })
                     .collect(),
             });

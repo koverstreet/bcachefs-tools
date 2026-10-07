@@ -51,7 +51,7 @@
 
 #include <linux/types.h>
 
-#include "util/siphash_types.h"
+#include "util/siphash_gen.h"
 
 #define SIPHASH_KEY_LENGTH	16
 #define SIPHASH_DIGEST_LENGTH	 8

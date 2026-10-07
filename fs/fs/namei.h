@@ -3,6 +3,7 @@
 #define _BCACHEFS_NAMEI_H
 
 #include "dirent.h"
+#include "fs/namei_gen.h"
 
 struct posix_acl;
 
@@ -18,11 +19,6 @@ static inline int is_subdir_for_nlink(struct bch_inode_unpacked *inode)
 {
 	return S_ISDIR(inode->bi_mode) && !inode->bi_subvol;
 }
-
-#define BCH_CREATE_TMPFILE		(1U << 0)
-#define BCH_CREATE_SUBVOL		(1U << 1)
-#define BCH_CREATE_SNAPSHOT		(1U << 2)
-#define BCH_CREATE_SNAPSHOT_RO		(1U << 3)
 
 int bch2_create_trans(struct btree_trans *, subvol_inum,
 		      struct bch_inode_unpacked *,

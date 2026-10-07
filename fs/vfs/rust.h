@@ -11,9 +11,11 @@
  * in the kernel crate's bindings, posix_acl's among them: those are here too.
  */
 
-#include "snapshots/types.h"
+#include "snapshots/types_gen.h"
 
 #ifndef NO_BCACHEFS_FS
+
+#include "vfs/rust_gen.h"
 
 struct bch_fs;
 struct bch_inode_info;

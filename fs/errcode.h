@@ -5,7 +5,8 @@
 /* we're getting away from reusing bi_status, this should go away */
 #define BLK_STS_REMOVED		((__force blk_status_t)128)
 
-#include "errcode_types.h"
+#include "enum_kind.h"
+#include "errcode_gen.h"
 
 __attribute__((const)) const char *bch2_err_str(int);
 

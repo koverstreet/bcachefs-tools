@@ -3,12 +3,13 @@
 #define _BCACHEFS_SUPER_H
 
 #include "data/extents.h"
-#include "init/dev_types.h"
+#include "init/dev_gen.h"
 #include "util/darray.h"
 
 #include "bcachefs_ioctl.h"
 
 #include <linux/math64.h>
+#include "init/fs_gen.h"
 
 #define KTYPE(type)							\
 static const struct attribute_group type ## _group = {			\

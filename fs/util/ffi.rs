@@ -56,8 +56,8 @@ pub use core::ffi::c_char;
 ///
 /// # Safety
 /// @p NULL or a NUL-terminated string, valid for 'a.
-pub unsafe fn opt_cstr<'a>(p: *const core::ffi::c_char) -> Option<&'a core::ffi::CStr> {
-    (!p.is_null()).then(|| unsafe { core::ffi::CStr::from_ptr(p) })
+pub unsafe fn opt_cstr<'a>(p: *const c_char) -> Option<&'a core::ffi::CStr> {
+    (!p.is_null()).then(|| unsafe { core::ffi::CStr::from_ptr(p.cast()) })
 }
 
 /// @size bytes at @p - nothing, for none.

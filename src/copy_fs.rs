@@ -172,7 +172,7 @@ fn unlink_and_rm(
         },
     )?;
 
-    if child.bi_flags & (c::bch_inode_flags::BCH_INODE_unlinked as u32) == 0 {
+    if child.bi_flags & (c::bch_inode_flags::BCH_INODE_unlinked.bits() as u32) == 0 {
         return Ok(());
     }
 

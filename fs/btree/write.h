@@ -2,9 +2,9 @@
 #ifndef _BCACHEFS_BTREE_WRITE_H
 #define _BCACHEFS_BTREE_WRITE_H
 
-#include "data/write_types.h"
+#include "data/write_gen.h"
 
-#include "btree/write_types.h"
+#include "btree/write_gen.h"
 
 bool bch2_btree_post_write_cleanup(struct bch_fs *, struct btree *);
 

@@ -6,6 +6,7 @@ use crate::c::{BchExtentEntryRef as Entry, ExtentEntryType};
 use crate::fs::Fs;
 use crate::types::ArmOf;
 use core::mem::{align_of, size_of};
+use zerocopy::byteorder::little_endian as le;
 
 macro_rules! extent_entry_u64s {
     ($(($name:tt, $nr:literal)),* $(,)?) => { ::paste::paste! {
@@ -132,10 +133,10 @@ pub fn bkey_crcs<'a>(k: BkeySC<'a>) -> impl Iterator<Item = c::bch_extent_crc_un
 fn crc_unpack(k: &c::bkey, entry: Entry<'_>) -> Option<c::bch_extent_crc_unpacked> {
     // The packed checksum bytes, at the start of a bch_csum word - C stores
     // them there through a cast, with no byte swap:
-    fn csum_word(bytes: &[u8]) -> u64 {
+    fn csum_word(bytes: &[u8]) -> le::U64 {
         let mut w = [0u8; 8];
         w[..bytes.len()].copy_from_slice(bytes);
-        u64::from_ne_bytes(w)
+        le::U64::from_bytes(w)
     }
 
     let unpacked = |csum_type: u64, compression_type: u64, compressed_raw: u64,
@@ -155,18 +156,18 @@ fn crc_unpack(k: &c::bkey, entry: Entry<'_>) -> Option<c::bch_extent_crc_unpacke
     Some(match entry {
         Entry::crc32(e) =>
             unpacked(e.csum_type() as u64, e.compression_type() as u64,
-                     e._compressed_size() as u64, e._uncompressed_size() as u64,
+                     e.compressed_size_raw() as u64, e.uncompressed_size_raw() as u64,
                      e.offset() as u64, 0,
-                     c::bch_csum { lo: csum_word(&{ e.csum }.to_ne_bytes()), hi: 0 }),
+                     c::bch_csum { lo: csum_word(&e.csum().to_ne_bytes()), hi: le::U64::new(0) }),
         Entry::crc64(e) =>
             unpacked(e.csum_type(), e.compression_type(),
-                     e._compressed_size(), e._uncompressed_size(),
+                     e.compressed_size_raw(), e.uncompressed_size_raw(),
                      e.offset(), e.nonce(),
                      c::bch_csum { lo: csum_word(&{ e.csum_lo }.to_ne_bytes()),
                                    hi: csum_word(&(e.csum_hi() as u16).to_ne_bytes()) }),
         Entry::crc128(e) =>
             unpacked(e.csum_type(), e.compression_type(),
-                     e._compressed_size(), e._uncompressed_size(),
+                     e.compressed_size_raw(), e.uncompressed_size_raw(),
                      e.offset(), e.nonce(), e.csum),
         _ => return None,
     })

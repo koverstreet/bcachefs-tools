@@ -61,8 +61,7 @@ impl StrHash {
     fn new(info: &c::bch_hash_info) -> Self {
         use c::bch_str_hash_type as T;
 
-        // An __le64: its bytes as they're stored
-        let k0 = info.siphash_key.k0.to_ne_bytes();
+        let k0 = info.siphash_key.k0.get().to_le_bytes();
 
         match info.type_ as u32 {
             t if t == T::BCH_STR_HASH_crc32c.0 => Self::Crc32c(crc32c(!0, &k0)),

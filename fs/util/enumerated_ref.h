@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_ENUMERATED_REF_H
 #define _BCACHEFS_ENUMERATED_REF_H
 
-#include "enumerated_ref_types.h"
+#include "util/enumerated_ref_gen.h"
 
 /*
  * A refcount where the users are enumerated: in debug mode, we create sepate

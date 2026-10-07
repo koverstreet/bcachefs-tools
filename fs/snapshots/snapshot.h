@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _BCACHEFS_SNAPSHOT_H
 #define _BCACHEFS_SNAPSHOT_H
+#include "snapshots/snapshot_gen.h"
 
 void bch2_snapshot_tree_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 int bch2_snapshot_tree_validate(struct bch_fs *, struct bkey_s_c,

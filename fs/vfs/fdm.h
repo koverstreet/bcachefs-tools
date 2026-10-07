@@ -28,7 +28,7 @@
 
 #include "vendor/closure.h"
 
-#include "vfs/fdm_types.h"
+#include "vfs/fdm_gen.h"
 
 static inline unsigned fdm_hash(struct fdm_hash *ht, int idx,
 				const struct task_struct *task)

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _BCACHEFS_JOURNAL_SEQ_BLACKLIST_H
 #define _BCACHEFS_JOURNAL_SEQ_BLACKLIST_H
+#include "journal/seq_blacklist_gen.h"
 
 static inline unsigned
 blacklist_nr_entries(struct bch_sb_field_journal_seq_blacklist *bl)

@@ -53,7 +53,7 @@ fn remove_bcachefs_attr(path: &Path, attr_name: &str) {
 
 fn do_setattr(path: &Path, opts: &[(String, String)], remove_all: bool) -> Result<()> {
     if remove_all {
-        for name in opts::bch_option_names(c::opt_flags::OPT_INODE as u32) {
+        for name in opts::bch_option_names(c::opt_flags::OPT_INODE.bits() as u32) {
             // casefold only works on empty directories
             if name == "casefold" { continue }
             remove_bcachefs_attr(path, &format!("bcachefs.{}", name));
@@ -118,7 +118,7 @@ setting a new compression algorithm will cause existing data to be \
 rewritten with the new algorithm. Use --option=- to remove a specific \
 option, or --remove-all to clear all per-file options.")
         .after_help("To remove a specific option, use: --option=-")
-        .args(opts::bch_option_args(c::opt_flags::OPT_INODE as u32, true))
+        .args(opts::bch_option_args(c::opt_flags::OPT_INODE.bits() as u32, true))
         .arg(Arg::new("remove-all")
             .long("remove-all")
             .action(ArgAction::SetTrue)
@@ -132,7 +132,7 @@ fn cmd_setattr(argv: Vec<String>) -> Result<()> {
     let matches = setattr_cmd().get_matches_from(argv);
 
     let remove_all = matches.get_flag("remove-all");
-    let opts = opts::bch_options_from_matches(&matches, c::opt_flags::OPT_INODE as u32);
+    let opts = opts::bch_options_from_matches(&matches, c::opt_flags::OPT_INODE.bits() as u32);
     let files: Vec<&String> = matches.get_many("files").unwrap().collect();
 
     for path in files {
@@ -170,7 +170,7 @@ fn cmd_getattr(argv: Vec<String>) -> Result<()> {
     let all = matches.get_flag("all");
     let prefix = if effective { "bcachefs_effective" } else { "bcachefs" };
     let files: Vec<&String> = matches.get_many("files").unwrap().collect();
-    let names = opts::bch_option_names(c::opt_flags::OPT_INODE as u32);
+    let names = opts::bch_option_names(c::opt_flags::OPT_INODE.bits() as u32);
     let multi_file = files.len() > 1;
 
     for file in files {

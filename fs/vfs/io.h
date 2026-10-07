@@ -2,17 +2,17 @@
 #ifndef _BCACHEFS_FS_IO_H
 #define _BCACHEFS_FS_IO_H
 
-#include "vfs/io_types.h"
-
 #ifndef NO_BCACHEFS_FS
 
 #include "alloc/buckets.h"
-#include "data/write_types.h"
+#include "data/write_gen.h"
 #include "fs/quota.h"
 #include "vfs/fdm.h"
 #include "vfs/fs.h"
 
 #include <linux/uio.h>
+
+#include "vfs/io_gen.h"
 
 static inline struct folio_vec biovec_to_foliovec(struct bio_vec bv)
 {

@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_KEYLIST_H
 #define _BCACHEFS_KEYLIST_H
 
-#include "keylist_types.h"
+#include "data/keylist_gen.h"
 
 int bch2_keylist_realloc(struct keylist *, u64 *, size_t, size_t);
 void bch2_keylist_pop_front(struct keylist *);

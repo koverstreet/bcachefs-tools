@@ -4,7 +4,7 @@
 
 #include "btree/bkey.h"
 
-#include "btree/journal_overlay_defs.h"
+#include "btree/journal_overlay_defs_gen.h"
 
 static inline u32 journal_entry_radix_idx(struct bch_fs *c, u64 seq)
 {

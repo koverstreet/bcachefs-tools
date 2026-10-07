@@ -3,7 +3,7 @@
 #define _BCACHEFS_IO_WRITE_H
 
 #include "data/checksum.h"
-#include "data/write_types.h"
+#include "data/write_gen.h"
 
 #define to_wbio(_bio)			\
 	container_of((_bio), struct bch_write_bio, bio)

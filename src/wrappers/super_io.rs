@@ -25,7 +25,7 @@ pub fn borrowed_file(fd: i32) -> std::mem::ManuallyDrop<std::fs::File> {
 /// Compute the total byte size of a variable-length superblock struct.
 /// Equivalent to C's `vstruct_bytes(sb)`.
 pub fn vstruct_bytes_sb(sb: &c::bch_sb) -> usize {
-    std::mem::size_of::<c::bch_sb>() + u32::from_le(sb.u64s) as usize * 8
+    std::mem::size_of::<c::bch_sb>() + sb.u64s.get() as usize * 8
 }
 
 /// Compute the superblock checksum using the csum type stored in the sb.
@@ -48,7 +48,7 @@ pub fn bch2_super_write<S: SbAccess>(fd: i32, sb: &mut S) {
     let nr_superblocks = sb.sb().layout.nr_superblocks as usize;
     for i in 0..nr_superblocks {
         let offset_le = sb.sb().layout.sb_offset[i];
-        let offset_sectors = u64::from_le(offset_le);
+        let offset_sectors = offset_le.get();
 
         sb.sb_mut().offset = offset_le;
         sb.sb_mut().csum = csum_vstruct_sb(sb.sb_mut());
@@ -161,7 +161,7 @@ pub fn sb_layout_init(
             sb_pos = sb_pos.div_ceil(align) * align;
         }
 
-        l.sb_offset[i] = sb_pos.to_le();
+        l.sb_offset[i] = sb_pos.into();
         sb_pos += sb_size as u64;
     }
 
@@ -182,7 +182,7 @@ pub fn sb_layout_init(
         let bucket_sectors = (bucket_size >> 9) as u64;
         let backup_sb = (sb_end - sb_max_size) / bucket_sectors * bucket_sectors;
         let idx = l.nr_superblocks as usize;
-        l.sb_offset[idx] = backup_sb.to_le();
+        l.sb_offset[idx] = backup_sb.into();
         l.nr_superblocks += 1;
     }
 

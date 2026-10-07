@@ -5,9 +5,9 @@
 #include "btree/cache.h"
 #include "btree/locking.h"
 #include "btree/update.h"
-#include "data/write_types.h"
+#include "data/write_gen.h"
 
-#include "btree/interior_defs.h"
+#include "btree/interior_defs_gen.h"
 
 int bch2_btree_node_check_topology_msg(struct btree_trans *, struct btree *,
 				       struct printbuf *);

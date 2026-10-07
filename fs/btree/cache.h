@@ -3,8 +3,9 @@
 #define _BCACHEFS_BTREE_CACHE_H
 
 #include "bcachefs.h"
-#include "btree/types.h"
+#include "btree/types_gen.h"
 #include "btree/bkey_methods.h"
+#include "btree/cache_gen.h"
 
 extern const char * const bch2_btree_node_flags[];
 

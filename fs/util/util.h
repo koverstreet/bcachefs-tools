@@ -29,7 +29,16 @@
 #include "darray.h"
 #include "time_stats.h"
 
-#include "util/util_types.h"
+#include "printbuf.h"
+#ifdef __KERNEL__
+#include <linux/cpumask.h>
+#include <linux/numa.h>
+#else
+#include <uuid/uuid.h>
+#endif
+#include <linux/uuid.h>
+#include <linux/sched/mm.h>
+#include "util/util_gen.h"
 
 #ifdef CONFIG_BCACHEFS_DEBUG
 #define EBUG_ON(cond)		BUG_ON(cond)

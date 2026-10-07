@@ -91,7 +91,7 @@ pub fn alloc_max<'a, 't>(t: &TransAttempt<'a, 't>, pos: c::bpos)
 /// Point @dst, a dirent, at what @src points at: as dirent_copy_target().
 pub fn copy_target(dst: &mut TransBkey<'_, '_>, src: Dirent<'_>) {
     let d = dst.k_i_mut().as_mut_dirent().expect("a dirent");
-    d.__bindgen_anon_1 = src.v().__bindgen_anon_1;
+    d.target = src.v().target;
     d.set_d_type(src.d_type());
 }
 
@@ -160,10 +160,10 @@ fn casefold_name(
     };
 
     let cf_block = unsafe {
-        k.as_mut_dirent().expect("a dirent").__bindgen_anon_2.d_cf_name_block.as_mut()
+        &mut k.as_mut_dirent().expect("a dirent").name_block.d_cf_name_block
     };
-    cf_block.d_name_len    = (name.len() as u16).to_le();
-    cf_block.d_cf_name_len = (cf_len as u16).to_le();
+    cf_block.d_name_len    = (name.len() as u16).into();
+    cf_block.d_cf_name_len = (cf_len as u16).into();
 
     Ok(D_NAMES_OFFSET + name.len() + cf_len)
 }
@@ -197,11 +197,11 @@ pub fn create_key<'a, 't>(
     let d = k.k_i_mut().as_mut_dirent().expect("a dirent");
     d.set_d_type(d_type);
     if d_type as u32 != c::DT_SUBVOL {
-        d.__bindgen_anon_1.d_inum = target.to_le();
+        d.target.d_inum = target.into();
     } else {
-        d.__bindgen_anon_1.__bindgen_anon_1 = c::bch_dirent__bindgen_ty_1__bindgen_ty_1 {
-            d_child_subvol:  (target as u32).to_le(),
-            d_parent_subvol: (dir.subvol as u32).to_le(),
+        d.target.subvol = c::bch_dirent_subvol {
+            d_child_subvol:  (target as u32).into(),
+            d_parent_subvol: (dir.subvol as u32).into(),
         };
     }
 
@@ -337,7 +337,7 @@ pub fn read_target(
         DirentTarget::Subvol { parent, .. } if u64::from(parent) != dir.subvol => Ok(None),
         DirentTarget::Subvol { child, .. } => {
             let s = subvolume::get(trans, child, true)?;
-            Ok(Some(c::subvol_inum { subvol: child as u64, inum: u64::from_le(s.inode) }))
+            Ok(Some(c::subvol_inum { subvol: child as u64, inum: s.inode.get() }))
         }
         DirentTarget::Inode(inum) => Ok(Some(c::subvol_inum { subvol: dir.subvol, inum })),
     }
@@ -427,8 +427,8 @@ pub unsafe extern "C" fn bch2_dirent_lookup_key(
                      dir, hash_info, unsafe { qstr_name(name) }, BtreeIterFlags::empty()) {
         Ok(k)  => k.to_raw(),
         Err(e) => c::bkey_s_c {
-            k: (-(e.raw() as isize)) as *const c::bkey,
-            v: core::ptr::null(),
+            k: (-(e.raw() as isize)) as *mut c::bkey,
+            v: core::ptr::null_mut(),
         },
     }
 }
@@ -595,13 +595,13 @@ pub unsafe extern "C" fn bch2_readdir(
 #[derive(Clone, Copy)]
 struct OldDirent {
     d_type:   u8,
-    target:   c::bch_dirent__bindgen_ty_1,
+    target:   c::bch_dirent_target,
     snapshot: u32,
 }
 
 impl OldDirent {
     fn of(d: Dirent<'_>) -> Self {
-        OldDirent { d_type: d.d_type(), target: d.v().__bindgen_anon_1, snapshot: d.k().k.p.snapshot }
+        OldDirent { d_type: d.d_type(), target: d.v().target, snapshot: d.k().k.p.snapshot }
     }
 
     fn is_subvol(&self) -> bool {
@@ -611,7 +611,7 @@ impl OldDirent {
     /// Point @dst at what this pointed at: as dirent_copy_target().
     fn copy_target_to(&self, dst: &mut TransBkey<'_, '_>) {
         let d = dst.k_i_mut().as_mut_dirent().expect("a dirent");
-        d.__bindgen_anon_1 = self.target;
+        d.target = self.target;
         d.set_d_type(self.d_type);
     }
 }

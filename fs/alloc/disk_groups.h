@@ -2,7 +2,8 @@
 #ifndef _BCACHEFS_DISK_GROUPS_H
 #define _BCACHEFS_DISK_GROUPS_H
 
-#include "disk_groups_types.h"
+#include "init/dev_gen.h"
+#include "alloc/disk_groups_gen.h"
 
 extern const struct bch_sb_field_ops bch_sb_field_ops_disk_groups;
 
@@ -14,7 +15,7 @@ static inline unsigned disk_groups_nr(struct bch_sb_field_disk_groups *groups)
 		: 0;
 }
 
-#include "alloc/disk_groups_defs.h"
+#include "alloc/disk_groups_defs_gen.h"
 
 #define TARGET_DEV_START	1
 #define TARGET_GROUP_START	(256 + TARGET_DEV_START)

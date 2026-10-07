@@ -81,7 +81,7 @@ fn __fsck_err(
     let (fs, trans) = ctx.fsck_err_ptrs();
     let ret = unsafe {
         c::__bch2_fsck_err(fs, trans, pos, flags, err,
-                           c"%s".as_ptr(), buf.as_raw().buf)
+                           c"%s".as_ptr().cast(), buf.as_raw().buf)
     };
     let e = BchError::from_raw(-ret);
 
@@ -193,7 +193,7 @@ pub fn trans_inconsistent(trans: &BtreeTrans<'_>, msg: fmt::Arguments<'_>) -> bo
     let mut buf = Printbuf::new();
     buf.write_fmt(msg);
 
-    unsafe { c::bch2_trans_inconsistent(trans.raw(), c"%s".as_ptr(), buf.as_raw().buf) }
+    unsafe { c::bch2_trans_inconsistent(trans.raw(), c"%s".as_ptr().cast(), buf.as_raw().buf) }
 }
 
 /// Report that the filesystem is inconsistent, and act on it as the errors
@@ -205,7 +205,7 @@ pub fn fs_inconsistent(fs: &Fs, msg: fmt::Arguments<'_>) -> bool {
     let mut buf = Printbuf::new();
     buf.write_fmt(msg);
 
-    unsafe { c::bch2_fs_inconsistent(fs.raw, c"%s".as_ptr(), buf.as_raw().buf) }
+    unsafe { c::bch2_fs_inconsistent(fs.raw, c"%s".as_ptr().cast(), buf.as_raw().buf) }
 }
 
 /// A key being validated, and where it came from: what C's bkey_fsck_err()
@@ -229,7 +229,7 @@ pub fn bkey_fsck_err(
 
     let ret = unsafe {
         c::__bch2_bkey_fsck_err(v.fs.raw, v.k.to_raw(), v.from, err,
-                                c"%s".as_ptr(), buf.as_raw().buf)
+                                c"%s".as_ptr().cast(), buf.as_raw().buf)
     };
     let e = BchError::from_raw(-ret);
 

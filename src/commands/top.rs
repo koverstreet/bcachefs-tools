@@ -38,7 +38,7 @@ fn read_counters(fd: std::os::fd::BorrowedFd, flags: u16, nr_stable: u16) -> Res
     unsafe { ioctl_ptr::<BCH_IOCTL_QUERY_COUNTERS>(fd, buf.as_mut_ptr())? };
 
     let nr = (buf.hdr().nr as usize).min(nr_stable as usize);
-    Ok(unsafe { buf.hdr().d.as_slice(nr) }.to_vec())
+    Ok(unsafe { std::slice::from_raw_parts(buf.hdr().d.as_ptr(), nr) }.to_vec())
 }
 
 // Per-device IO from sysfs (io_done is JSON: {"read": {...}, "write": {...}}, values in bytes)

@@ -314,11 +314,11 @@ fn journal_entry_header_to_text(
          \x20 flush           {}\n\
          \x20 written at      ",
         if blacklisted { "blacklisted " } else { "" },
-        u64::from_le(p.j.seq),
+        p.j.seq.get(),
         jset_vstruct_bytes(&p.j),
         jset_vstruct_sectors(&p.j, unsafe { (*c_fs).block_bits }),
-        u32::from_le(p.j.version),
-        u64::from_le(p.j.last_seq),
+        p.j.version.get(),
+        p.j.last_seq.get(),
         if jset_no_flush(&p.j) { 0 } else { 1 },
     );
 
@@ -414,7 +414,7 @@ fn print_one_entry(
 
 fn journal_replay_print(c_fs: *mut c::bch_fs, f: &JournalFilter, p: &c::journal_replay) {
     let mut buf = Printbuf::new();
-    let seq = u64::from_le(p.j.seq);
+    let seq = p.j.seq.get();
     let blacklisted = p.ignore_blacklisted
         || unsafe { c::bch2_journal_seq_is_blacklisted(c_fs, seq, false) };
     let mut printed_header = false;
@@ -787,7 +787,7 @@ pub(crate) fn list_journal_run(
         let mut seq = 0u64;
         for &ep in entries {
             let p = unsafe { &*ep };
-            let p_seq = u64::from_le(p.j.seq);
+            let p_seq = p.j.seq.get();
 
             if seq == 0 {
                 seq = p_seq;
@@ -812,7 +812,7 @@ pub(crate) fn list_journal_run(
         // journal.seq isn't set in read_journal_only mode, so compute
         // the max seq from the entries we actually collected
         let max_seq = entries.iter()
-            .map(|&ep| unsafe { u64::from_le((*ep).j.seq) })
+            .map(|&ep| unsafe { ((*ep).j.seq).get() })
             .max()
             .unwrap_or(0);
         let computed = (max_seq as i64) - (nr as i64) + 1;
@@ -830,7 +830,7 @@ pub(crate) fn list_journal_run(
         }
 
         let p = unsafe { &*ep };
-        let p_seq = u64::from_le(p.j.seq);
+        let p_seq = p.j.seq.get();
 
         if p_seq < min_seq_to_print {
             continue;

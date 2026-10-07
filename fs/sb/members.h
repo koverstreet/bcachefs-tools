@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_SB_MEMBERS_H
 #define _BCACHEFS_SB_MEMBERS_H
 
-#include "btree/bkey_types.h"
+#include "btree/bkey_gen.h"
 #include "util/enumerated_ref.h"
 #include "util/darray.h"
 
@@ -496,7 +496,7 @@ static inline bool bch2_dev_btree_bitmap_marked_sectors_any(struct bch_dev *ca, 
 bool bch2_dev_btree_bitmap_marked(struct bch_fs *, struct bkey_s_c);
 bool bch2_dev_btree_bitmap_marked_nogc(struct bch_fs *, struct bkey_s_c);
 
-#include "sb/members_defs.h"
+#include "sb/members_defs_gen.h"
 
 void bch2_dev_btree_bitmap_mark_locked(struct bch_fs *, struct bkey_s_c, struct sb_write *);
 void bch2_dev_btree_bitmap_mark(struct bch_fs *, struct bkey_s_c);

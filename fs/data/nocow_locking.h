@@ -4,7 +4,7 @@
 
 #include "bcachefs.h"
 #include "alloc/background.h"
-#include "nocow_locking_types.h"
+#include "data/nocow_locking_gen.h"
 
 #include <linux/hash.h>
 

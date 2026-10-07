@@ -3,6 +3,7 @@
 #define _BCACHEFS_FSCK_H
 
 #include "str_hash.h"
+#include "fs/check_gen.h"
 
 int bch2_check_inodes(struct bch_fs *);
 int bch2_check_extents(struct bch_fs *);

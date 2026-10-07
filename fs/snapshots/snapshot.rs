@@ -368,15 +368,15 @@ const SNAPSHOT_STATES: [c::bch_snapshot_state; 4] = [
 ];
 
 impl c::bch_snapshot {
-    pub fn parent(&self) -> u32       { u32::from_le(self.parent) }
-    pub fn children(&self) -> [u32; 2] { self.children.map(u32::from_le) }
-    pub fn subvol(&self) -> u32       { u32::from_le(self.subvol) }
-    pub fn tree(&self) -> u32         { u32::from_le(self.tree) }
-    pub fn depth(&self) -> u32        { u32::from_le(self.depth) }
+    pub fn parent(&self) -> u32       { self.parent.get() }
+    pub fn children(&self) -> [u32; 2] { self.children.map(|c| c.get()) }
+    pub fn subvol(&self) -> u32       { self.subvol.get() }
+    pub fn tree(&self) -> u32         { self.tree.get() }
+    pub fn depth(&self) -> u32        { self.depth.get() }
 
     /// The raw state field.
     pub fn state_raw(&self) -> u32 {
-        u32::from_le(self.state)
+        self.state.get()
     }
 
     /// The state field, if it holds a state - not if it's 0, predating the
@@ -420,7 +420,7 @@ impl c::bch_snapshot {
 /// As bch2_snapshot_state_str().
 impl fmt::Display for c::bch_snapshot_state {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = unsafe { core::ffi::CStr::from_ptr(c::bch2_snapshot_state_str(*self)) };
+        let s = unsafe { core::ffi::CStr::from_ptr(c::bch2_snapshot_state_str(*self).cast()) };
         f.write_str(s.to_str().unwrap_or("?"))
     }
 }

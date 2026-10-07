@@ -8,7 +8,24 @@
  * header can't have, as it's to be defined in Rust.
  */
 
-#include "bcachefs_format_types.h"
+#include "bcachefs_format_gen.h"
+
+#define KEY_INODE_MAX			((__u64)~0ULL)
+#define KEY_OFFSET_MAX			((__u64)~0ULL)
+#define KEY_SNAPSHOT_MAX		((__u32)~0U)
+#define KEY_SIZE_MAX			((__u32)~0U)
+
+#define SPOS(_inode, _offset, _snapshot)		\
+	((struct bpos) {				\
+		.inode		= _inode,		\
+		.offset		= _offset,		\
+		.snapshot	= _snapshot,		\
+	})
+
+#define POS_MIN				SPOS(0, 0, 0)
+#define POS_MAX				SPOS(KEY_INODE_MAX, KEY_OFFSET_MAX, 0)
+#define SPOS_MAX			SPOS(KEY_INODE_MAX, KEY_OFFSET_MAX, KEY_SNAPSHOT_MAX)
+#define POS(_inode, _offset)		SPOS(_inode, _offset, 0)
 
 static inline void bkey_init(struct bkey *k)
 {

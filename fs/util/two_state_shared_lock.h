@@ -8,7 +8,7 @@
 
 #include "util.h"
 
-#include "util/two_state_shared_lock_types.h"
+#include "util/two_state_shared_lock_gen.h"
 
 static inline void two_state_lock_init(two_state_lock_t *lock)
 {

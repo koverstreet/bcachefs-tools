@@ -4,10 +4,10 @@
 
 #include "fs/inode.h"
 #include "fs/str_hash.h"
-#include "fs/quota_types.h"
+#include "fs/quota_gen.h"
 
 #include "util/two_state_shared_lock.h"
-#include "vfs/types.h"
+#include "vfs/types_gen.h"
 
 #include <linux/seqlock.h>
 #include <linux/stat.h>
@@ -30,7 +30,7 @@ static inline void inode_state_set_raw(struct inode *inode, unsigned flags)
 }
 #endif
 
-#include "vfs/fs_types.h"
+#include "vfs/fs_gen.h"
 
 #define bch2_pagecache_add_put(i)	bch2_two_state_unlock(&(i)->ei_pagecache_lock, 0)
 #define bch2_pagecache_add_tryget(i)	bch2_two_state_trylock(&(i)->ei_pagecache_lock, 0)

@@ -7,7 +7,7 @@
 #include "sb/io.h"
 #include "snapshots/snapshot.h"
 
-#include "btree/update_types.h"
+#include "btree/update_gen.h"
 
 void bch2_btree_node_prep_for_write(struct btree_trans *,
 				    struct btree_path *, struct btree *);

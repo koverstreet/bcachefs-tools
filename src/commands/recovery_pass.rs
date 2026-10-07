@@ -58,12 +58,12 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
             ext_u64s,
         ).ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))?;
 
-        let mut scheduled = u64::from_le(ext.recovery_passes_required[0]);
+        let mut scheduled = ext.recovery_passes_required[0].get();
 
         if passes_to_set != 0 || passes_to_unset != 0 {
             ext.recovery_passes_required[0] &= !passes_to_unset.to_le();
             ext.recovery_passes_required[0] |= passes_to_set.to_le();
-            scheduled = u64::from_le(ext.recovery_passes_required[0]);
+            scheduled = ext.recovery_passes_required[0].get();
             fs.write_super_ret()
                 .map_err(|e| anyhow::anyhow!("error writing superblock: {e}"))?;
         }

@@ -36,10 +36,6 @@ use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
 };
 use crate::c;
-use crate::c::bch_inode_flags::{
-    BCH_INODE_has_access_acl, BCH_INODE_has_child_snapshot, BCH_INODE_has_default_acl,
-    BCH_INODE_has_inode_opts, BCH_INODE_unlinked,
-};
 use crate::check;
 use crate::errcode::{bch_errcode, BchError, Found};
 use crate::fs::Fs;
@@ -71,7 +67,7 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpac
     let d = namei::inode_get_dirent(t, &mut dirent_iter, u, &mut snapshot).found()?;
     let points = d.is_some_and(|k| namei::dirent_points_to_inode(Dirent::new(k).expect("a dirent"), u));
 
-    if !points && u.bi_subvol != 0 && u.flag(BCH_INODE_has_child_snapshot) {
+    if !points && u.bi_subvol != 0 && u.flag(c::bch_inode_flags::BCH_INODE_has_child_snapshot) {
         // Older version of a renamed subvolume root: we won't have a correct
         // dirent for it. That's expected, see inode_should_reattach().
         //
@@ -103,14 +99,14 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpac
 
     if let Some(k) = d {
         if points &&
-           fsck_err_on!(trans, u.flag(BCH_INODE_unlinked), id::inode_unlinked_but_has_dirent,
+           fsck_err_on!(trans, u.flag(c::bch_inode_flags::BCH_INODE_unlinked), id::inode_unlinked_but_has_dirent,
                         "inode unlinked but has dirent\n{u}\n{}", k.to_text(fs))? {
             // The dirent was just verified to point at this inode, so the
             // unlinked flag is wrong - and the flag clear is the complete
             // repair: bi_nlink counts links beyond the first, so this yields
             // nlink 1 (check_nlinks recounts hardlinks), and the inode trigger
             // removes the deleted_inodes entry.
-            u.set_flag(BCH_INODE_unlinked, false);
+            u.set_flag(c::bch_inode_flags::BCH_INODE_unlinked, false);
             changed = true;
         }
     }
@@ -194,7 +190,7 @@ fn check_inode_subvol(
     // conservative arms below, which strip the reference.
     let snapshot_agrees = snapshot.as_ref().is_some_and(|s| {
         s.state() == Some(c::bch_snapshot_state::SNAPSHOT_STATE_live) &&
-            u32::from_le(s.subvol) == u.bi_subvol
+            s.subvol.get() == u.bi_subvol
     });
 
     if subvol.is_none() && (fs.btree_lost_data(c::btree_id::subvolumes) || snapshot_agrees) {
@@ -226,11 +222,11 @@ fn check_inode_subvol(
                       u.bi_subvol, u.bi_snapshot)?,
         Some(s) =>
             fsck_err_on!(trans,
-                         u64::from_le(s.inode) != u.bi_inum ||
-                         !snapshot::is_ancestor(trans, u32::from_le(s.snapshot), pos.snapshot),
+                         s.inode.get() != u.bi_inum ||
+                         !snapshot::is_ancestor(trans, s.snapshot.get(), pos.snapshot),
                          id::inode_bi_subvol_wrong,
                          "inode points to subvol {}, but subvol points to {}:{}\n{u}\nsnapshot {}: {snap}",
-                         u.bi_subvol, u64::from_le(s.inode), u32::from_le(s.snapshot),
+                         u.bi_subvol, s.inode.get(), s.snapshot.get(),
                          u.bi_snapshot)?,
     };
     if !repair {
@@ -273,15 +269,15 @@ fn check_unlinked_dir(
         return Ok(false);
     }
 
-    u.set_flag(BCH_INODE_unlinked, false);
+    u.set_flag(c::bch_inode_flags::BCH_INODE_unlinked, false);
     Ok(true)
 }
 
 /// The ACL flags, with the xattr each records and its fsck error.
 const ACL_FLAGS: [(c::bch_inode_flags, u32, c::bch_sb_error_id, &str); 2] = [
-    (BCH_INODE_has_access_acl,  c::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS,
+    (c::bch_inode_flags::BCH_INODE_has_access_acl,  c::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS,
      id::inode_has_access_acl_flag_wrong,  "access"),
-    (BCH_INODE_has_default_acl, c::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT,
+    (c::bch_inode_flags::BCH_INODE_has_default_acl, c::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT,
      id::inode_has_default_acl_flag_wrong, "default"),
 ];
 
@@ -348,7 +344,7 @@ fn check_inode<'t>(
         changed |= check_inode_dirent_inode(t, &mut u)?;
     }
 
-    if u.is_dir() && u.flag(BCH_INODE_unlinked) {
+    if u.is_dir() && u.flag(c::bch_inode_flags::BCH_INODE_unlinked) {
         changed |= check_unlinked_dir(t, pos, &mut u)?;
     }
 
@@ -359,19 +355,19 @@ fn check_inode<'t>(
     }
 
     let has_child = inode::has_child_snapshots(trans, pos)?;
-    if fsck_err_on!(trans, has_child != u.flag(BCH_INODE_has_child_snapshot),
+    if fsck_err_on!(trans, has_child != u.flag(c::bch_inode_flags::BCH_INODE_has_child_snapshot),
                     id::inode_has_child_snapshots_wrong,
                     "inode has_child_snapshots flag wrong (should be {})\n{u}", has_child as u32)? {
-        u.set_flag(BCH_INODE_has_child_snapshot, has_child);
+        u.set_flag(c::bch_inode_flags::BCH_INODE_has_child_snapshot, has_child);
         changed = true;
     }
 
     // Unlinked subvolume roots are skipped here: their deletion belongs to the
     // subvolume path (check_subvols() resumes it after a crash), not the inode
     // reaper or the deleted_inodes btree:
-    if u.flag(BCH_INODE_unlinked) &&
+    if u.flag(c::bch_inode_flags::BCH_INODE_unlinked) &&
        !u.is_subvolume_root() &&
-       !u.flag(BCH_INODE_has_child_snapshot) {
+       !u.flag(c::bch_inode_flags::BCH_INODE_has_child_snapshot) {
         if !fs.flag(c::bch_fs_flags::BCH_FS_started) {
             // If we're not in online fsck, don't delete unlinked inodes, just
             // make sure they're on the deleted list.
@@ -398,10 +394,10 @@ fn check_inode<'t>(
     }
 
     let has_opts = u.has_opts();
-    if fsck_err_on!(trans, u.flag(BCH_INODE_has_inode_opts) != has_opts,
+    if fsck_err_on!(trans, u.flag(c::bch_inode_flags::BCH_INODE_has_inode_opts) != has_opts,
                     id::inode_has_inode_opts_flag_wrong,
                     "inode has_inode_opts flag wrong, should be {}\n{u}", has_opts as u32)? {
-        u.set_flag(BCH_INODE_has_inode_opts, has_opts);
+        u.set_flag(c::bch_inode_flags::BCH_INODE_has_inode_opts, has_opts);
         changed = true;
     }
 
@@ -416,7 +412,7 @@ fn check_inode<'t>(
     for (flag, x_type, err, acl) in ACL_FLAGS {
         if u.flag(flag) &&
            fsck_err_on!(trans, !has_xattr_type(t, &u, x_type)?, err,
-                        "inode has BCH_INODE_has_{acl}_acl set but no acl xattr\n{u}")? {
+                        "inode has c::bch_inode_flags::BCH_INODE_has_{acl}_acl set but no acl xattr\n{u}")? {
             u.set_flag(flag, false);
             changed = true;
         }

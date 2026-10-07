@@ -3,11 +3,12 @@
 #define _BCACHEFS_CHECKSUM_H
 
 #include "bcachefs.h"
-#include "extents_types.h"
+#include "data/extents_gen.h"
 #include "sb/io.h"
 
 #include <linux/crc64.h>
 #include <crypto/chacha.h>
+#include "data/checksum_gen.h"
 
 static inline bool bch2_checksum_mergeable(unsigned type)
 {

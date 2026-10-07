@@ -1,6 +1,5 @@
 pub mod alloc;
 pub mod async_exec;
-pub mod bitmask;
 pub mod darray;
 pub mod ffi;
 #[cfg(not(kernel))]

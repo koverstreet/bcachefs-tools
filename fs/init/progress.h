@@ -3,9 +3,9 @@
 #define _BCACHEFS_PROGRESS_H
 
 #include "bcachefs_ioctl.h"
-#include "btree/bbpos_types.h"
+#include "btree/bbpos_gen.h"
 
-#include "init/progress_types.h"
+#include "init/progress_gen.h"
 
 void bch2_progress_init(struct progress_indicator *s,
 			      const char *msg,

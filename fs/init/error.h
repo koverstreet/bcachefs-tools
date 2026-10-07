@@ -4,10 +4,10 @@
 
 #include <linux/list.h>
 #include <linux/printk.h>
-#include "btree/bkey_types.h"
+#include "btree/bkey_gen.h"
 #include "sb/errors.h"
 
-#include "init/error_defs.h"
+#include "init/error_defs_gen.h"
 
 /*
  * XXX: separate out errors that indicate on disk data is inconsistent, and flag

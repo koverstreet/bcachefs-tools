@@ -599,7 +599,7 @@ fn get_sb_journal(fs: &Fs, ca: &c::bch_dev, entire_journal: bool, d: &mut DumpDe
 
     // All superblock copies
     for i in 0..sb.layout.nr_superblocks as usize {
-        let offset = u64::from_le(sb.layout.sb_offset[i]);
+        let offset = sb.layout.sb_offset[i].get();
         range_add(&mut d.sb, offset << 9, sb_bytes);
     }
 

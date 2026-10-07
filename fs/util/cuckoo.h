@@ -25,7 +25,7 @@
 #include <linux/hash.h>
 #include <linux/types.h>
 
-#include "util/cuckoo_types.h"
+#include "util/cuckoo_gen.h"
 
 static inline u64 *cuckoo_u64_slot(u64 *d, unsigned bits, const u64 *seeds,
 				   unsigned i, u64 key)

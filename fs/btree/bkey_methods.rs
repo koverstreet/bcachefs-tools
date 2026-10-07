@@ -222,13 +222,13 @@ impl<'a> TriggerOp<'a> {
     /// @op is the one the trigger was called with: both keys valid, and @new
     /// the trigger's to edit, for 'a.
     pub unsafe fn from_raw(op: &'a mut c::btree_trigger_op) -> Self {
-        let new = unsafe { &mut op.new.__bindgen_anon_1.__bindgen_anon_1 };
+        let new = unsafe { &mut op.new.split.kv };
         TriggerOp {
             btree: op.btree,
             level: op.level,
             old:   BkeySC::from(&op.old),
             new:   BkeyS { k: unsafe { &mut *new.k }, v: unsafe { &mut *new.v } },
-            flags: UpdateTriggerFlags::from_bits_retain(op.flags.0),
+            flags: UpdateTriggerFlags::from_bits_retain(op.flags.bits()),
         }
     }
 }

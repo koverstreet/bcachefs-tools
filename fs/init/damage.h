@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_DAMAGE_H
 #define _BCACHEFS_DAMAGE_H
 
-#include "sb/errors_types.h"
+#include "sb/errors_gen.h"
 
 /*
  * The damage btree: a persistent record of which inodes have been damaged

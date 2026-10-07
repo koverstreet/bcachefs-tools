@@ -28,8 +28,8 @@ fn fix_reflink_p_key<'t>(
 
     let mut u = t.bkey_reassemble(k)?;
     let v = u.k_i_mut().as_mut_reflink_p().expect("reassembled from a reflink_p");
-    v.front_pad = 0;
-    v.back_pad  = 0;
+    v.front_pad = 0.into();
+    v.back_pad  = 0.into();
 
     t.update(iter, &u, UpdateTriggerFlags::NORUN)
 }

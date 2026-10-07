@@ -54,7 +54,7 @@ impl BchError {
     /// Returns a static string since bch2_err_str() returns strings
     /// that live for the process lifetime.
     pub fn msg(&self) -> &'static str {
-        unsafe { CStr::from_ptr(c::bch2_err_str(self.0)) }
+        unsafe { CStr::from_ptr(c::bch2_err_str(self.0).cast()) }
             .to_str()
             .unwrap_or("unknown error")
     }

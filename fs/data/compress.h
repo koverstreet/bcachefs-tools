@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_DATA_COMPRESS_H
 #define _BCACHEFS_DATA_COMPRESS_H
 
-#include "extents_types.h"
+#include "data/extents_gen.h"
 
 static const unsigned __bch2_compression_opt_to_type[] = {
 #define x(t, n) [BCH_COMPRESSION_OPT_##t] = BCH_COMPRESSION_TYPE_##t,
@@ -10,7 +10,7 @@ static const unsigned __bch2_compression_opt_to_type[] = {
 #undef x
 };
 
-#include "data/compress_defs.h"
+#include "data/compress_defs_gen.h"
 
 static inline bool bch2_compression_opt_valid(unsigned v)
 {

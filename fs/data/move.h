@@ -7,9 +7,9 @@
 #include "btree/bbpos.h"
 #include "btree/iter.h"
 #include "data/update.h"
-#include "move_types.h"
+#include "data/move_gen.h"
 
-#include "data/move_defs.h"
+#include "data/move_defs_gen.h"
 
 /*
  * Movers wait on IO they issued, and the completions (index updates) run on

@@ -3,8 +3,9 @@
 #define _BCACHEFS_ALLOC_BACKGROUND_H
 
 #include "bcachefs.h"
-#include "alloc/types.h"
+#include "alloc/types_gen.h"
 #include "alloc/buckets.h"
+#include "alloc/background_gen.h"
 
 /* Bucket position helpers */
 

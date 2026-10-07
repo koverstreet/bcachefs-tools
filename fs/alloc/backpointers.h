@@ -233,7 +233,7 @@ static inline bool bch2_backpointers_match(struct bch_backpointer l, struct bch_
 	return !memcmp(&l, &r, sizeof(l));
 }
 
-#include "alloc/backpointers_types.h"
+#include "alloc/backpointers_gen.h"
 
 struct bkey_s_c bch2_backpointer_get_key(struct btree_trans *, struct bkey_s_c_backpointer,
 					 struct btree_iter *, unsigned, struct wb_maybe_flush *);

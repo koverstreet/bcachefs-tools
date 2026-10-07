@@ -310,7 +310,7 @@ fn add_default_sb_layout(sb: &mut c::bch_sb) -> Result<u32> {
     }
 
     for i in 0..sb.layout.nr_superblocks as usize {
-        let off = u64::from_le(sb.layout.sb_offset[i]);
+        let off = sb.layout.sb_offset[i].get();
         if off == bch_sb_sector || off == bch_sb_sector + sb_size as u64 {
             bail!("Superblock layout already has default superblocks");
         }
@@ -320,8 +320,8 @@ fn add_default_sb_layout(sb: &mut c::bch_sb) -> Result<u32> {
     let nr = sb.layout.nr_superblocks as usize;
     sb.layout.sb_offset.copy_within(0..nr, 2);
     sb.layout.nr_superblocks += 2;
-    sb.layout.sb_offset[0] = bch_sb_sector.to_le();
-    sb.layout.sb_offset[1] = (bch_sb_sector + sb_size as u64).to_le();
+    sb.layout.sb_offset[0] = bch_sb_sector.into();
+    sb.layout.sb_offset[1] = (bch_sb_sector + sb_size as u64).into();
 
     Ok(sb_size)
 }
@@ -430,7 +430,7 @@ fn migrate_fs(
         bail!("format failed");
     }
 
-    let sb_offset_val = u64::from_le(unsafe { (*sb).layout.sb_offset[0] });
+    let sb_offset_val = (unsafe { (*sb).layout.sb_offset[0] }).get();
 
     // Add encryption key if needed
     if !passphrase.is_null() {
@@ -618,7 +618,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
 // ---- Public command entry points ----
 
 fn cmd_migrate(argv: Vec<String>) -> Result<()> {
-    let opt_flags = c::opt_flags::OPT_FORMAT as u32;
+    let opt_flags = c::opt_flags::OPT_FORMAT.bits() as u32;
 
     let mut fs_path: Option<String> = None;
     let mut encrypted = false;
@@ -641,7 +641,7 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
             let name = raw_name.replace('-', "_");
 
             if let Some((opt_id, opt, negated)) = bch_opt_lookup_negated(&name) {
-                if opt.flags as u32 & opt_flags != 0 {
+                if opt.flags.bits() as u32 & opt_flags != 0 {
                     let val_str = if negated {
                         "0".to_string()
                     } else if let Some(v) = inline_val {

@@ -14,7 +14,7 @@ u64 bch2_fsck_recovery_passes(void);
 
 void bch2_recovery_pass_set_no_ratelimit(struct bch_fs *, enum bch_recovery_pass);
 
-#include "init/passes_defs.h"
+#include "init/passes_defs_gen.h"
 
 /*
  * A pass is only ever scheduled because it has work to do, so anything

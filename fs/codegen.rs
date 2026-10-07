@@ -183,11 +183,113 @@ const DERIVE_READD: &[&str] = &[
 // can't be Copy) and we don't want a derived Debug leaking key bytes. Kept out
 // of DERIVE_READD deliberately.
 
+/// The types the fs crate defines in Rust that C shares (types/lib.rs): bindgen
+/// leaves them out, and crate::c takes them from crate::cstructs::c. Found in
+/// the source by the macros that define them: a struct or union deriving
+/// CStruct, c_enum!'s `pub enum NAME:`, c_typedef!'s `pub type NAME`,
+/// c_opaque!(NAME) - and the typed keys, which btree/bkey_types.rs makes from
+/// a list.
+fn rust_defined_types(sources: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for text in sources {
+        for (i, _) in text.match_indices("CStruct") {
+            // in a #[derive(...)]: the struct or union after it
+            let before = &text[..i];
+            if before.rfind("#[derive(").is_some_and(|d| !before[d..].contains(']')) {
+                let after = &text[i..];
+                let s = after.find("pub struct ").map(|j| (j, "pub struct "));
+                let u = after.find("pub union ").map(|j| (j, "pub union "));
+                if let Some((j, kw)) = [s, u].into_iter().flatten().min() {
+                    out.extend(ident_after(&after[j..], kw).map(String::from));
+                }
+            }
+        }
+        // a darray, C's typedef: DArray<T> in Rust
+        for (i, _) in text.match_indices("pub type ") {
+            let line = text[i..].lines().next().unwrap_or("");
+            if line.split_once('=').is_some_and(|(_, ty)| ty.trim_start().starts_with("DArray<")) {
+                out.extend(ident_after(line, "pub type ").map(String::from));
+            }
+        }
+        for (m, kw) in [("c_enum!", "pub enum "), ("c_typedef!", "pub type "), ("c_opaque!(", "")] {
+            for (i, _) in text.match_indices(m) {
+                let after = &text[i + m.len()..];
+                let n = if kw.is_empty() { ident_after(after, "") } else { ident_after(after, kw) };
+                out.extend(n.map(String::from));
+            }
+        }
+    }
+    out.extend(["bkey_i_.*", "bkey_s_c_.*", "bkey_s_.*"].map(String::from));
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The C functions and variables the fs crate declares itself, in c_extern!
+/// blocks: bindgen leaves them out, as it does the types.
+fn rust_declared(sources: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for text in sources {
+        for (i, _) in text.match_indices("c_extern!") {
+            let body = &text[i..];
+            let body = &body[..body.find("\n}").unwrap_or(body.len())];
+            for kw in ["fn ", "static mut ", "static "] {
+                for (j, _) in body.match_indices(kw) {
+                    // the keyword, not the end of a name
+                    if body[..j].ends_with(|c: char| c.is_alphanumeric() || c == '_') ||
+                       (kw == "static " && body[j..].starts_with("static mut ")) {
+                        continue;
+                    }
+                    out.extend(ident_after(&body[j..], kw).map(String::from));
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn ident_after<'a>(s: &'a str, kw: &str) -> Option<&'a str> {
+    let rest = &s[s.find(kw)? + kw.len()..];
+    let end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(rest.len());
+    Some(&rest[..end]).filter(|n| !n.is_empty())
+}
+
+/// The fs crate's Rust sources' text: what rust_defined_types() and
+/// rust_declared() scan.
+fn rust_sources(src: &str) -> Vec<String> {
+    fn scan(dir: &std::path::Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = e.file_name();
+            if p.is_dir() {
+                // the macros' own crates, and what isn't ours
+                if !matches!(name.to_str(), Some("vendor" | "types" | "cstruct-macros" |
+                                                  "typeinfo-macros" | "target")) {
+                    scan(&p, out);
+                }
+                continue;
+            }
+            if p.extension().is_some_and(|x| x == "rs") {
+                out.extend(std::fs::read_to_string(&p).ok());
+            }
+        }
+    }
+    let mut out = Vec::new();
+    scan(std::path::Path::new(src), &mut out);
+    // types/ is the macros' own source, but lib.rs's darrays are C's
+    // util/darray.h typedefs
+    out.extend(std::fs::read_to_string(format!("{src}/types/lib.rs")).ok());
+    out
+}
+
 /// Run the bindgen CLI over the fs/ headers and write `bcachefs.rs` + `extern.c`
 /// into `out`. The caller supplies `clang_args` and `blocklist_dirs` — userspace
 /// computes them via [`userspace_clang_args`]/[`default_blocklist`], the kernel
 /// build passes Kbuild's set.
-pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String], ptr_width: &str) {
+pub fn run_bindgen(src: &str, out: &str, clang_args: &[String], blocklist_dirs: &[String], ptr_width: &str) {
     std::fs::create_dir_all(out).expect("create out dir");
 
     // bindgen CLI takes one header; emit a wrapper that #includes the fs/ set.
@@ -243,6 +345,9 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String], 
     for x in ALLOWLIST_TYPE     { flag!("--allowlist-type", *x); }
     for x in BLOCKLIST_TYPE     { flag!("--blocklist-type", *x); }
     for x in BLOCKLIST_ITEM     { flag!("--blocklist-item", *x); }
+    let sources = rust_sources(src);
+    for x in rust_defined_types(&sources) { flag!("--blocklist-type", x); }
+    for x in rust_declared(&sources) { flag!("--blocklist-function", x.clone()); flag!("--blocklist-item", x); }
     for x in NO_DEBUG           { flag!("--no-debug", *x); }
     for x in NO_COPY            { flag!("--no-copy", *x); }
     for x in NO_PARTIALEQ       { flag!("--no-partialeq", *x); }
@@ -585,7 +690,9 @@ fn generate_bitmask_accessors(bms: &[Bitmask], out_dir: &str) -> String {
         let group = &bms[i..end];
         i = end;
 
-        if !bindings.contains(&format!("pub struct {st}")) {
+        // Only bindgen's: a type defined in Rust has c_bitmask!'s. The whole
+        // name - bch_sb isn't bch_sb_handle.
+        if !bindings.contains(&format!("pub struct {st} {{")) {
             continue;
         }
 

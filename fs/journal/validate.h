@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _BCACHEFS_JOURNAL_VALIDATE_H
 #define _BCACHEFS_JOURNAL_VALIDATE_H
+#include "journal/validate_gen.h"
 
 void bch2_journal_entry_err_msg(struct printbuf *, u32,
 				struct jset *, struct jset_entry *);

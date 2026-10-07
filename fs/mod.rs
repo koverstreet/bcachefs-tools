@@ -131,14 +131,28 @@ pub mod c {
     #[cfg(kernel)]
     pub use kernel::bindings::*;
 
-    // C's x-macro lists, as c::NAME!: see cstructs.rs.
+    // The types defined in Rust that C shares: bindgen leaves them out
+    // (codegen.rs's rust_defined_types()). printbuf the shim has too - ours.
     pub use crate::cstructs::c::*;
+    pub use crate::cstructs::c::printbuf;
 
     // Userspace #defines timespec64 → timespec (include/linux/time64.h), so
     // bindgen never emits a timespec64; alias it so fs/ can name the kernel's
     // real return type (timespec64) uniformly across both builds.
     #[cfg(not(kernel))]
     pub type timespec64 = timespec;
+    // Likewise list_head and the hlists, which are liburcu's
+    // (include/linux/list.h): for the types defined in Rust that hold them.
+    #[cfg(not(kernel))]
+    pub type list_head = cds_list_head;
+    #[cfg(not(kernel))]
+    pub type hlist_head = cds_hlist_head;
+    #[cfg(not(kernel))]
+    pub type hlist_node = cds_hlist_node;
+    // And the kernel's rcu_head, which is #define rcu_head callback_head: a
+    // macro, which the kernel crate's bindings don't have.
+    #[cfg(kernel)]
+    pub type rcu_head = callback_head;
 
     // The generated bindings carry #[derive(TypeInfo)] on the bch_* family
     // (injected by codegen.rs); bring the derive macro into scope for them.
@@ -162,8 +176,8 @@ pub mod c {
     impl bch_sb_field_crypt {
         pub fn scrypt_flags(&self) -> Option<bch_scrypt_flags> {
             use core::convert::TryInto;
-            match bch_kdf_types(bch_crypt_flags(self.flags).TYPE().try_into().ok()?) {
-                bch_kdf_types::BCH_KDF_SCRYPT => Some(bch_scrypt_flags(self.kdf_flags)),
+            match bch_kdf_types(bch_crypt_flags(self.flags.get()).TYPE().try_into().ok()?) {
+                bch_kdf_types::BCH_KDF_SCRYPT => Some(bch_scrypt_flags(self.kdf_flags.get())),
                 _ => None,
             }
         }
@@ -197,11 +211,11 @@ pub mod c {
 
         /// Plaintext (unencrypted) key for the crypt field (remove-passphrase).
         pub fn new_unencrypted(key: bch_key) -> Self {
-            Self { magic: u64::from_le_bytes(*Self::MAGIC).to_le(), key }
+            Self { magic: u64::from_le_bytes(*Self::MAGIC).into(), key }
         }
 
         pub fn is_encrypted(&self) -> bool {
-            u64::from_le(self.magic) != u64::from_le_bytes(*Self::MAGIC)
+            self.magic.get() != u64::from_le_bytes(*Self::MAGIC)
         }
 
         pub fn into_key(self) -> bch_key {
@@ -214,7 +228,7 @@ pub mod c {
 
     #[cfg(feature = "std")]
     impl Zeroize for bch_key {
-        fn zeroize(&mut self) { self.key.zeroize(); }
+        fn zeroize(&mut self) { zerocopy::IntoBytes::as_mut_bytes(&mut self.key).zeroize(); }
     }
     #[cfg(feature = "std")]
     impl Drop for bch_key {
@@ -226,7 +240,7 @@ pub mod c {
     #[cfg(feature = "std")]
     impl Zeroize for bch_encrypted_key {
         fn zeroize(&mut self) {
-            self.magic.zeroize();
+            zerocopy::IntoBytes::as_mut_bytes(&mut self.magic).zeroize();
             self.key.zeroize();
         }
     }

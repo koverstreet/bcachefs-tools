@@ -130,7 +130,8 @@
 #include "util/fifo.h"
 #include "util/util.h"
 
-#include "util/six_types.h"
+#include "enum_kind.h"
+#include "util/six_gen.h"
 
 /*
  * Wait list entry: cached {waiter pointer, start_time + lock_want} pair.

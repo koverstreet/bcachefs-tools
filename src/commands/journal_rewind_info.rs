@@ -61,7 +61,7 @@ fn entry_datetime_seconds(entry: &c::jset_entry) -> u64 {
 // ---- per-replay accessors ----
 
 fn jset_seq(p: &c::journal_replay) -> u64 {
-    u64::from_le(p.j.seq)
+    p.j.seq.get()
 }
 
 /// Scan a jset for its first BCH_JSET_ENTRY_datetime sub-entry and return

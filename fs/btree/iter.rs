@@ -66,7 +66,7 @@ impl TransFnName {
             return idx;
         }
 
-        let idx = unsafe { c::bch2_trans_get_fn_idx(self.name.get(name).as_ptr()) };
+        let idx = unsafe { c::bch2_trans_get_fn_idx(self.name.get(name).as_ptr().cast()) };
         self.idx.store(idx, Ordering::Release);
         idx
     }
@@ -132,7 +132,7 @@ impl<'f> BtreeTrans<'f> {
     ) -> Result<(), BchError> {
         crate::errcode::ret_to_result(unsafe {
             c::bch2_btree_delete_range_trans(self.raw, btree, start, end,
-                                             c::btree_iter_update_trigger_flags(flags.bits()))
+                                             c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()))
         }).map(|_| ())
     }
 
@@ -168,7 +168,7 @@ impl<'f> BtreeTrans<'f> {
     /// transaction restart if they've changed hands meanwhile.
     pub fn relock(&self) -> Result<(), BchError> {
         let trans = unsafe { &*self.raw };
-        if trans.locked() && trans.restarted().0 == 0 {
+        if trans.locked() && trans.restarted() == 0 {
             return Ok(());
         }
         crate::errcode::ret_to_result(unsafe { c::__bch2_trans_relock(self.raw, true) }).map(|_| ())
@@ -752,7 +752,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     ) -> Result<(), BchError> {
         let ret = unsafe {
             c::bch2_trans_update_extent_overwrite(self.raw(), iter.raw(),
-                                                  c::btree_iter_update_trigger_flags(flags.bits()),
+                                                  c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
                                                   old.to_raw(), new.to_raw())
         };
         self.result(ret)
@@ -785,7 +785,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 iter.raw(),
                 key.as_ptr(),
                 key.buf_u64s,
-                c::btree_iter_update_trigger_flags(flags.bits()),
+                c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
                 0,
             )
         };
@@ -815,7 +815,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             nr:           ids.len(),
             size:         ids.len(),
             data:         ids.as_mut_ptr(),
-            preallocated: Default::default(),
+            preallocated: [],
         };
         let ret = unsafe { c::__bch2_insert_snapshot_whiteouts(self.raw(), btree, new_pos, &mut list) };
         self.result(ret)
@@ -871,7 +871,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 self.raw(),
                 c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 key.as_ptr(),
-                c::btree_iter_update_trigger_flags(iter_flags.bits() | flags.bits()),
+                c::btree_iter_update_trigger_flags::from_bits_retain(iter_flags.bits() | flags.bits()),
             )
         };
         self.result(ret)
@@ -890,7 +890,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 key.as_ptr(),
                 key_ref.k.u64s as u32,
-                c::btree_iter_update_trigger_flags(flags.bits()),
+                c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
             )
         };
         self.result(ret)
@@ -903,7 +903,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
         let ret = unsafe {
-            c::bch2_btree_delete_at(self.raw(), iter, c::btree_iter_update_trigger_flags(flags.bits()))
+            c::bch2_btree_delete_at(self.raw(), iter, c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()))
         };
         self.result(ret)
     }
@@ -917,7 +917,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             c::bch2_btree_delete_at(
                 self.raw(),
                 iter.raw(),
-                c::btree_iter_update_trigger_flags(flags.bits()),
+                c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
             )
         };
         self.result(ret)
@@ -955,7 +955,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 self.raw(),
                 c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 pos,
-                c::btree_iter_update_trigger_flags(flags.bits()),
+                c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
             )
         };
         self.result(ret)
@@ -1073,25 +1073,25 @@ impl<'a, 't> Deref for TransAttempt<'a, 't> {
 bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct BtreeIterFlags: u32 {
-        const SLOTS = c::btree_iter_update_trigger_flags::BTREE_ITER_slots.0;
-        const PREV = c::btree_iter_update_trigger_flags::BTREE_ITER_prev.0;
-        const INTENT = c::btree_iter_update_trigger_flags::BTREE_ITER_intent.0;
-        const PREFETCH = c::btree_iter_update_trigger_flags::BTREE_ITER_prefetch.0;
-        const IS_EXTENTS = c::btree_iter_update_trigger_flags::BTREE_ITER_is_extents.0;
-        const NOT_EXTENTS = c::btree_iter_update_trigger_flags::BTREE_ITER_not_extents.0;
-        const CACHED = c::btree_iter_update_trigger_flags::BTREE_ITER_cached.0;
-        const KEY_CACHED = c::btree_iter_update_trigger_flags::BTREE_ITER_with_key_cache.0;
-        const WITH_JOURNAL = c::btree_iter_update_trigger_flags::BTREE_ITER_with_journal.0;
-        const SNAPSHOT_FIELD = c::btree_iter_update_trigger_flags::BTREE_ITER_snapshot_field.0;
-        const ALL_SNAPSHOTS = c::btree_iter_update_trigger_flags::BTREE_ITER_all_snapshots.0;
-        const FILTER_SNAPSHOTS = c::btree_iter_update_trigger_flags::BTREE_ITER_filter_snapshots.0;
-        const NOFILTER_WHITEOUTS = c::btree_iter_update_trigger_flags::BTREE_ITER_nofilter_whiteouts.0;
-        const NOPRESERVE = c::btree_iter_update_trigger_flags::BTREE_ITER_nopreserve.0;
-        const CACHED_NOFILL = c::btree_iter_update_trigger_flags::BTREE_ITER_cached_nofill.0;
-        const KEY_CACHE_FILL = c::btree_iter_update_trigger_flags::BTREE_ITER_key_cache_fill.0;
+        const SLOTS = c::btree_iter_update_trigger_flags::BTREE_ITER_slots.bits();
+        const PREV = c::btree_iter_update_trigger_flags::BTREE_ITER_prev.bits();
+        const INTENT = c::btree_iter_update_trigger_flags::BTREE_ITER_intent.bits();
+        const PREFETCH = c::btree_iter_update_trigger_flags::BTREE_ITER_prefetch.bits();
+        const IS_EXTENTS = c::btree_iter_update_trigger_flags::BTREE_ITER_is_extents.bits();
+        const NOT_EXTENTS = c::btree_iter_update_trigger_flags::BTREE_ITER_not_extents.bits();
+        const CACHED = c::btree_iter_update_trigger_flags::BTREE_ITER_cached.bits();
+        const KEY_CACHED = c::btree_iter_update_trigger_flags::BTREE_ITER_with_key_cache.bits();
+        const WITH_JOURNAL = c::btree_iter_update_trigger_flags::BTREE_ITER_with_journal.bits();
+        const SNAPSHOT_FIELD = c::btree_iter_update_trigger_flags::BTREE_ITER_snapshot_field.bits();
+        const ALL_SNAPSHOTS = c::btree_iter_update_trigger_flags::BTREE_ITER_all_snapshots.bits();
+        const FILTER_SNAPSHOTS = c::btree_iter_update_trigger_flags::BTREE_ITER_filter_snapshots.bits();
+        const NOFILTER_WHITEOUTS = c::btree_iter_update_trigger_flags::BTREE_ITER_nofilter_whiteouts.bits();
+        const NOPRESERVE = c::btree_iter_update_trigger_flags::BTREE_ITER_nopreserve.bits();
+        const CACHED_NOFILL = c::btree_iter_update_trigger_flags::BTREE_ITER_cached_nofill.bits();
+        const KEY_CACHE_FILL = c::btree_iter_update_trigger_flags::BTREE_ITER_key_cache_fill.bits();
         // For hash table inserts, which take them with the iterator flags:
-        const STR_HASH_MUST_CREATE = c::btree_iter_update_trigger_flags::STR_HASH_must_create.0;
-        const STR_HASH_MUST_REPLACE = c::btree_iter_update_trigger_flags::STR_HASH_must_replace.0;
+        const STR_HASH_MUST_CREATE = c::btree_iter_update_trigger_flags::STR_HASH_must_create.bits();
+        const STR_HASH_MUST_REPLACE = c::btree_iter_update_trigger_flags::STR_HASH_must_replace.bits();
     }
 }
 
@@ -1103,17 +1103,17 @@ bitflags! {
     /// the str_hash inserts, which take the two separately here, so they get
     /// their own type. (The str_hash flags themselves are with `BtreeIterFlags`.)
     pub struct UpdateTriggerFlags: u32 {
-        const INTERNAL_SNAPSHOT_NODE   = c::btree_iter_update_trigger_flags::BTREE_UPDATE_internal_snapshot_node.0;
-        const NOJOURNAL                = c::btree_iter_update_trigger_flags::BTREE_UPDATE_nojournal.0;
-        const KEY_CACHE_RECLAIM        = c::btree_iter_update_trigger_flags::BTREE_UPDATE_key_cache_reclaim.0;
-        const NORUN                    = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_norun.0;
-        const TRANSACTIONAL            = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_transactional.0;
-        const ATOMIC                   = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_atomic.0;
-        const GC                       = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_gc.0;
-        const INSERT                   = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_insert.0;
-        const OVERWRITE                = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_overwrite.0;
-        const IS_DISCARD               = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_is_discard.0;
-        const SET_NEEDS_RECONCILE_DONE = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_set_needs_reconcile_done.0;
+        const INTERNAL_SNAPSHOT_NODE   = c::btree_iter_update_trigger_flags::BTREE_UPDATE_internal_snapshot_node.bits();
+        const NOJOURNAL                = c::btree_iter_update_trigger_flags::BTREE_UPDATE_nojournal.bits();
+        const KEY_CACHE_RECLAIM        = c::btree_iter_update_trigger_flags::BTREE_UPDATE_key_cache_reclaim.bits();
+        const NORUN                    = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_norun.bits();
+        const TRANSACTIONAL            = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_transactional.bits();
+        const ATOMIC                   = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_atomic.bits();
+        const GC                       = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_gc.bits();
+        const INSERT                   = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_insert.bits();
+        const OVERWRITE                = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_overwrite.bits();
+        const IS_DISCARD               = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_is_discard.bits();
+        const SET_NEEDS_RECONCILE_DONE = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_set_needs_reconcile_done.bits();
     }
 }
 
@@ -1121,13 +1121,13 @@ bitflags! {
     /// The flag half of the C `bch_trans_commit_flags` word — the bits above the
     /// watermark. Composed onto a [`CommitOpts`] via [`CommitOpts::flags`].
     pub struct CommitFlags: u32 {
-        const NO_ENOSPC             = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_enospc.0;
-        const NO_CHECK_RW           = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_check_rw.0;
-        const NO_JOURNAL_RES        = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_journal_res.0;
-        const NO_SKIP_NOOPS         = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_skip_noops.0;
-        const JOURNAL_RECLAIM       = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_journal_reclaim.0;
-        const JOURNAL_REPLAY        = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_journal_replay.0;
-        const SKIP_ACCOUNTING_APPLY = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_skip_accounting_apply.0;
+        const NO_ENOSPC             = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_enospc.bits();
+        const NO_CHECK_RW           = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_check_rw.bits();
+        const NO_JOURNAL_RES        = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_journal_res.bits();
+        const NO_SKIP_NOOPS         = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_skip_noops.bits();
+        const JOURNAL_RECLAIM       = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_journal_reclaim.bits();
+        const JOURNAL_REPLAY        = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_journal_replay.bits();
+        const SKIP_ACCOUNTING_APPLY = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_skip_accounting_apply.bits();
     }
 }
 
@@ -1175,7 +1175,7 @@ impl CommitOpts {
     }
 
     pub(crate) const fn to_c(self) -> c::bch_trans_commit_flags {
-        c::bch_trans_commit_flags(self.0)
+        c::bch_trans_commit_flags::from_bits_retain(self.0)
     }
 }
 
@@ -1448,7 +1448,7 @@ impl<'t> BtreeIter<'t> {
     }
 
     pub fn btree(&self) -> c::btree_id {
-        self.r().btree_id()
+        c::btree_id(self.r().btree_id())
     }
 
     pub fn set_pos(&mut self, pos: c::bpos) {
@@ -1519,7 +1519,7 @@ impl<'t> BtreeIter<'t> {
                 iter.as_mut_ptr(),
                 c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 pos,
-                c::btree_iter_update_trigger_flags(flags.bits()),
+                c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
                 0
             );
 
@@ -1544,7 +1544,7 @@ impl<'t> BtreeIter<'t> {
                 pos,
                 0,
                 level,
-                c::btree_iter_update_trigger_flags(flags.bits())
+                c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits())
             );
 
             Self::from_raw(iter.assume_init())
@@ -2069,7 +2069,7 @@ impl<'t> BtreeNodeIter<'t> {
                 pos,
                 locks_want,
                 depth,
-                c::btree_iter_update_trigger_flags(flags.bits()),
+                c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
             );
 
             BtreeNodeIter {

@@ -138,7 +138,7 @@ impl<T> Default for DArray<T> {
 #[allow(non_camel_case_types)]
 pub mod darrays {
     use super::DArray;
-    use core::ffi::c_char;
+    use crate::util::ffi::c_char;
 
     pub type darray_char = DArray<c_char>;
     pub type darray_u8   = DArray<u8>;

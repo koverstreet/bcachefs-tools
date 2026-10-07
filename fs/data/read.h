@@ -4,7 +4,7 @@
 
 #include "btree/bkey_buf.h"
 #include "btree/iter.h"
-#include "extents_types.h"
+#include "data/extents_gen.h"
 #include "data/reflink.h"
 
 #define BIO_BOUNCE_BUF_POOL_LEN	(PAGE_SIZE << PAGE_ALLOC_COSTLY_ORDER)
@@ -18,7 +18,7 @@ void bch2_dev_congested_to_text(struct printbuf *, struct bch_dev *);
 #define BCH_READ_ERR_decompression	(1U << 2)
 #define BCH_READ_ERR_ec_reconstruct	(1U << 3)
 
-#include "data/read_types.h"
+#include "data/read_gen.h"
 
 #define to_rbio(_bio)		container_of((_bio), struct bch_read_bio, bio)
 

@@ -62,7 +62,6 @@ use crate::btree::iter::{
     TransBkey, UpdateTriggerFlags,
 };
 use crate::c;
-use crate::c::bch_inode_flags::BCH_INODE_i_sectors_dirty;
 use crate::check::{self, InodeWalker, SnapshotsSeen};
 use crate::data::extents;
 use crate::data::io_misc;
@@ -164,7 +163,7 @@ fn check_i_sectors_notnested(t: &TransAttempt<'_, '_>, w: &mut InodeWalker)
         }
         i.count = count2;
 
-        if fsck_err_on!(trans, !i.inode.flag(BCH_INODE_i_sectors_dirty) &&
+        if fsck_err_on!(trans, !i.inode.flag(c::bch_inode_flags::BCH_INODE_i_sectors_dirty) &&
                         i.inode.bi_sectors != i.count,
                         id::inode_i_sectors_wrong,
                         "incorrect i_sectors: got {}, should be {}\n{}",

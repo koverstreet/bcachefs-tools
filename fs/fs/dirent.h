@@ -14,7 +14,7 @@ void bch2_dirent_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 	.min_val_size	= 16,				\
 })
 
-#include "fs/dirent_types.h"
+#include "fs/dirent_gen.h"
 
 #if IS_ENABLED(CONFIG_UNICODE)
 /*

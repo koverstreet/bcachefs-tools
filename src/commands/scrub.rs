@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use bch_bindgen::c::{
-    bch_ioctl_data, bch_ioctl_data_event_ret, bch_ioctl_data_progress,
-    bch_ioctl_data__bindgen_ty_1__bindgen_ty_1 as ScrubArgs,
+    bch_ioctl_data, bch_ioctl_data_args, bch_ioctl_data_event_ret, bch_ioctl_data_progress,
+    bch_ioctl_data_scrub,
 };
 use bch_bindgen::accounting::data_type;
 use clap::Parser;
@@ -46,22 +46,13 @@ fn read_data_event(fd: &mut std::fs::File) -> io::Result<(u8, u8, bch_ioctl_data
 }
 
 fn start_scrub(ioctl_fd: std::os::fd::BorrowedFd, dev_idx: u32, data_types: u32) -> Result<std::fs::File> {
-    let mut cmd = bch_ioctl_data {
+    let cmd = bch_ioctl_data {
         op: bch_bindgen::c::bch_data_ops::BCH_DATA_OP_scrub.0 as u16,
+        args: bch_ioctl_data_args {
+            scrub: bch_ioctl_data_scrub { dev: dev_idx, data_types },
+        },
         ..Default::default()
     };
-    // bch_ioctl_data's op-params union is emitted as either a native Rust union or
-    // the __BindgenUnionField wrapper, depending on the host libclang's Copy analysis
-    // of its blocklisted __u32 members — non-deterministic across build hosts, and
-    // the wrapper's helper type isn't nameable here. Both forms share one C layout,
-    // so write the scrub params positionally; the asserts pin the layout we rely on.
-    const _: () = assert!(std::mem::offset_of!(ScrubArgs, dev) == 0);
-    const _: () = assert!(std::mem::offset_of!(ScrubArgs, data_types) == 4);
-    unsafe {
-        let p = std::ptr::addr_of_mut!(cmd.__bindgen_anon_1) as *mut u32;
-        p.write(dev_idx);
-        p.add(1).write(data_types);
-    }
 
     let ret = ioctl_w::<BCH_IOCTL_DATA>(ioctl_fd, &cmd)?;
     Ok(unsafe { std::fs::File::from_raw_fd(ret) })

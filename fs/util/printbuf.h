@@ -67,7 +67,8 @@
 #include <linux/kernel.h>
 #include <linux/string.h>
 
-#include "util/printbuf_types.h"
+#include "enum_kind.h"
+#include "util/printbuf_gen.h"
 
 static inline struct printbuf_restore printbuf_state_save(struct printbuf *buf)
 {

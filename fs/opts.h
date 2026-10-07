@@ -10,7 +10,7 @@
 #include "bcachefs_format.h"
 #include "util/darray.h"
 
-#include "opts_types.h"
+#include "opts_gen.h"
 
 extern const char * const bch2_error_actions[];
 extern const char * const bch2_degraded_actions[];
@@ -65,16 +65,6 @@ static inline const char *bch2_d_type_str(unsigned d_type)
  *  - default value
  *  - helptext
  */
-
-#ifdef __KERNEL__
-#define RATELIMIT_ERRORS_DEFAULT true
-#else
-#endif
-
-#ifdef CONFIG_BCACHEFS_DEBUG
-#define BCACHEFS_VERBOSE_DEFAULT	true
-#else
-#endif
 
 extern const struct bch_opts bch2_opts_default;
 

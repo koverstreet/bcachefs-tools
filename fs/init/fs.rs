@@ -22,7 +22,7 @@ impl DevRef {
 
     /// The device name (sdX etc).
     pub fn name(&self) -> &core::ffi::CStr {
-        unsafe { core::ffi::CStr::from_ptr((*self.0).name.as_ptr()) }
+        unsafe { core::ffi::CStr::from_ptr((*self.0).name.as_ptr().cast()) }
     }
 }
 
@@ -86,20 +86,6 @@ impl BorrowedFs {
     }
 }
 
-// Metadata versions only go up, so they order by number: "at least version X"
-// is fs.version() >= bcachefs_metadata_version::X.
-impl PartialOrd for c::bcachefs_metadata_version {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for c::bcachefs_metadata_version {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.0.cmp(&other.0)
-    }
-}
-
 /// As bch2_version_to_text(): the version's number and name.
 impl core::fmt::Display for c::bcachefs_metadata_version {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -110,7 +96,7 @@ impl core::fmt::Display for c::bcachefs_metadata_version {
 impl Fs {
     /// The filesystem's name, as its messages give it.
     pub fn name(&self) -> &core::ffi::CStr {
-        unsafe { core::ffi::CStr::from_ptr((*self.raw).name.as_ptr()) }
+        unsafe { core::ffi::CStr::from_ptr((*self.raw).name.as_ptr().cast()) }
     }
 
     /// The filesystem's options, as resolved at open.
@@ -348,7 +334,7 @@ impl Fs {
             c::bch2_opt_set_sb(self.raw,
                 dev.map_or(core::ptr::null_mut(), |d| d.as_mut_ptr()),
                 opt, v,
-                val_str.map_or(core::ptr::null(), |s| s.as_ptr()));
+                val_str.map_or(core::ptr::null(), |s| s.as_ptr().cast()));
         }
     }
 
@@ -364,7 +350,7 @@ impl Fs {
 
     /// Mark device superblock buckets in btree metadata.
     pub fn trans_mark_dev_sb(&self, ca: &DevRef, flags: UpdateTriggerFlags) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_trans_mark_dev_sb(self.raw, ca.as_mut_ptr(), c::btree_iter_update_trigger_flags(flags.bits())) })
+        ret_to_result(unsafe { c::bch2_trans_mark_dev_sb(self.raw, ca.as_mut_ptr(), c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits())) })
     }
 
     /// Flush the journal: everything committed before the call is on disk when
@@ -496,7 +482,7 @@ impl Fs {
         flags: BtreeIterFlags,
     ) -> Result<(), BchError> {
         ret_to_result(unsafe {
-            c::bch2_btree_delete_range(self.raw, btree_id, start, end, c::btree_iter_update_trigger_flags(flags.bits()))
+            c::bch2_btree_delete_range(self.raw, btree_id, start, end, c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()))
         })
     }
 
@@ -519,7 +505,7 @@ impl Fs {
                 key.as_bkey_i_mut(),
                 disk_res,
                 commit_flags.into().to_c(),
-                c::btree_iter_update_trigger_flags(iter_flags.bits()),
+                c::btree_iter_update_trigger_flags::from_bits_retain(iter_flags.bits()),
             )
         })
     }

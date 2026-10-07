@@ -4,7 +4,7 @@
 
 #include "btree/interior.h"
 
-#include "btree/sort_types.h"
+#include "btree/sort_gen.h"
 
 static inline void sort_iter_init(struct sort_iter *iter, struct btree *b, unsigned size)
 {

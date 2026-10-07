@@ -113,7 +113,7 @@ fn should_use_kernel_fsck(devs: &[String]) -> bool {
         Err(_) => return false,
     };
 
-    let sb_version = fs.sb().version as u64;
+    let sb_version = fs.sb().version.get() as u64;
 
     let ret = (current < kernel_version && kernel_version <= sb_version) ||
               (sb_version <= kernel_version && kernel_version < current);
@@ -295,7 +295,7 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
         let hdr = buf.hdr_mut();
         hdr.opts = c_opts.as_ptr() as u64;
         hdr.nr_devs = dev_ptrs.len() as u64;
-        unsafe { hdr.devs.as_mut_slice(dev_ptrs.len()).copy_from_slice(&dev_ptrs) };
+        unsafe { std::slice::from_raw_parts_mut(hdr.devs.as_mut_ptr(), dev_ptrs.len()).copy_from_slice(&dev_ptrs) };
 
         let fsck_fd = match std::fs::OpenOptions::new()
             .read(true).write(true)

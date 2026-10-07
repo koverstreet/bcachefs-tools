@@ -67,7 +67,7 @@ void bch2_inode_alloc_cursor_to_text(struct printbuf *, struct bch_fs *, struct 
 	.val_to_text	= bch2_inode_alloc_cursor_to_text,	\
 	.min_val_size	= 16,					\
 })
-#include "fs/inode_types.h"
+#include "fs/inode_gen.h"
 
 
 

@@ -175,7 +175,7 @@ pub fn val(k: BkeySC<'_>) -> Option<c::bch_subvolume> {
 }
 
 impl c::bch_subvolume {
-    pub fn snapshot(&self) -> u32 { u32::from_le(self.snapshot) }
+    pub fn snapshot(&self) -> u32 { self.snapshot.get() }
 
     /// The state field, if it holds a state - not if it's 0, predating the
     /// field, or damaged: as bch2_subvolume_state() and
@@ -185,7 +185,7 @@ impl c::bch_subvolume {
 
         [c::bch_subvolume_state::SUBVOLUME_STATE_live, c::bch_subvolume_state::SUBVOLUME_STATE_unlinked, c::bch_subvolume_state::SUBVOLUME_STATE_deleted]
             .into_iter()
-            .find(|&s| s.0 as u32 == u32::from_le(self.state))
+            .find(|&s| s.0 as u32 == self.state.get())
     }
 
     /// The subvolume's state - read from its flags if it predates the state

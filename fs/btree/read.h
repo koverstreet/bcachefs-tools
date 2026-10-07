@@ -9,7 +9,7 @@
 #include "data/extents.h"
 #include "init/error.h"
 
-#include "btree/read_types.h"
+#include "btree/read_gen.h"
 
 static inline unsigned btree_ptr_sectors_written(struct bkey_s_c k)
 {

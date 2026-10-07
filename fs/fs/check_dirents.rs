@@ -155,7 +155,7 @@ fn find_snapshot_subvol(t: &TransAttempt<'_, '_>, snapshot: u32) -> Result<Optio
 
     iter.for_each_norestart(t, |_, k| Ok(
         match k.as_subvolume() {
-            Some(s) if snapshot::is_ancestor(t, u32::from_le(s.snapshot), snapshot) =>
+            Some(s) if snapshot::is_ancestor(t, s.snapshot.get(), snapshot) =>
                 ControlFlow::Break(Some(k.k.p.offset as u32)),
             _ => ControlFlow::Continue(()),
         }))
@@ -265,9 +265,9 @@ fn check_dirent_to_subvol<'t>(
     };
 
     let v = subvolume::val(s).expect("typed");
-    let fs_path_parent  = u32::from_le(v.fs_path_parent);
-    let target_inum     = u64::from_le(v.inode);
-    let target_snapshot = u32::from_le(v.snapshot);
+    let fs_path_parent  = v.fs_path_parent.get();
+    let target_inum     = v.inode.get();
+    let target_snapshot = v.snapshot.get();
 
     if fs_path_parent != parent {
         let mut path = Printbuf::new();
@@ -277,7 +277,7 @@ fn check_dirent_to_subvol<'t>(
                      "subvol with wrong fs_path_parent, should be {parent}\n{path}\n{}",
                      s.to_text(fs))? {
             let mut n = t.bkey_reassemble(s)?;
-            n.k_i_mut().as_mut_subvolume().expect("a subvolume").fs_path_parent = parent.to_le();
+            n.k_i_mut().as_mut_subvolume().expect("a subvolume").fs_path_parent = parent.into();
             t.update(&subvol_iter, &n, UpdateTriggerFlags::empty())?;
         }
     }

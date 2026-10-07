@@ -6,7 +6,7 @@
 
 #include <linux/pagemap.h>
 
-#include "vfs/pagecache_types.h"
+#include "vfs/pagecache_gen.h"
 
 int bch2_filemap_get_contig_folios_d(struct address_space *, loff_t,
 				     u64, fgf_t, gfp_t, folios *);

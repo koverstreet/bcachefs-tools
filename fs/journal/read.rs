@@ -2,13 +2,14 @@ use crate::c;
 use crate::data::checksum::BCH_NONCE_JOURNAL;
 use crate::util::vstructs::vstruct_next_entry;
 use core::marker::PhantomData;
+use zerocopy::byteorder::little_endian::U32;
 
 #[allow(non_camel_case_types)]
 pub type journal_entry_type = c::bch_jset_entry_type;
 
 /// Pointer to one past the last entry in a jset.
 unsafe fn vstruct_last_jset(jset: *const c::jset) -> *const c::jset_entry {
-    let u64s = u32::from_le((*jset).u64s) as usize;
+    let u64s = ((*jset).u64s).get() as usize;
     (jset as *const u8).add(56 + u64s * 8) as *const c::jset_entry
 }
 
@@ -23,16 +24,21 @@ unsafe fn bkey_next_raw(k: *const c::bkey_i) -> *const c::bkey_i {
 impl c::jset {
     /// The nonce of this journal entry: its seq, in the journal domain.
     pub fn nonce(&self) -> c::nonce {
-        let seq = u64::from_le(self.seq);
+        let seq = self.seq.get();
         c::nonce {
-            d: [0, (seq as u32).to_le(), ((seq >> 32) as u32).to_le(), BCH_NONCE_JOURNAL.to_le()],
+            d: [
+                U32::ZERO,
+                U32::new(seq as u32),
+                U32::new((seq >> 32) as u32),
+                U32::new(BCH_NONCE_JOURNAL),
+            ],
         }
     }
 }
 
 /// Total byte size of a jset including header.
 pub fn jset_vstruct_bytes(jset: &c::jset) -> usize {
-    let u64s = u32::from_le(jset.u64s) as usize;
+    let u64s = jset.u64s.get() as usize;
     56 + u64s * 8
 }
 
@@ -45,7 +51,7 @@ pub fn jset_vstruct_sectors(jset: &c::jset, block_bits: u16) -> usize {
 
 /// JSET_NO_FLUSH bitfield: bit 5 of le32 flags.
 pub fn jset_no_flush(jset: &c::jset) -> bool {
-    (u32::from_le(jset.flags) >> 5) & 1 != 0
+    (jset.flags.get() >> 5) & 1 != 0
 }
 
 // ---- vstruct iterators ----
@@ -132,7 +138,7 @@ pub fn entry_btree_id(entry: &c::jset_entry) -> Option<c::btree_id> {
 /// Get log message bytes from a jset_entry of type log.
 /// Layout: jset_entry header (8 bytes) followed by d[] message bytes.
 pub fn entry_log_msg(entry: &c::jset_entry) -> &[u8] {
-    let msg_bytes = u16::from_le(entry.u64s) as usize * 8;
+    let msg_bytes = entry.u64s.get() as usize * 8;
     if msg_bytes == 0 {
         return &[];
     }

@@ -23,7 +23,7 @@ static inline unsigned xattr_val_u64s(unsigned name_len, unsigned val_len)
 #define xattr_val(_xattr)					\
 	((void *) (_xattr)->x_name_and_value + (_xattr)->x_name_len)
 
-#include "fs/xattr_types.h"
+#include "fs/xattr_gen.h"
 
 #define X_SEARCH(_type, _name, _len) ((struct xattr_search_key)	\
 	{ .type = _type, .name = QSTR_INIT(_name, _len) })

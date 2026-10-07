@@ -52,7 +52,7 @@ impl Printbuf {
         if self.0.buf.is_null() {
             ""
         } else {
-            unsafe { CStr::from_ptr(self.0.buf) }
+            unsafe { CStr::from_ptr(self.0.buf.cast()) }
                 .to_str()
                 .unwrap_or("")
         }
@@ -190,7 +190,7 @@ impl Printbuf {
     ///
     /// # Safety
     /// `list` must be a valid null-terminated array of C string pointers.
-    pub unsafe fn prt_bitflags(&mut self, list: *const *const core::ffi::c_char, flags: u64) {
+    pub unsafe fn prt_bitflags(&mut self, list: *const *const crate::util::ffi::c_char, flags: u64) {
         c::bch2_prt_bitflags(&mut self.0, list, flags);
     }
 
@@ -223,7 +223,7 @@ impl fmt::Write for Printbuf {
         unsafe {
             c::bch2_prt_bytes_indented(
                 &mut self.0,
-                s.as_ptr() as *const core::ffi::c_char,
+                s.as_ptr() as *const crate::util::ffi::c_char,
                 s.len() as core::ffi::c_uint,
             );
         }
@@ -282,7 +282,7 @@ where
         return Ok(());
     }
 
-    let bytes = unsafe { CStr::from_ptr(buf.buf) }.to_bytes();
+    let bytes = unsafe { CStr::from_ptr(buf.buf.cast()) }.to_bytes();
     for chunk in bytes.utf8_chunks() {
         f.write_str(chunk.valid())?;
         if !chunk.invalid().is_empty() {

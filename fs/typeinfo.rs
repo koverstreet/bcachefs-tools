@@ -749,10 +749,10 @@ mod tests {
         let mut s = c::bch_snapshot::default();
         s.set_no_keys_obsolete(true);
         assert!(s.no_keys_obsolete());
-        assert_eq!(u32::from_le(s.flags), 8);
+        assert_eq!(s.flags.get(), 8);
         s.set_no_keys_obsolete(false);
         assert!(!s.no_keys_obsolete());
-        assert_eq!(u32::from_le(s.flags), 0);
+        assert_eq!(s.flags.get(), 0);
     }
 
     #[test]

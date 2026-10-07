@@ -219,7 +219,7 @@ impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query {
     fn set_capacity(&mut self, n: u32) { self.nr = n; }
     fn nr(&self) -> u32 { self.nr }
     fn total(&self) -> u32 { self.total }
-    unsafe fn nodes(&self, nr: usize) -> &[Self::Node] { self.nodes.as_slice(nr) }
+    unsafe fn nodes(&self, nr: usize) -> &[Self::Node] { std::slice::from_raw_parts(self.nodes.as_ptr(), nr) }
 }
 
 impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query_v2 {
@@ -228,7 +228,7 @@ impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query_v2 {
     fn set_capacity(&mut self, n: u32) { self.nr = n; }
     fn nr(&self) -> u32 { self.nr }
     fn total(&self) -> u32 { self.total }
-    unsafe fn nodes(&self, nr: usize) -> &[Self::Node] { self.nodes.as_slice(nr) }
+    unsafe fn nodes(&self, nr: usize) -> &[Self::Node] { std::slice::from_raw_parts(self.nodes.as_ptr(), nr) }
 }
 
 fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {

@@ -267,6 +267,31 @@ fn classify(ty: &[TokenTree]) -> String {
 
     let full = tokens_to_string(ty);
 
+    // zerocopy's byteorder integers - le::U32, big_endian::U16: endianness
+    // lives in the *module*. U128 stays opaque: no wider than 8 bytes here.
+    let module = ty.iter().rev()
+        .filter_map(|t| match t {
+            TokenTree::Ident(id) => Some(id.to_string()),
+            _ => None,
+        })
+        .nth(1);
+    let byteorder = match module.as_deref() {
+        Some("le" | "little_endian") => Some("Little"),
+        Some("be" | "big_endian") => Some("Big"),
+        _ => None,
+    };
+    if let Some(endian) = byteorder {
+        return match last_ident.as_str() {
+            "U16" => int_kind("2u8", endian, false),
+            "U32" => int_kind("4u8", endian, false),
+            "U64" => int_kind("8u8", endian, false),
+            "I16" => int_kind("2u8", endian, true),
+            "I32" => int_kind("4u8", endian, true),
+            "I64" => int_kind("8u8", endian, true),
+            _ => OPAQUE.into(),
+        };
+    }
+
     // Fixed-width integer typedefs. Endianness lives in the *name*.
     let (bytes, endian, signed) = match last_ident.as_str() {
         "__le16" => ("2u8", "Little", false),

@@ -4,7 +4,7 @@
 
 #include "btree/bset.h"
 #include "btree/cache.h"
-#include "btree/types.h"
+#include "btree/types_gen.h"
 
 #include "closure.h"
 #include "sb/counters.h"
@@ -240,7 +240,7 @@ static inline struct btree_path *prev_btree_path(struct btree_trans *trans, stru
 	      _iter.sorted_idx < (_trans)->nr_sorted);			\
 	     _iter.sorted_idx++)
 
-#include "btree/iter_types.h"
+#include "btree/iter_gen.h"
 
 #define trans_for_each_path_inorder(_trans, _path, _iter)		\
 	for (_iter = (struct trans_for_each_path_inorder_iter) { 0 };	\

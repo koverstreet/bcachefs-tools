@@ -2,9 +2,10 @@
 #ifndef _BCACHEFS_THREAD_WITH_FILE_H
 #define _BCACHEFS_THREAD_WITH_FILE_H
 
-#include "thread_with_file_types.h"
+#include "util/darray.h"
+#include "util/thread_with_file_gen.h"
 
-#include "util/thread_with_file_defs.h"
+#include "util/thread_with_file_defs_gen.h"
 
 void bch2_thread_with_file_exit(struct thread_with_file *);
 int bch2_run_thread_with_file(struct thread_with_file *,

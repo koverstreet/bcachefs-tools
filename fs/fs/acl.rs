@@ -192,9 +192,9 @@ mod vfs {
     /// The inode flag saying an ACL of @type_ exists.
     fn inode_flag(type_: i32) -> u32 {
         if type_ == ACL_TYPE_ACCESS {
-            c::bch_inode_flags::BCH_INODE_has_access_acl as u32
+            c::bch_inode_flags::BCH_INODE_has_access_acl.bits()
         } else {
-            c::bch_inode_flags::BCH_INODE_has_default_acl as u32
+            c::bch_inode_flags::BCH_INODE_has_default_acl.bits()
         }
     }
 
@@ -319,7 +319,7 @@ mod vfs {
         let x = k.k_i_mut().as_mut_xattr().expect("an xattr");
         x.x_type     = xattr_type(type_);
         x.x_name_len = 0;
-        x.x_val_len  = (len as u16).to_le();
+        x.x_val_len.set(len as u16);
 
         let start = core::mem::offset_of!(c::bch_xattr, x_name_and_value);
         let mut s = crate::btree::bkey::BkeyS::from(k.k_i_mut());

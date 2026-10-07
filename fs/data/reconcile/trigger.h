@@ -124,7 +124,7 @@ static inline int bch2_trigger_extent_reconcile(struct btree_trans *trans,
 		: 0;
 }
 
-#include "data/reconcile/trigger_types.h"
+#include "data/reconcile/trigger_gen.h"
 
 static inline struct per_snapshot_io_opts per_snapshot_io_opts_init(struct bch_fs *c)
 {

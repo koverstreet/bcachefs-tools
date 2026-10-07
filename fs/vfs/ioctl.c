@@ -15,7 +15,7 @@
 #include "alloc/accounting.h"
 #include "btree/write_buffer.h"
 #include "data/reconcile/trigger.h"
-#include "data/reflink_format.h"
+#include "data/reflink_format_gen.h"
 
 #include "init/chardev.h"
 #include "init/fs.h"

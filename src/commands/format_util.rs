@@ -163,7 +163,7 @@ pub fn format(
         }
     }
 
-    if opt_defined!(fs_opts, block_size) == 0 {
+    if !opt_defined!(fs_opts, block_size) {
         let block_size = pick_block_size(&fs_opts, dev_slice);
         opt_set!(fs_opts, block_size, block_size as u16);
     }
@@ -180,7 +180,7 @@ pub fn format(
 
     for dev in dev_slice.iter_mut() {
         let opts = &mut dev.opts;
-        if opt_defined!(opts, bucket_size) == 0 {
+        if !opt_defined!(opts, bucket_size) {
             let clamped = dev_bucket_size_clamp(fs_opts, dev.fs_size, fs_bucket_size);
             opt_set!(opts, bucket_size, clamped as u32);
         }
@@ -192,7 +192,7 @@ pub fn format(
     }
 
     // Calculate btree node size
-    if opt_defined!(fs_opts, btree_node_size) == 0 {
+    if !opt_defined!(fs_opts, btree_node_size) {
         let mut s = bcachefs_kernel::opts::opts_default().btree_node_size;
         for dev in dev_slice.iter() {
             s = s.min(dev.opts.bucket_size);
@@ -220,17 +220,17 @@ pub fn format(
         die("insufficient memory");
     }
 
-    sb.sb_mut().version = (opts.version as u16).to_le();
-    sb.sb_mut().version_min = (opts.version as u16).to_le();
+    sb.sb_mut().version = (opts.version as u16).into();
+    sb.sb_mut().version_min = (opts.version as u16).into();
     sb.sb_mut().magic.b = BCHFS_MAGIC;
     sb.sb_mut().user_uuid = opts.uuid;
     sb.sb_mut().nr_devices = dev_slice.len() as u8;
 
-    sb.sb_mut().set_sb_version_incompat_allowed(opts.version as u64);
+    sb.sb_mut().set_version_incompat_allowed(opts.version as u64);
     // These are no longer options, only for compatibility with old versions
-    sb.sb_mut().set_sb_meta_replicas_req(1);
-    sb.sb_mut().set_sb_data_replicas_req(1);
-    sb.sb_mut().set_sb_extent_bp_shift(16);
+    sb.sb_mut().set_meta_replicas_req(1);
+    sb.sb_mut().set_data_replicas_req(1);
+    sb.sb_mut().set_extent_bp_shift(16);
 
     let version_threshold =
         u32::from(metadata_version::disk_accounting_big_endian);
@@ -266,8 +266,8 @@ pub fn format(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_else(|_| die("error getting current time"));
     let nsec = now.as_secs() * 1_000_000_000 + now.subsec_nanos() as u64;
-    sb.sb_mut().time_base_lo = nsec.to_le();
-    sb.sb_mut().time_precision = 1u32.to_le();
+    sb.sb_mut().time_base_lo = nsec.into();
+    sb.sb_mut().time_precision = 1u32.into();
 
     // Member info
     let mi_size = std::mem::size_of::<c::bch_sb_field_members_v2>()
@@ -276,24 +276,24 @@ pub fn format(
 
     let mi = bcachefs_kernel::sb::io::sb_field_resize::<c::bch_sb_field_members_v2>(&mut sb, mi_u64s as u32)
         .unwrap_or_else(|| die("failed to resize members_v2 field"));
-    mi.member_bytes = (std::mem::size_of::<c::bch_member>() as u16).to_le();
+    mi.member_bytes = (std::mem::size_of::<c::bch_member>() as u16).into();
 
     for (idx, dev) in dev_slice.iter_mut().enumerate() {
         let m = sb.member_mut(idx as u32)
             .unwrap_or_else(|| die("member index out of range"));
         m.uuid.b = *uuid::Uuid::new_v4().as_bytes();
-        m.nbuckets = dev.nbuckets.to_le();
-        m.first_bucket = 0;
+        m.nbuckets = dev.nbuckets.into();
+        m.first_bucket = 0u16.into();
 
         let fd = dev.fd();
         let opts = &mut dev.opts;
-        if opt_defined!(opts, rotational) == 0 {
+        if !opt_defined!(opts, rotational) {
             let nonrot = crate::wrappers::bdev::nonrot(fd);
             opt_set!(opts, rotational, !nonrot as u8);
         }
 
         opt_set_sb_all(sb.sb_mut(), idx as i32, &mut dev.opts);
-        sb.member_mut(idx as u32).unwrap().set_member_rotational_set(1);
+        sb.member_mut(idx as u32).unwrap().set_rotational_set(true);
     }
 
     // Deferred device options: labels resolve to a disk path against the sb we
@@ -306,7 +306,7 @@ pub fn format(
                         die(&format!("error creating disk path: {}",
                                      std::io::Error::from_raw_os_error(e))));
                     // Recompute m after sb modification (may have been reallocated)
-                    sb.member_mut(idx as u32).unwrap().set_member_group(path_idx as u64 + 1);
+                    sb.member_mut(idx as u32).unwrap().set_group(path_idx as u64 + 1);
                 }
                 c::bch_opt_id::Opt_failure_domain => {
                     let bytes = val.to_bytes();
@@ -330,10 +330,10 @@ pub fn format(
     let background = parse_target(sb_handle, dev_slice, target_strs.background_target);
     let promote    = parse_target(sb_handle, dev_slice, target_strs.promote_target);
     let metadata   = parse_target(sb_handle, dev_slice, target_strs.metadata_target);
-    sb.sb_mut().set_sb_foreground_target(foreground as u64);
-    sb.sb_mut().set_sb_background_target(background as u64);
-    sb.sb_mut().set_sb_promote_target(promote as u64);
-    sb.sb_mut().set_sb_metadata_target(metadata as u64);
+    sb.sb_mut().set_foreground_target(foreground as u64);
+    sb.sb_mut().set_background_target(background as u64);
+    sb.sb_mut().set_promote_target(promote as u64);
+    sb.sb_mut().set_metadata_target(metadata as u64);
 
     // Encryption
     if opts.encrypted {
@@ -343,7 +343,7 @@ pub fn format(
             .unwrap_or_else(|| die("failed to create crypt field"));
         let crypt_ptr = crypt as *mut c::bch_sb_field_crypt;
         unsafe { c::bch_sb_crypt_init(sb.sb, crypt_ptr, opts.passphrase) };
-        sb.sb_mut().set_sb_encryption_type(1);
+        sb.sb_mut().set_encryption_type(1);
     }
 
     sb.members_cpy_v2_v1();
@@ -456,7 +456,7 @@ fn dev_bucket_size_clamp(fs_opts: c::bch_opts, dev_size: u64, fs_bucket_size: u6
 
     // Largest bucket size that still gives >= 2048 buckets
     let mut max_size = rounddown_pow_of_two(dev_size / (min_nr_nbuckets * 4));
-    if opt_defined!(fs_opts, btree_node_size) != 0 {
+    if opt_defined!(fs_opts, btree_node_size) {
         max_size = max_size.max(fs_opts.btree_node_size as u64);
     }
     if max_size * min_nr_nbuckets > dev_size {
@@ -520,7 +520,7 @@ pub fn pick_block_size(_fs_opts: &c::bch_opts, dev_slice: &[DevOpts]) -> u32 {
 pub fn pick_bucket_size(opts: &c::bch_opts, devs: &[DevOpts]) -> u64 {
     // Hard minimum: bucket must hold a btree node
     let mut bucket_size = opts.block_size as u64;
-    if opt_defined!(opts, btree_node_size) != 0 {
+    if opt_defined!(opts, btree_node_size) {
         bucket_size = bucket_size.max(opts.btree_node_size as u64);
     }
 
@@ -580,7 +580,7 @@ pub fn check_bucket_size(opts: &c::bch_opts, dev: &DevOpts) {
         ));
     }
 
-    if opt_defined!(opts, btree_node_size) != 0
+    if opt_defined!(opts, btree_node_size)
         && dev.opts.bucket_size < opts.btree_node_size
     {
         die(&format!(

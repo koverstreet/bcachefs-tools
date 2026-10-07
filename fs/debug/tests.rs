@@ -17,10 +17,11 @@ use crate::errcode::{
 use crate::fs::{BorrowedFs, Fs};
 use crate::util::async_exec::{block_on, spawn, system_unbound, WaitGroup};
 use crate::util::kernel::{local_clock, random_u64_below};
+use crate::util::ffi::c_char;
 use crate::util::printbuf::Printbuf;
 use crate::c;
 
-use core::ffi::{c_char, c_int, CStr};
+use core::ffi::{c_int, CStr};
 use core::ops::ControlFlow;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 
@@ -385,7 +386,7 @@ fn test_extent_create_dup(fs: &Fs, inum: u64) -> TestRet {
 
         if size as u64 > res.sectors() {
             // durability 1: single_device.ktest formats one device
-            res.add(size as u64 - res.sectors(), 1, c::bch_reservation_flags(0))?;
+            res.add(size as u64 - res.sectors(), 1, c::bch_reservation_flags::from_bits_retain(0))?;
         }
 
         t.insert_nonextent(c::btree_id::extents, dup, INTERNAL_SNAPSHOT_NODE)
@@ -417,7 +418,9 @@ fn test_btree_ptr_stale_dirty_key(
     let mut update_k = BkeyS::from(update.as_mut());
     for ptr_entry in bkey_ptrs_mut(t.fs(), &mut update_k) {
         if ptr_entry.cached() == 0 && ptr_entry.dev() != c::BCH_SB_MEMBER_INVALID as u64 {
-            ptr_entry.set_generation(ptr_entry.generation().wrapping_sub(1));
+            // gen is 8 bits: one less, as C's ptr->gen-- - the setter checks
+            // that the value fits
+            ptr_entry.set_generation((ptr_entry.generation() as u8).wrapping_sub(1).into());
             updated = true;
             break;
         }
@@ -946,7 +949,7 @@ pub unsafe extern "C" fn bch2_btree_perf_test(
         return errcode(&fs, bch_errcode::BCH_ERR_EINVAL_test_zero_nr_or_threads);
     }
 
-    let Some(testname) = (!testname.is_null()).then(|| unsafe { CStr::from_ptr(testname) }) else {
+    let Some(testname) = (!testname.is_null()).then(|| unsafe { CStr::from_ptr(testname.cast()) }) else {
         return errcode(&fs, bch_errcode::BCH_ERR_EINVAL_test_unknown_test);
     };
 

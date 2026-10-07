@@ -2,13 +2,12 @@
 #ifndef _BCACHEFS_FS_IO_BUFFERED_H
 #define _BCACHEFS_FS_IO_BUFFERED_H
 
-#include "vfs/buffered_types.h"
-
 #ifndef NO_BCACHEFS_FS
 
 #include <linux/version.h>
 
-#include "data/write_types.h"
+#include "data/write_gen.h"
+#include "vfs/buffered_gen.h"
 
 int bch2_read_single_folio(struct folio *, struct address_space *, bool);
 int bch2_read_folio(struct file *, struct folio *);

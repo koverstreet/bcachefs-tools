@@ -128,7 +128,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
 
     let start = c::subvol_inum {
         subvol: k.k.p.offset,
-        inum:   u64::from_le(start_sv.inode),
+        inum:   start_sv.inode.get(),
     };
 
     // Each step works on a copy of its subvolume key: from the second step on
@@ -147,12 +147,12 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
 
         subvol_path.push(s.k.p.offset as u32, GFP_KERNEL)?;
 
-        let root = c::subvol_inum { subvol: s.k.p.offset, inum: u64::from_le(sv.inode) };
+        let root = c::subvol_inum { subvol: s.k.p.offset, inum: sv.inode.get() };
 
         inode::find_by_inum_trans(trans, root, c_function_name!())?;
 
-        let parent = u32::from_le(sv.fs_path_parent);
-        let inode_pos = spos(0, u64::from_le(sv.inode), u32::from_le(sv.snapshot));
+        let parent = sv.fs_path_parent.get();
+        let inode_pos = spos(0, sv.inode.get(), sv.snapshot.get());
 
         if subvol_path.contains(&parent) {
             let mut buf = Printbuf::new();
@@ -380,7 +380,7 @@ fn check_directory_structure(fs: &Fs) -> Result<(), BchError> {
             // directory but the root of an unlinked subvolume, and a subvolume
             // root ends every walk - so skipping these can't hide a directory
             // loop:
-            if inode::flags(k) & c::bch_inode_flags::BCH_INODE_unlinked as u32 != 0 {
+            if inode::flags(k) & c::bch_inode_flags::BCH_INODE_unlinked.bits() as u32 != 0 {
                 return Ok(());
             }
 

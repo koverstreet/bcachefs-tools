@@ -32,7 +32,7 @@ fn root_snapshot_from_snapshots(t: &TransAttempt<'_, '_>) -> Result<u32, BchErro
 
     iter.for_each_norestart(t, |_, k| Ok(
         match k.as_snapshot() {
-            Some(s) if u32::from_le(s.subvol) == c::BCACHEFS_ROOT_SUBVOL && s.children[0] == 0 =>
+            Some(s) if s.subvol.get() == c::BCACHEFS_ROOT_SUBVOL && s.children[0] == 0 =>
                 ControlFlow::Break(k.k.p.offset as u32),
             _ => ControlFlow::Continue(()),
         }))
@@ -43,7 +43,7 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
     let fs = trans.fs();
 
     let (snapshot, inum) = match subvolume::get(trans, c::BCACHEFS_ROOT_SUBVOL, false).found()? {
-        Some(s) => (u32::from_le(s.snapshot), u64::from_le(s.inode)),
+        Some(s) => (s.snapshot.get(), s.inode.get()),
         None => {
             // Inside the caller's commit_do(): restarts propagate out to it.
             let root_snapshot = root_snapshot_from_snapshots(t)?;
@@ -60,9 +60,9 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
                                           c::bch_bkey_type::KEY_TYPE_subvolume.0 as u8,
                                           pos(0, c::BCACHEFS_ROOT_SUBVOL as u64))?;
             let v = k.k_i_mut().as_mut_subvolume().expect("allocated as a subvolume");
-            v.flags    = 0;
-            v.snapshot = snapshot.to_le();
-            v.inode    = inum.to_le();
+            v.flags    = 0.into();
+            v.snapshot = snapshot.into();
+            v.inode    = inum.into();
             v.set_state(c::bch_subvolume_state::SUBVOLUME_STATE_live);
 
             t.insert(c::btree_id::subvolumes, k, UpdateTriggerFlags::empty())?;

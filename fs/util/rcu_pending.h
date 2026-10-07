@@ -4,7 +4,7 @@
 
 #include <linux/rcupdate.h>
 
-#include "util/rcu_pending_types.h"
+#include "util/rcu_pending_gen.h"
 
 void rcu_pending_enqueue(struct rcu_pending *pending, struct rcu_head *obj);
 struct rcu_head *rcu_pending_dequeue(struct rcu_pending *pending);

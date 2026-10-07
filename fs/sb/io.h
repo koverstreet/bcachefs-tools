@@ -3,7 +3,7 @@
 #define _BCACHEFS_SB_IO_H
 
 #include "data/extents.h"
-#include "init/dev_types.h"
+#include "init/dev_gen.h"
 #include "sb/members.h"
 #include "util/eytzinger.h"
 
@@ -70,7 +70,7 @@ void bch2_sb_field_delete(struct bch_sb_handle *, enum bch_sb_field_type);
 
 extern const char * const bch2_sb_fields[];
 
-#include "sb/io_defs.h"
+#include "sb/io_defs_gen.h"
 
 static inline __le64 bch2_sb_magic(struct bch_fs *c)
 {

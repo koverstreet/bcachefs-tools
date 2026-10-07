@@ -4,7 +4,7 @@
 
 #include "btree/bkey.h"
 
-#include "btree/bkey_methods_types.h"
+#include "btree/bkey_methods_gen.h"
 
 extern const char * const bch2_bkey_types[];
 extern const struct bkey_ops bch2_bkey_null_ops;

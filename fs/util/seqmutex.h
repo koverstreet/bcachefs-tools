@@ -4,7 +4,7 @@
 
 #include <linux/mutex.h>
 
-#include "util/seqmutex_types.h"
+#include "util/seqmutex_gen.h"
 
 #define seqmutex_init(_lock)	mutex_init(&(_lock)->lock)
 

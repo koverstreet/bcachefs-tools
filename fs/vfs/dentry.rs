@@ -53,6 +53,6 @@ impl<'a> Dentry<'a> {
     pub fn xattr_list_prefix(&self, type_: u8) -> Option<&'static CStr> {
         let p = unsafe { c::bch2_xattr_list_prefix(type_ as u32, self.raw) };
         // The handlers' prefixes are static strings:
-        (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) })
+        (!p.is_null()).then(|| unsafe { CStr::from_ptr(p.cast()) })
     }
 }

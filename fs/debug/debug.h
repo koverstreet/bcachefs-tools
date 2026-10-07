@@ -4,7 +4,7 @@
 
 #include "bcachefs.h"
 
-#include "debug/debug_types.h"
+#include "debug/debug_gen.h"
 
 void bch2_btree_node_ondisk_to_text(struct printbuf *, struct bch_fs *,
 				    const struct btree *);

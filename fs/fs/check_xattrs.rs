@@ -57,7 +57,7 @@ fn check_acl_flag(
     let Some((flag, err, an_acl, acl)) = acl_flag(x_type) else { return Ok(()) };
     let trans = t.trans();
     let fs = trans.fs();
-    let flag = flag as u32;
+    let flag = flag.bits() as u32;
 
     for i in st.inode.visible_mut(trans, &mut st.s, k.k.p.snapshot) {
         // One repair per visible version, bounded only by snapshot count:

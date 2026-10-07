@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_ACL_H
 #define _BCACHEFS_ACL_H
 
-#include "fs/acl_types.h"
+#include "fs/acl_gen.h"
 
 #define BCH_ACL_VERSION	0x0001
 

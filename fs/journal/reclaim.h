@@ -119,7 +119,7 @@ void bch2_journal_pin_list_check_retired(struct journal *,
 					 struct journal_entry_pin_list *, u64);
 void bch2_journal_update_last_seq(struct journal *);
 
-#include "journal/reclaim_types.h"
+#include "journal/reclaim_gen.h"
 
 int bch2_journal_update_last_seq_ondisk(struct journal *, u64,
 					darray_replicas_entry_refs *);

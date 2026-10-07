@@ -12,6 +12,7 @@
 //! C has its own in data/checksum.h: BCH_NONCE_*, nonce_add().
 
 use crate::c;
+use zerocopy::byteorder::little_endian::U32;
 
 /// ChaCha20's block, in bytes: what a nonce's first word counts.
 pub const CHACHA_BLOCK_SIZE: u32 = 64;
@@ -29,7 +30,7 @@ impl c::nonce {
     pub fn add(mut self, offset: u32) -> Self {
         debug_assert!(offset % CHACHA_BLOCK_SIZE == 0,
                       "nonce offset {offset}: not a whole number of ChaCha20 blocks");
-        self.d[0] = u32::from_le(self.d[0]).wrapping_add(offset / CHACHA_BLOCK_SIZE).to_le();
+        self.d[0] = U32::new(self.d[0].get().wrapping_add(offset / CHACHA_BLOCK_SIZE));
         self
     }
 }

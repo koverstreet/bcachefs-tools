@@ -39,11 +39,11 @@ pub struct Divergent {
 }
 
 fn seq(sb: &c::bch_sb) -> u64 {
-    u64::from_le(sb.seq)
+    sb.seq.get()
 }
 
 fn write_time(sb: &c::bch_sb) -> u64 {
-    u64::from_le(sb.write_time)
+    sb.write_time.get()
 }
 
 /// Highest seq, then newest write time - sb_cmp() in fs/init/fs.c.
@@ -102,7 +102,7 @@ pub fn find(sbs: &[(PathBuf, bch_sb_handle)], opts: &c::bch_opts) -> Vec<Diverge
                 expected_seq: best_members
                     .as_ref()
                     .and_then(|m| m.get(sb.dev_idx as u32))
-                    .map_or(0, |m| u64::from_le(m.seq)),
+                    .map_or(0, |m| m.seq.get()),
             });
         }
     }

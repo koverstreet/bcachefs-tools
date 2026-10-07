@@ -4,15 +4,15 @@
 
 #include "bcachefs.h"
 #include "alloc/buckets.h"
-#include "alloc/types.h"
+#include "alloc/types_gen.h"
 #include "btree/iter.h"
 #include "data/extents.h"
-#include "data/write_types.h"
+#include "data/write_gen.h"
 #include "sb/members.h"
 
 #include <linux/hash.h>
 
-#include "alloc/foreground_types.h"
+#include "alloc/foreground_gen.h"
 
 extern const char * const bch2_watermarks[];
 

@@ -2,10 +2,10 @@
 #ifndef _BCACHEFS_INODE_OPTS_H
 #define _BCACHEFS_INODE_OPTS_H
 
-#include "btree/bkey_types.h"
-#include "fs/inode_format.h"
+#include "btree/bkey_gen.h"
+#include "fs/inode_format_gen.h"
 
-#include "fs/inode_opts_types.h"
+#include "fs/inode_opts_gen.h"
 
 extern const char * const bch2_inode_opts[];
 

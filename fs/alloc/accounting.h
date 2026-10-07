@@ -149,7 +149,7 @@ static inline int accounting_pos_cmp(const void *_l, const void *_r)
 	return bpos_cmp(*l, *r);
 }
 
-#include "alloc/accounting_defs.h"
+#include "alloc/accounting_defs_gen.h"
 
 int bch2_accounting_mem_insert(struct bch_fs *, struct bkey_s_c_accounting, enum bch_accounting_mode);
 int bch2_accounting_mem_insert_locked(struct bch_fs *, struct bkey_s_c_accounting, enum bch_accounting_mode);

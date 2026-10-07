@@ -45,9 +45,11 @@ impl c::bkey {
     /// A key with no value at POS_MIN, of type deleted: C's KEY(0, 0, 0), as
     /// bkey_init() sets.
     pub fn new() -> Self {
-        let mut k = Self { u64s: BKEY_U64S as u8, ..Default::default() };
-        k.set_format(c::KEY_FORMAT_CURRENT as u8);
-        k
+        Self {
+            u64s:        BKEY_U64S as u8,
+            format_bits: c::bkey_format_bits::new().with_format(c::KEY_FORMAT_CURRENT as u8),
+            ..Default::default()
+        }
     }
 
     /// u64s for a value of @bytes: C's set_bkey_val_bytes().
@@ -111,6 +113,13 @@ impl c::bkey {
 
     pub fn is_btree_ptr(&self) -> bool {
         bkey_is_btree_ptr(self)
+    }
+}
+
+/// As Display: bch2_bpos_to_text().
+impl fmt::Debug for Bpos {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
     }
 }
 
@@ -326,10 +335,10 @@ macro_rules! bkey_types {
         pub type [<Bkey $name:camel>] = c::[<bkey_i_ $name>];
 
         impl c::[<bkey_i_ $name>] {
-            pub fn k(&self) -> &c::bkey { unsafe { self.__bindgen_anon_1.k.as_ref() } }
-            pub fn k_mut(&mut self) -> &mut c::bkey { unsafe { self.__bindgen_anon_1.k.as_mut() } }
-            pub fn k_i(&self) -> &c::bkey_i { unsafe { self.__bindgen_anon_1.k_i.as_ref() } }
-            pub fn k_i_mut(&mut self) -> &mut c::bkey_i { unsafe { self.__bindgen_anon_1.k_i.as_mut() } }
+            pub fn k(&self) -> &c::bkey { &self.k }
+            pub fn k_mut(&mut self) -> &mut c::bkey { &mut self.k }
+            pub fn k_i(&self) -> &c::bkey_i { unsafe { &*(self as *const Self as *const c::bkey_i) } }
+            pub fn k_i_mut(&mut self) -> &mut c::bkey_i { unsafe { &mut *(self as *mut Self as *mut c::bkey_i) } }
         }
 
         impl AsBkeyI for c::[<bkey_i_ $name>] {
@@ -343,11 +352,10 @@ macro_rules! bkey_types {
             const TYPE: c::bch_bkey_type = c::bch_bkey_type::[<KEY_TYPE_ $name>];
 
             fn new() -> Self {
-                let mut k = Self::default();
-                *k.k_mut() = c::bkey::new();
-                k.k_mut().type_ = $nr;
-                k.k_mut().set_val_bytes(size_of::<Self::Val>());
-                k
+                let mut k = c::bkey::new();
+                k.type_ = $nr;
+                k.set_val_bytes(size_of::<Self::Val>());
+                Self { k, v: Default::default() }
             }
 
             fn val_copy_pad(k: BkeySC<'_>) -> Option<Self::Val> {
@@ -455,8 +463,10 @@ macro_rules! bkey_types {
             /// The key as C's typed key, if it's that type, for C functions
             /// that take one.
             pub fn [<to_c_ $name>](&self) -> Option<c::[<bkey_s_c_ $name>]> {
-                self.[<as_ $name>]().map(|_| c::[<bkey_s_c_ $name>] {
-                    __bindgen_anon_1: c::[<bkey_s_c_ $name __bindgen_ty_1>] { s_c: self.to_raw() },
+                // the same key, the value as its type: C's typed key is this
+                // with a 'static, as its pointers have no lifetime
+                self.[<as_ $name>]().map(|_| unsafe {
+                    core::mem::transmute::<BkeySC<'a>, c::[<bkey_s_c_ $name>]>(*self)
                 })
             }
             )*
@@ -480,7 +490,12 @@ macro_rules! bkey_types {
         // bkey_s_c_to_result(): they're a union over the same key and value.
         $(
         impl From<c::[<bkey_s_c_ $name>]> for c::bkey_s_c {
-            fn from(k: c::[<bkey_s_c_ $name>]) -> Self { unsafe { k.__bindgen_anon_1.s_c } }
+            fn from(k: c::[<bkey_s_c_ $name>]) -> Self {
+                c::bkey_s_c {
+                    k: k.k as *const c::bkey as *mut c::bkey,
+                    v: k.v as *const c::[<bch_ $name>] as *mut c::bch_val,
+                }
+            }
         }
         )*
 
@@ -523,8 +538,8 @@ impl<'a> BkeySC<'a> {
     /// The key as C's bkey_s_c, for passing to C.
     pub(crate) fn to_raw(&self) -> c::bkey_s_c {
         c::bkey_s_c {
-            k: self.k,
-            v: self.v,
+            k: self.k as *const c::bkey as *mut c::bkey,
+            v: self.v as *const c::bch_val as *mut c::bch_val,
         }
     }
 

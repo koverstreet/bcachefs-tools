@@ -68,11 +68,11 @@ pub(crate) fn version_to_string(v: u32) -> String {
 
 fn format_usage() {
     let fs_opts = opts_usage_str(
-        c::opt_flags::OPT_FORMAT as u32 | c::opt_flags::OPT_FS as u32,
-        c::opt_flags::OPT_DEVICE as u32,
+        c::opt_flags::OPT_FORMAT.bits() as u32 | c::opt_flags::OPT_FS.bits() as u32,
+        c::opt_flags::OPT_DEVICE.bits() as u32,
     );
     let dev_opts = opts_usage_str(
-        c::opt_flags::OPT_DEVICE as u32,
+        c::opt_flags::OPT_DEVICE.bits() as u32,
         0,
     );
 
@@ -231,9 +231,9 @@ fn warn_same_parent_disk_replicas(cfg: &FormatConfig, devices: &[DevOpts]) {
 }
 
 fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
-    let opt_flags = c::opt_flags::OPT_FORMAT as u32
-        | c::opt_flags::OPT_FS as u32
-        | c::opt_flags::OPT_DEVICE as u32;
+    let opt_flags = c::opt_flags::OPT_FORMAT.bits() as u32
+        | c::opt_flags::OPT_FS.bits() as u32
+        | c::opt_flags::OPT_DEVICE.bits() as u32;
 
     let mut devices: Vec<DevConfig> = Vec::new();
     let mut force = false;
@@ -305,7 +305,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
             let name = raw_name.replace('-', "_");
 
             if let Some((opt_id, opt, negated)) = bch_opt_lookup_negated(&name) {
-                if opt.flags as u32 & opt_flags != 0 {
+                if opt.flags.bits() as u32 & opt_flags != 0 {
                     let val_str = if negated {
                         "0".to_string()
                     } else if let Some(v) = inline_val {
@@ -321,7 +321,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                             // Value needs a superblock to resolve against
                             // (labels, targets); device option values are
                             // per device, fs option values resolve once:
-                            if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
+                            if opt.flags.bits() as u32 & c::opt_flags::OPT_DEVICE.bits() as u32 != 0 {
                                 push_dev_opt_str!(opt_id, val_str);
                             } else {
                                 deferred_opts.push((opt_id, val_str));
@@ -337,10 +337,10 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                             // the string silently:
                             if opt.type_ == c::opt_type::BCH_OPT_STR_MEMBER {
                                 push_dev_opt_str!(opt_id, val_str);
-                            } else if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
+                            } else if opt.flags.bits() as u32 & c::opt_flags::OPT_DEVICE.bits() as u32 != 0 {
                                 bcachefs_kernel::opts::opt_set_by_id(&mut cur_dev_opts, opt_id, v);
                                 unconsumed_dev_option = true;
-                            } else if opt.flags as u32 & c::opt_flags::OPT_FS as u32 != 0 {
+                            } else if opt.flags.bits() as u32 & c::opt_flags::OPT_FS.bits() as u32 != 0 {
                                 bcachefs_kernel::opts::opt_set_by_id(&mut fs_opts, opt_id, v);
                             }
                         }

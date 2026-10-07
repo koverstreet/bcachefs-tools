@@ -100,12 +100,12 @@ fn get_damage(fd: &OwnedFd) -> std::io::Result<Vec<DamageEntry>> {
             continue;
         }
 
-        return Ok(unsafe { buf.hdr().entries.as_slice(nr as usize) }.iter()
+        return Ok(unsafe { std::slice::from_raw_parts(buf.hdr().entries.as_ptr(), nr as usize) }.iter()
             .map(|e| DamageEntry {
-                id:    e.id() as u32,
-                nr:    e.nr(),
-                first: e.first_error_time() as i64,
-                last:  e.last_error_time() as i64,
+                id:    e.v.id() as u32,
+                nr:    e.v.nr() as u64,
+                first: e.v.first_error_time() as i64,
+                last:  e.v.last_error_time() as i64,
             }).collect());
     }
 }

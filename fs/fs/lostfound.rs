@@ -100,8 +100,8 @@ fn find_snapshot_tree_subvol(t: &TransAttempt<'_, '_>, tree: u32) -> Result<u32,
     let mut iter = BtreeIter::new(t, c::btree_id::snapshots, POS_MIN, BtreeIterFlags::empty());
     iter.for_each_norestart(t, |_, k| Ok(
         match k.as_snapshot() {
-            Some(s) if u32::from_le(s.tree) == tree && s.subvol != 0 =>
-                ControlFlow::Break(Some(u32::from_le(s.subvol))),
+            Some(s) if s.tree.get() == tree && s.subvol != 0 =>
+                ControlFlow::Break(Some(s.subvol.get())),
             _ => ControlFlow::Continue(()),
         }))?
         .ok_or_else(|| t.fs().err(bch_errcode::BCH_ERR_ENOENT_no_snapshot_tree_subvol))
@@ -246,7 +246,7 @@ fn create_or_restore_lostfound(
     let fs = trans.fs();
 
     let st = snapshot::tree_lookup(trans, tree)?;
-    let tree_root = u32::from_le(st.root_snapshot);
+    let tree_root = st.root_snapshot.get();
 
     let Ok(Some(root_snapshot)) = snapshot::live_descendent(fs, tree_root) else {
         bch_err!(fs, "snapshot tree {tree} has no live snapshot, cannot create lost+found");
@@ -291,7 +291,7 @@ fn lookup_lostfound(t: &TransAttempt<'_, '_>, snapshot: u32)
     let subvol = bch_err_msg!(fs, subvolume::get_key(trans, subvolid, false),
                               "looking up subvol {subvolid} for snapshot {snapshot}")?;
 
-    let root_inum = c::subvol_inum { subvol: subvolid as u64, inum: u64::from_le(subvol.v.inode) };
+    let root_inum = c::subvol_inum { subvol: subvolid as u64, inum: subvol.v.inode.get() };
 
     // The inum came out of the subvolume key, so print the key: which snapshot
     // it points at is what says whether the root inode is missing or we're
@@ -393,7 +393,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
                                    c::bch_bkey_type::KEY_TYPE_subvolume,
                                    size_of::<c::bkey_i_subvolume>())?;
         s.k_i_mut().as_mut_subvolume().expect("a subvolume").fs_path_parent =
-            c::BCACHEFS_ROOT_SUBVOL.to_le();
+            c::BCACHEFS_ROOT_SUBVOL.into();
 
         dirent_snapshot = subvolume::get_snapshot(trans, inode.bi_parent_subvol)?;
         write!(name, "subvol-{}", inode.bi_subvol);

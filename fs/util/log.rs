@@ -44,7 +44,7 @@ pub fn log(fs: &Fs, level: LogLevel, args: fmt::Arguments<'_>) {
     // KERN_SOH, level, then the message as data: a '%' in it is text.
     let fmt = [0x01, level.0, b'%', b's', 0];
     unsafe {
-        c::__bch2_print(fs.raw, fmt.as_ptr() as *const core::ffi::c_char,
+        c::__bch2_print(fs.raw, fmt.as_ptr() as *const crate::util::ffi::c_char,
                         buf.as_raw().buf);
     }
 }
@@ -86,7 +86,7 @@ impl Ratelimit {
             self.ready.store(true, Ordering::Release);
         }
 
-        unsafe { c::bch2_ratelimit_suppress(fs.raw, state, func.as_ptr()) }
+        unsafe { c::bch2_ratelimit_suppress(fs.raw, state, func.as_ptr().cast()) }
     }
 }
 

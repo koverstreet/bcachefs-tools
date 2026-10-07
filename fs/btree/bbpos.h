@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_BBPOS_H
 #define _BCACHEFS_BBPOS_H
 
-#include "btree/bbpos_types.h"
+#include "btree/bbpos_gen.h"
 #include "btree/bkey_methods.h"
 #include "btree/cache.h"
 

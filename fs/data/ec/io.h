@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_DATA_EC_IO_H
 #define _BCACHEFS_DATA_EC_IO_H
 
-#include "data/ec/io_types.h"
+#include "data/ec/io_gen.h"
 
 static inline unsigned ec_nr_failed(struct ec_stripe_buf *buf,
 				    enum bch_stripe_buf_err e)

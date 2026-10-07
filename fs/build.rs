@@ -48,6 +48,9 @@ fn main() {
     // The shared codegen logic is include!d, not a tracked source file — tell
     // cargo to rerun us when it changes.
     println!("cargo:rerun-if-changed=codegen.rs");
+    // What bindgen leaves out is what the converted types define: regenerated,
+    // cstructs.rs is too.
+    println!("cargo:rerun-if-changed=cstructs.rs");
     println!("cargo:rerun-if-changed=build_config.rs");
     println!("cargo:rerun-if-changed=../clang_target.rs");
     // Rerun when any C/H file the wrapper might include changes.
@@ -68,7 +71,7 @@ fn main() {
     rerun_if_userspace_config_changed(root);
     emit_userspace_config_cfgs(root);
 
-    run_bindgen(&out, &clang_args, &blocklist, &ptr_width);
+    run_bindgen(&src, &out, &clang_args, &blocklist, &ptr_width);
     gen_bitmasks(&src, &out);
 
     // Compile the static-inline wrappers bindgen just emitted and link them in,

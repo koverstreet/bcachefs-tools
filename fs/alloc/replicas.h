@@ -3,7 +3,7 @@
 #define _BCACHEFS_REPLICAS_H
 
 #include "btree/bkey.h"
-#include "alloc/replicas_types.h"
+#include "alloc/replicas_gen.h"
 #include "util/eytzinger.h"
 
 void bch2_replicas_entry_sort(struct bch_replicas_entry_v1 *);
@@ -39,7 +39,7 @@ bool bch2_can_read_replicas_with_devs(struct bch_fs *, struct bch_devs_mask *,
 				      unsigned, struct printbuf *);
 bool bch2_can_read_fs_with_devs(struct bch_fs *, struct bch_devs_mask *,
 				unsigned, struct printbuf *);
-#include "alloc/replicas_defs.h"
+#include "alloc/replicas_defs_gen.h"
 
 bool bch2_can_write_fs_with_devs(struct bch_fs *, struct bch_devs_mask,
 				 enum bch_write_check, unsigned, struct printbuf *);

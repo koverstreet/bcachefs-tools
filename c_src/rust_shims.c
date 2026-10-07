@@ -10,7 +10,7 @@
 #include "fs/journal/seq_blacklist.h"
 #include "fs/sb/io.h"
 #include "fs/sb/members.h"
-#include "fs/alloc/buckets_types.h"
+#include "alloc/buckets_gen.h"
 #include "fs/data/checksum.h"
 #include "fs/data/read.h"
 #include "fs/data/write.h"

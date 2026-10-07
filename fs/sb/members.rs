@@ -1,5 +1,4 @@
 use crate::c;
-use crate::bitmask_accessors;
 use super::io::*;
 
 // ---------------------------------------------------------------------------
@@ -146,7 +145,7 @@ impl<'a> MembersV1<'a> {
 pub fn members_v2(sb: &c::bch_sb) -> Option<MembersV2<'_>> {
     let field: &c::bch_sb_field_members_v2 = sb_field_get(sb)?;
     Some(MembersV2 {
-        member_bytes: u16::from_le(field.member_bytes) as usize,
+        member_bytes: field.member_bytes.get() as usize,
         nr_devices: sb.nr_devices as u32,
         field,
     })
@@ -156,7 +155,7 @@ pub fn members_v2(sb: &c::bch_sb) -> Option<MembersV2<'_>> {
 pub fn members_v2_mut(disk_sb: &mut c::bch_sb_handle) -> Option<MembersV2Mut<'_>> {
     let nr_devices = unsafe { (*disk_sb.sb).nr_devices as u32 };
     let field: &mut c::bch_sb_field_members_v2 = sb_field_get_mut(disk_sb)?;
-    let member_bytes = u16::from_le(field.member_bytes) as usize;
+    let member_bytes = field.member_bytes.get() as usize;
     Some(MembersV2Mut {
         field,
         member_bytes,
@@ -171,14 +170,4 @@ pub fn members_v1(sb: &c::bch_sb) -> Option<MembersV1<'_>> {
         nr_devices: sb.nr_devices as u32,
         field,
     })
-}
-
-bitmask_accessors! {
-    bch_member, flags,
-        BCH_MEMBER_STATE          => (member_state, set_member_state),
-        BCH_MEMBER_GROUP          => (member_group, set_member_group),
-        BCH_MEMBER_DATA_ALLOWED   => (member_data_allowed, set_member_data_allowed),
-        BCH_MEMBER_RESIZE_ON_MOUNT => (member_resize_on_mount, set_member_resize_on_mount),
-        BCH_MEMBER_ROTATIONAL_SET => (member_rotational_set, set_member_rotational_set),
-        BCH_MEMBER_FREESPACE_INITIALIZED => (member_freespace_initialized, set_member_freespace_initialized);
 }

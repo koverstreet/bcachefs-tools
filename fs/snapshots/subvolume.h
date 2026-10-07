@@ -3,7 +3,8 @@
 #define _BCACHEFS_SUBVOLUME_H
 
 #include "util/darray.h"
-#include "snapshots/types.h"
+#include "snapshots/types_gen.h"
+#include "snapshots/subvolume_gen.h"
 
 static inline enum bch_subvolume_state bch2_subvolume_state(const struct bch_subvolume *s)
 {

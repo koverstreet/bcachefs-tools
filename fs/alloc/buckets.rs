@@ -40,7 +40,7 @@ impl<'f> DiskReservation<'f> {
                 self.raw.get(),
                 sectors,
                 nr_replicas,
-                flags.0 as i32,
+                flags.bits() as i32,
             )
         })
     }

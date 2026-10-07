@@ -12,7 +12,7 @@ use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs;
 
 fn opt_flags() -> u32 {
-    c::opt_flags::OPT_FS as u32 | c::opt_flags::OPT_DEVICE as u32
+    c::opt_flags::OPT_FS.bits() as u32 | c::opt_flags::OPT_DEVICE.bits() as u32
 }
 
 fn set_option_cmd() -> Command {
@@ -83,7 +83,7 @@ fn set_option_online(
             failed.insert(name.as_str());
             continue;
         };
-        let flags = opt.flags as u32;
+        let flags = opt.flags.bits() as u32;
 
         if flags & opt_flags() == 0 {
             eprintln!("Can't set option {name}");
@@ -98,15 +98,15 @@ fn set_option_online(
         // and testing OPT_FS|OPT_DEVICE above lets it through to fail.
         // Many such options *can* be set with the filesystem unmounted, so
         // say that rather than just refusing.
-        if flags & c::opt_flags::OPT_RUNTIME as u32 == 0 {
+        if flags & c::opt_flags::OPT_RUNTIME.bits() as u32 == 0 {
             eprintln!("{name} cannot be set while the filesystem is mounted \
                        (unmount and set it offline)");
             failed.insert(name.as_str());
             continue;
         }
 
-        let is_fs_opt = flags & c::opt_flags::OPT_FS as u32 != 0;
-        let is_device_opt = flags & c::opt_flags::OPT_DEVICE as u32 != 0;
+        let is_fs_opt = flags & c::opt_flags::OPT_FS.bits() as u32 != 0;
+        let is_device_opt = flags & c::opt_flags::OPT_DEVICE.bits() as u32 != 0;
 
         if is_fs_opt && !is_device_opt {
             if let Err(e) = sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("options/{name}"), value) {
@@ -170,7 +170,7 @@ fn set_option_offline(
             failed.insert(name.as_str());
             continue;
         };
-        let flags = opt.flags as u32;
+        let flags = opt.flags.bits() as u32;
 
         if flags & opt_flags() == 0 {
             eprintln!("Can't set option {name}");
@@ -185,7 +185,7 @@ fn set_option_offline(
             continue;
         };
 
-        if flags & c::opt_flags::OPT_FS as u32 != 0 {
+        if flags & c::opt_flags::OPT_FS.bits() as u32 != 0 {
             if let Err(e) = fs.opt_hook_pre_set(None, opt_id, val) {
                 eprintln!("Error setting {name}: {e}");
                 failed.insert(name.as_str());
@@ -195,7 +195,7 @@ fn set_option_offline(
             modified = true;
         }
 
-        if flags & c::opt_flags::OPT_DEVICE as u32 != 0 {
+        if flags & c::opt_flags::OPT_DEVICE.bits() as u32 != 0 {
             let indices: Vec<u32> = if !dev_idxs.is_empty() {
                 dev_idxs.to_vec()
             } else {

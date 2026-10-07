@@ -6,9 +6,9 @@
 #include "btree/bkey_buf.h"
 #include "btree/update.h"
 #include "data/read.h"
-#include "data/write_types.h"
+#include "data/write_gen.h"
 
-#include "data/update_types.h"
+#include "data/update_gen.h"
 
 /* Both scrub types read to check, and must never rewrite what they're checking */
 static inline bool data_update_is_scrub(enum bch_data_update_types type)

@@ -55,7 +55,7 @@ fn sb_last_mount_time(sb: &c::bch_sb) -> u64 {
     (0..sb.nr_devices as i32)
         .map(|i| {
             let m = unsafe { c::bch2_sb_member_get(sb as *const _ as *mut _, i) };
-            u64::from_le(m.last_mount as u64)
+            m.last_mount.get()
         })
         .max()
         .unwrap_or(0)
@@ -65,7 +65,7 @@ fn validate_sb(sb: &mut c::bch_sb, offset_sectors: u64) -> (i32, Printbuf) {
     let mut err = Printbuf::new();
     let mut opts = c::bch_opts::default();
     let ret = unsafe {
-        c::bch2_sb_validate(sb, &mut opts, offset_sectors, c::bch_validate_flags(0), err.as_raw())
+        c::bch2_sb_validate(sb, &mut opts, offset_sectors, c::bch_validate_flags::from_bits_retain(0), err.as_raw())
     };
     (ret, err)
 }
@@ -202,8 +202,8 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
 
     // Read fields safely before layout mutation
     let sb = src_sb.sb();
-    let block_size = u16::from_le(sb.block_size) as u32;
-    let bucket_size = u16::from_le(m.bucket_size) as u32;
+    let block_size = sb.block_size.get() as u32;
+    let bucket_size = m.bucket_size.get() as u32;
     let sb_max_size = 1u32 << sb.layout.sb_max_size_bits;
 
     super_io::sb_layout_init(

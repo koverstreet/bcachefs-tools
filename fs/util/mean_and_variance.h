@@ -6,7 +6,7 @@
 #include <linux/math64.h>
 #include <linux/types.h>
 
-#include "util/mean_and_variance_types.h"
+#include "util/mean_and_variance_gen.h"
 
 /**
  * sgm_median_mad_step() - one stochastic-gradient update of median + MAD.

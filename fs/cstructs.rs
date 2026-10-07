@@ -1,24 +1,332 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The C interface defined in Rust, one module per header - see types/lib.rs.
-//! So far, the bkey_ops methods Rust implements: see rust_c_extern!. And C's
-//! x-macro lists, read from C for now: see xmacros.rs. And typed views of
-//! C's tagged unions: see alloc/accounting_format.rs, data/extents_format.rs.
+//! The data types C shares, one module per header: foo/bar.rs is the source
+//! of foo/bar.h's types, whose C is generated from it - see types/lib.rs.
+//! btree/types.rs and fs/dirent_format.rs are modules of their own already.
 
+#[path = "alloc/accounting_defs.rs"] pub mod alloc_accounting_defs;
 #[path = "alloc/accounting_format.rs"] pub mod alloc_accounting_format;
+#[path = "alloc/accounting_types.rs"] pub mod alloc_accounting_types;
+#[path = "alloc/backpointers_types.rs"] pub mod alloc_backpointers_types;
+#[path = "alloc/buckets_defs.rs"] pub mod alloc_buckets_defs;
+#[path = "alloc/buckets_types.rs"] pub mod alloc_buckets_types;
+#[path = "alloc/disk_groups_defs.rs"] pub mod alloc_disk_groups_defs;
+#[path = "alloc/disk_groups_format.rs"] pub mod alloc_disk_groups_format;
+#[path = "alloc/disk_groups_types.rs"] pub mod alloc_disk_groups_types;
+#[path = "alloc/foreground_types.rs"] pub mod alloc_foreground_types;
+#[path = "alloc/format.rs"] pub mod alloc_format;
+#[path = "alloc/lru_format.rs"] pub mod alloc_lru_format;
+#[path = "alloc/replicas_defs.rs"] pub mod alloc_replicas_defs;
+#[path = "alloc/replicas_format.rs"] pub mod alloc_replicas_format;
+#[path = "alloc/replicas_types.rs"] pub mod alloc_replicas_types;
+#[path = "alloc/types.rs"] pub mod alloc_types;
+#[path = "bcachefs_format_types.rs"] pub mod bcachefs_format_types;
+#[path = "bcachefs_ioctl.rs"] pub mod bcachefs_ioctl;
+#[path = "bcachefs_types.rs"] pub mod bcachefs_types;
+#[path = "btree/bbpos_types.rs"] pub mod btree_bbpos_types;
+#[path = "btree/bkey_buf_types.rs"] pub mod btree_bkey_buf_types;
+#[path = "btree/bkey_defs.rs"] pub mod btree_bkey_defs;
+#[path = "btree/bkey_methods_types.rs"] pub mod btree_bkey_methods_types;
+#[path = "btree/bkey_types.rs"] pub mod btree_bkey_types;
+#[path = "btree/bset_types.rs"] pub mod btree_bset_types;
+#[path = "btree/check_types.rs"] pub mod btree_check_types;
+#[path = "btree/interior_defs.rs"] pub mod btree_interior_defs;
+#[path = "btree/interior_types.rs"] pub mod btree_interior_types;
+#[path = "btree/iter_types.rs"] pub mod btree_iter_types;
+#[path = "btree/journal_overlay_defs.rs"] pub mod btree_journal_overlay_defs;
+#[path = "btree/journal_overlay_types.rs"] pub mod btree_journal_overlay_types;
+#[path = "btree/key_cache_types.rs"] pub mod btree_key_cache_types;
+#[path = "btree/locking_defs.rs"] pub mod btree_locking_defs;
+#[path = "btree/locking_types.rs"] pub mod btree_locking_types;
+#[path = "btree/node_scan_types.rs"] pub mod btree_node_scan_types;
+#[path = "btree/read_types.rs"] pub mod btree_read_types;
+#[path = "btree/sort_types.rs"] pub mod btree_sort_types;
+#[path = "btree/update_types.rs"] pub mod btree_update_types;
+#[path = "btree/write_buffer_defs.rs"] pub mod btree_write_buffer_defs;
+#[path = "btree/write_buffer_types.rs"] pub mod btree_write_buffer_types;
+#[path = "btree/write_types.rs"] pub mod btree_write_types;
+#[path = "data/compress_defs.rs"] pub mod data_compress_defs;
+#[path = "data/compress_types.rs"] pub mod data_compress_types;
+#[path = "data/copygc_types.rs"] pub mod data_copygc_types;
+#[path = "data/ec/create_types.rs"] pub mod data_ec_create_types;
+#[path = "data/ec/format.rs"] pub mod data_ec_format;
+#[path = "data/ec/io_types.rs"] pub mod data_ec_io_types;
+#[path = "data/ec/types.rs"] pub mod data_ec_types;
+#[path = "data/extents_defs.rs"] pub mod data_extents_defs;
 #[path = "data/extents_format.rs"] pub mod data_extents_format;
+#[path = "data/extents_sb_format.rs"] pub mod data_extents_sb_format;
+#[path = "data/extents_types.rs"] pub mod data_extents_types;
+#[path = "data/keylist_types.rs"] pub mod data_keylist_types;
+#[path = "data/move_defs.rs"] pub mod data_move_defs;
+#[path = "data/move_types.rs"] pub mod data_move_types;
+#[path = "data/nocow_locking_types.rs"] pub mod data_nocow_locking_types;
+#[path = "data/read_types.rs"] pub mod data_read_types;
+#[path = "data/reconcile/format.rs"] pub mod data_reconcile_format;
+#[path = "data/reconcile/trigger_types.rs"] pub mod data_reconcile_trigger_types;
+#[path = "data/reconcile/types.rs"] pub mod data_reconcile_types;
+#[path = "data/reconcile/work_types.rs"] pub mod data_reconcile_work_types;
+#[path = "data/reflink_format.rs"] pub mod data_reflink_format;
+#[path = "data/update_types.rs"] pub mod data_update_types;
+#[path = "data/write_types.rs"] pub mod data_write_types;
+#[path = "debug/async_objs_types.rs"] pub mod debug_async_objs_types;
+#[path = "debug/debug_types.rs"] pub mod debug_debug_types;
+#[path = "errcode_types.rs"] pub mod errcode_types;
+#[path = "fs/acl_types.rs"] pub mod fs_acl_types;
 #[path = "fs/dirent_types.rs"] pub mod fs_dirent_types;
+#[path = "fs/inode_format.rs"] pub mod fs_inode_format;
+#[path = "fs/inode_opts_types.rs"] pub mod fs_inode_opts_types;
 #[path = "fs/inode_types.rs"] pub mod fs_inode_types;
+#[path = "fs/logged_ops_format.rs"] pub mod fs_logged_ops_format;
+#[path = "fs/quota_format.rs"] pub mod fs_quota_format;
+#[path = "fs/quota_types.rs"] pub mod fs_quota_types;
+#[path = "fs/str_hash_types.rs"] pub mod fs_str_hash_types;
+#[path = "fs/xattr_format.rs"] pub mod fs_xattr_format;
 #[path = "fs/xattr_types.rs"] pub mod fs_xattr_types;
-#[path = "xmacros.rs"] pub mod xmacros;
+#[path = "init/damage_format.rs"] pub mod init_damage_format;
+#[path = "init/damage_types.rs"] pub mod init_damage_types;
+#[path = "init/dev_types.rs"] pub mod init_dev_types;
+#[path = "init/error_defs.rs"] pub mod init_error_defs;
+#[path = "init/error_types.rs"] pub mod init_error_types;
+#[path = "init/passes_defs.rs"] pub mod init_passes_defs;
+#[path = "init/passes_format.rs"] pub mod init_passes_format;
+#[path = "init/passes_types.rs"] pub mod init_passes_types;
+#[path = "init/progress_types.rs"] pub mod init_progress_types;
+#[path = "journal/journal_types.rs"] pub mod journal_journal_types;
+#[path = "journal/read_types.rs"] pub mod journal_read_types;
+#[path = "journal/reclaim_types.rs"] pub mod journal_reclaim_types;
+#[path = "journal/seq_blacklist_format.rs"] pub mod journal_seq_blacklist_format;
+#[path = "journal/types.rs"] pub mod journal_types;
+#[path = "opts_types.rs"] pub mod opts_types;
+#[path = "sb/counters_format.rs"] pub mod sb_counters_format;
+#[path = "sb/counters_types.rs"] pub mod sb_counters_types;
+#[path = "sb/downgrade_format.rs"] pub mod sb_downgrade_format;
+#[path = "sb/errors_format.rs"] pub mod sb_errors_format;
+#[path = "sb/errors_types.rs"] pub mod sb_errors_types;
+#[path = "sb/io_defs.rs"] pub mod sb_io_defs;
+#[path = "sb/io_types.rs"] pub mod sb_io_types;
+#[path = "sb/members_defs.rs"] pub mod sb_members_defs;
+#[path = "sb/members_format.rs"] pub mod sb_members_format;
+#[path = "sb/members_types.rs"] pub mod sb_members_types;
+#[path = "snapshots/format.rs"] pub mod snapshots_format;
+#[path = "snapshots/types.rs"] pub mod snapshots_types;
+#[path = "types.rs"] pub mod types;
+#[path = "util/clock_types.rs"] pub mod util_clock_types;
+#[path = "util/cuckoo_types.rs"] pub mod util_cuckoo_types;
+#[path = "util/enumerated_ref_types.rs"] pub mod util_enumerated_ref_types;
+#[path = "util/fast_list_types.rs"] pub mod util_fast_list_types;
+#[path = "util/locking_types.rs"] pub mod util_locking_types;
+#[path = "util/mean_and_variance_types.rs"] pub mod util_mean_and_variance_types;
+#[path = "util/printbuf_types.rs"] pub mod util_printbuf_types;
+#[path = "util/rcu_pending_types.rs"] pub mod util_rcu_pending_types;
+#[path = "util/seqmutex_types.rs"] pub mod util_seqmutex_types;
+#[path = "util/siphash_types.rs"] pub mod util_siphash_types;
+#[path = "util/six_types.rs"] pub mod util_six_types;
+#[path = "util/thread_with_file_defs.rs"] pub mod util_thread_with_file_defs;
+#[path = "util/thread_with_file_types.rs"] pub mod util_thread_with_file_types;
+#[path = "util/time_stats_types.rs"] pub mod util_time_stats_types;
+#[path = "util/two_state_shared_lock_types.rs"] pub mod util_two_state_shared_lock_types;
+#[path = "util/util_types.rs"] pub mod util_util_types;
+#[path = "vfs/buffered_types.rs"] pub mod vfs_buffered_types;
+#[path = "vfs/direct_types.rs"] pub mod vfs_direct_types;
+#[path = "vfs/fdm_types.rs"] pub mod vfs_fdm_types;
+#[path = "vfs/fs_types.rs"] pub mod vfs_fs_types;
+#[path = "vfs/io_types.rs"] pub mod vfs_io_types;
+#[path = "vfs/pagecache_types.rs"] pub mod vfs_pagecache_types;
+#[path = "vfs/rust_types.rs"] pub mod vfs_rust_types;
+#[path = "vfs/types.rs"] pub mod vfs_types;
+#[path = "alloc/background_types.rs"] pub mod alloc_background_types;
+#[path = "btree/cache_types.rs"] pub mod btree_cache_types;
+#[path = "data/checksum_types.rs"] pub mod data_checksum_types;
+#[path = "data/ec/trigger_types.rs"] pub mod data_ec_trigger_types;
+#[path = "data/io_misc_types.rs"] pub mod data_io_misc_types;
+#[path = "fs/check_types.rs"] pub mod fs_check_types;
+#[path = "fs/namei_types.rs"] pub mod fs_namei_types;
+#[path = "init/fs_types.rs"] pub mod init_fs_types;
+#[path = "init/recovery_types.rs"] pub mod init_recovery_types;
+#[path = "journal/init_types.rs"] pub mod journal_init_types;
+#[path = "journal/seq_blacklist_types.rs"] pub mod journal_seq_blacklist_types;
+#[path = "journal/validate_types.rs"] pub mod journal_validate_types;
+#[path = "snapshots/snapshot_types.rs"] pub mod snapshots_snapshot_types;
+#[path = "snapshots/subvolume_types.rs"] pub mod snapshots_subvolume_types;
+#[path = "util/varint_types.rs"] pub mod util_varint_types;
 
-/// What crate::c re-exports from here: so far, the x-macro lists and the
-/// tagged unions' views. A list that splices in another names it here:
-/// crate::cstructs::c::SUB!.
+/// What C's types are to Rust: every type and constant above, and the
+/// kernel's - C's one namespace. The converted types name each other through
+/// it, as C does.
 pub mod c {
-    #![allow(unused_imports)]
+    #![allow(unused_imports, ambiguous_glob_reexports)]
 
+    #[cfg(not(kernel))]
+    pub use bcachefs_shim::c::*;
+    #[cfg(kernel)]
+    pub use kernel::bindings::*;
+
+    #[cfg(not(kernel))]
+    pub use crate::c::{cds_list_head, cds_hlist_head, cds_hlist_node, list_head, hlist_head, hlist_node, timespec64};
+    #[cfg(kernel)]
+    pub use crate::c::rcu_head;
+
+    // vendor/'s C, not converted.
+    pub use crate::c::{closure, closure_waitlist};
+
+    pub use crate::types::darrays::*;
+
+    // Ours, where the kernel's has one of the same name: the shim's
+    // printbuf is its own.
+    pub use super::util_printbuf_types::printbuf;
+
+    // C's limits, which the constants use.
+    pub const U8_MAX:  u8  = u8::MAX;
+    pub const U16_MAX: u16 = u16::MAX;
+    pub const U32_MAX: u32 = u32::MAX;
+    pub const U64_MAX: u64 = u64::MAX;
+    pub const INT_MAX: i32 = i32::MAX;
+
+    pub use crate::btree::types::*;
+    pub use crate::dirent::format::*;
+    pub use super::alloc_accounting_defs::*;
     pub use super::alloc_accounting_format::*;
+    pub use super::alloc_accounting_types::*;
+    pub use super::alloc_backpointers_types::*;
+    pub use super::alloc_buckets_defs::*;
+    pub use super::alloc_buckets_types::*;
+    pub use super::alloc_disk_groups_defs::*;
+    pub use super::alloc_disk_groups_format::*;
+    pub use super::alloc_disk_groups_types::*;
+    pub use super::alloc_foreground_types::*;
+    pub use super::alloc_format::*;
+    pub use super::alloc_lru_format::*;
+    pub use super::alloc_replicas_defs::*;
+    pub use super::alloc_replicas_format::*;
+    pub use super::alloc_replicas_types::*;
+    pub use super::alloc_types::*;
+    pub use super::bcachefs_format_types::*;
+    pub use super::bcachefs_ioctl::*;
+    pub use super::bcachefs_types::*;
+    pub use super::btree_bbpos_types::*;
+    pub use super::btree_bkey_buf_types::*;
+    pub use super::btree_bkey_defs::*;
+    pub use super::btree_bkey_methods_types::*;
+    pub use super::btree_bkey_types::*;
+    pub use super::btree_bset_types::*;
+    pub use super::btree_check_types::*;
+    pub use super::btree_interior_defs::*;
+    pub use super::btree_interior_types::*;
+    pub use super::btree_iter_types::*;
+    pub use super::btree_journal_overlay_defs::*;
+    pub use super::btree_journal_overlay_types::*;
+    pub use super::btree_key_cache_types::*;
+    pub use super::btree_locking_defs::*;
+    pub use super::btree_locking_types::*;
+    pub use super::btree_node_scan_types::*;
+    pub use super::btree_read_types::*;
+    pub use super::btree_sort_types::*;
+    pub use super::btree_update_types::*;
+    pub use super::btree_write_buffer_defs::*;
+    pub use super::btree_write_buffer_types::*;
+    pub use super::btree_write_types::*;
+    pub use super::data_compress_defs::*;
+    pub use super::data_compress_types::*;
+    pub use super::data_copygc_types::*;
+    pub use super::data_ec_create_types::*;
+    pub use super::data_ec_format::*;
+    pub use super::data_ec_io_types::*;
+    pub use super::data_ec_types::*;
+    pub use super::data_extents_defs::*;
     pub use super::data_extents_format::*;
-    pub use super::xmacros::*;
+    pub use super::data_extents_sb_format::*;
+    pub use super::data_extents_types::*;
+    pub use super::data_keylist_types::*;
+    pub use super::data_move_defs::*;
+    pub use super::data_move_types::*;
+    pub use super::data_nocow_locking_types::*;
+    pub use super::data_read_types::*;
+    pub use super::data_reconcile_format::*;
+    pub use super::data_reconcile_trigger_types::*;
+    pub use super::data_reconcile_types::*;
+    pub use super::data_reconcile_work_types::*;
+    pub use super::data_reflink_format::*;
+    pub use super::data_update_types::*;
+    pub use super::data_write_types::*;
+    pub use super::debug_async_objs_types::*;
+    pub use super::debug_debug_types::*;
+    pub use super::errcode_types::*;
+    pub use super::fs_acl_types::*;
+    pub use super::fs_dirent_types::*;
+    pub use super::fs_inode_format::*;
+    pub use super::fs_inode_opts_types::*;
+    pub use super::fs_inode_types::*;
+    pub use super::fs_logged_ops_format::*;
+    pub use super::fs_quota_format::*;
+    pub use super::fs_quota_types::*;
+    pub use super::fs_str_hash_types::*;
+    pub use super::fs_xattr_format::*;
+    pub use super::fs_xattr_types::*;
+    pub use super::init_damage_format::*;
+    pub use super::init_damage_types::*;
+    pub use super::init_dev_types::*;
+    pub use super::init_error_defs::*;
+    pub use super::init_error_types::*;
+    pub use super::init_passes_defs::*;
+    pub use super::init_passes_format::*;
+    pub use super::init_passes_types::*;
+    pub use super::init_progress_types::*;
+    pub use super::journal_journal_types::*;
+    pub use super::journal_read_types::*;
+    pub use super::journal_reclaim_types::*;
+    pub use super::journal_seq_blacklist_format::*;
+    pub use super::journal_types::*;
+    pub use super::opts_types::*;
+    pub use super::sb_counters_format::*;
+    pub use super::sb_counters_types::*;
+    pub use super::sb_downgrade_format::*;
+    pub use super::sb_errors_format::*;
+    pub use super::sb_errors_types::*;
+    pub use super::sb_io_defs::*;
+    pub use super::sb_io_types::*;
+    pub use super::sb_members_defs::*;
+    pub use super::sb_members_format::*;
+    pub use super::sb_members_types::*;
+    pub use super::snapshots_format::*;
+    pub use super::snapshots_types::*;
+    pub use super::types::*;
+    pub use super::util_clock_types::*;
+    pub use super::util_cuckoo_types::*;
+    pub use super::util_enumerated_ref_types::*;
+    pub use super::util_fast_list_types::*;
+    pub use super::util_locking_types::*;
+    pub use super::util_mean_and_variance_types::*;
+    pub use super::util_printbuf_types::*;
+    pub use super::util_rcu_pending_types::*;
+    pub use super::util_seqmutex_types::*;
+    pub use super::util_siphash_types::*;
+    pub use super::util_six_types::*;
+    pub use super::util_thread_with_file_defs::*;
+    pub use super::util_thread_with_file_types::*;
+    pub use super::util_time_stats_types::*;
+    pub use super::util_two_state_shared_lock_types::*;
+    pub use super::util_util_types::*;
+    pub use super::vfs_buffered_types::*;
+    pub use super::vfs_direct_types::*;
+    pub use super::vfs_fdm_types::*;
+    pub use super::vfs_fs_types::*;
+    pub use super::vfs_io_types::*;
+    pub use super::vfs_pagecache_types::*;
+    pub use super::vfs_rust_types::*;
+    pub use super::vfs_types::*;
+    pub use super::alloc_background_types::*;
+    pub use super::btree_cache_types::*;
+    pub use super::data_checksum_types::*;
+    pub use super::data_ec_trigger_types::*;
+    pub use super::data_io_misc_types::*;
+    pub use super::fs_check_types::*;
+    pub use super::fs_namei_types::*;
+    pub use super::init_fs_types::*;
+    pub use super::init_recovery_types::*;
+    pub use super::journal_init_types::*;
+    pub use super::journal_seq_blacklist_types::*;
+    pub use super::journal_validate_types::*;
+    pub use super::snapshots_snapshot_types::*;
+    pub use super::snapshots_subvolume_types::*;
+    pub use super::util_varint_types::*;
 }

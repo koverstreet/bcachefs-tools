@@ -5,8 +5,8 @@
 #include <linux/bug.h>
 #include <linux/static_key.h>
 #include "bcachefs_format.h"
-#include "btree/bkey_types.h"
-#include "btree/types.h"
+#include "btree/bkey_gen.h"
+#include "btree/types_gen.h"
 #include "util/util.h"
 #include "util/vstructs.h"
 
@@ -26,7 +26,7 @@ void bch2_bkey_packed_to_binary_text(struct printbuf *,
 				     const struct bkey_format *,
 				     const struct bkey_packed *);
 
-#include "btree/bkey_defs.h"
+#include "btree/bkey_defs_gen.h"
 
 static inline void bkey_p_copy(struct bkey_packed *dst, const struct bkey_packed *src)
 {

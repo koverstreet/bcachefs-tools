@@ -5,7 +5,7 @@
 #include "io.h"
 #include "util/darray.h"
 
-#include "data/ec/create_types.h"
+#include "data/ec/create_gen.h"
 
 extern const char * const bch2_ec_stripe_new_states[];
 

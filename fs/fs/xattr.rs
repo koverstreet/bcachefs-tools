@@ -114,14 +114,14 @@ fn type_and_name(k: BkeySC<'_>) -> (u8, &[u8]) {
 pub fn value(k: BkeySC<'_>) -> &[u8] {
     let x = k.as_xattr().expect("an xattr");
     let name_len = x.x_name_len as usize;
-    &k.val_bytes()[NAME_OFFSET + name_len..][..u16::from_le(x.x_val_len) as usize]
+    &k.val_bytes()[NAME_OFFSET + name_len..][..x.x_val_len.get() as usize]
 }
 
 /// Check @v.k, an xattr: as bch2_xattr_validate().
 pub fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let x = v.k.as_xattr().expect("an xattr");
     let name_len = x.x_name_len as usize;
-    let val_len  = u16::from_le(x.x_val_len) as usize;
+    let val_len  = x.x_val_len.get() as usize;
     let have     = v.k.val_bytes().len() / size_of::<u64>();
 
     let want = val_u64s(name_len, val_len);
@@ -170,7 +170,7 @@ pub fn to_text(out: &mut Printbuf, k: BkeySC<'_>) {
 
     let bytes    = &k.val_bytes()[NAME_OFFSET..];
     let name_len = (x.x_name_len as usize).min(bytes.len());
-    let val_len  = (u16::from_le(x.x_val_len) as usize).min(bytes.len() - name_len);
+    let val_len  = (x.x_val_len.get() as usize).min(bytes.len() - name_len);
     let (name, value) = bytes.split_at(name_len);
     let value = &value[..val_len];
 
@@ -276,7 +276,7 @@ pub fn set_key(
     let x = k.k_i_mut().as_mut_xattr().expect("an xattr");
     x.x_type     = type_;
     x.x_name_len = name.len() as u8;
-    x.x_val_len  = (value.len() as u16).to_le();
+    x.x_val_len  = (value.len() as u16).into();
 
     let mut s = crate::btree::bkey::BkeyS::from(k.k_i_mut());
     let bytes = &mut s.val_bytes_mut()[NAME_OFFSET..];
@@ -661,7 +661,7 @@ mod vfs {
             // rehash everything and update the dirent keys.
             crate::dirent::empty_dir_trans(t, inum)?;
 
-            let flag = c::bch_inode_flags::BCH_INODE_31bit_dirent_offset as u32;
+            let flag = c::bch_inode_flags::BCH_INODE_31bit_dirent_offset.bits();
             if defined {
                 bi.bi_flags |= flag;
             } else {

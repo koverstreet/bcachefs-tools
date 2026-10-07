@@ -2,7 +2,153 @@
 #ifndef _BCACHEFS_H
 #define _BCACHEFS_H
 
-#include "types.h"
+#include "enum_kind.h"
+
+/*
+ * bcachefs: a COW filesystem built around a b-tree with snapshot support,
+ * multiple devices, checksumming, compression, and encryption.
+ *
+ * The core runtime types (struct bch_fs, struct bch_dev) are in types_gen.h,
+ * after the subsystem type headers they're made of.
+ */
+
+#undef pr_fmt
+#ifdef __KERNEL__
+#define pr_fmt(fmt) "bcachefs: %s() " fmt "\n", __func__
+#else
+#define pr_fmt(fmt) "%s() " fmt "\n", __func__
+#endif
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+#define ENUMERATED_REF_DEBUG
+#endif
+
+#ifdef __KERNEL__
+#ifdef CONFIG_DEBUG_FS
+#define CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS
+#endif
+#endif
+
+#ifndef dynamic_fault
+#define dynamic_fault(...)		0
+#endif
+
+#define race_fault(...)			dynamic_fault("bcachefs:race")
+
+#include <linux/backing-dev-defs.h>
+#include <linux/bug.h>
+#include <linux/cache.h>
+#include <linux/bio.h>
+#include <linux/generic-radix-tree.h>
+#include <linux/kobject.h>
+#include <linux/kthread.h>
+#include <linux/list.h>
+#include <linux/math64.h>
+#include <linux/mempool.h>
+#include <linux/mutex.h>
+#include <linux/percpu-refcount.h>
+#include <linux/percpu-rwsem.h>
+#include <linux/refcount.h>
+#include <linux/rhashtable.h>
+#include <linux/rhashtable-types.h>
+#include <linux/rwsem.h>
+#include <linux/semaphore.h>
+#include <linux/seqlock.h>
+#include <linux/shrinker.h>
+#include <linux/spinlock.h>
+#include <linux/srcu.h>
+#include <linux/types.h>
+#include <linux/workqueue.h>
+#include <linux/zstd.h>
+#include <linux/unicode.h>
+
+/*
+ * WQ_PERCPU and system_dfl_wq are 6.17+ (128ea9f6ccfb): before that, per-cpu
+ * was the unflagged default and the unbound queue was system_unbound_wq. We
+ * support back to 6.16, so both need an alias there.
+ */
+#ifdef __KERNEL__
+#include <linux/version.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,17,0)
+#define WQ_PERCPU	0
+#define system_dfl_wq	system_unbound_wq
+#endif
+#endif
+
+#include "bcachefs_format.h"
+#include "errcode.h"
+#include "opts.h"
+
+#include "closure.h"
+
+#include "vendor/min_heap.h"
+#include "util/clock_gen.h"
+#include "util/enumerated_ref_gen.h"
+#include "util/fast_list.h"
+#include "util/fifo.h"
+#include "util/locking.h"
+#include "util/seqmutex.h"
+#include "util/time_stats.h"
+#include "util/darray.h"
+#include "util/thread_with_file_gen.h"
+#include "util/util.h"
+
+#include "alloc/accounting_gen.h"
+#include "alloc/buckets_gen.h"
+#include "init/dev_gen.h"
+#include "alloc/disk_groups_gen.h"
+#include "alloc/replicas_gen.h"
+#include "alloc/types_gen.h"
+
+#include "btree/bbpos_gen.h"
+#include "btree/bbpos_types_inline.h"
+#include "btree/check_gen.h"
+#include "btree/journal_overlay_gen.h"
+#include "util/six.h"
+#include "btree/bkey_gen.h"
+#include "btree/bkey_types_inline.h"
+#include "btree/interior_gen.h"
+#include "util/rcu_pending.h"
+#include "btree/key_cache_gen.h"
+#include "btree/node_scan_gen.h"
+#include "data/extents_gen.h"
+#include "journal/types_gen.h"
+#include "btree/write_buffer_gen.h"
+#include "btree/types_gen.h"
+#include "btree/types_inline.h"
+
+#include "data/compress_gen.h"
+#include "data/copygc_gen.h"
+#include "data/ec/types_gen.h"
+#include "data/keylist_gen.h"
+#include "data/nocow_locking_gen.h"
+#include "bcachefs_ioctl.h"
+#include "data/move_defs_gen.h"
+#include "data/move_gen.h"
+#include "init/progress.h"
+#include "util/cuckoo.h"
+#include "data/reconcile/types_gen.h"
+
+#include "debug/async_objs_gen.h"
+#include "debug/trace.h"
+
+#include "fs/quota_gen.h"
+
+#include "init/damage_gen.h"
+#include "sb/errors_gen.h"
+#include "init/error_gen.h"
+#include "init/passes_gen.h"
+
+#include "sb/counters_gen.h"
+#include "sb/io_gen.h"
+#include "sb/members_gen.h"
+
+#include "snapshots/types_gen.h"
+
+#include "vfs/fdm.h"
+#include "vfs/types_gen.h"
+
+#include "types_gen.h"
 
 #define bch2_fs_init_fault(name)					\
 	dynamic_fault("bcachefs:bch_fs_init:" name)
@@ -315,7 +461,7 @@ static inline void bch2_log_msg_start(struct bch_fs *c, struct printbuf *out)
 	__bch2_log_msg_start(c->name, out);
 }
 
-#include "bcachefs_types.h"
+#include "bcachefs_gen.h"
 
 static inline void bch2_log_msg_exit(struct bch_log_msg *msg)
 {

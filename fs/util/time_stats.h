@@ -31,7 +31,7 @@
 
 #include "mean_and_variance.h"
 
-#include "util/time_stats_types.h"
+#include "util/time_stats_gen.h"
 
 /*
  * given a nanosecond value, pick the preferred time units for printing:

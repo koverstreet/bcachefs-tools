@@ -26,7 +26,7 @@ use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs::{self, bcachefs_kernel_version};
 
 fn device_add_opt_flags() -> u32 {
-    c::opt_flags::OPT_FORMAT as u32 | c::opt_flags::OPT_DEVICE as u32
+    c::opt_flags::OPT_FORMAT.bits() as u32 | c::opt_flags::OPT_DEVICE.bits() as u32
 }
 
 fn device_add_cmd() -> Command {
@@ -372,7 +372,7 @@ fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
 
     {
         let _lock = fs.sb_lock();
-        unsafe { fs.member_mut(dev_idx) }.set_member_state(new_state as u64);
+        unsafe { fs.member_mut(dev_idx) }.set_state(new_state as u64);
         fs.write_super_ret()
             .map_err(|e| anyhow!("error writing superblock: {}", e))?;
     }

@@ -111,9 +111,9 @@
 
 #include <linux/hash.h>
 
-#include "journal/types.h"
+#include "journal/types_gen.h"
 
-#include "journal/journal_types.h"
+#include "journal/journal_gen.h"
 
 static inline void journal_wake(struct journal *j)
 {

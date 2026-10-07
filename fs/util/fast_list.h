@@ -5,7 +5,7 @@
 #include <linux/idr.h>
 #include <linux/percpu.h>
 
-#include "util/fast_list_types.h"
+#include "util/fast_list_gen.h"
 
 static inline void *fast_list_iter_peek(struct genradix_iter *iter,
 					struct fast_list *list)

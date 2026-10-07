@@ -8,11 +8,11 @@
 #include "bcachefs.h"
 #include "btree/bkey.h"
 #include "btree/bkey_methods.h"
-#include "btree/types.h"
+#include "btree/types_gen.h"
 #include "util/util.h" /* for time_stats */
 #include "util/vstructs.h"
 
-#include "btree/bset_types.h"
+#include "btree/bset_gen.h"
 
 #define BSET_NO_AUX_TREE_VAL	(U16_MAX)
 #define BSET_RW_AUX_TREE_VAL	(U16_MAX - 1)

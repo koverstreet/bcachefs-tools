@@ -160,7 +160,7 @@ fn check_snapshot_tree<'t>(
     let fs = trans.fs();
 
     let Some(st) = k.as_snapshot_tree() else { return Ok(()) };
-    let root_id = u32::from_le(st.root_snapshot);
+    let root_id = st.root_snapshot.get();
 
     let root = match snapshot::lookup_key(trans, root_id) {
         Err(e) if !e.matches(c::ENOENT) => return Err(e.into()),
@@ -184,7 +184,7 @@ fn check_snapshot_tree<'t>(
         }
     }
 
-    let master = u32::from_le(st.master_subvol);
+    let master = st.master_subvol.get();
     if master == 0 {
         return Ok(());
     }
@@ -211,7 +211,7 @@ fn check_snapshot_tree<'t>(
     let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty(),
                                 c::bch_bkey_type::KEY_TYPE_snapshot_tree,
                                 size_of::<c::bkey_i_snapshot_tree>())?;
-    u.k_i_mut().as_mut_snapshot_tree().expect("a snapshot tree key").master_subvol = subvol.to_le();
+    u.k_i_mut().as_mut_snapshot_tree().expect("a snapshot tree key").master_subvol = subvol.into();
     Ok(())
 }
 
@@ -283,7 +283,7 @@ fn check_state<'a, 't>(
            fsck_err!(t, id::snapshot_state_bad,
                      "snapshot state unset, recovering from legacy flags:\n{}", n.to_text(fs))? {
             let state = n.v().state_from_flags();
-            n.v_mut(t)?.state = (state.0 as u32).to_le();
+            n.v_mut(t)?.state = (state.0 as u32).into();
         }
     }
 
@@ -518,10 +518,10 @@ fn points_at(s: &c::bch_snapshot, role: Role, other: u32) -> bool {
 /// - keeping the children in order.
 fn set_ptr(s: &mut c::bch_snapshot, role: Role, old: u32, new: u32) {
     match role {
-        Role::Child  => s.parent = new.to_le(),
+        Role::Child  => s.parent = new.into(),
         Role::Parent => {
-            if let Some(child) = s.children.iter_mut().find(|c| u32::from_le(**c) == old) {
-                *child = new.to_le();
+            if let Some(child) = s.children.iter_mut().find(|c| (**c).get() == old) {
+                *child = new.into();
             }
             if s.children()[0] < s.children()[1] {
                 s.children.swap(0, 1);
@@ -693,15 +693,15 @@ fn resurrect_child(t: &TransAttempt<'_, '_>, parent_id: u32, id: u32) -> Result<
     n.k_mut().p = pos(0, id as u64);
 
     let v = snapshot_mut(&mut n);
-    v.parent    = parent_id.to_le();
+    v.parent    = parent_id.into();
     v.tree      = parent.v.tree;
-    v.depth     = snapshot::depth(fs, parent_id).to_le();
-    v.btime.lo  = fs.current_time().to_le();
+    v.depth     = snapshot::depth(fs, parent_id).into();
+    v.btime.lo  = fs.current_time().into();
     for skip in &mut v.skip {
-        *skip = snapshot::skiplist_get(fs, parent_id).to_le();
+        *skip = snapshot::skiplist_get(fs, parent_id).into();
     }
-    v.skip.sort_unstable_by_key(|s| u32::from_le(*s));
-    v.subvol    = subvol_claiming(t, id)?.unwrap_or(0).to_le();
+    v.skip.sort_unstable_by_key(|s| (*s).get());
+    v.subvol    = subvol_claiming(t, id)?.unwrap_or(0).into();
     v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
 
     snapshot::table_make_room(fs, id)?;
@@ -942,7 +942,7 @@ fn check_edge<'a, 't>(
 /// root @id descends from.
 fn tree_ptr_good(trans: &BtreeTrans<'_>, id: u32, tree: u32) -> Result<bool, BchError> {
     let Some(st) = snapshot::tree_lookup(trans, tree).found()? else { return Ok(false) };
-    Ok(snapshot::is_ancestor_early(trans.fs(), id, u32::from_le(st.root_snapshot)))
+    Ok(snapshot::is_ancestor_early(trans.fs(), id, st.root_snapshot.get()))
 }
 
 /// Snapshot node @n's tree pointer was wrong: make sure its root's is right -
@@ -963,20 +963,20 @@ fn tree_ptr_repair<'a, 't>(
     };
 
     let tree = snapshot::tree_lookup(trans, tree_id).found()?;
-    if tree.is_none_or(|st| u32::from_le(st.root_snapshot) != root_id) {
+    if tree.is_none_or(|st| st.root_snapshot.get() != root_id) {
         let mut new = snapshot::tree_create(t)?;
         let v = new.k_i_mut().as_mut_snapshot_tree().expect("a snapshot tree key");
-        v.master_subvol = snapshot::oldest_subvol(fs, root_id).unwrap_or(0).to_le();
-        v.root_snapshot = root_id.to_le();
+        v.master_subvol = snapshot::oldest_subvol(fs, root_id).unwrap_or(0).into();
+        v.root_snapshot = root_id.into();
         tree_id = new.k().p.offset as u32;
 
         if root_id != id {
-            snapshot_mut(&mut get_mut_node(t, root_id)?).tree = tree_id.to_le();
+            snapshot_mut(&mut get_mut_node(t, root_id)?).tree = tree_id.into();
         }
     }
 
     if n.v().tree() != tree_id {
-        n.v_mut(t)?.tree = tree_id.to_le();
+        n.v_mut(t)?.tree = tree_id.into();
     }
     Ok(())
 }
@@ -1004,7 +1004,7 @@ fn check_depth<'a, 't>(
     if fsck_err_on!(t, n.v().depth() != real_depth, id::snapshot_bad_depth,
                     "snapshot with incorrect depth field, should be {real_depth}:\n{}",
                     n.to_text(fs))? {
-        n.v_mut(t)?.depth = real_depth.to_le();
+        n.v_mut(t)?.depth = real_depth.into();
     }
     Ok(())
 }
@@ -1020,7 +1020,7 @@ fn check_skiplists<'a, 't>(
 
     for i in 0..n.v().skip.len() {
         let parent_id = n.v().parent();
-        let skip = u32::from_le(n.v().skip[i]);
+        let skip = (n.v().skip[i]).get();
 
         let bad = if parent_id == 0 { skip != 0 } else { !snapshot::is_ancestor_early(fs, id, skip) };
         if !bad {
@@ -1037,13 +1037,13 @@ fn check_skiplists<'a, 't>(
         }
 
         if fsck_err!(t, id::snapshot_bad_skiplist, "{msg}")? {
-            n.v_mut(t)?.skip[i] = snapshot::skiplist_get(fs, parent_id).to_le();
+            n.v_mut(t)?.skip[i] = snapshot::skiplist_get(fs, parent_id).into();
         }
     }
 
     // Kept sorted: is_ancestor() tries the highest first.
     if n.has_update() {
-        n.v_mut(t)?.skip.sort_unstable_by_key(|s| u32::from_le(*s));
+        n.v_mut(t)?.skip.sort_unstable_by_key(|s| (*s).get());
     }
     Ok(())
 }
@@ -1141,7 +1141,7 @@ fn check_to_subvol<'a, 't>(
                          "snapshot leaf missing subvol backref, subvolume {subvol} points at it - restoring:\n{}",
                          n.to_text(fs))? {
                 let v = n.v_mut(t)?;
-                v.subvol = subvol.to_le();
+                v.subvol = subvol.into();
                 v.set_subvol_obsolete(true);
             }
         }
@@ -1154,7 +1154,7 @@ fn check_to_subvol<'a, 't>(
         }
 
         // XXX: DANGEROUS
-        n.v_mut(t)?.subvol = 0;
+        n.v_mut(t)?.subvol = 0.into();
     }
 
     // Live nodes only: the _OBSOLETE flags are old-format compat bits, and
@@ -1340,7 +1340,7 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     let fs = trans.fs();
 
     let tree_id = find_key(t, c::btree_id::snapshot_trees, |k| {
-        k.as_snapshot_tree().is_some_and(|st| u32::from_le(st.root_snapshot) == id)
+        k.as_snapshot_tree().is_some_and(|st| st.root_snapshot.get() == id)
     })?;
 
     let tree_id = match tree_id {
@@ -1348,7 +1348,7 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
         None => {
             let mut tree = snapshot::tree_create(t)?;
             tree.k_i_mut().as_mut_snapshot_tree().expect("a snapshot tree key").root_snapshot =
-                id.to_le();
+                id.into();
             tree.k().p.offset as u32
         }
     };
@@ -1357,9 +1357,9 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     n.k_mut().p = pos(0, id as u64);
 
     let v = snapshot_mut(&mut n);
-    v.tree     = tree_id.to_le();
-    v.btime.lo = fs.current_time().to_le();
-    v.subvol   = subvol_claiming(t, id)?.unwrap_or(0).to_le();
+    v.tree     = tree_id.into();
+    v.btime.lo = fs.current_time().into();
+    v.subvol   = subvol_claiming(t, id)?.unwrap_or(0).into();
     v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
 
     snapshot::table_make_room(fs, id)?;
@@ -1566,7 +1566,7 @@ fn check_key_has_snapshot(
             },
             Some(live_child) => if fsck_err!(trans, id::bkey_in_deleted_interior_snapshot,
                                              "key in deleted interior snapshot {buf}, migrating to live descendant {live_child}")? {
-                let (btree, inum) = (iter.btree_id(), k.k.p.inode);
+                let (btree, inum) = (c::btree_id(iter.btree_id()), k.k.p.inode);
                 snapshot::delete_dead_key(t, iter, k, live_child)?;
                 key_has_inode_in_snapshot(t, btree, inum, live_child)?;
                 return Ok(true);
