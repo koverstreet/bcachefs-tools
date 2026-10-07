@@ -350,8 +350,6 @@ fn copy_xattrs(
             Err(_) => continue,
         };
 
-        let stripped_cstr = CString::new(stripped).unwrap();
-
         btree::iter::trans_commit_do(
             fs,
             None,
@@ -361,7 +359,7 @@ fn copy_xattrs(
                     t,
                     subvol_inum(dst.bi_inum),
                     dst,
-                    &stripped_cstr,
+                    OsStr::from_bytes(stripped),
                     &val_buf[..val_size],
                     xattr_type,
                     0,

@@ -4,8 +4,6 @@
 
 #include "str_hash.h"
 
-extern const struct bch_hash_desc bch2_xattr_hash_desc;
-
 int bch2_xattr_validate(struct bch_fs *, struct bkey_s_c,
 			const struct bkey_validate_context *);
 void bch2_xattr_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
@@ -38,17 +36,46 @@ struct xattr_handler;
 struct bch_hash_info;
 struct bch_inode_info;
 
+int bch2_xattr_get_trans(struct btree_trans *, const struct bch_inode_unpacked *,
+			 subvol_inum, int, const char *, void *, size_t);
+
 int __bch2_xattr_set(struct btree_trans *, subvol_inum,
 		     const struct bch_hash_info *,
 		     const char *, const void *, size_t, int, int);
 
-/* Exported for cmd_migrate.c in tools: */
 int bch2_xattr_set(struct btree_trans *, subvol_inum,
 		   struct bch_inode_unpacked *,
 		   const char *, const void *, size_t, int, int);
 
+#ifndef NO_BCACHEFS_FS
+
 ssize_t bch2_xattr_list(struct dentry *, char *, size_t);
 
 extern const struct xattr_handler * const bch2_xattr_handlers[];
+
+/* The handlers - fs/xattr.rs - for xattr.c's tables: */
+struct mnt_idmap;
+struct inode;
+
+int bch2_xattr_get_handler(const struct xattr_handler *, struct dentry *,
+			   struct inode *, const char *, void *, size_t);
+int bch2_xattr_set_handler(const struct xattr_handler *, struct mnt_idmap *,
+			   struct dentry *, struct inode *, const char *,
+			   const void *, size_t, int);
+int bch2_xattr_bcachefs_get(const struct xattr_handler *, struct dentry *,
+			    struct inode *, const char *, void *, size_t);
+int bch2_xattr_bcachefs_set(const struct xattr_handler *, struct mnt_idmap *,
+			    struct dentry *, struct inode *, const char *,
+			    const void *, size_t, int);
+int bch2_xattr_bcachefs_get_effective(const struct xattr_handler *, struct dentry *,
+				      struct inode *, const char *, void *, size_t);
+int bch2_xattr_bcachefs_set_effective(const struct xattr_handler *, struct mnt_idmap *,
+				      struct dentry *, struct inode *, const char *,
+				      const void *, size_t, int);
+
+/* For listxattr - fs/xattr.c: */
+const char *bch2_xattr_list_prefix(unsigned, struct dentry *);
+
+#endif /* NO_BCACHEFS_FS */
 
 #endif /* _BCACHEFS_XATTR_H */

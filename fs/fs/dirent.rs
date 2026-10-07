@@ -42,10 +42,6 @@ impl HashTable for Dirents {
     const BTREE:    c::btree_id      = c::btree_id::dirents;
     const KEY_TYPE: c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_dirent;
 
-    fn desc() -> &'static c::bch_hash_desc {
-        &bch2_dirent_hash_desc
-    }
-
     fn hash_key(info: &c::bch_hash_info, key: &OsStr) -> u64 {
         hash(info, key)
     }

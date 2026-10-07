@@ -16,14 +16,13 @@ use crate::printbuf_to_formatter;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::os_str::OsStrExt;
 use crate::util::Printbuf;
-
 use crate::{bch_err, fsck_err, fsck_err_on, inode_fsck_err};
 use core::ffi::c_void;
 use core::fmt;
 
 /// A btree that's a hash table keyed by name - dirents, xattrs: what C's
-/// struct bch_hash_desc describes, as a trait. The keys passed to these are
-/// valid - from the btree, or built to be inserted.
+/// struct bch_hash_desc described. The keys passed to these are valid -
+/// from the btree, or built to be inserted.
 pub trait HashTable {
     /// What a lookup searches for: a name, or for xattrs a name and type -
     /// which borrows the name, for 'k.
@@ -32,23 +31,19 @@ pub trait HashTable {
     const BTREE:    c::btree_id;
     const KEY_TYPE: c::bch_bkey_type;
 
-    /// The table as C's bch_hash_desc, for the C that still uses one.
-    fn desc() -> &'static c::bch_hash_desc;
-
-    /// Where @key hashes to under @info: desc->hash_key().
+    /// Where @key hashes to under @info.
     fn hash_key(info: &c::bch_hash_info, key: &Self::Key<'_>) -> u64;
 
-    /// Where @k's name hashes to under @info: desc->hash_bkey().
+    /// Where @k's name hashes to under @info.
     fn hash_bkey(info: &c::bch_hash_info, k: BkeySC<'_>) -> u64;
 
-    /// Whether @k is what @key looks for: !desc->cmp_key().
+    /// Whether @k is what @key looks for.
     fn matches(k: BkeySC<'_>, key: &Self::Key<'_>) -> bool;
 
-    /// Whether @a and @b have the same name: !desc->cmp_bkey().
+    /// Whether @a and @b have the same name.
     fn same_name(a: BkeySC<'_>, b: BkeySC<'_>) -> bool;
 
-    /// Whether @k is in the table as subvolume @inum.subvol sees it:
-    /// desc->is_visible().
+    /// Whether @k is in the table as subvolume @inum.subvol sees it.
     fn is_visible(_inum: c::subvol_inum, _k: BkeySC<'_>) -> bool {
         true
     }

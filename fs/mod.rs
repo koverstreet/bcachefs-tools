@@ -44,6 +44,7 @@ pub mod btree;
 pub mod debug {
     pub mod tests;
 }
+#[path = "fs/acl.rs"]          pub mod acl;
 #[path = "fs/check.rs"]        pub mod check;
 #[path = "fs/check_dir_structure.rs"] pub mod check_dir_structure;
 #[path = "fs/check_nlinks.rs"] pub mod check_nlinks;

@@ -24,8 +24,6 @@ typedef struct {
 	__le32		a_version;
 } bch_acl_header;
 
-void bch2_acl_to_text(struct printbuf *, const void *, size_t);
-
 #ifndef NO_BCACHEFS_FS
 
 struct posix_acl *bch2_get_acl(struct inode *, int, bool);

@@ -150,22 +150,7 @@ static int __rust_fuse_xattr_get(struct btree_trans *trans, subvol_inum inum,
 	struct bch_inode_unpacked inode_u;
 	try(bch2_inode_find_by_inum_trans(trans, inum, &inode_u));
 
-	struct bch_hash_info hash;
-	try(bch2_hash_info_init(trans->c, &inode_u, &hash));
-
-	struct xattr_search_key search = X_SEARCH(type, name, strlen(name));
-	CLASS(btree_iter_uninit, iter)(trans);
-	struct bkey_s_c k = bkey_try(bch2_hash_lookup(trans, &iter, bch2_xattr_hash_desc,
-						      &hash, inum, &search, 0));
-
-	struct bkey_s_c_xattr xattr = bkey_s_c_to_xattr(k);
-	int len = le16_to_cpu(xattr.v->x_val_len);
-	if (buf) {
-		if (len > size)
-			return -ERANGE;
-		memcpy(buf, xattr_val(xattr.v), len);
-	}
-	return len;
+	return bch2_xattr_get_trans(trans, &inode_u, inum, type, name, buf, size);
 }
 
 /* The value's length; with @buf NULL, just the length. */

@@ -156,7 +156,6 @@ bcachefs-y		:=			\
 	debug/sysfs.o				\
 	debug/trace.o				\
 	errcode.o				\
-	fs/acl.o				\
 	fs/check.o				\
 	fs/dirent.o				\
 	fs/inode.o				\
