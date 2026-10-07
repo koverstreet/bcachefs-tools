@@ -573,7 +573,7 @@ struct bch_dev {
 	int			sb_write_error;
 	dev_t			dev;
 
-	struct bch_devs_mask	self;
+	struct bch_devs_mask	self_mask;
 
 	/*
 	 * Buckets:

@@ -629,7 +629,7 @@ static void bch2_dev_attach(struct bch_fs *c, struct bch_dev *ca,
 			    unsigned dev_idx)
 {
 	ca->dev_idx = dev_idx;
-	__set_bit(ca->dev_idx, ca->self.d);
+	__set_bit(ca->dev_idx, ca->self_mask.d);
 
 	if (!ca->name[0])
 		scnprintf(ca->name, sizeof(ca->name), "dev-%u", dev_idx);
