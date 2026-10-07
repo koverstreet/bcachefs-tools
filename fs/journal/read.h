@@ -72,12 +72,7 @@ static inline struct nonce journal_nonce(const struct jset *jset)
 void bch2_journal_ptrs_to_text(struct printbuf *, struct bch_fs *,
 			       struct journal_replay *);
 
-typedef struct u64_range {
-	u64	start;
-	u64	end;
-} u64_range;
-
-DEFINE_DARRAY(u64_range);
+#include "journal/read_types.h"
 
 struct u64_range bch2_journal_entry_missing_range(struct bch_fs *, u64, u64);
 

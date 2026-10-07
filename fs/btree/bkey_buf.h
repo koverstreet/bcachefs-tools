@@ -7,10 +7,7 @@
 #include "bcachefs.h"
 #include "btree/bkey.h"
 
-struct bkey_buf {
-	struct bkey_i	*k;
-	u64		onstack[12];
-};
+#include "btree/bkey_buf_types.h"
 
 static inline int bch2_bkey_buf_realloc_noprof(struct bkey_buf *s, unsigned u64s)
 {

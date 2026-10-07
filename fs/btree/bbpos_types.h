@@ -7,11 +7,6 @@ struct bbpos {
 	struct bpos		pos;
 };
 
-static inline struct bbpos BBPOS(enum btree_id btree, struct bpos pos)
-{
-	return (struct bbpos) { btree, pos };
-}
-
 #define BBPOS_MIN	BBPOS(0, POS_MIN)
 #define BBPOS_MAX	BBPOS(BTREE_ID_NR - 1, SPOS_MAX)
 
@@ -25,9 +20,6 @@ struct blbpos {
 	struct bpos		pos;
 };
 
-static inline struct blbpos BLBPOS(enum btree_id btree, unsigned level, struct bpos pos)
-{
-	return (struct blbpos) { btree, level, pos };
-}
+#include "btree/bbpos_types_inline.h"
 
 #endif /* _BCACHEFS_BBPOS_TYPES_H */

@@ -9,8 +9,7 @@
 #include "data/extents.h"
 #include "init/error.h"
 
-struct bch_fs;
-struct btree;
+#include "btree/read_types.h"
 
 static inline unsigned btree_ptr_sectors_written(struct bkey_s_c k)
 {
@@ -35,20 +34,6 @@ static inline int bch2_bkey_in_btree_node(struct bch_fs *c, struct btree *b,
 fsck_err:
 	return ret;
 }
-
-struct btree_read_bio {
-	struct bch_fs		*c;
-	struct bch_dev		*ca;	/* stashed at submit; see bch_write_bio */
-	struct btree		*b;
-	u64			start_time;
-	unsigned		idx:7;
-#ifdef CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS
-	unsigned		list_idx;
-#endif
-	struct extent_ptr_decoded	pick;
-	struct work_struct	work;
-	struct bio		bio;
-};
 
 void bch2_btree_node_io_unlock(struct btree *);
 void bch2_btree_node_io_lock(struct btree *);
@@ -111,8 +96,6 @@ int bch2_btree_root_read(struct bch_fs *, enum btree_id,
 			 const struct bkey_i *, unsigned);
 
 void bch2_btree_read_bio_to_text(struct printbuf *, struct btree_read_bio *);
-
-typedef void (*btree_node_scrub_report_fn)(void *priv, unsigned dev, bool good);
 
 int bch2_btree_node_scrub_report(struct btree_trans *, enum btree_id, unsigned,
 				 struct bkey_s_c, unsigned,

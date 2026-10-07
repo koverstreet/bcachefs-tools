@@ -2,13 +2,11 @@
 #ifndef _BCACHEFS_FS_IO_PAGECACHE_H
 #define _BCACHEFS_FS_IO_PAGECACHE_H
 
-#include "enum_kind.h"
-
 #include "vfs/io.h"
 
 #include <linux/pagemap.h>
 
-typedef DARRAY(struct folio *) folios;
+#include "vfs/pagecache_types.h"
 
 int bch2_filemap_get_contig_folios_d(struct address_space *, loff_t,
 				     u64, fgf_t, gfp_t, folios *);
@@ -40,27 +38,6 @@ static inline u64 folio_end_sector(struct folio *folio)
 	return folio_end_pos(folio) >> 9;
 }
 
-#define BCH_FOLIO_SECTOR_STATE()	\
-	x(unallocated)			\
-	x(reserved)			\
-	x(dirty)			\
-	x(dirty_reserved)		\
-	x(allocated)
-
-enum __enum_closed bch_folio_sector_state {
-#define x(n)	SECTOR_##n,
-	BCH_FOLIO_SECTOR_STATE()
-#undef x
-};
-
-struct bch_folio_sector {
-	/* Uncompressed, fully allocated replicas (or on disk reservation): */
-	u8			nr_replicas:4,
-	/* Owns PAGE_SECTORS * replicas_reserved sized in memory reservation: */
-				replicas_reserved:4;
-	u8			state;
-};
-
 /*
  * Worst-case bytes for a per-folio bch_folio_sector snapshot: a folio can be up
  * to MAX_PAGECACHE_ORDER pages, each contributing PAGE_SECTORS sector entries.
@@ -69,28 +46,6 @@ struct bch_folio_sector {
 #define BCH_WRITEPAGE_BUF_BYTES						\
 	((PAGE_SECTORS << MAX_PAGECACHE_ORDER) *			\
 	 sizeof(struct bch_folio_sector))
-
-struct bch_folio {
-	spinlock_t		lock;
-	atomic_t		write_count;
-	/* is s[] up to date with the btree? says nothing about the data */
-	bool			state_uptodate;
-	/* the count s[].replicas_reserved is charged at, and released at */
-	u8			replicas_reserved_at;
-	/*
-	 * A foreground reservation fell back: writeback shouldn't insist on the
-	 * inode's count - see bch2_get_folio_disk_reservation().
-	 */
-	bool			reserved_degraded;
-	/*
-	 * The data: sectors [0, partially_uptodate) are read but the folio
-	 * isn't uptodate. One offset suffices because reads start at the front
-	 * of the folio; 0 means nothing partial, so only
-	 * readpage_bio_drop_unissued() maintains this.
-	 */
-	u16			partially_uptodate;
-	struct bch_folio_sector	s[];
-};
 
 /* Helper for when we need to add debug instrumentation: */
 static inline void bch2_folio_sector_set(struct folio *folio,
@@ -128,13 +83,6 @@ static inline struct bch_folio *bch2_folio(struct folio *folio)
 
 struct bch_folio *__bch2_folio_create(struct folio *, gfp_t);
 struct bch_folio *bch2_folio_create(struct folio *, gfp_t);
-
-struct bch2_folio_reservation {
-	struct disk_reservation	disk;
-	struct quota_res	quota;
-	/* @disk fell back to fewer replicas than the inode asks for */
-	bool			degraded;
-};
 
 static inline unsigned inode_nr_replicas(struct bch_fs *c, struct bch_inode_info *inode)
 {

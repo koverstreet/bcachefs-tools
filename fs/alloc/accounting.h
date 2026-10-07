@@ -2,8 +2,6 @@
 #ifndef _BCACHEFS_DISK_ACCOUNTING_H
 #define _BCACHEFS_DISK_ACCOUNTING_H
 
-#include "enum_kind.h"
-
 #include "btree/update.h"
 #include "sb/members.h"
 #include "util/eytzinger.h"
@@ -151,11 +149,7 @@ static inline int accounting_pos_cmp(const void *_l, const void *_r)
 	return bpos_cmp(*l, *r);
 }
 
-enum __enum_closed bch_accounting_mode {
-	BCH_ACCOUNTING_normal,
-	BCH_ACCOUNTING_gc,
-	BCH_ACCOUNTING_read,
-};
+#include "alloc/accounting_defs.h"
 
 int bch2_accounting_mem_insert(struct bch_fs *, struct bkey_s_c_accounting, enum bch_accounting_mode);
 int bch2_accounting_mem_insert_locked(struct bch_fs *, struct bkey_s_c_accounting, enum bch_accounting_mode);

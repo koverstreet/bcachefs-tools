@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_FS_IO_H
 #define _BCACHEFS_FS_IO_H
 
+#include "vfs/io_types.h"
+
 #ifndef NO_BCACHEFS_FS
 
 #include "alloc/buckets.h"
@@ -11,18 +13,6 @@
 #include "vfs/fs.h"
 
 #include <linux/uio.h>
-
-struct nocow_flush {
-	struct closure	*cl;
-	struct bch_dev	*ca;
-	struct bio	bio;
-};
-
-struct folio_vec {
-	struct folio	*fv_folio;
-	size_t		fv_offset;
-	size_t		fv_len;
-};
 
 static inline struct folio_vec biovec_to_foliovec(struct bio_vec bv)
 {
@@ -60,10 +50,6 @@ static inline struct folio_vec bio_iter_iovec_folio(struct bio *bio,
  */
 #define bio_for_each_folio(bvl, bio, iter)				\
 	__bio_for_each_folio(bvl, bio, iter, (bio)->bi_iter)
-
-struct quota_res {
-	u64				sectors;
-};
 
 #ifdef CONFIG_BCACHEFS_QUOTA
 

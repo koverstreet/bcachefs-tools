@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_INIT_DEV_TYPES_H
 #define _BCACHEFS_INIT_DEV_TYPES_H
 
+#include "util/darray.h"
+
 struct bch_fs;
 
 struct bch_sb_handle_holder {
@@ -22,6 +24,8 @@ struct bch_sb_handle {
 	unsigned		fs_sb:1;
 	u64			seq;
 };
+
+typedef DARRAY(struct bch_sb_handle) bch_sb_handles;
 
 struct bch_devs_mask {
 	unsigned long d[BITS_TO_LONGS(BCH_SB_MEMBERS_MAX)];

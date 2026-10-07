@@ -8,14 +8,7 @@
 
 #include "util.h"
 
-/*
- * Two-state lock - can be taken for add or block - both states are shared,
- * like read side of rwsem, but conflict with other state:
- */
-typedef struct {
-	atomic_long_t		v;
-	wait_queue_head_t	wait;
-} two_state_lock_t;
+#include "util/two_state_shared_lock_types.h"
 
 static inline void two_state_lock_init(two_state_lock_t *lock)
 {

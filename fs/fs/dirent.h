@@ -2,8 +2,6 @@
 #ifndef _BCACHEFS_DIRENT_H
 #define _BCACHEFS_DIRENT_H
 
-#include "enum_kind.h"
-
 #include "str_hash.h"
 
 int bch2_dirent_validate(struct bch_fs *, struct bkey_s_c,
@@ -16,12 +14,7 @@ void bch2_dirent_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 	.min_val_size	= 16,				\
 })
 
-struct qstr;
-struct file;
-struct dir_context;
-struct bch_fs;
-struct bch_hash_info;
-struct bch_inode_info;
+#include "fs/dirent_types.h"
 
 #if IS_ENABLED(CONFIG_UNICODE)
 /*
@@ -49,12 +42,6 @@ static inline unsigned vfs_d_type(unsigned type)
 {
 	return type == DT_SUBVOL ? DT_DIR : type;
 }
-
-enum __enum_closed bch_rename_mode {
-	BCH_RENAME,
-	BCH_RENAME_OVERWRITE,
-	BCH_RENAME_EXCHANGE,
-};
 
 int bch2_dirent_lookup(struct bch_fs *, subvol_inum,
 		       const struct bch_hash_info *,

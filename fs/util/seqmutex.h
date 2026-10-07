@@ -4,10 +4,7 @@
 
 #include <linux/mutex.h>
 
-struct seqmutex {
-	struct mutex	lock;
-	u32		seq;
-};
+#include "util/seqmutex_types.h"
 
 #define seqmutex_init(_lock)	mutex_init(&(_lock)->lock)
 

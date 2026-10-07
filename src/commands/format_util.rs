@@ -74,7 +74,7 @@ impl DevOpts {
 }
 
 /// Features enabled on all new filesystems.
-/// Must match BCH_SB_FEATURES_ALL in bcachefs_format.h.
+/// Must match BCH_SB_FEATURES_ALL in bcachefs_format_types.h.
 const BCH_SB_FEATURES_ALL: u64 = {
     // BCH_SB_FEATURES_ALWAYS:
     (1 << c::bch_sb_feature::BCH_FEATURE_new_extent_overwrite.0 as u64) |

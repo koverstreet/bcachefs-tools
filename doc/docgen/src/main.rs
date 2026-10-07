@@ -699,7 +699,7 @@ fn parse_opts(entries: &[Vec<String>]) -> Vec<OptEntry> {
 
 fn generate_opts_table(opts: &[OptEntry]) -> String {
     let mut out = String::new();
-    out.push_str("% Auto-generated from BCH_OPTS() in fs/opts.h — do not edit\n");
+    out.push_str("% Auto-generated from BCH_OPTS() in fs/opts_types.h — do not edit\n");
     out.push_str("% Regenerate with: cargo run -p bch-docgen\n\n");
 
     out.push_str("\\small\n");
@@ -769,7 +769,7 @@ struct EnumList {
 const ENUM_LISTS: &[EnumList] = &[
     EnumList {
         key: "error-actions",
-        header: "fs/bcachefs_format.h",
+        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_ERROR_ACTIONS",
         default: Some("fix_safe"),
         doc_field: Some(2),
@@ -780,7 +780,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "csum-opts",
-        header: "fs/bcachefs_format.h",
+        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_CSUM_OPTS",
         default: Some("crc32c"),
         doc_field: None,
@@ -791,7 +791,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "compression-opts",
-        header: "fs/bcachefs_format.h",
+        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_COMPRESSION_OPTS",
         default: Some("none"),
         doc_field: None,
@@ -802,7 +802,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "str-hash-opts",
-        header: "fs/bcachefs_format.h",
+        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_STR_HASH_OPTS",
         default: Some("siphash"),
         doc_field: None,
@@ -813,7 +813,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "btree-ids",
-        header: "fs/bcachefs_format.h",
+        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_BTREE_IDS",
         default: None,
         doc_field: Some(4),
@@ -824,7 +824,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "time-stats",
-        header: "fs/bcachefs.h",
+        header: "fs/types.h",
         macro_name: "BCH_TIME_STATS",
         default: None,
         doc_field: Some(1),
@@ -835,7 +835,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "sb-fields",
-        header: "fs/bcachefs_format.h",
+        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_SB_FIELDS",
         default: None,
         doc_field: Some(2),
@@ -846,7 +846,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "jset-entry-types",
-        header: "fs/bcachefs_format.h",
+        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_JSET_ENTRY_TYPES",
         default: None,
         doc_field: Some(2),
@@ -868,7 +868,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "bkey-types",
-        header: "fs/bcachefs_format.h",
+        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_BKEY_TYPES",
         default: None,
         doc_field: Some(3),
@@ -879,7 +879,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "metadata-versions",
-        header: "fs/bcachefs_format.h",
+        header: "fs/bcachefs_format_types.h",
         macro_name: "BCH_METADATA_VERSIONS",
         default: None,
         doc_field: Some(2),
@@ -1087,7 +1087,7 @@ fn main() {
     }
 
     // --- BCH_OPTS() table ---
-    let opts_source = fs::read_to_string(root.join("fs/opts.h")).unwrap();
+    let opts_source = fs::read_to_string(root.join("fs/opts_types.h")).unwrap();
     let opts_entries = parse_xmacro(&opts_source, "BCH_OPTS");
     let opts = parse_opts(&opts_entries);
     let table = generate_opts_table(&opts);

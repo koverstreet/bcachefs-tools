@@ -23,18 +23,11 @@ static inline unsigned xattr_val_u64s(unsigned name_len, unsigned val_len)
 #define xattr_val(_xattr)					\
 	((void *) (_xattr)->x_name_and_value + (_xattr)->x_name_len)
 
-struct xattr_search_key {
-	u8		type;
-	struct qstr	name;
-};
+#include "fs/xattr_types.h"
 
 #define X_SEARCH(_type, _name, _len) ((struct xattr_search_key)	\
 	{ .type = _type, .name = QSTR_INIT(_name, _len) })
 
-struct dentry;
-struct xattr_handler;
-struct bch_hash_info;
-struct bch_inode_info;
 
 int bch2_xattr_get_trans(struct btree_trans *, const struct bch_inode_unpacked *,
 			 subvol_inum, int, const char *, void *, size_t);
@@ -53,9 +46,6 @@ ssize_t bch2_xattr_list(struct dentry *, char *, size_t);
 
 extern const struct xattr_handler * const bch2_xattr_handlers[];
 
-/* The handlers - fs/xattr.rs - for xattr.c's tables: */
-struct mnt_idmap;
-struct inode;
 
 int bch2_xattr_get_handler(const struct xattr_handler *, struct dentry *,
 			   struct inode *, const char *, void *, size_t);

@@ -2,8 +2,6 @@
 #ifndef _BCACHEFS_DATA_COMPRESS_H
 #define _BCACHEFS_DATA_COMPRESS_H
 
-#include "enum_kind.h"
-
 #include "extents_types.h"
 
 static const unsigned __bch2_compression_opt_to_type[] = {
@@ -12,16 +10,7 @@ static const unsigned __bch2_compression_opt_to_type[] = {
 #undef x
 };
 
-union bch_compression_opt {
-	u8 value;
-	struct {
-#if defined(__LITTLE_ENDIAN_BITFIELD)
-		u8 type:4, level:4;
-#elif defined(__BIG_ENDIAN_BITFIELD)
-		u8 level:4, type:4;
-#endif
-	};
-};
+#include "data/compress_defs.h"
 
 static inline bool bch2_compression_opt_valid(unsigned v)
 {
@@ -43,24 +32,6 @@ static inline enum bch_compression_type bch2_compression_opt_to_type(unsigned v)
 
 	return __bch2_compression_opt_to_type[opt.type];
 }
-
-/*
- * Bounce buffer for the encode/decode paths: either a direct mapping of a
- * bio's pages (BB_none/BB_vmap - no copy) or a private allocation the caller
- * can scribble on without touching the bio. Exported because the write path
- * assembles its own decode sequence out of these.
- */
-struct bbuf {
-	struct bch_fs	*c;
-	void		*b;
-	enum __enum_closed bbuf_type {
-		BB_none,
-		BB_vmap,
-		BB_kmalloc,
-		BB_mempool,
-	}		type;
-	int		rw;
-};
 
 void bch2_bbuf_exit(struct bbuf *);
 struct bbuf bch2_bounce_alloc(struct bch_fs *, unsigned, int);

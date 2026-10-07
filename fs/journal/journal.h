@@ -2,8 +2,6 @@
 #ifndef _BCACHEFS_JOURNAL_H
 #define _BCACHEFS_JOURNAL_H
 
-#include "enum_kind.h"
-
 /*
  * THE JOURNAL:
  *
@@ -115,7 +113,7 @@
 
 #include "journal/types.h"
 
-struct bch_fs;
+#include "journal/journal_types.h"
 
 static inline void journal_wake(struct journal *j)
 {
@@ -381,12 +379,6 @@ static inline union journal_res_state journal_state_buf_put(struct journal *j, u
 	return s;
 }
 
-enum __enum_flags journal_cycle_flags {
-	JOURNAL_CYCLE_must_close	= BIT(0),
-	JOURNAL_CYCLE_must_open		= BIT(1),
-	JOURNAL_CYCLE_force_close	= BIT(2),
-};
-
 int bch2_journal_cycle_locked(struct journal *, enum journal_cycle_flags flags);
 void bch2_journal_cycle(struct journal *, enum journal_cycle_flags flags);
 
@@ -439,12 +431,6 @@ static inline void bch2_journal_res_put(struct journal *j,
 
 int bch2_journal_res_get_slowpath(struct journal *, struct journal_res *,
 				  unsigned, struct btree_trans *);
-
-/* First bits for BCH_WATERMARK: */
-enum __enum_closed journal_res_flags {
-	__JOURNAL_RES_GET_NONBLOCK	= BCH_WATERMARK_BITS,
-	__JOURNAL_RES_GET_CHECK,
-};
 
 #define JOURNAL_RES_GET_NONBLOCK	(1 << __JOURNAL_RES_GET_NONBLOCK)
 #define JOURNAL_RES_GET_CHECK		(1 << __JOURNAL_RES_GET_CHECK)
@@ -550,12 +536,8 @@ int bch2_journal_meta(struct journal *);
 void bch2_journal_halt_locked(struct journal *);
 void bch2_journal_halt(struct journal *);
 
-struct bch_dev;
-
 void bch2_journal_unblock(struct journal *);
 void bch2_journal_block(struct journal *);
-
-struct journal_block { struct journal *j; };
 
 DEFINE_CLASS(journal_block, struct journal_block,
 	     bch2_journal_unblock(_T.j),

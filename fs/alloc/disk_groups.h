@@ -2,8 +2,6 @@
 #ifndef _BCACHEFS_DISK_GROUPS_H
 #define _BCACHEFS_DISK_GROUPS_H
 
-#include "enum_kind.h"
-
 #include "disk_groups_types.h"
 
 extern const struct bch_sb_field_ops bch_sb_field_ops_disk_groups;
@@ -16,17 +14,7 @@ static inline unsigned disk_groups_nr(struct bch_sb_field_disk_groups *groups)
 		: 0;
 }
 
-struct target {
-	enum __enum_closed {
-		TARGET_NULL,
-		TARGET_DEV,
-		TARGET_GROUP,
-	}			type;
-	union {
-		unsigned	dev;
-		unsigned	group;
-	};
-};
+#include "alloc/disk_groups_defs.h"
 
 #define TARGET_DEV_START	1
 #define TARGET_GROUP_START	(256 + TARGET_DEV_START)

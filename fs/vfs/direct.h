@@ -2,45 +2,11 @@
 #ifndef _BCACHEFS_FS_IO_DIRECT_H
 #define _BCACHEFS_FS_IO_DIRECT_H
 
+#include "vfs/direct_types.h"
+
 #ifndef NO_BCACHEFS_FS
 #include "data/read.h"
 #include "vfs/io.h"
-
-struct dio_read {
-	struct closure			cl;
-	struct kiocb			*req;
-	long				ret;
-	bool				should_dirty;
-	/*
-	 * The read's flags. rbio->flags is only set on the rbio the read path
-	 * picks for an extent - a split, whenever the read bounces - so the
-	 * dio's own rbio doesn't carry them, and the endio has nowhere else to
-	 * look.
-	 */
-	enum bch_read_flags		flags;
-	struct bch_read_bio		rbio;
-};
-
-struct dio_write {
-	struct kiocb			*req;
-	struct address_space		*mapping;
-	struct bch_inode_info		*inode;
-	struct mm_struct		*mm;
-	const struct iovec		*iov;
-	unsigned			loop:1,
-					extending:1,
-					sync:1,
-					sync_done:1,
-					flush:1;
-	struct quota_res		quota_res;
-	u64				written;
-
-	struct iov_iter			iter;
-	struct iovec			inline_vecs[2];
-
-	/* must be last: */
-	struct bch_write_op		op;
-};
 
 int bch2_direct_IO_read(struct kiocb *, struct iov_iter *, enum bch_read_flags,
 			struct bch_read_err_report *);

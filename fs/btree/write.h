@@ -2,29 +2,12 @@
 #ifndef _BCACHEFS_BTREE_WRITE_H
 #define _BCACHEFS_BTREE_WRITE_H
 
-#include "enum_kind.h"
-
 #include "data/write_types.h"
 
-struct btree_write_bio {
-	struct work_struct	work;
-	__BKEY_PADDED(key, BKEY_BTREE_PTR_VAL_U64s_MAX);
-	void			*data;
-	unsigned		data_bytes;
-	unsigned		sector_offset;
-	u64			start_time;
-#ifdef CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS
-	unsigned		list_idx;
-#endif
-	struct bch_write_bio	wbio;
-};
+#include "btree/write_types.h"
 
 bool bch2_btree_post_write_cleanup(struct bch_fs *, struct btree *);
 
-enum __enum_closed btree_write_flags {
-	__BTREE_WRITE_only_if_need = BTREE_WRITE_TYPE_BITS,
-	__BTREE_WRITE_already_started,
-};
 #define BTREE_WRITE_only_if_need	BIT(__BTREE_WRITE_only_if_need)
 #define BTREE_WRITE_already_started	BIT(__BTREE_WRITE_already_started)
 

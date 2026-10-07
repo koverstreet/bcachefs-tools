@@ -5,14 +5,7 @@
 #include <linux/idr.h>
 #include <linux/percpu.h>
 
-struct fast_list_pcpu;
-
-struct fast_list {
-	GENRADIX(void *)	items;
-	struct ida		slots_allocated;
-	struct fast_list_pcpu __percpu
-				*buffer;
-};
+#include "util/fast_list_types.h"
 
 static inline void *fast_list_iter_peek(struct genradix_iter *iter,
 					struct fast_list *list)

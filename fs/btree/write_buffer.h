@@ -38,18 +38,11 @@ static inline bool bch2_btree_write_buffer_must_wait(struct bch_fs *c)
 	return nr > sz * 3 / 4;
 }
 
-struct btree_trans;
+#include "btree/write_buffer_defs.h"
+
 int bch2_btree_write_buffer_flush_sync(struct btree_trans *);
 bool bch2_btree_write_buffer_flush_going_ro(struct bch_fs *);
 int bch2_btree_write_buffer_tryflush(struct btree_trans *);
-
-struct wb_maybe_flush {
-	struct bkey_buf	last_flushed;
-	u32		flushed_commit_count;
-	u64		nr_flushes;
-	u64		nr_done;
-	bool		seen_error;
-};
 
 static inline void wb_maybe_flush_exit(struct wb_maybe_flush *f)
 {
@@ -69,19 +62,6 @@ static inline int wb_maybe_flush_inc(struct wb_maybe_flush *f)
 }
 
 int bch2_btree_write_buffer_maybe_flush(struct btree_trans *, struct bkey_s_c, struct wb_maybe_flush *);
-
-struct journal_keys_to_wb_btree {
-	struct btree_write_buffer_keys	*wb;	/* NULL: not yet acquired */
-	size_t				room;
-};
-
-struct journal_keys_to_wb {
-	u64				seq;
-#ifdef CONFIG_BCACHEFS_TESTS
-	bool				test_wb_pin_armed;
-#endif
-	struct journal_keys_to_wb_btree	per_btree[BCH_WB_BTREE_NR];
-};
 
 static inline int wb_key_cmp(const void *_l, const void *_r)
 {

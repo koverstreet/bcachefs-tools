@@ -496,7 +496,8 @@ static inline bool bch2_dev_btree_bitmap_marked_sectors_any(struct bch_dev *ca, 
 bool bch2_dev_btree_bitmap_marked(struct bch_fs *, struct bkey_s_c);
 bool bch2_dev_btree_bitmap_marked_nogc(struct bch_fs *, struct bkey_s_c);
 
-struct sb_write;
+#include "sb/members_defs.h"
+
 void bch2_dev_btree_bitmap_mark_locked(struct bch_fs *, struct bkey_s_c, struct sb_write *);
 void bch2_dev_btree_bitmap_mark(struct bch_fs *, struct bkey_s_c);
 
@@ -508,13 +509,6 @@ void bch2_maybe_schedule_btree_bitmap_gc(struct bch_fs *);
 
 int bch2_sb_member_alloc(struct bch_fs *);
 void bch2_sb_members_clean_deleted(struct bch_fs *);
-
-struct bch_dev_identity {
-	char name[sizeof(((struct bch_member *) NULL)->device_name) + 1];
-	char model[sizeof(((struct bch_member *) NULL)->device_model) + 1];
-	char serial[sizeof(((struct bch_member *) NULL)->device_serial) + 1];
-	bool rotational;
-};
 
 void bch2_dev_mi_field_read(struct bch_dev *, struct bch_dev_identity *);
 void bch2_dev_mi_field_upgrades_locked(struct bch_fs *, struct bch_dev *,

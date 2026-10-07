@@ -75,29 +75,6 @@ enum __enum_open bch_data_type {
 	BCH_DATA_NR
 };
 
-static inline bool data_type_is_empty(enum bch_data_type type)
-{
-	switch (type) {
-	case BCH_DATA_free:
-	case BCH_DATA_need_gc_gens:
-	case BCH_DATA_need_discard:
-		return true;
-	default:
-		return false;
-	}
-}
-
-static inline bool data_type_is_hidden(enum bch_data_type type)
-{
-	switch (type) {
-	case BCH_DATA_sb:
-	case BCH_DATA_journal:
-		return true;
-	default:
-		return false;
-	}
-}
-
 /*
  * field 1: name
  * field 2: id
@@ -293,5 +270,7 @@ struct disk_accounting_pos {
 		struct bpos			_pad;
 	};
 };
+
+#include "alloc/accounting_format_inline.h"
 
 #endif /* _BCACHEFS_DISK_ACCOUNTING_FORMAT_H */

@@ -240,10 +240,7 @@ static inline struct btree_path *prev_btree_path(struct btree_trans *trans, stru
 	      _iter.sorted_idx < (_trans)->nr_sorted);			\
 	     _iter.sorted_idx++)
 
-struct trans_for_each_path_inorder_iter {
-	btree_path_idx_t	sorted_idx;
-	btree_path_idx_t	path_idx;
-};
+#include "btree/iter_types.h"
 
 #define trans_for_each_path_inorder(_trans, _path, _iter)		\
 	for (_iter = (struct trans_for_each_path_inorder_iter) { 0 };	\
@@ -1154,16 +1151,6 @@ static inline int btree_trans_too_many_iters(struct btree_trans *trans)
 	} while (bch2_err_matches(_ret2, BCH_ERR_transaction_restart));	\
 	_ret2;								\
 })
-
-/*
- * Exempt bch2_trans_begin() from the dropped-updates warning for a scope (see
- * begin_may_drop_updates), restoring the previous value on exit, so exemptions
- * nest: an inner one ending doesn't end the outer.
- */
-struct trans_may_drop_updates {
-	struct btree_trans	*trans;
-	bool			old;
-};
 
 #define trans_may_drop_updates_class_init(_trans)				\
 ({										\

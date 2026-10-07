@@ -4,30 +4,7 @@
 
 #include "btree/bkey.h"
 
-struct journal_iter {
-	struct list_head	list;
-	enum btree_id		btree_id;
-	unsigned		level;
-	size_t			idx;
-	struct journal_keys	*keys;
-};
-
-/*
- * Iterate over keys in the btree, with keys from the journal overlaid on top:
- */
-
-struct btree_and_journal_iter {
-	struct btree_trans	*trans;
-	struct btree		*b;
-	struct btree_node_iter	node_iter;
-	struct bkey		unpacked;
-
-	struct journal_iter	journal;
-	struct bpos		pos;
-	bool			at_end;
-	bool			prefetch;
-	bool			fail_if_too_many_whiteouts;
-};
+#include "btree/journal_overlay_defs.h"
 
 static inline u32 journal_entry_radix_idx(struct bch_fs *c, u64 seq)
 {

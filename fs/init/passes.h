@@ -1,8 +1,6 @@
 #ifndef _BCACHEFS_RECOVERY_PASSES_H
 #define _BCACHEFS_RECOVERY_PASSES_H
 
-#include "enum_kind.h"
-
 #include <linux/kthread.h>
 
 extern const char * const bch2_recovery_passes[];
@@ -16,24 +14,7 @@ u64 bch2_fsck_recovery_passes(void);
 
 void bch2_recovery_pass_set_no_ratelimit(struct bch_fs *, enum bch_recovery_pass);
 
-enum __enum_flags bch_run_recovery_pass_flags {
-	RUN_RECOVERY_PASS_ratelimit	= BIT(0),
-	/*
-	 * Schedule in memory only, without taking sb_lock, so it's safe from
-	 * contexts that hold btree locks (e.g. triggers): the schedule touches
-	 * only in-memory recovery state and never writes the superblock. The
-	 * need is re-derivable, so persistence isn't required.
-	 */
-	RUN_RECOVERY_PASS_ephemeral	= BIT(1),
-	/*
-	 * Don't schedule if the pass already completed successfully this
-	 * instance: for callers that schedule cleanup passes on encountering
-	 * damage those passes might not fix. If the pass ran and the damage is
-	 * still here, rescheduling can't help - it just re-arms the pass in the
-	 * superblock on every encounter, forcing fsck on every subsequent mount.
-	 */
-	RUN_RECOVERY_PASS_skip_if_complete = BIT(2),
-};
+#include "init/passes_defs.h"
 
 /*
  * A pass is only ever scheduled because it has work to do, so anything
@@ -77,7 +58,6 @@ static inline int bch2_recovery_cancelled(struct bch_fs *c)
 
 bool bch2_recovery_pass_want_ratelimit(struct bch_fs *, enum bch_recovery_pass, unsigned);
 
-struct sb_write;
 int __bch2_run_explicit_recovery_pass(struct bch_fs *, struct printbuf *,
 				      enum bch_recovery_pass,
 				      enum bch_run_recovery_pass_flags,

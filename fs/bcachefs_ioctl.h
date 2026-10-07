@@ -362,17 +362,6 @@ struct bch_replicas_usage {
 	struct bch_replicas_entry_v1 r;
 } __packed;
 
-static inline unsigned replicas_usage_bytes(struct bch_replicas_usage *u)
-{
-	return offsetof(struct bch_replicas_usage, r) + replicas_entry_bytes(&u->r);
-}
-
-static inline struct bch_replicas_usage *
-replicas_usage_next(struct bch_replicas_usage *u)
-{
-	return (void *) u + replicas_usage_bytes(u);
-}
-
 /* Obsolete */
 /*
  * BCH_IOCTL_FS_USAGE: query filesystem disk space usage
@@ -637,16 +626,6 @@ struct bch_ioctl_subvol_dirent {
 	__u32			pad;
 	char			path[];
 };
-
-/*
- * The path is NUL-terminated, but reclen is 8-byte aligned so there may
- * be extra NUL padding beyond the terminator.
- */
-static inline __u32 bch_ioctl_subvol_dirent_path_len(struct bch_ioctl_subvol_dirent *d)
-{
-	return strnlen(d->path,
-		       d->reclen - offsetof(struct bch_ioctl_subvol_dirent, path));
-}
 
 /*
  * BCH_IOCTL_SUBVOLUME_LIST: list child subvolumes of a given parent,
@@ -928,5 +907,7 @@ struct bch_ioctl_query_btree_keys {
 	__u32			buf_size;
 	__u32			used;
 };
+
+#include "bcachefs_ioctl_inline.h"
 
 #endif /* _BCACHEFS_IOCTL_H */

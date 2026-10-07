@@ -25,15 +25,7 @@
 #include <linux/hash.h>
 #include <linux/types.h>
 
-#define CUCKOO_NR_HASH	3
-
-struct cuckoo_u64 {
-	u64		seeds[CUCKOO_NR_HASH];
-	unsigned	bits;
-	size_t		nr;
-	u64		stash;
-	u64		*d;
-};
+#include "util/cuckoo_types.h"
 
 static inline u64 *cuckoo_u64_slot(u64 *d, unsigned bits, const u64 *seeds,
 				   unsigned i, u64 key)

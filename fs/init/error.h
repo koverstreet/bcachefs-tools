@@ -7,9 +7,7 @@
 #include "btree/bkey_types.h"
 #include "sb/errors.h"
 
-struct bch_dev;
-struct bch_fs;
-struct work_struct;
+#include "init/error_defs.h"
 
 /*
  * XXX: separate out errors that indicate on disk data is inconsistent, and flag
@@ -56,20 +54,6 @@ bool bch2_trans_inconsistent(struct btree_trans *, const char *, ...);
 int __bch2_topology_error(struct bch_fs *, struct printbuf *);
 __printf(2, 3)
 int bch2_fs_topology_error(struct bch_fs *, const char *, ...);
-
-/*
- * Fsck errors: inconsistency errors we detect at mount time, and should ideally
- * be able to repair:
- */
-
-struct fsck_err_state {
-	enum bch_sb_error_id	id;
-	u64			nr;
-	bool			ratelimited;
-	int			ret;
-	int			fix;
-	char			*last_msg;
-};
 
 #define fsck_err_count(_c, _err)	bch2_sb_err_count(_c, BCH_FSCK_ERR_##_err)
 
@@ -236,7 +220,6 @@ void bch2_free_fsck_errs(struct bch_fs *);
 	_ret;								\
 })
 
-enum bch_validate_flags;
 __printf(5, 6)
 int __bch2_bkey_fsck_err(struct bch_fs *,
 			 struct bkey_s_c,

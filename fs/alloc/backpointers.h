@@ -233,7 +233,8 @@ static inline bool bch2_backpointers_match(struct bch_backpointer l, struct bch_
 	return !memcmp(&l, &r, sizeof(l));
 }
 
-struct wb_maybe_flush;
+#include "alloc/backpointers_types.h"
+
 struct bkey_s_c bch2_backpointer_get_key(struct btree_trans *, struct bkey_s_c_backpointer,
 					 struct btree_iter *, unsigned, struct wb_maybe_flush *);
 struct btree *bch2_backpointer_get_node(struct btree_trans *, struct bkey_s_c_backpointer,
@@ -254,17 +255,6 @@ static inline bool bch2_bucket_bitmap_test(struct bucket_bitmap *b, u64 i)
 	return bitmap && test_bit(i, bitmap);
 }
 
-DEFINE_DARRAY_NAMED(darray_bkey_i_backpointer, struct bkey_i_backpointer);
-
-struct progress_indicator;
-struct bp_scan_iter {
-	/* BTREE_ID_backpointers, BTREE_ID_stripe_backpointers */
-	enum btree_id			btree;
-	struct bpos			pos;
-	u64				nr_flushes;
-	struct progress_indicator	*progress;
-	darray_bkey_i_backpointer	bps;
-};
 
 DEFINE_CLASS(backpointer_scan_iter, struct bp_scan_iter,
 	     darray_exit(&_T.bps),

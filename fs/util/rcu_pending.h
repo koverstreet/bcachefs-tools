@@ -4,16 +4,7 @@
 
 #include <linux/rcupdate.h>
 
-struct rcu_pending;
-typedef void (*rcu_pending_process_fn)(struct rcu_pending *, struct rcu_head *);
-
-struct rcu_pending_pcpu;
-
-struct rcu_pending {
-	struct rcu_pending_pcpu __percpu *p;
-	struct srcu_struct		*srcu;
-	rcu_pending_process_fn		process;
-};
+#include "util/rcu_pending_types.h"
 
 void rcu_pending_enqueue(struct rcu_pending *pending, struct rcu_head *obj);
 struct rcu_head *rcu_pending_dequeue(struct rcu_pending *pending);

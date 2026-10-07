@@ -273,13 +273,6 @@ struct bch_sb_field_recovery_passes {
 	struct recovery_pass_entry start[];
 };
 
-static inline unsigned
-recovery_passes_nr_entries(struct bch_sb_field_recovery_passes *r)
-{
-	return r
-		? ((vstruct_end(&r->field) - (void *) &r->start[0]) /
-		   sizeof(struct recovery_pass_entry))
-		: 0;
-}
+#include "init/passes_format_inline.h"
 
 #endif /* _BCACHEFS_RECOVERY_PASSES_FORMAT_H */

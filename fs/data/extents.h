@@ -2,15 +2,12 @@
 #ifndef _BCACHEFS_EXTENTS_H
 #define _BCACHEFS_EXTENTS_H
 
-#include "enum_kind.h"
-
 #include "bcachefs.h"
 #include "alloc/check_data.h"
 #include "btree/bkey.h"
 #include "extents_types.h"
 
-struct bch_fs;
-struct btree_trans;
+#include "data/extents_defs.h"
 
 /* extent entries: */
 
@@ -118,13 +115,6 @@ static inline bool extent_entry_is_crc(const union bch_extent_entry *e)
 	}
 }
 
-union bch_extent_crc {
-	u8				type;
-	struct bch_extent_crc32		crc32;
-	struct bch_extent_crc64		crc64;
-	struct bch_extent_crc128	crc128;
-} __aligned(8);
-
 #define __entry_to_crc(_entry)						\
 	__builtin_choose_expr(						\
 		type_is_exact(_entry, const union bch_extent_entry *),	\
@@ -203,18 +193,6 @@ static inline bool crc_is_encoded(struct bch_extent_crc_unpacked crc)
 }
 
 void bch2_extent_crc_unpacked_to_text(struct printbuf *, struct bch_extent_crc_unpacked *);
-
-/* bkey_ptrs: generically over any key type that has ptrs */
-
-struct bkey_ptrs_c {
-	const union bch_extent_entry	*start;
-	const union bch_extent_entry	*end;
-};
-
-struct bkey_ptrs {
-	union bch_extent_entry	*start;
-	union bch_extent_entry	*end;
-};
 
 static inline struct bkey_ptrs_c bch2_bkey_ptrs_c(struct bkey_s_c k)
 {
@@ -639,61 +617,6 @@ static inline int bch2_extent_ptr_durability(struct btree_trans *trans, struct e
 	return __bch2_extent_ptr_durability(trans, p, false);
 }
 
-/*
- * Everything one walk of a key's pointer list can say about its replication.
- *
- * Gathered together because the walk is the expensive part - and for the exact
- * version, a stripe read per erasure coded pointer - while callers routinely
- * want several of these at once. bch2_sum_sector_overwrites() asks four
- * separate single-value helpers for them, on the same two keys, three of the
- * calls inside a loop.
- *
- * The durability counts are weighted by each device's mi.durability and skip
- * BCH_SB_MEMBER_INVALID placeholders - those are added by
- * bch2_bkey_set_needs_reconcile() on a degraded write, to stand for a replica
- * that isn't there. The raw counts below are unweighted.
- *
- * u8 except the sector count: BCH_MEMBER_DURABILITY is a two bit field and
- * BCH_REPLICAS_MAX is 4, so none of these can come near 255.
- *
- * Not handled here: KEY_TYPE_reservation, which several of the older
- * single-value helpers report as v->nr_replicas. Callers that need that still
- * special-case it themselves.
- */
-struct bkey_durability {
-	u8		online, total;
-	u8		acct, min_durability;
-
-	u8		nr_ptrs;		/* real device pointers */
-	u8		nr_overwritable;	/* uncompressed - an overwrite reclaims these */
-	unsigned	sectors_compressed;
-
-	/*
-	 * Copies this key occupies, for disk space accounting.
-	 *
-	 * Deliberately not weighted by mi.durability, unlike the counts above:
-	 * durability is OPT_RUNTIME, and accounting is persistent, so a
-	 * durability change would retroactively invalidate space already
-	 * accounted for. This has to be a function of what is physically on
-	 * disk.
-	 *
-	 * Differs from nr_ptrs only for a reservation, which occupies the space
-	 * it reserved while having no pointers at all.
-	 */
-	u8		nr_replicas;
-
-	/*
-	 * Copies for the purpose of "does this write increase replication" -
-	 * erasure coding counts, because a stripe genuinely provides it.
-	 *
-	 * Distinct from nr_replicas on purpose: parity is accounted separately
-	 * as BCH_DATA_parity at the stripe, so counting redundancy in a
-	 * per-extent space figure would charge the same parity to every extent
-	 * sharing the stripe. Space and replication are different questions.
-	 */
-	u8		replicas;
-};
-
 int bch2_bkey_durability(struct btree_trans *, struct bkey_s_c, struct bkey_durability *);
 struct bkey_durability bch2_bkey_durability_safe(const struct bch_fs *, struct bkey_s_c);
 struct bkey_durability bch2_btree_ptr_durability(struct bch_fs *, struct bkey_s_c);
@@ -840,15 +763,6 @@ static inline bool bch2_extent_ptr_eq(struct bch_extent_ptr ptr1,
 }
 
 void bch2_ptr_swab(const struct bch_fs *, struct bkey_s);
-
-/* Generic extent code: */
-
-enum __enum_closed bch_extent_overlap {
-	BCH_EXTENT_OVERLAP_ALL		= 0,
-	BCH_EXTENT_OVERLAP_BACK		= 1,
-	BCH_EXTENT_OVERLAP_FRONT	= 2,
-	BCH_EXTENT_OVERLAP_MIDDLE	= 3,
-};
 
 /* Returns how k overlaps with m */
 static inline enum bch_extent_overlap bch2_extent_overlap(const struct bkey *k,

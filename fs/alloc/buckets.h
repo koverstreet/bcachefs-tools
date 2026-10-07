@@ -8,8 +8,6 @@
 #ifndef _BUCKETS_H
 #define _BUCKETS_H
 
-#include "enum_kind.h"
-
 #include "alloc/buckets_types.h"
 #include "alloc/format.h"
 #include "data/extents.h"
@@ -459,10 +457,7 @@ static inline void bch2_disk_reservation_put(struct bch_fs *c,
 	}
 }
 
-enum __enum_flags bch_reservation_flags {
-	BCH_DISK_RESERVATION_NOFAIL	= 1 << 0,
-	BCH_DISK_RESERVATION_PARTIAL	= 1 << 1,
-};
+#include "alloc/buckets_defs.h"
 
 int bch2_disk_reservation_add_slowpath(struct bch_fs *, struct disk_reservation *,
 				       u64, enum bch_reservation_flags);
@@ -588,11 +583,6 @@ static inline int bch2_disk_reservation_add(struct bch_fs *c,
 		disk_res_move_slot(c, res, --nr_replicas);
 	}
 }
-
-struct disk_reservation_destructable {
-	struct bch_fs			*c;
-	struct disk_reservation		r;
-};
 
 DEFINE_CLASS(disk_reservation, struct disk_reservation_destructable,
 	     bch2_disk_reservation_put(_T.c, &_T.r),

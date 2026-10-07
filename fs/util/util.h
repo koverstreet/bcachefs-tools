@@ -29,7 +29,7 @@
 #include "darray.h"
 #include "time_stats.h"
 
-struct closure;
+#include "util/util_types.h"
 
 #ifdef CONFIG_BCACHEFS_DEBUG
 #define EBUG_ON(cond)		BUG_ON(cond)
@@ -251,8 +251,6 @@ void bch2_prt_u64_base2(struct printbuf *, u64);
 
 void bch2_print_string_as_lines(const char *, const char *);
 
-DEFINE_DARRAY_NAMED(bch_stacktrace, unsigned long);
-
 int bch2_save_backtrace(bch_stacktrace *stack, struct task_struct *, unsigned, gfp_t);
 void bch2_prt_backtrace(struct printbuf *, bch_stacktrace *);
 int bch2_prt_task_backtrace(struct printbuf *, struct task_struct *, unsigned, gfp_t);
@@ -278,18 +276,6 @@ void bch2_time_stats_json_to_text(struct printbuf *, struct bch2_time_stats *,
 	(((_ewma << _weight) - _ewma) + (val)) >> _weight;		\
 })
 
-struct bch_ratelimit {
-	/* Next time we want to do some work, in nanoseconds */
-	u64			next;
-
-	/*
-	 * Rate at which we want to do work, in units per nanosecond
-	 * The units here correspond to the units passed to
-	 * bch2_ratelimit_increment()
-	 */
-	unsigned		rate;
-};
-
 static inline void bch2_ratelimit_reset(struct bch_ratelimit *d)
 {
 	d->next = local_clock();
@@ -297,30 +283,6 @@ static inline void bch2_ratelimit_reset(struct bch_ratelimit *d)
 
 u64 bch2_ratelimit_delay(struct bch_ratelimit *);
 void bch2_ratelimit_increment(struct bch_ratelimit *, u64);
-
-struct bch_pd_controller {
-	struct bch_ratelimit	rate;
-	unsigned long		last_update;
-
-	s64			last_actual;
-	s64			smoothed_derivative;
-
-	unsigned		p_term_inverse;
-	unsigned		d_smooth;
-	unsigned		d_term;
-
-	/* for exporting to sysfs (no effect on behavior) */
-	s64			last_derivative;
-	s64			last_proportional;
-	s64			last_change;
-	s64			last_target;
-
-	/*
-	 * If true, the rate will not increase if bch2_ratelimit_delay()
-	 * is not being called often enough.
-	 */
-	bool			backpressure;
-};
 
 void bch2_pd_controller_update(struct bch_pd_controller *, s64, s64, int);
 void bch2_pd_controller_init(struct bch_pd_controller *);
@@ -863,8 +825,6 @@ do {									\
 })
 
 #include <linux/sched/mm.h>
-
-struct memalloc_flags { unsigned flags; };
 
 DEFINE_CLASS(memalloc_flags, struct memalloc_flags,
 	     memalloc_flags_restore(_T.flags),

@@ -299,13 +299,6 @@ enum __enum_closed bch_persistent_counters {
 	BCH_COUNTER_NR
 };
 
-__maybe_unused
-static const enum bch_counters_flags bch2_counter_flags[] = {
-#define x(t, n, flags, ...) [BCH_COUNTER_##t] = flags,
-	BCH_PERSISTENT_COUNTERS()
-#undef x
-};
-
 enum __enum_open bch_persistent_counters_stable {
 #define x(t, n, ...) BCH_COUNTER_STABLE_##t = n,
 	BCH_PERSISTENT_COUNTERS()
@@ -318,13 +311,6 @@ struct bch_sb_field_counters {
 	__le64			d[];
 };
 
-static inline void __maybe_unused check_bch_counter_ids_unique(void) {
-	switch(0){
-#define x(t, n, ...) case (n):
-        BCH_PERSISTENT_COUNTERS();
-#undef x
-		;
-	}
-}
+#include "sb/counters_format_inline.h"
 
 #endif /* _BCACHEFS_SB_COUNTERS_FORMAT_H */

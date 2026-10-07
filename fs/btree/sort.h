@@ -2,19 +2,9 @@
 #ifndef _BCACHEFS_BKEY_SORT_H
 #define _BCACHEFS_BKEY_SORT_H
 
-#include "enum_kind.h"
-
 #include "btree/interior.h"
 
-struct sort_iter {
-	struct btree		*b;
-	unsigned		used;
-	unsigned		size;
-
-	struct sort_iter_set {
-		struct bkey_packed *k, *end;
-	} data[];
-};
+#include "btree/sort_types.h"
 
 static inline void sort_iter_init(struct sort_iter *iter, struct btree *b, unsigned size)
 {
@@ -22,11 +12,6 @@ static inline void sort_iter_init(struct sort_iter *iter, struct btree *b, unsig
 	iter->used = 0;
 	iter->size = size;
 }
-
-struct sort_iter_stack {
-	struct sort_iter	iter;
-	struct sort_iter_set	sets[MAX_BSETS + 1];
-};
 
 static inline void sort_iter_stack_init(struct sort_iter_stack *iter, struct btree *b)
 {
@@ -59,11 +44,6 @@ void bch2_btree_bounce_free(struct bch_fs *, size_t, bool, void *);
 void *bch2_btree_bounce_alloc_noprof(struct bch_fs *, size_t, bool *);
 #define bch2_btree_bounce_alloc(...)						\
 	alloc_hooks(bch2_btree_bounce_alloc_noprof(__VA_ARGS__))
-
-enum __enum_closed compact_mode {
-	COMPACT_LAZY,
-	COMPACT_ALL,
-};
 
 void bch2_set_bset_needs_whiteout(struct bset *, int);
 void bch2_sort_whiteouts(struct bch_fs *, struct btree *);
