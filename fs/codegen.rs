@@ -62,9 +62,14 @@ const ALLOWLIST_VAR: &[&str] = &["BCH_.*", "BTREE_MAX_DEPTH", "KEY_SPEC_.*", "bc
     // errnos, for bch2_err_matches() against a bare errno, or returning one
     // as C does (darray_push()'s -ENOMEM); add as needed:
     "ENOENT", "ENOMEM", "EINVAL", "ERANGE", "ENODATA", "E2BIG", "EACCES", "ECHILD",
+    "EIO", "ENOTEMPTY",
     "BCACHEFS_ROOT_SUBVOL", "BCACHEFS_ROOT_INO",
+    "BLOCKDEV_INODE_MAX", "INODEv3_FIELDS_START_INITIAL",
     "KEY_TYPE_XATTR_INDEX_.*"];
 const ALLOWLIST_TYPE: &[&str] = &["bch_.*", "bkey_i_.*", "bkey_s_c_.*", "bkey_s_.*", "btree_flags", "disk_accounting_type", "fsck_err_opts", "nonce", "sb_names",
+    // the logged_ops btree's reserved inode numbers - inode alloc cursors
+    // live at one:
+    "logged_ops_inums",
     // xattr lookups take it through a void *, so nothing else pulls it in:
     "xattr_search_key",
     // genradix: kernel::bindings doesn't bind it, so we emit it ourselves from a
@@ -74,6 +79,7 @@ const BITFIELD_ENUM: &[&str] = &[
     "bch_fsck_flags",
     "btree_iter_update_trigger_flags",
     "bch_reservation_flags",
+    "bch_run_recovery_pass_flags",
     "bch_trans_commit_flags",
     "bch_validate_flags",
     "bch_write_flags",
@@ -333,6 +339,26 @@ pub fn gen_xmacros(src: &str, out: &str) {
                        + &generate_bitmask_table(&bitmasks)
                        + &generate_bitmask_accessors(&bitmasks, out))
         .expect("write typeinfo_gen.rs");
+
+    let inode_h = std::fs::read_to_string(format!("{src}/fs/inode_format.h"))
+        .expect("reading fs/inode_format.h");
+    let inode_fields_v2 = parse_xmacro(&inode_h, "BCH_INODE_FIELDS_v2");
+    assert!(!inode_fields_v2.is_empty(), "failed to parse BCH_INODE_FIELDS_v2()");
+    let inode_fields_v3 = parse_xmacro(&inode_h, "BCH_INODE_FIELDS_v3");
+    assert!(!inode_fields_v3.is_empty(), "failed to parse BCH_INODE_FIELDS_v3()");
+    let inode_opts = parse_xmacro(&inode_h, "BCH_INODE_OPTS");
+    assert!(!inode_opts.is_empty(), "failed to parse BCH_INODE_OPTS()");
+    let inode_flags = parse_xmacro(&inode_h, "BCH_INODE_FLAGS");
+    assert!(!inode_flags.is_empty(), "failed to parse BCH_INODE_FLAGS()");
+    std::fs::write(format!("{out}/inode_format_gen.rs"),
+                   "// Auto-generated from fs/inode_format.h — do not edit\n\n".to_string() +
+                   &generate_xmacro_callback("inode_fields_v2", "BCH_INODE_FIELDS_v2()",
+                                             &inode_fields_v2) +
+                   &generate_xmacro_callback("inode_fields_v3", "BCH_INODE_FIELDS_v3()",
+                                             &inode_fields_v3) +
+                   &generate_xmacro_callback("inode_opts", "BCH_INODE_OPTS()", &inode_opts) +
+                   &generate_value_table("INODE_FLAGS", &inode_flags))
+        .expect("write inode_format_gen.rs");
 
     let sb_fields = parse_xmacro(&format_h, "BCH_SB_FIELDS");
     assert!(!sb_fields.is_empty(), "failed to parse BCH_SB_FIELDS()");
@@ -613,6 +639,19 @@ fn generate_str_table(name: &str, entries: &[Vec<String>]) -> String {
     out.push_str(&format!("pub const {name}: &[&str] = &[\n"));
     for e in entries { out.push_str(&format!("    \"{}\",\n", e[0])); }
     out.push_str("];\n");
+    out
+}
+
+/// An x-macro of x(name, arg) entries as a macro taking a callback, the way
+/// C uses one: @name!(m) expands to m! { name = arg, ... }, and each user
+/// defines its own m, as C code defines its own x(). Not every user of the
+/// generated file uses every list.
+fn generate_xmacro_callback(name: &str, source: &str, entries: &[Vec<String>]) -> String {
+    let mut out = format!("/// {source}, as m! {{ name = arg, ... }}.\n\
+                           #[allow(unused_macros)]\n\
+                           macro_rules! {name} {{\n    ($m:ident) => {{ $m! {{\n");
+    for e in entries { out.push_str(&format!("        {} = {},\n", e[0], e[1])); }
+    out.push_str("    } };\n}\n\n");
     out
 }
 

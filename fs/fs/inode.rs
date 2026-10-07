@@ -13,6 +13,9 @@ use crate::{btree, btree_id, printbuf_to_formatter};
 use core::ffi::CStr;
 use core::fmt;
 
+// inode_fields_v2!(), inode_fields_v3!(), inode_opts!(), INODE_FLAGS:
+include!(concat!(env!("OUT_DIR"), "/inode_format_gen.rs"));
+
 pub fn find_by_inum(
     fs:   &Fs,
     inum: c::subvol_inum,
