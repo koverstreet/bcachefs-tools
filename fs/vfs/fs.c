@@ -3656,10 +3656,26 @@ int rust_posix_acl_update_mode(struct mnt_idmap *idmap, struct inode *inode,
 	return posix_acl_update_mode(idmap, inode, mode, acl);
 }
 
+/*
+ * __posix_acl_chmod() consumes the ACL it's passed, failing included: each
+ * attempt gets its own reference to @orig, so a retry after dropping locks
+ * has something to start from.
+ */
+static int posix_acl_chmod_from(struct posix_acl **acl, struct posix_acl *orig,
+				gfp_t gfp, umode_t mode)
+{
+	*acl = posix_acl_dup(orig);
+	return __posix_acl_chmod(acl, gfp, mode);
+}
+
 /* __posix_acl_chmod(), unlocking @trans to allocate if it has to: */
 int rust_posix_acl_chmod(struct btree_trans *trans, struct posix_acl **acl, umode_t mode)
 {
-	return allocate_dropping_locks_errcode(trans, __posix_acl_chmod(acl, _gfp, mode));
+	struct posix_acl *orig = *acl;
+	int ret = allocate_dropping_locks_errcode(trans,
+			posix_acl_chmod_from(acl, orig, _gfp, mode));
+	posix_acl_release(orig);
+	return ret;
 }
 
 #endif /* NO_BCACHEFS_FS */
