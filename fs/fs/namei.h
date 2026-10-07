@@ -105,7 +105,4 @@ static inline int bch2_check_dirent_target(struct btree_trans *trans,
 	return __bch2_check_dirent_target(trans, dirent_iter, d, target, in_fsck);
 }
 
-int bch2_maybe_propagate_has_case_insensitive(struct btree_trans *, subvol_inum,
-					      struct bch_inode_unpacked *);
-
 #endif /* _BCACHEFS_NAMEI_H */

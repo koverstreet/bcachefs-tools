@@ -501,36 +501,11 @@ pub fn empty_dir_snapshot(
     })
 }
 
-/// For C's inode deletion: bch2_empty_dir_snapshot().
-///
-/// # Safety
-/// @trans is valid for the call.
-#[no_mangle]
-pub unsafe extern "C" fn bch2_empty_dir_snapshot(
-    trans:    *mut c::btree_trans,
-    dir:      u64,
-    subvol:   u32,
-    snapshot: u32,
-) -> c_int {
-    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-    ret_to_c(empty_dir_snapshot(&trans.attempt_in_progress(), dir, subvol, snapshot))
-}
-
 /// Whether directory @dir is empty, as its subvolume sees it: as
 /// bch2_empty_dir_trans(). ENOTEMPTY_dir_not_empty if it isn't.
 pub fn empty_dir_trans(t: &TransAttempt<'_, '_>, dir: c::subvol_inum) -> Result<(), BchError> {
     let snapshot = subvolume::get_snapshot(t, dir.subvol as u32)?;
     empty_dir_snapshot(t, dir.inum, dir.subvol as u32, snapshot)
-}
-
-/// For C's rmdir, rename and xattrs: bch2_empty_dir_trans().
-///
-/// # Safety
-/// @trans is valid for the call.
-#[no_mangle]
-pub unsafe extern "C" fn bch2_empty_dir_trans(trans: *mut c::btree_trans, dir: c::subvol_inum) -> c_int {
-    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-    ret_to_c(empty_dir_trans(&trans.attempt_in_progress(), dir))
 }
 
 /// The VFS's dir_context, readdir's output.

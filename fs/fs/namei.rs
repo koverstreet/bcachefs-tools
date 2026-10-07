@@ -1351,22 +1351,6 @@ pub fn maybe_propagate_has_case_insensitive(
     propagate_has_case_insensitive(t, parent_inum(inum, inode))
 }
 
-/// For C's inode option setting: bch2_maybe_propagate_has_case_insensitive().
-///
-/// # Safety
-/// The arguments are the C function's, valid for the call; @trans has an
-/// attempt in progress.
-#[no_mangle]
-pub unsafe extern "C" fn bch2_maybe_propagate_has_case_insensitive(
-    trans: *mut c::btree_trans,
-    inum:  c::subvol_inum,
-    inode: *mut c::bch_inode_unpacked,
-) -> c_int {
-    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-    ret_to_c(maybe_propagate_has_case_insensitive(&trans.attempt_in_progress(), inum,
-                                                  unsafe { &mut *inode }))
-}
-
 /// Check BCH_INODE_has_case_insensitive on @inode against the casefolded
 /// directories on its path, as fsck: as
 /// bch2_check_inode_has_case_insensitive(). Sets @do_update if @inode was

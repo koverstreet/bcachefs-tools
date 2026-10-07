@@ -58,8 +58,6 @@ int bch2_dirent_lookup(struct bch_fs *, subvol_inum,
 		       const struct bch_hash_info *,
 		       const struct qstr *, subvol_inum *);
 
-int bch2_empty_dir_snapshot(struct btree_trans *, u64, u32, u32);
-int bch2_empty_dir_trans(struct btree_trans *, subvol_inum);
 int bch2_readdir(struct bch_fs *, subvol_inum, struct bch_hash_info *, struct dir_context *);
 
 /* readdir's VFS end, in C - fs/dirent.c: */
