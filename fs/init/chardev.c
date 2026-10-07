@@ -965,12 +965,13 @@ static long bch2_chardev_ioctl(struct file *filp, unsigned cmd, unsigned long v)
 	void __user *arg = (void __user *) v;
 	struct bch_fs *c = NULL;
 
-	if (minor < U8_MAX)
+	if (minor < U8_MAX) {
 		scoped_guard(mutex, &bch_chardev_lock) {
 			c = idr_find(&bch_chardev_minor, minor);
 			if (c && !bch2_ro_ref_tryget(c))
 				return bch2_err_class(bch_err_throw(c, ioctl_fs_stopping));
 		}
+	}
 
 	if (!c)
 		return bch2_global_ioctl(cmd, arg);
@@ -996,9 +997,10 @@ void bch2_fs_chardev_exit(struct bch_fs *c)
 {
 	if (!IS_ERR_OR_NULL(c->chardev))
 		device_unregister(c->chardev);
-	if (c->minor >= 0)
+	if (c->minor >= 0) {
 		scoped_guard(mutex, &bch_chardev_lock)
 			idr_remove(&bch_chardev_minor, c->minor);
+	}
 }
 
 int bch2_fs_chardev_init(struct bch_fs *c)
