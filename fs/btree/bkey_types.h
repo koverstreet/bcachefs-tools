@@ -318,12 +318,14 @@ enum bch_validate_flags {
 	x(btree_node)			\
 	x(commit)
 
-struct bkey_validate_context {
-	enum {
+enum bkey_validate_from {
 #define x(n)	BKEY_VALIDATE_##n,
 	BKEY_VALIDATE_CONTEXTS()
 #undef x
-	}			from:8;
+};
+
+struct bkey_validate_context {
+	enum bkey_validate_from	from:8;
 	enum bch_validate_flags	flags:8;
 	u8			level;
 	enum btree_id		btree;
