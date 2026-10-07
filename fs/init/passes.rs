@@ -55,6 +55,12 @@ pub fn set_btree_clean(fs: &Fs, btree: c::btree_id) {
     unsafe { c::bch2_set_btree_clean(fs.raw, btree) }
 }
 
+/// Have recovery pass @pass run at the next mount, unratelimited: as
+/// bch2_recovery_pass_set_no_ratelimit().
+pub fn set_no_ratelimit(fs: &Fs, pass: c::bch_recovery_pass) {
+    unsafe { c::bch2_recovery_pass_set_no_ratelimit(fs.raw, pass) }
+}
+
 /// Btree @btree is being changed, so no longer known consistent: as
 /// bch2_clear_btree_clean().
 pub fn clear_btree_clean(fs: &Fs, btree: c::btree_id) {

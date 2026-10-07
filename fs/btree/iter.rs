@@ -1430,6 +1430,20 @@ impl<'t> BtreeIter<'t> {
         Ok(k.expect("a slot always has a key"))
     }
 
+    /// As peek_slot_typed(), for a key to update through this iterator: the
+    /// iterator comes back shared, for as long as the key is used - as the
+    /// for_each loops pass it - so the key can't be moved out from under.
+    pub fn peek_slot_typed_shared<'k>(&'k mut self, _t: &'k TransAttempt<'_, 't>,
+                                      type_: c::bch_bkey_type)
+        -> Result<(&'k Self, BkeySC<'k>), BchError>
+    {
+        let this: &'k Self = self;
+        // 'k: the key is valid while the iterator is borrowed, within the
+        // attempt - shared, it can't be moved or peeked again
+        let k = unsafe { bkey_s_c_to_result::<'k>(c::__bch2_bkey_get_typed(this.raw.get(), type_))? };
+        Ok((this, k.expect("a slot always has a key")))
+    }
+
     pub fn peek_max_flags<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>, end: bpos,
                                       flags: BtreeIterFlags)
         -> Result<Option<BkeySC<'k>>, BchError>

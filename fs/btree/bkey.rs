@@ -658,6 +658,11 @@ impl<'a> BkeyS<'a> {
         c::bch_bkey_type(self.k.type_ as u32)
     }
 
+    /// The key, to read: as bkey_s_to_s_c().
+    pub fn as_sc(&self) -> BkeySC<'_> {
+        BkeySC { k: &*self.k, v: &*self.v, iter: PhantomData }
+    }
+
     /// The value, by the key's type, mutably: as BkeySC::v().
     pub fn v_mut(&mut self) -> BkeyValS<'_> {
         unsafe { BkeyValS::from_raw(self.k, self.v) }
