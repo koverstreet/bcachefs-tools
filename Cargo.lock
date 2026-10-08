@@ -113,6 +113,7 @@ dependencies = [
  "bitflags 2.11.1",
  "cc",
  "linux-raw-sys",
+ "nestify",
  "paste 1.0.15",
  "uuid",
  "zerocopy",
@@ -753,6 +754,15 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "nestify"
+version = "0.3.3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

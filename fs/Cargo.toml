@@ -22,6 +22,7 @@ std = ["dep:zeroize"]
 bcachefs-shim = { path = "../bcachefs-shim" }
 bcachefs-cstruct-macros = { path = "cstruct-macros" }
 bitfield-struct = { path = "vendor/bitfield-struct" }
+nestify = { path = "vendor/nestify" }
 bcachefs-typeinfo-macros = { path = "typeinfo-macros" }
 bitfield = { path = "vendor/bitfield" }
 bitflags = { path = "vendor/bitflags" }

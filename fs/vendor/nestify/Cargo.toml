@@ -1,0 +1,18 @@
+[package]
+name = "nestify"
+version = "0.3.3"
+edition = "2021"
+authors = ["Patrick Unick <dev_storm@winux.com>"]
+license = "MIT"
+keywords = ["macro", "nested", "syntax", "struct", "serde"]
+repository = "https://github.com/snowfoxsh/nestify"
+description = "Nestify offers a macro to simplify and beautify nested struct definitions in Rust, enabling cleaner, more readable code structures with less verbosity. It's especially valuable for handling API responses."
+
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { version = "1.0.69", features = ["span-locations"] }
+syn = { version = "2.0.39", features = ["extra-traits"] }
+quote = "1.0.33"

@@ -1,0 +1,851 @@
+# Nestify
+
+Nestify is a Rust library offering a powerful macro to streamline the definition of nested structs and enums.
+Designed to improve code readability and maintainability
+
+[<img alt="crates.io" src="https://img.shields.io/crates/v/nestify.svg?style=for-the-badge&color=fc8d62&logo=rust" height="20">](https://crates.io/crates/nestify)
+[<img alt="github" src="https://img.shields.io/badge/snowfoxsh/nestify-8da0cb?style=for-the-badge&labelColor=555555&logo=github" height="20">](https://github.com/snowfoxsh/nestify)
+[<img alt="License" src="https://img.shields.io/crates/l/nestify?style=for-the-badge&labelColor=555555&logo" height="20">](LICENSE)
+
+
+## Abstract
+
+Nestify re-imagines Rust struct and enum definitions with its "Type is Definition" approach,
+streamlining the way you handle nested structures.
+Gone are the days of flipping back and forth between type definitions—Nestify
+Unifies your codebase, making your code cleaner and far more readable.
+
+Nestify is crafted for ease of learning, with its syntax tailored to be comfortable for Rust developers. The aim is for anyone, even those unfamiliar with the Nest macro, to quickly grasp its concept upon first glance.
+
+## Features
+
+- Simplify nested struct and enum definitions in Rust.
+- Make your codebase more readable and less verbose.
+- Ideal for modeling complex API responses.
+- Advanced attribute modifiers for recursive propagation, single-item removal, propagation control, and structural partial removal.
+- Works well with Serde.
+- Intuitive syntax
+
+## Installation
+
+Add this to your `Cargo.toml`:
+
+```toml
+[dependencies]
+nestify = "0.3.3"
+```
+
+Then use the macro:
+
+```rust
+use nestify::nest;
+```
+
+> [!NOTE]
+> A nightly toolchain might provide better error diagnostics
+
+## Quick Examples
+
+### Simple Nested Structures
+
+Here's a quick example to show how Nestify simplifies nested struct definitions:
+
+```rust
+// Define a user profile with nested address and preferences structures
+nest! {
+    struct UserProfile {
+        name: String,
+        address: struct Address {
+            street: String,
+            city: String,
+        },
+        preferences: struct Preferences {
+            newsletter: bool,
+        },
+    }
+}
+```
+
+
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+```rust
+struct UserProfile {
+    name: String,
+    address: Address,
+    preferences: Preferences,
+}
+
+struct Address {
+    street: String,
+    city: String,
+}
+
+struct Preferences {
+    newsletter: bool,
+}
+```
+
+</details>
+
+### Simple Nested Enums
+```rust
+// Define a task with a nested status enum
+nest! {
+    struct Task {
+        id: i32,
+        description: String,
+        status: enum Status {
+            Pending,
+            InProgress,
+            Completed,
+        },
+    }
+}
+```
+
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+```rust
+struct Task {
+    id: i32,
+    description: String,
+    status: Status,
+}
+
+enum Status {
+    Pending,
+    InProgress,
+    Completed,
+}
+```
+
+</details>
+
+
+## Supported definitions
+
+Nestify supports [structs](https://doc.rust-lang.org/reference/expressions/struct-expr.html), [enums](https://doc.rust-lang.org/reference/items/enumerations.html) and [unions](https://doc.rust-lang.org/reference/items/unions.html).
+
+```rust
+// field structs (named)
+nest! {
+    struct Named {
+        f: struct Nested {}
+    }
+}
+
+// tuple structs (unnamed)
+nest! {
+    struct Unnamed(struct Nested())
+}
+
+// unit structs
+nest! {
+    struct Unit {
+        unit: struct UnitStruct
+    }
+}
+
+
+// enums
+nest! {
+    enum EnumVariants {
+        Unit,
+        Tuple(i32, struct TupleNested),
+        Struct {
+            f1: i32,
+
+        }
+        DiscriminantVariant = 1,
+    }
+}
+// note: any variant can have a discriminant
+// just as in normal rust
+
+// unions
+nest! {
+    #[repr(C)]
+    #[derive(Clone, Copy)]*
+    union Word {
+        raw: u64,
+        halves: struct Halves {
+            lo: u32,
+            hi: u32,
+        },
+    }
+}
+```
+
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+
+```rust
+// field structs (named)
+struct Named {
+    f: Nested,
+}
+struct Nested {}
+
+// tuple structs (unnamed)
+struct Unnamed(Nested,);
+struct Nested();
+
+// unit structs
+struct Unit {
+    unit: UnitStruct,
+}
+struct UnitStruct;
+
+
+// enums
+enum EnumVariants {
+    Unit,
+    Tuple(i32, TupleNested),
+    Struct { 
+        f1: i32 
+    },
+    DiscriminantVariant = 1,
+}
+struct TupleNested;
+
+// unions
+#[repr(C)]
+#[derive(Clone, Copy)]
+union Word {
+    raw: u64,
+    halves: Halves,
+}
+#[derive(Clone, Copy)]
+struct Halves {
+    lo: u32,
+    hi: u32,
+}
+```
+
+</details>
+
+## Generics
+Nestify fully supports Rust's generic parameters. This compatibility ensures that you can incorporate both lifetime and type parameters within your nested struct definitions, just as you would in standard Rust code.
+
+```rust
+nest! {
+    struct Example<'a, T> {
+        s: &'a str,
+        t: T
+    }
+}
+```
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+
+```rust
+struct Example<'a, T> { 
+    s: &'a str, 
+    t: T, 
+}
+```
+</details>
+
+### Nested Generics
+
+When defining nested generics, you need to add generics to types. Enter "FishHook" syntax.
+To define generics on the field use `||<...>`. This will let you specify the nested generic types.
+It also works with lifetimes if needed. 
+
+```rust
+nest! {
+    struct Parent<'a> {
+        child : struct Child<'c, C> {
+            s: &'c str,
+            f: C
+        } ||<'a, i32>
+    }
+}
+```
+
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+```rust
+struct Parent<'a> {
+    child: Child<'a, i32>,
+    //           ^^^^^^^^ FishHook expands to this part
+}
+
+struct Child<'c, C> {
+    s: &'c str,
+    f: C,
+}
+```
+
+</details>
+
+## Attributes
+
+You can apply attributes just like you would with a normal struct.
+
+```rust
+nest! {
+    #[derive(Clone)]
+    struct CloneMe {}
+}
+
+let x = CloneMe {};
+let cl = x.clone();
+```
+
+
+### Recursive Attributes **`#[meta]*`**
+
+Using `*` syntax you can inherit attributes to child structures easily. The attribute
+will propagate to each nested structure or enum. 
+
+```rust
+nest! {
+    #[apply_all]*
+    struct One {
+        two: struct Two {
+            three: struct Three {
+                payload: ()
+            }
+        }
+    }
+}
+```
+
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+
+```rust
+#[apply_all]
+struct One {
+    two: Two,
+}
+
+#[apply_all]
+struct Two {
+    three: Three,
+}
+
+#[apply_all]
+struct Three {
+    payload: (),
+}
+```
+
+</details>
+
+### Removal Syntax
+
+#### Disable Propagation **`#[meta]/`**
+
+You can end the recursion of an attribute with a `/` attribute modifier.
+It will remove a recursive attribute from the current structure and all nested structures
+
+```rust
+nest! {
+    #[nest]*
+    struct One {
+        two: struct Two {
+            three: #[nest]/ 
+            struct Three {
+                four: struct Four { }
+            }
+        }
+    }
+}
+```
+
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+
+```rust
+#[nest]
+struct One {
+    two: Two,
+}
+
+#[nest]
+struct Two {
+    three: Three,
+}
+
+struct Three {
+    four: Four,
+}
+
+struct Four {}
+```
+
+</details>
+
+#### Disable Single **`#[meta]-`**
+
+Using the `-` modifier will remove a recursive attribute from a single structure
+To use the previous example using `-` instead of `/`:
+
+```rust
+nest! {
+    #[nest]*
+    struct One {
+        two: struct Two {
+            three: #[nest]- 
+            struct Three {
+                four: struct Four { }
+            }
+        }
+    }
+}
+```
+
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+
+```rust
+#[nest]
+struct One {
+    two: Two,
+}
+
+#[nest]
+struct Two {
+    three: Three,
+}
+
+struct Three {
+    four: Four,
+}
+
+#[nest]
+struct Four {}
+```
+
+</details>
+
+#### Partial Attribute Removal
+
+For list-style attributes, `-` and `/` can remove part of an inherited attribute without removing the entire attribute.
+
+```rust
+nest! {
+    #[derive(Debug, Clone, PartialEq)]*
+    struct One {
+        two: #[derive(Debug)]-
+        struct Two {
+            value: i32,
+        }
+    }
+}
+```
+
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+struct One {
+    two: Two,
+}
+
+#[derive(Clone, PartialEq)]
+struct Two {
+    value: i32,
+}
+```
+
+</details>
+
+This is especially useful when most nested types should share a derive, but one type needs to opt out of a specific trait.
+
+```rust
+nest! {
+    #[derive(Debug, Clone, Serialize, Deserialize)]*
+    pub struct One {
+        two: Option<
+            #[derive(Deserialize)]-
+            pub struct Two {
+                two: Option<String>,
+            }
+        >,
+    }
+}
+```
+
+In this example, `Two` keeps `Debug`, `Clone`, and `Serialize`, but removes `Deserialize` for that item only.
+
+#### Partial Removal with `cfg_attr`
+
+Partial removal also works structurally with nested list-style attributes such as `cfg_attr`.
+
+```rust
+nest! {
+    #[cfg_attr(all(), derive(Debug, Eq, PartialEq))]*
+    #[cfg_attr(all(), derive(Clone))]*
+    struct Foo {
+        field: #[cfg_attr(derive(Debug, Eq, Clone))]-
+        struct Bar {
+            value: u32,
+        }
+    }
+}
+```
+
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+```rust
+#[cfg_attr(all(), derive(Debug, Eq, PartialEq))]
+#[cfg_attr(all(), derive(Clone))]
+struct Foo {
+    field: Bar,
+}
+
+#[cfg_attr(all(), derive(PartialEq))]
+struct Bar {
+    value: u32,
+}
+```
+
+</details>
+
+> [!NOTE]
+> Partial removal is structural. Nestify removes matching comma-separated token groups from list-style attributes. It does not validate whether the resulting attribute is semantically meaningful for every possible custom or procedural macro attribute.
+
+### Field Attributes **`#>[meta]`**
+
+If you structure has many defined attributes, it can become awkward to define attributes before the nested structure. To combat this, you can define attributes that apply to nested objects before fields and enum variants. This can be accomplished by using `#>[meta]` syntax. `#>` will apply the attribute to the next struct.
+
+```rust
+nest! {
+    struct MyStruct {
+        #>[derive(Debug)]
+        f: struct DebugableStruct { } 
+        // equivlent to: 
+        // f: #[derive(Debug)]
+        // struct DebugableStruct { }
+    }
+}
+```
+
+
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+```rust
+struct MyStruct {
+    f: DebugableStruct,
+}
+
+#[derive(Debug)]
+//       ^^^^^ applied to structure and not field `f`
+struct DebugableStruct {}
+```
+
+</details>
+
+#### Enum Variant Attributes
+Field attributes can also be applied to an enum variant. If there are multiple items defined in a single variant then the attribute will be applied to each.
+
+```rust
+nest! {
+    enum MyEnum {
+        #>[derive(Debug)]
+        Variant {
+            // #[derive(Debug)
+            one: struct One,
+            // #[derive(Debug)
+            two: struct Two
+        }
+    }
+}
+```
+
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+```rust
+enum MyEnum {
+    Variant {
+        one: One,
+        two: Two,
+    }
+}
+
+#[derive(Debug)]
+struct One;
+
+#[derive(Debug)]
+struct Two;
+```
+
+</details>
+
+## Semicolons
+
+Rust mandates semicolons to mark the end of tuple struct and unit struct declarations. Nestify, however, introduces flexibility by making this semicolon optional.
+
+### Rust Standard
+
+- Tuple struct: `struct MyTuple(i32, String);`
+- Unit struct: `struct MyUnit;`
+
+### Nestify Flexibility
+
+With Nestify, you can omit the semicolon without any impact:
+
+```rust
+// Unit struct without a semicolon
+nest! {
+    struct MyUnit
+}
+
+// Tuple struct without a semicolon
+nest! {
+    struct MyTuple(i32, String)
+}
+```
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+```rust
+struct MyUnit;
+//           ^ automaticly added
+
+struct MyTuple(i32, String);
+//                         ^ automaticly added
+```
+
+</details>
+<br>
+
+This adjustment simplifies syntax, particularly in the context of defining nested structures, aligning with Nestify's goal of enhancing code readability and maintenance. Whether you include the semicolon or not, Nestify processes the definitions correctly, thanks to its domain-specific optimizations.
+
+## Visibility 
+
+Visibility can be altered in both parent and nested structures. It exhibits the following behavior
+
+### Named Field Visibility
+When using named fields, you must specify the desired visibility before *both* the field and the definition.
+
+```rust
+nest! {
+    pub struct One {
+        pub two: pub struct Two
+        //|      ^^^ visibility applied to definition (b)
+        //|> visibility applied to field (a)
+    }
+}
+```
+
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+```rust
+pub struct One { 
+    pub two: Two,
+    //^ (a)
+}
+
+pub struct Two;
+//^ (b)
+```
+
+</details>
+
+### Unnamed Field Visibility
+Unnamed fields apply visibility to both the field and the item.
+
+```rust
+nest! {
+    pub struct One(pub struct Two)
+    //             ^^^ visibility applied to both field and struct
+}
+```
+
+
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+```rust
+pub struct One(pub Two);
+//             ^^^ applied here
+
+pub struct Two;
+//^ and here
+```
+
+</details>
+
+### Enum Variants
+Enum variants apply visibility just to the structure.
+This is because variants inherit the base visibility of the enum.
+See [E0449](https://doc.rust-lang.org/error_codes/E0449.html) for more details.
+
+```rust
+nest! {
+    pub enum One {
+        Two(pub struct Two)
+        //  ^^^ will apply to the structure
+    }
+}
+```
+
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+```rust
+pub enum One { 
+    Two(Two) 
+}
+
+pub struct Two;
+//^ applied to structure
+```
+
+</details>
+
+## Generic containers
+
+Nestify also supports defining nested structures inside generic containers like `Vec<T>`, `Option<T>`, or `Result<T, E>`.
+
+```rust
+struct One(Vec<struct Two { field: i32 }>);
+```
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+```rust
+struct One(Vec<Two>);
+
+struct Two {
+    field: i32,
+}
+```
+
+</details>
+
+Here, `struct Two` is being defined directly within the generic parameter of `Vec<T>`.
+
+### Another Example
+
+To further illustrate, consider a scenario where you want to include an optional configuration struct within another struct:
+
+```rust
+struct AppConfig(Option<struct DatabaseConfig { url: String }>);
+```
+
+<details class="expand">
+    <summary>
+    Expand
+    </summary>
+    <br>
+
+```rust
+struct AppConfig(Option<DatabaseConfig>);
+
+struct DatabaseConfig {
+    url: String,
+}
+```
+
+</details>
+
+In this example, `struct DatabaseConfig` is defined directly within the `Option<T>` generic type in the declaration of `AppConfig`.
+
+### Limitations
+
+Other kinds of indirections are not supported, such as after a `&` or `&mut`, inside a fixed size array `[_, N]` or dynamic size array `[_]`, tuples and probably many others. If you need such indirections feel free to contribute to add support for them.
+
+---
+
+## Contributing
+I love contributors! Plus,
+I'm a bad writer, so I would love community support to improve this guide as well.
+
+> [!IMPORTANT]
+> While not required, 
+> It is *strongly recommended* that you either [submit an issue](https://github.com/snowfoxsh/nestify/issues) 
+> or [contact me](#contact-me) before implementing a feature for the best chance of being accepted
+
+To make code changes:
+
+1. Fork the repository.
+2. Create a new branch for your features or bug fixes.
+3. Write tests for your changes.
+4. Make sure all tests pass.
+5. Submit a pull request.
+
+Standard stuff!
+
+## License
+
+This project is licensed under the MIT License. If you need it under a different license *Contact Me*.
+MIT license support will always be maintained. Don't fear!
+
+## Contact me
+
+Check GitHub for information @snowfoxsh
+
+## Credits
+These wonderful people made major contributions. Check them out
+
+- @nanocryk: Implemented nested definitions in generics
