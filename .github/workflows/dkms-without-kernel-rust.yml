@@ -1,0 +1,90 @@
+name: DKMS build on a kernel without Rust
+
+on:
+  pull_request:
+  push:
+
+env:
+  PINNED_KERNELS: 6.18.55 7.2.9
+  PINNED_RUST: 1.99.0
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.matrix.outputs.include }}
+    steps:
+      - id: matrix
+        name: Pinned versions, and the latest stable and longterm kernels
+        run: |
+          set -euo pipefail
+          # Without kernel.org there are no latest jobs; the pinned ones still run.
+          latest=$(curl -sSf https://www.kernel.org/releases.json |
+            jq -r '[.releases[] | select(.moniker == "stable")][0].version,
+                   [.releases[] | select(.moniker == "longterm")][0].version') || latest=""
+          entry() {
+            jq -nc --arg t "$1" --arg k "$2" --arg r "$3" --arg c "$4" \
+              '{track: $t, kernel: $k, rust: $r, "rustc-at-config": $c}'
+          }
+          {
+            for c in none present; do
+              for k in $PINNED_KERNELS; do entry pinned "$k" "$PINNED_RUST" $c; done
+              for k in $latest; do entry latest "$k" stable $c; done
+            done
+          } | jq -sc . | sed 's/^/include=/' >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: matrix
+    name: ${{ matrix.track }} linux ${{ matrix.kernel }}, rustc ${{ matrix.rust }}, rustc at config ${{ matrix.rustc-at-config }}
+    runs-on: ubuntu-latest
+    # The latest track warns of breakage ahead of the pinned versions; it
+    # shouldn't fail the run.
+    continue-on-error: ${{ matrix.track == 'latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.matrix.outputs.include) }}
+    env:
+      TARBALL: linux-${{ matrix.kernel }}.tar.xz
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: echo "WORK=$RUNNER_TEMP/dkms" >> "$GITHUB_ENV"
+      - name: Install kernel build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libelf-dev libssl-dev clang libclang-dev
+      # Restored and saved explicitly: actions/cache saves only when the job
+      # succeeds, and a failing build should still keep its tarball.
+      - uses: actions/cache/restore@v4
+        id: tarball
+        with:
+          path: ${{ env.WORK }}/${{ env.TARBALL }}
+          key: ${{ env.TARBALL }}
+      - name: Download the kernel
+        if: steps.tarball.outputs.cache-hit != 'true'
+        run: |
+          k=${{ matrix.kernel }}
+          mkdir -p "$WORK"
+          curl -sSfLo "$WORK/$TARBALL" "https://cdn.kernel.org/pub/linux/kernel/v${k%%.*}.x/$TARBALL"
+      - uses: actions/cache/save@v4
+        if: steps.tarball.outputs.cache-hit != 'true'
+        with:
+          path: ${{ env.WORK }}/${{ env.TARBALL }}
+          key: ${{ env.TARBALL }}
+      - name: Install Rust ${{ matrix.rust }}
+        run: |
+          rustup toolchain install ${{ matrix.rust }} --profile minimal -c rust-src -c rustfmt
+          rustup default ${{ matrix.rust }}
+      - id: month
+        run: echo "month=$(date +%Y-%m)" >> "$GITHUB_OUTPUT"
+      # A month-old bindgen is fine; installing it each run takes minutes.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/bindgen
+          key: bindgen-cli-${{ runner.os }}-${{ steps.month.outputs.month }}
+      - name: Install bindgen
+        run: command -v bindgen || cargo install --locked bindgen-cli
+      - name: Build the DKMS module
+        run: dkms/build-on-kernel-without-rust.sh ${{ matrix.kernel }} ${{ matrix.rustc-at-config }} "$WORK"
