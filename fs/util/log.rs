@@ -173,14 +173,23 @@ macro_rules! bch_verbose {
     };
 }
 
-/// As C's WARN_ON(): the kernel's warning in-kernel, and what the userspace
+/// As C's WARN_ON(): the kernel's warning in-kernel - through C, not the
+/// kernel crate's warn_on!(), see bch2_rust_warn() - and what the userspace
 /// shim's WARN_ON() prints otherwise. Evaluates to @cond.
 #[macro_export]
 macro_rules! warn_on {
     ($cond:expr) => {{
         let cond: bool = $cond;
         #[cfg(kernel)]
-        kernel::warn_on!(cond);
+        if cond {
+            // SAFETY: a NUL-terminated string literal.
+            unsafe {
+                $crate::c::bch2_rust_warn(
+                    concat!(file!(), "\0").as_ptr().cast(),
+                    line!(),
+                )
+            };
+        }
         #[cfg(not(kernel))]
         if cond {
             std::eprintln!("WARNING at {}:{}", file!(), line!());

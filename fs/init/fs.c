@@ -262,6 +262,17 @@ bool bch2_ratelimit_suppress(struct bch_fs *c, struct ratelimit_state *rs, const
 	return c->opts.ratelimit_errors && !___ratelimit(rs, func);
 }
 
+/*
+ * For Rust's warn_on!() in the kernel build: the kernel's own warn_on!() pulls
+ * the arch's WARN asm from a file generated in the kernel's build tree
+ * (rust/kernel/generated_arch_warn_asm.rs), which distro headers packages
+ * don't ship, so a DKMS build against them fails:
+ */
+void bch2_rust_warn(const char *file, unsigned line)
+{
+	WARN(1, "WARNING at %s:%u\n", file, line);
+}
+
 static void bch2_fs_release(struct kobject *);
 static void bch2_fs_counters_release(struct kobject *k)
 {
