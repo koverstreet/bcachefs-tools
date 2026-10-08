@@ -85,7 +85,7 @@ fi
 # worth salvaging.
 if [ "$SUITE" = "release" ]; then
     SRC_VERSION=$(find "$SRC_DIR" -maxdepth 1 -name '*.dsc' -print -quit)
-    SRC_VERSION=$(sed -n 's/^Version: //p' "$SRC_VERSION" 2>/dev/null)
+    SRC_VERSION=$(sed -n 's/^Version: //p' "$SRC_VERSION" 2>/dev/null || true)
     if [ -z "$SRC_VERSION" ]; then
         echo "ERROR: could not read a version from any .dsc in $SRC_DIR" >&2
         echo "  refusing to publish to the release suite without checking it" >&2
