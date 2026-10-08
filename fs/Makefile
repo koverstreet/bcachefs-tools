@@ -320,6 +320,14 @@ endif
 ifeq ($(bcachefs-vendor-rust),y)
 bch-rust-L := -L$(obj)/vrust
 
+# A kernel configured without a working rustc has CONFIG_RUSTC_VERSION=0, so
+# its target spec, rustc_cfg and rustc-min-version flag choices all describe
+# the oldest rustc, which current rustc rejects. Redo them for the rustc we
+# build with, at init/Kconfig's and the kernel Makefiles' thresholds (as of
+# 7.2).
+bch-rustc-version := $(shell $(srctree)/scripts/rustc-version.sh $(RUSTC))
+bch-rustc-min = $(call test-ge,$(bch-rustc-version),$(1))
+
 # A Rust-off kernel never generates scripts/target.json (it's
 # always-$(CONFIG_RUST)), but its KBUILD_RUSTFLAGS still point --target at
 # it. Generate our own copy under $(obj)/vrust with the kernel's own
@@ -335,15 +343,32 @@ $(shell	mkdir -p '$(abspath $(obj))/vrust' &&				\
 	  $(HOSTRUSTC) --edition=2021 -Copt-level=0			\
 	    '$(objtree)/scripts/generate_rust_target.rs'		\
 	    -o '$(abspath $(obj))/vrust/generate_rust_target'; } &&	\
-	'$(abspath $(obj))/vrust/generate_rust_target'			\
-	    < '$(objtree)/include/config/auto.conf' > '$(bch-target-json)')
+	{ grep -v '^CONFIG_RUSTC_VERSION=' '$(objtree)/include/config/auto.conf'; \
+	  echo 'CONFIG_RUSTC_VERSION=$(bch-rustc-version)'; } |		\
+	'$(abspath $(obj))/vrust/generate_rust_target' > '$(bch-target-json)')
 ifneq ($(wildcard $(bch-target-json)),)
 KBUILD_RUSTFLAGS := $(patsubst --target=$(objtree)/scripts/target.json,--target=$(bch-target-json),$(KBUILD_RUSTFLAGS))
 else
 $(warning bcachefs: failed to generate $(bch-target-json); leaving --target unchanged)
 endif
+
+bch-rustc-has := $(if $(call bch-rustc-min,108800),SPAN_FILE UNNECESSARY_TRANSMUTES) \
+	$(if $(call bch-rustc-min,108900),FILE_WITH_NUL) \
+	$(if $(call bch-rustc-min,109100),FILE_AS_C_STR)
+bch-rustc-cfg := $(abspath $(obj))/vrust/rustc_cfg
+$(shell	{ grep -v -e '^--cfg=CONFIG_RUSTC_VERSION=' -e '^--cfg=CONFIG_RUSTC_HAS_' \
+	    '$(objtree)/include/generated/rustc_cfg';			\
+	  echo '--cfg=CONFIG_RUSTC_VERSION="$(bch-rustc-version)"';	\
+	  $(foreach f,$(bch-rustc-has),echo '--cfg=CONFIG_RUSTC_HAS_$(f)';) \
+	} > '$(bch-rustc-cfg)')
+
+ifeq ($(call bch-rustc-min,109800),y)
+KBUILD_RUSTFLAGS := $(filter-out -Zllvm_module_flag=frame-pointer:u32:2:max,$(KBUILD_RUSTFLAGS))
+RUSTFLAGS_AUTOFDO_CLANG := $(patsubst -Zdebug-info-for-profiling,-Zdebuginfo-for-profiling,$(RUSTFLAGS_AUTOFDO_CLANG))
+endif
 else
 bch-rust-L := -L$(objtree)/rust
+bch-rustc-cfg := $(objtree)/include/generated/rustc_cfg
 endif
 
 # bindgen must see the headers exactly as the C build does, or struct layouts
@@ -537,7 +562,7 @@ quiet_cmd_bch_procmacro = RUSTC P  $@
 	-Clink-args='$(call escsq,$(KBUILD_PROCMACROLDFLAGS))' \
 	--emit=dep-info=$(depfile) --emit=link=$@ --extern proc_macro \
 	--crate-type proc-macro --crate-name $(patsubst lib%.so,%,$(notdir $@)) \
-	@$(objtree)/include/generated/rustc_cfg $<
+	@$(bch-rustc-cfg) $<
 
 # paste is vendored, so it gets the same treatment as the leaf rlibs above.
 # typeinfo-macros is ours and stays subject to the kernel's lints.
