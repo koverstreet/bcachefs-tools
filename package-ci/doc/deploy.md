@@ -92,6 +92,13 @@ the `# Managed by nix` marker line we stamp into what we generate.
 This is the whole point. A deploy that installs a binary and leaves the old
 process running is exactly what happened on 2026-08-09.
 
+It restarts only when there's something new to restart into, though: when the
+unit changed, when the daemon isn't running, or when the binary it's running
+differs from the closure's (by content - a scripts-only change still moves the
+binary to a new store path). A restart kills the builds in flight, and when
+farm-nixos deploys this node it deploys it on every push; the scripts are
+exec'd fresh for each build, so a deploy that changes only them needs none.
+
 ## Deploying
 
 ```sh

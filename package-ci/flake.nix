@@ -194,7 +194,9 @@
           # The unit is a bootstrap artifact: it points at the profile symlink,
           # so it only changes when we change it. Install on difference rather
           # than unconditionally, and say so.
+          unit_changed=0
           if ! cmp -s "$unit_src" "$unit_dst" 2>/dev/null; then
+            unit_changed=1
             keep_original "$unit_dst"
             echo "package-ci: installing unit from this closure"
             run install -Dm0644 "$unit_src" "$unit_dst"
@@ -237,10 +239,34 @@
           # The whole point: activation includes the restart. A deploy that
           # installs a binary and leaves the old process running is the failure
           # this closure exists to prevent.
-          run systemctl restart bcachefs-package-ci
-          if [ "$dry" != 1 ]; then
-            systemctl is-active --quiet bcachefs-package-ci
-            echo "package-ci: restarted, running $(readlink -f ${profile})"
+          #
+          # But only when there's something new to restart into. A restart
+          # kills the builds in flight, and farm-nixos deploys every node on
+          # every push; the scripts are exec'd fresh for each build, so a
+          # deploy that changes only them needs none. Restart when the unit
+          # changed, when the daemon isn't running, or when the binary it's
+          # running isn't this closure's - compared by content, since a
+          # scripts-only change still moves the binary to a new store path.
+          pid=$(systemctl show -p MainPID --value bcachefs-package-ci 2>/dev/null || echo 0)
+          if [ "$unit_changed" = 1 ]; then
+            why="the unit changed"
+          elif [ -z "$pid" ] || [ "$pid" = 0 ]; then
+            why="it isn't running"
+          elif ! cmp -s "/proc/$pid/exe" "${profile}/bin/bcachefs-package-ci"; then
+            why="the binary changed"
+          else
+            why=""
+          fi
+
+          if [ -z "$why" ]; then
+            echo "package-ci: pid $pid is already running this binary - not restarting"
+          else
+            echo "package-ci: restarting: $why"
+            run systemctl restart bcachefs-package-ci
+            if [ "$dry" != 1 ]; then
+              systemctl is-active --quiet bcachefs-package-ci
+              echo "package-ci: restarted, running $(readlink -f ${profile})"
+            fi
           fi
         '';
       in {
