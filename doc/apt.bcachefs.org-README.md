@@ -6,8 +6,7 @@ sudo chmod 0644 /etc/apt/keyrings/apt.bcachefs.org.asc
 # Fingerprint: EA483B991020C72A8A5035ADA0620B5E0E01C1DD
 sudo tee /etc/apt/sources.list.d/apt.bcachefs.org.sources > /dev/null <<EOF
 Types: deb deb-src
-URIs: https://apt.bcachefs.org/unstable/
-# Or replace unstable with your distro's release name
+URIs: https://apt.bcachefs.org/$(. /etc/os-release && echo ${UBUNTU_CODENAME:-$VERSION_CODENAME})/
 Suites: bcachefs-tools-release
 Components: main
 Architectures: $(dpkg --print-architecture)
@@ -16,6 +15,16 @@ EOF
 sudo apt update
 sudo apt install bcachefs-tools
 ```
+
+> **_NOTE:_**
+Packages are built per distribution: the URI must name your release's
+codename, which the snippet above fills in from `/etc/os-release` - for a
+derivative such as Mint, the Ubuntu release it's based on. The releases
+there are repositories for are the directories at https://apt.bcachefs.org/.
+`unstable` is built against Debian sid, and its dependencies often aren't
+installable on a stable release - if you set this repository up with
+`unstable` in the URI and you're not on sid, replace it with your codename
+in `/etc/apt/sources.list.d/apt.bcachefs.org.sources`.
 
 > **_NOTE:_**
 This will give you packages for the latest release of `bcachefs-tools`.
