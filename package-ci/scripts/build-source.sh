@@ -54,11 +54,14 @@ if [ -n "$TAG" ]; then
     # Release: the tag verbatim, minus the leading 'v'.
     NEW_VERSION="${TAG#v}"
 else
-    # Snapshot: base version from git describe or .version + snapshot suffix
+    # Snapshot: the last tag, plus +git<date>.<commit>. A snapshot is built
+    # after that release, and '+' sorts above it and below the next one; '~'
+    # sorted below it, so nobody who had the release installed was offered a
+    # snapshot.
     RAW_VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || cat .version 2>/dev/null | sed 's/^v//' || echo "0.0.0")
     SHORT_COMMIT=$(echo "$COMMIT" | head -c 12)
     SNAPSHOT_DATE=$(date -u +%Y%m%d%H%M%S)
-    NEW_VERSION="${RAW_VERSION}~${SNAPSHOT_DATE}.gbp${SHORT_COMMIT}"
+    NEW_VERSION="${RAW_VERSION}+git${SNAPSHOT_DATE}.${SHORT_COMMIT}"
 fi
 
 # Preserve epoch from existing debian/changelog if present
