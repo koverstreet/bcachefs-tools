@@ -216,9 +216,15 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String], 
     // bindgen bakes the wrapper's path into extern.c's `#include`; strip it to
     // the bare name so the C compile finds it right next to extern.c (same dir)
     // — no -I, no build-location-specific absolute path.
+    //
+    // And bindgen's wrapper serializer (codegen/serialize.rs) writes "const "
+    // for a const ResolvedTypeRef and again for the const struct it resolves
+    // to: "const const struct bkey_ops *" in the kernel build, which gcc warns
+    // about (-Wduplicate-decl-specifier).
     let extern_c = format!("{out}/extern.c");
     let fixed = std::fs::read_to_string(&extern_c).expect("read extern.c")
-        .replace(&format!("\"{wrapper}\""), "\"codegen-wrapper.h\"");
+        .replace(&format!("\"{wrapper}\""), "\"codegen-wrapper.h\"")
+        .replace("const const ", "const ");
     std::fs::write(&extern_c, fixed).expect("write extern.c");
 }
 
