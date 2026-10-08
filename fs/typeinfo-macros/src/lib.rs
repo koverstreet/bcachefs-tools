@@ -35,6 +35,8 @@ fn derives_type_info(name: &str) -> bool {
     name.starts_with("bch_") || matches!(name, "bpos" | "bkey" | "bversion")
 }
 
+/// `#[derive(TypeInfo)]`: implements `crate::typeinfo::TypeInfo` for a
+/// bindgen-generated struct, union or enum - see the crate docs.
 #[proc_macro_derive(TypeInfo)]
 pub fn derive_type_info(input: TokenStream) -> TokenStream {
     let toks: Vec<TokenTree> = input.into_iter().collect();
