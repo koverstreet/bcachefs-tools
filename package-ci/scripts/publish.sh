@@ -208,9 +208,10 @@ cat >> "$PUBLISH_ROOT/.footer/README.html" << 'FOOTER'
 
 sudo tee /etc/apt/sources.list.d/apt.bcachefs.org.sources > /dev/null &lt;&lt;SOURCES
 Types: deb deb-src
-URIs: https://apt.bcachefs.org/$(. /etc/os-release && echo ${VERSION_CODENAME})/
+URIs: https://apt.bcachefs.org/$(. /etc/os-release && echo ${UBUNTU_CODENAME:-$VERSION_CODENAME})/
 Suites: bcachefs-tools-release
 Components: main
+Architectures: $(dpkg --print-architecture)
 Signed-By: /etc/apt/keyrings/apt.bcachefs.org.asc
 SOURCES
 
@@ -219,7 +220,8 @@ sudo apt install bcachefs-tools
 </code></pre>
 <p><strong>Important:</strong> packages are built per distribution — the URI must
 name <em>your</em> release codename (the snippet above fills it in from
-<code>/etc/os-release</code>). Repositories exist for the directories listed
+<code>/etc/os-release</code> — for a derivative such as Mint, the Ubuntu release
+it's based on). Repositories exist for the directories listed
 above (e.g. <code>trixie</code>, <code>forky</code>, <code>plucky</code>,
 <code>questing</code>, <code>resolute</code>); <code>unstable</code> is built
 against Debian sid and its dependencies will often not be installable on
