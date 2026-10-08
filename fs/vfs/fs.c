@@ -779,8 +779,13 @@ __bch2_create(struct mnt_idmap *idmap,
 retry:
 	bch2_trans_begin(trans);
 
-	bool quota = !test_bit(EI_INODE_SNAPSHOT, &dir->ei_flags) &&
-		!(flags & BCH_CREATE_SNAPSHOT);
+	/*
+	 * Quotas count only master subvolume inodes; a new subvolume's root is
+	 * in a new snapshot tree, and is its master unless it's a snapshot:
+	 */
+	bool quota = flags & BCH_CREATE_SUBVOL
+		? !(flags & BCH_CREATE_SNAPSHOT)
+		: !test_bit(EI_INODE_SNAPSHOT, &dir->ei_flags);
 
 	ret   = bch2_create_trans(trans,
 				  inode_inum(dir), &dir_u, &inode_u, &subvol,
