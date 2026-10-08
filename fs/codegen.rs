@@ -59,7 +59,13 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     // damage command unpacks BCHFS_IOC_GET_DAMAGE entries through them.
     "BCH_SB_ERROR_ENTRY_V2_.*",
 ];
-const BLOCKLIST_FUNCTION: &[&str] = &["bch2_prt_vprintf"];
+const BLOCKLIST_FUNCTION: &[&str] = &[
+    "bch2_prt_vprintf",
+    // A static inline in fs/vendor/closure.h that .*bch2_.* catches: the
+    // closures are bcachefs-shim's, which wraps it too - two
+    // bch2_closure_debug_create__extern don't link.
+    "bch2_closure_debug_create",
+];
 const BLOCKLIST_TYPE: &[&str] = &["bch_ioctl_data_event", "bch_replicas_padded__bindgen_ty_.*"];
 const BLOCKLIST_ITEM: &[&str] = &["bch2_bkey_ops"];
 const ALLOWLIST_VAR: &[&str] = &["BCH_.*", "BTREE_MAX_DEPTH", "BTREE_TRANS_MEM_MAX", "KEY_FORMAT_CURRENT", "KEY_SPEC_.*", "bch.*", "__bch2.*", "__BTREE_ITER.*", "BTREE_ITER.*",

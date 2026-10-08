@@ -26,3 +26,4 @@
 #include "include/linux/unicode.h"
 #include "include/linux/wait_bit.h"
 #include "include/linux/xattr.h"
+#include "fs/vendor/closure.h"

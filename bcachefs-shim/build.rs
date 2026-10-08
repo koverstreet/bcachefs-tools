@@ -74,10 +74,17 @@ fn main() {
         // File mode bits: the kernel crate's bindings have them in-kernel.
         .allowlist_var("S_IF.*")
         .allowlist_var("S_ISGID")
+        // The vendored C fs/ uses - closures - is the shim's too: not
+        // bcachefs's, so not the fs crate's to define.
+        .allowlist_file(format!("{}/vendor/closure.h", fs_dir.display()))
         // Never emit fs/ types: those are bcachefs-kernel's, and some (printbuf)
         // even carry Rust impls there. allowlist_recursively would otherwise
-        // pull them in through an include/ reference.
-        .blocklist_file(format!("{}/.*", fs_dir.display()))
+        // pull them in through an include/ reference. fs/vendor/ isn't
+        // bcachefs's: "under fs/ but not under fs/vendor/", as an alternation
+        // over the prefixes of vendor/ that can't be completed.
+        .blocklist_file(format!(
+            r"{}/(?:[^v]|v(?:[^e]|e(?:[^n]|n(?:[^d]|d(?:[^o]|o(?:[^r]|r[^/])))))).*",
+            fs_dir.display()))
         // The kernel's DEFINE_LOCK_GUARD / DEFINE_CLASS cleanup machinery
         // (class_*_constructor/destructor/lock_ptr) are never called from Rust,
         // and wrap_static_fns can't emit valid C wrappers for them.
