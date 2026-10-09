@@ -9,7 +9,6 @@
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt, TransBkey};
 use crate::c;
-use crate::c::bch_snapshot_state::*;
 use crate::errcode::{bch_errcode, ret_to_result, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::util::rcu;
@@ -321,10 +320,23 @@ pub fn delete_dead_key<'a, 't>(
 /// The state codeword nearest @v, and its Hamming distance from @v: as
 /// bch2_snapshot_state_nearest().
 pub fn state_nearest(v: u32) -> (c::bch_snapshot_state, u32) {
-    let mut dist = 0;
-    let s = unsafe { c::bch2_snapshot_state_nearest(v, &mut dist) };
-    (s, dist)
+    let mut best = (c::bch_snapshot_state::SNAPSHOT_STATE_live, 33);
+    for s in SNAPSHOT_STATES {
+        let dist = (v ^ s as u32).count_ones();
+        if dist < best.1 {
+            best = (s, dist);
+        }
+    }
+    best
 }
+
+/// The states, in BCH_SNAPSHOT_STATES() order.
+const SNAPSHOT_STATES: [c::bch_snapshot_state; 4] = [
+    c::bch_snapshot_state::SNAPSHOT_STATE_live,
+    c::bch_snapshot_state::SNAPSHOT_STATE_will_delete,
+    c::bch_snapshot_state::SNAPSHOT_STATE_no_keys,
+    c::bch_snapshot_state::SNAPSHOT_STATE_deleted,
+];
 
 impl c::bch_snapshot {
     pub fn parent(&self) -> u32       { u32::from_le(self.parent) }
@@ -342,16 +354,21 @@ impl c::bch_snapshot {
     /// field, or damaged: as bch2_snapshot_state() and
     /// bch2_snapshot_state_valid().
     pub fn state_field(&self) -> Option<c::bch_snapshot_state> {
-        [SNAPSHOT_STATE_live, SNAPSHOT_STATE_will_delete,
-         SNAPSHOT_STATE_no_keys, SNAPSHOT_STATE_deleted]
-            .into_iter()
-            .find(|&s| s as u32 == self.state_raw())
+        SNAPSHOT_STATES.into_iter().find(|&s| s as u32 == self.state_raw())
     }
 
     /// The state the legacy flag bits say: as
     /// bch2_snapshot_state_from_flags().
     pub fn state_from_flags(&self) -> c::bch_snapshot_state {
-        unsafe { c::bch2_snapshot_state_from_flags(self) }
+        if self.deleted_obsolete() {
+            c::bch_snapshot_state::SNAPSHOT_STATE_deleted
+        } else if self.no_keys_obsolete() {
+            c::bch_snapshot_state::SNAPSHOT_STATE_no_keys
+        } else if self.will_delete_obsolete() {
+            c::bch_snapshot_state::SNAPSHOT_STATE_will_delete
+        } else {
+            c::bch_snapshot_state::SNAPSHOT_STATE_live
+        }
     }
 
     /// The node's state - read from its flags if it predates the state field:

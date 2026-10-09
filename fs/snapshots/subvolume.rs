@@ -193,7 +193,12 @@ impl c::bch_subvolume {
     /// field: as bch2_subvolume_state_compat(). None if the field is damaged.
     pub fn state(&self) -> Option<c::bch_subvolume_state> {
         if self.state == 0 {
-            Some(unsafe { c::bch2_subvolume_state_from_flags(self) })
+            // bch2_subvolume_state_from_flags()
+            Some(if self.unlinked_obsolete() {
+                c::bch_subvolume_state::SUBVOLUME_STATE_unlinked
+            } else {
+                c::bch_subvolume_state::SUBVOLUME_STATE_live
+            })
         } else {
             self.state_field()
         }
