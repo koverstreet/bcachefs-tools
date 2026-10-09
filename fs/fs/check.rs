@@ -90,27 +90,7 @@ impl SnapshotsSeen {
     pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
         -> Result<Self, BchError>
     {
-        let trans: &BtreeTrans<'_> = t;
-        let mut s = SnapshotsSeen { pos, ids: KVVec::new() };
-
-        if !snapshot::has_children(trans.fs(), pos.snapshot) {
-            return Ok(s);
-        }
-
-        // From the version before @pos's - in the snapshot with the next lower
-        // ID; @pos.snapshot has children, so it isn't 0 - down
-        let mut iter = BtreeIter::new(trans, btree, spos(pos.inode, pos.offset, pos.snapshot - 1),
-                                      BtreeIterFlags::ALL_SNAPSHOTS);
-        let ids = &mut s.ids;
-        iter.for_each_reverse_norestart(t, spos(pos.inode, pos.offset, 0), |_, k| {
-            let id = k.k.p.snapshot;
-            if snapshot::is_ancestor(trans, id, pos.snapshot) &&
-               !ids.iter().any(|&i| snapshot::is_ancestor(trans, id, i)) {
-                ids.push(id, GFP_KERNEL)?;
-            }
-            Ok(())
-        })?;
-        Ok(s)
+        Ok(SnapshotsSeen { pos, ids: snapshot::overwrites(t, btree, pos)? })
     }
 
     /// Whether a key in snapshot @id has been seen at this position.

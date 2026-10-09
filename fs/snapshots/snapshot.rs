@@ -6,11 +6,12 @@
 //! taken from C as a bch_snapshot_state: a damaged field holds a value that's
 //! no variant of the Rust enum, and fsck has to be able to look at it.
 
-use crate::btree::bkey::BkeySC;
-use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt, TransBkey};
+use crate::btree::bkey::{spos, BkeySC};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey};
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_result, ret_to_result_void, BchError};
 use crate::fs::Fs;
+use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::rcu;
 use crate::util::Printbuf;
 use core::fmt;
@@ -234,6 +235,34 @@ pub fn accounting_totals(fs: &Fs, id: u32, breakdown: Option<&mut Printbuf>)
                                            core::ptr::null_mut(), out)
     })?;
     Ok((keys, sectors))
+}
+
+/// The snapshots that have overwritten the key at @pos in @btree - each
+/// the closest to @pos.snapshot on its branch: as
+/// bch2_get_snapshot_overwrites().
+pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
+    -> Result<KVVec<u32>, BchError>
+{
+    let trans: &BtreeTrans<'_> = t;
+    let mut ids = KVVec::new();
+
+    if !has_children(trans.fs(), pos.snapshot) {
+        return Ok(ids);
+    }
+
+    // From the version before @pos's - in the snapshot with the next lower
+    // ID; @pos.snapshot has children, so it isn't 0 - down
+    let mut iter = BtreeIter::new(trans, btree, spos(pos.inode, pos.offset, pos.snapshot - 1),
+                                  BtreeIterFlags::ALL_SNAPSHOTS);
+    iter.for_each_reverse_norestart(t, spos(pos.inode, pos.offset, 0), |_, k| {
+        let id = k.k.p.snapshot;
+        if is_ancestor(trans, id, pos.snapshot) &&
+           !ids.iter().any(|&i| is_ancestor(trans, id, i)) {
+            ids.push(id, GFP_KERNEL)?;
+        }
+        Ok(())
+    })?;
+    Ok(ids)
 }
 
 /// Snapshot tree @id's key: as bch2_snapshot_tree_lookup().
