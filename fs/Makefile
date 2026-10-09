@@ -8,7 +8,9 @@ CONFIG_BCACHEFS_FS := m
 
 # If the build farm has a signed bcachefs.ko for this kernel and version,
 # fetch-module.sh puts it where kbuild would put ours, and we build nothing.
-# (It logs to stderr: stdout is our "hit" or nothing.)
+# (It logs to stderr: stdout is our "hit" or nothing.) Not on clean, which
+# reads this file too.
+ifneq ($(.DEFAULT_GOAL),__clean)
 bcachefs-version := $(shell sed -n 's/.*bcachefs_version "\(.*\)".*/\1/p' $(src)/version.h 2>/dev/null)
 ifneq ($(bcachefs-version),)
 ifeq ($(shell $(CONFIG_SHELL) $(src)/scripts/fetch-module.sh '$(KERNELRELEASE)' '$(bcachefs-version)' '$(obj)/bcachefs.ko' && echo hit),hit)
@@ -16,6 +18,7 @@ CONFIG_BCACHEFS_FS :=
 endif
 else
 $(warning bcachefs: no version in $(src)/version.h - not looking for a prebuilt module (version.h is staged by bcachefs-tools 'make install_dkms'; a hand-copied kernel fs/bcachefs/ tree lacks it))
+endif
 endif
 
 # Our options: from the environment (ktest, build.vars), and quota as Kconfig
