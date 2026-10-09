@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{anyhow, Context, Result};
 use bch_bindgen::c;
 use clap::{Arg, ArgAction, Command};
-use rustix::fs::{XattrFlags, setxattr, removexattr};
+use rustix::fs::{AtFlags, StatxFlags, XattrFlags, setxattr, statx, removexattr};
 
 use super::opts;
 
@@ -17,6 +17,7 @@ use crate::wrappers::ioctl::{ioctl_none, Ioctl,
 fn propagate_recurse(dir_path: &Path) {
     let inner = || -> std::io::Result<()> {
         let dir = std::fs::File::open(dir_path)?;
+        let mnt_id = statx(&dir, "", AtFlags::EMPTY_PATH, StatxFlags::MNT_ID)?.stx_mnt_id;
         for entry in std::fs::read_dir(dir_path)?.flatten() {
             let Ok(ft) = entry.file_type() else { continue };
             if ft.is_symlink() { continue }
@@ -33,6 +34,17 @@ fn propagate_recurse(dir_path: &Path) {
                 continue;
             }
             if ret == 0 || !ft.is_dir() { continue }
+
+            /* the ioctl saw the directory a mount covers; the path leads into the mount */
+            match statx(&dir, &*name, AtFlags::SYMLINK_NOFOLLOW|AtFlags::NO_AUTOMOUNT,
+                        StatxFlags::MNT_ID) {
+                Ok(stx) if stx.stx_mnt_id != mnt_id => continue,
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("{}: {}", entry.path().display(), e);
+                    continue;
+                }
+            }
             propagate_recurse(&entry.path());
         }
         Ok(())
