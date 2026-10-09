@@ -455,6 +455,7 @@ u64 bch2_get_random_u64_below(u64);
 u64 bch2_local_clock(void);
 void bch2_cond_resched(void);
 u64 bch2_get_random_u64(void);
+void bch2_ktime_get_coarse_real_ts64(struct timespec64 *);
 bool bch2_queue_work(struct workqueue_struct *, struct work_struct *);
 bool bch2_capable(int);
 #ifdef __KERNEL__

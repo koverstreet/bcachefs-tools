@@ -540,17 +540,45 @@ impl Fs {
 
     /// Convert a bcachefs internal time to a timespec.
     pub fn time_to_timespec(&self, time: i64) -> c::timespec64 {
-        unsafe { c::bch2_time_to_timespec(self.raw, time) }
+        const NSEC_PER_SEC: i64 = 1_000_000_000;
+
+        let sb = unsafe { &(*self.raw).sb };
+        let time = time.wrapping_add(sb.time_base_lo as i64);
+        let units = sb.time_units_per_sec as i64;
+
+        let mut sec  = time / units;
+        let mut nsec = (time % units) * sb.nsec_per_time_unit as i64;
+
+        // set_normalized_timespec64()
+        while nsec >= NSEC_PER_SEC {
+            nsec -= NSEC_PER_SEC;
+            sec += 1;
+        }
+        while nsec < 0 {
+            nsec += NSEC_PER_SEC;
+            sec -= 1;
+        }
+
+        let mut t: c::timespec64 = unsafe { core::mem::zeroed() };
+        t.tv_sec  = sec as _;
+        t.tv_nsec = nsec as _;
+        t
     }
 
     /// Convert a timespec to a bcachefs internal time.
     pub fn timespec_to_time(&self, ts: c::timespec64) -> i64 {
-        unsafe { c::timespec_to_bch2_time(self.raw, ts) }
+        let sb = unsafe { &(*self.raw).sb };
+        // C's (int) tv_nsec / nsec_per_time_unit: an unsigned division
+        (ts.tv_sec as i64).wrapping_mul(sb.time_units_per_sec as i64)
+            .wrapping_add((ts.tv_nsec as i32 as u32 / sb.nsec_per_time_unit) as i64)
+            .wrapping_sub(sb.time_base_lo as i64)
     }
 
     /// Current time in bcachefs internal time format.
     pub fn current_time(&self) -> u64 {
-        unsafe { c::bch2_current_time(self.raw) as u64 }
+        let mut now: c::timespec64 = unsafe { core::mem::zeroed() };
+        unsafe { c::bch2_ktime_get_coarse_real_ts64(&mut now) };
+        self.timespec_to_time(now) as u64
     }
 
     /// Short filesystem usage summary.

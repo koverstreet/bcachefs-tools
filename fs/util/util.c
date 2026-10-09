@@ -1413,6 +1413,11 @@ u64 bch2_get_random_u64(void)
 	return get_random_u64();
 }
 
+void bch2_ktime_get_coarse_real_ts64(struct timespec64 *ts)
+{
+	ktime_get_coarse_real_ts64(ts);
+}
+
 /* queue_work() is a static inline in the kernel, a function in userspace: */
 bool bch2_queue_work(struct workqueue_struct *wq, struct work_struct *work)
 {
