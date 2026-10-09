@@ -1995,8 +1995,21 @@ pub fn check_opts_propagated(
 /// and for each whether @inode set it or inherited it: as
 /// bch2_inode_reconcile_opts_get().
 pub fn reconcile_opts_get(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_extent_reconcile {
+    let mut opts = c::bch_inode_opts::default();
     // Only reads @inode: C's signature isn't const.
-    unsafe { c::bch2_inode_reconcile_opts_get(fs.raw, inode as *const _ as *mut _) }
+    unsafe { c::bch2_inode_opts_get_inode(fs.raw, inode as *const _ as *mut _, &mut opts) };
+
+    // io_opts_to_reconcile_opts()
+    let mut r = c::bch_extent_reconcile::default();
+    r.set_type(1 << c::bch_extent_entry_type::BCH_EXTENT_ENTRY_reconcile as u32);
+    macro_rules! reconcile_opts {
+        ($(($name:tt)),* $(,)?) => { crate::paste! { $(
+            r.[<set_ $name>](opts.$name as u64);
+            r.[<set_ $name _from_inode>](opts.[<$name _from_inode>]() as u64);
+        )* } };
+    }
+    c::BCH_RECONCILE_OPTS!(reconcile_opts);
+    r
 }
 
 // ── The unpacked inode ───────────────────────────────────────────────────
