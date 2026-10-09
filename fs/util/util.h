@@ -449,57 +449,18 @@ do {									\
 u64 bch2_get_random_u64_below(u64);
 
 /*
- * Rust-facing wrappers: local_clock() is a static inline and cond_resched() is a
- * macro, so neither binds through bindgen. Wrapping them as bch2_* static
- * inlines (allowlisted, so the codegen's wrap_static_fns emits callable
- * wrappers) lets fs/ Rust call them uniformly across the kernel and userspace
- * builds, with the macro expanded at C-compile time.
+ * For Rust, what it can't call itself - static inlines and macros, in the
+ * kernel or in userspace: out of line in util.c.
  */
-static inline u64 bch2_local_clock(void)
-{
-	return local_clock();
-}
-
-static inline void bch2_cond_resched(void)
-{
-	cond_resched();
-}
-
-static inline u64 bch2_get_random_u64(void)
-{
-	return get_random_u64();
-}
-
-/* queue_work() is a static inline in the kernel, a function in userspace: */
-static inline bool bch2_queue_work(struct workqueue_struct *wq, struct work_struct *work)
-{
-	return queue_work(wq, work);
-}
-
+u64 bch2_local_clock(void);
+void bch2_cond_resched(void);
+u64 bch2_get_random_u64(void);
+bool bch2_queue_work(struct workqueue_struct *, struct work_struct *);
+bool bch2_capable(int);
 #ifdef __KERNEL__
-#include <linux/cpumask.h>
-#include <linux/numa.h>
-
-/*
- * For Rust: NUMA_NO_NODE is a macro, nr_cpu_ids a variable - or a macro,
- * without SMP - neither of which bind.
- */
-static inline unsigned bch2_cpumask_local_spread(unsigned i)
-{
-	return cpumask_local_spread(i, NUMA_NO_NODE);
-}
-
-static inline unsigned bch2_nr_cpu_ids(void)
-{
-	return nr_cpu_ids;
-}
+unsigned bch2_cpumask_local_spread(unsigned);
+unsigned bch2_nr_cpu_ids(void);
 #endif
-
-/* capable() is a function in the kernel, a macro (true) in userspace's blkdev.h */
-static inline bool bch2_capable(int cap)
-{
-	return capable(cap);
-}
 
 /*
  * All-ones mask of width @bits, defined for the full range 0..64 — unlike

@@ -22,10 +22,9 @@ pub fn random_u64_below(ceil: u64) -> u64 {
     unsafe { c::bch2_get_random_u64_below(ceil) }
 }
 
-// local_clock() is a static inline and cond_resched() is a macro, so neither
-// binds through bindgen directly; util.h wraps both as allowlisted bch2_*
-// static inlines that the codegen picks up uniformly on the kernel and
-// userspace builds.
+// local_clock() is a static inline and cond_resched() a macro, so neither has
+// a symbol for Rust: util.c wraps both, as bch2_*, for the kernel and
+// userspace builds alike.
 pub fn local_clock() -> u64 {
     unsafe { c::bch2_local_clock() }
 }
