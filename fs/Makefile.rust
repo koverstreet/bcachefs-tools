@@ -224,6 +224,11 @@ rustflags-y += --cfg kernel
 # And __KERNEL__, which C has: types defined in Rust test it, as their C did.
 rustflags-y += --cfg __KERNEL__
 
+# The cfgs describing the kernel config (CONFIG_* as --cfg) and the rustc
+# (CONFIG_RUSTC_*), for the rules here that kbuild doesn't own.
+# Makefile.rust.vendor points this at its own copy, describing its rustc.
+bch-rustc-cfg = $(objtree)/include/generated/rustc_cfg
+
 # Rust crates the kernel doesn't provide: the vendored paste (a proc-macro),
 # bitfield/bitflags/uuid (plain rlibs) under fs/vendor/, and our own
 # typeinfo-macros (a proc-macro, deliberately dependency-free so this recipe
@@ -239,7 +244,7 @@ quiet_cmd_bch_procmacro = RUSTC P  $@
 	-Clink-args='$(call escsq,$(KBUILD_PROCMACROLDFLAGS))' \
 	--emit=dep-info=$(depfile) --emit=link=$@ --extern proc_macro \
 	--crate-type proc-macro --crate-name $(patsubst lib%.so,%,$(notdir $@)) \
-	@$(objtree)/include/generated/rustc_cfg $<
+	@$(bch-rustc-cfg) $<
 
 # paste is vendored, so it gets the same treatment as the leaf rlibs above.
 # typeinfo-macros is ours and stays subject to the kernel's lints.
@@ -257,13 +262,16 @@ $(obj)/libtypeinfo_macros.so: $(src)/typeinfo-macros/src/lib.rs FORCE
 # --cap-lints=allow: every crate built by this rule is vendored, and the
 # kernel's lints are a statement about how we want our own code written - they
 # say nothing about whether someone else's crate is correct. This is what cargo
-# does for dependencies, and what Makefile.rust.vendor already does on the
-# CONFIG_RUST=n path. Doing it per-lint instead means a rustc bump breaks
-# defconfig builds for whoever upgrades first: uuid needed two lints allowed
-# (#830) and the only reason bitfield and bitflags needed none is that today's
-# rustc happens not to complain about them.
+# does for dependencies, and what Makefile.rust.vendor already does for its
+# crates. Doing it per-lint instead means a rustc bump breaks defconfig builds
+# for whoever upgrades first: uuid needed two lints allowed (#830) and the only
+# reason bitfield and bitflags needed none is that today's rustc happens not to
+# complain about them.
+#
+# kbuild's $(rust_flags), with its hardcoded rustc_cfg swapped for ours.
+bch-library-rustflags = $(patsubst @$(objtree)/include/generated/rustc_cfg,@$(bch-rustc-cfg),$(rust_flags))
 quiet_cmd_bch_library = RUSTC L  $@
-      cmd_bch_library = $(RUSTC) $(rust_flags) --cap-lints=allow \
+      cmd_bch_library = $(RUSTC) $(bch-library-rustflags) --cap-lints=allow \
 	--emit=dep-info=$(depfile) --emit=obj=$@ \
 	--emit=metadata=$(dir $@)lib$(patsubst %.o,%,$(notdir $@)).rmeta \
 	--crate-type rlib $(bch-rust-L) --sysroot=/dev/null \

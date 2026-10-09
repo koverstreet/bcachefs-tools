@@ -96,7 +96,7 @@ endif
 endif
 
 # ---- the vendored crates ---------------------------------------------------
-bch-vr-cfg := @$(objtree)/include/generated/rustc_cfg
+bch-vr-cfg = @$(bch-rustc-cfg)
 # Target crates (no-std, kernel ABI). Filter --edition out of KBUILD_RUSTFLAGS:
 # it carries --edition=2021, and each crate sets its own (core wants 2024) —
 # rustc rejects --edition given twice.
