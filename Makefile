@@ -297,7 +297,10 @@ bcachefs: $(BCACHEFS_DEPS) $(RUST_SRCS)
 bindgen-test: $(BCACHEFS_DEPS)
 	$(Q)$(CARGO_TEST) -- --nocapture
 
-libbcachefs.a: $(OBJS)
+# Cargo builds on this - and the Rust include_str!s version.h, so make it here
+# too: the nix checks run `make libbcachefs.a`, then cargo. (Order-only, to
+# keep it out of $+.)
+libbcachefs.a: $(OBJS) | version.h
 	@echo "    [AR]     $@"
 	$(Q)$(RM) $@
 	$(Q)$(AR) -rc $@ $+
