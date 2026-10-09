@@ -139,7 +139,8 @@ RUSTFLAGS_mod.o += --cfg kernel --cfg __KERNEL__
 # foo.o, libfoo.so, libfoo.rmeta; per target, rs-flags (externs, cfgs) and
 # rs-edition (default 2021).
 #
-# The cfgs describing the kernel config and its rustc.
+# The cfgs describing the kernel config and its rustc; Makefile.rust.vendor
+# points this at a copy describing ours.
 bch-rustc-cfg = $(objtree)/include/generated/rustc_cfg
 bch-crate = $(patsubst lib%,%,$(basename $(notdir $@)))
 bch-edition = --edition=$(or $(rs-edition),2021)
