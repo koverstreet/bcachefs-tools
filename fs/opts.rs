@@ -312,13 +312,31 @@ impl InodeOpt {
 
     /// Its value on @inode, biased: 0 for not set.
     pub fn get(self, inode: &c::bch_inode_unpacked) -> u64 {
-        // Only reads @inode: C's signature isn't const.
-        unsafe { c::bch2_inode_opt_get(inode as *const _ as *mut _, self.0) }
+        // bch2_inode_opt_get()
+        macro_rules! get {
+            ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! { $(
+                if self.0 == c::inode_opt_id::[<Inode_opt_ $name>] {
+                    return inode.[<bi_ $name>] as u64;
+                }
+            )* } };
+        }
+        c::BCH_INODE_OPTS!(get);
+        panic!("inode option {} out of range", self.0 as u32)
     }
 
     /// Set its value on @inode - biased, 0 for not set.
     pub fn set(self, inode: &mut c::bch_inode_unpacked, v: u64) {
-        unsafe { c::bch2_inode_opt_set(inode, self.0, v) }
+        // bch2_inode_opt_set()
+        macro_rules! set {
+            ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! { $(
+                if self.0 == c::inode_opt_id::[<Inode_opt_ $name>] {
+                    inode.[<bi_ $name>] = v as _;
+                    return;
+                }
+            )* } };
+        }
+        c::BCH_INODE_OPTS!(set);
+        panic!("inode option {} out of range", self.0 as u32)
     }
 
     /// Whether it's set on @inode itself, not inherited: bi_fields_set.
