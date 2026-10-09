@@ -195,7 +195,9 @@ impl Fs {
 
     /// The journal sequence number being written: C's journal_cur_seq().
     pub fn journal_cur_seq(&self) -> u64 {
-        unsafe { c::journal_cur_seq(core::ptr::addr_of_mut!((*self.raw).journal)) }
+        // atomic64_read(&j->seq)
+        let seq = unsafe { &*(&raw const (*self.raw).journal.seq).cast::<core::sync::atomic::AtomicI64>() };
+        seq.load(core::sync::atomic::Ordering::Relaxed) as u64
     }
 
     /// Go emergency read-only: the journal halts, so nothing more commits,
@@ -482,7 +484,7 @@ impl Fs {
 
     /// Flush pins up to the current journal sequence.
     pub fn journal_flush_outstanding_pins(&self) -> bool {
-        unsafe { c::bch2_journal_flush_outstanding_pins(&mut (*self.raw).journal) }
+        unsafe { c::bch2_journal_flush_pins(&mut (*self.raw).journal, self.journal_cur_seq()) }
     }
 
     /// Delete a range of keys in a btree.
