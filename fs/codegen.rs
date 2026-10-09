@@ -62,7 +62,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
 const BLOCKLIST_FUNCTION: &[&str] = &["bch2_prt_vprintf"];
 const BLOCKLIST_TYPE: &[&str] = &["bch_ioctl_data_event", "bch_replicas_padded__bindgen_ty_.*"];
 const BLOCKLIST_ITEM: &[&str] = &["bch2_bkey_ops"];
-const ALLOWLIST_VAR: &[&str] = &["BCH_.*", "BTREE_MAX_DEPTH", "KEY_SPEC_.*", "bch.*", "__bch2.*", "__BTREE_ITER.*", "BTREE_ITER.*",
+const ALLOWLIST_VAR: &[&str] = &["BCH_.*", "BTREE_MAX_DEPTH", "KEY_FORMAT_CURRENT", "KEY_SPEC_.*", "bch.*", "__bch2.*", "__BTREE_ITER.*", "BTREE_ITER.*",
     // bcachefs's own dirent type, alongside the kernel's DT_*:
     "DT_SUBVOL",
     // errnos, for bch2_err_matches() against a bare errno, or returning one

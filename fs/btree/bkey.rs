@@ -94,6 +94,21 @@ impl<K: BkeyInit> Default for Bkey<K> {
 }
 
 impl c::bkey {
+    /// A key with no value at POS_MIN, of type deleted: C's KEY(0, 0, 0), as
+    /// bkey_init() sets.
+    pub fn new() -> Self {
+        let mut k = Self { u64s: BKEY_U64S as u8, ..Default::default() };
+        k.set_format(c::KEY_FORMAT_CURRENT as u8);
+        k
+    }
+
+    /// u64s for a value of @bytes: C's set_bkey_val_bytes().
+    pub fn set_val_bytes(&mut self, bytes: usize) {
+        let u64s = BKEY_U64S + bytes.div_ceil(size_of::<u64>());
+        self.u64s = u8::try_from(u64s)
+            .unwrap_or_else(|_| panic!("key of {u64s} u64s: a key is at most {} u64s", u8::MAX));
+    }
+
     pub fn pos(&self) -> c::bpos {
         self.p
     }
@@ -373,7 +388,14 @@ macro_rules! bkey_types {
         }
 
         impl BkeyInit for c::[<bkey_i_ $name>] {
-            fn init(&mut self) { unsafe { c::[<bkey_ $name _init>](self.k_i_mut()) }; }
+            /// C's bkey_<name>_init(): the header, of this type and sized for
+            /// the value, and the value zeroed.
+            fn init(&mut self) {
+                *self = Self::default();
+                *self.k_mut() = c::bkey::new();
+                self.k_mut().type_ = $nr;
+                self.k_mut().set_val_bytes(size_of::<c::[<bch_ $name>]>());
+            }
             fn k(&self) -> &c::bkey { c::[<bkey_i_ $name>]::k(self) }
             fn k_mut(&mut self) -> &mut c::bkey { c::[<bkey_i_ $name>]::k_mut(self) }
             fn k_i(&self) -> &c::bkey_i { c::[<bkey_i_ $name>]::k_i(self) }
