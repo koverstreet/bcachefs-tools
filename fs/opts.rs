@@ -417,7 +417,8 @@ pub struct OptChange<'f> {
 impl<'f> OptChange<'f> {
     pub fn new(fs: &'f Fs) -> Self {
         unsafe { c::bch2_opt_change_lock(fs.raw) };
-        OptChange { fs, scope: unsafe { c::bch2_opt_change_scope_init(fs.raw) } }
+        // bch2_opt_change_scope_init()
+        OptChange { fs, scope: c::opt_change_scope { c: fs.raw, ..Default::default() } }
     }
 
     /// Before setting option @id to @v, for inode @inum - 0 for the
