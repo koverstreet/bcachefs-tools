@@ -36,7 +36,7 @@ use crate::dirent::{self, DirentTarget};
 use crate::namei;
 use crate::util::kernel::random_u64;
 use crate::{bch_err_ratelimited, trans_inconsistent};
-use crate::btree::bkey::{pos, spos, BkeyInit, BkeyS, BkeySC, BkeyValS, BkeyValSC, BKEY_U64S, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, BkeyS, BkeySC, BkeyValS, BkeyValSC, TypedBkey, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::init::passes;
 use crate::util::varint;
 use core::mem::offset_of;
@@ -287,7 +287,7 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
     }
 
     let k = &mut out.inode;
-    k.init();
+    *k = c::bkey_i_inode_v3::new();
     k.k_mut().p.offset = inode.bi_inum;
     k.v.bi_journal_seq = inode.bi_journal_seq.to_le();
     k.v.bi_hash_seed   = inode.bi_hash_seed;

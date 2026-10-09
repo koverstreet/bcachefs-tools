@@ -18,10 +18,6 @@ use core::cmp::Ordering;
 /// The u64s of a key's header, struct bkey: as C's BKEY_U64s.
 pub const BKEY_U64S: usize = core::mem::size_of::<c::bkey>() / core::mem::size_of::<u64>();
 
-pub struct Bkey<K: BkeyInit> {
-    raw: K,
-}
-
 pub trait AsBkeyI {
     fn as_bkey_i(&self) -> &c::bkey_i;
     fn as_bkey_i_mut(&mut self) -> &mut c::bkey_i;
@@ -35,48 +31,6 @@ pub trait AsBkeyI {
     }
 }
 
-impl<K: BkeyInit> Bkey<K> {
-    pub fn new() -> Self {
-        let mut raw = K::default();
-        raw.init();
-        Self { raw }
-    }
-
-    pub fn raw(&self) -> &K {
-        &self.raw
-    }
-
-    pub fn raw_mut(&mut self) -> &mut K {
-        &mut self.raw
-    }
-
-    pub fn k(&self) -> &c::bkey {
-        self.raw.k()
-    }
-
-    pub fn k_mut(&mut self) -> &mut c::bkey {
-        self.raw.k_mut()
-    }
-
-    pub fn k_i(&self) -> &c::bkey_i {
-        self.raw.k_i()
-    }
-
-    pub fn k_i_mut(&mut self) -> &mut c::bkey_i {
-        self.raw.k_i_mut()
-    }
-}
-
-impl<K: BkeyInit> AsBkeyI for Bkey<K> {
-    fn as_bkey_i(&self) -> &c::bkey_i {
-        self.k_i()
-    }
-
-    fn as_bkey_i_mut(&mut self) -> &mut c::bkey_i {
-        self.k_i_mut()
-    }
-}
-
 impl AsBkeyI for c::bkey_i {
     fn as_bkey_i(&self) -> &c::bkey_i {
         self
@@ -84,12 +38,6 @@ impl AsBkeyI for c::bkey_i {
 
     fn as_bkey_i_mut(&mut self) -> &mut c::bkey_i {
         self
-    }
-}
-
-impl<K: BkeyInit> Default for Bkey<K> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -343,14 +291,6 @@ const _: () = {
     assert!(offset_of!(BkeySC<'static>, v) == offset_of!(c::bkey_s_c, v));
 };
 
-pub trait BkeyInit: Default {
-    fn init(&mut self);
-    fn k(&self) -> &c::bkey;
-    fn k_mut(&mut self) -> &mut c::bkey;
-    fn k_i(&self) -> &c::bkey_i;
-    fn k_i_mut(&mut self) -> &mut c::bkey_i;
-}
-
 /// A key type, named by its C typed key (bkey_i_<name>): its value type, and
 /// typed access to it - for code generic over key types.
 pub trait TypedBkey {
@@ -358,6 +298,10 @@ pub trait TypedBkey {
     type Val;
 
     const TYPE: c::bch_bkey_type;
+
+    /// A key of this type at POS_MIN, its value zeroed: C's
+    /// bkey_<name>_init().
+    fn new() -> Self where Self: Sized;
 
     /// @k's value if it's this type, zero padded past the end of a short
     /// one: see val_copy_pad().
@@ -379,7 +323,7 @@ pub trait TypedBkey {
 macro_rules! bkey_types {
     ($($name:ident = $nr:literal),* $(,)?) => { crate::paste! {
         $(
-        pub type [<Bkey $name:camel>] = Bkey<c::[<bkey_i_ $name>]>;
+        pub type [<Bkey $name:camel>] = c::[<bkey_i_ $name>];
 
         impl c::[<bkey_i_ $name>] {
             pub fn k(&self) -> &c::bkey { unsafe { self.__bindgen_anon_1.k.as_ref() } }
@@ -388,25 +332,23 @@ macro_rules! bkey_types {
             pub fn k_i_mut(&mut self) -> &mut c::bkey_i { unsafe { self.__bindgen_anon_1.k_i.as_mut() } }
         }
 
-        impl BkeyInit for c::[<bkey_i_ $name>] {
-            /// C's bkey_<name>_init(): the header, of this type and sized for
-            /// the value, and the value zeroed.
-            fn init(&mut self) {
-                *self = Self::default();
-                *self.k_mut() = c::bkey::new();
-                self.k_mut().type_ = $nr;
-                self.k_mut().set_val_bytes(size_of::<c::[<bch_ $name>]>());
-            }
-            fn k(&self) -> &c::bkey { c::[<bkey_i_ $name>]::k(self) }
-            fn k_mut(&mut self) -> &mut c::bkey { c::[<bkey_i_ $name>]::k_mut(self) }
-            fn k_i(&self) -> &c::bkey_i { c::[<bkey_i_ $name>]::k_i(self) }
-            fn k_i_mut(&mut self) -> &mut c::bkey_i { c::[<bkey_i_ $name>]::k_i_mut(self) }
+        impl AsBkeyI for c::[<bkey_i_ $name>] {
+            fn as_bkey_i(&self) -> &c::bkey_i { self.k_i() }
+            fn as_bkey_i_mut(&mut self) -> &mut c::bkey_i { self.k_i_mut() }
         }
 
         impl TypedBkey for c::[<bkey_i_ $name>] {
             type Val = c::[<bch_ $name>];
 
             const TYPE: c::bch_bkey_type = c::bch_bkey_type::[<KEY_TYPE_ $name>];
+
+            fn new() -> Self {
+                let mut k = Self::default();
+                *k.k_mut() = c::bkey::new();
+                k.k_mut().type_ = $nr;
+                k.k_mut().set_val_bytes(size_of::<Self::Val>());
+                k
+            }
 
             fn val_copy_pad(k: BkeySC<'_>) -> Option<Self::Val> {
                 (k.k.type_ == $nr).then(|| unsafe { k.val_copy_pad() })

@@ -537,15 +537,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
         })
     }
 
-    pub fn bkey_alloc_typed<K: BkeyInit>(&self) -> Result<TransBkey<'a, 't>, BchError> {
+    pub fn bkey_alloc_typed<K: TypedBkey>(&self) -> Result<TransBkey<'a, 't>, BchError> {
         debug_assert_eq!(size_of::<K>() % size_of::<u64>(), 0);
 
         let u64s = (size_of::<K>() / size_of::<u64>()) as u32;
         let mut k = self.bkey_alloc(u64s)?;
 
         unsafe {
-            let raw = k.as_mut() as *mut c::bkey_i as *mut K;
-            (*raw).init();
+            (k.as_mut() as *mut c::bkey_i as *mut K).write(K::new());
         }
 
         Ok(k)

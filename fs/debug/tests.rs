@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::alloc::buckets::DiskReservation;
-use crate::btree::bkey::{pos, spos, BkeyCookie, BkeyS, BkeySC, BKEY_U64S, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, BkeyCookie, BkeyS, BkeySC, TypedBkey, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
@@ -652,7 +652,7 @@ fn bkey_buf_test_key(buf: &mut [u64], seed: u64) -> BkeySC<'_> {
     }
 
     let k = unsafe { &mut *(buf.as_mut_ptr() as *mut c::bkey_i) };
-    unsafe { c::bkey_init(&mut k.k) };
+    k.k = c::bkey::new();
     k.k.u64s = u64s as u8;
     k.k.p.offset = seed;
     BkeySC::from(&*k)
