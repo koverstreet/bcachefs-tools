@@ -2,6 +2,8 @@
 
 #include "include/linux/bio.h"
 #include "include/linux/blkdev.h"
+#include "include/linux/crc32c.h"
+#include "include/linux/crc64.h"
 #include "include/linux/generic-radix-tree.h"
 #include "include/linux/idr.h"
 #include "include/linux/kernel.h"
