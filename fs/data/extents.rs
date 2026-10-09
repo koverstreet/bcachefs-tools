@@ -285,13 +285,18 @@ pub fn crc_is_encoded(crc: &c::bch_extent_crc_unpacked) -> bool {
 /// Whether @k is counted in its inode's i_sectors: as
 /// bkey_extent_is_allocation().
 pub fn bkey_extent_is_allocation(k: &c::bkey) -> bool {
-    unsafe { c::bkey_extent_is_allocation(k) }
+    use c::bch_bkey_type as t;
+
+    [t::KEY_TYPE_extent, t::KEY_TYPE_reservation, t::KEY_TYPE_reflink_p, t::KEY_TYPE_reflink_v,
+     t::KEY_TYPE_inline_data, t::KEY_TYPE_indirect_inline_data, t::KEY_TYPE_error]
+        .iter().any(|ty| ty.0 == k.type_ as u32)
 }
 
 /// Whether @k reserves space rather than holding data - a reservation, or
 /// an extent with unwritten pointers: as bkey_extent_is_reservation().
-pub fn bkey_extent_is_reservation(fs: &Fs, k: BkeySC<'_>) -> bool {
-    unsafe { c::bkey_extent_is_reservation(fs.raw, k.to_raw()) }
+pub fn bkey_extent_is_reservation(k: BkeySC<'_>) -> bool {
+    k.k.type_ as u32 == c::bch_bkey_type::KEY_TYPE_reservation.0 ||
+        bkey_ptrs_sc(&k.v()).any(|p| p.unwritten() != 0)
 }
 
 /// @k's durability, for reserving space to rewrite it: as

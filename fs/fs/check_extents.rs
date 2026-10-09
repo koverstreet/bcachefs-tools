@@ -363,7 +363,7 @@ fn check_extent_past_end(
         let last_block = i.inode.bi_size.div_ceil(block_bytes) * block_bytes >> 9;
 
         if fsck_err_on!(trans, k.k.p.offset > last_block &&
-                        !extents::bkey_extent_is_reservation(fs, k),
+                        !extents::bkey_extent_is_reservation(k),
                         id::extent_past_end_of_inode,
                         "extent type past end of inode {}:{}, i_size {}\n{}",
                         i.inode.bi_inum, i.inode.bi_snapshot, i.inode.bi_size,
