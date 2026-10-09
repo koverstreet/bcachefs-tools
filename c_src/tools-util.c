@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/crc32c.h>
 #include <linux/fs.h>
 #include <signal.h>
 #include <stdbool.h>

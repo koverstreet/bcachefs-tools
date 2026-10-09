@@ -73,8 +73,4 @@ void blkid_check(int fd, const char *path, bool force);
 
 bool ask_yn(void);
 
-/* Avoid conflicts with libblkid's crc32 function in static builds */
-#define crc32c bch_crc32c
-u32 crc32c(u32, const void *, size_t);
-
 #endif /* _TOOLS_UTIL_H */
