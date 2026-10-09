@@ -193,6 +193,11 @@ $(obj)/mod.o: $(obj)/rust/bcachefs.rs $(obj)/libpaste.so $(obj)/libtypeinfo_macr
 targets += codegen rust/bcachefs.rs libpaste.so libtypeinfo_macros.so bitfield.o bitflags.o uuid.o
 bcachefs-y += mod.o rust/extern.o bitfield.o bitflags.o uuid.o
 
+# And what those rules write besides their targets: the rest of the codegen's
+# output, the rlibs' metadata, and the vendored stack's directory - here, as
+# clean doesn't always read Makefile.rust.vendor.
+clean-files += rust vrust lib*.rmeta
+
 # Makefile.rust.vendor builds mod.o against the vendored stack; otherwise kbuild
 # builds it.
 ifeq ($(bcachefs-vendor-rust),y)
