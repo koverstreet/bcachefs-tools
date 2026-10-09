@@ -34,6 +34,11 @@ const HEADERS: &[&str] = &[
     "util/varint.h",
 ];
 
+/// The kernel API headers for the CRCs the string hash uses: bound from the
+/// kernel's own in the kernel build (KERNEL_UNBLOCKLISTED). In userspace they
+/// stay blocklisted, and bcachefs-shim binds them.
+const CRC_HEADERS: &[&str] = &["linux/crc32c.h", "linux/crc64.h"];
+
 // Translated 1:1 from the bindgen builder calls in build.rs.
 const ALLOWLIST_FUNCTION: &[&str] = &[
     // rust_* are C shims that exist solely for Rust to call (e.g. util/locking.h
@@ -45,6 +50,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "journal_cur_seq",
     "prt_bytes",
     "bkey_extent_is_allocation", "bkey_extent_is_reservation", "crc_is_encoded",
+    "crc32c", "crc64_be",
     // crypto helpers for the dump sanitize path (static inlines, not
     // bch2_-prefixed): nonce constructors + bset_encrypt, driven from Rust
     // over the already-wrapped bch2_checksum / bch2_encrypt.
@@ -149,6 +155,7 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String], 
         body.push_str("#include \"generic-radix-tree.h\"\n");
     }
     body.push_str(&HEADERS.iter().map(|h| format!("#include \"{h}\"\n")).collect::<String>());
+    body.push_str(&CRC_HEADERS.iter().map(|h| format!("#include <{h}>\n")).collect::<String>());
     std::fs::write(&wrapper, body).expect("write wrapper header");
 
     let mut a: Vec<String> = vec![wrapper.clone()];
@@ -294,24 +301,58 @@ fn regex_escape(s: &str) -> String {
 /// `__u32` from the shim are the same type. Verified by generating on Arch and
 /// NixOS: identical type surfaces.
 pub fn default_blocklist(src: &str) -> Vec<String> {
-    vec![blocklist_dir(&format!("{}/include", parent(src)))]
+    vec![blocklist_dir(&format!("{}/include", parent(src)), &["uapi/"])]
 }
 
-/// A `--blocklist-file` regex for everything under `dir` — except its `uapi/`
-/// subtree, which must stay visible for the reason above.
+/// What the kernel build binds from the kernel's own header trees, which
+/// otherwise stay blocklisted: `uapi/`, and the CRCs the string hash uses,
+/// which `kernel::bindings` doesn't have. Userspace takes the CRCs from
+/// bcachefs-shim.
+const KERNEL_UNBLOCKLISTED: &[&str] = &["uapi/", "linux/crc32.h", "linux/crc64.h"];
+
+/// The kernel build's `--blocklist-file` regex for header tree `dir`.
+pub fn kernel_blocklist_dir(dir: &str) -> String {
+    blocklist_dir(dir, KERNEL_UNBLOCKLISTED)
+}
+
+/// A `--blocklist-file` regex for everything under `dir` — except what's under
+/// it in `unblocklisted`. That's always its `uapi/` subtree, which must stay
+/// visible for the reason above.
 ///
 /// The kernel build can't simply drop its blocklist the way userspace did: the
 /// trees it names hold the kernel's own structs — `inode`, `super_block`, `bio`
 /// — and `kernel::bindings` already binds those, so a second copy would be a
-/// different type and nothing would link. But the only part of them bcachefs
-/// reaches is `uapi/`, and there it's scalar typedefs, which are transparent.
-/// So the tree stays blocklisted and the uapi half is carved out.
-///
-/// bindgen matches these with the `regex` crate, which has no lookahead, so
-/// "under `dir` but not under `dir/uapi/`" is spelled as an alternation over the
-/// prefixes of `uapi/` that can't be completed.
-fn blocklist_dir(dir: &str) -> String {
-    format!(r"{}/(?:[^u]|u(?:[^a]|a(?:[^p]|p(?:[^i]|i[^/])))).*", regex_escape(dir))
+/// different type and nothing would link. But what bcachefs reaches of them is
+/// `uapi/`, where it's scalar typedefs, which are transparent - and the few
+/// functions in KERNEL_UNBLOCKLISTED. So the tree stays blocklisted and those
+/// are carved out.
+fn blocklist_dir(dir: &str, unblocklisted: &[&str]) -> String {
+    format!("{}/{}", regex_escape(dir), not_prefixed(unblocklisted))
+}
+
+/// A regex for any string that doesn't start with one of @prefixes. bindgen
+/// matches with the `regex` crate, which has no lookahead, so it's spelled out
+/// a character at a time: a character no prefix continues with matches,
+/// whatever follows; one that some do continues down those - unless it
+/// completes one.
+fn not_prefixed(prefixes: &[&str]) -> String {
+    let mut next: Vec<char> = prefixes.iter().filter_map(|p| p.chars().next()).collect();
+    next.sort();
+    next.dedup();
+
+    // '-' last in the class, where it's literal rather than a range
+    let class: String = next.iter().filter(|&&c| c != '-').map(|c| regex_escape(&c.to_string()))
+        .chain(next.contains(&'-').then(|| "-".to_string()))
+        .collect();
+    let mut alts = vec![format!("[^{class}].*")];
+    for c in next {
+        let rest: Vec<&str> = prefixes.iter().filter_map(|p| p.strip_prefix(c)).collect();
+        if rest.iter().any(|r| r.is_empty()) {
+            continue;
+        }
+        alts.push(format!("{}{}", regex_escape(&c.to_string()), not_prefixed(&rest)));
+    }
+    format!("(?:{})", alts.join("|"))
 }
 
 /// Generate the x-macro-derived *_gen.rs files from the *_format.h headers.
