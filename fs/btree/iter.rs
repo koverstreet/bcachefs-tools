@@ -743,7 +743,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// Have the commit reserve @sectors more, at @nr_replicas, for data an
     /// update rewrites: as bch2_trans_extra_disk_res_add().
     pub fn extra_disk_res_add(&self, sectors: u64, nr_replicas: u32) {
-        unsafe { c::bch2_trans_extra_disk_res_add(self.raw(), sectors, nr_replicas) }
+        let trans = unsafe { &mut *self.raw() };
+        trans.extra_disk_res += sectors;
+        trans.extra_disk_res_replicas = trans.extra_disk_res_replicas.max(nr_replicas as u8);
     }
 
     /// Queue @key as an update at @iter's position. Takes the iterator
@@ -757,13 +759,16 @@ impl<'a, 't> TransAttempt<'a, 't> {
         key:   &TransBkey<'_, 't>,
         flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
+        // No caller ip: C's is the call site's, _THIS_IP_, which Rust has
+        // no way to name.
         let ret = unsafe {
-            c::bch2_trans_update_buf(
+            c::bch2_trans_update_ip(
                 self.raw(),
                 iter.raw(),
                 key.as_ptr(),
                 key.buf_u64s,
                 c::btree_iter_update_trigger_flags(flags.bits()),
+                0,
             )
         };
         self.result(ret)
