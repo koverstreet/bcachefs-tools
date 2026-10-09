@@ -38,6 +38,10 @@ static inline void enumerated_ref_put(struct enumerated_ref *ref, unsigned idx)
 }
 #endif
 
+/* For Rust, which can't call the static inlines: */
+bool rust_enumerated_ref_tryget(struct enumerated_ref *, unsigned);
+void rust_enumerated_ref_put(struct enumerated_ref *, unsigned);
+
 static inline bool enumerated_ref_is_zero(struct enumerated_ref *ref)
 {
 #ifndef ENUMERATED_REF_DEBUG

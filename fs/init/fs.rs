@@ -280,7 +280,7 @@ impl Fs {
                 return ControlFlow::Continue(());
             }
             if f(unsafe { &*ca }).is_break() {
-                unsafe { c::enumerated_ref_put(&mut (*ca).io_ref[0 /* READ */], 0) };
+                unsafe { c::rust_enumerated_ref_put(&mut (*ca).io_ref[0 /* READ */], 0) };
                 return ControlFlow::Break(());
             }
         }
@@ -614,7 +614,7 @@ impl Fs {
     /// A write ref of kind @idx, unless the filesystem is going read-only: as
     /// enumerated_ref_tryget(&c->writes, idx).
     pub fn write_ref_tryget(&self, idx: c::bch_write_ref) -> Option<WriteRef<'_>> {
-        unsafe { c::enumerated_ref_tryget(&raw mut (*self.raw).writes, idx as u32) }
+        unsafe { c::rust_enumerated_ref_tryget(&raw mut (*self.raw).writes, idx as u32) }
             .then_some(WriteRef { fs: self, idx })
     }
 }
@@ -641,7 +641,7 @@ impl<'f> WriteRef<'f> {
 
 impl Drop for WriteRef<'_> {
     fn drop(&mut self) {
-        unsafe { c::enumerated_ref_put(&raw mut (*self.fs.raw).writes, self.idx as u32) };
+        unsafe { c::rust_enumerated_ref_put(&raw mut (*self.fs.raw).writes, self.idx as u32) };
     }
 }
 
