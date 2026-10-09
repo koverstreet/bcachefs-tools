@@ -26,6 +26,10 @@ bitfield = { path = "vendor/bitfield" }
 bitflags = { path = "vendor/bitflags" }
 paste    = { path = "vendor/paste" }
 uuid     = "1.2.2"
+# The target's ioctl number layout (util/ioctl.rs): bindgen output of each
+# architecture's own headers. Userspace only - the kernel build has no
+# crates.io.
+linux-raw-sys = { version = "0.12", default-features = false, features = ["general", "no_std"] }
 # Endian-typed integers for the on-disk format: byteorder::{little,big}_endian.
 zerocopy = "0.8"
 zeroize  = { version = "1", optional = true, features = ["std", "zeroize_derive"] }

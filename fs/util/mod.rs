@@ -3,6 +3,8 @@ pub mod async_exec;
 pub mod bitmask;
 pub mod darray;
 pub mod ffi;
+#[cfg(not(kernel))]
+pub mod ioctl;
 pub mod kernel;
 pub mod locking;
 pub mod log;

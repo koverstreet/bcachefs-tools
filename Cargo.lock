@@ -107,6 +107,7 @@ dependencies = [
  "bitfield-struct",
  "bitflags 2.11.1",
  "cc",
+ "linux-raw-sys",
  "paste 1.0.15",
  "uuid",
  "zerocopy",
