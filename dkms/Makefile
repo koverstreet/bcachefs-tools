@@ -14,7 +14,6 @@ export BCACHEFS_DKMS=1
 $(foreach v,$(filter BCACHEFS_%,$(.VARIABLES)),$(eval export $(v)))
 
 ifneq (${KERNELRELEASE},)
-ccflags-y := -I$(src)/include
 obj-m += src/fs/bcachefs/
 else
 KDIR ?= /lib/modules/`uname -r`/build
