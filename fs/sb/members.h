@@ -522,6 +522,12 @@ void bch2_dev_mi_field_upgrades_locked(struct bch_fs *, struct bch_dev *,
 void bch2_dev_mi_field_upgrades(struct bch_dev *);
 void bch2_fs_mi_field_upgrades(struct bch_fs *);
 
+/* For Rust, which can't call the static inlines: */
+void rust_bch2_dev_put(struct bch_dev *);
+struct bch_dev *rust_bch2_dev_tryget_noerror(struct bch_fs *, unsigned);
+struct bch_dev *rust_bch2_get_next_online_dev(struct bch_fs *, struct bch_dev *,
+					      unsigned, int, unsigned);
+
 static inline void bch2_prt_member_name(struct printbuf *out, struct bch_fs *c, unsigned idx)
 {
 	if (idx == BCH_SB_MEMBER_INVALID) {

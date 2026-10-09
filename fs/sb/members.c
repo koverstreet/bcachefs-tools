@@ -1017,3 +1017,20 @@ void bch2_fs_mi_field_upgrades(struct bch_fs *c)
 		bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &w);
 	}
 }
+
+/* For Rust: static inlines over percpu refs and RCU */
+void rust_bch2_dev_put(struct bch_dev *ca)
+{
+	bch2_dev_put(ca);
+}
+
+struct bch_dev *rust_bch2_dev_tryget_noerror(struct bch_fs *c, unsigned dev)
+{
+	return bch2_dev_tryget_noerror(c, dev);
+}
+
+struct bch_dev *rust_bch2_get_next_online_dev(struct bch_fs *c, struct bch_dev *ca,
+					      unsigned state_mask, int rw, unsigned ref_idx)
+{
+	return bch2_get_next_online_dev(c, ca, state_mask, rw, ref_idx);
+}

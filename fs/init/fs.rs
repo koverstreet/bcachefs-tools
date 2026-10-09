@@ -35,7 +35,7 @@ impl core::ops::Deref for DevRef {
 
 impl Drop for DevRef {
     fn drop(&mut self) {
-        unsafe { c::bch2_dev_put(self.0) };
+        unsafe { c::rust_bch2_dev_put(self.0) };
     }
 }
 
@@ -275,7 +275,7 @@ impl Fs {
         let mut ca: *mut c::bch_dev = core::ptr::null_mut();
         loop {
             // any device state, READ ref-class, ref_idx 0.
-            ca = unsafe { c::bch2_get_next_online_dev(self.raw, ca, !0u32, 0 /* READ */, 0) };
+            ca = unsafe { c::rust_bch2_get_next_online_dev(self.raw, ca, !0u32, 0 /* READ */, 0) };
             if ca.is_null() {
                 return ControlFlow::Continue(());
             }
@@ -323,7 +323,7 @@ impl Fs {
     /// Get a reference to a device by index. Returns None if the device
     /// doesn't exist or can't be referenced.
     pub fn dev_get(&self, dev: u32) -> Option<DevRef> {
-        let ca = unsafe { c::bch2_dev_tryget_noerror(self.raw, dev) };
+        let ca = unsafe { c::rust_bch2_dev_tryget_noerror(self.raw, dev) };
         if ca.is_null() { None } else { Some(DevRef(ca)) }
     }
 
