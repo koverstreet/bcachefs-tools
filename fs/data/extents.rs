@@ -183,7 +183,7 @@ impl<'a> Iterator for ExtentEntryIterMut<'a> {
         }
 
         let entry = unsafe { &mut *self.cur };
-        let u64s = unsafe { c::extent_entry_u64s(self.fs.raw, self.cur) as usize };
+        let u64s = entry_u64s(self.fs, entry);
         if u64s == 0 {
             return None;
         }
@@ -202,14 +202,35 @@ pub(crate) fn bkey_extent_entries_mut<'a>(
     fs: &'a Fs,
     k:  &'a mut BkeyS<'_>,
 ) -> ExtentEntryIterMut<'a> {
-    let ptrs = unsafe { c::bch2_bkey_ptrs(k.to_raw()) };
+    // Where the entries are, by the read-only view - as offsets into the
+    // value, taken mutably from its bytes below:
+    let span = {
+        let sc = k.as_sc();
+        let v = sc.v as *const c::bch_val as *const u8;
+        bkey_ptrs_raw(&sc.v()).map(|(start, end)| unsafe {
+            ((start as *const u8).offset_from(v) as usize,
+             (end   as *const u8).offset_from(v) as usize)
+        })
+    };
+    let (start, end) = span.unwrap_or((0, 0));
+    let val = k.val_bytes_mut().as_mut_ptr();
 
     ExtentEntryIterMut {
         fs,
-        cur:      ptrs.start,
-        end:      ptrs.end,
+        cur:      unsafe { val.add(start).cast() },
+        end:      unsafe { val.add(end).cast() },
         _phantom: PhantomData,
     }
+}
+
+/// @entry's size in u64s, from this filesystem's table - which can know
+/// types this code doesn't: as extent_entry_u64s().
+fn entry_u64s(fs: &Fs, entry: &c::bch_extent_entry) -> usize {
+    let ty = extent_entry_type(entry) as usize;
+    let sb = unsafe { &(*fs.raw).sb };
+    assert!(ty < sb.extent_types_known as usize,
+            "extent entry type {ty}, of {} known: a validated key has none", sb.extent_types_known);
+    sb.extent_type_u64s[ty] as usize
 }
 
 pub struct ExtentPtrIterMut<'a> {
