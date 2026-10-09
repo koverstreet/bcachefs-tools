@@ -601,7 +601,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             core::ptr::copy_nonoverlapping(k.k, &mut dst_key.k, 1);
             core::ptr::copy_nonoverlapping(
                 k.v as *const c::bch_val as *const u64,
-                &mut dst.as_mut_u64s()[BKEY_U64S] as *mut u64,
+                dst.as_mut_u64s().as_mut_ptr().add(BKEY_U64S),
                 k.k.u64s as usize - BKEY_U64S,
             );
         }
@@ -622,7 +622,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             core::ptr::copy_nonoverlapping(k.k, &mut dst.k_i_mut().k, 1);
             core::ptr::copy_nonoverlapping(
                 k.v as *const c::bch_val as *const u64,
-                &mut dst.as_mut_u64s()[BKEY_U64S] as *mut u64,
+                dst.as_mut_u64s().as_mut_ptr().add(BKEY_U64S),
                 copy_val,
             );
         }
