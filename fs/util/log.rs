@@ -36,8 +36,7 @@ pub fn log(fs: &Fs, level: LogLevel, args: fmt::Arguments<'_>) {
 
     #[cfg(kernel)]
     {
-        let name = unsafe { core::ffi::CStr::from_ptr(c::bch2_fs_name(fs.raw)) };
-        write!(buf, "bcachefs ({}): ", name.to_str().unwrap_or("?"));
+        write!(buf, "bcachefs ({}): ", fs.name().to_str().unwrap_or("?"));
     }
     buf.write_fmt(args);
     buf.newline();

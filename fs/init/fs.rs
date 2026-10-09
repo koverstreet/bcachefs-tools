@@ -108,6 +108,11 @@ impl core::fmt::Display for c::bcachefs_metadata_version {
 }
 
 impl Fs {
+    /// The filesystem's name, as its messages give it.
+    pub fn name(&self) -> &core::ffi::CStr {
+        unsafe { core::ffi::CStr::from_ptr((*self.raw).name.as_ptr()) }
+    }
+
     /// The filesystem's options, as resolved at open.
     pub fn opts(&self) -> &c::bch_opts {
         unsafe { &(*self.raw).opts }
