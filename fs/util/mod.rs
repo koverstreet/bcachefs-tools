@@ -10,6 +10,7 @@ pub mod locking;
 pub mod log;
 pub mod os_str;
 pub mod printbuf;
+pub mod rcu;
 pub mod varint;
 pub mod vstructs;
 
