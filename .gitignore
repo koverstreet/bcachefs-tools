@@ -28,7 +28,7 @@ build.vars
 bcachefs-principles-of-operation.*
 doc/generated/
 
-fs/bcachefs-kernel/Cargo.lock
+modules.order
 
 # Vendored-Rust build scratch: fs/Makefile.rust.vendor builds the kernel's
 # target-spec generator in here and runs it to produce target.json, and stages
