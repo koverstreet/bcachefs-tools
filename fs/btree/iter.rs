@@ -608,7 +608,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     {
         let mut k = self.bkey_alloc((BKEY_U64S + val_u64s) as u32)?;
         k.as_mut_u64s().fill(0);
-        unsafe { c::bkey_init(k.k_mut()) };
+        *k.k_mut() = c::bkey::new();
         k.k_mut().u64s = (BKEY_U64S + val_u64s) as u8;
         k.k_mut().type_ = type_;
         k.k_mut().p = pos;

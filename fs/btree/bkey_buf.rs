@@ -32,7 +32,7 @@ impl BkeyBuf {
     /// Holding a deleted key, as bch2_bkey_buf_init() leaves it.
     pub fn new() -> Self {
         let mut b = BkeyBuf { onstack: [0; ONSTACK_U64S], heap: None };
-        unsafe { c::bkey_init(&mut b.k_i_mut().k) };
+        b.k_i_mut().k = c::bkey::new();
         b
     }
 
