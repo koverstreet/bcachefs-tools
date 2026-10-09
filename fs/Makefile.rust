@@ -10,17 +10,19 @@
 # (Makefile.rust.vendor); failing both, say why. BCACHEFS_RUST_VENDOR=1 forces
 # the vendored one, for testing.
 
-# Why the kernel's Rust can't be used, or empty. The probes answer "y" or why
-# not.
+# Can we build against the kernel's Rust, or our own? "y", or why not.
+bch-rust-available = $(shell RUSTC='$(RUSTC)' HOSTRUSTC='$(HOSTRUSTC)'	\
+	BINDGEN='$(BINDGEN)' CC='$(CC)' KERNEL_SRC='$(srctree)'		\
+	KERNEL_OBJ='$(objtree)' CONFIG_RUSTC_VERSION='$(CONFIG_RUSTC_VERSION)' \
+	RUSTC_MIN=1.85.0 $(CONFIG_SHELL) $(src)/scripts/rust-available.sh $(1))
+
+# Why the kernel's Rust can't be used, or empty.
 ifndef CONFIG_RUST
 bcachefs-kernel-rust-why := kernel $(KERNELVERSION) was built without CONFIG_RUST
 else ifeq ($(BCACHEFS_RUST_VENDOR),1)
 bcachefs-kernel-rust-why := vendored Rust forced with BCACHEFS_RUST_VENDOR=1
 else ifdef BCACHEFS_DKMS
-bcachefs-kernel-rust-why := $(filter-out y,$(shell RUSTC='$(RUSTC)' HOSTRUSTC='$(HOSTRUSTC)' \
-	BINDGEN='$(BINDGEN)' CC='$(CC)' KERNEL_SRC='$(srctree)'		\
-	KERNEL_OBJ='$(objtree)' CONFIG_RUSTC_VERSION='$(CONFIG_RUSTC_VERSION)' \
-	$(CONFIG_SHELL) $(src)/scripts/rust-is-available-dkms.sh))
+bcachefs-kernel-rust-why := $(filter-out y,$(call bch-rust-available,kernel))
 # --target: on x86 a generated scripts/target.json, which headers may lack.
 bcachefs-kernel-rust-target := $(patsubst --target=%,%,$(filter --target=%.json,$(KBUILD_RUSTFLAGS)))
 ifeq ($(bcachefs-kernel-rust-why),)
@@ -32,9 +34,7 @@ bcachefs-kernel-rust-why := $(if $(shell command -v $(BINDGEN) 2>/dev/null),,bin
 endif
 
 ifneq ($(bcachefs-kernel-rust-why),)
-bcachefs-vendor-rust-probe := $(shell RUSTC='$(RUSTC)' HOSTRUSTC='$(HOSTRUSTC)' \
-	BINDGEN='$(BINDGEN)' KERNEL_OBJ='$(objtree)' RUSTC_MIN=1.85.0	\
-	$(CONFIG_SHELL) $(src)/scripts/rust-vendor-available.sh)
+bcachefs-vendor-rust-probe := $(call bch-rust-available,vendored)
 ifeq ($(bcachefs-vendor-rust-probe),y)
 bcachefs-vendor-rust := y
 else ifneq ($(.DEFAULT_GOAL),__clean)

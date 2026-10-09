@@ -435,8 +435,7 @@ install_dkms: dkms/dkms.conf dkms/module-version.c
 	mkdir -p $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/vendor
 	cp -a fs/vendor/kernel-rust $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/vendor/
 	$(INSTALL) -m0755 -D fs/scripts/getdents-layout.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
-	$(INSTALL) -m0755 -D fs/scripts/rust-is-available-dkms.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
-	$(INSTALL) -m0755 -D fs/scripts/rust-vendor-available.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
+	$(INSTALL) -m0755 -D fs/scripts/rust-available.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
 	$(INSTALL) -m0755 -D fs/scripts/fetch-module.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
 	$(INSTALL) -m0644 -D signing/bcachefs-signing-ca.pem -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
 	$(INSTALL) -m0644 -D dkms/module-version.c	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
