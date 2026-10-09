@@ -15,7 +15,6 @@
 
 #include "util/siphash.h"
 
-#include <linux/crc32c.h>
 #include <crypto/sha2.h>
 
 static inline enum bch_str_hash_type
@@ -49,78 +48,5 @@ struct bch_hash_info {
 
 struct bch_hash_info __bch2_hash_info_init(struct bch_fs *, const struct bch_inode_unpacked *);
 int bch2_hash_info_init(struct bch_fs *, const struct bch_inode_unpacked *, struct bch_hash_info *);
-
-struct bch_str_hash_ctx {
-	union {
-		u32		crc32c;
-		u64		crc64;
-		SIPHASH_CTX	siphash;
-	};
-};
-
-static inline void bch2_str_hash_init(struct bch_str_hash_ctx *ctx,
-				     const struct bch_hash_info *info)
-{
-	switch (info->type) {
-	case BCH_STR_HASH_crc32c:
-		ctx->crc32c = crc32c(~0, &info->siphash_key.k0,
-				     sizeof(info->siphash_key.k0));
-		break;
-	case BCH_STR_HASH_crc64:
-		ctx->crc64 = crc64_be(~0, &info->siphash_key.k0,
-				      sizeof(info->siphash_key.k0));
-		break;
-	case BCH_STR_HASH_siphash_old:
-	case BCH_STR_HASH_siphash:
-		SipHash24_Init(&ctx->siphash, &info->siphash_key);
-		break;
-	default:
-		BUG();
-	}
-}
-
-static inline void bch2_str_hash_update(struct bch_str_hash_ctx *ctx,
-				       const struct bch_hash_info *info,
-				       const void *data, size_t len)
-{
-	switch (info->type) {
-	case BCH_STR_HASH_crc32c:
-		ctx->crc32c = crc32c(ctx->crc32c, data, len);
-		break;
-	case BCH_STR_HASH_crc64:
-		ctx->crc64 = crc64_be(ctx->crc64, data, len);
-		break;
-	case BCH_STR_HASH_siphash_old:
-	case BCH_STR_HASH_siphash:
-		SipHash24_Update(&ctx->siphash, data, len);
-		break;
-	default:
-		BUG();
-	}
-}
-
-static inline u64 __bch2_str_hash_end(struct bch_str_hash_ctx *ctx,
-				      const struct bch_hash_info *info)
-{
-	switch (info->type) {
-	case BCH_STR_HASH_crc32c:
-		return ctx->crc32c;
-	case BCH_STR_HASH_crc64:
-		return ctx->crc64 >> 1;
-	case BCH_STR_HASH_siphash_old:
-	case BCH_STR_HASH_siphash:
-		return SipHash24_End(&ctx->siphash) >> 1;
-	default:
-		BUG();
-	}
-}
-
-static inline u64 bch2_str_hash_end(struct bch_str_hash_ctx *ctx,
-				    const struct bch_hash_info *info,
-				    bool maybe_31bit)
-{
-	return __bch2_str_hash_end(ctx, info) &
-		(maybe_31bit && info->is_31bit ? INT_MAX : U64_MAX);
-}
 
 #endif /* _BCACHEFS_STR_HASH_H */

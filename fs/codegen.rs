@@ -50,7 +50,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "journal_cur_seq",
     "prt_bytes",
     "bkey_extent_is_allocation", "bkey_extent_is_reservation", "crc_is_encoded",
-    "crc32c", "crc64_be",
+    "crc32c", "crc64_be", "SipHash_.*",
     // crypto helpers for the dump sanitize path (static inlines, not
     // bch2_-prefixed): nonce constructors + bset_encrypt, driven from Rust
     // over the already-wrapped bch2_checksum / bch2_encrypt.

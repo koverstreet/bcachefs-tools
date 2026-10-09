@@ -49,19 +49,70 @@ pub trait HashTable {
     }
 }
 
-/// @parts, one after another, hashed under @info: bch2_str_hash_init(),
-/// bch2_str_hash_update() for each, bch2_str_hash_end(). With @maybe_31bit,
-/// the hash is cut to fit a directory with 31 bit offsets.
-pub fn hash_parts(info: &c::bch_hash_info, parts: &[&[u8]], maybe_31bit: bool) -> u64 {
-    let mut ctx = c::bch_str_hash_ctx::default();
+/// The name hash, as it's running: what @info's type hashes with. crc32c and
+/// crc64 are keyed with the first word of the siphash key, hashed first.
+enum StrHash {
+    Crc32c(u32),
+    Crc64(u64),
+    SipHash(c::SIPHASH_CTX),
+}
 
-    unsafe {
-        c::bch2_str_hash_init(&mut ctx, info);
-        for p in parts {
-            c::bch2_str_hash_update(&mut ctx, info, p.as_ptr() as *const c_void, p.len());
+impl StrHash {
+    fn new(info: &c::bch_hash_info) -> Self {
+        use c::bch_str_hash_type as T;
+
+        // An __le64: its bytes as they're stored
+        let k0 = info.siphash_key.k0.to_ne_bytes();
+
+        match info.type_ as u32 {
+            t if t == T::BCH_STR_HASH_crc32c as u32 => Self::Crc32c(crc32c(!0, &k0)),
+            t if t == T::BCH_STR_HASH_crc64 as u32 => Self::Crc64(crc64_be(!0, &k0)),
+            t if t == T::BCH_STR_HASH_siphash_old as u32 ||
+                 t == T::BCH_STR_HASH_siphash as u32 => {
+                let mut ctx = c::SIPHASH_CTX::default();
+                unsafe { c::SipHash_Init(&mut ctx, &info.siphash_key) };
+                Self::SipHash(ctx)
+            }
+            t => panic!("bch_hash_info: str_hash type {t} isn't one"),
         }
-        c::bch2_str_hash_end(&mut ctx, info, maybe_31bit)
     }
+
+    fn update(&mut self, data: &[u8]) {
+        match self {
+            Self::Crc32c(crc) => *crc = crc32c(*crc, data),
+            Self::Crc64(crc) => *crc = crc64_be(*crc, data),
+            Self::SipHash(ctx) => unsafe {
+                c::SipHash_Update(ctx, 2, 4, data.as_ptr() as *const c_void, data.len())
+            },
+        }
+    }
+
+    /// The hash: 63 bits, other than crc32c's 32.
+    fn end(self) -> u64 {
+        match self {
+            Self::Crc32c(crc) => crc as u64,
+            Self::Crc64(crc) => crc >> 1,
+            Self::SipHash(mut ctx) => unsafe { c::SipHash_End(&mut ctx, 2, 4) >> 1 },
+        }
+    }
+}
+
+fn crc32c(crc: u32, data: &[u8]) -> u32 {
+    unsafe { c::crc32c(crc, data.as_ptr() as *const c_void, data.len() as _) }
+}
+
+fn crc64_be(crc: u64, data: &[u8]) -> u64 {
+    unsafe { c::crc64_be(crc, data.as_ptr() as *const c_void, data.len() as _) }
+}
+
+/// @parts, one after another, hashed under @info. With @maybe_31bit, the hash
+/// is cut to fit a directory with 31 bit offsets.
+pub fn hash_parts(info: &c::bch_hash_info, parts: &[&[u8]], maybe_31bit: bool) -> u64 {
+    let mut h = StrHash::new(info);
+    for p in parts {
+        h.update(p);
+    }
+    h.end() & if maybe_31bit && info.is_31bit { i32::MAX as u64 } else { u64::MAX }
 }
 
 // ── The hash table operations ────────────────────────────────────────────
