@@ -795,7 +795,25 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn insert_snapshot_whiteouts(&self, btree: c::btree_id, old_pos: bpos, new_pos: bpos)
         -> Result<(), BchError>
     {
-        let ret = unsafe { c::bch2_insert_snapshot_whiteouts(self.raw(), btree, old_pos, new_pos) };
+        assert_eq!(old_pos.snapshot, new_pos.snapshot);
+
+        if crate::BTREE_HAS_SNAPSHOTS_MASK & (1 << btree as u32) == 0 || bkey_eq(old_pos, new_pos) {
+            return Ok(());
+        }
+
+        let mut ids = crate::snapshots::snapshot::overwrites(self, btree, old_pos)?;
+        if ids.is_empty() {
+            return Ok(());
+        }
+
+        // Lent to C, which only reads it:
+        let mut list = c::snapshot_id_list {
+            nr:           ids.len(),
+            size:         ids.len(),
+            data:         ids.as_mut_ptr(),
+            preallocated: Default::default(),
+        };
+        let ret = unsafe { c::__bch2_insert_snapshot_whiteouts(self.raw(), btree, new_pos, &mut list) };
         self.result(ret)
     }
 
