@@ -1212,6 +1212,15 @@ where
     lockrestart_do(&trans, f)
 }
 
+/// @k, if it's a @type_ - any type, for KEY_TYPE_deleted:
+/// ENOENT_bkey_type_mismatch if it isn't. As __bch2_bkey_get_typed().
+fn bkey_typed<'k>(fs: &Fs, k: BkeySC<'k>, type_: c::bch_bkey_type) -> Result<BkeySC<'k>, BchError> {
+    if type_ != c::bch_bkey_type::KEY_TYPE_deleted && k.k.type_ as u32 != type_.0 {
+        return fs.throw(bch_errcode::BCH_ERR_ENOENT_bkey_type_mismatch);
+    }
+    Ok(k)
+}
+
 impl c::btree_iter {
     fn iter_flags(&self) -> BtreeIterFlags {
         BtreeIterFlags::from_bits_retain(self.flags)
@@ -1540,22 +1549,22 @@ impl<'t> BtreeIter<'t> {
                                        type_: c::bch_bkey_type)
         -> Result<BkeySC<'k>, BchError>
     {
-        let k = self.peek_raw(t, |raw| unsafe { c::__bch2_bkey_get_typed(raw, type_) })?;
-        Ok(k.expect("a slot always has a key"))
+        let k = self.peek_slot(t)?.expect("a slot always has a key");
+        bkey_typed(t.fs(), k, type_)
     }
 
     /// As peek_slot_typed(), for a key to update through this iterator: the
     /// iterator comes back shared, for as long as the key is used - as the
     /// for_each loops pass it - so the key can't be moved out from under.
-    pub fn peek_slot_typed_shared<'k>(&'k mut self, _t: &'k TransAttempt<'_, 't>,
+    pub fn peek_slot_typed_shared<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>,
                                       type_: c::bch_bkey_type)
         -> Result<(&'k Self, BkeySC<'k>), BchError>
     {
         let this: &'k Self = self;
         // 'k: the key is valid while the iterator is borrowed, within the
         // attempt - shared, it can't be moved or peeked again
-        let k = unsafe { bkey_s_c_to_result::<'k>(c::__bch2_bkey_get_typed(this.raw.get(), type_))? };
-        Ok((this, k.expect("a slot always has a key")))
+        let k = unsafe { bkey_s_c_to_result::<'k>(c::bch2_btree_iter_peek_slot(this.raw.get()))? };
+        Ok((this, bkey_typed(t.fs(), k.expect("a slot always has a key"), type_)?))
     }
 
     pub fn peek_max_flags<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>, end: bpos,
