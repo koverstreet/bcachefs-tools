@@ -163,14 +163,14 @@ vr-redirect-intrinsics := __addsf3 __eqsf2 __extendsfdf2 __gesf2 __lesf2 __ltsf2
 	__muldf3 __unorddf2 __muloti4 __multi3 __udivmodti4 __udivti3 __umodti3
 $(VRD)/core.o: private rs-edition := $(shell sed -n 's/^edition *= *"\(.*\)"/\1/p' $(RUST_LIB_SRC)/core/Cargo.toml)
 $(VRD)/core.o: private rs-flags := --cap-lints=allow --cfg no_fp_fmt_parse
-$(VRD)/core.o: private rs-post = ; objcopy $(foreach s,$(vr-redirect-intrinsics),--redefine-sym $(s)=__rust$(s)) $@
+$(VRD)/core.o: private rs-post = ; $(OBJCOPY) $(foreach s,$(vr-redirect-intrinsics),--redefine-sym $(s)=__rust$(s)) $@
 $(VRD)/core.o: $(RUST_LIB_SRC)/core/src/lib.rs FORCE
 	$(call if_changed_dep,bch_rlib)
 KCOV_INSTRUMENT_vrust/core.o := n
 
 vr-core := --cap-lints=allow --extern core=$(VRD)/libcore.rmeta
 $(VRD)/compiler_builtins.o: private rs-flags := $(vr-core)
-$(VRD)/compiler_builtins.o: private rs-post = ; objcopy -w -W '__*' $@
+$(VRD)/compiler_builtins.o: private rs-post = ; $(OBJCOPY) -w -W '__*' $@
 $(VRD)/compiler_builtins.o: $(VENDOR)/compiler_builtins.rs $(VRD)/core.o FORCE
 	$(call if_changed_dep,bch_rlib)
 
