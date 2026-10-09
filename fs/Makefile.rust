@@ -133,6 +133,11 @@ CFLAGS_rust/extern.o += -Wno-missing-prototypes -Wno-missing-declarations \
 # mod.rs tests cfg(kernel), to take the kernel-compat types from the kernel
 # crate (userspace has bcachefs-shim), and __KERNEL__, as C does.
 RUSTFLAGS_mod.o += --cfg kernel --cfg __KERNEL__
+# And our CONFIG defines, which the kernel's rustc_cfg doesn't have, not being
+# in its .config: -DCONFIG_FOO=1 is --cfg CONFIG_FOO. The Rust tests them as
+# the C does, and a define one side sees and the other doesn't is code that
+# exists on one side only.
+RUSTFLAGS_mod.o += $(foreach f,$(bcachefs-config-cppflags),--cfg $(firstword $(subst =, ,$(patsubst -D%,%,$(f)))))
 
 # ---- crates kbuild doesn't build for us -------------------------------------
 # These, and Makefile.rust.vendor's. The crate name comes from the target -

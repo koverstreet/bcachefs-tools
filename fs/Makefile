@@ -28,7 +28,7 @@ bcachefs-config-cppflags := \
 	$(if $(CONFIG_QUOTA),-DCONFIG_BCACHEFS_QUOTA=1)
 endif
 
-# bindgen gets these too (Makefile.rust): some change struct layouts
+# bindgen and rustc get these too (Makefile.rust): some change struct layouts
 # (CONFIG_BCACHEFS_DEBUG adds btree_iter.ip_allocated), and C and Rust
 # disagreeing on one is silent memory corruption.
 subdir-ccflags-y += $(bcachefs-config-cppflags)
