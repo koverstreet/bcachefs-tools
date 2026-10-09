@@ -110,6 +110,9 @@ static inline u64 bch2_inode_shard_idx(struct bch_fs *c)
 		: 0;
 }
 
+/* For Rust, which can't call the static inline: */
+u64 rust_bch2_inode_shard_idx(struct bch_fs *);
+
 static inline unsigned bch2_inode_shard_cpu(struct bch_fs *c)
 {
 	return c->inode_shard_cpu[bch2_inode_shard_idx(c)];

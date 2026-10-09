@@ -1384,3 +1384,12 @@ void __bch2_trans_verify_locks(struct btree_trans *trans)
 	trans_for_each_path(trans, path, i)
 		__bch2_btree_path_verify_locks(trans, path);
 }
+
+/*
+ * For Rust: the shard is the thread's for inode numbers and for the CPU its
+ * transactions run on, so there's one implementation - the static inline
+ */
+u64 rust_bch2_inode_shard_idx(struct bch_fs *c)
+{
+	return bch2_inode_shard_idx(c);
+}
