@@ -35,7 +35,10 @@ endif
 # adds inode quota fields. If bindgen and the C compile disagree on even one -D,
 # struct sizes diverge silently and the C code writes past Rust-allocated structs
 # (e.g. the MaybeUninit<btree_iter> in BtreeIter::new) — stack-smashing corruption.
+#
+# DKMS only: in-tree, the kernel's .config has these.
 bcachefs-config-cppflags :=
+ifdef BCACHEFS_DKMS
 ifdef BCACHEFS_DEBUG
 	bcachefs-config-cppflags += -DCONFIG_BCACHEFS_DEBUG=1
 endif
@@ -48,6 +51,7 @@ endif
 # The in-kernel unit tests (CONFIG_BCACHEFS_TESTS).
 ifdef BCACHEFS_TESTS
 	bcachefs-config-cppflags += -DCONFIG_BCACHEFS_TESTS=1
+endif
 endif
 
 # Make bcachefs's own warnings fatal without CONFIG_WERROR for the whole
