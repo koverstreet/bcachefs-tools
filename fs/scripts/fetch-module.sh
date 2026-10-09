@@ -49,7 +49,7 @@
 #     default) it appends a signature the kernel verifies instead; where it is
 #     not (default Debian) the retained farm signature loads it via the enrolled
 #     bcachefs CA (see the debian/ MOK-enrollment flow). Either way a miss falls
-#     back to a local build. (Analysis: .claude/2026-06-29-module-pipeline-trust-model.md.)
+#     back to a local build.
 
 set -e
 
