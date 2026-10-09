@@ -38,7 +38,7 @@ static const unsigned long BCH_BLKROTATIONAL	= BLKROTATIONAL;
 
 /*
  * FS_IOC_GETFSSYSFSPATH is a generic VFS ioctl, so it's in neither the block
- * list above nor bcachefs's own (bcachefs_ioctl.h) - and it was open-coded in Rust
+ * list above nor bcachefs's own (bcachefs_ioctl.rs) - and it was open-coded in Rust
  * as (2 << 30) | (size << 16) | (0x15 << 8) | 1, which is the same asm-generic
  * restatement #904 was about, still wrong on ppc64le, three files from the fix.
  * Reported by logan2611.

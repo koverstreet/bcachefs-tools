@@ -241,7 +241,7 @@ quiet_cmd_bch_vr_mod = RUSTC M  $@
 	--extern pin_init=$(VRD)/libpin_init.rmeta --extern bindings=$(VRD)/libbindings.rmeta \
 	--extern zerocopy=$(VRD)/libzerocopy.rmeta \
 	--emit=obj=$@ $<
-$(obj)/mod.o: $(src)/mod.rs $(obj)/rust/bcachefs.rs $(VRD)/kernel.o $(VRD)/zerocopy.o FORCE
+$(obj)/mod.o: $(src)/mod.rs $(obj)/rust/bindings.rs $(VRD)/kernel.o $(VRD)/zerocopy.o FORCE
 	$(call if_changed,bch_vr_mod)
 
 bch-vr-objs := $(addprefix vrust/,core.o compiler_builtins.o ffi.o build_error.o \

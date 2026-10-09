@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! ioctl numbers, as the kernel's _IO*() macros make them, and the trait each
-//! ioctl's marker type implements: its number bound to its argument type, so
-//! a call can't pair the wrong two.
+//! ioctl numbers, as the kernel's _IO*() macros make them, and the trait
+//! c_ioctl! (bcachefs_ioctl.rs) gives each ioctl: its number bound to its
+//! argument type, so a call can't pair the wrong two.
 //!
 //! An ioctl number packs a direction, a type (bcachefs's is 0xbc), a number
 //! and the argument's size: asm-generic/ioctl.h's _IOC(), the same packing on
@@ -12,6 +12,8 @@
 //! linux-raw-sys, bindgen's view of each target's own headers; nothing here
 //! restates them. A hand-written opcode() that had asm-generic's layout
 //! everywhere got ppc64le ENOTTY (#904).
+//!
+//! The generated header asserts that C's _IO*() make the same numbers.
 //!
 //! Userspace only, for now: the kernel crate's equivalent, kernel::ioctl,
 //! has asm-generic's constants on powerpc from 6.4, where it arrived, through

@@ -1,8 +1,8 @@
-//! Typed ioctl calls over the generated inventory.
+//! Typed ioctl calls over the ioctls bcachefs_ioctl.rs defines.
 //!
-//! `bch_bindgen::ioctl` (re-exported here) carries one marker type per
-//! `_IO*()` define in bcachefs_ioctl.h, binding the opcode to its argument
-//! type so a call site can't pair the wrong two. This module adds the calls
+//! Its c_ioctl! lists (re-exported here, with the argument structs) give
+//! each ioctl a marker type, binding the opcode to its argument type so a
+//! call site can't pair the wrong two. This module adds the calls
 //! themselves: the three argument shapes, and one errno-to-io::Error
 //! conversion for the whole tree.
 //!
@@ -12,7 +12,8 @@
 use std::io;
 use std::os::fd::{AsFd, AsRawFd};
 
-pub use bch_bindgen::ioctl::*;
+pub use bcachefs_kernel::cstructs::bcachefs_ioctl::*;
+pub use bcachefs_kernel::util::ioctl::Ioctl;
 
 fn ret(r: libc::c_int) -> io::Result<i32> {
     if r < 0 {

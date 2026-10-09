@@ -122,17 +122,18 @@ pub mod c {
     #![allow(unused)]
     #![allow(unnecessary_transmutes)]
 
-    // Kernel types (bio, __u64, locks, …) that the fs/ bindings reference are
-    // blocklisted by build.rs and resolved here. Userspace and local builds
-    // source them from bcachefs-shim; the in-kernel build (`--cfg kernel`)
-    // sources them from the kernel crate's raw bindings instead.
+    // The kernel's types and functions (bio, __u64, locks, …). Userspace
+    // builds take them from bcachefs-shim; the in-kernel build (`--cfg
+    // kernel`) from the kernel crate's raw bindings, and what those don't
+    // cover - the CRCs, genradix, the vendored closures - from codegen.rs's.
     #[cfg(not(kernel))]
     pub use bcachefs_shim::c::*;
     #[cfg(kernel)]
     pub use kernel::bindings::*;
+    #[cfg(kernel)]
+    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
-    // The types defined in Rust that C shares: bindgen leaves them out
-    // (codegen.rs's rust_defined_types()). printbuf the shim has too - ours.
+    // The types defined in Rust that C shares. printbuf the shim has too - ours.
     pub use crate::cstructs::c::*;
     pub use crate::cstructs::c::printbuf;
 
@@ -154,11 +155,6 @@ pub mod c {
     #[cfg(kernel)]
     pub type rcu_head = callback_head;
 
-    // The generated bindings carry #[derive(TypeInfo)] on the bch_* family
-    // (injected by codegen.rs); bring the derive macro into scope for them.
-    use typeinfo_macros::TypeInfo;
-
-    include!(concat!(env!("OUT_DIR"), "/bcachefs.rs"));
 
     crate::impl_darray!(bch_sb_handles, bch_sb_handle);
 

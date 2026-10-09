@@ -35,8 +35,3 @@ linux-raw-sys = { version = "0.12", default-features = false, features = ["gener
 # Endian-typed integers for the on-disk format: byteorder::{little,big}_endian.
 zerocopy = "0.8"
 zeroize  = { version = "1", optional = true, features = ["std", "zeroize_derive"] }
-
-[build-dependencies]
-# build.rs drives the `bindgen` CLI (see codegen.rs) rather than the bindgen
-# library, so the only build-dep is cc, for the static-inline wrappers.
-cc = "1.0"

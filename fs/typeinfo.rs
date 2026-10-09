@@ -3,9 +3,8 @@
 //! Runtime type information for the C on-disk structures.
 //!
 //! Static per-type field tables — name, offset, width, endianness — for the
-//! bindgen-generated structs, produced by `#[derive(TypeInfo)]`
-//! (fs/typeinfo-macros/) which bindgen injects on every `bch_*`-family type
-//! (see the `--with-derive-custom-*` flags in codegen.rs). Offsets come from
+//! on-disk structs, produced by `#[derive(TypeInfo)]` (fs/typeinfo-macros/)
+//! on their Rust definitions. Offsets come from
 //! `offset_of!`, so the compiler guarantees them against the real layout;
 //! endianness is recovered from the C typedef *name* (`__le32` resolves to
 //! `u32`, so the information only exists at the syntax level — the reason
@@ -29,9 +28,9 @@
 //!   reflection.
 //!
 //! `BITMASK`/`LE*_BITMASK` bit ranges are described too, but through a
-//! separate table (`BITMASK_FIELDS`): the macro invocations are freestanding,
-//! not part of the struct definition, so codegen.rs scans the headers for
-//! them rather than the derive. Bits resolve by bare name when it doesn't
+//! separate table (`BITMASKS`): c_bitmask! is freestanding, not part of the
+//! struct definition, so each one makes a table of its own, listed there,
+//! rather than the derive. Bits resolve by bare name when it doesn't
 //! collide with a field (`no_keys`) or qualified as `<field>.<bit>`
 //! (`flags.subvol` — the `subvol` *field* wins the bare name).
 
@@ -91,7 +90,7 @@ pub trait TypeInfo {
 }
 
 /// A named bit range within an integer field, from a `BITMASK`/`LE*_BITMASK`
-/// declaration. The instances live in the generated `BITMASK_FIELDS` table.
+/// declaration. Each c_bitmask! has a table of them, which BITMASKS lists.
 pub struct BitmaskField {
     pub struct_name: &'static str,
     /// Field path within the struct, as written in the declaration —
@@ -127,7 +126,7 @@ impl BitmaskField {
 pub fn bitmask_fields(
     struct_name: &str,
 ) -> impl Iterator<Item = &'static BitmaskField> + '_ {
-    BITMASK_FIELDS.iter().filter(move |b| b.struct_name == struct_name)
+    BITMASKS.iter().flat_map(|t| t.iter()).filter(move |b| b.struct_name == struct_name)
 }
 
 // ---------------------------------------------------------------------------
@@ -603,10 +602,46 @@ pub fn bkey_type_info_by_name(name: &str) -> Option<&'static BkeyTypeInfo> {
     BKEY_TYPE_INFO.iter().find(|t| t.name == name)
 }
 
-// The BITMASK() bit ranges, scanned out of the headers by codegen.rs, and
-// their accessors - until the headers are converted and each c_bitmask! makes
-// its own.
-include!(concat!(env!("OUT_DIR"), "/typeinfo_gen.rs"));
+// Every c_bitmask!'s table, which each asserts is here.
+macro_rules! bitmasks {
+    ($($table:ident),* $(,)?) => {
+        static BITMASKS: &[&[BitmaskField]] = &[$(crate::c::$table),*];
+        const BITMASKS_LISTED: &[&str] = &[$(stringify!($table)),*];
+    };
+}
+bitmasks! {
+    bch_alloc_v3_flags_BITMASKS, bch_alloc_v4_flags_BITMASKS, bch_backpointer_flags_BITMASKS,
+    bch_btree_ptr_v2_flags_BITMASKS, bch_disk_group_flags_0_BITMASKS,
+    bch_inode_bi_flags_BITMASKS, bch_inode_unpacked_bi_flags_BITMASKS,
+    bch_inode_v2_bi_flags_BITMASKS, bch_inode_v3_bi_flags_BITMASKS,
+    bch_member_bucket_size_BITMASKS, bch_member_flags_BITMASKS, bch_reflink_p_idx_flags_BITMASKS,
+    bch_sb_block_size_BITMASKS, bch_sb_field_crypt_flags_BITMASKS,
+    bch_sb_field_crypt_kdf_flags_BITMASKS, bch_sb_field_error_entry_v_BITMASKS,
+    bch_sb_field_ext_flags0_BITMASKS, bch_sb_flags_0_BITMASKS, bch_sb_flags_1_BITMASKS,
+    bch_sb_flags_2_BITMASKS, bch_sb_flags_3_BITMASKS, bch_sb_flags_4_BITMASKS,
+    bch_sb_flags_5_BITMASKS, bch_sb_flags_6_BITMASKS, bch_snapshot_flags_BITMASKS,
+    bch_subvolume_flags_BITMASKS, bset_flags_BITMASKS, btree_node_flags_BITMASKS,
+    jset_flags_BITMASKS, recovery_pass_entry_flags_BITMASKS,
+}
+
+/// Whether BITMASKS lists @name: c_bitmask!'s check that its table is here.
+pub const fn bitmasks_listed(name: &str) -> bool {
+    let mut i = 0;
+    while i < BITMASKS_LISTED.len() {
+        let (a, b) = (BITMASKS_LISTED[i].as_bytes(), name.as_bytes());
+        if a.len() == b.len() {
+            let mut j = 0;
+            while j < a.len() && a[j] == b[j] {
+                j += 1;
+            }
+            if j == a.len() {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
 
 #[cfg(test)]
 mod tests {

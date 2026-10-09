@@ -1,51 +1,32 @@
 // SPDX-License-Identifier: GPL-2.0
-//! Standalone codegen entry point — the kernel/DKMS Makefile compiles and runs
-//! this with a plain `rustc -O codegen_main.rs -o codegen` (zero dependencies),
-//! then invokes the binary to emit the bindings before building `mod.o`.
-//!
-//! Userspace drives the same logic from `build.rs`; both `include!` `codegen.rs`
-//! so the two builds produce byte-identical bindings.
+//! The codegen tool: the kernel/DKMS Makefile compiles and runs this with a
+//! plain `rustc -O codegen_main.rs -o codegen` (zero dependencies), for the
+//! bindings mod.o includes - see codegen.rs.
 //!
 //! Usage:
-//!   codegen --src <fs-dir> --out <out-dir> \
-//!           [--blocklist "<dir>:<dir>"] [--target <triple>] [--ptr-width 64|32] \
-//!           [-- <clang args...>]
+//!   codegen --out <out-dir> --blocklist "<dir>:<dir>" -- <clang args...>
 //!
-//! Kernel: Kbuild passes --blocklist and the C build's flags after `--`, verbatim
-//! as separate args — never wrapped in a quoted string, so embedded quotes like
-//! arm64's -DARM64_ASM_ARCH='"..."' survive intact. Run standalone (no `--`) and
-//! it computes the userspace set (target + liburcu + -I + -D) instead.
+//! Kbuild passes the C build's flags after `--`, verbatim as separate args -
+//! never wrapped in a quoted string, so embedded quotes like arm64's
+//! -DARM64_ASM_ARCH='"..."' survive intact.
 
 include!("codegen.rs");
 
-fn opt(args: &[String], name: &str) -> Option<String> {
+fn opt(args: &[String], name: &str) -> String {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
+        .unwrap_or_else(|| panic!("{name} required"))
 }
 
 fn main() {
     let all: Vec<String> = std::env::args().collect();
 
-    // Clang args follow a `--` separator and are passed verbatim (the kernel
-    // build's own flags, as separate shell words). Codegen's own options are
-    // parsed only from before it, so a clang flag can't be mistaken for one. No
-    // `--` means we were run standalone, so compute the userspace clang set.
-    let sep = all.iter().position(|a| a == "--");
-    let args = &all[..sep.unwrap_or(all.len())];
+    // Codegen's own options come before the `--`, so a clang flag can't be
+    // mistaken for one.
+    let sep = all.iter().position(|a| a == "--").expect("-- <clang args> required");
+    let args = &all[..sep];
 
-    let src = opt(args, "--src").expect("--src <fs-dir> required");
-    let out = opt(args, "--out").expect("--out <out-dir> required");
-    let target = opt(args, "--target").unwrap_or_else(host_target);
-    let ptr_width = opt(args, "--ptr-width").unwrap_or_else(|| "64".to_string());
+    let out = opt(args, "--out");
+    let blocklist: Vec<String> = opt(args, "--blocklist").split(':').map(blocklist_dir).collect();
 
-    let clang_args: Vec<String> = match sep {
-        Some(i) => all[i + 1..].to_vec(),
-        None => userspace_clang_args(&src, &target),
-    };
-    let blocklist: Vec<String> = match opt(args, "--blocklist") {
-        Some(v) => v.split(':').map(kernel_blocklist_dir).collect(),
-        None => default_blocklist(&src),
-    };
-
-    run_bindgen(&src, &out, &clang_args, &blocklist, &ptr_width);
-    gen_bitmasks(&src, &out);
+    run_bindgen(&out, &all[sep + 1..], &blocklist);
 }

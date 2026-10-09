@@ -111,7 +111,6 @@ dependencies = [
  "bitfield 0.14.0",
  "bitfield-struct",
  "bitflags 2.11.1",
- "cc",
  "linux-raw-sys",
  "nestify",
  "paste 1.0.15",

@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0
 #
 # bcachefs's Rust, for the kernel build; included from fs/Makefile. mod.o is
-# a member object of bcachefs.ko. It include!s the bindings codegen.rs emits -
-# bcachefs.rs, *_gen.rs, and the static-inline C wrappers in extern.c - which
-# userspace generates from build.rs, and we by running the same code as a
-# host tool.
+# a member object of bcachefs.ko. It include!s the bindings to the kernel APIs
+# kernel::bindings doesn't cover (rust/bindings.rs), with C wrappers for those
+# that are static inlines (rust/extern.c): codegen.rs, the kernel's counterpart
+# of bcachefs-shim, built and run as a host tool.
 #
 # It builds against the kernel's own Rust, or failing that our vendored copy
 # (Makefile.rust.vendor); failing both, say why. BCACHEFS_RUST_VENDOR=1 forces
@@ -112,28 +112,19 @@ $(obj)/codegen: $(src)/codegen_main.rs $(src)/codegen.rs FORCE
 # them: quoting them as one argument breaks flags with embedded quotes (arm64's
 # -DARM64_ASM_ARCH='"armv8.5-a"').
 quiet_cmd_bch_codegen = CODEGEN $(obj)/rust
-      cmd_bch_codegen = $(obj)/codegen --src $(src) --out $(obj)/rust \
+      cmd_bch_codegen = $(obj)/codegen --out $(obj)/rust \
 	--blocklist '$(bcachefs-codegen-blocklist)' \
-	--ptr-width $(if $(CONFIG_64BIT),64,32) \
 	-- $(bcachefs-codegen-cflags)
 
-# kernel::bindings doesn't bind genradix, so we do, from a copy of the
-# (blocklisted) kernel header - in the build dir, made by its own rule: written
-# into $(src) by the codegen, it raced under -j.
-$(obj)/rust/generic-radix-tree.h: $(srctree)/include/linux/generic-radix-tree.h
-	$(Q)mkdir -p $(@D)
-	$(Q)cp $< $@
-
-# Every fs/ header goes through bindgen: list them, or a header edit doesn't
-# regenerate the bindings (if_changed ignores FORCE).
-bcachefs-codegen-headers := $(shell find $(src) -name '*.h')
-
-$(obj)/rust/bcachefs.rs: $(obj)/codegen $(obj)/rust/generic-radix-tree.h $(bcachefs-codegen-headers) FORCE
+# The vendored header it binds is a prerequisite: if_changed ignores FORCE, so
+# an edit to it wouldn't otherwise regenerate the bindings. (Kernel-header edits
+# ride in via a cflags or tool change, or a full rebuild.)
+$(obj)/rust/bindings.rs: $(obj)/codegen $(src)/vendor/closure.h FORCE
 	$(call if_changed,bch_codegen)
 
 # extern.c, from the same run: bindgen's wrappers have no prototypes, and its
 # warnings shouldn't fail CONFIG_WERROR builds - it's generated code (#819).
-$(obj)/rust/extern.c: $(obj)/rust/bcachefs.rs ;
+$(obj)/rust/extern.c: $(obj)/rust/bindings.rs ;
 CFLAGS_rust/extern.o += -Wno-missing-prototypes -Wno-missing-declarations \
 			-Wno-error
 
@@ -255,7 +246,7 @@ bch-externs := paste:libpaste.so typeinfo_macros:libtypeinfo_macros.so \
 RUSTFLAGS_mod.o += $(foreach e,$(bch-externs),--extern $(subst :,=$(obj)/,$(e)))
 $(obj)/mod.o: export OUT_DIR := $(abspath $(obj)/rust)
 $(obj)/mod.o: export CARGO_MANIFEST_DIR := $(abspath $(src))
-$(obj)/mod.o: $(obj)/rust/bcachefs.rs $(obj)/libpaste.so $(obj)/libtypeinfo_macros.so \
+$(obj)/mod.o: $(obj)/rust/bindings.rs $(obj)/libpaste.so $(obj)/libtypeinfo_macros.so \
 	$(obj)/libcstruct_macros.so $(obj)/libbitfield_struct.so $(obj)/libnestify.so \
 	$(obj)/bitfield.o $(obj)/bitflags.o $(obj)/uuid.o
 
@@ -264,7 +255,7 @@ $(obj)/mod.o: $(obj)/rust/bcachefs.rs $(obj)/libpaste.so $(obj)/libtypeinfo_macr
 # and linking the module discards them.
 RUSTFLAGS_mod.o += --cfg bch_cstruct_records
 
-targets += codegen rust/bcachefs.rs libpaste.so libtypeinfo_macros.so \
+targets += codegen rust/bindings.rs libpaste.so libtypeinfo_macros.so \
 	libcstruct_macros.so libbitfield_struct.so libnestify.so bitfield.o bitflags.o uuid.o \
 	$(addprefix rust-host/,libproc_macro2.rmeta libquote.rmeta libsyn.rmeta)
 bcachefs-rust-y := mod.o bitfield.o bitflags.o uuid.o
