@@ -16,11 +16,10 @@
 # Flags: the kernel's own KBUILD_RUSTFLAGS is populated even on CONFIG_RUST=n
 # (the top + arch Makefiles set it unconditionally). We reuse it (with the
 # --target rewrite above) — so the vendored objects match the target kernel's
-# ABI exactly — and only add -Awarnings (the vendored crates predate this
-# rustc's newer lints) + -Zunstable-options. We deliberately do NOT use
-# $(rust_flags): it carries bcachefs's `--cfg kernel` (rustflags-y), wrong for
-# core and the kernel crate. The crates are self-contained: their Rust symbols
-# stay module-local; only the kernel's C ABI crosses the .ko boundary.
+# ABI exactly — with kbuild's per-object flags on top, as the kernel builds its
+# crates, and only add -Awarnings (the vendored crates predate this rustc's
+# newer lints) + -Zunstable-options. The crates are self-contained: their Rust
+# symbols stay module-local; only the kernel's C ABI crosses the .ko boundary.
 
 VRD	:= $(obj)/vrust
 VENDOR	:= $(src)/vendor/kernel-rust
@@ -95,12 +94,25 @@ KBUILD_RUSTFLAGS := $(filter-out $(DEBUG_RUSTFLAGS),$(KBUILD_RUSTFLAGS)) -Cdebug
 endif
 endif
 
+# KASAN only where the kernel allows it with Rust (init/Kconfig: RUST depends
+# on !KASAN || CC_IS_CLANG): rustc's instrumentation doesn't match gcc's. Not
+# SW_TAGS, which wants rustc 1.96, nor AutoFDO's flags, spelled for the
+# kernel's rustc: those are decided by a rustc version, and ours isn't the
+# kernel's.
+ifneq ($(CONFIG_CC_IS_CLANG),y)
+RUSTFLAGS_KASAN :=
+else ifdef CONFIG_KASAN_SW_TAGS
+RUSTFLAGS_KASAN :=
+endif
+RUSTFLAGS_AUTOFDO_CLANG :=
+
 # ---- the vendored crates ---------------------------------------------------
 bch-vr-cfg = @$(bch-rustc-cfg)
-# Target crates (no-std, kernel ABI). Filter --edition out of KBUILD_RUSTFLAGS:
-# it carries --edition=2021, and each crate sets its own (core wants 2024) —
-# rustc rejects --edition given twice.
-bch-vr-tflags = $(filter-out --edition=%,$(KBUILD_RUSTFLAGS)) $(bch-vr-cfg) \
+# Target crates (no-std, kernel ABI), with kbuild's per-object flags - KASAN,
+# KCOV, RUSTFLAGS_foo.o - as the kernel builds its own crates. Filter --edition
+# out of them: KBUILD_RUSTFLAGS carries --edition=2021, and each crate sets its
+# own (core wants 2024) — rustc rejects --edition given twice.
+bch-vr-tflags = $(filter-out --edition=%,$(_rust_flags)) $(bch-vr-cfg) \
 	--cfg CONFIG_RUST -Awarnings -Zunstable-options --sysroot=/dev/null -L$(VRD)
 # Host crates (proc_macro2/quote/syn): real host std, no kernel target:
 bch-vr-hflags = $(filter-out --edition=%,$(rust_common_flags)) -Awarnings \
@@ -200,6 +212,7 @@ $(VRD)/core.o: private vr-flags := --edition=2024 --cfg no_fp_fmt_parse
 $(VRD)/core.o: private vr-post = ; objcopy $(foreach s,$(vr-redirect-intrinsics),--redefine-sym $(s)=__rust$(s)) $@
 $(VRD)/core.o: $(RUST_LIB_SRC)/core/src/lib.rs FORCE
 	$(call if_changed,bch_vr_lib)
+KCOV_INSTRUMENT_vrust/core.o := n
 
 # The shared leaf crates (bitfield/bitflags/uuid, built by cmd_bch_library) are
 # no_std and link our vendored core (cmd_bch_library now -L's $(obj)/vrust) —
@@ -320,13 +333,13 @@ $(VRD)/helpers.o: $(VENDOR)/helpers/helpers.c $(wildcard $(VENDOR)/helpers/*.c) 
 quiet_cmd_bch_vr_mod = VRUSTC M $@
       cmd_bch_vr_mod = RUSTC_BOOTSTRAP=1 OUT_DIR=$(abspath $(obj)/rust) \
 	OBJTREE=$(bch-vr-objtree) $(RUSTC) \
-	$(bch-vr-tflags) --edition=2021 --cfg kernel --cfg __KERNEL__ \
+	$(bch-vr-tflags) --edition=2021 \
 	-Zcrate-attr=no_std \
 	-Zcrate-attr='feature($(rust_allowed_features))' \
 	--crate-type rlib --crate-name bcachefs_mod \
 	--extern core=$(VRD)/libcore.rmeta --extern kernel=$(VRD)/libkernel.rmeta \
 	--extern pin_init=$(VRD)/libpin_init.rmeta --extern bindings=$(VRD)/libbindings.rmeta \
-	$(RUSTFLAGS_mod.o) --emit=obj=$@ $<
+	--emit=obj=$@ $<
 $(obj)/mod.o: $(src)/mod.rs $(obj)/rust/bcachefs.rs $(VRD)/kernel.o \
 	$(obj)/libpaste.so $(obj)/bitfield.o $(obj)/bitflags.o $(obj)/uuid.o FORCE
 	$(call if_changed,bch_vr_mod)

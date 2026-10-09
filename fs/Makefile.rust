@@ -219,10 +219,10 @@ CFLAGS_rust/extern.o += -Wno-missing-prototypes -Wno-missing-declarations \
 
 # mod.rs keys on cfg(kernel) to source the kernel-compat types from the kernel
 # crate (vs bcachefs-shim in userspace); the kernel build doesn't set it on its
-# own, so do it here for every Rust object in this dir.
-rustflags-y += --cfg kernel
+# own, so do it here, for our crate only.
+RUSTFLAGS_mod.o += --cfg kernel
 # And __KERNEL__, which C has: types defined in Rust test it, as their C did.
-rustflags-y += --cfg __KERNEL__
+RUSTFLAGS_mod.o += --cfg __KERNEL__
 
 # The cfgs describing the kernel config (CONFIG_* as --cfg) and the rustc
 # (CONFIG_RUSTC_*), for the rules here that kbuild doesn't own.
