@@ -388,14 +388,14 @@ fn watch_dir(dir: &str) {
 include!("../clang_target.rs");
 include!("../fs/build_config.rs");
 
-/// One `#define BCH_IOCTL_* _IO*(0xbc, nr[, type])` from bcachefs_ioctl.h.
-///
-/// The argument type is all we take from the define: it's the one part C can't
-/// hand us, since bindgen binds values and not types. The opcode comes from the
-/// constants BCH_IOCTL_BIND() emits - see the comment in c_src/rust_shims.h for
-/// why it has to.
+/// One `#define BCH_IOCTL_* _IO*(0xbc, nr[, type])` from bcachefs_ioctl.h - all
+/// of it: the opcode is made from it, by util::ioctl's _IO*(), as the kernel's
+/// macros make it.
 struct IoctlDef {
     name: String,
+    /// _IO, _IOR, _IOW or _IOWR - util::ioctl has each.
+    dir:  String,
+    nr:   u32,
     /// Rust type of the argument; None for _IO().
     arg:  Option<String>,
 }
@@ -407,7 +407,8 @@ fn parse_ioctls(header: &str) -> Vec<IoctlDef> {
         let mut it = rest.splitn(2, char::is_whitespace);
         let (Some(name), Some(body)) = (it.next(), it.next()) else { continue };
         let Some((mac, args)) = body.trim().split_once('(') else { continue };
-        let takes_arg = match mac.trim() {
+        let dir = mac.trim();
+        let takes_arg = match dir {
             "_IO"                     => false,
             "_IOW" | "_IOR" | "_IOWR" => true,
             _ => continue,
@@ -415,9 +416,11 @@ fn parse_ioctls(header: &str) -> Vec<IoctlDef> {
         let Some(args) = args.trim_end().strip_suffix(')') else { continue };
         let args: Vec<&str> = args.splitn(3, ',').map(str::trim).collect();
         assert_eq!(args[0], "0xbc", "{name}: unexpected ioctl magic {}", args[0]);
+        let nr = args[1].parse()
+            .unwrap_or_else(|_| panic!("{name}: ioctl number {} isn't a decimal number", args[1]));
         let arg = (args.len() > 2).then(|| ioctl_arg_to_rust(name, args[2]));
         assert_eq!(arg.is_some(), takes_arg, "{name}: _IO() iff no argument");
-        out.push(IoctlDef { name: name.to_string(), arg });
+        out.push(IoctlDef { name: name.to_string(), dir: dir.to_string(), nr, arg });
     }
     out
 }
@@ -439,30 +442,27 @@ fn generate_ioctls(defs: &[IoctlDef]) -> String {
 // A zero-sized marker type per ioctl, named exactly as the C macro, binding the
 // opcode to its argument type so a call site can't pair the wrong two.
 //
-// The opcode is whatever BCH_IOCTL_BIND() had the C compiler get out of _IOR()
-// and friends, against the target's own <asm/ioctl.h>. Nothing here restates
-// that bit layout - it varies by architecture, and c_src/rust_shims.h is the
-// comment to read before changing any of this.
+// The opcode is util::ioctl's _IO*() of the define's own arguments: the
+// kernel's _IOC() packing, with each target's field layout from linux-raw-sys.
 
 use crate::c;
-
-/// An ioctl definition: the request opcode and its argument type.
-pub trait Ioctl {
-    const OPCODE: u32;
-    type Arg;
-}
+use bcachefs_kernel::util::ioctl as ioc;
+pub use bcachefs_kernel::util::ioctl::Ioctl;
 
 ");
     for d in defs {
-        let arg = d.arg.as_deref().unwrap_or("()");
+        let (arg, opcode) = match &d.arg {
+            Some(a) => (a.as_str(), format!("ioc::{}::<{a}>(0xbc, {})", d.dir, d.nr)),
+            None    => ("()", format!("ioc::_IO(0xbc, {})", d.nr)),
+        };
         out += &format!("\
 pub struct {name};
 impl Ioctl for {name} {{
-    const OPCODE: u32 = c::bch_ioctl_op_{name};
+    const OPCODE: u32 = {opcode};
     type Arg = {arg};
 }}
 
-", name = d.name, arg = arg);
+", name = d.name);
     }
     out
 }
@@ -545,7 +545,6 @@ fn main() {
         .allowlist_var("BCH_BLK.*")
         .allowlist_var("BCH_FS_IOC_.*")
         .allowlist_var("BCH_SIZEOF_.*")
-        .allowlist_var("bch_ioctl_op_.*")
         .allowlist_function("raid_init")
         .allowlist_function("linux_shrinkers_init")
         .allowlist_function("sysfs_.*")
