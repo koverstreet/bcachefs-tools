@@ -124,23 +124,61 @@ pub fn bkey_ptrs_mut<'a>(
 
 /// The checksum/compression entries of @k, unpacked: as bkey_for_each_crc().
 pub fn bkey_crcs<'a>(k: BkeySC<'a>) -> impl Iterator<Item = c::bch_extent_crc_unpacked> + 'a {
-    bkey_extent_entries_sc(k).filter_map(move |e| {
-        let crc: *const u8 = match e {
-            Entry::crc32(crc)  => crc.head() as *const _ as _,
-            Entry::crc64(crc)  => crc.head() as *const _ as _,
-            Entry::crc128(crc) => crc.head() as *const _ as _,
-            _ => return None,
-        };
-        // SAFETY: a crc entry, which C reads by its type
-        Some(unsafe { c::bch2_extent_crc_unpack(k.k, crc.cast()) })
+    bkey_extent_entries_sc(k).filter_map(move |e| crc_unpack(k.k, e))
+}
+
+/// @entry, if it's a crc entry of @k, unpacked: the sizes unbiased, the
+/// checksum's bytes where bch_csum has them. As bch2_extent_crc_unpack().
+fn crc_unpack(k: &c::bkey, entry: Entry<'_>) -> Option<c::bch_extent_crc_unpacked> {
+    // The packed checksum bytes, at the start of a bch_csum word - C stores
+    // them there through a cast, with no byte swap:
+    fn csum_word(bytes: &[u8]) -> u64 {
+        let mut w = [0u8; 8];
+        w[..bytes.len()].copy_from_slice(bytes);
+        u64::from_ne_bytes(w)
+    }
+
+    let unpacked = |csum_type: u64, compression_type: u64, compressed_raw: u64,
+                    uncompressed_raw: u64, offset: u64, nonce: u64, csum| {
+        c::bch_extent_crc_unpacked {
+            compressed_size:   compressed_raw as u32 + 1,
+            uncompressed_size: uncompressed_raw as u32 + 1,
+            live_size:         k.size,
+            csum_type:         csum_type as u8,
+            compression_type:  compression_type as u8,
+            offset:            offset as u16,
+            nonce:             nonce as u16,
+            csum,
+        }
+    };
+
+    Some(match entry {
+        Entry::crc32(e) =>
+            unpacked(e.csum_type() as u64, e.compression_type() as u64,
+                     e._compressed_size() as u64, e._uncompressed_size() as u64,
+                     e.offset() as u64, 0,
+                     c::bch_csum { lo: csum_word(&{ e.csum }.to_ne_bytes()), hi: 0 }),
+        Entry::crc64(e) =>
+            unpacked(e.csum_type(), e.compression_type(),
+                     e._compressed_size(), e._uncompressed_size(),
+                     e.offset(), e.nonce(),
+                     c::bch_csum { lo: csum_word(&{ e.csum_lo }.to_ne_bytes()),
+                                   hi: csum_word(&(e.csum_hi() as u16).to_ne_bytes()) }),
+        Entry::crc128(e) =>
+            unpacked(e.csum_type(), e.compression_type(),
+                     e._compressed_size(), e._uncompressed_size(),
+                     e.offset(), e.nonce(), e.csum),
+        _ => return None,
     })
 }
 
 /// Whether @crc's data is checksummed or compressed - read back whole, so
 /// bounded by encoded_extent_max: as crc_is_encoded().
 pub fn crc_is_encoded(crc: &c::bch_extent_crc_unpacked) -> bool {
-    // By value in C; bindgen doesn't make it Copy
-    unsafe { c::crc_is_encoded(core::ptr::read(crc)) }
+    let compressed = crc.compression_type as u32 != c::bch_compression_type::BCH_COMPRESSION_TYPE_none.0 &&
+        crc.compression_type as u32 != c::bch_compression_type::BCH_COMPRESSION_TYPE_incompressible.0;
+
+    crc.csum_type as u32 != c::bch_csum_type::BCH_CSUM_none.0 || compressed
 }
 
 /// Whether @k is counted in its inode's i_sectors: as
