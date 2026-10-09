@@ -391,7 +391,10 @@ impl Fs {
     pub fn request_incompat_feature(&self, version: c::bcachefs_metadata_version)
         -> Result<(), BchError>
     {
-        ret_to_result(unsafe { c::bch2_request_incompat_feature(self.raw, version) })
+        if version.0 <= unsafe { (*self.raw).sb.version_incompat } as u32 {
+            return Ok(());
+        }
+        ret_to_result(unsafe { c::bch2_set_version_incompat(self.raw, version) })
     }
 
     /// Whether the filesystem uses @feature: c->sb.features, the in-memory
@@ -404,7 +407,9 @@ impl Fs {
     /// Mark the filesystem as using @feature, writing the superblock if it
     /// wasn't already: as bch2_check_set_feature().
     pub fn check_set_feature(&self, feature: c::bch_sb_feature) {
-        unsafe { c::bch2_check_set_feature(self.raw, feature as u32) }
+        if !self.feature(feature) {
+            unsafe { c::__bch2_check_set_feature(self.raw, feature as u32) }
+        }
     }
 
     /// Whether casefolding can be used: an error without CONFIG_UNICODE, or
