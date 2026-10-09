@@ -410,7 +410,13 @@ impl Fs {
     /// Whether casefolding can be used: an error without CONFIG_UNICODE, or
     /// with the casefold_disabled option - as bch2_fs_casefold_enabled().
     pub fn casefold_enabled(&self) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_fs_casefold_enabled(self.raw) })
+        if !cfg!(CONFIG_UNICODE) {
+            return self.throw(bch_errcode::BCH_ERR_no_casefolding_without_utf8);
+        }
+        if self.opts().casefold_disabled != 0 {
+            return self.throw(bch_errcode::BCH_ERR_casefolding_disabled);
+        }
+        Ok(())
     }
 
     /// Write superblock to disk (locked version). Caller must hold sb_lock.
@@ -540,7 +546,7 @@ impl Fs {
 
     /// Filesystem block size in bytes.
     pub fn block_bytes(&self) -> u64 {
-        unsafe { c::block_bytes(self.raw) as u64 }
+        self.opts().block_size as u64
     }
 
     /// Convert a bcachefs internal time to a timespec.
