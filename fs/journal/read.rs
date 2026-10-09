@@ -1,4 +1,5 @@
 use crate::c;
+use crate::data::checksum::BCH_NONCE_JOURNAL;
 use crate::util::vstructs::vstruct_next_entry;
 use core::marker::PhantomData;
 
@@ -18,6 +19,16 @@ unsafe fn bkey_next_raw(k: *const c::bkey_i) -> *const c::bkey_i {
 }
 
 // ---- jset helpers ----
+
+impl c::jset {
+    /// The nonce of this journal entry: its seq, in the journal domain.
+    pub fn nonce(&self) -> c::nonce {
+        let seq = u64::from_le(self.seq);
+        c::nonce {
+            d: [0, (seq as u32).to_le(), ((seq >> 32) as u32).to_le(), BCH_NONCE_JOURNAL.to_le()],
+        }
+    }
+}
 
 /// Total byte size of a jset including header.
 pub fn jset_vstruct_bytes(jset: &c::jset) -> usize {

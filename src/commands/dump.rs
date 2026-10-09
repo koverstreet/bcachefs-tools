@@ -29,7 +29,7 @@ use crate::wrappers::super_io::vstruct_bytes_sb;
 fn jset_encrypt(fs: &Fs, j: *mut c::jset, csum_type: u32, vstruct_bytes: usize) -> i32 {
     let off = std::mem::offset_of!(c::jset, encrypted_start);
     unsafe {
-        c::bch2_encrypt(fs.raw, csum_type, c::journal_nonce(j),
+        c::bch2_encrypt(fs.raw, csum_type, (*j).nonce(),
                         (j as *mut u8).add(off) as *mut core::ffi::c_void,
                         vstruct_bytes - off)
     }
@@ -38,7 +38,7 @@ fn jset_encrypt(fs: &Fs, j: *mut c::jset, csum_type: u32, vstruct_bytes: usize) 
 fn jset_csum_set(fs: &Fs, j: *mut c::jset, csum_type: u32, vstruct_bytes: usize) {
     let off = std::mem::size_of::<c::bch_csum>();
     let csum = unsafe {
-        c::bch2_checksum(fs.raw, csum_type, c::journal_nonce(j),
+        c::bch2_checksum(fs.raw, csum_type, (*j).nonce(),
                          (j as *const u8).add(off) as *const core::ffi::c_void,
                          vstruct_bytes - off)
     };
@@ -51,7 +51,7 @@ fn bset_csum_set(fs: &Fs, node: *mut u8, i: *mut c::bset, offset: u32,
                  csum_type: u32, vstruct_bytes: usize) {
     let off = std::mem::size_of::<c::bch_csum>();
     let csum = unsafe {
-        c::bch2_checksum(fs.raw, csum_type, c::btree_nonce(i, offset),
+        c::bch2_checksum(fs.raw, csum_type, (*i).nonce(offset),
                          node.add(off) as *const core::ffi::c_void,
                          vstruct_bytes - off)
     };
@@ -459,11 +459,11 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
             }
 
             let ret = unsafe {
-                c::bset_encrypt(fs.raw, buf.as_mut_ptr().add(bset_off) as *mut c::bset,
-                                bset_byte_offset as u32)
+                btree::read::bset_encrypt(fs.raw, buf.as_mut_ptr().add(bset_off) as *mut c::bset,
+                                          bset_byte_offset as u32)
             };
-            if ret != 0 {
-                eprintln!("error decrypting btree node: {}", ret);
+            if let Err(e) = ret {
+                eprintln!("error decrypting btree node: {e}");
                 return;
             }
             modified = true;
@@ -530,7 +530,9 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
             // over the btree_node (first bset) or btree_node_entry.
             let bset = unsafe { buf.as_mut_ptr().add(bset_off) } as *mut c::bset;
             if csum_type_is_encryption(csum_type) {
-                unsafe { c::bset_encrypt(fs.raw, bset, bset_byte_offset as u32); }
+                if let Err(e) = unsafe { btree::read::bset_encrypt(fs.raw, bset, bset_byte_offset as u32) } {
+                    eprintln!("error re-encrypting btree node: {e}");
+                }
             }
             let node = unsafe { buf.as_mut_ptr().add(pos) };
             bset_csum_set(&fs, node, bset, bset_byte_offset as u32, csum_type, vstruct_bytes);
