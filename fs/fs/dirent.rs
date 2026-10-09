@@ -270,7 +270,7 @@ pub fn create(
 /// utf8_casefold().
 #[cfg(CONFIG_UNICODE)]
 fn utf8_casefold(info: &c::bch_hash_info, name: &OsStr, out: &mut [u8]) -> Result<usize, BchError> {
-    let ret = unsafe { c::bch2_utf8_casefold(info, &qstr(name), out.as_mut_ptr(), out.len()) };
+    let ret = unsafe { c::utf8_casefold(info.cf_encoding, &qstr(name), out.as_mut_ptr(), out.len()) };
     ret_to_result(ret.min(0))?;
     Ok(ret as usize)
 }
