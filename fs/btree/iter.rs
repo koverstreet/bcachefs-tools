@@ -338,7 +338,10 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// Whether anything is queued for the next commit: key updates, journal
     /// entries or accounting.
     pub fn has_updates(&self) -> bool {
-        unsafe { c::bch2_trans_has_updates(self.raw()) }
+        let trans = unsafe { &*self.raw() };
+        trans.nr_updates != 0 ||
+            trans.journal_entries.u64s != 0 ||
+            trans.accounting.u64s != 0
     }
 
     // ── The attempt's operations ─────────────────────────────────────────
@@ -368,9 +371,16 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// transaction_restart_commit, so the caller's loop re-runs against the
     /// committed state: as bch2_trans_commit_lazy().
     pub fn commit_lazy(&self, flags: impl Into<CommitOpts>) -> Result<(), BchError> {
+        if !self.has_updates() {
+            return Ok(());
+        }
+
         let ret = unsafe {
-            c::bch2_trans_commit_lazy(self.raw(), core::ptr::null_mut(),
-                                      core::ptr::null_mut(), flags.into().to_c().0)
+            let trans = self.raw();
+            (*trans).disk_res    = core::ptr::null_mut();
+            (*trans).journal_seq = core::ptr::null_mut();
+            (*trans).flush       = core::ptr::null_mut();
+            c::__bch2_trans_commit(trans, flags.into().to_c(), true)
         };
         self.result(ret)
     }
@@ -380,11 +390,12 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// only by something like snapshot count. A commit here restarts, and the
     /// re-drive has less to queue, so it converges.
     pub fn commit_lazy_if_full(&self, flags: impl Into<CommitOpts>) -> Result<(), BchError> {
-        let ret = unsafe {
-            c::bch2_trans_commit_lazy_if_full(self.raw(), core::ptr::null_mut(),
-                                              core::ptr::null_mut(), flags.into().to_c().0)
-        };
-        self.result(ret)
+        // disk_accounting_mod allocations grow by powers of 2; max / 2 is too
+        // small of a limit to avoid hitting ENOMEMs
+        if unsafe { (*self.raw()).mem_top } < c::BTREE_TRANS_MEM_MAX / 4 {
+            return Ok(());
+        }
+        self.commit_lazy(flags)
     }
 
     pub fn result(&self, ret: i32) -> Result<(), BchError> {
@@ -476,9 +487,30 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// @bytes of transaction memory, freed when the transaction next begins:
     /// as bch2_trans_kmalloc().
     pub fn kmalloc(&self, bytes: usize) -> Result<&'a mut [u8], BchError> {
-        let ptr = unsafe { c::bch2_trans_kmalloc(self.raw(), bytes) };
-        let ptr = errptr_to_result(ptr)? as *mut u8;
+        let ptr = self.kmalloc_raw(bytes)?;
         Ok(unsafe { core::slice::from_raw_parts_mut(ptr, bytes) })
+    }
+
+    /// @bytes of zeroed transaction memory, rounded up to u64s: off the top of
+    /// the transaction's buffer, or __bch2_trans_kmalloc() grows it - which
+    /// restarts the transaction if it had a buffer already. As
+    /// bch2_trans_kmalloc(), less CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE's
+    /// record of the allocation.
+    fn kmalloc_raw(&self, bytes: usize) -> Result<*mut u8, BchError> {
+        let size = bytes.next_multiple_of(size_of::<u64>());
+        let trans = self.raw();
+
+        unsafe {
+            let top = (*trans).mem_top as usize;
+            if top + size > (*trans).mem_bytes as usize {
+                return Ok(errptr_to_result(c::__bch2_trans_kmalloc(trans, size, 0))? as *mut u8);
+            }
+
+            let p = ((*trans).mem as *mut u8).add(top);
+            (*trans).mem_top += size as u32;
+            p.write_bytes(0, size);
+            Ok(p)
+        }
     }
 
     /// Run @f in this attempt's commit, under its btree write locks: as
@@ -527,11 +559,10 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     pub fn bkey_alloc(&self, u64s: u32) -> Result<TransBkey<'a, 't>, BchError> {
         let bytes = u64s as usize * size_of::<u64>();
-        let ptr = unsafe { c::bch2_trans_kmalloc(self.raw(), bytes) };
-        let ptr = errptr_to_result(ptr)? as *mut c::bkey_i;
+        let ptr = self.kmalloc_raw(bytes)? as *mut c::bkey_i;
 
         Ok(TransBkey {
-            ptr:      NonNull::new(ptr).expect("bch2_trans_kmalloc returned NULL"),
+            ptr:      NonNull::new(ptr).expect("transaction memory at NULL"),
             buf_u64s: u64s,
             t:        PhantomData,
         })
