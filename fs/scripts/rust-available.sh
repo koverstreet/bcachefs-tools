@@ -98,6 +98,19 @@ vendored)
 	for f in scripts/generate_rust_target.rs include/generated/rustc_cfg; do
 		[ -r "$KERNEL_OBJ/$f" ] || miss "kernel tree has no $f"
 	done
+
+	# What init/Kconfig won't build Rust with, for reasons that hold for
+	# ours: nothing makes our bindings follow randomized struct layouts
+	# (bindgen - libclang - never sees the gcc plugin's at all), and C's
+	# kCFI checks would reject calls into our Rust - the kernel only adds
+	# Rust's kCFI flags, and normalizes C's type hashes to match them,
+	# with CONFIG_RUST.
+	conf=$KERNEL_OBJ/include/config/auto.conf
+	grep -q '^CONFIG_RANDSTRUCT=y' "$conf" 2>/dev/null &&
+		miss "kernel built with RANDSTRUCT, which Rust can't match struct layouts under"
+	grep -qE '^CONFIG_CFI(_CLANG)?=y' "$conf" 2>/dev/null &&
+		! grep -q '^CONFIG_RUST=y' "$conf" &&
+		miss "kernel built with CFI but not Rust, so it has no kCFI type hashes for Rust"
 	;;
 esac
 
