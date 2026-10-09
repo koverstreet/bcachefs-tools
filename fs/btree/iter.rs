@@ -645,20 +645,39 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(k)
     }
 
-    pub fn bkey_make_mut_noupdate(&self, k: BkeySC<'_>) -> Result<TransBkey<'a, 't>, BchError> {
-        let raw = c::bkey_s_c {
-            k: k.k,
-            v: k.v,
-        };
-        let ptr = unsafe { c::bch2_bkey_make_mut_noupdate(self.raw(), raw) };
-        let ptr = errptr_to_result(ptr)?;
-        let u64s = unsafe { (*ptr).k.u64s as u32 };
+    /// @k as a mutable copy, for an update - ENOENT unless it's of @type_,
+    /// any type for KEY_TYPE_deleted - with at least @min_bytes: past @k's
+    /// own value, zeroes, which is what those fields read as, and the key
+    /// covers them, so writes there go in with the commit. A u64 more is
+    /// allocated past the end, for varint_decode_fast(). As
+    /// __bch2_bkey_make_mut_noupdate().
+    fn make_mut_noupdate(&self, k: BkeySC<'_>, type_: c::bch_bkey_type, min_bytes: usize)
+        -> Result<TransBkey<'a, 't>, BchError>
+    {
+        if type_ != c::bch_bkey_type::KEY_TYPE_deleted && k.k.type_ as u32 != type_.0 {
+            return Err(BchError::from(c::ENOENT));
+        }
 
-        Ok(TransBkey {
-            ptr:      NonNull::new(ptr).expect("bch2_bkey_make_mut_noupdate returned NULL"),
-            buf_u64s: u64s,
-            t:        PhantomData,
-        })
+        let k_u64s = k.k.u64s as usize;
+        let u64s   = k_u64s.max(min_bytes.div_ceil(size_of::<u64>()));
+
+        let mut dst = self.bkey_alloc(u64s as u32 + 1)?;
+        dst.buf_u64s = u64s as u32;
+
+        unsafe {
+            core::ptr::copy_nonoverlapping(k.k, dst.k_mut(), 1);
+            core::ptr::copy_nonoverlapping(
+                k.v as *const c::bch_val as *const u64,
+                dst.as_mut_u64s().as_mut_ptr().add(BKEY_U64S),
+                k_u64s - BKEY_U64S,
+            );
+        }
+        dst.k_mut().u64s = u64s as u8;
+        Ok(dst)
+    }
+
+    pub fn bkey_make_mut_noupdate(&self, k: BkeySC<'_>) -> Result<TransBkey<'a, 't>, BchError> {
+        self.make_mut_noupdate(k, c::bch_bkey_type::KEY_TYPE_deleted, 0)
     }
 
     /// The value of the @K at @pos in @btree, zero padded:
@@ -694,12 +713,11 @@ impl<'a, 't> TransAttempt<'a, 't> {
         type_:      c::bch_bkey_type,
         min_bytes:  usize,
     ) -> Result<TransBkey<'a, 't>, BchError> {
-        unsafe {
-            let k = c::__bch2_bkey_get_mut(self.raw(), btree, pos,
-                                           c::btree_iter_update_trigger_flags(iter_flags.bits() | flags.bits()),
-                                           type_.0, min_bytes as u32);
-            TransBkey::from_raw(self, k)
-        }
+        let mut iter = BtreeIter::new(self.trans, btree, pos, iter_flags | BtreeIterFlags::INTENT);
+        let k = iter.peek_slot_typed(self, type_)?;
+        let k = self.make_mut_noupdate(k, c::bch_bkey_type::KEY_TYPE_deleted, min_bytes)?;
+        self.update(&iter, &k, flags)?;
+        Ok(k)
     }
 
     /// @k, the key at @iter, as a mutable copy already queued as its update -
@@ -714,13 +732,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
         type_:     c::bch_bkey_type,
         min_bytes: usize,
     ) -> Result<TransBkey<'a, 't>, BchError> {
-        let mut raw = k.to_raw();
-        unsafe {
-            let k = c::__bch2_bkey_make_mut(self.raw(), iter.raw(), &mut raw,
-                                            c::btree_iter_update_trigger_flags(flags.bits()),
-                                            type_.0, min_bytes as u32);
-            TransBkey::from_raw(self, k)
-        }
+        let k = self.make_mut_noupdate(k, type_, min_bytes)?;
+        self.update(iter, &k, flags)?;
+        Ok(k)
     }
 
     /// Overwrite @old with @new where they overlap, @old being the extent at
