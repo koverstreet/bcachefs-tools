@@ -424,12 +424,13 @@ install_dkms: dkms/dkms.conf dkms/module-version.c
 	$(INSTALL) -m0644 -D dkms/Makefile		-t $(DESTDIR)$(DKMSDIR)
 	$(INSTALL) -m0644 -D dkms/dkms.conf		-t $(DESTDIR)$(DKMSDIR)
 # vendor/kernel-rust is staged whole below, so prune it from the per-file copy.
-# Makefile* rather than fs/Makefile alone: Makefile.rust.vendor is included by
-# fs/Makefile on the CONFIG_RUST=n path, and listing makefiles individually is
-# how it got left out of 1.39.0 - a build that then dies at parse time.
+# Makefile* rather than fs/Makefile alone: fs/Makefile includes Makefile.rust,
+# which includes Makefile.rust.vendor when the kernel's Rust can't be used, and
+# listing makefiles individually is how the latter got left out of 1.39.0 - a
+# build that then dies at parse time.
 	(cd fs; find . -path ./vendor/kernel-rust -prune -o \( -name '*.[ch]' -o -name '*.rs' -o -name 'Makefile*' \) -exec install -m0644 -D {} $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/{} \; )
 # The vendored kernel Rust stack (fs/Makefile.rust.vendor builds it into $(obj)
-# on CONFIG_RUST=n) needs ALL its files — Makefile, *.rs.S templates,
+# when the kernel's Rust can't be used) needs ALL its files — Makefile, *.rs.S templates,
 # bindgen_parameters — not just the *.c/*.h/*.rs the find above copies.
 	mkdir -p $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/vendor
 	cp -a fs/vendor/kernel-rust $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/vendor/

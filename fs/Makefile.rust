@@ -78,39 +78,13 @@ endif
 endif
 
 # The shared leaf crates (cmd_bch_library) link core/compiler_builtins from the
-# active Rust stack: point -L at the vendored $(obj)/vrust on CONFIG_RUST=n, the
-# kernel's $(objtree)/rust otherwise — never both. A CONFIG_RUST=n devel tree can
-# still ship a stale prebuilt $(objtree)/rust (built with a different rustc); if
-# both are on -L, rustc sees two `core` candidates (E0464) and picks a core that
-# predates the current rustc's lang items (meta_sized).
-ifeq ($(bcachefs-vendor-rust),y)
-bch-rust-L := -L$(obj)/vrust
-
-# A Rust-off kernel never generates scripts/target.json (it's
-# always-$(CONFIG_RUST)), but its KBUILD_RUSTFLAGS still point --target at
-# it. Generate our own copy under $(obj)/vrust with the kernel's own
-# generator — same invocation as scripts/Makefile's filechk_rust_target —
-# and rewrite --target to match. The kernel tree stays read-only. Done
-# eagerly at parse time so every Rust rule in this file and the vendored
-# includes sees a present, current file; the -nt check skips the rebuild
-# when the generator binary is already newer than its source.
-bch-target-json := $(abspath $(obj))/vrust/target.json
-$(shell	mkdir -p '$(abspath $(obj))/vrust' &&				\
-	{ [ '$(abspath $(obj))/vrust/generate_rust_target' -nt		\
-	    '$(objtree)/scripts/generate_rust_target.rs' ] ||		\
-	  $(HOSTRUSTC) --edition=2021 -Copt-level=0			\
-	    '$(objtree)/scripts/generate_rust_target.rs'		\
-	    -o '$(abspath $(obj))/vrust/generate_rust_target'; } &&	\
-	'$(abspath $(obj))/vrust/generate_rust_target'			\
-	    < '$(objtree)/include/config/auto.conf' > '$(bch-target-json)')
-ifneq ($(wildcard $(bch-target-json)),)
-KBUILD_RUSTFLAGS := $(patsubst --target=$(objtree)/scripts/target.json,--target=$(bch-target-json),$(KBUILD_RUSTFLAGS))
-else
-$(warning bcachefs: failed to generate $(bch-target-json); leaving --target unchanged)
-endif
-else
+# active Rust stack: the kernel's $(objtree)/rust, or the vendored one when
+# Makefile.rust.vendor is in use (it overrides this) — never both. A
+# CONFIG_RUST=n devel tree can still ship a stale prebuilt $(objtree)/rust
+# (built with a different rustc); if both are on -L, rustc sees two `core`
+# candidates (E0464) and picks a core that predates the current rustc's lang
+# items (meta_sized).
 bch-rust-L := -L$(objtree)/rust
-endif
 
 # bindgen must see the headers exactly as the C build does, or struct layouts
 # diverge silently (e.g. NO_BCACHEFS_FS gates bch_fs.vfs; -fplan9-extensions
@@ -243,44 +217,6 @@ $(obj)/rust/extern.c: $(obj)/rust/bcachefs.rs ;
 CFLAGS_rust/extern.o += -Wno-missing-prototypes -Wno-missing-declarations \
 			-Wno-error
 
-# Kernel trees < 6.18 pass -Zno-jump-tables in KBUILD_RUSTFLAGS, written for
-# their era's pinned rustc; newer rustc has it stabilized as -Cjump-tables=n.
-# Rewrite the underlying variable - rust_flags expands it lazily, so this covers
-# every Rust rule below and in the vendored includes.
-#
-# Only rewrite when $(RUSTC) actually accepts the stable spelling. rustc from
-# before the stabilization rejects it outright:
-#
-#   $ rustc -Cjump-tables=n --print=sysroot
-#   error: unknown codegen option: `jump-tables`
-#
-# so rewriting unconditionally turns a working build into a hard failure on
-# those toolchains, which is worse than leaving the flag the kernel chose.
-rustc-has-cjump-tables := $(shell $(RUSTC) -Cjump-tables=n --print=sysroot \
-	>/dev/null 2>&1 && echo y || echo n)
-ifeq ($(rustc-has-cjump-tables),y)
-KBUILD_RUSTFLAGS := $(patsubst -Zno-jump-tables,-Cjump-tables=n,$(KBUILD_RUSTFLAGS))
-endif
-
-# Module BTF and Rust debuginfo: the kernel itself only allows Rust together
-# with BTF when pahole can skip Rust compilation units and the kernel isn't
-# LTO-built (init/Kconfig: RUST depends on !DEBUG_INFO_BTF ||
-# (PAHOLE_HAS_LANG_EXCLUDE && !LTO)). A kernel outside that - e.g. a clang LTO
-# distro kernel - has no Rust of its own, so we bring the vendored stack, and
-# its DWARF then breaks the module's BTF generation:
-#
-#   BTF [M] src/fs/bcachefs/bcachefs.ko
-#   FAILED: load BTF from src/fs/bcachefs/bcachefs.ko.BTF.1: No such file or directory
-#
-# (#1086). Build our Rust without debuginfo there, so pahole sees only C.
-ifeq ($(bcachefs-vendor-rust),y)
-ifdef CONFIG_DEBUG_INFO_BTF_MODULES
-ifneq ($(CONFIG_PAHOLE_HAS_LANG_EXCLUDE)$(CONFIG_LTO),y)
-KBUILD_RUSTFLAGS := $(filter-out $(DEBUG_RUSTFLAGS),$(KBUILD_RUSTFLAGS)) -Cdebuginfo=0
-endif
-endif
-endif
-
 # mod.rs keys on cfg(kernel) to source the kernel-compat types from the kernel
 # crate (vs bcachefs-shim in userspace); the kernel build doesn't set it on its
 # own, so do it here for every Rust object in this dir.
@@ -357,9 +293,10 @@ targets += codegen rust/bcachefs.rs libpaste.so libtypeinfo_macros.so bitfield.o
 # object. bitfield.o/bitflags.o/uuid.o: the vendored rlibs' objects, linked in.
 bcachefs-y += mod.o rust/extern.o bitfield.o bitflags.o uuid.o
 
-# CONFIG_RUST=n: build the vendored Rust stack into $(obj) and bundle it (it also
-# provides a custom mod.o rule linking against $(obj), since kbuild's Rust rule
-# wires mod.o to the kernel's rmeta). CONFIG_RUST=y leaves mod.o to kbuild.
+# The vendored stack, when the kernel's Rust can't be used: build it into
+# $(obj)/vrust and bundle it (it also provides a custom mod.o rule linking
+# against it, since kbuild's Rust rule wires mod.o to the kernel's rmeta).
+# Otherwise mod.o is left to kbuild.
 ifeq ($(bcachefs-vendor-rust),y)
 include $(src)/Makefile.rust.vendor
 endif
