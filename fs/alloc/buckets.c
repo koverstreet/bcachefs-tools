@@ -1501,3 +1501,15 @@ int bch2_dev_buckets_alloc(struct bch_fs *c, struct bch_dev *ca)
 
 	return bch2_dev_buckets_resize(c, ca, ca->mi.nbuckets);
 }
+
+/* For Rust: static inlines over percpu counters */
+int rust_bch2_disk_reservation_add(struct bch_fs *c, struct disk_reservation *res,
+				   u64 sectors, unsigned nr_replicas, int flags)
+{
+	return bch2_disk_reservation_add(c, res, sectors, nr_replicas, flags);
+}
+
+void rust_bch2_disk_reservation_put(struct bch_fs *c, struct disk_reservation *res)
+{
+	bch2_disk_reservation_put(c, res);
+}

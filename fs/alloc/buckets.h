@@ -616,4 +616,9 @@ int bch2_dev_buckets_resize(struct bch_fs *, struct bch_dev *, u64);
 void bch2_dev_buckets_free(struct bch_dev *);
 int bch2_dev_buckets_alloc(struct bch_fs *, struct bch_dev *);
 
+/* For Rust, which can't call the static inlines: */
+int rust_bch2_disk_reservation_add(struct bch_fs *, struct disk_reservation *,
+				   u64, unsigned, int);
+void rust_bch2_disk_reservation_put(struct bch_fs *, struct disk_reservation *);
+
 #endif /* _BUCKETS_H */
