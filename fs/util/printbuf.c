@@ -681,3 +681,9 @@ void bch2_printbuf_tabstop_align(struct printbuf *buf)
 err:
 	darray_exit(&col_widths);
 }
+
+/* For Rust: prt_bytes() is a static inline */
+void rust_prt_bytes(struct printbuf *out, const void *b, unsigned n)
+{
+	prt_bytes(out, b, n);
+}

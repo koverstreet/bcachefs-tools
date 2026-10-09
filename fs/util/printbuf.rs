@@ -212,8 +212,8 @@ impl Printbuf {
     /// newlines and tabs aren't indent or tabstops: as prt_bytes().
     pub fn write_bytes(&mut self, bytes: &[u8]) {
         unsafe {
-            c::prt_bytes(&mut self.0, bytes.as_ptr() as *const core::ffi::c_void,
-                         bytes.len() as core::ffi::c_uint);
+            c::rust_prt_bytes(&mut self.0, bytes.as_ptr() as *const core::ffi::c_void,
+                              bytes.len() as core::ffi::c_uint);
         }
     }
 }

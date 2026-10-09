@@ -154,6 +154,9 @@ void bch2_prt_tab(struct printbuf *);
 void bch2_prt_tab_rjust(struct printbuf *);
 void bch2_printbuf_tabstop_align(struct printbuf *);
 
+/* For Rust, which can't call the static inline: */
+void rust_prt_bytes(struct printbuf *, const void *, unsigned);
+
 void bch2_prt_bytes_indented(struct printbuf *, const char *, unsigned);
 void bch2_prt_human_readable_u64(struct printbuf *, u64);
 void bch2_prt_human_readable_s64(struct printbuf *, s64);
