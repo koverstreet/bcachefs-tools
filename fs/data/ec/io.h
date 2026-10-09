@@ -26,6 +26,8 @@ struct ec_stripe_buf {
 	/* might not be buffering the entire stripe: */
 	unsigned		offset;
 	unsigned		size;
+	/* Not aligned to the checksum granularity, so the checksums aren't checked */
+	bool			unaligned;
 	s16			err[2][BCH_BKEY_PTRS_MAX];
 	void			*data[BCH_BKEY_PTRS_MAX];
 
@@ -77,8 +79,22 @@ static inline u32 ec_failed_mask(struct ec_stripe_buf *buf,
 void __bch2_ec_stripe_buf_exit(struct ec_stripe_buf *);
 void bch2_ec_stripe_buf_exit(struct ec_stripe_buf *);
 void bch2_ec_stripe_buf_move(struct ec_stripe_buf *, struct ec_stripe_buf *);
-int bch2_ec_stripe_buf_init(struct bch_fs *, struct ec_stripe_buf *, unsigned, unsigned,
-			    struct closure *);
+enum ec_stripe_buf_flags {
+	/* Fail if it would go over ec_stripe_buf_limit */
+	EC_STRIPE_BUF_optional	= BIT(0),
+	/* Exactly the range given, without rounding to the checksum granularity */
+	EC_STRIPE_BUF_unaligned	= BIT(1),
+};
+
+int __bch2_ec_stripe_buf_init(struct bch_fs *, struct ec_stripe_buf *, unsigned, unsigned,
+			      struct closure *, enum ec_stripe_buf_flags);
+
+static inline int bch2_ec_stripe_buf_init(struct bch_fs *c, struct ec_stripe_buf *buf,
+					  unsigned offset, unsigned size,
+					  struct closure *cl)
+{
+	return __bch2_ec_stripe_buf_init(c, buf, offset, size, cl, 0);
+}
 
 DEFINE_FREE(ec_stripe_buf_free, struct ec_stripe_buf *, if (_T) { bch2_ec_stripe_buf_exit(_T); kfree(_T); });
 
@@ -92,11 +108,14 @@ int bch2_stripe_buf_validate_msg(struct bch_fs *, struct ec_stripe_buf *, bool, 
 void bch2_ec_block_io(struct bch_fs *, struct ec_stripe_buf *, blk_opf_t, unsigned);
 void bch2_ec_block_io_range(struct bch_fs *, struct ec_stripe_buf *, blk_opf_t, unsigned,
 			    unsigned, unsigned);
-void bch2_stripe_buf_read(struct bch_fs *, struct ec_stripe_buf *);
+
+u32 bch2_ec_read_around_skip(struct bch_fs *, const struct bch_stripe *, u32);
+int bch2_ec_read_around_pick(struct btree_trans *, struct extent_ptr_decoded *,
+			     struct bch_io_failures *, enum bch_read_flags, int);
 
 struct bch_read_bio;
 int bch2_ec_read_extent(struct btree_trans *, struct bch_read_bio *,
-			struct bkey_s_c, struct printbuf *);
+			struct bkey_s_c, struct bch_io_failures *);
 
 #endif /* _BCACHEFS_DATA_EC_IO_H */
 

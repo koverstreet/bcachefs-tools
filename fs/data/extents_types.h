@@ -22,6 +22,7 @@ struct bch_extent_crc_unpacked {
 struct extent_ptr_decoded {
 	bool				has_ec;
 	bool				do_ec_reconstruct;
+	bool				ec_read_around;
 	u8				crc_retry_nr;
 	struct bch_extent_crc_unpacked	crc;
 	struct bch_extent_ptr		ptr;
@@ -37,6 +38,12 @@ struct bch_io_failures {
 		s16		errcode;
 	}			data[BCH_REPLICAS_MAX + 1];
 
+	/*
+	 * A read-around failed: don't try another. Not a device error, so not
+	 * in data[] - those are what self healing rewrites.
+	 */
+	s16			ec_around_errcode;
+
 	struct printbuf		ec_msg;
 };
 
@@ -50,7 +57,8 @@ struct bch_io_failures {
 	x(must_bounce)			\
 	x(must_clone)			\
 	x(in_retry)			\
-	x(no_poison_check)
+	x(no_poison_check)		\
+	x(ec_read_around)
 
 enum __bch_read_flags {
 #define x(n)	__BCH_READ_##n,

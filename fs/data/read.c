@@ -370,13 +370,13 @@ static struct bch_read_bio *promote_alloc(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 
-	bool self_healing = failed != NULL;
+	bool self_healing = have_io_error(failed);
 
 	/*
-	 * We're in the retry path, but we don't know what to repair yet, and we
-	 * don't want to do a promote here:
+	 * We're in the retry path, but we don't know what to repair yet. Only
+	 * the read-around retry may promote: it isn't an error retry.
 	 */
-	if (self_healing && !failed->nr)
+	if (failed && !failed->nr && !(flags & BCH_READ_may_promote))
 		return NULL;
 
 	/*
@@ -407,7 +407,8 @@ static struct bch_read_bio *promote_alloc(struct btree_trans *trans,
 				k.k->type == KEY_TYPE_reflink_v
 				? BTREE_ID_reflink
 				: BTREE_ID_extents,
-				k, pos, pick, flags, sectors, orig, failed);
+				k, pos, pick, flags, sectors, orig,
+				self_healing ? failed : NULL);
 	int ret = PTR_ERR_OR_ZERO(promote);
 	if (unlikely(ret)) {
 		/*
@@ -741,12 +742,20 @@ static void bch2_rbio_retry(struct work_struct *work)
 	};
 	struct bpos read_pos = rbio->read_pos;
 	int orig_ret = rbio->ret;
+	/* Not an error: the read-around decision, punted here to do the reconstruct */
+	bool read_around = !orig_ret && rbio->pick.ec_read_around;
 	CLASS(bch_io_failures, failed)();
 
 	flags &= ~BCH_READ_hard_require_read_device;
 
-	event_inc_trace(c, data_read_retry, buf,
-			bch2_read_bio_to_text_atomic(&buf, rbio));
+	if (read_around) {
+		flags |= BCH_READ_ec_read_around;
+		event_inc_trace(c, data_read_ec_read_around, buf,
+				bch2_read_bio_to_text_atomic(&buf, rbio));
+	} else {
+		event_inc_trace(c, data_read_retry, buf,
+				bch2_read_bio_to_text_atomic(&buf, rbio));
+	}
 
 	{
 		CLASS(btree_trans, trans)(c);
@@ -773,7 +782,8 @@ static void bch2_rbio_retry(struct work_struct *work)
 		rbio = bch2_rbio_free(rbio);
 
 		flags |= BCH_READ_in_retry;
-		flags &= ~BCH_READ_may_promote;
+		if (!read_around)
+			flags &= ~BCH_READ_may_promote;
 		flags &= ~BCH_READ_last_fragment;
 		flags |= BCH_READ_must_clone;
 
@@ -789,7 +799,33 @@ static void bch2_rbio_retry(struct work_struct *work)
 		     bch2_err_matches(ret, BCH_ERR_data_read_ptr_stale_race)))
 			ret = 0;
 
-		if (failed.nr || failed.ec_msg.pos || ret) {
+		/*
+		 * The read-around failed and the direct read after it didn't:
+		 * nothing was lost, and the device is fine. Say what was found,
+		 * unless it was only a race or the stripe buffer limit.
+		 */
+		bool read_around_failed = !ret && !failed.nr && failed.ec_around_errcode;
+
+		if (read_around_failed) {
+			event_inc_trace(c, data_read_ec_read_around_fail, buf,
+					bch2_read_bio_to_text_atomic(&buf, rbio));
+
+			if (failed.ec_msg.pos ||
+			    failed.ec_around_errcode != -BCH_ERR_data_read_retry_ec_read_around) {
+				CLASS(bch_log_msg_level, msg)(c, LOGLEVEL_notice);
+				bch2_read_err_msg_trans(trans, &msg.m, rbio, read_pos);
+				prt_newline(&msg.m);
+
+				if (!bkey_deleted(&sk.k->k)) {
+					bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(sk.k));
+					prt_newline(&msg.m);
+				}
+
+				bch2_io_failures_to_text(&msg.m, c, &failed);
+				prt_str(&msg.m, "read device directly");
+				msg.m.suppress = bch2_ratelimit(c);
+			}
+		} else if (failed.nr || failed.ec_msg.pos || ret) {
 			struct printbuf *out;
 			CLASS(bch_log_msg, msg)(c);
 
@@ -832,9 +868,13 @@ static void bch2_rbio_retry(struct work_struct *work)
 		 * failure doesn't fail the read. Only user reads name an inum
 		 * (a data update read may be an indirect extent):
 		 */
-		if (failed.nr || ret) {
+		if (!read_around_failed && (failed.nr || ret)) {
+			/* After a read-around, orig_ret is 0: the failures say what was recovered from */
+			bool csum = data_read_err_is_csum(orig_ret) ||
+				(read_around &&
+				 (bch2_io_failures_to_err_mask(&failed) & BCH_READ_ERR_checksum));
 			enum bch_sb_error_id e = !ret
-				? (data_read_err_is_csum(orig_ret)
+				? (csum
 				   ? BCH_FSCK_ERR_data_read_csum_err_recovered
 				   : BCH_FSCK_ERR_data_read_io_err_recovered)
 				: (data_read_err_is_csum(ret)
@@ -887,7 +927,9 @@ static int bch2_rbio_error(struct bch_read_bio *rbio, int ret)
 	BUG_ON(ret >= 0);
 
 	rbio->ret = ret;
-	bch2_rbio_parent(rbio)->saw_error = true;
+	/* A failed read-around isn't an error: the read goes to the device next */
+	if (!rbio->pick.ec_read_around)
+		bch2_rbio_parent(rbio)->saw_error = true;
 
 	if (!(rbio->flags & BCH_READ_in_retry)) {
 		if (data_read_err_should_retry(ret)) {
@@ -1583,6 +1625,21 @@ int __bch2_read_extent(struct btree_trans *trans,
 		return read_extent_pick_err(trans, orig, read_pos, data_btree, k, flags, ret);
 	ret = 0;
 
+	/*
+	 * A read-around is punted to the retry, which does the promote: the
+	 * rbio allocated here is freed unused.
+	 */
+	enum bch_read_flags punt_promote = 0;
+
+	if (pick.has_ec && !pick.do_ec_reconstruct) {
+		try(bch2_ec_read_around_pick(trans, &pick, failed, flags, dev));
+
+		if (pick.ec_read_around && !(flags & BCH_READ_in_retry)) {
+			punt_promote = flags & BCH_READ_may_promote;
+			flags &= ~BCH_READ_may_promote;
+		}
+	}
+
 	if (bch2_csum_type_is_encryption(pick.crc.csum_type) &&
 	    unlikely(!c->chacha20_key_set))
 		return read_extent_no_encryption_key(trans, orig, read_pos, k, flags);
@@ -1704,17 +1761,21 @@ int __bch2_read_extent(struct btree_trans *trans,
 		trans->notrace_relock_fail = true;
 	} else {
 		if (!(flags & BCH_READ_in_retry)) {
+			rbio->flags |= punt_promote;
 			bch2_rbio_punt(rbio, bch2_rbio_retry, RBIO_CONTEXT_UNBOUND, system_dfl_wq);
 			return 0;
 		}
 
 		/* Attempting reconstruct read: */
-		ret = bch2_ec_read_extent(trans, rbio, k, &failed->ec_msg);
+		ret = bch2_ec_read_extent(trans, rbio, k, failed);
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
 			bch2_rbio_free(rbio);
 			return ret;
 		}
 		if (ret) {
+			/* Whatever went wrong, a read-around falls back to a direct read: */
+			if (rbio->pick.ec_read_around)
+				ret = bch_err_throw(c, data_read_retry_ec_read_around);
 			bch2_rbio_error(rbio, ret);
 			goto out;
 		}

@@ -83,6 +83,9 @@ __cold void bch2_io_failures_to_text(struct printbuf *out,
 			prt_newline(out);
 		}
 
+	if (failed->ec_around_errcode)
+		prt_printf(out, "ec read-around: %s\n", bch2_err_str(failed->ec_around_errcode));
+
 	if (failed->ec_msg.pos) {
 		prt_printf(out, "ec reconstruct:\n");
 		guard(printbuf_indent)(out);
@@ -135,6 +138,11 @@ void bch2_mark_io_failure(struct bch_io_failures *failed,
 {
 	BUG_ON(!err);
 	BUG_ON(bch2_err_matches(err, BCH_ERR_transaction_restart));
+
+	if (p->ec_read_around) {
+		failed->ec_around_errcode = err;
+		return;
+	}
 
 	struct bch_dev_io_failures *f = bch2_dev_io_failures_mut(failed, p->ptr.dev);
 
