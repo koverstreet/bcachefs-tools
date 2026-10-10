@@ -9,7 +9,11 @@
 VRD	:= $(obj)/vrust
 VRD_ABS	:= $(abspath $(VRD))
 VENDOR	:= $(src)/vendor/kernel-rust
-RUST_LIB_SRC := $(shell $(RUSTC) --print sysroot)/lib/rustlib/src/rust/library
+# core's source: RUST_LIB_SRC if given, else rustc's rust-src - as the
+# kernel's rust/Makefile, since some packagings (nixpkgs) keep it outside the
+# sysroot and pass it this way.
+bch-rustc-sysroot := $(shell $(RUSTC) --print sysroot)
+RUST_LIB_SRC ?= $(bch-rustc-sysroot)/lib/rustlib/src/rust/library
 
 # ---- adapting the kernel's build to our rustc ------------------------------
 # The kernel's KBUILD_RUSTFLAGS (set even with CONFIG_RUST=n), rustc_cfg and

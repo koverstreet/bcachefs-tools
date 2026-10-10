@@ -8,7 +8,7 @@
 # quotes, backslashes, $ and backticks.
 #
 # Environment: RUSTC, HOSTRUSTC, BINDGEN, CC, KERNEL_SRC, KERNEL_OBJ; for kernel,
-# CONFIG_RUSTC_VERSION; for vendored, RUSTC_MIN.
+# CONFIG_RUSTC_VERSION; for vendored, RUSTC_MIN and optionally RUST_LIB_SRC.
 
 RUSTC=${RUSTC:-rustc}
 HOSTRUSTC=${HOSTRUSTC:-$RUSTC}
@@ -93,8 +93,10 @@ vendored)
 	   [ "$(printf '%s\n' "$RUSTC_MIN" "$version" | sort -V | head -1)" != "$RUSTC_MIN" ]; then
 		miss "rustc $version is older than $RUSTC_MIN"
 	fi
-	core=$("$RUSTC" --print sysroot 2>/dev/null)/lib/rustlib/src/rust/library/core/src/lib.rs
-	[ -r "$core" ] || miss "rust-src not found (no $core - with rustup: rustup component add rust-src)"
+	# RUST_LIB_SRC overrides the sysroot's, as for the kernel's own check
+	lib_src=${RUST_LIB_SRC:-$("$RUSTC" --print sysroot 2>/dev/null)/lib/rustlib/src/rust/library}
+	core=$lib_src/core/src/lib.rs
+	[ -r "$core" ] || miss "rust-src not found (no $core - with rustup: rustup component add rust-src; or set RUST_LIB_SRC)"
 	for f in scripts/generate_rust_target.rs include/generated/rustc_cfg; do
 		[ -r "$KERNEL_OBJ/$f" ] || miss "kernel tree has no $f"
 	done
