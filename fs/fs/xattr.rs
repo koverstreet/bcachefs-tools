@@ -11,7 +11,7 @@
 //! POSIX ACLs are xattrs too - types POSIX_ACL_ACCESS and POSIX_ACL_DEFAULT,
 //! with an empty name - and are acl.rs's.
 
-use core::ffi::{c_char, c_int, c_void};
+use core::ffi::{c_int, c_void};
 use core::mem::{offset_of, size_of};
 
 use crate::acl;
@@ -25,7 +25,7 @@ use crate::init::error::{id, BkeyValidate};
 use crate::inode;
 use crate::snapshots::subvolume;
 use crate::str_hash::{self, HashTable};
-use crate::util::ffi::{bytes, opt_bytes, opt_bytes_mut, Opaque};
+use crate::util::ffi::{bytes, c_char, opt_bytes, opt_bytes_mut, Opaque};
 use crate::util::os_str::{cstr_name, OsStr, OsStrExt};
 use crate::util::Printbuf;
 
@@ -612,7 +612,7 @@ mod vfs {
         size:     usize,
     ) -> c_int {
         len_to_c(unsafe {
-            bcachefs_get(&InodeInfo::from_inode(vinode), CStr::from_ptr(name),
+            bcachefs_get(&InodeInfo::from_inode(vinode), CStr::from_ptr(name.cast()),
                          opt_bytes_mut(buffer, size), false)
         })
     }
@@ -631,7 +631,7 @@ mod vfs {
         size:     usize,
     ) -> c_int {
         len_to_c(unsafe {
-            bcachefs_get(&InodeInfo::from_inode(vinode), CStr::from_ptr(name),
+            bcachefs_get(&InodeInfo::from_inode(vinode), CStr::from_ptr(name.cast()),
                          opt_bytes_mut(buffer, size), true)
         })
     }
@@ -758,7 +758,7 @@ mod vfs {
         let value = unsafe { opt_bytes(value, size) };
         let r = unsafe {
             bcachefs_set(Dentry::borrow_raw(dentry), &InodeInfo::from_inode(vinode),
-                         CStr::from_ptr(name), value)
+                         CStr::from_ptr(name.cast()), value)
         };
         match r {
             Ok(())  => 0,

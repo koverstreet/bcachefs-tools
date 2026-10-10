@@ -40,6 +40,18 @@ impl<T> Opaque<T> {
     }
 }
 
+/// C's char, as C compiles it here. core::ffi::c_char is the platform ABI's -
+/// i8 on x86, u8 on arm64 - which is userspace's; the kernel builds with
+/// -funsigned-char, so u8 on every arch, as the kernel's own ffi::c_char. The
+/// types differ only to Rust, but that includes kCFI: a function C calls
+/// through a pointer taking `char *` as `*const i8` never hashes as C's
+/// prototype does.
+#[cfg(kernel)]
+#[allow(non_camel_case_types)]
+pub type c_char = u8;
+#[cfg(not(kernel))]
+pub use core::ffi::c_char;
+
 /// The C string at @p, None for a NULL @p.
 ///
 /// # Safety

@@ -81,8 +81,8 @@ pub fn qstr(name: &OsStr) -> c::qstr {
 ///
 /// # Safety
 /// @p is a NUL-terminated string, valid for 'a.
-pub unsafe fn cstr_name<'a>(p: *const core::ffi::c_char) -> &'a OsStr {
-    OsStr::from_bytes(unsafe { core::ffi::CStr::from_ptr(p) }.to_bytes())
+pub unsafe fn cstr_name<'a>(p: *const crate::util::ffi::c_char) -> &'a OsStr {
+    OsStr::from_bytes(unsafe { core::ffi::CStr::from_ptr(p.cast()) }.to_bytes())
 }
 
 /// The name C's qstr @q points at.
