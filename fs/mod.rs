@@ -122,6 +122,9 @@ pub mod c {
     #[cfg(kernel)]
     pub use kernel::bindings::*;
 
+    // C's x-macro lists, as c::NAME!: see cstructs.rs.
+    pub use crate::cstructs::c::*;
+
     // Userspace #defines timespec64 → timespec (include/linux/time64.h), so
     // bindgen never emits a timespec64; alias it so fs/ can name the kernel's
     // real return type (timespec64) uniformly across both builds.

@@ -15,6 +15,8 @@
 //!   c_verbatim!(r#".."#) C carried as is; no Rust side
 //!   c_xmacro! { .. }     an x-macro list: Rust gets NAME!(cb), handing cb!
 //!                        the whole list
+//!   c_xmacro_from_c!(..) a list C still defines, read from its header: the
+//!                        same NAME!(cb), no record (xmacro_from_c.rs)
 //!   c_bitmask! { .. }    bitfields in a flags word: Rust gets a getter and
 //!                        a setter on the struct for each
 //!   c_ioctl! { .. }      ioctl numbers: C gets the _IO*() #defines, Rust a
@@ -47,6 +49,7 @@ mod cstruct {
 use cstruct::{parse_cstruct, parse_items, CEnumKind, CItem, CXEntry};
 
 mod tagged_union;
+mod xmacro_from_c;
 
 /// A tagged union with a stable representation: see tagged_union.rs.
 #[proc_macro]
@@ -179,6 +182,28 @@ pub fn c_verbatim(input: TokenStream) -> TokenStream {
 /// crate::cstructs::c - NAME is expanded wherever it's used.
 #[proc_macro]
 pub fn c_xmacro(input: TokenStream) -> TokenStream {
+    xmacro(input, true)
+}
+
+/// An x-macro list C defines, for Rust until its header is converted:
+/// c_xmacro_from_c!(NAME, "header") is c_xmacro! of the header's
+/// #define NAME(), unrecorded - see xmacro_from_c.rs.
+#[proc_macro]
+pub fn c_xmacro_from_c(input: TokenStream) -> TokenStream {
+    let (list, path) = match xmacro_from_c::read(input) {
+        Ok(r) => r,
+        Err(e) => return compile_error(&format!("c_xmacro_from_c!: {e}")),
+    };
+    let Ok(list) = list.parse::<TokenStream>() else {
+        return compile_error(&format!("c_xmacro_from_c!: {list}: not Rust tokens"));
+    };
+    let mut out: TokenStream = format!("const _: &[u8] = include_bytes!({path:?});").parse().unwrap();
+    out.extend(xmacro(list, false));
+    out
+}
+
+/// c_xmacro!, its record only if @recorded: a list C defines has none.
+fn xmacro(input: TokenStream, recorded: bool) -> TokenStream {
     let text = format!("c_xmacro! {{ {input} }}");
     let x = match one_item(&text, "NAME(x) { (args), ... }", |i| matches!(i, CItem::XMacro(_))) {
         Ok(CItem::XMacro(x)) => x,
@@ -208,7 +233,7 @@ pub fn c_xmacro(input: TokenStream) -> TokenStream {
     }
     entries.retain(|e| !e.trim().is_empty());
 
-    let mut out = record(&text, &[]);
+    let mut out = if recorded { record(&text, &[]) } else { String::new() };
     let subs: Vec<usize> = x.entries.iter().enumerate()
         .filter(|(_, e)| matches!(e, CXEntry::Sub { .. }))
         .map(|(i, _)| i)

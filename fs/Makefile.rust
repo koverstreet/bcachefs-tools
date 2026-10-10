@@ -242,12 +242,14 @@ $(obj)/uuid.o: $(src)/vendor/uuid/src/lib.rs FORCE
 	$(call if_changed_dep,bch_rlib)
 
 # mod.o gets them as externs, and the codegen output via OUT_DIR, as in
-# userspace.
+# userspace - and the crate's directory as cargo gives it, CARGO_MANIFEST_DIR,
+# which c_xmacro_from_c! reads C's headers relative to.
 bch-externs := paste:libpaste.so typeinfo_macros:libtypeinfo_macros.so \
 	cstruct_macros:libcstruct_macros.so bitfield_struct:libbitfield_struct.so \
 	bitfield:libbitfield.rmeta bitflags:libbitflags.rmeta uuid:libuuid.rmeta
 RUSTFLAGS_mod.o += $(foreach e,$(bch-externs),--extern $(subst :,=$(obj)/,$(e)))
 $(obj)/mod.o: export OUT_DIR := $(abspath $(obj)/rust)
+$(obj)/mod.o: export CARGO_MANIFEST_DIR := $(abspath $(src))
 $(obj)/mod.o: $(obj)/rust/bcachefs.rs $(obj)/libpaste.so $(obj)/libtypeinfo_macros.so \
 	$(obj)/libcstruct_macros.so $(obj)/libbitfield_struct.so \
 	$(obj)/bitfield.o $(obj)/bitflags.o $(obj)/uuid.o
