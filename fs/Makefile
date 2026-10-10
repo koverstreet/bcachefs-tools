@@ -15,6 +15,7 @@ bcachefs-version := $(shell sed -n 's/.*bcachefs_version "\(.*\)".*/\1/p' $(src)
 ifneq ($(bcachefs-version),)
 ifeq ($(shell $(CONFIG_SHELL) $(src)/scripts/fetch-module.sh '$(KERNELRELEASE)' '$(bcachefs-version)' '$(obj)/bcachefs.ko' && echo hit),hit)
 CONFIG_BCACHEFS_FS :=
+bcachefs-prebuilt := y
 endif
 else
 $(warning bcachefs: no version in $(src)/version.h - not looking for a prebuilt module (version.h is staged by bcachefs-tools 'make install_dkms'; a hand-copied kernel fs/bcachefs/ tree lacks it))
@@ -195,4 +196,8 @@ else
 	obj-$(CONFIG_MEAN_AND_VARIANCE_UNIT_TEST)   += util/mean_and_variance_test.o
 endif
 
+# A prebuilt module builds nothing, so none of Rust's requirements apply - its
+# checks fail the build on a kernel that can't build our Rust (#1133).
+ifndef bcachefs-prebuilt
 include $(src)/Makefile.rust
+endif
