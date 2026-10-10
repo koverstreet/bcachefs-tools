@@ -82,7 +82,7 @@ impl FlexArray for c::bch_replicas_entry_v1 {
 
 pub fn mem_read(fs: &Fs, pos: &c::disk_accounting_pos, counters: &mut [u64]) {
     unsafe {
-        c::bch2_accounting_mem_read(
+        c::rust_bch2_accounting_mem_read(
             fs.raw,
             pos.to_bpos(),
             counters.as_mut_ptr(),
@@ -96,11 +96,16 @@ pub fn mem_read(fs: &Fs, pos: &c::disk_accounting_pos, counters: &mut [u64]) {
 pub fn add(trans: &BtreeTrans<'_>, pos: &c::disk_accounting_pos, d: &[i64], gc: bool)
     -> Result<(), BchError>
 {
-    // C's signature isn't const: a copy of @pos, and @d only read.
+    // bch2_disk_accounting_mod(); C's signatures aren't const: a copy of
+    // @pos, and @d only read.
     let mut acc = c::disk_accounting_pos::from_bytes(pos.as_bytes());
+    let d_ptr = d.as_ptr() as *mut i64;
     ret_to_result(unsafe {
-        c::bch2_disk_accounting_mod(trans.raw(), &mut acc, d.as_ptr() as *mut i64,
-                                    d.len() as u32, gc)
+        if gc {
+            c::bch2_disk_accounting_mod_gc(trans.raw(), &mut acc, d_ptr, d.len() as u32)
+        } else {
+            c::bch2_disk_accounting_mod_normal(trans.raw(), &mut acc, d_ptr, d.len() as u32)
+        }
     })
 }
 

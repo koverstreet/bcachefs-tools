@@ -353,4 +353,7 @@ void bch2_verify_accounting_clean(struct bch_fs *c);
 void bch2_accounting_gc_free(struct bch_fs *);
 void bch2_fs_accounting_exit(struct bch_fs *);
 
+/* For Rust, which can't call the static inline: */
+void rust_bch2_accounting_mem_read(struct bch_fs *, struct bpos, u64 *, unsigned);
+
 #endif /* _BCACHEFS_DISK_ACCOUNTING_H */

@@ -1465,3 +1465,9 @@ void bch2_fs_accounting_exit(struct bch_fs *c)
 	bch2_accounting_free_counters(acc, false);
 	darray_exit(&acc->k);
 }
+
+/* For Rust: a static inline, under mark_lock - a percpu rwsem */
+void rust_bch2_accounting_mem_read(struct bch_fs *c, struct bpos p, u64 *v, unsigned nr)
+{
+	bch2_accounting_mem_read(c, p, v, nr);
+}
