@@ -26,6 +26,9 @@
 //!   c_same! { .. }       a Rust type with a C type's layout: checked in C
 //!   c_extern! { .. }     what Rust calls of a C header: C gets the
 //!                        prototypes, which its own must agree with
+//!   rust_c_extern! { .. } what C calls of Rust through a pointer: C gets
+//!                        the prototypes, Rust definitions with C's
+//!                        signatures, calling the Rust functions
 //!   tagged_union! { .. } a tagged union with a stable representation: C's
 //!                        storage, the tag a Determinant of it, arms from an
 //!                        x-macro list, read as an enum (tagged_union.rs)
@@ -440,6 +443,69 @@ pub fn c_extern(input: TokenStream) -> TokenStream {
     }
     format!("{}unsafe extern \"C\" {{\n{decls}}}\n{}", cfg(&ex.cfg), record(&text, &[]))
         .parse().unwrap()
+}
+
+/// rust_c_extern!'s arguments: a C type, and the Rust type the function
+/// implementing it takes for it. Each pair has one layout - a pointer and its
+/// reference, a #[repr(transparent)] wrapper, a c_same! - so the argument
+/// converts by transmute. A C type not here is passed as it is.
+const RUST_ARGS: &[(&str, &str)] = &[
+    ("*mut c::bch_fs",                  "&crate::util::ffi::Opaque<c::bch_fs>"),
+    ("*mut c::btree_trans",             "&crate::util::ffi::Opaque<c::btree_trans>"),
+    ("*mut c::printbuf",                "&mut crate::util::printbuf::Printbuf"),
+    ("*const c::bkey_validate_context", "&c::bkey_validate_context"),
+    ("c::bkey_s_c",                     "crate::btree::bkey::BkeySC<'_>"),
+];
+
+/// What C calls of Rust through a pointer - bkey_ops' methods:
+///
+///   use crate::xattr::bch2_xattr_validate;
+///   rust_c_extern! {
+///       pub fn bch2_xattr_validate(arg1: *mut c::bch_fs, arg2: c::bkey_s_c,
+///                                  arg3: *const c::bkey_validate_context) -> core::ffi::c_int;
+///   }
+///
+/// C gets the prototypes, as c_extern!'s. Rust gets each function defined
+/// with exactly C's signature, calling the Rust function of the same name -
+/// `use`d from where it's implemented - with each argument as RUST_ARGS has
+/// it. kCFI checks every indirect call against a hash of the callee's type,
+/// and a definition in Rust's types (&Opaque<bch_fs>, BkeySC) never hashes
+/// as C's prototype does.
+#[proc_macro]
+pub fn rust_c_extern(input: TokenStream) -> TokenStream {
+    let text = format!("rust_c_extern! {{ {input} }}");
+    let ex = match one_item(&text, "fns", |i| matches!(i, CItem::Extern(_))) {
+        Ok(CItem::Extern(ex)) => ex,
+        Ok(_) => unreachable!(),
+        Err(e) => return compile_error(&format!("rust_c_extern!: {e}")),
+    };
+    if !ex.statics.is_empty() || ex.fns.iter().any(|f| f.variadic) {
+        return compile_error("rust_c_extern!: fns only, and not variadic");
+    }
+
+    let cfg = |c: &Option<cstruct::Cfg>| c.as_ref().map(|c| format!("#[cfg({})] ", c.to_rust())).unwrap_or_default();
+    let mut defs = String::new();
+    for f in &ex.fns {
+        let params: Vec<String> = f.params.iter().map(|(n, ty)| format!("{n}: {ty}")).collect();
+        let args: Vec<String> = f.params.iter()
+            .map(|(n, ty)| match RUST_ARGS.iter().find(|(c, _)| c == ty) {
+                Some((c, r)) => format!("::core::mem::transmute::<{c}, {r}>({n})"),
+                None => n.clone(),
+            })
+            .collect();
+        let ret = f.ret.as_ref().map(|r| format!(" -> {r}")).unwrap_or_default();
+        defs.push_str(&format!(
+            "{}{}const _: () = {{\n\
+                 #[no_mangle]\n\
+                 #[allow(unused_unsafe, clippy::transmute_ptr_to_ref)]\n\
+                 unsafe extern \"C\" fn {name}({params}){ret} {{\n\
+                     unsafe {{ self::{name}({args}) }}\n\
+                 }}\n\
+             }};\n",
+            cfg(&ex.cfg), cfg(&f.cfg),
+            name = f.name, params = params.join(", "), args = args.join(", ")));
+    }
+    format!("{defs}{}", record(&text, &[])).parse().unwrap()
 }
 
 /// An integer constant - C's #define: c_const! { pub const NAME: u32 = EXPR; }

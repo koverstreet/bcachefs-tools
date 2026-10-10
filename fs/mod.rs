@@ -81,6 +81,7 @@ pub mod snapshot_states {
 #[path = "fs/str_hash.rs"]     pub mod str_hash;
 /// The records types defined in Rust that C shares are written from.
 #[path = "types/lib.rs"]       pub mod types;
+pub mod cstructs;
 pub mod typeinfo;
 pub mod util;
 /// The VFS, for its Rust entry points - kernel only, as C's

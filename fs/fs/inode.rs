@@ -799,8 +799,7 @@ fn validate_c(
 }
 
 /// For C's bkey_ops: bch2_inode_validate().
-#[no_mangle]
-pub extern "C" fn bch2_inode_validate(
+pub fn bch2_inode_validate(
     c:    &Opaque<c::bch_fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
@@ -812,8 +811,7 @@ pub extern "C" fn bch2_inode_validate(
 }
 
 /// For C's bkey_ops: bch2_inode_v2_validate().
-#[no_mangle]
-pub extern "C" fn bch2_inode_v2_validate(
+pub fn bch2_inode_v2_validate(
     c:    &Opaque<c::bch_fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
@@ -826,8 +824,7 @@ pub extern "C" fn bch2_inode_v2_validate(
 
 /// For C's bkey_ops: bch2_inode_v3_validate(). The fields start past the
 /// fixed ones, within the value.
-#[no_mangle]
-pub extern "C" fn bch2_inode_v3_validate(
+pub fn bch2_inode_v3_validate(
     c:    &Opaque<c::bch_fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
@@ -847,8 +844,7 @@ pub extern "C" fn bch2_inode_v3_validate(
 }
 
 /// For C's bkey_ops: bch2_inode_generation_validate().
-#[no_mangle]
-pub extern "C" fn bch2_inode_generation_validate(
+pub fn bch2_inode_generation_validate(
     c:    &Opaque<c::bch_fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
@@ -934,9 +930,8 @@ impl fmt::Display for c::bch_inode_unpacked {
 }
 
 /// For C's bkey_ops: bch2_inode_to_text() - an inode key's fields, unpacked.
-#[no_mangle]
 #[cold]
-pub extern "C" fn bch2_inode_to_text(
+pub fn bch2_inode_to_text(
     out: &mut Printbuf,
     c:   &Opaque<c::bch_fs>,
     k:   BkeySC<'_>,
@@ -946,9 +941,8 @@ pub extern "C" fn bch2_inode_to_text(
 }
 
 /// For C's bkey_ops: bch2_inode_generation_to_text().
-#[no_mangle]
 #[cold]
-pub extern "C" fn bch2_inode_generation_to_text(
+pub fn bch2_inode_generation_to_text(
     out: &mut Printbuf,
     _c:  &Opaque<c::bch_fs>,
     k:   BkeySC<'_>,
@@ -1157,8 +1151,7 @@ fn alloc_cursor_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 /// For C's bkey_ops: bch2_inode_alloc_cursor_validate().
-#[no_mangle]
-pub extern "C" fn bch2_inode_alloc_cursor_validate(
+pub fn bch2_inode_alloc_cursor_validate(
     c:    &Opaque<c::bch_fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
@@ -1168,9 +1161,8 @@ pub extern "C" fn bch2_inode_alloc_cursor_validate(
 
 /// For C's bkey_ops: bch2_inode_alloc_cursor_to_text() - the cursor, and the
 /// range it hands out.
-#[no_mangle]
 #[cold]
-pub extern "C" fn bch2_inode_alloc_cursor_to_text(
+pub fn bch2_inode_alloc_cursor_to_text(
     out: &mut Printbuf,
     c:   &Opaque<c::bch_fs>,
     k:   BkeySC<'_>,

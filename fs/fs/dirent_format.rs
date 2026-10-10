@@ -252,9 +252,8 @@ pub fn d_type_str(d_type: u8) -> &'static str {
 }
 
 /// For C's bkey_ops: bch2_dirent_to_text().
-#[no_mangle]
 #[cold]
-pub extern "C" fn bch2_dirent_to_text(
+pub fn bch2_dirent_to_text(
     out: &mut Printbuf,
     _c:  &Opaque<c::bch_fs>,
     k:   BkeySC<'_>,
@@ -317,8 +316,7 @@ pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<Dirent<'k>, BchError> {
 }
 
 /// For C's bkey_ops: bch2_dirent_validate().
-#[no_mangle]
-pub extern "C" fn bch2_dirent_validate(
+pub fn bch2_dirent_validate(
     c:    &Opaque<c::bch_fs>,
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,

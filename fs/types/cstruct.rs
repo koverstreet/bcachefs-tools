@@ -466,7 +466,8 @@ pub struct CStaticDecl {
 /// c_extern!: what Rust calls of a C header - fs/foo/bar_c.rs, of
 /// fs/foo/bar.h. Rust gets an extern "C" block; C, the prototypes, which
 /// bar.h includes, so a declaration that has drifted from the C one is a
-/// conflicting-types error in the C build.
+/// conflicting-types error in the C build. And rust_c_extern!: what C calls
+/// of Rust - the same prototypes, Rust's side the definitions.
 #[derive(Debug)]
 pub struct CExtern {
     pub cfg:     Option<Cfg>,
@@ -2339,7 +2340,8 @@ pub fn parse_items(src: &str) -> Result<Vec<CItem>, String> {
                 i = next;
                 continue;
             }
-            (Some("c_extern"), Some(t)) if t.is_punct('!') => {
+            // rust_c_extern!'s C is c_extern!'s: the prototypes
+            (Some("c_extern" | "rust_c_extern"), Some(t)) if t.is_punct('!') => {
                 let (body, next) = macro_body(&toks, j + 2)?;
                 out.push(CItem::Extern(parse_extern(body, a.cfg)?));
                 i = next;

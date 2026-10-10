@@ -9,7 +9,7 @@
 //! is namei's (namei.rs, as in C).
 
 #[path = "dirent_format.rs"]
-mod format;
+pub(crate) mod format;
 
 pub use format::{d_type_str, set_field, Dirent, DirentName, DirentTarget, RawNames};
 use format::{D_NAME_OFFSET, D_NAMES_OFFSET};
