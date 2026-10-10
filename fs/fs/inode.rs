@@ -59,8 +59,24 @@ use crate::btree_id;
 use core::ffi::CStr;
 use core::fmt;
 
-// inode_fields_v2!(), inode_fields_v3!(), inode_opts!(), INODE_FLAGS:
-include!(concat!(env!("OUT_DIR"), "/inode_format_gen.rs"));
+// The inode x-macros as m! { name = arg, ... }, the way C uses them: each
+// user defines its own m, as C code defines its own x().
+macro_rules! name_eq_arg {
+    ([$m:ident] $(($name:tt, $arg:tt)),* $(,)?) => { $m! { $($name = $arg,)* } };
+}
+#[allow(unused_macros)]
+macro_rules! inode_fields_v2 { ($m:ident) => { c::BCH_INODE_FIELDS_v2!(name_eq_arg [$m]) }; }
+#[allow(unused_macros)]
+macro_rules! inode_fields_v3 { ($m:ident) => { c::BCH_INODE_FIELDS_v3!(name_eq_arg [$m]) }; }
+#[allow(unused_macros)]
+macro_rules! inode_opts { ($m:ident) => { c::BCH_INODE_OPTS!(name_eq_arg [$m]) }; }
+
+macro_rules! inode_flags_table {
+    ($(($name:tt, $value:expr)),* $(,)?) => {
+        pub const INODE_FLAGS: &[(&str, u64)] = &[$((stringify!($name), $value),)*];
+    };
+}
+c::BCH_INODE_FLAGS!(inode_flags_table);
 
 // ── Packing ──────────────────────────────────────────────────────────────
 

@@ -73,10 +73,18 @@ pub mod snapshots {
     #[path = "snapshot.rs"] pub mod snapshot;
     #[path = "subvolume.rs"] pub mod subvolume;
 }
-/// Name<->value tables for the snapshot/subvolume state codewords, generated
-/// from the BCH_*_STATES() x-macros in snapshots/format.h:
+/// Name<->value tables for the snapshot/subvolume state codewords, from the
+/// BCH_*_STATES() x-macros:
 pub mod snapshot_states {
-    include!(concat!(env!("OUT_DIR"), "/snapshot_states_gen.rs"));
+    macro_rules! value_table {
+        ($table:ident, $(($name:tt, $value:expr $(, $($rest:tt)*)?)),* $(,)?) => {
+            pub const $table: &[(&str, u64)] = &[$((stringify!($name), $value),)*];
+        };
+    }
+    macro_rules! snapshot_states { ($($e:tt)*) => { value_table!(SNAPSHOT_STATE_VALUES, $($e)*); }; }
+    macro_rules! subvolume_states { ($($e:tt)*) => { value_table!(SUBVOLUME_STATE_VALUES, $($e)*); }; }
+    crate::c::BCH_SNAPSHOT_STATES!(snapshot_states);
+    crate::c::BCH_SUBVOLUME_STATES!(subvolume_states);
 }
 #[path = "fs/str_hash.rs"]     pub mod str_hash;
 /// The records types defined in Rust that C shares are written from.
@@ -264,8 +272,52 @@ pub type opt_id = c::bch_opt_id;
 #[allow(non_camel_case_types)]
 pub type btree_id = c::btree_id;
 
-include!(concat!(env!("OUT_DIR"), "/newtype_enum_aliases_gen.rs"));
-include!(concat!(env!("OUT_DIR"), "/btree_ids_gen.rs"));
+// The x-macro enums' values by their list names - btree_id::extents for
+// BTREE_ID_extents - and their count: an x-macro list, with [the enum, the
+// prefix its values have, nr|max = its count].
+macro_rules! newtype_enum_aliases {
+    ([$ty:ident, $prefix:ident, $nr_alias:ident = $nr:ident] $(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => {
+        #[allow(non_upper_case_globals)]
+        impl c::$ty {
+            $(newtype_enum_aliases!(@alias $prefix $name);)*
+            pub const $nr_alias: Self = Self::$nr;
+        }
+    };
+    // a name that isn't an identifier - 31bit_dirent_offset - has none
+    (@alias $prefix:ident $name:ident) => { ::paste::paste! {
+        pub const $name: Self = Self::[<$prefix _ $name>];
+    } };
+    (@alias $prefix:ident $name:tt) => {};
+}
+c::BCH_METADATA_VERSIONS!(newtype_enum_aliases [bcachefs_metadata_version, bcachefs_metadata_version, max = bcachefs_metadata_version_max]);
+c::BCH_OPTS!(newtype_enum_aliases [bch_opt_id, Opt, nr = bch2_opts_nr]);
+c::BCH_BTREE_IDS!(newtype_enum_aliases [btree_id, BTREE_ID, nr = BTREE_ID_NR]);
+c::BCH_BKEY_TYPES!(newtype_enum_aliases [bch_bkey_type, KEY_TYPE, nr = KEY_TYPE_MAX]);
+c::BCH_DATA_TYPES!(newtype_enum_aliases [bch_data_type, BCH_DATA, nr = BCH_DATA_NR]);
+c::BCH_COMPRESSION_TYPES!(newtype_enum_aliases [bch_compression_type, BCH_COMPRESSION_TYPE, nr = BCH_COMPRESSION_TYPE_NR]);
+c::BCH_JSET_ENTRY_TYPES!(newtype_enum_aliases [bch_jset_entry_type, BCH_JSET_ENTRY, nr = BCH_JSET_ENTRY_NR]);
+c::BCH_SB_COMPAT!(newtype_enum_aliases [bch_sb_compat, BCH_COMPAT, nr = BCH_COMPAT_NR]);
+c::BCH_SB_FIELDS!(newtype_enum_aliases [bch_sb_field_type, BCH_SB_FIELD, nr = BCH_SB_FIELD_NR]);
+c::BCH_DISK_ACCOUNTING_TYPES!(newtype_enum_aliases [disk_accounting_type, BCH_DISK_ACCOUNTING, nr = BCH_DISK_ACCOUNTING_TYPE_NR]);
+c::BCH_RECONCILE_ACCOUNTING!(newtype_enum_aliases [bch_reconcile_accounting_type, BCH_RECONCILE_ACCOUNTING, nr = BCH_RECONCILE_ACCOUNTING_NR]);
+
+// BCH_BTREE_IDS(): every btree id, and those whose keys are snapshotted - as
+// C's btree_has_snapshots_mask.
+macro_rules! btree_has_snapshots {
+    () => { false };
+    (BTREE_IS_snapshots $($rest:tt)*) => { true };
+    ($first:tt $($rest:tt)*) => { btree_has_snapshots!($($rest)*) };
+}
+macro_rules! btree_ids_known {
+    ($(($name:tt, $nr:literal, $($flag:tt)|+ $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
+        pub const BTREE_IDS_KNOWN: &[c::btree_id] = &[$(c::btree_id::[<BTREE_ID_ $name>],)*];
+
+        /// Btrees whose keys are snapshotted; mirrors the C btree_has_snapshots_mask.
+        pub const BTREE_HAS_SNAPSHOTS_MASK: u64 =
+            0 $(| if btree_has_snapshots!($($flag)*) { 1u64 << $nr } else { 0 })*;
+    } };
+}
+c::BCH_BTREE_IDS!(btree_ids_known);
 
 // Position constructors/sentinels live with bkey; re-exported here for the
 // `crate::POS_MIN` / `crate::SPOS_MAX` spelling used across the tree and the

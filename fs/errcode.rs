@@ -4,7 +4,15 @@ use core::fmt;
 
 pub use crate::c::bch_errcode;
 
-include!(concat!(env!("OUT_DIR"), "/errcodes_gen.rs"));
+// Each errcode by its BCH_ERRCODES() name: transaction_restart for
+// bch_errcode::BCH_ERR_transaction_restart.
+macro_rules! errcode_names {
+    ($(($class:tt, $err:tt, $nr:tt)),* $(,)?) => { ::paste::paste! { $(
+        #[allow(non_upper_case_globals)]
+        pub const $err: bch_errcode = bch_errcode::[<BCH_ERR_ $err>];
+    )* } };
+}
+c::BCH_ERRCODES!(errcode_names);
 
 /// Safe wrapper for bcachefs/errno error codes.
 /// Stores the positive error code — either a standard errno (1..2047)

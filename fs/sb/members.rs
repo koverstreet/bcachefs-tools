@@ -11,8 +11,13 @@ use super::io::*;
 // the writer returns an in-place `&mut bch_member` for field-level mutation.
 // ---------------------------------------------------------------------------
 
-// Member state name table — generated from BCH_MEMBER_STATES() x-macro
-include!(concat!(env!("OUT_DIR"), "/member_states_gen.rs"));
+// Member state names, by value: from BCH_MEMBER_STATES()
+macro_rules! member_state_names {
+    ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => {
+        pub const MEMBER_STATE_NAMES: &[&str] = &[$(stringify!($name),)*];
+    };
+}
+c::BCH_MEMBER_STATES!(member_state_names);
 
 pub fn member_state_str(state: u8) -> &'static str {
     MEMBER_STATE_NAMES.get(state as usize).copied().unwrap_or("unknown")

@@ -318,10 +318,10 @@ pub trait TypedBkey {
     fn val_mut(k: &mut c::bkey_i) -> Option<&mut Self::Val>;
 }
 
-/// Everything defined per key type: invoked with BCH_BKEY_TYPES(), as
-/// name = KEY_TYPE number, by codegen (bkey_types_gen.rs).
+/// Everything defined per key type, from BCH_BKEY_TYPES(): (name, KEY_TYPE
+/// number, ...).
 macro_rules! bkey_types {
-    ($($name:ident = $nr:literal),* $(,)?) => { crate::paste! {
+    ($(($name:ident, $nr:literal $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! {
         $(
         pub type [<Bkey $name:camel>] = c::[<bkey_i_ $name>];
 
@@ -517,7 +517,7 @@ macro_rules! bkey_types {
     }};
 }
 
-include!(concat!(env!("OUT_DIR"), "/bkey_types_gen.rs"));
+c::BCH_BKEY_TYPES!(bkey_types);
 
 impl<'a> BkeySC<'a> {
     /// The key as C's bkey_s_c, for passing to C.

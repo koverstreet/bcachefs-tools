@@ -31,9 +31,15 @@ use core::fmt;
 
 /// The fsck error ids by their BCH_SB_ERRS() names: id::inode_wrong_nlink.
 pub mod id {
-    use crate::c::bch_sb_error_id;
+    use crate::c::{self, bch_sb_error_id};
 
-    include!(concat!(env!("OUT_DIR"), "/fsck_err_ids_gen.rs"));
+    macro_rules! fsck_err_ids {
+        ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! { $(
+            #[allow(non_upper_case_globals)]
+            pub const $name: bch_sb_error_id = bch_sb_error_id::[<BCH_FSCK_ERR_ $name>];
+        )* } };
+    }
+    c::BCH_SB_ERRS!(fsck_err_ids);
 }
 
 /// What an fsck error is reported against. A transaction is passed down so

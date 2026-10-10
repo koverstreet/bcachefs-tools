@@ -577,8 +577,35 @@ pub fn struct_to_text(
     fields_to_text(out, info, buf, 0, 0)
 }
 
-// Generated from BCH_BKEY_TYPES(): BKEY_TYPE_INFO table mapping each key type
-// to its val struct's StructInfo, plus lookup helpers.
+/// A bkey type together with its val struct's type info.
+pub struct BkeyTypeInfo {
+    pub name: &'static str,
+    pub type_: u32,
+    pub info: &'static StructInfo,
+}
+
+// From BCH_BKEY_TYPES(): each key type and its val struct's StructInfo.
+macro_rules! bkey_type_info {
+    ($(($name:ident, $nr:literal $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
+        pub static BKEY_TYPE_INFO: &[BkeyTypeInfo] = &[$(
+            BkeyTypeInfo { name: stringify!($name), type_: $nr,
+                           info: <crate::c::[<bch_ $name>] as TypeInfo>::INFO },
+        )*];
+    } };
+}
+crate::c::BCH_BKEY_TYPES!(bkey_type_info);
+
+pub fn bkey_val_info(type_: u32) -> Option<&'static StructInfo> {
+    BKEY_TYPE_INFO.iter().find(|t| t.type_ == type_).map(|t| t.info)
+}
+
+pub fn bkey_type_info_by_name(name: &str) -> Option<&'static BkeyTypeInfo> {
+    BKEY_TYPE_INFO.iter().find(|t| t.name == name)
+}
+
+// The BITMASK() bit ranges, scanned out of the headers by codegen.rs, and
+// their accessors - until the headers are converted and each c_bitmask! makes
+// its own.
 include!(concat!(env!("OUT_DIR"), "/typeinfo_gen.rs"));
 
 #[cfg(test)]

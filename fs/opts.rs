@@ -12,23 +12,22 @@ use std::ffi::CString;
 #[allow(non_camel_case_types)]
 pub type opt_id = c::bch_opt_id;
 
-/// An accessor for every option, invoked with BCH_OPTS() by codegen
-/// (opts_gen.rs): an OPT_BOOL() as bool, the rest as their C type.
+/// An accessor for every option, from BCH_OPTS(): an OPT_BOOL() as bool, the
+/// rest as their C type.
 macro_rules! bch_opts {
-    ($($name:ident: $ty:ty = $kind:ident),* $(,)?) => {
+    ($(($name:ident, $ty:ty, $flags:expr, $kind:ident $kind_args:tt $(, $($rest:tt)*)?)),* $(,)?) => {
         impl c::bch_opts {
             $(bch_opts!(@accessor $name, $ty, $kind);)*
         }
     };
-    (@accessor $name:ident, $ty:ty, bool) => {
+    (@accessor $name:ident, $ty:ty, OPT_BOOL) => {
         pub fn $name(&self) -> bool { self.$name != 0 }
     };
-    (@accessor $name:ident, $ty:ty, raw) => {
+    (@accessor $name:ident, $ty:ty, $kind:ident) => {
         pub fn $name(&self) -> $ty { self.$name }
     };
 }
-
-include!(concat!(env!("OUT_DIR"), "/opts_gen.rs"));
+c::BCH_OPTS!(bch_opts);
 
 /// Return the opt table as a proper slice.
 ///

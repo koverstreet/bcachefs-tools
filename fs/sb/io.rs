@@ -3,8 +3,23 @@ use crate::c::{bch_member, bch_sb, bch_sb_field_crypt, bch_sb_handle, block_devi
 use crate::sb::members;
 use crate::bitmask_accessors;
 
-// SbField trait + impls — generated from BCH_SB_FIELDS() x-macro
-include!(concat!(env!("OUT_DIR"), "/sb_field_types_gen.rs"));
+/// Marker trait connecting an sb field struct to its field type enum.
+///
+/// # Safety
+/// Implementors must ensure FIELD_TYPE matches the struct type,
+/// and that `field` is the first member (offset 0).
+pub unsafe trait SbField: Sized {
+    const FIELD_TYPE: c::bch_sb_field_type;
+}
+
+macro_rules! sb_field_impls {
+    ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! { $(
+        unsafe impl SbField for c::[<bch_sb_field_ $name>] {
+            const FIELD_TYPE: c::bch_sb_field_type = c::bch_sb_field_type::[<BCH_SB_FIELD_ $name>];
+        }
+    )* } };
+}
+c::BCH_SB_FIELDS!(sb_field_impls);
 
 impl PartialEq for bch_sb {
     fn eq(&self, other: &Self) -> bool {
@@ -161,8 +176,26 @@ impl Drop for bch_sb_handle {
     }
 }
 
-// Counter info table — generated from BCH_PERSISTENT_COUNTERS() x-macro
-include!(concat!(env!("OUT_DIR"), "/counters_gen.rs"));
+pub struct CounterInfo {
+    pub name: &'static str,
+    pub stable_id: u16,
+    pub is_sectors: bool,
+}
+
+// From BCH_PERSISTENT_COUNTERS(): its entries are (name, stable id, type,
+// description).
+macro_rules! counter_is_sectors {
+    (TYPE_SECTORS) => { true };
+    ($other:tt) => { false };
+}
+macro_rules! counter_table {
+    ($(($name:tt, $id:tt, $ty:tt $(, $($rest:tt)*)?)),* $(,)?) => {
+        pub const COUNTERS: &[CounterInfo] = &[$(
+            CounterInfo { name: stringify!($name), stable_id: $id, is_sectors: counter_is_sectors!($ty) },
+        )*];
+    };
+}
+c::BCH_PERSISTENT_COUNTERS!(counter_table);
 
 // ---------------------------------------------------------------------------
 // Superblock field access — safe, handle-based API

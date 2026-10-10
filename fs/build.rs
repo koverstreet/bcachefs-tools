@@ -69,7 +69,7 @@ fn main() {
     emit_userspace_config_cfgs(root);
 
     run_bindgen(&out, &clang_args, &blocklist, &ptr_width);
-    gen_xmacros(&src, &out);
+    gen_bitmasks(&src, &out);
 
     // Compile the static-inline wrappers bindgen just emitted and link them in,
     // with the same -I/-D set the headers were parsed with. cc-rs targets the

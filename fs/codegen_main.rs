@@ -47,5 +47,5 @@ fn main() {
     };
 
     run_bindgen(&out, &clang_args, &blocklist, &ptr_width);
-    gen_xmacros(&src, &out);
+    gen_bitmasks(&src, &out);
 }

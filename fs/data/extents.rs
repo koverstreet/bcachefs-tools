@@ -6,8 +6,18 @@ use crate::fs::Fs;
 use core::marker::PhantomData;
 use core::mem::size_of;
 
-// Pull in generated extent_entry_type_u64s() from build.rs
-include!(concat!(env!("OUT_DIR"), "/extent_entry_types_gen.rs"));
+macro_rules! extent_entry_u64s {
+    ($(($name:tt, $nr:literal)),* $(,)?) => { ::paste::paste! {
+        /// Size in u64s for each known extent entry type.
+        pub fn extent_entry_type_u64s(ty: u32) -> Option<usize> {
+            Some(match ty {
+                $($nr => size_of::<c::[<bch_extent_ $name>]>() / 8,)*
+                _ => return None,
+            })
+        }
+    } };
+}
+c::BCH_EXTENT_ENTRY_TYPES!(extent_entry_u64s);
 
 trait ExtentUnionField<T> {
     unsafe fn as_union_ref(&self) -> &T;
