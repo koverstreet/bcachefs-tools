@@ -2,6 +2,7 @@ use crate::btree::iter::BtreeTrans;
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
+use crate::util::vstructs::FlexArray;
 
 pub use c::bch_data_type;
 pub use c::bch_compression_type;
@@ -30,173 +31,60 @@ pub fn reconcile_type_from_u8(v: u8) -> bch_reconcile_accounting_type {
 /// Size of a bpos in bytes — maximum size of any accounting key payload.
 const BPOS_SIZE: usize = core::mem::size_of::<c::bpos>();
 
-/// A bpos encoding a disk accounting key position.
-///
-/// Same size and ABI as bpos (`#[repr(transparent)]`). The accounting type
-/// and variant fields are encoded in the bpos bytes (byte-reversed on LE).
-/// Use `decode()` to parse into `DiskAccountingKind` for pattern matching.
-#[repr(transparent)]
-#[derive(Clone, Copy, Debug)]
-pub struct DiskAccountingPos(pub c::bpos);
+/// The disk_accounting_pos an accounting key at @p holds, as bytes: the
+/// position as one big-endian number - inode, offset, snapshot - so the first
+/// byte, the inode's top one, is the accounting type. As
+/// bpos_to_disk_accounting_pos(): memcpy_swab() on little endian, a copy on
+/// big - the same bytes, as a bpos's fields are in the opposite order there.
+fn bpos_to_acc_bytes(p: c::bpos) -> [u8; BPOS_SIZE] {
+    let mut b = [0u8; BPOS_SIZE];
+    b[0..8].copy_from_slice(&p.inode.to_be_bytes());
+    b[8..16].copy_from_slice(&p.offset.to_be_bytes());
+    b[16..20].copy_from_slice(&p.snapshot.to_be_bytes());
+    b
+}
 
-impl DiskAccountingPos {
-    /// Wrap a raw bpos as an accounting position.
+/// The bpos of the accounting key holding disk_accounting_pos bytes @b:
+/// bpos_to_acc_bytes()'s inverse.
+fn acc_bytes_to_bpos(b: &[u8; BPOS_SIZE]) -> c::bpos {
+    c::bpos {
+        inode:    u64::from_be_bytes(b[0..8].try_into().unwrap()),
+        offset:   u64::from_be_bytes(b[8..16].try_into().unwrap()),
+        snapshot: u32::from_be_bytes(b[16..20].try_into().unwrap()),
+    }
+}
+
+/// An accounting key's position is a disk_accounting_pos - see
+/// accounting_format.rs: get() for the arm it holds, from_arm() to make one.
+impl c::disk_accounting_pos {
+    /// The disk_accounting_pos an accounting key at @p holds:
+    /// bpos_to_disk_accounting_pos().
     pub fn from_bpos(p: c::bpos) -> Self {
-        Self(p)
+        Self::from_bytes(&bpos_to_acc_bytes(p))
     }
 
-    /// The underlying bpos, for passing to btree/ioctl APIs.
-    #[allow(dead_code)]
-    pub fn as_bpos(&self) -> c::bpos {
-        self.0
-    }
-
-    /// Decode into the typed enum for pattern matching.
-    pub fn decode(&self) -> DiskAccountingKind {
-        bpos_to_accounting_kind(&self.0)
-    }
-
-    /// Extract the accounting type byte without full decode.
-    /// On LE, this is the high byte of bpos.inode (equivalent to raw[0]
-    /// after the 20-byte memcpy_swab reversal).
-    fn type_byte(&self) -> u8 {
-        (self.0.inode >> 56) as u8
-    }
-
-    /// Get the accounting type discriminant without full decode.
-    pub fn accounting_type(&self) -> Option<disk_accounting_type> {
-        let t = self.type_byte() as u32;
-        if t < u32::from(disk_accounting_type::nr) {
-            Some(c::disk_accounting_type(t))
-        } else {
-            None
-        }
+    /// The position of the accounting key holding it:
+    /// disk_accounting_pos_to_bpos().
+    pub fn to_bpos(&self) -> c::bpos {
+        acc_bytes_to_bpos(self.as_bytes())
     }
 }
 
-impl PartialEq for DiskAccountingPos {
-    fn eq(&self, other: &Self) -> bool { self.0 == other.0 }
-}
-impl Eq for DiskAccountingPos {}
+/// replicas' devices: devs[], nr_devs long.
+impl FlexArray for c::bch_replicas_entry_v1 {
+    type Elem = u8;
+    const TAIL: usize = core::mem::offset_of!(c::bch_replicas_entry_v1, devs);
 
-impl PartialOrd for DiskAccountingPos {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
+    fn nr(&self) -> usize {
+        self.nr_devs as usize
     }
 }
 
-impl Ord for DiskAccountingPos {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.0.cmp(&other.0)
-    }
-}
-
-/// Decoded accounting key — the typed form for pattern matching.
-#[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
-pub enum DiskAccountingKind {
-    NrInodes,
-    PersistentReserved { nr_replicas: u8 },
-    Replicas { data_type: bch_data_type, nr_devs: u8, nr_required: u8, devs: [u8; BPOS_SIZE] },
-    DevDataType { dev: u8, data_type: bch_data_type },
-    Compression { compression_type: bch_compression_type },
-    Snapshot { id: u32, btree: u32 },
-    Btree { id: u32 },
-    RebalanceWork,
-    Inum { inum: u64 },
-    ReconcileWork { work_type: bch_reconcile_accounting_type },
-    DevLeaving { dev: u32 },
-    StripeFrag { nr_empty: u8 },
-    DevStripeFrag { dev: u8 },
-    Unknown(u8),
-}
-
-// Compile-time check: update DiskAccountingKind when new disk_accounting_type values are added.
-const _: () = assert!(disk_accounting_type::nr.0 == 13);
-
-impl DiskAccountingKind {
-    /// Encode into a DiskAccountingPos (reverse of decode).
-    #[allow(dead_code)]
-    pub fn encode(&self) -> DiskAccountingPos {
-        let mut raw = [0u8; BPOS_SIZE];
-        match *self {
-            Self::NrInodes => {
-                raw[0] = disk_accounting_type::nr_inodes.0 as u8;
-            }
-            Self::PersistentReserved { nr_replicas } => {
-                raw[0] = disk_accounting_type::persistent_reserved.0 as u8;
-                raw[1] = nr_replicas;
-            }
-            Self::Replicas { data_type, nr_devs, nr_required, devs } => {
-                raw[0] = disk_accounting_type::replicas.0 as u8;
-                raw[1] = data_type.0 as u8;
-                raw[2] = nr_devs;
-                raw[3] = nr_required;
-                let n = (nr_devs as usize).min(BPOS_SIZE - 4);
-                raw[4..4 + n].copy_from_slice(&devs[..n]);
-            }
-            Self::DevDataType { dev, data_type } => {
-                raw[0] = disk_accounting_type::dev_data_type.0 as u8;
-                raw[1] = dev;
-                raw[2] = data_type.0 as u8;
-            }
-            Self::Compression { compression_type } => {
-                raw[0] = disk_accounting_type::compression.0 as u8;
-                raw[1] = compression_type.0 as u8;
-            }
-            Self::Snapshot { id, btree } => {
-                raw[0] = disk_accounting_type::snapshot.0 as u8;
-                raw[1..5].copy_from_slice(&id.to_ne_bytes());
-                raw[5..9].copy_from_slice(&btree.to_ne_bytes());
-            }
-            Self::Btree { id } => {
-                raw[0] = disk_accounting_type::btree.0 as u8;
-                raw[1..5].copy_from_slice(&id.to_ne_bytes());
-            }
-            Self::RebalanceWork => {
-                raw[0] = disk_accounting_type::rebalance_work.0 as u8;
-            }
-            Self::Inum { inum } => {
-                raw[0] = disk_accounting_type::inum.0 as u8;
-                raw[1..9].copy_from_slice(&inum.to_ne_bytes());
-            }
-            Self::ReconcileWork { work_type } => {
-                raw[0] = disk_accounting_type::reconcile_work.0 as u8;
-                raw[1] = work_type.0 as u8;
-            }
-            Self::DevLeaving { dev } => {
-                raw[0] = disk_accounting_type::dev_leaving.0 as u8;
-                raw[1..5].copy_from_slice(&dev.to_ne_bytes());
-            }
-            Self::StripeFrag { nr_empty } => {
-                raw[0] = disk_accounting_type::stripe_frag.0 as u8;
-                raw[1] = nr_empty;
-            }
-            Self::DevStripeFrag { dev } => {
-                raw[0] = disk_accounting_type::dev_stripe_frag.0 as u8;
-                raw[1] = dev;
-            }
-            Self::Unknown(t) => {
-                raw[0] = t;
-            }
-        }
-
-        // Reverse memcpy_swab: reverse bytes back into bpos layout
-        raw.reverse();
-
-        DiskAccountingPos(c::bpos {
-            snapshot: u32::from_ne_bytes(raw[0..4].try_into().unwrap()),
-            offset:   u64::from_ne_bytes(raw[4..12].try_into().unwrap()),
-            inode:    u64::from_ne_bytes(raw[12..20].try_into().unwrap()),
-        })
-    }
-}
-
-pub fn mem_read(fs: &Fs, pos: DiskAccountingPos, counters: &mut [u64]) {
+pub fn mem_read(fs: &Fs, pos: &c::disk_accounting_pos, counters: &mut [u64]) {
     unsafe {
         c::bch2_accounting_mem_read(
             fs.raw,
-            pos.as_bpos(),
+            pos.to_bpos(),
             counters.as_mut_ptr(),
             counters.len() as u32,
         );
@@ -205,13 +93,11 @@ pub fn mem_read(fs: &Fs, pos: DiskAccountingPos, counters: &mut [u64]) {
 
 /// Add @d to accounting key @pos's counters, in @trans - the gc copy's, with
 /// @gc: as bch2_disk_accounting_mod(). For triggers.
-pub fn add(trans: &BtreeTrans<'_>, pos: DiskAccountingPos, d: &[i64], gc: bool)
+pub fn add(trans: &BtreeTrans<'_>, pos: &c::disk_accounting_pos, d: &[i64], gc: bool)
     -> Result<(), BchError>
 {
-    let mut acc = c::disk_accounting_pos::default();
-    unsafe { c::bpos_to_disk_accounting_pos(&mut acc, pos.as_bpos()) };
-
-    // Only reads @d: C's signature isn't const.
+    // C's signature isn't const: a copy of @pos, and @d only read.
+    let mut acc = c::disk_accounting_pos::from_bytes(pos.as_bytes());
     ret_to_result(unsafe {
         c::bch2_disk_accounting_mod(trans.raw(), &mut acc, d.as_ptr() as *mut i64,
                                     d.len() as u32, gc)
@@ -222,7 +108,7 @@ pub fn nr_inodes(fs: &Fs) -> u64 {
     let mut nr_inodes = 0;
     mem_read(
         fs,
-        DiskAccountingKind::NrInodes.encode(),
+        &c::disk_accounting_pos::from_arm(c::bch_acct_nr_inodes {}),
         core::slice::from_mut(&mut nr_inodes),
     );
     nr_inodes
@@ -231,9 +117,8 @@ pub fn nr_inodes(fs: &Fs) -> u64 {
 /// A single accounting entry (from ioctl or btree iteration). Tools-only —
 /// holds its counters in a heap Vec.
 #[cfg(feature = "std")]
-#[derive(Debug)]
 pub struct AccountingEntry {
-    pub pos: DiskAccountingPos,
+    pub pos: c::disk_accounting_pos,
     pub counters: Vec<u64>,
 }
 
@@ -241,92 +126,6 @@ pub struct AccountingEntry {
 impl AccountingEntry {
     pub fn counter(&self, i: usize) -> u64 {
         self.counters.get(i).copied().unwrap_or(0)
-    }
-}
-
-/// Decode a bpos into a DiskAccountingKind by byte-reversing the 20-byte bpos
-/// (memcpy_swab on little-endian) and parsing the type-tagged union.
-fn bpos_to_accounting_kind(p: &c::bpos) -> DiskAccountingKind {
-    // bpos is 20 bytes: on little-endian, the accounting pos is the
-    // byte-reversed form. We copy to a 20-byte LE array, then reverse all bytes.
-    let mut raw = [0u8; BPOS_SIZE];
-
-    // Copy bpos fields into raw bytes in memory order (LE: snapshot, offset, inode)
-    let snap_bytes = p.snapshot.to_ne_bytes();
-    let off_bytes = p.offset.to_ne_bytes();
-    let ino_bytes = p.inode.to_ne_bytes();
-    raw[0..4].copy_from_slice(&snap_bytes);
-    raw[4..12].copy_from_slice(&off_bytes);
-    raw[12..20].copy_from_slice(&ino_bytes);
-
-    // memcpy_swab: reverse all 20 bytes
-    raw.reverse();
-
-    // Match on raw discriminant — no transmute, unknown types safely fall to Unknown
-    const NR_INODES:            u32 = disk_accounting_type::nr_inodes.0;
-    const PERSISTENT_RESERVED:  u32 = disk_accounting_type::persistent_reserved.0;
-    const REPLICAS:             u32 = disk_accounting_type::replicas.0;
-    const DEV_DATA_TYPE:        u32 = disk_accounting_type::dev_data_type.0;
-    const COMPRESSION:          u32 = disk_accounting_type::compression.0;
-    const SNAPSHOT:             u32 = disk_accounting_type::snapshot.0;
-    const BTREE:                u32 = disk_accounting_type::btree.0;
-    const REBALANCE_WORK:       u32 = disk_accounting_type::rebalance_work.0;
-    const INUM:                 u32 = disk_accounting_type::inum.0;
-    const RECONCILE_WORK:       u32 = disk_accounting_type::reconcile_work.0;
-    const DEV_LEAVING:          u32 = disk_accounting_type::dev_leaving.0;
-    const STRIPE_FRAG:          u32 = disk_accounting_type::stripe_frag.0;
-    const DEV_STRIPE_FRAG:      u32 = disk_accounting_type::dev_stripe_frag.0;
-
-    match raw[0] as u32 {
-        NR_INODES => DiskAccountingKind::NrInodes,
-        PERSISTENT_RESERVED => DiskAccountingKind::PersistentReserved {
-            nr_replicas: raw[1],
-        },
-        REPLICAS => {
-            let nr_devs = raw[2];
-            let nr_required = raw[3];
-            let mut devs = [0u8; BPOS_SIZE];
-            let n = (nr_devs as usize).min(BPOS_SIZE - 4);
-            devs[..n].copy_from_slice(&raw[4..4 + n]);
-            DiskAccountingKind::Replicas {
-                data_type: data_type_from_u8(raw[1]),
-                nr_devs, nr_required, devs,
-            }
-        }
-        DEV_DATA_TYPE => DiskAccountingKind::DevDataType {
-            dev: raw[1],
-            data_type: data_type_from_u8(raw[2]),
-        },
-        COMPRESSION => DiskAccountingKind::Compression {
-            compression_type: compression_type_from_u8(raw[1]),
-        },
-        SNAPSHOT => {
-            let id = u32::from_ne_bytes([raw[1], raw[2], raw[3], raw[4]]);
-            let btree = u32::from_ne_bytes([raw[5], raw[6], raw[7], raw[8]]);
-            DiskAccountingKind::Snapshot { id, btree }
-        }
-        BTREE => {
-            let id = u32::from_ne_bytes([raw[1], raw[2], raw[3], raw[4]]);
-            DiskAccountingKind::Btree { id }
-        }
-        REBALANCE_WORK => DiskAccountingKind::RebalanceWork,
-        INUM => {
-            let inum = u64::from_ne_bytes([
-                raw[1], raw[2], raw[3], raw[4],
-                raw[5], raw[6], raw[7], raw[8],
-            ]);
-            DiskAccountingKind::Inum { inum }
-        }
-        RECONCILE_WORK => DiskAccountingKind::ReconcileWork {
-            work_type: reconcile_type_from_u8(raw[1]),
-        },
-        DEV_LEAVING => {
-            let dev = u32::from_ne_bytes([raw[1], raw[2], raw[3], raw[4]]);
-            DiskAccountingKind::DevLeaving { dev }
-        }
-        STRIPE_FRAG => DiskAccountingKind::StripeFrag { nr_empty: raw[1] },
-        DEV_STRIPE_FRAG => DiskAccountingKind::DevStripeFrag { dev: raw[1] },
-        _ => DiskAccountingKind::Unknown(raw[0]),
     }
 }
 

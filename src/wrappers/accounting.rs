@@ -158,7 +158,7 @@ fn parse_accounting_entries(data: &[u8]) -> Vec<AccountingEntry> {
             unsafe { c::bch2_bpos_swab(&mut bpos) };
         }
 
-        let pos = DiskAccountingPos::from_bpos(bpos);
+        let pos = c::disk_accounting_pos::from_bpos(bpos);
 
         // Counters start after the bkey header (bch_accounting.d[])
         // bch_accounting has just a bch_val (0 bytes), then d[]

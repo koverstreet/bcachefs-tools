@@ -10,7 +10,7 @@ use std::process;
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::fs::FsExt;
-use bcachefs_kernel::accounting::{compression_type, data_type, DiskAccountingKind};
+use bcachefs_kernel::accounting::{compression_type, data_type};
 use bcachefs_kernel::btree::bkey::bkey_type;
 use bcachefs_kernel::btree_id;
 use bcachefs_kernel::opts::{prt_compression_type, prt_data_type};
@@ -249,8 +249,8 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
                 continue;
             }
 
-            let acc_pos = DiskAccountingKind::Btree { id: i }.encode();
-            let v = fs.accounting_mem_read(acc_pos.as_bpos(), 1);
+            let acc_pos = c::disk_accounting_pos::from_arm(c::bch_acct_btree { id: i });
+            let v = fs.accounting_mem_read(acc_pos.to_bpos(), 1);
 
             if v[0] != 0 {
                 unsafe {
@@ -265,19 +265,18 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
     }
 
     // User data via replicas accounting
-    let acc_pos = DiskAccountingKind::Replicas {
-        data_type: data_type::user,
-        nr_devs: 1,
-        nr_required: 1,
-        devs: {
-            let mut d = [0u8; 20];
-            d[0] = 0; // dev 0
-            d
+    let acc_pos = c::disk_accounting_pos::from_arm_tailed(
+        c::bch_acct_replicas {
+            data_type: data_type::user.0 as u8,
+            nr_devs: 1,
+            nr_required: 1,
+            devs: Default::default(),
         },
-    }
-    .encode();
+        &[0], // dev 0
+    )
+    .expect("one device fits in an accounting position");
 
-    let v = fs.accounting_mem_read(acc_pos.as_bpos(), 1);
+    let v = fs.accounting_mem_read(acc_pos.to_bpos(), 1);
     write!(&mut buf, "user");
     prt_sectors(&mut buf, v[0]);
 
@@ -293,12 +292,8 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
     let mut compression_header = false;
     let comp_nr = u32::from(compression_type::nr);
     for i in 1..comp_nr {
-        let acc_pos = DiskAccountingKind::Compression {
-            compression_type: c::bch_compression_type(i),
-        }
-        .encode();
-
-        let v = fs.accounting_mem_read(acc_pos.as_bpos(), 3);
+        let acc_pos = c::disk_accounting_pos::from_arm(c::bch_acct_compression { type_: i as u8 });
+        let v = fs.accounting_mem_read(acc_pos.to_bpos(), 3);
 
         if v[0] == 0 {
             continue;

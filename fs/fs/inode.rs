@@ -1351,7 +1351,7 @@ pub fn trigger(trans: &BtreeTrans<'_>, op: &mut TriggerOp<'_>) -> Result<(), Bch
 
     let nr = bkey_is_inode(op.new.k) as i64 - bkey_is_inode(op.old.k) as i64;
     if op.flags.intersects(UpdateTriggerFlags::TRANSACTIONAL | UpdateTriggerFlags::GC) && nr != 0 {
-        crate::accounting::add(trans, crate::accounting::DiskAccountingKind::NrInodes.encode(),
+        crate::accounting::add(trans, &c::disk_accounting_pos::from_arm(c::bch_acct_nr_inodes {}),
                                &[nr], op.flags.contains(UpdateTriggerFlags::GC))?;
     }
 

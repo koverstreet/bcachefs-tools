@@ -25,7 +25,8 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 
 use crate::commands::DeviceNameArgs;
-use crate::wrappers::accounting::{AccountingEntry, DiskAccountingKind, data_type, disk_accounting_type};
+use crate::wrappers::accounting::{AccountingEntry, data_type, data_type_from_u8, disk_accounting_type};
+use bch_bindgen::c::DiskAccountingPosRef as Acct;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs::{self, DeviceNameMode, DevInfo};
 use bcachefs_kernel::util::printbuf::Printbuf;
@@ -84,21 +85,21 @@ struct Exposure {
     total: u64,
 }
 
-fn accounting_replicas_entries(acct: &[&AccountingEntry]) -> Vec<Entry> {
+fn accounting_replicas_entries(acct: &[&AccountingEntry]) -> Result<Vec<Entry>> {
     let mut ret = Vec::new();
 
     for e in acct {
-        let DiskAccountingKind::Replicas { data_type: dt, nr_devs, nr_required, devs } = e.pos.decode()
-            else { continue };
+        let Ok(Acct::replicas(r)) = e.pos.get() else { continue };
+        let (nr_devs, nr_required) = (r.nr_devs, r.nr_required);
         let sectors = e.counter(0);
 
         // Cached data has no durability to lose; nr_required == 0 extents
         // are backed by stripes, accounted via the stripe entries:
-        if sectors == 0 || dt == data_type::cached || nr_required == 0 {
+        if sectors == 0 || data_type_from_u8(r.data_type) == data_type::cached || nr_required == 0 {
             continue;
         }
 
-        let devs: Vec<u8> = devs[..nr_devs as usize].iter()
+        let devs: Vec<u8> = r.tail()?.iter()
             .copied()
             .filter(|&d| d != 255)  /* BCH_SB_MEMBER_INVALID: dead stripe blocks */
             .collect();
@@ -117,7 +118,7 @@ fn accounting_replicas_entries(acct: &[&AccountingEntry]) -> Vec<Entry> {
         ret.push(Entry { devs, tolerates, sectors });
     }
 
-    ret
+    Ok(ret)
 }
 
 /// What failing a device set does, per bucket of sectors:
@@ -130,8 +131,8 @@ struct Score {
 }
 
 impl Exposure {
-    fn new(acct: &[&AccountingEntry]) -> Exposure {
-        Self::from_entries(accounting_replicas_entries(acct))
+    fn new(acct: &[&AccountingEntry]) -> Result<Exposure> {
+        Ok(Self::from_entries(accounting_replicas_entries(acct)?))
     }
 
     fn from_entries(entries: Vec<Entry>) -> Exposure {
@@ -324,7 +325,7 @@ fn fs_failure_domains_to_text(out: &mut Printbuf, cli: &Cli, name_mode: DeviceNa
         .map_err(|e| anyhow!("query_accounting ioctl failed (kernel too old?): {}", e))?;
     let acct_refs: Vec<&AccountingEntry> = acct.entries.iter().collect();
 
-    let e = Exposure::new(&acct_refs);
+    let e = Exposure::new(&acct_refs)?;
     let uuid = uuid::Uuid::from_bytes(handle.uuid());
 
     if cli.json {

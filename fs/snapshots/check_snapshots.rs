@@ -42,7 +42,7 @@
 //!   after a failed attempt to schedule passes - which returned first: its
 //!   errors are plain fixable fsck errors.
 
-use crate::accounting::{self, DiskAccountingKind};
+use crate::accounting;
 use crate::btree::bkey::{pos, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
@@ -586,9 +586,9 @@ fn has_accounting(fs: &Fs, id: u32) -> bool {
     crate::BTREE_IDS_KNOWN.iter()
         .filter(|&&btree| crate::BTREE_HAS_SNAPSHOTS_MASK & (1 << btree as u32) != 0)
         .any(|&btree| {
+            let acc = c::bch_acct_snapshot { id, btree: btree as u32 };
             let mut v = [0u64; 3];
-            accounting::mem_read(fs, DiskAccountingKind::Snapshot { id, btree: btree as u32 }.encode(),
-                                 &mut v);
+            accounting::mem_read(fs, &c::disk_accounting_pos::from_arm(acc), &mut v);
             v.iter().any(|&x| x != 0)
         })
 }
