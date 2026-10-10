@@ -191,6 +191,20 @@ static inline bool bch2_crc_cmp(struct bch_csum l, struct bch_csum r)
 	return ((l.lo ^ r.lo) | (l.hi ^ r.hi)) != 0;
 }
 
+/* returns true if not equal */
+static inline bool bch2_crc_unpacked_cmp(struct bch_extent_crc_unpacked l,
+					 struct bch_extent_crc_unpacked r)
+{
+	return (l.csum_type		!= r.csum_type ||
+		l.compression_type	!= r.compression_type ||
+		l.compressed_size	!= r.compressed_size ||
+		l.uncompressed_size	!= r.uncompressed_size ||
+		l.offset		!= r.offset ||
+		l.live_size		!= r.live_size ||
+		l.nonce			!= r.nonce ||
+		bch2_crc_cmp(l.csum, r.csum));
+}
+
 /* for skipping ahead and encrypting/decrypting at an offset: */
 static inline struct nonce nonce_add(struct nonce nonce, unsigned offset)
 {
