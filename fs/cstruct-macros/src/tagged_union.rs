@@ -43,6 +43,8 @@
 //!  - `get()`: the arm the tag selects, by reference - Err(the tag) if it
 //!    isn't one of ours. Shared references only: through a `&mut` to an arm,
 //!    a tag in the arm's own bits could change under whoever holds it.
+//!  - `arm_at()`: the arm a tag selects, from bytes - for arms in a stream,
+//!    each as long as its arm rather than the storage, as extent entries are;
 //!  - `new()`, and `from_arm()` by the arm's type: the payload into zeroed
 //!    storage, then Determinant::set() marks it - stabby's order, so a tag
 //!    that's bits of the payload is the last thing written, not overwritten
@@ -366,8 +368,10 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Token
         .map(|a| format!("    {}({flex}<'a, {}>),\n", a.name, a.ty))
         .collect();
     let gets: String = arms.iter()
-        .map(|a| format!("if t == ({}) as {tag_ty} {{ return Ok({en}Ref::{}({flex}::new_unchecked(b))); }}\n",
-                         a.value, a.name))
+        .map(|a| format!("if tag == ({}) as {tag_ty} {{\n\
+                              return fits::<{}>(b).then(|| {en}Ref::{}({flex}::new_unchecked(b)));\n\
+                          }}\n",
+                         a.value, a.ty, a.name))
         .collect();
     let news: String = arms.iter()
         .map(|a| format!("{en}::{}(x) => Self::from_arm(x),\n", a.name))
@@ -453,11 +457,25 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Token
              #[allow(dead_code)]\n\
              {vis} fn get(&self) -> Result<{en}Ref<'_>, {tag_enum}> {{\n\
                  let t: {tag_ty} = {det}::get(self);\n\
-                 let b = &self.as_bytes()[{payload_offset}..];\n\
+                 // each arm fits in the storage: asserted below\n\
+                 Self::arm_at(t, &self.as_bytes()[{payload_offset}..]).ok_or({tag_enum}(t as _))\n\
+             }}\n\
+             \n\
+             /// The arm @tag selects, at the start of @b - which it may extend to\n\
+             /// their end: None if @tag isn't one of ours, or the arm doesn't fit\n\
+             /// there. For arms in a stream, as a key's extent entries are, each as\n\
+             /// long as its arm rather than the storage: there's no whole storage\n\
+             /// to get() from.\n\
+             #[allow(dead_code)]\n\
+             {vis} fn arm_at<'a>(tag: {tag_ty}, b: &'a [u8]) -> Option<{en}Ref<'a>> {{\n\
+                 fn fits<A>(b: &[u8]) -> bool {{\n\
+                     b.len() >= ::core::mem::size_of::<A>() &&\n\
+                         b.as_ptr() as usize % ::core::mem::align_of::<A>() == 0\n\
+                 }}\n\
                  // SAFETY: the tag says these are that arm's bytes, an arm is plain data,\n\
-                 // and each is in bounds and aligned there: asserted below\n\
+                 // and it fits there, aligned: checked\n\
                  unsafe {{\n{gets}}}\n\
-                 Err({tag_enum}(t as _))\n\
+                 None\n\
              }}\n\
              \n\
              /// From an arm: new(), by the arm's type.\n\
