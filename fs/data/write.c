@@ -761,10 +761,22 @@ MODULE_PARM_DESC(write_corrupt_ratio, "");
 static inline void bch2_congested_acct(struct bch_dev *ca, u64 io_latency,
 				       u64 now, int rw)
 {
+	/*
+	 * The threshold is a multiple of the device's fast read quantile: the
+	 * historical constant was 4 (8 for writes). On devices with a flat
+	 * latency distribution (Optane, enterprise NVMe) the median sits above
+	 * 4x the fastest quantile, so the counter pins at CONGESTED_MAX and
+	 * promotes are refused almost always; promote_congestion_mult lets the
+	 * admin widen the margin. The counter is always maintained (it is
+	 * reported in sysfs); whether promotes act on it is
+	 * promote_skip_congested.
+	 */
+	unsigned mult = ca->fs->opts.promote_congestion_mult;
+
 	u64 latency_capable =
 		ca->io_latency[rw].quantiles.entries[QUANTILE_IDX(1)].m;
 	/* ideally we'd be taking into account the device's variance here: */
-	u64 latency_threshold = latency_capable << (rw == READ ? 2 : 3);
+	u64 latency_threshold = latency_capable * (rw == READ ? mult : mult * 2);
 	s64 latency_over = io_latency - latency_threshold;
 
 	if (latency_threshold && latency_over > 0) {
