@@ -150,7 +150,6 @@ impl<'f> BtreeTrans<'f> {
         TransAttempt {
             trans:         self,
             restart_count: unsafe { (*self.raw).restart_count },
-            t:             PhantomData,
         }
     }
 
@@ -174,7 +173,6 @@ impl<'f> BtreeTrans<'f> {
         TransAttempt {
             trans:         self,
             restart_count: self.begin_raw(),
-            t:             PhantomData,
         }
     }
 
@@ -231,7 +229,6 @@ impl<'f> Drop for BtreeTrans<'f> {
 pub struct TransAttempt<'a, 't> {
     trans:         &'a BtreeTrans<'t>,
     restart_count: u32,
-    t:             PhantomData<&'a mut ()>,
 }
 
 /// Exempts bch2_trans_begin() from the dropped-updates warning while it lives
