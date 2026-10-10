@@ -26,8 +26,8 @@ struct find_btree_nodes_worker {
 __cold void bch2_found_btree_node_to_text(struct printbuf *out, struct bch_fs *c, const struct found_btree_node *n)
 {
 	bch2_btree_id_level_to_text(out, n->btree_id, n->level);
-	prt_printf(out, " seq=%u journal_seq=%llu cookie=%llx ",
-		   n->seq, n->journal_seq, n->cookie);
+	prt_printf(out, " seq=%u journal_seq=%llu sectors_written=%u cookie=%llx ",
+		   n->seq, n->journal_seq, n->sectors_written, n->cookie);
 	bch2_bpos_to_text(out, n->min_key);
 	prt_str(out, "-");
 	bch2_bpos_to_text(out, n->max_key);
@@ -77,6 +77,31 @@ static int found_btree_node_cmp_cookie(const void *_l, const void *_r)
 	return  cmp_int(l->btree_id,	r->btree_id) ?:
 		cmp_int(l->level,	r->level) ?:
 		cmp_int(l->cookie,	r->cookie);
+}
+
+/*
+ * Not every copy of a node is a replica of its current version: a replica
+ * dropped from the key in place (write error, device removal) misses the bsets
+ * written after it, and a misplaced write leaves a copy where the key never
+ * pointed. Newest version first:
+ */
+static int found_btree_node_cmp_cookie_newest(const void *_l, const void *_r)
+{
+	const struct found_btree_node *l = _l;
+	const struct found_btree_node *r = _r;
+
+	return  found_btree_node_cmp_cookie(l, r) ?:
+		-cmp_int(l->sectors_written,	r->sectors_written) ?:
+		-cmp_int(l->journal_seq,	r->journal_seq);
+}
+
+/* A key with two pointers to one device is invalid (ptr_to_duplicate_device): */
+static bool found_btree_node_has_dev(const struct found_btree_node *n, unsigned dev)
+{
+	for (unsigned i = 0; i < n->nr_ptrs; i++)
+		if (n->ptrs[i].dev == dev)
+			return true;
+	return false;
 }
 
 /*
@@ -396,24 +421,32 @@ int bch2_scan_for_btree_nodes(struct bch_fs *c)
 		bch2_print_str(c, KERN_INFO, buf.buf);
 	}
 
-	sort_nonatomic(f->nodes.data, f->nodes.nr, sizeof(f->nodes.data[0]), found_btree_node_cmp_cookie, NULL);
+	sort_nonatomic(f->nodes.data, f->nodes.nr, sizeof(f->nodes.data[0]), found_btree_node_cmp_cookie_newest, NULL);
 
+	printbuf_reset(&buf);
 	dst = 0;
 	darray_for_each(f->nodes, i) {
 		struct found_btree_node *prev = dst ? f->nodes.data + dst - 1 : NULL;
 
-		if (prev &&
-		    prev->cookie == i->cookie) {
-			if (prev->nr_ptrs == ARRAY_SIZE(prev->ptrs)) {
-				bch_err(c, "%s: found too many replicas for btree node", __func__);
-				return bch_err_throw(c, EINVAL_node_scan_too_many_replicas);
-			}
+		if (!prev || found_btree_node_cmp_cookie(prev, i)) {
+			f->nodes.data[dst++] = *i;
+		} else if (prev->sectors_written == i->sectors_written &&
+			   prev->journal_seq == i->journal_seq &&
+			   prev->nr_ptrs < ARRAY_SIZE(prev->ptrs) &&
+			   !found_btree_node_has_dev(prev, i->ptrs[0].dev)) {
 			prev->ptrs[prev->nr_ptrs++] = i->ptrs[0];
 		} else {
-			f->nodes.data[dst++] = *i;
+			if (!buf.pos) {
+				prt_printf(&buf, "%s: ignoring stale, excess or same-device copies of btree nodes:\n", __func__);
+				printbuf_indent_add(&buf, 2);
+			}
+			bch2_found_btree_node_to_text(&buf, c, i);
 		}
 	}
 	f->nodes.nr = dst;
+
+	if (buf.pos)
+		bch2_print_str(c, KERN_INFO, buf.buf);
 
 	sort_nonatomic(f->nodes.data, f->nodes.nr, sizeof(f->nodes.data[0]), found_btree_node_cmp_pos, NULL);
 
