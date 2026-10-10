@@ -1092,6 +1092,12 @@ static unsigned durability_available_on_target(struct bch_fs *c,
 	guard(percpu_read_noio)(&c->capacity.mark_lock);
 	guard(rcu)();
 	struct bch_devs_mask devs = target_rw_devs(c, data_type, target);
+	if (write_flags & BCH_WRITE_cached) {
+		struct bch_devs_mask cached_devs =
+			target_rw_devs(c, BCH_DATA_cached, target);
+
+		bitmap_or(devs.d, devs.d, cached_devs.d, BCH_SB_MEMBERS_MAX);
+	}
 	unsigned durability = 0;
 
 	unsigned i;
