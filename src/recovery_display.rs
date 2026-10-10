@@ -466,7 +466,7 @@ fn pass_name(pass: u32) -> &'static str {
 }
 
 fn units_name(units: u32) -> &'static str {
-    if units == c::bch_progress_units::BCH_PROGRESS_UNITS_keys as u32 {
+    if units == c::bch_progress_units::BCH_PROGRESS_UNITS_keys.0 as u32 {
         "keys"
     } else {
         "nodes"

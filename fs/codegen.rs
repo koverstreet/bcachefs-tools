@@ -97,18 +97,61 @@ const BITFIELD_ENUM: &[&str] = &[
     "bch_write_flags",
 ];
 const RUSTIFIED_ENUM: &[&str] = &["fsck_err_opts", "bch_key_types"];
+// The open enums - a value can come from disk, an ioctl or userspace, so any
+// integer is one: a newtype with a const for each value, as the conversion
+// makes them (#[open]). The rest are Rust enums, the default style.
 const NEWTYPE_ENUM: &[&str] = &[
+    "__bch_inode_flags",
     "bcachefs_metadata_version",
     "bch_bkey_type",
+    "bch_compression_opts",
     "bch_compression_type",
+    "bch_csum_opt",
+    "bch_csum_type",
+    "bch_data_event",
+    "bch_data_ops",
     "bch_data_type",
+    "bch_degraded_actions",
+    "bch_errcode",
+    "bch_error_actions",
+    "bch_extent_entry_type",
+    "bch_extent_flags_e",
+    "bch_fs_usage_type",
+    "bch_ioctl_data_event_ret",
+    "bch_iops_measurement",
     "bch_jset_entry_type",
     "bch_kdf_types",
+    "bch_key_type_errors",
+    "bch_lru_type",
+    "bch_member_error_type",
+    "bch_member_initialized",
+    "bch_member_state",
     "bch_opt_id",
+    "bch_persistent_counters_stable",
+    "bch_progress_units",
     "bch_reconcile_accounting_type",
+    "bch_reconcile_opts",
+    "bch_recovery_pass_stable",
     "bch_sb_compat",
+    "bch_sb_error_id",
+    "bch_sb_feature",
     "bch_sb_field_type",
+    "bch_scrub_journal_opts",
+    "bch_snapshot_state",
+    "bch_str_hash_opts",
+    "bch_str_hash_type",
+    "bch_subvolume_state",
+    "bch_version_upgrade_opts",
+    "bch_write_degraded_actions",
+    "btree_id",
+    "data_progress_data_type_special",
     "disk_accounting_type",
+    "inode_opt_id",
+    "logged_op_finsert_state",
+    "logged_ops_inums",
+    "quota_counters",
+    "quota_types",
+    "reconcile_work_id",
 ];
 const OPAQUE_TYPE: &[&str] = &["gendisk", "gc_stripe", "open_bucket.*", "replicas_delta_list", "bch_replicas_padded"];
 const NO_DEBUG: &[&str] = &["bch_replicas_padded", "jset", "bch_replicas_entry_cpu"];
@@ -618,8 +661,59 @@ fn post_process(src: String, ptr_width: &str) -> String {
     // Default comes from bindgen's manual MaybeUninit impl, so re-add only
     // Debug/Copy/Clone.
     let src = readd_derives(src);
+    let src = bitfield_ctor_shadowing_fix(src);
 
     packed_and_align_fix(src, ptr_width)
+}
+
+/// bindgen names a bitfield constructor's parameters for their members, and a
+/// member named for its own type - enum btree_id btree_id:8 - is a parameter,
+/// and a local, that shadows the type when it's a newtype, a tuple struct:
+/// E0530. Such a name gets a trailing _, throughout the constructor.
+fn bitfield_ctor_shadowing_fix(src: String) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut lines = src.lines();
+    while let Some(line) = lines.next() {
+        if !line.trim_start().starts_with("pub fn new_bitfield_") {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        let close = format!("{}}}", &line[..line.len() - line.trim_start().len()]);
+        let mut f = vec![line];
+        for l in lines.by_ref() {
+            f.push(l);
+            if l == close {
+                break;
+            }
+        }
+        let mut f = f.join("\n");
+        for name in NEWTYPE_ENUM {
+            if f.contains(&format!("{name}: {name}")) {
+                f = rename_ident(&f, name, &format!("{name}_"))
+                    .replace(&format!("{name}_: {name}_"), &format!("{name}_: {name}"));
+            }
+        }
+        out.push_str(&f);
+        out.push('\n');
+    }
+    out
+}
+
+/// @s with every identifier @from - not a part of a longer one - as @to.
+fn rename_ident(s: &str, from: &str, to: &str) -> String {
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find(from) {
+        let whole = !rest[..i].chars().next_back().is_some_and(ident) &&
+                    !rest[i + from.len()..].chars().next().is_some_and(ident);
+        out.push_str(&rest[..i]);
+        out.push_str(if whole { to } else { from });
+        rest = &rest[i + from.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn readd_derives(src: String) -> String {

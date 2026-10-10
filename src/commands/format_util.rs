@@ -76,19 +76,18 @@ impl DevOpts {
 /// Features enabled on all new filesystems.
 /// Must match BCH_SB_FEATURES_ALL in bcachefs_format.h.
 const BCH_SB_FEATURES_ALL: u64 = {
-    use c::bch_sb_feature::*;
     // BCH_SB_FEATURES_ALWAYS:
-    (1 << BCH_FEATURE_new_extent_overwrite as u64) |
-    (1 << BCH_FEATURE_extents_above_btree_updates as u64) |
-    (1 << BCH_FEATURE_btree_updates_journalled as u64) |
-    (1 << BCH_FEATURE_alloc_v2 as u64) |
-    (1 << BCH_FEATURE_extents_across_btree_nodes as u64) |
+    (1 << c::bch_sb_feature::BCH_FEATURE_new_extent_overwrite.0 as u64) |
+    (1 << c::bch_sb_feature::BCH_FEATURE_extents_above_btree_updates.0 as u64) |
+    (1 << c::bch_sb_feature::BCH_FEATURE_btree_updates_journalled.0 as u64) |
+    (1 << c::bch_sb_feature::BCH_FEATURE_alloc_v2.0 as u64) |
+    (1 << c::bch_sb_feature::BCH_FEATURE_extents_across_btree_nodes.0 as u64) |
     // Plus FEATURES_ALL additions:
-    (1 << BCH_FEATURE_new_siphash as u64) |
-    (1 << BCH_FEATURE_btree_ptr_v2 as u64) |
-    (1 << BCH_FEATURE_new_varint as u64) |
-    (1 << BCH_FEATURE_journal_no_flush as u64) |
-    (1 << BCH_FEATURE_incompat_version_field as u64)
+    (1 << c::bch_sb_feature::BCH_FEATURE_new_siphash.0 as u64) |
+    (1 << c::bch_sb_feature::BCH_FEATURE_btree_ptr_v2.0 as u64) |
+    (1 << c::bch_sb_feature::BCH_FEATURE_new_varint.0 as u64) |
+    (1 << c::bch_sb_feature::BCH_FEATURE_journal_no_flush.0 as u64) |
+    (1 << c::bch_sb_feature::BCH_FEATURE_incompat_version_field.0 as u64)
 };
 
 const TARGET_DEV_START: u32 = 1;

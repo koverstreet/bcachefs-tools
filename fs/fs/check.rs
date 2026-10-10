@@ -664,7 +664,7 @@ pub fn reconstruct_inode(
         c::btree_id::extents => (c::S_IFREG, extents_end(t, inum, snapshot)?),
         c::btree_id::dirents => (c::S_IFDIR, 0),
         c::btree_id::xattrs  => (d_type.and_then(d_type_mode).unwrap_or(c::S_IFREG), 0),
-        _ => unreachable!("reconstruct_inode() for btree {}", btree as u32),
+        _ => unreachable!("reconstruct_inode() for btree {}", btree.0 as u32),
     };
 
     let mut new = inode::init(fs, 0, 0, (mode | 0o600) as c::umode_t, 0, None);
@@ -795,7 +795,7 @@ fn btree_matches_i_mode(btree: c::btree_id, mode: c::umode_t) -> bool {
         c::btree_id::extents => fmt == c::S_IFREG || fmt == c::S_IFLNK,
         c::btree_id::dirents => fmt == c::S_IFDIR,
         c::btree_id::xattrs  => true,
-        _ => unreachable!("check_key_has_inode() on btree {}", btree as u32),
+        _ => unreachable!("check_key_has_inode() on btree {}", btree.0 as u32),
     }
 }
 

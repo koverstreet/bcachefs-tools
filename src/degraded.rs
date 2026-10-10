@@ -51,7 +51,7 @@ fn degraded_action(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> u8 
     sbs.first()
         .and_then(|(_, sb)| sb_opts(sb))
         .map(|o| opt_get!(o, degraded))
-        .unwrap_or(c::bch_degraded_actions::BCH_DEGRADED_ask as u8)
+        .unwrap_or(c::bch_degraded_actions::BCH_DEGRADED_ask.0 as u8)
 }
 
 /// Which refusal we are answering, and so what is at stake.
@@ -169,7 +169,7 @@ impl Ask {
         let present  = device_scan::present_devices(sbs).len();
 
         if present >= expected
-            || degraded_action(sbs, cli_opts) != c::bch_degraded_actions::BCH_DEGRADED_ask as u8
+            || degraded_action(sbs, cli_opts) != c::bch_degraded_actions::BCH_DEGRADED_ask.0 as u8
         {
             return None;
         }
@@ -364,7 +364,7 @@ mod tests {
             // errcode parent-chain walk BUG_ON()s rather than bounds-checking,
             // so what's being asserted here is as much "doesn't abort" as
             // "doesn't match".
-            BchError::from_raw(c::bch_errcode::BCH_ERR_MAX as i32 + 1),
+            BchError::from_raw(c::bch_errcode::BCH_ERR_MAX.0 as i32 + 1),
         ] {
             assert_eq!(Situation::of(&e), None, "{e:?}");
         }

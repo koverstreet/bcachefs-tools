@@ -407,7 +407,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// is what bch2_trans_begin() and verify_not_restarted() go by.
     pub fn restart(&self, error: bch_errcode) -> BchError {
         let ip = Self::restart as *const () as core::ffi::c_ulong;
-        let ret = unsafe { c::bch2_trans_restart_ip(self.raw(), error as i32, ip) };
+        let ret = unsafe { c::bch2_trans_restart_ip(self.raw(), error.0 as i32, ip) };
         BchError::from_raw(-ret)
     }
 
@@ -441,7 +441,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
                     if unsafe { (*trans.raw()).restart_count } != orig_restart_count {
                         return Err(BchError::from_raw(
-                            bch_errcode::BCH_ERR_transaction_restart_nested as i32));
+                            bch_errcode::BCH_ERR_transaction_restart_nested.0 as i32));
                     }
                     return Ok(v);
                 }
@@ -479,7 +479,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let v = f(self)?;
 
         if unsafe { (*trans.raw()).restart_count } != self.restart_count {
-            return Err(BchError::from_raw(bch_errcode::BCH_ERR_transaction_restart_nested as i32));
+            return Err(BchError::from_raw(bch_errcode::BCH_ERR_transaction_restart_nested.0 as i32));
         }
         Ok(v)
     }
@@ -797,7 +797,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     {
         assert_eq!(old_pos.snapshot, new_pos.snapshot);
 
-        if crate::BTREE_HAS_SNAPSHOTS_MASK & (1 << btree as u32) == 0 || bkey_eq(old_pos, new_pos) {
+        if crate::BTREE_HAS_SNAPSHOTS_MASK & (1 << btree.0) == 0 || bkey_eq(old_pos, new_pos) {
             return Ok(());
         }
 

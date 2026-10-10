@@ -422,7 +422,7 @@ const RAW_EXACT: BtreeIterFlags = BtreeIterFlags::SLOTS.union(BtreeIterFlags::AL
 /// snapshotted - on anything else it would corrupt positions (snapshots
 /// btree keys live at snapshot 0) and filtering is meaningless.
 fn btree_uses_snapshots(btree: c::btree_id) -> bool {
-    bcachefs_kernel::BTREE_HAS_SNAPSHOTS_MASK & (1u64 << btree as u64) != 0
+    bcachefs_kernel::BTREE_HAS_SNAPSHOTS_MASK & (1u64 << btree.0 as u64) != 0
 }
 
 /// With a snapshot context active, reads drop ALL_SNAPSHOTS - the iterator
@@ -1278,7 +1278,7 @@ fn kvdb(cli: Cli) -> Result<()> {
     logging::setup(cli.verbose, cli.colorize);
 
     let mut fs_opts = c::bch_opts::default();
-    opt_set!(fs_opts, degraded, bch_degraded_actions::BCH_DEGRADED_very as u8);
+    opt_set!(fs_opts, degraded, bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
     // An injection tool must not consume its own injections: background
     // workers in *this* fs instance would otherwise act on the state under
     // test the moment we go read-write. Snapshot deletion reaps a snapshot
@@ -1296,7 +1296,7 @@ fn kvdb(cli: Cli) -> Result<()> {
     opt_set!(
         fs_opts,
         errors,
-        c::bch_error_actions::BCH_ON_ERROR_continue as u8
+        c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8
     );
     if cli.verbose > 0 {
         opt_set!(fs_opts, verbose, 1);

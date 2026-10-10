@@ -29,7 +29,7 @@ impl<'f> Progress<'f> {
         leaf_btrees:  &[c::btree_id],
         inner_btrees: &[c::btree_id],
     ) -> Self {
-        let mask = |ids: &[c::btree_id]| ids.iter().fold(0u64, |m, &id| m | 1 << id as u64);
+        let mask = |ids: &[c::btree_id]| ids.iter().fold(0u64, |m, &id| m | 1 << id.0 as u64);
         let raw = unsafe { ptr::addr_of_mut!((*fs.raw).recovery.progress) };
 
         unsafe { c::bch2_progress_init(raw, msg.as_ptr(), fs.raw, mask(leaf_btrees), mask(inner_btrees)) };

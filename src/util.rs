@@ -123,7 +123,7 @@ pub fn subvol_root(path: &Path) -> Result<std::path::PathBuf> {
 /// The name of a bch_sb_error_id - the same table fsck and the
 /// superblock error counters use.
 pub fn sb_error_name(id: u32) -> String {
-    if id < c::bch_sb_error_id::BCH_FSCK_ERR_MAX as u32 {
+    if id < c::bch_sb_error_id::BCH_FSCK_ERR_MAX.0 as u32 {
         unsafe { CStr::from_ptr(*c::bch2_sb_error_strs.as_ptr().add(id as usize)) }
             .to_string_lossy()
             .into_owned()

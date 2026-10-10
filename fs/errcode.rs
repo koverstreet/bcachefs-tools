@@ -27,7 +27,7 @@ pub struct BchError(i32);
 // bindings spell them (u32) or as libc does (i32), positive either way.
 
 impl From<bch_errcode> for BchError {
-    fn from(code: bch_errcode) -> Self { Self(code as i32) }
+    fn from(code: bch_errcode) -> Self { Self(code.0 as i32) }
 }
 
 impl From<u32> for BchError {
@@ -70,7 +70,7 @@ impl BchError {
     /// this table has never heard of, and aborting the mount helper over it
     /// would be a poor way to find out.
     fn known(&self) -> bool {
-        self.0.unsigned_abs() < bch_errcode::BCH_ERR_MAX as u32
+        self.0.unsigned_abs() < bch_errcode::BCH_ERR_MAX.0 as u32
     }
 
     /// Whether this error is @class, or derives from it: as bch2_err_matches().

@@ -65,10 +65,10 @@ impl StrHash {
         let k0 = info.siphash_key.k0.to_ne_bytes();
 
         match info.type_ as u32 {
-            t if t == T::BCH_STR_HASH_crc32c as u32 => Self::Crc32c(crc32c(!0, &k0)),
-            t if t == T::BCH_STR_HASH_crc64 as u32 => Self::Crc64(crc64_be(!0, &k0)),
-            t if t == T::BCH_STR_HASH_siphash_old as u32 ||
-                 t == T::BCH_STR_HASH_siphash as u32 => {
+            t if t == T::BCH_STR_HASH_crc32c.0 => Self::Crc32c(crc32c(!0, &k0)),
+            t if t == T::BCH_STR_HASH_crc64.0 => Self::Crc64(crc64_be(!0, &k0)),
+            t if t == T::BCH_STR_HASH_siphash_old.0 ||
+                 t == T::BCH_STR_HASH_siphash.0 => {
                 let mut ctx = c::SIPHASH_CTX::default();
                 unsafe { c::SipHash_Init(&mut ctx, &info.siphash_key) };
                 Self::SipHash(ctx)
@@ -145,7 +145,7 @@ pub fn lookup_in_snapshot<'i, 't, T: HashTable>(
     snapshot:  u32,
 ) -> Result<BkeySC<'i>, BchError> {
     let flags = BtreeIterFlags::SLOTS | flags;
-    *iter = BtreeIter::new(t, T::BTREE as u32,
+    *iter = BtreeIter::new(t, T::BTREE.0 as u32,
                            spos(inum.inum, T::hash_key(hash_info, key), snapshot), flags);
 
     // The key, or a hole: the end of its probe sequence
@@ -189,7 +189,7 @@ pub fn hole<'t, T: HashTable>(
 ) -> Result<(), BchError> {
     let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
     let flags = BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT;
-    *iter = BtreeIter::new(t, T::BTREE as u32,
+    *iter = BtreeIter::new(t, T::BTREE.0 as u32,
                            spos(inum.inum, T::hash_key(hash_info, key), snapshot), flags);
 
     match iter.find_max_norestart(t, pos(inum.inum, u64::MAX),
@@ -248,7 +248,7 @@ pub fn set_or_get_in_snapshot<'i, 't, T: HashTable>(
     let must_replace = iter_flags.contains(BtreeIterFlags::STR_HASH_MUST_REPLACE);
 
     let inode = insert.k().p.inode;
-    *iter = BtreeIter::new(t, T::BTREE as u32,
+    *iter = BtreeIter::new(t, T::BTREE.0 as u32,
                            spos(inode, T::hash_bkey(hash_info, BkeySC::from(insert.k_i())), snapshot),
                            peek_flags);
 
@@ -358,17 +358,15 @@ pub fn delete<T: HashTable>(
 /// read as a number, not taken as a bch_str_hash_opts - a value no variant has
 /// isn't a Rust enum - and as in C, one that isn't an option is a bug.
 pub fn new_inode_type(fs: &Fs) -> c::bch_str_hash_type {
-    use c::bch_str_hash_opts::*;
-    use c::bch_str_hash_type::*;
 
     match fs.opts().str_hash as u32 {
-        o if o == BCH_STR_HASH_OPT_crc32c as u32 => BCH_STR_HASH_crc32c,
-        o if o == BCH_STR_HASH_OPT_crc64 as u32  => BCH_STR_HASH_crc64,
-        o if o == BCH_STR_HASH_OPT_siphash as u32 => {
+        o if o == c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc32c.0 as u32 => c::bch_str_hash_type::BCH_STR_HASH_crc32c,
+        o if o == c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc64.0 as u32  => c::bch_str_hash_type::BCH_STR_HASH_crc64,
+        o if o == c::bch_str_hash_opts::BCH_STR_HASH_OPT_siphash.0 as u32 => {
             if fs.feature(c::bch_sb_feature::BCH_FEATURE_new_siphash) {
-                BCH_STR_HASH_siphash
+                c::bch_str_hash_type::BCH_STR_HASH_siphash
             } else {
-                BCH_STR_HASH_siphash_old
+                c::bch_str_hash_type::BCH_STR_HASH_siphash_old
             }
         }
         o => panic!("str_hash option {o} isn't one"),
@@ -405,15 +403,14 @@ pub struct StrHashType(pub u64);
 
 impl fmt::Display for StrHashType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use c::bch_str_hash_type::*;
 
         // A Rust enum: an out of range value can't be converted, and the
         // inode field this comes from is four bits
         let t = match self.0 {
-            0 => BCH_STR_HASH_crc32c,
-            1 => BCH_STR_HASH_crc64,
-            2 => BCH_STR_HASH_siphash_old,
-            3 => BCH_STR_HASH_siphash,
+            0 => c::bch_str_hash_type::BCH_STR_HASH_crc32c,
+            1 => c::bch_str_hash_type::BCH_STR_HASH_crc64,
+            2 => c::bch_str_hash_type::BCH_STR_HASH_siphash_old,
+            3 => c::bch_str_hash_type::BCH_STR_HASH_siphash,
             n => return write!(f, "(invalid str_hash type {n})"),
         };
         printbuf_to_formatter(f, |out| unsafe { c::bch2_prt_str_hash_type(out, t) })
@@ -836,7 +833,7 @@ impl Repair<'_> {
 
         // Probing from the slot it hashes to: itself, a duplicate - a key with
         // the same name - or a hole, which lookups would stop at
-        let mut iter = BtreeIter::new(trans, T::BTREE as u32,
+        let mut iter = BtreeIter::new(trans, T::BTREE.0 as u32,
                                       spos(hash_k.k.p.inode, hash, hash_k.k.p.snapshot),
                                       BtreeIterFlags::SLOTS);
         let found = iter.find_max_norestart(t, SPOS_MAX, |_, k| Ok(

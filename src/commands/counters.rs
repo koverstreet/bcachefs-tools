@@ -45,7 +45,7 @@ fn cmd_reset_counters(cli: Cli) -> Result<()> {
     let mut fs_opts = c::bch_opts::default();
     opt_set!(fs_opts, nostart, 1);
     opt_set!(fs_opts, will_not_start, 1);
-    opt_set!(fs_opts, degraded, bch_degraded_actions::BCH_DEGRADED_very as u8);
+    opt_set!(fs_opts, degraded, bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
 
     let fs = Fs::open(&devs, fs_opts)
         .context("opening filesystem")?;

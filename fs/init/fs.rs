@@ -175,7 +175,7 @@ impl Fs {
     /// repairs may reconstruct what it's missing: c->sb.btrees_lost_data.
     pub fn btree_lost_data(&self, id: c::btree_id) -> bool {
         let lost = unsafe { (*self.raw).sb.btrees_lost_data };
-        lost & (1u64 << id as u32) != 0
+        lost & (1u64 << id.0 as u32) != 0
     }
 
     /// Whether this is an image made with `bcachefs dump --sanitize`, which
@@ -225,7 +225,7 @@ impl Fs {
     /// Naming an error to compare or parse against isn't throwing it - that's
     /// BchError::from().
     pub fn err(&self, error: bch_errcode) -> BchError {
-        BchError::from_raw(-unsafe { c::__bch2_err_throw(self.raw, -(error as i32)) })
+        BchError::from_raw(-unsafe { c::__bch2_err_throw(self.raw, -(error.0 as i32)) })
     }
 
     pub fn throw<T>(&self, error: bch_errcode) -> Result<T, BchError> {
@@ -403,14 +403,14 @@ impl Fs {
     /// copy.
     pub fn feature(&self, feature: c::bch_sb_feature) -> bool {
         let features = unsafe { (*self.raw).sb.features };
-        features & (1u64 << feature as u32) != 0
+        features & (1u64 << feature.0 as u32) != 0
     }
 
     /// Mark the filesystem as using @feature, writing the superblock if it
     /// wasn't already: as bch2_check_set_feature().
     pub fn check_set_feature(&self, feature: c::bch_sb_feature) {
         if !self.feature(feature) {
-            unsafe { c::__bch2_check_set_feature(self.raw, feature as u32) }
+            unsafe { c::__bch2_check_set_feature(self.raw, feature.0 as u32) }
         }
     }
 

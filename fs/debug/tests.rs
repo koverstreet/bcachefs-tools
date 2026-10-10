@@ -475,7 +475,7 @@ fn test_btree_ptr_stale_dirty(fs: &Fs, _nr: u64) -> TestRet {
 /// caller must lay down erasure-coded data first (see ec.ktest); this errors
 /// out if no striped extent is found.
 fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
-    const STRIPE_PTR: u32 = c::bch_extent_entry_type::BCH_EXTENT_ENTRY_stripe_ptr as u32;
+    const STRIPE_PTR: u32 = c::bch_extent_entry_type::BCH_EXTENT_ENTRY_stripe_ptr.0 as u32;
 
     let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(

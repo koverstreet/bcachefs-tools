@@ -36,7 +36,7 @@ impl<'a> Dentry<'a> {
     /// has none: what clearing it on this inode inherits.
     pub fn parent_inode_opt(&self, opt: InodeOpt) -> Option<u64> {
         let mut v = 0;
-        unsafe { c::rust_dentry_parent_inode_opt(self.raw, opt.id() as u32, &mut v) }
+        unsafe { c::rust_dentry_parent_inode_opt(self.raw, opt.id().0, &mut v) }
             .then_some(v)
     }
 

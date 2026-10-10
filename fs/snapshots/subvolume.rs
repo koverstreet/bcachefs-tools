@@ -182,11 +182,10 @@ impl c::bch_subvolume {
     /// bch2_subvolume_state_valid(). Read raw, never taken from C as a
     /// bch_subvolume_state: a damaged field is no variant of the Rust enum.
     pub fn state_field(&self) -> Option<c::bch_subvolume_state> {
-        use c::bch_subvolume_state::*;
 
-        [SUBVOLUME_STATE_live, SUBVOLUME_STATE_unlinked, SUBVOLUME_STATE_deleted]
+        [c::bch_subvolume_state::SUBVOLUME_STATE_live, c::bch_subvolume_state::SUBVOLUME_STATE_unlinked, c::bch_subvolume_state::SUBVOLUME_STATE_deleted]
             .into_iter()
-            .find(|&s| s as u32 == u32::from_le(self.state))
+            .find(|&s| s.0 as u32 == u32::from_le(self.state))
     }
 
     /// The subvolume's state - read from its flags if it predates the state

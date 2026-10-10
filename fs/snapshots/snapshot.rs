@@ -351,7 +351,7 @@ pub fn delete_dead_key<'a, 't>(
 pub fn state_nearest(v: u32) -> (c::bch_snapshot_state, u32) {
     let mut best = (c::bch_snapshot_state::SNAPSHOT_STATE_live, 33);
     for s in SNAPSHOT_STATES {
-        let dist = (v ^ s as u32).count_ones();
+        let dist = (v ^ s.0 as u32).count_ones();
         if dist < best.1 {
             best = (s, dist);
         }
@@ -383,7 +383,7 @@ impl c::bch_snapshot {
     /// field, or damaged: as bch2_snapshot_state() and
     /// bch2_snapshot_state_valid().
     pub fn state_field(&self) -> Option<c::bch_snapshot_state> {
-        SNAPSHOT_STATES.into_iter().find(|&s| s as u32 == self.state_raw())
+        SNAPSHOT_STATES.into_iter().find(|&s| s.0 as u32 == self.state_raw())
     }
 
     /// The state the legacy flag bits say: as

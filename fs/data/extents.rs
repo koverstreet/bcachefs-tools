@@ -159,7 +159,7 @@ impl<'a> Iterator for ExtentPtrIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         for entry in self.inner.by_ref() {
-            if extent_entry_type(entry) == c::bch_extent_entry_type::BCH_EXTENT_ENTRY_ptr as u32 {
+            if extent_entry_type(entry) == c::bch_extent_entry_type::BCH_EXTENT_ENTRY_ptr.0 as u32 {
                 return Some(unsafe { extent_union_field_ref(&entry.ptr) });
             }
         }
@@ -252,7 +252,7 @@ impl<'a> Iterator for ExtentPtrIterMut<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         for entry in self.inner.by_ref() {
-            if extent_entry_type(entry) == c::bch_extent_entry_type::BCH_EXTENT_ENTRY_ptr as u32 {
+            if extent_entry_type(entry) == c::bch_extent_entry_type::BCH_EXTENT_ENTRY_ptr.0 as u32 {
                 return Some(unsafe { extent_union_field_mut(&mut entry.ptr) });
             }
         }
@@ -268,12 +268,11 @@ pub fn bkey_ptrs_mut<'a>(
 }
 
 fn extent_entry_is_crc(entry: &c::bch_extent_entry) -> bool {
-    use c::bch_extent_entry_type::*;
 
     let ty = extent_entry_type(entry);
-    ty == BCH_EXTENT_ENTRY_crc32 as u32 ||
-    ty == BCH_EXTENT_ENTRY_crc64 as u32 ||
-    ty == BCH_EXTENT_ENTRY_crc128 as u32
+    ty == c::bch_extent_entry_type::BCH_EXTENT_ENTRY_crc32.0 as u32 ||
+    ty == c::bch_extent_entry_type::BCH_EXTENT_ENTRY_crc64.0 as u32 ||
+    ty == c::bch_extent_entry_type::BCH_EXTENT_ENTRY_crc128.0 as u32
 }
 
 /// The checksum/compression entries of @k, unpacked: as bkey_for_each_crc().

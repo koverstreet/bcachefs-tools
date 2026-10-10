@@ -799,7 +799,7 @@ fn validate_pos(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 
 /// A str_hash type that isn't one.
 fn validate_str_hash(v: &BkeyValidate<'_, '_>, str_hash: u64) -> Result<(), BchError> {
-    let nr = c::bch_str_hash_type::BCH_STR_HASH_NR as u64;
+    let nr = c::bch_str_hash_type::BCH_STR_HASH_NR.0 as u64;
     bkey_fsck_err_on!(v, str_hash >= nr, id::inode_str_hash_invalid,
                       "invalid str hash type ({str_hash} >= {nr})")
 }
@@ -1065,7 +1065,7 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
     let idx = if is_32bit { 0 } else { 1 + unsafe { c::rust_bch2_inode_shard_idx(fs.raw) } };
     let (min, max) = cursor_range(fs, idx);
 
-    let cursor_pos = pos(c::logged_ops_inums::LOGGED_OPS_INUM_inode_cursors as u64, idx);
+    let cursor_pos = pos(c::logged_ops_inums::LOGGED_OPS_INUM_inode_cursors.0 as u64, idx);
 
     let mut cursor = match t.bkey_get_mut(c::btree_id::logged_ops, cursor_pos,
                                           BtreeIterFlags::CACHED, UpdateTriggerFlags::empty(),
@@ -1162,7 +1162,7 @@ pub fn create<'t>(
 }
 
 fn alloc_cursor_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    bkey_fsck_err_on!(v, v.k.k.p.inode != c::logged_ops_inums::LOGGED_OPS_INUM_inode_cursors as u64,
+    bkey_fsck_err_on!(v, v.k.k.p.inode != c::logged_ops_inums::LOGGED_OPS_INUM_inode_cursors.0 as u64,
                       id::inode_alloc_cursor_inode_bad, "k.p.inode bad")
 }
 
@@ -1823,7 +1823,7 @@ crate::recovery_pass!(bch2_kill_i_generation_keys => kill_i_generation_keys);
 /// option - and a random hash seed. As bch2_inode_init_early().
 pub fn init_early(fs: &Fs, inode: &mut c::bch_inode_unpacked) {
     *inode = c::bch_inode_unpacked::default();
-    inode.set_inode_str_hash(crate::str_hash::new_inode_type(fs) as u64);
+    inode.set_inode_str_hash(crate::str_hash::new_inode_type(fs).0 as u64);
     inode.bi_hash_seed = random_u64();
 }
 
@@ -1982,7 +1982,7 @@ pub fn set_casefold(
     fs.check_set_feature(c::bch_sb_feature::BCH_FEATURE_casefolding);
 
     inode.bi_casefold = v.wrapping_add(1) as _; // stored +1, 0 for unset
-    inode.bi_fields_set |= 1 << c::inode_opt_id::Inode_opt_casefold as u32;
+    inode.bi_fields_set |= 1 << c::inode_opt_id::Inode_opt_casefold.0 as u32;
 
     namei::maybe_propagate_has_case_insensitive(t, inum, inode)
 }
@@ -2017,7 +2017,7 @@ pub fn reconcile_opts_get(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_exte
 
     // io_opts_to_reconcile_opts()
     let mut r = c::bch_extent_reconcile::default();
-    r.set_type(1 << c::bch_extent_entry_type::BCH_EXTENT_ENTRY_reconcile as u32);
+    r.set_type(1 << c::bch_extent_entry_type::BCH_EXTENT_ENTRY_reconcile.0);
     macro_rules! reconcile_opts {
         ($(($name:tt)),* $(,)?) => { crate::paste! { $(
             r.[<set_ $name>](opts.$name as u64);

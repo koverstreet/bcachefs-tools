@@ -48,7 +48,7 @@ pub fn require(fs: &Fs, out: &mut Printbuf, pass: c::bch_recovery_pass) -> Resul
 /// bch2_btree_is_clean().
 pub fn btree_is_clean(fs: &Fs, btree: c::btree_id) -> bool {
     let clean = unsafe { (*fs.raw).sb.btrees_clean };
-    clean & (1u64 << btree as u32) != 0
+    clean & (1u64 << btree.0 as u32) != 0
 }
 
 /// Record btree @btree as checked consistent: as bch2_set_btree_clean().

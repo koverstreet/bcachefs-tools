@@ -628,7 +628,7 @@ fn scan_or_ask_splitbrain(dev: &String, opts: &mut bch_opts)
         return Err(err);
     }
 
-    opt_set!(opts, degraded, c::bch_degraded_actions::BCH_DEGRADED_yes as u8);
+    opt_set!(opts, degraded, c::bch_degraded_actions::BCH_DEGRADED_yes.0 as u8);
     Ok(sbs)
 }
 

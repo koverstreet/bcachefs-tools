@@ -292,12 +292,12 @@ impl InodeOpt {
     pub fn from_index(i: u32) -> Option<InodeOpt> {
         // The enum is repr(u32), with a variant for every value below
         // Inode_opt_nr:
-        (i < c::inode_opt_id::Inode_opt_nr as u32)
+        (i < c::inode_opt_id::Inode_opt_nr.0 as u32)
             .then(|| InodeOpt(unsafe { core::mem::transmute::<u32, c::inode_opt_id>(i) }))
     }
 
     pub fn all() -> impl Iterator<Item = InodeOpt> {
-        (0..c::inode_opt_id::Inode_opt_nr as u32)
+        (0..c::inode_opt_id::Inode_opt_nr.0 as u32)
             .map(|i| InodeOpt::from_index(i).expect("below Inode_opt_nr"))
     }
 
@@ -306,7 +306,7 @@ impl InodeOpt {
     }
 
     pub fn name(self) -> &'static CStr {
-        unsafe { CStr::from_ptr(*c::bch2_inode_opts.as_ptr().add(self.0 as usize)) }
+        unsafe { CStr::from_ptr(*c::bch2_inode_opts.as_ptr().add(self.0.0 as usize)) }
     }
 
     /// Its value on @inode, biased: 0 for not set.
@@ -320,7 +320,7 @@ impl InodeOpt {
             )* } };
         }
         c::BCH_INODE_OPTS!(get);
-        panic!("inode option {} out of range", self.0 as u32)
+        panic!("inode option {} out of range", self.0.0)
     }
 
     /// Set its value on @inode - biased, 0 for not set.
@@ -335,16 +335,16 @@ impl InodeOpt {
             )* } };
         }
         c::BCH_INODE_OPTS!(set);
-        panic!("inode option {} out of range", self.0 as u32)
+        panic!("inode option {} out of range", self.0.0)
     }
 
     /// Whether it's set on @inode itself, not inherited: bi_fields_set.
     pub fn is_own(self, inode: &c::bch_inode_unpacked) -> bool {
-        inode.bi_fields_set & (1 << self.0 as u32) != 0
+        inode.bi_fields_set & (1 << self.0.0 as u32) != 0
     }
 
     pub fn set_own(self, inode: &mut c::bch_inode_unpacked, own: bool) {
-        let bit = 1 << self.0 as u32;
+        let bit = 1 << self.0.0 as u32;
         if own {
             inode.bi_fields_set |= bit;
         } else {

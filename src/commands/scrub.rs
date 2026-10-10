@@ -47,7 +47,7 @@ fn read_data_event(fd: &mut std::fs::File) -> io::Result<(u8, u8, bch_ioctl_data
 
 fn start_scrub(ioctl_fd: std::os::fd::BorrowedFd, dev_idx: u32, data_types: u32) -> Result<std::fs::File> {
     let mut cmd = bch_ioctl_data {
-        op: bch_bindgen::c::bch_data_ops::BCH_DATA_OP_scrub as u16,
+        op: bch_bindgen::c::bch_data_ops::BCH_DATA_OP_scrub.0 as u16,
         ..Default::default()
     };
     // bch_ioctl_data's op-params union is emitted as either a native Rust union or
@@ -87,7 +87,7 @@ impl ScrubDev {
 
         let status = if self.progress_fd.is_some() {
             format!("{}/sec", fmt_bytes_human(rate))
-        } else if self.ret_status == bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_device_offline as u8 {
+        } else if self.ret_status == bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_device_offline.0 as u8 {
             "offline".to_string()
         } else {
             "complete".to_string()

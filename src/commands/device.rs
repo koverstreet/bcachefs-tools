@@ -9,7 +9,6 @@ use bch_bindgen::fs::FsExt;
 use bch_bindgen::c::{
     self,
     bch_degraded_actions,
-    bch_member_state::*,
     BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_METADATA_LOST,
 };
 use bcachefs_kernel::fs::Fs;
@@ -290,10 +289,10 @@ enum MemberState {
 impl MemberState {
     fn as_u32(self) -> u32 {
         match self {
-            MemberState::Rw         => BCH_MEMBER_STATE_rw as u32,
-            MemberState::Ro         => BCH_MEMBER_STATE_ro as u32,
-            MemberState::Evacuating => BCH_MEMBER_STATE_evacuating as u32,
-            MemberState::Spare      => BCH_MEMBER_STATE_spare as u32,
+            MemberState::Rw         => c::bch_member_state::BCH_MEMBER_STATE_rw.0 as u32,
+            MemberState::Ro         => c::bch_member_state::BCH_MEMBER_STATE_ro.0 as u32,
+            MemberState::Evacuating => c::bch_member_state::BCH_MEMBER_STATE_evacuating.0 as u32,
+            MemberState::Spare      => c::bch_member_state::BCH_MEMBER_STATE_spare.0 as u32,
         }
     }
 }
@@ -359,7 +358,7 @@ fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
     let mut opts: c::bch_opts = Default::default();
     opt_set!(opts, nostart, 1);
     opt_set!(opts, will_not_start, 1);
-    opt_set!(opts, degraded, bch_degraded_actions::BCH_DEGRADED_very as u8);
+    opt_set!(opts, degraded, bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
 
     // Read superblock to get dev_idx
     let sb_handle = bch_bindgen::sb::io::read_super_opts(Path::new(device), opts)
@@ -566,14 +565,14 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
     let usage = handle.dev_usage(dev_idx)
         .context("querying device usage")?;
 
-    if usage.state == BCH_MEMBER_STATE_rw as u8 {
+    if usage.state == c::bch_member_state::BCH_MEMBER_STATE_rw.0 as u8 {
         println!("Setting {} readonly", cli.device);
-        handle.disk_set_state(dev_idx, BCH_MEMBER_STATE_ro as u32, BCH_FORCE_IF_DEGRADED)
+        handle.disk_set_state(dev_idx, c::bch_member_state::BCH_MEMBER_STATE_ro.0 as u32, BCH_FORCE_IF_DEGRADED)
             .context("setting device readonly")?;
     }
 
     println!("Setting {} evacuating", cli.device);
-    handle.disk_set_state(dev_idx, BCH_MEMBER_STATE_evacuating as u32, BCH_FORCE_IF_DEGRADED)
+    handle.disk_set_state(dev_idx, c::bch_member_state::BCH_MEMBER_STATE_evacuating.0 as u32, BCH_FORCE_IF_DEGRADED)
         .context("setting device evacuating")?;
 
     // Trigger reconcile wakeup so it starts processing the evacuation
