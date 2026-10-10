@@ -167,7 +167,11 @@ impl<'f> BtreeTrans<'f> {
     /// Take back the locks unlock() dropped: as bch2_trans_relock(). A
     /// transaction restart if they've changed hands meanwhile.
     pub fn relock(&self) -> Result<(), BchError> {
-        crate::errcode::ret_to_result(unsafe { c::bch2_trans_relock(self.raw) }).map(|_| ())
+        let trans = unsafe { &*self.raw };
+        if trans.locked() && trans.restarted().0 == 0 {
+            return Ok(());
+        }
+        crate::errcode::ret_to_result(unsafe { c::__bch2_trans_relock(self.raw, true) }).map(|_| ())
     }
 
     pub fn begin<'a>(&'a self) -> TransAttempt<'a, 'f> {
