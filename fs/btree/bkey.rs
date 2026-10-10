@@ -643,18 +643,6 @@ pub struct BkeyS<'a, V = c::bch_val> {
 }
 
 impl<'a> BkeyS<'a> {
-    /// The raw `c::bkey_s` for passing to C helpers (e.g. `bch2_bkey_ptrs`).
-    pub(crate) fn to_raw(&mut self) -> c::bkey_s {
-        c::bkey_s {
-            __bindgen_anon_1: c::bkey_s__bindgen_ty_1 {
-                __bindgen_anon_1: c::bkey_s__bindgen_ty_1__bindgen_ty_1 {
-                    k: &mut *self.k,
-                    v: &mut *self.v,
-                },
-            },
-        }
-    }
-
     pub fn key_type(&self) -> c::bch_bkey_type {
         c::bch_bkey_type(self.k.type_ as u32)
     }
