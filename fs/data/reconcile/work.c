@@ -1619,18 +1619,75 @@ static int reconcile_phys_thread(void *arg)
 	return 0;
 }
 
+static int reconcile_phys_dev_has_work(struct bch_fs *c, unsigned reconcile_phase,
+				       unsigned dev, bool *has_work)
+{
+	enum btree_id btree = reconcile_phases[reconcile_phase].btree;
+	bool found = false;
+
+	*has_work = false;
+
+	int ret = bch2_trans_do(c, ({
+		found = false;
+
+		CLASS(btree_iter, iter)(trans, btree, POS(dev, 0), BTREE_ITER_prefetch);
+		int ret = 0;
+
+		while (true) {
+			struct bkey_s_c k = bch2_btree_iter_peek(&iter);
+
+			ret = bkey_err(k);
+			if (ret)
+				break;
+
+			if (!k.k || k.k->p.inode != dev)
+				break;
+
+			if (k.k->type == KEY_TYPE_set) {
+				found = true;
+				break;
+			}
+
+			bch2_btree_iter_advance(&iter);
+		}
+
+		ret;
+	}));
+
+	if (!ret)
+		*has_work = found;
+
+	return ret;
+}
+
 static int do_reconcile_phys(struct bch_fs *c, unsigned reconcile_phase)
 {
+	struct bch_fs_reconcile *r = &c->reconcile;
 	CLASS(darray_reconcile_phys_thr, thrs)();
+	u64 considered = 0, skipped_empty = 0;
 
-	for_each_member_device(c, ca)
+	for_each_member_device(c, ca) {
+		bool has_work;
+
 		if (ca->mi.rotational &&
-		    bch2_dev_is_online(ca))
+		    bch2_dev_is_online(ca)) {
+			considered++;
+			try(reconcile_phys_dev_has_work(c, reconcile_phase, ca->dev_idx, &has_work));
+			if (!has_work) {
+				skipped_empty++;
+				continue;
+			}
+
 			try(darray_push(&thrs, ((reconcile_phys_thr) {
 						.c			= c,
 						.dev			= ca->dev_idx,
 						.reconcile_phase	= reconcile_phase,
 						})));
+		}
+	}
+
+	WRITE_ONCE(r->phys_workers_considered, considered);
+	WRITE_ONCE(r->phys_workers_skipped_empty, skipped_empty);
 
 	int ret = 0;
 	unsigned nr_started = 0;
@@ -1645,6 +1702,7 @@ static int do_reconcile_phys(struct bch_fs *c, unsigned reconcile_phase)
 			break;
 		nr_started++;
 	}
+	WRITE_ONCE(r->phys_workers_started, nr_started);
 
 	/*
 	 * The threads freeze in place, so our wait for them must be freezable
@@ -2118,6 +2176,11 @@ __cold void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c
 			}
 		}
 	}
+
+	prt_printf(out, "phys workers last phase: considered %llu started %llu skipped empty %llu\n",
+		   READ_ONCE(r->phys_workers_considered),
+		   READ_ONCE(r->phys_workers_started),
+		   READ_ONCE(r->phys_workers_skipped_empty));
 
 	struct task_struct *t;
 	scoped_guard(rcu) {
