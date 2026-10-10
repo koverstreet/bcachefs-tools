@@ -122,7 +122,7 @@ static bool extent_matches_bp(struct bch_fs *c,
 		bch2_extent_ptr_to_bp(c, btree_id, level, k, p, entry, &bp2);
 
 		if (bpos_eq(bp.k->p, bp2.k.p) &&
-		    !memcmp(bp.v, &bp2.v, sizeof(bp2.v)))
+		    bch2_backpointers_match(*bp.v, bp2.v))
 			return true;
 	}
 
@@ -185,7 +185,7 @@ int bch2_bucket_backpointer_mod_nowritebuffer(struct btree_trans *trans,
 	if (insert
 	    ? k.k->type
 	    : (k.k->type != KEY_TYPE_backpointer ||
-	       memcmp(bkey_s_c_to_backpointer(k).v, &bp->v, sizeof(bp->v))))
+	       !bch2_backpointers_match(*bkey_s_c_to_backpointer(k).v, bp->v)))
 		try(backpointer_mod_err(trans, orig_k, bp, k, insert));
 
 	if (!insert) {
@@ -538,7 +538,6 @@ static int extents_to_reflink(struct btree_trans *trans,
 }
 
 static int check_bp_dup(struct btree_trans *trans,
-			struct extents_to_bp_state *s,
 			struct bkey_s_c extent,
 			struct bkey_i_backpointer *bp,
 			struct bkey_s_c_backpointer other_bp)
@@ -668,20 +667,24 @@ static int check_bp_dup(struct btree_trans *trans,
 	}
 }
 
-static int check_bp_exists(struct btree_trans *trans,
-			   struct extents_to_bp_state *s,
-			   struct bkey_s_c extent,
-			   struct bkey_i_backpointer *bp)
+/*
+ * @extent's backpointer @bp: if it's missing, or another backpointer is in its
+ * slot, repair it.
+ */
+int bch2_check_bp_exists(struct btree_trans *trans,
+			 struct bkey_s_c extent,
+			 struct bkey_i_backpointer *bp,
+			 struct wb_maybe_flush *last_flushed)
 {
 	CLASS(btree_iter, bp_iter)(trans, backpointer_btree(&bp->v), bp->k.p, 0);
 	struct bkey_s_c bp_found = bkey_try(bch2_btree_iter_peek_slot(&bp_iter));
 
 	if (bp_found.k->type != KEY_TYPE_backpointer) {
-		try(bch2_btree_write_buffer_maybe_flush(trans, extent, &s->last_flushed));
+		try(bch2_btree_write_buffer_maybe_flush(trans, extent, last_flushed));
 		try(bp_missing(trans, extent, bp, bp_found));
-	} else if (memcmp(bkey_s_c_to_backpointer(bp_found).v, &bp->v, sizeof(bp->v))) {
-		try(bch2_btree_write_buffer_maybe_flush(trans, extent, &s->last_flushed));
-		try(check_bp_dup(trans, s, extent, bp, bkey_s_c_to_backpointer(bp_found)));
+	} else if (!bch2_backpointers_match(*bkey_s_c_to_backpointer(bp_found).v, bp->v)) {
+		try(bch2_btree_write_buffer_maybe_flush(trans, extent, last_flushed));
+		try(check_bp_dup(trans, extent, bp, bkey_s_c_to_backpointer(bp_found)));
 	}
 
 	return 0;
@@ -703,7 +706,7 @@ static int check_extent_to_backpointers(struct btree_trans *trans,
 
 		if (p.ptr.dev == BCH_SB_MEMBER_INVALID) {
 			if (p.has_ec)
-				try(check_bp_exists(trans, s, k, &bp));
+				try(bch2_check_bp_exists(trans, k, &bp, &s->last_flushed));
 			continue;
 		}
 
@@ -730,7 +733,7 @@ static int check_extent_to_backpointers(struct btree_trans *trans,
 			continue;
 
 		try(!empty
-		    ? check_bp_exists(trans, s, k, &bp)
+		    ? bch2_check_bp_exists(trans, k, &bp, &s->last_flushed)
 		    : bch2_bucket_backpointer_mod(trans, k, &bp, true));
 	}
 

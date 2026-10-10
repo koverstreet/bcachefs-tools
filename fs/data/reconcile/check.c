@@ -108,9 +108,17 @@ static int check_extent_reconcile_phys(struct btree_trans *trans,
 		CLASS(btree_iter, bp_iter)(trans, backpointer_btree(&want.v), want.k.p, 0);
 		struct bkey_s_c bp_k = bkey_try(bch2_btree_iter_peek_slot(&bp_iter));
 
-		/* missing or mismatched backpointers are check_extents_to_backpointers' job */
-		if (bp_k.k->type != KEY_TYPE_backpointer)
+		/*
+		 * Someone else's, or stale: repair it as check_extents_to_backpointers
+		 * would - that only looks where a bucket's sector counts don't add
+		 * up, and a stale backpointer's can. Missing too: replacing a stale
+		 * one deletes it, committing, and a restart loses the insert.
+		 */
+		if (bp_k.k->type != KEY_TYPE_backpointer ||
+		    !bch2_backpointers_match(*bkey_s_c_to_backpointer(bp_k).v, want.v)) {
+			try(bch2_check_bp_exists(trans, k, &want, last_flushed));
 			continue;
+		}
 
 		struct bkey_s_c_backpointer bp = bkey_s_c_to_backpointer(bp_k);
 		enum reconcile_work_id want_w = BACKPOINTER_RECONCILE_PHYS(&want.v);
@@ -257,39 +265,6 @@ static int check_reconcile_work_data_btree(struct btree_trans *trans,
 	}
 }
 
-/*
- * The "set, shouldn't be" direction, from the backpointer alone: the bit is
- * only right on a rotational device, and has to match the extent's logical
- * work entry - which check_reconcile_work_data_btrees() has already made
- * consistent with the extent. Only backpointers with the bit set pay for the
- * lookup.
- */
-static int backpointer_reconcile_phys_want(struct btree_trans *trans,
-					   struct bkey_s_c_backpointer bp)
-{
-	if (bp.v->level || !bch2_dev_rotational(trans->c, bp.k->p.inode))
-		return RECONCILE_WORK_none;
-
-	struct bpos pos = data_to_rb_work_pos(bp.v->btree_id, bp.v->pos);
-
-	static const enum reconcile_work_id ids[] = {
-		RECONCILE_WORK_hipri,
-		RECONCILE_WORK_normal,
-	};
-	for (unsigned i = 0; i < ARRAY_SIZE(ids); i++) {
-		CLASS(btree_iter, iter)(trans, reconcile_work_btree[ids[i]], pos,
-					BTREE_ITER_all_snapshots);
-		struct bkey_s_c k = bch2_btree_iter_peek_slot(&iter);
-		int ret = bkey_err(k);
-		if (ret)
-			return ret;
-		if (k.k->type == KEY_TYPE_set)
-			return ids[i];
-	}
-
-	return RECONCILE_WORK_none;
-}
-
 static int check_reconcile_work_phys_one(struct btree_trans *trans,
 					 struct btree_iter *bp_iter,
 					 struct btree_iter *r_w,
@@ -324,20 +299,38 @@ static int check_reconcile_work_phys_one(struct btree_trans *trans,
 		? BACKPOINTER_RECONCILE_PHYS(bkey_s_c_to_backpointer(bp).v)
 		: 0;
 
+	/*
+	 * The "set, shouldn't be" direction: what the bit should be is what the
+	 * backpointer's extent says, computed as bch2_extent_ptr_to_bp() does -
+	 * so this and the data btrees direction can't disagree. Only
+	 * backpointers with the bit set pay for the lookup.
+	 */
 	if (w) {
-		int want = backpointer_reconcile_phys_want(trans, bkey_s_c_to_backpointer(bp));
-		if (want < 0)
-			return want;
+		struct bkey_s_c_backpointer bp_v = bkey_s_c_to_backpointer(bp);
+		CLASS(btree_iter_uninit, iter)(trans);
+		struct bkey_s_c k = bkey_try(bch2_backpointer_get_key(trans, bp_v, &iter, 0,
+								  last_flushed));
+		if (!k.k) {
+			/*
+			 * No extent: bch2_backpointer_get_key() reported the
+			 * backpointer and may have deleted it, committing - don't
+			 * touch @bp again. Its phys btree entry goes below.
+			 */
+			bp = (struct bkey_s_c) { .k = &deleted };
+			w = RECONCILE_WORK_none;
+		} else {
+			enum reconcile_work_id want =
+				bch2_bp_reconcile_phys(trans->c, bp_v.v->level, bp_v.k->p.inode, k);
 
-		if (want != w) {
-			try(bch2_btree_write_buffer_maybe_flush(trans, bp, last_flushed));
+			if (want != w) {
+				try(bch2_btree_write_buffer_maybe_flush(trans, bp, last_flushed));
 
-			bool fixed;
-			try(reconcile_phys_wrong(trans, bkey_s_c_to_backpointer(bp), want,
-						 bkey_s_c_null, &fixed));
-			/* the repair moved its phys btree entry too */
-			if (fixed)
-				return 0;
+				bool fixed;
+				try(reconcile_phys_wrong(trans, bp_v, want, k, &fixed));
+				/* the repair moved its phys btree entry too */
+				if (fixed)
+					return 0;
+			}
 		}
 	}
 

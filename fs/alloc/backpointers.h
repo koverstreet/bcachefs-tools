@@ -185,6 +185,18 @@ static inline struct bpos bch2_extent_ptr_to_bp_pos(const struct bch_fs *c, stru
 	}
 }
 
+/*
+ * The reconcile phys bits of a backpointer to @k on @dev: @k's pending work,
+ * when the pointer is a leaf's, on a rotational device.
+ */
+static inline enum reconcile_work_id bch2_bp_reconcile_phys(struct bch_fs *c, unsigned level,
+							     unsigned dev, struct bkey_s_c k)
+{
+	return !level && bch2_dev_rotational(c, dev)
+		? rb_work_id_phys(bch2_bkey_reconcile_work_id(c, k))
+		: RECONCILE_WORK_none;
+}
+
 static inline void bch2_extent_ptr_to_bp(struct bch_fs *c,
 			   enum btree_id btree_id, unsigned level,
 			   struct bkey_s_c k, struct extent_ptr_decoded p,
@@ -202,12 +214,23 @@ static inline void bch2_extent_ptr_to_bp(struct bch_fs *c,
 		.pos		= k.k->p,
 	};
 
-	if (!level && bch2_dev_rotational(c, p.ptr.dev))
-		SET_BACKPOINTER_RECONCILE_PHYS(&bp->v,
-				rb_work_id_phys(bch2_bkey_reconcile_work_id(c, k)));
-
+	SET_BACKPOINTER_RECONCILE_PHYS(&bp->v, bch2_bp_reconcile_phys(c, level, p.ptr.dev, k));
 	SET_BACKPOINTER_ERASURE_CODED(&bp->v, p.has_ec);
 	SET_BACKPOINTER_STRIPE_PTR(&bp->v, p.has_ec && p.ptr.dev == BCH_SB_MEMBER_INVALID);
+}
+
+/*
+ * Whether two backpointers say the same thing, as far as which extent they
+ * belong to: everything but the reconcile phys bits. Those are a cache of the
+ * extent's pending work, stale after a device's rotational flag flips - that's
+ * check_reconcile_work's to repair; it doesn't make a backpointer someone
+ * else's.
+ */
+static inline bool bch2_backpointers_match(struct bch_backpointer l, struct bch_backpointer r)
+{
+	SET_BACKPOINTER_RECONCILE_PHYS(&l, 0);
+	SET_BACKPOINTER_RECONCILE_PHYS(&r, 0);
+	return !memcmp(&l, &r, sizeof(l));
 }
 
 struct wb_maybe_flush;
@@ -215,6 +238,8 @@ struct bkey_s_c bch2_backpointer_get_key(struct btree_trans *, struct bkey_s_c_b
 					 struct btree_iter *, unsigned, struct wb_maybe_flush *);
 struct btree *bch2_backpointer_get_node(struct btree_trans *, struct bkey_s_c_backpointer,
 					struct btree_iter *, struct wb_maybe_flush *);
+int bch2_check_bp_exists(struct btree_trans *, struct bkey_s_c,
+			 struct bkey_i_backpointer *, struct wb_maybe_flush *);
 
 int bch2_check_bucket_backpointer_mismatch(struct btree_trans *, struct bch_dev *, u64,
 					   bool, struct wb_maybe_flush *);
