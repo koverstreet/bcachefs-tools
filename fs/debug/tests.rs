@@ -7,10 +7,7 @@ use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
     CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
-use crate::data::extents::{
-    bkey_extent_entries_mut, bkey_extent_entries_sc, bkey_ptrs_mut, entry_stripe_ptr_mut,
-    extent_entry_type,
-};
+use crate::data::extents::{bkey_extent_entries_mut, bkey_extent_entries_sc, bkey_ptrs_mut};
 use crate::errcode::{
     bch_errcode,
     BchError,
@@ -475,8 +472,6 @@ fn test_btree_ptr_stale_dirty(fs: &Fs, _nr: u64) -> TestRet {
 /// caller must lay down erasure-coded data first (see ec.ktest); this errors
 /// out if no striped extent is found.
 fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
-    const STRIPE_PTR: u32 = c::bch_extent_entry_type::BCH_EXTENT_ENTRY_stripe_ptr.0 as u32;
-
     let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(
         &trans,
@@ -492,19 +487,17 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
             };
 
             let striped = bkey_extent_entries_sc(k)
-                .any(|e| extent_entry_type(e) == STRIPE_PTR);
+                .any(|e| matches!(e, c::BchExtentEntryRef::stripe_ptr(_)));
             if !striped {
                 return Ok(None);
             }
 
             let mut u = t.bkey_make_mut_noupdate(k)?;
             let mut u_k = BkeyS::from(u.as_mut());
-            for entry in bkey_extent_entries_mut(t.fs(), &mut u_k) {
-                if extent_entry_type(entry) == STRIPE_PTR {
-                    let sp = entry_stripe_ptr_mut(entry);
-                    sp.set_block(sp.block() + 1);
-                    break;
-                }
+            let sp = bkey_extent_entries_mut(t.fs(), &mut u_k)
+                .find_map(|e| e.into_arm_mut::<c::bch_extent_stripe_ptr>());
+            if let Some(sp) = sp {
+                sp.set_block(sp.block() + 1);
             }
 
             t.update(&iter, &u, UpdateTriggerFlags::NORUN)?;
