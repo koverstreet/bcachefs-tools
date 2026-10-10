@@ -564,8 +564,6 @@ impl DumpDev {
 
 fn dump_node(fs: &Fs, devs: &mut [DumpDev], k: btree::BkeySC<'_>, btree_node_size: u64,
              single_replica: bool) {
-    let val = k.v();
-
     // Capture the length by value so the filter closure doesn't borrow `devs`,
     // which we mutate via range_add below.
     let ndevs = devs.len();
@@ -577,11 +575,11 @@ fn dump_node(fs: &Fs, devs: &mut [DumpDev], k: btree::BkeySC<'_>, btree_node_siz
     if single_replica {
         // Dump only the replica on the lowest device index; the other ptrs are
         // rewritten to an invalid device in the btree write path.
-        if let Some(ptr) = bkey_ptrs_sc(&val).filter(exists).min_by_key(|p| p.dev()) {
+        if let Some(ptr) = bkey_ptrs_sc(k).filter(exists).min_by_key(|p| p.dev()) {
             range_add(&mut devs[ptr.dev() as usize].btree, ptr.offset() << 9, btree_node_size);
         }
     } else {
-        for ptr in bkey_ptrs_sc(&val).filter(exists) {
+        for ptr in bkey_ptrs_sc(k).filter(exists) {
             range_add(&mut devs[ptr.dev() as usize].btree, ptr.offset() << 9, btree_node_size);
         }
     }

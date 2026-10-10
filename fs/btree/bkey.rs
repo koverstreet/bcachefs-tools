@@ -576,6 +576,32 @@ impl<'a> BkeySC<'a> {
         }
     }
 
+    /// Where in the value its extent entries - its pointers - are: as
+    /// bch2_bkey_ptrs_c(). Empty for a key type without them.
+    fn extent_entry_range(&self) -> core::ops::Range<usize> {
+        use core::mem::{offset_of, size_of};
+
+        let len = self.val_bytes().len();
+        match self.v() {
+            BkeyValSC::btree_ptr(..)    => offset_of!(c::bch_btree_ptr, start)..len,
+            BkeyValSC::extent(..)       => offset_of!(c::bch_extent, start)..len,
+            BkeyValSC::reflink_v(..)    => offset_of!(c::bch_reflink_v, start)..len,
+            BkeyValSC::btree_ptr_v2(..) => offset_of!(c::bch_btree_ptr_v2, start)..len,
+            BkeyValSC::stripe(_, v) => {
+                let start = offset_of!(c::bch_stripe, ptrs);
+                start..(start + v.nr_blocks as usize * size_of::<c::bch_extent_ptr>()).min(len)
+            }
+            _ => 0..0,
+        }
+    }
+
+    /// The value's extent entries - its pointers - as bytes: as
+    /// bch2_bkey_ptrs_c(). Empty for a key type without them, or a value too
+    /// short to hold them.
+    pub fn extent_entry_bytes(&self) -> &'a [u8] {
+        self.val_bytes().get(self.extent_entry_range()).unwrap_or_default()
+    }
+
     pub fn pos(&self) -> c::bpos {
         self.k.p
     }
@@ -662,6 +688,13 @@ impl<'a> BkeyS<'a> {
     pub fn val_bytes_mut(&mut self) -> &mut [u8] {
         let len = self.k.u64s as usize * 8 - core::mem::size_of::<c::bkey>();
         unsafe { core::slice::from_raw_parts_mut(self.v as *mut c::bch_val as *mut u8, len) }
+    }
+
+    /// The value's extent entries as bytes, mutably: as
+    /// BkeySC::extent_entry_bytes().
+    pub fn extent_entry_bytes_mut(&mut self) -> &mut [u8] {
+        let range = self.as_sc().extent_entry_range();
+        self.val_bytes_mut().get_mut(range).unwrap_or_default()
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::btree::bkey::{BkeyS, BkeySC, BkeyValSC};
+use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::errcode::BchError;
 use crate::c;
@@ -76,38 +76,6 @@ pub fn extent_entry_type(entry: &c::bch_extent_entry) -> u32 {
     if t != 0 { t.trailing_zeros() } else { u32::MAX }
 }
 
-/// Pointer past the last val u64 for a bkey.
-///
-/// # Safety
-/// `v` must point to the start of the value region for `k`.
-unsafe fn bkey_val_end(k: &c::bkey, v: *const u8) -> *const c::bch_extent_entry {
-    let val_u64s = k.u64s as usize - size_of::<c::bkey>() / 8;
-    v.add(val_u64s * 8) as *const c::bch_extent_entry
-}
-
-/// Get the start and end pointers for extent entries from a typed bkey.
-fn bkey_ptrs_raw(sc: &BkeyValSC<'_>) -> Option<(*const c::bch_extent_entry, *const c::bch_extent_entry)> {
-    // Safety: all typed value pointers come from BkeyValSC dispatch,
-    // which guarantees they point to valid bkey value data.
-    unsafe { match sc {
-        BkeyValSC::btree_ptr(k, v) =>
-            Some((v.start.as_ptr() as _, bkey_val_end(k, *v as *const _ as _))),
-        BkeyValSC::extent(k, v) =>
-            Some((v.start.as_ptr() as _, bkey_val_end(k, *v as *const _ as _))),
-        BkeyValSC::stripe(_k, v) =>
-            Some((v.ptrs.as_ptr() as _, v.ptrs.as_ptr().add(v.nr_blocks as usize) as _)),
-        BkeyValSC::reflink_v(k, v) =>
-            Some((v.start.as_ptr() as _, bkey_val_end(k, *v as *const _ as _))),
-        BkeyValSC::btree_ptr_v2(k, v) =>
-            Some((v.start.as_ptr() as _, bkey_val_end(k, *v as *const _ as _))),
-        _ => None,
-    } }
-}
-
-fn empty_iter<'a>() -> ExtentEntryIter<'a> {
-    ExtentEntryIter { cur: core::ptr::null(), end: core::ptr::null(), _phantom: PhantomData }
-}
-
 /// Iterator over extent entries within a bkey.
 pub struct ExtentEntryIter<'a> {
     cur: *const c::bch_extent_entry,
@@ -134,19 +102,17 @@ impl<'a> Iterator for ExtentEntryIter<'a> {
     }
 }
 
-/// Iterate over all extent entries in a typed bkey.
+/// Iterate over all extent entries in a bkey.
 ///
 /// Returns an empty iterator for key types that don't have extent entries.
-pub fn bkey_extent_entries_sc<'a>(sc: &BkeyValSC<'a>) -> ExtentEntryIter<'a> {
-    match bkey_ptrs_raw(sc) {
-        Some((start, end)) => ExtentEntryIter { cur: start, end, _phantom: PhantomData },
-        None => empty_iter(),
-    }
+pub fn bkey_extent_entries_sc(k: BkeySC<'_>) -> ExtentEntryIter<'_> {
+    let b = k.extent_entry_bytes().as_ptr_range();
+    ExtentEntryIter { cur: b.start.cast(), end: b.end.cast(), _phantom: PhantomData }
 }
 
 /// Iterate over all extent entries in a `bkey_i`.
 pub fn bkey_extent_entries(k: &c::bkey_i) -> ExtentEntryIter<'_> {
-    bkey_extent_entries_sc(&BkeyValSC::from_bkey_i(k))
+    bkey_extent_entries_sc(k.into())
 }
 
 /// Iterator over extent pointers within a bkey.
@@ -167,14 +133,14 @@ impl<'a> Iterator for ExtentPtrIter<'a> {
     }
 }
 
-/// Iterate over extent pointers in a typed bkey, skipping non-pointer entries.
-pub fn bkey_ptrs_sc<'a>(sc: &BkeyValSC<'a>) -> ExtentPtrIter<'a> {
-    ExtentPtrIter { inner: bkey_extent_entries_sc(sc) }
+/// Iterate over extent pointers in a bkey, skipping non-pointer entries.
+pub fn bkey_ptrs_sc(k: BkeySC<'_>) -> ExtentPtrIter<'_> {
+    ExtentPtrIter { inner: bkey_extent_entries_sc(k) }
 }
 
 /// Iterate over extent pointers in a `bkey_i`.
 pub fn bkey_ptrs(k: &c::bkey_i) -> ExtentPtrIter<'_> {
-    bkey_ptrs_sc(&BkeyValSC::from_bkey_i(k))
+    bkey_ptrs_sc(k.into())
 }
 
 pub struct ExtentEntryIterMut<'a> {
@@ -212,25 +178,8 @@ pub(crate) fn bkey_extent_entries_mut<'a>(
     fs: &'a Fs,
     k:  &'a mut BkeyS<'_>,
 ) -> ExtentEntryIterMut<'a> {
-    // Where the entries are, by the read-only view - as offsets into the
-    // value, taken mutably from its bytes below:
-    let span = {
-        let sc = k.as_sc();
-        let v = sc.v as *const c::bch_val as *const u8;
-        bkey_ptrs_raw(&sc.v()).map(|(start, end)| unsafe {
-            ((start as *const u8).offset_from(v) as usize,
-             (end   as *const u8).offset_from(v) as usize)
-        })
-    };
-    let (start, end) = span.unwrap_or((0, 0));
-    let val = k.val_bytes_mut().as_mut_ptr();
-
-    ExtentEntryIterMut {
-        fs,
-        cur:      unsafe { val.add(start).cast() },
-        end:      unsafe { val.add(end).cast() },
-        _phantom: PhantomData,
-    }
+    let b = k.extent_entry_bytes_mut().as_mut_ptr_range();
+    ExtentEntryIterMut { fs, cur: b.start.cast(), end: b.end.cast(), _phantom: PhantomData }
 }
 
 /// @entry's size in u64s, from this filesystem's table - which can know
@@ -277,7 +226,7 @@ fn extent_entry_is_crc(entry: &c::bch_extent_entry) -> bool {
 
 /// The checksum/compression entries of @k, unpacked: as bkey_for_each_crc().
 pub fn bkey_crcs<'a>(k: BkeySC<'a>) -> impl Iterator<Item = c::bch_extent_crc_unpacked> + 'a {
-    bkey_extent_entries_sc(&k.v())
+    bkey_extent_entries_sc(k)
         .filter(|e| extent_entry_is_crc(e))
         .map(move |e| unsafe {
             c::bch2_extent_crc_unpack(k.k, e as *const _ as *const c::bch_extent_crc)
@@ -305,7 +254,7 @@ pub fn bkey_extent_is_allocation(k: &c::bkey) -> bool {
 /// an extent with unwritten pointers: as bkey_extent_is_reservation().
 pub fn bkey_extent_is_reservation(k: BkeySC<'_>) -> bool {
     k.k.type_ as u32 == c::bch_bkey_type::KEY_TYPE_reservation.0 ||
-        bkey_ptrs_sc(&k.v()).any(|p| p.unwritten() != 0)
+        bkey_ptrs_sc(k).any(|p| p.unwritten() != 0)
 }
 
 /// @k's durability, for reserving space to rewrite it: as

@@ -491,7 +491,7 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
                 return Ok(Some(false));
             };
 
-            let striped = bkey_extent_entries_sc(&k.v())
+            let striped = bkey_extent_entries_sc(k)
                 .any(|e| extent_entry_type(e) == STRIPE_PTR);
             if !striped {
                 return Ok(None);
