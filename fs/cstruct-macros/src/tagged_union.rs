@@ -57,6 +57,13 @@
 //! as_bytes() can read any of them. A literal of the storage could leave
 //! some unwritten, as could an arm with padding; nothing makes either.
 //!
+//! Or the storage is another's - `pub struct disk_accounting_pos in
+//! c::disk_accounting_pos`, bindgen's while C defines it - and what's
+//! generated is only the view of it: no storage and no C, the arms' types
+//! another's too. Without the storage's definition, the arms are found where
+//! a `packed` struct has them, right after the tag, or for a union where it
+//! has them, at its start; the asserts check each fits there.
+//!
 //! The arms come from an x-macro list: tagged_union! hands the declaration to
 //! it - LIST!(cstruct_macros::__tagged_union [decl]) - and the list calls
 //! back with its entries, each bound to the params, `..` the rest, and
@@ -272,12 +279,14 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Token
     let flex = "crate::util::vstructs::Flex";
     let flex_error = "crate::util::vstructs::FlexError";
     // The storage: the type the views are of
-    let s_ty = name.clone();
+    let s_ty = tu.storage.clone().unwrap_or_else(|| name.clone());
     let s_size = format!("::core::mem::size_of::<{s_ty}>()");
 
     // The storage, as C has it: for a struct, the tag then the arms' union
     // (with types of their own, C's anonymous struct and union); for a union,
-    // the arms.
+    // the arms. Or none, the storage being another's: a struct's tag is then
+    // at its start, and its arms right after - `packed`, as the parser
+    // requires.
     let arm_fields: String = arms.iter()
         .map(|a| format!("    {vis} {}: {},\n", a.name, a.ty))
         .collect();
@@ -290,7 +299,29 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Token
     } else {
         storage_attrs
     };
-    let (storage, payload_offset, determinant) = if tu.union {
+    let (storage, payload_offset, determinant) = if tu.storage.is_some() && tu.union {
+        (String::new(), "0".to_string(), tu.by.clone().unwrap_or_default())
+    } else if tu.storage.is_some() {
+        let det = format!("{name}__tag");
+        (format!("/// {name}'s tag: the storage's first bytes.\n\
+                  #[doc(hidden)]\n\
+                  #[allow(non_camel_case_types)]\n\
+                  {vis} struct {det};\n\
+                  \n\
+                  impl {det_trait}<{s_ty}> for {det} {{\n\
+                      type Tag = {tag_ty};\n\
+                      fn get(u: &{s_ty}) -> {tag_ty} {{\n\
+                          // SAFETY: the tag is plain data, at the storage's start\n\
+                          unsafe {{ u.as_bytes().as_ptr().cast::<{tag_ty}>().read_unaligned() }}\n\
+                      }}\n\
+                      fn set(u: &mut {s_ty}, tag: {tag_ty}) {{\n\
+                          // SAFETY: a write of plain data, where get() reads it\n\
+                          unsafe {{ (u as *mut {s_ty}).cast::<{tag_ty}>().write_unaligned(tag) }}\n\
+                      }}\n\
+                  }}\n"),
+         format!("::core::mem::size_of::<{tag_ty}>()"),
+         det)
+    } else if tu.union {
         (format!("{attrs}{packed_attrs}{vis} union {name} {{\n{arm_fields}{pad_field}}}\n"),
          "0".to_string(),
          tu.by.clone().unwrap_or_default())
@@ -370,12 +401,17 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Token
         .map(|p| format!("const _: () = assert!({s_size} == ::core::mem::size_of::<{p}>(),\n\
                           \"tagged_union! {name}: bigger than its pad\");\n"))
         .unwrap_or_default();
-    let nums = [
-        format!("::core::mem::size_of::<{name}>() as u64"),
-        format!("::core::mem::align_of::<{name}>() as u64"),
-        format!("{payload_offset} as u64"),
-    ];
-    let c_record = record(&tagged_union_record_text(tu, arms), &nums);
+    // The C: another's storage has its own
+    let c_record = if tu.storage.is_none() {
+        let nums = [
+            format!("::core::mem::size_of::<{name}>() as u64"),
+            format!("::core::mem::align_of::<{name}>() as u64"),
+            format!("{payload_offset} as u64"),
+        ];
+        record(&tagged_union_record_text(tu, arms), &nums)
+    } else {
+        String::new()
+    };
 
     format!(
         "{storage}\

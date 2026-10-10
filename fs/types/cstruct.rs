@@ -510,12 +510,19 @@ pub struct CTaggedArm {
 /// value`, which is the form its record has. The arms' types can be defined
 /// in the block too, `[#[...]] [pub] struct|union NAME { ... }`: they go to
 /// nestify::nest!, with the declaration's `#[...]*`.
+///
+/// Or the storage is another's, `struct NAME in STORAGE` - bindgen's, while
+/// C still defines the type - and what's generated is only the typed view of
+/// it; its arms' types are another's too.
 #[derive(Debug)]
 pub struct CTaggedUnion {
     pub cfg:       Option<Cfg>,
     pub name:      String,
     /// `union NAME`: no stored tag - the arms alone.
     pub union:     bool,
+    /// `in STORAGE`: the storage is that type, defined elsewhere - bindgen's,
+    /// say - and its C too; what's generated is the typed view of it.
+    pub storage:   Option<String>,
     /// The tag's name: for a `struct`, its field; for either, the accessor.
     pub tag_field: String,
     pub tag_ty:    String,
@@ -1494,10 +1501,10 @@ fn parse_extern(body: &[Tok], cfg: Option<Cfg>) -> Result<CExtern, String> {
     Ok(ex)
 }
 
-/// tagged_union!'s body: `[vis] struct|union NAME { tag NAME: TYPE = TAG_ENUM
-/// [by DETERMINANT], arms from LIST(params) => template | arm NAME: TYPE =
-/// VALUE, ..., [pad: TYPE] }` - `by` for a union, and only for a union: a
-/// struct's tag is its stored field.
+/// tagged_union!'s body: `[vis] struct|union NAME [in STORAGE] { tag NAME: TYPE
+/// = TAG_ENUM [by DETERMINANT], arms from LIST(params) => template | arm NAME:
+/// TYPE = VALUE, ..., [pad: TYPE] }` - `by` for a union, and only for a union:
+/// a struct's tag is its stored field.
 fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, String> {
     // `#[...]*`: for the arm types defined here, not the storage
     let mut i = 0;
@@ -1511,14 +1518,26 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
         }
     }
     let i = skip_vis(body, i)?;
-    let (union, name, inner) = match &body[i..] {
-        [Tok::Ident(s), Tok::Ident(name), Tok::Punct('{'), inner @ .., Tok::Punct('}')]
-            if s == "struct" || s == "union" => (s == "union", name.clone(), inner),
-        _ => return Err("tagged_union!: expected struct|union NAME { ... }".into()),
+    const EXPECTED: &str = "tagged_union!: expected struct|union NAME [in STORAGE] { ... }";
+    let (union, name, rest) = match &body[i..] {
+        [Tok::Ident(s), Tok::Ident(name), rest @ ..] if s == "struct" || s == "union" =>
+            (s == "union", name.clone(), rest),
+        _ => return Err(EXPECTED.into()),
     };
-    let mut tu = CTaggedUnion { cfg, name, union, tag_field: String::new(), tag_ty: String::new(),
-                                tag_enum: String::new(), by: None, from: None, arms: Vec::new(),
-                                pad: None, packed: false, arm_attrs, defs: Vec::new() };
+    let open = rest.iter().position(|t| t.is_punct('{')).ok_or(EXPECTED)?;
+    let storage = match &rest[..open] {
+        [] => None,
+        [Tok::Ident(kw), path @ ..] if kw == "in" && !path.is_empty() => Some(tokens_to_rust(path)),
+        _ => return Err(EXPECTED.into()),
+    };
+    let inner = match &rest[open..] {
+        [Tok::Punct('{'), inner @ .., Tok::Punct('}')] => inner,
+        _ => return Err(EXPECTED.into()),
+    };
+    let mut tu = CTaggedUnion { cfg, name, union, storage, tag_field: String::new(),
+                                tag_ty: String::new(), tag_enum: String::new(), by: None,
+                                from: None, arms: Vec::new(), pad: None, packed: false, arm_attrs,
+                                defs: Vec::new() };
     for item in split_commas(inner) {
         let eq = item.iter().rposition(|t| t.is_punct('='));
         match item {
@@ -1569,6 +1588,18 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
         (false, Some(_)) => return Err(format!("tagged_union! {}: a struct's tag is its stored \
                                                 field - `by` is for a union", tu.name)),
         _ => {}
+    }
+    if tu.storage.is_some() {
+        if let Some(d) = tu.defs.first() {
+            return Err(format!("tagged_union! {}: {} is defined here, but the storage is \
+                                another's - `in STORAGE` - and so are its arms' types",
+                               tu.name, d.name));
+        }
+        if !tu.union && !tu.packed {
+            return Err(format!("tagged_union! {}: over another's storage, a struct must be \
+                                `packed`: its arms are found right after the tag",
+                               tu.name));
+        }
     }
     Ok(tu)
 }
