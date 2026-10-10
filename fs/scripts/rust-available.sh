@@ -97,9 +97,8 @@ vendored)
 	lib_src=${RUST_LIB_SRC:-$("$RUSTC" --print sysroot 2>/dev/null)/lib/rustlib/src/rust/library}
 	core=$lib_src/core/src/lib.rs
 	[ -r "$core" ] || miss "rust-src not found (no $core - with rustup: rustup component add rust-src; or set RUST_LIB_SRC)"
-	for f in scripts/generate_rust_target.rs include/generated/rustc_cfg; do
-		[ -r "$KERNEL_OBJ/$f" ] || miss "kernel tree has no $f"
-	done
+	[ -r "$KERNEL_OBJ/include/generated/rustc_cfg" ] ||
+		miss "kernel tree has no include/generated/rustc_cfg"
 
 	# What init/Kconfig won't build Rust with, for reasons that hold for
 	# ours: nothing makes our bindings follow randomized struct layouts
