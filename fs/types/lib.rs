@@ -118,6 +118,14 @@ pub trait Determinant<U> {
     fn set(u: &mut U, tag: Self::Tag);
 }
 
+/// An arm of tagged_union! U, by its type: the tag that selects it - for what's
+/// generic over the arms, U::from_arm(). tagged_union! implements it for each
+/// arm, so two arms of one type are an error.
+pub trait ArmOf<U> {
+    type Tag;
+    const TAG: Self::Tag;
+}
+
 /// Empty, as C's `= {}`: nothing allocated.
 impl<T> Default for DArray<T> {
     fn default() -> Self {
