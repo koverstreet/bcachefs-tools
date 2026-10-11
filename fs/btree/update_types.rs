@@ -15,7 +15,7 @@ c_xmacro! {
          "pin journal entry referred to by trans->journal_res.seq"),
         (no_skip_noops, "don't drop noop updates"),
         (journal_reclaim,
-         "operation required for journal reclaim; may return error"
+         "operation required for journal reclaim; may return error "
          "instead of deadlocking if BCH_WATERMARK_reclaim not specified"),
         (journal_replay, "in journal replay"),
         (skip_accounting_apply, "we're in journal replay - accounting updates have already been applied"),
