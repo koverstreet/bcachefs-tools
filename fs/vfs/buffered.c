@@ -107,6 +107,14 @@ static void readpage_bio_drop_unissued(struct bch_read_bio *rbio)
 struct readpages_iter {
 	struct address_space	*mapping;
 	unsigned		idx;
+	/*
+	 * Extra gfp flags OR'd into sibling-folio allocations in
+	 * readpage_bio_extend()'s get_more branch. Zero for the readahead
+	 * path (bit-identical to before); __GFP_NORETRY|__GFP_NOWARN for the
+	 * opportunistic single-folio sibling-populate path, which must stay
+	 * self-limiting and must not warn on failure.
+	 */
+	gfp_t			extra_gfp;
 	folios			folios;
 };
 
@@ -188,9 +196,10 @@ static inline struct folio *__readpage_alloc_folio(gfp_t gfp, unsigned order)
  */
 static struct folio *readpage_alloc_folio(struct btree_trans *trans,
 					  struct address_space *mapping,
-					  unsigned order)
+					  unsigned order,
+					  gfp_t extra_gfp)
 {
-	gfp_t gfp = readahead_gfp_mask(mapping);
+	gfp_t gfp = readahead_gfp_mask(mapping) | extra_gfp;
 
 	struct folio *folio = __readpage_alloc_folio(gfp & ~__GFP_DIRECT_RECLAIM, order);
 	if (!folio) {
@@ -249,7 +258,8 @@ static int readpage_bio_extend(struct btree_trans *trans,
 			if (folio && !xa_is_value(folio))
 				break;
 
-			folio = readpage_alloc_folio(trans, iter->mapping, order);
+			folio = readpage_alloc_folio(trans, iter->mapping, order,
+						     iter->extra_gfp);
 			if (!folio)
 				break;
 
@@ -478,6 +488,40 @@ static void bch2_read_single_folio_end_io(struct bio *bio)
 	complete(bio->bi_private);
 }
 
+/*
+ * Completion for the opportunistic sibling-populate path (Mechanism B,
+ * read_sibling_populate). The bio holds the caller's target folio at index 0,
+ * followed by the sibling folios readpage_bio_extend() allocated to cover the
+ * rest of the extent fragment being decoded.
+ *
+ * The lifecycle obeys the proven protocol (rfc/980, FolioLifecycle.lean):
+ *   - obligation 1: we end ONLY the siblings, never the target - the target is
+ *     owned by the synchronous caller, which marks it uptodate and unlocks it
+ *     after wait_for_completion();
+ *   - obligation 2: each agent fires once - this completion ends every sibling
+ *     exactly once, the caller ends the target exactly once;
+ *   - obligation 4: a folio inserted by readpage_bio_extend() is Locked, so
+ *     folio_end_read() on it is legal.
+ * We do not bio_put() here: the sync caller owns and puts the bio (unlike
+ * bch2_readpages_end_io(), where the completion owns it).
+ */
+static void bch2_read_folio_populate_end_io(struct bio *bio)
+{
+	struct bch_read_bio *rbio = to_rbio(bio);
+	struct folio *target = page_folio(bio->bi_io_vec[0].bv_page);
+	struct folio_iter fi;
+
+	/* a stale partially_uptodate would spin do_read_cache_folio() forever: */
+	struct folio *last = page_folio(bio->bi_io_vec[bio->bi_vcnt - 1].bv_page);
+	struct folio *partial = bch2_folio(last)->partially_uptodate ? last : NULL;
+
+	bio_for_each_folio_all(fi, bio)
+		if (fi.folio != target)
+			folio_end_read(fi.folio, !rbio->ret && fi.folio != partial);
+
+	complete(bio->bi_private);
+}
+
 int bch2_read_single_folio(struct folio *folio, struct address_space *mapping)
 {
 	struct bch_inode_info *inode = to_bch_ei(mapping->host);
@@ -497,19 +541,48 @@ int bch2_read_single_folio(struct folio *folio, struct address_space *mapping)
 
 	bch2_inode_opts_get_inode(c, &inode->ei_inode, &opts);
 
-	rbio = rbio_init(bio_alloc_bioset(NULL, 1, REQ_OP_READ, GFP_KERNEL, &c->bio_read),
+	/*
+	 * Mechanism B (issue #980): when enabled, widen the bio so
+	 * readpage_bio_extend() can pre-add the sibling folios of the extent
+	 * fragment we are about to decode anyway (compressed/checksummed
+	 * extents only - extent_partial_reads_expensive()), so a later read
+	 * into the same fragment issues no I/O. Default-off; when off this is
+	 * bit-identical to a plain single-folio read.
+	 */
+	bool populate = c->opts.read_sibling_populate;
+	unsigned nr_vecs = 1;
+	struct readpages_iter readpages_iter = {};
+
+	if (populate) {
+		/*
+		 * The fragment can be at most encoded_extent_max bytes; that
+		 * bounds the folios we may pre-add. The live fragment span (the
+		 * min() at read.c:1795) does the actual correctness clamp.
+		 */
+		nr_vecs = clamp_t(unsigned, c->opts.encoded_extent_max >> PAGE_SHIFT,
+				  1, BIO_MAX_VECS);
+		readpages_iter.mapping	= mapping;
+		readpages_iter.extra_gfp = __GFP_NORETRY|__GFP_NOWARN;
+	}
+
+	rbio = rbio_init(bio_alloc_bioset(NULL, nr_vecs, REQ_OP_READ, GFP_KERNEL, &c->bio_read),
 			 c,
 			 opts,
-			 bch2_read_single_folio_end_io);
+			 populate
+			 ? bch2_read_folio_populate_end_io
+			 : bch2_read_single_folio_end_io);
 	rbio->bio.bi_private = &done;
 	rbio->bio.bi_opf = REQ_OP_READ|REQ_SYNC;
 	rbio->bio.bi_iter.bi_sector = folio_sector(folio);
 	bio_add_folio_nofail(&rbio->bio, folio, folio_size(folio), 0);
 
 	blk_start_plug(&plug);
-	bch2_trans_run(c, (bchfs_read(trans, rbio, inode_inum(inode), NULL), 0));
+	bch2_trans_run(c, (bchfs_read(trans, rbio, inode_inum(inode),
+				      populate ? &readpages_iter : NULL), 0));
 	blk_finish_plug(&plug);
 	wait_for_completion(&done);
+
+	darray_exit(&readpages_iter.folios);
 
 	ret = bch2_err_class(rbio->ret);
 	bio_put(&rbio->bio);

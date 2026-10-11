@@ -286,6 +286,15 @@ enum fsck_err_opts {
 	  OPT_BOOL(),							\
 	  BCH_SB_PROMOTE_WHOLE_EXTENTS,	true,				\
 	  NULL,		"Promote whole extents, instead of just part being read")\
+	x(read_sibling_populate,	u8,				\
+	  OPT_FS|OPT_MOUNT|OPT_RUNTIME,					\
+	  OPT_BOOL(),							\
+	  BCH2_NO_SB_OPT,		false,				\
+	  NULL,		"On a single-folio buffered read of a checksummed or\n"\
+			"compressed extent, populate the page cache with the\n"\
+			"other folios of the same extent fragment that is\n"\
+			"decoded anyway, so later reads into that fragment\n"\
+			"issue no I/O (opportunistic; default off)")		\
 	x(acl,				u8,				\
 	  OPT_FS|OPT_FORMAT|OPT_MOUNT,					\
 	  OPT_BOOL(),							\
