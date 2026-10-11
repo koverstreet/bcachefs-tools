@@ -354,10 +354,6 @@ u32 bch2_snapshot_tree_next(struct bch_fs *, u32, unsigned *);
 	     _id && _id <= _start;					\
 	     _id = bch2_snapshot_tree_next(_c, _id, _depth))
 
-int bch2_check_snapshot_trees(struct bch_fs *);
-int bch2_check_snapshots(struct bch_fs *);
-int bch2_reconstruct_snapshots(struct bch_fs *);
-
 static inline int bch2_check_key_has_snapshot(struct btree_trans *trans,
 					      struct btree_iter *iter,
 					      struct bkey_s_c k)

@@ -156,7 +156,4 @@ static inline bool subvol_inum_eq(subvol_inum a, subvol_inum b)
 	return a.subvol == b.subvol && a.inum == b.inum;
 }
 
-int bch2_delete_dead_inodes(struct bch_fs *);
-int bch2_kill_i_generation_keys(struct bch_fs *);
-
 #endif /* _BCACHEFS_INODE_H */
