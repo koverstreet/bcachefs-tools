@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use zerocopy::byteorder::little_endian as le;
+use crate::types::Le64;
 use cstruct_macros::{c_enum, c_xmacro, CStruct};
 use typeinfo_macros::TypeInfo;
 
@@ -178,5 +178,5 @@ c_enum! {
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_sb_field_counters {
     pub field: c::bch_sb_field,
-    pub d: [le::U64; 0],
+    pub d: [Le64; 0],
 }

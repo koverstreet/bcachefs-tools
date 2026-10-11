@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
-use zerocopy::byteorder::little_endian as le;
+use crate::types::{Le16, Le32};
 use cstruct_macros::CStruct;
 use typeinfo_macros::TypeInfo;
 
@@ -10,22 +10,22 @@ use typeinfo_macros::TypeInfo;
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_typedef]
 pub struct bch_acl_entry {
-    pub e_tag: le::U16,
-    pub e_perm: le::U16,
-    pub e_id: le::U32,
+    pub e_tag: Le16,
+    pub e_perm: Le16,
+    pub e_id: Le32,
 }
 
 #[repr(C, align(2))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_typedef]
 pub struct bch_acl_entry_short {
-    pub e_tag: le::U16,
-    pub e_perm: le::U16,
+    pub e_tag: Le16,
+    pub e_perm: Le16,
 }
 
 #[repr(C, align(4))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_typedef]
 pub struct bch_acl_header {
-    pub a_version: le::U32,
+    pub a_version: Le32,
 }

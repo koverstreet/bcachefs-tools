@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use zerocopy::byteorder::little_endian as le;
+use crate::types::{Le32, Le64};
 use cstruct_macros::{c_enum, CStruct};
 use typeinfo_macros::TypeInfo;
 
@@ -30,8 +30,8 @@ c_enum! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_quota_counter {
-    pub hardlimit: le::U64,
-    pub softlimit: le::U64,
+    pub hardlimit: Le64,
+    pub softlimit: Le64,
 }
 
 #[repr(C, align(8))]
@@ -46,14 +46,14 @@ pub struct bch_quota {
 #[repr(C, align(4))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_sb_quota_counter {
-    pub timelimit: le::U32,
-    pub warnlimit: le::U32,
+    pub timelimit: Le32,
+    pub warnlimit: Le32,
 }
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_sb_quota_type {
-    pub flags: le::U64,
+    pub flags: Le64,
     pub c: [c::bch_sb_quota_counter; c::Q_COUNTERS as usize],
 }
 

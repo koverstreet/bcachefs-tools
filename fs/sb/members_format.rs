@@ -3,8 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{c_default, Le32, Le64};
-use zerocopy::byteorder::little_endian as le;
+use crate::types::{c_default, Le16, Le32, Le64};
 use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct};
 use typeinfo_macros::TypeInfo;
 
@@ -65,16 +64,16 @@ c_enum! {
 #[derive(Clone, Copy, CStruct, TypeInfo)]
 pub struct bch_member {
     pub uuid: c::__uuid_t,
-    pub nbuckets: le::U64, /* device size */
-    pub first_bucket: le::U16, /* index of first bucket used */
-    pub bucket_size: le::U16, /* sectors */
+    pub nbuckets: Le64, /* device size */
+    pub first_bucket: Le16, /* index of first bucket used */
+    pub bucket_size: Le16, /* sectors */
     pub btree_bitmap_shift: u8,
     pub pad: [u8; 3],
-    pub last_mount: le::U64, /* time_t */
+    pub last_mount: Le64, /* time_t */
 
-    pub flags: le::U64,
-    pub iops: [le::U32; 4],
-    pub errors: [le::U64; c::BCH_MEMBER_ERROR_NR as usize],
+    pub flags: Le64,
+    pub iops: [Le32; 4],
+    pub errors: [Le64; c::BCH_MEMBER_ERROR_NR as usize],
     pub errors_at_reset: [Le64; c::BCH_MEMBER_ERROR_NR as usize],
     pub errors_reset_time: Le64,
     pub seq: Le64,
@@ -195,7 +194,7 @@ pub struct bch_sb_field_members_v1 {
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_sb_field_members_v2 {
     pub field: c::bch_sb_field,
-    pub member_bytes: le::U16, //size of single member entry
+    pub member_bytes: Le16, //size of single member entry
     pub pad: [u8; 6],
     pub _members: [c::bch_member; 0],
 }

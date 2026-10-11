@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use zerocopy::byteorder::little_endian as le;
+use crate::types::Le64;
 use cstruct_macros::{c_const, c_enum, c_xmacro, CStruct};
 use typeinfo_macros::TypeInfo;
 
@@ -12,7 +12,7 @@ use typeinfo_macros::TypeInfo;
 #[c_packed]
 pub struct bch_lru {
     pub v: c::bch_val,
-    pub idx: le::U64,
+    pub idx: Le64,
 }
 
 c_xmacro! {

@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use core::ffi::{c_int, c_void};
-use zerocopy::byteorder::little_endian as le;
+use crate::types::Le64;
 use cstruct_macros::{c_const, c_extern, CStruct};
 
 c_const! {
@@ -26,8 +26,8 @@ pub type SIPHASH_CTX = _SIPHASH_CTX;
 #[derive(Clone, Copy, Default, CStruct)]
 #[c_typedef]
 pub struct SIPHASH_KEY {
-    pub k0: le::U64,
-    pub k1: le::U64,
+    pub k0: Le64,
+    pub k1: Le64,
 }
 
 c_extern! {

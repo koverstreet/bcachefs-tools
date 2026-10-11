@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use zerocopy::byteorder::little_endian as le;
+use crate::types::{Le32, Le64};
 use cstruct_macros::{c_enum, CStruct};
 use typeinfo_macros::TypeInfo;
 
@@ -19,10 +19,10 @@ c_enum! {
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_logged_op_truncate {
     pub v: c::bch_val,
-    pub subvol: le::U32,
-    pub pad: le::U32,
-    pub inum: le::U64,
-    pub new_i_size: le::U64,
+    pub subvol: Le32,
+    pub pad: Le32,
+    pub inum: Le64,
+    pub new_i_size: Le64,
 }
 
 c_enum! {
@@ -40,11 +40,11 @@ pub struct bch_logged_op_finsert {
     pub v: c::bch_val,
     pub state: u8,
     pub pad: [u8; 3],
-    pub subvol: le::U32,
-    pub inum: le::U64,
-    pub dst_offset: le::U64,
-    pub src_offset: le::U64,
-    pub pos: le::U64,
+    pub subvol: Le32,
+    pub inum: Le64,
+    pub dst_offset: Le64,
+    pub src_offset: Le64,
+    pub pos: Le64,
 }
 
 /*
@@ -64,17 +64,17 @@ pub struct bch_logged_op_finsert {
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_logged_op_inode_opt_propagate {
     pub v: c::bch_val,
-    pub inum: le::U64,
-    pub origin_snapshot: le::U32,
-    pub cursor_snapshot: le::U32,
+    pub inum: Le64,
+    pub origin_snapshot: Le32,
+    pub cursor_snapshot: Le32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_logged_op_stripe_update {
     pub v: c::bch_val,
-    pub old_idx: le::U64,
-    pub new_idx: le::U64,
+    pub old_idx: Le64,
+    pub new_idx: Le64,
     pub old_blocks_nr: u8,
     pub old_block_map: [u8; 16],
     pub pad: [u8; 7],

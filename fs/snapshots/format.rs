@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use zerocopy::byteorder::little_endian as le;
+use crate::types::{Le32, Le64};
 use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct};
 use typeinfo_macros::TypeInfo;
 
@@ -16,9 +16,9 @@ c_const! {
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_subvolume {
     pub v: c::bch_val,
-    pub flags: le::U32,
-    pub snapshot: le::U32,
-    pub inode: le::U64,
+    pub flags: Le32,
+    pub snapshot: Le32,
+    pub inode: Le64,
     /*
      * Snapshot subvolumes form a tree, separate from the snapshot nodes
      * tree - if this subvolume is a snapshot, this is the ID of the
@@ -27,12 +27,12 @@ pub struct bch_subvolume {
      * This is _not_ necessarily the subvolume of the directory containing
      * this subvolume:
      */
-    pub creation_parent: le::U32,
-    pub fs_path_parent: le::U32,
+    pub creation_parent: Le32,
+    pub fs_path_parent: Le32,
     pub otime: c::bch_le128,
 
-    pub state: le::U32,
-    pub pad: le::U32,
+    pub state: Le32,
+    pub pad: Le32,
 }
 
 c_xmacro! {
@@ -75,18 +75,18 @@ c_bitmask! {
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_snapshot {
     pub v: c::bch_val,
-    pub flags: le::U32,
-    pub parent: le::U32,
-    pub children: [le::U32; 2],
-    pub subvol: le::U32,
+    pub flags: Le32,
+    pub parent: Le32,
+    pub children: [Le32; 2],
+    pub subvol: Le32,
     /* corresponds to a bch_snapshot_tree in BTREE_ID_snapshot_trees */
-    pub tree: le::U32,
-    pub depth: le::U32,
-    pub skip: [le::U32; 3],
+    pub tree: Le32,
+    pub depth: Le32,
+    pub skip: [Le32; 3],
     pub btime: c::bch_le128,
 
-    pub state: le::U32,
-    pub pad: le::U32,
+    pub state: Le32,
+    pub pad: Le32,
 }
 
 c_xmacro! {
@@ -192,6 +192,6 @@ c_bitmask! {
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_snapshot_tree {
     pub v: c::bch_val,
-    pub master_subvol: le::U32,
-    pub root_snapshot: le::U32,
+    pub master_subvol: Le32,
+    pub root_snapshot: Le32,
 }

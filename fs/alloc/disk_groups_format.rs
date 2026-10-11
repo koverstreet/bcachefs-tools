@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use zerocopy::byteorder::little_endian as le;
+use crate::types::Le64;
 use cstruct_macros::{c_bitmask, c_const, CStruct};
 use typeinfo_macros::TypeInfo;
 
@@ -17,7 +17,7 @@ c_const! {
 #[c_packed]
 pub struct bch_disk_group {
     pub label: [u8; c::BCH_SB_LABEL_SIZE as usize],
-    pub flags: [le::U64; 2],
+    pub flags: [Le64; 2],
 }
 
 c_bitmask! {

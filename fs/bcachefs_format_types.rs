@@ -71,8 +71,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{c_default, Le32, Le64};
-use zerocopy::byteorder::little_endian as le;
+use crate::types::{c_default, Le16, Le32, Le64};
 use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, CStruct};
 #[cfg(__KERNEL__)]
 use cstruct_macros::c_typedef;
@@ -91,7 +90,7 @@ pub struct bkey_format {
     pub nr_fields: u8,
     /* One unused slot for now: */
     pub bits_per_field: [u8; 6],
-    pub field_offset: [le::U64; 6],
+    pub field_offset: [Le64; 6],
 }
 
 /* Btree keys - all units are in sectors */
@@ -259,8 +258,8 @@ c_default!(bkey_packed);
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_typedef]
 pub struct bch_le128 {
-    pub lo: le::U64,
-    pub hi: le::U64,
+    pub lo: Le64,
+    pub hi: Le64,
 }
 
 c_const! {
@@ -504,7 +503,7 @@ c_enum! {
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_cookie {
     pub v: c::bch_val,
-    pub cookie: le::U64,
+    pub cookie: Le64,
 }
 
 #[repr(C)]
@@ -524,8 +523,8 @@ pub struct bch_set {
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
 pub struct bch_csum {
-    pub lo: le::U64,
-    pub hi: le::U64,
+    pub lo: Le64,
+    pub hi: Le64,
 }
 
 #[repr(C, align(8))]
@@ -573,8 +572,8 @@ c_bitmask! {
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_sb_field {
     pub _data: [u64; 0],
-    pub u64s: le::U32,
-    pub type_: le::U32,
+    pub u64s: Le32,
+    pub type_: Le32,
 }
 
 c_xmacro! {
@@ -847,14 +846,14 @@ c_const! {
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_sb_field_journal {
     pub field: c::bch_sb_field,
-    pub buckets: [le::U64; 0],
+    pub buckets: [Le64; 0],
 }
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_sb_field_journal_v2_entry {
-    pub start: le::U64,
-    pub nr: le::U64,
+    pub start: Le64,
+    pub nr: Le64,
 }
 
 #[repr(C)]
@@ -870,19 +869,19 @@ pub struct bch_sb_field_journal_v2 {
 #[repr(C, align(4))]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct nonce {
-    pub d: [le::U32; 4],
+    pub d: [Le32; 4],
 }
 
 #[repr(C, align(8))]
 #[derive(Default, CStruct, TypeInfo)]
 pub struct bch_key {
-    pub key: [le::U64; 4],
+    pub key: [Le64; 4],
 }
 
 #[repr(C)]
 #[derive(Default, CStruct, TypeInfo)]
 pub struct bch_encrypted_key {
-    pub magic: le::U64,
+    pub magic: Le64,
     pub key: c::bch_key,
 }
 
@@ -898,8 +897,8 @@ pub struct bch_encrypted_key {
 pub struct bch_sb_field_crypt {
     pub field: c::bch_sb_field,
 
-    pub flags: le::U64,
-    pub kdf_flags: le::U64,
+    pub flags: Le64,
+    pub kdf_flags: Le64,
     pub key: c::bch_encrypted_key,
 }
 
@@ -933,7 +932,7 @@ c_bitmask! {
 #[repr(C)]
 #[derive(Default, CStruct)]
 pub struct jset_entry {
-    pub u64s: le::U16,
+    pub u64s: Le16,
     pub btree_id: u8,
     pub level: u8,
     pub type_: u8, /* designates what this jset holds */
@@ -948,10 +947,10 @@ pub struct jset_entry {
 pub struct bch_sb_field_clean {
     pub field: c::bch_sb_field,
 
-    pub flags: le::U32,
-    pub _read_clock: le::U16, /* no longer used */
-    pub _write_clock: le::U16,
-    pub journal_seq: le::U64,
+    pub flags: Le32,
+    pub _read_clock: Le16, /* no longer used */
+    pub _write_clock: Le16,
+    pub journal_seq: Le64,
 
     pub start: [c::jset_entry; 0],
     pub _data: [u64; 0],
@@ -961,16 +960,16 @@ pub struct bch_sb_field_clean {
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_sb_field_ext {
     pub field: c::bch_sb_field,
-    pub recovery_passes_required: [le::U64; 2],
-    pub errors_silent: [le::U64; 8],
-    pub btrees_lost_data: le::U64,
-    pub flags0: le::U64,
+    pub recovery_passes_required: [Le64; 2],
+    pub errors_silent: [Le64; 8],
+    pub btrees_lost_data: Le64,
+    pub flags0: Le64,
     /*
      * Like btrees_lost_data, but never cleared - btrees_lost_data gates
      * reconstruction and is cleared when repair completes; this is the
      * forensic record of every btree that has ever lost data:
      */
-    pub btrees_lost_data_ever: le::U64,
+    pub btrees_lost_data_ever: Le64,
     /*
      * Btrees validated consistent by their check pass and not mutated
      * since. Written synchronously on every change (set on clean pass
@@ -980,7 +979,7 @@ pub struct bch_sb_field_ext {
      * they can't fully trust (check_key_has_snapshot) instead reschedule
      * the check pass. Runtime copy: bch_sb.btrees_clean.
      */
-    pub btrees_clean: le::U64,
+    pub btrees_clean: Le64,
 }
 
 c_bitmask! {
@@ -1195,7 +1194,7 @@ pub struct bch_sb_layout {
     pub sb_max_size_bits: u8, /* base 2 of 512 byte sectors */
     pub nr_superblocks: u8,
     pub pad: [u8; 5],
-    pub sb_offset: [le::U64; 61],
+    pub sb_offset: [Le64; 61],
 }
 c_default!(bch_sb_layout);
 
@@ -1225,34 +1224,34 @@ c_const! {
 #[c_packed]
 pub struct bch_sb {
     pub csum: c::bch_csum,
-    pub version: le::U16,
-    pub version_min: le::U16,
-    pub pad: [le::U16; 2],
+    pub version: Le16,
+    pub version_min: Le16,
+    pub pad: [Le16; 2],
     pub magic: c::__uuid_t,
     pub uuid: c::__uuid_t,
     pub user_uuid: c::__uuid_t,
     pub label: [u8; c::BCH_SB_LABEL_SIZE as usize],
-    pub offset: le::U64,
-    pub seq: le::U64,
+    pub offset: Le64,
+    pub seq: Le64,
 
-    pub block_size: le::U16,
+    pub block_size: Le16,
     pub dev_idx: u8,
     pub nr_devices: u8,
-    pub u64s: le::U32,
+    pub u64s: Le32,
 
-    pub time_base_lo: le::U64,
-    pub time_base_hi: le::U32,
-    pub time_precision: le::U32,
+    pub time_base_lo: Le64,
+    pub time_base_hi: Le32,
+    pub time_precision: Le32,
 
-    pub flags: [le::U64; 7],
-    pub write_time: le::U64,
-    pub features: [le::U64; 2],
-    pub compat: [le::U64; 2],
+    pub flags: [Le64; 7],
+    pub write_time: Le64,
+    pub features: [Le64; 2],
+    pub compat: [Le64; 2],
 
     pub layout: c::bch_sb_layout,
 
     pub start: [c::bch_sb_field; 0],
-    pub _data: [le::U64; 0],
+    pub _data: [Le64; 0],
 }
 c_default!(bch_sb);
 
@@ -1802,14 +1801,14 @@ c_enum! {
 #[derive(Default, CStruct)]
 pub struct jset_entry_usage {
     pub entry: c::jset_entry,
-    pub v: le::U64,
+    pub v: Le64,
 }
 
 #[repr(C, packed)]
 #[derive(Default, CStruct)]
 pub struct jset_entry_data_usage {
     pub entry: c::jset_entry,
-    pub v: le::U64,
+    pub v: Le64,
     pub r: c::bch_replicas_entry_v1,
 }
 
@@ -1819,15 +1818,15 @@ pub struct jset_entry_clock {
     pub entry: c::jset_entry,
     pub rw: u8,
     pub pad: [u8; 7],
-    pub time: le::U64,
+    pub time: Le64,
 }
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct jset_entry_dev_usage_type {
-    pub buckets: le::U64,
-    pub sectors: le::U64,
-    pub fragmented: le::U64,
+    pub buckets: Le64,
+    pub sectors: Le64,
+    pub fragmented: Le64,
 }
 
 #[repr(C)]
@@ -1856,7 +1855,7 @@ pub struct jset_entry_log {
 #[c_packed]
 pub struct jset_entry_datetime {
     pub entry: c::jset_entry,
-    pub seconds: le::U64,
+    pub seconds: Le64,
 }
 
 #[repr(C, align(8))]
@@ -1864,7 +1863,7 @@ pub struct jset_entry_datetime {
 #[c_packed]
 pub struct jset_entry_rewind_limit {
     pub entry: c::jset_entry,
-    pub seq: le::U64,
+    pub seq: Le64,
 }
 
 /*
@@ -1876,8 +1875,8 @@ pub struct jset_entry_rewind_limit {
 #[c_packed]
 pub struct jset_entry_rewind {
     pub entry: c::jset_entry,
-    pub from: le::U64,
-    pub to: le::U64,
+    pub from: Le64,
+    pub to: Le64,
 }
 
 /*
@@ -1896,20 +1895,20 @@ pub struct jset_entry_rewind {
 pub struct jset {
     pub csum: c::bch_csum,
 
-    pub magic: le::U64,
-    pub seq: le::U64,
-    pub version: le::U32,
-    pub flags: le::U32,
+    pub magic: Le64,
+    pub seq: Le64,
+    pub version: Le32,
+    pub flags: Le32,
 
-    pub u64s: le::U32, /* size of d[] in u64s */
+    pub u64s: Le32, /* size of d[] in u64s */
 
     pub encrypted_start: [u8; 0],
 
-    pub _read_clock: le::U16, /* no longer used */
-    pub _write_clock: le::U16,
+    pub _read_clock: Le16, /* no longer used */
+    pub _write_clock: Le16,
 
     /* Sequence number of oldest dirty journal entry */
-    pub last_seq: le::U64,
+    pub last_seq: Le64,
 
     pub start: [c::jset_entry; 0],
     pub _data: [u64; 0],
@@ -1958,7 +1957,7 @@ c_enum! {
 #[derive(Clone, Copy, Default, CStruct)]
 #[c_packed]
 pub struct bset {
-    pub seq: le::U64,
+    pub seq: Le64,
 
     /*
      * Highest journal entry this bset contains keys for.
@@ -1967,11 +1966,11 @@ pub struct bset {
      * crash, since the journal records a total order of all index updates
      * and anything that didn't make it to the journal doesn't get used.
      */
-    pub journal_seq: le::U64,
+    pub journal_seq: Le64,
 
-    pub flags: le::U32,
-    pub version: le::U16,
-    pub u64s: le::U16, /* count of d[] in u64s */
+    pub flags: Le32,
+    pub version: Le16,
+    pub u64s: Le16, /* count of d[] in u64s */
 
     pub start: [c::bkey_packed; 0],
     pub _data: [u64; 0],
@@ -1995,10 +1994,10 @@ nest! {
     #[c_packed]
     pub struct btree_node {
         pub csum: c::bch_csum,
-        pub magic: le::U64,
+        pub magic: Le64,
 
         /* this flags field is encrypted, unlike bset->flags: */
-        pub flags: le::U64,
+        pub flags: Le64,
 
         /* Closed interval: */
         pub min_key: c::bpos,
@@ -2014,7 +2013,7 @@ nest! {
             #>[repr(C)]
             pub contents: pub struct btree_node_bset_contents {
                 pub pad: [u8; 22],
-                pub u64s: le::U16,
+                pub u64s: Le16,
                 pub _data: [u64; 0],
             },
         },
@@ -2048,7 +2047,7 @@ nest! {
             #>[repr(C)]
             pub contents: pub struct btree_node_entry_bset_contents {
                 pub pad: [u8; 22],
-                pub u64s: le::U16,
+                pub u64s: Le16,
                 pub _data: [u64; 0],
             },
         },

@@ -58,9 +58,10 @@ impl bch_sb {
     pub fn nonce(&self) -> nonce {
         let [a, b, c, d, e, f, g, h, _rest @ ..] = self.uuid.b;
         // nonce.d is __le32: the raw bytes, as they are.
-        use zerocopy::byteorder::little_endian::U32;
+        use crate::types::Le32;
+        let raw = |b| Le32::new(u32::from_le_bytes(b));
         nonce {
-            d: [U32::ZERO, U32::ZERO, U32::from_bytes([a, b, c, d]), U32::from_bytes([e, f, g, h])],
+            d: [Le32::new(0), Le32::new(0), raw([a, b, c, d]), raw([e, f, g, h])],
         }
     }
 }

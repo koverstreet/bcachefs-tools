@@ -7,6 +7,10 @@ use zerocopy::byteorder::little_endian as le;
 use cstruct_macros::CStruct;
 use typeinfo_macros::TypeInfo;
 
+/*
+ * Packed, recovery_passes at offset 2: zerocopy's le:: types, aligned to 1,
+ * not Le16/Le64, which Rust would pad for.
+ */
 #[repr(C, align(2))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]

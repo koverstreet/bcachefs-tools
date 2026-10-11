@@ -224,7 +224,7 @@ pub mod c {
 
     #[cfg(feature = "std")]
     impl Zeroize for bch_key {
-        fn zeroize(&mut self) { zerocopy::IntoBytes::as_mut_bytes(&mut self.key).zeroize(); }
+        fn zeroize(&mut self) { self.key.zeroize(); }
     }
     #[cfg(feature = "std")]
     impl Drop for bch_key {
@@ -236,7 +236,7 @@ pub mod c {
     #[cfg(feature = "std")]
     impl Zeroize for bch_encrypted_key {
         fn zeroize(&mut self) {
-            zerocopy::IntoBytes::as_mut_bytes(&mut self.magic).zeroize();
+            self.magic.zeroize();
             self.key.zeroize();
         }
     }

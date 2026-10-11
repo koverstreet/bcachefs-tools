@@ -3,15 +3,15 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use zerocopy::byteorder::little_endian as le;
+use crate::types::Le64;
 use cstruct_macros::CStruct;
 use typeinfo_macros::TypeInfo;
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct journal_seq_blacklist_entry {
-    pub start: le::U64,
-    pub end: le::U64,
+    pub start: Le64,
+    pub end: Le64,
 }
 
 #[repr(C)]

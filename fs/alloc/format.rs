@@ -3,9 +3,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::c_default;
+use crate::types::{c_default, Le32, Le64};
 use core::ffi::c_ulong;
-use zerocopy::byteorder::little_endian as le;
 use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct};
 use typeinfo_macros::TypeInfo;
 
@@ -67,8 +66,8 @@ c_xmacro! {
 #[c_packed]
 pub struct bch_alloc_v3 {
     pub v: c::bch_val,
-    pub journal_seq: le::U64,
-    pub flags: le::U32,
+    pub journal_seq: Le64,
+    pub flags: Le32,
     pub nr_fields: u8,
     pub generation: u8,
     pub oldest_gen: u8,

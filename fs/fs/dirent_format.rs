@@ -29,7 +29,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::typeinfo::AccessError;
-use crate::types::c_default;
+use crate::types::{c_default, Le32, Le64};
 use crate::util::ffi::Opaque;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
@@ -63,13 +63,13 @@ nest! {
         #[c_anon]
         #>[repr(C)]
         pub target: pub union bch_dirent_target {
-            pub d_inum: le::U64,
+            pub d_inum: Le64,
             /* DT_SUBVOL */
             #[c_anon]
             #>[repr(C)]
             pub subvol: pub struct bch_dirent_subvol {
-                pub d_child_subvol: le::U32,
-                pub d_parent_subvol: le::U32,
+                pub d_child_subvol: Le32,
+                pub d_parent_subvol: Le32,
             },
         },
 

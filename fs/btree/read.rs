@@ -6,8 +6,8 @@
 use crate::c;
 use crate::data::checksum::{BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
 use crate::errcode::{ret_to_result_void, BchError};
+use crate::types::Le32;
 use core::mem::offset_of;
-use zerocopy::byteorder::little_endian::U32;
 
 impl c::bset {
     /// The nonce of this bset, at byte @offset of its btree node: the offset,
@@ -17,10 +17,10 @@ impl c::bset {
         let seq = self.seq.get();
         c::nonce {
             d: [
-                U32::new(offset),
-                U32::new(seq as u32),
-                U32::new((seq >> 32) as u32),
-                U32::new(self.journal_seq.get() as u32 ^ BCH_NONCE_BTREE),
+                Le32::new(offset),
+                Le32::new(seq as u32),
+                Le32::new((seq >> 32) as u32),
+                Le32::new(self.journal_seq.get() as u32 ^ BCH_NONCE_BTREE),
             ],
         }
     }

@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use core::ffi::c_ulong;
-use zerocopy::byteorder::little_endian as le;
+use crate::types::{Le32, Le64};
 use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct};
 use typeinfo_macros::TypeInfo;
 
@@ -279,9 +279,9 @@ c_enum! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct recovery_pass_entry {
-    pub last_run: le::U64,
-    pub last_runtime: le::U32,
-    pub flags: le::U32,
+    pub last_run: Le64,
+    pub last_runtime: Le32,
+    pub flags: Le32,
 }
 
 c_bitmask! {

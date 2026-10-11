@@ -1,8 +1,8 @@
 use crate::c;
 use crate::data::checksum::BCH_NONCE_JOURNAL;
+use crate::types::Le32;
 use crate::util::vstructs::vstruct_next_entry;
 use core::marker::PhantomData;
-use zerocopy::byteorder::little_endian::U32;
 
 #[allow(non_camel_case_types)]
 pub type journal_entry_type = c::bch_jset_entry_type;
@@ -27,10 +27,10 @@ impl c::jset {
         let seq = self.seq.get();
         c::nonce {
             d: [
-                U32::ZERO,
-                U32::new(seq as u32),
-                U32::new((seq >> 32) as u32),
-                U32::new(BCH_NONCE_JOURNAL),
+                Le32::new(0),
+                Le32::new(seq as u32),
+                Le32::new((seq >> 32) as u32),
+                Le32::new(BCH_NONCE_JOURNAL),
             ],
         }
     }

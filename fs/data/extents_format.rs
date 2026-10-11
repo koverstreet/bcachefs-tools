@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use zerocopy::byteorder::little_endian as le;
+use crate::types::{Le16, Le32, Le64};
 use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_xmacro, tagged_union, CStruct};
 use nestify::nest;
 use typeinfo_macros::TypeInfo;
@@ -392,9 +392,9 @@ pub struct bch_btree_ptr_v2 {
     pub v: c::bch_val,
 
     pub mem_ptr: u64,
-    pub seq: le::U64,
-    pub sectors_written: le::U16,
-    pub flags: le::U16,
+    pub seq: Le64,
+    pub sectors_written: Le16,
+    pub flags: Le16,
     pub min_key: c::bpos,
     pub _data: [u64; 0],
     pub start: [c::bch_extent_ptr; 0],
@@ -460,7 +460,7 @@ c_const! {
 pub struct bch_reservation {
     pub v: c::bch_val,
 
-    pub generation: le::U32,
+    pub generation: Le32,
     pub nr_replicas: u8,
     pub pad: [u8; 3],
 }

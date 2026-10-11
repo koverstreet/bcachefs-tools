@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use zerocopy::byteorder::little_endian as le;
+use crate::types::Le16;
 use cstruct_macros::{bitfield, CStruct};
 use nestify::nest;
 use typeinfo_macros::TypeInfo;
@@ -14,7 +14,7 @@ nest! {
     #[c_packed]
     pub struct bch_stripe {
         pub v: c::bch_val,
-        pub sectors: le::U16,
+        pub sectors: Le16,
         #[c_bitfield]
         #>[bitfield(u8)]
         pub bits: pub struct bch_stripe_bits {

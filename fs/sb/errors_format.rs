@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::types::Le64;
 use zerocopy::byteorder::little_endian as le;
 use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_xmacro, CStruct};
 use nestify::nest;
@@ -473,8 +474,8 @@ c_enum! {
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_typedef(bch_sb_field_error_entry)]
 pub struct bch_sb_field_error_entry {
-    pub v: le::U64,
-    pub last_error_time: le::U64,
+    pub v: Le64,
+    pub last_error_time: Le64,
 }
 
 #[repr(C)]

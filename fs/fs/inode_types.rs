@@ -4,8 +4,7 @@
 
 use crate::cstructs::c;
 use crate::cstructs::c::BCH_INODE_FIELDS_v3;
-use crate::types::c_default;
-use zerocopy::byteorder::little_endian as le;
+use crate::types::{c_default, Le64};
 use cstruct_macros::{CStruct, c_bitmask, c_typedef, c_verbatim};
 use typeinfo_macros::TypeInfo;
 
@@ -27,7 +26,7 @@ BCH_INODE_FIELDS_v3!(__bch_inode_unpacked_0 [
     pub bi_inum: u64,
     pub bi_snapshot: u32,
     pub bi_journal_seq: u64,
-    pub bi_hash_seed: le::U64,
+    pub bi_hash_seed: Le64,
     pub bi_size: u64,
     pub bi_sectors: u64,
     pub bi_version: u64,

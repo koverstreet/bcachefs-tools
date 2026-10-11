@@ -3,8 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::Le32;
-use zerocopy::byteorder::little_endian as le;
+use crate::types::{Le16, Le32, Le64};
 use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct};
 use typeinfo_macros::TypeInfo;
 
@@ -21,9 +20,9 @@ c_const! {
 pub struct bch_inode {
     pub v: c::bch_val,
 
-    pub bi_hash_seed: le::U64,
-    pub bi_flags: le::U32,
-    pub bi_mode: le::U16,
+    pub bi_hash_seed: Le64,
+    pub bi_flags: Le32,
+    pub bi_mode: Le16,
     pub fields: [u8; 0],
 }
 
@@ -33,10 +32,10 @@ pub struct bch_inode {
 pub struct bch_inode_v2 {
     pub v: c::bch_val,
 
-    pub bi_journal_seq: le::U64,
-    pub bi_hash_seed: le::U64,
-    pub bi_flags: le::U64,
-    pub bi_mode: le::U16,
+    pub bi_journal_seq: Le64,
+    pub bi_hash_seed: Le64,
+    pub bi_flags: Le64,
+    pub bi_mode: Le16,
     pub fields: [u8; 0],
 }
 
@@ -46,12 +45,12 @@ pub struct bch_inode_v2 {
 pub struct bch_inode_v3 {
     pub v: c::bch_val,
 
-    pub bi_journal_seq: le::U64,
-    pub bi_hash_seed: le::U64,
-    pub bi_flags: le::U64,
-    pub bi_sectors: le::U64,
-    pub bi_size: le::U64,
-    pub bi_version: le::U64,
+    pub bi_journal_seq: Le64,
+    pub bi_hash_seed: Le64,
+    pub bi_flags: Le64,
+    pub bi_sectors: Le64,
+    pub bi_size: Le64,
+    pub bi_version: Le64,
     pub fields: [u8; 0],
 }
 
@@ -66,8 +65,8 @@ c_const! {
 pub struct bch_inode_generation {
     pub v: c::bch_val,
 
-    pub bi_generation: le::U32,
-    pub pad: le::U32,
+    pub bi_generation: Le32,
+    pub pad: Le32,
 }
 
 c_xmacro! {
@@ -266,5 +265,5 @@ pub struct bch_inode_alloc_cursor {
     pub bits: u8,
     pub pad: u8,
     pub generation: Le32,
-    pub idx: le::U64,
+    pub idx: Le64,
 }
