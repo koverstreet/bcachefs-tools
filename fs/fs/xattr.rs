@@ -13,6 +13,7 @@
 
 use core::ffi::{c_int, c_void};
 use core::mem::{offset_of, size_of};
+use cstruct_macros::c_export;
 
 use crate::acl;
 use crate::bkey_fsck_err_on;
@@ -142,6 +143,7 @@ pub fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 /// For C's bkey_ops: bch2_xattr_validate().
+#[c_export]
 pub fn bch2_xattr_validate(
     c:    &Opaque<c::bch_fs>,
     k:    BkeySC<'_>,
@@ -187,6 +189,7 @@ pub fn to_text(out: &mut Printbuf, k: BkeySC<'_>) {
 
 /// For C's bkey_ops: bch2_xattr_to_text().
 #[cold]
+#[c_export]
 pub fn bch2_xattr_to_text(
     out: &mut Printbuf,
     _c:  &Opaque<c::bch_fs>,

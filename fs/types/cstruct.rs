@@ -494,13 +494,15 @@ pub struct CStaticDecl {
 /// c_extern!: what Rust calls of a C header - fs/foo/bar_c.rs, of
 /// fs/foo/bar.h. Rust gets an extern "C" block; C, the prototypes, which
 /// bar.h includes, so a declaration that has drifted from the C one is a
-/// conflicting-types error in the C build. And rust_c_extern!: what C calls
-/// of Rust - the same prototypes, Rust's side the definitions.
+/// conflicting-types error in the C build. And a #[c_export] fn: what C calls
+/// of Rust - its prototype, Rust's side the definition.
 #[derive(Debug)]
 pub struct CExtern {
     pub cfg:     Option<Cfg>,
     pub fns:     Vec<CFnDecl>,
     pub statics: Vec<CStaticDecl>,
+    /// A #[c_export] fn's: a run of them is one block of prototypes.
+    pub export:  bool,
 }
 
 /// One arm of a tagged_union!: its name, payload type, and tag value.
@@ -928,6 +930,8 @@ struct ItemAttrs {
     typedef:   Option<Option<String>>,
     /// #[c("...")] on an item: its C declaration.
     c_decl:    Option<String>,
+    /// #[c_export] on a fn.
+    c_export:  bool,
 }
 
 fn parse_repr(args: &[Tok], into: &mut CRepr) -> Result<(), String> {
@@ -979,6 +983,9 @@ fn item_attrs(toks: &[Tok], mut i: usize) -> Result<(ItemAttrs, usize), String> 
         }
         if matches!(attr, [Tok::Ident(n)] if n == "c_packed") {
             a.repr.c_packed = true;
+        }
+        if matches!(attr, [Tok::Ident(n)] if n == "c_export") {
+            a.c_export = true;
         }
         if let Some([Tok::Str(s, _)]) = attr_args(attr, "c") {
             a.c_decl = Some(s.clone());
@@ -1505,7 +1512,7 @@ fn parse_const(body: &[Tok], cfg: Option<Cfg>) -> Result<CConst, String> {
 /// c_extern!'s body: `pub fn NAME(p: T, ...) -> R;` and `pub static [mut]
 /// NAME: T;`, each with a #[cfg] if it has one.
 fn parse_extern(body: &[Tok], cfg: Option<Cfg>) -> Result<CExtern, String> {
-    let mut ex = CExtern { cfg, fns: Vec::new(), statics: Vec::new() };
+    let mut ex = CExtern { cfg, fns: Vec::new(), statics: Vec::new(), export: false };
     let mut i = 0;
     while i < body.len() {
         let (a, j) = item_attrs(body, i)?;
@@ -1565,6 +1572,124 @@ fn parse_extern(body: &[Tok], cfg: Option<Cfg>) -> Result<CExtern, String> {
         i = semi + 1;
     }
     Ok(ex)
+}
+
+/// The Rust types a #[c_export] fn takes for C's: a pointer and its
+/// reference, a #[repr(transparent)] wrapper, a c_same! - one layout, so the
+/// argument converts by transmute. Rust's are as unqualified() has them; C's,
+/// as c_extern! does. Any other type is C's own, and passes as it is.
+pub const C_EXPORT_ARGS: &[(&str, &str)] = &[
+    ("&Opaque<bch_fs>",        "*mut c::bch_fs"),
+    ("&Opaque<btree_trans>",   "*mut c::btree_trans"),
+    ("&mut Printbuf",          "*mut c::printbuf"),
+    ("&bkey_validate_context", "*const c::bkey_validate_context"),
+    ("BkeySC<'_>",             "c::bkey_s_c"),
+];
+
+/// @toks with each path's qualifiers dropped: `&crate::util::ffi::Opaque<c::bch_fs>`
+/// is `&Opaque<bch_fs>`.
+fn unqualified(toks: &[Tok]) -> Vec<Tok> {
+    let colons = |k: usize| toks.get(k).is_some_and(|t| t.is_punct(':')) &&
+                            toks.get(k + 1).is_some_and(|t| t.is_punct(':'));
+    let mut out = Vec::new();
+    let mut k = 0;
+    while k < toks.len() {
+        if matches!(toks[k], Tok::Ident(_)) && colons(k + 1) {
+            k += 3;
+        } else {
+            out.push(toks[k].clone());
+            k += 1;
+        }
+    }
+    out
+}
+
+/// The C type, as c_extern! has it, for a #[c_export] fn's parameter or
+/// return type @ty: C_EXPORT_ARGS', or @ty itself - a path to one of C's
+/// types written c::NAME, as `crate::c::foo` from a macro_rules! isn't.
+fn c_export_type(ty: &[Tok]) -> String {
+    let bare = unqualified(ty);
+    if let Some((_, c)) = C_EXPORT_ARGS.iter().find(|(r, _)| tokenize(r).is_ok_and(|r| r == bare)) {
+        return c.to_string();
+    }
+    let mut t = ty.to_vec();
+    if let Some(ns) = t.iter().rposition(|x| matches!(x, Tok::Ident(n) if is_c_ns(n))) {
+        // the path's qualifiers before c::, each `IDENT ::`
+        let mut start = ns;
+        while start >= 3 && t[start - 1].is_punct(':') && t[start - 2].is_punct(':') &&
+              matches!(t[start - 3], Tok::Ident(_)) {
+            start -= 3;
+        }
+        t.splice(start..=ns, [Tok::Ident("c".into())]);
+    }
+    tokens_to_rust(&t)
+}
+
+/// A #[c_export] fn, at @i, past its attributes: `[pub] [unsafe] fn NAME(p:
+/// T, ...) [-> R] { ... }`. Its prototype, as c_extern!'s, with each type C's
+/// (c_export_type()); each parameter's Rust type; and the index after it.
+fn parse_export(toks: &[Tok], i: usize, cfg: Option<Cfg>)
+    -> Result<(CExtern, Vec<String>, usize), String>
+{
+    let mut j = skip_vis(toks, i)?;
+    if toks.get(j).is_some_and(|t| t.is_ident("unsafe")) {
+        j += 1;
+    }
+    let name = match &toks[j.min(toks.len())..] {
+        [f, Tok::Ident(name), p, ..] if f.is_ident("fn") && p.is_punct('(') => name.clone(),
+        _ => return Err("#[c_export]: expected [pub] [unsafe] fn NAME(..), not generic".into()),
+    };
+    let close = skip_group(toks, j + 2)?;
+    let mut params = Vec::new();
+    let mut rust_types = Vec::new();
+    for p in split_top(&toks[j + 3..close - 1], ',') {
+        let p = match p {
+            [m, rest @ ..] if m.is_ident("mut") => rest,
+            p => p,
+        };
+        match p {
+            [Tok::Ident(n), Tok::Punct(':'), ty @ ..] if !ty.is_empty() => {
+                params.push((n.clone(), c_export_type(ty)));
+                rust_types.push(tokens_to_rust(ty));
+            }
+            _ => return Err(format!("#[c_export] fn {name}: parameter {} not understood",
+                                    tokens_to_rust(p))),
+        }
+    }
+    let body = (close..toks.len()).find(|&k| toks[k].is_punct('{'))
+        .ok_or_else(|| format!("#[c_export] fn {name}: no body"))?;
+    let ret = match &toks[close..body] {
+        [] => None,
+        [Tok::Punct('-'), Tok::Punct('>'), ty @ ..] if !ty.is_empty() => Some(c_export_type(ty)),
+        rest => return Err(format!("#[c_export] fn {name}: {} after the parameters",
+                                   tokens_to_rust(rest))),
+    };
+    let f = CFnDecl { cfg, name, params, variadic: false, ret };
+    Ok((CExtern { cfg: None, fns: vec![f], statics: Vec::new(), export: true },
+        rust_types, skip_group(toks, body)?))
+}
+
+/// @item onto @items, where a #[c_export] fn after another joins its block: a
+/// run of them is one block of prototypes, as a c_extern!'s is.
+fn push_item(items: &mut Vec<CItem>, mut item: CItem) {
+    if let (CItem::Extern(ex), Some(CItem::Extern(prev))) = (&mut item, items.last_mut()) {
+        if ex.export && prev.export {
+            prev.fns.append(&mut ex.fns);
+            return;
+        }
+    }
+    items.push(item);
+}
+
+/// #[c_export]'s text, as its macro records it: the fn's prototype, checked
+/// that C can have it, and each parameter's Rust type.
+#[allow(dead_code)]
+pub fn parse_c_export(text: &str) -> Result<(CExtern, Vec<String>), String> {
+    let toks = tokenize(text)?;
+    let (a, j) = item_attrs(&toks, 0)?;
+    let (ex, rust_types, _) = parse_export(&toks, j, a.cfg)?;
+    emit_extern(&ex, &|_| None)?;
+    Ok((ex, rust_types))
 }
 
 /// tagged_union!'s body: `[vis] struct|union NAME [in STORAGE] { tag NAME: TYPE
@@ -2653,8 +2778,7 @@ pub fn parse_items(src: &str) -> Result<Vec<CItem>, String> {
                 i = next;
                 continue;
             }
-            // rust_c_extern!'s C is c_extern!'s: the prototypes
-            (Some("c_extern" | "rust_c_extern"), Some(t)) if t.is_punct('!') => {
+            (Some("c_extern"), Some(t)) if t.is_punct('!') => {
                 let (body, next) = macro_body(&toks, j + 2)?;
                 out.push(CItem::Extern(parse_extern(body, a.cfg)?));
                 i = next;
@@ -2673,6 +2797,12 @@ pub fn parse_items(src: &str) -> Result<Vec<CItem>, String> {
             _ => {}
         }
 
+        if a.c_export {
+            let (ex, _, next) = parse_export(&toks, j, a.cfg)?;
+            push_item(&mut out, CItem::Extern(ex));
+            i = next;
+            continue;
+        }
         if let Some(storage) = a.bitfield.clone() {
             if let Some((def, next)) = parse_bitfield(&toks, j, a.cfg.clone(), storage)? {
                 out.push(CItem::Bitfield(def));

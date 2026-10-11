@@ -234,8 +234,8 @@ impl<'a> TriggerOp<'a> {
 }
 
 /// @trigger, a `fn(&BtreeTrans, &mut TriggerOp) -> Result<(), E>` (or taking
-/// `&TriggerOp`) with E converting to BchError, as the key type trigger C's
-/// bkey_ops calls @name - which rust_c_extern! exports:
+/// `&TriggerOp`) with E converting to BchError, as @name, the key type
+/// trigger C's bkey_ops calls:
 ///
 /// `key_trigger!(bch2_trigger_inode => trigger);`
 #[macro_export]
@@ -244,6 +244,7 @@ macro_rules! key_trigger {
         /// # Safety
         /// @op is the update the transaction is triggering for, in its
         /// commit: bkey_ops' caller.
+        #[::cstruct_macros::c_export]
         pub unsafe fn $name(
             trans:  &$crate::util::ffi::Opaque<$crate::c::btree_trans>,
             mut op: $crate::c::btree_trigger_op,

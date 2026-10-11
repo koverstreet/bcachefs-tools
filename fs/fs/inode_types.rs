@@ -8,13 +8,7 @@ use crate::types::c_default;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint};
 use zerocopy::byteorder::little_endian as le;
-use cstruct_macros::{CStruct, c_bitmask, c_extern, c_typedef, c_verbatim, rust_c_extern};
-use crate::inode::{
-    bch2_inode_alloc_cursor_to_text, bch2_inode_alloc_cursor_validate,
-    bch2_inode_generation_to_text, bch2_inode_generation_validate,
-    bch2_inode_to_text, bch2_inode_v2_validate, bch2_inode_v3_validate,
-    bch2_inode_validate, bch2_trigger_inode,
-};
+use cstruct_macros::{CStruct, c_bitmask, c_extern, c_typedef, c_verbatim};
 use typeinfo_macros::TypeInfo;
 
 c_typedef! {
@@ -71,25 +65,6 @@ u8 _pad[0 + BCH_INODE_FIELDS_v3()];
     pub _pad: [u8; BKEY_INODE_BUF_XSUM_0],
 }
 c_default!(bkey_inode_buf);
-
-// bkey_ops' methods, Rust's: defined with C's signatures - see rust_c_extern!.
-rust_c_extern! {
-    pub fn bch2_inode_validate(c: *mut c::bch_fs, k: c::bkey_s_c,
-                               from: *const c::bkey_validate_context) -> c_int;
-    pub fn bch2_inode_v2_validate(c: *mut c::bch_fs, k: c::bkey_s_c,
-                                  from: *const c::bkey_validate_context) -> c_int;
-    pub fn bch2_inode_v3_validate(c: *mut c::bch_fs, k: c::bkey_s_c,
-                                  from: *const c::bkey_validate_context) -> c_int;
-    pub fn bch2_inode_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, k: c::bkey_s_c);
-    pub fn bch2_trigger_inode(trans: *mut c::btree_trans, op: c::btree_trigger_op) -> c_int;
-    pub fn bch2_inode_generation_validate(c: *mut c::bch_fs, k: c::bkey_s_c,
-                                          from: *const c::bkey_validate_context) -> c_int;
-    pub fn bch2_inode_generation_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, k: c::bkey_s_c);
-    pub fn bch2_inode_alloc_cursor_validate(c: *mut c::bch_fs, k: c::bkey_s_c,
-                                            from: *const c::bkey_validate_context) -> c_int;
-    pub fn bch2_inode_alloc_cursor_to_text(out: *mut c::printbuf, c: *mut c::bch_fs,
-                                           k: c::bkey_s_c);
-}
 
 c_extern! {
     pub fn bch2_inode_pack(c: *mut c::bch_fs, packed: *mut c::bkey_inode_buf,

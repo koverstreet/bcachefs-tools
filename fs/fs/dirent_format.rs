@@ -35,7 +35,7 @@ use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
 use core::ffi::{c_int, CStr};
 use core::mem::offset_of;
-use cstruct_macros::{bitfield, c_const, CStruct};
+use cstruct_macros::{bitfield, c_const, c_export, CStruct};
 use nestify::nest;
 use typeinfo_macros::TypeInfo;
 use zerocopy::byteorder::little_endian as le;
@@ -343,6 +343,7 @@ pub fn d_type_str(d_type: u8) -> &'static str {
 
 /// For C's bkey_ops: bch2_dirent_to_text().
 #[cold]
+#[c_export]
 pub fn bch2_dirent_to_text(
     out: &mut Printbuf,
     _c:  &Opaque<c::bch_fs>,
@@ -406,6 +407,7 @@ pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<Dirent<'k>, BchError> {
 }
 
 /// For C's bkey_ops: bch2_dirent_validate().
+#[c_export]
 pub fn bch2_dirent_validate(
     c:    &Opaque<c::bch_fs>,
     k:    BkeySC<'_>,

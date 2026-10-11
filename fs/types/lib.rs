@@ -33,9 +33,10 @@
 //!   nums      u32 count, then u64s: for a struct, its size and alignment,
 //!             then each field's offset, size and alignment, in order
 //!
-//! A source file's records, ordered by line, are one header: foo/types.rs
-//! gives foo/types_gen.h, foo/bar_types.rs foo/bar_gen.h - by file, not
-//! module, as mod.rs's #[path]s make the two differ.
+//! A source file's records, ordered by line, are a header: foo/types.rs
+//! gives foo/types_gen.h, foo/bar_types.rs foo/bar_gen.h - and foo/bar.rs's
+//! #[c_export]s follow bar_types.rs's there. By file, not module, as mod.rs's
+//! #[path]s make the two differ.
 
 pub const RECORD_MAGIC: [u8; 4] = *b"CSR1";
 

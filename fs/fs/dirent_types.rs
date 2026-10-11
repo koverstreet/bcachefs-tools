@@ -3,9 +3,8 @@
 #![allow(non_camel_case_types)]
 
 use core::ffi::c_int;
-use cstruct_macros::{c_enum, c_extern, rust_c_extern};
+use cstruct_macros::{c_enum, c_extern};
 use crate::cstructs::c;
-use crate::dirent::format::{bch2_dirent_to_text, bch2_dirent_validate};
 
 c_enum! {
     #[closed]
@@ -14,13 +13,6 @@ c_enum! {
         BCH_RENAME_OVERWRITE,
         BCH_RENAME_EXCHANGE,
     }
-}
-
-// bkey_ops' methods, Rust's: defined with C's signatures - see rust_c_extern!.
-rust_c_extern! {
-    pub fn bch2_dirent_validate(c: *mut c::bch_fs, k: c::bkey_s_c,
-                                from: *const c::bkey_validate_context) -> c_int;
-    pub fn bch2_dirent_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, k: c::bkey_s_c);
 }
 
 c_extern! {

@@ -6,14 +6,16 @@
 //!
 //! RECORDS is the .discard.bch_cstruct section of the fs crate's target
 //! object, as objcopy -O binary extracts it - see lib.rs for what's in it.
-//! Each source file's records, in order, are one header in OUT_DIR, named for
+//! Each source file's records, in order, are a header in OUT_DIR, named for
 //! the file's path under SRC, the crate's source root: foo/types.rs gives
-//! foo/types_gen.h, foo/bar_types.rs foo/bar_gen.h. Run from where rustc
-//! ran: a record's file is file!(), which is relative to that. A
-//! Rust-only field is opaque storage of its size and alignment; after the
-//! definitions come _Static_asserts of the Rust layout, so a C declaration
-//! that doesn't match its Rust type fails the C build, naming the field -
-//! and of the ioctl numbers, which C and Rust each compute.
+//! foo/types_gen.h, foo/bar_types.rs foo/bar_gen.h - and foo/bar.rs's, what
+//! C calls of the Rust that is bar.c (#[c_export]), follow bar_types.rs's in
+//! foo/bar_gen.h. Run from where rustc ran: a record's file is file!(),
+//! which is relative to that. A Rust-only field is opaque storage of its
+//! size and alignment; after the definitions come _Static_asserts of the
+//! Rust layout, so a C declaration that doesn't match its Rust type fails
+//! the C build, naming the field - and of the ioctl numbers, which C and
+//! Rust each compute.
 //!
 //! The records are from the target build, with its configuration: the C is
 //! that configuration's, #[cfg] already resolved.
@@ -99,8 +101,8 @@ fn records(mut b: &[u8]) -> Result<Vec<Record>, String> {
 }
 
 /// The header for source file @file, under @src: foo/bar_types.rs - foo/bar.h's
-/// types and what Rust calls of it - is foo/bar_gen.h; foo/types.rs is
-/// foo/types_gen.h.
+/// types and what Rust calls of it - is foo/bar_gen.h, and foo/bar.rs - what
+/// C calls of Rust - too; foo/types.rs is foo/types_gen.h.
 fn gen_header(src: &std::path::Path, file: &str) -> Result<String, String> {
     let path = std::fs::canonicalize(file)
         .map_err(|e| format!("{file}: {e} - rust_types_gen runs from where rustc did"))?;
@@ -392,7 +394,7 @@ fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>,
             }
             _ => {}
         }
-        items.push(item);
+        push_item(&mut items, item);
     }
 
     // Every misplaced bitfield, not just the first.
@@ -613,17 +615,23 @@ fn main() {
                     _ => {}
                 }
             }
-            // Every file's errors, not just the first's.
-            let mut errors = Vec::new();
-            let mut written: BTreeMap<String, &str> = BTreeMap::new();
-            for (file, mut rs) in files {
-                rs.sort_by_key(|r| r.line);
-                let rs = in_dependency_order(rs);
+            // foo_types.rs's records, then foo.rs's
+            let mut headers: BTreeMap<String, Vec<(&str, Vec<&Record>)>> = BTreeMap::new();
+            for (file, rs) in files {
                 let header = gen_header(&src, file).unwrap_or_else(|e| die(e));
-                if let Some(other) = written.insert(header.clone(), file) {
-                    errors.push(format!("{file} and {other} would both be {header}"));
-                    continue;
-                }
+                let srcs = headers.entry(header).or_default();
+                srcs.push((file, rs));
+                srcs.sort_by_key(|(f, _)| !f.ends_with("_types.rs"));
+            }
+            // Every header's errors, not just the first's.
+            let mut errors = Vec::new();
+            for (header, srcs) in headers {
+                let rs: Vec<&Record> = srcs.into_iter()
+                    .flat_map(|(_, mut rs)| {
+                        rs.sort_by_key(|r| r.line);
+                        in_dependency_order(rs)
+                    })
+                    .collect();
                 let h = match file_h(&header, &rs, &structs, &enums) {
                     Ok(h) => h,
                     Err(e) => { errors.push(e); continue; }

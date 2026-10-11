@@ -58,6 +58,7 @@ use core::ops::ControlFlow;
 use crate::btree_id;
 use core::ffi::CStr;
 use core::fmt;
+use cstruct_macros::c_export;
 
 // The inode x-macros as m! { name = arg, ... }, the way C uses them: each
 // user defines its own m, as C code defines its own x().
@@ -814,6 +815,7 @@ fn validate_c(
 }
 
 /// For C's bkey_ops: bch2_inode_validate().
+#[c_export]
 pub fn bch2_inode_validate(
     c:    &Opaque<c::bch_fs>,
     k:    BkeySC<'_>,
@@ -826,6 +828,7 @@ pub fn bch2_inode_validate(
 }
 
 /// For C's bkey_ops: bch2_inode_v2_validate().
+#[c_export]
 pub fn bch2_inode_v2_validate(
     c:    &Opaque<c::bch_fs>,
     k:    BkeySC<'_>,
@@ -839,6 +842,7 @@ pub fn bch2_inode_v2_validate(
 
 /// For C's bkey_ops: bch2_inode_v3_validate(). The fields start past the
 /// fixed ones, within the value.
+#[c_export]
 pub fn bch2_inode_v3_validate(
     c:    &Opaque<c::bch_fs>,
     k:    BkeySC<'_>,
@@ -859,6 +863,7 @@ pub fn bch2_inode_v3_validate(
 }
 
 /// For C's bkey_ops: bch2_inode_generation_validate().
+#[c_export]
 pub fn bch2_inode_generation_validate(
     c:    &Opaque<c::bch_fs>,
     k:    BkeySC<'_>,
@@ -946,6 +951,7 @@ impl fmt::Display for c::bch_inode_unpacked {
 
 /// For C's bkey_ops: bch2_inode_to_text() - an inode key's fields, unpacked.
 #[cold]
+#[c_export]
 pub fn bch2_inode_to_text(
     out: &mut Printbuf,
     c:   &Opaque<c::bch_fs>,
@@ -957,6 +963,7 @@ pub fn bch2_inode_to_text(
 
 /// For C's bkey_ops: bch2_inode_generation_to_text().
 #[cold]
+#[c_export]
 pub fn bch2_inode_generation_to_text(
     out: &mut Printbuf,
     _c:  &Opaque<c::bch_fs>,
@@ -1166,6 +1173,7 @@ fn alloc_cursor_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
 }
 
 /// For C's bkey_ops: bch2_inode_alloc_cursor_validate().
+#[c_export]
 pub fn bch2_inode_alloc_cursor_validate(
     c:    &Opaque<c::bch_fs>,
     k:    BkeySC<'_>,
@@ -1177,6 +1185,7 @@ pub fn bch2_inode_alloc_cursor_validate(
 /// For C's bkey_ops: bch2_inode_alloc_cursor_to_text() - the cursor, and the
 /// range it hands out.
 #[cold]
+#[c_export]
 pub fn bch2_inode_alloc_cursor_to_text(
     out: &mut Printbuf,
     c:   &Opaque<c::bch_fs>,
