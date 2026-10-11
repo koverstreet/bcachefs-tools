@@ -6,7 +6,7 @@ use crate::c;
 use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
 use crate::errcode::{bch_errcode, BchError};
-use crate::types::{DArray, NeBytes, bits_to_longs, c_default};
+use crate::types::{CacheAligned, DArray, NeBytes, bits_to_longs, c_default};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void, CStr};
 use core::fmt;
@@ -308,8 +308,7 @@ pub struct bch_fs_btree_cache {
     pub nr_in_flight: cs::atomic_long_t,
     pub nr_in_flight_inner: cs::atomic_long_t,
     pub nr_in_flight_wait: cs::closure_waitlist,
-    #[c_anon("")] pub __should_throttle_align: [crate::types::CacheAligned; 0],
-    #[c("bool should_throttle ____cacheline_aligned_in_smp")]
+    pub __should_throttle_align: CacheAligned,
     pub should_throttle: bool,
 
     /* shrinker stats */

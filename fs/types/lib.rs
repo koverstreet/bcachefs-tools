@@ -330,11 +330,12 @@ pub const fn bits_to_longs(nr: usize) -> usize {
     nr.div_ceil(core::ffi::c_ulong::BITS as usize)
 }
 
-/// SMP_CACHE_BYTES, as an alignment: a [CacheAligned; 0] field aligns what
-/// follows it, and its struct, as C's __aligned(SMP_CACHE_BYTES) and
-/// ____cacheline_aligned do - repr(align) takes only a literal. The
-/// kernel's L1_CACHE_BYTES for each target; the generated headers assert
-/// it, so a wrong or missing target fails its build.
+/// SMP_CACHE_BYTES, as an alignment: a CacheAligned field - zero-sized -
+/// aligns what follows it, and its struct, as C's __aligned(SMP_CACHE_BYTES)
+/// does; repr(align) takes only a literal. The generator writes C's
+/// __aligned() from it: the struct's, for a first field, or the next
+/// member's. The kernel's L1_CACHE_BYTES for each target; the generated
+/// headers assert it, so a wrong or missing target fails its build.
 #[cfg_attr(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64",
                target_arch = "arm", target_arch = "riscv64", target_arch = "loongarch64"),
            repr(align(64)))]
@@ -342,6 +343,11 @@ pub const fn bits_to_longs(nr: usize) -> usize {
 #[cfg_attr(target_arch = "s390x", repr(align(256)))]
 #[derive(Clone, Copy, Default)]
 pub struct CacheAligned;
+
+/// sizeof(long), as an alignment: as CacheAligned, C's __aligned(sizeof(long)).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct LongAligned([core::ffi::c_long; 0]);
 
 /// Default for a type C shares: all zeroes, C's `= {}` - as bindgen's was. For
 /// types whose every field is C's, to which all zeroes is a valid value.

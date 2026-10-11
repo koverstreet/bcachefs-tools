@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{DArray, Fifo, c_default};
+use crate::types::{CacheAligned, DArray, Fifo, c_default};
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct};
 use nestify::nest;
@@ -307,15 +307,13 @@ pub struct journal_rewind_range {
 nest! {
     #[derive(CStruct)]*
     #[repr(C)]*
-    #[c_align("SMP_CACHE_BYTES")]
     pub struct journal {
-        #[c_anon("")] pub __align: [crate::types::CacheAligned; 0],
+        pub __align: CacheAligned,
         /* Fastpath stuff up front: */
         #[c_anon]
         #>[derive(Clone, Copy)]
-        #>[c_align("SMP_CACHE_BYTES")]
         pub fastpath: pub struct journal_fastpath {
-            #[c_anon("")] pub __align: [crate::types::CacheAligned; 0],
+            pub __align: CacheAligned,
             pub reservations: c::journal_res_state,
             pub watermark: c::bch_watermark,
         },

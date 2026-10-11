@@ -159,9 +159,9 @@ pub struct CStructDef {
     pub typedef:   Option<String>,
     /// The typedef's struct has no tag: #[c_typedef], not #[c_typedef(NAME)].
     pub typedef_anon: bool,
-    /// #[c_align("EXPR")]: C's alignment as C spells it - SMP_CACHE_BYTES,
-    /// sizeof(long) - which Rust's repr(align) can't: Rust's is per target,
-    /// by cfg_attr, and the generated header asserts the two agree.
+    /// C's alignment as C spells it - SMP_CACHE_BYTES, sizeof(long) - from
+    /// an alignment marker leading the struct: Rust's repr(align) takes only
+    /// a literal. The generated header asserts the two agree.
     pub c_align:   Option<String>,
 }
 
@@ -219,6 +219,9 @@ pub struct CFieldDef {
     /// #[bits(N)], in a bitfield-struct type: its width.
     pub bits:     Option<u32>,
     pub cfg:      Option<Cfg>,
+    /// C's __aligned() on the member: from an alignment marker before it.
+    #[allow(dead_code)]
+    pub c_align:  Option<String>,
 }
 
 impl CFieldDef {
@@ -923,8 +926,6 @@ struct ItemAttrs {
     bitfield:  Option<String>,
     /// #[c_typedef] or #[c_typedef(NAME)].
     typedef:   Option<Option<String>>,
-    /// #[c_align("EXPR")].
-    c_align:   Option<String>,
     /// #[c("...")] on an item: its C declaration.
     c_decl:    Option<String>,
 }
@@ -978,9 +979,6 @@ fn item_attrs(toks: &[Tok], mut i: usize) -> Result<(ItemAttrs, usize), String> 
         }
         if matches!(attr, [Tok::Ident(n)] if n == "c_packed") {
             a.repr.c_packed = true;
-        }
-        if let Some([Tok::Str(s, _)]) = attr_args(attr, "c_align") {
-            a.c_align = Some(s.clone());
         }
         if let Some([Tok::Str(s, _)]) = attr_args(attr, "c") {
             a.c_decl = Some(s.clone());
@@ -1127,15 +1125,48 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
             return Err(format!("{name}.{field}: #[c_inline] and #[c_struct_group] are the field's type, \
                                 written in its place - one of them, and not a #[c] or #[c_anon] too"));
         }
-        fields.push(CFieldDef { name: field, ty, c_decl, anon, inline, group, bitfield, bits, cfg });
+        fields.push(CFieldDef { name: field, ty, c_decl, anon, inline, group, bitfield, bits, cfg,
+                                c_align: None });
+    }
+
+    // A field of an alignment marker type is no field of C's, but its
+    // __aligned(): the struct's if it comes first, the next member's if not.
+    let mut c_align = None;
+    for k in 0..fields.len() {
+        let Some(expr) = align_marker(&fields[k].ty) else { continue };
+        let f = &mut fields[k];
+        if f.c_decl.is_some() || f.cfg.is_some() {
+            return Err(format!("{name}.{}: an alignment marker is C's __aligned(), not a declaration \
+                                of its own, and in every configuration", f.name));
+        }
+        f.c_decl = Some(String::new());
+        f.anon = true;
+        if k == 0 {
+            c_align = Some(expr.to_string());
+        } else if k + 1 < fields.len() {
+            fields[k + 1].c_align = Some(expr.to_string());
+        } else {
+            return Err(format!("{name}.{}: an alignment marker aligns what follows it, and nothing does",
+                               fields[k].name));
+        }
     }
 
     let typedef_anon = matches!(a.typedef, Some(None));
     let typedef = a.typedef.map(|t| t.unwrap_or_else(|| name.clone()));
     Ok(Some((CStructDef {
         name, kind, cfg: a.cfg, repr: a.repr, cfg_reprs: a.cfg_reprs, fields, typedef,
-        typedef_anon, c_align: a.c_align,
+        typedef_anon, c_align,
     }, body_end + 1)))
+}
+
+/// C's alignment, as C spells it, for a field of one of types/lib.rs's
+/// alignment markers - zero-sized, aligned as C's __aligned() is.
+fn align_marker(ty: &str) -> Option<&'static str> {
+    match ty.trim().rsplit("::").next()? {
+        "CacheAligned" => Some("SMP_CACHE_BYTES"),
+        "LongAligned"  => Some("sizeof(long)"),
+        _ => None,
+    }
 }
 
 /// A bitfield-struct type at @i, after its attributes - the struct with
@@ -2274,6 +2305,12 @@ fn emit_members(def: &CStructDef, items: &[CItem],
             format!("\t{decl};\n")
         } else {
             format!("\t{};\n", opaque(def, f)?)
+        };
+        let text = match (&f.c_align, text.strip_suffix(";\n")) {
+            (None, _) => text,
+            (Some(a), Some(decl)) => format!("{decl} __aligned({a});\n"),
+            (Some(_), None) => return Err(format!("{}.{}: after an alignment marker, but C declares it \
+                                                   so __aligned() can't follow", def.name, f.name)),
         };
         let cond = f.cfg.as_ref().map(Cfg::to_c).transpose()?;
         if cond != open {

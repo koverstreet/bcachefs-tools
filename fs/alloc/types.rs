@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{DArray, c_default};
+use crate::types::{CacheAligned, DArray, c_default};
 use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct};
 use nestify::nest;
@@ -139,9 +139,8 @@ nest! {
     #[repr(C)]*
     pub struct write_point {
         #[c_anon]
-        #>[c_align("SMP_CACHE_BYTES")]
         pub alloc: pub struct write_point_alloc {
-            #[c_anon("")] pub __align: [crate::types::CacheAligned; 0],
+            pub __align: CacheAligned,
             pub node: c::hlist_node,
             pub lock: c::mutex,
             pub last_used: u64,
@@ -159,9 +158,8 @@ nest! {
         },
 
         #[c_anon]
-        #>[c_align("SMP_CACHE_BYTES")]
         pub io: pub struct write_point_io {
-            #[c_anon("")] pub __align: [crate::types::CacheAligned; 0],
+            pub __align: CacheAligned,
             pub index_update_work: c::work_struct,
 
             pub writes: c::list_head,

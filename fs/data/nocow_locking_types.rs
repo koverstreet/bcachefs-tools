@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::c_default;
+use crate::types::{CacheAligned, c_default};
 use cstruct_macros::{c_const, CStruct};
 
 c_const! {
@@ -17,9 +17,8 @@ c_const! {
 
 #[repr(C)]
 #[derive(CStruct)]
-#[c_align("SMP_CACHE_BYTES")]
 pub struct nocow_lock_bucket {
-    #[c_anon("")] pub __align: [crate::types::CacheAligned; 0],
+    pub __align: CacheAligned,
     pub wait: c::closure_waitlist,
     pub lock: c::spinlock_t,
     pub b: [u64; c::NOCOW_LOCK_BUCKET_SIZE as usize],

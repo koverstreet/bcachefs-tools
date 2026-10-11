@@ -3,8 +3,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::c_default;
-use core::ffi::{c_int, c_long, c_uint};
+use crate::types::{LongAligned, c_default};
+use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, bitfield, c_const, c_extern};
 use nestify::nest;
 use typeinfo_macros::TypeInfo;
@@ -54,9 +54,8 @@ c_default!(ulong_byte_assert);
 nest! {
     #[repr(C)]
     #[derive(Clone, Copy, Default, CStruct)]
-    #[c_align("sizeof(long)")]
     pub struct bucket {
-        #[c_anon("")] pub __align: [c_long; 0],
+        pub __align: LongAligned,
         pub lock: u8,
         #[c_bitfield]
         #>[bitfield(u8)]

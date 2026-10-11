@@ -117,7 +117,7 @@ fn one_item(text: &str, what: &str, is_kind: fn(&CItem) -> bool) -> Result<CItem
 /// `#[c_typedef]` on the struct: C has it as a typedef - `typedef struct {
 /// ... } name`, or with `#[c_typedef(NAME)]`, `typedef struct name { ... }
 /// NAME`.
-#[proc_macro_derive(CStruct, attributes(c, c_align, c_anon, c_bitfield, c_inline, c_packed, c_struct_group, c_typedef))]
+#[proc_macro_derive(CStruct, attributes(c, c_anon, c_bitfield, c_inline, c_packed, c_struct_group, c_typedef))]
 pub fn derive_cstruct(input: TokenStream) -> TokenStream {
     let text = format!("#[derive(CStruct)] {input}");
     let def = match parse_cstruct(&text) {
