@@ -102,19 +102,16 @@ use proc_macro::{Delimiter, Group, TokenStream, TokenTree};
 
 use crate::cstruct::{parse_items, tagged_union_arms, tagged_union_record_text, CItem, CTaggedArm,
                      CTaggedUnion};
-use crate::{compile_error, record, through_list};
+use crate::{comma_list, list_callback, record, through_list, tokens};
 
 /// tagged_union!: the arms from a list go through the list; written-out
 /// arms are generated directly. The declaration goes to the list as tokens,
 /// not text: an arm type defined in it keeps its spans, so an error in one
 /// is reported where it is.
-pub fn tagged_union(input: TokenStream) -> TokenStream {
-    let tu = match parse(&input) {
-        Ok(tu) => tu,
-        Err(e) => return compile_error(&format!("tagged_union!: {e}")),
-    };
+pub fn tagged_union(input: TokenStream) -> Result<TokenStream, String> {
+    let tu = parse(&input)?;
     match &tu.from {
-        Some(f) => through_list(&f.list, "cstruct_macros::__tagged_union", input),
+        Some(f) => Ok(through_list(&f.list, "cstruct_macros::__tagged_union", input)),
         None => generate(&input, &tu, &tu.arms),
     }
 }
@@ -141,13 +138,7 @@ fn arm_attrs_and_defs(decl: &TokenStream) -> (TokenStream, Vec<TokenStream>) {
         TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => Some(g.stream()),
         _ => None,
     });
-    let mut items: Vec<Vec<TokenTree>> = vec![Vec::new()];
-    for t in body.into_iter().flatten() {
-        match &t {
-            TokenTree::Punct(p) if p.as_char() == ',' => items.push(Vec::new()),
-            _ => items.last_mut().unwrap().push(t),
-        }
-    }
+    let items = body.map(comma_list).unwrap_or_default();
     // [#[..]]... [pub [(..)]] struct|union NAME { .. }
     let is_def = |item: &[TokenTree]| {
         let mut j = 0;
@@ -172,27 +163,12 @@ fn arm_attrs_and_defs(decl: &TokenStream) -> (TokenStream, Vec<TokenStream>) {
     (attrs, defs)
 }
 
-/// The list's callback: { [decl] (entry), (entry), ... }.
-pub fn expand(input: TokenStream) -> TokenStream {
-    let mut trees = input.into_iter();
-    let decl = match trees.next() {
-        Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket => g.stream(),
-        _ => return compile_error("__tagged_union!: expected [declaration] then the list's entries"),
-    };
-    let entries: Vec<String> = trees
-        .filter_map(|t| match t {
-            TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis => Some(g.stream().to_string()),
-            _ => None,
-        })
-        .collect();
-    let tu = match parse(&decl) {
-        Ok(tu) => tu,
-        Err(e) => return compile_error(&format!("tagged_union!: {e}")),
-    };
-    match tagged_union_arms(&tu, &entries) {
-        Ok(arms) => generate(&decl, &tu, &arms),
-        Err(e) => compile_error(&format!("tagged_union! {}: {e}", tu.name)),
-    }
+/// The list's callback: its arms are the list's entries.
+pub fn from_list(input: TokenStream) -> Result<TokenStream, String> {
+    let (decl, entries) = list_callback(input)?;
+    let tu = parse(&decl)?;
+    let arms = tagged_union_arms(&tu, &entries).map_err(|e| format!("{}: {e}", tu.name))?;
+    generate(&decl, &tu, &arms)
 }
 
 fn parse(input: &TokenStream) -> Result<CTaggedUnion, String> {
@@ -248,13 +224,12 @@ fn camel(name: &str) -> String {
         .collect()
 }
 
-fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> TokenStream {
+fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Result<TokenStream, String> {
     if arms.is_empty() {
-        return compile_error(&format!("tagged_union! {}: no arms", tu.name));
+        return Err(format!("{}: no arms", tu.name));
     }
     if let Some(d) = tu.defs.iter().find(|d| !arms.iter().any(|a| a.ty.trim() == d.name)) {
-        return compile_error(&format!("tagged_union! {}: {} is defined here but isn't an arm's type",
-                                      tu.name, d.name));
+        return Err(format!("{}: {} is defined here but isn't an arm's type", tu.name, d.name));
     }
     // The arm types defined in the block: nestify::nest!, given the
     // declaration's `#[...]*` - propagating, for any types nested in them -
@@ -264,7 +239,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Token
     for d in def_tokens {
         let mut body = arm_attrs.clone();
         body.extend(d);
-        defs.extend("::nestify::nest!".parse::<TokenStream>().unwrap());
+        defs.extend(tokens("::nestify::nest!"));
         defs.extend([TokenTree::Group(Group::new(Delimiter::Brace, body))]);
     }
     let (attrs, vis) = attrs_and_vis(decl);
@@ -541,5 +516,5 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Token
             defs.extend(rest);
             defs
         })
-        .unwrap_or_else(|e| compile_error(&format!("tagged_union! {name}: generated code doesn't parse: {e}")))
+        .map_err(|e| format!("{name}: generated code doesn't parse: {e}"))
 }
