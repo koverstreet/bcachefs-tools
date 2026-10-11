@@ -5,6 +5,9 @@
 //! bindings and adds the non-`fs/` userspace ones, so the tools reach all C
 //! symbols through it. Meant to shrink as this code is ported to no_std.
 
+// The C types Rust only passes pointers to are opaque - fieldless - structs.
+#![allow(improper_ctypes)]
+
 pub mod c {
 	#![allow(ambiguous_glob_reexports)]
 

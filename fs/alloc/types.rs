@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of alloc/types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::{DArray, c_default};
+use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct};
 use nestify::nest;
 use typeinfo_macros::TypeInfo;
@@ -23,40 +21,24 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_watermark_0 {
-    ([$($acc:tt)*] $(($name:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum bch_watermark: u32 {
-                $($acc)*
-                $([<BCH_WATERMARK_ $name>],)*
-                BCH_WATERMARK_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum bch_watermark: u32 {
+        BCH_WATERMARKS(name) => BCH_WATERMARK_ ## name,
+        BCH_WATERMARK_NR,
+    }
 }
-BCH_WATERMARKS!(__bch_watermark_0 []);
 
 c_const! {
     #[c_int]
     pub const BCH_WATERMARK_BITS: u32 = 3;
-}
-
-c_const! {
     pub const BCH_WATERMARK_MASK: u32 = !(!0 << c::BCH_WATERMARK_BITS);
-}
 
-c_const! {
     #[c_int]
     pub const OPEN_BUCKETS_COUNT: u32 = 4096;
-}
 
-c_const! {
     #[c_int]
     pub const WRITE_POINT_HASH_NR: u32 = 32;
-}
-
-c_const! {
     #[c_int]
     pub const WRITE_POINT_MAX: u32 = 32;
 }
@@ -68,53 +50,43 @@ c_typedef! {
     pub type open_bucket_idx_t = u16;
 }
 
-#[bitfield(u8)]
-pub struct open_bucket_data_type_bits {
-    #[bits(5)]
-    pub data_type: u32,
-    #[bits(1)]
-    pub valid: bool,
-    #[bits(1)]
-    pub on_partial_list: bool,
-    #[bits(1)]
-    pub do_discards_fast: bool,
-}
+nest! {
+    #[repr(C)]
+    #[derive(Clone, Copy, CStruct)]
+    pub struct open_bucket {
+        pub lock: c::spinlock_t,
+        pub pin: c::atomic_t,
+        pub freelist: c::open_bucket_idx_t,
+        pub hash: c::open_bucket_idx_t,
 
-#[repr(C)]
-#[derive(Clone, Copy, CStruct)]
-pub struct open_bucket {
-    pub lock: c::spinlock_t,
-    pub pin: c::atomic_t,
-    pub freelist: c::open_bucket_idx_t,
-    pub hash: c::open_bucket_idx_t,
+        /*
+         * When an open bucket has an ec_stripe attached, this is the index of
+         * the block in the stripe this open_bucket corresponds to:
+         */
+        pub ec_idx: u8,
+        #[c_bitfield]
+        #>[bitfield(u8)]
+        pub bits: pub struct open_bucket_bits {
+            #[bits(5)]
+            pub data_type: c::bch_data_type,
+            #[bits(1)]
+            pub valid: bool,
+            #[bits(1)]
+            pub on_partial_list: bool,
+            #[bits(1)]
+            pub do_discards_fast: bool,
+        },
+        /* handle already removed from ca->nr_open_buckets (bucket left free) */
+        pub free_uncounted: bool,
 
-    /*
-     * When an open bucket has an ec_stripe attached, this is the index of
-     * the block in the stripe this open_bucket corresponds to:
-     */
-    pub ec_idx: u8,
-    #[c_bitfield]
-    pub data_type_bits: open_bucket_data_type_bits,
-    /* handle already removed from ca->nr_open_buckets (bucket left free) */
-    pub free_uncounted: bool,
-
-    pub dev: u8,
-    pub generation: u8,
-    pub sectors_free: u32,
-    pub bucket: u64,
-    pub ec: *mut c::ec_stripe_new,
+        pub dev: u8,
+        pub generation: u8,
+        pub sectors_free: u32,
+        pub bucket: u64,
+        pub ec: *mut c::ec_stripe_new,
+    }
 }
 c_default!(open_bucket);
-impl open_bucket {
-    pub fn data_type(&self) -> u32 { let b = self.data_type_bits; b.data_type() }
-    pub fn set_data_type(&mut self, v: u32) { let mut b = self.data_type_bits; b.set_data_type(v); self.data_type_bits = b; }
-    pub fn valid(&self) -> bool { let b = self.data_type_bits; b.valid() }
-    pub fn set_valid(&mut self, v: bool) { let mut b = self.data_type_bits; b.set_valid(v); self.data_type_bits = b; }
-    pub fn on_partial_list(&self) -> bool { let b = self.data_type_bits; b.on_partial_list() }
-    pub fn set_on_partial_list(&mut self, v: bool) { let mut b = self.data_type_bits; b.set_on_partial_list(v); self.data_type_bits = b; }
-    pub fn do_discards_fast(&self) -> bool { let b = self.data_type_bits; b.do_discards_fast() }
-    pub fn set_do_discards_fast(&mut self, v: bool) { let mut b = self.data_type_bits; b.set_do_discards_fast(v); self.data_type_bits = b; }
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -154,19 +126,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __write_point_state_0 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum write_point_state: u32 {
-                $($acc)*
-                $([<WRITE_POINT_ $n>],)*
-                WRITE_POINT_STATE_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum write_point_state: u32 {
+        WRITE_POINT_STATES(n) => WRITE_POINT_ ## n,
+        WRITE_POINT_STATE_NR,
+    }
 }
-WRITE_POINT_STATES!(__write_point_state_0 []);
 
 nest! {
     #[derive(Clone, Copy, CStruct)]*
@@ -179,12 +145,12 @@ nest! {
             pub node: c::hlist_node,
             pub lock: c::mutex,
             pub last_used: u64,
-            pub write_point: core::ffi::c_ulong,
+            pub write_point: c_ulong,
             pub data_type: c::bch_data_type,
 
             /* calculated based on how many pointers we're actually going to use: */
-            pub sectors_free: core::ffi::c_uint,
-            pub prev_sectors_free: core::ffi::c_uint,
+            pub sectors_free: c_uint,
+            pub prev_sectors_free: c_uint,
 
             pub ptrs: c::open_buckets,
             pub stripe: c::dev_stripe_state,
@@ -213,7 +179,7 @@ c_default!(write_point);
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct write_point_specifier {
-    pub v: core::ffi::c_ulong,
+    pub v: c_ulong,
 }
 
 /* Indexed by disk_res_slot(); physical sectors, not data size */
@@ -237,7 +203,7 @@ pub struct bch_fs_capacity {
      * and forces them to be revalidated
      */
     pub capacity_gen: u32,
-    pub bucket_size_max: core::ffi::c_uint,
+    pub bucket_size_max: c_uint,
 
     pub sectors_available: [c::atomic64_t; c::BCH_REPLICAS_MAX as usize],
     pub sectors_available_lock: c::spinlock_t,
@@ -253,7 +219,7 @@ pub struct bch_fs_capacity {
      * could change, and so the most the reservation caches hand out
      * between recomputes.
      */
-    pub placement_constrained: core::ffi::c_ulong,
+    pub placement_constrained: c_ulong,
     pub placement_required: [c::bch_devs_mask; c::BCH_REPLICAS_MAX as usize],
     pub placement_allowance: u64,
 
@@ -268,14 +234,14 @@ c_default!(bch_fs_capacity);
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_allocator {
     pub rw_devs: [c::bch_devs_mask; c::BCH_DATA_NR as usize],
-    pub rw_devs_change_count: core::ffi::c_ulong,
+    pub rw_devs_change_count: c_ulong,
 
     /* fs-wide allocator wake generation; see bch2_alloc_wake_all() */
     pub wake_all_counter: c::atomic_t,
 
     pub freelist_lock: c::spinlock_t,
     pub freelist_wait: c::closure_waitlist,
-    pub last_stuck: core::ffi::c_ulong,
+    pub last_stuck: c_ulong,
 
     pub open_buckets_freelist: c::open_bucket_idx_t,
     pub open_buckets_nr_free: c::open_bucket_idx_t,
@@ -289,7 +255,7 @@ pub struct bch_fs_allocator {
     pub write_points: [c::write_point; c::WRITE_POINT_MAX as usize],
     pub write_points_hash: [c::hlist_head; c::WRITE_POINT_HASH_NR as usize],
     pub write_points_hash_lock: c::mutex,
-    pub write_points_nr: core::ffi::c_uint,
+    pub write_points_nr: c_uint,
 
     pub btree_write_point: c::write_point,
     pub reconcile_write_point: c::write_point,
@@ -352,7 +318,6 @@ pub struct bch_fs_discards {
     pub bioset: c::bio_set,
 
     pub lock: c::spinlock_t,
-    #[c("DARRAY(discard_in_flight) in_flight")]
     pub in_flight: DArray<c::discard_in_flight>,
     pub ready: u32,
     pub ref_: u32,

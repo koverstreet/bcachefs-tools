@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of btree/bkey_defs.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use cstruct_macros::{c_enum, c_typedef, c_verbatim, c_xmacro, CStruct};
+use cstruct_macros::{c_enum, c_typedef, c_xmacro, CStruct};
 
 c_enum! {
     #[closed]
@@ -17,11 +14,6 @@ c_enum! {
         BKEY_PACKED_NONE,
     }
 }
-
-c_verbatim!(r#"
-#define bkey_lr_packed(_l, _r)						\
-	((_l)->format + ((_r)->format << 1))
-"#);
 
 /*
  * Wrapper for stack-allocated struct bkey_packed.
@@ -49,15 +41,6 @@ pub struct bkey_i_padded {
     pub _pad: [u8; 8],
     pub k: c::bkey_i,
 }
-
-c_verbatim!(r#"
-struct btree;
-"#);
-
-#[cfg(not(CONFIG_BCACHEFS_DEBUG))]
-c_verbatim!(r#"
-#define bkey_packed(_k)		((_k)->format != KEY_FORMAT_CURRENT)
-"#);
 
 c_enum! {
     #[closed]

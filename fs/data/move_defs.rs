@@ -1,20 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of data/move_defs.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use cstruct_macros::{c_typedef, c_verbatim, CStruct};
-
-c_verbatim!(r#"
-struct bch_inode_opts;
-struct bch_read_bio;
-struct btree_trans;
-struct data_update_opts;
-"#);
+use core::ffi::{c_int, c_void};
+use cstruct_macros::{c_typedef, CStruct};
 
 /*
  * Tracks in-flight data movement IO for ratelimiting.
@@ -38,7 +29,7 @@ struct data_update_opts;
 pub struct moving_context {
     pub trans: *mut c::btree_trans,
     pub list: c::list_head,
-    pub fn_: *mut core::ffi::c_void,
+    pub fn_: *mut c_void,
 
     pub rate: *mut c::bch_ratelimit,
     pub stats: *mut c::bch_move_stats,
@@ -64,6 +55,6 @@ pub struct moving_context {
 c_default!(moving_context);
 
 c_typedef! {
-    pub type move_pred_fn = Option<unsafe extern "C" fn(*mut c::btree_trans, *mut core::ffi::c_void, c::btree_id, c::bkey_s_c,
-                                                        *mut c::bch_inode_opts, *mut c::data_update_opts) -> core::ffi::c_int>;
+    pub type move_pred_fn = Option<unsafe extern "C" fn(*mut c::btree_trans, *mut c_void, c::btree_id, c::bkey_s_c,
+                                                        *mut c::bch_inode_opts, *mut c::data_update_opts) -> c_int>;
 }

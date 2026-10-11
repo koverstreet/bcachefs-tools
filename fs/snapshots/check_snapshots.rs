@@ -1566,7 +1566,7 @@ fn check_key_has_snapshot(
             },
             Some(live_child) => if fsck_err!(trans, id::bkey_in_deleted_interior_snapshot,
                                              "key in deleted interior snapshot {buf}, migrating to live descendant {live_child}")? {
-                let (btree, inum) = (c::btree_id(iter.btree_id()), k.k.p.inode);
+                let (btree, inum) = (iter.btree_id(), k.k.p.inode);
                 snapshot::delete_dead_key(t, iter, k, live_child)?;
                 key_has_inode_in_snapshot(t, btree, inum, live_child)?;
                 return Ok(true);

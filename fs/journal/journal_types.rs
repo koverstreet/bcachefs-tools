@@ -1,17 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of journal/journal_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use cstruct_macros::{CStruct, c_enum, c_extern, c_verbatim};
-
-c_verbatim!(r#"
-struct bch_fs;
-"#);
+use core::ffi::c_int;
+use cstruct_macros::{CStruct, c_enum, c_extern};
 
 c_enum! {
     #[flags]
@@ -31,10 +25,6 @@ c_enum! {
     }
 }
 
-c_verbatim!(r#"
-struct bch_dev;
-"#);
-
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct journal_block {
@@ -42,8 +32,6 @@ pub struct journal_block {
 }
 c_default!(journal_block);
 
-// What Rust calls of journal/journal.h: C gets these as prototypes, in journal/journal_gen.h
-// with the types - see c_extern! in types/cstruct.rs.
 c_extern! {
-    pub fn bch2_journal_flush(arg1: *mut c::journal) -> core::ffi::c_int;
+    pub fn bch2_journal_flush(arg1: *mut c::journal) -> c_int;
 }

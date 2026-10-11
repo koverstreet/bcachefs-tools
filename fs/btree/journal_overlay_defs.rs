@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of btree/journal_overlay_defs.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use core::ffi::c_uint;
 use cstruct_macros::CStruct;
 
 #[repr(C)]
@@ -14,7 +12,7 @@ use cstruct_macros::CStruct;
 pub struct journal_iter {
     pub list: c::list_head,
     pub btree_id: c::btree_id,
-    pub level: core::ffi::c_uint,
+    pub level: c_uint,
     pub idx: usize,
     pub keys: *mut c::journal_keys,
 }

@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of init/passes_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::{DArray, c_default};
+use crate::util::ffi::c_char;
+use core::ffi::c_int;
 use cstruct_macros::{CStruct, c_extern};
 use typeinfo_macros::TypeInfo;
-
 
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
@@ -69,7 +67,6 @@ pub struct bch_fs_recovery {
      * mount, which recovery resumes. Positions in BTREE_ID_logged_ops,
      * ascending: see bch2_logged_ops_note_unfinished().
      */
-    #[c("DARRAY(u64) logged_ops_unfinished")]
     pub logged_ops_unfinished: DArray<u64>,
 
     pub lock: c::spinlock_t,
@@ -78,14 +75,11 @@ pub struct bch_fs_recovery {
 }
 c_default!(bch_fs_recovery);
 
-// What Rust calls of init/passes.h: C gets these as prototypes, in init/passes_gen.h
-// with the types - see c_extern! in types/cstruct.rs.
 c_extern! {
-    #[c("const char * const bch2_recovery_passes[]")]
-    pub static bch2_recovery_passes: [*const crate::util::ffi::c_char; 0usize];
+    pub static bch2_recovery_passes: [*const c_char; 0];
     pub fn bch2_recovery_passes_to_stable(v: u64) -> u64;
     pub fn bch2_recovery_passes_from_stable(v: u64) -> u64;
     pub fn bch2_recovery_pass_set_no_ratelimit(arg1: *mut c::bch_fs, arg2: c::bch_recovery_pass);
-    pub fn bch2_run_explicit_recovery_pass(arg1: *mut c::bch_fs, arg2: *mut c::printbuf, arg3: c::bch_recovery_pass, arg4: c::bch_run_recovery_pass_flags) -> core::ffi::c_int;
-    pub fn bch2_require_recovery_pass(arg1: *mut c::bch_fs, arg2: *mut c::printbuf, arg3: c::bch_recovery_pass) -> core::ffi::c_int;
+    pub fn bch2_run_explicit_recovery_pass(arg1: *mut c::bch_fs, arg2: *mut c::printbuf, arg3: c::bch_recovery_pass, arg4: c::bch_run_recovery_pass_flags) -> c_int;
+    pub fn bch2_require_recovery_pass(arg1: *mut c::bch_fs, arg2: *mut c::printbuf, arg3: c::bch_recovery_pass) -> c_int;
 }

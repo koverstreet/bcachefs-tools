@@ -1,23 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of vfs/pagecache_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
+// The VFS's: kernel only, as C's #ifndef NO_BCACHEFS_FS
+#![cfg(not(NO_BCACHEFS_FS))]
 
 use crate::cstructs::c;
 use crate::types::{DArray, c_default};
 use cstruct_macros::{bitfield, c_enum, c_typedef, c_xmacro, CStruct};
+use nestify::nest;
 use typeinfo_macros::TypeInfo;
 
-#[cfg(not(NO_BCACHEFS_FS))]
-#[cfg(not(NO_BCACHEFS_FS))]
 c_typedef! {
     #[c("DARRAY(struct folio *) folios")]
     pub type folios = DArray<*mut c::folio>;
 }
 
-#[cfg(not(NO_BCACHEFS_FS))]
 c_xmacro! {
     BCH_FOLIO_SECTOR_STATE(x) {
         (unallocated),
@@ -28,49 +25,31 @@ c_xmacro! {
     }
 }
 
-#[cfg(not(NO_BCACHEFS_FS))]
-macro_rules! __bch_folio_sector_state_0 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum bch_folio_sector_state: u32 {
-                $($acc)*
-                $([<SECTOR_ $n>],)*
-            }
-        }
-    } };
-}
-#[cfg(not(NO_BCACHEFS_FS))]
-BCH_FOLIO_SECTOR_STATE!(__bch_folio_sector_state_0 []);
-
-#[cfg(not(NO_BCACHEFS_FS))]
-#[bitfield(u8)]
-pub struct bch_folio_sector_nr_replicas_bits {
-    /* Uncompressed, fully allocated replicas (or on disk reservation): */
-    #[bits(4)]
-    pub nr_replicas: u8,
-    /* Owns PAGE_SECTORS * replicas_reserved sized in memory reservation: */
-    #[bits(4)]
-    pub replicas_reserved: u8,
+c_enum! {
+    #[closed]
+    pub enum bch_folio_sector_state: u32 {
+        BCH_FOLIO_SECTOR_STATE(n) => SECTOR_ ## n,
+    }
 }
 
-#[cfg(not(NO_BCACHEFS_FS))]
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-pub struct bch_folio_sector {
-    #[c_bitfield]
-    pub nr_replicas_bits: bch_folio_sector_nr_replicas_bits,
-    pub state: u8,
-}
-#[cfg(not(NO_BCACHEFS_FS))]
-impl bch_folio_sector {
-    pub fn nr_replicas(&self) -> u8 { let b = self.nr_replicas_bits; b.nr_replicas() }
-    pub fn set_nr_replicas(&mut self, v: u8) { let mut b = self.nr_replicas_bits; b.set_nr_replicas(v); self.nr_replicas_bits = b; }
-    pub fn replicas_reserved(&self) -> u8 { let b = self.nr_replicas_bits; b.replicas_reserved() }
-    pub fn set_replicas_reserved(&mut self, v: u8) { let mut b = self.nr_replicas_bits; b.set_replicas_reserved(v); self.nr_replicas_bits = b; }
+nest! {
+    #[repr(C)]
+    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+    pub struct bch_folio_sector {
+        #[c_bitfield]
+        #>[bitfield(u8)]
+        pub bits: pub struct bch_folio_sector_bits {
+            /* Uncompressed, fully allocated replicas (or on disk reservation): */
+            #[bits(4)]
+            pub nr_replicas: u8,
+            /* Owns PAGE_SECTORS * replicas_reserved sized in memory reservation: */
+            #[bits(4)]
+            pub replicas_reserved: u8,
+        },
+        pub state: u8,
+    }
 }
 
-#[cfg(not(NO_BCACHEFS_FS))]
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
 pub struct bch_folio {
@@ -94,10 +73,8 @@ pub struct bch_folio {
     pub partially_uptodate: u16,
     pub s: [c::bch_folio_sector; 0],
 }
-#[cfg(not(NO_BCACHEFS_FS))]
 c_default!(bch_folio);
 
-#[cfg(not(NO_BCACHEFS_FS))]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct bch2_folio_reservation {

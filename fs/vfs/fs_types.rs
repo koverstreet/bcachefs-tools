@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of vfs/fs_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use cstruct_macros::{c_enum, c_typedef, c_verbatim, CStruct};
+use core::ffi::{c_uint, c_ulong};
+#[cfg(not(NO_BCACHEFS_FS))]
+use core::ffi::{c_int, c_void};
+use cstruct_macros::{c_enum, CStruct};
+#[cfg(not(NO_BCACHEFS_FS))]
+use cstruct_macros::c_typedef;
 use typeinfo_macros::TypeInfo;
 
 #[repr(C)]
@@ -42,12 +44,12 @@ pub struct bch_inode_info {
     pub ei_reserved_state: u8,
     pub ei_reserved_lock: c::spinlock_t,
 
-    pub ei_inodes_idx: core::ffi::c_uint,
-    pub ei_flags: core::ffi::c_ulong,
+    pub ei_inodes_idx: c_uint,
+    pub ei_flags: c_ulong,
 
     pub ei_update_lock: c::mutex,
     pub ei_quota_reserved: u64,
-    pub ei_last_dirtied: core::ffi::c_ulong,
+    pub ei_last_dirtied: c_ulong,
     pub ei_pagecache_lock: c::two_state_lock_t,
 
     pub ei_quota_lock: c::mutex,
@@ -79,15 +81,11 @@ c_enum! {
     }
 }
 
-c_verbatim!(r#"
-struct bch_inode_unpacked;
-"#);
-
 /* returns 0 if we want to do the update, or error is passed up */
 #[cfg(not(NO_BCACHEFS_FS))]
 c_typedef! {
     pub type inode_set_fn = Option<unsafe extern "C" fn(*mut c::btree_trans,
                                                         *mut c::bch_inode_info,
-                                                        *mut c::bch_inode_unpacked, *mut core::ffi::c_void)
-                                                        -> core::ffi::c_int>;
+                                                        *mut c::bch_inode_unpacked, *mut c_void)
+                                                        -> c_int>;
 }

@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of btree/check_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::{GenRadix, c_default};
 use cstruct_macros::{bitfield, c_enum, c_typedef, c_xmacro, CStruct};
+use nestify::nest;
 use typeinfo_macros::TypeInfo;
 
 c_xmacro! {
@@ -19,41 +17,28 @@ c_xmacro! {
     }
 }
 
-macro_rules! __gc_phase_0 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum gc_phase: u32 {
-                $($acc)*
-                $([<GC_PHASE_ $n>],)*
-            }
-        }
-    } };
-}
-GC_PHASES!(__gc_phase_0 []);
-
-#[bitfield(u16, repr = zerocopy::byteorder::native_endian::U16, from = zerocopy::byteorder::native_endian::U16::new, into = zerocopy::byteorder::native_endian::U16::get)]
-pub struct gc_pos_phase_bits {
-    #[bits(8)]
-    pub phase: u32,
-    #[bits(8)]
-    pub btree: u32,
+c_enum! {
+    #[closed]
+    pub enum gc_phase: u32 {
+        GC_PHASES(n) => GC_PHASE_ ## n,
+    }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct gc_pos {
-    #[c_anon("")] pub __bitfield_align: [u32; 0],
-    #[c_bitfield]
-    pub phase_bits: gc_pos_phase_bits,
-    pub level: u16,
-    pub pos: c::bpos,
-}
-impl gc_pos {
-    pub fn phase(&self) -> u32 { let b = self.phase_bits; b.phase() }
-    pub fn set_phase(&mut self, v: u32) { let mut b = self.phase_bits; b.set_phase(v); self.phase_bits = b; }
-    pub fn btree(&self) -> u32 { let b = self.phase_bits; b.btree() }
-    pub fn set_btree(&mut self, v: u32) { let mut b = self.phase_bits; b.set_btree(v); self.phase_bits = b; }
+nest! {
+    #[repr(C)]
+    #[derive(Clone, Copy, Default, CStruct)]
+    pub struct gc_pos {
+        #[c_bitfield]
+        #>[bitfield(u16)]
+        pub bits: pub struct gc_pos_bits {
+            #[bits(8)]
+            pub phase: u32,
+            #[bits(8)]
+            pub btree: c::btree_id,
+        },
+        pub level: u16,
+        pub pos: c::bpos,
+    }
 }
 
 #[repr(C)]
@@ -65,7 +50,6 @@ pub struct reflink_gc {
 }
 
 c_typedef! {
-    #[c("GENRADIX(struct reflink_gc) reflink_gc_table")]
     pub type reflink_gc_table = GenRadix<c::reflink_gc>;
 }
 

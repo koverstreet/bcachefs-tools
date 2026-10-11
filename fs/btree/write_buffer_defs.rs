@@ -1,17 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of btree/write_buffer_defs.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use cstruct_macros::{c_verbatim, CStruct};
-
-c_verbatim!(r#"
-struct btree_trans;
-"#);
+use cstruct_macros::CStruct;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]

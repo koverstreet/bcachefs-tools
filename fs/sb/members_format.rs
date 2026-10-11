@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of sb/members_format.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::c_default;
+use crate::types::{c_default, Le32, Le64};
 use zerocopy::byteorder::little_endian as le;
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, CStruct};
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct};
 use typeinfo_macros::TypeInfo;
 
 c_const! {
@@ -18,21 +15,13 @@ c_const! {
      */
     #[c_int]
     pub const BCH_SB_MEMBERS_MAX: u32 = 256;
-}
 
-c_const! {
     /*
      * Sentinal value - indicates a device that does not exist
      */
     #[c_int]
     pub const BCH_SB_MEMBER_INVALID: u32 = 255;
 }
-
-c_verbatim!(r#"
-#define BCH_SB_MEMBER_DELETED_UUID					\
-	UUID_INIT(0xffffffff, 0xffff, 0xffff,				\
-		  0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef)
-"#);
 
 c_const! {
     #[c_int]
@@ -48,19 +37,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_iops_measurement_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_iops_measurement: u32 {
-                $($acc)*
-                $([<BCH_IOPS_ $t>] = (($n) as u32),)*
-                BCH_IOPS_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_iops_measurement: u32 {
+        BCH_IOPS_MEASUREMENTS(t, n) => BCH_IOPS_ ## t = n,
+        BCH_IOPS_NR,
+    }
 }
-BCH_IOPS_MEASUREMENTS!(__bch_iops_measurement_0 []);
 
 c_xmacro! {
     BCH_MEMBER_ERROR_TYPES(x) {
@@ -70,25 +53,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_member_error_type_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_member_error_type: u32 {
-                $($acc)*
-                $([<BCH_MEMBER_ERROR_ $t>] = (($n) as u32),)*
-                BCH_MEMBER_ERROR_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_member_error_type: u32 {
+        BCH_MEMBER_ERROR_TYPES(t, n) => BCH_MEMBER_ERROR_ ## t = n,
+        BCH_MEMBER_ERROR_NR,
+    }
 }
-BCH_MEMBER_ERROR_TYPES!(__bch_member_error_type_0 []);
-
-c_verbatim!(r#"
-#ifndef __nonstring
-#define __nonstring
-#endif
-"#);
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -104,30 +75,23 @@ pub struct bch_member {
     pub flags: le::U64,
     pub iops: [le::U32; 4],
     pub errors: [le::U64; c::BCH_MEMBER_ERROR_NR as usize],
-    #[c_anon("")] pub __errors_at_reset_align: [u64; 0],
-    pub errors_at_reset: [le::U64; c::BCH_MEMBER_ERROR_NR as usize],
-    #[c_anon("")] pub __errors_reset_time_align: [u64; 0],
-    pub errors_reset_time: le::U64,
-    #[c_anon("")] pub __seq_align: [u64; 0],
-    pub seq: le::U64,
-    #[c_anon("")] pub __btree_allocated_bitmap_align: [u64; 0],
-    pub btree_allocated_bitmap: le::U64,
+    pub errors_at_reset: [Le64; c::BCH_MEMBER_ERROR_NR as usize],
+    pub errors_reset_time: Le64,
+    pub seq: Le64,
+    pub btree_allocated_bitmap: Le64,
     /*
      * On recovery from a clean shutdown we don't normally read the journal,
      * but we still want to resume writing from where we left off so we
      * don't overwrite more than is necessary, for list journal debugging:
      */
-    #[c_anon("")] pub __last_journal_bucket_align: [u32; 0],
-    pub last_journal_bucket: le::U32,
-    #[c_anon("")] pub __last_journal_bucket_offset_align: [u32; 0],
-    pub last_journal_bucket_offset: le::U32,
+    pub last_journal_bucket: Le32,
+    pub last_journal_bucket_offset: Le32,
 
     #[c("__u8 device_name[16] __nonstring")]
     pub device_name: [u8; 16],
     #[c("__u8 device_model[64] __nonstring")]
     pub device_model: [u8; 64],
-    #[c_anon("")] pub __flush_errors_align: [u64; 0],
-    pub flush_errors: le::U64,
+    pub flush_errors: Le64,
     #[c("__u8 device_serial[64] __nonstring")]
     pub device_serial: [u8; 64],
     /*
@@ -150,18 +114,14 @@ c_const! {
      */
     #[c_int]
     pub const BCH_MI_BTREE_BITMAP_SHIFT_MAX: u32 = 58;
-}
 
-c_const! {
     /*
      * This limit comes from the bucket_gens array - it's a single allocation, and
      * kernel allocation are limited to INT_MAX
      */
     #[c_int]
     pub const BCH_MEMBER_NBUCKETS_MAX: u32 = c::INT_MAX as u32 - 64;
-}
 
-c_const! {
     #[c_int]
     pub const BCH_MEMBER_V1_BYTES: u32 = 56;
 }
@@ -189,13 +149,6 @@ c_bitmask! {
     }
 }
 
-c_verbatim!(r#"
-#if 0
-LE64_BITMASK(BCH_MEMBER_NR_READ_ERRORS,	struct bch_member, flags[1], 0,  20);
-LE64_BITMASK(BCH_MEMBER_NR_WRITE_ERRORS,struct bch_member, flags[1], 20, 40);
-#endif
-"#);
-
 c_xmacro! {
     BCH_MEMBER_STATES(x) {
         (rw, 0),
@@ -205,19 +158,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_member_state_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_member_state: u32 {
-                $($acc)*
-                $([<BCH_MEMBER_STATE_ $t>] = (($n) as u32),)*
-                BCH_MEMBER_STATE_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_member_state: u32 {
+        BCH_MEMBER_STATES(t, n) => BCH_MEMBER_STATE_ ## t = n,
+        BCH_MEMBER_STATE_NR,
+    }
 }
-BCH_MEMBER_STATES!(__bch_member_state_0 []);
 
 c_xmacro! {
     BCH_MEMBER_INITIALIZED_STATES(x) {
@@ -229,19 +176,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_member_initialized_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_member_initialized: u32 {
-                $($acc)*
-                $([<BCH_MEMBER_INITIALIZED_ $t>] = (($n) as u32),)*
-                BCH_MEMBER_INITIALIZED_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_member_initialized: u32 {
+        BCH_MEMBER_INITIALIZED_STATES(t, n) => BCH_MEMBER_INITIALIZED_ ## t = n,
+        BCH_MEMBER_INITIALIZED_NR,
+    }
 }
-BCH_MEMBER_INITIALIZED_STATES!(__bch_member_initialized_0 []);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]

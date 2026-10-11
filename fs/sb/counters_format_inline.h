@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_SB_COUNTERS_FORMAT_INLINE_H
 #define _BCACHEFS_SB_COUNTERS_FORMAT_INLINE_H
 
-/* Included at the end of sb/counters_format.h. */
+/* Included after sb/counters_format_gen.h. */
 
 __maybe_unused
 static const enum bch_counters_flags bch2_counter_flags[] = {

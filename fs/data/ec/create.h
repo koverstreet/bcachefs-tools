@@ -59,6 +59,7 @@ int bch2_ec_stripe_new_alloc(struct bch_fs *, struct ec_stripe_head *);
 
 void bch2_ec_stripe_head_put(struct bch_fs *, struct ec_stripe_head *);
 
+struct alloc_request;
 struct ec_stripe_head *bch2_ec_stripe_head_get(struct btree_trans *,
 			struct alloc_request *, unsigned, struct open_bucket **);
 

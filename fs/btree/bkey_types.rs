@@ -1,42 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of btree/bkey_types.h. Rust's own key types, btree/bkey.rs's
-//! BkeySC and BkeyS, are checked to have the layouts of C's bkey_s_c and
-//! bkey_s, which convert below. The typed keys C generates for each key type
-//! from BCH_BKEY_TYPES() - bkey_i_<type>, bkey_s_c_<type>, bkey_s_<type> -
-//! stay C's; Rust's are BkeyI, BkeySC and BkeyS of the value type, checked
-//! against them.
+//! Rust's own key types, btree/bkey.rs's BkeySC and BkeyS, are checked to
+//! have the layouts of C's bkey_s_c and bkey_s. The typed keys C generates
+//! for each key type from BCH_BKEY_TYPES() - bkey_i_<type>, bkey_s_c_<type>,
+//! bkey_s_<type> - stay C's; Rust's are BkeyI, BkeySC and BkeyS of the value
+//! type, checked against them.
 
 #![allow(non_camel_case_types)]
 
 use crate::btree::bkey::{BkeyI, BkeyS, BkeySC};
 use crate::cstructs::c as cs;
 use crate::cstructs::c::BCH_BKEY_TYPES;
-use cstruct_macros::c_same;
-
-c_same! { struct bkey_s_c == BkeySC<'static> { k, v } }
-c_same! { struct bkey_s   == BkeyS<'static> { k, v } }
-
-macro_rules! __bkey_typed {
-    ($( ($name:tt $(, $($rest:tt)*)?) ),* $(,)?) => { ::paste::paste! { $(
-        pub type [<bkey_i_ $name>]   = BkeyI<cs::[<bch_ $name>]>;
-        pub type [<bkey_s_c_ $name>] = BkeySC<'static, cs::[<bch_ $name>]>;
-        pub type [<bkey_s_ $name>]   = BkeyS<'static, cs::[<bch_ $name>]>;
-
-        c_same! { struct [<bkey_i_ $name>]   == BkeyI<cs::[<bch_ $name>]> { k, v } }
-        c_same! { struct [<bkey_s_c_ $name>] == BkeySC<'static, cs::[<bch_ $name>]> { k, v } }
-        c_same! { struct [<bkey_s_ $name>]   == BkeyS<'static, cs::[<bch_ $name>]> { k, v } }
-    )* } };
-}
-BCH_BKEY_TYPES!(__bkey_typed);
-// ---- the data types of btree/bkey_types.h, which is generated from this file: see
-// fs/types/lib.rs. Translated from the C by c2rs.
-
 use crate::types::c_default;
-use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_verbatim, c_xmacro};
+use core::ffi::c_uint;
+use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_same, c_verbatim, c_xmacro};
 use nestify::nest;
 
-c_verbatim!(r#"
 /* DOC_LATEX(bkey-structures)
  *
  * \paragraph{Search keys and bkeys}
@@ -120,35 +99,6 @@ c_verbatim!(r#"
  * bkey_s_c	- bkey with split value, const
  */
 
-#define bkey_p_next(_k)		vstruct_next(_k)
-
-#define bkey_val_u64s(_k)	((_k)->u64s - BKEY_U64s)
-
-#define bkey_val_end(_k)	((void *) (((u64 *) (_k).v) + bkey_val_u64s((_k).k)))
-
-/*
- * Was this key written with @field?
- *
- * Values grow: a key written by an older version stops short of the fields
- * added since, and the length is the only record of which ones it had. Reading
- * such a field off a raw bkey reads the next key in the bset, and reading it
- * off a padded copy reads 0 - which is indistinguishable from a stored 0.
- */
-#define bkey_has_field(_k, _type, _field)				\
-	(bkey_val_bytes(_k) >= offsetof(struct bch_##_type, _field) +	\
-			       sizeof(((struct bch_##_type *) NULL)->_field))
-
-#define bkey_deleted(_k)	((_k)->type == KEY_TYPE_deleted)
-
-#define bkey_whiteout(_k)				\
-	((_k)->type == KEY_TYPE_deleted || (_k)->type == KEY_TYPE_whiteout)
-
-#define bkey_extent_whiteout(_k)				\
-	((_k)->type == KEY_TYPE_deleted ||			\
-	 (_k)->type == KEY_TYPE_whiteout ||			\
-	 (_k)->type == KEY_TYPE_extent_whiteout)
-"#);
-
 /* bkey with split value, const */
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
@@ -180,13 +130,14 @@ nest! {
 }
 c_default!(bkey_s);
 
+c_same! { struct bkey_s_c == BkeySC<'static> { k, v } }
+c_same! { struct bkey_s   == BkeyS<'static> { k, v } }
+
+/*
+ * C's typed keys: bkey_gen.h defines them, for its checks of Rust's - the
+ * c_same!s after them.
+ */
 c_verbatim!(r#"
-#define bkey_s_null		((struct bkey_s)   { .k = NULL })
-#define bkey_s_c_null		((struct bkey_s_c) { .k = NULL })
-
-#define bkey_s_err(err)		((struct bkey_s)   { .k = ERR_PTR(err) })
-#define bkey_s_c_err(err)	((struct bkey_s_c) { .k = ERR_PTR(err) })
-
 /*
  * For a given type of value (e.g. struct bch_extent), generates the types for
  * bkey + bch_extent - inline, split, split const. The conversion functions,
@@ -232,6 +183,19 @@ BCH_BKEY_TYPES();
 #undef x
 "#);
 
+macro_rules! __bkey_typed {
+    ($( ($name:tt $(, $($rest:tt)*)?) ),* $(,)?) => { ::paste::paste! { $(
+        pub type [<bkey_i_ $name>]   = BkeyI<cs::[<bch_ $name>]>;
+        pub type [<bkey_s_c_ $name>] = BkeySC<'static, cs::[<bch_ $name>]>;
+        pub type [<bkey_s_ $name>]   = BkeyS<'static, cs::[<bch_ $name>]>;
+
+        c_same! { struct [<bkey_i_ $name>]   == BkeyI<cs::[<bch_ $name>]> { k, v } }
+        c_same! { struct [<bkey_s_c_ $name>] == BkeySC<'static, cs::[<bch_ $name>]> { k, v } }
+        c_same! { struct [<bkey_s_ $name>]   == BkeyS<'static, cs::[<bch_ $name>]> { k, v } }
+    )* } };
+}
+BCH_BKEY_TYPES!(__bkey_typed);
+
 c_enum! {
     #[flags]
     pub enum bch_validate_flags: u32 {
@@ -252,61 +216,41 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bkey_validate_from_0 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum bkey_validate_from: u32 {
-                $($acc)*
-                $([<BKEY_VALIDATE_ $n>],)*
-            }
-        }
-    } };
-}
-BKEY_VALIDATE_CONTEXTS!(__bkey_validate_from_0 []);
-
-#[bitfield(u16, repr = zerocopy::byteorder::native_endian::U16, from = zerocopy::byteorder::native_endian::U16::new, into = zerocopy::byteorder::native_endian::U16::get)]
-pub struct bkey_validate_context_from_bits {
-    #[bits(8)]
-    pub from: u32,
-    #[bits(8)]
-    pub flags: u32,
+c_enum! {
+    #[closed]
+    pub enum bkey_validate_from: u32 {
+        BKEY_VALIDATE_CONTEXTS(n) => BKEY_VALIDATE_ ## n,
+    }
 }
 
-#[bitfield(u8)]
-pub struct bkey_validate_context_root_bits {
-    #[bits(1)]
-    pub root: bool,
-    #[bits(7)]
-    pub __pad: u8,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, CStruct)]
-pub struct bkey_validate_context {
-    #[c_bitfield]
-    pub from_bits: bkey_validate_context_from_bits,
-    pub level: u8,
-    pub btree: cs::btree_id,
-    #[c_bitfield]
-    pub root_bits: bkey_validate_context_root_bits,
-    pub journal_offset: core::ffi::c_uint,
-    pub journal_seq: u64,
+nest! {
+    #[repr(C)]
+    #[derive(Clone, Copy, CStruct)]
+    pub struct bkey_validate_context {
+        #[c_bitfield]
+        #>[bitfield(u16)]
+        pub bits: pub struct bkey_validate_context_bits {
+            #[bits(8)]
+            pub from: u32,
+            #[bits(8, from = cs::bch_validate_flags::from_bits_retain)]
+            pub flags: cs::bch_validate_flags,
+        },
+        pub level: u8,
+        pub btree: cs::btree_id,
+        #[c_bitfield]
+        #>[bitfield(u8)]
+        pub root_bits: pub struct bkey_validate_context_root_bits {
+            #[bits(1)]
+            pub root: bool,
+            #[bits(7)]
+            pub __pad: u8,
+        },
+        pub journal_offset: c_uint,
+        pub journal_seq: u64,
+    }
 }
 c_default!(bkey_validate_context);
-impl bkey_validate_context {
-    pub fn from(&self) -> u32 { let b = self.from_bits; b.from() }
-    pub fn set_from(&mut self, v: u32) { let mut b = self.from_bits; b.set_from(v); self.from_bits = b; }
-    pub fn flags(&self) -> u32 { let b = self.from_bits; b.flags() }
-    pub fn set_flags(&mut self, v: u32) { let mut b = self.from_bits; b.set_flags(v); self.from_bits = b; }
-}
-impl bkey_validate_context {
-    pub fn root(&self) -> bool { let b = self.root_bits; b.root() }
-    pub fn set_root(&mut self, v: bool) { let mut b = self.root_bits; b.set_root(v); self.root_bits = b; }
-}
 
-// What Rust calls of btree/bkey.h: C gets these as prototypes, in btree/bkey_gen.h
-// with the types - see c_extern! in types/cstruct.rs.
 c_extern! {
     pub fn bch2_bpos_swab(arg1: *mut cs::bpos);
     pub fn __bch2_bkey_unpack_key(arg1: *const cs::bkey_format, arg2: *mut cs::bkey, arg3: *const cs::bkey_packed);

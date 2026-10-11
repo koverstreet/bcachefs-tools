@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of data/ec/types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::{GenRadix, c_default};
+use core::ffi::c_long;
 use cstruct_macros::{bitfield, CStruct};
+use nestify::nest;
 use typeinfo_macros::TypeInfo;
-
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -23,32 +21,28 @@ pub struct stripe {
     pub disk_label: u8,
 }
 
-#[bitfield(u8)]
-pub struct gc_stripe_alive_bits {
-    /* does a corresponding key exist in stripes btree? */
-    #[bits(1)]
-    pub alive: u32,
-    #[bits(7)]
-    pub __pad: u8,
-}
+nest! {
+    #[repr(C)]
+    #[derive(Clone, Copy, Default, CStruct)]
+    pub struct gc_stripe {
+        pub lock: u8,
+        #[c_bitfield]
+        #>[bitfield(u8)]
+        pub bits: pub struct gc_stripe_bits {
+            /* does a corresponding key exist in stripes btree? */
+            #[bits(1)]
+            pub alive: u32,
+            #[bits(7)]
+            pub __pad: u8,
+        },
+        pub sectors: u16,
+        pub nr_blocks: u8,
+        pub nr_redundant: u8,
+        pub block_sectors: [u16; c::BCH_BKEY_PTRS_MAX as usize],
+        pub ptrs: [c::bch_extent_ptr; c::BCH_BKEY_PTRS_MAX as usize],
 
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct gc_stripe {
-    pub lock: u8,
-    #[c_bitfield]
-    pub alive_bits: gc_stripe_alive_bits,
-    pub sectors: u16,
-    pub nr_blocks: u8,
-    pub nr_redundant: u8,
-    pub block_sectors: [u16; c::BCH_BKEY_PTRS_MAX as usize],
-    pub ptrs: [c::bch_extent_ptr; c::BCH_BKEY_PTRS_MAX as usize],
-
-    pub r: c::bch_replicas_padded,
-}
-impl gc_stripe {
-    pub fn alive(&self) -> u32 { let b = self.alive_bits; b.alive() }
-    pub fn set_alive(&mut self, v: u32) { let mut b = self.alive_bits; b.set_alive(v); self.alive_bits = b; }
+        pub r: c::bch_replicas_padded,
+    }
 }
 
 /* A claim on a stripe index, hashed in bch_fs_ec.stripes_new: */
@@ -63,7 +57,7 @@ c_default!(ec_stripe_handle);
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_ec {
-    pub stripe_buf_bytes: core::ffi::c_long,
+    pub stripe_buf_bytes: c_long,
     pub stripe_buf_lock: c::spinlock_t,
     pub stripe_buf_wait: c::closure_waitlist,
 
@@ -89,7 +83,6 @@ pub struct bch_fs_ec {
 
     pub block_bioset: c::bio_set,
 
-    #[c("GENRADIX(struct gc_stripe) gc_stripes")]
     pub gc_stripes: GenRadix<c::gc_stripe>,
 }
 c_default!(bch_fs_ec);

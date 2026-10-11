@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of data/compress_defs.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use core::ffi::{c_int, c_void};
 use cstruct_macros::{bitfield, c_enum, CStruct};
 use nestify::nest;
 use typeinfo_macros::TypeInfo;
@@ -22,7 +20,7 @@ nest! {
             #[c_bitfield]
             #>[derive(Clone, Copy, CStruct, TypeInfo)]-
             #>[bitfield(u8)]
-            pub type_bits: pub struct bch_compression_opt_type_bits {
+            pub bits: pub struct bch_compression_opt_bits {
                 #[bits(4)]
                 pub type_: u8,
                 #[bits(4)]
@@ -32,12 +30,6 @@ nest! {
     }
 }
 c_default!(bch_compression_opt);
-impl bch_compression_opt_fields {
-    pub fn type_(&self) -> u8 { let b = self.type_bits; b.type_() }
-    pub fn set_type_(&mut self, v: u8) { let mut b = self.type_bits; b.set_type_(v); self.type_bits = b; }
-    pub fn level(&self) -> u8 { let b = self.type_bits; b.level() }
-    pub fn set_level(&mut self, v: u8) { let mut b = self.type_bits; b.set_level(v); self.type_bits = b; }
-}
 
 c_enum! {
     #[closed]
@@ -59,8 +51,8 @@ c_enum! {
 #[derive(Clone, Copy, CStruct)]
 pub struct bbuf {
     pub c: *mut c::bch_fs,
-    pub b: *mut core::ffi::c_void,
+    pub b: *mut c_void,
     pub type_: c::bbuf_type,
-    pub rw: core::ffi::c_int,
+    pub rw: c_int,
 }
 c_default!(bbuf);

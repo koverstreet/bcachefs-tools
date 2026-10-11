@@ -1,20 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of snapshots/types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::{DArray, bits_to_longs, c_default};
-use cstruct_macros::{c_const, c_enum, c_verbatim, CStruct};
+use core::ffi::{c_uint, c_ulong};
+use cstruct_macros::{c_const, c_enum, CStruct, c_typedef};
 use typeinfo_macros::TypeInfo;
 
-c_verbatim!(r#"
-DEFINE_DARRAY_NAMED(snapshot_id_list, u32);
-"#);
-
-pub type snapshot_id_list = DArray<u32>;
+c_typedef! {
+    pub type snapshot_id_list = DArray<u32>;
+}
 
 c_const! {
     #[c_int]
@@ -57,7 +53,7 @@ pub struct snapshot_t {
     pub tree: u32,
     /* bit (ancestor - id - 1) set for ancestors within 128 IDs */
     #[c("unsigned long is_ancestor[BITS_TO_LONGS(IS_ANCESTOR_BITMAP)]")]
-    pub is_ancestor: [core::ffi::c_ulong; bits_to_longs(c::IS_ANCESTOR_BITMAP as usize)],
+    pub is_ancestor: [c_ulong; bits_to_longs(c::IS_ANCESTOR_BITMAP as usize)],
 }
 c_default!(snapshot_t);
 
@@ -78,11 +74,9 @@ pub struct snapshot_interior_delete {
     pub live_child: u32,
 }
 
-c_verbatim!(r#"
-DEFINE_DARRAY_NAMED(interior_delete_list, struct snapshot_interior_delete);
-"#);
-
-pub type interior_delete_list = DArray<c::snapshot_interior_delete>;
+c_typedef! {
+    pub type interior_delete_list = DArray<c::snapshot_interior_delete>;
+}
 
 #[repr(C)]
 #[derive(CStruct)]
@@ -95,7 +89,7 @@ pub struct snapshot_delete {
     pub eytzinger_delete_list: c::interior_delete_list,
 
     pub running: bool,
-    pub version: core::ffi::c_uint,
+    pub version: c_uint,
     pub progress: c::progress_indicator,
 }
 c_default!(snapshot_delete);

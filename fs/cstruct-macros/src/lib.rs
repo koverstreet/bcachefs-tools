@@ -23,7 +23,7 @@
 //!                        marker type for each, its opcode and argument type
 //!   c_enum! { .. }       an enum, #[open], #[closed] or #[flags]: Rust gets
 //!                        the type that is, and its values as constants
-//!   c_const! { .. }      an integer constant: C gets a #define
+//!   c_const! { .. }      integer constants: C gets a #define each
 //!   c_typedef! { .. }    a type alias: C gets a typedef
 //!   c_same! { .. }       a Rust type with a C type's layout: checked in C
 //!   c_extern! { .. }     what Rust calls of a C header: C gets the
@@ -38,7 +38,7 @@
 //! Zero dependencies, as typeinfo-macros: the kernel build compiles this with
 //! a bare rustc.
 
-use proc_macro::{Delimiter, TokenStream, TokenTree};
+use proc_macro::{Delimiter, Group, Punct, Spacing, TokenStream, TokenTree};
 
 // A proc-macro crate may export only its macros: the parser's pub items go in
 // a private module - pub for rust_types_gen, which include!s it too.
@@ -46,7 +46,8 @@ use proc_macro::{Delimiter, TokenStream, TokenTree};
 mod cstruct {
     include!("../../types/cstruct.rs");
 }
-use cstruct::{parse_cstruct, parse_items, CEnumKind, CItem, CXEntry};
+use cstruct::{enum_text, expand_enum_list, parse_cstruct, parse_items, rust_ident, CEnumDef,
+              CEnumKind, CItem, CXEntry};
 
 mod tagged_union;
 mod xmacro_from_c;
@@ -85,6 +86,18 @@ fn record(text: &str, nums: &[String]) -> String {
         nums.join(", "))
 }
 
+/// @decl through @list - LIST!(@callback [decl]) - which calls @callback back
+/// with its entries: { [decl] (entry), (entry), ... }. The declaration goes as
+/// tokens, not text, so what's defined in it keeps its spans.
+fn through_list(list: &str, callback: &str, decl: TokenStream) -> TokenStream {
+    let mut cb: TokenStream = callback.parse().unwrap();
+    cb.extend([TokenTree::Group(Group::new(Delimiter::Bracket, decl))]);
+    let mut out: TokenStream = format!("crate::cstructs::c::{list}!").parse().unwrap();
+    out.extend([TokenTree::Group(Group::new(Delimiter::Parenthesis, cb)),
+                TokenTree::Punct(Punct::new(';', Spacing::Alone))]);
+    out
+}
+
 /// @text, which must parse as one item of the kind @is_kind accepts: @what
 /// names that kind for the error.
 fn one_item(text: &str, what: &str, is_kind: fn(&CItem) -> bool) -> Result<CItem, String> {
@@ -116,6 +129,15 @@ pub fn derive_cstruct(input: TokenStream) -> TokenStream {
     }
 
     let name = &def.name;
+    // A #[c_bitfield] field's members, on the struct: its type's forwarders
+    // (#[bitfield]), by the type's own path.
+    let mut forward = String::new();
+    for f in def.fields.iter().filter(|f| f.bitfield) {
+        let ty = f.ty.trim();
+        let (path, ty) = ty.rsplit_once("::").map_or(("", ty), |(p, t)| (p, t));
+        let path = if path.is_empty() { String::new() } else { format!("{path}::") };
+        forward.push_str(&format!("{path}__{ty}_forward!({name}, {});\n", f.rust_name()));
+    }
     let mut nums = vec![
         format!("::core::mem::size_of::<{name}>() as u64"),
         format!("::core::mem::align_of::<{name}>() as u64"),
@@ -127,20 +149,37 @@ pub fn derive_cstruct(input: TokenStream) -> TokenStream {
         nums.push(format!("crate::types::field_size({proj})"));
         nums.push(format!("crate::types::field_align({proj})"));
     }
-    record(&text, &nums).parse().unwrap()
+    format!("{forward}{}", record(&text, &nums)).parse().unwrap()
 }
 
-/// bitfield_struct::bitfield, recorded.
+/// bitfield_struct::bitfield, recorded - and __NAME_forward!(STRUCT, field),
+/// which #[derive(CStruct)] invokes for a #[c_bitfield] field of this type:
+/// each member's getter and setter on the struct that holds it, as C has a
+/// bitfield's members on its struct. Not `_` members: those are padding.
 #[proc_macro_attribute]
 pub fn bitfield(attr: TokenStream, item: TokenStream) -> TokenStream {
     let text = format!("#[bitfield({attr})] {item}");
-    let name = match one_item(&text, "a bitfield struct", |i| matches!(i, CItem::Bitfield(_))) {
-        Ok(CItem::Bitfield(b)) => b.name,
+    let b = match one_item(&text, "a bitfield struct", |i| matches!(i, CItem::Bitfield(_))) {
+        Ok(CItem::Bitfield(b)) => b,
         Ok(_) => unreachable!(),
         Err(e) => return compile_error(&format!("#[bitfield]: {e}")),
     };
-    format!("{}#[::bitfield_struct::bitfield({attr})] {item}\n{}",
-            record(&text, &[]), typeinfo_size_only(&name, "Struct"))
+    let mut fns = String::new();
+    for (name, ty, _) in &b.fields {
+        let m = rust_ident(name);
+        if m.starts_with('_') {
+            continue;
+        }
+        fns.push_str(&format!(
+            "pub fn {m}(&self) -> {ty} {{ let b = self.$field; b.{m}() }}\n\
+             pub fn set_{m}(&mut self, v: {ty}) {{ let mut b = self.$field; b.set_{m}(v); self.$field = b; }}\n"));
+    }
+    let name = &b.name;
+    format!("{}#[::bitfield_struct::bitfield({attr})] {item}\n{}\
+             #[allow(unused_macros)]\n\
+             macro_rules! __{name}_forward {{ ($s:ident, $field:ident) => {{ impl $s {{\n{fns}}} }} }}\n\
+             #[allow(unused_imports)]\npub(crate) use __{name}_forward;\n",
+            record(&text, &[]), typeinfo_size_only(name, "Struct"))
         .parse().unwrap()
 }
 
@@ -288,10 +327,12 @@ fn xmacro(input: TokenStream, recorded: bool) -> TokenStream {
              }}\n\
              #[allow(unused_imports)]\npub(crate) use __{name}_{n};\n"));
     }
+    // The callback's [pre] bracketed, as the plain list's: an optional single
+    // tt after a path callback is ambiguous with its `::`.
     let CXEntry::Sub { list: first, .. } = &x.entries[subs[0]] else { unreachable!() };
     out.push_str(&format!(
         "#[allow(unused_macros)]\n\
-         macro_rules! {name} {{ ($($cb:ident)::+ $($pre:tt)?) => {{ {path}::{first}!({path}::__{name}_0 [{carry} {}]); }} }}\n\
+         macro_rules! {name} {{ ($($cb:ident)::+ $([$($pre:tt)*])?) => {{ {path}::{first}!({path}::__{name}_0 [($($cb)::+) ($([$($pre)*])?) {}]); }} }}\n\
          #[allow(unused_imports)]\npub(crate) use {name};\n",
         lits(0, subs[0])));
     out.parse().unwrap()
@@ -310,6 +351,12 @@ fn xmacro(input: TokenStream, recorded: bool) -> TokenStream {
 ///              from outside can be anything
 ///   #[flags]   a bitflags type
 ///
+/// An #[open] or #[flags] type can be a #[bitfield]'s member, as C's
+/// `enum btree_id btree_id:8`: it has the const into_bits() bitfield-struct
+/// converts with, and from_bits() - for #[flags], bitflags' from_bits() is
+/// the checked one, so a member names `from = T::from_bits_retain`. A
+/// #[closed] enum can't convert from bits it may not have a variant for.
+///
 /// `_` for the name: an anonymous enum, the constants alone. A variant with
 /// no value is the one before it plus one, as in C.
 #[proc_macro]
@@ -321,6 +368,47 @@ pub fn c_enum(input: TokenStream) -> TokenStream {
         Ok(_) => unreachable!(),
         Err(e) => return compile_error(&format!("c_enum!: {e}")),
     };
+    match e.from.first() {
+        Some((_, f)) => through_list(&f.list, "cstruct_macros::__c_enum", input),
+        None => c_enum_gen(&e, &text),
+    }
+}
+
+/// c_enum!'s list's callback: { [decl] (entry), (entry), ... } - the enum
+/// with its first list's variants in their place: through the next list, if
+/// it has another, or recorded so.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __c_enum(input: TokenStream) -> TokenStream {
+    let mut trees = input.into_iter();
+    let decl = match trees.next() {
+        Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket => g.stream(),
+        _ => return compile_error("__c_enum!: expected [declaration] then the list's entries"),
+    };
+    let entries: Vec<String> = trees
+        .filter_map(|t| match t {
+            TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis => Some(g.stream().to_string()),
+            _ => None,
+        })
+        .collect();
+    let mut e = match one_item(&format!("c_enum! {{ {decl} }}"), "#[open|closed|flags] pub enum NAME: REPR { ... }",
+                               |i| matches!(i, CItem::Enum(_))) {
+        Ok(CItem::Enum(e)) => e,
+        Ok(_) => unreachable!(),
+        Err(e) => return compile_error(&format!("c_enum!: {e}")),
+    };
+    if let Err(err) = expand_enum_list(&mut e, &entries) {
+        return compile_error(&format!("c_enum! {}: {err}", e.name.as_deref().unwrap_or("_")));
+    }
+    let decl = enum_text(&e);
+    match e.from.first() {
+        Some((_, f)) => through_list(&f.list, "cstruct_macros::__c_enum", decl.parse().unwrap()),
+        None => c_enum_gen(&e, &format!("c_enum! {{ {decl} }}")),
+    }
+}
+
+/// c_enum! @e's Rust, and its record, of @text.
+fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
     let repr = &e.repr;
 
     // A variant with no value counts from the last that has one - not from
@@ -367,7 +455,8 @@ pub fn c_enum(input: TokenStream) -> TokenStream {
                 for v in &names {
                     out.push_str(&format!("    pub const {v}: Self = Self({v});\n"));
                 }
-                out.push_str("}\n");
+                out.push_str(&format!("    pub const fn from_bits(v: {repr}) -> Self {{ Self(v) }}\n"));
+                out.push_str(&format!("    pub const fn into_bits(self) -> {repr} {{ self.0 }}\n}}\n"));
             }
             CEnumKind::Flags => {
                 out.push_str(&format!(
@@ -377,7 +466,9 @@ pub fn c_enum(input: TokenStream) -> TokenStream {
                 for v in &names {
                     out.push_str(&format!("    #[allow(non_upper_case_globals)]\n    const {v} = {v};\n"));
                 }
-                out.push_str("}\n}\n");
+                out.push_str(&format!(
+                    "}}\n}}\n\
+                     impl {name} {{\n    pub const fn into_bits(self) -> {repr} {{ self.bits() }}\n}}\n"));
             }
         }
     }
@@ -391,7 +482,7 @@ pub fn c_enum(input: TokenStream) -> TokenStream {
         format!("::core::mem::align_of::<{ty}>() as u64"),
     ];
     nums.extend(names.iter().map(|v| format!("{v} as u64")));
-    out.push_str(&record(&text, &nums));
+    out.push_str(&record(text, &nums));
     out.parse().unwrap()
 }
 
@@ -437,12 +528,13 @@ pub fn c_same(input: TokenStream) -> TokenStream {
 ///
 ///   c_extern! {
 ///       pub fn bch2_trans_begin(trans: *mut c::btree_trans) -> u32;
-///       #[c("const struct bch_option bch2_opt_table[]")]
 ///       pub static bch2_opt_table: [c::bch_option; 0];
 ///   }
 ///
 /// Rust gets the extern "C" block; C the prototypes, generated into the
-/// header the C ones are in - see CExtern.
+/// header the C ones are in - see CExtern. A static that isn't mut is C's
+/// const, and [T; 0] its unsized array: `extern const struct bch_option
+/// bch2_opt_table[];`.
 #[proc_macro]
 pub fn c_extern(input: TokenStream) -> TokenStream {
     let text = format!("c_extern! {{ {input} }}");
@@ -533,20 +625,27 @@ pub fn rust_c_extern(input: TokenStream) -> TokenStream {
     format!("{defs}{}", record(&text, &[])).parse().unwrap()
 }
 
-/// An integer constant - C's #define: c_const! { pub const NAME: u32 = EXPR; }
-/// The #define has the type's C type (`5U`); #[c_int] before it, int's, for
-/// a constant C had as a plain number and Rust wants unsigned.
+/// Integer constants - C's #defines: c_const! { pub const NAME: u32 = EXPR; ... }
+/// Each #define has its type's C type (`5U`); #[c_int] before one, int's, for
+/// a constant C had as a plain number and Rust wants unsigned. The record is
+/// the block's, with each constant's value, in order.
 #[proc_macro]
 pub fn c_const(input: TokenStream) -> TokenStream {
     let text = format!("c_const! {{ {input} }}");
-    let c = match one_item(&text, "pub const NAME: TYPE = EXPR;", |i| matches!(i, CItem::Const(_))) {
-        Ok(CItem::Const(c)) => c,
-        Ok(_) => unreachable!(),
+    let consts = match parse_items(&text) {
+        Ok(items) if !items.is_empty() && items.iter().all(|i| matches!(i, CItem::Const(_))) => items,
+        Ok(_) => return compile_error("c_const!: expected pub const NAME: TYPE = EXPR;"),
         Err(e) => return compile_error(&format!("c_const!: {e}")),
     };
-    format!("#[allow(non_upper_case_globals, dead_code)]\npub const {}: {} = {};\n{}",
-            c.name, c.ty, c.value, record(&text, &[format!("{} as u64", c.name)]))
-        .parse().unwrap()
+    let mut out = String::new();
+    let mut nums = Vec::new();
+    for c in &consts {
+        let CItem::Const(c) = c else { unreachable!() };
+        out.push_str(&format!("#[allow(non_upper_case_globals, dead_code)]\npub const {}: {} = {};\n",
+                              c.name, c.ty, c.value));
+        nums.push(format!("{} as u64", c.name));
+    }
+    format!("{out}{}", record(&text, &nums)).parse().unwrap()
 }
 
 /// ioctl numbers, C's _IO*() #defines:

@@ -9,6 +9,7 @@
 
 /// The clang args that configure a compile like the Makefile's: the header,
 /// force-included, then EXTRA_CFLAGS's defines.
+#[allow(dead_code)]
 fn userspace_config_args(root: &std::path::Path) -> Vec<String> {
     let header = root.join("c_src/autoconf.h");
     let mut args = vec!["-include".to_string(), header.display().to_string()];
@@ -40,10 +41,21 @@ fn extra_cflags_defines() -> Vec<String> {
 /// them builds without them.
 const PER_BUILD_CONFIG: &[&str] = &["CONFIG_BCACHEFS_DEBUG", "CONFIG_VALGRIND"];
 
+/// The kernel's options the types test, which no userspace build sets:
+/// declared too, as the kernel build has them.
+const KERNEL_CONFIG: &[&str] = &[
+    "CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS",
+    "CONFIG_BCACHEFS_LOCK_TIME_STATS",
+    "CONFIG_BCACHEFS_TESTS",
+    "CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE",
+    "CONFIG_DEBUG_LOCK_ALLOC",
+    "CONFIG_POWER_SUPPLY",
+];
+
 /// Make the configuration's CONFIG_* defines Rust cfgs, as the kernel's
 /// rustc_cfg does for a kernel build: cfg(CONFIG_UNICODE) where C has
 /// CONFIG_UNICODE. Every name autoconf.h or EXTRA_CFLAGS mentions is
-/// declared, set or not, and so is PER_BUILD_CONFIG.
+/// declared, set or not, and so are PER_BUILD_CONFIG and KERNEL_CONFIG.
 #[allow(dead_code)]
 fn emit_userspace_config_cfgs(root: &std::path::Path) {
     let header = root.join("c_src/autoconf.h");
@@ -60,7 +72,7 @@ fn emit_userspace_config_cfgs(root: &std::path::Path) {
         .map(String::from)
         .collect();
     let mut names = set.clone();
-    names.extend(PER_BUILD_CONFIG.iter().map(|n| n.to_string()));
+    names.extend(PER_BUILD_CONFIG.iter().chain(KERNEL_CONFIG).map(|n| n.to_string()));
 
     for f in extra_cflags_defines() {
         let (undef, def) = match f.strip_prefix("-U") {

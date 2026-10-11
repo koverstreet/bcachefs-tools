@@ -1,144 +1,88 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of bcachefs_format_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
+//! bcachefs on disk data structures
+//!
+//! OVERVIEW:
+//!
+//! There are three main types of on disk data structures in bcachefs (this is
+//! reduced from 5 in bcache)
+//!
+//!  - superblock
+//!  - journal
+//!  - btree
+//!
+//! The btree is the primary structure; most metadata exists as keys in the
+//! various btrees. There are only a small number of btrees, they're not
+//! sharded - we have one btree for extents, another for inodes, et cetera.
+//!
+//! SUPERBLOCK:
+//!
+//! The superblock contains the location of the journal, the list of devices in
+//! the filesystem, and in general any metadata we need in order to decide
+//! whether we can start a filesystem or prior to reading the journal/btree
+//! roots.
+//!
+//! The superblock is extensible, and most of the contents of the superblock are
+//! in variable length, type tagged fields; see struct bch_sb_field.
+//!
+//! Backup superblocks do not reside in a fixed location; also, superblocks do
+//! not have a fixed size. To locate backup superblocks we have struct
+//! bch_sb_layout; we store a copy of this inside every superblock, and also
+//! before the first superblock.
+//!
+//! JOURNAL:
+//!
+//! The journal primarily records btree updates in the order they occurred;
+//! journal replay consists of just iterating over all the keys in the open
+//! journal entries and re-inserting them into the btrees.
+//!
+//! The journal also contains entry types for the btree roots, and blacklisted
+//! journal sequence numbers (see journal_seq_blacklist.c).
+//!
+//! BTREE:
+//!
+//! bcachefs btrees are copy on write b+ trees, where nodes are big (typically
+//! 128k-256k) and log structured. We use struct btree_node for writing the first
+//! entry in a given node (offset 0), and struct btree_node_entry for all
+//! subsequent writes.
+//!
+//! After the header, btree node entries contain a list of keys in sorted order.
+//! Values are stored inline with the keys; since values are variable length (and
+//! keys effectively are variable length too, due to packing) we can't do random
+//! access without building up additional in memory tables in the btree node read
+//! path.
+//!
+//! BTREE KEYS (struct bkey):
+//!
+//! The various btrees share a common format for the key - so as to avoid
+//! switching in fastpath lookup/comparison code - but define their own
+//! structures for the key values.
+//!
+//! The size of a key/value pair is stored as a u8 in units of u64s, so the max
+//! size is just under 2k. The common part also contains a type tag for the
+//! value, and a format field indicating whether the key is packed or not (and
+//! also meant to allow adding new key fields in the future, if desired).
+//!
+//! bkeys, when stored within a btree node, may also be packed. In that case, the
+//! bkey_format in that node is used to unpack it. Packed bkeys mean that we can
+//! be generous with field sizes in the common part of the key format (64 bit
+//! inode number, 64 bit offset, 96 bit version field, etc.) for negligible cost.
 
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::c_default;
+use crate::types::{c_default, Le32, Le64};
 use zerocopy::byteorder::little_endian as le;
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_typedef, c_verbatim, c_xmacro, CStruct};
+use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, CStruct};
+#[cfg(__KERNEL__)]
+use cstruct_macros::c_typedef;
 use nestify::nest;
 use typeinfo_macros::TypeInfo;
-
-c_verbatim!(r#"
-#include "enum_kind.h"
-
-/*
- * bcachefs on disk data structures
- *
- * OVERVIEW:
- *
- * There are three main types of on disk data structures in bcachefs (this is
- * reduced from 5 in bcache)
- *
- *  - superblock
- *  - journal
- *  - btree
- *
- * The btree is the primary structure; most metadata exists as keys in the
- * various btrees. There are only a small number of btrees, they're not
- * sharded - we have one btree for extents, another for inodes, et cetera.
- *
- * SUPERBLOCK:
- *
- * The superblock contains the location of the journal, the list of devices in
- * the filesystem, and in general any metadata we need in order to decide
- * whether we can start a filesystem or prior to reading the journal/btree
- * roots.
- *
- * The superblock is extensible, and most of the contents of the superblock are
- * in variable length, type tagged fields; see struct bch_sb_field.
- *
- * Backup superblocks do not reside in a fixed location; also, superblocks do
- * not have a fixed size. To locate backup superblocks we have struct
- * bch_sb_layout; we store a copy of this inside every superblock, and also
- * before the first superblock.
- *
- * JOURNAL:
- *
- * The journal primarily records btree updates in the order they occurred;
- * journal replay consists of just iterating over all the keys in the open
- * journal entries and re-inserting them into the btrees.
- *
- * The journal also contains entry types for the btree roots, and blacklisted
- * journal sequence numbers (see journal_seq_blacklist.c).
- *
- * BTREE:
- *
- * bcachefs btrees are copy on write b+ trees, where nodes are big (typically
- * 128k-256k) and log structured. We use struct btree_node for writing the first
- * entry in a given node (offset 0), and struct btree_node_entry for all
- * subsequent writes.
- *
- * After the header, btree node entries contain a list of keys in sorted order.
- * Values are stored inline with the keys; since values are variable length (and
- * keys effectively are variable length too, due to packing) we can't do random
- * access without building up additional in memory tables in the btree node read
- * path.
- *
- * BTREE KEYS (struct bkey):
- *
- * The various btrees share a common format for the key - so as to avoid
- * switching in fastpath lookup/comparison code - but define their own
- * structures for the key values.
- *
- * The size of a key/value pair is stored as a u8 in units of u64s, so the max
- * size is just under 2k. The common part also contains a type tag for the
- * value, and a format field indicating whether the key is packed or not (and
- * also meant to allow adding new key fields in the future, if desired).
- *
- * bkeys, when stored within a btree node, may also be packed. In that case, the
- * bkey_format in that node is used to unpack it. Packed bkeys mean that we can
- * be generous with field sizes in the common part of the key format (64 bit
- * inode number, 64 bit offset, 96 bit version field, etc.) for negligible cost.
- */
-
-#include <asm/types.h>
-#include <asm/byteorder.h>
-#include <linux/kernel.h>
-#include <linux/uuid.h>
-#include <uapi/linux/magic.h>
-
-#include "util/vstructs.h"
-"#);
 
 #[cfg(__KERNEL__)]
 c_typedef! {
     pub type __uuid_t = c::uuid_t;
 }
-
-c_verbatim!(r#"
-#define BITMASK(name, type, field, offset, end)				\
-static const __maybe_unused unsigned	name##_OFFSET = offset;		\
-static const __maybe_unused unsigned	name##_BITS = (end - offset);	\
-									\
-static inline __u64 name(const type *k)					\
-{									\
-	return (k->field >> offset) & ~(~0ULL << (end - offset));	\
-}									\
-									\
-static inline void SET_##name(type *k, __u64 v)				\
-{									\
-	k->field &= ~(~(~0ULL << (end - offset)) << offset);		\
-	k->field |= (v & ~(~0ULL << (end - offset))) << offset;		\
-}
-
-#define LE_BITMASK(_bits, name, type, field, offset, end)		\
-static const __maybe_unused unsigned	name##_OFFSET = offset;		\
-static const __maybe_unused unsigned	name##_BITS = (end - offset);	\
-static const __maybe_unused __u##_bits	name##_MAX = (1ULL << (end - offset)) - 1;\
-									\
-static inline __u64 name(const type *k)					\
-{									\
-	return (__le##_bits##_to_cpu(k->field) >> offset) &		\
-		~(~0ULL << (end - offset));				\
-}									\
-									\
-static inline void SET_##name(type *k, __u64 v)				\
-{									\
-	__u##_bits new = __le##_bits##_to_cpu(k->field);		\
-									\
-	new &= ~(~(~0ULL << (end - offset)) << offset);			\
-	new |= (v & ~(~0ULL << (end - offset))) << offset;		\
-	k->field = __cpu_to_le##_bits(new);				\
-}
-
-#define LE16_BITMASK(n, t, f, o, e)	LE_BITMASK(16, n, t, f, o, e)
-#define LE32_BITMASK(n, t, f, o, e)	LE_BITMASK(32, n, t, f, o, e)
-#define LE64_BITMASK(n, t, f, o, e)	LE_BITMASK(64, n, t, f, o, e)
-"#);
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -152,29 +96,29 @@ pub struct bkey_format {
 
 /* Btree keys - all units are in sectors */
 
-#[cfg_attr(target_endian = "little", repr(C, packed(4)))]
-#[cfg_attr(not(target_endian = "little"), repr(C, packed))]
+/*
+ * Word order matches machine byte order - btree code treats a bpos as a
+ * single large integer, for search/comparison purposes
+ *
+ * Note that wherever a bpos is embedded in another on disk data
+ * structure, it has to be byte swabbed when reading in metadata that
+ * wasn't written in native endian order:
+ */
+#[cfg(target_endian = "little")]
+#[repr(C, packed(4))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bpos {
-    /*
-     * Word order matches machine byte order - btree code treats a bpos as a
-     * single large integer, for search/comparison purposes
-     *
-     * Note that wherever a bpos is embedded in another on disk data
-     * structure, it has to be byte swabbed when reading in metadata that
-     * wasn't written in native endian order:
-     */
-    #[cfg(target_endian = "little")]
     pub snapshot: u32,
-    #[cfg(target_endian = "little")]
     pub offset: u64,
-    #[cfg(target_endian = "little")]
     pub inode: u64,
-    #[cfg(target_endian = "big")]
+}
+
+#[cfg(target_endian = "big")]
+#[repr(C, packed)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+pub struct bpos {
     pub inode: u64,
-    #[cfg(target_endian = "big")]
     pub offset: u64, /* Points to end of extent - sectors */
-    #[cfg(target_endian = "big")]
     pub snapshot: u32,
 }
 
@@ -185,17 +129,19 @@ pub struct bch_val {
     pub __nothing: [u64; 0],
 }
 
-#[cfg_attr(target_endian = "little", repr(C, packed(4)))]
-#[cfg_attr(not(target_endian = "little"), repr(C, packed))]
+#[cfg(target_endian = "little")]
+#[repr(C, packed(4))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bversion {
-    #[cfg(target_endian = "little")]
     pub lo: u64,
-    #[cfg(target_endian = "little")]
     pub hi: u32,
-    #[cfg(target_endian = "big")]
+}
+
+#[cfg(target_endian = "big")]
+#[repr(C, packed)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+pub struct bversion {
     pub hi: u32,
-    #[cfg(target_endian = "big")]
     pub lo: u64,
 }
 
@@ -208,10 +154,9 @@ pub struct bkey_format_bits {
 }
 
 /*
- * The big-endian version of bkey can't be compiled by rustc with the "aligned"
- * attr since it doesn't allow types to have both "packed" and "aligned" attrs.
- * So for Rust compatibility, don't include this. It can be included in the LE
- * version because the "packed" attr is redundant in that case.
+ * The big-endian bkey has no align(8): rustc doesn't allow a type to be both
+ * packed and aligned. The little-endian one can have it, because packed is
+ * redundant there.
  *
  * History: (quoting Kent)
  *
@@ -232,8 +177,8 @@ pub struct bkey_format_bits {
  * If we ever do a bkey_v2 and need to expand the hedaer by another byte for
  * some reason - that will clean up this wart.
  */
-#[cfg_attr(target_endian = "little", repr(C, align(8)))]
-#[cfg_attr(not(target_endian = "little"), repr(C, packed))]
+#[cfg(target_endian = "little")]
+#[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
 pub struct bkey {
@@ -247,38 +192,33 @@ pub struct bkey {
     /* Type of the value */
     pub type_: u8,
 
-    #[cfg(target_endian = "little")]
     pub pad: [u8; 1],
 
-    #[cfg(target_endian = "little")]
     pub bversion: c::bversion,
-    #[cfg(target_endian = "little")]
     pub size: u32, /* extent size, in sectors */
-    #[cfg(target_endian = "little")]
     pub p: c::bpos,
-    #[cfg(target_endian = "big")]
+}
+
+#[cfg(target_endian = "big")]
+#[repr(C, packed)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[c_packed]
+pub struct bkey {
+    /* Size of combined key and value, in u64s */
+    pub u64s: u8,
+
+    /* Format of key (0 for format local to btree node) */
+    #[c_bitfield]
+    pub format_bits: bkey_format_bits,
+
+    /* Type of the value */
+    pub type_: u8,
+
     pub p: c::bpos,
-    #[cfg(target_endian = "big")]
     pub size: u32, /* extent size, in sectors */
-    #[cfg(target_endian = "big")]
     pub bversion: c::bversion,
 
-    #[cfg(target_endian = "big")]
     pub pad: [u8; 1],
-}
-impl bkey {
-    pub fn format(&self) -> u8 { let b = self.format_bits; b.format() }
-    pub fn set_format(&mut self, v: u8) { let mut b = self.format_bits; b.set_format(v); self.format_bits = b; }
-    pub fn needs_whiteout(&self) -> u8 { let b = self.format_bits; b.needs_whiteout() }
-    pub fn set_needs_whiteout(&mut self, v: u8) { let mut b = self.format_bits; b.set_needs_whiteout(v); self.format_bits = b; }
-}
-
-#[bitfield(u8)]
-pub struct bkey_packed_format_bits {
-    #[bits(7)]
-    pub format: u8,
-    #[bits(1)]
-    pub needs_whiteout: u8,
 }
 
 #[repr(C, align(8))]
@@ -298,7 +238,7 @@ pub struct bkey_packed {
      * bits of the bitfield
      */
     #[c_bitfield]
-    pub format_bits: bkey_packed_format_bits,
+    pub format_bits: bkey_format_bits,
 
     /* Type of the value */
     pub type_: u8,
@@ -314,12 +254,6 @@ pub struct bkey_packed {
     pub pad: [u8; core::mem::size_of::<c::bkey>() - 3],
 }
 c_default!(bkey_packed);
-impl bkey_packed {
-    pub fn format(&self) -> u8 { let b = self.format_bits; b.format() }
-    pub fn set_format(&mut self, v: u8) { let mut b = self.format_bits; b.set_format(v); self.format_bits = b; }
-    pub fn needs_whiteout(&self) -> u8 { let b = self.format_bits; b.needs_whiteout() }
-    pub fn set_needs_whiteout(&mut self, v: u8) { let mut b = self.format_bits; b.set_needs_whiteout(v); self.format_bits = b; }
-}
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -331,27 +265,14 @@ pub struct bch_le128 {
 
 c_const! {
     pub const BKEY_U64s: usize = size_of::<c::bkey>() / size_of::<u64>();
-}
-
-c_const! {
     pub const BKEY_U64s_MAX: u8 = u8::MAX;
-}
-
-c_const! {
     pub const BKEY_VAL_U64s_MAX: usize = c::BKEY_U64s_MAX as usize - c::BKEY_U64s;
-}
 
-c_const! {
     #[c_int]
     pub const KEY_PACKED_BITS_START: u32 = 24;
-}
 
-c_const! {
     #[c_int]
     pub const KEY_FORMAT_LOCAL_BTREE: u32 = 0;
-}
-
-c_const! {
     #[c_int]
     pub const KEY_FORMAT_CURRENT: u32 = 1;
 }
@@ -369,25 +290,6 @@ c_enum! {
     }
 }
 
-c_verbatim!(r#"
-#define bkey_format_field(name, field)					\
-	[BKEY_FIELD_##name] = (sizeof(((struct bkey *) NULL)->field) * 8)
-
-#define BKEY_FORMAT_CURRENT						\
-((struct bkey_format) {							\
-	.key_u64s	= BKEY_U64s,					\
-	.nr_fields	= BKEY_NR_FIELDS,				\
-	.bits_per_field = {						\
-		bkey_format_field(INODE,	p.inode),		\
-		bkey_format_field(OFFSET,	p.offset),		\
-		bkey_format_field(SNAPSHOT,	p.snapshot),		\
-		bkey_format_field(SIZE,		size),			\
-		bkey_format_field(VERSION_HI,	bversion.hi),		\
-		bkey_format_field(VERSION_LO,	bversion.lo),		\
-	},								\
-})
-"#);
-
 /* bkey with inline value */
 #[repr(C)]
 #[derive(Default, CStruct)]
@@ -397,28 +299,6 @@ pub struct bkey_i {
     pub k: c::bkey,
     pub v: c::bch_val,
 }
-
-c_verbatim!(r#"
-#define POS_KEY(_pos)							\
-((struct bkey) {							\
-	.u64s		= BKEY_U64s,					\
-	.format		= KEY_FORMAT_CURRENT,				\
-	.p		= _pos,						\
-})
-
-#define KEY(_inode, _offset, _size)					\
-((struct bkey) {							\
-	.u64s		= BKEY_U64s,					\
-	.format		= KEY_FORMAT_CURRENT,				\
-	.p		= POS(_inode, _offset),				\
-	.size		= _size,					\
-})
-
-#define bkey_bytes(_k)		((_k)->u64s * sizeof(__u64))
-
-#define __BKEY_PADDED(key, pad)					\
-	struct bkey_i key; __u64 key ## _pad[pad]
-"#);
 
 c_enum! {
     #[flags]
@@ -543,19 +423,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_bkey_type_0 {
-    ([$($acc:tt)*] $(($name:tt, $nr:expr$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_bkey_type: u32 {
-                $($acc)*
-                $([<KEY_TYPE_ $name>] = (($nr) as u32),)*
-                KEY_TYPE_MAX,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_bkey_type: u32 {
+        BCH_BKEY_TYPES(name, nr, ..) => KEY_TYPE_ ## name = nr,
+        KEY_TYPE_MAX,
+    }
 }
-BCH_BKEY_TYPES!(__bch_bkey_type_0 []);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -590,7 +464,7 @@ c_xmacro! {
      * fsck can prune.
      *
      * The decompress_ reasons are the data_decompress_err_ list in
-     * sb/errors_format.h, name for name: the superblock counts how often a
+     * sb/errors_format.rs, name for name: the superblock counts how often a
      * decompression failed each way, and the key says which of those killed this
      * extent. bch2_decompress_key_type_error() maps between them off the same
      * table that produces the sb error ids, so the two can't drift - adding a
@@ -619,18 +493,12 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_key_type_errors_0 {
-    ([$($acc:tt)*] $(($n:tt, $t:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_key_type_errors: u32 {
-                $($acc)*
-                $([<KEY_TYPE_ERROR_ $n>] = (($t) as u32),)*
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_key_type_errors: u32 {
+        KEY_TYPE_ERRORS(n, t) => KEY_TYPE_ERROR_ ## n = t,
+    }
 }
-KEY_TYPE_ERRORS!(__bch_key_type_errors_0 []);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -916,19 +784,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __btree_id_0 {
-    ([$($acc:tt)*] $(($name:tt, $nr:expr$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum btree_id: u32 {
-                $($acc)*
-                $([<BTREE_ID_ $name>] = (($nr) as u32),)*
-                BTREE_ID_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum btree_id: u32 {
+        BCH_BTREE_IDS(name, nr, ..) => BTREE_ID_ ## name = nr,
+        BTREE_ID_NR,
+    }
 }
-BCH_BTREE_IDS!(__btree_id_0 []);
 
 c_verbatim!(r#"
 #include "alloc/replicas_format_gen.h"
@@ -961,19 +823,13 @@ c_verbatim!(r#"
 #include "snapshots/format_gen.h"
 "#);
 
-macro_rules! __bch_sb_field_type_0 {
-    ([$($acc:tt)*] $(($f:tt, $nr:expr$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_sb_field_type: u32 {
-                $($acc)*
-                $([<BCH_SB_FIELD_ $f>] = (($nr) as u32),)*
-                BCH_SB_FIELD_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_sb_field_type: u32 {
+        BCH_SB_FIELDS(f, nr, ..) => BCH_SB_FIELD_ ## f = nr,
+        BCH_SB_FIELD_NR,
+    }
 }
-BCH_SB_FIELDS!(__bch_sb_field_type_0 []);
 
 c_const! {
     /*
@@ -1022,14 +878,6 @@ pub struct nonce {
 pub struct bch_key {
     pub key: [le::U64; 4],
 }
-
-c_verbatim!(r#"
-#define BCH_KEY_MAGIC					\
-	(((__u64) 'b' <<  0)|((__u64) 'c' <<  8)|		\
-	 ((__u64) 'h' << 16)|((__u64) '*' << 24)|		\
-	 ((__u64) '*' << 32)|((__u64) 'k' << 40)|		\
-	 ((__u64) 'e' << 48)|((__u64) 'y' << 56))
-"#);
 
 #[repr(C)]
 #[derive(Default, CStruct, TypeInfo)]
@@ -1146,30 +994,17 @@ c_bitmask! {
     }
 }
 
-c_verbatim!(r#"
-/* Superblock: */
+// Superblock:
 
-/*
- * New versioning scheme:
- * One common version number for all on disk data structures - superblock, btree
- * nodes, journal entries
- */
-#define BCH_VERSION_MAJOR(_v)		((__u16) ((_v) >> 10))
-"#);
+// New versioning scheme:
+// One common version number for all on disk data structures - superblock, btree
+// nodes, journal entries
 
 #[allow(non_snake_case)]
 pub const fn BCH_VERSION_MAJOR(v: u64) -> u64 { v >> 10 }
 
-c_verbatim!(r#"
-#define BCH_VERSION_MINOR(_v)		((__u16) ((_v) & ~(~0U << 10)))
-"#);
-
 #[allow(non_snake_case)]
 pub const fn BCH_VERSION_MINOR(v: u64) -> u64 { v & !(!0 << 10) }
-
-c_verbatim!(r#"
-#define BCH_VERSION(_major, _minor)	(((_major) << 10)|(_minor) << 0)
-"#);
 
 #[allow(non_snake_case)]
 pub const fn BCH_VERSION(major: u64, minor: u64) -> u64 { (major << 10) | (minor << 0) }
@@ -1331,36 +1166,22 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bcachefs_metadata_version_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bcachefs_metadata_version: u32 {
-                $($acc)*
-                $([<bcachefs_metadata_version_ $t>] = (($n) as u32),)*
-                bcachefs_metadata_version_max,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bcachefs_metadata_version: u32 {
+        bcachefs_metadata_version_min = 9,
+        BCH_METADATA_VERSIONS(t, n, ..) => bcachefs_metadata_version_ ## t = n,
+        bcachefs_metadata_version_max,
+    }
 }
-BCH_METADATA_VERSIONS!(__bcachefs_metadata_version_0 [bcachefs_metadata_version_min = 9,]);
-
-c_verbatim!(r#"
-static const __maybe_unused
-unsigned bcachefs_metadata_required_upgrade_below = bcachefs_metadata_version_btree_node_accounting;
-"#);
 
 c_const! {
     #[c_int]
     pub const bcachefs_metadata_version_current: u32 = c::bcachefs_metadata_version_max as u32 - 1;
-}
 
-c_const! {
     #[c_int]
     pub const BCH_SB_SECTOR: u32 = 8;
-}
 
-c_const! {
     #[c_int]
     pub const BCH_SB_LAYOUT_SIZE_BITS_MAX: u32 = 16; /* 32 MB */
 }
@@ -1437,20 +1258,21 @@ c_default!(bch_sb);
 
 c_bitmask! {
     LE16_BITMASK(struct bch_sb, block_size), strip BCH_SB_ {
-        /*
-         * Flags:
-         * BCH_SB_INITALIZED	- set on first mount
-         * BCH_SB_CLEAN		- did we shut down cleanly? Just a hint, doesn't affect
-         *			  behaviour of mount/recovery path:
-         * BCH_SB_INODE_32BIT	- limit inode numbers to 32 bits
-         * BCH_SB_128_BIT_MACS	- 128 bit macs instead of 80
-         * BCH_SB_ENCRYPTION_TYPE - if nonzero encryption is enabled; overrides
-         *			   DATA/META_CSUM_TYPE. Also indicates encryption
-         *			   algorithm in use, if/when we get more than one
-         */
         BCH_SB_BLOCK_SIZE(0, 16),
     }
 }
+
+/*
+ * Flags:
+ * BCH_SB_INITALIZED	- set on first mount
+ * BCH_SB_CLEAN		- did we shut down cleanly? Just a hint, doesn't affect
+ *			  behaviour of mount/recovery path:
+ * BCH_SB_INODE_32BIT	- limit inode numbers to 32 bits
+ * BCH_SB_128_BIT_MACS	- 128 bit macs instead of 80
+ * BCH_SB_ENCRYPTION_TYPE - if nonzero encryption is enabled; overrides
+ *			   DATA/META_CSUM_TYPE. Also indicates encryption
+ *			   algorithm in use, if/when we get more than one
+ */
 
 c_bitmask! {
     LE64_BITMASK(struct bch_sb, flags[0]), strip BCH_SB_ {
@@ -1620,9 +1442,7 @@ c_const! {
         (1 << c::BCH_FEATURE_btree_updates_journalled as u32) |
         (1 << c::BCH_FEATURE_alloc_v2 as u32) |
         (1 << c::BCH_FEATURE_extents_across_btree_nodes as u32);
-}
 
-c_const! {
     pub const BCH_SB_FEATURES_ALL: u64 =
         c::BCH_SB_FEATURES_ALWAYS |
         (1 << c::BCH_FEATURE_new_siphash as u32) |
@@ -1632,19 +1452,13 @@ c_const! {
         (1 << c::BCH_FEATURE_incompat_version_field as u32);
 }
 
-macro_rules! __bch_sb_feature_0 {
-    ([$($acc:tt)*] $(($f:tt$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_sb_feature: u32 {
-                $($acc)*
-                $([<BCH_FEATURE_ $f>],)*
-                BCH_FEATURE_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_sb_feature: u32 {
+        BCH_SB_FEATURES(f, ..) => BCH_FEATURE_ ## f,
+        BCH_FEATURE_NR,
+    }
 }
-BCH_SB_FEATURES!(__bch_sb_feature_0 []);
 
 c_xmacro! {
     BCH_SB_COMPAT(x) {
@@ -1658,22 +1472,17 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_sb_compat_0 {
-    ([$($acc:tt)*] $(($f:tt$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_sb_compat: u32 {
-                $($acc)*
-                $([<BCH_COMPAT_ $f>],)*
-                BCH_COMPAT_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_sb_compat: u32 {
+        BCH_SB_COMPAT(f, ..) => BCH_COMPAT_ ## f,
+        BCH_COMPAT_NR,
+    }
 }
-BCH_SB_COMPAT!(__bch_sb_compat_0 []);
+
+/* options: */
 
 c_xmacro! {
-    /* options: */
     BCH_VERSION_UPGRADE_OPTS(x) {
         (compatible, 0),
         (incompatible, 1),
@@ -1681,24 +1490,16 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_version_upgrade_opts_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_version_upgrade_opts: u32 {
-                $($acc)*
-                $([<BCH_VERSION_UPGRADE_ $t>] = (($n) as u32),)*
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_version_upgrade_opts: u32 {
+        BCH_VERSION_UPGRADE_OPTS(t, n) => BCH_VERSION_UPGRADE_ ## t = n,
+    }
 }
-BCH_VERSION_UPGRADE_OPTS!(__bch_version_upgrade_opts_0 []);
 
 c_const! {
     pub const BCH_REPLICAS_MAX: u32 = 4;
-}
 
-c_const! {
     pub const BCH_BKEY_PTRS_MAX: u32 = 16;
 }
 
@@ -1720,19 +1521,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_error_actions_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_error_actions: u32 {
-                $($acc)*
-                $([<BCH_ON_ERROR_ $t>] = (($n) as u32),)*
-                BCH_ON_ERROR_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_error_actions: u32 {
+        BCH_ERROR_ACTIONS(t, n, ..) => BCH_ON_ERROR_ ## t = n,
+        BCH_ON_ERROR_NR,
+    }
 }
-BCH_ERROR_ACTIONS!(__bch_error_actions_0 []);
 
 c_xmacro! {
     BCH_DEGRADED_ACTIONS(x) {
@@ -1743,19 +1538,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_degraded_actions_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_degraded_actions: u32 {
-                $($acc)*
-                $([<BCH_DEGRADED_ $t>] = (($n) as u32),)*
-                BCH_DEGRADED_ACTIONS_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_degraded_actions: u32 {
+        BCH_DEGRADED_ACTIONS(t, n) => BCH_DEGRADED_ ## t = n,
+        BCH_DEGRADED_ACTIONS_NR,
+    }
 }
-BCH_DEGRADED_ACTIONS!(__bch_degraded_actions_0 []);
 
 c_xmacro! {
     /*
@@ -1776,19 +1565,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_write_degraded_actions_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_write_degraded_actions: u32 {
-                $($acc)*
-                $([<BCH_WRITE_DEGRADED_ $t>] = (($n) as u32),)*
-                BCH_WRITE_DEGRADED_ACTIONS_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_write_degraded_actions: u32 {
+        BCH_WRITE_DEGRADED_ACTIONS(t, n) => BCH_WRITE_DEGRADED_ ## t = n,
+        BCH_WRITE_DEGRADED_ACTIONS_NR,
+    }
 }
-BCH_WRITE_DEGRADED_ACTIONS!(__bch_write_degraded_actions_0 []);
 
 c_xmacro! {
     BCH_STR_HASH_TYPES(x) {
@@ -1799,19 +1582,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_str_hash_type_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_str_hash_type: u32 {
-                $($acc)*
-                $([<BCH_STR_HASH_ $t>] = (($n) as u32),)*
-                BCH_STR_HASH_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_str_hash_type: u32 {
+        BCH_STR_HASH_TYPES(t, n) => BCH_STR_HASH_ ## t = n,
+        BCH_STR_HASH_NR,
+    }
 }
-BCH_STR_HASH_TYPES!(__bch_str_hash_type_0 []);
 
 c_xmacro! {
     BCH_STR_HASH_OPTS(x) {
@@ -1821,19 +1598,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_str_hash_opts_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_str_hash_opts: u32 {
-                $($acc)*
-                $([<BCH_STR_HASH_OPT_ $t>] = (($n) as u32),)*
-                BCH_STR_HASH_OPT_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_str_hash_opts: u32 {
+        BCH_STR_HASH_OPTS(t, n) => BCH_STR_HASH_OPT_ ## t = n,
+        BCH_STR_HASH_OPT_NR,
+    }
 }
-BCH_STR_HASH_OPTS!(__bch_str_hash_opts_0 []);
 
 c_xmacro! {
     BCH_CSUM_TYPES(x) {
@@ -1848,32 +1619,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_csum_type_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_csum_type: u32 {
-                $($acc)*
-                $([<BCH_CSUM_ $t>] = (($n) as u32),)*
-                BCH_CSUM_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_csum_type: u32 {
+        BCH_CSUM_TYPES(t, n) => BCH_CSUM_ ## t = n,
+        BCH_CSUM_NR,
+    }
 }
-BCH_CSUM_TYPES!(__bch_csum_type_0 []);
-
-c_verbatim!(r#"
-static const __maybe_unused unsigned bch_crc_bytes[] = {
-	[BCH_CSUM_none]				= 0,
-	[BCH_CSUM_crc32c_nonzero]		= 4,
-	[BCH_CSUM_crc32c]			= 4,
-	[BCH_CSUM_crc64_nonzero]		= 8,
-	[BCH_CSUM_crc64]			= 8,
-	[BCH_CSUM_xxhash]			= 8,
-	[BCH_CSUM_chacha20_poly1305_80]		= 10,
-	[BCH_CSUM_chacha20_poly1305_128]	= 16,
-};
-"#);
 
 c_xmacro! {
     BCH_CSUM_OPTS(x) {
@@ -1884,19 +1636,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_csum_opt_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_csum_opt: u32 {
-                $($acc)*
-                $([<BCH_CSUM_OPT_ $t>] = (($n) as u32),)*
-                BCH_CSUM_OPT_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_csum_opt: u32 {
+        BCH_CSUM_OPTS(t, n) => BCH_CSUM_OPT_ ## t = n,
+        BCH_CSUM_OPT_NR,
+    }
 }
-BCH_CSUM_OPTS!(__bch_csum_opt_0 []);
 
 c_xmacro! {
     BCH_COMPRESSION_TYPES(x) {
@@ -1909,19 +1655,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_compression_type_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_compression_type: u32 {
-                $($acc)*
-                $([<BCH_COMPRESSION_TYPE_ $t>] = (($n) as u32),)*
-                BCH_COMPRESSION_TYPE_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_compression_type: u32 {
+        BCH_COMPRESSION_TYPES(t, n) => BCH_COMPRESSION_TYPE_ ## t = n,
+        BCH_COMPRESSION_TYPE_NR,
+    }
 }
-BCH_COMPRESSION_TYPES!(__bch_compression_type_0 []);
 
 c_xmacro! {
     BCH_COMPRESSION_OPTS(x) {
@@ -1932,19 +1672,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_compression_opts_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_compression_opts: u32 {
-                $($acc)*
-                $([<BCH_COMPRESSION_OPT_ $t>] = (($n) as u32),)*
-                BCH_COMPRESSION_OPT_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_compression_opts: u32 {
+        BCH_COMPRESSION_OPTS(t, n) => BCH_COMPRESSION_OPT_ ## t = n,
+        BCH_COMPRESSION_OPT_NR,
+    }
 }
-BCH_COMPRESSION_OPTS!(__bch_compression_opts_0 []);
 
 c_xmacro! {
     BCH_SCRUB_JOURNAL_OPTS(x) {
@@ -1954,48 +1688,19 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_scrub_journal_opts_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_scrub_journal_opts: u32 {
-                $($acc)*
-                $([<BCH_SCRUB_JOURNAL_ $t>] = (($n) as u32),)*
-                BCH_SCRUB_JOURNAL_OPT_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_scrub_journal_opts: u32 {
+        BCH_SCRUB_JOURNAL_OPTS(t, n) => BCH_SCRUB_JOURNAL_ ## t = n,
+        BCH_SCRUB_JOURNAL_OPT_NR,
+    }
 }
-BCH_SCRUB_JOURNAL_OPTS!(__bch_scrub_journal_opts_0 []);
-
-c_verbatim!(r#"
-/*
- * Magic numbers
- *
- * The various other data structures have their own magic numbers, which are
- * xored with the first part of the cache set's UUID
- */
-
-#define BCACHE_MAGIC							\
-	UUID_INIT(0xc68573f6, 0x4e1a, 0x45ca,				\
-		  0x82, 0x65, 0xf5, 0x7f, 0x48, 0xba, 0x6d, 0x81)
-#define BCHFS_MAGIC							\
-	UUID_INIT(0xc68573f6, 0x66ce, 0x90a9,				\
-		  0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef)
-"#);
 
 c_const! {
     /* statfs()'s f_type, and the superblock's s_magic: the kernel's
      * uapi/linux/magic.h has it too, as BCACHEFS_SUPER_MAGIC */
     pub const BCACHEFS_STATFS_MAGIC: u32 = 0xca451a4e;
-}
 
-c_verbatim!(r#"
-#define JSET_MAGIC		__cpu_to_le64(0x245235c1a3625032ULL)
-#define BSET_MAGIC		__cpu_to_le64(0x90135c78b99e07f5ULL)
-"#);
-
-c_const! {
     /* Journal */
     pub const JSET_KEYS_U64s: usize = size_of::<c::jset_entry>() / size_of::<u64>();
 }
@@ -2044,19 +1749,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_jset_entry_type_0 {
-    ([$($acc:tt)*] $(($f:tt, $nr:expr$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_jset_entry_type: u32 {
-                $($acc)*
-                $([<BCH_JSET_ENTRY_ $f>] = (($nr) as u32),)*
-                BCH_JSET_ENTRY_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_jset_entry_type: u32 {
+        BCH_JSET_ENTRY_TYPES(f, nr, ..) => BCH_JSET_ENTRY_ ## f = nr,
+        BCH_JSET_ENTRY_NR,
+    }
 }
-BCH_JSET_ENTRY_TYPES!(__bch_jset_entry_type_0 []);
 
 /*
  * Journal sequence numbers can be blacklisted: bsets record the max sequence
@@ -2072,18 +1771,15 @@ BCH_JSET_ENTRY_TYPES!(__bch_jset_entry_type_0 []);
 #[derive(Default, CStruct)]
 pub struct jset_entry_blacklist {
     pub entry: c::jset_entry,
-    #[c_anon("")] pub __seq_align: [u64; 0],
-    pub seq: le::U64,
+    pub seq: Le64,
 }
 
 #[repr(C)]
 #[derive(Default, CStruct)]
 pub struct jset_entry_blacklist_v2 {
     pub entry: c::jset_entry,
-    #[c_anon("")] pub __start_align: [u64; 0],
-    pub start: le::U64,
-    #[c_anon("")] pub __end_align: [u64; 0],
-    pub end: le::U64,
+    pub start: Le64,
+    pub end: Le64,
 }
 
 c_xmacro! {
@@ -2094,19 +1790,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_fs_usage_type_0 {
-    ([$($acc:tt)*] $(($f:tt, $nr:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_fs_usage_type: u32 {
-                $($acc)*
-                $([<BCH_FS_USAGE_ $f>] = (($nr) as u32),)*
-                BCH_FS_USAGE_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_fs_usage_type: u32 {
+        BCH_FS_USAGE_TYPES(f, nr) => BCH_FS_USAGE_ ## f = nr,
+        BCH_FS_USAGE_NR,
+    }
 }
-BCH_FS_USAGE_TYPES!(__bch_fs_usage_type_0 []);
 
 #[repr(C, packed)]
 #[derive(Default, CStruct)]
@@ -2144,14 +1834,11 @@ pub struct jset_entry_dev_usage_type {
 #[derive(Default, CStruct)]
 pub struct jset_entry_dev_usage {
     pub entry: c::jset_entry,
-    #[c_anon("")] pub __dev_align: [u32; 0],
-    pub dev: le::U32,
+    pub dev: Le32,
     pub pad: u32,
 
-    #[c_anon("")] pub ___buckets_ec_align: [u64; 0],
-    pub _buckets_ec: le::U64, /* No longer used */
-    #[c_anon("")] pub ___buckets_unavailable_align: [u64; 0],
-    pub _buckets_unavailable: le::U64, /* No longer used */
+    pub _buckets_ec: Le64, /* No longer used */
+    pub _buckets_unavailable: Le64, /* No longer used */
 
     pub d: [c::jset_entry_dev_usage_type; 0],
 }
@@ -2240,9 +1927,7 @@ c_bitmask! {
 c_const! {
     #[c_int]
     pub const BCH_JOURNAL_BUCKETS_MIN: u32 = 8;
-}
 
-c_const! {
     /* Btree: */
 
     /*

@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of btree/sort_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use core::ffi::c_uint;
 use cstruct_macros::{c_enum, CStruct};
 
 #[repr(C)]
@@ -21,8 +19,8 @@ c_default!(sort_iter_set);
 #[derive(Clone, Copy, CStruct)]
 pub struct sort_iter {
     pub b: *mut c::btree,
-    pub used: core::ffi::c_uint,
-    pub size: core::ffi::c_uint,
+    pub used: c_uint,
+    pub size: c_uint,
 
     pub data: [c::sort_iter_set; 0],
 }

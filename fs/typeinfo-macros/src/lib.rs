@@ -1,42 +1,38 @@
 // SPDX-License-Identifier: GPL-2.0
-//! `#[derive(TypeInfo)]` — runtime type information for the bindgen-generated
-//! C struct bindings.
+//! `#[derive(TypeInfo)]` — runtime type information for the types C shares.
 //!
 //! Emits a `crate::typeinfo::TypeInfo` impl whose `INFO` describes every field:
 //! name, offset (via `offset_of!`, so the compiler guarantees it) and kind.
-//! The kind encodes width, endianness and signedness, recovered from the C
-//! typedef *name* (`__le32`, `__u64`, ...). The typedefs resolve to plain
-//! integers, so the endianness only exists at the syntax level — that's why
-//! this must be a derive macro looking at tokens rather than a generic
+//! The kind encodes width, endianness and signedness, read from the field's
+//! type as written - `le::U32`, `Le64`, `__le16`, `u64`, `c_uint` - which is
+//! why this is a derive macro looking at tokens rather than a generic
 //! reflection library looking at resolved types.
 //!
-//! Injected into the bindings by bindgen's `--with-derive-custom-*` flags (see
-//! `codegen.rs`) on structs, unions and enums matching the `bch_*`-family
-//! regex. The macro is total over everything bindgen emits for those: field
-//! types it can't describe (pointers, function pointers, bitfield units,
+//! Derived by hand, beside CStruct, on the types in fs/ that are introspected.
+//! Field types it can't describe (pointers, function pointers, bitfield units,
 //! kernel-internal structs) degrade to `Opaque` rather than failing, so
-//! tagging an in-memory monster like `bch_fs` is harmless. Unions and enums
-//! get an empty field list (size only). Nested struct fields whose type name
-//! matches the same regex are described by reference to that type's own INFO —
-//! the regex here and in codegen.rs must stay in sync, or the emitted
-//! `<T as TypeInfo>` bound will fail to resolve (a loud, actionable error).
+//! deriving it on a large in-memory struct is harmless. Unions and enums get
+//! an empty field list (size only). A field whose type is one of
+//! derives_type_info()'s names is described by reference to that type's own
+//! INFO - so that type must derive TypeInfo too, or the emitted
+//! `<T as TypeInfo>` bound fails to resolve (a loud, actionable error).
 //!
 //! Hand-rolled token parsing, zero dependencies (no syn/quote): the kernel and
 //! DKMS builds compile this with a plain `rustc --crate-type proc-macro`, the
 //! same recipe as the vendored `paste` crate, so it must be self-contained.
-//! The input grammar is machine-generated bindgen output, which is far more
-//! regular than general Rust — this is much less heroic than it sounds.
+//! The input is plain #[repr(C)] declarations, far more regular than general
+//! Rust — this is much less heroic than it sounds.
 
 use proc_macro::{Delimiter, TokenStream, TokenTree};
 
-/// Must match the `--with-derive-custom-*` regex in codegen.rs: these are the
-/// type names we may reference as `<T as TypeInfo>::INFO` from field kinds.
+/// The type names a field kind may reference as `<T as TypeInfo>::INFO`:
+/// each must derive TypeInfo itself.
 fn derives_type_info(name: &str) -> bool {
     name.starts_with("bch_") || matches!(name, "bpos" | "bkey" | "bversion")
 }
 
 /// `#[derive(TypeInfo)]`: implements `crate::typeinfo::TypeInfo` for a
-/// bindgen-generated struct, union or enum - see the crate docs.
+/// struct, union or enum C shares - see the crate docs.
 #[proc_macro_derive(TypeInfo)]
 pub fn derive_type_info(input: TokenStream) -> TokenStream {
     let toks: Vec<TokenTree> = input.into_iter().collect();
@@ -52,8 +48,8 @@ pub fn derive_type_info(input: TokenStream) -> TokenStream {
     let name = name.to_string();
     i += 1;
 
-    // Generic types can't be described by a single static table; bindgen
-    // doesn't emit generics for the types we match, so just skip quietly.
+    // A generic type can't be described by a single static table - none of
+    // the types that derive this is one, so just skip quietly.
     if matches!(toks.get(i), Some(TokenTree::Punct(p)) if p.as_char() == '<') {
         return TokenStream::new();
     }
@@ -204,7 +200,7 @@ fn classify(ty: &[TokenTree]) -> String {
         return OPAQUE.into();
     }
 
-    // Raw pointers (and references, should bindgen ever emit one).
+    // Raw pointers, and references.
     if matches!(&ty[0], TokenTree::Punct(p) if matches!(p.as_char(), '*' | '&')) {
         return OPAQUE.into();
     }
@@ -294,9 +290,9 @@ fn classify(ty: &[TokenTree]) -> String {
 
     // Fixed-width integer typedefs. Endianness lives in the *name*.
     let (bytes, endian, signed) = match last_ident.as_str() {
-        "__le16" => ("2u8", "Little", false),
-        "__le32" => ("4u8", "Little", false),
-        "__le64" => ("8u8", "Little", false),
+        "__le16" | "Le16" => ("2u8", "Little", false),
+        "__le32" | "Le32" => ("4u8", "Little", false),
+        "__le64" | "Le64" => ("8u8", "Little", false),
         "__be16" => ("2u8", "Big", false),
         "__be32" => ("4u8", "Big", false),
         "__be64" => ("8u8", "Big", false),

@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::{GenRadix, bits_to_longs, c_default};
-use cstruct_macros::{c_const, c_enum, c_verbatim, c_xmacro, CStruct};
+use crate::util::ffi::c_char;
+use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
+use cstruct_macros::{c_const, c_enum, c_xmacro, CStruct};
 use typeinfo_macros::TypeInfo;
 
 c_xmacro! {
@@ -62,26 +61,6 @@ c_xmacro! {
          "Test restarting mark and sweep gc when bucket gens change"),
     }
 }
-
-c_verbatim!(r#"
-#define BCH_DEBUG_PARAMS_ALL() BCH_DEBUG_PARAMS_ALWAYS() BCH_DEBUG_PARAMS_DEBUG()
-"#);
-
-#[cfg(CONFIG_BCACHEFS_DEBUG)]
-c_verbatim!(r#"
-#define BCH_DEBUG_PARAMS() BCH_DEBUG_PARAMS_ALL()
-"#);
-
-#[cfg(not(CONFIG_BCACHEFS_DEBUG))]
-c_verbatim!(r#"
-#define BCH_DEBUG_PARAMS() BCH_DEBUG_PARAMS_ALWAYS()
-"#);
-
-c_verbatim!(r#"
-#define BCH_DEBUG_PARAM(name, description) extern struct static_key_false bch2_##name;
-BCH_DEBUG_PARAMS_ALL()
-#undef BCH_DEBUG_PARAM
-"#);
 
 c_xmacro! {
     BCH_TIME_STATS(x) {
@@ -199,32 +178,20 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_time_stats_0 {
-    ([$($acc:tt)*] $(($name:tt$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum bch_time_stats: u32 {
-                $($acc)*
-                $([<BCH_TIME_ $name>],)*
-                BCH_TIME_STAT_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum bch_time_stats: u32 {
+        BCH_TIME_STATS(name, ..) => BCH_TIME_ ## name,
+        BCH_TIME_STAT_NR,
+    }
 }
-BCH_TIME_STATS!(__bch_time_stats_0 []);
 
 c_const! {
     /* Number of nodes btree coalesce will try to coalesce at once */
     pub const GC_MERGE_NODES: u32 = 4;
-}
 
-c_const! {
     pub const BTREE_NODE_OPEN_BUCKET_RESERVE: u32 = c::BTREE_RESERVE_MAX * c::BCH_REPLICAS_MAX;
 }
-
-c_verbatim!(r#"
-struct btree;
-"#);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -257,19 +224,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_dev_read_ref_0 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum bch_dev_read_ref: u32 {
-                $($acc)*
-                $([<BCH_DEV_READ_REF_ $n>],)*
-                BCH_DEV_READ_REF_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum bch_dev_read_ref: u32 {
+        BCH_DEV_READ_REFS(n) => BCH_DEV_READ_REF_ ## n,
+        BCH_DEV_READ_REF_NR,
+    }
 }
-BCH_DEV_READ_REFS!(__bch_dev_read_ref_0 []);
 
 c_xmacro! {
     BCH_DEV_WRITE_REFS(x) {
@@ -286,24 +247,18 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_dev_write_ref_0 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum bch_dev_write_ref: u32 {
-                $($acc)*
-                $([<BCH_DEV_WRITE_REF_ $n>],)*
-                BCH_DEV_WRITE_REF_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum bch_dev_write_ref: u32 {
+        BCH_DEV_WRITE_REFS(n) => BCH_DEV_WRITE_REF_ ## n,
+        BCH_DEV_WRITE_REF_NR,
+    }
 }
-BCH_DEV_WRITE_REFS!(__bch_dev_write_ref_0 []);
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct bucket_bitmap {
-    pub buckets: *mut core::ffi::c_ulong,
+    pub buckets: *mut c_ulong,
     pub nr: u64,
     pub lock: c::mutex,
 }
@@ -319,18 +274,12 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_dev_flags_0 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum bch_dev_flags: u32 {
-                $($acc)*
-                $([<BCH_DEV_ $n>],)*
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum bch_dev_flags: u32 {
+        BCH_DEV_FLAGS(n) => BCH_DEV_ ## n,
+    }
 }
-BCH_DEV_FLAGS!(__bch_dev_flags_0 []);
 
 c_const! {
     #[c_int]
@@ -346,7 +295,7 @@ pub struct bch_dev {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     pub dying: bool,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub last_put: core::ffi::c_ulong,
+    pub last_put: c_ulong,
     #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
     pub ref_: c::percpu_ref,
     pub ref_completion: c::completion,
@@ -383,15 +332,15 @@ pub struct bch_dev {
     pub mi: c::bch_member_cpu,
     pub btree_allocated_bitmap_gc: u64,
     pub errors: [c::atomic64_t; c::BCH_MEMBER_ERROR_NR as usize],
-    pub write_errors_start: core::ffi::c_ulong,
-    pub flags: core::ffi::c_ulong,
+    pub write_errors_start: c_ulong,
+    pub flags: c_ulong,
 
     pub uuid: c::__uuid_t,
-    pub name: [crate::util::ffi::c_char; c::BDEVNAME_SIZE as usize],
+    pub name: [c_char; c::BDEVNAME_SIZE as usize],
 
     pub disk_sb: c::bch_sb_handle,
     pub sb_read_scratch: *mut c::bch_sb,
-    pub sb_write_error: core::ffi::c_int,
+    pub sb_write_error: c_int,
     pub dev: c::dev_t,
 
     pub self_mask: c::bch_devs_mask,
@@ -401,12 +350,11 @@ pub struct bch_dev {
      * Per-bucket arrays are protected by either rcu_read_lock or
      * state_lock, for device resize.
      */
-    #[c("GENRADIX(struct bucket) buckets_gc")]
     pub buckets_gc: GenRadix<c::bucket>,
     #[c("struct bucket_gens __rcu *bucket_gens")]
     pub bucket_gens: *mut c::bucket_gens,
     pub oldest_gen: *mut u8,
-    pub buckets_nouse: *mut core::ffi::c_ulong,
+    pub buckets_nouse: *mut c_ulong,
 
     pub bucket_backpointer_mismatch: c::bucket_bitmap,
     pub bucket_backpointer_empty: c::bucket_bitmap,
@@ -431,9 +379,9 @@ pub struct bch_dev {
     /* Buckets copygc has queued for evacuation on this device: */
     pub copygc_in_flight: c::atomic_t,
 
-    pub nr_open_buckets: core::ffi::c_uint,
-    pub nr_partial_buckets: core::ffi::c_uint,
-    pub nr_btree_reserve: core::ffi::c_uint,
+    pub nr_open_buckets: c_uint,
+    pub nr_partial_buckets: c_uint,
+    pub nr_btree_reserve: c_uint,
 
     /* this device's share of c->capacity.reserved, which is their sum */
     pub reserved_sectors: u64,
@@ -503,23 +451,17 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_fs_flags_0 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum bch_fs_flags: u32 {
-                $($acc)*
-                $([<BCH_FS_ $n>],)*
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum bch_fs_flags: u32 {
+        BCH_FS_FLAGS(n) => BCH_FS_ ## n,
+    }
 }
-BCH_FS_FLAGS!(__bch_fs_flags_0 []);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct btree_debug {
-    pub id: core::ffi::c_uint,
+    pub id: c_uint,
 }
 
 c_const! {
@@ -569,23 +511,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_write_ref_0 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum bch_write_ref: u32 {
-                $($acc)*
-                $([<BCH_WRITE_REF_ $n>],)*
-                BCH_WRITE_REF_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum bch_write_ref: u32 {
+        BCH_WRITE_REFS(n) => BCH_WRITE_REF_ ## n,
+        BCH_WRITE_REF_NR,
+    }
 }
-BCH_WRITE_REFS!(__bch_write_ref_0 []);
-
-c_verbatim!(r#"
-#define BCH_FS_DEFAULT_UTF8_ENCODING UNICODE_AGE(12, 1, 0)
-"#);
 
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
@@ -599,13 +531,13 @@ pub struct bch_fs {
     pub opts_dir: c::kobject,
     pub time_stats: c::kobject,
     pub time_stats_json: c::kobject,
-    pub flags: core::ffi::c_ulong,
+    pub flags: c_ulong,
 
-    pub minor: core::ffi::c_int,
+    pub minor: c_int,
     pub chardev: *mut c::device,
     pub vfs_sb: *mut c::super_block,
     pub dev: c::dev_t,
-    pub name: [crate::util::ffi::c_char; 40],
+    pub name: [c_char; 40],
 
     pub stdio: *mut c::stdio_redirect,
     pub stdio_filter: *mut c::task_struct,
@@ -624,8 +556,8 @@ pub struct bch_fs {
      * still gets its progress in dmesg.
      */
     pub stdio_progress_reader: bool,
-    pub loglevel: core::ffi::c_uint,
-    pub prev_loglevel: core::ffi::c_uint,
+    pub loglevel: c_uint,
+    pub prev_loglevel: c_uint,
     /*
      * Certain operations are only allowed in single threaded mode, during
      * recovery, and we want to assert that this is the case:
@@ -662,11 +594,11 @@ pub struct bch_fs {
     pub sb_write: c::closure,
     pub sb_lock: c::mutex_noio,
     #[c("unsigned long incompat_versions_requested[BITS_TO_LONGS(BCH_VERSION_MINOR(bcachefs_metadata_version_current))]")]
-    pub incompat_versions_requested: [core::ffi::c_ulong;
+    pub incompat_versions_requested: [c_ulong;
         bits_to_longs(c::BCH_VERSION_MINOR(c::bcachefs_metadata_version_current as u64) as usize)],
     pub cf_encoding: *mut c::unicode_map,
 
-    pub block_bits: core::ffi::c_ushort, /* ilog2(block_size) */
+    pub block_bits: c_ushort, /* ilog2(block_size) */
 
     /*
      * shard → preferred CPU mapping for wake_cpu hinting from
@@ -681,8 +613,8 @@ pub struct bch_fs {
     pub times: [c::bch2_time_stats; c::BCH_TIME_STAT_NR as usize],
     pub errors: c::bch_fs_errors,
 
-    /* C's CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS, which it defines from these,
-     * above: rustc sees only the configuration */
+    /* C's CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS, which bcachefs.h defines from
+     * these: rustc sees only the configuration */
     #[cfg(all(__KERNEL__, CONFIG_DEBUG_FS))]
     pub async_objs: [c::async_obj_list; c::BCH_ASYNC_OBJ_NR as usize],
 
@@ -694,7 +626,6 @@ pub struct bch_fs {
      */
     pub journal_scrub_seq: u64,
     pub journal_replay_seq_end: u64,
-    #[c("GENRADIX(struct journal_replay *) journal_entries")]
     pub journal_entries: GenRadix<*mut c::journal_replay>,
     pub journal_entries_base_seq: u64,
     pub journal_keys: c::journal_keys,
@@ -795,7 +726,7 @@ pub struct bch_fs {
      * Test knob: KEY_TYPE_logged_op_* whose next cursor update should fail,
      * or 0. Armed via sysfs, one shot, disarms itself as it fires.
      */
-    pub logged_op_fail_next: core::ffi::c_uint,
+    pub logged_op_fail_next: c_uint,
 
     #[cfg(CONFIG_DEBUG_FS)]
     pub fs_debug_dir: *mut c::dentry,

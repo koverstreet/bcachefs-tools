@@ -8,9 +8,8 @@
 //! object, as objcopy -O binary extracts it - see lib.rs for what's in it.
 //! Each source file's records, in order, are one header in OUT_DIR, named for
 //! the file's path under SRC, the crate's source root: foo/types.rs gives
-//! foo/types_gen.h, which foo/types.h includes where the types belong. Run
-//! from where rustc ran: a record's file is file!(), which is relative to
-//! that. A
+//! foo/types_gen.h, foo/bar_types.rs foo/bar_gen.h. Run from where rustc
+//! ran: a record's file is file!(), which is relative to that. A
 //! Rust-only field is opaque storage of its size and alignment; after the
 //! definitions come _Static_asserts of the Rust layout, so a C declaration
 //! that doesn't match its Rust type fails the C build, naming the field -
@@ -166,8 +165,10 @@ fn defines_and_holds(r: &Record) -> (Option<String>, Vec<String>) {
 /// expansion, all at its invocation. Among records of one line, the ones
 /// nothing else there holds go first, each laying out what it holds in its
 /// own order, depth first: arm types in arm order, nested types in field
-/// order - not in whatever order rustc emitted them. Records on lines of
-/// their own keep line order. A cycle is left as it is, for C to complain.
+/// order - not in whatever order rustc emitted them, which isn't the same
+/// from one build to the next; the rest of a line's, by their text. Records
+/// on lines of their own keep line order. A cycle is left as it is, for C
+/// to complain.
 fn in_dependency_order(rs: Vec<&Record>) -> Vec<&Record> {
     let info: Vec<_> = rs.iter().map(|r| defines_and_holds(r)).collect();
     let by_name: BTreeMap<&str, usize> = info.iter().enumerate()
@@ -178,7 +179,8 @@ fn in_dependency_order(rs: Vec<&Record>) -> Vec<&Record> {
                                                       holds.iter().any(|h| h == d))
     });
     let mut order: Vec<usize> = (0..rs.len()).collect();
-    order.sort_by_key(|&i| (rs[i].line, held_on_its_line(i)));
+    order.sort_by(|&i, &j| (rs[i].line, held_on_its_line(i), &rs[i].text)
+                            .cmp(&(rs[j].line, held_on_its_line(j), &rs[j].text)));
 
     fn visit(i: usize, info: &[(Option<String>, Vec<String>)], by_name: &BTreeMap<&str, usize>,
              visited: &mut [bool], out: &mut Vec<usize>) {
@@ -226,8 +228,10 @@ fn layout(def: &CStructDef, nums: &[u64]) -> Result<Layout, String> {
 /// a struct that isn't @packed - aligns a plain member to its type, and starts
 /// a new unit of a bitfield member's type rather than let it straddle one.
 /// Little-endian bitfields only: big-endian C declares the members reversed,
-/// to put each at the same bits of the same word.
-fn check_bitfield(bf: &CBitfieldDef, offset: u64, prev_end: u64, packed: bool) -> Result<(), String> {
+/// to put each at the same bits of the same word. An enum member's unit is
+/// the enum's size, from @enums - the C enum's too, which the headers assert.
+fn check_bitfield(bf: &CBitfieldDef, offset: u64, prev_end: u64, packed: bool,
+                  enums: &BTreeMap<String, u64>) -> Result<(), String> {
     let storage = int_bits(&bf.storage)
         .ok_or_else(|| format!("{}: storage {} isn't an integer", bf.name, bf.storage))? as u64;
     let align_up = |pos: u64, unit: u64| pos.div_ceil(unit) * unit;
@@ -242,7 +246,9 @@ fn check_bitfield(bf: &CBitfieldDef, offset: u64, prev_end: u64, packed: bool) -
             rust += width;
             continue;
         }
-        let unit = unit_bits(ty).ok_or_else(|| format!("{}.{name}: {ty} isn't an integer or bool", bf.name))? as u64;
+        let unit = unit_bits(ty).map(u64::from)
+            .or_else(|| ty.trim().rsplit("::").next().and_then(|e| enums.get(e)).map(|size| size * 8))
+            .ok_or_else(|| format!("{}.{name}: {ty} isn't an integer, bool or enum", bf.name))?;
         if !packed && (width == unit || c / unit != (c + width - 1) / unit) {
             c = align_up(c, unit);
         }
@@ -300,7 +306,8 @@ fn member_asserts(out: &mut String, ty: &str, name: &str, offset: u64, size: u64
 /// The header for one source file's records, in order. @structs: every
 /// struct, union and typedef recorded, any file's - Rust name to C type - for
 /// the fields whose type is one.
-fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>)
+fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>,
+          enums: &BTreeMap<String, u64>)
     -> Result<String, String>
 {
     let mut items = Vec::new();
@@ -311,6 +318,19 @@ fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>)
     for r in records {
         let at = |e: String| format!("{}:{}: {e}", r.file, r.line);
         let mut parsed = parse_items(&r.text).map_err(at)?;
+        // A c_const! is one record: its constants, and their values in order.
+        if !parsed.is_empty() && parsed.iter().all(|i| matches!(i, CItem::Const(_))) {
+            if parsed.len() != r.nums.len() {
+                return Err(at(format!("{} values for {} constants", r.nums.len(), parsed.len())));
+            }
+            for (mut item, &v) in parsed.into_iter().zip(&r.nums) {
+                if let CItem::Const(c) = &mut item {
+                    c.value = if rust_int_signed(&c.ty) { format!("{}", v as i64) } else { format!("{v}") };
+                }
+                items.push(item);
+            }
+            continue;
+        }
         let mut item = match (parsed.pop(), parsed.is_empty()) {
             (Some(item), true) => item,
             _ => return Err(at("a record is one item".into())),
@@ -338,12 +358,6 @@ fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>)
                 if let Some(name) = &e.name {
                     enum_sizes.push((name.clone(), *size, *align));
                 }
-            }
-            CItem::Const(c) => {
-                let [v] = r.nums.as_slice() else {
-                    return Err(at("a constant's record has its value".into()));
-                };
-                c.value = if rust_int_signed(&c.ty) { format!("{}", *v as i64) } else { format!("{v}") };
             }
             // Each opcode as Rust made it - none in a build that has no
             // Rust ones (see fs/util/ioctl.rs).
@@ -396,7 +410,7 @@ fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>)
                 _ => None,
             }).ok_or_else(|| format!("{}.{}: #[c_bitfield], but {} isn't a #[bitfield] type in {header}",
                                      def.name, f.name, f.ty))?;
-            if let Err(e) = check_bitfield(bf, *offset, prev_end, def.repr.packed.is_some()) {
+            if let Err(e) = check_bitfield(bf, *offset, prev_end, def.repr.packed.is_some(), enums) {
                 misplaced.push(format!("{}.{}: {e}", def.name, f.name));
             }
         }
@@ -499,8 +513,9 @@ fn main() {
         [_, flag, src] if flag == "--emit" => {
             let text = std::fs::read_to_string(src).unwrap_or_else(|e| die(format!("reading {src}: {e}")));
             let mut items = parse_items(&text).unwrap_or_else(|e| die(format!("{src}: {e}")));
-            // A tagged_union!'s arms from a list this file defines: as the
-            // macro expands them. (One from another file's list has none here.)
+            // A tagged_union!'s arms, and a c_enum!'s variants, from a list this
+            // file defines: as the macros expand them. (Another file's list
+            // has no entries here.)
             let lists: BTreeMap<String, Vec<String>> = items.iter()
                 .filter_map(|i| match i {
                     CItem::XMacro(x) => Some((x.name.clone(), x.entries.iter()
@@ -510,10 +525,14 @@ fn main() {
                 })
                 .collect();
             for item in &mut items {
-                if let CItem::TaggedUnion(tu) = item {
-                    if let Some(entries) = tu.from.as_ref().and_then(|(l, _, _)| lists.get(l)) {
+                match item {
+                    CItem::TaggedUnion(tu) => if let Some(entries) = tu.from.as_ref().and_then(|f| lists.get(&f.list)) {
                         tu.arms = tagged_union_arms(tu, entries).unwrap_or_else(|e| die(format!("{src}: {e}")));
-                    }
+                    },
+                    CItem::Enum(e) => while let Some(entries) = e.from.first().and_then(|(_, f)| lists.get(&f.list)).cloned() {
+                        expand_enum_list(e, &entries).unwrap_or_else(|e| die(format!("{src}: {e}")));
+                    },
+                    _ => {}
                 }
             }
             // The arm types a tagged_union! defines in its block: structs of
@@ -566,6 +585,7 @@ fn main() {
 
             let mut files: BTreeMap<&str, Vec<&Record>> = BTreeMap::new();
             let mut structs = BTreeMap::new();
+            let mut enums = BTreeMap::new();
             for r in &recs {
                 files.entry(&r.file).or_default().push(r);
                 match parse_items(&r.text).ok().and_then(|mut items| items.pop()) {
@@ -579,6 +599,9 @@ fn main() {
                     // how a prototype names it
                     Some(CItem::Enum(CEnumDef { name: Some(n), .. })) => {
                         structs.insert(n.clone(), format!("enum {n}"));
+                        if let Some(&size) = r.nums.first() {
+                            enums.insert(n.clone(), size);
+                        }
                     }
                     // a darray type is C's typedef, which its DEFINE_DARRAY*()
                     // makes: Rust's is a DArray alias, with no record
@@ -601,7 +624,7 @@ fn main() {
                     errors.push(format!("{file} and {other} would both be {header}"));
                     continue;
                 }
-                let h = match file_h(&header, &rs, &structs) {
+                let h = match file_h(&header, &rs, &structs, &enums) {
                     Ok(h) => h,
                     Err(e) => { errors.push(e); continue; }
                 };

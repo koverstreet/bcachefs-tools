@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of data/reconcile/types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use core::ffi::{c_int, c_uint};
 use cstruct_macros::CStruct;
 use typeinfo_macros::TypeInfo;
-
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -21,7 +18,7 @@ pub struct bch_fs_reconcile {
      * that it's running: it also exits on its own if do_reconcile() fails.
      * Nonzero iff it did.
      */
-    pub thread_exit_ret: core::ffi::c_int,
+    pub thread_exit_ret: c_int,
     pub kick: u32,
 
     pub running: bool,
@@ -29,7 +26,7 @@ pub struct bch_fs_reconcile {
     pub wait_iotime_end: u64,
     pub wait_wallclock_start: u64,
 
-    pub phase: core::ffi::c_uint,
+    pub phase: c_uint,
     pub work_pos: c::bbpos,
     pub work_stats: c::bch_move_stats,
     pub progress: c::progress_indicator,

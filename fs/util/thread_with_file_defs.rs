@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of util/thread_with_file_defs.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use cstruct_macros::{c_verbatim, CStruct};
+use core::ffi::{c_int, c_long, c_uint, c_ulong};
+use cstruct_macros::CStruct;
 
-c_verbatim!(r#"
 /*
  * Thread with file: Run a kthread and connect it to a file descriptor, so that
  * it can be interacted with via fd read/write methods and closing the file
@@ -41,28 +38,22 @@ c_verbatim!(r#"
  * To write, use stdio_redirect_printf()
  * To read, use stdio_redirect_read() or stdio_redirect_readline()
  */
-struct task_struct;
-"#);
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct thread_with_file {
     pub task: *mut c::task_struct,
-    pub ret: core::ffi::c_int,
+    pub ret: c_int,
     pub done: bool,
 }
 c_default!(thread_with_file);
-
-c_verbatim!(r#"
-struct thread_with_stdio;
-"#);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct thread_with_stdio_ops {
     pub exit: Option<unsafe extern "C" fn(*mut c::thread_with_stdio)>,
-    pub fn_: Option<unsafe extern "C" fn(*mut c::thread_with_stdio) -> core::ffi::c_int>,
-    pub unlocked_ioctl: Option<unsafe extern "C" fn(*mut c::thread_with_stdio, core::ffi::c_uint, core::ffi::c_ulong) -> core::ffi::c_long>,
+    pub fn_: Option<unsafe extern "C" fn(*mut c::thread_with_stdio) -> c_int>,
+    pub unlocked_ioctl: Option<unsafe extern "C" fn(*mut c::thread_with_stdio, c_uint, c_ulong) -> c_long>,
 }
 
 #[repr(C)]

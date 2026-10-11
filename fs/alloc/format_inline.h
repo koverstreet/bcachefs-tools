@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_ALLOC_FORMAT_INLINE_H
 #define _BCACHEFS_ALLOC_FORMAT_INLINE_H
 
-/* Included at the end of alloc/format.h. */
+/* Included after alloc/format_gen.h. */
 
 /* Data type computation */
 

@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_SB_ERRORS_FORMAT_INLINE_H
 #define _BCACHEFS_SB_ERRORS_FORMAT_INLINE_H
 
-/* Included at the end of sb/errors_format.h. */
+/* Included after sb/errors_format_gen.h. */
 
 static inline __u64 BCH_SB_ERROR_ENTRY_V2_ID(const struct bch_sb_field_error_entry_v2 *e)
 {

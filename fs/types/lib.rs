@@ -85,11 +85,47 @@ pub const fn field_align<S, F>(_f: fn(*const S) -> *const F) -> u64 {
     core::mem::align_of::<F>() as u64
 }
 
+// ---- C's little-endian integers -------------------------------------------
+
+/// __le16, __le32, __le64 as C has them: little-endian, and aligned as the
+/// integer is - on every target, i386's 4-aligned u64 included, since they're
+/// the integer underneath. zerocopy's le::U16..le::U64 are aligned to 1, so a
+/// field of one is placed, and aligns its struct, as no C __le field is.
+/// The same new(), get(), set() and From conversions.
+macro_rules! le_int {
+    ($($name:ident: $t:ty),*) => { $(
+        #[repr(transparent)]
+        #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+        pub struct $name($t);
+
+        impl $name {
+            pub const fn new(v: $t) -> Self { Self(v.to_le()) }
+            pub const fn get(self) -> $t { <$t>::from_le(self.0) }
+            pub fn set(&mut self, v: $t) { self.0 = v.to_le() }
+        }
+
+        impl From<$t> for $name {
+            fn from(v: $t) -> Self { Self::new(v) }
+        }
+
+        impl From<$name> for $t {
+            fn from(v: $name) -> Self { v.get() }
+        }
+
+        impl core::fmt::Debug for $name {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                self.get().fmt(f)
+            }
+        }
+    )* };
+}
+le_int!(Le16: u16, Le32: u32, Le64: u64);
+
 // ---- C's containers ------------------------------------------------------
 //
 // Laid out as the C macros make them; C is the code that uses them, Rust only
 // holds them, so they're opaque - darray's layout is C's, not Vec's. A field
-// of one is declared in C with its macro, by #[c].
+// of one is declared in C with its macro - the generator's container_c().
 
 /// DARRAY(T) - DARRAY_PREALLOCATED(T, N) - util/darray.h. Not Clone or
 /// Copy: it owns its allocation, and a copy would be a second owner.

@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of sb/counters_format.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
@@ -161,33 +158,21 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_persistent_counters_0 {
-    ([$($acc:tt)*] $(($t:tt$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum bch_persistent_counters: u32 {
-                $($acc)*
-                $([<BCH_COUNTER_ $t>],)*
-                BCH_COUNTER_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum bch_persistent_counters: u32 {
+        BCH_PERSISTENT_COUNTERS(t, ..) => BCH_COUNTER_ ## t,
+        BCH_COUNTER_NR,
+    }
 }
-BCH_PERSISTENT_COUNTERS!(__bch_persistent_counters_0 []);
 
-macro_rules! __bch_persistent_counters_stable_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_persistent_counters_stable: u32 {
-                $($acc)*
-                $([<BCH_COUNTER_STABLE_ $t>] = (($n) as u32),)*
-                BCH_COUNTER_STABLE_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_persistent_counters_stable: u32 {
+        BCH_PERSISTENT_COUNTERS(t, n, ..) => BCH_COUNTER_STABLE_ ## t = n,
+        BCH_COUNTER_STABLE_NR,
+    }
 }
-BCH_PERSISTENT_COUNTERS!(__bch_persistent_counters_stable_0 []);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]

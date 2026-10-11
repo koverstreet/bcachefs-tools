@@ -1,25 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of util/rcu_pending_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::{c_opaque, c_default};
-use cstruct_macros::{c_typedef, c_verbatim, CStruct};
-
-c_verbatim!(r#"
-struct rcu_pending;
-"#);
+use cstruct_macros::{c_typedef, CStruct};
 
 c_typedef! {
     pub type rcu_pending_process_fn = Option<unsafe extern "C" fn(*mut c::rcu_pending, *mut c::rcu_head)>;
 }
-
-c_verbatim!(r#"
-struct rcu_pending_pcpu;
-"#);
 
 c_opaque!(rcu_pending_pcpu);
 

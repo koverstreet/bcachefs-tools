@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of sb/counters_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use core::ffi::c_uint;
 use cstruct_macros::{CStruct, c_const, c_extern};
 use typeinfo_macros::TypeInfo;
 
@@ -27,8 +25,6 @@ pub struct bch_fs_counters {
 }
 c_default!(bch_fs_counters);
 
-// What Rust calls of sb/counters.h: C gets these as prototypes, in sb/counters_gen.h
-// with the types - see c_extern! in types/cstruct.rs.
 c_extern! {
-    pub fn bch2_counter_reset(arg1: *mut c::bch_fs, arg2: core::ffi::c_uint);
+    pub fn bch2_counter_reset(arg1: *mut c::bch_fs, arg2: c_uint);
 }

@@ -8,8 +8,6 @@
 use crate::cstructs::c;
 use cstruct_macros::c_extern;
 
-// What Rust calls of alloc/background.h: C gets these as prototypes, in alloc/background_gen.h
-// with the types - see c_extern! in types/cstruct.rs.
 c_extern! {
     pub fn bch2_dev_allocator_set_rw(arg1: *mut c::bch_fs, arg2: *mut c::bch_dev, arg3: bool);
 }

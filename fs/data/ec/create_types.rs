@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of data/ec/create_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::{DArray, bits_to_longs, c_default};
-use cstruct_macros::{bitfield, c_enum, c_verbatim, c_xmacro, CStruct};
+use core::ffi::{c_int, c_uint, c_ulong};
+use cstruct_macros::{bitfield, c_enum, c_xmacro, CStruct, c_typedef};
+use nestify::nest;
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
@@ -15,7 +14,7 @@ pub struct ec_dev_stripe_state {
     pub list: c::list_head,
     pub lock: c::mutex,
 
-    pub disk_label: core::ffi::c_uint,
+    pub disk_label: c_uint,
 
     pub block_stripe: c::dev_stripe_state,
     pub parity_stripe: c::dev_stripe_state,
@@ -54,19 +53,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __ec_stripe_new_state_0 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum ec_stripe_new_state: u32 {
-                $($acc)*
-                $([<EC_STRIPE_NEW_ $n>],)*
-                EC_STRIPE_NEW_STATE_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum ec_stripe_new_state: u32 {
+        EC_STRIPE_NEW_STATES(n) => EC_STRIPE_NEW_ ## n,
+        EC_STRIPE_NEW_STATE_NR,
+    }
 }
-EC_STRIPE_NEW_STATES!(__ec_stripe_new_state_0 []);
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
@@ -76,90 +69,78 @@ pub struct ec_stripe_new_bucket {
 }
 c_default!(ec_stripe_new_bucket);
 
-#[bitfield(u8)]
-pub struct ec_stripe_new_have_old_stripe_bits {
-    #[bits(1)]
-    pub have_old_stripe: bool,
+nest! {
+    #[repr(C)]
+    #[derive(CStruct)]
+    pub struct ec_stripe_new {
+        pub c: *mut c::bch_fs,
+        pub ctxt: *mut c::moving_context,
+        pub lock: c::mutex,
+        pub list: c::list_head,
+        pub work: c::work_struct,
+        pub cl: c::closure,
 
-    #[bits(1)]
-    pub allocated: bool,
-    #[bits(1)]
-    pub mem_allocated: bool,
-    #[bits(1)]
-    pub old_stripe_read: bool,
-    #[bits(1)]
-    pub old_stripe_read_all: bool,
-    #[bits(3)]
-    pub __pad: u8,
-}
+        pub ref_: [c::atomic_t; c::STRIPE_REF_NR as usize],
 
-#[repr(C)]
-#[derive(CStruct)]
-pub struct ec_stripe_new {
-    pub c: *mut c::bch_fs,
-    pub ctxt: *mut c::moving_context,
-    pub lock: c::mutex,
-    pub list: c::list_head,
-    pub work: c::work_struct,
-    pub cl: c::closure,
+        /* seq is only assigned once the refs are gone, so it can't give an age */
+        pub start_time: u64,
+        pub seq: u64,
 
-    pub ref_: [c::atomic_t; c::STRIPE_REF_NR as usize],
+        pub err: c_int,
 
-    /* seq is only assigned once the refs are gone, so it can't give an age */
-    pub start_time: u64,
-    pub seq: u64,
+        /*
+         * Set by ec_old_stripe_fold() from the read's completion, read by
+         * create: its own field so neither side needs a lock to say what
+         * happened. @old_stripe_lost_blocks is the blocks that were carried forward
+         * and are unreadable, i.e. the data the failure actually cost us.
+         */
+        pub old_stripe_err: c_int,
+        pub old_stripe_lost_blocks: u32,
 
-    pub err: core::ffi::c_int,
+        pub devs: c::bch_devs_mask,
+        pub watermark: c::bch_watermark,
+        pub state: c::ec_stripe_new_state,
 
-    /*
-     * Set by ec_old_stripe_fold() from the read's completion, read by
-     * create: its own field so neither side needs a lock to say what
-     * happened. @old_stripe_lost_blocks is the blocks that were carried forward
-     * and are unreadable, i.e. the data the failure actually cost us.
-     */
-    pub old_stripe_err: core::ffi::c_int,
-    pub old_stripe_lost_blocks: u32,
+        #[c_bitfield]
+        #>[bitfield(u8)]
+        pub bits: pub struct ec_stripe_new_bits {
+            #[bits(1)]
+            pub have_old_stripe: bool,
 
-    pub devs: c::bch_devs_mask,
-    pub watermark: c::bch_watermark,
-    pub state: c::ec_stripe_new_state,
+            #[bits(1)]
+            pub allocated: bool,
+            #[bits(1)]
+            pub mem_allocated: bool,
+            #[bits(1)]
+            pub old_stripe_read: bool,
+            #[bits(1)]
+            pub old_stripe_read_all: bool,
+            #[bits(3)]
+            pub __pad: u8,
+        },
 
-    #[c_bitfield]
-    pub have_old_stripe_bits: ec_stripe_new_have_old_stripe_bits,
+        #[c("unsigned long blocks_gotten[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)]")]
+        pub blocks_gotten: [c_ulong; bits_to_longs(c::BCH_BKEY_PTRS_MAX as usize)],
+        #[c("unsigned long blocks_allocated[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)]")]
+        pub blocks_allocated: [c_ulong; bits_to_longs(c::BCH_BKEY_PTRS_MAX as usize)],
+        #[c("unsigned long blocks_moving[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)]")]
+        pub blocks_moving: [c_ulong; bits_to_longs(c::BCH_BKEY_PTRS_MAX as usize)],
+        pub blocks: [c::open_bucket_idx_t; c::BCH_BKEY_PTRS_MAX as usize],
+        pub res: c::disk_reservation,
 
-    #[c("unsigned long blocks_gotten[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)]")]
-    pub blocks_gotten: [core::ffi::c_ulong; bits_to_longs(c::BCH_BKEY_PTRS_MAX as usize)],
-    #[c("unsigned long blocks_allocated[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)]")]
-    pub blocks_allocated: [core::ffi::c_ulong; bits_to_longs(c::BCH_BKEY_PTRS_MAX as usize)],
-    #[c("unsigned long blocks_moving[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)]")]
-    pub blocks_moving: [core::ffi::c_ulong; bits_to_longs(c::BCH_BKEY_PTRS_MAX as usize)],
-    pub blocks: [c::open_bucket_idx_t; c::BCH_BKEY_PTRS_MAX as usize],
-    pub res: c::disk_reservation,
+        pub buckets: [c::ec_stripe_new_bucket; c::BCH_BKEY_PTRS_MAX as usize],
 
-    pub buckets: [c::ec_stripe_new_bucket; c::BCH_BKEY_PTRS_MAX as usize],
+        pub new_stripe: c::ec_stripe_buf,
+        pub old_stripe: c::ec_stripe_buf,
 
-    pub new_stripe: c::ec_stripe_buf,
-    pub old_stripe: c::ec_stripe_buf,
+        pub new_stripe_handle: c::ec_stripe_handle,
+        pub old_stripe_handle: c::ec_stripe_handle,
 
-    pub new_stripe_handle: c::ec_stripe_handle,
-    pub old_stripe_handle: c::ec_stripe_handle,
-
-    pub old_block_map: [u8; c::BCH_BKEY_PTRS_MAX as usize],
-    pub old_blocks_nr: u8,
+        pub old_block_map: [u8; c::BCH_BKEY_PTRS_MAX as usize],
+        pub old_blocks_nr: u8,
+    }
 }
 c_default!(ec_stripe_new);
-impl ec_stripe_new {
-    pub fn have_old_stripe(&self) -> bool { let b = self.have_old_stripe_bits; b.have_old_stripe() }
-    pub fn set_have_old_stripe(&mut self, v: bool) { let mut b = self.have_old_stripe_bits; b.set_have_old_stripe(v); self.have_old_stripe_bits = b; }
-    pub fn allocated(&self) -> bool { let b = self.have_old_stripe_bits; b.allocated() }
-    pub fn set_allocated(&mut self, v: bool) { let mut b = self.have_old_stripe_bits; b.set_allocated(v); self.have_old_stripe_bits = b; }
-    pub fn mem_allocated(&self) -> bool { let b = self.have_old_stripe_bits; b.mem_allocated() }
-    pub fn set_mem_allocated(&mut self, v: bool) { let mut b = self.have_old_stripe_bits; b.set_mem_allocated(v); self.have_old_stripe_bits = b; }
-    pub fn old_stripe_read(&self) -> bool { let b = self.have_old_stripe_bits; b.old_stripe_read() }
-    pub fn set_old_stripe_read(&mut self, v: bool) { let mut b = self.have_old_stripe_bits; b.set_old_stripe_read(v); self.have_old_stripe_bits = b; }
-    pub fn old_stripe_read_all(&self) -> bool { let b = self.have_old_stripe_bits; b.old_stripe_read_all() }
-    pub fn set_old_stripe_read_all(&mut self, v: bool) { let mut b = self.have_old_stripe_bits; b.set_old_stripe_read_all(v); self.have_old_stripe_bits = b; }
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
@@ -167,20 +148,20 @@ pub struct ec_stripe_head {
     pub list: c::list_head,
     pub lock: c::mutex,
 
-    pub disk_label: core::ffi::c_uint,
-    pub algo: core::ffi::c_uint,
-    pub redundancy: core::ffi::c_uint,
+    pub disk_label: c_uint,
+    pub algo: c_uint,
+    pub redundancy: c_uint,
     pub watermark: c::bch_watermark,
     pub insufficient_devs: bool,
 
-    pub rw_devs_change_count: core::ffi::c_ulong,
+    pub rw_devs_change_count: c_ulong,
 
     pub nr_created: u64,
 
     pub devs: c::bch_devs_mask,
-    pub nr_active_devs: core::ffi::c_uint,
+    pub nr_active_devs: c_uint,
 
-    pub blocksize: core::ffi::c_uint,
+    pub blocksize: c_uint,
 
     pub dev_stripe: *mut c::ec_dev_stripe_state,
 
@@ -201,16 +182,6 @@ pub struct widen_cache_entry {
     pub nr_devs: u16,
 }
 
-c_verbatim!(r#"
-DEFINE_DARRAY_NAMED(widen_cache, struct widen_cache_entry);
-"#);
-
-pub type widen_cache = DArray<c::widen_cache_entry>;
-
-c_verbatim!(r#"
-struct alloc_request;
-
-struct moving_context;
-
-struct ec_stripe_buf;
-"#);
+c_typedef! {
+    pub type widen_cache = DArray<c::widen_cache_entry>;
+}

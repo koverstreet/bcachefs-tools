@@ -3,10 +3,64 @@
 #define _BCACHEFS_FORMAT_H
 
 /*
- * bcachefs on disk data structures: the types are bcachefs_format_types.h's;
- * this is what C has for them besides - the inline functions, which a types
- * header can't have, as it's to be defined in Rust.
+ * bcachefs on disk data structures: the types are defined in Rust, in
+ * bcachefs_format_types.rs, which has the overview, and generated into
+ * bcachefs_format_gen.h. This is what C has for them besides - its macros and
+ * inline functions.
  */
+
+#include "enum_kind.h"
+
+#include <asm/types.h>
+#include <asm/byteorder.h>
+#include <linux/kernel.h>
+#include <linux/uuid.h>
+#include <uapi/linux/magic.h>
+
+#include "util/vstructs.h"
+
+#define BITMASK(name, type, field, offset, end)				\
+static const __maybe_unused unsigned	name##_OFFSET = offset;		\
+static const __maybe_unused unsigned	name##_BITS = (end - offset);	\
+									\
+static inline __u64 name(const type *k)					\
+{									\
+	return (k->field >> offset) & ~(~0ULL << (end - offset));	\
+}									\
+									\
+static inline void SET_##name(type *k, __u64 v)				\
+{									\
+	k->field &= ~(~(~0ULL << (end - offset)) << offset);		\
+	k->field |= (v & ~(~0ULL << (end - offset))) << offset;		\
+}
+
+#define LE_BITMASK(_bits, name, type, field, offset, end)		\
+static const __maybe_unused unsigned	name##_OFFSET = offset;		\
+static const __maybe_unused unsigned	name##_BITS = (end - offset);	\
+static const __maybe_unused __u##_bits	name##_MAX = (1ULL << (end - offset)) - 1;\
+									\
+static inline __u64 name(const type *k)					\
+{									\
+	return (__le##_bits##_to_cpu(k->field) >> offset) &		\
+		~(~0ULL << (end - offset));				\
+}									\
+									\
+static inline void SET_##name(type *k, __u64 v)				\
+{									\
+	__u##_bits new = __le##_bits##_to_cpu(k->field);		\
+									\
+	new &= ~(~(~0ULL << (end - offset)) << offset);			\
+	new |= (v & ~(~0ULL << (end - offset))) << offset;		\
+	k->field = __cpu_to_le##_bits(new);				\
+}
+
+#define LE16_BITMASK(n, t, f, o, e)	LE_BITMASK(16, n, t, f, o, e)
+#define LE32_BITMASK(n, t, f, o, e)	LE_BITMASK(32, n, t, f, o, e)
+#define LE64_BITMASK(n, t, f, o, e)	LE_BITMASK(64, n, t, f, o, e)
+
+#ifndef __nonstring
+#define __nonstring
+#endif
 
 #include "bcachefs_format_gen.h"
 
@@ -26,6 +80,114 @@
 #define POS_MAX				SPOS(KEY_INODE_MAX, KEY_OFFSET_MAX, 0)
 #define SPOS_MAX			SPOS(KEY_INODE_MAX, KEY_OFFSET_MAX, KEY_SNAPSHOT_MAX)
 #define POS(_inode, _offset)		SPOS(_inode, _offset, 0)
+
+#define bkey_format_field(name, field)					\
+	[BKEY_FIELD_##name] = (sizeof(((struct bkey *) NULL)->field) * 8)
+
+#define BKEY_FORMAT_CURRENT						\
+((struct bkey_format) {							\
+	.key_u64s	= BKEY_U64s,					\
+	.nr_fields	= BKEY_NR_FIELDS,				\
+	.bits_per_field = {						\
+		bkey_format_field(INODE,	p.inode),		\
+		bkey_format_field(OFFSET,	p.offset),		\
+		bkey_format_field(SNAPSHOT,	p.snapshot),		\
+		bkey_format_field(SIZE,		size),			\
+		bkey_format_field(VERSION_HI,	bversion.hi),		\
+		bkey_format_field(VERSION_LO,	bversion.lo),		\
+	},								\
+})
+
+#define POS_KEY(_pos)							\
+((struct bkey) {							\
+	.u64s		= BKEY_U64s,					\
+	.format		= KEY_FORMAT_CURRENT,				\
+	.p		= _pos,						\
+})
+
+#define KEY(_inode, _offset, _size)					\
+((struct bkey) {							\
+	.u64s		= BKEY_U64s,					\
+	.format		= KEY_FORMAT_CURRENT,				\
+	.p		= POS(_inode, _offset),				\
+	.size		= _size,					\
+})
+
+#define bkey_bytes(_k)		((_k)->u64s * sizeof(__u64))
+
+#define __BKEY_PADDED(key, pad)					\
+	struct bkey_i key; __u64 key ## _pad[pad]
+
+#define BCH_KEY_MAGIC					\
+	(((__u64) 'b' <<  0)|((__u64) 'c' <<  8)|		\
+	 ((__u64) 'h' << 16)|((__u64) '*' << 24)|		\
+	 ((__u64) '*' << 32)|((__u64) 'k' << 40)|		\
+	 ((__u64) 'e' << 48)|((__u64) 'y' << 56))
+
+#define BCH_VERSION_MAJOR(_v)		((__u16) ((_v) >> 10))
+#define BCH_VERSION_MINOR(_v)		((__u16) ((_v) & ~(~0U << 10)))
+#define BCH_VERSION(_major, _minor)	(((_major) << 10)|(_minor) << 0)
+
+static const __maybe_unused
+unsigned bcachefs_metadata_required_upgrade_below = bcachefs_metadata_version_btree_node_accounting;
+
+static const __maybe_unused unsigned bch_crc_bytes[] = {
+	[BCH_CSUM_none]				= 0,
+	[BCH_CSUM_crc32c_nonzero]		= 4,
+	[BCH_CSUM_crc32c]			= 4,
+	[BCH_CSUM_crc64_nonzero]		= 8,
+	[BCH_CSUM_crc64]			= 8,
+	[BCH_CSUM_xxhash]			= 8,
+	[BCH_CSUM_chacha20_poly1305_80]		= 10,
+	[BCH_CSUM_chacha20_poly1305_128]	= 16,
+};
+
+/*
+ * Magic numbers
+ *
+ * The various other data structures have their own magic numbers, which are
+ * xored with the first part of the cache set's UUID
+ */
+
+#define BCACHE_MAGIC							\
+	UUID_INIT(0xc68573f6, 0x4e1a, 0x45ca,				\
+		  0x82, 0x65, 0xf5, 0x7f, 0x48, 0xba, 0x6d, 0x81)
+#define BCHFS_MAGIC							\
+	UUID_INIT(0xc68573f6, 0x66ce, 0x90a9,				\
+		  0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef)
+
+#define JSET_MAGIC		__cpu_to_le64(0x245235c1a3625032ULL)
+#define BSET_MAGIC		__cpu_to_le64(0x90135c78b99e07f5ULL)
+
+#define replicas_entry_bytes(_i)					\
+	(offsetof(typeof(*(_i)), devs) + (_i)->nr_devs)
+
+#define replicas_entry_add_dev(e, d) ({					\
+	(e)->nr_devs++;							\
+	(e)->devs[(e)->nr_devs - 1] = (d);				\
+})
+
+__maybe_unused
+static const enum btree_id reconcile_work_btree[] = {
+	[RECONCILE_WORK_hipri]		= BTREE_ID_reconcile_hipri,
+	[RECONCILE_WORK_normal]		= BTREE_ID_reconcile_work,
+	[RECONCILE_WORK_pending]	= BTREE_ID_reconcile_pending,
+};
+
+__maybe_unused
+static const enum btree_id reconcile_work_phys_btree[] = {
+	[RECONCILE_WORK_hipri]		= BTREE_ID_reconcile_hipri_phys,
+	[RECONCILE_WORK_normal]		= BTREE_ID_reconcile_work_phys,
+};
+
+#define INODEv3_FIELDS_START_CUR	(offsetof(struct bch_inode_v3, fields) / sizeof(__u64))
+
+#define BCH_SB_MEMBER_DELETED_UUID					\
+	UUID_INIT(0xffffffff, 0xffff, 0xffff,				\
+		  0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef)
+
+#define SUBVOL_POS_MIN		POS(0, 1)
+#define SUBVOL_POS_MAX		POS(0, S32_MAX)
 
 static inline void bkey_init(struct bkey *k)
 {

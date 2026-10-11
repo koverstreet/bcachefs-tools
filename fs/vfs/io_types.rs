@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of vfs/io_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
+// The VFS's: kernel only, as C's #ifndef NO_BCACHEFS_FS
+#![cfg(not(NO_BCACHEFS_FS))]
 
 use crate::cstructs::c;
 use crate::types::c_default;
 use cstruct_macros::CStruct;
 
-#[cfg(not(NO_BCACHEFS_FS))]
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct nocow_flush {
@@ -17,10 +15,8 @@ pub struct nocow_flush {
     pub ca: *mut c::bch_dev,
     pub bio: c::bio,
 }
-#[cfg(not(NO_BCACHEFS_FS))]
 c_default!(nocow_flush);
 
-#[cfg(not(NO_BCACHEFS_FS))]
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct folio_vec {
@@ -28,10 +24,8 @@ pub struct folio_vec {
     pub fv_offset: usize,
     pub fv_len: usize,
 }
-#[cfg(not(NO_BCACHEFS_FS))]
 c_default!(folio_vec);
 
-#[cfg(not(NO_BCACHEFS_FS))]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct quota_res {

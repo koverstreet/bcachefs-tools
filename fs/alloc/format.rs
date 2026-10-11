@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of alloc/format.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
@@ -35,18 +32,12 @@ c_xmacro! {
     }
 }
 
-macro_rules! __anon_bch_alloc_fields_v1_0 {
-    ([$($acc:tt)*] $(($name:tt$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum _: u32 {
-                $($acc)*
-                $([<BCH_ALLOC_FIELD_V1_ $name>],)*
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum _: u32 {
+        BCH_ALLOC_FIELDS_V1(name, ..) => BCH_ALLOC_FIELD_V1_ ## name,
+    }
 }
-BCH_ALLOC_FIELDS_V1!(__anon_bch_alloc_fields_v1_0 []);
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -140,9 +131,6 @@ pub struct bch_alloc_v4 {
 c_const! {
     #[c_int]
     pub const BCH_ALLOC_V4_U64s_V0: u32 = 6;
-}
-
-c_const! {
     pub const BCH_ALLOC_V4_U64s: usize = size_of::<c::bch_alloc_v4>() / size_of::<u64>();
 }
 
@@ -158,13 +146,7 @@ c_bitmask! {
 c_const! {
     #[c_int]
     pub const KEY_TYPE_BUCKET_GENS_BITS: u32 = 8;
-}
-
-c_const! {
     pub const KEY_TYPE_BUCKET_GENS_NR: u32 = 1 << c::KEY_TYPE_BUCKET_GENS_BITS;
-}
-
-c_const! {
     pub const KEY_TYPE_BUCKET_GENS_MASK: u32 = c::KEY_TYPE_BUCKET_GENS_NR - 1;
 }
 

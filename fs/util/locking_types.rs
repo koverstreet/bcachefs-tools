@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of util/locking_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use core::ffi::c_uint;
 use cstruct_macros::{CStruct, c_extern};
 
 /*
@@ -51,9 +49,7 @@ pub struct percpu_rwsem_noio {
 }
 c_default!(percpu_rwsem_noio);
 
-// What Rust calls of util/locking.h: C gets these as prototypes, in util/locking_gen.h
-// with the types - see c_extern! in types/cstruct.rs.
 c_extern! {
-    pub fn rust_memalloc_noio_save() -> core::ffi::c_uint;
-    pub fn rust_memalloc_flags_restore(flags: core::ffi::c_uint);
+    pub fn rust_memalloc_noio_save() -> c_uint;
+    pub fn rust_memalloc_flags_restore(flags: c_uint);
 }

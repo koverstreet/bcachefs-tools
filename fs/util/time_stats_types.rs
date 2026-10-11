@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of util/time_stats_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use cstruct_macros::{CStruct, c_const, c_extern, c_verbatim};
+use crate::util::ffi::c_char;
+use core::ffi::c_uint;
+use cstruct_macros::{CStruct, c_const, c_extern};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct time_unit {
-    pub name: *const crate::util::ffi::c_char,
+    pub name: *const c_char,
     pub nsecs: u64,
 }
 c_default!(time_unit);
@@ -59,7 +58,7 @@ pub struct time_stat_buffer {
      * it; they race the owner by design, bounded by nr.
      */
     pub lock: c::local_lock_t,
-    pub nr: core::ffi::c_uint,
+    pub nr: c_uint,
     pub entries: [c::time_stat_buffer_entry; 31],
 }
 c_default!(time_stat_buffer);
@@ -103,12 +102,6 @@ pub struct bch2_time_stats_quantiles {
 }
 c_default!(bch2_time_stats_quantiles);
 
-c_verbatim!(r#"
-struct seq_buf;
-"#);
-
-// What Rust calls of util/time_stats.h: C gets these as prototypes, in util/time_stats_gen.h
-// with the types - see c_extern! in types/cstruct.rs.
 c_extern! {
-    pub fn bch2_time_stats_to_json(arg1: *mut c::seq_buf, arg2: *mut c::bch2_time_stats, epoch_name: *const crate::util::ffi::c_char, flags: core::ffi::c_uint);
+    pub fn bch2_time_stats_to_json(arg1: *mut c::seq_buf, arg2: *mut c::bch2_time_stats, epoch_name: *const c_char, flags: c_uint);
 }

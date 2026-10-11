@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_ALLOC_ACCOUNTING_FORMAT_INLINE_H
 #define _BCACHEFS_ALLOC_ACCOUNTING_FORMAT_INLINE_H
 
-/* Included at the end of alloc/accounting_format.h. */
+/* Included after alloc/accounting_format_gen.h. */
 
 static inline bool data_type_is_empty(enum bch_data_type type)
 {

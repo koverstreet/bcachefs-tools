@@ -1,21 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of fs/inode_format.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::types::Le32;
 use zerocopy::byteorder::little_endian as le;
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, CStruct};
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct};
 use typeinfo_macros::TypeInfo;
 
 c_const! {
     #[c_int]
     pub const BLOCKDEV_INODE_MAX: u32 = 4096;
-}
-
-c_const! {
     #[c_int]
     pub const BCACHEFS_ROOT_INO: u32 = 4096;
 }
@@ -64,10 +59,6 @@ c_const! {
     #[c_int]
     pub const INODEv3_FIELDS_START_INITIAL: u32 = 6;
 }
-
-c_verbatim!(r#"
-#define INODEv3_FIELDS_START_CUR	(offsetof(struct bch_inode_v3, fields) / sizeof(__u64))
-"#);
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -163,19 +154,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __inode_opt_id_0 {
-    ([$($acc:tt)*] $(($name:tt$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum inode_opt_id: u32 {
-                $($acc)*
-                $([<Inode_opt_ $name>],)*
-                Inode_opt_nr,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum inode_opt_id: u32 {
+        BCH_INODE_OPTS(name, ..) => Inode_opt_ ## name,
+        Inode_opt_nr,
+    }
 }
-BCH_INODE_OPTS!(__inode_opt_id_0 []);
 
 c_xmacro! {
     /*
@@ -236,31 +221,19 @@ c_xmacro! {
 }
 
 /* bits 20+ reserved for packed fields below: */
-macro_rules! __bch_inode_flags_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[flags]
-            pub enum bch_inode_flags: u32 {
-                $($acc)*
-                $([<BCH_INODE_ $t>] = 1 << (($n) as u32),)*
-            }
-        }
-    } };
+c_enum! {
+    #[flags]
+    pub enum bch_inode_flags: u32 {
+        BCH_INODE_FLAGS(t, n) => BCH_INODE_ ## t = 1 << (n as u32),
+    }
 }
-BCH_INODE_FLAGS!(__bch_inode_flags_0 []);
 
-macro_rules! ____bch_inode_flags_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum __bch_inode_flags: u32 {
-                $($acc)*
-                $([<__BCH_INODE_ $t>] = (($n) as u32),)*
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum __bch_inode_flags: u32 {
+        BCH_INODE_FLAGS(t, n) => __BCH_INODE_ ## t = n,
+    }
 }
-BCH_INODE_FLAGS!(____bch_inode_flags_0 []);
 
 c_bitmask! {
     LE32_BITMASK(struct bch_inode, bi_flags) {
@@ -292,7 +265,6 @@ pub struct bch_inode_alloc_cursor {
     pub v: c::bch_val,
     pub bits: u8,
     pub pad: u8,
-    #[c_anon("")] pub __generation_align: [u32; 0],
-    pub generation: le::U32,
+    pub generation: Le32,
     pub idx: le::U64,
 }

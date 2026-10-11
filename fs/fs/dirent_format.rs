@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A dirent's value (fs/dirent_format.h): reading it, and for kvdb, writing
-//! its fields.
+//! A dirent's value: its layout, which C shares, reading it, and for kvdb,
+//! writing its fields.
 //!
 //! The value is two tagged unions. The target is an inode number, or for
 //! d_type DT_SUBVOL a (child, parent) subvolume pair. The name block is the
@@ -18,28 +18,109 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::bkey_fsck_err_on;
 use crate::btree::bkey::BkeySC;
 use crate::btree::bkey_methods::{self, SetError};
 use crate::btree::iter::TransBkey;
-use crate::util::ffi::Opaque;
-use crate::util::os_str::{OsStr, OsStrExt};
-use crate::bkey_fsck_err_on;
 use crate::c;
 use crate::c::bch_validate_flags;
+use crate::cstructs::c as cs;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::typeinfo::AccessError;
+use crate::types::c_default;
+use crate::util::ffi::Opaque;
+use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
 use core::ffi::{c_int, CStr};
 use core::mem::offset_of;
-
-use crate::cstructs::c as cs;
-use crate::types::c_default;
 use cstruct_macros::{bitfield, c_const, CStruct};
 use nestify::nest;
 use typeinfo_macros::TypeInfo;
 use zerocopy::byteorder::little_endian as le;
+
+// ── The value, which C shares ─────────────────────────────────────────────
+
+/*
+ * Dirents (and xattrs) have to implement string lookups; since our b-tree
+ * doesn't support arbitrary length strings for the key, we instead index by a
+ * 64 bit hash (currently truncated sha1) of the string, stored in the offset
+ * field of the key - using linear probing to resolve hash collisions. This also
+ * provides us with the readdir cookie posix requires.
+ *
+ * Linear probing requires us to use whiteouts for deletions, in the event of a
+ * collision:
+ */
+nest! {
+    #[derive(Clone, Copy, CStruct, TypeInfo)]*
+    #[repr(C, align(8))]
+    #[c_packed]
+    pub struct bch_dirent {
+        pub v: cs::bch_val,
+
+        /* Target inode number: */
+        #[c_anon]
+        #>[repr(C)]
+        pub target: pub union bch_dirent_target {
+            pub d_inum: le::U64,
+            /* DT_SUBVOL */
+            #[c_anon]
+            #>[repr(C)]
+            pub subvol: pub struct bch_dirent_subvol {
+                pub d_child_subvol: le::U32,
+                pub d_parent_subvol: le::U32,
+            },
+        },
+
+        /*
+         * Copy of mode bits 12-15 from the target inode - so userspace can get
+         * the filetype without having to do a stat()
+         */
+        #[c_bitfield]
+        #>[derive(Clone, Copy, CStruct, TypeInfo)]-
+        #>[bitfield(u8)]
+        pub bits: pub struct bch_dirent_bits {
+            #[bits(5)]
+            pub d_type: u8,
+            #[bits(2)]
+            pub d_unused: u8,
+            #[bits(1)]
+            pub d_casefold: u8,
+        },
+
+        #[c_anon]
+        #>[repr(C, packed)]
+        pub name_block: pub union bch_dirent_name_block {
+            #[c_inline]
+            #>[repr(C)]
+            pub d_cf_name_block: pub struct bch_dirent_cf_name_block {
+                pub d_pad: u8,
+                /*
+                 * C's padding, for __le16's alignment: zerocopy's le::U16 has
+                 * none. The block's __packed is the member's, not its type's.
+                 */
+                #[c_anon("")]
+                pub __d_name_len_align: u8,
+                pub d_name_len: le::U16,
+                pub d_cf_name_len: le::U16,
+                pub d_names: [u8; 0],
+            },
+            pub d_name: [u8; 0],
+        },
+    }
+}
+c_default!(bch_dirent);
+
+c_const! {
+    #[c_int]
+    pub const DT_SUBVOL: u32 = 16;
+    #[c_int]
+    pub const BCH_DT_MAX: u32 = 17;
+
+    #[c_int]
+    pub const BCH_NAME_MAX: u32 = 512;
+}
 
 // ── The target ───────────────────────────────────────────────────────────
 
@@ -292,7 +373,7 @@ pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<Dirent<'k>, BchError> {
     let names = raw.names().expect("names within the name block");
     let name = names.name().as_bytes();
 
-    bkey_fsck_err_on!(v, v.from.flags() & bch_validate_flags::BCH_VALIDATE_commit.bits() != 0 &&
+    bkey_fsck_err_on!(v, v.from.flags().contains(bch_validate_flags::BCH_VALIDATE_commit) &&
                       name.len() > c::BCH_NAME_MAX as usize,
                       id::dirent_name_too_long,
                       "dirent name too big ({} > {})", name.len(), c::BCH_NAME_MAX)?;
@@ -407,99 +488,4 @@ fn set_name<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, val: &'p str) -> Result<(), 
     let hash_info = c::bch_hash_info::default();
     super::init_name(fs, k.k_i_mut(), &hash_info, OsStr::from_bytes(val.as_bytes()), None)
         .map_err(|_| SetError::BadName { val })
-}
-// ---- the data types of fs/dirent_format.h, which is generated from this file: see
-// fs/types/lib.rs.
-
-/*
- * Dirents (and xattrs) have to implement string lookups; since our b-tree
- * doesn't support arbitrary length strings for the key, we instead index by a
- * 64 bit hash (currently truncated sha1) of the string, stored in the offset
- * field of the key - using linear probing to resolve hash collisions. This also
- * provides us with the readdir cookie posix requires.
- *
- * Linear probing requires us to use whiteouts for deletions, in the event of a
- * collision:
- */
-nest! {
-    #[derive(Clone, Copy, CStruct, TypeInfo)]*
-    #[repr(C, align(8))]
-    #[c_packed]
-    pub struct bch_dirent {
-        pub v: cs::bch_val,
-
-        /* Target inode number: */
-        #[c_anon]
-        #>[repr(C)]
-        pub target: pub union bch_dirent_target {
-            pub d_inum: le::U64,
-            /* DT_SUBVOL */
-            #[c_anon]
-            #>[repr(C)]
-            pub subvol: pub struct bch_dirent_subvol {
-                pub d_child_subvol: le::U32,
-                pub d_parent_subvol: le::U32,
-            },
-        },
-
-        /*
-         * Copy of mode bits 12-15 from the target inode - so userspace can get
-         * the filetype without having to do a stat()
-         */
-        #[c_bitfield]
-        #>[derive(Clone, Copy, CStruct, TypeInfo)]-
-        #>[bitfield(u8)]
-        pub d_type_bits: pub struct bch_dirent_d_type_bits {
-            #[bits(5)]
-            pub d_type: u8,
-            #[bits(2)]
-            pub d_unused: u8,
-            #[bits(1)]
-            pub d_casefold: u8,
-        },
-
-        #[c_anon]
-        #>[repr(C, packed)]
-        pub name_block: pub union bch_dirent_name_block {
-            #[c_inline]
-            #>[repr(C)]
-            pub d_cf_name_block: pub struct bch_dirent_cf_name_block {
-                pub d_pad: u8,
-                /*
-                 * C's padding, for __le16's alignment: zerocopy's le::U16 has
-                 * none. The block's __packed is the member's, not its type's.
-                 */
-                #[c_anon("")]
-                pub __d_name_len_align: u8,
-                pub d_name_len: le::U16,
-                pub d_cf_name_len: le::U16,
-                pub d_names: [u8; 0],
-            },
-            pub d_name: [u8; 0],
-        },
-    }
-}
-c_default!(bch_dirent);
-impl bch_dirent {
-    pub fn d_type(&self) -> u8 { let b = self.d_type_bits; b.d_type() }
-    pub fn set_d_type(&mut self, v: u8) { let mut b = self.d_type_bits; b.set_d_type(v); self.d_type_bits = b; }
-    pub fn d_unused(&self) -> u8 { let b = self.d_type_bits; b.d_unused() }
-    pub fn set_d_unused(&mut self, v: u8) { let mut b = self.d_type_bits; b.set_d_unused(v); self.d_type_bits = b; }
-    pub fn d_casefold(&self) -> u8 { let b = self.d_type_bits; b.d_casefold() }
-    pub fn set_d_casefold(&mut self, v: u8) { let mut b = self.d_type_bits; b.set_d_casefold(v); self.d_type_bits = b; }
-}
-
-c_const! {
-    #[c_int]
-    pub const DT_SUBVOL: u32 = 16;
-}
-
-c_const! {
-    #[c_int]
-    pub const BCH_DT_MAX: u32 = 17;
-}
-
-c_const! {
-    #[c_int]
-    pub const BCH_NAME_MAX: u32 = 512;
 }

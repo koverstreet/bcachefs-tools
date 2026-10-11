@@ -498,6 +498,7 @@ bool bch2_dev_btree_bitmap_marked_nogc(struct bch_fs *, struct bkey_s_c);
 
 #include "sb/members_defs_gen.h"
 
+struct sb_write;
 void bch2_dev_btree_bitmap_mark_locked(struct bch_fs *, struct bkey_s_c, struct sb_write *);
 void bch2_dev_btree_bitmap_mark(struct bch_fs *, struct bkey_s_c);
 

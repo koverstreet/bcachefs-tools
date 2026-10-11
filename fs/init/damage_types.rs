@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of init/damage_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::DArray;
-use cstruct_macros::{CStruct, c_extern, c_verbatim};
-
+use core::ffi::c_int;
+use cstruct_macros::{CStruct, c_extern, c_typedef};
 
 /*
  * The key range of an extents btree node we lost.
@@ -27,15 +24,11 @@ pub struct lost_extents_range {
     pub end: c::bpos,
 }
 
-c_verbatim!(r#"
-DEFINE_DARRAY(lost_extents_range);
-"#);
+c_typedef! {
+    pub type darray_lost_extents_range = DArray<c::lost_extents_range>;
+}
 
-pub type darray_lost_extents_range = DArray<c::lost_extents_range>;
-
-// What Rust calls of init/damage.h: C gets these as prototypes, in init/damage_gen.h
-// with the types - see c_extern! in types/cstruct.rs.
 c_extern! {
-    pub fn bch2_damage_delete(arg1: *mut c::btree_trans, arg2: u64, arg3: u32) -> core::ffi::c_int;
+    pub fn bch2_damage_delete(arg1: *mut c::btree_trans, arg2: u64, arg3: u32) -> c_int;
     pub fn bch2_damage_record_lost_extents(arg1: *mut c::bch_fs);
 }

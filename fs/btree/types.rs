@@ -1,98 +1,24 @@
+// SPDX-License-Identifier: GPL-2.0
+
 #![allow(non_camel_case_types)]
 
 use crate::c;
+use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
 use crate::errcode::{bch_errcode, BchError};
-use core::{ffi::CStr, fmt};
+use crate::types::{DArray, NeBytes, bits_to_longs, c_default};
+use crate::util::ffi::c_char;
+use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void, CStr};
+use core::fmt;
+use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct};
+use nestify::nest;
 #[cfg(feature = "std")]
 use std::{ffi::CString, str::FromStr};
-
-impl c::btree_id {
-    /// Convert from raw u32. Returns None for unknown built-in btree IDs.
-    pub fn from_raw(id: u32) -> Option<Self> {
-        crate::BTREE_IDS_KNOWN.get(id as usize).copied()
-    }
-
-    /// Iterate over all known btree IDs.
-    pub fn iter_known() -> impl Iterator<Item = Self> {
-        crate::BTREE_IDS_KNOWN.iter().copied()
-    }
-}
-
-impl From<c::btree_id> for u32 {
-    fn from(id: c::btree_id) -> u32 {
-        id.0 as u32
-    }
-}
-
-/// Get a btree ID name string.
-#[cfg(feature = "std")]
-pub fn btree_id_str(id: u32) -> String {
-    match c::btree_id::from_raw(id) {
-        Some(btree_id) => format!("{}", btree_id),
-        None => format!("(unknown btree {})", id),
-    }
-}
-
-impl fmt::Display for c::btree_id {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = unsafe { CStr::from_ptr(c::bch2_btree_id_str(*self).cast()) };
-        f.write_str(s.to_str().unwrap_or("(invalid btree name)"))
-    }
-}
-
-#[cfg(feature = "std")]
-impl FromStr for c::btree_id {
-    type Err = BchError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = CString::new(s)
-            .map_err(|_| BchError::from(bch_errcode::BCH_ERR_EINVAL_parse_btree_id))?;
-        let p = s.as_ptr();
-
-        let v =
-            unsafe { c::match_string(c::__bch2_btree_ids[..].as_ptr(), (-1_isize) as usize, p) };
-        c::btree_id::from_raw(v as u32)
-            .ok_or(bch_errcode::BCH_ERR_EINVAL_parse_btree_id.into())
-    }
-}
-
-#[cfg(feature = "std")]
-impl FromStr for c::bch_bkey_type {
-    type Err = BchError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = CString::new(s)
-            .map_err(|_| BchError::from(bch_errcode::BCH_ERR_EINVAL_parse_bkey_type))?;
-        let p = s.as_ptr();
-
-        let v = unsafe { c::match_string(c::bch2_bkey_types[..].as_ptr(), (-1_isize) as usize, p) };
-        if v >= 0 {
-            Ok(c::bch_bkey_type(v as u32))
-        } else {
-            Err(bch_errcode::BCH_ERR_EINVAL_parse_bkey_type.into())
-        }
-    }
-}
-// ---- the data types of btree/types.h, which is generated from this file: see
-// fs/types/lib.rs. Translated from the C by c2rs.
-
-use crate::cstructs::c as cs;
-use crate::cstructs::c::BCH_BTREE_IDS;
-use crate::types::{DArray, bits_to_longs, c_default};
-use core::ffi::{c_long, c_ulong};
-use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_verbatim, c_xmacro, CStruct};
 use typeinfo_macros::TypeInfo;
-c_verbatim!(r#"
-struct bio;
-struct open_bucket;
-struct btree_update;
-struct btree_trans;
-struct lock_graph;
-"#);
+
+/* Btree nodes: */
 
 c_const! {
-    /* Btree nodes: */
     pub const MAX_BSETS: u32 = 3;
 }
 
@@ -180,7 +106,7 @@ pub struct btree {
     pub hash: cs::rhash_head,
     pub hash_val: u64,
 
-    pub flags: core::ffi::c_ulong,
+    pub flags: c_ulong,
     pub written: u16,
     pub nsets: u8,
     pub nr_key_bits: u8,
@@ -214,7 +140,7 @@ pub struct btree {
     pub unpack: [cs::bkey_unpack_field; cs::BKEY_NR_FIELDS as usize],
 
     pub data: *mut cs::btree_node,
-    pub aux_data: *mut core::ffi::c_void,
+    pub aux_data: *mut c_void,
 
     /*
      * Sets of sorted keys - the real btree node - plus a binary search tree
@@ -261,7 +187,7 @@ pub struct btree {
      * another write - because that write also won't yet be reachable and
      * marking it as completed before it's reachable would be incorrect:
      */
-    pub will_make_reachable: core::ffi::c_ulong,
+    pub will_make_reachable: c_ulong,
 
     pub ob: cs::open_buckets,
 
@@ -280,8 +206,9 @@ c_enum! {
     }
 }
 
+/* Btree cache: */
+
 c_xmacro! {
-    /* Btree cache: */
     BCH_BTREE_CACHE_NOT_FREED_REASONS(x) {
         (cache_reserve),
         (lock_intent),
@@ -297,24 +224,18 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_btree_cache_not_freed_reasons_0 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum bch_btree_cache_not_freed_reasons: u32 {
-                $($acc)*
-                $([<BCH_BTREE_CACHE_NOT_FREED_ $n>],)*
-                BCH_BTREE_CACHE_NOT_FREED_REASONS_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum bch_btree_cache_not_freed_reasons: u32 {
+        BCH_BTREE_CACHE_NOT_FREED_REASONS(n) => BCH_BTREE_CACHE_NOT_FREED_ ## n,
+        BCH_BTREE_CACHE_NOT_FREED_REASONS_NR,
+    }
 }
-BCH_BTREE_CACHE_NOT_FREED_REASONS!(__bch_btree_cache_not_freed_reasons_0 []);
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct btree_cache_list {
-    pub idx: core::ffi::c_uint,
+    pub idx: c_uint,
     pub shrink: *mut cs::shrinker,
     pub nr_clean: usize,
     pub nr_dirty: usize,
@@ -351,10 +272,9 @@ pub struct bch_fs_btree_cache {
      * working set in a few cache lines instead of the full ~88 lines of
      * roots_known[].
      */
-    pub roots_b: [core::ffi::c_ulong; cs::BTREE_ID_NR as usize],
+    pub roots_b: [c_ulong; cs::BTREE_ID_NR as usize],
 
     pub roots_known: [cs::btree_root; cs::BTREE_ID_NR as usize],
-    #[c("DARRAY(struct btree_root) roots_extra")]
     pub roots_extra: DArray<cs::btree_root>,
     pub root_lock: cs::mutex,
 
@@ -403,7 +323,7 @@ pub struct bch_fs_btree_cache {
      * sorted-order fastpath, which holds every journal pin until replay
      * finishes - pins must be released for reclaim to clean btree nodes.
      */
-    pub nr_self_reclaim: core::ffi::c_ulong,
+    pub nr_self_reclaim: c_ulong,
 
     /*
      * If we need to allocate memory for a new btree node and that
@@ -421,6 +341,8 @@ pub struct bch_fs_btree_cache {
 }
 c_default!(bch_fs_btree_cache);
 
+/* Iterator, update, and trigger flags: */
+
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct btree_node_iter_set {
@@ -428,7 +350,6 @@ pub struct btree_node_iter_set {
     pub end: u16,
 }
 
-/* Iterator, update, and trigger flags: */
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct btree_node_iter {
@@ -503,105 +424,42 @@ c_xmacro! {
     }
 }
 
-macro_rules! __anon_btree_iter_flags_0 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        STR_HASH_FLAGS!(__anon_btree_iter_flags_1 [$($acc)* $([<BTREE_ITER_FLAG_BIT_ $n>],)*]);
-    } };
+c_enum! {
+    #[closed]
+    pub enum _: u32 {
+        BTREE_ITER_FLAGS(n) => BTREE_ITER_FLAG_BIT_ ## n,
+        STR_HASH_FLAGS(n) => BTREE_ITER_FLAG_BIT_ ## n,
+        BTREE_UPDATE_FLAGS(n) => BTREE_ITER_FLAG_BIT_ ## n,
+        BTREE_TRIGGER_FLAGS(n) => BTREE_ITER_FLAG_BIT_ ## n,
+    }
 }
-macro_rules! __anon_btree_iter_flags_1 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        BTREE_UPDATE_FLAGS!(__anon_btree_iter_flags_2 [$($acc)* $([<BTREE_ITER_FLAG_BIT_ $n>],)*]);
-    } };
-}
-macro_rules! __anon_btree_iter_flags_2 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        BTREE_TRIGGER_FLAGS!(__anon_btree_iter_flags_3 [$($acc)* $([<BTREE_ITER_FLAG_BIT_ $n>],)*]);
-    } };
-}
-macro_rules! __anon_btree_iter_flags_3 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum _: u32 {
-                $($acc)*
-                $([<BTREE_ITER_FLAG_BIT_ $n>],)*
-            }
-        }
-    } };
-}
-BTREE_ITER_FLAGS!(__anon_btree_iter_flags_0 []);
 
-macro_rules! __btree_iter_update_trigger_flags_0 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        STR_HASH_FLAGS!(__btree_iter_update_trigger_flags_1 [$($acc)* $([<BTREE_ITER_ $n>] = 1 << (cs::[<BTREE_ITER_FLAG_BIT_ $n>] as u32),)*]);
-    } };
+c_enum! {
+    #[flags]
+    pub enum btree_iter_update_trigger_flags: u32 {
+        BTREE_ITER_FLAGS(n) => BTREE_ITER_ ## n = 1 << (cs::BTREE_ITER_FLAG_BIT_ ## n as u32),
+        STR_HASH_FLAGS(n) => STR_HASH_ ## n = 1 << (cs::BTREE_ITER_FLAG_BIT_ ## n as u32),
+        BTREE_UPDATE_FLAGS(n) => BTREE_UPDATE_ ## n = 1 << (cs::BTREE_ITER_FLAG_BIT_ ## n as u32),
+        BTREE_TRIGGER_FLAGS(n) => BTREE_TRIGGER_ ## n = 1 << (cs::BTREE_ITER_FLAG_BIT_ ## n as u32),
+    }
 }
-macro_rules! __btree_iter_update_trigger_flags_1 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        BTREE_UPDATE_FLAGS!(__btree_iter_update_trigger_flags_2 [$($acc)* $([<STR_HASH_ $n>] = 1 << (cs::[<BTREE_ITER_FLAG_BIT_ $n>] as u32),)*]);
-    } };
-}
-macro_rules! __btree_iter_update_trigger_flags_2 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        BTREE_TRIGGER_FLAGS!(__btree_iter_update_trigger_flags_3 [$($acc)* $([<BTREE_UPDATE_ $n>] = 1 << (cs::[<BTREE_ITER_FLAG_BIT_ $n>] as u32),)*]);
-    } };
-}
-macro_rules! __btree_iter_update_trigger_flags_3 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[flags]
-            pub enum btree_iter_update_trigger_flags: u32 {
-                $($acc)*
-                $([<BTREE_TRIGGER_ $n>] = 1 << (cs::[<BTREE_ITER_FLAG_BIT_ $n>] as u32),)*
-            }
-        }
-    } };
-}
-BTREE_ITER_FLAGS!(__btree_iter_update_trigger_flags_0 []);
 
 #[repr(C)]
 #[derive(CStruct)]
 pub struct btree_trigger_op {
     pub btree: cs::btree_id,
-    pub level: core::ffi::c_uint,
+    pub level: c_uint,
     pub old: cs::bkey_s_c,
     pub new: cs::bkey_s,
-    pub new_buf_u64s: core::ffi::c_uint,
+    pub new_buf_u64s: c_uint,
     pub flags: cs::btree_iter_update_trigger_flags,
 }
 c_default!(btree_trigger_op);
 
-c_verbatim!(r#"
-/* Btree paths and iterators: */
-"#);
-
-#[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
-c_verbatim!(r#"
-#define TRACK_PATH_ALLOCATED
-"#);
+// Btree paths and iterators:
 
 c_typedef! {
     pub type btree_path_idx_t = u16;
-}
-
-#[bitfield(u16, repr = zerocopy::byteorder::native_endian::U16, from = zerocopy::byteorder::native_endian::U16::new, into = zerocopy::byteorder::native_endian::U16::get)]
-pub struct btree_path_btree_id_bits {
-    #[bits(7)]
-    pub btree_id: u32,
-    #[bits(1)]
-    pub cached: bool,
-    #[bits(1)]
-    pub preserve: bool,
-    /*
-     * When true, failing to relock this path will cause the transaction to
-     * restart:
-     */
-    #[bits(1)]
-    pub should_be_locked: bool,
-    #[bits(3)]
-    pub level: u32,
-    #[bits(3)]
-    pub locks_want: u32,
 }
 
 #[repr(C)]
@@ -615,47 +473,47 @@ pub struct btree_path_level {
 }
 c_default!(btree_path_level);
 
-#[repr(C)]
-#[derive(Clone, Copy, CStruct)]
-pub struct btree_path {
-    pub sorted_idx: cs::btree_path_idx_t,
-    pub ref_: u8,
-    pub intent_ref: u8,
+nest! {
+    #[repr(C)]
+    #[derive(Clone, Copy, CStruct)]
+    pub struct btree_path {
+        pub sorted_idx: cs::btree_path_idx_t,
+        pub ref_: u8,
+        pub intent_ref: u8,
 
-    /* btree_iter_copy starts here: */
-    pub pos: cs::bpos,
+        /* btree_iter_copy starts here: */
+        pub pos: cs::bpos,
 
-    #[c_bitfield]
-    pub btree_id_bits: btree_path_btree_id_bits,
-    pub nodes_locked: u8,
+        #[c_bitfield]
+        #>[bitfield(u16)]
+        pub bits: pub struct btree_path_bits {
+            #[bits(7)]
+            pub btree_id: cs::btree_id,
+            #[bits(1)]
+            pub cached: bool,
+            #[bits(1)]
+            pub preserve: bool,
+            /*
+             * When true, failing to relock this path will cause the transaction to
+             * restart:
+             */
+            #[bits(1)]
+            pub should_be_locked: bool,
+            #[bits(3)]
+            pub level: u32,
+            #[bits(3)]
+            pub locks_want: u32,
+        },
+        pub nodes_locked: u8,
 
-    pub l: [cs::btree_path_level; cs::BTREE_MAX_DEPTH as usize],
-    /* C's TRACK_PATH_ALLOCATED, which it defines from these, above:
-     * rustc sees only the configuration */
-    #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
-    pub ip_allocated: core::ffi::c_ulong,
+        pub l: [cs::btree_path_level; cs::BTREE_MAX_DEPTH as usize],
+        /* C's TRACK_PATH_ALLOCATED, which btree/types_inline.h defines from
+         * these: rustc sees only the configuration */
+        #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
+        pub ip_allocated: c_ulong,
+    }
 }
 c_default!(btree_path);
-impl btree_path {
-    pub fn btree_id(&self) -> u32 { let b = self.btree_id_bits; b.btree_id() }
-    pub fn set_btree_id(&mut self, v: u32) { let mut b = self.btree_id_bits; b.set_btree_id(v); self.btree_id_bits = b; }
-    pub fn cached(&self) -> bool { let b = self.btree_id_bits; b.cached() }
-    pub fn set_cached(&mut self, v: bool) { let mut b = self.btree_id_bits; b.set_cached(v); self.btree_id_bits = b; }
-    pub fn preserve(&self) -> bool { let b = self.btree_id_bits; b.preserve() }
-    pub fn set_preserve(&mut self, v: bool) { let mut b = self.btree_id_bits; b.set_preserve(v); self.btree_id_bits = b; }
-    pub fn should_be_locked(&self) -> bool { let b = self.btree_id_bits; b.should_be_locked() }
-    pub fn set_should_be_locked(&mut self, v: bool) { let mut b = self.btree_id_bits; b.set_should_be_locked(v); self.btree_id_bits = b; }
-    pub fn level(&self) -> u32 { let b = self.btree_id_bits; b.level() }
-    pub fn set_level(&mut self, v: u32) { let mut b = self.btree_id_bits; b.set_level(v); self.btree_id_bits = b; }
-    pub fn locks_want(&self) -> u32 { let b = self.btree_id_bits; b.locks_want() }
-    pub fn set_locks_want(&mut self, v: u32) { let mut b = self.btree_id_bits; b.set_locks_want(v); self.btree_id_bits = b; }
-}
-
-#[bitfield(u8)]
-pub struct btree_iter_btree_id_bits {
-    #[bits(8)]
-    pub btree_id: u32,
-}
 
 /*
  * btree_iter: the high level btree iterator API, iterates over keys.
@@ -663,63 +521,60 @@ pub struct btree_iter_btree_id_bits {
  *
  * Multiple iterators can share the same btree_path via refcounting.
  */
-#[repr(C)]
-#[derive(Clone, Copy, CStruct)]
-pub struct btree_iter {
-    pub trans: *mut cs::btree_trans,
-    pub path: cs::btree_path_idx_t,
-    pub update_path: cs::btree_path_idx_t,
-    pub key_cache_path: cs::btree_path_idx_t,
+nest! {
+    #[repr(C)]
+    #[derive(Clone, Copy, CStruct)]
+    pub struct btree_iter {
+        pub trans: *mut cs::btree_trans,
+        pub path: cs::btree_path_idx_t,
+        pub update_path: cs::btree_path_idx_t,
+        pub key_cache_path: cs::btree_path_idx_t,
 
-    #[c_bitfield]
-    pub btree_id_bits: btree_iter_btree_id_bits,
-    pub min_depth: u8,
+        #[c_bitfield]
+        #>[bitfield(u8)]
+        pub bits: pub struct btree_iter_bits {
+            #[bits(8)]
+            pub btree_id: cs::btree_id,
+        },
+        pub min_depth: u8,
 
-    /* btree_iter_copy starts here: */
-    pub flags: u32,
+        /* btree_iter_copy starts here: */
+        pub flags: u32,
 
-    /* When we're filtering by snapshot, the snapshot ID we're looking for: */
-    pub snapshot: core::ffi::c_uint,
+        /* When we're filtering by snapshot, the snapshot ID we're looking for: */
+        pub snapshot: c_uint,
 
-    pub pos: cs::bpos,
-    /*
-     * Current unpacked key - so that bch2_btree_iter_next()/
-     * bch2_btree_iter_next_slot() can correctly advance pos.
-     */
-    pub k: cs::bkey,
+        pub pos: cs::bpos,
+        /*
+         * Current unpacked key - so that bch2_btree_iter_next()/
+         * bch2_btree_iter_next_slot() can correctly advance pos.
+         */
+        pub k: cs::bkey,
 
-    /* BTREE_ITER_with_journal: */
-    pub journal_idx: usize,
-    /* C's TRACK_PATH_ALLOCATED: see btree_path */
-    #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
-    pub ip_allocated: core::ffi::c_ulong,
+        /* BTREE_ITER_with_journal: */
+        pub journal_idx: usize,
+        /* C's TRACK_PATH_ALLOCATED: see btree_path */
+        #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
+        pub ip_allocated: c_ulong,
+    }
 }
 c_default!(btree_iter);
-impl btree_iter {
-    pub fn btree_id(&self) -> u32 { let b = self.btree_id_bits; b.btree_id() }
-    pub fn set_btree_id(&mut self, v: u32) { let mut b = self.btree_id_bits; b.set_btree_id(v); self.btree_id_bits = b; }
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct get_locks_fail {
-    pub l: core::ffi::c_uint,
+    pub l: c_uint,
     pub b: *mut cs::btree,
 }
 c_default!(get_locks_fail);
 
+/* Key cache: */
+
 c_const! {
-    /* Key cache: */
     #[c_int]
     pub const BKEY_CACHED_ACCESSED: u32 = 0;
-}
-
-c_const! {
     #[c_int]
     pub const BKEY_CACHED_DIRTY: u32 = 1;
-}
-
-c_const! {
     #[c_int]
     pub const BKEY_CACHED_IMMEDIATE_FLUSH: u32 = 2;
 }
@@ -729,7 +584,7 @@ c_const! {
 pub struct bkey_cached {
     pub c: cs::btree_bkey_cached_common,
 
-    pub flags: core::ffi::c_ulong,
+    pub flags: c_ulong,
     pub u64s: u16,
     pub key: cs::bkey_cached_key,
 
@@ -743,72 +598,54 @@ pub struct bkey_cached {
 }
 c_default!(bkey_cached);
 
-#[bitfield(u16, repr = zerocopy::byteorder::native_endian::U16, from = zerocopy::byteorder::native_endian::U16::new, into = zerocopy::byteorder::native_endian::U16::get)]
-pub struct btree_insert_entry_btree_id_bits {
-    #[bits(8)]
-    pub btree_id: u32,
-    #[bits(3)]
-    pub level: u8,
-    #[bits(1)]
-    pub cached: bool,
-    #[bits(1)]
-    pub insert_trigger_run: bool,
-    #[bits(1)]
-    pub overwrite_trigger_run: bool,
-    #[bits(1)]
-    pub key_cache_already_flushed: bool,
-    #[bits(1)]
-    pub key_cache_flushing: bool,
-}
-
 /* Transaction types: */
-#[repr(C)]
-#[derive(Clone, Copy, CStruct)]
-pub struct btree_insert_entry {
-    pub flags: core::ffi::c_uint,
-    pub sort_order: u8,
-    pub bkey_type: u8,
-    #[c_bitfield]
-    pub btree_id_bits: btree_insert_entry_btree_id_bits,
-    /*
-     * @old_k may be a key from the journal or the key cache;
-     * @old_btree_u64s always refers to the size of the key being
-     * overwritten in the btree:
-     */
-    pub old_btree_u64s: u8,
-    pub k_buf_u64s: u8,
-    pub path: cs::btree_path_idx_t,
-    pub k: *mut cs::bkey_i,
-    /* key being overwritten: */
-    pub old_k: cs::bkey,
-    pub old_v: *const cs::bch_val,
-    pub ip_allocated: core::ffi::c_ulong,
+nest! {
+    #[repr(C)]
+    #[derive(Clone, Copy, CStruct)]
+    pub struct btree_insert_entry {
+        pub flags: c_uint,
+        pub sort_order: u8,
+        pub bkey_type: u8,
+        #[c_bitfield]
+        #>[bitfield(u16)]
+        pub bits: pub struct btree_insert_entry_bits {
+            #[bits(8)]
+            pub btree_id: cs::btree_id,
+            #[bits(3)]
+            pub level: u8,
+            #[bits(1)]
+            pub cached: bool,
+            #[bits(1)]
+            pub insert_trigger_run: bool,
+            #[bits(1)]
+            pub overwrite_trigger_run: bool,
+            #[bits(1)]
+            pub key_cache_already_flushed: bool,
+            #[bits(1)]
+            pub key_cache_flushing: bool,
+        },
+        /*
+         * @old_k may be a key from the journal or the key cache;
+         * @old_btree_u64s always refers to the size of the key being
+         * overwritten in the btree:
+         */
+        pub old_btree_u64s: u8,
+        pub k_buf_u64s: u8,
+        pub path: cs::btree_path_idx_t,
+        pub k: *mut cs::bkey_i,
+        /* key being overwritten: */
+        pub old_k: cs::bkey,
+        pub old_v: *const cs::bch_val,
+        pub ip_allocated: c_ulong,
+    }
 }
 c_default!(btree_insert_entry);
-impl btree_insert_entry {
-    pub fn btree_id(&self) -> u32 { let b = self.btree_id_bits; b.btree_id() }
-    pub fn set_btree_id(&mut self, v: u32) { let mut b = self.btree_id_bits; b.set_btree_id(v); self.btree_id_bits = b; }
-    pub fn level(&self) -> u8 { let b = self.btree_id_bits; b.level() }
-    pub fn set_level(&mut self, v: u8) { let mut b = self.btree_id_bits; b.set_level(v); self.btree_id_bits = b; }
-    pub fn cached(&self) -> bool { let b = self.btree_id_bits; b.cached() }
-    pub fn set_cached(&mut self, v: bool) { let mut b = self.btree_id_bits; b.set_cached(v); self.btree_id_bits = b; }
-    pub fn insert_trigger_run(&self) -> bool { let b = self.btree_id_bits; b.insert_trigger_run() }
-    pub fn set_insert_trigger_run(&mut self, v: bool) { let mut b = self.btree_id_bits; b.set_insert_trigger_run(v); self.btree_id_bits = b; }
-    pub fn overwrite_trigger_run(&self) -> bool { let b = self.btree_id_bits; b.overwrite_trigger_run() }
-    pub fn set_overwrite_trigger_run(&mut self, v: bool) { let mut b = self.btree_id_bits; b.set_overwrite_trigger_run(v); self.btree_id_bits = b; }
-    pub fn key_cache_already_flushed(&self) -> bool { let b = self.btree_id_bits; b.key_cache_already_flushed() }
-    pub fn set_key_cache_already_flushed(&mut self, v: bool) { let mut b = self.btree_id_bits; b.set_key_cache_already_flushed(v); self.btree_id_bits = b; }
-    pub fn key_cache_flushing(&self) -> bool { let b = self.btree_id_bits; b.key_cache_flushing() }
-    pub fn set_key_cache_flushing(&mut self, v: bool) { let mut b = self.btree_id_bits; b.set_key_cache_flushing(v); self.btree_id_bits = b; }
-}
 
 c_const! {
     /* Number of btree paths we preallocate, usually enough */
     #[c_int]
     pub const BTREE_ITER_INITIAL: u32 = 64;
-}
 
-c_const! {
     /*
      * Lmiit for btree_trans_too_many_iters(); this is enough that almost all code
      * paths should run inside this limit, and if they don't it usually indicates a
@@ -822,46 +659,36 @@ c_const! {
      */
     #[c_int]
     pub const BTREE_ITER_NORMAL_LIMIT: u32 = 256;
-}
 
-c_const! {
     /* never exceed limit */
     pub const BTREE_ITER_MAX: u32 = 1 << 10;
 }
 
-c_verbatim!(r#"
-struct btree_trans_commit_hook;
-typedef int (btree_trans_commit_hook_fn)(struct btree_trans *, struct btree_trans_commit_hook *);
-"#);
-
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct btree_trans_commit_hook {
-    #[c("btree_trans_commit_hook_fn *fn")]
-    pub fn_: Option<unsafe extern "C" fn(*mut cs::btree_trans, *mut cs::btree_trans_commit_hook) -> core::ffi::c_int>,
+    pub fn_: Option<unsafe extern "C" fn(*mut cs::btree_trans, *mut cs::btree_trans_commit_hook) -> c_int>,
     pub next: *mut cs::btree_trans_commit_hook,
 }
 c_default!(btree_trans_commit_hook);
 
 c_const! {
     pub const BTREE_TRANS_MEM_MAX: u32 = 1 << 16;
-}
 
-c_const! {
     pub const BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS: c_long = cs::NSEC_PER_MSEC as c_long;
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct btree_trans_paths {
-    pub nr_paths: core::ffi::c_ulong,
+    pub nr_paths: c_ulong,
     pub paths: [cs::btree_path; 0],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct trans_kmalloc_trace {
-    pub ip: core::ffi::c_ulong,
+    pub ip: c_ulong,
     pub bytes: usize,
 }
 
@@ -878,66 +705,6 @@ pub struct btree_trans_subbuf {
     pub size: u16,
 }
 
-#[bitfield(u64, repr = crate::types::NeBytes::<6>, from = crate::types::NeBytes::<6>::from_u64, into = crate::types::NeBytes::<6>::to_u64)]
-pub struct btree_trans_lock_may_not_fail_bits {
-    #[bits(1)]
-    pub lock_may_not_fail: bool,
-    #[bits(1)]
-    pub locked: bool,
-    #[bits(1)]
-    pub migrate_disabled: bool,
-    #[bits(1)]
-    pub write_locked: bool,
-    #[bits(1)]
-    pub srcu_held: bool,
-    /*
-     * IO was submitted under the srcu read lock (submit_bio() can block for
-     * an unbounded time): suppress the next bch2_trans_unlock_long() "held
-     * too long" warning. Scoped to one locked attempt — cleared on relock /
-     * bch2_trans_begin().
-     */
-    #[bits(1)]
-    pub srcu_io_submitted: bool,
-    #[bits(1)]
-    pub btree_cache_cannibalize_locked: bool,
-    #[bits(1)]
-    pub pf_memalloc_noio: bool,
-    #[bits(1)]
-    pub used_mempool: bool,
-    #[bits(1)]
-    pub in_traverse_all: bool,
-    #[bits(1)]
-    pub paths_sorted: bool,
-    #[bits(1)]
-    pub memory_allocation_failure: bool,
-    #[bits(1)]
-    pub journal_transaction_names: bool,
-    #[bits(1)]
-    pub journal_replay_not_finished: bool,
-    #[bits(1)]
-    pub notrace_relock_fail: bool,
-    /*
-     * Exempt bch2_trans_begin() from the dropped-updates warning. Set
-     * around a nested transaction - one that grabs trans->restart_count,
-     * does work whose inner commits discard the outer's queued updates, and
-     * returns trans_was_restarted() (e.g. fsck counting i_sectors, which
-     * spans too many extents to be a single transaction). The begin can't
-     * see the restart that's about to be returned, so the caller vouches
-     * for it here. Set it with CLASS(trans_may_drop_updates), which
-     * restores it at the end of the scope.
-     */
-    #[bits(1)]
-    pub begin_may_drop_updates: bool,
-    #[bits(1)]
-    pub has_interior_updates: bool,
-    #[bits(15)]
-    pub __pad17: u16,
-    #[bits(16)]
-    pub restarted: u32,
-    #[bits(16)]
-    pub __pad: u16,
-}
-
 /*
  * Transaction context for btree operations.
  *
@@ -951,161 +718,183 @@ pub struct btree_trans_lock_may_not_fail_bits {
  *  - SRCU read lock protects btree node memory from being freed;
  *    released periodically to avoid stalling reclaim
  */
-#[repr(C)]
-#[derive(CStruct)]
-pub struct btree_trans {
-    pub c: *mut cs::bch_fs,
+nest! {
+    #[repr(C)]
+    #[derive(CStruct)]
+    pub struct btree_trans {
+        pub c: *mut cs::bch_fs,
 
-    pub paths_allocated: *mut core::ffi::c_ulong,
-    pub paths: *mut cs::btree_path,
-    pub sorted: *mut cs::btree_path_idx_t,
-    pub updates: *mut cs::btree_insert_entry,
+        pub paths_allocated: *mut c_ulong,
+        pub paths: *mut cs::btree_path,
+        pub sorted: *mut cs::btree_path_idx_t,
+        pub updates: *mut cs::btree_insert_entry,
 
-    /* bump allocator, invalidated on transaction restart */
-    pub mem: *mut core::ffi::c_void,
-    pub mem_top: core::ffi::c_uint,
-    pub mem_bytes: core::ffi::c_uint,
-    pub realloc_bytes_required: core::ffi::c_uint,
-    #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
-    pub trans_kmalloc_trace: cs::darray_trans_kmalloc_trace,
+        /* bump allocator, invalidated on transaction restart */
+        pub mem: *mut c_void,
+        pub mem_top: c_uint,
+        pub mem_bytes: c_uint,
+        pub realloc_bytes_required: c_uint,
+        #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
+        pub trans_kmalloc_trace: cs::darray_trans_kmalloc_trace,
 
-    pub nr_sorted: cs::btree_path_idx_t,
-    pub nr_paths: cs::btree_path_idx_t,
-    pub nr_paths_max: cs::btree_path_idx_t,
-    pub nr_updates: cs::btree_path_idx_t,
-    pub shard_cpu: i16,
-    pub fn_idx: u8,
-    pub lock_must_abort: u8,
-    #[c_bitfield]
-    pub lock_may_not_fail_bits: btree_trans_lock_may_not_fail_bits,
-    pub restart_count: u32,
-    #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
-    pub restart_count_this_trans: u32,
-    /*
-     * Incremented on every successful (non-empty) commit; for detecting
-     * that cached state derived from btree reads may be stale:
-     */
-    pub commit_count: u32,
+        pub nr_sorted: cs::btree_path_idx_t,
+        pub nr_paths: cs::btree_path_idx_t,
+        pub nr_paths_max: cs::btree_path_idx_t,
+        pub nr_updates: cs::btree_path_idx_t,
+        pub shard_cpu: i16,
+        pub fn_idx: u8,
+        pub lock_must_abort: u8,
+        #[c_bitfield]
+        #>[bitfield(u64, repr = NeBytes<6>, from = NeBytes::<6>::from_u64, into = NeBytes::<6>::to_u64)]
+        pub bits: pub struct btree_trans_bits {
+            #[bits(1)]
+            pub lock_may_not_fail: bool,
+            #[bits(1)]
+            pub locked: bool,
+            #[bits(1)]
+            pub migrate_disabled: bool,
+            #[bits(1)]
+            pub write_locked: bool,
+            #[bits(1)]
+            pub srcu_held: bool,
+            /*
+             * IO was submitted under the srcu read lock (submit_bio() can block for
+             * an unbounded time): suppress the next bch2_trans_unlock_long() "held
+             * too long" warning. Scoped to one locked attempt — cleared on relock /
+             * bch2_trans_begin().
+             */
+            #[bits(1)]
+            pub srcu_io_submitted: bool,
+            #[bits(1)]
+            pub btree_cache_cannibalize_locked: bool,
+            #[bits(1)]
+            pub pf_memalloc_noio: bool,
+            #[bits(1)]
+            pub used_mempool: bool,
+            #[bits(1)]
+            pub in_traverse_all: bool,
+            #[bits(1)]
+            pub paths_sorted: bool,
+            #[bits(1)]
+            pub memory_allocation_failure: bool,
+            #[bits(1)]
+            pub journal_transaction_names: bool,
+            #[bits(1)]
+            pub journal_replay_not_finished: bool,
+            #[bits(1)]
+            pub notrace_relock_fail: bool,
+            /*
+             * Exempt bch2_trans_begin() from the dropped-updates warning. Set
+             * around a nested transaction - one that grabs trans->restart_count,
+             * does work whose inner commits discard the outer's queued updates, and
+             * returns trans_was_restarted() (e.g. fsck counting i_sectors, which
+             * spans too many extents to be a single transaction). The begin can't
+             * see the restart that's about to be returned, so the caller vouches
+             * for it here. Set it with CLASS(trans_may_drop_updates), which
+             * restores it at the end of the scope.
+             */
+            #[bits(1)]
+            pub begin_may_drop_updates: bool,
+            #[bits(1)]
+            pub has_interior_updates: bool,
+            #[bits(15)]
+            pub __pad17: u16,
+            #[bits(16)]
+            pub restarted: cs::bch_errcode,
+            #[bits(16)]
+            pub __pad: u16,
+        },
+        pub restart_count: u32,
+        #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]
+        pub restart_count_this_trans: u32,
+        /*
+         * Incremented on every successful (non-empty) commit; for detecting
+         * that cached state derived from btree reads may be stale:
+         */
+        pub commit_count: u32,
 
-    pub last_begin_time: u64,
-    pub last_begin_ip: core::ffi::c_ulong,
-    pub last_restarted_ip: core::ffi::c_ulong,
-    #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub last_restarted_trace: cs::bch_stacktrace,
-    pub last_unlock_ip: core::ffi::c_ulong,
-    pub srcu_lock_time: core::ffi::c_ulong,
-    pub srcu_idx: core::ffi::c_int,
-    pub locking_root_id: cs::btree_id,
+        pub last_begin_time: u64,
+        pub last_begin_ip: c_ulong,
+        pub last_restarted_ip: c_ulong,
+        #[cfg(CONFIG_BCACHEFS_DEBUG)]
+        pub last_restarted_trace: cs::bch_stacktrace,
+        pub last_unlock_ip: c_ulong,
+        pub srcu_lock_time: c_ulong,
+        pub srcu_idx: c_int,
+        pub locking_root_id: cs::btree_id,
 
-    pub locking_hash_val: u64,
-    pub locking: *mut cs::btree_bkey_cached_common,
-    /*
-     * Snapshot of locking->{btree}.hash_val at lock-attempt time, used by
-     * bch2_six_check_for_deadlock() to detect that the node identity
-     * rotated while we were about to sleep on it. 0 for cached entries.
-     */
-    pub locking_wait: cs::six_lock_waiter,
+        pub locking_hash_val: u64,
+        pub locking: *mut cs::btree_bkey_cached_common,
+        /*
+         * Snapshot of locking->{btree}.hash_val at lock-attempt time, used by
+         * bch2_six_check_for_deadlock() to detect that the node identity
+         * rotated while we were about to sleep on it. 0 for cached entries.
+         */
+        pub locking_wait: cs::six_lock_waiter,
 
-    /*
-     * btree node writes issued in this trans's context are queued here
-     * (singly linked via bi_next) instead of being submitted directly —
-     * no block layer work happens while we hold btree node locks.
-     * Submitted when the trans unlocks, and before waiting on btree
-     * node IO (see bch2_btree_node_wait_on_write()).
-     */
-    pub queued_write_bios: *mut cs::bio,
+        /*
+         * btree node writes issued in this trans's context are queued here
+         * (singly linked via bi_next) instead of being submitted directly —
+         * no block layer work happens while we hold btree node locks.
+         * Submitted when the trans unlocks, and before waiting on btree
+         * node IO (see bch2_btree_node_wait_on_write()).
+         */
+        pub queued_write_bios: *mut cs::bio,
 
-    pub fn_: *const crate::util::ffi::c_char,
+        pub fn_: *const c_char,
 
-    /* update path: */
-    pub journal_entries: cs::btree_trans_subbuf,
-    pub accounting: cs::btree_trans_subbuf,
+        /* update path: */
+        pub journal_entries: cs::btree_trans_subbuf,
+        pub accounting: cs::btree_trans_subbuf,
 
-    pub hooks: *mut cs::btree_trans_commit_hook,
-    pub journal_pin: *mut cs::journal_entry_pin,
+        pub hooks: *mut cs::btree_trans_commit_hook,
+        pub journal_pin: *mut cs::journal_entry_pin,
 
-    pub journal_res: cs::journal_res,
-    /*
-     * Input for BCH_TRANS_COMMIT_no_journal_res: with no reservation to
-     * derive a seq from, the caller names the journal entry the btree node
-     * write has to pin.
-     */
-    pub journal_seq_to_pin: u64,
-    pub journal_seq: *mut u64,
-    pub disk_res: *mut cs::disk_reservation,
-    pub flush: *mut cs::closure,
+        pub journal_res: cs::journal_res,
+        /*
+         * Input for BCH_TRANS_COMMIT_no_journal_res: with no reservation to
+         * derive a seq from, the caller names the journal entry the btree node
+         * write has to pin.
+         */
+        pub journal_seq_to_pin: u64,
+        pub journal_seq: *mut u64,
+        pub disk_res: *mut cs::disk_reservation,
+        pub flush: *mut cs::closure,
 
-    pub fs_usage_delta: cs::bch_fs_usage_base,
+        pub fs_usage_delta: cs::bch_fs_usage_base,
 
-    pub journal_u64s: core::ffi::c_uint,
-    pub extra_journal_u64s: u32,
+        pub journal_u64s: c_uint,
+        pub extra_journal_u64s: u32,
 
-    /*
-     * Space a trigger needs on top of @disk_res, charged at commit.
-     * Charge sites may disagree on the count, so keep the max: erring
-     * high only over-reserves.
-     */
-    pub extra_disk_res: u64,
-    pub extra_disk_res_replicas: u8,
+        /*
+         * Space a trigger needs on top of @disk_res, charged at commit.
+         * Charge sites may disagree on the count, so keep the max: erring
+         * high only over-reserves.
+         */
+        pub extra_disk_res: u64,
+        pub extra_disk_res_replicas: u8,
 
-    pub btree_path_down: cs::bkey_i,
-    pub btree_path_down_pad: [u64; cs::BKEY_BTREE_PTR_VAL_U64s_MAX],
+        pub btree_path_down: cs::bkey_i,
+        pub btree_path_down_pad: [u64; cs::BKEY_BTREE_PTR_VAL_U64s_MAX],
 
-    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
-    pub dep_map: cs::lockdep_map,
-    /* Entries before this are zeroed out on every bch2_trans_get() call */
+        #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+        pub dep_map: cs::lockdep_map,
+        /* Entries before this are zeroed out on every bch2_trans_get() call */
 
-    pub list: cs::list_head,
-    pub ref_: cs::closure,
-    pub rcu: cs::rcu_head,
+        pub list: cs::list_head,
+        pub ref_: cs::closure,
+        pub rcu: cs::rcu_head,
 
-    #[c("unsigned long _paths_allocated[BITS_TO_LONGS(BTREE_ITER_INITIAL)]")]
-    pub _paths_allocated: [core::ffi::c_ulong; bits_to_longs(cs::BTREE_ITER_INITIAL as usize)],
-    pub trans_paths: cs::btree_trans_paths,
-    pub _paths: [cs::btree_path; cs::BTREE_ITER_INITIAL as usize],
-    #[c("btree_path_idx_t _sorted[BTREE_ITER_INITIAL + 4]")]
-    pub _sorted: [cs::btree_path_idx_t; cs::BTREE_ITER_INITIAL as usize + 4],
-    pub _updates: [cs::btree_insert_entry; cs::BTREE_ITER_INITIAL as usize],
+        #[c("unsigned long _paths_allocated[BITS_TO_LONGS(BTREE_ITER_INITIAL)]")]
+        pub _paths_allocated: [c_ulong; bits_to_longs(cs::BTREE_ITER_INITIAL as usize)],
+        pub trans_paths: cs::btree_trans_paths,
+        pub _paths: [cs::btree_path; cs::BTREE_ITER_INITIAL as usize],
+        #[c("btree_path_idx_t _sorted[BTREE_ITER_INITIAL + 4]")]
+        pub _sorted: [cs::btree_path_idx_t; cs::BTREE_ITER_INITIAL as usize + 4],
+        pub _updates: [cs::btree_insert_entry; cs::BTREE_ITER_INITIAL as usize],
+    }
 }
 c_default!(btree_trans);
-impl btree_trans {
-    pub fn lock_may_not_fail(&self) -> bool { let b = self.lock_may_not_fail_bits; b.lock_may_not_fail() }
-    pub fn set_lock_may_not_fail(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_lock_may_not_fail(v); self.lock_may_not_fail_bits = b; }
-    pub fn locked(&self) -> bool { let b = self.lock_may_not_fail_bits; b.locked() }
-    pub fn set_locked(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_locked(v); self.lock_may_not_fail_bits = b; }
-    pub fn migrate_disabled(&self) -> bool { let b = self.lock_may_not_fail_bits; b.migrate_disabled() }
-    pub fn set_migrate_disabled(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_migrate_disabled(v); self.lock_may_not_fail_bits = b; }
-    pub fn write_locked(&self) -> bool { let b = self.lock_may_not_fail_bits; b.write_locked() }
-    pub fn set_write_locked(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_write_locked(v); self.lock_may_not_fail_bits = b; }
-    pub fn srcu_held(&self) -> bool { let b = self.lock_may_not_fail_bits; b.srcu_held() }
-    pub fn set_srcu_held(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_srcu_held(v); self.lock_may_not_fail_bits = b; }
-    pub fn srcu_io_submitted(&self) -> bool { let b = self.lock_may_not_fail_bits; b.srcu_io_submitted() }
-    pub fn set_srcu_io_submitted(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_srcu_io_submitted(v); self.lock_may_not_fail_bits = b; }
-    pub fn btree_cache_cannibalize_locked(&self) -> bool { let b = self.lock_may_not_fail_bits; b.btree_cache_cannibalize_locked() }
-    pub fn set_btree_cache_cannibalize_locked(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_btree_cache_cannibalize_locked(v); self.lock_may_not_fail_bits = b; }
-    pub fn pf_memalloc_noio(&self) -> bool { let b = self.lock_may_not_fail_bits; b.pf_memalloc_noio() }
-    pub fn set_pf_memalloc_noio(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_pf_memalloc_noio(v); self.lock_may_not_fail_bits = b; }
-    pub fn used_mempool(&self) -> bool { let b = self.lock_may_not_fail_bits; b.used_mempool() }
-    pub fn set_used_mempool(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_used_mempool(v); self.lock_may_not_fail_bits = b; }
-    pub fn in_traverse_all(&self) -> bool { let b = self.lock_may_not_fail_bits; b.in_traverse_all() }
-    pub fn set_in_traverse_all(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_in_traverse_all(v); self.lock_may_not_fail_bits = b; }
-    pub fn paths_sorted(&self) -> bool { let b = self.lock_may_not_fail_bits; b.paths_sorted() }
-    pub fn set_paths_sorted(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_paths_sorted(v); self.lock_may_not_fail_bits = b; }
-    pub fn memory_allocation_failure(&self) -> bool { let b = self.lock_may_not_fail_bits; b.memory_allocation_failure() }
-    pub fn set_memory_allocation_failure(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_memory_allocation_failure(v); self.lock_may_not_fail_bits = b; }
-    pub fn journal_transaction_names(&self) -> bool { let b = self.lock_may_not_fail_bits; b.journal_transaction_names() }
-    pub fn set_journal_transaction_names(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_journal_transaction_names(v); self.lock_may_not_fail_bits = b; }
-    pub fn journal_replay_not_finished(&self) -> bool { let b = self.lock_may_not_fail_bits; b.journal_replay_not_finished() }
-    pub fn set_journal_replay_not_finished(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_journal_replay_not_finished(v); self.lock_may_not_fail_bits = b; }
-    pub fn notrace_relock_fail(&self) -> bool { let b = self.lock_may_not_fail_bits; b.notrace_relock_fail() }
-    pub fn set_notrace_relock_fail(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_notrace_relock_fail(v); self.lock_may_not_fail_bits = b; }
-    pub fn begin_may_drop_updates(&self) -> bool { let b = self.lock_may_not_fail_bits; b.begin_may_drop_updates() }
-    pub fn set_begin_may_drop_updates(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_begin_may_drop_updates(v); self.lock_may_not_fail_bits = b; }
-    pub fn has_interior_updates(&self) -> bool { let b = self.lock_may_not_fail_bits; b.has_interior_updates() }
-    pub fn set_has_interior_updates(&mut self, v: bool) { let mut b = self.lock_may_not_fail_bits; b.set_has_interior_updates(v); self.lock_may_not_fail_bits = b; }
-    pub fn restarted(&self) -> u32 { let b = self.lock_may_not_fail_bits; b.restarted() }
-    pub fn set_restarted(&mut self, v: u32) { let mut b = self.lock_may_not_fail_bits; b.set_restarted(v); self.lock_may_not_fail_bits = b; }
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
@@ -1121,11 +910,11 @@ pub struct btree_transaction_stats {
     pub lock_hold_times: cs::bch2_time_stats,
     pub lock_wait_times: cs::bch2_time_stats,
     pub lock: cs::mutex,
-    pub nr_max_paths: core::ffi::c_uint,
-    pub max_mem: core::ffi::c_uint,
+    pub nr_max_paths: c_uint,
+    pub max_mem: c_uint,
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
     pub trans_kmalloc_trace: cs::darray_trans_kmalloc_trace,
-    pub max_paths_text: *mut crate::util::ffi::c_char,
+    pub max_paths_text: *mut c_char,
 }
 c_default!(btree_transaction_stats);
 
@@ -1154,8 +943,9 @@ pub struct bch_fs_btree_trans {
 }
 c_default!(bch_fs_btree_trans);
 
+/* Btree node write types and flags: */
+
 c_xmacro! {
-    /* Btree node write types and flags: */
     BCH_BTREE_WRITE_TYPES(x) {
         (initial, 0),
         (init_next_bset, 1),
@@ -1165,26 +955,17 @@ c_xmacro! {
     }
 }
 
-macro_rules! __btree_write_type_0 {
-    ([$($acc:tt)*] $(($t:tt$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum btree_write_type: u32 {
-                $($acc)*
-                $([<BTREE_WRITE_ $t>],)*
-                BTREE_WRITE_TYPE_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum btree_write_type: u32 {
+        BCH_BTREE_WRITE_TYPES(t, ..) => BTREE_WRITE_ ## t,
+        BTREE_WRITE_TYPE_NR,
+    }
 }
-BCH_BTREE_WRITE_TYPES!(__btree_write_type_0 []);
 
 c_const! {
     pub const BTREE_WRITE_TYPE_MASK: c_ulong =
         (cs::BTREE_WRITE_TYPE_NR as c_ulong).next_power_of_two() - 1;
-}
-
-c_const! {
     #[c_int]
     pub const BTREE_WRITE_TYPE_BITS: u32 = (cs::BTREE_WRITE_TYPE_NR as u32).next_power_of_two().ilog2();
 }
@@ -1214,21 +995,14 @@ c_xmacro! {
     }
 }
 
-macro_rules! __btree_flags_0 {
-    ([$($acc:tt)*] $(($flag:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum btree_flags: u32 {
-                $($acc)*
-                $([<BTREE_NODE_ $flag>],)*
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum btree_flags: u32 {
+        /* First bits for btree node write type */
+        BTREE_NODE_FLAGS_START = cs::BTREE_WRITE_TYPE_BITS - 1,
+        BTREE_FLAGS(flag) => BTREE_NODE_ ## flag,
+    }
 }
-BTREE_FLAGS!(__btree_flags_0 [
-    /* First bits for btree node write type */
-    BTREE_NODE_FLAGS_START = cs::BTREE_WRITE_TYPE_BITS - 1,
-]);
 
 c_xmacro! {
     BTREE_NODE_REWRITE_REASON(x) {
@@ -1239,18 +1013,12 @@ c_xmacro! {
     }
 }
 
-macro_rules! __btree_node_rewrite_reason_0 {
-    ([$($acc:tt)*] $(($n:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum btree_node_rewrite_reason: u32 {
-                $($acc)*
-                $([<BTREE_NODE_REWRITE_ $n>],)*
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum btree_node_rewrite_reason: u32 {
+        BTREE_NODE_REWRITE_REASON(n) => BTREE_NODE_REWRITE_ ## n,
+    }
 }
-BTREE_NODE_REWRITE_REASON!(__btree_node_rewrite_reason_0 []);
 
 /* Filesystem-level btree state: */
 /*
@@ -1275,9 +1043,6 @@ c_default!(btree_evicted_size);
 c_const! {
     #[c_int]
     pub const BTREE_EVICTED_SIZE_HASH_BITS: u32 = 48;
-}
-
-c_const! {
     pub const BTREE_EVICTED_SIZE_HASH_MASK: u64 = (1 << cs::BTREE_EVICTED_SIZE_HASH_BITS) - 1;
 }
 
@@ -1351,35 +1116,80 @@ pub struct bch_fs_btree {
 }
 c_default!(bch_fs_btree);
 
-c_verbatim!(r#"
-#define btree_bkey_first(_b, _t)					\
-({									\
-	EBUG_ON(bset(_b, _t)->start !=					\
-		__btree_node_offset_to_key(_b, btree_bkey_first_offset(_t)));\
-									\
-	bset(_b, _t)->start;						\
-})
-
-#define btree_bkey_last(_b, _t)						\
-({									\
-	EBUG_ON(__btree_node_offset_to_key(_b, (_t)->end_offset) !=	\
-		vstruct_last(bset(_b, _t)));				\
-									\
-	__btree_node_offset_to_key(_b, (_t)->end_offset);		\
-})
-"#);
-
 /* Btree ID properties: */
-macro_rules! __btree_node_type_0 {
-    ([$($acc:tt)*] $(($kwd:tt, $val:expr$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum btree_node_type: u32 {
-                $($acc)*
-                $([<BKEY_TYPE_ $kwd>] = (($val) as u32) + 1,)*
-                BKEY_TYPE_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum btree_node_type: u32 {
+        BKEY_TYPE_btree,
+        BCH_BTREE_IDS(kwd, val, ..) => BKEY_TYPE_ ## kwd = (val as u32) + 1,
+        BKEY_TYPE_NR,
+    }
 }
-BCH_BTREE_IDS!(__btree_node_type_0 [BKEY_TYPE_btree,]);
+
+impl c::btree_id {
+    /// Convert from raw u32. Returns None for unknown built-in btree IDs.
+    pub fn from_raw(id: u32) -> Option<Self> {
+        crate::BTREE_IDS_KNOWN.get(id as usize).copied()
+    }
+
+    /// Iterate over all known btree IDs.
+    pub fn iter_known() -> impl Iterator<Item = Self> {
+        crate::BTREE_IDS_KNOWN.iter().copied()
+    }
+}
+
+impl From<c::btree_id> for u32 {
+    fn from(id: c::btree_id) -> u32 {
+        id.0 as u32
+    }
+}
+
+/// Get a btree ID name string.
+#[cfg(feature = "std")]
+pub fn btree_id_str(id: u32) -> String {
+    match c::btree_id::from_raw(id) {
+        Some(btree_id) => format!("{}", btree_id),
+        None => format!("(unknown btree {})", id),
+    }
+}
+
+impl fmt::Display for c::btree_id {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = unsafe { CStr::from_ptr(c::bch2_btree_id_str(*self).cast()) };
+        f.write_str(s.to_str().unwrap_or("(invalid btree name)"))
+    }
+}
+
+#[cfg(feature = "std")]
+impl FromStr for c::btree_id {
+    type Err = BchError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = CString::new(s)
+            .map_err(|_| BchError::from(bch_errcode::BCH_ERR_EINVAL_parse_btree_id))?;
+        let p = s.as_ptr();
+
+        let v =
+            unsafe { c::match_string(c::__bch2_btree_ids[..].as_ptr(), (-1_isize) as usize, p) };
+        c::btree_id::from_raw(v as u32)
+            .ok_or(bch_errcode::BCH_ERR_EINVAL_parse_btree_id.into())
+    }
+}
+
+#[cfg(feature = "std")]
+impl FromStr for c::bch_bkey_type {
+    type Err = BchError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = CString::new(s)
+            .map_err(|_| BchError::from(bch_errcode::BCH_ERR_EINVAL_parse_bkey_type))?;
+        let p = s.as_ptr();
+
+        let v = unsafe { c::match_string(c::bch2_bkey_types[..].as_ptr(), (-1_isize) as usize, p) };
+        if v >= 0 {
+            Ok(c::bch_bkey_type(v as u32))
+        } else {
+            Err(bch_errcode::BCH_ERR_EINVAL_parse_bkey_type.into())
+        }
+    }
+}

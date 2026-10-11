@@ -15,6 +15,7 @@
 //!       pub union bch_extent_entry {
 //!           tag type_: u32 = bch_extent_entry_type by ExtentEntryType,
 //!           arms from BCH_EXTENT_ENTRY_TYPES(f, n) => f: bch_extent_ ## f = n,
+//!           pub type_: u64,
 //!       }
 //!   }
 //!
@@ -22,7 +23,8 @@
 //! which of its arms it holds, and that may be one this version doesn't know.
 //! The layout is given, not chosen: the storage is the C, plain #[repr(C)]
 //! data - a `struct` is the tag, then a union of the arms, and a `union` is
-//! the arms alone. Either is overlaid with the pad, if any. `packed` is C's
+//! the arms, with any members of its own (`pub NAME: TYPE`) overlaid on them
+//! for C to read. Either is overlaid with the pad, if any. `packed` is C's
 //! __packed: for an on-disk struct, the payload right after the tag, whatever
 //! the arms' alignment - a struct of the tag and the union otherwise puts the
 //! union at its alignment, and a new arm could move every payload.
@@ -96,11 +98,11 @@
 //! declaration reaches the list as tokens, so an error in a definition is
 //! reported where it's written.
 
-use proc_macro::{Delimiter, Group, Punct, Spacing, TokenStream, TokenTree};
+use proc_macro::{Delimiter, Group, TokenStream, TokenTree};
 
 use crate::cstruct::{parse_items, tagged_union_arms, tagged_union_record_text, CItem, CTaggedArm,
                      CTaggedUnion};
-use crate::{compile_error, record};
+use crate::{compile_error, record, through_list};
 
 /// tagged_union!: the arms from a list go through the list; written-out
 /// arms are generated directly. The declaration goes to the list as tokens,
@@ -112,14 +114,7 @@ pub fn tagged_union(input: TokenStream) -> TokenStream {
         Err(e) => return compile_error(&format!("tagged_union!: {e}")),
     };
     match &tu.from {
-        Some((list, _, _)) => {
-            let mut callback: TokenStream = "cstruct_macros::__tagged_union".parse().unwrap();
-            callback.extend([TokenTree::Group(Group::new(Delimiter::Bracket, input))]);
-            let mut out: TokenStream = format!("crate::cstructs::c::{list}!").parse().unwrap();
-            out.extend([TokenTree::Group(Group::new(Delimiter::Parenthesis, callback)),
-                        TokenTree::Punct(Punct::new(';', Spacing::Alone))]);
-            out
-        }
+        Some(f) => through_list(&f.list, "cstruct_macros::__tagged_union", input),
         None => generate(&input, &tu, &tu.arms),
     }
 }
@@ -292,6 +287,9 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Token
     let arm_fields: String = arms.iter()
         .map(|a| format!("    {vis} {}: {},\n", a.name, a.ty))
         .collect();
+    let member_fields: String = tu.members.iter()
+        .map(|(m, ty)| format!("    {vis} {m}: {ty},\n"))
+        .collect();
     let pad_field = tu.pad.as_ref().map(|p| format!("    {vis} _pad: {p},\n")).unwrap_or_default();
     let storage_attrs = "#[allow(non_camel_case_types)]\n#[repr(C)]\n#[derive(Clone, Copy)]\n";
     // `packed`: where C has __packed - the arms' union and the tag's struct,
@@ -324,7 +322,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Token
          format!("::core::mem::size_of::<{tag_ty}>()"),
          det)
     } else if tu.union {
-        (format!("{attrs}{packed_attrs}{vis} union {name} {{\n{arm_fields}{pad_field}}}\n"),
+        (format!("{attrs}{packed_attrs}{vis} union {name} {{\n{arm_fields}{member_fields}{pad_field}}}\n"),
          "0".to_string(),
          tu.by.clone().unwrap_or_default())
     } else {

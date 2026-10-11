@@ -4,6 +4,9 @@
 
 #include "fs/acl_gen.h"
 
+struct bch_inode_unpacked;
+struct posix_acl;
+
 #define BCH_ACL_VERSION	0x0001
 
 #ifndef NO_BCACHEFS_FS

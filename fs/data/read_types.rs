@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of data/read_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{c_opaque, c_default};
-use cstruct_macros::{bitfield, c_verbatim, CStruct};
+use crate::types::c_default;
+use core::ffi::c_uint;
+use cstruct_macros::{bitfield, CStruct};
 use nestify::nest;
 use typeinfo_macros::TypeInfo;
 
@@ -50,20 +48,18 @@ nest! {
          */
         pub bvec_iter: c::bvec_iter,
 
-        pub offset_into_extent: core::ffi::c_uint,
+        pub offset_into_extent: c_uint,
 
         pub flags: u16,
         #[c_anon]
         pub state: pub union bch_read_bio_state {
             #[c_anon]
-            pub bits: pub struct bch_read_bio_state_bits {
-                #[c_anon("")]
-                pub __bitfield_align: [u16; 0],
+            pub fields: pub struct bch_read_bio_state_fields {
                 #[c_bitfield]
                 #>[derive(Clone, Copy, CStruct, TypeInfo)]-
                 #>[repr(C)]-
-                #>[bitfield(u16, repr = zerocopy::byteorder::native_endian::U16, from = zerocopy::byteorder::native_endian::U16::new, into = zerocopy::byteorder::native_endian::U16::get)]
-                pub data_update_bits: pub struct bch_read_bio_data_update_bits {
+                #>[bitfield(u16)]
+                pub bits: pub struct bch_read_bio_bits {
                     #[bits(1)]
                     pub data_update: u16,
                     #[bits(1)]
@@ -89,9 +85,9 @@ nest! {
             pub _state: u16,
         },
         pub ret: i16,
-        /* C's CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS: see types.rs */
+        /* C's CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS, which bcachefs.h defines from these */
         #[cfg(all(__KERNEL__, CONFIG_DEBUG_FS))]
-        pub list_idx: core::ffi::c_uint,
+        pub list_idx: c_uint,
 
         pub pick: c::extent_ptr_decoded,
 
@@ -120,35 +116,3 @@ nest! {
     }
 }
 c_default!(bch_read_bio);
-impl bch_read_bio_state_bits {
-    pub fn data_update(&self) -> u16 { let b = self.data_update_bits; b.data_update() }
-    pub fn set_data_update(&mut self, v: u16) { let mut b = self.data_update_bits; b.set_data_update(v); self.data_update_bits = b; }
-    pub fn data_update_verify_decompress(&self) -> u16 { let b = self.data_update_bits; b.data_update_verify_decompress() }
-    pub fn set_data_update_verify_decompress(&mut self, v: u16) { let mut b = self.data_update_bits; b.set_data_update_verify_decompress(v); self.data_update_bits = b; }
-    pub fn promote(&self) -> u16 { let b = self.data_update_bits; b.promote() }
-    pub fn set_promote(&mut self, v: u16) { let mut b = self.data_update_bits; b.set_promote(v); self.data_update_bits = b; }
-    pub fn bounce(&self) -> u16 { let b = self.data_update_bits; b.bounce() }
-    pub fn set_bounce(&mut self, v: u16) { let mut b = self.data_update_bits; b.set_bounce(v); self.data_update_bits = b; }
-    pub fn split(&self) -> u16 { let b = self.data_update_bits; b.split() }
-    pub fn set_split(&mut self, v: u16) { let mut b = self.data_update_bits; b.set_split(v); self.data_update_bits = b; }
-    pub fn narrow_crcs(&self) -> u16 { let b = self.data_update_bits; b.narrow_crcs() }
-    pub fn set_narrow_crcs(&mut self, v: u16) { let mut b = self.data_update_bits; b.set_narrow_crcs(v); self.data_update_bits = b; }
-    pub fn saw_error(&self) -> u16 { let b = self.data_update_bits; b.saw_error() }
-    pub fn set_saw_error(&mut self, v: u16) { let mut b = self.data_update_bits; b.set_saw_error(v); self.data_update_bits = b; }
-    pub fn self_healing(&self) -> u16 { let b = self.data_update_bits; b.self_healing() }
-    pub fn set_self_healing(&mut self, v: u16) { let mut b = self.data_update_bits; b.set_self_healing(v); self.data_update_bits = b; }
-    pub fn context(&self) -> u16 { let b = self.data_update_bits; b.context() }
-    pub fn set_context(&mut self, v: u16) { let mut b = self.data_update_bits; b.set_context(v); self.data_update_bits = b; }
-}
-
-c_verbatim!(r#"
-struct bch_devs_mask;
-struct cache_promote_op;
-"#);
-
-c_opaque!(cache_promote_op);
-
-c_verbatim!(r#"
-struct extent_ptr_decoded;
-struct promote_op;
-"#);

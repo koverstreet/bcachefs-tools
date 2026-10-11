@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of btree/bset_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
@@ -142,6 +139,7 @@ use cstruct_macros::{CStruct, c_const, c_enum, c_extern};
  * to it, only when it would overflow do we go to the trouble of finding the
  * first key in that range of bytes again.
  */
+
 c_enum! {
     #[closed]
     pub enum bset_aux_tree_type: u32 {
@@ -156,8 +154,7 @@ c_const! {
     pub const BSET_TREE_NR_TYPES: u32 = 3;
 }
 
-/* bset_stats' per-type counts: C's struct { ... } sets[] - nest! can't define
- * an array's element type in place */
+/* bset_stats.sets[]: the counts for one bset tree type */
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct bset_stats_set {
@@ -175,8 +172,6 @@ pub struct bset_stats {
     pub failed: usize,
 }
 
-// What Rust calls of btree/bset.h: C gets these as prototypes, in btree/bset_gen.h
-// with the types - see c_extern! in types/cstruct.rs.
 c_extern! {
     pub fn bch2_btree_node_iter_init_from_start(arg1: *mut c::btree_node_iter, arg2: *mut c::btree);
     pub fn bch2_btree_node_iter_advance(arg1: *mut c::btree_node_iter, arg2: *mut c::btree);

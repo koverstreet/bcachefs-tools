@@ -1,22 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of alloc/buckets_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use cstruct_macros::{CStruct, bitfield, c_const, c_extern, c_verbatim};
+use core::ffi::{c_int, c_long, c_uint};
+use cstruct_macros::{CStruct, bitfield, c_const, c_extern};
+use nestify::nest;
 use typeinfo_macros::TypeInfo;
-
 
 c_const! {
     #[c_int]
     pub const BUCKET_JOURNAL_SEQ_BITS: u32 = 16;
 }
 
-c_verbatim!(r#"
 /*
  * Ugly hack alert:
  *
@@ -32,7 +29,6 @@ c_verbatim!(r#"
  * ulong for this - we just need to make sure the lock bit always ends up in the
  * first byte.
  */
-"#);
 
 #[cfg(target_endian = "little")]
 c_const! {
@@ -55,32 +51,26 @@ pub union ulong_byte_assert {
 }
 c_default!(ulong_byte_assert);
 
-#[bitfield(u8)]
-pub struct bucket_gen_valid_bits {
-    #[bits(1)]
-    pub gen_valid: u8,
-    #[bits(7)]
-    pub data_type: u8,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-#[c_align("sizeof(long)")]
-pub struct bucket {
-    #[c_anon("")] pub __align: [core::ffi::c_long; 0],
-    pub lock: u8,
-    #[c_bitfield]
-    pub gen_valid_bits: bucket_gen_valid_bits,
-    pub generation: u8,
-    pub dirty_sectors: u32,
-    pub cached_sectors: u32,
-    pub stripe_sectors: u32,
-}
-impl bucket {
-    pub fn gen_valid(&self) -> u8 { let b = self.gen_valid_bits; b.gen_valid() }
-    pub fn set_gen_valid(&mut self, v: u8) { let mut b = self.gen_valid_bits; b.set_gen_valid(v); self.gen_valid_bits = b; }
-    pub fn data_type(&self) -> u8 { let b = self.gen_valid_bits; b.data_type() }
-    pub fn set_data_type(&mut self, v: u8) { let mut b = self.gen_valid_bits; b.set_data_type(v); self.gen_valid_bits = b; }
+nest! {
+    #[repr(C)]
+    #[derive(Clone, Copy, Default, CStruct)]
+    #[c_align("sizeof(long)")]
+    pub struct bucket {
+        #[c_anon("")] pub __align: [c_long; 0],
+        pub lock: u8,
+        #[c_bitfield]
+        #>[bitfield(u8)]
+        pub bits: pub struct bucket_bits {
+            #[bits(1)]
+            pub gen_valid: u8,
+            #[bits(7)]
+            pub data_type: u8,
+        },
+        pub generation: u8,
+        pub dirty_sectors: u32,
+        pub cached_sectors: u32,
+        pub stripe_sectors: u32,
+    }
 }
 
 #[repr(C)]
@@ -150,16 +140,14 @@ pub struct bch_fs_usage_short {
 pub struct disk_reservation {
     pub sectors: u64,
     pub generation: u32,
-    pub nr_replicas: core::ffi::c_uint,
+    pub nr_replicas: c_uint,
 }
 
-// What Rust calls of alloc/buckets.h: C gets these as prototypes, in alloc/buckets_gen.h
-// with the types - see c_extern! in types/cstruct.rs.
 c_extern! {
-    pub fn rust_bch2_disk_reservation_add(c: *mut c::bch_fs, res: *mut c::disk_reservation, sectors: u64, nr_replicas: core::ffi::c_uint, flags: core::ffi::c_int) -> core::ffi::c_int;
+    pub fn rust_bch2_disk_reservation_add(c: *mut c::bch_fs, res: *mut c::disk_reservation, sectors: u64, nr_replicas: c_uint, flags: c_int) -> c_int;
     pub fn rust_bch2_disk_reservation_put(c: *mut c::bch_fs, res: *mut c::disk_reservation);
     pub fn bch2_dev_usage_full_read_fast(arg1: *mut c::bch_dev, arg2: *mut c::bch_dev_usage_full);
     pub fn bch2_fs_usage_read_short(arg1: *mut c::bch_fs) -> c::bch_fs_usage_short;
-    pub fn bch2_trans_mark_dev_sb(arg1: *mut c::bch_fs, arg2: *mut c::bch_dev, arg3: c::btree_iter_update_trigger_flags) -> core::ffi::c_int;
-    pub fn bch2_buckets_nouse_alloc(arg1: *mut c::bch_fs) -> core::ffi::c_int;
+    pub fn bch2_trans_mark_dev_sb(arg1: *mut c::bch_fs, arg2: *mut c::bch_dev, arg3: c::btree_iter_update_trigger_flags) -> c_int;
+    pub fn bch2_buckets_nouse_alloc(arg1: *mut c::bch_fs) -> c_int;
 }

@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of alloc/disk_groups_defs.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use core::ffi::c_uint;
 use cstruct_macros::{c_enum, CStruct};
 use nestify::nest;
 
-/* What a target is: C's is anonymous, in its type field */
+/* target.type_: what a target names */
 c_enum! {
     #[closed]
     pub enum bch_target_type: u32 {
@@ -28,8 +26,8 @@ nest! {
 
         #[c_anon]
         pub id: pub union target_id {
-            pub dev: core::ffi::c_uint,
-            pub group: core::ffi::c_uint,
+            pub dev: c_uint,
+            pub group: c_uint,
         },
     }
 }

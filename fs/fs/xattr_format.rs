@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of fs/xattr_format.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
@@ -13,24 +10,12 @@ use typeinfo_macros::TypeInfo;
 c_const! {
     #[c_int]
     pub const KEY_TYPE_XATTR_INDEX_USER: u32 = 0;
-}
-
-c_const! {
     #[c_int]
     pub const KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS: u32 = 1;
-}
-
-c_const! {
     #[c_int]
     pub const KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT: u32 = 2;
-}
-
-c_const! {
     #[c_int]
     pub const KEY_TYPE_XATTR_INDEX_TRUSTED: u32 = 3;
-}
-
-c_const! {
     #[c_int]
     pub const KEY_TYPE_XATTR_INDEX_SECURITY: u32 = 4;
 }

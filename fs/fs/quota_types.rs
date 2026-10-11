@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of fs/quota_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::{GenRadix, c_default};
+use core::ffi::c_int;
 use cstruct_macros::{c_enum, c_typedef, CStruct};
 use typeinfo_macros::TypeInfo;
-
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -33,8 +30,8 @@ pub struct memquota_counter {
     pub hardlimit: u64,
     pub softlimit: u64,
     pub timer: i64,
-    pub warns: core::ffi::c_int,
-    pub warning_issued: core::ffi::c_int,
+    pub warns: c_int,
+    pub warning_issued: c_int,
 }
 
 #[repr(C)]
@@ -44,7 +41,6 @@ pub struct bch_memquota {
 }
 
 c_typedef! {
-    #[c("GENRADIX(struct bch_memquota) bch_memquota_table")]
     pub type bch_memquota_table = GenRadix<c::bch_memquota>;
 }
 

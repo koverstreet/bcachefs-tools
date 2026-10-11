@@ -1,20 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of data/extents_defs.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use cstruct_macros::{c_enum, c_verbatim, CStruct};
+use core::ffi::c_uint;
+use cstruct_macros::{c_enum, CStruct};
 use typeinfo_macros::TypeInfo;
-
-c_verbatim!(r#"
-struct bch_fs;
-
-struct btree_trans;
-"#);
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -74,7 +66,7 @@ pub struct bkey_durability {
 
     pub nr_ptrs: u8, /* real device pointers */
     pub nr_overwritable: u8, /* uncompressed - an overwrite reclaims these */
-    pub sectors_compressed: core::ffi::c_uint,
+    pub sectors_compressed: c_uint,
 
     /*
      * Copies this key occupies, for disk space accounting.

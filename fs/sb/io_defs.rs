@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of sb/io_defs.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use core::ffi::c_int;
 use cstruct_macros::{c_enum, CStruct};
 use typeinfo_macros::TypeInfo;
 
@@ -14,7 +12,7 @@ use typeinfo_macros::TypeInfo;
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_sb_field_ops {
     pub validate: Option<unsafe extern "C" fn(*mut c::bch_sb, *mut c::bch_sb_field,
-                                              c::bch_validate_flags, *mut c::printbuf) -> core::ffi::c_int>,
+                                              c::bch_validate_flags, *mut c::printbuf) -> c_int>,
     pub to_text: Option<unsafe extern "C" fn(*mut c::printbuf, *mut c::bch_fs, *mut c::bch_sb, *mut c::bch_sb_field)>,
 }
 

@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_BTREE_TYPES_INLINE_H
 #define _BCACHEFS_BTREE_TYPES_INLINE_H
 
-/* Included at the end of btree/types.h. */
+/* Included after btree/types_gen.h. */
 
 static inline size_t btree_cache_list_nr(const struct btree_cache_list *l)
 {
@@ -22,6 +22,10 @@ static inline size_t btree_cache_nr_dirty(const struct bch_fs_btree_cache *bc)
 
 /* iter flags must fit in struct btree_iter.flags: */
 static_assert(BTREE_ITER_FLAG_BIT_committed < 32);
+
+#if defined(CONFIG_BCACHEFS_LOCK_TIME_STATS) || defined(CONFIG_BCACHEFS_DEBUG)
+#define TRACK_PATH_ALLOCATED
+#endif
 
 static inline struct btree_path_level *path_l(struct btree_path *path)
 {
@@ -158,6 +162,22 @@ static inline unsigned btree_bkey_first_offset(const struct bset_tree *t)
 {
 	return t->data_offset + offsetof(struct bset, _data) / sizeof(u64);
 }
+
+#define btree_bkey_first(_b, _t)					\
+({									\
+	EBUG_ON(bset(_b, _t)->start !=					\
+		__btree_node_offset_to_key(_b, btree_bkey_first_offset(_t)));\
+									\
+	bset(_b, _t)->start;						\
+})
+
+#define btree_bkey_last(_b, _t)						\
+({									\
+	EBUG_ON(__btree_node_offset_to_key(_b, (_t)->end_offset) !=	\
+		vstruct_last(bset(_b, _t)));				\
+									\
+	__btree_node_offset_to_key(_b, (_t)->end_offset);		\
+})
 
 static inline unsigned bset_u64s(struct bset_tree *t)
 {

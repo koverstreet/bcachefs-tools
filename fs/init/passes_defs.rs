@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of init/passes_defs.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
-use cstruct_macros::{c_enum, c_verbatim};
+use cstruct_macros::c_enum;
 
 c_enum! {
     #[flags]
@@ -28,7 +25,3 @@ c_enum! {
         RUN_RECOVERY_PASS_skip_if_complete = 1 << 2,
     }
 }
-
-c_verbatim!(r#"
-struct sb_write;
-"#);

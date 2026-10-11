@@ -43,7 +43,7 @@ extern const char * const bch2_extent_entry_types[];
 
 static inline unsigned extent_entry_type(const union bch_extent_entry *e)
 {
-	return e->type ? __ffs(e->type) : ~0U;
+	return e->type ? __ffs64(e->type) : ~0U;
 }
 
 static inline size_t extent_entry_u64s(const struct bch_fs *c, const union bch_extent_entry *entry)

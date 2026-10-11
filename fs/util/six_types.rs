@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of util/six_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use core::ffi::{c_int, c_uint};
 use cstruct_macros::{c_const, c_enum, c_typedef, CStruct};
 
 c_enum! {
@@ -70,9 +68,9 @@ pub struct six_lock {
     pub state: c::atomic_t,
     pub seq: u32,
     #[c("unsigned __percpu *readers")]
-    pub readers: *mut core::ffi::c_uint,
-    pub intent_lock_recurse: core::ffi::c_uint,
-    pub write_lock_recurse: core::ffi::c_uint,
+    pub readers: *mut c_uint,
+    pub intent_lock_recurse: c_uint,
+    pub write_lock_recurse: c_uint,
     pub owner: *mut c::task_struct,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     pub owner_stack: c::bch_stacktrace,
@@ -90,7 +88,7 @@ c_default!(six_lock);
 
 c_typedef! {
     pub type six_lock_should_sleep_fn = Option<unsafe extern "C" fn(lock: *mut c::six_lock,
-                                                                    *mut c::six_lock_waiter) -> core::ffi::c_int>;
+                                                                    *mut c::six_lock_waiter) -> c_int>;
 }
 
 c_enum! {
@@ -103,5 +101,5 @@ c_enum! {
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct six_lock_count {
-    pub n: [core::ffi::c_uint; 3],
+    pub n: [c_uint; 3],
 }

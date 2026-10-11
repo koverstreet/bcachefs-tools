@@ -1,25 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of alloc/backpointers_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::{DArray, c_default};
-use cstruct_macros::{c_verbatim, CStruct};
+use cstruct_macros::{CStruct, c_typedef};
 
-c_verbatim!(r#"
-struct wb_maybe_flush;
-
-DEFINE_DARRAY_NAMED(darray_bkey_i_backpointer, struct bkey_i_backpointer);
-"#);
-
-pub type darray_bkey_i_backpointer = DArray<c::bkey_i_backpointer>;
-
-c_verbatim!(r#"
-struct progress_indicator;
-"#);
+c_typedef! {
+    pub type darray_bkey_i_backpointer = DArray<c::bkey_i_backpointer>;
+}
 
 #[repr(C)]
 #[derive(CStruct)]

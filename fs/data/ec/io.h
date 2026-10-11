@@ -58,6 +58,7 @@ void bch2_ec_block_io_range(struct bch_fs *, struct ec_stripe_buf *, blk_opf_t, 
 			    unsigned, unsigned);
 void bch2_stripe_buf_read(struct bch_fs *, struct ec_stripe_buf *);
 
+struct bch_read_bio;
 int bch2_ec_read_extent(struct btree_trans *, struct bch_read_bio *,
 			struct bkey_s_c, struct printbuf *);
 

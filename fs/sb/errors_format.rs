@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of sb/errors_format.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use zerocopy::byteorder::little_endian as le;
 use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_xmacro, CStruct};
+use nestify::nest;
 use typeinfo_macros::TypeInfo;
 
 c_enum! {
@@ -464,18 +462,12 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_sb_error_id_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_sb_error_id: u32 {
-                $($acc)*
-                $([<BCH_FSCK_ERR_ $t>] = (($n) as u32),)*
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_sb_error_id: u32 {
+        BCH_SB_ERRS(t, n, ..) => BCH_FSCK_ERR_ ## t = n,
+    }
 }
-BCH_SB_ERRS!(__bch_sb_error_id_0 []);
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -512,24 +504,24 @@ c_bitmask! {
  * v[0]: id 0..16, nr 16..48, last_error_time 48..64 (low 16 bits)
  * v[1]: last_error_time 0..24 (high 24 bits), first_error_time 24..64
  */
-#[bitfield(u128, repr = le::U128, from = le::U128::new, into = le::U128::get)]
-pub struct bch_sb_field_error_entry_v2_bits {
-    #[bits(16)]
-    pub id: u16,
-    #[bits(32)]
-    pub nr: u32,
-    #[bits(40)]
-    pub last_error_time: u64,
-    #[bits(40)]
-    pub first_error_time: u64,
-}
-
-#[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-#[c_typedef(bch_sb_field_error_entry_v2)]
-pub struct bch_sb_field_error_entry_v2 {
-    #[c("__le64 v[2]")]
-    pub v: bch_sb_field_error_entry_v2_bits,
+nest! {
+    #[repr(C, align(8))]
+    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+    #[c_typedef(bch_sb_field_error_entry_v2)]
+    pub struct bch_sb_field_error_entry_v2 {
+        #[c("__le64 v[2]")]
+        #>[bitfield(u128, repr = le::U128, from = le::U128::new, into = le::U128::get)]
+        pub v: pub struct bch_sb_field_error_entry_v2_bits {
+            #[bits(16)]
+            pub id: u16,
+            #[bits(32)]
+            pub nr: u32,
+            #[bits(40)]
+            pub last_error_time: u64,
+            #[bits(40)]
+            pub first_error_time: u64,
+        },
+    }
 }
 
 #[repr(C)]
@@ -541,8 +533,5 @@ pub struct bch_sb_field_errors_v2 {
 
 c_const! {
     pub const BCH_SB_ERROR_ENTRY_V2_NR_MAX: u64 = (1 << 32) - 1;
-}
-
-c_const! {
     pub const BCH_SB_ERROR_ENTRY_V2_TIME_MAX: u64 = (1 << 40) - 1;
 }

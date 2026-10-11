@@ -168,7 +168,7 @@ impl<'f> BtreeTrans<'f> {
     /// transaction restart if they've changed hands meanwhile.
     pub fn relock(&self) -> Result<(), BchError> {
         let trans = unsafe { &*self.raw };
-        if trans.locked() && trans.restarted() == 0 {
+        if trans.locked() && trans.restarted().0 == 0 {
             return Ok(());
         }
         crate::errcode::ret_to_result(unsafe { c::__bch2_trans_relock(self.raw, true) }).map(|_| ())
@@ -1448,7 +1448,7 @@ impl<'t> BtreeIter<'t> {
     }
 
     pub fn btree(&self) -> c::btree_id {
-        c::btree_id(self.r().btree_id())
+        self.r().btree_id()
     }
 
     pub fn set_pos(&mut self, pos: c::bpos) {

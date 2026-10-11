@@ -1,19 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of opts_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::cstructs::c::BCH_INODE_OPTS;
 use crate::types::{bits_to_longs, c_opaque, c_default};
-use cstruct_macros::{CStruct, c_const, c_enum, c_extern, c_verbatim, c_xmacro};
+use crate::util::ffi::c_char;
+use core::ffi::{c_int, c_uint, c_ulong};
+use cstruct_macros::{CStruct, c_const, c_enum, c_extern, c_xmacro};
 use typeinfo_macros::TypeInfo;
-
-c_verbatim!(r#"
-struct bch_fs;
-"#);
 
 /*
  * Mount options; we also store defaults in the superblock.
@@ -64,18 +59,16 @@ c_enum! {
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
 pub struct bch_opt_fn {
-    pub parse: Option<unsafe extern "C" fn(*mut c::bch_fs, *const crate::util::ffi::c_char, *mut u64, *mut c::printbuf) -> core::ffi::c_int>,
+    pub parse: Option<unsafe extern "C" fn(*mut c::bch_fs, *const c_char, *mut u64, *mut c::printbuf) -> c_int>,
     pub to_text: Option<unsafe extern "C" fn(*mut c::printbuf, *mut c::bch_fs, *mut c::bch_sb, u64)>,
-    pub validate: Option<unsafe extern "C" fn(u64, *mut c::printbuf) -> core::ffi::c_int>,
+    pub validate: Option<unsafe extern "C" fn(u64, *mut c::printbuf) -> c_int>,
 }
 c_default!(bch_opt_fn);
 
 c_const! {
     /* the ratelimit_errors option's default: on in the kernel */
     pub const RATELIMIT_ERRORS_DEFAULT: bool = cfg!(__KERNEL__);
-}
 
-c_const! {
     /* the verbose option's default: on in debug builds */
     pub const BCACHEFS_VERBOSE_DEFAULT: bool = cfg!(CONFIG_BCACHEFS_DEBUG);
 }
@@ -89,18 +82,12 @@ c_xmacro! {
     }
 }
 
-macro_rules! __fsck_err_opts_0 {
-    ([$($acc:tt)*] $(($t:tt$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum fsck_err_opts: u32 {
-                $($acc)*
-                $([<FSCK_FIX_ $t>],)*
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum fsck_err_opts: u32 {
+        BCH_FIX_ERRORS_OPTS(t, ..) => FSCK_FIX_ ## t,
+    }
 }
-BCH_FIX_ERRORS_OPTS!(__fsck_err_opts_0 []);
 
 c_xmacro! {
     BCH_OPTS(x) {
@@ -627,25 +614,19 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_opt_id_0 {
-    ([$($acc:tt)*] $(($_name:tt$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_opt_id: u32 {
-                $($acc)*
-                $([<Opt_ $_name>],)*
-                bch2_opts_nr,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_opt_id: u32 {
+        BCH_OPTS(_name, ..) => Opt_ ## _name,
+        bch2_opts_nr,
+    }
 }
-BCH_OPTS!(__bch_opt_id_0 []);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_opts_mask {
     #[c("unsigned long d[BITS_TO_LONGS(bch2_opts_nr)]")]
-    pub d: [core::ffi::c_ulong; bits_to_longs(c::bch2_opts_nr as usize)],
+    pub d: [c_ulong; bits_to_longs(c::bch2_opts_nr as usize)],
 }
 
 macro_rules! __bch_opts_0 {
@@ -688,10 +669,6 @@ macro_rules! __bch_opts_1 {
 }
 BCH_OPTS!(__bch_opts_0 [#[c_anon("")] pub __bch_opts_align: [u32; 0],]);
 
-c_verbatim!(r#"
-struct bch_status_fd;
-"#);
-
 c_opaque!(bch_status_fd);
 
 #[repr(C)]
@@ -730,12 +707,6 @@ pub struct bch2_opts_parse {
 }
 c_default!(bch2_opts_parse);
 
-c_verbatim!(r#"
-struct bch_fs;
-
-struct printbuf;
-"#);
-
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
 pub struct bch_option {
@@ -745,13 +716,13 @@ pub struct bch_option {
     pub min: u64,
     pub max: u64,
 
-    pub choices: *const *const crate::util::ffi::c_char,
+    pub choices: *const *const c_char,
     pub choices_allowed_mask: u64,
 
     pub fn_: c::bch_opt_fn,
 
-    pub hint: *const crate::util::ffi::c_char,
-    pub help: *const crate::util::ffi::c_char,
+    pub hint: *const c_char,
+    pub help: *const c_char,
 
     pub get_sb: Option<unsafe extern "C" fn(*const c::bch_sb) -> u64>,
     pub set_sb: Option<unsafe extern "C" fn(*mut c::bch_sb, u64)>,
@@ -763,16 +734,10 @@ pub struct bch_option {
     pub set_ext: Option<unsafe extern "C" fn(*mut c::bch_sb_field_ext, u64)>,
 
     /* BCH_OPT_STR_MEMBER: the bch_member char[] field the string lives in */
-    pub member_offset: core::ffi::c_uint,
-    pub member_size: core::ffi::c_uint,
+    pub member_offset: c_uint,
+    pub member_size: c_uint,
 }
 c_default!(bch_option);
-
-c_verbatim!(r#"
-struct bch_dev;
-
-struct opt_change_scope;
-"#);
 
 /* inode opts: */
 macro_rules! __bch_inode_opts_0 {
@@ -817,34 +782,28 @@ BCH_INODE_OPTS()
 }
 BCH_INODE_OPTS!(__bch_inode_opts_0 [#[c_anon("")] pub __bch_inode_opts_align: [u64; 0],]);
 
-// What Rust calls of opts.h: C gets these as prototypes, in opts_gen.h
-// with the types - see c_extern! in types/cstruct.rs.
 c_extern! {
-    #[c("const char * const __bch2_btree_ids[]")]
-    pub static __bch2_btree_ids: [*const crate::util::ffi::c_char; 0usize];
-    #[c("const char * const bch2_d_types[]")]
-    pub static bch2_d_types: [*const crate::util::ffi::c_char; 0usize];
+    pub static __bch2_btree_ids: [*const c_char; 0];
+    pub static bch2_d_types: [*const c_char; 0];
     pub fn bch2_prt_jset_entry_type(arg1: *mut c::printbuf, arg2: c::bch_jset_entry_type);
     pub fn bch2_prt_data_type(arg1: *mut c::printbuf, arg2: c::bch_data_type);
     pub fn bch2_prt_compression_type(arg1: *mut c::printbuf, arg2: c::bch_compression_type);
     pub fn bch2_prt_str_hash_type(arg1: *mut c::printbuf, arg2: c::bch_str_hash_type);
     pub fn bch2_prt_reconcile_accounting_type(arg1: *mut c::printbuf, arg2: c::bch_reconcile_accounting_type);
-    #[c("const struct bch_opts bch2_opts_default")]
     pub static bch2_opts_default: c::bch_opts;
-    #[c("const struct bch_option bch2_opt_table[]")]
-    pub static bch2_opt_table: [c::bch_option; 0usize];
+    pub static bch2_opt_table: [c::bch_option; 0];
     pub fn bch2_opt_defined_by_id(arg1: *const c::bch_opts, arg2: c::bch_opt_id) -> bool;
     pub fn bch2_opt_get_by_id(arg1: *const c::bch_opts, arg2: c::bch_opt_id) -> u64;
     pub fn bch2_opt_set_by_id(arg1: *mut c::bch_opts, arg2: c::bch_opt_id, arg3: u64);
-    pub fn bch2_opts_from_sb(arg1: *mut c::bch_opts, arg2: *mut c::bch_sb) -> core::ffi::c_int;
-    pub fn __bch2_opt_set_sb(arg1: *mut c::bch_sb, arg2: core::ffi::c_int, arg3: *const c::bch_option, arg4: u64, arg5: *const crate::util::ffi::c_char) -> bool;
-    pub fn bch2_opt_set_sb(arg1: *mut c::bch_fs, arg2: *mut c::bch_dev, arg3: *const c::bch_option, arg4: u64, arg5: *const crate::util::ffi::c_char) -> bool;
-    pub fn bch2_opt_lookup(arg1: *const crate::util::ffi::c_char) -> core::ffi::c_int;
-    pub fn bch2_opt_parse(arg1: *mut c::bch_fs, arg2: *const c::bch_option, arg3: *const crate::util::ffi::c_char, arg4: *mut u64, arg5: *mut c::printbuf) -> core::ffi::c_int;
-    pub fn bch2_opt_to_text(arg1: *mut c::printbuf, arg2: *mut c::bch_fs, arg3: *mut c::bch_sb, arg4: *const c::bch_option, arg5: u64, arg6: core::ffi::c_uint);
-    pub fn bch2_opt_hook_pre_set(arg1: *mut c::bch_fs, arg2: *mut c::bch_dev, arg3: u64, arg4: c::bch_opt_id, arg5: u64, arg6: bool, arg7: *mut c::opt_change_scope) -> core::ffi::c_int;
+    pub fn bch2_opts_from_sb(arg1: *mut c::bch_opts, arg2: *mut c::bch_sb) -> c_int;
+    pub fn __bch2_opt_set_sb(arg1: *mut c::bch_sb, arg2: c_int, arg3: *const c::bch_option, arg4: u64, arg5: *const c_char) -> bool;
+    pub fn bch2_opt_set_sb(arg1: *mut c::bch_fs, arg2: *mut c::bch_dev, arg3: *const c::bch_option, arg4: u64, arg5: *const c_char) -> bool;
+    pub fn bch2_opt_lookup(arg1: *const c_char) -> c_int;
+    pub fn bch2_opt_parse(arg1: *mut c::bch_fs, arg2: *const c::bch_option, arg3: *const c_char, arg4: *mut u64, arg5: *mut c::printbuf) -> c_int;
+    pub fn bch2_opt_to_text(arg1: *mut c::printbuf, arg2: *mut c::bch_fs, arg3: *mut c::bch_sb, arg4: *const c::bch_option, arg5: u64, arg6: c_uint);
+    pub fn bch2_opt_hook_pre_set(arg1: *mut c::bch_fs, arg2: *mut c::bch_dev, arg3: u64, arg4: c::bch_opt_id, arg5: u64, arg6: bool, arg7: *mut c::opt_change_scope) -> c_int;
     pub fn bch2_opt_hook_post_set(arg1: *mut c::bch_fs, arg2: *mut c::bch_dev, arg3: u64, arg4: c::bch_opt_id, arg5: u64);
-    pub fn bch2_parse_mount_opts(arg1: *mut c::bch_fs, arg2: *mut c::bch_opts, arg3: *mut c::printbuf, arg4: *mut crate::util::ffi::c_char, arg5: bool) -> core::ffi::c_int;
+    pub fn bch2_parse_mount_opts(arg1: *mut c::bch_fs, arg2: *mut c::bch_opts, arg3: *mut c::printbuf, arg4: *mut c_char, arg5: bool) -> c_int;
     pub fn bch2_opt_is_inode_opt(arg1: c::bch_opt_id) -> bool;
     pub fn bch2_opt_change_unlock(arg1: *mut c::bch_fs);
     pub fn bch2_opt_change_lock(arg1: *mut c::bch_fs);

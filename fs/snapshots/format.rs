@@ -1,19 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of snapshots/format.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use zerocopy::byteorder::little_endian as le;
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, CStruct};
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct};
 use typeinfo_macros::TypeInfo;
-
-c_verbatim!(r#"
-#define SUBVOL_POS_MIN		POS(0, 1)
-#define SUBVOL_POS_MAX		POS(0, S32_MAX)
-"#);
 
 c_const! {
     #[c_int]
@@ -59,18 +51,12 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_subvolume_state_0 {
-    ([$($acc:tt)*] $(($n:tt, $v:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_subvolume_state: u32 {
-                $($acc)*
-                $([<SUBVOLUME_STATE_ $n>] = (($v) as u32),)*
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_subvolume_state: u32 {
+        BCH_SUBVOLUME_STATES(n, v) => SUBVOLUME_STATE_ ## n = v,
+    }
 }
-BCH_SUBVOLUME_STATES!(__bch_subvolume_state_0 []);
 
 c_bitmask! {
     LE32_BITMASK(struct bch_subvolume, flags), strip BCH_SUBVOLUME_ {
@@ -146,46 +132,44 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_snapshot_state_0 {
-    ([$($acc:tt)*] $(($n:tt, $v:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_snapshot_state: u32 {
-                $($acc)*
-                $([<SNAPSHOT_STATE_ $n>] = (($v) as u32),)*
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_snapshot_state: u32 {
+        BCH_SNAPSHOT_STATES(n, v) => SNAPSHOT_STATE_ ## n = v,
+    }
 }
-BCH_SNAPSHOT_STATES!(__bch_snapshot_state_0 []);
 
-c_verbatim!(r#"
-/* pairwise Hamming distance; add a row per pair when adding a state: */
-static_assert(__builtin_popcount(SNAPSHOT_STATE_live        ^ SNAPSHOT_STATE_will_delete) >= 14);
-static_assert(__builtin_popcount(SNAPSHOT_STATE_live        ^ SNAPSHOT_STATE_no_keys)     >= 14);
-static_assert(__builtin_popcount(SNAPSHOT_STATE_live        ^ SNAPSHOT_STATE_deleted)     >= 14);
-static_assert(__builtin_popcount(SNAPSHOT_STATE_will_delete ^ SNAPSHOT_STATE_no_keys)     >= 14);
-static_assert(__builtin_popcount(SNAPSHOT_STATE_will_delete ^ SNAPSHOT_STATE_deleted)     >= 14);
-static_assert(__builtin_popcount(SNAPSHOT_STATE_no_keys     ^ SNAPSHOT_STATE_deleted)     >= 14);
-
-/* weight window: >= 14 flips from a zeroed field and from an all-ones one: */
-#define x(n, v) static_assert(__builtin_popcount(v) >= 14 && __builtin_popcount(v) <= 18);
-	BCH_SNAPSHOT_STATES()
-	BCH_SUBVOLUME_STATES()
-#undef x
-
-static_assert(__builtin_popcount(SUBVOLUME_STATE_live     ^ SUBVOLUME_STATE_unlinked) >= 14);
-static_assert(__builtin_popcount(SUBVOLUME_STATE_live     ^ SUBVOLUME_STATE_deleted)  >= 14);
-static_assert(__builtin_popcount(SUBVOLUME_STATE_unlinked ^ SUBVOLUME_STATE_deleted)  >= 14);
-
-/* cross-type distance, snapshot states vs subvolume states: */
-#define x(n, v)										\
-	static_assert(__builtin_popcount(v ^ SUBVOLUME_STATE_live)     >= 14);		\
-	static_assert(__builtin_popcount(v ^ SUBVOLUME_STATE_unlinked) >= 14);		\
-	static_assert(__builtin_popcount(v ^ SUBVOLUME_STATE_deleted)  >= 14);
-	BCH_SNAPSHOT_STATES()
-#undef x
-"#);
+// The state codewords' distances, as the comment on BCH_SNAPSHOT_STATES
+// says: every snapshot and subvolume state at least 14 bit flips from every
+// other, of either kind, and 14 to 18 from a zeroed field and from an
+// all-ones one. Every pair, from the lists - a state added is checked.
+macro_rules! codewords {
+    ([] $(($n:tt, $v:expr)),* $(,)?) => { &[$($v),*] };
+}
+const _: () = {
+    let lists: [&[u32]; 2] = [BCH_SNAPSHOT_STATES!(codewords []), BCH_SUBVOLUME_STATES!(codewords [])];
+    let mut a = 0;
+    while a < lists.len() {
+        let mut i = 0;
+        while i < lists[a].len() {
+            let v = lists[a][i];
+            assert!(v.count_ones() >= 14 && v.count_ones() <= 18,
+                    "a state codeword within 14 bit flips of zero or of all ones");
+            let mut b = a;
+            while b < lists.len() {
+                let mut j = if b == a { i + 1 } else { 0 };
+                while j < lists[b].len() {
+                    assert!((v ^ lists[b][j]).count_ones() >= 14,
+                            "two state codewords within 14 bit flips of each other");
+                    j += 1;
+                }
+                b += 1;
+            }
+            i += 1;
+        }
+        a += 1;
+    }
+};
 
 c_bitmask! {
     LE32_BITMASK(struct bch_snapshot, flags), strip BCH_SNAPSHOT_ {

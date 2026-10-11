@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of bcachefs_ioctl.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use crate::util::ffi::c_char;
 use cstruct_macros::{c_const, c_enum, c_ioctl, c_xmacro, CStruct};
 use nestify::nest;
 use typeinfo_macros::TypeInfo;
@@ -17,38 +15,22 @@ c_const! {
      */
     #[c_int]
     pub const BCH_FORCE_IF_DATA_LOST: u32 = 1 << 0;
-}
-
-c_const! {
     #[c_int]
     pub const BCH_FORCE_IF_METADATA_LOST: u32 = 1 << 1;
-}
-
-c_const! {
     #[c_int]
     pub const BCH_FORCE_IF_DATA_DEGRADED: u32 = 1 << 2;
-}
-
-c_const! {
     #[c_int]
     pub const BCH_FORCE_IF_METADATA_DEGRADED: u32 = 1 << 3;
-}
 
-c_const! {
     #[c_int]
     pub const BCH_FORCE_IF_LOST: u32 =
         c::BCH_FORCE_IF_DATA_LOST |
         c::BCH_FORCE_IF_METADATA_LOST;
-}
-
-c_const! {
     #[c_int]
     pub const BCH_FORCE_IF_DEGRADED: u32 =
         c::BCH_FORCE_IF_DATA_DEGRADED |
         c::BCH_FORCE_IF_METADATA_DEGRADED;
-}
 
-c_const! {
     /*
      * If cleared, ioctl that refer to a device pass it as a pointer to a pathname
      * (e.g. /dev/sda1); if set, the dev field is the device's index within the
@@ -56,9 +38,7 @@ c_const! {
      */
     #[c_int]
     pub const BCH_BY_INDEX: u32 = 1 << 4;
-}
 
-c_const! {
     /*
      * For BCH_IOCTL_READ_SUPER: get superblock of a specific device, not filesystem
      * wide superblock:
@@ -116,7 +96,7 @@ c_ioctl! {
     /* ioctl below act on a particular file, not the filesystem as a whole: */
 
     #[c("const char __user *")]
-    BCHFS_IOC_REINHERIT_ATTRS		= _IOR(0xbc, 64, *const crate::util::ffi::c_char),
+    BCHFS_IOC_REINHERIT_ATTRS		= _IOR(0xbc, 64, *const c_char),
     BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS = _IO(0xbc, 65),
     BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS	= _IO(0xbc, 66),
     BCHFS_IOC_PREAD_RAW			= _IOWR(0xbc, 67, c::bch_ioctl_pread_raw),
@@ -158,41 +138,35 @@ pub struct bch_ioctl_get_damage {
 }
 
 c_const! {
-    /*
-     * BCHFS_IOC_READDIR_FLAGS: readdir with filters, on the directory the
-     * ioctl is called on.
-     *
-     * recursive: entries from the whole subtree, names become paths relative
-     * to the fd's directory. The filters pick the iteration: damaged
-     * walks the damage btree (cost proportional to recorded damage, not tree
-     * size), subvolumes_only walks the subvolume tree, an unfiltered
-     * recursive listing is an honest tree walk.
-     *
-     * damaged: only entries whose inode has recorded damage, in its
-     * snapshot version or an ancestor.
-     *
-     * Permissions are those of readdir: the caller learns nothing beyond the
-     * directory they opened.
-     *
-     * @flags	- BCH_READDIR_*
-     * @pos		- opaque resume cursor: zero to start; copied back out
-     *		  past the last entry returned. Iterate until @used == 0.
-     * @buf_size,
-     * @buf		- userspace buffer, filled with struct
-     *		  bch_ioctl_readdir_entry records
-     * @used	- out: bytes of @buf filled
-     */
     pub const BCH_READDIR_recursive: u32 = 1 << 0;
-}
-
-c_const! {
     pub const BCH_READDIR_damaged: u32 = 1 << 2;
-}
-
-c_const! {
     pub const BCH_READDIR_subvolumes_only: u32 = 1 << 1;
 }
 
+/*
+ * BCHFS_IOC_READDIR_FLAGS: readdir with filters, on the directory the
+ * ioctl is called on.
+ *
+ * recursive: entries from the whole subtree, names become paths relative
+ * to the fd's directory. The filters pick the iteration: damaged
+ * walks the damage btree (cost proportional to recorded damage, not tree
+ * size), subvolumes_only walks the subvolume tree, an unfiltered
+ * recursive listing is an honest tree walk.
+ *
+ * damaged: only entries whose inode has recorded damage, in its
+ * snapshot version or an ancestor.
+ *
+ * Permissions are those of readdir: the caller learns nothing beyond the
+ * directory they opened.
+ *
+ * @flags	- BCH_READDIR_*
+ * @pos		- opaque resume cursor: zero to start; copied back out
+ *		  past the last entry returned. Iterate until @used == 0.
+ * @buf_size,
+ * @buf		- userspace buffer, filled with struct
+ *		  bch_ioctl_readdir_entry records
+ * @used	- out: bytes of @buf filled
+ */
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_ioctl_readdir_flags {
@@ -345,19 +319,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_data_ops_0 {
-    ([$($acc:tt)*] $(($t:tt, $n:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_data_ops: u32 {
-                $($acc)*
-                $([<BCH_DATA_OP_ $t>] = (($n) as u32),)*
-                BCH_DATA_OP_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_data_ops: u32 {
+        BCH_DATA_OPS(t, n) => BCH_DATA_OP_ ## t = n,
+        BCH_DATA_OP_NR,
+    }
 }
-BCH_DATA_OPS!(__bch_data_ops_0 []);
 
 /*
  * BCH_IOCTL_DATA: operations that walk and manipulate filesystem data (e.g.
@@ -656,9 +624,6 @@ pub struct bch_ioctl_subvolume_v2 {
 
 c_const! {
     pub const BCH_SUBVOL_SNAPSHOT_CREATE: u32 = 1 << 0;
-}
-
-c_const! {
     pub const BCH_SUBVOL_SNAPSHOT_RO: u32 = 1 << 1;
 }
 
@@ -718,30 +683,30 @@ pub struct bch_ioctl_query_accounting {
 }
 
 c_const! {
-    /*
-     * BCH_IOCTL_QUERY_ACCOUNTING_v2: as v1, plus free space by replica count
-     *
-     * Free space is a vector, not a scalar: raw sectors free says nothing about
-     * whether n copies can go on n distinct devices, so a filesystem can report
-     * room and then refuse the write. @free[n - 1] is what we would grant at n
-     * replicas - the cumulative figure, so free[0] is the whole of the free space
-     * and the numbers are non-increasing.
-     *
-     * @free_now is the same vector counting only space the allocator can hand out
-     * without waiting: @free includes fragmentation copygc hasn't compacted yet, so
-     * a write against the difference blocks on copygc rather than failing. The gap
-     * is the allocator's backlog, and it's what distinguishes a filesystem that is
-     * slow right now from one that is full.
-     *
-     * Both are sized 8 rather than BCH_REPLICAS_MAX deliberately: sizeof(this
-     * struct) is encoded in the ioctl number, so sizing it by a constant that could
-     * grow would silently change the command and -ENOTTY every existing binary.
-     * Entries from BCH_REPLICAS_MAX up are zero.
-     */
     #[c_int]
     pub const BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR: u32 = 8;
 }
 
+/*
+ * BCH_IOCTL_QUERY_ACCOUNTING_v2: as v1, plus free space by replica count
+ *
+ * Free space is a vector, not a scalar: raw sectors free says nothing about
+ * whether n copies can go on n distinct devices, so a filesystem can report
+ * room and then refuse the write. @free[n - 1] is what we would grant at n
+ * replicas - the cumulative figure, so free[0] is the whole of the free space
+ * and the numbers are non-increasing.
+ *
+ * @free_now is the same vector counting only space the allocator can hand out
+ * without waiting: @free includes fragmentation copygc hasn't compacted yet, so
+ * a write against the difference blocks on copygc rather than failing. The gap
+ * is the allocator's backlog, and it's what distinguishes a filesystem that is
+ * slow right now from one that is full.
+ *
+ * Both are sized 8 rather than BCH_REPLICAS_MAX deliberately: sizeof(this
+ * struct) is encoded in the ioctl number, so sizing it by a constant that could
+ * grow would silently change the command and -ENOTTY every existing binary.
+ * Entries from BCH_REPLICAS_MAX up are zero.
+ */
 #[repr(C)]
 #[derive(Default, CStruct, TypeInfo)]
 pub struct bch_ioctl_query_accounting_v2 {
@@ -781,7 +746,7 @@ pub struct bch_ioctl_subvol_dirent {
     pub otime_sec: u64,
     pub otime_nsec: u32,
     pub pad: u32,
-    pub path: [crate::util::ffi::c_char; 0],
+    pub path: [c_char; 0],
 }
 
 /*
@@ -923,18 +888,12 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_progress_units_0 {
-    ([$($acc:tt)*] $(($n:tt, $v:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_progress_units: u32 {
-                $($acc)*
-                $([<BCH_PROGRESS_UNITS_ $n>] = (($v) as u32),)*
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_progress_units: u32 {
+        BCH_PROGRESS_UNITS(n, v) => BCH_PROGRESS_UNITS_ ## n = v,
+    }
 }
-BCH_PROGRESS_UNITS!(__bch_progress_units_0 []);
 
 /*
  * A set of enum bch_recovery_pass ids - the in-memory pass ids, not the stable
@@ -990,35 +949,24 @@ pub struct bch_ioctl_recovery_status {
 }
 
 c_const! {
-    /*
-     * BCHFS_IOC_PREAD_RAW: O_DIRECT read with extended error reporting.
-     *
-     * Like pread(), but with flags to control error handling and detailed
-     * error reporting via the errors bitmask and embedded err_msg.
-     *
-     * With no flags set, behaves like a normal O_DIRECT read but with
-     * better error information.  BCH_PREAD_RAW_no_poison_check bypasses
-     * extent poisoning so corrupted data can be recovered.
-     */
     pub const BCH_PREAD_RAW_no_poison_check: u32 = 1 << 0;
-}
 
-c_const! {
     pub const BCH_PREAD_RAW_ERR_checksum: u32 = 1 << 0;
-}
-
-c_const! {
     pub const BCH_PREAD_RAW_ERR_io: u32 = 1 << 1;
-}
-
-c_const! {
     pub const BCH_PREAD_RAW_ERR_decompression: u32 = 1 << 2;
-}
-
-c_const! {
     pub const BCH_PREAD_RAW_ERR_ec_reconstruct: u32 = 1 << 3;
 }
 
+/*
+ * BCHFS_IOC_PREAD_RAW: O_DIRECT read with extended error reporting.
+ *
+ * Like pread(), but with flags to control error handling and detailed
+ * error reporting via the errors bitmask and embedded err_msg.
+ *
+ * With no flags set, behaves like a normal O_DIRECT read but with
+ * better error information.  BCH_PREAD_RAW_no_poison_check bypasses
+ * extent poisoning so corrupted data can be recovered.
+ */
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_ioctl_pread_raw {
@@ -1047,67 +995,58 @@ pub struct bch_ioctl_unpoison {
 }
 
 c_const! {
-    /*
-     * BCH_IOCTL_QUERY_BTREE_KEYS: read keys from a btree, range query
-     *
-     * Stateless: the cursor lives in userspace and each call is self-contained,
-     * so concurrent callers don't interact and an aborted caller leaves nothing
-     * behind. Modeled on BTRFS_IOC_TREE_SEARCH / FS_IOC_GETFSMAP.
-     *
-     * The buffer is filled with bkeys (struct bkey_i: unpacked key header
-     * followed by the value), densely packed; step to the next with bkey_bytes()
-     * (k->u64s * 8). This is the unpacked in-memory format - the same format the
-     * update ioctls and libbcachefs speak, not the packed on-disk one.
-     *
-     * Flags:
-     *
-     * slots: iterate positions instead of keys - a KEY_TYPE_deleted key is
-     * synthesized for every position without one. On extents btrees a single
-     * synthesized key covers each hole. This is how you see holes; mind that a
-     * wide range in slots mode returns a key per position.
-     *
-     * prev: iterate backwards, from @start down to @end.
-     *
-     * all_snapshots: return keys from all snapshots, rather than filtering to
-     * the snapshot in @start. Snapshot-filtered iteration (i.e. without this
-     * flag, on a snapshots btree) has preconditions, -EINVAL otherwise:
-     * @start.snapshot must be nonzero (there's no snapshot to filter against),
-     * @end must not be POS_MAX (whiteout filtering peeks ahead of the end pos),
-     * and with prev the range must be within a single inode. Interior node
-     * levels (@level > 0) always iterate all snapshots.
-     *
-     * @btree	- btree id
-     * @level	- btree level to read keys from (0 = leaves)
-     * @flags	- BCH_IOCTL_QUERY_BTREE_KEYS_*
-     * @done	- out: nonzero once iteration has reached the end of the range
-     * @start	- in/out: cursor; on return, where the next call should
-     *		  resume (only meaningful while @done is unset)
-     * @end		- inclusive bound: upper, or lower with prev
-     * @buf		- pointer to userspace buffer for keys
-     * @buf_size	- size of buffer in bytes
-     * @used	- out: bytes written to buffer
-     *
-     * To iterate: repeat the call, keeping @start from the previous call, until
-     * @done is set. The kernel bounds how much it returns per call, so @used may
-     * be well short of @buf_size while more keys remain.
-     *
-     * Returns -ERANGE if @buf_size is too small to hold even one key.
-     */
     pub const BCH_IOCTL_QUERY_BTREE_KEYS_slots: u32 = 1 << 0;
-}
-
-c_const! {
     pub const BCH_IOCTL_QUERY_BTREE_KEYS_prev: u32 = 1 << 1;
-}
-
-c_const! {
     pub const BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots: u32 = 1 << 2;
-}
-
-c_const! {
     pub const BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts: u32 = 1 << 3;
 }
 
+/*
+ * BCH_IOCTL_QUERY_BTREE_KEYS: read keys from a btree, range query
+ *
+ * Stateless: the cursor lives in userspace and each call is self-contained,
+ * so concurrent callers don't interact and an aborted caller leaves nothing
+ * behind. Modeled on BTRFS_IOC_TREE_SEARCH / FS_IOC_GETFSMAP.
+ *
+ * The buffer is filled with bkeys (struct bkey_i: unpacked key header
+ * followed by the value), densely packed; step to the next with bkey_bytes()
+ * (k->u64s * 8). This is the unpacked in-memory format - the same format the
+ * update ioctls and libbcachefs speak, not the packed on-disk one.
+ *
+ * Flags:
+ *
+ * slots: iterate positions instead of keys - a KEY_TYPE_deleted key is
+ * synthesized for every position without one. On extents btrees a single
+ * synthesized key covers each hole. This is how you see holes; mind that a
+ * wide range in slots mode returns a key per position.
+ *
+ * prev: iterate backwards, from @start down to @end.
+ *
+ * all_snapshots: return keys from all snapshots, rather than filtering to
+ * the snapshot in @start. Snapshot-filtered iteration (i.e. without this
+ * flag, on a snapshots btree) has preconditions, -EINVAL otherwise:
+ * @start.snapshot must be nonzero (there's no snapshot to filter against),
+ * @end must not be POS_MAX (whiteout filtering peeks ahead of the end pos),
+ * and with prev the range must be within a single inode. Interior node
+ * levels (@level > 0) always iterate all snapshots.
+ *
+ * @btree	- btree id
+ * @level	- btree level to read keys from (0 = leaves)
+ * @flags	- BCH_IOCTL_QUERY_BTREE_KEYS_*
+ * @done	- out: nonzero once iteration has reached the end of the range
+ * @start	- in/out: cursor; on return, where the next call should
+ *		  resume (only meaningful while @done is unset)
+ * @end		- inclusive bound: upper, or lower with prev
+ * @buf		- pointer to userspace buffer for keys
+ * @buf_size	- size of buffer in bytes
+ * @used	- out: bytes written to buffer
+ *
+ * To iterate: repeat the call, keeping @start from the previous call, until
+ * @done is set. The kernel bounds how much it returns per call, so @used may
+ * be well short of @buf_size while more keys remain.
+ *
+ * Returns -ERANGE if @buf_size is too small to hold even one key.
+ */
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_ioctl_query_btree_keys {

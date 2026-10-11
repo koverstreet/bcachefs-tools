@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of btree/key_cache_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::CStruct;
 use typeinfo_macros::TypeInfo;
 
@@ -17,7 +15,7 @@ pub struct bch_fs_btree_key_cache {
     pub table_init_done: bool,
 
     pub shrink: *mut c::shrinker,
-    pub shrink_iter: core::ffi::c_uint,
+    pub shrink_iter: c_uint,
 
     /* 0: non pcpu reader locks, 1: pcpu reader locks */
     pub pending: [c::rcu_pending; 2],
@@ -28,11 +26,11 @@ pub struct bch_fs_btree_key_cache {
     pub nr_dirty: c::atomic_long_t,
 
     /* shrinker stats */
-    pub requested_to_free: core::ffi::c_ulong,
-    pub freed: core::ffi::c_ulong,
-    pub skipped_dirty: core::ffi::c_ulong,
-    pub skipped_accessed: core::ffi::c_ulong,
-    pub skipped_lock_fail: core::ffi::c_ulong,
+    pub requested_to_free: c_ulong,
+    pub freed: c_ulong,
+    pub skipped_dirty: c_ulong,
+    pub skipped_accessed: c_ulong,
+    pub skipped_lock_fail: c_ulong,
 }
 c_default!(bch_fs_btree_key_cache);
 

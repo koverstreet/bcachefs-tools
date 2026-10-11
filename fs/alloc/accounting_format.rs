@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of alloc/accounting_format.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
@@ -79,19 +76,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __bch_data_type_0 {
-    ([$($acc:tt)*] $(($t:tt$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_data_type: u32 {
-                $($acc)*
-                $([<BCH_DATA_ $t>],)*
-                BCH_DATA_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_data_type: u32 {
+        BCH_DATA_TYPES(t, ..) => BCH_DATA_ ## t,
+        BCH_DATA_NR,
+    }
 }
-BCH_DATA_TYPES!(__bch_data_type_0 []);
 
 c_xmacro! {
     /*
@@ -116,19 +107,13 @@ c_xmacro! {
     }
 }
 
-macro_rules! __disk_accounting_type_0 {
-    ([$($acc:tt)*] $(($f:tt, $nr:expr$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum disk_accounting_type: u32 {
-                $($acc)*
-                $([<BCH_DISK_ACCOUNTING_ $f>] = (($nr) as u32),)*
-                BCH_DISK_ACCOUNTING_TYPE_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum disk_accounting_type: u32 {
+        BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => BCH_DISK_ACCOUNTING_ ## f = nr,
+        BCH_DISK_ACCOUNTING_TYPE_NR,
+    }
 }
-BCH_DISK_ACCOUNTING_TYPES!(__disk_accounting_type_0 []);
 
 c_typedef! {
     pub type bch_acct_replicas = c::bch_replicas_entry_v1;

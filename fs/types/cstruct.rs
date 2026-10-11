@@ -349,6 +349,26 @@ impl CEnumKind {
             CEnumKind::Flags  => "__enum_flags",
         }
     }
+
+    /// The attribute that says it: #[closed], #[open], #[flags].
+    pub fn attr(self) -> &'static str {
+        match self {
+            CEnumKind::Closed => "closed",
+            CEnumKind::Open   => "open",
+            CEnumKind::Flags  => "flags",
+        }
+    }
+}
+
+/// Items from an x-macro list: `LIST(params) => template`. Each entry's
+/// arguments are bound to the params - `..` the rest - and `A ## B` in the
+/// template is pasted into one identifier: spaced, as Rust 2021 lexes `a##b`
+/// as a reserved prefix.
+#[derive(Debug, Clone)]
+pub struct CFromList {
+    pub list:     String,
+    pub params:   Vec<String>,
+    pub template: String,
 }
 
 /// c_enum!: an enum, and what its values can be. @name is None for an
@@ -363,6 +383,10 @@ pub struct CEnumDef {
     /// The integer type: u32, i32, u64.
     pub repr:     String,
     pub variants: Vec<(String, Option<String>)>,
+    /// `LIST(params) => VARIANT [= value]`: variants from lists, each in
+    /// place before the written one at its index - expand_enum_list() makes
+    /// them, a list at a time.
+    pub from:     Vec<(usize, CFromList)>,
 }
 
 /// c_typedef!: a type alias, C's typedef. @c_decl is its C declarator - the
@@ -435,6 +459,7 @@ impl CConst {
 
 /// Whether integer type @ty, a Rust one, is signed: how a constant's
 /// record, `as u64`, reads back.
+#[allow(dead_code)]
 fn rust_int_signed(ty: &str) -> bool {
     let last = ty.rsplit("::").next().unwrap_or(ty).trim();
     last.starts_with('i') || matches!(last, "c_schar" | "c_short" | "c_int" | "c_long" | "c_longlong")
@@ -451,9 +476,9 @@ pub struct CFnDecl {
     pub ret:      Option<String>,
 }
 
-/// A C variable Rust uses, from c_extern!: with #[c("...")], its C
-/// declaration where the Rust type doesn't say it - C's const, which a Rust
-/// static has no way to.
+/// A C variable Rust uses, from c_extern!. One that isn't `mut` is C's
+/// const; #[c("...")] is its C declaration where the Rust type doesn't say
+/// it.
 #[derive(Debug)]
 pub struct CStaticDecl {
     pub cfg:     Option<Cfg>,
@@ -498,12 +523,14 @@ pub struct CTaggedArm {
 ///       pub union bch_extent_entry {
 ///           tag type_: u32 = bch_extent_entry_type by ExtentEntryType,
 ///           arms from BCH_EXTENT_ENTRY_TYPES(f, n) => f: bch_extent_ ## f = n,
+///           pub type_: u64,
 ///       }
 ///   }
 ///
 /// The storage is what C has: a `struct` is the tag, then a union of the
-/// arms; a `union` is the union of the arms alone, the tag being something
-/// the arms' own bytes say - computed by the Determinant named with `by`.
+/// arms; a `union` is the union of the arms, the tag being something the
+/// arms' own bytes say - computed by the Determinant named with `by` - and
+/// any members of its own, `pub NAME: TYPE`, overlaid on them for C to read.
 /// Either is overlaid with the pad, if any. The arms come from an x-macro
 /// list, `arms from LIST(params) => template`, its entries bound to the
 /// params and `##` pasting tokens - or are written out, `arm name: Type =
@@ -529,10 +556,11 @@ pub struct CTaggedUnion {
     pub tag_enum:  String,
     /// `by DETERMINANT`: the tag, computed by a hand-written Determinant.
     pub by:        Option<String>,
-    /// `arms from LIST(params) => template`: the list, its parameters, and the
-    /// template, as source.
-    pub from:      Option<(String, Vec<String>, String)>,
+    /// `arms from LIST(params) => template`.
+    pub from:      Option<CFromList>,
     pub arms:      Vec<CTaggedArm>,
+    /// A union's members besides its arms, `pub NAME: TYPE`: name, type.
+    pub members:   Vec<(String, String)>,
     pub pad:       Option<String>,
     /// `packed`: C's __packed - for a struct, the payload right after the
     /// tag whatever the arms' alignment, which is what the format says.
@@ -784,8 +812,8 @@ fn skip_group(toks: &[Tok], i: usize) -> Result<usize, String> {
     Err("unbalanced brackets".into())
 }
 
-/// Split @toks on ',' at bracket depth 0; an empty last part is dropped.
-fn split_commas(toks: &[Tok]) -> Vec<&[Tok]> {
+/// Split @toks on @sep at bracket depth 0; an empty last part is dropped.
+fn split_top(toks: &[Tok], sep: char) -> Vec<&[Tok]> {
     let mut parts = Vec::new();
     let mut depth = 0i32;
     let mut start = 0;
@@ -793,7 +821,7 @@ fn split_commas(toks: &[Tok]) -> Vec<&[Tok]> {
         match t {
             Tok::Punct('(' | '[' | '{') => depth += 1,
             Tok::Punct(')' | ']' | '}') => depth -= 1,
-            Tok::Punct(',') if depth == 0 => {
+            Tok::Punct(c) if *c == sep && depth == 0 => {
                 parts.push(&toks[start..i]);
                 start = i + 1;
             }
@@ -872,7 +900,7 @@ fn parse_cfg(toks: &[Tok]) -> Result<Cfg, String> {
         [Tok::Ident(n)] => Ok(Cfg::Name(n.clone())),
         [Tok::Ident(k), Tok::Punct('='), Tok::Str(v, _)] => Ok(Cfg::KeyValue(k.clone(), v.clone())),
         [Tok::Ident(op), Tok::Punct('('), rest @ .., Tok::Punct(')')] => {
-            let args = split_commas(rest).into_iter().map(parse_cfg).collect::<Result<Vec<_>, _>>()?;
+            let args = split_top(rest, ',').into_iter().map(parse_cfg).collect::<Result<Vec<_>, _>>()?;
             match op.as_str() {
                 "not" if args.len() == 1 => Ok(Cfg::Not(Box::new(args.into_iter().next().unwrap()))),
                 "all" => Ok(Cfg::All(args)),
@@ -902,7 +930,7 @@ struct ItemAttrs {
 }
 
 fn parse_repr(args: &[Tok], into: &mut CRepr) -> Result<(), String> {
-    for r in split_commas(args) {
+    for r in split_top(args, ',') {
         match r {
             [Tok::Ident(c)] if c == "C" => into.repr_c = true,
             [Tok::Ident(p)] if p == "packed" => into.packed = Some("1".into()),
@@ -931,7 +959,7 @@ fn item_attrs(toks: &[Tok], mut i: usize) -> Result<(ItemAttrs, usize), String> 
         }
         if let Some(args) = attr_args(attr, "cfg_attr") {
             // cfg_attr(PRED, repr(...)): a repr for one configuration.
-            let parts = split_commas(args);
+            let parts = split_top(args, ',');
             if let [pred, rest @ ..] = parts.as_slice() {
                 if let [r] = rest {
                     if let Some(rargs) = attr_args(r, "repr") {
@@ -943,7 +971,7 @@ fn item_attrs(toks: &[Tok], mut i: usize) -> Result<(ItemAttrs, usize), String> 
             }
         }
         if let Some(args) = attr_args(attr, "bitfield") {
-            a.bitfield = split_commas(args).first().map(|t| tokens_to_rust(t));
+            a.bitfield = split_top(args, ',').first().map(|t| tokens_to_rust(t));
         }
         if matches!(attr, [Tok::Ident(n)] if n == "c_typedef") {
             a.typedef = Some(None);
@@ -1029,11 +1057,13 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
             if matches!(attr, [Tok::Ident(n)] if n == "c_struct_group") {
                 group = true;
             }
+            // #[bits(N, ...)]: the width, then bitfield-struct's options -
+            // from = and into = for a member's type - which C doesn't see
             if let Some(args) = attr_args(attr, "bits") {
                 match args {
-                    [Tok::Lit(n)] => bits = Some(n.parse::<u32>()
+                    [Tok::Lit(n)] | [Tok::Lit(n), Tok::Punct(','), ..] => bits = Some(n.parse::<u32>()
                         .map_err(|_| format!("{name}: #[bits({n})] isn't a width"))?),
-                    _ => return Err(format!("{name}: #[bits(N)] takes a width")),
+                    _ => return Err(format!("{name}: #[bits(N, ...)] takes a width first")),
                 }
             }
             for (n, is_anon) in [("c", false), ("c_anon", true)] {
@@ -1181,7 +1211,7 @@ fn parse_xmacro(body: &[Tok], cfg: Option<Cfg>) -> Result<CXMacro, String> {
     }
     let (list, _) = macro_body(body, i + 4)?;
     let mut entries = Vec::new();
-    for e in split_commas(list) {
+    for e in split_top(list, ',') {
         match e {
             [Tok::Punct('('), inner @ .., Tok::Punct(')')] =>
                 entries.push(CXEntry::Args(tokens_to_c(inner))),
@@ -1191,7 +1221,7 @@ fn parse_xmacro(body: &[Tok], cfg: Option<Cfg>) -> Result<CXMacro, String> {
                 // SUB(MAP(params) => (template))
                 let close = rest.iter().position(|t| t.is_punct(')'))
                     .ok_or_else(|| format!("c_xmacro! {name}: {sub}({map}(...: unterminated"))?;
-                let params = split_commas(&rest[..close]).iter()
+                let params = split_top(&rest[..close], ',').iter()
                     .map(|p| match p {
                         [Tok::Ident(p)] => Ok(p.clone()),
                         _ => Err(format!("c_xmacro! {name}: {map}'s parameters are names")),
@@ -1223,7 +1253,7 @@ fn parse_bitmask(body: &[Tok], cfg: Option<Cfg>) -> Result<CBitmask, String> {
         return Err(format!("c_bitmask!: {macro_name}: not a bitmask macro"));
     }
     let args_end = skip_group(body, i + 1)?;
-    let args = split_commas(&body[i + 2..args_end - 1]);
+    let args = split_top(&body[i + 2..args_end - 1], ',');
     let [ty, field] = args.as_slice() else {
         return Err(format!("c_bitmask! {macro_name}: expected (struct foo, field)"));
     };
@@ -1244,10 +1274,10 @@ fn parse_bitmask(body: &[Tok], cfg: Option<Cfg>) -> Result<CBitmask, String> {
 
     let (list, _) = macro_body(body, i)?;
     let mut entries = Vec::new();
-    for e in split_commas(list) {
+    for e in split_top(list, ',') {
         match e {
             [Tok::Ident(n), Tok::Punct('('), range @ .., Tok::Punct(')')] => {
-                let parts = split_commas(range);
+                let parts = split_top(range, ',');
                 let [start, end] = parts.as_slice() else {
                     return Err(format!("c_bitmask! {n}: expected NAME(start, end)"));
                 };
@@ -1277,7 +1307,7 @@ fn parse_bitmask(body: &[Tok], cfg: Option<Cfg>) -> Result<CBitmask, String> {
 /// type doesn't say it.
 fn parse_ioctl(body: &[Tok], cfg: Option<Cfg>) -> Result<CIoctl, String> {
     let mut entries = Vec::new();
-    for e in split_commas(body) {
+    for e in split_top(body, ',') {
         let mut c_arg = None;
         let mut i = 0;
         while let Some((attr, next)) = attr_at(e, i)? {
@@ -1289,7 +1319,7 @@ fn parse_ioctl(body: &[Tok], cfg: Option<Cfg>) -> Result<CIoctl, String> {
         let [Tok::Ident(name), Tok::Punct('='), Tok::Ident(dir), Tok::Punct('('), args @ .., Tok::Punct(')')] = &e[i..] else {
             return Err("c_ioctl!: an entry is NAME = _IOW(type, nr, ARG)".into());
         };
-        let (ty, nr, arg) = match (dir.as_str(), split_commas(args).as_slice()) {
+        let (ty, nr, arg) = match (dir.as_str(), split_top(args, ',').as_slice()) {
             ("_IO", [ty, nr]) => (tokens_to_c(ty), tokens_to_c(nr), None),
             ("_IOR" | "_IOW" | "_IOWR", [ty, nr, arg]) => (tokens_to_c(ty), tokens_to_c(nr), Some(tokens_to_rust(arg))),
             ("_IO", _) => return Err(format!("c_ioctl! {name}: expected _IO(type, nr)")),
@@ -1341,7 +1371,12 @@ fn parse_enum(body: &[Tok], cfg: Option<Cfg>) -> Result<CEnumDef, String> {
     let (list, _) = macro_body(body, i + 4)?;
 
     let mut variants = Vec::new();
-    for v in split_commas(list) {
+    let mut from = Vec::new();
+    for v in split_top(list, ',') {
+        if let Some(f) = parse_from_list(v)? {
+            from.push((variants.len(), f));
+            continue;
+        }
         let j = skip_attrs(v, 0)?;
         let Some(vname) = ident_at(v, j) else {
             return Err(format!("c_enum! {what}: expected a variant name"));
@@ -1353,7 +1388,7 @@ fn parse_enum(body: &[Tok], cfg: Option<Cfg>) -> Result<CEnumDef, String> {
         };
         variants.push((vname.to_string(), value));
     }
-    Ok(CEnumDef { cfg, kind, name, repr, variants })
+    Ok(CEnumDef { cfg, kind, name, repr, variants, from })
 }
 
 /// c_typedef!'s body: [#[c("C declarator")]] pub type NAME = TYPE;
@@ -1391,7 +1426,7 @@ fn parse_same(body: &[Tok]) -> Result<CSame, String> {
     let (ty, fields) = match rest.iter().position(|t| t.is_punct('{')) {
         Some(b) => {
             let (list, _) = macro_body(rest, b)?;
-            let fields = split_commas(list).into_iter()
+            let fields = split_top(list, ',').into_iter()
                 .map(|f| match f {
                     [Tok::Ident(n)] => Ok(n.clone()),
                     _ => Err(format!("c_same! {name}: a field list is names")),
@@ -1407,7 +1442,7 @@ fn parse_same(body: &[Tok]) -> Result<CSame, String> {
     Ok(CSame { c_type: format!("{kw} {name}"), rust_ty: tokens_to_rust(ty), fields })
 }
 
-/// c_const!'s body: `#[c_int]? pub const NAME: TYPE = EXPR;`. The #define
+/// One of c_const!'s constants: `#[c_int]? pub const NAME: TYPE = EXPR`. The #define
 /// has TYPE's C type; #[c_int], int's: for a constant C had as a plain
 /// number, so its type is the one C was written against, whatever type
 /// Rust wants it in.
@@ -1464,7 +1499,7 @@ fn parse_extern(body: &[Tok], cfg: Option<Cfg>) -> Result<CExtern, String> {
                 let close = skip_group(item, 2)?;
                 let mut params = Vec::new();
                 let mut variadic = false;
-                for p in split_commas(&item[3..close - 1]) {
+                for p in split_top(&item[3..close - 1], ',') {
                     match p {
                         [] => {}
                         [Tok::Punct('.'), Tok::Punct('.'), Tok::Punct('.')] => variadic = true,
@@ -1503,8 +1538,9 @@ fn parse_extern(body: &[Tok], cfg: Option<Cfg>) -> Result<CExtern, String> {
 
 /// tagged_union!'s body: `[vis] struct|union NAME [in STORAGE] { tag NAME: TYPE
 /// = TAG_ENUM [by DETERMINANT], arms from LIST(params) => template | arm NAME:
-/// TYPE = VALUE, ..., [pad: TYPE] }` - `by` for a union, and only for a union:
-/// a struct's tag is its stored field.
+/// TYPE = VALUE, ..., [pub NAME: TYPE, ...] [pad: TYPE] }` - `by`, and members
+/// besides the arms, for a union and only for a union: a struct's tag is its
+/// stored field.
 fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, String> {
     // `#[...]*`: for the arm types defined here, not the storage
     let mut i = 0;
@@ -1536,9 +1572,9 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
     };
     let mut tu = CTaggedUnion { cfg, name, union, storage, tag_field: String::new(),
                                 tag_ty: String::new(), tag_enum: String::new(), by: None,
-                                from: None, arms: Vec::new(), pad: None, packed: false, arm_attrs,
-                                defs: Vec::new() };
-    for item in split_commas(inner) {
+                                from: None, arms: Vec::new(), members: Vec::new(), pad: None,
+                                packed: false, arm_attrs, defs: Vec::new() };
+    for item in split_top(inner, ',') {
         let eq = item.iter().rposition(|t| t.is_punct('='));
         match item {
             [] => {}
@@ -1556,16 +1592,9 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
                 tu.tag_enum = tokens_to_rust(&rest[eq + 1..by.unwrap_or(rest.len())]);
                 tu.by = by.map(|b| tokens_to_rust(&rest[b + 1..]));
             }
-            [Tok::Ident(kw), Tok::Ident(from), Tok::Ident(list), Tok::Punct('('), ..] if kw == "arms" && from == "from" => {
-                let close = skip_group(item, 3)?;
-                let params = split_commas(&item[4..close - 1]).into_iter()
-                    .map(tokens_to_rust)
-                    .collect();
-                let template = match &item[close..] {
-                    [Tok::Punct('='), Tok::Punct('>'), t @ ..] if !t.is_empty() => tokens_to_rust(t),
-                    _ => return Err("tagged_union!: arms from LIST(params) => name: Type = value".into()),
-                };
-                tu.from = Some((list.clone(), params, template));
+            [Tok::Ident(kw), Tok::Ident(from), rest @ ..] if kw == "arms" && from == "from" => {
+                tu.from = Some(parse_from_list(rest)?
+                    .ok_or("tagged_union!: arms from LIST(params) => name: Type = value")?);
             }
             [Tok::Ident(kw), Tok::Ident(arm), Tok::Punct(':'), ..] if kw == "arm" => {
                 let eq = eq.ok_or("tagged_union!: arm NAME: TYPE = VALUE")?;
@@ -1574,6 +1603,9 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
             }
             [Tok::Ident(kw), Tok::Punct(':'), ty @ ..] if kw == "pad" && !ty.is_empty() =>
                 tu.pad = Some(tokens_to_rust(ty)),
+            [Tok::Ident(v), Tok::Ident(m), Tok::Punct(':'), ty @ ..]
+                if v == "pub" && ty.first().is_some_and(|t| !t.is_punct(':')) =>
+                tu.members.push((m.clone(), tokens_to_rust(ty))),
             [Tok::Ident(kw)] if kw == "packed" => tu.packed = true,
             _ => return Err(format!("tagged_union!: {} not understood", tokens_to_rust(item))),
         }
@@ -1588,6 +1620,13 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
         (false, Some(_)) => return Err(format!("tagged_union! {}: a struct's tag is its stored \
                                                 field - `by` is for a union", tu.name)),
         _ => {}
+    }
+    if let Some((m, _)) = tu.members.first() {
+        if !tu.union || tu.storage.is_some() {
+            return Err(format!("tagged_union! {}: member {m}: only a union this defines has \
+                                members of its own - a struct's are its tag and its arms' union",
+                               tu.name));
+        }
     }
     if tu.storage.is_some() {
         if let Some(d) = tu.defs.first() {
@@ -1604,51 +1643,72 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
     Ok(tu)
 }
 
+/// `LIST(params) => template` at @item - the rest of a tagged_union!'s `arms
+/// from`, or a c_enum! variant - if it is one.
+fn parse_from_list(item: &[Tok]) -> Result<Option<CFromList>, String> {
+    let [Tok::Ident(list), Tok::Punct('('), ..] = item else {
+        return Ok(None);
+    };
+    let close = skip_group(item, 1)?;
+    let template = match &item[close..] {
+        [Tok::Punct('='), Tok::Punct('>'), t @ ..] if !t.is_empty() => tokens_to_rust(t),
+        _ => return Ok(None),
+    };
+    let params = split_top(&item[2..close - 1], ',').into_iter().map(tokens_to_rust).collect();
+    Ok(Some(CFromList { list: list.clone(), params, template }))
+}
+
+/// What @f's template makes of one entry of its list, @entry its source.
+fn from_list_entry(f: &CFromList, entry: &str) -> Result<Vec<Tok>, String> {
+    let list = &f.list;
+    let template = tokenize(&f.template)?;
+    let etoks = tokenize(entry)?;
+    let args = split_top(&etoks, ',');
+    let mut bound: Vec<(&str, &[Tok])> = Vec::new();
+    for (n, p) in f.params.iter().enumerate() {
+        if p == ".." {
+            break;
+        }
+        let arg = args.get(n).ok_or_else(|| format!("{list}: entry ({entry}) has no {p}"))?;
+        bound.push((p, arg));
+    }
+    // substitute, then paste
+    let mut subst: Vec<Tok> = Vec::new();
+    for t in &template {
+        match t {
+            Tok::Ident(s) => match bound.iter().find(|(p, _)| p == s) {
+                Some((_, arg)) => subst.extend(arg.iter().cloned()),
+                None => subst.push(t.clone()),
+            },
+            _ => subst.push(t.clone()),
+        }
+    }
+    let mut out: Vec<Tok> = Vec::new();
+    let mut k = 0;
+    while k < subst.len() {
+        if subst[k].is_punct('#') && subst.get(k + 1).is_some_and(|t| t.is_punct('#')) {
+            let (Some(Tok::Ident(a) | Tok::Lit(a)), Some(Tok::Ident(b) | Tok::Lit(b))) =
+                (out.pop(), subst.get(k + 2).cloned()) else {
+                return Err(format!("{list}: ## between non-identifiers in the template"));
+            };
+            out.push(Tok::Ident(a + &b));
+            k += 3;
+            continue;
+        }
+        out.push(subst[k].clone());
+        k += 1;
+    }
+    Ok(out)
+}
+
 /// tagged_union!'s arms from its list's entries - each the source of one
-/// entry's arguments: bound to the template's params, `..` the rest, and
-/// `A ## B` pasted into one identifier.
+/// entry's arguments.
 #[allow(dead_code)]
 pub fn tagged_union_arms(tu: &CTaggedUnion, entries: &[String]) -> Result<Vec<CTaggedArm>, String> {
-    let (list, params, template) = tu.from.as_ref().ok_or("tagged_union!: no arms from a list")?;
-    let template = tokenize(template)?;
+    let f = tu.from.as_ref().ok_or("tagged_union!: no arms from a list")?;
     let mut arms = Vec::new();
     for entry in entries {
-        let etoks = tokenize(entry)?;
-        let args = split_commas(&etoks);
-        let mut bound: Vec<(&str, &[Tok])> = Vec::new();
-        for (n, p) in params.iter().enumerate() {
-            if p == ".." {
-                break;
-            }
-            let arg = args.get(n).ok_or_else(|| format!("{list}: entry ({entry}) has no {p}"))?;
-            bound.push((p, arg));
-        }
-        // substitute, then paste
-        let mut subst: Vec<Tok> = Vec::new();
-        for t in &template {
-            match t {
-                Tok::Ident(s) => match bound.iter().find(|(p, _)| p == s) {
-                    Some((_, arg)) => subst.extend(arg.iter().cloned()),
-                    None => subst.push(t.clone()),
-                },
-                _ => subst.push(t.clone()),
-            }
-        }
-        let mut out: Vec<Tok> = Vec::new();
-        let mut k = 0;
-        while k < subst.len() {
-            if subst[k].is_punct('#') && subst.get(k + 1).is_some_and(|t| t.is_punct('#')) {
-                let (Some(Tok::Ident(a) | Tok::Lit(a)), Some(Tok::Ident(b) | Tok::Lit(b))) =
-                    (out.pop(), subst.get(k + 2).cloned()) else {
-                    return Err(format!("{list}: ## between non-identifiers in the template"));
-                };
-                out.push(Tok::Ident(a + &b));
-                k += 3;
-                continue;
-            }
-            out.push(subst[k].clone());
-            k += 1;
-        }
+        let out = from_list_entry(f, entry)?;
         let colon = out.iter().position(|t| t.is_punct(':'));
         let eq = out.iter().rposition(|t| t.is_punct('='));
         match (&out[..], colon, eq) {
@@ -1657,11 +1717,63 @@ pub fn tagged_union_arms(tu: &CTaggedUnion, entries: &[String]) -> Result<Vec<CT
                 ty:    tokens_to_rust(&out[2..eq]),
                 value: tokens_to_rust(&out[eq + 1..]),
             }),
-            _ => return Err(format!("{list}: the template gives {} - not name: Type = value",
-                                    tokens_to_rust(&out))),
+            _ => return Err(format!("{}: the template gives {} - not name: Type = value",
+                                    f.list, tokens_to_rust(&out))),
         }
     }
     Ok(arms)
+}
+
+/// c_enum! @e's variants from its first list, @entries each the source of one
+/// entry's arguments, in their place: each `NAME [= value]`, a value cast to
+/// the enum's integer type, as a list's can be any integer type.
+#[allow(dead_code)]
+pub fn expand_enum_list(e: &mut CEnumDef, entries: &[String]) -> Result<(), String> {
+    if e.from.is_empty() {
+        return Ok(());
+    }
+    let (at, f) = e.from.remove(0);
+    let mut variants = Vec::new();
+    for entry in entries {
+        let toks = from_list_entry(&f, entry)?;
+        variants.push(match &toks[..] {
+            [Tok::Ident(name)] => (name.clone(), None),
+            [Tok::Ident(name), Tok::Punct('='), v @ ..] if !v.is_empty() =>
+                (name.clone(), Some(format!("(({}) as {})", tokens_to_rust(v), e.repr))),
+            _ => return Err(format!("{}: the template gives {} - not NAME [= value]",
+                                    f.list, tokens_to_rust(&toks))),
+        });
+    }
+    let n = variants.len();
+    e.variants.splice(at..at, variants);
+    for (later, _) in &mut e.from {
+        *later += n;
+    }
+    Ok(())
+}
+
+/// c_enum! @e as source: its variants, and the lists not yet expanded in their
+/// place - with all expanded, the record's form.
+#[allow(dead_code)]
+pub fn enum_text(e: &CEnumDef) -> String {
+    let mut t = format!("#[{}] pub enum {}: {} {{ ", e.kind.attr(),
+                        e.name.as_deref().unwrap_or("_"), e.repr);
+    let lists = |t: &mut String, i: usize| for (at, f) in &e.from {
+        if *at == i {
+            // `##` spaced: Rust 2021 lexes `a##b` as a reserved prefix
+            t.push_str(&format!("{}({}) => {}, ", f.list, f.params.join(", "),
+                                f.template.replace("##", " ## ")));
+        }
+    };
+    for (i, (v, value)) in e.variants.iter().enumerate() {
+        lists(&mut t, i);
+        match value {
+            Some(x) => t.push_str(&format!("{v} = {x}, ")),
+            None => t.push_str(&format!("{v}, ")),
+        }
+    }
+    lists(&mut t, e.variants.len());
+    t + "}"
 }
 
 /// The record's form of @tu, with @arms: each written out.
@@ -1672,6 +1784,9 @@ pub fn tagged_union_record_text(tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Strin
                         tu.c_type(), tu.tag_field, tu.tag_ty, tu.tag_enum);
     for a in arms {
         t.push_str(&format!("arm {}: {} = {}, ", a.name, a.ty, a.value));
+    }
+    for (m, ty) in &tu.members {
+        t.push_str(&format!("pub {m}: {ty}, "));
     }
     if let Some(p) = &tu.pad {
         t.push_str(&format!("pad: {p}, "));
@@ -1691,8 +1806,8 @@ impl CTaggedUnion {
 
 /// tagged_union!'s C: for a struct, the tag, then an anonymous union of the
 /// arms - inside an anonymous union with the pad, if there is one; for a
-/// union, the arms and the pad. `packed`: the struct and the arms' union are
-/// __packed, or the union.
+/// union, the arms, its own members and the pad. `packed`: the struct and the
+/// arms' union are __packed, or the union.
 fn emit_tagged_union(tu: &CTaggedUnion, kind: &dyn Fn(&str) -> Option<String>) -> Result<String, String> {
     let c = |ty: &str, decl: &str| {
         // a payload is a type the file defines, by its bare name, or c::NAME
@@ -1708,6 +1823,9 @@ fn emit_tagged_union(tu: &CTaggedUnion, kind: &dyn Fn(&str) -> Option<String>) -
         let mut body = String::new();
         for a in &tu.arms {
             body.push_str(&format!("\t{};\n", c(&a.ty, &c_ident(&a.name))?));
+        }
+        for (m, ty) in &tu.members {
+            body.push_str(&format!("\t{};\n", c(ty, &c_ident(m))?));
         }
         if let Some(p) = &tu.pad {
             body.push_str(&format!("\t{};\n", c(p, "_pad")?));
@@ -1764,7 +1882,7 @@ fn proto_toks(toks: &[Tok], decl: String, konst: bool, last: bool,
                 return None;
             }
             let close = skip_group(inner, f + 1).ok()?;
-            let args = split_commas(&inner[f + 2..close - 1]).into_iter()
+            let args = split_top(&inner[f + 2..close - 1], ',').into_iter()
                 .filter(|p| !p.is_empty())
                 .map(|p| match p {
                     [Tok::Punct('.'), Tok::Punct('.'), Tok::Punct('.')] => Some("...".to_string()),
@@ -1811,25 +1929,6 @@ fn emit_extern(ex: &CExtern, kind: &dyn Fn(&str) -> Option<String>) -> Result<St
     let c = |ty: &str, decl: &str, what: &str| proto_c(ty, decl, kind)
         .ok_or_else(|| format!("{what}: {ty} has no C rendering"));
     let mut t = String::new();
-    // A struct a prototype names before it's declared would be one of the
-    // prototype's own, which conflicts with the real one: declare each first.
-    // An enum too - incomplete until its definition, as GNU C allows.
-    let mut structs = std::collections::BTreeSet::new();
-    let types = ex.fns.iter()
-        .flat_map(|f| f.params.iter().map(|(_, ty)| ty).chain(f.ret.as_ref()))
-        .chain(ex.statics.iter().filter(|s| s.c_decl.is_none()).map(|s| &s.ty));
-    for ty in types {
-        let rendered = proto_c(ty, "", kind).unwrap_or_default();
-        let mut words = rendered.split(|ch: char| !(ch.is_alphanumeric() || ch == '_'));
-        while let Some(w) = words.next() {
-            if w == "struct" || w == "union" || w == "enum" {
-                if let Some(n) = words.find(|n| !n.is_empty()) {
-                    structs.insert(format!("{w} {n};\n"));
-                }
-            }
-        }
-    }
-    t.extend(structs);
     for f in &ex.fns {
         let mut params = f.params.iter()
             .map(|(_, ty)| c(ty, "", &format!("fn {}", f.name)))
@@ -1846,9 +1945,12 @@ fn emit_extern(ex: &CExtern, kind: &dyn Fn(&str) -> Option<String>) -> Result<St
         t.push_str(&under_cfg(&f.cfg, format!("{proto};\n"))?);
     }
     for s in &ex.statics {
+        // a static that isn't mut is C's const: what it holds, an array's
+        // elements - for a pointer, the pointer
         let decl = match &s.c_decl {
             Some(d) => d.clone(),
-            None => c(&s.ty, &s.name, &format!("static {}", s.name))?,
+            None => proto_toks(&tokenize(&s.ty)?, s.name.clone(), !s.mutable, true, kind)
+                .ok_or_else(|| format!("static {}: {} has no C rendering", s.name, s.ty))?,
         };
         t.push_str(&under_cfg(&s.cfg, format!("extern {decl};\n"))?);
     }
@@ -1884,6 +1986,7 @@ fn canon_base(toks: &[Tok]) -> Option<String> {
         [.., "c_int"] => "int", [.., "c_uint"] => "unsigned",
         [.., "c_long"] => "long", [.., "c_ulong"] => "unsigned long",
         [.., "c_longlong"] => "long long", [.., "c_ulonglong"] => "unsigned long long",
+        [.., "Le16"] => "__le16", [.., "Le32"] => "__le32", [.., "Le64"] => "__le64",
         [e, u] if (*e == "le" || *e == "be") && u.starts_with('U') => {
             return Some(format!("__{e}{}", &u[1..]));
         }
@@ -1939,25 +2042,24 @@ fn bitfield_c_name(name: &str) -> String {
     }
 }
 
-/// The members of bitfield type @bf, as C declares them: least significant
-/// first on little-endian bitfields, the reverse on big-endian - so each is at
-/// the same bits of the same native-endian word either way.
 /// A bitfield-struct member that's padding: Rust's, where C leaves bits
 /// unused.
-#[allow(dead_code)]
 fn is_bitfield_pad(name: &str) -> bool {
     name.starts_with("__pad")
 }
 
-fn emit_bitfield(bf: &CBitfieldDef) -> Result<String, String> {
+/// The members of bitfield type @bf, as C declares them: least significant
+/// first on little-endian bitfields, the reverse on big-endian - so each is at
+/// the same bits of the same native-endian word either way. A member of an
+/// enum type is C's `enum foo name:N`.
+fn emit_bitfield(bf: &CBitfieldDef, kind: &dyn Fn(&str) -> Option<String>) -> Result<String, String> {
     let decl = |(name, ty, width): &(String, String, u32)| -> Result<String, String> {
-        let base = canon_base(&tokenize(ty)?)
+        let d = canon_c(ty, &bitfield_c_name(name), false, kind)
             .ok_or_else(|| format!("{}.{name}: {ty} has no C type", bf.name))?;
-        let n = bitfield_c_name(name);
         Ok(if Some(*width) == int_bits(ty) {
-            format!("\t{base} {n};\n")
+            format!("\t{d};\n")
         } else {
-            format!("\t{base} {n}:{width};\n")
+            format!("\t{d}:{width};\n")
         })
     };
     // Padding - __pad, __padN, where C skips to a member's next unit or past
@@ -2120,7 +2222,7 @@ fn emit_members(def: &CStructDef, items: &[CItem],
                 _ => None,
             }).ok_or_else(|| format!("{}.{}: #[c_bitfield], but {} isn't a #[bitfield] type here",
                                      def.name, f.name, f.ty))?;
-            emit_bitfield(bf)?
+            emit_bitfield(bf, kind)?
         } else if in_place(f) {
             let attr = match (f.inline, f.group) {
                 (true, _) => "c_inline",
@@ -2165,6 +2267,9 @@ fn emit_members(def: &CStructDef, items: &[CItem],
             format!("\t{decl}{}\n", if directive { "" } else { ";" })
         } else if let Some(decl) = union_flex_array(&f.ty, &f.name).filter(|_| def.kind == CKind::Union) {
             format!("\t{decl};\n")
+        } else if let Some(decl) = container_c(&f.ty, &f.name, kind)
+            .map_err(|e| format!("{}.{e}", def.name))? {
+            format!("\t{decl};\n")
         } else if let Some(decl) = canon_c(&f.ty, &f.name, last, kind) {
             format!("\t{decl};\n")
         } else {
@@ -2188,7 +2293,114 @@ fn emit_members(def: &CStructDef, items: &[CItem],
     Ok(body)
 }
 
-/// The C for @items, in order. @opaque as for emit_struct().
+/// @ty's type arguments, Rust source, if it's @name<...> - one of
+/// types/lib.rs's containers of C's, by any path.
+fn container_args(ty: &str, name: &str) -> Result<Option<Vec<String>>, String> {
+    let toks = tokenize(ty)?;
+    let Some(i) = toks.iter().rposition(|t| t.is_ident(name)) else {
+        return Ok(None);
+    };
+    let [Tok::Punct('<'), args @ .., Tok::Punct('>')] = &toks[i + 1..] else {
+        return Ok(None);
+    };
+    Ok(Some(split_top(args, ',').into_iter().map(tokens_to_rust).collect()))
+}
+
+/// A DArray<T> or DArray<T, N> - types/lib.rs's, C's DARRAY() - as @ty, Rust
+/// source: T, and N if it's there.
+fn darray_args(ty: &str) -> Result<Option<(String, Option<String>)>, String> {
+    Ok(match container_args(ty, "DArray")?.as_deref() {
+        Some([elem]) => Some((elem.clone(), None)),
+        Some([elem, nr]) => Some((elem.clone(), Some(nr.clone()))),
+        _ => None,
+    })
+}
+
+/// @decl of container type @ty - a DArray or a GenRadix - as C declares it,
+/// by the container's macro: DARRAY(T), DARRAY_PREALLOCATED(T, N),
+/// GENRADIX(T). None if @ty is no container.
+fn container_c(ty: &str, decl: &str, kind: &dyn Fn(&str) -> Option<String>)
+    -> Result<Option<String>, String>
+{
+    let elem_c = |elem: &str| canon_c(elem, "", false, kind)
+        .map(|e| e.trim().to_string())
+        .ok_or_else(|| format!("{decl}: {ty}'s element type {elem} has no C rendering"));
+    if let Some((elem, nr)) = darray_args(ty)? {
+        let elem = elem_c(&elem)?;
+        return Ok(Some(match nr {
+            None => format!("DARRAY({elem}) {decl}"),
+            Some(n) => format!("DARRAY_PREALLOCATED({elem}, {}) {decl}", darray_nr_c(&n)
+                .ok_or_else(|| format!("{decl}: {ty}'s length {n} has no C rendering"))?),
+        }));
+    }
+    if let Some([elem]) = container_args(ty, "GenRadix")?.as_deref() {
+        return Ok(Some(format!("GENRADIX({}) {decl}", elem_c(elem)?)));
+    }
+    Ok(None)
+}
+
+/// DArray<T, N>'s N as C: a const generic, so a constant's in braces.
+fn darray_nr_c(n: &str) -> Option<String> {
+    let toks = tokenize(n).ok()?;
+    match toks.as_slice() {
+        [Tok::Punct('{'), inner @ .., Tok::Punct('}')] => c_dim(inner),
+        toks => c_dim(toks),
+    }
+}
+
+/// A declaration of each struct, union and enum @c names inside parentheses -
+/// in a prototype: a c_extern!'s, a callback field's, a function typedef's. One
+/// a prototype names before it's declared would be the prototype's own, which
+/// conflicts with the real one. An enum too: incomplete until its definition,
+/// as GNU C allows. Macros are left out - they declare nothing until they're
+/// used - and so are comments.
+fn forward_decls(c: &str) -> String {
+    let mut decls = std::collections::BTreeSet::new();
+    let mut depth = 0usize;
+    let mut in_comment = false;
+    for line in c.lines() {
+        if !in_comment && line.trim_start().starts_with('#') {
+            continue;
+        }
+        let b = line.as_bytes();
+        let ident = |i: usize| b.get(i).is_some_and(|&c| c == b'_' || c.is_ascii_alphanumeric());
+        let mut i = 0;
+        while i < b.len() {
+            if in_comment {
+                if b[i..].starts_with(b"*/") {
+                    in_comment = false;
+                    i += 1;
+                }
+            } else if b[i..].starts_with(b"/*") {
+                in_comment = true;
+                i += 1;
+            } else if b[i..].starts_with(b"//") {
+                break;
+            } else if b[i] == b'(' {
+                depth += 1;
+            } else if b[i] == b')' {
+                depth = depth.saturating_sub(1);
+            } else if ident(i) {
+                let start = i;
+                while ident(i) { i += 1; }
+                let word = &line[start..i];
+                if depth > 0 && matches!(word, "struct" | "union" | "enum") {
+                    let rest = line[i..].trim_start();
+                    let n: String = rest.chars().take_while(|&c| c == '_' || c.is_ascii_alphanumeric()).collect();
+                    if !n.is_empty() {
+                        decls.insert(format!("{word} {n};\n"));
+                    }
+                }
+                continue;
+            }
+            i += 1;
+        }
+    }
+    decls.into_iter().collect()
+}
+
+/// The C for @items, in order, after the declarations their prototypes need
+/// (forward_decls()). @opaque as for emit_struct().
 #[allow(dead_code)]
 pub fn emit_items(items: &[CItem],
                   opaque: &dyn Fn(&CStructDef, &CFieldDef) -> Result<String, String>,
@@ -2254,31 +2466,62 @@ pub fn emit_items(items: &[CItem],
             CItem::Enum(e) => {
                 let mut t = format!("enum {}{} {{\n", e.kind.marker(),
                                     e.name.as_deref().map(|n| format!(" {n}")).unwrap_or_default());
-                for (v, value) in &e.variants {
+                // Variants from a list not expanded - from source alone, of
+                // another file's list: C's x-macro, where they go.
+                let list = |t: &mut String, i: usize| for (at, f) in &e.from {
+                    if *at == i {
+                        let params = f.params.join(", ").replace("..", "...");
+                        t.push_str(&format!("#define x({params})\t{},\n\t{}()\n#undef x\n",
+                                            f.template.replace(" ## ", "##"), f.list));
+                    }
+                };
+                for (i, (v, value)) in e.variants.iter().enumerate() {
+                    list(&mut t, i);
                     match value {
                         Some(x) => t.push_str(&format!("\t{v} = {},\n", rust_expr_to_c(x))),
                         None => t.push_str(&format!("\t{v},\n")),
                     }
                 }
+                list(&mut t, e.variants.len());
                 under_cfg(&e.cfg, t + "};\n")?
             }
             CItem::Const(c) => under_cfg(&c.cfg, format!("#define {}\t{}\n", c.name, c.c_value()?))?,
-            CItem::Typedef(t) => {
-                let decl = match &t.c_decl {
-                    Some(d) => d.clone(),
-                    None => canon_c(&t.ty, &t.name, false, kind)
-                        .ok_or_else(|| format!("typedef {}: {} has no C rendering - it needs a #[c(\"...\")]",
-                                               t.name, t.ty))?,
-                };
-                under_cfg(&t.cfg, format!("typedef {decl};\n"))?
-            }
+            CItem::Typedef(t) => match (&t.c_decl, darray_args(&t.ty)?) {
+                // util/darray.h's: the typedef and its cleanup class
+                (None, Some((elem, nr))) => {
+                    let elem = canon_c(&elem, "", false, kind)
+                        .ok_or_else(|| format!("typedef {}: {elem} has no C rendering", t.name))?;
+                    under_cfg(&t.cfg, match nr {
+                        None => format!("DEFINE_DARRAY_NAMED({}, {});\n", t.name, elem.trim()),
+                        Some(n) => {
+                            let n = darray_nr_c(&n).ok_or_else(|| format!(
+                                "typedef {}: {}'s length {n} has no C rendering", t.name, t.ty))?;
+                            format!("typedef DARRAY_PREALLOCATED({}, {n}) {};\nDEFINE_DARRAY_CLASS({})\n",
+                                    elem.trim(), t.name, t.name)
+                        }
+                    })?
+                }
+                _ => {
+                    let decl = match &t.c_decl {
+                        Some(d) => d.clone(),
+                        None => match container_c(&t.ty, &t.name, kind).map_err(|e| format!("typedef {e}"))? {
+                            Some(d) => d,
+                            None => canon_c(&t.ty, &t.name, false, kind)
+                                .ok_or_else(|| format!("typedef {}: {} has no C rendering - it needs a #[c(\"...\")]",
+                                                       t.name, t.ty))?,
+                        },
+                    };
+                    under_cfg(&t.cfg, format!("typedef {decl};\n"))?
+                }
+            },
             // C's own definition: the generator asserts it's the Rust type's.
             CItem::Same(_) => continue,
         };
         out.push('\n');
         out.push_str(&text);
     }
-    Ok(out)
+    let decls = forward_decls(&out);
+    Ok(if decls.is_empty() { out } else { format!("\n{decls}{out}") })
 }
 
 // ---- entry points ----------------------------------------------------------
@@ -2355,7 +2598,9 @@ pub fn parse_items(src: &str) -> Result<Vec<CItem>, String> {
             }
             (Some("c_const"), Some(t)) if t.is_punct('!') => {
                 let (body, next) = macro_body(&toks, j + 2)?;
-                out.push(CItem::Const(parse_const(body, a.cfg)?));
+                for c in split_top(body, ';') {
+                    out.push(CItem::Const(parse_const(c, a.cfg.clone())?));
+                }
                 i = next;
                 continue;
             }

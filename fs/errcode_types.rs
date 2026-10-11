@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of errcode_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use crate::util::ffi::c_char;
+use core::ffi::c_int;
 use cstruct_macros::{CStruct, c_enum, c_extern, c_xmacro};
 use typeinfo_macros::TypeInfo;
 
@@ -659,6 +658,7 @@ c_xmacro! {
  */
 macro_rules! __bch_errcode_max_0 {
     ([$($acc:tt)*] $(($class:tt, $err:tt, $nr:tt)),* $(,)?) => { ::paste::paste! {
+        #[allow(non_snake_case)]
         #[repr(C)]
         #[derive(Clone, Copy, CStruct, TypeInfo)]
         pub union bch_errcode_max {
@@ -670,25 +670,18 @@ macro_rules! __bch_errcode_max_0 {
 BCH_ERRCODES!(__bch_errcode_max_0 []);
 c_default!(bch_errcode_max);
 
-macro_rules! __bch_errcode_0 {
-    ([$($acc:tt)*] $(($class:expr, $err:tt, $nr:expr)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_errcode: u32 {
-                $($acc)*
-                $([<BCH_ERR_ $err>] = (c::BCH_ERR_START as u32) + (($nr) as u32),)*
-                BCH_ERR_MAX = (c::BCH_ERR_START as u32)
-                    + (core::mem::size_of::<c::bch_errcode_max>() as u32),
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_errcode: u32 {
+        BCH_ERR_START = 2048,
+        BCH_ERRCODES(class, err, nr) => BCH_ERR_ ## err = (c::BCH_ERR_START as u32) + (nr as u32),
+        BCH_ERR_MAX = (c::BCH_ERR_START as u32)
+        + (core::mem::size_of::<c::bch_errcode_max>() as u32),
+    }
 }
-BCH_ERRCODES!(__bch_errcode_0 [BCH_ERR_START = 2048,]);
 
-// What Rust calls of errcode.h: C gets these as prototypes, in errcode_gen.h
-// with the types - see c_extern! in types/cstruct.rs.
 c_extern! {
-    pub fn bch2_err_str(arg1: core::ffi::c_int) -> *const crate::util::ffi::c_char;
-    pub fn __bch2_err_matches(arg1: core::ffi::c_int, arg2: core::ffi::c_int) -> bool;
-    pub fn __bch2_err_class(arg1: core::ffi::c_int) -> core::ffi::c_int;
+    pub fn bch2_err_str(arg1: c_int) -> *const c_char;
+    pub fn __bch2_err_matches(arg1: c_int, arg2: c_int) -> bool;
+    pub fn __bch2_err_class(arg1: c_int) -> c_int;
 }

@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of init/passes_format.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
@@ -13,33 +10,12 @@ use typeinfo_macros::TypeInfo;
 
 c_const! {
     pub const PASS_SILENT: c_ulong = 1 << 0;
-}
-
-c_const! {
     pub const PASS_FSCK: c_ulong = 1 << 1;
-}
-
-c_const! {
     pub const PASS_UNCLEAN: c_ulong = 1 << 2;
-}
-
-c_const! {
     pub const PASS_ALWAYS: c_ulong = 1 << 3;
-}
-
-c_const! {
     pub const PASS_ONLINE: c_ulong = 1 << 4;
-}
-
-c_const! {
     pub const PASS_ALLOC: c_ulong = 1 << 5;
-}
-
-c_const! {
     pub const PASS_NODEFER: c_ulong = 1 << 6;
-}
-
-c_const! {
     pub const PASS_FSCK_ALLOC: c_ulong = c::PASS_FSCK | c::PASS_ALLOC;
 }
 
@@ -284,33 +260,21 @@ c_xmacro! {
 }
 
 /* We normally enumerate recovery passes in the order we run them: */
-macro_rules! __bch_recovery_pass_0 {
-    ([$($acc:tt)*] $(($n:tt$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum bch_recovery_pass: u32 {
-                $($acc)*
-                $([<BCH_RECOVERY_PASS_ $n>],)*
-                BCH_RECOVERY_PASS_NR,
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum bch_recovery_pass: u32 {
+        BCH_RECOVERY_PASSES(n, ..) => BCH_RECOVERY_PASS_ ## n,
+        BCH_RECOVERY_PASS_NR,
+    }
 }
-BCH_RECOVERY_PASSES!(__bch_recovery_pass_0 []);
 
 /* But we also need stable identifiers that can be used in the superblock */
-macro_rules! __bch_recovery_pass_stable_0 {
-    ([$($acc:tt)*] $(($n:tt, $id:expr$(, $($__rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[open]
-            pub enum bch_recovery_pass_stable: u32 {
-                $($acc)*
-                $([<BCH_RECOVERY_PASS_STABLE_ $n>] = (($id) as u32),)*
-            }
-        }
-    } };
+c_enum! {
+    #[open]
+    pub enum bch_recovery_pass_stable: u32 {
+        BCH_RECOVERY_PASSES(n, id, ..) => BCH_RECOVERY_PASS_STABLE_ ## n = id,
+    }
 }
-BCH_RECOVERY_PASSES!(__bch_recovery_pass_stable_0 []);
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct)]

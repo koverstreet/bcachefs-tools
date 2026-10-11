@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_INIT_PASSES_FORMAT_INLINE_H
 #define _BCACHEFS_INIT_PASSES_FORMAT_INLINE_H
 
-/* Included at the end of init/passes_format.h. */
+/* Included after init/passes_format_gen.h. */
 
 static inline unsigned
 recovery_passes_nr_entries(struct bch_sb_field_recovery_passes *r)

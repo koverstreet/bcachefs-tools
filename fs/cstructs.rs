@@ -306,12 +306,17 @@ pub mod c {
     pub use super::util_time_stats_types::*;
     pub use super::util_two_state_shared_lock_types::*;
     pub use super::util_util_types::*;
+    #[cfg(not(NO_BCACHEFS_FS))]
     pub use super::vfs_buffered_types::*;
+    #[cfg(not(NO_BCACHEFS_FS))]
     pub use super::vfs_direct_types::*;
     pub use super::vfs_fdm_types::*;
     pub use super::vfs_fs_types::*;
+    #[cfg(not(NO_BCACHEFS_FS))]
     pub use super::vfs_io_types::*;
+    #[cfg(not(NO_BCACHEFS_FS))]
     pub use super::vfs_pagecache_types::*;
+    #[cfg(not(NO_BCACHEFS_FS))]
     pub use super::vfs_rust_types::*;
     pub use super::vfs_types::*;
     pub use super::alloc_background_types::*;

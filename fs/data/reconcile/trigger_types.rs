@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of data/reconcile/trigger_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
@@ -38,7 +35,6 @@ pub struct per_snapshot_io_opts {
     pub dev_cookie: c::bch_devs_mask,
 
     pub fs_io_opts: c::bch_inode_opts,
-    #[c("DARRAY(struct snapshot_io_opts_entry) d")]
     pub d: DArray<c::snapshot_io_opts_entry>,
 }
 c_default!(per_snapshot_io_opts);

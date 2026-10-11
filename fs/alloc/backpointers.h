@@ -235,6 +235,7 @@ static inline bool bch2_backpointers_match(struct bch_backpointer l, struct bch_
 
 #include "alloc/backpointers_gen.h"
 
+struct wb_maybe_flush;
 struct bkey_s_c bch2_backpointer_get_key(struct btree_trans *, struct bkey_s_c_backpointer,
 					 struct btree_iter *, unsigned, struct wb_maybe_flush *);
 struct btree *bch2_backpointer_get_node(struct btree_trans *, struct bkey_s_c_backpointer,

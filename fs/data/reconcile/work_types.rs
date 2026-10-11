@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The data types of data/reconcile/work_types.h, which is generated from this file: see
-//! fs/types/lib.rs. Translated from the C by c2rs.
-
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use core::ffi::c_uint;
 use cstruct_macros::{CStruct, c_const, c_enum, c_extern, c_xmacro};
 use nestify::nest;
 
@@ -21,18 +19,12 @@ c_xmacro! {
     }
 }
 
-macro_rules! __reconcile_scan_type_0 {
-    ([$($acc:tt)*] $(($t:tt)),* $(,)?) => { ::paste::paste! {
-        c_enum! {
-            #[closed]
-            pub enum reconcile_scan_type: u32 {
-                $($acc)*
-                $([<RECONCILE_SCAN_ $t>],)*
-            }
-        }
-    } };
+c_enum! {
+    #[closed]
+    pub enum reconcile_scan_type: u32 {
+        RECONCILE_SCAN_TYPES(t) => RECONCILE_SCAN_ ## t,
+    }
 }
-RECONCILE_SCAN_TYPES!(__reconcile_scan_type_0 []);
 
 nest! {
     #[derive(Clone, Copy, CStruct)]*
@@ -42,7 +34,7 @@ nest! {
 
         #[c_anon]
         pub id: pub union reconcile_scan_id {
-            pub dev: core::ffi::c_uint,
+            pub dev: c_uint,
             pub inum: u64,
         },
     }
@@ -66,13 +58,11 @@ c_const! {
 #[derive(Clone, Copy, CStruct)]
 pub struct opt_change_scope {
     pub c: *mut c::bch_fs,
-    pub nr: core::ffi::c_uint,
+    pub nr: c_uint,
     pub cookies: [u64; c::BCH_OPT_CHANGE_SCANS_MAX as usize],
 }
 c_default!(opt_change_scope);
 
-// What Rust calls of data/reconcile/work.h: C gets these as prototypes, in data/reconcile/work_gen.h
-// with the types - see c_extern! in types/cstruct.rs.
 c_extern! {
     pub fn bch2_opt_change_scope_exit(arg1: *mut c::opt_change_scope);
 }
