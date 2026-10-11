@@ -22,7 +22,7 @@ pub struct _SIPHASH_CTX {
 }
 pub type SIPHASH_CTX = _SIPHASH_CTX;
 
-#[repr(C, align(8))]
+#[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 #[c_typedef]
 pub struct SIPHASH_KEY {

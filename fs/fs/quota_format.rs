@@ -27,7 +27,7 @@ c_enum! {
     }
 }
 
-#[repr(C, align(8))]
+#[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_quota_counter {
     pub hardlimit: Le64,
@@ -43,14 +43,14 @@ pub struct bch_quota {
 }
 
 /* BCH_SB_FIELD_quota: */
-#[repr(C, align(4))]
+#[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_sb_quota_counter {
     pub timelimit: Le32,
     pub warnlimit: Le32,
 }
 
-#[repr(C, align(8))]
+#[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_sb_quota_type {
     pub flags: Le64,

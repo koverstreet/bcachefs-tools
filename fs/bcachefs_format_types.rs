@@ -83,7 +83,7 @@ c_typedef! {
     pub type __uuid_t = c::uuid_t;
 }
 
-#[repr(C, align(8))]
+#[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct bkey_format {
     pub key_u64s: u8,
@@ -254,7 +254,7 @@ pub struct bkey_packed {
 }
 c_default!(bkey_packed);
 
-#[repr(C, align(8))]
+#[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_typedef]
 pub struct bch_le128 {
@@ -849,7 +849,7 @@ pub struct bch_sb_field_journal {
     pub buckets: [Le64; 0],
 }
 
-#[repr(C, align(8))]
+#[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_sb_field_journal_v2_entry {
     pub start: Le64,
@@ -866,13 +866,13 @@ pub struct bch_sb_field_journal_v2 {
 
 /* BCH_SB_FIELD_crypt: */
 
-#[repr(C, align(4))]
+#[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct nonce {
     pub d: [Le32; 4],
 }
 
-#[repr(C, align(8))]
+#[repr(C)]
 #[derive(Default, CStruct, TypeInfo)]
 pub struct bch_key {
     pub key: [Le64; 4],

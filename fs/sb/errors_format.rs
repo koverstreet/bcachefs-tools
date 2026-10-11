@@ -470,7 +470,7 @@ c_enum! {
     }
 }
 
-#[repr(C, align(8))]
+#[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_typedef(bch_sb_field_error_entry)]
 pub struct bch_sb_field_error_entry {
@@ -505,6 +505,7 @@ c_bitmask! {
  * v[0]: id 0..16, nr 16..48, last_error_time 48..64 (low 16 bits)
  * v[1]: last_error_time 0..24 (high 24 bits), first_error_time 24..64
  */
+/* align(8): C's v is __le64 v[2]; its bitfield's le::U128 is aligned to 1 */
 nest! {
     #[repr(C, align(8))]
     #[derive(Clone, Copy, Default, CStruct, TypeInfo)]

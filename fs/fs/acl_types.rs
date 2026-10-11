@@ -6,7 +6,7 @@ use crate::types::{Le16, Le32};
 use cstruct_macros::CStruct;
 use typeinfo_macros::TypeInfo;
 
-#[repr(C, align(4))]
+#[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_typedef]
 pub struct bch_acl_entry {
@@ -15,7 +15,7 @@ pub struct bch_acl_entry {
     pub e_id: Le32,
 }
 
-#[repr(C, align(2))]
+#[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_typedef]
 pub struct bch_acl_entry_short {
@@ -23,7 +23,7 @@ pub struct bch_acl_entry_short {
     pub e_perm: Le16,
 }
 
-#[repr(C, align(4))]
+#[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_typedef]
 pub struct bch_acl_header {
