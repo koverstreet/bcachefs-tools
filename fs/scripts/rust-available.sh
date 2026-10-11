@@ -112,6 +112,13 @@ vendored)
 	grep -qE '^CONFIG_CFI(_CLANG)?=y' "$conf" 2>/dev/null &&
 		! grep -q '^CONFIG_RUST=y' "$conf" &&
 		miss "kernel built with CFI but not Rust, so it has no kCFI type hashes for Rust"
+
+	# Paranoid FineIBT corrupts Rust built without -Zindirect-branch-cs-prefix
+	# (Makefile.rust): rustc 1.91.
+	if [ -n "$version" ] && grep -q '^CONFIG_FINEIBT=y' "$conf" 2>/dev/null &&
+	   [ "$(printf '%s\n' 1.91.0 "$version" | sort -V | head -1)" != 1.91.0 ]; then
+		miss "rustc $version is older than 1.91, which a CONFIG_FINEIBT kernel needs (-Zindirect-branch-cs-prefix)"
+	fi
 	;;
 esac
 

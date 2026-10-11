@@ -40,6 +40,18 @@ ifeq ($(bcachefs-kernel-rust-why),)
 bcachefs-kernel-rust-why := $(if $(wildcard $(objtree)/rust/libzerocopy.rmeta),,kernel $(KERNELVERSION)'s Rust has no zerocopy)
 endif
 
+# Paranoid FineIBT (x86; cfi=auto on IBT hardware without FRED) rewrites each
+# kCFI indirect call site as 20 bytes, taking the thunk call to be 6, as
+# -mindirect-branch-cs-prefix makes C's. The kernel passes rustc no equivalent
+# (as of 7.3), so Rust's are 5 and the byte after each is clobbered at boot,
+# vmlinux's own core::fmt included. The vendored stack is built with
+# -Zindirect-branch-cs-prefix, and doesn't call into the kernel's Rust.
+ifeq ($(bcachefs-kernel-rust-why),)
+ifdef CONFIG_FINEIBT
+bcachefs-kernel-rust-why := $(if $(filter -Zindirect-branch-cs-prefix,$(KBUILD_RUSTFLAGS)),,kernel $(KERNELVERSION)'s Rust is built without -Zindirect-branch-cs-prefix and breaks under paranoid FineIBT)
+endif
+endif
+
 ifneq ($(bcachefs-kernel-rust-why),)
 bcachefs-vendor-rust-probe := $(call bch-rust-available,vendored)
 ifeq ($(bcachefs-vendor-rust-probe),y)

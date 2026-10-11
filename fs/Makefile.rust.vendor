@@ -67,6 +67,12 @@ KBUILD_RUSTFLAGS := $(filter-out -Cjump-tables=n -Zno-jump-tables,$(KBUILD_RUSTF
 		echo -Cjump-tables=n || echo -Zno-jump-tables)
 endif
 
+# The cs prefix on retpoline thunk calls, as C has it: paranoid FineIBT's
+# rewrite needs it (fs/Makefile.rust). rustc has it from 1.91;
+# rust-available.sh requires that of a CONFIG_FINEIBT kernel.
+KBUILD_RUSTFLAGS := $(filter-out -Zindirect-branch-cs-prefix,$(KBUILD_RUSTFLAGS)) \
+	$(if $(filter -mindirect-branch-cs-prefix,$(KBUILD_CFLAGS)),$(if $(call bch-rustc-min,109100),-Zindirect-branch-cs-prefix))
+
 # rustc < 1.98 doesn't record frame pointers or unwind tables in the LLVM
 # module flags (rust-lang/rust#156980, #156973); the kernel adds them by hand
 # when it asks for either (top Makefile, arch/arm64), if its rustc needs it.
