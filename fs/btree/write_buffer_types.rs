@@ -48,6 +48,7 @@ c_const! {
  * Each bch_fs_btree_write_buffer is per-btree, so individual key entries don't
  * need to carry a btree id — it's implicit in the containing buffer.
  */
+#[cfg(target_endian = "little")]
 nest! {
     #[derive(Clone, Copy, CStruct)]*
     #[repr(C)]
@@ -58,31 +59,41 @@ nest! {
             #[c_anon]
             #>[repr(C, packed)]
             pub pos_idx: pub struct wb_key_ref_pos_idx {
-                #[cfg(target_endian = "little")]
                 pub idx: u32,
-                #[cfg(target_endian = "little")]
                 #[c("u8 pos[sizeof(struct bpos)]")]
                 pub pos: [u8; size_of::<c::bpos>()],
-                #[cfg(not(target_endian = "little"))]
+            },
+            #[c_anon]
+            #>[repr(C)]
+            pub words: pub struct wb_key_ref_words {
+                pub lo: u64,
+                pub mi: u64,
+                pub hi: u64,
+            },
+        },
+    }
+}
+
+#[cfg(target_endian = "big")]
+nest! {
+    #[derive(Clone, Copy, CStruct)]*
+    #[repr(C)]
+    pub struct wb_key_ref {
+        #[c_anon]
+        #>[repr(C)]
+        pub key: pub union wb_key_ref_key {
+            #[c_anon]
+            #>[repr(C, packed)]
+            pub pos_idx: pub struct wb_key_ref_pos_idx {
                 #[c("u8 pos[sizeof(struct bpos)]")]
                 pub pos: [u8; size_of::<c::bpos>()],
-                #[cfg(not(target_endian = "little"))]
                 pub idx: u32,
             },
             #[c_anon]
             #>[repr(C)]
             pub words: pub struct wb_key_ref_words {
-                #[cfg(target_endian = "little")]
-                pub lo: u64,
-                #[cfg(target_endian = "little")]
-                pub mi: u64,
-                #[cfg(target_endian = "little")]
                 pub hi: u64,
-                #[cfg(not(target_endian = "little"))]
-                pub hi: u64,
-                #[cfg(not(target_endian = "little"))]
                 pub mi: u64,
-                #[cfg(not(target_endian = "little"))]
                 pub lo: u64,
             },
         },
