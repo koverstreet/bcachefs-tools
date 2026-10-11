@@ -9,7 +9,7 @@ use core::ffi::{c_uint, c_ulong};
 use core::ffi::{c_int, c_void};
 use cstruct_macros::{c_enum, CStruct};
 #[cfg(not(NO_BCACHEFS_FS))]
-use cstruct_macros::c_typedef;
+use cstruct_macros::{c_extern, c_typedef};
 use typeinfo_macros::TypeInfo;
 
 #[repr(C)]
@@ -88,4 +88,14 @@ c_typedef! {
                                                         *mut c::bch_inode_info,
                                                         *mut c::bch_inode_unpacked, *mut c_void)
                                                         -> c_int>;
+}
+
+#[cfg(not(NO_BCACHEFS_FS))]
+c_extern! {
+    pub fn bch2_inode_update_after_write(trans: *mut c::btree_trans, ei: *mut c::bch_inode_info,
+                                         bi: *mut c::bch_inode_unpacked, fields: c_uint);
+    #[must_use]
+    pub fn bch2_write_inode(c: *mut c::bch_fs, ei: *mut c::bch_inode_info, set: c::inode_set_fn,
+                            p: *mut c_void, fields: c_uint) -> c_int;
+    pub fn bch2_inode_or_descendents_is_open(trans: *mut c::btree_trans, pos: c::bpos) -> c_int;
 }

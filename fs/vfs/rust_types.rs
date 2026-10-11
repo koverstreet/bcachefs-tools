@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! What Rust calls of vfs/rust.h - the VFS shims, and vfs/fs.c's functions -
-//! declared to Rust: C gets the prototypes, in vfs/rust_gen.h, which rust.h
-//! includes. Kernel only, as the VFS is.
+//! What Rust calls of vfs/rust.h - the VFS shims - declared to Rust: C gets
+//! the prototypes, in vfs/rust_gen.h, which rust.h includes. Kernel only, as
+//! the VFS is.
 
 #![allow(non_camel_case_types)]
 // The VFS's: kernel only, as C's #ifndef NO_BCACHEFS_FS
@@ -27,15 +27,6 @@ c_extern! {
     pub fn rust_dentry_ei(dentry: *mut c::dentry) -> *mut c::bch_inode_info;
     pub fn rust_dentry_parent_inode_opt(dentry: *mut c::dentry, opt: c_uint, v: *mut u64) -> bool;
     pub fn rust_dir_casefold_changed(dentry: *mut c::dentry);
-
-    /* vfs/fs.c: */
-    pub fn bch2_inode_update_after_write(trans: *mut c::btree_trans, ei: *mut c::bch_inode_info,
-                                         bi: *mut c::bch_inode_unpacked, fields: c_uint);
-    #[must_use]
-    pub fn bch2_write_inode(c: *mut c::bch_fs, ei: *mut c::bch_inode_info,
-                            set: Option<unsafe extern "C" fn(trans: *mut c::btree_trans, ei: *mut c::bch_inode_info, bi: *mut c::bch_inode_unpacked, p: *mut c_void) -> c_int>,
-                            p: *mut c_void, fields: c_uint) -> c_int;
-    pub fn bch2_inode_or_descendents_is_open(trans: *mut c::btree_trans, pos: c::bpos) -> c_int;
 
     /* xattr handlers: */
     pub fn rust_xattr_handler_flags(handler: *const c::xattr_handler) -> c_int;
