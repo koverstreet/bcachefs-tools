@@ -231,7 +231,7 @@ nest! {
         #>[bitfield(u16)]
         pub bits: pub struct bkey_validate_context_bits {
             #[bits(8)]
-            pub from: u32,
+            pub from: cs::bkey_validate_from,
             #[bits(8, from = cs::bch_validate_flags::from_bits_retain)]
             pub flags: cs::bch_validate_flags,
         },

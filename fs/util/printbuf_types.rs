@@ -49,7 +49,7 @@ nest! {
             #[bits(1)]
             pub suppress: bool,
             #[bits(1)]
-            pub si_units: u32,
+            pub si_units: c::printbuf_si,
             #[bits(1)]
             pub human_readable_units: bool,
             #[bits(1)]

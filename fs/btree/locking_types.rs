@@ -26,7 +26,7 @@ nest! {
         #>[bitfield(u8)]
         pub bits: pub struct trans_waiting_for_lock_bits {
             #[bits(8)]
-            pub lock_want: u32,
+            pub lock_want: c::six_lock_type,
         },
 
         /* for iterating over held locks :*/
