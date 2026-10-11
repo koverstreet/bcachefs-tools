@@ -320,6 +320,17 @@ impl<const N: usize> NeBytes<N> {
     }
 }
 
+/// The storage of u64 bitfields C aligns to 8 - __aligned(8), which i386
+/// needs said: its u64 is 4-aligned. #[bitfield(u64, align = 8)] uses it.
+#[repr(C, align(8))]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct Align8U64(pub u64);
+
+impl Align8U64 {
+    pub const fn from_u64(v: u64) -> Self { Self(v) }
+    pub const fn to_u64(self) -> u64 { self.0 }
+}
+
 /// Bit @i of a run of one-bit C bitfields, an x-macro list's - stored as bytes,
 /// @b, from the run's start. C allocates bitfields from the low bit of each
 /// unit on a little-endian target, from the high bit on a big-endian one; a
