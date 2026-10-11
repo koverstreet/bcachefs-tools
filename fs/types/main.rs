@@ -248,6 +248,7 @@ fn check_bitfield(bf: &CBitfieldDef, offset: u64, prev_end: u64, packed: bool,
             rust += width;
             continue;
         }
+        let ty = bf.c_type(ty);
         let unit = unit_bits(ty).map(u64::from)
             .or_else(|| ty.trim().rsplit("::").next().and_then(|e| enums.get(e)).map(|size| size * 8))
             .ok_or_else(|| format!("{}.{name}: {ty} isn't an integer, bool or enum", bf.name))?;

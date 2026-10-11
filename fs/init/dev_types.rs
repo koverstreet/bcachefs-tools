@@ -30,7 +30,7 @@ nest! {
         pub buffer_size: usize,
         pub mode: c::blk_mode_t,
         #[c_bitfield]
-        #>[bitfield(u8)]
+        #>[bitfield(u8, ty = u32)]
         pub bits: pub struct bch_sb_handle_bits {
             #[bits(1)]
             pub have_layout: u32,

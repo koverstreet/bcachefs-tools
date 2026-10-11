@@ -88,7 +88,7 @@ nest! {
         pub mode: c::btree_update_mode,
         pub flags: c::bch_trans_commit_flags,
         #[c_bitfield]
-        #>[bitfield(u8)]
+        #>[bitfield(u8, ty = u32)]
         pub bits: pub struct btree_update_bits {
             #[bits(1)]
             pub nodes_written: u32,

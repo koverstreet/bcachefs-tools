@@ -484,7 +484,7 @@ nest! {
         pub pos: cs::bpos,
 
         #[c_bitfield]
-        #>[bitfield(u16)]
+        #>[bitfield(u16, ty = u32)]
         pub bits: pub struct btree_path_bits {
             #[bits(7)]
             pub btree_id: cs::btree_id,
@@ -606,7 +606,7 @@ nest! {
         pub sort_order: u8,
         pub bkey_type: u8,
         #[c_bitfield]
-        #>[bitfield(u16)]
+        #>[bitfield(u16, ty = u8)]
         pub bits: pub struct btree_insert_entry_bits {
             #[bits(8)]
             pub btree_id: cs::btree_id,

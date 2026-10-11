@@ -181,16 +181,29 @@ impl CStructDef {
     }
 }
 
-/// A bitfield-struct type (#[bitfield(uN)]): its storage, and its members
-/// least significant first - (name, Rust type, width). A member as wide as its
-/// type is a plain member in C; narrower, a bitfield of that unit.
+/// A bitfield-struct type (#[bitfield(uN)]): its storage, C's declared type of
+/// its integer members (ty), and its members least significant first - (name,
+/// Rust type, width). A member as wide as its C type is a plain member in C;
+/// narrower, a bitfield of that unit.
 #[derive(Debug)]
 #[allow(dead_code)] // cfg and storage: read by rust_types_gen, not the macros
 pub struct CBitfieldDef {
     pub name:    String,
     pub cfg:     Option<Cfg>,
     pub storage: String,
+    pub ty:      String,
     pub fields:  Vec<(String, String, u32)>,
+}
+
+impl CBitfieldDef {
+    /// The type C declares a member of Rust type @rust_ty: an integer, the
+    /// bitfield's ty - C lays a bitfield out by its members' declared type,
+    /// Rust reads each at its width rounded up; bool and enums, themselves.
+    #[allow(dead_code)] // rust_types_gen's
+    pub fn c_type<'a>(&'a self, rust_ty: &'a str) -> &'a str {
+        let t = rust_ty.trim();
+        if t.starts_with('u') && int_bits(t).is_some() { &self.ty } else { rust_ty }
+    }
 }
 
 /// One field: its name (as C has it - type, not type_), its Rust type as written, its C
@@ -931,6 +944,8 @@ struct ItemAttrs {
     cfg_reprs: Vec<(Cfg, CRepr)>,
     /// #[bitfield(uN)]: a bitfield-struct type, its storage.
     bitfield:  Option<String>,
+    /// #[bitfield(.., ty = T)]: C's declared type of its integer members.
+    bitfield_ty: Option<String>,
     /// #[c_typedef] or #[c_typedef(NAME)].
     typedef:   Option<Option<String>>,
     /// #[c("...")] on an item: its C declaration.
@@ -987,7 +1002,12 @@ fn item_attrs(toks: &[Tok], mut i: usize) -> Result<(ItemAttrs, usize), String> 
             }
         }
         if let Some(args) = attr_args(attr, "bitfield") {
-            a.bitfield = split_top(args, ',').first().map(|t| tokens_to_rust(t));
+            let args = split_top(args, ',');
+            a.bitfield = args.first().map(|t| tokens_to_rust(t));
+            a.bitfield_ty = args.iter().find_map(|t| match *t {
+                [Tok::Ident(k), Tok::Punct('='), ty @ ..] if k == "ty" => Some(tokens_to_rust(ty)),
+                _ => None,
+            });
         }
         if matches!(attr, [Tok::Ident(n)] if n == "c_typedef") {
             a.typedef = Some(None);
@@ -1198,7 +1218,7 @@ fn align_marker(ty: &str) -> Option<&'static str> {
 
 /// A bitfield-struct type at @i, after its attributes - the struct with
 /// #[bitfield(@storage)] - and the index after it.
-fn parse_bitfield(toks: &[Tok], i: usize, cfg: Option<Cfg>, storage: String)
+fn parse_bitfield(toks: &[Tok], i: usize, cfg: Option<Cfg>, storage: String, ty: Option<String>)
     -> Result<Option<(CBitfieldDef, usize)>, String>
 {
     let Some((def, next)) = parse_struct(toks, i, ItemAttrs::default())? else {
@@ -1213,7 +1233,8 @@ fn parse_bitfield(toks: &[Tok], i: usize, cfg: Option<Cfg>, storage: String)
         };
         fields.push((f.name, f.ty, width));
     }
-    Ok(Some((CBitfieldDef { name: def.name, cfg, storage, fields }, next)))
+    let ty = ty.unwrap_or_else(|| storage.clone());
+    Ok(Some((CBitfieldDef { name: def.name, cfg, storage, ty, fields }, next)))
 }
 
 /// The width of the unit C lays out a bitfield of type @ty in: an integer's,
@@ -2287,6 +2308,7 @@ fn is_bitfield_pad(name: &str) -> bool {
 /// enum type is C's `enum foo name:N`.
 fn emit_bitfield(bf: &CBitfieldDef, kind: &dyn Fn(&str) -> Option<String>) -> Result<String, String> {
     let decl = |(name, ty, width): &(String, String, u32)| -> Result<String, String> {
+        let ty = bf.c_type(ty);
         let d = canon_c(ty, &bitfield_c_name(name), false, kind)
             .ok_or_else(|| format!("{}.{name}: {ty} has no C type", bf.name))?;
         Ok(if Some(*width) == int_bits(ty) {
@@ -2881,7 +2903,7 @@ pub fn parse_items(src: &str) -> Result<Vec<CItem>, String> {
             continue;
         }
         if let Some(storage) = a.bitfield.clone() {
-            if let Some((def, next)) = parse_bitfield(&toks, j, a.cfg.clone(), storage)? {
+            if let Some((def, next)) = parse_bitfield(&toks, j, a.cfg.clone(), storage, a.bitfield_ty.clone())? {
                 out.push(CItem::Bitfield(def));
                 i = next;
                 continue;

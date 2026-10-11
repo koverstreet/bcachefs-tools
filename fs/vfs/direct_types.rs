@@ -38,7 +38,7 @@ nest! {
         pub mm: *mut c::mm_struct,
         pub iov: *const c::iovec,
         #[c_bitfield]
-        #>[bitfield(u8)]
+        #>[bitfield(u8, ty = u32)]
         pub bits: pub struct dio_write_bits {
             #[bits(1)]
             pub loop_: u32,

@@ -17,7 +17,7 @@ nest! {
         pub b: *mut c::btree,
         pub start_time: u64,
         #[c_bitfield]
-        #>[bitfield(u8)]
+        #>[bitfield(u8, ty = u32)]
         pub bits: pub struct btree_read_bio_bits {
             #[bits(7)]
             pub idx: u32,

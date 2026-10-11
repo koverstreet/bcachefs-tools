@@ -44,7 +44,7 @@ nest! {
         #[c_anon("")] pub __bitfield_align: [u32; 0],
         pub dev: u8,
         #[c_bitfield]
-        #>[bitfield(u8)]
+        #>[bitfield(u8, ty = u32)]
         pub bits: pub struct bch_dev_io_failures_bits {
             #[bits(7)]
             pub csum_nr: u32,

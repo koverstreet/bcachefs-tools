@@ -27,7 +27,7 @@ nest! {
     pub struct gc_stripe {
         pub lock: u8,
         #[c_bitfield]
-        #>[bitfield(u8)]
+        #>[bitfield(u8, ty = u32)]
         pub bits: pub struct gc_stripe_bits {
             /* does a corresponding key exist in stripes btree? */
             #[bits(1)]

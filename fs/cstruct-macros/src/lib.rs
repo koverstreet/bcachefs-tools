@@ -38,7 +38,7 @@
 //! Zero dependencies, as typeinfo-macros: the kernel build compiles this with
 //! a bare rustc.
 
-use proc_macro::{Delimiter, Group, Punct, Spacing, TokenStream, TokenTree};
+use proc_macro::{Delimiter, Group, Ident, Literal, Punct, Spacing, TokenStream, TokenTree};
 
 // A proc-macro crate may export only its macros: the parser's pub items go in
 // a private module - pub for rust_types_gen, which include!s it too.
@@ -156,9 +156,28 @@ pub fn derive_cstruct(input: TokenStream) -> TokenStream {
 /// which #[derive(CStruct)] invokes for a #[c_bitfield] field of this type:
 /// each member's getter and setter on the struct that holds it, as C has a
 /// bitfield's members on its struct. Not `_` members: those are padding.
+///
+/// Members are written as bilge has them, the type giving the width:
+///
+///   #[bitfield(u64, ty = u32)]
+///   pub struct foo_bits { type_: u2, offset: u40, cached: bool, __pad: u3, .. }
+///
+/// `name: uN` is N bits, read and written as N rounded up to an integer -
+/// offset above is a u64; `name: bool` is one bit. A member of any other type -
+/// an enum - gives its width, #[bits(N)], as bitfield-struct has it. Members
+/// are pub, as C's are. ty is C's declared type of the integer members, which
+/// C lays the bitfield out by - the storage type if not given: the generator's,
+/// not passed on.
 #[proc_macro_attribute]
 pub fn bitfield(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let text = format!("#[bitfield({attr})] {item}");
+    let (attr, ty, item) = match bitfield_canonical(attr, item) {
+        Ok(v) => v,
+        Err(e) => return compile_error(&format!("#[bitfield]: {e}")),
+    };
+    let text = match &ty {
+        Some(ty) => format!("#[bitfield({attr}, ty = {ty})] {item}"),
+        None     => format!("#[bitfield({attr})] {item}"),
+    };
     let b = match one_item(&text, "a bitfield struct", |i| matches!(i, CItem::Bitfield(_))) {
         Ok(CItem::Bitfield(b)) => b,
         Ok(_) => unreachable!(),
@@ -181,6 +200,145 @@ pub fn bitfield(attr: TokenStream, item: TokenStream) -> TokenStream {
              #[allow(unused_imports)]\npub(crate) use __{name}_forward;\n",
             record(&text, &[]), typeinfo_size_only(name, "Struct"))
         .parse().unwrap()
+}
+
+/// #[bitfield]'s attribute without `ty = T`, T, and the struct with its
+/// members as bitfield-struct has them - see bitfield().
+fn bitfield_canonical(attr: TokenStream, item: TokenStream)
+    -> Result<(TokenStream, Option<String>, TokenStream), String>
+{
+    let mut args: Vec<Vec<TokenTree>> = vec![Vec::new()];
+    for t in attr {
+        match t {
+            TokenTree::Punct(p) if p.as_char() == ',' => args.push(Vec::new()),
+            t => args.last_mut().unwrap().push(t),
+        }
+    }
+    if !matches!(args.first().map(|a| a.as_slice()), Some([TokenTree::Ident(_)])) {
+        return Err("expected the storage type first: #[bitfield(uN, ..)]".into());
+    }
+    let mut ty = None;
+    args.retain(|a| match a.as_slice() {
+        [TokenTree::Ident(k), TokenTree::Punct(eq), TokenTree::Ident(t)]
+            if k.to_string() == "ty" && eq.as_char() == '=' => {
+            ty = Some(t.to_string());
+            false
+        }
+        _ => true,
+    });
+    let mut attr = Vec::new();
+    for (i, a) in args.into_iter().filter(|a| !a.is_empty()).enumerate() {
+        if i > 0 {
+            attr.push(TokenTree::Punct(Punct::new(',', Spacing::Alone)));
+        }
+        attr.extend(a);
+    }
+
+    let mut out = Vec::new();
+    for t in item {
+        match t {
+            TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => {
+                let mut body = Group::new(Delimiter::Brace, bitfield_members(g.stream())?);
+                body.set_span(g.span());
+                out.push(TokenTree::Group(body));
+            }
+            t => out.push(t),
+        }
+    }
+    Ok((attr.into_iter().collect(), ty, out.into_iter().collect()))
+}
+
+/// A bitfield struct's members, each with its #[bits(N)] and type: see
+/// bitfield(). New tokens take the span of the type they replace, so an error
+/// in one points at its member.
+fn bitfield_members(body: TokenStream) -> Result<TokenStream, String> {
+    // The commas between members - not those in a type's <..>
+    let mut members: Vec<Vec<TokenTree>> = vec![Vec::new()];
+    let mut depth = 0;
+    for t in body {
+        match &t {
+            TokenTree::Punct(p) if p.as_char() == '<' => depth += 1,
+            TokenTree::Punct(p) if p.as_char() == '>' => depth -= 1,
+            TokenTree::Punct(p) if p.as_char() == ',' && depth == 0 => {
+                members.push(Vec::new());
+                continue;
+            }
+            _ => {}
+        }
+        members.last_mut().unwrap().push(t);
+    }
+
+    let mut out: Vec<TokenTree> = Vec::new();
+    for m in members.into_iter().filter(|m| !m.is_empty()) {
+        let mut i = 0;
+        let mut has_bits = false;
+        while let (Some(TokenTree::Punct(p)), Some(TokenTree::Group(g))) = (m.get(i), m.get(i + 1)) {
+            if p.as_char() != '#' || g.delimiter() != Delimiter::Bracket {
+                break;
+            }
+            has_bits |= matches!(g.stream().into_iter().next(),
+                                 Some(TokenTree::Ident(a)) if a.to_string() == "bits");
+            i += 2;
+        }
+        out.extend(m[..i].iter().cloned());
+
+        let vis_start = i;
+        if matches!(m.get(i), Some(TokenTree::Ident(v)) if v.to_string() == "pub") {
+            i += 1;
+            if matches!(m.get(i), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis) {
+                i += 1;
+            }
+        }
+        let vis = &m[vis_start..i];
+
+        let (Some(TokenTree::Ident(name)), Some(TokenTree::Punct(colon))) = (m.get(i), m.get(i + 1)) else {
+            return Err(format!("expected a member, `name: type`, at `{}`",
+                               m.iter().cloned().collect::<TokenStream>()));
+        };
+        if colon.as_char() != ':' {
+            return Err(format!("{name}: expected `name: type`"));
+        }
+        let member_ty = &m[i + 2..];
+
+        let member_ty: Vec<TokenTree> = if has_bits {
+            member_ty.to_vec()
+        } else {
+            let [TokenTree::Ident(t)] = member_ty else {
+                return Err(format!("{name}: a member without #[bits(N)] is uN or bool"));
+            };
+            let span = t.span();
+            let t = t.to_string();
+            let (bits, rust_ty) = if t == "bool" {
+                (1, t)
+            } else {
+                let n: u32 = t.strip_prefix('u').and_then(|n| n.parse().ok())
+                    .filter(|n| (1..=128).contains(n))
+                    .ok_or_else(|| format!("{name}: {t}: a member without #[bits(N)] is uN or bool"))?;
+                (n, format!("u{}", [8, 16, 32, 64, 128].into_iter().find(|w| *w >= n).unwrap()))
+            };
+            let mut width = Group::new(Delimiter::Parenthesis,
+                                       TokenTree::Literal(Literal::u32_unsuffixed(bits)).into());
+            width.set_span(span);
+            let bits_attr: TokenStream = [TokenTree::Ident(Ident::new("bits", span)), width.into()]
+                .into_iter().collect();
+            let mut bits_attr = Group::new(Delimiter::Bracket, bits_attr);
+            bits_attr.set_span(span);
+            out.push(TokenTree::Punct(Punct::new('#', Spacing::Alone)));
+            out.push(bits_attr.into());
+            vec![TokenTree::Ident(Ident::new(&rust_ty, span))]
+        };
+
+        if vis.is_empty() {
+            out.push(TokenTree::Ident(Ident::new("pub", name.span())));
+        } else {
+            out.extend(vis.iter().cloned());
+        }
+        out.push(TokenTree::Ident(name.clone()));
+        out.push(TokenTree::Punct(colon.clone()));
+        out.extend(member_ty);
+        out.push(TokenTree::Punct(Punct::new(',', Spacing::Alone)));
+    }
+    Ok(out.into_iter().collect())
 }
 
 /// What #[derive(TypeInfo)] gives an enum or union: its size, no fields.

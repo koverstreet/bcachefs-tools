@@ -163,7 +163,7 @@ nest! {
     #[c_packed]
     pub struct bch_extent_crc32 {
         #[c_bitfield]
-        #>[bitfield(u64)]
+        #>[bitfield(u64, ty = u32)]
         pub bits: pub struct bch_extent_crc32_bits {
             #[bits(2)]
             pub type_: u32,
