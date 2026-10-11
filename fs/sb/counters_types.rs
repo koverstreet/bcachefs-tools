@@ -26,5 +26,5 @@ pub struct bch_fs_counters {
 c_default!(bch_fs_counters);
 
 c_extern! {
-    pub fn bch2_counter_reset(arg1: *mut c::bch_fs, arg2: c_uint);
+    pub fn bch2_counter_reset(c: *mut c::bch_fs, idx: c_uint);
 }

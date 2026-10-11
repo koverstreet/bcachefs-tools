@@ -66,7 +66,7 @@ pub struct bch_devs_list {
 }
 
 c_extern! {
-    pub fn bch2_dev_in_fs(arg1: *mut c::bch_sb_handle, arg2: *mut c::bch_sb_handle, arg3: *mut c::bch_opts) -> c_int;
-    pub fn bch2_dev_add(arg1: *mut c::bch_fs, arg2: *const c_char, arg3: *mut c::printbuf) -> c_int;
-    pub fn bch2_dev_resize(arg1: *mut c::bch_fs, arg2: *mut c::bch_dev, arg3: u64, arg4: *mut c::printbuf) -> c_int;
+    pub fn bch2_dev_in_fs(fs: *mut c::bch_sb_handle, sb: *mut c::bch_sb_handle, opts: *mut c::bch_opts) -> c_int;
+    pub fn bch2_dev_add(c: *mut c::bch_fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
+    pub fn bch2_dev_resize(c: *mut c::bch_fs, ca: *mut c::bch_dev, nbuckets: u64, err: *mut c::printbuf) -> c_int;
 }

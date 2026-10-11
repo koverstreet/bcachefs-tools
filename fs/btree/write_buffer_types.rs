@@ -176,5 +176,5 @@ pub struct bch_fs_btree_write_buffer {
 c_default!(bch_fs_btree_write_buffer);
 
 c_extern! {
-    pub fn bch2_btree_write_buffer_flush_sync(arg1: *mut c::btree_trans) -> c_int;
+    pub fn bch2_btree_write_buffer_flush_sync(trans: *mut c::btree_trans) -> c_int;
 }

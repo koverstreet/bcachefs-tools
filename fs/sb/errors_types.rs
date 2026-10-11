@@ -33,5 +33,5 @@ c_typedef! {
 
 c_extern! {
     pub static bch2_sb_error_strs: [*const c_char; 0];
-    pub fn bch2_sb_error_count(arg1: *mut c::bch_fs, arg2: c::bch_sb_error_id);
+    pub fn bch2_sb_error_count(c: *mut c::bch_fs, err: c::bch_sb_error_id);
 }

@@ -33,5 +33,5 @@ pub struct dump_iter {
 c_default!(dump_iter);
 
 c_extern! {
-    pub fn bch2_btree_node_ondisk_to_text(arg1: *mut c::printbuf, arg2: *mut c::bch_fs, arg3: *const c::btree);
+    pub fn bch2_btree_node_ondisk_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, b: *const c::btree);
 }

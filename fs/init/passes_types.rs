@@ -79,7 +79,7 @@ c_extern! {
     pub static bch2_recovery_passes: [*const c_char; 0];
     pub fn bch2_recovery_passes_to_stable(v: u64) -> u64;
     pub fn bch2_recovery_passes_from_stable(v: u64) -> u64;
-    pub fn bch2_recovery_pass_set_no_ratelimit(arg1: *mut c::bch_fs, arg2: c::bch_recovery_pass);
-    pub fn bch2_run_explicit_recovery_pass(arg1: *mut c::bch_fs, arg2: *mut c::printbuf, arg3: c::bch_recovery_pass, arg4: c::bch_run_recovery_pass_flags) -> c_int;
-    pub fn bch2_require_recovery_pass(arg1: *mut c::bch_fs, arg2: *mut c::printbuf, arg3: c::bch_recovery_pass) -> c_int;
+    pub fn bch2_recovery_pass_set_no_ratelimit(c: *mut c::bch_fs, pass: c::bch_recovery_pass);
+    pub fn bch2_run_explicit_recovery_pass(c: *mut c::bch_fs, out: *mut c::printbuf, pass: c::bch_recovery_pass, flags: c::bch_run_recovery_pass_flags) -> c_int;
+    pub fn bch2_require_recovery_pass(c: *mut c::bch_fs, out: *mut c::printbuf, pass: c::bch_recovery_pass) -> c_int;
 }

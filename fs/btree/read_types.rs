@@ -40,5 +40,5 @@ c_typedef! {
 }
 
 c_extern! {
-    pub fn bch2_btree_node_read_done(arg1: *mut c::bch_fs, arg2: *mut c::bch_dev, arg3: *mut c::btree, arg4: *mut c::bch_io_failures, arg5: *mut c::printbuf) -> c_int;
+    pub fn bch2_btree_node_read_done(c: *mut c::bch_fs, ca: *mut c::bch_dev, b: *mut c::btree, failed: *mut c::bch_io_failures, err_msg: *mut c::printbuf) -> c_int;
 }

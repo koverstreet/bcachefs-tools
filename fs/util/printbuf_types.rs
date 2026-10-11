@@ -80,18 +80,18 @@ pub struct printbuf_restore {
 }
 
 c_extern! {
-    pub fn bch2_printbuf_exit(arg1: *mut c::printbuf);
-    pub fn bch2_printbuf_tabstops_reset(arg1: *mut c::printbuf);
-    pub fn bch2_printbuf_tabstop_push(arg1: *mut c::printbuf, arg2: c_uint) -> c_int;
-    pub fn bch2_printbuf_indent_add(arg1: *mut c::printbuf, arg2: c_uint);
-    pub fn bch2_printbuf_indent_sub(arg1: *mut c::printbuf, arg2: c_uint);
-    pub fn bch2_prt_newline(arg1: *mut c::printbuf);
-    pub fn bch2_prt_tab(arg1: *mut c::printbuf);
-    pub fn bch2_prt_tab_rjust(arg1: *mut c::printbuf);
-    pub fn bch2_printbuf_tabstop_align(arg1: *mut c::printbuf);
-    pub fn bch2_prt_bytes_indented(arg1: *mut c::printbuf, arg2: *const c_char, arg3: c_uint);
-    pub fn bch2_prt_human_readable_u64(arg1: *mut c::printbuf, arg2: u64);
-    pub fn bch2_prt_units_u64(arg1: *mut c::printbuf, arg2: u64);
-    pub fn bch2_prt_bitflags(arg1: *mut c::printbuf, arg2: *const *const c_char, arg3: u64);
+    pub fn bch2_printbuf_exit(buf: *mut c::printbuf);
+    pub fn bch2_printbuf_tabstops_reset(buf: *mut c::printbuf);
+    pub fn bch2_printbuf_tabstop_push(buf: *mut c::printbuf, spaces: c_uint) -> c_int;
+    pub fn bch2_printbuf_indent_add(buf: *mut c::printbuf, spaces: c_uint);
+    pub fn bch2_printbuf_indent_sub(buf: *mut c::printbuf, spaces: c_uint);
+    pub fn bch2_prt_newline(buf: *mut c::printbuf);
+    pub fn bch2_prt_tab(out: *mut c::printbuf);
+    pub fn bch2_prt_tab_rjust(buf: *mut c::printbuf);
+    pub fn bch2_printbuf_tabstop_align(buf: *mut c::printbuf);
+    pub fn bch2_prt_bytes_indented(out: *mut c::printbuf, str: *const c_char, count: c_uint);
+    pub fn bch2_prt_human_readable_u64(out: *mut c::printbuf, v: u64);
+    pub fn bch2_prt_units_u64(out: *mut c::printbuf, v: u64);
+    pub fn bch2_prt_bitflags(out: *mut c::printbuf, list: *const *const c_char, flags: u64);
     pub fn rust_prt_bytes(out: *mut c::printbuf, b: *const c_void, n: c_uint);
 }

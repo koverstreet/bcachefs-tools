@@ -74,36 +74,36 @@ c_default!(bkey_inode_buf);
 
 // bkey_ops' methods, Rust's: defined with C's signatures - see rust_c_extern!.
 rust_c_extern! {
-    pub fn bch2_inode_validate(arg1: *mut c::bch_fs, arg2: c::bkey_s_c, arg3: *const c::bkey_validate_context) -> c_int;
-    pub fn bch2_inode_v2_validate(arg1: *mut c::bch_fs, arg2: c::bkey_s_c, arg3: *const c::bkey_validate_context) -> c_int;
-    pub fn bch2_inode_v3_validate(arg1: *mut c::bch_fs, arg2: c::bkey_s_c, arg3: *const c::bkey_validate_context) -> c_int;
-    pub fn bch2_inode_to_text(arg1: *mut c::printbuf, arg2: *mut c::bch_fs, arg3: c::bkey_s_c);
-    pub fn bch2_trigger_inode(arg1: *mut c::btree_trans, arg2: c::btree_trigger_op) -> c_int;
-    pub fn bch2_inode_generation_validate(arg1: *mut c::bch_fs, arg2: c::bkey_s_c, arg3: *const c::bkey_validate_context) -> c_int;
-    pub fn bch2_inode_generation_to_text(arg1: *mut c::printbuf, arg2: *mut c::bch_fs, arg3: c::bkey_s_c);
-    pub fn bch2_inode_alloc_cursor_validate(arg1: *mut c::bch_fs, arg2: c::bkey_s_c, arg3: *const c::bkey_validate_context) -> c_int;
-    pub fn bch2_inode_alloc_cursor_to_text(arg1: *mut c::printbuf, arg2: *mut c::bch_fs, arg3: c::bkey_s_c);
+    pub fn bch2_inode_validate(c: *mut c::bch_fs, k: c::bkey_s_c, from: *const c::bkey_validate_context) -> c_int;
+    pub fn bch2_inode_v2_validate(c: *mut c::bch_fs, k: c::bkey_s_c, from: *const c::bkey_validate_context) -> c_int;
+    pub fn bch2_inode_v3_validate(c: *mut c::bch_fs, k: c::bkey_s_c, from: *const c::bkey_validate_context) -> c_int;
+    pub fn bch2_inode_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, k: c::bkey_s_c);
+    pub fn bch2_trigger_inode(trans: *mut c::btree_trans, op: c::btree_trigger_op) -> c_int;
+    pub fn bch2_inode_generation_validate(c: *mut c::bch_fs, k: c::bkey_s_c, from: *const c::bkey_validate_context) -> c_int;
+    pub fn bch2_inode_generation_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, k: c::bkey_s_c);
+    pub fn bch2_inode_alloc_cursor_validate(c: *mut c::bch_fs, k: c::bkey_s_c, from: *const c::bkey_validate_context) -> c_int;
+    pub fn bch2_inode_alloc_cursor_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, k: c::bkey_s_c);
 }
 
 c_extern! {
-    pub fn bch2_inode_pack(arg1: *mut c::bch_fs, arg2: *mut c::bkey_inode_buf, arg3: *const c::bch_inode_unpacked);
-    pub fn bch2_inode_unpack(arg1: *mut c::bch_fs, arg2: c::bkey_s_c, arg3: *mut c::bch_inode_unpacked);
-    pub fn bch2_inode_to_v3(arg1: *mut c::btree_trans, arg2: *mut c::bkey_i) -> *mut c::bkey_i;
-    pub fn bch2_inode_unpacked_to_text(arg1: *mut c::printbuf, arg2: *const c::bch_inode_unpacked);
-    pub fn __bch2_inode_peek(arg1: *mut c::btree_trans, arg2: *mut c::btree_iter, arg3: *mut c::bch_inode_unpacked, arg4: c::subvol_inum, arg5: c_uint, arg6: *const c_char) -> c_int;
-    pub fn bch2_inode_find_by_inum_snapshot(arg1: *mut c::btree_trans, arg2: u64, arg3: u32, arg4: *mut c::bch_inode_unpacked, arg5: c_uint) -> c_int;
-    pub fn bch2_inode_find_by_inum_snapshot2(arg1: *mut c::btree_trans, arg2: c::subvol_inum, arg3: u32, arg4: *mut c::bch_inode_unpacked, arg5: c_uint, arg6: *const c_char) -> c_int;
-    pub fn __bch2_inode_find_by_inum_trans(arg1: *mut c::btree_trans, arg2: c::subvol_inum, arg3: *mut c::bch_inode_unpacked, arg4: *const c_char) -> c_int;
-    pub fn bch2_inode_find_by_inum(arg1: *mut c::bch_fs, arg2: c::subvol_inum, arg3: *mut c::bch_inode_unpacked) -> c_int;
-    pub fn bch2_inode_write_flags(arg1: *mut c::btree_trans, arg2: *mut c::btree_iter, arg3: *mut c::bch_inode_unpacked, arg4: c::btree_iter_update_trigger_flags) -> c_int;
-    pub fn __bch2_fsck_write_inode(arg1: *mut c::btree_trans, arg2: *mut c::bch_inode_unpacked) -> c_int;
-    pub fn bch2_inode_init_early(arg1: *mut c::bch_fs, arg2: *mut c::bch_inode_unpacked);
-    pub fn bch2_inode_init_late(arg1: *mut c::bch_fs, arg2: *mut c::bch_inode_unpacked, arg3: u64, arg4: c::uid_t, arg5: c::gid_t, arg6: c::umode_t, arg7: c::dev_t, arg8: *mut c::bch_inode_unpacked);
-    pub fn bch2_inode_init(arg1: *mut c::bch_fs, arg2: *mut c::bch_inode_unpacked, arg3: c::uid_t, arg4: c::gid_t, arg5: c::umode_t, arg6: c::dev_t, arg7: *mut c::bch_inode_unpacked);
-    pub fn bch2_fs_inode_shard_cpu_init(arg1: *mut c::bch_fs);
+    pub fn bch2_inode_pack(c: *mut c::bch_fs, packed: *mut c::bkey_inode_buf, inode: *const c::bch_inode_unpacked);
+    pub fn bch2_inode_unpack(c: *mut c::bch_fs, k: c::bkey_s_c, unpacked: *mut c::bch_inode_unpacked);
+    pub fn bch2_inode_to_v3(trans: *mut c::btree_trans, k: *mut c::bkey_i) -> *mut c::bkey_i;
+    pub fn bch2_inode_unpacked_to_text(out: *mut c::printbuf, inode: *const c::bch_inode_unpacked);
+    pub fn __bch2_inode_peek(trans: *mut c::btree_trans, iter: *mut c::btree_iter, inode: *mut c::bch_inode_unpacked, inum: c::subvol_inum, flags: c_uint, warn: *const c_char) -> c_int;
+    pub fn bch2_inode_find_by_inum_snapshot(trans: *mut c::btree_trans, inum: u64, snapshot: u32, inode: *mut c::bch_inode_unpacked, flags: c_uint) -> c_int;
+    pub fn bch2_inode_find_by_inum_snapshot2(trans: *mut c::btree_trans, inum: c::subvol_inum, snapshot: u32, inode: *mut c::bch_inode_unpacked, flags: c_uint, warn: *const c_char) -> c_int;
+    pub fn __bch2_inode_find_by_inum_trans(trans: *mut c::btree_trans, inum: c::subvol_inum, inode: *mut c::bch_inode_unpacked, warn: *const c_char) -> c_int;
+    pub fn bch2_inode_find_by_inum(c: *mut c::bch_fs, inum: c::subvol_inum, inode: *mut c::bch_inode_unpacked) -> c_int;
+    pub fn bch2_inode_write_flags(trans: *mut c::btree_trans, iter: *mut c::btree_iter, inode: *mut c::bch_inode_unpacked, flags: c::btree_iter_update_trigger_flags) -> c_int;
+    pub fn __bch2_fsck_write_inode(trans: *mut c::btree_trans, inode: *mut c::bch_inode_unpacked) -> c_int;
+    pub fn bch2_inode_init_early(c: *mut c::bch_fs, inode: *mut c::bch_inode_unpacked);
+    pub fn bch2_inode_init_late(c: *mut c::bch_fs, inode: *mut c::bch_inode_unpacked, now: u64, uid: c::uid_t, gid: c::gid_t, mode: c::umode_t, rdev: c::dev_t, parent: *mut c::bch_inode_unpacked);
+    pub fn bch2_inode_init(c: *mut c::bch_fs, inode: *mut c::bch_inode_unpacked, uid: c::uid_t, gid: c::gid_t, mode: c::umode_t, rdev: c::dev_t, parent: *mut c::bch_inode_unpacked);
+    pub fn bch2_fs_inode_shard_cpu_init(c: *mut c::bch_fs);
     pub fn bch2_shard_inode_numbers_bits_default(nr_cpus: c_uint, fs_size: u64, btree_node_bytes: u64) -> c_uint;
-    pub fn bch2_inode_rm(arg1: *mut c::bch_fs, arg2: c::subvol_inum) -> c_int;
-    pub fn bch2_inode_set_casefold(arg1: *mut c::btree_trans, arg2: c::subvol_inum, arg3: *mut c::bch_inode_unpacked, arg4: c_uint) -> c_int;
-    pub fn bch2_delete_dead_inodes(arg1: *mut c::bch_fs) -> c_int;
-    pub fn bch2_kill_i_generation_keys(arg1: *mut c::bch_fs) -> c_int;
+    pub fn bch2_inode_rm(c: *mut c::bch_fs, inum: c::subvol_inum) -> c_int;
+    pub fn bch2_inode_set_casefold(trans: *mut c::btree_trans, inum: c::subvol_inum, inode: *mut c::bch_inode_unpacked, v: c_uint) -> c_int;
+    pub fn bch2_delete_dead_inodes(c: *mut c::bch_fs) -> c_int;
+    pub fn bch2_kill_i_generation_keys(c: *mut c::bch_fs) -> c_int;
 }

@@ -252,6 +252,6 @@ nest! {
 c_default!(bkey_validate_context);
 
 c_extern! {
-    pub fn bch2_bpos_swab(arg1: *mut cs::bpos);
-    pub fn __bch2_bkey_unpack_key(arg1: *const cs::bkey_format, arg2: *mut cs::bkey, arg3: *const cs::bkey_packed);
+    pub fn bch2_bpos_swab(p: *mut cs::bpos);
+    pub fn __bch2_bkey_unpack_key(format: *const cs::bkey_format, out: *mut cs::bkey, in_: *const cs::bkey_packed);
 }

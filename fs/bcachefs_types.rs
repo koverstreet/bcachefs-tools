@@ -34,8 +34,8 @@ c_enum! {
 
 c_extern! {
     pub fn __bch2_print(c: *mut c::bch_fs, fmt: *const c_char, ...);
-    pub fn bch2_ratelimit_state_init(arg1: *mut c::ratelimit_state);
-    pub fn bch2_ratelimit_suppress(arg1: *mut c::bch_fs, arg2: *mut c::ratelimit_state, arg3: *const c_char) -> bool;
+    pub fn bch2_ratelimit_state_init(rs: *mut c::ratelimit_state);
+    pub fn bch2_ratelimit_suppress(c: *mut c::bch_fs, rs: *mut c::ratelimit_state, func: *const c_char) -> bool;
     pub fn bch2_rust_warn(file: *const c_char, line: c_uint);
-    pub fn __bch2_err_throw(arg1: *mut c::bch_fs, arg2: c_int) -> c_int;
+    pub fn __bch2_err_throw(c: *mut c::bch_fs, err: c_int) -> c_int;
 }

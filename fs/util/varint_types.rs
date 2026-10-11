@@ -9,6 +9,6 @@ use core::ffi::c_int;
 use cstruct_macros::c_extern;
 
 c_extern! {
-    pub fn bch2_varint_encode(arg1: *mut u8, arg2: u64) -> c_int;
-    pub fn bch2_varint_decode(arg1: *const u8, arg2: *const u8, arg3: *mut u64) -> c_int;
+    pub fn bch2_varint_encode(out: *mut u8, v: u64) -> c_int;
+    pub fn bch2_varint_decode(in_: *const u8, end: *const u8, out: *mut u64) -> c_int;
 }

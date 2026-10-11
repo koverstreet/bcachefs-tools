@@ -21,14 +21,14 @@ c_default!(xattr_search_key);
 
 // bkey_ops' methods, Rust's: defined with C's signatures - see rust_c_extern!.
 rust_c_extern! {
-    pub fn bch2_xattr_validate(arg1: *mut c::bch_fs, arg2: c::bkey_s_c, arg3: *const c::bkey_validate_context) -> c_int;
-    pub fn bch2_xattr_to_text(arg1: *mut c::printbuf, arg2: *mut c::bch_fs, arg3: c::bkey_s_c);
+    pub fn bch2_xattr_validate(c: *mut c::bch_fs, k: c::bkey_s_c, from: *const c::bkey_validate_context) -> c_int;
+    pub fn bch2_xattr_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, k: c::bkey_s_c);
 }
 
 c_extern! {
-    pub fn bch2_xattr_get_trans(arg1: *mut c::btree_trans, arg2: *const c::bch_inode_unpacked, arg3: c::subvol_inum, arg4: c_int, arg5: *const c_char, arg6: *mut c_void, arg7: usize) -> c_int;
-    pub fn __bch2_xattr_set(arg1: *mut c::btree_trans, arg2: c::subvol_inum, arg3: *const c::bch_hash_info, arg4: *const c_char, arg5: *const c_void, arg6: usize, arg7: c_int, arg8: c_int) -> c_int;
-    pub fn bch2_xattr_set(arg1: *mut c::btree_trans, arg2: c::subvol_inum, arg3: *mut c::bch_inode_unpacked, arg4: *const c_char, arg5: *const c_void, arg6: usize, arg7: c_int, arg8: c_int) -> c_int;
+    pub fn bch2_xattr_get_trans(trans: *mut c::btree_trans, inode: *const c::bch_inode_unpacked, inum: c::subvol_inum, type_: c_int, name: *const c_char, buffer: *mut c_void, size: usize) -> c_int;
+    pub fn __bch2_xattr_set(trans: *mut c::btree_trans, inum: c::subvol_inum, hash_info: *const c::bch_hash_info, name: *const c_char, value: *const c_void, size: usize, type_: c_int, flags: c_int) -> c_int;
+    pub fn bch2_xattr_set(trans: *mut c::btree_trans, inum: c::subvol_inum, inode: *mut c::bch_inode_unpacked, name: *const c_char, value: *const c_void, size: usize, type_: c_int, flags: c_int) -> c_int;
 }
 
 // For listxattr, as xattr.h has it: kernel only.

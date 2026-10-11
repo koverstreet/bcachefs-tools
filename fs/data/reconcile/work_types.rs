@@ -64,5 +64,5 @@ pub struct opt_change_scope {
 c_default!(opt_change_scope);
 
 c_extern! {
-    pub fn bch2_opt_change_scope_exit(arg1: *mut c::opt_change_scope);
+    pub fn bch2_opt_change_scope_exit(scope: *mut c::opt_change_scope);
 }

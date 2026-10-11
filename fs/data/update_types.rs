@@ -121,5 +121,5 @@ pub struct promote_op {
 c_default!(promote_op);
 
 c_extern! {
-    pub fn bch2_data_update_init(arg1: *mut c::btree_trans, arg2: *mut c::btree_iter, arg3: *mut c::moving_context, arg4: *mut c::data_update, arg5: c::write_point_specifier, arg6: *mut c::bch_inode_opts, arg7: c::data_update_opts, arg8: c::btree_id, arg9: c::bkey_s_c) -> c_int;
+    pub fn bch2_data_update_init(trans: *mut c::btree_trans, iter: *mut c::btree_iter, ctxt: *mut c::moving_context, m: *mut c::data_update, wp: c::write_point_specifier, io_opts: *mut c::bch_inode_opts, data_opts: c::data_update_opts, btree_id: c::btree_id, k: c::bkey_s_c) -> c_int;
 }

@@ -9,5 +9,5 @@ use crate::cstructs::c;
 use cstruct_macros::c_extern;
 
 c_extern! {
-    pub fn bch2_journal_seq_is_blacklisted(arg1: *mut c::bch_fs, arg2: u64, arg3: bool) -> bool;
+    pub fn bch2_journal_seq_is_blacklisted(c: *mut c::bch_fs, seq: u64, dirty: bool) -> bool;
 }

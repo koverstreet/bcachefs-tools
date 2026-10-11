@@ -578,8 +578,8 @@ const RUST_ARGS: &[(&str, &str)] = &[
 ///
 ///   use crate::xattr::bch2_xattr_validate;
 ///   rust_c_extern! {
-///       pub fn bch2_xattr_validate(arg1: *mut c::bch_fs, arg2: c::bkey_s_c,
-///                                  arg3: *const c::bkey_validate_context) -> core::ffi::c_int;
+///       pub fn bch2_xattr_validate(c: *mut c::bch_fs, k: c::bkey_s_c,
+///                                  from: *const c::bkey_validate_context) -> c_int;
 ///   }
 ///
 /// C gets the prototypes, as c_extern!'s. Rust gets each function defined

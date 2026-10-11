@@ -9,6 +9,6 @@ use crate::cstructs::c;
 use cstruct_macros::c_extern;
 
 c_extern! {
-    pub fn bch2_set_btree_clean(arg1: *mut c::bch_fs, arg2: c::btree_id);
-    pub fn bch2_clear_btree_clean(arg1: *mut c::bch_fs, arg2: c::btree_id);
+    pub fn bch2_set_btree_clean(c: *mut c::bch_fs, btree: c::btree_id);
+    pub fn bch2_clear_btree_clean(c: *mut c::bch_fs, btree: c::btree_id);
 }

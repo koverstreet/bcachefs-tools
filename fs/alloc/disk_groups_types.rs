@@ -29,6 +29,6 @@ pub struct bch_disk_groups_cpu {
 c_default!(bch_disk_groups_cpu);
 
 c_extern! {
-    pub fn bch2_disk_path_find(arg1: *mut c::bch_sb_handle, arg2: *const c_char) -> c_int;
-    pub fn bch2_disk_path_find_or_create(arg1: *mut c::bch_sb_handle, arg2: *const c_char) -> c_int;
+    pub fn bch2_disk_path_find(sb: *mut c::bch_sb_handle, name: *const c_char) -> c_int;
+    pub fn bch2_disk_path_find_or_create(sb: *mut c::bch_sb_handle, name: *const c_char) -> c_int;
 }

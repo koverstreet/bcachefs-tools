@@ -9,5 +9,5 @@ use crate::cstructs::c;
 use cstruct_macros::c_extern;
 
 c_extern! {
-    pub fn bch2_journal_entry_to_text(arg1: *mut c::printbuf, arg2: *mut c::bch_fs, arg3: *mut c::jset_entry);
+    pub fn bch2_journal_entry_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, entry: *mut c::jset_entry);
 }

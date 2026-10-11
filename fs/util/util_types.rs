@@ -60,11 +60,11 @@ pub struct memalloc_flags {
 }
 
 c_extern! {
-    pub fn bch2_prt_datetime(arg1: *mut c::printbuf, arg2: c::time64_t);
-    pub fn bch2_strtoull_h(arg1: *const c_char, arg2: *mut c_ulonglong) -> c_int;
-    pub fn bch2_read_flag_list(arg1: *const c_char, arg2: *const *const c_char) -> u64;
-    pub fn bch2_prt_task_backtrace(arg1: *mut c::printbuf, arg2: *mut c::task_struct, arg3: c_uint, arg4: c::gfp_t) -> c_int;
-    pub fn bch2_get_random_u64_below(arg1: u64) -> u64;
+    pub fn bch2_prt_datetime(out: *mut c::printbuf, sec: c::time64_t);
+    pub fn bch2_strtoull_h(cp: *const c_char, res: *mut c_ulonglong) -> c_int;
+    pub fn bch2_read_flag_list(opt: *const c_char, list: *const *const c_char) -> u64;
+    pub fn bch2_prt_task_backtrace(out: *mut c::printbuf, task: *mut c::task_struct, skipnr: c_uint, gfp: c::gfp_t) -> c_int;
+    pub fn bch2_get_random_u64_below(ceil: u64) -> u64;
     pub fn rust_kzalloc_nofail(size: usize) -> *mut c_void;
     pub fn rust_kfree(p: *const c_void);
     pub fn bch2_local_clock() -> u64;

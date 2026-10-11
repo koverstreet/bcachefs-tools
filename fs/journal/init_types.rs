@@ -10,5 +10,5 @@ use core::ffi::{c_int, c_uint};
 use cstruct_macros::c_extern;
 
 c_extern! {
-    pub fn bch2_set_nr_journal_buckets(arg1: *mut c::bch_fs, arg2: *mut c::bch_dev, arg3: c_uint) -> c_int;
+    pub fn bch2_set_nr_journal_buckets(c: *mut c::bch_fs, ca: *mut c::bch_dev, nr: c_uint) -> c_int;
 }

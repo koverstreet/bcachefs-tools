@@ -681,7 +681,7 @@ c_enum! {
 }
 
 c_extern! {
-    pub fn bch2_err_str(arg1: c_int) -> *const c_char;
-    pub fn __bch2_err_matches(arg1: c_int, arg2: c_int) -> bool;
-    pub fn __bch2_err_class(arg1: c_int) -> c_int;
+    pub fn bch2_err_str(err: c_int) -> *const c_char;
+    pub fn __bch2_err_matches(err: c_int, class: c_int) -> bool;
+    pub fn __bch2_err_class(bch_err: c_int) -> c_int;
 }

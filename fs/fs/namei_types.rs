@@ -16,13 +16,13 @@ c_const! { pub const BCH_CREATE_SNAPSHOT: u32 = 1 << 2; }
 c_const! { pub const BCH_CREATE_SNAPSHOT_RO: u32 = 1 << 3; }
 
 c_extern! {
-    pub fn bch2_create_trans(arg1: *mut c::btree_trans, arg2: c::subvol_inum, arg3: *mut c::bch_inode_unpacked, arg4: *mut c::bch_inode_unpacked, arg5: *mut c::bch_subvolume, arg6: *const c::qstr, arg7: c::uid_t, arg8: c::gid_t, arg9: c::umode_t, arg10: c::dev_t, arg11: *mut c::posix_acl, arg12: *mut c::posix_acl, arg13: c::subvol_inum, arg14: c_uint) -> c_int;
-    pub fn bch2_link_trans(arg1: *mut c::btree_trans, arg2: c::subvol_inum, arg3: *mut c::bch_inode_unpacked, arg4: c::subvol_inum, arg5: *mut c::bch_inode_unpacked, arg6: *const c::qstr) -> c_int;
-    pub fn bch2_unlink_trans(arg1: *mut c::btree_trans, arg2: c::subvol_inum, arg3: *mut c::bch_inode_unpacked, arg4: c::subvol_inum, arg5: *mut c::bch_inode_unpacked, arg6: *const c::qstr, arg7: bool) -> c_int;
-    pub fn bch2_rename_trans(arg1: *mut c::btree_trans, arg2: c::subvol_inum, arg3: *mut c::bch_inode_unpacked, arg4: c::subvol_inum, arg5: *mut c::bch_inode_unpacked, arg6: *mut c::bch_inode_unpacked, arg7: *mut c::bch_inode_unpacked, arg8: *const c::qstr, arg9: *const c::qstr, arg10: c::bch_rename_mode, arg11: *mut c::inode_opt_change, arg12: *mut c::inode_opt_change) -> c_int;
-    pub fn bch2_inum_to_path(arg1: *mut c::btree_trans, arg2: c::subvol_inum, arg3: *mut c::printbuf) -> c_int;
-    pub fn bch2_inum_to_path_in_subvol(arg1: *mut c::btree_trans, arg2: c::subvol_inum, arg3: u32, arg4: c_uint, arg5: *mut c::printbuf) -> c_int;
-    pub fn bch2_inum_is_descendant(arg1: *mut c::btree_trans, arg2: c::subvol_inum, arg3: c::subvol_inum) -> c_int;
-    pub fn bch2_inum_snapshot_to_path(arg1: *mut c::btree_trans, arg2: u64, arg3: u32, arg4: *mut c::snapshot_id_list, arg5: *mut c::printbuf) -> c_int;
-    pub fn __bch2_check_dirent_target(arg1: *mut c::btree_trans, arg2: *mut c::btree_iter, arg3: c::bkey_s_c_dirent, arg4: *mut c::bch_inode_unpacked, arg5: bool) -> c_int;
+    pub fn bch2_create_trans(trans: *mut c::btree_trans, dir: c::subvol_inum, dir_u: *mut c::bch_inode_unpacked, new_inode: *mut c::bch_inode_unpacked, new_subvol: *mut c::bch_subvolume, name: *const c::qstr, uid: c::uid_t, gid: c::gid_t, mode: c::umode_t, rdev: c::dev_t, default_acl: *mut c::posix_acl, acl: *mut c::posix_acl, snapshot_src: c::subvol_inum, flags: c_uint) -> c_int;
+    pub fn bch2_link_trans(trans: *mut c::btree_trans, dir: c::subvol_inum, dir_u: *mut c::bch_inode_unpacked, inum: c::subvol_inum, inode_u: *mut c::bch_inode_unpacked, name: *const c::qstr) -> c_int;
+    pub fn bch2_unlink_trans(trans: *mut c::btree_trans, dir: c::subvol_inum, dir_u: *mut c::bch_inode_unpacked, inode: c::subvol_inum, inode_u: *mut c::bch_inode_unpacked, name: *const c::qstr, deleting_subvol: bool) -> c_int;
+    pub fn bch2_rename_trans(trans: *mut c::btree_trans, src_dir: c::subvol_inum, src_dir_u: *mut c::bch_inode_unpacked, dst_dir: c::subvol_inum, dst_dir_u: *mut c::bch_inode_unpacked, src_inode_u: *mut c::bch_inode_unpacked, dst_inode_u: *mut c::bch_inode_unpacked, src_name: *const c::qstr, dst_name: *const c::qstr, mode: c::bch_rename_mode, src_opt_change: *mut c::inode_opt_change, dst_opt_change: *mut c::inode_opt_change) -> c_int;
+    pub fn bch2_inum_to_path(trans: *mut c::btree_trans, inum: c::subvol_inum, out: *mut c::printbuf) -> c_int;
+    pub fn bch2_inum_to_path_in_subvol(trans: *mut c::btree_trans, inum: c::subvol_inum, stop_subvol: u32, flags: c_uint, out: *mut c::printbuf) -> c_int;
+    pub fn bch2_inum_is_descendant(trans: *mut c::btree_trans, inum: c::subvol_inum, ancestor: c::subvol_inum) -> c_int;
+    pub fn bch2_inum_snapshot_to_path(trans: *mut c::btree_trans, inum: u64, snapshot: u32, snapshot_overwrites: *mut c::snapshot_id_list, out: *mut c::printbuf) -> c_int;
+    pub fn __bch2_check_dirent_target(trans: *mut c::btree_trans, dirent_iter: *mut c::btree_iter, d: c::bkey_s_c_dirent, target: *mut c::bch_inode_unpacked, in_fsck: bool) -> c_int;
 }

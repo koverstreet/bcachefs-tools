@@ -20,5 +20,5 @@ c_typedef! {
 }
 
 c_extern! {
-    pub fn bch2_journal_flush_pins(arg1: *mut c::journal, arg2: u64) -> bool;
+    pub fn bch2_journal_flush_pins(j: *mut c::journal, seq_to_flush: u64) -> bool;
 }

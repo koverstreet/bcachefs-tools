@@ -33,5 +33,5 @@ pub struct journal_block {
 c_default!(journal_block);
 
 c_extern! {
-    pub fn bch2_journal_flush(arg1: *mut c::journal) -> c_int;
+    pub fn bch2_journal_flush(j: *mut c::journal) -> c_int;
 }

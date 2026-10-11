@@ -35,7 +35,7 @@ pub struct bkey_ops {
 
 c_extern! {
     pub static bch2_bkey_types: [*const c_char; 0];
-    pub fn bch2_bpos_to_text(arg1: *mut c::printbuf, arg2: c::bpos);
-    pub fn bch2_bkey_to_text(arg1: *mut c::printbuf, arg2: *const c::bkey);
-    pub fn bch2_bkey_val_to_text(arg1: *mut c::printbuf, arg2: *mut c::bch_fs, arg3: c::bkey_s_c);
+    pub fn bch2_bpos_to_text(out: *mut c::printbuf, pos: c::bpos);
+    pub fn bch2_bkey_to_text(out: *mut c::printbuf, k: *const c::bkey);
+    pub fn bch2_bkey_val_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, k: c::bkey_s_c);
 }
