@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro};
+use cstruct_macros::{CStruct, bitfield, c_enum, c_xmacro};
 use nestify::nest;
 
 c_xmacro! {
@@ -119,11 +119,3 @@ pub struct promote_op {
     pub bi_inline_vecs: [c::bio_vec; 0], /* must be last */
 }
 c_default!(promote_op);
-
-c_extern! {
-    pub fn bch2_data_update_init(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
-                                 ctxt: *mut c::moving_context, m: *mut c::data_update,
-                                 wp: c::write_point_specifier, io_opts: *mut c::bch_inode_opts,
-                                 data_opts: c::data_update_opts, btree_id: c::btree_id,
-                                 k: c::bkey_s_c) -> c_int;
-}

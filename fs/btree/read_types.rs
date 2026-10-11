@@ -4,8 +4,8 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use core::ffi::{c_int, c_uint, c_void};
-use cstruct_macros::{CStruct, bitfield, c_extern, c_typedef};
+use core::ffi::{c_uint, c_void};
+use cstruct_macros::{CStruct, bitfield, c_typedef};
 use nestify::nest;
 
 nest! {
@@ -37,10 +37,4 @@ c_default!(btree_read_bio);
 c_typedef! {
     pub type btree_node_scrub_report_fn = Option<unsafe extern "C" fn(priv_: *mut c_void,
                                                                      dev: c_uint, good: bool)>;
-}
-
-c_extern! {
-    pub fn bch2_btree_node_read_done(c: *mut c::bch_fs, ca: *mut c::bch_dev, b: *mut c::btree,
-                                     failed: *mut c::bch_io_failures,
-                                     err_msg: *mut c::printbuf) -> c_int;
 }

@@ -92,6 +92,7 @@ static inline bool track_event_change(struct bch2_time_stats *stats, bool v)
 void bch2_time_stats_reset(struct bch2_time_stats *);
 
 #define TIME_STATS_PRINT_NO_ZEROES	(1U << 0)	/* print nothing if zero count */
+struct seq_buf;
 void bch2_time_stats_to_seq_buf(struct seq_buf *, struct bch2_time_stats *,
 				const char *epoch_name, unsigned int flags);
 void bch2_time_stats_to_json(struct seq_buf *, struct bch2_time_stats *,

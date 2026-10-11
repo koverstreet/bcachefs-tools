@@ -12,8 +12,6 @@ use cstruct_macros::c_extern;
 
 c_extern! {
     pub fn bch2_subvolume_state_set(s: *mut c::bch_subvolume, n: c::bch_subvolume_state);
-    pub fn bch2_subvolume_validate(c: *mut c::bch_fs, k: c::bkey_s_c,
-                                   from: *const c::bkey_validate_context) -> c_int;
     pub fn bch2_subvol_has_children(trans: *mut c::btree_trans, subvol: u32) -> c_int;
     pub fn bch2_subvolume_get(trans: *mut c::btree_trans, subvol: c_uint,
                               inconsistent_if_not_found: bool, s: *mut c::bch_subvolume) -> c_int;

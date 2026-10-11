@@ -5,9 +5,8 @@
 use crate::cstructs::c;
 use crate::cstructs::c::BCH_INODE_FIELDS_v3;
 use crate::types::c_default;
-use core::ffi::c_int;
 use zerocopy::byteorder::little_endian as le;
-use cstruct_macros::{CStruct, c_bitmask, c_extern, c_typedef, c_verbatim};
+use cstruct_macros::{CStruct, c_bitmask, c_typedef, c_verbatim};
 use typeinfo_macros::TypeInfo;
 
 c_typedef! {
@@ -64,8 +63,3 @@ u8 _pad[0 + BCH_INODE_FIELDS_v3()];
     pub _pad: [u8; BKEY_INODE_BUF_XSUM_0],
 }
 c_default!(bkey_inode_buf);
-
-c_extern! {
-    pub fn bch2_delete_dead_inodes(c: *mut c::bch_fs) -> c_int;
-    pub fn bch2_kill_i_generation_keys(c: *mut c::bch_fs) -> c_int;
-}

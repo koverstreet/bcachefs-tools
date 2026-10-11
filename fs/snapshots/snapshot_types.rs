@@ -16,8 +16,6 @@ c_extern! {
     pub fn bch2_snapshot_tree_lookup(trans: *mut c::btree_trans, id: u32,
                                      s: *mut c::bch_snapshot_tree) -> c_int;
     pub fn bch2_snapshot_to_text(out: *mut c::printbuf, s: *const c::bch_snapshot);
-    pub fn bch2_snapshot_validate(c: *mut c::bch_fs, k: c::bkey_s_c,
-                                  from: *const c::bkey_validate_context) -> c_int;
     pub fn bch2_snapshot_state_str(s: c::bch_snapshot_state) -> *const c_char;
     pub fn bch2_snapshot_state_set(s: *mut c::bch_snapshot, n: c::bch_snapshot_state);
     pub fn bch2_snapshot_table_make_room(c: *mut c::bch_fs, id: u32) -> c_int;
@@ -28,18 +26,13 @@ c_extern! {
     pub fn bch2_snapshot_redundant_interior(c: *mut c::bch_fs, id: u32) -> u32;
     pub fn __bch2_snapshot_is_ancestor(trans: *mut c::btree_trans, id: u32, ancestor: u32) -> bool;
     pub fn bch2_snapshot_is_ancestor_early(c: *mut c::bch_fs, id: u32, ancestor: u32) -> bool;
-    pub fn bch2_snapshot_id_list_to_text(out: *mut c::printbuf, s: *mut c::snapshot_id_list);
     pub fn bch2_snapshot_lookup(trans: *mut c::btree_trans, id: u32,
                                 s: *mut c::bch_snapshot) -> c_int;
     pub fn bch2_snapshot_lookup_key(trans: *mut c::btree_trans, id: u32,
                                     k: *mut c::bkey_i_snapshot) -> c_int;
     pub fn bch2_snapshot_node_create(trans: *mut c::btree_trans, parent: u32, new_snapids: *mut u32,
                                      snapshot_subvols: *mut u32, nr_snapids: c_uint) -> c_int;
-    pub fn bch2_check_snapshot_trees(c: *mut c::bch_fs) -> c_int;
-    pub fn bch2_check_snapshots(c: *mut c::bch_fs) -> c_int;
-    pub fn bch2_reconstruct_snapshots(c: *mut c::bch_fs) -> c_int;
     pub fn bch2_snapshot_node_set_deleted(trans: *mut c::btree_trans, id: u32) -> c_int;
-    pub fn bch2_snapshot_node_delete(trans: *mut c::btree_trans, id: u32) -> c_int;
     pub fn bch2_snapshot_node_undelete(trans: *mut c::btree_trans,
                                        u: *mut c::bkey_i_snapshot) -> c_int;
     pub fn bch2_snapshot_accounting_totals(c: *mut c::bch_fs, id: u32, total_keys: *mut u64,

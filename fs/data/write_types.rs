@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{NeBytes, c_default};
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro};
+use cstruct_macros::{CStruct, bitfield, c_enum, c_xmacro};
 use nestify::nest;
 use typeinfo_macros::TypeInfo;
 
@@ -205,8 +205,3 @@ nest! {
     }
 }
 c_default!(bch_write_op);
-
-c_extern! {
-    // CLOSURE_CALLBACK(bch2_write)
-    pub fn bch2_write(ws: *mut c::work_struct);
-}

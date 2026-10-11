@@ -14,7 +14,6 @@ c_extern! {
                                 out: *mut c::printbuf) -> c_int;
     pub fn bch2_fs_emergency_read_only(c: *mut c::bch_fs, out: *mut c::printbuf) -> bool;
     pub fn bch2_fs_read_only(c: *mut c::bch_fs);
-    pub fn bch2_fs_read_write(c: *mut c::bch_fs) -> c_int;
     pub fn bch2_fs_start(c: *mut c::bch_fs) -> c_int;
     pub fn bch2_fs_exit(c: *mut c::bch_fs) -> c_int;
     pub fn bch2_fs_open(devices: *mut c::darray_const_str, opts: *mut c::bch_opts,

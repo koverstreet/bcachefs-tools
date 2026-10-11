@@ -15,6 +15,5 @@ c_extern! {
     pub fn bch2_encrypt(c: *mut c::bch_fs, type_: c_uint, nonce: c::nonce, data: *mut c_void,
                         len: usize) -> c_int;
     pub fn bch2_chacha20(key: *const c::bch_key, nonce: c::nonce, data: *mut c_void, len: usize);
-    pub fn bch2_request_key(sb: *mut c::bch_sb, key: *mut c::bch_key) -> c_int;
     pub fn bch2_revoke_key(sb: *mut c::bch_sb) -> c_int;
 }

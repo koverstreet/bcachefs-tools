@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::ffi::c_char;
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, c_const, c_extern};
+use cstruct_macros::{CStruct, c_const};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
@@ -101,8 +101,3 @@ pub struct bch2_time_stats_quantiles {
     pub quantiles: c::quantiles,
 }
 c_default!(bch2_time_stats_quantiles);
-
-c_extern! {
-    pub fn bch2_time_stats_to_json(out: *mut c::seq_buf, stats: *mut c::bch2_time_stats,
-                                   epoch_name: *const c_char, flags: c_uint);
-}
