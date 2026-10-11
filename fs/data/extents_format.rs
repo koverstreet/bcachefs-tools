@@ -157,24 +157,18 @@ c_enum! {
 }
 
 /* Compressed/uncompressed size are stored biased by 1: */
-nest! {
-    #[repr(C, align(8))]
-    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-    #[c_packed]
-    pub struct bch_extent_crc32 {
-        #[c_bitfield]
-        #>[bitfield(u64, ty = u32)]
-        pub bits: pub struct bch_extent_crc32_bits {
-            type_:                 u2,
-            compressed_size_raw:   u7,
-            uncompressed_size_raw: u7,
-            offset:                u7,
-            unused_raw:            u1,
-            csum_type:             u4,
-            compression_type:      u4,
-            csum:                  u32,
-        },
-    }
+#[bitfield(u64, ty = u32, align = 8)]
+#[derive(CStruct)]
+#[c_packed]
+pub struct bch_extent_crc32 {
+    type_:                 u2,
+    compressed_size_raw:   u7,
+    uncompressed_size_raw: u7,
+    offset:                u7,
+    unused_raw:            u1,
+    csum_type:             u4,
+    compression_type:      u4,
+    csum:                  u32,
 }
 
 c_const! {
@@ -237,38 +231,26 @@ c_const! {
 /*
  * @reservation - pointer hasn't been written to, just reserved
  */
-nest! {
-    #[repr(C, align(8))]
-    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-    #[c_packed]
-    pub struct bch_extent_ptr {
-        #[c_bitfield]
-        #>[bitfield(u64)]
-        pub bits: pub struct bch_extent_ptr_bits {
-            type_:      u1,
-            cached:     u1,
-            unused:     u1,
-            unwritten:  u1,
-            offset:     u44, /* 8 petabytes */
-            dev:        u8,
-            generation: u8,
-        },
-    }
+#[bitfield(u64, align = 8)]
+#[derive(CStruct)]
+#[c_packed]
+pub struct bch_extent_ptr {
+    type_:      u1,
+    cached:     u1,
+    unused:     u1,
+    unwritten:  u1,
+    offset:     u44, /* 8 petabytes */
+    dev:        u8,
+    generation: u8,
 }
 
-nest! {
-    #[repr(C)]
-    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-    pub struct bch_extent_stripe_ptr {
-        #[c_bitfield]
-        #>[bitfield(u64)]
-        pub bits: pub struct bch_extent_stripe_ptr_bits {
-            type_:      u5,
-            block:      u8,
-            redundancy: u4,
-            idx:        u47,
-        },
-    }
+#[bitfield(u64)]
+#[derive(CStruct)]
+pub struct bch_extent_stripe_ptr {
+    type_:      u5,
+    block:      u8,
+    redundancy: u4,
+    idx:        u47,
 }
 
 c_xmacro! {
@@ -284,17 +266,11 @@ c_enum! {
     }
 }
 
-nest! {
-    #[repr(C)]
-    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-    pub struct bch_extent_flags {
-        #[c_bitfield]
-        #>[bitfield(u64)]
-        pub bits: pub struct bch_extent_flags_bits {
-            type_: u7,
-            flags: u57,
-        },
-    }
+#[bitfield(u64)]
+#[derive(CStruct)]
+pub struct bch_extent_flags {
+    type_: u7,
+    flags: u57,
 }
 
 /*

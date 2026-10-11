@@ -3,8 +3,6 @@
 #![allow(non_camel_case_types)]
 
 use cstruct_macros::{bitfield, c_const, c_enum, c_xmacro, CStruct};
-use nestify::nest;
-use typeinfo_macros::TypeInfo;
 
 /*
  * rebalance on disk data structures:
@@ -53,75 +51,57 @@ use typeinfo_macros::TypeInfo;
  *    label change.
  */
 
-nest! {
-    #[repr(C)]
-    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-    pub struct bch_extent_rebalance_v1 {
-        #[c_bitfield]
-        #>[bitfield(u64)]
-        pub bits: pub struct bch_extent_rebalance_v1_bits {
-            type_:                             u6,
-            unused:                            u3,
+#[bitfield(u64)]
+#[derive(CStruct)]
+pub struct bch_extent_rebalance_v1 {
+    type_:                             u6,
+    unused:                            u3,
 
-            promote_target_from_inode:         u1,
-            erasure_code_from_inode:           u1,
-            data_checksum_from_inode:          u1,
-            background_compression_from_inode: u1,
-            data_replicas_from_inode:          u1,
-            background_target_from_inode:      u1,
+    promote_target_from_inode:         u1,
+    erasure_code_from_inode:           u1,
+    data_checksum_from_inode:          u1,
+    background_compression_from_inode: u1,
+    data_replicas_from_inode:          u1,
+    background_target_from_inode:      u1,
 
-            promote_target:                    u16,
-            erasure_code:                      u1,
-            data_checksum:                     u4,
-            data_replicas:                     u4,
-            background_compression:            u8, /* enum bch_compression_opt */
-            background_target:                 u16,
-        },
-    }
+    promote_target:                    u16,
+    erasure_code:                      u1,
+    data_checksum:                     u4,
+    data_replicas:                     u4,
+    background_compression:            u8, /* enum bch_compression_opt */
+    background_target:                 u16,
 }
 
-nest! {
-    #[repr(C)]
-    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-    pub struct bch_extent_reconcile {
-        #[c_bitfield]
-        #>[bitfield(u64)]
-        pub bits: pub struct bch_extent_reconcile_bits {
-            type_:                             u8,
-            unused:                            u2,
-            ptrs_moving:                       u5,
-            hipri:                             u1,
-            pending:                           u1,
-            need_rb:                           u5,
+#[bitfield(u64)]
+#[derive(CStruct)]
+pub struct bch_extent_reconcile {
+    type_:                             u8,
+    unused:                            u2,
+    ptrs_moving:                       u5,
+    hipri:                             u1,
+    pending:                           u1,
+    need_rb:                           u5,
 
-            data_replicas_from_inode:          u1,
-            data_checksum_from_inode:          u1,
-            erasure_code_from_inode:           u1,
-            background_compression_from_inode: u1,
-            background_target_from_inode:      u1,
-            promote_target_from_inode:         u1,
+    data_replicas_from_inode:          u1,
+    data_checksum_from_inode:          u1,
+    erasure_code_from_inode:           u1,
+    background_compression_from_inode: u1,
+    background_target_from_inode:      u1,
+    promote_target_from_inode:         u1,
 
-            data_replicas:                     u3,
-            data_checksum:                     u4,
-            erasure_code:                      u1,
-            background_compression:            u8, /* enum bch_compression_opt */
-            background_target:                 u10,
-            promote_target:                    u10,
-        },
-    }
+    data_replicas:                     u3,
+    data_checksum:                     u4,
+    erasure_code:                      u1,
+    background_compression:            u8, /* enum bch_compression_opt */
+    background_target:                 u10,
+    promote_target:                    u10,
 }
 
-nest! {
-    #[repr(C)]
-    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-    pub struct bch_extent_reconcile_bp {
-        #[c_bitfield]
-        #>[bitfield(u64)]
-        pub bits: pub struct bch_extent_reconcile_bp_bits {
-            type_: u9,
-            idx:   u55,
-        },
-    }
+#[bitfield(u64)]
+#[derive(CStruct)]
+pub struct bch_extent_reconcile_bp {
+    type_: u9,
+    idx:   u55,
 }
 
 c_xmacro! {
