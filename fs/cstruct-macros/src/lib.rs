@@ -351,11 +351,12 @@ fn xmacro(input: TokenStream, recorded: bool) -> TokenStream {
 ///              from outside can be anything
 ///   #[flags]   a bitflags type
 ///
-/// An #[open] or #[flags] type can be a #[bitfield]'s member, as C's
-/// `enum btree_id btree_id:8`: it has the const into_bits() bitfield-struct
-/// converts with, and from_bits() - for #[flags], bitflags' from_bits() is
-/// the checked one, so a member names `from = T::from_bits_retain`. A
-/// #[closed] enum can't convert from bits it may not have a variant for.
+/// Any of them can be a #[bitfield]'s member, as C's `enum btree_id
+/// btree_id:8`: it has the const into_bits() bitfield-struct converts with,
+/// and from_bits() - for #[flags], bitflags' from_bits() is the checked one,
+/// so a member names `from = T::from_bits_retain`. A #[closed] enum's member
+/// only ever holds one of its values, as its type says; from_bits() of
+/// anything else is memory corruption, and panics.
 ///
 /// `_` for the name: an anonymous enum, the constants alone. A variant with
 /// no value is the one before it plus one, as in C.
@@ -445,7 +446,13 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
                 for v in &names {
                     out.push_str(&format!("    {v} = {v},\n"));
                 }
-                out.push_str("}\n");
+                out.push_str(&format!("}}\nimpl {name} {{\n    pub const fn from_bits(v: {repr}) -> Self {{\n        match v {{\n"));
+                for v in &names {
+                    out.push_str(&format!("            x if x == Self::{v} as {repr} => Self::{v},\n"));
+                }
+                out.push_str(&format!(
+                    "            _ => panic!(\"{name}::from_bits(): not a {name}\"),\n        }}\n    }}\n\
+                     pub const fn into_bits(self) -> {repr} {{ self as {repr} }}\n}}\n"));
             }
             CEnumKind::Open => {
                 out.push_str(&format!(
