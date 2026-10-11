@@ -32,6 +32,7 @@ pub struct SIPHASH_KEY {
 
 c_extern! {
     pub fn SipHash_Init(ctx: *mut c::_SIPHASH_CTX, key: *const c::SIPHASH_KEY);
-    pub fn SipHash_Update(ctx: *mut c::_SIPHASH_CTX, rc: c_int, rf: c_int, src: *const c_void, len: usize);
+    pub fn SipHash_Update(ctx: *mut c::_SIPHASH_CTX, rc: c_int, rf: c_int, src: *const c_void,
+                          len: usize);
     pub fn SipHash_End(ctx: *mut c::_SIPHASH_CTX, rc: c_int, rf: c_int) -> u64;
 }

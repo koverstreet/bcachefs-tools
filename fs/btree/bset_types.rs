@@ -175,5 +175,6 @@ pub struct bset_stats {
 c_extern! {
     pub fn bch2_btree_node_iter_init_from_start(iter: *mut c::btree_node_iter, b: *mut c::btree);
     pub fn bch2_btree_node_iter_advance(iter: *mut c::btree_node_iter, b: *mut c::btree);
-    pub fn bch2_btree_node_iter_peek_unpack(iter: *mut c::btree_node_iter, b: *mut c::btree, u: *mut c::bkey) -> c::bkey_s_c;
+    pub fn bch2_btree_node_iter_peek_unpack(iter: *mut c::btree_node_iter, b: *mut c::btree,
+                                            u: *mut c::bkey) -> c::bkey_s_c;
 }

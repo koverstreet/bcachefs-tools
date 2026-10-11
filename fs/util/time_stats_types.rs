@@ -103,5 +103,6 @@ pub struct bch2_time_stats_quantiles {
 c_default!(bch2_time_stats_quantiles);
 
 c_extern! {
-    pub fn bch2_time_stats_to_json(out: *mut c::seq_buf, stats: *mut c::bch2_time_stats, epoch_name: *const c_char, flags: c_uint);
+    pub fn bch2_time_stats_to_json(out: *mut c::seq_buf, stats: *mut c::bch2_time_stats,
+                                   epoch_name: *const c_char, flags: c_uint);
 }

@@ -33,6 +33,8 @@ pub struct progress_indicator {
 c_default!(progress_indicator);
 
 c_extern! {
-    pub fn bch2_progress_init(s: *mut c::progress_indicator, msg: *const c_char, c: *mut c::bch_fs, leaf_btree_id_mask: u64, inner_btree_id_mask: u64);
-    pub fn bch2_progress_update_iter(trans: *mut c::btree_trans, s: *mut c::progress_indicator, iter: *mut c::btree_iter) -> c_int;
+    pub fn bch2_progress_init(s: *mut c::progress_indicator, msg: *const c_char, c: *mut c::bch_fs,
+                              leaf_btree_id_mask: u64, inner_btree_id_mask: u64);
+    pub fn bch2_progress_update_iter(trans: *mut c::btree_trans, s: *mut c::progress_indicator,
+                                     iter: *mut c::btree_iter) -> c_int;
 }

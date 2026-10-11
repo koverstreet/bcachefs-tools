@@ -143,10 +143,12 @@ pub struct disk_reservation {
 }
 
 c_extern! {
-    pub fn rust_bch2_disk_reservation_add(c: *mut c::bch_fs, res: *mut c::disk_reservation, sectors: u64, nr_replicas: c_uint, flags: c_int) -> c_int;
+    pub fn rust_bch2_disk_reservation_add(c: *mut c::bch_fs, res: *mut c::disk_reservation,
+                                          sectors: u64, nr_replicas: c_uint, flags: c_int) -> c_int;
     pub fn rust_bch2_disk_reservation_put(c: *mut c::bch_fs, res: *mut c::disk_reservation);
     pub fn bch2_dev_usage_full_read_fast(ca: *mut c::bch_dev, usage: *mut c::bch_dev_usage_full);
     pub fn bch2_fs_usage_read_short(c: *mut c::bch_fs) -> c::bch_fs_usage_short;
-    pub fn bch2_trans_mark_dev_sb(c: *mut c::bch_fs, ca: *mut c::bch_dev, flags: c::btree_iter_update_trigger_flags) -> c_int;
+    pub fn bch2_trans_mark_dev_sb(c: *mut c::bch_fs, ca: *mut c::bch_dev,
+                                  flags: c::btree_iter_update_trigger_flags) -> c_int;
     pub fn bch2_buckets_nouse_alloc(c: *mut c::bch_fs) -> c_int;
 }

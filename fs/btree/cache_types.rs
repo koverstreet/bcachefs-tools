@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! What Rust calls of btree/cache.h - C gets it as prototypes, in btree/cache_gen.h,
-//! which is generated from this file: see fs/types/lib.rs.
+//! What Rust calls of btree/cache.h - C gets it as prototypes, in
+//! btree/cache_gen.h, which is generated from this file: see fs/types/lib.rs.
 
 #![allow(non_camel_case_types)]
 

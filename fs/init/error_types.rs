@@ -45,7 +45,12 @@ c_default!(bch_fs_errors);
 c_extern! {
     pub fn bch2_fs_inconsistent(c: *mut c::bch_fs, fmt: *const c_char, ...) -> bool;
     pub fn bch2_trans_inconsistent(trans: *mut c::btree_trans, fmt: *const c_char, ...) -> bool;
-    pub fn __bch2_count_fsck_err(c: *mut c::bch_fs, id: c::bch_sb_error_id, msg: *mut c::printbuf) -> bool;
-    pub fn __bch2_fsck_err(c: *mut c::bch_fs, trans: *mut c::btree_trans, pos: c::bpos, flags: c::bch_fsck_flags, err: c::bch_sb_error_id, fmt: *const c_char, ...) -> c_int;
-    pub fn __bch2_bkey_fsck_err(c: *mut c::bch_fs, k: c::bkey_s_c, from: *const c::bkey_validate_context, err: c::bch_sb_error_id, fmt: *const c_char, ...) -> c_int;
+    pub fn __bch2_count_fsck_err(c: *mut c::bch_fs, id: c::bch_sb_error_id,
+                                 msg: *mut c::printbuf) -> bool;
+    pub fn __bch2_fsck_err(c: *mut c::bch_fs, trans: *mut c::btree_trans, pos: c::bpos,
+                           flags: c::bch_fsck_flags, err: c::bch_sb_error_id, fmt: *const c_char,
+                           ...) -> c_int;
+    pub fn __bch2_bkey_fsck_err(c: *mut c::bch_fs, k: c::bkey_s_c,
+                                from: *const c::bkey_validate_context, err: c::bch_sb_error_id,
+                                fmt: *const c_char, ...) -> c_int;
 }

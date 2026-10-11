@@ -32,7 +32,8 @@ c_extern! {
     pub fn bch2_path_put(trans: *mut c::btree_trans, path_idx: c::btree_path_idx_t, intent: bool);
     pub fn __bch2_trans_relock(trans: *mut c::btree_trans, trace: bool) -> c_int;
     pub fn bch2_trans_relock_notrace(trans: *mut c::btree_trans) -> c_int;
-    pub fn __bch2_trans_kmalloc(trans: *mut c::btree_trans, size: usize, ip: c_ulong) -> *mut c_void;
+    pub fn __bch2_trans_kmalloc(trans: *mut c::btree_trans, size: usize,
+                                ip: c_ulong) -> *mut c_void;
     pub fn bch2_trans_unlock(trans: *mut c::btree_trans);
     pub fn bch2_trans_unlock_long(trans: *mut c::btree_trans);
     pub fn bch2_trans_restart_error(trans: *mut c::btree_trans, restart_count: u32) -> !;
@@ -45,9 +46,13 @@ c_extern! {
     pub fn bch2_btree_iter_advance(iter: *mut c::btree_iter) -> bool;
     pub fn bch2_btree_iter_rewind(iter: *mut c::btree_iter) -> bool;
     pub fn bch2_trans_iter_exit(iter: *mut c::btree_iter);
-    pub fn bch2_trans_iter_init_outlined(trans: *mut c::btree_trans, iter: *mut c::btree_iter, btree_id: c::btree_id, pos: c::bpos, flags: c::btree_iter_update_trigger_flags, ip: c_ulong);
+    pub fn bch2_trans_iter_init_outlined(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
+                                         btree_id: c::btree_id, pos: c::bpos,
+                                         flags: c::btree_iter_update_trigger_flags, ip: c_ulong);
     pub fn bch2_trans_copy_iter(dst: *mut c::btree_iter, src: *mut c::btree_iter);
-    pub fn __bch2_trans_node_iter_init(trans: *mut c::btree_trans, iter: *mut c::btree_iter, btree_id: c::btree_id, pos: c::bpos, locks_want: c_uint, depth: c_uint, flags: c::btree_iter_update_trigger_flags);
+    pub fn __bch2_trans_node_iter_init(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
+                                       btree_id: c::btree_id, pos: c::bpos, locks_want: c_uint,
+                                       depth: c_uint, flags: c::btree_iter_update_trigger_flags);
     pub fn bch2_trans_begin(trans: *mut c::btree_trans) -> u32;
     pub fn __bch2_trans_get(c: *mut c::bch_fs, fn_idx: c_uint) -> *mut c::btree_trans;
     pub fn bch2_trans_put(trans: *mut c::btree_trans);

@@ -19,6 +19,8 @@ c_typedef! {
 }
 
 c_extern! {
-    pub fn bch2_journal_ptrs_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, j: *mut c::journal_replay);
-    pub fn bch2_journal_entry_missing_range(c: *mut c::bch_fs, start: u64, end: u64) -> c::u64_range;
+    pub fn bch2_journal_ptrs_to_text(out: *mut c::printbuf, c: *mut c::bch_fs,
+                                     j: *mut c::journal_replay);
+    pub fn bch2_journal_entry_missing_range(c: *mut c::bch_fs, start: u64,
+                                            end: u64) -> c::u64_range;
 }

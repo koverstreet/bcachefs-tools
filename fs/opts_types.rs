@@ -789,21 +789,31 @@ c_extern! {
     pub fn bch2_prt_data_type(out: *mut c::printbuf, t: c::bch_data_type);
     pub fn bch2_prt_compression_type(out: *mut c::printbuf, t: c::bch_compression_type);
     pub fn bch2_prt_str_hash_type(out: *mut c::printbuf, t: c::bch_str_hash_type);
-    pub fn bch2_prt_reconcile_accounting_type(out: *mut c::printbuf, t: c::bch_reconcile_accounting_type);
+    pub fn bch2_prt_reconcile_accounting_type(out: *mut c::printbuf,
+                                              t: c::bch_reconcile_accounting_type);
     pub static bch2_opts_default: c::bch_opts;
     pub static bch2_opt_table: [c::bch_option; 0];
     pub fn bch2_opt_defined_by_id(opts: *const c::bch_opts, id: c::bch_opt_id) -> bool;
     pub fn bch2_opt_get_by_id(opts: *const c::bch_opts, id: c::bch_opt_id) -> u64;
     pub fn bch2_opt_set_by_id(opts: *mut c::bch_opts, id: c::bch_opt_id, v: u64);
     pub fn bch2_opts_from_sb(opts: *mut c::bch_opts, sb: *mut c::bch_sb) -> c_int;
-    pub fn __bch2_opt_set_sb(sb: *mut c::bch_sb, dev_idx: c_int, opt: *const c::bch_option, v: u64, val: *const c_char) -> bool;
-    pub fn bch2_opt_set_sb(c: *mut c::bch_fs, ca: *mut c::bch_dev, opt: *const c::bch_option, v: u64, val: *const c_char) -> bool;
+    pub fn __bch2_opt_set_sb(sb: *mut c::bch_sb, dev_idx: c_int, opt: *const c::bch_option, v: u64,
+                             val: *const c_char) -> bool;
+    pub fn bch2_opt_set_sb(c: *mut c::bch_fs, ca: *mut c::bch_dev, opt: *const c::bch_option,
+                           v: u64, val: *const c_char) -> bool;
     pub fn bch2_opt_lookup(name: *const c_char) -> c_int;
-    pub fn bch2_opt_parse(c: *mut c::bch_fs, opt: *const c::bch_option, val: *const c_char, res: *mut u64, err: *mut c::printbuf) -> c_int;
-    pub fn bch2_opt_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, sb: *mut c::bch_sb, opt: *const c::bch_option, v: u64, flags: c_uint);
-    pub fn bch2_opt_hook_pre_set(c: *mut c::bch_fs, ca: *mut c::bch_dev, inum: u64, id: c::bch_opt_id, v: u64, change: bool, scope: *mut c::opt_change_scope) -> c_int;
-    pub fn bch2_opt_hook_post_set(c: *mut c::bch_fs, ca: *mut c::bch_dev, inum: u64, id: c::bch_opt_id, v: u64);
-    pub fn bch2_parse_mount_opts(c: *mut c::bch_fs, opts: *mut c::bch_opts, parse_later: *mut c::printbuf, options: *mut c_char, ignore_unknown: bool) -> c_int;
+    pub fn bch2_opt_parse(c: *mut c::bch_fs, opt: *const c::bch_option, val: *const c_char,
+                          res: *mut u64, err: *mut c::printbuf) -> c_int;
+    pub fn bch2_opt_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, sb: *mut c::bch_sb,
+                            opt: *const c::bch_option, v: u64, flags: c_uint);
+    pub fn bch2_opt_hook_pre_set(c: *mut c::bch_fs, ca: *mut c::bch_dev, inum: u64,
+                                 id: c::bch_opt_id, v: u64, change: bool,
+                                 scope: *mut c::opt_change_scope) -> c_int;
+    pub fn bch2_opt_hook_post_set(c: *mut c::bch_fs, ca: *mut c::bch_dev, inum: u64,
+                                  id: c::bch_opt_id, v: u64);
+    pub fn bch2_parse_mount_opts(c: *mut c::bch_fs, opts: *mut c::bch_opts,
+                                 parse_later: *mut c::printbuf, options: *mut c_char,
+                                 ignore_unknown: bool) -> c_int;
     pub fn bch2_opt_is_inode_opt(id: c::bch_opt_id) -> bool;
     pub fn bch2_opt_change_unlock(c: *mut c::bch_fs);
     pub fn bch2_opt_change_lock(c: *mut c::bch_fs);
