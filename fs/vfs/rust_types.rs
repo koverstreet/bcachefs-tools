@@ -31,6 +31,7 @@ c_extern! {
     /* vfs/fs.c: */
     pub fn bch2_inode_update_after_write(trans: *mut c::btree_trans, ei: *mut c::bch_inode_info,
                                          bi: *mut c::bch_inode_unpacked, fields: c_uint);
+    #[must_use]
     pub fn bch2_write_inode(c: *mut c::bch_fs, ei: *mut c::bch_inode_info,
                             set: Option<unsafe extern "C" fn(trans: *mut c::btree_trans, ei: *mut c::bch_inode_info, bi: *mut c::bch_inode_unpacked, p: *mut c_void) -> c_int>,
                             p: *mut c_void, fields: c_uint) -> c_int;

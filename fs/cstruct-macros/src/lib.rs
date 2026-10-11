@@ -552,7 +552,10 @@ pub fn c_extern(input: TokenStream) -> TokenStream {
             params.push("...".into());
         }
         let ret = f.ret.as_ref().map(|r| format!(" -> {r}")).unwrap_or_default();
-        decls.push_str(&format!("{}pub fn {}({}){ret};\n", cfg(&f.cfg), f.name, params.join(", ")));
+        let must_use = if f.must_use { "#[must_use] " } else { "" };
+        let cold = if f.cold { "#[cold] " } else { "" };
+        decls.push_str(&format!("{}{must_use}{cold}pub fn {}({}){ret};\n", cfg(&f.cfg), f.name,
+                                params.join(", ")));
     }
     for s in &ex.statics {
         let m = if s.mutable { "mut " } else { "" };

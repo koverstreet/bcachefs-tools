@@ -64,6 +64,7 @@ c_extern! {
                                        set: bool) -> c_int;
     pub fn __bch2_insert_snapshot_whiteouts(trans: *mut c::btree_trans, btree: c::btree_id,
                                             pos: c::bpos, s: *mut c::snapshot_id_list) -> c_int;
+    #[must_use]
     pub fn bch2_trans_update_ip(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
                                 k: *mut c::bkey_i, k_buf_u64s: c_uint,
                                 flags: c::btree_iter_update_trigger_flags, ip: c_ulong) -> c_int;

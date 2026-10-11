@@ -468,7 +468,9 @@ fn rust_int_signed(ty: &str) -> bool {
     last.starts_with('i') || matches!(last, "c_schar" | "c_short" | "c_int" | "c_long" | "c_longlong")
 }
 
-/// A C function Rust calls, from c_extern!.
+/// A C function Rust calls, from c_extern!. #[must_use] is C's
+/// __must_check, #[cold] its __cold, and a return type of ! its __noreturn;
+/// #[c_printf(FMT, ARGS)], C's alone, is its __printf(FMT, ARGS).
 #[derive(Debug)]
 pub struct CFnDecl {
     pub cfg:      Option<Cfg>,
@@ -477,6 +479,9 @@ pub struct CFnDecl {
     pub params:   Vec<(String, String)>,
     pub variadic: bool,
     pub ret:      Option<String>,
+    pub must_use: bool,
+    pub cold:     bool,
+    pub printf:   Option<String>,
 }
 
 /// A C variable Rust uses, from c_extern!. One that isn't `mut` is C's
@@ -932,6 +937,12 @@ struct ItemAttrs {
     c_decl:    Option<String>,
     /// #[c_export] on a fn.
     c_export:  bool,
+    /// #[must_use] on a fn.
+    must_use:  bool,
+    /// #[cold] on a fn.
+    cold:      bool,
+    /// #[c_printf(FMT, ARGS)] on a fn: its arguments.
+    c_printf:  Option<String>,
 }
 
 fn parse_repr(args: &[Tok], into: &mut CRepr) -> Result<(), String> {
@@ -986,6 +997,15 @@ fn item_attrs(toks: &[Tok], mut i: usize) -> Result<(ItemAttrs, usize), String> 
         }
         if matches!(attr, [Tok::Ident(n)] if n == "c_export") {
             a.c_export = true;
+        }
+        if matches!(attr, [Tok::Ident(n), ..] if n == "must_use") {
+            a.must_use = true;
+        }
+        if matches!(attr, [Tok::Ident(n)] if n == "cold") {
+            a.cold = true;
+        }
+        if let Some(args) = attr_args(attr, "c_printf") {
+            a.c_printf = Some(tokens_to_c(args));
         }
         if let Some([Tok::Str(s, _)]) = attr_args(attr, "c") {
             a.c_decl = Some(s.clone());
@@ -1553,7 +1573,8 @@ fn parse_extern(body: &[Tok], cfg: Option<Cfg>) -> Result<CExtern, String> {
                     rest => return Err(format!("c_extern!: fn {name}: {} after the parameters",
                                                tokens_to_rust(rest))),
                 };
-                ex.fns.push(CFnDecl { cfg: a.cfg, name: name.clone(), params, variadic, ret });
+                ex.fns.push(CFnDecl { cfg: a.cfg, name: name.clone(), params, variadic, ret,
+                                      must_use: a.must_use, cold: a.cold, printf: a.c_printf });
             }
             [Tok::Ident(s), rest @ ..] if s == "static" => {
                 let (mutable, rest) = match rest {
@@ -1668,7 +1689,9 @@ pub struct CExport {
 
 /// A #[c_export] fn, at @i, past its attributes: `[pub] [unsafe] [extern
 /// "C"] fn NAME(p: T, ...) [-> R] { ... }`; and the index after it.
-fn parse_export(toks: &[Tok], i: usize, cfg: Option<Cfg>) -> Result<(CExport, usize), String> {
+fn parse_export(toks: &[Tok], i: usize, a: ItemAttrs)
+    -> Result<(CExport, usize), String>
+{
     let mut j = skip_vis(toks, i)?;
     if toks.get(j).is_some_and(|t| t.is_ident("unsafe")) {
         j += 1;
@@ -1712,7 +1735,8 @@ fn parse_export(toks: &[Tok], i: usize, cfg: Option<Cfg>) -> Result<(CExport, us
         rest => return Err(format!("#[c_export] fn {name}: {} after the parameters",
                                    tokens_to_rust(rest))),
     };
-    let f = CFnDecl { cfg, name, params, variadic: false, ret };
+    let f = CFnDecl { cfg: a.cfg, name, params, variadic: false, ret, must_use: a.must_use,
+                      cold: a.cold, printf: a.c_printf };
     let ex = CExtern { cfg: None, fns: vec![f], statics: Vec::new(), export: true };
     Ok((CExport { ex, extern_c, params: rust_params, ret: rust_ret }, skip_group(toks, body)?))
 }
@@ -1735,7 +1759,7 @@ fn push_item(items: &mut Vec<CItem>, mut item: CItem) {
 pub fn parse_c_export(text: &str) -> Result<CExport, String> {
     let toks = tokenize(text)?;
     let (a, j) = item_attrs(&toks, 0)?;
-    let (e, _) = parse_export(&toks, j, a.cfg)?;
+    let (e, _) = parse_export(&toks, j, a)?;
     emit_extern(&e.ex, &|_| None)?;
     Ok(e)
 }
@@ -2141,11 +2165,16 @@ fn emit_extern(ex: &CExtern, kind: &dyn Fn(&str) -> Option<String>) -> Result<St
             params.push("...".into());
         }
         let params = if params.is_empty() { "void".to_string() } else { params.join(", ") };
-        let decl = format!("{}({params})", f.name);
-        let proto = match &f.ret {
+        let must_check = if f.must_use { "__must_check " } else { "" };
+        let decl = format!("{must_check}{}({params})", f.name);
+        let proto = match f.ret.as_deref().map(str::trim) {
             None => format!("void {decl}"),
+            Some("!") => format!("void __noreturn {decl}"),
             Some(r) => c(r, &decl, &format!("fn {}", f.name))?,
         };
+        let printf = f.printf.as_ref().map(|p| format!("__printf({p}) ")).unwrap_or_default();
+        let cold = if f.cold { "__cold " } else { "" };
+        let proto = format!("{printf}{cold}{proto}");
         t.push_str(&under_cfg(&f.cfg, format!("{proto};\n"))?);
     }
     for s in &ex.statics {
@@ -2846,7 +2875,7 @@ pub fn parse_items(src: &str) -> Result<Vec<CItem>, String> {
         }
 
         if a.c_export {
-            let (e, next) = parse_export(&toks, j, a.cfg)?;
+            let (e, next) = parse_export(&toks, j, a)?;
             push_item(&mut out, CItem::Extern(e.ex));
             i = next;
             continue;

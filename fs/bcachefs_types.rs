@@ -33,6 +33,7 @@ c_enum! {
 }
 
 c_extern! {
+    #[c_printf(2, 3)]
     pub fn __bch2_print(c: *mut c::bch_fs, fmt: *const c_char, ...);
     pub fn bch2_ratelimit_state_init(rs: *mut c::ratelimit_state);
     pub fn bch2_ratelimit_suppress(c: *mut c::bch_fs, rs: *mut c::ratelimit_state,

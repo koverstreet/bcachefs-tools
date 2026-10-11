@@ -38,6 +38,7 @@ c_extern! {
     pub fn bch2_trans_unlock_long(trans: *mut c::btree_trans);
     pub fn bch2_trans_restart_error(trans: *mut c::btree_trans, restart_count: u32) -> !;
     pub fn bch2_trans_restart_ip(trans: *mut c::btree_trans, err: c_int, ip: c_ulong) -> c_int;
+    #[must_use]
     pub fn bch2_btree_iter_traverse(iter: *mut c::btree_iter) -> c_int;
     pub fn bch2_btree_iter_peek_node(iter: *mut c::btree_iter) -> *mut c::btree;
     pub fn bch2_btree_iter_peek_max(iter: *mut c::btree_iter, end: *const c::bpos) -> c::bkey_s_c;
