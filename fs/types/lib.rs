@@ -92,7 +92,8 @@ pub const fn field_align<S, F>(_f: fn(*const S) -> *const F) -> u64 {
 /// integer is - on every target, i386's 4-aligned u64 included, since they're
 /// the integer underneath. zerocopy's le::U16..le::U64 are aligned to 1, so a
 /// field of one is placed, and aligns its struct, as no C __le field is.
-/// The same new(), get(), set() and From conversions.
+/// The same new(), get(), set(), From conversions and comparison with the
+/// integer.
 macro_rules! le_int {
     ($($name:ident: $t:ty),*) => { $(
         #[repr(transparent)]
@@ -113,10 +114,25 @@ macro_rules! le_int {
             fn from(v: $name) -> Self { v.get() }
         }
 
+        impl PartialEq<$t> for $name {
+            fn eq(&self, v: &$t) -> bool { self.get() == *v }
+        }
+
         impl core::fmt::Debug for $name {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 self.get().fmt(f)
             }
+        }
+
+        impl core::fmt::LowerHex for $name {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::LowerHex::fmt(&self.get(), f)
+            }
+        }
+
+        #[cfg(feature = "std")]
+        impl zeroize::Zeroize for $name {
+            fn zeroize(&mut self) { self.0.zeroize() }
         }
     )* };
 }
