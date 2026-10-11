@@ -61,8 +61,8 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
         let mut scheduled = ext.recovery_passes_required[0].get();
 
         if passes_to_set != 0 || passes_to_unset != 0 {
-            ext.recovery_passes_required[0] &= !passes_to_unset.to_le();
-            ext.recovery_passes_required[0] |= passes_to_set.to_le();
+            let r = &mut ext.recovery_passes_required[0];
+            r.set((r.get() & !passes_to_unset) | passes_to_set);
             scheduled = ext.recovery_passes_required[0].get();
             fs.write_super_ret()
                 .map_err(|e| anyhow::anyhow!("error writing superblock: {e}"))?;

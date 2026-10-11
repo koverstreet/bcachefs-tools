@@ -463,7 +463,7 @@ fn migrate_fs(
 
     // Set no_default_sb feature — prevents rw mount until migrate-superblock is run
     let sb = unsafe { &mut *(*fs.raw).disk_sb.sb };
-    sb.features[0] |= (1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64).to_le();
+    sb.features[0].set(sb.features[0].get() | (1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64));
     {
         let _lock = fs.sb_lock();
         fs.write_super_ret()
@@ -580,7 +580,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
         let fs_raw = fs.raw;
         let _lock = fs.sb_lock();
         let sb = &mut *(*fs_raw).disk_sb.sb;
-        sb.features[0] &= !(1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64).to_le();
+        sb.features[0].set(sb.features[0].get() & !(1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64));
         // Also update the cached copy — c->sb.features is host-endian
         (*fs_raw).sb.features &= !(1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64);
         fs.write_super_ret()

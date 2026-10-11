@@ -407,7 +407,8 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
 
     // Set small_image feature
     let disk_sb = unsafe { fs.disk_sb_mut() };
-    disk_sb.sb_mut().features[0] |= (1u64 << c::bch_sb_feature::BCH_FEATURE_small_image.0 as u64).to_le();
+    let f = &mut disk_sb.sb_mut().features[0];
+    f.set(f.get() | (1u64 << c::bch_sb_feature::BCH_FEATURE_small_image.0 as u64));
 
     // Resize members_v2 to contain only one device
     let mi: &c::bch_sb_field_members_v2 = disk_sb.field()

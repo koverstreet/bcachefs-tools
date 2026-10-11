@@ -235,7 +235,8 @@ pub fn format(
     let version_threshold =
         u32::from(metadata_version::disk_accounting_big_endian);
     if opts.version > version_threshold {
-        sb.sb_mut().features[0] |= BCH_SB_FEATURES_ALL.to_le();
+        let f = &mut sb.sb_mut().features[0];
+        f.set(f.get() | BCH_SB_FEATURES_ALL);
     }
 
     // Internal UUID (different from user_uuid)

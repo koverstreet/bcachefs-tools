@@ -464,7 +464,7 @@ pub fn set_field<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, field: &'p str, val: &'
         }
         "d_inum" => d.target.d_inum = v.into(),
         _ => {
-            let v = u32::try_from(v).map_err(|_| overflow(4, v))?.to_le();
+            let v = u32::try_from(v).map_err(|_| overflow(4, v))?;
             let s = unsafe { &mut d.target.subvol };
             if field == "d_child_subvol" {
                 s.d_child_subvol = v.into();
