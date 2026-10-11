@@ -73,26 +73,8 @@ void bch2_inode_alloc_cursor_to_text(struct printbuf *, struct bch_fs *, struct 
 
 #include "fs/inode_opts.h"
 
-void bch2_inode_pack(struct bch_fs *, struct bkey_inode_buf *, const struct bch_inode_unpacked *);
-void bch2_inode_unpack(struct bch_fs *, struct bkey_s_c, struct bch_inode_unpacked *);
-struct bkey_i *bch2_inode_to_v3(struct btree_trans *, struct bkey_i *);
-
-void bch2_inode_unpacked_to_text(struct printbuf *, const struct bch_inode_unpacked *);
-
-int __bch2_inode_peek(struct btree_trans *, struct btree_iter *,
-		      struct bch_inode_unpacked *, subvol_inum, unsigned, const char *);
-
 #define bch2_inode_peek(_trans, _iter, _inode, _inum, _flags)			\
 	__bch2_inode_peek(_trans, _iter, _inode, _inum, _flags, __func__)
-
-int bch2_inode_find_by_inum_snapshot(struct btree_trans *, u64, u32,
-				     struct bch_inode_unpacked *, unsigned);
-int bch2_inode_find_by_inum_snapshot2(struct btree_trans *, subvol_inum, u32,
-				      struct bch_inode_unpacked *,
-				      unsigned, const char *);
-
-int __bch2_inode_find_by_inum_trans(struct btree_trans *, subvol_inum,
-				    struct bch_inode_unpacked *, const char *);
 
 #define bch2_inode_find_by_inum_trans(_trans, _inum, _inode)			\
 	__bch2_inode_find_by_inum_trans(_trans, _inum, _inode, __func__)
@@ -104,35 +86,12 @@ static inline int bch2_inode_find_by_inum_nowarn_trans(struct btree_trans *trans
 	return __bch2_inode_find_by_inum_trans(trans, inum, inode, NULL);
 }
 
-int bch2_inode_find_by_inum(struct bch_fs *, subvol_inum,
-			    struct bch_inode_unpacked *);
-
-int bch2_inode_write_flags(struct btree_trans *, struct btree_iter *,
-		     struct bch_inode_unpacked *, enum btree_iter_update_trigger_flags);
-
 static inline int bch2_inode_write(struct btree_trans *trans,
 		     struct btree_iter *iter,
 		     struct bch_inode_unpacked *inode)
 {
 	return bch2_inode_write_flags(trans, iter, inode, 0);
 }
-
-int __bch2_fsck_write_inode(struct btree_trans *, struct bch_inode_unpacked *);
-
-void bch2_inode_init_early(struct bch_fs *,
-			   struct bch_inode_unpacked *);
-void bch2_inode_init_late(struct bch_fs *, struct bch_inode_unpacked *, u64,
-			  uid_t, gid_t, umode_t, dev_t,
-			  struct bch_inode_unpacked *);
-void bch2_inode_init(struct bch_fs *, struct bch_inode_unpacked *,
-		     uid_t, gid_t, umode_t, dev_t,
-		     struct bch_inode_unpacked *);
-
-void bch2_fs_inode_shard_cpu_init(struct bch_fs *);
-unsigned bch2_shard_inode_numbers_bits_default(unsigned nr_cpus, u64 fs_size, u64 btree_node_bytes);
-
-int bch2_inode_rm(struct bch_fs *, subvol_inum);
-
 
 static inline u8 mode_to_type(umode_t mode)
 {
@@ -178,10 +137,6 @@ static inline unsigned bch2_inode_nlink_get(struct bch_inode_unpacked *bi)
 		  ? 0
 		  : bi->bi_nlink + nlink_bias(bi->bi_mode);
 }
-
-int bch2_inode_set_casefold(struct btree_trans *, subvol_inum,
-			    struct bch_inode_unpacked *, unsigned);
-
 
 #include "data/reconcile/trigger.h"
 

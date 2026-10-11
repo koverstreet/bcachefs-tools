@@ -28,8 +28,9 @@
 //!   c_same! { .. }       a Rust type with a C type's layout: checked in C
 //!   c_extern! { .. }     what Rust calls of a C header: C gets the
 //!                        prototypes, which its own must agree with
-//!   #[c_export]          a Rust fn C calls: C gets the prototype, Rust a
-//!                        definition with C's signature, calling the fn
+//!   #[c_export]          a Rust fn C calls: C gets the prototype; Rust,
+//!                        unless it's extern "C", a definition with C's
+//!                        signature, calling the fn
 //!   tagged_union! { .. } a tagged union with a stable representation: C's
 //!                        storage, the tag a Determinant of it, arms from an
 //!                        x-macro list, read as an enum (tagged_union.rs)
@@ -46,7 +47,7 @@ mod cstruct {
     include!("../../types/cstruct.rs");
 }
 use cstruct::{enum_text, expand_enum_list, parse_c_export, parse_cstruct, parse_items, rust_ident,
-              CEnumDef, CEnumKind, CItem, CXEntry, C_EXPORT_ARGS};
+              CEnumDef, CEnumKind, CItem, CXEntry};
 
 mod tagged_union;
 mod xmacro_from_c;
@@ -561,19 +562,21 @@ pub fn c_extern(input: TokenStream) -> TokenStream {
         .parse().unwrap()
 }
 
-/// A Rust fn C calls - bkey_ops' methods:
+/// A Rust fn C calls:
 ///
 ///   #[c_export]
 ///   pub fn bch2_xattr_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>,
 ///                              from: &c::bkey_validate_context) -> c_int { .. }
 ///
 /// C gets the prototype, as c_extern!'s, from the fn's signature - in
-/// foo/bar_gen.h, for a fn in foo/bar.rs: a Rust type in C_EXPORT_ARGS is the
-/// C type it has there - &Opaque<bch_fs> is struct bch_fs * - and any other
-/// is C's own. Rust gets a definition with exactly C's signature, which calls
-/// the fn with each argument transmuted. kCFI checks every indirect call
-/// against a hash of the callee's type, and a fn in Rust's types never hashes
-/// as C's prototype does.
+/// foo/bar_gen.h, for a fn in foo/bar.rs - each Rust type as C's
+/// (cstruct.rs, c_export_type()): &Opaque<bch_fs> is struct bch_fs *,
+/// BkeySC struct bkey_s_c. An extern "C" fn is the symbol C calls, made
+/// #[no_mangle]. Any other is called through a definition with exactly C's
+/// signature, made here, which transmutes what isn't C's type: kCFI checks
+/// every call through a pointer against a hash of the callee's type, and a fn
+/// in Rust's types (&Opaque<bch_fs>, BkeySC) never hashes as C's prototype
+/// does.
 #[proc_macro_attribute]
 pub fn c_export(attr: TokenStream, item: TokenStream) -> TokenStream {
     if !attr.is_empty() {
@@ -588,21 +591,35 @@ pub fn c_export(attr: TokenStream, item: TokenStream) -> TokenStream {
     let sig: TokenStream = sig.into_iter().collect();
     let text = format!("#[c_export] {sig} {{}}").replace("$crate", "crate");
 
-    let (ex, rust_types) = match parse_c_export(&text) {
-        Ok(p) => p,
+    let e = match parse_c_export(&text) {
+        Ok(e) => e,
         Err(e) => return compile_error(&format!("#[c_export]: {e}")),
     };
-    let f = &ex.fns[0];
+    let f = &e.ex.fns[0];
+    let cfg = f.cfg.as_ref().map(|c| format!("#[cfg({})] ", c.to_rust())).unwrap_or_default();
+    let record = format!("{cfg}{}", record(&text, &[]));
+
+    // extern "C": the fn is C's symbol itself
+    if e.extern_c {
+        let mut out: TokenStream = "#[no_mangle]".parse().unwrap();
+        out.extend(item);
+        out.extend(record.parse::<TokenStream>().unwrap());
+        return out;
+    }
 
     let params: Vec<String> = f.params.iter().map(|(n, ty)| format!("{n}: {ty}")).collect();
-    let args: Vec<String> = f.params.iter().zip(&rust_types)
-        .map(|((n, c), r)| match C_EXPORT_ARGS.iter().any(|(_, ca)| ca == c) {
-            true  => format!("::core::mem::transmute::<{c}, {r}>({n})"),
-            false => n.clone(),
+    let args: Vec<String> = f.params.iter().zip(&e.params)
+        .map(|((n, c), r)| match r {
+            Some(r) => format!("::core::mem::transmute::<{c}, {r}>({n})"),
+            None    => n.clone(),
         })
         .collect();
-    let ret = f.ret.as_ref().map(|r| format!(" -> {r}")).unwrap_or_default();
-    let cfg = f.cfg.as_ref().map(|c| format!("#[cfg({})] ", c.to_rust())).unwrap_or_default();
+    let call = format!("self::{}({})", f.name, args.join(", "));
+    let (ret, call) = match (&f.ret, &e.ret) {
+        (Some(c), Some(r)) => (format!(" -> {c}"), format!("::core::mem::transmute::<{r}, {c}>({call})")),
+        (Some(c), None)    => (format!(" -> {c}"), call),
+        (None, _)          => (String::new(), call),
+    };
     let def = format!(
         "{cfg}const _: () = {{\n\
              #[allow(unused_imports)]\n\
@@ -610,12 +627,11 @@ pub fn c_export(attr: TokenStream, item: TokenStream) -> TokenStream {
              #[no_mangle]\n\
              #[allow(unused_unsafe, clippy::transmute_ptr_to_ref)]\n\
              unsafe extern \"C\" fn {name}({params}){ret} {{\n\
-                 unsafe {{ self::{name}({args}) }}\n\
+                 unsafe {{ {call} }}\n\
              }}\n\
          }};\n\
-         {cfg}{record}",
-        name = f.name, params = params.join(", "), args = args.join(", "),
-        record = record(&text, &[]));
+         {record}",
+        name = f.name, params = params.join(", "));
 
     let mut out = item;
     out.extend(def.parse::<TokenStream>().unwrap());

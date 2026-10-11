@@ -164,6 +164,7 @@ mod vfs {
     use core::ffi::c_int;
     use core::mem::ManuallyDrop;
     use core::ptr::NonNull;
+    use cstruct_macros::c_export;
     use crate::bch_err;
     use crate::btree::bkey::{BKEY_U64S, POS_MIN};
     use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
@@ -332,7 +333,7 @@ mod vfs {
     ///
     /// # Safety
     /// The arguments are the VFS's.
-    #[no_mangle]
+    #[c_export]
     pub unsafe extern "C" fn bch2_get_acl(vinode: *mut c::inode, type_: c_int, rcu: bool)
         -> *mut c::posix_acl
     {
@@ -413,7 +414,7 @@ mod vfs {
     ///
     /// # Safety
     /// The arguments are the VFS's.
-    #[no_mangle]
+    #[c_export]
     pub unsafe extern "C" fn bch2_set_acl(
         idmap:  *mut c::mnt_idmap,
         dentry: *mut c::dentry,
@@ -498,7 +499,7 @@ mod vfs {
 
     /// For C's setattr: bch2_acl_chmod(). @new_acl is left as it was if
     /// there's none.
-    #[no_mangle]
+    #[c_export]
     pub extern "C" fn bch2_acl_chmod(
         trans:   &Opaque<c::btree_trans>,
         inum:    c::subvol_inum,

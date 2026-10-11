@@ -50,6 +50,7 @@ use core::ffi::{c_int, c_uint};
 use core::fmt;
 use core::mem::size_of;
 use core::ops::ControlFlow;
+use cstruct_macros::c_export;
 
 const ROOT_SUBVOL_INUM: c::subvol_inum = c::subvol_inum {
     subvol: c::BCACHEFS_ROOT_SUBVOL as u64,
@@ -267,7 +268,7 @@ pub fn create_trans(
 /// # Safety
 /// @name and the ACLs valid for the call; in userspace the ACLs are NULL.
 /// @name is NULL for BCH_CREATE_TMPFILE.
-#[no_mangle]
+#[c_export]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn bch2_create_trans(
     trans:        &Opaque<c::btree_trans>,
@@ -352,7 +353,7 @@ pub fn link_trans(
 ///
 /// # Safety
 /// @name valid for the call.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn bch2_link_trans(
     trans:   &Opaque<c::btree_trans>,
     dir:     c::subvol_inum,
@@ -489,7 +490,7 @@ pub fn unlink_trans(
 ///
 /// # Safety
 /// @name valid for the call.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn bch2_unlink_trans(
     trans:           &Opaque<c::btree_trans>,
     dir:             c::subvol_inum,
@@ -723,7 +724,7 @@ pub fn rename_trans(
 /// # Safety
 /// The names valid for the call; the inodes four different ones, as their
 /// &muts say.
-#[no_mangle]
+#[c_export]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn bch2_rename_trans(
     trans:          &Opaque<c::btree_trans>,
@@ -942,7 +943,7 @@ pub fn inum_to_path(trans: &BtreeTrans<'_>, inum: c::subvol_inum, out: &mut Prin
 
 /// For C's error reporting, ioctls and VFS: bch2_inum_to_path().
 ///
-#[no_mangle]
+#[c_export]
 pub extern "C" fn bch2_inum_to_path(
     trans: &Opaque<c::btree_trans>,
     inum:  c::subvol_inum,
@@ -954,7 +955,7 @@ pub extern "C" fn bch2_inum_to_path(
 /// For C's ioctls: bch2_inum_to_path_in_subvol() - @inum's path from
 /// subvolume @stop_subvol's root, with INUM_TO_PATH_FAIL_ON_ERR an error if
 /// the walk can't get there.
-#[no_mangle]
+#[c_export]
 pub extern "C" fn bch2_inum_to_path_in_subvol(
     trans:       &Opaque<c::btree_trans>,
     inum:        c::subvol_inum,
@@ -982,7 +983,7 @@ pub fn inum_snapshot_to_path(
 
 /// For C's error reporting and reconcile: bch2_inum_snapshot_to_path(). Its
 /// snapshot list was never used.
-#[no_mangle]
+#[c_export]
 pub extern "C" fn bch2_inum_snapshot_to_path(
     trans:     &Opaque<c::btree_trans>,
     inum:      u64,
@@ -1037,7 +1038,7 @@ pub fn inum_is_descendant(
 }
 
 /// For C's ioctls: bch2_inum_is_descendant() - 1 yes, 0 no.
-#[no_mangle]
+#[c_export]
 pub extern "C" fn bch2_inum_is_descendant(
     trans:    &Opaque<c::btree_trans>,
     inum:     c::subvol_inum,
@@ -1286,7 +1287,7 @@ pub fn check_dirent_target(
 ///
 /// # Safety
 /// @d a dirent from the btree, valid for the call.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn __bch2_check_dirent_target(
     trans:       &Opaque<c::btree_trans>,
     dirent_iter: &mut Opaque<c::btree_iter>,

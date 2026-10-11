@@ -5,8 +5,6 @@
 #include "dirent.h"
 #include "fs/namei_gen.h"
 
-struct posix_acl;
-
 /*
  * Does linking this inode into a directory bump that directory's i_nlink?
  *
@@ -20,55 +18,10 @@ static inline int is_subdir_for_nlink(struct bch_inode_unpacked *inode)
 	return S_ISDIR(inode->bi_mode) && !inode->bi_subvol;
 }
 
-int bch2_create_trans(struct btree_trans *, subvol_inum,
-		      struct bch_inode_unpacked *,
-		      struct bch_inode_unpacked *,
-		      struct bch_subvolume *,
-		      const struct qstr *,
-		      uid_t, gid_t, umode_t, dev_t,
-		      struct posix_acl *,
-		      struct posix_acl *,
-		      subvol_inum, unsigned);
-
-int bch2_link_trans(struct btree_trans *,
-		    subvol_inum, struct bch_inode_unpacked *,
-		    subvol_inum, struct bch_inode_unpacked *,
-		    const struct qstr *);
-
-int bch2_unlink_trans(struct btree_trans *,
-		      subvol_inum, struct bch_inode_unpacked *,
-		      subvol_inum, struct bch_inode_unpacked *,
-		      const struct qstr *, bool);
-
-struct inode_opt_change;
-int bch2_rename_trans(struct btree_trans *,
-		      subvol_inum, struct bch_inode_unpacked *,
-		      subvol_inum, struct bch_inode_unpacked *,
-		      struct bch_inode_unpacked *,
-		      struct bch_inode_unpacked *,
-		      const struct qstr *,
-		      const struct qstr *,
-		      enum bch_rename_mode,
-		      struct inode_opt_change *,
-		      struct inode_opt_change *);
-
 bool bch2_reinherit_attrs(struct bch_inode_unpacked *,
 			  struct bch_inode_unpacked *);
 
-int bch2_inum_to_path(struct btree_trans *, subvol_inum, struct printbuf *);
-
 #define INUM_TO_PATH_FAIL_ON_ERR	(1 << 0)
-
-int bch2_inum_to_path_in_subvol(struct btree_trans *, subvol_inum,
-				u32, unsigned, struct printbuf *);
-int bch2_inum_is_descendant(struct btree_trans *, subvol_inum, subvol_inum);
-int bch2_inum_snapshot_to_path(struct btree_trans *, u64, u32,
-			       snapshot_id_list *, struct printbuf *);
-
-int __bch2_check_dirent_target(struct btree_trans *,
-			       struct btree_iter *,
-			       struct bkey_s_c_dirent,
-			       struct bch_inode_unpacked *, bool);
 
 static inline int dirent_points_to_inode_nowarn(struct bch_fs *c,
 						struct bkey_s_c_dirent d,

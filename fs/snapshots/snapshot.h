@@ -2,6 +2,7 @@
 #ifndef _BCACHEFS_SNAPSHOT_H
 #define _BCACHEFS_SNAPSHOT_H
 #include "snapshots/snapshot_gen.h"
+#include "snapshots/check_snapshots_gen.h"
 
 void bch2_snapshot_tree_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 int bch2_snapshot_tree_validate(struct bch_fs *, struct bkey_s_c,
@@ -382,11 +383,8 @@ int bch2_snapshot_node_create(struct btree_trans *, u32,
 			      u32 *, u32 *, unsigned);
 
 int bch2_check_snapshot_trees(struct bch_fs *);
-int bch2_check_snapshots_trans(struct btree_trans *);
 int bch2_check_snapshots(struct bch_fs *);
 int bch2_reconstruct_snapshots(struct bch_fs *);
-
-int __bch2_check_key_has_snapshot(struct btree_trans *, struct btree_iter *, struct bkey_s_c);
 
 static inline int bch2_check_key_has_snapshot(struct btree_trans *trans,
 					      struct btree_iter *iter,

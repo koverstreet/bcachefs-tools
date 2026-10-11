@@ -24,6 +24,7 @@ use crate::c;
 use core::ffi::{c_int, CStr};
 use core::ops::ControlFlow;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use cstruct_macros::c_export;
 
 #[cfg(kernel)]
 use kernel::prelude::*;
@@ -936,7 +937,7 @@ fn print_perf_result(
     );
 }
 
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn bch2_btree_perf_test(
     raw_fs:     *mut c::bch_fs,
     testname:   *const c_char,

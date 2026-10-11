@@ -65,6 +65,7 @@ use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err};
 use core::fmt;
 use core::mem::size_of;
+use cstruct_macros::c_export;
 
 /// Snapshot node @id's key, None if there's no such node.
 ///
@@ -1235,7 +1236,7 @@ fn check_snapshots_trans(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
 ///
 /// # Safety
 /// @trans is a live transaction, with no attempt in progress.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn bch2_check_snapshots_trans(trans: *mut c::btree_trans) -> core::ffi::c_int {
     let trans = unsafe { BtreeTrans::borrow_raw(trans) };
 
@@ -1462,7 +1463,7 @@ fn key_has_inode_in_snapshot(
 /// Key @k is in a snapshot that's missing or dead: repair it - deleted, or
 /// moved to a live descendant - true if so, for the caller to skip it. With
 /// no @iter - the promote path - it can't be repaired, and is just skipped.
-fn check_key_has_snapshot(
+pub(crate) fn check_key_has_snapshot(
     t:    &TransAttempt<'_, '_>,
     iter: Option<&mut c::btree_iter>,
     k:    BkeySC<'_>,
@@ -1586,7 +1587,7 @@ fn check_key_has_snapshot(
 ///
 /// # Safety
 /// @iter NULL - the promote path - or the iterator @k was read from.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn __bch2_check_key_has_snapshot(
     trans: &crate::util::ffi::Opaque<c::btree_trans>,
     iter:  Option<&mut c::btree_iter>,

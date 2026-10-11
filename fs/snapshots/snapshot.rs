@@ -11,6 +11,7 @@ use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, Tr
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_result, ret_to_result_void, BchError};
 use crate::fs::Fs;
+use crate::snapshots::check_snapshots;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::rcu;
 use crate::util::Printbuf;
@@ -292,8 +293,10 @@ pub fn check_key_has_snapshot(
     if id_state(trans.fs(), k.k.p.snapshot) == c::snapshot_id_state::SNAPSHOT_ID_live {
         return Ok(false);
     }
-    let ret = unsafe { c::__bch2_check_key_has_snapshot(trans.raw(), iter.raw(), k.to_raw()) };
-    Ok(ret_to_result(ret)? > 0)
+    // SAFETY: BtreeIter holds its iterator in an UnsafeCell, and nothing else
+    // has it for the call
+    let iter = unsafe { &mut *iter.raw() };
+    check_snapshots::check_key_has_snapshot(&trans.attempt_in_progress(), Some(iter), k)
 }
 
 /// Snapshot node @id: as bch2_snapshot_lookup(). ENOENT if there's none.

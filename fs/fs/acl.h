@@ -9,19 +9,10 @@ struct posix_acl;
 
 #define BCH_ACL_VERSION	0x0001
 
-#ifndef NO_BCACHEFS_FS
-
-struct posix_acl *bch2_get_acl(struct inode *, int, bool);
-
-int bch2_set_acl(struct mnt_idmap *, struct dentry *, struct posix_acl *, int);
-int bch2_acl_chmod(struct btree_trans *, subvol_inum,
-		   struct bch_inode_unpacked *,
-		   umode_t, struct posix_acl **);
-
-#else
+#ifdef NO_BCACHEFS_FS
 
 static inline int bch2_acl_chmod(struct btree_trans *trans, subvol_inum inum,
-				 struct bch_inode_unpacked *inode,
+				 const struct bch_inode_unpacked *inode,
 				 umode_t mode,
 				 struct posix_acl **new_acl)
 {

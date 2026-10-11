@@ -28,40 +28,9 @@ static inline unsigned xattr_val_u64s(unsigned name_len, unsigned val_len)
 #define X_SEARCH(_type, _name, _len) ((struct xattr_search_key)	\
 	{ .type = _type, .name = QSTR_INIT(_name, _len) })
 
-
-int bch2_xattr_get_trans(struct btree_trans *, const struct bch_inode_unpacked *,
-			 subvol_inum, int, const char *, void *, size_t);
-
-int __bch2_xattr_set(struct btree_trans *, subvol_inum,
-		     const struct bch_hash_info *,
-		     const char *, const void *, size_t, int, int);
-
-int bch2_xattr_set(struct btree_trans *, subvol_inum,
-		   struct bch_inode_unpacked *,
-		   const char *, const void *, size_t, int, int);
-
 #ifndef NO_BCACHEFS_FS
 
-ssize_t bch2_xattr_list(struct dentry *, char *, size_t);
-
 extern const struct xattr_handler * const bch2_xattr_handlers[];
-
-
-int bch2_xattr_get_handler(const struct xattr_handler *, struct dentry *,
-			   struct inode *, const char *, void *, size_t);
-int bch2_xattr_set_handler(const struct xattr_handler *, struct mnt_idmap *,
-			   struct dentry *, struct inode *, const char *,
-			   const void *, size_t, int);
-int bch2_xattr_bcachefs_get(const struct xattr_handler *, struct dentry *,
-			    struct inode *, const char *, void *, size_t);
-int bch2_xattr_bcachefs_set(const struct xattr_handler *, struct mnt_idmap *,
-			    struct dentry *, struct inode *, const char *,
-			    const void *, size_t, int);
-int bch2_xattr_bcachefs_get_effective(const struct xattr_handler *, struct dentry *,
-				      struct inode *, const char *, void *, size_t);
-int bch2_xattr_bcachefs_set_effective(const struct xattr_handler *, struct mnt_idmap *,
-				      struct dentry *, struct inode *, const char *,
-				      const void *, size_t, int);
 
 /* For listxattr - fs/xattr.c: */
 const char *bch2_xattr_list_prefix(unsigned, struct dentry *);

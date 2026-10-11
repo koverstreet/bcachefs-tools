@@ -233,7 +233,7 @@ fn copy_out(buffer: Option<&mut [u8]>, v: &[u8]) -> Result<usize, BchError> {
 ///
 /// # Safety
 /// @name NUL terminated, @buffer NULL or valid for @size.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn bch2_xattr_get_trans(
     trans:  &Opaque<c::btree_trans>,
     inode:  &c::bch_inode_unpacked,
@@ -302,7 +302,7 @@ pub fn set_key(
 ///
 /// # Safety
 /// @name NUL terminated, @value valid for @size.
-#[no_mangle]
+#[c_export]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn __bch2_xattr_set(
     trans:     &Opaque<c::btree_trans>,
@@ -380,7 +380,7 @@ pub fn set(
 ///
 /// # Safety
 /// @name NUL terminated, @value NULL or valid for @size.
-#[no_mangle]
+#[c_export]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn bch2_xattr_set(
     trans: &Opaque<c::btree_trans>,
@@ -462,7 +462,7 @@ mod vfs {
     ///
     /// # Safety
     /// The arguments are the VFS's.
-    #[no_mangle]
+    #[c_export]
     pub unsafe extern "C" fn bch2_xattr_list(
         dentry: *mut c::dentry,
         buffer: *mut c_char,
@@ -505,7 +505,7 @@ mod vfs {
     ///
     /// # Safety
     /// The arguments are the VFS's.
-    #[no_mangle]
+    #[c_export]
     pub unsafe extern "C" fn bch2_xattr_get_handler(
         handler: *const c::xattr_handler,
         _dentry: *mut c::dentry,
@@ -535,7 +535,7 @@ mod vfs {
     ///
     /// # Safety
     /// The arguments are the VFS's.
-    #[no_mangle]
+    #[c_export]
     #[allow(clippy::too_many_arguments)]
     pub unsafe extern "C" fn bch2_xattr_set_handler(
         handler: *const c::xattr_handler,
@@ -605,7 +605,7 @@ mod vfs {
     ///
     /// # Safety
     /// The arguments are the VFS's.
-    #[no_mangle]
+    #[c_export]
     pub unsafe extern "C" fn bch2_xattr_bcachefs_get(
         _handler: *const c::xattr_handler,
         _dentry:  *mut c::dentry,
@@ -624,7 +624,7 @@ mod vfs {
     ///
     /// # Safety
     /// The arguments are the VFS's.
-    #[no_mangle]
+    #[c_export]
     pub unsafe extern "C" fn bch2_xattr_bcachefs_get_effective(
         _handler: *const c::xattr_handler,
         _dentry:  *mut c::dentry,
@@ -746,7 +746,7 @@ mod vfs {
     ///
     /// # Safety
     /// The arguments are the VFS's.
-    #[no_mangle]
+    #[c_export]
     #[allow(clippy::too_many_arguments)]
     pub unsafe extern "C" fn bch2_xattr_bcachefs_set(
         _handler: *const c::xattr_handler,
@@ -771,7 +771,7 @@ mod vfs {
 
     /// For xattr.c's bcachefs_effective.* handler: ->set(), which does
     /// nothing - xattrs in that namespace are inherited.
-    #[no_mangle]
+    #[c_export]
     #[allow(clippy::too_many_arguments)]
     pub extern "C" fn bch2_xattr_bcachefs_set_effective(
         _handler: *const c::xattr_handler,

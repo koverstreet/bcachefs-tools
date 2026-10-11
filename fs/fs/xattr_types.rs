@@ -4,11 +4,9 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use crate::util::ffi::c_char;
-use core::ffi::{c_int, c_void};
+use cstruct_macros::CStruct;
 #[cfg(not(NO_BCACHEFS_FS))]
-use core::ffi::c_uint;
-use cstruct_macros::{CStruct, c_extern};
+use {core::ffi::c_uint, crate::util::ffi::c_char, cstruct_macros::c_extern};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
@@ -17,18 +15,6 @@ pub struct xattr_search_key {
     pub name: c::qstr,
 }
 c_default!(xattr_search_key);
-
-c_extern! {
-    pub fn bch2_xattr_get_trans(trans: *mut c::btree_trans, inode: *const c::bch_inode_unpacked,
-                                inum: c::subvol_inum, type_: c_int, name: *const c_char,
-                                buffer: *mut c_void, size: usize) -> c_int;
-    pub fn __bch2_xattr_set(trans: *mut c::btree_trans, inum: c::subvol_inum,
-                            hash_info: *const c::bch_hash_info, name: *const c_char,
-                            value: *const c_void, size: usize, type_: c_int, flags: c_int) -> c_int;
-    pub fn bch2_xattr_set(trans: *mut c::btree_trans, inum: c::subvol_inum,
-                          inode: *mut c::bch_inode_unpacked, name: *const c_char,
-                          value: *const c_void, size: usize, type_: c_int, flags: c_int) -> c_int;
-}
 
 // For listxattr, as xattr.h has it: kernel only.
 #[cfg(not(NO_BCACHEFS_FS))]

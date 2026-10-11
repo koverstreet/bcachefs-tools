@@ -2,11 +2,6 @@
 #ifndef _BCACHEFS_TEST_H
 #define _BCACHEFS_TEST_H
 
-struct bch_fs;
-
-#ifdef CONFIG_BCACHEFS_TESTS
-/* implemented in Rust: debug/tests.rs */
-int bch2_btree_perf_test(struct bch_fs *, const char *, u64, unsigned);
-#endif
+#include "debug/tests_gen.h"
 
 #endif /* _BCACHEFS_TEST_H */

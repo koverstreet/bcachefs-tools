@@ -281,7 +281,7 @@ pub fn unpack(fs: &Fs, k: BkeySC<'_>) -> c::bch_inode_unpacked {
 }
 
 /// For C: bch2_inode_unpack().
-#[no_mangle]
+#[c_export]
 pub extern "C" fn bch2_inode_unpack(
     c:        &Opaque<c::bch_fs>,
     k:        BkeySC<'_>,
@@ -370,7 +370,7 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
 }
 
 /// For C: bch2_inode_pack().
-#[no_mangle]
+#[c_export]
 pub extern "C" fn bch2_inode_pack(
     _c:     &Opaque<c::bch_fs>,
     packed: &mut MaybeUninit<c::bkey_inode_buf>,
@@ -486,7 +486,7 @@ pub fn peek<'t>(
 ///
 /// # Safety
 /// @warn NULL or a string, valid for the call.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn __bch2_inode_peek(
     trans: &Opaque<c::btree_trans>,
     iter:  &mut Opaque<c::btree_iter>,
@@ -529,7 +529,7 @@ pub fn find_by_inum_snapshot(
 }
 
 /// For C's VFS and reconcile: bch2_inode_find_by_inum_snapshot().
-#[no_mangle]
+#[c_export]
 pub extern "C" fn bch2_inode_find_by_inum_snapshot(
     trans:    &Opaque<c::btree_trans>,
     inum:     u64,
@@ -547,7 +547,7 @@ pub extern "C" fn bch2_inode_find_by_inum_snapshot(
 ///
 /// # Safety
 /// @warn NULL or a string, valid for the call.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn bch2_inode_find_by_inum_snapshot2(
     trans:    &Opaque<c::btree_trans>,
     inum:     c::subvol_inum,
@@ -581,7 +581,7 @@ pub fn find_by_inum_trans(
 ///
 /// # Safety
 /// @warn NULL or a string, valid for the call.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn __bch2_inode_find_by_inum_trans(
     trans: &Opaque<c::btree_trans>,
     inum:  c::subvol_inum,
@@ -603,7 +603,7 @@ pub fn find_by_inum(fs: &Fs, inum: c::subvol_inum) -> Result<c::bch_inode_unpack
 }
 
 /// For C's VFS and FUSE: bch2_inode_find_by_inum().
-#[no_mangle]
+#[c_export]
 pub extern "C" fn bch2_inode_find_by_inum(
     c:     &Opaque<c::bch_fs>,
     inum:  c::subvol_inum,
@@ -697,7 +697,7 @@ pub fn write_flags<'t>(
 }
 
 /// For C's inode options, and bch2_inode_write(): bch2_inode_write_flags().
-#[no_mangle]
+#[c_export]
 pub extern "C" fn bch2_inode_write_flags(
     trans: &Opaque<c::btree_trans>,
     iter:  &mut Opaque<c::btree_iter>,
@@ -730,7 +730,7 @@ pub fn fsck_write(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked)
 }
 
 /// For C's subvolume repair: __bch2_fsck_write_inode().
-#[no_mangle]
+#[c_export]
 pub extern "C" fn __bch2_fsck_write_inode(
     trans: &Opaque<c::btree_trans>,
     inode: &mut c::bch_inode_unpacked,
@@ -775,7 +775,7 @@ pub fn to_v3<'a, 't>(t: &TransAttempt<'a, 't>, k: &c::bkey_i) -> Result<TransBke
 ///
 /// # Safety
 /// @k a key, its u64s covering its value.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn bch2_inode_to_v3(trans: &Opaque<c::btree_trans>, k: &c::bkey_i)
     -> *mut c::bkey_i
 {
@@ -935,7 +935,7 @@ pub fn unpacked_to_text(out: &mut Printbuf, inode: &c::bch_inode_unpacked) {
 }
 
 /// For C's subvolume, VFS and inode option code: bch2_inode_unpacked_to_text().
-#[no_mangle]
+#[c_export]
 #[cold]
 pub extern "C" fn bch2_inode_unpacked_to_text(out: &mut Printbuf, inode: &c::bch_inode_unpacked) {
     unpacked_to_text(out, inode)
@@ -1013,7 +1013,7 @@ pub fn shard_cpu_init(fs: &Fs) {
 ///
 /// # Safety
 /// @c is a filesystem being started, nothing else using it.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn bch2_fs_inode_shard_cpu_init(c: &Opaque<c::bch_fs>) {
     shard_cpu_init(&Fs::from_c(c))
 }
@@ -1038,7 +1038,7 @@ pub fn shard_bits_default(nr_cpus: u32, fs_size: u64, btree_node_bytes: u64) -> 
 }
 
 /// For C's superblock validate: bch2_shard_inode_numbers_bits_default().
-#[no_mangle]
+#[c_export]
 pub extern "C" fn bch2_shard_inode_numbers_bits_default(
     nr_cpus:          core::ffi::c_uint,
     fs_size:          u64,
@@ -1631,7 +1631,7 @@ pub fn rm(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
 }
 
 /// For C's VFS: bch2_inode_rm().
-#[no_mangle]
+#[c_export]
 pub extern "C" fn bch2_inode_rm(c: &Opaque<c::bch_fs>, inum: c::subvol_inum) -> core::ffi::c_int {
     ret_to_c(rm(&Fs::from_c(c), inum))
 }
@@ -1835,7 +1835,7 @@ pub fn init_early(fs: &Fs, inode: &mut c::bch_inode_unpacked) {
 }
 
 /// For C's VFS, subvolume creation and recovery: bch2_inode_init_early().
-#[no_mangle]
+#[c_export]
 pub extern "C" fn bch2_inode_init_early(
     c:     &Opaque<c::bch_fs>,
     inode: &mut MaybeUninit<c::bch_inode_unpacked>,
@@ -1894,7 +1894,7 @@ pub fn init_late(
 }
 
 /// For C's subvolume creation: bch2_inode_init_late(). @parent may be NULL.
-#[no_mangle]
+#[c_export]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn bch2_inode_init_late(
     c:      &Opaque<c::bch_fs>,
@@ -1926,7 +1926,7 @@ pub fn init(
 }
 
 /// For C's recovery: bch2_inode_init(). @parent may be NULL.
-#[no_mangle]
+#[c_export]
 pub extern "C" fn bch2_inode_init(
     c:      &Opaque<c::bch_fs>,
     inode:  &mut MaybeUninit<c::bch_inode_unpacked>,
@@ -1995,7 +1995,7 @@ pub fn set_casefold(
 }
 
 /// For C's VFS: bch2_inode_set_casefold().
-#[no_mangle]
+#[c_export]
 pub extern "C" fn bch2_inode_set_casefold(
     trans: &Opaque<c::btree_trans>,
     inum:  c::subvol_inum,

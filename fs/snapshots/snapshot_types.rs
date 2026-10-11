@@ -36,11 +36,8 @@ c_extern! {
     pub fn bch2_snapshot_node_create(trans: *mut c::btree_trans, parent: u32, new_snapids: *mut u32,
                                      snapshot_subvols: *mut u32, nr_snapids: c_uint) -> c_int;
     pub fn bch2_check_snapshot_trees(c: *mut c::bch_fs) -> c_int;
-    pub fn bch2_check_snapshots_trans(trans: *mut c::btree_trans) -> c_int;
     pub fn bch2_check_snapshots(c: *mut c::bch_fs) -> c_int;
     pub fn bch2_reconstruct_snapshots(c: *mut c::bch_fs) -> c_int;
-    pub fn __bch2_check_key_has_snapshot(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
-                                         k: c::bkey_s_c) -> c_int;
     pub fn bch2_snapshot_node_set_deleted(trans: *mut c::btree_trans, id: u32) -> c_int;
     pub fn bch2_snapshot_node_delete(trans: *mut c::btree_trans, id: u32) -> c_int;
     pub fn bch2_snapshot_node_undelete(trans: *mut c::btree_trans,

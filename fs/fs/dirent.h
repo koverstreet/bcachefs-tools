@@ -29,25 +29,10 @@ static inline int bch2_utf8_casefold(const struct bch_hash_info *info,
 }
 #endif
 
-struct qstr bch2_dirent_get_name(struct bkey_s_c_dirent);
-
-struct bkey_s_c bch2_dirent_lookup_key(struct btree_trans *, struct btree_iter *,
-				       subvol_inum, const struct bch_hash_info *,
-				       const struct qstr *);
-
-int bch2_dirent_read_target(struct btree_trans *, subvol_inum,
-			    struct bkey_s_c_dirent, subvol_inum *);
-
 static inline unsigned vfs_d_type(unsigned type)
 {
 	return type == DT_SUBVOL ? DT_DIR : type;
 }
-
-int bch2_dirent_lookup(struct bch_fs *, subvol_inum,
-		       const struct bch_hash_info *,
-		       const struct qstr *, subvol_inum *);
-
-int bch2_readdir(struct bch_fs *, subvol_inum, struct bch_hash_info *, struct dir_context *);
 
 /* readdir's VFS end, in C - fs/dirent.c: */
 void bch2_readdir_fault_in(struct dir_context *);

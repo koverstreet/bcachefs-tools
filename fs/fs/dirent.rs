@@ -30,6 +30,7 @@ use crate::util::os_str::{qstr, qstr_name, OsStr, OsStrExt};
 use core::mem::MaybeUninit;
 use core::ffi::c_int;
 use core::ops::ControlFlow;
+use cstruct_macros::c_export;
 
 // ── The hash table ───────────────────────────────────────────────────────
 
@@ -319,7 +320,7 @@ pub fn maybe_casefold<'a>(
 ///
 /// # Safety
 /// @d is a dirent from the btree - valid - as C's callers' are.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn bch2_dirent_get_name(d: c::bkey_s_c_dirent) -> c::qstr {
     let k = c::bkey_s_c::from(d);
     qstr(Dirent::new(BkeySC::from(&k)).expect("a dirent").name())
@@ -348,7 +349,7 @@ pub fn read_target(
 ///
 /// # Safety
 /// @d a dirent from the btree, valid for the call.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn bch2_dirent_read_target(
     trans:  &Opaque<c::btree_trans>,
     dir:    c::subvol_inum,
@@ -415,7 +416,7 @@ pub fn lookup_key<'i, 't>(
 ///
 /// # Safety
 /// @name valid for the call.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn bch2_dirent_lookup_key(
     trans:     &Opaque<c::btree_trans>,
     iter:      &mut Opaque<c::btree_iter>,
@@ -465,7 +466,7 @@ pub fn lookup(
 ///
 /// # Safety
 /// @name valid for the call.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn bch2_dirent_lookup(
     c:         &Opaque<c::bch_fs>,
     dir:       c::subvol_inum,
@@ -578,7 +579,7 @@ pub fn readdir(
 ///
 /// # Safety
 /// @ctx the VFS's (or FUSE's), its actor valid for the call.
-#[no_mangle]
+#[c_export]
 pub unsafe extern "C" fn bch2_readdir(
     c:         &Opaque<c::bch_fs>,
     dir:       c::subvol_inum,
