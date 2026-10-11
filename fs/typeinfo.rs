@@ -691,6 +691,22 @@ mod tests {
         ));
     }
 
+    /// A trailing `[T; 0]` is C's flexible array member, indexable past
+    /// zero; anywhere else it's a zero-length array.
+    #[test]
+    fn flex_array_tail() {
+        let info = <c::bch_ioctl_fsck_offline as TypeInfo>::INFO;
+        let devs = info.fields.iter().find(|f| f.name == "devs").unwrap();
+        assert!(matches!(devs.kind, FieldKind::VarTail { stride: 8, .. }));
+
+        let r = resolve(info, "devs[1]").unwrap();
+        assert_eq!(r.offset, 32);
+        assert!(matches!(
+            r.kind,
+            FieldKind::Int { bytes: 8, endian: Endian::Native, signed: false }
+        ));
+    }
+
     #[test]
     fn scalar_roundtrip() {
         let info = snapshot_info();

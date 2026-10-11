@@ -135,7 +135,7 @@ fn split_top_level(ts: TokenStream, sep: char) -> Vec<Vec<TokenTree>> {
 }
 
 fn named_fields(struct_name: &str, body: TokenStream) -> String {
-    let mut out = String::new();
+    let mut fields = Vec::new();
     for field in split_top_level(body, ',') {
         let mut i = 0;
         skip_attrs_and_vis(&field, &mut i);
@@ -146,10 +146,38 @@ fn named_fields(struct_name: &str, body: TokenStream) -> String {
         if !matches!(field.get(i), Some(TokenTree::Punct(p)) if p.as_char() == ':') {
             continue;
         }
-        i += 1;
-        push_field(&mut out, struct_name, &fname, &fname, &field[i..]);
+        fields.push((fname, field[i + 1..].to_vec()));
+    }
+
+    let mut out = String::new();
+    let n = fields.len();
+    for (i, (fname, ty)) in fields.iter().enumerate() {
+        // [T; 0] last is C's flexible array member, x[]: as long as the value
+        let kind = match flex_tail(ty) {
+            Some(kind) if i + 1 == n => kind,
+            _ => classify(ty),
+        };
+        push_field(&mut out, struct_name, fname, fname, &kind);
     }
     out
+}
+
+/// A flexible array's kind, if @ty is `[T; 0]`: a VarTail of T.
+fn flex_tail(ty: &[TokenTree]) -> Option<String> {
+    let [TokenTree::Group(g)] = ty else { return None };
+    if g.delimiter() != Delimiter::Bracket {
+        return None;
+    }
+    let parts = split_top_level(g.stream(), ';');
+    let [elem, n] = parts.as_slice() else { return None };
+    if tokens_to_string(n) != "0" {
+        return None;
+    }
+    Some(format!(
+        "crate::typeinfo::FieldKind::VarTail {{ \
+             elem: &{}, \
+             stride: ::core::mem::size_of::<{}>() \
+         }}", classify(elem), tokens_to_string(elem)))
 }
 
 fn tuple_fields(struct_name: &str, body: TokenStream) -> String {
@@ -158,13 +186,12 @@ fn tuple_fields(struct_name: &str, body: TokenStream) -> String {
         let mut i = 0;
         skip_attrs_and_vis(&field, &mut i);
         let idx = idx.to_string();
-        push_field(&mut out, struct_name, &idx, &idx, &field[i..]);
+        push_field(&mut out, struct_name, &idx, &idx, &classify(&field[i..]));
     }
     out
 }
 
-fn push_field(out: &mut String, struct_name: &str, fname: &str, faccess: &str, ty: &[TokenTree]) {
-    let kind = classify(ty);
+fn push_field(out: &mut String, struct_name: &str, fname: &str, faccess: &str, kind: &str) {
     out.push_str(&format!(
         "crate::typeinfo::FieldInfo {{ \
              name: \"{fname}\", \
@@ -243,21 +270,8 @@ fn classify(ty: &[TokenTree]) -> String {
     }
     let Some(last_ident) = last_ident else { return OPAQUE.into() };
 
-    if let Some(gs) = generic_start {
-        // `__IncompleteArrayField<T>`: C flexible array member — a variable
-        // tail whose length comes from the value's size at runtime.
-        if last_ident == "__IncompleteArrayField" && ty.len() >= gs + 3 {
-            let inner = &ty[gs + 1..ty.len() - 1];
-            let elem = classify(inner);
-            let elem_ty = tokens_to_string(inner);
-            return format!(
-                "crate::typeinfo::FieldKind::VarTail {{ \
-                     elem: &{elem}, \
-                     stride: ::core::mem::size_of::<{elem_ty}>() \
-                 }}"
-            );
-        }
-        // Option<fn...>, __BindgenUnionField<T>, ...
+    // Option<fn...>, ...
+    if generic_start.is_some() {
         return OPAQUE.into();
     }
 
