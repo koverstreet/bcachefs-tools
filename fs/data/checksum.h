@@ -32,9 +32,6 @@ struct bch_csum bch2_checksum_merge(unsigned, struct bch_csum,
 #define BCH_NONCE_PRIO		cpu_to_le32(4 << 28)
 #define BCH_NONCE_POLY		cpu_to_le32(1 << 31)
 
-struct bch_csum bch2_checksum(struct bch_fs *, unsigned, struct nonce,
-			     const void *, size_t);
-
 /*
  * This is used for various on disk data structures - bch_sb, prio_set, bset,
  * jset: The checksum is _always_ the first field of these structs
@@ -70,15 +67,7 @@ static inline void bch2_csum_err_msg(struct printbuf *out,
 	bch2_csum_to_text(out, type, expected);
 }
 
-void bch2_chacha20(const struct bch_key *, struct nonce, void *, size_t);
-
 int bch2_request_key(struct bch_sb *, struct bch_key *);
-#ifndef __KERNEL__
-int bch2_revoke_key(struct bch_sb *);
-#endif
-
-int bch2_encrypt(struct bch_fs *, unsigned, struct nonce,
-		 void *data, size_t);
 
 struct bch_csum bch2_checksum_bio(struct bch_fs *, unsigned,
 				  struct nonce, struct bio *);

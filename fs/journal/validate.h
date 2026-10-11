@@ -36,8 +36,6 @@ void bch2_journal_entry_err_msg(struct printbuf *, u32,
 int bch2_journal_entry_validate(struct bch_fs *, struct jset *,
 				struct jset_entry *, unsigned, int,
 				struct bkey_validate_context);
-void bch2_journal_entry_to_text(struct printbuf *, struct bch_fs *,
-				struct jset_entry *);
 
 int bch2_jset_validate(struct bch_fs *, struct bch_dev *, struct jset *,
 		       u64, enum bch_validate_flags);

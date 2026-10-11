@@ -35,7 +35,7 @@
 #include "vfs/buffered.h"
 #include "vfs/direct.h"
 #include "vfs/pagecache.h"
-#include "vfs/rust.h"
+#include "vfs/rust_gen.h"
 
 #include <linux/aio.h>
 #include <linux/backing-dev.h>
@@ -3523,7 +3523,7 @@ err:
 	return ret;
 }
 
-/* For Rust - see vfs/rust.h: */
+/* For Rust - see vfs/rust_types.rs: */
 
 struct bch_inode_info *rust_to_bch_ei(struct inode *vinode)
 {

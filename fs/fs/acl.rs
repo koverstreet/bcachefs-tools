@@ -3,7 +3,7 @@
 //! POSIX ACLs (fs/acl.c): stored as xattrs of types POSIX_ACL_ACCESS and
 //! POSIX_ACL_DEFAULT with an empty name, the value a bch_acl_header and its
 //! entries - and converted to and from the VFS's struct posix_acl, which Rust
-//! reaches through vfs/rust.h's shims.
+//! reaches through the shims of vfs/rust_types.rs.
 //!
 //! An inode records whether it has each kind (BCH_INODE_has_access_acl,
 //! _has_default_acl), so that getting the ACL of an inode without one -

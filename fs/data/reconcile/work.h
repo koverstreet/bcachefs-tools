@@ -14,8 +14,6 @@ static inline struct opt_change_scope bch2_opt_change_scope_init(struct bch_fs *
 	return (struct opt_change_scope) { .c = c };
 }
 
-void bch2_opt_change_scope_exit(struct opt_change_scope *);
-
 DEFINE_CLASS(opt_change_scope, struct opt_change_scope,
 	     bch2_opt_change_scope_exit(&_T),
 	     bch2_opt_change_scope_init(c),

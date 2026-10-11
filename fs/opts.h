@@ -32,14 +32,9 @@ extern const char * const __bch2_reconcile_accounting_types[];
 extern const char * const bch2_d_types[];
 extern const char * const bch2_scrub_journal_opts[];
 
-void bch2_prt_jset_entry_type(struct printbuf *,	enum bch_jset_entry_type);
 void bch2_prt_fs_usage_type(struct printbuf *,		enum bch_fs_usage_type);
-void bch2_prt_data_type(struct printbuf *,		enum bch_data_type);
 void bch2_prt_csum_opt(struct printbuf *,		enum bch_csum_opt);
 void bch2_prt_csum_type(struct printbuf *,		enum bch_csum_type);
-void bch2_prt_compression_type(struct printbuf *,	enum bch_compression_type);
-void bch2_prt_str_hash_type(struct printbuf *,		enum bch_str_hash_type);
-void bch2_prt_reconcile_accounting_type(struct printbuf *, enum bch_reconcile_accounting_type);
 void bch2_prt_key_type_error_reason(struct printbuf *,	enum bch_key_type_errors);
 
 static inline const char *bch2_d_type_str(unsigned d_type)
@@ -89,42 +84,24 @@ void bch2_opts_apply(struct bch_opts *, struct bch_opts);
 
 extern const struct bch_option bch2_opt_table[];
 
-bool bch2_opt_defined_by_id(const struct bch_opts *, enum bch_opt_id);
-u64 bch2_opt_get_by_id(const struct bch_opts *, enum bch_opt_id);
-void bch2_opt_set_by_id(struct bch_opts *, enum bch_opt_id, u64);
-
 u64 bch2_opt_from_sb(struct bch_sb *, enum bch_opt_id, int);
-int bch2_opts_from_sb(struct bch_opts *, struct bch_sb *);
-bool __bch2_opt_set_sb(struct bch_sb *, int, const struct bch_option *, u64, const char *);
 
-bool bch2_opt_set_sb(struct bch_fs *, struct bch_dev *, const struct bch_option *, u64, const char *);
-
-int bch2_opt_lookup(const char *);
 int bch2_opt_validate(const struct bch_option *, u64, struct printbuf *);
-int bch2_opt_parse(struct bch_fs *, const struct bch_option *,
-		   const char *, u64 *, struct printbuf *);
 
 #define OPT_SHOW_FULL_LIST	(1 << 0)
 #define OPT_SHOW_MOUNT_STYLE	(1 << 1)
 
-void bch2_opt_to_text(struct printbuf *, struct bch_fs *, struct bch_sb *,
-		      const struct bch_option *, u64, unsigned);
 void bch2_opts_to_text(struct printbuf *,
 		       struct bch_opts,
 		       struct bch_fs *, struct bch_sb *,
 		       struct bch_opts_mask *,
 		       unsigned, unsigned, unsigned);
 
-int bch2_opt_hook_pre_set(struct bch_fs *, struct bch_dev *, u64, enum bch_opt_id, u64, bool,
-			  struct opt_change_scope *);
 int bch2_opts_hooks_pre_set(struct bch_fs *);
-void bch2_opt_hook_post_set(struct bch_fs *, struct bch_dev *, u64, enum bch_opt_id, u64);
 
 int bch2_parse_one_mount_opt(struct bch_fs *, struct bch_opts *,
 			     struct printbuf *, const char *, const char *,
 			     struct printbuf *);
-int bch2_parse_mount_opts(struct bch_fs *, struct bch_opts *, struct printbuf *,
-			  char *, bool);
 
 static inline void bch2_io_opts_fixups(struct bch_inode_opts *opts)
 {
@@ -145,11 +122,7 @@ static inline void bch2_io_opts_fixups(struct bch_inode_opts *opts)
 }
 
 void bch2_inode_opts_get(struct bch_fs *, struct bch_inode_opts *, bool);
-bool bch2_opt_is_inode_opt(enum bch_opt_id);
 void bch2_inode_opts_to_text(struct printbuf *, struct bch_fs *, struct bch_inode_opts);
-
-void bch2_opt_change_unlock(struct bch_fs *);
-void bch2_opt_change_lock(struct bch_fs *);
 
 DEFINE_GUARD(opt_change_lock, struct bch_fs *,
 	     bch2_opt_change_lock(_T),

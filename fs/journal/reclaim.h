@@ -167,8 +167,6 @@ int bch2_journal_reclaim(struct journal *);
 void bch2_journal_reclaim_stop(struct journal *);
 int bch2_journal_reclaim_start(struct journal *);
 
-bool bch2_journal_flush_pins(struct journal *, u64);
-
 static inline bool bch2_journal_flush_all_pins(struct journal *j)
 {
 	return bch2_journal_flush_pins(j, U64_MAX);

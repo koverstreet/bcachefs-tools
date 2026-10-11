@@ -1929,7 +1929,7 @@ void bch2_fs_btree_evicted_size_exit(struct bch_fs *c)
 
 /* Debug / text rendering */
 
-const char *bch2_btree_id_str(enum btree_id btree)
+const char *bch2_btree_id_str(enum btree_id btree)	/* avoid */
 {
 	return btree < BTREE_ID_NR ? __bch2_btree_ids[btree] : "(unknown)";
 }

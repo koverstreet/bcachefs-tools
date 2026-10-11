@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! The VFS's dentry, for Rust's VFS entry points: opaque, as struct inode
-//! is - see inode.rs - and reached through vfs/rust.h's shims. A Dentry is
+//! is - see inode.rs - and reached through vfs/rust_types.rs's shims. A Dentry is
 //! one borrowed for a VFS call, which holds a reference on it for as long as
 //! it runs: that's 'a.
 

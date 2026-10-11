@@ -618,7 +618,6 @@ static inline int bch2_extent_ptr_durability(struct btree_trans *trans, struct e
 }
 
 int bch2_bkey_durability(struct btree_trans *, struct bkey_s_c, struct bkey_durability *);
-struct bkey_durability bch2_bkey_durability_safe(const struct bch_fs *, struct bkey_s_c);
 struct bkey_durability bch2_btree_ptr_durability(struct bch_fs *, struct bkey_s_c);
 
 bool bch2_bkey_can_read(const struct bch_fs *, struct bkey_s_c);
@@ -738,7 +737,6 @@ bch2_extent_has_ptr(const struct bch_fs *, struct bkey_s_c, struct extent_ptr_de
 void bch2_extent_ptr_set_cached(struct bch_fs *, struct bch_inode_opts *,
 				struct bkey_s, struct bch_extent_ptr *);
 
-int bch2_bkey_drop_stale_ptrs(struct btree_trans *, struct btree_iter *, struct bkey_s_c);
 void bch2_bkey_drop_extra_cached_ptrs(struct bch_fs *, struct bch_inode_opts *, struct bkey_s);
 int bch2_bkey_drop_extra_durability(struct btree_trans *, struct bch_inode_opts *,
 				    struct bkey_i *, unsigned, bool);

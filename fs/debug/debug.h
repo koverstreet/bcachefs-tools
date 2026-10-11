@@ -6,9 +6,6 @@
 
 #include "debug/debug_gen.h"
 
-void bch2_btree_node_ondisk_to_text(struct printbuf *, struct bch_fs *,
-				    const struct btree *);
-
 #ifdef CONFIG_DEBUG_FS
 
 ssize_t bch2_debugfs_flush_buf(struct dump_iter *);

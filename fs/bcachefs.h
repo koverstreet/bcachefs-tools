@@ -206,13 +206,7 @@ void bch2_print_str_user(struct bch_fs *, const char *);
 __printf(2, 3)
 void bch2_print_opts(struct bch_opts *, const char *, ...);
 
-__printf(2, 3)
-void __bch2_print(struct bch_fs *c, const char *fmt, ...);
-
-void bch2_ratelimit_state_init(struct ratelimit_state *);
-bool bch2_ratelimit_suppress(struct bch_fs *, struct ratelimit_state *, const char *);
-void bch2_rust_warn(const char *, unsigned);
-
+#include "bcachefs_gen.h"
 
 #define maybe_dev_to_fs(_c)	_Generic((_c),				\
 	struct bch_dev *:	((struct bch_dev *) (_c))->fs,		\
@@ -305,8 +299,6 @@ do {									\
 } while (0)
 
 /* Error tracking: */
-
-int __bch2_err_throw(struct bch_fs *, int);
 
 #define bch_err_throw(_c, _err) __bch2_err_throw(_c, -BCH_ERR_##_err)
 
@@ -474,8 +466,6 @@ static inline void bch2_log_msg_start(struct bch_fs *c, struct printbuf *out)
 {
 	__bch2_log_msg_start(c->name, out);
 }
-
-#include "bcachefs_gen.h"
 
 static inline void bch2_log_msg_exit(struct bch_log_msg *msg)
 {

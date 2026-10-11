@@ -34,11 +34,6 @@ static inline unsigned vfs_d_type(unsigned type)
 	return type == DT_SUBVOL ? DT_DIR : type;
 }
 
-/* readdir's VFS end, in C - fs/dirent.c: */
-void bch2_readdir_fault_in(struct dir_context *);
-int bch2_dir_emit(struct btree_trans *, struct dir_context *,
-		  struct bkey_s_c_dirent, subvol_inum);
-
 void bch2_dirent_init(void);
 void bch2_filldir64_specialization_to_text(struct printbuf *);
 

@@ -525,7 +525,6 @@ static inline void bch2_journal_res_flush(struct journal *j, struct journal_res 
 }
 
 int bch2_journal_flush_seq(struct journal *, u64, unsigned);
-int bch2_journal_flush(struct journal *);
 void bch2_journal_advance_rewind_seq(struct journal *, u64);
 int bch2_journal_add_rewind_range(struct bch_fs *, u64, u64);
 bool bch2_journal_noflush_seq(struct journal *, u64, u64);

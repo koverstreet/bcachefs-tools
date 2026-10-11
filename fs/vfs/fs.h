@@ -151,8 +151,6 @@ static inline void bch2_dentry_set_casefold_ops(struct dentry *dentry, struct in
 static inline void bch2_dir_casefold_changed(struct dentry *dentry) {}
 #endif
 
-int bch2_inode_or_descendents_is_open(struct btree_trans *trans, struct bpos p);
-
 int bch2_fs_quota_transfer(struct bch_fs *,
 			   struct bch_inode_info *,
 			   struct bch_qid,
@@ -174,13 +172,6 @@ static inline int bch2_set_projid(struct bch_fs *c,
 
 struct bch_inode_info *bch2_vfs_inode_get_trans(struct btree_trans *, subvol_inum, const char *);
 struct inode *bch2_vfs_inode_get(struct bch_fs *, subvol_inum, const char *);
-
-void bch2_inode_update_after_write(struct btree_trans *,
-				   struct bch_inode_info *,
-				   struct bch_inode_unpacked *,
-				   unsigned);
-int __must_check bch2_write_inode(struct bch_fs *, struct bch_inode_info *,
-				  inode_set_fn, void *, unsigned);
 
 int bch2_setattr_nonsize(struct mnt_idmap *,
 			 struct bch_inode_info *,

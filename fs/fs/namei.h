@@ -18,9 +18,6 @@ static inline int is_subdir_for_nlink(struct bch_inode_unpacked *inode)
 	return S_ISDIR(inode->bi_mode) && !inode->bi_subvol;
 }
 
-bool bch2_reinherit_attrs(struct bch_inode_unpacked *,
-			  struct bch_inode_unpacked *);
-
 #define INUM_TO_PATH_FAIL_ON_ERR	(1 << 0)
 
 static inline int dirent_points_to_inode_nowarn(struct bch_fs *c,

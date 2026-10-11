@@ -34,20 +34,4 @@ DEFINE_LOCK_GUARD_1(percpu_write_noio, struct percpu_rwsem_noio,
 		    percpu_up_write(&_T->lock->lock); memalloc_flags_restore(_T->flags),
 		    unsigned int flags)
 
-/*
- * Bindgen shims for the Rust memalloc guards (util/locking.rs).
- * memalloc_flags_save/restore are kernel static inlines outside bcachefs, and
- * PF_MEMALLOC_NOIO is a bare #define that doesn't reach Rust; wrap them under
- * bcachefs-owned rust_* names so the flag stays on the C side. Save is
- * per-flag; restore just replays saved flags.
- *
- * These are real (out-of-line) functions, defined in util/locking.c, not static
- * inlines: both the fs and bch_bindgen bindgen passes see this header, and a
- * static inline would have each emit its own wrap_static_fns wrapper for the
- * same symbol - a duplicate at link. A plain declaration binds to one shared
- * definition.
- */
-unsigned int rust_memalloc_noio_save(void);
-void rust_memalloc_flags_restore(unsigned int flags);
-
 #endif /* _BCACHEFS_LOCKING_H */

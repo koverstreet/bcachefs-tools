@@ -56,9 +56,6 @@
 #define SIPHASH_KEY_LENGTH	16
 #define SIPHASH_DIGEST_LENGTH	 8
 
-void	SipHash_Init(SIPHASH_CTX *, const SIPHASH_KEY *);
-void	SipHash_Update(SIPHASH_CTX *, int, int, const void *, size_t);
-u64	SipHash_End(SIPHASH_CTX *, int, int);
 void	SipHash_Final(void *, SIPHASH_CTX *, int, int);
 u64	SipHash(const SIPHASH_KEY *, int, int, const void *, size_t);
 

@@ -36,7 +36,4 @@ bch2_str_hash_opt_to_type(struct bch_fs *c, enum bch_str_hash_opts opt)
 
 #include "fs/str_hash_gen.h"
 
-struct bch_hash_info __bch2_hash_info_init(struct bch_fs *, const struct bch_inode_unpacked *);
-int bch2_hash_info_init(struct bch_fs *, const struct bch_inode_unpacked *, struct bch_hash_info *);
-
 #endif /* _BCACHEFS_STR_HASH_H */

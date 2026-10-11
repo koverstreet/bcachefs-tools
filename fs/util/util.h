@@ -158,7 +158,6 @@ do {									\
 #define prt_bitflags_vector(...)	bch2_prt_bitflags_vector(__VA_ARGS__)
 
 void bch2_pr_time_units(struct printbuf *, u64);
-void bch2_prt_datetime(struct printbuf *, time64_t);
 
 #ifdef __KERNEL__
 static inline void uuid_unparse_lower(u8 *uuid, char *out)
@@ -180,7 +179,6 @@ static inline void pr_uuid(struct printbuf *out, u8 *uuid)
 int bch2_strtoint_h(const char *, int *);
 int bch2_strtouint_h(const char *, unsigned int *);
 int bch2_strtoll_h(const char *, long long *);
-int bch2_strtoull_h(const char *, unsigned long long *);
 int bch2_strtou64_h(const char *, u64 *);
 
 static inline int bch2_strtol_h(const char *cp, long *res)
@@ -253,7 +251,6 @@ static inline int bch2_strtoul_h(const char *cp, long *res)
 bool bch2_is_zero(const void *, size_t);
 
 u64 bch2_read_flag_list_mask(const char *, const char * const[], u64);
-u64 bch2_read_flag_list(const char *, const char * const[]);
 
 void bch2_prt_u64_base2_nbits(struct printbuf *, u64, unsigned);
 void bch2_prt_u64_base2(struct printbuf *, u64);
@@ -416,23 +413,6 @@ do {									\
 	set_current_state(TASK_RUNNING);				\
 	_ret;								\
 })
-
-u64 bch2_get_random_u64_below(u64);
-
-/*
- * For Rust, what it can't call itself - static inlines and macros, in the
- * kernel or in userspace: out of line in util.c.
- */
-u64 bch2_local_clock(void);
-void bch2_cond_resched(void);
-u64 bch2_get_random_u64(void);
-void bch2_ktime_get_coarse_real_ts64(struct timespec64 *);
-bool bch2_queue_work(struct workqueue_struct *, struct work_struct *);
-bool bch2_capable(int);
-#ifdef __KERNEL__
-unsigned bch2_cpumask_local_spread(unsigned);
-unsigned bch2_nr_cpu_ids(void);
-#endif
 
 /*
  * All-ones mask of width @bits, defined for the full range 0..64 — unlike
@@ -920,12 +900,5 @@ static inline u64 system_totalram_bytes(void)
 
 	return i.totalram * i.mem_unit;
 }
-
-/*
- * For Rust: the kernel's Rust allocator API has no __GFP_NOFAIL. Out of line,
- * as util/locking.h's shims are, for the same reason.
- */
-void *rust_kzalloc_nofail(size_t size);
-void rust_kfree(const void *p);
 
 #endif /* _BCACHEFS_UTIL_H */

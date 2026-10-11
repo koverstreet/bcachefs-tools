@@ -63,10 +63,6 @@ do {									\
 
 extern const char * const bch2_data_ops_strs[];
 
-void bch2_moving_ctxt_exit(struct moving_context *);
-void bch2_moving_ctxt_init(struct moving_context *, struct bch_fs *,
-			   struct bch_ratelimit *, struct bch_move_stats *,
-			   struct write_point_specifier, bool);
 struct data_update *bch2_moving_ctxt_next_pending_write(struct moving_context *);
 void bch2_moving_ctxt_do_pending_writes(struct moving_context *);
 void bch2_moving_ctxt_flush_all(struct moving_context *);
@@ -78,9 +74,6 @@ int bch2_move_extent(struct moving_context *,
 		     struct bch_inode_opts *,
 		     struct data_update_opts *,
 		     struct btree_iter *, unsigned, struct bkey_s_c);
-
-int bch2_move_data_btree(struct moving_context *, struct bpos, struct bpos,
-			 move_pred_fn, void *, enum btree_id, unsigned);
 
 int bch2_move_data_phys(struct bch_fs *, unsigned, u64, u64, unsigned,
 			struct bch_ratelimit *, struct bch_move_stats *,

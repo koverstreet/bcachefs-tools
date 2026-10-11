@@ -9,8 +9,6 @@
 
 extern const char * const bch2_inode_opts[];
 
-int bch2_opt_to_inode_opt(int);
-
 /*
  * Options are stored with a +1 bias so that 0 means "not set": 1 is an
  * explicit "none", which is a different thing from inheriting the filesystem
@@ -58,23 +56,11 @@ static inline bool bch2_inode_has_opts(const struct bch_inode_unpacked *inode)
 #define inode_opt_get(_c, _inode, _name)			\
 	((_inode)->bi_##_name ? (_inode)->bi_##_name - 1 : (_c)->opts._name)
 
-struct bch_opts bch2_inode_opts_to_opts(struct bch_inode_unpacked *);
-void bch2_inode_opts_get_inode(struct bch_fs *, struct bch_inode_unpacked *,
-			       struct bch_inode_opts *);
-
-bool bch2_reinherit_attrs(struct bch_inode_unpacked *, struct bch_inode_unpacked *);
-
 int bch2_inode_opt_propagate_start(struct btree_trans *, u64, u32,
 				   struct bkey_i_logged_op_inode_opt_propagate *);
 int bch2_inode_opt_propagate_finish(struct btree_trans *,
 				    struct bkey_i_logged_op_inode_opt_propagate *);
 
-void bch2_inode_opt_change_init(struct inode_opt_change *);
-int bch2_inode_opt_change_trans(struct btree_trans *, struct bch_extent_reconcile *,
-				struct bch_inode_unpacked *, u32, struct inode_opt_change *);
-int bch2_inode_opt_change_finish(struct btree_trans *, struct inode_opt_change *);
-
-int bch2_check_inode_opts_propagated(struct btree_trans *, struct bch_inode_unpacked *);
 int bch2_resume_logged_op_inode_opt_propagate(struct btree_trans *, struct bkey_i *);
 void bch2_logged_op_inode_opt_propagate_to_text(struct printbuf *, struct bch_fs *,
 						struct bkey_s_c);

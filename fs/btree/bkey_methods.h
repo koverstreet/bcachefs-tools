@@ -24,12 +24,8 @@ int __bch2_bkey_validate(struct bch_fs *, struct bkey_s_c,
 			 const struct bkey_validate_context *);
 int bch2_bkey_validate(struct bch_fs *, struct bkey_s_c,
 		       const struct bkey_validate_context *);
-void bch2_bpos_to_text(struct printbuf *, struct bpos);
-void bch2_bkey_to_text(struct printbuf *, const struct bkey *);
 void bch2_val_to_text(struct printbuf *, struct bch_fs *,
 		      struct bkey_s_c);
-void bch2_bkey_val_to_text(struct printbuf *, struct bch_fs *,
-			   struct bkey_s_c);
 
 void bch2_bkey_swab_val(const struct bch_fs *c, struct bkey_s);
 

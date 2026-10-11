@@ -185,8 +185,6 @@ void bch2_btree_node_iter_push(struct btree_node_iter *, struct btree *,
 			      const struct bkey_packed *);
 void bch2_btree_node_iter_init(struct bch_fs *, struct btree *,
 			       struct btree_node_iter *, struct bpos *);
-void bch2_btree_node_iter_init_from_start(struct btree_node_iter *,
-					  struct btree *);
 struct bkey_packed *bch2_btree_node_iter_bset_pos(struct btree_node_iter *,
 						 struct btree *,
 						 struct bset_tree *);
@@ -194,7 +192,6 @@ struct bkey_packed *bch2_btree_node_iter_bset_pos(struct btree_node_iter *,
 void bch2_btree_node_iter_sort(struct btree_node_iter *, struct btree *);
 void bch2_btree_node_iter_set_drop(struct btree_node_iter *,
 				   struct btree_node_iter_set *);
-void bch2_btree_node_iter_advance(struct btree_node_iter *, struct btree *);
 
 #define btree_node_iter_for_each(_iter, _set)				\
 	for (struct btree_node_iter_set *_set = (_iter)->data;		\
@@ -297,10 +294,6 @@ struct bkey_packed *bch2_btree_node_iter_prev_all(struct btree_node_iter *,
 						  struct btree *);
 struct bkey_packed *bch2_btree_node_iter_prev(struct btree_node_iter *,
 					      struct btree *);
-
-struct bkey_s_c bch2_btree_node_iter_peek_unpack(struct btree_node_iter *,
-						struct btree *,
-						struct bkey *);
 
 #define for_each_btree_node_key(b, k, iter)				\
 	for (bch2_btree_node_iter_init_from_start((iter), (b));		\

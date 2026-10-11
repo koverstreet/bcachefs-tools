@@ -32,9 +32,6 @@ static inline unsigned xattr_val_u64s(unsigned name_len, unsigned val_len)
 
 extern const struct xattr_handler * const bch2_xattr_handlers[];
 
-/* For listxattr - fs/xattr.c: */
-const char *bch2_xattr_list_prefix(unsigned, struct dentry *);
-
 #endif /* NO_BCACHEFS_FS */
 
 #endif /* _BCACHEFS_XATTR_H */

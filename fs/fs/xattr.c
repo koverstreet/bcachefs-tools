@@ -12,8 +12,6 @@
 
 #include "fs/xattr.h"
 
-#include "vfs/rust.h"
-
 #include <linux/dcache.h>
 #include <linux/posix_acl_xattr.h>
 #include <linux/xattr.h>

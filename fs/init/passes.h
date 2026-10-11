@@ -7,12 +7,7 @@ extern const char * const bch2_recovery_passes[];
 
 extern const struct bch_sb_field_ops bch_sb_field_ops_recovery_passes;
 
-u64 bch2_recovery_passes_to_stable(u64 v);
-u64 bch2_recovery_passes_from_stable(u64 v);
-
 u64 bch2_fsck_recovery_passes(void);
-
-void bch2_recovery_pass_set_no_ratelimit(struct bch_fs *, enum bch_recovery_pass);
 
 #include "init/passes_defs_gen.h"
 
@@ -62,12 +57,6 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *, struct printbuf *,
 				      enum bch_recovery_pass,
 				      enum bch_run_recovery_pass_flags,
 				      struct sb_write *);
-int bch2_run_explicit_recovery_pass(struct bch_fs *, struct printbuf *,
-				    enum bch_recovery_pass,
-				    enum bch_run_recovery_pass_flags);
-
-int bch2_require_recovery_pass(struct bch_fs *, struct printbuf *,
-			       enum bch_recovery_pass);
 
 u64 bch2_recovery_passes_match(unsigned);
 void bch2_run_async_recovery_passes(struct bch_fs *);

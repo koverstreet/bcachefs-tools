@@ -29,8 +29,6 @@
 
 bool __bch2_inconsistent_error(struct bch_fs *, struct printbuf *);
 bool bch2_inconsistent_error(struct bch_fs *);
-__printf(2, 3)
-bool bch2_fs_inconsistent(struct bch_fs *, const char *, ...);
 
 #define bch2_fs_inconsistent_on(cond, ...)				\
 ({									\
@@ -39,9 +37,6 @@ bool bch2_fs_inconsistent(struct bch_fs *, const char *, ...);
 		bch2_fs_inconsistent(__VA_ARGS__);			\
 	_ret;								\
 })
-
-__printf(2, 3)
-bool bch2_trans_inconsistent(struct btree_trans *, const char *, ...);
 
 #define bch2_trans_inconsistent_on(cond, ...)				\
 ({									\
@@ -57,7 +52,6 @@ int bch2_fs_topology_error(struct bch_fs *, const char *, ...);
 
 #define fsck_err_count(_c, _err)	bch2_sb_err_count(_c, BCH_FSCK_ERR_##_err)
 
-bool __bch2_count_fsck_err(struct bch_fs *, enum bch_sb_error_id, struct printbuf *);
 #define bch2_count_fsck_err(_c, _err, ...)				\
 	__bch2_count_fsck_err(_c, BCH_FSCK_ERR_##_err, __VA_ARGS__)
 
@@ -67,12 +61,6 @@ int bch2_fsck_err_opt(struct bch_fs *,
 		      enum bch_fsck_flags,
 		      enum bch_sb_error_id);
 
-__printf(6, 7) __cold
-int __bch2_fsck_err(struct bch_fs *, struct btree_trans *,
-		  struct bpos,
-		  enum bch_fsck_flags,
-		  enum bch_sb_error_id,
-		  const char *, ...);
 #define bch2_fsck_err(c, _flags, _err_type, ...)				\
 	__bch2_fsck_err(type_is(c, struct bch_fs *) ? (struct bch_fs *) c : NULL,\
 			type_is(c, struct btree_trans *) ? (struct btree_trans *) c : NULL,\
@@ -219,13 +207,6 @@ void bch2_free_fsck_errs(struct bch_fs *);
 		ret_log_fsck_err(__VA_ARGS__);				\
 	_ret;								\
 })
-
-__printf(5, 6)
-int __bch2_bkey_fsck_err(struct bch_fs *,
-			 struct bkey_s_c,
-			 const struct bkey_validate_context *from,
-			 enum bch_sb_error_id,
-			 const char *, ...);
 
 /*
  * for now, bkey fsck errors are always handled by deleting the entire key -

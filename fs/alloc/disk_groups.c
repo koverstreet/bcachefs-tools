@@ -459,6 +459,7 @@ int bch2_disk_path_find(struct bch_sb_handle *sb, const char *name)
 	return v;
 }
 
+/* Exported for userspace bcachefs-tools: */
 int bch2_disk_path_find_or_create(struct bch_sb_handle *sb, const char *name)
 {
 	struct bch_sb_field_disk_groups *groups;

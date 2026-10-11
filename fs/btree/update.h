@@ -24,41 +24,13 @@ void bch2_btree_insert_key_leaf(struct btree_trans *, struct btree_path *,
 
 void bch2_trans_commit_flags_to_text(struct printbuf *, enum bch_trans_commit_flags);
 
-int bch2_btree_delete_at(struct btree_trans *, struct btree_iter *,
-			 enum btree_iter_update_trigger_flags);
-int bch2_btree_delete(struct btree_trans *, enum btree_id, struct bpos,
-		      enum btree_iter_update_trigger_flags);
-
-int bch2_btree_insert_nonextent(struct btree_trans *, enum btree_id,
-				struct bkey_i *, unsigned,
-				enum btree_iter_update_trigger_flags);
-
-int bch2_btree_insert_trans(struct btree_trans *, enum btree_id, struct bkey_i *,
-			enum btree_iter_update_trigger_flags);
-int bch2_btree_insert(struct bch_fs *, enum btree_id, struct bkey_i *,
-		      struct disk_reservation *,
-		      enum bch_trans_commit_flags,
-		      enum btree_iter_update_trigger_flags);
-
-int bch2_btree_delete_range_trans(struct btree_trans *, enum btree_id,
-				  struct bpos, struct bpos,
-				  enum btree_iter_update_trigger_flags);
-int bch2_btree_delete_range(struct bch_fs *, enum btree_id,
-			    struct bpos, struct bpos,
-			    enum btree_iter_update_trigger_flags);
-
 int bch2_btree_bit_mod_iter(struct btree_trans *, struct btree_iter *, bool);
-int bch2_btree_bit_mod(struct btree_trans *, enum btree_id, struct bpos, bool);
-int bch2_btree_bit_mod_buffered(struct btree_trans *, enum btree_id, struct bpos, bool);
 
 static inline int bch2_btree_delete_at_buffered(struct btree_trans *trans,
 						enum btree_id btree, struct bpos pos)
 {
 	return bch2_btree_bit_mod_buffered(trans, btree, pos, false);
 }
-
-int __bch2_insert_snapshot_whiteouts(struct btree_trans *, enum btree_id,
-				     struct bpos, snapshot_id_list *);
 
 /*
  * For use when splitting extents in existing snapshots:
@@ -102,18 +74,6 @@ static inline enum bch_bkey_type extent_whiteout_type(struct bch_fs *c, enum btr
 		? KEY_TYPE_extent_whiteout
 		: KEY_TYPE_whiteout;
 }
-
-int bch2_trans_update_extent_overwrite(struct btree_trans *, struct btree_iter *,
-				       enum btree_iter_update_trigger_flags,
-				       struct bkey_s_c, struct bkey_s_c);
-
-int bch2_bkey_get_empty_slot(struct btree_trans *, struct btree_iter *,
-			     enum btree_id, struct bpos, struct bpos);
-
-int __must_check bch2_trans_update_ip(struct btree_trans *, struct btree_iter *,
-				      struct bkey_i *, unsigned,
-				      enum btree_iter_update_trigger_flags,
-				      unsigned long);
 
 int bch2_trigger_get_mutable_new(struct btree_trans *,
 				 struct btree_trigger_op,
@@ -241,10 +201,6 @@ static inline int __must_check bch2_trans_update_buffered(struct btree_trans *tr
 	bkey_copy(e->start, k);
 	return 0;
 }
-
-void bch2_trans_commit_hook(struct btree_trans *,
-			    struct btree_trans_commit_hook *);
-int __bch2_trans_commit(struct btree_trans *, enum bch_trans_commit_flags, bool);
 
 int bch2_trans_log_str(struct btree_trans *, const char *);
 int bch2_trans_log_msg(struct btree_trans *, struct printbuf *);

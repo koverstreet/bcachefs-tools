@@ -81,11 +81,6 @@ static inline bool bch2_dev_in_target(struct bch_fs *c, unsigned dev, unsigned t
 	return bch2_dev_in_target_rcu(c, dev, target);
 }
 
-int bch2_disk_path_find(struct bch_sb_handle *, const char *);
-
-/* Exported for userspace bcachefs-tools: */
-int bch2_disk_path_find_or_create(struct bch_sb_handle *, const char *);
-
 void bch2_disk_path_to_text(struct printbuf *, struct bch_fs *, unsigned);
 void bch2_disk_path_to_text_sb(struct printbuf *, struct bch_sb *, unsigned);
 

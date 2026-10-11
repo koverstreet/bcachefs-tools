@@ -38,12 +38,7 @@ extern struct mutex bch2_fs_list_lock;
 struct bch_fs *__bch2_uuid_to_fs(__uuid_t uuid);
 struct bch_fs *bch2_uuid_to_fs(__uuid_t);
 
-int bch2_sbs_filter_dead(bch_sb_handles *, struct bch_opts *, struct printbuf *);
-
-bool bch2_fs_emergency_read_only(struct bch_fs *, struct printbuf *);
 bool bch2_fs_emergency_read_only_locked(struct bch_fs *, struct printbuf *out);
-
-void bch2_fs_read_only(struct bch_fs *);
 
 int bch2_fs_read_write(struct bch_fs *);
 int bch2_fs_read_write_early(struct bch_fs *);
@@ -53,11 +48,6 @@ int bch2_fs_resize_on_mount(struct bch_fs *);
 
 void bch2_missing_devs_to_text(struct printbuf *, struct bch_fs *);
 
-int bch2_fs_start(struct bch_fs *);
 int bch2_fs_stop(struct bch_fs *);
-
-int bch2_fs_exit(struct bch_fs *);
-struct bch_fs *bch2_fs_open(darray_const_str *, struct bch_opts *,
-			    const struct bch_key *);
 
 #endif /* _BCACHEFS_SUPER_H */

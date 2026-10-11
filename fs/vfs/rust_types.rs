@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! What Rust calls of vfs/rust.h - the VFS shims - declared to Rust: C gets
-//! the prototypes, in vfs/rust_gen.h, which rust.h includes. Kernel only, as
-//! the VFS is.
+//! The VFS, for Rust: shims out of line in vfs/fs.c, as util/locking.c's are.
+//! C gets the prototypes, in vfs/rust_gen.h. Kernel only, as the VFS is.
+//!
+//! struct bch_inode_info is kernel types all the way down - struct inode,
+//! locks, the pagecache - so Rust doesn't bind its layout: it's opaque there,
+//! and reached through these. Nor does Rust call kernel functions that aren't
+//! in the kernel crate's bindings, posix_acl's among them: those are here too.
 
 #![allow(non_camel_case_types)]
 // The VFS's: kernel only, as C's #ifndef NO_BCACHEFS_FS

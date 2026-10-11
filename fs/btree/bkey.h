@@ -191,7 +191,6 @@ static inline struct bpos bkey_max(struct bpos l, struct bpos r)
 	return bkey_gt(l, r) ? l : r;
 }
 
-void bch2_bpos_swab(struct bpos *);
 void bch2_bkey_swab_key(const struct bkey_format *, struct bkey_packed *);
 
 static __always_inline int bversion_cmp(struct bversion l, struct bversion r)
@@ -378,8 +377,6 @@ bool bch2_bkey_transform(const struct bkey_format *,
 			 const struct bkey_format *,
 			 const struct bkey_packed *);
 
-void __bch2_bkey_unpack_key(const struct bkey_format *, struct bkey *,
-			    const struct bkey_packed *);
 void __bch2_bkey_unpack_key_b(const struct btree *, struct bkey *,
 			      const struct bkey_packed *);
 void bch2_compute_bkey_unpack_consts(struct btree *);

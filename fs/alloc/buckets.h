@@ -235,7 +235,6 @@ static inline struct bch_dev_usage bch2_dev_usage_read(struct bch_dev *ca)
 	return ret;
 }
 
-void bch2_dev_usage_full_read_fast(struct bch_dev *, struct bch_dev_usage_full *);
 static inline struct bch_dev_usage_full bch2_dev_usage_full_read(struct bch_dev *ca)
 {
 	struct bch_dev_usage_full ret;
@@ -350,9 +349,6 @@ static inline u64 dev_buckets_available(struct bch_dev *ca,
 
 /* Filesystem usage: */
 
-struct bch_fs_usage_short
-bch2_fs_usage_read_short(struct bch_fs *);
-
 /* raw sectors: they land somewhere whatever count they were taken at */
 static inline u64 bch2_online_reserved(struct bch_fs *c)
 {
@@ -414,8 +410,6 @@ void bch2_trans_account_disk_usage_change(struct btree_trans *);
 
 int bch2_trans_mark_metadata_bucket(struct btree_trans *, struct bch_dev *, u64,
 				    enum bch_data_type, unsigned,
-				    enum btree_iter_update_trigger_flags);
-int bch2_trans_mark_dev_sb(struct bch_fs *, struct bch_dev *,
 				    enum btree_iter_update_trigger_flags);
 int bch2_trans_mark_dev_sbs_flags(struct bch_fs *,
 				    enum btree_iter_update_trigger_flags);
@@ -597,7 +591,6 @@ static inline u64 avail_factor(u64 r)
 }
 
 void bch2_buckets_nouse_free(struct bch_fs *);
-int bch2_buckets_nouse_alloc(struct bch_fs *);
 
 static inline bool bch2_bucket_nouse(struct bch_dev *ca, u64 bucket)
 {
@@ -607,10 +600,5 @@ static inline bool bch2_bucket_nouse(struct bch_dev *ca, u64 bucket)
 int bch2_dev_buckets_resize(struct bch_fs *, struct bch_dev *, u64);
 void bch2_dev_buckets_free(struct bch_dev *);
 int bch2_dev_buckets_alloc(struct bch_fs *, struct bch_dev *);
-
-/* For Rust, which can't call the static inlines: */
-int rust_bch2_disk_reservation_add(struct bch_fs *, struct disk_reservation *,
-				   u64, unsigned, int);
-void rust_bch2_disk_reservation_put(struct bch_fs *, struct disk_reservation *);
 
 #endif /* _BUCKETS_H */

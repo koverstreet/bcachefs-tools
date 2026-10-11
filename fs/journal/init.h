@@ -3,7 +3,6 @@
 #define _BCACHEFS_JOURNAL_INIT_H
 #include "journal/init_gen.h"
 
-int bch2_set_nr_journal_buckets(struct bch_fs *, struct bch_dev *, unsigned);
 int bch2_dev_journal_bucket_delete(struct bch_dev *, u64);
 
 int bch2_dev_journal_alloc(struct bch_dev *, bool);

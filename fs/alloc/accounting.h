@@ -6,6 +6,8 @@
 #include "sb/members.h"
 #include "util/eytzinger.h"
 
+#include "alloc/accounting_defs_gen.h"
+
 static inline void bch2_u64s_neg(u64 *v, unsigned nr)
 {
 	for (unsigned i = 0; i < nr; i++)
@@ -97,11 +99,6 @@ static inline struct bpos disk_accounting_pos_to_bpos(struct disk_accounting_pos
 	return p;
 }
 
-int bch2_disk_accounting_mod_normal(struct btree_trans *, struct disk_accounting_pos *,
-			     s64 *, unsigned);
-int bch2_disk_accounting_mod_gc(struct btree_trans *, struct disk_accounting_pos *,
-			     s64 *, unsigned);
-
 static inline int bch2_disk_accounting_mod(struct btree_trans *trans,
 			     struct disk_accounting_pos *k,
 			     s64 *d, unsigned nr, bool gc)
@@ -148,8 +145,6 @@ static inline int accounting_pos_cmp(const void *_l, const void *_r)
 
 	return bpos_cmp(*l, *r);
 }
-
-#include "alloc/accounting_defs_gen.h"
 
 int bch2_accounting_mem_insert(struct bch_fs *, struct bkey_s_c_accounting, enum bch_accounting_mode);
 int bch2_accounting_mem_insert_locked(struct bch_fs *, struct bkey_s_c_accounting, enum bch_accounting_mode);
@@ -348,8 +343,5 @@ void bch2_verify_accounting_clean(struct bch_fs *c);
 
 void bch2_accounting_gc_free(struct bch_fs *);
 void bch2_fs_accounting_exit(struct bch_fs *);
-
-/* For Rust, which can't call the static inline: */
-void rust_bch2_accounting_mem_read(struct bch_fs *, struct bpos, u64 *, unsigned);
 
 #endif /* _BCACHEFS_DISK_ACCOUNTING_H */

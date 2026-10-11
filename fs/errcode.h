@@ -24,8 +24,6 @@ static inline bool _bch2_err_matches(int err, int class)
 	unlikely(_bch2_err_matches(_err, _class));	\
 })
 
-int __bch2_err_class(int);
-
 static inline s64 bch2_err_class(s64 err)
 {
 	return err < 0 ? __bch2_err_class(err) : err;

@@ -14,11 +14,6 @@ int bch2_snapshot_tree_validate(struct bch_fs *, struct bkey_s_c,
 	.min_val_size	= 8,					\
 })
 
-struct bkey_i_snapshot_tree *__bch2_snapshot_tree_create(struct btree_trans *);
-
-int bch2_snapshot_tree_lookup(struct btree_trans *, u32, struct bch_snapshot_tree *);
-
-void bch2_snapshot_to_text(struct printbuf *, const struct bch_snapshot *);
 void bch2_snapshot_key_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 int bch2_snapshot_validate(struct bch_fs *, struct bkey_s_c,
 			   const struct bkey_validate_context *);
@@ -107,9 +102,6 @@ bch2_snapshot_state_nearest(u32 v, unsigned *dist)
 	return best;
 }
 
-const char *bch2_snapshot_state_str(enum bch_snapshot_state);
-void bch2_snapshot_state_set(struct bch_snapshot *, enum bch_snapshot_state);
-
 static inline struct snapshot_t *__snapshot_t(struct snapshot_table *t, u32 id)
 {
 	u32 idx = U32_MAX - id;
@@ -125,7 +117,6 @@ static inline const struct snapshot_t *snapshot_t(struct bch_fs *c, u32 id)
 }
 
 struct snapshot_t *bch2_snapshot_t_mut(struct bch_fs *, u32);
-int bch2_snapshot_table_make_room(struct bch_fs *, u32);
 
 static inline u32 bch2_snapshot_tree(struct bch_fs *c, u32 id)
 {
@@ -189,10 +180,6 @@ static inline u32 bch2_snapshot_nth_parent(struct bch_fs *c, u32 id, u32 n)
 	return id;
 }
 
-u32 bch2_snapshot_skiplist_get(struct bch_fs *, u32);
-u32 bch2_snapshot_oldest_subvol(struct bch_fs *, u32);
-u32 bch2_snapshot_table_find_edge(struct bch_fs *, const struct bch_snapshot *, u32, bool);
-
 static inline u32 bch2_snapshot_root(struct bch_fs *c, u32 id)
 {
 	guard(rcu)();
@@ -225,8 +212,6 @@ static inline bool bch2_snapshot_exists(struct bch_fs *c, u32 id)
 {
 	return bch2_snapshot_id_state(c, id) == SNAPSHOT_ID_live;
 }
-
-u32 bch2_snapshot_redundant_interior(struct bch_fs *, u32);
 
 static inline int bch2_snapshot_is_internal_node(struct bch_fs *c, u32 id)
 {
@@ -297,8 +282,6 @@ static inline int bch2_snapshot_live_descendent(struct bch_fs *c, u32 id, u32 *l
 	}
 }
 
-bool __bch2_snapshot_is_ancestor(struct btree_trans *, u32, u32);
-
 static inline bool bch2_snapshot_is_ancestor(struct btree_trans *trans, u32 id, u32 ancestor)
 {
 	EBUG_ON(!id);
@@ -308,8 +291,6 @@ static inline bool bch2_snapshot_is_ancestor(struct btree_trans *trans, u32 id, 
 		? true
 		: __bch2_snapshot_is_ancestor(trans, id, ancestor);
 }
-
-bool bch2_snapshot_is_ancestor_early(struct bch_fs *, u32, u32);
 
 static inline bool bch2_snapshot_has_children(struct bch_fs *c, u32 id)
 {
@@ -373,15 +354,6 @@ u32 bch2_snapshot_tree_next(struct bch_fs *, u32, unsigned *);
 	     _id && _id <= _start;					\
 	     _id = bch2_snapshot_tree_next(_c, _id, _depth))
 
-int bch2_snapshot_lookup(struct btree_trans *trans, u32 id,
-			 struct bch_snapshot *s);
-int bch2_snapshot_lookup_key(struct btree_trans *trans, u32 id,
-			     struct bkey_i_snapshot *k);
-
-/* only exported for tests: */
-int bch2_snapshot_node_create(struct btree_trans *, u32,
-			      u32 *, u32 *, unsigned);
-
 int bch2_check_snapshot_trees(struct bch_fs *);
 int bch2_check_snapshots(struct bch_fs *);
 int bch2_reconstruct_snapshots(struct bch_fs *);
@@ -412,11 +384,7 @@ static inline int bch2_get_snapshot_overwrites(struct btree_trans *trans,
 
 }
 
-int bch2_snapshot_node_set_deleted(struct btree_trans *, u32);
 int bch2_snapshot_node_delete(struct btree_trans *, u32);
-int bch2_snapshot_node_undelete(struct btree_trans *, struct bkey_i_snapshot *);
-int bch2_snapshot_accounting_totals(struct bch_fs *, u32, u64 *, u64 *,
-				    u64 *, struct printbuf *);
 
 int __bch2_key_has_snapshot_overwrites(struct btree_trans *, enum btree_id, struct bpos);
 
@@ -431,15 +399,11 @@ static inline int bch2_key_has_snapshot_overwrites(struct btree_trans *trans,
 	return __bch2_key_has_snapshot_overwrites(trans, id, pos);
 }
 
-int bch2_delete_dead_snapshot_key(struct btree_trans *, struct btree_iter *,
-				  struct bkey_s_c, u32);
-
 int __bch2_delete_dead_snapshots(struct bch_fs *);
 int bch2_delete_dead_snapshots(struct bch_fs *);
 void bch2_snapshot_delete_status_to_text(struct printbuf *, struct bch_fs *);
 
 int bch2_delete_dead_interior_snapshots(struct bch_fs *);
-int bch2_snapshot_table_rebuild(struct btree_trans *);
 int bch2_snapshots_read(struct bch_fs *);
 void bch2_fs_snapshots_exit(struct bch_fs *);
 void bch2_fs_snapshots_init_early(struct bch_fs *);

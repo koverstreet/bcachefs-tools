@@ -1183,6 +1183,7 @@ static int bch2_snapshot_node_create_tree(struct btree_trans *trans,
 	return 0;
 }
 
+/* only exported for tests: */
 int bch2_snapshot_node_create(struct btree_trans *trans, u32 parent,
 			      u32 *new_snapids,
 			      u32 *snapshot_subvols,

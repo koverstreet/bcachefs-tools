@@ -716,6 +716,7 @@ bool bch2_stripe_handle_tryget(struct bch_fs *c,
 	return ret;
 }
 
+/* Intent-locked existing key: 1 acquired, 0 busy, negative error/restart. */
 int bch2_stripe_handle_tryget_existing(struct btree_iter *iter,
 				       struct ec_stripe_handle *s)
 {

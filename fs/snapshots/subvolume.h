@@ -56,7 +56,6 @@ bch2_subvolume_state_nearest(u32 v, unsigned *dist)
 }
 
 const char *bch2_subvolume_state_str(enum bch_subvolume_state);
-void bch2_subvolume_state_set(struct bch_subvolume *, enum bch_subvolume_state);
 
 int bch2_check_subvols(struct bch_fs *);
 int bch2_check_subvol_children(struct bch_fs *);
@@ -72,19 +71,6 @@ int bch2_subvolume_trigger(struct btree_trans *, struct btree_trigger_op);
 	.trigger	= bch2_subvolume_trigger,		\
 	.min_val_size	= 16,					\
 })
-
-int bch2_subvol_has_children(struct btree_trans *, u32);
-int bch2_subvolume_get(struct btree_trans *, unsigned,
-		       bool, struct bch_subvolume *);
-int bch2_subvolume_get_key(struct btree_trans *, unsigned,
-			   bool, struct bkey_i_subvolume *);
-int bch2_subvolume_is_unlinked(struct btree_trans *, u32);
-int __bch2_subvolume_get_snapshot(struct btree_trans *, u32,
-				  u32 *, bool);
-int bch2_subvolume_get_snapshot(struct btree_trans *, u32, u32 *);
-
-int bch2_subvol_is_ro_trans(struct btree_trans *, u32, u32 *);
-int bch2_subvol_is_ro(struct bch_fs *, u32);
 
 static inline struct bkey_s_c
 bch2_btree_iter_peek_in_subvolume_max_type(struct btree_iter *iter, struct bpos end,
@@ -187,10 +173,6 @@ febk_in_subvolume_in_trans_cond(struct btree_trans *trans,
 	for_each_btree_key_in_subvolume_max_continue_in_trans(_trans, _iter,		\
 					_end, _subvolid, _flags, _k, _do);	\
 })
-
-int bch2_subvolume_unlink(struct btree_trans *, u32);
-int bch2_subvolume_create(struct btree_trans *, u64, u32, u32, u32 *, u32 *,
-			  struct bch_subvolume *, bool);
 
 int bch2_initialize_subvolumes(struct bch_fs *);
 int bch2_fs_upgrade_for_subvolumes(struct bch_fs *);

@@ -5,7 +5,7 @@
 //!
 //! It's kernel types all the way down - struct inode, its locks, the
 //! pagecache - so Rust doesn't bind its layout: it's opaque, and reached
-//! through vfs/rust.h's shims. An InodeInfo is one borrowed for a VFS call,
+//! through vfs/rust_types.rs's shims. An InodeInfo is one borrowed for a VFS call,
 //! which holds a reference on the inode for as long as it runs: that's 'a.
 //!
 //! ei_update_lock serializes updates to the inode from the VFS side - read

@@ -3,9 +3,6 @@
 #define _BCACHEFS_VARINT_H
 #include "util/varint_gen.h"
 
-int bch2_varint_encode(u8 *, u64);
-int bch2_varint_decode(const u8 *, const u8 *, u64 *);
-
 int bch2_varint_encode_fast(u8 *, u64);
 int bch2_varint_decode_fast(const u8 *, const u8 *, u64 *);
 

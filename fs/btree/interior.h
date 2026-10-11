@@ -109,9 +109,6 @@ int bch2_btree_node_rewrite_pos(struct btree_trans *,
 
 void bch2_async_btree_op(struct bch_fs *, struct btree *, enum async_btree_op);
 
-int bch2_btree_node_update_key(struct btree_trans *, struct btree_iter *,
-			       struct btree *, struct bkey_i *,
-			       unsigned, bool);
 int bch2_btree_node_update_key_at_pos(struct btree_trans *, enum btree_id,
 				      unsigned, struct bkey_i *);
 

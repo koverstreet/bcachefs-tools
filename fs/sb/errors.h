@@ -13,8 +13,6 @@ void bch2_fs_errors_to_text(struct printbuf *, struct bch_fs *);
 extern const struct bch_sb_field_ops bch_sb_field_ops_errors;
 extern const struct bch_sb_field_ops bch_sb_field_ops_errors_v2;
 
-void bch2_sb_error_count(struct bch_fs *, enum bch_sb_error_id);
-
 /*
  * Block statuses we count separately: what the device said is the first
  * thing worth knowing from a filesystem that's logging IO errors - media
