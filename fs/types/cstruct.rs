@@ -112,10 +112,11 @@ impl CKind {
 /// A struct's repr: C's packing and alignment attributes. packed is "1" for
 /// plain packed.
 ///
-/// c_packed, #[c_packed]: C's is __packed though Rust's isn't. Every field is
-/// byte aligned in Rust - zerocopy's endian integers are, C's __le64 isn't -
-/// so packing is no-op there, but not in C. For __packed __aligned(N), which
-/// Rust's repr can't say: align(N) and #[c_packed].
+/// c_packed, #[c_packed]: C's is __packed though Rust's isn't. Every field sits
+/// where C's packing puts it - at its own alignment, as the layout asserts
+/// check; a field C packs off its alignment is one of zerocopy's le:: types,
+/// aligned to 1. For __packed __aligned(N), which Rust's repr can't say:
+/// align(N) and #[c_packed].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CRepr {
     pub repr_c:   bool,
@@ -2222,9 +2223,9 @@ fn is_c_ns(s: &str) -> bool {
 }
 
 /// The C base type Rust type @toks renders as - the canonical rendering, by
-/// which a field needs no #[c]: integers by their plain names, zerocopy's
-/// endian integers as __leN/__beN, c::foo as struct foo - unless foo ends in
-/// _t, a typedef.
+/// which a field needs no #[c]: integers by their plain names, endian
+/// integers - Le16..Le64, zerocopy's le::/be:: - as __leN/__beN, c::foo as
+/// struct foo - unless foo ends in _t, a typedef.
 fn canon_base(toks: &[Tok]) -> Option<String> {
     let path: Vec<&str> = toks.iter().filter_map(|t| match t {
         Tok::Ident(s) => Some(s.as_str()),
