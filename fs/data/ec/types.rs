@@ -30,10 +30,8 @@ nest! {
         #>[bitfield(u8, ty = u32)]
         pub bits: pub struct gc_stripe_bits {
             /* does a corresponding key exist in stripes btree? */
-            #[bits(1)]
-            pub alive: u32,
-            #[bits(7)]
-            pub __pad: u8,
+            alive: u1,
+            __pad: u7,
         },
         pub sectors: u16,
         pub nr_blocks: u8,

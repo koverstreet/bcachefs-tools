@@ -51,12 +51,9 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8)]
         pub bits: pub struct data_update_opts_bits {
-            #[bits(1)]
-            pub no_devs_have: bool,
-            #[bits(1)]
-            pub checksum_paranoia: bool,
-            #[bits(6)]
-            pub __pad: u8,
+            no_devs_have:      bool,
+            checksum_paranoia: bool,
+            __pad:             u6,
         },
 
         pub read_dev: c_uint,

@@ -62,27 +62,17 @@ nest! {
         #>[bitfield(u16)]
         pub bits: pub struct journal_buf_bits {
             /* write has already been or waiting to be kicked off */
-            #[bits(1)]
-            pub flush_picked: bool,
-            #[bits(1)]
-            pub flush: bool,
+            flush_picked:               bool,
+            flush:                      bool,
 
-            #[bits(1)]
-            pub separate_flush: bool,
-            #[bits(1)]
-            pub need_flush_to_write_buffer: bool,
-            #[bits(1)]
-            pub write_started: bool,
-            #[bits(1)]
-            pub write_allocated: bool,
-            #[bits(1)]
-            pub write_done: bool,
-            #[bits(1)]
-            pub empty: bool,
-            #[bits(1)]
-            pub has_overwrites: bool,
-            #[bits(7)]
-            pub __pad: u8,
+            separate_flush:             bool,
+            need_flush_to_write_buffer: bool,
+            write_started:              bool,
+            write_allocated:            bool,
+            write_done:                 bool,
+            empty:                      bool,
+            has_overwrites:             bool,
+            __pad:                      u7,
         },
 
         /* must not be memset, only manipulated by xchg/cmpxchg */
@@ -198,18 +188,12 @@ nest! {
             #>[repr(C)]-
             #>[bitfield(u64)]
             pub bits: pub struct journal_res_state_bits {
-                #[bits(22)]
-                pub cur_entry_offset: u64,
-                #[bits(2)]
-                pub idx: u64,
-                #[bits(10)]
-                pub buf0_count: u64,
-                #[bits(10)]
-                pub buf1_count: u64,
-                #[bits(10)]
-                pub buf2_count: u64,
-                #[bits(10)]
-                pub buf3_count: u64,
+                cur_entry_offset: u22,
+                idx:              u2,
+                buf0_count:       u10,
+                buf1_count:       u10,
+                buf2_count:       u10,
+                buf3_count:       u10,
             },
         },
     }

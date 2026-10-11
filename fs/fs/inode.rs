@@ -2027,8 +2027,9 @@ pub fn reconcile_opts_get(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_exte
     r.set_type_(1 << c::bch_extent_entry_type::BCH_EXTENT_ENTRY_reconcile.0);
     macro_rules! reconcile_opts {
         ($(($name:tt)),* $(,)?) => { crate::paste! { $(
-            r.[<set_ $name>](opts.$name as u64);
-            r.[<set_ $name _from_inode>](opts.[<$name _from_inode>]() as u64);
+            r.[<set_ $name>](opts.$name.try_into()
+                .expect(concat!("io option ", stringify!($name), " too big for bch_extent_reconcile")));
+            r.[<set_ $name _from_inode>](opts.[<$name _from_inode>]().into());
         )* } };
     }
     c::BCH_RECONCILE_OPTS!(reconcile_opts);

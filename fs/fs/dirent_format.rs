@@ -81,12 +81,9 @@ nest! {
         #>[derive(Clone, Copy, CStruct, TypeInfo)]-
         #>[bitfield(u8)]
         pub bits: pub struct bch_dirent_bits {
-            #[bits(5)]
-            pub d_type: u8,
-            #[bits(2)]
-            pub d_unused: u8,
-            #[bits(1)]
-            pub d_casefold: u8,
+            d_type:     u5,
+            d_unused:   u2,
+            d_casefold: u1,
         },
 
         #[c_anon]

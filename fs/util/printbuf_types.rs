@@ -39,23 +39,15 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8)]
         pub bits: pub struct printbuf_bits {
-            #[bits(1)]
-            pub allocation_failure: bool,
-            #[bits(1)]
-            pub heap_allocated: bool,
-            #[bits(1)]
-            pub overflow: bool,
+            allocation_failure:     bool,
+            heap_allocated:         bool,
+            overflow:               bool,
             /* Ratelimited or already printed */
-            #[bits(1)]
-            pub suppress: bool,
-            #[bits(1)]
-            pub si_units: c::printbuf_si,
-            #[bits(1)]
-            pub human_readable_units: bool,
-            #[bits(1)]
-            pub has_indent_or_tabstops: bool,
-            #[bits(1)]
-            pub may_vmalloc: bool,
+            suppress:               bool,
+            #[bits(1)] pub si_units: c::printbuf_si,
+            human_readable_units:   bool,
+            has_indent_or_tabstops: bool,
+            may_vmalloc:            bool,
         },
         pub nr_tabstops: u8,
 

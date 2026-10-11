@@ -165,21 +165,14 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u64, ty = u32)]
         pub bits: pub struct bch_extent_crc32_bits {
-            #[bits(2)]
-            pub type_: u32,
-            #[bits(7)]
-            pub compressed_size_raw: u32,
-            #[bits(7)]
-            pub uncompressed_size_raw: u32,
-            #[bits(7)]
-            pub offset: u32,
-            #[bits(1)]
-            pub unused_raw: u32,
-            #[bits(4)]
-            pub csum_type: u32,
-            #[bits(4)]
-            pub compression_type: u32,
-            pub csum: u32,
+            type_:                 u2,
+            compressed_size_raw:   u7,
+            uncompressed_size_raw: u7,
+            offset:                u7,
+            unused_raw:            u1,
+            csum_type:             u4,
+            compression_type:      u4,
+            csum:                  u32,
         },
     }
 }
@@ -198,22 +191,14 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u64)]
         pub bits: pub struct bch_extent_crc64_bits {
-            #[bits(3)]
-            pub type_: u64,
-            #[bits(9)]
-            pub compressed_size_raw: u64,
-            #[bits(9)]
-            pub uncompressed_size_raw: u64,
-            #[bits(9)]
-            pub offset: u64,
-            #[bits(10)]
-            pub nonce: u64,
-            #[bits(4)]
-            pub csum_type: u64,
-            #[bits(4)]
-            pub compression_type: u64,
-            #[bits(16)]
-            pub csum_hi: u64,
+            type_:                 u3,
+            compressed_size_raw:   u9,
+            uncompressed_size_raw: u9,
+            offset:                u9,
+            nonce:                 u10,
+            csum_type:             u4,
+            compression_type:      u4,
+            csum_hi:               u16,
         },
         pub csum_lo: u64,
     }
@@ -232,20 +217,13 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u64)]
         pub bits: pub struct bch_extent_crc128_bits {
-            #[bits(4)]
-            pub type_: u64,
-            #[bits(13)]
-            pub compressed_size_raw: u64,
-            #[bits(13)]
-            pub uncompressed_size_raw: u64,
-            #[bits(13)]
-            pub offset: u64,
-            #[bits(13)]
-            pub nonce: u64,
-            #[bits(4)]
-            pub csum_type: u64,
-            #[bits(4)]
-            pub compression_type: u64,
+            type_:                 u4,
+            compressed_size_raw:   u13,
+            uncompressed_size_raw: u13,
+            offset:                u13,
+            nonce:                 u13,
+            csum_type:             u4,
+            compression_type:      u4,
         },
         pub csum: c::bch_csum,
     }
@@ -267,20 +245,13 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u64)]
         pub bits: pub struct bch_extent_ptr_bits {
-            #[bits(1)]
-            pub type_: u64,
-            #[bits(1)]
-            pub cached: u64,
-            #[bits(1)]
-            pub unused: u64,
-            #[bits(1)]
-            pub unwritten: u64,
-            #[bits(44)]
-            pub offset: u64, /* 8 petabytes */
-            #[bits(8)]
-            pub dev: u64,
-            #[bits(8)]
-            pub generation: u64,
+            type_:      u1,
+            cached:     u1,
+            unused:     u1,
+            unwritten:  u1,
+            offset:     u44, /* 8 petabytes */
+            dev:        u8,
+            generation: u8,
         },
     }
 }
@@ -292,14 +263,10 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u64)]
         pub bits: pub struct bch_extent_stripe_ptr_bits {
-            #[bits(5)]
-            pub type_: u64,
-            #[bits(8)]
-            pub block: u64,
-            #[bits(4)]
-            pub redundancy: u64,
-            #[bits(47)]
-            pub idx: u64,
+            type_:      u5,
+            block:      u8,
+            redundancy: u4,
+            idx:        u47,
         },
     }
 }
@@ -324,10 +291,8 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u64)]
         pub bits: pub struct bch_extent_flags_bits {
-            #[bits(7)]
-            pub type_: u64,
-            #[bits(57)]
-            pub flags: u64,
+            type_: u7,
+            flags: u57,
         },
     }
 }

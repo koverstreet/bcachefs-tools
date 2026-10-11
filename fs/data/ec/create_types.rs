@@ -104,19 +104,13 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8)]
         pub bits: pub struct ec_stripe_new_bits {
-            #[bits(1)]
-            pub have_old_stripe: bool,
+            have_old_stripe:     bool,
 
-            #[bits(1)]
-            pub allocated: bool,
-            #[bits(1)]
-            pub mem_allocated: bool,
-            #[bits(1)]
-            pub old_stripe_read: bool,
-            #[bits(1)]
-            pub old_stripe_read_all: bool,
-            #[bits(3)]
-            pub __pad: u8,
+            allocated:           bool,
+            mem_allocated:       bool,
+            old_stripe_read:     bool,
+            old_stripe_read_all: bool,
+            __pad:               u3,
         },
 
         #[c("unsigned long blocks_gotten[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)]")]

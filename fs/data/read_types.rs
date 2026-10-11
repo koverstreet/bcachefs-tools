@@ -60,26 +60,16 @@ nest! {
                 #>[repr(C)]-
                 #>[bitfield(u16)]
                 pub bits: pub struct bch_read_bio_bits {
-                    #[bits(1)]
-                    pub data_update: u16,
-                    #[bits(1)]
-                    pub data_update_verify_decompress: u16,
-                    #[bits(1)]
-                    pub promote: u16,
-                    #[bits(1)]
-                    pub bounce: u16,
-                    #[bits(1)]
-                    pub split: u16,
-                    #[bits(1)]
-                    pub narrow_crcs: u16,
-                    #[bits(1)]
-                    pub saw_error: u16,
-                    #[bits(1)]
-                    pub self_healing: u16,
-                    #[bits(2)]
-                    pub context: u16,
-                    #[bits(6)]
-                    pub __pad: u8,
+                    data_update:                   u1,
+                    data_update_verify_decompress: u1,
+                    promote:                       u1,
+                    bounce:                        u1,
+                    split:                         u1,
+                    narrow_crcs:                   u1,
+                    saw_error:                     u1,
+                    self_healing:                  u1,
+                    context:                       u2,
+                    __pad:                         u6,
                 },
             },
             pub _state: u16,

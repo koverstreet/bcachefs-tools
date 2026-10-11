@@ -67,14 +67,10 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8)]
         pub bits: pub struct open_bucket_bits {
-            #[bits(5)]
-            pub data_type: c::bch_data_type,
-            #[bits(1)]
-            pub valid: bool,
-            #[bits(1)]
-            pub on_partial_list: bool,
-            #[bits(1)]
-            pub do_discards_fast: bool,
+            #[bits(5)] pub data_type: c::bch_data_type,
+            valid:            bool,
+            on_partial_list:  bool,
+            do_discards_fast: bool,
         },
         /* handle already removed from ca->nr_open_buckets (bucket left free) */
         pub free_uncounted: bool,

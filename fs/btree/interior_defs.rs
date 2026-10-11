@@ -90,12 +90,9 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8, ty = u32)]
         pub bits: pub struct btree_update_bits {
-            #[bits(1)]
-            pub nodes_written: u32,
-            #[bits(1)]
-            pub took_gc_lock: u32,
-            #[bits(6)]
-            pub __pad: u8,
+            nodes_written: u1,
+            took_gc_lock:  u1,
+            __pad:         u6,
         },
 
         pub btree_id: c::btree_id,

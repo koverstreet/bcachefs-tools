@@ -486,22 +486,16 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u16, ty = u32)]
         pub bits: pub struct btree_path_bits {
-            #[bits(7)]
-            pub btree_id: cs::btree_id,
-            #[bits(1)]
-            pub cached: bool,
-            #[bits(1)]
-            pub preserve: bool,
+            #[bits(7)] pub btree_id: cs::btree_id,
+            cached:           bool,
+            preserve:         bool,
             /*
              * When true, failing to relock this path will cause the transaction to
              * restart:
              */
-            #[bits(1)]
-            pub should_be_locked: bool,
-            #[bits(3)]
-            pub level: u32,
-            #[bits(3)]
-            pub locks_want: u32,
+            should_be_locked: bool,
+            level:            u3,
+            locks_want:       u3,
         },
         pub nodes_locked: u8,
 
@@ -532,8 +526,7 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8)]
         pub bits: pub struct btree_iter_bits {
-            #[bits(8)]
-            pub btree_id: cs::btree_id,
+            #[bits(8)] pub btree_id: cs::btree_id,
         },
         pub min_depth: u8,
 
@@ -608,20 +601,13 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u16, ty = u8)]
         pub bits: pub struct btree_insert_entry_bits {
-            #[bits(8)]
-            pub btree_id: cs::btree_id,
-            #[bits(3)]
-            pub level: u8,
-            #[bits(1)]
-            pub cached: bool,
-            #[bits(1)]
-            pub insert_trigger_run: bool,
-            #[bits(1)]
-            pub overwrite_trigger_run: bool,
-            #[bits(1)]
-            pub key_cache_already_flushed: bool,
-            #[bits(1)]
-            pub key_cache_flushing: bool,
+            #[bits(8)] pub btree_id: cs::btree_id,
+            level:                     u3,
+            cached:                    bool,
+            insert_trigger_run:        bool,
+            overwrite_trigger_run:     bool,
+            key_cache_already_flushed: bool,
+            key_cache_flushing:        bool,
         },
         /*
          * @old_k may be a key from the journal or the key cache;
@@ -746,42 +732,27 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u64, repr = NeBytes<6>, from = NeBytes::<6>::from_u64, into = NeBytes::<6>::to_u64)]
         pub bits: pub struct btree_trans_bits {
-            #[bits(1)]
-            pub lock_may_not_fail: bool,
-            #[bits(1)]
-            pub locked: bool,
-            #[bits(1)]
-            pub migrate_disabled: bool,
-            #[bits(1)]
-            pub write_locked: bool,
-            #[bits(1)]
-            pub srcu_held: bool,
+            lock_may_not_fail:              bool,
+            locked:                         bool,
+            migrate_disabled:               bool,
+            write_locked:                   bool,
+            srcu_held:                      bool,
             /*
              * IO was submitted under the srcu read lock (submit_bio() can block for
              * an unbounded time): suppress the next bch2_trans_unlock_long() "held
              * too long" warning. Scoped to one locked attempt — cleared on relock /
              * bch2_trans_begin().
              */
-            #[bits(1)]
-            pub srcu_io_submitted: bool,
-            #[bits(1)]
-            pub btree_cache_cannibalize_locked: bool,
-            #[bits(1)]
-            pub pf_memalloc_noio: bool,
-            #[bits(1)]
-            pub used_mempool: bool,
-            #[bits(1)]
-            pub in_traverse_all: bool,
-            #[bits(1)]
-            pub paths_sorted: bool,
-            #[bits(1)]
-            pub memory_allocation_failure: bool,
-            #[bits(1)]
-            pub journal_transaction_names: bool,
-            #[bits(1)]
-            pub journal_replay_not_finished: bool,
-            #[bits(1)]
-            pub notrace_relock_fail: bool,
+            srcu_io_submitted:              bool,
+            btree_cache_cannibalize_locked: bool,
+            pf_memalloc_noio:               bool,
+            used_mempool:                   bool,
+            in_traverse_all:                bool,
+            paths_sorted:                   bool,
+            memory_allocation_failure:      bool,
+            journal_transaction_names:      bool,
+            journal_replay_not_finished:    bool,
+            notrace_relock_fail:            bool,
             /*
              * Exempt bch2_trans_begin() from the dropped-updates warning. Set
              * around a nested transaction - one that grabs trans->restart_count,
@@ -792,16 +763,11 @@ nest! {
              * for it here. Set it with CLASS(trans_may_drop_updates), which
              * restores it at the end of the scope.
              */
-            #[bits(1)]
-            pub begin_may_drop_updates: bool,
-            #[bits(1)]
-            pub has_interior_updates: bool,
-            #[bits(15)]
-            pub __pad17: u16,
-            #[bits(16)]
-            pub restarted: cs::bch_errcode,
-            #[bits(16)]
-            pub __pad: u16,
+            begin_may_drop_updates:         bool,
+            has_interior_updates:           bool,
+            __pad17:                        u15,
+            #[bits(16)] pub restarted: cs::bch_errcode,
+            __pad:                          u16,
         },
         pub restart_count: u32,
         #[cfg(CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS)]

@@ -228,7 +228,7 @@ struct SanitizeOpts {
 
 /// A member index that names no device (`BCH_SB_MEMBER_INVALID`); the read
 /// path skips ptrs pointing at it.
-const MEMBER_INVALID: u64 = c::BCH_SB_MEMBER_INVALID as u64;
+const MEMBER_INVALID: u8 = c::BCH_SB_MEMBER_INVALID as u8;
 
 /// De-replicate a btree pointer key in place: keep the pointer on the lowest
 /// device index and set every other pointer's device to `BCH_SB_MEMBER_INVALID`.

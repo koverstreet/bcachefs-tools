@@ -16,10 +16,8 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8)]
         pub bits: pub struct found_btree_node_bits {
-            #[bits(1)]
-            pub range_updated: bool,
-            #[bits(7)]
-            pub __pad: u8,
+            range_updated: bool,
+            __pad:         u7,
         },
         pub btree_id: u8,
         pub level: u8,

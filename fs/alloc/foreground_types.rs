@@ -25,20 +25,13 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8)]
         pub bits: pub struct alloc_trace_entry_bits {
-            #[bits(1)]
-            pub new_stripe_alloc: bool,
-            #[bits(1)]
-            pub will_retry_all_devices: bool,
-            #[bits(1)]
-            pub will_retry_target_devices: bool,
-            #[bits(1)]
-            pub will_retry_set_devices: bool,
-            #[bits(1)]
-            pub copygc_can_make_progress: bool,
-            #[bits(1)]
-            pub have_cl: bool,
-            #[bits(2)]
-            pub __pad: u8,
+            new_stripe_alloc:          bool,
+            will_retry_all_devices:    bool,
+            will_retry_target_devices: bool,
+            will_retry_set_devices:    bool,
+            copygc_can_make_progress:  bool,
+            have_cl:                   bool,
+            __pad:                     u2,
         },
         pub err: i16,
         pub wake_counter_snapshot: u32,
@@ -74,23 +67,15 @@ nest! {
         #>[derive(CStruct)]-
         #>[repr(C)]-
         pub bits: pub struct alloc_request_bits {
-            #[bits(1)]
-            pub ec: bool,
-            #[bits(1)]
-            pub new_stripe_alloc: bool,
-            #[bits(1)]
-            pub will_retry_all_devices: bool,
-            #[bits(1)]
-            pub will_retry_target_devices: bool,
-            #[bits(1)]
-            pub will_retry_set_devices: bool,
-            #[bits(1)]
-            pub copygc_can_make_progress: bool,
-            #[bits(1)]
-            pub trace_alloc_failed: bool,
+            ec:                        bool,
+            new_stripe_alloc:          bool,
+            will_retry_all_devices:    bool,
+            will_retry_target_devices: bool,
+            will_retry_set_devices:    bool,
+            copygc_can_make_progress:  bool,
+            trace_alloc_failed:        bool,
             /* failure domains are a hard requirement, not a preference (erasure coding): */
-            #[bits(1)]
-            pub failure_domains_required: bool,
+            failure_domains_required:  bool,
         },
         pub watermark: c::bch_watermark,
         pub flags: c::bch_write_flags,

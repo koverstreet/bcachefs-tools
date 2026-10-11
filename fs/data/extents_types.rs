@@ -46,10 +46,8 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8, ty = u32)]
         pub bits: pub struct bch_dev_io_failures_bits {
-            #[bits(7)]
-            pub csum_nr: u32,
-            #[bits(1)]
-            pub __pad: u8,
+            csum_nr: u7,
+            __pad:   u1,
         },
         pub ec_errcode: i16,
         pub errcode: i16,

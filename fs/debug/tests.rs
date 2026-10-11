@@ -418,7 +418,7 @@ fn test_btree_ptr_stale_dirty_key(
     let mut updated = false;
     let mut update_k = BkeyS::from(update.as_mut());
     for ptr_entry in bkey_ptrs_mut(t.fs(), &mut update_k) {
-        if ptr_entry.cached() == 0 && ptr_entry.dev() != c::BCH_SB_MEMBER_INVALID as u64 {
+        if ptr_entry.cached() == 0 && u64::from(ptr_entry.dev()) != c::BCH_SB_MEMBER_INVALID as u64 {
             // gen is 8 bits: one less, as C's ptr->gen-- - the setter checks
             // that the value fits
             ptr_entry.set_generation((ptr_entry.generation() as u8).wrapping_sub(1).into());

@@ -31,10 +31,8 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u16)]
         pub bits: pub struct gc_pos_bits {
-            #[bits(8)]
-            pub phase: c::gc_phase,
-            #[bits(8)]
-            pub btree: c::btree_id,
+            #[bits(8)] pub phase: c::gc_phase,
+            #[bits(8)] pub btree: c::btree_id,
         },
         pub level: u16,
         pub pos: c::bpos,

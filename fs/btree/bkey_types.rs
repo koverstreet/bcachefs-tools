@@ -230,20 +230,16 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u16)]
         pub bits: pub struct bkey_validate_context_bits {
-            #[bits(8)]
-            pub from: cs::bkey_validate_from,
-            #[bits(8, from = cs::bch_validate_flags::from_bits_retain)]
-            pub flags: cs::bch_validate_flags,
+            #[bits(8)] pub from: cs::bkey_validate_from,
+            #[bits(8, from = cs::bch_validate_flags::from_bits_retain)] pub flags: cs::bch_validate_flags,
         },
         pub level: u8,
         pub btree: cs::btree_id,
         #[c_bitfield]
         #>[bitfield(u8)]
         pub root_bits: pub struct bkey_validate_context_root_bits {
-            #[bits(1)]
-            pub root: bool,
-            #[bits(7)]
-            pub __pad: u8,
+            root:  bool,
+            __pad: u7,
         },
         pub journal_offset: c_uint,
         pub journal_seq: u64,

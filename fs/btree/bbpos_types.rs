@@ -26,8 +26,7 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u16)]
         pub bits: pub struct blbpos_bits {
-            #[bits(16)]
-            pub btree: c::btree_id,
+            #[bits(16)] pub btree: c::btree_id,
         },
         pub level: u16,
         pub pos: c::bpos,

@@ -19,10 +19,8 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8, ty = u32)]
         pub bits: pub struct btree_read_bio_bits {
-            #[bits(7)]
-            pub idx: u32,
-            #[bits(1)]
-            pub __pad: u8,
+            idx:   u7,
+            __pad: u1,
         },
         /* C's CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS, which bcachefs.h defines from these */
         #[cfg(all(__KERNEL__, CONFIG_DEBUG_FS))]

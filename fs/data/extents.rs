@@ -138,32 +138,32 @@ fn crc_unpack(k: &c::bkey, entry: Entry<'_>) -> Option<c::bch_extent_crc_unpacke
         Le64::new(u64::from_le_bytes(w))
     }
 
-    let unpacked = |csum_type: u64, compression_type: u64, compressed_raw: u64,
-                    uncompressed_raw: u64, offset: u64, nonce: u64, csum| {
+    let unpacked = |csum_type: u8, compression_type: u8, compressed_raw: u16,
+                    uncompressed_raw: u16, offset: u16, nonce: u16, csum| {
         c::bch_extent_crc_unpacked {
-            compressed_size:   compressed_raw as u32 + 1,
-            uncompressed_size: uncompressed_raw as u32 + 1,
+            compressed_size:   u32::from(compressed_raw) + 1,
+            uncompressed_size: u32::from(uncompressed_raw) + 1,
             live_size:         k.size,
-            csum_type:         csum_type as u8,
-            compression_type:  compression_type as u8,
-            offset:            offset as u16,
-            nonce:             nonce as u16,
+            csum_type,
+            compression_type,
+            offset,
+            nonce,
             csum,
         }
     };
 
     Some(match entry {
         Entry::crc32(e) =>
-            unpacked(e.csum_type() as u64, e.compression_type() as u64,
-                     e.compressed_size_raw() as u64, e.uncompressed_size_raw() as u64,
-                     e.offset() as u64, 0,
+            unpacked(e.csum_type(), e.compression_type(),
+                     e.compressed_size_raw().into(), e.uncompressed_size_raw().into(),
+                     e.offset().into(), 0,
                      c::bch_csum { lo: csum_word(&e.csum().to_ne_bytes()), hi: Le64::new(0) }),
         Entry::crc64(e) =>
             unpacked(e.csum_type(), e.compression_type(),
                      e.compressed_size_raw(), e.uncompressed_size_raw(),
                      e.offset(), e.nonce(),
                      c::bch_csum { lo: csum_word(&{ e.csum_lo }.to_ne_bytes()),
-                                   hi: csum_word(&(e.csum_hi() as u16).to_ne_bytes()) }),
+                                   hi: csum_word(&e.csum_hi().to_ne_bytes()) }),
         Entry::crc128(e) =>
             unpacked(e.csum_type(), e.compression_type(),
                      e.compressed_size_raw(), e.uncompressed_size_raw(),

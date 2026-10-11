@@ -72,20 +72,13 @@ nest! {
             #>[repr(C)]-
             #>[bitfield(u8, ty = u32)]
             pub bits: pub struct bch_write_bio_bits {
-                #[bits(1)]
-                pub split: u32,
-                #[bits(1)]
-                pub bounce: u32,
-                #[bits(1)]
-                pub put_bio: u32,
-                #[bits(1)]
-                pub nocow: u32,
-                #[bits(1)]
-                pub used_mempool: u32,
-                #[bits(1)]
-                pub first_btree_write: u32,
-                #[bits(2)]
-                pub __pad: u8,
+                split:             u1,
+                bounce:            u1,
+                put_bio:           u1,
+                nocow:             u1,
+                used_mempool:      u1,
+                first_btree_write: u1,
+                __pad:             u2,
             },
         },
 
@@ -124,10 +117,8 @@ nest! {
              *
              * Read these, not @opts, when deciding what to produce.
              */
-            #[bits(8)]
-            pub compression_opt: u32,
-            #[bits(4)]
-            pub csum_type: u32,
+            compression_opt: u8,
+            csum_type:       u4,
 
             /*
              * Replicas this write will place - not @res.nr_replicas, which is what
@@ -137,16 +128,11 @@ nest! {
              * it covers. Overwriting a 2 replica extent that has one replica
              * compressed thus reserves for 1 and writes 2.
              */
-            #[bits(4)]
-            pub nr_replicas: u32,
-            #[bits(3)]
-            pub watermark: u32,
-            #[bits(1)]
-            pub incompressible: u32,
-            #[bits(1)]
-            pub stripe_waited: u32,
-            #[bits(11)]
-            pub __pad: u16,
+            nr_replicas:     u4,
+            watermark:       u3,
+            incompressible:  u1,
+            stripe_waited:   u1,
+            __pad:           u11,
         },
 
         pub devs_have: c::bch_devs_list,

@@ -61,18 +61,12 @@ nest! {
         #>[derive(Clone, Copy, CStruct)]-
         #>[bitfield(u32, repr = NeBytes<3>, from = NeBytes::<3>::from_u32, into = NeBytes::<3>::to_u32)]
         pub bits: pub struct journal_key_bits {
-            #[bits(8)]
-            pub btree_id: c::btree_id,
-            #[bits(8)]
-            pub level: u32,
-            #[bits(1)]
-            pub allocated: bool,
-            #[bits(1)]
-            pub overwritten: bool,
-            #[bits(1)]
-            pub rewind: bool,
-            #[bits(13)]
-            pub __pad: u16,
+            #[bits(8)] pub btree_id: c::btree_id,
+            level:       u8,
+            allocated:   bool,
+            overwritten: bool,
+            rewind:      bool,
+            __pad:       u13,
         },
         pub overwritten_range: u32,
     }

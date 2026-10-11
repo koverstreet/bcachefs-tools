@@ -21,10 +21,8 @@ nest! {
             #>[derive(Clone, Copy, CStruct, TypeInfo)]-
             #>[bitfield(u8)]
             pub bits: pub struct bch_compression_opt_bits {
-                #[bits(4)]
-                pub type_: u8,
-                #[bits(4)]
-                pub level: u8,
+                type_: u4,
+                level: u4,
             },
         },
     }

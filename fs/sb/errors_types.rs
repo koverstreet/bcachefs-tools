@@ -16,10 +16,8 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u64)]
         pub bits: pub struct bch_sb_error_entry_cpu_bits {
-            #[bits(16)]
-            pub id: u64,
-            #[bits(48)]
-            pub nr: u64,
+            id: u16,
+            nr: u48,
         },
         pub first_error_time: u64,
         pub last_error_time: u64,

@@ -60,36 +60,22 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u64)]
         pub bits: pub struct bch_extent_rebalance_v1_bits {
-            #[bits(6)]
-            pub type_: u64,
-            #[bits(3)]
-            pub unused: u64,
+            type_:                             u6,
+            unused:                            u3,
 
-            #[bits(1)]
-            pub promote_target_from_inode: u64,
-            #[bits(1)]
-            pub erasure_code_from_inode: u64,
-            #[bits(1)]
-            pub data_checksum_from_inode: u64,
-            #[bits(1)]
-            pub background_compression_from_inode: u64,
-            #[bits(1)]
-            pub data_replicas_from_inode: u64,
-            #[bits(1)]
-            pub background_target_from_inode: u64,
+            promote_target_from_inode:         u1,
+            erasure_code_from_inode:           u1,
+            data_checksum_from_inode:          u1,
+            background_compression_from_inode: u1,
+            data_replicas_from_inode:          u1,
+            background_target_from_inode:      u1,
 
-            #[bits(16)]
-            pub promote_target: u64,
-            #[bits(1)]
-            pub erasure_code: u64,
-            #[bits(4)]
-            pub data_checksum: u64,
-            #[bits(4)]
-            pub data_replicas: u64,
-            #[bits(8)]
-            pub background_compression: u64, /* enum bch_compression_opt */
-            #[bits(16)]
-            pub background_target: u64,
+            promote_target:                    u16,
+            erasure_code:                      u1,
+            data_checksum:                     u4,
+            data_replicas:                     u4,
+            background_compression:            u8, /* enum bch_compression_opt */
+            background_target:                 u16,
         },
     }
 }
@@ -101,44 +87,26 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u64)]
         pub bits: pub struct bch_extent_reconcile_bits {
-            #[bits(8)]
-            pub type_: u64,
-            #[bits(2)]
-            pub unused: u64,
-            #[bits(5)]
-            pub ptrs_moving: u64,
-            #[bits(1)]
-            pub hipri: u64,
-            #[bits(1)]
-            pub pending: u64,
-            #[bits(5)]
-            pub need_rb: u64,
+            type_:                             u8,
+            unused:                            u2,
+            ptrs_moving:                       u5,
+            hipri:                             u1,
+            pending:                           u1,
+            need_rb:                           u5,
 
-            #[bits(1)]
-            pub data_replicas_from_inode: u64,
-            #[bits(1)]
-            pub data_checksum_from_inode: u64,
-            #[bits(1)]
-            pub erasure_code_from_inode: u64,
-            #[bits(1)]
-            pub background_compression_from_inode: u64,
-            #[bits(1)]
-            pub background_target_from_inode: u64,
-            #[bits(1)]
-            pub promote_target_from_inode: u64,
+            data_replicas_from_inode:          u1,
+            data_checksum_from_inode:          u1,
+            erasure_code_from_inode:           u1,
+            background_compression_from_inode: u1,
+            background_target_from_inode:      u1,
+            promote_target_from_inode:         u1,
 
-            #[bits(3)]
-            pub data_replicas: u64,
-            #[bits(4)]
-            pub data_checksum: u64,
-            #[bits(1)]
-            pub erasure_code: u64,
-            #[bits(8)]
-            pub background_compression: u64, /* enum bch_compression_opt */
-            #[bits(10)]
-            pub background_target: u64,
-            #[bits(10)]
-            pub promote_target: u64,
+            data_replicas:                     u3,
+            data_checksum:                     u4,
+            erasure_code:                      u1,
+            background_compression:            u8, /* enum bch_compression_opt */
+            background_target:                 u10,
+            promote_target:                    u10,
         },
     }
 }
@@ -150,10 +118,8 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u64)]
         pub bits: pub struct bch_extent_reconcile_bp_bits {
-            #[bits(9)]
-            pub type_: u64,
-            #[bits(55)]
-            pub idx: u64,
+            type_: u9,
+            idx:   u55,
         },
     }
 }

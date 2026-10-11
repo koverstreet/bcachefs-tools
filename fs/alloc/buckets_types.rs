@@ -60,10 +60,8 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8)]
         pub bits: pub struct bucket_bits {
-            #[bits(1)]
-            pub gen_valid: u8,
-            #[bits(7)]
-            pub data_type: u8,
+            gen_valid: u1,
+            data_type: u7,
         },
         pub generation: u8,
         pub dirty_sectors: u32,

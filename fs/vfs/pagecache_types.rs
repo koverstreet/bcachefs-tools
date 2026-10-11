@@ -40,11 +40,9 @@ nest! {
         #>[bitfield(u8)]
         pub bits: pub struct bch_folio_sector_bits {
             /* Uncompressed, fully allocated replicas (or on disk reservation): */
-            #[bits(4)]
-            pub nr_replicas: u8,
+            nr_replicas:       u4,
             /* Owns PAGE_SECTORS * replicas_reserved sized in memory reservation: */
-            #[bits(4)]
-            pub replicas_reserved: u8,
+            replicas_reserved: u4,
         },
         pub state: u8,
     }

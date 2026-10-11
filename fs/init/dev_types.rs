@@ -32,14 +32,10 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8, ty = u32)]
         pub bits: pub struct bch_sb_handle_bits {
-            #[bits(1)]
-            pub have_layout: u32,
-            #[bits(1)]
-            pub have_bio: u32,
-            #[bits(1)]
-            pub fs_sb: u32,
-            #[bits(5)]
-            pub __pad: u8,
+            have_layout: u1,
+            have_bio:    u1,
+            fs_sb:       u1,
+            __pad:       u5,
         },
         pub seq: u64,
     }

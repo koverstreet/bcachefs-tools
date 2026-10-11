@@ -40,18 +40,12 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8, ty = u32)]
         pub bits: pub struct dio_write_bits {
-            #[bits(1)]
-            pub loop_: u32,
-            #[bits(1)]
-            pub extending: u32,
-            #[bits(1)]
-            pub sync: u32,
-            #[bits(1)]
-            pub sync_done: u32,
-            #[bits(1)]
-            pub flush: u32,
-            #[bits(3)]
-            pub __pad: u8,
+            loop_:     u1,
+            extending: u1,
+            sync:      u1,
+            sync_done: u1,
+            flush:     u1,
+            __pad:     u3,
         },
         pub quota_res: c::quota_res,
         pub written: u64,

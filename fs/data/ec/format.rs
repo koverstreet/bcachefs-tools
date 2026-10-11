@@ -18,17 +18,14 @@ nest! {
         #[c_bitfield]
         #>[bitfield(u8)]
         pub bits: pub struct bch_stripe_bits {
-            #[bits(4)]
-            pub algorithm: u8,
-            #[bits(1)]
-            pub needs_reconcile: u8,
+            algorithm:       u4,
+            needs_reconcile: u1,
             /*
              * can_widen: how many additional data blocks this stripe could grow
              * into if reused at the current pool's wider target geometry.
              * 3 bits = 0..7, saturating - writers must clamp.
              */
-            #[bits(3)]
-            pub can_widen: u8,
+            can_widen:       u3,
         },
         pub nr_blocks: u8,
         pub nr_redundant: u8,

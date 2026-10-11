@@ -146,10 +146,8 @@ pub struct bversion {
 
 #[bitfield(u8)]
 pub struct bkey_format_bits {
-    #[bits(7)]
-    pub format: u8,
-    #[bits(1)]
-    pub needs_whiteout: u8,
+    format:         u7,
+    needs_whiteout: u1,
 }
 
 /*
