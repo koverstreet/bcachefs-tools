@@ -232,8 +232,12 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         nums.push(format!("crate::types::field_size({proj})"));
         nums.push(format!("crate::types::field_align({proj})"));
     }
+    // a pointer field C reads is a thin one: as c_extern!'s parameters
+    let thin: String = def.fields.iter()
+        .map(|f| thin_pointers(name, &f.cfg, &[(f.rust_name(), f.ty.clone())], None))
+        .collect();
     let flex = vstructs::flex_array(&def)?;
-    Ok(tokens(&format!("{forward}{flex}{}", record(&text, &nums))))
+    Ok(tokens(&format!("{forward}{flex}const _: () = {{\n{thin}}};\n{}", record(&text, &nums))))
 }
 
 /// bitfield_struct::bitfield, recorded - and __NAME_forward!(STRUCT, field),
