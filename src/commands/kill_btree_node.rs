@@ -155,7 +155,7 @@ struct BsetLoc {
 /// empty still has to be corruptible: on a freshly formatted filesystem every
 /// btree leaf is one of those, which is exactly what the spin repro formats.
 fn first_bset(node: &[u8]) -> BsetLoc {
-    let at = size_of::<c::btree_node>() - size_of::<c::bset>();
+    let at = std::mem::offset_of!(c::btree_node, keys);
     let u64s_at = at + std::mem::offset_of!(c::bset, u64s);
 
     BsetLoc {
@@ -176,10 +176,9 @@ fn first_bset_with_keys(node: &[u8], written_sectors: usize, block_size: usize)
         // offset of the bset within its container, and the container's size -
         // which is offsetof(_data), i.e. where this bset's keys begin
         let (bset_at, header) = if off == 0 {
-            (size_of::<c::btree_node>() - size_of::<c::bset>(), size_of::<c::btree_node>())
+            (std::mem::offset_of!(c::btree_node, keys), size_of::<c::btree_node>())
         } else {
-            (off + size_of::<c::btree_node_entry>() - size_of::<c::bset>(),
-             size_of::<c::btree_node_entry>())
+            (off + std::mem::offset_of!(c::btree_node_entry, keys), size_of::<c::btree_node_entry>())
         };
 
         let u64s_at = bset_at + u64s_in_bset;
