@@ -276,7 +276,7 @@ c_enum! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct recovery_pass_entry {
     pub last_run: Le64,
     pub last_runtime: Le32,

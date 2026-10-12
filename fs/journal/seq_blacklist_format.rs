@@ -7,7 +7,7 @@ use crate::types::Le64;
 use cstruct_macros::{CStruct, TypeInfo};
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct journal_seq_blacklist_entry {
     pub start: Le64,
     pub end: Le64,

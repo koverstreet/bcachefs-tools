@@ -83,7 +83,7 @@ c_typedef! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bkey_format {
     pub key_u64s: u8,
     pub nr_fields: u8,
@@ -218,7 +218,7 @@ pub struct bkey {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, CStruct, TypeInfo)]
 #[c_packed]
 pub struct bkey_packed {
     pub _data: [u64; 0],
@@ -288,7 +288,7 @@ c_enum! {
 
 /* bkey with inline value */
 #[repr(C)]
-#[derive(Default, CStruct)]
+#[derive(Default, CStruct, TypeInfo)]
 pub struct bkey_i {
     pub _data: [u64; 0],
 
@@ -864,7 +864,7 @@ pub struct bch_sb_field_journal_v2 {
 /* BCH_SB_FIELD_crypt: */
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct nonce {
     pub d: [Le32; 4],
 }
@@ -927,7 +927,7 @@ c_bitmask! {
  * the superblock:
  */
 #[repr(C)]
-#[derive(Default, CStruct)]
+#[derive(Default, CStruct, TypeInfo)]
 pub struct jset_entry {
     pub u64s: Le16,
     pub btree_id: u8,
@@ -1764,14 +1764,14 @@ c_enum! {
  * don't think there was a missing journal entry.
  */
 #[repr(C)]
-#[derive(Default, CStruct)]
+#[derive(Default, CStruct, TypeInfo)]
 pub struct jset_entry_blacklist {
     pub entry: c::jset_entry,
     pub seq: Le64,
 }
 
 #[repr(C)]
-#[derive(Default, CStruct)]
+#[derive(Default, CStruct, TypeInfo)]
 pub struct jset_entry_blacklist_v2 {
     pub entry: c::jset_entry,
     pub start: Le64,
@@ -1795,14 +1795,14 @@ c_enum! {
 }
 
 #[repr(C, packed)]
-#[derive(Default, CStruct)]
+#[derive(Default, CStruct, TypeInfo)]
 pub struct jset_entry_usage {
     pub entry: c::jset_entry,
     pub v: Le64,
 }
 
 #[repr(C, packed)]
-#[derive(Default, CStruct)]
+#[derive(Default, CStruct, TypeInfo)]
 pub struct jset_entry_data_usage {
     pub entry: c::jset_entry,
     pub v: Le64,
@@ -1810,7 +1810,7 @@ pub struct jset_entry_data_usage {
 }
 
 #[repr(C, packed)]
-#[derive(Default, CStruct)]
+#[derive(Default, CStruct, TypeInfo)]
 pub struct jset_entry_clock {
     pub entry: c::jset_entry,
     pub rw: u8,
@@ -1819,7 +1819,7 @@ pub struct jset_entry_clock {
 }
 
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct jset_entry_dev_usage_type {
     pub buckets: Le64,
     pub sectors: Le64,
@@ -1827,7 +1827,7 @@ pub struct jset_entry_dev_usage_type {
 }
 
 #[repr(C)]
-#[derive(Default, CStruct)]
+#[derive(Default, CStruct, TypeInfo)]
 pub struct jset_entry_dev_usage {
     pub entry: c::jset_entry,
     pub dev: Le32,
@@ -1840,7 +1840,7 @@ pub struct jset_entry_dev_usage {
 }
 
 #[repr(C, align(8))]
-#[derive(Default, CStruct)]
+#[derive(Default, CStruct, TypeInfo)]
 #[c_packed]
 pub struct jset_entry_log {
     pub entry: c::jset_entry,
@@ -1848,7 +1848,7 @@ pub struct jset_entry_log {
 }
 
 #[repr(C, align(8))]
-#[derive(Default, CStruct)]
+#[derive(Default, CStruct, TypeInfo)]
 #[c_packed]
 pub struct jset_entry_datetime {
     pub entry: c::jset_entry,
@@ -1856,7 +1856,7 @@ pub struct jset_entry_datetime {
 }
 
 #[repr(C, align(8))]
-#[derive(Default, CStruct)]
+#[derive(Default, CStruct, TypeInfo)]
 #[c_packed]
 pub struct jset_entry_rewind_limit {
     pub entry: c::jset_entry,
@@ -1868,7 +1868,7 @@ pub struct jset_entry_rewind_limit {
  * with seq in (to, from] use overwrite entries instead of btree_keys.
  */
 #[repr(C, align(8))]
-#[derive(Default, CStruct)]
+#[derive(Default, CStruct, TypeInfo)]
 #[c_packed]
 pub struct jset_entry_rewind {
     pub entry: c::jset_entry,
@@ -1887,7 +1887,7 @@ pub struct jset_entry_rewind {
  * version is for on disk format changes.
  */
 #[repr(C, align(8))]
-#[derive(Default, CStruct)]
+#[derive(Default, CStruct, TypeInfo)]
 #[c_packed]
 pub struct jset {
     pub csum: c::bch_csum,
@@ -1951,7 +1951,7 @@ c_enum! {
  * sorted
  */
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
 pub struct bset {
     pub seq: Le64,
@@ -1986,7 +1986,7 @@ c_bitmask! {
 }
 
 nest! {
-    #[derive(Clone, Copy, CStruct)]*
+    #[derive(Clone, Copy, CStruct, TypeInfo)]*
     #[repr(C, align(8))]
     #[c_packed]
     pub struct btree_node {
@@ -2030,7 +2030,7 @@ c_bitmask! {
 }
 
 nest! {
-    #[derive(Clone, Copy, CStruct)]*
+    #[derive(Clone, Copy, CStruct, TypeInfo)]*
     #[repr(C, align(8))]
     #[c_packed]
     pub struct btree_node_entry {

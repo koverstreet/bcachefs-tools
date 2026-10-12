@@ -121,6 +121,7 @@ c_typedef! {
 tagged_union! {
     #[derive(Clone, Copy, CStruct, TypeInfo)]*
     #[c_typedef]*
+    #[derive(TypeInfo)]
     pub struct disk_accounting_pos {
         tag type_: u8 = disk_accounting_type,
         arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: bch_acct_ ## f = nr,
