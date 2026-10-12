@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::c;
-use bcachefs_kernel::journal::{entry_type, journal_entry_type, jset_no_flush};
+use bcachefs_kernel::journal::{entry_type, journal_entry_type};
 use bcachefs_kernel::util::vstructs::VStructContainer;
 use bcachefs_kernel::opt_set;
 use chrono::{TimeZone, Utc};
@@ -197,7 +197,7 @@ fn cmd_journal_rewind_info(cli: Cli) -> Result<()> {
         if s < floor_seq || s > latest_seq {
             continue;
         }
-        if jset_no_flush(&p.j) {
+        if p.j.no_flush() {
             continue;
         }
         candidates.push((s, jset_datetime(p)));

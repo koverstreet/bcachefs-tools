@@ -22,11 +22,6 @@ impl c::jset {
     }
 }
 
-/// JSET_NO_FLUSH bitfield: bit 5 of le32 flags.
-pub fn jset_no_flush(jset: &c::jset) -> bool {
-    (jset.flags.get() >> 5) & 1 != 0
-}
-
 // ---- entry type conversion ----
 
 /// Convert entry type byte to the raw journal entry type.

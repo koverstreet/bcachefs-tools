@@ -4,7 +4,7 @@ use bch_bindgen::c;
 use bcachefs_kernel::{BbposRange, bbpos_range_parse};
 use bcachefs_kernel::journal::{
     entry_type, entry_btree_id, entry_log_str_eq,
-    entry_type_is_known, journal_entry_type, jset_no_flush,
+    entry_type_is_known, journal_entry_type,
 };
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::util::vstructs::{SelfSized, VStruct, VStructContainer};
@@ -320,7 +320,7 @@ fn journal_entry_header_to_text(
         p.j.sectors(unsafe { (*c_fs).block_bits }.into()),
         p.j.version.get(),
         p.j.last_seq.get(),
-        if jset_no_flush(&p.j) { 0 } else { 1 },
+        if p.j.no_flush() { 0 } else { 1 },
     );
 
     unsafe {
@@ -882,7 +882,7 @@ pub(crate) fn list_journal_run(
             continue;
         }
 
-        if f.flush_only && jset_no_flush(&p.j) {
+        if f.flush_only && p.j.no_flush() {
             continue;
         }
 
