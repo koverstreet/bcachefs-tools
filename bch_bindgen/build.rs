@@ -225,7 +225,7 @@ fn main() {
 
     std::fs::write(
         out_dir.join("non_fs.rs"),
-        packed_and_align_fix(bindings.to_string()),
+        bindings.to_string(),
     )
     .expect("Writing to output file failed for: `non_fs.rs`");
 
@@ -283,86 +283,4 @@ fn main() {
     bindings
         .write_to_file(out_dir.join("keyutils.rs"))
         .expect("Writing to output file failed for: `keyutils.rs`");
-}
-
-// rustc has a limitation where it does not allow structs with a "packed" attribute to contain a
-// member with an "align(N)" attribute. There are a few types in bcachefs with this problem. We can
-// "fix" these types by stripping off "packed" from the outer type, or "align(N)" from the inner
-// type. For all of the affected types, stripping "packed" from the outer type happens to preserve
-// the same layout in Rust as in C.
-//
-// Some types are only affected on attributes on architectures where the natural alignment of u64
-// is 4 instead of 8, for example i686 or ppc64: struct bch_csum and struct bch_sb_layout have
-// "align(8)" added on such architecutres. These types are included by several "packed" types:
-//   - bch_extent_crc128
-//   - jset
-//   - btree_node_entry
-//   - bch_sb
-//
-// TODO: find a way to conditionally include arch-specific modifications when compiling for that
-// target arch. Regular conditional compilation won't work here since build scripts are always
-// compiled for the host arch, not the target arch, so that won't work when cross-compiling.
-fn packed_and_align_fix(bindings: std::string::String) -> std::string::String {
-    let bindings = bindings
-        .replace(
-            "#[repr(C, packed(8))]\npub struct btree_node {",
-            "#[repr(C, align(8))]\npub struct btree_node {",
-        )
-        .replace(
-            "#[repr(C, packed(8))]\n#[derive(Debug, Default, Copy, Clone)]\npub struct bch_extent_crc128 {",
-            "#[repr(C, align(8))]\n#[derive(Debug, Default, Copy, Clone)]\npub struct bch_extent_crc128 {",
-        )
-        .replace(
-            "#[repr(C, packed(8))]\npub struct jset {",
-            "#[repr(C, align(8))]\npub struct jset {",
-        )
-        .replace(
-            "#[repr(C, packed(8))]\npub struct btree_node_entry {",
-            "#[repr(C, align(8))]\npub struct btree_node_entry {",
-        )
-        .replace(
-            "#[repr(C, packed(8))]\npub struct bch_sb {",
-            "#[repr(C, align(8))]\npub struct bch_sb {",
-        );
-
-    // On architectures where u64 has alignment 4 (i686, ppc32), Rust's repr(C)
-    // doesn't propagate the explicit __aligned(8) from struct bkey to types
-    // that contain it (bkey_i_*, btree_node/btree_node_entry anonymous unions,
-    // bch_ioctl_query_accounting). Fix by adding align(8) to all such types.
-    //
-    // These types all contain bkey (which is __packed __aligned(8) in C),
-    // so they inherit alignment 8 on all architectures. Rust's repr(C) doesn't
-    // propagate this — it computes alignment from the fields' natural alignment,
-    // which for u64 is 4 on 32-bit.
-    let target_ptr_width = std::env::var("CARGO_CFG_TARGET_POINTER_WIDTH")
-        .unwrap_or_default();
-    let bindings = if target_ptr_width == "32" {
-        let mut result = String::with_capacity(bindings.len());
-        let mut lines = bindings.lines().peekable();
-        while let Some(line) = lines.next() {
-            if line == "#[repr(C)]" {
-                if let Some(&next) = lines.peek() {
-                    let needs_align8 = next.contains("pub struct bkey_i_")
-                        || next.contains("pub struct btree_node__bindgen_ty_1")
-                        || next.contains("pub struct btree_node_entry__bindgen_ty_1")
-                        || next.contains("pub struct bch_ioctl_query_accounting");
-                    if needs_align8 {
-                        result.push_str("#[repr(C, align(8))]");
-                    } else {
-                        result.push_str(line);
-                    }
-                } else {
-                    result.push_str(line);
-                }
-            } else {
-                result.push_str(line);
-            }
-            result.push('\n');
-        }
-        result
-    } else {
-        bindings
-    };
-
-    bindings
 }
