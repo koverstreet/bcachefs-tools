@@ -2,7 +2,6 @@ use std::fmt::Write;
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::c;
-use bcachefs_kernel::journal::{entry_type, journal_entry_type};
 use bcachefs_kernel::util::vstructs::VStructContainer;
 use bcachefs_kernel::opt_set;
 use chrono::{TimeZone, Utc};
@@ -36,54 +35,26 @@ impl Drop for JournalEntries {
     }
 }
 
-// ---- jset_entry sub-struct field readers ----
-//
-// struct jset_entry is 8 bytes (u64s, btree_id, level, type, pad[3]); the
-// type-specific payload starts at offset 8. We read those payload fields
-// raw because bch_bindgen doesn't expose jset_entry_{datetime,rewind_limit}.
-
-fn entry_payload_le64(entry: &c::jset_entry) -> u64 {
-    unsafe {
-        let p = (entry as *const c::jset_entry as *const u8).add(8) as *const u64;
-        u64::from_le(p.read_unaligned())
-    }
-}
-
-/// Extract the seq from a jset_entry of type rewind_limit (oldest safe rewind).
-fn entry_rewind_limit_seq(entry: &c::jset_entry) -> u64 {
-    entry_payload_le64(entry)
-}
-
-/// Extract seconds-since-epoch from a jset_entry of type datetime.
-fn entry_datetime_seconds(entry: &c::jset_entry) -> u64 {
-    entry_payload_le64(entry)
-}
-
 // ---- per-replay accessors ----
 
 fn jset_seq(p: &c::journal_replay) -> u64 {
     p.j.seq.get()
 }
 
-/// Scan a jset for its first BCH_JSET_ENTRY_datetime sub-entry and return
-/// seconds-since-epoch, or None if absent.
+/// A jset's first datetime entry's seconds-since-epoch, or None if absent.
 fn jset_datetime(p: &c::journal_replay) -> Option<u64> {
-    for e in p.j.entries() {
-        if entry_type(e) == journal_entry_type::datetime {
-            return Some(entry_datetime_seconds(e));
-        }
-    }
-    None
+    p.j.entries().find_map(|e| match e.get() {
+        Ok(c::JsetEntryRef::datetime(d)) => Some(d.seconds.get()),
+        _ => None,
+    })
 }
 
-/// Scan a jset for its first BCH_JSET_ENTRY_rewind_limit and return the seq.
+/// A jset's first rewind_limit entry's seq, or None if absent.
 fn jset_rewind_limit(p: &c::journal_replay) -> Option<u64> {
-    for e in p.j.entries() {
-        if entry_type(e) == journal_entry_type::rewind_limit {
-            return Some(entry_rewind_limit_seq(e));
-        }
-    }
-    None
+    p.j.entries().find_map(|e| match e.get() {
+        Ok(c::JsetEntryRef::rewind_limit(r)) => Some(r.seq.get()),
+        _ => None,
+    })
 }
 
 fn fmt_secs(secs: u64) -> String {

@@ -40,15 +40,11 @@ pub fn entry_btree_id(entry: &c::jset_entry) -> Option<c::btree_id> {
 
 // ---- jset_entry_log helpers ----
 
-/// Get log message bytes from a jset_entry of type log.
-/// Layout: jset_entry header (8 bytes) followed by d[] message bytes.
+/// A log entry's message, its NUL padding trimmed - empty for any other entry.
 pub fn entry_log_msg(entry: &c::jset_entry) -> &[u8] {
-    let msg_bytes = entry.u64s.get() as usize * 8;
-    if msg_bytes == 0 {
-        return &[];
-    }
-    let ptr = entry as *const c::jset_entry as *const u8;
-    let data = unsafe { core::slice::from_raw_parts(ptr.add(8), msg_bytes) };
+    let Ok(c::JsetEntryRef::log(l)) = entry.get() else { return &[] };
+    let data = l.as_bytes()
+        .map_or(&[][..], |b| &b[core::mem::offset_of!(c::jset_entry_log, d)..]);
     // Trim trailing nulls
     let len = data.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
     &data[..len]
