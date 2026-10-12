@@ -187,6 +187,7 @@ pub(crate) fn unsized_impl(def: &CStructDef) -> Result<String, String> {
          // past the header\n\
          unsafe impl<{state}> crate::util::vstructs::Unsized for {ty} {{\n\
              type Ffi = {inst};\n\
+             type Elem = {elem};\n\
              #[inline]\n\
              fn from_raw(p: *const u8, bytes: usize) -> *const Self {{\n\
                  let n = (bytes - ::core::mem::size_of::<Self::Ffi>()) / ::core::mem::size_of::<{elem}>();\n\

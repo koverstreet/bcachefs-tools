@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use zerocopy::byteorder::little_endian as le;
-use crate::util::vstructs::vstruct;
+use crate::util::vstructs::{vstruct, Ffi};
 use cstruct_macros::{CStruct, Plain, TypeInfo, View};
 
 /*
@@ -25,7 +25,7 @@ pub struct bch_sb_field_downgrade_entry {
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_sb_field_downgrade {
-    pub field: c::bch_sb_field,
+    pub field: Ffi<c::bch_sb_field>,
     pub entries: [c::bch_sb_field_downgrade_entry; 0],
 }
 vstruct!(bch_sb_field_downgrade, field.u64s, start = 0);

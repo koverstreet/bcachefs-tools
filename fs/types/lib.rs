@@ -407,9 +407,10 @@ pub struct CacheAligned([u8; 0]);
 pub struct LongAligned([core::ffi::c_long; 0]);
 
 /// Default for a type C shares: all zeroes, C's `= {}` - as bindgen's was. For
-/// types whose every field is C's, to which all zeroes is a valid value.
+/// types whose every field is C's, to which all zeroes is a valid value - an
+/// unsized vstruct's sized instance too, by name: c_default!(T<Validated, [E; 0]>).
 macro_rules! c_default {
-    ($name:ident) => {
+    ($name:ty) => {
         impl Default for $name {
             fn default() -> Self {
                 // SAFETY: every field is a C type, valid all zeroes

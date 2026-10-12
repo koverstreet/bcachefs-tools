@@ -643,9 +643,6 @@ pub struct CTaggedUnion {
     /// past - an unsized vstruct (CGeneric), each reference to which has its
     /// arm's bytes.
     pub unsized_:  bool,
-    /// `unsized view`: the same, but the storage still a sized header,
-    /// reached through a View of its bytes - until it's an unsized vstruct.
-    pub unsized_view: bool,
     /// Arm types defined in the block, for nestify::nest!.
     pub defs:      Vec<CTaggedDef>,
 }
@@ -1977,7 +1974,7 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
     let mut tu = CTaggedUnion { cfg, name, union, storage, tag_field: String::new(),
                                 tag_ty: String::new(), tag_enum: String::new(), by: None,
                                 from: None, arms: Vec::new(), members: Vec::new(), pad: None,
-                                packed: false, unsized_: false, unsized_view: false, defs: Vec::new() };
+                                packed: false, unsized_: false, defs: Vec::new() };
     for item in split_top(inner, ',') {
         let eq = item.iter().rposition(|t| t.is_punct('='));
         match item {
@@ -2011,10 +2008,6 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
                 tu.members.push((m.clone(), tokens_to_rust(ty))),
             [Tok::Ident(kw)] if kw == "packed" => tu.packed = true,
             [Tok::Ident(kw)] if kw == "unsized" => tu.unsized_ = true,
-            [Tok::Ident(kw), Tok::Ident(v)] if kw == "unsized" && v == "view" => {
-                tu.unsized_ = true;
-                tu.unsized_view = true;
-            }
             _ => return Err(format!("tagged_union!: {} not understood", tokens_to_rust(item))),
         }
     }

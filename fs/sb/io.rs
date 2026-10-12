@@ -2,7 +2,7 @@ use crate::c;
 use crate::c::{bch_member, bch_sb, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
 use crate::sb::members;
 use crate::types::ArmOf;
-use crate::util::vstructs::{Plain, SelfSized, View, ViewMut};
+use crate::util::vstructs::{Ffi, Plain, SelfSized, Validated, View, ViewMut};
 
 /// A superblock section's type: an arm of tagged_union! bch_sb_field, which
 /// gives its field type - Plain, so a View of a short one reads as zero
@@ -13,7 +13,7 @@ pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + Plain + Sized {
 
 impl<F: ArmOf<c::bch_sb_field, Tag = u32> + Plain> SbField for F {}
 
-impl PartialEq for bch_sb {
+impl<S, T: ?Sized> PartialEq for bch_sb<S, T> {
     fn eq(&self, other: &Self) -> bool {
         self.magic.b == other.magic.b
             && self.user_uuid.b == other.user_uuid.b
@@ -32,6 +32,8 @@ impl PartialEq for bch_sb {
 const JSET_MAGIC: u64 = 0x245235c1a3625032;
 const BSET_MAGIC: u64 = 0x90135c78b99e07f5;
 
+/// What walks its sections - C's walk, which trusts their counts: a
+/// validated superblock's.
 impl bch_sb {
     /// Its section of type @F: sb_field_get().
     pub fn field<F: SbField>(&self) -> Option<View<'_, F>> {
@@ -43,6 +45,13 @@ impl bch_sb {
         self.field::<bch_sb_field_crypt>()?.whole()
     }
 
+    pub fn number_of_devices(&self) -> u32 {
+        unsafe { c::bch2_sb_nr_devices(self.as_ffi()) }
+    }
+}
+
+/// Its header's: every instance's.
+impl<S, T: ?Sized> bch_sb<S, T> {
     pub fn uuid(&self) -> uuid::Uuid {
         uuid::Uuid::from_bytes(self.user_uuid.b)
     }
@@ -68,10 +77,6 @@ impl bch_sb {
         &self.label[..len]
     }
 
-    pub fn number_of_devices(&self) -> u32 {
-        unsafe { c::bch2_sb_nr_devices(self) }
-    }
-
     /// Get the nonce used to encrypt the superblock
     pub fn nonce(&self) -> nonce {
         let [a, b, c, d, e, f, g, h, _rest @ ..] = self.uuid.b;
@@ -86,11 +91,14 @@ impl bch_sb {
 
 impl bch_sb_handle {
     pub fn sb(&self) -> &bch_sb {
-        unsafe { &*self.sb }
+        // SAFETY: C read and validated it, and owns its buffer while we're
+        // borrowed - resize and realloc take &mut
+        unsafe { bch_sb::<Validated>::from_ffi(self.sb) }
     }
 
     pub fn sb_mut(&mut self) -> &mut bch_sb {
-        unsafe { &mut *self.sb }
+        // SAFETY: as sb()'s
+        unsafe { bch_sb::<Validated>::from_ffi_mut(self.sb) }
     }
 
     pub fn bdev(&self) -> &block_device {
@@ -150,14 +158,12 @@ impl bch_sb_handle {
 
     /// The superblock's full vstruct extent as bytes.
     pub fn sb_bytes(&self) -> &[u8] {
-        let bytes = self.sb().bytes();
-        unsafe { core::slice::from_raw_parts(self.sb as *const u8, bytes) }
+        self.sb().as_bytes()
     }
 
     /// The superblock's full vstruct extent, mutably.
     pub fn sb_bytes_mut(&mut self) -> &mut [u8] {
-        let bytes = self.sb().bytes();
-        unsafe { core::slice::from_raw_parts_mut(self.sb as *mut u8, bytes) }
+        crate::util::vstructs::bytes_of_mut(self.sb_mut())
     }
 
     /// Member @idx, to edit: None if there's no such member in the section,
@@ -226,10 +232,10 @@ c::BCH_PERSISTENT_COUNTERS!(counter_table);
 /// its header says are its - one written before F grew reads as zero past
 /// them, as C's bch2_sb_field_get_minsize() would have grown it to.
 pub fn sb_field_get<F: SbField>(sb: &c::bch_sb) -> Option<View<'_, F>> {
-    let f = unsafe { c::bch2_sb_field_get_id(sb as *const _ as *mut _, F::FIELD_TYPE) };
+    let f = unsafe { c::bch2_sb_field_get_id(sb.as_ffi() as *mut _, F::FIELD_TYPE) };
     // SAFETY: C's walk of the sections the superblock's count says it has -
     // validated, so the section and its bytes are there
-    (!f.is_null()).then(|| unsafe { View::from_validated(f) })?.arm::<F>()
+    (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi(f) })?.arm::<F>()
 }
 
 /// sb_field_get(), to edit: a field past the section's end is a set()
@@ -241,7 +247,7 @@ pub fn sb_field_get<F: SbField>(sb: &c::bch_sb) -> Option<View<'_, F>> {
 pub fn sb_field_get_mut<F: SbField>(disk_sb: &mut c::bch_sb_handle) -> Option<ViewMut<'_, F>> {
     let f = unsafe { c::bch2_sb_field_get_id(disk_sb.sb, F::FIELD_TYPE) };
     // SAFETY: as sb_field_get()'s
-    (!f.is_null()).then(|| unsafe { ViewMut::from_validated(f) })?.arm_mut::<F>()
+    (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
 }
 
 /// Resize the section of type @F to @u64s, making it if there's none: the
@@ -253,7 +259,7 @@ pub fn sb_field_resize<F: SbField>(
 ) -> Option<ViewMut<'_, F>> {
     let f = unsafe { c::bch2_sb_field_resize_id(disk_sb, F::FIELD_TYPE, u64s) };
     // SAFETY: C's resize, which reallocates the superblock if it has to
-    (!f.is_null()).then(|| unsafe { ViewMut::from_validated(f) })?.arm_mut::<F>()
+    (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
 }
 
 /// The section of type @F, made or grown to at least @min_u64s: as
@@ -264,7 +270,7 @@ pub fn sb_field_get_minsize<F: SbField>(
 ) -> Option<ViewMut<'_, F>> {
     let f = unsafe { c::bch2_sb_field_get_minsize_id(disk_sb, F::FIELD_TYPE, min_u64s) };
     // SAFETY: as sb_field_resize()'s
-    (!f.is_null()).then(|| unsafe { ViewMut::from_validated(f) })?.arm_mut::<F>()
+    (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
 }
 
 // ---------------------------------------------------------------------------
@@ -322,15 +328,15 @@ impl core::fmt::Display for SbParseError {
 
 /// Validate the extents; returns the vstruct size in bytes.
 fn sb_parse_checks(buf: &[u8]) -> Result<usize, SbParseError> {
-    let hdr = core::mem::size_of::<bch_sb>();
+    let hdr = core::mem::size_of::<Ffi<bch_sb>>();
     if buf.len() < hdr {
         return Err(SbParseError::BufferTooSmall { need: hdr, have: buf.len() });
     }
-    if buf.as_ptr() as usize % core::mem::align_of::<bch_sb>() != 0 {
+    if buf.as_ptr() as usize % core::mem::align_of::<Ffi<bch_sb>>() != 0 {
         return Err(SbParseError::Misaligned);
     }
     /* header extent and alignment just validated: */
-    let sb = unsafe { &*(buf.as_ptr() as *const bch_sb) };
+    let sb = unsafe { &*(buf.as_ptr() as *const Ffi<bch_sb>) };
 
     if sb.magic.b != BCACHE_MAGIC && sb.magic.b != BCHFS_MAGIC {
         return Err(SbParseError::BadMagic);
@@ -343,12 +349,12 @@ fn sb_parse_checks(buf: &[u8]) -> Result<usize, SbParseError> {
 
     let mut off = hdr;
     while off < bytes {
-        if bytes - off < core::mem::size_of::<c::bch_sb_field>() {
+        if bytes - off < core::mem::size_of::<Ffi<c::bch_sb_field>>() {
             return Err(SbParseError::FieldBeyondSb { field_offset: off });
         }
         /* field header extent just validated: */
-        let f = unsafe { &*(buf.as_ptr().add(off) as *const c::bch_sb_field) };
-        let f_u64s = f.u64s.get() as u64;
+        let f = unsafe { &*(buf.as_ptr().add(off) as *const Ffi<c::bch_sb_field>) };
+        let f_u64s = f.u64s() as u64;
         if f_u64s == 0 {
             return Err(SbParseError::FieldBadU64s { field_offset: off });
         }
@@ -375,7 +381,8 @@ impl<'a> SbRef<'a> {
     }
 
     pub fn sb(&self) -> &'a bch_sb {
-        unsafe { &*(self.buf.as_ptr() as *const bch_sb) }
+        // SAFETY: parse() checked every count it has
+        unsafe { bch_sb::<Validated>::from_ffi(self.buf.as_ptr().cast()) }
     }
 
     /// The superblock's full vstruct extent.
@@ -401,11 +408,13 @@ impl<'a> SbMut<'a> {
     }
 
     pub fn sb(&self) -> &bch_sb {
-        unsafe { &*(self.buf.as_ptr() as *const bch_sb) }
+        // SAFETY: parse() checked every count it has
+        unsafe { bch_sb::<Validated>::from_ffi(self.buf.as_ptr().cast()) }
     }
 
     pub fn sb_mut(&mut self) -> &mut bch_sb {
-        unsafe { &mut *(self.buf.as_mut_ptr() as *mut bch_sb) }
+        // SAFETY: as sb()'s
+        unsafe { bch_sb::<Validated>::from_ffi_mut(self.buf.as_mut_ptr().cast()) }
     }
 
     /// The superblock's full vstruct extent.
@@ -465,11 +474,13 @@ impl SbBuf {
     }
 
     pub fn sb(&self) -> &bch_sb {
-        unsafe { &*(self.buf.as_ptr() as *const bch_sb) }
+        // SAFETY: parse() checked every count it has
+        unsafe { bch_sb::<Validated>::from_ffi(self.buf.as_ptr().cast()) }
     }
 
     pub fn sb_mut(&mut self) -> &mut bch_sb {
-        unsafe { &mut *(self.buf.as_mut_ptr() as *mut bch_sb) }
+        // SAFETY: as sb()'s
+        unsafe { bch_sb::<Validated>::from_ffi_mut(self.buf.as_mut_ptr().cast()) }
     }
 
     /// The superblock's full vstruct extent.
@@ -493,19 +504,18 @@ impl SbAccess for SbBuf {
 mod tests {
     use crate::c;
     use crate::types::Le32;
-    use crate::util::vstructs::{VStruct, View};
+    use crate::util::vstructs::{Ffi, Validated, VStruct};
 
     /// @buf as a superblock field of type @ty, @u64s long - its header written
-    /// - and the View of it a superblock's walk would give: as many bytes as
-    /// it says.
-    fn field(buf: &mut [u64], ty: c::bch_sb_field_type, u64s: usize) -> View<'_, c::bch_sb_field> {
-        let f = buf.as_mut_ptr().cast::<c::bch_sb_field>();
+    /// - as a superblock's walk would give it: as many bytes as it says.
+    fn field(buf: &mut [u64], ty: c::bch_sb_field_type, u64s: usize) -> &c::bch_sb_field {
+        let f = buf.as_mut_ptr().cast::<Ffi<c::bch_sb_field>>();
         // SAFETY: u64s, which any bytes are, aligned for a bch_sb_field, and
         // as many as u64s says
         unsafe {
             (*f).set_val_u64s(u64s);
             (*f).type_ = Le32::new(ty.0);
-            View::from_validated(f)
+            c::bch_sb_field::<Validated>::from_ffi(f)
         }
     }
 
@@ -517,7 +527,8 @@ mod tests {
         let mut buf = [0u64; 4];
 
         let f = field(&mut buf, T::BCH_SB_FIELD_journal, 3);
-        assert!(matches!(f.typed(), Ok(c::BchSbFieldRef::journal(j)) if j.field().u64s().get() == 3));
+        assert_eq!(f.as_bytes().len(), 24);
+        assert!(matches!(f.typed(), Ok(c::BchSbFieldRef::journal(j)) if j.field().get().u64s() == 3));
 
         let f = field(&mut buf, T::BCH_SB_FIELD_NR, 3);
         assert!(matches!(f.typed(), Err(t) if t == T::BCH_SB_FIELD_NR));

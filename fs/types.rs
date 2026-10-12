@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::util::vstructs::Ffi;
 use crate::types::{GenRadix, bits_to_longs, c_default};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
@@ -338,7 +339,7 @@ pub struct bch_dev {
     pub name: [c_char; c::BDEVNAME_SIZE as usize],
 
     pub disk_sb: c::bch_sb_handle,
-    pub sb_read_scratch: *mut c::bch_sb,
+    pub sb_read_scratch: *mut Ffi<c::bch_sb>,
     pub sb_write_error: c_int,
     pub dev: c::dev_t,
 

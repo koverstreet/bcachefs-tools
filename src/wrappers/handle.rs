@@ -17,6 +17,7 @@ use bch_bindgen::accounting::data_type;
 use crate::wrappers::ioctl::*;
 use crate::wrappers::sysfs;
 use bch_bindgen::c::bch_sb;
+use bcachefs_kernel::util::vstructs::Ffi;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::path_to_cstr;
 use errno::Errno;
@@ -494,10 +495,12 @@ impl BcachefsHandle {
     /// Read the on-disk metadata version from the filesystem superblock.
     pub(crate) fn sb_version(&self) -> Result<u16, Errno> {
         let buf = self.read_super()?;
-        if buf.len() < mem::size_of::<bch_sb>() {
+        if buf.len() < mem::size_of::<Ffi<bch_sb>>() {
             return Err(Errno(libc::EIO));
         }
-        let sb = unsafe { &*(buf.as_ptr() as *const bch_sb) };
+        // SAFETY: the header's bytes, as checked, and any bytes are one - read
+        // unaligned: the buffer is bytes
+        let sb = unsafe { buf.as_ptr().cast::<Ffi<bch_sb>>().read_unaligned() };
         Ok(sb.version.get())
     }
 

@@ -65,7 +65,7 @@ fn validate_sb(sb: &mut c::bch_sb, offset_sectors: u64) -> (i32, Printbuf) {
     let mut err = Printbuf::new();
     let mut opts = c::bch_opts::default();
     let ret = unsafe {
-        c::bch2_sb_validate(sb, &mut opts, offset_sectors, c::bch_validate_flags::from_bits_retain(0), err.as_raw())
+        c::bch2_sb_validate(sb.as_ffi_mut(), &mut opts, offset_sectors, c::bch_validate_flags::from_bits_retain(0), err.as_raw())
     };
     (ret, err)
 }

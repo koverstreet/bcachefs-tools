@@ -586,14 +586,23 @@ c_bitmask! {
 
 /* Optional/variable size superblock sections: */
 
+/// Its u64s count it from its start, its header's included: C's _data[] is
+/// there, at 0, as vstructs.h's macros have it. The unsized tail is Rust's
+/// alone, past the header - C has it as _data[] already.
+///
+/// The count is the crate's, not private: the sections that embed this
+/// header are defined across the crate, and their vstruct!() reads it.
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
-pub struct bch_sb_field {
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+pub struct bch_sb_field<S = Validated, T: ?Sized = [u64]> {
     pub _data: [u64; 0],
-    pub u64s: Le32,
+    pub(crate) u64s: Le32,
     pub type_: Le32,
+    _s: PhantomData<S>,
+    #[c_anon("")]
+    _tail: T,
 }
-vstruct!(bch_sb_field, u64s, start = 0);
+vstruct!(unsized bch_sb_field, u64s, start = 0);
 
 c_xmacro! {
     BCH_SB_FIELDS(x) {
@@ -854,7 +863,7 @@ tagged_union! {
     pub union bch_sb_field in c::bch_sb_field {
         tag type_: u32 = c::bch_sb_field_type,
         arms from BCH_SB_FIELDS(f, nr, ..) => f: c::bch_sb_field_ ## f = nr,
-        unsized view,
+        unsized,
     }
 }
 
@@ -873,7 +882,7 @@ c_const! {
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_sb_field_journal {
-    pub field: c::bch_sb_field,
+    pub field: Ffi<c::bch_sb_field>,
     pub buckets: [Le64; 0],
 }
 vstruct!(bch_sb_field_journal, field.u64s, start = 0);
@@ -888,7 +897,7 @@ pub struct bch_sb_field_journal_v2_entry {
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_sb_field_journal_v2 {
-    pub field: c::bch_sb_field,
+    pub field: Ffi<c::bch_sb_field>,
 
     pub d: [c::bch_sb_field_journal_v2_entry; 0],
 }
@@ -925,7 +934,7 @@ pub struct bch_encrypted_key {
 #[repr(C)]
 #[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_sb_field_crypt {
-    pub field: c::bch_sb_field,
+    pub field: Ffi<c::bch_sb_field>,
 
     pub flags: Le64,
     pub kdf_flags: Le64,
@@ -979,7 +988,7 @@ vstruct_container!(unsized jset_entry, thin c::bkey_i);
 #[repr(C)]
 #[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_sb_field_clean {
-    pub field: c::bch_sb_field,
+    pub field: Ffi<c::bch_sb_field>,
 
     pub flags: Le32,
     pub _read_clock: Le16, /* no longer used */
@@ -995,7 +1004,7 @@ vstruct_container!(bch_sb_field_clean, c::jset_entry);
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_sb_field_ext {
-    pub field: c::bch_sb_field,
+    pub field: Ffi<c::bch_sb_field>,
     pub recovery_passes_required: [Le64; 2],
     pub errors_silent: [Le64; 8],
     pub btrees_lost_data: Le64,
@@ -1259,7 +1268,7 @@ c_const! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bch_sb {
+pub struct bch_sb<S = Validated, T: ?Sized = [Le64]> {
     pub csum: c::bch_csum,
     pub version: Le16,
     pub version_min: Le16,
@@ -1274,7 +1283,7 @@ pub struct bch_sb {
     pub block_size: Le16,
     pub dev_idx: u8,
     pub nr_devices: u8,
-    pub u64s: Le32,
+    u64s: Le32,
 
     pub time_base_lo: Le64,
     pub time_base_hi: Le32,
@@ -1287,15 +1296,17 @@ pub struct bch_sb {
 
     pub layout: c::bch_sb_layout,
 
-    pub start: [c::bch_sb_field; 0],
-    pub _data: [Le64; 0],
+    pub start: [Ffi<c::bch_sb_field>; 0],
+    _s: PhantomData<S>,
+    pub _data: T,
 }
-vstruct!(bch_sb, u64s);
-vstruct_container!(bch_sb, c::bch_sb_field);
-c_default!(bch_sb);
+vstruct!(unsized bch_sb, u64s);
+vstruct_container!(unsized bch_sb, bch_sb_field);
+// Ffi<bch_sb>, by name - see vstructs.rs Unsized::Ffi
+c_default!(bch_sb<Validated, [Le64; 0]>);
 
 c_bitmask! {
-    LE16_BITMASK(struct bch_sb, block_size), strip BCH_SB_ {
+    LE16_BITMASK(struct bch_sb<S, T: ?Sized>, block_size), strip BCH_SB_ {
         BCH_SB_BLOCK_SIZE(0, 16),
     }
 }
@@ -1313,7 +1324,7 @@ c_bitmask! {
  */
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb, flags[0]), strip BCH_SB_ {
+    LE64_BITMASK(struct bch_sb<S, T: ?Sized>, flags[0]), strip BCH_SB_ {
         BCH_SB_INITIALIZED(0, 1),
         BCH_SB_CLEAN(1, 2),
         BCH_SB_CSUM_TYPE(2, 8),
@@ -1344,7 +1355,7 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb, flags[1]), strip BCH_SB_ {
+    LE64_BITMASK(struct bch_sb<S, T: ?Sized>, flags[1]), strip BCH_SB_ {
         BCH_SB_STR_HASH_TYPE(0, 4),
         BCH_SB_COMPRESSION_TYPE_LO(4, 8),
         BCH_SB_INODE_32BIT(8, 9),
@@ -1368,14 +1379,14 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb, flags[2]), strip BCH_SB_ {
+    LE64_BITMASK(struct bch_sb<S, T: ?Sized>, flags[2]), strip BCH_SB_ {
         BCH_SB_BACKGROUND_COMPRESSION_TYPE_LO(0, 4),
         BCH_SB_GC_RESERVE_BYTES(4, 64),
     }
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb, flags[3]), strip BCH_SB_ {
+    LE64_BITMASK(struct bch_sb<S, T: ?Sized>, flags[3]), strip BCH_SB_ {
         BCH_SB_ERASURE_CODE(0, 16),
         BCH_SB_METADATA_TARGET(16, 28),
         BCH_SB_SHARD_INUMS(28, 29),
@@ -1386,7 +1397,7 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb, flags[4]), strip BCH_SB_ {
+    LE64_BITMASK(struct bch_sb<S, T: ?Sized>, flags[4]), strip BCH_SB_ {
         BCH_SB_JOURNAL_RECLAIM_DELAY(0, 32),
         BCH_SB_JOURNAL_TRANSACTION_NAMES(32, 33),
         BCH_SB_NOCOW(33, 34),
@@ -1399,7 +1410,7 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb, flags[5]), strip BCH_SB_ {
+    LE64_BITMASK(struct bch_sb<S, T: ?Sized>, flags[5]), strip BCH_SB_ {
         BCH_SB_VERSION_UPGRADE_COMPLETE(0, 16),
         BCH_SB_ALLOCATOR_STUCK_TIMEOUT(16, 32),
         BCH_SB_VERSION_INCOMPAT(32, 48),
@@ -1408,7 +1419,7 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb, flags[6]), strip BCH_SB_ {
+    LE64_BITMASK(struct bch_sb<S, T: ?Sized>, flags[6]), strip BCH_SB_ {
         BCH_SB_SHARD_INUMS_NBITS(0, 4),
         BCH_SB_WRITE_ERROR_TIMEOUT(4, 14),
         BCH_SB_CSUM_ERR_RETRY_NR(14, 20),
@@ -1995,7 +2006,7 @@ vstruct!(unsized jset, u64s);
 vstruct_container!(unsized jset, jset_entry);
 
 /* The containers and their entries: each one's header is whole in all of them. */
-floored_by_self!(bkey_i, bch_sb_field, bch_sb_field_clean, bch_sb);
+floored_by_self!(bkey_i, bch_sb_field_clean);
 
 c_bitmask! {
     LE32_BITMASK(struct jset<S, T: ?Sized>, flags), strip JSET_ {

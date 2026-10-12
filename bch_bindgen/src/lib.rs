@@ -26,6 +26,10 @@ pub mod c {
 	mod generated {
 		use bcachefs_kernel::c::*;
 
+		// C's: the unsized vstructs bindgen's fns name, as their sized
+		// instances - an item beats the glob
+		type bch_sb = bcachefs_kernel::util::vstructs::Ffi<bcachefs_kernel::c::bch_sb>;
+
 		include!(concat!(env!("OUT_DIR"), "/non_fs.rs"));
 	}
 	pub use generated::*;

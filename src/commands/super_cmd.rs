@@ -90,7 +90,7 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
     // Use the per-device superblock, not c->disk_sb.sb — the filesystem-level
     // copy omits fields like magic and layout that __copy_super doesn't transfer.
     let _ = fs.for_each_online_member(|ca| {
-        let sb = unsafe { &*ca.disk_sb.sb };
+        let sb = ca.disk_sb.sb();
 
         let mut fields = fields;
         if print_default_fields {

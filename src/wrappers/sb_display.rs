@@ -15,6 +15,7 @@ use bch_bindgen::c;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::c::bch_sb_handle;
 use bcachefs_kernel::sb::{self, sb_field_type};
+use bcachefs_kernel::util::vstructs::Ffi;
 
 use crate::device_scan;
 
@@ -44,7 +45,7 @@ fn find_dev(sbs: &[(PathBuf, bch_sb_handle)], idx: u32) -> Option<&(PathBuf, bch
 unsafe fn print_one_member(
     out: &mut Printbuf,
     sbs: &[(PathBuf, bch_sb_handle)],
-    sb: *mut c::bch_sb,
+    sb: *mut Ffi<c::bch_sb>,
     gi: *mut c::bch_sb_field_disk_groups,
     m: &mut c::bch_member,
     idx: u32,
@@ -101,7 +102,7 @@ pub unsafe fn sb_to_text_with_names(
     let opts = bcachefs_kernel::opts::parse_mount_opts(None, None, true).unwrap_or_default();
     let sbs = device_scan::scan_sbs(&device_str, &opts).unwrap_or_default();
 
-    let sb_ptr = sb as *const c::bch_sb as *mut c::bch_sb;
+    let sb_ptr = sb.as_ffi() as *mut Ffi<c::bch_sb>;
 
     if field_only >= 0 {
         let f = c::bch2_sb_field_get_id(sb_ptr, c::bch_sb_field_type(field_only as u32));
