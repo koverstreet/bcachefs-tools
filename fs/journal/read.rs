@@ -22,19 +22,6 @@ impl c::jset {
     }
 }
 
-/// Total byte size of a jset including header.
-pub fn jset_vstruct_bytes(jset: &c::jset) -> usize {
-    let u64s = jset.u64s.get() as usize;
-    56 + u64s * 8
-}
-
-/// Number of sectors occupied by a jset on disk.
-pub fn jset_vstruct_sectors(jset: &c::jset, block_bits: u16) -> usize {
-    let bytes = jset_vstruct_bytes(jset);
-    let block_size = 512usize << block_bits;
-    (bytes.div_ceil(block_size) * block_size) >> 9
-}
-
 /// JSET_NO_FLUSH bitfield: bit 5 of le32 flags.
 pub fn jset_no_flush(jset: &c::jset) -> bool {
     (jset.flags.get() >> 5) & 1 != 0

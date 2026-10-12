@@ -11,11 +11,11 @@ use bcachefs_kernel::btree::bkey::BkeyS;
 use bcachefs_kernel::c;
 use bcachefs_kernel::data::extents::{bkey_ptrs_mut, bkey_ptrs_sc};
 use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::util::vstructs::SelfSized;
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::POS_MIN;
 
 use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
-use crate::wrappers::super_io::vstruct_bytes_sb;
 
 // Crypto for the sanitize path. These drive the wrapped bch2_encrypt /
 // bch2_checksum (and bset_encrypt) over the same byte ranges the kernel's
@@ -589,7 +589,7 @@ fn dump_node(fs: &Fs, devs: &mut [DumpDev], k: btree::BkeySC<'_>, btree_node_siz
 
 fn get_sb_journal(fs: &Fs, ca: &c::bch_dev, entire_journal: bool, d: &mut DumpDev) {
     let sb = unsafe { &*ca.disk_sb.sb };
-    let sb_bytes = vstruct_bytes_sb(sb) as u64;
+    let sb_bytes = sb.bytes() as u64;
     let bucket_bytes = (ca.mi.bucket_size as u64) << 9;
 
     // Superblock layout

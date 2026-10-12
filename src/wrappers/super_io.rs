@@ -22,12 +22,6 @@ pub fn borrowed_file(fd: i32) -> std::mem::ManuallyDrop<std::fs::File> {
     std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) })
 }
 
-/// Compute the total byte size of a variable-length superblock struct.
-/// Equivalent to C's `vstruct_bytes(sb)`.
-pub fn vstruct_bytes_sb(sb: &c::bch_sb) -> usize {
-    std::mem::size_of::<c::bch_sb>() + sb.u64s.get() as usize * 8
-}
-
 /// Compute the superblock checksum using the csum type stored in the sb.
 fn csum_vstruct_sb(sb: *mut c::bch_sb) -> c::bch_csum {
     unsafe { c::rust_csum_vstruct_sb(sb) }

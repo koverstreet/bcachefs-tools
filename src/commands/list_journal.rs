@@ -4,10 +4,10 @@ use bch_bindgen::c;
 use bcachefs_kernel::{BbposRange, bbpos_range_parse};
 use bcachefs_kernel::journal::{
     entry_type, entry_btree_id, entry_log_str_eq,
-    entry_type_is_known, journal_entry_type, jset_vstruct_bytes, jset_vstruct_sectors, jset_no_flush,
+    entry_type_is_known, journal_entry_type, jset_no_flush,
 };
 use bcachefs_kernel::opt_set;
-use bcachefs_kernel::util::vstructs::VStructContainer;
+use bcachefs_kernel::util::vstructs::{SelfSized, VStruct, VStructContainer};
 use clap::Parser;
 
 use bcachefs_kernel::util::printbuf::Printbuf;
@@ -316,8 +316,8 @@ fn journal_entry_header_to_text(
          \x20 written at      ",
         if blacklisted { "blacklisted " } else { "" },
         p.j.seq.get(),
-        jset_vstruct_bytes(&p.j),
-        jset_vstruct_sectors(&p.j, unsafe { (*c_fs).block_bits }),
+        p.j.bytes(),
+        p.j.sectors(unsafe { (*c_fs).block_bits }.into()),
         p.j.version.get(),
         p.j.last_seq.get(),
         if jset_no_flush(&p.j) { 0 } else { 1 },

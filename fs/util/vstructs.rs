@@ -78,6 +78,12 @@ pub trait SelfSized {
 pub trait VStruct: SelfSized {
     /// Set the count; panics if its field can't hold @u64s.
     fn set_val_u64s(&mut self, u64s: usize);
+
+    /// Its 512 byte sectors, whole blocks of 512 << @block_bits:
+    /// vstruct_sectors().
+    fn sectors(&self, block_bits: u32) -> usize {
+        self.bytes().next_multiple_of(512 << block_bits) >> 9
+    }
 }
 
 /// A type ending in a flexible array member, C's `T name[]`.
