@@ -17,6 +17,10 @@
 //! #[derive(Plain)] (cstruct-macros) checks at compile time, zerocopy's
 //! FromBytes for the types we define.
 //!
+//! Bytes nothing has validated - off a device, from the kernel - are an
+//! UnvalidatedRef: its count checked against them when it's made, an overrun an
+//! error, and then it's exactly its own bytes.
+//!
 //! What a variable-size type is, from the most general:
 //!  - SelfSized, bytes(): its own bytes say how big it is - a #[counted_by]
 //!    array's FlexArray is. Not extent entries, sized by the superblock's
@@ -38,7 +42,7 @@
 
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, MaybeUninit};
-use core::ops::Deref;
+use core::ops::{Deref, DerefMut};
 
 use crate::c;
 
@@ -358,6 +362,216 @@ impl<'a, T: FlexArray> Flex<'a, T> {
         }
         // SAFETY: in bounds and aligned, as checked above, and any bytes are an Elem
         Ok(unsafe { core::slice::from_raw_parts(p.cast::<T::Elem>(), nr) })
+    }
+}
+
+// ---- UnvalidatedRef: bytes whose counts haven't been checked ---------------
+
+/// An UnvalidatedRef's header doesn't match the bytes it's made from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VStructError {
+    /// They don't hold @ty's header, or what it says: @want bytes, @have.
+    Overrun { ty: &'static str, want: usize, have: usize },
+    /// They aren't aligned for @ty, which needs @align.
+    Misaligned { ty: &'static str, align: usize },
+    /// @ty's header says it's @len bytes, fewer than the header itself: a
+    /// walk would never get past it.
+    Short { ty: &'static str, len: usize },
+}
+
+impl core::fmt::Display for VStructError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match *self {
+            Self::Overrun { ty, want, have } =>
+                write!(f, "{ty}: {want} bytes, but only {have} hold it"),
+            Self::Misaligned { ty, align } =>
+                write!(f, "{ty}: bytes not aligned to {align}"),
+            Self::Short { ty, len } =>
+                write!(f, "{ty}: its header says {len} bytes, fewer than the header"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for VStructError {}
+
+/// How many of @bytes a T at their start says are its: an error if they
+/// don't hold its header, aligned, or that many - or it says fewer than its
+/// header.
+fn checked_bytes<T: Plain + SelfSized>(bytes: &[u8]) -> Result<usize, VStructError> {
+    let ty = core::any::type_name::<T>();
+    if bytes.len() < size_of::<T>() {
+        return Err(VStructError::Overrun { ty, want: size_of::<T>(), have: bytes.len() });
+    }
+    if bytes.as_ptr() as usize % align_of::<T>() != 0 {
+        return Err(VStructError::Misaligned { ty, align: align_of::<T>() });
+    }
+    // SAFETY: the header is there, aligned, and any bytes are a T's
+    let len = unsafe { &*bytes.as_ptr().cast::<T>() }.bytes();
+    if len < size_of::<T>() {
+        return Err(VStructError::Short { ty, len });
+    }
+    if len > bytes.len() {
+        return Err(VStructError::Overrun { ty, want: len, have: bytes.len() });
+    }
+    Ok(len)
+}
+
+/// A T and its bytes, from bytes nothing has validated it against - off a
+/// device, from the kernel. Its header's count is checked against them when
+/// it's made, an overrun an error; then it's those bytes exactly, header and
+/// tail, and the header's fields are fields.
+pub struct UnvalidatedRef<'a, T> {
+    bytes: &'a [u8],
+    _t:    PhantomData<&'a T>,
+}
+
+impl<T> Clone for UnvalidatedRef<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for UnvalidatedRef<'_, T> {}
+
+impl<T> Deref for UnvalidatedRef<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        // SAFETY: new() checked the header is there, aligned, and T is Plain
+        unsafe { &*self.bytes.as_ptr().cast::<T>() }
+    }
+}
+
+impl<'a, T: Plain + SelfSized> UnvalidatedRef<'a, T> {
+    /// The T at the start of @bytes, as many of them as its header says.
+    pub fn new(bytes: &'a [u8]) -> Result<Self, VStructError> {
+        let len = checked_bytes::<T>(bytes)?;
+        Ok(Self { bytes: &bytes[..len], _t: PhantomData })
+    }
+
+    /// Its bytes, header and tail.
+    pub fn as_bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
+}
+
+impl<'a, T: FlexArray + Plain> UnvalidatedRef<'a, T> {
+    /// Its flexible array, as many elements as its header says: new() checked
+    /// its bytes hold them.
+    pub fn tail(&self) -> &'a [T::Elem] {
+        // SAFETY: in its bytes, as new() checked; the array is a field of T,
+        // so aligned where T is; any bytes are an Elem
+        unsafe { core::slice::from_raw_parts(self.bytes[T::TAIL..].as_ptr().cast(), self.nr()) }
+    }
+}
+
+impl<'a, C: VStructContainer> UnvalidatedRef<'a, C> {
+    /// Its entries, each checked against what's left of its bytes: an error
+    /// at one that doesn't fit, which ends the walk.
+    pub fn entries(&self) -> UnvalidatedRefEntries<'a, C::Entry> {
+        UnvalidatedRefEntries { rest: self.bytes.get(C::START..), _entry: PhantomData }
+    }
+}
+
+/// An UnvalidatedRef container's entries: UnvalidatedRef::entries().
+pub struct UnvalidatedRefEntries<'a, E> {
+    /// None after an error
+    rest:   Option<&'a [u8]>,
+    _entry: PhantomData<&'a E>,
+}
+
+impl<'a, E: Plain + SelfSized + 'a> Iterator for UnvalidatedRefEntries<'a, E> {
+    type Item = Result<UnvalidatedRef<'a, E>, VStructError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rest = self.rest.filter(|r| !r.is_empty())?;
+        match UnvalidatedRef::<E>::new(rest) {
+            Ok(e) => {
+                self.rest = Some(&rest[e.bytes.len()..]);
+                Some(Ok(e))
+            }
+            Err(err) => {
+                self.rest = None;
+                Some(Err(err))
+            }
+        }
+    }
+}
+
+/// An UnvalidatedRef, mutably.
+pub struct UnvalidatedMut<'a, T> {
+    bytes: &'a mut [u8],
+    _t:    PhantomData<&'a mut T>,
+}
+
+impl<T> Deref for UnvalidatedMut<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        // SAFETY: as UnvalidatedRef's
+        unsafe { &*self.bytes.as_ptr().cast::<T>() }
+    }
+}
+
+impl<T> DerefMut for UnvalidatedMut<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: as deref()
+        unsafe { &mut *self.bytes.as_mut_ptr().cast::<T>() }
+    }
+}
+
+impl<'a, T: Plain + SelfSized> UnvalidatedMut<'a, T> {
+    /// As UnvalidatedRef::new(), mutably.
+    pub fn new(bytes: &'a mut [u8]) -> Result<Self, VStructError> {
+        let len = checked_bytes::<T>(bytes)?;
+        Ok(Self { bytes: &mut bytes[..len], _t: PhantomData })
+    }
+
+    /// A pointer to it that reaches all its bytes, for C: one from the &T
+    /// reaches only the header.
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        self.bytes.as_mut_ptr().cast()
+    }
+}
+
+impl<'a, T: FlexArray + Plain> UnvalidatedMut<'a, T> {
+    /// Its flexible array, mutably, for good: as UnvalidatedRef::tail() - as
+    /// many elements as new() checked its bytes hold, not as its header says
+    /// now, which DerefMut may have changed since.
+    pub fn into_tail(self) -> &'a mut [T::Elem] {
+        let nr = (self.bytes.len() - T::TAIL) / size_of::<T::Elem>();
+        // SAFETY: as UnvalidatedRef::tail()'s
+        unsafe { core::slice::from_raw_parts_mut(self.bytes[T::TAIL..].as_mut_ptr().cast(), nr) }
+    }
+}
+
+impl<'a, C: VStructContainer> UnvalidatedMut<'a, C> {
+    /// UnvalidatedRef::entries(), mutably.
+    pub fn entries_mut(&mut self) -> UnvalidatedRefEntriesMut<'_, C::Entry> {
+        UnvalidatedRefEntriesMut { rest: self.bytes.get_mut(C::START..), _entry: PhantomData }
+    }
+}
+
+/// UnvalidatedMut::entries_mut()'s.
+pub struct UnvalidatedRefEntriesMut<'a, E> {
+    rest:   Option<&'a mut [u8]>,
+    _entry: PhantomData<&'a mut E>,
+}
+
+impl<'a, E: Plain + SelfSized + 'a> Iterator for UnvalidatedRefEntriesMut<'a, E> {
+    type Item = Result<UnvalidatedMut<'a, E>, VStructError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rest = self.rest.take().filter(|r| !r.is_empty())?;
+        match checked_bytes::<E>(rest) {
+            Ok(len) => {
+                let (e, rest) = rest.split_at_mut(len);
+                self.rest = Some(rest);
+                Some(Ok(UnvalidatedMut { bytes: e, _t: PhantomData }))
+            }
+            Err(err) => Some(Err(err)),
+        }
     }
 }
 
@@ -735,6 +949,42 @@ mod tests {
         put(&mut buf, hdr, &c::bch_sb_field { u64s: Le32::new(0), ..Default::default() });
         let sb = Flex::<c::bch_sb>::new(bytes(&buf)).unwrap();
         assert_eq!(sb.entries().count(), 0);
+    }
+
+    /// Bytes nothing has validated: a count past them is an error when the
+    /// value's made, and an entry past its container's an error in the walk,
+    /// which ends there.
+    #[test]
+    fn unvalidated_counts_are_checked() {
+        let buf = jset(3);
+        let j = UnvalidatedRef::<c::jset>::new(bytes(&buf)).unwrap();
+        let es = j.entries().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!((es[0].u64s.get(), es[1].u64s.get()), (1, 3));
+        assert_eq!(es[1].as_bytes().len(), 32);
+
+        let buf = jset(4);
+        let j = UnvalidatedRef::<c::jset>::new(bytes(&buf)).unwrap();
+        let es: Vec<_> = j.entries().collect();
+        assert!(matches!(es[..], [Ok(_), Err(VStructError::Overrun { want: 40, have: 32, .. })]));
+
+        let hdr = size_of::<c::jset>();
+        assert!(matches!(UnvalidatedRef::<c::jset>::new(&bytes(&buf)[..hdr + 8]),
+                         Err(VStructError::Overrun { want, have, .. }) if want == hdr + 48 && have == hdr + 8));
+    }
+
+    /// A superblock field of no u64s says it's shorter than its own header:
+    /// an error, not a walk that never ends.
+    #[test]
+    fn unvalidated_short_entry() {
+        let hdr = size_of::<c::bch_sb>();
+        let mut buf = vec![0u64; hdr / 8 + 1];
+        let mut sb: c::bch_sb = Default::default();
+        sb.u64s = Le32::new(1);
+        put(&mut buf, 0, &sb);
+        put(&mut buf, hdr, &c::bch_sb_field { u64s: Le32::new(0), ..Default::default() });
+        let sb = UnvalidatedRef::<c::bch_sb>::new(bytes(&buf)).unwrap();
+        let es: Vec<_> = sb.entries().collect();
+        assert!(matches!(es[..], [Err(VStructError::Short { len: 0, .. })]));
     }
 
     #[repr(C)]

@@ -14,7 +14,7 @@ use std::os::fd::{AsFd, AsRawFd};
 
 pub use bcachefs_kernel::cstructs::bcachefs_ioctl::*;
 pub use bcachefs_kernel::util::ioctl::Ioctl;
-use bcachefs_kernel::util::vstructs::{Flex, FlexArray, FlexError, Plain};
+use bcachefs_kernel::util::vstructs::{FlexArray, Plain, UnvalidatedRef, UnvalidatedMut, VStructError};
 
 fn ret(r: libc::c_int) -> io::Result<i32> {
     if r < 0 {
@@ -60,9 +60,9 @@ pub unsafe fn ioctl_ptr<I: Ioctl>(fd: impl AsFd, arg: *mut I::Arg) -> io::Result
 /// array member: header `H`, then what follows it. The header is read and
 /// written through the struct. What follows is reached through this buffer,
 /// never through the header's `[T; 0]` field, whose reference covers only the
-/// header: as a Flex (util/vstructs.rs) for an array the header counts - so a
-/// count past the end of the buffer is an error, not a read past it - or as
-/// bytes, for a tail of variable-size records.
+/// header: as an UnvalidatedRef (util/vstructs.rs) for an array the header
+/// counts - so a count past the end of the buffer is an error, not a read
+/// past it - or as bytes, for a tail of variable-size records.
 ///
 /// `H` must be valid zeroed, and align <= 8 (asserted at compile time).
 pub struct IoctlBuf<H> {
@@ -119,21 +119,17 @@ impl<H: FlexArray + Plain> IoctlBuf<H> {
         Self::alloc(H::TAIL + nr * std::mem::size_of::<H::Elem>())
     }
 
-    /// The header, and the buffer it may extend into: .tail() is its array,
-    /// as long as the header's count says, if the buffer holds that many.
-    pub fn flex(&self) -> Flex<'_, H> {
-        Flex::new(self.bytes()).expect("IoctlBuf: 8 byte aligned, and holding the header")
+    /// The array, as long as the header's count says: an error if the
+    /// buffer doesn't hold that many - the kernel and us disagreeing.
+    pub fn tail(&self) -> Result<&[H::Elem], VStructError> {
+        Ok(UnvalidatedRef::<H>::new(self.bytes())?.tail())
     }
 
     /// The array, as long as the header's count says - to fill in, having
     /// set that count.
-    pub fn tail_mut(&mut self) -> Result<&mut [H::Elem], FlexError> {
-        let nr = self.flex().tail()?.len();
-        // SAFETY: tail() checked that nr elements at TAIL are in the buffer,
-        // aligned; any bytes are an Elem; &mut self, so this is the only
-        // borrow of them
-        Ok(unsafe {
-            std::slice::from_raw_parts_mut(self.buf.as_mut_ptr().cast::<u8>().add(H::TAIL).cast(), nr)
-        })
+    pub fn tail_mut(&mut self) -> Result<&mut [H::Elem], VStructError> {
+        // SAFETY: u64s, which any bytes are
+        let bytes = unsafe { std::slice::from_raw_parts_mut(self.buf.as_mut_ptr().cast(), self.buf.len() * 8) };
+        Ok(UnvalidatedMut::<H>::new(bytes)?.into_tail())
     }
 }

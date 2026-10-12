@@ -12,7 +12,7 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::data::extents::{bkey_ptrs_mut, bkey_ptrs_sc};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::{entry_type, journal_entry_type};
-use bcachefs_kernel::util::vstructs::{Flex, Plain, SelfSized, VStruct, VStructContainer};
+use bcachefs_kernel::util::vstructs::{SelfSized, UnvalidatedRef, UnvalidatedMut, VStruct};
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::POS_MIN;
 
@@ -242,15 +242,6 @@ fn sanitize_val(fs: &Fs, mut k: BkeyS, opts: SanitizeOpts) -> bool {
     }
 }
 
-/// The T at the start of @buf, if one's whole there: off the disk and not
-/// validated, so its header is checked to be there, then its count.
-fn whole_at<T: Plain + SelfSized>(buf: &mut [u8]) -> Option<&mut T> {
-    let whole = Flex::<T>::new(buf).is_ok_and(|t| t.as_bytes().is_ok());
-    // SAFETY: a T is there, aligned, with all its bytes - checked - and it's
-    // plain data
-    whole.then(|| unsafe { &mut *buf.as_mut_ptr().cast::<T>() })
-}
-
 /// Sanitize a journal buffer in-place: walk jset entries, handle encryption,
 /// zero inline data, optionally scramble filenames, clear checksums.
 fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
@@ -259,7 +250,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
     let block_bits = fs.block_bits() as u32;
 
     let mut pos = 0;
-    while let Some(j) = whole_at::<c::jset>(&mut buf[pos..]).filter(|j| j.magic.get() == jset_magic) {
+    while let Some(mut j) = UnvalidatedMut::<c::jset>::new(&mut buf[pos..]).ok().filter(|j| j.magic.get() == jset_magic) {
         let (bytes, csum_type) = (j.bytes(), j.csum_type() as u32);
         let mut modified = false;
 
@@ -269,7 +260,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
                 return;
             }
 
-            let ret = jset_encrypt(&fs, j, csum_type, bytes);
+            let ret = jset_encrypt(&fs, j.as_mut_ptr(), csum_type, bytes);
             if ret != 0 {
                 eprintln!("error decrypting journal entry: {}", ret);
                 return;
@@ -277,12 +268,16 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
             modified = true;
         }
 
+        // an entry or key that overruns what holds it ends the walk there:
+        // the rest is dumped as it is
         for e in j.entries_mut() {
-            if matches!(entry_type(e), journal_entry_type::btree_keys
-                                     | journal_entry_type::btree_root
-                                     | journal_entry_type::write_buffer_keys) {
+            let Ok(mut e) = e else { break };
+            if matches!(entry_type(&e), journal_entry_type::btree_keys
+                                      | journal_entry_type::btree_root
+                                      | journal_entry_type::write_buffer_keys) {
                 for k in e.entries_mut() {
-                    modified |= sanitize_val(&fs, BkeyS::from(k), opts);
+                    let Ok(mut k) = k else { break };
+                    modified |= sanitize_val(&fs, BkeyS::from(&mut *k), opts);
                 }
             }
         }
@@ -291,9 +286,9 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
             // Re-encrypt (symmetric) if encrypted, then recompute the csum so
             // the entry stays checksum-valid instead of csum-cleared.
             if c::bch_csum_type(csum_type).is_encryption() {
-                jset_encrypt(&fs, j, csum_type, bytes);
+                jset_encrypt(&fs, j.as_mut_ptr(), csum_type, bytes);
             }
-            jset_csum_set(&fs, j, csum_type, bytes);
+            jset_csum_set(&fs, j.as_mut_ptr(), csum_type, bytes);
         }
 
         pos += (j.sectors(block_bits) << 9).min(buf.len() - pos);
@@ -323,7 +318,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
         // The node, then its entries - each as long as its bset: where the
         // bset is, and the whole's bytes and sectors
         let (bset_off, vstruct_bytes, sectors) = if first {
-            let Some(n) = whole_at::<c::btree_node>(&mut buf[pos..]) else { break };
+            let Some(n) = UnvalidatedRef::<c::btree_node>::new(&buf[pos..]).ok() else { break };
             if n.magic.get() != bset_magic {
                 break;
             }
@@ -331,7 +326,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
             seq = n.keys.seq.get();
             (pos + std::mem::offset_of!(c::btree_node, keys), n.bytes(), n.sectors(block_bits))
         } else {
-            let Some(n) = whole_at::<c::btree_node_entry>(&mut buf[pos..]) else { break };
+            let Some(n) = UnvalidatedRef::<c::btree_node_entry>::new(&buf[pos..]).ok() else { break };
             if n.keys.seq.get() != seq {
                 break;
             }

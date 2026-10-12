@@ -522,7 +522,7 @@ impl BcachefsHandle {
                 state: hdr.state,
                 bucket_size: hdr.bucket_size,
                 nr_buckets: hdr.nr_buckets,
-                data_types: buf.flex().tail().map_err(|_| Errno(libc::EIO))?.iter()
+                data_types: buf.tail().map_err(|_| Errno(libc::EIO))?.iter()
                     .map(|d| DevUsageType { buckets: d.buckets, sectors: d.sectors, fragmented: d.fragmented })
                     .collect(),
             });

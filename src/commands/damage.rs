@@ -100,7 +100,7 @@ fn get_damage(fd: &OwnedFd) -> std::io::Result<Vec<DamageEntry>> {
             continue;
         }
 
-        return Ok(buf.flex().tail().map_err(std::io::Error::other)?.iter()
+        return Ok(buf.tail().map_err(std::io::Error::other)?.iter()
             .map(|e| DamageEntry {
                 id:    e.v.id() as u32,
                 nr:    e.v.nr() as u64,

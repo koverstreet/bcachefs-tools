@@ -204,7 +204,7 @@ fn bcachefs_flex_ioctl<H: FlexArrayIoctl>(
             Err(e) => return Err(e.into()),
         }
 
-        let nodes = buf.flex().tail()?.to_vec();
+        let nodes = buf.tail()?.to_vec();
         return Ok((*buf.hdr(), nodes));
     }
 }

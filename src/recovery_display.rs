@@ -24,7 +24,7 @@ use std::{
 use rustix::fs::{flock, FlockOperation};
 
 use bch_bindgen::c;
-use bcachefs_kernel::util::vstructs::Flex;
+use bcachefs_kernel::util::vstructs::UnvalidatedRef;
 
 use crate::commands::fs_usage::replicas_spare_redundancy;
 use crate::thread_with_file::StatusDisplay;
@@ -147,8 +147,7 @@ impl<'a> RecoveryDisplay<'a> {
 
         usage.replicas()
             .filter(|u| u.r.data_type as u32 != u32::from(data_type::cached))
-            .filter_map(|u| Some(replicas_spare_redundancy(u.r.nr_devs, u.r.nr_required,
-                                                           u.tail().ok()?, &self.devs)))
+            .map(|u| replicas_spare_redundancy(u.r.nr_devs, u.r.nr_required, u.tail(), &self.devs))
             .min()
     }
 
@@ -384,15 +383,15 @@ struct FsUsage {
 }
 
 impl FsUsage {
-    /// Each entry, bounded by the tail: its devs are Flex::tail().
-    fn replicas(&self) -> impl Iterator<Item = Flex<'_, c::bch_replicas_usage>> + '_ {
+    /// Each entry, checked against the tail: its devs are its tail().
+    fn replicas(&self) -> impl Iterator<Item = UnvalidatedRef<'_, c::bch_replicas_usage>> + '_ {
         let mut rest = self.buf.trailing_bytes(self.bytes);
 
         // A truncated tail is the kernel and us disagreeing about the layout;
         // stop rather than read past what it wrote.
         std::iter::from_fn(move || {
-            let u = Flex::<c::bch_replicas_usage>::new(rest).ok()?;
-            rest = &rest[u.as_bytes().ok()?.len()..];
+            let u = UnvalidatedRef::<c::bch_replicas_usage>::new(rest).ok()?;
+            rest = &rest[u.as_bytes().len()..];
             Some(u)
         })
     }
