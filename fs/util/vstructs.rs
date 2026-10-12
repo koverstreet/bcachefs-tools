@@ -71,6 +71,43 @@ const _: () = assert!(size_of::<c::__uuid_t>() == 16);
 /// #[bitfield] check a type's fields with (cstruct-macros' vstructs.rs).
 pub const fn assert_plain<T: Plain>() {}
 
+/// What a value reads as: a little-endian integer's integer, an array's
+/// elements' - itself, for anything else. The one conversion a type has,
+/// where From and Into allow any number, so generic code can make it without
+/// being told the type: a View's get() returns it and set() takes it, and a
+/// field reads as a u32, not a Le32 to get() again.
+pub trait Native: Sized {
+    type Native;
+    fn to_native(self) -> Self::Native;
+    fn from_native(n: Self::Native) -> Self;
+}
+
+macro_rules! native_self {
+    ($($t:ty),*) => { $(impl Native for $t {
+        type Native = Self;
+        fn to_native(self) -> Self { self }
+        fn from_native(n: Self) -> Self { n }
+    })* };
+}
+native_self!(u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, c::__uuid_t);
+
+impl<T: Native, const N: usize> Native for [T; N] {
+    type Native = [T::Native; N];
+    fn to_native(self) -> Self::Native { self.map(T::to_native) }
+    fn from_native(n: Self::Native) -> Self { n.map(T::from_native) }
+}
+
+macro_rules! native_byteorder {
+    ($($t:ident: $n:ty),*) => { $(
+        impl<O: zerocopy::byteorder::ByteOrder> Native for zerocopy::byteorder::$t<O> {
+            type Native = $n;
+            fn to_native(self) -> $n { self.get() }
+            fn from_native(n: $n) -> Self { Self::new(n) }
+        }
+    )* };
+}
+native_byteorder!(U16: u16, U32: u32, U64: u64, U128: u128, I16: i16, I32: i32, I64: i64, I128: i128);
+
 /// A type whose values run past size_of::<Self>(), as far as their own fields
 /// say.
 pub trait SelfSized {
@@ -460,8 +497,8 @@ impl<'a, T: Plain> View<'a, T> {
         View { p: self.p.wrapping_add(off), at: self.at.saturating_add(off), end: self.end, _t: PhantomData }
     }
 
-    /// Its value: what's past the end reads as zero.
-    pub fn get(&self) -> T {
+    /// Its value, as T: what's past the end reads as zero.
+    fn read(&self) -> T {
         let mut v = MaybeUninit::<T>::zeroed();
         // SAFETY: len() of its bytes are there, into a zeroed T - and any
         // bytes are a T
@@ -483,6 +520,14 @@ impl<'a, T: Plain> View<'a, T> {
         (self.len() == size_of::<T>() && self.p as usize % align_of::<T>() == 0)
             // SAFETY: all of it is there, aligned - and any bytes are a T
             .then(|| unsafe { &*self.p.cast::<T>() })
+    }
+}
+
+impl<T: Plain + Native> View<'_, T> {
+    /// Its value - the integer, for a little-endian one: what's past the end
+    /// reads as zero.
+    pub fn get(&self) -> T::Native {
+        self.read().to_native()
     }
 }
 
@@ -515,28 +560,32 @@ impl<'a, T: Plain> ViewMut<'a, T> {
                   field, _t: PhantomData }
     }
 
-    /// As View::get().
-    pub fn get(&self) -> T {
-        self.as_view().get()
-    }
-
-    /// Set it to @v - if all of it is there.
-    pub fn set(&mut self, v: T) -> Result<(), ShortField> {
-        if self.as_view().len() < size_of::<T>() {
-            return Err(ShortField { ty: self.ty, field: self.field, at: self.at,
-                                    size: size_of::<T>(), len: self.end });
-        }
-        // SAFETY: all of it is there; @v is Plain, so all its bytes are
-        // initialized - and the value they land in is Plain, as new() required
-        unsafe { core::ptr::copy_nonoverlapping((&raw const v).cast::<u8>(), self.p, size_of::<T>()) };
-        Ok(())
-    }
-
     /// As View::whole(), mutably.
     pub fn whole_mut(&mut self) -> Option<&mut T> {
         (self.as_view().len() == size_of::<T>() && self.p as usize % align_of::<T>() == 0)
             // SAFETY: as View::whole()
             .then(|| unsafe { &mut *self.p.cast::<T>() })
+    }
+}
+
+impl<T: Plain + Native> ViewMut<'_, T> {
+    /// As View::get().
+    pub fn get(&self) -> T::Native {
+        self.as_view().get()
+    }
+
+    /// Set it to @v - the integer, for a little-endian one - if all of it is
+    /// there.
+    pub fn set(&mut self, v: T::Native) -> Result<(), ShortField> {
+        if self.as_view().len() < size_of::<T>() {
+            return Err(ShortField { ty: self.ty, field: self.field, at: self.at,
+                                    size: size_of::<T>(), len: self.end });
+        }
+        let v = T::from_native(v);
+        // SAFETY: all of it is there; @v is Plain, so all its bytes are
+        // initialized - and the value they land in is Plain, as new() required
+        unsafe { core::ptr::copy_nonoverlapping((&raw const v).cast::<u8>(), self.p, size_of::<T>()) };
+        Ok(())
     }
 }
 
@@ -671,14 +720,14 @@ mod tests {
     fn view_reads_zero_past_the_end() {
         let full = grown(5);
         let v = View::<Grown>::new(bytes(&full));
-        assert_eq!((v.next().get(), v.last().get()), (Le64::new(4), Le64::new(5)));
+        assert_eq!((v.next().get(), v.last().get()), (4, 5));
         assert_eq!(v.whole(), Some(&v.get()));
 
         let short = grown(3);
         let v = View::<Grown>::new(bytes(&short));
         assert_eq!(v.hdr().ty().get(), 7);
-        assert_eq!(v.old().get(), [Le64::new(2), Le64::new(3)]);
-        assert_eq!((v.next().get(), v.last().get()), (Le64::new(0), Le64::new(0)));
+        assert_eq!(v.old().get(), [2, 3]);
+        assert_eq!((v.next().get(), v.last().get()), (0, 0));
         assert_eq!(v.get(), Grown { hdr: Hdr { u64s: Le32::new(3), ty: Le32::new(7) },
                                     old: [Le64::new(2), Le64::new(3)], ..Default::default() });
         assert_eq!(v.whole(), None);
@@ -687,7 +736,7 @@ mod tests {
 
         // half an array there: the half there is read, the rest is zero
         let half = grown(2);
-        assert_eq!(View::<Grown>::new(bytes(&half)).old().get(), [Le64::new(2), Le64::new(0)]);
+        assert_eq!(View::<Grown>::new(bytes(&half)).old().get(), [2, 0]);
 
         // nothing there at all
         assert_eq!(View::<Grown>::new(&[]).hdr().ty().get(), 0);
@@ -699,10 +748,10 @@ mod tests {
     fn view_set_past_the_end_errors() {
         let mut short = grown(3);
         let mut v = ViewMut::<Grown>::new(bytes_mut(&mut short));
-        v.old().set([Le64::new(20), Le64::new(30)]).unwrap();
+        v.old().set([20, 30]).unwrap();
         assert_eq!(v.get().old, [Le64::new(20), Le64::new(30)]);
 
-        let e = v.last().set(Le64::new(9)).unwrap_err();
+        let e = v.last().set(9).unwrap_err();
         assert_eq!((e.field, e.at, e.size, e.len), ("last", 32, 8, 24));
         assert!(e.to_string().ends_with("Grown: last at 32..40 is past its end (24 bytes); grow it first"),
                 "{e}");

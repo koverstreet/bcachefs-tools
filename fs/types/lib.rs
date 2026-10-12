@@ -103,6 +103,12 @@ macro_rules! le_int {
         // SAFETY: the integer, and nothing else
         unsafe impl crate::util::vstructs::Plain for $name {}
 
+        impl crate::util::vstructs::Native for $name {
+            type Native = $t;
+            fn to_native(self) -> $t { self.get() }
+            fn from_native(n: $t) -> Self { Self::new(n) }
+        }
+
         impl $name {
             pub const fn new(v: $t) -> Self { Self(v.to_le()) }
             pub const fn get(self) -> $t { <$t>::from_le(self.0) }
@@ -273,6 +279,12 @@ pub struct NeBytes<const N: usize>(pub [u8; N]);
 // SAFETY: bytes, and nothing else
 unsafe impl<const N: usize> crate::util::vstructs::Plain for NeBytes<N> {}
 
+impl<const N: usize> crate::util::vstructs::Native for NeBytes<N> {
+    type Native = Self;
+    fn to_native(self) -> Self { self }
+    fn from_native(n: Self) -> Self { n }
+}
+
 impl<const N: usize> Default for NeBytes<N> {
     fn default() -> Self { Self([0; N]) }
 }
@@ -334,6 +346,12 @@ pub struct Align8U64(pub u64);
 
 // SAFETY: a u64, aligned to its own size - so nothing else
 unsafe impl crate::util::vstructs::Plain for Align8U64 {}
+
+impl crate::util::vstructs::Native for Align8U64 {
+    type Native = Self;
+    fn to_native(self) -> Self { self }
+    fn from_native(n: Self) -> Self { n }
+}
 const _: () = assert!(core::mem::size_of::<Align8U64>() == 8);
 
 impl Align8U64 {

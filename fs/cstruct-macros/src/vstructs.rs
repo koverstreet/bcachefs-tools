@@ -27,7 +27,8 @@ pub(crate) fn derive_plain(input: TokenStream) -> Result<TokenStream, String> {
 }
 
 /// Plain for @name, whose fields are of types @tys: the impl, and the
-/// checks that make it sound - a compile error if it isn't.
+/// checks that make it sound - a compile error if it isn't. Native too, as
+/// itself.
 pub(crate) fn plain(name: &str, tys: &[&str]) -> String {
     let fields: String = tys.iter()
         .map(|ty| format!("crate::util::vstructs::assert_plain::<{ty}>();\n"))
@@ -35,8 +36,14 @@ pub(crate) fn plain(name: &str, tys: &[&str]) -> String {
     let sizes: String = tys.iter()
         .map(|ty| format!(" + ::core::mem::size_of::<{ty}>()"))
         .collect();
+    // and Native as itself: a struct reads as a struct
     format!(
         "unsafe impl crate::util::vstructs::Plain for {name} {{}}\n\
+         impl crate::util::vstructs::Native for {name} {{\n\
+             type Native = Self;\n\
+             fn to_native(self) -> Self {{ self }}\n\
+             fn from_native(n: Self) -> Self {{ n }}\n\
+         }}\n\
          const _: () = {{\n\
              {fields}\
              assert!(::core::mem::size_of::<{name}>() == 0{sizes},\n\
