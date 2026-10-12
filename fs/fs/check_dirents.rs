@@ -28,7 +28,7 @@
 //! position, so the pass runs a second time to check the copies; a second
 //! pass that still finds work is an error.
 
-use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
+use crate::btree::bkey::{pos, spos, BkeySC, BkeySubvolume, POS_MIN};
 use crate::btree::iter::{
     is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
     UpdateTriggerFlags,
@@ -154,7 +154,7 @@ fn find_snapshot_subvol(t: &TransAttempt<'_, '_>, snapshot: u32) -> Result<Optio
     let mut iter = BtreeIter::new(t, c::btree_id::subvolumes, POS_MIN, BtreeIterFlags::empty());
 
     iter.for_each_norestart(t, |_, k| Ok(
-        match k.as_subvolume() {
+        match k.view::<BkeySubvolume>() {
             Some(s) if snapshot::is_ancestor(t, s.snapshot.get(), snapshot) =>
                 ControlFlow::Break(Some(k.k.p.offset as u32)),
             _ => ControlFlow::Continue(()),

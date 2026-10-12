@@ -188,7 +188,7 @@ c_bitmask! {
  * subvolume that other snapshots were created from:
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_snapshot_tree {
     pub v: c::bch_val,
     pub master_subvol: Le32,

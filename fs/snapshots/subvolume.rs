@@ -2,7 +2,7 @@
 
 //! Subvolumes (snapshots/subvolume.h).
 
-use crate::btree::bkey::BkeySC;
+use crate::btree::bkey::{BkeySC, BkeySubvolume};
 use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, LoopControl};
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
@@ -170,8 +170,7 @@ pub fn is_unlinked(trans: &BtreeTrans<'_>, subvol: u32) -> Result<bool, BchError
 /// @k's value if it's a subvolume, zero padded past the fields an older key
 /// lacks: as bkey_val_copy_pad() on a bkey_s_c_subvolume.
 pub fn val(k: BkeySC<'_>) -> Option<c::bch_subvolume> {
-    (k.k.type_ == c::bch_bkey_type::KEY_TYPE_subvolume.0 as u8)
-        .then(|| unsafe { k.val_copy_pad() })
+    k.view::<BkeySubvolume>().map(|v| v.get())
 }
 
 impl c::bch_subvolume {

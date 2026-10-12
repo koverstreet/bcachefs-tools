@@ -11,7 +11,7 @@
 //! node, and a subvolume pointing at it is subvol_snapshot_not_leaf, which
 //! has no repair.
 
-use crate::btree::bkey::{pos, POS_MIN};
+use crate::btree::bkey::{pos, BkeySnapshot, POS_MIN};
 use crate::btree::iter::{
     commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
@@ -31,8 +31,8 @@ fn root_snapshot_from_snapshots(t: &TransAttempt<'_, '_>) -> Result<u32, BchErro
                                   BtreeIterFlags::empty());
 
     iter.for_each_norestart(t, |_, k| Ok(
-        match k.as_snapshot() {
-            Some(s) if s.subvol.get() == c::BCACHEFS_ROOT_SUBVOL && s.children[0] == 0 =>
+        match k.view::<BkeySnapshot>() {
+            Some(s) if s.subvol.get() == c::BCACHEFS_ROOT_SUBVOL && s.children[0].get() == 0 =>
                 ControlFlow::Break(k.k.p.offset as u32),
             _ => ControlFlow::Continue(()),
         }))

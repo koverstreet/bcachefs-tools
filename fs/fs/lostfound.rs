@@ -42,7 +42,7 @@
 //! partial-commit re-drive), a taken name, the descendant fixup with its
 //! whiteouts.
 
-use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
+use crate::btree::bkey::{pos, spos, BkeySC, BkeySnapshot, POS_MIN};
 use crate::btree::iter::{
     is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
@@ -99,8 +99,8 @@ fn lostfound_dirent(
 fn find_snapshot_tree_subvol(t: &TransAttempt<'_, '_>, tree: u32) -> Result<u32, BchError> {
     let mut iter = BtreeIter::new(t, c::btree_id::snapshots, POS_MIN, BtreeIterFlags::empty());
     iter.for_each_norestart(t, |_, k| Ok(
-        match k.as_snapshot() {
-            Some(s) if s.tree.get() == tree && s.subvol != 0 =>
+        match k.view::<BkeySnapshot>() {
+            Some(s) if s.tree.get() == tree && s.subvol.get() != 0 =>
                 ControlFlow::Break(Some(s.subvol.get())),
             _ => ControlFlow::Continue(()),
         }))?

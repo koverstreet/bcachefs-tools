@@ -31,7 +31,7 @@
 //! it - so a key is only good until its iterator moves: check_subvol_path()
 //! copies each step's key before looking up its parent.
 
-use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, BkeySC, BkeySubvolume, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
@@ -167,7 +167,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
 
         parent_iter.set_pos(pos(0, parent as u64));
         match parent_iter.peek_slot(t)? {
-            Some(pk) if pk.as_subvolume().is_some() => {
+            Some(pk) if pk.view::<BkeySubvolume>().is_some() => {
                 cur.reassemble(pk);
             }
             _ => {

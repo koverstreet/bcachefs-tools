@@ -43,7 +43,7 @@
 //!   errors are plain fixable fsck errors.
 
 use crate::accounting;
-use crate::btree::bkey::{pos, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, BkeySC, BkeySnapshotTree, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
     commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransBkey,
@@ -160,7 +160,7 @@ fn check_snapshot_tree<'t>(
     let trans = t.trans();
     let fs = trans.fs();
 
-    let Some(st) = k.as_snapshot_tree() else { return Ok(()) };
+    let Some(st) = k.view::<BkeySnapshotTree>() else { return Ok(()) };
     let root_id = st.root_snapshot.get();
 
     let root = match snapshot::lookup_key(trans, root_id) {
@@ -185,7 +185,7 @@ fn check_snapshot_tree<'t>(
         }
     }
 
-    let master = st.master_subvol.get();
+    let master = st.master_subvol().get();
     if master == 0 {
         return Ok(());
     }
@@ -1341,7 +1341,7 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     let fs = trans.fs();
 
     let tree_id = find_key(t, c::btree_id::snapshot_trees, |k| {
-        k.as_snapshot_tree().is_some_and(|st| st.root_snapshot.get() == id)
+        k.view::<BkeySnapshotTree>().is_some_and(|st| st.root_snapshot.get() == id)
     })?;
 
     let tree_id = match tree_id {

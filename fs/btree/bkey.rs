@@ -9,7 +9,7 @@ use core::fmt;
 use core::str::FromStr;
 #[cfg(feature = "std")]
 use crate::errcode::{bch_errcode, BchError};
-use crate::util::vstructs::Floored;
+use crate::util::vstructs::{Floored, Plain, View};
 use core::marker::PhantomData;
 
 use c::bpos as Bpos;
@@ -479,11 +479,10 @@ macro_rules! bkey_types {
         /// struct, but a key written before its type gained fields has a
         /// value only min_val_size long - snapshot 24 of 64 bytes, subvolume
         /// 16 of 48 - and reading a later field reads past the end of it.
-        /// Callers reading such fields use a padded copy instead (see
-        /// val_copy_pad(), snapshot::val(), subvolume::val()). The real fix
-        /// is capnproto-style accessors: per-field reads that check the
-        /// value's length and return zero past its end - ergonomic once Rust
-        /// has field projections.
+        /// view::<K>() is the fix: per-field reads that check the value's
+        /// length and return zero past its end. Callers move to it as their
+        /// value types derive Plain and View - snapshot, subvolume and
+        /// snapshot_tree so far - and this goes when they all have.
         impl<'a> BkeySC<'a> {
             $(
             pub fn [<as_ $name>](&self) -> Option<&'a c::[<bch_ $name>]> {
@@ -619,6 +618,19 @@ impl<'a> BkeySC<'a> {
         unsafe {
             core::slice::from_raw_parts(self.v as *const c::bch_val as *const u8, u64s * 8)
         }
+    }
+
+    /// The value as @K's, if the key is that type: a View of as many of its
+    /// bytes as there are - one written before its type grew reads as zero
+    /// past them. None if it's another type, or shorter than its type has
+    /// ever been (MIN_VAL_SIZE): that's damage, not an older version.
+    pub fn view<K: TypedBkey>(&self) -> Option<View<'a, K::Val>>
+    where
+        K::Val: Plain,
+    {
+        let v = self.val_bytes();
+        (self.k.type_ as u32 == K::TYPE.0 && v.len() >= K::MIN_VAL_SIZE)
+            .then(|| View::new(v))
     }
 
     /// Where in the value its extent entries - its pointers - are: as
@@ -919,7 +931,31 @@ pub fn bkey_is_btree_ptr(k: &c::bkey) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::vstructs::View;
+    use crate::types::Le32;
+
+    /// A snapshot key from before depth, skip and btime - 24 bytes of its 64 -
+    /// views as a snapshot: the fields it has as they are, the rest zero, not
+    /// what's in the buffer past it. Shorter than snapshots have ever been,
+    /// it's not one.
+    #[test]
+    fn bkey_view_short_value() {
+        assert_eq!(BkeySnapshot::MIN_VAL_SIZE, 24);
+
+        let mut k = BkeySnapshot::new();
+        k.v.subvol = Le32::new(5);
+        k.v.children = [Le32::new(3), Le32::new(4)];
+        k.v.depth = Le32::new(7);
+        k.k.set_val_bytes(24);
+
+        let s = BkeySC::from(k.k_i()).view::<BkeySnapshot>().expect("a snapshot");
+        assert_eq!((s.subvol.get(), s.children[0].get(), s.children[1].get()), (5, 3, 4));
+        assert_eq!(s.depth().get(), 0);
+        assert!(s.whole().is_none());
+        assert!(BkeySC::from(k.k_i()).view::<BkeySubvolume>().is_none());
+
+        k.k.set_val_bytes(16);
+        assert!(BkeySC::from(k.k_i()).view::<BkeySnapshot>().is_none());
+    }
 
     /// A View of a snapshot over fewer bytes than every snapshot has - not
     /// one from view(), which won't make it - panics at a field every one
