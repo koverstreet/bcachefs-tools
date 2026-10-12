@@ -1,6 +1,7 @@
 use crate::c;
 use crate::c::{bch_member, bch_sb, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
 use crate::sb::members;
+use crate::util::vstructs::SelfSized;
 
 /// Marker trait connecting an sb field struct to its field type enum.
 ///
@@ -154,15 +155,13 @@ impl bch_sb_handle {
 
     /// The superblock's full vstruct extent as bytes.
     pub fn sb_bytes(&self) -> &[u8] {
-        let bytes = core::mem::size_of::<bch_sb>()
-            + (self.sb().u64s).get() as usize * 8;
+        let bytes = self.sb().bytes();
         unsafe { core::slice::from_raw_parts(self.sb as *const u8, bytes) }
     }
 
     /// The superblock's full vstruct extent, mutably.
     pub fn sb_bytes_mut(&mut self) -> &mut [u8] {
-        let bytes = core::mem::size_of::<bch_sb>()
-            + (self.sb().u64s).get() as usize * 8;
+        let bytes = self.sb().bytes();
         unsafe { core::slice::from_raw_parts_mut(self.sb as *mut u8, bytes) }
     }
 
@@ -341,7 +340,7 @@ fn sb_parse_checks(buf: &[u8]) -> Result<usize, SbParseError> {
         return Err(SbParseError::BadMagic);
     }
 
-    let bytes = hdr + sb.u64s.get() as usize * 8;
+    let bytes = sb.bytes();
     if bytes > buf.len() {
         return Err(SbParseError::ExtentBeyondBuffer { need: bytes, have: buf.len() });
     }
