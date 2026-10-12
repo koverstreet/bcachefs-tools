@@ -2776,18 +2776,6 @@ pub fn parse_cstruct(src: &str) -> Result<CStructDef, String> {
         .ok_or_else(|| "#[derive(CStruct)] is for structs and unions with named fields".to_string())
 }
 
-/// Parse c_xmacro!'s input.
-#[allow(dead_code)]
-pub fn parse_xmacro_input(src: &str) -> Result<CXMacro, String> {
-    parse_xmacro(&tokenize(src)?, None)
-}
-
-/// Parse c_bitmask!'s input.
-#[allow(dead_code)]
-pub fn parse_bitmask_input(src: &str) -> Result<CBitmask, String> {
-    parse_bitmask(&tokenize(src)?, None)
-}
-
 /// Every C-shared item in a source file, in order.
 #[allow(dead_code)]
 pub fn parse_items(src: &str) -> Result<Vec<CItem>, String> {
