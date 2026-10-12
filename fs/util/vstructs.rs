@@ -29,11 +29,8 @@
 //! vstructs.h, and where it goes:
 //!  - vstruct_bytes(), replicas_entry_bytes(): SelfSized::bytes()
 //!  - a counted array - devs[]: FlexArray, Flex::tail()
-//!  - vstruct_for_each(), vstruct_next(), vstruct_last(): Flex::entries(),
-//!    each entry a Flex bounded by its parent's end; vstruct_next_entry()
-//!    until its users are converted
-//!  - vstruct_idx(), and building in place - journal entries, bsets: a Flex
-//!    over mutable bytes, with push() and retain()
+//!  - vstruct_for_each(), vstruct_next(), vstruct_last():
+//!    VStructContainer::entries(), trusting the count, as C does
 
 use core::mem::{align_of, size_of};
 use core::ops::Deref;
@@ -126,11 +123,26 @@ macro_rules! count_le {
 count_le!(Le16, Le32, Le64);
 
 /// A vstruct of entries, one after another from its start[] to its end, each
-/// as long as it says: vstruct_for_each().
+/// as long as it says.
 pub trait VStructContainer: VStruct {
     type Entry: SelfSized + Plain;
     /// offsetof(start)
     const START: usize;
+
+    /// Its entries: vstruct_for_each(). Trusting its count, as C does a
+    /// validated vstruct's; an entry that doesn't fit, or says it's shorter
+    /// than its own header - which would never end the walk - ends it,
+    /// rather than being read.
+    ///
+    /// XXX: technically undefined behaviour until these are proper DSTs: the
+    /// entries are read through a pointer from &self, which covers only the
+    /// header.
+    fn entries(&self) -> Entries<'_, Self::Entry> {
+        // SAFETY: its count is right - validated - so its bytes follow it;
+        // but see above
+        let bytes = unsafe { core::slice::from_raw_parts((self as *const Self).cast::<u8>(), self.bytes()) };
+        Entries { rest: bytes.get(Self::START..).unwrap_or_default(), _entry: core::marker::PhantomData }
+    }
 }
 
 /// vstruct!(T, u64s): T is a vstruct, @u64s its count of the u64s past its
@@ -192,9 +204,6 @@ pub enum FlexError {
     Misaligned { ty: &'static str, align: usize },
     /// @ty's header says @nr elements; @given were given.
     Count { ty: &'static str, nr: usize, given: usize },
-    /// @ty's header says it spans @want bytes, less than the @header bytes
-    /// of the header itself: an entry that would never end a walk.
-    Short { ty: &'static str, want: usize, header: usize },
 }
 
 impl core::fmt::Display for FlexError {
@@ -206,8 +215,6 @@ impl core::fmt::Display for FlexError {
                 write!(f, "{ty}: bytes not aligned to {align}"),
             Self::Count { ty, nr, given } =>
                 write!(f, "{ty}: its header says {nr} elements, but {given} were given"),
-            Self::Short { ty, want, header } =>
-                write!(f, "{ty}: its header says {want} bytes, short of the {header} of the header itself"),
         }
     }
 }
@@ -298,52 +305,24 @@ impl<'a, T: FlexArray> Flex<'a, T> {
     }
 }
 
-impl<'a, T: VStructContainer> Flex<'a, T> {
-    /// Its entries, each a Flex bounded by its end: vstruct_for_each(). An
-    /// entry that overruns it is an error, and the walk's last item.
-    pub fn entries(&self) -> Result<Entries<'a, T::Entry>, FlexError> {
-        let bytes = self.as_bytes()?;
-        let rest = bytes.get(T::START..).ok_or(FlexError::Short {
-            ty: core::any::type_name::<T>(), want: bytes.len(), header: T::START,
-        })?;
-        Ok(Entries { rest, _entry: core::marker::PhantomData })
-    }
-}
-
-/// A vstruct's entries: Flex::entries().
+/// A vstruct's entries: VStructContainer::entries().
 pub struct Entries<'a, E> {
     rest:   &'a [u8],
     _entry: core::marker::PhantomData<&'a E>,
 }
 
 impl<'a, E: SelfSized + Plain + 'a> Iterator for Entries<'a, E> {
-    type Item = Result<Flex<'a, E>, FlexError>;
+    type Item = &'a E;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.rest.is_empty() {
+        let e = Flex::<E>::new(self.rest).ok()?.head();
+        let len = e.bytes();
+        if len < size_of::<E>() || len > self.rest.len() {
+            self.rest = &[];
             return None;
         }
-        let entry = Flex::<E>::new(self.rest).and_then(|e| {
-            let len = e.bytes();
-            if len > self.rest.len() {
-                return Err(FlexError::overrun::<E>(len, self.rest.len()));
-            }
-            if len < size_of::<E>() {
-                return Err(FlexError::Short { ty: core::any::type_name::<E>(), want: len,
-                                              header: size_of::<E>() });
-            }
-            Ok((e, len))
-        });
-        match entry {
-            Ok((e, len)) => {
-                self.rest = &self.rest[len..];
-                Some(Ok(e))
-            }
-            Err(err) => {
-                self.rest = &[];
-                Some(Err(err))
-            }
-        }
+        self.rest = &self.rest[len..];
+        Some(e)
     }
 }
 
@@ -354,12 +333,6 @@ impl<'a, T: SelfSized> Flex<'a, T> {
         let want = self.head.bytes();
         self.bytes.get(..want).ok_or_else(|| FlexError::overrun::<T>(want, self.bytes.len()))
     }
-}
-
-// vstruct_next(entry) = (u64*)entry._data + le16(entry.u64s)
-pub(crate) unsafe fn vstruct_next_entry(entry: *const c::jset_entry) -> *const c::jset_entry {
-    let u64s = ((*entry).u64s).get() as usize;
-    (entry as *const u8).add(8 + u64s * 8) as *const c::jset_entry
 }
 
 #[cfg(test)]
@@ -401,20 +374,18 @@ mod tests {
     fn entries_walk_variable_size_entries() {
         let buf = jset(3);
         let j = Flex::<c::jset>::new(bytes(&buf)).unwrap();
-        let es: Vec<_> = j.entries().unwrap().collect::<Result<_, _>>().unwrap();
+        let es: Vec<_> = j.entries().collect();
         assert_eq!(es.len(), 2);
         assert_eq!((es[0].u64s.get(), es[1].u64s.get()), (1, 3));
-        assert_eq!(es[1].as_bytes().unwrap().len(), 32);
+        assert_eq!(es[1].bytes(), 32);
     }
 
+    /// An entry past its container's end ends the walk, unread.
     #[test]
     fn entries_stop_at_an_overrun() {
         let buf = jset(4);
         let j = Flex::<c::jset>::new(bytes(&buf)).unwrap();
-        let es: Vec<_> = j.entries().unwrap().collect();
-        assert_eq!(es.len(), 2);
-        assert!(es[0].is_ok());
-        assert!(matches!(es[1], Err(FlexError::Overrun { want: 40, have: 32, .. })), "{:?}", es[1].as_ref().err());
+        assert_eq!(j.entries().count(), 1);
     }
 
     /// Where a vstruct's u64s count from: past its header, from its start
@@ -448,15 +419,15 @@ mod tests {
         put(&mut buf, 0, &clean);
         put(&mut buf, hdr, &entry(1));
         let clean = Flex::<c::bch_sb_field_clean>::new(bytes(&buf)).unwrap();
-        let es: Vec<_> = clean.entries().unwrap().collect::<Result<_, _>>().unwrap();
+        let es: Vec<_> = clean.entries().collect();
         assert_eq!(es.len(), 1);
         assert_eq!(es[0].u64s.get(), 1);
     }
 
     /// A superblock field of no u64s spans less than its own header: it
-    /// would never end a walk.
+    /// would never end a walk, so it ends it.
     #[test]
-    fn entries_refuse_a_zero_length_entry() {
+    fn entries_end_at_a_zero_length_entry() {
         let hdr = size_of::<c::bch_sb>();
         let mut buf = vec![0u64; hdr / 8 + 1];
         let mut sb: c::bch_sb = Default::default();
@@ -464,8 +435,6 @@ mod tests {
         put(&mut buf, 0, &sb);
         put(&mut buf, hdr, &c::bch_sb_field { u64s: Le32::new(0), ..Default::default() });
         let sb = Flex::<c::bch_sb>::new(bytes(&buf)).unwrap();
-        let es: Vec<_> = sb.entries().unwrap().collect();
-        assert!(matches!(es[..], [Err(FlexError::Short { want: 0, header: 8, .. })]),
-                "{:?}", es.iter().map(|e| e.as_ref().err()).collect::<Vec<_>>());
+        assert_eq!(sb.entries().count(), 0);
     }
 }

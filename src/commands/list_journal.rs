@@ -3,10 +3,11 @@ use anyhow::{anyhow, bail, Result};
 use bch_bindgen::c;
 use bcachefs_kernel::{BbposRange, bbpos_range_parse};
 use bcachefs_kernel::journal::{
-    jset_entries, jset_entry_keys, entry_type, entry_btree_id, entry_log_str_eq,
+    entry_type, entry_btree_id, entry_log_str_eq,
     entry_type_is_known, journal_entry_type, jset_vstruct_bytes, jset_vstruct_sectors, jset_no_flush,
 };
 use bcachefs_kernel::opt_set;
+use bcachefs_kernel::util::vstructs::VStructContainer;
 use clap::Parser;
 
 use bcachefs_kernel::util::printbuf::Printbuf;
@@ -192,7 +193,7 @@ fn entry_matches_range(
         return false;
     }
 
-    jset_entry_keys(entry).any(|k| bkey_matches_range(entry, k, range))
+    entry.entries().any(|k| bkey_matches_range(entry, k, range))
 }
 
 fn transaction_matches_transaction_filter(
@@ -342,7 +343,7 @@ fn journal_entry_indent(entry: &c::jset_entry) -> u32 {
 }
 
 fn journal_entry_keys_noval_to_text(out: &mut Printbuf, entry: &c::jset_entry) {
-    for k in jset_entry_keys(entry) {
+    for k in entry.entries() {
         let t = entry_type(entry);
         if entry_type_is_known(t) {
             unsafe { c::bch2_prt_jset_entry_type(out.as_raw(), t) };
@@ -427,7 +428,7 @@ fn journal_replay_print(c_fs: *mut c::bch_fs, f: &JournalFilter, p: &c::journal_
             seq,
         );
 
-        for entry in jset_entries(&p.j) {
+        for entry in p.j.entries() {
             if entry_type(entry) == journal_entry_type::datetime {
                 unsafe {
                     c::bch2_journal_entry_to_text(
@@ -444,7 +445,7 @@ fn journal_replay_print(c_fs: *mut c::bch_fs, f: &JournalFilter, p: &c::journal_
     }
 
     // Collect all entries for this jset
-    let all_entries: Vec<&c::jset_entry> = jset_entries(&p.j).collect();
+    let all_entries: Vec<&c::jset_entry> = p.j.entries().collect();
 
     if !f.filtering {
         journal_entry_header_to_text(&mut buf, c_fs, p, blacklisted);
