@@ -50,6 +50,7 @@ use bcachefs_kernel::btree::bkey::BkeySC;
 use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter};
 use bcachefs_kernel::data::extents::bkey_ptrs;
 use bcachefs_kernel::opt_set;
+use bcachefs_kernel::util::vstructs::{Flex, VStruct};
 use clap::Parser;
 
 struct KillNode {
@@ -155,45 +156,33 @@ struct BsetLoc {
 /// empty still has to be corruptible: on a freshly formatted filesystem every
 /// btree leaf is one of those, which is exactly what the spin repro formats.
 fn first_bset(node: &[u8]) -> BsetLoc {
-    let at = std::mem::offset_of!(c::btree_node, keys);
-    let u64s_at = at + std::mem::offset_of!(c::bset, u64s);
+    let n = Flex::<c::btree_node>::new(node).expect("node buffer: aligned, and at least a block");
 
     BsetLoc {
-        at,
+        at:     std::mem::offset_of!(c::btree_node, keys),
         sector: 0,
-        u64s: u16::from_le_bytes([node[u64s_at], node[u64s_at + 1]]) as usize,
+        u64s:   n.keys.u64s.get() as usize,
     }
 }
 
-fn first_bset_with_keys(node: &[u8], written_sectors: usize, block_size: usize)
-    -> Option<BsetLoc>
-{
-    let u64s_in_bset = std::mem::offset_of!(c::bset, u64s);
-
+fn first_bset_with_keys(node: &[u8], written_sectors: usize, block_bits: u32) -> Option<BsetLoc> {
     let mut off = 0;
 
     while off < written_sectors * 512 {
-        // offset of the bset within its container, and the container's size -
-        // which is offsetof(_data), i.e. where this bset's keys begin
-        let (bset_at, header) = if off == 0 {
-            (std::mem::offset_of!(c::btree_node, keys), size_of::<c::btree_node>())
+        // where the bset is, its u64s, and its container's sectors
+        let (bset_at, u64s, sectors) = if off == 0 {
+            let n = Flex::<c::btree_node>::new(&node[off..]).ok()?;
+            (std::mem::offset_of!(c::btree_node, keys), n.keys.u64s.get(), n.sectors(block_bits))
         } else {
-            (off + std::mem::offset_of!(c::btree_node_entry, keys), size_of::<c::btree_node_entry>())
+            let n = Flex::<c::btree_node_entry>::new(&node[off..]).ok()?;
+            (off + std::mem::offset_of!(c::btree_node_entry, keys), n.keys.u64s.get(), n.sectors(block_bits))
         };
 
-        let u64s_at = bset_at + u64s_in_bset;
-        if u64s_at + 2 > node.len() {
-            break;
-        }
-
-        let u64s = u16::from_le_bytes([node[u64s_at], node[u64s_at + 1]]) as usize;
-
         if u64s != 0 {
-            return Some(BsetLoc { at: bset_at, sector: off / 512, u64s });
+            return Some(BsetLoc { at: bset_at, sector: off / 512, u64s: u64s as usize });
         }
 
         /* empty bset: skip past it and try the next */
-        let sectors = (header + u64s * 8).div_ceil(block_size) * block_size / 512;
         if sectors == 0 {
             break;
         }
@@ -281,7 +270,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
 
                             std::os::unix::fs::FileExt::read_exact_at(&*file, &mut buf, offset)?;
 
-                            let bset = first_bset_with_keys(&buf, written, block_size)
+                            let bset = first_bset_with_keys(&buf, written, fs.block_bits() as u32)
                                 .or_else(|| (cli.error == ErrorType::Csum)
                                             .then(|| first_bset(&buf)))
                                 .ok_or_else(|| anyhow!(
