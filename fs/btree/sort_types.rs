@@ -27,13 +27,12 @@ pub struct sort_iter {
 c_default!(sort_iter);
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, Default, CStruct)]
 pub struct sort_iter_stack {
     pub iter: c::sort_iter,
     #[c("struct sort_iter_set sets[MAX_BSETS + 1]")]
     pub sets: [c::sort_iter_set; c::MAX_BSETS as usize + 1],
 }
-c_default!(sort_iter_stack);
 
 c_enum! {
     #[closed]

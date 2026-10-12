@@ -95,9 +95,8 @@ pub struct bch2_time_stats {
 c_default!(bch2_time_stats);
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, Default, CStruct)]
 pub struct bch2_time_stats_quantiles {
     pub stats: c::bch2_time_stats,
     pub quantiles: c::quantiles,
 }
-c_default!(bch2_time_stats_quantiles);

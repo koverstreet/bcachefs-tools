@@ -56,13 +56,12 @@ c_enum! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_opt_fn {
     pub parse: Option<unsafe extern "C" fn(*mut c::bch_fs, *const c_char, *mut u64, *mut c::printbuf) -> c_int>,
     pub to_text: Option<unsafe extern "C" fn(*mut c::printbuf, *mut c::bch_fs, *mut c::bch_sb, u64)>,
     pub validate: Option<unsafe extern "C" fn(u64, *mut c::printbuf) -> c_int>,
 }
-c_default!(bch_opt_fn);
 
 c_const! {
     /* the ratelimit_errors option's default: on in the kernel */

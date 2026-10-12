@@ -225,7 +225,7 @@ c_enum! {
 
 nest! {
     #[repr(C)]
-    #[derive(Clone, Copy, CStruct)]
+    #[derive(Clone, Copy, Default, CStruct)]
     pub struct bkey_validate_context {
         #[c_bitfield]
         #>[bitfield(u16)]
@@ -245,7 +245,6 @@ nest! {
         pub journal_seq: u64,
     }
 }
-c_default!(bkey_validate_context);
 
 c_extern! {
     pub fn bch2_bpos_swab(p: *mut cs::bpos);

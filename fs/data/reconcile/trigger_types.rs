@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{DArray, c_default};
+use crate::types::DArray;
 use cstruct_macros::{c_enum, CStruct};
 
 c_enum! {
@@ -18,15 +18,14 @@ c_enum! {
 
 /* Inodes in different snapshots may have different IO options: */
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, Default, CStruct)]
 pub struct snapshot_io_opts_entry {
     pub snapshot: u32,
     pub io_opts: c::bch_inode_opts,
 }
-c_default!(snapshot_io_opts_entry);
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(Default, CStruct)]
 pub struct per_snapshot_io_opts {
     pub cur_inum: u64,
     pub metadata: bool,
@@ -37,4 +36,3 @@ pub struct per_snapshot_io_opts {
     pub fs_io_opts: c::bch_inode_opts,
     pub d: DArray<c::snapshot_io_opts_entry>,
 }
-c_default!(per_snapshot_io_opts);

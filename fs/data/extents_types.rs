@@ -3,7 +3,6 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::c_default;
 use core::ffi::c_int;
 use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro, TypeInfo};
 use nestify::nest;
@@ -54,7 +53,7 @@ nest! {
 }
 
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(Default, CStruct, TypeInfo)]
 pub struct bch_io_failures {
     pub nr: u8,
     #[c("struct bch_dev_io_failures data[BCH_REPLICAS_MAX + 1]")]
@@ -62,7 +61,6 @@ pub struct bch_io_failures {
 
     pub ec_msg: c::printbuf,
 }
-c_default!(bch_io_failures);
 
 c_xmacro! {
     BCH_READ_FLAGS(x) {

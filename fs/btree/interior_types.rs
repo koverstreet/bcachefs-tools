@@ -8,13 +8,12 @@ use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, c_const, c_extern, TypeInfo};
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(Default, CStruct)]
 pub struct btree_alloc {
     pub ob: c::open_buckets,
     pub k: c::bkey_i,
     pub k_pad: [u64; c::BKEY_BTREE_PTR_VAL_U64s_MAX],
 }
-c_default!(btree_alloc);
 
 c_const! {
     /* Maximum number of nodes we might need to allocate atomically: */

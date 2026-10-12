@@ -45,10 +45,9 @@ nest! {
 c_default!(trans_waiting_for_lock);
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(Default, CStruct)]
 pub struct lock_graph {
     pub g: [c::trans_waiting_for_lock; 8],
     pub nr: c_uint,
     pub printed_chain: bool,
 }
-c_default!(lock_graph);

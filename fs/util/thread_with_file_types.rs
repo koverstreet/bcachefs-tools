@@ -17,10 +17,9 @@ pub struct stdio_buf {
 c_default!(stdio_buf);
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(Default, CStruct)]
 pub struct stdio_redirect {
     pub input: c::stdio_buf,
     pub output: c::stdio_buf,
     pub done: bool,
 }
-c_default!(stdio_redirect);

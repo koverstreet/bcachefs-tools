@@ -19,9 +19,8 @@ pub struct accounting_mem_entry {
 c_default!(accounting_mem_entry);
 
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(Default, CStruct, TypeInfo)]
 pub struct bch_accounting_mem {
     pub k: DArray<c::accounting_mem_entry>,
     pub gc_running: bool,
 }
-c_default!(bch_accounting_mem);

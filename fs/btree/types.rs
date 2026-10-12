@@ -443,7 +443,7 @@ c_enum! {
 }
 
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(Default, CStruct)]
 pub struct btree_trigger_op {
     pub btree: cs::btree_id,
     pub level: c_uint,
@@ -452,7 +452,6 @@ pub struct btree_trigger_op {
     pub new_buf_u64s: c_uint,
     pub flags: cs::btree_iter_update_trigger_flags,
 }
-c_default!(btree_trigger_op);
 
 // Btree paths and iterators:
 

@@ -3,17 +3,15 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::c_default;
 use cstruct_macros::{CStruct, bitfield};
 use nestify::nest;
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(Clone, Copy, Default, CStruct)]
 pub struct bbpos {
     pub btree: c::btree_id,
     pub pos: c::bpos,
 }
-c_default!(bbpos);
 
 /*
  * Layout is padding-free (bpos is __packed __aligned(4)), so a blbpos can be
