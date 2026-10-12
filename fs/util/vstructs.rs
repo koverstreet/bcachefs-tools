@@ -31,8 +31,13 @@
 //!  - a counted array - devs[]: FlexArray, Flex::tail()
 //!  - vstruct_for_each(), vstruct_next(), vstruct_last():
 //!    VStructContainer::entries(), trusting the count, as C does
+//!
+//! And a value shorter than its type - written by an older version, before
+//! the type grew - is a View: its fields read as zero past its end, as
+//! bch2_sb_field_get_minsize() and bkey_val_copy_pad() zero them in C.
 
-use core::mem::{align_of, size_of};
+use core::marker::PhantomData;
+use core::mem::{align_of, size_of, MaybeUninit};
 use core::ops::Deref;
 
 use crate::c;
@@ -377,10 +382,168 @@ impl<'a, T: SelfSized> Flex<'a, T> {
     }
 }
 
+// ---- Views: values shorter than their type ---------------------------------
+
+/// ViewMut::set() on a field past the end of a view's bytes: one a shorter,
+/// older version of the type it's in doesn't have. Growing the value is its
+/// owner's job, not a field write's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShortField {
+    /// The type the bytes are a value of.
+    pub ty:    &'static str,
+    /// The field, if one was projected to - and where it is in @ty.
+    pub field: &'static str,
+    pub at:    usize,
+    pub size:  usize,
+    /// How many of @ty's bytes there are.
+    pub len:   usize,
+}
+
+impl core::fmt::Display for ShortField {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let Self { ty, field, at, size, len } = *self;
+        let field = if field.is_empty() { "bytes" } else { field };
+        write!(f, "{ty}: {field} at {at}..{} is past its end ({len} bytes); grow it first", at + size)
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ShortField {}
+
+/// A T, and as many of its bytes as there are - fewer, for one written before
+/// T grew: a superblock section, journal entry or key value from an older
+/// version. One field of a View is a View of that field: #[derive(View)]'s
+/// projections.
+///
+/// Read, a field past the end is zero - an older version's missing fields
+/// are, as C's get_minsize() and bkey_val_copy_pad() zero them - and nothing
+/// past the end is ever read: those bytes are whatever comes next.
+///
+/// That a short value is an older version, not a truncated one, rests on its
+/// count having been validated: the bytes a View is made over are as many as
+/// its header says. Not for untrusted bytes - dump's, off a damaged disk.
+///
+/// Field projections will replace this when the language has them:
+/// e.btrees_lost_data() becomes e.btrees_lost_data.
+pub struct View<'a, T> {
+    /// T's first byte: the value's, @at further on - and maybe past its end
+    p:   *const u8,
+    at:  usize,
+    /// How many of the value's bytes there are
+    end: usize,
+    _t:  PhantomData<&'a T>,
+}
+
+impl<T> Clone for View<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for View<'_, T> {}
+
+impl<'a, T: Plain> View<'a, T> {
+    /// The T at the start of @bytes, as much of it as they hold.
+    pub fn new(bytes: &'a [u8]) -> Self {
+        Self { p: bytes.as_ptr(), at: 0, end: bytes.len(), _t: PhantomData }
+    }
+
+    /// How many of its bytes there are, up to its size.
+    fn len(&self) -> usize {
+        self.end.saturating_sub(self.at).min(size_of::<T>())
+    }
+
+    /// The U at @off in it, its field @_field - named as ViewMut's are, for
+    /// set()'s errors: what #[derive(View)]'s projections return. A wrong @off
+    /// reads the wrong bytes, never bytes that aren't there.
+    pub fn project<U: Plain>(&self, off: usize, _field: &'static str) -> View<'a, U> {
+        View { p: self.p.wrapping_add(off), at: self.at.saturating_add(off), end: self.end, _t: PhantomData }
+    }
+
+    /// Its value: what's past the end reads as zero.
+    pub fn get(&self) -> T {
+        let mut v = MaybeUninit::<T>::zeroed();
+        // SAFETY: len() of its bytes are there, into a zeroed T - and any
+        // bytes are a T
+        unsafe {
+            core::ptr::copy_nonoverlapping(self.p, v.as_mut_ptr().cast::<u8>(), self.len());
+            v.assume_init()
+        }
+    }
+
+    /// Its bytes and the value's past them - a flexible array's, a message's
+    /// - to the value's end: Flex::as_bytes().
+    pub fn as_bytes(&self) -> &'a [u8] {
+        // SAFETY: the value's bytes, from ours to its end - none if we're past it
+        unsafe { core::slice::from_raw_parts(self.p, self.end.saturating_sub(self.at)) }
+    }
+
+    /// It, whole: None if any of it is past the end, or it isn't aligned.
+    pub fn whole(&self) -> Option<&'a T> {
+        (self.len() == size_of::<T>() && self.p as usize % align_of::<T>() == 0)
+            // SAFETY: all of it is there, aligned - and any bytes are a T
+            .then(|| unsafe { &*self.p.cast::<T>() })
+    }
+}
+
+/// A View that can set fields - those there are: one past the end is an
+/// error, not a write.
+pub struct ViewMut<'a, T> {
+    p:     *mut u8,
+    at:    usize,
+    end:   usize,
+    ty:    &'static str,
+    field: &'static str,
+    _t:    PhantomData<&'a mut T>,
+}
+
+impl<'a, T: Plain> ViewMut<'a, T> {
+    /// The T at the start of @bytes, as much of it as they hold.
+    pub fn new(bytes: &'a mut [u8]) -> Self {
+        Self { p: bytes.as_mut_ptr(), at: 0, end: bytes.len(), ty: core::any::type_name::<T>(),
+               field: "", _t: PhantomData }
+    }
+
+    /// It, read-only.
+    pub fn as_view(&self) -> View<'_, T> {
+        View { p: self.p, at: self.at, end: self.end, _t: PhantomData }
+    }
+
+    /// As View::project().
+    pub fn project<U: Plain>(&mut self, off: usize, field: &'static str) -> ViewMut<'_, U> {
+        ViewMut { p: self.p.wrapping_add(off), at: self.at.saturating_add(off), end: self.end, ty: self.ty,
+                  field, _t: PhantomData }
+    }
+
+    /// As View::get().
+    pub fn get(&self) -> T {
+        self.as_view().get()
+    }
+
+    /// Set it to @v - if all of it is there.
+    pub fn set(&mut self, v: T) -> Result<(), ShortField> {
+        if self.as_view().len() < size_of::<T>() {
+            return Err(ShortField { ty: self.ty, field: self.field, at: self.at,
+                                    size: size_of::<T>(), len: self.end });
+        }
+        // SAFETY: all of it is there; @v is Plain, so all its bytes are
+        // initialized - and the value they land in is Plain, as new() required
+        unsafe { core::ptr::copy_nonoverlapping((&raw const v).cast::<u8>(), self.p, size_of::<T>()) };
+        Ok(())
+    }
+
+    /// As View::whole(), mutably.
+    pub fn whole_mut(&mut self) -> Option<&mut T> {
+        (self.as_view().len() == size_of::<T>() && self.p as usize % align_of::<T>() == 0)
+            // SAFETY: as View::whole()
+            .then(|| unsafe { &mut *self.p.cast::<T>() })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Le16, Le32};
+    use crate::types::{Le16, Le32, Le64};
 
     /// @v's bytes, at @at in @buf.
     fn put<T: Plain>(buf: &mut [u64], at: usize, v: &T) {
@@ -478,5 +641,91 @@ mod tests {
         put(&mut buf, hdr, &c::bch_sb_field { u64s: Le32::new(0), ..Default::default() });
         let sb = Flex::<c::bch_sb>::new(bytes(&buf)).unwrap();
         assert_eq!(sb.entries().count(), 0);
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    struct Hdr { u64s: Le32, ty: Le32 }
+    // SAFETY: integers, no padding
+    unsafe impl Plain for Hdr {}
+
+    /// A section that grew: 40 bytes now, 24 once - before @new and @newer.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    struct Grown { hdr: Hdr, old: [Le64; 2], new: Le64, newer: Le64 }
+    // SAFETY: integers, no padding
+    unsafe impl Plain for Grown {}
+
+    // What #[view] generates: one projection per field
+    impl<'a> View<'a, Grown> {
+        fn hdr(&self) -> View<'a, Hdr> { self.project(core::mem::offset_of!(Grown, hdr), "hdr") }
+        fn old(&self) -> View<'a, [Le64; 2]> { self.project(core::mem::offset_of!(Grown, old), "old") }
+        fn new_(&self) -> View<'a, Le64> { self.project(core::mem::offset_of!(Grown, new), "new") }
+        fn newer(&self) -> View<'a, Le64> { self.project(core::mem::offset_of!(Grown, newer), "newer") }
+    }
+    impl<'a> View<'a, Hdr> {
+        fn ty(&self) -> View<'a, Le32> { self.project(core::mem::offset_of!(Hdr, ty), "ty") }
+    }
+    impl<'a> ViewMut<'a, Grown> {
+        fn old(&mut self) -> ViewMut<'_, [Le64; 2]> { self.project(core::mem::offset_of!(Grown, old), "old") }
+        fn newer(&mut self) -> ViewMut<'_, Le64> { self.project(core::mem::offset_of!(Grown, newer), "newer") }
+    }
+
+    /// A Grown of @u64s: its header, then 2, 3, ... in each u64 after.
+    fn grown(u64s: usize) -> Vec<u64> {
+        let mut buf: Vec<u64> = (0..u64s as u64).map(|i| i + 1).collect();
+        put(&mut buf, 0, &Hdr { u64s: Le32::new(u64s as u32), ty: Le32::new(7) });
+        buf
+    }
+
+    fn bytes_mut(buf: &mut [u64]) -> &mut [u8] {
+        // SAFETY: u64s, which any bytes are
+        unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), buf.len() * 8) }
+    }
+
+    /// The fields an older, shorter version has read as they are; the ones
+    /// it lacks, as zero.
+    #[test]
+    fn view_reads_zero_past_the_end() {
+        let full = grown(5);
+        let v = View::<Grown>::new(bytes(&full));
+        assert_eq!((v.new_().get(), v.newer().get()), (Le64::new(4), Le64::new(5)));
+        assert_eq!(v.whole(), Some(&v.get()));
+
+        let short = grown(3);
+        let v = View::<Grown>::new(bytes(&short));
+        assert_eq!(v.hdr().ty().get(), 7);
+        assert_eq!(v.old().get(), [Le64::new(2), Le64::new(3)]);
+        assert_eq!((v.new_().get(), v.newer().get()), (Le64::new(0), Le64::new(0)));
+        assert_eq!(v.get(), Grown { hdr: Hdr { u64s: Le32::new(3), ty: Le32::new(7) },
+                                    old: [Le64::new(2), Le64::new(3)], ..Default::default() });
+        assert_eq!(v.whole(), None);
+        assert_eq!((v.as_bytes().len(), v.old().as_bytes().len(), v.newer().as_bytes().len()),
+                   (24, 16, 0));
+
+        // half an array there: the half there is read, the rest is zero
+        let half = grown(2);
+        assert_eq!(View::<Grown>::new(bytes(&half)).old().get(), [Le64::new(2), Le64::new(0)]);
+
+        // nothing there at all
+        assert_eq!(View::<Grown>::new(&[]).hdr().ty().get(), 0);
+    }
+
+    /// A field the bytes have can be set; one past the end is an error, and
+    /// writes nothing.
+    #[test]
+    fn view_set_past_the_end_errors() {
+        let mut short = grown(3);
+        let mut v = ViewMut::<Grown>::new(bytes_mut(&mut short));
+        v.old().set([Le64::new(20), Le64::new(30)]).unwrap();
+        assert_eq!(v.get().old, [Le64::new(20), Le64::new(30)]);
+
+        let e = v.newer().set(Le64::new(9)).unwrap_err();
+        assert_eq!((e.field, e.at, e.size, e.len), ("newer", 32, 8, 24));
+        assert!(e.to_string().ends_with("Grown: newer at 32..40 is past its end (24 bytes); grow it first"),
+                "{e}");
+        assert!(v.whole_mut().is_none());
+        assert_eq!(short, grown(3).iter().enumerate()
+                   .map(|(i, &x)| match i { 1 => 20, 2 => 30, _ => x }).collect::<Vec<_>>());
     }
 }
