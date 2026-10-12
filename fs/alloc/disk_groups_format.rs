@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::Le64;
 use crate::util::vstructs::vstruct;
-use cstruct_macros::{c_bitmask, c_const, CStruct, TypeInfo};
+use cstruct_macros::{c_bitmask, c_const, CStruct, Plain, TypeInfo, View};
 
 c_const! {
     #[c_int]
@@ -13,7 +13,7 @@ c_const! {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_disk_group {
     pub label: [u8; c::BCH_SB_LABEL_SIZE as usize],
@@ -29,7 +29,7 @@ c_bitmask! {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 #[c_packed]
 pub struct bch_sb_field_disk_groups {
     pub field: c::bch_sb_field,

@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
 use crate::util::vstructs::vstruct;
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, TypeInfo};
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, Plain, TypeInfo, View};
 
 c_const! {
     /*
@@ -61,7 +61,7 @@ c_enum! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
 pub struct bch_member {
     pub uuid: c::__uuid_t,
     pub nbuckets: Le64, /* device size */
@@ -184,7 +184,7 @@ c_enum! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_sb_field_members_v1 {
     pub field: c::bch_sb_field,
     pub _members: [c::bch_member; 0], //Members are now variable size
@@ -192,7 +192,7 @@ pub struct bch_sb_field_members_v1 {
 vstruct!(bch_sb_field_members_v1, field.u64s, start = 0);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_sb_field_members_v2 {
     pub field: c::bch_sb_field,
     pub member_bytes: Le16, //size of single member entry

@@ -4,10 +4,10 @@
 
 use crate::cstructs::c;
 use crate::util::vstructs::vstruct;
-use cstruct_macros::{CStruct, Plain, TypeInfo};
+use cstruct_macros::{CStruct, Plain, TypeInfo, View};
 
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_replicas_entry_v0 {
     pub data_type: u8,
     pub nr_devs: u8,
@@ -16,7 +16,7 @@ pub struct bch_replicas_entry_v0 {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 #[c_packed]
 pub struct bch_sb_field_replicas_v0 {
     pub field: c::bch_sb_field,
@@ -36,7 +36,7 @@ pub struct bch_replicas_entry_v1 {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 #[c_packed]
 pub struct bch_sb_field_replicas {
     pub field: c::bch_sb_field,

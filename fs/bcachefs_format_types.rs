@@ -73,7 +73,7 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
 use crate::util::vstructs::{vstruct, vstruct_container, FlexArray};
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, tagged_union, CStruct, Plain, TypeInfo};
+use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, tagged_union, CStruct, Plain, TypeInfo, View};
 #[cfg(__KERNEL__)]
 use cstruct_macros::c_typedef;
 
@@ -578,7 +578,7 @@ c_bitmask! {
 /* Optional/variable size superblock sections: */
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_sb_field {
     pub _data: [u64; 0],
     pub u64s: Le32,
@@ -862,7 +862,7 @@ c_const! {
 /* BCH_SB_FIELD_journal: */
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_sb_field_journal {
     pub field: c::bch_sb_field,
     pub buckets: [Le64; 0],
@@ -870,14 +870,14 @@ pub struct bch_sb_field_journal {
 vstruct!(bch_sb_field_journal, field.u64s, start = 0);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_journal_v2_entry {
     pub start: Le64,
     pub nr: Le64,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_sb_field_journal_v2 {
     pub field: c::bch_sb_field,
 
@@ -894,13 +894,13 @@ pub struct nonce {
 }
 
 #[repr(C)]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct bch_key {
     pub key: [Le64; 4],
 }
 
 #[repr(C)]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct bch_encrypted_key {
     pub magic: Le64,
     pub key: c::bch_key,
@@ -914,7 +914,7 @@ pub struct bch_encrypted_key {
  * previously encrypted data.
  */
 #[repr(C)]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_sb_field_crypt {
     pub field: c::bch_sb_field,
 
@@ -952,7 +952,7 @@ c_bitmask! {
  * the superblock:
  */
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct jset_entry {
     pub u64s: Le16,
     pub btree_id: u8,
@@ -967,7 +967,7 @@ vstruct!(jset_entry, u64s);
 vstruct_container!(jset_entry, c::bkey_i);
 
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_sb_field_clean {
     pub field: c::bch_sb_field,
 
@@ -983,7 +983,7 @@ vstruct!(bch_sb_field_clean, field.u64s, start = 0);
 vstruct_container!(bch_sb_field_clean, c::jset_entry);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_sb_field_ext {
     pub field: c::bch_sb_field,
     pub recovery_passes_required: [Le64; 2],
@@ -1824,7 +1824,7 @@ tagged_union! {
  * don't think there was a missing journal entry.
  */
 #[repr(C)]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct jset_entry_blacklist {
     pub entry: c::jset_entry,
     pub seq: Le64,
@@ -1832,7 +1832,7 @@ pub struct jset_entry_blacklist {
 vstruct!(jset_entry_blacklist, entry.u64s);
 
 #[repr(C)]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct jset_entry_blacklist_v2 {
     pub entry: c::jset_entry,
     pub start: Le64,
@@ -1857,7 +1857,7 @@ c_enum! {
 }
 
 #[repr(C, packed)]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct jset_entry_usage {
     pub entry: c::jset_entry,
     pub v: Le64,
@@ -1865,7 +1865,7 @@ pub struct jset_entry_usage {
 vstruct!(jset_entry_usage, entry.u64s);
 
 #[repr(C, packed)]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct jset_entry_data_usage {
     pub entry: c::jset_entry,
     pub v: Le64,
@@ -1874,7 +1874,7 @@ pub struct jset_entry_data_usage {
 vstruct!(jset_entry_data_usage, entry.u64s);
 
 #[repr(C, packed)]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct jset_entry_clock {
     pub entry: c::jset_entry,
     pub rw: u8,
@@ -1884,7 +1884,7 @@ pub struct jset_entry_clock {
 vstruct!(jset_entry_clock, entry.u64s);
 
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct jset_entry_dev_usage_type {
     pub buckets: Le64,
     pub sectors: Le64,
@@ -1892,7 +1892,7 @@ pub struct jset_entry_dev_usage_type {
 }
 
 #[repr(C)]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct jset_entry_dev_usage {
     pub entry: c::jset_entry,
     pub dev: Le32,
@@ -1906,7 +1906,7 @@ pub struct jset_entry_dev_usage {
 vstruct!(jset_entry_dev_usage, entry.u64s);
 
 #[repr(C, align(8))]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo, View)]
 #[c_packed]
 pub struct jset_entry_log {
     pub entry: c::jset_entry,
@@ -1915,7 +1915,7 @@ pub struct jset_entry_log {
 vstruct!(jset_entry_log, entry.u64s);
 
 #[repr(C, align(8))]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo, View)]
 #[c_packed]
 pub struct jset_entry_datetime {
     pub entry: c::jset_entry,
@@ -1924,7 +1924,7 @@ pub struct jset_entry_datetime {
 vstruct!(jset_entry_datetime, entry.u64s);
 
 #[repr(C, align(8))]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo, View)]
 #[c_packed]
 pub struct jset_entry_rewind_limit {
     pub entry: c::jset_entry,
@@ -1937,7 +1937,7 @@ vstruct!(jset_entry_rewind_limit, entry.u64s);
  * with seq in (to, from] use overwrite entries instead of btree_keys.
  */
 #[repr(C, align(8))]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo, View)]
 #[c_packed]
 pub struct jset_entry_rewind {
     pub entry: c::jset_entry,

@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
 use crate::util::vstructs::vstruct;
-use cstruct_macros::{c_enum, CStruct, TypeInfo};
+use cstruct_macros::{c_enum, CStruct, Plain, TypeInfo, View};
 
 /* KEY_TYPE_quota: */
 c_enum! {
@@ -44,21 +44,21 @@ pub struct bch_quota {
 
 /* BCH_SB_FIELD_quota: */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_quota_counter {
     pub timelimit: Le32,
     pub warnlimit: Le32,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_quota_type {
     pub flags: Le64,
     pub c: [c::bch_sb_quota_counter; c::Q_COUNTERS as usize],
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 #[c_packed]
 pub struct bch_sb_field_quota {
     pub field: c::bch_sb_field,

@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::Le64;
 use crate::util::vstructs::vstruct;
-use cstruct_macros::{c_enum, c_xmacro, CStruct, TypeInfo};
+use cstruct_macros::{c_enum, c_xmacro, CStruct, Plain, TypeInfo, View};
 
 c_enum! {
     #[flags]
@@ -175,7 +175,7 @@ c_enum! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_sb_field_counters {
     pub field: c::bch_sb_field,
     pub d: [Le64; 0],
