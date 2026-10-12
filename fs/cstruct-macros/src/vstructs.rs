@@ -12,7 +12,7 @@
 
 use proc_macro::TokenStream;
 
-use crate::cstruct::{field_type, parse_cstruct, CKind, CStructDef, FieldType};
+use crate::cstruct::{field_type, parse_cstruct, CFieldDef, CKind, CStructDef, FieldType};
 use crate::tokens;
 
 /// #[derive(Plain)], on a struct - not a union, whose bytes past a short
@@ -57,7 +57,9 @@ const VIEW_METHODS: &[&str] = &["new", "get", "set", "whole", "whole_mut", "proj
 /// #[derive(View)], on a Plain struct: a projection for each field, on View
 /// and ViewMut - `v.field()`, a View of the field, until field projections
 /// make it `v.field`. Not for fields named `_..`, padding and C's internals,
-/// or a trailing `[T; 0]`: a flexible array is View::as_bytes()'s.
+/// or a trailing `[T; 0]`: a flexible array is View::as_bytes()'s. And
+/// __NAME_min!(FIELD), for a type whose values may end before FIELD: see
+/// min_arm().
 pub(crate) fn derive_view(input: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&input.to_string())?;
     if def.kind != CKind::Struct {
@@ -85,11 +87,62 @@ pub(crate) fn derive_view(input: TokenStream) -> Result<TokenStream, String> {
                  self.project({off}, \"{field}\")\n\
              }}\n"));
     }
+    let arms: String = def.fields.iter().enumerate()
+        .map(|(i, f)| min_arm(name, &def.fields[..i], &f.rust_name()))
+        .collect();
     Ok(tokens(&format!(
         "#[allow(dead_code)]\n\
          impl<'a> crate::util::vstructs::View<'a, {name}> {{\n{get}}}\n\
          #[allow(dead_code)]\n\
-         impl<'a> crate::util::vstructs::ViewMut<'a, {name}> {{\n{get_mut}}}\n")))
+         impl<'a> crate::util::vstructs::ViewMut<'a, {name}> {{\n{get_mut}}}\n\
+         #[allow(unused_macros)]\n\
+         macro_rules! __{name}_min {{\n{arms}}}\n\
+         #[allow(unused_imports)]\n\
+         pub(crate) use __{name}_min;\n")))
+}
+
+/// __@name_min!'s arm for @field: @name up to it, its fields @before - the
+/// fields every valid value has, if one may end before @field - as
+/// @name_min, and @name Floored by it. For a key type, whose
+/// BCH_BKEY_TYPES() names @field: bkey_types! invokes it, through crate::c.
+///
+/// That's in another module, where @before's types as written may not be
+/// named, so it names them as every format file does: c and crate::types.
+fn min_arm(name: &str, before: &[CFieldDef], field: &str) -> String {
+    let min = format!("{name}_min");
+    let fields: String = before.iter()
+        .map(|f| format!("pub {}: {},\n", f.rust_name(), f.ty.trim()))
+        .collect();
+    let offsets: String = before.iter()
+        .map(|f| format!("assert!(::core::mem::offset_of!({min}, {0}) == \
+                          ::core::mem::offset_of!(crate::cstructs::c::{name}, {0}));\n", f.rust_name()))
+        .collect();
+    let tys: Vec<&str> = before.iter().map(|f| f.ty.trim()).collect();
+    let plain = plain(&min, &tys);
+    format!(
+        "({field}) => {{\n\
+             mod __{min} {{\n\
+                 #[allow(unused_imports)]\n\
+                 use crate::cstructs::c;\n\
+                 #[allow(unused_imports)]\n\
+                 use crate::types::*;\n\
+                 /// {name} up to {field}: the fields every valid one has.\n\
+                 #[repr(C)]\n\
+                 #[derive(Clone, Copy)]\n\
+                 #[allow(non_camel_case_types)]\n\
+                 pub struct {min} {{\n{fields}}}\n\
+                 {plain}\
+                 unsafe impl crate::util::vstructs::Floored for crate::cstructs::c::{name} {{\n\
+                     type Min = {min};\n\
+                 }}\n\
+                 const _: () = {{\n\
+                     {offsets}\
+                     assert!(::core::mem::size_of::<{min}>() == \
+                             ::core::mem::offset_of!(crate::cstructs::c::{name}, {field}));\n\
+                 }};\n\
+             }}\n\
+             pub use __{min}::{min};\n\
+         }};\n")
 }
 
 /// A CStruct's FlexArray, from #[counted_by(FIELD)] on its trailing `[T; 0]`

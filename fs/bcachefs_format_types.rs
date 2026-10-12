@@ -253,7 +253,7 @@ vstruct!(bkey_packed, u64s, start = 0);
 c_default!(bkey_packed);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_typedef]
 pub struct bch_le128 {
     pub lo: Le64,
@@ -465,7 +465,7 @@ pub struct bch_extent_whiteout {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_error {
     pub v: c::bch_val,
     pub err: u8,

@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_enum, CStruct, TypeInfo};
+use cstruct_macros::{c_enum, CStruct, Plain, TypeInfo, View};
 
 c_enum! {
     #[open]
@@ -34,7 +34,7 @@ c_enum! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_logged_op_finsert {
     pub v: c::bch_val,
     pub state: u8,

@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, TypeInfo};
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, Plain, TypeInfo, View};
 
 c_const! {
     #[c_int]
@@ -12,7 +12,7 @@ c_const! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_subvolume {
     pub v: c::bch_val,
     pub flags: Le32,
@@ -71,7 +71,7 @@ c_bitmask! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 pub struct bch_snapshot {
     pub v: c::bch_val,
     pub flags: Le32,

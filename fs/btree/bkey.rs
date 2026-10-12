@@ -9,6 +9,7 @@ use core::fmt;
 use core::str::FromStr;
 #[cfg(feature = "std")]
 use crate::errcode::{bch_errcode, BchError};
+use crate::util::vstructs::Floored;
 use core::marker::PhantomData;
 
 use c::bpos as Bpos;
@@ -340,6 +341,19 @@ macro_rules! min_val_size {
     ($val:ty, $field:ident)  => { core::mem::offset_of!($val, $field) };
 }
 
+/// And as what a View of it derefs to, Floored's Min: the value up to the
+/// field, #[derive(View)]'s __bch_<name>_min!(), or all of it for `_`.
+macro_rules! bkey_floored {
+    ($name:ident, _) => { crate::paste! {
+        unsafe impl Floored for c::[<bch_ $name>] {
+            type Min = Self;
+        }
+    } };
+    ($name:ident, $field:ident) => { crate::paste! {
+        c::[<__bch_ $name _min>]!($field);
+    } };
+}
+
 /// Everything defined per key type, from BCH_BKEY_TYPES(): (name, KEY_TYPE
 /// number, ...).
 macro_rules! bkey_types {
@@ -395,6 +409,8 @@ macro_rules! bkey_types {
                 k.[<as_mut_ $name>]()
             }
         }
+
+        bkey_floored!($name, $field);
         )*
 
         /// Typed dispatch for inline bkeys (`bkey_i`).
@@ -903,6 +919,16 @@ pub fn bkey_is_btree_ptr(k: &c::bkey) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::vstructs::View;
+
+    /// A View of a snapshot over fewer bytes than every snapshot has - not
+    /// one from view(), which won't make it - panics at a field every one
+    /// has, rather than reading past them.
+    #[test]
+    #[should_panic(expected = "fewer than every valid one has")]
+    fn bkey_view_unfloored() {
+        let _ = View::<c::bch_snapshot>::new(&[0u8; 16]).subvol;
+    }
 
     #[test]
     fn bpos_successor_predecessor_carry() {

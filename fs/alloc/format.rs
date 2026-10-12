@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le32, Le64};
 use core::ffi::c_ulong;
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, TypeInfo};
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, Plain, TypeInfo, View};
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -105,7 +105,7 @@ c_bitmask! {
  *     0 means no journal delay needed (noflush/fast discard path).
  */
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
 #[c_packed]
 pub struct bch_alloc_v4 {
     pub v: c::bch_val,
@@ -149,7 +149,7 @@ c_const! {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(Clone, Copy, CStruct, Plain, TypeInfo, View)]
 #[c_packed]
 pub struct bch_bucket_gens {
     pub v: c::bch_val,

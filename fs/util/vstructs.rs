@@ -460,6 +460,9 @@ impl std::error::Error for ShortField {}
 /// count having been validated: the bytes a View is made over are as many as
 /// its header says. Not for untrusted bytes - dump's, off a damaged disk.
 ///
+/// A Floored type's fields that every value has are fields of its View
+/// already: s.subvol, not s.subvol().
+///
 /// Field projections will replace this when the language has them:
 /// e.btrees_lost_data() becomes e.btrees_lost_data.
 pub struct View<'a, T> {
@@ -586,6 +589,47 @@ impl<T: Plain + Native> ViewMut<'_, T> {
         // initialized - and the value they land in is Plain, as new() required
         unsafe { core::ptr::copy_nonoverlapping((&raw const v).cast::<u8>(), self.p, size_of::<T>()) };
         Ok(())
+    }
+}
+
+/// A type whose values may be shorter than it, but never shorter than Min:
+/// the fields every valid one has. A View of it derefs to them, so they're
+/// fields - v.subvol - and only the later ones are projected, reading as
+/// zero past the end. A key type's value is one: Min is it up to the field
+/// BCH_BKEY_TYPES() names, from #[derive(View)]'s __<name>_min!(), or all of
+/// it for `_`.
+///
+/// # Safety
+/// Min is Self's first fields, at the same offsets.
+pub unsafe trait Floored {
+    type Min;
+}
+
+impl<'a, T: Plain + Floored> View<'a, T>
+where
+    T::Min: Plain,
+{
+    /// Its fields every valid one has. A View of fewer bytes than those
+    /// wasn't made by what floors it - BkeySC::view() - and is a bug.
+    fn min(&self) -> &'a T::Min {
+        let (ty, len) = (core::any::type_name::<T>(), self.len());
+        assert!(len >= size_of::<T::Min>(),
+                "{ty}: {len} bytes, fewer than every valid one has ({})", size_of::<T::Min>());
+        assert!(self.p as usize % align_of::<T::Min>() == 0,
+                "{ty} at {:p}: not aligned to {}", self.p, align_of::<T::Min>());
+        // SAFETY: that many bytes are there, aligned - and any bytes are a Min
+        unsafe { &*self.p.cast::<T::Min>() }
+    }
+}
+
+impl<T: Plain + Floored> Deref for View<'_, T>
+where
+    T::Min: Plain,
+{
+    type Target = T::Min;
+
+    fn deref(&self) -> &T::Min {
+        self.min()
     }
 }
 
