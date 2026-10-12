@@ -2,7 +2,6 @@ use std::fmt::Write;
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::c;
-use bcachefs_kernel::util::vstructs::View;
 use bcachefs_kernel::opt_set;
 use chrono::{TimeZone, Utc};
 use clap::Parser;
@@ -42,7 +41,7 @@ fn jset_seq(p: &c::journal_replay) -> u64 {
 }
 
 /// A jset's first datetime entry's seconds-since-epoch, or None if absent.
-fn jset_datetime(j: View<'_, c::jset>) -> Option<u64> {
+fn jset_datetime(j: &c::jset) -> Option<u64> {
     j.entries().find_map(|e| match e.typed() {
         Ok(c::JsetEntryRef::datetime(d)) => Some(d.seconds().get()),
         _ => None,
@@ -50,7 +49,7 @@ fn jset_datetime(j: View<'_, c::jset>) -> Option<u64> {
 }
 
 /// A jset's first rewind_limit entry's seq, or None if absent.
-fn jset_rewind_limit(j: View<'_, c::jset>) -> Option<u64> {
+fn jset_rewind_limit(j: &c::jset) -> Option<u64> {
     j.entries().find_map(|e| match e.typed() {
         Ok(c::JsetEntryRef::rewind_limit(r)) => Some(r.seq().get()),
         _ => None,

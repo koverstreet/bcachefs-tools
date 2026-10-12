@@ -237,7 +237,8 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         .map(|f| thin_pointers(name, &f.cfg, &[(f.rust_name(), f.ty.clone())], None))
         .collect();
     let flex = vstructs::flex_array(&def)?;
-    Ok(tokens(&format!("{forward}{flex}const _: () = {{\n{thin}}};\n{}", record(&text, &nums))))
+    let unsized_ = vstructs::unsized_impl(&def)?;
+    Ok(tokens(&format!("{forward}{flex}{unsized_}const _: () = {{\n{thin}}};\n{}", record(&text, &nums))))
 }
 
 /// bitfield_struct::bitfield, recorded - and __NAME_forward!(STRUCT, field),

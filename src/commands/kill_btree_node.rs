@@ -50,7 +50,7 @@ use bcachefs_kernel::btree::bkey::BkeySC;
 use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter};
 use bcachefs_kernel::data::extents::bkey_ptrs;
 use bcachefs_kernel::opt_set;
-use bcachefs_kernel::util::vstructs::{UnvalidatedRef, VStruct};
+use bcachefs_kernel::util::vstructs::{SelfSized, UnvalidatedRef};
 use clap::Parser;
 
 struct KillNode {

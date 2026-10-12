@@ -70,9 +70,11 @@
 
 #![allow(non_camel_case_types)]
 
+use core::marker::PhantomData;
+
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
-use crate::util::vstructs::{floored_by_self, vstruct, vstruct_container, FlexArray};
+use crate::util::vstructs::{floored_by_self, vstruct, vstruct_container, Ffi, FlexArray, Validated};
 use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, tagged_union, CStruct, Plain, TypeInfo, View};
 #[cfg(__KERNEL__)]
 use cstruct_macros::c_typedef;
@@ -852,7 +854,7 @@ tagged_union! {
     pub union bch_sb_field in c::bch_sb_field {
         tag type_: u32 = c::bch_sb_field_type,
         arms from BCH_SB_FIELDS(f, nr, ..) => f: c::bch_sb_field_ ## f = nr,
-        unsized,
+        unsized view,
     }
 }
 
@@ -959,19 +961,20 @@ c_bitmask! {
  * the superblock:
  */
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo, View)]
-pub struct jset_entry {
-    pub u64s: Le16,
+#[derive(Default, CStruct, Plain, TypeInfo)]
+pub struct jset_entry<S = Validated, T: ?Sized = [u64]> {
+    u64s: Le16,
     pub btree_id: u8,
     pub level: u8,
     pub type_: u8, /* designates what this jset holds */
     pub pad: [u8; 3],
 
     pub start: [c::bkey_i; 0],
-    pub _data: [u64; 0],
+    _s: PhantomData<S>,
+    pub _data: T,
 }
-vstruct!(jset_entry, u64s);
-vstruct_container!(jset_entry, c::bkey_i);
+vstruct!(unsized jset_entry, u64s);
+vstruct_container!(unsized jset_entry, thin c::bkey_i);
 
 #[repr(C)]
 #[derive(Default, CStruct, Plain, TypeInfo, View)]
@@ -983,7 +986,7 @@ pub struct bch_sb_field_clean {
     pub _write_clock: Le16,
     pub journal_seq: Le64,
 
-    pub start: [c::jset_entry; 0],
+    pub start: [Ffi<c::jset_entry>; 0],
     pub _data: [u64; 0],
 }
 vstruct!(bch_sb_field_clean, field.u64s, start = 0);
@@ -1737,7 +1740,7 @@ c_const! {
     pub const BCACHEFS_STATFS_MAGIC: u32 = 0xca451a4e;
 
     /* Journal */
-    pub const JSET_KEYS_U64s: usize = size_of::<c::jset_entry>() / size_of::<u64>();
+    pub const JSET_KEYS_U64s: usize = size_of::<Ffi<c::jset_entry>>() / size_of::<u64>();
 }
 
 c_xmacro! {
@@ -1833,7 +1836,7 @@ tagged_union! {
 #[repr(C)]
 #[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct jset_entry_blacklist {
-    pub entry: c::jset_entry,
+    pub entry: Ffi<c::jset_entry>,
     pub seq: Le64,
 }
 vstruct!(jset_entry_blacklist, entry.u64s);
@@ -1841,7 +1844,7 @@ vstruct!(jset_entry_blacklist, entry.u64s);
 #[repr(C)]
 #[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct jset_entry_blacklist_v2 {
-    pub entry: c::jset_entry,
+    pub entry: Ffi<c::jset_entry>,
     pub start: Le64,
     pub end: Le64,
 }
@@ -1866,7 +1869,7 @@ c_enum! {
 #[repr(C, packed)]
 #[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct jset_entry_usage {
-    pub entry: c::jset_entry,
+    pub entry: Ffi<c::jset_entry>,
     pub v: Le64,
 }
 vstruct!(jset_entry_usage, entry.u64s);
@@ -1874,7 +1877,7 @@ vstruct!(jset_entry_usage, entry.u64s);
 #[repr(C, packed)]
 #[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct jset_entry_data_usage {
-    pub entry: c::jset_entry,
+    pub entry: Ffi<c::jset_entry>,
     pub v: Le64,
     pub r: c::bch_replicas_entry_v1,
 }
@@ -1883,7 +1886,7 @@ vstruct!(jset_entry_data_usage, entry.u64s);
 #[repr(C, packed)]
 #[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct jset_entry_clock {
-    pub entry: c::jset_entry,
+    pub entry: Ffi<c::jset_entry>,
     pub rw: u8,
     pub pad: [u8; 7],
     pub time: Le64,
@@ -1901,7 +1904,7 @@ pub struct jset_entry_dev_usage_type {
 #[repr(C)]
 #[derive(Default, CStruct, Plain, TypeInfo, View)]
 pub struct jset_entry_dev_usage {
-    pub entry: c::jset_entry,
+    pub entry: Ffi<c::jset_entry>,
     pub dev: Le32,
     pub pad: u32,
 
@@ -1916,7 +1919,7 @@ vstruct!(jset_entry_dev_usage, entry.u64s);
 #[derive(Default, CStruct, Plain, TypeInfo, View)]
 #[c_packed]
 pub struct jset_entry_log {
-    pub entry: c::jset_entry,
+    pub entry: Ffi<c::jset_entry>,
     pub d: [u8; 0],
 }
 vstruct!(jset_entry_log, entry.u64s);
@@ -1925,7 +1928,7 @@ vstruct!(jset_entry_log, entry.u64s);
 #[derive(Default, CStruct, Plain, TypeInfo, View)]
 #[c_packed]
 pub struct jset_entry_datetime {
-    pub entry: c::jset_entry,
+    pub entry: Ffi<c::jset_entry>,
     pub seconds: Le64,
 }
 vstruct!(jset_entry_datetime, entry.u64s);
@@ -1934,7 +1937,7 @@ vstruct!(jset_entry_datetime, entry.u64s);
 #[derive(Default, CStruct, Plain, TypeInfo, View)]
 #[c_packed]
 pub struct jset_entry_rewind_limit {
-    pub entry: c::jset_entry,
+    pub entry: Ffi<c::jset_entry>,
     pub seq: Le64,
 }
 vstruct!(jset_entry_rewind_limit, entry.u64s);
@@ -1947,7 +1950,7 @@ vstruct!(jset_entry_rewind_limit, entry.u64s);
 #[derive(Default, CStruct, Plain, TypeInfo, View)]
 #[c_packed]
 pub struct jset_entry_rewind {
-    pub entry: c::jset_entry,
+    pub entry: Ffi<c::jset_entry>,
     pub from: Le64,
     pub to: Le64,
 }
@@ -1966,7 +1969,7 @@ vstruct!(jset_entry_rewind, entry.u64s);
 #[repr(C, align(8))]
 #[derive(Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct jset {
+pub struct jset<S = Validated, T: ?Sized = [u64]> {
     pub csum: c::bch_csum,
 
     pub magic: Le64,
@@ -1974,7 +1977,7 @@ pub struct jset {
     pub version: Le32,
     pub flags: Le32,
 
-    pub u64s: Le32, /* size of d[] in u64s */
+    u64s: Le32, /* size of d[] in u64s */
 
     pub encrypted_start: [u8; 0],
 
@@ -1984,17 +1987,18 @@ pub struct jset {
     /* Sequence number of oldest dirty journal entry */
     pub last_seq: Le64,
 
-    pub start: [c::jset_entry; 0],
-    pub _data: [u64; 0],
+    pub start: [Ffi<c::jset_entry>; 0],
+    _s: PhantomData<S>,
+    pub _data: T,
 }
-vstruct!(jset, u64s);
-vstruct_container!(jset, c::jset_entry);
+vstruct!(unsized jset, u64s);
+vstruct_container!(unsized jset, jset_entry);
 
 /* The containers and their entries: each one's header is whole in all of them. */
-floored_by_self!(bkey_i, jset_entry, jset, bch_sb_field, bch_sb_field_clean, bch_sb);
+floored_by_self!(bkey_i, bch_sb_field, bch_sb_field_clean, bch_sb);
 
 c_bitmask! {
-    LE32_BITMASK(struct jset, flags), strip JSET_ {
+    LE32_BITMASK(struct jset<S, T: ?Sized>, flags), strip JSET_ {
         JSET_CSUM_TYPE(0, 4),
         JSET_BIG_ENDIAN(4, 5),
         JSET_NO_FLUSH(5, 6),

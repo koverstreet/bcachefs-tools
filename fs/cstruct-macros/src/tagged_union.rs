@@ -71,15 +71,21 @@
 //! has them, at its start; the asserts check each fits there.
 //!
 //! Or, `unsized`, that storage is a header its arms embed and run past, as
-//! far as its count says - a superblock field's: SelfSized. Then what's
-//! generated is the Ref enum, arm_at(), ArmOf, and, on a View of the storage
-//! - which has its bytes, where a &storage reaches only the header - typed():
-//! the arm its tag selects, over those bytes. An arm there may be shorter
-//! than its type - written by an older version, before the type grew - so
-//! it's a crate::util::vstructs::View, not a Flex: its fields past the end
-//! read as zero, and each arm's type derives Plain and View. arm::<A>() is
-//! typed() for one arm: A's View, if the tag is A's - and arm_mut::<A>(), on
-//! a ViewMut, its ViewMut. The storage is Floored by itself: its header is
+//! far as its count says - a journal entry's: an unsized vstruct
+//! (util/vstructs.rs), each reference to which has its arm's bytes. Then
+//! what's generated is the Ref enum, ArmOf, and on the storage, in every
+//! state, typed(): the arm its tag selects, over its bytes. An arm there may
+//! be shorter than its type - written by an older version, before the type
+//! grew - so it's a crate::util::vstructs::View, not a Flex: its fields past
+//! the end read as zero, and each arm's type derives Plain and View. An arm
+//! that's the storage itself - a journal entry of keys - is the storage, in
+//! its state. arm::<A>() is typed() for one arm: A's View, if the tag is A's.
+//!
+//! Or, `unsized view`, the same over a storage that's still a sized header -
+//! a superblock field's, until it's an unsized vstruct: SelfSized, reached
+//! through a View of its bytes, where a &storage reaches only the header.
+//! arm_at(), and on a View of it, typed() and arm() - and arm_mut::<A>(), on
+//! a ViewMut, A's ViewMut. The storage is Floored by itself: its header is
 //! whole in every one.
 //!
 //! The arms come from an x-macro list: tagged_union! hands the declaration to
@@ -288,6 +294,9 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
     } else {
         storage_attrs
     };
+    // An unsized vstruct's storage: generic over its state, St
+    let dst = tu.unsized_ && !tu.unsized_view;
+    let (st_params, s_any) = if dst { ("<St>", format!("{s_ty}<St>")) } else { ("", s_ty.clone()) };
     let (storage, payload_offset, determinant) = if tu.storage.is_some() && tu.union {
         match &tu.by {
             Some(by) => (String::new(), "0".to_string(), by.clone()),
@@ -299,12 +308,12 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                           #[allow(non_camel_case_types)]\n\
                           {vis} struct {det};\n\
                           \n\
-                          impl {det_trait}<{s_ty}> for {det} {{\n\
+                          impl{st_params} {det_trait}<{s_any}> for {det} {{\n\
                               type Tag = {tag_ty};\n\
-                              fn get(u: &{s_ty}) -> {tag_ty} {{\n\
+                              fn get(u: &{s_any}) -> {tag_ty} {{\n\
                                   <{tag_ty}>::from({{ u.{tag} }})\n\
                               }}\n\
-                              fn set(u: &mut {s_ty}, tag: {tag_ty}) {{\n\
+                              fn set(u: &mut {s_any}, tag: {tag_ty}) {{\n\
                                   u.{tag} = tag.into();\n\
                               }}\n\
                           }}\n"),
@@ -448,7 +457,75 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
              None\n\
          }}");
 
-    if tu.unsized_ {
+    if dst {
+        // An unsized vstruct, its arms running past its header as far as its
+        // count says - each reference to one has them: typed() and arm(), on
+        // the storage in every state. An arm there may be an older, shorter
+        // version of its type: a View of the storage's bytes. Or the storage
+        // itself - a journal entry of keys - in its state.
+        let view = "crate::util::vstructs::View";
+        let own = |a: &CTaggedArm| a.ty.trim() == s_ty.trim();
+        let has_own = arms.iter().any(own);
+        let (ref_params, ref_args) = if has_own {
+            ("<'a, St = crate::util::vstructs::Validated>", "<'_, St>")
+        } else {
+            ("<'a>", "<'_>")
+        };
+        let by_ref: String = arms.iter()
+            .map(|a| if own(a) {
+                format!("    {}(&'a {s_any}),\n", a.name)
+            } else {
+                format!("    {}({view}<'a, {}>),\n", a.name, a.ty)
+            })
+            .collect();
+        let selects: String = arms.iter()
+            .map(|a| format!("if t == ({}) as {tag_ty} {{\n\
+                                  return Ok({en}Ref::{}({}));\n\
+                              }}\n",
+                             a.value, a.name,
+                             if own(a) { "self".to_string() } else { format!("{view}::new(self.as_bytes())") }))
+            .collect();
+        let det_any = format!("<{determinant} as {det_trait}<{s_any}>>");
+        return with_defs(defs, name, &format!(
+            "{storage}\
+             /// One of {name}'s arms, with the bytes its header says are its - as\n\
+             /// many as there are, for one written before its type grew: what\n\
+             /// {name}'s typed() gives.\n\
+             #[allow(non_camel_case_types, dead_code)]\n\
+             #[derive(Clone, Copy)]\n\
+             {vis} enum {en}Ref{ref_params} {{\n{by_ref}}}\n\
+             \n\
+             impl<St> {s_any} {{\n\
+                 /// The tag, whether this version knows it or not.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn {tag}(&self) -> {tag_enum} {{\n\
+                     {tag_enum}({det_any}::get(self) as _)\n\
+                 }}\n\
+                 \n\
+                 /// The arm its tag selects, over its bytes - as many as its count\n\
+                 /// says: Err(the tag) if it isn't one of ours. One shorter than its\n\
+                 /// type is an older version, its missing fields zero.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn typed(&self) -> Result<{en}Ref{ref_args}, {tag_enum}> {{\n\
+                     let t: {tag_ty} = {det_any}::get(self);\n\
+                     {selects}\
+                     Err({tag_enum}(t as _))\n\
+                 }}\n\
+                 \n\
+                 /// The arm, if the tag is @A's: typed(), for one arm.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn arm<A>(&self) -> Option<{view}<'_, A>>\n\
+                 where\n\
+                     A: {arm_of}<{s_ty}, Tag = {tag_ty}> + crate::util::vstructs::Plain,\n\
+                 {{\n\
+                     ({det_any}::get(self) == A::TAG).then(|| {view}::new(self.as_bytes()))\n\
+                 }}\n\
+             }}\n\
+             \n\
+             {arms_of}"));
+    }
+
+    if tu.unsized_view {
         // Over a header its arms embed and run past, as far as its count says:
         // arm_at(), and get() over those bytes - nothing of a storage's own.
         // An arm there may be an older, shorter version of its type: a View.

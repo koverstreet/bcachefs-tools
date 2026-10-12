@@ -174,7 +174,7 @@ pub struct DArray<T, const N: usize = 0> {
 ///
 /// tagged_union! makes one for a stored tag; for any other, it's written by
 /// hand and named with `by`.
-pub trait Determinant<U> {
+pub trait Determinant<U: ?Sized> {
     type Tag: Copy + PartialEq;
     fn get(u: &U) -> Self::Tag;
     fn set(u: &mut U, tag: Self::Tag);
@@ -183,7 +183,7 @@ pub trait Determinant<U> {
 /// An arm of tagged_union! U, by its type: the tag that selects it - for what's
 /// generic over the arms, U::from_arm(). tagged_union! implements it for each
 /// arm, so two arms of one type are an error.
-pub trait ArmOf<U> {
+pub trait ArmOf<U: ?Sized> {
     type Tag;
     const TAG: Self::Tag;
 }

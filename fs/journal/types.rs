@@ -4,6 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{CacheAligned, DArray, Fifo, c_default};
+use crate::util::vstructs::Ffi;
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct};
 use nestify::nest;
@@ -35,7 +36,7 @@ nest! {
     pub struct journal_buf {
         pub io: c::closure,
         pub j: *mut c::journal, /* for container_of-equivalent recovery */
-        pub data: *mut c::jset,
+        pub data: *mut Ffi<c::jset>,
 
         pub key: c::bkey_i,
         pub key_pad: [u64; c::BCH_REPLICAS_MAX as usize],
@@ -97,7 +98,7 @@ c_default!(journal_buf);
 #[derive(Clone, Copy, CStruct)]
 pub struct journal_ringbuf {
     pub buf: *mut c::journal_buf,
-    pub data: *mut c::jset,
+    pub data: *mut Ffi<c::jset>,
 }
 c_default!(journal_ringbuf);
 

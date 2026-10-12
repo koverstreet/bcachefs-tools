@@ -7,17 +7,37 @@
 //! pointer to one says nothing about the bytes past it, so C trusts the
 //! count, having validated it wherever the bytes came in.
 //!
-//! Here the bound travels with the pointer: a value is reached through a View
-//! of its own bytes, as many as its header says - made where those bytes are,
-//! from a buffer or from C's pointer, never by widening a &T, which reaches
-//! only as far as the T. A validated value's count is trusted, as C trusts
-//! it; bytes nothing has validated - off a device, from the kernel - are an
-//! UnvalidatedRef, its count checked against them when it's made, an overrun an
-//! error. A type's statement of its layout, SelfSized or FlexArray, is a
-//! plain trait: nothing's soundness rests on it being right. What does need
-//! trusting is Plain: that any bytes are a valid value - which
-//! #[derive(Plain)] (cstruct-macros) checks at compile time, zerocopy's
-//! FromBytes for the types we define.
+//! Here the bound travels with the reference: a reference is a claim about
+//! bytes - a &T, that size_of::<T>() of them are there and are a T - so one
+//! is made at the value's own size, where its bytes are, from a buffer or
+//! from C's pointer: never by widening a &T, which reaches only as far as the
+//! T, and never from fewer bytes than its header.
+//!
+//! An unsized vstruct is one definition, generic over its state and its tail
+//! - `struct jset<S = Validated, T: ?Sized = [u64]>` - and a reference to one,
+//! &jset<S>, is fat: it has the tail's length, and reaches every byte of the
+//! value and none past. Its state says what's known of its counts, and its
+//! entries are walked in the same state:
+//!  - Validated, the default: what C read and validated, from C's pointer
+//!    (from_ffi()). Its counts are trusted, as C trusts them.
+//!  - Unvalidated: bytes from outside - off a device, from the kernel
+//!    (from_bytes()). Its count was checked against them, an overrun an
+//!    error; its entries' are checked as they're walked.
+//! C has its sized instance, Ffi<T> - its tail zero-length, C's flexible array
+//! - which is what Rust names wherever it meets C. A count is no field to set
+//! through &mut: it changes only through what holds the value, which has the
+//! room for it to grow - so an unsized vstruct's count is private, read as
+//! T::u64s().
+//!
+//! Sized types with a tail, not yet unsized - an ioctl's reply, a replicas
+//! entry, a btree node's buffer: a FlexArray, its tail an array the header
+//! counts, reached as an UnvalidatedRef (or UnvalidatedMut) of the bytes its
+//! count was checked against.
+//!
+//! A value shorter than its type - written by an older version, before the
+//! type grew - can't be a &T at all: it's a View, reading only its own bytes,
+//! its fields past its end zero, as bch2_sb_field_get_minsize() and
+//! bkey_val_copy_pad() zero them in C.
 //!
 //! A sized tagged_union!'s arms - extent entries, accounting positions - are
 //! Flexes: a &T and the bytes it may extend into, the storage's, its count
@@ -31,20 +51,23 @@
 //!    vstruct!().
 //!  - VStructContainer: a VStruct of entries, one after another from its
 //!    start[]: vstruct_for_each(). vstruct_container!().
+//!  - Unsized: an unsized vstruct, its reference fat.
 //!
 //! vstructs.h, and where it goes:
 //!  - vstruct_bytes(), replicas_entry_bytes(): SelfSized::bytes()
-//!  - a counted array - devs[]: FlexArray, Flex::tail()
-//!  - vstruct_for_each(), vstruct_next(), vstruct_last(): View::entries(),
-//!    trusting a validated count as C does, or UnvalidatedRef::entries(),
-//!    checking it
+//!  - a counted array - devs[]: FlexArray, UnvalidatedRef::tail()
+//!  - vstruct_for_each(), vstruct_next(), vstruct_last(): an unsized
+//!    vstruct's entries(), trusting a Validated one's counts as C does,
+//!    checking an Unvalidated one's
 //!
-//! And a value shorter than its type - written by an older version, before
-//! the type grew - is a View: its fields read as zero past its end, as
-//! bch2_sb_field_get_minsize() and bkey_val_copy_pad() zero them in C.
+//! What's trusted: Plain, that any bytes are a valid value - which
+//! #[derive(Plain)] (cstruct-macros) checks at compile time, zerocopy's
+//! FromBytes for the types we define - and, for a reference made from C's
+//! pointer (from_ffi()), the count: SelfSized::bytes(), which vstruct!() and
+//! #[counted_by] generate from the field the struct declares as its count.
 
 use core::marker::PhantomData;
-use core::mem::{align_of, size_of, MaybeUninit};
+use core::mem::{align_of, size_of, size_of_val, MaybeUninit};
 use core::ops::{Deref, DerefMut};
 
 use crate::c;
@@ -121,18 +144,18 @@ pub trait SelfSized {
     /// The bytes this value spans, its header's included: vstruct_bytes(),
     /// replicas_entry_bytes().
     fn bytes(&self) -> usize;
-}
-
-/// vstructs.h's: SelfSized by a count of u64s.
-pub trait VStruct: SelfSized {
-    /// Set the count; panics if its field can't hold @u64s.
-    fn set_val_u64s(&mut self, u64s: usize);
 
     /// Its 512 byte sectors, whole blocks of 512 << @block_bits:
     /// vstruct_sectors().
     fn sectors(&self, block_bits: u32) -> usize {
         self.bytes().next_multiple_of(512 << block_bits) >> 9
     }
+}
+
+/// vstructs.h's: SelfSized by a count of u64s.
+pub trait VStruct: SelfSized {
+    /// Set the count; panics if its field can't hold @u64s.
+    fn set_val_u64s(&mut self, u64s: usize);
 }
 
 /// A type ending in a flexible array member, C's `T name[]`.
@@ -182,7 +205,7 @@ count_le!(Le16, Le32, Le64);
 /// View::entries() for a validated one, UnvalidatedRef::entries() for one that
 /// isn't.
 pub trait VStructContainer: VStruct {
-    type Entry: SelfSized + Plain;
+    type Entry: ?Sized;
     /// offsetof(start)
     const START: usize;
 }
@@ -204,7 +227,39 @@ pub(crate) use floored_by_self;
 /// header; vstruct!(T, hdr.u64s), past the header @hdr it embeds first;
 /// `start = 0` where the count includes the header, as a superblock
 /// field's does.
+///
+/// vstruct!(unsized T, u64s), for an unsized vstruct, T<S, [E]> (see
+/// Unsized): the count is its header's, Ffi<T>'s - and a reference's length
+/// is the value's, size_of_val(). Its count reads as T::u64s(), on every
+/// instance; it's no field to set but the container's, which has the room
+/// for it - VStruct, on Ffi<T>, builds a header.
 macro_rules! vstruct {
+    (unsized $t:ident, $count:ident) => {
+        $crate::util::vstructs::vstruct!(@impl $crate::util::vstructs::Ffi<$t>,
+            ::core::mem::size_of::<$crate::util::vstructs::Ffi<$t>>(), $count);
+        $crate::util::vstructs::vstruct!(@unsized $t, $count);
+    };
+    (unsized $t:ident, $count:ident, start = $start:expr) => {
+        $crate::util::vstructs::vstruct!(@impl $crate::util::vstructs::Ffi<$t>, $start, $count);
+        $crate::util::vstructs::vstruct!(@unsized $t, $count);
+    };
+    (@unsized $t:ident, $count:ident) => {
+        impl<S> $crate::util::vstructs::SelfSized for $t<S> {
+            #[inline]
+            fn bytes(&self) -> usize {
+                ::core::mem::size_of_val(self)
+            }
+        }
+
+        impl<S, T: ?Sized> $t<S, T> {
+            /// Its count, as a usize - to read: it changes only through what
+            /// holds the value, which has room for it to grow.
+            #[allow(dead_code)]
+            pub fn $count(&self) -> usize {
+                $crate::util::vstructs::Count::count(&{ self.$count })
+            }
+        }
+    };
     ($t:ty, $($count:ident).+, start = $start:expr) => {
         $crate::util::vstructs::vstruct!(@impl $t, $start, $($count).+);
     };
@@ -240,7 +295,69 @@ macro_rules! vstruct {
 pub(crate) use vstruct;
 
 /// vstruct_container!(T, E): vstruct T's entries are Es, from its start[].
+///
+/// vstruct_container!(unsized T, E), for an unsized vstruct and its unsized
+/// entries: T's entries() are E's in T's state - a Validated one's trusted,
+/// as C trusts them; an Unvalidated one's each checked against what's left,
+/// an error ending the walk. With `thin E`, entries that aren't unsized -
+/// keys - as a View, or an UnvalidatedRef(Mut), of their own bytes.
 macro_rules! vstruct_container {
+    (unsized $t:ident, $entry:ident) => {
+        impl $t<$crate::util::vstructs::Validated> {
+            pub fn entries(&self)
+                -> $crate::util::vstructs::ValidatedEntries<'_, $entry<$crate::util::vstructs::Validated>>
+            {
+                $crate::util::vstructs::ValidatedEntries::new(self.start_bytes())
+            }
+        }
+
+        impl $t<$crate::util::vstructs::Unvalidated> {
+            pub fn entries(&self)
+                -> $crate::util::vstructs::UnvalidatedEntries<'_, $entry<$crate::util::vstructs::Unvalidated>>
+            {
+                $crate::util::vstructs::UnvalidatedEntries::new(self.start_bytes())
+            }
+
+            pub fn entries_mut(&mut self)
+                -> $crate::util::vstructs::UnvalidatedEntriesMut<'_, $entry<$crate::util::vstructs::Unvalidated>>
+            {
+                $crate::util::vstructs::UnvalidatedEntriesMut::new(self.start_bytes_mut())
+            }
+        }
+
+        $crate::util::vstructs::vstruct_container!(@start $t);
+    };
+    (unsized $t:ident, thin $entry:ty) => {
+        impl $t<$crate::util::vstructs::Validated> {
+            pub fn entries(&self) -> $crate::util::vstructs::ViewEntries<'_, $entry> {
+                $crate::util::vstructs::ViewEntries::new(self.start_bytes())
+            }
+        }
+
+        impl $t<$crate::util::vstructs::Unvalidated> {
+            pub fn entries(&self) -> $crate::util::vstructs::UnvalidatedRefEntries<'_, $entry> {
+                $crate::util::vstructs::UnvalidatedRefEntries::new(self.start_bytes())
+            }
+
+            pub fn entries_mut(&mut self) -> $crate::util::vstructs::UnvalidatedRefEntriesMut<'_, $entry> {
+                $crate::util::vstructs::UnvalidatedRefEntriesMut::new(self.start_bytes_mut())
+            }
+        }
+
+        $crate::util::vstructs::vstruct_container!(@start $t);
+    };
+    (@start $t:ident) => {
+        impl<S> $t<S> {
+            /// Its entries' bytes: from its start[] to its end.
+            fn start_bytes(&self) -> &[u8] {
+                &self.as_bytes()[::core::mem::offset_of!($t, start)..]
+            }
+
+            fn start_bytes_mut(&mut self) -> &mut [u8] {
+                &mut self.as_bytes_mut()[::core::mem::offset_of!($t, start)..]
+            }
+        }
+    };
     ($t:ty, $entry:ty) => {
         impl $crate::util::vstructs::VStructContainer for $t {
             type Entry = $entry;
@@ -360,6 +477,15 @@ impl<'a, T: FlexArray> Flex<'a, T> {
     }
 }
 
+impl<'a, T: SelfSized> Flex<'a, T> {
+    /// Its bytes, header and tail - what C copies with vstruct_bytes() - if
+    /// what holds it holds them.
+    pub fn as_bytes(&self) -> Result<&'a [u8], FlexError> {
+        let want = self.head.bytes();
+        self.bytes.get(..want).ok_or_else(|| FlexError::overrun::<T>(want, self.bytes.len()))
+    }
+}
+
 // ---- UnvalidatedRef: bytes whose counts haven't been checked ---------------
 
 /// An UnvalidatedRef's header doesn't match the bytes it's made from.
@@ -461,7 +587,7 @@ impl<'a, T: FlexArray + Plain> UnvalidatedRef<'a, T> {
     }
 }
 
-impl<'a, C: VStructContainer> UnvalidatedRef<'a, C> {
+impl<'a, C: VStructContainer<Entry: Sized + SelfSized + Plain>> UnvalidatedRef<'a, C> {
     /// Its entries, each checked against what's left of its bytes: an error
     /// at one that doesn't fit, which ends the walk.
     pub fn entries(&self) -> UnvalidatedRefEntries<'a, C::Entry> {
@@ -474,6 +600,13 @@ pub struct UnvalidatedRefEntries<'a, E> {
     /// None after an error
     rest:   Option<&'a [u8]>,
     _entry: PhantomData<&'a E>,
+}
+
+impl<'a, E> UnvalidatedRefEntries<'a, E> {
+    /// The entries in @rest: an unsized container's, from its start[].
+    pub(crate) fn new(rest: &'a [u8]) -> Self {
+        Self { rest: Some(rest), _entry: PhantomData }
+    }
 }
 
 impl<'a, E: Plain + SelfSized + 'a> Iterator for UnvalidatedRefEntries<'a, E> {
@@ -541,7 +674,7 @@ impl<'a, T: FlexArray + Plain> UnvalidatedMut<'a, T> {
     }
 }
 
-impl<'a, C: VStructContainer> UnvalidatedMut<'a, C> {
+impl<'a, C: VStructContainer<Entry: Sized + SelfSized + Plain>> UnvalidatedMut<'a, C> {
     /// UnvalidatedRef::entries(), mutably.
     pub fn entries_mut(&mut self) -> UnvalidatedRefEntriesMut<'_, C::Entry> {
         UnvalidatedRefEntriesMut { rest: self.bytes.get_mut(C::START..), _entry: PhantomData }
@@ -552,6 +685,13 @@ impl<'a, C: VStructContainer> UnvalidatedMut<'a, C> {
 pub struct UnvalidatedRefEntriesMut<'a, E> {
     rest:   Option<&'a mut [u8]>,
     _entry: PhantomData<&'a mut E>,
+}
+
+impl<'a, E> UnvalidatedRefEntriesMut<'a, E> {
+    /// The entries in @rest: an unsized container's, from its start[].
+    pub(crate) fn new(rest: &'a mut [u8]) -> Self {
+        Self { rest: Some(rest), _entry: PhantomData }
+    }
 }
 
 impl<'a, E: Plain + SelfSized + 'a> Iterator for UnvalidatedRefEntriesMut<'a, E> {
@@ -570,12 +710,195 @@ impl<'a, E: Plain + SelfSized + 'a> Iterator for UnvalidatedRefEntriesMut<'a, E>
     }
 }
 
-impl<'a, T: SelfSized> Flex<'a, T> {
-    /// Its bytes, header and tail - what C copies with vstruct_bytes() - if
-    /// what holds it holds them.
-    pub fn as_bytes(&self) -> Result<&'a [u8], FlexError> {
-        let want = self.head.bytes();
-        self.bytes.get(..want).ok_or_else(|| FlexError::overrun::<T>(want, self.bytes.len()))
+// ---- Unsized vstructs: a header and its tail, behind one fat reference -----
+
+/// Bytes from outside - off a device, from the kernel: a state, an unsized
+/// vstruct's S. Its count was checked against the bytes it was made from;
+/// its entries' are checked as they're walked, each an Unvalidated one.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Unvalidated;
+
+/// What C read and validated: a state, an unsized vstruct's S - the default.
+/// Its counts, and its entries', are trusted, as C trusts them; its entries
+/// are Validated ones.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Validated;
+
+/// What C has of unsized vstruct T: its sized instance - the same
+/// definition, its tail zero-length - which C has as the struct itself, its
+/// flexible array _data[]. What Rust names wherever it meets C: an extern's
+/// parameters, a pointer field, a struct that embeds one.
+pub type Ffi<T> = <T as Unsized>::Ffi;
+
+/// An unsized vstruct: a header, Ffi - whose count says how many bytes the
+/// value spans - then its tail. One definition, generic over its state and
+/// its tail - `struct jset<S = Validated, T: ?Sized = [u64]>` - whose
+/// references are to T<S>: fat, with the tail's length, so a reference
+/// reaches every byte of the value and none past it, and carries what's
+/// known of its counts. #[derive(CStruct)] implements it, with the
+/// constructors: from C's pointer, from_ffi(), and for an Unvalidated one,
+/// from bytes, from_bytes() - its count checked against them.
+///
+/// # Safety
+/// Self is Ffi up to its tail - the same fields at the same offsets - and
+/// its tail starts at size_of::<Ffi>(), every bit pattern of it valid, each
+/// element a multiple of Ffi's alignment long - so no padding follows the
+/// last, which a reference would claim; from_raw() and from_raw_mut() make a
+/// pointer to all of @bytes, which are no fewer than Ffi's.
+pub unsafe trait Unsized {
+    /// The sized instance, C's: its count is the value's length.
+    type Ffi: Plain + SelfSized;
+
+    /// The value at @p, @bytes long.
+    fn from_raw(p: *const u8, bytes: usize) -> *const Self;
+
+    /// The value at @p, @bytes long, mutably.
+    fn from_raw_mut(p: *mut u8, bytes: usize) -> *mut Self;
+}
+
+/// The T C's pointer @p is to, as long as its count says - not widened from
+/// a &Ffi<T>, which reaches only the header: T::from_ffi().
+///
+/// # Safety
+/// @p points to a T whose count is right for its state, and those bytes stay
+/// valid, and unwritten, for 'a.
+pub unsafe fn from_ffi<'a, T: Unsized + ?Sized>(p: *const T::Ffi) -> &'a T {
+    // SAFETY: the caller's
+    unsafe { &*T::from_raw(p.cast(), (*p).bytes()) }
+}
+
+/// from_ffi(), mutably: T::from_ffi_mut().
+///
+/// # Safety
+/// As from_ffi(), and nothing else touches those bytes for 'a.
+pub unsafe fn from_ffi_mut<'a, T: Unsized + ?Sized>(p: *mut T::Ffi) -> &'a mut T {
+    // SAFETY: the caller's
+    unsafe { &mut *T::from_raw_mut(p.cast(), (*p).bytes()) }
+}
+
+/// The T at the start of @bytes, as many as its count says - an error if they
+/// don't hold its header, aligned, or that many, or it says fewer than its
+/// header: T::from_bytes(), for an Unvalidated T.
+pub fn from_bytes<T: Unsized + ?Sized>(bytes: &[u8]) -> Result<&T, VStructError> {
+    let len = checked_bytes::<T::Ffi>(bytes)?;
+    // SAFETY: that many are there, aligned, and any bytes are a T
+    Ok(unsafe { &*T::from_raw(bytes.as_ptr(), len) })
+}
+
+/// from_bytes(), mutably: T::from_bytes_mut().
+pub fn from_bytes_mut<T: Unsized + ?Sized>(bytes: &mut [u8]) -> Result<&mut T, VStructError> {
+    let len = checked_bytes::<T::Ffi>(bytes)?;
+    // SAFETY: as from_bytes()
+    Ok(unsafe { &mut *T::from_raw_mut(bytes.as_mut_ptr(), len) })
+}
+
+/// @v's bytes, every one: what its reference reaches - T::as_bytes().
+pub fn bytes_of<T: Unsized + ?Sized>(v: &T) -> &[u8] {
+    // SAFETY: the value's own bytes; an unsized vstruct is Plain throughout
+    unsafe { core::slice::from_raw_parts((v as *const T).cast::<u8>(), size_of_val(v)) }
+}
+
+/// bytes_of(), mutably - for the walks over a container's entries, not for
+/// its owner to hand out: through them, a count could change.
+pub(crate) fn bytes_of_mut<T: Unsized + ?Sized>(v: &mut T) -> &mut [u8] {
+    let len = size_of_val(v);
+    // SAFETY: as bytes_of()
+    unsafe { core::slice::from_raw_parts_mut((v as *mut T).cast::<u8>(), len) }
+}
+
+/// A Validated container's entries, each an &E of exactly its own bytes:
+/// vstruct_for_each(), its counts trusted, as C trusts them. One that
+/// doesn't fit, or says it's shorter than its header - which would never end
+/// the walk - ends it, rather than being read past.
+pub struct ValidatedEntries<'a, E: ?Sized> {
+    rest:   &'a [u8],
+    _entry: PhantomData<&'a E>,
+}
+
+impl<'a, E: ?Sized> ValidatedEntries<'a, E> {
+    /// The entries in @rest: a container's, from its start[].
+    pub(crate) fn new(rest: &'a [u8]) -> Self {
+        Self { rest, _entry: PhantomData }
+    }
+}
+
+impl<'a, E: Unsized + ?Sized + 'a> Iterator for ValidatedEntries<'a, E> {
+    type Item = &'a E;
+
+    fn next(&mut self) -> Option<&'a E> {
+        let Ok(len) = checked_bytes::<E::Ffi>(self.rest) else {
+            self.rest = &[];
+            return None;
+        };
+        let (e, rest) = self.rest.split_at(len);
+        self.rest = rest;
+        // SAFETY: checked_bytes(): its header is there, aligned, and the
+        // bytes it says are its - any bytes are an E
+        Some(unsafe { &*E::from_raw(e.as_ptr(), len) })
+    }
+}
+
+/// An Unvalidated container's entries: each checked against what's left of
+/// its bytes - an error at one that doesn't fit, which ends the walk.
+pub struct UnvalidatedEntries<'a, E: ?Sized> {
+    /// None after an error
+    rest:   Option<&'a [u8]>,
+    _entry: PhantomData<&'a E>,
+}
+
+impl<'a, E: ?Sized> UnvalidatedEntries<'a, E> {
+    /// The entries in @rest: a container's, from its start[].
+    pub(crate) fn new(rest: &'a [u8]) -> Self {
+        Self { rest: Some(rest), _entry: PhantomData }
+    }
+}
+
+impl<'a, E: Unsized + ?Sized + 'a> Iterator for UnvalidatedEntries<'a, E> {
+    type Item = Result<&'a E, VStructError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rest = self.rest.filter(|r| !r.is_empty())?;
+        match from_bytes::<E>(rest) {
+            Ok(e) => {
+                self.rest = Some(&rest[size_of_val(e)..]);
+                Some(Ok(e))
+            }
+            Err(err) => {
+                self.rest = None;
+                Some(Err(err))
+            }
+        }
+    }
+}
+
+/// UnvalidatedEntries, mutably.
+pub struct UnvalidatedEntriesMut<'a, E: ?Sized> {
+    /// None after an error
+    rest:   Option<&'a mut [u8]>,
+    _entry: PhantomData<&'a mut E>,
+}
+
+impl<'a, E: ?Sized> UnvalidatedEntriesMut<'a, E> {
+    /// The entries in @rest: a container's, from its start[].
+    pub(crate) fn new(rest: &'a mut [u8]) -> Self {
+        Self { rest: Some(rest), _entry: PhantomData }
+    }
+}
+
+impl<'a, E: Unsized + ?Sized + 'a> Iterator for UnvalidatedEntriesMut<'a, E> {
+    type Item = Result<&'a mut E, VStructError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rest = self.rest.take().filter(|r| !r.is_empty())?;
+        match checked_bytes::<E::Ffi>(rest) {
+            Ok(len) => {
+                let (e, rest) = rest.split_at_mut(len);
+                self.rest = Some(rest);
+                // SAFETY: as UnvalidatedEntries'
+                Some(Ok(unsafe { &mut *E::from_raw_mut(e.as_mut_ptr(), len) }))
+            }
+            Err(err) => Some(Err(err)),
+        }
     }
 }
 
@@ -706,7 +1029,7 @@ impl<'a, T: Plain + SelfSized> View<'a, T> {
     }
 }
 
-impl<'a, C: VStructContainer + Plain> View<'a, C> {
+impl<'a, C: VStructContainer<Entry: Sized + SelfSized + Plain> + Plain> View<'a, C> {
     /// Its entries: vstruct_for_each(), as far as its count says. Validated,
     /// so its count and theirs are trusted, as C trusts them; each is a View
     /// of its own bytes. One that doesn't fit, or says it's shorter than its
@@ -724,6 +1047,15 @@ pub struct ViewEntries<'a, E> {
     rest:   &'a [u8],
     _entry: PhantomData<&'a E>,
 }
+
+impl<'a, E> ViewEntries<'a, E> {
+    /// The entries in @rest: a validated unsized container's, from its
+    /// start[].
+    pub(crate) fn new(rest: &'a [u8]) -> Self {
+        Self { rest, _entry: PhantomData }
+    }
+}
+
 
 impl<'a, E: SelfSized + Plain + 'a> Iterator for ViewEntries<'a, E> {
     type Item = View<'a, E>;
@@ -872,7 +1204,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Le16, Le32, Le64};
+    use crate::types::{Le32, Le64};
     use cstruct_macros::{Plain, View};
 
     /// @v's bytes, at @at in @buf.
@@ -889,29 +1221,37 @@ mod tests {
         unsafe { core::slice::from_raw_parts(buf.as_ptr().cast(), buf.len() * 8) }
     }
 
-    fn entry(u64s: u16) -> c::jset_entry {
-        c::jset_entry { u64s: Le16::new(u64s), ..Default::default() }
+    fn entry(u64s: usize) -> Ffi<c::jset_entry> {
+        let mut e = Ffi::<c::jset_entry>::default();
+        e.set_val_u64s(u64s);
+        e
     }
 
     /// A jset of two jset_entries, of 1 and 3 u64s past their headers: and,
     /// with @second's u64s for the second, the jset's u64s saying 1 + 1 + 1
     /// + 3 still.
-    fn jset(second: u16) -> Vec<u64> {
-        let hdr = size_of::<c::jset>();
+    fn jset(second: usize) -> Vec<u64> {
+        let hdr = size_of::<Ffi<c::jset>>();
         let mut buf = vec![0u64; hdr / 8 + 6];
-        put(&mut buf, 0, &c::jset { u64s: Le32::new(6), ..Default::default() });
+        let mut j = Ffi::<c::jset>::default();
+        j.set_val_u64s(6);
+        put(&mut buf, 0, &j);
         put(&mut buf, hdr, &entry(1));
         put(&mut buf, hdr + 16, &entry(second));
         buf
     }
 
+    /// A validated jset - as C's pointer has one - is as long as its count
+    /// says, and so is each of its entries.
     #[test]
     fn entries_walk_variable_size_entries() {
         let buf = jset(3);
-        let j = View::<c::jset>::new(bytes(&buf));
+        // SAFETY: the buffer's, as long as its count says
+        let j = unsafe { c::jset::<Validated>::from_ffi(buf.as_ptr().cast()) };
+        assert_eq!(j.as_bytes().len(), buf.len() * 8);
         let es: Vec<_> = j.entries().collect();
         assert_eq!(es.len(), 2);
-        assert_eq!((es[0].u64s.get(), es[1].u64s.get()), (1, 3));
+        assert_eq!((es[0].u64s(), es[1].u64s()), (1, 3));
         assert_eq!(es[1].bytes(), 32);
     }
 
@@ -919,7 +1259,8 @@ mod tests {
     #[test]
     fn entries_stop_at_an_overrun() {
         let buf = jset(4);
-        let j = View::<c::jset>::new(bytes(&buf));
+        // SAFETY: the buffer's, as long as its count says
+        let j = unsafe { c::jset::<Validated>::from_ffi(buf.as_ptr().cast()) };
         assert_eq!(j.entries().count(), 1);
     }
 
@@ -944,21 +1285,6 @@ mod tests {
         assert_eq!(b.bytes(), 16 + 24 + 24);
     }
 
-    /// A section counts from its start; its entries start at its start[].
-    #[test]
-    fn entries_start_at_start() {
-        let hdr = size_of::<c::bch_sb_field_clean>();
-        let mut buf = vec![0u64; hdr / 8 + 2];
-        let mut clean: c::bch_sb_field_clean = Default::default();
-        clean.set_val_u64s(hdr / 8 + 2);
-        put(&mut buf, 0, &clean);
-        put(&mut buf, hdr, &entry(1));
-        let clean = View::<c::bch_sb_field_clean>::new(bytes(&buf));
-        let es: Vec<_> = clean.entries().collect();
-        assert_eq!(es.len(), 1);
-        assert_eq!(es[0].u64s.get(), 1);
-    }
-
     /// A superblock field of no u64s spans less than its own header: it
     /// would never end a walk, so it ends it.
     #[test]
@@ -979,18 +1305,18 @@ mod tests {
     #[test]
     fn unvalidated_counts_are_checked() {
         let buf = jset(3);
-        let j = UnvalidatedRef::<c::jset>::new(bytes(&buf)).unwrap();
+        let j = c::jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
         let es = j.entries().collect::<Result<Vec<_>, _>>().unwrap();
-        assert_eq!((es[0].u64s.get(), es[1].u64s.get()), (1, 3));
+        assert_eq!((es[0].u64s(), es[1].u64s()), (1, 3));
         assert_eq!(es[1].as_bytes().len(), 32);
 
         let buf = jset(4);
-        let j = UnvalidatedRef::<c::jset>::new(bytes(&buf)).unwrap();
+        let j = c::jset::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
         let es: Vec<_> = j.entries().collect();
         assert!(matches!(es[..], [Ok(_), Err(VStructError::Overrun { want: 40, have: 32, .. })]));
 
-        let hdr = size_of::<c::jset>();
-        assert!(matches!(UnvalidatedRef::<c::jset>::new(&bytes(&buf)[..hdr + 8]),
+        let hdr = size_of::<Ffi<c::jset>>();
+        assert!(matches!(c::jset::<Unvalidated>::from_bytes(&bytes(&buf)[..hdr + 8]),
                          Err(VStructError::Overrun { want, have, .. }) if want == hdr + 48 && have == hdr + 8));
     }
 
@@ -1074,5 +1400,124 @@ mod tests {
         assert!(v.whole_mut().is_none());
         assert_eq!(short, grown(3).iter().enumerate()
                    .map(|(i, &x)| match i { 1 => 20, 2 => 30, _ => x }).collect::<Vec<_>>());
+    }
+}
+
+#[cfg(test)]
+#[allow(non_camel_case_types)]
+mod unsized_tests {
+    use super::*;
+    use crate::types::{Le16, Le32};
+    use cstruct_macros::{CStruct, Plain};
+
+    /// A container of tents: 8 bytes of header, its u64s counting what follows.
+    #[repr(C)]
+    #[derive(Default, CStruct, Plain)]
+    pub struct tcont<S = Validated, T: ?Sized = [u64]> {
+        u64s:      Le32,
+        pub tag:   u32,
+        pub start: [Ffi<tent>; 0],
+        _s:        PhantomData<S>,
+        pub _data: T,
+    }
+    vstruct!(unsized tcont, u64s);
+    vstruct_container!(unsized tcont, tent);
+
+    /// An entry, its u64s counting itself, as a superblock field's does.
+    #[repr(C)]
+    #[derive(Default, CStruct, Plain)]
+    pub struct tent<S = Validated, T: ?Sized = [u64]> {
+        u64s:      Le16,
+        pub ty:    u16,
+        pub pad:   u32,
+        _s:        PhantomData<S>,
+        pub _data: T,
+    }
+    vstruct!(unsized tent, u64s, start = 0);
+
+    /// A tcont of entries @sizes long, in u64s, typed 1, 2, ...: and @extra
+    /// u64s past it, all ones - what's next, not its.
+    fn buf(sizes: &[u16], extra: usize) -> Vec<u64> {
+        let total: usize = sizes.iter().map(|&s| s as usize).sum();
+        let mut buf = vec![0u64; 1 + total + extra];
+        let mut h = Ffi::<tcont>::default();
+        h.set_val_u64s(total);
+        h.tag = 7;
+        buf[0] = u64::from_le_bytes(as_bytes(&h).try_into().unwrap());
+        let mut at = 1;
+        for (i, &s) in sizes.iter().enumerate() {
+            let mut e = Ffi::<tent>::default();
+            e.set_val_u64s(s as usize);
+            e.ty = i as u16 + 1;
+            buf[at] = u64::from_le_bytes(as_bytes(&e).try_into().unwrap());
+            at += s as usize;
+        }
+        buf[1 + total..].fill(u64::MAX);
+        buf
+    }
+
+    fn as_bytes<T: Plain>(v: &T) -> &[u8] {
+        // SAFETY: Plain - every byte a field's
+        unsafe { core::slice::from_raw_parts((v as *const T).cast(), size_of::<T>()) }
+    }
+
+    fn bytes(buf: &[u64]) -> &[u8] {
+        // SAFETY: u64s, which any bytes are
+        unsafe { core::slice::from_raw_parts(buf.as_ptr().cast(), buf.len() * 8) }
+    }
+
+    /// A reference has the value's length - every byte of it, none past -
+    /// and its walk the entries', in its state.
+    #[test]
+    fn unsized_reference_is_the_value() {
+        let buf = buf(&[1, 3, 2], 2);
+
+        let c = tcont::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
+        assert_eq!((c.u64s(), c.tag, c._data.len(), size_of_val(c)), (6, 7, 6, 56));
+        let e: Vec<(u16, usize)> = c.entries().map(|e| e.map(|e| (e.ty, e.as_bytes().len()))).collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(e, [(1, 8), (2, 24), (3, 16)]);
+
+        // as C's pointer has it - validated, trusted
+        // SAFETY: the buffer's, as long as its count says
+        let c = unsafe { tcont::<Validated>::from_ffi(buf.as_ptr().cast()) };
+        assert_eq!(c.as_bytes().len(), 56);
+        assert_eq!(c.entries().map(|e| e.ty).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(c.as_ffi().cast::<u64>(), buf.as_ptr());
+        let e = c.entries().nth(1).unwrap();
+        assert_eq!((e.u64s(), e._data.len()), (3, 2));
+    }
+
+    /// An Unvalidated container's count past its bytes, or an entry's past
+    /// the container's, is an error - and a Validated one's ends the walk.
+    #[test]
+    fn unsized_overrun() {
+        let buf = buf(&[1, 3], 0);
+        assert!(matches!(tcont::<Unvalidated>::from_bytes(&bytes(&buf)[..24]),
+                         Err(VStructError::Overrun { want: 40, have: 24, .. })));
+
+        // the second entry says 5, in 3
+        let mut buf = buf;
+        buf[2] = 5 | (2 << 16);
+        let c = tcont::<Unvalidated>::from_bytes(bytes(&buf)).unwrap();
+        let r: Vec<_> = c.entries().collect();
+        assert!(matches!(r.as_slice(), [Ok(_), Err(VStructError::Overrun { want: 40, have: 24, .. })]));
+
+        // SAFETY: the buffer's, as long as its count says
+        let c = unsafe { tcont::<Validated>::from_ffi(buf.as_ptr().cast()) };
+        assert_eq!(c.entries().count(), 1);
+    }
+
+    /// Walked mutably, each entry is its own bytes - and an error ends it.
+    #[test]
+    fn unsized_entries_mut() {
+        let mut buf = buf(&[2, 1], 1);
+        let mut b = bytes(&buf).to_vec();
+        let c = tcont::<Unvalidated>::from_bytes_mut(&mut b).unwrap();
+        for e in c.entries_mut() {
+            e.unwrap()._data.fill(0x5a);
+        }
+        buf[2] = 0x5a;
+        assert_eq!(b, bytes(&buf));
     }
 }

@@ -640,8 +640,12 @@ pub struct CTaggedUnion {
     /// tag whatever the arms' alignment, which is what the format says.
     pub packed:    bool,
     /// `unsized`: over another's storage, a header its arms embed and run
-    /// past - SelfSized, its bytes() bounding the arm.
+    /// past - an unsized vstruct (CGeneric), each reference to which has its
+    /// arm's bytes.
     pub unsized_:  bool,
+    /// `unsized view`: the same, but the storage still a sized header,
+    /// reached through a View of its bytes - until it's an unsized vstruct.
+    pub unsized_view: bool,
     /// Arm types defined in the block, for nestify::nest!.
     pub defs:      Vec<CTaggedDef>,
 }
@@ -1463,7 +1467,21 @@ fn parse_bitmask(body: &[Tok], cfg: Option<Cfg>) -> Result<CBitmask, String> {
         return Err(format!("c_bitmask!: {macro_name}: not a bitmask macro"));
     }
     let args_end = skip_group(body, i + 1)?;
-    let args = split_top(&body[i + 2..args_end - 1], ',');
+    // the struct, then the field: a struct with type parameters has commas
+    // of its own, within its <>
+    let args = &body[i + 2..args_end - 1];
+    let mut depth = 0i32;
+    let mut parts = vec![0];
+    for (k, t) in args.iter().enumerate() {
+        match t {
+            Tok::Punct('<') => depth += 1,
+            Tok::Punct('>') => depth -= 1,
+            Tok::Punct(',') if depth == 0 => parts.push(k + 1),
+            _ => {}
+        }
+    }
+    parts.push(args.len() + 1);
+    let args: Vec<&[Tok]> = parts.windows(2).map(|w| &args[w[0]..w[1] - 1]).collect();
     let [ty, field] = args.as_slice() else {
         return Err(format!("c_bitmask! {macro_name}: expected (struct foo, field)"));
     };
@@ -1959,7 +1977,7 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
     let mut tu = CTaggedUnion { cfg, name, union, storage, tag_field: String::new(),
                                 tag_ty: String::new(), tag_enum: String::new(), by: None,
                                 from: None, arms: Vec::new(), members: Vec::new(), pad: None,
-                                packed: false, unsized_: false, defs: Vec::new() };
+                                packed: false, unsized_: false, unsized_view: false, defs: Vec::new() };
     for item in split_top(inner, ',') {
         let eq = item.iter().rposition(|t| t.is_punct('='));
         match item {
@@ -1993,6 +2011,10 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
                 tu.members.push((m.clone(), tokens_to_rust(ty))),
             [Tok::Ident(kw)] if kw == "packed" => tu.packed = true,
             [Tok::Ident(kw)] if kw == "unsized" => tu.unsized_ = true,
+            [Tok::Ident(kw), Tok::Ident(v)] if kw == "unsized" && v == "view" => {
+                tu.unsized_ = true;
+                tu.unsized_view = true;
+            }
             _ => return Err(format!("tagged_union!: {} not understood", tokens_to_rust(item))),
         }
     }

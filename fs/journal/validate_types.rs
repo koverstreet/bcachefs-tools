@@ -7,9 +7,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::util::vstructs::Ffi;
 use cstruct_macros::c_extern;
 
 c_extern! {
     pub fn bch2_journal_entry_to_text(out: *mut c::printbuf, c: *mut c::bch_fs,
-                                      entry: *mut c::jset_entry);
+                                      entry: *mut Ffi<c::jset_entry>);
 }

@@ -12,7 +12,7 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::data::extents::{bkey_ptrs_mut, bkey_ptrs_sc};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::{entry_type, journal_entry_type};
-use bcachefs_kernel::util::vstructs::{SelfSized, UnvalidatedRef, UnvalidatedMut, VStruct};
+use bcachefs_kernel::util::vstructs::{SelfSized, Unvalidated, UnvalidatedRef};
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::POS_MIN;
 
@@ -22,28 +22,25 @@ use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
 // bch2_checksum (and bset_encrypt) over the same byte ranges the kernel's
 // bset_encrypt() and csum_vstruct() macro cover, so the metadata dump can
 // decrypt, edit, and re-checksum bsets and journal entries without a C shim.
-// @vstruct_bytes is the whole vstruct's byte length; the checksum covers
-// everything after the leading csum field, and journal encryption everything
-// after the encrypted_start marker. Encryption is symmetric, so the same call
-// both decrypts and re-encrypts.
+// The checksum covers everything after the leading csum field, to the end of
+// the vstruct - a bset's @vstruct_bytes, a jset's reference's - and journal
+// encryption everything after the encrypted_start marker. Encryption is
+// symmetric, so the same call both decrypts and re-encrypts.
 
-fn jset_encrypt(fs: &Fs, j: *mut c::jset, csum_type: u32, vstruct_bytes: usize) -> i32 {
+fn jset_encrypt(fs: &Fs, j: &mut c::jset<Unvalidated>, csum_type: u32) -> i32 {
     let off = std::mem::offset_of!(c::jset, encrypted_start);
-    unsafe {
-        c::bch2_encrypt(fs.raw, csum_type, (*j).nonce(),
-                        (j as *mut u8).add(off) as *mut core::ffi::c_void,
-                        vstruct_bytes - off)
-    }
+    let (nonce, len) = (j.nonce(), size_of_val(j) - off);
+    // SAFETY: the jset's bytes, past encrypted_start: its pointer reaches all of them
+    unsafe { c::bch2_encrypt(fs.raw, csum_type, nonce, j.as_ffi_mut().cast::<u8>().add(off).cast(), len) }
 }
 
-fn jset_csum_set(fs: &Fs, j: *mut c::jset, csum_type: u32, vstruct_bytes: usize) {
+fn jset_csum_set(fs: &Fs, j: &mut c::jset<Unvalidated>, csum_type: u32) {
     let off = std::mem::size_of::<c::bch_csum>();
-    let csum = unsafe {
-        c::bch2_checksum(fs.raw, csum_type, (*j).nonce(),
-                         (j as *const u8).add(off) as *const core::ffi::c_void,
-                         vstruct_bytes - off)
+    // SAFETY: the jset's bytes, past its csum: its pointer reaches all of them
+    j.csum = unsafe {
+        c::bch2_checksum(fs.raw, csum_type, j.nonce(), j.as_ffi().cast::<u8>().add(off).cast(),
+                         size_of_val(j) - off)
     };
-    unsafe { (*j).csum = csum };
 }
 
 /// @node points at the btree_node (first bset) or btree_node_entry, whose first
@@ -250,8 +247,10 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
     let block_bits = fs.block_bits() as u32;
 
     let mut pos = 0;
-    while let Some(mut j) = UnvalidatedMut::<c::jset>::new(&mut buf[pos..]).ok().filter(|j| j.magic.get() == jset_magic) {
-        let (bytes, csum_type) = (j.bytes(), j.csum_type() as u32);
+    while let Some(j) = c::jset::<Unvalidated>::from_bytes_mut(&mut buf[pos..]).ok()
+        .filter(|j| j.magic.get() == jset_magic)
+    {
+        let csum_type = j.csum_type() as u32;
         let mut modified = false;
 
         if c::bch_csum_type(csum_type).is_encryption() {
@@ -260,7 +259,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
                 return;
             }
 
-            let ret = jset_encrypt(&fs, j.as_mut_ptr(), csum_type, bytes);
+            let ret = jset_encrypt(&fs, j, csum_type);
             if ret != 0 {
                 eprintln!("error decrypting journal entry: {}", ret);
                 return;
@@ -271,10 +270,10 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
         // an entry or key that overruns what holds it ends the walk there:
         // the rest is dumped as it is
         for e in j.entries_mut() {
-            let Ok(mut e) = e else { break };
-            if matches!(entry_type(&e), journal_entry_type::btree_keys
-                                      | journal_entry_type::btree_root
-                                      | journal_entry_type::write_buffer_keys) {
+            let Ok(e) = e else { break };
+            if matches!(entry_type(e), journal_entry_type::btree_keys
+                                     | journal_entry_type::btree_root
+                                     | journal_entry_type::write_buffer_keys) {
                 for k in e.entries_mut() {
                     let Ok(mut k) = k else { break };
                     modified |= sanitize_val(&fs, BkeyS::from(&mut *k), opts);
@@ -286,9 +285,9 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
             // Re-encrypt (symmetric) if encrypted, then recompute the csum so
             // the entry stays checksum-valid instead of csum-cleared.
             if c::bch_csum_type(csum_type).is_encryption() {
-                jset_encrypt(&fs, j.as_mut_ptr(), csum_type, bytes);
+                jset_encrypt(&fs, j, csum_type);
             }
-            jset_csum_set(&fs, j.as_mut_ptr(), csum_type, bytes);
+            jset_csum_set(&fs, j, csum_type);
         }
 
         pos += (j.sectors(block_bits) << 9).min(buf.len() - pos);
