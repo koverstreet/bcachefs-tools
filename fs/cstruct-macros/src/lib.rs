@@ -887,6 +887,7 @@ pub fn c_extern(input: TokenStream) -> TokenStream {
         let ex = one_item!(&text, Extern, "fns and statics");
 
         let mut decls = String::new();
+        let mut asserts = String::new();
         for f in &ex.fns {
             let mut params: Vec<String> = f.params.iter().map(|(n, ty)| format!("{n}: {ty}")).collect();
             if f.variadic {
@@ -897,13 +898,35 @@ pub fn c_extern(input: TokenStream) -> TokenStream {
             let cold = if f.cold { "#[cold] " } else { "" };
             decls.push_str(&format!("{}{must_use}{cold}pub fn {}({}){ret};\n", cfg_attr(&f.cfg), f.name,
                                     params.join(", ")));
+            asserts.push_str(&thin_pointers(&f.name, &f.cfg, &f.params, f.ret.as_deref()));
         }
         for s in &ex.statics {
             let m = if s.mutable { "mut " } else { "" };
             decls.push_str(&format!("{}pub static {m}{}: {};\n", cfg_attr(&s.cfg), s.name, s.ty));
         }
-        Ok(tokens(&format!("{}unsafe extern \"C\" {{\n{decls}}}\n{}", cfg_attr(&ex.cfg), record(&text, &[]))))
+        let cfg = cfg_attr(&ex.cfg);
+        Ok(tokens(&format!("{cfg}unsafe extern \"C\" {{\n{decls}}}\n\
+                            {cfg}const _: () = {{\n{asserts}}};\n\
+                            {}", record(&text, &[]))))
     })
+}
+
+/// That each pointer fn @name passes C - parameters @params, return type
+/// @ret - is one: a compile error if it's fat, a pointer to an unsized type,
+/// whose metadata C has nowhere for. improper_ctypes can't say so: rustc
+/// doesn't report it in what a proc macro generates. A pointer to an unsized
+/// vstruct is to its sized instance, Ffi<T>, which is C's.
+fn thin_pointers(name: &str, cfg: &Option<cstruct::Cfg>, params: &[(String, String)], ret: Option<&str>) -> String {
+    params.iter()
+        .map(|(n, ty)| (n.as_str(), ty.as_str()))
+        .chain(ret.map(|r| ("its return", r)))
+        .filter(|(_, ty)| ty.trim_start().starts_with(['*', '&']))
+        .map(|(n, ty)| format!(
+            "{}assert!(::core::mem::size_of::<{ty}>() == ::core::mem::size_of::<*const u8>(),\n\
+                     \"{name}: {n}'s {ty} is a fat pointer, which C has no place for - \
+                      a pointer to an unsized vstruct T is to Ffi<T>\");\n",
+            cfg_attr(cfg)))
+        .collect()
 }
 
 /// A Rust fn C calls:
@@ -965,6 +988,7 @@ fn c_export_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
         (Some(c), None)    => (format!(" -> {c}"), call),
         (None, _)          => (String::new(), call),
     };
+    let thin = thin_pointers(&f.name, &None, &f.params, f.ret.as_deref());
     let def = format!(
         "{cfg}const _: () = {{\n\
              #[allow(unused_imports)]\n\
@@ -974,6 +998,7 @@ fn c_export_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
              unsafe extern \"C\" fn {name}({params}){ret} {{\n\
                  unsafe {{ {call} }}\n\
              }}\n\
+             const _: () = {{\n{thin}}};\n\
          }};\n\
          {record}",
         name = f.name, params = params.join(", "));
