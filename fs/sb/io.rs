@@ -1,25 +1,16 @@
 use crate::c;
 use crate::c::{bch_member, bch_sb, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
 use crate::sb::members;
+use crate::types::ArmOf;
 use crate::util::vstructs::SelfSized;
 
-/// Marker trait connecting an sb field struct to its field type enum.
-///
-/// # Safety
-/// Implementors must ensure FIELD_TYPE matches the struct type,
-/// and that `field` is the first member (offset 0).
-pub unsafe trait SbField: Sized {
-    const FIELD_TYPE: c::bch_sb_field_type;
+/// A superblock section's type: an arm of tagged_union! bch_sb_field, which
+/// gives its field type.
+pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + Sized {
+    const FIELD_TYPE: c::bch_sb_field_type = c::bch_sb_field_type(Self::TAG);
 }
 
-macro_rules! sb_field_impls {
-    ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! { $(
-        unsafe impl SbField for c::[<bch_sb_field_ $name>] {
-            const FIELD_TYPE: c::bch_sb_field_type = c::bch_sb_field_type::[<BCH_SB_FIELD_ $name>];
-        }
-    )* } };
-}
-c::BCH_SB_FIELDS!(sb_field_impls);
+impl<F: ArmOf<c::bch_sb_field, Tag = u32>> SbField for F {}
 
 impl PartialEq for bch_sb {
     fn eq(&self, other: &Self) -> bool {
@@ -491,4 +482,27 @@ impl SbAccess for SbBuf {
     fn sb(&self) -> &bch_sb { SbBuf::sb(self) }
     fn sb_mut(&mut self) -> &mut bch_sb { SbBuf::sb_mut(self) }
     fn sb_bytes(&self) -> &[u8] { SbBuf::bytes(self) }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::c;
+    use crate::types::Le32;
+    use crate::util::vstructs::VStruct;
+
+    /// A superblock field is the section its type says - and one this code
+    /// doesn't know is its type, as an error.
+    #[test]
+    fn sb_field_get() {
+        let mut buf = [0u64; 4];
+        // SAFETY: u64s, which any bytes are, aligned for a bch_sb_field
+        let f = unsafe { &mut *buf.as_mut_ptr().cast::<c::bch_sb_field>() };
+        f.set_val_u64s(3);
+
+        f.type_ = Le32::new(c::bch_sb_field_type::BCH_SB_FIELD_journal.0);
+        assert!(matches!(f.get(), Ok(c::BchSbFieldRef::journal(j)) if j.field.u64s.get() == 3));
+
+        f.type_ = Le32::new(c::bch_sb_field_type::BCH_SB_FIELD_NR.0);
+        assert!(matches!(f.get(), Err(t) if t == c::bch_sb_field_type::BCH_SB_FIELD_NR));
+    }
 }

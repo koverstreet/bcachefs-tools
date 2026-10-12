@@ -73,7 +73,7 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
 use crate::util::vstructs::{vstruct, vstruct_container, FlexArray};
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, CStruct, Plain, TypeInfo};
+use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, tagged_union, CStruct, Plain, TypeInfo};
 #[cfg(__KERNEL__)]
 use cstruct_macros::c_typedef;
 
@@ -837,6 +837,15 @@ c_enum! {
     pub enum bch_sb_field_type: u32 {
         BCH_SB_FIELDS(f, nr, ..) => BCH_SB_FIELD_ ## f = nr,
         BCH_SB_FIELD_NR,
+    }
+}
+
+/* A superblock field is one of its sections, by its type: */
+tagged_union! {
+    pub union bch_sb_field in c::bch_sb_field {
+        tag type_: u32 = c::bch_sb_field_type,
+        arms from BCH_SB_FIELDS(f, nr, ..) => f: c::bch_sb_field_ ## f = nr,
+        unsized,
     }
 }
 
