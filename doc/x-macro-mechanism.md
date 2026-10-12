@@ -20,7 +20,7 @@ into Rust at build time.
 
 | X-macro | Source header | Generated output |
 |---------|--------------|-----------------|
-| `BCH_BKEY_TYPES()` | `bcachefs_format.h` | Typed bkey dispatch enums (`BkeyValI`, `BkeyValSC`, etc.) and accessors |
+| `BCH_BKEY_TYPES()` | `bcachefs_format.h` | Typed bkey dispatch enums (`BkeyValSC`, `BkeyValS`) and accessors |
 | `BCH_SB_FIELDS()` | `bcachefs_format.h` | `SbField` trait impls for each superblock field type |
 | `BCH_MEMBER_STATES()` | `sb/members_format.h` | Member state string table |
 | `BCH_PERSISTENT_COUNTERS()` | `sb/counters_format.h` | Counter info table (name, stable ID, is_sectors flag) |

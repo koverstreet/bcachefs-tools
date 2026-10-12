@@ -36,7 +36,7 @@ use crate::dirent::{self, DirentTarget};
 use crate::namei;
 use crate::util::kernel::random_u64;
 use crate::{bch_err_ratelimited, trans_inconsistent};
-use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyInodeAllocCursor, BkeyS, BkeySC, BkeyValS, BkeyValSC, POS_MIN, SPOS_MAX, TypedBkey};
+use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyInode, BkeyInodeAllocCursor, BkeyInodeGeneration, BkeyInodeV2, BkeyInodeV3, BkeyS, BkeySC, BkeyValS, BkeyValSC, POS_MIN, SPOS_MAX, TypedBkey};
 use crate::init::passes;
 use crate::util::varint;
 use core::mem::offset_of;
@@ -822,7 +822,7 @@ pub fn bch2_inode_validate(
     from: &c::bkey_validate_context,
 ) -> core::ffi::c_int {
     validate_c(c, k, from, |v| {
-        validate_str_hash(v, v.k.as_inode().expect("an inode").inodev1_str_hash())?;
+        validate_str_hash(v, v.k.whole::<BkeyInode>().expect("an inode").inodev1_str_hash())?;
         validate_pos(v)
     })
 }
@@ -835,7 +835,7 @@ pub fn bch2_inode_v2_validate(
     from: &c::bkey_validate_context,
 ) -> core::ffi::c_int {
     validate_c(c, k, from, |v| {
-        validate_str_hash(v, v.k.as_inode_v2().expect("an inode_v2").inodev2_str_hash())?;
+        validate_str_hash(v, v.k.whole::<BkeyInodeV2>().expect("an inode_v2").inodev2_str_hash())?;
         validate_pos(v)
     })
 }
@@ -849,7 +849,7 @@ pub fn bch2_inode_v3_validate(
     from: &c::bkey_validate_context,
 ) -> core::ffi::c_int {
     validate_c(c, k, from, |v| {
-        let i = v.k.as_inode_v3().expect("an inode_v3");
+        let i = v.k.whole::<BkeyInodeV3>().expect("an inode_v3");
         let start = i.inodev3_fields_start();
         let min = c::INODEv3_FIELDS_START_INITIAL as u64;
         let max = v.k.k.u64s as u64 - crate::btree::bkey::BKEY_U64S as u64;
@@ -969,7 +969,7 @@ pub fn bch2_inode_generation_to_text(
     _c:  &Opaque<c::bch_fs>,
     k:   BkeySC<'_>,
 ) {
-    let generation = (k.as_inode_generation().expect("an inode_generation").bi_generation).get();
+    let generation = (k.whole::<BkeyInodeGeneration>().expect("an inode_generation").bi_generation).get();
     write!(out, "generation: {generation}");
 }
 
@@ -1138,7 +1138,7 @@ pub fn create<'t>(
                 None => Some(0),
                 Some(k) if k.k.type_ == c::bch_bkey_type::KEY_TYPE_inode_generation.0 as u8 &&
                            crate::snapshots::snapshot::is_ancestor(t, snapshot, k.k.p.snapshot) =>
-                    Some((k.as_inode_generation().expect("a generation").bi_generation).get()),
+                    Some((k.whole::<BkeyInodeGeneration>().expect("a generation").bi_generation).get()),
                 Some(_) => None,
             };
 
@@ -1192,7 +1192,7 @@ pub fn bch2_inode_alloc_cursor_to_text(
     k:   BkeySC<'_>,
 ) {
     let fs = Fs::from_c(c);
-    let v = k.as_inode_alloc_cursor().expect("an inode alloc cursor");
+    let v = k.whole::<BkeyInodeAllocCursor>().expect("an inode alloc cursor");
 
     let idx = v.idx.get();
     let (min, max) = cursor_range(&fs, k.k.p.offset);

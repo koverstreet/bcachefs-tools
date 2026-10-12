@@ -166,7 +166,7 @@ clean and make it easy to compare old vs new or revert.
 - `bch_bindgen` generates Rust bindings via bindgen, plus hand-written
   safe wrappers for btree iteration, journal parsing, extent iteration,
   printbuf, and superblock access
-- Typed bkey dispatch (`BkeyValSC`, `BkeyValI`) is code-generated from
+- Typed bkey dispatch (`BkeyValSC`, `BkeyValS`) is code-generated from
   the `KEY_TYPE_*` x-macro
 - Transaction restart handling uses `lockrestart_do` / `for_each`
   patterns that retry on restart errors

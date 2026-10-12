@@ -41,7 +41,7 @@ impl<'i, 'k, 'a, 't, K: TypedBkey> CowKey<'i, 'k, 'a, 't, K> {
     /// The value as it is now, repairs and all.
     pub fn v(&self) -> &K::Val {
         match &self.u {
-            Some(u) => K::val(u.k_i()).expect("CowKey: the update changed the key type"),
+            Some(u) => u.k_i().whole::<K>().expect("CowKey: the update is K's, grown whole"),
             None    => &self.v,
         }
     }

@@ -18,7 +18,7 @@ fn fix_reflink_p_key<'t>(
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
 ) -> Result<(), BchError> {
-    let Some(p) = k.as_reflink_p() else {
+    let Some(p) = k.whole::<BkeyReflinkP>() else {
         return Ok(());
     };
 

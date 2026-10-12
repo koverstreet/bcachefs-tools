@@ -107,20 +107,20 @@ fn type_prefix(type_: u8) -> Option<Option<&'static str>> {
 
 /// @k's type and name - @k an xattr, valid.
 fn type_and_name(k: BkeySC<'_>) -> (u8, &[u8]) {
-    let x = k.as_xattr().expect("an xattr");
+    let x = k.whole::<BkeyXattr>().expect("an xattr");
     (x.x_type, &k.val_bytes()[NAME_OFFSET..][..x.x_name_len as usize])
 }
 
 /// @k's value - @k an xattr, valid.
 pub fn value(k: BkeySC<'_>) -> &[u8] {
-    let x = k.as_xattr().expect("an xattr");
+    let x = k.whole::<BkeyXattr>().expect("an xattr");
     let name_len = x.x_name_len as usize;
     &k.val_bytes()[NAME_OFFSET + name_len..][..x.x_val_len.get() as usize]
 }
 
 /// Check @v.k, an xattr: as bch2_xattr_validate().
 pub fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
-    let x = v.k.as_xattr().expect("an xattr");
+    let x = v.k.whole::<BkeyXattr>().expect("an xattr");
     let name_len = x.x_name_len as usize;
     let val_len  = x.x_val_len.get() as usize;
     let have     = v.k.val_bytes().len() / size_of::<u64>();
@@ -162,7 +162,7 @@ fn to_nul(b: &[u8]) -> &[u8] {
 /// @k, an xattr, as text: as bch2_xattr_to_text(). @k may not have passed
 /// validate: lengths past the value are cut to it.
 pub fn to_text(out: &mut Printbuf, k: BkeySC<'_>) {
-    let x = k.as_xattr().expect("an xattr");
+    let x = k.whole::<BkeyXattr>().expect("an xattr");
 
     match type_prefix(x.x_type) {
         Some(Some(prefix)) => write!(out, "{prefix}"),
