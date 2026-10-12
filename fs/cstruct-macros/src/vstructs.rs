@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 //! What util/vstructs.rs's traits need of a type C shares, from its
 //! definition: #[derive(Plain)] - and #[bitfield], every one of which is -
-//! and #[counted_by(FIELD)], a CStruct's FlexArray.
+//! #[counted_by(FIELD)], a CStruct's FlexArray, and #[derive(View)], its
+//! fields' projections on a View of it.
 //!
 //! Plain is a promise: every bit pattern of the type's bytes is a value of
 //! it, and every byte is a field's. These impls check it at compile time,
@@ -41,6 +42,47 @@ pub(crate) fn plain(name: &str, tys: &[&str]) -> String {
              assert!(::core::mem::size_of::<{name}>() == 0{sizes},\n\
                      \"{name}: padding between its fields - it isn't Plain\");\n\
          }};\n")
+}
+
+/// A View's own methods, which a field's projection can't be named.
+const VIEW_METHODS: &[&str] = &["new", "get", "set", "whole", "whole_mut", "project", "as_view", "as_bytes"];
+
+/// #[derive(View)], on a Plain struct: a projection for each field, on View
+/// and ViewMut - `v.field()`, a View of the field, until field projections
+/// make it `v.field`. Not for fields named `_..`, padding and C's internals,
+/// or a trailing `[T; 0]`: a flexible array is View::as_bytes()'s.
+pub(crate) fn derive_view(input: TokenStream) -> Result<TokenStream, String> {
+    let def = parse_cstruct(&input.to_string())?;
+    if def.kind != CKind::Struct {
+        return Err(format!("{}: a View is of a struct", def.name));
+    }
+    let name = &def.name;
+    let (mut get, mut get_mut) = (String::new(), String::new());
+    for f in &def.fields {
+        let field = f.rust_name();
+        let ty = f.ty.trim();
+        if field.starts_with('_') || matches!(field_type(ty)?, FieldType::Array { n, .. } if n == "0") {
+            continue;
+        }
+        if VIEW_METHODS.contains(&field.as_str()) {
+            return Err(format!("{name}.{field}: a View's own method is named {field} - \
+                                its projection would be hidden"));
+        }
+        let off = format!("::core::mem::offset_of!({name}, {field})");
+        get.push_str(&format!(
+            "pub fn {field}(&self) -> crate::util::vstructs::View<'a, {ty}> {{\n\
+                 self.project({off}, \"{field}\")\n\
+             }}\n"));
+        get_mut.push_str(&format!(
+            "pub fn {field}(&mut self) -> crate::util::vstructs::ViewMut<'_, {ty}> {{\n\
+                 self.project({off}, \"{field}\")\n\
+             }}\n"));
+    }
+    Ok(tokens(&format!(
+        "#[allow(dead_code)]\n\
+         impl<'a> crate::util::vstructs::View<'a, {name}> {{\n{get}}}\n\
+         #[allow(dead_code)]\n\
+         impl<'a> crate::util::vstructs::ViewMut<'a, {name}> {{\n{get_mut}}}\n")))
 }
 
 /// A CStruct's FlexArray, from #[counted_by(FIELD)] on its trailing `[T; 0]`

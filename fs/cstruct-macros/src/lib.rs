@@ -40,6 +40,9 @@
 //!                        a #[bitfield] is Plain too, and #[counted_by] on a
 //!                        CStruct's trailing [T; 0] is its FlexArray
 //!                        (vstructs.rs)
+//!   #[derive(View)]      a projection for each field on a View of the type:
+//!                        its fields read as zero past a short value's end
+//!                        (vstructs.rs)
 //!
 //! Zero dependencies: the kernel build compiles this with a bare rustc.
 
@@ -193,6 +196,13 @@ pub fn derive_type_info(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Plain)]
 pub fn derive_plain(input: TokenStream) -> TokenStream {
     expand("#[derive(Plain)]", || vstructs::derive_plain(input))
+}
+
+/// `#[derive(View)]`: a projection for each field, on util/vstructs.rs's
+/// View and ViewMut of the type - see vstructs.rs.
+#[proc_macro_derive(View)]
+pub fn derive_view(input: TokenStream) -> TokenStream {
+    expand("#[derive(View)]", || vstructs::derive_view(input))
 }
 
 fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {

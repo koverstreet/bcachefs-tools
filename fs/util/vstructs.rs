@@ -544,6 +544,7 @@ impl<'a, T: Plain> ViewMut<'a, T> {
 mod tests {
     use super::*;
     use crate::types::{Le16, Le32, Le64};
+    use cstruct_macros::{Plain, View};
 
     /// @v's bytes, at @at in @buf.
     fn put<T: Plain>(buf: &mut [u64], at: usize, v: &T) {
@@ -644,32 +645,13 @@ mod tests {
     }
 
     #[repr(C)]
-    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Plain, View)]
     struct Hdr { u64s: Le32, ty: Le32 }
-    // SAFETY: integers, no padding
-    unsafe impl Plain for Hdr {}
 
-    /// A section that grew: 40 bytes now, 24 once - before @new and @newer.
+    /// A section that grew: 40 bytes now, 24 once - before @next and @last.
     #[repr(C)]
-    #[derive(Clone, Copy, Debug, Default, PartialEq)]
-    struct Grown { hdr: Hdr, old: [Le64; 2], new: Le64, newer: Le64 }
-    // SAFETY: integers, no padding
-    unsafe impl Plain for Grown {}
-
-    // What #[view] generates: one projection per field
-    impl<'a> View<'a, Grown> {
-        fn hdr(&self) -> View<'a, Hdr> { self.project(core::mem::offset_of!(Grown, hdr), "hdr") }
-        fn old(&self) -> View<'a, [Le64; 2]> { self.project(core::mem::offset_of!(Grown, old), "old") }
-        fn new_(&self) -> View<'a, Le64> { self.project(core::mem::offset_of!(Grown, new), "new") }
-        fn newer(&self) -> View<'a, Le64> { self.project(core::mem::offset_of!(Grown, newer), "newer") }
-    }
-    impl<'a> View<'a, Hdr> {
-        fn ty(&self) -> View<'a, Le32> { self.project(core::mem::offset_of!(Hdr, ty), "ty") }
-    }
-    impl<'a> ViewMut<'a, Grown> {
-        fn old(&mut self) -> ViewMut<'_, [Le64; 2]> { self.project(core::mem::offset_of!(Grown, old), "old") }
-        fn newer(&mut self) -> ViewMut<'_, Le64> { self.project(core::mem::offset_of!(Grown, newer), "newer") }
-    }
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Plain, View)]
+    struct Grown { hdr: Hdr, old: [Le64; 2], next: Le64, last: Le64, _tail: [u64; 0] }
 
     /// A Grown of @u64s: its header, then 2, 3, ... in each u64 after.
     fn grown(u64s: usize) -> Vec<u64> {
@@ -689,18 +671,18 @@ mod tests {
     fn view_reads_zero_past_the_end() {
         let full = grown(5);
         let v = View::<Grown>::new(bytes(&full));
-        assert_eq!((v.new_().get(), v.newer().get()), (Le64::new(4), Le64::new(5)));
+        assert_eq!((v.next().get(), v.last().get()), (Le64::new(4), Le64::new(5)));
         assert_eq!(v.whole(), Some(&v.get()));
 
         let short = grown(3);
         let v = View::<Grown>::new(bytes(&short));
         assert_eq!(v.hdr().ty().get(), 7);
         assert_eq!(v.old().get(), [Le64::new(2), Le64::new(3)]);
-        assert_eq!((v.new_().get(), v.newer().get()), (Le64::new(0), Le64::new(0)));
+        assert_eq!((v.next().get(), v.last().get()), (Le64::new(0), Le64::new(0)));
         assert_eq!(v.get(), Grown { hdr: Hdr { u64s: Le32::new(3), ty: Le32::new(7) },
                                     old: [Le64::new(2), Le64::new(3)], ..Default::default() });
         assert_eq!(v.whole(), None);
-        assert_eq!((v.as_bytes().len(), v.old().as_bytes().len(), v.newer().as_bytes().len()),
+        assert_eq!((v.as_bytes().len(), v.old().as_bytes().len(), v.last().as_bytes().len()),
                    (24, 16, 0));
 
         // half an array there: the half there is read, the rest is zero
@@ -720,9 +702,9 @@ mod tests {
         v.old().set([Le64::new(20), Le64::new(30)]).unwrap();
         assert_eq!(v.get().old, [Le64::new(20), Le64::new(30)]);
 
-        let e = v.newer().set(Le64::new(9)).unwrap_err();
-        assert_eq!((e.field, e.at, e.size, e.len), ("newer", 32, 8, 24));
-        assert!(e.to_string().ends_with("Grown: newer at 32..40 is past its end (24 bytes); grow it first"),
+        let e = v.last().set(Le64::new(9)).unwrap_err();
+        assert_eq!((e.field, e.at, e.size, e.len), ("last", 32, 8, 24));
+        assert!(e.to_string().ends_with("Grown: last at 32..40 is past its end (24 bytes); grow it first"),
                 "{e}");
         assert!(v.whole_mut().is_none());
         assert_eq!(short, grown(3).iter().enumerate()
