@@ -44,7 +44,7 @@ fn jset_seq(p: &c::journal_replay) -> u64 {
 /// A jset's first datetime entry's seconds-since-epoch, or None if absent.
 fn jset_datetime(p: &c::journal_replay) -> Option<u64> {
     p.j.entries().find_map(|e| match e.get() {
-        Ok(c::JsetEntryRef::datetime(d)) => Some(d.seconds.get()),
+        Ok(c::JsetEntryRef::datetime(d)) => Some(d.seconds().get()),
         _ => None,
     })
 }
@@ -52,7 +52,7 @@ fn jset_datetime(p: &c::journal_replay) -> Option<u64> {
 /// A jset's first rewind_limit entry's seq, or None if absent.
 fn jset_rewind_limit(p: &c::journal_replay) -> Option<u64> {
     p.j.entries().find_map(|e| match e.get() {
-        Ok(c::JsetEntryRef::rewind_limit(r)) => Some(r.seq.get()),
+        Ok(c::JsetEntryRef::rewind_limit(r)) => Some(r.seq().get()),
         _ => None,
     })
 }

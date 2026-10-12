@@ -500,9 +500,30 @@ mod tests {
         f.set_val_u64s(3);
 
         f.type_ = Le32::new(c::bch_sb_field_type::BCH_SB_FIELD_journal.0);
-        assert!(matches!(f.get(), Ok(c::BchSbFieldRef::journal(j)) if j.field.u64s.get() == 3));
+        assert!(matches!(f.get(), Ok(c::BchSbFieldRef::journal(j)) if j.field().u64s().get() == 3));
 
         f.type_ = Le32::new(c::bch_sb_field_type::BCH_SB_FIELD_NR.0);
         assert!(matches!(f.get(), Err(t) if t == c::bch_sb_field_type::BCH_SB_FIELD_NR));
+    }
+
+    /// An ext section from before btrees_lost_data, 88 bytes, is an ext
+    /// section: the fields it has read as they are, the ones it doesn't as
+    /// zero - not as whatever follows it, which here is all ones.
+    #[test]
+    fn sb_field_get_short_section() {
+        let mut buf = [u64::MAX; 16];
+        buf[..11].fill(0);
+        buf[3] = 0x5a;                          // errors_silent[0]
+        // SAFETY: u64s, which any bytes are, aligned for a bch_sb_field
+        let f = unsafe { &mut *buf.as_mut_ptr().cast::<c::bch_sb_field>() };
+        f.set_val_u64s(11);
+        f.type_ = Le32::new(c::bch_sb_field_type::BCH_SB_FIELD_ext.0);
+
+        let Ok(c::BchSbFieldRef::ext(e)) = f.get() else { panic!("an ext section") };
+        assert_eq!(e.errors_silent().get()[0], 0x5a);
+        assert_eq!(e.btrees_lost_data().get(), 0);
+        assert_eq!(e.btrees_clean().get(), 0);
+        assert!(e.whole().is_none());
+        assert_eq!(e.as_bytes().len(), 88);
     }
 }

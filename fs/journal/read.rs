@@ -43,8 +43,7 @@ pub fn entry_btree_id(entry: &c::jset_entry) -> Option<c::btree_id> {
 /// A log entry's message, its NUL padding trimmed - empty for any other entry.
 pub fn entry_log_msg(entry: &c::jset_entry) -> &[u8] {
     let Ok(c::JsetEntryRef::log(l)) = entry.get() else { return &[] };
-    let data = l.as_bytes()
-        .map_or(&[][..], |b| &b[core::mem::offset_of!(c::jset_entry_log, d)..]);
+    let data = l.as_bytes().get(core::mem::offset_of!(c::jset_entry_log, d)..).unwrap_or_default();
     // Trim trailing nulls
     let len = data.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
     &data[..len]

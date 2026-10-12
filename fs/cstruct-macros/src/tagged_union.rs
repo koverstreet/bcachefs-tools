@@ -74,7 +74,10 @@
 //! far as its count says - a superblock field's: SelfSized. Then what's
 //! generated is the Ref enum, arm_at(), ArmOf, and get() over the bytes the
 //! header's count says are the arm's - trusting it, as
-//! VStructContainer::entries() does.
+//! VStructContainer::entries() does. An arm in those bytes may be shorter
+//! than its type - written by an older version, before the type grew - so
+//! it's a crate::util::vstructs::View, not a Flex: its fields past the end
+//! read as zero, and each arm's type derives Plain and View.
 //!
 //! The arms come from an x-macro list: tagged_union! hands the declaration to
 //! it - LIST!(cstruct_macros::__tagged_union [decl]) - and the list calls
@@ -423,7 +426,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
         String::new()
     };
 
-    // arm_at(): every form has it
+    // arm_at(): every sized form has it - an unsized one has its own, of Views
     let arm_at = format!(
         "/// The arm @tag selects, at the start of @b - which it may extend to\n\
          /// their end: None if @tag isn't one of ours, or the arm doesn't fit\n\
@@ -444,14 +447,26 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
 
     if tu.unsized_ {
         // Over a header its arms embed and run past, as far as its count says:
-        // arm_at(), and get() over those bytes - nothing of a storage's own
+        // arm_at(), and get() over those bytes - nothing of a storage's own.
+        // An arm there may be an older, shorter version of its type: a View.
+        let view = "crate::util::vstructs::View";
+        let by_view: String = arms.iter()
+            .map(|a| format!("    {}({view}<'a, {}>),\n", a.name, a.ty))
+            .collect();
+        let views: String = arms.iter()
+            .map(|a| format!("if tag == ({}) as {tag_ty} {{\n\
+                                  return Some({en}Ref::{}({view}::new(b)));\n\
+                              }}\n",
+                             a.value, a.name))
+            .collect();
         return with_defs(defs, name, &format!(
             "{storage}\
-             /// One of {name}'s arms, with the bytes its header says are its: what\n\
+             /// One of {name}'s arms, with the bytes its header says are its - as\n\
+             /// many as there are, for one written before its type grew: what\n\
              /// {name}::get() gives.\n\
              #[allow(non_camel_case_types, dead_code)]\n\
              #[derive(Clone, Copy)]\n\
-             {vis} enum {en}Ref<'a> {{\n{by_ref}}}\n\
+             {vis} enum {en}Ref<'a> {{\n{by_view}}}\n\
              \n\
              impl {s_ty} {{\n\
                  /// The tag, whether this version knows it or not.\n\
@@ -462,7 +477,8 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                  \n\
                  /// The arm the tag selects, over the bytes its count says are its -\n\
                  /// trusted, as VStructContainer::entries() is: Err(the tag) if it isn't\n\
-                 /// one of ours, or its arm doesn't fit them.\n\
+                 /// one of ours. One shorter than its type is an older version, its\n\
+                 /// missing fields zero - which a validated count is what makes so.\n\
                  ///\n\
                  /// XXX: technically undefined behaviour until these are proper DSTs: the\n\
                  /// arm is read through a pointer from &self, which covers only the header.\n\
@@ -476,7 +492,13 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                      Self::arm_at(t, b).ok_or({tag_enum}(t as _))\n\
                  }}\n\
                  \n\
-                 {arm_at}\n\
+                 /// The arm @tag selects, at the start of @b - as much of it as they\n\
+                 /// hold: None if @tag isn't one of ours.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn arm_at<'a>(tag: {tag_ty}, b: &'a [u8]) -> Option<{en}Ref<'a>> {{\n\
+                     {views}\
+                     None\n\
+                 }}\n\
              }}\n\
              \n\
              {arms_of}"));
