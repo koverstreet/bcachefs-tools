@@ -5,24 +5,24 @@
 //! bindings and adds the non-`fs/` userspace ones, so the tools reach all C
 //! symbols through it. Meant to shrink as this code is ported to no_std.
 
-// The C types Rust only passes pointers to are opaque - fieldless - structs.
-#![allow(improper_ctypes)]
-
 pub mod c {
 	#![allow(ambiguous_glob_reexports)]
 
 	pub use bcachefs_kernel::c::*;
 
 	// The bindgen lints apply only to the generated bindings, not the
-	// re-export above.
+	// re-export above. improper_ctypes is an error: bcachefs's types are
+	// blocklisted here and resolve to bcachefs_kernel's by name, and one
+	// that's unsized - a jset, a bch_sb - would be a fat pointer where C has
+	// a thin one. Its sized instance, Ffi<T>, is C's.
 	#[allow(
 		non_camel_case_types,
 		non_upper_case_globals,
 		non_snake_case,
 		dead_code,
-		improper_ctypes,
 		unnecessary_transmutes
 	)]
+	#[deny(improper_ctypes)]
 	mod generated {
 		use bcachefs_kernel::c::*;
 

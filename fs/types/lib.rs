@@ -397,8 +397,9 @@ pub const fn bits_to_longs(nr: usize) -> usize {
            repr(align(64)))]
 #[cfg_attr(target_arch = "powerpc64", repr(align(128)))]
 #[cfg_attr(target_arch = "s390x", repr(align(256)))]
+#[repr(C)]
 #[derive(Clone, Copy, Default)]
-pub struct CacheAligned;
+pub struct CacheAligned([u8; 0]);
 
 /// sizeof(long), as an alignment: as CacheAligned, C's __aligned(sizeof(long)).
 #[repr(C)]

@@ -107,6 +107,12 @@ fn main() {
         .opaque_type("rhash_lock_head")
         .opaque_type("srcu_struct")
         .opaque_type("bch_ioctl_data_event")
+        // the shim's own stand-ins for kernel structs, empty in
+        // include/linux/: reached through bch_fs and bch_dev
+        .opaque_type("device")
+        .opaque_type("class")
+        .opaque_type("blk_plug")
+        .opaque_type("idr")
         .generate_inline_functions(true)
         .wrap_static_fns(true)
         .wrap_static_fns_path(out_dir.join("extern.c"))

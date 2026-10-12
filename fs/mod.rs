@@ -29,9 +29,12 @@
 // using every feature in it is not a defect in this crate, but under
 // -D warnings (CONFIG_WERROR) unused_features makes it a build failure.
 #![allow(unused_features)]
-// Generated extern blocks reference kernel types bindgen flags as not FFI-safe
-// (e.g. its_array); harmless, and allowed on the kernel's own bindings crate.
-#![allow(improper_ctypes)]
+// The kernel build's generated extern blocks reference kernel types bindgen
+// flags as not FFI-safe (e.g. its_array); harmless, and allowed on the
+// kernel's own bindings crate. Userspace's are clean, so there it warns -
+// though not of c_extern!'s declarations, which rustc doesn't lint in what a
+// proc macro generates: c_extern! checks its own pointers are thin.
+#![cfg_attr(kernel, allow(improper_ctypes))]
 
 #[cfg(kernel)]
 const __LOG_PREFIX: &[u8] = b"bcachefs\0";

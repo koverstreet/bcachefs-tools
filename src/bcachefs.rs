@@ -1,6 +1,3 @@
-// The C types Rust only passes pointers to are opaque - fieldless - structs.
-#![allow(improper_ctypes)]
-
 mod commands;
 mod copy_fs;
 mod degraded;
