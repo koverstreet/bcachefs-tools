@@ -1,4 +1,6 @@
 use crate::c;
+use crate::util::vstructs::View;
+use core::mem::offset_of;
 use super::io::*;
 
 // ---------------------------------------------------------------------------
@@ -24,9 +26,18 @@ pub fn member_state_str(state: u8) -> &'static str {
 
 const BCH_MEMBER_V1_BYTES: usize = 56;
 
+/// Member @idx of a members section, its bytes @b: one of @member_bytes from
+/// @start, copied - zero past the end of one shorter than bch_member. None
+/// if it's past the section's end.
+fn member_at(b: &[u8], start: usize, member_bytes: usize, idx: u32) -> Option<c::bch_member> {
+    let at = start + idx as usize * member_bytes;
+    Some(View::<c::bch_member>::new(b.get(at..at + member_bytes)?).get())
+}
+
 /// Read-only view of members_v2 with bounds-checked access.
 pub struct MembersV2<'a> {
-    field: &'a c::bch_sb_field_members_v2,
+    /// The section's
+    bytes: &'a [u8],
     member_bytes: usize,
     nr_devices: u32,
 }
@@ -38,14 +49,7 @@ impl<'a> MembersV2<'a> {
         if idx >= self.nr_devices {
             return None;
         }
-        unsafe {
-            let base = self.field._members.as_ptr() as *const u8;
-            let src = base.add(idx as usize * self.member_bytes);
-            let mut ret: c::bch_member = core::mem::zeroed();
-            let copy_len = self.member_bytes.min(core::mem::size_of::<c::bch_member>());
-            core::ptr::copy_nonoverlapping(src, &mut ret as *mut _ as *mut u8, copy_len);
-            Some(ret)
-        }
+        member_at(self.bytes, offset_of!(c::bch_sb_field_members_v2, _members), self.member_bytes, idx)
     }
 
     pub fn member_bytes(&self) -> usize {
@@ -113,7 +117,8 @@ impl<'a> MembersV2Mut<'a> {
 
 /// Read-only view of members_v1 with bounds-checked access.
 pub struct MembersV1<'a> {
-    field: &'a c::bch_sb_field_members_v1,
+    /// The section's
+    bytes: &'a [u8],
     nr_devices: u32,
 }
 
@@ -122,14 +127,7 @@ impl<'a> MembersV1<'a> {
         if idx >= self.nr_devices {
             return None;
         }
-        unsafe {
-            let base = self.field._members.as_ptr() as *const u8;
-            let src = base.add(idx as usize * BCH_MEMBER_V1_BYTES);
-            let mut ret: c::bch_member = core::mem::zeroed();
-            let copy_len = BCH_MEMBER_V1_BYTES.min(core::mem::size_of::<c::bch_member>());
-            core::ptr::copy_nonoverlapping(src, &mut ret as *mut _ as *mut u8, copy_len);
-            Some(ret)
-        }
+        member_at(self.bytes, offset_of!(c::bch_sb_field_members_v1, _members), BCH_MEMBER_V1_BYTES, idx)
     }
 
     pub fn nr_devices(&self) -> u32 {
@@ -143,11 +141,11 @@ impl<'a> MembersV1<'a> {
 
 /// Construct a MembersV2 reader from a superblock.
 pub fn members_v2(sb: &c::bch_sb) -> Option<MembersV2<'_>> {
-    let field: &c::bch_sb_field_members_v2 = sb_field_get(sb)?;
+    let field = sb_field_get::<c::bch_sb_field_members_v2>(sb)?;
     Some(MembersV2 {
-        member_bytes: field.member_bytes.get() as usize,
+        member_bytes: field.member_bytes().get() as usize,
         nr_devices: sb.nr_devices as u32,
-        field,
+        bytes: field.as_bytes(),
     })
 }
 
@@ -165,9 +163,9 @@ pub fn members_v2_mut(disk_sb: &mut c::bch_sb_handle) -> Option<MembersV2Mut<'_>
 
 /// Construct a MembersV1 reader from a superblock.
 pub fn members_v1(sb: &c::bch_sb) -> Option<MembersV1<'_>> {
-    let field: &c::bch_sb_field_members_v1 = sb_field_get(sb)?;
+    let field = sb_field_get::<c::bch_sb_field_members_v1>(sb)?;
     Some(MembersV1 {
         nr_devices: sb.nr_devices as u32,
-        field,
+        bytes: field.as_bytes(),
     })
 }

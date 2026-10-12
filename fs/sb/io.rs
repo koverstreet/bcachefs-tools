@@ -2,15 +2,16 @@ use crate::c;
 use crate::c::{bch_member, bch_sb, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
 use crate::sb::members;
 use crate::types::ArmOf;
-use crate::util::vstructs::SelfSized;
+use crate::util::vstructs::{Plain, SelfSized, View};
 
 /// A superblock section's type: an arm of tagged_union! bch_sb_field, which
-/// gives its field type.
-pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + Sized {
+/// gives its field type - Plain, so a View of a short one reads as zero
+/// past its end.
+pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + Plain + Sized {
     const FIELD_TYPE: c::bch_sb_field_type = c::bch_sb_field_type(Self::TAG);
 }
 
-impl<F: ArmOf<c::bch_sb_field, Tag = u32>> SbField for F {}
+impl<F: ArmOf<c::bch_sb_field, Tag = u32> + Plain> SbField for F {}
 
 impl PartialEq for bch_sb {
     fn eq(&self, other: &Self) -> bool {
@@ -32,12 +33,14 @@ const JSET_MAGIC: u64 = 0x245235c1a3625032;
 const BSET_MAGIC: u64 = 0x90135c78b99e07f5;
 
 impl bch_sb {
-    pub fn field<F: SbField>(&self) -> Option<&F> {
+    /// Its section of type @F: sb_field_get().
+    pub fn field<F: SbField>(&self) -> Option<View<'_, F>> {
         sb_field_get(self)
     }
 
+    /// Its crypt section, whole - validate rejects a shorter one.
     pub fn crypt(&self) -> Option<&bch_sb_field_crypt> {
-        self.field()
+        self.field::<bch_sb_field_crypt>()?.whole()
     }
 
     pub fn uuid(&self) -> uuid::Uuid {
@@ -94,8 +97,8 @@ impl bch_sb_handle {
         unsafe { &*self.bdev }
     }
 
-    /// Get a typed reference to a superblock field, or None if absent.
-    pub fn field<F: SbField>(&self) -> Option<&F> {
+    /// Its section of type @F: sb_field_get().
+    pub fn field<F: SbField>(&self) -> Option<View<'_, F>> {
         sb_field_get(self.sb())
     }
 
@@ -213,17 +216,18 @@ c::BCH_PERSISTENT_COUNTERS!(counter_table);
 // Superblock field access — safe, handle-based API
 //
 // The key safety property: `sb_field_resize` takes `&mut bch_sb_handle`,
-// which invalidates any outstanding `&F` references from `sb_field_get`
-// at compile time. This is the capnp-inspired reader/builder split —
+// which invalidates any outstanding Views from `sb_field_get` at compile
+// time. This is the capnp-inspired reader/builder split —
 // resize is the "build" operation and must be exclusive.
 // ---------------------------------------------------------------------------
 
-/// Get a typed reference to a superblock field, or None if absent.
-pub fn sb_field_get<F: SbField>(sb: &c::bch_sb) -> Option<&F> {
-    unsafe {
-        let ptr = c::bch2_sb_field_get_id(sb as *const _ as *mut _, F::FIELD_TYPE);
-        if ptr.is_null() { None } else { Some(&*(ptr as *const F)) }
-    }
+/// The superblock's section of type @F, if it has one: a View of the bytes
+/// its header says are its - one written before F grew reads as zero past
+/// them, as C's bch2_sb_field_get_minsize() would have grown it to.
+pub fn sb_field_get<F: SbField>(sb: &c::bch_sb) -> Option<View<'_, F>> {
+    // SAFETY: C's walk of the sections the superblock's count says it has -
+    // validated, so they're there
+    unsafe { c::bch2_sb_field_get_id(sb as *const _ as *mut _, F::FIELD_TYPE).as_ref() }?.arm::<F>()
 }
 
 /// Get a typed mutable reference to a superblock field via handle.
@@ -378,7 +382,7 @@ impl<'a> SbRef<'a> {
         &self.buf[..self.bytes]
     }
 
-    pub fn field<F: SbField>(&self) -> Option<&'a F> {
+    pub fn field<F: SbField>(&self) -> Option<View<'a, F>> {
         sb_field_get(self.sb())
     }
 }
@@ -408,7 +412,7 @@ impl<'a> SbMut<'a> {
         &self.buf[..self.bytes]
     }
 
-    pub fn field<F: SbField>(&self) -> Option<&F> {
+    pub fn field<F: SbField>(&self) -> Option<View<'_, F>> {
         sb_field_get(self.sb())
     }
 }
@@ -472,7 +476,7 @@ impl SbBuf {
         unsafe { core::slice::from_raw_parts(self.buf.as_ptr() as *const u8, self.bytes) }
     }
 
-    pub fn field<F: SbField>(&self) -> Option<&F> {
+    pub fn field<F: SbField>(&self) -> Option<View<'_, F>> {
         sb_field_get(self.sb())
     }
 }
@@ -525,5 +529,10 @@ mod tests {
         assert_eq!(e.btrees_clean().get(), 0);
         assert!(e.whole().is_none());
         assert_eq!(e.as_bytes().len(), 88);
+
+        // and as the one arm sb_field_get() asks for
+        let e = f.arm::<c::bch_sb_field_ext>().expect("an ext section");
+        assert_eq!((e.errors_silent().get()[0], e.btrees_lost_data().get()), (0x5a, 0));
+        assert!(f.arm::<c::bch_sb_field_crypt>().is_none());
     }
 }

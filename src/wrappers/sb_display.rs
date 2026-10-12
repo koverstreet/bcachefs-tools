@@ -117,7 +117,7 @@ pub unsafe fn sb_to_text_with_names(
 
         let gi: *mut c::bch_sb_field_disk_groups =
             sb::io::sb_field_get::<c::bch_sb_field_disk_groups>(sb)
-                .map(|f| f as *const _ as *mut _)
+                .map(|f| f.as_bytes().as_ptr() as *mut _)
                 .unwrap_or(std::ptr::null_mut());
 
         // members_v1

@@ -77,7 +77,8 @@
 //! VStructContainer::entries() does. An arm in those bytes may be shorter
 //! than its type - written by an older version, before the type grew - so
 //! it's a crate::util::vstructs::View, not a Flex: its fields past the end
-//! read as zero, and each arm's type derives Plain and View.
+//! read as zero, and each arm's type derives Plain and View. arm::<A>() is
+//! get() for one arm: A's View, if the tag is A's.
 //!
 //! The arms come from an x-macro list: tagged_union! hands the declaration to
 //! it - LIST!(cstruct_macros::__tagged_union [decl]) - and the list calls
@@ -485,11 +486,24 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                  #[allow(dead_code)]\n\
                  {vis} fn get(&self) -> Result<{en}Ref<'_>, {tag_enum}> {{\n\
                      let t: {tag_ty} = {det}::get(self);\n\
+                     Self::arm_at(t, self.arm_bytes()).ok_or({tag_enum}(t as _))\n\
+                 }}\n\
+                 \n\
+                 /// The arm, if the tag is @A's: get(), for one arm.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn arm<A>(&self) -> Option<{view}<'_, A>>\n\
+                 where\n\
+                     A: {arm_of}<Self, Tag = {tag_ty}> + crate::util::vstructs::Plain,\n\
+                 {{\n\
+                     ({det}::get(self) == A::TAG).then(|| {view}::new(self.arm_bytes()))\n\
+                 }}\n\
+                 \n\
+                 /// Its bytes, as many as its count says: get()'s.\n\
+                 fn arm_bytes(&self) -> &[u8] {{\n\
                      let len = crate::util::vstructs::SelfSized::bytes(self);\n\
                      // SAFETY: its count is right - validated - so its bytes follow it;\n\
-                     // but see above\n\
-                     let b = unsafe {{ ::core::slice::from_raw_parts((self as *const Self).cast::<u8>(), len) }};\n\
-                     Self::arm_at(t, b).ok_or({tag_enum}(t as _))\n\
+                     // but see get()\n\
+                     unsafe {{ ::core::slice::from_raw_parts((self as *const Self).cast::<u8>(), len) }}\n\
                  }}\n\
                  \n\
                  /// The arm @tag selects, at the start of @b - as much of it as they\n\

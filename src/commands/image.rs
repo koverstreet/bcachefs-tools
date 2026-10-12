@@ -411,9 +411,9 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     f.set(f.get() | (1u64 << c::bch_sb_feature::BCH_FEATURE_small_image.0 as u64));
 
     // Resize members_v2 to contain only one device
-    let mi: &c::bch_sb_field_members_v2 = disk_sb.field()
-        .expect("members_v2 field missing");
-    let member_bytes = mi.member_bytes.get();
+    let member_bytes = disk_sb.field::<c::bch_sb_field_members_v2>()
+        .expect("members_v2 field missing")
+        .member_bytes().get();
     let u64s = (std::mem::size_of::<c::bch_sb_field_members_v2>() as u32 + member_bytes as u32)
         .div_ceil(8) as u32;
     sb::io::sb_field_resize::<c::bch_sb_field_members_v2>(disk_sb, u64s);
