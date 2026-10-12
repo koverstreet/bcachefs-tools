@@ -1261,13 +1261,19 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
     // marker Rust's alone - see CGeneric.
     for g in &generics {
         let uses: Vec<usize> = (0..fields.len()).filter(|&k| fields[k].ty.trim() == g.name).collect();
-        match (&g.tail, uses.as_slice()) {
-            (Some(elem), [k]) if k + 1 == fields.len() => fields[*k].ty = format!("[{elem}; 0]"),
-            (Some(_), _) => return Err(format!(
-                "{name}: its tail {} is the type of its last field, and no other", g.name)),
-            (None, []) => {}
-            (None, _) => return Err(format!(
-                "{name}: {} is a state, which only a PhantomData field names", g.name)),
+        // or the last field is another unsized vstruct, carrying the tail -
+        // a btree_node's bset, `keys: c::bset<S, T>`: C has its sized instance
+        let embeds = |f: &CFieldDef| embedded_vstruct(&f.ty, &g.name);
+        match (&g.tail, uses.as_slice(), fields.last().and_then(embeds)) {
+            (Some(elem), [k], None) if k + 1 == fields.len() => fields[*k].ty = format!("[{elem}; 0]"),
+            (Some(_), [], Some(path)) => fields.last_mut().unwrap().ty = format!("Ffi<{path}>"),
+            (Some(_), _, _) => return Err(format!(
+                "{name}: its tail {} is the type of its last field, or carried by it - another \
+                 unsized vstruct's - and no other", g.name)),
+            (None, [], _) => {}
+            (None, _, _) => return Err(format!(
+                "{name}: {} is a state, which only a PhantomData field names, or an embedded \
+                 unsized vstruct's", g.name)),
         }
     }
     for f in &mut fields {
@@ -1329,6 +1335,18 @@ fn parse_generics(name: &str, toks: &[Tok], i: usize) -> Result<(Vec<CGeneric>, 
         return Err(format!("{name}: type parameters are an unsized vstruct's, which has one tail"));
     }
     Ok((generics, end))
+}
+
+/// The path of @ty, if it's `PATH<.., @tail, ..>`: another unsized vstruct,
+/// its tail @tail - which makes the struct whose last field it is unsized
+/// too, with its length.
+fn embedded_vstruct(ty: &str, tail: &str) -> Option<String> {
+    let toks = tokenize(ty).ok()?;
+    let lt = toks.iter().position(|t| t.is_punct('<'))?;
+    let [Tok::Punct('<'), args @ .., Tok::Punct('>')] = &toks[lt..] else { return None };
+    split_top(args, ',').iter()
+        .any(|a| matches!(a, [Tok::Ident(n)] if n == tail))
+        .then(|| tokens_to_rust(&toks[..lt]))
 }
 
 /// Whether Rust type @ty is a PhantomData, by any path: an unsized

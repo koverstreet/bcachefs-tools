@@ -12,7 +12,7 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::data::extents::{bkey_ptrs_mut, bkey_ptrs_sc};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::{entry_type, journal_entry_type};
-use bcachefs_kernel::util::vstructs::{SelfSized, Unvalidated, UnvalidatedRef};
+use bcachefs_kernel::util::vstructs::{Ffi, SelfSized, Unvalidated};
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::POS_MIN;
 
@@ -45,7 +45,7 @@ fn jset_csum_set(fs: &Fs, j: &mut c::jset<Unvalidated>, csum_type: u32) {
 
 /// @node points at the btree_node (first bset) or btree_node_entry, whose first
 /// field is the csum; @i is the bset within it, at byte @offset from the node.
-fn bset_csum_set(fs: &Fs, node: *mut u8, i: *mut c::bset, offset: u32,
+fn bset_csum_set(fs: &Fs, node: *mut u8, i: *mut Ffi<c::bset>, offset: u32,
                  csum_type: u32, vstruct_bytes: usize) {
     let off = std::mem::size_of::<c::bch_csum>();
     let csum = unsafe {
@@ -317,22 +317,22 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
         // The node, then its entries - each as long as its bset: where the
         // bset is, and the whole's bytes and sectors
         let (bset_off, vstruct_bytes, sectors) = if first {
-            let Some(n) = UnvalidatedRef::<c::btree_node>::new(&buf[pos..]).ok() else { break };
+            let Some(n) = c::btree_node::<Unvalidated>::from_bytes(&buf[pos..]).ok() else { break };
             if n.magic.get() != bset_magic {
                 break;
             }
             format_key_u64s = n.format.key_u64s as usize;
             seq = n.keys.seq.get();
-            (pos + std::mem::offset_of!(c::btree_node, keys), n.bytes(), n.sectors(block_bits))
+            (pos + std::mem::offset_of!(Ffi<c::btree_node>, keys), n.bytes(), n.sectors(block_bits))
         } else {
-            let Some(n) = UnvalidatedRef::<c::btree_node_entry>::new(&buf[pos..]).ok() else { break };
+            let Some(n) = c::btree_node_entry::<Unvalidated>::from_bytes(&buf[pos..]).ok() else { break };
             if n.keys.seq.get() != seq {
                 break;
             }
-            (pos + std::mem::offset_of!(c::btree_node_entry, keys), n.bytes(), n.sectors(block_bits))
+            (pos + std::mem::offset_of!(Ffi<c::btree_node_entry>, keys), n.bytes(), n.sectors(block_bits))
         };
         // SAFETY: checked whole, above
-        let csum_type = unsafe { &*buf.as_ptr().add(bset_off).cast::<c::bset>() }.csum_type() as u32;
+        let csum_type = unsafe { &*buf.as_ptr().add(bset_off).cast::<Ffi<c::bset>>() }.csum_type() as u32;
         let mut modified = false;
 
         if c::bch_csum_type(csum_type).is_encryption() {
@@ -342,7 +342,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
             }
 
             let ret = unsafe {
-                btree::read::bset_encrypt(fs.raw, buf.as_mut_ptr().add(bset_off) as *mut c::bset,
+                btree::read::bset_encrypt(fs.raw, buf.as_mut_ptr().add(bset_off) as *mut Ffi<c::bset>,
                                           bset_byte_offset as u32)
             };
             if let Err(e) = ret {
@@ -354,7 +354,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
 
         // Walk packed keys in bset data region
         let key_end = pos + vstruct_bytes;
-        let mut key_pos = bset_off + std::mem::size_of::<c::bset>();
+        let mut key_pos = bset_off + std::mem::size_of::<Ffi<c::bset>>();
         while key_pos + 3 <= key_end {
             let key_u64s = buf[key_pos] as usize;
             if key_u64s == 0 {
@@ -409,7 +409,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
         if modified {
             // Re-encrypt (symmetric) if encrypted, then recompute the bset csum
             // over the btree_node (first bset) or btree_node_entry.
-            let bset = unsafe { buf.as_mut_ptr().add(bset_off) } as *mut c::bset;
+            let bset = unsafe { buf.as_mut_ptr().add(bset_off) } as *mut Ffi<c::bset>;
             if c::bch_csum_type(csum_type).is_encryption() {
                 if let Err(e) = unsafe { btree::read::bset_encrypt(fs.raw, bset, bset_byte_offset as u32) } {
                     eprintln!("error re-encrypting btree node: {e}");

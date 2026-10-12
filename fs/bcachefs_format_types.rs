@@ -2050,7 +2050,7 @@ c_enum! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bset {
+pub struct bset<S = Validated, T: ?Sized = [u64]> {
     pub seq: Le64,
 
     /*
@@ -2064,15 +2064,16 @@ pub struct bset {
 
     pub flags: Le32,
     pub version: Le16,
-    pub u64s: Le16, /* count of d[] in u64s */
+    u64s: Le16, /* count of d[] in u64s */
 
     pub start: [c::bkey_packed; 0],
-    pub _data: [u64; 0],
+    _s: PhantomData<S>,
+    pub _data: T,
 }
-vstruct!(bset, u64s);
+vstruct!(unsized bset, u64s);
 
 c_bitmask! {
-    LE32_BITMASK(struct bset, flags), strip BSET_ {
+    LE32_BITMASK(struct bset<S, T: ?Sized>, flags), strip BSET_ {
         BSET_CSUM_TYPE(0, 4),
 
         BSET_BIG_ENDIAN(4, 5),
@@ -2086,7 +2087,7 @@ c_bitmask! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct btree_node {
+pub struct btree_node<S = Validated, T: ?Sized = [u64]> {
     pub csum: c::bch_csum,
     pub magic: Le64,
 
@@ -2108,13 +2109,13 @@ pub struct btree_node {
 			u64 _data[];
 		};
 	}")]
-    pub keys: c::bset,
+    pub keys: c::bset<S, T>,
 }
-vstruct!(btree_node, keys.u64s);
-c_default!(btree_node);
+vstruct!(unsized btree_node, keys.u64s);
+c_default!(btree_node<Validated, [u64; 0]>);
 
 c_bitmask! {
-    LE64_BITMASK(struct btree_node, flags), strip BTREE_NODE_ {
+    LE64_BITMASK(struct btree_node<S, T: ?Sized>, flags), strip BTREE_NODE_ {
         BTREE_NODE_ID_LO(0, 4),
         BTREE_NODE_LEVEL(4, 8),
         BTREE_NODE_NEW_EXTENT_OVERWRITE(8, 9),
@@ -2127,7 +2128,7 @@ c_bitmask! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct btree_node_entry {
+pub struct btree_node_entry<S = Validated, T: ?Sized = [u64]> {
     pub csum: c::bch_csum,
 
     /* C's vstruct macros find u64s and _data on the entry itself: */
@@ -2139,10 +2140,10 @@ pub struct btree_node_entry {
 			u64 _data[];
 		};
 	}")]
-    pub keys: c::bset,
+    pub keys: c::bset<S, T>,
 }
-vstruct!(btree_node_entry, keys.u64s);
-c_default!(btree_node_entry);
+vstruct!(unsized btree_node_entry, keys.u64s);
+c_default!(btree_node_entry<Validated, [u64; 0]>);
 
 c_verbatim!(r#"
 _Static_assert(offsetof(struct btree_node, u64s) == offsetof(struct btree_node, keys.u64s) &&

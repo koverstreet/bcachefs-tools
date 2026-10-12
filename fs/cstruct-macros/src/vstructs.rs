@@ -205,7 +205,11 @@ pub(crate) fn unsized_impl(def: &CStructDef) -> Result<String, String> {
              // long as size_of_val(), rounded up to its alignment - would claim\n\
              assert!(::core::mem::size_of::<{elem}>() % ::core::mem::align_of::<{inst}>() == 0,\n\
                      \"{name}: its tail's elements are a multiple of its alignment long\");\n\
-             assert!(::core::mem::offset_of!({inst}, {tail}) == ::core::mem::size_of::<{inst}>(),\n\
+             // its last field - its tail, or an embedded vstruct's header,\n\
+             // which ends where that one's tail starts - ends where it does\n\
+             assert!(::core::mem::offset_of!({inst}, {tail}) + crate::types::field_size(\n\
+                         |p: *const {inst}| unsafe {{ ::core::ptr::addr_of!((*p).{tail}) }}) as usize\n\
+                     == ::core::mem::size_of::<{inst}>(),\n\
                      \"{name}: its tail starts where its header ends\");\n\
          }};\n\
          #[allow(dead_code)]\n\

@@ -30,9 +30,9 @@
 //! T::u64s().
 //!
 //! Sized types with a tail, not yet unsized - an ioctl's reply, a replicas
-//! entry, a btree node's buffer: a FlexArray, its tail an array the header
-//! counts, reached as an UnvalidatedRef (or UnvalidatedMut) of the bytes its
-//! count was checked against.
+//! entry: a FlexArray, its tail an array the header counts, reached as an
+//! UnvalidatedRef (or UnvalidatedMut) of the bytes its count was checked
+//! against.
 //!
 //! A value shorter than its type - written by an older version, before the
 //! type grew - can't be a &T at all: it's a View, reading only its own bytes,
@@ -242,19 +242,30 @@ macro_rules! vstruct {
             ::core::mem::size_of::<$crate::util::vstructs::Ffi<$t>>(), $count);
         $crate::util::vstructs::vstruct!(@unsized $t, $count);
     };
+    // counted by the header it embeds last - a btree_node's bset, its keys:
+    // the count is that header's, and its own u64s() reads it
+    (unsized $t:ident, $hdr:ident . $count:ident) => {
+        $crate::util::vstructs::vstruct!(
+            $t<$crate::util::vstructs::Validated, [<$t as $crate::util::vstructs::Unsized>::Elem; 0]>,
+            $hdr.$count);
+        $crate::util::vstructs::vstruct!(@bytes $t);
+    };
     (unsized $t:ident, $count:ident, start = $start:expr) => {
         $crate::util::vstructs::vstruct!(@impl
             $t<$crate::util::vstructs::Validated, [<$t as $crate::util::vstructs::Unsized>::Elem; 0]>,
             $start, $count);
         $crate::util::vstructs::vstruct!(@unsized $t, $count);
     };
-    (@unsized $t:ident, $count:ident) => {
+    (@bytes $t:ident) => {
         impl<S> $crate::util::vstructs::SelfSized for $t<S> {
             #[inline]
             fn bytes(&self) -> usize {
                 ::core::mem::size_of_val(self)
             }
         }
+    };
+    (@unsized $t:ident, $count:ident) => {
+        $crate::util::vstructs::vstruct!(@bytes $t);
 
         impl<S, T: ?Sized> $t<S, T> {
             /// Its count, as a usize - to read: it changes only through what
@@ -1240,7 +1251,7 @@ mod tests {
         l.set_val_u64s(2);
         assert_eq!(l.bytes(), 8 + 16);
 
-        let mut b: c::btree_node_entry = Default::default();
+        let mut b = Ffi::<c::btree_node_entry>::default();
         b.set_val_u64s(3);
         assert_eq!(b.bytes(), 16 + 24 + 24);
     }

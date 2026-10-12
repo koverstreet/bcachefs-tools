@@ -7,6 +7,7 @@ use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
 use crate::errcode::{bch_errcode, BchError};
 use crate::types::{CacheAligned, DArray, NeBytes, bits_to_longs, c_default};
+use crate::util::vstructs::Ffi;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void, CStr};
 use core::fmt;
@@ -138,7 +139,7 @@ pub struct btree {
     pub byte_aligned_fields: bool,
     pub unpack: [cs::bkey_unpack_field; cs::BKEY_NR_FIELDS as usize],
 
-    pub data: *mut cs::btree_node,
+    pub data: *mut Ffi<cs::btree_node>,
     pub aux_data: *mut c_void,
 
     /*
