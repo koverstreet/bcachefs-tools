@@ -7,19 +7,21 @@
 //! pointer to one says nothing about the bytes past it, so C trusts the
 //! count, having validated it wherever the bytes came in.
 //!
-//! Here the bound travels with the reference. A Flex<'a, T> is a &T and the
-//! bytes it may extend into: whatever holds it - a tagged_union!'s storage, a
-//! key's value, a journal buffer. What its header claims is checked against
-//! those bytes each time it's used, so a wrong count is an error, never a
-//! read past the end - and a type's statement of its layout, SelfSized or
-//! FlexArray, is a plain trait: nothing's soundness rests on it being right.
-//! What does need trusting is Plain: that any bytes are a valid value - which
+//! Here the bound travels with the pointer: a value is reached through a View
+//! of its own bytes, as many as its header says - made where those bytes are,
+//! from a buffer or from C's pointer, never by widening a &T, which reaches
+//! only as far as the T. A validated value's count is trusted, as C trusts
+//! it; bytes nothing has validated - off a device, from the kernel - are an
+//! UnvalidatedRef, its count checked against them when it's made, an overrun an
+//! error. A type's statement of its layout, SelfSized or FlexArray, is a
+//! plain trait: nothing's soundness rests on it being right. What does need
+//! trusting is Plain: that any bytes are a valid value - which
 //! #[derive(Plain)] (cstruct-macros) checks at compile time, zerocopy's
 //! FromBytes for the types we define.
 //!
-//! Bytes nothing has validated - off a device, from the kernel - are an
-//! UnvalidatedRef: its count checked against them when it's made, an overrun an
-//! error, and then it's exactly its own bytes.
+//! A sized tagged_union!'s arms - extent entries, accounting positions - are
+//! Flexes: a &T and the bytes it may extend into, the storage's, its count
+//! checked against them each time it's used.
 //!
 //! What a variable-size type is, from the most general:
 //!  - SelfSized, bytes(): its own bytes say how big it is - a #[counted_by]
@@ -33,8 +35,9 @@
 //! vstructs.h, and where it goes:
 //!  - vstruct_bytes(), replicas_entry_bytes(): SelfSized::bytes()
 //!  - a counted array - devs[]: FlexArray, Flex::tail()
-//!  - vstruct_for_each(), vstruct_next(), vstruct_last():
-//!    VStructContainer::entries(), trusting the count, as C does
+//!  - vstruct_for_each(), vstruct_next(), vstruct_last(): View::entries(),
+//!    trusting a validated count as C does, or UnvalidatedRef::entries(),
+//!    checking it
 //!
 //! And a value shorter than its type - written by an older version, before
 //! the type grew - is a View: its fields read as zero past its end, as
@@ -175,35 +178,27 @@ macro_rules! count_le {
 count_le!(Le16, Le32, Le64);
 
 /// A vstruct of entries, one after another from its start[] to its end, each
-/// as long as it says.
+/// as long as it says: walked from its bytes, which a &Self doesn't reach -
+/// View::entries() for a validated one, UnvalidatedRef::entries() for one that
+/// isn't.
 pub trait VStructContainer: VStruct {
     type Entry: SelfSized + Plain;
     /// offsetof(start)
     const START: usize;
-
-    /// Its entries: vstruct_for_each(). Trusting its count, as C does a
-    /// validated vstruct's; an entry that doesn't fit, or says it's shorter
-    /// than its own header - which would never end the walk - ends it,
-    /// rather than being read.
-    ///
-    /// XXX: technically undefined behaviour until these are proper DSTs: the
-    /// entries are read through a pointer from &self, which covers only the
-    /// header.
-    fn entries(&self) -> Entries<'_, Self::Entry> {
-        // SAFETY: its count is right - validated - so its bytes follow it;
-        // but see above
-        let bytes = unsafe { core::slice::from_raw_parts((self as *const Self).cast::<u8>(), self.bytes()) };
-        Entries { rest: bytes.get(Self::START..).unwrap_or_default(), _entry: core::marker::PhantomData }
-    }
-
-    /// entries(), mutably.
-    fn entries_mut(&mut self) -> EntriesMut<'_, Self::Entry> {
-        let len = self.bytes();
-        // SAFETY: as entries()
-        let bytes = unsafe { core::slice::from_raw_parts_mut((self as *mut Self).cast::<u8>(), len) };
-        EntriesMut { rest: bytes.get_mut(Self::START..).unwrap_or_default(), _entry: core::marker::PhantomData }
-    }
 }
+
+/// floored_by_self!(T, ..): each T is whole in every valid value of it - a
+/// header, whose count includes itself - so a View of one derefs to all of
+/// it: a container's, or an entry's.
+macro_rules! floored_by_self {
+    ($($t:ty),* $(,)?) => {
+        // SAFETY: Min is Self
+        $(unsafe impl $crate::util::vstructs::Floored for $t {
+            type Min = Self;
+        })*
+    };
+}
+pub(crate) use floored_by_self;
 
 /// vstruct!(T, u64s): T is a vstruct, @u64s its count of the u64s past its
 /// header; vstruct!(T, hdr.u64s), past the header @hdr it embeds first;
@@ -575,55 +570,6 @@ impl<'a, E: Plain + SelfSized + 'a> Iterator for UnvalidatedRefEntriesMut<'a, E>
     }
 }
 
-/// The bytes of the entry at the start of @rest, if a whole one is there:
-/// what a walk steps by.
-fn entry_bytes<E: SelfSized + Plain>(rest: &[u8]) -> Option<usize> {
-    let len = Flex::<E>::new(rest).ok()?.bytes();
-    (len >= size_of::<E>() && len <= rest.len()).then_some(len)
-}
-
-/// A vstruct's entries: VStructContainer::entries().
-pub struct Entries<'a, E> {
-    rest:   &'a [u8],
-    _entry: core::marker::PhantomData<&'a E>,
-}
-
-impl<'a, E: SelfSized + Plain + 'a> Iterator for Entries<'a, E> {
-    type Item = &'a E;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let Some(len) = entry_bytes::<E>(self.rest) else {
-            self.rest = &[];
-            return None;
-        };
-        let (e, rest) = self.rest.split_at(len);
-        self.rest = rest;
-        // SAFETY: entry_bytes() checked an E is there, aligned, and it's Plain
-        Some(unsafe { &*e.as_ptr().cast::<E>() })
-    }
-}
-
-/// A vstruct's entries, mutably: VStructContainer::entries_mut().
-pub struct EntriesMut<'a, E> {
-    rest:   &'a mut [u8],
-    _entry: core::marker::PhantomData<&'a mut E>,
-}
-
-impl<'a, E: SelfSized + Plain + 'a> Iterator for EntriesMut<'a, E> {
-    type Item = &'a mut E;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let Some(len) = entry_bytes::<E>(self.rest) else {
-            self.rest = Default::default();
-            return None;
-        };
-        let (e, rest) = core::mem::take(&mut self.rest).split_at_mut(len);
-        self.rest = rest;
-        // SAFETY: as Entries', and the entries don't overlap
-        Some(unsafe { &mut *e.as_mut_ptr().cast::<E>() })
-    }
-}
-
 impl<'a, T: SelfSized> Flex<'a, T> {
     /// Its bytes, header and tail - what C copies with vstruct_bytes() - if
     /// what holds it holds them.
@@ -738,6 +684,64 @@ impl<'a, T: Plain> View<'a, T> {
             // SAFETY: all of it is there, aligned - and any bytes are a T
             .then(|| unsafe { &*self.p.cast::<T>() })
     }
+
+    /// A pointer to it that reaches all its bytes, for C: one from a &T
+    /// reaches only as far as the T.
+    pub fn as_ptr(&self) -> *const T {
+        self.p.cast()
+    }
+}
+
+impl<'a, T: Plain + SelfSized> View<'a, T> {
+    /// The T at @p, validated - C read and checked it - and the bytes its
+    /// header says are its: made from @p, not from a &T, which reaches only
+    /// as far as the T.
+    ///
+    /// # Safety
+    /// @p points to a T whose count is right - validated - and those bytes
+    /// stay valid, and unwritten, for 'a.
+    pub unsafe fn from_validated(p: *const T) -> Self {
+        // SAFETY: the caller's
+        unsafe { Self::new(core::slice::from_raw_parts(p.cast::<u8>(), (*p).bytes())) }
+    }
+}
+
+impl<'a, C: VStructContainer + Plain> View<'a, C> {
+    /// Its entries: vstruct_for_each(), as far as its count says. Validated,
+    /// so its count and theirs are trusted, as C trusts them; each is a View
+    /// of its own bytes. One that doesn't fit, or says it's shorter than its
+    /// header - which would never end the walk - ends it, rather than being
+    /// read past.
+    pub fn entries(&self) -> ViewEntries<'a, C::Entry> {
+        let bytes = self.as_bytes();
+        let len = self.whole().map_or(0, |c| c.bytes().min(bytes.len()));
+        ViewEntries { rest: bytes[..len].get(C::START..).unwrap_or_default(), _entry: PhantomData }
+    }
+}
+
+/// A validated container's entries: View::entries().
+pub struct ViewEntries<'a, E> {
+    rest:   &'a [u8],
+    _entry: PhantomData<&'a E>,
+}
+
+impl<'a, E: SelfSized + Plain + 'a> Iterator for ViewEntries<'a, E> {
+    type Item = View<'a, E>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rest = self.rest;
+        let whole = rest.len() >= size_of::<E>() && rest.as_ptr() as usize % align_of::<E>() == 0;
+        // SAFETY: its header is there, aligned, and any bytes are an E
+        let len = whole.then(|| unsafe { &*rest.as_ptr().cast::<E>() }.bytes())
+            .filter(|&len| len >= size_of::<E>() && len <= rest.len());
+        let Some(len) = len else {
+            self.rest = &[];
+            return None;
+        };
+        let (e, rest) = rest.split_at(len);
+        self.rest = rest;
+        Some(View::new(e))
+    }
 }
 
 impl<T: Plain + Native> View<'_, T> {
@@ -782,6 +786,24 @@ impl<'a, T: Plain> ViewMut<'a, T> {
         (self.as_view().len() == size_of::<T>() && self.p as usize % align_of::<T>() == 0)
             // SAFETY: as View::whole()
             .then(|| unsafe { &mut *self.p.cast::<T>() })
+    }
+
+    /// Its bytes, to the value's end, for good: what an arm of it is over.
+    pub fn into_bytes(self) -> &'a mut [u8] {
+        // SAFETY: the value's bytes, from ours to its end - none if we're past it
+        unsafe { core::slice::from_raw_parts_mut(self.p, self.end.saturating_sub(self.at)) }
+    }
+}
+
+impl<'a, T: Plain + SelfSized> ViewMut<'a, T> {
+    /// As View::from_validated(), mutably.
+    ///
+    /// # Safety
+    /// As View::from_validated()'s, and nothing else touches those bytes for
+    /// 'a.
+    pub unsafe fn from_validated(p: *mut T) -> Self {
+        // SAFETY: the caller's
+        unsafe { Self::new(core::slice::from_raw_parts_mut(p.cast::<u8>(), (*p).bytes())) }
     }
 }
 
@@ -886,7 +908,7 @@ mod tests {
     #[test]
     fn entries_walk_variable_size_entries() {
         let buf = jset(3);
-        let j = Flex::<c::jset>::new(bytes(&buf)).unwrap();
+        let j = View::<c::jset>::new(bytes(&buf));
         let es: Vec<_> = j.entries().collect();
         assert_eq!(es.len(), 2);
         assert_eq!((es[0].u64s.get(), es[1].u64s.get()), (1, 3));
@@ -897,7 +919,7 @@ mod tests {
     #[test]
     fn entries_stop_at_an_overrun() {
         let buf = jset(4);
-        let j = Flex::<c::jset>::new(bytes(&buf)).unwrap();
+        let j = View::<c::jset>::new(bytes(&buf));
         assert_eq!(j.entries().count(), 1);
     }
 
@@ -931,7 +953,7 @@ mod tests {
         clean.set_val_u64s(hdr / 8 + 2);
         put(&mut buf, 0, &clean);
         put(&mut buf, hdr, &entry(1));
-        let clean = Flex::<c::bch_sb_field_clean>::new(bytes(&buf)).unwrap();
+        let clean = View::<c::bch_sb_field_clean>::new(bytes(&buf));
         let es: Vec<_> = clean.entries().collect();
         assert_eq!(es.len(), 1);
         assert_eq!(es[0].u64s.get(), 1);
@@ -947,7 +969,7 @@ mod tests {
         sb.u64s = Le32::new(1);
         put(&mut buf, 0, &sb);
         put(&mut buf, hdr, &c::bch_sb_field { u64s: Le32::new(0), ..Default::default() });
-        let sb = Flex::<c::bch_sb>::new(bytes(&buf)).unwrap();
+        let sb = View::<c::bch_sb>::new(bytes(&buf));
         assert_eq!(sb.entries().count(), 0);
     }
 

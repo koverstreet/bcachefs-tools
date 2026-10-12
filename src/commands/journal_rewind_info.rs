@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::c;
-use bcachefs_kernel::util::vstructs::VStructContainer;
+use bcachefs_kernel::util::vstructs::View;
 use bcachefs_kernel::opt_set;
 use chrono::{TimeZone, Utc};
 use clap::Parser;
@@ -42,16 +42,16 @@ fn jset_seq(p: &c::journal_replay) -> u64 {
 }
 
 /// A jset's first datetime entry's seconds-since-epoch, or None if absent.
-fn jset_datetime(p: &c::journal_replay) -> Option<u64> {
-    p.j.entries().find_map(|e| match e.get() {
+fn jset_datetime(j: View<'_, c::jset>) -> Option<u64> {
+    j.entries().find_map(|e| match e.typed() {
         Ok(c::JsetEntryRef::datetime(d)) => Some(d.seconds().get()),
         _ => None,
     })
 }
 
 /// A jset's first rewind_limit entry's seq, or None if absent.
-fn jset_rewind_limit(p: &c::journal_replay) -> Option<u64> {
-    p.j.entries().find_map(|e| match e.get() {
+fn jset_rewind_limit(j: View<'_, c::jset>) -> Option<u64> {
+    j.entries().find_map(|e| match e.typed() {
         Ok(c::JsetEntryRef::rewind_limit(r)) => Some(r.seq().get()),
         _ => None,
     })
@@ -122,17 +122,18 @@ fn cmd_journal_rewind_info(cli: Cli) -> Result<()> {
     }
 
     // Find the most recent entry (max seq).
-    let latest_p: &c::journal_replay = entries.iter()
-        .map(|&ep| unsafe { &*ep })
-        .max_by_key(|p| jset_seq(p))
+    let latest = *entries.iter()
+        .max_by_key(|&&ep| unsafe { jset_seq(&*ep) })
         .unwrap();
-    let latest_seq = jset_seq(latest_p);
-    let latest_dt = jset_datetime(latest_p);
+    // SAFETY: from the journal read, live as long as je is
+    let latest_j = unsafe { c::journal_replay::jset(latest) };
+    let latest_seq = latest_j.seq.get();
+    let latest_dt = jset_datetime(latest_j);
 
     // The rewind floor comes from the latest entry's rewind_limit sub-entry.
     // If absent (older fs format / not yet written): fall back to lowest
     // seq present on disk and warn.
-    let (floor_seq, fell_back) = match jset_rewind_limit(latest_p) {
+    let (floor_seq, fell_back) = match jset_rewind_limit(latest_j) {
         Some(s) => (s, false),
         None => {
             let lo = entries.iter()
@@ -171,7 +172,8 @@ fn cmd_journal_rewind_info(cli: Cli) -> Result<()> {
         if p.j.no_flush() {
             continue;
         }
-        candidates.push((s, jset_datetime(p)));
+        // SAFETY: as latest_j's
+        candidates.push((s, jset_datetime(unsafe { c::journal_replay::jset(ep) })));
     }
     candidates.sort_by_key(|(s, _)| *s);
 

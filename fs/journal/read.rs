@@ -1,6 +1,7 @@
 use crate::c;
 use crate::data::checksum::BCH_NONCE_JOURNAL;
 use crate::types::Le32;
+use crate::util::vstructs::View;
 
 #[allow(non_camel_case_types)]
 pub type journal_entry_type = c::bch_jset_entry_type;
@@ -19,6 +20,20 @@ impl c::jset {
                 Le32::new(BCH_NONCE_JOURNAL),
             ],
         }
+    }
+}
+
+impl c::journal_replay {
+    /// @p's jset, and the bytes its header says it has: a replay is
+    /// allocated to hold them, past the struct's end - which a
+    /// &journal_replay doesn't reach.
+    ///
+    /// # Safety
+    /// @p is a replay from the journal read, which validated its jset, live
+    /// for 'a.
+    pub unsafe fn jset<'a>(p: *const Self) -> View<'a, c::jset> {
+        // SAFETY: the caller's
+        unsafe { View::from_validated(&raw const (*p).j) }
     }
 }
 
@@ -41,15 +56,15 @@ pub fn entry_btree_id(entry: &c::jset_entry) -> Option<c::btree_id> {
 // ---- jset_entry_log helpers ----
 
 /// A log entry's message, its NUL padding trimmed - empty for any other entry.
-pub fn entry_log_msg(entry: &c::jset_entry) -> &[u8] {
-    let Ok(c::JsetEntryRef::log(l)) = entry.get() else { return &[] };
+pub fn entry_log_msg<'a>(entry: View<'a, c::jset_entry>) -> &'a [u8] {
+    let Ok(c::JsetEntryRef::log(l)) = entry.typed() else { return &[] };
     let data = l.as_bytes().get(core::mem::offset_of!(c::jset_entry_log, d)..).unwrap_or_default();
     // Trim trailing nulls
     let len = data.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
     &data[..len]
 }
 
-pub fn entry_log_str_eq(entry: &c::jset_entry, s: &str) -> bool {
+pub fn entry_log_str_eq(entry: View<'_, c::jset_entry>, s: &str) -> bool {
     let msg = entry_log_msg(entry);
     msg.len() >= s.len() && &msg[..s.len()] == s.as_bytes()
 }

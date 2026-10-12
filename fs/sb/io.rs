@@ -226,9 +226,10 @@ c::BCH_PERSISTENT_COUNTERS!(counter_table);
 /// its header says are its - one written before F grew reads as zero past
 /// them, as C's bch2_sb_field_get_minsize() would have grown it to.
 pub fn sb_field_get<F: SbField>(sb: &c::bch_sb) -> Option<View<'_, F>> {
+    let f = unsafe { c::bch2_sb_field_get_id(sb as *const _ as *mut _, F::FIELD_TYPE) };
     // SAFETY: C's walk of the sections the superblock's count says it has -
-    // validated, so they're there
-    unsafe { c::bch2_sb_field_get_id(sb as *const _ as *mut _, F::FIELD_TYPE).as_ref() }?.arm::<F>()
+    // validated, so the section and its bytes are there
+    (!f.is_null()).then(|| unsafe { View::from_validated(f) })?.arm::<F>()
 }
 
 /// sb_field_get(), to edit: a field past the section's end is a set()
@@ -238,8 +239,9 @@ pub fn sb_field_get<F: SbField>(sb: &c::bch_sb) -> Option<View<'_, F>> {
 /// Taking `&mut bch_sb_handle` ensures exclusive access and prevents
 /// dangling references after resize.
 pub fn sb_field_get_mut<F: SbField>(disk_sb: &mut c::bch_sb_handle) -> Option<ViewMut<'_, F>> {
+    let f = unsafe { c::bch2_sb_field_get_id(disk_sb.sb, F::FIELD_TYPE) };
     // SAFETY: as sb_field_get()'s
-    unsafe { c::bch2_sb_field_get_id(disk_sb.sb, F::FIELD_TYPE).as_mut() }?.arm_mut::<F>()
+    (!f.is_null()).then(|| unsafe { ViewMut::from_validated(f) })?.arm_mut::<F>()
 }
 
 /// Resize the section of type @F to @u64s, making it if there's none: the
@@ -249,8 +251,9 @@ pub fn sb_field_resize<F: SbField>(
     disk_sb: &mut c::bch_sb_handle,
     u64s: u32,
 ) -> Option<ViewMut<'_, F>> {
+    let f = unsafe { c::bch2_sb_field_resize_id(disk_sb, F::FIELD_TYPE, u64s) };
     // SAFETY: C's resize, which reallocates the superblock if it has to
-    unsafe { c::bch2_sb_field_resize_id(disk_sb, F::FIELD_TYPE, u64s).as_mut() }?.arm_mut::<F>()
+    (!f.is_null()).then(|| unsafe { ViewMut::from_validated(f) })?.arm_mut::<F>()
 }
 
 /// The section of type @F, made or grown to at least @min_u64s: as
@@ -259,8 +262,9 @@ pub fn sb_field_get_minsize<F: SbField>(
     disk_sb: &mut c::bch_sb_handle,
     min_u64s: u32,
 ) -> Option<ViewMut<'_, F>> {
+    let f = unsafe { c::bch2_sb_field_get_minsize_id(disk_sb, F::FIELD_TYPE, min_u64s) };
     // SAFETY: as sb_field_resize()'s
-    unsafe { c::bch2_sb_field_get_minsize_id(disk_sb, F::FIELD_TYPE, min_u64s).as_mut() }?.arm_mut::<F>()
+    (!f.is_null()).then(|| unsafe { ViewMut::from_validated(f) })?.arm_mut::<F>()
 }
 
 // ---------------------------------------------------------------------------
@@ -489,22 +493,34 @@ impl SbAccess for SbBuf {
 mod tests {
     use crate::c;
     use crate::types::Le32;
-    use crate::util::vstructs::VStruct;
+    use crate::util::vstructs::{VStruct, View};
+
+    /// @buf as a superblock field of type @ty, @u64s long - its header written
+    /// - and the View of it a superblock's walk would give: as many bytes as
+    /// it says.
+    fn field(buf: &mut [u64], ty: c::bch_sb_field_type, u64s: usize) -> View<'_, c::bch_sb_field> {
+        let f = buf.as_mut_ptr().cast::<c::bch_sb_field>();
+        // SAFETY: u64s, which any bytes are, aligned for a bch_sb_field, and
+        // as many as u64s says
+        unsafe {
+            (*f).set_val_u64s(u64s);
+            (*f).type_ = Le32::new(ty.0);
+            View::from_validated(f)
+        }
+    }
 
     /// A superblock field is the section its type says - and one this code
     /// doesn't know is its type, as an error.
     #[test]
     fn sb_field_get() {
+        type T = c::bch_sb_field_type;
         let mut buf = [0u64; 4];
-        // SAFETY: u64s, which any bytes are, aligned for a bch_sb_field
-        let f = unsafe { &mut *buf.as_mut_ptr().cast::<c::bch_sb_field>() };
-        f.set_val_u64s(3);
 
-        f.type_ = Le32::new(c::bch_sb_field_type::BCH_SB_FIELD_journal.0);
-        assert!(matches!(f.get(), Ok(c::BchSbFieldRef::journal(j)) if j.field().u64s().get() == 3));
+        let f = field(&mut buf, T::BCH_SB_FIELD_journal, 3);
+        assert!(matches!(f.typed(), Ok(c::BchSbFieldRef::journal(j)) if j.field().u64s().get() == 3));
 
-        f.type_ = Le32::new(c::bch_sb_field_type::BCH_SB_FIELD_NR.0);
-        assert!(matches!(f.get(), Err(t) if t == c::bch_sb_field_type::BCH_SB_FIELD_NR));
+        let f = field(&mut buf, T::BCH_SB_FIELD_NR, 3);
+        assert!(matches!(f.typed(), Err(t) if t == T::BCH_SB_FIELD_NR));
     }
 
     /// An ext section from before btrees_lost_data, 88 bytes, is an ext
@@ -515,12 +531,9 @@ mod tests {
         let mut buf = [u64::MAX; 16];
         buf[..11].fill(0);
         buf[3] = 0x5a;                          // errors_silent[0]
-        // SAFETY: u64s, which any bytes are, aligned for a bch_sb_field
-        let f = unsafe { &mut *buf.as_mut_ptr().cast::<c::bch_sb_field>() };
-        f.set_val_u64s(11);
-        f.type_ = Le32::new(c::bch_sb_field_type::BCH_SB_FIELD_ext.0);
+        let f = field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_ext, 11);
 
-        let Ok(c::BchSbFieldRef::ext(e)) = f.get() else { panic!("an ext section") };
+        let Ok(c::BchSbFieldRef::ext(e)) = f.typed() else { panic!("an ext section") };
         assert_eq!(e.errors_silent().get()[0], 0x5a);
         assert_eq!(e.btrees_lost_data().get(), 0);
         assert_eq!(e.btrees_clean().get(), 0);

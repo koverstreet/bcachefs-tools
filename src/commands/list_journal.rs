@@ -7,7 +7,7 @@ use bcachefs_kernel::journal::{
     entry_type_is_known, journal_entry_type,
 };
 use bcachefs_kernel::opt_set;
-use bcachefs_kernel::util::vstructs::{SelfSized, VStruct, VStructContainer};
+use bcachefs_kernel::util::vstructs::{SelfSized, VStruct, View};
 use clap::Parser;
 
 use bcachefs_kernel::util::printbuf::Printbuf;
@@ -48,8 +48,8 @@ fn entry_is_transaction_start(entry: &c::jset_entry) -> bool {
         && entry.level == 0
 }
 
-fn entry_is_log_msg(entry: &c::jset_entry) -> bool {
-    if !(entry_type(entry) == journal_entry_type::log
+fn entry_is_log_msg(entry: View<'_, c::jset_entry>) -> bool {
+    if !(entry_type(&entry) == journal_entry_type::log
         && entry.level != 0)
     {
         return false;
@@ -151,7 +151,7 @@ fn entry_matches_btree_filter(f: &JournalFilter, entry: &c::jset_entry) -> bool 
 /// Check if any entry in the transaction (from start+1 to end) matches btree filter.
 fn transaction_matches_btree_filter(
     f: &JournalFilter,
-    entries: &[&c::jset_entry],
+    entries: &[View<'_, c::jset_entry>],
 ) -> bool {
     entries.iter().skip(1).any(|e| {
         entry_is_print_key(e) && entry_matches_btree_filter(f, e)
@@ -180,25 +180,25 @@ fn bkey_matches_range(
 }
 
 fn entry_matches_range(
-    entry: &c::jset_entry,
+    entry: View<'_, c::jset_entry>,
     range: &BbposRange,
 ) -> bool {
     if entry.level != 0 {
         return false;
     }
-    let t = entry_type(entry);
+    let t = entry_type(&entry);
     if t != journal_entry_type::btree_keys
         && t != journal_entry_type::overwrite
     {
         return false;
     }
 
-    entry.entries().any(|k| bkey_matches_range(entry, k, range))
+    entry.entries().any(|k| bkey_matches_range(&entry, &k, range))
 }
 
 fn transaction_matches_transaction_filter(
     f: &TransactionKeyFilter,
-    entries: &[&c::jset_entry],
+    entries: &[View<'_, c::jset_entry>],
 ) -> bool {
     let has_positive = f.ranges.iter().any(|(sign, _)| *sign >= 0);
     let has_negative = f.ranges.iter().any(|(sign, _)| *sign < 0);
@@ -206,7 +206,7 @@ fn transaction_matches_transaction_filter(
     // Check negative ranges first - must NOT match any
     if has_negative {
         for (sign, range) in &f.ranges {
-            if *sign < 0 && entries.iter().skip(1).any(|e| entry_matches_range(e, range)) {
+            if *sign < 0 && entries.iter().skip(1).any(|e| entry_matches_range(*e, range)) {
                 return false;
             }
         }
@@ -215,7 +215,7 @@ fn transaction_matches_transaction_filter(
     // Check positive ranges - must match at least one (if any exist)
     if has_positive {
         for (sign, range) in &f.ranges {
-            if *sign >= 0 && entries.iter().skip(1).any(|e| entry_matches_range(e, range)) {
+            if *sign >= 0 && entries.iter().skip(1).any(|e| entry_matches_range(*e, range)) {
                 return true;
             }
         }
@@ -225,14 +225,14 @@ fn transaction_matches_transaction_filter(
     true
 }
 
-fn entry_matches_msg_filter(f: &TransactionMsgFilter, entry: &c::jset_entry) -> bool {
+fn entry_matches_msg_filter(f: &TransactionMsgFilter, entry: View<'_, c::jset_entry>) -> bool {
     f.patterns.iter().any(|p| entry_log_str_eq(entry, p))
 }
 
-fn entry_is_log_only(entries: &[&c::jset_entry]) -> bool {
+fn entry_is_log_only(entries: &[View<'_, c::jset_entry>]) -> bool {
     let mut have_log = false;
     for e in entries.iter().skip(1) {
-        if e.u64s != 0 && !entry_is_log_msg(e) {
+        if e.u64s != 0 && !entry_is_log_msg(*e) {
             return false;
         }
         have_log = true;
@@ -240,15 +240,15 @@ fn entry_is_log_only(entries: &[&c::jset_entry]) -> bool {
     have_log
 }
 
-fn entry_has_log(entries: &[&c::jset_entry]) -> bool {
-    entries.iter().skip(1).any(|e| entry_is_log_msg(e))
+fn entry_has_log(entries: &[View<'_, c::jset_entry>]) -> bool {
+    entries.iter().skip(1).any(|e| entry_is_log_msg(*e))
 }
 
 fn should_print_transaction(
     f: &JournalFilter,
-    entries: &[&c::jset_entry],
+    entries: &[View<'_, c::jset_entry>],
 ) -> bool {
-    debug_assert!(entry_type(entries[0]) == journal_entry_type::log);
+    debug_assert!(entry_type(&entries[0]) == journal_entry_type::log);
 
     if f.log && entry_is_log_only(entries) {
         return true;
@@ -342,16 +342,16 @@ fn journal_entry_indent(entry: &c::jset_entry) -> u32 {
     }
 }
 
-fn journal_entry_keys_noval_to_text(out: &mut Printbuf, entry: &c::jset_entry) {
+fn journal_entry_keys_noval_to_text(out: &mut Printbuf, entry: View<'_, c::jset_entry>) {
     for k in entry.entries() {
-        let t = entry_type(entry);
+        let t = entry_type(&entry);
         if entry_type_is_known(t) {
             unsafe { c::bch2_prt_jset_entry_type(out.as_raw(), t) };
         } else {
             write!(out, "(unknown jset entry {})", entry.type_);
         }
         write!(out, ": ");
-        if let Some(btree) = entry_btree_id(entry) {
+        if let Some(btree) = entry_btree_id(&entry) {
             unsafe {
                 c::bch2_btree_id_level_to_text(out.as_raw(), btree, entry.level as u32);
             }
@@ -371,13 +371,13 @@ fn print_one_entry(
     c_fs: *mut c::bch_fs,
     f: &JournalFilter,
     p: &c::journal_replay,
-    entry: &c::jset_entry,
+    entry: View<'_, c::jset_entry>,
 ) {
-    if entry_is_print_key(entry) && entry.u64s == 0 {
+    if entry_is_print_key(&entry) && entry.u64s == 0 {
         return;
     }
 
-    if entry_is_print_key(entry) && !entry_matches_btree_filter(f, entry) {
+    if entry_is_print_key(&entry) && !entry_matches_btree_filter(f, &entry) {
         return;
     }
 
@@ -387,7 +387,7 @@ fn print_one_entry(
         write!(out, "{RED}");
     }
 
-    let mut ind = out.indent(journal_entry_indent(entry));
+    let mut ind = out.indent(journal_entry_indent(&entry));
 
     if f.print_offset {
         // Compute offset of entry._data relative to p.j._data
@@ -397,11 +397,11 @@ fn print_one_entry(
         write!(ind, "{offset:4} ");
     }
 
-    if !f.bkey_val && entry_is_print_key(entry) {
+    if !f.bkey_val && entry_is_print_key(&entry) {
         journal_entry_keys_noval_to_text(&mut ind, entry);
     } else {
         unsafe {
-            c::bch2_journal_entry_to_text(ind.as_raw(), c_fs, entry as *const _ as *mut _);
+            c::bch2_journal_entry_to_text(ind.as_raw(), c_fs, entry.as_ptr() as *mut _);
         }
         ind.newline();
     }
@@ -413,7 +413,8 @@ fn print_one_entry(
     }
 }
 
-fn journal_replay_print(c_fs: *mut c::bch_fs, f: &JournalFilter, p: &c::journal_replay) {
+fn journal_replay_print(c_fs: *mut c::bch_fs, f: &JournalFilter, p: &c::journal_replay,
+                        j: View<'_, c::jset>) {
     let mut buf = Printbuf::new();
     let seq = p.j.seq.get();
     let blacklisted = p.ignore_blacklisted
@@ -428,11 +429,11 @@ fn journal_replay_print(c_fs: *mut c::bch_fs, f: &JournalFilter, p: &c::journal_
             seq,
         );
 
-        for entry in p.j.entries() {
-            if entry_type(entry) == journal_entry_type::datetime {
+        for entry in j.entries() {
+            if entry_type(&entry) == journal_entry_type::datetime {
                 unsafe {
                     c::bch2_journal_entry_to_text(
-                        buf.as_raw(), c_fs, entry as *const _ as *mut _,
+                        buf.as_raw(), c_fs, entry.as_ptr() as *mut _,
                     );
                 }
                 break;
@@ -445,13 +446,13 @@ fn journal_replay_print(c_fs: *mut c::bch_fs, f: &JournalFilter, p: &c::journal_
     }
 
     // Collect all entries for this jset
-    let all_entries: Vec<&c::jset_entry> = p.j.entries().collect();
+    let all_entries: Vec<View<'_, c::jset_entry>> = j.entries().collect();
 
     if !f.filtering {
         journal_entry_header_to_text(&mut buf, c_fs, p, blacklisted);
 
         if !f.headers_only {
-            for entry in &all_entries {
+            for &entry in &all_entries {
                 print_one_entry(&mut buf, c_fs, f, p, entry);
             }
         }
@@ -465,7 +466,7 @@ fn journal_replay_print(c_fs: *mut c::bch_fs, f: &JournalFilter, p: &c::journal_
         let mut i = 0;
         while i < all_entries.len() {
             // Skip to next transaction start
-            while i < all_entries.len() && !entry_is_transaction_start(all_entries[i]) {
+            while i < all_entries.len() && !entry_is_transaction_start(&all_entries[i]) {
                 i += 1;
             }
             if i >= all_entries.len() {
@@ -476,8 +477,8 @@ fn journal_replay_print(c_fs: *mut c::bch_fs, f: &JournalFilter, p: &c::journal_
             let t_start = i;
             i += 1;
             while i < all_entries.len()
-                && !entry_is_transaction_start(all_entries[i])
-                && !entry_is_non_transaction(all_entries[i])
+                && !entry_is_transaction_start(&all_entries[i])
+                && !entry_is_non_transaction(&all_entries[i])
             {
                 i += 1;
             }
@@ -490,7 +491,7 @@ fn journal_replay_print(c_fs: *mut c::bch_fs, f: &JournalFilter, p: &c::journal_
                     printed_header = true;
                 }
 
-                for entry in t_entries {
+                for &entry in t_entries {
                     print_one_entry(&mut buf, c_fs, f, p, entry);
                 }
             }
@@ -886,7 +887,8 @@ pub(crate) fn list_journal_run(
             continue;
         }
 
-        journal_replay_print(c_fs, &f, p);
+        // SAFETY: from the journal read, live as long as je is
+        journal_replay_print(c_fs, &f, p, unsafe { c::journal_replay::jset(ep) });
     }
 
     Ok(())

@@ -72,7 +72,7 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
-use crate::util::vstructs::{vstruct, vstruct_container, FlexArray};
+use crate::util::vstructs::{floored_by_self, vstruct, vstruct_container, FlexArray};
 use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, tagged_union, CStruct, Plain, TypeInfo, View};
 #[cfg(__KERNEL__)]
 use cstruct_macros::c_typedef;
@@ -1989,6 +1989,9 @@ pub struct jset {
 }
 vstruct!(jset, u64s);
 vstruct_container!(jset, c::jset_entry);
+
+/* The containers and their entries: each one's header is whole in all of them. */
+floored_by_self!(bkey_i, jset_entry, jset, bch_sb_field, bch_sb_field_clean, bch_sb);
 
 c_bitmask! {
     LE32_BITMASK(struct jset, flags), strip JSET_ {

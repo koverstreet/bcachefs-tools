@@ -72,14 +72,15 @@
 //!
 //! Or, `unsized`, that storage is a header its arms embed and run past, as
 //! far as its count says - a superblock field's: SelfSized. Then what's
-//! generated is the Ref enum, arm_at(), ArmOf, and get() over the bytes the
-//! header's count says are the arm's - trusting it, as
-//! VStructContainer::entries() does. An arm in those bytes may be shorter
+//! generated is the Ref enum, arm_at(), ArmOf, and, on a View of the storage
+//! - which has its bytes, where a &storage reaches only the header - typed():
+//! the arm its tag selects, over those bytes. An arm there may be shorter
 //! than its type - written by an older version, before the type grew - so
 //! it's a crate::util::vstructs::View, not a Flex: its fields past the end
 //! read as zero, and each arm's type derives Plain and View. arm::<A>() is
-//! get() for one arm: A's View, if the tag is A's - and arm_mut::<A>() its
-//! ViewMut.
+//! typed() for one arm: A's View, if the tag is A's - and arm_mut::<A>(), on
+//! a ViewMut, its ViewMut. The storage is Floored by itself: its header is
+//! whole in every one.
 //!
 //! The arms come from an x-macro list: tagged_union! hands the declaration to
 //! it - LIST!(cstruct_macros::__tagged_union [decl]) - and the list calls
@@ -461,11 +462,14 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                               }}\n",
                              a.value, a.name))
             .collect();
+        // the Determinant over the storage itself: in the View impls, Self is
+        // the View
+        let det_s = format!("<{determinant} as {det_trait}<{s_ty}>>");
         return with_defs(defs, name, &format!(
             "{storage}\
              /// One of {name}'s arms, with the bytes its header says are its - as\n\
-             /// many as there are, for one written before its type grew: what\n\
-             /// {name}::get() gives.\n\
+             /// many as there are, for one written before its type grew: what a\n\
+             /// View of {name}'s typed() gives.\n\
              #[allow(non_camel_case_types, dead_code)]\n\
              #[derive(Clone, Copy)]\n\
              {vis} enum {en}Ref<'a> {{\n{by_view}}}\n\
@@ -477,56 +481,43 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                      {tag_enum}({det}::get(self) as _)\n\
                  }}\n\
                  \n\
-                 /// The arm the tag selects, over the bytes its count says are its -\n\
-                 /// trusted, as VStructContainer::entries() is: Err(the tag) if it isn't\n\
-                 /// one of ours. One shorter than its type is an older version, its\n\
-                 /// missing fields zero - which a validated count is what makes so.\n\
-                 ///\n\
-                 /// XXX: technically undefined behaviour until these are proper DSTs: the\n\
-                 /// arm is read through a pointer from &self, which covers only the header.\n\
-                 #[allow(dead_code)]\n\
-                 {vis} fn get(&self) -> Result<{en}Ref<'_>, {tag_enum}> {{\n\
-                     let t: {tag_ty} = {det}::get(self);\n\
-                     Self::arm_at(t, self.arm_bytes()).ok_or({tag_enum}(t as _))\n\
-                 }}\n\
-                 \n\
-                 /// The arm, if the tag is @A's: get(), for one arm.\n\
-                 #[allow(dead_code)]\n\
-                 {vis} fn arm<A>(&self) -> Option<{view}<'_, A>>\n\
-                 where\n\
-                     A: {arm_of}<Self, Tag = {tag_ty}> + crate::util::vstructs::Plain,\n\
-                 {{\n\
-                     ({det}::get(self) == A::TAG).then(|| {view}::new(self.arm_bytes()))\n\
-                 }}\n\
-                 \n\
-                 /// arm(), to edit: a field past its end is a set() error.\n\
-                 #[allow(dead_code)]\n\
-                 {vis} fn arm_mut<A>(&mut self) -> Option<{view}Mut<'_, A>>\n\
-                 where\n\
-                     A: {arm_of}<Self, Tag = {tag_ty}> + crate::util::vstructs::Plain,\n\
-                 {{\n\
-                     let len = crate::util::vstructs::SelfSized::bytes(self);\n\
-                     ({det}::get(self) == A::TAG).then(|| {{\n\
-                         // SAFETY: as arm_bytes()'s\n\
-                         let b = unsafe {{ ::core::slice::from_raw_parts_mut((self as *mut Self).cast::<u8>(), len) }};\n\
-                         {view}Mut::new(b)\n\
-                     }})\n\
-                 }}\n\
-                 \n\
-                 /// Its bytes, as many as its count says: get()'s.\n\
-                 fn arm_bytes(&self) -> &[u8] {{\n\
-                     let len = crate::util::vstructs::SelfSized::bytes(self);\n\
-                     // SAFETY: its count is right - validated - so its bytes follow it;\n\
-                     // but see get()\n\
-                     unsafe {{ ::core::slice::from_raw_parts((self as *const Self).cast::<u8>(), len) }}\n\
-                 }}\n\
-                 \n\
                  /// The arm @tag selects, at the start of @b - as much of it as they\n\
                  /// hold: None if @tag isn't one of ours.\n\
                  #[allow(dead_code)]\n\
                  {vis} fn arm_at<'a>(tag: {tag_ty}, b: &'a [u8]) -> Option<{en}Ref<'a>> {{\n\
                      {views}\
                      None\n\
+                 }}\n\
+             }}\n\
+             \n\
+             impl<'a> {view}<'a, {s_ty}> {{\n\
+                 /// The arm its tag selects, over its bytes - as many as its count\n\
+                 /// says: Err(the tag) if it isn't one of ours. One shorter than its\n\
+                 /// type is an older version, its missing fields zero.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn typed(&self) -> Result<{en}Ref<'a>, {tag_enum}> {{\n\
+                     let t: {tag_ty} = {det_s}::get(&**self);\n\
+                     <{s_ty}>::arm_at(t, self.as_bytes()).ok_or({tag_enum}(t as _))\n\
+                 }}\n\
+                 \n\
+                 /// The arm, if the tag is @A's: typed(), for one arm.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn arm<A>(&self) -> Option<{view}<'a, A>>\n\
+                 where\n\
+                     A: {arm_of}<{s_ty}, Tag = {tag_ty}> + crate::util::vstructs::Plain,\n\
+                 {{\n\
+                     ({det_s}::get(&**self) == A::TAG).then(|| {view}::new(self.as_bytes()))\n\
+                 }}\n\
+             }}\n\
+             \n\
+             impl<'a> {view}Mut<'a, {s_ty}> {{\n\
+                 /// arm(), to edit, for good: a field past its end is a set() error.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn arm_mut<A>(self) -> Option<{view}Mut<'a, A>>\n\
+                 where\n\
+                     A: {arm_of}<{s_ty}, Tag = {tag_ty}> + crate::util::vstructs::Plain,\n\
+                 {{\n\
+                     ({det_s}::get(&*self.as_view()) == A::TAG).then(|| {view}Mut::new(self.into_bytes()))\n\
                  }}\n\
              }}\n\
              \n\
