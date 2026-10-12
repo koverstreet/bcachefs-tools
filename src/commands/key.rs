@@ -135,7 +135,8 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
 /// Caller must hold sb_lock.
 unsafe fn set_crypt_key(fs: &Fs, key: c::bch_encrypted_key) {
     let disk_sb = &mut (*fs.raw).disk_sb;
-    let crypt: &mut c::bch_sb_field_crypt = bcachefs_kernel::sb::io::sb_field_get_mut(disk_sb)
+    let crypt = bcachefs_kernel::sb::io::sb_field_get_mut::<c::bch_sb_field_crypt>(disk_sb)
+        .and_then(|v| v.whole_mut())
         .expect("filesystem has no crypt field");
     crypt.key = key;
 }
@@ -147,7 +148,8 @@ unsafe fn set_crypt_key(fs: &Fs, key: c::bch_encrypted_key) {
 /// Caller must hold sb_lock.
 unsafe fn init_crypt_kdf(fs: &Fs) {
     let disk_sb = &mut (*fs.raw).disk_sb;
-    let crypt: &mut c::bch_sb_field_crypt = bcachefs_kernel::sb::io::sb_field_get_mut(disk_sb)
+    let crypt = bcachefs_kernel::sb::io::sb_field_get_mut::<c::bch_sb_field_crypt>(disk_sb)
+        .and_then(|v| v.whole_mut())
         .expect("filesystem has no crypt field");
     c::bch_crypt_kdf_init(crypt);
 }

@@ -2,7 +2,7 @@ use crate::c;
 use crate::c::{bch_member, bch_sb, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
 use crate::sb::members;
 use crate::types::ArmOf;
-use crate::util::vstructs::{Plain, SelfSized, View};
+use crate::util::vstructs::{Plain, SelfSized, View, ViewMut};
 
 /// A superblock section's type: an arm of tagged_union! bch_sb_field, which
 /// gives its field type - Plain, so a View of a short one reads as zero
@@ -102,18 +102,19 @@ impl bch_sb_handle {
         sb_field_get(self.sb())
     }
 
-    /// Get a typed mutable reference to a superblock field, or None if absent.
-    pub fn field_mut<F: SbField>(&mut self) -> Option<&mut F> {
+    /// Its section of type @F, to edit: sb_field_get_mut().
+    pub fn field_mut<F: SbField>(&mut self) -> Option<ViewMut<'_, F>> {
         sb_field_get_mut(self)
     }
 
-    /// Resize a superblock field to `u64s` 64-bit words.
-    pub fn field_resize<F: SbField>(&mut self, u64s: u32) -> Option<&mut F> {
+    /// Resize a superblock field to `u64s` 64-bit words: sb_field_resize().
+    pub fn field_resize<F: SbField>(&mut self, u64s: u32) -> Option<ViewMut<'_, F>> {
         sb_field_resize(self, u64s)
     }
 
-    /// Get or create a superblock field with at least `min_u64s` size.
-    pub fn field_get_minsize<F: SbField>(&mut self, min_u64s: u32) -> Option<&mut F> {
+    /// Get or create a superblock field with at least `min_u64s` size:
+    /// sb_field_get_minsize().
+    pub fn field_get_minsize<F: SbField>(&mut self, min_u64s: u32) -> Option<ViewMut<'_, F>> {
         sb_field_get_minsize(self, min_u64s)
     }
 
@@ -159,24 +160,24 @@ impl bch_sb_handle {
         unsafe { core::slice::from_raw_parts_mut(self.sb as *mut u8, bytes) }
     }
 
-    /// Get a mutable reference to a single member entry by device index.
-    ///
-    /// This is the simple accessor for one-shot field mutation. For
-    /// iteration, use `members_v2_mut()`.
+    /// Member @idx, to edit: None if there's no such member in the section,
+    /// or it's shorter than a bch_member - written before it grew - which a
+    /// write to would run past, into the next member.
     pub fn member_mut(&mut self, idx: u32) -> Option<&mut bch_member> {
         let nr = self.sb().nr_devices as u32;
-        if idx >= nr { return None; }
+        let mi = self.field::<c::bch_sb_field_members_v2>()?;
+        let member_bytes = mi.member_bytes().get() as usize;
+        let end = core::mem::offset_of!(c::bch_sb_field_members_v2, _members) + (idx as usize + 1) * member_bytes;
+        if idx >= nr || member_bytes < size_of::<bch_member>() || end > mi.as_bytes().len() {
+            return None;
+        }
+        // SAFETY: the member's in the section, all of it
         unsafe { Some(&mut *c::bch2_members_v2_get_mut(self.sb, idx as i32)) }
     }
 
     /// Read-only, bounds-checked access to members_v2.
     pub fn members_v2(&self) -> Option<members::MembersV2<'_>> {
         members::members_v2(self.sb())
-    }
-
-    /// Mutable, bounds-checked access to members_v2.
-    pub fn members_v2_mut(&mut self) -> Option<members::MembersV2Mut<'_>> {
-        members::members_v2_mut(self)
     }
 
     /// Read-only, bounds-checked access to members_v1.
@@ -230,40 +231,36 @@ pub fn sb_field_get<F: SbField>(sb: &c::bch_sb) -> Option<View<'_, F>> {
     unsafe { c::bch2_sb_field_get_id(sb as *const _ as *mut _, F::FIELD_TYPE).as_ref() }?.arm::<F>()
 }
 
-/// Get a typed mutable reference to a superblock field via handle.
+/// sb_field_get(), to edit: a field past the section's end is a set()
+/// error, not a write it won't carry - whole_mut() for all of it, if it's
+/// all there.
 ///
 /// Taking `&mut bch_sb_handle` ensures exclusive access and prevents
 /// dangling references after resize.
-pub fn sb_field_get_mut<F: SbField>(disk_sb: &mut c::bch_sb_handle) -> Option<&mut F> {
-    unsafe {
-        let ptr = c::bch2_sb_field_get_id(disk_sb.sb, F::FIELD_TYPE);
-        if ptr.is_null() { None } else { Some(&mut *(ptr as *mut F)) }
-    }
+pub fn sb_field_get_mut<F: SbField>(disk_sb: &mut c::bch_sb_handle) -> Option<ViewMut<'_, F>> {
+    // SAFETY: as sb_field_get()'s
+    unsafe { c::bch2_sb_field_get_id(disk_sb.sb, F::FIELD_TYPE).as_mut() }?.arm_mut::<F>()
 }
 
-/// Resize a typed superblock field.
-///
-/// Returns the field at its (possibly new) location. The `&mut` borrow on
-/// the handle ensures no stale references can exist.
+/// Resize the section of type @F to @u64s, making it if there's none: the
+/// section, at its (possibly new) location - whole_mut() if that's all of F.
+/// The `&mut` borrow on the handle ensures no stale references can exist.
 pub fn sb_field_resize<F: SbField>(
     disk_sb: &mut c::bch_sb_handle,
     u64s: u32,
-) -> Option<&mut F> {
-    unsafe {
-        let ptr = c::bch2_sb_field_resize_id(disk_sb, F::FIELD_TYPE, u64s);
-        if ptr.is_null() { None } else { Some(&mut *(ptr as *mut F)) }
-    }
+) -> Option<ViewMut<'_, F>> {
+    // SAFETY: C's resize, which reallocates the superblock if it has to
+    unsafe { c::bch2_sb_field_resize_id(disk_sb, F::FIELD_TYPE, u64s).as_mut() }?.arm_mut::<F>()
 }
 
-/// Get a typed field, creating or growing it to at least `min_u64s`.
+/// The section of type @F, made or grown to at least @min_u64s: as
+/// sb_field_resize().
 pub fn sb_field_get_minsize<F: SbField>(
     disk_sb: &mut c::bch_sb_handle,
     min_u64s: u32,
-) -> Option<&mut F> {
-    unsafe {
-        let ptr = c::bch2_sb_field_get_minsize_id(disk_sb, F::FIELD_TYPE, min_u64s);
-        if ptr.is_null() { None } else { Some(&mut *(ptr as *mut F)) }
-    }
+) -> Option<ViewMut<'_, F>> {
+    // SAFETY: as sb_field_resize()'s
+    unsafe { c::bch2_sb_field_get_minsize_id(disk_sb, F::FIELD_TYPE, min_u64s).as_mut() }?.arm_mut::<F>()
 }
 
 // ---------------------------------------------------------------------------

@@ -53,10 +53,11 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
         let _sb_lock = crate::wrappers::sb_lock(fs.raw);
 
         let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
-        let ext: &mut c::bch_sb_field_ext = bcachefs_kernel::sb::io::sb_field_get_minsize(
+        let ext = bcachefs_kernel::sb::io::sb_field_get_minsize::<c::bch_sb_field_ext>(
             &mut (*fs.raw).disk_sb,
             ext_u64s,
-        ).ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))?;
+        ).and_then(|v| v.whole_mut())
+         .ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))?;
 
         let mut scheduled = ext.recovery_passes_required[0].get();
 

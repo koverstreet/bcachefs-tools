@@ -564,7 +564,7 @@ impl<'a, T: Plain> ViewMut<'a, T> {
     }
 
     /// As View::whole(), mutably.
-    pub fn whole_mut(&mut self) -> Option<&mut T> {
+    pub fn whole_mut(self) -> Option<&'a mut T> {
         (self.as_view().len() == size_of::<T>() && self.p as usize % align_of::<T>() == 0)
             // SAFETY: as View::whole()
             .then(|| unsafe { &mut *self.p.cast::<T>() })

@@ -276,6 +276,7 @@ pub fn format(
     let mi_u64s = mi_size / std::mem::size_of::<u64>();
 
     let mi = bcachefs_kernel::sb::io::sb_field_resize::<c::bch_sb_field_members_v2>(&mut sb, mi_u64s as u32)
+        .and_then(|v| v.whole_mut())
         .unwrap_or_else(|| die("failed to resize members_v2 field"));
     mi.member_bytes = (std::mem::size_of::<c::bch_member>() as u16).into();
 
@@ -340,7 +341,8 @@ pub fn format(
     if opts.encrypted {
         let crypt_u64s =
             std::mem::size_of::<c::bch_sb_field_crypt>() / std::mem::size_of::<u64>();
-        let crypt: &mut c::bch_sb_field_crypt = sb.field_resize(crypt_u64s as u32)
+        let crypt = sb.field_resize::<c::bch_sb_field_crypt>(crypt_u64s as u32)
+            .and_then(|v| v.whole_mut())
             .unwrap_or_else(|| die("failed to create crypt field"));
         let crypt_ptr = crypt as *mut c::bch_sb_field_crypt;
         unsafe { c::bch_sb_crypt_init(sb.sb, crypt_ptr, opts.passphrase) };

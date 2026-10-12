@@ -78,7 +78,8 @@
 //! than its type - written by an older version, before the type grew - so
 //! it's a crate::util::vstructs::View, not a Flex: its fields past the end
 //! read as zero, and each arm's type derives Plain and View. arm::<A>() is
-//! get() for one arm: A's View, if the tag is A's.
+//! get() for one arm: A's View, if the tag is A's - and arm_mut::<A>() its
+//! ViewMut.
 //!
 //! The arms come from an x-macro list: tagged_union! hands the declaration to
 //! it - LIST!(cstruct_macros::__tagged_union [decl]) - and the list calls
@@ -496,6 +497,20 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                      A: {arm_of}<Self, Tag = {tag_ty}> + crate::util::vstructs::Plain,\n\
                  {{\n\
                      ({det}::get(self) == A::TAG).then(|| {view}::new(self.arm_bytes()))\n\
+                 }}\n\
+                 \n\
+                 /// arm(), to edit: a field past its end is a set() error.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn arm_mut<A>(&mut self) -> Option<{view}Mut<'_, A>>\n\
+                 where\n\
+                     A: {arm_of}<Self, Tag = {tag_ty}> + crate::util::vstructs::Plain,\n\
+                 {{\n\
+                     let len = crate::util::vstructs::SelfSized::bytes(self);\n\
+                     ({det}::get(self) == A::TAG).then(|| {{\n\
+                         // SAFETY: as arm_bytes()'s\n\
+                         let b = unsafe {{ ::core::slice::from_raw_parts_mut((self as *mut Self).cast::<u8>(), len) }};\n\
+                         {view}Mut::new(b)\n\
+                     }})\n\
                  }}\n\
                  \n\
                  /// Its bytes, as many as its count says: get()'s.\n\
