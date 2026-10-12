@@ -379,7 +379,10 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
     let news: String = arms.iter()
         .map(|a| format!("{en}::{}(x) => Self::from_arm(x),\n", a.name))
         .collect();
+    // An arm that's the storage itself - a journal entry of keys - isn't a
+    // type of its own to go by
     let arms_of: String = arms.iter()
+        .filter(|a| a.ty.trim() != s_ty.trim())
         .map(|a| format!("impl {arm_of}<{s_ty}> for {} {{\n\
                               type Tag = {tag_ty};\n\
                               const TAG: {tag_ty} = ({}) as {tag_ty};\n\
