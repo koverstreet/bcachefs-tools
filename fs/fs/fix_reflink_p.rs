@@ -4,7 +4,7 @@
 //! older than bcachefs_metadata_version_reflink_p_fix, zero front_pad and
 //! back_pad on every reflink pointer, without running triggers.
 
-use crate::btree::bkey::{BkeySC, POS_MIN};
+use crate::btree::bkey::{BkeyReflinkP, BkeySC, POS_MIN};
 use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
     UpdateTriggerFlags,
@@ -27,7 +27,7 @@ fn fix_reflink_p_key<'t>(
     }
 
     let mut u = t.bkey_reassemble(k)?;
-    let v = u.k_i_mut().as_mut_reflink_p().expect("reassembled from a reflink_p");
+    let v = u.k_i_mut().whole_mut::<BkeyReflinkP>().expect("reassembled from a reflink_p");
     v.front_pad = 0.into();
     v.back_pad  = 0.into();
 

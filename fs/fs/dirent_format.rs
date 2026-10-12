@@ -19,7 +19,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::bkey_fsck_err_on;
-use crate::btree::bkey::BkeySC;
+use crate::btree::bkey::{BkeyDirent, BkeySC};
 use crate::btree::bkey_methods::{self, SetError};
 use crate::btree::iter::TransBkey;
 use crate::c;
@@ -446,7 +446,7 @@ pub fn set_field<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, field: &'p str, val: &'
     }
 
     let v = bkey_methods::parse_val(k.k().type_, field, val)?;
-    let d = k.k_i_mut().as_mut_dirent().expect("a dirent");
+    let d = k.k_i_mut().whole_mut::<BkeyDirent>().expect("a dirent");
 
     match field {
         "d_type" => {

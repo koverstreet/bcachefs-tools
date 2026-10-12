@@ -62,7 +62,8 @@ impl<'i, 'k, 'a, 't, K: TypedBkey> CowKey<'i, 'k, 'a, 't, K> {
 
     /// The value, to repair.
     pub fn v_mut(&mut self, t: &TransAttempt<'a, 't>) -> Result<&mut K::Val, BchError> {
-        Ok(K::val_mut(self.u(t)?.k_i_mut()).expect("CowKey: the update changed the key type"))
+        Ok(self.u(t)?.k_i_mut().whole_mut::<K>()
+           .expect("CowKey: u() grows the key to K's size, of K's type"))
     }
 
     /// The key as it is now, to print.

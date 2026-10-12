@@ -43,7 +43,7 @@
 //!   errors are plain fixable fsck errors.
 
 use crate::accounting;
-use crate::btree::bkey::{pos, BkeySC, BkeySnapshotTree, POS_MAX, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, BkeySC, BkeySnapshot, BkeySnapshotTree, BkeySubvolume, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
     commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransBkey,
@@ -88,7 +88,7 @@ fn get_mut_node<'a, 't>(t: &TransAttempt<'a, 't>, id: u32) -> Result<TransBkey<'
 }
 
 fn snapshot_mut<'k>(k: &'k mut TransBkey<'_, '_>) -> &'k mut c::bch_snapshot {
-    k.k_i_mut().as_mut_snapshot().expect("a snapshot key")
+    k.k_i_mut().whole_mut::<BkeySnapshot>().expect("a snapshot key")
 }
 
 /// The id - offset - of the first key in @btree @pred accepts: for the
@@ -145,7 +145,7 @@ fn tree_master_subvol(t: &TransAttempt<'_, '_>, root: u32) -> Result<Option<u32>
                                      size_of::<c::bkey_i_subvolume>()).found()? else {
         return Ok(None);
     };
-    u.k_i_mut().as_mut_subvolume().expect("a subvolume key").set_snap(false);
+    u.k_i_mut().whole_mut::<BkeySubvolume>().expect("a subvolume key").set_snap(false);
     Ok(Some(oldest))
 }
 
@@ -212,7 +212,7 @@ fn check_snapshot_tree<'t>(
     let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty(),
                                 c::bch_bkey_type::KEY_TYPE_snapshot_tree,
                                 size_of::<c::bkey_i_snapshot_tree>())?;
-    u.k_i_mut().as_mut_snapshot_tree().expect("a snapshot tree key").master_subvol = subvol.into();
+    u.k_i_mut().whole_mut::<BkeySnapshotTree>().expect("a snapshot tree key").master_subvol = subvol.into();
     Ok(())
 }
 
@@ -966,7 +966,7 @@ fn tree_ptr_repair<'a, 't>(
     let tree = snapshot::tree_lookup(trans, tree_id).found()?;
     if tree.is_none_or(|st| st.root_snapshot.get() != root_id) {
         let mut new = snapshot::tree_create(t)?;
-        let v = new.k_i_mut().as_mut_snapshot_tree().expect("a snapshot tree key");
+        let v = new.k_i_mut().whole_mut::<BkeySnapshotTree>().expect("a snapshot tree key");
         v.master_subvol = snapshot::oldest_subvol(fs, root_id).unwrap_or(0).into();
         v.root_snapshot = root_id.into();
         tree_id = new.k().p.offset as u32;
@@ -1348,7 +1348,7 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
         Some(tree_id) => tree_id,
         None => {
             let mut tree = snapshot::tree_create(t)?;
-            tree.k_i_mut().as_mut_snapshot_tree().expect("a snapshot tree key").root_snapshot =
+            tree.k_i_mut().whole_mut::<BkeySnapshotTree>().expect("a snapshot tree key").root_snapshot =
                 id.into();
             tree.k().p.offset as u32
         }

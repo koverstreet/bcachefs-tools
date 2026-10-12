@@ -17,7 +17,7 @@ use cstruct_macros::c_export;
 
 use crate::acl;
 use crate::bkey_fsck_err_on;
-use crate::btree::bkey::{BkeySC, BKEY_U64S, POS_MIN};
+use crate::btree::bkey::{BKEY_U64S, BkeySC, BkeyXattr, POS_MIN};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
@@ -276,7 +276,7 @@ pub fn set_key(
     }
 
     let mut k = t.bkey_alloc_init(val_u64s, c::bch_bkey_type::KEY_TYPE_xattr.0 as u8, POS_MIN)?;
-    let x = k.k_i_mut().as_mut_xattr().expect("an xattr");
+    let x = k.k_i_mut().whole_mut::<BkeyXattr>().expect("an xattr");
     x.x_type     = type_;
     x.x_name_len = name.len() as u8;
     x.x_val_len  = (value.len() as u16).into();

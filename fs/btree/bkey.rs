@@ -9,7 +9,7 @@ use core::fmt;
 use core::str::FromStr;
 #[cfg(feature = "std")]
 use crate::errcode::{bch_errcode, BchError};
-use crate::util::vstructs::{Floored, Plain, View};
+use crate::util::vstructs::{Floored, Plain, View, ViewMut};
 use core::marker::PhantomData;
 
 use c::bpos as Bpos;
@@ -330,8 +330,6 @@ pub trait TypedBkey {
     /// @k's value, if it's this type - whole, so not for a key read from the
     /// btree that may be short: see BkeySC's as_<name>().
     fn val(k: &c::bkey_i) -> Option<&Self::Val>;
-
-    fn val_mut(k: &mut c::bkey_i) -> Option<&mut Self::Val>;
 }
 
 /// BCH_BKEY_TYPES()' field column as a length, as C's bch2_bkey_min_val_sizes[]
@@ -404,10 +402,6 @@ macro_rules! bkey_types {
                     _ => None,
                 }
             }
-
-            fn val_mut(k: &mut c::bkey_i) -> Option<&mut Self::Val> {
-                k.[<as_mut_ $name>]()
-            }
         }
 
         bkey_floored!($name, $field);
@@ -429,21 +423,6 @@ macro_rules! bkey_types {
             }
         }
 
-        /// Typed dispatch for mutable inline bkeys (`bkey_i`).
-        pub enum BkeyValIMut<'a> {
-            $($name(&'a mut c::[<bkey_i_ $name>]),)*
-            unknown(&'a mut c::bkey_i),
-        }
-
-        impl<'a> BkeyValIMut<'a> {
-            #[allow(clippy::missing_transmute_annotations)]
-            pub fn from_bkey_i(k: &'a mut c::bkey_i) -> Self {
-                match k.k.type_ as u32 {
-                    $($nr => BkeyValIMut::$name(unsafe { core::mem::transmute(k) }),)*
-                    _ => BkeyValIMut::unknown(k),
-                }
-            }
-        }
 
         /// Typed dispatch for split-const bkey references.
         pub enum BkeyValSC<'a> {
@@ -497,20 +476,6 @@ macro_rules! bkey_types {
                 self.[<as_ $name>]().map(|_| unsafe {
                     core::mem::transmute::<BkeySC<'a>, c::[<bkey_s_c_ $name>]>(*self)
                 })
-            }
-            )*
-        }
-
-        /// Typed mutable value access: the value if the key is that type, else
-        /// None - for editing a key built from another, as bkey_reassemble()
-        /// gives.
-        impl c::bkey_i {
-            $(
-            pub fn [<as_mut_ $name>](&mut self) -> Option<&mut c::[<bch_ $name>]> {
-                match BkeyValIMut::from_bkey_i(self) {
-                    BkeyValIMut::$name(k) => Some(&mut k.v),
-                    _ => None,
-                }
             }
             )*
         }
@@ -688,6 +653,43 @@ impl<'a> BkeySC<'a> {
 
     pub fn start_offset(&self) -> u64 {
         bkey_start_offset(self.k)
+    }
+}
+
+/// Editing a key's value: it's only as long as its u64s say - a key copied
+/// from one written before its type grew is shorter than its type, and a
+/// field past its end is one the key won't carry when it's written. Grow it
+/// first, as C's bch2_bkey_make_mut_typed() does: bkey_make_mut() or
+/// bkey_get_mut() with the typed key's size.
+impl c::bkey_i {
+    /// The value's bytes, as many as its u64s say: an owned key's buffer
+    /// holds them.
+    fn val_bytes_mut(&mut self) -> &mut [u8] {
+        let len = (self.k.u64s as usize).saturating_sub(BKEY_U64S) * size_of::<u64>();
+        // SAFETY: its value follows its header, as long as u64s says
+        unsafe { core::slice::from_raw_parts_mut((self as *mut Self).cast::<u8>().add(size_of::<c::bkey>()), len) }
+    }
+
+    /// The value as @K's, whole, to edit: None unless the key is that type and
+    /// holds all of it - one grown to its size, or made new.
+    pub fn whole_mut<K: TypedBkey>(&mut self) -> Option<&mut K::Val> {
+        let is_k = self.k.type_ as u32 == K::TYPE.0;
+        let v = self.val_bytes_mut();
+        (is_k && v.len() >= size_of::<K::Val>())
+            // SAFETY: all of it is there, at the u64 after the header - aligned
+            .then(|| unsafe { &mut *v.as_mut_ptr().cast::<K::Val>() })
+    }
+
+    /// The value as @K's, to edit field by field, if the key is that type and
+    /// at least K::MIN_VAL_SIZE: a field past the value's end is a set()
+    /// error, not a write the key wouldn't carry.
+    pub fn view_mut<K: TypedBkey>(&mut self) -> Option<ViewMut<'_, K::Val>>
+    where
+        K::Val: Plain,
+    {
+        let is_k = self.k.type_ as u32 == K::TYPE.0;
+        let v = self.val_bytes_mut();
+        (is_k && v.len() >= K::MIN_VAL_SIZE).then(|| ViewMut::new(v))
     }
 }
 
@@ -964,6 +966,30 @@ mod tests {
     #[should_panic(expected = "fewer than every valid one has")]
     fn bkey_view_unfloored() {
         let _ = View::<c::bch_snapshot>::new(&[0u8; 16]).subvol;
+    }
+
+    /// A subvolume key from before fs_path_parent - 16 bytes of its 48 - can't
+    /// be had whole to edit, and setting a field it lacks is an error, not a
+    /// write the key wouldn't carry; one it has sets.
+    #[test]
+    fn bkey_edit_short_value() {
+        let mut k = BkeySubvolume::new();
+        k.k.set_val_bytes(16);
+        let k = k.k_i_mut();
+
+        assert!(k.whole_mut::<BkeySubvolume>().is_none());
+        assert!(k.whole_mut::<BkeySnapshot>().is_none());
+
+        let mut v = k.view_mut::<BkeySubvolume>().expect("a subvolume");
+        v.snapshot().set(5).unwrap();
+        let e = v.fs_path_parent().set(9).unwrap_err();
+        assert_eq!((e.field, e.at, e.len), ("fs_path_parent", 20, 16));
+
+        let mut full = BkeySubvolume::new();
+        full.k_i_mut().whole_mut::<BkeySubvolume>().expect("whole").fs_path_parent = Le32::new(9);
+        assert_eq!(full.v.fs_path_parent, 9);
+        assert_eq!(BkeySC::from(k as &c::bkey_i).view::<BkeySubvolume>().expect("a subvolume")
+                   .fs_path_parent().get(), 0);
     }
 
     #[test]

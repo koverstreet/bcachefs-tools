@@ -28,7 +28,7 @@
 //! position, so the pass runs a second time to check the copies; a second
 //! pass that still finds work is an error.
 
-use crate::btree::bkey::{pos, spos, BkeySC, BkeySubvolume, POS_MIN};
+use crate::btree::bkey::{pos, spos, BkeyDirent, BkeySC, BkeySubvolume, POS_MIN};
 use crate::btree::iter::{
     is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
     UpdateTriggerFlags,
@@ -222,7 +222,7 @@ fn check_dirent_parent_subvol<'t>(
     // The dirent is rewritten at its own position, which may be an interior
     // snapshot node - dirents in old snapshots need this repair too:
     let mut n = t.bkey_reassemble(k)?;
-    n.k_i_mut().as_mut_dirent().expect("a dirent").set_parent_subvol(new_parent);
+    n.k_i_mut().whole_mut::<BkeyDirent>().expect("a dirent").set_parent_subvol(new_parent);
     t.update(iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
     // The fs_path_parent check after this repairs the subvolume to agree with
@@ -276,8 +276,11 @@ fn check_dirent_to_subvol<'t>(
         if fsck_err!(trans, id::subvol_fs_path_parent_wrong,
                      "subvol with wrong fs_path_parent, should be {parent}\n{path}\n{}",
                      s.to_text(fs))? {
-            let mut n = t.bkey_reassemble(s)?;
-            n.k_i_mut().as_mut_subvolume().expect("a subvolume").fs_path_parent = parent.into();
+            // grown to a whole subvolume: one from before fs_path_parent is
+            // shorter than the field
+            let mut n = t.bkey_make_mut_noupdate_typed::<BkeySubvolume>(s)?;
+            n.k_i_mut().whole_mut::<BkeySubvolume>().expect("grown to a whole subvolume")
+                .fs_path_parent = parent.into();
             t.update(&subvol_iter, &n, UpdateTriggerFlags::empty())?;
         }
     }

@@ -11,7 +11,7 @@
 //! node, and a subvolume pointing at it is subvol_snapshot_not_leaf, which
 //! has no repair.
 
-use crate::btree::bkey::{pos, BkeySnapshot, POS_MIN};
+use crate::btree::bkey::{pos, BkeySnapshot, BkeySubvolume, POS_MIN};
 use crate::btree::iter::{
     commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
@@ -59,7 +59,7 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
             let mut k = t.bkey_alloc_init(size_of::<c::bch_subvolume>() / size_of::<u64>(),
                                           c::bch_bkey_type::KEY_TYPE_subvolume.0 as u8,
                                           pos(0, c::BCACHEFS_ROOT_SUBVOL as u64))?;
-            let v = k.k_i_mut().as_mut_subvolume().expect("allocated as a subvolume");
+            let v = k.k_i_mut().whole_mut::<BkeySubvolume>().expect("allocated as a subvolume");
             v.flags    = 0.into();
             v.snapshot = snapshot.into();
             v.inode    = inum.into();

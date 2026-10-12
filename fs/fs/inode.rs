@@ -36,7 +36,7 @@ use crate::dirent::{self, DirentTarget};
 use crate::namei;
 use crate::util::kernel::random_u64;
 use crate::{bch_err_ratelimited, trans_inconsistent};
-use crate::btree::bkey::{pos, spos, BkeyS, BkeySC, BkeyValS, BkeyValSC, TypedBkey, BKEY_U64S, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyInodeAllocCursor, BkeyS, BkeySC, BkeyValS, BkeyValSC, POS_MIN, SPOS_MAX, TypedBkey};
 use crate::init::passes;
 use crate::util::varint;
 use core::mem::offset_of;
@@ -1092,7 +1092,7 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
         }
     };
 
-    let v = cursor.k_i_mut().as_mut_inode_alloc_cursor().expect("an inode alloc cursor");
+    let v = cursor.k_i_mut().whole_mut::<BkeyInodeAllocCursor>().expect("an inode alloc cursor");
     v.bits = fs.opts().shard_inode_numbers_bits;
 
     if v.idx.get() < min {
@@ -1124,7 +1124,7 @@ pub fn create<'t>(
 ) -> Result<(), BchError> {
     let fs = t.fs();
     let (mut cursor, min, max) = alloc_cursor_get(t, is_32bit)?;
-    let cursor = cursor.k_i_mut().as_mut_inode_alloc_cursor().expect("an inode alloc cursor");
+    let cursor = cursor.k_i_mut().whole_mut::<BkeyInodeAllocCursor>().expect("an inode alloc cursor");
 
     let mut start = cursor.idx.get();
     let mut inum = start;

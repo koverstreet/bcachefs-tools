@@ -684,6 +684,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.make_mut_noupdate(k, c::bch_bkey_type::KEY_TYPE_deleted, 0)
     }
 
+    /// @k, a @K, as a mutable copy grown to a whole @K - not yet an update:
+    /// ENOENT if it isn't one. As bch2_bkey_make_mut_noupdate_typed().
+    pub fn bkey_make_mut_noupdate_typed<K: TypedBkey>(&self, k: BkeySC<'_>)
+        -> Result<TransBkey<'a, 't>, BchError>
+    {
+        self.make_mut_noupdate(k, K::TYPE, size_of::<K>())
+    }
+
     /// The value of the @K at @pos in @btree, zero padded:
     /// ENOENT_bkey_type_mismatch if it isn't one - as bch2_bkey_get_val_typed().
     pub fn bkey_get_val<K: TypedBkey>(&self, btree: c::btree_id, pos: bpos, flags: BtreeIterFlags)

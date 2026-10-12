@@ -42,7 +42,7 @@
 //! partial-commit re-drive), a taken name, the descendant fixup with its
 //! whiteouts.
 
-use crate::btree::bkey::{pos, spos, BkeySC, BkeySnapshot, POS_MIN};
+use crate::btree::bkey::{pos, spos, BkeySC, BkeySnapshot, BkeySubvolume, POS_MIN};
 use crate::btree::iter::{
     is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
@@ -392,7 +392,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
                                    BtreeIterFlags::empty(), UpdateTriggerFlags::empty(),
                                    c::bch_bkey_type::KEY_TYPE_subvolume,
                                    size_of::<c::bkey_i_subvolume>())?;
-        s.k_i_mut().as_mut_subvolume().expect("a subvolume").fs_path_parent =
+        s.k_i_mut().whole_mut::<BkeySubvolume>().expect("a subvolume").fs_path_parent =
             c::BCACHEFS_ROOT_SUBVOL.into();
 
         dirent_snapshot = subvolume::get_snapshot(trans, inode.bi_parent_subvol)?;
