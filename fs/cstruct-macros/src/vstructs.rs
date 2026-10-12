@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 //! What util/vstructs.rs's traits need of a type C shares, from its
-//! definition: #[derive(Plain)] - and #[bitfield], every one of which is - and
-//! #[counted_by(FIELD)], a CStruct's FlexArray.
+//! definition: #[derive(Plain)] - and #[bitfield], every one of which is -
+//! and #[counted_by(FIELD)], a CStruct's FlexArray.
 //!
 //! Plain is a promise: every bit pattern of the type's bytes is a value of
 //! it, and every byte is a field's. These impls check it at compile time,
@@ -58,10 +58,17 @@ pub(crate) fn flex_array(def: &CStructDef) -> Result<String, String> {
     if !def.fields.iter().any(|g| g.rust_name() == count) {
         return Err(format!("{name}.{}: #[counted_by({count})]: {name} has no field {count}", f.name));
     }
-    Ok(format!(
+    Ok(flex_impl(name, &f.rust_name(), &elem, count))
+}
+
+/// FlexArray for @name: @field, [@elem; 0], as long as @count says.
+fn flex_impl(name: &str, field: &str, elem: &str, count: &str) -> String {
+    // the count by value: a reference to a packed struct's field may be
+    // unaligned
+    format!(
         "impl crate::util::vstructs::FlexArray for {name} {{\n\
              type Elem = {elem};\n\
              const TAIL: usize = ::core::mem::offset_of!({name}, {field});\n\
-             fn nr(&self) -> usize {{ self.{count} as usize }}\n\
-         }}\n", field = f.rust_name()))
+             fn nr(&self) -> usize {{ crate::util::vstructs::Count::count(&{{ self.{count} }}) }}\n\
+         }}\n")
 }

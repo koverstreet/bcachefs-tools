@@ -5,6 +5,7 @@
 use crate::cstructs::c;
 use core::ffi::c_ulong;
 use crate::types::{Le32, Le64};
+use crate::util::vstructs::vstruct;
 use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, TypeInfo};
 
 c_const! {
@@ -295,3 +296,4 @@ pub struct bch_sb_field_recovery_passes {
     pub field: c::bch_sb_field,
     pub start: [c::recovery_pass_entry; 0],
 }
+vstruct!(bch_sb_field_recovery_passes, field.u64s, start = 0);

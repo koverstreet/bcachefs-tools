@@ -72,10 +72,10 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, CStruct, TypeInfo};
+use crate::util::vstructs::{vstruct, vstruct_container, FlexArray};
+use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, CStruct, Plain, TypeInfo};
 #[cfg(__KERNEL__)]
 use cstruct_macros::c_typedef;
-use nestify::nest;
 
 #[cfg(__KERNEL__)]
 c_typedef! {
@@ -104,7 +104,7 @@ pub struct bkey_format {
  */
 #[cfg(target_endian = "little")]
 #[repr(C, packed(4))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bpos {
     pub snapshot: u32,
     pub offset: u64,
@@ -113,7 +113,7 @@ pub struct bpos {
 
 #[cfg(target_endian = "big")]
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bpos {
     pub inode: u64,
     pub offset: u64, /* Points to end of extent - sectors */
@@ -122,14 +122,14 @@ pub struct bpos {
 
 /* Empty placeholder struct, for container_of() */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_val {
     pub __nothing: [u64; 0],
 }
 
 #[cfg(target_endian = "little")]
 #[repr(C, packed(4))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bversion {
     pub lo: u64,
     pub hi: u32,
@@ -137,7 +137,7 @@ pub struct bversion {
 
 #[cfg(target_endian = "big")]
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bversion {
     pub hi: u32,
     pub lo: u64,
@@ -175,7 +175,7 @@ pub struct bkey_format_bits {
  */
 #[cfg(target_endian = "little")]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bkey {
     /* Size of combined key and value, in u64s */
@@ -197,7 +197,7 @@ pub struct bkey {
 
 #[cfg(target_endian = "big")]
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bkey {
     /* Size of combined key and value, in u64s */
@@ -218,7 +218,7 @@ pub struct bkey {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bkey_packed {
     pub _data: [u64; 0],
@@ -249,6 +249,7 @@ pub struct bkey_packed {
     #[c("__u8 pad[sizeof(struct bkey) - 3]")]
     pub pad: [u8; core::mem::size_of::<c::bkey>() - 3],
 }
+vstruct!(bkey_packed, u64s, start = 0);
 c_default!(bkey_packed);
 
 #[repr(C)]
@@ -288,12 +289,23 @@ c_enum! {
 
 /* bkey with inline value */
 #[repr(C)]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct bkey_i {
     pub _data: [u64; 0],
 
     pub k: c::bkey,
     pub v: c::bch_val,
+}
+
+/// _data, as long as k.u64s says - its own count is its bkey's, a field of a
+/// field, which #[vstruct] doesn't take: SelfSized::bytes() is bkey_bytes().
+impl FlexArray for bkey_i {
+    type Elem = u64;
+    const TAIL: usize = core::mem::offset_of!(bkey_i, _data);
+
+    fn nr(&self) -> usize {
+        self.k.u64s as usize
+    }
 }
 
 c_enum! {
@@ -517,7 +529,7 @@ pub struct bch_set {
 
 /* 128 bits, sufficient for cryptographic MACs: */
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_csum {
     pub lo: Le64,
@@ -566,12 +578,13 @@ c_bitmask! {
 /* Optional/variable size superblock sections: */
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field {
     pub _data: [u64; 0],
     pub u64s: Le32,
     pub type_: Le32,
 }
+vstruct!(bch_sb_field, u64s, start = 0);
 
 c_xmacro! {
     BCH_SB_FIELDS(x) {
@@ -845,6 +858,7 @@ pub struct bch_sb_field_journal {
     pub field: c::bch_sb_field,
     pub buckets: [Le64; 0],
 }
+vstruct!(bch_sb_field_journal, field.u64s, start = 0);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -860,6 +874,7 @@ pub struct bch_sb_field_journal_v2 {
 
     pub d: [c::bch_sb_field_journal_v2_entry; 0],
 }
+vstruct!(bch_sb_field_journal_v2, field.u64s, start = 0);
 
 /* BCH_SB_FIELD_crypt: */
 
@@ -898,6 +913,7 @@ pub struct bch_sb_field_crypt {
     pub kdf_flags: Le64,
     pub key: c::bch_encrypted_key,
 }
+vstruct!(bch_sb_field_crypt, field.u64s, start = 0);
 
 c_bitmask! {
     LE64_BITMASK(struct bch_sb_field_crypt, flags) {
@@ -927,7 +943,7 @@ c_bitmask! {
  * the superblock:
  */
 #[repr(C)]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct jset_entry {
     pub u64s: Le16,
     pub btree_id: u8,
@@ -938,9 +954,11 @@ pub struct jset_entry {
     pub start: [c::bkey_i; 0],
     pub _data: [u64; 0],
 }
+vstruct!(jset_entry, u64s);
+vstruct_container!(jset_entry, c::bkey_i);
 
 #[repr(C)]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_clean {
     pub field: c::bch_sb_field,
 
@@ -952,6 +970,8 @@ pub struct bch_sb_field_clean {
     pub start: [c::jset_entry; 0],
     pub _data: [u64; 0],
 }
+vstruct!(bch_sb_field_clean, field.u64s, start = 0);
+vstruct_container!(bch_sb_field_clean, c::jset_entry);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -978,6 +998,7 @@ pub struct bch_sb_field_ext {
      */
     pub btrees_clean: Le64,
 }
+vstruct!(bch_sb_field_ext, field.u64s, start = 0);
 
 c_bitmask! {
     LE64_BITMASK(struct bch_sb_field_ext, flags0) {
@@ -1183,7 +1204,7 @@ c_const! {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_sb_layout {
     pub magic: c::__uuid_t, /* bcachefs superblock UUID */
@@ -1217,7 +1238,7 @@ c_const! {
  * @features	- enabled incompatible features
  */
 #[repr(C, align(8))]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_sb {
     pub csum: c::bch_csum,
@@ -1250,6 +1271,8 @@ pub struct bch_sb {
     pub start: [c::bch_sb_field; 0],
     pub _data: [Le64; 0],
 }
+vstruct!(bch_sb, u64s);
+vstruct_container!(bch_sb, c::bch_sb_field);
 c_default!(bch_sb);
 
 c_bitmask! {
@@ -1769,6 +1792,7 @@ pub struct jset_entry_blacklist {
     pub entry: c::jset_entry,
     pub seq: Le64,
 }
+vstruct!(jset_entry_blacklist, entry.u64s);
 
 #[repr(C)]
 #[derive(Default, CStruct, TypeInfo)]
@@ -1777,6 +1801,7 @@ pub struct jset_entry_blacklist_v2 {
     pub start: Le64,
     pub end: Le64,
 }
+vstruct!(jset_entry_blacklist_v2, entry.u64s);
 
 c_xmacro! {
     BCH_FS_USAGE_TYPES(x) {
@@ -1800,6 +1825,7 @@ pub struct jset_entry_usage {
     pub entry: c::jset_entry,
     pub v: Le64,
 }
+vstruct!(jset_entry_usage, entry.u64s);
 
 #[repr(C, packed)]
 #[derive(Default, CStruct, TypeInfo)]
@@ -1808,6 +1834,7 @@ pub struct jset_entry_data_usage {
     pub v: Le64,
     pub r: c::bch_replicas_entry_v1,
 }
+vstruct!(jset_entry_data_usage, entry.u64s);
 
 #[repr(C, packed)]
 #[derive(Default, CStruct, TypeInfo)]
@@ -1817,6 +1844,7 @@ pub struct jset_entry_clock {
     pub pad: [u8; 7],
     pub time: Le64,
 }
+vstruct!(jset_entry_clock, entry.u64s);
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -1838,6 +1866,7 @@ pub struct jset_entry_dev_usage {
 
     pub d: [c::jset_entry_dev_usage_type; 0],
 }
+vstruct!(jset_entry_dev_usage, entry.u64s);
 
 #[repr(C, align(8))]
 #[derive(Default, CStruct, TypeInfo)]
@@ -1846,6 +1875,7 @@ pub struct jset_entry_log {
     pub entry: c::jset_entry,
     pub d: [u8; 0],
 }
+vstruct!(jset_entry_log, entry.u64s);
 
 #[repr(C, align(8))]
 #[derive(Default, CStruct, TypeInfo)]
@@ -1854,6 +1884,7 @@ pub struct jset_entry_datetime {
     pub entry: c::jset_entry,
     pub seconds: Le64,
 }
+vstruct!(jset_entry_datetime, entry.u64s);
 
 #[repr(C, align(8))]
 #[derive(Default, CStruct, TypeInfo)]
@@ -1862,6 +1893,7 @@ pub struct jset_entry_rewind_limit {
     pub entry: c::jset_entry,
     pub seq: Le64,
 }
+vstruct!(jset_entry_rewind_limit, entry.u64s);
 
 /*
  * Records a journal rewind in progress. Keys from journal entries
@@ -1875,6 +1907,7 @@ pub struct jset_entry_rewind {
     pub from: Le64,
     pub to: Le64,
 }
+vstruct!(jset_entry_rewind, entry.u64s);
 
 /*
  * On disk format for a journal entry:
@@ -1887,7 +1920,7 @@ pub struct jset_entry_rewind {
  * version is for on disk format changes.
  */
 #[repr(C, align(8))]
-#[derive(Default, CStruct, TypeInfo)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct jset {
     pub csum: c::bch_csum,
@@ -1910,6 +1943,8 @@ pub struct jset {
     pub start: [c::jset_entry; 0],
     pub _data: [u64; 0],
 }
+vstruct!(jset, u64s);
+vstruct_container!(jset, c::jset_entry);
 
 c_bitmask! {
     LE32_BITMASK(struct jset, flags), strip JSET_ {
@@ -1951,7 +1986,7 @@ c_enum! {
  * sorted
  */
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bset {
     pub seq: Le64,
@@ -1972,6 +2007,7 @@ pub struct bset {
     pub start: [c::bkey_packed; 0],
     pub _data: [u64; 0],
 }
+vstruct!(bset, u64s);
 
 c_bitmask! {
     LE32_BITMASK(struct bset, flags), strip BSET_ {
@@ -1985,37 +2021,34 @@ c_bitmask! {
     }
 }
 
-nest! {
-    #[derive(Clone, Copy, CStruct, TypeInfo)]*
-    #[repr(C, align(8))]
-    #[c_packed]
-    pub struct btree_node {
-        pub csum: c::bch_csum,
-        pub magic: Le64,
+#[repr(C, align(8))]
+#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[c_packed]
+pub struct btree_node {
+    pub csum: c::bch_csum,
+    pub magic: Le64,
 
-        /* this flags field is encrypted, unlike bset->flags: */
-        pub flags: Le64,
+    /* this flags field is encrypted, unlike bset->flags: */
+    pub flags: Le64,
 
-        /* Closed interval: */
-        pub min_key: c::bpos,
-        pub max_key: c::bpos,
-        pub _ptr: c::bch_extent_ptr, /* not used anymore */
-        pub format: c::bkey_format,
+    /* Closed interval: */
+    pub min_key: c::bpos,
+    pub max_key: c::bpos,
+    pub _ptr: c::bch_extent_ptr, /* not used anymore */
+    pub format: c::bkey_format,
 
-        #[c_anon]
-        #>[repr(C)]
-        pub bset: pub union btree_node_bset {
-            pub keys: c::bset,
-            #[c_anon]
-            #>[repr(C)]
-            pub contents: pub struct btree_node_bset_contents {
-                pub pad: [u8; 22],
-                pub u64s: Le16,
-                pub _data: [u64; 0],
-            },
-        },
-    }
+    /* C's vstruct macros find u64s and _data on the node itself: */
+    #[c_anon("union {
+		struct bset keys;
+		struct {
+			u8 pad[22];
+			__le16 u64s;
+			u64 _data[];
+		};
+	}")]
+    pub keys: c::bset,
 }
+vstruct!(btree_node, keys.u64s);
 c_default!(btree_node);
 
 c_bitmask! {
@@ -2029,25 +2062,31 @@ c_bitmask! {
     }
 }
 
-nest! {
-    #[derive(Clone, Copy, CStruct, TypeInfo)]*
-    #[repr(C, align(8))]
-    #[c_packed]
-    pub struct btree_node_entry {
-        pub csum: c::bch_csum,
+#[repr(C, align(8))]
+#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[c_packed]
+pub struct btree_node_entry {
+    pub csum: c::bch_csum,
 
-        #[c_anon]
-        #>[repr(C)]
-        pub bset: pub union btree_node_entry_bset {
-            pub keys: c::bset,
-            #[c_anon]
-            #>[repr(C)]
-            pub contents: pub struct btree_node_entry_bset_contents {
-                pub pad: [u8; 22],
-                pub u64s: Le16,
-                pub _data: [u64; 0],
-            },
-        },
-    }
+    /* C's vstruct macros find u64s and _data on the entry itself: */
+    #[c_anon("union {
+		struct bset keys;
+		struct {
+			u8 pad[22];
+			__le16 u64s;
+			u64 _data[];
+		};
+	}")]
+    pub keys: c::bset,
 }
+vstruct!(btree_node_entry, keys.u64s);
 c_default!(btree_node_entry);
+
+c_verbatim!(r#"
+_Static_assert(offsetof(struct btree_node, u64s) == offsetof(struct btree_node, keys.u64s) &&
+	       offsetof(struct btree_node, _data) == offsetof(struct btree_node, keys._data),
+	       "btree_node: u64s and _data aren't its bset's");
+_Static_assert(offsetof(struct btree_node_entry, u64s) == offsetof(struct btree_node_entry, keys.u64s) &&
+	       offsetof(struct btree_node_entry, _data) == offsetof(struct btree_node_entry, keys._data),
+	       "btree_node_entry: u64s and _data aren't its bset's");
+"#);

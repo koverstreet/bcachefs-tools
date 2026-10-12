@@ -39,9 +39,9 @@ pub unsafe fn bset_encrypt(c: *mut c::bch_fs, i: *mut c::bset, offset: u32) -> R
     let mut nonce = (*i).nonce(offset);
 
     if offset == 0 {
-        let bn = i.byte_sub(offset_of!(c::btree_node, bset)).cast::<c::btree_node>();
+        let bn = i.byte_sub(offset_of!(c::btree_node, keys)).cast::<c::btree_node>();
         let start = offset_of!(c::btree_node, flags);
-        let bytes = offset_of!(c::btree_node, bset) - start;
+        let bytes = offset_of!(c::btree_node, keys) - start;
 
         ret_to_result_void(c::bch2_encrypt(c, csum_type, nonce, bn.byte_add(start).cast(), bytes))?;
         nonce = nonce.add((bytes as u32).next_multiple_of(CHACHA_BLOCK_SIZE));

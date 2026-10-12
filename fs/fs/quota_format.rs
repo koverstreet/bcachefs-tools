@@ -4,6 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
+use crate::util::vstructs::vstruct;
 use cstruct_macros::{c_enum, CStruct, TypeInfo};
 
 /* KEY_TYPE_quota: */
@@ -63,3 +64,4 @@ pub struct bch_sb_field_quota {
     pub field: c::bch_sb_field,
     pub q: [c::bch_sb_quota_type; c::QTYP_NR as usize],
 }
+vstruct!(bch_sb_field_quota, field.u64s, start = 0);

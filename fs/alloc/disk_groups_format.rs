@@ -4,6 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::Le64;
+use crate::util::vstructs::vstruct;
 use cstruct_macros::{c_bitmask, c_const, CStruct, TypeInfo};
 
 c_const! {
@@ -34,3 +35,4 @@ pub struct bch_sb_field_disk_groups {
     pub field: c::bch_sb_field,
     pub entries: [c::bch_disk_group; 0],
 }
+vstruct!(bch_sb_field_disk_groups, field.u64s, start = 0);

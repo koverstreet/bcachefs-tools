@@ -100,6 +100,9 @@ macro_rules! le_int {
         #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
         pub struct $name($t);
 
+        // SAFETY: the integer, and nothing else
+        unsafe impl crate::util::vstructs::Plain for $name {}
+
         impl $name {
             pub const fn new(v: $t) -> Self { Self(v.to_le()) }
             pub const fn get(self) -> $t { <$t>::from_le(self.0) }

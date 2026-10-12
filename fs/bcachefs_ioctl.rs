@@ -441,7 +441,7 @@ pub struct bch_replicas_usage {
 }
 
 /// r's devs[], r.nr_devs long: what makes a replicas_usage variable size -
-/// C's replicas_usage_bytes() is VStruct::bytes().
+/// C's replicas_usage_bytes() is SelfSized::bytes().
 impl FlexArray for bch_replicas_usage {
     type Elem = u8;
     const TAIL: usize = core::mem::offset_of!(bch_replicas_usage, r.devs);

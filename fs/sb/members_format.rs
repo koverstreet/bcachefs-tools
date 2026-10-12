@@ -4,6 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
+use crate::util::vstructs::vstruct;
 use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, TypeInfo};
 
 c_const! {
@@ -188,6 +189,7 @@ pub struct bch_sb_field_members_v1 {
     pub field: c::bch_sb_field,
     pub _members: [c::bch_member; 0], //Members are now variable size
 }
+vstruct!(bch_sb_field_members_v1, field.u64s, start = 0);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -197,3 +199,4 @@ pub struct bch_sb_field_members_v2 {
     pub pad: [u8; 6],
     pub _members: [c::bch_member; 0],
 }
+vstruct!(bch_sb_field_members_v2, field.u64s, start = 0);
