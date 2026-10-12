@@ -24,21 +24,18 @@ int bch2_trigger_inode(struct btree_trans *, struct btree_trigger_op);
 	.key_validate	= bch2_inode_validate,		\
 	.val_to_text	= bch2_inode_to_text,		\
 	.trigger	= bch2_trigger_inode,		\
-	.min_val_size	= 16,				\
 })
 
 #define bch2_bkey_ops_inode_v2 ((struct bkey_ops) {	\
 	.key_validate	= bch2_inode_v2_validate,	\
 	.val_to_text	= bch2_inode_to_text,		\
 	.trigger	= bch2_trigger_inode,		\
-	.min_val_size	= 32,				\
 })
 
 #define bch2_bkey_ops_inode_v3 ((struct bkey_ops) {	\
 	.key_validate	= bch2_inode_v3_validate,	\
 	.val_to_text	= bch2_inode_to_text,		\
 	.trigger	= bch2_trigger_inode,		\
-	.min_val_size	= 48,				\
 })
 
 static inline bool bkey_is_inode(const struct bkey *k)
@@ -55,7 +52,6 @@ void bch2_inode_generation_to_text(struct printbuf *, struct bch_fs *, struct bk
 #define bch2_bkey_ops_inode_generation ((struct bkey_ops) {	\
 	.key_validate	= bch2_inode_generation_validate,	\
 	.val_to_text	= bch2_inode_generation_to_text,	\
-	.min_val_size	= 8,					\
 })
 
 int bch2_inode_alloc_cursor_validate(struct bch_fs *, struct bkey_s_c,
@@ -65,7 +61,6 @@ void bch2_inode_alloc_cursor_to_text(struct printbuf *, struct bch_fs *, struct 
 #define bch2_bkey_ops_inode_alloc_cursor ((struct bkey_ops) {	\
 	.key_validate	= bch2_inode_alloc_cursor_validate,	\
 	.val_to_text	= bch2_inode_alloc_cursor_to_text,	\
-	.min_val_size	= 16,					\
 })
 #include "fs/inode_gen.h"
 

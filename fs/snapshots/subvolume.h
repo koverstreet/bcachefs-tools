@@ -69,7 +69,6 @@ int bch2_subvolume_trigger(struct btree_trans *, struct btree_trigger_op);
 	.key_validate	= bch2_subvolume_validate,		\
 	.val_to_text	= bch2_subvolume_to_text,		\
 	.trigger	= bch2_subvolume_trigger,		\
-	.min_val_size	= 16,					\
 })
 
 static inline struct bkey_s_c

@@ -29,8 +29,6 @@ pub struct bkey_ops {
                                             big_endian: c_uint, write: c_int,
                                             c::bkey_s)>,
 
-    /* Size of value type when first created: */
-    pub min_val_size: c_uint,
 }
 
 c_extern! {

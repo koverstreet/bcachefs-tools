@@ -120,7 +120,6 @@ static __cold void key_type_cookie_to_text(struct printbuf *out, struct bch_fs *
 #define bch2_bkey_ops_cookie ((struct bkey_ops) {	\
 	.key_validate	= key_type_cookie_validate,	\
 	.val_to_text	= key_type_cookie_to_text,	\
-	.min_val_size	= 8,				\
 })
 
 #define bch2_bkey_ops_hash_whiteout ((struct bkey_ops) {\
@@ -168,6 +167,34 @@ const struct bkey_ops bch2_bkey_ops[] = {
 const struct bkey_ops bch2_bkey_null_ops = {
 };
 
+/*
+ * The shortest valid value of each type: its struct up to BCH_BKEY_TYPES()'
+ * field, or all of it for _. A type this code doesn't know has no minimum.
+ *
+ * For _, __min_val_size_field_##field is __min_val_size_field__, which is two
+ * arguments: that puts __min_val_size_all where __min_val_size_pick() finds
+ * __min_val_size_upto for a field.
+ */
+#define __min_val_size_all(type, field)		sizeof(type)
+#define __min_val_size_upto(type, field)	offsetof(type, field)
+#define __min_val_size_field__			~, __min_val_size_all
+#define __min_val_size_pick(probe, f, ...)	f
+#define __min_val_size(probe)			__min_val_size_pick(probe, __min_val_size_upto, )
+
+static const unsigned bch2_bkey_min_val_sizes[] = {
+#define x(name, nr, flags, field, ...)					\
+	[KEY_TYPE_##name] = __min_val_size(__min_val_size_field_##field)(struct bch_##name, field),
+	BCH_BKEY_TYPES()
+#undef x
+};
+
+static unsigned bkey_min_val_size(unsigned type)
+{
+	return type < ARRAY_SIZE(bch2_bkey_min_val_sizes)
+		? bch2_bkey_min_val_sizes[type]
+		: 0;
+}
+
 int bch2_bkey_val_validate(struct bch_fs *c, struct bkey_s_c k,
 			   const struct bkey_validate_context *from)
 {
@@ -177,10 +204,10 @@ int bch2_bkey_val_validate(struct bch_fs *c, struct bkey_s_c k,
 	const struct bkey_ops *ops = bch2_bkey_type_ops(k.k->type);
 	int ret = 0;
 
-	bkey_fsck_err_on(bkey_val_bytes(k.k) < ops->min_val_size,
+	bkey_fsck_err_on(bkey_val_bytes(k.k) < bkey_min_val_size(k.k->type),
 			 c, bkey_val_size_too_small,
 			 "bad val size (%zu < %u)",
-			 bkey_val_bytes(k.k), ops->min_val_size);
+			 bkey_val_bytes(k.k), bkey_min_val_size(k.k->type));
 
 	if (!ops->key_validate)
 		return 0;
@@ -360,9 +387,9 @@ __cold void bch2_val_to_text(struct printbuf *out, struct bch_fs *c,
 		return;
 	}
 
-	if (bkey_val_bytes(k.k) < ops->min_val_size) {
+	if (bkey_val_bytes(k.k) < bkey_min_val_size(k.k->type)) {
 		prt_printf(out, "(value too small: %zu < %u)",
-			   bkey_val_bytes(k.k), ops->min_val_size);
+			   bkey_val_bytes(k.k), bkey_min_val_size(k.k->type));
 		return;
 	}
 

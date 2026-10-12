@@ -16,7 +16,6 @@ int bch2_reflink_p_check_repair(struct btree_trans *, struct btree_iter *,
 	.key_merge	= bch2_reflink_p_merge,			\
 	.trigger	= bch2_trigger_reflink_p,		\
 	.check_repair	= bch2_reflink_p_check_repair,		\
-	.min_val_size	= 16,					\
 })
 
 int bch2_reflink_v_validate(struct bch_fs *, struct bkey_s_c,
@@ -30,7 +29,6 @@ int bch2_trigger_reflink_v(struct btree_trans *, struct btree_trigger_op);
 	.swab		= bch2_ptr_swab,			\
 	.trigger	= bch2_trigger_reflink_v,		\
 	.check_repair	= bch2_check_fix_ptrs,			\
-	.min_val_size	= 8,					\
 })
 
 int bch2_indirect_inline_data_validate(struct bch_fs *, struct bkey_s_c,
@@ -43,7 +41,6 @@ int bch2_trigger_indirect_inline_data(struct btree_trans *, struct btree_trigger
 	.key_validate	= bch2_indirect_inline_data_validate,	\
 	.val_to_text	= bch2_indirect_inline_data_to_text,	\
 	.trigger	= bch2_trigger_indirect_inline_data,	\
-	.min_val_size	= 8,					\
 })
 
 static inline bool bkey_is_indirect(const struct bkey *k)

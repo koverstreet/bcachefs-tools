@@ -24,7 +24,6 @@ void bch2_damage_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 #define bch2_bkey_ops_damage ((struct bkey_ops) {	\
 	.key_validate	= bch2_damage_validate,		\
 	.val_to_text	= bch2_damage_to_text,		\
-	.min_val_size	= 16,				\
 })
 
 int bch2_inode_has_damage(struct btree_trans *, u64, u32);

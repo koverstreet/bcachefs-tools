@@ -30,7 +30,6 @@ void bch2_backpointer_swab(const struct bch_fs *, struct bkey_s);
 	.key_validate	= bch2_backpointer_validate,	\
 	.val_to_text	= bch2_backpointer_to_text,	\
 	.swab		= bch2_backpointer_swab,	\
-	.min_val_size	= 32,				\
 })
 
 /*

@@ -30,6 +30,10 @@ int bch2_damage_validate(struct bch_fs *c, struct bkey_s_c k,
 			 "val size %zu not a multiple of entry size",
 			 bkey_val_bytes(k.k));
 
+	bkey_fsck_err_on(!nr,
+			 c, damage_entries_bad,
+			 "no entries");
+
 	for (unsigned i = 0; i < nr; i++) {
 		const bch_sb_field_error_entry_v2 *e = &d.v->entries[i];
 		unsigned id = BCH_SB_ERROR_ENTRY_V2_ID(e);

@@ -263,21 +263,18 @@ void bch2_alloc_v4_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 	.key_validate	= bch2_alloc_v1_validate,	\
 	.val_to_text	= bch2_alloc_to_text,		\
 	.trigger	= bch2_trigger_alloc,		\
-	.min_val_size	= 8,				\
 })
 
 #define bch2_bkey_ops_alloc_v2 ((struct bkey_ops) {	\
 	.key_validate	= bch2_alloc_v2_validate,	\
 	.val_to_text	= bch2_alloc_to_text,		\
 	.trigger	= bch2_trigger_alloc,		\
-	.min_val_size	= 8,				\
 })
 
 #define bch2_bkey_ops_alloc_v3 ((struct bkey_ops) {	\
 	.key_validate	= bch2_alloc_v3_validate,	\
 	.val_to_text	= bch2_alloc_to_text,		\
 	.trigger	= bch2_trigger_alloc,		\
-	.min_val_size	= 16,				\
 })
 
 #define bch2_bkey_ops_alloc_v4 ((struct bkey_ops) {	\
@@ -285,7 +282,6 @@ void bch2_alloc_v4_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 	.val_to_text	= bch2_alloc_v4_to_text,	\
 	.swab		= bch2_alloc_v4_swab,		\
 	.trigger	= bch2_trigger_alloc,		\
-	.min_val_size	= 48,				\
 })
 
 int bch2_bucket_gens_validate(struct bch_fs *, struct bkey_s_c,

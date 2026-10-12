@@ -134,7 +134,6 @@ void bch2_accounting_swab(const struct bch_fs *, struct bkey_s);
 	.key_validate	= bch2_accounting_validate,	\
 	.val_to_text	= bch2_accounting_to_text,	\
 	.swab		= bch2_accounting_swab,		\
-	.min_val_size	= 8,				\
 })
 
 int bch2_accounting_update_sb(struct btree_trans *);

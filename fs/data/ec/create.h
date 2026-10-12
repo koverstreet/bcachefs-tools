@@ -118,7 +118,6 @@ void bch2_logged_op_stripe_update_to_text(struct printbuf *, struct bch_fs *, st
 
 #define bch2_bkey_ops_logged_op_stripe_update ((struct bkey_ops) {	\
 	.val_to_text	= bch2_logged_op_stripe_update_to_text,		\
-	.min_val_size	= 40,						\
 })
 
 int bch2_resume_logged_op_stripe_update(struct btree_trans *, struct bkey_i *);

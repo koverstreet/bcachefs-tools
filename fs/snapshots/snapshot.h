@@ -11,7 +11,6 @@ int bch2_snapshot_tree_validate(struct bch_fs *, struct bkey_s_c,
 #define bch2_bkey_ops_snapshot_tree ((struct bkey_ops) {	\
 	.key_validate	= bch2_snapshot_tree_validate,		\
 	.val_to_text	= bch2_snapshot_tree_to_text,		\
-	.min_val_size	= 8,					\
 })
 
 void bch2_snapshot_key_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
@@ -27,7 +26,6 @@ int bch2_check_snapshot_needs_deletion(struct btree_trans *, struct bkey_s_c, u3
 	.key_validate	= bch2_snapshot_validate,		\
 	.val_to_text	= bch2_snapshot_key_to_text,		\
 	.trigger	= bch2_snapshot_trigger,		\
-	.min_val_size	= 24,					\
 })
 
 /*

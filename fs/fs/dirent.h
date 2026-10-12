@@ -11,7 +11,6 @@ void bch2_dirent_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 #define bch2_bkey_ops_dirent ((struct bkey_ops) {	\
 	.key_validate	= bch2_dirent_validate,		\
 	.val_to_text	= bch2_dirent_to_text,		\
-	.min_val_size	= 16,				\
 })
 
 #include "fs/dirent_gen.h"

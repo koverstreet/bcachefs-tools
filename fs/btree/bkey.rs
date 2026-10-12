@@ -308,6 +308,12 @@ pub trait TypedBkey {
 
     const TYPE: c::bch_bkey_type;
 
+    /// The shortest a valid value is: Val up to BCH_BKEY_TYPES()' field, the
+    /// first one a value may end before, or all of it for `_`. One that long
+    /// but shorter than Val is an older version; a shorter one is damage,
+    /// which validate rejects as bkey_val_size_too_small.
+    const MIN_VAL_SIZE: usize;
+
     /// A key of this type at POS_MIN, its value zeroed: C's
     /// bkey_<name>_init().
     fn new() -> Self where Self: Sized;
@@ -327,10 +333,17 @@ pub trait TypedBkey {
     fn val_mut(k: &mut c::bkey_i) -> Option<&mut Self::Val>;
 }
 
+/// BCH_BKEY_TYPES()' field column as a length, as C's bch2_bkey_min_val_sizes[]
+/// has it: @val up to @field, or all of it for `_`.
+macro_rules! min_val_size {
+    ($val:ty, _)             => { size_of::<$val>() };
+    ($val:ty, $field:ident)  => { core::mem::offset_of!($val, $field) };
+}
+
 /// Everything defined per key type, from BCH_BKEY_TYPES(): (name, KEY_TYPE
 /// number, ...).
 macro_rules! bkey_types {
-    ($(($name:ident, $nr:literal $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! {
+    ($(($name:ident, $nr:literal, $flags:expr, $field:tt $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! {
         $(
         pub type [<Bkey $name:camel>] = c::[<bkey_i_ $name>];
 
@@ -350,6 +363,7 @@ macro_rules! bkey_types {
             type Val = c::[<bch_ $name>];
 
             const TYPE: c::bch_bkey_type = c::bch_bkey_type::[<KEY_TYPE_ $name>];
+            const MIN_VAL_SIZE: usize = min_val_size!(c::[<bch_ $name>], $field);
 
             fn new() -> Self {
                 let mut k = c::bkey::new();

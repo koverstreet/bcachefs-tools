@@ -14,7 +14,6 @@ void bch2_quota_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 #define bch2_bkey_ops_quota ((struct bkey_ops) {	\
 	.key_validate	= bch2_quota_validate,		\
 	.val_to_text	= bch2_quota_to_text,		\
-	.min_val_size	= 32,				\
 })
 
 static inline struct bch_qid bch_qid(struct bch_inode_unpacked *u)

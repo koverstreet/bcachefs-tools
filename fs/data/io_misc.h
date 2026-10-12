@@ -14,7 +14,6 @@ void bch2_logged_op_truncate_to_text(struct printbuf *, struct bch_fs *, struct 
 
 #define bch2_bkey_ops_logged_op_truncate ((struct bkey_ops) {	\
 	.val_to_text	= bch2_logged_op_truncate_to_text,	\
-	.min_val_size	= 24,					\
 })
 
 int bch2_resume_logged_op_truncate(struct btree_trans *, struct bkey_i *);
@@ -23,7 +22,6 @@ void bch2_logged_op_finsert_to_text(struct printbuf *, struct bch_fs *, struct b
 
 #define bch2_bkey_ops_logged_op_finsert ((struct bkey_ops) {	\
 	.val_to_text	= bch2_logged_op_finsert_to_text,	\
-	.min_val_size	= 24,					\
 })
 
 int bch2_resume_logged_op_finsert(struct btree_trans *, struct bkey_i *);
