@@ -42,8 +42,18 @@ pub unsafe trait Plain {}
 macro_rules! plain {
     ($($t:ty),*) => { $(unsafe impl Plain for $t {})* };
 }
-plain!(u8, u16, u32, u64, i8, i16, i32, i64);
+plain!(u8, u16, u32, u64, u128, i8, i16, i32, i64, i128);
 unsafe impl<T: Plain, const N: usize> Plain for [T; N] {}
+
+// zerocopy's byte order integers: an integer's bytes, any of which are one
+macro_rules! plain_byteorder {
+    ($($t:ident),*) => { $(unsafe impl<O: zerocopy::byteorder::ByteOrder> Plain for zerocopy::byteorder::$t<O> {})* };
+}
+plain_byteorder!(U16, U32, U64, U128, I16, I32, I64, I128);
+
+/// Nothing, at compile time, if @T is Plain: what #[derive(Plain)] and
+/// #[bitfield] check a type's fields with (cstruct-macros' vstructs.rs).
+pub const fn assert_plain<T: Plain>() {}
 
 /// A type whose values run past size_of::<Self>(), as far as their own fields
 /// say.

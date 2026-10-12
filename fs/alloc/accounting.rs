@@ -2,7 +2,6 @@ use crate::btree::iter::BtreeTrans;
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
-use crate::util::vstructs::FlexArray;
 
 pub use c::bch_data_type;
 pub use c::bch_compression_type;
@@ -67,16 +66,6 @@ impl c::disk_accounting_pos {
     /// disk_accounting_pos_to_bpos().
     pub fn to_bpos(&self) -> c::bpos {
         acc_bytes_to_bpos(self.as_bytes())
-    }
-}
-
-/// replicas' devices: devs[], nr_devs long.
-impl FlexArray for c::bch_replicas_entry_v1 {
-    type Elem = u8;
-    const TAIL: usize = core::mem::offset_of!(c::bch_replicas_entry_v1, devs);
-
-    fn nr(&self) -> usize {
-        self.nr_devs as usize
     }
 }
 

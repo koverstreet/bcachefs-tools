@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use cstruct_macros::{CStruct, TypeInfo};
+use cstruct_macros::{CStruct, Plain, TypeInfo};
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -23,12 +23,13 @@ pub struct bch_sb_field_replicas_v0 {
 }
 
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_replicas_entry_v1 {
     pub data_type: u8,
     pub nr_devs: u8,
     pub nr_required: u8,
-    /* No counted_by: bch_replicas_cpu entries are all the size of the biggest entry */
+    /* No __counted_by in C: bch_replicas_cpu entries are all the size of the biggest entry */
+    #[counted_by(nr_devs)]
     pub devs: [u8; 0],
 }
 

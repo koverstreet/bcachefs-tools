@@ -36,6 +36,10 @@
 //!                        x-macro list, read as an enum (tagged_union.rs)
 //!   #[derive(TypeInfo)]  runtime type information, for kvdb: no record, no
 //!                        C (typeinfo.rs)
+//!   #[derive(Plain)]     util/vstructs.rs's Plain, checked at compile time;
+//!                        a #[bitfield] is Plain too, and #[counted_by] on a
+//!                        CStruct's trailing [T; 0] is its FlexArray
+//!                        (vstructs.rs)
 //!
 //! Zero dependencies: the kernel build compiles this with a bare rustc.
 
@@ -52,6 +56,7 @@ use cstruct::{enum_text, expand_enum_list, parse_c_export, parse_cstruct, parse_
 
 mod tagged_union;
 mod typeinfo;
+mod vstructs;
 mod xmacro_from_c;
 
 /// A tagged union with a stable representation: see tagged_union.rs.
@@ -165,11 +170,13 @@ macro_rules! one_item {
 /// type written in its place, unnamed - C's anonymous struct or union - and
 /// `#[c_inline]` the same, named; `#[c_struct_group]` as the kernel's
 /// struct_group(). `#[c_bitfield]` marks a field of a #[bitfield] type, whose
-/// members C declares in its place.
+/// members C declares in its place. `#[counted_by(FIELD)]` on a trailing
+/// `[T; 0]`: FIELD is its length - the struct's FlexArray (vstructs.rs).
 /// `#[c_typedef]` on the struct: C has it as a typedef - `typedef struct {
 /// ... } name`, or with `#[c_typedef(NAME)]`, `typedef struct name { ... }
 /// NAME`.
-#[proc_macro_derive(CStruct, attributes(c, c_anon, c_bitfield, c_inline, c_packed, c_struct_group, c_typedef))]
+#[proc_macro_derive(CStruct, attributes(c, c_anon, c_bitfield, c_inline, c_packed, c_struct_group, c_typedef,
+                                        counted_by))]
 pub fn derive_cstruct(input: TokenStream) -> TokenStream {
     expand("#[derive(CStruct)]", || cstruct_expand(input))
 }
@@ -179,6 +186,13 @@ pub fn derive_cstruct(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(TypeInfo)]
 pub fn derive_type_info(input: TokenStream) -> TokenStream {
     expand("#[derive(TypeInfo)]", || typeinfo::derive(input))
+}
+
+/// `#[derive(Plain)]`: util/vstructs.rs's Plain, checked at compile time -
+/// see vstructs.rs.
+#[proc_macro_derive(Plain)]
+pub fn derive_plain(input: TokenStream) -> TokenStream {
+    expand("#[derive(Plain)]", || vstructs::derive_plain(input))
 }
 
 fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
@@ -206,7 +220,8 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         nums.push(format!("crate::types::field_size({proj})"));
         nums.push(format!("crate::types::field_align({proj})"));
     }
-    Ok(tokens(&format!("{forward}{}", record(&text, &nums))))
+    let flex = vstructs::flex_array(&def)?;
+    Ok(tokens(&format!("{forward}{flex}{}", record(&text, &nums))))
 }
 
 /// bitfield_struct::bitfield, recorded - and __NAME_forward!(STRUCT, field),
@@ -292,11 +307,21 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
         bs_args.extend(["repr = crate::types::Align8U64", "from = crate::types::Align8U64::from_u64",
                         "into = crate::types::Align8U64::to_u64"].map(String::from));
     }
+    // What it holds - its repr, else the storage integer - and nothing else:
+    // so it's Plain
+    let held = if args.align8 {
+        "crate::types::Align8U64".to_string()
+    } else {
+        args.rest.iter()
+            .find_map(|a| key_value(a).filter(|(k, _)| k == "repr").map(|(_, v)| v))
+            .unwrap_or_else(|| args.storage.clone())
+    };
     // The struct as tokens, not text: an error in a member points at it
     let mut out = tokens(&out);
     out.extend(tokens(&format!("#[::bitfield_struct::bitfield({})]", bs_args.join(", "))));
     out.extend(s.item.clone());
     out.extend(tokens(&typeinfo::info(name, "Struct", "")));
+    out.extend(tokens(&vstructs::plain(name, &[&held])));
     Ok(out)
 }
 

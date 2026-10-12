@@ -267,6 +267,9 @@ pub struct Fifo<T, I = usize> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct NeBytes<const N: usize>(pub [u8; N]);
 
+// SAFETY: bytes, and nothing else
+unsafe impl<const N: usize> crate::util::vstructs::Plain for NeBytes<N> {}
+
 impl<const N: usize> Default for NeBytes<N> {
     fn default() -> Self { Self([0; N]) }
 }
@@ -325,6 +328,10 @@ impl<const N: usize> NeBytes<N> {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Align8U64(pub u64);
+
+// SAFETY: a u64, aligned to its own size - so nothing else
+unsafe impl crate::util::vstructs::Plain for Align8U64 {}
+const _: () = assert!(core::mem::size_of::<Align8U64>() == 8);
 
 impl Align8U64 {
     pub const fn from_u64(v: u64) -> Self { Self(v) }
