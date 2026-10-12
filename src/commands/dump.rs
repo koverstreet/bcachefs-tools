@@ -12,7 +12,7 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::data::extents::{bkey_ptrs_mut, bkey_ptrs_sc};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::{entry_type, journal_entry_type};
-use bcachefs_kernel::util::vstructs::{Flex, SelfSized, VStruct, VStructContainer};
+use bcachefs_kernel::util::vstructs::{Flex, Plain, SelfSized, VStruct, VStructContainer};
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::POS_MIN;
 
@@ -178,33 +178,8 @@ fn cmd_undump(cli: UndumpCli) -> Result<()> {
 
 // ---- Sanitize implementation ----
 
-// On-disk struct sizes (all __packed, little-endian x86_64)
-const BSET_HDR: usize = 24;            // offsetof(bset, _data)
-const BTREE_NODE_KEYS: usize = 136;    // offsetof(btree_node, keys)
-const BNE_KEYS: usize = 16;            // offsetof(btree_node_entry, keys)
-const BKEY_U64S: usize = 5;            // sizeof(bkey) / 8
-
-fn read_le64(buf: &[u8], off: usize) -> u64 {
-    u64::from_le_bytes(buf[off..off + 8].try_into().unwrap())
-}
-
-fn read_le32(buf: &[u8], off: usize) -> u32 {
-    u32::from_le_bytes(buf[off..off + 4].try_into().unwrap())
-}
-
-fn read_le16(buf: &[u8], off: usize) -> u16 {
-    u16::from_le_bytes(buf[off..off + 2].try_into().unwrap())
-}
-
 fn csum_type_is_encryption(csum_type: u32) -> bool {
     csum_type == 3 || csum_type == 4 // chacha20_poly1305_{80,128}
-}
-
-/// Round `bytes` up to the block alignment determined by `block_bits`,
-/// matching C `vstruct_sectors(s, block_bits) << 9`.
-fn vstruct_aligned_bytes(bytes: usize, block_bits: usize) -> usize {
-    let align = 512 << block_bits;
-    bytes.div_ceil(align) * align
 }
 
 /// Sanitize a bkey value region in-place. Returns true if modified.
@@ -286,15 +261,13 @@ fn sanitize_val(fs: &Fs, mut k: BkeyS, opts: SanitizeOpts) -> bool {
     }
 }
 
-/// The jset at the start of @buf, if one's whole there: off the disk and not
+/// The T at the start of @buf, if one's whole there: off the disk and not
 /// validated, so its header is checked to be there, then its count.
-fn jset_at(buf: &mut [u8], magic: u64) -> Option<&mut c::jset> {
-    let whole = Flex::<c::jset>::new(buf).ok()
-        .filter(|j| j.magic.get() == magic && j.as_bytes().is_ok())
-        .is_some();
-    // SAFETY: a jset is there, aligned, with all its bytes - checked - and
-    // it's plain data
-    whole.then(|| unsafe { &mut *buf.as_mut_ptr().cast::<c::jset>() })
+fn whole_at<T: Plain + SelfSized>(buf: &mut [u8]) -> Option<&mut T> {
+    let whole = Flex::<T>::new(buf).is_ok_and(|t| t.as_bytes().is_ok());
+    // SAFETY: a T is there, aligned, with all its bytes - checked - and it's
+    // plain data
+    whole.then(|| unsafe { &mut *buf.as_mut_ptr().cast::<T>() })
 }
 
 /// Sanitize a journal buffer in-place: walk jset entries, handle encryption,
@@ -305,7 +278,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
     let block_bits = fs.block_bits() as u32;
 
     let mut pos = 0;
-    while let Some(j) = jset_at(&mut buf[pos..], jset_magic) {
+    while let Some(j) = whole_at::<c::jset>(&mut buf[pos..]).filter(|j| j.magic.get() == jset_magic) {
         let (bytes, csum_type) = (j.bytes(), j.csum_type() as u32);
         let mut modified = false;
 
@@ -351,7 +324,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
 fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
     let fs = unsafe { Fs::borrow_raw(fs_raw) };
     let bset_magic = bset_magic(fs.disk_sb().sb());
-    let block_bits = fs.block_bits() as usize;
+    let block_bits = fs.block_bits() as u32;
 
     // The node's packed-key format lives in the btree_node header at the start
     // of the buffer; packed keys are unpacked against it.
@@ -361,46 +334,30 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
 
     let mut first = true;
     let mut seq: u64 = 0;
-    let mut format_key_u64s: usize = BKEY_U64S;
+    let mut format_key_u64s = c::BKEY_U64s;
     let mut pos = 0;
     let mut bset_byte_offset: usize = 0;
 
     while pos < buf.len() {
-        let (bset_off, data_off, vstruct_bytes);
-
-        if first {
-            if pos + BTREE_NODE_KEYS + BSET_HDR > buf.len() {
+        // The node, then its entries - each as long as its bset: where the
+        // bset is, and the whole's bytes and sectors
+        let (bset_off, vstruct_bytes, sectors) = if first {
+            let Some(n) = whole_at::<c::btree_node>(&mut buf[pos..]) else { break };
+            if n.magic.get() != bset_magic {
                 break;
             }
-            if read_le64(buf, pos + 16) != bset_magic {
-                break;
-            }
-
-            bset_off = pos + BTREE_NODE_KEYS;
-            data_off = pos + BTREE_NODE_KEYS + BSET_HDR;
-            format_key_u64s = buf[pos + 80] as usize; // btree_node.format.key_u64s
-            seq = read_le64(buf, bset_off);            // bset.seq
-            let u64s = read_le16(buf, bset_off + 22) as usize;
-            vstruct_bytes = BTREE_NODE_KEYS + BSET_HDR + u64s * 8;
+            format_key_u64s = n.format.key_u64s as usize;
+            seq = n.keys.seq.get();
+            (pos + std::mem::offset_of!(c::btree_node, keys), n.bytes(), n.sectors(block_bits))
         } else {
-            if pos + BNE_KEYS + BSET_HDR > buf.len() {
+            let Some(n) = whole_at::<c::btree_node_entry>(&mut buf[pos..]) else { break };
+            if n.keys.seq.get() != seq {
                 break;
             }
-
-            bset_off = pos + BNE_KEYS;
-            data_off = pos + BNE_KEYS + BSET_HDR;
-            if read_le64(buf, bset_off) != seq {
-                break;
-            }
-            let u64s = read_le16(buf, bset_off + 22) as usize;
-            vstruct_bytes = BNE_KEYS + BSET_HDR + u64s * 8;
-        }
-
-        if pos + vstruct_bytes > buf.len() {
-            break;
-        }
-
-        let csum_type = read_le32(buf, bset_off + 16) & 0xf;
+            (pos + std::mem::offset_of!(c::btree_node_entry, keys), n.bytes(), n.sectors(block_bits))
+        };
+        // SAFETY: checked whole, above
+        let csum_type = unsafe { &*buf.as_ptr().add(bset_off).cast::<c::bset>() }.csum_type() as u32;
         let mut modified = false;
 
         if csum_type_is_encryption(csum_type) {
@@ -421,10 +378,8 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
         }
 
         // Walk packed keys in bset data region
-        let u64s = read_le16(buf, bset_off + 22) as usize;
-        let key_end = (data_off + u64s * 8).min(buf.len());
-
-        let mut key_pos = data_off;
+        let key_end = pos + vstruct_bytes;
+        let mut key_pos = bset_off + std::mem::size_of::<c::bset>();
         while key_pos + 3 <= key_end {
             let key_u64s = buf[key_pos] as usize;
             if key_u64s == 0 {
@@ -440,7 +395,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
             // KEY_FORMAT_LOCAL_BTREE (0) uses the btree node's packed format;
             // anything else (KEY_FORMAT_CURRENT = 1) is the canonical
             // unpacked layout.
-            let key_hdr_u64s = if key_format == 0 { format_key_u64s } else { BKEY_U64S };
+            let key_hdr_u64s = if key_format == 0 { format_key_u64s } else { c::BKEY_U64s };
             let val_off = key_hdr_u64s * 8;
 
             if val_off < key_bytes {
@@ -490,8 +445,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
         }
 
         first = false;
-        let advance = vstruct_aligned_bytes(vstruct_bytes, block_bits)
-            .min(buf.len() - pos);
+        let advance = (sectors << 9).min(buf.len() - pos);
         bset_byte_offset += advance;
         pos += advance;
     }

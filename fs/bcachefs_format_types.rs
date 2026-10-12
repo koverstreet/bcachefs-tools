@@ -83,7 +83,7 @@ c_typedef! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bkey_format {
     pub key_u64s: u8,
     pub nr_fields: u8,
@@ -2022,7 +2022,7 @@ c_bitmask! {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct btree_node {
     pub csum: c::bch_csum,
@@ -2063,7 +2063,7 @@ c_bitmask! {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct btree_node_entry {
     pub csum: c::bch_csum,
