@@ -589,6 +589,9 @@ pub struct CTaggedUnion {
     /// `packed`: C's __packed - for a struct, the payload right after the
     /// tag whatever the arms' alignment, which is what the format says.
     pub packed:    bool,
+    /// `unsized`: over another's storage, a header its arms embed and run
+    /// past - SelfSized, its bytes() bounding the arm.
+    pub unsized_:  bool,
     /// Arm types defined in the block, for nestify::nest!.
     pub defs:      Vec<CTaggedDef>,
 }
@@ -1816,7 +1819,7 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
     let mut tu = CTaggedUnion { cfg, name, union, storage, tag_field: String::new(),
                                 tag_ty: String::new(), tag_enum: String::new(), by: None,
                                 from: None, arms: Vec::new(), members: Vec::new(), pad: None,
-                                packed: false, defs: Vec::new() };
+                                packed: false, unsized_: false, defs: Vec::new() };
     for item in split_top(inner, ',') {
         let eq = item.iter().rposition(|t| t.is_punct('='));
         match item {
@@ -1849,6 +1852,7 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
                 if v == "pub" && ty.first().is_some_and(|t| !t.is_punct(':')) =>
                 tu.members.push((m.clone(), tokens_to_rust(ty))),
             [Tok::Ident(kw)] if kw == "packed" => tu.packed = true,
+            [Tok::Ident(kw)] if kw == "unsized" => tu.unsized_ = true,
             _ => return Err(format!("tagged_union!: {} not understood", tokens_to_rust(item))),
         }
     }
@@ -1856,9 +1860,10 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
         return Err("tagged_union!: no tag".into());
     }
     match (tu.union, &tu.by) {
-        (true, None) => return Err(format!("tagged_union! {}: a union has no stored tag - \
-                                            `by DETERMINANT` says how its arms' bytes give it",
-                                           tu.name)),
+        // over another's storage, the tag can be the storage's field
+        (true, None) if tu.storage.is_none() =>
+            return Err(format!("tagged_union! {}: a union has no stored tag - \
+                                `by DETERMINANT` says how its arms' bytes give it", tu.name)),
         (false, Some(_)) => return Err(format!("tagged_union! {}: a struct's tag is its stored \
                                                 field - `by` is for a union", tu.name)),
         _ => {}
@@ -1869,6 +1874,10 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
                                 members of its own - a struct's are its tag and its arms' union",
                                tu.name));
         }
+    }
+    if tu.unsized_ && (tu.storage.is_none() || !tu.union) {
+        return Err(format!("tagged_union! {}: `unsized` is a union over another's storage - \
+                            `union NAME in STORAGE` - whose arms run past it", tu.name));
     }
     if tu.storage.is_some() {
         if let Some(d) = tu.defs.first() {

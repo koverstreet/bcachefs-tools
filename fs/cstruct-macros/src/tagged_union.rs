@@ -33,7 +33,9 @@
 //! stabby's idea (docs.rs/stabby), n-way. A struct's is generated, and
 //! returns the field; a union's is written by hand and named with `by` -
 //! an extent entry's tag is the lowest set bit of its first word, bits each
-//! arm's own type field sets.
+//! arm's own type field sets - unless it's over another's storage that has
+//! the tag as a field: `tag NAME` is that field, and its Determinant
+//! generated.
 //!
 //! Generated, for the first declaration:
 //!
@@ -67,6 +69,12 @@
 //! another's too. Without the storage's definition, the arms are found where
 //! a `packed` struct has them, right after the tag, or for a union where it
 //! has them, at its start; the asserts check each fits there.
+//!
+//! Or, `unsized`, that storage is a header its arms embed and run past, as
+//! far as its count says - a superblock field's: SelfSized. Then what's
+//! generated is the Ref enum, arm_at(), ArmOf, and get() over the bytes the
+//! header's count says are the arm's - trusting it, as
+//! VStructContainer::entries() does.
 //!
 //! The arms come from an x-macro list: tagged_union! hands the declaration to
 //! it - LIST!(cstruct_macros::__tagged_union [decl]) - and the list calls
@@ -275,7 +283,29 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
         storage_attrs
     };
     let (storage, payload_offset, determinant) = if tu.storage.is_some() && tu.union {
-        (String::new(), "0".to_string(), tu.by.clone().unwrap_or_default())
+        match &tu.by {
+            Some(by) => (String::new(), "0".to_string(), by.clone()),
+            // the storage's own field: by value, as a packed struct's must be
+            None => {
+                let det = format!("{name}__tag");
+                (format!("/// {name}'s tag: the storage's {tag}.\n\
+                          #[doc(hidden)]\n\
+                          #[allow(non_camel_case_types)]\n\
+                          {vis} struct {det};\n\
+                          \n\
+                          impl {det_trait}<{s_ty}> for {det} {{\n\
+                              type Tag = {tag_ty};\n\
+                              fn get(u: &{s_ty}) -> {tag_ty} {{\n\
+                                  <{tag_ty}>::from({{ u.{tag} }})\n\
+                              }}\n\
+                              fn set(u: &mut {s_ty}, tag: {tag_ty}) {{\n\
+                                  u.{tag} = tag.into();\n\
+                              }}\n\
+                          }}\n"),
+                 "0".to_string(),
+                 det)
+            }
+        }
     } else if tu.storage.is_some() {
         let det = format!("{name}__tag");
         (format!("/// {name}'s tag: the storage's first bytes.\n\
@@ -390,7 +420,66 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
         String::new()
     };
 
-    format!(
+    // arm_at(): every form has it
+    let arm_at = format!(
+        "/// The arm @tag selects, at the start of @b - which it may extend to\n\
+         /// their end: None if @tag isn't one of ours, or the arm doesn't fit\n\
+         /// there. For arms in a stream, as a key's extent entries are, each as\n\
+         /// long as its arm rather than the storage: there's no whole storage\n\
+         /// to get() from.\n\
+         #[allow(dead_code)]\n\
+         {vis} fn arm_at<'a>(tag: {tag_ty}, b: &'a [u8]) -> Option<{en}Ref<'a>> {{\n\
+             fn fits<A>(b: &[u8]) -> bool {{\n\
+                 b.len() >= ::core::mem::size_of::<A>() &&\n\
+                     b.as_ptr() as usize % ::core::mem::align_of::<A>() == 0\n\
+             }}\n\
+             // SAFETY: the tag says these are that arm's bytes, an arm is plain data,\n\
+             // and it fits there, aligned: checked\n\
+             unsafe {{\n{gets}}}\n\
+             None\n\
+         }}");
+
+    if tu.unsized_ {
+        // Over a header its arms embed and run past, as far as its count says:
+        // arm_at(), and get() over those bytes - nothing of a storage's own
+        return with_defs(defs, name, &format!(
+            "{storage}\
+             /// One of {name}'s arms, with the bytes its header says are its: what\n\
+             /// {name}::get() gives.\n\
+             #[allow(non_camel_case_types, dead_code)]\n\
+             #[derive(Clone, Copy)]\n\
+             {vis} enum {en}Ref<'a> {{\n{by_ref}}}\n\
+             \n\
+             impl {s_ty} {{\n\
+                 /// The tag, whether this version knows it or not.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn {tag}(&self) -> {tag_enum} {{\n\
+                     {tag_enum}({det}::get(self) as _)\n\
+                 }}\n\
+                 \n\
+                 /// The arm the tag selects, over the bytes its count says are its -\n\
+                 /// trusted, as VStructContainer::entries() is: Err(the tag) if it isn't\n\
+                 /// one of ours, or its arm doesn't fit them.\n\
+                 ///\n\
+                 /// XXX: technically undefined behaviour until these are proper DSTs: the\n\
+                 /// arm is read through a pointer from &self, which covers only the header.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn get(&self) -> Result<{en}Ref<'_>, {tag_enum}> {{\n\
+                     let t: {tag_ty} = {det}::get(self);\n\
+                     let len = crate::util::vstructs::SelfSized::bytes(self);\n\
+                     // SAFETY: its count is right - validated - so its bytes follow it;\n\
+                     // but see above\n\
+                     let b = unsafe {{ ::core::slice::from_raw_parts((self as *const Self).cast::<u8>(), len) }};\n\
+                     Self::arm_at(t, b).ok_or({tag_enum}(t as _))\n\
+                 }}\n\
+                 \n\
+                 {arm_at}\n\
+             }}\n\
+             \n\
+             {arms_of}"));
+    }
+
+    with_defs(defs, name, &format!(
         "{storage}\
          \n\
          /// One of {name}'s arms, by value: what {name}::new() takes.\n\
@@ -434,22 +523,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                  Self::arm_at(t, &self.as_bytes()[{payload_offset}..]).ok_or({tag_enum}(t as _))\n\
              }}\n\
              \n\
-             /// The arm @tag selects, at the start of @b - which it may extend to\n\
-             /// their end: None if @tag isn't one of ours, or the arm doesn't fit\n\
-             /// there. For arms in a stream, as a key's extent entries are, each as\n\
-             /// long as its arm rather than the storage: there's no whole storage\n\
-             /// to get() from.\n\
-             #[allow(dead_code)]\n\
-             {vis} fn arm_at<'a>(tag: {tag_ty}, b: &'a [u8]) -> Option<{en}Ref<'a>> {{\n\
-                 fn fits<A>(b: &[u8]) -> bool {{\n\
-                     b.len() >= ::core::mem::size_of::<A>() &&\n\
-                         b.as_ptr() as usize % ::core::mem::align_of::<A>() == 0\n\
-                 }}\n\
-                 // SAFETY: the tag says these are that arm's bytes, an arm is plain data,\n\
-                 // and it fits there, aligned: checked\n\
-                 unsafe {{\n{gets}}}\n\
-                 None\n\
-             }}\n\
+             {arm_at}\n\
              \n\
              /// From an arm: new(), by the arm's type.\n\
              #[allow(dead_code)]\n\
@@ -510,11 +584,13 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
          {pad_assert}\
          {arm_asserts}\
          {packed_asserts}\
-         {c_record}")
-        .parse::<TokenStream>()
-        .map(|rest| {
-            defs.extend(rest);
-            defs
-        })
-        .map_err(|e| format!("{name}: generated code doesn't parse: {e}"))
+         {c_record}"))
+}
+
+/// @code, after @defs: the arm types defined in the block, then the rest.
+fn with_defs(mut defs: TokenStream, name: &str, code: &str) -> Result<TokenStream, String> {
+    let rest = code.parse::<TokenStream>()
+        .map_err(|e| format!("{name}: generated code doesn't parse: {e}"))?;
+    defs.extend(rest);
+    Ok(defs)
 }
