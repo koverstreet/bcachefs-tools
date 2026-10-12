@@ -290,12 +290,12 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
             }
         }
 
-        let mut buf = IoctlBuf::<c::bch_ioctl_fsck_offline>::new::<u64>(dev_ptrs.len());
+        let mut buf = IoctlBuf::<c::bch_ioctl_fsck_offline>::new(dev_ptrs.len());
         let c_opts = CString::new(opts_str.as_str())?;
         let hdr = buf.hdr_mut();
         hdr.opts = c_opts.as_ptr() as u64;
         hdr.nr_devs = dev_ptrs.len() as u64;
-        unsafe { std::slice::from_raw_parts_mut(hdr.devs.as_mut_ptr(), dev_ptrs.len()).copy_from_slice(&dev_ptrs) };
+        buf.tail_mut()?.copy_from_slice(&dev_ptrs);
 
         let fsck_fd = match std::fs::OpenOptions::new()
             .read(true).write(true)

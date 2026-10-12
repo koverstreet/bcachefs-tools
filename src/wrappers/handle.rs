@@ -5,7 +5,6 @@ use std::path::Path;
 
 use bch_bindgen::c::{
     bch_ioctl_dev_usage, bch_ioctl_dev_usage_v2,
-    bch_ioctl_dev_usage_type,
     bch_ioctl_disk, bch_ioctl_disk_v2,
     bch_ioctl_disk_set_state, bch_ioctl_disk_set_state_v2,
     bch_ioctl_disk_resize, bch_ioctl_disk_resize_v2,
@@ -506,7 +505,7 @@ impl BcachefsHandle {
     pub(crate) fn dev_usage(&self, dev_idx: u32) -> Result<DevUsage, Errno> {
         let nr_data_types = data_type::nr.0 as usize;
 
-        let mut buf = IoctlBuf::<bch_ioctl_dev_usage_v2>::new::<bch_ioctl_dev_usage_type>(nr_data_types);
+        let mut buf = IoctlBuf::<bch_ioctl_dev_usage_v2>::new(nr_data_types);
         let hdr = buf.hdr_mut();
         hdr.dev = dev_idx as u64;
         hdr.flags = BCH_BY_INDEX;
@@ -518,13 +517,12 @@ impl BcachefsHandle {
 
         if ret.is_ok() {
             let hdr = buf.hdr();
-            let nr = (hdr.nr_data_types as usize).min(nr_data_types);
 
             return Ok(DevUsage {
                 state: hdr.state,
                 bucket_size: hdr.bucket_size,
                 nr_buckets: hdr.nr_buckets,
-                data_types: unsafe { std::slice::from_raw_parts(hdr.d.as_ptr(), nr) }.iter()
+                data_types: buf.flex().tail().map_err(|_| Errno(libc::EIO))?.iter()
                     .map(|d| DevUsageType { buckets: d.buckets, sectors: d.sectors, fragmented: d.fragmented })
                     .collect(),
             });

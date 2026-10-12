@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::Le64;
 use zerocopy::byteorder::little_endian as le;
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_xmacro, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_xmacro, CStruct, Plain, TypeInfo};
 use nestify::nest;
 
 c_enum! {
@@ -507,7 +507,7 @@ c_bitmask! {
 /* align(8): C's v is __le64 v[2]; its bitfield's le::U128 is aligned to 1 */
 nest! {
     #[repr(C, align(8))]
-    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+    #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
     #[c_typedef(bch_sb_field_error_entry_v2)]
     pub struct bch_sb_field_error_entry_v2 {
         #[c("__le64 v[2]")]

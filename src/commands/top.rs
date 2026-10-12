@@ -30,15 +30,14 @@ const BCH_IOCTL_QUERY_COUNTERS_MOUNT: u16 = 1 << 0;
 // ioctl query
 
 fn read_counters(fd: std::os::fd::BorrowedFd, flags: u16, nr_stable: u16) -> Result<Vec<u64>> {
-    let mut buf = IoctlBuf::<bch_ioctl_query_counters>::new::<u64>(nr_stable as usize);
+    let mut buf = IoctlBuf::<bch_ioctl_query_counters>::new(nr_stable as usize);
     let hdr = buf.hdr_mut();
     hdr.nr = nr_stable;
     hdr.flags = flags;
 
     unsafe { ioctl_ptr::<BCH_IOCTL_QUERY_COUNTERS>(fd, buf.as_mut_ptr())? };
 
-    let nr = (buf.hdr().nr as usize).min(nr_stable as usize);
-    Ok(unsafe { std::slice::from_raw_parts(buf.hdr().d.as_ptr(), nr) }.to_vec())
+    Ok(buf.flex().tail()?.to_vec())
 }
 
 // Per-device IO from sysfs (io_done is JSON: {"read": {...}, "write": {...}}, values in bytes)

@@ -90,7 +90,7 @@ impl DamageEntry {
 fn get_damage(fd: &OwnedFd) -> std::io::Result<Vec<DamageEntry>> {
     let mut cap = 16u32;
     loop {
-        let mut buf = IoctlBuf::<c::bch_ioctl_get_damage>::new::<c::bch_sb_field_error_entry_v2>(cap as usize);
+        let mut buf = IoctlBuf::<c::bch_ioctl_get_damage>::new(cap as usize);
         buf.hdr_mut().nr_entries = cap;
         unsafe { ioctl_ptr::<BCHFS_IOC_GET_DAMAGE>(fd, buf.as_mut_ptr())? };
 
@@ -100,7 +100,7 @@ fn get_damage(fd: &OwnedFd) -> std::io::Result<Vec<DamageEntry>> {
             continue;
         }
 
-        return Ok(unsafe { std::slice::from_raw_parts(buf.hdr().entries.as_ptr(), nr as usize) }.iter()
+        return Ok(buf.flex().tail().map_err(std::io::Error::other)?.iter()
             .map(|e| DamageEntry {
                 id:    e.v.id() as u32,
                 nr:    e.v.nr() as u64,

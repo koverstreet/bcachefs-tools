@@ -45,7 +45,7 @@ impl BcachefsHandle {
         let mut accounting_u64s: u32 = 128;
 
         loop {
-            let mut buf = IoctlBuf::<c::bch_ioctl_query_accounting_v2>::new::<u64>(accounting_u64s as usize);
+            let mut buf = IoctlBuf::<c::bch_ioctl_query_accounting_v2>::with_trailing_bytes(accounting_u64s as usize * 8);
             let hdr = buf.hdr_mut();
             hdr.accounting_u64s = accounting_u64s;
             hdr.accounting_types_mask = type_mask;
@@ -79,7 +79,7 @@ impl BcachefsHandle {
         let mut accounting_u64s: u32 = 128;
 
         loop {
-            let mut buf = IoctlBuf::<c::bch_ioctl_query_accounting>::new::<u64>(accounting_u64s as usize);
+            let mut buf = IoctlBuf::<c::bch_ioctl_query_accounting>::with_trailing_bytes(accounting_u64s as usize * 8);
             let hdr = buf.hdr_mut();
             hdr.accounting_u64s = accounting_u64s;
             hdr.accounting_types_mask = type_mask;

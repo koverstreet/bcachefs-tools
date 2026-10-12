@@ -4,13 +4,15 @@ use chrono::{Local, TimeZone};
 
 use anyhow::{Context, Result};
 use bch_bindgen::c::{
-    BCH_SUBVOL_SNAPSHOT_RO, bch_ioctl_snapshot_node, bch_ioctl_snapshot_node_v2,
+    BCH_SUBVOL_SNAPSHOT_RO, bch_ioctl_snapshot_node_v2,
     bch_ioctl_snapshot_tree_query, bch_ioctl_snapshot_tree_query_v2,
     bch_ioctl_subvol_dirent, bch_ioctl_subvol_readdir, bch_ioctl_subvol_to_path,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human, open_dir, subvol_root};
+use bcachefs_kernel::util::vstructs::{FlexArray, Plain};
+
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::{ioctl_ptr, ioctl_rw, Ioctl, IoctlBuf,
     BCH_IOCTL_SNAPSHOT_TREE, BCH_IOCTL_SNAPSHOT_TREE_v2,
@@ -176,27 +178,22 @@ const BCH_SUBVOLUME_UNLINKED: u32 = 1 << 2;
 
 /// A header-plus-flexible-array ioctl with capacity/total retry protocol:
 /// nr in is capacity, ERANGE reports the required total.
-trait FlexArrayIoctl: Sized {
-    type Node: Copy;
+trait FlexArrayIoctl: FlexArray<Elem: Copy> + Plain + Copy {
     type Ioc: Ioctl<Arg = Self>;
     fn set_capacity(&mut self, n: u32);
-    fn nr(&self) -> u32;
     fn total(&self) -> u32;
-    /// The trailing array, through the struct's flexible array member.
-    /// Caller guarantees `nr` entries exist past the header.
-    unsafe fn nodes(&self, nr: usize) -> &[Self::Node];
 }
 
 fn bcachefs_flex_ioctl<H: FlexArrayIoctl>(
     fd: &OwnedFd,
     mut arg: H,
-) -> Result<(H, Vec<H::Node>)> {
+) -> Result<(H, Vec<H::Elem>)> {
     let mut capacity = 256u32;
 
     loop {
         arg.set_capacity(capacity);
-        let mut buf = IoctlBuf::<H>::new::<H::Node>(capacity as usize);
-        unsafe { std::ptr::copy_nonoverlapping(&arg, buf.as_mut_ptr(), 1) };
+        let mut buf = IoctlBuf::<H>::new(capacity as usize);
+        *buf.hdr_mut() = arg;
 
         match unsafe { ioctl_ptr::<H::Ioc>(fd, buf.as_mut_ptr()) } {
             Ok(_) => {}
@@ -207,28 +204,21 @@ fn bcachefs_flex_ioctl<H: FlexArrayIoctl>(
             Err(e) => return Err(e.into()),
         }
 
-        let nr = (buf.hdr().nr() as usize).min(capacity as usize);
-        let nodes = unsafe { buf.hdr().nodes(nr) }.to_vec();
-        return Ok((unsafe { std::ptr::read(buf.hdr()) }, nodes));
+        let nodes = buf.flex().tail()?.to_vec();
+        return Ok((*buf.hdr(), nodes));
     }
 }
 
 impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query {
-    type Node = bch_ioctl_snapshot_node;
     type Ioc = BCH_IOCTL_SNAPSHOT_TREE;
     fn set_capacity(&mut self, n: u32) { self.nr = n; }
-    fn nr(&self) -> u32 { self.nr }
     fn total(&self) -> u32 { self.total }
-    unsafe fn nodes(&self, nr: usize) -> &[Self::Node] { std::slice::from_raw_parts(self.nodes.as_ptr(), nr) }
 }
 
 impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query_v2 {
-    type Node = bch_ioctl_snapshot_node_v2;
     type Ioc = BCH_IOCTL_SNAPSHOT_TREE_v2;
     fn set_capacity(&mut self, n: u32) { self.nr = n; }
-    fn nr(&self) -> u32 { self.nr }
     fn total(&self) -> u32 { self.total }
-    unsafe fn nodes(&self, nr: usize) -> &[Self::Node] { std::slice::from_raw_parts(self.nodes.as_ptr(), nr) }
 }
 
 fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {

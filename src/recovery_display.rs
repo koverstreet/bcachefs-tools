@@ -24,6 +24,7 @@ use std::{
 use rustix::fs::{flock, FlockOperation};
 
 use bch_bindgen::c;
+use bcachefs_kernel::util::vstructs::Flex;
 
 use crate::commands::fs_usage::replicas_spare_redundancy;
 use crate::thread_with_file::StatusDisplay;
@@ -145,13 +146,9 @@ impl<'a> RecoveryDisplay<'a> {
         let usage = fs_usage(self.fd).ok()?;
 
         usage.replicas()
-            .filter(|r| r.r.data_type as u32 != u32::from(data_type::cached))
-            .map(|r| {
-                let devs = unsafe {
-                    std::slice::from_raw_parts(r.r.devs.as_ptr(), r.r.nr_devs as usize)
-                };
-                replicas_spare_redundancy(r.r.nr_devs, r.r.nr_required, devs, &self.devs)
-            })
+            .filter(|u| u.r.data_type as u32 != u32::from(data_type::cached))
+            .filter_map(|u| Some(replicas_spare_redundancy(u.r.nr_devs, u.r.nr_required,
+                                                           u.tail().ok()?, &self.devs)))
             .min()
     }
 
@@ -386,34 +383,16 @@ struct FsUsage {
     bytes: usize,
 }
 
-/// Rust's spelling of replicas_usage_bytes() - the C inline can't cross
-/// bindgen, and the length has to come from the entry's own nr_devs because
-/// that is what makes these variable-size.
-fn replicas_usage_bytes(u: &c::bch_replicas_usage) -> usize {
-    std::mem::offset_of!(c::bch_replicas_usage, r)
-        + std::mem::size_of::<c::bch_replicas_entry_v1>()
-        + u.r.nr_devs as usize
-}
-
 impl FsUsage {
-    fn replicas(&self) -> impl Iterator<Item = &c::bch_replicas_usage> + '_ {
-        let trailing = self.buf.trailing_bytes(self.bytes);
-        let mut off = 0usize;
+    /// Each entry, bounded by the tail: its devs are Flex::tail().
+    fn replicas(&self) -> impl Iterator<Item = Flex<'_, c::bch_replicas_usage>> + '_ {
+        let mut rest = self.buf.trailing_bytes(self.bytes);
 
+        // A truncated tail is the kernel and us disagreeing about the layout;
+        // stop rather than read past what it wrote.
         std::iter::from_fn(move || {
-            // A truncated tail is the kernel and us disagreeing about the
-            // layout; stop rather than read past what it wrote.
-            if off + std::mem::size_of::<c::bch_replicas_usage>() > trailing.len() {
-                return None;
-            }
-
-            let u = unsafe { &*(trailing.as_ptr().add(off) as *const c::bch_replicas_usage) };
-            let len = replicas_usage_bytes(u);
-
-            if len == 0 || off + len > trailing.len() {
-                return None;
-            }
-            off += len;
+            let u = Flex::<c::bch_replicas_usage>::new(rest).ok()?;
+            rest = &rest[u.as_bytes().ok()?.len()..];
             Some(u)
         })
     }
@@ -428,7 +407,7 @@ fn fs_usage(fd: BorrowedFd<'_>) -> io::Result<FsUsage> {
     let mut bytes = 4096usize;
 
     loop {
-        let mut buf = IoctlBuf::<c::bch_ioctl_fs_usage>::new::<u8>(bytes);
+        let mut buf = IoctlBuf::<c::bch_ioctl_fs_usage>::with_trailing_bytes(bytes);
         buf.hdr_mut().replica_entries_bytes = bytes as u32;
 
         match unsafe { ioctl_ptr::<BCH_IOCTL_FS_USAGE>(fd, buf.as_mut_ptr()) } {

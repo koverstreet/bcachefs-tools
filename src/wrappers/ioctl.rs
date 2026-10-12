@@ -14,6 +14,7 @@ use std::os::fd::{AsFd, AsRawFd};
 
 pub use bcachefs_kernel::cstructs::bcachefs_ioctl::*;
 pub use bcachefs_kernel::util::ioctl::Ioctl;
+use bcachefs_kernel::util::vstructs::{Flex, FlexArray, FlexError, Plain};
 
 fn ret(r: libc::c_int) -> io::Result<i32> {
     if r < 0 {
@@ -55,25 +56,38 @@ pub unsafe fn ioctl_ptr<I: Ioctl>(fd: impl AsFd, arg: *mut I::Arg) -> io::Result
     ret(libc::ioctl(fd.as_fd().as_raw_fd(), I::OPCODE as libc::Ioctl, arg))
 }
 
-/// Owned, zeroed allocation for a flexible-array-member ioctl argument:
-/// header `H` followed by trailing entries. The header is read and
-/// written through the real struct, and trailing entries through its
-/// `__IncompleteArrayField` accessors - the one place that knows the
-/// layout is the C definition.
+/// Owned, zeroed allocation for an ioctl argument that ends in a flexible
+/// array member: header `H`, then what follows it. The header is read and
+/// written through the struct. What follows is reached through this buffer,
+/// never through the header's `[T; 0]` field, whose reference covers only the
+/// header: as a Flex (util/vstructs.rs) for an array the header counts - so a
+/// count past the end of the buffer is an error, not a read past it - or as
+/// bytes, for a tail of variable-size records.
 ///
-/// `H` must be a plain-old-data bindgen ioctl struct (zero-initialized
-/// is valid, align <= 8 - asserted at compile time).
+/// `H` must be valid zeroed, and align <= 8 (asserted at compile time).
 pub struct IoctlBuf<H> {
     buf:  Vec<u64>,
     _arg: std::marker::PhantomData<H>,
 }
 
 impl<H> IoctlBuf<H> {
-    /// Room for the header plus `nr` trailing elements of `T`.
-    pub fn new<T>(nr: usize) -> Self {
+    /// Room for @bytes, the header's included: at least the header.
+    fn alloc(bytes: usize) -> Self {
         const { assert!(std::mem::align_of::<H>() <= 8) };
-        let bytes = std::mem::size_of::<H>() + nr * std::mem::size_of::<T>();
+        let bytes = bytes.max(std::mem::size_of::<H>());
         IoctlBuf { buf: vec![0u64; bytes.div_ceil(8)], _arg: std::marker::PhantomData }
+    }
+
+    /// Room for the header and @bytes after it: a tail of variable-size
+    /// records.
+    pub fn with_trailing_bytes(bytes: usize) -> Self {
+        Self::alloc(std::mem::size_of::<H>() + bytes)
+    }
+
+    /// The whole buffer.
+    fn bytes(&self) -> &[u8] {
+        // SAFETY: u64s, which any bytes are
+        unsafe { std::slice::from_raw_parts(self.buf.as_ptr().cast(), self.buf.len() * 8) }
     }
 
     pub fn hdr(&self) -> &H {
@@ -88,14 +102,38 @@ impl<H> IoctlBuf<H> {
         self.buf.as_mut_ptr() as *mut H
     }
 
-    /// The trailing region as raw bytes, for arguments whose trailing
-    /// records are variable-size. Panics if `bytes` overruns the
-    /// allocation (a kernel echoing back more than it was given).
+    /// @bytes after the header, for a tail of variable-size records. Panics
+    /// if that's past the end of the buffer: a kernel echoing back more than
+    /// it was given.
     pub fn trailing_bytes(&self, bytes: usize) -> &[u8] {
         let off = std::mem::size_of::<H>();
-        assert!(off + bytes <= self.buf.len() * 8);
-        unsafe {
-            std::slice::from_raw_parts((self.buf.as_ptr() as *const u8).add(off), bytes)
-        }
+        let have = self.buf.len() * 8;
+        assert!(off + bytes <= have, "ioctl tail of {bytes} bytes past {off} overruns its {have} byte buffer");
+        &self.bytes()[off..off + bytes]
+    }
+}
+
+impl<H: FlexArray + Plain> IoctlBuf<H> {
+    /// Room for the header and @nr elements of its array.
+    pub fn new(nr: usize) -> Self {
+        Self::alloc(H::TAIL + nr * std::mem::size_of::<H::Elem>())
+    }
+
+    /// The header, and the buffer it may extend into: .tail() is its array,
+    /// as long as the header's count says, if the buffer holds that many.
+    pub fn flex(&self) -> Flex<'_, H> {
+        Flex::new(self.bytes()).expect("IoctlBuf: 8 byte aligned, and holding the header")
+    }
+
+    /// The array, as long as the header's count says - to fill in, having
+    /// set that count.
+    pub fn tail_mut(&mut self) -> Result<&mut [H::Elem], FlexError> {
+        let nr = self.flex().tail()?.len();
+        // SAFETY: tail() checked that nr elements at TAIL are in the buffer,
+        // aligned; any bytes are an Elem; &mut self, so this is the only
+        // borrow of them
+        Ok(unsafe {
+            std::slice::from_raw_parts_mut(self.buf.as_mut_ptr().cast::<u8>().add(H::TAIL).cast(), nr)
+        })
     }
 }

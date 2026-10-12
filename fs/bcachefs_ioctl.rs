@@ -5,7 +5,8 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::ffi::c_char;
-use cstruct_macros::{c_const, c_enum, c_ioctl, c_xmacro, CStruct, TypeInfo};
+use crate::util::vstructs::FlexArray;
+use cstruct_macros::{c_const, c_enum, c_ioctl, c_xmacro, CStruct, Plain, TypeInfo};
 use nestify::nest;
 
 c_const! {
@@ -128,11 +129,13 @@ c_ioctl! {
  *		  BCH_SB_ERROR_ENTRY_V2_ID/NR/FIRST/LAST
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_get_damage {
+    /* in: capacity; out: the true count, which may be more */
     pub nr_entries: u32,
     pub pad: u32,
     #[c("bch_sb_field_error_entry_v2 entries[]")]
+    #[counted_by(nr_entries)]
     pub entries: [c::bch_sb_field_error_entry_v2; 0],
 }
 
@@ -431,10 +434,21 @@ nest! {
 c_default!(bch_ioctl_data_event);
 
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_replicas_usage {
     pub sectors: u64,
     pub r: c::bch_replicas_entry_v1,
+}
+
+/// r's devs[], r.nr_devs long: what makes a replicas_usage variable size -
+/// C's replicas_usage_bytes() is VStruct::bytes().
+impl FlexArray for bch_replicas_usage {
+    type Elem = u8;
+    const TAIL: usize = core::mem::offset_of!(bch_replicas_usage, r.devs);
+
+    fn nr(&self) -> usize {
+        self.r.nr_devs as usize
+    }
 }
 
 /* Obsolete */
@@ -466,7 +480,7 @@ pub struct bch_ioctl_fs_usage {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_dev_usage_type {
     pub buckets: u64,
     pub sectors: u64,
@@ -498,7 +512,7 @@ pub struct bch_ioctl_dev_usage {
 
 /* Obsolete */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_dev_usage_v2 {
     pub dev: u64,
     pub flags: u32,
@@ -509,6 +523,7 @@ pub struct bch_ioctl_dev_usage_v2 {
     pub bucket_size: u32,
     pub nr_buckets: u64,
 
+    #[counted_by(nr_data_types)]
     pub d: [c::bch_ioctl_dev_usage_type; 0],
 }
 
@@ -631,7 +646,7 @@ c_const! {
  * but with the kernel's implementation of fsck:
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_fsck_offline {
     pub flags: u64,
     pub opts: u64, /* string */
@@ -641,6 +656,7 @@ pub struct bch_ioctl_fsck_offline {
      * a bounds check to happen, even when it's a userspace pointer
      * (properly marked as __user)
      */
+    #[counted_by(nr_devs)]
     pub devs: [u64; 0],
 }
 
@@ -727,11 +743,12 @@ c_const! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_query_counters {
     pub nr: u16,
     pub flags: u16,
     pub pad: u32,
+    #[counted_by(nr)]
     pub d: [u64; 0],
 }
 
@@ -817,7 +834,7 @@ pub struct bch_ioctl_subvol_to_path {
  * add fields to bch_ioctl_snapshot_node_v2, which is size-negotiated.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_snapshot_node {
     pub id: u32, /* snapshot ID */
     pub parent: u32, /* parent snapshot ID, 0 for root */
@@ -830,7 +847,7 @@ pub struct bch_ioctl_snapshot_node {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_snapshot_tree_query {
     pub tree_id: u32, /* in: 0 = infer from fd's subvol */
     pub master_subvol: u32, /* out */
@@ -838,6 +855,7 @@ pub struct bch_ioctl_snapshot_tree_query {
     pub nr: u32, /* in: capacity; out: returned */
     pub total: u32, /* out: total nodes */
     pub pad: u32,
+    #[counted_by(nr)]
     pub nodes: [c::bch_ioctl_snapshot_node; 0],
 }
 
@@ -850,7 +868,7 @@ pub struct bch_ioctl_snapshot_tree_query {
  * node_size to know what's present.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_snapshot_node_v2 {
     pub id: u32, /* snapshot ID */
     pub parent: u32, /* parent snapshot ID, 0 for root */
@@ -865,7 +883,7 @@ pub struct bch_ioctl_snapshot_node_v2 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_snapshot_tree_query_v2 {
     pub tree_id: u32, /* in: 0 = infer from fd's subvol */
     pub master_subvol: u32, /* out */
@@ -873,6 +891,7 @@ pub struct bch_ioctl_snapshot_tree_query_v2 {
     pub nr: u32, /* in: capacity; out: returned */
     pub total: u32, /* out: total nodes */
     pub node_size: u32, /* in: caller's sizeof; out: ours */
+    #[counted_by(nr)]
     pub nodes: [c::bch_ioctl_snapshot_node_v2; 0],
 }
 
