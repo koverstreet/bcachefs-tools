@@ -149,6 +149,14 @@ pub trait VStructContainer: VStruct {
         let bytes = unsafe { core::slice::from_raw_parts((self as *const Self).cast::<u8>(), self.bytes()) };
         Entries { rest: bytes.get(Self::START..).unwrap_or_default(), _entry: core::marker::PhantomData }
     }
+
+    /// entries(), mutably.
+    fn entries_mut(&mut self) -> EntriesMut<'_, Self::Entry> {
+        let len = self.bytes();
+        // SAFETY: as entries()
+        let bytes = unsafe { core::slice::from_raw_parts_mut((self as *mut Self).cast::<u8>(), len) };
+        EntriesMut { rest: bytes.get_mut(Self::START..).unwrap_or_default(), _entry: core::marker::PhantomData }
+    }
 }
 
 /// vstruct!(T, u64s): T is a vstruct, @u64s its count of the u64s past its
@@ -311,6 +319,13 @@ impl<'a, T: FlexArray> Flex<'a, T> {
     }
 }
 
+/// The bytes of the entry at the start of @rest, if a whole one is there:
+/// what a walk steps by.
+fn entry_bytes<E: SelfSized + Plain>(rest: &[u8]) -> Option<usize> {
+    let len = Flex::<E>::new(rest).ok()?.bytes();
+    (len >= size_of::<E>() && len <= rest.len()).then_some(len)
+}
+
 /// A vstruct's entries: VStructContainer::entries().
 pub struct Entries<'a, E> {
     rest:   &'a [u8],
@@ -321,14 +336,35 @@ impl<'a, E: SelfSized + Plain + 'a> Iterator for Entries<'a, E> {
     type Item = &'a E;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let e = Flex::<E>::new(self.rest).ok()?.head();
-        let len = e.bytes();
-        if len < size_of::<E>() || len > self.rest.len() {
+        let Some(len) = entry_bytes::<E>(self.rest) else {
             self.rest = &[];
             return None;
-        }
-        self.rest = &self.rest[len..];
-        Some(e)
+        };
+        let (e, rest) = self.rest.split_at(len);
+        self.rest = rest;
+        // SAFETY: entry_bytes() checked an E is there, aligned, and it's Plain
+        Some(unsafe { &*e.as_ptr().cast::<E>() })
+    }
+}
+
+/// A vstruct's entries, mutably: VStructContainer::entries_mut().
+pub struct EntriesMut<'a, E> {
+    rest:   &'a mut [u8],
+    _entry: core::marker::PhantomData<&'a mut E>,
+}
+
+impl<'a, E: SelfSized + Plain + 'a> Iterator for EntriesMut<'a, E> {
+    type Item = &'a mut E;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let Some(len) = entry_bytes::<E>(self.rest) else {
+            self.rest = Default::default();
+            return None;
+        };
+        let (e, rest) = core::mem::take(&mut self.rest).split_at_mut(len);
+        self.rest = rest;
+        // SAFETY: as Entries', and the entries don't overlap
+        Some(unsafe { &mut *e.as_mut_ptr().cast::<E>() })
     }
 }
 

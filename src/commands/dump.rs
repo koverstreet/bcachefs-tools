@@ -11,7 +11,8 @@ use bcachefs_kernel::btree::bkey::BkeyS;
 use bcachefs_kernel::c;
 use bcachefs_kernel::data::extents::{bkey_ptrs_mut, bkey_ptrs_sc};
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::util::vstructs::SelfSized;
+use bcachefs_kernel::journal::{entry_type, journal_entry_type};
+use bcachefs_kernel::util::vstructs::{Flex, SelfSized, VStruct, VStructContainer};
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::POS_MIN;
 
@@ -178,8 +179,6 @@ fn cmd_undump(cli: UndumpCli) -> Result<()> {
 // ---- Sanitize implementation ----
 
 // On-disk struct sizes (all __packed, little-endian x86_64)
-const JSET_HDR: usize = 56;            // offsetof(jset, _data)
-const JSET_ENTRY_HDR: usize = 8;       // offsetof(jset_entry, start)
 const BSET_HDR: usize = 24;            // offsetof(bset, _data)
 const BTREE_NODE_KEYS: usize = 136;    // offsetof(btree_node, keys)
 const BNE_KEYS: usize = 16;            // offsetof(btree_node_entry, keys)
@@ -287,38 +286,15 @@ fn sanitize_val(fs: &Fs, mut k: BkeyS, opts: SanitizeOpts) -> bool {
     }
 }
 
-/// Walk unpacked bkey_i entries in a jset_entry data region and sanitize.
-fn sanitize_journal_keys(
-    fs: &Fs,
-    buf: &mut [u8],
-    start: usize,
-    end: usize,
-    opts: SanitizeOpts,
-) -> bool {
-    let mut modified = false;
-    let mut pos = start;
-
-    while pos + 3 <= end {
-        let key_u64s = buf[pos] as usize;
-        if key_u64s == 0 {
-            break;
-        }
-
-        let key_bytes = key_u64s * 8;
-        if pos + key_bytes > end {
-            break;
-        }
-
-        // Journal keys are always unpacked, so buf[pos..] is a bkey_i.
-        let ki = unsafe { &mut *(buf.as_mut_ptr().add(pos) as *mut c::bkey_i) };
-        if sanitize_val(fs, BkeyS::from(ki), opts) {
-            modified = true;
-        }
-
-        pos += key_bytes;
-    }
-
-    modified
+/// The jset at the start of @buf, if one's whole there: off the disk and not
+/// validated, so its header is checked to be there, then its count.
+fn jset_at(buf: &mut [u8], magic: u64) -> Option<&mut c::jset> {
+    let whole = Flex::<c::jset>::new(buf).ok()
+        .filter(|j| j.magic.get() == magic && j.as_bytes().is_ok())
+        .is_some();
+    // SAFETY: a jset is there, aligned, with all its bytes - checked - and
+    // it's plain data
+    whole.then(|| unsafe { &mut *buf.as_mut_ptr().cast::<c::jset>() })
 }
 
 /// Sanitize a journal buffer in-place: walk jset entries, handle encryption,
@@ -326,21 +302,11 @@ fn sanitize_journal_keys(
 fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
     let fs = unsafe { Fs::borrow_raw(fs_raw) };
     let jset_magic = jset_magic(fs.disk_sb().sb());
-    let block_bits = fs.block_bits() as usize;
+    let block_bits = fs.block_bits() as u32;
 
     let mut pos = 0;
-    while pos + JSET_HDR <= buf.len() {
-        if read_le64(buf, pos + 16) != jset_magic {
-            break;
-        }
-
-        let u64s = read_le32(buf, pos + 40) as usize;
-        let vstruct_bytes = JSET_HDR + u64s * 8;
-        if vstruct_bytes > buf.len() - pos {
-            break;
-        }
-
-        let csum_type = read_le32(buf, pos + 36) & 0xf;
+    while let Some(j) = jset_at(&mut buf[pos..], jset_magic) {
+        let (bytes, csum_type) = (j.bytes(), j.csum_type() as u32);
         let mut modified = false;
 
         if csum_type_is_encryption(csum_type) {
@@ -349,8 +315,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
                 return;
             }
 
-            let j = unsafe { buf.as_mut_ptr().add(pos) } as *mut c::jset;
-            let ret = jset_encrypt(&fs, j, csum_type, vstruct_bytes);
+            let ret = jset_encrypt(&fs, j, csum_type, bytes);
             if ret != 0 {
                 eprintln!("error decrypting journal entry: {}", ret);
                 return;
@@ -358,40 +323,26 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
             modified = true;
         }
 
-        // Walk jset entries: each is 8-byte header + u64s * 8 data
-        let data_end = (pos + vstruct_bytes).min(buf.len());
-        let mut entry_pos = pos + JSET_HDR;
-
-        while entry_pos + JSET_ENTRY_HDR <= data_end {
-            let entry_u64s = read_le16(buf, entry_pos) as usize;
-            let entry_end = entry_pos + JSET_ENTRY_HDR + entry_u64s * 8;
-            if entry_end > data_end {
-                break;
+        for e in j.entries_mut() {
+            if matches!(entry_type(e), journal_entry_type::btree_keys
+                                     | journal_entry_type::btree_root
+                                     | journal_entry_type::write_buffer_keys) {
+                for k in e.entries_mut() {
+                    modified |= sanitize_val(&fs, BkeyS::from(k), opts);
+                }
             }
-
-            // jset_entry_is_key: btree_keys(0), btree_root(1), write_buffer_keys(11)
-            let entry_type = buf[entry_pos + 4];
-            if (entry_type == 0 || entry_type == 1 || entry_type == 11)
-                && sanitize_journal_keys(&fs, buf, entry_pos + JSET_ENTRY_HDR,
-                                         entry_end, opts) {
-                modified = true;
-            }
-
-            entry_pos = entry_end;
         }
 
         if modified {
             // Re-encrypt (symmetric) if encrypted, then recompute the csum so
             // the entry stays checksum-valid instead of csum-cleared.
-            let j = unsafe { buf.as_mut_ptr().add(pos) } as *mut c::jset;
             if csum_type_is_encryption(csum_type) {
-                jset_encrypt(&fs, j, csum_type, vstruct_bytes);
+                jset_encrypt(&fs, j, csum_type, bytes);
             }
-            jset_csum_set(&fs, j, csum_type, vstruct_bytes);
+            jset_csum_set(&fs, j, csum_type, bytes);
         }
 
-        pos += vstruct_aligned_bytes(vstruct_bytes, block_bits)
-            .min(buf.len() - pos);
+        pos += (j.sectors(block_bits) << 9).min(buf.len() - pos);
     }
 }
 
@@ -623,7 +574,10 @@ fn write_sanitized_ranges(
     sanitize_fn: fn(*mut c::bch_fs, &mut [u8], SanitizeOpts),
 ) -> Result<()> {
     ranges_sort(ranges);
-    let mut buf = vec![0u8; bucket_bytes as usize];
+    let mut words = vec![0u64; bucket_bytes as usize / 8];
+    // SAFETY: u64s, which any bytes are - 8 byte aligned, as the jsets and
+    // btree nodes read through it need
+    let buf = unsafe { std::slice::from_raw_parts_mut(words.as_mut_ptr().cast::<u8>(), words.len() * 8) };
 
     for r in ranges.iter() {
         let len = (r.end - r.start) as usize;
