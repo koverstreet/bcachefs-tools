@@ -222,11 +222,13 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         let path = if path.is_empty() { String::new() } else { format!("{path}::") };
         forward.push_str(&format!("{path}__{ty}_forward!({name}, {});\n", f.rust_name()));
     }
-    let mut nums = size_align(name);
+    // the layout C has: an unsized vstruct's sized instance's (CGeneric)
+    let inst = def.instance();
+    let mut nums = size_align(&inst);
     for f in &def.fields {
         let field = f.rust_name();
-        let proj = format!("|p: *const {name}| unsafe {{ ::core::ptr::addr_of!((*p).{field}) }}");
-        nums.push(format!("::core::mem::offset_of!({name}, {field}) as u64"));
+        let proj = format!("|p: *const {inst}| unsafe {{ ::core::ptr::addr_of!((*p).{field}) }}");
+        nums.push(format!("::core::mem::offset_of!({inst}, {field}) as u64"));
         nums.push(format!("crate::types::field_size({proj})"));
         nums.push(format!("crate::types::field_align({proj})"));
     }
@@ -1107,10 +1109,10 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
     }
 
     Ok(tokens(&format!(
-        "{}impl {} {{\n{methods}}}\n\
+        "{}impl{} {} {{\n{methods}}}\n\
          #[allow(non_upper_case_globals)]\n\
          pub const {table}: &[crate::typeinfo::BitmaskField] = &[\n{table_entries}];\n\
          const _: () = assert!(crate::typeinfo::bitmasks_listed({table:?}),\n\
                                \"{table}: not in typeinfo.rs's BITMASKS - add it\");\n",
-        record(&text, &[]), b.rust_type)))
+        record(&text, &[]), b.impl_params, b.rust_type)))
 }

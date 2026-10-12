@@ -12,18 +12,23 @@
 
 use proc_macro::TokenStream;
 
-use crate::cstruct::{field_type, parse_cstruct, CFieldDef, CKind, CStructDef, FieldType};
+use crate::cstruct::{field_type, is_phantom, parse_cstruct, CFieldDef, CKind, CStructDef, FieldType};
 use crate::tokens;
 
 /// #[derive(Plain)], on a struct - not a union, whose bytes past a short
-/// arm's end are no field's.
+/// arm's end are no field's. An unsized vstruct's (cstruct.rs' CGeneric) is
+/// its sized instance's, C's: the unsized one's bytes are that header's,
+/// then its tail's elements - Plain too, as its tail field checks.
 pub(crate) fn derive_plain(input: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&input.to_string())?;
     if def.kind != CKind::Struct {
         return Err(format!("{}: Plain is for structs", def.name));
     }
-    let tys: Vec<&str> = def.fields.iter().map(|f| f.ty.as_str()).collect();
-    Ok(tokens(&plain(&def.name, &tys)))
+    let tys: Vec<&str> = def.fields.iter()
+        .map(|f| f.ty.as_str())
+        .filter(|ty| !is_phantom(ty))
+        .collect();
+    Ok(tokens(&plain(&def.instance(), &tys)))
 }
 
 /// Plain for @name, whose fields are of types @tys: the impl, and the
@@ -64,6 +69,10 @@ pub(crate) fn derive_view(input: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&input.to_string())?;
     if def.kind != CKind::Struct {
         return Err(format!("{}: a View is of a struct", def.name));
+    }
+    if !def.generics.is_empty() {
+        return Err(format!("{}: an unsized vstruct's reference has its length, and its header is \
+                            whole: its fields are fields, with no View", def.name));
     }
     let name = &def.name;
     let (mut get, mut get_mut) = (String::new(), String::new());
