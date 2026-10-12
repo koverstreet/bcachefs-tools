@@ -6,8 +6,7 @@ use crate::cstructs::c;
 use crate::types::{bits_to_longs, c_default};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong};
-use cstruct_macros::{CStruct, c_extern};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{CStruct, c_extern, TypeInfo};
 
 /* Updated by bch2_sb_update():*/
 #[repr(C)]

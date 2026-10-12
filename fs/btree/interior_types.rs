@@ -5,8 +5,7 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, c_const, c_extern};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{CStruct, c_const, c_extern, TypeInfo};
 
 #[repr(C)]
 #[derive(CStruct)]

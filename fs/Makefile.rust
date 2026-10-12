@@ -222,13 +222,11 @@ bch-pmac-deps := $(bch-host)/libsyn.rmeta FORCE
 # Vendored crates get --cap-lints=allow: the kernel's lints are about how our
 # own code is written, not whether someone else's is correct (as cargo does for
 # dependencies) - and a rustc bump would otherwise break the build (#830).
-# typeinfo-macros and cstruct-macros are ours, and get the lints.
+# cstruct-macros is ours, and gets the lints.
 $(obj)/libpaste.so $(obj)/bitfield.o $(obj)/bitflags.o $(obj)/uuid.o: private rs-flags := --cap-lints=allow
 $(obj)/libbitfield_struct.so $(obj)/libnestify.so: private rs-flags := $(bch-pmac)
 
 $(obj)/libpaste.so: $(src)/vendor/paste/src/lib.rs FORCE
-	$(call if_changed_dep,bch_procmacro)
-$(obj)/libtypeinfo_macros.so: $(src)/typeinfo-macros/src/lib.rs FORCE
 	$(call if_changed_dep,bch_procmacro)
 # cstruct-macros include!s its parser from types/cstruct.rs: the dep-info
 # tracks it.
@@ -251,14 +249,14 @@ $(obj)/uuid.o: $(src)/vendor/uuid/src/lib.rs FORCE
 # mod.o gets them as externs, and the codegen output via OUT_DIR, as in
 # userspace - and the crate's directory as cargo gives it, CARGO_MANIFEST_DIR,
 # which c_xmacro_from_c! reads C's headers relative to.
-bch-externs := paste:libpaste.so typeinfo_macros:libtypeinfo_macros.so \
+bch-externs := paste:libpaste.so \
 	cstruct_macros:libcstruct_macros.so bitfield_struct:libbitfield_struct.so \
 	nestify:libnestify.so \
 	bitfield:libbitfield.rmeta bitflags:libbitflags.rmeta uuid:libuuid.rmeta
 RUSTFLAGS_mod.o += $(foreach e,$(bch-externs),--extern $(subst :,=$(obj)/,$(e)))
 $(obj)/mod.o: export OUT_DIR := $(abspath $(obj)/rust)
 $(obj)/mod.o: export CARGO_MANIFEST_DIR := $(abspath $(src))
-$(obj)/mod.o: $(obj)/rust/bindings.rs $(obj)/libpaste.so $(obj)/libtypeinfo_macros.so \
+$(obj)/mod.o: $(obj)/rust/bindings.rs $(obj)/libpaste.so \
 	$(obj)/libcstruct_macros.so $(obj)/libbitfield_struct.so $(obj)/libnestify.so \
 	$(obj)/bitfield.o $(obj)/bitflags.o $(obj)/uuid.o
 
@@ -267,7 +265,7 @@ $(obj)/mod.o: $(obj)/rust/bindings.rs $(obj)/libpaste.so $(obj)/libtypeinfo_macr
 # and linking the module discards them.
 RUSTFLAGS_mod.o += --cfg bch_cstruct_records
 
-targets += codegen rust/bindings.rs libpaste.so libtypeinfo_macros.so \
+targets += codegen rust/bindings.rs libpaste.so \
 	libcstruct_macros.so libbitfield_struct.so libnestify.so bitfield.o bitflags.o uuid.o \
 	$(addprefix rust-host/,libproc_macro2.rmeta libquote.rmeta libsyn.rmeta)
 bcachefs-rust-y := mod.o bitfield.o bitflags.o uuid.o

@@ -5,8 +5,7 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::c_uint;
-use cstruct_macros::{c_enum, CStruct};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{c_enum, CStruct, TypeInfo};
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, TypeInfo)]

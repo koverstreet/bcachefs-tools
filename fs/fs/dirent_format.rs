@@ -35,9 +35,8 @@ use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
 use core::ffi::{c_int, CStr};
 use core::mem::offset_of;
-use cstruct_macros::{bitfield, c_const, c_export, CStruct};
+use cstruct_macros::{bitfield, c_const, c_export, CStruct, TypeInfo};
 use nestify::nest;
-use typeinfo_macros::TypeInfo;
 use zerocopy::byteorder::little_endian as le;
 
 // ── The value, which C shares ─────────────────────────────────────────────

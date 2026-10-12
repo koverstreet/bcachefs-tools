@@ -5,9 +5,8 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::ffi::c_char;
-use cstruct_macros::{c_const, c_enum, c_ioctl, c_xmacro, CStruct};
+use cstruct_macros::{c_const, c_enum, c_ioctl, c_xmacro, CStruct, TypeInfo};
 use nestify::nest;
-use typeinfo_macros::TypeInfo;
 
 c_const! {
     /*

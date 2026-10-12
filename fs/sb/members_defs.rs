@@ -4,8 +4,7 @@
 
 use crate::types::c_default;
 use crate::util::ffi::c_char;
-use cstruct_macros::CStruct;
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{CStruct, TypeInfo};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]

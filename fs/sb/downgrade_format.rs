@@ -4,8 +4,7 @@
 
 use crate::cstructs::c;
 use zerocopy::byteorder::little_endian as le;
-use cstruct_macros::CStruct;
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{CStruct, TypeInfo};
 
 /*
  * Packed, recovery_passes at offset 2: zerocopy's le:: types, aligned to 1,

@@ -107,7 +107,6 @@ version = "0.1.0"
 dependencies = [
  "bcachefs-cstruct-macros",
  "bcachefs-shim",
- "bcachefs-typeinfo-macros",
  "bitfield 0.14.0",
  "bitfield-struct",
  "bitflags 2.11.1",
@@ -168,10 +167,6 @@ dependencies = [
  "uuid",
  "zeroize",
 ]
-
-[[package]]
-name = "bcachefs-typeinfo-macros"
-version = "0.1.0"
 
 [[package]]
 name = "bch-docgen"

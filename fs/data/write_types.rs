@@ -5,9 +5,8 @@
 use crate::cstructs::c;
 use crate::types::{NeBytes, c_default};
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, bitfield, c_enum, c_xmacro};
+use cstruct_macros::{CStruct, bitfield, c_enum, c_xmacro, TypeInfo};
 use nestify::nest;
-use typeinfo_macros::TypeInfo;
 
 c_xmacro! {
     BCH_WRITE_FLAGS(x) {

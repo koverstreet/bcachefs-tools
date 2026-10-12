@@ -4,8 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_enum, CStruct};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{c_enum, CStruct, TypeInfo};
 
 c_enum! {
     #[open]

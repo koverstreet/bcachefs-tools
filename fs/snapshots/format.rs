@@ -4,8 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, TypeInfo};
 
 c_const! {
     #[c_int]

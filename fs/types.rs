@@ -6,8 +6,7 @@ use crate::cstructs::c;
 use crate::types::{GenRadix, bits_to_longs, c_default};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
-use cstruct_macros::{c_const, c_enum, c_xmacro, CStruct};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{c_const, c_enum, c_xmacro, CStruct, TypeInfo};
 
 c_xmacro! {
     /* Parameters that are useful for debugging, but should always be compiled in: */

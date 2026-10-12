@@ -10,11 +10,10 @@ use crate::types::{CacheAligned, DArray, NeBytes, bits_to_longs, c_default};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void, CStr};
 use core::fmt;
-use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct};
+use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, TypeInfo};
 use nestify::nest;
 #[cfg(feature = "std")]
 use std::{ffi::CString, str::FromStr};
-use typeinfo_macros::TypeInfo;
 
 /* Btree nodes: */
 

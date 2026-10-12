@@ -4,8 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_bitmask, CStruct};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{c_bitmask, CStruct, TypeInfo};
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]

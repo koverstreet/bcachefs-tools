@@ -5,8 +5,7 @@
 use crate::cstructs::c;
 use crate::cstructs::c::BCH_INODE_FIELDS_v3;
 use crate::types::{c_default, Le64};
-use cstruct_macros::{CStruct, c_bitmask, c_typedef, c_verbatim};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{CStruct, c_bitmask, c_typedef, c_verbatim, TypeInfo};
 
 c_typedef! {
     pub type u96 = u64;

@@ -5,9 +5,8 @@
 use crate::cstructs::c;
 use crate::types::{LongAligned, c_default};
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, bitfield, c_const, c_extern};
+use cstruct_macros::{CStruct, bitfield, c_const, c_extern, TypeInfo};
 use nestify::nest;
-use typeinfo_macros::TypeInfo;
 
 c_const! {
     #[c_int]

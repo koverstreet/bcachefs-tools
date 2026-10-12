@@ -5,9 +5,8 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::c_int;
-use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro};
+use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro, TypeInfo};
 use nestify::nest;
-use typeinfo_macros::TypeInfo;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]

@@ -4,8 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::Le16;
-use cstruct_macros::{c_const, CStruct};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{c_const, CStruct, TypeInfo};
 
 c_const! {
     #[c_int]

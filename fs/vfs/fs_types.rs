@@ -7,10 +7,9 @@ use crate::types::c_default;
 use core::ffi::{c_uint, c_ulong};
 #[cfg(not(NO_BCACHEFS_FS))]
 use core::ffi::{c_int, c_void};
-use cstruct_macros::{c_enum, CStruct};
+use cstruct_macros::{c_enum, CStruct, TypeInfo};
 #[cfg(not(NO_BCACHEFS_FS))]
 use cstruct_macros::{c_extern, c_typedef};
-use typeinfo_macros::TypeInfo;
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]

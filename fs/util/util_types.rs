@@ -6,8 +6,7 @@ use crate::cstructs::c;
 use crate::types::DArray;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ulonglong, c_void};
-use cstruct_macros::{CStruct, c_extern, c_typedef};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{CStruct, c_extern, c_typedef, TypeInfo};
 
 c_typedef! {
     pub type bch_stacktrace = DArray<c_ulong>;

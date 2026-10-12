@@ -2253,6 +2253,40 @@ fn canon_base(toks: &[Tok]) -> Option<String> {
     Some(s.to_string())
 }
 
+/// A field's Rust type, as #[derive(TypeInfo)] describes it.
+#[allow(dead_code)] // the macros', not rust_types_gen's
+pub enum FieldType {
+    /// `[elem; n]`, both as Rust source
+    Array { elem: String, n: String },
+    /// A pointer, reference, function or generic: nothing to describe
+    Opaque,
+    /// Anything else: the C base type it renders as, if it has one - an
+    /// integer's name, `struct foo` - and the last segment of its path.
+    Named { c: Option<String>, name: String },
+}
+
+/// What @ty is, for #[derive(TypeInfo)]: an integer's width, endianness and
+/// signedness are read from canon_base(), the C the generator renders it as,
+/// so a field's TypeInfo and its C declaration can't disagree.
+#[allow(dead_code)] // the macros', not rust_types_gen's
+pub fn field_type(ty: &str) -> Result<FieldType, String> {
+    let toks = tokenize(ty)?;
+    Ok(match toks.as_slice() {
+        [Tok::Punct('*' | '&'), ..] => FieldType::Opaque,
+        [Tok::Punct('['), inner @ .., Tok::Punct(']')] => match split_top(inner, ';').as_slice() {
+            [elem, n] => FieldType::Array { elem: tokens_to_rust(elem), n: tokens_to_rust(n) },
+            _ => FieldType::Opaque,
+        },
+        _ if toks.iter().any(|t| t.is_punct('<') || t.is_ident("fn")) => FieldType::Opaque,
+        _ => FieldType::Named {
+            c:    canon_base(&toks),
+            name: toks.iter().rev()
+                .find_map(|t| match t { Tok::Ident(s) => Some(s.clone()), _ => None })
+                .unwrap_or_default(),
+        },
+    })
+}
+
 /// A value's Rust source as C, for the --emit path, which has no evaluated
 /// values: the same tokens, but for a constant's c:: path. The records path
 /// has numbers.

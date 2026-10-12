@@ -72,11 +72,10 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, CStruct};
+use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, CStruct, TypeInfo};
 #[cfg(__KERNEL__)]
 use cstruct_macros::c_typedef;
 use nestify::nest;
-use typeinfo_macros::TypeInfo;
 
 #[cfg(__KERNEL__)]
 c_typedef! {

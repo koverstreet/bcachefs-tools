@@ -5,8 +5,7 @@
 use crate::cstructs::c;
 use core::ffi::c_ulong;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, TypeInfo};
 
 c_const! {
     pub const PASS_SILENT: c_ulong = 1 << 0;

@@ -34,9 +34,10 @@
 //!   tagged_union! { .. } a tagged union with a stable representation: C's
 //!                        storage, the tag a Determinant of it, arms from an
 //!                        x-macro list, read as an enum (tagged_union.rs)
+//!   #[derive(TypeInfo)]  runtime type information, for kvdb: no record, no
+//!                        C (typeinfo.rs)
 //!
-//! Zero dependencies, as typeinfo-macros: the kernel build compiles this with
-//! a bare rustc.
+//! Zero dependencies: the kernel build compiles this with a bare rustc.
 
 use proc_macro::{Delimiter, Group, Punct, Spacing, Span, TokenStream, TokenTree};
 
@@ -50,6 +51,7 @@ use cstruct::{enum_text, expand_enum_list, parse_c_export, parse_cstruct, parse_
               CEnumDef, CEnumKind, CItem, CXEntry};
 
 mod tagged_union;
+mod typeinfo;
 mod xmacro_from_c;
 
 /// A tagged union with a stable representation: see tagged_union.rs.
@@ -172,6 +174,13 @@ pub fn derive_cstruct(input: TokenStream) -> TokenStream {
     expand("#[derive(CStruct)]", || cstruct_expand(input))
 }
 
+/// `#[derive(TypeInfo)]`: runtime type information for a struct or union C
+/// shares - see typeinfo.rs.
+#[proc_macro_derive(TypeInfo)]
+pub fn derive_type_info(input: TokenStream) -> TokenStream {
+    expand("#[derive(TypeInfo)]", || typeinfo::derive(input))
+}
+
 fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
     let text = format!("#[derive(CStruct)] {input}");
     let def = parse_cstruct(&text)?;
@@ -287,7 +296,7 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     let mut out = tokens(&out);
     out.extend(tokens(&format!("#[::bitfield_struct::bitfield({})]", bs_args.join(", "))));
     out.extend(s.item.clone());
-    out.extend(tokens(&typeinfo_size_only(name, "Struct")));
+    out.extend(tokens(&typeinfo::info(name, "Struct", "")));
     Ok(out)
 }
 
@@ -529,21 +538,6 @@ fn bilge_width(t: &str) -> Option<(u32, String)> {
     let n: u32 = t.strip_prefix('u')?.parse().ok().filter(|n| (1..=128).contains(n))?;
     let int = [8, 16, 32, 64, 128].into_iter().find(|w| *w >= n)?;
     Some((n, format!("u{int}")))
-}
-
-/// What #[derive(TypeInfo)] gives an enum or union: its size, no fields.
-/// Structs deriving it describe fields of this type by reference to it.
-fn typeinfo_size_only(name: &str, shape: &str) -> String {
-    format!(
-        "#[automatically_derived]\n\
-         impl crate::typeinfo::TypeInfo for {name} {{\n\
-             const INFO: &'static crate::typeinfo::StructInfo = &crate::typeinfo::StructInfo {{\n\
-                 name: \"{name}\",\n\
-                 size: ::core::mem::size_of::<{name}>(),\n\
-                 shape: crate::typeinfo::Shape::{shape},\n\
-                 fields: &[],\n\
-             }};\n\
-         }}\n")
 }
 
 /// C carried as is: c_verbatim!(r#"..."#).
@@ -798,7 +792,7 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
     }
 
     if let Some(name) = &e.name {
-        out.push_str(&typeinfo_size_only(name, "Enum"));
+        out.push_str(&typeinfo::info(name, "Enum", ""));
     }
 
     let mut nums = size_align(&ty);

@@ -4,8 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::Le64;
-use cstruct_macros::CStruct;
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{CStruct, TypeInfo};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]

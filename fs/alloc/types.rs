@@ -5,9 +5,8 @@
 use crate::cstructs::c;
 use crate::types::{CacheAligned, DArray, c_default};
 use core::ffi::{c_uint, c_ulong};
-use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct};
+use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, TypeInfo};
 use nestify::nest;
-use typeinfo_macros::TypeInfo;
 
 c_xmacro! {
     BCH_WATERMARKS(x) {

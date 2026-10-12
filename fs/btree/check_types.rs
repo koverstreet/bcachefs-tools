@@ -4,9 +4,8 @@
 
 use crate::cstructs::c;
 use crate::types::{GenRadix, c_default};
-use cstruct_macros::{bitfield, c_enum, c_typedef, c_xmacro, CStruct};
+use cstruct_macros::{bitfield, c_enum, c_typedef, c_xmacro, CStruct, TypeInfo};
 use nestify::nest;
-use typeinfo_macros::TypeInfo;
 
 c_xmacro! {
     GC_PHASES(x) {

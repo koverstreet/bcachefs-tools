@@ -4,9 +4,8 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_xmacro, tagged_union, CStruct};
+use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_xmacro, tagged_union, CStruct, TypeInfo};
 use nestify::nest;
-use typeinfo_macros::TypeInfo;
 
 /* DOC_LATEX(extent-checksums)
  *

@@ -7,8 +7,7 @@ use crate::cstructs::c::BCH_INODE_OPTS;
 use crate::types::{bits_to_longs, c_opaque, c_default};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong};
-use cstruct_macros::{CStruct, c_const, c_enum, c_extern, c_xmacro};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{CStruct, c_const, c_enum, c_extern, c_xmacro, TypeInfo};
 
 /*
  * Mount options; we also store defaults in the superblock.

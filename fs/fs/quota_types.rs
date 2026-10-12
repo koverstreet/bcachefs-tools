@@ -5,8 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{GenRadix, c_default};
 use core::ffi::c_int;
-use cstruct_macros::{c_enum, c_typedef, CStruct};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{c_enum, c_typedef, CStruct, TypeInfo};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]

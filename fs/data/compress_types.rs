@@ -4,8 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use cstruct_macros::CStruct;
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{CStruct, TypeInfo};
 
 /*
  * Compressing and decompressing want wildly different amounts of scratch

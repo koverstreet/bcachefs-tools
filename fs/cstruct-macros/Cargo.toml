@@ -11,6 +11,6 @@ name = "cstruct_macros"
 proc-macro = true
 
 # Deliberately zero dependencies (no syn/quote): the kernel/DKMS build compiles
-# this with a plain `rustc --crate-type proc-macro src/lib.rs`, as it does
-# typeinfo-macros. Its parser is fs/types/cstruct.rs, include!d.
+# this with a plain `rustc --crate-type proc-macro src/lib.rs`. Its parser is
+# fs/types/cstruct.rs, include!d.
 [dependencies]

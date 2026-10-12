@@ -5,9 +5,8 @@
 use crate::cstructs::c;
 use crate::types::{GenRadix, c_default};
 use core::ffi::c_long;
-use cstruct_macros::{bitfield, CStruct};
+use cstruct_macros::{bitfield, CStruct, TypeInfo};
 use nestify::nest;
-use typeinfo_macros::TypeInfo;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]

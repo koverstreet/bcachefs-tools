@@ -3,8 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, c_extern};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{CStruct, c_extern, TypeInfo};
 use crate::cstructs::c;
 
 #[repr(C)]

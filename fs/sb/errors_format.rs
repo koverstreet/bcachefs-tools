@@ -5,9 +5,8 @@
 use crate::cstructs::c;
 use crate::types::Le64;
 use zerocopy::byteorder::little_endian as le;
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_xmacro, CStruct};
+use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_xmacro, CStruct, TypeInfo};
 use nestify::nest;
-use typeinfo_macros::TypeInfo;
 
 c_enum! {
     #[flags]

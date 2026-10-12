@@ -6,9 +6,8 @@ use crate::cstructs::c;
 use crate::types::{DArray, bits_to_longs, c_default};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_ulong};
-use cstruct_macros::{CStruct, bitfield, c_extern, c_typedef};
+use cstruct_macros::{CStruct, bitfield, c_extern, c_typedef, TypeInfo};
 use nestify::nest;
-use typeinfo_macros::TypeInfo;
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]

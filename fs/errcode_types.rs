@@ -6,8 +6,7 @@ use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::ffi::c_char;
 use core::ffi::c_int;
-use cstruct_macros::{CStruct, c_enum, c_extern, c_xmacro};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{CStruct, c_enum, c_extern, c_xmacro, TypeInfo};
 
 c_xmacro! {
     BLK_ERRS(BLK_STS) {

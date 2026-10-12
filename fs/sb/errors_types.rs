@@ -5,9 +5,8 @@
 use crate::cstructs::c;
 use crate::types::DArray;
 use crate::util::ffi::c_char;
-use cstruct_macros::{CStruct, bitfield, c_extern, c_typedef};
+use cstruct_macros::{CStruct, bitfield, c_extern, c_typedef, TypeInfo};
 use nestify::nest;
-use typeinfo_macros::TypeInfo;
 
 nest! {
     #[repr(C)]

@@ -3,12 +3,12 @@
 //! Runtime type information for the C on-disk structures.
 //!
 //! Static per-type field tables — name, offset, width, endianness — for the
-//! on-disk structs, produced by `#[derive(TypeInfo)]` (fs/typeinfo-macros/)
-//! on their Rust definitions. Offsets come from
-//! `offset_of!`, so the compiler guarantees them against the real layout;
-//! endianness is recovered from the C typedef *name* (`__le32` resolves to
-//! `u32`, so the information only exists at the syntax level — the reason
-//! this is a derive macro and not a generic reflection library).
+//! on-disk structs, produced by `#[derive(TypeInfo)]`
+//! (fs/cstruct-macros/src/typeinfo.rs) on their Rust definitions. Offsets come
+//! from `offset_of!`, so the compiler guarantees them against the real layout;
+//! width, endianness and signedness are read from the C type a field renders
+//! as (`Le32` is `__le32`) - the syntax, which is why this is a derive macro
+//! and not a generic reflection library.
 //!
 //! Primary consumer: the btree REPL (`bcachefs kvdb`), which reads and writes
 //! btree keys by field name — both for field debugging and for corruption

@@ -3,8 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use cstruct_macros::{c_const, c_enum, c_typedef, c_xmacro, tagged_union, CStruct};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{c_const, c_enum, c_typedef, c_xmacro, tagged_union, CStruct, TypeInfo};
 
 /*
  * Disk accounting - KEY_TYPE_accounting - on disk format:

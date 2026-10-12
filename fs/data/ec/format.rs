@@ -4,9 +4,8 @@
 
 use crate::cstructs::c;
 use crate::types::Le16;
-use cstruct_macros::{bitfield, CStruct};
+use cstruct_macros::{bitfield, CStruct, TypeInfo};
 use nestify::nest;
-use typeinfo_macros::TypeInfo;
 
 nest! {
     #[repr(C, align(8))]

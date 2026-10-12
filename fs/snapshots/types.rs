@@ -5,8 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{DArray, bits_to_longs, c_default};
 use core::ffi::{c_uint, c_ulong};
-use cstruct_macros::{c_const, c_enum, CStruct, c_typedef};
-use typeinfo_macros::TypeInfo;
+use cstruct_macros::{c_const, c_enum, CStruct, c_typedef, TypeInfo};
 
 c_typedef! {
     pub type snapshot_id_list = DArray<u32>;
