@@ -59,21 +59,6 @@ fn bset_csum_set(fs: &Fs, node: *mut u8, i: *mut c::bset, offset: u32,
     unsafe { *(node as *mut c::bch_csum) = csum };
 }
 
-/// First 8 bytes of the superblock UUID interpreted as a little-endian u64.
-fn sb_magic(sb: &c::bch_sb) -> u64 {
-    u64::from_le_bytes(sb.uuid.b[..8].try_into().unwrap())
-}
-
-/// Journal set magic: sb_magic XOR JSET_MAGIC constant.
-fn jset_magic(sb: &c::bch_sb) -> u64 {
-    sb_magic(sb) ^ 0x245235c1a3625032
-}
-
-/// Btree set magic: sb_magic XOR BSET_MAGIC constant.
-fn bset_magic(sb: &c::bch_sb) -> u64 {
-    sb_magic(sb) ^ 0x90135c78b99e07f5
-}
-
 // ---- Dump CLI ----
 
 /// Dump filesystem metadata to a qcow2 image
@@ -178,10 +163,6 @@ fn cmd_undump(cli: UndumpCli) -> Result<()> {
 
 // ---- Sanitize implementation ----
 
-fn csum_type_is_encryption(csum_type: u32) -> bool {
-    csum_type == 3 || csum_type == 4 // chacha20_poly1305_{80,128}
-}
-
 /// Sanitize a bkey value region in-place. Returns true if modified.
 ///
 /// On-disk value layout (bch_val = 0 bytes):
@@ -274,7 +255,7 @@ fn whole_at<T: Plain + SelfSized>(buf: &mut [u8]) -> Option<&mut T> {
 /// zero inline data, optionally scramble filenames, clear checksums.
 fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
     let fs = unsafe { Fs::borrow_raw(fs_raw) };
-    let jset_magic = jset_magic(fs.disk_sb().sb());
+    let jset_magic = fs.disk_sb().sb().jset_magic();
     let block_bits = fs.block_bits() as u32;
 
     let mut pos = 0;
@@ -282,7 +263,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
         let (bytes, csum_type) = (j.bytes(), j.csum_type() as u32);
         let mut modified = false;
 
-        if csum_type_is_encryption(csum_type) {
+        if c::bch_csum_type(csum_type).is_encryption() {
             if !fs.chacha20_key_set() {
                 eprintln!("found encrypted journal entry on non-encrypted filesystem");
                 return;
@@ -309,7 +290,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
         if modified {
             // Re-encrypt (symmetric) if encrypted, then recompute the csum so
             // the entry stays checksum-valid instead of csum-cleared.
-            if csum_type_is_encryption(csum_type) {
+            if c::bch_csum_type(csum_type).is_encryption() {
                 jset_encrypt(&fs, j, csum_type, bytes);
             }
             jset_csum_set(&fs, j, csum_type, bytes);
@@ -323,7 +304,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
 /// encryption, zero inline data, optionally scramble filenames.
 fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
     let fs = unsafe { Fs::borrow_raw(fs_raw) };
-    let bset_magic = bset_magic(fs.disk_sb().sb());
+    let bset_magic = fs.disk_sb().sb().bset_magic();
     let block_bits = fs.block_bits() as u32;
 
     // The node's packed-key format lives in the btree_node header at the start
@@ -360,7 +341,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
         let csum_type = unsafe { &*buf.as_ptr().add(bset_off).cast::<c::bset>() }.csum_type() as u32;
         let mut modified = false;
 
-        if csum_type_is_encryption(csum_type) {
+        if c::bch_csum_type(csum_type).is_encryption() {
             if !fs.chacha20_key_set() {
                 eprintln!("found encrypted btree node on non-encrypted filesystem");
                 return;
@@ -435,7 +416,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
             // Re-encrypt (symmetric) if encrypted, then recompute the bset csum
             // over the btree_node (first bset) or btree_node_entry.
             let bset = unsafe { buf.as_mut_ptr().add(bset_off) } as *mut c::bset;
-            if csum_type_is_encryption(csum_type) {
+            if c::bch_csum_type(csum_type).is_encryption() {
                 if let Err(e) = unsafe { btree::read::bset_encrypt(fs.raw, bset, bset_byte_offset as u32) } {
                     eprintln!("error re-encrypting btree node: {e}");
                 }

@@ -31,6 +31,14 @@ impl PartialEq for bch_sb {
     }
 }
 
+/*
+ * bcachefs_format.h's JSET_MAGIC and BSET_MAGIC. C keeps its own: they're
+ * __cpu_to_le64()s, XORed with the uuid's bytes as they are, which a
+ * c_const! - a plain integer - can't say.
+ */
+const JSET_MAGIC: u64 = 0x245235c1a3625032;
+const BSET_MAGIC: u64 = 0x90135c78b99e07f5;
+
 impl bch_sb {
     pub fn field<F: SbField>(&self) -> Option<&F> {
         sb_field_get(self)
@@ -42,6 +50,21 @@ impl bch_sb {
 
     pub fn uuid(&self) -> uuid::Uuid {
         uuid::Uuid::from_bytes(self.user_uuid.b)
+    }
+
+    /// The magic this filesystem's jsets carry: __jset_magic().
+    pub fn jset_magic(&self) -> u64 {
+        self.magic() ^ JSET_MAGIC
+    }
+
+    /// The magic this filesystem's btree nodes carry: __bset_magic().
+    pub fn bset_magic(&self) -> u64 {
+        self.magic() ^ BSET_MAGIC
+    }
+
+    /// The first 8 bytes of its internal uuid: __bch2_sb_magic().
+    fn magic(&self) -> u64 {
+        u64::from_le_bytes(self.uuid.b[..8].try_into().unwrap())
     }
 
     /// The filesystem label, as bytes up to the first NUL.

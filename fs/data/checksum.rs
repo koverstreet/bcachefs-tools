@@ -24,6 +24,14 @@ pub const BCH_NONCE_JOURNAL:	u32 = 3 << 28;
 pub const BCH_NONCE_PRIO:	u32 = 4 << 28;
 pub const BCH_NONCE_POLY:	u32 = 1 << 31;
 
+impl c::bch_csum_type {
+    /// Whether it's an encryption type: bch2_csum_type_is_encryption().
+    pub fn is_encryption(self) -> bool {
+        matches!(self, c::bch_csum_type::BCH_CSUM_chacha20_poly1305_80 |
+                       c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128)
+    }
+}
+
 impl c::nonce {
     /// The nonce @offset bytes further into its stream - a whole number of
     /// ChaCha20 blocks.
