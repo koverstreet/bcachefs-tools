@@ -11,9 +11,7 @@
 // nothing: the kernel build compiles the macros with a bare rustc.
 //
 // The macros get their input as a TokenStream and record its to_string(), so
-// an item is parsed by the same code from the same text both times. --emit
-// parses a whole source file, whose tokens differ from a TokenStream's text
-// only in spacing and comments.
+// an item is parsed by the same code from the same text both times.
 //
 // The items, each with an optional #[cfg(...)] - which C gets as #if:
 //
@@ -439,16 +437,15 @@ pub struct CConst {
 }
 
 impl CConst {
-    /// The #define's value. An evaluated one, the records path's, is
-    /// written so C gives it c_type: `5U`, `5ULL`, `((size_t) 5)`. A
+    /// The #define's value: the number rustc evaluated, written so C gives
+    /// it c_type: `5U`, `5ULL`, `((size_t) 5)`. A
     /// constant's type is what C does with it - %zu, integer promotion,
     /// signed against unsigned - and a bare number would be int, or
-    /// whatever's wide enough. --emit's value is the Rust expression,
-    /// as C.
+    /// whatever's wide enough.
     fn c_value(&self) -> Result<String, String> {
-        let Ok(v) = self.value.parse::<i128>() else {
-            return Ok(rust_expr_to_c(&self.value));
-        };
+        let v = self.value.parse::<i128>()
+            .map_err(|_| format!("{}: value {} isn't a number - the records path evaluates every constant",
+                                 self.name, self.value))?;
         let suffix = match self.c_type.as_str() {
             "int" | "s32"                   => Some(("", i32::MIN as i128, i32::MAX as i128)),
             "unsigned" | "u32"              => Some(("U", 0, u32::MAX as i128)),
@@ -589,23 +586,14 @@ pub struct CTaggedUnion {
     /// `packed`: C's __packed - for a struct, the payload right after the
     /// tag whatever the arms' alignment, which is what the format says.
     pub packed:    bool,
-    /// `#[...]*` on the declaration: attributes for the arm types defined in
-    /// it, propagated as nestify does - as source, the `*` included.
-    // Read by rust_types_gen's --emit, not the macros.
-    #[allow(dead_code)]
-    pub arm_attrs: Vec<String>,
     /// Arm types defined in the block, for nestify::nest!.
     pub defs:      Vec<CTaggedDef>,
 }
 
-/// An arm's type, defined in its tagged_union!'s block: its name, and its
-/// definition as source.
+/// An arm's type, defined in its tagged_union!'s block.
 #[derive(Debug, Clone)]
 pub struct CTaggedDef {
     pub name: String,
-    // Read by rust_types_gen's --emit, not the macros.
-    #[allow(dead_code)]
-    pub text: String,
 }
 
 /// Where a definition's `struct|union NAME { ... }` starts in @item, past its
@@ -1792,16 +1780,11 @@ pub fn parse_c_export(text: &str) -> Result<CExport, String> {
 /// besides the arms, for a union and only for a union: a struct's tag is its
 /// stored field.
 fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, String> {
-    // `#[...]*`: for the arm types defined here, not the storage
+    // `#[...]*` are for the arm types defined here - nestify propagates them -
+    // not the storage: skipped
     let mut i = 0;
-    let mut arm_attrs = Vec::new();
     while let Some((_, next)) = attr_at(body, i)? {
-        if body.get(next).is_some_and(|t| t.is_punct('*')) {
-            arm_attrs.push(tokens_to_rust(&body[i..next + 1]));
-            i = next + 1;
-        } else {
-            i = next;
-        }
+        i = if body.get(next).is_some_and(|t| t.is_punct('*')) { next + 1 } else { next };
     }
     let i = skip_vis(body, i)?;
     const EXPECTED: &str = "tagged_union!: expected struct|union NAME [in STORAGE] { ... }";
@@ -1823,15 +1806,14 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
     let mut tu = CTaggedUnion { cfg, name, union, storage, tag_field: String::new(),
                                 tag_ty: String::new(), tag_enum: String::new(), by: None,
                                 from: None, arms: Vec::new(), members: Vec::new(), pad: None,
-                                packed: false, arm_attrs, defs: Vec::new() };
+                                packed: false, defs: Vec::new() };
     for item in split_top(inner, ',') {
         let eq = item.iter().rposition(|t| t.is_punct('='));
         match item {
             [] => {}
             _ if tagged_def_at(item).is_some() => {
                 let j = tagged_def_at(item).unwrap();
-                tu.defs.push(CTaggedDef { name: ident_at(item, j + 1).unwrap().to_string(),
-                                          text: tokens_to_rust(item) });
+                tu.defs.push(CTaggedDef { name: ident_at(item, j + 1).unwrap().to_string() });
             }
             [Tok::Ident(kw), Tok::Ident(field), Tok::Punct(':'), rest @ ..] if kw == "tag" => {
                 let eq = rest.iter().position(|t| t.is_punct('='))
@@ -2287,33 +2269,6 @@ pub fn field_type(ty: &str) -> Result<FieldType, String> {
     })
 }
 
-/// A value's Rust source as C, for the --emit path, which has no evaluated
-/// values: the same tokens, but for a constant's c:: path. The records path
-/// has numbers.
-fn rust_expr_to_c(x: &str) -> String {
-    match tokenize(x) {
-        Ok(toks) => {
-            let toks: Vec<Tok> = toks.into_iter()
-                .filter(|t| !matches!(t, Tok::Ident(s) if is_c_ns(s)))
-                .collect::<Vec<_>>();
-            // `c :: NAME` -> `NAME`: the path's ::, now leading, dropped.
-            let mut out = Vec::new();
-            let mut k = 0;
-            while k < toks.len() {
-                if toks[k].is_punct(':') && toks.get(k + 1).is_some_and(|t| t.is_punct(':')) &&
-                    (k == 0 || !matches!(toks[k - 1], Tok::Ident(_))) {
-                    k += 2;
-                    continue;
-                }
-                out.push(toks[k].clone());
-                k += 1;
-            }
-            tokens_to_c(&out)
-        }
-        Err(_) => x.to_string(),
-    }
-}
-
 /// @text, under #if @cfg if there is one.
 fn under_cfg(cfg: &Option<Cfg>, text: String) -> Result<String, String> {
     Ok(match cfg {
@@ -2762,23 +2717,12 @@ pub fn emit_items(items: &[CItem],
             CItem::Enum(e) => {
                 let mut t = format!("enum {}{} {{\n", e.kind.marker(),
                                     e.name.as_deref().map(|n| format!(" {n}")).unwrap_or_default());
-                // Variants from a list not expanded - from source alone, of
-                // another file's list: C's x-macro, where they go.
-                let list = |t: &mut String, i: usize| for (at, f) in &e.from {
-                    if *at == i {
-                        let params = f.params.join(", ").replace("..", "...");
-                        t.push_str(&format!("#define x({params})\t{},\n\t{}()\n#undef x\n",
-                                            f.template.replace(" ## ", "##"), f.list));
-                    }
-                };
-                for (i, (v, value)) in e.variants.iter().enumerate() {
-                    list(&mut t, i);
+                for (v, value) in &e.variants {
                     match value {
-                        Some(x) => t.push_str(&format!("\t{v} = {},\n", rust_expr_to_c(x))),
+                        Some(x) => t.push_str(&format!("\t{v} = {x},\n")),
                         None => t.push_str(&format!("\t{v},\n")),
                     }
                 }
-                list(&mut t, e.variants.len());
                 under_cfg(&e.cfg, t + "};\n")?
             }
             CItem::Const(c) => under_cfg(&c.cfg, format!("#define {}\t{}\n", c.name, c.c_value()?))?,
@@ -2924,10 +2868,6 @@ pub fn parse_items(src: &str) -> Result<Vec<CItem>, String> {
                 i = next;
                 continue;
             }
-            // The macros record the items nest! unpacks to; source text has
-            // nestify's syntax, which this doesn't read.
-            (Some("nest"), Some(t)) if t.is_punct('!') =>
-                return Err("nest!: --emit doesn't read nestify's syntax - the records path does".into()),
             _ => {}
         }
 
