@@ -41,7 +41,7 @@ impl<'i, 'k, 'a, 't, K: TypedBkey> CowKey<'i, 'k, 'a, 't, K> {
     /// The value as it is now, repairs and all.
     pub fn v(&self) -> &K::Val {
         match &self.u {
-            Some(u) => u.k_i().whole::<K>().expect("CowKey: the update is K's, grown whole"),
+            Some(u) => u.k_i().arm::<K>().expect("CowKey: the update is K's, grown whole").v(),
             None    => &self.v,
         }
     }
@@ -62,8 +62,8 @@ impl<'i, 'k, 'a, 't, K: TypedBkey> CowKey<'i, 'k, 'a, 't, K> {
 
     /// The value, to repair.
     pub fn v_mut(&mut self, t: &TransAttempt<'a, 't>) -> Result<&mut K::Val, BchError> {
-        Ok(self.u(t)?.k_i_mut().whole_mut::<K>()
-           .expect("CowKey: u() grows the key to K's size, of K's type"))
+        Ok(self.u(t)?.k_i_mut().arm_mut::<K>()
+           .expect("CowKey: u() grows the key to K's size, of K's type").v_mut())
     }
 
     /// The key as it is now, to print.

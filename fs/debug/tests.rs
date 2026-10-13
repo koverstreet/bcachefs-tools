@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::alloc::buckets::DiskReservation;
-use crate::btree::bkey::{pos, spos, BkeyCookie, BkeyS, BkeySC, TypedBkey, BKEY_U64S, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, BkeyICookie, BkeyS, BkeySC, TypedBkey, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
@@ -74,7 +74,7 @@ fn delete_test_keys(fs: &Fs) -> TestRet {
     )
 }
 
-fn insert_cookie(fs: &Fs, btree: c::btree_id, k: &mut BkeyCookie) -> TestRet {
+fn insert_cookie(fs: &Fs, btree: c::btree_id, k: &mut BkeyICookie) -> TestRet {
     /*
      * A cookie has no pointers, so nothing can charge trans->extra_disk_res
      * for it - but an extents leaf update is required to have somewhere to
@@ -153,7 +153,7 @@ fn test_iterate(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
     for i in 0..nr {
-        let mut k = BkeyCookie::new();
+        let mut k = BkeyICookie::new();
         k.k_mut().p.offset = i;
         k.k_mut().p.snapshot = u32::MAX;
         insert_cookie(fs, c::btree_id::xattrs, &mut k)?;
@@ -183,7 +183,7 @@ fn test_iterate_extents(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
     for i in (0..nr).step_by(8) {
-        let mut k = BkeyCookie::new();
+        let mut k = BkeyICookie::new();
         k.k_mut().p.offset = i + 8;
         k.k_mut().p.snapshot = u32::MAX;
         k.k_mut().size = 8;
@@ -214,7 +214,7 @@ fn test_iterate_slots(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
     for i in 0..nr {
-        let mut k = BkeyCookie::new();
+        let mut k = BkeyICookie::new();
         k.k_mut().p.offset = i * 2;
         k.k_mut().p.snapshot = u32::MAX;
         insert_cookie(fs, c::btree_id::xattrs, &mut k)?;
@@ -248,7 +248,7 @@ fn test_iterate_slots_extents(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
     for i in (0..nr).step_by(16) {
-        let mut k = BkeyCookie::new();
+        let mut k = BkeyICookie::new();
         k.k_mut().p.offset = i + 16;
         k.k_mut().p.snapshot = u32::MAX;
         k.k_mut().size = 8;
@@ -306,7 +306,7 @@ fn test_peek_end_extents(fs: &Fs, _nr: u64) -> TestRet {
 static TEST_VERSION: AtomicU64 = AtomicU64::new(0);
 
 fn insert_test_extent(fs: &Fs, start: u64, end: u64) -> TestRet {
-    let mut k = BkeyCookie::new();
+    let mut k = BkeyICookie::new();
     k.k_mut().p.offset = end;
     k.k_mut().p.snapshot = u32::MAX;
     k.k_mut().size = (end - start) as u32;
@@ -610,7 +610,7 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
 }
 
 fn test_snapshot_filter(fs: &Fs, snapid_lo: u32, snapid_hi: u32) -> TestRet {
-    let mut cookie = BkeyCookie::new();
+    let mut cookie = BkeyICookie::new();
     cookie.k_mut().p.snapshot = snapid_hi;
     insert_cookie(fs, c::btree_id::xattrs, &mut cookie)?;
 
@@ -626,7 +626,7 @@ fn test_snapshot_filter(fs: &Fs, snapid_lo: u32, snapid_hi: u32) -> TestRet {
 }
 
 fn test_snapshots(fs: &Fs, _nr: u64) -> TestRet {
-    let mut cookie = BkeyCookie::new();
+    let mut cookie = BkeyICookie::new();
     cookie.k_mut().p.snapshot = u32::MAX;
     insert_cookie(fs, c::btree_id::xattrs, &mut cookie)?;
 

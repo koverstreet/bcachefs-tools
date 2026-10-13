@@ -26,7 +26,7 @@
 //! panic here.
 
 use crate::acl::PosixAcl;
-use crate::btree::bkey::{pos, spos, BkeyDirent, BkeySC, BkeySubvolume};
+use crate::btree::bkey::{pos, spos, BkeyIDirent, BkeySC, BkeyISubvolume};
 use crate::btree::iter::{
     is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
     UpdateTriggerFlags,
@@ -513,7 +513,7 @@ fn subvol_update_parent(t: &TransAttempt<'_, '_>, subvol: u32, new_parent: u32)
                                BtreeIterFlags::CACHED, UpdateTriggerFlags::empty(),
                                c::bch_bkey_type::KEY_TYPE_subvolume,
                                size_of::<c::bkey_i_subvolume>())?;
-    s.k_i_mut().whole_mut::<BkeySubvolume>().expect("a subvolume").fs_path_parent = new_parent.into();
+    s.k_i_mut().arm_mut::<BkeyISubvolume>().expect("a subvolume").v_mut().fs_path_parent = new_parent.into();
     Ok(())
 }
 
@@ -1248,7 +1248,7 @@ fn __check_dirent_target(
                     d_type_str(d_type),
                     d.k().to_text(fs))? {
         let mut n = t.bkey_reassemble(d.k())?;
-        let v = n.k_i_mut().whole_mut::<BkeyDirent>().expect("a dirent");
+        let v = n.k_i_mut().arm_mut::<BkeyIDirent>().expect("a dirent").v_mut();
 
         v.set_d_type(d_type);
         if d_type as u32 == c::DT_SUBVOL {

@@ -9,7 +9,7 @@ use core::fmt;
 use core::str::FromStr;
 #[cfg(feature = "std")]
 use crate::errcode::{bch_errcode, BchError};
-use crate::util::vstructs::{Floored, Plain, View, ViewMut};
+use crate::util::vstructs::{Floored, View, ViewMut};
 use core::marker::PhantomData;
 
 use c::bpos as Bpos;
@@ -51,6 +51,11 @@ impl c::bkey {
             format_bits: c::bkey_format_bits::new().with_format(c::KEY_FORMAT_CURRENT as u8),
             ..Default::default()
         }
+    }
+
+    /// Its value's length, as its u64s say: C's bkey_val_bytes().
+    pub fn val_bytes(&self) -> usize {
+        (self.u64s as usize).saturating_sub(BKEY_U64S) * size_of::<u64>()
     }
 
     /// u64s for a value of @bytes: C's set_bkey_val_bytes().
@@ -264,12 +269,15 @@ pub type bkey_type = c::bch_bkey_type;
 
 /// A key and its value, borrowed: C's struct bkey_s_c, which it's laid out
 /// as - so a C entry point can take one by value where C passes a
-/// bkey_s_c. With a value type, the typed one: BkeySC<'a, bch_extent> is
-/// struct bkey_s_c_extent (btree/bkey_types.rs).
+/// bkey_s_c. It's a tagged union, its tag k.type_: typed() is C's switch on
+/// it, each arm the key as its type's, BkeySC<'a, bch_extent> - C's struct
+/// bkey_s_c_extent, BkeySCExtent (btree/bkey_types.rs) - whose value is
+/// v(). @v is a pointer, not a reference: a value written before its type
+/// grew is shorter than its type, as long as k.u64s says.
 #[repr(C)]
 pub struct BkeySC<'a, V = c::bch_val> {
     pub k:           &'a c::bkey,
-    pub v:           &'a V,
+    pub(crate) v:    *const V,
     pub(crate) iter: PhantomData<&'a mut BtreeIter<'a>>,
 }
 
@@ -282,7 +290,9 @@ impl<V> Clone for BkeySC<'_, V> {
 impl<V> Copy for BkeySC<'_, V> {}
 
 /// A key with its value inline, of type V: C's struct bkey_i_<type>, whose
-/// k is also the bkey_i k_i - an empty value, there.
+/// k is also the bkey_i k_i - an empty value, there. bkey_i's typed() and
+/// arm() hand one out only for a key whose value is all there: a reference
+/// to one reaches all of V.
 ///
 /// Not Clone or Copy: a key is its header and u64s of value, which can run
 /// past V - copying one is bkey_copy().
@@ -291,6 +301,18 @@ impl<V> Copy for BkeySC<'_, V> {}
 pub struct BkeyI<V> {
     pub k: c::bkey,
     pub v: V,
+}
+
+impl<V> BkeyI<V> {
+    /// Its value.
+    pub fn v(&self) -> &V {
+        &self.v
+    }
+
+    /// Its value, to edit.
+    pub fn v_mut(&mut self) -> &mut V {
+        &mut self.v
+    }
 }
 
 const _: () = {
@@ -348,8 +370,8 @@ macro_rules! bkey_floored {
     } };
 }
 
-/// And what the typed dispatch enums hold of a value: all of it, if every
-/// valid one is whole - `_` - else a View of it.
+/// And what a typed key's v() is: all of the value, if every valid one is
+/// whole - `_` - else a View of it.
 macro_rules! bkey_val_ref {
     ($a:lifetime, $val:ty, _)          => { &$a $val };
     ($a:lifetime, $val:ty, $f:ident)   => { View<$a, $val> };
@@ -379,7 +401,9 @@ macro_rules! bkey_val_mut_new {
 macro_rules! bkey_types {
     ($(($name:ident, $nr:literal, $flags:expr, $field:tt $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! {
         $(
-        pub type [<Bkey $name:camel>] = c::[<bkey_i_ $name>];
+        pub type [<BkeyI $name:camel>] = c::[<bkey_i_ $name>];
+        pub type [<BkeySC $name:camel>]<'a> = BkeySC<'a, c::[<bch_ $name>]>;
+        pub type [<BkeyS $name:camel>]<'a> = BkeyS<'a, c::[<bch_ $name>]>;
 
         impl c::[<bkey_i_ $name>] {
             pub fn k(&self) -> &c::bkey { &self.k }
@@ -419,26 +443,49 @@ macro_rules! bkey_types {
             }
         }
 
+        impl<'a> BkeySC<'a, c::[<bch_ $name>]> {
+            /// Its value: whole, for a type every valid value of which is -
+            /// else a View of it, as long as the key says.
+            pub fn v(&self) -> bkey_val_ref!('a, c::[<bch_ $name>], $field) {
+                bkey_val_ref_new!(self.val_bytes(), $field)
+            }
+        }
+
+        impl BkeyS<'_, c::[<bch_ $name>]> {
+            /// Its value: as BkeySC's v().
+            pub fn v(&self) -> bkey_val_ref!('_, c::[<bch_ $name>], $field) {
+                bkey_val_ref_new!(self.val_bytes(), $field)
+            }
+
+            /// Its value, to edit: a field a grown type's older value lacks
+            /// is a set() error.
+            pub fn v_mut(&mut self) -> bkey_val_mut!('_, c::[<bch_ $name>], $field) {
+                bkey_val_mut_new!(self.val_bytes_mut(), $field)
+            }
+        }
+
         bkey_floored!($name, $field);
         )*
 
-        /// Typed dispatch for split-const bkey references: BkeySC::v().
-        pub enum BkeyValSC<'a> {
-            $($name(&'a c::bkey, bkey_val_ref!('a, c::[<bch_ $name>], $field)),)*
+        /// A key, by its type - C's switch on k.k->type: each arm the key as
+        /// its type's, as bkey_s_c_to_<type>() makes it. BkeySC::typed().
+        #[allow(non_camel_case_types)]
+        #[derive(Clone, Copy)]
+        pub enum BkeySCTyped<'a> {
+            $($name(BkeySC<'a, c::[<bch_ $name>]>),)*
             /// A type this code doesn't know, or a value shorter than its
             /// type's ever been - damage, which validate rejects.
-            unknown(&'a c::bkey, u8),
+            unknown(BkeySC<'a>),
         }
 
         impl<'a> BkeySC<'a> {
-            /// The value, by the key's type: whole, for a type every valid
-            /// value of which is - else a View of it, as view().
-            pub fn v(&self) -> BkeyValSC<'a> {
-                let v = self.val_bytes();
+            /// The key as its type's: C's switch on k.k->type.
+            pub fn typed(self) -> BkeySCTyped<'a> {
+                let len = self.val_bytes().len();
                 match self.k.type_ as u32 {
-                    $($nr if v.len() >= <[<Bkey $name:camel>] as TypedBkey>::MIN_VAL_SIZE =>
-                        BkeyValSC::$name(self.k, bkey_val_ref_new!(v, $field)),)*
-                    _ => BkeyValSC::unknown(self.k, self.k.type_),
+                    $($nr if len >= <[<BkeyI $name:camel>] as TypedBkey>::MIN_VAL_SIZE =>
+                        BkeySCTyped::$name(self.cast()),)*
+                    _ => BkeySCTyped::unknown(self),
                 }
             }
 
@@ -462,30 +509,73 @@ macro_rules! bkey_types {
             fn from(k: c::[<bkey_s_c_ $name>]) -> Self {
                 c::bkey_s_c {
                     k: k.k as *const c::bkey as *mut c::bkey,
-                    v: k.v as *const c::[<bch_ $name>] as *mut c::bch_val,
+                    v: k.v.cast_mut().cast(),
                 }
             }
         }
         )*
 
-        /// Typed dispatch for split-mutable bkey references: BkeyS::v_mut().
-        pub enum BkeyValS<'a> {
-            $($name(&'a mut c::bkey, bkey_val_mut!('a, c::[<bch_ $name>], $field)),)*
-            /// As BkeyValSC's.
-            unknown(&'a mut c::bkey, u8),
+        /// A key to edit, by its type: as BkeySCTyped, each arm the key as its
+        /// type's, as bkey_s_to_<type>() makes it. BkeyS::typed().
+        #[allow(non_camel_case_types)]
+        pub enum BkeySTyped<'a> {
+            $($name(BkeyS<'a, c::[<bch_ $name>]>),)*
+            /// As BkeySCTyped's.
+            unknown(BkeyS<'a>),
         }
 
         impl BkeyS<'_> {
-            /// The value, by the key's type, mutably: as BkeySC::v(). A field
-            /// a grown type's older value lacks is a set() error, as
-            /// bkey_i::view_mut()'s.
-            pub fn v_mut(&mut self) -> BkeyValS<'_> {
-                let type_ = self.k.type_;
-                let (k, v) = self.split_mut();
-                match type_ as u32 {
-                    $($nr if v.len() >= <[<Bkey $name:camel>] as TypedBkey>::MIN_VAL_SIZE =>
-                        BkeyValS::$name(k, bkey_val_mut_new!(v, $field)),)*
-                    _ => BkeyValS::unknown(k, type_),
+            /// The key as its type's, to edit: as BkeySC::typed().
+            pub fn typed(&mut self) -> BkeySTyped<'_> {
+                let len = self.val_bytes().len();
+                let k = self.reborrow();
+                match k.k.type_ as u32 {
+                    $($nr if len >= <[<BkeyI $name:camel>] as TypedBkey>::MIN_VAL_SIZE =>
+                        BkeySTyped::$name(k.cast()),)*
+                    _ => BkeySTyped::unknown(k),
+                }
+            }
+        }
+
+        /// A key with its value inline, by its type: as BkeySCTyped, each arm
+        /// the key as its type's, bkey_i_to_<type>() - one whose value is all
+        /// there. bkey_i::typed().
+        #[allow(non_camel_case_types)]
+        pub enum BkeyITyped<'a> {
+            $($name(&'a [<BkeyI $name:camel>]),)*
+            /// A type this code doesn't know, or a value shorter than its
+            /// type - written before it grew, which a copy is grown from
+            /// first (bkey_make_mut()), or damage.
+            unknown(&'a c::bkey_i),
+        }
+
+        /// BkeyITyped, to edit.
+        #[allow(non_camel_case_types)]
+        pub enum BkeyITypedMut<'a> {
+            $($name(&'a mut [<BkeyI $name:camel>]),)*
+            /// As BkeyITyped's.
+            unknown(&'a mut c::bkey_i),
+        }
+
+        impl c::bkey_i {
+            /// The key as its type's, if its value is all there: C's switch
+            /// on k.type.
+            pub fn typed(&self) -> BkeyITyped<'_> {
+                match self.k.type_ as u32 {
+                    $($nr if self.k.val_bytes() >= size_of::<c::[<bch_ $name>]>() =>
+                        // SAFETY: as cast()'s
+                        BkeyITyped::$name(unsafe { self.cast() }),)*
+                    _ => BkeyITyped::unknown(self),
+                }
+            }
+
+            /// typed(), to edit.
+            pub fn typed_mut(&mut self) -> BkeyITypedMut<'_> {
+                match self.k.type_ as u32 {
+                    $($nr if self.k.val_bytes() >= size_of::<c::[<bch_ $name>]>() =>
+                        // SAFETY: as cast_mut()'s
+                        BkeyITypedMut::$name(unsafe { self.cast_mut() }),)*
+                    _ => BkeyITypedMut::unknown(self),
                 }
             }
         }
@@ -494,12 +584,38 @@ macro_rules! bkey_types {
 
 c::BCH_BKEY_TYPES!(bkey_types);
 
+impl<'a, V> BkeySC<'a, V> {
+    /// The value as bytes, as long as k.u64s says.
+    pub fn val_bytes(&self) -> &'a [u8] {
+        // SAFETY: its value follows its header, as long as u64s says, for 'a
+        unsafe { core::slice::from_raw_parts(self.v.cast::<u8>(), self.k.val_bytes()) }
+    }
+
+    /// The key as one with a @W value: typed() and arm(), which check it is.
+    fn cast<W>(self) -> BkeySC<'a, W> {
+        BkeySC { k: self.k, v: self.v.cast(), iter: PhantomData }
+    }
+
+    /// The key, of any type: C's .s_c, a typed key as the union.
+    pub fn s_c(self) -> BkeySC<'a> {
+        self.cast()
+    }
+}
+
 impl<'a> BkeySC<'a> {
+    /// The key as its type's, @K's, if it's that type: bkey_s_c_to_<type>().
+    /// None for another type, or a value shorter than its type's ever been -
+    /// damage, which validate rejects.
+    pub fn arm<K: TypedBkey>(self) -> Option<BkeySC<'a, K::Val>> {
+        (self.k.type_ as u32 == K::TYPE.0 && self.val_bytes().len() >= K::MIN_VAL_SIZE)
+            .then(|| self.cast())
+    }
+
     /// The key as C's bkey_s_c, for passing to C.
     pub(crate) fn to_raw(self) -> c::bkey_s_c {
         c::bkey_s_c {
             k: self.k as *const c::bkey as *mut c::bkey,
-            v: self.v as *const c::bch_val as *mut c::bch_val,
+            v: self.v.cast_mut(),
         }
     }
 
@@ -507,7 +623,7 @@ impl<'a> BkeySC<'a> {
     /// reading a value that may predate fields @T has, which a reference to
     /// it would read past the end of - as C's bkey_val_copy_pad(). Typed
     /// wrappers check the key type, then call this. To read one in place,
-    /// view().
+    /// arm() then v().
     ///
     /// # Safety
     /// @T is the value type of this key's type: plain data, all-zeroes valid.
@@ -517,8 +633,7 @@ impl<'a> BkeySC<'a> {
             .min(core::mem::size_of::<T>());
         unsafe {
             core::ptr::write_bytes(&mut v as *mut T as *mut u8, 0, core::mem::size_of::<T>());
-            core::ptr::copy_nonoverlapping(self.v as *const c::bch_val as *const u8,
-                                           &mut v as *mut T as *mut u8, bytes);
+            core::ptr::copy_nonoverlapping(self.v.cast::<u8>(), &mut v as *mut T as *mut u8, bytes);
         }
         v
     }
@@ -537,60 +652,20 @@ impl<'a> BkeySC<'a> {
         }
     }
 
-    /// The value as raw bytes: its full u64s extent past the key header.
-    pub fn val_bytes(&self) -> &'a [u8] {
-        let u64s = self.k.u64s as usize - core::mem::size_of::<c::bkey>() / 8;
-        unsafe {
-            core::slice::from_raw_parts(self.v as *const c::bch_val as *const u8, u64s * 8)
-        }
-    }
-
-    /// The value as @K's, if the key is that type: a View of as many of its
-    /// bytes as there are - one written before its type grew reads as zero
-    /// past them. None if it's another type, or shorter than its type has
-    /// ever been (MIN_VAL_SIZE): that's damage, not an older version.
-    pub fn view<K: TypedBkey>(&self) -> Option<View<'a, K::Val>>
-    where
-        K::Val: Plain,
-    {
-        let v = self.val_bytes();
-        (self.k.type_ as u32 == K::TYPE.0 && v.len() >= K::MIN_VAL_SIZE)
-            .then(|| View::new(v))
-    }
-
-    /// The value as @K's, whole, if the key is that type: for a type every
-    /// valid value of which is - BCH_BKEY_TYPES()' `_`, Floored by itself. A
-    /// type that grew is view()'s: an older value of it is shorter. None for
-    /// a shorter one here, which is damage.
-    pub fn whole<K: TypedBkey>(&self) -> Option<&'a K::Val>
-    where
-        K::Val: Floored<Min = K::Val>,
-    {
-        self.whole_val::<K>()
-    }
-
-    /// whole(), for any type: for a key known to hold all of it.
-    fn whole_val<K: TypedBkey>(&self) -> Option<&'a K::Val> {
-        let v = self.val_bytes();
-        (self.k.type_ as u32 == K::TYPE.0 && v.len() >= size_of::<K::Val>())
-            // SAFETY: all of it is there, at the u64 after the header - aligned
-            .then(|| unsafe { &*v.as_ptr().cast::<K::Val>() })
-    }
-
     /// Where in the value its extent entries - its pointers - are: as
     /// bch2_bkey_ptrs_c(). Empty for a key type without them.
     fn extent_entry_range(&self) -> core::ops::Range<usize> {
         use core::mem::{offset_of, size_of};
 
         let len = self.val_bytes().len();
-        match self.v() {
-            BkeyValSC::btree_ptr(..)    => offset_of!(c::bch_btree_ptr, start)..len,
-            BkeyValSC::extent(..)       => offset_of!(c::bch_extent, start)..len,
-            BkeyValSC::reflink_v(..)    => offset_of!(c::bch_reflink_v, start)..len,
-            BkeyValSC::btree_ptr_v2(..) => offset_of!(c::bch_btree_ptr_v2, start)..len,
-            BkeyValSC::stripe(_, v) => {
+        match self.typed() {
+            BkeySCTyped::btree_ptr(_)    => offset_of!(c::bch_btree_ptr, start)..len,
+            BkeySCTyped::extent(_)       => offset_of!(c::bch_extent, start)..len,
+            BkeySCTyped::reflink_v(_)    => offset_of!(c::bch_reflink_v, start)..len,
+            BkeySCTyped::btree_ptr_v2(_) => offset_of!(c::bch_btree_ptr_v2, start)..len,
+            BkeySCTyped::stripe(s) => {
                 let start = offset_of!(c::bch_stripe, ptrs);
-                start..(start + v.nr_blocks as usize * size_of::<c::bch_extent_ptr>()).min(len)
+                start..(start + s.v().nr_blocks as usize * size_of::<c::bch_extent_ptr>()).min(len)
             }
             _ => 0..0,
         }
@@ -641,39 +716,36 @@ impl<'a> BkeySC<'a> {
 /// first, as C's bch2_bkey_make_mut_typed() does: bkey_make_mut() or
 /// bkey_get_mut() with the typed key's size.
 impl c::bkey_i {
-    /// The value's bytes, as many as its u64s say: an owned key's buffer
-    /// holds them.
-    fn val_bytes_mut(&mut self) -> &mut [u8] {
-        let len = (self.k.u64s as usize).saturating_sub(BKEY_U64S) * size_of::<u64>();
-        // SAFETY: its value follows its header, as long as u64s says
-        unsafe { core::slice::from_raw_parts_mut((self as *mut Self).cast::<u8>().add(size_of::<c::bkey>()), len) }
+    /// The key as its type's, @K's, if it's that type and its value is all
+    /// there: bkey_i_to_<type>().
+    pub fn arm<K: TypedBkey>(&self) -> Option<&BkeyI<K::Val>> {
+        (self.k.type_ as u32 == K::TYPE.0 && self.k.val_bytes() >= size_of::<K::Val>())
+            // SAFETY: as cast()'s
+            .then(|| unsafe { self.cast() })
     }
 
-    /// The value as @K's, whole: as whole_mut(), to read.
-    pub fn whole<K: TypedBkey>(&self) -> Option<&K::Val> {
-        BkeySC::from(self).whole_val::<K>()
+    /// arm(), to edit.
+    pub fn arm_mut<K: TypedBkey>(&mut self) -> Option<&mut BkeyI<K::Val>> {
+        (self.k.type_ as u32 == K::TYPE.0 && self.k.val_bytes() >= size_of::<K::Val>())
+            // SAFETY: as cast_mut()'s
+            .then(|| unsafe { self.cast_mut() })
     }
 
-    /// The value as @K's, whole, to edit: None unless the key is that type and
-    /// holds all of it - one grown to its size, or made new.
-    pub fn whole_mut<K: TypedBkey>(&mut self) -> Option<&mut K::Val> {
-        let is_k = self.k.type_ as u32 == K::TYPE.0;
-        let v = self.val_bytes_mut();
-        (is_k && v.len() >= size_of::<K::Val>())
-            // SAFETY: all of it is there, at the u64 after the header - aligned
-            .then(|| unsafe { &mut *v.as_mut_ptr().cast::<K::Val>() })
+    /// The key as one with a @V value.
+    ///
+    /// # Safety
+    /// Its value is a V, all of it there: k.type_ is V's, and its u64s cover
+    /// it. Its value is at the u64 after its header: aligned.
+    unsafe fn cast<V>(&self) -> &BkeyI<V> {
+        unsafe { &*(self as *const Self).cast::<BkeyI<V>>() }
     }
 
-    /// The value as @K's, to edit field by field, if the key is that type and
-    /// at least K::MIN_VAL_SIZE: a field past the value's end is a set()
-    /// error, not a write the key wouldn't carry.
-    pub fn view_mut<K: TypedBkey>(&mut self) -> Option<ViewMut<'_, K::Val>>
-    where
-        K::Val: Plain,
-    {
-        let is_k = self.k.type_ as u32 == K::TYPE.0;
-        let v = self.val_bytes_mut();
-        (is_k && v.len() >= K::MIN_VAL_SIZE).then(|| ViewMut::new(v))
+    /// cast(), to edit.
+    ///
+    /// # Safety
+    /// As cast()'s.
+    unsafe fn cast_mut<V>(&mut self) -> &mut BkeyI<V> {
+        unsafe { &mut *(self as *mut Self).cast::<BkeyI<V>>() }
     }
 }
 
@@ -691,47 +763,84 @@ impl<'a> From<&'a c::bkey_s_c> for BkeySC<'a> {
     fn from(k: &'a c::bkey_s_c) -> Self {
         BkeySC {
             k:    unsafe { &*k.k },
-            v:    unsafe { &*k.v },
+            v:    k.v,
             iter: PhantomData,
         }
     }
 }
 
-/// Mutable counterpart of [`BkeySC`]: a borrowed, unpacked key + value with the
-/// lifetime tracked, so mutations land on the underlying buffer. It is a mutable
-/// handle, so it is deliberately not `Copy`; the extent iterators borrow it
-/// (`&mut BkeyS`), which lets a single handle be iterated more than once (e.g. a
-/// read scan then a rewrite pass) without ever aliasing `&mut`.
-///
-/// Laid out as C's struct bkey_s - and with a value type, the typed one:
-/// BkeyS<'a, bch_extent> is struct bkey_s_extent (btree/bkey_types.rs).
+/// A key and its value, borrowed to edit: C's struct bkey_s, which it's laid
+/// out as. A tagged union, as BkeySC is: typed() gives the key as its
+/// type's, BkeyS<'a, bch_extent> - C's struct bkey_s_extent, BkeySExtent -
+/// whose value is v() and v_mut(); @v is a pointer, as BkeySC's is. Not
+/// Copy: what edits it borrows it, &mut BkeyS, so one can be walked twice -
+/// a read, then a rewrite - without aliasing.
 #[repr(C)]
 pub struct BkeyS<'a, V = c::bch_val> {
-    pub k: &'a mut c::bkey,
-    pub v: &'a mut V,
+    pub k:        &'a mut c::bkey,
+    pub(crate) v: *mut V,
 }
 
-impl<'a> BkeyS<'a> {
+impl<'a, V> BkeyS<'a, V> {
     pub fn key_type(&self) -> c::bch_bkey_type {
         c::bch_bkey_type(self.k.type_ as u32)
     }
 
-    /// The key, to read: as bkey_s_to_s_c().
-    pub fn as_sc(&self) -> BkeySC<'_> {
-        BkeySC { k: &*self.k, v: &*self.v, iter: PhantomData }
+    /// The key, to read: as bkey_s_to_s_c() - a typed key's C .c.
+    pub fn as_sc(&self) -> BkeySC<'_, V> {
+        BkeySC { k: &*self.k, v: self.v.cast_const(), iter: PhantomData }
     }
 
-    /// The value bytes, mutably. Length is derived from the key's `u64s`; the
-    /// value is never packed, so this is the on-disk value region in place.
-    pub fn val_bytes_mut(&mut self) -> &mut [u8] {
-        self.split_mut().1
+    /// The key, of any type: C's .s, a typed key as the union.
+    pub fn s(self) -> BkeyS<'a> {
+        self.cast()
     }
 
-    /// The key and its value's bytes, mutably, apart: for v_mut()'s arms.
-    fn split_mut(&mut self) -> (&mut c::bkey, &mut [u8]) {
-        let len = self.k.u64s as usize * 8 - core::mem::size_of::<c::bkey>();
+    /// The key, of any type, to read: C's .s_c.
+    pub fn s_c(&self) -> BkeySC<'_> {
+        self.as_sc().s_c()
+    }
+
+    /// The value as bytes, as long as k.u64s says: it's never packed, so
+    /// this is the value in place.
+    pub fn val_bytes(&self) -> &[u8] {
         // SAFETY: its value follows its header, as long as u64s says
-        (&mut *self.k, unsafe { core::slice::from_raw_parts_mut(self.v as *mut c::bch_val as *mut u8, len) })
+        unsafe { core::slice::from_raw_parts(self.v.cast::<u8>(), self.k.val_bytes()) }
+    }
+
+    /// val_bytes(), mutably.
+    pub fn val_bytes_mut(&mut self) -> &mut [u8] {
+        // SAFETY: as val_bytes()
+        unsafe { core::slice::from_raw_parts_mut(self.v.cast::<u8>(), self.k.val_bytes()) }
+    }
+
+    /// The key, borrowed again: for typed() and arm(), which don't consume
+    /// it.
+    fn reborrow(&mut self) -> BkeyS<'_, V> {
+        BkeyS { k: &mut *self.k, v: self.v }
+    }
+
+    /// The key as one with a @W value: typed() and arm(), which check it is.
+    fn cast<W>(self) -> BkeyS<'a, W> {
+        BkeyS { k: self.k, v: self.v.cast() }
+    }
+}
+
+impl<'a> BkeyS<'a> {
+    /// A key and its value, apart: C's struct bkey_s.
+    ///
+    /// # Safety
+    /// @v is @k's value, as long as k.u64s says, nothing else touching it for
+    /// 'a.
+    pub unsafe fn from_parts(k: &'a mut c::bkey, v: *mut c::bch_val) -> Self {
+        BkeyS { k, v }
+    }
+
+    /// The key as its type's, @K's, to edit, if it's that type:
+    /// bkey_s_to_<type>(), as BkeySC::arm().
+    pub fn arm<K: TypedBkey>(&mut self) -> Option<BkeyS<'_, K::Val>> {
+        let is_k = self.k.type_ as u32 == K::TYPE.0 && self.val_bytes().len() >= K::MIN_VAL_SIZE;
+        is_k.then(|| self.reborrow().cast())
     }
 
     /// The value's extent entries as bytes, mutably: as
@@ -926,48 +1035,52 @@ mod tests {
     /// it's not one.
     #[test]
     fn bkey_view_short_value() {
-        assert_eq!(BkeySnapshot::MIN_VAL_SIZE, 24);
+        assert_eq!(BkeyISnapshot::MIN_VAL_SIZE, 24);
 
-        let mut k = BkeySnapshot::new();
+        let mut k = BkeyISnapshot::new();
         k.v.subvol = Le32::new(5);
         k.v.children = [Le32::new(3), Le32::new(4)];
         k.v.depth = Le32::new(7);
         k.k.set_val_bytes(24);
 
-        let s = BkeySC::from(k.k_i()).view::<BkeySnapshot>().expect("a snapshot");
+        let s = BkeySC::from(k.k_i()).arm::<BkeyISnapshot>().expect("a snapshot").v();
         assert_eq!((s.subvol.get(), s.children[0].get(), s.children[1].get()), (5, 3, 4));
         assert_eq!(s.depth().get(), 0);
         assert!(s.whole().is_none());
-        assert!(BkeySC::from(k.k_i()).view::<BkeySubvolume>().is_none());
+        assert!(BkeySC::from(k.k_i()).arm::<BkeyISubvolume>().is_none());
 
         k.k.set_val_bytes(16);
-        assert!(BkeySC::from(k.k_i()).view::<BkeySnapshot>().is_none());
+        assert!(BkeySC::from(k.k_i()).arm::<BkeyISnapshot>().is_none());
     }
 
-    /// A key's value by its type: a View for a type that grew, an older value
-    /// of it read as one; whole for a type that hasn't, a shorter value of
-    /// which is damage - unknown, not a reference past its end.
+    /// A key by its type: a grown type's value a View, an older value of it
+    /// read as one; a type that hasn't grown whole, a shorter value of which
+    /// is damage - unknown, not a reference past its end. The inline key is
+    /// its type's only if its value is all there.
     #[test]
-    fn bkey_v_short_values() {
-        let mut k = BkeySubvolume::new();
+    fn bkey_typed_short_values() {
+        let mut k = BkeyISubvolume::new();
         k.v.snapshot = Le32::new(5);
         k.k.set_val_bytes(16);
-        match BkeySC::from(k.k_i()).v() {
-            BkeyValSC::subvolume(_, v) => assert_eq!((v.snapshot.get(), v.fs_path_parent().get()), (5, 0)),
+        match BkeySC::from(k.k_i()).typed() {
+            BkeySCTyped::subvolume(s) =>
+                assert_eq!((s.v().snapshot.get(), s.v().fs_path_parent().get()), (5, 0)),
             _ => panic!("a subvolume"),
         }
+        assert!(matches!(k.k_i().typed(), BkeyITyped::unknown(_)));
 
-        let mut g = BkeyInodeGeneration::new();
+        let mut g = BkeyIInodeGeneration::new();
         g.v.bi_generation = Le32::new(3);
-        assert_eq!(BkeySC::from(g.k_i()).whole::<BkeyInodeGeneration>().map(|v| v.bi_generation.get()),
+        assert_eq!(BkeySC::from(g.k_i()).arm::<BkeyIInodeGeneration>().map(|g| g.v().bi_generation.get()),
                    Some(3));
+        assert!(matches!(g.k_i().typed(), BkeyITyped::inode_generation(_)));
         g.k.set_val_bytes(0);
-        assert!(matches!(BkeySC::from(g.k_i()).v(), BkeyValSC::unknown(..)));
-        assert!(BkeySC::from(g.k_i()).whole::<BkeyInodeGeneration>().is_none());
+        assert!(matches!(BkeySC::from(g.k_i()).typed(), BkeySCTyped::unknown(_)));
+        assert!(BkeySC::from(g.k_i()).arm::<BkeyIInodeGeneration>().is_none());
     }
 
     /// A View of a snapshot over fewer bytes than every snapshot has - not
-    /// one from view(), which won't make it - panics at a field every one
+    /// one from a typed key's v(), which won't make it - panics at a field every one
     /// has, rather than reading past them.
     #[test]
     #[should_panic(expected = "fewer than every valid one has")]
@@ -980,23 +1093,25 @@ mod tests {
     /// write the key wouldn't carry; one it has sets.
     #[test]
     fn bkey_edit_short_value() {
-        let mut k = BkeySubvolume::new();
+        let mut k = BkeyISubvolume::new();
         k.k.set_val_bytes(16);
         let k = k.k_i_mut();
 
-        assert!(k.whole_mut::<BkeySubvolume>().is_none());
-        assert!(k.whole_mut::<BkeySnapshot>().is_none());
+        assert!(k.arm_mut::<BkeyISubvolume>().is_none());
+        assert!(k.arm_mut::<BkeyISnapshot>().is_none());
 
-        let mut v = k.view_mut::<BkeySubvolume>().expect("a subvolume");
+        let mut s = BkeyS::from(&mut *k);
+        let BkeySTyped::subvolume(mut s) = s.typed() else { panic!("a subvolume") };
+        let mut v = s.v_mut();
         v.snapshot().set(5).unwrap();
         let e = v.fs_path_parent().set(9).unwrap_err();
         assert_eq!((e.field, e.at, e.len), ("fs_path_parent", 20, 16));
 
-        let mut full = BkeySubvolume::new();
-        full.k_i_mut().whole_mut::<BkeySubvolume>().expect("whole").fs_path_parent = Le32::new(9);
+        let mut full = BkeyISubvolume::new();
+        full.k_i_mut().arm_mut::<BkeyISubvolume>().expect("whole").v_mut().fs_path_parent = Le32::new(9);
         assert_eq!(full.v.fs_path_parent, 9);
-        assert_eq!(BkeySC::from(k as &c::bkey_i).view::<BkeySubvolume>().expect("a subvolume")
-                   .fs_path_parent().get(), 0);
+        assert_eq!(BkeySC::from(k as &c::bkey_i).arm::<BkeyISubvolume>().expect("a subvolume")
+                   .v().fs_path_parent().get(), 0);
     }
 
     #[test]

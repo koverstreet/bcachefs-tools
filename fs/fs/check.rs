@@ -2,7 +2,7 @@
 
 //! fsck helpers shared by the passes (fs/check.h).
 
-use crate::btree::bkey::{bkey_extent_whiteout, pos, spos, BkeySC, BkeySnapshot, BkeySnapshotTree, BkeySubvolume};
+use crate::btree::bkey::{bkey_extent_whiteout, pos, spos, BkeySC, BkeyISnapshot, BkeyISnapshotTree, BkeyISubvolume};
 use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
@@ -759,7 +759,7 @@ pub fn reconstruct_subvol(
 
     let mut k = t.bkey_alloc_typed::<c::bkey_i_subvolume>()?;
     k.k_mut().p = pos(0, subvol as u64);
-    let v = k.k_i_mut().whole_mut::<BkeySubvolume>().expect("a subvolume key");
+    let v = k.k_i_mut().arm_mut::<BkeyISubvolume>().expect("a subvolume key").v_mut();
     v.snapshot = snapshot.into();
     v.inode    = root.into();
     v.set_state(c::bch_subvolume_state::SUBVOLUME_STATE_live);
@@ -770,7 +770,7 @@ pub fn reconstruct_subvol(
                        UpdateTriggerFlags::empty(),
                        c::bch_bkey_type::KEY_TYPE_snapshot, size_of::<c::bkey_i_snapshot>()),
         "getting snapshot {snapshot}")?;
-    let s = s.k_i_mut().whole_mut::<BkeySnapshot>().expect("a snapshot key");
+    let s = s.k_i_mut().arm_mut::<BkeyISnapshot>().expect("a snapshot key").v_mut();
     let tree = s.tree();
     s.subvol = subvol.into();
     s.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
@@ -780,7 +780,7 @@ pub fn reconstruct_subvol(
                        UpdateTriggerFlags::empty(),
                        c::bch_bkey_type::KEY_TYPE_snapshot_tree, size_of::<c::bkey_i_snapshot_tree>()),
         "getting snapshot tree {tree}")?;
-    let st = st.k_i_mut().whole_mut::<BkeySnapshotTree>().expect("a snapshot tree key");
+    let st = st.k_i_mut().arm_mut::<BkeyISnapshotTree>().expect("a snapshot tree key").v_mut();
     if st.master_subvol == 0 {
         st.master_subvol = subvol.into();
     }

@@ -6,7 +6,7 @@
 //! taken from C as a bch_snapshot_state: a damaged field holds a value that's
 //! no variant of the Rust enum, and fsck has to be able to look at it.
 
-use crate::btree::bkey::{spos, BkeySC, BkeySnapshot};
+use crate::btree::bkey::{spos, BkeySC, BkeyISnapshot};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey};
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_result, ret_to_result_void, BchError};
@@ -317,7 +317,7 @@ pub fn lookup_key(trans: &BtreeTrans<'_>, id: u32) -> Result<c::bkey_i_snapshot,
 /// @k's value if it's a snapshot node, zero padded past the fields an older
 /// key lacks: as bkey_val_copy_pad() on a bkey_s_c_snapshot.
 pub fn val(k: BkeySC<'_>) -> Option<c::bch_snapshot> {
-    k.view::<BkeySnapshot>().map(|v| v.get())
+    k.arm::<BkeyISnapshot>().map(|k| k.v().get())
 }
 
 /// Mark node @id will_delete, its subvolume being deleted - if it's live;

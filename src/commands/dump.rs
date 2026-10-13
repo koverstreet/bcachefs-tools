@@ -391,8 +391,10 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
                             buf.as_ptr().add(key_pos) as *const c::bkey_packed,
                         );
                     }
-                    let v = unsafe { &mut *(buf.as_mut_ptr().add(vs) as *mut c::bch_val) };
-                    BkeyS { k: &mut u, v }
+                    let v = unsafe { buf.as_mut_ptr().add(vs) as *mut c::bch_val };
+                    // SAFETY: the value after the packed key, in the node's
+                    // buffer: as long as the unpacked key's u64s says
+                    unsafe { BkeyS::from_parts(&mut u, v) }
                 } else {
                     let ki = unsafe { &mut *(buf.as_mut_ptr().add(key_pos) as *mut c::bkey_i) };
                     BkeyS::from(ki)

@@ -166,7 +166,7 @@ mod vfs {
     use core::ptr::NonNull;
     use cstruct_macros::c_export;
     use crate::bch_err;
-    use crate::btree::bkey::{BkeyXattr, BKEY_U64S, POS_MIN};
+    use crate::btree::bkey::{BkeyIXattr, BKEY_U64S, POS_MIN};
     use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                              TransAttempt, TransBkey, UpdateTriggerFlags};
     use crate::c;
@@ -317,7 +317,7 @@ mod vfs {
 
         let mut k = t.bkey_alloc_init(val_u64s, c::bch_bkey_type::KEY_TYPE_xattr.0 as u8,
                                       POS_MIN)?;
-        let x = k.k_i_mut().whole_mut::<BkeyXattr>().expect("an xattr");
+        let x = k.k_i_mut().arm_mut::<BkeyIXattr>().expect("an xattr").v_mut();
         x.x_type     = xattr_type(type_);
         x.x_name_len = 0;
         x.x_val_len.set(len as u16);

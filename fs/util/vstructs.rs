@@ -1177,7 +1177,7 @@ where
     T::Min: Plain,
 {
     /// Its fields every valid one has. A View of fewer bytes than those
-    /// wasn't made by what floors it - BkeySC::view() - and is a bug.
+    /// wasn't made by what floors it - a typed key's v() - and is a bug.
     fn min(&self) -> &'a T::Min {
         let (ty, len) = (core::any::type_name::<T>(), self.len());
         assert!(len >= size_of::<T::Min>(),
