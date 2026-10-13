@@ -237,7 +237,9 @@ impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query_v2 {
 
 fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {
     let buf_size = 64 * 1024u32;
-    let mut buf = vec![0u8; buf_size as usize];
+    // u64s: the kernel writes each dirent at a multiple of 8 from the start,
+    // aligned for it if the buffer is
+    let mut buf = vec![0u64; buf_size as usize / 8];
     let mut arg = bch_ioctl_subvol_readdir {
         pos: *pos,
         buf_size,
@@ -250,15 +252,21 @@ fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {
         .context("BCH_IOCTL_SUBVOLUME_LIST")?;
     *pos = arg.pos;
 
+    // SAFETY: u64s are plain data, their bytes too
+    let buf: &[u8] = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast(), buf.len() * 8) };
+
     let mut entries = Vec::new();
     let mut offset = 0usize;
-    let used = arg.used as usize;
+    let used = (arg.used as usize).min(buf.len());
     let hdr_size = mem::size_of::<bch_ioctl_subvol_dirent>();
 
     while offset + hdr_size <= used {
+        // SAFETY: in the buffer, as checked above, at a multiple of 8 into
+        // it - aligned for a dirent - and a dirent is plain data
         let dirent = unsafe { &*(buf.as_ptr().add(offset) as *const bch_ioctl_subvol_dirent) };
         let reclen = dirent.reclen as usize;
-        if reclen < hdr_size || offset + reclen > used { break; }
+        // the next is at a multiple of 8 only if this one's length is
+        if reclen < hdr_size || reclen % 8 != 0 || offset + reclen > used { break; }
 
         let path_bytes = &buf[offset + hdr_size..offset + reclen];
         let path = CStr::from_bytes_until_nul(path_bytes)
