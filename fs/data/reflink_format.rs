@@ -38,6 +38,7 @@ c_bitmask! {
 pub struct bch_reflink_v {
     pub v: c::bch_val,
     pub refcount: Le64,
+    #[c("union bch_extent_entry start[0]")]
     pub start: [c::bch_extent_entry; 0],
     pub _data: [u64; 0],
 }

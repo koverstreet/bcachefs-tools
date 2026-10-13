@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_xmacro, tagged_union, CStruct, Plain,
+use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, CStruct, Plain,
                     TypeInfo};
 use nestify::nest;
 
@@ -273,47 +273,29 @@ pub struct bch_extent_flags {
     flags: u57,
 }
 
-/*
- * An entry is as long as its arm, not the union: read entries with arm_at()
- * over a value's bytes (data/extents.rs), not get().
- */
-tagged_union! {
-    #[derive(TypeInfo)]
-    pub union bch_extent_entry {
-        tag type_: u32 = c::bch_extent_entry_type by ExtentEntryType,
-        arms from BCH_EXTENT_ENTRY_TYPES(f, n) => f: c::bch_extent_ ## f = n,
-        /*
-         * XXX: C's extent_entry_type() reads the type bits through this - rip
-         * it out when that's gone
-         */
-        pub type_: u64,
-    }
-}
+c_verbatim!(r#"
+union bch_extent_entry {
+	struct bch_extent_ptr ptr;
+	struct bch_extent_crc32 crc32;
+	struct bch_extent_crc64 crc64;
+	struct bch_extent_crc128 crc128;
+	struct bch_extent_stripe_ptr stripe_ptr;
+	struct bch_extent_rebalance_v1 rebalance_v1;
+	struct bch_extent_flags flags;
+	struct bch_extent_reconcile reconcile;
+	struct bch_extent_reconcile_bp reconcile_bp;
+	u64 type;
+};
+"#);
 
-/// bch_extent_entry's tag: the lowest set bit of its first word, which each
-/// arm's own type field sets.
-pub struct ExtentEntryType;
-
-impl ExtentEntryType {
-    /// The tag of the entry @b starts with - u32::MAX if its type word is 0.
-    pub fn of_bytes(b: &[u8]) -> Option<u32> {
-        let w = u64::from_ne_bytes(b.get(..8)?.try_into().ok()?);
-        Some(if w != 0 { w.trailing_zeros() } else { u32::MAX })
-    }
-}
-
-impl crate::types::Determinant<bch_extent_entry> for ExtentEntryType {
-    type Tag = u32;
-
-    fn get(u: &bch_extent_entry) -> u32 {
-        Self::of_bytes(u.as_bytes()).unwrap()
-    }
-
-    /// An arm's type field is its low @tag + 1 bits, the top one set.
-    fn set(u: &mut bch_extent_entry, tag: u32) {
-        // SAFETY: plain data
-        unsafe { u.type_ = (u.type_ & !((2 << tag) - 1)) | (1 << tag) }
-    }
+/// An extent entry - C's union bch_extent_entry, above - as Rust names it:
+/// opaque, behind a pointer or as a value's entries, since an entry is as
+/// long as its arm, not the union. Rust reads entries as their arms
+/// (data/extents.rs).
+#[repr(C, align(8))]
+#[derive(Clone, Copy, Default, TypeInfo)]
+pub struct bch_extent_entry {
+    _opaque: [u64; 0],
 }
 
 #[repr(C, align(8))]
@@ -354,6 +336,7 @@ pub struct bch_extent {
     pub v: c::bch_val,
 
     pub _data: [u64; 0],
+    #[c("union bch_extent_entry start[]")]
     pub start: [c::bch_extent_entry; 0],
 }
 

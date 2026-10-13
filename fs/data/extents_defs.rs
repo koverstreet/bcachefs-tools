@@ -21,7 +21,9 @@ c_default!(bch_extent_crc);
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct bkey_ptrs_c {
+    #[c("const union bch_extent_entry *start")]
     pub start: *const c::bch_extent_entry,
+    #[c("const union bch_extent_entry *end")]
     pub end: *const c::bch_extent_entry,
 }
 c_default!(bkey_ptrs_c);
@@ -29,7 +31,9 @@ c_default!(bkey_ptrs_c);
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct bkey_ptrs {
+    #[c("union bch_extent_entry *start")]
     pub start: *mut c::bch_extent_entry,
+    #[c("union bch_extent_entry *end")]
     pub end: *mut c::bch_extent_entry,
 }
 c_default!(bkey_ptrs);

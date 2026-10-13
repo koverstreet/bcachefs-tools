@@ -16,7 +16,6 @@ use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::errcode::BchError;
 use crate::c;
-use crate::c::ExtentEntryType;
 use crate::fs::Fs;
 use crate::types::Le64;
 use crate::util::vstructs::{cast_plain, cast_plain_mut};
@@ -77,6 +76,13 @@ macro_rules! extent_entries {
 }
 c::BCH_EXTENT_ENTRY_TYPES!(extent_entries);
 
+/// The type of the entry @b starts with: the lowest set bit of its first
+/// word, which each arm's own type field sets - u32::MAX if that's 0.
+fn entry_type(b: &[u8]) -> Option<u32> {
+    let w = u64::from_ne_bytes(b.get(..8)?.try_into().ok()?);
+    Some(if w != 0 { w.trailing_zeros() } else { u32::MAX })
+}
+
 /// How long each type of entry a filesystem knows is, in u64s, by type: its
 /// superblock's table, which knows types newer than this code. A copy - set
 /// once the filesystem's up - so a walk borrows only its key.
@@ -106,7 +112,7 @@ fn entry_len(sizes: &EntrySizes, b: &[u8]) -> Option<(u32, usize)> {
     if b.is_empty() {
         return None;
     }
-    let ty = ExtentEntryType::of_bytes(b).unwrap_or(u32::MAX);
+    let ty = entry_type(b).unwrap_or(u32::MAX);
     let len = sizes.bytes(ty).filter(|len| *len <= b.len()).unwrap_or(b.len());
     Some((ty, len))
 }
@@ -347,9 +353,5 @@ mod tests {
         assert!(matches!(ExtentEntryMut::new(4, bytes(&mut w)), ExtentEntryMut::stripe_ptr(_)));
         assert!(matches!(ExtentEntryMut::new(3, bytes(&mut w)), ExtentEntryMut::Unknown { ty: 3, .. }),
                 "a crc128 doesn't fit in a word");
-
-        // from_arm() sets the type field, whatever the arm had
-        let e = c::bch_extent_entry::from_arm(c::bch_extent_crc128::default());
-        assert_eq!(e.type_(), c::bch_extent_entry_type::BCH_EXTENT_ENTRY_crc128);
     }
 }
