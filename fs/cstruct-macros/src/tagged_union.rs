@@ -79,8 +79,8 @@
 //! arm its tag selects, over its bytes, in the storage's state - every arm
 //! type has a family (util/vstructs.rs), so an Unvalidated storage's arms are
 //! Unvalidated. An arm may be shorter than its type - written by an older
-//! version, before the type grew - so it's what its definition's ArmRef says,
-//! not a Flex: a grown type's at the arm's length, its later fields zero
+//! version, before the type grew - so it's what its definition's ArmRef says:
+//! a grown type's at the arm's length, its later fields zero
 //! past the end. An arm that's the storage itself - a journal entry of keys -
 //! is the storage, in its state. arm::<A>() is typed() for one arm, if the
 //! tag is A's - A in the storage's state, X<Unvalidated> for an Unvalidated

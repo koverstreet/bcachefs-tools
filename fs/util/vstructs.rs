@@ -44,9 +44,10 @@
 //! its fields past its end zero, as bch2_sb_field_get_minsize() and
 //! bkey_val_copy_pad() zero them in C.
 //!
-//! A sized tagged_union!'s arms - extent entries, accounting positions - are
-//! Flexes: a &T and the bytes it may extend into, the storage's, its count
-//! checked against them each time it's used.
+//! A sized tagged_union!'s arms - an accounting position's - are as long as
+//! each says (ArmAt): a replicas entry, a header and the devices it counts,
+//! is a #[counted] family's, its count checked against the storage once,
+//! when it's handed out.
 //!
 //! What a variable-size type is, from the most general:
 //!  - SelfSized, bytes(): its own bytes say how big it is - a #[counted_by]
@@ -377,125 +378,6 @@ macro_rules! vstruct_container {
     };
 }
 pub(crate) use vstruct_container;
-
-/// A Flex's bytes don't hold what it says.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FlexError {
-    /// @ty's header says it spans @want bytes; what holds it has @have.
-    Overrun { ty: &'static str, want: usize, have: usize },
-    /// The bytes aren't aligned for @ty, which needs @align.
-    Misaligned { ty: &'static str, align: usize },
-    /// @ty's header says @nr elements; @given were given.
-    Count { ty: &'static str, nr: usize, given: usize },
-}
-
-impl core::fmt::Display for FlexError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match *self {
-            Self::Overrun { ty, want, have } =>
-                write!(f, "{ty}: its header says {want} bytes, but only {have} hold it"),
-            Self::Misaligned { ty, align } =>
-                write!(f, "{ty}: bytes not aligned to {align}"),
-            Self::Count { ty, nr, given } =>
-                write!(f, "{ty}: its header says {nr} elements, but {given} were given"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for FlexError {}
-
-impl FlexError {
-    fn overrun<T>(want: usize, have: usize) -> Self {
-        Self::Overrun { ty: core::any::type_name::<T>(), want, have }
-    }
-}
-
-/// A T, and the bytes it may extend into: from its first byte to the end of
-/// whatever holds it - the bound a &T doesn't carry.
-pub struct Flex<'a, T> {
-    head:  &'a T,
-    bytes: &'a [u8],
-}
-
-impl<T> Clone for Flex<'_, T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for Flex<'_, T> {}
-
-impl<T> Deref for Flex<'_, T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        self.head
-    }
-}
-
-impl<'a, T> Flex<'a, T> {
-    /// The T at the start of @bytes, which it may extend to their end.
-    pub fn new(bytes: &'a [u8]) -> Result<Self, FlexError>
-    where
-        T: Plain,
-    {
-        if bytes.len() < size_of::<T>() {
-            return Err(FlexError::overrun::<T>(size_of::<T>(), bytes.len()));
-        }
-        if bytes.as_ptr() as usize % align_of::<T>() != 0 {
-            return Err(FlexError::Misaligned { ty: core::any::type_name::<T>(),
-                                               align: align_of::<T>() });
-        }
-        // SAFETY: as checked above, and any bytes are a T
-        Ok(unsafe { Self::new_unchecked(bytes) })
-    }
-
-    /// The T at the start of @bytes, which it may extend to their end.
-    ///
-    /// # Safety
-    /// @bytes must start with a valid T, aligned for it.
-    pub unsafe fn new_unchecked(bytes: &'a [u8]) -> Self {
-        debug_assert!(bytes.len() >= size_of::<T>());
-        // SAFETY: the caller's
-        Self { head: unsafe { &*bytes.as_ptr().cast::<T>() }, bytes }
-    }
-
-    /// The T, for as long as the bytes are borrowed.
-    pub fn head(&self) -> &'a T {
-        self.head
-    }
-}
-
-impl<'a, T: FlexArray> Flex<'a, T> {
-    /// The flexible array: as many elements as the header says, if the bytes
-    /// hold them.
-    pub fn tail(&self) -> Result<&'a [T::Elem], FlexError> {
-        let nr = self.head.nr();
-        let want = nr.checked_mul(size_of::<T::Elem>())
-            .and_then(|b| b.checked_add(T::TAIL))
-            .unwrap_or(usize::MAX);
-        if want > self.bytes.len() {
-            return Err(FlexError::overrun::<T>(want, self.bytes.len()));
-        }
-        let p = self.bytes[T::TAIL..].as_ptr();
-        if p as usize % align_of::<T::Elem>() != 0 {
-            return Err(FlexError::Misaligned { ty: core::any::type_name::<T::Elem>(),
-                                               align: align_of::<T::Elem>() });
-        }
-        // SAFETY: in bounds and aligned, as checked above, and any bytes are an Elem
-        Ok(unsafe { core::slice::from_raw_parts(p.cast::<T::Elem>(), nr) })
-    }
-}
-
-impl<'a, T: SelfSized> Flex<'a, T> {
-    /// Its bytes, header and tail - what C copies with vstruct_bytes() - if
-    /// what holds it holds them.
-    pub fn as_bytes(&self) -> Result<&'a [u8], FlexError> {
-        let want = self.head.bytes();
-        self.bytes.get(..want).ok_or_else(|| FlexError::overrun::<T>(want, self.bytes.len()))
-    }
-}
 
 // ---- UnvalidatedRef: bytes whose counts haven't been checked ---------------
 
@@ -1101,7 +983,7 @@ impl<'a, T: Plain> View<'a, T> {
     }
 
     /// Its bytes and the value's past them - a flexible array's, a message's
-    /// - to the value's end: Flex::as_bytes().
+    /// - to the value's end.
     pub fn as_bytes(&self) -> &'a [u8] {
         // SAFETY: the value's bytes, from ours to its end - none if we're past it
         unsafe { core::slice::from_raw_parts(self.p, self.end.saturating_sub(self.at)) }
