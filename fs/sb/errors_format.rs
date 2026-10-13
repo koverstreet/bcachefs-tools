@@ -460,7 +460,8 @@ c_xmacro! {
         (write_degraded_no_progress, 434, 0),
         (backpointer_reconcile_phys_wrong, 435, FSCK_AUTOFIX),
         (device_bad_flush_repaired_from_replica, 436, 0),
-        (MAX, 437, 0),
+        (extent_ptrs_entry_past_end, 437, 0),
+        (MAX, 438, 0),
     }
 }
 

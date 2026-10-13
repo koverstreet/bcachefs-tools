@@ -1850,18 +1850,39 @@ const char * const bch2_extent_entry_types[] = {
 	NULL
 };
 
+/*
+ * An entry of a type this filesystem knows that runs past @end: a truncated
+ * value, which validate rejects. The walks don't check - only what can see a
+ * key before or after validate rejects it: validate, to_text and swab.
+ */
+static bool extent_entry_past_end(const struct bch_fs *c,
+				  const union bch_extent_entry *entry,
+				  const void *end)
+{
+	return extent_entry_type(entry) < c->sb.extent_types_known &&
+		(const void *) entry + extent_entry_bytes(c, entry) > end;
+}
+
 __cold void bch2_bkey_ptrs_to_text(struct printbuf *out, struct bch_fs *c,
 			    struct bkey_s_c k)
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c_safe(k);
-	const union bch_extent_entry *entry;
+	const union bch_extent_entry *entry, *val_end = ptrs.end;
 
 	if (!c) {
 		prt_printf(out, "no filesystem object available");
 		return;
 	}
 
-	prt_printf(out, "durability: %u ", bch2_bkey_durability_safe(c, k).total);
+	/* A key validate rejected: print what's in the value, not past it */
+	bkey_extent_entry_for_each(ptrs, entry)
+		if (extent_entry_past_end(c, entry, ptrs.end)) {
+			ptrs.end = entry;
+			break;
+		}
+
+	if (ptrs.end == val_end)
+		prt_printf(out, "durability: %u ", bch2_bkey_durability_safe(c, k).total);
 
 	guard(printbuf_atomic)(out);
 	guard(rcu)();
@@ -1915,6 +1936,12 @@ __cold void bch2_bkey_ptrs_to_text(struct printbuf *out, struct bch_fs *c,
 			prt_printf(out, "(unknown extent entry %.16llx)", *((u64 *) entry));
 			return;
 		}
+	}
+
+	if (ptrs.end != val_end) {
+		prt_newline(out);
+		prt_printf(out, "(extent entry at u64 %td runs past the end of the value)",
+			   (const u64 *) ptrs.end - (const u64 *) ptrs.start);
 	}
 }
 
@@ -2000,6 +2027,12 @@ int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 				 c, extent_ptrs_invalid_entry,
 				 "invalid extent entry type (got %u, max %u)",
 				 type, c->sb.extent_types_known);
+
+		bkey_fsck_err_on(extent_entry_past_end(c, entry, ptrs.end),
+				 c, extent_ptrs_entry_past_end,
+				 "extent entry at u64 %td runs past the end of the value, %td u64s",
+				 (const u64 *) entry - (const u64 *) ptrs.start,
+				 (const u64 *) ptrs.end - (const u64 *) ptrs.start);
 
 		bkey_fsck_err_on(bkey_is_btree_ptr(k.k) &&
 				 type < BCH_EXTENT_ENTRY_MAX &&
@@ -2139,9 +2172,11 @@ void bch2_ptr_swab(const struct bch_fs *c, struct bkey_s k)
 	     d++)
 		*d = swab64(*d);
 
-	for (entry = ptrs.start;
-	     entry < ptrs.end;
-	     entry = extent_entry_next(c, entry)) {
+	bkey_extent_entry_for_each(ptrs, entry) {
+		/* Not ours to fix up - validate() rejects it: */
+		if (extent_entry_past_end(c, entry, ptrs.end))
+			break;
+
 		switch (extent_entry_type(entry)) {
 		case BCH_EXTENT_ENTRY_ptr:
 			break;
@@ -2162,10 +2197,16 @@ void bch2_ptr_swab(const struct bch_fs *c, struct bkey_s k)
 			break;
 		case BCH_EXTENT_ENTRY_rebalance_v1:
 		case BCH_EXTENT_ENTRY_reconcile:
+		case BCH_EXTENT_ENTRY_flags:
+		case BCH_EXTENT_ENTRY_reconcile_bp:
 			break;
 		default:
-			/* Bad entry type: will be caught by validate() */
-			return;
+			/*
+			 * A type this code doesn't know: its words are swabbed
+			 * above, and validate() reports it if the filesystem
+			 * doesn't know it either
+			 */
+			break;
 		}
 	}
 }
