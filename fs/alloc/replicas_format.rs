@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::util::vstructs::{vstruct, Ffi};
-use cstruct_macros::{unsized_vstruct, CStruct, Plain, TypeInfo};
+use cstruct_macros::{counted, unsized_vstruct, CStruct, Plain, TypeInfo};
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
@@ -25,6 +25,7 @@ pub struct bch_sb_field_replicas_v0 {
 }
 vstruct!(unsized bch_sb_field_replicas_v0, field.u64s, start = 0);
 
+#[counted(nr_devs)]
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_replicas_entry_v1 {
@@ -32,7 +33,6 @@ pub struct bch_replicas_entry_v1 {
     pub nr_devs: u8,
     pub nr_required: u8,
     /* No __counted_by in C: bch_replicas_cpu entries are all the size of the biggest entry */
-    #[counted_by(nr_devs)]
     pub devs: [u8; 0],
 }
 
@@ -42,7 +42,7 @@ pub struct bch_replicas_entry_v1 {
 #[c_packed]
 pub struct bch_sb_field_replicas {
     pub field: Ffi<c::bch_sb_field>,
-    pub entries: [c::bch_replicas_entry_v1; 0],
+    pub entries: [Ffi<c::bch_replicas_entry_v1>; 0],
 }
 vstruct!(unsized bch_sb_field_replicas, field.u64s, start = 0);
 

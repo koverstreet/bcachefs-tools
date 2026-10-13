@@ -1898,7 +1898,7 @@ vstruct!(jset_entry_usage__ffi, entry.u64s);
 pub struct jset_entry_data_usage {
     pub entry: Ffi<c::jset_entry>,
     pub v: Le64,
-    pub r: c::bch_replicas_entry_v1,
+    pub r: Ffi<c::bch_replicas_entry_v1>,
 }
 vstruct!(unsized jset_entry_data_usage, entry.u64s);
 

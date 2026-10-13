@@ -438,7 +438,7 @@ c_default!(bch_ioctl_data_event);
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_replicas_usage {
     pub sectors: u64,
-    pub r: c::bch_replicas_entry_v1,
+    pub r: Ffi<c::bch_replicas_entry_v1>,
 }
 
 /* Obsolete */

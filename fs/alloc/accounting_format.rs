@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::util::vstructs::Ffi;
 use cstruct_macros::{c_const, c_enum, c_typedef, c_xmacro, tagged_union, CStruct, TypeInfo};
 
 /*
@@ -115,7 +116,7 @@ c_enum! {
 }
 
 c_typedef! {
-    pub type bch_acct_replicas = c::bch_replicas_entry_v1;
+    pub type bch_acct_replicas = Ffi<c::bch_replicas_entry_v1>;
 }
 
 tagged_union! {
