@@ -152,11 +152,15 @@ void bch2_ec_stripe_delete_work(struct work_struct *work)
 	struct bch_fs *c =
 		container_of(work, struct bch_fs, ec.stripe_delete_work);
 
+	/*
+	 * Empty stripes sit at LRU time STRIPE_LRU_POS_EMPTY, ahead of every
+	 * reusable one: walk just those, not every stripe in the LRU.
+	 */
 	bch2_trans_run(c,
 		bch2_btree_write_buffer_tryflush(trans) ?:
 		for_each_btree_key_max_commit(trans, lru_iter, BTREE_ID_lru,
-				lru_pos(BCH_LRU_STRIPE_FRAGMENTATION, 1, 0),
-				lru_pos(BCH_LRU_STRIPE_FRAGMENTATION, 1, LRU_TIME_MAX),
+				lru_pos(BCH_LRU_STRIPE_FRAGMENTATION, 0, STRIPE_LRU_POS_EMPTY),
+				lru_pos(BCH_LRU_STRIPE_FRAGMENTATION, U64_MAX, STRIPE_LRU_POS_EMPTY),
 				0, lru_k,
 				NULL, NULL,
 				BCH_TRANS_COMMIT_no_enospc, ({
