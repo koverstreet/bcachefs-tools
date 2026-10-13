@@ -96,7 +96,9 @@ void rust_strip_alloc_do(struct bch_fs *c);
 
 /*
  * Collect all non-NULL journal_replay entries from c->journal_entries
- * (genradix) into a flat array. Caller must free entries.
+ * (genradix) into a flat array, pinned by a journal_keys ref - whose last
+ * put frees them - until rust_journal_entries_put(). Empty, holding no ref,
+ * if they're gone already.
  */
 struct journal_replay;
 
@@ -106,6 +108,7 @@ struct rust_journal_entries {
 };
 
 struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c);
+void rust_journal_entries_put(struct bch_fs *c, struct rust_journal_entries *e);
 
 /*
  * Bitmap shim — set_bit() is atomic (locked bitops in the kernel),

@@ -6,40 +6,14 @@ use bcachefs_kernel::journal::{
     entry_type, entry_btree_id, entry_log_str_eq,
     entry_type_is_known, journal_entry_type,
 };
+use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::util::vstructs::SelfSized;
 use clap::Parser;
 
 use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::util::read_flag_list;
-
-// ---- RAII wrapper for C-allocated journal entries array ----
-
-struct JournalEntries {
-    inner: c::rust_journal_entries,
-}
-
-impl JournalEntries {
-    fn collect(c_fs: *mut c::bch_fs) -> Self {
-        Self { inner: unsafe { c::rust_collect_journal_entries(c_fs) } }
-    }
-
-    fn as_slice(&self) -> &[*mut c::journal_replay] {
-        if self.inner.entries.is_null() || self.inner.nr == 0 {
-            &[]
-        } else {
-            unsafe { std::slice::from_raw_parts(self.inner.entries, self.inner.nr) }
-        }
-    }
-}
-
-impl Drop for JournalEntries {
-    fn drop(&mut self) {
-        if !self.inner.entries.is_null() {
-            unsafe { libc::free(self.inner.entries as *mut _) }
-        }
-    }
-}
+use crate::wrappers::journal::JournalReplays;
 
 // ---- entry classification ----
 
@@ -763,15 +737,13 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
     let fs = crate::device_scan::open_scan(&devs, opts)
         .map_err(|e| anyhow::anyhow!("error opening {}: {}", cli.devices[0], e))?;
 
-    let c_fs = fs.raw;
-
-    list_journal_run(c_fs, &f, contiguous_only, seq_start, seq_end, cli.nr_entries, None)
+    list_journal_run(&fs, &f, contiguous_only, seq_start, seq_end, cli.nr_entries, None)
 }
 
 /// The listing core, shared with kvdb's list_journal command. @interrupted
 /// is polled per journal entry so a ^C can stop a long dump.
 pub(crate) fn list_journal_run(
-    c_fs: *mut c::bch_fs,
+    fs: &Fs,
     f: &JournalFilter,
     contiguous_only: bool,
     seq_start: u64,
@@ -779,17 +751,16 @@ pub(crate) fn list_journal_run(
     nr_entries: Option<u32>,
     interrupted: Option<&dyn Fn() -> bool>,
 ) -> Result<()> {
-    let je = JournalEntries::collect(c_fs);
-    let entries = je.as_slice();
+    let c_fs = fs.raw;
+    let replays = JournalReplays::collect(fs);
 
     // Compute min_seq_to_print for contiguous checking
     let mut min_seq_to_print = 0u64;
 
     if contiguous_only {
         let mut seq = 0u64;
-        for &ep in entries {
-            let p = unsafe { &*ep };
-            let p_seq = p.j.seq.get();
+        for p in replays.iter() {
+            let p_seq = p.seq();
 
             if seq == 0 {
                 seq = p_seq;
@@ -813,10 +784,7 @@ pub(crate) fn list_journal_run(
     if let Some(nr) = nr_entries {
         // journal.seq isn't set in read_journal_only mode, so compute
         // the max seq from the entries we actually collected
-        let max_seq = entries.iter()
-            .map(|&ep| unsafe { ((*ep).j.seq).get() })
-            .max()
-            .unwrap_or(0);
+        let max_seq = replays.iter().map(|p| p.seq()).max().unwrap_or(0);
         let computed = (max_seq as i64) - (nr as i64) + 1;
         min_seq_to_print = min_seq_to_print.max(computed.max(0) as u64);
     }
@@ -825,14 +793,13 @@ pub(crate) fn list_journal_run(
     let mut seq = 0u64;
     let last_seq_ondisk = unsafe { (*c_fs).journal.last_seq_ondisk };
 
-    for &ep in entries {
+    for p in replays.iter() {
         if interrupted.is_some_and(|i| i()) {
             println!("(interrupted)");
             break;
         }
 
-        let p = unsafe { &*ep };
-        let p_seq = p.j.seq.get();
+        let p_seq = p.seq();
 
         if p_seq < min_seq_to_print {
             continue;
@@ -887,8 +854,7 @@ pub(crate) fn list_journal_run(
             continue;
         }
 
-        // SAFETY: from the journal read, live as long as je is
-        journal_replay_print(c_fs, &f, p, unsafe { c::journal_replay::jset(ep) });
+        journal_replay_print(c_fs, &f, &p, p.jset());
     }
 
     Ok(())

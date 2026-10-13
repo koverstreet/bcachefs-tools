@@ -1239,7 +1239,7 @@ fn h_list_journal(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFl
         }
     }
     let interrupt: &dyn Fn() -> bool = &take_interrupt;
-    super::list_journal::list_journal_run(fs.raw, &f, false, 0, u64::MAX, None,
+    super::list_journal::list_journal_run(fs, &f, false, 0, u64::MAX, None,
                                           Some(interrupt))?;
     Ok(ControlFlow::Continue(String::new()))
 }

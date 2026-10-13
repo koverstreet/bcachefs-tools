@@ -6,39 +6,9 @@ use bcachefs_kernel::opt_set;
 use chrono::{TimeZone, Utc};
 use clap::Parser;
 
-// ---- RAII wrapper, same shape as list_journal ----
+use crate::wrappers::journal::JournalReplays;
 
-struct JournalEntries {
-    inner: c::rust_journal_entries,
-}
-
-impl JournalEntries {
-    fn collect(c_fs: *mut c::bch_fs) -> Self {
-        Self { inner: unsafe { c::rust_collect_journal_entries(c_fs) } }
-    }
-
-    fn as_slice(&self) -> &[*mut c::journal_replay] {
-        if self.inner.entries.is_null() || self.inner.nr == 0 {
-            &[]
-        } else {
-            unsafe { std::slice::from_raw_parts(self.inner.entries, self.inner.nr) }
-        }
-    }
-}
-
-impl Drop for JournalEntries {
-    fn drop(&mut self) {
-        if !self.inner.entries.is_null() {
-            unsafe { libc::free(self.inner.entries as *mut _) }
-        }
-    }
-}
-
-// ---- per-replay accessors ----
-
-fn jset_seq(p: &c::journal_replay) -> u64 {
-    p.j.seq.get()
-}
+// ---- per-jset accessors ----
 
 /// A jset's first datetime entry's seconds-since-epoch, or None if absent.
 fn jset_datetime(j: &c::jset) -> Option<u64> {
@@ -112,20 +82,14 @@ fn cmd_journal_rewind_info(cli: Cli) -> Result<()> {
     let fs = crate::device_scan::open_scan(&devs, opts)
         .map_err(|e| anyhow!("error opening {}: {}", cli.devices[0], e))?;
 
-    let c_fs = fs.raw;
-
-    let je = JournalEntries::collect(c_fs);
-    let entries = je.as_slice();
-    if entries.is_empty() {
+    let replays = JournalReplays::collect(&fs);
+    if replays.is_empty() {
         bail!("no journal entries found");
     }
 
     // Find the most recent entry (max seq).
-    let latest = *entries.iter()
-        .max_by_key(|&&ep| unsafe { jset_seq(&*ep) })
-        .unwrap();
-    // SAFETY: from the journal read, live as long as je is
-    let latest_j = unsafe { c::journal_replay::jset(latest) };
+    let latest = replays.iter().max_by_key(|r| r.seq()).unwrap();
+    let latest_j = latest.jset();
     let latest_seq = latest_j.seq.get();
     let latest_dt = jset_datetime(latest_j);
 
@@ -135,10 +99,7 @@ fn cmd_journal_rewind_info(cli: Cli) -> Result<()> {
     let (floor_seq, fell_back) = match jset_rewind_limit(latest_j) {
         Some(s) => (s, false),
         None => {
-            let lo = entries.iter()
-                .map(|&ep| unsafe { jset_seq(&*ep) })
-                .min()
-                .unwrap();
+            let lo = replays.iter().map(|r| r.seq()).min().unwrap();
             (lo, true)
         }
     };
@@ -162,22 +123,20 @@ fn cmd_journal_rewind_info(cli: Cli) -> Result<()> {
 
     // Walk entries in window, filter to flush entries.
     let mut candidates: Vec<(u64, Option<u64>)> = Vec::new();
-    for &ep in entries {
-        let p = unsafe { &*ep };
-        let s = jset_seq(p);
+    for r in replays.iter() {
+        let s = r.seq();
         if s < floor_seq || s > latest_seq {
             continue;
         }
-        if p.j.no_flush() {
+        if r.j.no_flush() {
             continue;
         }
-        // SAFETY: as latest_j's
-        candidates.push((s, jset_datetime(unsafe { c::journal_replay::jset(ep) })));
+        candidates.push((s, jset_datetime(r.jset())));
     }
     candidates.sort_by_key(|(s, _)| *s);
 
-    let total_entries_in_window = entries.iter()
-        .map(|&ep| unsafe { jset_seq(&*ep) })
+    let total_entries_in_window = replays.iter()
+        .map(|r| r.seq())
         .filter(|s| *s >= floor_seq && *s <= latest_seq)
         .count();
 
