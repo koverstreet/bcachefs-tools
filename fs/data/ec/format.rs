@@ -4,10 +4,11 @@
 
 use crate::cstructs::c;
 use crate::types::Le16;
-use cstruct_macros::{bitfield, CStruct, Plain, TypeInfo};
+use cstruct_macros::{bitfield, whole, CStruct, Plain, TypeInfo};
 use nestify::nest;
 
 nest! {
+    #[whole(tail = ptrs: [u8])]
     #[repr(C, align(8))]
     #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
     #[c_packed]

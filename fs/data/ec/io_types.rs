@@ -2,8 +2,10 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::bkey::BkeyI;
 use crate::cstructs::c;
 use crate::types::{bits_to_longs, c_default};
+use crate::util::vstructs::Ffi;
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use cstruct_macros::{c_enum, CStruct};
 use nestify::nest;
@@ -52,7 +54,7 @@ nest! {
             pub csum_good: [c::bch_csum; c::BCH_BKEY_PTRS_MAX as usize],
             pub csum_bad: [c::bch_csum; c::BCH_BKEY_PTRS_MAX as usize],
 
-            pub key: c::bkey_i_stripe,
+            pub key: BkeyI<Ffi<c::bch_stripe>>,
             pub pad: [u64; 255],
         },
     }

@@ -623,6 +623,10 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 /// struct up into the array's first bytes - bch_inode's fields end at 14, its
 /// size is 16 - which the deref to C's struct reaches, a value being no
 /// shorter than that.
+///
+/// Or `tail = NAME: [u8]`, over any zero-length array: the bytes from where
+/// it starts, for a tail that's more than that array - bch_stripe's
+/// pointers, then checksums and sector counts its header sizes.
 pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item.to_string())?;
     let args = parse_family_args(&attr.to_string(), &["tail"]).map_err(|e| format!("{}: {e}", def.name))?;
@@ -633,8 +637,10 @@ pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
         Some((Some(tail), elem)) => {
             let at = def.fields.iter().position(|f| f.rust_name() == tail)
                 .ok_or_else(|| format!("{}: #[whole(tail = {tail}: ..)], but it has no field {tail}", def.name))?;
+            // [E; 0] - or any zero-length array, for a tail of bytes
             match field_type(&def.fields[at].ty)? {
-                FieldType::Array { elem: e, n } if n == "0" && e.trim() == elem.trim() => {}
+                FieldType::Array { elem: e, n }
+                    if n == "0" && (e.trim() == elem.trim() || elem.trim() == "u8") => {}
                 _ => return Err(format!("{}: #[whole(tail = {tail}: [{elem}])], but its field {tail} \
                                          isn't [{elem}; 0]", def.name)),
             }

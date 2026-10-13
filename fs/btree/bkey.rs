@@ -410,6 +410,7 @@ macro_rules! bkey_val {
     (btree_ptr_v2, $f:tt)         => { bkey_val!(@family btree_ptr_v2, $f); };
     (extent, $f:tt)               => { bkey_val!(@family extent, $f); };
     (reflink_v, $f:tt)            => { bkey_val!(@family reflink_v, $f); };
+    (stripe, $f:tt)               => { bkey_val!(@family stripe, $f); };
 
     (error, $f:tt)                => { bkey_val!(@grown error, $f); };
     (subvolume, $f:tt)            => { bkey_val!(@grown subvolume, $f); };
@@ -738,7 +739,7 @@ impl<'a> BkeySC<'a> {
             BkeySCTyped::reflink_v(_)    => offset_of!(Ffi<c::bch_reflink_v>, start)..len,
             BkeySCTyped::btree_ptr_v2(_) => offset_of!(Ffi<c::bch_btree_ptr_v2>, start)..len,
             BkeySCTyped::stripe(s) => {
-                let start = offset_of!(c::bch_stripe, ptrs);
+                let start = offset_of!(Ffi<c::bch_stripe>, ptrs);
                 start..(start + s.v().nr_blocks as usize * size_of::<c::bch_extent_ptr>()).min(len)
             }
             _ => 0..0,
