@@ -73,7 +73,7 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
-use crate::util::vstructs::{floored_by_self, view_arm, vstruct, vstruct_container, whole_arm, Ffi, FlexArray};
+use crate::util::vstructs::{floored_by_self, vstruct, vstruct_container, whole_arm, Ffi, FlexArray};
 use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, grown, tagged_union,
                      unsized_vstruct, CStruct, Plain, TypeInfo, View};
 #[cfg(__KERNEL__)]
@@ -1891,15 +1891,16 @@ pub struct jset_entry_usage {
 vstruct!(jset_entry_usage, entry.u64s);
 whole_arm!(jset_entry_usage);
 
+/* r's devs[] are in the tail: the entry's size is its u64s, not r's nr_devs */
+#[unsized_vstruct(tail = [u8])]
 #[repr(C, packed)]
-#[derive(Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct jset_entry_data_usage {
     pub entry: Ffi<c::jset_entry>,
     pub v: Le64,
     pub r: c::bch_replicas_entry_v1,
 }
-vstruct!(jset_entry_data_usage, entry.u64s);
-view_arm!(jset_entry_data_usage);
+vstruct!(unsized jset_entry_data_usage, entry.u64s);
 
 #[repr(C, packed)]
 #[derive(Default, CStruct, Plain, TypeInfo)]

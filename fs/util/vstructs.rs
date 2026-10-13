@@ -1219,9 +1219,8 @@ pub fn read_past<T: Plain>(rest: &[u8], at: usize) -> T {
 /// says are its - as many as there are, for one written before its type
 /// grew. Each arm's type says which, by its declaration: a type that never
 /// grew, all of it (whole_arm!); a grown type, its Validated definition -
-/// #[grown]'s - at the value's length; a family, its Validated DST; one not
-/// yet converted, a View (view_arm!). None if the bytes can't be one: fewer
-/// than every valid one has.
+/// #[grown]'s - at the value's length; a family, its Validated DST. None if
+/// the bytes can't be one: fewer than every valid one has.
 pub trait ArmRef {
     type Ref<'a> where Self: 'a;
     type Mut<'a> where Self: 'a;
@@ -1250,26 +1249,6 @@ macro_rules! whole_arm {
     )* };
 }
 pub(crate) use whole_arm;
-
-/// view_arm!(T, ..): each T an arm that may be shorter than it, and isn't yet
-/// a family of its own - a View, its fields past the end zero.
-macro_rules! view_arm {
-    ($($t:ty),* $(,)?) => { $(
-        impl $crate::util::vstructs::ArmRef for $t {
-            type Ref<'a> = $crate::util::vstructs::View<'a, $t>;
-            type Mut<'a> = $crate::util::vstructs::ViewMut<'a, $t>;
-
-            fn arm_ref(b: &[u8]) -> Option<Self::Ref<'_>> {
-                Some($crate::util::vstructs::View::new(b))
-            }
-
-            fn arm_mut(b: &mut [u8]) -> Option<Self::Mut<'_>> {
-                Some($crate::util::vstructs::ViewMut::new(b))
-            }
-        }
-    )* };
-}
-pub(crate) use view_arm;
 
 /// The T at the start of @b: None unless @b holds all of it, aligned.
 pub fn cast_whole<T: Plain>(b: &[u8]) -> Option<&T> {
@@ -1378,6 +1357,31 @@ mod tests {
         assert_eq!(es.len(), 2);
         assert_eq!((es[0].u64s(), es[1].u64s()), (1, 3));
         assert_eq!(es[1].bytes(), 32);
+    }
+
+    /// A data_usage entry is as long as its u64s say; r's devs are in its
+    /// tail. One shorter than its header isn't one.
+    #[test]
+    fn data_usage_entry() {
+        let mut buf = [0u64; 3];
+        let mut e = entry(2);
+        e.type_ = c::bch_jset_entry_type::BCH_JSET_ENTRY_data_usage.0 as u8;
+        put(&mut buf, 0, &e);
+        buf[1] = 77;                            // v
+        buf[2] = 1 | 2 << 8 | 1 << 16 | 3 << 24 | 5 << 32; // r: data_type, nr_devs 2, nr_required, devs 3, 5
+        // SAFETY: the buffer's, as long as its count says
+        let e = unsafe { c::jset_entry::<Validated>::from_ffi(buf.as_ptr().cast()) };
+        let Ok(c::JsetEntryRef::data_usage(u)) = e.typed() else { panic!("a data_usage entry") };
+        assert_eq!((u.v.get(), u.as_bytes().len()), (77, 24));
+        assert_eq!(&u._tail[..u.r.nr_devs as usize], [3, 5]);
+
+        let mut e = entry(1);
+        e.type_ = c::bch_jset_entry_type::BCH_JSET_ENTRY_data_usage.0 as u8;
+        put(&mut buf, 0, &e);
+        // SAFETY: as above
+        let e = unsafe { c::jset_entry::<Validated>::from_ffi(buf.as_ptr().cast()) };
+        assert_eq!(e.as_bytes().len(), 16);
+        assert!(e.typed().is_err());
     }
 
     /// An entry past its container's end ends the walk, unread.
