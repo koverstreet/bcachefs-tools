@@ -182,24 +182,40 @@ fn repr_attrs(item: &TokenStream) -> String {
         .collect()
 }
 
-/// A state's definition, @ty: a DST - @fields inline, as @repr lays them
-/// out, those of @private private (inline_field()), then @tail, a slice of
-/// @elem - and C's struct, @ffi, its HasFfi.
+/// What a state's definition is laid out as, for dst().
+#[derive(Clone, Copy)]
+struct Shape<'a> {
+    /// The item's #[repr]s, as written.
+    repr:    &'a str,
+    /// C's fields it has inline, at @head's offsets.
+    fields:  &'a [CFieldDef],
+    /// Those the family makes private: a counted type's count.
+    private: &'a [&'a str],
+    /// What it derefs to: C's struct, or a grown type's floor.
+    head:    &'a str,
+    /// After the fields: @tail, a slice of @elem.
+    tail:    &'a str,
+    elem:    &'a str,
+    /// C's struct: its HasFfi.
+    ffi:     &'a str,
+}
+
+/// A state's definition, @ty, laid out as @shape: a DST - its fields inline,
+/// those that hold a count private (inline_field()), then its tail.
 ///
-/// Its fields are @head's, at @head's offsets - asserted - so it derefs to
-/// @head: reads, and @head's methods, written once there. No DerefMut: a &mut
-/// to the head would let a count - its own, or an embedded header's - be
-/// rewritten, or the whole head assigned or swapped, from outside what holds
-/// the value. Its own fields that hold one are private (inline_field()), and
-/// it's unsized, so it can't be assigned or swapped whole either.
+/// Its fields are its head's, at the head's offsets - asserted - so it derefs
+/// to the head: reads, and the head's methods, written once there. No
+/// DerefMut: a &mut to the head would let a count - its own, or an embedded
+/// header's - be rewritten, or the whole head assigned or swapped, from
+/// outside what holds the value. Its own fields that hold one are private,
+/// and it's unsized, so it can't be assigned or swapped whole either.
 ///
-/// It's Unsized: from_raw() at the length's worth of @elem past the head;
+/// It's Unsized: from_raw() at the length's worth of elements past the head;
 /// SelfSized, and its bytes, by its reference's length; and an arm's,
 /// ArmRef, cast() from the bytes its storage says are its. @doc is its own;
 /// @methods, more of them.
-#[allow(clippy::too_many_arguments)]
-fn dst(ty: &str, doc: &str, repr: &str, fields: &[CFieldDef], private: &[&str], head: &str, tail: &str, elem: &str,
-       ffi: &str, methods: &str) -> String {
+fn dst(ty: &str, doc: &str, shape: &Shape, methods: &str) -> String {
+    let Shape { repr, fields, private, head, tail, elem, ffi } = *shape;
     let inline: String = fields.iter().map(|f| inline_field(f, private)).collect();
     let offsets: String = fields.iter()
         .map(|f| format!("assert!(::core::mem::offset_of!({ty}, {0}) == ::core::mem::offset_of!({head}, {0}),\n\
@@ -440,13 +456,14 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
     // where that's the tail
     let fields = if tail == last { &def.fields[..def.fields.len() - 1] } else { &def.fields[..] };
     let repr = repr_attrs(&item);
+    let shape = Shape { repr: &repr, fields, private: &[], head: &ffi, tail: &tail, elem: &elem, ffi: &ffi };
 
     let state = |st: &str, what: &str| -> String {
         dst(&format!("{name}__{}", st.to_lowercase()),
             &format!("/// {name}<{st}>: {what}. C's fields - those that hold a count\n\
                       /// private - then its tail, as long as its count says. It derefs\n\
                       /// to C's struct {name}, Ffi<{name}>, to read.\n"),
-            &repr, fields, &[], &ffi, &tail, &elem, &ffi, &state_methods(&name, &ffi, st))
+            &shape, &state_methods(&name, &ffi, st))
     };
 
     let mut out = rename_struct(item, &name, &ffi)?;
@@ -533,13 +550,14 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
     };
     let repr = repr_attrs(&item);
     let private = [count_field.as_str()];
+    let shape = Shape { repr: &repr, fields, private: &private, head: &ffi, tail: &tail, elem: &elem, ffi: &ffi };
 
     let state = |st: &str, what: &str| -> String {
         dst(&format!("{name}__{}", st.to_lowercase()),
             &format!("/// {name}<{st}>: {what}. C's fields - those that hold a count\n\
                       /// private - then its array, {tail}, as long as its count says.\n\
                       /// It derefs to C's struct {name}, Ffi<{name}>, to read.\n"),
-            &repr, fields, &private, &ffi, &tail, &elem, &ffi, &state_methods(&name, &ffi, st))
+            &shape, &state_methods(&name, &ffi, st))
     };
 
     let mut out = rename_struct(item, &name, &ffi)?;
@@ -635,12 +653,13 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
         Some(_) => format!("{name}__whole"),
         None => format!("{name}__validated"),
     };
+    let repr = repr_attrs(&item);
     let all_def = dst(&all,
         &format!("/// {name}, all of it: C's fields - those that hold a count private - then\n\
                   /// the bytes past them there are, written by a version since, at\n\
                   /// exactly the value's length. It derefs to C's struct {name},\n\
                   /// Ffi<{name}>, to read.\n"),
-        &repr_attrs(&item), &def.fields, &[], &ffi, "_rest", "u8", &ffi,
+        &Shape { repr: &repr, fields: &def.fields, private: &[], head: &ffi, tail: "_rest", elem: "u8", ffi: &ffi },
         &format!("/// For C: a pointer to all of it.\n\
                   pub fn as_ffi(&self) -> *const {ffi} {{\n\
                       (self as *const Self).cast()\n\
@@ -732,7 +751,9 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
                             /// length. It derefs to the floor, to read. A field it gained later\n\
                             /// is a getter, zero where the value ends before it; whole() is all\n\
                             /// of it, {name}<Whole>, if it's all there.\n"),
-                  "#[repr(C)]\n", floor, &[], &fl, "_rest", "u8", &ffi, &methods),
+                  &Shape { repr: "#[repr(C)]\n", fields: floor, private: &[], head: &fl, tail: "_rest", elem: "u8",
+                           ffi: &ffi },
+                  &methods),
         // the cast checks the floor: an unvalidated one is as good. Its later
         // fields are inline only in its Whole, so that's where c_bitmask!'s
         // setters go
