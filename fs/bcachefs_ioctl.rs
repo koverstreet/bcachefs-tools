@@ -863,9 +863,10 @@ pub struct bch_ioctl_snapshot_tree_query {
  * v2: same query, but the header states the array element size, so either
  * side can grow bch_ioctl_snapshot_node_v2 without breaking the other.
  * The kernel writes min(node_size, its own sizeof) bytes per entry and
- * strides by node_size, so a shorter node from either direction truncates
- * instead of overrunning. New fields go on the end, and both sides read
- * node_size to know what's present.
+ * strides by that same min, so a shorter node from either direction truncates
+ * instead of overrunning - and a reader steps by min(the node_size it sent,
+ * the one returned). New fields go on the end, and both sides read node_size
+ * to know what's present.
  */
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]

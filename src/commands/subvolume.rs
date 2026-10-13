@@ -2,7 +2,7 @@ use std::{collections::{HashMap, HashSet}, ffi::CStr, mem, os::fd::OwnedFd,
     path::{Path, PathBuf}, process::ExitCode};
 use chrono::{Local, TimeZone};
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use bch_bindgen::c::{
     BCH_SUBVOL_SNAPSHOT_RO, bch_ioctl_snapshot_node_v2,
     bch_ioctl_snapshot_tree_query, bch_ioctl_snapshot_tree_query_v2,
@@ -178,10 +178,16 @@ const BCH_SUBVOLUME_UNLINKED: u32 = 1 << 2;
 
 /// A header-plus-flexible-array ioctl with capacity/total retry protocol:
 /// nr in is capacity, ERANGE reports the required total.
-trait FlexArrayIoctl: FlexArray<Elem: Copy> + Plain + Copy {
+trait FlexArrayIoctl: FlexArray + Plain + Copy {
     type Ioc: Ioctl<Arg = Self>;
     fn set_capacity(&mut self, n: u32);
     fn total(&self) -> u32;
+
+    /// Bytes from one element of the reply to the next, given the header we
+    /// sent: our element's size, unless the header says what the kernel's is.
+    fn stride(&self, _sent: &Self) -> usize {
+        mem::size_of::<Self::Elem>()
+    }
 }
 
 fn bcachefs_flex_ioctl<H: FlexArrayIoctl>(
@@ -204,7 +210,9 @@ fn bcachefs_flex_ioctl<H: FlexArrayIoctl>(
             Err(e) => return Err(e.into()),
         }
 
-        let nodes = buf.tail()?.to_vec();
+        let stride = buf.hdr().stride(&arg);
+        ensure!(stride > 0, "{}: the kernel says its elements are 0 bytes", std::any::type_name::<H>());
+        let nodes = buf.tail_strided(stride)?;
         return Ok((*buf.hdr(), nodes));
     }
 }
@@ -219,6 +227,12 @@ impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query_v2 {
     type Ioc = BCH_IOCTL_SNAPSHOT_TREE_v2;
     fn set_capacity(&mut self, n: u32) { self.nr = n; }
     fn total(&self) -> u32 { self.total }
+
+    /// node_size: ours going in, the kernel's coming back. It writes the
+    /// smaller of the two per node, and steps by that.
+    fn stride(&self, sent: &Self) -> usize {
+        self.node_size.min(sent.node_size) as usize
+    }
 }
 
 fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {

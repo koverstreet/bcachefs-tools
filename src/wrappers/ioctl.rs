@@ -14,7 +14,7 @@ use std::os::fd::{AsFd, AsRawFd};
 
 pub use bcachefs_kernel::cstructs::bcachefs_ioctl::*;
 pub use bcachefs_kernel::util::ioctl::Ioctl;
-use bcachefs_kernel::util::vstructs::{FlexArray, Plain, UnvalidatedRef, UnvalidatedMut, VStructError};
+use bcachefs_kernel::util::vstructs::{read_past, FlexArray, Plain, UnvalidatedRef, UnvalidatedMut, VStructError};
 
 fn ret(r: libc::c_int) -> io::Result<i32> {
     if r < 0 {
@@ -125,11 +125,83 @@ impl<H: FlexArray + Plain> IoctlBuf<H> {
         Ok(UnvalidatedRef::<H>::new(self.bytes())?.tail())
     }
 
+    /// The array of a reply whose elements are @stride bytes apart - the
+    /// kernel's size for them, where the header says, not necessarily ours -
+    /// each copied: zero past @stride, the kernel's past ours dropped. An
+    /// error if the buffer doesn't hold as many as the header's count says.
+    pub fn tail_strided(&self, stride: usize) -> Result<Vec<H::Elem>, VStructError> {
+        assert!(stride > 0, "{}: elements of no bytes", std::any::type_name::<H>());
+        let want = H::TAIL + self.hdr().nr() * stride;
+        let have = self.bytes().len();
+        let tail = self.bytes().get(H::TAIL..want).ok_or(VStructError::Overrun {
+            ty: std::any::type_name::<H>(), want, have,
+        })?;
+        Ok(tail.chunks_exact(stride).map(|e| read_past(e, 0)).collect())
+    }
+
     /// The array, as long as the header's count says - to fill in, having
     /// set that count.
     pub fn tail_mut(&mut self) -> Result<&mut [H::Elem], VStructError> {
         // SAFETY: u64s, which any bytes are
         let bytes = unsafe { std::slice::from_raw_parts_mut(self.buf.as_mut_ptr().cast(), self.buf.len() * 8) };
         Ok(UnvalidatedMut::<H>::new(bytes)?.into_tail())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type Query = bch_ioctl_snapshot_tree_query_v2;
+
+    /// A reply of @nr snapshot nodes @stride bytes apart, as a kernel whose
+    /// nodes are that size writes it: node i's id i + 1, every other byte of
+    /// it 0xff.
+    fn reply(nr: u32, stride: usize) -> IoctlBuf<Query> {
+        let mut buf = IoctlBuf::<Query>::new(4);
+        buf.hdr_mut().nr = nr;
+        // SAFETY: u64s, which any bytes are
+        let bytes: &mut [u8] = unsafe {
+            std::slice::from_raw_parts_mut(buf.buf.as_mut_ptr().cast(), buf.buf.len() * 8)
+        };
+        for i in 0..nr as usize {
+            let at = Query::TAIL + i * stride;
+            bytes[at..at + stride].fill(0xff);
+            bytes[at..at + 4].copy_from_slice(&(i as u32 + 1).to_ne_bytes());
+        }
+        buf
+    }
+
+    /// Nodes smaller than ours - an older kernel's, 40 bytes, before
+    /// nr_keys - are read at their own stride, the fields they lack zero.
+    #[test]
+    fn tail_strided_shorter_nodes() {
+        let nodes = reply(3, 40).tail_strided(40).unwrap();
+        assert_eq!(nodes.iter().map(|n| n.id).collect::<Vec<_>>(), [1, 2, 3]);
+        assert!(nodes.iter().all(|n| n.sectors == u64::MAX && n.nr_keys == 0 && n.key_bytes == 0));
+
+        // stepping by our size instead, the second is read from the middle of
+        // the second and third
+        let ours = std::mem::size_of::<bch_ioctl_snapshot_node_v2>();
+        assert_ne!(reply(3, 40).tail_strided(ours).unwrap()[1].id, 2);
+    }
+
+    /// At our own size, it's the array as it is.
+    #[test]
+    fn tail_strided_our_nodes() {
+        let stride = std::mem::size_of::<bch_ioctl_snapshot_node_v2>();
+        let buf = reply(3, stride);
+        let ids = |ns: &[bch_ioctl_snapshot_node_v2]| ns.iter().map(|n| n.id).collect::<Vec<_>>();
+        assert_eq!(ids(&buf.tail_strided(stride).unwrap()), [1, 2, 3]);
+        assert_eq!(ids(buf.tail().unwrap()), [1, 2, 3]);
+    }
+
+    /// A count past the buffer is an error, not a read past it.
+    #[test]
+    fn tail_strided_overrun() {
+        let stride = std::mem::size_of::<bch_ioctl_snapshot_node_v2>();
+        let mut buf = reply(1, stride);
+        buf.hdr_mut().nr = 5;
+        assert!(matches!(buf.tail_strided(stride), Err(VStructError::Overrun { .. })));
     }
 }
