@@ -198,6 +198,10 @@ struct Shape<'a> {
     elem:    &'a str,
     /// C's struct: its HasFfi.
     ffi:     &'a str,
+    /// Where the tail starts, if not where the head ends: inside it, the
+    /// head being C's struct rounded up into the tail's first bytes - a key
+    /// value's (#[whole(tail = ..)]).
+    tail_at: Option<&'a str>,
 }
 
 /// A state's definition, @ty, laid out as @shape: a DST - its fields inline,
@@ -215,7 +219,11 @@ struct Shape<'a> {
 /// ArmRef, cast() from the bytes its storage says are its. @doc is its own;
 /// @methods, more of them.
 fn dst(ty: &str, doc: &str, shape: &Shape, methods: &str) -> String {
-    let Shape { repr, fields, private, head, tail, elem, ffi } = *shape;
+    let Shape { repr, fields, private, head, tail, elem, ffi, tail_at } = *shape;
+    let tail_at = tail_at.map(str::to_string).unwrap_or_else(|| format!("::core::mem::size_of::<{head}>()"));
+    let plain_fields: String = fields.iter()
+        .map(|f| format!("{VS}::assert_plain::<{}>();\n", f.ty.trim()))
+        .collect();
     let inline: String = fields.iter().map(|f| inline_field(f, private)).collect();
     let offsets: String = fields.iter()
         .map(|f| format!("assert!(::core::mem::offset_of!({ty}, {0}) == ::core::mem::offset_of!({head}, {0}),\n\
@@ -240,8 +248,8 @@ fn dst(ty: &str, doc: &str, shape: &Shape, methods: &str) -> String {
              #[inline]\n\
              fn deref(&self) -> &{head} {{\n\
                  // SAFETY: its first size_of::<{head}>() bytes are {head}'s fields, at\n\
-                 // {head}'s offsets, its tail after them - asserted below - and\n\
-                 // {head} is Plain\n\
+                 // {head}'s offsets - asserted below, each Plain - and any of its\n\
+                 // tail they reach: it's no shorter than {head}, as Unsized says\n\
                  unsafe {{ &*(self as *const Self).cast::<{head}>() }}\n\
              }}\n\
          }}\n\
@@ -250,32 +258,35 @@ fn dst(ty: &str, doc: &str, shape: &Shape, methods: &str) -> String {
              type Ffi = {ffi};\n\
          }}\n\
          \n\
-         // SAFETY: its head, then its tail right after - as the assert below\n\
-         // checks - both Plain; from_raw() makes the tail as long as @bytes past\n\
-         // the head\n\
+         // SAFETY: its head's fields, each Plain, then its tail at TAIL - as the\n\
+         // asserts below check - Plain; from_raw() makes the tail as long as\n\
+         // @bytes past TAIL\n\
          unsafe impl {VS}::Unsized for {ty} {{\n\
              type Head = {head};\n\
              type Elem = {elem};\n\
+             const TAIL: usize = {tail_at};\n\
              #[inline]\n\
              fn from_raw(p: *const u8, bytes: usize) -> *const Self {{\n\
-                 let n = (bytes - ::core::mem::size_of::<{head}>()) / ::core::mem::size_of::<{elem}>();\n\
+                 let n = (bytes - Self::TAIL) / ::core::mem::size_of::<{elem}>();\n\
                  ::core::ptr::slice_from_raw_parts(p.cast::<{elem}>(), n) as *const Self\n\
              }}\n\
              #[inline]\n\
              fn from_raw_mut(p: *mut u8, bytes: usize) -> *mut Self {{\n\
-                 let n = (bytes - ::core::mem::size_of::<{head}>()) / ::core::mem::size_of::<{elem}>();\n\
+                 let n = (bytes - Self::TAIL) / ::core::mem::size_of::<{elem}>();\n\
                  ::core::ptr::slice_from_raw_parts_mut(p.cast::<{elem}>(), n) as *mut Self\n\
              }}\n\
          }}\n\
          \n\
          const _: () = {{\n\
              {VS}::assert_plain::<{elem}>();\n\
+             {plain_fields}\
              {offsets}\
-             // its tail starts where its head ends: from_raw()'s length, and\n\
-             // the Deref, count on it\n\
+             // its tail starts at TAIL - where its head ends, or inside it:\n\
+             // from_raw()'s length counts on it\n\
              assert!(({tail_start}).next_multiple_of(::core::mem::align_of::<{elem}>())\n\
-                         == ::core::mem::size_of::<{head}>(),\n\
-                     \"{ty}: its tail starts where {head} ends\");\n\
+                         == <{ty} as {VS}::Unsized>::TAIL,\n\
+                     \"{ty}: its tail starts where its fields end, at TAIL\");\n\
+             assert!(<{ty} as {VS}::Unsized>::TAIL <= ::core::mem::size_of::<{head}>());\n\
          }};\n\
          \n\
          impl {VS}::SelfSized for {ty} {{\n\
@@ -484,7 +495,7 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
     // where that's the tail
     let fields = if tail == last { &def.fields[..def.fields.len() - 1] } else { &def.fields[..] };
     let repr = repr_attrs(&item);
-    let shape = Shape { repr: &repr, fields, private: &[], head: &ffi, tail: &tail, elem: &elem, ffi: &ffi };
+    let shape = Shape { repr: &repr, fields, private: &[], head: &ffi, tail: &tail, elem: &elem, ffi: &ffi, tail_at: None };
 
     let mut out = rename_struct(item, &name, &ffi)?;
     out.extend(tokens(&format!(
@@ -550,7 +561,7 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
     };
     let repr = repr_attrs(&item);
     let private = [count_field.as_str()];
-    let shape = Shape { repr: &repr, fields, private: &private, head: &ffi, tail: &tail, elem: &elem, ffi: &ffi };
+    let shape = Shape { repr: &repr, fields, private: &private, head: &ffi, tail: &tail, elem: &elem, ffi: &ffi, tail_at: None };
 
     let mut out = rename_struct(item, &name, &ffi)?;
     out.extend(tokens(&format!(
@@ -593,7 +604,7 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
     if at == 0 {
         return Err(format!("{name}: #[grown(from = {from})]: every valid value has at least one field"));
     }
-    sized_family(&def, item, Some((from, at)))
+    sized_family(&def, item, Some((from, at)), None)
 }
 
 /// #[whole]: the family of a type every valid value of which has all of it -
@@ -604,10 +615,32 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 /// state of it is X__validated, a DST: C's fields, those that hold a count
 /// private, then the bytes past them there are, at exactly the value's
 /// length; it derefs to C's struct, to read.
+///
+/// Or `#[whole(tail = NAME: [E])]`: C's struct ends in NAME: [E; 0], a
+/// header and the array after it - a key value, its length the key's. The
+/// tail is NAME, from where C has it: inside C's struct, if align rounds the
+/// struct up into the array's first bytes - bch_inode's fields end at 14, its
+/// size is 16 - which the deref to C's struct reaches, a value being no
+/// shorter than that.
 pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item.to_string())?;
-    parse_family_args(&attr.to_string(), &[]).map_err(|e| format!("{}: {e}", def.name))?;
-    sized_family(&def, item, None)
+    let args = parse_family_args(&attr.to_string(), &["tail"]).map_err(|e| format!("{}: {e}", def.name))?;
+    let tail = match args.tail {
+        None => None,
+        Some((None, _)) => return Err(format!("{}: #[whole(tail = NAME: [E])] - the tail is C's last \
+                                               field, NAME: [E; 0], named", def.name)),
+        Some((Some(tail), elem)) => {
+            let last = def.fields.last().ok_or_else(|| format!("{}: a whole type has fields", def.name))?;
+            match field_type(&last.ty)? {
+                FieldType::Array { elem: e, n } if n == "0" && last.rust_name() == tail
+                    && e.trim() == elem.trim() => {}
+                _ => return Err(format!("{}: #[whole(tail = {tail}: [{elem}])], but its last field, {}, \
+                                         isn't {tail}: [{elem}; 0]", def.name, last.name)),
+            }
+            Some((tail, elem))
+        }
+    };
+    sized_family(&def, item, None, tail)
 }
 
 /// #[grown] and #[whole]: the family of sized C struct @def, written @item -
@@ -617,7 +650,8 @@ pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 /// Both have a definition of all of it, every field inline: X__whole, if it
 /// grew - its Whole; else X__validated, its every state. Only that one is
 /// handed to C, as_ffi(): it's the one sure to hold all of C's struct.
-fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>)
+fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>,
+                tail: Option<(String, String)>)
     -> Result<TokenStream, String>
 {
     let name = def.name.clone();
@@ -627,12 +661,24 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
         None => format!("{name}__validated"),
     };
     let repr = repr_attrs(&item);
+    // the tail, C's last field - or the bytes past C's fields
+    let (fields, tail_name, elem, tail_at) = match &tail {
+        Some((t, e)) => (&def.fields[..def.fields.len() - 1], t.as_str(), e.as_str(),
+                         Some(format!("::core::mem::offset_of!({ffi}, {t})"))),
+        None => (&def.fields[..], "_rest", "u8", None),
+    };
     let all_def = dst(&all,
-        &format!("/// {name}, all of it: C's fields - those that hold a count private - then\n\
-                  /// the bytes past them there are, written by a version since, at\n\
-                  /// exactly the value's length. It derefs to C's struct {name},\n\
-                  /// Ffi<{name}>, to read.\n"),
-        &Shape { repr: &repr, fields: &def.fields, private: &[], head: &ffi, tail: "_rest", elem: "u8", ffi: &ffi },
+        &match &tail {
+            Some((t, _)) => format!("/// {name}, all of it: C's fields - those that hold a count private -\n\
+                                     /// then {t}, from where C has it, as long as the value is. It\n\
+                                     /// derefs to C's struct {name}, Ffi<{name}>, to read.\n"),
+            None => format!("/// {name}, all of it: C's fields - those that hold a count private - then\n\
+                             /// the bytes past them there are, written by a version since, at\n\
+                             /// exactly the value's length. It derefs to C's struct {name},\n\
+                             /// Ffi<{name}>, to read.\n"),
+        },
+        &Shape { repr: &repr, fields, private: &[], head: &ffi, tail: tail_name, elem, ffi: &ffi,
+                 tail_at: tail_at.as_deref() },
         &format!("/// For C: a pointer to all of it.\n\
                   pub fn as_ffi(&self) -> *const {ffi} {{\n\
                       (self as *const Self).cast()\n\
@@ -725,7 +771,7 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
                             /// is a getter, zero where the value ends before it; whole() is all\n\
                             /// of it, {name}<Whole>, if it's all there.\n"),
                   &Shape { repr: "#[repr(C)]\n", fields: floor, private: &[], head: &fl, tail: "_rest", elem: "u8",
-                           ffi: &ffi },
+                           ffi: &ffi, tail_at: None },
                   &methods),
         // the cast checks the floor: an unvalidated one is as good. Its later
         // fields are inline only in its Whole, so that's where c_bitmask!'s

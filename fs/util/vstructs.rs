@@ -638,7 +638,7 @@ impl State for Whole {
 pub trait HasFfi {
     /// C's struct. An impl is never for Ffi<T> itself - a projection - but
     /// for the family's definition by name, X__ffi.
-    type Ffi: Plain;
+    type Ffi;
 }
 
 /// C's struct of a #[counted] family - a header, and an array it counts in
@@ -664,17 +664,25 @@ pub type Ffi<T> = <T as HasFfi>::Ffi;
 /// (#[unsized_vstruct]); a grown type's is its floor, the value as long as
 /// what holds it says (#[grown]).
 ///
+/// A key value's, whose header is C's struct rounded up into its tail's
+/// first bytes - bch_inode's fields end at 14, its size is 16 - has its tail
+/// from where it starts, TAIL, inside its head (#[whole(tail = ..)]).
+///
 /// # Safety
-/// Self is Head then its tail, at size_of::<Head>(), every bit pattern of it
-/// valid; from_raw() and from_raw_mut() make a pointer to all of @bytes,
-/// which are no fewer than Head's - a reference from it claims them, and
-/// none past, if they're a whole number of Self's alignment long too.
+/// Self is Head's fields, every bit pattern of each valid, then its tail at
+/// TAIL - size_of::<Head>(), or within it; from_raw() and from_raw_mut() make
+/// a pointer to all of @bytes, which are no fewer than Head's - a reference
+/// from it claims them, and none past, if they're a whole number of Self's
+/// alignment long too.
 pub unsafe trait Unsized {
     /// What precedes the tail: what it derefs to.
-    type Head: Plain;
+    type Head;
 
     /// What its tail holds.
     type Elem: Plain;
+
+    /// Where its tail starts.
+    const TAIL: usize;
 
     /// The value at @p, @bytes long.
     fn from_raw(p: *const u8, bytes: usize) -> *const Self;
@@ -693,7 +701,7 @@ pub unsafe trait Unsized {
 pub unsafe fn from_ffi<'a, T>(p: *const T::Head) -> &'a T
 where
     T: Unsized + ?Sized,
-    T::Head: SelfSized,
+    T::Head: Plain + SelfSized,
 {
     // SAFETY: the caller's
     unsafe { &*T::from_raw(p.cast(), (*p).bytes()) }
@@ -706,7 +714,7 @@ where
 pub unsafe fn from_ffi_mut<'a, T>(p: *mut T::Head) -> &'a mut T
 where
     T: Unsized + ?Sized,
-    T::Head: SelfSized,
+    T::Head: Plain + SelfSized,
 {
     // SAFETY: the caller's
     unsafe { &mut *T::from_raw_mut(p.cast(), (*p).bytes()) }
@@ -718,7 +726,7 @@ where
 pub fn from_bytes<T>(bytes: &[u8]) -> Result<&T, VStructError>
 where
     T: Unsized + ?Sized,
-    T::Head: SelfSized,
+    T::Head: Plain + SelfSized,
 {
     let len = checked_bytes::<T::Head>(bytes)?;
     // SAFETY: that many are there, aligned, and any bytes are a T
@@ -729,7 +737,7 @@ where
 pub fn from_bytes_mut<T>(bytes: &mut [u8]) -> Result<&mut T, VStructError>
 where
     T: Unsized + ?Sized,
-    T::Head: SelfSized,
+    T::Head: Plain + SelfSized,
 {
     let len = checked_bytes::<T::Head>(bytes)?;
     // SAFETY: as from_bytes()
@@ -745,7 +753,7 @@ fn fits<T: Unsized + ?Sized>(b: &[u8]) -> bool {
     b.len() >= head
         && b.as_ptr() as usize % align == 0
         && b.len() % align == 0
-        && (b.len() - head) % size_of::<T::Elem>() == 0
+        && (b.len() - T::TAIL) % size_of::<T::Elem>() == 0
 }
 
 /// @b as a T, every byte of it - an arm, as long as what holds it says: None
@@ -810,7 +818,7 @@ impl<'a, E: ?Sized> ValidatedEntries<'a, E> {
     }
 }
 
-impl<'a, E: Unsized<Head: SelfSized> + ?Sized + 'a> Iterator for ValidatedEntries<'a, E> {
+impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for ValidatedEntries<'a, E> {
     type Item = &'a E;
 
     fn next(&mut self) -> Option<&'a E> {
@@ -841,7 +849,7 @@ impl<'a, E: ?Sized> UnvalidatedEntries<'a, E> {
     }
 }
 
-impl<'a, E: Unsized<Head: SelfSized> + ?Sized + 'a> Iterator for UnvalidatedEntries<'a, E> {
+impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for UnvalidatedEntries<'a, E> {
     type Item = Result<&'a E, VStructError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -873,7 +881,7 @@ impl<'a, E: ?Sized> UnvalidatedEntriesMut<'a, E> {
     }
 }
 
-impl<'a, E: Unsized<Head: SelfSized> + ?Sized + 'a> Iterator for UnvalidatedEntriesMut<'a, E> {
+impl<'a, E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a> Iterator for UnvalidatedEntriesMut<'a, E> {
     type Item = Result<&'a mut E, VStructError>;
 
     fn next(&mut self) -> Option<Self::Item> {
