@@ -193,7 +193,7 @@ impl TransBkey<'_, '_> {
 
         // The packed key, header first - within the buffer pack() sized for it:
         let packed_u64s = unsafe {
-            core::slice::from_raw_parts(packed.inode.k_i() as *const c::bkey_i as *const u64,
+            core::slice::from_raw_parts(packed.k_i().as_ffi().cast::<u64>(),
                                         need_u64s)
         };
         self.as_mut_u64s()[..need_u64s].copy_from_slice(packed_u64s);

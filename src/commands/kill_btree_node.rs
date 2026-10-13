@@ -239,7 +239,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
             }
 
             found = true;
-            let k = BkeySC::from(&b.key);
+            let k = BkeySC::from(b.key_i());
 
             for ptr in k.ptrs(&fs) {
                 let dev = ptr.dev() as u32;

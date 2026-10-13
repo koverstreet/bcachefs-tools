@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::bkey::{pos, spos, BkeyIDirent, BkeySC, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, BkeyI, BkeyIDirent, BkeySC, SPOS_MAX};
 use crate::btree::iter::{
     polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransBkey,
     UpdateTriggerFlags,
@@ -610,7 +610,7 @@ impl Repair<'_> {
         &mut self,
         t:   &TransAttempt<'_, '_>,
         pos: c::bpos,
-        new: &c::bkey_i,
+        new: &BkeyI,
     ) -> Result<(), BchError> {
         let s = self.s.get(t, T::BTREE, pos)?;
         check::fsck_update_backpointers(t, s, new)

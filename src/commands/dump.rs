@@ -7,7 +7,7 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 
 use bcachefs_kernel::btree;
-use bcachefs_kernel::btree::bkey::BkeyS;
+use bcachefs_kernel::btree::bkey::{BkeyI, BkeyS};
 use bcachefs_kernel::c;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::{entry_type, journal_entry_type};
@@ -276,7 +276,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
                                      | journal_entry_type::write_buffer_keys) {
                 for k in e.entries_mut() {
                     let Ok(mut k) = k else { break };
-                    modified |= sanitize_val(&fs, BkeyS::from(&mut *k), opts);
+                    modified |= sanitize_val(&fs, BkeyS::from(k.key_mut()), opts);
                 }
             }
         }
@@ -396,7 +396,9 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
                     // buffer: as long as the unpacked key's u64s says
                     unsafe { BkeyS::from_parts(&mut u, v) }
                 } else {
-                    let ki = unsafe { &mut *(buf.as_mut_ptr().add(key_pos) as *mut c::bkey_i) };
+                    // SAFETY: an unpacked key in the node's buffer, as long
+                    // as its u64s say
+                    let ki = unsafe { &mut *BkeyI::from_raw_mut(buf.as_mut_ptr().add(key_pos).cast()) };
                     BkeyS::from(ki)
                 };
 
@@ -634,7 +636,7 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
             );
 
             node_iter.for_each(&trans, |b| {
-                dump_node(fs, &mut devs, btree::BkeySC::from(&b.key), btree_node_size,
+                dump_node(fs, &mut devs, btree::BkeySC::from(b.key_i()), btree_node_size,
                           cli.single_replica);
                 ControlFlow::Continue(())
             }).map_err(|e| anyhow!("error walking btree {}: {}",

@@ -94,7 +94,7 @@ fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
                 return ControlFlow::Break(());
             }
 
-            println!("{}", BkeySC::from(&b.key).to_text(fs));
+            println!("{}", BkeySC::from(b.key_i()).to_text(fs));
             ControlFlow::Continue(())
         })?;
     }

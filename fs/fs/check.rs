@@ -852,7 +852,7 @@ pub fn own_version(trans: &BtreeTrans<'_>, inode: &mut c::bch_inode_unpacked, sn
 pub fn fsck_update_backpointers(
     t:   &TransAttempt<'_, '_>,
     s:   &mut SnapshotsSeen,
-    new: &c::bkey_i,
+    new: &BkeyI,
 ) -> Result<(), BchError> {
     let trans = t.trans();
     let Some(d) = Dirent::new(BkeySC::from(new)) else { return Ok(()) };

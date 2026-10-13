@@ -15,7 +15,7 @@
 use std::ops::ControlFlow;
 
 use bcachefs_kernel::c;
-use bcachefs_kernel::btree::bkey::BkeySC;
+use bcachefs_kernel::btree::bkey::{BkeyI, BkeySC};
 use errno::Errno;
 
 use crate::wrappers::handle::BcachefsHandle;
@@ -127,16 +127,16 @@ impl<'h> OnlineBtreeIter<'h> {
             return Err(Errno(libc::EPROTO));
         }
 
-        let k = unsafe {
-            &*(self.buf.as_ptr().add(self.pos as usize) as *const c::bkey_i)
-        };
-        let bytes = k.k.u64s as u32 * 8;
+        let p = unsafe { self.buf.as_ptr().add(self.pos as usize) }.cast::<c::bkey_i>();
+        // SAFETY: its header is in the buffer, checked above
+        let bytes = unsafe { (*p).k.u64s } as u32 * 8;
         if bytes < HDR || bytes > rest {
             return Err(Errno(libc::EPROTO));
         }
         self.pos += bytes;
 
-        Ok(Some(BkeySC::from(k)))
+        // SAFETY: a key, its u64s checked against the buffer @p reaches
+        Ok(Some(BkeySC::from(unsafe { &*BkeyI::from_raw(p) })))
     }
 
     pub fn for_each<F>(&mut self, mut f: F) -> Result<(), Errno>

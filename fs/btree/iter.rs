@@ -314,8 +314,9 @@ impl BtreeNodeRef {
         unsafe { self.raw.as_ref().c.level.into() }
     }
 
-    pub(crate) fn key(&self) -> &c::bkey_i {
-        unsafe { &self.raw.as_ref().key }
+    pub(crate) fn key(&self) -> &BkeyI {
+        // SAFETY: a node we hold
+        unsafe { self.raw.as_ref() }.key_i()
     }
 
     pub(crate) fn key_sc(&self) -> BkeySC<'_> {
@@ -582,33 +583,30 @@ impl<'a, 't> TransAttempt<'a, 't> {
         debug_assert_eq!(size_of::<Whole<K>>() % size_of::<u64>(), 0);
 
         let u64s = (size_of::<Whole<K>>() / size_of::<u64>()) as u32;
-        let mut k = self.bkey_alloc(u64s)?;
+        let k = self.bkey_alloc(u64s)?;
 
         unsafe {
-            (k.as_mut() as *mut c::bkey_i as *mut Whole<K>).write(K::new());
+            k.as_ptr().cast::<Whole<K>>().write(K::new());
         }
 
         Ok(k)
     }
 
-    pub fn bkey_copy(&self, k: &c::bkey_i) -> Result<TransBkey<'a, 't>, BchError> {
-        let mut dst = self.bkey_alloc(k.k.u64s as u32)?;
+    pub fn bkey_copy(&self, k: &BkeyI) -> Result<TransBkey<'a, 't>, BchError> {
+        let dst = self.bkey_alloc(k.k.u64s as u32)?;
+        // SAFETY: all of @k, into a buffer as long
         unsafe {
-            core::ptr::copy_nonoverlapping(
-                k as *const c::bkey_i as *const u8,
-                dst.as_mut() as *mut c::bkey_i as *mut u8,
-                k.k.u64s as usize * size_of::<u64>(),
-            );
+            core::ptr::copy_nonoverlapping(k.as_ffi().cast::<u8>(), dst.as_ptr().cast::<u8>(),
+                                           size_of_val(k));
         }
         Ok(dst)
     }
 
     pub fn bkey_reassemble(&self, k: BkeySC<'_>) -> Result<TransBkey<'a, 't>, BchError> {
         let mut dst = self.bkey_alloc(k.k.u64s as u32)?;
-        let dst_key: &mut c::bkey_i = dst.as_mut();
 
         unsafe {
-            core::ptr::copy_nonoverlapping(k.k, &mut dst_key.k, 1);
+            core::ptr::copy_nonoverlapping(k.k, &raw mut (*dst.as_ptr()).k, 1);
             core::ptr::copy_nonoverlapping(
                 k.v as *const c::bch_val as *const u64,
                 dst.as_mut_u64s().as_mut_ptr().add(BKEY_U64S),
@@ -897,13 +895,12 @@ impl<'a, 't> TransAttempt<'a, 't> {
         key:   TransBkey<'_, 't>,
         flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
-        let key_ref: &c::bkey_i = key.as_ref();
         let ret = unsafe {
             c::bch2_btree_insert_nonextent(
                 self.raw(),
                 c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 key.as_ptr(),
-                key_ref.k.u64s as u32,
+                key.k().u64s as u32,
                 c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
             )
         };
@@ -1008,14 +1005,15 @@ impl<'a, 't> TransBkey<'a, 't> {
         self.ptr.as_ptr()
     }
 
+    /// Its header - whatever its u64s say, which may be being set.
     pub fn k(&self) -> &c::bkey {
-        let k: &c::bkey_i = self.as_ref();
-        &k.k
+        // SAFETY: the header at the start of our buffer
+        unsafe { &(*self.ptr.as_ptr()).k }
     }
 
     pub fn k_mut(&mut self) -> &mut c::bkey {
-        let k: &mut c::bkey_i = self.as_mut();
-        &mut k.k
+        // SAFETY: as k()'s, and we have the buffer mutably
+        unsafe { &mut (*self.ptr.as_ptr()).k }
     }
 
     /// A key C allocated in @t's transaction memory, sized by its own u64s -
@@ -1035,12 +1033,17 @@ impl<'a, 't> TransBkey<'a, 't> {
         })
     }
 
-    pub fn k_i(&self) -> &c::bkey_i {
-        AsRef::<c::bkey_i>::as_ref(self)
+    /// The key, all of it, as long as its u64s say.
+    pub fn k_i(&self) -> &BkeyI {
+        // SAFETY: a key in our buffer, which the pointer reaches all of
+        unsafe { &*BkeyI::from_raw(self.ptr.as_ptr()) }
     }
 
-    pub fn k_i_mut(&mut self) -> &mut c::bkey_i {
-        AsMut::<c::bkey_i>::as_mut(self)
+    /// k_i(), to edit. Its length is its u64s when it's taken: one that
+    /// changes them - grows the key, in its buffer - takes it again after.
+    pub fn k_i_mut(&mut self) -> &mut BkeyI {
+        // SAFETY: as k_i()'s, and we have the buffer mutably
+        unsafe { &mut *BkeyI::from_raw_mut(self.ptr.as_ptr()) }
     }
 
     pub fn as_u64s(&self) -> &[u64] {
@@ -1049,18 +1052,6 @@ impl<'a, 't> TransBkey<'a, 't> {
 
     pub fn as_mut_u64s(&mut self) -> &mut [u64] {
         self.as_mut()
-    }
-}
-
-impl AsRef<c::bkey_i> for TransBkey<'_, '_> {
-    fn as_ref(&self) -> &c::bkey_i {
-        unsafe { self.ptr.as_ref() }
-    }
-}
-
-impl AsMut<c::bkey_i> for TransBkey<'_, '_> {
-    fn as_mut(&mut self) -> &mut c::bkey_i {
-        unsafe { self.ptr.as_mut() }
     }
 }
 
@@ -2158,6 +2149,12 @@ impl<'b, 'f> c::btree {
 }
 
 impl c::btree {
+    /// The node's key, all of it - its value runs past bkey_i, into key_pad.
+    pub fn key_i(&self) -> &BkeyI {
+        // SAFETY: the node's key, from a pointer to all of the node
+        unsafe { &*BkeyI::from_raw(&raw const self.key) }
+    }
+
     /// Check if this btree node is a fake/placeholder node.
     pub fn is_fake(&self) -> bool {
         (self.flags >> c::btree_flags::BTREE_NODE_fake as u64) & 1 != 0

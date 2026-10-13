@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::alloc::buckets::DiskReservation;
-use crate::btree::bkey::{pos, spos, BkeyICookie, BkeyS, BkeySC, SizedBkey, BKEY_U64S, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, BkeyI, BkeyICookie, BkeyS, BkeySC, SizedBkey, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
@@ -416,7 +416,7 @@ fn test_btree_ptr_stale_dirty_key(
     let mut update = t.bkey_make_mut_noupdate(b.key_sc())?;
 
     let mut updated = false;
-    let mut update_k = BkeyS::from(update.as_mut());
+    let mut update_k = BkeyS::from(update.k_i_mut());
     for ptr_entry in update_k.ptrs_mut(t.fs()) {
         if ptr_entry.cached() == 0 && u64::from(ptr_entry.dev()) != c::BCH_SB_MEMBER_INVALID as u64 {
             // gen is 8 bits: one less, as C's ptr->gen-- - the setter checks
@@ -497,7 +497,7 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
             }
 
             let mut u = t.bkey_make_mut_noupdate(k)?;
-            let mut u_k = BkeyS::from(u.as_mut());
+            let mut u_k = BkeyS::from(u.k_i_mut());
             let sp = u_k.extent_entries_mut(t.fs())
                 .find_map(|e| match e {
                     ExtentEntryMut::stripe_ptr(sp) => Some(sp),
@@ -651,11 +651,17 @@ fn bkey_buf_test_key(buf: &mut [u64], seed: u64) -> BkeySC<'_> {
         *v = seed + i as u64;
     }
 
-    let k = unsafe { &mut *(buf.as_mut_ptr() as *mut c::bkey_i) };
-    k.k = c::bkey::new();
-    k.k.u64s = u64s as u8;
-    k.k.p.offset = seed;
-    BkeySC::from(&*k)
+    let mut h = c::bkey::new();
+    h.u64s = u64s as u8;
+    h.p.offset = seed;
+
+    let p = buf.as_mut_ptr().cast::<c::bkey_i>();
+    // SAFETY: the header written at the start of @buf, its u64s all of @buf
+    let k = unsafe {
+        (&raw mut (*p).k).write(h);
+        &*BkeyI::from_raw(p)
+    };
+    BkeySC::from(k)
 }
 
 fn bkey_buf_holds(b: &BkeyBuf, k: BkeySC<'_>) -> bool {

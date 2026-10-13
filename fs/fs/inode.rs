@@ -296,6 +296,22 @@ pub extern "C" fn bch2_inode_unpack(
     unpacked.write(unpack(&Fs::from_c(c), k));
 }
 
+impl c::bkey_inode_buf {
+    /// Its key, all of it: the typed key's header, then the fields packed
+    /// past it, in _pad - which the typed key, inode, doesn't reach.
+    pub fn k_i(&self) -> &BkeyI {
+        // SAFETY: the key at the start of the buffer, its u64s within it, as
+        // pack() sizes them; from a pointer to all of the buffer
+        unsafe { &*BkeyI::from_raw((&raw const self.inode).cast()) }
+    }
+
+    /// k_i(), to edit.
+    pub fn k_i_mut(&mut self) -> &mut BkeyI {
+        // SAFETY: as k_i()'s
+        unsafe { &mut *BkeyI::from_raw_mut((&raw mut self.inode).cast()) }
+    }
+}
+
 /// @inode packed, as an inode_v3 key at snapshot 0 - the caller's to set: as
 /// bch2_inode_pack(). The key ends at the last nonzero field, and
 /// has_inode_opts is recomputed - pack is what maintains it.
@@ -358,7 +374,7 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
 
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     {
-        let u = try_unpack(BkeySC::from(out.inode.k_i()))
+        let u = try_unpack(BkeySC::from(out.k_i()))
             .unwrap_or_else(|(_, fieldnr)| panic!("packed inode doesn't unpack, at field {fieldnr}"));
 
         macro_rules! check {
@@ -687,7 +703,7 @@ fn pack_trans<'a, 't>(t: &TransAttempt<'a, 't>, inode: &c::bch_inode_unpacked)
     let buf = t.kmalloc(size_of::<c::bkey_inode_buf>())?.as_mut_ptr() as *mut c::bkey_inode_buf;
     unsafe {
         buf.write(pack(inode));
-        TransBkey::from_raw(t, (*buf).inode.k_i_mut())
+        TransBkey::from_raw(t, (&raw mut (*buf).inode).cast())
     }
 }
 
@@ -762,7 +778,7 @@ pub fn write_cached(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchErr
     packed.inode.k.p.snapshot = u32::MAX;
     fs.btree_insert(
         btree_id::inodes,
-        packed.inode.k_i_mut(),
+        packed.k_i_mut(),
         None,
         CommitFlags::empty(),
         BtreeIterFlags::CACHED,
@@ -772,7 +788,7 @@ pub fn write_cached(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchErr
 /// @k, an inode of any version, as an inode_v3 - at no snapshot, as packing
 /// leaves it - in transaction memory: as bch2_inode_to_v3(). ENOENT if it
 /// isn't an inode.
-pub fn to_v3<'a, 't>(t: &TransAttempt<'a, 't>, k: &c::bkey_i) -> Result<TransBkey<'a, 't>, BchError> {
+pub fn to_v3<'a, 't>(t: &TransAttempt<'a, 't>, k: &BkeyI) -> Result<TransBkey<'a, 't>, BchError> {
     if !bkey_is_inode(&k.k) {
         return Err(BchError::from(c::ENOENT));
     }
@@ -784,9 +800,11 @@ pub fn to_v3<'a, 't>(t: &TransAttempt<'a, 't>, k: &c::bkey_i) -> Result<TransBke
 /// # Safety
 /// @k a key, its u64s covering its value.
 #[c_export]
-pub unsafe extern "C" fn bch2_inode_to_v3(trans: &Opaque<c::btree_trans>, k: &c::bkey_i)
+pub unsafe extern "C" fn bch2_inode_to_v3(trans: &Opaque<c::btree_trans>, k: *const c::bkey_i)
     -> *mut c::bkey_i
 {
+    // SAFETY: the caller's - C's pointer reaches all of the key
+    let k = unsafe { &*BkeyI::from_raw(k) };
     match to_v3(&BtreeTrans::from_c(trans).attempt_in_progress(), k) {
         Ok(k)  => k.as_ptr(),
         Err(e) => (-(e.raw() as isize)) as *mut c::bkey_i,
@@ -2227,7 +2245,7 @@ mod tests {
     fn pack_unpack_round_trip() {
         let u = sample();
         let packed = pack(&u);
-        let v = try_unpack(BkeySC::from(packed.inode.k_i())).expect("unpacks");
+        let v = try_unpack(BkeySC::from(packed.k_i())).expect("unpacks");
 
         assert_eq!(v.bi_inum, u.bi_inum);
         assert_eq!(v.bi_hash_seed, u.bi_hash_seed);
@@ -2254,7 +2272,7 @@ mod tests {
         let nr_fields = packed.inode.v.inodev3_nr_fields();
         set_fields_len(&mut packed, 8, nr_fields);
 
-        let (v, fieldnr) = try_unpack(BkeySC::from(packed.inode.k_i()))
+        let (v, fieldnr) = try_unpack(BkeySC::from(packed.k_i()))
             .expect_err("a truncated value doesn't unpack");
 
         assert_eq!(fieldnr, 1);
@@ -2279,7 +2297,7 @@ mod tests {
         len += varint::encode(&mut packed._pad[len..], 1 << 40);
         set_fields_len(&mut packed, len, 5);
 
-        let (v, fieldnr) = try_unpack(BkeySC::from(packed.inode.k_i()))
+        let (v, fieldnr) = try_unpack(BkeySC::from(packed.k_i()))
             .expect_err("an oversized field doesn't unpack");
         assert_eq!(fieldnr, 4);
         assert_eq!(v.bi_uid, 0);

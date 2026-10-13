@@ -14,7 +14,7 @@ pub(crate) mod format;
 pub use format::{d_type_str, set_field, Dirent, DirentName, DirentTarget, RawNames};
 use format::{D_NAME_OFFSET, D_NAMES_OFFSET};
 
-use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyIDirent, BkeyS, BkeySC};
+use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyIDirent, BkeyS, BkeySC};
 use crate::btree::iter::{
     lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey,
     UpdateTriggerFlags,
@@ -102,7 +102,7 @@ pub fn copy_target(dst: &mut TransBkey<'_, '_>, src: Dirent<'_>) {
 /// it, otherwise made here.
 pub fn init_name(
     fs:        &Fs,
-    k:         &mut c::bkey_i,
+    k:         &mut BkeyI,
     hash_info: &c::bch_hash_info,
     name:      &OsStr,
     cf_name:   Option<&OsStr>,
@@ -142,7 +142,7 @@ pub fn init_name(
 /// their lengths. Where the names end.
 #[cfg(CONFIG_UNICODE)]
 fn casefold_name(
-    k:         &mut c::bkey_i,
+    k:         &mut BkeyI,
     hash_info: &c::bch_hash_info,
     name:      &[u8],
     cf_name:   Option<&[u8]>,
@@ -172,7 +172,7 @@ fn casefold_name(
 /// Without CONFIG_UNICODE, bch2_fs_casefold_enabled() has refused already.
 #[cfg(not(CONFIG_UNICODE))]
 fn casefold_name(
-    _k:         &mut c::bkey_i,
+    _k:         &mut BkeyI,
     _hash_info: &c::bch_hash_info,
     _name:      &[u8],
     _cf_name:   Option<&[u8]>,

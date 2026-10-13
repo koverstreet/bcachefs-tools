@@ -11,7 +11,7 @@
 //! __GFP_NOFAIL, through rust_kzalloc_nofail() - the kernel's Rust allocator
 //! API doesn't offer it. Zeroed, so the whole buffer is initialized memory.
 
-use crate::btree::bkey::{BkeySC, BKEY_U64S};
+use crate::btree::bkey::{BkeyI, BkeySC, BKEY_U64S};
 use crate::c;
 use core::mem::size_of;
 use core::ptr::NonNull;
@@ -78,12 +78,16 @@ impl BkeyBuf {
         }
     }
 
-    pub fn k_i(&self) -> &c::bkey_i {
-        unsafe { &*(self.buf().as_ptr() as *const c::bkey_i) }
+    /// The key, all of it, as long as its u64s say.
+    pub fn k_i(&self) -> &BkeyI {
+        // SAFETY: a key at the start of the buffer, as reassemble() sizes it
+        unsafe { &*BkeyI::from_raw(self.buf().as_ptr().cast()) }
     }
 
-    pub fn k_i_mut(&mut self) -> &mut c::bkey_i {
-        unsafe { &mut *(self.buf_mut().as_mut_ptr() as *mut c::bkey_i) }
+    /// k_i(), to edit.
+    pub fn k_i_mut(&mut self) -> &mut BkeyI {
+        // SAFETY: as k_i()'s
+        unsafe { &mut *BkeyI::from_raw_mut(self.buf_mut().as_mut_ptr().cast()) }
     }
 
     pub fn sc(&self) -> BkeySC<'_> {

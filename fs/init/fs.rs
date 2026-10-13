@@ -489,7 +489,7 @@ impl Fs {
     pub fn btree_insert(
         &self,
         btree_id:     c::btree_id,
-        key:          &mut impl AsBkeyI,
+        key:          &mut (impl AsBkeyI + ?Sized),
         disk_res:     Option<&DiskReservation<'_>>,
         commit_flags: impl Into<CommitOpts>,
         iter_flags:   BtreeIterFlags,
@@ -502,7 +502,7 @@ impl Fs {
             c::bch2_btree_insert(
                 self.raw,
                 btree_id,
-                key.as_bkey_i_mut(),
+                key.as_bkey_i_mut().as_ffi_mut(),
                 disk_res,
                 commit_flags.into().to_c(),
                 c::btree_iter_update_trigger_flags::from_bits_retain(iter_flags.bits()),
