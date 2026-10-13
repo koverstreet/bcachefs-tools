@@ -10,7 +10,7 @@ use crate::types::Le32;
 use crate::util::vstructs::Ffi;
 use core::mem::offset_of;
 
-impl<S, T: ?Sized> c::bset<S, T> {
+impl c::bset__ffi {
     /// The nonce of this bset, at byte @offset of its btree node: the offset,
     /// the bset's seq, and the low half of its journal seq, in the btree
     /// domain.

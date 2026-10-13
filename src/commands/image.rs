@@ -16,6 +16,7 @@ use bcachefs_kernel::btree_id;
 use bcachefs_kernel::opts::{prt_compression_type, prt_data_type};
 use bcachefs_kernel::btree::iter::{BtreeIter, lockrestart_do};
 use bch_bindgen::c;
+use bcachefs_kernel::util::vstructs::Validated;
 use crate::copy_fs::{CopyFsState, copy_fs};
 use bch_bindgen::data::moving::MovingContext;
 use bcachefs_kernel::fs::{Fs, btree_id_is_alloc, bucket_bytes, bucket_to_sector, dev_to_target,
@@ -495,7 +496,8 @@ fn image_create_inner(
         unsafe {
             buf.sb_to_text(
                 std::ptr::null_mut(),
-                &*sb,
+                // the superblock format() built, as long as its count says
+                c::bch_sb::<Validated>::from_ffi(sb),
                 false,
                 sb_field_type::members_v2.bit(),
             );

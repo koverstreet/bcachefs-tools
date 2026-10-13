@@ -36,7 +36,7 @@ pub fn bch2_super_write<S: SbAccess>(fd: i32, sb: &mut S) {
 
     let bs = crate::wrappers::bdev::get_blocksize_physical_hint(fd) as usize;
     let layout_range = {
-        let off = std::mem::offset_of!(c::bch_sb, layout);
+        let off = std::mem::offset_of!(Ffi<c::bch_sb>, layout);
         off..off + std::mem::size_of::<c::bch_sb_layout>()
     };
 

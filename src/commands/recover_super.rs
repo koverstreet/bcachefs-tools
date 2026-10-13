@@ -5,6 +5,7 @@ use std::path::Path;
 use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::c;
 use bcachefs_kernel::opt_set;
+use bcachefs_kernel::util::vstructs::Ffi;
 use bch_bindgen::sb::io as sb_io;
 use bch_bindgen::sb::sb_field_type;
 use clap::Parser;
@@ -107,7 +108,7 @@ fn probe_sb_range(dev: &File, start: u64, end: u64, verbose: bool) -> Vec<SbBuf>
         return Vec::new();
     }
 
-    let magic_off = std::mem::offset_of!(c::bch_sb, magic);
+    let magic_off = std::mem::offset_of!(Ffi<c::bch_sb>, magic);
     let mut results = Vec::new();
     let mut offset = 0usize;
 

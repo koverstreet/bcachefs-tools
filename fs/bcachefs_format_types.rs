@@ -70,12 +70,12 @@
 
 #![allow(non_camel_case_types)]
 
-use core::marker::PhantomData;
 
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
-use crate::util::vstructs::{floored_by_self, vstruct, vstruct_container, Ffi, FlexArray, Validated};
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, tagged_union, CStruct, Plain, TypeInfo, View};
+use crate::util::vstructs::{floored_by_self, vstruct, vstruct_container, Ffi, FlexArray};
+use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, tagged_union, unsized_vstruct,
+                     CStruct, Plain, TypeInfo, View};
 #[cfg(__KERNEL__)]
 use cstruct_macros::c_typedef;
 
@@ -592,15 +592,13 @@ c_bitmask! {
 ///
 /// The count is the crate's, not private: the sections that embed this
 /// header are defined across the crate, and their vstruct!() reads it.
+#[unsized_vstruct(tail = [u64])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_sb_field<S = Validated, T: ?Sized = [u64]> {
+pub struct bch_sb_field {
     pub _data: [u64; 0],
     pub(crate) u64s: Le32,
     pub type_: Le32,
-    _s: PhantomData<S>,
-    #[c_anon("")]
-    _tail: T,
 }
 vstruct!(unsized bch_sb_field, u64s, start = 0);
 
@@ -969,9 +967,10 @@ c_bitmask! {
  * On clean shutdown, store btree roots and current journal sequence number in
  * the superblock:
  */
+#[unsized_vstruct]
 #[repr(C)]
 #[derive(Default, CStruct, Plain, TypeInfo)]
-pub struct jset_entry<S = Validated, T: ?Sized = [u64]> {
+pub struct jset_entry {
     u64s: Le16,
     pub btree_id: u8,
     pub level: u8,
@@ -979,8 +978,7 @@ pub struct jset_entry<S = Validated, T: ?Sized = [u64]> {
     pub pad: [u8; 3],
 
     pub start: [c::bkey_i; 0],
-    _s: PhantomData<S>,
-    pub _data: T,
+    pub _data: [u64; 0],
 }
 vstruct!(unsized jset_entry, u64s);
 vstruct_container!(unsized jset_entry, thin c::bkey_i);
@@ -1265,10 +1263,11 @@ c_const! {
  *		  superblock is written
  * @features	- enabled incompatible features
  */
+#[unsized_vstruct]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bch_sb<S = Validated, T: ?Sized = [Le64]> {
+pub struct bch_sb {
     pub csum: c::bch_csum,
     pub version: Le16,
     pub version_min: Le16,
@@ -1297,16 +1296,14 @@ pub struct bch_sb<S = Validated, T: ?Sized = [Le64]> {
     pub layout: c::bch_sb_layout,
 
     pub start: [Ffi<c::bch_sb_field>; 0],
-    _s: PhantomData<S>,
-    pub _data: T,
+    pub _data: [Le64; 0],
 }
 vstruct!(unsized bch_sb, u64s);
 vstruct_container!(unsized bch_sb, bch_sb_field);
-// Ffi<bch_sb>, by name - see vstructs.rs Unsized::Ffi
-c_default!(bch_sb<Validated, [Le64; 0]>);
+c_default!(bch_sb__ffi);
 
 c_bitmask! {
-    LE16_BITMASK(struct bch_sb<S, T: ?Sized>, block_size), strip BCH_SB_ {
+    LE16_BITMASK(struct Ffi<bch_sb>, block_size), strip BCH_SB_ {
         BCH_SB_BLOCK_SIZE(0, 16),
     }
 }
@@ -1324,7 +1321,7 @@ c_bitmask! {
  */
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb<S, T: ?Sized>, flags[0]), strip BCH_SB_ {
+    LE64_BITMASK(struct Ffi<bch_sb>, flags[0]), strip BCH_SB_ {
         BCH_SB_INITIALIZED(0, 1),
         BCH_SB_CLEAN(1, 2),
         BCH_SB_CSUM_TYPE(2, 8),
@@ -1355,7 +1352,7 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb<S, T: ?Sized>, flags[1]), strip BCH_SB_ {
+    LE64_BITMASK(struct Ffi<bch_sb>, flags[1]), strip BCH_SB_ {
         BCH_SB_STR_HASH_TYPE(0, 4),
         BCH_SB_COMPRESSION_TYPE_LO(4, 8),
         BCH_SB_INODE_32BIT(8, 9),
@@ -1379,14 +1376,14 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb<S, T: ?Sized>, flags[2]), strip BCH_SB_ {
+    LE64_BITMASK(struct Ffi<bch_sb>, flags[2]), strip BCH_SB_ {
         BCH_SB_BACKGROUND_COMPRESSION_TYPE_LO(0, 4),
         BCH_SB_GC_RESERVE_BYTES(4, 64),
     }
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb<S, T: ?Sized>, flags[3]), strip BCH_SB_ {
+    LE64_BITMASK(struct Ffi<bch_sb>, flags[3]), strip BCH_SB_ {
         BCH_SB_ERASURE_CODE(0, 16),
         BCH_SB_METADATA_TARGET(16, 28),
         BCH_SB_SHARD_INUMS(28, 29),
@@ -1397,7 +1394,7 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb<S, T: ?Sized>, flags[4]), strip BCH_SB_ {
+    LE64_BITMASK(struct Ffi<bch_sb>, flags[4]), strip BCH_SB_ {
         BCH_SB_JOURNAL_RECLAIM_DELAY(0, 32),
         BCH_SB_JOURNAL_TRANSACTION_NAMES(32, 33),
         BCH_SB_NOCOW(33, 34),
@@ -1410,7 +1407,7 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb<S, T: ?Sized>, flags[5]), strip BCH_SB_ {
+    LE64_BITMASK(struct Ffi<bch_sb>, flags[5]), strip BCH_SB_ {
         BCH_SB_VERSION_UPGRADE_COMPLETE(0, 16),
         BCH_SB_ALLOCATOR_STUCK_TIMEOUT(16, 32),
         BCH_SB_VERSION_INCOMPAT(32, 48),
@@ -1419,7 +1416,7 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb<S, T: ?Sized>, flags[6]), strip BCH_SB_ {
+    LE64_BITMASK(struct Ffi<bch_sb>, flags[6]), strip BCH_SB_ {
         BCH_SB_SHARD_INUMS_NBITS(0, 4),
         BCH_SB_WRITE_ERROR_TIMEOUT(4, 14),
         BCH_SB_CSUM_ERR_RETRY_NR(14, 20),
@@ -1977,10 +1974,11 @@ vstruct!(jset_entry_rewind, entry.u64s);
  *
  * version is for on disk format changes.
  */
+#[unsized_vstruct]
 #[repr(C, align(8))]
 #[derive(Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct jset<S = Validated, T: ?Sized = [u64]> {
+pub struct jset {
     pub csum: c::bch_csum,
 
     pub magic: Le64,
@@ -1999,8 +1997,7 @@ pub struct jset<S = Validated, T: ?Sized = [u64]> {
     pub last_seq: Le64,
 
     pub start: [Ffi<c::jset_entry>; 0],
-    _s: PhantomData<S>,
-    pub _data: T,
+    pub _data: [u64; 0],
 }
 vstruct!(unsized jset, u64s);
 vstruct_container!(unsized jset, jset_entry);
@@ -2009,7 +2006,7 @@ vstruct_container!(unsized jset, jset_entry);
 floored_by_self!(bkey_i, bch_sb_field_clean);
 
 c_bitmask! {
-    LE32_BITMASK(struct jset<S, T: ?Sized>, flags), strip JSET_ {
+    LE32_BITMASK(struct Ffi<jset>, flags), strip JSET_ {
         JSET_CSUM_TYPE(0, 4),
         JSET_BIG_ENDIAN(4, 5),
         JSET_NO_FLUSH(5, 6),
@@ -2047,10 +2044,11 @@ c_enum! {
  * On disk a btree node is a list/log of these; within each set the keys are
  * sorted
  */
+#[unsized_vstruct]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bset<S = Validated, T: ?Sized = [u64]> {
+pub struct bset {
     pub seq: Le64,
 
     /*
@@ -2067,13 +2065,12 @@ pub struct bset<S = Validated, T: ?Sized = [u64]> {
     u64s: Le16, /* count of d[] in u64s */
 
     pub start: [c::bkey_packed; 0],
-    _s: PhantomData<S>,
-    pub _data: T,
+    pub _data: [u64; 0],
 }
 vstruct!(unsized bset, u64s);
 
 c_bitmask! {
-    LE32_BITMASK(struct bset<S, T: ?Sized>, flags), strip BSET_ {
+    LE32_BITMASK(struct Ffi<bset>, flags), strip BSET_ {
         BSET_CSUM_TYPE(0, 4),
 
         BSET_BIG_ENDIAN(4, 5),
@@ -2084,10 +2081,11 @@ c_bitmask! {
     }
 }
 
+#[unsized_vstruct(tail = [u64])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct btree_node<S = Validated, T: ?Sized = [u64]> {
+pub struct btree_node {
     pub csum: c::bch_csum,
     pub magic: Le64,
 
@@ -2109,13 +2107,13 @@ pub struct btree_node<S = Validated, T: ?Sized = [u64]> {
 			u64 _data[];
 		};
 	}")]
-    pub keys: c::bset<S, T>,
+    pub keys: Ffi<c::bset>,
 }
 vstruct!(unsized btree_node, keys.u64s);
-c_default!(btree_node<Validated, [u64; 0]>);
+c_default!(btree_node__ffi);
 
 c_bitmask! {
-    LE64_BITMASK(struct btree_node<S, T: ?Sized>, flags), strip BTREE_NODE_ {
+    LE64_BITMASK(struct Ffi<btree_node>, flags), strip BTREE_NODE_ {
         BTREE_NODE_ID_LO(0, 4),
         BTREE_NODE_LEVEL(4, 8),
         BTREE_NODE_NEW_EXTENT_OVERWRITE(8, 9),
@@ -2125,10 +2123,11 @@ c_bitmask! {
     }
 }
 
+#[unsized_vstruct(tail = [u64])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct btree_node_entry<S = Validated, T: ?Sized = [u64]> {
+pub struct btree_node_entry {
     pub csum: c::bch_csum,
 
     /* C's vstruct macros find u64s and _data on the entry itself: */
@@ -2140,10 +2139,10 @@ pub struct btree_node_entry<S = Validated, T: ?Sized = [u64]> {
 			u64 _data[];
 		};
 	}")]
-    pub keys: c::bset<S, T>,
+    pub keys: Ffi<c::bset>,
 }
 vstruct!(unsized btree_node_entry, keys.u64s);
-c_default!(btree_node_entry<Validated, [u64; 0]>);
+c_default!(btree_node_entry__ffi);
 
 c_verbatim!(r#"
 _Static_assert(offsetof(struct btree_node, u64s) == offsetof(struct btree_node, keys.u64s) &&

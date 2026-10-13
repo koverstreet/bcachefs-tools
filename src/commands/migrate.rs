@@ -600,7 +600,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
     assert_eq!(actual_sb_size, sb_size, "sb_max_size_bits mismatch after recovery");
 
     // Apply superblock layout changes (FS is already RW)
-    let sb_ref = unsafe { &mut *(*ca).disk_sb.sb };
+    let sb_ref = unsafe { (*ca).disk_sb.sb_mut() };
     add_default_sb_layout(sb_ref)?;
 
     // Mark the new sb buckets in FS metadata

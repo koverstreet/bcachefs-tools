@@ -278,7 +278,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                                      --error keys has nothing to corrupt"))?;
 
                             let (victim, what) = if cli.error == ErrorType::Csum {
-                                (bset.at + std::mem::offset_of!(c::bset, journal_seq),
+                                (bset.at + std::mem::offset_of!(Ffi<c::bset>, journal_seq),
                                  "bset header")
                             } else {
                                 /* midway into the keys: inside the checksummed

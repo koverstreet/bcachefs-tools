@@ -13,21 +13,23 @@
 //! from C's pointer: never by widening a &T, which reaches only as far as the
 //! T, and never from fewer bytes than its header.
 //!
-//! An unsized vstruct is one definition, generic over its state and its tail
-//! - `struct jset<S = Validated, T: ?Sized = [u64]>` - and a reference to one,
-//! &jset<S>, is fat: it has the tail's length, and reaches every byte of the
-//! value and none past. Its state says what's known of its counts, and its
-//! entries are walked in the same state:
+//! An unsized vstruct is a family of definitions, one per state - each its
+//! own, as states that differ in structure are different types - written by
+//! #[unsized_vstruct] from C's, and `jset<S>` picks one (Family). A reference
+//! to one, &jset<S>, is fat: it has the tail's length, and reaches every byte
+//! of the value and none past. Its state says what's known of its counts, and
+//! its entries are walked in the same state:
 //!  - Validated, the default: what C read and validated, from C's pointer
 //!    (from_ffi()). Its counts are trusted, as C trusts them.
 //!  - Unvalidated: bytes from outside - off a device, from the kernel
 //!    (from_bytes()). Its count was checked against them, an overrun an
 //!    error; its entries' are checked as they're walked.
-//! C has its sized instance, Ffi<T> - its tail zero-length, C's flexible array
-//! - which is what Rust names wherever it meets C. A count is no field to set
+//! Each state's definition is the header, then the tail, and derefs to the
+//! header: C's struct, Ffi<T> - its tail zero-length, C's flexible array -
+//! which is what Rust names wherever it meets C. A count is no field to set
 //! through &mut: it changes only through what holds the value, which has the
 //! room for it to grow - so an unsized vstruct's count is private, read as
-//! T::u64s().
+//! u64s().
 //!
 //! Sized types with a tail, not yet unsized - an ioctl's reply, a replicas
 //! entry: a FlexArray, its tail an array the header counts, reached as an
@@ -229,45 +231,28 @@ pub(crate) use floored_by_self;
 /// `start = 0` where the count includes the header, as a superblock
 /// field's does.
 ///
-/// vstruct!(unsized T, u64s), for an unsized vstruct, T<S, [E]> (see
-/// Unsized): the count is its header's, Ffi<T>'s - and a reference's length
-/// is the value's, size_of_val(). Its count reads as T::u64s(), on every
-/// instance; it's no field to set but the container's, which has the room
-/// for it - VStruct, on Ffi<T>, builds a header.
+/// vstruct!(unsized T, u64s), for an unsized vstruct, #[unsized_vstruct]'s
+/// family: the count is its header's, T__ffi's - and each state's length is
+/// its reference's, size_of_val(). Its count reads as u64s(), on the header,
+/// which each state derefs to; it's no field to set but the container's,
+/// which has the room for it - VStruct, on the header, builds one.
 macro_rules! vstruct {
-    // Ffi<T>, by name - see Unsized::Ffi
-    (unsized $t:ident, $count:ident) => {
-        $crate::util::vstructs::vstruct!(@impl
-            $t<$crate::util::vstructs::Validated, [<$t as $crate::util::vstructs::Unsized>::Elem; 0]>,
-            ::core::mem::size_of::<$crate::util::vstructs::Ffi<$t>>(), $count);
+    (unsized $t:ident, $count:ident) => { $crate::paste! {
+        $crate::util::vstructs::vstruct!(@impl [<$t __ffi>],
+            ::core::mem::size_of::<[<$t __ffi>]>(), $count);
         $crate::util::vstructs::vstruct!(@unsized $t, $count);
-    };
+    } };
     // counted by the header it embeds last - a btree_node's bset, its keys:
     // the count is that header's, and its own u64s() reads it
-    (unsized $t:ident, $hdr:ident . $count:ident) => {
-        $crate::util::vstructs::vstruct!(
-            $t<$crate::util::vstructs::Validated, [<$t as $crate::util::vstructs::Unsized>::Elem; 0]>,
-            $hdr.$count);
-        $crate::util::vstructs::vstruct!(@bytes $t);
-    };
-    (unsized $t:ident, $count:ident, start = $start:expr) => {
-        $crate::util::vstructs::vstruct!(@impl
-            $t<$crate::util::vstructs::Validated, [<$t as $crate::util::vstructs::Unsized>::Elem; 0]>,
-            $start, $count);
+    (unsized $t:ident, $hdr:ident . $count:ident) => { $crate::paste! {
+        $crate::util::vstructs::vstruct!([<$t __ffi>], $hdr.$count);
+    } };
+    (unsized $t:ident, $count:ident, start = $start:expr) => { $crate::paste! {
+        $crate::util::vstructs::vstruct!(@impl [<$t __ffi>], $start, $count);
         $crate::util::vstructs::vstruct!(@unsized $t, $count);
-    };
-    (@bytes $t:ident) => {
-        impl<S> $crate::util::vstructs::SelfSized for $t<S> {
-            #[inline]
-            fn bytes(&self) -> usize {
-                ::core::mem::size_of_val(self)
-            }
-        }
-    };
-    (@unsized $t:ident, $count:ident) => {
-        $crate::util::vstructs::vstruct!(@bytes $t);
-
-        impl<S, T: ?Sized> $t<S, T> {
+    } };
+    (@unsized $t:ident, $count:ident) => { $crate::paste! {
+        impl [<$t __ffi>] {
             /// Its count, as a usize - to read: it changes only through what
             /// holds the value, which has room for it to grow.
             #[allow(dead_code)]
@@ -275,7 +260,7 @@ macro_rules! vstruct {
                 $crate::util::vstructs::Count::count(&{ self.$count })
             }
         }
-    };
+    } };
     ($t:ty, $($count:ident).+, start = $start:expr) => {
         $crate::util::vstructs::vstruct!(@impl $t, $start, $($count).+);
     };
@@ -318,8 +303,8 @@ pub(crate) use vstruct;
 /// an error ending the walk. With `thin E`, entries that aren't unsized -
 /// keys - as a View, or an UnvalidatedRef(Mut), of their own bytes.
 macro_rules! vstruct_container {
-    (unsized $t:ident, $entry:ident) => {
-        impl $t<$crate::util::vstructs::Validated> {
+    (unsized $t:ident, $entry:ident) => { $crate::paste! {
+        impl [<$t __validated>] {
             pub fn entries(&self)
                 -> $crate::util::vstructs::ValidatedEntries<'_, $entry<$crate::util::vstructs::Validated>>
             {
@@ -327,7 +312,7 @@ macro_rules! vstruct_container {
             }
         }
 
-        impl $t<$crate::util::vstructs::Unvalidated> {
+        impl [<$t __unvalidated>] {
             pub fn entries(&self)
                 -> $crate::util::vstructs::UnvalidatedEntries<'_, $entry<$crate::util::vstructs::Unvalidated>>
             {
@@ -342,15 +327,15 @@ macro_rules! vstruct_container {
         }
 
         $crate::util::vstructs::vstruct_container!(@start $t);
-    };
-    (unsized $t:ident, thin $entry:ty) => {
-        impl $t<$crate::util::vstructs::Validated> {
+    } };
+    (unsized $t:ident, thin $entry:ty) => { $crate::paste! {
+        impl [<$t __validated>] {
             pub fn entries(&self) -> $crate::util::vstructs::ViewEntries<'_, $entry> {
                 $crate::util::vstructs::ViewEntries::new(self.start_bytes())
             }
         }
 
-        impl $t<$crate::util::vstructs::Unvalidated> {
+        impl [<$t __unvalidated>] {
             pub fn entries(&self) -> $crate::util::vstructs::UnvalidatedRefEntries<'_, $entry> {
                 $crate::util::vstructs::UnvalidatedRefEntries::new(self.start_bytes())
             }
@@ -361,16 +346,23 @@ macro_rules! vstruct_container {
         }
 
         $crate::util::vstructs::vstruct_container!(@start $t);
-    };
-    (@start $t:ident) => {
-        impl<S> $t<S> {
+    } };
+    (@start $t:ident) => { $crate::paste! {
+        $crate::util::vstructs::vstruct_container!(@start_of [<$t __unvalidated>], [<$t __ffi>]);
+        $crate::util::vstructs::vstruct_container!(@start_of [<$t __validated>], [<$t __ffi>]);
+
+        impl [<$t __unvalidated>] {
+            /// start_bytes(), mutably: for entries_mut().
+            fn start_bytes_mut(&mut self) -> &mut [u8] {
+                &mut self.as_bytes_mut()[::core::mem::offset_of!([<$t __ffi>], start)..]
+            }
+        }
+    } };
+    (@start_of $s:ident, $ffi:ident) => {
+        impl $s {
             /// Its entries' bytes: from its start[] to its end.
             fn start_bytes(&self) -> &[u8] {
-                &self.as_bytes()[::core::mem::offset_of!($t, start)..]
-            }
-
-            fn start_bytes_mut(&mut self) -> &mut [u8] {
-                &mut self.as_bytes_mut()[::core::mem::offset_of!($t, start)..]
+                &self.as_bytes()[::core::mem::offset_of!($ffi, start)..]
             }
         }
     };
@@ -504,7 +496,9 @@ impl<'a, T: SelfSized> Flex<'a, T> {
 
 // ---- UnvalidatedRef: bytes whose counts haven't been checked ---------------
 
-/// An UnvalidatedRef's header doesn't match the bytes it's made from.
+/// Bytes that can't be the value read from them: they don't hold its header,
+/// aligned, or as many as its count says. What from_bytes() and the checked
+/// walks return.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VStructError {
     /// They don't hold @ty's header, or what it says: @want bytes, @have.
@@ -727,33 +721,76 @@ pub struct Unvalidated;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Validated;
 
-/// What C has of unsized vstruct T: its sized instance - the same
-/// definition, its tail zero-length - which C has as the struct itself, its
-/// flexible array _data[]. What Rust names wherever it meets C: an extern's
-/// parameters, a pointer field, a struct that embeds one.
-pub type Ffi<T> = <T as Unsized>::Ffi;
+/// A type's definitions, one per state: states that differ in structure are
+/// different types, so each is its own definition - written by macro,
+/// #[unsized_vstruct] - and X<S>, an alias, picks one:
+///
+///   pub type jset<S = Validated> = <S as State>::Of<jset__family>;
+///
+/// The definitions are named - X__ffi, X__unvalidated, X__validated - and an
+/// impl, hand-written or generated, is always for one of those by name:
+/// X<Validated> is a projection, and an impl for a projection is E0118 if
+/// inherent, and breaks other crates' impls of the same trait (E0119) - to
+/// their coherence check it could be any type.
+pub trait Family {
+    type Unvalidated: ?Sized;
+    type Validated: ?Sized;
+    /// Validated and extended to the current type: every field there, so
+    /// every field a field. An unsized vstruct's is its Validated - its
+    /// header never grew.
+    type Whole: ?Sized;
+}
 
-/// An unsized vstruct: a header, Ffi - whose count says how many bytes the
-/// value spans - then its tail. One definition, generic over its state and
-/// its tail - `struct jset<S = Validated, T: ?Sized = [u64]>` - whose
-/// references are to T<S>: fat, with the tail's length, so a reference
-/// reaches every byte of the value and none past it, and carries what's
-/// known of its counts. #[derive(CStruct)] implements it, with the
-/// constructors: from C's pointer, from_ffi(), and for an Unvalidated one,
-/// from bytes, from_bytes() - its count checked against them.
+/// A state: which of a Family's definitions X<S> is.
+pub trait State {
+    type Of<F: Family>: ?Sized;
+}
+
+impl State for Unvalidated {
+    type Of<F: Family> = F::Unvalidated;
+}
+
+impl State for Validated {
+    type Of<F: Family> = F::Validated;
+}
+
+/// What a Validated value of a type that grew is, extended to the current
+/// type - see Family::Whole.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Whole;
+
+impl State for Whole {
+    type Of<F: Family> = F::Whole;
+}
+
+/// What C has of a family's type: its struct - an unsized vstruct's header,
+/// its tail zero-length, C's flexible array. The family's X__ffi.
+/// Implemented for each state's definition.
+pub trait HasFfi {
+    /// C's struct. An impl is never for Ffi<T> itself - a projection - but
+    /// for the family's definition by name, X__ffi.
+    type Ffi: Plain;
+}
+
+/// What C has of family type T, by T's name: its struct - see HasFfi. What
+/// Rust names wherever it meets C: an extern's parameters, a pointer field,
+/// a struct that embeds one.
+pub type Ffi<T> = <T as HasFfi>::Ffi;
+
+/// A DST of ours, in a state: a sized head, which it derefs to, then its
+/// tail - a slice. Its references are fat, with the tail's length, so a
+/// reference reaches every byte of the value and none past it. An unsized
+/// vstruct's head is C's struct, its header, whose count says how long the
+/// value is (#[unsized_vstruct]).
 ///
 /// # Safety
-/// Self is Ffi up to its tail - the same fields at the same offsets - and
-/// its tail starts at size_of::<Ffi>(), every bit pattern of it valid, each
-/// element a multiple of Ffi's alignment long - so no padding follows the
-/// last, which a reference would claim; from_raw() and from_raw_mut() make a
-/// pointer to all of @bytes, which are no fewer than Ffi's.
+/// Self is Head then its tail, at size_of::<Head>(), every bit pattern of it
+/// valid; from_raw() and from_raw_mut() make a pointer to all of @bytes,
+/// which are no fewer than Head's - a reference from it claims them, and
+/// none past, if they're a whole number of Self's alignment long too.
 pub unsafe trait Unsized {
-    /// The sized instance, C's: its count is the value's length. An impl
-    /// is never for Ffi<T> itself - a projection, which to another crate's
-    /// coherence check could be any type - but for the instance by name,
-    /// T<Validated, [Elem; 0]>.
-    type Ffi: Plain + SelfSized;
+    /// What precedes the tail: what it derefs to.
+    type Head: Plain;
 
     /// What its tail holds.
     type Elem: Plain;
@@ -766,12 +803,17 @@ pub unsafe trait Unsized {
 }
 
 /// The T C's pointer @p is to, as long as its count says - not widened from
-/// a &Ffi<T>, which reaches only the header: T::from_ffi().
+/// a reference to its header, which reaches only that: T::from_ffi(). For a
+/// T whose head says how long it is, an unsized vstruct's.
 ///
 /// # Safety
 /// @p points to a T whose count is right for its state, and those bytes stay
 /// valid, and unwritten, for 'a.
-pub unsafe fn from_ffi<'a, T: Unsized + ?Sized>(p: *const T::Ffi) -> &'a T {
+pub unsafe fn from_ffi<'a, T>(p: *const T::Head) -> &'a T
+where
+    T: Unsized + ?Sized,
+    T::Head: SelfSized,
+{
     // SAFETY: the caller's
     unsafe { &*T::from_raw(p.cast(), (*p).bytes()) }
 }
@@ -780,7 +822,11 @@ pub unsafe fn from_ffi<'a, T: Unsized + ?Sized>(p: *const T::Ffi) -> &'a T {
 ///
 /// # Safety
 /// As from_ffi(), and nothing else touches those bytes for 'a.
-pub unsafe fn from_ffi_mut<'a, T: Unsized + ?Sized>(p: *mut T::Ffi) -> &'a mut T {
+pub unsafe fn from_ffi_mut<'a, T>(p: *mut T::Head) -> &'a mut T
+where
+    T: Unsized + ?Sized,
+    T::Head: SelfSized,
+{
     // SAFETY: the caller's
     unsafe { &mut *T::from_raw_mut(p.cast(), (*p).bytes()) }
 }
@@ -788,22 +834,31 @@ pub unsafe fn from_ffi_mut<'a, T: Unsized + ?Sized>(p: *mut T::Ffi) -> &'a mut T
 /// The T at the start of @bytes, as many as its count says - an error if they
 /// don't hold its header, aligned, or that many, or it says fewer than its
 /// header: T::from_bytes(), for an Unvalidated T.
-pub fn from_bytes<T: Unsized + ?Sized>(bytes: &[u8]) -> Result<&T, VStructError> {
-    let len = checked_bytes::<T::Ffi>(bytes)?;
+pub fn from_bytes<T>(bytes: &[u8]) -> Result<&T, VStructError>
+where
+    T: Unsized + ?Sized,
+    T::Head: SelfSized,
+{
+    let len = checked_bytes::<T::Head>(bytes)?;
     // SAFETY: that many are there, aligned, and any bytes are a T
     Ok(unsafe { &*T::from_raw(bytes.as_ptr(), len) })
 }
 
 /// from_bytes(), mutably: T::from_bytes_mut().
-pub fn from_bytes_mut<T: Unsized + ?Sized>(bytes: &mut [u8]) -> Result<&mut T, VStructError> {
-    let len = checked_bytes::<T::Ffi>(bytes)?;
+pub fn from_bytes_mut<T>(bytes: &mut [u8]) -> Result<&mut T, VStructError>
+where
+    T: Unsized + ?Sized,
+    T::Head: SelfSized,
+{
+    let len = checked_bytes::<T::Head>(bytes)?;
     // SAFETY: as from_bytes()
     Ok(unsafe { &mut *T::from_raw_mut(bytes.as_mut_ptr(), len) })
 }
 
 /// @v's bytes, every one: what its reference reaches - T::as_bytes().
 pub fn bytes_of<T: Unsized + ?Sized>(v: &T) -> &[u8] {
-    // SAFETY: the value's own bytes; an unsized vstruct is Plain throughout
+    // SAFETY: the value's own bytes: Unsized's are its head's and its tail's,
+    // both Plain
     unsafe { core::slice::from_raw_parts((v as *const T).cast::<u8>(), size_of_val(v)) }
 }
 
@@ -831,11 +886,11 @@ impl<'a, E: ?Sized> ValidatedEntries<'a, E> {
     }
 }
 
-impl<'a, E: Unsized + ?Sized + 'a> Iterator for ValidatedEntries<'a, E> {
+impl<'a, E: Unsized<Head: SelfSized> + ?Sized + 'a> Iterator for ValidatedEntries<'a, E> {
     type Item = &'a E;
 
     fn next(&mut self) -> Option<&'a E> {
-        let Ok(len) = checked_bytes::<E::Ffi>(self.rest) else {
+        let Ok(len) = checked_bytes::<E::Head>(self.rest) else {
             self.rest = &[];
             return None;
         };
@@ -862,7 +917,7 @@ impl<'a, E: ?Sized> UnvalidatedEntries<'a, E> {
     }
 }
 
-impl<'a, E: Unsized + ?Sized + 'a> Iterator for UnvalidatedEntries<'a, E> {
+impl<'a, E: Unsized<Head: SelfSized> + ?Sized + 'a> Iterator for UnvalidatedEntries<'a, E> {
     type Item = Result<&'a E, VStructError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -894,12 +949,12 @@ impl<'a, E: ?Sized> UnvalidatedEntriesMut<'a, E> {
     }
 }
 
-impl<'a, E: Unsized + ?Sized + 'a> Iterator for UnvalidatedEntriesMut<'a, E> {
+impl<'a, E: Unsized<Head: SelfSized> + ?Sized + 'a> Iterator for UnvalidatedEntriesMut<'a, E> {
     type Item = Result<&'a mut E, VStructError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let rest = self.rest.take().filter(|r| !r.is_empty())?;
-        match checked_bytes::<E::Ffi>(rest) {
+        match checked_bytes::<E::Head>(rest) {
             Ok(len) => {
                 let (e, rest) = rest.split_at_mut(len);
                 self.rest = Some(rest);
@@ -1404,30 +1459,30 @@ mod tests {
 mod unsized_tests {
     use super::*;
     use crate::types::{Le16, Le32};
-    use cstruct_macros::{CStruct, Plain};
+    use cstruct_macros::{unsized_vstruct, CStruct, Plain};
 
     /// A container of tents: 8 bytes of header, its u64s counting what follows.
+    #[unsized_vstruct]
     #[repr(C)]
     #[derive(Default, CStruct, Plain)]
-    pub struct tcont<S = Validated, T: ?Sized = [u64]> {
+    pub struct tcont {
         u64s:      Le32,
         pub tag:   u32,
         pub start: [Ffi<tent>; 0],
-        _s:        PhantomData<S>,
-        pub _data: T,
+        pub _data: [u64; 0],
     }
     vstruct!(unsized tcont, u64s);
     vstruct_container!(unsized tcont, tent);
 
     /// An entry, its u64s counting itself, as a superblock field's does.
+    #[unsized_vstruct]
     #[repr(C)]
     #[derive(Default, CStruct, Plain)]
-    pub struct tent<S = Validated, T: ?Sized = [u64]> {
+    pub struct tent {
         u64s:      Le16,
         pub ty:    u16,
         pub pad:   u32,
-        _s:        PhantomData<S>,
-        pub _data: T,
+        pub _data: [u64; 0],
     }
     vstruct!(unsized tent, u64s, start = 0);
 

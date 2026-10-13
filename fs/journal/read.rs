@@ -1,14 +1,14 @@
 use crate::c;
 use crate::data::checksum::BCH_NONCE_JOURNAL;
 use crate::types::Le32;
-use crate::util::vstructs::Validated;
+use crate::util::vstructs::{Ffi, Validated};
 
 #[allow(non_camel_case_types)]
 pub type journal_entry_type = c::bch_jset_entry_type;
 
 // ---- jset helpers ----
 
-impl<S, T: ?Sized> c::jset<S, T> {
+impl c::jset__ffi {
     /// The nonce of this journal entry: its seq, in the journal domain.
     pub fn nonce(&self) -> c::nonce {
         let seq = self.seq.get();
@@ -39,7 +39,7 @@ impl c::journal_replay {
 // ---- entry type conversion ----
 
 /// Convert entry type byte to the raw journal entry type.
-pub fn entry_type<S>(entry: &c::jset_entry<S>) -> c::bch_jset_entry_type {
+pub fn entry_type(entry: &Ffi<c::jset_entry>) -> c::bch_jset_entry_type {
     c::bch_jset_entry_type(entry.type_ as u32)
 }
 
@@ -48,7 +48,7 @@ pub fn entry_type_is_known(t: c::bch_jset_entry_type) -> bool {
 }
 
 /// Convert entry btree_id byte to the enum, if it's a known btree.
-pub fn entry_btree_id<S>(entry: &c::jset_entry<S>) -> Option<c::btree_id> {
+pub fn entry_btree_id(entry: &Ffi<c::jset_entry>) -> Option<c::btree_id> {
     c::btree_id::from_raw(entry.btree_id as u32)
 }
 

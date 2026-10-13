@@ -25,6 +25,7 @@ use std::process;
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
+use bcachefs_kernel::util::vstructs::Validated;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::sb::sb_field_type;
 use bcachefs_kernel::{metadata_version, opt_id};
@@ -651,7 +652,9 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         let mut buf = Printbuf::new();
         buf.set_human_readable(true);
         let fields = sb_field_type::members_v2.bit();
-        unsafe { crate::wrappers::sb_display::sb_to_text_with_names(&mut buf, std::ptr::null_mut(), &*sb, false, fields, -1) };
+        // SAFETY: the superblock format() built, as long as its count says
+        let sb = unsafe { c::bch_sb::<Validated>::from_ffi(sb) };
+        unsafe { crate::wrappers::sb_display::sb_to_text_with_names(&mut buf, std::ptr::null_mut(), sb, false, fields, -1) };
         print!("{}", buf);
     }
     unsafe { libc::free(sb as *mut _) };

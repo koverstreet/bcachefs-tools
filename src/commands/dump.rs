@@ -28,7 +28,7 @@ use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
 // symmetric, so the same call both decrypts and re-encrypts.
 
 fn jset_encrypt(fs: &Fs, j: &mut c::jset<Unvalidated>, csum_type: u32) -> i32 {
-    let off = std::mem::offset_of!(c::jset, encrypted_start);
+    let off = std::mem::offset_of!(Ffi<c::jset>, encrypted_start);
     let (nonce, len) = (j.nonce(), size_of_val(j) - off);
     // SAFETY: the jset's bytes, past encrypted_start: its pointer reaches all of them
     unsafe { c::bch2_encrypt(fs.raw, csum_type, nonce, j.as_ffi_mut().cast::<u8>().add(off).cast(), len) }
@@ -304,7 +304,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
     // The node's packed-key format lives in the btree_node header at the start
     // of the buffer; packed keys are unpacked against it.
     let format_ptr = unsafe {
-        buf.as_ptr().add(std::mem::offset_of!(c::btree_node, format)) as *const c::bkey_format
+        buf.as_ptr().add(std::mem::offset_of!(Ffi<c::btree_node>, format)) as *const c::bkey_format
     };
 
     let mut first = true;

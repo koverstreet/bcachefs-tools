@@ -43,6 +43,9 @@
 //!   #[derive(View)]      a projection for each field on a View of the type:
 //!                        its fields read as zero past a short value's end
 //!                        (vstructs.rs)
+//!   #[unsized_vstruct]   on C's struct ending in a flexible array: a family
+//!                        of definitions, one per state, and X<S> picking
+//!                        one (vstructs.rs)
 //!
 //! Zero dependencies: the kernel build compiles this with a bare rustc.
 
@@ -223,9 +226,8 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         let path = if path.is_empty() { String::new() } else { format!("{path}::") };
         forward.push_str(&format!("{path}__{ty}_forward!({name}, {});\n", f.rust_name()));
     }
-    // the layout C has: an unsized vstruct's sized instance's (CGeneric)
-    let inst = def.instance();
-    let mut nums = size_align(&inst);
+    let inst = def.rust_ident();
+    let mut nums = size_align(inst);
     for f in &def.fields {
         let field = f.rust_name();
         let proj = format!("|p: *const {inst}| unsafe {{ ::core::ptr::addr_of!((*p).{field}) }}");
@@ -238,8 +240,7 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         .map(|f| thin_pointers(name, &f.cfg, &[(f.rust_name(), f.ty.clone())], None))
         .collect();
     let flex = vstructs::flex_array(&def)?;
-    let unsized_ = vstructs::unsized_impl(&def)?;
-    Ok(tokens(&format!("{forward}{flex}{unsized_}const _: () = {{\n{thin}}};\n{}", record(&text, &nums))))
+    Ok(tokens(&format!("{forward}{flex}const _: () = {{\n{thin}}};\n{}", record(&text, &nums))))
 }
 
 /// bitfield_struct::bitfield, recorded - and __NAME_forward!(STRUCT, field),
@@ -267,6 +268,15 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
 #[proc_macro_attribute]
 pub fn bitfield(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand("#[bitfield]", || bitfield_expand(attr, item))
+}
+
+/// `#[unsized_vstruct]`, on C's definition of a struct ending in a flexible
+/// array: the family of its definitions, one per state - C's, renamed X__ffi,
+/// and each state's, a DST of the header and its tail - and the alias X<S>
+/// that picks one. See vstructs.rs.
+#[proc_macro_attribute]
+pub fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand("#[unsized_vstruct]", || vstructs::unsized_vstruct(attr, item))
 }
 
 fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
@@ -921,7 +931,7 @@ pub fn c_extern(input: TokenStream) -> TokenStream {
 /// @ret - is one: a compile error if it's fat, a pointer to an unsized type,
 /// whose metadata C has nowhere for. improper_ctypes can't say so: rustc
 /// doesn't report it in what a proc macro generates. A pointer to an unsized
-/// vstruct is to its sized instance, Ffi<T>, which is C's.
+/// vstruct is to its header, Ffi<T>, which is C's struct.
 fn thin_pointers(name: &str, cfg: &Option<cstruct::Cfg>, params: &[(String, String)], ret: Option<&str>) -> String {
     params.iter()
         .map(|(n, ty)| (n.as_str(), ty.as_str()))
@@ -1140,10 +1150,10 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
     }
 
     Ok(tokens(&format!(
-        "{}impl{} {} {{\n{methods}}}\n\
+        "{}impl {} {{\n{methods}}}\n\
          #[allow(non_upper_case_globals)]\n\
          pub const {table}: &[crate::typeinfo::BitmaskField] = &[\n{table_entries}];\n\
          const _: () = assert!(crate::typeinfo::bitmasks_listed({table:?}),\n\
                                \"{table}: not in typeinfo.rs's BITMASKS - add it\");\n",
-        record(&text, &[]), b.impl_params, b.rust_type)))
+        record(&text, &[]), b.rust_type)))
 }

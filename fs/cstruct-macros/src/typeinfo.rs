@@ -18,7 +18,7 @@
 
 use proc_macro::TokenStream;
 
-use crate::cstruct::{field_type, is_phantom, parse_cstruct, CKind, FieldType};
+use crate::cstruct::{field_type, parse_cstruct, CKind, FieldType};
 use crate::tokens;
 
 const OPAQUE: &str = "crate::typeinfo::FieldKind::Opaque";
@@ -29,13 +29,11 @@ fn derives_type_info(name: &str) -> bool {
     name.starts_with("bch_") || matches!(name, "bpos" | "bkey" | "bversion")
 }
 
-/// An unsized vstruct's (cstruct.rs' CGeneric) is every instance's, sized or
-/// not, in every state: the fields C has, laid out as C's instance - its
-/// state marker isn't one.
+/// By C's name: a family's C definition, X__ffi, is struct X to C.
 pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&input.to_string())?;
     let name = &def.name;
-    let inst = def.instance();
+    let inst = def.rust_ident();
 
     let shape = match def.kind {
         CKind::Struct => "Struct",
@@ -45,7 +43,7 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
     let mut fields = String::new();
     if def.kind == CKind::Struct {
         let last = def.fields.len().saturating_sub(1);
-        for (i, f) in def.fields.iter().enumerate().filter(|(_, f)| !is_phantom(&f.ty)) {
+        for (i, f) in def.fields.iter().enumerate() {
             let field = f.rust_name();
             fields.push_str(&format!(
                 "crate::typeinfo::FieldInfo {{ \
@@ -56,24 +54,23 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
         }
     }
 
-    let (params, ty) = def.every_instance();
-    Ok(tokens(&info_of(&params, &ty, name, &inst, shape, &fields)))
+    Ok(tokens(&info_of(inst, name, shape, &fields)))
 }
 
 /// The TypeInfo impl for @name: @fields its FieldInfo entries - none for a
 /// type described by its size alone.
 pub(crate) fn info(name: &str, shape: &str, fields: &str) -> String {
-    info_of("", name, name, name, shape, fields)
+    info_of(name, name, shape, fields)
 }
 
-/// info(), for type @ty with impl parameters @params, its size @sized's.
-fn info_of(params: &str, ty: &str, name: &str, sized: &str, shape: &str, fields: &str) -> String {
+/// info(), for Rust type @ty, which C names @name.
+fn info_of(ty: &str, name: &str, shape: &str, fields: &str) -> String {
     format!(
         "#[automatically_derived]\n\
-         impl{params} crate::typeinfo::TypeInfo for {ty} {{\n\
+         impl crate::typeinfo::TypeInfo for {ty} {{\n\
              const INFO: &'static crate::typeinfo::StructInfo = &crate::typeinfo::StructInfo {{\n\
                  name: \"{name}\",\n\
-                 size: ::core::mem::size_of::<{sized}>(),\n\
+                 size: ::core::mem::size_of::<{ty}>(),\n\
                  shape: crate::typeinfo::Shape::{shape},\n\
                  fields: &[{fields}],\n\
              }};\n\

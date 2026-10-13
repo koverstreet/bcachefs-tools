@@ -171,57 +171,12 @@ pub struct CStructDef {
     /// an alignment marker leading the struct: Rust's repr(align) takes only
     /// a literal. The generated header asserts the two agree.
     pub c_align:   Option<String>,
-    /// Its type parameters: an unsized vstruct's - see CGeneric. C has one
-    /// instance of it, instance().
-    pub generics:  Vec<CGeneric>,
-}
-
-/// A type parameter of a CStruct. Only an unsized vstruct has them: its tail,
-/// `T: ?Sized = [E]` - the type of its last field, `_data: T` - and its
-/// state, `S = Validated`, which only a PhantomData field names. C has its
-/// sized instance, every parameter its default but the tail, which is
-/// `[E; 0]`: E _data[], C's flexible array - and Rust names that instance
-/// Ffi<T> wherever it meets C.
-#[derive(Debug)]
-pub struct CGeneric {
-    pub name:    String,
-    /// As written.
-    pub default: String,
-    /// The tail's element type, E, if it's the tail.
-    pub tail:    Option<String>,
 }
 
 impl CStructDef {
     /// Its Rust name: C's, but for #[c_name].
     pub fn rust_ident(&self) -> &str {
         self.rust_name.as_deref().unwrap_or(&self.name)
-    }
-
-    /// The type C has: the struct, or for one with type parameters, its
-    /// sized instance - see CGeneric.
-    pub fn instance(&self) -> String {
-        if self.generics.is_empty() {
-            return self.rust_ident().to_string();
-        }
-        let args: Vec<String> = self.generics.iter()
-            .map(|g| g.tail.as_ref().map_or_else(|| g.default.clone(), |e| format!("[{e}; 0]")))
-            .collect();
-        format!("{}<{}>", self.rust_ident(), args.join(", "))
-    }
-
-    /// Every instance, sized or not, in every state - for an impl of all of
-    /// them: the impl's parameters, and the type. The struct, with no
-    /// parameters, if it has none.
-    #[allow(dead_code)] // the macros'
-    pub fn every_instance(&self) -> (String, String) {
-        if self.generics.is_empty() {
-            return (String::new(), self.rust_ident().to_string());
-        }
-        let params: Vec<String> = self.generics.iter()
-            .map(|g| if g.tail.is_some() { format!("{}: ?Sized", g.name) } else { g.name.clone() })
-            .collect();
-        let args: Vec<&str> = self.generics.iter().map(|g| g.name.as_str()).collect();
-        (format!("<{}>", params.join(", ")), format!("{}<{}>", self.rust_ident(), args.join(", ")))
     }
 
     /// #[repr(C)], in every configuration.
@@ -357,12 +312,9 @@ pub struct CBitmask {
     pub cfg:        Option<Cfg>,
     pub macro_name: String,
     pub c_type:     String,
-    /// The type the accessors are on, and the impl's parameters: "foo" and
-    /// "", or for `struct foo<S, T: ?Sized>`, an unsized vstruct's every
-    /// instance, "foo<S, T>" and "<S, T: ?Sized>".
+    /// The type the accessors are on: "foo" - or for `struct Ffi<foo>`, a
+    /// family's C definition, "foo__ffi".
     pub rust_type:  String,
-    #[allow(dead_code)] // the macros'
-    pub impl_params: String,
     pub field:      String,
     pub strip:      Option<String>,
     pub entries:    Vec<CBitmaskEntry>,
@@ -654,8 +606,8 @@ pub struct CTaggedUnion {
     /// tag whatever the arms' alignment, which is what the format says.
     pub packed:    bool,
     /// `unsized`: over another's storage, a header its arms embed and run
-    /// past - an unsized vstruct (CGeneric), each reference to which has its
-    /// arm's bytes.
+    /// past - an unsized vstruct, a family (util/vstructs.rs), each state's
+    /// reference to which has its arm's bytes.
     pub unsized_:  bool,
     /// Arm types defined in the block, for nestify::nest!.
     pub defs:      Vec<CTaggedDef>,
@@ -1139,14 +1091,9 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
     let name = name.to_string();
     i += 2;
 
-    let mut generics = Vec::new();
-    if toks.get(i).is_some_and(|t| t.is_punct('<')) {
-        let (g, next) = parse_generics(&name, toks, i)?;
-        generics = g;
-        i = next;
-    }
     if !toks.get(i).is_some_and(|t| t.is_punct('{')) {
-        return Err(format!("{name}: a CStruct has named fields"));
+        return Err(format!("{name}: a CStruct has named fields, and no generics - an unsized \
+                            vstruct's states are each its own definition: #[unsized_vstruct]"));
     }
     let body_end = skip_group(toks, i)? - 1;
     i += 1;
@@ -1276,36 +1223,6 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
         }
     }
 
-    // An unsized vstruct's: its tail field is C's flexible array, its state
-    // marker Rust's alone - see CGeneric.
-    for g in &generics {
-        let uses: Vec<usize> = (0..fields.len()).filter(|&k| fields[k].ty.trim() == g.name).collect();
-        // or the last field is another unsized vstruct, carrying the tail -
-        // a btree_node's bset, `keys: c::bset<S, T>`: C has its sized instance
-        let embeds = |f: &CFieldDef| embedded_vstruct(&f.ty, &g.name);
-        match (&g.tail, uses.as_slice(), fields.last().and_then(embeds)) {
-            (Some(elem), [k], None) if k + 1 == fields.len() => fields[*k].ty = format!("[{elem}; 0]"),
-            (Some(_), [], Some(path)) => fields.last_mut().unwrap().ty = format!("Ffi<{path}>"),
-            (Some(_), _, _) => return Err(format!(
-                "{name}: its tail {} is the type of its last field, or carried by it - another \
-                 unsized vstruct's - and no other", g.name)),
-            (None, [], _) => {}
-            (None, _, _) => return Err(format!(
-                "{name}: {} is a state, which only a PhantomData field names, or an embedded \
-                 unsized vstruct's", g.name)),
-        }
-    }
-    for f in &mut fields {
-        if is_phantom(&f.ty) {
-            if f.c_decl.is_some() || f.cfg.is_some() {
-                return Err(format!("{name}.{}: a PhantomData is no field of C's, in every configuration",
-                                   f.name));
-            }
-            f.c_decl = Some(String::new());
-            f.anon = true;
-        }
-    }
-
     let (name, rust_name) = match a.c_name {
         Some(c) => (c, Some(name)),
         None    => (name, None),
@@ -1314,69 +1231,8 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
     let typedef = a.typedef.map(|t| t.unwrap_or_else(|| name.clone()));
     Ok(Some((CStructDef {
         name, rust_name, kind, cfg: a.cfg, repr: a.repr, cfg_reprs: a.cfg_reprs, fields, typedef,
-        typedef_anon, c_align, generics,
+        typedef_anon, c_align,
     }, body_end + 1)))
-}
-
-/// A struct's type parameters, from the `<` at @i: an unsized vstruct's tail,
-/// `T: ?Sized = [E]`, and states, `S = Default` - see CGeneric. Each has a
-/// default: C's instance is the defaults. And where they end.
-fn parse_generics(name: &str, toks: &[Tok], i: usize) -> Result<(Vec<CGeneric>, usize), String> {
-    let mut depth = 0i32;
-    let mut end = i;
-    loop {
-        match toks.get(end) {
-            Some(Tok::Punct('<' | '(' | '[')) => depth += 1,
-            Some(Tok::Punct('>' | ')' | ']')) => depth -= 1,
-            Some(_) => {}
-            None => return Err(format!("{name}: unterminated <")),
-        }
-        end += 1;
-        if depth == 0 {
-            break;
-        }
-    }
-    let mut generics = Vec::new();
-    for p in split_top(&toks[i + 1..end - 1], ',').into_iter().filter(|p| !p.is_empty()) {
-        let err = || format!("{name}: a type parameter is `T: ?Sized = [E]`, the tail, \
-                              or `S = Default`, a state - not {}", tokens_to_rust(p));
-        let [Tok::Ident(n), rest @ ..] = p else { return Err(err()) };
-        let eq = rest.iter().position(|t| t.is_punct('=')).ok_or_else(err)?;
-        let bounds = &rest[..eq];
-        let default = &rest[eq + 1..];
-        let unsized_ = bounds.windows(2).any(|w| w[0].is_punct('?') && w[1].is_ident("Sized"));
-        let tail = match (unsized_, default) {
-            (true, [Tok::Punct('['), elem @ .., Tok::Punct(']')]) if !elem.iter().any(|t| t.is_punct(';')) =>
-                Some(tokens_to_rust(elem)),
-            (true, _) => return Err(err()),
-            (false, _) if bounds.is_empty() => None,
-            (false, _) => return Err(err()),
-        };
-        generics.push(CGeneric { name: n.clone(), default: tokens_to_rust(default), tail });
-    }
-    if generics.iter().filter(|g| g.tail.is_some()).count() != 1 {
-        return Err(format!("{name}: type parameters are an unsized vstruct's, which has one tail"));
-    }
-    Ok((generics, end))
-}
-
-/// The path of @ty, if it's `PATH<.., @tail, ..>`: another unsized vstruct,
-/// its tail @tail - which makes the struct whose last field it is unsized
-/// too, with its length.
-fn embedded_vstruct(ty: &str, tail: &str) -> Option<String> {
-    let toks = tokenize(ty).ok()?;
-    let lt = toks.iter().position(|t| t.is_punct('<'))?;
-    let [Tok::Punct('<'), args @ .., Tok::Punct('>')] = &toks[lt..] else { return None };
-    split_top(args, ',').iter()
-        .any(|a| matches!(a, [Tok::Ident(n)] if n == tail))
-        .then(|| tokens_to_rust(&toks[..lt]))
-}
-
-/// Whether Rust type @ty is a PhantomData, by any path: an unsized
-/// vstruct's state marker, no field of C's.
-pub fn is_phantom(ty: &str) -> bool {
-    let base = ty.split('<').next().unwrap_or(ty);
-    base.rsplit("::").next().is_some_and(|b| b.trim() == "PhantomData")
 }
 
 /// C's alignment, as C spells it, for a field of one of types/lib.rs's
@@ -1505,37 +1361,18 @@ fn parse_bitmask(body: &[Tok], cfg: Option<Cfg>) -> Result<CBitmask, String> {
         return Err(format!("c_bitmask!: {macro_name}: not a bitmask macro"));
     }
     let args_end = skip_group(body, i + 1)?;
-    // the struct, then the field: a struct with type parameters has commas
-    // of its own, within its <>
-    let args = &body[i + 2..args_end - 1];
-    let mut depth = 0i32;
-    let mut parts = vec![0];
-    for (k, t) in args.iter().enumerate() {
-        match t {
-            Tok::Punct('<') => depth += 1,
-            Tok::Punct('>') => depth -= 1,
-            Tok::Punct(',') if depth == 0 => parts.push(k + 1),
-            _ => {}
-        }
-    }
-    parts.push(args.len() + 1);
-    let args: Vec<&[Tok]> = parts.windows(2).map(|w| &args[w[0]..w[1] - 1]).collect();
+    let args = split_top(&body[i + 2..args_end - 1], ',');
     let [ty, field] = args.as_slice() else {
         return Err(format!("c_bitmask! {macro_name}: expected (struct foo, field)"));
     };
-    let (rust_type, impl_params, c_type) = match ty {
-        [Tok::Ident(s), Tok::Ident(n)] if s == "struct" => (n.clone(), String::new(), tokens_to_c(ty)),
-        // an unsized vstruct (CGeneric), its every instance: struct foo<S, T: ?Sized>
-        [Tok::Ident(s), Tok::Ident(n), Tok::Punct('<'), params @ .., Tok::Punct('>')] if s == "struct" => {
-            let names: Vec<&str> = split_top(params, ',').iter()
-                .filter_map(|p| match p.first() {
-                    Some(Tok::Ident(x)) => Some(x.as_str()),
-                    _ => None,
-                })
-                .collect();
-            (format!("{n}<{}>", names.join(", ")), format!("<{}>", tokens_to_rust(params)), format!("struct {n}"))
-        }
-        _ => return Err(format!("c_bitmask! {macro_name}: expected a struct type")),
+    let (rust_type, c_type) = match ty {
+        [Tok::Ident(s), Tok::Ident(n)] if s == "struct" => (n.clone(), tokens_to_c(ty)),
+        // a family's C definition, X__ffi (util/vstructs.rs): its header's
+        // fields, which each state's definition derefs to
+        [Tok::Ident(s), Tok::Ident(f), Tok::Punct('<'), Tok::Ident(n), Tok::Punct('>')]
+            if s == "struct" && f == "Ffi" => (format!("{n}__ffi"), format!("struct {n}")),
+        _ => return Err(format!("c_bitmask! {macro_name}: expected a struct type - struct foo, or \
+                                 struct Ffi<foo> for a family's")),
     };
 
     let mut i = args_end;
@@ -1572,7 +1409,6 @@ fn parse_bitmask(body: &[Tok], cfg: Option<Cfg>) -> Result<CBitmask, String> {
         macro_name: macro_name.to_string(),
         c_type,
         rust_type,
-        impl_params,
         field: tokens_to_c(field),
         strip,
         entries,
@@ -2374,8 +2210,8 @@ fn proto_toks(toks: &[Tok], decl: String, konst: bool, last: bool,
     }
 }
 
-/// T, if @toks is Ffi<T> by any path: an unsized vstruct's sized instance,
-/// which C has as the struct itself (CGeneric).
+/// T, if @toks is Ffi<T> by any path: a family's C definition, which C has
+/// as the struct T itself (util/vstructs.rs).
 fn ffi_arg(toks: &[Tok]) -> Option<&[Tok]> {
     let f = toks.iter().position(|t| t.is_ident("Ffi"))?;
     let path_ok = toks[..f].iter().all(|t| matches!(t, Tok::Ident(_) | Tok::Punct(':')));

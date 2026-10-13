@@ -13,7 +13,7 @@ pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + Plain + Sized {
 
 impl<F: ArmOf<c::bch_sb_field, Tag = u32> + Plain> SbField for F {}
 
-impl<S, T: ?Sized> PartialEq for bch_sb<S, T> {
+impl PartialEq for c::bch_sb__ffi {
     fn eq(&self, other: &Self) -> bool {
         self.magic.b == other.magic.b
             && self.user_uuid.b == other.user_uuid.b
@@ -34,7 +34,7 @@ const BSET_MAGIC: u64 = 0x90135c78b99e07f5;
 
 /// What walks its sections - C's walk, which trusts their counts: a
 /// validated superblock's.
-impl bch_sb {
+impl c::bch_sb__validated {
     /// Its section of type @F: sb_field_get().
     pub fn field<F: SbField>(&self) -> Option<View<'_, F>> {
         sb_field_get(self)
@@ -50,8 +50,8 @@ impl bch_sb {
     }
 }
 
-/// Its header's: every instance's.
-impl<S, T: ?Sized> bch_sb<S, T> {
+/// Its header's: every state's, which each derefs to.
+impl c::bch_sb__ffi {
     pub fn uuid(&self) -> uuid::Uuid {
         uuid::Uuid::from_bytes(self.user_uuid.b)
     }
