@@ -20,7 +20,8 @@ pub mod c {
 		non_upper_case_globals,
 		non_snake_case,
 		dead_code,
-		unnecessary_transmutes
+		unnecessary_transmutes,
+		clippy::all	// bindgen's output
 	)]
 	#[deny(improper_ctypes)]
 	mod generated {

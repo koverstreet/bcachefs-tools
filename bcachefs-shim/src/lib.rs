@@ -21,7 +21,8 @@ pub mod c {
         non_upper_case_globals,
         non_snake_case,
         dead_code,
-        unnecessary_transmutes
+        unnecessary_transmutes,
+        clippy::all // bindgen's output
     )]
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
@@ -41,7 +42,7 @@ pub mod print {
         };
 
         unsafe {
-            c::printk(b"%s\0".as_ptr().cast(), msg.as_ptr());
+            c::printk(c"%s".as_ptr(), msg.as_ptr());
         }
     }
 }

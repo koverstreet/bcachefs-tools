@@ -1065,13 +1065,11 @@ fn item_attrs(toks: &[Tok], mut i: usize) -> Result<(ItemAttrs, usize), String> 
         if let Some(args) = attr_args(attr, "cfg_attr") {
             // cfg_attr(PRED, repr(...)): a repr for one configuration.
             let parts = split_top(args, ',');
-            if let [pred, rest @ ..] = parts.as_slice() {
-                if let [r] = rest {
-                    if let Some(rargs) = attr_args(r, "repr") {
-                        let mut repr = CRepr::default();
-                        parse_repr(rargs, &mut repr)?;
-                        a.cfg_reprs.push((parse_cfg(pred)?, repr));
-                    }
+            if let [pred, r] = parts.as_slice() {
+                if let Some(rargs) = attr_args(r, "repr") {
+                    let mut repr = CRepr::default();
+                    parse_repr(rargs, &mut repr)?;
+                    a.cfg_reprs.push((parse_cfg(pred)?, repr));
                 }
             }
         }

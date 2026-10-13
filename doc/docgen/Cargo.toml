@@ -2,6 +2,7 @@
 name = "bch-docgen"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.85.0"
 
 [[bin]]
 name = "bch-docgen"

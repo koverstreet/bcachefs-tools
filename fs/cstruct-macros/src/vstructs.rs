@@ -639,7 +639,7 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
         let mut out = rename_struct(item, &name, &ffi)?;
         out.extend(tokens(&format!(
             "{all_def}{}",
-            family(&name, &all, &all, &all, &[all.clone()],
+            family(&name, &all, &all, &all, std::slice::from_ref(&all),
                    &format!("/// {name}, in state S - all of it in every one: C's validate rejects\n\
                              /// one shorter. C's struct {name} is Ffi<{name}>.\n")))));
         return Ok(out);
@@ -722,7 +722,7 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
         // the cast checks the floor: an unvalidated one is as good. Its later
         // fields are inline only in its Whole, so that's where c_bitmask!'s
         // setters go
-        family = family(&name, &ty, &ty, &all, &[all.clone()],
+        family = family(&name, &ty, &ty, &all, std::slice::from_ref(&all),
                         &format!("/// {name}, in state S - Validated unless named: from any version since\n\
                                   /// its floor, at its own length. {name}<Whole> is all of it, every\n\
                                   /// field a field. C's struct {name} is Ffi<{name}>.\n")))));
