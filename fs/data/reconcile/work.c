@@ -823,10 +823,16 @@ static int do_reconcile_stripe(struct moving_context *ctxt,
 	if (cuckoo_u64_test(&c->reconcile.stripes_pending, k.k->p.offset))
 		return 0;
 
+	/*
+	 * Repair drops our locks to do IO: @k points into the btree - into the
+	 * key cache, for a retry (do_retry_stripe()) - and may be freed or
+	 * reused by the time it returns. Only the copy is used past this point.
+	 */
 	struct bkey_buf stack_k __cleanup(bch2_bkey_buf_exit);
 	bch2_bkey_buf_init(&stack_k);
 	bch2_bkey_buf_reassemble(&stack_k, k);
-	s = bkey_i_to_s_c_stripe(stack_k.k);;
+	s = bkey_i_to_s_c_stripe(stack_k.k);
+	k = bkey_s_c_null;
 
 	int ret = bch2_stripe_repair(ctxt, iter, s);
 
@@ -839,7 +845,7 @@ static int do_reconcile_stripe(struct moving_context *ctxt,
 	if (ret == -BCH_ERR_stripe_needs_block_evacuate) {
 		if (retry) {
 			darray_push(retry, ((stripe_retry) {
-					    .idx	= k.k->p.offset,
+					    .idx	= s.k->p.offset,
 					    .io_seq	= ctxt->io_seq,
 			}));
 		} else {
@@ -847,7 +853,7 @@ static int do_reconcile_stripe(struct moving_context *ctxt,
 			CLASS(bch_log_msg_ratelimited, msg)(c);
 			prt_printf(&msg.m, "error retrying stripe: %s\n", bch2_err_str(ret));
 			bch2_bkey_val_to_text(&msg.m, c, s.s_c);
-			reconcile_stripe_park(c, k.k->p.offset);
+			reconcile_stripe_park(c, s.k->p.offset);
 		}
 		ret = 0;
 	} else if (ret && !bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
@@ -862,7 +868,7 @@ static int do_reconcile_stripe(struct moving_context *ctxt,
 		prt_printf(&msg.m, "error repairing stripe, leaving it for a later pass: %s\n",
 			   bch2_err_str(ret));
 		bch2_bkey_val_to_text(&msg.m, c, s.s_c);
-		reconcile_stripe_park(c, k.k->p.offset);
+		reconcile_stripe_park(c, s.k->p.offset);
 		ret = 0;
 	}
 
