@@ -166,14 +166,11 @@ pub struct DArray<T, const N: usize = 0> {
 /// How a tagged_union! says which arm it holds: stabby's IDeterminant
 /// (docs.rs/stabby), n-way, over a layout that's given rather than chosen.
 ///
-/// get() is the tag - a function of the whole value, not necessarily a field
-/// of it: an extent entry's is the lowest set bit of its first word. A tagged
-/// union is written payload first, then set() marks it as holding that arm -
-/// stabby's order, so that a tag that's bits of the payload is written after
-/// the payload that would otherwise overwrite it.
-///
-/// tagged_union! makes one for a stored tag; for any other, it's written by
-/// hand and named with `by`.
+/// get() is the tag - a function of the whole value; tagged_union!'s is its
+/// stored tag field. A tagged union is written payload first, then set()
+/// marks it as holding that arm - stabby's order, so that a tag that's bits
+/// of the payload would be written after the payload that would otherwise
+/// overwrite it.
 pub trait Determinant<U: ?Sized> {
     type Tag: Copy + PartialEq;
     fn get(u: &U) -> Self::Tag;

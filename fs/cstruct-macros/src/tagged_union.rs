@@ -12,30 +12,26 @@
 //!   }
 //!
 //!   tagged_union! {
-//!       pub union bch_extent_entry {
-//!           tag type_: u32 = bch_extent_entry_type by ExtentEntryType,
-//!           arms from BCH_EXTENT_ENTRY_TYPES(f, n) => f: bch_extent_ ## f = n,
-//!           pub type_: u64,
+//!       pub union jset_entry in c::jset_entry {
+//!           tag type_: u8 = c::bch_jset_entry_type,
+//!           arm btree_keys: c::jset_entry = ..,
+//!           ...
+//!           unsized,
 //!       }
 //!   }
 //!
 //! A type whose bytes come from outside - disk, or C - with a tag that says
 //! which of its arms it holds, and that may be one this version doesn't know.
 //! The layout is given, not chosen: the storage is the C, plain #[repr(C)]
-//! data - a `struct` is the tag, then a union of the arms, and a `union` is
-//! the arms, with any members of its own (`pub NAME: TYPE`) overlaid on them
-//! for C to read. Either is overlaid with the pad, if any. `packed` is C's
-//! __packed: for an on-disk struct, the payload right after the tag, whatever
-//! the arms' alignment - a struct of the tag and the union otherwise puts the
-//! union at its alignment, and a new arm could move every payload.
+//! data - a `struct` is the tag, then a union of the arms, overlaid with the
+//! pad, if any. `packed` is C's __packed: for an on-disk struct, the payload
+//! right after the tag, whatever the arms' alignment - a struct of the tag
+//! and the union otherwise puts the union at its alignment, and a new arm
+//! could move every payload.
 //!
 //! The tag is a function of the whole value: a crate::types::Determinant,
-//! stabby's idea (docs.rs/stabby), n-way. A struct's is generated, and
-//! returns the field; a union's is written by hand and named with `by` -
-//! an extent entry's tag is the lowest set bit of its first word, bits each
-//! arm's own type field sets - unless it's over another's storage that has
-//! the tag as a field: `tag NAME` is that field, and its Determinant
-//! generated.
+//! stabby's idea (docs.rs/stabby), n-way - generated, returning the tag
+//! field, `tag NAME`.
 //!
 //! Generated, for the first declaration:
 //!
@@ -47,8 +43,6 @@
 //!  - `get()`: the arm the tag selects, by reference - Err(the tag) if it
 //!    isn't one of ours. Shared references only: through a `&mut` to an arm,
 //!    a tag in the arm's own bits could change under whoever holds it.
-//!  - `arm_at()`: the arm a tag selects, from bytes - for arms in a stream,
-//!    each as long as its arm rather than the storage, as extent entries are;
 //!  - `new()`, and `from_arm()` by the arm's type: the payload into zeroed
 //!    storage, then Determinant::set() marks it - stabby's order, so a tag
 //!    that's bits of the payload is the last thing written, not overwritten
@@ -63,17 +57,11 @@
 //! as_bytes() can read any of them. A literal of the storage could leave
 //! some unwritten, as could an arm with padding; nothing makes either.
 //!
-//! Or the storage is another's - `pub struct disk_accounting_pos in
-//! c::disk_accounting_pos`, bindgen's while C defines it - and what's
-//! generated is only the view of it: no storage and no C, the arms' types
-//! another's too. Without the storage's definition, the arms are found where
-//! a `packed` struct has them, right after the tag, or for a union where it
-//! has them, at its start; the asserts check each fits there.
-//!
-//! Or, `unsized`, that storage is a header its arms embed and run past, as
-//! far as its count says - a journal entry's, a superblock field's: an
-//! unsized vstruct (util/vstructs.rs), each reference to which has its arm's
-//! bytes. Then what's generated is the Ref enum, ArmOf, and on each state's
+//! Or, `union NAME in STORAGE { .., unsized }`, the storage is another's: a
+//! header its arms embed and run past, as far as its count says - a journal
+//! entry's, a superblock field's: an unsized vstruct (util/vstructs.rs), each
+//! reference to which has its arm's bytes, and its own C. Then what's
+//! generated is the Ref enum, ArmOf, and on each state's
 //! definition of the storage - X__unvalidated, X__validated - typed(): the
 //! arm its tag selects, over its bytes, in the storage's state - every arm
 //! type has a family (util/vstructs.rs), so an Unvalidated storage's arms are
@@ -271,21 +259,15 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
     let s_ty = tu.storage.clone().unwrap_or_else(|| name.clone());
     let s_size = format!("::core::mem::size_of::<{s_ty}>()");
 
-    // The storage, as C has it: for a struct, the tag then the arms' union
-    // (with types of their own, C's anonymous struct and union); for a union,
-    // the arms. Or none, the storage being another's: a struct's tag is then
-    // at its start, and its arms right after - `packed`, as the parser
-    // requires.
+    // The storage, as C has it: the tag then the arms' union (with types of
+    // their own, C's anonymous struct and union), overlaid with the pad. Or
+    // none, the storage being another's - an unsized union's.
     let arm_fields: String = arms.iter()
         .map(|a| format!("    {vis} {}: {},\n", a.name, a.ty))
         .collect();
-    let member_fields: String = tu.members.iter()
-        .map(|(m, ty)| format!("    {vis} {m}: {ty},\n"))
-        .collect();
     let pad_field = tu.pad.as_ref().map(|p| format!("    {vis} _pad: {p},\n")).unwrap_or_default();
     let storage_attrs = "#[allow(non_camel_case_types)]\n#[repr(C)]\n#[derive(Clone, Copy)]\n";
-    // `packed`: where C has __packed - the arms' union and the tag's struct,
-    // or the union
+    // `packed`: where C has __packed - the arms' union and the tag's struct
     let packed_attrs = if tu.packed {
         "#[allow(non_camel_case_types)]\n#[repr(C, packed)]\n#[derive(Clone, Copy)]\n"
     } else {
@@ -301,58 +283,30 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
     } else {
         vec![("", s_ty.clone())]
     };
-    let (storage, payload_offset, determinant) = if tu.storage.is_some() && tu.union {
-        match &tu.by {
-            Some(by) => (String::new(), "0".to_string(), by.clone()),
-            // the storage's own field: by value, as a packed struct's must be
-            None => {
-                let det = format!("{name}__tag");
-                let impls: String = states.iter()
-                    .map(|(_, s)| format!(
-                        "impl {det_trait}<{s}> for {det} {{\n\
-                             type Tag = {tag_ty};\n\
-                             fn get(u: &{s}) -> {tag_ty} {{\n\
-                                 <{tag_ty}>::from({{ u.{tag} }})\n\
-                             }}\n\
-                             fn set(u: &mut {s}, tag: {tag_ty}) {{\n\
-                                 u.{tag} = tag.into();\n\
-                             }}\n\
-                         }}\n"))
-                    .collect();
-                (format!("/// {name}'s tag: the storage's {tag}.\n\
-                          #[doc(hidden)]\n\
-                          #[allow(non_camel_case_types)]\n\
-                          {vis} struct {det};\n\
-                          \n\
-                          {impls}"),
-                 "0".to_string(),
-                 det)
-            }
-        }
-    } else if tu.storage.is_some() {
+    let (storage, payload_offset, determinant) = if tu.storage.is_some() {
+        // another's storage, a union: its tag is its own field, by value, as
+        // a packed struct's must be
         let det = format!("{name}__tag");
-        (format!("/// {name}'s tag: the storage's first bytes.\n\
+        let impls: String = states.iter()
+            .map(|(_, s)| format!(
+                "impl {det_trait}<{s}> for {det} {{\n\
+                     type Tag = {tag_ty};\n\
+                     fn get(u: &{s}) -> {tag_ty} {{\n\
+                         <{tag_ty}>::from({{ u.{tag} }})\n\
+                     }}\n\
+                     fn set(u: &mut {s}, tag: {tag_ty}) {{\n\
+                         u.{tag} = tag.into();\n\
+                     }}\n\
+                 }}\n"))
+            .collect();
+        (format!("/// {name}'s tag: the storage's {tag}.\n\
                   #[doc(hidden)]\n\
                   #[allow(non_camel_case_types)]\n\
                   {vis} struct {det};\n\
                   \n\
-                  impl {det_trait}<{s_ty}> for {det} {{\n\
-                      type Tag = {tag_ty};\n\
-                      fn get(u: &{s_ty}) -> {tag_ty} {{\n\
-                          // SAFETY: the tag is plain data, at the storage's start\n\
-                          unsafe {{ u.as_bytes().as_ptr().cast::<{tag_ty}>().read_unaligned() }}\n\
-                      }}\n\
-                      fn set(u: &mut {s_ty}, tag: {tag_ty}) {{\n\
-                          // SAFETY: a write of plain data, where get() reads it\n\
-                          unsafe {{ (u as *mut {s_ty}).cast::<{tag_ty}>().write_unaligned(tag) }}\n\
-                      }}\n\
-                  }}\n"),
-         format!("::core::mem::size_of::<{tag_ty}>()"),
-         det)
-    } else if tu.union {
-        (format!("{attrs}{packed_attrs}{vis} union {name} {{\n{arm_fields}{member_fields}{pad_field}}}\n"),
+                  {impls}"),
          "0".to_string(),
-         tu.by.clone().unwrap_or_default())
+         det)
     } else {
         let det = format!("{name}__tag");
         (format!("#[doc(hidden)]\n{packed_attrs}{vis} union {name}__arms {{\n{arm_fields}}}\n\
@@ -394,8 +348,8 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
         .map(|a| format!("    {}({flex}<'a, {}>),\n", a.name, a.ty))
         .collect();
     let gets: String = arms.iter()
-        .map(|a| format!("if tag == ({}) as {tag_ty} {{\n\
-                              return fits::<{}>(b).then(|| {en}Ref::{}({flex}::new_unchecked(b)));\n\
+        .map(|a| format!("if t == ({}) as {tag_ty} && fits::<{}>(b) {{\n\
+                              return Ok({en}Ref::{}({flex}::new_unchecked(b)));\n\
                           }}\n",
                          a.value, a.ty, a.name))
         .collect();
@@ -445,25 +399,6 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
     } else {
         String::new()
     };
-
-    // arm_at(): every sized form has it - an unsized one has its own, of Views
-    let arm_at = format!(
-        "/// The arm @tag selects, at the start of @b - which it may extend to\n\
-         /// their end: None if @tag isn't one of ours, or the arm doesn't fit\n\
-         /// there. For arms in a stream, as a key's extent entries are, each as\n\
-         /// long as its arm rather than the storage: there's no whole storage\n\
-         /// to get() from.\n\
-         #[allow(dead_code)]\n\
-         {vis} fn arm_at<'a>(tag: {tag_ty}, b: &'a [u8]) -> Option<{en}Ref<'a>> {{\n\
-             fn fits<A>(b: &[u8]) -> bool {{\n\
-                 b.len() >= ::core::mem::size_of::<A>() &&\n\
-                     b.as_ptr() as usize % ::core::mem::align_of::<A>() == 0\n\
-             }}\n\
-             // SAFETY: the tag says these are that arm's bytes, an arm is plain data,\n\
-             // and it fits there, aligned: checked\n\
-             unsafe {{\n{gets}}}\n\
-             None\n\
-         }}");
 
     if tu.unsized_ {
         // An unsized vstruct, its arms running past its header as far as its
@@ -615,12 +550,17 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
              /// Err(the tag) if it isn't one of ours.\n\
              #[allow(dead_code)]\n\
              {vis} fn get(&self) -> Result<{en}Ref<'_>, {tag_enum}> {{\n\
+                 fn fits<A>(b: &[u8]) -> bool {{\n\
+                     b.len() >= ::core::mem::size_of::<A>() &&\n\
+                         b.as_ptr() as usize % ::core::mem::align_of::<A>() == 0\n\
+                 }}\n\
                  let t: {tag_ty} = {det}::get(self);\n\
-                 // each arm fits in the storage: asserted below\n\
-                 Self::arm_at(t, &self.as_bytes()[{payload_offset}..]).ok_or({tag_enum}(t as _))\n\
+                 let b = &self.as_bytes()[{payload_offset}..];\n\
+                 // SAFETY: the tag says these are that arm's bytes, an arm is plain\n\
+                 // data, and it fits there, aligned: checked\n\
+                 unsafe {{\n{gets}}}\n\
+                 Err({tag_enum}(t as _))\n\
              }}\n\
-             \n\
-             {arm_at}\n\
              \n\
              /// From an arm: new(), by the arm's type.\n\
              #[allow(dead_code)]\n\

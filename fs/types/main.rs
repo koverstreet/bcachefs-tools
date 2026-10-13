@@ -374,16 +374,13 @@ fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>,
                 sames.push((s.c_type.clone(), *size, *align,
                             s.fields.iter().cloned().zip(offsets.iter().copied()).collect::<Vec<_>>()));
             }
-            // The Rust layout C's must have: a struct's tag at 0, every arm at
-            // the payload offset (a union's at 0) - as for a c_same!.
+            // The Rust layout C's must have: the tag at 0, every arm at the
+            // payload offset - as for a c_same!.
             CItem::TaggedUnion(tu) => {
                 let [size, align, payload] = r.nums.as_slice() else {
                     return Err(at("a tagged_union!'s record has its size, alignment and payload offset".into()));
                 };
-                let mut offsets = Vec::new();
-                if !tu.union {
-                    offsets.push((c_ident(&tu.tag_field), 0));
-                }
+                let mut offsets = vec![(c_ident(&tu.tag_field), 0)];
                 offsets.extend(tu.arms.iter().map(|a| (c_ident(&a.name), *payload)));
                 sames.push((tu.c_type(), *size, *align, offsets));
             }
