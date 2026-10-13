@@ -4,10 +4,10 @@
 
 use crate::cstructs::c;
 use crate::types::Le64;
-use cstruct_macros::{c_const, c_enum, c_xmacro, CStruct, TypeInfo};
+use cstruct_macros::{c_const, c_enum, c_xmacro, CStruct, Plain, TypeInfo};
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_lru {
     pub v: c::bch_val,

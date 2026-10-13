@@ -4,12 +4,12 @@
 
 use crate::cstructs::c;
 use crate::types::Le16;
-use cstruct_macros::{bitfield, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, CStruct, Plain, TypeInfo};
 use nestify::nest;
 
 nest! {
     #[repr(C, align(8))]
-    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+    #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
     #[c_packed]
     pub struct bch_stripe {
         pub v: c::bch_val,

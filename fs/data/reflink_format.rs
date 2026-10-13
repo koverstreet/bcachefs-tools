@@ -4,10 +4,10 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_bitmask, CStruct, TypeInfo};
+use cstruct_macros::{c_bitmask, CStruct, Plain, TypeInfo};
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_reflink_p {
     pub v: c::bch_val,
@@ -33,7 +33,7 @@ c_bitmask! {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_reflink_v {
     pub v: c::bch_val,
@@ -44,7 +44,7 @@ pub struct bch_reflink_v {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_indirect_inline_data {
     pub v: c::bch_val,
     pub refcount: Le64,

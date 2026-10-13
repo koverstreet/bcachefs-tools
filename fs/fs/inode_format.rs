@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, TypeInfo};
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, Plain, TypeInfo};
 
 c_const! {
     #[c_int]
@@ -39,7 +39,7 @@ pub struct bch_inode_v2 {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_inode_v3 {
     pub v: c::bch_val,
@@ -59,7 +59,7 @@ c_const! {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_inode_generation {
     pub v: c::bch_val,
@@ -258,11 +258,14 @@ c_bitmask! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_inode_alloc_cursor {
     pub v: c::bch_val,
     pub bits: u8,
     pub pad: u8,
+    /* C's padding, for __le32's alignment */
+    #[c_anon("")]
+    pub __gen_align: [u8; 2],
     pub generation: Le32,
     pub idx: Le64,
 }

@@ -299,13 +299,13 @@ union bch_extent_entry {
 /// long as its arm, not the union. Rust reads entries as their arms
 /// (data/extents.rs).
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, TypeInfo)]
+#[derive(Clone, Copy, Default, Plain, TypeInfo)]
 pub struct bch_extent_entry {
     _opaque: [u64; 0],
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_btree_ptr {
     pub v: c::bch_val,
@@ -315,7 +315,7 @@ pub struct bch_btree_ptr {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_btree_ptr_v2 {
     pub v: c::bch_val,
@@ -336,7 +336,7 @@ c_bitmask! {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_extent {
     pub v: c::bch_val,
@@ -385,7 +385,7 @@ c_const! {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_reservation {
     pub v: c::bch_val,
@@ -396,7 +396,7 @@ pub struct bch_reservation {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_inline_data {
     pub v: c::bch_val,
     pub data: [u8; 0],

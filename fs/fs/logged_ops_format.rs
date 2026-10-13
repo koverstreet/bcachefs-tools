@@ -15,7 +15,7 @@ c_enum! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_logged_op_truncate {
     pub v: c::bch_val,
     pub subvol: Le32,
@@ -60,7 +60,7 @@ pub struct bch_logged_op_finsert {
  * that may have changed since.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_logged_op_inode_opt_propagate {
     pub v: c::bch_val,
     pub inum: Le64,
@@ -69,7 +69,7 @@ pub struct bch_logged_op_inode_opt_propagate {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_logged_op_stripe_update {
     pub v: c::bch_val,
     pub old_idx: Le64,

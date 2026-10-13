@@ -61,7 +61,7 @@ c_xmacro! {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_alloc_v3 {
     pub v: c::bch_val,
