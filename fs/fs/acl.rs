@@ -322,7 +322,7 @@ mod vfs {
         x.x_name_len = 0;
         x.x_val_len.set(len as u16);
 
-        let start = core::mem::offset_of!(c::bch_xattr, x_name_and_value);
+        let start = core::mem::offset_of!(crate::util::vstructs::Ffi<c::bch_xattr>, x_name_and_value);
         let mut s = crate::btree::bkey::BkeyS::from(k.k_i_mut());
         encode(acl.entries(), &mut s.val_bytes_mut()[start..][..len]);
 

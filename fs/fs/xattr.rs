@@ -29,6 +29,7 @@ use crate::str_hash::{self, HashTable};
 use crate::util::ffi::{bytes, c_char, opt_bytes, opt_bytes_mut, Opaque};
 use crate::util::os_str::{cstr_name, OsStr, OsStrExt};
 use crate::util::Printbuf;
+use crate::util::vstructs::Ffi;
 
 /// setxattr() flags - <uapi/linux/xattr.h>:
 pub const XATTR_CREATE:  i32 = 0x1;
@@ -84,7 +85,7 @@ pub fn search_key(type_: u32, name: &OsStr) -> XattrKey<'_> {
 // ── The value ────────────────────────────────────────────────────────────
 
 /// Where the name starts - the value follows it.
-const NAME_OFFSET: usize = offset_of!(c::bch_xattr, x_name_and_value);
+const NAME_OFFSET: usize = offset_of!(Ffi<c::bch_xattr>, x_name_and_value);
 
 /// The u64s of value an xattr with these takes: as xattr_val_u64s().
 pub fn val_u64s(name_len: usize, val_len: usize) -> usize {
@@ -108,14 +109,13 @@ fn type_prefix(type_: u8) -> Option<Option<&'static str>> {
 /// @k's type and name - @k an xattr, valid.
 fn type_and_name(k: BkeySC<'_>) -> (u8, &[u8]) {
     let x = k.arm::<BkeyIXattr>().expect("an xattr").v();
-    (x.x_type, &k.val_bytes()[NAME_OFFSET..][..x.x_name_len as usize])
+    (x.x_type, &x.x_name_and_value[..x.x_name_len as usize])
 }
 
 /// @k's value - @k an xattr, valid.
 pub fn value(k: BkeySC<'_>) -> &[u8] {
     let x = k.arm::<BkeyIXattr>().expect("an xattr").v();
-    let name_len = x.x_name_len as usize;
-    &k.val_bytes()[NAME_OFFSET + name_len..][..x.x_val_len.get() as usize]
+    &x.x_name_and_value[x.x_name_len as usize..][..x.x_val_len.get() as usize]
 }
 
 /// Check @v.k, an xattr: as bch2_xattr_validate().

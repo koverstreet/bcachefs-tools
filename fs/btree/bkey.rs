@@ -387,6 +387,7 @@ pub type ValC<V> = <V as BkeyValC>::C;
 macro_rules! bkey_val {
     (inline_data, $f:tt)          => { bkey_val!(@family inline_data); };
     (indirect_inline_data, $f:tt) => { bkey_val!(@family indirect_inline_data); };
+    (xattr, $f:tt)                => { bkey_val!(@family xattr); };
 
     (@family $name:ident) => { crate::paste! {
         impl BkeyValC for c::[<bch_ $name>] {

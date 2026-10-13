@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::Le16;
-use cstruct_macros::{c_const, CStruct, TypeInfo};
+use cstruct_macros::{c_const, whole, CStruct, TypeInfo};
 
 c_const! {
     #[c_int]
@@ -19,6 +19,7 @@ c_const! {
     pub const KEY_TYPE_XATTR_INDEX_SECURITY: u32 = 4;
 }
 
+#[whole(tail = x_name_and_value: [u8])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
