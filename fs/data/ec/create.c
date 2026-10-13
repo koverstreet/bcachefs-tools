@@ -2108,7 +2108,8 @@ static int stripe_idx_alloc(struct btree_trans *trans, struct ec_stripe_new *s)
 			ret = bch2_ec_stripe_mem_alloc(trans, &iter);
 			if (ret)
 				bch2_stripe_handle_put(c, &s->new_stripe_handle);
-			s->new_stripe.key.k.p = iter.pos;
+			else
+				s->new_stripe.key.k.p = iter.pos;
 			break;
 		}
 	}
