@@ -290,12 +290,12 @@ impl InodeOpt {
     pub fn from_index(i: u32) -> Option<InodeOpt> {
         // The enum is repr(u32), with a variant for every value below
         // Inode_opt_nr:
-        (i < c::inode_opt_id::Inode_opt_nr.0 as u32)
+        (i < c::inode_opt_id::Inode_opt_nr.0)
             .then(|| InodeOpt(unsafe { core::mem::transmute::<u32, c::inode_opt_id>(i) }))
     }
 
     pub fn all() -> impl Iterator<Item = InodeOpt> {
-        (0..c::inode_opt_id::Inode_opt_nr.0 as u32)
+        (0..c::inode_opt_id::Inode_opt_nr.0)
             .map(|i| InodeOpt::from_index(i).expect("below Inode_opt_nr"))
     }
 
@@ -338,11 +338,11 @@ impl InodeOpt {
 
     /// Whether it's set on @inode itself, not inherited: bi_fields_set.
     pub fn is_own(self, inode: &c::bch_inode_unpacked) -> bool {
-        inode.bi_fields_set & (1 << self.0.0 as u32) != 0
+        inode.bi_fields_set & (1 << self.0.0) != 0
     }
 
     pub fn set_own(self, inode: &mut c::bch_inode_unpacked, own: bool) {
-        let bit = 1 << self.0.0 as u32;
+        let bit = 1 << self.0.0;
         if own {
             inode.bi_fields_set |= bit;
         } else {

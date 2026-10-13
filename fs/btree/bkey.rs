@@ -496,7 +496,7 @@ c::BCH_BKEY_TYPES!(bkey_types);
 
 impl<'a> BkeySC<'a> {
     /// The key as C's bkey_s_c, for passing to C.
-    pub(crate) fn to_raw(&self) -> c::bkey_s_c {
+    pub(crate) fn to_raw(self) -> c::bkey_s_c {
         c::bkey_s_c {
             k: self.k as *const c::bkey as *mut c::bkey,
             v: self.v as *const c::bch_val as *mut c::bch_val,

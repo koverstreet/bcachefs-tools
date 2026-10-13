@@ -21,7 +21,7 @@ impl PartialOrd for c::bbpos {
 
 impl Ord for c::bbpos {
     fn cmp(&self, other: &Self) -> Ordering {
-        (self.btree.0 as u32).cmp(&(other.btree.0 as u32))
+        self.btree.0.cmp(&{ other.btree.0 })
             .then(self.pos.cmp(&other.pos))
     }
 }

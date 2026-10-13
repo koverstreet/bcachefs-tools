@@ -48,10 +48,6 @@ where
 		}
 	}
 
-	pub fn as_mut(&mut self) -> &mut D {
-		&mut self.darray
-	}
-
 	pub fn into_vec(self) -> Vec<T> {
 		let mut this = ManuallyDrop::new(self);
 
@@ -62,6 +58,16 @@ where
 				this.vec.capacity(),
 			)
 		}
+	}
+}
+
+#[cfg(feature = "std")]
+impl<D, T> AsMut<D> for DarrayVec<D, T>
+where
+	D: Darray<T>,
+{
+	fn as_mut(&mut self) -> &mut D {
+		&mut self.darray
 	}
 }
 

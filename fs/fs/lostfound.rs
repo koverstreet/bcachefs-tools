@@ -250,7 +250,7 @@ fn create_or_restore_lostfound(
 
     let Ok(Some(root_snapshot)) = snapshot::live_descendent(fs, tree_root) else {
         bch_err!(fs, "snapshot tree {tree} has no live snapshot, cannot create lost+found");
-        return Err(fs.err(bch_errcode::BCH_ERR_ENOENT_snapshot).into());
+        return Err(fs.err(bch_errcode::BCH_ERR_ENOENT_snapshot));
     };
 
     // Keeping lost+found in the root snapshot only gives every branch the
@@ -259,7 +259,7 @@ fn create_or_restore_lostfound(
     if !snapshot::is_ancestor(trans, snapshot, root_snapshot) {
         bch_err!(fs, "lost+found for snapshot {snapshot} belongs in snapshot {root_snapshot}, \
                       which it does not inherit from (snapshot tree {tree}, root snapshot {tree_root})");
-        return Err(fs.err(bch_errcode::BCH_ERR_snapshot_lostfound_unreachable).into());
+        return Err(fs.err(bch_errcode::BCH_ERR_snapshot_lostfound_unreachable));
     }
 
     // root_hash came from the root inode as @snapshot sees it, and we're about
@@ -450,7 +450,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
     let Some(name) = chosen else {
         bch_err!(fs, "reattaching inode {}:{}: lost+found entries {base} through {base}.999 all taken",
                  inode.bi_inum, inode.bi_snapshot);
-        return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented).into());
+        return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented));
     };
 
     // is_subdir_for_nlink(), not is_dir(): a subvolume root is named by a
@@ -479,7 +479,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
         let d_type = inode.d_type();
         let target = inode.dirent_target();
         bch_err_msg!(fs,
-            dirent::create_snapshot(t, inode.bi_parent_subvol, dirent_snapshot, &mut lostfound,
+            dirent::create_snapshot(t, inode.bi_parent_subvol, dirent_snapshot, &lostfound,
                                     d_type, name.as_os_str(), target, &mut inode.bi_dir_offset,
                                     CREATE.0, CREATE.1),
             "error creating dirent")?;

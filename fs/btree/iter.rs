@@ -48,6 +48,12 @@ pub struct TransFnName {
     name:  CFnName,
 }
 
+impl Default for TransFnName {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TransFnName {
     pub const fn new() -> Self {
         TransFnName {

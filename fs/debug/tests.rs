@@ -55,7 +55,7 @@ fn enomem(fs: &Fs) -> BchError {
 }
 
 fn round_up(v: u64, by: u64) -> u64 {
-    ((v + by - 1) / by) * by
+    v.div_ceil(by) * by
 }
 
 fn delete_test_keys(fs: &Fs) -> TestRet {
@@ -421,7 +421,7 @@ fn test_btree_ptr_stale_dirty_key(
         if ptr_entry.cached() == 0 && u64::from(ptr_entry.dev()) != c::BCH_SB_MEMBER_INVALID as u64 {
             // gen is 8 bits: one less, as C's ptr->gen-- - the setter checks
             // that the value fits
-            ptr_entry.set_generation((ptr_entry.generation() as u8).wrapping_sub(1).into());
+            ptr_entry.set_generation(ptr_entry.generation().wrapping_sub(1));
             updated = true;
             break;
         }
@@ -937,6 +937,12 @@ fn print_perf_result(
     );
 }
 
+/// Run perf test @testname, @nr iterations on @nr_threads threads: what
+/// sysfs's perf_test does.
+///
+/// # Safety
+/// @raw_fs is a live filesystem for the call, and @testname NULL or a
+/// NUL-terminated string.
 #[c_export]
 pub unsafe extern "C" fn bch2_btree_perf_test(
     raw_fs:     *mut c::bch_fs,
@@ -958,7 +964,7 @@ pub unsafe extern "C" fn bch2_btree_perf_test(
         return errcode(&fs, bch_errcode::BCH_ERR_EINVAL_test_unknown_test);
     };
 
-    let job = match TestJob::new(&*fs, nr, nr_threads, test) {
+    let job = match TestJob::new(&fs, nr, nr_threads, test) {
         Ok(job) => job,
         Err(e) => return error_ret(e),
     };
@@ -1009,22 +1015,14 @@ pub unsafe extern "C" fn bch2_btree_perf_test(
     let mut nr_buf = Printbuf::new();
     let mut per_sec_buf = Printbuf::new();
     nr_buf.human_readable_u64(nr);
-    per_sec_buf.human_readable_u64(if time != 0 {
-        // nr is caller-supplied — for the unit tests it's an inode number, not an op
-        // count — so nr * NSEC_PER_SEC overflows u64 (C wrapped it silently; the debug
-        // build BUGs on the overflow check). saturating_mul caps instead: real perf
-        // runs (sane nr) stay exact, the unit tests get a bounded-nonsense number.
-        // NOT u128 — 128-bit division pulls in __udivti3, which the kernel lacks.
-        nr.saturating_mul(c::NSEC_PER_SEC as u64) / time
-    } else {
-        0
-    });
+    // nr is caller-supplied — for the unit tests it's an inode number, not an op
+    // count — so nr * NSEC_PER_SEC overflows u64 (C wrapped it silently; the debug
+    // build BUGs on the overflow check). saturating_mul caps instead: real perf
+    // runs (sane nr) stay exact, the unit tests get a bounded-nonsense number.
+    // NOT u128 — 128-bit division pulls in __udivti3, which the kernel lacks.
+    per_sec_buf.human_readable_u64(nr.saturating_mul(c::NSEC_PER_SEC as u64).checked_div(time).unwrap_or(0));
 
-    let nsec_per_iter = if nr != 0 {
-        (time * nr_threads as u64) / nr
-    } else {
-        0
-    };
+    let nsec_per_iter = (time * nr_threads as u64).checked_div(nr).unwrap_or(0);
 
     print_perf_result(name, nr_threads, time, nsec_per_iter, &nr_buf, &per_sec_buf);
 

@@ -96,7 +96,9 @@ impl<F: Future<Output = ()> + Send + 'static> Task<F> {
         let queue = self.queue;
         // Err means the work item is already enqueued, i.e. a poll is already
         // pending - which is exactly what we wanted. Dropping it is correct;
-        // propagating it would turn "already scheduled" into a failure.
+        // propagating it would turn "already scheduled" into a failure. In
+        // userspace enqueue() returns nothing.
+        #[allow(clippy::let_unit_value)]
         let _ = queue.enqueue(self);
     }
 }

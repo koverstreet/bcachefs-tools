@@ -63,6 +63,12 @@ pub struct Ratelimit {
 // after that only ___ratelimit() touches it, under its lock.
 unsafe impl Sync for Ratelimit {}
 
+impl Default for Ratelimit {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Ratelimit {
     pub const fn new() -> Self {
         Ratelimit {
@@ -234,6 +240,12 @@ pub struct CFnName {
 // buf is written once, by whoever claims it, before ready is published, and
 // only read after that.
 unsafe impl Sync for CFnName {}
+
+impl Default for CFnName {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl CFnName {
     pub const fn new() -> Self {

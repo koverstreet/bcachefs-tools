@@ -509,6 +509,8 @@ pub fn empty_dir_trans(t: &TransAttempt<'_, '_>, dir: c::subvol_inum) -> Result<
 struct DirContext<'c>(&'c mut c::dir_context);
 
 impl DirContext<'_> {
+    // The kernel's pos is a loff_t; only the userspace shim's is a u64
+    #[allow(clippy::unnecessary_cast)]
     fn pos(&self) -> u64 {
         self.0.pos as u64
     }

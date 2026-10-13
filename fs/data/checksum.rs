@@ -32,10 +32,12 @@ impl c::bch_csum_type {
     }
 }
 
-impl c::nonce {
-    /// The nonce @offset bytes further into its stream - a whole number of
-    /// ChaCha20 blocks.
-    pub fn add(mut self, offset: u32) -> Self {
+/// The nonce @offset bytes further into its stream - a whole number of
+/// ChaCha20 blocks: C's nonce_add().
+impl core::ops::Add<u32> for c::nonce {
+    type Output = Self;
+
+    fn add(mut self, offset: u32) -> Self {
         debug_assert!(offset % CHACHA_BLOCK_SIZE == 0,
                       "nonce offset {offset}: not a whole number of ChaCha20 blocks");
         self.d[0] = Le32::new(self.d[0].get().wrapping_add(offset / CHACHA_BLOCK_SIZE));

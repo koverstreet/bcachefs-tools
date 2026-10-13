@@ -236,7 +236,7 @@ fn overlapping_extents_found(
 
     let Some(k1) = k1.filter(|k1| k1.k.p == pos1) else {
         bch_err!(fs, "overlapping_extents_found: error finding first overlapping extent when repairing, got{buf}\nwanted\n  {pos1}\n{pos2}");
-        return Err(fs.err(bch_errcode::BCH_ERR_internal_fsck_err).into());
+        return Err(fs.err(bch_errcode::BCH_ERR_internal_fsck_err));
     };
 
     // iter2 starts at k1 too, and walks forward to pos2:
@@ -256,7 +256,7 @@ fn overlapping_extents_found(
 
     let Some(k2) = k2.filter(|k2| k2.k.p == pos2.p && k2.k.size == pos2.size) else {
         bch_err!(fs, "overlapping_extents_found: error finding second overlapping extent when repairing{buf}");
-        return Err(fs.err(bch_errcode::BCH_ERR_internal_fsck_err).into());
+        return Err(fs.err(bch_errcode::BCH_ERR_internal_fsck_err));
     };
 
     let k1_whiteout = k1.key_type() == c::bch_bkey_type::KEY_TYPE_extent_whiteout;
@@ -321,7 +321,7 @@ fn check_overlapping_extents(
 
     for i in extent_ends.e.iter_mut() {
         if i.offset <= k.start_offset() ||
-           !check::ref_visible2(trans, k.k.p.snapshot, s, i.snapshot, &mut i.seen) {
+           !check::ref_visible2(trans, k.k.p.snapshot, s, i.snapshot, &i.seen) {
             continue;
         }
 
@@ -358,8 +358,8 @@ fn check_extent_past_end(
     let block_bytes = fs.block_bytes();
     let mut punch = None;
 
-    for i in st.w.visible_mut(trans, &mut st.s, k.k.p.snapshot) {
-        let last_block = i.inode.bi_size.div_ceil(block_bytes) * block_bytes >> 9;
+    for i in st.w.visible_mut(trans, &st.s, k.k.p.snapshot) {
+        let last_block = (i.inode.bi_size.div_ceil(block_bytes) * block_bytes) >> 9;
 
         if fsck_err_on!(trans, k.k.p.offset > last_block &&
                         !extents::bkey_extent_is_reservation(k),
@@ -423,7 +423,7 @@ fn check_extent<'t>(
     t.commit(Some(&st.res), CommitFlags::NO_ENOSPC)?;
 
     if allocation {
-        for i in st.w.visible_mut(trans, &mut st.s, p.snapshot) {
+        for i in st.w.visible_mut(trans, &st.s, p.snapshot) {
             if !i.whiteout {
                 i.count += size;
             }

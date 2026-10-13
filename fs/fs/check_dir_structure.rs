@@ -279,7 +279,7 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
 
         if let Err(e) = dirent_iter.peek_slot_typed(t, c::bch_bkey_type::KEY_TYPE_dirent) {
             if !e.matches(c::ENOENT) {
-                return Err(e.into());
+                return Err(e);
             }
 
             // The naming dirent is gone, so we can't recover the filename -
@@ -293,7 +293,7 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
             buf.newline();
             write!(buf, "{}", inode);
             bch_err!(fs, "{}", buf);
-            return Err(e.into());
+            return Err(e);
         }
 
         path.push(inode.bi_inum, GFP_KERNEL)?;
@@ -380,7 +380,7 @@ fn check_directory_structure(fs: &Fs) -> Result<(), BchError> {
             // directory but the root of an unlinked subvolume, and a subvolume
             // root ends every walk - so skipping these can't hide a directory
             // loop:
-            if inode::flags(k) & c::bch_inode_flags::BCH_INODE_unlinked.bits() as u32 != 0 {
+            if inode::flags(k) & c::bch_inode_flags::BCH_INODE_unlinked.bits() != 0 {
                 return Ok(());
             }
 

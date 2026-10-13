@@ -144,7 +144,7 @@ pub fn lookup_in_snapshot<'i, 't, T: HashTable>(
     snapshot:  u32,
 ) -> Result<BkeySC<'i>, BchError> {
     let flags = BtreeIterFlags::SLOTS | flags;
-    *iter = BtreeIter::new(t, T::BTREE.0 as u32,
+    *iter = BtreeIter::new(t, T::BTREE.0,
                            spos(inum.inum, T::hash_key(hash_info, key), snapshot), flags);
 
     // The key, or a hole: the end of its probe sequence
@@ -188,7 +188,7 @@ pub fn hole<'t, T: HashTable>(
 ) -> Result<(), BchError> {
     let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
     let flags = BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT;
-    *iter = BtreeIter::new(t, T::BTREE.0 as u32,
+    *iter = BtreeIter::new(t, T::BTREE.0,
                            spos(inum.inum, T::hash_key(hash_info, key), snapshot), flags);
 
     match iter.find_max_norestart(t, pos(inum.inum, u64::MAX),
@@ -247,7 +247,7 @@ pub fn set_or_get_in_snapshot<'i, 't, T: HashTable>(
     let must_replace = iter_flags.contains(BtreeIterFlags::STR_HASH_MUST_REPLACE);
 
     let inode = insert.k().p.inode;
-    *iter = BtreeIter::new(t, T::BTREE.0 as u32,
+    *iter = BtreeIter::new(t, T::BTREE.0,
                            spos(inode, T::hash_bkey(hash_info, BkeySC::from(insert.k_i())), snapshot),
                            peek_flags);
 
@@ -359,9 +359,9 @@ pub fn delete<T: HashTable>(
 pub fn new_inode_type(fs: &Fs) -> c::bch_str_hash_type {
 
     match fs.opts().str_hash as u32 {
-        o if o == c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc32c.0 as u32 => c::bch_str_hash_type::BCH_STR_HASH_crc32c,
-        o if o == c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc64.0 as u32  => c::bch_str_hash_type::BCH_STR_HASH_crc64,
-        o if o == c::bch_str_hash_opts::BCH_STR_HASH_OPT_siphash.0 as u32 => {
+        o if o == c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc32c.0 => c::bch_str_hash_type::BCH_STR_HASH_crc32c,
+        o if o == c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc64.0  => c::bch_str_hash_type::BCH_STR_HASH_crc64,
+        o if o == c::bch_str_hash_opts::BCH_STR_HASH_OPT_siphash.0 => {
             if fs.feature(c::bch_sb_feature::BCH_FEATURE_new_siphash) {
                 c::bch_str_hash_type::BCH_STR_HASH_siphash
             } else {
@@ -473,7 +473,7 @@ fn needs_check<T: HashTable>(hash_info: &c::bch_hash_info, k: BkeySC<'_>) -> boo
         return true;
     }
     k.whole::<BkeyDirent>()
-        .is_some_and(|d| (d.d_casefold() != 0) != !hash_info.cf_encoding.is_null())
+        .is_some_and(|d| (d.d_casefold() != 0) == hash_info.cf_encoding.is_null())
 }
 
 // fsck: repairing hash table keys
@@ -687,7 +687,7 @@ impl Repair<'_> {
         buf.indent_add(2);
         write!(buf, "{collisions}");
         bch_err!(fs, "{buf}");
-        Err(fs.err(bch_errcode::BCH_ERR_EEXIST_str_hash_set).into())
+        Err(fs.err(bch_errcode::BCH_ERR_EEXIST_str_hash_set))
     }
 
     /// @k and @dup, ahead of it in its probe sequence, have the same name:
@@ -792,7 +792,7 @@ impl Repair<'_> {
         let fs = trans.fs();
         let d = Dirent::new(k).expect("a dirent");
 
-        if !fsck_err_on!(trans, (d.v().d_casefold() != 0) != !self.hash_info.cf_encoding.is_null(),
+        if !fsck_err_on!(trans, (d.v().d_casefold() != 0) == self.hash_info.cf_encoding.is_null(),
                          id::dirent_casefold_mismatch,
                          "dirent casefold does not match dir casefold\n{}", k.to_text(fs))? {
             return Ok(());
@@ -815,7 +815,7 @@ impl Repair<'_> {
                              UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
         self.repair_key::<Dirents>(t, BkeySC::from(new.k_i()), None)?;
-        Err(fs.err(bch_errcode::BCH_ERR_str_hash_key_repaired).into())
+        Err(fs.err(bch_errcode::BCH_ERR_str_hash_key_repaired))
     }
 
     /// The rest of check_key(), for a key not at the offset it hashes to:
@@ -832,7 +832,7 @@ impl Repair<'_> {
 
         // Probing from the slot it hashes to: itself, a duplicate - a key with
         // the same name - or a hole, which lookups would stop at
-        let mut iter = BtreeIter::new(trans, T::BTREE.0 as u32,
+        let mut iter = BtreeIter::new(trans, T::BTREE.0,
                                       spos(hash_k.k.p.inode, hash, hash_k.k.p.snapshot),
                                       BtreeIterFlags::SLOTS);
         let found = iter.find_max_norestart(t, SPOS_MAX, |_, k| Ok(

@@ -1056,7 +1056,7 @@ pub const fn BCH_VERSION_MAJOR(v: u64) -> u64 { v >> 10 }
 pub const fn BCH_VERSION_MINOR(v: u64) -> u64 { v & !(!0 << 10) }
 
 #[allow(non_snake_case)]
-pub const fn BCH_VERSION(major: u64, minor: u64) -> u64 { (major << 10) | (minor << 0) }
+pub const fn BCH_VERSION(major: u64, minor: u64) -> u64 { (major << 10) | minor }
 
 c_xmacro! {
     /*

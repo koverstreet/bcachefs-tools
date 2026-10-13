@@ -1104,7 +1104,7 @@ impl c::btree_id {
 
 impl From<c::btree_id> for u32 {
     fn from(id: c::btree_id) -> u32 {
-        id.0 as u32
+        id.0
     }
 }
 

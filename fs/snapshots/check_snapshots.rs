@@ -164,7 +164,7 @@ fn check_snapshot_tree<'t>(
     let root_id = st.root_snapshot.get();
 
     let root = match snapshot::lookup_key(trans, root_id) {
-        Err(e) if !e.matches(c::ENOENT) => return Err(e.into()),
+        Err(e) if !e.matches(c::ENOENT) => return Err(e),
         r => r,
     };
 
@@ -284,7 +284,7 @@ fn check_state<'a, 't>(
            fsck_err!(t, id::snapshot_state_bad,
                      "snapshot state unset, recovering from legacy flags:\n{}", n.to_text(fs))? {
             let state = n.v().state_from_flags();
-            n.v_mut(t)?.state = (state.0 as u32).into();
+            n.v_mut(t)?.state = state.0.into();
         }
     }
 
@@ -343,7 +343,7 @@ fn check_state<'a, 't>(
     // report; snapshot-inject/stale_state_tombstone).
     let v = n.v();
     if fsck_err_on!(t,
-                    v.state_raw() != c::bch_snapshot_state::SNAPSHOT_STATE_deleted.0 as u32 &&
+                    v.state_raw() != c::bch_snapshot_state::SNAPSHOT_STATE_deleted.0 &&
                     v.deleted_obsolete() &&
                     v.tree == 0,
                     id::snapshot_state_stale_tombstone,
@@ -411,7 +411,7 @@ fn check_deleted<'a, 't>(
     let fs = trans.fs();
     let id = n.id();
 
-    if n.v().state_raw() == c::bch_snapshot_state::SNAPSHOT_STATE_live.0 as u32 {
+    if n.v().state_raw() == c::bch_snapshot_state::SNAPSHOT_STATE_live.0 {
         return Ok(false);
     }
 
@@ -466,7 +466,7 @@ fn check_deleted<'a, 't>(
         }
     }
 
-    Ok(n.v().state_raw() == c::bch_snapshot_state::SNAPSHOT_STATE_deleted.0 as u32)
+    Ok(n.v().state_raw() == c::bch_snapshot_state::SNAPSHOT_STATE_deleted.0)
 }
 
 /* Parent <-> child edge checks and repair:
@@ -584,9 +584,9 @@ fn ptr_available(trans: &BtreeTrans<'_>, n: &c::bch_snapshot, n_id: u32, role: R
 /// read it needs no write buffer flush to be trustworthy.
 fn has_accounting(fs: &Fs, id: u32) -> bool {
     crate::BTREE_IDS_KNOWN.iter()
-        .filter(|&&btree| crate::BTREE_HAS_SNAPSHOTS_MASK & (1 << btree.0 as u32) != 0)
+        .filter(|&&btree| crate::BTREE_HAS_SNAPSHOTS_MASK & (1 << btree.0) != 0)
         .any(|&btree| {
-            let acc = c::bch_acct_snapshot { id, btree: btree.0 as u32 };
+            let acc = c::bch_acct_snapshot { id, btree: btree.0 };
             let mut v = [0u64; 3];
             accounting::mem_read(fs, &c::disk_accounting_pos::from_arm(acc), &mut v);
             v.iter().any(|&x| x != 0)
@@ -687,7 +687,7 @@ fn resurrect_child(t: &TransAttempt<'_, '_>, parent_id: u32, id: u32) -> Result<
     let fs = trans.fs();
 
     let Some(parent) = lookup_node(trans, parent_id)? else {
-        return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_snapshot_edge_to_missing_node).into());
+        return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_snapshot_edge_to_missing_node));
     };
 
     let mut n = t.bkey_alloc_typed::<c::bkey_i_snapshot>()?;
@@ -756,7 +756,7 @@ fn past_deleted(trans: &BtreeTrans<'_>, s: &c::bch_snapshot, role: Role)
     };
 
     let mut id = next(s);
-    for _ in 0..c::BTREE_MAX_DEPTH as u32 * 64 {
+    for _ in 0..c::BTREE_MAX_DEPTH * 64 {
         if id == 0 {
             return Ok(Some(0));
         }
@@ -1088,7 +1088,7 @@ fn check_to_subvol<'a, 't>(
                 Ok(root) => return check::reconstruct_subvol(t, id, subvol_id, root),
                 // couldn't find a root inode for it - fall through and report
                 Err(e) if e.matches(bch_errcode::BCH_ERR_fsck_repair_unimplemented) => {}
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(e),
             }
         }
 
@@ -1151,7 +1151,7 @@ fn check_to_subvol<'a, 't>(
     if fsck_err_on!(t, n.v().subvol() != 0 && !should_have_subvol, id::snapshot_should_not_have_subvol,
                     "snapshot should not point to subvol:\n{}", n.to_text(fs))? {
         if n.v().children()[0] != 0 {
-            return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented).into());
+            return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented));
         }
 
         // XXX: DANGEROUS
@@ -1164,7 +1164,7 @@ fn check_to_subvol<'a, 't>(
     // checks it) - old kernels must not read a dying snapshot as a live
     // subvolume leaf:
     let v = n.v();
-    if v.state_raw() == c::bch_snapshot_state::SNAPSHOT_STATE_live.0 as u32 && v.subvol_obsolete() != (v.subvol() != 0) {
+    if v.state_raw() == c::bch_snapshot_state::SNAPSHOT_STATE_live.0 && v.subvol_obsolete() != (v.subvol() != 0) {
         let mut msg = Printbuf::new();
         write!(msg, "snapshot node {id} has wrong subvol flag:\n{}", n.to_text(fs));
 
@@ -1377,7 +1377,7 @@ fn reconstruct_node(t: &TransAttempt<'_, '_>, id: u32, tree: &[u32]) -> Result<(
                     "snapshot node {id} from tree {} missing, recreate?", IdList(tree))? {
         if tree.len() > 1 {
             bch_err!(fs, "cannot reconstruct snapshot trees with multiple nodes");
-            return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented).into());
+            return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented));
         }
 
         return recreate_node(t, id);
@@ -1391,7 +1391,7 @@ fn reconstruct_snapshots(fs: &Fs) -> Result<(), BchError> {
 
     let mut btrees: KVVec<c::btree_id> = KVVec::new();
     for &btree in crate::BTREE_IDS_KNOWN {
-        if crate::BTREE_HAS_SNAPSHOTS_MASK & (1 << btree.0 as u32) != 0 {
+        if crate::BTREE_HAS_SNAPSHOTS_MASK & (1 << btree.0) != 0 {
             btrees.push(btree, GFP_KERNEL)?;
         }
     }

@@ -380,7 +380,7 @@ impl InodeWalker {
             btree_matches_i_mode(btree, i2.inode.bi_mode)
         });
         if let Some(g) = good_ancestor {
-            write!(buf, ", but found good inode in older snapshot{}\n", inodes[g].inode);
+            writeln!(buf, ", but found good inode in older snapshot{}", inodes[g].inode);
         }
 
         write!(buf, "\nfound keys:\n");
@@ -389,18 +389,18 @@ impl InodeWalker {
         let nr_keys = count_inode_keys(t, inode_pos, btree, Some(&mut buf))?;
         if nr_keys == 0 {
             bch_err!(fs, "check_key_has_inode: error finding live keys in inode");
-            return Err(fs.err(bch_errcode::BCH_ERR_shutdown_with_errors_unfixed).into());
+            return Err(fs.err(bch_errcode::BCH_ERR_shutdown_with_errors_unfixed));
         }
 
         if nr_keys >= COUNT_INODE_KEYS_MAX {
-            write!(buf, "found {nr_keys}+ keys for this inode\n");
+            writeln!(buf, "found {nr_keys}+ keys for this inode");
         } else {
-            write!(buf, "found {nr_keys} keys for this inode\n");
+            writeln!(buf, "found {nr_keys} keys for this inode");
         }
 
         let lost_data = fs.btree_lost_data(c::btree_id::inodes);
         if lost_data {
-            write!(buf, "data was lost in inodes btree\n");
+            writeln!(buf, "data was lost in inodes btree");
         }
 
         // Both write repairs edit a version in place: which one
@@ -408,7 +408,7 @@ impl InodeWalker {
             None => {
                 let inode_looks_deleted = good_ancestor.is_some() && nr_keys < 3 && !lost_data;
                 if inode_looks_deleted {
-                    write!(buf, "inode was deleted, will delete key\n");
+                    writeln!(buf, "inode was deleted, will delete key");
                 }
 
                 if !inode_fsck_err!(trans, k.k.p, id::key_in_missing_inode, "{buf}")? {
@@ -450,9 +450,9 @@ impl InodeWalker {
                 };
 
                 if has_own_keys {
-                    write!(buf, "inode has keys of its own type: deleting this one\n");
+                    writeln!(buf, "inode has keys of its own type: deleting this one");
                 } else {
-                    write!(buf, "inode has no keys of its own type: changing its type to match\n");
+                    writeln!(buf, "inode has no keys of its own type: changing its type to match");
                 }
 
                 if !inode_fsck_err!(trans, k.k.p, id::key_in_wrong_inode_type, "{buf}")? {
@@ -664,7 +664,7 @@ pub fn reconstruct_inode(
         c::btree_id::extents => (c::S_IFREG, extents_end(t, inum, snapshot)?),
         c::btree_id::dirents => (c::S_IFDIR, 0),
         c::btree_id::xattrs  => (d_type.and_then(d_type_mode).unwrap_or(c::S_IFREG), 0),
-        _ => unreachable!("reconstruct_inode() for btree {}", btree.0 as u32),
+        _ => unreachable!("reconstruct_inode() for btree {}", { btree.0 }),
     };
 
     let mut new = inode::init(fs, 0, 0, (mode | 0o600) as c::umode_t, 0, None);
@@ -795,7 +795,7 @@ fn btree_matches_i_mode(btree: c::btree_id, mode: c::umode_t) -> bool {
         c::btree_id::extents => fmt == c::S_IFREG || fmt == c::S_IFLNK,
         c::btree_id::dirents => fmt == c::S_IFDIR,
         c::btree_id::xattrs  => true,
-        _ => unreachable!("check_key_has_inode() on btree {}", btree.0 as u32),
+        _ => unreachable!("check_key_has_inode() on btree {}", { btree.0 }),
     }
 }
 
@@ -825,7 +825,7 @@ fn count_inode_keys(
 
         nr_keys += 1;
         if let Some(out) = out.as_deref_mut().filter(|_| nr_keys <= 10) {
-            write!(out, "{}\n", k.to_text(fs));
+            writeln!(out, "{}", k.to_text(fs));
         }
 
         Ok(if nr_keys >= COUNT_INODE_KEYS_MAX { ControlFlow::Break(()) } else { ControlFlow::Continue(()) })

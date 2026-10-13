@@ -57,9 +57,9 @@ fn check_acl_flag(
     let Some((flag, err, an_acl, acl)) = acl_flag(x_type) else { return Ok(()) };
     let trans = t.trans();
     let fs = trans.fs();
-    let flag = flag.bits() as u32;
+    let flag = flag.bits();
 
-    for i in st.inode.visible_mut(trans, &mut st.s, k.k.p.snapshot) {
+    for i in st.inode.visible_mut(trans, &st.s, k.k.p.snapshot) {
         // One repair per visible version, bounded only by snapshot count:
         t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
 

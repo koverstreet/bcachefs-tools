@@ -163,7 +163,9 @@ fn v1_field(in_: &[u8], _bits: u32) -> Option<(u128, usize)> {
 /// Unpack @k, an inode of any version (see bkey_is_inode()), reporting
 /// nothing: Err(what did unpack, and the field it stopped at) if a field
 /// doesn't - it, and the fields after it, are left zero.
-#[allow(clippy::type_complexity)]
+// result_large_err: Ok is the same bch_inode_unpacked, so boxing Err would
+// shrink nothing
+#[allow(clippy::type_complexity, clippy::result_large_err)]
 fn try_unpack(k: BkeySC<'_>)
     -> Result<c::bch_inode_unpacked, (c::bch_inode_unpacked, usize)>
 {
@@ -1989,7 +1991,7 @@ pub fn set_casefold(
     fs.check_set_feature(c::bch_sb_feature::BCH_FEATURE_casefolding);
 
     inode.bi_casefold = v.wrapping_add(1) as _; // stored +1, 0 for unset
-    inode.bi_fields_set |= 1 << c::inode_opt_id::Inode_opt_casefold.0 as u32;
+    inode.bi_fields_set |= 1 << c::inode_opt_id::Inode_opt_casefold.0;
 
     namei::maybe_propagate_has_case_insensitive(t, inum, inode)
 }
@@ -2077,14 +2079,14 @@ impl c::bch_inode_unpacked {
 
     /// Whether flag @f (BCH_INODE_*) is set.
     pub fn flag(&self, f: c::bch_inode_flags) -> bool {
-        self.bi_flags & f.bits() as u32 != 0
+        self.bi_flags & f.bits() != 0
     }
 
     pub fn set_flag(&mut self, f: c::bch_inode_flags, v: bool) {
         if v {
-            self.bi_flags |= f.bits() as u32;
+            self.bi_flags |= f.bits();
         } else {
-            self.bi_flags &= !(f.bits() as u32);
+            self.bi_flags &= !f.bits();
         }
     }
 

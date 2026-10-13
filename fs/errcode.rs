@@ -70,7 +70,7 @@ impl BchError {
     /// this table has never heard of, and aborting the mount helper over it
     /// would be a poor way to find out.
     fn known(&self) -> bool {
-        self.0.unsigned_abs() < bch_errcode::BCH_ERR_MAX.0 as u32
+        self.0.unsigned_abs() < bch_errcode::BCH_ERR_MAX.0
     }
 
     /// Whether this error is @class, or derives from it: as bch2_err_matches().

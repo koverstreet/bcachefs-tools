@@ -216,7 +216,7 @@ fn check_dirent_parent_subvol<'t>(
 
     let Some(new_parent) = new_parent else {
         bch_err!(fs, "could not find a subvol for snapshot {d_snapshot}");
-        return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented).into());
+        return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented));
     };
 
     // The dirent is rewritten at its own position, which may be an interior
@@ -288,7 +288,7 @@ fn check_dirent_to_subvol<'t>(
     let Some(mut subvol_root) = inode::find_by_inum_snapshot(trans, target_inum, target_snapshot,
                                                              BtreeIterFlags::empty()).found()? else {
         bch_err!(fs, "subvol {child} points to missing inode root {target_inum}");
-        return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented).into());
+        return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented));
     };
 
     if fsck_err_on!(trans, parent != subvol_root.bi_parent_subvol, id::inode_bi_parent_wrong,
@@ -404,7 +404,7 @@ fn check_dirent_to_inode<'t>(
     let fs = trans.fs();
     let d_snapshot = k.k.p.snapshot;
 
-    st.target.get_visible(t, &mut st.s, inum)?;
+    st.target.get_visible(t, &st.s, inum)?;
 
     if st.target.inodes().is_empty() {
         let d_type = Dirent::new(k).expect("a dirent").d_type();
@@ -544,7 +544,7 @@ fn check_dirent<'t>(
     t.commit(None, CommitFlags::NO_ENOSPC)?;
 
     if have_dir {
-        for i in st.dir.visible_mut(trans, &mut st.s, d_snapshot) {
+        for i in st.dir.visible_mut(trans, &st.s, d_snapshot) {
             i.count += 1;
         }
     }

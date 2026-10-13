@@ -8,10 +8,12 @@
 //! fsck_repair_unimplemented, ...). Never 0. The C macros turn that into a
 //! bool and a `goto fsck_err`; here it's Result<bool>, and the `?` is the goto:
 //!
-//!	if fsck_err_on!(trans, nlink != count, id::inode_wrong_nlink,
-//!			"inode has wrong i_nlink ({}, should be {})", nlink, count)? {
-//!	    repair
-//!	}
+//! ```ignore
+//! if fsck_err_on!(trans, nlink != count, id::inode_wrong_nlink,
+//!                 "inode has wrong i_nlink ({}, should be {})", nlink, count)? {
+//!     repair
+//! }
+//! ```
 //!
 //! format_args!() is lazy - nothing is formatted unless the error is
 //! reported - so the work is in plain functions taking it; C needed macros

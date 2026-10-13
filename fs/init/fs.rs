@@ -161,7 +161,7 @@ impl Fs {
     /// repairs may reconstruct what it's missing: c->sb.btrees_lost_data.
     pub fn btree_lost_data(&self, id: c::btree_id) -> bool {
         let lost = unsafe { (*self.raw).sb.btrees_lost_data };
-        lost & (1u64 << id.0 as u32) != 0
+        lost & (1u64 << id.0) != 0
     }
 
     /// Whether this is an image made with `bcachefs dump --sanitize`, which
@@ -389,14 +389,14 @@ impl Fs {
     /// copy.
     pub fn feature(&self, feature: c::bch_sb_feature) -> bool {
         let features = unsafe { (*self.raw).sb.features };
-        features & (1u64 << feature.0 as u32) != 0
+        features & (1u64 << feature.0) != 0
     }
 
     /// Mark the filesystem as using @feature, writing the superblock if it
     /// wasn't already: as bch2_check_set_feature().
     pub fn check_set_feature(&self, feature: c::bch_sb_feature) {
         if !self.feature(feature) {
-            unsafe { c::__bch2_check_set_feature(self.raw, feature.0 as u32) }
+            unsafe { c::__bch2_check_set_feature(self.raw, feature.0) }
         }
     }
 
@@ -570,6 +570,9 @@ impl Fs {
     }
 
     /// Convert a timespec to a bcachefs internal time.
+    // tv_sec is the kernel's time64_t, or userspace's time_t - 32 bits on some
+    // targets
+    #[allow(clippy::unnecessary_cast)]
     pub fn timespec_to_time(&self, ts: c::timespec64) -> i64 {
         let sb = unsafe { &(*self.raw).sb };
         // C's (int) tv_nsec / nsec_per_time_unit: an unsigned division

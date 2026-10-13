@@ -46,7 +46,7 @@ pub unsafe fn bset_encrypt(c: *mut c::bch_fs, i: *mut Ffi<c::bset>, offset: u32)
         let bytes = keys - start;
 
         ret_to_result_void(c::bch2_encrypt(c, csum_type, nonce, bn.byte_add(start).cast(), bytes))?;
-        nonce = nonce.add((bytes as u32).next_multiple_of(CHACHA_BLOCK_SIZE));
+        nonce = nonce + (bytes as u32).next_multiple_of(CHACHA_BLOCK_SIZE);
     }
 
     // its keys: its tail, past its header
