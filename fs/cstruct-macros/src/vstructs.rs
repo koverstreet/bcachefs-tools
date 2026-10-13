@@ -252,8 +252,16 @@ fn dst(ty: &str, doc: &str, head: &str, tail: &str, elem: &str, ffi: &str, metho
 }
 
 /// @name's family, @name__family - its Unvalidated, Validated and Whole
-/// definitions - and @name<S>, which picks one, documented @doc.
+/// definitions - and @name<S>, which picks one, documented @doc. Every family
+/// has @name__unvalidated and @name__validated: a plain alias where a state
+/// shares another's definition, so a container's ArmOf impls can name each
+/// state's - concrete types, not projections.
 fn family(name: &str, unvalidated: &str, validated: &str, whole: &str, doc: &str) -> String {
+    let aliases: String = [("unvalidated", unvalidated), ("validated", validated)].iter()
+        .filter(|(st, def)| *def != format!("{name}__{st}"))
+        .map(|(st, def)| format!("#[allow(non_camel_case_types)]\n\
+                                  pub type {name}__{st} = {def};\n"))
+        .collect();
     format!(
         "#[doc(hidden)]\n\
          #[allow(non_camel_case_types)]\n\
@@ -265,6 +273,7 @@ fn family(name: &str, unvalidated: &str, validated: &str, whole: &str, doc: &str
              type Whole = {whole};\n\
          }}\n\
          \n\
+         {aliases}\
          {doc}\
          #[allow(non_camel_case_types)]\n\
          pub type {name}<S = {VS}::Validated> = <S as {VS}::State>::Of<{name}__family>;\n")
@@ -483,6 +492,21 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
          }};\n\
          \n\
          {dst}\
+         // {name}<Whole>, as every family's definitions are, from its bytes:\n\
+         // all of it, if they hold it, aligned\n\
+         impl {VS}::ArmRef for {ffi} {{\n\
+             type Ref<'a> = &'a Self;\n\
+             type Mut<'a> = &'a mut Self;\n\
+             \n\
+             fn arm_ref(b: &[u8]) -> Option<&Self> {{\n\
+                 {VS}::cast_whole(b)\n\
+             }}\n\
+             \n\
+             fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {{\n\
+                 {VS}::cast_whole_mut(b)\n\
+             }}\n\
+         }}\n\
+         \n\
          {family}",
         plain = plain(&fl, &floor_tys),
         dst = dst(&ty,

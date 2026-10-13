@@ -730,18 +730,23 @@ pub struct Validated;
 /// X<Validated> is a projection, and an impl for a projection is E0118 if
 /// inherent, and breaks other crates' impls of the same trait (E0119) - to
 /// their coherence check it could be any type.
+///
+/// Every definition is made from its bytes the same way, ArmRef, and none
+/// borrows: so a container in state S can name a member as <S as
+/// State>::Of<its family> and hand it out in S - tagged_union!'s typed(),
+/// for any S. The state propagates to every member.
 pub trait Family {
-    type Unvalidated: ?Sized;
-    type Validated: ?Sized;
+    type Unvalidated: ?Sized + ArmRef + 'static;
+    type Validated: ?Sized + ArmRef + 'static;
     /// Validated and extended to the current type: every field there, so
     /// every field a field. An unsized vstruct's is its Validated - its
     /// header never grew.
-    type Whole: ?Sized;
+    type Whole: ?Sized + ArmRef + 'static;
 }
 
 /// A state: which of a Family's definitions X<S> is.
 pub trait State {
-    type Of<F: Family>: ?Sized;
+    type Of<F: Family>: ?Sized + ArmRef + 'static;
 }
 
 impl State for Unvalidated {
@@ -1222,7 +1227,7 @@ pub fn read_past<T: Plain>(rest: &[u8], at: usize) -> T {
 /// #[grown]'s - at the value's length; a family, its Validated DST. None if
 /// the bytes can't be one: fewer than every valid one has.
 pub trait ArmRef {
-    type Ref<'a> where Self: 'a;
+    type Ref<'a>: Copy where Self: 'a;
     type Mut<'a> where Self: 'a;
 
     fn arm_ref(b: &[u8]) -> Option<Self::Ref<'_>>;
@@ -1231,9 +1236,11 @@ pub trait ArmRef {
 
 /// whole_arm!(T, ..): each T an arm that never grew - C's validate rejects one
 /// unless it's whole - so handed out as a reference of all of it, if the
-/// arm's bytes hold it, aligned: cast_whole().
+/// arm's bytes hold it, aligned: cast_whole(). And T's family, T in every
+/// state, its definitions named as a family's are - so a container names it
+/// by state like any other arm.
 macro_rules! whole_arm {
-    ($($t:ty),* $(,)?) => { $(
+    ($($t:ident),* $(,)?) => { $crate::paste! { $(
         impl $crate::util::vstructs::ArmRef for $t {
             type Ref<'a> = &'a $t;
             type Mut<'a> = &'a mut $t;
@@ -1246,7 +1253,22 @@ macro_rules! whole_arm {
                 $crate::util::vstructs::cast_whole_mut(b)
             }
         }
-    )* };
+
+        #[doc(hidden)]
+        #[allow(non_camel_case_types)]
+        pub struct [<$t __family>];
+
+        impl $crate::util::vstructs::Family for [<$t __family>] {
+            type Unvalidated = $t;
+            type Validated = $t;
+            type Whole = $t;
+        }
+
+        #[allow(non_camel_case_types)]
+        pub type [<$t __unvalidated>] = $t;
+        #[allow(non_camel_case_types)]
+        pub type [<$t __validated>] = $t;
+    )* } };
 }
 pub(crate) use whole_arm;
 

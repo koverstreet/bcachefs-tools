@@ -503,7 +503,7 @@ impl SbAccess for SbBuf {
 mod tests {
     use crate::c;
     use crate::types::Le32;
-    use crate::util::vstructs::{Ffi, Validated, VStruct};
+    use crate::util::vstructs::{Ffi, Unvalidated, Validated, VStruct, VStructError};
 
     /// @buf as a superblock field of type @ty, @u64s long - its header written
     /// - as a superblock's walk would give it: as many bytes as it says.
@@ -569,6 +569,32 @@ mod tests {
         assert_eq!((clean.journal_seq.get(), clean.as_bytes().len()), (42, 48));
         let es: Vec<_> = clean.entries().map(|e| (e.u64s(), e.type_)).collect();
         assert_eq!(es, [(1, 7), (0, 0)]);
+    }
+
+    /// A section is in its superblock field's state, and so are its members:
+    /// the same clean section, Unvalidated, checks each entry and says which
+    /// overruns it; Validated, trusting its counts as C does, just ends there.
+    #[test]
+    fn sb_field_state_reaches_its_members() {
+        let mut buf = [0u64; 6];
+        buf[2] = 42;                            // journal_seq
+        buf[3] = 1;                             // an entry of 1 u64
+        buf[5] = 5;                             // one of 5, past the section's end
+        let f = field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_clean, 6);
+        let Ok(c::BchSbFieldRef::clean(clean)) = f.typed() else { panic!("a clean section") };
+        assert_eq!(clean.entries().count(), 1);
+
+        // SAFETY: u64s, which any bytes are
+        let b = unsafe { core::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len() * 8) };
+        let f = c::bch_sb_field::<Unvalidated>::from_bytes(b).unwrap();
+        let Ok(c::BchSbFieldRef::clean(clean)) = f.typed() else { panic!("a clean section") };
+        let es: Vec<_> = clean.entries().collect();
+        assert!(matches!(es[..], [Ok(_), Err(VStructError::Overrun { want: 48, have: 8, .. })]));
+        assert_eq!(clean.journal_seq.get(), 42);
+
+        // one arm, named in the field's state - c::bch_sb_field_clean alone,
+        // the Validated one, isn't an arm of an Unvalidated field
+        assert!(f.arm::<c::bch_sb_field_clean<Unvalidated>>().is_some());
     }
 
     /// A whole ext section is all of it, every field a field; one shorter
