@@ -32,6 +32,7 @@ c_bitmask! {
     }
 }
 
+#[whole(tail = _data: [u64])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]

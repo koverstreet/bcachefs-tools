@@ -396,6 +396,10 @@ macro_rules! bkey_val {
     (inode_v3, $f:tt)             => { bkey_val!(@family inode_v3); };
     (accounting, $f:tt)           => { bkey_val!(@family accounting); };
     (damage, $f:tt)               => { bkey_val!(@family damage); };
+    (btree_ptr, $f:tt)            => { bkey_val!(@family btree_ptr); };
+    (btree_ptr_v2, $f:tt)         => { bkey_val!(@family btree_ptr_v2); };
+    (extent, $f:tt)               => { bkey_val!(@family extent); };
+    (reflink_v, $f:tt)            => { bkey_val!(@family reflink_v); };
 
     (@family $name:ident) => { crate::paste! {
         impl BkeyValC for c::[<bch_ $name>] {
@@ -713,10 +717,10 @@ impl<'a> BkeySC<'a> {
 
         let len = self.val_bytes().len();
         match self.typed() {
-            BkeySCTyped::btree_ptr(_)    => offset_of!(c::bch_btree_ptr, start)..len,
-            BkeySCTyped::extent(_)       => offset_of!(c::bch_extent, start)..len,
-            BkeySCTyped::reflink_v(_)    => offset_of!(c::bch_reflink_v, start)..len,
-            BkeySCTyped::btree_ptr_v2(_) => offset_of!(c::bch_btree_ptr_v2, start)..len,
+            BkeySCTyped::btree_ptr(_)    => offset_of!(Ffi<c::bch_btree_ptr>, start)..len,
+            BkeySCTyped::extent(_)       => offset_of!(Ffi<c::bch_extent>, start)..len,
+            BkeySCTyped::reflink_v(_)    => offset_of!(Ffi<c::bch_reflink_v>, start)..len,
+            BkeySCTyped::btree_ptr_v2(_) => offset_of!(Ffi<c::bch_btree_ptr_v2>, start)..len,
             BkeySCTyped::stripe(s) => {
                 let start = offset_of!(c::bch_stripe, ptrs);
                 start..(start + s.v().nr_blocks as usize * size_of::<c::bch_extent_ptr>()).min(len)

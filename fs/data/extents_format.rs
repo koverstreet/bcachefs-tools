@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::util::vstructs::Ffi;
 use crate::types::{Le16, Le32, Le64};
 use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, whole, CStruct, Plain, TypeInfo};
 use nestify::nest;
@@ -303,6 +304,7 @@ pub struct bch_extent_entry {
     _opaque: [u64; 0],
 }
 
+#[whole(tail = _data: [u64])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
@@ -313,6 +315,7 @@ pub struct bch_btree_ptr {
     pub start: [c::bch_extent_ptr; 0],
 }
 
+#[whole(tail = _data: [u64])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
@@ -329,11 +332,12 @@ pub struct bch_btree_ptr_v2 {
 }
 
 c_bitmask! {
-    LE16_BITMASK(struct bch_btree_ptr_v2, flags) {
+    LE16_BITMASK(struct Ffi<bch_btree_ptr_v2>, flags) {
         BTREE_PTR_RANGE_UPDATED(0, 1),
     }
 }
 
+#[whole(tail = _data: [u64])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
@@ -376,7 +380,7 @@ c_const! {
      * sets of pointers coexist.
      */
     pub const BKEY_BTREE_PTR_VAL_U64s_MAX: usize =
-        (size_of::<c::bch_btree_ptr_v2>() +
+        (size_of::<Ffi<c::bch_btree_ptr_v2>>() +
          size_of::<c::bch_extent_ptr>() * c::BCH_REPLICAS_MAX as usize * 2 +
          size_of::<c::bch_extent_reconcile>() +
          size_of::<c::bch_extent_reconcile_bp>()) / size_of::<u64>();
