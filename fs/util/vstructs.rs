@@ -246,12 +246,29 @@ macro_rules! vstruct {
     // the count is that header's, and its own u64s() reads it
     (unsized $t:ident, $hdr:ident . $count:ident) => { $crate::paste! {
         $crate::util::vstructs::vstruct!([<$t __ffi>], $hdr.$count);
+        $crate::util::vstructs::vstruct!(@u64s $t);
+    } };
+    // counted by the header it embeds first, from its start - a superblock
+    // section's, by its field's u64s: start = 0
+    (unsized $t:ident, $hdr:ident . $count:ident, start = $start:expr) => { $crate::paste! {
+        $crate::util::vstructs::vstruct!(@impl [<$t __ffi>], $start, $hdr.$count);
+        $crate::util::vstructs::vstruct!(@u64s $t);
     } };
     (unsized $t:ident, $count:ident, start = $start:expr) => { $crate::paste! {
         $crate::util::vstructs::vstruct!(@impl [<$t __ffi>], $start, $count);
         $crate::util::vstructs::vstruct!(@unsized $t, $count);
     } };
+    // its length - a count of u64s from a u64 aligned start, as @impl
+    // asserts - is a whole number of its alignment, its head's, if that's no
+    // more than 8: so a reference to one, as long as size_of_val(), claims
+    // none past it, whatever its tail holds
+    (@u64s $t:ident) => { $crate::paste! {
+        const _: () = assert!(::core::mem::align_of::<[<$t __ffi>]>() <= 8,
+            concat!(stringify!($t), ": counted in u64s, so aligned to no more than 8"));
+    } };
     (@unsized $t:ident, $count:ident) => { $crate::paste! {
+        $crate::util::vstructs::vstruct!(@u64s $t);
+
         impl [<$t __ffi>] {
             /// Its count, as a usize - to read: it changes only through what
             /// holds the value, which has room for it to grow.

@@ -370,10 +370,6 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
     out.extend(tokens(&format!(
         "{}{}\
          const _: () = {{\n\
-             // no padding after its last element, which a reference - as long\n\
-             // as size_of_val(), rounded up to its alignment - would claim\n\
-             assert!(::core::mem::size_of::<{elem}>() % ::core::mem::align_of::<{ffi}>() == 0,\n\
-                     \"{name}: its tail's elements are a multiple of its alignment long\");\n\
              // C's struct ends at its last field - its flexible array, or an\n\
              // embedded vstruct's header, which ends where that one's tail starts\n\
              assert!(::core::mem::offset_of!({ffi}, {last}) + crate::types::field_size(\n\
