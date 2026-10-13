@@ -31,8 +31,10 @@
 //! room for it to grow - so an unsized vstruct's count is private, read as
 //! u64s().
 //!
-//! Sized types with a tail, not yet unsized - an ioctl's reply, a replicas
-//! entry: a FlexArray, its tail an array the header counts, reached as an
+//! A header and an array it counts in elements - an ioctl's reply, a
+//! replicas usage record - is #[counted]: a family like an unsized
+//! vstruct's, its tail the array, as long as the count says. A key is thin -
+//! its size is its k.u64s, not its reference's - and walked as an
 //! UnvalidatedRef (or UnvalidatedMut) of the bytes its count was checked
 //! against.
 //!
@@ -51,13 +53,15 @@
 //!    extent_type_u64s.
 //!  - VStruct: SelfSized by a count of u64s, vstructs.h's - 8 byte aligned.
 //!    vstruct!().
-//!  - Unsized: an unsized vstruct, its reference fat.
+//!  - Unsized: any DST of ours - an unsized vstruct, a #[counted] array, a
+//!    #[whole] or #[grown] value - its reference fat.
 //!  - A container: an unsized vstruct of entries, one after another from its
 //!    start[]: vstruct_for_each(), vstruct_container!()'s entries().
 //!
 //! vstructs.h, and where it goes:
 //!  - vstruct_bytes(), replicas_entry_bytes(): SelfSized::bytes()
-//!  - a counted array - devs[]: FlexArray, UnvalidatedRef::tail()
+//!  - a counted array - devs[]: #[counted], its Unvalidated definition's
+//!    array; FlexArray where it's read by stride
 //!  - vstruct_for_each(), vstruct_next(), vstruct_last(): an unsized
 //!    vstruct's entries(), trusting a Validated one's counts as C does,
 //!    checking an Unvalidated one's
@@ -585,16 +589,6 @@ impl<'a, T: Plain + SelfSized> UnvalidatedRef<'a, T> {
     }
 }
 
-impl<'a, T: FlexArray + Plain> UnvalidatedRef<'a, T> {
-    /// Its flexible array, as many elements as its header says: new() checked
-    /// its bytes hold them.
-    pub fn tail(&self) -> &'a [T::Elem] {
-        // SAFETY: in its bytes, as new() checked; the array is a field of T,
-        // so aligned where T is; any bytes are an Elem
-        unsafe { core::slice::from_raw_parts(self.bytes[T::TAIL..].as_ptr().cast(), self.nr()) }
-    }
-}
-
 /// An unsized container's thin entries, keys - each an UnvalidatedRef of
 /// its own bytes, checked against what's left: an Unvalidated
 /// jset_entry's entries().
@@ -662,17 +656,6 @@ impl<'a, T: Plain + SelfSized> UnvalidatedMut<'a, T> {
     /// reaches only the header.
     pub fn as_mut_ptr(&mut self) -> *mut T {
         self.bytes.as_mut_ptr().cast()
-    }
-}
-
-impl<'a, T: FlexArray + Plain> UnvalidatedMut<'a, T> {
-    /// Its flexible array, mutably, for good: as UnvalidatedRef::tail() - as
-    /// many elements as new() checked its bytes hold, not as its header says
-    /// now, which DerefMut may have changed since.
-    pub fn into_tail(self) -> &'a mut [T::Elem] {
-        let nr = (self.bytes.len() - T::TAIL) / size_of::<T::Elem>();
-        // SAFETY: as UnvalidatedRef::tail()'s
-        unsafe { core::slice::from_raw_parts_mut(self.bytes[T::TAIL..].as_mut_ptr().cast(), nr) }
     }
 }
 
@@ -773,6 +756,14 @@ pub trait HasFfi {
     /// C's struct. An impl is never for Ffi<T> itself - a projection - but
     /// for the family's definition by name, X__ffi.
     type Ffi: Plain;
+}
+
+/// C's struct of a #[counted] family - a header, and an array it counts in
+/// elements: its Unvalidated definition, for what holds a value's bytes -
+/// an ioctl's buffer - to hand the value out as, the count checked against
+/// them.
+pub trait CountedFfi: FlexArray + Plain {
+    type Unvalidated: ?Sized + Unsized<Head = Self>;
 }
 
 /// What C has of family type T, by T's name: its struct - see HasFfi. What

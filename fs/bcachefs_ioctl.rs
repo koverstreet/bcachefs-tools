@@ -5,8 +5,8 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::ffi::c_char;
-use crate::util::vstructs::FlexArray;
-use cstruct_macros::{c_const, c_enum, c_ioctl, c_xmacro, CStruct, Plain, TypeInfo};
+use crate::util::vstructs::Ffi;
+use cstruct_macros::{c_const, c_enum, c_ioctl, c_xmacro, counted, CStruct, Plain, TypeInfo};
 use nestify::nest;
 
 c_const! {
@@ -77,12 +77,12 @@ c_ioctl! {
     BCH_IOCTL_SUBVOLUME_DESTROY		= _IOW(0xbc,	17, c::bch_ioctl_subvolume),
     BCH_IOCTL_SUBVOLUME_DESTROY_v2	= _IOW(0xbc,	30, c::bch_ioctl_subvolume_v2),
 
-    BCH_IOCTL_DEV_USAGE_V2		= _IOWR(0xbc,	18, c::bch_ioctl_dev_usage_v2),
+    BCH_IOCTL_DEV_USAGE_V2		= _IOWR(0xbc,	18, Ffi<c::bch_ioctl_dev_usage_v2>),
 
-    BCH_IOCTL_FSCK_OFFLINE		= _IOW(0xbc,	19, c::bch_ioctl_fsck_offline),
+    BCH_IOCTL_FSCK_OFFLINE		= _IOW(0xbc,	19, Ffi<c::bch_ioctl_fsck_offline>),
     BCH_IOCTL_FSCK_ONLINE		= _IOW(0xbc,	20, c::bch_ioctl_fsck_online),
     BCH_IOCTL_QUERY_ACCOUNTING		= _IOW(0xbc,	21, c::bch_ioctl_query_accounting),
-    BCH_IOCTL_QUERY_COUNTERS		= _IOW(0xbc,	21, c::bch_ioctl_query_counters),
+    BCH_IOCTL_QUERY_COUNTERS		= _IOW(0xbc,	21, Ffi<c::bch_ioctl_query_counters>),
     BCH_IOCTL_SUBVOLUME_LIST		= _IOWR(0xbc,	31, c::bch_ioctl_subvol_readdir),
     BCH_IOCTL_SUBVOLUME_TO_PATH		= _IOWR(0xbc,	32, c::bch_ioctl_subvol_to_path),
     BCH_IOCTL_SNAPSHOT_TREE		= _IOWR(0xbc,	33, c::bch_ioctl_snapshot_tree_query),
@@ -101,7 +101,7 @@ c_ioctl! {
     BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS	= _IO(0xbc, 66),
     BCHFS_IOC_PREAD_RAW			= _IOWR(0xbc, 67, c::bch_ioctl_pread_raw),
     BCHFS_IOC_UNPOISON			= _IOW(0xbc, 68, c::bch_ioctl_unpoison),
-    BCHFS_IOC_GET_DAMAGE		= _IOWR(0xbc, 70, c::bch_ioctl_get_damage),
+    BCHFS_IOC_GET_DAMAGE		= _IOWR(0xbc, 70, Ffi<c::bch_ioctl_get_damage>),
     BCHFS_IOC_READDIR_FLAGS		= _IOWR(0xbc, 69, c::bch_ioctl_readdir_flags),
 
     /*
@@ -128,6 +128,7 @@ c_ioctl! {
  *		  first and last occurrence, unpacked with
  *		  BCH_SB_ERROR_ENTRY_V2_ID/NR/FIRST/LAST
  */
+#[counted]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_get_damage {
@@ -135,7 +136,6 @@ pub struct bch_ioctl_get_damage {
     pub nr_entries: u32,
     pub pad: u32,
     #[c("bch_sb_field_error_entry_v2 entries[]")]
-    #[counted_by(nr_entries)]
     pub entries: [c::bch_sb_field_error_entry_v2; 0],
 }
 
@@ -433,22 +433,12 @@ nest! {
 }
 c_default!(bch_ioctl_data_event);
 
+#[counted(r.nr_devs, tail = devs: [u8])]
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_replicas_usage {
     pub sectors: u64,
     pub r: c::bch_replicas_entry_v1,
-}
-
-/// r's devs[], r.nr_devs long: what makes a replicas_usage variable size -
-/// C's replicas_usage_bytes() is SelfSized::bytes().
-impl FlexArray for bch_replicas_usage {
-    type Elem = u8;
-    const TAIL: usize = core::mem::offset_of!(bch_replicas_usage, r.devs);
-
-    fn nr(&self) -> usize {
-        self.r.nr_devs as usize
-    }
 }
 
 /* Obsolete */
@@ -476,7 +466,7 @@ pub struct bch_ioctl_fs_usage {
     pub replica_entries_bytes: u32,
     pub pad: u32,
 
-    pub replicas: [c::bch_replicas_usage; 0],
+    pub replicas: [Ffi<c::bch_replicas_usage>; 0],
 }
 
 #[repr(C)]
@@ -511,6 +501,7 @@ pub struct bch_ioctl_dev_usage {
 }
 
 /* Obsolete */
+#[counted(nr_data_types)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_dev_usage_v2 {
@@ -523,7 +514,6 @@ pub struct bch_ioctl_dev_usage_v2 {
     pub bucket_size: u32,
     pub nr_buckets: u64,
 
-    #[counted_by(nr_data_types)]
     pub d: [c::bch_ioctl_dev_usage_type; 0],
 }
 
@@ -645,6 +635,7 @@ c_const! {
  * BCH_IOCTL_FSCK_OFFLINE: run fsck from the 'bcachefs fsck' userspace command,
  * but with the kernel's implementation of fsck:
  */
+#[counted(nr_devs)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_fsck_offline {
@@ -656,7 +647,6 @@ pub struct bch_ioctl_fsck_offline {
      * a bounds check to happen, even when it's a userspace pointer
      * (properly marked as __user)
      */
-    #[counted_by(nr_devs)]
     pub devs: [u64; 0],
 }
 
@@ -742,13 +732,13 @@ c_const! {
     pub const BCH_IOCTL_QUERY_COUNTERS_MOUNT: u32 = 1 << 0;
 }
 
+#[counted(nr)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_query_counters {
     pub nr: u16,
     pub flags: u16,
     pub pad: u32,
-    #[counted_by(nr)]
     pub d: [u64; 0],
 }
 

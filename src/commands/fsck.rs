@@ -10,6 +10,7 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::metadata_version;
 use bcachefs_kernel::opt_set;
+use bcachefs_kernel::util::vstructs::Ffi;
 use clap::Parser;
 
 use crate::wrappers::handle::BcachefsHandle;
@@ -290,12 +291,12 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
             }
         }
 
-        let mut buf = IoctlBuf::<c::bch_ioctl_fsck_offline>::new(dev_ptrs.len());
+        let mut buf = IoctlBuf::<Ffi<c::bch_ioctl_fsck_offline>>::new(dev_ptrs.len());
         let c_opts = CString::new(opts_str.as_str())?;
         let hdr = buf.hdr_mut();
         hdr.opts = c_opts.as_ptr() as u64;
         hdr.nr_devs = dev_ptrs.len() as u64;
-        buf.tail_mut()?.copy_from_slice(&dev_ptrs);
+        buf.get_mut()?.devs.copy_from_slice(&dev_ptrs);
 
         let fsck_fd = match std::fs::OpenOptions::new()
             .read(true).write(true)

@@ -508,7 +508,7 @@ impl BcachefsHandle {
     pub(crate) fn dev_usage(&self, dev_idx: u32) -> Result<DevUsage, Errno> {
         let nr_data_types = data_type::nr.0 as usize;
 
-        let mut buf = IoctlBuf::<bch_ioctl_dev_usage_v2>::new(nr_data_types);
+        let mut buf = IoctlBuf::<Ffi<bch_ioctl_dev_usage_v2>>::new(nr_data_types);
         let hdr = buf.hdr_mut();
         hdr.dev = dev_idx as u64;
         hdr.flags = BCH_BY_INDEX;
@@ -525,7 +525,7 @@ impl BcachefsHandle {
                 state: hdr.state,
                 bucket_size: hdr.bucket_size,
                 nr_buckets: hdr.nr_buckets,
-                data_types: buf.tail().map_err(|_| Errno(libc::EIO))?.iter()
+                data_types: buf.get().map_err(|_| Errno(libc::EIO))?.d.iter()
                     .map(|d| DevUsageType { buckets: d.buckets, sectors: d.sectors, fragmented: d.fragmented })
                     .collect(),
             });

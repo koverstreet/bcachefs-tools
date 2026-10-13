@@ -292,6 +292,14 @@ pub fn grown(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand("#[grown]", || vstructs::grown(attr, item))
 }
 
+/// `#[counted]`, `#[counted(PATH)]`, `#[counted(PATH, tail = NAME: [E])]`, on
+/// C's definition of a header and an array it counts in elements: its
+/// family, the count private in each state's definition - see vstructs.rs.
+#[proc_macro_attribute]
+pub fn counted(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand("#[counted]", || vstructs::counted(attr, item))
+}
+
 /// `#[whole]`, on C's definition of a type every valid value of which has
 /// all of it - a superblock section or journal entry of fixed fields: its
 /// family, every state all of it, at the value's length - see vstructs.rs.

@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use bch_bindgen::c::bch_ioctl_query_counters;
 use bcachefs_kernel::sb::io::{COUNTERS, CounterInfo};
+use bcachefs_kernel::util::vstructs::Ffi;
 use clap::Parser;
 use crossterm::{
     cursor,
@@ -30,14 +31,14 @@ const BCH_IOCTL_QUERY_COUNTERS_MOUNT: u16 = 1 << 0;
 // ioctl query
 
 fn read_counters(fd: std::os::fd::BorrowedFd, flags: u16, nr_stable: u16) -> Result<Vec<u64>> {
-    let mut buf = IoctlBuf::<bch_ioctl_query_counters>::new(nr_stable as usize);
+    let mut buf = IoctlBuf::<Ffi<bch_ioctl_query_counters>>::new(nr_stable as usize);
     let hdr = buf.hdr_mut();
     hdr.nr = nr_stable;
     hdr.flags = flags;
 
     unsafe { ioctl_ptr::<BCH_IOCTL_QUERY_COUNTERS>(fd, buf.as_mut_ptr())? };
 
-    Ok(buf.tail()?.to_vec())
+    Ok(buf.get()?.d.to_vec())
 }
 
 // Per-device IO from sysfs (io_done is JSON: {"read": {...}, "write": {...}}, values in bytes)

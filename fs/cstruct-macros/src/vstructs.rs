@@ -155,11 +155,16 @@ const VS: &str = "crate::util::vstructs";
 
 /// A field of C's struct as a state's definition has it, inline: pub only
 /// where C's is pub and holds no count - not the count, written private or
-/// pub(crate), nor an embedded header, Ffi<..>, whose own count it is. Those
+/// pub(crate), nor an embedded header, Ffi<..>, whose own count it is, nor
+/// one of @private, which the family names: a counted type's count. Those
 /// read through the definition's Deref to its head, and can't be written: a
 /// count changes only through what holds the value.
-fn inline_field(f: &CFieldDef) -> String {
-    let vis = if f.vis == "pub" && !f.ty.contains("Ffi<") { "pub " } else { "" };
+fn inline_field(f: &CFieldDef, private: &[&str]) -> String {
+    let vis = if f.vis == "pub" && !f.ty.contains("Ffi<") && !private.contains(&f.rust_name().as_str()) {
+        "pub "
+    } else {
+        ""
+    };
     format!("    {vis}{}: {},\n", f.rust_name(), f.ty.trim())
 }
 
@@ -178,7 +183,8 @@ fn repr_attrs(item: &TokenStream) -> String {
 }
 
 /// A state's definition, @ty: a DST - @fields inline, as @repr lays them
-/// out, then @tail, a slice of @elem - and C's struct, @ffi, its HasFfi.
+/// out, those of @private private (inline_field()), then @tail, a slice of
+/// @elem - and C's struct, @ffi, its HasFfi.
 ///
 /// Its fields are @head's, at @head's offsets - asserted - so it derefs to
 /// @head: reads, and @head's methods, written once there. No DerefMut: a &mut
@@ -192,9 +198,9 @@ fn repr_attrs(item: &TokenStream) -> String {
 /// ArmRef, cast() from the bytes its storage says are its. @doc is its own;
 /// @methods, more of them.
 #[allow(clippy::too_many_arguments)]
-fn dst(ty: &str, doc: &str, repr: &str, fields: &[CFieldDef], head: &str, tail: &str, elem: &str,
+fn dst(ty: &str, doc: &str, repr: &str, fields: &[CFieldDef], private: &[&str], head: &str, tail: &str, elem: &str,
        ffi: &str, methods: &str) -> String {
-    let inline: String = fields.iter().map(inline_field).collect();
+    let inline: String = fields.iter().map(|f| inline_field(f, private)).collect();
     let offsets: String = fields.iter()
         .map(|f| format!("assert!(::core::mem::offset_of!({ty}, {0}) == ::core::mem::offset_of!({head}, {0}),\n\
                               \"{ty}.{0}: not at {head}'s offset\");\n", f.rust_name()))
@@ -337,6 +343,62 @@ fn family(name: &str, unvalidated: &str, validated: &str, whole: &str, with_fiel
          pub type {name}<S = {VS}::Validated> = <S as {VS}::State>::Of<{name}__family>;\n")
 }
 
+/// The methods of @name's state @st's definition, a family whose count is
+/// its own - an unsized vstruct's, a counted type's: made from C's pointer,
+/// or, Unvalidated, from bytes; and handed back to C.
+fn state_methods(name: &str, ffi: &str, st: &str) -> String {
+    let from_bytes = if st == "Unvalidated" {
+        format!("/// The {name} at the start of @bytes - off a device, from the\n\
+                 /// kernel - as many as its count says: an error if they don't hold\n\
+                 /// its header, aligned, or that many.\n\
+                 pub fn from_bytes(bytes: &[u8]) -> Result<&Self, {VS}::VStructError> {{\n\
+                     {VS}::from_bytes::<Self>(bytes)\n\
+                 }}\n\
+                 \n\
+                 /// from_bytes(), mutably.\n\
+                 pub fn from_bytes_mut(bytes: &mut [u8]) -> Result<&mut Self, {VS}::VStructError> {{\n\
+                     {VS}::from_bytes_mut::<Self>(bytes)\n\
+                 }}\n")
+    } else {
+        String::new()
+    };
+    format!(
+        "/// The {name} C's pointer @p is to, as long as its count says: not\n\
+         /// widened from a reference to its header, which reaches only that.\n\
+         /// In the state the caller names - {name}::<Validated>, for what C\n\
+         /// read and validated - never one inferred.\n\
+         ///\n\
+         /// # Safety\n\
+         /// @p points to a {name} whose count is right, and what its state\n\
+         /// says of its entries' is true - for Validated, that C checked\n\
+         /// them; and those bytes stay valid, and unwritten, for 'a.\n\
+         pub unsafe fn from_ffi<'a>(p: *const {ffi}) -> &'a Self {{\n\
+             // SAFETY: the caller's\n\
+             unsafe {{ {VS}::from_ffi::<Self>(p) }}\n\
+         }}\n\
+         \n\
+         /// from_ffi(), mutably.\n\
+         ///\n\
+         /// # Safety\n\
+         /// As from_ffi()'s, and nothing else touches those bytes for 'a.\n\
+         pub unsafe fn from_ffi_mut<'a>(p: *mut {ffi}) -> &'a mut Self {{\n\
+             // SAFETY: the caller's\n\
+             unsafe {{ {VS}::from_ffi_mut::<Self>(p) }}\n\
+         }}\n\
+         \n\
+         /// For C: a pointer that reaches all of it.\n\
+         pub fn as_ffi(&self) -> *const {ffi} {{\n\
+             (self as *const Self).cast()\n\
+         }}\n\
+         \n\
+         /// For C, to edit: a pointer that reaches all of it.\n\
+         pub fn as_ffi_mut(&mut self) -> *mut {ffi} {{\n\
+             (self as *mut Self).cast()\n\
+         }}\n\
+         \n\
+         {from_bytes}")
+}
+
 /// #[unsized_vstruct]: the family of an unsized vstruct's definitions, one
 /// per state (util/vstructs.rs' Family), from C's struct as written.
 ///
@@ -380,61 +442,11 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
     let repr = repr_attrs(&item);
 
     let state = |st: &str, what: &str| -> String {
-        let from_bytes = if st == "Unvalidated" {
-            format!("/// The {name} at the start of @bytes - off a device, from the\n\
-                     /// kernel - as many as its count says: an error if they don't hold\n\
-                     /// its header, aligned, or that many.\n\
-                     pub fn from_bytes(bytes: &[u8]) -> Result<&Self, {VS}::VStructError> {{\n\
-                         {VS}::from_bytes::<Self>(bytes)\n\
-                     }}\n\
-                     \n\
-                     /// from_bytes(), mutably.\n\
-                     pub fn from_bytes_mut(bytes: &mut [u8]) -> Result<&mut Self, {VS}::VStructError> {{\n\
-                         {VS}::from_bytes_mut::<Self>(bytes)\n\
-                     }}\n")
-        } else {
-            String::new()
-        };
-        let methods = format!(
-            "/// The {name} C's pointer @p is to, as long as its count says: not\n\
-             /// widened from a reference to its header, which reaches only that.\n\
-             /// In the state the caller names - {name}::<Validated>, for what C\n\
-             /// read and validated - never one inferred.\n\
-             ///\n\
-             /// # Safety\n\
-             /// @p points to a {name} whose count is right, and what its state\n\
-             /// says of its entries' is true - for Validated, that C checked\n\
-             /// them; and those bytes stay valid, and unwritten, for 'a.\n\
-             pub unsafe fn from_ffi<'a>(p: *const {ffi}) -> &'a Self {{\n\
-                 // SAFETY: the caller's\n\
-                 unsafe {{ {VS}::from_ffi::<Self>(p) }}\n\
-             }}\n\
-             \n\
-             /// from_ffi(), mutably.\n\
-             ///\n\
-             /// # Safety\n\
-             /// As from_ffi()'s, and nothing else touches those bytes for 'a.\n\
-             pub unsafe fn from_ffi_mut<'a>(p: *mut {ffi}) -> &'a mut Self {{\n\
-                 // SAFETY: the caller's\n\
-                 unsafe {{ {VS}::from_ffi_mut::<Self>(p) }}\n\
-             }}\n\
-             \n\
-             /// For C: a pointer that reaches all of it.\n\
-             pub fn as_ffi(&self) -> *const {ffi} {{\n\
-                 (self as *const Self).cast()\n\
-             }}\n\
-             \n\
-             /// For C, to edit: a pointer that reaches all of it.\n\
-             pub fn as_ffi_mut(&mut self) -> *mut {ffi} {{\n\
-                 (self as *mut Self).cast()\n\
-             }}\n\
-             \n\
-             {from_bytes}");
         dst(&format!("{name}__{}", st.to_lowercase()),
             &format!("/// {name}<{st}>: {what}. C's fields - those that hold a count\n\
                       /// private - then its tail, as long as its count says. It derefs\n\
                       /// to C's struct {name}, Ffi<{name}>, to read.\n"),
-            &repr, fields, &ffi, &tail, &elem, &ffi, &methods)
+            &repr, fields, &[], &ffi, &tail, &elem, &ffi, &state_methods(&name, &ffi, st))
     };
 
     let mut out = rename_struct(item, &name, &ffi)?;
@@ -458,6 +470,108 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
                &[format!("{name}__unvalidated"), format!("{name}__validated")],
                &format!("/// {name}, in state S - Validated unless named: a reference to one\n\
                          /// reaches every byte of it and none past. C's struct {name} is\n\
+                         /// Ffi<{name}>.\n")))));
+    Ok(out)
+}
+
+/// #[counted], #[counted(PATH)], #[counted(PATH, tail = NAME: [E])]: the
+/// family of a type that's a header and an array it counts in elements - an
+/// ioctl's reply, a replicas usage record. Not a vstruct: no u64s, no entries
+/// to walk; its tail is just the array.
+///
+/// PATH is the count, as vstruct!'s is - a field, or a field of one it
+/// embeds (r.nr_devs) - and nr_entries if not named, the convention. Its
+/// first field holds the count, so that's private in each state's
+/// definition; C's struct keeps it as written, so a header can still be
+/// built standalone. The array is the item's trailing [E; 0], or, where it's
+/// a field of a field, `tail = NAME: [E]` - the states' NAME.
+///
+/// C's struct gets FlexArray from the count - its size, TAIL and the
+/// elements past it - and CountedFfi, the way to its Unvalidated definition
+/// from what holds its bytes.
+pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
+    let def = parse_cstruct(&item.to_string())?;
+    let name = def.name.clone();
+    let ffi = format!("{name}__ffi");
+
+    let mut count = "nr_entries".to_string();
+    let mut tail_spec = None;
+    for part in attr.to_string().split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        match part.strip_prefix("tail").map(str::trim_start).and_then(|p| p.strip_prefix('=')) {
+            Some(t) => tail_spec = Some(t.trim().to_string()),
+            None => count = part.replace(' ', ""),
+        }
+    }
+    let count_field = count.split('.').next().unwrap_or_default().to_string();
+    if !def.fields.iter().any(|f| f.rust_name() == count_field) {
+        return Err(format!("{name}: #[counted({count})], but {name} has no field {count_field} - \
+                            name its count, #[counted(FIELD)] or #[counted(FIELD.COUNT)]"));
+    }
+
+    // the array: a trailing [E; 0], or a field of a field - after C's struct,
+    // where dst() asserts its tail starts
+    let (tail, elem, fields, tail_at) = match tail_spec {
+        Some(t) => {
+            let bad = || format!("{name}: #[counted(.., tail = NAME: [E])], not tail = {t}");
+            let (n, e) = t.split_once(':').ok_or_else(bad)?;
+            let e = e.trim().strip_prefix('[').and_then(|e| e.strip_suffix(']'))
+                .filter(|e| !e.contains(';')).ok_or_else(bad)?;
+            (n.trim().to_string(), e.trim().to_string(), &def.fields[..],
+             format!("::core::mem::size_of::<{ffi}>()"))
+        }
+        None => {
+            let last = def.fields.last().ok_or_else(|| format!("{name}: a counted type has fields"))?;
+            match field_type(&last.ty)? {
+                FieldType::Array { elem, n } if n == "0" =>
+                    (last.rust_name(), elem, &def.fields[..def.fields.len() - 1],
+                     format!("::core::mem::offset_of!({ffi}, {})", last.rust_name())),
+                _ => return Err(format!("{name}: its last field, {}, isn't a flexible array, [E; 0] - \
+                                         #[counted(.., tail = NAME: [E])] says where its array is",
+                                        last.name)),
+            }
+        }
+    };
+    let repr = repr_attrs(&item);
+    let private = [count_field.as_str()];
+
+    let state = |st: &str, what: &str| -> String {
+        dst(&format!("{name}__{}", st.to_lowercase()),
+            &format!("/// {name}<{st}>: {what}. C's fields - those that hold a count\n\
+                      /// private - then its array, {tail}, as long as its count says.\n\
+                      /// It derefs to C's struct {name}, Ffi<{name}>, to read.\n"),
+            &repr, fields, &private, &ffi, &tail, &elem, &ffi, &state_methods(&name, &ffi, st))
+    };
+
+    let mut out = rename_struct(item, &name, &ffi)?;
+    out.extend(tokens(&format!(
+        "impl {VS}::FlexArray for {ffi} {{\n\
+             type Elem = {elem};\n\
+             const TAIL: usize = {tail_at};\n\
+             #[inline]\n\
+             fn nr(&self) -> usize {{\n\
+                 // by value: a packed struct's field can't be borrowed\n\
+                 {VS}::Count::count(&{{ self.{count} }})\n\
+             }}\n\
+         }}\n\
+         \n\
+         impl {VS}::CountedFfi for {ffi} {{\n\
+             type Unvalidated = {name}__unvalidated;\n\
+         }}\n\
+         \n\
+         // a reference as long as its count says is a whole number of its\n\
+         // alignment only if its elements are: else it claims bytes past it\n\
+         const _: () = assert!(::core::mem::size_of::<{elem}>() % ::core::mem::align_of::<{ffi}>() == 0,\n\
+             \"{name}: its elements aren't a whole number of its alignment\");\n\
+         \n\
+         {}{}{}",
+        state("Unvalidated", "bytes from outside - from the kernel - its count checked \
+                              against them when it's made"),
+        state("Validated", "what C read and validated, its count trusted as C trusts it"),
+        family(&name, &format!("{name}__unvalidated"), &format!("{name}__validated"),
+               &format!("{name}__validated"),
+               &[format!("{name}__unvalidated"), format!("{name}__validated")],
+               &format!("/// {name}, in state S - Validated unless named: a reference to one\n\
+                         /// reaches every element of it and none past. C's struct {name} is\n\
                          /// Ffi<{name}>.\n")))));
     Ok(out)
 }
@@ -526,7 +640,7 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
                   /// the bytes past them there are, written by a version since, at\n\
                   /// exactly the value's length. It derefs to C's struct {name},\n\
                   /// Ffi<{name}>, to read.\n"),
-        &repr_attrs(&item), &def.fields, &ffi, "_rest", "u8", &ffi,
+        &repr_attrs(&item), &def.fields, &[], &ffi, "_rest", "u8", &ffi,
         &format!("/// For C: a pointer to all of it.\n\
                   pub fn as_ffi(&self) -> *const {ffi} {{\n\
                       (self as *const Self).cast()\n\
@@ -618,7 +732,7 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
                             /// length. It derefs to the floor, to read. A field it gained later\n\
                             /// is a getter, zero where the value ends before it; whole() is all\n\
                             /// of it, {name}<Whole>, if it's all there.\n"),
-                  "#[repr(C)]\n", floor, &fl, "_rest", "u8", &ffi, &methods),
+                  "#[repr(C)]\n", floor, &[], &fl, "_rest", "u8", &ffi, &methods),
         // the cast checks the floor: an unvalidated one is as good. Its later
         // fields are inline only in its Whole, so that's where c_bitmask!'s
         // setters go

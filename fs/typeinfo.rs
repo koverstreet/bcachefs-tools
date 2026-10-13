@@ -695,7 +695,7 @@ mod tests {
     /// zero; anywhere else it's a zero-length array.
     #[test]
     fn flex_array_tail() {
-        let info = <c::bch_ioctl_fsck_offline as TypeInfo>::INFO;
+        let info = <crate::util::vstructs::Ffi<c::bch_ioctl_fsck_offline> as TypeInfo>::INFO;
         let devs = info.fields.iter().find(|f| f.name == "devs").unwrap();
         assert!(matches!(devs.kind, FieldKind::VarTail { stride: 8, .. }));
 

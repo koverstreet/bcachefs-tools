@@ -14,7 +14,7 @@ use std::os::fd::{AsFd, AsRawFd};
 
 pub use bcachefs_kernel::cstructs::bcachefs_ioctl::*;
 pub use bcachefs_kernel::util::ioctl::Ioctl;
-use bcachefs_kernel::util::vstructs::{read_past, FlexArray, Plain, UnvalidatedRef, UnvalidatedMut, VStructError};
+use bcachefs_kernel::util::vstructs::{from_bytes, from_bytes_mut, read_past, CountedFfi, FlexArray, Plain, VStructError};
 
 fn ret(r: libc::c_int) -> io::Result<i32> {
     if r < 0 {
@@ -58,11 +58,12 @@ pub unsafe fn ioctl_ptr<I: Ioctl>(fd: impl AsFd, arg: *mut I::Arg) -> io::Result
 
 /// Owned, zeroed allocation for an ioctl argument that ends in a flexible
 /// array member: header `H`, then what follows it. The header is read and
-/// written through the struct. What follows is reached through this buffer,
-/// never through the header's `[T; 0]` field, whose reference covers only the
-/// header: as an UnvalidatedRef (util/vstructs.rs) for an array the header
-/// counts - so a count past the end of the buffer is an error, not a read
-/// past it - or as bytes, for a tail of variable-size records.
+/// written through the struct; what follows, through this buffer - never the
+/// header's `[T; 0]` field, whose reference covers only the header:
+///  - get(): a #[counted] header's value, its array as long as the count says
+///    - a count past the end of the buffer an error, not a read past it;
+///  - tail_strided(): an array of elements the kernel sized;
+///  - trailing_bytes(): a tail of variable-size records.
 ///
 /// `H` must be valid zeroed, and align <= 8 (asserted at compile time).
 pub struct IoctlBuf<H> {
@@ -119,12 +120,6 @@ impl<H: FlexArray + Plain> IoctlBuf<H> {
         Self::alloc(H::TAIL + nr * std::mem::size_of::<H::Elem>())
     }
 
-    /// The array, as long as the header's count says: an error if the
-    /// buffer doesn't hold that many - the kernel and us disagreeing.
-    pub fn tail(&self) -> Result<&[H::Elem], VStructError> {
-        Ok(UnvalidatedRef::<H>::new(self.bytes())?.tail())
-    }
-
     /// The array of a reply whose elements are @stride bytes apart - the
     /// kernel's size for them, where the header says, not necessarily ours -
     /// each copied: zero past @stride, the kernel's past ours dropped. An
@@ -138,13 +133,22 @@ impl<H: FlexArray + Plain> IoctlBuf<H> {
         })?;
         Ok(tail.chunks_exact(stride).map(|e| read_past(e, 0)).collect())
     }
+}
 
-    /// The array, as long as the header's count says - to fill in, having
-    /// set that count.
-    pub fn tail_mut(&mut self) -> Result<&mut [H::Elem], VStructError> {
+impl<H: CountedFfi> IoctlBuf<H> {
+    /// The value, a #[counted] family's - its header, and its array as long
+    /// as the header's count says: an error if the buffer doesn't hold that
+    /// many, the kernel and us disagreeing. Unvalidated: the kernel's bytes.
+    pub fn get(&self) -> Result<&H::Unvalidated, VStructError> {
+        from_bytes::<H::Unvalidated>(self.bytes())
+    }
+
+    /// get(), to fill in its array, having set the header's count: the
+    /// count is the buffer's to set, through hdr_mut().
+    pub fn get_mut(&mut self) -> Result<&mut H::Unvalidated, VStructError> {
         // SAFETY: u64s, which any bytes are
         let bytes = unsafe { std::slice::from_raw_parts_mut(self.buf.as_mut_ptr().cast(), self.buf.len() * 8) };
-        Ok(UnvalidatedMut::<H>::new(bytes)?.into_tail())
+        from_bytes_mut::<H::Unvalidated>(bytes)
     }
 }
 
@@ -193,7 +197,6 @@ mod tests {
         let buf = reply(3, stride);
         let ids = |ns: &[bch_ioctl_snapshot_node_v2]| ns.iter().map(|n| n.id).collect::<Vec<_>>();
         assert_eq!(ids(&buf.tail_strided(stride).unwrap()), [1, 2, 3]);
-        assert_eq!(ids(buf.tail().unwrap()), [1, 2, 3]);
     }
 
     /// A count past the buffer is an error, not a read past it.
@@ -203,5 +206,29 @@ mod tests {
         let mut buf = reply(1, stride);
         buf.hdr_mut().nr = 5;
         assert!(matches!(buf.tail_strided(stride), Err(VStructError::Overrun { .. })));
+    }
+
+    type Counters = bcachefs_kernel::util::vstructs::Ffi<bch_ioctl_query_counters>;
+
+    /// get() is the array as long as the header's count says, not as long as
+    /// the buffer.
+    #[test]
+    fn get_counted() {
+        let mut buf = IoctlBuf::<Counters>::new(4);
+        buf.hdr_mut().nr = 3;
+        buf.get_mut().unwrap().d.copy_from_slice(&[1, 2, 3]);
+        assert_eq!(buf.get().unwrap().d, [1, 2, 3]);
+
+        buf.hdr_mut().nr = 4;
+        assert_eq!(buf.get().unwrap().d, [1, 2, 3, 0]);
+    }
+
+    /// A count past the buffer is an error, not a read past it.
+    #[test]
+    fn get_overrun() {
+        let mut buf = IoctlBuf::<Counters>::new(4);
+        buf.hdr_mut().nr = 5;
+        assert!(matches!(buf.get(), Err(VStructError::Overrun { want: 48, have: 40, .. })));
+        assert!(matches!(buf.get_mut(), Err(VStructError::Overrun { .. })));
     }
 }
