@@ -2,7 +2,7 @@ use crate::c;
 use crate::c::{bch_member, bch_sb, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
 use crate::sb::members;
 use crate::types::ArmOf;
-use crate::util::vstructs::{ArmRef, Ffi, SelfSized, Validated};
+use crate::util::vstructs::{read_past, ArmRef, Ffi, SelfSized, Validated};
 
 /// A superblock section's type: an arm of tagged_union! bch_sb_field, which
 /// gives its field type - handed out as its ArmRef says, a short one, written
@@ -161,9 +161,19 @@ impl bch_sb_handle {
         self.sb().as_bytes()
     }
 
-    /// The superblock's full vstruct extent, mutably.
-    pub fn sb_bytes_mut(&mut self) -> &mut [u8] {
-        crate::util::vstructs::bytes_of_mut(self.sb_mut())
+    /// Its header - C's struct bch_sb, every field at its offset - edited as
+    /// bytes by @f: kvdb's sb set. Not its count, u64s, which changes only
+    /// with what it counts: an error if @f changed it, the header left as it
+    /// was.
+    pub fn edit_header<R>(&mut self, f: impl FnOnce(&mut [u8]) -> R) -> Result<R, &'static str> {
+        const N: usize = core::mem::size_of::<Ffi<bch_sb>>();
+        let mut h: [u8; N] = self.sb_bytes()[..N].try_into().unwrap();
+        let r = f(&mut h);
+        if read_past::<Ffi<bch_sb>>(&h, 0).u64s() != self.sb().u64s() {
+            return Err("u64s is the superblock's count: it changes with the fields it counts");
+        }
+        crate::util::vstructs::bytes_of_mut(self.sb_mut())[..N].copy_from_slice(&h);
+        Ok(r)
     }
 
     /// Member @idx, to edit: None if there's no such member in the section,

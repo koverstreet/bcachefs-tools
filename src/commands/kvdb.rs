@@ -855,11 +855,13 @@ fn cmd_sb_set(fs: &Fs, dev: Option<u32>, field: &str, v: u64) -> Result<String> 
     let _lock = unsafe { crate::wrappers::sb_lock(fs.raw) };
 
     /* sb_lock is held above - disk_sb_mut's contract, and ca->disk_sb's: */
-    let buf = match &ca {
-        Some(ca) => unsafe { &mut (*ca.as_mut_ptr()).disk_sb }.sb_bytes_mut(),
-        None     => unsafe { fs.disk_sb_mut() }.sb_bytes_mut(),
+    let sb = match &ca {
+        Some(ca) => unsafe { &mut (*ca.as_mut_ptr()).disk_sb },
+        None     => unsafe { fs.disk_sb_mut() },
     };
-    typeinfo::write(buf, &target, v).map_err(|e| anyhow!("{field}: {e}"))?;
+    sb.edit_header(|h| typeinfo::write(h, &target, v))
+        .map_err(|e| anyhow!("{field}: {e}"))?
+        .map_err(|e| anyhow!("{field}: {e}"))?;
 
     // Only --rw (started) and --nostart (opened will_not_start, which makes
     // no version decisions to persist) get here - see the check in the
