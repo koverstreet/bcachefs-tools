@@ -309,7 +309,7 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
 
     let k = &mut out.inode;
     *k = c::bkey_i_inode_v3::new();
-    k.k_mut().p.offset = inode.bi_inum;
+    k.k.p.offset = inode.bi_inum;
     k.v.bi_journal_seq = inode.bi_journal_seq.into();
     k.v.bi_hash_seed   = inode.bi_hash_seed;
     k.v.bi_flags       = flags.into();
@@ -350,7 +350,7 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
     // Trailing zero fields are left off; what they encoded to is zeroes,
     // so the value's last u64 is zero-padded:
     let k = &mut out.inode;
-    k.k_mut().u64s = (BKEY_U64S + (V3_FIELDS_OFFSET + used_len).div_ceil(8)) as u8;
+    k.k.u64s = (BKEY_U64S + (V3_FIELDS_OFFSET + used_len).div_ceil(8)) as u8;
     k.v.set_inodev3_nr_fields(used_nr);
 
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -756,7 +756,7 @@ pub fn fsck_write_inode(trans: &BtreeTrans<'_>, inode: &mut c::bch_inode_unpacke
 /// tree in at format time.
 pub fn write_cached(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchError> {
     let mut packed = pack(inode);
-    packed.inode.k_mut().p.snapshot = u32::MAX;
+    packed.inode.k.p.snapshot = u32::MAX;
     fs.btree_insert(
         btree_id::inodes,
         packed.inode.k_i_mut(),
@@ -2216,7 +2216,7 @@ mod tests {
     /// Set the key's value to @fields_bytes of packed fields, @nr_fields of
     /// them.
     fn set_fields_len(k: &mut c::bkey_inode_buf, fields_bytes: usize, nr_fields: u64) {
-        k.inode.k_mut().u64s = (BKEY_U64S + (V3_FIELDS_OFFSET + fields_bytes).div_ceil(8)) as u8;
+        k.inode.k.u64s = (BKEY_U64S + (V3_FIELDS_OFFSET + fields_bytes).div_ceil(8)) as u8;
         k.inode.v.set_inodev3_nr_fields(nr_fields);
     }
 

@@ -19,26 +19,21 @@ use core::cmp::Ordering;
 /// The u64s of a key's header, struct bkey: as C's BKEY_U64s.
 pub const BKEY_U64S: usize = core::mem::size_of::<c::bkey>() / core::mem::size_of::<u64>();
 
+/// A key with its value inline, of any type or its own: a bkey_i, or a typed
+/// one's .k_i - for what takes either, as btree_insert() does.
 pub trait AsBkeyI {
-    fn as_bkey_i(&self) -> &c::bkey_i;
     fn as_bkey_i_mut(&mut self) -> &mut c::bkey_i;
-
-    fn as_bkey(&self) -> &c::bkey {
-        &self.as_bkey_i().k
-    }
-
-    fn as_bkey_mut(&mut self) -> &mut c::bkey {
-        &mut self.as_bkey_i_mut().k
-    }
 }
 
 impl AsBkeyI for c::bkey_i {
-    fn as_bkey_i(&self) -> &c::bkey_i {
-        self
-    }
-
     fn as_bkey_i_mut(&mut self) -> &mut c::bkey_i {
         self
+    }
+}
+
+impl<V> AsBkeyI for BkeyI<V> {
+    fn as_bkey_i_mut(&mut self) -> &mut c::bkey_i {
+        self.k_i_mut()
     }
 }
 
@@ -296,6 +291,18 @@ pub struct BkeyI<V> {
 }
 
 impl<V> BkeyI<V> {
+    /// The key, of any type: C's .k_i.
+    pub fn k_i(&self) -> &c::bkey_i {
+        // SAFETY: a bkey_i is a key's header, then its value - empty, there
+        unsafe { &*(self as *const Self).cast::<c::bkey_i>() }
+    }
+
+    /// k_i(), to edit.
+    pub fn k_i_mut(&mut self) -> &mut c::bkey_i {
+        // SAFETY: as k_i()'s
+        unsafe { &mut *(self as *mut Self).cast::<c::bkey_i>() }
+    }
+
     /// Its value.
     pub fn v(&self) -> &V {
         &self.v
@@ -398,18 +405,6 @@ macro_rules! bkey_types {
         pub type [<BkeySC $name:camel>]<'a> = BkeySC<'a, c::[<bch_ $name>]>;
         pub type [<BkeyS $name:camel>]<'a> = BkeyS<'a, c::[<bch_ $name>]>;
 
-        impl c::[<bkey_i_ $name>] {
-            pub fn k(&self) -> &c::bkey { &self.k }
-            pub fn k_mut(&mut self) -> &mut c::bkey { &mut self.k }
-            pub fn k_i(&self) -> &c::bkey_i { unsafe { &*(self as *const Self as *const c::bkey_i) } }
-            pub fn k_i_mut(&mut self) -> &mut c::bkey_i { unsafe { &mut *(self as *mut Self as *mut c::bkey_i) } }
-        }
-
-        impl AsBkeyI for c::[<bkey_i_ $name>] {
-            fn as_bkey_i(&self) -> &c::bkey_i { self.k_i() }
-            fn as_bkey_i_mut(&mut self) -> &mut c::bkey_i { self.k_i_mut() }
-        }
-
         impl TypedBkey for c::[<bkey_i_ $name>] {
             type Val = c::[<bch_ $name>];
 
@@ -430,7 +425,7 @@ macro_rules! bkey_types {
             fn from_key(k: BkeySC<'_>) -> Option<Self> {
                 let v = Self::val_copy_pad(k)?;
                 let mut r = Self::default();
-                *r.k_mut() = *k.k;
+                r.k = *k.k;
                 r.v = v;
                 Some(r)
             }

@@ -183,9 +183,9 @@ impl TransBkey<'_, '_> {
         write(u_bytes, field, &target, v)?;
 
         let mut packed = inode::pack(&u);
-        packed.inode.k_mut().p = self.k().p;
+        packed.inode.k.p = self.k().p;
 
-        let need_u64s = packed.inode.k().u64s as usize;
+        let need_u64s = packed.inode.k.u64s as usize;
         let have_u64s = self.as_u64s().len();
         if need_u64s > have_u64s {
             return Err(SetError::NoRoom { need_u64s, have_u64s });
