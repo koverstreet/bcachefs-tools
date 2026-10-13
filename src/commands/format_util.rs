@@ -12,7 +12,7 @@ use bcachefs_kernel::{metadata_version, opt_defined, opt_get, opt_set};
 
 use crate::wrappers::super_io::{die, SUPERBLOCK_SIZE_DEFAULT};
 use bcachefs_kernel::sb::io::BCHFS_MAGIC;
-use bcachefs_kernel::util::vstructs::Ffi;
+use bcachefs_kernel::util::vstructs::{Ffi, Whole};
 
 /// Device options for formatting — Rust replacement for C struct dev_opts.
 ///
@@ -258,7 +258,7 @@ pub fn format(
 
     // Create ext field before setting options - some options (e.g.
     // dev_readahead) use set_ext which requires this field to exist
-    let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
+    let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext<Whole>>() / std::mem::size_of::<u64>()) as u32;
     sb.field_get_minsize::<c::bch_sb_field_ext>(ext_u64s);
 
     opt_set_sb_all(sb.sb_mut(), -1, &mut fs_opts);

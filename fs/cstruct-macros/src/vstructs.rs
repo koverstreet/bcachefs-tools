@@ -2,8 +2,9 @@
 //! What util/vstructs.rs's traits need of a type C shares, from its
 //! definition: #[derive(Plain)] - and #[bitfield], every one of which is -
 //! #[counted_by(FIELD)], a CStruct's FlexArray, #[derive(View)], its
-//! fields' projections on a View of it, and #[unsized_vstruct], the family
-//! of an unsized vstruct's definitions.
+//! fields' projections on a View of it, and the families of definitions,
+//! one per state: #[unsized_vstruct], an unsized vstruct's; #[grown], a type
+//! that grew between format versions.
 //!
 //! Plain is a promise: every bit pattern of the type's bytes is a value of
 //! it, and every byte is a field's. These impls check it at compile time,
@@ -375,6 +376,150 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
                &format!("/// {name}, in state S - Validated unless named: a reference to one\n\
                          /// reaches every byte of it and none past. C's struct {name} is\n\
                          /// Ffi<{name}>.\n")))));
+    Ok(out)
+}
+
+/// #[grown(from = FIELD)]: the family of a type that grew between format
+/// versions, from C's struct as written - FIELD the first field a valid
+/// value may lack, written by a version from before it.
+///
+/// C's definition is the item, renamed X__ffi, with #[c_name(X)]: the whole
+/// struct, X<Whole> - every field there, so every field a field. X__floor is
+/// the fields before FIELD, every valid value's. X<Validated> - Unvalidated
+/// too, as the cast checks the floor - is X__validated, a DST: the floor,
+/// which it derefs to, then the bytes there are, at exactly the value's
+/// length; a field from FIELD on is a getter, zero past the end, and
+/// whole() is all of it, if it's all there.
+pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
+    let def = parse_cstruct(&item.to_string())?;
+    let name = def.name.clone();
+    let attr = attr.to_string();
+    let from = attr.trim().strip_prefix("from").map(str::trim_start).and_then(|a| a.strip_prefix('='))
+        .map(str::trim)
+        .ok_or_else(|| format!("{name}: #[grown(from = FIELD)], FIELD the first field an older \
+                                version's value may lack - not ({attr})"))?;
+    let at = def.fields.iter().position(|f| f.rust_name() == from)
+        .ok_or_else(|| format!("{name}: #[grown(from = {from})], but {name} has no field {from}"))?;
+    if at == 0 {
+        return Err(format!("{name}: #[grown(from = {from})]: every valid value has at least one field"));
+    }
+    let (floor, later) = def.fields.split_at(at);
+
+    let ffi = format!("{name}__ffi");
+    let fl = format!("{name}__floor");
+    let ty = format!("{name}__validated");
+
+    let floor_fields: String = floor.iter()
+        .map(|f| format!("    pub {}: {},\n", f.rust_name(), f.ty.trim()))
+        .collect();
+    let floor_tys: Vec<&str> = floor.iter().map(|f| f.ty.trim()).collect();
+    let floor_offsets: String = floor.iter()
+        .map(|f| format!("assert!(::core::mem::offset_of!({fl}, {0}) == ::core::mem::offset_of!({ffi}, {0}));\n",
+                         f.rust_name()))
+        .collect();
+
+    const METHODS: &[&str] = &["whole", "whole_mut", "as_bytes", "as_bytes_mut", "from_bytes", "from_bytes_mut"];
+    let mut getters = String::new();
+    for f in later {
+        let field = f.rust_name();
+        if METHODS.contains(&field.as_str()) {
+            return Err(format!("{name}.{field}: {ty}'s own method is named {field} - its getter \
+                                would be hidden"));
+        }
+        let fty = f.ty.trim();
+        getters.push_str(&format!(
+            "/// {field}, or zero where the value ends before it: one written\n\
+             /// before {name} had it.\n\
+             pub fn {field}(&self) -> {fty} {{\n\
+                 {VS}::read_past::<{fty}>(&self._rest,\n\
+                     ::core::mem::offset_of!({ffi}, {field}) - ::core::mem::size_of::<{fl}>())\n\
+             }}\n\
+             \n"));
+    }
+
+    let methods = format!(
+        "/// @b as one, every byte of it: None if it can't be - fewer than its\n\
+         /// floor, not aligned for it, or not a whole number of its alignment\n\
+         /// long, which a reference, as long as size_of_val(), would claim past.\n\
+         fn from_bytes(b: &[u8]) -> Option<&Self> {{\n\
+             let align = ::core::mem::align_of::<{fl}>();\n\
+             (b.len() >= ::core::mem::size_of::<{fl}>() && b.as_ptr() as usize % align == 0\n\
+              && b.len() % align == 0)\n\
+                 // SAFETY: as checked: the floor's bytes are there, aligned, and the\n\
+                 // reference claims exactly @b\n\
+                 .then(|| unsafe {{ &*<Self as {VS}::Unsized>::from_raw(b.as_ptr(), b.len()) }})\n\
+         }}\n\
+         \n\
+         /// from_bytes(), mutably.\n\
+         fn from_bytes_mut(b: &mut [u8]) -> Option<&mut Self> {{\n\
+             let align = ::core::mem::align_of::<{fl}>();\n\
+             (b.len() >= ::core::mem::size_of::<{fl}>() && b.as_ptr() as usize % align == 0\n\
+              && b.len() % align == 0)\n\
+                 // SAFETY: as from_bytes()\n\
+                 .then(|| unsafe {{ &mut *<Self as {VS}::Unsized>::from_raw_mut(b.as_mut_ptr(), b.len()) }})\n\
+         }}\n\
+         \n\
+         /// All of it, {name}<Whole>, if it's all there - every field a field.\n\
+         pub fn whole(&self) -> Option<&{ffi}> {{\n\
+             (::core::mem::size_of_val(self) >= ::core::mem::size_of::<{ffi}>()\n\
+              && (self as *const Self).cast::<u8>() as usize % ::core::mem::align_of::<{ffi}>() == 0)\n\
+                 // SAFETY: that many bytes are its, aligned, and C's struct is Plain\n\
+                 .then(|| unsafe {{ &*(self as *const Self).cast::<{ffi}>() }})\n\
+         }}\n\
+         \n\
+         /// whole(), to edit.\n\
+         pub fn whole_mut(&mut self) -> Option<&mut {ffi}> {{\n\
+             (::core::mem::size_of_val(self) >= ::core::mem::size_of::<{ffi}>()\n\
+              && (self as *const Self).cast::<u8>() as usize % ::core::mem::align_of::<{ffi}>() == 0)\n\
+                 // SAFETY: as whole()\n\
+                 .then(|| unsafe {{ &mut *(self as *mut Self).cast::<{ffi}>() }})\n\
+         }}\n\
+         \n\
+         {getters}");
+
+    let mut out = rename_struct(item, &name, &ffi)?;
+    out.extend(tokens(&format!(
+        "/// {name}'s floor: the fields every valid one has - all it had before\n\
+         /// it grew, from {from} on.\n\
+         #[repr(C)]\n\
+         #[derive(Clone, Copy)]\n\
+         #[allow(non_camel_case_types)]\n\
+         pub struct {fl} {{\n{floor_fields}}}\n\
+         {plain}\
+         const _: () = {{\n\
+             {floor_offsets}\
+             assert!(::core::mem::size_of::<{fl}>() == ::core::mem::offset_of!({ffi}, {from}),\n\
+                     \"{name}: its floor ends where {from} starts\");\n\
+         }};\n\
+         \n\
+         {dst}\
+         impl {VS}::ArmRef for {ty} {{\n\
+             type Ref<'a> = &'a Self;\n\
+             type Mut<'a> = &'a mut Self;\n\
+             \n\
+             fn arm_ref(b: &[u8]) -> Option<&Self> {{\n\
+                 Self::from_bytes(b)\n\
+             }}\n\
+             \n\
+             fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {{\n\
+                 Self::from_bytes_mut(b)\n\
+             }}\n\
+         }}\n\
+         \n\
+         {family}",
+        plain = plain(&fl, &floor_tys),
+        dst = dst(&ty,
+                  &format!("/// {name}<Validated>: what C read and validated, written by any version\n\
+                            /// since it had its floor - the floor, which it derefs to, then the\n\
+                            /// bytes there are, at exactly the value's length. A field it gained\n\
+                            /// later is a getter, zero where the value ends before it; whole() is\n\
+                            /// all of it, {name}<Whole>, if it's all there.\n"),
+                  &fl, "_rest", "u8", &ffi, &methods),
+        // the cast checks the floor: an unvalidated one is as good
+        family = family(&name, &ty, &ty, &ffi,
+                        &format!("/// {name}, in state S - Validated unless named: from any version since\n\
+                                  /// its floor, at its own length. {name}<Whole> is all of it - C's\n\
+                                  /// struct {name}, Ffi<{name}>.\n")))));
     Ok(out)
 }
 

@@ -46,6 +46,9 @@
 //!   #[unsized_vstruct]   on C's struct ending in a flexible array: a family
 //!                        of definitions, one per state, and X<S> picking
 //!                        one (vstructs.rs)
+//!   #[grown(from = F)]   on C's struct of a type that grew: its family - the
+//!                        whole struct, and the floor and the bytes there
+//!                        are (vstructs.rs)
 //!
 //! Zero dependencies: the kernel build compiles this with a bare rustc.
 
@@ -277,6 +280,16 @@ pub fn bitfield(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand("#[unsized_vstruct]", || vstructs::unsized_vstruct(attr, item))
+}
+
+/// `#[grown(from = FIELD)]`, on C's definition of a type that grew between
+/// format versions, FIELD the first field an older value may lack: the
+/// family of its definitions - C's, the whole struct, X<Whole>; its floor;
+/// and X<Validated>, the floor and the bytes there are, at the value's
+/// length. See vstructs.rs.
+#[proc_macro_attribute]
+pub fn grown(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand("#[grown]", || vstructs::grown(attr, item))
 }
 
 fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {

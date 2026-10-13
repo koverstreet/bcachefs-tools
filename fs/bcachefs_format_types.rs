@@ -74,8 +74,8 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
 use crate::util::vstructs::{floored_by_self, vstruct, vstruct_container, Ffi, FlexArray};
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, tagged_union, unsized_vstruct,
-                     CStruct, Plain, TypeInfo, View};
+use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, grown, tagged_union,
+                     unsized_vstruct, CStruct, Plain, TypeInfo, View};
 #[cfg(__KERNEL__)]
 use cstruct_macros::c_typedef;
 
@@ -999,8 +999,10 @@ pub struct bch_sb_field_clean {
 vstruct!(bch_sb_field_clean, field.u64s, start = 0);
 vstruct_container!(bch_sb_field_clean, c::jset_entry);
 
+/* sections from before btrees_lost_data are 88 bytes: what validate accepts */
+#[grown(from = btrees_lost_data)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_ext {
     pub field: Ffi<c::bch_sb_field>,
     pub recovery_passes_required: [Le64; 2],
@@ -1024,10 +1026,10 @@ pub struct bch_sb_field_ext {
      */
     pub btrees_clean: Le64,
 }
-vstruct!(bch_sb_field_ext, field.u64s, start = 0);
+vstruct!(bch_sb_field_ext__ffi, field.u64s, start = 0);
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb_field_ext, flags0) {
+    LE64_BITMASK(struct Ffi<bch_sb_field_ext>, flags0) {
         BCH_SB_EXT_DEV_READAHEAD(0, 20),
         BCH_SB_EXT_EC_STRIPE_BUF_LIMIT(20, 26),
         BCH_SB_EXT_SCRUB_MAX_REWIND_SECS(26, 38),

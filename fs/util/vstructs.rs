@@ -764,8 +764,8 @@ impl State for Whole {
 }
 
 /// What C has of a family's type: its struct - an unsized vstruct's header,
-/// its tail zero-length, C's flexible array. The family's X__ffi.
-/// Implemented for each state's definition.
+/// its tail zero-length, C's flexible array; a grown type's whole struct.
+/// The family's X__ffi. Implemented for each state's definition.
 pub trait HasFfi {
     /// C's struct. An impl is never for Ffi<T> itself - a projection - but
     /// for the family's definition by name, X__ffi.
@@ -781,7 +781,8 @@ pub type Ffi<T> = <T as HasFfi>::Ffi;
 /// tail - a slice. Its references are fat, with the tail's length, so a
 /// reference reaches every byte of the value and none past it. An unsized
 /// vstruct's head is C's struct, its header, whose count says how long the
-/// value is (#[unsized_vstruct]).
+/// value is (#[unsized_vstruct]); a grown type's is its floor, the value as
+/// long as what holds it says (#[grown]).
 ///
 /// # Safety
 /// Self is Head then its tail, at size_of::<Head>(), every bit pattern of it
@@ -1183,6 +1184,21 @@ impl<T: Plain + Native> ViewMut<'_, T> {
         // initialized - and the value they land in is Plain, as new() required
         unsafe { core::ptr::copy_nonoverlapping((&raw const v).cast::<u8>(), self.p, size_of::<T>()) };
         Ok(())
+    }
+}
+
+/// The @T at byte @at of @rest - a field a grown type gained, from the bytes
+/// past its floor (#[grown]) - or as much of it as there is, the rest zero,
+/// as for a value written before the type had it.
+pub fn read_past<T: Plain>(rest: &[u8], at: usize) -> T {
+    let have = rest.get(at..).unwrap_or_default();
+    let n = have.len().min(size_of::<T>());
+    let mut v = MaybeUninit::<T>::zeroed();
+    // SAFETY: @n of @T's bytes, from @have, which has them; T is Plain, so
+    // any bytes - these, then zeroes - are one
+    unsafe {
+        core::ptr::copy_nonoverlapping(have.as_ptr(), v.as_mut_ptr().cast::<u8>(), n);
+        v.assume_init()
     }
 }
 
