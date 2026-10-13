@@ -12,6 +12,7 @@
 //! has no repair.
 
 use crate::btree::bkey::{pos, BkeyISnapshot, BkeyISubvolume, POS_MIN};
+use crate::util::vstructs::Ffi;
 use crate::btree::iter::{
     commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
@@ -56,10 +57,10 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
             let snapshot = if root_snapshot != 0 { root_snapshot } else { u32::MAX };
             let inum = c::BCACHEFS_ROOT_INO as u64;
 
-            let mut k = t.bkey_alloc_init(size_of::<c::bch_subvolume>() / size_of::<u64>(),
+            let mut k = t.bkey_alloc_init(size_of::<Ffi<c::bch_subvolume>>() / size_of::<u64>(),
                                           c::bch_bkey_type::KEY_TYPE_subvolume.0 as u8,
                                           pos(0, c::BCACHEFS_ROOT_SUBVOL as u64))?;
-            let v = k.k_i_mut().arm_mut::<BkeyISubvolume>().expect("allocated as a subvolume").v_mut();
+            let v = &mut k.k_i_mut().whole_mut::<BkeyISubvolume>().expect("allocated as a subvolume").v;
             v.flags    = 0.into();
             v.snapshot = snapshot.into();
             v.inode    = inum.into();

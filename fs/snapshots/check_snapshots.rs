@@ -43,7 +43,7 @@
 //!   errors are plain fixable fsck errors.
 
 use crate::accounting;
-use crate::btree::bkey::{pos, BkeySC, BkeyISnapshot, BkeyISnapshotTree, BkeyISubvolume, POS_MAX, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyISnapshot, BkeyISnapshotTree, BkeyISubvolume, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
     commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransBkey,
@@ -62,6 +62,7 @@ use crate::inode;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::Printbuf;
+use crate::util::vstructs::Ffi;
 use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err};
 use core::fmt;
 use core::mem::size_of;
@@ -76,7 +77,7 @@ use cstruct_macros::c_export;
 /// read-only over a dangling child pointer. And the key comes back whole:
 /// the topology checks report on nodes they didn't start from, and a field
 /// report is whatever the message printed.
-fn lookup_node(trans: &BtreeTrans<'_>, id: u32) -> Result<Option<c::bkey_i_snapshot>, BchError> {
+fn lookup_node(trans: &BtreeTrans<'_>, id: u32) -> Result<Option<BkeyI<Ffi<c::bch_snapshot>>>, BchError> {
     snapshot::lookup_key(trans, id).found()
 }
 
@@ -84,11 +85,11 @@ fn lookup_node(trans: &BtreeTrans<'_>, id: u32) -> Result<Option<c::bkey_i_snaps
 fn get_mut_node<'a, 't>(t: &TransAttempt<'a, 't>, id: u32) -> Result<TransBkey<'a, 't>, BchError> {
     t.bkey_get_mut(c::btree_id::snapshots, pos(0, id as u64), BtreeIterFlags::empty(),
                    UpdateTriggerFlags::empty(),
-                   c::bch_bkey_type::KEY_TYPE_snapshot, size_of::<c::bkey_i_snapshot>())
+                   c::bch_bkey_type::KEY_TYPE_snapshot, size_of::<BkeyI<Ffi<c::bch_snapshot>>>())
 }
 
-fn snapshot_mut<'k>(k: &'k mut TransBkey<'_, '_>) -> &'k mut c::bch_snapshot {
-    k.k_i_mut().arm_mut::<BkeyISnapshot>().expect("a snapshot key").v_mut()
+fn snapshot_mut<'k>(k: &'k mut TransBkey<'_, '_>) -> &'k mut Ffi<c::bch_snapshot> {
+    &mut k.k_i_mut().whole_mut::<BkeyISnapshot>().expect("a snapshot key").v
 }
 
 /// The id - offset - of the first key in @btree @pred accepts: for the
@@ -142,10 +143,10 @@ fn tree_master_subvol(t: &TransAttempt<'_, '_>, root: u32) -> Result<Option<u32>
     let Some(mut u) = t.bkey_get_mut(c::btree_id::subvolumes, pos(0, oldest as u64),
                                      BtreeIterFlags::empty(), UpdateTriggerFlags::empty(),
                                      c::bch_bkey_type::KEY_TYPE_subvolume,
-                                     size_of::<c::bkey_i_subvolume>()).found()? else {
+                                     size_of::<BkeyI<Ffi<c::bch_subvolume>>>()).found()? else {
         return Ok(None);
     };
-    u.k_i_mut().arm_mut::<BkeyISubvolume>().expect("a subvolume key").v_mut().set_snap(false);
+    u.k_i_mut().whole_mut::<BkeyISubvolume>().expect("a subvolume key").v.set_snap(false);
     Ok(Some(oldest))
 }
 
@@ -239,7 +240,7 @@ impl CowKey<'_, '_, '_, '_, c::bkey_i_snapshot> {
 /// is us, our parent listing us as a child, or a child naming us as its
 /// parent? For recovering a node whose state field is garbage: if it's
 /// referenced it must be live, whatever the corrupted state says.
-fn referenced(trans: &BtreeTrans<'_>, s: &c::bch_snapshot, id: u32) -> Result<bool, BchError> {
+fn referenced(trans: &BtreeTrans<'_>, s: &Ffi<c::bch_snapshot>, id: u32) -> Result<bool, BchError> {
     if s.subvol() != 0 &&
        subvolume::get(trans, s.subvol(), false).found()?.is_some_and(|sv| sv.snapshot() == id) {
         return Ok(true);
@@ -508,7 +509,7 @@ impl Role {
 }
 
 /// Whether @s, as @role, points at @other.
-fn points_at(s: &c::bch_snapshot, role: Role, other: u32) -> bool {
+fn points_at(s: &Ffi<c::bch_snapshot>, role: Role, other: u32) -> bool {
     match role {
         Role::Parent => s.children().contains(&other),
         Role::Child  => s.parent() == other,
@@ -517,7 +518,7 @@ fn points_at(s: &c::bch_snapshot, role: Role, other: u32) -> bool {
 
 /// Point @s's @role pointer at @old to @new instead - 0 clears a child slot
 /// - keeping the children in order.
-fn set_ptr(s: &mut c::bch_snapshot, role: Role, old: u32, new: u32) {
+fn set_ptr(s: &mut Ffi<c::bch_snapshot>, role: Role, old: u32, new: u32) {
     match role {
         Role::Child  => s.parent = new.into(),
         Role::Parent => {
@@ -534,8 +535,8 @@ fn set_ptr(s: &mut c::bch_snapshot, role: Role, old: u32, new: u32) {
 /// Whether @s, @id, as @role, and @o, @o_id, are shaped like the two ends of
 /// one edge: the parent's id above the child's, the same tree, and the
 /// child one deeper.
-fn parent_child_consistent(s: &c::bch_snapshot, id: u32, role: Role,
-                           o: &c::bch_snapshot, o_id: u32) -> bool {
+fn parent_child_consistent(s: &Ffi<c::bch_snapshot>, id: u32, role: Role,
+                           o: &Ffi<c::bch_snapshot>, o_id: u32) -> bool {
     let ((pa, pa_id), (ch, ch_id)) = match role {
         Role::Parent => ((s, id), (o, o_id)),
         Role::Child  => ((o, o_id), (s, id)),
@@ -548,7 +549,7 @@ fn parent_child_consistent(s: &c::bch_snapshot, id: u32, role: Role,
 /// whose current target doesn't reciprocate - and if so, the value that
 /// would be displaced. Empty slots first, so a stale pointer keeps its own
 /// shot at repair when its node is visited.
-fn ptr_available(trans: &BtreeTrans<'_>, n: &c::bch_snapshot, n_id: u32, role: Role)
+fn ptr_available(trans: &BtreeTrans<'_>, n: &Ffi<c::bch_snapshot>, n_id: u32, role: Role)
     -> Result<Option<u32>, BchError>
 {
     let parent = [n.parent()];
@@ -716,16 +717,16 @@ fn resurrect_child(t: &TransAttempt<'_, '_>, parent_id: u32, id: u32) -> Result<
 struct EdgeNodes<'n, 'f> {
     fs:       &'f Fs,
     node:     BkeySC<'n>,
-    target:   Option<&'n c::bkey_i_snapshot>,
-    claimant: Option<&'n c::bkey_i_snapshot>,
+    target:   Option<&'n BkeyI<Ffi<c::bch_snapshot>>>,
+    claimant: Option<&'n BkeyI<Ffi<c::bch_snapshot>>>,
 }
 
 impl<'n, 'f> EdgeNodes<'n, 'f> {
     fn new(
         fs:       &'f Fs,
         node:     &'n CowKey<'_, '_, '_, '_, c::bkey_i_snapshot>,
-        target:   Option<&'n c::bkey_i_snapshot>,
-        claimant: Option<&'n c::bkey_i_snapshot>,
+        target:   Option<&'n BkeyI<Ffi<c::bch_snapshot>>>,
+        claimant: Option<&'n BkeyI<Ffi<c::bch_snapshot>>>,
     ) -> Self {
         EdgeNodes { fs, node: node.key(), target, claimant }
     }
@@ -747,10 +748,10 @@ impl fmt::Display for EdgeNodes<'_, '_> {
 /// Walking from deleted node @s past the deleted nodes beyond it, in the
 /// direction @role's pointer goes: the nearest one that isn't deleted, 0 if
 /// they all are - None if the chain is too long to be anything but damage.
-fn past_deleted(trans: &BtreeTrans<'_>, s: &c::bch_snapshot, role: Role)
+fn past_deleted(trans: &BtreeTrans<'_>, s: &Ffi<c::bch_snapshot>, role: Role)
     -> Result<Option<u32>, BchError>
 {
-    let next = |s: &c::bch_snapshot| match role {
+    let next = |s: &Ffi<c::bch_snapshot>| match role {
         Role::Child  => s.parent(),
         Role::Parent => s.children()[0],
     };

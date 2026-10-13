@@ -4,15 +4,16 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, Plain, TypeInfo, View};
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, grown, CStruct, Plain, TypeInfo, View};
 
 c_const! {
     #[c_int]
     pub const BCACHEFS_ROOT_SUBVOL: u32 = 1;
 }
 
+#[grown(from = creation_parent)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_subvolume {
     pub v: c::bch_val,
     pub flags: Le32,
@@ -58,7 +59,7 @@ c_enum! {
 }
 
 c_bitmask! {
-    LE32_BITMASK(struct bch_subvolume, flags), strip BCH_SUBVOLUME_ {
+    LE32_BITMASK(struct Ffi<bch_subvolume>, flags), strip BCH_SUBVOLUME_ {
         BCH_SUBVOLUME_RO(0, 1),
         /*
          * We need to know whether a subvolume is a snapshot so we can know whether we
@@ -70,8 +71,9 @@ c_bitmask! {
     }
 }
 
+#[grown(from = depth)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_snapshot {
     pub v: c::bch_val,
     pub flags: Le32,
@@ -171,7 +173,7 @@ const _: () = {
 };
 
 c_bitmask! {
-    LE32_BITMASK(struct bch_snapshot, flags), strip BCH_SNAPSHOT_ {
+    LE32_BITMASK(struct Ffi<bch_snapshot>, flags), strip BCH_SNAPSHOT_ {
         /* Obsolete */
         BCH_SNAPSHOT_WILL_DELETE_OBSOLETE(0, 1),
         BCH_SNAPSHOT_SUBVOL_OBSOLETE(1, 2),

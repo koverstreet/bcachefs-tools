@@ -2,10 +2,11 @@
 
 //! Subvolumes (snapshots/subvolume.h).
 
-use crate::btree::bkey::{BkeySC, BkeyISubvolume};
+use crate::btree::bkey::{BkeyI, BkeySC, BkeyISubvolume, SizedBkey};
 use crate::btree::iter::{is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, LoopControl};
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
+use crate::util::vstructs::Ffi;
 
 /// Subvolume @subvol: as bch2_subvolume_get(). With
 /// @inconsistent_if_not_found, a missing subvolume is reported as
@@ -14,8 +15,8 @@ pub fn get(
     trans:                     &BtreeTrans<'_>,
     subvol:                    u32,
     inconsistent_if_not_found: bool,
-) -> Result<c::bch_subvolume, BchError> {
-    let mut s = c::bch_subvolume::default();
+) -> Result<Ffi<c::bch_subvolume>, BchError> {
+    let mut s: Ffi<c::bch_subvolume> = Default::default();
     ret_to_result_void(unsafe {
         c::bch2_subvolume_get(trans.raw(), subvol, inconsistent_if_not_found, &mut s)
     })?;
@@ -28,8 +29,8 @@ pub fn get_key(
     trans:                     &BtreeTrans<'_>,
     subvol:                    u32,
     inconsistent_if_not_found: bool,
-) -> Result<c::bkey_i_subvolume, BchError> {
-    let mut k = c::bkey_i_subvolume::default();
+) -> Result<BkeyI<Ffi<c::bch_subvolume>>, BchError> {
+    let mut k: BkeyI<Ffi<c::bch_subvolume>> = Default::default();
     ret_to_result_void(unsafe {
         c::bch2_subvolume_get_key(trans.raw(), subvol, inconsistent_if_not_found, &mut k)
     })?;
@@ -68,7 +69,7 @@ pub fn is_ro_trans(trans: &BtreeTrans<'_>, subvol: u32) -> Result<u32, BchError>
 pub struct Created {
     pub subvol:   u32,
     pub snapshot: u32,
-    pub v:        c::bch_subvolume,
+    pub v:        Ffi<c::bch_subvolume>,
 }
 
 /// Create a subvolume whose root is inode @inode, in the filesystem tree
@@ -169,11 +170,11 @@ pub fn is_unlinked(trans: &BtreeTrans<'_>, subvol: u32) -> Result<bool, BchError
 
 /// @k's value if it's a subvolume, zero padded past the fields an older key
 /// lacks: as bkey_val_copy_pad() on a bkey_s_c_subvolume.
-pub fn val(k: BkeySC<'_>) -> Option<c::bch_subvolume> {
-    k.arm::<BkeyISubvolume>().map(|k| k.v().get())
+pub fn val(k: BkeySC<'_>) -> Option<Ffi<c::bch_subvolume>> {
+    BkeyISubvolume::val_copy_pad(k)
 }
 
-impl c::bch_subvolume {
+impl c::bch_subvolume__ffi {
     pub fn snapshot(&self) -> u32 { self.snapshot.get() }
 
     /// The state field, if it holds a state - not if it's 0, predating the

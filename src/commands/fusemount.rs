@@ -69,6 +69,7 @@ use bcachefs_kernel::{accounting, btree, dirent, namei, str_hash};
 use bcachefs_kernel::btree::iter::CommitFlags;
 use bcachefs_kernel::inode;
 use bcachefs_kernel::opt_set;
+use bcachefs_kernel::util::vstructs::Ffi;
 
 use crate::util::AlignedBuf;
 
@@ -241,7 +242,7 @@ fn fuse_create_inode(
 ) -> Result<c::bch_inode_unpacked, BchError> {
     let mut dir_u: c::bch_inode_unpacked = Default::default();
     let mut inode: c::bch_inode_unpacked = Default::default();
-    let mut subvol: c::bch_subvolume = Default::default();
+    let mut subvol: Ffi<c::bch_subvolume> = Default::default();
 
     inode::init_early(fs, &mut inode);
 

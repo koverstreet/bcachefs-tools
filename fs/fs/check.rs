@@ -2,7 +2,7 @@
 
 //! fsck helpers shared by the passes (fs/check.h).
 
-use crate::btree::bkey::{bkey_extent_whiteout, pos, spos, BkeySC, BkeyISnapshot, BkeyISnapshotTree, BkeyISubvolume};
+use crate::btree::bkey::{bkey_extent_whiteout, pos, spos, BkeyI, BkeySC, BkeyISnapshot, BkeyISnapshotTree, BkeyISubvolume};
 use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
@@ -17,6 +17,7 @@ use crate::snapshots::{snapshot, subvolume};
 use crate::alloc::buckets::DiskReservation;
 use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::Printbuf;
+use crate::util::vstructs::Ffi;
 use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err};
 use core::mem::size_of;
 use core::ops::ControlFlow;
@@ -759,7 +760,7 @@ pub fn reconstruct_subvol(
 
     let mut k = t.bkey_alloc_typed::<c::bkey_i_subvolume>()?;
     k.k_mut().p = pos(0, subvol as u64);
-    let v = k.k_i_mut().arm_mut::<BkeyISubvolume>().expect("a subvolume key").v_mut();
+    let v = &mut k.k_i_mut().whole_mut::<BkeyISubvolume>().expect("a subvolume key").v;
     v.snapshot = snapshot.into();
     v.inode    = root.into();
     v.set_state(c::bch_subvolume_state::SUBVOLUME_STATE_live);
@@ -768,9 +769,9 @@ pub fn reconstruct_subvol(
     let mut s = bch_err_msg!(fs,
         t.bkey_get_mut(c::btree_id::snapshots, pos(0, snapshot as u64), BtreeIterFlags::empty(),
                        UpdateTriggerFlags::empty(),
-                       c::bch_bkey_type::KEY_TYPE_snapshot, size_of::<c::bkey_i_snapshot>()),
+                       c::bch_bkey_type::KEY_TYPE_snapshot, size_of::<BkeyI<Ffi<c::bch_snapshot>>>()),
         "getting snapshot {snapshot}")?;
-    let s = s.k_i_mut().arm_mut::<BkeyISnapshot>().expect("a snapshot key").v_mut();
+    let s = &mut s.k_i_mut().whole_mut::<BkeyISnapshot>().expect("a snapshot key").v;
     let tree = s.tree();
     s.subvol = subvol.into();
     s.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);

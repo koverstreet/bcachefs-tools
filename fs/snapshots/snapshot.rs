@@ -6,7 +6,7 @@
 //! taken from C as a bch_snapshot_state: a damaged field holds a value that's
 //! no variant of the Rust enum, and fsck has to be able to look at it.
 
-use crate::btree::bkey::{spos, BkeySC, BkeyISnapshot};
+use crate::btree::bkey::{spos, BkeyI, BkeySC, BkeyISnapshot, SizedBkey};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey};
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_result, ret_to_result_void, BchError};
@@ -14,6 +14,7 @@ use crate::fs::Fs;
 use crate::snapshots::check_snapshots;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::rcu;
+use crate::util::vstructs::Ffi;
 use crate::util::Printbuf;
 use core::fmt;
 use core::marker::PhantomData;
@@ -168,7 +169,7 @@ pub fn oldest_subvol(fs: &Fs, root: u32) -> Option<u32> {
 /// The unique live node claiming an edge with @id - as its parent if
 /// @parent, else as its child - other than those @s, @id's key, points at:
 /// as bch2_snapshot_table_find_edge(). None if there's none, or more than one.
-pub fn table_find_edge(fs: &Fs, s: &c::bch_snapshot, id: u32, parent: bool) -> Option<u32> {
+pub fn table_find_edge(fs: &Fs, s: &Ffi<c::bch_snapshot>, id: u32, parent: bool) -> Option<u32> {
     match unsafe { c::bch2_snapshot_table_find_edge(fs.raw, s, id, parent) } {
         0 => None,
         n => Some(n),
@@ -300,24 +301,24 @@ pub fn check_key_has_snapshot(
 }
 
 /// Snapshot node @id: as bch2_snapshot_lookup(). ENOENT if there's none.
-pub fn lookup(trans: &BtreeTrans<'_>, id: u32) -> Result<c::bch_snapshot, BchError> {
-    let mut s = c::bch_snapshot::default();
+pub fn lookup(trans: &BtreeTrans<'_>, id: u32) -> Result<Ffi<c::bch_snapshot>, BchError> {
+    let mut s: Ffi<c::bch_snapshot> = Default::default();
     ret_to_result(unsafe { c::bch2_snapshot_lookup(trans.raw(), id, &mut s) })?;
     Ok(s)
 }
 
 /// Snapshot node @id's key, for when the key itself is wanted - to print: as
 /// bch2_snapshot_lookup_key(). ENOENT if there's none.
-pub fn lookup_key(trans: &BtreeTrans<'_>, id: u32) -> Result<c::bkey_i_snapshot, BchError> {
-    let mut k = c::bkey_i_snapshot::default();
+pub fn lookup_key(trans: &BtreeTrans<'_>, id: u32) -> Result<BkeyI<Ffi<c::bch_snapshot>>, BchError> {
+    let mut k: BkeyI<Ffi<c::bch_snapshot>> = Default::default();
     ret_to_result(unsafe { c::bch2_snapshot_lookup_key(trans.raw(), id, &mut k) })?;
     Ok(k)
 }
 
 /// @k's value if it's a snapshot node, zero padded past the fields an older
 /// key lacks: as bkey_val_copy_pad() on a bkey_s_c_snapshot.
-pub fn val(k: BkeySC<'_>) -> Option<c::bch_snapshot> {
-    k.arm::<BkeyISnapshot>().map(|k| k.v().get())
+pub fn val(k: BkeySC<'_>) -> Option<Ffi<c::bch_snapshot>> {
+    BkeyISnapshot::val_copy_pad(k)
 }
 
 /// Mark node @id will_delete, its subvolume being deleted - if it's live;
@@ -332,7 +333,7 @@ pub fn node_set_deleted(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchErro
 pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't>)
     -> Result<(), BchError>
 {
-    let ret = unsafe { c::bch2_snapshot_node_undelete(t.raw(), u.as_ptr() as *mut c::bkey_i_snapshot) };
+    let ret = unsafe { c::bch2_snapshot_node_undelete(t.raw(), u.as_ptr() as *mut BkeyI<Ffi<c::bch_snapshot>>) };
     t.result(ret)
 }
 
@@ -369,7 +370,7 @@ const SNAPSHOT_STATES: [c::bch_snapshot_state; 4] = [
     c::bch_snapshot_state::SNAPSHOT_STATE_deleted,
 ];
 
-impl c::bch_snapshot {
+impl c::bch_snapshot__ffi {
     pub fn parent(&self) -> u32       { self.parent.get() }
     pub fn children(&self) -> [u32; 2] { self.children.map(|c| c.get()) }
     pub fn subvol(&self) -> u32       { self.subvol.get() }
@@ -428,7 +429,7 @@ impl fmt::Display for c::bch_snapshot_state {
 }
 
 /// As bch2_snapshot_to_text().
-impl fmt::Display for c::bch_snapshot {
+impl fmt::Display for c::bch_snapshot__ffi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         crate::printbuf_to_formatter(f, |out| unsafe { c::bch2_snapshot_to_text(out, self) })
     }

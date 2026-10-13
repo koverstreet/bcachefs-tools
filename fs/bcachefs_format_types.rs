@@ -75,7 +75,7 @@ use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
 use crate::util::vstructs::{floored_by_self, vstruct, vstruct_container, Ffi, FlexArray};
 use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, grown, tagged_union,
-                     unsized_vstruct, whole, CStruct, Plain, TypeInfo, View};
+                     unsized_vstruct, whole, CStruct, Plain, TypeInfo};
 #[cfg(__KERNEL__)]
 use cstruct_macros::c_typedef;
 
@@ -466,8 +466,9 @@ pub struct bch_extent_whiteout {
     pub v: c::bch_val,
 }
 
+#[grown(from = err)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_error {
     pub v: c::bch_val,
     pub err: u8,

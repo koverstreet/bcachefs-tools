@@ -648,16 +648,17 @@ pub const fn bitmasks_listed(name: &str) -> bool {
 mod tests {
     use super::*;
     use crate::c;
+    use crate::util::vstructs::Ffi;
 
     fn snapshot_info() -> &'static StructInfo {
-        <c::bch_snapshot as TypeInfo>::INFO
+        <Ffi<c::bch_snapshot> as TypeInfo>::INFO
     }
 
     #[test]
     fn snapshot_table() {
         let info = snapshot_info();
         assert_eq!(info.name, "bch_snapshot");
-        assert_eq!(info.size, core::mem::size_of::<c::bch_snapshot>());
+        assert_eq!(info.size, core::mem::size_of::<Ffi<c::bch_snapshot>>());
     }
 
     #[test]
@@ -711,7 +712,7 @@ mod tests {
     #[test]
     fn scalar_roundtrip() {
         let info = snapshot_info();
-        let mut buf = [0u8; core::mem::size_of::<c::bch_snapshot>()];
+        let mut buf = [0u8; core::mem::size_of::<Ffi<c::bch_snapshot>>()];
 
         let r = resolve(info, "parent").unwrap();
         write_scalar(&mut buf, &r, 249).unwrap();
@@ -734,7 +735,7 @@ mod tests {
     #[test]
     fn to_text() {
         let info = snapshot_info();
-        let mut buf = [0u8; core::mem::size_of::<c::bch_snapshot>()];
+        let mut buf = [0u8; core::mem::size_of::<Ffi<c::bch_snapshot>>()];
         let r = resolve(info, "parent").unwrap();
         write_scalar(&mut buf, &r, 249).unwrap();
 
@@ -767,7 +768,7 @@ mod tests {
     #[test]
     fn bits_roundtrip() {
         let info = snapshot_info();
-        let mut buf = [0u8; core::mem::size_of::<c::bch_snapshot>()];
+        let mut buf = [0u8; core::mem::size_of::<Ffi<c::bch_snapshot>>()];
 
         let (r, bm) = resolve_with_bits(info, "no_keys_obsolete").unwrap();
         let bm = bm.unwrap();
@@ -788,7 +789,7 @@ mod tests {
     #[test]
     fn bits_decode_display() {
         let info = snapshot_info();
-        let mut buf = [0u8; core::mem::size_of::<c::bch_snapshot>()];
+        let mut buf = [0u8; core::mem::size_of::<Ffi<c::bch_snapshot>>()];
         buf[0] = 2 | 8; // SUBVOL_OBSOLETE | NO_KEYS_OBSOLETE
 
         let mut s = String::new();
@@ -798,7 +799,7 @@ mod tests {
 
     #[test]
     fn typed_accessors() {
-        let mut s = c::bch_snapshot::default();
+        let mut s: Ffi<c::bch_snapshot> = Default::default();
         s.set_no_keys_obsolete(true);
         assert!(s.no_keys_obsolete());
         assert_eq!(s.flags.get(), 8);

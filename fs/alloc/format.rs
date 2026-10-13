@@ -4,8 +4,9 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, Le32, Le64};
+use crate::util::vstructs::Ffi;
 use core::ffi::c_ulong;
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, whole, CStruct, Plain, TypeInfo, View};
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, grown, whole, CStruct, Plain, TypeInfo, View};
 
 #[whole(tail = data: [u8])]
 #[repr(C, align(8))]
@@ -107,8 +108,9 @@ c_bitmask! {
  *     bucket can't be reused until this seq is flushed to disk.
  *     0 means no journal delay needed (noflush/fast discard path).
  */
+#[grown(from = journal_seq_empty)]
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_alloc_v4 {
     pub v: c::bch_val,
@@ -132,11 +134,11 @@ pub struct bch_alloc_v4 {
 c_const! {
     #[c_int]
     pub const BCH_ALLOC_V4_U64s_V0: u32 = 6;
-    pub const BCH_ALLOC_V4_U64s: usize = size_of::<c::bch_alloc_v4>() / size_of::<u64>();
+    pub const BCH_ALLOC_V4_U64s: usize = size_of::<Ffi<c::bch_alloc_v4>>() / size_of::<u64>();
 }
 
 c_bitmask! {
-    BITMASK(struct bch_alloc_v4, flags), strip BCH_ALLOC_V4_ {
+    BITMASK(struct Ffi<bch_alloc_v4>, flags), strip BCH_ALLOC_V4_ {
         BCH_ALLOC_V4_NEED_DISCARD(0, 1),
         BCH_ALLOC_V4_NEED_INC_GEN(1, 2),
         BCH_ALLOC_V4_BACKPOINTERS_START(2, 8),

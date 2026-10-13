@@ -279,7 +279,7 @@ fn check_dirent_to_subvol<'t>(
             // grown to a whole subvolume: one from before fs_path_parent is
             // shorter than the field
             let mut n = t.bkey_make_mut_noupdate_typed::<BkeyISubvolume>(s)?;
-            n.k_i_mut().arm_mut::<BkeyISubvolume>().expect("grown to a whole subvolume").v_mut()
+            n.k_i_mut().whole_mut::<BkeyISubvolume>().expect("grown to a whole subvolume").v
                 .fs_path_parent = parent.into();
             t.update(&subvol_iter, &n, UpdateTriggerFlags::empty())?;
         }

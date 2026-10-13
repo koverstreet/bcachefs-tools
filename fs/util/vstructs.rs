@@ -42,7 +42,8 @@
 //! A value shorter than its type - written by an older version, before the
 //! type grew - can't be a &T at all: it's a View, reading only its own bytes,
 //! its fields past its end zero, as bch2_sb_field_get_minsize() and
-//! bkey_val_copy_pad() zero them in C.
+//! bkey_val_copy_pad() zero them in C - or, for a #[grown] family's, its
+//! DST: the fields every one has, then the bytes there are.
 //!
 //! A sized tagged_union!'s arms - an accounting position's - are as long as
 //! each says (ArmAt): a replicas entry, a header and the devices it counts,
@@ -1170,9 +1171,8 @@ impl<T: core::fmt::Debug> std::error::Error for ArmError<T> {}
 /// A type whose values may be shorter than it, but never shorter than Min:
 /// the fields every valid one has. A View of it derefs to them, so they're
 /// fields - v.subvol - and only the later ones are projected, reading as
-/// zero past the end. A key type's value is one: Min is it up to the field
-/// BCH_BKEY_TYPES() names, from #[derive(View)]'s __<name>_min!(), or all of
-/// it for `_`.
+/// zero past the end. A sized key type's value is one, Min all of it: a key
+/// type that grew is a #[grown] family.
 ///
 /// # Safety
 /// Min is Self's first fields, at the same offsets.

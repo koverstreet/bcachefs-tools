@@ -22,6 +22,7 @@ use bcachefs_kernel::data::io_misc;
 use bcachefs_kernel::{acl, dirent, inode, namei, str_hash, xattr};
 use bcachefs_kernel::errcode::{ret_to_result_void as ret_to_result, BchError, bch_errcode};
 use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::util::vstructs::Ffi;
 
 use crate::util::AlignedBuf;
 
@@ -236,7 +237,7 @@ fn create_or_update_file(
     let child_inum = dirent::lookup(fs, dir_inum, &dir_hash, name);
 
     let mut child_inode: c::bch_inode_unpacked = Default::default();
-    let mut child_subvol : c::bch_subvolume = Default::default();
+    let mut child_subvol : Ffi<c::bch_subvolume> = Default::default();
 
     if let Ok(child_inum) = child_inum {
         // Already exists — update
