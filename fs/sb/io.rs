@@ -172,8 +172,8 @@ impl bch_sb_handle {
     pub fn member_mut(&mut self, idx: u32) -> Option<&mut bch_member> {
         let nr = self.sb().nr_devices as u32;
         let mi = self.field::<c::bch_sb_field_members_v2>()?;
-        let member_bytes = mi.member_bytes().get() as usize;
-        let end = core::mem::offset_of!(c::bch_sb_field_members_v2, _members) + (idx as usize + 1) * member_bytes;
+        let member_bytes = mi.member_bytes.get() as usize;
+        let end = core::mem::offset_of!(Ffi<c::bch_sb_field_members_v2>, _members) + (idx as usize + 1) * member_bytes;
         if idx >= nr || member_bytes < size_of::<bch_member>() || end > mi.as_bytes().len() {
             return None;
         }

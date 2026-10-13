@@ -4,8 +4,8 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
-use crate::util::vstructs::{view_arm, vstruct, Ffi};
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, Plain, TypeInfo, View};
+use crate::util::vstructs::{vstruct, Ffi};
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, unsized_vstruct, CStruct, Plain, TypeInfo};
 
 c_const! {
     /*
@@ -183,22 +183,22 @@ c_enum! {
     }
 }
 
+#[unsized_vstruct(tail = [u64])]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_members_v1 {
     pub field: Ffi<c::bch_sb_field>,
     pub _members: [c::bch_member; 0], //Members are now variable size
 }
-vstruct!(bch_sb_field_members_v1, field.u64s, start = 0);
-view_arm!(bch_sb_field_members_v1);
+vstruct!(unsized bch_sb_field_members_v1, field.u64s, start = 0);
 
+#[unsized_vstruct(tail = [u64])]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_members_v2 {
     pub field: Ffi<c::bch_sb_field>,
     pub member_bytes: Le16, //size of single member entry
     pub pad: [u8; 6],
     pub _members: [c::bch_member; 0],
 }
-vstruct!(bch_sb_field_members_v2, field.u64s, start = 0);
-view_arm!(bch_sb_field_members_v2);
+vstruct!(unsized bch_sb_field_members_v2, field.u64s, start = 0);

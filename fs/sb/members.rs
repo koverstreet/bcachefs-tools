@@ -1,5 +1,5 @@
 use crate::c;
-use crate::util::vstructs::View;
+use crate::util::vstructs::{Ffi, View};
 use core::mem::offset_of;
 use super::io::*;
 
@@ -49,7 +49,7 @@ impl<'a> MembersV2<'a> {
         if idx >= self.nr_devices {
             return None;
         }
-        member_at(self.bytes, offset_of!(c::bch_sb_field_members_v2, _members), self.member_bytes, idx)
+        member_at(self.bytes, offset_of!(Ffi<c::bch_sb_field_members_v2>, _members), self.member_bytes, idx)
     }
 
     pub fn member_bytes(&self) -> usize {
@@ -77,7 +77,7 @@ impl<'a> MembersV1<'a> {
         if idx >= self.nr_devices {
             return None;
         }
-        member_at(self.bytes, offset_of!(c::bch_sb_field_members_v1, _members), BCH_MEMBER_V1_BYTES, idx)
+        member_at(self.bytes, offset_of!(Ffi<c::bch_sb_field_members_v1>, _members), BCH_MEMBER_V1_BYTES, idx)
     }
 
     pub fn nr_devices(&self) -> u32 {
@@ -93,7 +93,7 @@ impl<'a> MembersV1<'a> {
 pub fn members_v2(sb: &c::bch_sb) -> Option<MembersV2<'_>> {
     let field = sb_field_get::<c::bch_sb_field_members_v2>(sb)?;
     Some(MembersV2 {
-        member_bytes: field.member_bytes().get() as usize,
+        member_bytes: field.member_bytes.get() as usize,
         nr_devices: sb.nr_devices as u32,
         bytes: field.as_bytes(),
     })

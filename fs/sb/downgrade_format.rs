@@ -4,8 +4,8 @@
 
 use crate::cstructs::c;
 use zerocopy::byteorder::little_endian as le;
-use crate::util::vstructs::{view_arm, vstruct, Ffi};
-use cstruct_macros::{CStruct, Plain, TypeInfo, View};
+use crate::util::vstructs::{vstruct, Ffi};
+use cstruct_macros::{unsized_vstruct, CStruct, Plain, TypeInfo};
 
 /*
  * Packed, recovery_passes at offset 2: zerocopy's le:: types, aligned to 1,
@@ -22,11 +22,11 @@ pub struct bch_sb_field_downgrade_entry {
     pub errors: [le::U16; 0],
 }
 
+#[unsized_vstruct(tail = [u64])]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_downgrade {
     pub field: Ffi<c::bch_sb_field>,
     pub entries: [c::bch_sb_field_downgrade_entry; 0],
 }
-vstruct!(bch_sb_field_downgrade, field.u64s, start = 0);
-view_arm!(bch_sb_field_downgrade);
+vstruct!(unsized bch_sb_field_downgrade, field.u64s, start = 0);
