@@ -225,6 +225,8 @@ impl CBitfieldDef {
 pub struct CFieldDef {
     pub name:     String,
     pub ty:       String,
+    /// Its visibility, as written: `pub`, `pub(crate)`, or empty.
+    pub vis:      String,
     pub c_decl:   Option<String>,
     /// C doesn't name it: #[c_anon("...")], C's declaration in c_decl, or a
     /// bare #[c_anon], its type written in its place - see in_place_def().
@@ -1152,7 +1154,9 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
             }
             i = next;
         }
+        let vis_at = i;
         i = skip_vis(toks, i)?;
+        let vis = tokens_to_rust(&toks[vis_at..i]);
 
         let Some(field) = ident_at(toks, i) else {
             return Err(format!("{name}: expected a field name"));
@@ -1197,7 +1201,7 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
             return Err(format!("{name}.{field}: #[c_inline] and #[c_struct_group] are the field's type, \
                                 written in its place - one of them, and not a #[c] or #[c_anon] too"));
         }
-        fields.push(CFieldDef { name: field, ty, c_decl, anon, inline, group, bitfield, bits,
+        fields.push(CFieldDef { name: field, ty, vis, c_decl, anon, inline, group, bitfield, bits,
                                 counted_by, cfg, c_align: None });
     }
 

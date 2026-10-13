@@ -1135,6 +1135,7 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
     let mut table_entries = String::new();
 
     let mut methods = String::new();
+    let mut setters = String::new();
     for e in &b.entries {
         let m = b.method(&e.name);
         // set_128_bit_macs: the setter's set_ makes it a name already
@@ -1153,8 +1154,9 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
             "#[allow(dead_code)]\n\
              pub fn {m}(&self) -> {ty} {{\n\
                  (({get} >> ({start})) & (u64::MAX >> (64 - (({end}) - ({start}))))){from}\n\
-             }}\n\
-             #[allow(dead_code)]\n\
+             }}\n"));
+        setters.push_str(&format!(
+            "#[allow(dead_code)]\n\
              pub fn set_{set_m}(&mut self, v: {ty}) {{\n\
                  let mask = (u64::MAX >> (64 - (({end}) - ({start})))) << ({start});\n\
                  let new = ({get} & !mask) | (((v{to}) << ({start})) & mask);\n\
@@ -1162,8 +1164,17 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
              }}\n"));
     }
 
+    // A family's C struct, X__ffi: its state definitions, which have C's
+    // fields inline and no DerefMut to it, get the setters too - the getters
+    // they reach through their Deref
+    let state_setters = match b.rust_type.strip_suffix("__ffi") {
+        Some(family) => format!("__{family}__state_impls! {{\n{setters}}}\n"),
+        None => String::new(),
+    };
+
     Ok(tokens(&format!(
-        "{}impl {} {{\n{methods}}}\n\
+        "{}impl {} {{\n{methods}{setters}}}\n\
+         {state_setters}\
          #[allow(non_upper_case_globals)]\n\
          pub const {table}: &[crate::typeinfo::BitmaskField] = &[\n{table_entries}];\n\
          const _: () = assert!(crate::typeinfo::bitmasks_listed({table:?}),\n\

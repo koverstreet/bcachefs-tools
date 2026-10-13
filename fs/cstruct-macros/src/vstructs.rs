@@ -153,19 +153,63 @@ fn min_arm(name: &str, before: &[CFieldDef], field: &str) -> String {
 
 const VS: &str = "crate::util::vstructs";
 
-/// A state's definition, @ty: a DST - @head, which it derefs to, its fields
-/// and methods; then @tail, a slice of @elem - and C's struct, @ffi, its
-/// HasFfi. It's Unsized: from_raw() at the length's worth of @elem past the
-/// head; SelfSized, and its bytes, by its reference's length; and an arm's,
+/// A field of C's struct as a state's definition has it, inline: pub only
+/// where C's is pub and holds no count - not the count, written private or
+/// pub(crate), nor an embedded header, Ffi<..>, whose own count it is. Those
+/// read through the definition's Deref to its head, and can't be written: a
+/// count changes only through what holds the value.
+fn inline_field(f: &CFieldDef) -> String {
+    let vis = if f.vis == "pub" && !f.ty.contains("Ffi<") { "pub " } else { "" };
+    format!("    {vis}{}: {},\n", f.rust_name(), f.ty.trim())
+}
+
+/// @item's #[repr(..)]s, as written.
+fn repr_attrs(item: &TokenStream) -> String {
+    let tts: Vec<TokenTree> = item.clone().into_iter().collect();
+    tts.windows(2)
+        .filter_map(|w| match (&w[0], &w[1]) {
+            (TokenTree::Punct(p), TokenTree::Group(g))
+                if p.as_char() == '#' && g.delimiter() == Delimiter::Bracket
+                    && g.stream().to_string().trim_start().starts_with("repr") =>
+                Some(format!("#[{}]\n", g.stream())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A state's definition, @ty: a DST - @fields inline, as @repr lays them
+/// out, then @tail, a slice of @elem - and C's struct, @ffi, its HasFfi.
+///
+/// Its fields are @head's, at @head's offsets - asserted - so it derefs to
+/// @head: reads, and @head's methods, written once there. No DerefMut: a &mut
+/// to the head would let a count - its own, or an embedded header's - be
+/// rewritten, or the whole head assigned or swapped, from outside what holds
+/// the value. Its own fields that hold one are private (inline_field()), and
+/// it's unsized, so it can't be assigned or swapped whole either.
+///
+/// It's Unsized: from_raw() at the length's worth of @elem past the head;
+/// SelfSized, and its bytes, by its reference's length; and an arm's,
 /// ArmRef, cast() from the bytes its storage says are its. @doc is its own;
 /// @methods, more of them.
-fn dst(ty: &str, doc: &str, head: &str, tail: &str, elem: &str, ffi: &str, methods: &str) -> String {
+#[allow(clippy::too_many_arguments)]
+fn dst(ty: &str, doc: &str, repr: &str, fields: &[CFieldDef], head: &str, tail: &str, elem: &str,
+       ffi: &str, methods: &str) -> String {
+    let inline: String = fields.iter().map(inline_field).collect();
+    let offsets: String = fields.iter()
+        .map(|f| format!("assert!(::core::mem::offset_of!({ty}, {0}) == ::core::mem::offset_of!({head}, {0}),\n\
+                              \"{ty}.{0}: not at {head}'s offset\");\n", f.rust_name()))
+        .collect();
+    let tail_start = match fields.last() {
+        Some(l) => format!("::core::mem::offset_of!({ty}, {}) + ::core::mem::size_of::<{}>()",
+                           l.rust_name(), l.ty.trim()),
+        None => "0".to_string(),
+    };
     format!(
         "{doc}\
-         #[repr(C)]\n\
+         {repr}\
          #[allow(non_camel_case_types)]\n\
          pub struct {ty} {{\n\
-             head: {head},\n\
+         {inline}\
              pub {tail}: [{elem}],\n\
          }}\n\
          \n\
@@ -173,14 +217,10 @@ fn dst(ty: &str, doc: &str, head: &str, tail: &str, elem: &str, ffi: &str, metho
              type Target = {head};\n\
              #[inline]\n\
              fn deref(&self) -> &{head} {{\n\
-                 &self.head\n\
-             }}\n\
-         }}\n\
-         \n\
-         impl ::core::ops::DerefMut for {ty} {{\n\
-             #[inline]\n\
-             fn deref_mut(&mut self) -> &mut {head} {{\n\
-                 &mut self.head\n\
+                 // SAFETY: its first size_of::<{head}>() bytes are {head}'s fields, at\n\
+                 // {head}'s offsets, its tail after them - asserted below - and\n\
+                 // {head} is Plain\n\
+                 unsafe {{ &*(self as *const Self).cast::<{head}>() }}\n\
              }}\n\
          }}\n\
          \n\
@@ -208,9 +248,12 @@ fn dst(ty: &str, doc: &str, head: &str, tail: &str, elem: &str, ffi: &str, metho
          \n\
          const _: () = {{\n\
              {VS}::assert_plain::<{elem}>();\n\
-             // the tail right after the head, no padding between\n\
-             assert!(::core::mem::align_of::<{elem}>() <= ::core::mem::align_of::<{head}>(),\n\
-                     \"{ty}: its tail is aligned no more than its head\");\n\
+             {offsets}\
+             // its tail starts where its head ends: from_raw()'s length, and\n\
+             // the Deref, count on it\n\
+             assert!(({tail_start}).next_multiple_of(::core::mem::align_of::<{elem}>())\n\
+                         == ::core::mem::size_of::<{head}>(),\n\
+                     \"{ty}: its tail starts where {head} ends\");\n\
          }};\n\
          \n\
          impl {VS}::SelfSized for {ty} {{\n\
@@ -256,12 +299,26 @@ fn dst(ty: &str, doc: &str, head: &str, tail: &str, elem: &str, ffi: &str, metho
 /// has @name__unvalidated and @name__validated: a plain alias where a state
 /// shares another's definition, so a container's ArmOf impls can name each
 /// state's - concrete types, not projections.
-fn family(name: &str, unvalidated: &str, validated: &str, whole: &str, doc: &str) -> String {
+///
+/// And __@name__state_impls!{ items }: the items, impl'd on each of
+/// @with_fields, the definitions with C's fields inline - for c_bitmask!'s
+/// setters, which the Deref to C's struct can't reach: there's no DerefMut.
+fn family(name: &str, unvalidated: &str, validated: &str, whole: &str, with_fields: &[String],
+          doc: &str) -> String {
     let aliases: String = [("unvalidated", unvalidated), ("validated", validated)].iter()
         .filter(|(st, def)| *def != format!("{name}__{st}"))
         .map(|(st, def)| format!("#[allow(non_camel_case_types)]\n\
                                   pub type {name}__{st} = {def};\n"))
         .collect();
+    let state_impls: String = with_fields.iter()
+        .map(|d| format!("impl {d} {{ $($items)* }}\n"))
+        .collect();
+    let state_impls = format!(
+        "#[doc(hidden)]\n\
+         #[allow(unused_macros)]\n\
+         macro_rules! __{name}__state_impls {{\n\
+             ($($items:tt)*) => {{\n{state_impls}}};\n\
+         }}\n");
     format!(
         "#[doc(hidden)]\n\
          #[allow(non_camel_case_types)]\n\
@@ -274,6 +331,7 @@ fn family(name: &str, unvalidated: &str, validated: &str, whole: &str, doc: &str
          }}\n\
          \n\
          {aliases}\
+         {state_impls}\
          {doc}\
          #[allow(non_camel_case_types)]\n\
          pub type {name}<S = {VS}::Validated> = <S as {VS}::State>::Of<{name}__family>;\n")
@@ -316,6 +374,10 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
     };
     let ffi = format!("{name}__ffi");
     let last = last.rust_name();
+    // C's fields, inline in each state's definition - but its flexible array,
+    // where that's the tail
+    let fields = if tail == last { &def.fields[..def.fields.len() - 1] } else { &def.fields[..] };
+    let repr = repr_attrs(&item);
 
     let state = |st: &str, what: &str| -> String {
         let from_bytes = if st == "Unvalidated" {
@@ -369,10 +431,10 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
              \n\
              {from_bytes}");
         dst(&format!("{name}__{}", st.to_lowercase()),
-            &format!("/// {name}<{st}>: {what}. Its header - C's struct {name},\n\
-                      /// Ffi<{name}>, which it derefs to - then its tail, as long as its\n\
-                      /// count says.\n"),
-            &ffi, &tail, &elem, &ffi, &methods)
+            &format!("/// {name}<{st}>: {what}. C's fields - those that hold a count\n\
+                      /// private - then its tail, as long as its count says. It derefs\n\
+                      /// to C's struct {name}, Ffi<{name}>, to read.\n"),
+            &repr, fields, &ffi, &tail, &elem, &ffi, &methods)
     };
 
     let mut out = rename_struct(item, &name, &ffi)?;
@@ -393,6 +455,7 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
         state("Validated", "what C read and validated, its counts trusted as C trusts them"),
         family(&name, &format!("{name}__unvalidated"), &format!("{name}__validated"),
                &format!("{name}__validated"),
+               &[format!("{name}__unvalidated"), format!("{name}__validated")],
                &format!("/// {name}, in state S - Validated unless named: a reference to one\n\
                          /// reaches every byte of it and none past. C's struct {name} is\n\
                          /// Ffi<{name}>.\n")))));
@@ -406,10 +469,10 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
 /// C's definition is the item, renamed X__ffi, with #[c_name(X)]: the whole
 /// struct, X<Whole> - every field there, so every field a field. X__floor is
 /// the fields before FIELD, every valid value's. X<Validated> - Unvalidated
-/// too, as the cast checks the floor - is X__validated, a DST: the floor,
-/// which it derefs to, then the bytes there are, at exactly the value's
-/// length; a field from FIELD on is a getter, zero past the end, and
-/// whole() is all of it, if it's all there.
+/// too, as the cast checks the floor - is X__validated, a DST: the floor's
+/// fields, then the bytes there are, at exactly the value's length; it derefs
+/// to the floor, to read. A field from FIELD on is a getter, zero past the
+/// end, and whole() is all of it, if it's all there.
 pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item.to_string())?;
     let name = def.name.clone();
@@ -511,13 +574,16 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
         plain = plain(&fl, &floor_tys),
         dst = dst(&ty,
                   &format!("/// {name}<Validated>: what C read and validated, written by any version\n\
-                            /// since it had its floor - the floor, which it derefs to, then the\n\
-                            /// bytes there are, at exactly the value's length. A field it gained\n\
-                            /// later is a getter, zero where the value ends before it; whole() is\n\
-                            /// all of it, {name}<Whole>, if it's all there.\n"),
-                  &fl, "_rest", "u8", &ffi, &methods),
+                            /// since it had its floor - the floor's fields, those that hold a\n\
+                            /// count private, then the bytes there are, at exactly the value's\n\
+                            /// length. It derefs to the floor, to read. A field it gained later\n\
+                            /// is a getter, zero where the value ends before it; whole() is all\n\
+                            /// of it, {name}<Whole>, if it's all there.\n"),
+                  "#[repr(C)]\n", floor, &fl, "_rest", "u8", &ffi, &methods),
         // the cast checks the floor: an unvalidated one is as good
-        family = family(&name, &ty, &ty, &ffi,
+        // none of its definitions has every field inline - its later fields are
+        // past the floor - so no state_impls: c_bitmask!s on it are C's struct's
+        family = family(&name, &ty, &ty, &ffi, &[],
                         &format!("/// {name}, in state S - Validated unless named: from any version since\n\
                                   /// its floor, at its own length. {name}<Whole> is all of it - C's\n\
                                   /// struct {name}, Ffi<{name}>.\n")))));

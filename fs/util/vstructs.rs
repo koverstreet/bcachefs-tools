@@ -780,12 +780,15 @@ pub trait HasFfi {
 /// a struct that embeds one.
 pub type Ffi<T> = <T as HasFfi>::Ffi;
 
-/// A DST of ours, in a state: a sized head, which it derefs to, then its
-/// tail - a slice. Its references are fat, with the tail's length, so a
-/// reference reaches every byte of the value and none past it. An unsized
-/// vstruct's head is C's struct, its header, whose count says how long the
-/// value is (#[unsized_vstruct]); a grown type's is its floor, the value as
-/// long as what holds it says (#[grown]).
+/// A DST of ours, in a state: a sized head's fields, inline, then its tail
+/// - a slice. Its references are fat, with the tail's length, so a reference
+/// reaches every byte of the value and none past it. It derefs to its head,
+/// to read; never mutably, so no count - the head's, or an embedded
+/// header's - can be rewritten from outside what holds the value, and its
+/// fields that hold one are private. An unsized vstruct's head is C's
+/// struct, its header, whose count says how long the value is
+/// (#[unsized_vstruct]); a grown type's is its floor, the value as long as
+/// what holds it says (#[grown]).
 ///
 /// # Safety
 /// Self is Head then its tail, at size_of::<Head>(), every bit pattern of it
