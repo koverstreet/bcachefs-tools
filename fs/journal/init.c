@@ -14,6 +14,7 @@
 #include "btree/update.h"
 #include "init/error.h"
 #include "init/dev.h"
+#include "init/passes.h"
 
 /* allocate journal on a device: */
 
@@ -282,6 +283,18 @@ static int bch2_shrink_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
 						old_buckets[bucket], BCH_DATA_free, 0,
 						BTREE_TRIGGER_transactional);
 		}
+
+	/*
+	 * A failed mark can leave this and later old buckets typed as journal
+	 * in the alloc btree, with nothing referencing them any more: have
+	 * check_allocations reconcile them from current references.
+	 */
+	if (committed && ret) {
+		CLASS(bch_log_msg, msg)(c);
+		int recovery_ret = bch2_run_explicit_recovery_pass(c, &msg.m,
+				BCH_RECOVERY_PASS_check_allocations, 0);
+		bch_err_fn(c, recovery_ret);
+	}
 
 	if (allocator_updated) {
 		if (!committed)
