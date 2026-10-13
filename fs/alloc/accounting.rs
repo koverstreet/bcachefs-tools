@@ -2,6 +2,7 @@ use crate::btree::iter::BtreeTrans;
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
+use crate::util::vstructs::Unvalidated;
 
 pub use c::bch_data_type;
 pub use c::bch_compression_type;
@@ -55,13 +56,15 @@ fn acc_bytes_to_bpos(b: &[u8; BPOS_SIZE]) -> c::bpos {
 
 /// An accounting key's position is a disk_accounting_pos - see
 /// accounting_format.rs: get() for the arm it holds, from_arm() to make one.
-impl c::disk_accounting_pos {
-    /// The disk_accounting_pos an accounting key at @p holds:
-    /// bpos_to_disk_accounting_pos().
+impl c::disk_accounting_pos<Unvalidated> {
+    /// The disk_accounting_pos an accounting key at @p holds - one validate
+    /// may not have passed: bpos_to_disk_accounting_pos().
     pub fn from_bpos(p: c::bpos) -> Self {
         Self::from_bytes(&bpos_to_acc_bytes(p))
     }
+}
 
+impl<S> c::disk_accounting_pos<S> {
     /// The position of the accounting key holding it:
     /// disk_accounting_pos_to_bpos().
     pub fn to_bpos(&self) -> c::bpos {
@@ -87,13 +90,13 @@ pub fn add(trans: &BtreeTrans<'_>, pos: &c::disk_accounting_pos, d: &[i64], gc: 
 {
     // bch2_disk_accounting_mod(); C's signatures aren't const: a copy of
     // @pos, and @d only read.
-    let mut acc = c::disk_accounting_pos::from_bytes(pos.as_bytes());
+    let mut acc = *pos;
     let d_ptr = d.as_ptr() as *mut i64;
     ret_to_result(unsafe {
         if gc {
-            c::bch2_disk_accounting_mod_gc(trans.raw(), &mut acc, d_ptr, d.len() as u32)
+            c::bch2_disk_accounting_mod_gc(trans.raw(), acc.as_ffi_mut(), d_ptr, d.len() as u32)
         } else {
-            c::bch2_disk_accounting_mod_normal(trans.raw(), &mut acc, d_ptr, d.len() as u32)
+            c::bch2_disk_accounting_mod_normal(trans.raw(), acc.as_ffi_mut(), d_ptr, d.len() as u32)
         }
     })
 }
@@ -108,11 +111,12 @@ pub fn nr_inodes(fs: &Fs) -> u64 {
     nr_inodes
 }
 
-/// A single accounting entry (from ioctl or btree iteration). Tools-only —
-/// holds its counters in a heap Vec.
+/// A single accounting entry, from the query_accounting ioctl - from the
+/// kernel, so its position is Unvalidated. Tools-only — holds its counters
+/// in a heap Vec.
 #[cfg(feature = "std")]
 pub struct AccountingEntry {
-    pub pos: c::disk_accounting_pos,
+    pub pos: c::disk_accounting_pos<Unvalidated>,
     pub counters: Vec<u64>,
 }
 

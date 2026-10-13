@@ -9,6 +9,7 @@ use crate::wrappers::accounting::{
     disk_accounting_type, reconcile_type_from_u8,
 };
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
+use bcachefs_kernel::util::vstructs::ArmError;
 use crate::wrappers::handle::{BcachefsHandle, DevUsage};
 use bcachefs_kernel::{btree, metadata_version};
 use bcachefs_kernel::opts::{prt_data_type, prt_compression_type, prt_reconcile_type};
@@ -209,10 +210,7 @@ fn fs_usage_v1_to_text(
                         let sectors = entry.counter(0);
                         if sectors == 0 { continue; }
 
-                        let dev_list = match r.tail() {
-                            Ok(d) => d,
-                            Err(e) => { write!(sub, "{e}\r\n"); continue; }
-                        };
+                        let dev_list = &r.devs;
                         let dur = replicas_durability(r.nr_devs, r.nr_required, dev_list, devs);
 
                         prt_data_type(sub, data_type_from_u8(r.data_type));
@@ -224,6 +222,7 @@ fn fs_usage_v1_to_text(
                         sub.units_sectors(sectors);
                         write!(sub, "\r\n");
                     }
+                    Err(e @ ArmError::Bad { .. }) => write!(sub, "{e}\r\n"),
                     _ => {}
                 }
             }
@@ -492,10 +491,7 @@ fn replicas_summary_to_text(
                     continue;
                 }
 
-                let dev_list = match r.tail() {
-                    Ok(d) => d,
-                    Err(e) => { writeln!(out, "{e}"); continue; }
-                };
+                let dev_list = &r.devs;
                 let (nr_devs, nr_required) = (r.nr_devs, r.nr_required);
                 let d = replicas_durability(nr_devs, nr_required, dev_list, devs);
 
@@ -505,6 +501,7 @@ fn replicas_summary_to_text(
                     durability_matrix_add(&mut replicated, d.durability, d.degraded, entry.counter(0));
                 }
             }
+            Err(e @ ArmError::Bad { .. }) => writeln!(out, "{e}"),
             _ => {}
         }
     }

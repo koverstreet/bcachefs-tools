@@ -35,21 +35,34 @@
 //!
 //! Generated, for the first declaration:
 //!
-//!  - `union disk_accounting_pos`: the storage, what C and disk see;
+//!  - `union disk_accounting_pos__ffi`: the storage, what C and disk see -
+//!    C's struct disk_accounting_pos, Ffi<disk_accounting_pos>; Plain, its
+//!    pad being every byte of it;
+//!  - `disk_accounting_pos<S>`, the storage in a state, Validated unless
+//!    named, as a family's types are (util/vstructs.rs): Unvalidated, bytes
+//!    from outside - `from_bytes()`; Validated, what validate passed, or
+//!    what's made here from an arm. One generic newtype, not a definition
+//!    per state: the states differ only in what get() does with an arm
+//!    that doesn't fit.
 //!  - `enum DiskAccountingPos`, an arm by value, and `enum
-//!    DiskAccountingPosRef<'_>`, an arm with the bytes it may extend into -
-//!    a crate::util::vstructs::Flex, so an arm ending in a flexible array,
-//!    replicas' devs, has its tail checked against the storage's end;
-//!  - `get()`: the arm the tag selects, by reference - Err(the tag) if it
-//!    isn't one of ours. Shared references only: through a `&mut` to an arm,
-//!    a tag in the arm's own bits could change under whoever holds it.
-//!  - `new()`, and `from_arm()` by the arm's type: the payload into zeroed
-//!    storage, then Determinant::set() marks it - stabby's order, so a tag
-//!    that's bits of the payload is the last thing written, not overwritten
-//!    by it. Never a typed copy, which leaves the bytes past a short payload
-//!    undefined. `from_arm_tailed()` writes an arm's flexible array too.
+//!    DiskAccountingPosRef<'_, St>`, an arm by reference: one of the arm
+//!    types the block declares, plain data, a reference to it; another's -
+//!    the replicas entry, a header and the devices it counts - its
+//!    family's, NAME__family, in the storage's state, as long as its own
+//!    header says (ArmAt);
+//!  - `get()`: the arm the tag selects. Unvalidated, an error if the tag
+//!    isn't one of ours or the arm's header says it's longer than the
+//!    storage holds (ArmError); Validated, Err(the tag), and an arm that
+//!    doesn't fit a bug. Shared references only: through a `&mut` to an
+//!    arm, a tag in the arm's own bits could change under whoever holds it.
+//!  - `new()`, and `from_arm()` by the arm's type, Validated: the payload into
+//!    zeroed storage, then Determinant::set() marks it - stabby's order, so a
+//!    tag that's bits of the payload is the last thing written, not
+//!    overwritten by it. Never a typed copy, which leaves the bytes past a
+//!    short payload undefined. `from_arm_tailed()` writes an arm's flexible
+//!    array too.
 //!  - crate::types::ArmOf for each arm's type, which from_arm() goes by;
-//!  - `type_()`, the tag, known or not; `from_bytes()` and `as_bytes()`;
+//!  - `type_()`, the tag, known or not; `as_bytes()`, `as_ffi()`;
 //!  - C: the same storage, its offsets asserted against the Rust's.
 //!
 //! The storage's bytes are always all written: they come from C or disk, from
@@ -233,6 +246,10 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
     if arms.is_empty() {
         return Err(format!("{}: no arms", tu.name));
     }
+    if !tu.unsized_ && tu.pad.is_none() {
+        return Err(format!("{}: a sized tagged_union! has a pad, `pad: TYPE` - its size, every \
+                            byte of it, which makes it Plain", tu.name));
+    }
     if let Some(d) = tu.defs.iter().find(|d| !arms.iter().any(|a| a.ty.trim() == d.name)) {
         return Err(format!("{}: {} is defined here but isn't an arm's type", tu.name, d.name));
     }
@@ -253,10 +270,10 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
     let (tag, tag_ty, tag_enum) = (&tu.tag_field, &tu.tag_ty, &tu.tag_enum);
     let det_trait = "crate::types::Determinant";
     let arm_of = "crate::types::ArmOf";
-    let flex = "crate::util::vstructs::Flex";
-    let flex_error = "crate::util::vstructs::FlexError";
+    let vs = "crate::util::vstructs";
     // The storage: the type the views are of
-    let s_ty = tu.storage.clone().unwrap_or_else(|| name.clone());
+    // A sized storage's is C's struct, {name}__ffi: {name} is its state's
+    let s_ty = tu.storage.clone().unwrap_or_else(|| format!("{name}__ffi"));
     let s_size = format!("::core::mem::size_of::<{s_ty}>()");
 
     // The storage, as C has it: the tag then the arms' union (with types of
@@ -316,7 +333,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                       {vis} u: {name}__arms,\n\
                   }}\n\
                   \n\
-                  {attrs}{storage_attrs}{vis} union {name} {{\n\
+                  {attrs}#[c_name({name})]\n{storage_attrs}{vis} union {s_ty} {{\n\
                       {vis} t: {name}__tagged,\n\
                       {pad_field}\
                   }}\n\
@@ -326,13 +343,13 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                   #[allow(non_camel_case_types)]\n\
                   {vis} struct {det};\n\
                   \n\
-                  impl {det_trait}<{name}> for {det} {{\n\
+                  impl {det_trait}<{s_ty}> for {det} {{\n\
                       type Tag = {tag_ty};\n\
-                      fn get(u: &{name}) -> {tag_ty} {{\n\
+                      fn get(u: &{s_ty}) -> {tag_ty} {{\n\
                           // SAFETY: the tag is plain data, the struct's first field\n\
                           unsafe {{ u.t.{tag} }}\n\
                       }}\n\
-                      fn set(u: &mut {name}, tag: {tag_ty}) {{\n\
+                      fn set(u: &mut {s_ty}, tag: {tag_ty}) {{\n\
                           #[allow(unused_unsafe)]\n\
                           // SAFETY: a write of plain data\n\
                           unsafe {{ u.t.{tag} = tag }}\n\
@@ -341,18 +358,45 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
          format!("::core::mem::offset_of!({name}__tagged, u)"),
          det)
     };
-    let det = format!("<{determinant} as {det_trait}<Self>>");
+    let det = format!("<{determinant} as {det_trait}<{s_ty}>>");
 
     let by_value: String = arms.iter().map(|a| format!("    {}({}),\n", a.name, a.ty)).collect();
+    // An arm type this declares is plain data: a reference to it, whatever
+    // the storage's state. Another's is a family's - a replicas entry - in the
+    // storage's state, as long as its own header says (ArmAt).
+    let declared = |a: &CTaggedArm| tu.defs.iter().any(|d| d.name == a.ty.trim());
+    let stated = arms.iter().any(|a| !declared(a));
+    let st_param = if stated { format!(", St: {vs}::State = {vs}::Validated") } else { String::new() };
+    let st_arg = |st: &str| if stated { format!(", {vs}::{st}") } else { String::new() };
     let by_ref: String = arms.iter()
-        .map(|a| format!("    {}({flex}<'a, {}>),\n", a.name, a.ty))
+        .map(|a| if declared(a) {
+            format!("    {}(&'a {}),\n", a.name, a.ty)
+        } else {
+            format!("    {}(<<St as {vs}::State>::Of<{}__family> as {vs}::ArmRef>::Ref<'a>),\n",
+                    a.name, a.ty.trim())
+        })
         .collect();
-    let gets: String = arms.iter()
-        .map(|a| format!("if t == ({}) as {tag_ty} && fits::<{}>(b) {{\n\
-                              return Ok({en}Ref::{}({flex}::new_unchecked(b)));\n\
-                          }}\n",
-                         a.value, a.ty, a.name))
-        .collect();
+    // get()'s arms, in state @st: @bad, what an arm whose header says it's
+    // longer than the storage holds is
+    let gets = |st: &str, bad: &str| -> String {
+        arms.iter()
+            .map(|a| {
+                let arm = if declared(a) {
+                    format!("// SAFETY: an arm this declares is plain data, in the storage\n\
+                             // and aligned there: asserted below\n\
+                             unsafe {{ &*b.as_ptr().cast::<{}>() }}", a.ty)
+                } else {
+                    format!("match <<{vs}::{st} as {vs}::State>::Of<{}__family> as {vs}::ArmAt>::arm_at(b) {{\n\
+                                 Ok(arm) => arm,\n\
+                                 Err(err) => {bad},\n\
+                             }}", a.ty.trim())
+                };
+                format!("if t == ({}) as {tag_ty} {{\n\
+                             return Ok({en}Ref::{}({arm}));\n\
+                         }}\n", a.value, a.name)
+            })
+            .collect()
+    };
     let news: String = arms.iter()
         .map(|a| format!("{en}::{}(x) => Self::from_arm(x),\n", a.name))
         .collect();
@@ -384,15 +428,21 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                           union get() can't hand out a reference to it - pack the arm\");\n",
                          a.ty, a.name))
         .collect();
+    // Plain - C's struct of a family is: its pad is every byte of it, and
+    // Plain, and the arms are plain data
     let pad_assert = tu.pad.as_ref()
         .map(|p| format!("const _: () = assert!({s_size} == ::core::mem::size_of::<{p}>(),\n\
-                          \"tagged_union! {name}: bigger than its pad\");\n"))
+                          \"tagged_union! {name}: bigger than its pad\");\n\
+                          // SAFETY: its pad is every byte of it - asserted above - and Plain,\n\
+                          // and its arms are plain data, any bytes one\n\
+                          unsafe impl {vs}::Plain for {s_ty} {{}}\n\
+                          const _: () = {vs}::assert_plain::<{p}>();\n"))
         .unwrap_or_default();
     // The C: another's storage has its own
     let c_record = if tu.storage.is_none() {
         let nums = [
-            format!("::core::mem::size_of::<{name}>() as u64"),
-            format!("::core::mem::align_of::<{name}>() as u64"),
+            format!("::core::mem::size_of::<{s_ty}>() as u64"),
+            format!("::core::mem::align_of::<{s_ty}>() as u64"),
             format!("{payload_offset} as u64"),
         ];
         record(&tagged_union_record_text(tu, arms), &nums)
@@ -511,31 +561,49 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
              {arms_of_by_state}"));
     }
 
+    let ref_doc = if stated {
+        format!("/// One of {name}'s arms, by reference, in its state: what {name}::get()\n\
+                 /// gives - an arm that's another's type as long as its own header says.\n")
+    } else {
+        format!("/// One of {name}'s arms, by reference: what {name}::get() gives.\n")
+    };
     with_defs(defs, name, &format!(
         "{storage}\
+         \n\
+         /// {name}, in state S - Validated unless named: C's struct, Ffi<{name}>.\n\
+         /// Unvalidated, bytes from outside - from the kernel, off a device - each\n\
+         /// arm checked against the storage as get() hands it out; Validated,\n\
+         /// what validate passed, or what's made here from an arm.\n\
+         #[allow(non_camel_case_types)]\n\
+         #[repr(transparent)]\n\
+         {vis} struct {name}<S = {vs}::Validated>({s_ty}, ::core::marker::PhantomData<S>);\n\
+         \n\
+         impl<S> Clone for {name}<S> {{\n\
+             fn clone(&self) -> Self {{\n\
+                 *self\n\
+             }}\n\
+         }}\n\
+         \n\
+         impl<S> Copy for {name}<S> {{}}\n\
+         \n\
+         impl<S> {vs}::HasFfi for {name}<S> {{\n\
+             type Ffi = {s_ty};\n\
+         }}\n\
          \n\
          /// One of {name}'s arms, by value: what {name}::new() takes.\n\
          #[allow(non_camel_case_types, dead_code)]\n\
          {vis} enum {en} {{\n{by_value}}}\n\
          \n\
-         /// One of {name}'s arms, with the bytes it may extend into - the storage's,\n\
-         /// to its end: what {name}::get() gives.\n\
+         {ref_doc}\
          #[allow(non_camel_case_types, dead_code)]\n\
          #[derive(Clone, Copy)]\n\
-         {vis} enum {en}Ref<'a> {{\n{by_ref}}}\n\
+         {vis} enum {en}Ref<'a{st_param}> {{\n{by_ref}}}\n\
          \n\
-         impl {s_ty} {{\n\
+         impl<S> {name}<S> {{\n\
              /// The tag, whether this version knows it or not.\n\
              #[allow(dead_code)]\n\
              {vis} fn {tag}(&self) -> {tag_enum} {{\n\
-                 {tag_enum}({det}::get(self) as _)\n\
-             }}\n\
-             \n\
-             /// From its bytes, as C and disk have them.\n\
-             #[allow(dead_code)]\n\
-             {vis} fn from_bytes(b: &[u8; {s_size}]) -> Self {{\n\
-                 // SAFETY: the storage is plain data: any bytes are a valid {name}\n\
-                 unsafe {{ b.as_ptr().cast::<Self>().read_unaligned() }}\n\
+                 {tag_enum}({det}::get(&self.0) as _)\n\
              }}\n\
              \n\
              /// Its bytes, as C and disk have them.\n\
@@ -546,54 +614,81 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                  unsafe {{ &*(self as *const Self).cast::<[u8; {s_size}]>() }}\n\
              }}\n\
              \n\
-             /// The arm the tag selects, with the storage's bytes from it to the end -\n\
-             /// Err(the tag) if it isn't one of ours.\n\
+             /// For C.\n\
              #[allow(dead_code)]\n\
-             {vis} fn get(&self) -> Result<{en}Ref<'_>, {tag_enum}> {{\n\
-                 fn fits<A>(b: &[u8]) -> bool {{\n\
-                     b.len() >= ::core::mem::size_of::<A>() &&\n\
-                         b.as_ptr() as usize % ::core::mem::align_of::<A>() == 0\n\
-                 }}\n\
-                 let t: {tag_ty} = {det}::get(self);\n\
+             {vis} fn as_ffi(&self) -> *const {s_ty} {{\n\
+                 &self.0\n\
+             }}\n\
+             \n\
+             /// For C, to edit.\n\
+             #[allow(dead_code)]\n\
+             {vis} fn as_ffi_mut(&mut self) -> *mut {s_ty} {{\n\
+                 &mut self.0\n\
+             }}\n\
+         }}\n\
+         \n\
+         impl {name}<{vs}::Unvalidated> {{\n\
+             /// From its bytes, as C and disk have them.\n\
+             #[allow(dead_code)]\n\
+             {vis} fn from_bytes(b: &[u8; {s_size}]) -> Self {{\n\
+                 // SAFETY: the storage is plain data: any bytes are a valid {name}\n\
+                 Self(unsafe {{ b.as_ptr().cast::<{s_ty}>().read_unaligned() }}, ::core::marker::PhantomData)\n\
+             }}\n\
+             \n\
+             /// The arm the tag selects: Err if the tag isn't one of ours, or the\n\
+             /// arm's header says it's longer than the storage holds.\n\
+             #[allow(dead_code)]\n\
+             {vis} fn get(&self) -> Result<{en}Ref<'_{unvalidated}>, {vs}::ArmError<{tag_enum}>> {{\n\
+                 let t: {tag_ty} = {det}::get(&self.0);\n\
                  let b = &self.as_bytes()[{payload_offset}..];\n\
-                 // SAFETY: the tag says these are that arm's bytes, an arm is plain\n\
-                 // data, and it fits there, aligned: checked\n\
-                 unsafe {{\n{gets}}}\n\
+                 {gets_unvalidated}\
+                 Err({vs}::ArmError::Unknown({tag_enum}(t as _)))\n\
+             }}\n\
+         }}\n\
+         \n\
+         impl {name}<{vs}::Validated> {{\n\
+             /// The arm the tag selects - Err(the tag) if it isn't one of ours.\n\
+             /// Validated, every arm fits in the storage.\n\
+             #[allow(dead_code)]\n\
+             {vis} fn get(&self) -> Result<{en}Ref<'_{validated}>, {tag_enum}> {{\n\
+                 let t: {tag_ty} = {det}::get(&self.0);\n\
+                 let b = &self.as_bytes()[{payload_offset}..];\n\
+                 {gets_validated}\
                  Err({tag_enum}(t as _))\n\
              }}\n\
              \n\
              /// From an arm: new(), by the arm's type.\n\
              #[allow(dead_code)]\n\
-             {vis} fn from_arm<A: {arm_of}<Self, Tag = {tag_ty}>>(arm: A) -> Self {{\n\
+             {vis} fn from_arm<A: {arm_of}<{s_ty}, Tag = {tag_ty}>>(arm: A) -> Self {{\n\
                  let mut s = Self::with_payload(arm);\n\
                  {det}::set(&mut s, A::TAG);\n\
-                 s\n\
+                 Self(s, ::core::marker::PhantomData)\n\
              }}\n\
              \n\
-             /// From an arm ending in a flexible array, and that array: as many elements\n\
-             /// as the arm's header says, if the storage holds them.\n\
+             /// From an arm ending in a flexible array, and that array - as many\n\
+             /// elements as the arm's header says: an error if the storage can't\n\
+             /// hold them.\n\
              #[allow(dead_code)]\n\
-             {vis} fn from_arm_tailed<A>(arm: A, tail: &[A::Elem]) -> Result<Self, {flex_error}>\n\
-             where A: {arm_of}<Self, Tag = {tag_ty}> + crate::util::vstructs::FlexArray\n\
+             {vis} fn from_arm_tailed<A>(arm: A, tail: &[A::Elem]) -> Result<Self, {vs}::VStructError>\n\
+             where A: {arm_of}<{s_ty}, Tag = {tag_ty}> + {vs}::FlexArray\n\
              {{\n\
-                 let ty = ::core::any::type_name::<A>();\n\
-                 if arm.nr() != tail.len() {{\n\
-                     return Err({flex_error}::Count {{ ty, nr: arm.nr(), given: tail.len() }});\n\
-                 }}\n\
+                 assert_eq!(arm.nr(), tail.len(), \"{{}}: its header's count, and the elements given\",\n\
+                            ::core::any::type_name::<A>());\n\
                  let at = {payload_offset} + A::TAIL;\n\
                  let len = ::core::mem::size_of_val(tail);\n\
                  if at + len > {s_size} {{\n\
-                     return Err({flex_error}::Overrun {{ ty, want: A::TAIL + len,\n\
-                                                       have: {s_size} - {payload_offset} }});\n\
+                     return Err({vs}::VStructError::Overrun {{ ty: ::core::any::type_name::<A>(),\n\
+                                                               want: A::TAIL + len,\n\
+                                                               have: {s_size} - {payload_offset} }});\n\
                  }}\n\
                  let mut s = Self::with_payload(arm);\n\
                  // SAFETY: in bounds, as checked above, and the elements are plain data\n\
                  unsafe {{\n\
                      ::core::ptr::copy_nonoverlapping(tail.as_ptr().cast::<u8>(),\n\
-                         (&mut s as *mut Self).cast::<u8>().add(at), len);\n\
+                         (&mut s as *mut {s_ty}).cast::<u8>().add(at), len);\n\
                  }}\n\
                  {det}::set(&mut s, A::TAG);\n\
-                 Ok(s)\n\
+                 Ok(Self(s, ::core::marker::PhantomData))\n\
              }}\n\
              \n\
              /// From an arm: its payload into zeroed storage, then the determinant marks\n\
@@ -604,13 +699,13 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
              }}\n\
              \n\
              /// Zeroed storage holding @arm's payload, not yet marked as holding it.\n\
-             fn with_payload<A: {arm_of}<Self>>(arm: A) -> Self {{\n\
+             fn with_payload<A: {arm_of}<{s_ty}>>(arm: A) -> {s_ty} {{\n\
                  // SAFETY: the storage is plain data: any bytes are a valid {name}\n\
-                 let mut s: Self = unsafe {{ ::core::mem::zeroed() }};\n\
+                 let mut s: {s_ty} = unsafe {{ ::core::mem::zeroed() }};\n\
                  // SAFETY: only arms are ArmOf, and each is plain data, in bounds - asserted\n\
                  // below\n\
                  unsafe {{\n\
-                     (&mut s as *mut Self).cast::<u8>().add({payload_offset}).cast::<A>()\n\
+                     (&mut s as *mut {s_ty}).cast::<u8>().add({payload_offset}).cast::<A>()\n\
                          .write_unaligned(arm);\n\
                  }}\n\
                  s\n\
@@ -621,7 +716,14 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
          {pad_assert}\
          {arm_asserts}\
          {packed_asserts}\
-         {c_record}"))
+         {c_record}",
+        unvalidated = st_arg("Unvalidated"),
+        validated = st_arg("Validated"),
+        gets_unvalidated = gets("Unvalidated",
+            &format!("return Err({vs}::ArmError::Bad {{ tag: {tag_enum}(t as _), err }})")),
+        gets_validated = gets("Validated",
+            &format!("panic!(\"{name}<Validated>: {{err}} - an arm that doesn't fit, in one \\
+                      validate passed or made from an arm\")"))))
 }
 
 /// @code, after @defs: the arm types defined in the block, then the rest.

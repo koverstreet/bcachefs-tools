@@ -27,6 +27,7 @@ use clap::Parser;
 use crate::commands::DeviceNameArgs;
 use crate::wrappers::accounting::{AccountingEntry, data_type, data_type_from_u8, disk_accounting_type};
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
+use bcachefs_kernel::util::vstructs::ArmError;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs::{self, DeviceNameMode, DevInfo};
 use bcachefs_kernel::util::printbuf::Printbuf;
@@ -89,7 +90,11 @@ fn accounting_replicas_entries(acct: &[&AccountingEntry]) -> Result<Vec<Entry>> 
     let mut ret = Vec::new();
 
     for e in acct {
-        let Ok(Acct::replicas(r)) = e.pos.get() else { continue };
+        let r = match e.pos.get() {
+            Ok(Acct::replicas(r)) => r,
+            Err(err @ ArmError::Bad { .. }) => return Err(err.into()),
+            _ => continue,
+        };
         let (nr_devs, nr_required) = (r.nr_devs, r.nr_required);
         let sectors = e.counter(0);
 
@@ -99,7 +104,7 @@ fn accounting_replicas_entries(acct: &[&AccountingEntry]) -> Result<Vec<Entry>> 
             continue;
         }
 
-        let devs: Vec<u8> = r.tail()?.iter()
+        let devs: Vec<u8> = r.devs.iter()
             .copied()
             .filter(|&d| d != 255)  /* BCH_SB_MEMBER_INVALID: dead stripe blocks */
             .collect();

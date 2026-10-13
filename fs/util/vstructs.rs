@@ -1256,6 +1256,27 @@ pub trait ArmAt: ArmRef {
     fn arm_at(b: &[u8]) -> Result<Self::Ref<'_>, VStructError>;
 }
 
+/// Why an Unvalidated sized tagged union's get() has no arm to hand out:
+/// its tag, @T, isn't one this version knows, or the arm's header says it's
+/// longer than the storage holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArmError<T> {
+    Unknown(T),
+    Bad { tag: T, err: VStructError },
+}
+
+impl<T: core::fmt::Debug> core::fmt::Display for ArmError<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Unknown(tag) => write!(f, "unknown type {tag:?}"),
+            Self::Bad { tag, err } => write!(f, "type {tag:?}: {err}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<T: core::fmt::Debug> std::error::Error for ArmError<T> {}
+
 /// A type whose values may be shorter than it, but never shorter than Min:
 /// the fields every valid one has. A View of it derefs to them, so they're
 /// fields - v.subvol - and only the later ones are projected, reading as

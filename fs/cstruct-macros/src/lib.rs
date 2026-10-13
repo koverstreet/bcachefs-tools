@@ -193,7 +193,7 @@ pub fn derive_cstruct(input: TokenStream) -> TokenStream {
 
 /// `#[derive(TypeInfo)]`: runtime type information for a struct or union C
 /// shares - see typeinfo.rs.
-#[proc_macro_derive(TypeInfo)]
+#[proc_macro_derive(TypeInfo, attributes(c_name))]
 pub fn derive_type_info(input: TokenStream) -> TokenStream {
     expand("#[derive(TypeInfo)]", || typeinfo::derive(input))
 }
