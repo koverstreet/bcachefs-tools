@@ -295,7 +295,7 @@ fn parse_assign(s: &str) -> Result<(&str, &str)> {
 /// addressing fields on the write side (update/set), not for display.
 fn render_key(fs: &Fs, k: &BkeySC<'_>, key_only: bool) -> String {
     if key_only {
-        format!("{}\n", k.to_text_key())
+        format!("{}\n", k.k)
     } else {
         format!("{}\n", k.to_text(fs))
     }
@@ -585,7 +585,7 @@ fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos,
             return Ok(ControlFlow::Break(()));
         }
         if key_only {
-            out.push_str(&format!("{}\n", k.to_text_key()));
+            out.push_str(&format!("{}\n", k.k));
         } else {
             out.push_str(&format!("{}\n", k.to_text(fs)));
         }
@@ -645,7 +645,7 @@ fn cmd_list_online(handle: &BcachefsHandle, fs: &Fs,
             return ControlFlow::Break(());
         }
         if key_only {
-            out.push_str(&format!("{}\n", k.to_text_key()));
+            out.push_str(&format!("{}\n", k.k));
         } else {
             out.push_str(&format!("{}\n", k.to_text(fs)));
         }

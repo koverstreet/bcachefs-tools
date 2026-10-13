@@ -615,13 +615,6 @@ impl<'a> BkeySC<'a> {
         BkeySCToText { k: *self, fs }
     }
 
-    /// Key only - type, pos, size - without rendering the value.
-    pub fn to_text_key(&self) -> BkeySCKeyToText<'a> {
-        BkeySCKeyToText {
-            k: BkeySC { k: self.k, v: self.v, iter: PhantomData },
-        }
-    }
-
     /// Where in the value its extent entries - its pointers - are: as
     /// bch2_bkey_ptrs_c(). Empty for a key type without them.
     fn extent_entry_range(&self) -> core::ops::Range<usize> {
@@ -831,16 +824,6 @@ impl fmt::Display for BkeySCToText<'_, '_> {
                 c::bch2_bkey_val_to_text(buf, self.fs.raw, self.k.to_raw())
             })
         }
-    }
-}
-
-pub struct BkeySCKeyToText<'a> {
-    k: BkeySC<'a>,
-}
-
-impl fmt::Display for BkeySCKeyToText<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        unsafe { printbuf_to_formatter(f, |buf| c::bch2_bkey_to_text(buf, self.k.k)) }
     }
 }
 
