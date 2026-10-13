@@ -5,6 +5,8 @@
 use crate::cstructs::c;
 use crate::cstructs::c::BCH_INODE_FIELDS_v3;
 use crate::types::{c_default, Le64};
+use crate::btree::bkey::BkeyI;
+use crate::util::vstructs::Ffi;
 use cstruct_macros::{CStruct, c_bitmask, c_typedef, c_verbatim, TypeInfo};
 
 c_typedef! {
@@ -54,7 +56,9 @@ BCH_INODE_FIELDS_v3!(__BKEY_INODE_BUF_XSUM_0);
 #[repr(C)]
 #[derive(CStruct)]
 pub struct bkey_inode_buf {
-    pub inode: c::bkey_i_inode_v3,
+    /* C's typed key: a v3 inode's header, its fields in _pad */
+    #[c("struct bkey_i_inode_v3 inode")]
+    pub inode: BkeyI<Ffi<c::bch_inode_v3>>,
     #[c("#define x(_name, _bits)		+ 8 + _bits / 8
 u8 _pad[0 + BCH_INODE_FIELDS_v3()];
 #undef x")]

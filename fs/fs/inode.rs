@@ -36,7 +36,8 @@ use crate::dirent::{self, DirentTarget};
 use crate::namei;
 use crate::util::kernel::random_u64;
 use crate::{bch_err_ratelimited, trans_inconsistent};
-use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyIInode, BkeyIInodeAllocCursor, BkeyIInodeGeneration, BkeyIInodeV2, BkeyIInodeV3, BkeyS, BkeySC, BkeySCTyped, BkeySTyped, POS_MIN, SPOS_MAX, SizedBkey};
+use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyIInode, BkeyIInodeAllocCursor, BkeyIInodeGeneration, BkeyIInodeV2, BkeyIInodeV3, BkeyS, BkeySC, BkeySCTyped, BkeySTyped, POS_MIN, SPOS_MAX};
+use crate::util::vstructs::Ffi;
 use crate::init::passes;
 use crate::util::varint;
 use core::mem::offset_of;
@@ -84,7 +85,7 @@ c::BCH_INODE_FLAGS!(inode_flags_table);
 /// Where an inode_v3's packed fields start, in its value - past the fixed
 /// fields. Unpack reads them from here, not from INODEv3_FIELDS_START, as C
 /// always has: the validate check on that field is all it's used for.
-const V3_FIELDS_OFFSET: usize = offset_of!(c::bch_inode_v3, fields);
+const V3_FIELDS_OFFSET: usize = offset_of!(Ffi<c::bch_inode_v3>, fields);
 
 /// The packed fields an inode's value ends with, decoded into @u: the first
 /// @nr_fields, in inode_fields_v3!() order if @v3, else inode_fields_v2!(),
@@ -201,7 +202,7 @@ fn try_unpack(k: BkeySC<'_>)
             u.bi_flags       = v.bi_flags.get() as u32;
             u.bi_mode        = v.bi_mode.get();
 
-            unpack_fields(&mut u, false, fields_at(offset_of!(c::bch_inode_v2, fields)),
+            unpack_fields(&mut u, false, fields_at(offset_of!(Ffi<c::bch_inode_v2>, fields)),
                           v.inodev2_nr_fields() as usize, varint_field)
         }
         BkeySCTyped::inode(i) => {
@@ -210,7 +211,7 @@ fn try_unpack(k: BkeySC<'_>)
             u.bi_flags       = v.bi_flags.get();
             u.bi_mode        = v.bi_mode.get();
 
-            let in_ = fields_at(offset_of!(c::bch_inode, fields));
+            let in_ = fields_at(offset_of!(Ffi<c::bch_inode>, fields));
             let nr_fields = v.inodev1_nr_fields() as usize;
 
             if v.inodev1_new_varint() {
@@ -308,7 +309,9 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
     }
 
     let k = &mut out.inode;
-    *k = c::bkey_i_inode_v3::new();
+    *k = BkeyI { k: c::bkey::new(), v: Default::default() };
+    k.k.type_ = c::bch_bkey_type::KEY_TYPE_inode_v3.0 as u8;
+    k.k.set_val_bytes(size_of::<Ffi<c::bch_inode_v3>>());
     k.k.p.offset = inode.bi_inum;
     k.v.bi_journal_seq = inode.bi_journal_seq.into();
     k.v.bi_hash_seed   = inode.bi_hash_seed;
@@ -323,7 +326,7 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
     // buffer has for every one of them at its biggest:
     const _: () = assert!(offset_of!(c::bkey_inode_buf, _pad) ==
                           offset_of!(c::bkey_inode_buf, inode) +
-                          offset_of!(c::bkey_i_inode_v3, v) +
+                          offset_of!(BkeyI<Ffi<c::bch_inode_v3>>, v) +
                           V3_FIELDS_OFFSET);
     let fields = &mut out._pad;
 

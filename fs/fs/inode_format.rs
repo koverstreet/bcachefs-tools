@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, Plain, TypeInfo};
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, whole, CStruct, Plain, TypeInfo};
 
 c_const! {
     #[c_int]
@@ -13,6 +13,7 @@ c_const! {
     pub const BCACHEFS_ROOT_INO: u32 = 4096;
 }
 
+#[whole(tail = fields: [u8])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
@@ -25,6 +26,7 @@ pub struct bch_inode {
     pub fields: [u8; 0],
 }
 
+#[whole(tail = fields: [u8])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
@@ -38,6 +40,7 @@ pub struct bch_inode_v2 {
     pub fields: [u8; 0],
 }
 
+#[whole(tail = fields: [u8])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
@@ -234,7 +237,7 @@ c_enum! {
 }
 
 c_bitmask! {
-    LE32_BITMASK(struct bch_inode, bi_flags) {
+    LE32_BITMASK(struct Ffi<bch_inode>, bi_flags) {
         INODEv1_STR_HASH(20, 24),
         INODEv1_NR_FIELDS(24, 31),
         INODEv1_NEW_VARINT(31, 32),
@@ -242,14 +245,14 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_inode_v2, bi_flags) {
+    LE64_BITMASK(struct Ffi<bch_inode_v2>, bi_flags) {
         INODEv2_STR_HASH(20, 24),
         INODEv2_NR_FIELDS(24, 31),
     }
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_inode_v3, bi_flags) {
+    LE64_BITMASK(struct Ffi<bch_inode_v3>, bi_flags) {
         INODEv3_STR_HASH(20, 24),
         INODEv3_NR_FIELDS(24, 31),
         INODEv3_FIELDS_START(31, 36),

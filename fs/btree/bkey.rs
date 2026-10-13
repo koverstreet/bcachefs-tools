@@ -391,6 +391,9 @@ macro_rules! bkey_val {
     (alloc, $f:tt)                => { bkey_val!(@family alloc); };
     (alloc_v2, $f:tt)             => { bkey_val!(@family alloc_v2); };
     (alloc_v3, $f:tt)             => { bkey_val!(@family alloc_v3); };
+    (inode, $f:tt)                => { bkey_val!(@family inode); };
+    (inode_v2, $f:tt)             => { bkey_val!(@family inode_v2); };
+    (inode_v3, $f:tt)             => { bkey_val!(@family inode_v3); };
 
     (@family $name:ident) => { crate::paste! {
         impl BkeyValC for c::[<bch_ $name>] {
