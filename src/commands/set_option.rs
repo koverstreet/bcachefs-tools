@@ -20,10 +20,17 @@ fn schedule_reconcile_after_offline_io_opt_change(fs: &bcachefs_kernel::fs::Fs) 
     let ext: &mut c::bch_sb_field_ext =
         unsafe { bcachefs_kernel::sb::io::sb_field_get_minsize(&mut (*fs.raw).disk_sb, ext_u64s) }
             .ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))?;
+    mark_reconcile_recovery_pass(ext);
+    Ok(())
+}
+
+/// Set the stable recovery-pass bit that makes the next mount rescan for
+/// reconcile work. Idempotent; only called when an inode option really
+/// changed (`opt_set_sb` returned true), so unchanged values never reach it.
+fn mark_reconcile_recovery_pass(ext: &mut c::bch_sb_field_ext) {
     let pass = 1u64 << c::bch_recovery_pass::BCH_RECOVERY_PASS_set_fs_needs_reconcile as u64;
     let stable_pass = unsafe { c::bch2_recovery_passes_to_stable(pass) };
     ext.recovery_passes_required[0] |= stable_pass.to_le();
-    Ok(())
 }
 
 fn set_option_cmd() -> Command {
@@ -203,6 +210,9 @@ fn set_option_offline(
                 failed.insert(name.as_str());
                 continue;
             }
+            // opt_set_sb() returns false when the value is unchanged: then
+            // neither `modified` nor `needs_reconcile` is set, so no
+            // superblock write and no recovery bit are forced.
             if fs.opt_set_sb(None, opt, val, Some(&c_value)) {
                 modified = true;
                 needs_reconcile |= unsafe { c::bch2_opt_is_inode_opt(opt_id) };
@@ -276,3 +286,33 @@ fn name_to_dev_idx(fs: &Fs, name: &str) -> Option<usize> {
 }
 
 pub const CMD: super::CmdDef = raw_cmd!("set-fs-option", "Set filesystem options", cmd_set_option);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn zeroed_ext() -> c::bch_sb_field_ext {
+        unsafe { std::mem::zeroed() }
+    }
+
+    #[test]
+    fn reconcile_recovery_bit_is_set_and_stable() {
+        let mut ext = zeroed_ext();
+        mark_reconcile_recovery_pass(&mut ext);
+        let pass = 1u64 << c::bch_recovery_pass::BCH_RECOVERY_PASS_set_fs_needs_reconcile as u64;
+        let want = unsafe { c::bch2_recovery_passes_to_stable(pass) };
+        assert_ne!(want, 0);
+        assert_eq!(u64::from_le(ext.recovery_passes_required[0]), want);
+    }
+
+    #[test]
+    fn reconcile_recovery_bit_is_idempotent_and_keeps_other_bits() {
+        let mut ext = zeroed_ext();
+        ext.recovery_passes_required[0] = 1u64.to_le();
+        mark_reconcile_recovery_pass(&mut ext);
+        let once = ext.recovery_passes_required[0];
+        mark_reconcile_recovery_pass(&mut ext);
+        assert_eq!(ext.recovery_passes_required[0], once);
+        assert_eq!(u64::from_le(once) & 1, 1);
+    }
+}

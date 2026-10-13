@@ -318,7 +318,7 @@ impl Fs {
             c::bch2_opt_set_sb(self.raw,
                 dev.map_or(core::ptr::null_mut(), |d| d.as_mut_ptr()),
                 opt, v,
-                val_str.map_or(core::ptr::null(), |s| s.as_ptr().cast()));
+                val_str.map_or(core::ptr::null(), |s| s.as_ptr().cast()))
         }
     }
 
