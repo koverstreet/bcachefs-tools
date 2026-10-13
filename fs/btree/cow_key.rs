@@ -70,7 +70,7 @@ impl<'i, 'k, 'a, 't, K: TypedBkey> CowKey<'i, 'k, 'a, 't, K> {
     pub fn key(&self) -> BkeySC<'_> {
         match &self.u {
             Some(u) => BkeySC::from(u.k_i()),
-            None    => BkeySC { k: self.k.k, v: self.k.v, iter: PhantomData },
+            None    => BkeySC { k: self.k.k, v: self.k.v, iter: PhantomData, val: PhantomData },
         }
     }
 

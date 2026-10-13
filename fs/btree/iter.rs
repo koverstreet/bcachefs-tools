@@ -1387,15 +1387,12 @@ pub(crate) unsafe fn bkey_s_c_to_result<'i>(k: c::bkey_s_c)
                 Some(BkeySC {
                     k:    &*k.k,
                     // Hole slots (peek_slot) return a deleted key with a NULL
-                    // val; bch_val is zero-sized, so a dangling well-aligned
-                    // reference is legal - the val is never read through (a
-                    // deleted key's val length is zero).
-                    v:    if !k.v.is_null() {
-                        &*k.v
-                    } else {
-                        NonNull::dangling().as_ref()
-                    },
+                    // val: a dangling, aligned one instead, as val_bytes()
+                    // makes a slice of it - empty, a deleted key's value, but
+                    // a slice's pointer is never null.
+                    v:    if !k.v.is_null() { k.v } else { NonNull::dangling().as_ptr() },
                     iter: PhantomData,
+                    val:  PhantomData,
                 })
             }
         } else {
@@ -2189,9 +2186,10 @@ impl c::btree {
                 return ControlFlow::Continue(());
             }
             if f(BkeySC {
-                k: unsafe { &*k.k },
-                v: unsafe { &*k.v },
+                k:    unsafe { &*k.k },
+                v:    k.v,
                 iter: PhantomData,
+                val:  PhantomData,
             }).is_break() {
                 return ControlFlow::Break(());
             }

@@ -259,22 +259,23 @@ pub type bkey_type = c::bch_bkey_type;
 /// bkey_s_c. It's a tagged union, its tag k.type_: typed() is C's switch on
 /// it, each arm the key as its type's, BkeySC<'a, bch_extent> - C's struct
 /// bkey_s_c_extent, BkeySCExtent (btree/bkey_types.rs) - whose value is
-/// v(). @v is a pointer, not a reference: a value written before its type
-/// grew is shorter than its type, as long as k.u64s says.
+/// v(). @v is C's - a thin pointer to the value, as long as k.u64s says -
+/// and @V only what the value is: v() makes the reference, sized or not.
 #[repr(C)]
-pub struct BkeySC<'a, V = c::bch_val> {
+pub struct BkeySC<'a, V: ?Sized = c::bch_val> {
     pub k:           &'a c::bkey,
-    pub(crate) v:    *const V,
+    pub(crate) v:    *const c::bch_val,
     pub(crate) iter: PhantomData<&'a mut BtreeIter<'a>>,
+    pub(crate) val:  PhantomData<*const V>,
 }
 
 // References: Copy whatever V is, which a derive would require it to be.
-impl<V> Clone for BkeySC<'_, V> {
+impl<V: ?Sized> Clone for BkeySC<'_, V> {
     fn clone(&self) -> Self {
         *self
     }
 }
-impl<V> Copy for BkeySC<'_, V> {}
+impl<V: ?Sized> Copy for BkeySC<'_, V> {}
 
 /// A key with its value inline, of type V: C's struct bkey_i_<type>, whose
 /// k is also the bkey_i k_i - an empty value, there. bkey_i's typed() and
@@ -543,7 +544,7 @@ macro_rules! bkey_types {
 
 c::BCH_BKEY_TYPES!(bkey_types);
 
-impl<'a, V> BkeySC<'a, V> {
+impl<'a, V: ?Sized> BkeySC<'a, V> {
     /// The value as bytes, as long as k.u64s says.
     pub fn val_bytes(&self) -> &'a [u8] {
         // SAFETY: its value follows its header, as long as u64s says, for 'a
@@ -551,8 +552,8 @@ impl<'a, V> BkeySC<'a, V> {
     }
 
     /// The key as one with a @W value: typed() and arm(), which check it is.
-    fn cast<W>(self) -> BkeySC<'a, W> {
-        BkeySC { k: self.k, v: self.v.cast(), iter: PhantomData }
+    fn cast<W: ?Sized>(self) -> BkeySC<'a, W> {
+        BkeySC { k: self.k, v: self.v, iter: PhantomData, val: PhantomData }
     }
 
     /// The key, of any type: C's .s_c, a typed key as the union.
@@ -566,15 +567,15 @@ impl<'a, V> BkeySC<'a, V> {
     pub(crate) fn to_c(self) -> BkeySC<'static, V> {
         // SAFETY: a C typed key's pointers have no lifetime, and this one is
         // for C, within 'a
-        BkeySC { k: unsafe { &*(self.k as *const c::bkey) }, v: self.v, iter: PhantomData }
+        BkeySC { k: unsafe { &*(self.k as *const c::bkey) }, v: self.v, iter: PhantomData, val: PhantomData }
     }
 }
 
 // C's typed keys - from a C lookup, say - as a plain bkey_s_c, for
 // bkey_s_c_to_result(): the same key and value.
-impl<V> From<BkeySC<'static, V>> for c::bkey_s_c {
+impl<V: ?Sized> From<BkeySC<'static, V>> for c::bkey_s_c {
     fn from(k: BkeySC<'static, V>) -> Self {
-        c::bkey_s_c { k: k.k as *const c::bkey as *mut c::bkey, v: k.v.cast_mut().cast() }
+        c::bkey_s_c { k: k.k as *const c::bkey as *mut c::bkey, v: k.v.cast_mut() }
     }
 }
 
@@ -708,6 +709,7 @@ impl<'a> From<&'a c::bkey_i> for BkeySC<'a> {
             k:    &k.k,
             v:    &k.v,
             iter: PhantomData,
+            val:  PhantomData,
         }
     }
 }
@@ -718,6 +720,7 @@ impl<'a> From<&'a c::bkey_s_c> for BkeySC<'a> {
             k:    unsafe { &*k.k },
             v:    k.v,
             iter: PhantomData,
+            val:  PhantomData,
         }
     }
 }
@@ -729,19 +732,20 @@ impl<'a> From<&'a c::bkey_s_c> for BkeySC<'a> {
 /// Copy: what edits it borrows it, &mut BkeyS, so one can be walked twice -
 /// a read, then a rewrite - without aliasing.
 #[repr(C)]
-pub struct BkeyS<'a, V = c::bch_val> {
-    pub k:        &'a mut c::bkey,
-    pub(crate) v: *mut V,
+pub struct BkeyS<'a, V: ?Sized = c::bch_val> {
+    pub k:          &'a mut c::bkey,
+    pub(crate) v:   *mut c::bch_val,
+    pub(crate) val: PhantomData<*mut V>,
 }
 
-impl<'a, V> BkeyS<'a, V> {
+impl<'a, V: ?Sized> BkeyS<'a, V> {
     pub fn key_type(&self) -> c::bch_bkey_type {
         c::bch_bkey_type(self.k.type_ as u32)
     }
 
     /// The key, to read: as bkey_s_to_s_c() - a typed key's C .c.
     pub fn as_sc(&self) -> BkeySC<'_, V> {
-        BkeySC { k: &*self.k, v: self.v.cast_const(), iter: PhantomData }
+        BkeySC { k: &*self.k, v: self.v.cast_const(), iter: PhantomData, val: PhantomData }
     }
 
     /// The key, of any type: C's .s, a typed key as the union.
@@ -770,12 +774,12 @@ impl<'a, V> BkeyS<'a, V> {
     /// The key, borrowed again: for typed() and arm(), which don't consume
     /// it.
     fn reborrow(&mut self) -> BkeyS<'_, V> {
-        BkeyS { k: &mut *self.k, v: self.v }
+        BkeyS { k: &mut *self.k, v: self.v, val: PhantomData }
     }
 
     /// The key as one with a @W value: typed() and arm(), which check it is.
-    fn cast<W>(self) -> BkeyS<'a, W> {
-        BkeyS { k: self.k, v: self.v.cast() }
+    fn cast<W: ?Sized>(self) -> BkeyS<'a, W> {
+        BkeyS { k: self.k, v: self.v, val: PhantomData }
     }
 }
 
@@ -786,7 +790,7 @@ impl<'a> BkeyS<'a> {
     /// @v is @k's value, as long as k.u64s says, nothing else touching it for
     /// 'a.
     pub unsafe fn from_parts(k: &'a mut c::bkey, v: *mut c::bch_val) -> Self {
-        BkeyS { k, v }
+        BkeyS { k, v, val: PhantomData }
     }
 
     /// The key as its type's, @K's, to edit, if it's that type:
@@ -806,8 +810,9 @@ impl<'a> BkeyS<'a> {
 impl<'a> From<&'a mut c::bkey_i> for BkeyS<'a> {
     fn from(k: &'a mut c::bkey_i) -> Self {
         BkeyS {
-            k: &mut k.k,
-            v: &mut k.v,
+            k:   &mut k.k,
+            v:   &mut k.v,
+            val: PhantomData,
         }
     }
 }

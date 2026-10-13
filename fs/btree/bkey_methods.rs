@@ -227,7 +227,7 @@ impl<'a> TriggerOp<'a> {
             btree: op.btree,
             level: op.level,
             old:   BkeySC::from(&op.old),
-            new:   BkeyS { k: unsafe { &mut *new.k }, v: unsafe { &mut *new.v } },
+            new:   BkeyS { k: unsafe { &mut *new.k }, v: new.v, val: core::marker::PhantomData },
             flags: UpdateTriggerFlags::from_bits_retain(op.flags.bits()),
         }
     }
