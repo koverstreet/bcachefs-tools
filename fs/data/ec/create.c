@@ -75,7 +75,10 @@
 /*
  * dev stripe state
  *
- * block/parity striping, indexed by target:
+ * block/parity striping, indexed by target. Its lock is only for the bucket
+ * allocator's rotation through the devices, so new_stripe_alloc_buckets()
+ * takes it, around that alone; states are never freed while the filesystem is
+ * up, so it's returned unlocked.
  */
 
 static struct ec_dev_stripe_state *ec_dev_stripe_state_get(struct btree_trans *trans, unsigned disk_label)
@@ -87,25 +90,18 @@ static struct ec_dev_stripe_state *ec_dev_stripe_state_get(struct btree_trans *t
 
 	struct ec_dev_stripe_state *s;
 	list_for_each_entry(s, &c->ec.dev_stripe_state_list, list)
-		if (s->disk_label == disk_label) {
-			int ret = bch2_trans_mutex_lock(trans, &s->lock);
-			if (ret)
-				s = ERR_PTR(ret);
-
-			mutex_unlock(&c->ec.dev_stripe_state_lock);
-			return s;
-		}
+		if (s->disk_label == disk_label)
+			goto out;
 
 	s = kzalloc(sizeof(*s), GFP_KERNEL);
 	if (!s) {
 		s = ERR_PTR(-ENOMEM);
 	} else {
 		mutex_init(&s->lock);
-		BUG_ON(!mutex_trylock(&s->lock));
 		s->disk_label = disk_label;
 		list_add(&s->list, &c->ec.dev_stripe_state_list);
 	}
-
+out:
 	mutex_unlock(&c->ec.dev_stripe_state_lock);
 	return s;
 }
@@ -1666,7 +1662,11 @@ static int new_stripe_alloc_buckets(struct btree_trans *trans,
 	if (req->watermark == BCH_WATERMARK_copygc)
 		req->flags |= BCH_WRITE_alloc_nowait;
 
-	int ret = __new_stripe_alloc_buckets(trans, req, dev_stripe, s);
+	int ret = bch2_trans_mutex_lock(trans, &dev_stripe->lock);
+	if (!ret) {
+		ret = __new_stripe_alloc_buckets(trans, req, dev_stripe, s);
+		mutex_unlock(&dev_stripe->lock);
+	}
 
 	if (may_shrink &&
 	    ((ret == -BCH_ERR_bucket_alloc_blocked ||
@@ -2588,10 +2588,6 @@ struct ec_stripe_head *bch2_ec_stripe_head_get(struct btree_trans *trans,
 			if (ret)
 				goto err;
 			h->dev_stripe = d;
-		} else {
-			ret = bch2_trans_mutex_lock(trans, &h->dev_stripe->lock);
-			if (ret)
-				goto err;
 		}
 
 		bool waiting = false;
@@ -2599,8 +2595,6 @@ struct ec_stripe_head *bch2_ec_stripe_head_get(struct btree_trans *trans,
 		if (waiting &&
 		    !bch2_err_matches(ret, BCH_ERR_operation_blocked))
 			bch2_alloc_waiters_unpark(c);
-
-		mutex_unlock(&h->dev_stripe->lock);
 
 		if (ret)
 			goto err;
@@ -2912,9 +2906,6 @@ static int stripe_repair_rebuild(struct moving_context *ctxt,
 								   0, 0, BCH_WATERMARK_normal, 0, &cl));
 		if (!ret2)
 			ret2 = new_stripe_alloc_buckets(trans, req, dev_stripe, new_s, true);
-
-		if (!IS_ERR_OR_NULL(dev_stripe))
-			mutex_unlock(&dev_stripe->lock);
 
 		if (bch2_err_matches(ret2, BCH_ERR_operation_blocked))
 			ret2 = bch2_wait_on_allocator(trans, req, ret2, &cl) ?:
