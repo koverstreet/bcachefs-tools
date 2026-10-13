@@ -578,14 +578,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
         })
     }
 
-    pub fn bkey_alloc_typed<K: SizedBkey>(&self) -> Result<TransBkey<'a, 't>, BchError> {
-        debug_assert_eq!(size_of::<K>() % size_of::<u64>(), 0);
+    pub fn bkey_alloc_typed<K: SizedBkey + ?Sized>(&self) -> Result<TransBkey<'a, 't>, BchError> {
+        debug_assert_eq!(size_of::<Whole<K>>() % size_of::<u64>(), 0);
 
-        let u64s = (size_of::<K>() / size_of::<u64>()) as u32;
+        let u64s = (size_of::<Whole<K>>() / size_of::<u64>()) as u32;
         let mut k = self.bkey_alloc(u64s)?;
 
         unsafe {
-            (k.as_mut() as *mut c::bkey_i as *mut K).write(K::new());
+            (k.as_mut() as *mut c::bkey_i as *mut Whole<K>).write(K::new());
         }
 
         Ok(k)
@@ -692,16 +692,16 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     /// @k, a @K, as a mutable copy grown to a whole @K - not yet an update:
     /// ENOENT if it isn't one. As bch2_bkey_make_mut_noupdate_typed().
-    pub fn bkey_make_mut_noupdate_typed<K: SizedBkey>(&self, k: BkeySC<'_>)
+    pub fn bkey_make_mut_noupdate_typed<K: SizedBkey + ?Sized>(&self, k: BkeySC<'_>)
         -> Result<TransBkey<'a, 't>, BchError>
     {
-        self.make_mut_noupdate(k, K::TYPE, size_of::<K>())
+        self.make_mut_noupdate(k, K::TYPE, size_of::<Whole<K>>())
     }
 
     /// The value of the @K at @pos in @btree, zero padded:
     /// ENOENT_bkey_type_mismatch if it isn't one - as bch2_bkey_get_val_typed().
-    pub fn bkey_get_val<K: SizedBkey>(&self, btree: c::btree_id, pos: bpos, flags: BtreeIterFlags)
-        -> Result<K::Val, BchError>
+    pub fn bkey_get_val<K: SizedBkey + ?Sized>(&self, btree: c::btree_id, pos: bpos, flags: BtreeIterFlags)
+        -> Result<ValC<K::Val>, BchError>
     {
         let mut iter = BtreeIter::new(self.trans, btree, pos, flags);
         let k = iter.peek_slot_typed(self, K::TYPE)?;
@@ -709,8 +709,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     /// As bkey_get_val(), the whole key: as bch2_bkey_get_i_typed().
-    pub fn bkey_get_key<K: SizedBkey>(&self, btree: c::btree_id, pos: bpos, flags: BtreeIterFlags)
-        -> Result<K, BchError>
+    pub fn bkey_get_key<K: SizedBkey + ?Sized>(&self, btree: c::btree_id, pos: bpos, flags: BtreeIterFlags)
+        -> Result<Whole<K>, BchError>
     {
         let mut iter = BtreeIter::new(self.trans, btree, pos, flags);
         let k = iter.peek_slot_typed(self, K::TYPE)?;

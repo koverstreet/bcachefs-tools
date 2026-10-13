@@ -356,20 +356,27 @@ pub trait TypedBkey {
     unsafe fn cast_mut(k: *mut c::bkey_i) -> *mut BkeyI<Self::Val>;
 }
 
-/// A key type whose value is sized: what's made, or copied, by value.
-pub trait SizedBkey: TypedBkey<Val: Sized> + Sized {
+/// A key type whose value can be had by value - made, or copied: all of it,
+/// as C's struct, ValC - the value itself if it's sized, or a grown type's
+/// (#[grown]), the fields an older value lacks zero. Not a type whose value
+/// has a tail.
+pub trait SizedBkey: TypedBkey<Val: BkeyValC<C: Default>> {
     /// A key of this type at POS_MIN, its value zeroed: C's
     /// bkey_<name>_init().
-    fn new() -> Self;
+    fn new() -> Whole<Self>;
 
     /// @k's value if it's this type, zero padded past the end of a short
     /// one: see val_copy_pad().
-    fn val_copy_pad(k: BkeySC<'_>) -> Option<Self::Val>;
+    fn val_copy_pad(k: BkeySC<'_>) -> Option<ValC<Self::Val>>;
 
     /// @k, if it's this type, as an owned key: the value zero padded, u64s as
     /// on disk - as bch2_bkey_get_i_typed() copies it.
-    fn from_key(k: BkeySC<'_>) -> Option<Self>;
+    fn from_key(k: BkeySC<'_>) -> Option<Whole<Self>>;
 }
+
+/// A key of type @K, whole, by value: C's typed key, bkey_i_<name>, its
+/// value C's struct - K itself, for a sized value.
+pub type Whole<K> = BkeyI<ValC<<K as TypedBkey>::Val>>;
 
 /// A value type, as C has it: itself, or a DST's C struct - for what
 /// C's typed keys hold, bkey_i_<name>.
@@ -778,6 +785,21 @@ impl c::bkey_i {
     pub fn arm_mut<K: TypedBkey + ?Sized>(&mut self) -> Option<&mut BkeyI<K::Val>> {
         // SAFETY: as arm()'s
         self.k.holds_whole::<K>().then(|| unsafe { &mut *K::cast_mut(self) })
+    }
+
+    /// The key as @K's, whole, if it's that type and all of C's struct is
+    /// there: every field a field - for a grown type, where arm() is the
+    /// value as long as it is.
+    pub fn whole<K: SizedBkey + ?Sized>(&self) -> Option<&Whole<K>> {
+        // SAFETY: a K, all of its C struct there; a key's value is at the u64
+        // after its header, aligned
+        self.k.holds_whole::<K>().then(|| unsafe { &*(self as *const Self).cast::<Whole<K>>() })
+    }
+
+    /// whole(), to edit.
+    pub fn whole_mut<K: SizedBkey + ?Sized>(&mut self) -> Option<&mut Whole<K>> {
+        // SAFETY: as whole()'s
+        self.k.holds_whole::<K>().then(|| unsafe { &mut *(self as *mut Self).cast::<Whole<K>>() })
     }
 }
 

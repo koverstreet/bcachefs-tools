@@ -9,7 +9,7 @@
 //! and a repair that made its own mutable copy from the original key dropped
 //! every repair before it.
 
-use crate::btree::bkey::{BkeySC, BkeySCToText, SizedBkey};
+use crate::btree::bkey::{BkeySC, BkeySCToText, SizedBkey, ValC, Whole};
 use crate::btree::iter::{BtreeIter, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::errcode::BchError;
@@ -18,16 +18,16 @@ use core::marker::PhantomData;
 use core::mem::size_of;
 
 /// Key @k of type @K, at @iter.
-pub struct CowKey<'i, 'k, 'a, 't, K: SizedBkey> {
+pub struct CowKey<'i, 'k, 'a, 't, K: SizedBkey + ?Sized> {
     iter: &'i BtreeIter<'t>,
     k:    BkeySC<'k>,
     /// The value as read, zero padded - until there's @u.
-    v:    K::Val,
+    v:    ValC<K::Val>,
     /// The key as it will be written, once anything has been repaired.
     u:    Option<TransBkey<'a, 't>>,
 }
 
-impl<'i, 'k, 'a, 't, K: SizedBkey> CowKey<'i, 'k, 'a, 't, K> {
+impl<'i, 'k, 'a, 't, K: SizedBkey + ?Sized> CowKey<'i, 'k, 'a, 't, K> {
     /// None if @k isn't of type @K.
     pub fn new(iter: &'i BtreeIter<'t>, k: BkeySC<'k>) -> Option<Self> {
         let v = K::val_copy_pad(k)?;
@@ -39,9 +39,9 @@ impl<'i, 'k, 'a, 't, K: SizedBkey> CowKey<'i, 'k, 'a, 't, K> {
     }
 
     /// The value as it is now, repairs and all.
-    pub fn v(&self) -> &K::Val {
+    pub fn v(&self) -> &ValC<K::Val> {
         match &self.u {
-            Some(u) => u.k_i().arm::<K>().expect("CowKey: the update is K's, grown whole").v(),
+            Some(u) => &u.k_i().whole::<K>().expect("CowKey: the update is K's, grown whole").v,
             None    => &self.v,
         }
     }
@@ -55,15 +55,15 @@ impl<'i, 'k, 'a, 't, K: SizedBkey> CowKey<'i, 'k, 'a, 't, K> {
     pub fn u(&mut self, t: &TransAttempt<'a, 't>) -> Result<&mut TransBkey<'a, 't>, BchError> {
         if self.u.is_none() {
             self.u = Some(t.bkey_make_mut(self.iter, self.k, UpdateTriggerFlags::empty(),
-                                          K::TYPE, size_of::<K>())?);
+                                          K::TYPE, size_of::<Whole<K>>())?);
         }
         Ok(self.u.as_mut().expect("just made"))
     }
 
     /// The value, to repair.
-    pub fn v_mut(&mut self, t: &TransAttempt<'a, 't>) -> Result<&mut K::Val, BchError> {
-        Ok(self.u(t)?.k_i_mut().arm_mut::<K>()
-           .expect("CowKey: u() grows the key to K's size, of K's type").v_mut())
+    pub fn v_mut(&mut self, t: &TransAttempt<'a, 't>) -> Result<&mut ValC<K::Val>, BchError> {
+        Ok(&mut self.u(t)?.k_i_mut().whole_mut::<K>()
+           .expect("CowKey: u() grows the key to K's size, of K's type").v)
     }
 
     /// The key as it is now, to print.
