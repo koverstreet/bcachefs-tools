@@ -453,8 +453,9 @@ fn own_count_family(name: &str, shape: &Shape) -> String {
 ///
 /// The tail is the item's trailing flexible array, `NAME: [E; 0]` - the
 /// states' is `NAME: [E]` - or, where the header doesn't end in one, what
-/// the attribute names: `#[unsized_vstruct(tail = [E])]`, the states' `_tail`
-/// - a superblock field's, past its header; a btree node's, its bset's keys.
+/// the attribute says: `tail = [E]`, the states' `_tail`, the raw rest - a
+/// superblock field's, past its header; a btree node's, its bset's keys - or
+/// `tail = NAME: [E]`, an array the states call NAME.
 pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item.to_string())?;
     let name = def.name.clone();
@@ -467,8 +468,7 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
                                      #[unsized_vstruct(tail = [E])] says what its tail holds",
                                     last.name)),
         },
-        Some((None, elem)) => ("_tail".to_string(), elem),
-        Some((Some(n), _)) => return Err(format!("{name}: tail = [E], its tail _tail - not named {n}")),
+        Some((tail, elem)) => (tail.unwrap_or_else(|| "_tail".to_string()), elem),
     };
     let ffi = format!("{name}__ffi");
     let last = last.rust_name();
@@ -494,17 +494,18 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
     Ok(out)
 }
 
-/// #[counted], #[counted(PATH)], #[counted(PATH, tail = NAME: [E])]: the
-/// family of a type that's a header and an array it counts in elements - an
-/// ioctl's reply, a replicas usage record. Not a vstruct: no u64s, no entries
-/// to walk; its tail is just the array.
+/// #[counted], #[counted(PATH)], #[counted(PATH, tail = ..)]: the family of a
+/// type that's a header and an array it counts in elements - an ioctl's
+/// reply, a replicas usage record. Not a vstruct: no u64s, no entries to
+/// walk; its tail is just the array.
 ///
 /// PATH is the count, as vstruct!'s is - a field, or a field of one it
 /// embeds (r.nr_devs) - and nr_entries if not named, the convention. Its
 /// first field holds the count, so that's private in each state's
 /// definition; C's struct keeps it as written, so a header can still be
-/// built standalone. The array is the item's trailing [E; 0], or, where it's
-/// a field of a field, `tail = NAME: [E]` - the states' NAME.
+/// built standalone. The array is the item's trailing [E; 0], or what the
+/// attribute says - as #[unsized_vstruct]'s, `tail = [E]`, the states'
+/// `_tail`, or `tail = NAME: [E]`, a field of a field the states call NAME.
 ///
 /// C's struct gets FlexArray from the count - its size, TAIL and the
 /// elements past it - and CountedFfi, the way to its Unvalidated definition
@@ -525,8 +526,8 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
     // the array: a trailing [E; 0], or a field of a field - after C's struct,
     // where dst() asserts its tail starts
     let (tail, elem, fields, tail_at) = match args.tail {
-        Some((Some(n), elem)) => (n, elem, &def.fields[..], format!("::core::mem::size_of::<{ffi}>()")),
-        Some((None, _)) => return Err(format!("{name}: #[counted(.., tail = NAME: [E])] - its tail is named")),
+        Some((tail, elem)) => (tail.unwrap_or_else(|| "_tail".to_string()), elem, &def.fields[..],
+                               format!("::core::mem::size_of::<{ffi}>()")),
         None => {
             let last = def.fields.last().ok_or_else(|| format!("{name}: a counted type has fields"))?;
             match field_type(&last.ty)? {
@@ -534,7 +535,7 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
                     (last.rust_name(), elem, &def.fields[..def.fields.len() - 1],
                      format!("::core::mem::offset_of!({ffi}, {})", last.rust_name())),
                 _ => return Err(format!("{name}: its last field, {}, isn't a flexible array, [E; 0] - \
-                                         #[counted(.., tail = NAME: [E])] says where its array is",
+                                         #[counted(.., tail = [E])] says where its array is",
                                         last.name)),
             }
         }

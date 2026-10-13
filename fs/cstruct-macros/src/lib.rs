@@ -274,9 +274,10 @@ pub fn bitfield(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// `#[unsized_vstruct]`, on C's definition of a struct ending in a flexible
-/// array: the family of its definitions, one per state - C's, renamed X__ffi,
-/// and each state's, a DST of the header and its tail - and the alias X<S>
-/// that picks one. See vstructs.rs.
+/// array - or `#[unsized_vstruct(tail = [E])]`, `tail = NAME: [E]`, saying
+/// what follows its header: the family of its definitions, one per state -
+/// C's, renamed X__ffi, and each state's, a DST of the header and its tail -
+/// and the alias X<S> that picks one. See vstructs.rs.
 #[proc_macro_attribute]
 pub fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand("#[unsized_vstruct]", || vstructs::unsized_vstruct(attr, item))
@@ -292,9 +293,10 @@ pub fn grown(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand("#[grown]", || vstructs::grown(attr, item))
 }
 
-/// `#[counted]`, `#[counted(PATH)]`, `#[counted(PATH, tail = NAME: [E])]`, on
-/// C's definition of a header and an array it counts in elements: its
-/// family, the count private in each state's definition - see vstructs.rs.
+/// `#[counted]`, `#[counted(PATH)]`, `#[counted(PATH, tail = [E])]` or
+/// `tail = NAME: [E]`, on C's definition of a header and an array it counts
+/// in elements: its family, the count private in each state's definition -
+/// see vstructs.rs.
 #[proc_macro_attribute]
 pub fn counted(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand("#[counted]", || vstructs::counted(attr, item))

@@ -932,7 +932,7 @@ fn attr_args<'a>(attr: &'a [Tok], name: &str) -> Option<&'a [Tok]> {
 }
 
 /// A family attribute's arguments (cstruct-macros' vstructs.rs):
-/// `#[counted(PATH, tail = NAME: [E])]`, `#[unsized_vstruct(tail = [E])]`,
+/// `#[counted(PATH, tail = ..)]`, `#[unsized_vstruct(tail = ..)]`,
 /// `#[grown(from = FIELD)]`.
 #[derive(Debug, Default)]
 pub struct FamilyArgs {
