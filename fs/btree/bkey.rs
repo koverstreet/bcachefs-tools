@@ -499,31 +499,7 @@ macro_rules! bkey_types {
                 }
             }
 
-            $(
-            /// The key as C's typed key, if it's that type, for C functions
-            /// that take one.
-            pub fn [<to_c_ $name>](&self) -> Option<c::[<bkey_s_c_ $name>]> {
-                // the same key, the value as its type: C's typed key is this
-                // with a 'static, as its pointers have no lifetime
-                (self.k.type_ == $nr).then(|| unsafe {
-                    core::mem::transmute::<BkeySC<'a>, c::[<bkey_s_c_ $name>]>(*self)
-                })
-            }
-            )*
         }
-
-        // C's typed keys - from a C lookup, say - as a plain bkey_s_c, for
-        // bkey_s_c_to_result(): they're a union over the same key and value.
-        $(
-        impl From<c::[<bkey_s_c_ $name>]> for c::bkey_s_c {
-            fn from(k: c::[<bkey_s_c_ $name>]) -> Self {
-                c::bkey_s_c {
-                    k: k.k as *const c::bkey as *mut c::bkey,
-                    v: k.v.cast_mut().cast(),
-                }
-            }
-        }
-        )*
 
         /// A key to edit, by its type: as BkeySCTyped, each arm the key as its
         /// type's, as bkey_s_to_<type>() makes it. BkeyS::typed().
@@ -608,6 +584,23 @@ impl<'a, V> BkeySC<'a, V> {
     pub fn s_c(self) -> BkeySC<'a> {
         self.cast()
     }
+
+    /// The key as C's typed key, bkey_s_c_<type>, for C functions that take
+    /// one: the same key, its lifetime C's - none. Crate-private: it's to be
+    /// handed to C within 'a, not kept.
+    pub(crate) fn to_c(self) -> BkeySC<'static, V> {
+        // SAFETY: a C typed key's pointers have no lifetime, and this one is
+        // for C, within 'a
+        BkeySC { k: unsafe { &*(self.k as *const c::bkey) }, v: self.v, iter: PhantomData }
+    }
+}
+
+// C's typed keys - from a C lookup, say - as a plain bkey_s_c, for
+// bkey_s_c_to_result(): the same key and value.
+impl<V> From<BkeySC<'static, V>> for c::bkey_s_c {
+    fn from(k: BkeySC<'static, V>) -> Self {
+        c::bkey_s_c { k: k.k as *const c::bkey as *mut c::bkey, v: k.v.cast_mut().cast() }
+    }
 }
 
 impl<'a> BkeySC<'a> {
@@ -632,22 +625,19 @@ impl<'a> BkeySC<'a> {
     ///
     /// # Safety
     /// @T is the value type of this key's type: plain data, all-zeroes valid.
-    pub(crate) unsafe fn val_copy_pad<T: Default>(&self) -> T {
-        let mut v = T::default();
-        let bytes = ((self.k.u64s as usize).saturating_sub(BKEY_U64S) * 8)
-            .min(core::mem::size_of::<T>());
+    pub(crate) unsafe fn val_copy_pad<T>(&self) -> T {
+        let mut v = core::mem::MaybeUninit::<T>::zeroed();
+        let n = self.k.val_bytes().min(size_of::<T>());
+        // SAFETY: @n of the value's bytes, which it has, into a zeroed T -
+        // which the caller says any bytes are
         unsafe {
-            core::ptr::write_bytes(&mut v as *mut T as *mut u8, 0, core::mem::size_of::<T>());
-            core::ptr::copy_nonoverlapping(self.v.cast::<u8>(), &mut v as *mut T as *mut u8, bytes);
+            core::ptr::copy_nonoverlapping(self.v.cast::<u8>(), v.as_mut_ptr().cast::<u8>(), n);
+            v.assume_init()
         }
-        v
     }
 
     pub fn to_text<'f>(&self, fs: &'f Fs) -> BkeySCToText<'a, 'f> {
-        BkeySCToText {
-            k: BkeySC { k: self.k, v: self.v, iter: PhantomData },
-            fs,
-        }
+        BkeySCToText { k: *self, fs }
     }
 
     /// Key only - type, pos, size - without rendering the value.

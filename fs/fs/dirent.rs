@@ -526,7 +526,7 @@ impl DirContext<'_> {
     fn emit(&mut self, trans: &BtreeTrans<'_>, d: Dirent<'_>, target: c::subvol_inum)
         -> Result<bool, BchError>
     {
-        let d = d.k().to_c_dirent().expect("a dirent");
+        let d = d.k().arm::<BkeyIDirent>().expect("a dirent").to_c();
         match unsafe { c::bch2_dir_emit(trans.raw(), self.0, d, target) } {
             0              => Ok(true),
             ret if ret > 0 => Ok(false),
