@@ -616,8 +616,9 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 /// private, then the bytes past them there are, at exactly the value's
 /// length; it derefs to C's struct, to read.
 ///
-/// Or `#[whole(tail = NAME: [E])]`: C's struct ends in NAME: [E; 0], a
-/// header and the array after it - a key value, its length the key's. The
+/// Or `#[whole(tail = NAME: [E])]`: C's struct ends in NAME: [E; 0] - and
+/// perhaps other zero-length arrays, C's other names for where it starts - a
+/// header and the array after it: a key value, its length the key's. The
 /// tail is NAME, from where C has it: inside C's struct, if align rounds the
 /// struct up into the array's first bytes - bch_inode's fields end at 14, its
 /// size is 16 - which the deref to C's struct reaches, a value being no
@@ -630,12 +631,19 @@ pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
         Some((None, _)) => return Err(format!("{}: #[whole(tail = NAME: [E])] - the tail is C's last \
                                                field, NAME: [E; 0], named", def.name)),
         Some((Some(tail), elem)) => {
-            let last = def.fields.last().ok_or_else(|| format!("{}: a whole type has fields", def.name))?;
-            match field_type(&last.ty)? {
-                FieldType::Array { elem: e, n } if n == "0" && last.rust_name() == tail
-                    && e.trim() == elem.trim() => {}
-                _ => return Err(format!("{}: #[whole(tail = {tail}: [{elem}])], but its last field, {}, \
-                                         isn't {tail}: [{elem}; 0]", def.name, last.name)),
+            let at = def.fields.iter().position(|f| f.rust_name() == tail)
+                .ok_or_else(|| format!("{}: #[whole(tail = {tail}: ..)], but it has no field {tail}", def.name))?;
+            match field_type(&def.fields[at].ty)? {
+                FieldType::Array { elem: e, n } if n == "0" && e.trim() == elem.trim() => {}
+                _ => return Err(format!("{}: #[whole(tail = {tail}: [{elem}])], but its field {tail} \
+                                         isn't [{elem}; 0]", def.name)),
+            }
+            // after it, only C's other names for where it starts
+            for f in &def.fields[at + 1..] {
+                if !matches!(field_type(&f.ty)?, FieldType::Array { n, .. } if n == "0") {
+                    return Err(format!("{}.{}: after the tail, {tail}, a field that isn't a \
+                                        zero-length array - C's other name for its start", def.name, f.name));
+                }
             }
             Some((tail, elem))
         }
@@ -663,8 +671,10 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
     let repr = repr_attrs(&item);
     // the tail, C's last field - or the bytes past C's fields
     let (fields, tail_name, elem, tail_at) = match &tail {
-        Some((t, e)) => (&def.fields[..def.fields.len() - 1], t.as_str(), e.as_str(),
-                         Some(format!("::core::mem::offset_of!({ffi}, {t})"))),
+        Some((t, e)) => {
+            let at = def.fields.iter().position(|f| f.rust_name() == *t).unwrap_or(def.fields.len());
+            (&def.fields[..at], t.as_str(), e.as_str(), Some(format!("::core::mem::offset_of!({ffi}, {t})")))
+        }
         None => (&def.fields[..], "_rest", "u8", None),
     };
     let all_def = dst(&all,
