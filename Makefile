@@ -336,7 +336,7 @@ generate_version: .version version.h
 # because cargo puts those last, and a codegen-units there would win.
 build/cstruct/fs.o: force
 	$(Q)mkdir -p $(dir $@)
-	$(Q)CARGO_INCREMENTAL=0 RUSTFLAGS="$$RUSTFLAGS -C codegen-units=1" \
+	$(Q)CARGO_INCREMENTAL=0 RUSTFLAGS="$$RUSTFLAGS -C codegen-units=1 -C linker-plugin-lto=off" \
 		$(CARGO) rustc $(CARGO_BUILD_ARGS) -q \
 		--target-dir build/gen-headers -p bcachefs-kernel --lib -- \
 		--cfg bch_cstruct_records --emit=obj=$(abspath $@)
