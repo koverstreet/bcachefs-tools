@@ -2165,6 +2165,11 @@ fn proto_toks(toks: &[Tok], decl: String, konst: bool, last: bool,
         return proto_toks(t, decl, konst, last, kind);
     }
     let q = if konst { "const " } else { "" };
+    // BkeyI<Ffi<bch_foo>>, by any path: a key whose value is a family's,
+    // whole - C's typed key, struct bkey_i_foo
+    if let Some(name) = bkey_i_arg(toks) {
+        return Some(format!("{q}struct bkey_i_{name} {decl}").trim_end().to_string());
+    }
     match toks {
         // Option<unsafe extern "C" fn(ARGS) -> RET>: a function pointer.
         [Tok::Ident(o), Tok::Punct('<'), inner @ .., Tok::Punct('>')] if o == "Option" => {
@@ -2221,6 +2226,17 @@ fn ffi_arg(toks: &[Tok]) -> Option<&[Tok]> {
     let path_ok = toks[..f].iter().all(|t| matches!(t, Tok::Ident(_) | Tok::Punct(':')));
     match &toks[f + 1..] {
         [Tok::Punct('<'), inner @ .., Tok::Punct('>')] if path_ok => Some(inner),
+        _ => None,
+    }
+}
+
+/// foo, if @toks is BkeyI<Ffi<bch_foo>> by any path: C's struct bkey_i_foo.
+fn bkey_i_arg(toks: &[Tok]) -> Option<&str> {
+    let b = toks.iter().position(|t| t.is_ident("BkeyI"))?;
+    let path_ok = toks[..b].iter().all(|t| matches!(t, Tok::Ident(_) | Tok::Punct(':')));
+    let [Tok::Punct('<'), inner @ .., Tok::Punct('>')] = &toks[b + 1..] else { return None };
+    match ffi_arg(inner)? {
+        [.., Tok::Ident(v)] if path_ok => v.strip_prefix("bch_"),
         _ => None,
     }
 }
