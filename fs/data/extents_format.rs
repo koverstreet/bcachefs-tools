@@ -4,7 +4,8 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_xmacro, tagged_union, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_xmacro, tagged_union, CStruct, Plain,
+                    TypeInfo};
 use nestify::nest;
 
 /* DOC_LATEX(extent-checksums)
@@ -178,7 +179,7 @@ c_const! {
 
 nest! {
     #[repr(C, align(8))]
-    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+    #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
     #[c_packed]
     pub struct bch_extent_crc64 {
         #[c_bitfield]
@@ -204,7 +205,7 @@ c_const! {
 
 nest! {
     #[repr(C, align(8))]
-    #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+    #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
     #[c_packed]
     pub struct bch_extent_crc128 {
         #[c_bitfield]

@@ -880,6 +880,23 @@ pub fn cast_mut<T: Unsized + ?Sized>(b: &mut [u8]) -> Option<&mut T> {
     fits::<T>(b).then(|| unsafe { &mut *T::from_raw_mut(b.as_mut_ptr(), b.len()) })
 }
 
+/// The sized @T at the start of @b - an extent entry's arm, from the entry's
+/// bytes: None if they're too few for one, or not aligned for it.
+pub fn cast_plain<T: Plain>(b: &[u8]) -> Option<&T> {
+    // SAFETY: a T's bytes are there, aligned; T is Plain, so any bytes are one
+    (b.len() >= size_of::<T>() && b.as_ptr() as usize % align_of::<T>() == 0)
+        .then(|| unsafe { &*b.as_ptr().cast::<T>() })
+}
+
+/// cast_plain(), mutably: what's written through it is a T's fields, every
+/// byte, so @b is still bytes.
+pub fn cast_plain_mut<T: Plain>(b: &mut [u8]) -> Option<&mut T> {
+    // SAFETY: as cast_plain(); Plain has no padding, so writing a T leaves
+    // no byte of @b uninitialized
+    (b.len() >= size_of::<T>() && b.as_ptr() as usize % align_of::<T>() == 0)
+        .then(|| unsafe { &mut *b.as_mut_ptr().cast::<T>() })
+}
+
 /// @v's bytes, every one: what its reference reaches - T::as_bytes().
 pub fn bytes_of<T: Unsized + ?Sized>(v: &T) -> &[u8] {
     // SAFETY: the value's own bytes: Unsized's are its head's and its tail's,
