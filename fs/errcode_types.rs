@@ -646,6 +646,7 @@ c_xmacro! {
         (EROFS, erofs_sb_never_started, 621),
         (ESHUTDOWN, ioctl_fs_stopping, 622),
         (ENOMEM, ENOMEM_reconcile_stripes_pending, 623),
+        (BCH_ERR_btree_node_validate_err, btree_node_validate_err_keys_lost, 624),
     }
 }
 

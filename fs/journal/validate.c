@@ -4,6 +4,7 @@
 #include "alloc/replicas.h"
 #include "btree/cache.h"
 #include "init/error.h"
+#include "init/recovery.h"
 #include "journal/journal.h"
 #include "journal/read.h"
 #include "journal/validate.h"
@@ -50,6 +51,29 @@ static void journal_entry_null_range(void *start, void *end)
 		memset(entry, 0, sizeof(*entry));
 }
 
+/*
+ * A key dropped from a journal entry as it was read: what it said never
+ * reaches its btree, as for a btree node that couldn't be read - flag the
+ * btree, so the passes that rebuild it run. Not on write or commit, where
+ * the key is ours and never got out; nor for the superblock's clean section,
+ * validated under sb_lock, which bch2_btree_lost_data() takes - its entries
+ * are roots, and a missing root recovery handles itself.
+ */
+static void journal_key_lost(struct bch_fs *c, struct bkey_validate_context from)
+{
+	if ((from.flags & BCH_VALIDATE_write) ||
+	    from.from != BKEY_VALIDATE_journal)
+		return;
+
+	CLASS(bch_log_msg, msg)(c);
+	/* printed only if bch2_btree_lost_data() did something: */
+	msg.m.suppress = true;
+
+	prt_printf(&msg.m, "journal seq %llu offset %u: dropped key\n",
+		   from.journal_seq, from.journal_offset);
+	bch2_btree_lost_data(c, &msg.m, from.btree);
+}
+
 static int journal_validate_key(struct bch_fs *c,
 				struct jset *jset,
 				struct jset_entry *entry,
@@ -68,6 +92,7 @@ static int journal_validate_key(struct bch_fs *c,
 				 "k->u64s 0")) {
 		entry->u64s = cpu_to_le16((u64 *) k - entry->_data);
 		journal_entry_null_range(vstruct_next(entry), next);
+		journal_key_lost(c, from);
 		return FSCK_DELETED_KEY;
 	}
 
@@ -78,6 +103,7 @@ static int journal_validate_key(struct bch_fs *c,
 				 "extends past end of journal entry")) {
 		entry->u64s = cpu_to_le16((u64 *) k - entry->_data);
 		journal_entry_null_range(vstruct_next(entry), next);
+		journal_key_lost(c, from);
 		return FSCK_DELETED_KEY;
 	}
 
@@ -88,6 +114,7 @@ static int journal_validate_key(struct bch_fs *c,
 		le16_add_cpu(&entry->u64s, -((u16) k->k.u64s));
 		memmove(k, bkey_next(k), next - (void *) bkey_next(k));
 		journal_entry_null_range(vstruct_next(entry), next);
+		journal_key_lost(c, from);
 		return FSCK_DELETED_KEY;
 	}
 
@@ -102,6 +129,7 @@ static int journal_validate_key(struct bch_fs *c,
 		le16_add_cpu(&entry->u64s, -((u16) k->k.u64s));
 		memmove(k, bkey_next(k), next - (void *) bkey_next(k));
 		journal_entry_null_range(vstruct_next(entry), next);
+		journal_key_lost(c, from);
 		return FSCK_DELETED_KEY;
 	}
 
