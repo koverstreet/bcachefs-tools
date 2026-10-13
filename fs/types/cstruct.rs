@@ -931,6 +931,64 @@ fn attr_args<'a>(attr: &'a [Tok], name: &str) -> Option<&'a [Tok]> {
     }
 }
 
+/// A family attribute's arguments (cstruct-macros' vstructs.rs):
+/// `#[counted(PATH, tail = NAME: [E])]`, `#[unsized_vstruct(tail = [E])]`,
+/// `#[grown(from = FIELD)]`.
+#[derive(Debug, Default)]
+pub struct FamilyArgs {
+    /// The one argument that isn't `key = value`: the count, a field path.
+    pub count: Option<String>,
+    /// `tail = [E]` or `tail = NAME: [E]`: the tail's name, if it's named,
+    /// and E.
+    pub tail: Option<(Option<String>, String)>,
+    /// `from = FIELD`.
+    pub from: Option<String>,
+}
+
+/// @src, a family attribute's arguments: an error for one it doesn't take -
+/// @takes, of "count", "tail" and "from" - or one not written as its kind is.
+/// The caller names the attribute and the struct.
+pub fn parse_family_args(src: &str, takes: &[&str]) -> Result<FamilyArgs, String> {
+    let toks = tokenize(src)?;
+    let mut args = FamilyArgs::default();
+    for part in split_top(&toks, ',') {
+        let (kind, set) = match part {
+            [] => continue,
+            [Tok::Ident(k), Tok::Punct('='), v @ ..] => {
+                let bad = || format!("({}) not understood", tokens_to_rust(part));
+                match k.as_str() {
+                    "tail" => {
+                        let (name, slice) = match v {
+                            [Tok::Ident(n), Tok::Punct(':'), s @ ..] if s.first().is_some_and(|t| t.is_punct('[')) =>
+                                (Some(n.clone()), s),
+                            s => (None, s),
+                        };
+                        let elem = match slice {
+                            [Tok::Punct('['), e @ .., Tok::Punct(']')] if !e.is_empty() && split_top(e, ';').len() == 1 =>
+                                tokens_to_rust(e),
+                            _ => return Err(format!("tail = [E] - a slice - not tail = {}", tokens_to_rust(v))),
+                        };
+                        ("tail", args.tail.replace((name, elem)).is_some())
+                    }
+                    "from" => match v {
+                        [Tok::Ident(f)] => ("from", args.from.replace(f.clone()).is_some()),
+                        _ => return Err(bad()),
+                    },
+                    _ => return Err(format!("no argument {k}")),
+                }
+            }
+            p => ("count", args.count.replace(tokens_to_rust(p)).is_some()),
+        };
+        if !takes.contains(&kind) {
+            return Err(format!("doesn't take ({})", tokens_to_rust(part)));
+        }
+        if set {
+            return Err(format!("{kind} given twice"));
+        }
+    }
+    Ok(args)
+}
+
 /// Parse a cfg predicate.
 fn parse_cfg(toks: &[Tok]) -> Result<Cfg, String> {
     match toks {

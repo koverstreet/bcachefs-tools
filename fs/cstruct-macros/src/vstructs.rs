@@ -14,7 +14,7 @@
 
 use proc_macro::{Delimiter, Ident, TokenStream, TokenTree};
 
-use crate::cstruct::{field_type, parse_cstruct, CFieldDef, CKind, CStructDef, FieldType};
+use crate::cstruct::{field_type, parse_cstruct, parse_family_args, CFieldDef, CKind, CStructDef, FieldType};
 use crate::tokens;
 
 /// #[derive(Plain)], on a struct - not a union, whose bytes past a short
@@ -459,22 +459,16 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
     let def = parse_cstruct(&item.to_string())?;
     let name = def.name.clone();
     let last = def.fields.last().ok_or_else(|| format!("{name}: an unsized vstruct has fields"))?;
-    let attr = attr.to_string();
-    let (tail, elem) = match attr.trim() {
-        "" => match field_type(&last.ty)? {
+    let args = parse_family_args(&attr.to_string(), &["tail"]).map_err(|e| format!("{name}: {e}"))?;
+    let (tail, elem) = match args.tail {
+        None => match field_type(&last.ty)? {
             FieldType::Array { elem, n } if n == "0" => (last.rust_name(), elem),
             _ => return Err(format!("{name}: its last field, {}, isn't a flexible array, [E; 0] - \
                                      #[unsized_vstruct(tail = [E])] says what its tail holds",
                                     last.name)),
         },
-        a => match a.strip_prefix("tail").map(str::trim_start).and_then(|a| a.strip_prefix('=')) {
-            Some(t) => match t.trim().strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
-                Some(e) if !e.contains(';') => ("_tail".to_string(), e.trim().to_string()),
-                _ => return Err(format!("{name}: tail = [E], a slice - not {t}")),
-            },
-            None => return Err(format!("{name}: #[unsized_vstruct] or #[unsized_vstruct(tail = [E])], \
-                                        not ({a})")),
-        },
+        Some((None, elem)) => ("_tail".to_string(), elem),
+        Some((Some(n), _)) => return Err(format!("{name}: tail = [E], its tail _tail - not named {n}")),
     };
     let ffi = format!("{name}__ffi");
     let last = last.rust_name();
@@ -520,14 +514,8 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
     let name = def.name.clone();
     let ffi = format!("{name}__ffi");
 
-    let mut count = "nr_entries".to_string();
-    let mut tail_spec = None;
-    for part in attr.to_string().split(',').map(str::trim).filter(|p| !p.is_empty()) {
-        match part.strip_prefix("tail").map(str::trim_start).and_then(|p| p.strip_prefix('=')) {
-            Some(t) => tail_spec = Some(t.trim().to_string()),
-            None => count = part.replace(' ', ""),
-        }
-    }
+    let args = parse_family_args(&attr.to_string(), &["count", "tail"]).map_err(|e| format!("{name}: {e}"))?;
+    let count = args.count.unwrap_or_else(|| "nr_entries".to_string());
     let count_field = count.split('.').next().unwrap_or_default().to_string();
     if !def.fields.iter().any(|f| f.rust_name() == count_field) {
         return Err(format!("{name}: #[counted({count})], but {name} has no field {count_field} - \
@@ -536,15 +524,9 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
 
     // the array: a trailing [E; 0], or a field of a field - after C's struct,
     // where dst() asserts its tail starts
-    let (tail, elem, fields, tail_at) = match tail_spec {
-        Some(t) => {
-            let bad = || format!("{name}: #[counted(.., tail = NAME: [E])], not tail = {t}");
-            let (n, e) = t.split_once(':').ok_or_else(bad)?;
-            let e = e.trim().strip_prefix('[').and_then(|e| e.strip_suffix(']'))
-                .filter(|e| !e.contains(';')).ok_or_else(bad)?;
-            (n.trim().to_string(), e.trim().to_string(), &def.fields[..],
-             format!("::core::mem::size_of::<{ffi}>()"))
-        }
+    let (tail, elem, fields, tail_at) = match args.tail {
+        Some((Some(n), elem)) => (n, elem, &def.fields[..], format!("::core::mem::size_of::<{ffi}>()")),
+        Some((None, _)) => return Err(format!("{name}: #[counted(.., tail = NAME: [E])] - its tail is named")),
         None => {
             let last = def.fields.last().ok_or_else(|| format!("{name}: a counted type has fields"))?;
             match field_type(&last.ty)? {
@@ -593,11 +575,10 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
 pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item.to_string())?;
     let name = def.name.clone();
-    let attr = attr.to_string();
-    let from = attr.trim().strip_prefix("from").map(str::trim_start).and_then(|a| a.strip_prefix('='))
-        .map(str::trim)
+    let args = parse_family_args(&attr.to_string(), &["from"]).map_err(|e| format!("{name}: {e}"))?;
+    let from = args.from.as_deref()
         .ok_or_else(|| format!("{name}: #[grown(from = FIELD)], FIELD the first field an older \
-                                version's value may lack - not ({attr})"))?;
+                                version's value may lack"))?;
     let at = def.fields.iter().position(|f| f.rust_name() == from)
         .ok_or_else(|| format!("{name}: #[grown(from = {from})], but {name} has no field {from}"))?;
     if at == 0 {
@@ -616,9 +597,7 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 /// length; it derefs to C's struct, to read.
 pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item.to_string())?;
-    if !attr.is_empty() {
-        return Err(format!("{}: #[whole] takes nothing", def.name));
-    }
+    parse_family_args(&attr.to_string(), &[]).map_err(|e| format!("{}: {e}", def.name))?;
     sized_family(&def, item, None)
 }
 
@@ -756,7 +735,7 @@ fn rename_struct(item: TokenStream, name: &str, to: &str) -> Result<TokenStream,
     let at = tts.windows(2)
         .position(|w| matches!((&w[0], &w[1]), (TokenTree::Ident(s), TokenTree::Ident(n))
                                if s.to_string() == "struct" && n.to_string() == name))
-        .ok_or_else(|| format!("{name}: #[unsized_vstruct] is for a struct"))?;
+        .ok_or_else(|| format!("{name}: a family is made from a struct"))?;
     tts[at + 1] = TokenTree::Ident(Ident::new(to, tts[at + 1].span()));
     let mut attrs_end = 0;
     while matches!((tts.get(attrs_end), tts.get(attrs_end + 1)),
