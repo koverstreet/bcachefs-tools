@@ -108,7 +108,7 @@ fn test_delete(fs: &Fs, _nr: u64) -> TestRet {
 
     commit_do(&trans, None, NO_ENOSPC, |t| {
         let mut k = trans_cookie_alloc(t)?;
-        k.k_mut().set_snapshot(u32::MAX);
+        k.k_mut().p.snapshot = u32::MAX;
         iter.traverse(t)?;
         t.update(&iter, &k, UpdateTriggerFlags::empty())
     })?;
@@ -135,7 +135,7 @@ fn test_delete_written(fs: &Fs, _nr: u64) -> TestRet {
 
     commit_do(&trans, None, NO_ENOSPC, |t| {
         let mut k = trans_cookie_alloc(t)?;
-        k.k_mut().set_snapshot(u32::MAX);
+        k.k_mut().p.snapshot = u32::MAX;
         iter.traverse(t)?;
         t.update(&iter, &k, UpdateTriggerFlags::empty())
     })?;

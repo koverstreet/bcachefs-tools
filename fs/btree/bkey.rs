@@ -77,26 +77,6 @@ impl c::bkey {
             .unwrap_or_else(|_| panic!("key of {u64s} u64s: a key is at most {} u64s", u8::MAX));
     }
 
-    pub fn pos(&self) -> c::bpos {
-        self.p
-    }
-
-    pub fn set_pos(&mut self, pos: c::bpos) {
-        self.p = pos;
-    }
-
-    pub fn set_snapshot(&mut self, snapshot: u32) {
-        self.p.snapshot = snapshot;
-    }
-
-    pub fn size(&self) -> u32 {
-        self.size
-    }
-
-    pub fn set_size(&mut self, size: u32) {
-        self.size = size;
-    }
-
     /// Make an extent @new_size long, from where it starts now - its end,
     /// its position, moves: as bch2_key_resize().
     pub fn resize(&mut self, new_size: u32) {
@@ -671,14 +651,6 @@ impl<'a> BkeySC<'a> {
     /// short to hold them.
     pub fn extent_entry_bytes(&self) -> &'a [u8] {
         self.val_bytes().get(self.extent_entry_range()).unwrap_or_default()
-    }
-
-    pub fn pos(&self) -> c::bpos {
-        self.k.p
-    }
-
-    pub fn size(&self) -> u32 {
-        self.k.size
     }
 
     pub fn key_type(&self) -> c::bch_bkey_type {
