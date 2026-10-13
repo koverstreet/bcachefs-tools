@@ -1186,6 +1186,32 @@ impl<T: Plain + Native> ViewMut<'_, T> {
     }
 }
 
+/// What a tagged union's arm is handed out as, from the bytes its storage
+/// says are its - as many as there are, for one written before its type
+/// grew. A sized arm's is a View, its fields past a short one's end zero; a
+/// grown type's, its Validated definition - #[grown]'s - at the value's
+/// length. None if the bytes can't be one: fewer than every valid one has.
+pub trait ArmRef {
+    type Ref<'a> where Self: 'a;
+    type Mut<'a> where Self: 'a;
+
+    fn arm_ref(b: &[u8]) -> Option<Self::Ref<'_>>;
+    fn arm_mut(b: &mut [u8]) -> Option<Self::Mut<'_>>;
+}
+
+impl<A: Plain> ArmRef for A {
+    type Ref<'a> = View<'a, A> where A: 'a;
+    type Mut<'a> = ViewMut<'a, A> where A: 'a;
+
+    fn arm_ref(b: &[u8]) -> Option<View<'_, A>> {
+        Some(View::new(b))
+    }
+
+    fn arm_mut(b: &mut [u8]) -> Option<ViewMut<'_, A>> {
+        Some(ViewMut::new(b))
+    }
+}
+
 /// A type whose values may be shorter than it, but never shorter than Min:
 /// the fields every valid one has. A View of it derefs to them, so they're
 /// fields - v.subvol - and only the later ones are projected, reading as

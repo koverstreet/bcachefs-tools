@@ -2,16 +2,16 @@ use crate::c;
 use crate::c::{bch_member, bch_sb, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
 use crate::sb::members;
 use crate::types::ArmOf;
-use crate::util::vstructs::{Ffi, Plain, SelfSized, Validated, View, ViewMut};
+use crate::util::vstructs::{ArmRef, Ffi, SelfSized, Validated};
 
 /// A superblock section's type: an arm of tagged_union! bch_sb_field, which
-/// gives its field type - Plain, so a View of a short one reads as zero
-/// past its end.
-pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + Plain + Sized {
+/// gives its field type - handed out as its ArmRef says, a short one, written
+/// before its type grew, reading as zero past its end.
+pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef {
     const FIELD_TYPE: c::bch_sb_field_type = c::bch_sb_field_type(Self::TAG);
 }
 
-impl<F: ArmOf<c::bch_sb_field, Tag = u32> + Plain> SbField for F {}
+impl<F: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef + ?Sized> SbField for F {}
 
 impl PartialEq for c::bch_sb__ffi {
     fn eq(&self, other: &Self) -> bool {
@@ -36,8 +36,8 @@ const BSET_MAGIC: u64 = 0x90135c78b99e07f5;
 /// validated superblock's.
 impl c::bch_sb__validated {
     /// Its section of type @F: sb_field_get().
-    pub fn field<F: SbField>(&self) -> Option<View<'_, F>> {
-        sb_field_get(self)
+    pub fn field<F: SbField + ?Sized>(&self) -> Option<F::Ref<'_>> {
+        sb_field_get::<F>(self)
     }
 
     /// Its crypt section, whole - validate rejects a shorter one.
@@ -106,24 +106,24 @@ impl bch_sb_handle {
     }
 
     /// Its section of type @F: sb_field_get().
-    pub fn field<F: SbField>(&self) -> Option<View<'_, F>> {
-        sb_field_get(self.sb())
+    pub fn field<F: SbField + ?Sized>(&self) -> Option<F::Ref<'_>> {
+        sb_field_get::<F>(self.sb())
     }
 
     /// Its section of type @F, to edit: sb_field_get_mut().
-    pub fn field_mut<F: SbField>(&mut self) -> Option<ViewMut<'_, F>> {
-        sb_field_get_mut(self)
+    pub fn field_mut<F: SbField + ?Sized>(&mut self) -> Option<F::Mut<'_>> {
+        sb_field_get_mut::<F>(self)
     }
 
     /// Resize a superblock field to `u64s` 64-bit words: sb_field_resize().
-    pub fn field_resize<F: SbField>(&mut self, u64s: u32) -> Option<ViewMut<'_, F>> {
-        sb_field_resize(self, u64s)
+    pub fn field_resize<F: SbField + ?Sized>(&mut self, u64s: u32) -> Option<F::Mut<'_>> {
+        sb_field_resize::<F>(self, u64s)
     }
 
     /// Get or create a superblock field with at least `min_u64s` size:
     /// sb_field_get_minsize().
-    pub fn field_get_minsize<F: SbField>(&mut self, min_u64s: u32) -> Option<ViewMut<'_, F>> {
-        sb_field_get_minsize(self, min_u64s)
+    pub fn field_get_minsize<F: SbField + ?Sized>(&mut self, min_u64s: u32) -> Option<F::Mut<'_>> {
+        sb_field_get_minsize::<F>(self, min_u64s)
     }
 
     /// Delete a superblock field by type.
@@ -228,23 +228,22 @@ c::BCH_PERSISTENT_COUNTERS!(counter_table);
 // resize is the "build" operation and must be exclusive.
 // ---------------------------------------------------------------------------
 
-/// The superblock's section of type @F, if it has one: a View of the bytes
-/// its header says are its - one written before F grew reads as zero past
-/// them, as C's bch2_sb_field_get_minsize() would have grown it to.
-pub fn sb_field_get<F: SbField>(sb: &c::bch_sb) -> Option<View<'_, F>> {
+/// The superblock's section of type @F, if it has one, over the bytes its
+/// header says are its - one written before F grew reads as zero past them,
+/// as C's bch2_sb_field_get_minsize() would have grown it to.
+pub fn sb_field_get<F: SbField + ?Sized>(sb: &c::bch_sb) -> Option<F::Ref<'_>> {
     let f = unsafe { c::bch2_sb_field_get_id(sb.as_ffi() as *mut _, F::FIELD_TYPE) };
     // SAFETY: C's walk of the sections the superblock's count says it has -
     // validated, so the section and its bytes are there
     (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi(f) })?.arm::<F>()
 }
 
-/// sb_field_get(), to edit: a field past the section's end is a set()
-/// error, not a write it won't carry - whole_mut() for all of it, if it's
-/// all there.
+/// sb_field_get(), to edit: a field past the section's end is no write it
+/// will carry - whole_mut() for all of it, if it's all there.
 ///
 /// Taking `&mut bch_sb_handle` ensures exclusive access and prevents
 /// dangling references after resize.
-pub fn sb_field_get_mut<F: SbField>(disk_sb: &mut c::bch_sb_handle) -> Option<ViewMut<'_, F>> {
+pub fn sb_field_get_mut<F: SbField + ?Sized>(disk_sb: &mut c::bch_sb_handle) -> Option<F::Mut<'_>> {
     let f = unsafe { c::bch2_sb_field_get_id(disk_sb.sb, F::FIELD_TYPE) };
     // SAFETY: as sb_field_get()'s
     (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
@@ -253,10 +252,10 @@ pub fn sb_field_get_mut<F: SbField>(disk_sb: &mut c::bch_sb_handle) -> Option<Vi
 /// Resize the section of type @F to @u64s, making it if there's none: the
 /// section, at its (possibly new) location - whole_mut() if that's all of F.
 /// The `&mut` borrow on the handle ensures no stale references can exist.
-pub fn sb_field_resize<F: SbField>(
+pub fn sb_field_resize<F: SbField + ?Sized>(
     disk_sb: &mut c::bch_sb_handle,
     u64s: u32,
-) -> Option<ViewMut<'_, F>> {
+) -> Option<F::Mut<'_>> {
     let f = unsafe { c::bch2_sb_field_resize_id(disk_sb, F::FIELD_TYPE, u64s) };
     // SAFETY: C's resize, which reallocates the superblock if it has to
     (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
@@ -264,10 +263,10 @@ pub fn sb_field_resize<F: SbField>(
 
 /// The section of type @F, made or grown to at least @min_u64s: as
 /// sb_field_resize().
-pub fn sb_field_get_minsize<F: SbField>(
+pub fn sb_field_get_minsize<F: SbField + ?Sized>(
     disk_sb: &mut c::bch_sb_handle,
     min_u64s: u32,
-) -> Option<ViewMut<'_, F>> {
+) -> Option<F::Mut<'_>> {
     let f = unsafe { c::bch2_sb_field_get_minsize_id(disk_sb, F::FIELD_TYPE, min_u64s) };
     // SAFETY: as sb_field_resize()'s
     (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
@@ -390,8 +389,8 @@ impl<'a> SbRef<'a> {
         &self.buf[..self.bytes]
     }
 
-    pub fn field<F: SbField>(&self) -> Option<View<'a, F>> {
-        sb_field_get(self.sb())
+    pub fn field<F: SbField + ?Sized>(&self) -> Option<F::Ref<'a>> {
+        sb_field_get::<F>(self.sb())
     }
 }
 
@@ -422,8 +421,8 @@ impl<'a> SbMut<'a> {
         &self.buf[..self.bytes]
     }
 
-    pub fn field<F: SbField>(&self) -> Option<View<'_, F>> {
-        sb_field_get(self.sb())
+    pub fn field<F: SbField + ?Sized>(&self) -> Option<F::Ref<'_>> {
+        sb_field_get::<F>(self.sb())
     }
 }
 
@@ -488,8 +487,8 @@ impl SbBuf {
         unsafe { core::slice::from_raw_parts(self.buf.as_ptr() as *const u8, self.bytes) }
     }
 
-    pub fn field<F: SbField>(&self) -> Option<View<'_, F>> {
-        sb_field_get(self.sb())
+    pub fn field<F: SbField + ?Sized>(&self) -> Option<F::Ref<'_>> {
+        sb_field_get::<F>(self.sb())
     }
 }
 

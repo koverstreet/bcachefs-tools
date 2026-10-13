@@ -75,13 +75,13 @@
 //! unsized vstruct (util/vstructs.rs), each reference to which has its arm's
 //! bytes. Then what's generated is the Ref enum, ArmOf, and on each state's
 //! definition of the storage - X__unvalidated, X__validated - typed(): the
-//! arm its tag selects, over its bytes. An arm
-//! there may be shorter than its type - written by an older version, before
-//! the type grew - so it's a crate::util::vstructs::View, not a Flex: its
-//! fields past the end read as zero, and each arm's type derives Plain and
-//! View. An arm that's the storage itself - a journal entry of keys - is the
-//! storage, in its state. arm::<A>() is typed() for one arm: A's View, if
-//! the tag is A's - and arm_mut::<A>() its ViewMut.
+//! arm its tag selects, over its bytes. An arm there may be shorter than its
+//! type - written by an older version, before the type grew - so it's what
+//! its type's util/vstructs.rs ArmRef says, not a Flex: a View of a sized
+//! arm, its fields past the end zero; a grown type's Validated definition,
+//! at the arm's length. An arm that's the storage itself - a journal entry
+//! of keys - is the storage, in its state. arm::<A>() is typed() for one
+//! arm, if the tag is A's - and arm_mut::<A>() the same, to edit.
 //!
 //! The arms come from an x-macro list: tagged_union! hands the declaration to
 //! it - LIST!(cstruct_macros::__tagged_union [decl]) - and the list calls
@@ -467,9 +467,9 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
         // An unsized vstruct, its arms running past its header as far as its
         // count says - each reference to one has them: typed() and arm(), on
         // each state's definition of the storage. An arm there may be an
-        // older, shorter version of its type: a View of the storage's bytes.
-        // Or the storage itself - a journal entry of keys - in its state.
-        let view = "crate::util::vstructs::View";
+        // older, shorter version of its type: as its ArmRef has it, over the
+        // storage's bytes. Or the storage itself - a journal entry of keys -
+        // in its state.
         let vs = "crate::util::vstructs";
         let own = |a: &CTaggedArm| a.ty.trim() == s_ty.trim();
         let has_own = arms.iter().any(own);
@@ -482,15 +482,20 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
             .map(|a| if own(a) {
                 format!("    {}(&'a {s_ty}<St>),\n", a.name)
             } else {
-                format!("    {}({view}<'a, {}>),\n", a.name, a.ty)
+                format!("    {}(<{} as {vs}::ArmRef>::Ref<'a>),\n", a.name, a.ty)
             })
             .collect();
         let selects: String = arms.iter()
             .map(|a| format!("if t == ({}) as {tag_ty} {{\n\
-                                  return Ok({en}Ref::{}({}));\n\
+                                  return {};\n\
                               }}\n",
-                             a.value, a.name,
-                             if own(a) { "self".to_string() } else { format!("{view}::new(self.as_bytes())") }))
+                             a.value,
+                             if own(a) {
+                                 format!("Ok({en}Ref::{}(self))", a.name)
+                             } else {
+                                 format!("<{} as {vs}::ArmRef>::arm_ref(self.as_bytes())\n\
+                                              .map({en}Ref::{}).ok_or({tag_enum}(t as _))", a.ty, a.name)
+                             }))
             .collect();
         let det = format!("<{determinant} as {det_trait}<Self>>");
         let impls: String = states.iter()
@@ -505,8 +510,9 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                          }}\n\
                          \n\
                          /// The arm its tag selects, over its bytes - as many as its count\n\
-                         /// says: Err(the tag) if it isn't one of ours. One shorter than its\n\
-                         /// type is an older version, its missing fields zero.\n\
+                         /// says, as its ArmRef has it: Err(the tag) if it isn't one of\n\
+                         /// ours, or the bytes are fewer than any valid one's. One shorter\n\
+                         /// than its type is an older version, its missing fields zero.\n\
                          #[allow(dead_code)]\n\
                          {vis} fn typed(&self) -> Result<{en}Ref{ref_args}, {tag_enum}> {{\n\
                              let t: {tag_ty} = {det}::get(self);\n\
@@ -516,20 +522,27 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                          \n\
                          /// The arm, if the tag is @A's: typed(), for one arm.\n\
                          #[allow(dead_code)]\n\
-                         {vis} fn arm<A>(&self) -> Option<{view}<'_, A>>\n\
+                         {vis} fn arm<A>(&self) -> Option<A::Ref<'_>>\n\
                          where\n\
-                             A: {arm_of}<{s_ty}, Tag = {tag_ty}> + {vs}::Plain,\n\
+                             A: {arm_of}<{s_ty}, Tag = {tag_ty}> + {vs}::ArmRef + ?Sized,\n\
                          {{\n\
-                             ({det}::get(self) == A::TAG).then(|| {view}::new(self.as_bytes()))\n\
+                             if {det}::get(self) != A::TAG {{\n\
+                                 return None;\n\
+                             }}\n\
+                             A::arm_ref(self.as_bytes())\n\
                          }}\n\
                          \n\
-                         /// arm(), to edit: a field past its end is a set() error.\n\
+                         /// arm(), to edit: as its ArmRef has it - for a View, a field\n\
+                         /// past its end is a set() error.\n\
                          #[allow(dead_code)]\n\
-                         {vis} fn arm_mut<A>(&mut self) -> Option<{view}Mut<'_, A>>\n\
+                         {vis} fn arm_mut<A>(&mut self) -> Option<A::Mut<'_>>\n\
                          where\n\
-                             A: {arm_of}<{s_ty}, Tag = {tag_ty}> + {vs}::Plain,\n\
+                             A: {arm_of}<{s_ty}, Tag = {tag_ty}> + {vs}::ArmRef + ?Sized,\n\
                          {{\n\
-                             ({det}::get(self) == A::TAG).then(|| {view}Mut::new(self.as_bytes_mut()))\n\
+                             if {det}::get(self) != A::TAG {{\n\
+                                 return None;\n\
+                             }}\n\
+                             A::arm_mut(self.as_bytes_mut())\n\
                          }}\n\
                      }}\n\
                      \n")
