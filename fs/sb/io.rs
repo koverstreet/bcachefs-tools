@@ -40,9 +40,9 @@ impl c::bch_sb__validated {
         sb_field_get::<F>(self)
     }
 
-    /// Its crypt section, whole - validate rejects a shorter one.
+    /// Its crypt section - whole, or none: validate rejects a shorter one.
     pub fn crypt(&self) -> Option<&bch_sb_field_crypt> {
-        self.field::<bch_sb_field_crypt>()?.whole()
+        self.field::<bch_sb_field_crypt>()
     }
 
     pub fn number_of_devices(&self) -> u32 {

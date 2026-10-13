@@ -343,7 +343,6 @@ pub fn format(
         let crypt_u64s =
             std::mem::size_of::<c::bch_sb_field_crypt>() / std::mem::size_of::<u64>();
         let crypt = sb.field_resize::<c::bch_sb_field_crypt>(crypt_u64s as u32)
-            .and_then(|v| v.whole_mut())
             .unwrap_or_else(|| die("failed to create crypt field"));
         let crypt_ptr = crypt as *mut c::bch_sb_field_crypt;
         unsafe { c::bch_sb_crypt_init(sb.sb, crypt_ptr, opts.passphrase) };

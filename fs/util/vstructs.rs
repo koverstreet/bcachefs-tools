@@ -1247,9 +1247,11 @@ pub fn read_past<T: Plain>(rest: &[u8], at: usize) -> T {
 
 /// What a tagged union's arm is handed out as, from the bytes its storage
 /// says are its - as many as there are, for one written before its type
-/// grew. A sized arm's is a View, its fields past a short one's end zero; a
-/// grown type's, its Validated definition - #[grown]'s - at the value's
-/// length. None if the bytes can't be one: fewer than every valid one has.
+/// grew. Each arm's type says which, by its declaration: a type that never
+/// grew, all of it (whole_arm!); a grown type, its Validated definition -
+/// #[grown]'s - at the value's length; a family, its Validated DST; one not
+/// yet converted, a View (view_arm!). None if the bytes can't be one: fewer
+/// than every valid one has.
 pub trait ArmRef {
     type Ref<'a> where Self: 'a;
     type Mut<'a> where Self: 'a;
@@ -1258,17 +1260,59 @@ pub trait ArmRef {
     fn arm_mut(b: &mut [u8]) -> Option<Self::Mut<'_>>;
 }
 
-impl<A: Plain> ArmRef for A {
-    type Ref<'a> = View<'a, A> where A: 'a;
-    type Mut<'a> = ViewMut<'a, A> where A: 'a;
+/// whole_arm!(T, ..): each T an arm that never grew - C's validate rejects one
+/// unless it's whole - so handed out as a reference of all of it, if the
+/// arm's bytes hold it, aligned: cast_whole().
+macro_rules! whole_arm {
+    ($($t:ty),* $(,)?) => { $(
+        impl $crate::util::vstructs::ArmRef for $t {
+            type Ref<'a> = &'a $t;
+            type Mut<'a> = &'a mut $t;
 
-    fn arm_ref(b: &[u8]) -> Option<View<'_, A>> {
-        Some(View::new(b))
-    }
+            fn arm_ref(b: &[u8]) -> Option<&$t> {
+                $crate::util::vstructs::cast_whole(b)
+            }
 
-    fn arm_mut(b: &mut [u8]) -> Option<ViewMut<'_, A>> {
-        Some(ViewMut::new(b))
-    }
+            fn arm_mut(b: &mut [u8]) -> Option<&mut $t> {
+                $crate::util::vstructs::cast_whole_mut(b)
+            }
+        }
+    )* };
+}
+pub(crate) use whole_arm;
+
+/// view_arm!(T, ..): each T an arm that may be shorter than it, and isn't yet
+/// a family of its own - a View, its fields past the end zero.
+macro_rules! view_arm {
+    ($($t:ty),* $(,)?) => { $(
+        impl $crate::util::vstructs::ArmRef for $t {
+            type Ref<'a> = $crate::util::vstructs::View<'a, $t>;
+            type Mut<'a> = $crate::util::vstructs::ViewMut<'a, $t>;
+
+            fn arm_ref(b: &[u8]) -> Option<Self::Ref<'_>> {
+                Some($crate::util::vstructs::View::new(b))
+            }
+
+            fn arm_mut(b: &mut [u8]) -> Option<Self::Mut<'_>> {
+                Some($crate::util::vstructs::ViewMut::new(b))
+            }
+        }
+    )* };
+}
+pub(crate) use view_arm;
+
+/// The T at the start of @b: None unless @b holds all of it, aligned.
+pub fn cast_whole<T: Plain>(b: &[u8]) -> Option<&T> {
+    (b.len() >= size_of::<T>() && b.as_ptr() as usize % align_of::<T>() == 0)
+        // SAFETY: that many bytes, aligned, and any bytes are a T
+        .then(|| unsafe { &*b.as_ptr().cast::<T>() })
+}
+
+/// cast_whole(), mutably.
+pub fn cast_whole_mut<T: Plain>(b: &mut [u8]) -> Option<&mut T> {
+    (b.len() >= size_of::<T>() && b.as_ptr() as usize % align_of::<T>() == 0)
+        // SAFETY: as cast_whole()
+        .then(|| unsafe { &mut *b.as_mut_ptr().cast::<T>() })
 }
 
 /// A type whose values may be shorter than it, but never shorter than Min:

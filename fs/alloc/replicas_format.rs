@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::util::vstructs::{vstruct, Ffi};
+use crate::util::vstructs::{view_arm, vstruct, Ffi};
 use cstruct_macros::{CStruct, Plain, TypeInfo, View};
 
 #[repr(C, packed)]
@@ -23,6 +23,7 @@ pub struct bch_sb_field_replicas_v0 {
     pub entries: [c::bch_replicas_entry_v0; 0],
 }
 vstruct!(bch_sb_field_replicas_v0, field.u64s, start = 0);
+view_arm!(bch_sb_field_replicas_v0);
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
@@ -43,4 +44,5 @@ pub struct bch_sb_field_replicas {
     pub entries: [c::bch_replicas_entry_v1; 0],
 }
 vstruct!(bch_sb_field_replicas, field.u64s, start = 0);
+view_arm!(bch_sb_field_replicas);
 

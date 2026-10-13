@@ -73,7 +73,7 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
-use crate::util::vstructs::{floored_by_self, vstruct, vstruct_container, Ffi, FlexArray};
+use crate::util::vstructs::{floored_by_self, view_arm, vstruct, vstruct_container, whole_arm, Ffi, FlexArray};
 use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, grown, tagged_union,
                      unsized_vstruct, CStruct, Plain, TypeInfo, View};
 #[cfg(__KERNEL__)]
@@ -932,7 +932,7 @@ pub struct bch_encrypted_key {
  * previously encrypted data.
  */
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_crypt {
     pub field: Ffi<c::bch_sb_field>,
 
@@ -941,6 +941,7 @@ pub struct bch_sb_field_crypt {
     pub key: c::bch_encrypted_key,
 }
 vstruct!(bch_sb_field_crypt, field.u64s, start = 0);
+whole_arm!(bch_sb_field_crypt);
 
 c_bitmask! {
     LE64_BITMASK(struct bch_sb_field_crypt, flags) {
@@ -1000,6 +1001,7 @@ pub struct bch_sb_field_clean {
 }
 vstruct!(bch_sb_field_clean, field.u64s, start = 0);
 vstruct_container!(bch_sb_field_clean, c::jset_entry);
+view_arm!(bch_sb_field_clean);
 
 /* sections from before btrees_lost_data are 88 bytes: what validate accepts */
 #[grown(from = btrees_lost_data)]
@@ -1846,21 +1848,23 @@ tagged_union! {
  * don't think there was a missing journal entry.
  */
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct jset_entry_blacklist {
     pub entry: Ffi<c::jset_entry>,
     pub seq: Le64,
 }
 vstruct!(jset_entry_blacklist, entry.u64s);
+whole_arm!(jset_entry_blacklist);
 
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct jset_entry_blacklist_v2 {
     pub entry: Ffi<c::jset_entry>,
     pub start: Le64,
     pub end: Le64,
 }
 vstruct!(jset_entry_blacklist_v2, entry.u64s);
+whole_arm!(jset_entry_blacklist_v2);
 
 c_xmacro! {
     BCH_FS_USAGE_TYPES(x) {
@@ -1879,12 +1883,13 @@ c_enum! {
 }
 
 #[repr(C, packed)]
-#[derive(Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct jset_entry_usage {
     pub entry: Ffi<c::jset_entry>,
     pub v: Le64,
 }
 vstruct!(jset_entry_usage, entry.u64s);
+whole_arm!(jset_entry_usage);
 
 #[repr(C, packed)]
 #[derive(Default, CStruct, Plain, TypeInfo, View)]
@@ -1894,9 +1899,10 @@ pub struct jset_entry_data_usage {
     pub r: c::bch_replicas_entry_v1,
 }
 vstruct!(jset_entry_data_usage, entry.u64s);
+view_arm!(jset_entry_data_usage);
 
 #[repr(C, packed)]
-#[derive(Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct jset_entry_clock {
     pub entry: Ffi<c::jset_entry>,
     pub rw: u8,
@@ -1904,6 +1910,7 @@ pub struct jset_entry_clock {
     pub time: Le64,
 }
 vstruct!(jset_entry_clock, entry.u64s);
+whole_arm!(jset_entry_clock);
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
@@ -1939,29 +1946,31 @@ pub struct jset_entry_log {
 vstruct!(unsized jset_entry_log, entry.u64s);
 
 #[repr(C, align(8))]
-#[derive(Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct jset_entry_datetime {
     pub entry: Ffi<c::jset_entry>,
     pub seconds: Le64,
 }
 vstruct!(jset_entry_datetime, entry.u64s);
+whole_arm!(jset_entry_datetime);
 
 #[repr(C, align(8))]
-#[derive(Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct jset_entry_rewind_limit {
     pub entry: Ffi<c::jset_entry>,
     pub seq: Le64,
 }
 vstruct!(jset_entry_rewind_limit, entry.u64s);
+whole_arm!(jset_entry_rewind_limit);
 
 /*
  * Records a journal rewind in progress. Keys from journal entries
  * with seq in (to, from] use overwrite entries instead of btree_keys.
  */
 #[repr(C, align(8))]
-#[derive(Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct jset_entry_rewind {
     pub entry: Ffi<c::jset_entry>,
@@ -1969,6 +1978,7 @@ pub struct jset_entry_rewind {
     pub to: Le64,
 }
 vstruct!(jset_entry_rewind, entry.u64s);
+whole_arm!(jset_entry_rewind);
 
 /*
  * On disk format for a journal entry:

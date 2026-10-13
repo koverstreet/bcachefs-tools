@@ -13,7 +13,7 @@ use crate::wrappers::journal::JournalReplays;
 /// A jset's first datetime entry's seconds-since-epoch, or None if absent.
 fn jset_datetime(j: &c::jset) -> Option<u64> {
     j.entries().find_map(|e| match e.typed() {
-        Ok(c::JsetEntryRef::datetime(d)) => Some(d.seconds().get()),
+        Ok(c::JsetEntryRef::datetime(d)) => Some(d.seconds.get()),
         _ => None,
     })
 }
@@ -21,7 +21,7 @@ fn jset_datetime(j: &c::jset) -> Option<u64> {
 /// A jset's first rewind_limit entry's seq, or None if absent.
 fn jset_rewind_limit(j: &c::jset) -> Option<u64> {
     j.entries().find_map(|e| match e.typed() {
-        Ok(c::JsetEntryRef::rewind_limit(r)) => Some(r.seq().get()),
+        Ok(c::JsetEntryRef::rewind_limit(r)) => Some(r.seq.get()),
         _ => None,
     })
 }
