@@ -415,6 +415,32 @@ fn state_methods(name: &str, ffi: &str, st: &str) -> String {
          {from_bytes}")
 }
 
+/// The family of a type whose count is its own - an unsized vstruct's, a
+/// #[counted] type's: both states laid out as @shape - Unvalidated, bytes
+/// from outside, its count checked against them; Validated, its count
+/// trusted as C trusts it - and Validated its Whole, the header never having
+/// grown.
+fn own_count_family(name: &str, shape: &Shape) -> String {
+    let state = |st: &str, what: &str| -> String {
+        dst(&format!("{name}__{}", st.to_lowercase()),
+            &format!("/// {name}<{st}>: {what}. C's fields - those that hold a count\n\
+                      /// private - then its tail, as long as its count says. It derefs\n\
+                      /// to C's struct {name}, Ffi<{name}>, to read.\n"),
+            shape, &state_methods(name, shape.ffi, st))
+    };
+    format!(
+        "{}{}{}",
+        state("Unvalidated", "bytes from outside - off a device, from the kernel - its count \
+                              checked against them when it's made"),
+        state("Validated", "what C read and validated, its counts trusted as C trusts them"),
+        family(name, &format!("{name}__unvalidated"), &format!("{name}__validated"),
+               &format!("{name}__validated"),
+               &[format!("{name}__unvalidated"), format!("{name}__validated")],
+               &format!("/// {name}, in state S - Validated unless named: a reference to one\n\
+                         /// reaches every byte of it and none past. C's struct {name} is\n\
+                         /// Ffi<{name}>.\n")))
+}
+
 /// #[unsized_vstruct]: the family of an unsized vstruct's definitions, one
 /// per state (util/vstructs.rs' Family), from C's struct as written.
 ///
@@ -458,18 +484,9 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
     let repr = repr_attrs(&item);
     let shape = Shape { repr: &repr, fields, private: &[], head: &ffi, tail: &tail, elem: &elem, ffi: &ffi };
 
-    let state = |st: &str, what: &str| -> String {
-        dst(&format!("{name}__{}", st.to_lowercase()),
-            &format!("/// {name}<{st}>: {what}. C's fields - those that hold a count\n\
-                      /// private - then its tail, as long as its count says. It derefs\n\
-                      /// to C's struct {name}, Ffi<{name}>, to read.\n"),
-            &shape, &state_methods(&name, &ffi, st))
-    };
-
     let mut out = rename_struct(item, &name, &ffi)?;
     out.extend(tokens(&format!(
-        "{}{}\
-         const _: () = {{\n\
+        "const _: () = {{\n\
              // C's struct ends at its last field - its flexible array, or an\n\
              // embedded vstruct's header, which ends where that one's tail starts\n\
              assert!(::core::mem::offset_of!({ffi}, {last}) + crate::types::field_size(\n\
@@ -479,15 +496,7 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
          }};\n\
          \n\
          {}",
-        state("Unvalidated", "bytes from outside - off a device, from the kernel - its count \
-                              checked against them when it's made"),
-        state("Validated", "what C read and validated, its counts trusted as C trusts them"),
-        family(&name, &format!("{name}__unvalidated"), &format!("{name}__validated"),
-               &format!("{name}__validated"),
-               &[format!("{name}__unvalidated"), format!("{name}__validated")],
-               &format!("/// {name}, in state S - Validated unless named: a reference to one\n\
-                         /// reaches every byte of it and none past. C's struct {name} is\n\
-                         /// Ffi<{name}>.\n")))));
+        own_count_family(&name, &shape))));
     Ok(out)
 }
 
@@ -552,26 +561,9 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
     let private = [count_field.as_str()];
     let shape = Shape { repr: &repr, fields, private: &private, head: &ffi, tail: &tail, elem: &elem, ffi: &ffi };
 
-    let state = |st: &str, what: &str| -> String {
-        dst(&format!("{name}__{}", st.to_lowercase()),
-            &format!("/// {name}<{st}>: {what}. C's fields - those that hold a count\n\
-                      /// private - then its array, {tail}, as long as its count says.\n\
-                      /// It derefs to C's struct {name}, Ffi<{name}>, to read.\n"),
-            &shape, &state_methods(&name, &ffi, st))
-    };
-
     let mut out = rename_struct(item, &name, &ffi)?;
     out.extend(tokens(&format!(
-        "impl {VS}::FlexArray for {ffi} {{\n\
-             type Elem = {elem};\n\
-             const TAIL: usize = {tail_at};\n\
-             #[inline]\n\
-             fn nr(&self) -> usize {{\n\
-                 // by value: a packed struct's field can't be borrowed\n\
-                 {VS}::Count::count(&{{ self.{count} }})\n\
-             }}\n\
-         }}\n\
-         \n\
+        "{}\
          impl {VS}::CountedFfi for {ffi} {{\n\
              type Unvalidated = {name}__unvalidated;\n\
          }}\n\
@@ -581,16 +573,9 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
          const _: () = assert!(::core::mem::size_of::<{elem}>() % ::core::mem::align_of::<{ffi}>() == 0,\n\
              \"{name}: its elements aren't a whole number of its alignment\");\n\
          \n\
-         {}{}{}",
-        state("Unvalidated", "bytes from outside - from the kernel - its count checked \
-                              against them when it's made"),
-        state("Validated", "what C read and validated, its count trusted as C trusts it"),
-        family(&name, &format!("{name}__unvalidated"), &format!("{name}__validated"),
-               &format!("{name}__validated"),
-               &[format!("{name}__unvalidated"), format!("{name}__validated")],
-               &format!("/// {name}, in state S - Validated unless named: a reference to one\n\
-                         /// reaches every element of it and none past. C's struct {name} is\n\
-                         /// Ffi<{name}>.\n")))));
+         {}",
+        flex_impl(&ffi, &tail_at, &elem, &count),
+        own_count_family(&name, &shape))));
     Ok(out)
 }
 
@@ -800,17 +785,19 @@ pub(crate) fn flex_array(def: &CStructDef) -> Result<String, String> {
     if !def.fields.iter().any(|g| g.rust_name() == count) {
         return Err(format!("{name}.{}: #[counted_by({count})]: {name} has no field {count}", f.name));
     }
-    Ok(flex_impl(name, &f.rust_name(), &elem, count))
+    Ok(flex_impl(name, &format!("::core::mem::offset_of!({name}, {})", f.rust_name()), &elem, count))
 }
 
-/// FlexArray for @name: @field, [@elem; 0], as long as @count says.
-fn flex_impl(name: &str, field: &str, elem: &str, count: &str) -> String {
+/// FlexArray for @name: @elem from @tail_at, as many as @count says.
+fn flex_impl(name: &str, tail_at: &str, elem: &str, count: &str) -> String {
     // the count by value: a reference to a packed struct's field may be
     // unaligned
     format!(
-        "impl crate::util::vstructs::FlexArray for {name} {{\n\
+        "impl {VS}::FlexArray for {name} {{\n\
              type Elem = {elem};\n\
-             const TAIL: usize = ::core::mem::offset_of!({name}, {field});\n\
-             fn nr(&self) -> usize {{ crate::util::vstructs::Count::count(&{{ self.{count} }}) }}\n\
-         }}\n")
+             const TAIL: usize = {tail_at};\n\
+             #[inline]\n\
+             fn nr(&self) -> usize {{ {VS}::Count::count(&{{ self.{count} }}) }}\n\
+         }}\n\
+         \n")
 }
