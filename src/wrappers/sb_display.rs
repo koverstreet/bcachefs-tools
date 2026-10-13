@@ -46,7 +46,7 @@ unsafe fn print_one_member(
     out: &mut Printbuf,
     sbs: &[(PathBuf, bch_sb_handle)],
     sb: *mut Ffi<c::bch_sb>,
-    gi: *mut c::bch_sb_field_disk_groups,
+    gi: *mut Ffi<c::bch_sb_field_disk_groups>,
     m: &mut c::bch_member,
     idx: u32,
 ) {
@@ -116,9 +116,9 @@ pub unsafe fn sb_to_text_with_names(
             | sb_field_type::members_v2.bit();
         c::bch2_sb_to_text(out.as_raw(), fs, sb_ptr, print_layout, fields & !member_mask);
 
-        let gi: *mut c::bch_sb_field_disk_groups =
+        let gi: *mut Ffi<c::bch_sb_field_disk_groups> =
             sb::io::sb_field_get::<c::bch_sb_field_disk_groups>(sb)
-                .map(|f| f.as_bytes().as_ptr() as *mut _)
+                .map(|f| f.as_ffi() as *mut _)
                 .unwrap_or(std::ptr::null_mut());
 
         // members_v1

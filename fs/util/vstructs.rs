@@ -242,8 +242,8 @@ macro_rules! vstruct {
             ::core::mem::size_of::<[<$t __ffi>]>(), $count);
         $crate::util::vstructs::vstruct!(@unsized $t, $count);
     } };
-    // counted by the header it embeds last - a btree_node's bset, its keys:
-    // the count is that header's, and its own u64s() reads it
+    // counted past the header it embeds - a btree node's bset, its keys; a
+    // journal entry subtype's entry: the count is that header's, read as it
     (unsized $t:ident, $hdr:ident . $count:ident) => { $crate::paste! {
         $crate::util::vstructs::vstruct!([<$t __ffi>], $hdr.$count);
         $crate::util::vstructs::vstruct!(@u64s $t);
@@ -1387,7 +1387,7 @@ mod tests {
         f.set_val_u64s(3);
         assert_eq!(f.bytes(), 24);
 
-        let mut l: c::jset_entry_log = Default::default();
+        let mut l = Ffi::<c::jset_entry_log>::default();
         l.set_val_u64s(2);
         assert_eq!(l.bytes(), 8 + 16);
 

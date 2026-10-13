@@ -34,7 +34,7 @@ c_extern! {
     pub fn bch2_members_v2_get_mut(sb: *mut Ffi<c::bch_sb>, i: c_int) -> *mut c::bch_member;
     pub fn bch2_sb_member_get(sb: *mut Ffi<c::bch_sb>, i: c_int) -> c::bch_member;
     pub fn bch2_member_to_text(out: *mut c::printbuf, m: *mut c::bch_member,
-                               gi: *mut c::bch_sb_field_disk_groups, sb: *mut Ffi<c::bch_sb>,
+                               gi: *mut Ffi<c::bch_sb_field_disk_groups>, sb: *mut Ffi<c::bch_sb>,
                                idx: c_uint);
     pub fn bch2_sb_nr_devices(sb: *const Ffi<c::bch_sb>) -> c_uint;
     pub fn rust_bch2_dev_put(ca: *mut c::bch_dev);

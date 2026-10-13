@@ -6,7 +6,8 @@ use crate::cstructs::c;
 use crate::types::Le64;
 use zerocopy::byteorder::little_endian as le;
 use crate::util::vstructs::{vstruct, Ffi};
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_xmacro, CStruct, Plain, TypeInfo, View};
+use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_xmacro, unsized_vstruct, CStruct, Plain,
+                     TypeInfo};
 use nestify::nest;
 
 c_enum! {
@@ -478,13 +479,14 @@ pub struct bch_sb_field_error_entry {
     pub last_error_time: Le64,
 }
 
+#[unsized_vstruct]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_errors {
     pub field: Ffi<c::bch_sb_field>,
     pub entries: [c::bch_sb_field_error_entry; 0],
 }
-vstruct!(bch_sb_field_errors, field.u64s, start = 0);
+vstruct!(unsized bch_sb_field_errors, field.u64s, start = 0);
 
 c_bitmask! {
     LE64_BITMASK(struct bch_sb_field_error_entry, v) {
@@ -523,13 +525,14 @@ nest! {
     }
 }
 
+#[unsized_vstruct]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_errors_v2 {
     pub field: Ffi<c::bch_sb_field>,
     pub entries: [c::bch_sb_field_error_entry_v2; 0],
 }
-vstruct!(bch_sb_field_errors_v2, field.u64s, start = 0);
+vstruct!(unsized bch_sb_field_errors_v2, field.u64s, start = 0);
 
 c_const! {
     pub const BCH_SB_ERROR_ENTRY_V2_NR_MAX: u64 = (1 << 32) - 1;

@@ -877,13 +877,14 @@ c_const! {
 
 /* BCH_SB_FIELD_journal: */
 
+#[unsized_vstruct]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_journal {
     pub field: Ffi<c::bch_sb_field>,
     pub buckets: [Le64; 0],
 }
-vstruct!(bch_sb_field_journal, field.u64s, start = 0);
+vstruct!(unsized bch_sb_field_journal, field.u64s, start = 0);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
@@ -892,14 +893,15 @@ pub struct bch_sb_field_journal_v2_entry {
     pub nr: Le64,
 }
 
+#[unsized_vstruct]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_journal_v2 {
     pub field: Ffi<c::bch_sb_field>,
 
     pub d: [c::bch_sb_field_journal_v2_entry; 0],
 }
-vstruct!(bch_sb_field_journal_v2, field.u64s, start = 0);
+vstruct!(unsized bch_sb_field_journal_v2, field.u64s, start = 0);
 
 /* BCH_SB_FIELD_crypt: */
 
@@ -1911,8 +1913,9 @@ pub struct jset_entry_dev_usage_type {
     pub fragmented: Le64,
 }
 
+#[unsized_vstruct]
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct jset_entry_dev_usage {
     pub entry: Ffi<c::jset_entry>,
     pub dev: Le32,
@@ -1923,16 +1926,17 @@ pub struct jset_entry_dev_usage {
 
     pub d: [c::jset_entry_dev_usage_type; 0],
 }
-vstruct!(jset_entry_dev_usage, entry.u64s);
+vstruct!(unsized jset_entry_dev_usage, entry.u64s);
 
+#[unsized_vstruct]
 #[repr(C, align(8))]
-#[derive(Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct jset_entry_log {
     pub entry: Ffi<c::jset_entry>,
     pub d: [u8; 0],
 }
-vstruct!(jset_entry_log, entry.u64s);
+vstruct!(unsized jset_entry_log, entry.u64s);
 
 #[repr(C, align(8))]
 #[derive(Default, CStruct, Plain, TypeInfo, View)]

@@ -527,7 +527,7 @@ mod tests {
 
         let f = field(&mut buf, T::BCH_SB_FIELD_journal, 3);
         assert_eq!(f.as_bytes().len(), 24);
-        assert!(matches!(f.typed(), Ok(c::BchSbFieldRef::journal(j)) if j.field().get().u64s() == 3));
+        assert!(matches!(f.typed(), Ok(c::BchSbFieldRef::journal(j)) if j.field.u64s() == 3 && j.buckets.len() == 2));
 
         let f = field(&mut buf, T::BCH_SB_FIELD_NR, 3);
         assert!(matches!(f.typed(), Err(t) if t == T::BCH_SB_FIELD_NR));
