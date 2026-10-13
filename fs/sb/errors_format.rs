@@ -462,7 +462,8 @@ c_xmacro! {
         (device_bad_flush_repaired_from_replica, 436, 0),
         (extent_ptrs_entry_past_end, 437, 0),
         (accounting_key_replicas_past_end, 438, FSCK_AUTOFIX),
-        (MAX, 439, 0),
+        (alloc_v4_inline_backpointers, 439, FSCK_AUTOFIX),
+        (MAX, 440, 0),
     }
 }
 

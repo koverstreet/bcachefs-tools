@@ -709,10 +709,17 @@ int bch2_alloc_v4_validate(struct bch_fs *c, struct bkey_s_c k,
 			 "bad val size (%u > %zu)",
 			 alloc_v4_u64s_noerror(&a), bkey_val_u64s(k.k));
 
-	bkey_fsck_err_on(!BCH_ALLOC_V4_BACKPOINTERS_START(&a) &&
-			 BCH_ALLOC_V4_NR_BACKPOINTERS(&a),
-			 c, alloc_v4_backpointers_start_bad,
-			 "invalid backpointers_start");
+	/*
+	 * Backpointers stored after the value, as before they moved to the
+	 * backpointers btree (no_bps_in_alloc_keys): a value is read by its
+	 * length, where these would read as fields added since. Dropping the
+	 * key flags the alloc btree as having lost data, and check_allocations
+	 * rebuilds it.
+	 */
+	bkey_fsck_err_on(BCH_ALLOC_V4_NR_BACKPOINTERS(&a),
+			 c, alloc_v4_inline_backpointers,
+			 "%llu backpointers inline, from before they moved to the backpointers btree",
+			 BCH_ALLOC_V4_NR_BACKPOINTERS(&a));
 
 	bkey_fsck_err_on(alloc_data_type(a, a.data_type) != a.data_type,
 			 c, alloc_key_data_type_bad,
@@ -726,22 +733,17 @@ int bch2_alloc_v4_validate(struct bch_fs *c, struct bkey_s_c k,
 				 i == READ ? "read" : "write",
 				 a.io_time[i], LRU_TIME_MAX);
 
-	unsigned stripe_sectors = BCH_ALLOC_V4_BACKPOINTERS_START(&a) * sizeof(u64) >
-		offsetof(struct bch_alloc_v4, stripe_sectors)
-		? a.stripe_sectors
-		: 0;
-
 	switch (a.data_type) {
 	case BCH_DATA_free:
 	case BCH_DATA_need_gc_gens:
 	case BCH_DATA_need_discard:
-		bkey_fsck_err_on(stripe_sectors ||
+		bkey_fsck_err_on(a.stripe_sectors ||
 				 a.dirty_sectors ||
 				 a.cached_sectors ||
 				 a.stripe_refcount,
 				 c, alloc_key_empty_but_have_data,
 				 "empty data type free but have data %u.%u.%u %u",
-				 stripe_sectors,
+				 a.stripe_sectors,
 				 a.dirty_sectors,
 				 a.cached_sectors,
 				 a.stripe_refcount);
@@ -752,7 +754,7 @@ int bch2_alloc_v4_validate(struct bch_fs *c, struct bkey_s_c k,
 	case BCH_DATA_user:
 	case BCH_DATA_parity:
 		bkey_fsck_err_on(!a.dirty_sectors &&
-				 !stripe_sectors &&
+				 !a.stripe_sectors &&
 				 !a.stripe_refcount,
 				 c, alloc_key_dirty_sectors_0,
 				 "data_type %s but dirty_sectors==0",
@@ -761,7 +763,7 @@ int bch2_alloc_v4_validate(struct bch_fs *c, struct bkey_s_c k,
 	case BCH_DATA_cached:
 		bkey_fsck_err_on(!a.cached_sectors ||
 				 a.dirty_sectors ||
-				 stripe_sectors ||
+				 a.stripe_sectors ||
 				 a.stripe_refcount,
 				 c, alloc_key_cached_inconsistency,
 				 "data type inconsistency");
@@ -837,18 +839,13 @@ __cold void bch2_alloc_v4_to_text(struct printbuf *out, struct bch_fs *c, struct
 void __bch2_alloc_to_v4(struct bkey_s_c k, struct bch_alloc_v4 *out)
 {
 	if (k.k->type == KEY_TYPE_alloc_v4) {
-		void *src, *dst;
-
+		/*
+		 * By its length: fields past it are zero, as written before
+		 * they existed. Not by BACKPOINTERS_START - a key widened
+		 * without updating it has fields written past it since:
+		 */
 		bkey_val_copy_pad(out, bkey_s_c_to_alloc_v4(k));
-
-		src = alloc_v4_backpointers(out);
 		SET_BCH_ALLOC_V4_BACKPOINTERS_START(out, BCH_ALLOC_V4_U64s);
-		dst = alloc_v4_backpointers(out);
-
-		if (src < dst)
-			memset(src, 0, dst - src);
-
-		SET_BCH_ALLOC_V4_NR_BACKPOINTERS(out, 0);
 	} else {
 		struct bkey_alloc_unpacked u = bch2_alloc_unpack(k);
 
@@ -874,40 +871,30 @@ __bch2_alloc_to_v4_mut(struct btree_trans *trans, struct bkey_s_c k)
 {
 	struct bkey_i_alloc_v4 *ret;
 
-	ret = bch2_trans_kmalloc(trans, max(bkey_bytes(k.k), sizeof(struct bkey_i_alloc_v4)));
+	ret = bch2_trans_kmalloc(trans, sizeof(*ret));
 	if (IS_ERR(ret))
 		return ret;
 
-	if (k.k->type == KEY_TYPE_alloc_v4) {
-		void *src, *dst;
-
-		bkey_reassemble(&ret->k_i, k);
-
-		src = alloc_v4_backpointers(&ret->v);
-		SET_BCH_ALLOC_V4_BACKPOINTERS_START(&ret->v, BCH_ALLOC_V4_U64s);
-		dst = alloc_v4_backpointers(&ret->v);
-
-		if (src < dst)
-			memset(src, 0, dst - src);
-
-		SET_BCH_ALLOC_V4_NR_BACKPOINTERS(&ret->v, 0);
-		set_alloc_v4_u64s(ret);
-	} else {
-		bkey_alloc_v4_init(&ret->k_i);
-		ret->k.p = k.k->p;
-		bch2_alloc_to_v4(k, &ret->v);
-	}
+	bkey_alloc_v4_init(&ret->k_i);
+	ret->k.p = k.k->p;
+	bch2_alloc_to_v4(k, &ret->v);
 	return ret;
 }
 
 static inline struct bkey_i_alloc_v4 *bch2_alloc_to_v4_mut_inlined(struct btree_trans *trans, struct bkey_s_c k)
 {
-	struct bkey_s_c_alloc_v4 a;
+	if (likely(k.k->type == KEY_TYPE_alloc_v4)) {
+		struct bkey_i_alloc_v4 *a = bch2_bkey_make_mut_noupdate_typed(trans, k, alloc_v4);
 
-	if (likely(k.k->type == KEY_TYPE_alloc_v4) &&
-	    ((a = bkey_s_c_to_alloc_v4(k), true) &&
-	     BCH_ALLOC_V4_NR_BACKPOINTERS(a.v) == 0))
-		return bch2_bkey_make_mut_noupdate_typed(trans, k, alloc_v4);
+		/*
+		 * Widened to all of today's struct: say so, for a kernel that
+		 * reads by BACKPOINTERS_START - one from before it read by
+		 * length would drop what's written past an older start:
+		 */
+		if (!IS_ERR(a))
+			SET_BCH_ALLOC_V4_BACKPOINTERS_START(&a->v, BCH_ALLOC_V4_U64s);
+		return a;
+	}
 
 	return __bch2_alloc_to_v4_mut(trans, k);
 }
