@@ -24,6 +24,7 @@
 //!  - Unvalidated: bytes from outside - off a device, from the kernel
 //!    (from_bytes()). Its count was checked against them, an overrun an
 //!    error; its entries' are checked as they're walked.
+//!
 //! Each state's definition is the header, then the tail, and derefs to the
 //! header: C's struct, Ffi<T> - its tail zero-length, C's flexible array -
 //! which is what Rust names wherever it meets C. A count is no field to set
@@ -771,8 +772,8 @@ pub trait CountedFfi: FlexArray + Plain {
 /// a struct that embeds one.
 pub type Ffi<T> = <T as HasFfi>::Ffi;
 
-/// A DST of ours, in a state: a sized head's fields, inline, then its tail
-/// - a slice. Its references are fat, with the tail's length, so a reference
+/// A DST of ours, in a state: a sized head's fields, inline, then its tail -
+/// a slice. Its references are fat, with the tail's length, so a reference
 /// reaches every byte of the value and none past it. It derefs to its head,
 /// to read; never mutably, so no count - the head's, or an embedded
 /// header's - can be rewritten from outside what holds the value, and its

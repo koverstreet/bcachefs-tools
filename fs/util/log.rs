@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! Logging, as C's bch_log() family (bcachefs.h): a message is formatted
-//! here, then handed to __bch2_print() whole, so it goes where C's messages go
-//! - the filesystem's loglevel, a stdio redirect, the "previous loglevel" a
+//! here, then handed to __bch2_print() whole, so it goes where C's messages go -
+//! the filesystem's loglevel, a stdio redirect, the "previous loglevel" a
 //! continuation line inherits - without any of that being reimplemented.
 //!
 //! In-kernel each message is prefixed with the filesystem's name, as
