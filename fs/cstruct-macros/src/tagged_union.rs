@@ -473,7 +473,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
         // storage's bytes. Or the storage itself - a journal entry of keys -
         // in its state.
         //
-        // Every arm has a family - #[unsized_vstruct], #[grown], whole_arm! -
+        // Every arm has a family - #[unsized_vstruct], #[grown], #[whole] -
         // so each is named in the storage's state: a member of an Unvalidated
         // one is Unvalidated, all the way down.
         let vs = "crate::util::vstructs";

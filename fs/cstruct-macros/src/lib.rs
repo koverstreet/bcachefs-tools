@@ -292,6 +292,14 @@ pub fn grown(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand("#[grown]", || vstructs::grown(attr, item))
 }
 
+/// `#[whole]`, on C's definition of a type every valid value of which has
+/// all of it - a superblock section or journal entry of fixed fields: its
+/// family, every state all of it, at the value's length - see vstructs.rs.
+#[proc_macro_attribute]
+pub fn whole(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand("#[whole]", || vstructs::whole(attr, item))
+}
+
 fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let args = bitfield_args(attr)?;
     let s = bitfield_struct(item)?;

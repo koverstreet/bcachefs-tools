@@ -26,9 +26,11 @@ pub mod c {
 	mod generated {
 		use bcachefs_kernel::c::*;
 
-		// C's: the unsized vstructs bindgen's fns name, as their sized
-		// instances - an item beats the glob
+		// C's: the families bindgen's fns name - an unsized vstruct, or a
+		// sized type now unsized in Rust - as C's structs, Ffi<T>: an item
+		// beats the glob
 		type bch_sb = bcachefs_kernel::util::vstructs::Ffi<bcachefs_kernel::c::bch_sb>;
+		type bch_sb_field_crypt = bcachefs_kernel::util::vstructs::Ffi<bcachefs_kernel::c::bch_sb_field_crypt>;
 
 		include!(concat!(env!("OUT_DIR"), "/non_fs.rs"));
 	}

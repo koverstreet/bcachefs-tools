@@ -4,8 +4,8 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use crate::util::vstructs::{vstruct, whole_arm, Ffi};
-use cstruct_macros::{c_enum, CStruct, Plain, TypeInfo};
+use crate::util::vstructs::{vstruct, Ffi};
+use cstruct_macros::{c_enum, whole, CStruct, Plain, TypeInfo};
 
 /* KEY_TYPE_quota: */
 c_enum! {
@@ -57,6 +57,7 @@ pub struct bch_sb_quota_type {
     pub c: [c::bch_sb_quota_counter; c::Q_COUNTERS as usize],
 }
 
+#[whole]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
@@ -64,5 +65,4 @@ pub struct bch_sb_field_quota {
     pub field: Ffi<c::bch_sb_field>,
     pub q: [c::bch_sb_quota_type; c::QTYP_NR as usize],
 }
-vstruct!(bch_sb_field_quota, field.u64s, start = 0);
-whole_arm!(bch_sb_field_quota);
+vstruct!(bch_sb_field_quota__ffi, field.u64s, start = 0);

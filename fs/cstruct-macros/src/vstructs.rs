@@ -486,9 +486,68 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
     if at == 0 {
         return Err(format!("{name}: #[grown(from = {from})]: every valid value has at least one field"));
     }
+    sized_family(&def, item, Some((from, at)))
+}
+
+/// #[whole]: the family of a type every valid value of which has all of it -
+/// C's validate rejects one shorter - though it may be longer, written by a
+/// version since: a superblock section or journal entry of fixed fields.
+///
+/// C's definition is the item, renamed X__ffi, with #[c_name(X)]. Every
+/// state of it is X__validated, a DST: C's fields, those that hold a count
+/// private, then the bytes past them there are, at exactly the value's
+/// length; it derefs to C's struct, to read.
+pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
+    let def = parse_cstruct(&item.to_string())?;
+    if !attr.is_empty() {
+        return Err(format!("{}: #[whole] takes nothing", def.name));
+    }
+    sized_family(&def, item, None)
+}
+
+/// #[grown] and #[whole]: the family of sized C struct @def, written @item -
+/// @grew, the first field an older version's value may lack and its index,
+/// if it grew.
+///
+/// Both have a definition of all of it, every field inline: X__whole, if it
+/// grew - its Whole; else X__validated, its every state. Only that one is
+/// handed to C, as_ffi(): it's the one sure to hold all of C's struct.
+fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>)
+    -> Result<TokenStream, String>
+{
+    let name = def.name.clone();
+    let ffi = format!("{name}__ffi");
+    let all = match grew {
+        Some(_) => format!("{name}__whole"),
+        None => format!("{name}__validated"),
+    };
+    let all_def = dst(&all,
+        &format!("/// {name}, all of it: C's fields - those that hold a count private - then\n\
+                  /// the bytes past them there are, written by a version since, at\n\
+                  /// exactly the value's length. It derefs to C's struct {name},\n\
+                  /// Ffi<{name}>, to read.\n"),
+        &repr_attrs(&item), &def.fields, &ffi, "_rest", "u8", &ffi,
+        &format!("/// For C: a pointer to all of it.\n\
+                  pub fn as_ffi(&self) -> *const {ffi} {{\n\
+                      (self as *const Self).cast()\n\
+                  }}\n\
+                  \n\
+                  /// For C, to edit: a pointer to all of it.\n\
+                  pub fn as_ffi_mut(&mut self) -> *mut {ffi} {{\n\
+                      (self as *mut Self).cast()\n\
+                  }}\n"));
+
+    let Some((from, at)) = grew else {
+        let mut out = rename_struct(item, &name, &ffi)?;
+        out.extend(tokens(&format!(
+            "{all_def}{}",
+            family(&name, &all, &all, &all, &[all.clone()],
+                   &format!("/// {name}, in state S - all of it in every one: C's validate rejects\n\
+                             /// one shorter. C's struct {name} is Ffi<{name}>.\n")))));
+        return Ok(out);
+    };
     let (floor, later) = def.fields.split_at(at);
 
-    let ffi = format!("{name}__ffi");
     let fl = format!("{name}__floor");
     let ty = format!("{name}__validated");
 
@@ -522,19 +581,13 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 
     let methods = format!(
         "/// All of it, {name}<Whole>, if it's all there - every field a field.\n\
-         pub fn whole(&self) -> Option<&{ffi}> {{\n\
-             (::core::mem::size_of_val(self) >= ::core::mem::size_of::<{ffi}>()\n\
-              && (self as *const Self).cast::<u8>() as usize % ::core::mem::align_of::<{ffi}>() == 0)\n\
-                 // SAFETY: that many bytes are its, aligned, and C's struct is Plain\n\
-                 .then(|| unsafe {{ &*(self as *const Self).cast::<{ffi}>() }})\n\
+         pub fn whole(&self) -> Option<&{all}> {{\n\
+             {VS}::cast(self.as_bytes())\n\
          }}\n\
          \n\
          /// whole(), to edit.\n\
-         pub fn whole_mut(&mut self) -> Option<&mut {ffi}> {{\n\
-             (::core::mem::size_of_val(self) >= ::core::mem::size_of::<{ffi}>()\n\
-              && (self as *const Self).cast::<u8>() as usize % ::core::mem::align_of::<{ffi}>() == 0)\n\
-                 // SAFETY: as whole()\n\
-                 .then(|| unsafe {{ &mut *(self as *mut Self).cast::<{ffi}>() }})\n\
+         pub fn whole_mut(&mut self) -> Option<&mut {all}> {{\n\
+             {VS}::cast_mut(self.as_bytes_mut())\n\
          }}\n\
          \n\
          {getters}");
@@ -555,21 +608,7 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
          }};\n\
          \n\
          {dst}\
-         // {name}<Whole>, as every family's definitions are, from its bytes:\n\
-         // all of it, if they hold it, aligned\n\
-         impl {VS}::ArmRef for {ffi} {{\n\
-             type Ref<'a> = &'a Self;\n\
-             type Mut<'a> = &'a mut Self;\n\
-             \n\
-             fn arm_ref(b: &[u8]) -> Option<&Self> {{\n\
-                 {VS}::cast_whole(b)\n\
-             }}\n\
-             \n\
-             fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {{\n\
-                 {VS}::cast_whole_mut(b)\n\
-             }}\n\
-         }}\n\
-         \n\
+         {all_def}\
          {family}",
         plain = plain(&fl, &floor_tys),
         dst = dst(&ty,
@@ -580,13 +619,13 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
                             /// is a getter, zero where the value ends before it; whole() is all\n\
                             /// of it, {name}<Whole>, if it's all there.\n"),
                   "#[repr(C)]\n", floor, &fl, "_rest", "u8", &ffi, &methods),
-        // the cast checks the floor: an unvalidated one is as good
-        // none of its definitions has every field inline - its later fields are
-        // past the floor - so no state_impls: c_bitmask!s on it are C's struct's
-        family = family(&name, &ty, &ty, &ffi, &[],
+        // the cast checks the floor: an unvalidated one is as good. Its later
+        // fields are inline only in its Whole, so that's where c_bitmask!'s
+        // setters go
+        family = family(&name, &ty, &ty, &all, &[all.clone()],
                         &format!("/// {name}, in state S - Validated unless named: from any version since\n\
-                                  /// its floor, at its own length. {name}<Whole> is all of it - C's\n\
-                                  /// struct {name}, Ffi<{name}>.\n")))));
+                                  /// its floor, at its own length. {name}<Whole> is all of it, every\n\
+                                  /// field a field. C's struct {name} is Ffi<{name}>.\n")))));
     Ok(out)
 }
 
