@@ -36,7 +36,7 @@ use crate::dirent::{self, DirentTarget};
 use crate::namei;
 use crate::util::kernel::random_u64;
 use crate::{bch_err_ratelimited, trans_inconsistent};
-use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyIInode, BkeyIInodeAllocCursor, BkeyIInodeGeneration, BkeyIInodeV2, BkeyIInodeV3, BkeyS, BkeySC, BkeySCTyped, BkeySTyped, POS_MIN, SPOS_MAX, TypedBkey};
+use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyIInode, BkeyIInodeAllocCursor, BkeyIInodeGeneration, BkeyIInodeV2, BkeyIInodeV3, BkeyS, BkeySC, BkeySCTyped, BkeySTyped, POS_MIN, SPOS_MAX, SizedBkey};
 use crate::init::passes;
 use crate::util::varint;
 use core::mem::offset_of;

@@ -578,7 +578,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         })
     }
 
-    pub fn bkey_alloc_typed<K: TypedBkey>(&self) -> Result<TransBkey<'a, 't>, BchError> {
+    pub fn bkey_alloc_typed<K: SizedBkey>(&self) -> Result<TransBkey<'a, 't>, BchError> {
         debug_assert_eq!(size_of::<K>() % size_of::<u64>(), 0);
 
         let u64s = (size_of::<K>() / size_of::<u64>()) as u32;
@@ -692,7 +692,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     /// @k, a @K, as a mutable copy grown to a whole @K - not yet an update:
     /// ENOENT if it isn't one. As bch2_bkey_make_mut_noupdate_typed().
-    pub fn bkey_make_mut_noupdate_typed<K: TypedBkey>(&self, k: BkeySC<'_>)
+    pub fn bkey_make_mut_noupdate_typed<K: SizedBkey>(&self, k: BkeySC<'_>)
         -> Result<TransBkey<'a, 't>, BchError>
     {
         self.make_mut_noupdate(k, K::TYPE, size_of::<K>())
@@ -700,7 +700,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     /// The value of the @K at @pos in @btree, zero padded:
     /// ENOENT_bkey_type_mismatch if it isn't one - as bch2_bkey_get_val_typed().
-    pub fn bkey_get_val<K: TypedBkey>(&self, btree: c::btree_id, pos: bpos, flags: BtreeIterFlags)
+    pub fn bkey_get_val<K: SizedBkey>(&self, btree: c::btree_id, pos: bpos, flags: BtreeIterFlags)
         -> Result<K::Val, BchError>
     {
         let mut iter = BtreeIter::new(self.trans, btree, pos, flags);
@@ -709,7 +709,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     /// As bkey_get_val(), the whole key: as bch2_bkey_get_i_typed().
-    pub fn bkey_get_key<K: TypedBkey>(&self, btree: c::btree_id, pos: bpos, flags: BtreeIterFlags)
+    pub fn bkey_get_key<K: SizedBkey>(&self, btree: c::btree_id, pos: bpos, flags: BtreeIterFlags)
         -> Result<K, BchError>
     {
         let mut iter = BtreeIter::new(self.trans, btree, pos, flags);

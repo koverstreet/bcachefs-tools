@@ -9,7 +9,7 @@ use core::fmt;
 use core::str::FromStr;
 #[cfg(feature = "std")]
 use crate::errcode::{bch_errcode, BchError};
-use crate::util::vstructs::{ArmRef, Floored, View, ViewMut};
+use crate::util::vstructs::{ArmRef, Ffi, Floored, Unsized, View, ViewMut};
 use core::marker::PhantomData;
 
 use c::bpos as Bpos;
@@ -31,7 +31,7 @@ impl AsBkeyI for c::bkey_i {
     }
 }
 
-impl<V> AsBkeyI for BkeyI<V> {
+impl<V: ?Sized> AsBkeyI for BkeyI<V> {
     fn as_bkey_i_mut(&mut self) -> &mut c::bkey_i {
         self.k_i_mut()
     }
@@ -55,14 +55,14 @@ impl c::bkey {
 
     /// Whether it's @K's type: the tag. Not whether its value is long enough
     /// - that's validate's, as in C.
-    pub fn is<K: TypedBkey>(&self) -> bool {
+    pub fn is<K: TypedBkey + ?Sized>(&self) -> bool {
         self.type_ as u32 == K::TYPE.0
     }
 
     /// is::<K>(), with all of K's value there: for a reference to all of it,
     /// &BkeyI<K::Val> - a grown type's older value is shorter, and valid.
-    pub fn holds_whole<K: TypedBkey>(&self) -> bool {
-        self.is::<K>() && self.val_bytes() >= size_of::<K::Val>()
+    pub fn holds_whole<K: TypedBkey + ?Sized>(&self) -> bool {
+        self.is::<K>() && self.val_bytes() >= K::WHOLE_VAL_SIZE
     }
 
     /// u64s for a value of @bytes: C's set_bkey_val_bytes().
@@ -286,12 +286,12 @@ impl<V: ?Sized> Copy for BkeySC<'_, V> {}
 /// past V - copying one is bkey_copy().
 #[derive(Default)]
 #[repr(C)]
-pub struct BkeyI<V> {
+pub struct BkeyI<V: ?Sized> {
     pub k: c::bkey,
     pub v: V,
 }
 
-impl<V> BkeyI<V> {
+impl<V: ?Sized> BkeyI<V> {
     /// The key, of any type: C's .k_i.
     pub fn k_i(&self) -> &c::bkey_i {
         // SAFETY: a bkey_i is a key's header, then its value - empty, there
@@ -326,20 +326,41 @@ const _: () = {
 /// A key type, named by its C typed key (bkey_i_<name>): its value type, and
 /// typed access to it - for code generic over key types.
 pub trait TypedBkey {
-    /// The value: bch_<name>.
-    type Val;
+    /// The value: bch_<name> - sized, or a DST.
+    type Val: ?Sized + ArmRef;
 
     const TYPE: c::bch_bkey_type;
 
     /// The shortest a valid value is: Val up to BCH_BKEY_TYPES()' field, the
-    /// first one a value may end before, or all of it for `_`. One that long
-    /// but shorter than Val is an older version; a shorter one is damage,
-    /// which validate rejects as bkey_val_size_too_small.
+    /// first one a value may end before, or all of it for `_` - a DST's
+    /// header. One that long but shorter than Val is an older version; a
+    /// shorter one is damage, which validate rejects as
+    /// bkey_val_size_too_small.
     const MIN_VAL_SIZE: usize;
 
+    /// How long a value is with all of it there: size_of a sized one, a
+    /// DST's header.
+    const WHOLE_VAL_SIZE: usize;
+
+    /// The key at @k as this type's - a thin pointer for a sized value, fat
+    /// for a DST, as long as k.u64s says.
+    ///
+    /// # Safety
+    /// @k is a key of this type, its value WHOLE_VAL_SIZE at least.
+    unsafe fn cast(k: *const c::bkey_i) -> *const BkeyI<Self::Val>;
+
+    /// cast(), to edit.
+    ///
+    /// # Safety
+    /// As cast()'s.
+    unsafe fn cast_mut(k: *mut c::bkey_i) -> *mut BkeyI<Self::Val>;
+}
+
+/// A key type whose value is sized: what's made, or copied, by value.
+pub trait SizedBkey: TypedBkey<Val: Sized> + Sized {
     /// A key of this type at POS_MIN, its value zeroed: C's
     /// bkey_<name>_init().
-    fn new() -> Self where Self: Sized;
+    fn new() -> Self;
 
     /// @k's value if it's this type, zero padded past the end of a short
     /// one: see val_copy_pad().
@@ -347,34 +368,111 @@ pub trait TypedBkey {
 
     /// @k, if it's this type, as an owned key: the value zero padded, u64s as
     /// on disk - as bch2_bkey_get_i_typed() copies it.
-    fn from_key(k: BkeySC<'_>) -> Option<Self> where Self: Sized;
+    fn from_key(k: BkeySC<'_>) -> Option<Self>;
 }
 
-/// BCH_BKEY_TYPES()' field column as a length, as C's bch2_bkey_min_val_sizes[]
-/// has it: @val up to @field, or all of it for `_`.
-macro_rules! min_val_size {
-    ($val:ty, _)             => { size_of::<$val>() };
-    ($val:ty, $field:ident)  => { core::mem::offset_of!($val, $field) };
+/// A value type, as C has it: itself, or a DST's C struct - for what
+/// C's typed keys hold, bkey_i_<name>.
+pub trait BkeyValC {
+    type C;
 }
 
-/// And as what a View of it derefs to, Floored's Min: the value up to the
-/// field, #[derive(View)]'s __bch_<name>_min!(), or all of it for `_`.
-macro_rules! bkey_floored {
-    ($name:ident, _) => { crate::paste! {
-        unsafe impl Floored for c::[<bch_ $name>] {
-            type Min = Self;
+/// What C's typed inline key, bkey_i_<name>, holds: BkeyValC's.
+pub type ValC<V> = <V as BkeyValC>::C;
+
+/// Per value type, by BCH_BKEY_TYPES()' field column: `_`, every valid one
+/// whole - &T; a field, the first a value may end before - a View; or one of
+/// the value types that are DSTs, families (util/vstructs.rs), whose ArmRef
+/// and length are their family's, listed here as they're made.
+macro_rules! bkey_val {
+    (inline_data, $f:tt)          => { bkey_val!(@family inline_data); };
+    (indirect_inline_data, $f:tt) => { bkey_val!(@family indirect_inline_data); };
+
+    (@family $name:ident) => { crate::paste! {
+        impl BkeyValC for c::[<bch_ $name>] {
+            type C = Ffi<c::[<bch_ $name>]>;
+        }
+
+        impl TypedBkey for c::[<bkey_i_ $name>] {
+            type Val = c::[<bch_ $name>];
+            const TYPE: c::bch_bkey_type = c::bch_bkey_type::[<KEY_TYPE_ $name>];
+            const MIN_VAL_SIZE: usize = size_of::<Ffi<c::[<bch_ $name>]>>();
+            const WHOLE_VAL_SIZE: usize = Self::MIN_VAL_SIZE;
+
+            unsafe fn cast(k: *const c::bkey_i) -> *const BkeyI<Self::Val> {
+                // SAFETY: the caller's: its value, after its header, as long
+                // as k.u64s says
+                unsafe {
+                    let len = (*k).k.val_bytes();
+                    let v = <Self::Val as Unsized>::from_raw(k.cast::<u8>().add(size_of::<c::bkey>()), len);
+                    v.byte_sub(size_of::<c::bkey>()) as *const BkeyI<Self::Val>
+                }
+            }
+
+            unsafe fn cast_mut(k: *mut c::bkey_i) -> *mut BkeyI<Self::Val> {
+                // SAFETY: as cast()'s
+                unsafe {
+                    let len = (*k).k.val_bytes();
+                    let v = <Self::Val as Unsized>::from_raw_mut(k.cast::<u8>().add(size_of::<c::bkey>()), len);
+                    v.byte_sub(size_of::<c::bkey>()) as *mut BkeyI<Self::Val>
+                }
+            }
         }
     } };
-    ($name:ident, $field:ident) => { crate::paste! {
-        c::[<__bch_ $name _min>]!($field);
-    } };
-}
 
-/// And what a typed key's v() is - the value as its type's ArmRef has it,
-/// over its bytes: all of it, if every valid one is whole - `_` - else a
-/// View of it. A key's value is at the u64 after its header: aligned.
-macro_rules! bkey_val_arm {
-    ($name:ident, _) => { crate::paste! {
+    ($name:ident, $field:tt) => { crate::paste! {
+        impl BkeyValC for c::[<bch_ $name>] {
+            type C = Self;
+        }
+
+        impl TypedBkey for c::[<bkey_i_ $name>] {
+            type Val = c::[<bch_ $name>];
+            const TYPE: c::bch_bkey_type = c::bch_bkey_type::[<KEY_TYPE_ $name>];
+            const MIN_VAL_SIZE: usize = bkey_val!(@min c::[<bch_ $name>], $field);
+            const WHOLE_VAL_SIZE: usize = size_of::<Self::Val>();
+
+            unsafe fn cast(k: *const c::bkey_i) -> *const BkeyI<Self::Val> {
+                k.cast()
+            }
+
+            unsafe fn cast_mut(k: *mut c::bkey_i) -> *mut BkeyI<Self::Val> {
+                k.cast()
+            }
+        }
+
+        impl SizedBkey for c::[<bkey_i_ $name>] {
+            fn new() -> Self {
+                let mut k = c::bkey::new();
+                k.type_ = Self::TYPE.0 as u8;
+                k.set_val_bytes(size_of::<Self::Val>());
+                Self { k, v: Default::default() }
+            }
+
+            fn val_copy_pad(k: BkeySC<'_>) -> Option<Self::Val> {
+                k.k.is::<Self>().then(|| unsafe { k.val_copy_pad() })
+            }
+
+            fn from_key(k: BkeySC<'_>) -> Option<Self> {
+                let v = Self::val_copy_pad(k)?;
+                let mut r = Self::default();
+                r.k = *k.k;
+                r.v = v;
+                Some(r)
+            }
+        }
+
+        bkey_val!(@arm $name, $field);
+    } };
+
+    // BCH_BKEY_TYPES()' field column as a length, as C's
+    // bch2_bkey_min_val_sizes[] has it: @val up to @field, or all of it
+    (@min $val:ty, _)            => { size_of::<$val>() };
+    (@min $val:ty, $field:ident) => { core::mem::offset_of!($val, $field) };
+
+    // A value its type's ArmRef has whole, &T, and what a View of it derefs
+    // to, Floored's Min, all of it - aligned, a value being at the u64 after
+    // its key's header
+    (@arm $name:ident, _) => { crate::paste! {
         impl ArmRef for c::[<bch_ $name>] {
             type Ref<'a> = &'a Self;
             type Mut<'a> = &'a mut Self;
@@ -391,20 +489,27 @@ macro_rules! bkey_val_arm {
                     .then(|| unsafe { &mut *b.as_mut_ptr().cast() })
             }
         }
+
+        unsafe impl Floored for c::[<bch_ $name>] {
+            type Min = Self;
+        }
     } };
-    ($name:ident, $field:ident) => { crate::paste! {
+    // One that grew: a View, Floored by #[derive(View)]'s __bch_<name>_min!()
+    (@arm $name:ident, $field:ident) => { crate::paste! {
         impl ArmRef for c::[<bch_ $name>] {
             type Ref<'a> = View<'a, Self>;
             type Mut<'a> = ViewMut<'a, Self>;
 
             fn arm_ref(b: &[u8]) -> Option<View<'_, Self>> {
-                (b.len() >= <[<BkeyI $name:camel>] as TypedBkey>::MIN_VAL_SIZE).then(|| View::new(b))
+                (b.len() >= <c::[<bkey_i_ $name>] as TypedBkey>::MIN_VAL_SIZE).then(|| View::new(b))
             }
 
             fn arm_mut(b: &mut [u8]) -> Option<ViewMut<'_, Self>> {
-                (b.len() >= <[<BkeyI $name:camel>] as TypedBkey>::MIN_VAL_SIZE).then(|| ViewMut::new(b))
+                (b.len() >= <c::[<bkey_i_ $name>] as TypedBkey>::MIN_VAL_SIZE).then(|| ViewMut::new(b))
             }
         }
+
+        c::[<__bch_ $name _min>]!($field);
     } };
 }
 
@@ -417,34 +522,7 @@ macro_rules! bkey_types {
         pub type [<BkeySC $name:camel>]<'a> = BkeySC<'a, c::[<bch_ $name>]>;
         pub type [<BkeyS $name:camel>]<'a> = BkeyS<'a, c::[<bch_ $name>]>;
 
-        impl TypedBkey for c::[<bkey_i_ $name>] {
-            type Val = c::[<bch_ $name>];
-
-            const TYPE: c::bch_bkey_type = c::bch_bkey_type::[<KEY_TYPE_ $name>];
-            const MIN_VAL_SIZE: usize = min_val_size!(c::[<bch_ $name>], $field);
-
-            fn new() -> Self {
-                let mut k = c::bkey::new();
-                k.type_ = $nr;
-                k.set_val_bytes(size_of::<Self::Val>());
-                Self { k, v: Default::default() }
-            }
-
-            fn val_copy_pad(k: BkeySC<'_>) -> Option<Self::Val> {
-                (k.k.type_ == $nr).then(|| unsafe { k.val_copy_pad() })
-            }
-
-            fn from_key(k: BkeySC<'_>) -> Option<Self> {
-                let v = Self::val_copy_pad(k)?;
-                let mut r = Self::default();
-                r.k = *k.k;
-                r.v = v;
-                Some(r)
-            }
-        }
-
-        bkey_val_arm!($name, $field);
-        bkey_floored!($name, $field);
+        bkey_val!($name, $field);
         )*
 
         /// A key, by its type - C's switch on k.k->type: each arm the key as
@@ -514,8 +592,8 @@ macro_rules! bkey_types {
             pub fn typed(&self) -> BkeyITyped<'_> {
                 match self.k.type_ as u32 {
                     $($nr if self.k.holds_whole::<[<BkeyI $name:camel>]>() =>
-                        // SAFETY: as cast()'s
-                        BkeyITyped::$name(unsafe { self.cast() }),)*
+                        // SAFETY: as arm()'s
+                        BkeyITyped::$name(unsafe { &*<[<BkeyI $name:camel>] as TypedBkey>::cast(self) }),)*
                     _ => BkeyITyped::unknown(self),
                 }
             }
@@ -524,8 +602,8 @@ macro_rules! bkey_types {
             pub fn typed_mut(&mut self) -> BkeyITypedMut<'_> {
                 match self.k.type_ as u32 {
                     $($nr if self.k.holds_whole::<[<BkeyI $name:camel>]>() =>
-                        // SAFETY: as cast_mut()'s
-                        BkeyITypedMut::$name(unsafe { self.cast_mut() }),)*
+                        // SAFETY: as arm()'s
+                        BkeyITypedMut::$name(unsafe { &mut *<[<BkeyI $name:camel>] as TypedBkey>::cast_mut(self) }),)*
                     _ => BkeyITypedMut::unknown(self),
                 }
             }
@@ -584,7 +662,7 @@ impl<'a, V: ?Sized + ArmRef> BkeySC<'a, V> {
 
 impl<'a> BkeySC<'a> {
     /// The key as its type's, @K's, if it's that type: bkey_s_c_to_<type>().
-    pub fn arm<K: TypedBkey>(self) -> Option<BkeySC<'a, K::Val>> {
+    pub fn arm<K: TypedBkey + ?Sized>(self) -> Option<BkeySC<'a, K::Val>> {
         self.k.is::<K>().then(|| self.cast())
     }
 
@@ -677,32 +755,16 @@ impl<'a> BkeySC<'a> {
 impl c::bkey_i {
     /// The key as its type's, @K's, if it's that type and its value is all
     /// there: bkey_i_to_<type>().
-    pub fn arm<K: TypedBkey>(&self) -> Option<&BkeyI<K::Val>> {
-        // SAFETY: as cast()'s
-        self.k.holds_whole::<K>().then(|| unsafe { self.cast() })
+    pub fn arm<K: TypedBkey + ?Sized>(&self) -> Option<&BkeyI<K::Val>> {
+        // SAFETY: a K, its value all there; a key's value is at the u64 after
+        // its header, aligned
+        self.k.holds_whole::<K>().then(|| unsafe { &*K::cast(self) })
     }
 
     /// arm(), to edit.
-    pub fn arm_mut<K: TypedBkey>(&mut self) -> Option<&mut BkeyI<K::Val>> {
-        // SAFETY: as cast_mut()'s
-        self.k.holds_whole::<K>().then(|| unsafe { self.cast_mut() })
-    }
-
-    /// The key as one with a @V value.
-    ///
-    /// # Safety
-    /// Its value is a V, all of it there: k.type_ is V's, and its u64s cover
-    /// it. Its value is at the u64 after its header: aligned.
-    unsafe fn cast<V>(&self) -> &BkeyI<V> {
-        unsafe { &*(self as *const Self).cast::<BkeyI<V>>() }
-    }
-
-    /// cast(), to edit.
-    ///
-    /// # Safety
-    /// As cast()'s.
-    unsafe fn cast_mut<V>(&mut self) -> &mut BkeyI<V> {
-        unsafe { &mut *(self as *mut Self).cast::<BkeyI<V>>() }
+    pub fn arm_mut<K: TypedBkey + ?Sized>(&mut self) -> Option<&mut BkeyI<K::Val>> {
+        // SAFETY: as arm()'s
+        self.k.holds_whole::<K>().then(|| unsafe { &mut *K::cast_mut(self) })
     }
 }
 
@@ -815,7 +877,7 @@ impl<'a> BkeyS<'a> {
 
     /// The key as its type's, @K's, to edit, if it's that type:
     /// bkey_s_to_<type>(), as BkeySC::arm().
-    pub fn arm<K: TypedBkey>(&mut self) -> Option<BkeyS<'_, K::Val>> {
+    pub fn arm<K: TypedBkey + ?Sized>(&mut self) -> Option<BkeyS<'_, K::Val>> {
         self.k.is::<K>().then(|| self.reborrow().cast())
     }
 

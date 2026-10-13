@@ -583,12 +583,13 @@ pub struct BkeyTypeInfo {
     pub info: &'static StructInfo,
 }
 
-// From BCH_BKEY_TYPES(): each key type and its val struct's StructInfo.
+// From BCH_BKEY_TYPES(): each key type and its val struct's StructInfo - C's,
+// for one that's a DST.
 macro_rules! bkey_type_info {
     ($(($name:ident, $nr:literal $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
         pub static BKEY_TYPE_INFO: &[BkeyTypeInfo] = &[$(
             BkeyTypeInfo { name: stringify!($name), type_: $nr,
-                           info: <crate::c::[<bch_ $name>] as TypeInfo>::INFO },
+                           info: <crate::btree::bkey::ValC<crate::c::[<bch_ $name>]> as TypeInfo>::INFO },
         )*];
     } };
 }

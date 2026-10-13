@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::alloc::buckets::DiskReservation;
-use crate::btree::bkey::{pos, spos, BkeyICookie, BkeyS, BkeySC, TypedBkey, BKEY_U64S, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, BkeyICookie, BkeyS, BkeySC, SizedBkey, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,

@@ -9,7 +9,7 @@
 //! and a repair that made its own mutable copy from the original key dropped
 //! every repair before it.
 
-use crate::btree::bkey::{BkeySC, BkeySCToText, TypedBkey};
+use crate::btree::bkey::{BkeySC, BkeySCToText, SizedBkey};
 use crate::btree::iter::{BtreeIter, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::errcode::BchError;
@@ -18,7 +18,7 @@ use core::marker::PhantomData;
 use core::mem::size_of;
 
 /// Key @k of type @K, at @iter.
-pub struct CowKey<'i, 'k, 'a, 't, K: TypedBkey> {
+pub struct CowKey<'i, 'k, 'a, 't, K: SizedBkey> {
     iter: &'i BtreeIter<'t>,
     k:    BkeySC<'k>,
     /// The value as read, zero padded - until there's @u.
@@ -27,7 +27,7 @@ pub struct CowKey<'i, 'k, 'a, 't, K: TypedBkey> {
     u:    Option<TransBkey<'a, 't>>,
 }
 
-impl<'i, 'k, 'a, 't, K: TypedBkey> CowKey<'i, 'k, 'a, 't, K> {
+impl<'i, 'k, 'a, 't, K: SizedBkey> CowKey<'i, 'k, 'a, 't, K> {
     /// None if @k isn't of type @K.
     pub fn new(iter: &'i BtreeIter<'t>, k: BkeySC<'k>) -> Option<Self> {
         let v = K::val_copy_pad(k)?;

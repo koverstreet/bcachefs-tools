@@ -4,8 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, CStruct, Plain,
-                    TypeInfo};
+use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, whole, CStruct, Plain, TypeInfo};
 use nestify::nest;
 
 /* DOC_LATEX(extent-checksums)
@@ -395,6 +394,7 @@ pub struct bch_reservation {
     pub pad: [u8; 3],
 }
 
+#[whole(tail = data: [u8])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_inline_data {
