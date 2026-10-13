@@ -258,10 +258,13 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
 ///
 /// `name: uN` is N bits, read and written as N rounded up to an integer -
 /// offset above is a u64; `name: bool` is one bit. A member of any other type -
-/// an enum - gives its width, #[bits(N)], as bitfield-struct has it. Members
-/// are pub, as C's are. ty is C's declared type of the integer members, which
-/// C lays the bitfield out by - the storage type if not given: the generator's,
-/// not passed on.
+/// an enum - gives its width, #[bits(N)], as bitfield-struct has it; a uN or
+/// bool member's #[bits(..)] gives only its options, as #[bits(default = 1)]
+/// does. Members are pub, as C's are, unless written otherwise, and their
+/// forwarders the same - pub(self), for one only its own module may set, has
+/// none. ty is C's declared type of the integer members, which C lays the
+/// bitfield out by - the storage type if not given: the generator's, not
+/// passed on.
 ///
 /// With #[derive(CStruct)], the bitfield is itself the C struct - C's
 /// `struct bch_extent_ptr { __u64 type:1, ...; }` - and C's attributes go on
@@ -348,10 +351,12 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
         let mut fns = String::new();
         for (m, ty, _) in &bf.fields {
             let m = rust_ident(m);
-            if !m.starts_with('_') {
+            let vis = s.vis.iter().find(|(n, _)| *n == m).map_or("pub", |(_, v)| v.as_str());
+            // pub(self): its module's, which has the bitfield itself
+            if !m.starts_with('_') && vis.replace(' ', "") != "pub(self)" {
                 fns.push_str(&format!(
-                    "pub fn {m}(&self) -> {ty} {{ let b = self.$field; b.{m}() }}\n\
-                     pub fn set_{m}(&mut self, v: {ty}) {{ let mut b = self.$field; b.set_{m}(v); self.$field = b; }}\n"));
+                    "{vis} fn {m}(&self) -> {ty} {{ let b = self.$field; b.{m}() }}\n\
+                     {vis} fn set_{m}(&mut self, v: {ty}) {{ let mut b = self.$field; b.set_{m}(v); self.$field = b; }}\n"));
             }
         }
         out.push_str(&format!(
@@ -487,11 +492,14 @@ struct BitfieldStruct {
     c_struct: bool,
     /// #[c_packed]: C's is __packed
     packed:   bool,
+    /// Each member's name and visibility
+    vis:      Vec<(String, String)>,
 }
 
 fn bitfield_struct(item: TokenStream) -> Result<BitfieldStruct, String> {
     let mut s = BitfieldStruct { name: String::new(), item: TokenStream::new(),
-                                 body: TokenStream::new(), c_struct: false, packed: false };
+                                 body: TokenStream::new(), c_struct: false, packed: false,
+                                 vis: Vec::new() };
     let mut toks = item.into_iter().peekable();
     while let Some(t) = toks.next() {
         match t {
@@ -510,7 +518,9 @@ fn bitfield_struct(item: TokenStream) -> Result<BitfieldStruct, String> {
                 s.item.extend([TokenTree::Ident(i)]);
             }
             TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => {
-                let mut body = Group::new(Delimiter::Brace, bitfield_members(g.stream())?);
+                let (members, vis) = bitfield_members(g.stream())?;
+                s.vis = vis;
+                let mut body = Group::new(Delimiter::Brace, members);
                 body.set_span(g.span());
                 s.body.extend([TokenTree::Group(body.clone())]);
                 s.item.extend([TokenTree::Group(body)]);
@@ -555,30 +565,40 @@ fn attr_less_ours(attr: Group, s: &mut BitfieldStruct) -> Option<Group> {
     }
 }
 
-/// A bitfield struct's members, as bitfield-struct has them - see bitfield().
-fn bitfield_members(body: TokenStream) -> Result<TokenStream, String> {
+/// A bitfield struct's members, as bitfield-struct has them - see bitfield() -
+/// and each one's name and visibility, for its forwarders.
+fn bitfield_members(body: TokenStream) -> Result<(TokenStream, Vec<(String, String)>), String> {
     let mut out = TokenStream::new();
+    let mut vis = Vec::new();
     for m in comma_list(body) {
-        out.extend(bitfield_member(&m)?);
+        let (member, name, v) = bitfield_member(&m)?;
+        out.extend(member);
         out.extend([TokenTree::Punct(Punct::new(',', Spacing::Alone))]);
+        vis.push((name, v));
     }
-    Ok(out)
+    Ok((out, vis))
 }
 
 /// One member: `name: uN` and `name: bool` with their #[bits(N)] and Rust
-/// type, at the span of the type they replace, so an error points there; one
-/// with #[bits(..)] as written. pub either way.
-fn bitfield_member(m: &[TokenTree]) -> Result<TokenStream, String> {
+/// type, at the span of the type they replace, so an error points there - a
+/// #[bits(..)] of bitfield-struct's options only, default = .., gets the width
+/// put first; one with #[bits(N, ..)] as written. Its visibility as written,
+/// pub if none. With its name and that visibility.
+fn bitfield_member(m: &[TokenTree]) -> Result<(TokenStream, String, String), String> {
     let mut attrs = 0;
-    let mut has_bits = false;
+    // #[bits(..)]: where it is, and its arguments
+    let mut bits: Option<(usize, TokenStream)> = None;
     while let [TokenTree::Punct(p), TokenTree::Group(g), ..] = &m[attrs..] {
         if p.as_char() != '#' || g.delimiter() != Delimiter::Bracket {
             break;
         }
-        has_bits |= g.stream().into_iter().next().is_some_and(|a| a.to_string() == "bits");
+        if let [TokenTree::Ident(a), TokenTree::Group(args)] = &g.stream().into_iter().collect::<Vec<_>>()[..] {
+            if a.to_string() == "bits" {
+                bits = Some((attrs, args.stream()));
+            }
+        }
         attrs += 2;
     }
-    // pub, pub(..): members are pub, whatever's written
     let mut rest = &m[attrs..];
     if matches!(rest.first(), Some(TokenTree::Ident(v)) if v.to_string() == "pub") {
         rest = &rest[1..];
@@ -586,6 +606,7 @@ fn bitfield_member(m: &[TokenTree]) -> Result<TokenStream, String> {
             rest = &rest[1..];
         }
     }
+    let vis: TokenStream = m[attrs..m.len() - rest.len()].iter().cloned().collect();
     let [TokenTree::Ident(name), TokenTree::Punct(colon), ty @ ..] = rest else {
         return Err(format!("expected a member, `name: type`: `{}`", m.iter().cloned().collect::<TokenStream>()));
     };
@@ -593,24 +614,36 @@ fn bitfield_member(m: &[TokenTree]) -> Result<TokenStream, String> {
         return Err(format!("{name}: expected `name: type`"));
     }
 
-    let mut out: TokenStream = m[..attrs].iter().cloned().collect();
-    let ty: TokenStream = if has_bits {
+    let width_given = bits.as_ref()
+        .is_some_and(|(_, args)| matches!(args.clone().into_iter().next(), Some(TokenTree::Literal(_))));
+    let mut out = TokenStream::new();
+    let ty: TokenStream = if width_given {
+        out.extend(m[..attrs].iter().cloned());
         ty.iter().cloned().collect()
     } else {
         let [TokenTree::Ident(t)] = ty else {
             return Err(format!("{name}: a member without #[bits(N)] is uN or bool"));
         };
-        let (bits, rust_ty) = bilge_width(&t.to_string())
+        let (width, rust_ty) = bilge_width(&t.to_string())
             .ok_or_else(|| format!("{name}: {t}: a member without #[bits(N)] is uN or bool"))?;
-        out.extend(respan(tokens(&format!("#[bits({bits})]")), t.span()));
+        // the other attributes, then #[bits(N)] with its options
+        for (i, a) in m[..attrs].chunks(2).enumerate() {
+            if bits.as_ref().is_none_or(|(at, _)| *at != i * 2) {
+                out.extend(a.iter().cloned());
+            }
+        }
+        let opts = bits.map(|(_, args)| format!(", {args}")).unwrap_or_default();
+        out.extend(respan(tokens(&format!("#[bits({width}{opts})]")), t.span()));
         respan(tokens(&rust_ty), t.span())
     };
-    out.extend(respan(tokens("pub"), name.span()));
+    let vis = if vis.is_empty() { respan(tokens("pub"), name.span()) } else { vis };
+    let vis_text = vis.to_string();
+    out.extend(vis);
     let mut name = name.clone();
     name.set_span(at(name.span()));
-    out.extend([TokenTree::Ident(name), TokenTree::Punct(colon.clone())]);
+    out.extend([TokenTree::Ident(name.clone()), TokenTree::Punct(colon.clone())]);
     out.extend(ty);
-    Ok(out)
+    Ok((out, name.to_string(), vis_text))
 }
 
 /// A bilge member type's width and the Rust type it's read as: bool, and uN
