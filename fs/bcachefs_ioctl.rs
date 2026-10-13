@@ -5,6 +5,7 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::ffi::c_char;
+use crate::btree::bkey::BkeyI;
 use crate::util::vstructs::Ffi;
 use cstruct_macros::{c_const, c_enum, c_ioctl, c_xmacro, counted, CStruct, Plain, TypeInfo};
 use nestify::nest;
@@ -684,7 +685,9 @@ pub struct bch_ioctl_query_accounting {
     pub accounting_u64s: u32, /* input parameter */
     pub accounting_types_mask: u32, /* input parameter */
 
-    pub accounting: [c::bkey_i_accounting; 0],
+    /* C's typed keys: an accounting value's header, sized, its counters after */
+    #[c("struct bkey_i_accounting accounting[]")]
+    pub accounting: [BkeyI<Ffi<c::bch_accounting>>; 0],
 }
 
 c_const! {
@@ -724,7 +727,9 @@ pub struct bch_ioctl_query_accounting_v2 {
     pub accounting_u64s: u32, /* input parameter */
     pub accounting_types_mask: u32, /* input parameter */
 
-    pub accounting: [c::bkey_i_accounting; 0],
+    /* C's typed keys: an accounting value's header, sized, its counters after */
+    #[c("struct bkey_i_accounting accounting[]")]
+    pub accounting: [BkeyI<Ffi<c::bch_accounting>>; 0],
 }
 
 c_const! {
