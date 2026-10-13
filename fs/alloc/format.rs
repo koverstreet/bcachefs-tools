@@ -5,8 +5,9 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le32, Le64};
 use core::ffi::c_ulong;
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, CStruct, Plain, TypeInfo, View};
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, whole, CStruct, Plain, TypeInfo, View};
 
+#[whole(tail = data: [u8])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
@@ -37,6 +38,7 @@ c_enum! {
     }
 }
 
+#[whole(tail = data: [u8])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
@@ -60,6 +62,7 @@ c_xmacro! {
     }
 }
 
+#[whole(tail = data: [u8])]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
@@ -75,7 +78,7 @@ pub struct bch_alloc_v3 {
 }
 
 c_bitmask! {
-    LE32_BITMASK(struct bch_alloc_v3, flags), strip BCH_ALLOC_V3_ {
+    LE32_BITMASK(struct Ffi<bch_alloc_v3>, flags), strip BCH_ALLOC_V3_ {
         BCH_ALLOC_V3_NEED_DISCARD(0, 1),
         BCH_ALLOC_V3_NEED_INC_GEN(1, 2),
     }

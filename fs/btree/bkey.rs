@@ -388,6 +388,9 @@ macro_rules! bkey_val {
     (inline_data, $f:tt)          => { bkey_val!(@family inline_data); };
     (indirect_inline_data, $f:tt) => { bkey_val!(@family indirect_inline_data); };
     (xattr, $f:tt)                => { bkey_val!(@family xattr); };
+    (alloc, $f:tt)                => { bkey_val!(@family alloc); };
+    (alloc_v2, $f:tt)             => { bkey_val!(@family alloc_v2); };
+    (alloc_v3, $f:tt)             => { bkey_val!(@family alloc_v3); };
 
     (@family $name:ident) => { crate::paste! {
         impl BkeyValC for c::[<bch_ $name>] {
