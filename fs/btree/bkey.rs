@@ -9,7 +9,7 @@ use core::fmt;
 use core::str::FromStr;
 #[cfg(feature = "std")]
 use crate::errcode::{bch_errcode, BchError};
-use crate::util::vstructs::{Floored, View, ViewMut};
+use crate::util::vstructs::{ArmRef, Floored, View, ViewMut};
 use core::marker::PhantomData;
 
 use c::bpos as Bpos;
@@ -370,31 +370,42 @@ macro_rules! bkey_floored {
     } };
 }
 
-/// And what a typed key's v() is: all of the value, if every valid one is
-/// whole - `_` - else a View of it.
-macro_rules! bkey_val_ref {
-    ($a:lifetime, $val:ty, _)          => { &$a $val };
-    ($a:lifetime, $val:ty, $f:ident)   => { View<$a, $val> };
-}
+/// And what a typed key's v() is - the value as its type's ArmRef has it,
+/// over its bytes: all of it, if every valid one is whole - `_` - else a
+/// View of it. A key's value is at the u64 after its header: aligned.
+macro_rules! bkey_val_arm {
+    ($name:ident, _) => { crate::paste! {
+        impl ArmRef for c::[<bch_ $name>] {
+            type Ref<'a> = &'a Self;
+            type Mut<'a> = &'a mut Self;
 
-macro_rules! bkey_val_mut {
-    ($a:lifetime, $val:ty, _)          => { &$a mut $val };
-    ($a:lifetime, $val:ty, $f:ident)   => { ViewMut<$a, $val> };
-}
+            fn arm_ref(b: &[u8]) -> Option<&Self> {
+                // SAFETY: all of it, aligned
+                (b.len() >= size_of::<Self>() && b.as_ptr() as usize % align_of::<Self>() == 0)
+                    .then(|| unsafe { &*b.as_ptr().cast() })
+            }
 
-/// And that, from @v: a value validate passed, so at least MIN_VAL_SIZE
-/// long - as C, the accessors don't check it.
-macro_rules! bkey_val_ref_new {
-    // SAFETY: validate checked it's at least MIN_VAL_SIZE, all of it for `_`;
-    // a value is at the u64 after its key's header, so it's aligned
-    ($v:expr, _)        => { unsafe { &*$v.as_ptr().cast() } };
-    ($v:expr, $f:ident) => { View::new($v) };
-}
+            fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {
+                // SAFETY: as arm_ref()'s
+                (b.len() >= size_of::<Self>() && b.as_ptr() as usize % align_of::<Self>() == 0)
+                    .then(|| unsafe { &mut *b.as_mut_ptr().cast() })
+            }
+        }
+    } };
+    ($name:ident, $field:ident) => { crate::paste! {
+        impl ArmRef for c::[<bch_ $name>] {
+            type Ref<'a> = View<'a, Self>;
+            type Mut<'a> = ViewMut<'a, Self>;
 
-macro_rules! bkey_val_mut_new {
-    // SAFETY: as bkey_val_ref_new!()'s
-    ($v:expr, _)        => { unsafe { &mut *$v.as_mut_ptr().cast() } };
-    ($v:expr, $f:ident) => { ViewMut::new($v) };
+            fn arm_ref(b: &[u8]) -> Option<View<'_, Self>> {
+                (b.len() >= <[<BkeyI $name:camel>] as TypedBkey>::MIN_VAL_SIZE).then(|| View::new(b))
+            }
+
+            fn arm_mut(b: &mut [u8]) -> Option<ViewMut<'_, Self>> {
+                (b.len() >= <[<BkeyI $name:camel>] as TypedBkey>::MIN_VAL_SIZE).then(|| ViewMut::new(b))
+            }
+        }
+    } };
 }
 
 /// Everything defined per key type, from BCH_BKEY_TYPES(): (name, KEY_TYPE
@@ -432,27 +443,7 @@ macro_rules! bkey_types {
             }
         }
 
-        impl<'a> BkeySC<'a, c::[<bch_ $name>]> {
-            /// Its value: whole, for a type every valid value of which is -
-            /// else a View of it, as long as the key says.
-            pub fn v(&self) -> bkey_val_ref!('a, c::[<bch_ $name>], $field) {
-                bkey_val_ref_new!(self.val_bytes(), $field)
-            }
-        }
-
-        impl BkeyS<'_, c::[<bch_ $name>]> {
-            /// Its value: as BkeySC's v().
-            pub fn v(&self) -> bkey_val_ref!('_, c::[<bch_ $name>], $field) {
-                bkey_val_ref_new!(self.val_bytes(), $field)
-            }
-
-            /// Its value, to edit: a field a grown type's older value lacks
-            /// is a set() error.
-            pub fn v_mut(&mut self) -> bkey_val_mut!('_, c::[<bch_ $name>], $field) {
-                bkey_val_mut_new!(self.val_bytes_mut(), $field)
-            }
-        }
-
+        bkey_val_arm!($name, $field);
         bkey_floored!($name, $field);
         )*
 
@@ -576,6 +567,18 @@ impl<'a, V: ?Sized> BkeySC<'a, V> {
 impl<V: ?Sized> From<BkeySC<'static, V>> for c::bkey_s_c {
     fn from(k: BkeySC<'static, V>) -> Self {
         c::bkey_s_c { k: k.k as *const c::bkey as *mut c::bkey, v: k.v.cast_mut() }
+    }
+}
+
+impl<'a, V: ?Sized + ArmRef> BkeySC<'a, V> {
+    /// Its value, as its type's ArmRef has it: whole for a type every valid
+    /// value of which is, a View for one that grew - over its bytes, as long
+    /// as k.u64s says. A value validate passed is at least as long as every
+    /// valid one; a shorter one is a bug.
+    pub fn v(&self) -> V::Ref<'a> {
+        V::arm_ref(self.val_bytes())
+            .unwrap_or_else(|| panic!("{}: {} bytes, shorter than validate passes", self.k,
+                                      self.val_bytes().len()))
     }
 }
 
@@ -780,6 +783,23 @@ impl<'a, V: ?Sized> BkeyS<'a, V> {
     /// The key as one with a @W value: typed() and arm(), which check it is.
     fn cast<W: ?Sized>(self) -> BkeyS<'a, W> {
         BkeyS { k: self.k, v: self.v, val: PhantomData }
+    }
+}
+
+impl<V: ?Sized + ArmRef> BkeyS<'_, V> {
+    /// Its value: as BkeySC's v().
+    pub fn v(&self) -> V::Ref<'_> {
+        let k: &c::bkey = self.k;
+        V::arm_ref(self.val_bytes())
+            .unwrap_or_else(|| panic!("{k}: shorter than validate passes"))
+    }
+
+    /// Its value, to edit: a field a grown type's older value lacks is a
+    /// set() error.
+    pub fn v_mut(&mut self) -> V::Mut<'_> {
+        let k = *self.k;
+        V::arm_mut(self.val_bytes_mut())
+            .unwrap_or_else(|| panic!("{k}: shorter than validate passes"))
     }
 }
 
