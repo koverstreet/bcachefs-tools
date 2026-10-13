@@ -58,6 +58,18 @@ impl c::bkey {
         (self.u64s as usize).saturating_sub(BKEY_U64S) * size_of::<u64>()
     }
 
+    /// Whether it's @K's type: the tag. Not whether its value is long enough
+    /// - that's validate's, as in C.
+    pub fn is<K: TypedBkey>(&self) -> bool {
+        self.type_ as u32 == K::TYPE.0
+    }
+
+    /// is::<K>(), with all of K's value there: for a reference to all of it,
+    /// &BkeyI<K::Val> - a grown type's older value is shorter, and valid.
+    pub fn holds_whole<K: TypedBkey>(&self) -> bool {
+        self.is::<K>() && self.val_bytes() >= size_of::<K::Val>()
+    }
+
     /// u64s for a value of @bytes: C's set_bkey_val_bytes().
     pub fn set_val_bytes(&mut self, bytes: usize) {
         let u64s = BKEY_U64S + bytes.div_ceil(size_of::<u64>());
@@ -382,10 +394,11 @@ macro_rules! bkey_val_mut {
     ($a:lifetime, $val:ty, $f:ident)   => { ViewMut<$a, $val> };
 }
 
-/// And that, from @v: a value at least MIN_VAL_SIZE long.
+/// And that, from @v: a value validate passed, so at least MIN_VAL_SIZE
+/// long - as C, the accessors don't check it.
 macro_rules! bkey_val_ref_new {
-    // SAFETY: MIN_VAL_SIZE is all of it, for `_`; a value is at the u64
-    // after its key's header, so it's aligned
+    // SAFETY: validate checked it's at least MIN_VAL_SIZE, all of it for `_`;
+    // a value is at the u64 after its key's header, so it's aligned
     ($v:expr, _)        => { unsafe { &*$v.as_ptr().cast() } };
     ($v:expr, $f:ident) => { View::new($v) };
 }
@@ -473,18 +486,15 @@ macro_rules! bkey_types {
         #[derive(Clone, Copy)]
         pub enum BkeySCTyped<'a> {
             $($name(BkeySC<'a, c::[<bch_ $name>]>),)*
-            /// A type this code doesn't know, or a value shorter than its
-            /// type's ever been - damage, which validate rejects.
+            /// A type this code doesn't know.
             unknown(BkeySC<'a>),
         }
 
         impl<'a> BkeySC<'a> {
             /// The key as its type's: C's switch on k.k->type.
             pub fn typed(self) -> BkeySCTyped<'a> {
-                let len = self.val_bytes().len();
                 match self.k.type_ as u32 {
-                    $($nr if len >= <[<BkeyI $name:camel>] as TypedBkey>::MIN_VAL_SIZE =>
-                        BkeySCTyped::$name(self.cast()),)*
+                    $($nr => BkeySCTyped::$name(self.cast()),)*
                     _ => BkeySCTyped::unknown(self),
                 }
             }
@@ -527,11 +537,9 @@ macro_rules! bkey_types {
         impl BkeyS<'_> {
             /// The key as its type's, to edit: as BkeySC::typed().
             pub fn typed(&mut self) -> BkeySTyped<'_> {
-                let len = self.val_bytes().len();
                 let k = self.reborrow();
                 match k.k.type_ as u32 {
-                    $($nr if len >= <[<BkeyI $name:camel>] as TypedBkey>::MIN_VAL_SIZE =>
-                        BkeySTyped::$name(k.cast()),)*
+                    $($nr => BkeySTyped::$name(k.cast()),)*
                     _ => BkeySTyped::unknown(k),
                 }
             }
@@ -562,7 +570,7 @@ macro_rules! bkey_types {
             /// on k.type.
             pub fn typed(&self) -> BkeyITyped<'_> {
                 match self.k.type_ as u32 {
-                    $($nr if self.k.val_bytes() >= size_of::<c::[<bch_ $name>]>() =>
+                    $($nr if self.k.holds_whole::<[<BkeyI $name:camel>]>() =>
                         // SAFETY: as cast()'s
                         BkeyITyped::$name(unsafe { self.cast() }),)*
                     _ => BkeyITyped::unknown(self),
@@ -572,7 +580,7 @@ macro_rules! bkey_types {
             /// typed(), to edit.
             pub fn typed_mut(&mut self) -> BkeyITypedMut<'_> {
                 match self.k.type_ as u32 {
-                    $($nr if self.k.val_bytes() >= size_of::<c::[<bch_ $name>]>() =>
+                    $($nr if self.k.holds_whole::<[<BkeyI $name:camel>]>() =>
                         // SAFETY: as cast_mut()'s
                         BkeyITypedMut::$name(unsafe { self.cast_mut() }),)*
                     _ => BkeyITypedMut::unknown(self),
@@ -604,11 +612,8 @@ impl<'a, V> BkeySC<'a, V> {
 
 impl<'a> BkeySC<'a> {
     /// The key as its type's, @K's, if it's that type: bkey_s_c_to_<type>().
-    /// None for another type, or a value shorter than its type's ever been -
-    /// damage, which validate rejects.
     pub fn arm<K: TypedBkey>(self) -> Option<BkeySC<'a, K::Val>> {
-        (self.k.type_ as u32 == K::TYPE.0 && self.val_bytes().len() >= K::MIN_VAL_SIZE)
-            .then(|| self.cast())
+        self.k.is::<K>().then(|| self.cast())
     }
 
     /// The key as C's bkey_s_c, for passing to C.
@@ -719,16 +724,14 @@ impl c::bkey_i {
     /// The key as its type's, @K's, if it's that type and its value is all
     /// there: bkey_i_to_<type>().
     pub fn arm<K: TypedBkey>(&self) -> Option<&BkeyI<K::Val>> {
-        (self.k.type_ as u32 == K::TYPE.0 && self.k.val_bytes() >= size_of::<K::Val>())
-            // SAFETY: as cast()'s
-            .then(|| unsafe { self.cast() })
+        // SAFETY: as cast()'s
+        self.k.holds_whole::<K>().then(|| unsafe { self.cast() })
     }
 
     /// arm(), to edit.
     pub fn arm_mut<K: TypedBkey>(&mut self) -> Option<&mut BkeyI<K::Val>> {
-        (self.k.type_ as u32 == K::TYPE.0 && self.k.val_bytes() >= size_of::<K::Val>())
-            // SAFETY: as cast_mut()'s
-            .then(|| unsafe { self.cast_mut() })
+        // SAFETY: as cast_mut()'s
+        self.k.holds_whole::<K>().then(|| unsafe { self.cast_mut() })
     }
 
     /// The key as one with a @V value.
@@ -839,8 +842,7 @@ impl<'a> BkeyS<'a> {
     /// The key as its type's, @K's, to edit, if it's that type:
     /// bkey_s_to_<type>(), as BkeySC::arm().
     pub fn arm<K: TypedBkey>(&mut self) -> Option<BkeyS<'_, K::Val>> {
-        let is_k = self.k.type_ as u32 == K::TYPE.0 && self.val_bytes().len() >= K::MIN_VAL_SIZE;
-        is_k.then(|| self.reborrow().cast())
+        self.k.is::<K>().then(|| self.reborrow().cast())
     }
 
     /// The value's extent entries as bytes, mutably: as
@@ -1031,8 +1033,7 @@ mod tests {
 
     /// A snapshot key from before depth, skip and btime - 24 bytes of its 64 -
     /// views as a snapshot: the fields it has as they are, the rest zero, not
-    /// what's in the buffer past it. Shorter than snapshots have ever been,
-    /// it's not one.
+    /// what's in the buffer past it.
     #[test]
     fn bkey_view_short_value() {
         assert_eq!(BkeyISnapshot::MIN_VAL_SIZE, 24);
@@ -1048,15 +1049,11 @@ mod tests {
         assert_eq!(s.depth().get(), 0);
         assert!(s.whole().is_none());
         assert!(BkeySC::from(k.k_i()).arm::<BkeyISubvolume>().is_none());
-
-        k.k.set_val_bytes(16);
-        assert!(BkeySC::from(k.k_i()).arm::<BkeyISnapshot>().is_none());
     }
 
     /// A key by its type: a grown type's value a View, an older value of it
-    /// read as one; a type that hasn't grown whole, a shorter value of which
-    /// is damage - unknown, not a reference past its end. The inline key is
-    /// its type's only if its value is all there.
+    /// read as one. The inline key is its type's only if its value is all
+    /// there - an older grown one isn't.
     #[test]
     fn bkey_typed_short_values() {
         let mut k = BkeyISubvolume::new();
@@ -1074,14 +1071,11 @@ mod tests {
         assert_eq!(BkeySC::from(g.k_i()).arm::<BkeyIInodeGeneration>().map(|g| g.v().bi_generation.get()),
                    Some(3));
         assert!(matches!(g.k_i().typed(), BkeyITyped::inode_generation(_)));
-        g.k.set_val_bytes(0);
-        assert!(matches!(BkeySC::from(g.k_i()).typed(), BkeySCTyped::unknown(_)));
-        assert!(BkeySC::from(g.k_i()).arm::<BkeyIInodeGeneration>().is_none());
     }
 
     /// A View of a snapshot over fewer bytes than every snapshot has - not
-    /// one from a typed key's v(), which won't make it - panics at a field every one
-    /// has, rather than reading past them.
+    /// one from a typed key's v(), whose key validate passed - panics at a
+    /// field every one has, rather than reading past them.
     #[test]
     #[should_panic(expected = "fewer than every valid one has")]
     fn bkey_view_unfloored() {
