@@ -1,13 +1,28 @@
+//! A key's extent entries - its pointers, and what applies to them - as the
+//! arms they are.
+//!
+//! An entry is as long as its type's arm, its type the lowest set bit of its
+//! first word; how long a type this code doesn't know is, only the
+//! filesystem's table says (sb extent_type_u64s, data/extents_sb.c). So an
+//! entry isn't a type of its own: a walk takes that table from the Fs, steps
+//! by it, and hands each entry out as a reference to its arm - ExtentEntry,
+//! ExtentEntryMut - or, for a type this code doesn't know, as Unknown, its
+//! bytes: a newer version's, which validate passes. Where the walk can't
+//! step - an entry validate rejects, of a type the filesystem doesn't know or
+//! running past the value's end - the rest of the value is the last entry,
+//! Unknown: so printing a damaged key shows the damage.
+
 use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::errcode::BchError;
 use crate::c;
-use crate::c::{BchExtentEntryRef as Entry, ExtentEntryType};
+use crate::c::ExtentEntryType;
 use crate::fs::Fs;
-use crate::types::{ArmOf, Le64};
-use core::mem::{align_of, size_of};
+use crate::types::Le64;
+use crate::util::vstructs::{cast_plain, cast_plain_mut};
+use core::mem::size_of;
 
-macro_rules! extent_entry_u64s {
+macro_rules! extent_entries {
     ($(($name:tt, $nr:literal)),* $(,)?) => { ::paste::paste! {
         /// Size in u64s for each known extent entry type.
         pub fn extent_entry_type_u64s(ty: u32) -> Option<usize> {
@@ -16,120 +31,165 @@ macro_rules! extent_entry_u64s {
                 _ => return None,
             })
         }
+
+        /// An extent entry: its arm.
+        #[allow(non_camel_case_types)]
+        #[derive(Clone, Copy)]
+        pub enum ExtentEntry<'a> {
+            $($name(&'a c::[<bch_extent_ $name>]),)*
+            /// One of a type this code doesn't know.
+            Unknown { ty: u32, bytes: &'a [u8] },
+        }
+
+        /// An extent entry, to edit: its arm. One of a type this code doesn't
+        /// know, it can't edit.
+        #[allow(non_camel_case_types)]
+        pub enum ExtentEntryMut<'a> {
+            $($name(&'a mut c::[<bch_extent_ $name>]),)*
+            Unknown { ty: u32, bytes: &'a [u8] },
+        }
+
+        impl<'a> ExtentEntry<'a> {
+            /// Entry @b, of type @ty: its arm if it's exactly one.
+            fn new(ty: u32, b: &'a [u8]) -> Self {
+                match ty {
+                    $($nr if b.len() == size_of::<c::[<bch_extent_ $name>]>() =>
+                        if let Some(a) = cast_plain(b) { return Self::$name(a) },)*
+                    _ => {}
+                }
+                Self::Unknown { ty, bytes: b }
+            }
+        }
+
+        impl<'a> ExtentEntryMut<'a> {
+            /// ExtentEntry::new(), to edit.
+            fn new(ty: u32, b: &'a mut [u8]) -> Self {
+                match ty {
+                    $($nr if b.len() == size_of::<c::[<bch_extent_ $name>]>() &&
+                             cast_plain::<c::[<bch_extent_ $name>]>(b).is_some() =>
+                        return Self::$name(cast_plain_mut(b).unwrap()),)*
+                    _ => {}
+                }
+                Self::Unknown { ty, bytes: b }
+            }
+        }
     } };
 }
-c::BCH_EXTENT_ENTRY_TYPES!(extent_entry_u64s);
+c::BCH_EXTENT_ENTRY_TYPES!(extent_entries);
 
-/// A key's extent entries, each the arm its type says, bounded by its own
-/// bytes. Stops at a type this code doesn't know, or past the value's end.
-pub struct ExtentEntryIter<'a> {
-    b: &'a [u8],
+/// How long each type of entry a filesystem knows is, in u64s, by type: its
+/// superblock's table, which knows types newer than this code. A copy - set
+/// once the filesystem's up - so a walk borrows only its key.
+#[derive(Clone, Copy)]
+struct EntrySizes {
+    u64s: [u8; 31],
+    nr:   u8,
 }
 
-impl<'a> Iterator for ExtentEntryIter<'a> {
-    type Item = Entry<'a>;
+impl EntrySizes {
+    fn of(fs: &Fs) -> Self {
+        // SAFETY: the filesystem's in-memory superblock info, live as long as it is
+        let sb = unsafe { &(*fs.raw).sb };
+        EntrySizes { u64s: sb.extent_type_u64s, nr: sb.extent_types_known }
+    }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        let ty = ExtentEntryType::of_bytes(self.b)?;
-        let (entry, rest) = self.b.split_at_checked(extent_entry_type_u64s(ty)? * 8)?;
+    /// An entry of type @ty's bytes: None for a type it doesn't know.
+    fn bytes(&self, ty: u32) -> Option<usize> {
+        let u64s = *self.u64s[..usize::from(self.nr).min(self.u64s.len())].get(ty as usize)?;
+        (u64s != 0).then_some(usize::from(u64s) * 8)
+    }
+}
+
+/// The type and length of the entry @b starts with, as @sizes has it - or,
+/// if it can't step there, @b's: None at the end.
+fn entry_len(sizes: &EntrySizes, b: &[u8]) -> Option<(u32, usize)> {
+    if b.is_empty() {
+        return None;
+    }
+    let ty = ExtentEntryType::of_bytes(b).unwrap_or(u32::MAX);
+    let len = sizes.bytes(ty).filter(|len| *len <= b.len()).unwrap_or(b.len());
+    Some((ty, len))
+}
+
+/// A key's extent entries: each one's type, and its bytes, as long as the
+/// filesystem's table says - the last the rest of the value, where it can't
+/// step.
+struct Entries<'a> {
+    sizes: EntrySizes,
+    b:     &'a [u8],
+}
+
+impl<'a> Iterator for Entries<'a> {
+    type Item = (u32, &'a [u8]);
+
+    fn next(&mut self) -> Option<(u32, &'a [u8])> {
+        let (ty, len) = entry_len(&self.sizes, self.b)?;
+        let (e, rest) = self.b.split_at(len);
         self.b = rest;
-        c::bch_extent_entry::arm_at(ty, entry)
+        Some((ty, e))
     }
 }
 
-/// Iterate over all extent entries in a bkey.
-///
-/// Returns an empty iterator for key types that don't have extent entries.
-pub fn bkey_extent_entries_sc(k: BkeySC<'_>) -> ExtentEntryIter<'_> {
-    ExtentEntryIter { b: k.extent_entry_bytes() }
+/// Entries, to edit.
+struct EntriesMut<'a> {
+    sizes: EntrySizes,
+    b:     &'a mut [u8],
 }
 
-/// Iterate over all extent entries in a `bkey_i`.
-pub fn bkey_extent_entries(k: &c::bkey_i) -> ExtentEntryIter<'_> {
-    bkey_extent_entries_sc(k.into())
-}
+impl<'a> Iterator for EntriesMut<'a> {
+    type Item = (u32, &'a mut [u8]);
 
-/// Iterate over extent pointers in a bkey, skipping non-pointer entries.
-pub fn bkey_ptrs_sc(k: BkeySC<'_>) -> impl Iterator<Item = &c::bch_extent_ptr> {
-    bkey_extent_entries_sc(k).filter_map(|e| match e {
-        Entry::ptr(p) => Some(p.head()),
-        _ => None,
-    })
-}
-
-/// Iterate over extent pointers in a `bkey_i`.
-pub fn bkey_ptrs(k: &c::bkey_i) -> impl Iterator<Item = &c::bch_extent_ptr> {
-    bkey_ptrs_sc(k.into())
-}
-
-/// A key's extent entry, mutably: its type, and its bytes.
-pub struct ExtentEntryMut<'a> {
-    ty: u32,
-    b:  &'a mut [u8],
-}
-
-impl<'a> ExtentEntryMut<'a> {
-    /// The entry as arm @A, if that's its type.
-    pub fn into_arm_mut<A: ArmOf<c::bch_extent_entry, Tag = u32>>(self) -> Option<&'a mut A> {
-        let fits = self.b.len() >= size_of::<A>() && self.b.as_ptr() as usize % align_of::<A>() == 0;
-        // SAFETY: the type says these bytes are an A, and an A fits there,
-        // aligned; an arm is plain data. Writing its type field through it
-        // makes them another arm - still plain data, read by type each time.
-        (self.ty == A::TAG && fits).then(|| unsafe { &mut *self.b.as_mut_ptr().cast::<A>() })
-    }
-}
-
-/// A key's extent entries, mutably - each sized by the filesystem's table,
-/// so a type this code doesn't know is stepped over.
-pub struct ExtentEntryIterMut<'a> {
-    fs: &'a Fs,
-    b:  &'a mut [u8],
-}
-
-impl<'a> Iterator for ExtentEntryIterMut<'a> {
-    type Item = ExtentEntryMut<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ty = ExtentEntryType::of_bytes(self.b)?;
-        let bytes = entry_u64s(self.fs, ty) * 8;
-        let (b, rest) = core::mem::take(&mut self.b).split_at_mut_checked(bytes).filter(|_| bytes > 0)?;
+    fn next(&mut self) -> Option<(u32, &'a mut [u8])> {
+        let (ty, len) = entry_len(&self.sizes, self.b)?;
+        let (e, rest) = core::mem::take(&mut self.b).split_at_mut(len);
         self.b = rest;
-        Some(ExtentEntryMut { ty, b })
+        Some((ty, e))
     }
 }
 
-pub(crate) fn bkey_extent_entries_mut<'a>(
-    fs: &'a Fs,
-    k:  &'a mut BkeyS<'_>,
-) -> ExtentEntryIterMut<'a> {
-    ExtentEntryIterMut { fs, b: k.extent_entry_bytes_mut() }
+impl<'a> BkeySC<'a> {
+    fn entries(self, fs: &Fs) -> Entries<'a> {
+        Entries { sizes: EntrySizes::of(fs), b: self.extent_entry_bytes() }
+    }
+
+    /// Its extent entries - none, for a key without.
+    pub fn extent_entries(self, fs: &Fs) -> impl Iterator<Item = ExtentEntry<'a>> {
+        self.entries(fs).map(|(ty, b)| ExtentEntry::new(ty, b))
+    }
+
+    /// Its pointers: as bkey_for_each_ptr().
+    pub fn ptrs(self, fs: &Fs) -> impl Iterator<Item = &'a c::bch_extent_ptr> {
+        self.extent_entries(fs).filter_map(|e| match e {
+            ExtentEntry::ptr(p) => Some(p),
+            _ => None,
+        })
+    }
+
+    /// Its checksum/compression entries, unpacked: as bkey_for_each_crc().
+    pub fn crcs(self, fs: &Fs) -> impl Iterator<Item = c::bch_extent_crc_unpacked> + 'a {
+        self.extent_entries(fs).filter_map(move |e| crc_unpack(self.k, e))
+    }
 }
 
-/// The size in u64s of an entry of type @ty, from this filesystem's table -
-/// which can know types this code doesn't: as extent_entry_u64s().
-fn entry_u64s(fs: &Fs, ty: u32) -> usize {
-    let ty = ty as usize;
-    let sb = unsafe { &(*fs.raw).sb };
-    assert!(ty < sb.extent_types_known as usize,
-            "extent entry type {ty}, of {} known: a validated key has none", sb.extent_types_known);
-    sb.extent_type_u64s[ty] as usize
-}
+impl BkeyS<'_> {
+    /// Its extent entries, to edit: as BkeySC::extent_entries().
+    pub fn extent_entries_mut(&mut self, fs: &Fs) -> impl Iterator<Item = ExtentEntryMut<'_>> {
+        EntriesMut { sizes: EntrySizes::of(fs), b: self.extent_entry_bytes_mut() }
+            .map(|(ty, b)| ExtentEntryMut::new(ty, b))
+    }
 
-pub fn bkey_ptrs_mut<'a>(
-    fs: &'a Fs,
-    k:  &'a mut BkeyS<'_>,
-) -> impl Iterator<Item = &'a mut c::bch_extent_ptr> {
-    bkey_extent_entries_mut(fs, k).filter_map(|e| e.into_arm_mut())
-}
-
-/// The checksum/compression entries of @k, unpacked: as bkey_for_each_crc().
-pub fn bkey_crcs<'a>(k: BkeySC<'a>) -> impl Iterator<Item = c::bch_extent_crc_unpacked> + 'a {
-    bkey_extent_entries_sc(k).filter_map(move |e| crc_unpack(k.k, e))
+    /// Its pointers, to edit.
+    pub fn ptrs_mut(&mut self, fs: &Fs) -> impl Iterator<Item = &mut c::bch_extent_ptr> {
+        self.extent_entries_mut(fs).filter_map(|e| match e {
+            ExtentEntryMut::ptr(p) => Some(p),
+            _ => None,
+        })
+    }
 }
 
 /// @entry, if it's a crc entry of @k, unpacked: the sizes unbiased, the
 /// checksum's bytes where bch_csum has them. As bch2_extent_crc_unpack().
-fn crc_unpack(k: &c::bkey, entry: Entry<'_>) -> Option<c::bch_extent_crc_unpacked> {
+fn crc_unpack(k: &c::bkey, entry: ExtentEntry<'_>) -> Option<c::bch_extent_crc_unpacked> {
     // The packed checksum bytes, at the start of a bch_csum word - C stores
     // them there through a cast, with no byte swap:
     fn csum_word(bytes: &[u8]) -> Le64 {
@@ -153,18 +213,18 @@ fn crc_unpack(k: &c::bkey, entry: Entry<'_>) -> Option<c::bch_extent_crc_unpacke
     };
 
     Some(match entry {
-        Entry::crc32(e) =>
+        ExtentEntry::crc32(e) =>
             unpacked(e.csum_type(), e.compression_type(),
                      e.compressed_size_raw().into(), e.uncompressed_size_raw().into(),
                      e.offset().into(), 0,
                      c::bch_csum { lo: csum_word(&e.csum().to_ne_bytes()), hi: Le64::new(0) }),
-        Entry::crc64(e) =>
+        ExtentEntry::crc64(e) =>
             unpacked(e.csum_type(), e.compression_type(),
                      e.compressed_size_raw(), e.uncompressed_size_raw(),
                      e.offset(), e.nonce(),
                      c::bch_csum { lo: csum_word(&{ e.csum_lo }.to_ne_bytes()),
                                    hi: csum_word(&e.csum_hi().to_ne_bytes()) }),
-        Entry::crc128(e) =>
+        ExtentEntry::crc128(e) =>
             unpacked(e.csum_type(), e.compression_type(),
                      e.compressed_size_raw(), e.uncompressed_size_raw(),
                      e.offset(), e.nonce(), e.csum),
@@ -193,9 +253,9 @@ pub fn bkey_extent_is_allocation(k: &c::bkey) -> bool {
 
 /// Whether @k reserves space rather than holding data - a reservation, or
 /// an extent with unwritten pointers: as bkey_extent_is_reservation().
-pub fn bkey_extent_is_reservation(k: BkeySC<'_>) -> bool {
+pub fn bkey_extent_is_reservation(fs: &Fs, k: BkeySC<'_>) -> bool {
     k.k.type_ as u32 == c::bch_bkey_type::KEY_TYPE_reservation.0 ||
-        bkey_ptrs_sc(k).any(|p| p.unwritten() != 0)
+        k.ptrs(fs).any(|p| p.unwritten() != 0)
 }
 
 /// @k's durability, for reserving space to rewrite it: as
@@ -230,17 +290,30 @@ mod tests {
         unsafe { core::slice::from_raw_parts_mut(words.as_mut_ptr().cast(), words.len() * 8) }
     }
 
-    /// The type of each entry in @words, and where it is, in u64s.
-    fn walk(mut words: std::vec::Vec<u64>) -> std::vec::Vec<(u32, usize)> {
+    /// Our sizes, as a filesystem's table has them for the types we know.
+    fn ours() -> std::vec::Vec<u8> {
+        (0..c::BCH_EXTENT_ENTRY_MAX).map(|ty| extent_entry_type_u64s(ty).unwrap() as u8).collect()
+    }
+
+    /// walk()'s type for an Unknown entry.
+    const UNKNOWN: u32 = u32::MAX;
+
+    /// The type of each entry in @words, and where it is, in u64s: walked by
+    /// @table, as a filesystem's.
+    fn walk(table: &[u8], mut words: std::vec::Vec<u64>) -> std::vec::Vec<(u32, usize)> {
+        let mut sizes = EntrySizes { u64s: [0; 31], nr: table.len() as u8 };
+        sizes.u64s[..table.len()].copy_from_slice(table);
         let start = words.as_ptr() as usize;
         let at = |p: *const u8| (p as usize - start) / 8;
-        ExtentEntryIter { b: bytes(&mut words) }
+        Entries { sizes, b: bytes(&mut words) }
+            .map(|(ty, b)| ExtentEntry::new(ty, b))
             .map(|e| match e {
-                Entry::ptr(a)        => (0, at(a.head() as *const _ as _)),
-                Entry::crc32(a)      => (1, at(a.head() as *const _ as _)),
-                Entry::crc64(a)      => (2, at(a.head() as *const _ as _)),
-                Entry::crc128(a)     => (3, at(a.head() as *const _ as _)),
-                Entry::stripe_ptr(a) => (4, at(a.head() as *const _ as _)),
+                ExtentEntry::ptr(a)        => (0, at(a as *const _ as _)),
+                ExtentEntry::crc32(a)      => (1, at(a as *const _ as _)),
+                ExtentEntry::crc64(a)      => (2, at(a as *const _ as _)),
+                ExtentEntry::crc128(a)     => (3, at(a as *const _ as _)),
+                ExtentEntry::stripe_ptr(a) => (4, at(a as *const _ as _)),
+                ExtentEntry::Unknown { bytes, .. } => (UNKNOWN, at(bytes.as_ptr())),
                 _ => panic!("an entry type the test doesn't use"),
             })
             .collect()
@@ -250,26 +323,30 @@ mod tests {
     fn extent_entries_each_as_long_as_its_arm() {
         // crc32, ptr, ptr, crc64, ptr, stripe_ptr, crc128, and a ptr at the
         // very end - shorter than a bch_extent_entry
-        assert_eq!(walk(vec![word(1, 5), word(0, 6), word(0, 7), word(2, 8), 0, word(0, 9),
-                             word(4, 10), word(3, 11), 0, 0, word(0, 12)]),
+        assert_eq!(walk(&ours(), vec![word(1, 5), word(0, 6), word(0, 7), word(2, 8), 0, word(0, 9),
+                                      word(4, 10), word(3, 11), 0, 0, word(0, 12)]),
                    [(1, 0), (0, 1), (0, 2), (2, 3), (0, 5), (4, 6), (3, 7), (0, 10)]);
 
-        // stopping at a type this code doesn't know, a crc128 two u64s long,
-        // and a type word of zero
-        assert_eq!(walk(vec![word(0, 1), word(20, 0), word(0, 1)]), [(0, 0)]);
-        assert_eq!(walk(vec![word(0, 1), word(3, 0), 0]), [(0, 0)]);
-        assert_eq!(walk(vec![word(0, 1), 0, word(0, 1)]), [(0, 0)]);
+        // where it can't step - a type the filesystem doesn't know, a crc128
+        // two u64s long, a type word of zero - the rest of the value
+        assert_eq!(walk(&ours(), vec![word(0, 1), word(20, 0), word(0, 1)]), [(0, 0), (UNKNOWN, 1)]);
+        assert_eq!(walk(&ours(), vec![word(0, 1), word(3, 0), 0]), [(0, 0), (UNKNOWN, 1)]);
+        assert_eq!(walk(&ours(), vec![word(0, 1), 0, word(0, 1)]), [(0, 0), (UNKNOWN, 1)]);
+
+        // stepping over one only the filesystem knows, by its table's size
+        let mut newer = ours();
+        newer.resize(20, 0);
+        newer.push(1);
+        assert_eq!(walk(&newer, vec![word(0, 1), word(20, 0), word(0, 1)]),
+                   [(0, 0), (UNKNOWN, 1), (0, 2)]);
     }
 
     #[test]
     fn extent_entry_arm_by_type() {
         let mut w = [word(4, 3)];
-        fn e(ty: u32, w: &mut [u64]) -> ExtentEntryMut<'_> {
-            ExtentEntryMut { ty, b: bytes(w) }
-        }
-        assert!(e(4, &mut w).into_arm_mut::<c::bch_extent_ptr>().is_none(), "not its type");
-        assert!(e(4, &mut w).into_arm_mut::<c::bch_extent_stripe_ptr>().is_some());
-        assert!(e(3, &mut w).into_arm_mut::<c::bch_extent_crc128>().is_none(), "doesn't fit");
+        assert!(matches!(ExtentEntryMut::new(4, bytes(&mut w)), ExtentEntryMut::stripe_ptr(_)));
+        assert!(matches!(ExtentEntryMut::new(3, bytes(&mut w)), ExtentEntryMut::Unknown { ty: 3, .. }),
+                "a crc128 doesn't fit in a word");
 
         // from_arm() sets the type field, whatever the arm had
         let e = c::bch_extent_entry::from_arm(c::bch_extent_crc128::default());

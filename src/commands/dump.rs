@@ -9,7 +9,6 @@ use clap::Parser;
 use bcachefs_kernel::btree;
 use bcachefs_kernel::btree::bkey::BkeyS;
 use bcachefs_kernel::c;
-use bcachefs_kernel::data::extents::{bkey_ptrs_mut, bkey_ptrs_sc};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::{entry_type, journal_entry_type};
 use bcachefs_kernel::util::vstructs::{Ffi, SelfSized, Unvalidated};
@@ -188,14 +187,14 @@ const MEMBER_INVALID: u8 = c::BCH_SB_MEMBER_INVALID as u8;
 /// Returns whether it changed anything. The surviving replica is the one the
 /// dump actually wrote, and the only one the read path will consider.
 fn derep(fs: &Fs, mut k: BkeyS) -> bool {
-    let min_dev = bkey_ptrs_mut(fs, &mut k)
+    let min_dev = k.ptrs_mut(fs)
         .map(|p| p.dev())
         .filter(|&d| d != MEMBER_INVALID)
         .min();
     let Some(min_dev) = min_dev else { return false };
 
     let mut modified = false;
-    for p in bkey_ptrs_mut(fs, &mut k) {
+    for p in k.ptrs_mut(fs) {
         if p.dev() != min_dev {
             p.set_dev(MEMBER_INVALID);
             modified = true;
@@ -458,11 +457,11 @@ fn dump_node(fs: &Fs, devs: &mut [DumpDev], k: btree::BkeySC<'_>, btree_node_siz
     if single_replica {
         // Dump only the replica on the lowest device index; the other ptrs are
         // rewritten to an invalid device in the btree write path.
-        if let Some(ptr) = bkey_ptrs_sc(k).filter(exists).min_by_key(|p| p.dev()) {
+        if let Some(ptr) = k.ptrs(fs).filter(exists).min_by_key(|p| p.dev()) {
             range_add(&mut devs[ptr.dev() as usize].btree, ptr.offset() << 9, btree_node_size);
         }
     } else {
-        for ptr in bkey_ptrs_sc(k).filter(exists) {
+        for ptr in k.ptrs(fs).filter(exists) {
             range_add(&mut devs[ptr.dev() as usize].btree, ptr.offset() << 9, btree_node_size);
         }
     }

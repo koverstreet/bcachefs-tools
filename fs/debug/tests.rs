@@ -7,7 +7,7 @@ use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
     CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
-use crate::data::extents::{bkey_extent_entries_mut, bkey_extent_entries_sc, bkey_ptrs_mut};
+use crate::data::extents::{ExtentEntry, ExtentEntryMut};
 use crate::errcode::{
     bch_errcode,
     BchError,
@@ -417,7 +417,7 @@ fn test_btree_ptr_stale_dirty_key(
 
     let mut updated = false;
     let mut update_k = BkeyS::from(update.as_mut());
-    for ptr_entry in bkey_ptrs_mut(t.fs(), &mut update_k) {
+    for ptr_entry in update_k.ptrs_mut(t.fs()) {
         if ptr_entry.cached() == 0 && u64::from(ptr_entry.dev()) != c::BCH_SB_MEMBER_INVALID as u64 {
             // gen is 8 bits: one less, as C's ptr->gen-- - the setter checks
             // that the value fits
@@ -490,16 +490,19 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
                 return Ok(Some(false));
             };
 
-            let striped = bkey_extent_entries_sc(k)
-                .any(|e| matches!(e, c::BchExtentEntryRef::stripe_ptr(_)));
+            let striped = k.extent_entries(t.fs())
+                .any(|e| matches!(e, ExtentEntry::stripe_ptr(_)));
             if !striped {
                 return Ok(None);
             }
 
             let mut u = t.bkey_make_mut_noupdate(k)?;
             let mut u_k = BkeyS::from(u.as_mut());
-            let sp = bkey_extent_entries_mut(t.fs(), &mut u_k)
-                .find_map(|e| e.into_arm_mut::<c::bch_extent_stripe_ptr>());
+            let sp = u_k.extent_entries_mut(t.fs())
+                .find_map(|e| match e {
+                    ExtentEntryMut::stripe_ptr(sp) => Some(sp),
+                    _ => None,
+                });
             if let Some(sp) = sp {
                 sp.set_block(sp.block() + 1);
             }

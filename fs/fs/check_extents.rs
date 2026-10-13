@@ -338,7 +338,7 @@ fn check_overlapping_extents(
 fn check_extent_overbig(fs: &Fs, k: BkeySC<'_>) {
     let max_sectors = fs.opts().encoded_extent_max() >> 9;
 
-    for crc in extents::bkey_crcs(k) {
+    for crc in k.crcs(fs) {
         if extents::crc_is_encoded(&crc) && crc.uncompressed_size > max_sectors {
             bch_err!(fs, "overbig encoded extent, please report this:\n  {}", k.to_text(fs));
         }
@@ -362,7 +362,7 @@ fn check_extent_past_end(
         let last_block = (i.inode.bi_size.div_ceil(block_bytes) * block_bytes) >> 9;
 
         if fsck_err_on!(trans, k.k.p.offset > last_block &&
-                        !extents::bkey_extent_is_reservation(k),
+                        !extents::bkey_extent_is_reservation(fs, k),
                         id::extent_past_end_of_inode,
                         "extent type past end of inode {}:{}, i_size {}\n{}",
                         i.inode.bi_inum, i.inode.bi_snapshot, i.inode.bi_size,

@@ -48,7 +48,6 @@ use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::BkeySC;
 use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter};
-use bcachefs_kernel::data::extents::bkey_ptrs;
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::util::vstructs::{Ffi, SelfSized, Unvalidated};
 use clap::Parser;
@@ -242,7 +241,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
             found = true;
             let k = BkeySC::from(&b.key);
 
-            for ptr in bkey_ptrs(&b.key) {
+            for ptr in k.ptrs(&fs) {
                 let dev = ptr.dev() as u32;
                 if dev_idx >= 0 && dev as i32 != dev_idx {
                     continue;
