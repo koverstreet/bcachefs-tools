@@ -422,11 +422,19 @@ fn state_methods(name: &str, ffi: &str, st: &str) -> String {
 /// grown.
 fn own_count_family(name: &str, shape: &Shape) -> String {
     let state = |st: &str, what: &str| -> String {
-        dst(&format!("{name}__{}", st.to_lowercase()),
+        let ty = format!("{name}__{}", st.to_lowercase());
+        dst(&ty,
             &format!("/// {name}<{st}>: {what}. C's fields - those that hold a count\n\
                       /// private - then its tail, as long as its count says. It derefs\n\
                       /// to C's struct {name}, Ffi<{name}>, to read.\n"),
             shape, &state_methods(name, shape.ffi, st))
+            + &format!(
+                "// a sized tagged union's arm: as many bytes as its count says\n\
+                 impl {VS}::ArmAt for {ty} {{\n\
+                     fn arm_at(b: &[u8]) -> Result<&Self, {VS}::VStructError> {{\n\
+                         {VS}::from_bytes::<Self>(b)\n\
+                     }}\n\
+                 }}\n")
     };
     format!(
         "{}{}{}",

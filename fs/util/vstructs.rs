@@ -1247,6 +1247,15 @@ pub trait ArmRef {
     fn arm_mut(b: &mut [u8]) -> Option<Self::Mut<'_>>;
 }
 
+/// An arm of a sized tagged union, from the storage's bytes past the tag:
+/// the storage doesn't say how long the arm is, as an unsized one's header
+/// does, so it's as long as the arm says - a plain one its size, a
+/// #[counted] one as many as its count says. An error if the bytes don't
+/// hold that many.
+pub trait ArmAt: ArmRef {
+    fn arm_at(b: &[u8]) -> Result<Self::Ref<'_>, VStructError>;
+}
+
 /// A type whose values may be shorter than it, but never shorter than Min:
 /// the fields every valid one has. A View of it derefs to them, so they're
 /// fields - v.subvol - and only the later ones are projected, reading as
