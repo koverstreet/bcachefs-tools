@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::cstructs::c;
 use cstruct_macros::{bitfield, c_const, c_enum, c_xmacro, CStruct};
 
 /*
@@ -54,7 +55,8 @@ use cstruct_macros::{bitfield, c_const, c_enum, c_xmacro, CStruct};
 #[bitfield(u64)]
 #[derive(CStruct)]
 pub struct bch_extent_rebalance_v1 {
-    type_:                             u6,
+    #[bits(default = 1 << c::bch_extent_entry_type::BCH_EXTENT_ENTRY_rebalance_v1.0)]
+    pub(self) type_:                   u6,
     unused:                            u3,
 
     promote_target_from_inode:         u1,
@@ -75,7 +77,8 @@ pub struct bch_extent_rebalance_v1 {
 #[bitfield(u64)]
 #[derive(CStruct)]
 pub struct bch_extent_reconcile {
-    type_:                             u8,
+    #[bits(default = 1 << c::bch_extent_entry_type::BCH_EXTENT_ENTRY_reconcile.0)]
+    pub(self) type_:                   u8,
     unused:                            u2,
     ptrs_moving:                       u5,
     hipri:                             u1,
@@ -100,7 +103,8 @@ pub struct bch_extent_reconcile {
 #[bitfield(u64)]
 #[derive(CStruct)]
 pub struct bch_extent_reconcile_bp {
-    type_: u9,
+    #[bits(default = 1 << c::bch_extent_entry_type::BCH_EXTENT_ENTRY_reconcile_bp.0)]
+    pub(self) type_: u9,
     idx:   u55,
 }
 

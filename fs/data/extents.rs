@@ -77,7 +77,7 @@ macro_rules! extent_entries {
 c::BCH_EXTENT_ENTRY_TYPES!(extent_entries);
 
 /// The type of the entry @b starts with: the lowest set bit of its first
-/// word, which each arm's own type field sets - u32::MAX if that's 0.
+/// word, the arm's type_, which its Default sets - u32::MAX if that's 0.
 fn entry_type(b: &[u8]) -> Option<u32> {
     let w = u64::from_ne_bytes(b.get(..8)?.try_into().ok()?);
     Some(if w != 0 { w.trailing_zeros() } else { u32::MAX })
