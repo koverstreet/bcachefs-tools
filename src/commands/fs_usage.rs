@@ -184,7 +184,7 @@ fn fs_usage_v1_to_text(
                 write!(sub, "writable now");
             }
 
-            write!(sub, "\n");
+            writeln!(sub);
         }
     });
 
@@ -254,9 +254,7 @@ fn fs_usage_v1_to_text(
                         sub.units_sectors(sectors_uncompressed);
                         write!(sub, "\r");
 
-                        let avg = if nr_extents > 0 {
-                            (sectors_uncompressed << 9) / nr_extents
-                        } else { 0 };
+                        let avg = (sectors_uncompressed << 9).checked_div(nr_extents).unwrap_or(0);
                         sub.units_u64(avg);
                         write!(sub, "\r\n");
                     }
@@ -496,7 +494,7 @@ fn replicas_summary_to_text(
 
                 let dev_list = match r.tail() {
                     Ok(d) => d,
-                    Err(e) => { write!(out, "{e}\n"); continue; }
+                    Err(e) => { writeln!(out, "{e}"); continue; }
                 };
                 let (nr_devs, nr_required) = (r.nr_devs, r.nr_required);
                 let d = replicas_durability(nr_devs, nr_required, dev_list, devs);
@@ -639,9 +637,7 @@ fn devs_usage_to_text(
                 write!(sub, "\r");
                 sub.units_sectors(used);
 
-                let pct = if usage.nr_buckets > 0 {
-                    usage.used_buckets() * 100 / usage.nr_buckets
-                } else { 0 };
+                let pct = (usage.used_buckets() * 100).checked_div(usage.nr_buckets).unwrap_or(0);
                 write!(sub, "\r{:>2}%\r", pct);
 
                 if d.leaving > 0 {
@@ -667,7 +663,7 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
     };
 
     let state = bcachefs_kernel::sb::members::member_state_str(u.state);
-    let pct = if u.nr_buckets > 0 { u.used_buckets() * 100 / u.nr_buckets } else { 0 };
+    let pct = (u.used_buckets() * 100).checked_div(u.nr_buckets).unwrap_or(0);
 
     out.aligned(|sub| {
         writeln!(sub, "{} (device {}):\t{}\t{}\t{:>2}%", label, d.info.idx, d.info.dev, state, pct);

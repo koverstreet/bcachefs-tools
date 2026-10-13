@@ -161,7 +161,7 @@ fn first_bset(node: &[u8]) -> BsetLoc {
     BsetLoc {
         at:     std::mem::offset_of!(Ffi<c::btree_node>, keys),
         sector: 0,
-        u64s:   n.keys.u64s() as usize,
+        u64s:   n.keys.u64s(),
     }
 }
 
@@ -179,7 +179,7 @@ fn first_bset_with_keys(node: &[u8], written_sectors: usize, block_bits: u32) ->
         };
 
         if u64s != 0 {
-            return Some(BsetLoc { at: bset_at, sector: off / 512, u64s: u64s as usize });
+            return Some(BsetLoc { at: bset_at, sector: off / 512, u64s });
         }
 
         /* empty bset: skip past it and try the next */
@@ -257,7 +257,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
 
                 let fd = unsafe { (*ca.disk_sb.bdev).bd_fd };
                 let file = crate::wrappers::super_io::borrowed_file(fd);
-                let offset = (ptr.offset() as u64) << 9;
+                let offset = ptr.offset() << 9;
 
                 let damage = || -> Result<()> {
                     match cli.error {

@@ -54,7 +54,7 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_btree_formats(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = bcachefs_kernel::btree_trans!(fs);
-    for level in opt.level..(c::BTREE_MAX_DEPTH as u32) {
+    for level in opt.level..c::BTREE_MAX_DEPTH {
         let mut iter = BtreeNodeIter::new(
             &trans,
             opt.btree,
@@ -79,7 +79,7 @@ fn list_btree_formats(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = bcachefs_kernel::btree_trans!(fs);
-    for level in opt.level..(c::BTREE_MAX_DEPTH as u32) {
+    for level in opt.level..c::BTREE_MAX_DEPTH {
         let mut iter = BtreeNodeIter::new(
             &trans,
             opt.btree,
@@ -104,7 +104,7 @@ fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = bcachefs_kernel::btree_trans!(fs);
-    for level in opt.level..(c::BTREE_MAX_DEPTH as u32) {
+    for level in opt.level..c::BTREE_MAX_DEPTH {
         let mut iter = BtreeNodeIter::new(
             &trans,
             opt.btree,

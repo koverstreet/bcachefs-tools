@@ -923,6 +923,8 @@ fn cmd_snapshot(read_only: bool, source: Option<PathBuf>, dest: PathBuf) -> Resu
     Ok(())
 }
 
+// List's flags, as the dispatch destructures every subcommand's
+#[allow(clippy::too_many_arguments)]
 fn cmd_list(json: bool, tree: bool, recursive: bool, snapshots: bool,
             readonly: bool, sort: Option<SortBy>, target: PathBuf,
             skipped: &mut Skipped) -> Result<()> {

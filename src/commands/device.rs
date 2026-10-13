@@ -26,7 +26,7 @@ use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs::{self, bcachefs_kernel_version};
 
 fn device_add_opt_flags() -> u32 {
-    c::opt_flags::OPT_FORMAT.bits() as u32 | c::opt_flags::OPT_DEVICE.bits() as u32
+    c::opt_flags::OPT_FORMAT.bits() | c::opt_flags::OPT_DEVICE.bits()
 }
 
 fn device_add_cmd() -> Command {
@@ -289,10 +289,10 @@ enum MemberState {
 impl MemberState {
     fn as_u32(self) -> u32 {
         match self {
-            MemberState::Rw         => c::bch_member_state::BCH_MEMBER_STATE_rw.0 as u32,
-            MemberState::Ro         => c::bch_member_state::BCH_MEMBER_STATE_ro.0 as u32,
-            MemberState::Evacuating => c::bch_member_state::BCH_MEMBER_STATE_evacuating.0 as u32,
-            MemberState::Spare      => c::bch_member_state::BCH_MEMBER_STATE_spare.0 as u32,
+            MemberState::Rw         => c::bch_member_state::BCH_MEMBER_STATE_rw.0,
+            MemberState::Ro         => c::bch_member_state::BCH_MEMBER_STATE_ro.0,
+            MemberState::Evacuating => c::bch_member_state::BCH_MEMBER_STATE_evacuating.0,
+            MemberState::Spare      => c::bch_member_state::BCH_MEMBER_STATE_spare.0,
         }
     }
 }
@@ -567,12 +567,12 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
 
     if usage.state == c::bch_member_state::BCH_MEMBER_STATE_rw.0 as u8 {
         println!("Setting {} readonly", cli.device);
-        handle.disk_set_state(dev_idx, c::bch_member_state::BCH_MEMBER_STATE_ro.0 as u32, BCH_FORCE_IF_DEGRADED)
+        handle.disk_set_state(dev_idx, c::bch_member_state::BCH_MEMBER_STATE_ro.0, BCH_FORCE_IF_DEGRADED)
             .context("setting device readonly")?;
     }
 
     println!("Setting {} evacuating", cli.device);
-    handle.disk_set_state(dev_idx, c::bch_member_state::BCH_MEMBER_STATE_evacuating.0 as u32, BCH_FORCE_IF_DEGRADED)
+    handle.disk_set_state(dev_idx, c::bch_member_state::BCH_MEMBER_STATE_evacuating.0, BCH_FORCE_IF_DEGRADED)
         .context("setting device evacuating")?;
 
     // Trigger reconcile wakeup so it starts processing the evacuation

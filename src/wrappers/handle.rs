@@ -58,7 +58,7 @@ struct FsSysfsPath {
 }
 
 const _: () = assert!(
-    mem::size_of::<FsSysfsPath>() == bch_bindgen::c::BCH_SIZEOF_FS_SYSFS_PATH as usize,
+    mem::size_of::<FsSysfsPath>() == bch_bindgen::c::BCH_SIZEOF_FS_SYSFS_PATH,
     "FsSysfsPath must match struct fs_sysfs_path - FS_IOC_GETFSSYSFSPATH encodes its size",
 );
 

@@ -70,11 +70,7 @@ struct ScrubDev {
 
 impl ScrubDev {
     fn format_line(&self, rate: u64) -> String {
-        let pct = if self.total > 0 {
-            format!("{}%", self.done * 100 / self.total)
-        } else {
-            "0%".to_string()
-        };
+        let pct = format!("{}%", (self.done * 100).checked_div(self.total).unwrap_or(0));
 
         let status = if self.progress_fd.is_some() {
             format!("{}/sec", fmt_bytes_human(rate))

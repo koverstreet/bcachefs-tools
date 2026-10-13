@@ -174,7 +174,7 @@ fn cmdline_param<'a>(cmdline: &'a str, key: &str) -> Option<&'a str> {
         .filter_map(|w| w.split_once('='))
         .filter(|(k, _)| *k == key)
         .map(|(_, v)| v)
-        .last()
+        .next_back()
 }
 
 /// systemd's own test, from in_initrd() in src/basic/initrd-util.c. Every

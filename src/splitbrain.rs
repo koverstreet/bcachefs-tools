@@ -245,6 +245,22 @@ const CHOICES: &[Choice<bool>] = &[
              blurb: "don't mount", answer: false },
 ];
 
+/// What to call the side that is not diverging.
+///
+/// "The rest of the filesystem" reads fine when nine devices agree and one does
+/// not. With two devices there is no rest - there are two halves, and which one
+/// counts as "the filesystem" is the arbitrary newest-wins pick that
+/// [`authoritative`] exists to warn about. Naming the device instead of
+/// implying a verdict keeps the prose as neutral as the code.
+fn other_side(sbs: &[(PathBuf, bch_sb_handle)], divergent: &[Divergent]) -> String {
+    let surviving = sbs.len() - divergent.len();
+
+    match (surviving, authoritative(sbs)) {
+        (1, Some(i)) => name(&sbs[i].0),
+        _ => "the rest of the filesystem".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,21 +281,5 @@ mod tests {
         for no in ["", " ", "n", "N", "no", "y", "Y", "yes", "f", "very", "cc", "x"] {
             assert!(!parse(no), "{no:?} must not continue");
         }
-    }
-}
-
-/// What to call the side that is not diverging.
-///
-/// "The rest of the filesystem" reads fine when nine devices agree and one does
-/// not. With two devices there is no rest - there are two halves, and which one
-/// counts as "the filesystem" is the arbitrary newest-wins pick that
-/// [`authoritative`] exists to warn about. Naming the device instead of
-/// implying a verdict keeps the prose as neutral as the code.
-fn other_side(sbs: &[(PathBuf, bch_sb_handle)], divergent: &[Divergent]) -> String {
-    let surviving = sbs.len() - divergent.len();
-
-    match (surviving, authoritative(sbs)) {
-        (1, Some(i)) => name(&sbs[i].0),
-        _ => "the rest of the filesystem".to_string(),
     }
 }

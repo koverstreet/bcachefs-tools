@@ -321,8 +321,8 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
         }
 
         buf.human_readable_u64(sectors_uncompressed << 9);
-        if sectors_uncompressed > 0 {
-            write!(&mut buf, "\r{}%\r\n", sectors_compressed * 100 / sectors_uncompressed);
+        if let Some(pct) = (sectors_compressed * 100).checked_div(sectors_uncompressed) {
+            write!(&mut buf, "\r{pct}%\r\n");
         } else {
             write!(&mut buf, "\r\n");
         }
@@ -703,11 +703,11 @@ fn image_update_inner(
 
 fn image_create_usage() {
     let fs_opts = opts_usage_str(
-        c::opt_flags::OPT_FORMAT.bits() as u32 | c::opt_flags::OPT_FS.bits() as u32,
-        c::opt_flags::OPT_DEVICE.bits() as u32,
+        c::opt_flags::OPT_FORMAT.bits() | c::opt_flags::OPT_FS.bits(),
+        c::opt_flags::OPT_DEVICE.bits(),
     );
     let dev_opts = opts_usage_str(
-        c::opt_flags::OPT_DEVICE.bits() as u32,
+        c::opt_flags::OPT_DEVICE.bits(),
         0,
     );
 
@@ -745,9 +745,9 @@ Report bugs to <linux-bcachefs@vger.kernel.org>
 }
 
 fn cmd_image_create(argv: Vec<String>) -> Result<()> {
-    let opt_flags = c::opt_flags::OPT_FORMAT.bits() as u32
-        | c::opt_flags::OPT_FS.bits() as u32
-        | c::opt_flags::OPT_DEVICE.bits() as u32;
+    let opt_flags = c::opt_flags::OPT_FORMAT.bits()
+        | c::opt_flags::OPT_FS.bits()
+        | c::opt_flags::OPT_DEVICE.bits();
 
     let mut source: Option<String> = None;
     let mut keep_alloc = false;
@@ -790,7 +790,7 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
             let name = raw_name.replace('-', "_");
 
             if let Some((opt_id, opt, negated)) = bch_opt_lookup_negated(&name) {
-                if opt.flags.bits() as u32 & opt_flags != 0 {
+                if opt.flags.bits() & opt_flags != 0 {
                     let val_str = if negated {
                         "0".to_string()
                     } else if let Some(v) = inline_val {
@@ -804,9 +804,9 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                     match parse_opt_val(opt, &val_str)? {
                         None => deferred_opts.push((opt_id, val_str)),
                         Some(v) => {
-                            if opt.flags.bits() as u32 & c::opt_flags::OPT_DEVICE.bits() as u32 != 0 {
+                            if opt.flags.bits() & c::opt_flags::OPT_DEVICE.bits() != 0 {
                                 bcachefs_kernel::opts::opt_set_by_id(&mut dev_opts, opt_id, v);
-                            } else if opt.flags.bits() as u32 & c::opt_flags::OPT_FS.bits() as u32 != 0 {
+                            } else if opt.flags.bits() & c::opt_flags::OPT_FS.bits() != 0 {
                                 bcachefs_kernel::opts::opt_set_by_id(&mut fs_opts, opt_id, v);
                             }
                         }

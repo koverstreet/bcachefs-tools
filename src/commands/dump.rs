@@ -166,6 +166,7 @@ fn cmd_undump(cli: UndumpCli) -> Result<()> {
 ///  - inline_data:          data at offset 0 — zero all
 ///  - indirect_inline_data: refcount(8), data — zero data
 ///  - dirent:               d_inum(8), d_type(1), d_name — fill with 'X'
+///
 /// What the write path should do to each buffer before dumping it.
 #[derive(Clone, Copy)]
 struct SanitizeOpts {
@@ -244,7 +245,7 @@ fn sanitize_val(fs: &Fs, mut k: BkeyS, opts: SanitizeOpts) -> bool {
 fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
     let fs = unsafe { Fs::borrow_raw(fs_raw) };
     let jset_magic = fs.disk_sb().sb().jset_magic();
-    let block_bits = fs.block_bits() as u32;
+    let block_bits = fs.block_bits();
 
     let mut pos = 0;
     while let Some(j) = c::jset::<Unvalidated>::from_bytes_mut(&mut buf[pos..]).ok()
@@ -299,7 +300,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
 fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
     let fs = unsafe { Fs::borrow_raw(fs_raw) };
     let bset_magic = fs.disk_sb().sb().bset_magic();
-    let block_bits = fs.block_bits() as u32;
+    let block_bits = fs.block_bits();
 
     // The node's packed-key format lives in the btree_node header at the start
     // of the buffer; packed keys are unpacked against it.
@@ -621,7 +622,7 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
     for id in 0..fs.btree_id_nr_alive() {
         let trans = bcachefs_kernel::btree_trans!(fs);
 
-        for level in 0..(c::BTREE_MAX_DEPTH as u32) {
+        for level in 0..c::BTREE_MAX_DEPTH {
             let mut node_iter = btree::BtreeNodeIter::new(
                 &trans,
                 id,

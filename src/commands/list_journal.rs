@@ -180,7 +180,7 @@ fn transaction_matches_transaction_filter(
     // Check negative ranges first - must NOT match any
     if has_negative {
         for (sign, range) in &f.ranges {
-            if *sign < 0 && entries.iter().skip(1).any(|e| entry_matches_range(*e, range)) {
+            if *sign < 0 && entries.iter().skip(1).any(|e| entry_matches_range(e, range)) {
                 return false;
             }
         }
@@ -189,7 +189,7 @@ fn transaction_matches_transaction_filter(
     // Check positive ranges - must match at least one (if any exist)
     if has_positive {
         for (sign, range) in &f.ranges {
-            if *sign >= 0 && entries.iter().skip(1).any(|e| entry_matches_range(*e, range)) {
+            if *sign >= 0 && entries.iter().skip(1).any(|e| entry_matches_range(e, range)) {
                 return true;
             }
         }
@@ -215,7 +215,7 @@ fn entry_is_log_only(entries: &[&c::jset_entry]) -> bool {
 }
 
 fn entry_has_log(entries: &[&c::jset_entry]) -> bool {
-    entries.iter().skip(1).any(|e| entry_is_log_msg(*e))
+    entries.iter().skip(1).any(|e| entry_is_log_msg(e))
 }
 
 fn should_print_transaction(
@@ -854,7 +854,7 @@ pub(crate) fn list_journal_run(
             continue;
         }
 
-        journal_replay_print(c_fs, &f, &p, p.jset());
+        journal_replay_print(c_fs, f, &p, p.jset());
     }
 
     Ok(())

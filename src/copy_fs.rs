@@ -172,7 +172,7 @@ fn unlink_and_rm(
         },
     )?;
 
-    if child.bi_flags & (c::bch_inode_flags::BCH_INODE_unlinked.bits() as u32) == 0 {
+    if child.bi_flags & c::bch_inode_flags::BCH_INODE_unlinked.bits() == 0 {
         return Ok(());
     }
 
@@ -302,6 +302,9 @@ fn xattr_resolve_name(name: &[u8]) -> Option<(i32, &[u8])> {
     }
 }
 
+// st_*time is a time_t: 32 bits on some targets - where a timespec may also
+// have padding fields, which the struct update zeroes
+#[allow(clippy::unnecessary_cast, clippy::needless_update)]
 fn copy_times(fs: &Fs, dst: &mut c::bch_inode_unpacked, src: &rustix::fs::Stat) {
     let to_bch_time = |sec: i64, nsec: i64| {
         let ts = c::timespec64 {
@@ -944,7 +947,11 @@ fn copy_dir(
             continue;
         }
 
-        if s.migrate_type == MigrateType::Migrate && d.stat.st_ino as u64 == s.bcachefs_inum {
+        // an ino_t: 32 bits on some targets
+        #[allow(clippy::unnecessary_cast)]
+        let src_ino = d.stat.st_ino as u64;
+
+        if s.migrate_type == MigrateType::Migrate && src_ino == s.bcachefs_inum {
             continue;
         }
 
@@ -963,7 +970,6 @@ fn copy_dir(
 
         // Hardlink handling
         if (d.stat.st_mode & libc::S_IFMT) == libc::S_IFREG && d.stat.st_nlink > 1 {
-            let src_ino = d.stat.st_ino as u64;
             if let Some(&dst_ino) = s.hardlinks.get(&src_ino) {
                 create_or_update_link(
                     fs, dir_inum, dst, &d.name,
@@ -983,7 +989,7 @@ fn copy_dir(
 
         // Record hardlink destination
         if (d.stat.st_mode & libc::S_IFMT) == libc::S_IFREG && d.stat.st_nlink > 1 {
-            s.hardlinks.insert(d.stat.st_ino as u64, inode.bi_inum);
+            s.hardlinks.insert(src_ino, inode.bi_inum);
         }
 
         let name_cstr = &d.name;
