@@ -556,6 +556,21 @@ mod tests {
         assert!(f.arm::<c::bch_sb_field_crypt>().is_none());
     }
 
+    /// A clean section is its header, then journal entries to its end - each
+    /// as long as it says.
+    #[test]
+    fn sb_field_clean_entries() {
+        let mut buf = [0u64; 6];
+        buf[2] = 42;                            // journal_seq
+        buf[3] = 1 | 7 << 32;                   // an entry: u64s 1, type 7
+        let f = field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_clean, 6);
+
+        let Ok(c::BchSbFieldRef::clean(clean)) = f.typed() else { panic!("a clean section") };
+        assert_eq!((clean.journal_seq.get(), clean.as_bytes().len()), (42, 48));
+        let es: Vec<_> = clean.entries().map(|e| (e.u64s(), e.type_)).collect();
+        assert_eq!(es, [(1, 7), (0, 0)]);
+    }
+
     /// A whole ext section is all of it, every field a field; one shorter
     /// than every valid one isn't one at all.
     #[test]

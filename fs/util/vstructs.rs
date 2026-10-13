@@ -51,9 +51,9 @@
 //!    extent_type_u64s.
 //!  - VStruct: SelfSized by a count of u64s, vstructs.h's - 8 byte aligned.
 //!    vstruct!().
-//!  - VStructContainer: a VStruct of entries, one after another from its
-//!    start[]: vstruct_for_each(). vstruct_container!().
 //!  - Unsized: an unsized vstruct, its reference fat.
+//!  - A container: an unsized vstruct of entries, one after another from its
+//!    start[]: vstruct_for_each(), vstruct_container!()'s entries().
 //!
 //! vstructs.h, and where it goes:
 //!  - vstruct_bytes(), replicas_entry_bytes(): SelfSized::bytes()
@@ -202,17 +202,6 @@ macro_rules! count_le {
 }
 count_le!(Le16, Le32, Le64);
 
-/// A sized vstruct of entries - a superblock section of them, clean's - one
-/// after another from its start[] to its end, each as long as it says:
-/// walked from a View of its bytes, which a &Self doesn't reach,
-/// View::entries(). An unsized container's are vstruct_container!(unsized
-/// ..)'s, on the container.
-pub trait VStructContainer: VStruct {
-    type Entry: ?Sized;
-    /// offsetof(start)
-    const START: usize;
-}
-
 /// floored_by_self!(T, ..): each T is whole in every valid value of it - a
 /// header, whose count includes itself - so a View of one derefs to all of
 /// it: a container's, or an entry's.
@@ -312,15 +301,13 @@ macro_rules! vstruct {
 }
 pub(crate) use vstruct;
 
-/// vstruct_container!(T, E): vstruct T's entries are Es, from its start[].
-///
-/// vstruct_container!(unsized T, E), for an unsized vstruct and its unsized
-/// entries: T's entries() are E's in T's state - a Validated one's trusted,
-/// as C trusts them; an Unvalidated one's each checked against what's left,
-/// an error ending the walk. With `thin E`, entries that aren't unsized -
-/// keys - as a View, or an UnvalidatedRef(Mut), of their own bytes.
+/// vstruct_container!(T, E): unsized vstruct T's entries are unsized Es,
+/// from its start[]. T's entries() are E's in T's state - a Validated one's
+/// trusted, as C trusts them; an Unvalidated one's each checked against
+/// what's left, an error ending the walk. With `thin E`, entries that aren't
+/// unsized - keys - as a View, or an UnvalidatedRef(Mut), of their own bytes.
 macro_rules! vstruct_container {
-    (unsized $t:ident, $entry:ident) => { $crate::paste! {
+    ($t:ident, $entry:ident) => { $crate::paste! {
         impl [<$t __validated>] {
             pub fn entries(&self)
                 -> $crate::util::vstructs::ValidatedEntries<'_, $entry<$crate::util::vstructs::Validated>>
@@ -345,7 +332,7 @@ macro_rules! vstruct_container {
 
         $crate::util::vstructs::vstruct_container!(@start $t);
     } };
-    (unsized $t:ident, thin $entry:ty) => { $crate::paste! {
+    ($t:ident, thin $entry:ty) => { $crate::paste! {
         impl [<$t __validated>] {
             pub fn entries(&self) -> $crate::util::vstructs::ViewEntries<'_, $entry> {
                 $crate::util::vstructs::ViewEntries::new(self.start_bytes())
@@ -381,12 +368,6 @@ macro_rules! vstruct_container {
             fn start_bytes(&self) -> &[u8] {
                 &self.as_bytes()[::core::mem::offset_of!($ffi, start)..]
             }
-        }
-    };
-    ($t:ty, $entry:ty) => {
-        impl $crate::util::vstructs::VStructContainer for $t {
-            type Entry = $entry;
-            const START: usize = ::core::mem::offset_of!($t, start);
         }
     };
 }
@@ -1117,17 +1098,6 @@ impl<'a, T: Plain> View<'a, T> {
     }
 }
 
-impl<'a, C: VStructContainer<Entry: Unsized> + Plain> View<'a, C> {
-    /// Its entries - a section's, of a superblock that's validated - in that
-    /// state: vstruct_for_each(), as far as its count says, ValidatedEntries'
-    /// walk.
-    pub fn entries(&self) -> ValidatedEntries<'a, C::Entry> {
-        let bytes = self.as_bytes();
-        let len = self.whole().map_or(0, |c| c.bytes().min(bytes.len()));
-        ValidatedEntries::new(bytes[..len].get(C::START..).unwrap_or_default())
-    }
-}
-
 /// An unsized container's thin entries, keys - each a View of its own
 /// bytes: a Validated jset_entry's entries(). One that doesn't fit, or says
 /// it's shorter than its header - which would never end the walk - ends it,
@@ -1503,13 +1473,15 @@ mod tests {
     /// unsized ones, each as long as it says.
     #[test]
     fn entries_start_at_start() {
-        let hdr = size_of::<c::bch_sb_field_clean>();
+        let hdr = size_of::<Ffi<c::bch_sb_field_clean>>();
         let mut buf = vec![0u64; hdr / 8 + 2];
-        let mut clean: c::bch_sb_field_clean = Default::default();
+        let mut clean = Ffi::<c::bch_sb_field_clean>::default();
         clean.set_val_u64s(hdr / 8 + 2);
         put(&mut buf, 0, &clean);
         put(&mut buf, hdr, &entry(1));
-        let clean = View::<c::bch_sb_field_clean>::new(bytes(&buf));
+        // SAFETY: the buffer's, as long as its count says
+        let clean = unsafe { c::bch_sb_field_clean::<Validated>::from_ffi(buf.as_ptr().cast()) };
+        assert_eq!(clean.as_bytes().len(), buf.len() * 8);
         let es: Vec<_> = clean.entries().collect();
         assert_eq!(es.len(), 1);
         assert_eq!((es[0].u64s(), es[0].as_bytes().len()), (1, 16));
@@ -1601,7 +1573,7 @@ mod unsized_tests {
         pub _data: [u64; 0],
     }
     vstruct!(unsized tcont, u64s);
-    vstruct_container!(unsized tcont, tent);
+    vstruct_container!(tcont, tent);
 
     /// An entry, its u64s counting itself, as a superblock field's does.
     #[unsized_vstruct]

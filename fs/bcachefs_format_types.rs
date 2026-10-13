@@ -984,10 +984,11 @@ pub struct jset_entry {
     pub _data: [u64; 0],
 }
 vstruct!(unsized jset_entry, u64s);
-vstruct_container!(unsized jset_entry, thin c::bkey_i);
+vstruct_container!(jset_entry, thin c::bkey_i);
 
+#[unsized_vstruct]
 #[repr(C)]
-#[derive(Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_clean {
     pub field: Ffi<c::bch_sb_field>,
 
@@ -999,9 +1000,8 @@ pub struct bch_sb_field_clean {
     pub start: [Ffi<c::jset_entry>; 0],
     pub _data: [u64; 0],
 }
-vstruct!(bch_sb_field_clean, field.u64s, start = 0);
-vstruct_container!(bch_sb_field_clean, c::jset_entry);
-view_arm!(bch_sb_field_clean);
+vstruct!(unsized bch_sb_field_clean, field.u64s, start = 0);
+vstruct_container!(bch_sb_field_clean, jset_entry);
 
 /* sections from before btrees_lost_data are 88 bytes: what validate accepts */
 #[grown(from = btrees_lost_data)]
@@ -1305,7 +1305,7 @@ pub struct bch_sb {
     pub _data: [Le64; 0],
 }
 vstruct!(unsized bch_sb, u64s);
-vstruct_container!(unsized bch_sb, bch_sb_field);
+vstruct_container!(bch_sb, bch_sb_field);
 c_default!(bch_sb__ffi);
 
 c_bitmask! {
@@ -2016,10 +2016,10 @@ pub struct jset {
     pub _data: [u64; 0],
 }
 vstruct!(unsized jset, u64s);
-vstruct_container!(unsized jset, jset_entry);
+vstruct_container!(jset, jset_entry);
 
-/* The containers and their entries: each one's header is whole in all of them. */
-floored_by_self!(bkey_i, bch_sb_field_clean);
+/* A journal entry's keys, Views as its walk yields them: each one's header is whole. */
+floored_by_self!(bkey_i);
 
 c_bitmask! {
     LE32_BITMASK(struct Ffi<jset>, flags), strip JSET_ {
