@@ -156,8 +156,9 @@ const VS: &str = "crate::util::vstructs";
 /// A state's definition, @ty: a DST - @head, which it derefs to, its fields
 /// and methods; then @tail, a slice of @elem - and C's struct, @ffi, its
 /// HasFfi. It's Unsized: from_raw() at the length's worth of @elem past the
-/// head; and SelfSized, and its bytes, by its reference's length. @doc is
-/// its own; @methods, more of them.
+/// head; SelfSized, and its bytes, by its reference's length; and an arm's,
+/// ArmRef, cast() from the bytes its storage says are its. @doc is its own;
+/// @methods, more of them.
 fn dst(ty: &str, doc: &str, head: &str, tail: &str, elem: &str, ffi: &str, methods: &str) -> String {
     format!(
         "{doc}\
@@ -216,6 +217,20 @@ fn dst(ty: &str, doc: &str, head: &str, tail: &str, elem: &str, ffi: &str, metho
              #[inline]\n\
              fn bytes(&self) -> usize {{\n\
                  ::core::mem::size_of_val(self)\n\
+             }}\n\
+         }}\n\
+         \n\
+         // as a tagged union's arm, over the bytes its storage says are its\n\
+         impl {VS}::ArmRef for {ty} {{\n\
+             type Ref<'a> = &'a Self;\n\
+             type Mut<'a> = &'a mut Self;\n\
+             \n\
+             fn arm_ref(b: &[u8]) -> Option<&Self> {{\n\
+                 {VS}::cast(b)\n\
+             }}\n\
+             \n\
+             fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {{\n\
+                 {VS}::cast_mut(b)\n\
              }}\n\
          }}\n\
          \n\
@@ -418,7 +433,7 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
                          f.rust_name()))
         .collect();
 
-    const METHODS: &[&str] = &["whole", "whole_mut", "as_bytes", "as_bytes_mut", "from_bytes", "from_bytes_mut"];
+    const METHODS: &[&str] = &["whole", "whole_mut", "as_bytes", "as_bytes_mut"];
     let mut getters = String::new();
     for f in later {
         let field = f.rust_name();
@@ -438,28 +453,7 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
     }
 
     let methods = format!(
-        "/// @b as one, every byte of it: None if it can't be - fewer than its\n\
-         /// floor, not aligned for it, or not a whole number of its alignment\n\
-         /// long, which a reference, as long as size_of_val(), would claim past.\n\
-         fn from_bytes(b: &[u8]) -> Option<&Self> {{\n\
-             let align = ::core::mem::align_of::<{fl}>();\n\
-             (b.len() >= ::core::mem::size_of::<{fl}>() && b.as_ptr() as usize % align == 0\n\
-              && b.len() % align == 0)\n\
-                 // SAFETY: as checked: the floor's bytes are there, aligned, and the\n\
-                 // reference claims exactly @b\n\
-                 .then(|| unsafe {{ &*<Self as {VS}::Unsized>::from_raw(b.as_ptr(), b.len()) }})\n\
-         }}\n\
-         \n\
-         /// from_bytes(), mutably.\n\
-         fn from_bytes_mut(b: &mut [u8]) -> Option<&mut Self> {{\n\
-             let align = ::core::mem::align_of::<{fl}>();\n\
-             (b.len() >= ::core::mem::size_of::<{fl}>() && b.as_ptr() as usize % align == 0\n\
-              && b.len() % align == 0)\n\
-                 // SAFETY: as from_bytes()\n\
-                 .then(|| unsafe {{ &mut *<Self as {VS}::Unsized>::from_raw_mut(b.as_mut_ptr(), b.len()) }})\n\
-         }}\n\
-         \n\
-         /// All of it, {name}<Whole>, if it's all there - every field a field.\n\
+        "/// All of it, {name}<Whole>, if it's all there - every field a field.\n\
          pub fn whole(&self) -> Option<&{ffi}> {{\n\
              (::core::mem::size_of_val(self) >= ::core::mem::size_of::<{ffi}>()\n\
               && (self as *const Self).cast::<u8>() as usize % ::core::mem::align_of::<{ffi}>() == 0)\n\
@@ -493,19 +487,6 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
          }};\n\
          \n\
          {dst}\
-         impl {VS}::ArmRef for {ty} {{\n\
-             type Ref<'a> = &'a Self;\n\
-             type Mut<'a> = &'a mut Self;\n\
-             \n\
-             fn arm_ref(b: &[u8]) -> Option<&Self> {{\n\
-                 Self::from_bytes(b)\n\
-             }}\n\
-             \n\
-             fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {{\n\
-                 Self::from_bytes_mut(b)\n\
-             }}\n\
-         }}\n\
-         \n\
          {family}",
         plain = plain(&fl, &floor_tys),
         dst = dst(&ty,

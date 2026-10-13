@@ -856,6 +856,32 @@ where
     Ok(unsafe { &mut *T::from_raw_mut(bytes.as_mut_ptr(), len) })
 }
 
+/// Whether @b can be a T, every byte of it: at least its head, aligned for
+/// it, and a length a reference to one has - a whole number of its tail's
+/// elements past the head, and of its alignment, the head's, so
+/// size_of_val() is @b's length and the reference claims none past.
+fn fits<T: Unsized + ?Sized>(b: &[u8]) -> bool {
+    let (head, align) = (size_of::<T::Head>(), align_of::<T::Head>());
+    b.len() >= head
+        && b.as_ptr() as usize % align == 0
+        && b.len() % align == 0
+        && (b.len() - head) % size_of::<T::Elem>() == 0
+}
+
+/// @b as a T, every byte of it - an arm, as long as what holds it says: None
+/// if it can't be one, fits().
+pub fn cast<T: Unsized + ?Sized>(b: &[u8]) -> Option<&T> {
+    // SAFETY: fits(): its head is there, aligned, and the reference claims
+    // exactly @b; any bytes are a T's
+    fits::<T>(b).then(|| unsafe { &*T::from_raw(b.as_ptr(), b.len()) })
+}
+
+/// cast(), mutably.
+pub fn cast_mut<T: Unsized + ?Sized>(b: &mut [u8]) -> Option<&mut T> {
+    // SAFETY: as cast()
+    fits::<T>(b).then(|| unsafe { &mut *T::from_raw_mut(b.as_mut_ptr(), b.len()) })
+}
+
 /// @v's bytes, every one: what its reference reaches - T::as_bytes().
 pub fn bytes_of<T: Unsized + ?Sized>(v: &T) -> &[u8] {
     // SAFETY: the value's own bytes: Unsized's are its head's and its tail's,
