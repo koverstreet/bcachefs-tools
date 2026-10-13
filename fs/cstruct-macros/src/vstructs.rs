@@ -74,7 +74,7 @@ pub(crate) fn derive_view(input: TokenStream) -> Result<TokenStream, String> {
         return Err(format!("{}: an unsized vstruct's reference has its length, and its header is \
                             whole: its fields are fields, with no View", def.name));
     }
-    let name = &def.name;
+    let name = def.rust_ident();
     let (mut get, mut get_mut) = (String::new(), String::new());
     for f in &def.fields {
         let field = f.rust_name();
@@ -162,7 +162,7 @@ pub(crate) fn unsized_impl(def: &CStructDef) -> Result<String, String> {
     let Some(elem) = def.generics.iter().find_map(|g| g.tail.as_ref()) else {
         return Ok(String::new());
     };
-    let name = &def.name;
+    let name = def.rust_ident();
     let inst = def.instance();
     let states: Vec<&str> = def.generics.iter()
         .filter(|g| g.tail.is_none())
@@ -276,7 +276,7 @@ pub(crate) fn unsized_impl(def: &CStructDef) -> Result<String, String> {
 /// A CStruct's FlexArray, from #[counted_by(FIELD)] on its trailing `[T; 0]`
 /// - empty if it has none.
 pub(crate) fn flex_array(def: &CStructDef) -> Result<String, String> {
-    let name = &def.name;
+    let name = def.rust_ident();
     let Some((i, f)) = def.fields.iter().enumerate().find(|(_, f)| f.counted_by.is_some()) else {
         return Ok(String::new());
     };

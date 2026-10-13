@@ -31,6 +31,10 @@
 //   fields are asserted as name.field; #[c_struct_group] for the kernel's
 //   struct_group(name, ...), its members both name's and the struct's own.
 //
+//   #[c_name(NAME)] on the struct: C's name for it, where Rust's differs - a
+//   family's C definition, X__ffi, whose name the family's alias X has in
+//   Rust (util/vstructs.rs). C knows it only as NAME.
+//
 //   c_verbatim!(r#"..."#): C, carried as is - what hasn't been converted.
 //
 //   c_xmacro! { NAME(x) { (args), (args), ... } }: an x-macro list. C gets
@@ -146,7 +150,12 @@ impl CRepr {
 /// repr may be per configuration: cfg_attr(PRED, repr(...)).
 #[derive(Debug)]
 pub struct CStructDef {
+    /// C's name - its Rust one too, but for #[c_name]: rust_name.
     pub name:      String,
+    /// Its Rust name, where C's differs - #[c_name(NAME)]: a family's C
+    /// definition, X__ffi, whose own name the family's alias takes (see
+    /// util/vstructs.rs). rust_ident() is the name to impl and lay out by.
+    pub rust_name: Option<String>,
     pub kind:      CKind,
     pub cfg:       Option<Cfg>,
     pub repr:      CRepr,
@@ -183,16 +192,21 @@ pub struct CGeneric {
 }
 
 impl CStructDef {
+    /// Its Rust name: C's, but for #[c_name].
+    pub fn rust_ident(&self) -> &str {
+        self.rust_name.as_deref().unwrap_or(&self.name)
+    }
+
     /// The type C has: the struct, or for one with type parameters, its
     /// sized instance - see CGeneric.
     pub fn instance(&self) -> String {
         if self.generics.is_empty() {
-            return self.name.clone();
+            return self.rust_ident().to_string();
         }
         let args: Vec<String> = self.generics.iter()
             .map(|g| g.tail.as_ref().map_or_else(|| g.default.clone(), |e| format!("[{e}; 0]")))
             .collect();
-        format!("{}<{}>", self.name, args.join(", "))
+        format!("{}<{}>", self.rust_ident(), args.join(", "))
     }
 
     /// Every instance, sized or not, in every state - for an impl of all of
@@ -201,13 +215,13 @@ impl CStructDef {
     #[allow(dead_code)] // the macros'
     pub fn every_instance(&self) -> (String, String) {
         if self.generics.is_empty() {
-            return (String::new(), self.name.clone());
+            return (String::new(), self.rust_ident().to_string());
         }
         let params: Vec<String> = self.generics.iter()
             .map(|g| if g.tail.is_some() { format!("{}: ?Sized", g.name) } else { g.name.clone() })
             .collect();
         let args: Vec<&str> = self.generics.iter().map(|g| g.name.as_str()).collect();
-        (format!("<{}>", params.join(", ")), format!("{}<{}>", self.name, args.join(", ")))
+        (format!("<{}>", params.join(", ")), format!("{}<{}>", self.rust_ident(), args.join(", ")))
     }
 
     /// #[repr(C)], in every configuration.
@@ -994,6 +1008,8 @@ struct ItemAttrs {
     bitfield_ty: Option<String>,
     /// #[c_typedef] or #[c_typedef(NAME)].
     typedef:   Option<Option<String>>,
+    /// #[c_name(NAME)]: C's name for it, where Rust's differs.
+    c_name:    Option<String>,
     /// #[c("...")] on an item: its C declaration.
     c_decl:    Option<String>,
     /// #[c_export] on a fn.
@@ -1078,6 +1094,9 @@ fn item_attrs(toks: &[Tok], mut i: usize) -> Result<(ItemAttrs, usize), String> 
         }
         if let Some([Tok::Ident(t)]) = attr_args(attr, "c_typedef") {
             a.typedef = Some(Some(t.clone()));
+        }
+        if let Some([Tok::Ident(n)]) = attr_args(attr, "c_name") {
+            a.c_name = Some(n.clone());
         }
         i = next;
     }
@@ -1287,10 +1306,14 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
         }
     }
 
+    let (name, rust_name) = match a.c_name {
+        Some(c) => (c, Some(name)),
+        None    => (name, None),
+    };
     let typedef_anon = matches!(a.typedef, Some(None));
     let typedef = a.typedef.map(|t| t.unwrap_or_else(|| name.clone()));
     Ok(Some((CStructDef {
-        name, kind, cfg: a.cfg, repr: a.repr, cfg_reprs: a.cfg_reprs, fields, typedef,
+        name, rust_name, kind, cfg: a.cfg, repr: a.repr, cfg_reprs: a.cfg_reprs, fields, typedef,
         typedef_anon, c_align, generics,
     }, body_end + 1)))
 }

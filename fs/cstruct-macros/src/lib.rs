@@ -177,9 +177,10 @@ macro_rules! one_item {
 /// `[T; 0]`: FIELD is its length - the struct's FlexArray (vstructs.rs).
 /// `#[c_typedef]` on the struct: C has it as a typedef - `typedef struct {
 /// ... } name`, or with `#[c_typedef(NAME)]`, `typedef struct name { ... }
-/// NAME`.
-#[proc_macro_derive(CStruct, attributes(c, c_anon, c_bitfield, c_inline, c_packed, c_struct_group, c_typedef,
-                                        counted_by))]
+/// NAME`. `#[c_name(NAME)]` on the struct: C's name for it, where Rust's
+/// differs - a family's C definition (vstructs.rs).
+#[proc_macro_derive(CStruct, attributes(c, c_anon, c_bitfield, c_inline, c_name, c_packed, c_struct_group,
+                                        c_typedef, counted_by))]
 pub fn derive_cstruct(input: TokenStream) -> TokenStream {
     expand("#[derive(CStruct)]", || cstruct_expand(input))
 }
@@ -212,7 +213,7 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         return Err(format!("{} must be #[repr(C)]: C shares it", def.name));
     }
 
-    let name = &def.name;
+    let name = def.rust_ident();
     // A #[c_bitfield] field's members, on the struct: its type's forwarders
     // (#[bitfield]), by the type's own path.
     let mut forward = String::new();
