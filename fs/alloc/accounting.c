@@ -212,6 +212,13 @@ static inline bool is_zero(char *start, char *end)
 
 #define field_end(p, member)	(((void *) (&p.member)) + sizeof(p.member))
 
+/* @acc's replicas entry has more devs than the key has room for: */
+static inline bool accounting_replicas_past_end(struct disk_accounting_pos *acc)
+{
+	return (void *) &acc->replicas + replicas_entry_bytes(&acc->replicas) >
+		(void *) (acc + 1);
+}
+
 int bch2_accounting_validate(struct bch_fs *c, struct bkey_s_c k,
 			     const struct bkey_validate_context *from)
 {
@@ -236,6 +243,12 @@ int bch2_accounting_validate(struct bch_fs *c, struct bkey_s_c k,
 		end = field_end(acc_k, persistent_reserved);
 		break;
 	case BCH_DISK_ACCOUNTING_replicas:
+		bkey_fsck_err_on(accounting_replicas_past_end(&acc_k),
+				 c, accounting_key_replicas_past_end,
+				 "accounting key replicas entry with %u devs, room for %zu",
+				 acc_k.replicas.nr_devs,
+				 (size_t) ((void *) (&acc_k + 1) - (void *) acc_k.replicas.devs));
+
 		bkey_fsck_err_on(!acc_k.replicas.nr_devs,
 				 c, accounting_key_replicas_nr_devs_0,
 				 "accounting key replicas entry with nr_devs=0");
@@ -313,7 +326,11 @@ __cold void bch2_accounting_key_to_text(struct printbuf *out,
 		prt_printf(out, "replicas=%u", k->persistent_reserved.nr_replicas);
 		break;
 	case BCH_DISK_ACCOUNTING_replicas:
-		bch2_replicas_entry_to_text(out, &k->replicas);
+		if (accounting_replicas_past_end(k))
+			prt_printf(out, "(replicas entry with %u devs runs past the end of the key)",
+				   k->replicas.nr_devs);
+		else
+			bch2_replicas_entry_to_text(out, &k->replicas);
 		break;
 	case BCH_DISK_ACCOUNTING_dev_data_type:
 		prt_printf(out, "dev=%u data_type=", k->dev_data_type.dev);
