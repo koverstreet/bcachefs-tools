@@ -14,11 +14,12 @@
 
 use std::ops::ControlFlow;
 
+use anyhow::anyhow;
 use bcachefs_kernel::c;
-use bcachefs_kernel::btree::bkey::{BkeyI, BkeySC};
-use errno::Errno;
+use bcachefs_kernel::btree::bkey::BkeySC;
+use bcachefs_kernel::util::vstructs::{plain_bytes, UnvalidatedRef};
 
-use crate::wrappers::handle::{io_errno, BcachefsHandle};
+use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::grow_on_erange;
 
 /// Iteration flags, mirroring BCH_IOCTL_QUERY_BTREE_KEYS_*:
@@ -43,10 +44,12 @@ impl std::ops::BitOr for OnlineIterFlags {
 pub struct OnlineBtreeIter<'h> {
     fs:   &'h BcachefsHandle,
     arg:  c::bch_ioctl_query_btree_keys,
-    buf:  Vec<u8>,
-    /// Offset of the next unconsumed key in `buf`; == arg.used when the
-    /// buffer is drained.
-    pos:  u32,
+    /// u64s: the kernel writes each key at a multiple of 8 from the start,
+    /// aligned for one if the buffer is
+    buf:  Vec<u64>,
+    /// Byte offset of the next unconsumed key in `buf`; == arg.used when
+    /// the buffer is drained.
+    pos:  usize,
 }
 
 impl<'h> OnlineBtreeIter<'h> {
@@ -80,29 +83,34 @@ impl<'h> OnlineBtreeIter<'h> {
                 end,
                 ..Default::default()
             },
-            buf: vec![0; buf_size],
+            buf: vec![0; buf_size.div_ceil(8)],
             pos: 0,
         }
     }
 
     /// ERANGE is a buffer too small for even one key: grown, and kept grown.
-    fn refill(&mut self) -> Result<(), Errno> {
+    fn refill(&mut self) -> std::io::Result<()> {
         self.pos = 0;
-        grow_on_erange(self.buf.len(), 1 << 20, |bytes| {
-            self.buf.resize(bytes, 0);
+        grow_on_erange(self.buf.len() * 8, 1 << 20, |bytes| {
+            self.buf.resize(bytes / 8, 0);
             self.arg.buf = self.buf.as_mut_ptr() as u64;
             self.arg.buf_size = bytes as u32;
             self.arg.used = 0;
             self.fs.query_btree_keys(&mut self.arg)
-        }).map_err(io_errno)
+        })
     }
 
     /// The next key, or None at the end of the range. Lending: the
     /// returned key borrows the internal buffer and dies at the next
     /// call.
+    ///
+    /// The trust boundary for what the ioctl wrote: each key is checked
+    /// against the bytes left before it's stepped past - a short u64s would
+    /// spin us, a long one walk off what was written - and one that doesn't
+    /// fit is an error saying where and why.
     #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Result<Option<BkeySC<'_>>, Errno> {
-        if self.pos >= self.arg.used {
+    pub fn next(&mut self) -> anyhow::Result<Option<BkeySC<'_>>> {
+        if self.pos >= self.arg.used as usize {
             if self.arg.done != 0 {
                 return Ok(None);
             }
@@ -112,28 +120,17 @@ impl<'h> OnlineBtreeIter<'h> {
             }
         }
 
-        // This is the trust boundary for buffer contents from the ioctl:
-        // validate the record header before stepping by it, or a zero/short
-        // u64s spins us forever or walks off the valid region.
-        const HDR: u32 = std::mem::size_of::<c::bkey>() as u32;
-        let rest = self.arg.used - self.pos;
-        if rest < HDR {
-            return Err(Errno(libc::EPROTO));
-        }
+        let reply = plain_bytes(&self.buf[..]).get(..self.arg.used as usize).ok_or_else(|| {
+            anyhow!("{} bytes used, of {}", self.arg.used, self.buf.len() * 8)
+        })?;
+        let k = UnvalidatedRef::<c::bkey_i>::new(&reply[self.pos..])
+            .map_err(|e| anyhow!("reply at byte {}: {e}", self.pos))?;
+        self.pos += k.as_bytes().len();
 
-        let p = unsafe { self.buf.as_ptr().add(self.pos as usize) }.cast::<c::bkey_i>();
-        // SAFETY: its header is in the buffer, checked above
-        let bytes = unsafe { (*p).k.u64s } as u32 * 8;
-        if bytes < HDR || bytes > rest {
-            return Err(Errno(libc::EPROTO));
-        }
-        self.pos += bytes;
-
-        // SAFETY: a key, its u64s checked against the buffer @p reaches
-        Ok(Some(BkeySC::from(unsafe { &*BkeyI::from_raw(p) })))
+        Ok(Some(BkeySC::from(k.key())))
     }
 
-    pub fn for_each<F>(&mut self, mut f: F) -> Result<(), Errno>
+    pub fn for_each<F>(&mut self, mut f: F) -> anyhow::Result<()>
     where
         F: FnMut(BkeySC<'_>) -> ControlFlow<()>,
     {

@@ -22,7 +22,7 @@ use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::path_to_cstr;
 use errno::Errno;
 
-pub(crate) fn io_errno(e: std::io::Error) -> Errno {
+fn io_errno(e: std::io::Error) -> Errno {
     Errno(e.raw_os_error().unwrap_or(libc::EIO))
 }
 
