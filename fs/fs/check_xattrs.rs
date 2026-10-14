@@ -34,14 +34,14 @@ struct CheckXattrs {
 
 /// The inode flag a POSIX ACL xattr of @x_type needs, with its fsck error and
 /// the ACL's name (with article, then bare).
-fn acl_flag(x_type: u8)
+fn acl_flag(ty: c::bch_xattr_type)
     -> Option<(c::bch_inode_flags, c::bch_sb_error_id, &'static str, &'static str)>
 {
-    match x_type as u32 {
-        c::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS =>
+    match ty {
+        c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS =>
             Some((c::bch_inode_flags::BCH_INODE_has_access_acl,
                   id::inode_has_access_acl_flag_wrong, "an access", "access")),
-        c::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT =>
+        c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT =>
             Some((c::bch_inode_flags::BCH_INODE_has_default_acl,
                   id::inode_has_default_acl_flag_wrong, "a default", "default")),
         _ => None,
@@ -52,9 +52,9 @@ fn check_acl_flag(
     t:      &TransAttempt<'_, '_>,
     st:     &mut CheckXattrs,
     k:      BkeySC<'_>,
-    x_type: u8,
+    ty:     c::bch_xattr_type,
 ) -> Result<(), BchError> {
-    let Some((flag, err, an_acl, acl)) = acl_flag(x_type) else { return Ok(()) };
+    let Some((flag, err, an_acl, acl)) = acl_flag(ty) else { return Ok(()) };
     let trans = t.trans();
     let fs = trans.fs();
     let flag = flag.bits();
@@ -97,7 +97,7 @@ fn check_xattr<'t>(
     }
 
     if let Some(x) = k.arm::<BkeyIXattr>().map(|k| k.v()) {
-        check_acl_flag(t, st, k, x.x_type)?;
+        check_acl_flag(t, st, k, x.ty())?;
     }
 
     if let Err(e) = str_hash::check_key::<Xattrs>(trans, None, &mut st.hash_info, k, &mut false) {

@@ -78,7 +78,7 @@ static const struct xattr_handler *bch_xattr_handler_map[] = {
  * What an xattr of @type lists under for @dentry's caller - NULL if it
  * doesn't: the handler's prefix, or its name for a POSIX ACL's.
  */
-const char *bch2_xattr_list_prefix(unsigned type, struct dentry *dentry)
+const char *bch2_xattr_list_prefix(enum bch_xattr_type type, struct dentry *dentry)
 {
 	const struct xattr_handler *handler = type < ARRAY_SIZE(bch_xattr_handler_map)
 		? bch_xattr_handler_map[type]

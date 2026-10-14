@@ -145,10 +145,10 @@ pub enum AclType {
 
 impl AclType {
     /// The xattr type it's stored as: as acl_to_xattr_type().
-    pub fn xattr_type(self) -> u8 {
+    pub fn xattr_type(self) -> c::bch_xattr_type {
         match self {
-            Self::Access  => c::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS as u8,
-            Self::Default => c::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT as u8,
+            Self::Access  => c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS,
+            Self::Default => c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT,
         }
     }
 
@@ -407,7 +407,7 @@ mod vfs {
                                     UpdateTriggerFlags::empty())?;
             inode.bi_flags |= ty.inode_flag().bits();
         } else {
-            let search = xattr::search_key(ty.xattr_type() as u32, OsStr::from_bytes(b""));
+            let search = xattr::search_key(ty.xattr_type(), OsStr::from_bytes(b""));
             match str_hash::delete::<Xattrs>(t, &hash_info, inum, &search) {
                 Err(e) if e.matches(c::ENOENT) => {}
                 r => r?,

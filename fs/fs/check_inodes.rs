@@ -121,12 +121,12 @@ fn on_deleted_list(t: &TransAttempt<'_, '_>, pos: c::bpos) -> Result<bool, BchEr
     Ok(iter.peek_slot(t)?.is_some_and(|k| k.key_type() == c::bch_bkey_type::KEY_TYPE_set))
 }
 
-/// Whether @u has an xattr of @x_type: what the has_*_acl flags record.
-fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &c::bch_inode_unpacked, x_type: u32)
+/// Whether @u has an xattr of @ty: what the has_*_acl flags record.
+fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &c::bch_inode_unpacked, ty: c::bch_xattr_type)
     -> Result<bool, BchError>
 {
     let hash = str_hash::hash_info_init(t.fs(), u)?;
-    let key = xattr::search_key(x_type, OsStr::from_bytes(b""));
+    let key = xattr::search_key(ty, OsStr::from_bytes(b""));
     let mut iter = BtreeIter::uninit();
 
     Ok(str_hash::lookup_in_snapshot::<Xattrs>(t, &mut iter, &hash,
@@ -275,10 +275,12 @@ fn check_unlinked_dir(
 }
 
 /// The ACL flags, with the xattr each records and its fsck error.
-const ACL_FLAGS: [(c::bch_inode_flags, u32, c::bch_sb_error_id, &str); 2] = [
-    (c::bch_inode_flags::BCH_INODE_has_access_acl,  c::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS,
-     id::inode_has_access_acl_flag_wrong,  "access"),
-    (c::bch_inode_flags::BCH_INODE_has_default_acl, c::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT,
+const ACL_FLAGS: [(c::bch_inode_flags, c::bch_xattr_type, c::bch_sb_error_id, &str); 2] = [
+    (c::bch_inode_flags::BCH_INODE_has_access_acl,
+     c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS,
+     id::inode_has_access_acl_flag_wrong, "access"),
+    (c::bch_inode_flags::BCH_INODE_has_default_acl,
+     c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT,
      id::inode_has_default_acl_flag_wrong, "default"),
 ];
 
@@ -410,9 +412,9 @@ fn check_inode<'t>(
     // Flag clear but xattr present, the direction that would break the
     // bch2_get_acl() short circuit, is caught from the xattr side in
     // check_xattrs:
-    for (flag, x_type, err, acl) in ACL_FLAGS {
+    for (flag, ty, err, acl) in ACL_FLAGS {
         if u.flag(flag) &&
-           fsck_err_on!(trans, !has_xattr_type(t, &u, x_type)?, err,
+           fsck_err_on!(trans, !has_xattr_type(t, &u, ty)?, err,
                         "inode has c::bch_inode_flags::BCH_INODE_has_{acl}_acl set but no acl xattr\n{u}")? {
             u.set_flag(flag, false);
             changed = true;

@@ -47,11 +47,11 @@ impl<'a> Dentry<'a> {
         unsafe { c::rust_dir_casefold_changed(self.raw) }
     }
 
-    /// The prefix xattrs of @type_ list under, here - None for a type that
+    /// The prefix xattrs of @ty list under, here - None for a type that
     /// isn't listed, or that the caller may not see: as
     /// bch2_xattr_list_prefix().
-    pub fn xattr_list_prefix(&self, type_: u8) -> Option<&'static CStr> {
-        let p = unsafe { c::bch2_xattr_list_prefix(type_ as u32, self.raw) };
+    pub fn xattr_list_prefix(&self, ty: c::bch_xattr_type) -> Option<&'static CStr> {
+        let p = unsafe { c::bch2_xattr_list_prefix(ty, self.raw) };
         // The handlers' prefixes are static strings:
         (!p.is_null()).then(|| unsafe { CStr::from_ptr(p.cast()) })
     }

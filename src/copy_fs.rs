@@ -34,13 +34,6 @@ const DT_DIR: u8  = 4;
 const DT_REG: u8  = 8;
 const DT_LNK: u8  = 10;
 
-/// Xattr namespace indices matching KEY_TYPE_XATTR_INDEX_* in xattr_format.h.
-const XATTR_INDEX_USER: i32     = 0;
-const XATTR_INDEX_ACL_ACCESS: i32 = 1;
-const XATTR_INDEX_ACL_DEFAULT: i32 = 2;
-const XATTR_INDEX_TRUSTED: i32  = 3;
-const XATTR_INDEX_SECURITY: i32 = 4;
-
 fn mode_to_type(mode: u32) -> u8 {
     ((mode >> 12) & 15) as u8
 }
@@ -285,24 +278,6 @@ fn create_or_update_file(
     Ok(child_inode)
 }
 
-/// Resolve xattr name prefix to bcachefs xattr index.
-/// Returns (index, stripped_name) or None if unsupported.
-fn xattr_resolve_name(name: &[u8]) -> Option<(i32, &[u8])> {
-    if let Some(rest) = name.strip_prefix(b"user.") {
-        Some((XATTR_INDEX_USER, rest))
-    } else if let Some(rest) = name.strip_prefix(b"trusted.") {
-        Some((XATTR_INDEX_TRUSTED, rest))
-    } else if let Some(rest) = name.strip_prefix(b"security.") {
-        Some((XATTR_INDEX_SECURITY, rest))
-    } else if let Some(rest) = name.strip_prefix(b"system.posix_acl_access") {
-        Some((XATTR_INDEX_ACL_ACCESS, rest))
-    } else if let Some(rest) = name.strip_prefix(b"system.posix_acl_default") {
-        Some((XATTR_INDEX_ACL_DEFAULT, rest))
-    } else {
-        None
-    }
-}
-
 // st_*time is a time_t: 32 bits on some targets - where a timespec may also
 // have padding fields, which the struct update zeroes
 #[allow(clippy::unnecessary_cast, clippy::needless_update)]
@@ -346,7 +321,7 @@ fn copy_xattrs(
         let attr_name = &attrs_buf[pos..end];
         pos = end + 1;
 
-        let (xattr_type, stripped) = match xattr_resolve_name(attr_name) {
+        let (xattr_type, stripped) = match c::bch_xattr_type::from_name(attr_name) {
             Some(v) => v,
             None => continue,
         };
@@ -362,22 +337,22 @@ fn copy_xattrs(
         // own. bch2_get_acl() goes by the inode's flags, not the xattrs:
         // without them the ACLs are there and ignored.
         let acl;
-        let value = match xattr_type {
-            XATTR_INDEX_ACL_ACCESS | XATTR_INDEX_ACL_DEFAULT => {
-                let Some(v) = acl_from_xattr(&val_buf[..val_size]) else {
-                    eprintln!("{}: {} isn't a POSIX ACL, not copied",
-                              src.to_string_lossy(), String::from_utf8_lossy(attr_name));
-                    continue;
-                };
-                acl = v;
-                acl_flags.push(if xattr_type == XATTR_INDEX_ACL_ACCESS {
+        let value = if xattr_type.is_acl() {
+            let Some(v) = acl_from_xattr(&val_buf[..val_size]) else {
+                eprintln!("{}: {} isn't a POSIX ACL, not copied",
+                          src.to_string_lossy(), String::from_utf8_lossy(attr_name));
+                continue;
+            };
+            acl = v;
+            acl_flags.push(
+                if xattr_type == c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS {
                     c::bch_inode_flags::BCH_INODE_has_access_acl
                 } else {
                     c::bch_inode_flags::BCH_INODE_has_default_acl
                 });
-                &acl[..]
-            }
-            _ => &val_buf[..val_size],
+            &acl[..]
+        } else {
+            &val_buf[..val_size]
         };
 
         btree::iter::trans_commit_do(

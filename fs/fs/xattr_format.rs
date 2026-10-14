@@ -4,19 +4,18 @@
 
 use crate::cstructs::c;
 use crate::types::Le16;
-use cstruct_macros::{c_const, whole, CStruct, TypeInfo};
+use cstruct_macros::{c_enum, whole, CStruct, TypeInfo};
 
-c_const! {
-    #[c_int]
-    pub const KEY_TYPE_XATTR_INDEX_USER: u32 = 0;
-    #[c_int]
-    pub const KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS: u32 = 1;
-    #[c_int]
-    pub const KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT: u32 = 2;
-    #[c_int]
-    pub const KEY_TYPE_XATTR_INDEX_TRUSTED: u32 = 3;
-    #[c_int]
-    pub const KEY_TYPE_XATTR_INDEX_SECURITY: u32 = 4;
+/* An xattr's type - its namespace; bch_xattr.x_type: */
+c_enum! {
+    #[open]
+    pub enum bch_xattr_type: u32 {
+        KEY_TYPE_XATTR_INDEX_USER              = 0,
+        KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS  = 1,
+        KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT = 2,
+        KEY_TYPE_XATTR_INDEX_TRUSTED           = 3,
+        KEY_TYPE_XATTR_INDEX_SECURITY          = 4,
+    }
 }
 
 #[whole(tail = x_name_and_value: [u8])]

@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::types::c_default;
 use cstruct_macros::CStruct;
 #[cfg(not(NO_BCACHEFS_FS))]
-use {core::ffi::c_uint, crate::util::ffi::c_char, cstruct_macros::c_extern};
+use {crate::util::ffi::c_char, cstruct_macros::c_extern};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
@@ -19,5 +19,5 @@ c_default!(xattr_search_key);
 // For listxattr, as xattr.h has it: kernel only.
 #[cfg(not(NO_BCACHEFS_FS))]
 c_extern! {
-    pub fn bch2_xattr_list_prefix(type_: c_uint, dentry: *mut c::dentry) -> *const c_char;
+    pub fn bch2_xattr_list_prefix(ty: c::bch_xattr_type, dentry: *mut c::dentry) -> *const c_char;
 }
