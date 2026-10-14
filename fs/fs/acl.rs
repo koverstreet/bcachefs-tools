@@ -182,7 +182,8 @@ mod vfs {
     use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                              TransAttempt, TransBkey, UpdateTriggerFlags};
     use crate::c;
-    use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void as ret_to_result, BchError};
+    use crate::errcode::{bch_errcode, ret_to_c, ret_to_class, ret_to_result_void as ret_to_result,
+                         BchError};
     use crate::inode;
     use crate::snapshots::subvolume;
     use crate::str_hash;
@@ -467,11 +468,7 @@ mod vfs {
             PosixAcl::set_cached(acl.as_deref(), &v, ty);
             Ok(())
         });
-
-        match ret {
-            Ok(())  => 0,
-            Err(e)  => e.class(),
-        }
+        ret_to_class(ret)
     }
 
     /// Apply new mode @mode to inode @inum's access ACL, if it has one: as

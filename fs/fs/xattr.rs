@@ -456,7 +456,7 @@ mod vfs {
     use core::ffi::CStr;
     use crate::btree::bkey::pos;
     use crate::btree::iter::{commit_do, lockrestart_do, CommitFlags};
-    use crate::errcode::bch_errcode;
+    use crate::errcode::{bch_errcode, ret_to_class};
     use crate::opts::{self, InodeOpt, OptChange};
     use crate::util::locking::MemallocFlags;
     use crate::vfs::dentry::Dentry;
@@ -603,14 +603,7 @@ mod vfs {
         let ret = commit_do(&trans, None, CommitFlags::empty(), |t| {
             set_trans(t, v.inum(), &mut inode, name, value, ty, flags)
         });
-
-        match ret {
-            Ok(()) => {
-                v.update_after_write(&trans, &mut inode, ATTR_CTIME);
-                0
-            }
-            Err(e) => e.class(),
-        }
+        ret_to_class(ret.map(|()| v.update_after_write(&trans, &mut inode, ATTR_CTIME)))
     }
 
     // bcachefs.* and bcachefs_effective.*: inode options
@@ -805,14 +798,10 @@ mod vfs {
         _flags:   c_int,
     ) -> c_int {
         let value = unsafe { opt_bytes(value, size) };
-        let r = unsafe {
+        ret_to_class(unsafe {
             bcachefs_set(Dentry::borrow_raw(dentry), &InodeInfo::from_inode(vinode),
                          CStr::from_ptr(name.cast()), value)
-        };
-        match r {
-            Ok(())  => 0,
-            Err(e)  => e.class(),
-        }
+        })
     }
 
     /// For xattr.c's bcachefs_effective.* handler: ->set(), which does

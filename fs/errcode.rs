@@ -180,6 +180,12 @@ pub fn ret_to_c<E: Into<BchError>>(ret: Result<(), E>) -> c_int {
     }
 }
 
+/// ret_to_c(), for the VFS: 0, or the plain errno the error is a case of -
+/// as bch2_err_class().
+pub fn ret_to_class<E: Into<BchError>>(ret: Result<(), E>) -> c_int {
+    ret.map_or_else(|e| e.into().class(), |()| 0)
+}
+
 pub fn errptr_to_result<T>(p: *mut T) -> Result<*mut T, BchError> {
     let addr = p as usize;
     let max_err: isize = -4096;
