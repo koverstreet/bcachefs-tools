@@ -103,7 +103,8 @@ c_ioctl! {
     BCHFS_IOC_PREAD_RAW			= _IOWR(0xbc, 67, c::bch_ioctl_pread_raw),
     BCHFS_IOC_UNPOISON			= _IOW(0xbc, 68, c::bch_ioctl_unpoison),
     BCHFS_IOC_GET_DAMAGE		= _IOWR(0xbc, 70, Ffi<c::bch_ioctl_get_damage>),
-    BCHFS_IOC_READDIR_FLAGS		= _IOWR(0xbc, 69, c::bch_ioctl_readdir_flags),
+    /* 69: retired - READDIR_FLAGS before its entries had a reclen */
+    BCHFS_IOC_READDIR_FLAGS		= _IOWR(0xbc, 72, c::bch_ioctl_readdir_flags),
 
     /*
      * BCHFS_IOC_CLEAR_DAMAGE: clear the file's damage record, in the calling
@@ -182,19 +183,26 @@ pub struct bch_ioctl_readdir_flags {
 }
 
 /*
- * One entry: the NUL-terminated name - a relative path, under recursive -
- * follows the fixed header; entries are padded to 8-byte alignment.
+ * One entry, @reclen bytes: the fixed header, then the NUL-terminated name -
+ * a relative path, under recursive - zero-padded to a multiple of 8.
  * Deliberately knows nothing about the filters that selected it: damage
  * details come from BCHFS_IOC_GET_DAMAGE on the file itself.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_readdir_entry {
-    pub inum: u64,
+    pub reclen: u32,
     pub d_type: u8,
-    pub pad: u8,
-    pub name_len: u16, /* including the NUL */
+    pub pad: [u8; 3],
+    pub inum: u64,
     pub name: [u8; 0],
+}
+
+impl crate::util::vstructs::SelfSized for bch_ioctl_readdir_entry {
+    /// reclen: the header, the name and its NUL, padding to 8.
+    fn bytes(&self) -> usize {
+        self.reclen as usize
+    }
 }
 
 #[repr(C)]

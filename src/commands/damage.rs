@@ -8,13 +8,14 @@
 // bch_sb_error_id, printed with the same names fsck and the superblock
 // error counters use.
 
+use std::ffi::CStr;
 use std::mem;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use bch_bindgen::c;
-use bcachefs_kernel::util::vstructs::Ffi;
+use bcachefs_kernel::util::vstructs::{plain_bytes, Ffi, UnvalidatedRefEntries};
 use clap::{Parser, Subcommand};
 
 use crate::util::{open_dir, sb_error_name};
@@ -119,13 +120,16 @@ struct Entry {
 }
 
 /// One BCHFS_IOC_READDIR_FLAGS call, advancing the opaque cursor. An
-/// empty result means enumeration is complete.
-fn readdir_flags(fd: &OwnedFd, flags: u32, pos: &mut [u64; 2]) -> std::io::Result<Vec<Entry>> {
-    let mut buf = vec![0u8; 64 << 10];
+/// empty result means enumeration is complete; an entry that doesn't fit
+/// in what the kernel says it wrote, or has no name, is an error.
+fn readdir_flags(fd: &OwnedFd, flags: u32, pos: &mut [u64; 2]) -> Result<Vec<Entry>> {
+    // u64s: the kernel writes each entry at a multiple of 8 from the start,
+    // aligned for one if the buffer is
+    let mut buf = Box::new([0u64; (64 << 10) / 8]);
     let mut arg = c::bch_ioctl_readdir_flags {
         pos: *pos,
         buf: buf.as_mut_ptr() as u64,
-        buf_size: buf.len() as u32,
+        buf_size: mem::size_of_val(&*buf) as u32,
         flags,
         used: 0,
         pad: 0,
@@ -134,28 +138,20 @@ fn readdir_flags(fd: &OwnedFd, flags: u32, pos: &mut [u64; 2]) -> std::io::Resul
     ioctl_rw::<BCHFS_IOC_READDIR_FLAGS>(fd, &mut arg)?;
     *pos = arg.pos;
 
-    const D_TYPE: usize   = mem::offset_of!(c::bch_ioctl_readdir_entry, d_type);
-    const NAME_LEN: usize = mem::offset_of!(c::bch_ioctl_readdir_entry, name_len);
-    const NAME: usize     = mem::offset_of!(c::bch_ioctl_readdir_entry, name);
+    let reply = plain_bytes(&*buf).get(..arg.used as usize)
+        .ok_or_else(|| anyhow!("{} bytes used, of {}", arg.used, arg.buf_size))?;
 
-    let mut entries = Vec::new();
-    let mut offset = 0usize;
-    while offset + NAME < arg.used as usize {
-        let rec = &buf[offset..];
-        let name_len = u16::from_ne_bytes(rec[NAME_LEN..NAME_LEN + 2].try_into().unwrap()) as usize;
-        let reclen = (NAME + name_len).next_multiple_of(8);
-        if name_len == 0 || offset + reclen > arg.used as usize {
-            break;
-        }
+    UnvalidatedRefEntries::<c::bch_ioctl_readdir_entry>::new(reply)
+        .map(|e| {
+            let e = e?;
+            let name = &e.as_bytes()[mem::offset_of!(c::bch_ioctl_readdir_entry, name)..];
+            let name = CStr::from_bytes_until_nul(name)
+                .map_err(|_| anyhow!("inode {}: name not NUL-terminated", e.inum))?;
+            ensure!(!name.is_empty(), "inode {}: empty name", e.inum);
 
-        entries.push(Entry {
-            d_type: rec[D_TYPE],
-            /* name_len includes the nul */
-            name:   rec[NAME..NAME + name_len - 1].to_vec(),
-        });
-        offset += reclen;
-    }
-    Ok(entries)
+            Ok(Entry { d_type: e.d_type, name: name.to_bytes().to_vec() })
+        })
+        .collect()
 }
 
 // ---- Commands ----
