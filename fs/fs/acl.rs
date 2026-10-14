@@ -15,6 +15,7 @@
 use core::mem::size_of;
 
 use crate::c::{self, AclEntry, BCH_ACL_VERSION};
+use crate::init::error::id;
 use crate::util::vstructs::{cast_plain, plain_bytes, ArmSized, ArmWalkError};
 use crate::util::Printbuf;
 
@@ -144,6 +145,8 @@ pub enum AclType {
 }
 
 impl AclType {
+    pub const ALL: [Self; 2] = [Self::Access, Self::Default];
+
     /// The xattr type it's stored as: as acl_to_xattr_type().
     pub fn xattr_type(self) -> c::bch_xattr_type {
         match self {
@@ -152,11 +155,30 @@ impl AclType {
         }
     }
 
+    pub fn from_xattr_type(ty: c::bch_xattr_type) -> Option<Self> {
+        Self::ALL.into_iter().find(|acl| acl.xattr_type() == ty)
+    }
+
     /// The inode flag saying it has one.
     pub fn inode_flag(self) -> c::bch_inode_flags {
         match self {
             Self::Access  => c::bch_inode_flags::BCH_INODE_has_access_acl,
             Self::Default => c::bch_inode_flags::BCH_INODE_has_default_acl,
+        }
+    }
+
+    /// The fsck error for the inode's flag and its xattrs disagreeing.
+    pub fn flag_wrong(self) -> c::bch_sb_error_id {
+        match self {
+            Self::Access  => id::inode_has_access_acl_flag_wrong,
+            Self::Default => id::inode_has_default_acl_flag_wrong,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Access  => "access",
+            Self::Default => "default",
         }
     }
 }

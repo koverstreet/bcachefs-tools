@@ -31,6 +31,7 @@
 //! is looked up through it: the C cleared a good backpointer for a bogus one,
 //! for check_dirents to put back.
 
+use crate::acl::AclType;
 use crate::btree::bkey::{spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
@@ -274,16 +275,6 @@ fn check_unlinked_dir(
     Ok(true)
 }
 
-/// The ACL flags, with the xattr each records and its fsck error.
-const ACL_FLAGS: [(c::bch_inode_flags, c::bch_xattr_type, c::bch_sb_error_id, &str); 2] = [
-    (c::bch_inode_flags::BCH_INODE_has_access_acl,
-     c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS,
-     id::inode_has_access_acl_flag_wrong, "access"),
-    (c::bch_inode_flags::BCH_INODE_has_default_acl,
-     c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT,
-     id::inode_has_default_acl_flag_wrong, "default"),
-];
-
 fn write_if_changed(
     t:       &TransAttempt<'_, '_>,
     u:       &mut c::bch_inode_unpacked,
@@ -412,11 +403,11 @@ fn check_inode<'t>(
     // Flag clear but xattr present, the direction that would break the
     // bch2_get_acl() short circuit, is caught from the xattr side in
     // check_xattrs:
-    for (flag, ty, err, acl) in ACL_FLAGS {
-        if u.flag(flag) &&
-           fsck_err_on!(trans, !has_xattr_type(t, &u, ty)?, err,
-                        "inode has c::bch_inode_flags::BCH_INODE_has_{acl}_acl set but no acl xattr\n{u}")? {
-            u.set_flag(flag, false);
+    for acl in AclType::ALL {
+        if u.flag(acl.inode_flag()) &&
+           fsck_err_on!(trans, !has_xattr_type(t, &u, acl.xattr_type())?, acl.flag_wrong(),
+                        "inode has BCH_INODE_has_{}_acl set but no acl xattr\n{u}", acl.name())? {
+            u.set_flag(acl.inode_flag(), false);
             changed = true;
         }
     }

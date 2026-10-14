@@ -14,13 +14,13 @@
 //! walker's inodes: a restarted commit must see the check fire again, and once
 //! the repair commits the walker refetches (see InodeWalker).
 
+use crate::acl::AclType;
 use crate::btree::bkey::{pos, BkeySC, BkeyIXattr};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
 use crate::check::{InodeWalker, SnapshotsSeen};
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::init::error::id;
 use crate::init::progress::Progress;
 use crate::snapshots::snapshot;
 use crate::xattr::Xattrs;
@@ -32,41 +32,25 @@ struct CheckXattrs {
     hash_info: c::bch_hash_info,
 }
 
-/// The inode flag a POSIX ACL xattr of @x_type needs, with its fsck error and
-/// the ACL's name (with article, then bare).
-fn acl_flag(ty: c::bch_xattr_type)
-    -> Option<(c::bch_inode_flags, c::bch_sb_error_id, &'static str, &'static str)>
-{
-    match ty {
-        c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS =>
-            Some((c::bch_inode_flags::BCH_INODE_has_access_acl,
-                  id::inode_has_access_acl_flag_wrong, "an access", "access")),
-        c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT =>
-            Some((c::bch_inode_flags::BCH_INODE_has_default_acl,
-                  id::inode_has_default_acl_flag_wrong, "a default", "default")),
-        _ => None,
-    }
-}
-
+/// The inode flag a POSIX ACL xattr needs.
 fn check_acl_flag(
-    t:      &TransAttempt<'_, '_>,
-    st:     &mut CheckXattrs,
-    k:      BkeySC<'_>,
-    ty:     c::bch_xattr_type,
+    t:   &TransAttempt<'_, '_>,
+    st:  &mut CheckXattrs,
+    k:   BkeySC<'_>,
+    acl: AclType,
 ) -> Result<(), BchError> {
-    let Some((flag, err, an_acl, acl)) = acl_flag(ty) else { return Ok(()) };
     let trans = t.trans();
     let fs = trans.fs();
-    let flag = flag.bits();
+    let flag = acl.inode_flag().bits();
 
     for i in st.inode.visible_mut(trans, &st.s, k.k.p.snapshot) {
         // One repair per visible version, bounded only by snapshot count:
         t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
 
         if !i.whiteout &&
-           fsck_err_on!(trans, i.inode.bi_flags & flag == 0, err,
-                        "inode has {an_acl} acl xattr but BCH_INODE_has_{acl}_acl not set\n{}\n{}",
-                        i.inode, k.to_text(fs))? {
+           fsck_err_on!(trans, i.inode.bi_flags & flag == 0, acl.flag_wrong(),
+                        "inode has {0} acl xattr but BCH_INODE_has_{0}_acl not set\n{1}\n{2}",
+                        acl.name(), i.inode, k.to_text(fs))? {
             let mut u = i.inode;
             u.bi_flags |= flag;
             inode::fsck_write(t, &mut u)?;
@@ -96,8 +80,8 @@ fn check_xattr<'t>(
         st.hash_info = str_hash::hash_info_init(fs, w.inode)?;
     }
 
-    if let Some(x) = k.arm::<BkeyIXattr>().map(|k| k.v()) {
-        check_acl_flag(t, st, k, x.ty())?;
+    if let Some(acl) = k.arm::<BkeyIXattr>().and_then(|k| AclType::from_xattr_type(k.v().ty())) {
+        check_acl_flag(t, st, k, acl)?;
     }
 
     if let Err(e) = str_hash::check_key::<Xattrs>(trans, None, &mut st.hash_info, k, &mut false) {
