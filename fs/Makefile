@@ -151,7 +151,6 @@ bcachefs-y		:=			\
 	sb/members.o				\
 	snapshots/delete.o			\
 	snapshots/snapshot.o			\
-	snapshots/subvolume.o			\
 	util/clock.o				\
 	util/cuckoo.o				\
 	util/darray.o				\

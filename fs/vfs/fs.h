@@ -178,8 +178,6 @@ int bch2_setattr_nonsize(struct mnt_idmap *,
 			 struct iattr *);
 int __bch2_unlink(struct inode *, struct dentry *, bool);
 
-void bch2_evict_subvolume_inodes(struct bch_fs *, snapshot_id_list *);
-
 int bch2_fiemap(struct inode *, struct fiemap_extent_info *, u64, u64);
 
 void bch2_fs_vfs_exit(struct bch_fs *);

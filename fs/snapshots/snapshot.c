@@ -305,6 +305,7 @@
 #include "init/recovery.h"
 
 #include "snapshots/snapshot.h"
+#include "snapshots/subvolume.h"
 
 /*
  * Snapshot trees:
@@ -1262,7 +1263,8 @@ void bch2_fs_snapshots_init_early(struct bch_fs *c)
 
 	mutex_init(&c->snapshots.delete.progress_lock);
 
-	mutex_init(&c->snapshots.unlinked_lock);
+	INIT_WORK(&c->snapshots.wait_for_pagecache_and_delete_work,
+		  bch2_subvolume_wait_for_pagecache_and_delete);
 }
 
 int bch2_fs_snapshots_init(struct bch_fs *c)

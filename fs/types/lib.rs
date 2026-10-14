@@ -259,6 +259,14 @@ impl<T, const U64S: usize> core::ops::Deref for RustOnly<T, U64S> {
     }
 }
 
+/// RustOnly<@T>, its storage sized for a @T.
+macro_rules! rust_only {
+    ($t:ty) => {
+        $crate::types::RustOnly<$t, { core::mem::size_of::<$t>().div_ceil(8) }>
+    };
+}
+pub(crate) use rust_only;
+
 /// util/darray.h's DEFINE_DARRAY()s: C's typedefs are its own, these the
 /// same types for Rust.
 #[allow(non_camel_case_types)]

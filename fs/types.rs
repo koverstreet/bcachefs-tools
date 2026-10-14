@@ -737,4 +737,3 @@ pub struct bch_fs {
     #[cfg(CONFIG_DEBUG_FS)]
     pub btree_debug: [c::btree_debug; c::BTREE_ID_NR as usize],
 }
-c_default!(bch_fs);

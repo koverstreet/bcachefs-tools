@@ -343,7 +343,7 @@ impl Fs {
 
     /// EROFS if @subvol is a read-only subvolume (a read-only snapshot).
     pub fn subvol_is_ro(&self, subvol: u32) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_subvol_is_ro(self.raw, subvol) })
+        crate::snapshots::subvolume::is_ro(self, subvol)
     }
 
     /// Make the filesystem incompatible with versions before @version, if

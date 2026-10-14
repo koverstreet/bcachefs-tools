@@ -147,7 +147,6 @@
 #[path = "journal/seq_blacklist_types.rs"] pub mod journal_seq_blacklist_types;
 #[path = "journal/validate_types.rs"] pub mod journal_validate_types;
 #[path = "snapshots/snapshot_types.rs"] pub mod snapshots_snapshot_types;
-#[path = "snapshots/subvolume_types.rs"] pub mod snapshots_subvolume_types;
 #[path = "util/varint_types.rs"] pub mod util_varint_types;
 
 /// What C's types are to Rust: every type and constant above, and the
@@ -332,6 +331,5 @@ pub mod c {
     pub use super::journal_seq_blacklist_types::*;
     pub use super::journal_validate_types::*;
     pub use super::snapshots_snapshot_types::*;
-    pub use super::snapshots_subvolume_types::*;
     pub use super::util_varint_types::*;
 }

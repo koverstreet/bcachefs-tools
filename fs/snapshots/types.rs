@@ -3,7 +3,9 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{DArray, bits_to_longs, c_default};
+use crate::types::{DArray, bits_to_longs, c_default, rust_only};
+use crate::util::alloc::KVVec;
+use crate::util::sync::Mutex;
 use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::{c_const, c_enum, CStruct, c_typedef, TypeInfo};
 
@@ -119,10 +121,11 @@ pub struct bch_fs_snapshots {
     pub create_lock: c::percpu_rw_semaphore,
     pub delete: c::snapshot_delete,
     pub wait_for_pagecache_and_delete_work: c::work_struct,
-    pub unlinked: c::snapshot_id_list,
-    pub unlinked_lock: c::mutex,
+    /// Subvolumes unlinked and waiting for the delete work: Rust's alone,
+    /// initialized in place by bch2_fs_subvolumes_init_early() and dropped
+    /// by bch2_fs_subvolumes_exit() (subvolume.rs).
+    pub(crate) unlinked: rust_only!(Mutex<KVVec<u32>>),
 }
-c_default!(bch_fs_snapshots);
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, CStruct)]
