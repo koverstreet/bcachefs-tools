@@ -788,6 +788,13 @@ pub fn cast_plain_mut<T: Plain>(b: &mut [u8]) -> Option<&mut T> {
         .then(|| unsafe { &mut *b.as_mut_ptr().cast::<T>() })
 }
 
+/// A sized Plain @v's bytes, every one - to write it into bytes that
+/// needn't be aligned for it.
+pub fn plain_bytes<T: Plain>(v: &T) -> &[u8] {
+    // SAFETY: Plain - every byte a field's
+    unsafe { core::slice::from_raw_parts((v as *const T).cast(), size_of::<T>()) }
+}
+
 /// @v's bytes, every one: what its reference reaches - T::as_bytes().
 pub fn bytes_of<T: Unsized + ?Sized>(v: &T) -> &[u8] {
     // SAFETY: the value's own bytes: Unsized's are its head's and its tail's,
@@ -1502,22 +1509,17 @@ mod unsized_tests {
         let mut h = Ffi::<tcont>::default();
         h.set_val_u64s(total);
         h.tag = 7;
-        buf[0] = u64::from_le_bytes(as_bytes(&h).try_into().unwrap());
+        buf[0] = u64::from_le_bytes(plain_bytes(&h).try_into().unwrap());
         let mut at = 1;
         for (i, &s) in sizes.iter().enumerate() {
             let mut e = Ffi::<tent>::default();
             e.set_val_u64s(s as usize);
             e.ty = i as u16 + 1;
-            buf[at] = u64::from_le_bytes(as_bytes(&e).try_into().unwrap());
+            buf[at] = u64::from_le_bytes(plain_bytes(&e).try_into().unwrap());
             at += s as usize;
         }
         buf[1 + total..].fill(u64::MAX);
         buf
-    }
-
-    fn as_bytes<T: Plain>(v: &T) -> &[u8] {
-        // SAFETY: Plain - every byte a field's
-        unsafe { core::slice::from_raw_parts((v as *const T).cast(), size_of::<T>()) }
     }
 
     fn bytes(buf: &[u64]) -> &[u8] {
