@@ -18,9 +18,6 @@ use crate::c::{self, AclEntry, BCH_ACL_VERSION};
 use crate::util::vstructs::{cast_plain, plain_bytes, ArmSized, ArmWalkError};
 use crate::util::Printbuf;
 
-pub const ACL_TYPE_ACCESS:  i32 = 0x8000;
-pub const ACL_TYPE_DEFAULT: i32 = 0x4000;
-
 impl AclEntry {
     /// An entry as the VFS has it - for ACL_USER and ACL_GROUP, @id the uid
     /// or gid; the others have none: Err(the tag) for a tag ACLs don't have.
@@ -30,12 +27,14 @@ impl AclEntry {
         Self::read(plain_bytes(&e)).map_err(|_| tag)
     }
 
-    /// The uid or gid, for ACL_USER and ACL_GROUP; None for the others.
-    pub fn id(&self) -> Option<u32> {
-        match self {
-            Self::user(e) | Self::group(e) => Some(e.e_id.get()),
-            _                              => None,
-        }
+    /// The entry as the VFS has it, new()'s: its tag, its permissions, and
+    /// for ACL_USER and ACL_GROUP the uid or gid - 0 for the others.
+    pub fn vfs(&self) -> (u16, u16, u32) {
+        let id = match self {
+            Self::user(e) | Self::group(e) => e.e_id.get(),
+            _                              => 0,
+        };
+        (self.e_tag(), self.head().e_perm.get(), id)
     }
 }
 
@@ -134,6 +133,34 @@ pub fn to_text(out: &mut Printbuf, value: &[u8]) {
     }
 }
 
+/// Which of an inode's ACLs: its access ACL, or a directory's default ACL,
+/// which what's made in it inherits - as the VFS's <uapi/linux/posix_acl.h>
+/// ACL_TYPE_*.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum AclType {
+    Access  = 0x8000,
+    Default = 0x4000,
+}
+
+impl AclType {
+    /// The xattr type it's stored as: as acl_to_xattr_type().
+    pub fn xattr_type(self) -> u8 {
+        match self {
+            Self::Access  => c::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS as u8,
+            Self::Default => c::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT as u8,
+        }
+    }
+
+    /// The inode flag saying it has one.
+    pub fn inode_flag(self) -> c::bch_inode_flags {
+        match self {
+            Self::Access  => c::bch_inode_flags::BCH_INODE_has_access_acl,
+            Self::Default => c::bch_inode_flags::BCH_INODE_has_default_acl,
+        }
+    }
+}
+
 #[cfg(kernel)]
 pub use vfs::*;
 
@@ -166,26 +193,15 @@ mod vfs {
     use crate::vfs::inode::{InodeInfo, ATTR_CTIME, ATTR_MODE};
     use crate::xattr::{self, Xattrs};
 
-    /// The xattr type ACLs of @type_ are stored as: as acl_to_xattr_type().
-    fn xattr_type(type_: i32) -> u8 {
-        match type_ {
-            ACL_TYPE_ACCESS  => c::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS as u8,
-            ACL_TYPE_DEFAULT => c::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT as u8,
-            _ => panic!("acl type {type_}"),
+    impl AclType {
+        /// The VFS's type: anything else is a bug, as C's BUG().
+        fn from_vfs(type_: c_int) -> Self {
+            match type_ {
+                t if t == Self::Access as c_int  => Self::Access,
+                t if t == Self::Default as c_int => Self::Default,
+                _ => panic!("acl type {type_}"),
+            }
         }
-    }
-
-    /// The inode flag saying an ACL of @type_ exists.
-    fn inode_flag(type_: i32) -> u32 {
-        if type_ == ACL_TYPE_ACCESS {
-            c::bch_inode_flags::BCH_INODE_has_access_acl.bits()
-        } else {
-            c::bch_inode_flags::BCH_INODE_has_default_acl.bits()
-        }
-    }
-
-    fn search_key(type_: i32) -> xattr::XattrKey<'static> {
-        xattr::search_key(xattr_type(type_) as u32, OsStr::from_bytes(b""))
     }
 
     /// ERR_PTR(), for the VFS.
@@ -237,10 +253,8 @@ mod vfs {
         /// Set entry @i - below the count it was allocated with.
         fn set_entry(&mut self, i: u32, e: AclEntry) {
             assert!(i < unsafe { c::rust_posix_acl_count(self.as_raw()) });
-            unsafe {
-                c::rust_posix_acl_set_entry(self.as_raw(), i, e.e_tag(), e.head().e_perm.get(),
-                                            e.id().unwrap_or(0))
-            }
+            let (tag, perm, id) = e.vfs();
+            unsafe { c::rust_posix_acl_set_entry(self.as_raw(), i, tag, perm, id) }
         }
 
         /// This ACL with its permissions changed to match file mode @mode:
@@ -255,10 +269,10 @@ mod vfs {
             Ok(acl.expect("posix_acl_chmod() succeeded without an ACL"))
         }
 
-        /// Cache this - or None, for no ACL - as @v's ACL of @type_.
-        fn set_cached(acl: Option<&PosixAcl>, v: &InodeInfo<'_>, type_: i32) {
+        /// Cache this - or None, for no ACL - as @v's ACL of @ty.
+        fn set_cached(acl: Option<&PosixAcl>, v: &InodeInfo<'_>, ty: AclType) {
             let acl = acl.map_or(core::ptr::null_mut(), PosixAcl::as_raw);
-            unsafe { c::rust_set_cached_acl(v.vinode(), type_, acl) }
+            unsafe { c::rust_set_cached_acl(v.vinode(), ty as c_int, acl) }
         }
     }
 
@@ -268,40 +282,56 @@ mod vfs {
         }
     }
 
-    /// On-disk ACL @value as a posix_acl - None for one with no entries: as
-    /// bch2_acl_from_disk(). May unlock to allocate: a restart then.
-    fn from_disk(t: &TransAttempt<'_, '_>, value: &[u8]) -> Result<Option<PosixAcl>, BchError> {
-        let entries = entries(value).map_err(|err| {
-            bch_err!(t.fs(), "invalid acl: {err}");
-            BchError::from(c::EINVAL)
-        })?;
-        let nr = entries.clone().count();
-        if nr == 0 {
-            return Ok(None);
+    // ── To and from disk ─────────────────────────────────────────────────
+
+    impl PosixAcl {
+        /// On-disk ACL @value as a posix_acl - None for one with no entries:
+        /// as bch2_acl_from_disk(). May unlock to allocate: a restart then.
+        fn from_disk(t: &TransAttempt<'_, '_>, value: &[u8]) -> Result<Option<Self>, BchError> {
+            let entries = entries(value).map_err(|err| {
+                bch_err!(t.fs(), "invalid acl: {err}");
+                BchError::from(c::EINVAL)
+            })?;
+            let nr = entries.clone().count();
+            if nr == 0 {
+                return Ok(None);
+            }
+
+            let mut acl = Self::alloc(t, nr as u32)?;
+            for (i, e) in entries.enumerate() {
+                acl.set_entry(i as u32, e);
+            }
+            Ok(Some(acl))
         }
 
-        let mut acl = PosixAcl::alloc(t, nr as u32)?;
-        for (i, e) in entries.enumerate() {
-            acl.set_entry(i as u32, e);
+        /// Inode @inode's (@inum's) ACL of @ty, @iter pointed at its xattr -
+        /// None if it has none, or one with no entries.
+        fn lookup<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>,
+                      inode: &c::bch_inode_unpacked, inum: c::subvol_inum, ty: AclType,
+                      flags: BtreeIterFlags) -> Result<Option<Self>, BchError> {
+            match xattr::lookup(t, iter, inode, inum, ty.xattr_type(), OsStr::from_bytes(b""), flags) {
+                Ok(k)                          => Self::from_disk(t, xattr::value(k)),
+                Err(e) if e.matches(c::ENOENT) => Ok(None),
+                Err(e)                         => Err(e),
+            }
         }
-        Ok(Some(acl))
-    }
 
-    /// @acl as the xattr key storing it, for ACLs of @type_: as
-    /// bch2_acl_to_xattr(). E2BIG if it doesn't fit in a key.
-    fn to_xattr<'a, 't>(t: &TransAttempt<'a, 't>, acl: &PosixAcl, type_: i32)
-        -> Result<TransBkey<'a, 't>, BchError>
-    {
-        // A tag ACLs don't have: EINVAL, as bch2_acl_to_xattr()
-        if acl.entries().any(|e| e.is_err()) {
-            return Err(BchError::from(c::EINVAL));
+        /// The xattr key storing it, as an ACL of @ty: as bch2_acl_to_xattr().
+        /// E2BIG if it doesn't fit in a key.
+        fn to_xattr<'a, 't>(&self, t: &TransAttempt<'a, 't>, ty: AclType)
+            -> Result<TransBkey<'a, 't>, BchError>
+        {
+            // A tag ACLs don't have: EINVAL, as bch2_acl_to_xattr()
+            if self.entries().any(|e| e.is_err()) {
+                return Err(BchError::from(c::EINVAL));
+            }
+            let entries = || self.entries().map(|e| e.expect("checked above"));
+
+            let mut k = xattr::new_key(t, ty.xattr_type(), b"", encoded_len(entries()))?
+                .ok_or(BchError::from(c::E2BIG))?;
+            encode(entries(), xattr::value_mut(k.k_i_mut()));
+            Ok(k)
         }
-        let entries = || acl.entries().map(|e| e.expect("checked above"));
-
-        let mut k = xattr::new_key(t, xattr_type(type_), b"", encoded_len(entries()))?
-            .ok_or(BchError::from(c::E2BIG))?;
-        encode(entries(), xattr::value_mut(k.k_i_mut()));
-        Ok(k)
     }
 
     /// For the VFS: ->get_inode_acl(), bch2_get_acl(). NULL for none.
@@ -316,6 +346,7 @@ mod vfs {
             return err_ptr(BchError::from(c::ECHILD));
         }
 
+        let ty = AclType::from_vfs(type_);
         let v = unsafe { InodeInfo::from_inode(vinode) };
         let fs = v.fs();
         let inode = v.inode();
@@ -325,36 +356,25 @@ mod vfs {
         // xattr exists and we can skip the btree lookup. Also populate the
         // VFS negative cache, so subsequent permission checks on this inode
         // short-circuit at the VFS layer:
-        if inode.bi_flags & inode_flag(type_) == 0 {
-            PosixAcl::set_cached(None, &v, type_);
+        if inode.bi_flags & ty.inode_flag().bits() == 0 {
+            PosixAcl::set_cached(None, &v, ty);
             return core::ptr::null_mut();
         }
 
-        let hash_info = match str_hash::hash_info_init(fs, inode) {
-            Ok(h)  => h,
-            Err(e) => return err_ptr(e),
-        };
-        let search = search_key(type_);
-
         let trans = crate::btree_trans!(fs);
-        let ret = lockrestart_do(&trans, |t| {
+        let acl = match lockrestart_do(&trans, |t| {
             let mut iter = BtreeIter::uninit();
-            let k = str_hash::lookup::<Xattrs>(t, &mut iter, &hash_info, inum, &search,
-                                               BtreeIterFlags::empty())?;
-            from_disk(t, xattr::value(k))
-        });
-
-        let acl = match ret {
-            Ok(acl)                         => acl,
-            Err(e) if e.matches(c::ENOENT)  => None,
-            Err(e)                          => return err_ptr(e),
+            PosixAcl::lookup(t, &mut iter, inode, inum, ty, BtreeIterFlags::empty())
+        }) {
+            Ok(acl) => acl,
+            Err(e)  => return err_ptr(e),
         };
 
-        PosixAcl::set_cached(acl.as_ref(), &v, type_);
+        PosixAcl::set_cached(acl.as_ref(), &v, ty);
         acl.map_or(core::ptr::null_mut(), PosixAcl::into_raw)
     }
 
-    /// Set inode @inum's ACL of @type_ to @acl, or with None remove it, and
+    /// Set inode @inum's ACL of @ty to @acl, or with None remove it, and
     /// its flag saying it has one: as bch2_set_acl_trans(). @inode is the
     /// inode to write; a default ACL is only for directories.
     pub fn set_acl_trans(
@@ -362,25 +382,26 @@ mod vfs {
         inum:  c::subvol_inum,
         inode: &mut c::bch_inode_unpacked,
         acl:   Option<&PosixAcl>,
-        type_: i32,
+        ty:    AclType,
     ) -> Result<(), BchError> {
         let hash_info = str_hash::hash_info_init(t.fs(), inode)?;
 
-        if type_ == ACL_TYPE_DEFAULT && inode.bi_mode as u32 & c::S_IFMT != c::S_IFDIR {
+        if ty == AclType::Default && inode.bi_mode as u32 & c::S_IFMT != c::S_IFDIR {
             return if acl.is_none() { Ok(()) } else { Err(BchError::from(c::EACCES)) };
         }
 
         if let Some(acl) = acl {
-            let mut k = to_xattr(t, acl, type_)?;
+            let mut k = acl.to_xattr(t, ty)?;
             str_hash::set::<Xattrs>(t, &hash_info, inum, &mut k, BtreeIterFlags::empty(),
                                     UpdateTriggerFlags::empty())?;
-            inode.bi_flags |= inode_flag(type_);
+            inode.bi_flags |= ty.inode_flag().bits();
         } else {
-            match str_hash::delete::<Xattrs>(t, &hash_info, inum, &search_key(type_)) {
+            let search = xattr::search_key(ty.xattr_type() as u32, OsStr::from_bytes(b""));
+            match str_hash::delete::<Xattrs>(t, &hash_info, inum, &search) {
                 Err(e) if e.matches(c::ENOENT) => {}
                 r => r?,
             }
-            inode.bi_flags &= !inode_flag(type_);
+            inode.bi_flags &= !ty.inode_flag().bits();
         }
         Ok(())
     }
@@ -396,6 +417,7 @@ mod vfs {
         acl:    *mut c::posix_acl,
         type_:  c_int,
     ) -> c_int {
+        let ty = AclType::from_vfs(type_);
         let v = unsafe { Dentry::borrow_raw(dentry) }.inode();
         let vinode = v.vinode();
         let fs = v.fs();
@@ -414,7 +436,7 @@ mod vfs {
 
             // The mode can say all an access ACL would: then there's none.
             let mut mode = inode.bi_mode;
-            if type_ == ACL_TYPE_ACCESS {
+            if ty == AclType::Access {
                 ret_to_result(unsafe {
                     c::rust_posix_acl_update_mode(idmap, vinode, &mut mode, &mut acl)
                 })?;
@@ -422,7 +444,7 @@ mod vfs {
             // The VFS's reference:
             let acl = unsafe { PosixAcl::borrow_raw(acl) };
 
-            set_acl_trans(t, inum, &mut inode, acl.as_deref(), type_)?;
+            set_acl_trans(t, inum, &mut inode, acl.as_deref(), ty)?;
 
             inode.bi_ctime = fs.current_time();
             inode.bi_mode  = mode;
@@ -431,7 +453,7 @@ mod vfs {
             t.commit(None, CommitFlags::empty())?;
 
             v.update_after_write(t.trans(), &mut inode, ATTR_CTIME | ATTR_MODE);
-            PosixAcl::set_cached(acl.as_deref(), &v, type_);
+            PosixAcl::set_cached(acl.as_deref(), &v, ty);
             Ok(())
         });
 
@@ -450,23 +472,16 @@ mod vfs {
         inode: &c::bch_inode_unpacked,
         mode:  c::umode_t,
     ) -> Result<Option<PosixAcl>, BchError> {
-        let hash_info = str_hash::hash_info_init(t.fs(), inode)?;
-        let search = search_key(ACL_TYPE_ACCESS);
-
+        // None, or one with no entries: nothing to change.
         let mut iter = BtreeIter::uninit();
-        let acl = match str_hash::lookup::<Xattrs>(t, &mut iter, &hash_info, inum, &search,
-                                                   BtreeIterFlags::INTENT) {
-            Ok(k)                           => from_disk(t, xattr::value(k))?,
-            Err(e) if e.matches(c::ENOENT)  => return Ok(None),
-            Err(e)                          => return Err(e),
+        let Some(acl) = PosixAcl::lookup(t, &mut iter, inode, inum, AclType::Access,
+                                         BtreeIterFlags::INTENT)? else {
+            return Ok(None);
         };
-
-        // An ACL with no entries: nothing to change.
-        let Some(acl) = acl else { return Ok(None) };
 
         let acl = acl.chmod(t, mode)?;
 
-        let mut new = to_xattr(t, &acl, ACL_TYPE_ACCESS)?;
+        let mut new = acl.to_xattr(t, AclType::Access)?;
         new.k_mut().p = iter.pos();
         t.update(&iter, &new, UpdateTriggerFlags::empty())?;
         Ok(Some(acl))

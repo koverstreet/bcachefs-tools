@@ -208,7 +208,7 @@ pub fn create_trans(
     if flags & c::BCH_CREATE_SNAPSHOT == 0 {
         #[cfg(kernel)]
         {
-            use crate::acl::{set_acl_trans, ACL_TYPE_ACCESS, ACL_TYPE_DEFAULT};
+            use crate::acl::{set_acl_trans, AclType};
 
             // In the new subvolume, if one was made:
             let new_inum = c::subvol_inum {
@@ -221,10 +221,10 @@ pub fn create_trans(
             };
 
             if default_acl.is_some() {
-                set_acl_trans(t, new_inum, new_inode, default_acl, ACL_TYPE_DEFAULT)?;
+                set_acl_trans(t, new_inum, new_inode, default_acl, AclType::Default)?;
             }
             if acl.is_some() {
-                set_acl_trans(t, new_inum, new_inode, acl, ACL_TYPE_ACCESS)?;
+                set_acl_trans(t, new_inum, new_inode, acl, AclType::Access)?;
             }
         }
     }
