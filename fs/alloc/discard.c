@@ -31,6 +31,13 @@ static bool dev_bucket_nouse(struct bch_fs *c, struct bpos bucket)
 	return ca ? bch2_bucket_nouse(ca, bucket.offset) : true;
 }
 
+static bool dev_bucket_rw(struct bch_fs *c, struct bpos bucket)
+{
+	guard(rcu)();
+	struct bch_dev *ca = bch2_dev_rcu_noerror(c, bucket.inode);
+	return ca && ca->mi.state == BCH_MEMBER_STATE_rw;
+}
+
 #define DEV_IN_FLIGHT_MAX		4
 
 static __cold void __discard_state_to_text(struct printbuf *out, struct discard_state *s)
@@ -312,6 +319,18 @@ static int bch2_discard_one_bucket(struct btree_trans *trans,
 
 	if (unlikely(dev_bucket_nouse(c, bucket)))
 		return 0;
+
+	/*
+	 * A member that isn't rw keeps its need_discard buckets until it is,
+	 * with old journal seqs, so they sit at the front of the btree: check
+	 * before the alloc key lookup, or every pass looks each of them up
+	 * before it reaches the rw members' buckets. bch2_dev_get_ioref()
+	 * below still catches a member going ro after this check.
+	 */
+	if (unlikely(!dev_bucket_rw(c, bucket))) {
+		s->not_rw += bucket_size;
+		return 0;
+	}
 
 	int ret = discard_in_flight_add(c, NULL, bucket, fastpath, true);
 	if (ret) {
