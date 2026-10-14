@@ -35,7 +35,7 @@ use crate::fs::Fs;
 use crate::dirent::{self, DirentTarget};
 use crate::namei;
 use crate::util::kernel::random_u64;
-use crate::{bch_err_ratelimited, trans_inconsistent};
+use crate::{bch_err_ratelimited, bch_warn, trans_inconsistent};
 use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyIInode, BkeyIInodeAllocCursor, BkeyIInodeGeneration, BkeyIInodeV2, BkeyIInodeV3, BkeyS, BkeySC, BkeySCTyped, BkeySTyped, POS_MIN, SPOS_MAX};
 use crate::util::vstructs::Ffi;
 use crate::init::passes;
@@ -2042,8 +2042,11 @@ pub fn check_opts_propagated(
 
 /// @inode's reconcile options - the ones reconcile moves its data to match,
 /// and for each whether @inode set it or inherited it: as
-/// bch2_inode_reconcile_opts_get().
-pub fn reconcile_opts_get(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_extent_reconcile {
+/// bch2_inode_reconcile_opts_get(). An option too big for its field in
+/// bch_extent_reconcile is warned about and an error, not truncated.
+pub fn reconcile_opts_get(fs: &Fs, inode: &c::bch_inode_unpacked)
+    -> Result<c::bch_extent_reconcile, BchError>
+{
     let mut opts = c::bch_inode_opts::default();
     // Only reads @inode: C's signature isn't const.
     unsafe { c::bch2_inode_opts_get_inode(fs.raw, inode as *const _ as *mut _, &mut opts) };
@@ -2052,13 +2055,19 @@ pub fn reconcile_opts_get(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_exte
     let mut r = c::bch_extent_reconcile::default();
     macro_rules! reconcile_opts {
         ($(($name:tt)),* $(,)?) => { crate::paste! { $(
-            r.[<set_ $name>](opts.$name.try_into()
-                .expect(concat!("io option ", stringify!($name), " too big for bch_extent_reconcile")));
+            // an option already its field's type can't fail
+            #[allow(irrefutable_let_patterns)]
+            let Ok(v) = opts.$name.try_into() else {
+                bch_warn!(fs, "inode {}: io option {} = {} doesn't fit in bch_extent_reconcile",
+                          inode.bi_inum, stringify!($name), opts.$name);
+                return Err(BchError::from(bch_errcode::BCH_ERR_EINVAL_io_opt_too_big_for_reconcile));
+            };
+            r.[<set_ $name>](v);
             r.[<set_ $name _from_inode>](opts.[<$name _from_inode>]().into());
         )* } };
     }
     c::BCH_RECONCILE_OPTS!(reconcile_opts);
-    r
+    Ok(r)
 }
 
 // ── The unpacked inode ───────────────────────────────────────────────────

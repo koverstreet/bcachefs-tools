@@ -578,12 +578,12 @@ pub fn rename_trans(
     let (src_inum, dst_inum) = (r.src_inum, r.dst_inum);
 
     *src_inode_u = inode::peek(t, &mut src_inode_iter, src_inum, BtreeIterFlags::INTENT)?;
-    let src_old_r = inode::reconcile_opts_get(fs, src_inode_u);
+    let src_old_r = inode::reconcile_opts_get(fs, src_inode_u)?;
 
     let mut dst_old_r = c::bch_extent_reconcile::default();
     if dst_inum.inum != 0 {
         *dst_inode_u = inode::peek(t, &mut dst_inode_iter, dst_inum, BtreeIterFlags::INTENT)?;
-        dst_old_r = inode::reconcile_opts_get(fs, dst_inode_u);
+        dst_old_r = inode::reconcile_opts_get(fs, dst_inode_u)?;
     }
 
     if src_inode_u.bi_subvol != 0 &&
