@@ -1123,11 +1123,8 @@ pub fn read_past<T: Plain>(rest: &[u8], at: usize) -> T {
 /// (#[unsized_vstruct]), as long as its count says. None if the bytes can't
 /// be one: fewer than every valid one has.
 pub trait ArmRef {
-    type Ref<'a>: Copy where Self: 'a;
-    type Mut<'a> where Self: 'a;
-
-    fn arm_ref(b: &[u8]) -> Option<Self::Ref<'_>>;
-    fn arm_mut(b: &mut [u8]) -> Option<Self::Mut<'_>>;
+    fn arm_ref(b: &[u8]) -> Option<&Self>;
+    fn arm_mut(b: &mut [u8]) -> Option<&mut Self>;
 }
 
 /// An arm of a sized tagged union, from the storage's bytes past the tag:
@@ -1136,7 +1133,7 @@ pub trait ArmRef {
 /// #[counted] one as many as its count says. An error if the bytes don't
 /// hold that many.
 pub trait ArmAt: ArmRef {
-    fn arm_at(b: &[u8]) -> Result<Self::Ref<'_>, VStructError>;
+    fn arm_at(b: &[u8]) -> Result<&Self, VStructError>;
 }
 
 /// Why an Unvalidated tagged union has no arm to hand out: its tag, @T,

@@ -402,8 +402,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
         .map(|a| if declared(a) {
             format!("    {}(&'a {}),\n", a.name, a.ty)
         } else {
-            format!("    {}(<<St as {vs}::State>::Of<{}__family> as {vs}::ArmRef>::Ref<'a>),\n",
-                    a.name, a.ty.trim())
+            format!("    {}(&'a <St as {vs}::State>::Of<{}__family>),\n", a.name, a.ty.trim())
         })
         .collect();
     // get()'s arms, in state @st: @bad, what an arm whose header says it's
@@ -629,8 +628,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
             .map(|a| if own(a) {
                 format!("    {}(&'a {s_ty}<St>),\n", a.name)
             } else {
-                format!("    {}(<<St as {vs}::State>::Of<{}__family> as {vs}::ArmRef>::Ref<'a>),\n",
-                        a.name, a.ty.trim())
+                format!("    {}(&'a <St as {vs}::State>::Of<{}__family>),\n", a.name, a.ty.trim())
             })
             .collect();
         let det = format!("<{determinant} as {det_trait}<Self>>");
@@ -686,7 +684,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                          \n\
                          /// The arm, if the tag is @A's: typed(), for one arm.\n\
                          #[allow(dead_code)]\n\
-                         {vis} fn arm<A>(&self) -> Option<A::Ref<'_>>\n\
+                         {vis} fn arm<A>(&self) -> Option<&A>\n\
                          where\n\
                              A: {arm_of}<{s}, Tag = {tag_ty}> + {vs}::ArmRef + ?Sized,\n\
                          {{\n\
@@ -698,7 +696,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                          \n\
                          /// arm(), to edit: as its ArmRef has it.\n\
                          #[allow(dead_code)]\n\
-                         {vis} fn arm_mut<A>(&mut self) -> Option<A::Mut<'_>>\n\
+                         {vis} fn arm_mut<A>(&mut self) -> Option<&mut A>\n\
                          where\n\
                              A: {arm_of}<{s}, Tag = {tag_ty}> + {vs}::ArmRef + ?Sized,\n\
                          {{\n\

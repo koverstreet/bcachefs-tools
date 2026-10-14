@@ -298,9 +298,6 @@ fn dst(ty: &str, doc: &str, shape: &Shape<'_>, methods: &str) -> String {
          \n\
          // as a tagged union's arm, over the bytes its storage says are its\n\
          impl {VS}::ArmRef for {ty} {{\n\
-             type Ref<'a> = &'a Self;\n\
-             type Mut<'a> = &'a mut Self;\n\
-             \n\
              fn arm_ref(b: &[u8]) -> Option<&Self> {{\n\
                  {VS}::cast(b)\n\
              }}\n\

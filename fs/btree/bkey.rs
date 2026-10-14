@@ -520,9 +520,6 @@ macro_rules! bkey_val {
         // Whole, &T - and the Floored Min a View derefs to. A value is at the
         // u64 after its key's header, so it's aligned.
         impl ArmRef for c::[<bch_ $name>] {
-            type Ref<'a> = &'a Self;
-            type Mut<'a> = &'a mut Self;
-
             fn arm_ref(b: &[u8]) -> Option<&Self> {
                 // SAFETY: all of it, aligned
                 (b.len() >= size_of::<Self>() && b.as_ptr() as usize % align_of::<Self>() == 0)
@@ -699,7 +696,7 @@ impl<'a, V: ?Sized + ArmRef> BkeySC<'a, V> {
     /// As its type's ArmRef has it: &T for a sized type, whose valid values are
     /// all whole; else its family's DST, as long as k.u64s says. A value
     /// shorter than validate passes is a bug.
-    pub fn v(&self) -> V::Ref<'a> {
+    pub fn v(&self) -> &'a V {
         V::arm_ref(self.val_bytes())
             .unwrap_or_else(|| panic!("{}: {} bytes, shorter than validate passes", self.k,
                                       self.val_bytes().len()))
@@ -902,7 +899,7 @@ impl<'a, V: ?Sized> BkeyS<'a, V> {
 }
 
 impl<V: ?Sized + ArmRef> BkeyS<'_, V> {
-    pub fn v(&self) -> V::Ref<'_> {
+    pub fn v(&self) -> &V {
         let k: &c::bkey = self.k;
         V::arm_ref(self.val_bytes())
             .unwrap_or_else(|| panic!("{k}: shorter than validate passes"))
@@ -910,7 +907,7 @@ impl<V: ?Sized + ArmRef> BkeyS<'_, V> {
 
     /// Its value, to edit: a field a grown type's older value lacks is a
     /// set() error.
-    pub fn v_mut(&mut self) -> V::Mut<'_> {
+    pub fn v_mut(&mut self) -> &mut V {
         let k = *self.k;
         V::arm_mut(self.val_bytes_mut())
             .unwrap_or_else(|| panic!("{k}: shorter than validate passes"))

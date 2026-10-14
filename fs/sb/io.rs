@@ -35,7 +35,7 @@ const BSET_MAGIC: u64 = 0x90135c78b99e07f5;
 /// What walks its sections - C's walk, which trusts their counts: a
 /// validated superblock's.
 impl c::bch_sb__validated {
-    pub fn field<F: SbField + ?Sized>(&self) -> Option<F::Ref<'_>> {
+    pub fn field<F: SbField + ?Sized>(&self) -> Option<&F> {
         sb_field_get::<F>(self)
     }
 
@@ -104,19 +104,19 @@ impl bch_sb_handle {
         unsafe { &*self.bdev }
     }
 
-    pub fn field<F: SbField + ?Sized>(&self) -> Option<F::Ref<'_>> {
+    pub fn field<F: SbField + ?Sized>(&self) -> Option<&F> {
         sb_field_get::<F>(self.sb())
     }
 
-    pub fn field_mut<F: SbField + ?Sized>(&mut self) -> Option<F::Mut<'_>> {
+    pub fn field_mut<F: SbField + ?Sized>(&mut self) -> Option<&mut F> {
         sb_field_get_mut::<F>(self)
     }
 
-    pub fn field_resize<F: SbField + ?Sized>(&mut self, u64s: u32) -> Option<F::Mut<'_>> {
+    pub fn field_resize<F: SbField + ?Sized>(&mut self, u64s: u32) -> Option<&mut F> {
         sb_field_resize::<F>(self, u64s)
     }
 
-    pub fn field_get_minsize<F: SbField + ?Sized>(&mut self, min_u64s: u32) -> Option<F::Mut<'_>> {
+    pub fn field_get_minsize<F: SbField + ?Sized>(&mut self, min_u64s: u32) -> Option<&mut F> {
         sb_field_get_minsize::<F>(self, min_u64s)
     }
 
@@ -228,7 +228,7 @@ c::BCH_PERSISTENT_COUNTERS!(counter_table);
 
 /// The superblock's section of type @F, if it has one, over the bytes its
 /// header says are its - one written before F grew reads as zero past them.
-pub fn sb_field_get<F: SbField + ?Sized>(sb: &c::bch_sb) -> Option<F::Ref<'_>> {
+pub fn sb_field_get<F: SbField + ?Sized>(sb: &c::bch_sb) -> Option<&F> {
     let f = unsafe { c::bch2_sb_field_get_id(sb.as_ffi() as *mut _, F::FIELD_TYPE) };
     // SAFETY: C's walk of the sections the superblock's count says it has -
     // validated, so the section and its bytes are there
@@ -237,7 +237,7 @@ pub fn sb_field_get<F: SbField + ?Sized>(sb: &c::bch_sb) -> Option<F::Ref<'_>> {
 
 /// To edit: a field past the section's end is no write it will carry -
 /// whole_mut() for all of it, if it's all there.
-pub fn sb_field_get_mut<F: SbField + ?Sized>(disk_sb: &mut c::bch_sb_handle) -> Option<F::Mut<'_>> {
+pub fn sb_field_get_mut<F: SbField + ?Sized>(disk_sb: &mut c::bch_sb_handle) -> Option<&mut F> {
     let f = unsafe { c::bch2_sb_field_get_id(disk_sb.sb, F::FIELD_TYPE) };
     // SAFETY: as sb_field_get()'s
     (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
@@ -248,7 +248,7 @@ pub fn sb_field_get_mut<F: SbField + ?Sized>(disk_sb: &mut c::bch_sb_handle) -> 
 pub fn sb_field_resize<F: SbField + ?Sized>(
     disk_sb: &mut c::bch_sb_handle,
     u64s: u32,
-) -> Option<F::Mut<'_>> {
+) -> Option<&mut F> {
     let f = unsafe { c::bch2_sb_field_resize_id(disk_sb, F::FIELD_TYPE, u64s) };
     // SAFETY: C's resize, which reallocates the superblock if it has to
     (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
@@ -258,7 +258,7 @@ pub fn sb_field_resize<F: SbField + ?Sized>(
 pub fn sb_field_get_minsize<F: SbField + ?Sized>(
     disk_sb: &mut c::bch_sb_handle,
     min_u64s: u32,
-) -> Option<F::Mut<'_>> {
+) -> Option<&mut F> {
     let f = unsafe { c::bch2_sb_field_get_minsize_id(disk_sb, F::FIELD_TYPE, min_u64s) };
     // SAFETY: as sb_field_resize()'s
     (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
@@ -376,7 +376,7 @@ impl<'a> SbRef<'a> {
         &self.buf[..self.bytes]
     }
 
-    pub fn field<F: SbField + ?Sized>(&self) -> Option<F::Ref<'a>> {
+    pub fn field<F: SbField + ?Sized>(&self) -> Option<&'a F> {
         sb_field_get::<F>(self.sb())
     }
 }
@@ -407,7 +407,7 @@ impl<'a> SbMut<'a> {
         &self.buf[..self.bytes]
     }
 
-    pub fn field<F: SbField + ?Sized>(&self) -> Option<F::Ref<'_>> {
+    pub fn field<F: SbField + ?Sized>(&self) -> Option<&F> {
         sb_field_get::<F>(self.sb())
     }
 }
@@ -470,7 +470,7 @@ impl SbBuf {
         unsafe { core::slice::from_raw_parts(self.buf.as_ptr() as *const u8, self.bytes) }
     }
 
-    pub fn field<F: SbField + ?Sized>(&self) -> Option<F::Ref<'_>> {
+    pub fn field<F: SbField + ?Sized>(&self) -> Option<&F> {
         sb_field_get::<F>(self.sb())
     }
 }
