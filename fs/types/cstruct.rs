@@ -591,6 +591,8 @@ pub struct CTaggedUnion {
     /// The tag's name: its field, and the accessor.
     pub tag_field: String,
     pub tag_ty:    String,
+    /// `= TAG_ENUM`: the tag as handed out, a newtype over an integer the
+    /// tag widens to - or empty, the tag as it is.
     pub tag_enum:  String,
     /// `arms from LIST(params) => template`.
     pub from:      Option<CFromList>,
@@ -1897,7 +1899,7 @@ pub fn parse_c_export(text: &str) -> Result<CExport, String> {
     Ok(e)
 }
 
-/// tagged_union!'s body: `[vis] struct NAME { tag NAME: TYPE = TAG_ENUM, arms
+/// tagged_union!'s body: `[vis] struct NAME { tag NAME: TYPE [= TAG_ENUM], arms
 /// from LIST(params) => template | arm NAME: TYPE = VALUE, ..., pad: TYPE,
 /// size: pad, [packed] }`, or `[vis] union NAME in STORAGE { ..., size: header|arm }`.
 fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, String> {
@@ -1938,11 +1940,13 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
                 tu.defs.push(CTaggedDef { name: ident_at(item, j + 1).unwrap().to_string() });
             }
             [Tok::Ident(kw), Tok::Ident(field), Tok::Punct(':'), rest @ ..] if kw == "tag" => {
-                let eq = rest.iter().position(|t| t.is_punct('='))
-                    .ok_or("tagged_union!: tag NAME: TYPE = TAG_ENUM")?;
+                let eq = rest.iter().position(|t| t.is_punct('=')).unwrap_or(rest.len());
                 tu.tag_field = field.clone();
                 tu.tag_ty = tokens_to_rust(&rest[..eq]);
-                tu.tag_enum = tokens_to_rust(&rest[eq + 1..]);
+                tu.tag_enum = tokens_to_rust(rest.get(eq + 1..).unwrap_or_default());
+                if tu.tag_ty.is_empty() || (eq < rest.len() && tu.tag_enum.is_empty()) {
+                    return Err("tagged_union!: tag NAME: TYPE [= TAG_ENUM]".into());
+                }
             }
             [Tok::Ident(kw), Tok::Ident(from), rest @ ..] if kw == "arms" && from == "from" => {
                 tu.from = Some(parse_from_list(rest)?
@@ -2136,8 +2140,9 @@ pub fn enum_text(e: &CEnumDef) -> String {
 /// The record's form of @tu, with @arms: each written out.
 #[allow(dead_code)]
 pub fn tagged_union_record_text(tu: &CTaggedUnion, arms: &[CTaggedArm]) -> String {
-    let mut t = format!("tagged_union! {{ {} {{ tag {}: {} = {}, ",
-                        tu.c_type(), tu.tag_field, tu.tag_ty, tu.tag_enum);
+    let tag_enum = if tu.tag_enum.is_empty() { String::new() } else { format!(" = {}", tu.tag_enum) };
+    let mut t = format!("tagged_union! {{ {} {{ tag {}: {}{tag_enum}, ",
+                        tu.c_type(), tu.tag_field, tu.tag_ty);
     for a in arms {
         t.push_str(&format!("arm {}: {} = {}, ", a.name, a.ty, a.value));
     }

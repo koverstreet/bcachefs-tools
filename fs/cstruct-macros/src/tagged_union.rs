@@ -41,7 +41,9 @@
 //!
 //! The tag is a function of the whole value: a crate::types::Determinant,
 //! stabby's idea (docs.rs/stabby), n-way - generated, returning the tag
-//! field, `tag NAME`.
+//! field, `tag NAME`. It's handed out as TAG_ENUM, `tag NAME: TYPE =
+//! TAG_ENUM`, a newtype over an integer the tag widens to - or with none,
+//! `tag NAME: TYPE`, as it is.
 //!
 //! Generated, for the first declaration:
 //!
@@ -286,7 +288,16 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
     let (attrs, vis) = attrs_and_vis(decl);
     let name = &tu.name;
     let en = camel(name);
-    let (tag, tag_ty, tag_enum) = (&tu.tag_field, &tu.tag_ty, &tu.tag_enum);
+    let (tag, tag_ty) = (&tu.tag_field, &tu.tag_ty);
+    // The tag as handed out: its enum, a newtype over an integer the tag
+    // widens to - or with none, the tag as it is
+    let tag_enum = if tu.tag_enum.is_empty() { tag_ty } else { &tu.tag_enum };
+    let wrap_tag = |x: &str| if tu.tag_enum.is_empty() {
+        x.to_string()
+    } else {
+        format!("{tag_enum}({x} as _)")
+    };
+    let t_tag = wrap_tag("t");
     let det_trait = "crate::types::Determinant";
     let arm_of = "crate::types::ArmOf";
     let vs = "crate::util::vstructs";
@@ -477,12 +488,13 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
         // is plain data, read and written by copying, at any alignment.
         // No ArmOf: arms may share a type, the variant saying which.
         let head = s_ty.trim();
+        let tag_of_raw = wrap_tag("self.tag_raw()");
         let reads: String = arms.iter()
             .map(|a| format!(
                 "if t == ({value}) as {tag_ty} {{\n\
                      return {vs}::cast_plain::<{ty}>(b).copied().map(Self::{arm})\n\
                          .ok_or({vs}::ArmError::Bad {{\n\
-                             tag: {tag_enum}(t as _),\n\
+                             tag: {t_tag},\n\
                              err: {vs}::VStructError::Overrun {{\n\
                                  ty:   ::core::any::type_name::<{ty}>(),\n\
                                  want: ::core::mem::size_of::<{ty}>(),\n\
@@ -543,7 +555,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                  /// Its tag: its variant's.\n\
                  #[allow(dead_code)]\n\
                  {vis} fn {tag}(&self) -> {tag_enum} {{\n\
-                     {tag_enum}(self.tag_raw() as _)\n\
+                     {tag_of_raw}\n\
                  }}\n\
                  \n\
                  /// Its head, which every arm starts with: the fields they share.\n\
@@ -591,7 +603,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                      }};\n\
                      let t: {tag_ty} = {det}::get(h);\n\
                      {reads}\
-                     Err({vs}::ArmError::Unknown({tag_enum}(t as _)))\n\
+                     Err({vs}::ArmError::Unknown({t_tag}))\n\
                  }}\n\
                  \n\
                  fn bytes(&self) -> usize {{\n\
@@ -622,6 +634,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
             })
             .collect();
         let det = format!("<{determinant} as {det_trait}<Self>>");
+        let tag_of_self = wrap_tag(&format!("{det}::get(self)"));
         // ArmOf by each state's definitions, named - the storage's and the
         // arm's: an arm of an Unvalidated storage is its Unvalidated definition
         let arms_of_by_state: String = states.iter()
@@ -647,7 +660,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                                          format!("Ok({en}Ref::{}(self))", a.name)
                                      } else {
                                          format!("<{}__{lower} as {vs}::ArmRef>::arm_ref(self.as_bytes())\n\
-                                                      .map({en}Ref::{}).ok_or({tag_enum}(t as _))",
+                                                      .map({en}Ref::{}).ok_or({t_tag})",
                                                  a.ty.trim(), a.name)
                                      }))
                     .collect();
@@ -657,7 +670,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                          /// The tag, whether this version knows it or not.\n\
                          #[allow(dead_code)]\n\
                          {vis} fn {tag}(&self) -> {tag_enum} {{\n\
-                             {tag_enum}({det}::get(self) as _)\n\
+                             {tag_of_self}\n\
                          }}\n\
                          \n\
                          /// The arm its tag selects, over its bytes - as many as its count\n\
@@ -668,7 +681,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                          {vis} fn typed(&self) -> Result<{en}Ref{ref_args}, {tag_enum}> {{\n\
                              let t: {tag_ty} = {det}::get(self);\n\
                              {selects}\
-                             Err({tag_enum}(t as _))\n\
+                             Err({t_tag})\n\
                          }}\n\
                          \n\
                          /// The arm, if the tag is @A's: typed(), for one arm.\n\
@@ -711,6 +724,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
              {arms_of_by_state}"));
     }
 
+    let tag_of_storage = wrap_tag(&format!("{det}::get(&self.0)"));
     let ref_doc = if stated {
         format!("/// One of {name}'s arms, by reference, in its state: what {name}::get()\n\
                  /// gives - an arm that's another's type as long as its own header says.\n")
@@ -753,7 +767,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
              /// The tag, whether this version knows it or not.\n\
              #[allow(dead_code)]\n\
              {vis} fn {tag}(&self) -> {tag_enum} {{\n\
-                 {tag_enum}({det}::get(&self.0) as _)\n\
+                 {tag_of_storage}\n\
              }}\n\
              \n\
              /// Its bytes, as C and disk have them.\n\
@@ -792,7 +806,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                  let t: {tag_ty} = {det}::get(&self.0);\n\
                  let b = &self.as_bytes()[{payload_offset}..];\n\
                  {gets_unvalidated}\
-                 Err({vs}::ArmError::Unknown({tag_enum}(t as _)))\n\
+                 Err({vs}::ArmError::Unknown({t_tag}))\n\
              }}\n\
          }}\n\
          \n\
@@ -804,7 +818,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                  let t: {tag_ty} = {det}::get(&self.0);\n\
                  let b = &self.as_bytes()[{payload_offset}..];\n\
                  {gets_validated}\
-                 Err({tag_enum}(t as _))\n\
+                 Err({t_tag})\n\
              }}\n\
              \n\
              /// From an arm: new(), by the arm's type.\n\
@@ -870,7 +884,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
         unvalidated = st_arg("Unvalidated"),
         validated = st_arg("Validated"),
         gets_unvalidated = gets("Unvalidated",
-            &format!("return Err({vs}::ArmError::Bad {{ tag: {tag_enum}(t as _), err }})")),
+            &format!("return Err({vs}::ArmError::Bad {{ tag: {t_tag}, err }})")),
         gets_validated = gets("Validated",
             &format!("panic!(\"{name}<Validated>: {{err}} - an arm that doesn't fit, in one \\
                       validate passed or made from an arm\")"))))
