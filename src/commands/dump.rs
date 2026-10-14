@@ -9,6 +9,7 @@ use clap::Parser;
 use bcachefs_kernel::btree;
 use bcachefs_kernel::btree::bkey::{BkeyI, BkeyS};
 use bcachefs_kernel::c;
+use bcachefs_kernel::errcode::{ret_to_result_void, BchError};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::{entry_type, journal_entry_type};
 use bcachefs_kernel::util::vstructs::{cast_plain, Ffi, SelfSized, Unvalidated};
@@ -26,11 +27,13 @@ use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
 // encryption everything after the encrypted_start marker. Encryption is
 // symmetric, so the same call both decrypts and re-encrypts.
 
-fn jset_encrypt(fs: &Fs, j: &mut c::jset<Unvalidated>, csum_type: u32) -> i32 {
+fn jset_encrypt(fs: &Fs, j: &mut c::jset<Unvalidated>, csum_type: u32) -> Result<(), BchError> {
     let off = std::mem::offset_of!(Ffi<c::jset>, encrypted_start);
     let (nonce, len) = (j.nonce(), size_of_val(j) - off);
     // SAFETY: the jset's bytes, past encrypted_start: its pointer reaches all of them
-    unsafe { c::bch2_encrypt(fs.raw, csum_type, nonce, j.as_ffi_mut().cast::<u8>().add(off).cast(), len) }
+    ret_to_result_void(unsafe {
+        c::bch2_encrypt(fs.raw, csum_type, nonce, j.as_ffi_mut().cast::<u8>().add(off).cast(), len)
+    })
 }
 
 fn jset_csum_set(fs: &Fs, j: &mut c::jset<Unvalidated>, csum_type: u32) {
@@ -257,15 +260,11 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
 
         if c::bch_csum_type(csum_type).is_encryption() {
             if !fs.chacha20_key_set() {
-                eprintln!("found encrypted journal entry on non-encrypted filesystem");
-                return Ok(());
+                bail!("journal entry at {pos:#x} is encrypted, and the filesystem has no key to decrypt it");
             }
 
-            let ret = jset_encrypt(&fs, j, csum_type);
-            if ret != 0 {
-                eprintln!("error decrypting journal entry: {}", ret);
-                return Ok(());
-            }
+            jset_encrypt(&fs, j, csum_type)
+                .map_err(|e| anyhow!("decrypting journal entry at {pos:#x}: {e}"))?;
             modified = true;
         }
 
@@ -285,7 +284,8 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
             // Re-encrypt (symmetric) if encrypted, then recompute the csum so
             // the entry stays checksum-valid instead of csum-cleared.
             if c::bch_csum_type(csum_type).is_encryption() {
-                jset_encrypt(&fs, j, csum_type);
+                jset_encrypt(&fs, j, csum_type)
+                    .map_err(|e| anyhow!("re-encrypting journal entry at {pos:#x}: {e}"))?;
             }
             jset_csum_set(&fs, j, csum_type);
         }
@@ -345,18 +345,14 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) ->
 
         if c::bch_csum_type(csum_type).is_encryption() {
             if !fs.chacha20_key_set() {
-                eprintln!("found encrypted btree node on non-encrypted filesystem");
-                return Ok(());
+                bail!("btree node bset at {pos:#x} is encrypted, and the filesystem has no key to decrypt it");
             }
 
             let ret = unsafe {
                 btree::read::bset_encrypt(fs.raw, buf.as_mut_ptr().add(bset_off) as *mut Ffi<c::bset>,
                                           bset_byte_offset as u32)
             };
-            if let Err(e) = ret {
-                eprintln!("error decrypting btree node: {e}");
-                return Ok(());
-            }
+            ret.map_err(|e| anyhow!("decrypting btree node bset at {pos:#x}: {e}"))?;
             modified = true;
         }
 
@@ -423,9 +419,8 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) ->
             // over the btree_node (first bset) or btree_node_entry.
             let bset = unsafe { buf.as_mut_ptr().add(bset_off) } as *mut Ffi<c::bset>;
             if c::bch_csum_type(csum_type).is_encryption() {
-                if let Err(e) = unsafe { btree::read::bset_encrypt(fs.raw, bset, bset_byte_offset as u32) } {
-                    eprintln!("error re-encrypting btree node: {e}");
-                }
+                unsafe { btree::read::bset_encrypt(fs.raw, bset, bset_byte_offset as u32) }
+                    .map_err(|e| anyhow!("re-encrypting btree node bset at {pos:#x}: {e}"))?;
             }
             let node = unsafe { buf.as_mut_ptr().add(pos) };
             bset_csum_set(&fs, node, bset, bset_byte_offset as u32, csum_type, vstruct_bytes);
