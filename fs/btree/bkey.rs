@@ -318,8 +318,17 @@ impl BkeyI {
     }
 }
 
-/// A key as a journal entry's walk hands it out - its bytes, checked against
-/// its u64s - all of it.
+/// A key as a walk over keys in bytes hands it out - its bytes, checked
+/// against its u64s - all of it.
+impl<'a> crate::util::vstructs::UnvalidatedRef<'a, c::bkey_i> {
+    pub fn key(&self) -> &'a BkeyI {
+        // SAFETY: the walk checked its u64s against its bytes, all of which
+        // as_bytes() is
+        unsafe { &*BkeyI::from_raw(self.as_bytes().as_ptr().cast()) }
+    }
+}
+
+/// key(), mutably: a journal entry's walk.
 impl crate::util::vstructs::UnvalidatedMut<'_, c::bkey_i> {
     pub fn key_mut(&mut self) -> &mut BkeyI {
         // SAFETY: the walk checked its u64s against its bytes, which

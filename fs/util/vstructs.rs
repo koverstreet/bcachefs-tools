@@ -483,8 +483,9 @@ pub struct UnvalidatedRefEntries<'a, E> {
 }
 
 impl<'a, E> UnvalidatedRefEntries<'a, E> {
-    /// The entries in @rest: an unsized container's, from its start[].
-    pub(crate) fn new(rest: &'a [u8]) -> Self {
+    /// The entries in @rest: an unsized container's, from its start[] - or
+    /// an ioctl's reply, keys one after another.
+    pub fn new(rest: &'a [u8]) -> Self {
         Self { rest: Some(rest), _entry: PhantomData }
     }
 }

@@ -102,8 +102,7 @@ fn fs_usage_to_text(
     let sysfs_path = sysfs::sysfs_path_from_fd(handle.sysfs_fd())?;
     let devs = sysfs::fs_get_devices(&sysfs_path, name_mode)?;
 
-    fs_usage_v1_to_text(out, &handle, &devs, fields)
-        .map_err(|e| anyhow!("query_accounting ioctl failed (kernel too old?): {}", e))?;
+    fs_usage_v1_to_text(out, &handle, &devs, fields)?;
 
     devs_usage_to_text(out, &handle, &devs, fields)?;
 
@@ -115,7 +114,7 @@ fn fs_usage_v1_to_text(
     handle: &BcachefsHandle,
     devs: &[DevInfo],
     fields: &[Field],
-) -> Result<(), errno::Errno> {
+) -> Result<()> {
     let has = |f: Field| -> bool { fields.contains(&f) };
 
     let mut accounting_types: u32 =
@@ -138,7 +137,8 @@ fn fs_usage_v1_to_text(
         }
     }
 
-    let result = handle.query_accounting(accounting_types)?;
+    let result = handle.query_accounting(accounting_types)
+        .map_err(|e| anyhow!("query_accounting: {e}"))?;
 
     // Sort entries by bpos
     let mut sorted: Vec<&AccountingEntry> = result.entries.iter().collect();

@@ -1,5 +1,8 @@
+use anyhow::anyhow;
 use bch_bindgen::c;
+use bcachefs_kernel::btree::bkey::BkeyIAccounting;
 use bcachefs_kernel::metadata_version;
+use bcachefs_kernel::util::vstructs::UnvalidatedRefEntries;
 
 use super::handle::BcachefsHandle;
 use super::ioctl::{ioctl_ptr, IoctlBuf, BCH_IOCTL_QUERY_ACCOUNTING, BCH_IOCTL_QUERY_ACCOUNTING_v2};
@@ -34,14 +37,15 @@ impl BcachefsHandle {
     /// falls back to v1 on a kernel that doesn't have it. ENOTTY is the only
     /// error that means "too old" - anything else is a real failure and is
     /// returned, rather than silently downgraded.
-    pub fn query_accounting(&self, type_mask: u32) -> Result<AccountingResult, errno::Errno> {
+    pub fn query_accounting(&self, type_mask: u32) -> anyhow::Result<AccountingResult> {
         match self.query_accounting_v2(type_mask) {
-            Err(e) if e.0 == libc::ENOTTY => self.query_accounting_v1(type_mask),
+            Err(e) if e.downcast_ref::<std::io::Error>().and_then(|e| e.raw_os_error())
+                == Some(libc::ENOTTY) => self.query_accounting_v1(type_mask),
             r => r,
         }
     }
 
-    fn query_accounting_v2(&self, type_mask: u32) -> Result<AccountingResult, errno::Errno> {
+    fn query_accounting_v2(&self, type_mask: u32) -> anyhow::Result<AccountingResult> {
         let mut accounting_u64s: u32 = 128;
 
         loop {
@@ -58,7 +62,7 @@ impl BcachefsHandle {
                 Ok(_) => {
                     let hdr = buf.hdr();
                     let entries = parse_accounting_entries(
-                        buf.trailing_bytes(hdr.accounting_u64s as usize * 8));
+                        buf.trailing_bytes(hdr.accounting_u64s as usize * 8))?;
 
                     return Ok(AccountingResult {
                         capacity: hdr.capacity,
@@ -70,12 +74,12 @@ impl BcachefsHandle {
                     });
                 }
                 Err(e) if e.raw_os_error() == Some(libc::ERANGE) => accounting_u64s *= 2,
-                Err(e) => return Err(errno::Errno(e.raw_os_error().unwrap_or(libc::EIO))),
+                Err(e) => return Err(e.into()),
             }
         }
     }
 
-    fn query_accounting_v1(&self, type_mask: u32) -> Result<AccountingResult, errno::Errno> {
+    fn query_accounting_v1(&self, type_mask: u32) -> anyhow::Result<AccountingResult> {
         let mut accounting_u64s: u32 = 128;
 
         loop {
@@ -91,9 +95,8 @@ impl BcachefsHandle {
             match ret {
                 Ok(_) => {
                     let hdr = buf.hdr();
-                    /* trailing records are variable-size bkey_i_accounting, parsed from bytes */
                     let entries = parse_accounting_entries(
-                        buf.trailing_bytes(hdr.accounting_u64s as usize * 8));
+                        buf.trailing_bytes(hdr.accounting_u64s as usize * 8))?;
 
                     return Ok(AccountingResult {
                         capacity: hdr.capacity,
@@ -105,75 +108,33 @@ impl BcachefsHandle {
                     });
                 }
                 Err(e) if e.raw_os_error() == Some(libc::ERANGE) => accounting_u64s *= 2,
-                Err(e) => return Err(errno::Errno(e.raw_os_error().unwrap_or(libc::EIO))),
+                Err(e) => return Err(e.into()),
             }
         }
     }
 }
 
-/// Parse the raw u64 buffer of bkey_i_accounting entries.
-///
-/// Each entry starts with a `struct bkey` header (5 u64s = 40 bytes),
-/// followed by counters. The `bkey.u64s` field gives the total size
-/// of key + value in u64s.
-fn parse_accounting_entries(data: &[u8]) -> Vec<AccountingEntry> {
-    let mut entries = Vec::new();
+/// The accounting keys of a QUERY_ACCOUNTING reply, one after another: each
+/// checked against the bytes there are, an error if it doesn't fit or isn't
+/// an accounting key - the kernel and us disagreeing about the reply.
+fn parse_accounting_entries(data: &[u8]) -> anyhow::Result<Vec<AccountingEntry>> {
+    // Kernels before disk_accounting_big_endian wrote the pos byte swapped
     let kernel_version = bcachefs_kernel_version();
     let need_swab = kernel_version > 0
         && kernel_version < u32::from(metadata_version::disk_accounting_big_endian) as u64;
 
-    let mut offset = 0;
-    while offset < data.len() {
-        let key_u64s = data[offset] as usize;
-        if key_u64s == 0 {
-            break;
-        }
+    UnvalidatedRefEntries::<c::bkey_i>::new(data)
+        .map(|k| {
+            let k = k.map_err(|e| anyhow!("QUERY_ACCOUNTING reply: {e}"))?.key();
+            let a = k.arm::<BkeyIAccounting>().ok_or_else(|| {
+                anyhow!("QUERY_ACCOUNTING reply: a key of type {} at {}", k.k.type_, k.k.p)
+            })?;
 
-        let entry_bytes = key_u64s * 8;
-        if offset + entry_bytes > data.len() {
-            break;
-        }
-
-        let entry_data = &data[offset..offset + entry_bytes];
-
-        // bkey header is 5 u64s (40 bytes). The bpos is at the end of the bkey.
-        // On little-endian: bkey layout is [u64s(1B), format:nw(1B), type(1B), pad(1B),
-        //                                   bversion(12B), size(4B), bpos(20B)]
-        // bpos starts at byte 20 (offset 20..40)
-        const BKEY_U64S: usize = 5;
-        const BPOS_OFFSET: usize = 20;
-
-        if entry_bytes < BKEY_U64S * 8 {
-            break;
-        }
-
-        // Extract bpos
-        let mut bpos = c::bpos {
-            snapshot: u32::from_ne_bytes(entry_data[BPOS_OFFSET..BPOS_OFFSET+4].try_into().unwrap()),
-            offset: u64::from_ne_bytes(entry_data[BPOS_OFFSET+4..BPOS_OFFSET+12].try_into().unwrap()),
-            inode: u64::from_ne_bytes(entry_data[BPOS_OFFSET+12..BPOS_OFFSET+20].try_into().unwrap()),
-        };
-
-        if need_swab {
-            unsafe { c::bch2_bpos_swab(&mut bpos) };
-        }
-
-        let pos = c::disk_accounting_pos::from_bpos(bpos);
-
-        // Counters start after the bkey header (bch_accounting.d[])
-        // bch_accounting has just a bch_val (0 bytes), then d[]
-        // So counters start at u64 offset BKEY_U64S
-        let nr_counters = key_u64s - BKEY_U64S;
-        let counters: Vec<u64> = (0..nr_counters)
-            .map(|i| {
-                let off = (BKEY_U64S + i) * 8;
-                u64::from_ne_bytes(entry_data[off..off + 8].try_into().unwrap())
-            })
-            .collect();
-
-        entries.push(AccountingEntry { pos, counters });
-        offset += entry_bytes;
-    }
-
-    entries
+            let mut p = k.k.p;
+            if need_swab {
+                unsafe { c::bch2_bpos_swab(&mut p) };
+            }
+            Ok(AccountingEntry { pos: c::disk_accounting_pos::from_bpos(p), counters: a.v().d.to_vec() })
+        })
+        .collect()
 }
