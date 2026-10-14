@@ -1981,7 +1981,7 @@ pub fn opts_get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_op
 /// it isn't casefolded: for its bch_hash_info.
 pub fn cf_encoding(fs: &Fs, inode: &c::bch_inode_unpacked) -> *mut c::unicode_map {
     if inode.casefold(fs) {
-        unsafe { (*fs.raw).cf_encoding }
+        fs.cf_encoding
     } else {
         core::ptr::null_mut()
     }

@@ -102,20 +102,20 @@ impl Fs {
 
     /// The filesystem's options, as resolved at open.
     pub fn opts(&self) -> &c::bch_opts {
-        unsafe { &(*self.raw).opts }
+        &self.opts
     }
 
     /// log2 of the filesystem block size in 512-byte sectors.
     pub fn block_bits(&self) -> u32 {
-        unsafe { (*self.raw).block_bits as u32 }
+        self.block_bits as u32
     }
 
     pub fn chacha20_key_set(&self) -> bool {
-        unsafe { (*self.raw).chacha20_key_set }
+        self.chacha20_key_set
     }
 
     pub fn disk_sb(&self) -> &c::bch_sb_handle {
-        unsafe { &(*self.raw).disk_sb }
+        &self.disk_sb
     }
 
     /// Non-owning: ManuallyDrop, so Fs::drop doesn't call bch2_fs_exit.
@@ -133,7 +133,7 @@ impl Fs {
     }
 
     pub fn sb_handle(&self) -> &c::bch_sb_handle {
-        unsafe { &(*self.raw).disk_sb }
+        &self.disk_sb
     }
 
     pub fn sb(&self) -> &c::bch_sb {
@@ -143,26 +143,25 @@ impl Fs {
     /// The metadata version the filesystem is at: C's c->sb.version, the
     /// in-memory copy, which is what decides version-gated behaviour.
     pub fn version(&self) -> c::bcachefs_metadata_version {
-        c::bcachefs_metadata_version(unsafe { (*self.raw).sb.version } as u32)
+        c::bcachefs_metadata_version(self.sb.version as u32)
     }
 
     /// The version the last upgrade completed to: c->sb.version_upgrade_complete.
     /// Below version() while an upgrade's migrations are still running.
     pub fn version_upgrade_complete(&self) -> c::bcachefs_metadata_version {
-        c::bcachefs_metadata_version(unsafe { (*self.raw).sb.version_upgrade_complete } as u32)
+        c::bcachefs_metadata_version(self.sb.version_upgrade_complete as u32)
     }
 
     /// Whether btree @id lost data - topology repair dropped nodes - so
     /// repairs may reconstruct what it's missing: c->sb.btrees_lost_data.
     pub fn btree_lost_data(&self, id: c::btree_id) -> bool {
-        let lost = unsafe { (*self.raw).sb.btrees_lost_data };
-        lost & (1u64 << id.0) != 0
+        self.sb.btrees_lost_data & (1u64 << id.0) != 0
     }
 
     /// Whether this is an image made with `bcachefs dump --sanitize`, which
     /// scrubs dirent names without rehashing them: c->sb.dirents_sanitized.
     pub fn dirents_sanitized(&self) -> bool {
-        unsafe { (*self.raw).sb.dirents_sanitized }
+        self.sb.dirents_sanitized
     }
 
     /// Whether filesystem flag @f (BCH_FS_*) is set: C's test_bit() on
@@ -290,7 +289,7 @@ impl Fs {
 
     /// Number of devices in the filesystem superblock.
     pub fn nr_devices(&self) -> u32 {
-        unsafe { (*self.raw).sb.nr_devices as u32 }
+        self.sb.nr_devices as u32
     }
 
     /// Get a reference to a device by index. Returns None if the device
@@ -366,8 +365,7 @@ impl Fs {
     /// Whether the filesystem uses @feature: c->sb.features, the in-memory
     /// copy.
     pub fn feature(&self, feature: c::bch_sb_feature) -> bool {
-        let features = unsafe { (*self.raw).sb.features };
-        features & (1u64 << feature.0) != 0
+        self.sb.features & (1u64 << feature.0) != 0
     }
 
     /// Mark the filesystem as using @feature, writing the superblock if it
