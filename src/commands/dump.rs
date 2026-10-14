@@ -3,7 +3,7 @@ use std::os::fd::{AsFd, BorrowedFd};
 use std::path::Path;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 
 use bcachefs_kernel::btree;
@@ -11,7 +11,7 @@ use bcachefs_kernel::btree::bkey::{BkeyI, BkeyS};
 use bcachefs_kernel::c;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::{entry_type, journal_entry_type};
-use bcachefs_kernel::util::vstructs::{Ffi, SelfSized, Unvalidated};
+use bcachefs_kernel::util::vstructs::{cast_plain, Ffi, SelfSized, Unvalidated};
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::POS_MIN;
 
@@ -241,41 +241,41 @@ fn sanitize_val(fs: &Fs, mut k: BkeyS, opts: SanitizeOpts) -> bool {
 
 /// Sanitize a journal buffer in-place: walk jset entries, handle encryption,
 /// zero inline data, optionally scramble filenames, clear checksums.
-fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
+fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
     let fs = unsafe { Fs::borrow_raw(fs_raw) };
     let jset_magic = fs.disk_sb().sb().jset_magic();
     let block_bits = fs.block_bits();
 
+    // A jset that overruns what holds it - or an entry or key one - is an
+    // error: the walk can't scrub it, and skipping it would dump it as it is
     let mut pos = 0;
-    while let Some(j) = c::jset::<Unvalidated>::from_bytes_mut(&mut buf[pos..]).ok()
-        .filter(|j| j.magic.get() == jset_magic)
-    {
+    while cast_plain::<Ffi<c::jset>>(&buf[pos..]).is_some_and(|j| j.magic.get() == jset_magic) {
+        let j = c::jset::<Unvalidated>::from_bytes_mut(&mut buf[pos..])
+            .map_err(|e| anyhow!("journal entry at {pos:#x} overruns its bucket: {e}"))?;
         let csum_type = j.csum_type() as u32;
         let mut modified = false;
 
         if c::bch_csum_type(csum_type).is_encryption() {
             if !fs.chacha20_key_set() {
                 eprintln!("found encrypted journal entry on non-encrypted filesystem");
-                return;
+                return Ok(());
             }
 
             let ret = jset_encrypt(&fs, j, csum_type);
             if ret != 0 {
                 eprintln!("error decrypting journal entry: {}", ret);
-                return;
+                return Ok(());
             }
             modified = true;
         }
 
-        // an entry or key that overruns what holds it ends the walk there:
-        // the rest is dumped as it is
         for e in j.entries_mut() {
-            let Ok(e) = e else { break };
+            let e = e.map_err(|e| anyhow!("journal entry at {pos:#x}: {e}"))?;
             if matches!(entry_type(e), journal_entry_type::btree_keys
                                      | journal_entry_type::btree_root
                                      | journal_entry_type::write_buffer_keys) {
                 for k in e.entries_mut() {
-                    let Ok(mut k) = k else { break };
+                    let mut k = k.map_err(|e| anyhow!("journal entry at {pos:#x}: {e}"))?;
                     modified |= sanitize_val(&fs, BkeyS::from(k.key_mut()), opts);
                 }
             }
@@ -292,11 +292,13 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
 
         pos += (j.sectors(block_bits) << 9).min(buf.len() - pos);
     }
+
+    Ok(())
 }
 
 /// Sanitize a btree node buffer in-place: walk bset entries, handle
 /// encryption, zero inline data, optionally scramble filenames.
-fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
+fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
     let fs = unsafe { Fs::borrow_raw(fs_raw) };
     let bset_magic = fs.disk_sb().sb().bset_magic();
     let block_bits = fs.block_bits();
@@ -313,22 +315,28 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
     let mut pos = 0;
     let mut bset_byte_offset: usize = 0;
 
+    // The node, then its entries - each as long as its bset - until one isn't
+    // this node's. A bset of this node's that overruns the buffer, or a key
+    // that overruns its bset, is an error, as in sanitize_journal()
+    let overrun = |pos: usize, e| anyhow!("btree node bset at {pos:#x} overruns the node: {e}");
+
     while pos < buf.len() {
-        // The node, then its entries - each as long as its bset: where the
-        // bset is, and the whole's bytes and sectors
+        // where the bset is, and the whole's bytes and sectors
         let (bset_off, vstruct_bytes, sectors) = if first {
-            let Some(n) = c::btree_node::<Unvalidated>::from_bytes(&buf[pos..]).ok() else { break };
+            let Some(n) = cast_plain::<Ffi<c::btree_node>>(&buf[pos..]) else { break };
             if n.magic.get() != bset_magic {
                 break;
             }
+            let n = c::btree_node::<Unvalidated>::from_bytes(&buf[pos..]).map_err(|e| overrun(pos, e))?;
             format_key_u64s = n.format.key_u64s as usize;
             seq = n.keys.seq.get();
             (pos + std::mem::offset_of!(Ffi<c::btree_node>, keys), n.bytes(), n.sectors(block_bits))
         } else {
-            let Some(n) = c::btree_node_entry::<Unvalidated>::from_bytes(&buf[pos..]).ok() else { break };
+            let Some(n) = cast_plain::<Ffi<c::btree_node_entry>>(&buf[pos..]) else { break };
             if n.keys.seq.get() != seq {
                 break;
             }
+            let n = c::btree_node_entry::<Unvalidated>::from_bytes(&buf[pos..]).map_err(|e| overrun(pos, e))?;
             (pos + std::mem::offset_of!(Ffi<c::btree_node_entry>, keys), n.bytes(), n.sectors(block_bits))
         };
         // SAFETY: checked whole, above
@@ -338,7 +346,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
         if c::bch_csum_type(csum_type).is_encryption() {
             if !fs.chacha20_key_set() {
                 eprintln!("found encrypted btree node on non-encrypted filesystem");
-                return;
+                return Ok(());
             }
 
             let ret = unsafe {
@@ -347,7 +355,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
             };
             if let Err(e) = ret {
                 eprintln!("error decrypting btree node: {e}");
-                return;
+                return Ok(());
             }
             modified = true;
         }
@@ -363,7 +371,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
 
             let key_bytes = key_u64s * 8;
             if key_pos + key_bytes > key_end {
-                break;
+                bail!("btree node bset at {pos:#x}: key at {key_pos:#x}, {key_bytes} bytes, overruns the bset's end at {key_end:#x}");
             }
 
             let key_format = buf[key_pos + 1] & 0x7f;
@@ -428,6 +436,8 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
         bset_byte_offset += advance;
         pos += advance;
     }
+
+    Ok(())
 }
 
 // ---- Dump implementation ----
@@ -504,7 +514,7 @@ fn write_sanitized_ranges(
     ranges: &mut Ranges,
     bucket_bytes: u64,
     opts: SanitizeOpts,
-    sanitize_fn: fn(*mut c::bch_fs, &mut [u8], SanitizeOpts),
+    sanitize_fn: fn(*mut c::bch_fs, &mut [u8], SanitizeOpts) -> Result<()>,
 ) -> Result<()> {
     ranges_sort(ranges);
     let mut words = vec![0u64; bucket_bytes as usize / 8];
@@ -517,7 +527,9 @@ fn write_sanitized_ranges(
         assert!(len <= bucket_bytes as usize);
 
         qcow2::pread_exact(img.infd(), &mut buf[..len], r.start)?;
-        sanitize_fn(fs_raw, &mut buf[..len], opts);
+        sanitize_fn(fs_raw, &mut buf[..len], opts)
+            .with_context(|| format!("sanitizing the {len} bytes at device offset {:#x}; \
+                                      not written unsanitized - dump failed", r.start))?;
         img.write_buf(&buf[..len], r.start)?;
     }
 
