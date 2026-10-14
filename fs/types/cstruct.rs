@@ -557,6 +557,7 @@ pub struct CTaggedArm {
 ///           tag type_: u8 = disk_accounting_type,
 ///           arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: bch_acct_ ## f = nr,
 ///           pad: c::bpos,
+///           size: pad,
 ///           packed,
 ///       }
 ///   }
@@ -569,9 +570,11 @@ pub struct CTaggedArm {
 /// `[#[...]] [pub] struct|union NAME { ... }`: they go to nestify::nest!,
 /// with the declaration's `#[...]*`.
 ///
-/// Or the storage is another's, `union NAME in STORAGE { .., unsized }` - a
-/// header its arms embed and run past - and what's generated is only the
-/// typed view of it; its arms' types are another's too.
+/// `size: pad` says what its size is a function of: nothing, a constant,
+/// the pad's. Or it's the header's count, `size: header` - the storage is
+/// another's, `union NAME in STORAGE { .., size: header }`, a header its
+/// arms embed and run past - and what's generated is only the typed view of
+/// it; its arms' types are another's too.
 #[derive(Debug)]
 pub struct CTaggedUnion {
     pub cfg:       Option<Cfg>,
@@ -594,12 +597,33 @@ pub struct CTaggedUnion {
     /// `packed`: C's __packed - for a struct, the payload right after the
     /// tag whatever the arms' alignment, which is what the format says.
     pub packed:    bool,
-    /// `unsized`: over another's storage, a header its arms embed and run
-    /// past - an unsized vstruct, a family (util/vstructs.rs), each state's
-    /// reference to which has its arm's bytes.
-    pub unsized_:  bool,
+    /// `size: ..`: what its size is a function of.
+    pub size:      CTaggedSize,
     /// Arm types defined in the block, for nestify::nest!.
     pub defs:      Vec<CTaggedDef>,
+}
+
+/// What a tagged_union!'s size is a function of, `size: pad|header`: the
+/// rest follows from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CTaggedSize {
+    /// Nothing - a constant, its pad's: a struct, its own storage, which
+    /// holds every arm, and a value of plain data.
+    Pad,
+    /// Its header's count: a union over another's storage, an unsized
+    /// vstruct, its arms embedding the header and running past it as far as
+    /// the count says - a family (util/vstructs.rs), each state's reference
+    /// to which has its arm's bytes.
+    Header,
+}
+
+impl CTaggedSize {
+    fn keyword(self) -> &'static str {
+        match self {
+            Self::Pad    => "pad",
+            Self::Header => "header",
+        }
+    }
 }
 
 /// An arm's type, defined in its tagged_union!'s block.
@@ -1867,8 +1891,8 @@ pub fn parse_c_export(text: &str) -> Result<CExport, String> {
 }
 
 /// tagged_union!'s body: `[vis] struct NAME { tag NAME: TYPE = TAG_ENUM, arms
-/// from LIST(params) => template | arm NAME: TYPE = VALUE, ..., [pad: TYPE]
-/// [packed] }`, or `[vis] union NAME in STORAGE { ..., unsized }`.
+/// from LIST(params) => template | arm NAME: TYPE = VALUE, ..., pad: TYPE,
+/// size: pad, [packed] }`, or `[vis] union NAME in STORAGE { ..., size: header }`.
 fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, String> {
     // `#[...]*` are for the arm types defined here - nestify propagates them -
     // not the storage: skipped
@@ -1893,10 +1917,11 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
         [Tok::Punct('{'), inner @ .., Tok::Punct('}')] => inner,
         _ => return Err(EXPECTED.into()),
     };
+    let mut size = None;
     let mut tu = CTaggedUnion { cfg, name, union, storage, tag_field: String::new(),
                                 tag_ty: String::new(), tag_enum: String::new(), from: None,
-                                arms: Vec::new(), pad: None, packed: false, unsized_: false,
-                                defs: Vec::new() };
+                                arms: Vec::new(), pad: None, packed: false,
+                                size: CTaggedSize::Pad, defs: Vec::new() };
     for item in split_top(inner, ',') {
         let eq = item.iter().rposition(|t| t.is_punct('='));
         match item {
@@ -1923,20 +1948,37 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
             }
             [Tok::Ident(kw), Tok::Punct(':'), ty @ ..] if kw == "pad" && !ty.is_empty() =>
                 tu.pad = Some(tokens_to_rust(ty)),
+            [Tok::Ident(kw), Tok::Punct(':'), Tok::Ident(of)] if kw == "size" => {
+                size = Some(match of.as_str() {
+                    "pad"    => CTaggedSize::Pad,
+                    "header" => CTaggedSize::Header,
+                    _ => return Err(format!("tagged_union!: size: {of} - its size is a function \
+                                             of its pad's, `size: pad`, or of its header's \
+                                             count, `size: header`")),
+                });
+            }
             [Tok::Ident(kw)] if kw == "packed" => tu.packed = true,
-            [Tok::Ident(kw)] if kw == "unsized" => tu.unsized_ = true,
             _ => return Err(format!("tagged_union!: {} not understood", tokens_to_rust(item))),
         }
     }
     if tu.tag_field.is_empty() {
         return Err("tagged_union!: no tag".into());
     }
-    // a union is over another's storage, whose arms run past it; a struct is
-    // its own storage, which holds its arms
-    if tu.union != tu.storage.is_some() || tu.union != tu.unsized_ {
-        return Err(format!("tagged_union! {}: either `union NAME in STORAGE {{ .., unsized }}` - \
-                            over another's storage, whose arms run past it - or `struct NAME`, \
-                            its own storage, which holds them", tu.name));
+    tu.size = size.ok_or_else(|| format!("tagged_union! {}: no size - what it's a function of, \
+                                          `size: pad` or `size: header`", tu.name))?;
+    // a constant size is a struct's, its own storage, which holds its arms; a
+    // header's count, a union's over another's storage, whose arms run past
+    // the header
+    let ok = match tu.size {
+        CTaggedSize::Pad    => !tu.union && tu.storage.is_none() && tu.pad.is_some(),
+        CTaggedSize::Header => tu.union && tu.storage.is_some() && tu.pad.is_none(),
+    };
+    if !ok {
+        return Err(format!("tagged_union! {}: either `struct NAME {{ .., pad: TYPE, size: pad }}` - \
+                            its own storage, which holds its arms, the pad's size - or \
+                            `union NAME in STORAGE {{ .., size: header }}` - over another's \
+                            storage, whose arms run past its header as far as its count says",
+                           tu.name));
     }
     if tu.storage.is_some() {
         if let Some(d) = tu.defs.first() {
@@ -2092,6 +2134,7 @@ pub fn tagged_union_record_text(tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Strin
     if let Some(p) = &tu.pad {
         t.push_str(&format!("pad: {p}, "));
     }
+    t.push_str(&format!("size: {}, ", tu.size.keyword()));
     if tu.packed {
         t.push_str("packed, ");
     }

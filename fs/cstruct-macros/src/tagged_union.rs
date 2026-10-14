@@ -7,6 +7,7 @@
 //!           tag type_: u8 = disk_accounting_type,
 //!           arms from BCH_DISK_ACCOUNTING_TYPES(f, nr, ..) => f: bch_acct_ ## f = nr,
 //!           pad: c::bpos,
+//!           size: pad,
 //!           packed,
 //!       }
 //!   }
@@ -16,7 +17,7 @@
 //!           tag type_: u8 = c::bch_jset_entry_type,
 //!           arm btree_keys: c::jset_entry = ..,
 //!           ...
-//!           unsized,
+//!           size: header,
 //!       }
 //!   }
 //!
@@ -24,10 +25,18 @@
 //! which of its arms it holds, and that may be one this version doesn't know.
 //! The layout is given, not chosen: the storage is the C, plain #[repr(C)]
 //! data - a `struct` is the tag, then a union of the arms, overlaid with the
-//! pad, if any. `packed` is C's __packed: for an on-disk struct, the payload
-//! right after the tag, whatever the arms' alignment - a struct of the tag
-//! and the union otherwise puts the union at its alignment, and a new arm
-//! could move every payload.
+//! pad.
+//!
+//! `size:` says what its size is a function of, and what's generated follows
+//! from that: nothing, a constant - `size: pad`, a struct, every value the
+//! pad's size, a value of plain data; or its header's count - `size: header`,
+//! a union over another's storage, below, a view of bytes as long as the
+//! header says.
+//!
+//! `packed` is C's __packed: for an on-disk struct, the payload right after
+//! the tag, whatever the arms' alignment - a struct of the tag and the union
+//! otherwise puts the union at its alignment, and a new arm could move every
+//! payload.
 //!
 //! The tag is a function of the whole value: a crate::types::Determinant,
 //! stabby's idea (docs.rs/stabby), n-way - generated, returning the tag
@@ -70,11 +79,11 @@
 //! as_bytes() can read any of them. A literal of the storage could leave
 //! some unwritten, as could an arm with padding; nothing makes either.
 //!
-//! Or, `union NAME in STORAGE { .., unsized }`, the storage is another's: a
-//! header its arms embed and run past, as far as its count says - a journal
-//! entry's, a superblock field's: an unsized vstruct (util/vstructs.rs), each
-//! reference to which has its arm's bytes, and its own C. Then what's
-//! generated is the Ref enum, ArmOf, and on each state's
+//! Or, `union NAME in STORAGE { .., size: header }`, the storage is
+//! another's: a header its arms embed and run past, as far as its count
+//! says - a journal entry's, a superblock field's: an unsized vstruct
+//! (util/vstructs.rs), each reference to which has its arm's bytes, and its
+//! own C. Then what's generated is the Ref enum, ArmOf, and on each state's
 //! definition of the storage - X__unvalidated, X__validated - typed(): the
 //! arm its tag selects, over its bytes, in the storage's state - every arm
 //! type has a family (util/vstructs.rs), so an Unvalidated storage's arms are
@@ -119,7 +128,7 @@
 use proc_macro::{Delimiter, Group, TokenStream, TokenTree};
 
 use crate::cstruct::{parse_items, tagged_union_arms, tagged_union_record_text, CItem, CTaggedArm,
-                     CTaggedUnion};
+                     CTaggedSize, CTaggedUnion};
 use crate::{comma_list, list_callback, record, through_list, tokens};
 
 /// tagged_union!: the arms from a list go through the list; written-out
@@ -246,10 +255,6 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
     if arms.is_empty() {
         return Err(format!("{}: no arms", tu.name));
     }
-    if !tu.unsized_ && tu.pad.is_none() {
-        return Err(format!("{}: a sized tagged_union! has a pad, `pad: TYPE` - its size, every \
-                            byte of it, which makes it Plain", tu.name));
-    }
     if let Some(d) = tu.defs.iter().find(|d| !arms.iter().any(|a| a.ty.trim() == d.name)) {
         return Err(format!("{}: {} is defined here but isn't an arm's type", tu.name, d.name));
     }
@@ -293,7 +298,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
     // An unsized vstruct's storage is a family: each state its own
     // definition, named - an impl for the alias X<St> would be for a
     // projection (util/vstructs.rs)
-    let states: Vec<(&str, String)> = if tu.unsized_ {
+    let states: Vec<(&str, String)> = if tu.size == CTaggedSize::Header {
         ["Unvalidated", "Validated"].iter()
             .map(|st| (*st, format!("{s_ty}__{}", st.to_lowercase())))
             .collect()
@@ -450,7 +455,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
         String::new()
     };
 
-    if tu.unsized_ {
+    if tu.size == CTaggedSize::Header {
         // An unsized vstruct, its arms running past its header as far as its
         // count says - each reference to one has them: typed() and arm(), on
         // each state's definition of the storage. An arm there may be an

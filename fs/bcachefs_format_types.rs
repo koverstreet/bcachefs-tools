@@ -862,7 +862,7 @@ tagged_union! {
     pub union bch_sb_field in c::bch_sb_field {
         tag type_: u32 = c::bch_sb_field_type,
         arms from BCH_SB_FIELDS(f, nr, ..) => f: c::bch_sb_field_ ## f = nr,
-        unsized,
+        size: header,
     }
 }
 
@@ -1834,7 +1834,7 @@ tagged_union! {
         arm log_bkey:          c::jset_entry              = c::bch_jset_entry_type::BCH_JSET_ENTRY_log_bkey.0,
         arm rewind_limit:      c::jset_entry_rewind_limit = c::bch_jset_entry_type::BCH_JSET_ENTRY_rewind_limit.0,
         arm rewind:            c::jset_entry_rewind       = c::bch_jset_entry_type::BCH_JSET_ENTRY_rewind.0,
-        unsized,
+        size: header,
     }
 }
 
