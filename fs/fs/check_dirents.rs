@@ -1,32 +1,23 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! fsck: the check_dirents recovery pass - every dirent belongs to a live
-//! directory in its snapshot, sits at the offset its hash says, and points at
-//! something that exists and agrees with it: an inode whose backpointer and
-//! type match, or for DT_SUBVOL a subvolume whose root and fs_path_parent
-//! match. Along the way it counts each directory's subdirectories, and checks
-//! i_nlink against the count once the walk leaves the directory.
+//! check_dirents: every dirent belongs to a live directory in its snapshot,
+//! sits where its hash says, and points at something that agrees with it - an
+//! inode whose backpointer and type match, or for DT_SUBVOL a subvolume whose
+//! root and fs_path_parent match. Each directory's subdirectories are counted
+//! and checked against i_nlink as the walk leaves it.
 //!
-//! Two inode walkers: @dir walks the directories the dirents belong to, in
-//! key order (InodeWalker::walk()); @target is loaded per dirent with the
-//! versions of the inode it points at that are visible from it
-//! (InodeWalker::get_visible()).
+//! @dir walks the directories in key order; @target is loaded per dirent with
+//! the versions of its inode visible from it.
 //!
-//! Snapshots make "points at something that exists" subtle. The target inode
-//! must exist in an ancestor snapshot of the dirent, so every subvolume that
-//! sees the dirent sees the inode; one that exists only in descendant
-//! snapshots gets the dirent moved down to them. And a target inode deleted
-//! in a descendant snapshot (a whiteout there) must not stay reachable from
-//! that snapshot through an older dirent: those get whiteouts too.
+//! The target must exist in an ancestor of the dirent's snapshot, so every
+//! subvolume that sees the dirent sees the inode. One only in descendants gets
+//! the dirent moved down to them - ahead of the walk, so the pass runs twice,
+//! and a second pass that still finds work is an error. A target deleted in a
+//! descendant, a whiteout there, gets the dirent whited out there too.
 //!
-//! The subdirectory counts are kept per dir walker entry, incremented after
-//! each DT_DIR dirent commits. When the walker refetches partway through a
-//! directory (a commit changed inodes, or it was invalidated), the counts are
-//! partial and are recounted from the btree instead (recalculate_sums).
-//!
-//! Moving a dirent down to descendant snapshots puts it ahead of the walk's
-//! position, so the pass runs a second time to check the copies; a second
-//! pass that still finds work is an error.
+//! Subdirectory counts are per dir walker entry, incremented as each DT_DIR
+//! dirent commits; if the walker refetches partway through a directory, they're
+//! recounted from the btree (recalculate_sums).
 
 use crate::btree::bkey::{pos, spos, BkeyIDirent, BkeySC, BkeyISubvolume, POS_MIN};
 use crate::btree::iter::{
@@ -57,9 +48,9 @@ struct CheckDirents {
 // ---------------------------------------------------------------------------
 // Subdirectory counts
 
-/// The subdirectories of directory @inum, as its version in @snapshot sees
-/// them. In the caller's attempt - a restart is returned, not retried - as it
-/// runs self_committing() (see check_dir_nlink()).
+/// The subdirectories of @inum as @snapshot sees them. In the caller's attempt,
+/// a restart returned, not retried: it runs self_committing() (see
+/// check_dir_nlink()).
 fn count_subdirs(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<u64, BchError> {
     let mut subdirs = 0;
     let mut iter = BtreeIter::new(t, c::btree_id::dirents, spos(inum, 0, snapshot),
@@ -105,11 +96,9 @@ fn check_dir_nlink(
     }
 
     let mut path = Printbuf::new();
-    // The path is for the message: failing to find it isn't an error. Looked
-    // up in the caller's attempt, a restart returned: this runs
-    // self_committing(), where beginning an attempt means the key is retried
-    // - and a declined repair, retried, would find the same count and begin
-    // another, forever.
+    // For the message only. In the caller's attempt: under self_committing(),
+    // beginning one retries the key, and a declined repair would find the same
+    // count and begin another, forever.
     if let Err(e) = namei::inum_snapshot_to_path(trans, inum, snapshot, &mut path) {
         if is_restart(&e) {
             return Err(e);
@@ -175,11 +164,9 @@ fn check_dirent_parent_subvol<'t>(
 
     let parent_snapshot = subvolume::get_snapshot_nowarn(trans, parent).found()?;
 
-    // A reference to the root subvolume is never the broken side: subvol 1's
-    // existence is an invariant, and check_root() recreates it if lost.
-    // Rewiring parent_subvol around the absence reparents the root
-    // directory's subvolume dirents onto arbitrary subvolumes; left alone,
-    // they're valid the moment the root subvolume is back:
+    // The root subvolume always exists (check_root() recreates it): rewiring
+    // around its absence would reparent the root's subvolume dirents onto
+    // arbitrary subvolumes.
     if parent_snapshot.is_none() && parent == c::BCACHEFS_ROOT_SUBVOL {
         return Ok(parent);
     }
@@ -225,10 +212,9 @@ fn check_dirent_parent_subvol<'t>(
     n.k_i_mut().arm_mut::<BkeyIDirent>().expect("a dirent").v_mut().set_parent_subvol(new_parent);
     t.update(iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
-    // The fs_path_parent check after this repairs the subvolume to agree with
-    // the dirent, so it has to agree with the dirent just written, not the
-    // one replaced - otherwise a single pass writes two different answers,
-    // and each fsck after moves one to match the other's stale value.
+    // The fs_path_parent check next repairs the subvolume to agree with the dirent:
+    // the one just written, or each fsck after moves one to match the other's
+    // stale value.
     Ok(new_parent)
 }
 
@@ -247,11 +233,9 @@ fn check_dirent_to_subvol<'t>(
                                          BtreeIterFlags::empty());
     let s = subvol_iter.peek_slot_typed(t, c::bch_bkey_type::KEY_TYPE_subvolume).found()?;
 
-    // A deleted-state subvolume is a tombstone pending the snapshot sweep:
-    // subvolume::get() reports those as ENOENT, but this is a raw read (the
-    // fs_path_parent repair needs the key). Treat it as missing here too -
-    // otherwise the dirent outlives the subvolume, and fsck stops converging
-    // once the sweep removes the key:
+    // A deleted subvolume is a tombstone awaiting the sweep: missing, as get()
+    // would say - this is a raw read, for the key. Else the dirent outlives it,
+    // and fsck stops converging once the sweep removes it.
     let s = s.filter(|s| {
         subvolume::val(*s).expect("typed").state() != Some(c::bch_subvolume_state::SUBVOLUME_STATE_deleted)
     });
@@ -305,15 +289,10 @@ fn check_dirent_to_subvol<'t>(
 // ---------------------------------------------------------------------------
 // Dirents to inodes
 
-/// The dirent's target inode is missing, but @inum has extents, dirents or
-/// xattrs in @snapshot: offer to recreate it - as what its keys say it was,
-/// or, for xattrs, which don't say, what the dirent does (@d_type). Returns
-/// whether the repair was declined - the dirent is then left alone, rather
-/// than removed as pointing at nothing.
-///
-/// Xattrs too, or a file whose only contents are xattrs loses its name: the
-/// dirent goes as pointing at nothing, and check_xattrs reconstructs the
-/// inode after, for check_unreachable_inodes to file under lost+found.
+/// The target is missing but @inum has keys in @snapshot: offer to recreate it,
+/// as what its keys say it was - or for xattrs, which don't say, as @d_type.
+/// Xattrs count, or a file of only xattrs would lose its name. Whether the
+/// repair was declined: the dirent is then left alone.
 fn maybe_reconstruct_inum(
     t:        &TransAttempt<'_, '_>,
     inum:     u64,
@@ -362,10 +341,8 @@ fn move_dirent_to_inode_snapshots(
 
         let snapshot = i.inode.bi_snapshot;
 
-        // The inode-side state firing this repair is unchanged by the copies,
-        // so a re-drive after a partially committed batch fires it again: skip
-        // the copies already committed, or the commit_lazy_if_full() restart
-        // can't make forward progress:
+        // The state firing this is unchanged by the copies: skip those already
+        // committed, or a re-drive after a partial commit makes no progress
         let copied = {
             let mut probe = BtreeIter::new(trans, c::btree_id::dirents,
                                            spos(k.k.p.inode, k.k.p.offset, snapshot),
@@ -413,13 +390,10 @@ fn check_dirent_to_inode<'t>(
         }
     }
 
-    // The inode must exist in an ancestor snapshot of the dirent: that's what
-    // makes the dirent resolvable from every subvolume leaf that can see it.
-    // get_visible() also finds inodes in descendant snapshots - reachable
-    // from *some* leaf, but a subvolume in a sibling branch sees the dirent
-    // and not the inode, and lookups there return ENOENT. Versions come
-    // newest snapshot first, from the dirent's down, so an ancestor inode, if
-    // there is one, is first:
+    // The inode must exist in an ancestor of the dirent's snapshot, for every
+    // subvolume that sees the dirent to see it: one only in descendants is
+    // invisible from a sibling branch. Versions come newest snapshot first, from
+    // the dirent's down, so an ancestor's is first.
     if let Some(first) = st.target.inodes().first() {
         if !snapshot::is_ancestor(trans, d_snapshot, first.inode.bi_snapshot) &&
            inode_fsck_err!(trans, k.k.p, id::dirent_to_inode_in_descendant_snapshot,
@@ -458,12 +432,9 @@ fn check_dirent_to_inode<'t>(
                                              spos(k.k.p.inode, k.k.p.offset, snapshot),
                                              BtreeIterFlags::INTENT);
 
-        // The deletes list is derived from inode-side state the whiteouts
-        // don't change: check that the dirent is still visible in this
-        // snapshot, both so a re-drive after a partially committed batch
-        // skips the committed whiteouts (or the commit_lazy_if_full() restart
-        // can't make forward progress), and so an already invisible dirent
-        // isn't reported and "repaired" redundantly:
+        // Still visible here? A re-drive after a partial commit must skip the
+        // whiteouts already committed to make progress, and a dirent no longer
+        // visible mustn't be reported again.
         let visible = delete_iter.peek_slot(t)?.expect("a slot always has a key");
         if visible.key_type() != c::bch_bkey_type::KEY_TYPE_dirent {
             continue;

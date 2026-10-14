@@ -1,35 +1,25 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! fsck: directory and subvolume structure - the check_subvolume_structure and
-//! check_directory_structure recovery passes. Every other connectivity problem
-//! has been fixed by earlier passes; these two look for what's left: a part of
-//! the tree that loops back on itself, or a subvolume whose path up doesn't
-//! reach the root. The repair for both is to cut the loop - remove the dirent
-//! naming it - and reattach in lost+found.
+//! check_subvolume_structure and check_directory_structure: earlier passes
+//! fixed every other connectivity problem, so what's left is part of the tree
+//! looping back on itself, or a subvolume whose path up doesn't reach the
+//! root. The repair for both cuts the loop - removes the dirent naming it - and
+//! reattaches in lost+found.
 //!
-//!  - check_subvolume_structure walks each live subvolume up its
-//!    fs_path_parent chain to the root subvolume, reporting a loop
-//!    (subvol_loop) or a parent that isn't a subvolume (subvol_unreachable).
-//!  - check_directory_structure walks each directory up its backpointers
-//!    (bi_dir, bi_dir_offset) to a subvolume root, reporting a loop
-//!    (dir_loop).
+//! Subvolumes walk their fs_path_parent chain to the root subvolume
+//! (subvol_loop, subvol_unreachable); directories walk their backpointers to a
+//! subvolume root (dir_loop).
 //!
 //! bi_depth makes the directory walk cheap: if every directory is deeper than
-//! its parent, every chain strictly decreases to a root and there are no
-//! loops, so each directory only checks its own edge. A directory whose parent
-//! isn't shallower walks to the root, trusting no depth past that one, and the
-//! walked path is renumbered after. Soundness: a loop has an edge that doesn't
-//! decrease, and the walk starting at its child takes no early exit, so it goes
-//! around and sees the repeat. bi_depth_renumber commits as it goes - a nested
-//! transaction inside the commit loop, one commit per inode, since a path's
-//! length is unbounded and needn't fit in one transaction. That drops anything
-//! the outer attempt has queued, silently - the dropped-updates check is off
-//! for nested transactions - so nothing may be queued on a path that
-//! renumbers: today the walk only reads, and repairs return before it.
+//! its parent, every chain decreases to a root, so each directory only checks
+//! its own edge. One whose parent isn't shallower walks to the root, and the
+//! path is renumbered after. Sound, because a loop has an edge that doesn't
+//! decrease, and the walk from its child goes around and sees the repeat.
 //!
-//! Keys live partly in their iterator - a packed key's header is unpacked into
-//! it - so a key is only good until its iterator moves: check_subvol_path()
-//! copies each step's key before looking up its parent.
+//! Renumbering commits per inode in nested transactions - a path needn't fit
+//! in one - which silently drops anything the outer attempt queued: nothing
+//! may be queued on a path that renumbers. Today the walk only reads, and
+//! repairs return before it.
 
 use crate::btree::bkey::{pos, spos, BkeySC, BkeyISubvolume, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -76,13 +66,9 @@ fn remove_backpointer(
     let mut snapshot = inode.bi_snapshot;
     let mut iter = BtreeIter::uninit();
 
-    // For a subvolume root, get_dirent() resolves the dirent through
-    // bi_parent_subvol - so a missing parent subvolume lands here as an
-    // ENOENT, like a not-found dirent. That is exactly the state
-    // reattach_subvol() is called for.
-    //
-    // Nothing to remove is success: the caller's next move is to reattach,
-    // and it can't if we hand it an error.
+    // For a subvolume root, a missing parent subvolume reads as ENOENT here, like
+    // a missing dirent - what reattach_subvol() is for. Nothing to remove is
+    // success: the caller reattaches next.
     let Some(k) = namei::inode_get_dirent(t, &mut iter, inode, &mut snapshot).found()? else {
         return Ok(());
     };
@@ -131,9 +117,8 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
         inum:   start_sv.inode.get(),
     };
 
-    // Each step works on a copy of its subvolume key: from the second step on
-    // the key came from parent_iter, which holds its unpacked header - and
-    // looking up the parent overwrites it.
+    // A copy: from the second step on the key is parent_iter's, whose unpacked
+    // header looking up the parent overwrites
     let mut cur = BkeyBuf::new();
     cur.reassemble(k);
 
@@ -229,9 +214,8 @@ fn bi_depth_renumber(
 ) -> Result<(), BchError> {
     let fs = t.trans().fs();
 
-    // Each nested attempt that restarted ends with transaction_restart_nested,
-    // as nested_lockrestart_do() did; the C's closing trans_was_restarted()
-    // can't see a restart those didn't.
+    // A nested attempt that restarted returns transaction_restart_nested, so the
+    // outer one retries too
     for &inum in path.iter().rev() {
         bch_err_fn!(fs, t.nested(|t| bi_depth_renumber_one(t, inum, snapshot, new_bi_depth)))?;
         new_bi_depth += 1;
@@ -252,13 +236,10 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
 
     let mut inode = inode::unpack(fs, inode_k);
 
-    // If this inode sits at a redundant interior snapshot node that
-    // delete_dead_snapshots will collapse into a live descendant, do the whole
-    // path traversal in the descendant's view: an interrupted collapse migrated
-    // the naming dirents and parent inodes down there, and that's the state the
-    // subtree is converging on - otherwise a half-migrated dirent reads as a
-    // spurious unreachable-inode. Computed once (the walk stays in one
-    // snapshot); no-op on a healthy fs.
+    // At a redundant interior node delete_dead_snapshots will collapse, walk in
+    // the live descendant's view: an interrupted collapse moved the dirents and
+    // parents down there, and a half-moved dirent would read as unreachable.
+    // No-op on a healthy fs.
     if let Some(terminal) = snapshot::redundant_interior(fs, snapshot) {
         snapshot = terminal;
     }
@@ -269,9 +250,8 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
     let mut inode_iter = BtreeIter::new(trans, c::btree_id::inodes, spos(0, 0, snapshot),
                                         BtreeIterFlags::empty());
 
-    // If we're running full fsck, check_dirents() will have already ran, and we
-    // shouldn't see any missing alloc/backpointers here - otherwise that's
-    // handled separately, by check_unreachable_inodes
+    // After check_dirents, a missing dirent or backpointer is
+    // check_unreachable_inodes'
     while inode.bi_subvol == 0 && inode.has_backpointer() {
         let mut dirent_iter = BtreeIter::new(trans, c::btree_id::dirents,
                                              spos(inode.bi_dir, inode.bi_dir_offset, snapshot),
@@ -282,11 +262,8 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
                 return Err(e);
             }
 
-            // The naming dirent is gone, so we can't recover the filename -
-            // but bi_dir still tells us which directory the inode was in.
-            // Print that path so the user can see what was lost. A restart
-            // from the path walk just propagates to the enclosing
-            // for_each_..._commit loop.
+            // The dirent is gone, and the name with it, but bi_dir says which directory:
+            // print its path. A restart propagates to the commit loop.
             let mut buf = Printbuf::new();
             write!(buf, "unreachable inode, naming dirent missing; was in directory ");
             namei::inum_snapshot_to_path(trans, inode.bi_dir, snapshot, &mut buf)?;
@@ -362,8 +339,7 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
     Ok(())
 }
 
-/// Check for loops in the directory structure: all other connectivity issues
-/// have been fixed by prior passes
+/// Check for directory loops.
 fn check_directory_structure(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, c::btree_id::inodes, SPOS_MAX,

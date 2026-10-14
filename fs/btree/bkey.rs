@@ -16,11 +16,10 @@ use c::bpos as Bpos;
 
 use core::cmp::Ordering;
 
-/// The u64s of a key's header, struct bkey: as C's BKEY_U64s.
+/// struct bkey, in u64s.
 pub const BKEY_U64S: usize = core::mem::size_of::<c::bkey>() / core::mem::size_of::<u64>();
 
-/// A key with its value inline, of any type or its own: a BkeyI, generic or
-/// typed - for what takes either, as btree_insert() does.
+/// A BkeyI, generic or typed, for what takes either: btree_insert().
 pub trait AsBkeyI {
     fn as_bkey_i_mut(&mut self) -> &mut BkeyI;
 }
@@ -32,8 +31,7 @@ impl<V: ?Sized> AsBkeyI for BkeyI<V> {
 }
 
 impl c::bkey {
-    /// A key with no value at POS_MIN, of type deleted: C's KEY(0, 0, 0), as
-    /// bkey_init() sets.
+    /// Of type deleted, at POS_MIN, with no value: as bkey_init() sets.
     pub fn new() -> Self {
         Self {
             u64s:        BKEY_U64S as u8,
@@ -42,7 +40,7 @@ impl c::bkey {
         }
     }
 
-    /// Its value's length, as its u64s say: C's bkey_val_bytes().
+    /// As its u64s say.
     pub fn val_bytes(&self) -> usize {
         (self.u64s as usize).saturating_sub(BKEY_U64S) * size_of::<u64>()
     }
@@ -53,15 +51,14 @@ impl c::bkey {
         self.type_ as u32 == K::TYPE.0
     }
 
-    /// u64s for a value of @bytes: C's set_bkey_val_bytes().
     pub fn set_val_bytes(&mut self, bytes: usize) {
         let u64s = BKEY_U64S + bytes.div_ceil(size_of::<u64>());
         self.u64s = u8::try_from(u64s)
             .unwrap_or_else(|_| panic!("key of {u64s} u64s: a key is at most {} u64s", u8::MAX));
     }
 
-    /// Make an extent @new_size long, from where it starts now - its end,
-    /// its position, moves: as bch2_key_resize().
+    /// Make an extent @new_size long from where it starts: its end, its
+    /// position, moves.
     pub fn resize(&mut self, new_size: u32) {
         self.p.offset = self.p.offset - self.size as u64 + new_size as u64;
         self.size = new_size;
@@ -97,7 +94,7 @@ impl c::bkey {
     }
 }
 
-/// As Display: bch2_bpos_to_text().
+/// As Display.
 impl fmt::Debug for Bpos {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
@@ -151,8 +148,7 @@ pub const POS_MAX: Bpos = spos(u64::MAX, u64::MAX, 0);
 pub const SPOS_MAX: Bpos = spos(u64::MAX, u64::MAX, u32::MAX);
 
 impl c::bpos {
-    /// The next position, snapshot field first: as bpos_successor(). There's
-    /// none after SPOS_MAX - panics, as C BUG()s.
+    /// The next position, snapshot field first. None after SPOS_MAX: panics.
     pub fn successor(self) -> Self {
         let (inode, offset, snapshot) = (self.inode, self.offset, self.snapshot);
 
@@ -165,8 +161,8 @@ impl c::bpos {
         }
     }
 
-    /// The previous position, snapshot field first: as bpos_predecessor().
-    /// There's none before POS_MIN - panics, as C BUG()s.
+    /// The previous position, snapshot field first. None before POS_MIN:
+    /// panics.
     pub fn predecessor(self) -> Self {
         let (inode, offset, snapshot) = (self.inode, self.offset, self.snapshot);
 
@@ -180,9 +176,8 @@ impl c::bpos {
     }
 }
 
-/// Parse a bpos field that holds a u64 (inode, offset). Accepts the literal
-/// tokens "U64_MAX" / "U32_MAX" as their respective sentinel values, matching
-/// how positions are printed in dmesg / bcachefs_to_text output.
+/// A bpos field that holds a u64 (inode, offset). "U64_MAX" and "U32_MAX" are
+/// accepted, as positions are printed.
 #[cfg(feature = "std")]
 fn parse_bpos_u64(s: &str) -> Result<u64, BchError> {
     match s {
@@ -242,13 +237,11 @@ impl FromStr for c::bpos {
 
 pub type bkey_type = c::bch_bkey_type;
 
-/// A key and its value, borrowed: C's struct bkey_s_c, which it's laid out
-/// as - so a C entry point can take one by value where C passes a
-/// bkey_s_c. It's a tagged union, its tag k.type_: typed() is C's switch on
-/// it, each arm the key as its type's, BkeySC<'a, bch_extent> - C's struct
-/// bkey_s_c_extent, BkeySCExtent (btree/bkey_types.rs) - whose value is
-/// v(). @v is C's - a thin pointer to the value, as long as k.u64s says -
-/// and @V only what the value is: v() makes the reference, sized or not.
+/// A key and its value, borrowed: laid out as C's struct bkey_s_c, so a C entry
+/// point can take one by value. typed() switches on k.type_, each arm the key
+/// as its type's - BkeySC<'a, bch_extent>, BkeySCExtent - whose value is v().
+/// @v is C's thin pointer to the value; @V is only its type, and v() makes the
+/// reference, sized or not.
 #[repr(C)]
 pub struct BkeySC<'a, V: ?Sized = c::bch_val> {
     pub k:           &'a c::bkey,
@@ -257,7 +250,7 @@ pub struct BkeySC<'a, V: ?Sized = c::bch_val> {
     pub(crate) val:  PhantomData<*const V>,
 }
 
-// References: Copy whatever V is, which a derive would require it to be.
+// Copy whatever V is: a derive would require V: Copy.
 impl<V: ?Sized> Clone for BkeySC<'_, V> {
     fn clone(&self) -> Self {
         *self
@@ -265,18 +258,15 @@ impl<V: ?Sized> Clone for BkeySC<'_, V> {
 }
 impl<V: ?Sized> Copy for BkeySC<'_, V> {}
 
-/// A key with its value inline, of type V: C's struct bkey_i_<type> - sized
-/// if V is, a DST if V is. typed() and arm() on the generic key hand one out
-/// by its type, as C's bkey_i_to_<type>() do: its length is validate's.
+/// A key with its value inline: C's struct bkey_i_<type> for value type V,
+/// sized or a DST. typed() and arm() hand one out by its type; its length is
+/// validate's.
 ///
-/// The generic key, BkeyI - V its value's u64s, as many as k.u64s says - is
-/// a key of any type, all of it: what C's bkey_i is to C, which is only the
-/// header, thin. A reference to a key reaches its value: the generic one is
-/// made from a pointer that does (from_raw()) - its owner's, or C's - never
-/// widened from a reference to the header.
+/// BkeyI, V = [u64] as long as k.u64s says, is a key of any type, all of it -
+/// where C's bkey_i is only the header. It's made from a pointer that reaches
+/// the value (from_raw()), never widened from a reference to the header.
 ///
-/// Not Clone or Copy: a key is its header and u64s of value, which can run
-/// past V - copying one is bkey_copy().
+/// Not Clone or Copy: the value can run past V - copying a key is bkey_copy().
 #[derive(Default)]
 #[repr(C)]
 pub struct BkeyI<V: ?Sized = [u64]> {
@@ -285,8 +275,8 @@ pub struct BkeyI<V: ?Sized = [u64]> {
 }
 
 impl BkeyI {
-    /// The key at @p, all of it, as long as its u64s say: where a thin key -
-    /// C's, or an owner's buffer - becomes a reference to all of one.
+    /// Where a thin key - C's, or an owner's buffer - becomes a reference to
+    /// all of one, as long as its u64s say.
     ///
     /// # Safety
     /// @p is a key, its u64s right and all of them there, and it may reach
@@ -307,7 +297,7 @@ impl BkeyI {
         core::ptr::slice_from_raw_parts_mut(p.cast::<u64>(), n) as *mut Self
     }
 
-    /// For C: the key, thin, C's struct bkey_i.
+    /// Thin, for C.
     pub fn as_ffi(&self) -> *const c::bkey_i {
         (self as *const Self).cast()
     }
@@ -318,8 +308,8 @@ impl BkeyI {
     }
 }
 
-/// A key as a walk over keys in bytes hands it out - its bytes, checked
-/// against its u64s - all of it.
+/// From a walk over keys in bytes, which checked each one's u64s against its
+/// bytes.
 impl<'a> crate::util::vstructs::UnvalidatedRef<'a, c::bkey_i> {
     pub fn key(&self) -> &'a BkeyI {
         // SAFETY: the walk checked its u64s against its bytes, all of which
@@ -338,7 +328,7 @@ impl crate::util::vstructs::UnvalidatedMut<'_, c::bkey_i> {
 }
 
 impl<V: ?Sized> BkeyI<V> {
-    /// The key, of any type: C's .k_i - all of it, as long as its u64s say.
+    /// As a key of any type, all of it.
     pub fn k_i(&self) -> &BkeyI {
         // SAFETY: a key, as long as its u64s say
         unsafe { &*BkeyI::from_raw((self as *const Self).cast()) }
@@ -350,12 +340,10 @@ impl<V: ?Sized> BkeyI<V> {
         unsafe { &mut *BkeyI::from_raw_mut((self as *mut Self).cast()) }
     }
 
-    /// Its value.
     pub fn v(&self) -> &V {
         &self.v
     }
 
-    /// Its value, to edit.
     pub fn v_mut(&mut self) -> &mut V {
         &mut self.v
     }
@@ -369,8 +357,8 @@ const _: () = {
     assert!(offset_of!(BkeySC<'static>, v) == offset_of!(c::bkey_s_c, v));
 };
 
-/// A key type, named by its C typed key (bkey_i_<name>): its value type, and
-/// typed access to it - for code generic over key types.
+/// A key type, named by its C typed key, bkey_i_<name>: for code generic over
+/// key types.
 pub trait TypedBkey {
     /// The value: bch_<name> - sized, or a DST.
     type Val: ?Sized + ArmRef;
@@ -388,12 +376,11 @@ pub trait TypedBkey {
     /// DST's header.
     const WHOLE_VAL_SIZE: usize;
 
-    /// The key at @k as this type's - a thin pointer for a sized value, fat
-    /// for a DST, as long as k.u64s says.
+    /// The key at @k as this type's - a thin pointer for a sized value, fat for
+    /// a DST, as long as k.u64s says.
     ///
     /// # Safety
-    /// @k is a key of this type, its length validate's - as C's
-    /// bkey_i_to_<type>().
+    /// @k is a key of this type, its length validate's.
     unsafe fn cast(k: *const c::bkey_i) -> *const BkeyI<Self::Val>;
 
     /// cast(), to edit.
@@ -403,13 +390,11 @@ pub trait TypedBkey {
     unsafe fn cast_mut(k: *mut c::bkey_i) -> *mut BkeyI<Self::Val>;
 }
 
-/// A key type whose value can be had by value - made, or copied: all of it,
-/// as C's struct, ValC - the value itself if it's sized, or a grown type's
-/// (#[grown]), the fields an older value lacks zero. Not a type whose value
-/// has a tail.
+/// A key type whose whole value can be had by value - made, or copied: ValC,
+/// the value itself if it's sized, or a grown type's C struct, the fields an
+/// older value lacks zeroed. Not a type with a tail.
 pub trait SizedBkey: TypedBkey<Val: BkeyValC<C: Default>> {
-    /// A key of this type at POS_MIN, its value zeroed: C's
-    /// bkey_<name>_init().
+    /// At POS_MIN, its value zeroed.
     fn new() -> Whole<Self>;
 
     /// @k's value if it's this type, zero padded past the end of a short
@@ -417,30 +402,26 @@ pub trait SizedBkey: TypedBkey<Val: BkeyValC<C: Default>> {
     fn val_copy_pad(k: BkeySC<'_>) -> Option<ValC<Self::Val>>;
 
     /// @k, if it's this type, as an owned key: the value zero padded, u64s as
-    /// on disk - as bch2_bkey_get_i_typed() copies it.
+    /// on disk.
     fn from_key(k: BkeySC<'_>) -> Option<Whole<Self>>;
 }
 
-/// A key of type @K, whole, by value: C's typed key, bkey_i_<name>, its
-/// value C's struct - K itself, for a sized value.
+/// A key of type @K, whole, by value: C's bkey_i_<name>.
 pub type Whole<K> = BkeyI<ValC<<K as TypedBkey>::Val>>;
 
-/// A value type, as C has it: itself, or a DST's C struct - for what
-/// C's typed keys hold, bkey_i_<name>.
+/// A value type as C's typed keys hold it: itself, or a DST's C struct.
 pub trait BkeyValC {
     type C;
 }
 
-/// What C's typed inline key, bkey_i_<name>, holds: BkeyValC's.
 pub type ValC<V> = <V as BkeyValC>::C;
 
-/// Per value type, by BCH_BKEY_TYPES()' field column - `_`, every valid one
-/// whole; or a field, the first a valid one may end before. A sized one is
-/// its ArmRef whole, &T. A DST is a family's (util/vstructs.rs), listed
-/// here, its ArmRef and length its family's: #[whole] - with a tail, or
-/// whole - or #[grown], which can be had by value too, SizedBkey. A type
-/// with a field there that isn't listed doesn't build: it grew, so it's a
-/// #[grown] family.
+/// Per value type, by its BCH_BKEY_TYPES() field column: `_` if every valid
+/// value is whole, else the first field a valid one may end before. A sized
+/// type's ArmRef is &T, whole. A DST is a family's (util/vstructs.rs), listed
+/// here: #[whole] - with a tail, or whole - or #[grown], which SizedBkey can
+/// have by value too. A type with a field in the column that isn't listed
+/// doesn't build: it grew, so it's a #[grown] family.
 macro_rules! bkey_val {
     (inline_data, $f:tt)          => { bkey_val!(@family inline_data, $f); };
     (indirect_inline_data, $f:tt) => { bkey_val!(@family indirect_inline_data, $f); };
@@ -536,9 +517,8 @@ macro_rules! bkey_val {
 
         bkey_val!(@by_value $name);
 
-        // Its ArmRef is it whole, &T, and what a View of it derefs to,
-        // Floored's Min, all of it - aligned, a value being at the u64 after
-        // its key's header
+        // Whole, &T - and the Floored Min a View derefs to. A value is at the
+        // u64 after its key's header, so it's aligned.
         impl ArmRef for c::[<bch_ $name>] {
             type Ref<'a> = &'a Self;
             type Mut<'a> = &'a mut Self;
@@ -601,8 +581,7 @@ macro_rules! bkey_types {
         bkey_val!($name, $field);
         )*
 
-        /// A key, by its type - C's switch on k.k->type: each arm the key as
-        /// its type's, as bkey_s_c_to_<type>() makes it. BkeySC::typed().
+        /// A key, by its type: BkeySC::typed().
         #[allow(non_camel_case_types)]
         #[derive(Clone, Copy)]
         pub enum BkeySCTyped<'a> {
@@ -612,7 +591,6 @@ macro_rules! bkey_types {
         }
 
         impl<'a> BkeySC<'a> {
-            /// The key as its type's: C's switch on k.k->type.
             pub fn typed(self) -> BkeySCTyped<'a> {
                 match self.k.type_ as u32 {
                     $($nr => BkeySCTyped::$name(self.cast()),)*
@@ -622,17 +600,15 @@ macro_rules! bkey_types {
 
         }
 
-        /// A key to edit, by its type: as BkeySCTyped, each arm the key as its
-        /// type's, as bkey_s_to_<type>() makes it. BkeyS::typed().
+        /// BkeySCTyped, to edit: BkeyS::typed().
         #[allow(non_camel_case_types)]
         pub enum BkeySTyped<'a> {
             $($name(BkeyS<'a, c::[<bch_ $name>]>),)*
-            /// As BkeySCTyped's.
+            /// A type this code doesn't know.
             unknown(BkeyS<'a>),
         }
 
         impl BkeyS<'_> {
-            /// The key as its type's, to edit: as BkeySC::typed().
             pub fn typed(&mut self) -> BkeySTyped<'_> {
                 let k = self.reborrow();
                 match k.k.type_ as u32 {
@@ -642,9 +618,8 @@ macro_rules! bkey_types {
             }
         }
 
-        /// A key with its value inline, by its type: as BkeySCTyped, each arm
-        /// the key as its type's, bkey_i_to_<type>() - one whose value is all
-        /// there. bkey_i::typed().
+        /// A key with its value inline, by its type, each arm one whose value
+        /// is all there: BkeyI::typed().
         #[allow(non_camel_case_types)]
         pub enum BkeyITyped<'a> {
             $($name(&'a [<BkeyI $name:camel>]),)*
@@ -656,12 +631,11 @@ macro_rules! bkey_types {
         #[allow(non_camel_case_types)]
         pub enum BkeyITypedMut<'a> {
             $($name(&'a mut [<BkeyI $name:camel>]),)*
-            /// As BkeyITyped's.
+            /// A type this code doesn't know.
             unknown(&'a mut BkeyI),
         }
 
         impl BkeyI {
-            /// The key as its type's: C's switch on k.type.
             pub fn typed(&self) -> BkeyITyped<'_> {
                 match self.k.type_ as u32 {
                     $($nr =>
@@ -698,7 +672,7 @@ impl<'a, V: ?Sized> BkeySC<'a, V> {
         BkeySC { k: self.k, v: self.v, iter: PhantomData, val: PhantomData }
     }
 
-    /// The key, of any type: C's .s_c, a typed key as the union.
+    /// Of any type: C's .s_c.
     pub fn s_c(self) -> BkeySC<'a> {
         self.cast()
     }
@@ -722,11 +696,9 @@ impl<V: ?Sized> From<BkeySC<'static, V>> for c::bkey_s_c {
 }
 
 impl<'a, V: ?Sized + ArmRef> BkeySC<'a, V> {
-    /// Its value, as its type's ArmRef has it: &T for a sized one, every
-    /// valid value of which is whole; a family's DST for one that isn't - a
-    /// grown type's floor and the bytes there are - as long as k.u64s says.
-    /// A value validate passed is at least as long as every valid one; a
-    /// shorter one is a bug.
+    /// As its type's ArmRef has it: &T for a sized type, whose valid values are
+    /// all whole; else its family's DST, as long as k.u64s says. A value
+    /// shorter than validate passes is a bug.
     pub fn v(&self) -> V::Ref<'a> {
         V::arm_ref(self.val_bytes())
             .unwrap_or_else(|| panic!("{}: {} bytes, shorter than validate passes", self.k,
@@ -735,7 +707,7 @@ impl<'a, V: ?Sized + ArmRef> BkeySC<'a, V> {
 }
 
 impl<'a> BkeySC<'a> {
-    /// The key as its type's, @K's, if it's that type: bkey_s_c_to_<type>().
+    /// The key as @K's, if it's that type.
     pub fn arm<K: TypedBkey + ?Sized>(self) -> Option<BkeySC<'a, K::Val>> {
         self.k.is::<K>().then(|| self.cast())
     }
@@ -748,11 +720,9 @@ impl<'a> BkeySC<'a> {
         }
     }
 
-    /// The value, copied into a @T and zero padded past what the key has: for
-    /// reading a value that may predate fields @T has, which a reference to
-    /// it would read past the end of - as C's bkey_val_copy_pad(). Typed
-    /// wrappers check the key type, then call this. To read one in place,
-    /// arm() then v().
+    /// Copied into a @T, zero padded past what the key has: for a value that
+    /// may predate fields @T has, which a reference would read past the end of.
+    /// To read one in place, arm() then v().
     ///
     /// # Safety
     /// @T is the value type of this key's type: plain data, all-zeroes valid.
@@ -771,8 +741,8 @@ impl<'a> BkeySC<'a> {
         BkeySCToText { k: *self, fs }
     }
 
-    /// Where in the value its extent entries - its pointers - are: as
-    /// bch2_bkey_ptrs_c(). Empty for a key type without them.
+    /// Where in the value its extent entries - its pointers - are. Empty for a
+    /// key type without them.
     fn extent_entry_range(&self) -> core::ops::Range<usize> {
         use core::mem::{offset_of, size_of};
 
@@ -790,9 +760,8 @@ impl<'a> BkeySC<'a> {
         }
     }
 
-    /// The value's extent entries - its pointers - as bytes: as
-    /// bch2_bkey_ptrs_c(). Empty for a key type without them, or a value too
-    /// short to hold them.
+    /// Empty for a key type without extent entries, or a value too short to
+    /// hold them.
     pub fn extent_entry_bytes(&self) -> &'a [u8] {
         self.val_bytes().get(self.extent_entry_range()).unwrap_or_default()
     }
@@ -821,13 +790,12 @@ impl<'a> BkeySC<'a> {
     }
 }
 
-/// Editing a key's value: it's only as long as its u64s say - a key copied
-/// from one written before its type grew is shorter than its type, and a
-/// field past its end is one the key won't carry when it's written. Grow it
-/// first, as C's bch2_bkey_make_mut_typed() does: bkey_make_mut() or
-/// bkey_get_mut() with the typed key's size.
+/// Editing a key's value: it's only as long as its u64s say - a key copied from
+/// one written before its type grew is shorter than its type, and a field past
+/// its end is one the key won't carry when it's written. Grow it first:
+/// bkey_make_mut() or bkey_get_mut() with the typed key's size.
 impl BkeyI {
-    /// The key as its type's, @K's, if it's that type: bkey_i_to_<type>().
+    /// The key as @K's, if it's that type.
     pub fn arm<K: TypedBkey + ?Sized>(&self) -> Option<&BkeyI<K::Val>> {
         // SAFETY: a K, its length validate's, as in C; a key's value is at
         // the u64 after its header, aligned
@@ -840,10 +808,9 @@ impl BkeyI {
         self.k.is::<K>().then(|| unsafe { &mut *K::cast_mut(self.as_ffi_mut()) })
     }
 
-    /// The key as @K's, whole, if it's that type: C's struct, every field a
-    /// field - for a grown type, where arm() is the value as long as it is.
-    /// As bkey_i_to_<type>(): a key grown to its struct first is the
-    /// caller's, as above.
+    /// The key as @K's C struct, whole, if it's that type: for a grown type,
+    /// whose arm() is the value only as long as it is. Growing the key to its
+    /// struct first is the caller's, as above.
     pub fn whole<K: SizedBkey + ?Sized>(&self) -> Option<&Whole<K>> {
         // SAFETY: a K, grown to its struct by the caller, as C's; a key's
         // value is at the u64 after its header, aligned
@@ -879,12 +846,9 @@ impl<'a> From<&'a c::bkey_s_c> for BkeySC<'a> {
     }
 }
 
-/// A key and its value, borrowed to edit: C's struct bkey_s, which it's laid
-/// out as. A tagged union, as BkeySC is: typed() gives the key as its
-/// type's, BkeyS<'a, bch_extent> - C's struct bkey_s_extent, BkeySExtent -
-/// whose value is v() and v_mut(); @v is a pointer, as BkeySC's is. Not
-/// Copy: what edits it borrows it, &mut BkeyS, so one can be walked twice -
-/// a read, then a rewrite - without aliasing.
+/// A key and its value, borrowed to edit: laid out as C's struct bkey_s. A
+/// tagged union, as BkeySC is. Not Copy: editing borrows it, &mut BkeyS, so one
+/// can be walked twice - a read, then a rewrite - without aliasing.
 #[repr(C)]
 pub struct BkeyS<'a, V: ?Sized = c::bch_val> {
     pub k:          &'a mut c::bkey,
@@ -897,17 +861,17 @@ impl<'a, V: ?Sized> BkeyS<'a, V> {
         c::bch_bkey_type(self.k.type_ as u32)
     }
 
-    /// The key, to read: as bkey_s_to_s_c() - a typed key's C .c.
+    /// To read: a typed key's C .c.
     pub fn as_sc(&self) -> BkeySC<'_, V> {
         BkeySC { k: &*self.k, v: self.v.cast_const(), iter: PhantomData, val: PhantomData }
     }
 
-    /// The key, of any type: C's .s, a typed key as the union.
+    /// Of any type: C's .s.
     pub fn s(self) -> BkeyS<'a> {
         self.cast()
     }
 
-    /// The key, of any type, to read: C's .s_c.
+    /// Of any type, to read: C's .s_c.
     pub fn s_c(&self) -> BkeySC<'_> {
         self.as_sc().s_c()
     }
@@ -938,7 +902,6 @@ impl<'a, V: ?Sized> BkeyS<'a, V> {
 }
 
 impl<V: ?Sized + ArmRef> BkeyS<'_, V> {
-    /// Its value: as BkeySC's v().
     pub fn v(&self) -> V::Ref<'_> {
         let k: &c::bkey = self.k;
         V::arm_ref(self.val_bytes())
@@ -955,7 +918,7 @@ impl<V: ?Sized + ArmRef> BkeyS<'_, V> {
 }
 
 impl<'a> BkeyS<'a> {
-    /// A key and its value, apart: C's struct bkey_s.
+    /// From a key and its value, apart.
     ///
     /// # Safety
     /// @v is @k's value, as long as k.u64s says, nothing else touching it for
@@ -964,14 +927,12 @@ impl<'a> BkeyS<'a> {
         BkeyS { k, v, val: PhantomData }
     }
 
-    /// The key as its type's, @K's, to edit, if it's that type:
-    /// bkey_s_to_<type>(), as BkeySC::arm().
+    /// BkeySC::arm(), to edit.
     pub fn arm<K: TypedBkey + ?Sized>(&mut self) -> Option<BkeyS<'_, K::Val>> {
         self.k.is::<K>().then(|| self.reborrow().cast())
     }
 
-    /// The value's extent entries as bytes, mutably: as
-    /// BkeySC::extent_entry_bytes().
+    /// BkeySC::extent_entry_bytes(), to edit.
     pub fn extent_entry_bytes_mut(&mut self) -> &mut [u8] {
         let range = self.as_sc().extent_entry_range();
         self.val_bytes_mut().get_mut(range).unwrap_or_default()
@@ -1102,7 +1063,6 @@ pub fn bkey_cmp(l: Bpos, r: Bpos) -> i32 {
     }
 }
 
-/// Start position of a bkey (p.offset - size).
 pub fn bkey_start_pos(k: &c::bkey) -> c::bpos {
     c::bpos {
         inode: k.p.inode,
@@ -1119,8 +1079,7 @@ pub fn bkey_deleted(k: &c::bkey) -> bool {
     c::bch_bkey_type(k.type_ as u32) == c::bch_bkey_type::KEY_TYPE_deleted
 }
 
-/// Whether @k is a tombstone in an extents btree - deleted, a whiteout or an
-/// extent whiteout: as bkey_extent_whiteout().
+/// A tombstone in an extents btree.
 pub fn bkey_extent_whiteout(k: &c::bkey) -> bool {
     matches!(c::bch_bkey_type(k.type_ as u32),
              c::bch_bkey_type::KEY_TYPE_deleted |
@@ -1128,7 +1087,7 @@ pub fn bkey_extent_whiteout(k: &c::bkey) -> bool {
              c::bch_bkey_type::KEY_TYPE_extent_whiteout)
 }
 
-/// The key, without its value: as bch2_bkey_to_text().
+/// Without its value.
 impl fmt::Display for c::bkey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         printbuf_to_formatter(f, |buf| unsafe { c::bch2_bkey_to_text(buf, self) })

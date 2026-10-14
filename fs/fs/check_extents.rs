@@ -1,59 +1,33 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! fsck: the check_extents and check_indirect_extents recovery passes.
+//! check_extents and check_indirect_extents.
 //!
-//! check_extents walks the extents btree, all snapshots, and checks each
-//! extent against the versions of its inode it's visible in: that there is
-//! one, of the right type (check_key_has_inode(), in InodeWalker::walk()),
-//! that the extent doesn't overlap another visible in the same snapshot, and
-//! that it isn't past i_size; then at the end of each inode, that i_sectors
-//! matches the extents counted for each version.
+//! check_extents checks each extent, across all snapshots, against the inode
+//! versions it's visible in: that there is one, of the right type; that it
+//! doesn't overlap another visible in the same snapshot; that it isn't past
+//! i_size. At the end of each inode, i_sectors is checked against the extents
+//! counted for each version.
 //!
-//! Each key commits its own repairs (for_each_attempt()), because what comes
-//! after the commit - adding the extent to its inode versions' sector counts,
-//! and recording where it ends for the overlap check - mustn't happen twice,
-//! which a restart in the commit would do.
+//! Each key commits its own repairs: what follows the commit - adding the
+//! extent to its inodes' sector counts, recording where it ends - mustn't run
+//! twice, as a restart in the commit would make it.
 //!
-//! Overlaps: extent_ends records, per snapshot, where the last extent seen
-//! ended, with a copy of snapshots_seen as of that extent; an extent starting
-//! before one of those ends overlaps it if the two are visible in some common
-//! snapshot. One of the two is overwritten - an extent whiteout first, else
-//! the extent in the older snapshot.
+//! Overlaps: extent_ends records, per snapshot, where the last extent ended,
+//! with snapshots_seen as of that extent; an extent starting before one of
+//! those overlaps it if both are visible in some snapshot. One is overwritten:
+//! an extent whiteout first, else the extent in the older snapshot.
 //!
-//! check_i_sectors() is a nested transaction: counting an inode's sectors
-//! spans too many extents for one, and its repairs commit, so it returns
-//! transaction_restart_nested and the walk retries the key.
+//! check_i_sectors() is a nested transaction: an inode's extents needn't fit
+//! in one, and its repairs commit, so it returns transaction_restart_nested
+//! and the walk retries the key.
 //!
-//! check_indirect_extents is the part of this that applies to the reflink
-//! btree: the overbig check, and dropping stale pointers.
+//! check_indirect_extents is the part that applies to the reflink btree: the
+//! overbig check, and dropping stale pointers.
 //!
-//! Changes from the C:
-//!
-//! - bch2_count_inode_sectors() returned an error as its count, and
-//!   check_i_sectors_notnested() never checked for one: an error became
-//!   i->count, and with the repair taken, bi_sectors. And it ran its own
-//!   restart loop inside the caller's nested transaction (the C's XXX); now
-//!   it walks without one, and a restart propagates, to the restart
-//!   check_i_sectors() returns anyway. The flush after the walk, which called
-//!   check_i_sectors_notnested() with no restart handler, now retries.
-//!
-//! - The past-i_size check and the sector count go over the inode versions
-//!   the extent is visible in (InodeWalker::visible_mut(), C's
-//!   for_each_visible_inode()); the C walked down from the version the key
-//!   resolved to. They differ only under a redundant interior snapshot, where
-//!   that version is found through the collapse terminal and the C skipped the
-//!   versions between it and the key's own snapshot.
-//!
-//! - overlapping_extents_found() dereferenced the keys it looked up without
-//!   checking they were there; a missing one is the internal error a
-//!   mismatched one already was.
-//!
-//! XXX: the past-i_size check doesn't skip whiteout versions, as the sector
-//! count does. A whiteout's bi_size is 0, so an extent still visible where
-//! its inode is deleted - key_in_missing_inode declined, or the restore path,
-//! which rewrites the version but leaves it marked a whiteout - is reported
-//! as past the end of an inode with i_size 0, and punched from block 0.
-//! Unverified; one for the error injection tests.
+//! XXX: the past-i_size check doesn't skip whiteout versions as the sector
+//! count does: an extent still visible where its inode is deleted would be
+//! reported past an i_size of 0 and punched from block 0. Unverified; one for
+//! the error injection tests.
 
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::bkey::{bkey_extent_whiteout, bpos_gt, pos, spos, BkeySC, POS_MIN};

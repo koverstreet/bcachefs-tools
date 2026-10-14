@@ -29,10 +29,7 @@ macro_rules! bch_opts {
 }
 c::BCH_OPTS!(bch_opts);
 
-/// Return the opt table as a proper slice.
-///
-/// bindgen generates `bch2_opt_table` as a zero-length array since it can't
-/// determine the size. This wraps it safely using `bch2_opts_nr`.
+/// bindgen makes bch2_opt_table zero-length: it can't see the size.
 pub fn opt_table() -> &'static [c::bch_option] {
     unsafe {
         core::slice::from_raw_parts(
@@ -78,48 +75,35 @@ macro_rules! opt_get {
     };
 }
 
-/// Safe conversion from opt table index to bch_opt_id.
-///
-/// Panics if idx >= bch2_opts_nr (i.e. out of the opt_table range).
 pub fn opt_id(idx: usize) -> c::bch_opt_id {
     assert!(idx < opt_id::nr.0 as usize);
     c::bch_opt_id(idx as u32)
 }
 
-/// Check whether an option is explicitly defined in the opts struct.
 pub fn opt_defined_by_id(opts: &c::bch_opts, id: c::bch_opt_id) -> bool {
     unsafe { c::bch2_opt_defined_by_id(opts, id) }
 }
 
-/// Get the value of an option by id.
 pub fn opt_get_by_id(opts: &c::bch_opts, id: c::bch_opt_id) -> u64 {
     unsafe { c::bch2_opt_get_by_id(opts, id) }
 }
 
-/// Reference to the default opts (C global).
 pub fn opts_default() -> &'static c::bch_opts {
     unsafe { &c::bch2_opts_default }
 }
 
-/// Set a superblock option from the opt table.
 pub fn opt_set_sb(sb: &mut c::bch_sb, dev_idx: i32, opt: &c::bch_option, v: u64) {
     // val is only used by BCH_OPT_STR_MEMBER options, not set through this path:
     unsafe { c::__bch2_opt_set_sb(sb.as_ffi_mut(), dev_idx, opt, v, core::ptr::null()); }
 }
 
-/// Set an option value in a bch_opts struct by id.
 pub fn opt_set_by_id(opts: &mut c::bch_opts, id: c::bch_opt_id, v: u64) {
     unsafe { c::bch2_opt_set_by_id(opts, id, v) }
 }
 
-/// Safe accessors for bch_option C string fields.
-///
-/// These methods provide safe access to the static C strings in the
-/// option table. The strings are guaranteed to be valid for the process lifetime.
+/// The option table's strings are static. None for a null pointer or invalid
+/// UTF-8.
 impl c::bch_option {
-    /// Get the option name as a Rust string.
-    ///
-    /// Returns None if the name pointer is null or contains invalid UTF-8.
     pub fn name(&self) -> Option<&'static str> {
         if self.attr.name.is_null() {
             return None;
@@ -129,9 +113,6 @@ impl c::bch_option {
             .ok()
     }
 
-    /// Get the option hint as a Rust string.
-    ///
-    /// Returns None if the hint pointer is null or contains invalid UTF-8.
     pub fn hint(&self) -> Option<&'static str> {
         if self.hint.is_null() {
             return None;
@@ -141,9 +122,6 @@ impl c::bch_option {
             .ok()
     }
 
-    /// Get the option help text as a Rust string.
-    ///
-    /// Returns None if the help pointer is null or contains invalid UTF-8.
     pub fn help(&self) -> Option<&'static str> {
         if self.help.is_null() {
             return None;
@@ -153,10 +131,7 @@ impl c::bch_option {
             .ok()
     }
 
-    /// Collect choices array into a Vec of Rust strings.
-    ///
-    /// The choices array is null-terminated. Returns an empty Vec if
-    /// the pointer is null. Invalid UTF-8 entries are skipped.
+    /// Invalid UTF-8 entries are skipped.
     #[cfg(feature = "std")]
     pub fn choices(&self) -> Vec<&'static str> {
         let mut v = Vec::new();
@@ -205,10 +180,6 @@ pub fn parse_mount_opts(fs: Option<&mut Fs>, optstr: Option<&str>, ignore_unknow
     Ok(opts)
 }
 
-/// Join a slice of option strings with commas and parse into bch_opts.
-///
-/// Convenience wrapper for callers that accumulate options as a Vec<String>.
-/// Caller passes an empty slice for default opts.
 #[cfg(feature = "std")]
 pub fn parse_mount_opts_vec(opts: &[String], ignore_unknown: bool)
         -> Result<c::bch_opts, crate::errcode::BchError> {
@@ -219,22 +190,18 @@ pub fn parse_mount_opts_vec(opts: &[String], ignore_unknown: bool)
     parse_mount_opts(None, Some(&joined), ignore_unknown)
 }
 
-/// Print a data type directly into a Printbuf via bch2_prt_data_type.
 pub fn prt_data_type(out: &mut Printbuf, t: c::bch_data_type) {
     unsafe { c::bch2_prt_data_type(out.as_raw(), t) }
 }
 
-/// Print a compression type directly into a Printbuf via bch2_prt_compression_type.
 pub fn prt_compression_type(out: &mut Printbuf, t: c::bch_compression_type) {
     unsafe { c::bch2_prt_compression_type(out.as_raw(), t) }
 }
 
-/// Print a reconcile accounting type directly into a Printbuf.
 pub fn prt_reconcile_type(out: &mut Printbuf, t: c::bch_reconcile_accounting_type) {
     unsafe { c::bch2_prt_reconcile_accounting_type(out.as_raw(), t) }
 }
 
-/// Look up an option by name. The typed id plus the table entry.
 pub fn opt_lookup(name: &core::ffi::CStr) -> Option<(c::bch_opt_id, &'static c::bch_option)> {
     let id = unsafe { c::bch2_opt_lookup(name.as_ptr().cast()) };
     if id < 0 || id as usize >= opt_table().len() {
@@ -256,18 +223,15 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &c::bch_option, val: &core::ffi::CStr,
     if ret < 0 { Err(ret) } else { Ok(v) }
 }
 
-/// Option @opt's value @v, as text: as bch2_opt_to_text(), without flags.
 pub fn opt_to_text(out: &mut Printbuf, fs: &Fs, opt: &c::bch_option, v: u64) {
     unsafe { c::bch2_opt_to_text(out.as_raw(), fs.raw, fs.sb() as *const _ as *mut _, opt, v, 0) }
 }
 
 impl c::bch_opt_id {
-    /// Whether this is an option inodes can set: as bch2_opt_is_inode_opt().
     pub fn is_inode_opt(self) -> bool {
         unsafe { c::bch2_opt_is_inode_opt(self) }
     }
 
-    /// The inode option this is, if it is one: as bch2_opt_to_inode_opt().
     pub fn inode_opt(self) -> Option<InodeOpt> {
         let id = unsafe { c::bch2_opt_to_inode_opt(self.0 as core::ffi::c_int) };
         u32::try_from(id).ok().and_then(InodeOpt::from_index)
@@ -286,7 +250,6 @@ impl c::bch_opt_id {
 pub struct InodeOpt(c::inode_opt_id);
 
 impl InodeOpt {
-    /// The inode option numbered @i, if there's one.
     pub fn from_index(i: u32) -> Option<InodeOpt> {
         // The enum is repr(u32), with a variant for every value below
         // Inode_opt_nr:
@@ -309,7 +272,6 @@ impl InodeOpt {
 
     /// Its value on @inode, biased: 0 for not set.
     pub fn get(self, inode: &c::bch_inode_unpacked) -> u64 {
-        // bch2_inode_opt_get()
         macro_rules! get {
             ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! { $(
                 if self.0 == c::inode_opt_id::[<Inode_opt_ $name>] {
@@ -321,9 +283,8 @@ impl InodeOpt {
         panic!("inode option {} out of range", self.0.0)
     }
 
-    /// Set its value on @inode - biased, 0 for not set.
+    /// @v biased, 0 for not set.
     pub fn set(self, inode: &mut c::bch_inode_unpacked, v: u64) {
-        // bch2_inode_opt_set()
         macro_rules! set {
             ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! { $(
                 if self.0 == c::inode_opt_id::[<Inode_opt_ $name>] {
@@ -351,16 +312,15 @@ impl InodeOpt {
     }
 }
 
-/// @inode's options as filesystem options - those it sets, with the +1 bias
-/// removed: as bch2_inode_opts_to_opts().
+/// Those @inode sets, with the +1 bias removed.
 pub fn inode_opts_to_opts(inode: &c::bch_inode_unpacked) -> c::bch_opts {
     // Only reads @inode: C's signature isn't const.
     unsafe { c::bch2_inode_opts_to_opts(inode as *const _ as *mut _) }
 }
 
 /// @dst takes on @src's inode options - those it didn't set itself, and
-/// casefolding only for a directory - as when it moves into directory @src:
-/// as bch2_reinherit_attrs(). Whether anything changed.
+/// casefolding only for a directory - as when it moves into directory @src.
+/// Whether anything changed.
 pub fn reinherit_attrs(dst: &mut c::bch_inode_unpacked, src: &c::bch_inode_unpacked) -> bool {
     // Only reads @src: C's signature isn't const.
     unsafe { c::bch2_reinherit_attrs(dst, src as *const _ as *mut _) }
@@ -370,7 +330,6 @@ pub fn reinherit_attrs(dst: &mut c::bch_inode_unpacked, src: &c::bch_inode_unpac
 /// scan, if the options its data goes by changed, and pushing them up to the
 /// inode's older snapshots - the propagate logged op.
 impl c::inode_opt_change {
-    /// Nothing to do yet: as bch2_inode_opt_change_init().
     pub fn new() -> Self {
         let mut ch = Self::default();
         unsafe { c::bch2_inode_opt_change_init(&mut ch) };
@@ -379,7 +338,7 @@ impl c::inode_opt_change {
 
     /// @inode's options have changed, in @snapshot, from those that gave
     /// reconcile options @old: if those changed, schedule the scan and start
-    /// the propagate - as bch2_inode_opt_change_trans().
+    /// the propagate.
     pub fn record(
         &mut self,
         trans:    &BtreeTrans<'_>,
@@ -395,7 +354,7 @@ impl c::inode_opt_change {
     }
 
     /// After the commit: finish the propagate, if one was started, and wake
-    /// reconcile, if there's a scan for it - as bch2_inode_opt_change_finish().
+    /// reconcile, if there's a scan for it.
     pub fn finish(&mut self, trans: &BtreeTrans<'_>) -> Result<(), BchError> {
         ret_to_result(unsafe { c::bch2_inode_opt_change_finish(trans.raw(), self) })
     }
@@ -404,9 +363,8 @@ impl c::inode_opt_change {
 // ── Changing options ─────────────────────────────────────────────────────
 
 /// An option change in progress: the option change lock held, and the scope
-/// the pre-set hooks record what the change needs into - as C's
-/// guard(opt_change_lock) and CLASS(opt_change_scope). Both are released
-/// when this is dropped, the scope first.
+/// the pre-set hooks record what the change needs into. Both are released on
+/// drop, the scope first.
 pub struct OptChange<'f> {
     fs:    &'f Fs,
     scope: c::opt_change_scope,
@@ -415,13 +373,12 @@ pub struct OptChange<'f> {
 impl<'f> OptChange<'f> {
     pub fn new(fs: &'f Fs) -> Self {
         unsafe { c::bch2_opt_change_lock(fs.raw) };
-        // bch2_opt_change_scope_init()
+        // bch2_opt_change_scope_init(), a static inline:
         OptChange { fs, scope: c::opt_change_scope { c: fs.raw, ..Default::default() } }
     }
 
     /// Before setting option @id to @v, for inode @inum - 0 for the
-    /// filesystem: what the change needs, and whether it may - as
-    /// bch2_opt_hook_pre_set().
+    /// filesystem: records what the change needs, and fails if it may not.
     pub fn pre_set(&mut self, inum: u64, id: c::bch_opt_id, v: u64) -> Result<(), BchError> {
         ret_to_result(unsafe {
             c::bch2_opt_hook_pre_set(self.fs.raw, core::ptr::null_mut(), inum, id, v, true,
@@ -429,7 +386,6 @@ impl<'f> OptChange<'f> {
         })
     }
 
-    /// Having set it: as bch2_opt_hook_post_set().
     pub fn post_set(&self, inum: u64, id: c::bch_opt_id, v: u64) {
         unsafe { c::bch2_opt_hook_post_set(self.fs.raw, core::ptr::null_mut(), inum, id, v) }
     }

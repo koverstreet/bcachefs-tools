@@ -4,43 +4,27 @@
 //!
 //! check_snapshot_trees: every tree key names a live root and master subvol.
 //!
-//! check_snapshots: per node - check_state() recovers the state field
-//! itself; check_has_data() and check_deleted() hold a non-live state up
-//! against the accounting, the child snapshots and the subvolume; then the
-//! topology checks (edges, tree pointer, depth, skiplists, subvol backref).
+//! check_snapshots: per node - check_state() recovers the state field itself;
+//! check_has_data() and check_deleted() hold a non-live state up against the
+//! accounting, the child snapshots and the subvolume; then the topology checks
+//! (edges, tree pointer, depth, skiplists, subvol backref).
 //!
-//! reconstruct_snapshots: rebuild missing snapshot nodes from the keys that
-//! reference them.
+//! reconstruct_snapshots: rebuild missing nodes from the keys that reference
+//! them.
 //!
-//! check_key_has_snapshot: per-key repair for keys whose snapshot node is
-//! missing or dead; also called from runtime paths, through C's
-//! bch2_check_key_has_snapshot().
+//! check_key_has_snapshot: per-key repair for keys whose snapshot is missing
+//! or dead; also called at runtime, through bch2_check_key_has_snapshot().
 //!
-//! Repair philosophy: enumerate which writers can produce a state before
-//! repairing it. Unconstructible combinations are rejected at commit
-//! (bch2_snapshot_validate()); real damage is repaired toward the side the
-//! rest of the metadata agrees with - child snapshots, the subvolume
-//! (deletion tombstones it in the same transaction that condemns its
-//! snapshot), the per-snapshot accounting (nothing we write deletes a node
-//! with data). Ambiguity fail-stops rather than guessing.
+//! Before repairing a state, enumerate which writers can produce it.
+//! Unconstructible combinations are rejected at commit
+//! (bch2_snapshot_validate()); real damage is repaired toward what the rest of
+//! the metadata agrees on - the child snapshots, the subvolume (deletion
+//! tombstones it in the transaction that condemns its snapshot), the
+//! per-snapshot accounting (nothing we write deletes a node with data).
+//! Ambiguity fail-stops rather than guessing.
 //!
-//! The node being checked is a CowKey: one copy of its value, read by every
-//! check and written by every repair - the first repair makes it the node's
-//! queued update. The C kept a copy for reading and a mutable key, synced by
-//! hand, and some repairs made their own mutable copy from the original key:
-//! a tree pointer repair followed by a depth, skiplist or subvolume flag
-//! repair on the same node lost the tree pointer repair, and the accounting
-//! check dropped what check_state() had queued.
-//!
-//! Changes from the C, besides that:
-//!
-//! - reconstruct_snapshots dropped errors growing its id lists; it returns
-//!   them now. And it merged an inode's ids into the first tree they
-//!   overlapped: ids overlapping two trees join them all into one.
-//!
-//! - check_key_has_snapshot only offered a repair it could also ignore
-//!   after a failed attempt to schedule passes - which returned first: its
-//!   errors are plain fixable fsck errors.
+//! The node being checked is a CowKey: one copy, read by every check and
+//! written by every repair, so one repair can't lose another's.
 
 use crate::accounting;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyISnapshot, BkeyISnapshotTree, BkeyISubvolume, POS_MAX, POS_MIN, SPOS_MAX};
@@ -68,15 +52,9 @@ use core::fmt;
 use core::mem::size_of;
 use cstruct_macros::c_export;
 
-/// Snapshot node @id's key, None if there's no such node.
-///
-/// fsck has no right to assume a node exists, so absence is a value here,
-/// not an error - an error can be returned by mistake, a value can't: the C
-/// laundered ENOENT back into a boolean at every call site, and once returned
-/// the one it had just decided was benign, taking recovery emergency
-/// read-only over a dangling child pointer. And the key comes back whole:
-/// the topology checks report on nodes they didn't start from, and a field
-/// report is whatever the message printed.
+/// Snapshot node @id's key, None if there's none: fsck can't assume a node
+/// exists, and absence as a value can't be returned as an error by mistake.
+/// The whole key: the topology checks print nodes they didn't start from.
 fn lookup_node(trans: &BtreeTrans<'_>, id: u32) -> Result<Option<BkeyI<Ffi<c::bch_snapshot>>>, BchError> {
     snapshot::lookup_key(trans, id).found()
 }
@@ -110,8 +88,7 @@ fn subvol_claiming(t: &TransAttempt<'_, '_>, id: u32) -> Result<Option<u32>, Bch
              |k| subvolume::val(k).is_some_and(|s| s.snapshot() == id))
 }
 
-/// A state field, by name - "(invalid state)" if it isn't one: as
-/// bch2_snapshot_state_str().
+/// A state field by name; "(invalid state)" if it isn't one.
 struct StateName(Option<c::bch_snapshot_state>);
 
 impl fmt::Display for StateName {
@@ -150,9 +127,8 @@ fn tree_master_subvol(t: &TransAttempt<'_, '_>, root: u32) -> Result<Option<u32>
     Ok(Some(oldest))
 }
 
-/// Make sure tree key @k points to the root of a snapshot tree and that
-/// snapshot entry points back to it, or delete it. And make sure it points to
-/// a non-snapshot subvolume in the tree, or correct it to one.
+/// Tree key @k must name a root that points back, or it's deleted; and its
+/// master must be a non-snapshot subvolume in the tree, or it's corrected.
 fn check_snapshot_tree<'t>(
     t:    &TransAttempt<'_, 't>,
     iter: &BtreeIter<'t>,
@@ -229,17 +205,15 @@ crate::recovery_pass!(bch2_check_snapshot_trees => check_snapshot_trees);
 
 /* check_snapshots: */
 
-/// The node check_snapshot() is on: see the notes at the top.
+/// The node being checked.
 impl CowKey<'_, '_, '_, '_, c::bkey_i_snapshot> {
     fn id(&self) -> u32 {
         self.pos().offset as u32
     }
 }
 
-/// Is anything still pointing at node @s, @id - a subvolume whose snapshot
-/// is us, our parent listing us as a child, or a child naming us as its
-/// parent? For recovering a node whose state field is garbage: if it's
-/// referenced it must be live, whatever the corrupted state says.
+/// Whether anything points at node @s, @id: a subvolume, its parent, or a
+/// child. For a garbage state field: a referenced node must be live.
 fn referenced(trans: &BtreeTrans<'_>, s: &Ffi<c::bch_snapshot>, id: u32) -> Result<bool, BchError> {
     if s.subvol() != 0 &&
        subvolume::get(trans, s.subvol(), false).found()?.is_some_and(|sv| sv.snapshot() == id) {
@@ -271,13 +245,9 @@ fn check_state<'a, 't>(
     let trans = t.trans();
     let fs = trans.fs();
 
-    // A zero state field means the key predates the state field, or was
-    // wiped: the legacy flag bits are then authoritative (old kernels
-    // dual-wrote them). Derive the state from the bits whenever it's unset,
-    // regardless of upgrade status - so a fs already on the new version but
-    // carrying pre-state keys (never migrated, because no upgrade transition
-    // ran) heals too. Mid-upgrade this is the expected migration and silent;
-    // post-upgrade an unset state is unexpected, so surface it (autofix).
+    // Predates the state field, or was wiped: the legacy flags, which old kernels
+    // dual-wrote, are authoritative - past the upgrade too, for keys never
+    // migrated. Silent mid-upgrade, autofix after.
     if n.v().state_raw() == 0 {
         let upgrading = fs.version_upgrade_complete() <
             c::bcachefs_metadata_version::per_dev_fragmentation_lru;
@@ -289,18 +259,14 @@ fn check_state<'a, 't>(
         }
     }
 
-    // Pre-upgrade, the rewrite above always leaves a valid state, so this
-    // only fires post-upgrade - where any invalid value (including zero) is
-    // corruption. State-keyed repairs must not run on a state we can't read.
+    // The repairs below go by the state, so it has to be readable first.
     if n.v().state_field().is_none() {
         let raw = n.v().state_raw();
         let (nearest, dist) = snapshot::state_nearest(raw);
 
-        // Codewords are >= 14 apart, so anything <= 6 bits out is uniquely
-        // decodable and recoverable. <= 2 bits is a genuine bitflip (its own
-        // error, so failing hardware shows up in the counters); 3-6 is larger
-        // but still-recoverable corruption. Further out is not a bitflip we
-        // can trust.
+        // Codewords are >= 14 bits apart: within 6 bits, the nearest is the
+        // original. Within 2 is a bitflip, counted apart so failing hardware shows;
+        // further than 6 can't be trusted.
         let fix = if dist <= 2 {
             fsck_err!(t, id::snapshot_state_bitflip,
                       "snapshot state {raw:#x} is a {dist}-bit flip of {nearest} - correcting:\n{}",
@@ -310,9 +276,7 @@ fn check_state<'a, 't>(
                       "snapshot state {raw:#x} is {dist} bits from {nearest} - correcting:\n{}",
                       n.to_text(fs))?.then_some(nearest)
         } else if referenced(trans, n.v(), n.id())? {
-            // Too far from any codeword to decode. But the rest of the key is
-            // intact, so if anything still references this node it must be
-            // live.
+            // Too far to decode, but if anything references it, it must be live
             fsck_err!(t, id::snapshot_state_bad,
                       "snapshot state {raw:#x} is garbage, but the node is referenced - marking live:\n{}",
                       n.to_text(fs))?.then_some(c::bch_snapshot_state::SNAPSHOT_STATE_live)
@@ -329,19 +293,13 @@ fn check_state<'a, 't>(
         }
     }
 
-    // A valid state that contradicts the legacy flags: current writers
-    // dual-write both via set_state(), so only a legacy flags-only writer
-    // leaves them disagreeing - the flags are the fresher write. But the flags
-    // are single unprotected bits, so check the node's shape before trusting
-    // them over a codeword: a node tombstoned by a legacy
-    // bch2_snapshot_node_delete() carries the tombstone wipe, and no live,
-    // will_delete or no_keys node ever has tree == 0. A bare DELETED bit on a
-    // live-shaped node stays with the state field.
-    //
-    // Left as-is, the interior-deletion collector reads the stale no_keys
-    // state, queues the tombstone, and the breadcrumb child pointer
-    // fail-stops the edge checks - wedging every mount (the 2026-07-20 field
-    // report; snapshot-inject/stale_state_tombstone).
+    // A valid state contradicting the legacy flags: only a legacy flags-only
+    // writer does that, so the flags are the fresher write. But they're single
+    // unprotected bits: trust them only on a node shaped like a legacy
+    // bch2_snapshot_node_delete() tombstone - tree == 0, which nothing else ever
+    // has. Left stale, the interior-deletion collector tombstones the node and the
+    // edge checks fail-stop on its breadcrumb, wedging every mount (2026-07-20
+    // field report; snapshot-inject/stale_state_tombstone).
     let v = n.v();
     if fsck_err_on!(t,
                     v.state_raw() != c::bch_snapshot_state::SNAPSHOT_STATE_deleted.0 &&
@@ -357,20 +315,13 @@ fn check_state<'a, 't>(
     Ok(())
 }
 
-/// Data first, before anything else reasons about the state field: nothing
-/// we write deletes a node with keys still accounted to it, so data means the
-/// state field is the lie, whatever the rest of the node says. Settling it
-/// here means every check after - and every edge repair a parent runs
-/// against this node - sees a state that has already been held up against
-/// the accounting.
+/// Data first: nothing we write deletes a node with keys still accounted to
+/// it, so data means the state field is the lie. Settled here, every check
+/// after - and every edge repair a parent runs against this node - sees a
+/// state held up against the accounting.
 ///
-/// No data: settled tombstone, and the checks after handle it.
-///
-/// How the state gets put right depends on which lie it is. deleted means
-/// the node was spliced out of the tree, so reviving it means undoing that
-/// splice. no_keys is only ever marked - it says "this node's keys have
-/// migrated down", and the node stays where it is - so there is nothing to
-/// relink and setting the state live is the whole repair.
+/// deleted was spliced out of the tree, so reviving it undoes the splice;
+/// no_keys is only ever marked, so setting it live is the whole repair.
 fn check_has_data<'a, 't>(
     t: &TransAttempt<'a, 't>,
     n: &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
@@ -416,22 +367,12 @@ fn check_deleted<'a, 't>(
         return Ok(false);
     }
 
-    // A non-live node with two live children that both point back at it is a
-    // lie: it's a branching interior that two subtrees still depend on as
-    // their common ancestor, so it can't be gone. Reviving it is the simplest
-    // repair back to a consistent tree.
-    //
-    // A single live child is legal, and does not trigger this: a no_keys node
-    // is an emptied interior kept until the next remount, and it retains its
-    // one live descendant so ancestry still resolves - non-live nodes are
-    // single-child by construction.
-    //
-    // Children must reciprocate. A deleted node's child pointer can be a
-    // splice breadcrumb: a child reparented to the grandparent that no longer
-    // names us as parent doesn't depend on us and isn't counted.
-    //
-    // Before the deleted early-out, then fall through so the edge, depth and
-    // tree checks validate the now-live node.
+    // A non-live node can't have two live children pointing back at it: two
+    // subtrees still depend on it as their common ancestor. Revive it - before
+    // the deleted early-out, falling through to the edge, depth and tree checks.
+    // One live child is legal: a no_keys node keeps its one descendant so
+    // ancestry resolves. A child no longer naming us is a splice breadcrumb, not
+    // counted.
     let mut nr_live_children = 0;
     for child in n.v().children() {
         if child != 0 &&
@@ -447,13 +388,10 @@ fn check_deleted<'a, 't>(
         n.v_mut(t)?.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
     }
 
-    // Same check via the subvolume: deletion tombstones the subvolume in the
-    // same transaction that marks its snapshot, so a non-live leaf whose
-    // subvolume is live and points back has a bad state field. This also
-    // fixes, in the same pass, a bad state stamped by the zero-state
-    // migration in check_state() from a corrupt legacy flag. (A tombstoned
-    // subvolume reads as ENOENT here: that's normal mid-deletion, not
-    // evidence.)
+    // Deletion tombstones the subvolume in the transaction that marks its
+    // snapshot, so a non-live leaf whose subvolume is live and points back has a
+    // bad state field - including one check_state() stamped from a corrupt legacy
+    // flag. (A tombstoned subvolume reads as ENOENT: normal mid-deletion.)
     let v = n.v();
     if v.children()[0] == 0 && v.subvol() != 0 {
         let subvol_live = subvolume::get(trans, v.subvol(), false).found()?.is_some_and(|sv|
@@ -572,17 +510,9 @@ fn ptr_available(trans: &BtreeTrans<'_>, n: &Ffi<c::bch_snapshot>, n_id: u32, ro
     Ok(None)
 }
 
-/// Does snapshot @id own anything at all?
-///
-/// Any nonzero counter in any snapshotted btree says yes - keys, their
-/// bytes, or sectors. Only the existence of evidence matters here, not what
-/// it means, so there's nothing to version gate: a filesystem from before the
-/// per-btree key counts still accounts sectors, and on one that has them a
-/// snapshot holding only dirents or xattrs shows up in nr_keys where sectors
-/// alone would read as empty.
-///
-/// In-memory read: current as of the last applied delta, so unlike a btree
-/// read it needs no write buffer flush to be trustworthy.
+/// Whether snapshot @id owns anything: any nonzero counter in any snapshotted
+/// btree. Keys as well as sectors: a snapshot of only dirents or xattrs has no
+/// sectors. In memory, so current without a write buffer flush.
 fn has_accounting(fs: &Fs, id: u32) -> bool {
     crate::BTREE_IDS_KNOWN.iter()
         .filter(|&&btree| crate::BTREE_HAS_SNAPSHOTS_MASK & (1 << btree.0) != 0)
@@ -604,14 +534,10 @@ fn edge_repair_commit(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
     Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))
 }
 
-/// Put a node the accounting says is alive, @u, back into the tree.
-///
-/// Two children means nothing ever spliced this node out: the structure is
-/// intact and only the state field is wrong, so setting it live is the whole
-/// repair - snapshot::node_undelete() is for undoing a splice, and rejects
-/// that shape outright.
-///
-/// Otherwise it relinks through the parent, which has to be live first.
+/// Put a node the accounting says is alive, @u, back into the tree. With two
+/// children it was never spliced out: setting it live is the whole repair,
+/// and node_undelete() rejects that shape. Otherwise it relinks through the
+/// parent, which has to be live first.
 fn undelete_owns_data<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't>)
     -> Result<(), BchError>
 {
@@ -649,14 +575,11 @@ fn topmost_dead_ancestor(trans: &BtreeTrans<'_>, mut id: u32) -> Result<Option<u
     Ok(topmost)
 }
 
-/// Undelete relinks through the parent, so refusing a fully condemned chain
-/// turns a repairable filesystem into emergency read-only.
-///
-/// One node per commit: the chain is unbounded.
-///
-/// Nothing corroborates these ancestors - they are scaffolding, and stay
-/// only because the node below them ends up live. depth and the skiplists
-/// are left stale for snapshot_bad_depth/snapshot_bad_skiplist.
+/// Undelete relinks through the parent, so undelete @id's dead ancestors first,
+/// the topmost per commit - the chain is unbounded. Refusing would make a
+/// repairable filesystem go emergency read-only. Nothing corroborates them;
+/// they stay because the node below ends up live. Depth and skiplists are left
+/// for snapshot_bad_depth/snapshot_bad_skiplist.
 fn undelete_ancestors(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     let Some(topmost) = topmost_dead_ancestor(t.trans(), id)? else { return Ok(()) };
 
@@ -665,24 +588,12 @@ fn undelete_ancestors(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError>
     edge_repair_commit(t)
 }
 
-/// Put back a child node, @id under @parent_id, that isn't there at all.
-///
-/// Same argument as undeleting a tombstone that still owns data, one step
-/// further along: nothing we write removes a snapshot node with keys still
-/// accounted to it, so a node that's missing while its keys are not is a
-/// node that was destroyed, not deleted. Its keys are still on disk and
-/// still reachable from every view that inherits from it - only the node
-/// naming that view is gone. Recreate it, and they stay reachable.
-///
-/// A leaf, because that's the shape we can justify: @parent_id names it as a
-/// child, so parent, tree, depth and skiplists all follow from a node we can
-/// see, and nothing attests to any children of its own. If it did have
-/// descendants, their own parent pointers bring them back on a later pass
-/// through the same edge check.
-///
-/// The subvolume, if one claims this id, comes back with it: a subvolume
-/// whose snapshot went missing is exactly what a resurrected leaf should
-/// carry, and zeroing it would strand the subvolume instead.
+/// Recreate missing child @id of @parent_id, as a leaf. Nothing we write
+/// removes a node with keys still accounted to it, so it was destroyed, and
+/// its keys are still reachable from every view below it. A leaf is what
+/// @parent_id's pointer justifies; descendants, if any, come back through
+/// their own parent pointers on a later pass. A subvolume claiming @id comes
+/// back with it.
 fn resurrect_child(t: &TransAttempt<'_, '_>, parent_id: u32, id: u32) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
@@ -710,10 +621,8 @@ fn resurrect_child(t: &TransAttempt<'_, '_>, parent_id: u32, id: u32) -> Result<
     t.insert(c::btree_id::snapshots, n, UpdateTriggerFlags::empty())
 }
 
-/// The nodes an edge repair is between, keys and all. Which pointer is wrong
-/// is only decidable from parent/children/tree/depth across both sides, so a
-/// message naming them by id reports the conclusion and none of the evidence
-/// - and a field report is whatever the message printed.
+/// The nodes an edge repair is between, keys and all: which pointer is wrong
+/// is only decidable across both, so the message shows both.
 struct EdgeNodes<'n, 'f> {
     fs:       &'f Fs,
     node:     BkeySC<'n>,
@@ -798,25 +707,17 @@ fn edge_repair(
 
     let other = lookup_node(trans, other_id)?;
 
-    // Connectivity: the live tree must be closed over not-deleted nodes. A
-    // deleted target is history - an interrupted deletion left our edge
-    // pointing into it - so rewrite our own edge past it: parent edges walk up
-    // the tombstone's retained parent chain, child edges walk down retained
-    // children, to the nearest not-deleted node (or nothing, if that
-    // direction is all dead). The tombstone itself is untouched; depth and
-    // skiplist fallout is repaired by the checks downstream.
+    // The live tree must be closed over nodes that aren't deleted: an edge into a
+    // tombstone is left by an interrupted deletion, so rewrite ours past it - up
+    // the tombstone's retained parents or down its retained children - to the
+    // nearest node that isn't deleted. The tombstone itself is untouched.
     //
-    // Only for a tombstone that owns no data - see below. We cannot lean on
-    // check_deleted() having already adjudicated the target: the walk is
-    // reverse from POS_MAX and snapshot ids descend from the root, so a parent
-    // always reaches a deleted child's edge before that child is visited at
-    // all.
+    // Only a tombstone without data. check_deleted() can't have ruled on it yet:
+    // we walk down from POS_MAX and ids descend from the root, so a parent
+    // reaches a deleted child's edge before the child is visited.
     if let Some(o) = other.as_ref().filter(|o| o.v.state() == Some(c::bch_snapshot_state::SNAPSHOT_STATE_deleted)) {
-        // Data is definitive: nothing we write deletes a node with keys still
-        // accounted to it, so a deleted node that still owns data has a state
-        // field that lies, and routing the tree around it strands those keys.
-        // Undelete it and leave our edge alone - the node's own visit
-        // validates the result.
+        // A deleted node with data has a lying state, and routing around it would
+        // strand the keys: undelete it, and leave our edge to its own visit.
         let (keys, sectors) = snapshot::accounting_totals(fs, other_id, None)?;
         if keys != 0 || sectors != 0 {
             let fix = fsck_err!(t, id::snapshot_deleted_but_has_data,
@@ -867,12 +768,9 @@ fn edge_repair(
         }
     }
 
-    // A child pointer naming a node that isn't there. The accounting says
-    // which way to go: keys accounted to it mean the node was destroyed rather
-    // than deleted, and putting it back is what keeps them reachable. Nothing
-    // accounted means there's nothing to lose, and clearing is the smaller
-    // repair - which also means a garbage child id gets cleared instead of
-    // conjuring a snapshot out of one stomped field.
+    // A child pointer to a node that isn't there: keys accounted to it mean it
+    // was destroyed, and recreating it keeps them reachable. With none, clear the
+    // pointer - so a garbage id doesn't conjure a snapshot.
     if role == Role::Parent && other.is_none() {
         let [c0, c1] = n.v().children();
         let sibling = if c0 == other_id { c1 } else { c0 };
@@ -894,11 +792,8 @@ fn edge_repair(
         }
     }
 
-    // A single stomped field always leaves the other side's intact pointer for
-    // the repairs above to key off, so reaching here means multiple
-    // corruptions or a destroyed node - beyond what local evidence can
-    // repair. Rare enough that we report and stop rather than attempt
-    // topology surgery on a conjunction of corruptions:
+    // One stomped field leaves the other side's pointer for the repairs above, so
+    // this is multiple corruptions or a destroyed node: report and stop.
     bch_err!(fs, "snapshot topology damage is beyond single-corruption repair:\n\
                   node {id}'s {ptr} pointer names {other_id}, which {}\n\
                   no other node passes the parent/child consistency checks for this edge{}\n\
@@ -992,10 +887,8 @@ fn check_depth<'a, 't>(
     let fs = trans.fs();
     let parent_id = n.v().parent();
 
-    // With the parent missing there's nothing to derive depth from - and "no
-    // parent" would give 0, flattening an interior node to a root.
-    // check_edge() has already reported the dangling pointer; leave depth
-    // alone until that's resolved and the node is visited again.
+    // No parent to derive depth from, and 0 would flatten an interior node to a
+    // root. check_edge() reported the pointer; leave depth until it's fixed.
     let real_depth = if parent_id == 0 {
         0
     } else {
@@ -1074,16 +967,10 @@ fn check_to_subvol<'a, 't>(
         let subvol_k = iter.peek_slot(t)?.expect("a slot always has a key");
         let subvol = subvolume::val(subvol_k);
 
-        // A missing subvolume can be rebuilt from right here, and only from
-        // here: this snapshot names it, and a snapshot carrying a subvol
-        // backref is a leaf - which is what reconstruct_subvol() needs and
-        // what its other callers can't promise, since an inode's or dirent's
-        // snapshot may be interior. Left to them, a subvolume whose key was
-        // lost after it had been snapshotted was never reconstructed at all.
-        //
-        // Not while the snapshot is deleting, though: there the missing
-        // subvolume is a tombstoned deletion in flight, and rebuilding it
-        // would revert it.
+        // Only here can a missing subvolume be rebuilt: a snapshot with a subvol
+        // backref is a leaf, which reconstruct_subvol() needs and an inode's or
+        // dirent's snapshot can't promise. Not while the snapshot is deleting: that's
+        // a tombstoned deletion in flight.
         if subvol.is_none() && !snap_deleting {
             match check::reconstruct_subvol_root(t, id, subvol_id, None) {
                 Ok(root) => return check::reconstruct_subvol(t, id, subvol_id, root),
@@ -1093,10 +980,8 @@ fn check_to_subvol<'a, 't>(
             }
         }
 
-        // Wrong backref, or a missing subvolume we couldn't rebuild: repair
-        // needs the subvolume side validated first - it belongs to the
-        // dedicated pass after check_subvols. Report only; an error return
-        // here would regress mounts of filesystems mid-deletion.
+        // Wrong backref, or not rebuildable: the repair belongs to the pass after
+        // check_subvols. Report only - an error would break mounts mid-deletion.
         let subvol = match subvol {
             Some(s) if s.snapshot() == id => s,
             Some(_) => {
@@ -1113,12 +998,8 @@ fn check_to_subvol<'a, 't>(
             }
         };
 
-        // The deletion machinery couples exactly one bit on each side: a
-        // snapshot is will_delete iff its subvolume is tombstoned (live vs
-        // unlinked is the subvolume's own user-visibility business, invisible
-        // to the snapshot). With the edge intact, a state mismatch repairs in
-        // one direction only: the subvolume implies the snapshot state
-        // exactly, while the reverse would have to guess between live and
+        // Deletion couples one bit on each side: will_delete iff the subvolume is
+        // tombstoned. The subvolume decides - the reverse would have to guess live or
         // unlinked.
         let subvol_deleted = subvol.state() == Some(c::bch_subvolume_state::SUBVOLUME_STATE_deleted);
         if fsck_err_on!(t, snap_deleting != subvol_deleted, id::snapshot_subvol_state_mismatch,
@@ -1133,11 +1014,9 @@ fn check_to_subvol<'a, 't>(
             });
         }
     } else if should_have_subvol && state == Some(c::bch_snapshot_state::SNAPSHOT_STATE_live) {
-        // A live leaf with no backref: a subvolume still pointing at it means
-        // the backref was wiped - restore it. (A second claimant, if damage
-        // minted one, still hits check_subvols' doesn't-point-back
-        // fail-stop.) No claimant is an orphan leaf, whose repair (creating a
-        // subvolume) is unimplemented, as above.
+        // No backref: if a subvolume points here it was wiped - restore it (a second
+        // claimant still hits check_subvols' fail-stop). No claimant is an orphan
+        // leaf, unrepaired.
         if let Some(subvol) = subvol_claiming(t, id)? {
             if fsck_err!(t, id::snapshot_subvol_backref_wrong,
                          "snapshot leaf missing subvol backref, subvolume {subvol} points at it - restoring:\n{}",
@@ -1159,11 +1038,9 @@ fn check_to_subvol<'a, 't>(
         n.v_mut(t)?.subvol = 0.into();
     }
 
-    // Live nodes only: the _OBSOLETE flags are old-format compat bits, and
-    // set_state() clears SUBVOL_OBSOLETE for every non-live state even when
-    // the subvol backref is retained (a will_delete leaf keeps it; deletion
-    // checks it) - old kernels must not read a dying snapshot as a live
-    // subvolume leaf:
+    // Live nodes only: set_state() clears SUBVOL_OBSOLETE for every non-live
+    // state, backref or not, so old kernels don't read a dying snapshot as a live
+    // subvolume leaf.
     let v = n.v();
     if v.state_raw() == c::bch_snapshot_state::SNAPSHOT_STATE_live.0 && v.subvol_obsolete() != (v.subvol() != 0) {
         let mut msg = Printbuf::new();
@@ -1248,10 +1125,7 @@ fn check_snapshots(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     check_snapshots_trans(&trans)?;
 
-    // The pass completed cleanly, so the snapshots btree is consistent: record
-    // it so check_key_has_snapshot can trust the in-memory snapshot table (see
-    // bch2_btree_is_clean()). The same gate the pass runner uses to mark a
-    // pass complete.
+    // A clean pass lets check_key_has_snapshot trust the in-memory table
     if !fs.flag(c::bch_fs_flags::BCH_FS_error) {
         passes::set_btree_clean(fs, c::btree_id::snapshots);
     }
@@ -1262,7 +1136,7 @@ crate::recovery_pass!(bch2_check_snapshots => check_snapshots);
 
 /* reconstruct_snapshots: */
 
-/// A list of snapshot ids, space separated: as bch2_snapshot_id_list_to_text().
+/// Space separated.
 struct IdList<'l>(&'l [u32]);
 
 impl fmt::Display for IdList<'_> {
@@ -1431,13 +1305,9 @@ crate::recovery_pass!(bch2_reconstruct_snapshots => reconstruct_snapshots);
 
 /* check_key_has_snapshot - per-key repair, also called at runtime: */
 
-/// A key moved out of a deleted snapshot to its live descendant @snapshot -
-/// the snapshot-deletion scan's premise, "a key in snapshot X implies an
-/// inode in snapshot X", has to hold at the destination too, or the key gets
-/// stranded again on the next deletion. If the inode is only inherited from
-/// an ancestor of the descendant, copy it down. A genuinely missing inode is
-/// left for a full fsck to reconstruct; we don't do that or schedule passes
-/// here.
+/// A key moved from a deleted snapshot to its live descendant @snapshot needs
+/// an inode there, or the next deletion strands it again: copy one down if
+/// it's only inherited. A missing inode is left for full fsck.
 fn key_has_inode_in_snapshot(
     t:        &TransAttempt<'_, '_>,
     btree:    c::btree_id,
@@ -1483,54 +1353,29 @@ pub(crate) fn check_key_has_snapshot(
     let mut ret = Ok(());
     let mut keep = |r: Result<(), BchError>| if r.is_err() { ret = r };
 
-    // The incomplete snapshot deletion that stranded this key almost
-    // certainly stranded sibling keys across the content btrees too - left
-    // alone they only surface later, when copygc/reconcile trips over them.
-    // Schedule the content passes so the whole cascade of damage gets
-    // repaired in this fsck run rather than festering. run_explicit() only
-    // returns the unwind error (deferring this key's own repair) when it
-    // actually needs to rewind to an earlier pass; scheduling a
-    // later-or-current pass just marks it to run.
-    //
-    // skip_if_complete: at most one sweep per instance. These passes don't
-    // repair every stranded-key state - if they already ran and this key is
-    // still here, rescheduling can't fix it, but it would re-arm the passes in
-    // the superblock on every encounter, forcing fsck on every mount.
+    // The deletion that stranded this key almost certainly stranded others across
+    // the content btrees: schedule their passes now, before copygc or reconcile
+    // trips over them. Only a rewind returns an error, deferring this key.
+    // skip_if_complete: if they ran and the key's still here they can't fix it,
+    // and rescheduling would force fsck on every mount.
     for pass in [BCH_RECOVERY_PASS_check_inodes, BCH_RECOVERY_PASS_check_extents,
                  BCH_RECOVERY_PASS_check_dirents, BCH_RECOVERY_PASS_check_xattrs] {
         keep(passes::run_explicit(fs, &mut buf, pass,
                                   c::bch_run_recovery_pass_flags::RUN_RECOVERY_PASS_skip_if_complete));
     }
 
-    // A key in a deleted snapshot means that snapshot has data, and
-    // check_snapshot() holds a deleted node up against the accounting and
-    // undeletes it when it does - nothing we write deletes a node with keys
-    // still accounted to it, so the state field is the lie. If we are standing
-    // here looking at the key, that corroboration hasn't happened: either
-    // check_snapshots hasn't run, or it ran before whatever put the node in
-    // this state.
-    //
-    // So require it, and let the node be undeleted before anything below
-    // decides what to do with the key - the alternatives there are deleting it
-    // or migrating it to a live descendant, and both are irreversible on the
-    // strength of a state field the accounting disagrees with.
-    //
-    // Requiring it rewinds if we are past it, so the key is retried once the
-    // node is live again. If check_snapshots has already run this recovery and
-    // the key is still in a deleted snapshot, the corroboration saw it and let
-    // it stand - require() returns Ok and the repair below proceeds.
+    // A key in a deleted snapshot means it has data, and check_snapshot()
+    // undeletes a node with data: the state is the lie. We're seeing the key, so
+    // that hasn't happened yet - require check_snapshots before deleting or
+    // migrating it, both irreversible. require() rewinds if we're past it; if it
+    // ran and left the node deleted, it returns Ok and the repair proceeds.
     if state == IdState::SNAPSHOT_ID_deleted {
         keep(passes::require(fs, &mut buf, BCH_RECOVERY_PASS_check_snapshots));
     }
 
-    // Both repairs below destroy or relocate a key based on the in-memory
-    // snapshot table. Only trust it if the snapshots and subvolumes btrees
-    // have both been validated consistent (by check_snapshots /
-    // check_subvols) and not mutated since. If they haven't, the table may
-    // simply be stale and acting on it would destroy live data; schedule the
-    // passes and defer instead. Unlike require() on its own, this doesn't
-    // trust a pass that merely ran this mount (or was ratelimited) - it must
-    // have run since the last mutation.
+    // Both repairs act on the in-memory table: trust it only if the snapshots and
+    // subvolumes btrees were checked clean and not changed since - not just
+    // checked this mount. Otherwise schedule the passes and defer.
     if !passes::btree_is_clean(fs, c::btree_id::snapshots) ||
        !passes::btree_is_clean(fs, c::btree_id::subvolumes) {
         keep(passes::require(fs, &mut buf, BCH_RECOVERY_PASS_check_snapshots));
@@ -1542,24 +1387,14 @@ pub(crate) fn check_key_has_snapshot(
     write!(buf, "{} {}", iter.btree_id(), k.to_text(fs));
 
     if state == IdState::SNAPSHOT_ID_deleted {
-        // Reached at runtime - data moves (bch2_data_update_init()) - not in
-        // fsck: check_allocations rebuilds the accounting from the keys first,
-        // so a deleted node with keys has data accounted, and check_snapshots
-        // undeletes it (snapshot_deleted_but_has_data) before any pass gets
-        // here. (fsck-inject test_deleted_interior_has_data.)
+        // At runtime - data moves, bch2_data_update_init() - not in fsck, where
+        // check_allocations rebuilds the accounting first and check_snapshots
+        // undeletes a node with keys (fsck-inject test_deleted_interior_has_data).
         //
-        // If there's no live descendant (a leaf, or an interior node whose
-        // subtree is entirely deleted) the key is genuinely orphaned - nothing
-        // can see it - so delete it. If there is a live descendant the key is
-        // still visible to it via inheritance and should have been migrated
-        // there during deletion; migrate it now rather than dropping it (the
-        // deleted node retains a child pointer so live_descendent() can find
-        // the target).
-        //
-        // An error finding it - a dangling child pointer, on a table
-        // check_snapshots just validated clean (we only reach here clean) - is
-        // a real inconsistency, not a stale table. Surface it; don't destroy
-        // the key.
+        // No live descendant: nothing can see the key, so delete it. A live
+        // descendant still sees it by inheritance: migrate it there - deletion keeps a
+        // child pointer for live_descendent() to find. An error finding it, on a
+        // table just checked clean, is real damage: report it, keep the key.
         match snapshot::live_descendent(fs, k.k.p.snapshot)? {
             None => if inode_fsck_err!(trans, k.k.p, id::bkey_in_deleted_snapshot,
                                        "key in deleted snapshot {buf}, delete?")? {

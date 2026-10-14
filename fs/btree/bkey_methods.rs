@@ -37,11 +37,9 @@ use core::mem::size_of;
 type EnumValues = &'static [(&'static str, u64)];
 
 pub enum SetError<'p> {
-    /// No field by that name in this key type's value.
     Resolve(ResolveError<'p>),
     Access { field: &'p str, err: AccessError },
     BadValue { field: &'p str, val: &'p str, valid: Option<EnumValues> },
-    /// The key's buffer can't hold the result.
     NoRoom { need_u64s: usize, have_u64s: usize },
     /// A dirent name that isn't one: empty, or past BCH_NAME_MAX.
     BadName { val: &'p str },
@@ -101,8 +99,6 @@ pub fn parse_int(s: &str) -> Option<u64> {
     }
 }
 
-/// A field's value from text: an integer, or the name of one of the field's
-/// enum codewords.
 pub(crate) fn parse_val<'p>(type_: u8, field: &'p str, val: &'p str) -> Result<u64, SetError<'p>> {
     if let Some(v) = parse_int(val) {
         return Ok(v);
@@ -121,9 +117,8 @@ fn write<'p>(buf: &mut [u8], field: &'p str, target: &FieldTarget, v: u64)
 }
 
 impl TransBkey<'_, '_> {
-    /// Set @field of this key's value to @val - see the notes at the top of
-    /// this file. The key's buffer must have room for the result: a value
-    /// that grows to reach the field, or the repacked inode.
+    /// The key's buffer must have room for the result: a value grown to reach
+    /// the field, or the repacked inode.
     pub fn set<'p>(&mut self, fs: &Fs, field: &'p str, val: &'p str)
         -> Result<(), SetError<'p>>
     {
@@ -136,16 +131,14 @@ impl TransBkey<'_, '_> {
         }
     }
 
-    /// Set @field of the value as it's stored, by the value struct's own
-    /// field names - no unpack and repack for an inode, so what the packer
-    /// recomputes (has_inode_opts) can be set wrong. Only the fixed fields:
-    /// bi_flags, bi_journal_seq, ... of bch_inode_v3.
+    /// By the stored struct's field names: an inode isn't repacked, so what the
+    /// packer recomputes (has_inode_opts) can be set wrong. For an inode, only
+    /// bch_inode_v3's fixed fields.
     pub fn set_raw<'p>(&mut self, field: &'p str, val: &'p str) -> Result<(), SetError<'p>> {
         self.set_fixed(field, val)
     }
 
-    /// A field of the value's own struct, written in place: the fallback for
-    /// the key types with their own set_field().
+    /// In place; also dirent::set_field()'s fallback.
     pub(crate) fn set_fixed<'p>(&mut self, field: &'p str, val: &'p str) -> Result<(), SetError<'p>> {
         let type_ = self.k().type_;
         let info = typeinfo::bkey_val_info(type_ as u32)
@@ -203,10 +196,8 @@ impl TransBkey<'_, '_> {
 
 // ── Triggers ─────────────────────────────────────────────────────────────
 
-/// What a key type's trigger is called with: an update to @btree at @level,
-/// as the key it overwrites and the key going in - as struct
-/// btree_trigger_op. @new is mutable: an atomic trigger can edit the key
-/// going in, in place.
+/// What a key type's trigger is called with. @new is mutable: an atomic
+/// trigger can edit the key going in, in place.
 pub struct TriggerOp<'a> {
     pub btree: c::btree_id,
     pub level: u32,
@@ -216,8 +207,6 @@ pub struct TriggerOp<'a> {
 }
 
 impl<'a> TriggerOp<'a> {
-    /// The op C called a trigger with.
-    ///
     /// # Safety
     /// @op is the one the trigger was called with: both keys valid, and @new
     /// the trigger's to edit, for 'a.

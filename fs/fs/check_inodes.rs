@@ -1,35 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! fsck: the check_inodes recovery pass - each inode key, every snapshot
-//! version, on its own: that its fields agree with each other and with what
-//! they point at, and that what's derived from them - flags caching the
-//! answer to a question about other btrees - is right.
-//!
-//! In order:
-//!  - hash info (seed and type) agrees with the version at the snapshot root;
-//!  - has_case_insensitive agrees with the casefolded directories above it;
-//!  - bi_parent_subvol is only set on a subvolume root;
-//!  - the backpointer (bi_dir, bi_dir_offset) names a dirent that points back;
-//!  - an unlinked directory is empty (rmdir'd, not yet reaped), or the root of
-//!    an unlinked subvolume;
-//!  - a directory has no i_size;
-//!  - has_child_snapshot agrees with the versions in descendant snapshots;
-//!  - an unlinked inode is on the deleted list (offline), or open (online);
-//!  - has_inode_opts agrees with the options set, and they've propagated;
-//!  - has_access_acl/has_default_acl have the ACL xattr they claim (the other
-//!    direction - an ACL xattr with the flag clear - is check_xattrs');
-//!  - bi_subvol names a subvolume that names this inode back;
-//!  - bi_journal_seq isn't in the future.
-//!
-//! Repairs edit an unpacked copy, written once at the end.
-//!
-//! Changes from the C: a declined repair changes nothing - the C cleared a
-//! non-empty directory's unlinked flag and set the deleted_inodes bit whether
-//! or not the fix was taken - and a missing subvolume no longer has its
-//! uninitialized value compared against the inode when inode_bi_subvol_missing
-//! is declined. And bi_parent_subvol is checked before the backpointer, which
-//! is looked up through it: the C cleared a good backpointer for a bogus one,
-//! for check_dirents to put back.
+//! check_inodes: each inode version on its own - that its fields agree with
+//! each other and with what they point at, and that the flags caching facts
+//! about other btrees (has_child_snapshot, has_inode_opts, the ACL flags) are
+//! right. Repairs edit an unpacked copy, written once at the end.
 
 use crate::acl::AclType;
 use crate::btree::bkey::{spos, BkeySC, POS_MIN};
@@ -52,13 +26,12 @@ use crate::{inode, namei, str_hash};
 use core::fmt;
 
 struct CheckInodes {
-    /// The oldest version of the inode being walked that the current key
-    /// sees - the one every version takes its hash info from.
+    /// The oldest version the current key sees: every version takes its hash
+    /// info from it.
     snapshot_root: c::bch_inode_unpacked,
 }
 
-/// The backpointer: the dirent @u names has to exist and name @u back.
-/// Returns whether @u was changed.
+/// The dirent @u names must exist and name @u back. Whether @u changed.
 fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpacked) -> Result<bool, BchError> {
     let trans: &BtreeTrans<'_> = t;
     let fs = trans.fs();
@@ -70,11 +43,8 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpac
     let points = d.is_some_and(|k| namei::dirent_points_to_inode(Dirent::new(k).expect("a dirent"), u));
 
     if !points && u.bi_subvol != 0 && u.flag(c::bch_inode_flags::BCH_INODE_has_child_snapshot) {
-        // Older version of a renamed subvolume root: we won't have a correct
-        // dirent for it. That's expected, see inode_should_reattach().
-        //
-        // We don't clear the backpointer field when doing the rename because
-        // there might be arbitrarily many versions in older snapshots.
+        // An old version of a renamed subvolume root has no dirent, as
+        // expected: the rename can't clear arbitrarily many old backpointers
         u.clear_backpointer();
         return Ok(true);
     }
@@ -91,10 +61,8 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpac
         Some(_) => false,
     };
     if repair {
-        // We just clear the backpointer fields for now. If we find a dirent
-        // that points to this inode in check_dirents(), we'll update it then;
-        // then when we get to check_path() if the backpointer is still 0
-        // we'll reattach it.
+        // check_dirents sets it again if a dirent points here;
+        // check_unreachable_inodes reattaches it if none does
         u.clear_backpointer();
         changed = true;
     }
@@ -103,11 +71,10 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpac
         if points &&
            fsck_err_on!(trans, u.flag(c::bch_inode_flags::BCH_INODE_unlinked), id::inode_unlinked_but_has_dirent,
                         "inode unlinked but has dirent\n{u}\n{}", k.to_text(fs))? {
-            // The dirent was just verified to point at this inode, so the
-            // unlinked flag is wrong - and the flag clear is the complete
-            // repair: bi_nlink counts links beyond the first, so this yields
-            // nlink 1 (check_nlinks recounts hardlinks), and the inode trigger
-            // removes the deleted_inodes entry.
+            // A dirent points here, so the unlinked flag is wrong, and
+            // clearing it is the whole repair: nlink becomes 1 (check_nlinks
+            // recounts hardlinks), and the trigger drops the deleted_inodes
+            // entry
             u.set_flag(c::bch_inode_flags::BCH_INODE_unlinked, false);
             changed = true;
         }
@@ -122,7 +89,7 @@ fn on_deleted_list(t: &TransAttempt<'_, '_>, pos: c::bpos) -> Result<bool, BchEr
     Ok(iter.peek_slot(t)?.is_some_and(|k| k.key_type() == c::bch_bkey_type::KEY_TYPE_set))
 }
 
-/// Whether @u has an xattr of @ty: what the has_*_acl flags record.
+/// What the has_*_acl flags record.
 fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &c::bch_inode_unpacked, ty: c::bch_xattr_type)
     -> Result<bool, BchError>
 {
@@ -151,24 +118,18 @@ impl fmt::Display for MaybeSnapshot<'_> {
 enum SubvolCheck {
     Ok,
     Repaired,
-    /// The subvolume key needs recreating, with this root inode - the caller
-    /// has the attempt to do it with - and the C skips the rest of the
-    /// checks.
+    /// The caller recreates the subvolume key with this root inode, and skips
+    /// the rest of the checks.
     Reconstruct(u64),
 }
 
-/// bi_subvol: the subvolume has to exist and point back at this inode, at a
-/// snapshot that sees this version.
+/// The subvolume must exist and point back at this inode, at a snapshot that
+/// sees this version.
 ///
-/// Not gated on the snapshot being a leaf: taking a snapshot rewrites the root
-/// inode of the new subvolume, not of the old, so a live subvolume's root
-/// inode key stays at a node that has since become interior. Leaf-ness
-/// therefore skipped this check for every subvolume that had ever been
-/// snapshotted - so a lost subvolume key was never reconstructed and bi_subvol
-/// was never validated for exactly the subvolumes with the most history behind
-/// them. Live versus stale is decided by inode_bi_subvol_wrong instead: the
-/// subvolume's snapshot has to have this key's snapshot as an ancestor, which
-/// is the actual question leaf-ness was standing in for.
+/// Not just at leaves: a snapshotted subvolume's root inode stays at a node
+/// that has since become interior, so a leaf check skipped every subvolume ever
+/// snapshotted. Live versus stale is whether the subvolume's snapshot descends
+/// from this key's (inode_bi_subvol_wrong).
 fn check_inode_subvol(
     t:     &TransAttempt<'_, '_>,
     pos:   c::bpos,
@@ -180,16 +141,11 @@ fn check_inode_subvol(
     let subvol   = subvolume::get(trans, u.bi_subvol, false).found()?;
     let snapshot = snapshot::lookup(trans, u.bi_snapshot).found()?;
 
-    // A missing subvolume is reconstructed in two cases. If the subvolumes
-    // btree is known to have lost data, reconstruct. Or if this root inode
-    // names the subvolume and the live snapshot it lives at names the same
-    // subvolume in its backref, reconstruct: two keys point at the edge and
-    // only the subvolume key is gone.
-    //
-    // If the snapshot is will_delete, don't - there the missing subvolume is
-    // a deletion in flight, and reconstructing it live would revert the
-    // deletion; the sweep owns those keys. Anything else falls through to the
-    // conservative arms below, which strip the reference.
+    // Reconstruct a missing subvolume if the subvolumes btree lost data, or if
+    // the live snapshot this inode is at backrefs the same subvolume: two keys
+    // agree, only the subvolume is gone. Not if the snapshot is will_delete:
+    // that's a deletion in flight, which reconstructing would revert. Anything
+    // else strips the reference, below.
     let snapshot_agrees = snapshot.as_ref().is_some_and(|s| {
         s.state() == Some(c::bch_snapshot_state::SNAPSHOT_STATE_live) &&
             s.subvol.get() == u.bi_subvol
@@ -200,18 +156,13 @@ fn check_inode_subvol(
         return Ok(SubvolCheck::Reconstruct(root));
     }
 
-    // No exemption for a missing subvolume: an unlinked subvolume still
-    // resolves, and once it's tombstoned the snapshot is will_delete and we
-    // never visit these keys - the sweep owns them. A root inode pointing at a
-    // subvolume that's actually gone is damage, and the repair below must run
-    // or check_unreachable_inodes() meets an orphan whose bi_subvol points
-    // nowhere and the reattach fail-stops the pass (field report, 2026-07-21).
+    // No exemption for a missing subvolume: an unlinked one still resolves, and
+    // a tombstone's snapshot is will_delete, which we never get here for. Left
+    // alone, check_unreachable_inodes() fails on an orphan whose bi_subvol
+    // points nowhere (field report, 2026-07-21).
     //
-    // A reference to the root subvolume is never the broken side: subvol 1's
-    // existence is an invariant, and check_root() recreates it if lost.
-    // Stripping bi_subvol around the absence takes a valid backref off the
-    // root inode - and check_unreachable_inodes() then reattaches the root
-    // directory into lost+found:
+    // Except the root subvolume, which always exists (check_root() recreates
+    // it): stripping bi_subvol would reattach the root directory in lost+found.
     if subvol.is_none() && u.bi_subvol == c::BCACHEFS_ROOT_SUBVOL {
         return Ok(SubvolCheck::Ok);
     }
@@ -240,16 +191,11 @@ fn check_inode_subvol(
     Ok(SubvolCheck::Repaired)
 }
 
-/// BCH_INODE_unlinked on a directory is allowed on the root of an unlinked
-/// subvolume - legitimately non-empty, since the snapshot sweep is what
-/// deletes the contents - and on an empty directory: rmdir sets it
-/// (bch2_inode_nlink_dec(); bi_nlink is the subdirectory count), and one
-/// that's still open, or not yet reaped at a crash, is waiting for deletion
-/// like any unlinked file - and is handled as one, on the deleted list.
-///
-/// A non-empty one is damage, rmdir only taking empty directories: clear the
-/// flag, so check_unreachable_inodes() reattaches it. Returns whether @u was
-/// changed.
+/// An unlinked directory is allowed if it's an unlinked subvolume's root -
+/// the snapshot sweep deletes its contents - or empty: rmdir'd, and still open
+/// or not yet reaped, on the deleted list like any unlinked file. Non-empty is
+/// damage: clear the flag, so check_unreachable_inodes() reattaches it. Whether
+/// @u changed.
 fn check_unlinked_dir(
     t:     &TransAttempt<'_, '_>,
     pos:   c::bpos,
@@ -356,22 +302,16 @@ fn check_inode<'t>(
         changed = true;
     }
 
-    // Unlinked subvolume roots are skipped here: their deletion belongs to the
-    // subvolume path (check_subvols() resumes it after a crash), not the inode
-    // reaper or the deleted_inodes btree:
+    // An unlinked subvolume root is the subvolume path's to delete -
+    // check_subvols() resumes it - not the inode reaper's
     if u.flag(c::bch_inode_flags::BCH_INODE_unlinked) &&
        !u.is_subvolume_root() &&
        !u.flag(c::bch_inode_flags::BCH_INODE_has_child_snapshot) {
         if !fs.flag(c::bch_fs_flags::BCH_FS_started) {
-            // If we're not in online fsck, don't delete unlinked inodes, just
-            // make sure they're on the deleted list.
-            //
-            // They might be referred to by a logged operation - i.e. we might
-            // have crashed in the middle of a truncate on an unlinked but open
-            // file - so we want to let the delete_dead_inodes kill it after
-            // resuming logged ops.
-            //
-            // (The online arm below isn't reached today: check_inodes isn't
+            // Offline, only make sure it's on the deleted list: a logged
+            // operation may still refer to it - a crash mid-truncate of an open
+            // unlinked file - so delete_dead_inodes runs after logged ops
+            // resume. (The online arm isn't reached: check_inodes isn't
             // PASS_ONLINE.)
             if !on_deleted_list(t, pos)? &&
                fsck_err!(trans, id::unlinked_inode_not_on_deleted_list,
@@ -395,14 +335,12 @@ fn check_inode<'t>(
         changed = true;
     }
 
-    // after the flag check above: it's what gates the walk
+    // After the flag check: the flag gates the walk
     inode::check_opts_propagated(trans, &mut u)?;
 
-    // has_access_acl/has_default_acl: only the set direction is verified
-    // here, an xattr lookup per flagged inode - inodes with ACLs are rare.
-    // Flag clear but xattr present, the direction that would break the
-    // bch2_get_acl() short circuit, is caught from the xattr side in
-    // check_xattrs:
+    // Only flag set, xattr missing: a lookup per flagged inode, which are
+    // rare. Flag clear with an xattr - which breaks bch2_get_acl()'s short
+    // circuit - is check_xattrs'.
     for acl in AclType::ALL {
         if u.flag(acl.inode_flag()) &&
            fsck_err_on!(trans, !has_xattr_type(t, &u, acl.xattr_type())?, acl.flag_wrong(),

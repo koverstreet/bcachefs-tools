@@ -1,78 +1,53 @@
 // SPDX-License-Identifier: GPL-2.0
 //! Variable-size structs: vstructs.h's, and C's flexible array members.
 //!
-//! A C struct that ends in a flexible array member - `u8 devs[]`, `u64
-//! _data[]` - has values that run past sizeof, as far as their own fields
-//! say: replicas_entry_bytes() from nr_devs, vstruct_bytes() from u64s. A
-//! pointer to one says nothing about the bytes past it, so C trusts the
-//! count, having validated it wherever the bytes came in.
+//! A C struct ending in a flexible array member - `u8 devs[]`, `u64
+//! _data[]` - runs past sizeof, as far as its own count says:
+//! vstruct_bytes() from u64s, replicas_entry_bytes() from nr_devs. C trusts
+//! the count, having validated it where the bytes came in.
 //!
-//! Here the bound travels with the reference: a reference is a claim about
-//! bytes - a &T, that size_of::<T>() of them are there and are a T - so one
-//! is made at the value's own size, where its bytes are, from a buffer or
-//! from C's pointer: never by widening a &T, which reaches only as far as the
-//! T, and never from fewer bytes than its header.
+//! Here the bound travels with the reference. A reference claims its bytes,
+//! so one is made at the value's own size, from a buffer or from C's pointer:
+//! never by widening a &T, which reaches only the T, and never from fewer
+//! bytes than the header.
 //!
-//! An unsized vstruct is a family of definitions, one per state - each its
-//! own, as states that differ in structure are different types - written by
-//! #[unsized_vstruct] from C's, and `jset<S>` picks one (Family). A reference
-//! to one, &jset<S>, is fat: it has the tail's length, and reaches every byte
-//! of the value and none past. Its state says what's known of its counts, and
-//! its entries are walked in the same state:
-//!  - Validated, the default: what C read and validated, from C's pointer
-//!    (from_ffi()). Its counts are trusted, as C trusts them.
-//!  - Unvalidated: bytes from outside - off a device, from the kernel
-//!    (from_bytes()). Its count was checked against them, an overrun an
-//!    error; its entries' are checked as they're walked.
-//!
-//! Each state's definition is the header, then the tail, and derefs to the
-//! header: C's struct, Ffi<T> - its tail zero-length, C's flexible array -
-//! which is what Rust names wherever it meets C. A count is no field to set
-//! through &mut: it changes only through what holds the value, which has the
-//! room for it to grow - so an unsized vstruct's count is private, read as
-//! u64s().
-//!
-//! A header and an array it counts in elements - an ioctl's reply, a
-//! replicas usage record - is #[counted]: a family like an unsized
-//! vstruct's, its tail the array, as long as the count says. A key is thin -
-//! its size is its k.u64s, not its reference's - and walked as an
-//! UnvalidatedRef (or UnvalidatedMut) of the bytes its count was checked
-//! against.
-//!
-//! A value shorter than its type - written by an older version, before the
-//! type grew - can't be a &T at all: it's a View, reading only its own bytes,
-//! its fields past its end zero, as bch2_sb_field_get_minsize() and
-//! bkey_val_copy_pad() zero them in C - or, for a #[grown] family's, its
-//! DST: the fields every one has, then the bytes there are.
-//!
-//! A sized tagged_union!'s arms - an accounting position's - are as long as
-//! each says (ArmAt): a replicas entry, a header and the devices it counts,
-//! is a #[counted] family's, its count checked against the storage once,
-//! when it's handed out.
-//!
-//! What a variable-size type is, from the most general:
-//!  - SelfSized, bytes(): its own bytes say how big it is - a #[counted_by]
-//!    array's FlexArray is. Not extent entries, sized by the superblock's
-//!    extent_type_u64s.
-//!  - VStruct: SelfSized by a count of u64s, vstructs.h's - 8 byte aligned.
+//! What a variable-size type can be, most general first:
+//!  - SelfSized: its own bytes say how big it is. A #[counted_by] array's
+//!    FlexArray is; extent entries aren't - the superblock sizes those.
+//!  - VStruct: SelfSized by a count of u64s, vstructs.h's, 8 byte aligned:
 //!    vstruct!().
-//!  - Unsized: any DST of ours - an unsized vstruct, a #[counted] array, a
-//!    #[whole] or #[grown] value - its reference fat.
-//!  - A container: an unsized vstruct of entries, one after another from its
-//!    start[]: vstruct_for_each(), vstruct_container!()'s entries().
+//!  - Unsized: a DST of ours, its reference fat - an unsized vstruct, a
+//!    #[counted] array, a #[whole] or #[grown] value.
+//!  - A container: an unsized vstruct whose entries follow its start[]:
+//!    vstruct_container!()'s entries().
+//!
+//! An unsized vstruct is a Family of definitions, one per State, written by
+//! #[unsized_vstruct]; jset<S> picks one. Validated, the default, is what C
+//! read and validated (from_ffi()): its counts are trusted, as C trusts
+//! them. Unvalidated is bytes from outside - off a device, from the kernel
+//! (from_bytes()): its count is checked against them, its entries' as
+//! they're walked. Each derefs to its header, C's struct, Ffi<T>. The count
+//! is private, read as u64s(): it changes only through what holds the value,
+//! which has the room for it to grow.
+//!
+//! A key is thin - its size is its k.u64s, not its reference's - and walked
+//! as an UnvalidatedRef of the bytes its count was checked against.
+//!
+//! A value shorter than its type, written before the type grew, can't be a
+//! &T: it's a View, reading only its own bytes, the fields past its end zero;
+//! or, for a #[grown] family, its DST - the fields every value has, then the
+//! bytes there are.
 //!
 //! vstructs.h, and where it goes:
 //!  - vstruct_bytes(), replicas_entry_bytes(): SelfSized::bytes()
-//!  - a counted array - devs[]: #[counted], its Unvalidated definition's
-//!    array; FlexArray where it's read by stride
-//!  - vstruct_for_each(), vstruct_next(), vstruct_last(): an unsized
-//!    vstruct's entries(), trusting a Validated one's counts as C does,
-//!    checking an Unvalidated one's
+//!  - devs[]: #[counted]; FlexArray where it's read by stride
+//!  - vstruct_for_each(), vstruct_next(), vstruct_last(): entries()
 //!
 //! What's trusted: Plain, that any bytes are a valid value - which
-//! #[derive(Plain)] (cstruct-macros) checks at compile time, zerocopy's
-//! FromBytes for the types we define - and, for a reference made from C's
-//! pointer (from_ffi()), the count: SelfSized::bytes(), which vstruct!() and
+//! #[derive(Plain)] checks at compile time, and zerocopy's FromBytes for the
+//! types we define - and, for a reference from C's pointer, the count
+//! SelfSized::bytes() reads, which vstruct!() and #[counted_by] generate from
+//! the field the struct declares.
 //! #[counted_by] generate from the field the struct declares as its count.
 
 use core::marker::PhantomData;

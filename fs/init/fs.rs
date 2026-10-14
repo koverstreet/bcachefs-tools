@@ -8,14 +8,11 @@ use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use core::ops::ControlFlow;
 
-/// RAII guard for a device reference. Calls bch2_dev_put on drop.
-///
-/// Obtained via `Fs::dev_get()`. Derefs to `&bch_dev` for read access.
+/// A device ref, put on drop. Derefs to &bch_dev.
 pub struct DevRef(*mut c::bch_dev);
 
 impl DevRef {
-    /// Get a raw mutable pointer to the device. Needed for C functions
-    /// that take `*mut bch_dev`.
+    /// For C functions taking *mut bch_dev.
     pub fn as_mut_ptr(&self) -> *mut c::bch_dev {
         self.0
     }
@@ -39,12 +36,9 @@ impl Drop for DevRef {
     }
 }
 
-/// RAII guard for bch_fs::sb_lock. Unlocks on drop.
-///
-/// Mirrors the C `mutex_noio` guard: sb_lock is held precisely to guard
-/// allocations that must not recurse into reclaim IO, so the lock brackets a
-/// PF_MEMALLOC_NOIO scope. The explicit Drop below runs before the `_noio`
-/// field is dropped, so the order is unlock-then-restore - matching the C side.
+/// sb_lock, unlocked on drop. It guards allocations that mustn't recurse into
+/// reclaim IO, so it brackets a PF_MEMALLOC_NOIO scope: Drop unlocks before the
+/// _noio field restores, as the C does.
 pub struct SbLockGuard<'a> {
     fs: &'a Fs,
     _noio: MemallocFlags,
@@ -73,10 +67,7 @@ unsafe impl Send for BorrowedFs {}
 unsafe impl Sync for BorrowedFs {}
 
 impl BorrowedFs {
-    /// Create a cross-thread non-owning `Fs` handle.
-    ///
-    /// Callers must ensure the underlying bch_fs remains live while any
-    /// resulting borrowed Fs views are in use.
+    /// A cross-thread non-owning handle: the bch_fs must outlive its users.
     pub fn new(fs: &Fs) -> Self {
         Self(fs.raw)
     }
@@ -86,7 +77,7 @@ impl BorrowedFs {
     }
 }
 
-/// As bch2_version_to_text(): the version's number and name.
+/// The version's number and name.
 impl core::fmt::Display for c::bcachefs_metadata_version {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         crate::printbuf_to_formatter(f, |out| unsafe { c::bch2_version_to_text(out, *self) })
@@ -113,18 +104,14 @@ impl Fs {
         unsafe { (*self.raw).chacha20_key_set }
     }
 
-    /// The filesystem's superblock handle.
     pub fn disk_sb(&self) -> &c::bch_sb_handle {
         unsafe { &(*self.raw).disk_sb }
     }
 
-    /// Create a non-owning `Fs` view from a raw pointer.
-    ///
-    /// Returns `ManuallyDrop<Fs>` to prevent `Fs::drop` from calling
-    /// `bch2_fs_exit`. Deref gives `&Fs` for all methods.
+    /// Non-owning: ManuallyDrop, so Fs::drop doesn't call bch2_fs_exit.
     ///
     /// # Safety
-    /// `raw` must point to a valid, live `bch_fs`.
+    /// @raw points to a live bch_fs.
     pub unsafe fn borrow_raw(raw: *mut c::bch_fs) -> core::mem::ManuallyDrop<Fs> {
         core::mem::ManuallyDrop::new(Fs { raw })
     }
@@ -135,12 +122,10 @@ impl Fs {
         unsafe { Self::borrow_raw(c.as_ptr()) }
     }
 
-    /// Access the superblock handle.
     pub fn sb_handle(&self) -> &c::bch_sb_handle {
         unsafe { &(*self.raw).disk_sb }
     }
 
-    /// Access the superblock.
     pub fn sb(&self) -> &c::bch_sb {
         self.sb_handle().sb()
     }
@@ -194,14 +179,13 @@ impl Fs {
         unsafe { c::bch2_fs_emergency_read_only(self.raw, out.as_raw()) }
     }
 
-    /// Acquire the superblock lock, returning a guard that releases it on drop.
     pub fn sb_lock(&self) -> SbLockGuard<'_> {
         let _noio = MemallocFlags::noio();
         unsafe { c::mutex_lock(&mut (*self.raw).sb_lock.lock); }
         SbLockGuard { fs: self, _noio }
     }
 
-    /// Write superblock to disk. Caller must hold sb_lock.
+    /// Caller holds sb_lock.
     pub fn write_super(&self) {
         unsafe { c::bch2_write_super(self.raw) };
     }
@@ -233,29 +217,21 @@ impl Fs {
         }
     }
 
-    /// Get a mutable reference to a member entry in the superblock.
-    /// Caller must hold sb_lock.
-    ///
     /// # Safety
-    /// Caller must hold sb_lock for mutation safety.
+    /// Caller holds sb_lock.
     #[allow(clippy::mut_from_ref)] // interior mutability guarded by sb_lock
     pub unsafe fn member_mut(&self, dev_idx: u32) -> &mut c::bch_member {
         unsafe { &mut *c::bch2_members_v2_get_mut((*self.raw).disk_sb.sb, dev_idx as i32) }
     }
 
-    /// Shut down the filesystem, returning the error code from bch2_fs_exit.
-    /// Consumes self so the caller can't use it afterward; forget prevents
-    /// Drop from double-freeing.
+    /// Consumes self, and forgets it so Drop doesn't exit it twice.
     pub fn exit(self) -> i32 {
         let ret = unsafe { c::bch2_fs_exit(self.raw) };
         core::mem::forget(self);
         ret
     }
 
-    /// Iterate over all online member devices.
-    ///
-    /// Equivalent to the C `for_each_online_member` macro. Ref counting
-    /// is handled automatically, including on early break.
+    /// Refs are put, including on early break.
     pub fn for_each_online_member<F>(&self, mut f: F) -> ControlFlow<()>
     where
         F: FnMut(&c::bch_dev) -> ControlFlow<()>,
@@ -274,7 +250,6 @@ impl Fs {
         }
     }
 
-    /// Get the root btree node for a btree ID.
     pub fn btree_id_root(&self, id: u32) -> Option<&c::btree> {
         unsafe {
             let c = &*self.raw;
@@ -338,12 +313,10 @@ impl Fs {
         }
     }
 
-    /// Start the filesystem (recovery, journal replay, etc).
     pub fn start(&self) -> Result<(), BchError> {
         ret_to_result(unsafe { c::bch2_fs_start(self.raw) })
     }
 
-    /// Allocate the buckets_nouse bitmaps for all devices.
     pub fn buckets_nouse_alloc(&self) -> Result<(), BchError> {
         ret_to_result(unsafe { c::bch2_buckets_nouse_alloc(self.raw) })
     }
@@ -412,8 +385,7 @@ impl Fs {
         Ok(())
     }
 
-    /// Write superblock to disk (locked version). Caller must hold sb_lock.
-    /// Returns Ok(()) on success or the error code on failure.
+    /// Caller holds sb_lock.
     pub fn write_super_ret(&self) -> Result<(), BchError> {
         ret_to_result(unsafe { c::bch2_write_super(self.raw) })
     }
@@ -443,12 +415,10 @@ impl Fs {
         }
     }
 
-    /// Transition filesystem to read-only mode.
     pub fn read_only(&self) {
         unsafe { c::bch2_fs_read_only(self.raw) };
     }
 
-    /// Set a device's allocator to RW or RO.
     pub fn dev_allocator_set_rw(&self, dev: u32, rw: bool) {
         unsafe {
             let ca = (*self.raw).devs[dev as usize];
@@ -458,7 +428,6 @@ impl Fs {
         }
     }
 
-    /// Flush all journal pins (equivalent to bch2_journal_flush_all_pins).
     pub fn journal_flush_all_pins(&self) {
         unsafe {
             c::bch2_journal_flush_pins(
@@ -473,7 +442,6 @@ impl Fs {
         unsafe { c::bch2_journal_flush_pins(&mut (*self.raw).journal, self.journal_cur_seq()) }
     }
 
-    /// Delete a range of keys in a btree.
     pub fn btree_delete_range(
         &self,
         btree_id: c::btree_id,
@@ -510,7 +478,6 @@ impl Fs {
         })
     }
 
-    /// Read full device usage stats.
     pub fn dev_usage_full_read(&self, dev: u32) -> c::bch_dev_usage_full {
         unsafe {
             let ca = (*self.raw).devs[dev as usize];
@@ -520,29 +487,25 @@ impl Fs {
         }
     }
 
-    /// Get the raw device pointer by index.
-    ///
     /// # Safety
-    /// Caller must ensure the device exists and the pointer is valid.
+    /// The device exists.
     pub unsafe fn dev_raw(&self, dev: u32) -> *mut c::bch_dev {
         (*self.raw).devs[dev as usize]
     }
 
-    /// Access the mutable superblock handle for resize operations.
+    /// For resize.
     ///
     /// # Safety
-    /// Caller must hold sb_lock.
+    /// Caller holds sb_lock.
     #[allow(clippy::mut_from_ref)] // interior mutability guarded by sb_lock
     pub unsafe fn disk_sb_mut(&self) -> &mut c::bch_sb_handle {
         &mut (*self.raw).disk_sb
     }
 
-    /// Filesystem block size in bytes.
     pub fn block_bytes(&self) -> u64 {
         self.opts().block_size as u64
     }
 
-    /// Convert a bcachefs internal time to a timespec.
     pub fn time_to_timespec(&self, time: i64) -> c::timespec64 {
         const NSEC_PER_SEC: i64 = 1_000_000_000;
 
@@ -569,7 +532,6 @@ impl Fs {
         t
     }
 
-    /// Convert a timespec to a bcachefs internal time.
     // tv_sec is the kernel's time64_t, or userspace's time_t - 32 bits on some
     // targets
     #[allow(clippy::unnecessary_cast)]
@@ -581,19 +543,17 @@ impl Fs {
             .wrapping_sub(sb.time_base_lo as i64)
     }
 
-    /// Current time in bcachefs internal time format.
+    /// In the filesystem's time units.
     pub fn current_time(&self) -> u64 {
         let mut now: c::timespec64 = unsafe { core::mem::zeroed() };
         unsafe { c::bch2_ktime_get_coarse_real_ts64(&mut now) };
         self.timespec_to_time(now) as u64
     }
 
-    /// Short filesystem usage summary.
     pub fn usage_read_short(&self) -> c::bch_fs_usage_short {
         unsafe { c::bch2_fs_usage_read_short(self.raw) }
     }
 
-    /// Set the filesystem log level.
     pub fn set_loglevel(&self, level: u32) {
         unsafe { (*self.raw).loglevel = level; }
     }
@@ -649,12 +609,10 @@ impl Drop for WriteRef<'_> {
 
 // Standalone helpers — pure Rust reimplementations of C static inlines.
 
-/// Sector offset of bucket `b` on device `ca`.
 pub fn bucket_to_sector(ca: &c::bch_dev, b: u64) -> u64 {
     b * ca.mi.bucket_size as u64
 }
 
-/// Size of one bucket in bytes.
 pub fn bucket_bytes(ca: &c::bch_dev) -> u64 {
     ca.mi.bucket_size as u64 * 512
 }
@@ -669,7 +627,6 @@ pub fn dev_to_target(dev: u32) -> u16 {
     1 + dev as u16
 }
 
-/// Check if a btree ID is an allocator btree.
 pub fn btree_id_is_alloc(id: u32) -> bool {
     matches!(
         c::btree_id::from_raw(id),

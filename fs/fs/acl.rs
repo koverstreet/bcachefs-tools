@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! POSIX ACLs (fs/acl.c): their on-disk form, acl_format.rs's, read and
-//! written - and converted to and from the VFS's struct posix_acl, which Rust
-//! reaches through the shims of vfs/rust_types.rs.
+//! POSIX ACLs: their on-disk form, acl_format.rs's, read and written - and
+//! converted to and from the VFS's struct posix_acl, through the shims of
+//! vfs/rust_types.rs.
 //!
 //! An entry is an AclEntry, a tagged_union! as long as its arm. A tag it
 //! doesn't know is one there's no stepping past, so an ACL with one isn't an
@@ -20,16 +20,15 @@ use crate::util::vstructs::{cast_plain, plain_bytes, ArmSized, ArmWalkError};
 use crate::util::Printbuf;
 
 impl AclEntry {
-    /// An entry as the VFS has it - for ACL_USER and ACL_GROUP, @id the uid
-    /// or gid; the others have none: Err(the tag) for a tag ACLs don't have.
-    /// Read from a long entry, whose start a short one is, as C overlays them.
+    /// From the VFS's (tag, perm, id) - @id only for ACL_USER and ACL_GROUP:
+    /// Err(the tag) for a tag ACLs don't have. Read as a long entry, whose
+    /// start a short one is.
     pub fn new(tag: u16, perm: u16, id: u32) -> Result<Self, u16> {
         let e = c::bch_acl_entry { e_tag: tag.into(), e_perm: perm.into(), e_id: id.into() };
         Self::read(plain_bytes(&e)).map_err(|_| tag)
     }
 
-    /// The entry as the VFS has it, new()'s: its tag, its permissions, and
-    /// for ACL_USER and ACL_GROUP the uid or gid - 0 for the others.
+    /// new()'s (tag, perm, id): the id 0 but for ACL_USER and ACL_GROUP.
     pub fn vfs(&self) -> (u16, u16, u32) {
         let id = match self {
             Self::user(e) | Self::group(e) => e.e_id.get(),
@@ -42,12 +41,9 @@ impl AclEntry {
 /// Why an on-disk ACL isn't one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AclError {
-    /// Fewer bytes than a header: how many.
     Short(usize),
-    /// A bch_acl_header of a version that isn't BCH_ACL_VERSION.
     Version(u32),
-    /// An entry that's cut off, or has a tag ACLs don't have - at its byte
-    /// offset in the value.
+    /// Cut off, or of a tag ACLs don't have - at its byte offset in the value.
     Entry(ArmWalkError<u16>),
 }
 
@@ -63,8 +59,7 @@ impl core::fmt::Display for AclError {
 
 const HEADER_BYTES: usize = size_of::<c::bch_acl_header>();
 
-/// On-disk ACL @value's entries, past its header: an error if the header
-/// isn't one.
+/// Past the header: an error if the header isn't one.
 fn entry_bytes(value: &[u8]) -> Result<&[u8], AclError> {
     let h = cast_plain::<c::bch_acl_header>(value).ok_or(AclError::Short(value.len()))?;
     if h.a_version.get() != BCH_ACL_VERSION {
@@ -73,30 +68,27 @@ fn entry_bytes(value: &[u8]) -> Result<&[u8], AclError> {
     Ok(&value[HEADER_BYTES..])
 }
 
-/// The entries in @entries, an ACL's past its header: one that can't be read
-/// is an error, at its offset in the value, which ends the walk.
+/// An entry that can't be read is an error, at its offset in the value, and
+/// ends the walk.
 fn walk(entries: &[u8]) -> impl Iterator<Item = Result<AclEntry, AclError>> + '_ {
     AclEntry::walk(entries)
         .map(|e| e.map_err(|e| AclError::Entry(ArmWalkError { at: HEADER_BYTES + e.at, ..e })))
 }
 
-/// The entries of on-disk ACL @value, checked first - the right version,
-/// and every entry there, of a tag ACLs have: as bch2_acl_from_disk()'s
-/// checks.
+/// Checked first: the right version, and every entry there of a tag ACLs
+/// have.
 pub fn entries(value: &[u8]) -> Result<impl Iterator<Item = AclEntry> + Clone + '_, AclError> {
     let entries = entry_bytes(value)?;
     walk(entries).try_for_each(|e| e.map(|_| ()))?;
     Ok(AclEntry::walk(entries).map(|e| e.expect("an entry checked above")))
 }
 
-/// The size @entries take as an on-disk ACL, header included: as
-/// bch2_acl_size().
+/// Header included.
 pub fn encoded_len(entries: impl Iterator<Item = AclEntry>) -> usize {
     HEADER_BYTES + entries.map(|e| e.bytes()).sum::<usize>()
 }
 
-/// Write @entries into @out as an on-disk ACL - @out encoded_len() of them
-/// long.
+/// @out must be encoded_len() long.
 pub fn encode(entries: impl Iterator<Item = AclEntry>, out: &mut [u8]) {
     let h = c::bch_acl_header { a_version: BCH_ACL_VERSION.into() };
     out[..HEADER_BYTES].copy_from_slice(plain_bytes(&h));
@@ -108,9 +100,8 @@ pub fn encode(entries: impl Iterator<Item = AclEntry>, out: &mut [u8]) {
     assert!(rest.is_empty(), "encode() given a buffer encoded_len() didn't size");
 }
 
-/// On-disk ACL @value, as text: as bch2_acl_to_text(). Its entries, as far
-/// as they can be read; where they can't - or the header isn't one - what's
-/// wrong, and where.
+/// The entries as far as they can be read; where they can't - or the header
+/// isn't one - what's wrong, and where.
 pub fn to_text(out: &mut Printbuf, value: &[u8]) {
     let mut entries = || -> Result<(), AclError> {
         for (i, e) in walk(entry_bytes(value)?).enumerate() {
@@ -135,8 +126,7 @@ pub fn to_text(out: &mut Printbuf, value: &[u8]) {
 }
 
 /// Which of an inode's ACLs: its access ACL, or a directory's default ACL,
-/// which what's made in it inherits - as the VFS's <uapi/linux/posix_acl.h>
-/// ACL_TYPE_*.
+/// which what's made in it inherits. The values are the VFS's ACL_TYPE_*.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 pub enum AclType {
@@ -147,7 +137,6 @@ pub enum AclType {
 impl AclType {
     pub const ALL: [Self; 2] = [Self::Access, Self::Default];
 
-    /// The xattr type it's stored as: as acl_to_xattr_type().
     pub fn xattr_type(self) -> c::bch_xattr_type {
         match self {
             Self::Access  => c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS,
@@ -159,7 +148,6 @@ impl AclType {
         Self::ALL.into_iter().find(|acl| acl.xattr_type() == ty)
     }
 
-    /// The inode flag saying it has one.
     pub fn inode_flag(self) -> c::bch_inode_flags {
         match self {
             Self::Access  => c::bch_inode_flags::BCH_INODE_has_access_acl,
@@ -191,8 +179,7 @@ pub use vfs::*;
 #[cfg(not(kernel))]
 pub enum PosixAcl {}
 
-/// struct posix_acl, and the VFS's entry points - kernel only, as C's
-/// #ifndef NO_BCACHEFS_FS.
+/// struct posix_acl, and the VFS's entry points: kernel only.
 #[cfg(kernel)]
 mod vfs {
     use super::*;
@@ -216,7 +203,7 @@ mod vfs {
     use crate::xattr::{self, Xattrs};
 
     impl AclType {
-        /// The VFS's type: anything else is a bug, as C's BUG().
+        /// Anything else is a bug.
         fn from_vfs(type_: c_int) -> Self {
             match type_ {
                 t if t == Self::Access as c_int  => Self::Access,
@@ -319,8 +306,8 @@ mod vfs {
     // ── To and from disk ─────────────────────────────────────────────────
 
     impl PosixAcl {
-        /// On-disk ACL @value as a posix_acl - None for one with no entries:
-        /// as bch2_acl_from_disk(). May unlock to allocate: a restart then.
+        /// None for one with no entries. May unlock to allocate: a restart
+        /// then.
         fn from_disk(t: &TransAttempt<'_, '_>, value: &[u8]) -> Result<Option<Self>, BchError> {
             let entries = entries(value).map_err(|err| {
                 bch_err!(t.fs(), "invalid acl: {err}");
@@ -350,12 +337,11 @@ mod vfs {
             }
         }
 
-        /// The xattr key storing it, as an ACL of @ty: as bch2_acl_to_xattr().
-        /// E2BIG if it doesn't fit in a key.
+        /// The xattr key storing it: E2BIG if it doesn't fit in a key.
         fn to_xattr<'a, 't>(&self, t: &TransAttempt<'a, 't>, ty: AclType)
             -> Result<TransBkey<'a, 't>, BchError>
         {
-            // A tag ACLs don't have: EINVAL, as bch2_acl_to_xattr()
+            // A tag ACLs don't have: EINVAL
             if self.entries().any(|e| e.is_err()) {
                 return Err(BchError::from(c::EINVAL));
             }
@@ -368,7 +354,7 @@ mod vfs {
         }
     }
 
-    /// For the VFS: ->get_inode_acl(), bch2_get_acl(). NULL for none.
+    /// ->get_inode_acl(). NULL for none.
     ///
     /// # Safety
     /// The arguments are the VFS's.
@@ -386,10 +372,8 @@ mod vfs {
         let inode = v.inode();
         let inum = v.inum();
 
-        // Fast path: if the inode flag for this ACL type is clear, no acl
-        // xattr exists and we can skip the btree lookup. Also populate the
-        // VFS negative cache, so subsequent permission checks on this inode
-        // short-circuit at the VFS layer:
+        // The flag clear means there's no ACL xattr: skip the lookup, and have
+        // the VFS cache that there's none
         if inode.bi_flags & ty.inode_flag().bits() == 0 {
             PosixAcl::set_cached(None, &v, ty);
             return core::ptr::null_mut();
@@ -408,9 +392,9 @@ mod vfs {
         acl.map_or(core::ptr::null_mut(), PosixAcl::into_raw)
     }
 
-    /// Set inode @inum's ACL of @ty to @acl, or with None remove it, and
-    /// its flag saying it has one: as bch2_set_acl_trans(). @inode is the
-    /// inode to write; a default ACL is only for directories.
+    /// Set inode @inum's ACL of @ty to @acl, or with None remove it, and its
+    /// flag saying it has one. @inode is the inode to write; a default ACL is
+    /// only for directories.
     pub fn set_acl_trans(
         t:     &TransAttempt<'_, '_>,
         inum:  c::subvol_inum,
@@ -440,7 +424,7 @@ mod vfs {
         Ok(())
     }
 
-    /// For the VFS: ->set_acl(), bch2_set_acl().
+    /// ->set_acl().
     ///
     /// # Safety
     /// The arguments are the VFS's.
@@ -493,9 +477,8 @@ mod vfs {
         ret_to_class(ret)
     }
 
-    /// Apply new mode @mode to inode @inum's access ACL, if it has one: as
-    /// bch2_acl_chmod(). The new ACL, which the caller caches once this has
-    /// committed.
+    /// Apply new mode @mode to inode @inum's access ACL, if it has one. The new
+    /// ACL, which the caller caches once this has committed.
     pub fn acl_chmod(
         t:     &TransAttempt<'_, '_>,
         inum:  c::subvol_inum,
@@ -517,8 +500,7 @@ mod vfs {
         Ok(Some(acl))
     }
 
-    /// For C's setattr: bch2_acl_chmod(). @new_acl is left as it was if
-    /// there's none.
+    /// For C's setattr. @new_acl is left as it was if there's none.
     #[c_export]
     pub extern "C" fn bch2_acl_chmod(
         trans:   &Opaque<c::btree_trans>,

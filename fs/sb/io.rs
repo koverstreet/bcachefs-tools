@@ -35,7 +35,6 @@ const BSET_MAGIC: u64 = 0x90135c78b99e07f5;
 /// What walks its sections - C's walk, which trusts their counts: a
 /// validated superblock's.
 impl c::bch_sb__validated {
-    /// Its section of type @F: sb_field_get().
     pub fn field<F: SbField + ?Sized>(&self) -> Option<F::Ref<'_>> {
         sb_field_get::<F>(self)
     }
@@ -56,28 +55,28 @@ impl c::bch_sb__ffi {
         uuid::Uuid::from_bytes(self.user_uuid.b)
     }
 
-    /// The magic this filesystem's jsets carry: __jset_magic().
+    /// The magic this filesystem's jsets carry.
     pub fn jset_magic(&self) -> u64 {
         self.magic() ^ JSET_MAGIC
     }
 
-    /// The magic this filesystem's btree nodes carry: __bset_magic().
+    /// The magic this filesystem's btree nodes carry.
     pub fn bset_magic(&self) -> u64 {
         self.magic() ^ BSET_MAGIC
     }
 
-    /// The first 8 bytes of its internal uuid: __bch2_sb_magic().
+    /// The first 8 bytes of its internal uuid.
     fn magic(&self) -> u64 {
         u64::from_le_bytes(self.uuid.b[..8].try_into().unwrap())
     }
 
-    /// The filesystem label, as bytes up to the first NUL.
+    /// Up to the first NUL.
     pub fn label(&self) -> &[u8] {
         let len = self.label.iter().position(|b| *b == 0).unwrap_or(self.label.len());
         &self.label[..len]
     }
 
-    /// Get the nonce used to encrypt the superblock
+    /// The nonce the superblock is encrypted with.
     pub fn nonce(&self) -> nonce {
         let [a, b, c, d, e, f, g, h, _rest @ ..] = self.uuid.b;
         // nonce.d is __le32: the raw bytes, as they are.
@@ -105,33 +104,27 @@ impl bch_sb_handle {
         unsafe { &*self.bdev }
     }
 
-    /// Its section of type @F: sb_field_get().
     pub fn field<F: SbField + ?Sized>(&self) -> Option<F::Ref<'_>> {
         sb_field_get::<F>(self.sb())
     }
 
-    /// Its section of type @F, to edit: sb_field_get_mut().
     pub fn field_mut<F: SbField + ?Sized>(&mut self) -> Option<F::Mut<'_>> {
         sb_field_get_mut::<F>(self)
     }
 
-    /// Resize a superblock field to `u64s` 64-bit words: sb_field_resize().
     pub fn field_resize<F: SbField + ?Sized>(&mut self, u64s: u32) -> Option<F::Mut<'_>> {
         sb_field_resize::<F>(self, u64s)
     }
 
-    /// Get or create a superblock field with at least `min_u64s` size:
-    /// sb_field_get_minsize().
     pub fn field_get_minsize<F: SbField + ?Sized>(&mut self, min_u64s: u32) -> Option<F::Mut<'_>> {
         sb_field_get_minsize::<F>(self, min_u64s)
     }
 
-    /// Delete a superblock field by type.
     pub fn field_delete(&mut self, ty: c::bch_sb_field_type) {
         unsafe { c::bch2_sb_field_delete(self, ty) }
     }
 
-    /// Reallocate the superblock buffer for at least `u64s` (0 = minimum).
+    /// @u64s 0 for the minimum.
     pub fn sb_realloc(&mut self, u64s: u32) -> Result<(), i32> {
         match unsafe { c::bch2_sb_realloc(self, u64s) } {
             0 => Ok(()),
@@ -139,18 +132,17 @@ impl bch_sb_handle {
         }
     }
 
-    /// Copy members_v2 into the members_v1 mirror, for old-kernel compat.
+    /// Copy members_v2 into the members_v1 mirror, for old kernels.
     pub fn members_cpy_v2_v1(&mut self) {
         unsafe { c::bch2_sb_members_cpy_v2_v1(self) };
     }
 
-    /// Find a disk path (label group) by name.
+    /// A disk path is a label group.
     pub fn disk_path_find(&mut self, name: &core::ffi::CStr) -> Option<u32> {
         let v = unsafe { c::bch2_disk_path_find(self, name.as_ptr().cast()) };
         (v >= 0).then_some(v as u32)
     }
 
-    /// Find or create a disk path; Err(errno) on failure.
     pub fn disk_path_find_or_create(&mut self, name: &core::ffi::CStr) -> Result<u32, i32> {
         let v = unsafe { c::bch2_disk_path_find_or_create(self, name.as_ptr().cast()) };
         if v >= 0 { Ok(v as u32) } else { Err(-v) }
@@ -229,18 +221,13 @@ macro_rules! counter_table {
 }
 c::BCH_PERSISTENT_COUNTERS!(counter_table);
 
-// ---------------------------------------------------------------------------
-// Superblock field access — safe, handle-based API
+// ── Sections, through a bch_sb_handle ────────────────────────────────────
 //
-// The key safety property: `sb_field_resize` takes `&mut bch_sb_handle`,
-// which invalidates any outstanding Views from `sb_field_get` at compile
-// time. This is the capnp-inspired reader/builder split —
-// resize is the "build" operation and must be exclusive.
-// ---------------------------------------------------------------------------
+// Resizing takes &mut bch_sb_handle - it can reallocate the superblock - so
+// no section borrowed from the handle outlives it.
 
 /// The superblock's section of type @F, if it has one, over the bytes its
-/// header says are its - one written before F grew reads as zero past them,
-/// as C's bch2_sb_field_get_minsize() would have grown it to.
+/// header says are its - one written before F grew reads as zero past them.
 pub fn sb_field_get<F: SbField + ?Sized>(sb: &c::bch_sb) -> Option<F::Ref<'_>> {
     let f = unsafe { c::bch2_sb_field_get_id(sb.as_ffi() as *mut _, F::FIELD_TYPE) };
     // SAFETY: C's walk of the sections the superblock's count says it has -
@@ -248,11 +235,8 @@ pub fn sb_field_get<F: SbField + ?Sized>(sb: &c::bch_sb) -> Option<F::Ref<'_>> {
     (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi(f) })?.arm::<F>()
 }
 
-/// sb_field_get(), to edit: a field past the section's end is no write it
-/// will carry - whole_mut() for all of it, if it's all there.
-///
-/// Taking `&mut bch_sb_handle` ensures exclusive access and prevents
-/// dangling references after resize.
+/// To edit: a field past the section's end is no write it will carry -
+/// whole_mut() for all of it, if it's all there.
 pub fn sb_field_get_mut<F: SbField + ?Sized>(disk_sb: &mut c::bch_sb_handle) -> Option<F::Mut<'_>> {
     let f = unsafe { c::bch2_sb_field_get_id(disk_sb.sb, F::FIELD_TYPE) };
     // SAFETY: as sb_field_get()'s
@@ -261,7 +245,6 @@ pub fn sb_field_get_mut<F: SbField + ?Sized>(disk_sb: &mut c::bch_sb_handle) -> 
 
 /// Resize the section of type @F to @u64s, making it if there's none: the
 /// section, at its (possibly new) location - whole_mut() if that's all of F.
-/// The `&mut` borrow on the handle ensures no stale references can exist.
 pub fn sb_field_resize<F: SbField + ?Sized>(
     disk_sb: &mut c::bch_sb_handle,
     u64s: u32,
@@ -271,8 +254,7 @@ pub fn sb_field_resize<F: SbField + ?Sized>(
     (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
 }
 
-/// The section of type @F, made or grown to at least @min_u64s: as
-/// sb_field_resize().
+/// The section of type @F, made or grown to at least @min_u64s.
 pub fn sb_field_get_minsize<F: SbField + ?Sized>(
     disk_sb: &mut c::bch_sb_handle,
     min_u64s: u32,
@@ -282,18 +264,14 @@ pub fn sb_field_get_minsize<F: SbField + ?Sized>(
     (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
 }
 
-// ---------------------------------------------------------------------------
-// Raw-buffer superblock views
+// ── Superblocks in byte buffers ──────────────────────────────────────────
 //
-// For superblocks in plain byte buffers (device scans, recovery) rather
-// than a C bch_sb_handle. Construction validates every extent once -
-// header within the buffer, vstruct extent within the buffer, each
-// field's extent within the superblock - so typed access afterwards is
-// safe: the C field lookups walk exactly the extents parse() checked.
-// Semantic validity remains bch2_sb_validate()'s job; these views
-// guarantee memory safety only. Raw buffers can't be reallocated, so
-// mutation is in-place only - field resize/delete stay on bch_sb_handle.
-// ---------------------------------------------------------------------------
+// For device scans and recovery, without a bch_sb_handle. Construction checks
+// every extent once - the header and vstruct within the buffer, each section
+// within the superblock - so the C lookups after walk only what parse()
+// checked. That's memory safety only: whether the contents make sense is
+// bch2_sb_validate()'s. A buffer can't be reallocated, so resizing and
+// deleting sections stay bch_sb_handle's.
 
 pub const BCACHE_MAGIC: [u8; 16] = [
     0xc6, 0x85, 0x73, 0xf6, 0x4e, 0x1a, 0x45, 0xca,
@@ -394,7 +372,6 @@ impl<'a> SbRef<'a> {
         unsafe { bch_sb::<Validated>::from_ffi(self.buf.as_ptr().cast()) }
     }
 
-    /// The superblock's full vstruct extent.
     pub fn bytes(&self) -> &'a [u8] {
         &self.buf[..self.bytes]
     }
@@ -426,7 +403,6 @@ impl<'a> SbMut<'a> {
         unsafe { bch_sb::<Validated>::from_ffi_mut(self.buf.as_mut_ptr().cast()) }
     }
 
-    /// The superblock's full vstruct extent.
     pub fn bytes(&self) -> &[u8] {
         &self.buf[..self.bytes]
     }
@@ -458,9 +434,8 @@ impl SbAccess for SbMut<'_> {
     fn sb_bytes(&self) -> &[u8] { SbMut::bytes(self) }
 }
 
-/// An owned superblock: aligned storage, extents validated at
-/// construction. The owned counterpart of SbRef/SbMut, for recovery
-/// flows that carry superblocks around as values.
+/// An owned superblock: aligned storage, extents validated at construction -
+/// for recovery, which carries superblocks around as values.
 #[cfg(feature = "std")]
 pub struct SbBuf {
     buf:   Vec<u64>,
@@ -469,8 +444,7 @@ pub struct SbBuf {
 
 #[cfg(feature = "std")]
 impl SbBuf {
-    /// Copy a superblock out of `src` (no alignment requirement) and
-    /// validate it.
+    /// @src needn't be aligned.
     pub fn from_bytes(src: &[u8]) -> Result<Self, SbParseError> {
         let mut buf = vec![0u64; src.len().div_ceil(8)];
         let dst = unsafe {
@@ -492,7 +466,6 @@ impl SbBuf {
         unsafe { bch_sb::<Validated>::from_ffi_mut(self.buf.as_mut_ptr().cast()) }
     }
 
-    /// The superblock's full vstruct extent.
     pub fn bytes(&self) -> &[u8] {
         unsafe { core::slice::from_raw_parts(self.buf.as_ptr() as *const u8, self.bytes) }
     }

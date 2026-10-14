@@ -1,21 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! fsck: the check_unreachable_inodes recovery pass - reattach unreachable
-//! (but not unlinked) inodes.
+//! check_unreachable_inodes: reattach inodes that aren't unlinked but have no
+//! dirent. It runs after check_inodes and check_dirents, so backpointers are
+//! valid and set wherever a dirent exists: an inode without one is unreachable.
 //!
-//! Runs after check_inodes and check_dirents, so we know that inode
-//! backpointer fields point to valid dirents, and every inode that has a
-//! dirent pointing to it has its backpointer set - so we're just looking for
-//! non-unlinked inodes without backpointers.
-//!
-//! An unreachable version is reattached at the oldest version that needs it,
-//! and preferably where a descendant version is still attached - by
-//! propagating that dirent up - rather than in lost+found.
-//!
-//! Changes from the C: find_oldest_inode_needs_reattach() no longer wraps
-//! the start of its walk past U32_MAX - the C's bi_snapshot + 1 walked every
-//! version from snapshot 0, and only found nothing older by luck (no snapshot
-//! is an ancestor of U32_MAX but itself).
+//! An unreachable inode is reattached at its oldest version that needs it: by
+//! propagating up the dirent of a descendant version that's still attached, if
+//! there is one, else into lost+found.
 //!
 //! XXX: racy w.r.t. hardlink removal in online fsck.
 
@@ -36,49 +27,25 @@ use crate::dirent::Dirent;
 use crate::{inode, namei};
 use core::ops::ControlFlow;
 
-/// Is this inode number a subvolume root? Answered once per inum, from the
-/// first version we see.
+/// Whether this inum is a subvolume root, from the first version seen.
 ///
-/// bi_subvol cannot be read off an arbitrary version. Taking a snapshot
-/// updates the root inode of the new subvolume but not of the old, so the
-/// version left behind at the now-interior node is still the live root of
-/// the old subvolume and was never rewritten; versions older still may
-/// predate the subvolume entirely. An old version of a subvolume root
-/// legitimately reads bi_subvol == 0, and trusting that is how we ended up
-/// reattaching one into lost+found.
+/// bi_subvol can't be read off an arbitrary version: taking a snapshot updates
+/// the new subvolume's root inode but not the old one's, and older versions may
+/// predate the subvolume, so an old version of a root reads bi_subvol == 0.
 ///
-/// The first version we see for an inum is different, and one bool taken from
-/// it then carries to the rest:
-///
-///  1. We iterate BTREE_ID_inodes with all_snapshots from POS_MIN, and inode
-///     keys sort by (inum, snapshot) - so within an inum we visit snapshot IDs
-///     in ascending order.
-///  2. A snapshot's ID is always strictly less than its parent's; the
-///     snapshot key validator enforces it (snapshot_parent_bad,
-///     bch2_snapshot_validate()). So every descendant of a node sorts before
-///     that node.
-///  3. Version B shadows version A only if B lives at a descendant of A's
-///     snapshot. By (2) B sorts before A, so by (1) we would already have
-///     seen B when we reach A.
-///  4. Hence nothing shadows the first version we see for an inum: some live
-///     view resolves to it. That is the version fsck maintains bi_subvol on -
-///     check_subvols() ran before us and repairs it there, and check_inode()
-///     only validates bi_subvol where it is meaningful.
-///  5. Whether an inum is a subvolume root is a property of the number, not
-///     of any one version, so the answer is good for all of them.
-///
-/// Only the boolean is carried, not the subvolume ID: the first version we
-/// land on may belong to any of the subvolumes rooted at this inum, and which
-/// one it is says nothing.
+/// The first version seen is one fsck maintains bi_subvol on: within an inum we
+/// visit snapshot IDs ascending, a snapshot's ID is less than its parent's
+/// (bch2_snapshot_validate()), and only a descendant's version can shadow a
+/// version - so nothing shadows it. Being a subvolume root is a property of the
+/// inum, so the answer holds for every version.
 #[derive(Default)]
 struct SubvolRootSeen {
     inum:           u64,
     is_subvol_root: bool,
 }
 
-/// We look for inodes to reattach in natural key order, leaves first, but we
-/// should do the reattach at the oldest version that needs to be reattached:
-/// walk @inode up to it.
+/// We find versions leaves first: walk @inode up to the oldest version that
+/// also needs reattaching.
 fn find_oldest_inode_needs_reattach(
     t:     &TransAttempt<'_, '_>,
     inode: &mut c::bch_inode_unpacked,
@@ -111,34 +78,21 @@ fn find_oldest_inode_needs_reattach(
     })
 }
 
-/// An unreachable inode version may still be attached in a descendant
-/// snapshot: incomplete snapshot deletion can move a dirent further down the
-/// snapshot tree than the inode that points to it (an interrupted pass
-/// resumes against new topology, so the two stop at different termini),
-/// leaving ancestor views orphaned while the descendant view is intact.
+/// Incomplete snapshot deletion can leave a dirent further down the snapshot
+/// tree than its inode: ancestor versions orphaned, a descendant still
+/// attached. Find the descendant's dirent, to propagate up here rather than
+/// reattach in lost+found. It must name this inode, the directory must be
+/// visible and not unlinked here, and the slot empty: a whiteout means the
+/// entry was deliberately deleted in this view.
 ///
-/// check_inodes zeroed this version's backpointer, but the attached
-/// descendant version still carries its verified one - find that dirent, so
-/// we can propagate a copy up to this version's snapshot instead of
-/// reattaching in lost+found.
-///
-/// Requirements checked here: the dirent names this inode from a strict
-/// descendant, the parent directory is visible (and not unlinked) in this
-/// version's view, and the destination slot is empty - a whiteout there means
-/// the entry was deliberately deleted in this view, and must not be
-/// resurrected.
-///
-/// Returns a copy in transaction memory: the caller uses it across fsck_err(),
-/// which can cycle transaction locks, so a reference into a btree node buffer
-/// would be a use after unlock.
+/// A copy: the caller holds it across fsck_err(), which can drop locks.
 fn find_attached_dirent_in_descendant<'a, 't>(
     t:     &TransAttempt<'a, 't>,
     inode: &c::bch_inode_unpacked,
 ) -> Result<Option<TransBkey<'a, 't>>, BchError> {
     let trans = t.trans();
 
-    // Dirents pointing to subvolume roots live in the parent subvolume - a
-    // different snapshot space; those take the reattach path:
+    // A subvolume root's dirent is in the parent subvolume's snapshots
     if inode.bi_subvol != 0 {
         return Ok(None);
     }
@@ -155,19 +109,15 @@ fn find_attached_dirent_in_descendant<'a, 't>(
         return Ok(None);
     }
 
-    // (d is visible at the descendant, so it lies on the descendant's
-    // rootward path and is always comparable with our snapshot - no separate
-    // ancestry check is needed.)
+    // Visible at the descendant, so on its path to the root, as our snapshot
+    // is: the two are comparable
     let dst = spos(d.k.p.inode, d.k.p.offset, inode.bi_snapshot);
 
     match dst_slot(t, dst, inode, BtreeIterFlags::empty())? {
         DstSlot::Ours  => {}
         DstSlot::Taken => return Ok(None),
-        // An insert also requires the parent directory to be visible and not
-        // unlinked. (No hash check needed: check_dirents verified the dirent
-        // at the descendant's view, and hash info is invariant across an
-        // inode's snapshot versions - enforced by check_inodes - so it hashes
-        // identically under the directory here.)
+        // No hash check: check_inodes keeps a directory's hash info the same
+        // across versions
         DstSlot::Empty => {
             let dir = inode::find_by_inum_snapshot(trans, d.k.p.inode, inode.bi_snapshot,
                                                    BtreeIterFlags::empty()).found()?;
@@ -180,9 +130,7 @@ fn find_attached_dirent_in_descendant<'a, 't>(
     Ok(Some(t.bkey_make_mut_noupdate(d)?))
 }
 
-/// A version of @inode's inum in a strict descendant of its snapshot that is
-/// attached - has a backpointer, in its own subvolume: the first in key
-/// order, leaves first.
+/// The first attached version of @inode in a strict descendant snapshot.
 fn attached_descendant_version(
     t:     &TransAttempt<'_, '_>,
     inode: &c::bch_inode_unpacked,
@@ -214,19 +162,14 @@ fn attached_descendant_version(
     Ok(child)
 }
 
-/// Our snapshot's view of the position a propagated dirent would go.
+/// Where a propagated dirent would go, as our snapshot sees it.
 enum DstSlot {
-    /// A dirent naming @inode is already visible - a propagation done at an
-    /// older version of this inode earlier in the pass: only the backpointer
-    /// needs fixing. There's no insert, and falling back to lost+found would
-    /// create a duplicate link to a reachable file.
+    /// Propagated already, from an older version earlier in the pass: only the
+    /// backpointer needs fixing; lost+found would make a second link.
     Ours,
-    /// Nothing visible, and no whiteout: a copy can go here.
     Empty,
-    /// A different inode's dirent is visible - the name belongs to someone
-    /// else in this view, and inserting over it would hide that file from
-    /// every view below - or a whiteout: the entry was deliberately deleted
-    /// here. Either way, fall back to lost+found.
+    /// Another inode's dirent - inserting would hide it from every view below -
+    /// or a whiteout.
     Taken,
 }
 
@@ -252,9 +195,8 @@ fn dst_slot(
     })
 }
 
-/// Attach @inode by @new, a copy of the dirent naming a descendant version,
-/// moved to @inode's snapshot - or, if a matching dirent is already visible
-/// there, just point the backpointer at it.
+/// Copy @new, a descendant version's dirent, to @inode's snapshot - unless
+/// it's there already - and point the backpointer at it.
 fn reattach_via_descendant_dirent<'a, 't>(
     t:       &TransAttempt<'a, 't>,
     inode:   &mut c::bch_inode_unpacked,
@@ -265,8 +207,8 @@ fn reattach_via_descendant_dirent<'a, 't>(
     new.k_mut().p.snapshot = inode.bi_snapshot;
     let pos = new.k().p;
 
-    // Re-classify under the intent lock: the probe ran before fsck_err(),
-    // which can cycle transaction locks, and this pass can run online.
+    // Again, under the intent lock: fsck_err() may have dropped locks, and
+    // this pass can run online
     match dst_slot(t, pos, inode, BtreeIterFlags::INTENT)? {
         DstSlot::Ours  => {}
         DstSlot::Empty => {
@@ -301,7 +243,7 @@ fn check_unreachable_inode(
 
     let mut u = inode::unpack(trans.fs(), k);
 
-    // Before the early return below: every version has to advance this.
+    // Every version, including those that don't need reattaching
     if u.bi_inum != seen.inum {
         seen.inum           = u.bi_inum;
         seen.is_subvol_root = u.bi_subvol != 0;
@@ -311,32 +253,19 @@ fn check_unreachable_inode(
         return Ok(());
     }
 
-    // Not for a subvolume root. A subvolume root has exactly one dirent, in
-    // the parent subvolume, and dirents to subvolumes aren't versioned - so
-    // there is no chain of unreachable ancestor versions to walk back to, and
-    // the version we were handed is the one to reattach.
-    //
-    // Note that leaf-ness can't stand in for this: taking a snapshot updates
-    // the root inode of the new subvolume, but not of the old, so a live
-    // subvolume's root inode key stays at a snapshot that has since become
-    // interior.
-    //
-    // Climbing anyway picks some ancestor version, reattaches that - and
-    // because the ancestor doesn't carry bi_subvol, it gets filed into
-    // lost+found as a plain directory named after its inode number, whose
-    // backpointer is then propagated back down over the live versions below
-    // it. The subvolume root ends up reachable both by its own DT_SUBVOL
-    // dirent and by the manufactured one, which is inode_dir_multiple_links
-    // -> emergency read-only at runtime. (field report, 2026-08-04)
+    // Not for a subvolume root: its one dirent is in the parent subvolume and
+    // isn't versioned, so there are no ancestor versions to climb. Climbing
+    // anyway reattached an ancestor - without bi_subvol - in lost+found, and
+    // the root was then reachable twice: inode_dir_multiple_links, emergency
+    // read-only (field report, 2026-08-04).
     if !seen.is_subvol_root {
         find_oldest_inode_needs_reattach(t, &mut u)?;
     }
 
     let pos = spos(0, u.bi_inum, u.bi_snapshot);
 
-    // Attached in a descendant snapshot? Then this version has a proper home;
-    // propagate the dirent up to our snapshot rather than manufacturing a
-    // lost+found entry visible in every view below:
+    // Attached in a descendant: propagate that, rather than a lost+found
+    // entry visible in every view below
     if let Some(d) = find_attached_dirent_in_descendant(t, &u)? {
         return if inode_fsck_err!(trans, pos, id::inode_unreachable_dirent_in_descendant,
                                   "unreachable inode with dirent in descendant snapshot {}, propagating:\n{u}",

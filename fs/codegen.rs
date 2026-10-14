@@ -1,18 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 // The kernel build's bindgen: what fs/'s Rust uses of the kernel that
-// kernel::bindings doesn't bind - the kernel-side counterpart of
-// bcachefs-shim, which binds the same for userspace from include/.
+// kernel::bindings doesn't bind - the kernel-side counterpart of bcachefs-shim.
+// Never bcachefs's own headers: they include the *_gen.h the Rust build
+// generates, so binding them would make it depend on its own output. What's
+// bound is kernel headers, carved out of the include trees' blocklist one by
+// one, and vendored library code (the closures).
 //
-// Never bcachefs's own code. Its C interface is Rust's (types/lib.rs), and its
-// headers include the ones the Rust build generates (*_gen.h), so binding
-// them would make the Rust build depend on its own output. What's bound is
-// kernel headers, carved out of the kernel include trees' blocklist one by
-// one, and vendored library code: the closures.
-//
-// codegen_main.rs is the tool the kernel/DKMS Makefile builds and runs; it
-// include!s this file. It drives the bindgen CLI rather than the library - no
-// crates to vendor, no target/ litter in the kernel build tree. Plain //
-// comments: include!d, never a crate root.
+// codegen_main.rs, which the kernel/DKMS Makefile builds and runs, include!s
+// this file - so plain // comments. It drives the bindgen CLI: no crates to
+// vendor, no target/ in the kernel build tree.
 
 use std::process::Command;
 
@@ -104,12 +100,9 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String]) 
     std::fs::write(&extern_c, fixed).expect("write extern.c");
 }
 
-/// Escape regex metacharacters so a literal path can be used in a bindgen
-/// `--blocklist-file` regex. Without this, a path like
-/// `linux-headers-7.0.13+deb14-common` is interpreted as a regex - the `+`
-/// quantifies the preceding `3` - and silently fails to match, so the kernel
-/// headers under it never get blocklisted and their types leak into the
-/// generated bindings (e.g. a second `struct mutex` distinct from the kernel's).
+/// Escape regex metacharacters in a path, for --blocklist-file: unescaped, the
+/// + in linux-headers-7.0.13+deb14-common quantifies, the match silently fails,
+/// and kernel types leak into the bindings - a second struct mutex.
 fn regex_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -121,27 +114,16 @@ fn regex_escape(s: &str) -> String {
     out
 }
 
-/// A `--blocklist-file` regex for everything under kernel include tree `dir`,
-/// except what's in UNBLOCKLISTED.
+/// A --blocklist-file regex for everything under kernel include tree @dir but
+/// UNBLOCKLISTED. The trees hold the kernel's own structs, which
+/// kernel::bindings binds: a second copy would be a different type. uapi/ stays
+/// visible: bindgen can't see across a blocklist that a pruned scalar typedef
+/// is Copy, and structs holding one would lose Copy/Clone/Debug.
 ///
-/// The trees are blocklisted because they hold the kernel's own structs -
-/// `inode`, `super_block`, `bio` - which `kernel::bindings` already binds: a
-/// second copy would be a different type, and nothing would link. A blocklisted
-/// type the bound ones use resolves to `kernel::bindings`'s instead, the
-/// generated code being included where that's glob-imported.
-///
-/// `uapi/` stays visible: its scalar typedefs are transparent, and bindgen
-/// can't see across a blocklist that a pruned type is Copy - a struct holding
-/// one would lose its Copy/Clone/Debug.
-///
-/// Why path regexes and not something structural: bindgen has no notion of
-/// "system header" (nothing keyed off -isystem), only file-path patterns. And
-/// --allowlist-file can't replace these: allowlisting makes every item in a
-/// matching file a *root*, so --wrap-static-fns then wraps every static inline
-/// in the tree - which breaks on functions whose signatures use
-/// structs-defined-within-structs (bindgen's mangled names for those aren't
-/// real C types, so the generated extern.c doesn't compile). The allowlists
-/// pick the roots; this prunes their dependencies back to kernel::bindings.
+/// Path regexes because bindgen has nothing structural, no notion of a system
+/// header. And --allowlist-file can't replace them: it makes every item in a
+/// file a root, so --wrap-static-fns wraps every static inline in the tree, and
+/// those using nested structs don't compile in extern.c.
 fn blocklist_dir(dir: &str) -> String {
     format!("{}/{}", regex_escape(dir), not_prefixed(UNBLOCKLISTED))
 }

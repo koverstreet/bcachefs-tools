@@ -20,27 +20,21 @@ use crate::{bch_err, fsck_err, fsck_err_on, inode_fsck_err};
 use core::ffi::c_void;
 use core::fmt;
 
-/// A btree that's a hash table keyed by name - dirents, xattrs: what C's
-/// struct bch_hash_desc described. The keys passed to these are valid -
-/// from the btree, or built to be inserted.
+/// A btree that's a hash table keyed by name: dirents, xattrs. The keys passed
+/// to these are valid - from the btree, or built to be inserted.
 pub trait HashTable {
-    /// What a lookup searches for: a name, or for xattrs a name and type -
-    /// which borrows the name, for 'k.
+    /// A name, or for xattrs a name and type.
     type Key<'k>: ?Sized;
 
     const BTREE:    c::btree_id;
     const KEY_TYPE: c::bch_bkey_type;
 
-    /// Where @key hashes to under @info.
     fn hash_key(info: &c::bch_hash_info, key: &Self::Key<'_>) -> u64;
 
-    /// Where @k's name hashes to under @info.
     fn hash_bkey(info: &c::bch_hash_info, k: BkeySC<'_>) -> u64;
 
-    /// Whether @k is what @key looks for.
     fn matches(k: BkeySC<'_>, key: &Self::Key<'_>) -> bool;
 
-    /// Whether @a and @b have the same name.
     fn same_name(a: BkeySC<'_>, b: BkeySC<'_>) -> bool;
 
     /// Whether @k is in the table as subvolume @inum.subvol sees it.
@@ -116,13 +110,13 @@ pub fn hash_parts(info: &c::bch_hash_info, parts: &[&[u8]], maybe_31bit: bool) -
 
 // ── The hash table operations ────────────────────────────────────────────
 //
-// As str_hash.h's. A key's slot is where its name hashes to, or the first
-// after it, probing past collisions and whiteouts: a hole ends a probe
-// sequence, which is why deleting leaves a whiteout when a later key in the
-// sequence would be cut off.
+// A key's slot is where its name hashes to, or the first after it, probing
+// past collisions and whiteouts: a hole ends a probe sequence, which is why
+// deleting leaves a whiteout when a later key in the sequence would be cut
+// off.
 
 /// Whether @k is one of @T's keys, visible to subvolume @inum.subvol - all of
-/// them are, with no inode number: is_visible_key().
+/// them are, with no inode number.
 fn is_visible_key<T: HashTable>(inum: c::subvol_inum, k: BkeySC<'_>) -> bool {
     k.k.type_ == T::KEY_TYPE.0 as u8 && (inum.inum == 0 || T::is_visible(inum, k))
 }
@@ -131,9 +125,8 @@ fn is_whiteout(k: BkeySC<'_>) -> bool {
     k.k.type_ == c::bch_bkey_type::KEY_TYPE_hash_whiteout.0 as u8
 }
 
-/// Look up @key in hash table @T, in inode @inum as seen in @snapshot: as
-/// bch2_hash_lookup_in_snapshot(). The key found, through @iter;
-/// ENOENT_str_hash_lookup if there is none.
+/// In inode @inum as seen in @snapshot: the key found, through @iter, or
+/// ENOENT_str_hash_lookup.
 pub fn lookup_in_snapshot<'i, 't, T: HashTable>(
     t:         &'i TransAttempt<'_, 't>,
     iter:      &'i mut BtreeIter<'t>,
@@ -161,9 +154,8 @@ pub fn lookup_in_snapshot<'i, 't, T: HashTable>(
     }
 }
 
-/// Look up @key in hash table @T, in subvolume and inode @inum: as
-/// bch2_hash_lookup(). The key found, through @iter;
-/// ENOENT_str_hash_lookup if there is none.
+/// In subvolume and inode @inum: the key found, through @iter, or
+/// ENOENT_str_hash_lookup.
 pub fn lookup<'i, 't, T: HashTable>(
     t:         &'i TransAttempt<'_, 't>,
     iter:      &'i mut BtreeIter<'t>,
@@ -176,9 +168,9 @@ pub fn lookup<'i, 't, T: HashTable>(
     lookup_in_snapshot::<T>(t, iter, hash_info, inum, key, flags, snapshot)
 }
 
-/// Point @iter at the slot @key would be inserted at, in hash table @T in
-/// subvolume and inode @inum - the first that holds no visible key: as
-/// bch2_hash_hole(). ENOSPC_str_hash_create if the table is full.
+/// Point @iter at the slot @key would be inserted at, in subvolume and inode
+/// @inum - the first that holds no visible key. ENOSPC_str_hash_create if the
+/// table is full.
 pub fn hole<'t, T: HashTable>(
     t:         &TransAttempt<'_, 't>,
     iter:      &mut BtreeIter<'t>,
@@ -198,9 +190,8 @@ pub fn hole<'t, T: HashTable>(
     }
 }
 
-/// Whether deleting the key at @start, in hash table @T, needs a whiteout
-/// left in its place - a later key in the same probe sequence would be cut
-/// off without one: as bch2_hash_needs_whiteout().
+/// Whether deleting the key at @start needs a whiteout left in its place: a
+/// later key in the same probe sequence would be cut off without one.
 pub fn needs_whiteout<'t, T: HashTable>(
     t:         &TransAttempt<'_, 't>,
     hash_info: &c::bch_hash_info,
@@ -223,9 +214,8 @@ pub fn needs_whiteout<'t, T: HashTable>(
     Ok(found.is_some_and(ours))
 }
 
-/// Insert @insert into hash table @T, in inode @inum as seen in @snapshot:
-/// as bch2_hash_set_or_get_in_snapshot(). With STR_HASH_MUST_CREATE, a key
-/// of the same name already there is returned, through @iter, and nothing
+/// In inode @inum as seen in @snapshot. With STR_HASH_MUST_CREATE, a key of
+/// the same name already there is returned, through @iter, and nothing
 /// inserted; with STR_HASH_MUST_REPLACE, there must be one. None if it was
 /// inserted (queued).
 #[allow(clippy::too_many_arguments)]
@@ -286,8 +276,8 @@ pub fn set_or_get_in_snapshot<'i, 't, T: HashTable>(
     Ok(None)
 }
 
-/// Insert @insert into hash table @T, in inode @inum as seen in @snapshot:
-/// as bch2_hash_set_in_snapshot(). EEXIST_str_hash_set if its name is taken.
+/// In inode @inum as seen in @snapshot. EEXIST_str_hash_set if its name is
+/// taken.
 pub fn set_in_snapshot<'t, T: HashTable>(
     t:            &TransAttempt<'_, 't>,
     hash_info:    &c::bch_hash_info,
@@ -305,8 +295,7 @@ pub fn set_in_snapshot<'t, T: HashTable>(
     }
 }
 
-/// Insert @insert into hash table @T, in subvolume and inode @inum: as
-/// bch2_hash_set(). EEXIST_str_hash_set if its name is taken.
+/// In subvolume and inode @inum. EEXIST_str_hash_set if its name is taken.
 pub fn set<'t, T: HashTable>(
     t:            &TransAttempt<'_, 't>,
     hash_info:    &c::bch_hash_info,
@@ -321,8 +310,7 @@ pub fn set<'t, T: HashTable>(
     set_in_snapshot::<T>(t, hash_info, inum, snapshot, insert, iter_flags, update_flags)
 }
 
-/// Delete the key at @iter from hash table @T, leaving a whiteout if a later
-/// key in the same probe sequence needs one: as bch2_hash_delete_at().
+/// Leaves a whiteout if a later key in the same probe sequence needs one.
 pub fn delete_at<'t, T: HashTable>(
     t:         &TransAttempt<'_, 't>,
     hash_info: &c::bch_hash_info,
@@ -339,8 +327,7 @@ pub fn delete_at<'t, T: HashTable>(
     t.update(iter, &k, flags)
 }
 
-/// Delete @key from hash table @T, in subvolume and inode @inum: as
-/// bch2_hash_delete(). ENOENT_str_hash_lookup if it isn't there.
+/// In subvolume and inode @inum. ENOENT_str_hash_lookup if it isn't there.
 pub fn delete<T: HashTable>(
     t:         &TransAttempt<'_, '_>,
     hash_info: &c::bch_hash_info,
@@ -353,11 +340,8 @@ pub fn delete<T: HashTable>(
 }
 
 /// The hash type a new inode's dirents and xattrs get, from the str_hash
-/// option: as bch2_str_hash_opt_to_type(c, c->opts.str_hash). The option is
-/// read as a number, not taken as a bch_str_hash_opts - a value no variant has
-/// isn't a Rust enum - and as in C, one that isn't an option is a bug.
+/// option. A value that isn't an option is a bug.
 pub fn new_inode_type(fs: &Fs) -> c::bch_str_hash_type {
-
     match fs.opts().str_hash as u32 {
         o if o == c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc32c.0 => c::bch_str_hash_type::BCH_STR_HASH_crc32c,
         o if o == c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc64.0  => c::bch_str_hash_type::BCH_STR_HASH_crc64,
@@ -372,9 +356,8 @@ pub fn new_inode_type(fs: &Fs) -> c::bch_str_hash_type {
     }
 }
 
-/// @inode's hash info, without bch2_hash_info_init()'s check that casefolding
-/// is enabled: for comparing hash info, not hashing with it - as
-/// __bch2_hash_info_init().
+/// Without hash_info_init()'s check that casefolding is enabled: for comparing
+/// hash info, not hashing with it.
 pub fn hash_info_init_unchecked(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_hash_info {
     unsafe { c::__bch2_hash_info_init(fs.raw, inode) }
 }
@@ -396,15 +379,11 @@ impl PartialEq for c::bch_hash_info {
     }
 }
 
-/// A str_hash type - INODE_STR_HASH() - for formatting with {}: as
-/// bch2_prt_str_hash_type().
+/// An INODE_STR_HASH() value, for formatting with {}.
 pub struct StrHashType(pub u64);
 
 impl fmt::Display for StrHashType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-
-        // A Rust enum: an out of range value can't be converted, and the
-        // inode field this comes from is four bits
         let t = match self.0 {
             0 => c::bch_str_hash_type::BCH_STR_HASH_crc32c,
             1 => c::bch_str_hash_type::BCH_STR_HASH_crc64,
@@ -427,11 +406,10 @@ pub fn hash_info_init(
     Ok(hash_info)
 }
 
-/// Check that @k, in hash table @T, is where its hash says it should be,
-/// repairing it if not: as bch2_str_hash_check_key(). @s, for the btrees whose
-/// keys are walked with all snapshots in fsck, gives the snapshot visibility
-/// for repairs; a repair that moves a key to before @k's position sets
-/// @updated_before_k_pos.
+/// Check that @k is where its hash says it should be, repairing it if not. @s,
+/// for the btrees whose keys are walked with all snapshots in fsck, gives the
+/// snapshot visibility for repairs; a repair that moves a key to before @k's
+/// position sets @updated_before_k_pos.
 ///
 /// A mismatched @hash_info - an inode version whose hash seed or type differs
 /// from its snapshot root's - is repaired and committed, and returned as a
@@ -476,28 +454,12 @@ fn needs_check<T: HashTable>(hash_info: &c::bch_hash_info, k: BkeySC<'_>) -> boo
         .is_some_and(|d| (d.d_casefold() != 0) == hash_info.cf_encoding.is_null())
 }
 
-// fsck: repairing hash table keys
+// ── fsck: repairing hash table keys ──────────────────────────────────────
 //
-// check_key() above is the dirents_sanitized guard and the cheap "is this
-// key where it hashes to" test. Everything past that test - a key that isn't
+// check_key() above is the dirents_sanitized guard and the cheap "is this key
+// where it hashes to" test. Everything past that test - a key that isn't
 // where its hash says, or has a duplicate ahead of it in its probe sequence -
 // is here.
-//
-// Changes from the C:
-//
-// - hash_pick_winner() documented its result as "0 -> delete k1, 1 -> delete
-//   k2", and str_hash_dup_entries() read it the other way round (swap, then
-//   delete @k when nonzero) - so each repair deleted the key the winner
-//   function meant to keep: of two duplicate dirents, the valid one rather
-//   than the one pointing nowhere; of identical keys, the one in the right
-//   place; across snapshots, the newer key instead of the older one in the
-//   newer snapshot. DupResolution says which key goes, so the two can't
-//   disagree.
-//
-// - repair_inode_hash_info() queued the inode write before asking - so the
-//   message could print it - and a declined repair still wrote, when the
-//   caller committed. It asks first now, with the new hash info in the
-//   message.
 
 /// Every version of an inode has the same hash seed and type: make
 /// @bad_inode's match @snapshot_root's.
@@ -596,8 +558,7 @@ impl Seen<'_> {
     }
 }
 
-/// What the repairs for one key share - the state C threaded through every
-/// function.
+/// What the repairs for one key share.
 struct Repair<'r> {
     s:                    Seen<'r>,
     hash_info:            &'r mut c::bch_hash_info,

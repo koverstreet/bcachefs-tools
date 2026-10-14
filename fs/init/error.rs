@@ -15,12 +15,10 @@
 //! }
 //! ```
 //!
-//! format_args!() is lazy - nothing is formatted unless the error is
-//! reported - so the work is in plain functions taking it; C needed macros
-//! for that. The macros of the same names only write the format_args!(), so
-//! call sites read as C's do. The message is passed down as "%s":
-//! prefixing, ratelimiting and the superblock error counters stay
-//! __bch2_fsck_err()'s, as for C callers.
+//! format_args!() is lazy, so the work is in plain functions; the macros of
+//! the same names only write the format_args!(), so call sites read as C's
+//! do. The message goes down as "%s": prefixing, ratelimiting and the
+//! superblock error counters stay __bch2_fsck_err()'s.
 
 use crate::btree::bkey::{BkeySC, POS_MIN};
 use crate::btree::iter::{BtreeTrans, TransAttempt};
@@ -96,8 +94,7 @@ fn __fsck_err(
     }
 }
 
-/// Report @err, fixable or ignorable, as C's fsck_err(): Ok(true) to fix,
-/// Ok(false) to leave it, Err to stop.
+/// Fixable or ignorable: Ok(true) to fix, Ok(false) to leave it, Err to stop.
 pub fn fsck_err(
     ctx: &impl FsckErrCtx,
     err: bch_sb_error_id,
@@ -107,7 +104,6 @@ pub fn fsck_err(
                bch_fsck_flags::FSCK_CAN_FIX | bch_fsck_flags::FSCK_CAN_IGNORE, err, msg)
 }
 
-/// fsck_err() if @cond holds, as C's fsck_err_on().
 pub fn fsck_err_on(
     ctx:  &impl FsckErrCtx,
     cond: bool,
@@ -117,7 +113,7 @@ pub fn fsck_err_on(
     if cond { fsck_err(ctx, err, msg) } else { Ok(false) }
 }
 
-/// Report @err, fixable but not ignorable, as C's mustfix_fsck_err().
+/// Fixable, not ignorable.
 pub fn mustfix_fsck_err(
     ctx: &impl FsckErrCtx,
     err: bch_sb_error_id,
@@ -126,7 +122,6 @@ pub fn mustfix_fsck_err(
     __fsck_err(ctx, POS_MIN, bch_fsck_flags::FSCK_CAN_FIX, err, msg)
 }
 
-/// mustfix_fsck_err() if @cond holds, as C's mustfix_fsck_err_on().
 pub fn mustfix_fsck_err_on(
     ctx:  &impl FsckErrCtx,
     cond: bool,
@@ -136,9 +131,8 @@ pub fn mustfix_fsck_err_on(
     if cond { mustfix_fsck_err(ctx, err, msg) } else { Ok(false) }
 }
 
-/// fsck_err() against an inode, as C's inode_fsck_err(): @pos, the inode's
-/// (0, inum, snapshot), is where __bch2_fsck_err() records the damage - which
-/// takes a transaction.
+/// Against an inode: @pos, its (0, inum, snapshot), is where __bch2_fsck_err()
+/// records the damage - which takes a transaction.
 pub fn inode_fsck_err(
     trans: &BtreeTrans<'_>,
     pos:   c::bpos,
@@ -149,9 +143,8 @@ pub fn inode_fsck_err(
                bch_fsck_flags::FSCK_CAN_FIX | bch_fsck_flags::FSCK_CAN_IGNORE, err, msg)
 }
 
-/// fsck_err() with the caller's @flags, against @pos - POS_MIN for none: as
-/// C's __fsck_err() and __inode_fsck_err(), for a caller that decides
-/// whether the error can be fixed.
+/// For a caller that decides whether the error can be fixed. @pos is POS_MIN
+/// for none.
 pub fn fsck_err_flags(
     ctx:   &impl FsckErrCtx,
     pos:   c::bpos,
@@ -162,9 +155,8 @@ pub fn fsck_err_flags(
     __fsck_err(ctx, pos, flags, err, msg)
 }
 
-/// Report @err without offering a repair - for damage another pass owns - as
-/// C's bch_log_msg with bch2_count_fsck_err(): counted in the superblock, and
-/// logged unless it's a repeat or being ratelimited.
+/// Without offering a repair, for damage another pass owns: counted in the
+/// superblock, and logged unless it's a repeat or being ratelimited.
 pub fn fsck_err_report(fs: &Fs, err: bch_sb_error_id, msg: fmt::Arguments<'_>) {
     let mut buf = Printbuf::new();
     buf.write_fmt(msg);
@@ -174,23 +166,17 @@ pub fn fsck_err_report(fs: &Fs, err: bch_sb_error_id, msg: fmt::Arguments<'_>) {
     }
 }
 
-/// Count @err in the superblock, for message @msg: as bch2_count_fsck_err().
-/// Whether to log @msg - not if it's a repeat or being ratelimited; if this
-/// is where ratelimiting starts, @msg says so.
+/// Whether to log @msg: not if it's a repeat or being ratelimited. If this is
+/// where ratelimiting starts, @msg says so.
 pub fn count_fsck_err(fs: &Fs, err: bch_sb_error_id, msg: &mut Printbuf) -> bool {
     unsafe { c::__bch2_count_fsck_err(fs.raw, err, msg.as_raw()) }
 }
 
-/// Count @err in the superblock's error counters, without a message: as
-/// bch2_sb_error_count().
 pub fn sb_error_count(fs: &Fs, err: bch_sb_error_id) {
     unsafe { c::bch2_sb_error_count(fs.raw, err) }
 }
 
-/// As fs_inconsistent(), for an inconsistency found in a transaction: the
-/// message says what the transaction has queued. As
-/// bch2_trans_inconsistent() - but not from atomic context, as C's can be:
-/// the message is formatted here first, with an allocation that can sleep.
+/// fs_inconsistent(), with what the transaction has queued in the message.
 pub fn trans_inconsistent(trans: &BtreeTrans<'_>, msg: fmt::Arguments<'_>) -> bool {
     let mut buf = Printbuf::new();
     buf.write_fmt(msg);
@@ -198,11 +184,9 @@ pub fn trans_inconsistent(trans: &BtreeTrans<'_>, msg: fmt::Arguments<'_>) -> bo
     unsafe { c::bch2_trans_inconsistent(trans.raw(), c"%s".as_ptr().cast(), buf.as_raw().buf) }
 }
 
-/// Report that the filesystem is inconsistent, and act on it as the errors
-/// option says - continue, go emergency read-only, or panic: as
-/// bch2_fs_inconsistent(). Whether the filesystem is going read-only. Not
-/// from atomic context, as C's can be: the message is formatted here first,
-/// with an allocation that can sleep.
+/// Acts as the errors option says - continue, go emergency read-only, or
+/// panic - and returns whether we're going read-only. Unlike C's, not from
+/// atomic context: formatting the message allocates, and can sleep.
 pub fn fs_inconsistent(fs: &Fs, msg: fmt::Arguments<'_>) -> bool {
     let mut buf = Printbuf::new();
     buf.write_fmt(msg);
@@ -210,17 +194,16 @@ pub fn fs_inconsistent(fs: &Fs, msg: fmt::Arguments<'_>) -> bool {
     unsafe { c::bch2_fs_inconsistent(fs.raw, c"%s".as_ptr().cast(), buf.as_raw().buf) }
 }
 
-/// A key being validated, and where it came from: what C's bkey_fsck_err()
-/// finds by name - c, k, from - in a key type's validate.
+/// What C's bkey_fsck_err() finds by name in a key type's validate: c, k,
+/// from.
 pub struct BkeyValidate<'a, 'k> {
     pub fs:   &'a Fs,
     pub k:    BkeySC<'k>,
     pub from: &'a c::bkey_validate_context,
 }
 
-/// Report @err in the key being validated, as C's bkey_fsck_err(): the error
-/// validate returns. fsck_delete_bkey if the key is to be dropped - fsck said
-/// fix or ignore, or the error is silenced - otherwise what stops us.
+/// The error validate returns: fsck_delete_bkey if the key is to be dropped -
+/// fsck said fix or ignore, or the error is silenced - else what stops us.
 pub fn bkey_fsck_err(
     v:   &BkeyValidate<'_, '_>,
     err: bch_sb_error_id,
@@ -242,8 +225,6 @@ pub fn bkey_fsck_err(
     }
 }
 
-/// bkey_fsck_err() if @cond holds, as C's bkey_fsck_err_on(): the `?` on
-/// the result is C's goto fsck_err.
 pub fn bkey_fsck_err_on(
     v:    &BkeyValidate<'_, '_>,
     cond: bool,
@@ -253,9 +234,7 @@ pub fn bkey_fsck_err_on(
     if cond { Err(bkey_fsck_err(v, err, msg)) } else { Ok(()) }
 }
 
-// The family as macros taking a format string, as C's do, so call sites read
-// like C's: the functions above, with the message's format_args!() written
-// for you.
+// ── Macros: the functions above, with format_args!() written for you ──────
 
 #[macro_export]
 macro_rules! bkey_fsck_err {

@@ -1,16 +1,13 @@
 //! A key's extent entries - its pointers, and what applies to them - as the
 //! arms they are.
 //!
-//! An entry is as long as its type's arm, its type the lowest set bit of its
-//! first word; how long a type this code doesn't know is, only the
-//! filesystem's table says (sb extent_type_u64s, data/extents_sb.c). So an
-//! entry isn't a type of its own: a walk takes that table from the Fs, steps
-//! by it, and hands each entry out as a reference to its arm - ExtentEntry,
-//! ExtentEntryMut - or, for a type this code doesn't know, as Unknown, its
-//! bytes: a newer version's, which validate passes. Where the walk can't
-//! step - an entry validate rejects, of a type the filesystem doesn't know or
-//! running past the value's end - the rest of the value is the last entry,
-//! Unknown: so printing a damaged key shows the damage.
+//! An entry's type is the lowest set bit of its first word; how long a type
+//! newer than this code is, only the filesystem's table says (sb
+//! extent_type_u64s). So a walk steps by that table, and hands out a type
+//! this code doesn't know as Unknown, its bytes - validate passes those.
+//! Where the walk can't step - a type the filesystem doesn't know, or past
+//! the value's end - the rest of the value is one last Unknown entry, so
+//! printing a damaged key shows the damage.
 
 use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::iter::{BtreeIter, TransAttempt};
@@ -23,7 +20,6 @@ use core::mem::size_of;
 
 macro_rules! extent_entries {
     ($(($name:tt, $nr:literal)),* $(,)?) => { ::paste::paste! {
-        /// Size in u64s for each known extent entry type.
         pub fn extent_entry_type_u64s(ty: u32) -> Option<usize> {
             Some(match ty {
                 $($nr => size_of::<c::[<bch_extent_ $name>]>() / 8,)*
@@ -31,7 +27,6 @@ macro_rules! extent_entries {
             })
         }
 
-        /// An extent entry: its arm.
         #[allow(non_camel_case_types)]
         #[derive(Clone, Copy)]
         pub enum ExtentEntry<'a> {
@@ -40,8 +35,7 @@ macro_rules! extent_entries {
             Unknown { ty: u32, bytes: &'a [u8] },
         }
 
-        /// An extent entry, to edit: its arm. One of a type this code doesn't
-        /// know, it can't edit.
+        /// An Unknown entry can't be edited.
         #[allow(non_camel_case_types)]
         pub enum ExtentEntryMut<'a> {
             $($name(&'a mut c::[<bch_extent_ $name>]),)*
@@ -49,7 +43,7 @@ macro_rules! extent_entries {
         }
 
         impl<'a> ExtentEntry<'a> {
-            /// Entry @b, of type @ty: its arm if it's exactly one.
+            /// Unknown unless @b is exactly an arm of type @ty.
             fn new(ty: u32, b: &'a [u8]) -> Self {
                 match ty {
                     $($nr if b.len() == size_of::<c::[<bch_extent_ $name>]>() =>
@@ -61,7 +55,6 @@ macro_rules! extent_entries {
         }
 
         impl<'a> ExtentEntryMut<'a> {
-            /// ExtentEntry::new(), to edit.
             fn new(ty: u32, b: &'a mut [u8]) -> Self {
                 match ty {
                     $($nr if b.len() == size_of::<c::[<bch_extent_ $name>]>() &&
@@ -76,16 +69,15 @@ macro_rules! extent_entries {
 }
 c::BCH_EXTENT_ENTRY_TYPES!(extent_entries);
 
-/// The type of the entry @b starts with: the lowest set bit of its first
-/// word, the arm's type_, which its Default sets - u32::MAX if that's 0.
+/// The lowest set bit of @b's first word; u32::MAX if it has none.
 fn entry_type(b: &[u8]) -> Option<u32> {
     let w = u64::from_ne_bytes(b.get(..8)?.try_into().ok()?);
     Some(if w != 0 { w.trailing_zeros() } else { u32::MAX })
 }
 
-/// How long each type of entry a filesystem knows is, in u64s, by type: its
-/// superblock's table, which knows types newer than this code. A copy - set
-/// once the filesystem's up - so a walk borrows only its key.
+/// The filesystem's entry lengths in u64s, which know types newer than this
+/// code. A copy - the table is set once the filesystem's up - so a walk
+/// borrows only its key.
 #[derive(Clone, Copy)]
 struct EntrySizes {
     u64s: [u8; 31],
@@ -117,9 +109,6 @@ fn entry_len(sizes: &EntrySizes, b: &[u8]) -> Option<(u32, usize)> {
     Some((ty, len))
 }
 
-/// A key's extent entries: each one's type, and its bytes, as long as the
-/// filesystem's table says - the last the rest of the value, where it can't
-/// step.
 struct Entries<'a> {
     sizes: EntrySizes,
     b:     &'a [u8],
@@ -136,7 +125,6 @@ impl<'a> Iterator for Entries<'a> {
     }
 }
 
-/// Entries, to edit.
 struct EntriesMut<'a> {
     sizes: EntrySizes,
     b:     &'a mut [u8],
@@ -158,12 +146,11 @@ impl<'a> BkeySC<'a> {
         Entries { sizes: EntrySizes::of(fs), b: self.extent_entry_bytes() }
     }
 
-    /// Its extent entries - none, for a key without.
+    /// None, for a key without.
     pub fn extent_entries(self, fs: &Fs) -> impl Iterator<Item = ExtentEntry<'a>> {
         self.entries(fs).map(|(ty, b)| ExtentEntry::new(ty, b))
     }
 
-    /// Its pointers: as bkey_for_each_ptr().
     pub fn ptrs(self, fs: &Fs) -> impl Iterator<Item = &'a c::bch_extent_ptr> {
         self.extent_entries(fs).filter_map(|e| match e {
             ExtentEntry::ptr(p) => Some(p),
@@ -171,20 +158,17 @@ impl<'a> BkeySC<'a> {
         })
     }
 
-    /// Its checksum/compression entries, unpacked: as bkey_for_each_crc().
     pub fn crcs(self, fs: &Fs) -> impl Iterator<Item = c::bch_extent_crc_unpacked> + 'a {
         self.extent_entries(fs).filter_map(move |e| crc_unpack(self.k, e))
     }
 }
 
 impl BkeyS<'_> {
-    /// Its extent entries, to edit: as BkeySC::extent_entries().
     pub fn extent_entries_mut(&mut self, fs: &Fs) -> impl Iterator<Item = ExtentEntryMut<'_>> {
         EntriesMut { sizes: EntrySizes::of(fs), b: self.extent_entry_bytes_mut() }
             .map(|(ty, b)| ExtentEntryMut::new(ty, b))
     }
 
-    /// Its pointers, to edit.
     pub fn ptrs_mut(&mut self, fs: &Fs) -> impl Iterator<Item = &mut c::bch_extent_ptr> {
         self.extent_entries_mut(fs).filter_map(|e| match e {
             ExtentEntryMut::ptr(p) => Some(p),
@@ -194,7 +178,7 @@ impl BkeyS<'_> {
 }
 
 /// @entry, if it's a crc entry of @k, unpacked: the sizes unbiased, the
-/// checksum's bytes where bch_csum has them. As bch2_extent_crc_unpack().
+/// checksum's bytes where bch_csum has them.
 fn crc_unpack(k: &c::bkey, entry: ExtentEntry<'_>) -> Option<c::bch_extent_crc_unpacked> {
     // The packed checksum bytes, at the start of a bch_csum word - C stores
     // them there through a cast, with no byte swap:
@@ -239,7 +223,7 @@ fn crc_unpack(k: &c::bkey, entry: ExtentEntry<'_>) -> Option<c::bch_extent_crc_u
 }
 
 /// Whether @crc's data is checksummed or compressed - read back whole, so
-/// bounded by encoded_extent_max: as crc_is_encoded().
+/// bounded by encoded_extent_max.
 pub fn crc_is_encoded(crc: &c::bch_extent_crc_unpacked) -> bool {
     let compressed = crc.compression_type as u32 != c::bch_compression_type::BCH_COMPRESSION_TYPE_none.0 &&
         crc.compression_type as u32 != c::bch_compression_type::BCH_COMPRESSION_TYPE_incompressible.0;
@@ -247,8 +231,7 @@ pub fn crc_is_encoded(crc: &c::bch_extent_crc_unpacked) -> bool {
     crc.csum_type as u32 != c::bch_csum_type::BCH_CSUM_none.0 || compressed
 }
 
-/// Whether @k is counted in its inode's i_sectors: as
-/// bkey_extent_is_allocation().
+/// Whether @k is counted in its inode's i_sectors.
 pub fn bkey_extent_is_allocation(k: &c::bkey) -> bool {
     use c::bch_bkey_type as t;
 
@@ -258,20 +241,18 @@ pub fn bkey_extent_is_allocation(k: &c::bkey) -> bool {
 }
 
 /// Whether @k reserves space rather than holding data - a reservation, or
-/// an extent with unwritten pointers: as bkey_extent_is_reservation().
+/// an extent with unwritten pointers.
 pub fn bkey_extent_is_reservation(fs: &Fs, k: BkeySC<'_>) -> bool {
     k.k.type_ as u32 == c::bch_bkey_type::KEY_TYPE_reservation.0 ||
         k.ptrs(fs).any(|p| p.unwritten() != 0)
 }
 
-/// @k's durability, for reserving space to rewrite it: as
-/// bch2_bkey_durability_safe(), which tolerates bad pointers.
+/// For reserving space to rewrite @k: tolerates bad pointers.
 pub fn durability_safe(fs: &Fs, k: BkeySC<'_>) -> c::bkey_durability {
     unsafe { c::bch2_bkey_durability_safe(fs.raw, k.to_raw()) }
 }
 
-/// Drop @k's stale cached pointers, updating it through @iter: as
-/// bch2_bkey_drop_stale_ptrs().
+/// Drop @k's stale cached pointers, updating it through @iter.
 pub fn drop_stale_ptrs<'a, 't>(
     t:    &TransAttempt<'a, 't>,
     iter: &BtreeIter<'t>,

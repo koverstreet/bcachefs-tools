@@ -70,8 +70,8 @@ impl InodeInfo<'_> {
     }
 
     /// Update the VFS inode to @inode, just written in @trans, which still
-    /// holds the inode's btree position locked - as
-    /// bch2_inode_update_after_write(). @fields: the ATTR_* that changed.
+    /// holds the inode's btree position locked. @fields: the ATTR_* that
+    /// changed.
     pub fn update_after_write(&self, trans: &BtreeTrans<'_>, inode: &mut c::bch_inode_unpacked,
                               fields: u32) {
         unsafe { c::bch2_inode_update_after_write(trans.raw(), self.ei, inode, fields) }
@@ -90,17 +90,15 @@ pub struct UpdateLock<'i> {
 }
 
 impl UpdateLock<'_> {
-    /// Move the inode to project @projid, transferring its quota: as
-    /// bch2_set_projid().
+    /// Move the inode to project @projid, quota and all.
     pub fn set_projid(&self, projid: u32) -> Result<(), BchError> {
         let inode = self.inode;
         ret_to_result(unsafe { c::rust_ei_set_projid(inode.fs.raw, inode.ei, projid) })
     }
 
     /// Change the inode with @set, in a transaction of its own that's
-    /// committed, and update the VFS inode after - @fields, the ATTR_* that
-    /// changed: as bch2_write_inode(). @set runs in each attempt, on the
-    /// inode as it is in the btree.
+    /// committed, then update the VFS inode - @fields, the ATTR_* that
+    /// changed. @set runs in each attempt, on the inode as it is in the btree.
     pub fn write_inode<F>(&self, fields: u32, mut set: F) -> Result<(), BchError>
     where
         F: FnMut(&TransAttempt<'_, '_>, &mut c::bch_inode_unpacked) -> Result<(), BchError>,

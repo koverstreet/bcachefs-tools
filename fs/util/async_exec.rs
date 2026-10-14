@@ -1,44 +1,30 @@
 // SPDX-License-Identifier: GPL-2.0
-//! An async executor backed by a kernel workqueue.
+//! An async executor on a workqueue: a task is a future and an embedded
+//! work_struct. The workqueue runs the task, which polls the future once; its
+//! waker re-enqueues it to be polled again. Ported from Wedson Almeida Filho's
+//! out-of-tree kasync onto kernel::workqueue and the shim's matching API.
 //!
-//! Modernization of Wedson Almeida Filho's `kasync` workqueue executor
-//! (out-of-tree rust-for-linux), onto the current in-kernel `kernel::workqueue`
-//! and the userspace shim's matching `Work`/`WorkItem`/`enqueue` API.
+//! Two workqueue properties, doing different jobs:
 //!
-//! Model: a task is a future plus an embedded `work_struct`. The workqueue runs
-//! the task (`WorkItem::run`), which polls the future once; the future's waker
-//! re-`enqueue`s the task to be polled again. So there is no hand-rolled state
-//! machine, unlike a per-wake-`spawn` design — but that rests on two *distinct*
-//! workqueue properties, and it matters to keep them apart:
+//! - The pending bit dedups enqueues of a task queued and not yet running: the
+//!   second enqueue fails, as Task::wake() wants. It doesn't serialize runs -
+//!   it's cleared before the work function runs, so a wake mid-poll requeues.
+//! - Non-reentrancy serializes runs: a workqueue never runs one work item on
+//!   two workers at once (process_one_work(), __queue_work(); in userspace
+//!   find_runnable_work()). This, not the pending bit, is what makes the
+//!   UnsafeCell access in Task::poll() and the Sync impl sound.
 //!
-//! - The pending bit dedups enqueues of a task that is queued and not yet
-//!   running: the second `enqueue` fails, which is exactly what [`Task::wake`]
-//!   wants. It does **not** serialize runs — it is cleared before the work
-//!   function is called, so a wake arriving mid-poll re-queues successfully,
-//!   which is correct and necessary.
-//! - **Non-reentrancy** is what serializes runs: a workqueue never executes one
-//!   work item on two workers at once. That is a documented guarantee of the
-//!   kernel API (`process_one_work()` defers on collision, `__queue_work()`
-//!   routes a re-queue back to the pool where the item is running); userspace
-//!   reproduces it in `find_runnable_work()`, linux/workqueue.c.
+//! So a task is polled by one thread at a time, and a wake during a poll
+//! yields exactly one more poll.
 //!
-//! Together: a task is polled by at most one thread at a time, and a wake during
-//! a poll yields exactly one further poll after it. Only the second property
-//! makes the `UnsafeCell` access in [`Task::poll`] and the `unsafe impl Sync`
-//! below sound — attributing it to the pending bit, as this comment used to,
-//! names a mechanism that does not provide it.
+//! WaitGroup is a fork-join barrier - the last task to finish wakes the waiter
+//! - and block_on() drives a future from a synchronous caller, parking the
+//! thread: a completion in the kernel, a condvar in userspace, the one
+//! platform-specific piece.
 //!
-//! On top of that core sit [`WaitGroup`] (an async fork-join barrier — the last
-//! task to finish wakes the waiter) and [`block_on`] (drive a future to
-//! completion from a synchronous caller, parking the thread until it is ready).
-//! `block_on`'s parker — a completion in the kernel, a condvar in userspace — is
-//! the one genuinely platform-specific piece; localizing it here is what lets
-//! callers like the perf test stay cfg-free.
-//!
-//! Tests for both workqueue properties above live in src/workqueue_test.rs, in
-//! the tools crate — not here, because a `cargo test -p bcachefs-kernel` binary
-//! does not link libbcachefs.a and so has no `queue_work()`. If you change
-//! anything about how a task is enqueued or polled, that is the file to run.
+//! Both properties are tested in src/workqueue_test.rs, in the tools crate - a
+//! bcachefs-kernel test binary has no queue_work(). Run it after changing how a
+//! task is enqueued or polled.
 
 use core::cell::UnsafeCell;
 use core::future::Future;
@@ -94,10 +80,7 @@ impl<F: Future<Output = ()> + Send + 'static> Task<F> {
     /// Re-run this task on its workqueue (the waker calls this).
     fn wake(self: Arc<Self>) {
         let queue = self.queue;
-        // Err means the work item is already enqueued, i.e. a poll is already
-        // pending - which is exactly what we wanted. Dropping it is correct;
-        // propagating it would turn "already scheduled" into a failure. In
-        // userspace enqueue() returns nothing.
+        // Err: already enqueued, so a poll is pending - what we want, not a failure
         #[allow(clippy::let_unit_value)]
         let _ = queue.enqueue(self);
     }
@@ -127,22 +110,16 @@ impl<F: Future<Output = ()> + Send + 'static> WorkItem for Task<F> {
     }
 }
 
-// The `Work<T>` offset is wired via `impl_has_work!`, whose `work_container_of`
-// expands to `container_of!(ptr, Self, work)`. The generic `impl{..}
-// HasWork<Self> for Task<F>` form matches the kernel's own `ClosureWork<T>`
-// invocation (rust/kernel/workqueue.rs), so the syntax is confirmed; `work` is
-// the first field, so the container_of is identity.
+// HasWork through impl_has_work!, as the kernel's own ClosureWork<T>; work is
+// the first field, so container_of is identity.
 #[cfg(kernel)]
 kernel::impl_has_work! {
     impl{F: Future<Output = ()> + Send + 'static} HasWork<Self> for Task<F> { self.work }
 }
 
-/// Spawn `future` onto `queue` to run to completion. Fire-and-forget: the output
-/// is discarded — pair it with a [`WaitGroup`] to learn when a batch is done.
-///
-/// Returns `Result` on both platforms — kernel task allocation is fallible; the
-/// userspace path is infallible but mirrors the signature — so callers handling
-/// the error (e.g. `.map_err(...)` / `.is_err()`) stay cfg-free.
+/// Spawn @future onto @queue, fire and forget: pair it with a WaitGroup to learn
+/// when a batch is done. A Result in both builds, though userspace can't fail,
+/// so callers stay cfg-free.
 #[cfg(not(kernel))]
 pub fn spawn<F: Future<Output = ()> + Send + 'static>(
     queue: &'static Queue,
@@ -157,9 +134,8 @@ pub fn spawn<F: Future<Output = ()> + Send + 'static>(
     Ok(())
 }
 
-// FLAG(kernel, verify): the kernel half. `Work` is `#[pin]`, so construction is
-// pin-init; `Work::new()`'s real args (name + lock-class key) and the
-// `Arc::pin_init`/`GFP`/`Result` shape need confirming against the kernel crate.
+// XXX(kernel): Work::new()'s arguments (name, lock class key) and the
+// Arc::pin_init shape aren't verified against the kernel crate.
 #[cfg(kernel)]
 pub fn spawn<F: Future<Output = ()> + Send + 'static>(
     queue: &'static Queue,
@@ -192,20 +168,15 @@ pub fn system_unbound() -> &'static Queue {
 
 // ---- WaitGroup: an async fork-join barrier ----
 
-/// A counting fork-join barrier. `n` tasks each call [`done`](WaitGroup::done)
-/// when they finish; [`wait`](WaitGroup::wait) resolves once all `n` have. This is
-/// the async analogue of a counting completion: the last `done` wakes the waiter
-/// through the executor's waker, so the forking thread can park on it in
-/// [`block_on`].
+/// A counting fork-join barrier: @n tasks each call done(), and wait() resolves
+/// after the last - whose wake can unpark a thread in block_on().
 pub struct WaitGroup {
     remaining: AtomicU32,
     waker: WakerSlot,
 }
 
 impl WaitGroup {
-    /// Create a group expecting `n` [`done`](WaitGroup::done) calls, shared via
-    /// `Arc` between the workers and the waiter. `Result` on both platforms (see
-    /// [`spawn`]) so callers stay cfg-free.
+    /// Shared by the workers and the waiter. A Result in both builds, as spawn().
     #[cfg(not(kernel))]
     pub fn new(n: u32) -> Result<Arc<Self>, AllocError> {
         Ok(Arc::new(WaitGroup {
@@ -262,10 +233,9 @@ impl Future for WaitGroupWait {
     }
 }
 
-/// A single-slot waker cell guarded by a tiny spinlock. Pure `core`, so it is
-/// identical on kernel and userspace — no lock type, no pin-init, no allocation.
-/// The critical section only moves an `Option<Waker>`, so it is O(1) and never
-/// sleeps; the only contenders are the waiter and the task that wakes it.
+/// A single waker slot under a tiny spinlock: pure core, the same in both
+/// builds. The critical section only moves an Option<Waker>, and the only
+/// contenders are the waiter and the waker.
 struct WakerSlot {
     locked: AtomicBool,
     waker: UnsafeCell<Option<Waker>>,
@@ -311,9 +281,6 @@ impl Drop for WakerGuard<'_> {
 }
 
 // ---- block_on: drive a future to completion from a synchronous caller ----
-// The parker — what actually blocks the calling thread until the future is ready
-// — is the one genuinely platform-specific primitive: a condvar in userspace, a
-// kernel wait primitive in the kernel. Everything above this line is shared.
 
 /// Drive `future` to completion on the calling thread, parking when it is pending
 /// and re-polling on each wake.
@@ -359,11 +326,9 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
     }
 }
 
-// The kernel parker mirrors the condvar version: a guarded flag plus a `CondVar`
-// (both pin-init types, so the `Parker` lives pinned behind an `Arc`), woken
-// through a hand-built `RawWaker` since the kernel has no `std::task::Wake`.
-// Refcounting through the `Arc` keeps the waker sound even if the future stashes
-// a clone of it.
+// A guarded flag and a CondVar, both pin-init, so the Parker is pinned in an
+// Arc; woken through a hand-built RawWaker, the kernel having no Wake trait.
+// The Arc keeps the waker sound if the future keeps a clone.
 #[cfg(kernel)]
 pub fn block_on<F: Future>(future: F) -> F::Output {
     use kernel::sync::{new_condvar, new_mutex, CondVar, Mutex};
@@ -440,10 +405,8 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
 }
 
 // ---- Waker bridge: Arc<Task> <-> core::task::Waker ----
-// Both platforms expose `Arc::into_raw`/`from_raw` with std-equivalent
-// ownership semantics: the in-kernel workqueue round-trips its `Arc` this same
-// way (`__enqueue` does `into_raw`, `run` does `from_raw`, paired —
-// rust/kernel/workqueue.rs), so one API spans both sides.
+// Both builds' Arc::into_raw()/from_raw() own as std's do; the kernel
+// workqueue round-trips its Arc the same way.
 
 fn waker_for<F: Future<Output = ()> + Send + 'static>(task: Arc<Task<F>>) -> Waker {
     // SAFETY: the vtable upholds the Waker contract.

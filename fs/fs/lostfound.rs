@@ -1,46 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! fsck: lost+found, and reattaching unreachable inodes in it.
+//! lost+found, and reattaching unreachable inodes in it.
 //!
 //! There's one lost+found per snapshot tree, in the tree's root snapshot, so
-//! every branch inherits the same one; lookup_lostfound() finds it from a
-//! snapshot, recreating it if the tree has none, or restoring its dirent in a
-//! snapshot that deleted it. reattach_inode() names an inode there - by its
-//! number, or "subvol-<n>" for a subvolume root - and then fixes up the
-//! versions of the inode in descendant snapshots: pointing those that also
-//! need reattaching at the new dirent, and hiding it from those that don't.
+//! every branch inherits it. lookup_lostfound() finds it from a snapshot,
+//! creating it if the tree has none or restoring its dirent where a snapshot
+//! deleted it. reattach_inode() names an inode there - its number, or
+//! "subvol-<n>" for a subvolume root - then points the descendant versions that
+//! also need reattaching at the new dirent, and hides it from the rest.
 //!
-//! The descendant fixup commits as it goes when there's a lot of it, so a
-//! retry can find the reattach dirent already committed: it adopts it rather
-//! than creating a second.
-//!
-//! Changes from the C:
-//!
-//! - lookup_lostfound() had a branch for a subvolume key with no root inode,
-//!   which set the subvolume's root to the inode being reattached - then
-//!   looked up root inode 0, through a local copy of the key it had shadowed.
-//!   bch2_subvolume_validate() rejects such a key (subvol_inode_bad), so the
-//!   branch couldn't run; it's gone.
-//!
-//! - Whether the inode's snapshot is a leaf, for the descendant fixup: an
-//!   error there - no such snapshot - was taken as "not a leaf"; it's
-//!   returned now. check_key_has_snapshot() should have dealt with a key in a
-//!   missing snapshot before we got here.
-//!
-//! - Adopting an existing reattach dirent: the C flattened what it points at
-//!   to one number - subvolume ID or inode number by d_type - and compared
-//!   it with the inode's, so inode 5 would adopt a DT_SUBVOL dirent for
-//!   subvolume 5. It compares DirentTargets now, and that's "points
-//!   elsewhere".
-//!
-//! - A lost+found entry under the inode's name that points elsewhere was
-//!   fsck_repair_unimplemented, stopping fsck; the name is probed forward
-//!   ("<n>.1", ...) to the first that's ours or free.
-//!
-//! This code has been troublesome; fsck-inject has a test for each path:
-//! creating vs restoring lost+found, an adopted reattach dirent (the
-//! partial-commit re-drive), a taken name, the descendant fixup with its
-//! whiteouts.
+//! fsck-inject tests each path: creating vs restoring lost+found, adopting a
+//! reattach dirent after a partial commit, a taken name, the descendant fixup.
 
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, BkeyISnapshot, BkeyISubvolume, POS_MIN};
 use crate::btree::iter::{
@@ -63,14 +33,11 @@ use core::ops::ControlFlow;
 
 const LOSTFOUND: &[u8] = b"lost+found";
 
-/// The flags lost+found's dirents are created with.
 const CREATE: (BtreeIterFlags, UpdateTriggerFlags) =
     (BtreeIterFlags::STR_HASH_MUST_CREATE, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE);
 
-/// The inode lost+found's dirent in @root - hashed with @root_hash - points
-/// at, as seen from @snapshot; None if there's no such dirent.
-/// ENOENT_not_directory if it isn't a directory - an error, not a None: we'd
-/// fail to create one over it.
+/// The inode lost+found names in @root at @snapshot. Not a directory is an
+/// error, not None: we'd fail to create one over it.
 fn lostfound_dirent(
     t:         &TransAttempt<'_, '_>,
     root_hash: &c::bch_hash_info,
@@ -95,8 +62,7 @@ fn lostfound_dirent(
     }
 }
 
-/// Any subvolume in snapshot tree @tree - not master_subvol, which might
-/// have been deleted.
+/// Any subvolume in @tree: master_subvol may have been deleted.
 fn find_snapshot_tree_subvol(t: &TransAttempt<'_, '_>, tree: u32) -> Result<u32, BchError> {
     let mut iter = BtreeIter::new(t, c::btree_id::snapshots, POS_MIN, BtreeIterFlags::empty());
     iter.for_each_norestart(t, |_, k| Ok(
@@ -108,8 +74,7 @@ fn find_snapshot_tree_subvol(t: &TransAttempt<'_, '_>, tree: u32) -> Result<u32,
         .ok_or_else(|| t.fs().err(bch_errcode::BCH_ERR_ENOENT_no_snapshot_tree_subvol))
 }
 
-/// Name directory @inum lost+found in @root at @snapshot, logging @msg - what
-/// we're doing - at notice, or at err with the error if it fails.
+/// Logs @msg at notice, or at err with the error.
 fn create_lostfound_dirent(
     t:          &TransAttempt<'_, '_>,
     msg:        &mut Printbuf,
@@ -170,15 +135,10 @@ fn create_lostfound(
     Ok(lostfound)
 }
 
-/// The snapshot tree has a lost+found, but @snapshot hasn't: it was deleted
-/// there. Give @snapshot a dirent for the same inode - one lost+found per
-/// tree is the invariant, not one dirent.
-///
-/// A fresh dirent, deliberately, rather than removing the whiteout in place:
-/// dirents are a hash table, so let the table pick the slot. It goes back
-/// into the slot that was freed in the normal case, and probes past whatever
-/// took it otherwise. One inode with different dirent positions in different
-/// snapshots is what a directory renamed after a snapshot already looks like.
+/// The tree has a lost+found but @snapshot deleted its dirent: give @snapshot a
+/// new dirent for the same inode, in whatever slot the hash table picks, rather
+/// than removing the whiteout. Different positions in different snapshots are
+/// what a directory renamed after a snapshot has anyway.
 fn restore_lostfound(
     t:             &TransAttempt<'_, '_>,
     snapshot:      u32,
@@ -190,9 +150,8 @@ fn restore_lostfound(
     let trans = t.trans();
     let fs = trans.fs();
 
-    // The inode is normally still visible here - only the dirent was
-    // shadowed - but if the directory was deleted rather than unlinked it's
-    // shadowed too, and we have to go get it from the root snapshot.
+    // Normally still visible here; if the directory was deleted rather than
+    // unlinked, only in the root snapshot
     let mut lostfound = bch_err_msg!(fs,
         match inode::find_by_inum_snapshot(trans, inum, snapshot, BtreeIterFlags::empty()) {
             Err(e) if e.matches(c::ENOENT) =>
@@ -217,10 +176,8 @@ fn restore_lostfound(
     Ok(lostfound)
 }
 
-/// lost+found is a subdirectory of the root inode in @snapshot, so the root
-/// inode gains a link there. Take it on the version @snapshot sees and write
-/// it back at @snapshot: writing it where that version lives would hand the
-/// link to sibling branches that haven't got a lost+found.
+/// Written at @snapshot, not where the version it reads lives: that would give
+/// the link to branches without a lost+found.
 fn lostfound_dir_link(t: &TransAttempt<'_, '_>, dir_inum: u64, snapshot: u32)
     -> Result<(), BchError>
 {
@@ -231,10 +188,7 @@ fn lostfound_dir_link(t: &TransAttempt<'_, '_>, dir_inum: u64, snapshot: u32)
     inode::fsck_write(t, &mut dir)
 }
 
-/// @snapshot needs a lost+found and hasn't got one. There's one per snapshot
-/// tree, in the tree's root snapshot so that every branch inherits the same
-/// one, so either the tree hasn't got one at all or it has and it was deleted
-/// here.
+/// @snapshot has no lost+found: the tree has none, or it was deleted here.
 fn create_or_restore_lostfound(
     t:          &TransAttempt<'_, '_>,
     tree:       u32,
@@ -254,19 +208,16 @@ fn create_or_restore_lostfound(
         return Err(fs.err(bch_errcode::BCH_ERR_ENOENT_snapshot));
     };
 
-    // Keeping lost+found in the root snapshot only gives every branch the
-    // same one if they all inherit from it. If this snapshot doesn't, we can
-    // neither find what's there nor create something it will see.
+    // One lost+found per tree works only if every branch inherits from where
+    // it is
     if !snapshot::is_ancestor(trans, snapshot, root_snapshot) {
         bch_err!(fs, "lost+found for snapshot {snapshot} belongs in snapshot {root_snapshot}, \
                       which it does not inherit from (snapshot tree {tree}, root snapshot {tree_root})");
         return Err(fs.err(bch_errcode::BCH_ERR_snapshot_lostfound_unreachable));
     }
 
-    // root_hash came from the root inode as @snapshot sees it, and we're about
-    // to hash with it in another snapshot: fine, because all versions of an
-    // inode must have the same hash seed and type, and check_dirents has
-    // already run and repaired any that didn't.
+    // Hashing at root_snapshot with @snapshot's root_hash: check_dirents has
+    // made every version's hash seed and type the same
     let (lostfound, dirent_snapshot) =
         match lostfound_dirent(t, root_hash, root_inum, root_snapshot)? {
             Some(inum) => (restore_lostfound(t, snapshot, root_snapshot, root_inum, root_inode,
@@ -294,9 +245,8 @@ fn lookup_lostfound(t: &TransAttempt<'_, '_>, snapshot: u32)
 
     let root_inum = c::subvol_inum { subvol: subvolid as u64, inum: subvol.v.inode.get() };
 
-    // The inum came out of the subvolume key, so print the key: which snapshot
-    // it points at is what says whether the root inode is missing or we're
-    // looking in the wrong place.
+    // The subvolume key's snapshot says whether the root inode is missing or
+    // we're looking in the wrong place
     let mut root_inode = bch_err_msg!(fs,
         inode::find_by_inum_snapshot(trans, root_inum.inum, snapshot, BtreeIterFlags::empty()),
         "looking up root inode {} in snapshot {snapshot}, from\n  {}",
@@ -306,8 +256,7 @@ fn lookup_lostfound(t: &TransAttempt<'_, '_>, snapshot: u32)
 
     let Some(inum) = bch_err_msg!(fs, lostfound_dirent(t, &root_hash, root_inum, snapshot),
                                   "looking up lost+found")? else {
-        // We always create lost+found in its own transaction; this will
-        // return a transaction restart:
+        // Commits, so this returns a restart
         return bch_err_msg!(fs, create_or_restore_lostfound(t, tree, snapshot, root_inum,
                                                             &mut root_inode, &root_hash),
                             "getting lost+found for snapshot {snapshot}");
@@ -327,25 +276,10 @@ pub fn inode_should_reattach(inode: &c::bch_inode_unpacked) -> bool {
         return false;
     }
 
-    // Subvolume roots are special: older versions of subvolume roots may be
-    // disconnected, it's only the newest version that matters.
-    //
-    // We only keep a single dirent pointing to a subvolume root, i.e. older
-    // versions of snapshots will not have a different dirent pointing to the
-    // same subvolume root.
-    //
-    // This is because dirents that point to subvolumes are only visible in
-    // the parent subvolume - versioning is not needed - and keeping them
-    // around would break fsck, because when we're crossing subvolumes we
-    // don't have a consistent snapshot ID to do check the inode <-> dirent
-    // relationships.
-    //
-    // Thus, a subvolume root that's been renamed after a snapshot will have a
-    // disconnected older version - that's expected.
-    //
-    // Note that taking a snapshot always updates the root inode (to update
-    // the dirent backpointer), so a subvolume root inode with
-    // BCH_INODE_has_child_snapshot is never visible.
+    // A subvolume root has one dirent, in the parent subvolume, unversioned:
+    // renamed after a snapshot, its old version is disconnected, as expected.
+    // Taking a snapshot always rewrites the root inode, so a version with
+    // has_child_snapshot is never the visible one.
     if inode.bi_subvol != 0 && inode.flag(c::bch_inode_flags::BCH_INODE_has_child_snapshot) {
         return false;
     }
@@ -366,13 +300,9 @@ fn maybe_delete_dirent(t: &TransAttempt<'_, '_>, d_pos: c::bpos, snapshot: u32)
         return Ok(());
     }
 
-    // An explicit whiteout because delete_at() relies on
-    // need_whiteout_for_snapshot() to see the dirent we just created, which
-    // wasn't possible when this was written: it's still an uncommitted
-    // update, and iterators didn't see those then.
-    //
-    // XXX: they do now, so delete_at() should be equivalent - switch once a
-    // fault injection test covers this path.
+    // Explicit: delete_at() needs need_whiteout_for_snapshot() to see the
+    // uncommitted dirent, which iterators couldn't when this was written.
+    // XXX: they can now - switch once fault injection covers this path.
     let whiteout = t.bkey_alloc_init(0, c::bch_bkey_type::KEY_TYPE_whiteout.0 as u8, iter.pos())?;
     t.update(&iter, &whiteout, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
@@ -405,20 +335,13 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
     let mut lostfound = lookup_lostfound(t, dirent_snapshot)?;
     bch_verbose!(fs, "got lostfound inum {}", lostfound.bi_inum);
 
-    // Adopt instead of create: the child fixup loop below commits in chunks
-    // (commit_lazy_if_full()), so a re-drive can find the reattach dirent
-    // already committed - at our snapshot or an ancestor, when the committed
-    // fixups moved the oldest-needing-reattach point down. The name is
-    // deterministic, so look it up: adopting avoids the STR_HASH_MUST_CREATE
-    // collision and re-bumping lost+found's nlink.
+    // The descendant fixup below commits in chunks, so a re-drive can find our
+    // dirent already there: adopt it rather than create a second. A name taken
+    // by something else - a file made in lost+found, an earlier repair's entry -
+    // is skipped for "<name>.1", "<name>.2", ...: the same sequence every time,
+    // so a re-drive finds what it made.
     let lostfound_hash = str_hash::hash_info_init(fs, &lostfound)?;
 
-    //
-    // A name that's taken by something else - a file someone made in
-    // lost+found, or an entry an earlier repair left - isn't ours: try
-    // "<name>.1", "<name>.2", ..., adopting the first that points at us, or
-    // taking the first free one. Deterministic, so a re-drive probes the same
-    // names in the same order and finds what it made.
     let base = name;
     let mut adopted = false;
     let mut chosen = None;
@@ -454,21 +377,16 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
         return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented));
     };
 
-    // is_subdir_for_nlink(), not is_dir(): a subvolume root is named by a
-    // DT_SUBVOL dirent, which doesn't count towards its parent's link count.
-    // Bumping it here for one leaves check_nlinks() to disagree.
+    // Not is_dir(): a subvolume root's DT_SUBVOL dirent doesn't count towards
+    // its parent's links
     if !adopted && inode.is_subdir_for_nlink() {
         lostfound.bi_nlink += 1;
     }
 
-    // Ensure lost+found has an inode version in the snapshot we're about to
-    // create the dirent in, or we leave a key in a snapshot whose inode only
-    // exists in an ancestor - snapshot_key_missing_inode_snapshot, which the
-    // next check_dirents has to clean up after us.
-    //
-    // dirent_snapshot is the inode's own snapshot for an ordinary inode, and
-    // the parent subvolume's for a subvolume root (above); lookup_lostfound()
-    // resolved lost+found from it, so it is at worst an ancestor of it.
+    // lost+found needs a version where the dirent goes, or the dirent is in a
+    // snapshot its directory isn't: snapshot_key_missing_inode_snapshot.
+    // lookup_lostfound() resolved it from dirent_snapshot: the version found
+    // is there or in an ancestor.
     assert!(snapshot::is_ancestor(trans, dirent_snapshot, lostfound.bi_snapshot));
     lostfound.bi_snapshot = dirent_snapshot;
 
@@ -496,9 +414,8 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
         bch_info!(fs, "reattached at {path}");
     }
 
-    // Fix up inodes in child snapshots: if they should also be reattached
-    // update the backpointer field, if they should not be we need to emit
-    // whiteouts for the dirent we just created.
+    // Descendant versions: point those that also need reattaching at the new
+    // dirent, and hide it from the rest
     if inode.bi_subvol != 0 || snapshot::is_leaf(fs, inode.bi_snapshot)? {
         return Ok(());
     }
@@ -511,21 +428,16 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
         let id = k.k.p.snapshot;
         let child = inode::bkey_is_inode(k.k).then(|| inode::unpack(fs, k));
 
-        // This loop batches an update per descendant snapshot version into
-        // one transaction; a fat chain overflows the bump allocator. Commit
-        // once substantial work has accumulated - the restart re-drives us,
-        // the adopt path above resumes without duplicating the reattach
-        // dirent, and already-fixed children are skipped below:
+        // An update per version can overflow the transaction: commit as we go.
+        // The restart re-drives us, the adopt path above resumes, and versions
+        // already fixed are skipped below.
         t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
 
         let child = child.filter(|child| {
             snapshot::is_ancestor(trans, id, inode.bi_snapshot) &&
             !whiteouts_done.iter().any(|&w| snapshot::is_ancestor(trans, id, w)) &&
-            // Fixed by a previous partial commit: its backpointer already
-            // names our reattach dirent. Must be checked before
-            // inode_should_reattach() - having a backpointer, it would fall
-            // into the whiteout arm and turn the committed fixup into a
-            // dangling backpointer:
+            // Fixed by an earlier partial commit. Before inode_should_reattach():
+            // with a backpointer, it would take the whiteout arm and dangle
             (child.bi_dir, child.bi_dir_offset) != (inode.bi_dir, inode.bi_dir_offset)
         });
 

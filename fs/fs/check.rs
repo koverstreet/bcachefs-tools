@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! fsck helpers shared by the passes (fs/check.h).
+//! Helpers shared by the fsck passes.
 
 use crate::btree::bkey::{bkey_extent_whiteout, pos, spos, BkeyI, BkeySC, BkeyISnapshot, BkeyISnapshotTree, BkeyISubvolume};
 use crate::btree::iter::{
@@ -22,16 +22,13 @@ use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err};
 use core::mem::size_of;
 use core::ops::ControlFlow;
 
-/// The snapshot IDs of the keys seen so far at one position, for deciding
-/// visibility while walking a btree in key order with all snapshots: a key
-/// in an ancestor snapshot is hidden from a descendant that overwrote it.
-///
-/// C knows the type only by name: it hands a pointer to one from Rust's
-/// check_key() back to Rust's __bch2_str_hash_check_key() without looking.
+/// The snapshots of the keys seen so far at one position, while walking a
+/// btree in key order with all snapshots: a key in an ancestor is hidden from
+/// a descendant that overwrote it. C only passes it through, from check_key()
+/// back to __bch2_str_hash_check_key().
 pub struct SnapshotsSeen {
     pos: c::bpos,
-    /// In the order seen - ascending, for a walk in key order - plus any a
-    /// repair added in order.
+    /// Ascending, as seen in key order, plus any a repair added in order.
     ids: KVVec<u32>,
 }
 
@@ -40,9 +37,7 @@ impl SnapshotsSeen {
         SnapshotsSeen { pos: Default::default(), ids: KVVec::new() }
     }
 
-    /// Record a key at @pos, starting the list over if @pos is a new
-    /// position - inode and offset, the snapshot being what's recorded: as
-    /// bch2_snapshots_seen_update().
+    /// Record a key at @pos; a new inode:offset starts the list over.
     pub fn update(&mut self, pos: c::bpos) -> Result<(), BchError> {
         if self.pos.inode != pos.inode || self.pos.offset != pos.offset {
             self.ids.clear();
@@ -55,9 +50,8 @@ impl SnapshotsSeen {
         Ok(())
     }
 
-    /// Whether a key in snapshot @ancestor is visible in its descendant @id,
-    /// not overwritten by a key this list has seen: as
-    /// bch2_key_visible_in_snapshot().
+    /// Whether a key in @ancestor is visible in its descendant @id: not
+    /// overwritten by a key this list has seen.
     pub fn key_visible(&self, trans: &BtreeTrans<'_>, id: u32, ancestor: u32) -> bool {
         debug_assert!(id <= ancestor);
 
@@ -68,15 +62,12 @@ impl SnapshotsSeen {
             return false;
         }
 
-        // @id is a descendant of @ancestor: has a key been seen that
-        // overwrote @ancestor - also a descendant of @ancestor, and with @id
-        // as a descendant?
+        // Overwritten by a key seen in a snapshot between the two?
         !self.ids.iter().any(|&i| i != ancestor && snapshot::is_ancestor(trans, id, i))
     }
 
-    /// Whether a reference from a key in @src points at something visible in
-    /// some snapshot as a key in @dst: as bch2_ref_visible(). Assumes the @src
-    /// keys are being visited in key order, with this list recording them.
+    /// Whether a key in @src points at something visible as a key in @dst, in
+    /// some snapshot. The @src keys must be walked in key order, recorded here.
     pub fn ref_visible(&self, trans: &BtreeTrans<'_>, src: u32, dst: u32) -> bool {
         if dst <= src {
             self.key_visible(trans, dst, src)
@@ -85,9 +76,8 @@ impl SnapshotsSeen {
         }
     }
 
-    /// The snapshots that have overwritten the key at @pos in @btree, as if
-    /// a walk had seen them there: for checking a key out of walk order, as
-    /// with no SnapshotsSeen at hand, C's bch2_get_snapshot_overwrites().
+    /// The snapshots that have overwritten the key at @pos in @btree, as if a walk
+    /// had seen them: for a key checked out of walk order.
     pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
         -> Result<Self, BchError>
     {
@@ -108,8 +98,7 @@ impl SnapshotsSeen {
         Ok(SnapshotsSeen { pos: self.pos, ids })
     }
 
-    /// Record @id as seen, keeping the list sorted: for a key a repair
-    /// created at this position.
+    /// For a key a repair created at this position: kept sorted.
     pub fn add_inorder(&mut self, id: u32) -> Result<(), BchError> {
         match self.ids.iter().position(|&i| i >= id) {
             Some(idx) if self.ids[idx] == id => {}
@@ -120,9 +109,8 @@ impl SnapshotsSeen {
     }
 }
 
-/// Whether a key in @src (seen as @src_seen) and one in @dst (seen as
-/// @dst_seen) are both visible in some snapshot - one being an ancestor of
-/// the other, and not overwritten in between: as bch2_ref_visible2().
+/// Whether a key in @src and one in @dst are both visible in some snapshot:
+/// one an ancestor of the other, not overwritten in between.
 pub fn ref_visible2(
     trans:    &BtreeTrans<'_>,
     src:      u32,
@@ -137,13 +125,11 @@ pub fn ref_visible2(
     }
 }
 
-/// Every snapshot version of the inode the keys being walked belong to, for
-/// the passes that walk a btree keyed by inode number (xattrs, dirents,
-/// extents) in key order with all snapshots.
-///
-/// The versions are cached between keys of the same inode, and refetched on
-/// the next inode or after a commit. walk() keeps the entries sorted by
-/// snapshot ID, and each carries a per-pass count (i_sectors, subdirectories).
+/// Every version of the inode the walked keys belong to, for passes walking a
+/// btree keyed by inode number (xattrs, dirents, extents) with all snapshots.
+/// Cached between keys of one inode, refetched on the next inode or after a
+/// commit; sorted by snapshot ID, each with the pass's counts (i_sectors,
+/// subdirectories).
 pub struct InodeWalker {
     first_this_inode: bool,
     have_inodes:      bool,
@@ -205,13 +191,10 @@ impl InodeWalker {
         }
     }
 
-    /// The live inode version @k belongs to, as bch2_walk_inode() and then
-    /// check_key_has_inode(): None if @k is a tombstone, or its inode is
-    /// missing or a whiteout. A missing inode or one of the wrong type is
-    /// reported, and repaired.
-    ///
-    /// Either may commit and return a restart. On any error the cached
-    /// versions are invalidated, so the retry starts from the btree.
+    /// The live version @k belongs to: None if @k is a tombstone, or its inode is
+    /// missing or a whiteout. A missing inode, or one of the wrong type, is
+    /// reported and repaired, which may commit and return a restart; on an error
+    /// the cache is invalidated, so the retry reads the btree.
     pub fn walk<'w, 't>(
         &'w mut self,
         t:    &TransAttempt<'_, 't>,
@@ -247,10 +230,8 @@ impl InodeWalker {
         if self.last_pos.inode != k.k.p.inode {
             self.get_inodes_all_snapshots(t, k.k.p.inode)?;
         } else if self.commit_count != trans.commit_count() {
-            // A commit may have updated inodes we have cached: revalidate.
-            // We're mid way through walking this inode's keys, so per-inode
-            // accumulations (i_sectors, subdir counts) are now partial -
-            // recount instead of complaining:
+            // A commit may have changed cached inodes: refetch, and since we're partway
+            // through this inode's keys, recount rather than complain
             self.get_inodes_all_snapshots(t, k.k.p.inode)?;
             self.recalculate_sums = true;
         }
@@ -270,9 +251,8 @@ impl InodeWalker {
         let trans: &BtreeTrans<'_> = t;
         let fs = trans.fs();
 
-        // We no longer have inodes for last_pos; clear this to avoid screwing
-        // up check_i_sectors/check_subdir_count if we take a transaction
-        // restart here:
+        // No inodes for last_pos now: clear it, or a restart here would confuse
+        // check_i_sectors and check_subdir_count
         self.have_inodes = false;
         self.recalculate_sums = false;
         self.inodes.clear();
@@ -291,13 +271,10 @@ impl InodeWalker {
         Ok(())
     }
 
-    /// The version @k belongs to: the first - in snapshot ID order, the
-    /// nearest - in its snapshot or an ancestor.
-    ///
-    /// That should be in @k's own snapshot, since a key's inode is always
-    /// updated when the key is; if it's an ancestor's, the inode is copied
-    /// (or the whiteout repeated) into @k's snapshot, committed, and a restart
-    /// returned.
+    /// The version @k belongs to: the nearest, in its snapshot or an ancestor. It
+    /// should be @k's own, a key's inode being updated with it; if it's an
+    /// ancestor's, the inode (or whiteout) is copied into @k's snapshot,
+    /// committed, and a restart returned.
     fn lookup_inode_for_snapshot(&mut self, t: &TransAttempt<'_, '_>, k: BkeySC<'_>)
         -> Result<Option<usize>, BchError>
     {
@@ -404,7 +381,7 @@ impl InodeWalker {
             writeln!(buf, "data was lost in inodes btree");
         }
 
-        // Both write repairs edit a version in place: which one
+        // Which repair: each edits a version in place
         let fix = match live {
             None => {
                 let inode_looks_deleted = good_ancestor.is_some() && nr_keys < 3 && !lost_data;
@@ -480,28 +457,21 @@ impl InodeWalker {
             }
         };
 
-        // fsck_write(), not the self-committing version: we're inside the
-        // caller's commit loop, and that one eats restarts - and when the lazy
-        // commit after it has nothing to do, the advanced restart_count leaks
-        // to the caller
+        // fsck_write(), not the self-committing write: inside the caller's commit
+        // loop that eats restarts, and leaks the advanced restart_count to the caller
         inode::fsck_write(t, &mut self.inodes_mut()[fix].inode)?;
         t.commit_lazy(CommitFlags::NO_ENOSPC)
     }
 
-    /// The cached versions are stale - something changed the inodes without
-    /// committing, or the walk is being retried: refetch them on the next
-    /// walk, and recount the per-inode sums.
-    ///
-    /// That is the path a commit takes, so this is how it's spelled: the
-    /// walker revalidates when the transaction's commit_count moves on from
-    /// the one it recorded, and the recorded count is never ahead of it.
+    /// Refetch on the next walk and recount the per-inode sums: the inodes
+    /// changed without a commit, or the walk is retrying. Spelled as a commit: the
+    /// walker refetches when commit_count isn't the one it recorded.
     pub fn invalidate(&mut self) {
         self.commit_count = self.commit_count.wrapping_sub(1);
     }
 
-    /// The versions visible to a key in @snapshot, as for_each_visible_inode:
-    /// @snapshot or its ancestors, not overwritten by a version in a
-    /// descendant that @s has seen.
+    /// The versions visible to a key in @snapshot: its own or its ancestors', not
+    /// overwritten by a version in a descendant @s has seen.
     pub fn visible_mut<'a>(
         &'a mut self,
         trans:    &'a BtreeTrans<'_>,
@@ -513,11 +483,10 @@ impl InodeWalker {
             .filter(move |i| s.key_visible(trans, i.inode.bi_snapshot, snapshot))
     }
 
-    /// Load the versions of inode @inum a key at @s's position refers to, as
-    /// bch2_get_visible_inodes(): for the target of a reference (a dirent's
-    /// inode), not for walking. Scans down from @s's snapshot: the versions
-    /// whose key is visible from it, newest snapshot first, and in deletes()
-    /// the snapshots where a whiteout hides older versions.
+    /// Load the versions of inode @inum that a reference from @s's position
+    /// names - a dirent's target, not a walk: those visible from @s's snapshot,
+    /// newest first, and in deletes() the snapshots where a whiteout hides older
+    /// versions.
     pub fn get_visible(
         &mut self,
         t:     &TransAttempt<'_, '_>,
@@ -550,15 +519,11 @@ impl InodeWalker {
             Ok(())
         })?;
 
-        // The scan is @snapshot and its descendants. With no version at
-        // @snapshot itself, @snapshot sees its nearest ancestor's - what a
-        // lookup there resolves to, and so what a reference there names. Just
-        // that one: any further up are shadowed by it. Normally there is a
-        // version at @snapshot, since whatever makes a dirent writes its
-        // inode there; this is for the dirents a repair or corruption left.
-        //
-        // First in the list, as the oldest. It's shared with the ancestor's
-        // other descendants: writers go through own_version().
+        // We scan @snapshot and its descendants. With no version at @snapshot, it
+        // sees its nearest ancestor's - only that one, the rest shadowed by it.
+        // Normally there is one, since what makes a dirent writes its inode there;
+        // this is for what repair or corruption left. First, as the oldest, and
+        // shared with the ancestor's other descendants: writers use own_version().
         if !self.inodes.iter().any(|i| i.inode.bi_snapshot == snapshot) &&
            !self.deletes.contains(&snapshot) {
             if let Some(u) = inode::find_by_inum_snapshot(trans, inum, snapshot,
@@ -616,13 +581,10 @@ impl Default for InodeWalker {
     }
 }
 
-/// Delete @iter's key, a stray, and start the caller's key over: committed,
-/// and a restart, because the passes' per-key checks go on with the key they
-/// were handed - a deleted dirent would be rehashed back in, and have its
-/// target's backpointer pointed at it.
-///
-/// With a disk reservation: an extents update needs one to put whatever its
-/// triggers charge. A deletion charges nothing, so an empty one does.
+/// Delete @iter's stray key, commit, and restart: the per-key checks carry on
+/// with the key they were handed, and a deleted dirent would be rehashed back
+/// in. With an empty disk reservation: an extents update needs one, and a
+/// deletion charges nothing.
 fn delete_stray_key<'t>(t: &TransAttempt<'_, 't>, iter: &BtreeIter<'t>) -> Result<(), BchError> {
     let res = DiskReservation::new(t.trans().fs());
     t.delete_at(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
@@ -673,17 +635,11 @@ pub fn reconstruct_inode(
     new.bi_inum     = inum;
     new.bi_snapshot = snapshot;
 
-    // Recover the hash info if any version of this inode survives anywhere.
-    //
-    // bi_hash_seed and the str_hash type are the same in every snapshot
-    // version of an inode - repair_inode_hash_info() exists to enforce that -
-    // so a descendant will do when no ancestor is left. Btree node loss takes
-    // out one snapshot's inode key while leaving another's, and an
-    // ancestor-only search calls that unrecoverable and falls back to the
-    // random seed init() left in @new. That puts every dirent already under
-    // this directory at the wrong hash offset: lookups miss, so creates insert
-    // duplicates instead of overwriting, and the directory quietly becomes
-    // untraversable.
+    // Recover the hash info from any surviving version: every version shares
+    // bi_hash_seed and the str_hash type (repair_inode_hash_info() enforces it),
+    // so a descendant will do. Node loss can take one snapshot's inode and leave
+    // another's; a random seed would put every existing dirent at the wrong
+    // offset, and the directory quietly becomes untraversable.
     let hash_src = match inode::find_oldest_snapshot(trans, inum, snapshot) {
         Err(e) if e.matches(c::ENOENT) => inode::find_any_snapshot(trans, inum),
         r => r,
@@ -696,14 +652,11 @@ pub fn reconstruct_inode(
     inode::fsck_write(t, &mut new)
 }
 
-/// The root inode for recreating missing subvolume @subvol at @snapshot:
-/// @inum if the caller knows it, else found. fsck_repair_unimplemented,
-/// logged, if it can't be done - for reconstruct_subvol(), and decided before
-/// anything is queued, so a caller can fall back to reporting.
-///
-/// @snapshot has to be a leaf: the key reconstruct_subvol() writes sets the
-/// snapshot's subvol backref, and bch2_snapshot_validate() rejects a subvol
-/// on a node with children.
+/// The root inode for recreating subvolume @subvol at @snapshot: @inum if the
+/// caller knows it, else found. fsck_repair_unimplemented if it can't be,
+/// decided before anything is queued, so a caller can fall back to reporting.
+/// @snapshot must be a leaf: the subvolume key sets its subvol backref, which
+/// bch2_snapshot_validate() rejects on a node with children.
 pub fn reconstruct_subvol_root(
     t:        &TransAttempt<'_, '_>,
     snapshot: u32,
@@ -722,15 +675,10 @@ pub fn reconstruct_subvol_root(
         return Ok(inum);
     }
 
-    // Find the root inode rather than minting one: the inode carrying
-    // bi_subvol == @subvol is the root, and when it's the subvolume key that
-    // went missing that inode is still there. Creating a second one would
-    // leave two claimants for the same subvolume and the real contents
-    // orphaned behind the new empty root.
-    //
-    // It can't be deferred to a later pass either - bch2_subvolume_validate()
-    // rejects a subvolume key with inode == 0 (subvol_inode_bad), so the key
-    // can't be written at all until we know it.
+    // Find the root, don't mint one: when the subvolume key is what went missing,
+    // the inode with bi_subvol == @subvol is still there, and a second root would
+    // orphan the real contents. Nor can it wait for a later pass: a subvolume key
+    // with inode == 0 is rejected (subvol_inode_bad).
     let mut iter = BtreeIter::new(trans, c::btree_id::inodes, pos(0, 0),
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
     let root = iter.for_each_norestart(t, |_, k| Ok(
@@ -883,15 +831,11 @@ pub fn fsck_update_backpointers(
             let mut target = InodeWalker::new();
             target.get_visible(t, s, inum)?;
 
-            // A backpointer is the (bi_dir, bi_dir_offset) pair - compare and
-            // set both, or an offset match into the wrong directory skips a
-            // broken backpointer, and an offset-only write manufactures one.
-            //
-            // Skip before the write: fsck_write() allocates a bkey_inode_buf
-            // of trans mem per call, and this runs once per visible version
-            // in one transaction - an already-correct backpointer must cost
-            // nothing, both to bound trans mem and so a re-run over
-            // partially-repaired state shrinks instead of repeating the batch.
+            // A backpointer is the (bi_dir, bi_dir_offset) pair: compare and set both, or
+            // a matching offset in the wrong directory skips a broken one. Skip before
+            // writing: fsck_write() allocates trans mem per call, once per visible
+            // version, so a correct backpointer must cost nothing - and a re-run over
+            // partly repaired state then shrinks instead of repeating.
             for i in target.inodes_mut().iter_mut().filter(|i| !points_here(&i.inode)) {
                 own_version(trans, &mut i.inode, new.k.p.snapshot);
                 i.inode.bi_dir        = dir;
