@@ -72,15 +72,10 @@ fn hash(info: &c::bch_hash_info, ty: c::bch_xattr_type, name: &[u8]) -> u64 {
     str_hash::hash_parts(info, &[&[ty.0 as u8], name], false)
 }
 
-/// What an xattr lookup searches for: C's struct xattr_search_key.
+/// What an xattr lookup searches for.
 pub struct XattrKey<'k> {
     pub ty:   c::bch_xattr_type,
     pub name: &'k OsStr,
-}
-
-/// A type and name, to look up: C's X_SEARCH().
-pub fn search_key(ty: c::bch_xattr_type, name: &OsStr) -> XattrKey<'_> {
-    XattrKey { ty, name }
 }
 
 // ── The value ────────────────────────────────────────────────────────────
@@ -286,7 +281,7 @@ pub fn lookup<'i, 't>(
     flags: BtreeIterFlags,
 ) -> Result<BkeySC<'i>, BchError> {
     let hash_info = str_hash::hash_info_init(t.fs(), inode)?;
-    str_hash::lookup::<Xattrs>(t, iter, &hash_info, inum, &search_key(ty, name), flags)
+    str_hash::lookup::<Xattrs>(t, iter, &hash_info, inum, &XattrKey { ty, name }, flags)
 }
 
 /// @v into @buffer, if there is one - getxattr's: its length, or ERANGE if
@@ -343,12 +338,8 @@ pub fn set_key(
     value_mut(k.k_i_mut()).copy_from_slice(value);
 
     let mut iter_flags = BtreeIterFlags::empty();
-    if flags & XATTR_CREATE != 0 {
-        iter_flags |= BtreeIterFlags::STR_HASH_MUST_CREATE;
-    }
-    if flags & XATTR_REPLACE != 0 {
-        iter_flags |= BtreeIterFlags::STR_HASH_MUST_REPLACE;
-    }
+    iter_flags.set(BtreeIterFlags::STR_HASH_MUST_CREATE,  flags & XATTR_CREATE != 0);
+    iter_flags.set(BtreeIterFlags::STR_HASH_MUST_REPLACE, flags & XATTR_REPLACE != 0);
 
     str_hash::set::<Xattrs>(t, hash_info, inum, &mut k, iter_flags,
                             UpdateTriggerFlags::empty())
@@ -380,7 +371,7 @@ pub unsafe extern "C" fn __bch2_xattr_set(
 /// bch2_xattr_set(). Removing one that isn't there is ENODATA with
 /// XATTR_REPLACE, and nothing otherwise.
 #[allow(clippy::too_many_arguments)]
-pub fn set_trans(
+fn set_trans(
     t:     &TransAttempt<'_, '_>,
     inum:  c::subvol_inum,
     inode: &mut c::bch_inode_unpacked,
@@ -406,7 +397,7 @@ pub fn set_trans(
 
     let ret = match value {
         Some(value) => set_key(t, inum, &hash_info, name, value, ty, flags),
-        None        => str_hash::delete::<Xattrs>(t, &hash_info, inum, &search_key(ty, name)),
+        None        => str_hash::delete::<Xattrs>(t, &hash_info, inum, &XattrKey { ty, name }),
     };
 
     match ret {

@@ -407,7 +407,7 @@ mod vfs {
                                     UpdateTriggerFlags::empty())?;
             inode.bi_flags |= ty.inode_flag().bits();
         } else {
-            let search = xattr::search_key(ty.xattr_type(), OsStr::from_bytes(b""));
+            let search = xattr::XattrKey { ty: ty.xattr_type(), name: OsStr::from_bytes(b"") };
             match str_hash::delete::<Xattrs>(t, &hash_info, inum, &search) {
                 Err(e) if e.matches(c::ENOENT) => {}
                 r => r?,

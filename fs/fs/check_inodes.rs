@@ -126,7 +126,7 @@ fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &c::bch_inode_unpacked, ty: c::bc
     -> Result<bool, BchError>
 {
     let hash = str_hash::hash_info_init(t.fs(), u)?;
-    let key = xattr::search_key(ty, OsStr::from_bytes(b""));
+    let key = xattr::XattrKey { ty, name: OsStr::from_bytes(b"") };
     let mut iter = BtreeIter::uninit();
 
     Ok(str_hash::lookup_in_snapshot::<Xattrs>(t, &mut iter, &hash,
