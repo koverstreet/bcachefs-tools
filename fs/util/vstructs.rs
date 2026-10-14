@@ -1154,13 +1154,16 @@ pub trait ArmAt: ArmRef {
     fn arm_at(b: &[u8]) -> Result<Self::Ref<'_>, VStructError>;
 }
 
-/// Why an Unvalidated sized tagged union's get() has no arm to hand out:
-/// its tag, @T, isn't one this version knows, or the arm's header says it's
-/// longer than the storage holds.
+/// Why an Unvalidated tagged union has no arm to hand out: its tag, @T,
+/// isn't one this version knows, or the arm is longer than the bytes there
+/// are - its header says so, or for one as long as its arm (size: arm), its
+/// type does. Short: too few bytes for even the tag - only an entry read off
+/// bytes, size: arm, can be; a sized tagged union's storage holds its tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArmError<T> {
     Unknown(T),
     Bad { tag: T, err: VStructError },
+    Short(VStructError),
 }
 
 impl<T: core::fmt::Debug> core::fmt::Display for ArmError<T> {
@@ -1168,12 +1171,79 @@ impl<T: core::fmt::Debug> core::fmt::Display for ArmError<T> {
         match self {
             Self::Unknown(tag) => write!(f, "unknown type {tag:?}"),
             Self::Bad { tag, err } => write!(f, "type {tag:?}: {err}"),
+            Self::Short(err) => write!(f, "{err}"),
         }
     }
 }
 
 #[cfg(feature = "std")]
 impl<T: core::fmt::Debug> std::error::Error for ArmError<T> {}
+
+/// A tagged union read off bytes, each value as long as the arm its tag
+/// selects - tagged_union!'s `size: arm`: an ACL's entries.
+pub trait ArmSized: Sized {
+    type Tag;
+
+    /// The value at the start of @b: an error if its tag isn't one of ours -
+    /// how long it is, only its arm says - or @b is shorter than its arm.
+    fn read(b: &[u8]) -> Result<Self, ArmError<Self::Tag>>;
+
+    /// How long it is: its arm's size.
+    fn bytes(&self) -> usize;
+}
+
+/// The ArmSized values @b holds, one after another, each as long as its
+/// arm: one that can't be read - its tag unknown, so there's no stepping
+/// past it, or cut off - is an error, which ends the walk.
+#[derive(Clone)]
+pub struct ArmWalk<'a, E> {
+    /// None after an error
+    rest:   Option<&'a [u8]>,
+    at:     usize,
+    _entry: PhantomData<E>,
+}
+
+impl<'a, E> ArmWalk<'a, E> {
+    pub fn new(b: &'a [u8]) -> Self {
+        Self { rest: Some(b), at: 0, _entry: PhantomData }
+    }
+}
+
+impl<E: ArmSized> Iterator for ArmWalk<'_, E> {
+    type Item = Result<E, ArmWalkError<E::Tag>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rest = self.rest.filter(|r| !r.is_empty())?;
+        match E::read(rest) {
+            Ok(e) => {
+                self.rest = Some(&rest[e.bytes()..]);
+                self.at += e.bytes();
+                Some(Ok(e))
+            }
+            Err(err) => {
+                self.rest = None;
+                Some(Err(ArmWalkError { at: self.at, err }))
+            }
+        }
+    }
+}
+
+/// An ArmWalk's error: the entry @at bytes into the walk, and what's wrong
+/// with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArmWalkError<T> {
+    pub at:  usize,
+    pub err: ArmError<T>,
+}
+
+impl<T: core::fmt::Debug> core::fmt::Display for ArmWalkError<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "entry at byte {}: {}", self.at, self.err)
+    }
+}
+
+#[cfg(feature = "std")]
+impl<T: core::fmt::Debug> std::error::Error for ArmWalkError<T> {}
 
 /// A type whose values may be shorter than it, but never shorter than Min:
 /// the fields every valid one has. A View of it derefs to them, so they're

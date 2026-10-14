@@ -29,9 +29,10 @@
 //!
 //! `size:` says what its size is a function of, and what's generated follows
 //! from that: nothing, a constant - `size: pad`, a struct, every value the
-//! pad's size, a value of plain data; or its header's count - `size: header`,
+//! pad's size, a value of plain data; its header's count - `size: header`,
 //! a union over another's storage, below, a view of bytes as long as the
-//! header says.
+//! header says; or its tag - `size: arm`, a value as long as the arm its tag
+//! selects, below.
 //!
 //! `packed` is C's __packed: for an on-disk struct, the payload right after
 //! the tag, whatever the arms' alignment - a struct of the tag and the union
@@ -94,6 +95,19 @@
 //! is the storage, in its state. arm::<A>() is typed() for one arm, if the
 //! tag is A's - A in the storage's state, X<Unvalidated> for an Unvalidated
 //! one - and arm_mut::<A>() the same, to edit.
+//!
+//! Or, `union NAME in HEAD { .., size: arm }`, each value is as long as the
+//! arm its tag selects - an ACL's entries: no count to step by, so a tag this
+//! version doesn't know is one there's no stepping past. HEAD is what every
+//! arm starts with, the tag in it, and the arms are plain data, packed: an
+//! on-disk type asks no alignment of where it is, so a value is read at any
+//! offset. Arms may share a type, the variant saying which. What's generated
+//! is the enum, the arm by value, and on it read(),
+//! from bytes, an error if the tag isn't ours or the bytes are fewer than
+//! its arm (crate::util::vstructs::ArmSized); bytes(), its arm's size;
+//! head(), the fields every arm shares; name(), its arm's; write(), its
+//! arm's bytes then its tag; walk(), over a run of them (ArmWalk). No C:
+//! HEAD and the arms have their own.
 //!
 //! The arms come from an x-macro list: tagged_union! hands the declaration to
 //! it - LIST!(cstruct_macros::__tagged_union [decl]) - and the list calls
@@ -454,6 +468,137 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
     } else {
         String::new()
     };
+
+    if tu.size == CTaggedSize::Arm {
+        // Each value as long as the arm its tag selects - the variant, by
+        // value - read off bytes and written back to them: ArmSized, and
+        // ArmWalk over a run of them. The tag is the head's, so every arm
+        // starts with the head, its tag where the head has it; and every arm
+        // is plain data, read and written by copying, at any alignment.
+        // No ArmOf: arms may share a type, the variant saying which.
+        let head = s_ty.trim();
+        let reads: String = arms.iter()
+            .map(|a| format!(
+                "if t == ({value}) as {tag_ty} {{\n\
+                     return {vs}::cast_plain::<{ty}>(b).copied().map(Self::{arm})\n\
+                         .ok_or({vs}::ArmError::Bad {{\n\
+                             tag: {tag_enum}(t as _),\n\
+                             err: {vs}::VStructError::Overrun {{\n\
+                                 ty:   ::core::any::type_name::<{ty}>(),\n\
+                                 want: ::core::mem::size_of::<{ty}>(),\n\
+                                 have: b.len(),\n\
+                             }},\n\
+                         }});\n\
+                 }}\n",
+                value = a.value, ty = a.ty, arm = a.name))
+            .collect();
+        let tags: String = arms.iter()
+            .map(|a| format!("Self::{}(_) => ({}) as {tag_ty},\n", a.name, a.value))
+            .collect();
+        let sizes: String = arms.iter()
+            .map(|a| format!("Self::{}(_) => ::core::mem::size_of::<{}>(),\n", a.name, a.ty))
+            .collect();
+        let arm_bytes: String = arms.iter()
+            .map(|a| format!("Self::{}(x) => {vs}::plain_bytes(x),\n", a.name))
+            .collect();
+        let names: String = arms.iter()
+            .map(|a| format!("Self::{0}(_) => \"{0}\",\n", a.name))
+            .collect();
+        let asserts: String = arms.iter()
+            .map(|a| format!(
+                "const _: () = {vs}::assert_plain::<{ty}>();\n\
+                 const _: () = assert!(::core::mem::size_of::<{ty}>() >= ::core::mem::size_of::<{head}>() &&\n\
+                                       ::core::mem::offset_of!({ty}, {tag}) == ::core::mem::offset_of!({head}, {tag}),\n\
+                     \"tagged_union! {name}: arm {arm} doesn't start with the head - its {tag} \
+                     where the head has it\");\n\
+                 const _: () = assert!(::core::mem::align_of::<{ty}>() == 1,\n\
+                     \"tagged_union! {name}: arm {arm} has an alignment - it's read where it \
+                     is, at any offset: #[repr(C, packed)]\");\n",
+                ty = a.ty, arm = a.name))
+            .collect();
+        return with_defs(defs, name, &format!(
+            "{storage}\
+             const _: () = {vs}::assert_plain::<{head}>();\n\
+             const _: () = assert!(::core::mem::align_of::<{head}>() == 1,\n\
+                 \"tagged_union! {name}: its head has an alignment - it's read where it is, \
+                 at any offset: #[repr(C, packed)]\");\n\
+             {asserts}\
+             \n\
+             /// One of {name}'s arms, by value, as long as it is - the variant is\n\
+             /// the tag: what read() gives, and write() writes, its arm's own\n\
+             /// {tag} with it.\n\
+             #[allow(non_camel_case_types, dead_code)]\n\
+             #[derive(Clone, Copy)]\n\
+             {vis} enum {en} {{\n{by_value}}}\n\
+             \n\
+             impl {en} {{\n\
+                 fn tag_raw(&self) -> {tag_ty} {{\n\
+                     match self {{\n{tags}}}\n\
+                 }}\n\
+                 \n\
+                 fn arm_bytes(&self) -> &[u8] {{\n\
+                     match self {{\n{arm_bytes}}}\n\
+                 }}\n\
+                 \n\
+                 /// Its tag: its variant's.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn {tag}(&self) -> {tag_enum} {{\n\
+                     {tag_enum}(self.tag_raw() as _)\n\
+                 }}\n\
+                 \n\
+                 /// Its head, which every arm starts with: the fields they share.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn head(&self) -> {head} {{\n\
+                     *{vs}::cast_plain(self.arm_bytes()).expect(\"an arm starts with the head\")\n\
+                 }}\n\
+                 \n\
+                 /// Its arm's name.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn name(&self) -> &'static str {{\n\
+                     match self {{\n{names}}}\n\
+                 }}\n\
+                 \n\
+                 /// Write it at the start of @out - its arm's bytes, then its tag,\n\
+                 /// last, as a sized union's new() marks it - and give back the rest\n\
+                 /// of @out. Panics if @out is shorter than it: bytes() sizes @out.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn write<'o>(&self, out: &'o mut [u8]) -> &'o mut [u8] {{\n\
+                     let b = self.arm_bytes();\n\
+                     let (to, rest) = out.split_at_mut(b.len());\n\
+                     to.copy_from_slice(b);\n\
+                     {det}::set({vs}::cast_plain_mut(to).expect(\"an arm starts with the head\"),\n\
+                                self.tag_raw());\n\
+                     rest\n\
+                 }}\n\
+                 \n\
+                 /// The values @b holds, one after another: ArmWalk.\n\
+                 #[allow(dead_code)]\n\
+                 {vis} fn walk(b: &[u8]) -> {vs}::ArmWalk<'_, Self> {{\n\
+                     {vs}::ArmWalk::new(b)\n\
+                 }}\n\
+             }}\n\
+             \n\
+             impl {vs}::ArmSized for {en} {{\n\
+                 type Tag = {tag_enum};\n\
+                 \n\
+                 fn read(b: &[u8]) -> Result<Self, {vs}::ArmError<{tag_enum}>> {{\n\
+                     let Some(h) = {vs}::cast_plain::<{head}>(b) else {{\n\
+                         return Err({vs}::ArmError::Short({vs}::VStructError::Overrun {{\n\
+                             ty:   ::core::any::type_name::<{head}>(),\n\
+                             want: ::core::mem::size_of::<{head}>(),\n\
+                             have: b.len(),\n\
+                         }}));\n\
+                     }};\n\
+                     let t: {tag_ty} = {det}::get(h);\n\
+                     {reads}\
+                     Err({vs}::ArmError::Unknown({tag_enum}(t as _)))\n\
+                 }}\n\
+                 \n\
+                 fn bytes(&self) -> usize {{\n\
+                     match self {{\n{sizes}}}\n\
+                 }}\n\
+             }}\n"));
+    }
 
     if tu.size == CTaggedSize::Header {
         // An unsized vstruct, its arms running past its header as far as its
