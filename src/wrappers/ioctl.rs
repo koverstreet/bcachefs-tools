@@ -14,7 +14,7 @@ use std::os::fd::{AsFd, AsRawFd};
 
 pub use bcachefs_kernel::cstructs::bcachefs_ioctl::*;
 pub use bcachefs_kernel::util::ioctl::Ioctl;
-use bcachefs_kernel::util::vstructs::{from_bytes, from_bytes_mut, read_past, CountedFfi, FlexArray, Plain, VStructError};
+use bcachefs_kernel::util::vstructs::{from_bytes, from_bytes_mut, plain_bytes, plain_bytes_mut, read_past, CountedFfi, FlexArray, Plain, VStructError};
 
 fn ret(r: libc::c_int) -> io::Result<i32> {
     if r < 0 {
@@ -102,8 +102,7 @@ impl<H> IoctlBuf<H> {
 
     /// The whole buffer.
     fn bytes(&self) -> &[u8] {
-        // SAFETY: u64s, which any bytes are
-        unsafe { std::slice::from_raw_parts(self.buf.as_ptr().cast(), self.buf.len() * 8) }
+        plain_bytes(&self.buf[..])
     }
 
     pub fn hdr(&self) -> &H {
@@ -161,9 +160,7 @@ impl<H: CountedFfi> IoctlBuf<H> {
     /// get(), to fill in its array, having set the header's count: the
     /// count is the buffer's to set, through hdr_mut().
     pub fn get_mut(&mut self) -> Result<&mut H::Unvalidated, VStructError> {
-        // SAFETY: u64s, which any bytes are
-        let bytes = unsafe { std::slice::from_raw_parts_mut(self.buf.as_mut_ptr().cast(), self.buf.len() * 8) };
-        from_bytes_mut::<H::Unvalidated>(bytes)
+        from_bytes_mut::<H::Unvalidated>(plain_bytes_mut(&mut self.buf[..]))
     }
 }
 
@@ -179,10 +176,7 @@ mod tests {
     fn reply(nr: u32, stride: usize) -> IoctlBuf<Query> {
         let mut buf = IoctlBuf::<Query>::new(4);
         buf.hdr_mut().nr = nr;
-        // SAFETY: u64s, which any bytes are
-        let bytes: &mut [u8] = unsafe {
-            std::slice::from_raw_parts_mut(buf.buf.as_mut_ptr().cast(), buf.buf.len() * 8)
-        };
+        let bytes = plain_bytes_mut(&mut buf.buf[..]);
         for i in 0..nr as usize {
             let at = Query::TAIL + i * stride;
             bytes[at..at + stride].fill(0xff);

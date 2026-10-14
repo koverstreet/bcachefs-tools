@@ -94,6 +94,7 @@ macro_rules! plain {
 }
 plain!(u8, u16, u32, u64, u128, i8, i16, i32, i64, i128);
 unsafe impl<T: Plain, const N: usize> Plain for [T; N] {}
+unsafe impl<T: Plain> Plain for [T] {}
 
 // zerocopy's byte order integers: an integer's bytes, any of which are one
 macro_rules! plain_byteorder {
@@ -789,11 +790,18 @@ pub fn cast_plain_mut<T: Plain>(b: &mut [u8]) -> Option<&mut T> {
         .then(|| unsafe { &mut *b.as_mut_ptr().cast::<T>() })
 }
 
-/// A sized Plain @v's bytes, every one - to write it into bytes that
-/// needn't be aligned for it.
-pub fn plain_bytes<T: Plain>(v: &T) -> &[u8] {
+/// A Plain @v's bytes, every one - to write it into bytes that needn't be
+/// aligned for it; or a slice's, to read records out of a buffer of u64s.
+pub fn plain_bytes<T: Plain + ?Sized>(v: &T) -> &[u8] {
     // SAFETY: Plain - every byte a field's
-    unsafe { core::slice::from_raw_parts((v as *const T).cast(), size_of::<T>()) }
+    unsafe { core::slice::from_raw_parts((v as *const T).cast(), size_of_val(v)) }
+}
+
+/// plain_bytes(), to write: any bytes written are a Plain value.
+pub fn plain_bytes_mut<T: Plain + ?Sized>(v: &mut T) -> &mut [u8] {
+    let len = size_of_val(v);
+    // SAFETY: Plain - every byte a field's, and any bytes a value
+    unsafe { core::slice::from_raw_parts_mut((v as *mut T).cast(), len) }
 }
 
 /// @v's bytes, every one: what its reference reaches - T::as_bytes().
@@ -1295,11 +1303,8 @@ mod tests {
 
     /// @v's bytes, at @at in @buf.
     fn put<T: Plain>(buf: &mut [u64], at: usize, v: &T) {
-        // SAFETY: Plain - every byte of it is a field's
-        let b = unsafe { core::slice::from_raw_parts((v as *const T).cast::<u8>(), size_of::<T>()) };
-        // SAFETY: u64s, which any bytes are
-        let dst = unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<u8>(), buf.len() * 8) };
-        dst[at..at + b.len()].copy_from_slice(b);
+        let b = plain_bytes(v);
+        plain_bytes_mut(buf)[at..at + b.len()].copy_from_slice(b);
     }
 
     fn bytes(buf: &[u64]) -> &[u8] {
@@ -1489,11 +1494,6 @@ mod tests {
         buf
     }
 
-    fn bytes_mut(buf: &mut [u64]) -> &mut [u8] {
-        // SAFETY: u64s, which any bytes are
-        unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), buf.len() * 8) }
-    }
-
     /// The fields an older, shorter version has read as they are; the ones
     /// it lacks, as zero.
     #[test]
@@ -1527,7 +1527,7 @@ mod tests {
     #[test]
     fn view_set_past_the_end_errors() {
         let mut short = grown(3);
-        let mut v = ViewMut::<Grown>::new(bytes_mut(&mut short));
+        let mut v = ViewMut::<Grown>::new(plain_bytes_mut(&mut short[..]));
         v.old().set([20, 30]).unwrap();
         assert_eq!(v.get().old, [Le64::new(20), Le64::new(30)]);
 
