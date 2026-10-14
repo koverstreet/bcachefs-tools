@@ -237,13 +237,24 @@ pub fn get_trans(
     name:   &OsStr,
     buffer: Option<&mut [u8]>,
 ) -> Result<usize, BchError> {
-    let hash_info = str_hash::hash_info_init(t.fs(), inode)?;
-    let search = search_key(type_ as u32, name);
-
     let mut iter = BtreeIter::uninit();
-    let k = str_hash::lookup::<Xattrs>(t, &mut iter, &hash_info, inum, &search,
-                                       BtreeIterFlags::empty())?;
+    let k = lookup(t, &mut iter, inode, inum, type_, name, BtreeIterFlags::empty())?;
     copy_out(buffer, value(k))
+}
+
+/// Xattr @name of @type_ on inode @inode (@inum), @iter pointed at it:
+/// ENOENT if there's no such xattr.
+pub fn lookup<'i, 't>(
+    t:     &'i TransAttempt<'_, 't>,
+    iter:  &'i mut BtreeIter<'t>,
+    inode: &c::bch_inode_unpacked,
+    inum:  c::subvol_inum,
+    type_: u8,
+    name:  &OsStr,
+    flags: BtreeIterFlags,
+) -> Result<BkeySC<'i>, BchError> {
+    let hash_info = str_hash::hash_info_init(t.fs(), inode)?;
+    str_hash::lookup::<Xattrs>(t, iter, &hash_info, inum, &search_key(type_ as u32, name), flags)
 }
 
 /// @v into @buffer, if there is one - getxattr's: its length, or ERANGE if
