@@ -94,9 +94,9 @@ pub fn add(trans: &BtreeTrans<'_>, pos: &c::disk_accounting_pos, d: &[i64], gc: 
     let d_ptr = d.as_ptr() as *mut i64;
     ret_to_result(unsafe {
         if gc {
-            c::bch2_disk_accounting_mod_gc(trans.raw(), acc.as_ffi_mut(), d_ptr, d.len() as u32)
+            c::bch2_disk_accounting_mod_gc(trans.raw(), &raw mut acc, d_ptr, d.len() as u32)
         } else {
-            c::bch2_disk_accounting_mod_normal(trans.raw(), acc.as_ffi_mut(), d_ptr, d.len() as u32)
+            c::bch2_disk_accounting_mod_normal(trans.raw(), &raw mut acc, d_ptr, d.len() as u32)
         }
     })
 }
