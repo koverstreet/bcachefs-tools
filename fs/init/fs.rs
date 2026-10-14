@@ -57,6 +57,16 @@ pub struct Fs {
     pub raw: *mut c::bch_fs,
 }
 
+/// bch_fs's members, as `fs.snapshots` - the syntax they keep as they become
+/// Rust types.
+impl core::ops::Deref for Fs {
+    type Target = c::bch_fs;
+
+    fn deref(&self) -> &c::bch_fs {
+        unsafe { &*self.raw }
+    }
+}
+
 #[derive(Copy, Clone)]
 pub struct BorrowedFs(*mut c::bch_fs);
 

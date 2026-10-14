@@ -25,8 +25,8 @@ struct Table<'g> {
 
 impl<'g> Table<'g> {
     /// Valid while @g's section is open.
-    fn get(fs: &Fs, g: &'g rcu::ReadGuard) -> Self {
-        let t = unsafe { rcu::dereference(&raw const (*fs.raw).snapshots.table, g) };
+    fn get(snapshots: &c::bch_fs_snapshots, g: &'g rcu::ReadGuard) -> Self {
+        let t = unsafe { rcu::dereference(&raw const snapshots.table, g) };
         Table { t, _g: PhantomData }
     }
 
@@ -50,20 +50,164 @@ impl<'g> Table<'g> {
     }
 }
 
-pub fn parent(fs: &Fs, id: u32) -> Option<u32> {
-    let g = rcu::read_lock();
-    match Table::get(fs, &g).parent(id) {
-        0      => None,
-        parent => Some(parent),
+impl c::bch_fs_snapshots {
+    /// The bch_fs these are in, for the C that takes it.
+    fn c(&self) -> *mut c::bch_fs {
+        unsafe {
+            (self as *const Self).byte_sub(core::mem::offset_of!(c::bch_fs, snapshots))
+                .cast::<c::bch_fs>().cast_mut()
+        }
     }
-}
 
-/// If @id is an interior node an interrupted deletion left, the live snapshot
-/// it collapses into.
-pub fn redundant_interior(fs: &Fs, id: u32) -> Option<u32> {
-    match unsafe { c::bch2_snapshot_redundant_interior(fs.raw, id) } {
-        0 => None,
-        terminal => Some(terminal),
+    /// The filesystem these are in, whose errors they throw.
+    fn fs(&self) -> core::mem::ManuallyDrop<Fs> {
+        unsafe { Fs::borrow_raw(self.c()) }
+    }
+
+    pub fn parent(&self, id: u32) -> Option<u32> {
+        let g = rcu::read_lock();
+        match Table::get(self, &g).parent(id) {
+            0      => None,
+            parent => Some(parent),
+        }
+    }
+
+    /// If @id is an interior node an interrupted deletion left, the live snapshot
+    /// it collapses into.
+    pub fn redundant_interior(&self, id: u32) -> Option<u32> {
+        match unsafe { c::bch2_snapshot_redundant_interior(self.c(), id) } {
+            0 => None,
+            terminal => Some(terminal),
+        }
+    }
+
+    /// By parent pointers, before the ancestor bitmaps are built.
+    pub fn is_ancestor_early(&self, id: u32, ancestor: u32) -> bool {
+        unsafe { c::bch2_snapshot_is_ancestor_early(self.c(), id, ancestor) }
+    }
+
+    pub fn has_children(&self, id: u32) -> bool {
+        let g = rcu::read_lock();
+        Table::get(self, &g).entry(id).is_some_and(|s| (s.children[0] | s.children[1]) != 0)
+    }
+
+    /// An error if there's no such snapshot.
+    pub fn is_leaf(&self, id: u32) -> Result<bool, BchError> {
+        let first_child = {
+            let g = rcu::read_lock();
+            Table::get(self, &g).entry(id).map(|s| s.children[0])
+        };
+        match first_child {
+            Some(child) => Ok(child == 0),
+            None        => self.fs().throw(bch_errcode::BCH_ERR_invalid_snapshot_node),
+        }
+    }
+
+    /// 0 if there's no such snapshot.
+    pub fn tree(&self, id: u32) -> u32 {
+        let g = rcu::read_lock();
+        Table::get(self, &g).entry(id).map_or(0, |s| s.tree)
+    }
+
+    pub fn root(&self, mut id: u32) -> u32 {
+        let g = rcu::read_lock();
+        let t = Table::get(self, &g);
+        loop {
+            match t.parent(id) {
+                0      => return id,
+                parent => id = parent,
+            }
+        }
+    }
+
+    pub fn id_state(&self, id: u32) -> c::snapshot_id_state {
+        let g = rcu::read_lock();
+        Table::get(self, &g).entry(id).map_or(c::snapshot_id_state::SNAPSHOT_ID_empty, |s| s.state)
+    }
+
+    /// Of a child of @parent; 0 for no parent. Panics if @parent isn't in the
+    /// table, rather than have repair write a wrong depth.
+    pub fn depth(&self, parent: u32) -> u32 {
+        if parent == 0 {
+            return 0;
+        }
+        let g = rcu::read_lock();
+        let s = Table::get(self, &g).entry(parent)
+            .unwrap_or_else(|| panic!("snapshot depth: parent {parent} not in the table"));
+        s.depth + 1
+    }
+
+    /// For a skiplist entry: @id itself for a root, 0 for 0.
+    pub fn skiplist_get(&self, id: u32) -> u32 {
+        unsafe { c::bch2_snapshot_skiplist_get(self.c(), id) }
+    }
+
+    /// The lowest numbered subvolume in @root's subtree.
+    pub fn oldest_subvol(&self, root: u32) -> Option<u32> {
+        match unsafe { c::bch2_snapshot_oldest_subvol(self.c(), root) } {
+            0 => None,
+            subvol => Some(subvol),
+        }
+    }
+
+    /// The unique live node claiming an edge with @id - as its parent if @parent,
+    /// else as its child - other than those @s points at. None if none or several.
+    pub fn table_find_edge(&self, s: &Ffi<c::bch_snapshot>, id: u32, parent: bool) -> Option<u32> {
+        match unsafe { c::bch2_snapshot_table_find_edge(self.c(), s, id, parent) } {
+            0 => None,
+            n => Some(n),
+        }
+    }
+
+    /// For node @id, about to be created.
+    pub fn table_make_room(&self, id: u32) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::bch2_snapshot_table_make_room(self.c(), id) })
+    }
+
+    /// Have the table rebuilt from the btree, after repairs it doesn't track:
+    /// see table_rebuild_if_needed().
+    pub fn set_need_table_rebuild(&self) {
+        unsafe { (*self.c()).snapshots.need_table_rebuild = true }
+    }
+
+    /// @id, or the live snapshot it collapses into if it's dead. An error if the
+    /// tree is damaged on the way.
+    pub fn live_descendent(&self, mut id: u32) -> Result<Option<u32>, BchError> {
+        let err = {
+            let g = rcu::read_lock();
+            let t = Table::get(self, &g);
+            loop {
+                let Some(s) = t.entry(id) else {
+                    break bch_errcode::BCH_ERR_invalid_snapshot_node;
+                };
+                if s.state == c::snapshot_id_state::SNAPSHOT_ID_live {
+                    return Ok(Some(id));
+                }
+                // deleted nodes are single-child
+                if s.children[1] != 0 {
+                    break bch_errcode::BCH_ERR_snapshot_multiple_descendents;
+                }
+                if s.children[0] == 0 {
+                    return Ok(None);
+                }
+                id = s.children[0];
+            }
+        };
+        self.fs().throw(err)
+    }
+
+    /// Keys and sectors accounted to @id across the snapshotted btrees, broken
+    /// down per btree into @breakdown.
+    pub fn accounting_totals(&self, id: u32, breakdown: Option<&mut Printbuf>)
+        -> Result<(u64, u64), BchError>
+    {
+        let (mut keys, mut sectors) = (0, 0);
+        let out = breakdown.map_or(core::ptr::null_mut(), |b| b.as_raw() as *mut _);
+        ret_to_result_void(unsafe {
+            c::bch2_snapshot_accounting_totals(self.c(), id, &mut keys, &mut sectors,
+                                               core::ptr::null_mut(), out)
+        })?;
+        Ok((keys, sectors))
     }
 }
 
@@ -71,95 +215,6 @@ pub fn redundant_interior(fs: &Fs, id: u32) -> Option<u32> {
 pub fn is_ancestor(trans: &BtreeTrans<'_>, id: u32, ancestor: u32) -> bool {
     debug_assert!(id != 0 && ancestor != 0);
     id == ancestor || unsafe { c::__bch2_snapshot_is_ancestor(trans.raw(), id, ancestor) }
-}
-
-/// By parent pointers, before the ancestor bitmaps are built.
-pub fn is_ancestor_early(fs: &Fs, id: u32, ancestor: u32) -> bool {
-    unsafe { c::bch2_snapshot_is_ancestor_early(fs.raw, id, ancestor) }
-}
-
-pub fn has_children(fs: &Fs, id: u32) -> bool {
-    let g = rcu::read_lock();
-    Table::get(fs, &g).entry(id).is_some_and(|s| (s.children[0] | s.children[1]) != 0)
-}
-
-/// An error if there's no such snapshot.
-pub fn is_leaf(fs: &Fs, id: u32) -> Result<bool, BchError> {
-    let first_child = {
-        let g = rcu::read_lock();
-        Table::get(fs, &g).entry(id).map(|s| s.children[0])
-    };
-    match first_child {
-        Some(child) => Ok(child == 0),
-        None        => fs.throw(bch_errcode::BCH_ERR_invalid_snapshot_node),
-    }
-}
-
-/// 0 if there's no such snapshot.
-pub fn tree(fs: &Fs, id: u32) -> u32 {
-    let g = rcu::read_lock();
-    Table::get(fs, &g).entry(id).map_or(0, |s| s.tree)
-}
-
-pub fn root(fs: &Fs, mut id: u32) -> u32 {
-    let g = rcu::read_lock();
-    let t = Table::get(fs, &g);
-    loop {
-        match t.parent(id) {
-            0      => return id,
-            parent => id = parent,
-        }
-    }
-}
-
-pub fn id_state(fs: &Fs, id: u32) -> c::snapshot_id_state {
-    let g = rcu::read_lock();
-    Table::get(fs, &g).entry(id).map_or(c::snapshot_id_state::SNAPSHOT_ID_empty, |s| s.state)
-}
-
-/// Of a child of @parent; 0 for no parent. Panics if @parent isn't in the
-/// table, rather than have repair write a wrong depth.
-pub fn depth(fs: &Fs, parent: u32) -> u32 {
-    if parent == 0 {
-        return 0;
-    }
-    let g = rcu::read_lock();
-    let s = Table::get(fs, &g).entry(parent)
-        .unwrap_or_else(|| panic!("snapshot depth: parent {parent} not in the table"));
-    s.depth + 1
-}
-
-/// For a skiplist entry: @id itself for a root, 0 for 0.
-pub fn skiplist_get(fs: &Fs, id: u32) -> u32 {
-    unsafe { c::bch2_snapshot_skiplist_get(fs.raw, id) }
-}
-
-/// The lowest numbered subvolume in @root's subtree.
-pub fn oldest_subvol(fs: &Fs, root: u32) -> Option<u32> {
-    match unsafe { c::bch2_snapshot_oldest_subvol(fs.raw, root) } {
-        0 => None,
-        subvol => Some(subvol),
-    }
-}
-
-/// The unique live node claiming an edge with @id - as its parent if @parent,
-/// else as its child - other than those @s points at. None if none or several.
-pub fn table_find_edge(fs: &Fs, s: &Ffi<c::bch_snapshot>, id: u32, parent: bool) -> Option<u32> {
-    match unsafe { c::bch2_snapshot_table_find_edge(fs.raw, s, id, parent) } {
-        0 => None,
-        n => Some(n),
-    }
-}
-
-/// For node @id, about to be created.
-pub fn table_make_room(fs: &Fs, id: u32) -> Result<(), BchError> {
-    ret_to_result_void(unsafe { c::bch2_snapshot_table_make_room(fs.raw, id) })
-}
-
-/// Have the table rebuilt from the btree, after repairs it doesn't track:
-/// see table_rebuild_if_needed().
-pub fn set_need_table_rebuild(fs: &Fs) {
-    unsafe { (*fs.raw).snapshots.need_table_rebuild = true }
 }
 
 /// If repairs asked for it.
@@ -170,46 +225,6 @@ pub fn table_rebuild_if_needed(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     ret_to_result_void(unsafe { c::bch2_snapshot_table_rebuild(trans.raw()) })
 }
 
-/// @id, or the live snapshot it collapses into if it's dead. An error if the
-/// tree is damaged on the way.
-pub fn live_descendent(fs: &Fs, mut id: u32) -> Result<Option<u32>, BchError> {
-    let err = {
-        let g = rcu::read_lock();
-        let t = Table::get(fs, &g);
-        loop {
-            let Some(s) = t.entry(id) else {
-                break bch_errcode::BCH_ERR_invalid_snapshot_node;
-            };
-            if s.state == c::snapshot_id_state::SNAPSHOT_ID_live {
-                return Ok(Some(id));
-            }
-            // deleted nodes are single-child
-            if s.children[1] != 0 {
-                break bch_errcode::BCH_ERR_snapshot_multiple_descendents;
-            }
-            if s.children[0] == 0 {
-                return Ok(None);
-            }
-            id = s.children[0];
-        }
-    };
-    fs.throw(err)
-}
-
-/// Keys and sectors accounted to @id across the snapshotted btrees, broken
-/// down per btree into @breakdown.
-pub fn accounting_totals(fs: &Fs, id: u32, breakdown: Option<&mut Printbuf>)
-    -> Result<(u64, u64), BchError>
-{
-    let (mut keys, mut sectors) = (0, 0);
-    let out = breakdown.map_or(core::ptr::null_mut(), |b| b.as_raw() as *mut _);
-    ret_to_result_void(unsafe {
-        c::bch2_snapshot_accounting_totals(fs.raw, id, &mut keys, &mut sectors,
-                                           core::ptr::null_mut(), out)
-    })?;
-    Ok((keys, sectors))
-}
-
 /// The snapshots that have overwritten the key at @pos in @btree: on each
 /// branch, the one closest to @pos.snapshot.
 pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
@@ -218,7 +233,7 @@ pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
     let trans: &BtreeTrans<'_> = t;
     let mut ids = KVVec::new();
 
-    if !has_children(trans.fs(), pos.snapshot) {
+    if !trans.fs().snapshots.has_children(pos.snapshot) {
         return Ok(ids);
     }
 
@@ -258,7 +273,7 @@ pub fn check_key_has_snapshot(
     iter:  &BtreeIter<'_>,
     k:     BkeySC<'_>,
 ) -> Result<bool, BchError> {
-    if id_state(trans.fs(), k.k.p.snapshot) == c::snapshot_id_state::SNAPSHOT_ID_live {
+    if trans.fs().snapshots.id_state(k.k.p.snapshot) == c::snapshot_id_state::SNAPSHOT_ID_live {
         return Ok(false);
     }
     // SAFETY: BtreeIter holds its iterator in an UnsafeCell, and nothing else

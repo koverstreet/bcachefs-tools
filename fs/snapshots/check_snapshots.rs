@@ -116,7 +116,7 @@ fn tree_master_subvol(t: &TransAttempt<'_, '_>, root: u32) -> Result<Option<u32>
         return Ok(found);
     }
 
-    let Some(oldest) = snapshot::oldest_subvol(fs, root) else { return Ok(None) };
+    let Some(oldest) = fs.snapshots.oldest_subvol(root) else { return Ok(None) };
     let Some(mut u) = t.bkey_get_mut(c::btree_id::subvolumes, pos(0, oldest as u64),
                                      BtreeIterFlags::empty(), UpdateTriggerFlags::empty(),
                                      c::bch_bkey_type::KEY_TYPE_subvolume,
@@ -147,7 +147,7 @@ fn check_snapshot_tree<'t>(
 
     let bad = match &root {
         Err(_) => true,
-        Ok(r)  => root_id != snapshot::root(fs, root_id) || k.k.p.offset as u32 != r.v.tree(),
+        Ok(r)  => root_id != fs.snapshots.root(root_id) || k.k.p.offset as u32 != r.v.tree(),
     };
     if bad {
         let mut found = Printbuf::new();
@@ -335,7 +335,7 @@ fn check_has_data<'a, 't>(
     let no_keys = state == Some(c::bch_snapshot_state::SNAPSHOT_STATE_no_keys);
 
     let mut breakdown = Printbuf::new();
-    let (keys, sectors) = snapshot::accounting_totals(fs, n.id(), Some(&mut breakdown))?;
+    let (keys, sectors) = fs.snapshots.accounting_totals(n.id(), Some(&mut breakdown))?;
 
     if !fsck_err_on!(t, keys != 0 || sectors != 0, id::snapshot_deleted_but_has_data,
                      "{} snapshot node has data accounted - {}:{}\n{}",
@@ -530,7 +530,7 @@ fn has_accounting(fs: &Fs, id: u32) -> bool {
 fn edge_repair_commit(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
     let fs = t.trans().fs();
     t.commit(None, CommitFlags::NO_ENOSPC)?;
-    snapshot::set_need_table_rebuild(fs);
+    fs.snapshots.set_need_table_rebuild();
     Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))
 }
 
@@ -608,16 +608,16 @@ fn resurrect_child(t: &TransAttempt<'_, '_>, parent_id: u32, id: u32) -> Result<
     let v = snapshot_mut(&mut n);
     v.parent    = parent_id.into();
     v.tree      = parent.v.tree;
-    v.depth     = snapshot::depth(fs, parent_id).into();
+    v.depth     = fs.snapshots.depth(parent_id).into();
     v.btime.lo  = fs.current_time().into();
     for skip in &mut v.skip {
-        *skip = snapshot::skiplist_get(fs, parent_id).into();
+        *skip = fs.snapshots.skiplist_get(parent_id).into();
     }
     v.skip.sort_unstable_by_key(|s| (*s).get());
     v.subvol    = subvol_claiming(t, id)?.unwrap_or(0).into();
     v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
 
-    snapshot::table_make_room(fs, id)?;
+    fs.snapshots.table_make_room(id)?;
     t.insert(c::btree_id::snapshots, n, UpdateTriggerFlags::empty())
 }
 
@@ -718,7 +718,7 @@ fn edge_repair(
     if let Some(o) = other.as_ref().filter(|o| o.v.state() == Some(c::bch_snapshot_state::SNAPSHOT_STATE_deleted)) {
         // A deleted node with data has a lying state, and routing around it would
         // strand the keys: undelete it, and leave our edge to its own visit.
-        let (keys, sectors) = snapshot::accounting_totals(fs, other_id, None)?;
+        let (keys, sectors) = fs.snapshots.accounting_totals(other_id, None)?;
         if keys != 0 || sectors != 0 {
             let fix = fsck_err!(t, id::snapshot_deleted_but_has_data,
                                 "snapshot {id} {ptr} pointer {other_id} is deleted but has {keys} keys, \
@@ -755,7 +755,7 @@ fn edge_repair(
     }
 
     // Or another node claims the edge and tree and depth agree - re-aim ours:
-    if let Some(repl) = snapshot::table_find_edge(fs, n.v(), id, role == Role::Child) {
+    if let Some(repl) = fs.snapshots.table_find_edge(n.v(), id, role == Role::Child) {
         if let Some(r) = lookup_node(trans, repl)? {
             if parent_child_consistent(n.v(), id, role, &r.v, repl) &&
                fsck_err!(t, id::snapshot_edge_bad,
@@ -839,7 +839,7 @@ fn check_edge<'a, 't>(
 /// root @id descends from.
 fn tree_ptr_good(trans: &BtreeTrans<'_>, id: u32, tree: u32) -> Result<bool, BchError> {
     let Some(st) = snapshot::tree_lookup(trans, tree).found()? else { return Ok(false) };
-    Ok(snapshot::is_ancestor_early(trans.fs(), id, st.root_snapshot.get()))
+    Ok(trans.fs().snapshots.is_ancestor_early(id, st.root_snapshot.get()))
 }
 
 /// Snapshot node @n's tree pointer was wrong: make sure its root's is right -
@@ -851,7 +851,7 @@ fn tree_ptr_repair<'a, 't>(
     let trans = t.trans();
     let fs = trans.fs();
     let id = n.id();
-    let root_id = snapshot::root(fs, id);
+    let root_id = fs.snapshots.root(id);
 
     let mut tree_id = if root_id == id {
         n.v().tree()
@@ -863,7 +863,7 @@ fn tree_ptr_repair<'a, 't>(
     if tree.is_none_or(|st| st.root_snapshot.get() != root_id) {
         let mut new = snapshot::tree_create(t)?;
         let v = new.k_i_mut().arm_mut::<BkeyISnapshotTree>().expect("a snapshot tree key").v_mut();
-        v.master_subvol = snapshot::oldest_subvol(fs, root_id).unwrap_or(0).into();
+        v.master_subvol = fs.snapshots.oldest_subvol(root_id).unwrap_or(0).into();
         v.root_snapshot = root_id.into();
         tree_id = new.k().p.offset as u32;
 
@@ -917,7 +917,7 @@ fn check_skiplists<'a, 't>(
         let parent_id = n.v().parent();
         let skip = (n.v().skip[i]).get();
 
-        let bad = if parent_id == 0 { skip != 0 } else { !snapshot::is_ancestor_early(fs, id, skip) };
+        let bad = if parent_id == 0 { skip != 0 } else { !fs.snapshots.is_ancestor_early(id, skip) };
         if !bad {
             continue;
         }
@@ -932,7 +932,7 @@ fn check_skiplists<'a, 't>(
         }
 
         if fsck_err!(t, id::snapshot_bad_skiplist, "{msg}")? {
-            n.v_mut(t)?.skip[i] = snapshot::skiplist_get(fs, parent_id).into();
+            n.v_mut(t)?.skip[i] = fs.snapshots.skiplist_get(parent_id).into();
         }
     }
 
@@ -1238,7 +1238,7 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     v.subvol   = subvol_claiming(t, id)?.unwrap_or(0).into();
     v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
 
-    snapshot::table_make_room(fs, id)?;
+    fs.snapshots.table_make_room(id)?;
     t.insert(c::btree_id::snapshots, n, UpdateTriggerFlags::empty())
 }
 
@@ -1247,7 +1247,7 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
 fn reconstruct_node(t: &TransAttempt<'_, '_>, id: u32, tree: &[u32]) -> Result<(), BchError> {
     let fs = t.trans().fs();
 
-    if fsck_err_on!(t, snapshot::id_state(fs, id) == IdState::SNAPSHOT_ID_empty,
+    if fsck_err_on!(t, fs.snapshots.id_state(id) == IdState::SNAPSHOT_ID_empty,
                     id::snapshot_node_missing,
                     "snapshot node {id} from tree {} missing, recreate?", IdList(tree))? {
         if tree.len() > 1 {
@@ -1341,7 +1341,7 @@ pub(crate) fn check_key_has_snapshot(
 ) -> Result<bool, BchError> {
     let trans = t.trans();
     let fs = trans.fs();
-    let state = snapshot::id_state(fs, k.k.p.snapshot);
+    let state = fs.snapshots.id_state(k.k.p.snapshot);
 
     let Some(iter) = iter else { return Ok(true) };
 
@@ -1395,7 +1395,7 @@ pub(crate) fn check_key_has_snapshot(
         // descendant still sees it by inheritance: migrate it there - deletion keeps a
         // child pointer for live_descendent() to find. An error finding it, on a
         // table just checked clean, is real damage: report it, keep the key.
-        match snapshot::live_descendent(fs, k.k.p.snapshot)? {
+        match fs.snapshots.live_descendent(k.k.p.snapshot)? {
             None => if inode_fsck_err!(trans, k.k.p, id::bkey_in_deleted_snapshot,
                                        "key in deleted snapshot {buf}, delete?")? {
                 t.delete_at_raw(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;

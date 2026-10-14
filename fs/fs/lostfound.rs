@@ -203,7 +203,7 @@ fn create_or_restore_lostfound(
     let st = snapshot::tree_lookup(trans, tree)?;
     let tree_root = st.root_snapshot.get();
 
-    let Ok(Some(root_snapshot)) = snapshot::live_descendent(fs, tree_root) else {
+    let Ok(Some(root_snapshot)) = fs.snapshots.live_descendent(tree_root) else {
         bch_err!(fs, "snapshot tree {tree} has no live snapshot, cannot create lost+found");
         return Err(fs.err(bch_errcode::BCH_ERR_ENOENT_snapshot));
     };
@@ -236,7 +236,7 @@ fn lookup_lostfound(t: &TransAttempt<'_, '_>, snapshot: u32)
 {
     let trans = t.trans();
     let fs = trans.fs();
-    let tree = snapshot::tree(fs, snapshot);
+    let tree = fs.snapshots.tree(snapshot);
 
     let subvolid = bch_err_msg!(fs, find_snapshot_tree_subvol(t, tree),
                                 "finding subvol associated with snapshot tree {tree}")?;
@@ -266,7 +266,7 @@ fn lookup_lostfound(t: &TransAttempt<'_, '_>, snapshot: u32)
     bch_err_msg!(fs,
         inode::find_by_inum_snapshot(trans, inum, snapshot, BtreeIterFlags::empty()),
         "looking up lost+found {inum}:{snapshot} in (root inode {}, snapshot root {})",
-        root_inum.inum, snapshot::root(fs, snapshot))
+        root_inum.inum, fs.snapshots.root(snapshot))
 }
 
 /// Whether @inode is unreachable and has to be reattached: no backpointer,
@@ -416,7 +416,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
 
     // Descendant versions: point those that also need reattaching at the new
     // dirent, and hide it from the rest
-    if inode.bi_subvol != 0 || snapshot::is_leaf(fs, inode.bi_snapshot)? {
+    if inode.bi_subvol != 0 || fs.snapshots.is_leaf(inode.bi_snapshot)? {
         return Ok(());
     }
 

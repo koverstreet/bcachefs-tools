@@ -36,7 +36,7 @@ use crate::snapshot_states::SUBVOLUME_STATE_VALUES;
 use crate::util::alloc::KVVec;
 use crate::types::RustOnly;
 use crate::util::ffi::Opaque;
-use crate::util::sync::{new_mutex, Mutex};
+use crate::util::sync::new_mutex;
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_notice, bkey_fsck_err_on, fs_inconsistent, fsck_err,
             fsck_err_on, fsck_err_report};
@@ -352,7 +352,7 @@ fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         }
 
         let snapshot = s.snapshot.get();
-        bkey_fsck_err_on!(v, matches!(snapshot::is_leaf(v.fs, snapshot), Ok(false)),
+        bkey_fsck_err_on!(v, matches!(v.fs.snapshots.is_leaf(snapshot), Ok(false)),
                           id::subvol_snapshot_not_leaf,
                           "snapshot {snapshot} is an interior node (subvolumes only reference leaves)")?;
     }
@@ -621,8 +621,8 @@ fn check_subvol<'a, 't>(
     }
 
     if !s.v().snap() {
-        let snapshot_root = snapshot::root(fs, s.v().snapshot());
-        let tree = snapshot::tree(fs, snapshot_root);
+        let snapshot_root = fs.snapshots.root(s.v().snapshot());
+        let tree = fs.snapshots.tree(snapshot_root);
 
         let st = match snapshot::tree_lookup(trans, tree) {
             Ok(st) => st,
@@ -814,9 +814,10 @@ fn set_deleted(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError> {
     commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| __set_deleted(t, subvol))
 }
 
-fn unlinked(fs: &Fs) -> &Mutex<KVVec<u32>> {
-    // SAFETY: bch2_fs_subvolumes_init_early() initialized it
-    unsafe { &(*fs.raw).snapshots.unlinked }
+impl c::bch_fs_snapshots {
+    fn delete_work(&self) -> &Opaque<c::work_struct> {
+        unsafe { &*(&raw const self.wait_for_pagecache_and_delete_work).cast() }
+    }
 }
 
 /// Waits for inodes still in use.
@@ -852,7 +853,7 @@ pub unsafe fn bch2_subvolume_wait_for_pagecache_and_delete(work: *mut c::work_st
     };
 
     loop {
-        let subvols = core::mem::replace(&mut *unlinked(&fs).lock(), KVVec::new());
+        let subvols = core::mem::replace(&mut *fs.snapshots.unlinked.lock(), KVVec::new());
         if subvols.is_empty() {
             break;
         }
@@ -874,7 +875,7 @@ pub fn unlink(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
         let fs = trans.fs();
 
         {
-            let mut unlinked = unlinked(fs).lock();
+            let mut unlinked = fs.snapshots.unlinked.lock();
             if !unlinked.contains(&subvol) {
                 unlinked.push(subvol, crate::util::alloc::flags::GFP_KERNEL)?;
             }
@@ -884,11 +885,7 @@ pub fn unlink(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
             fs.write_ref_tryget(c::bch_write_ref::BCH_WRITE_REF_snapshot_delete_pagecache) else {
             return Err(BchError::from(c::EROFS));
         };
-        let work = unsafe {
-            &*(&raw const (*fs.raw).snapshots.wait_for_pagecache_and_delete_work)
-                .cast::<Opaque<c::work_struct>>()
-        };
-        write_ref.queue_work(work);
+        write_ref.queue_work(fs.snapshots.delete_work());
         Ok(())
     })?;
 

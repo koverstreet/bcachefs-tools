@@ -1307,7 +1307,7 @@ fn snapshot_parent<'i, 't>(
 /// bch2_inode_has_child_snapshots(). In the caller's transaction attempt.
 pub fn has_child_snapshots(trans: &BtreeTrans<'_>, p: c::bpos) -> Result<bool, BchError> {
     // As C: if leafness can't be told, look.
-    if let Ok(true) = crate::snapshots::snapshot::is_leaf(trans.fs(), p.snapshot) {
+    if let Ok(true) = trans.fs().snapshots.is_leaf(p.snapshot) {
         return Ok(false);
     }
 
@@ -1403,7 +1403,7 @@ pub fn trigger(trans: &BtreeTrans<'_>, op: &mut TriggerOp<'_>) -> Result<(), Bch
         // has_child_snapshot flag on the parent.
         let deleted_delta = nr;
         if deleted_delta != 0 &&
-           crate::snapshots::snapshot::parent(fs, op.new.k.p.snapshot).is_some() {
+           fs.snapshots.parent(op.new.k.p.snapshot).is_some() {
             update_parent_has_children(&t, op.new.k.p, deleted_delta > 0)?;
         }
 

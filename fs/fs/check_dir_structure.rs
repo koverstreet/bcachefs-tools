@@ -31,7 +31,7 @@ use crate::errcode::{bch_errcode, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::init::progress::Progress;
-use crate::snapshots::{snapshot, subvolume};
+use crate::snapshots::subvolume;
 use crate::dirent::{self, Dirent};
 use crate::{inode, lostfound, namei};
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
@@ -240,7 +240,7 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
     // the live descendant's view: an interrupted collapse moved the dirents and
     // parents down there, and a half-moved dirent would read as unreachable.
     // No-op on a healthy fs.
-    if let Some(terminal) = snapshot::redundant_interior(fs, snapshot) {
+    if let Some(terminal) = fs.snapshots.redundant_interior(snapshot) {
         snapshot = terminal;
     }
 

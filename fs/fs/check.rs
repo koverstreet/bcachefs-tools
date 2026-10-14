@@ -281,7 +281,7 @@ impl InodeWalker {
         let trans = t.trans();
         let fs = trans.fs();
         let snapshot = k.k.p.snapshot;
-        let k_snapshot = snapshot::redundant_interior(fs, snapshot).unwrap_or(snapshot);
+        let k_snapshot = fs.snapshots.redundant_interior(snapshot).unwrap_or(snapshot);
 
         let Some(i) = self.inodes.iter()
             .position(|i| snapshot::is_ancestor(trans, k_snapshot, i.inode.bi_snapshot)) else {
@@ -289,7 +289,7 @@ impl InodeWalker {
         };
 
         let e = self.inodes[i];
-        let inode_snapshot = snapshot::redundant_interior(fs, e.inode.bi_snapshot)
+        let inode_snapshot = fs.snapshots.redundant_interior(e.inode.bi_snapshot)
             .unwrap_or(e.inode.bi_snapshot);
 
         if !fsck_err_on!(trans, k_snapshot != inode_snapshot, id::snapshot_key_missing_inode_snapshot,
@@ -666,7 +666,7 @@ pub fn reconstruct_subvol_root(
     let trans: &BtreeTrans<'_> = t;
     let fs = trans.fs();
 
-    if !snapshot::is_leaf(fs, snapshot)? {
+    if !fs.snapshots.is_leaf(snapshot)? {
         bch_err!(fs, "need to reconstruct subvol {subvol}, but snapshot {snapshot} is an interior node");
         return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented));
     }

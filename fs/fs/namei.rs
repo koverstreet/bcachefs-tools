@@ -38,7 +38,7 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::inode;
 use crate::opts::reinherit_attrs;
-use crate::snapshots::{snapshot, subvolume};
+use crate::snapshots::subvolume;
 use crate::str_hash;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::ffi::Opaque;
@@ -777,7 +777,7 @@ pub fn inode_get_dirent<'i, 't>(
     // may have been moved to a child snapshot (when cleaning up redundant
     // interior node snapshots) but not the inode - do the lookup in the
     // child snapshot we'll be moving to:
-    *snapshot = snapshot::redundant_interior(t.fs(), *snapshot).unwrap_or(*snapshot);
+    *snapshot = t.fs().snapshots.redundant_interior(*snapshot).unwrap_or(*snapshot);
 
     *iter = BtreeIter::new(t, c::btree_id::dirents,
                            spos(inode.bi_dir, inode.bi_dir_offset, *snapshot),
