@@ -182,8 +182,7 @@ mod vfs {
     use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                              TransAttempt, TransBkey, UpdateTriggerFlags};
     use crate::c;
-    use crate::errcode::{bch_errcode, errptr_to_result, ret_to_c,
-                         ret_to_result_void as ret_to_result, BchError};
+    use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void as ret_to_result, BchError};
     use crate::inode;
     use crate::snapshots::subvolume;
     use crate::str_hash;
@@ -218,9 +217,10 @@ mod vfs {
         /// An ACL of @nr entries, to be filled in: unlocking @t to allocate
         /// if it has to - a restart then.
         fn alloc(t: &TransAttempt<'_, '_>, nr: u32) -> Result<PosixAcl, BchError> {
-            let acl = errptr_to_result(unsafe { c::rust_posix_acl_alloc(t.raw(), nr) })?;
-            NonNull::new(acl).map(PosixAcl)
-                .ok_or_else(|| t.fs().err(bch_errcode::BCH_ERR_ENOMEM_acl))
+            let acl = t.allocate_dropping_locks(|gfp| {
+                NonNull::new(unsafe { c::posix_acl_alloc(nr, gfp) }).map(PosixAcl)
+            })?;
+            acl.ok_or_else(|| t.fs().err(bch_errcode::BCH_ERR_ENOMEM_acl))
         }
 
         /// @acl, which the caller holds a reference on - None for NULL.
@@ -261,18 +261,29 @@ mod vfs {
         /// a new one, as __posix_acl_chmod() makes, unlocking @t to allocate
         /// if it has to.
         fn chmod(self, t: &TransAttempt<'_, '_>, mode: c::umode_t) -> Result<PosixAcl, BchError> {
-            let mut acl = self.into_raw();
-            let ret = t.result(unsafe { c::rust_posix_acl_chmod(t.raw(), &mut acl, mode) });
-            // Ours, whatever happened - so released, on error:
-            let acl = NonNull::new(acl).map(PosixAcl);
-            ret?;
-            Ok(acl.expect("posix_acl_chmod() succeeded without an ACL"))
+            t.allocate_dropping_locks_errcode(|gfp| {
+                // __posix_acl_chmod() consumes the reference it's given -
+                // failing too - so each try gets its own:
+                let mut acl = self.clone().into_raw();
+                let ret = ret_to_result(unsafe { c::__posix_acl_chmod(&mut acl, gfp, mode) });
+                let acl = NonNull::new(acl).map(PosixAcl);
+                ret?;
+                Ok(acl.expect("__posix_acl_chmod() succeeded without an ACL"))
+            })
         }
 
         /// Cache this - or None, for no ACL - as @v's ACL of @ty.
         fn set_cached(acl: Option<&PosixAcl>, v: &InodeInfo<'_>, ty: AclType) {
             let acl = acl.map_or(core::ptr::null_mut(), PosixAcl::as_raw);
             unsafe { c::rust_set_cached_acl(v.vinode(), ty as c_int, acl) }
+        }
+    }
+
+    /// Another reference: posix_acl_dup().
+    impl Clone for PosixAcl {
+        fn clone(&self) -> Self {
+            PosixAcl(NonNull::new(unsafe { c::rust_posix_acl_dup(self.as_raw()) })
+                     .expect("posix_acl_dup() of an ACL"))
         }
     }
 

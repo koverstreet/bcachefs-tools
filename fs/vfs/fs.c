@@ -3594,22 +3594,6 @@ int rust_xattr_handler_flags(const struct xattr_handler *handler)
 	return handler->flags;
 }
 
-/*
- * A posix_acl of @count entries, unlocking @trans to allocate if it has to:
- * NULL if that fails without an error to return.
- */
-struct posix_acl *rust_posix_acl_alloc(struct btree_trans *trans, unsigned count)
-{
-	int ret;
-	struct posix_acl *acl = allocate_dropping_locks(trans, ret,
-					posix_acl_alloc(count, _gfp));
-	if (ret) {
-		kfree(acl);
-		return ERR_PTR(ret);
-	}
-	return acl;
-}
-
 unsigned rust_posix_acl_count(const struct posix_acl *acl)
 {
 	return acl->a_count;
@@ -3654,6 +3638,11 @@ void rust_posix_acl_set_entry(struct posix_acl *acl, unsigned i,
 	}
 }
 
+struct posix_acl *rust_posix_acl_dup(struct posix_acl *acl)
+{
+	return posix_acl_dup(acl);
+}
+
 void rust_posix_acl_release(struct posix_acl *acl)
 {
 	posix_acl_release(acl);
@@ -3668,28 +3657,6 @@ int rust_posix_acl_update_mode(struct mnt_idmap *idmap, struct inode *inode,
 			       umode_t *mode, struct posix_acl **acl)
 {
 	return posix_acl_update_mode(idmap, inode, mode, acl);
-}
-
-/*
- * __posix_acl_chmod() consumes the ACL it's passed, failing included: each
- * attempt gets its own reference to @orig, so a retry after dropping locks
- * has something to start from.
- */
-static int posix_acl_chmod_from(struct posix_acl **acl, struct posix_acl *orig,
-				gfp_t gfp, umode_t mode)
-{
-	*acl = posix_acl_dup(orig);
-	return __posix_acl_chmod(acl, gfp, mode);
-}
-
-/* __posix_acl_chmod(), unlocking @trans to allocate if it has to: */
-int rust_posix_acl_chmod(struct btree_trans *trans, struct posix_acl **acl, umode_t mode)
-{
-	struct posix_acl *orig = *acl;
-	int ret = allocate_dropping_locks_errcode(trans,
-			posix_acl_chmod_from(acl, orig, _gfp, mode));
-	posix_acl_release(orig);
-	return ret;
 }
 
 #endif /* NO_BCACHEFS_FS */

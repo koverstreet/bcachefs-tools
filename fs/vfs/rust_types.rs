@@ -36,16 +36,16 @@ c_extern! {
     pub fn rust_xattr_handler_flags(handler: *const c::xattr_handler) -> c_int;
 
     /* posix ACLs: */
-    pub fn rust_posix_acl_alloc(trans: *mut c::btree_trans, nr: c_uint) -> *mut c::posix_acl;
+    pub fn posix_acl_alloc(count: c_uint, flags: c::gfp_t) -> *mut c::posix_acl;
     pub fn rust_posix_acl_count(acl: *const c::posix_acl) -> c_uint;
     pub fn rust_posix_acl_entry(acl: *const c::posix_acl, i: c_uint, tag: *mut u16, perm: *mut u16,
                                 id: *mut u32);
     pub fn rust_posix_acl_set_entry(acl: *mut c::posix_acl, i: c_uint, tag: u16, perm: u16,
                                     id: u32);
+    pub fn rust_posix_acl_dup(acl: *mut c::posix_acl) -> *mut c::posix_acl;
     pub fn rust_posix_acl_release(acl: *mut c::posix_acl);
     pub fn rust_set_cached_acl(inode: *mut c::inode, type_: c_int, acl: *mut c::posix_acl);
     pub fn rust_posix_acl_update_mode(idmap: *mut c::mnt_idmap, inode: *mut c::inode,
                                       mode: *mut c::umode_t, acl: *mut *mut c::posix_acl) -> c_int;
-    pub fn rust_posix_acl_chmod(trans: *mut c::btree_trans, acl: *mut *mut c::posix_acl,
-                                mode: c::umode_t) -> c_int;
+    pub fn __posix_acl_chmod(acl: *mut *mut c::posix_acl, gfp: c::gfp_t, mode: c::umode_t) -> c_int;
 }
