@@ -211,20 +211,32 @@ impl<'f> BtreeTrans<'f> {
         unsafe { c::bch2_trans_unlock_long(self.raw) };
     }
 
-    /// The static inline bch2_trans_commit(), but for journal_seq and flush,
-    /// which it leaves as they are.
     pub fn commit(
         &self,
         disk_res: Option<&DiskReservation<'_>>,
         flags: impl Into<CommitOpts>,
     ) -> Result<(), BchError> {
-        unsafe {
-            (*self.raw).disk_res = disk_res.map_or(core::ptr::null_mut(), |r| r.as_mut_ptr());
-        }
+        self.commit_inner(disk_res, flags.into(), false)
+    }
+
+    /// The static inline bch2_trans_commit(), with __bch2_trans_commit()'s
+    /// @lazy. journal_seq and flush are reset, as C's every commit does: a C
+    /// commit before ours, in the same transaction, may have left a pointer to
+    /// its stack there.
+    fn commit_inner(
+        &self,
+        disk_res: Option<&DiskReservation<'_>>,
+        flags:    CommitOpts,
+        lazy:     bool,
+    ) -> Result<(), BchError> {
         let ret = unsafe {
-            c::__bch2_trans_commit(self.raw, flags.into().to_c(), false)
+            let trans = self.raw;
+            (*trans).disk_res    = disk_res.map_or(core::ptr::null_mut(), |r| r.as_mut_ptr());
+            (*trans).journal_seq = core::ptr::null_mut();
+            (*trans).flush       = core::ptr::null_mut();
+            c::__bch2_trans_commit(trans, flags.to_c(), lazy)
         };
-        crate::errcode::ret_to_result(ret).map(|_| ())
+        ret_to_result(ret)
     }
 }
 
@@ -364,12 +376,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         disk_res: Option<&DiskReservation<'_>>,
         flags:    impl Into<CommitOpts>,
     ) -> Result<(), BchError> {
-        unsafe {
-            (*self.raw()).disk_res = disk_res.map_or(core::ptr::null_mut(), |r| r.as_mut_ptr());
-        }
-        // Not lazy: that's commit_lazy()
-        let ret = unsafe { c::__bch2_trans_commit(self.raw(), flags.into().to_c(), false) };
-        self.result(ret)
+        self.trans.commit(disk_res, flags)
     }
 
     /// Commit what's queued, if anything - and having committed, return
@@ -380,14 +387,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             return Ok(());
         }
 
-        let ret = unsafe {
-            let trans = self.raw();
-            (*trans).disk_res    = core::ptr::null_mut();
-            (*trans).journal_seq = core::ptr::null_mut();
-            (*trans).flush       = core::ptr::null_mut();
-            c::__bch2_trans_commit(trans, flags.into().to_c(), true)
-        };
-        self.result(ret)
+        self.trans.commit_inner(None, flags.into(), true)
     }
 
     /// Commit only once the transaction's memory is getting full: for a key
