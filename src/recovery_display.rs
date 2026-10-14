@@ -21,10 +21,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::Context;
 use rustix::fs::{flock, FlockOperation};
 
 use bch_bindgen::c;
-use bcachefs_kernel::util::vstructs::Unvalidated;
+use bcachefs_kernel::util::vstructs::{Unvalidated, UnvalidatedEntries};
 
 use crate::commands::fs_usage::replicas_spare_redundancy;
 use crate::thread_with_file::StatusDisplay;
@@ -133,8 +134,9 @@ impl<'a> RecoveryDisplay<'a> {
         }
 
         let line = match self.read_redundancy() {
-            Some(r) => format!("{head}, current redundancy {r}"),
-            None    => format!("{head}, redundancy unavailable"),
+            Ok(Some(r)) => format!("{head}, current redundancy {r}"),
+            Ok(None)    => format!("{head}, redundancy unavailable"),
+            Err(e)      => format!("{head}, redundancy unavailable: {e:#}"),
         };
         self.devices_line = Some(line.clone());
         line
@@ -142,13 +144,15 @@ impl<'a> RecoveryDisplay<'a> {
 
     /// How many more devices can go before some data is unreadable: the
     /// worst-off replicas entry decides, so the minimum over all of them.
-    fn read_redundancy(&self) -> Option<i32> {
-        let usage = fs_usage(self.fd).ok()?;
+    fn read_redundancy(&self) -> anyhow::Result<Option<i32>> {
+        let usage = fs_usage(self.fd).context("BCH_IOCTL_FS_USAGE")?;
+        let replicas = usage.replicas().collect::<Result<Vec<_>, _>>()
+            .context("BCH_IOCTL_FS_USAGE reply")?;
 
-        usage.replicas()
+        Ok(replicas.iter()
             .filter(|u| u.r.data_type as u32 != u32::from(data_type::cached))
             .map(|u| replicas_spare_redundancy(u.r.nr_devs, u.r.nr_required, &u.devs, &self.devs))
-            .min()
+            .min())
     }
 
     /// ENODEV is ordinary, not a failure: the ioctl only answers while a
@@ -384,17 +388,10 @@ struct FsUsage {
 
 impl FsUsage {
     /// Each entry, as long as its nr_devs says - checked against what's left
-    /// of the tail.
-    fn replicas(&self) -> impl Iterator<Item = &c::bch_replicas_usage<Unvalidated>> + '_ {
-        let mut rest = self.buf.trailing_bytes(self.bytes);
-
-        // A truncated tail is the kernel and us disagreeing about the layout;
-        // stop rather than read past what it wrote.
-        std::iter::from_fn(move || {
-            let u = c::bch_replicas_usage::<Unvalidated>::from_bytes(rest).ok()?;
-            rest = &rest[u.as_bytes().len()..];
-            Some(u)
-        })
+    /// of the tail: one that doesn't fit, the kernel and us disagreeing
+    /// about the layout, an error.
+    fn replicas(&self) -> UnvalidatedEntries<'_, c::bch_replicas_usage<Unvalidated>> {
+        UnvalidatedEntries::new(self.buf.trailing_bytes(self.bytes))
     }
 }
 
