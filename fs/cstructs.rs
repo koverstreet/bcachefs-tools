@@ -71,7 +71,7 @@
 #[path = "debug/async_objs_types.rs"] pub mod debug_async_objs_types;
 #[path = "debug/debug_types.rs"] pub mod debug_debug_types;
 #[path = "errcode_types.rs"] pub mod errcode_types;
-#[path = "fs/acl_types.rs"] pub mod fs_acl_types;
+#[path = "fs/acl_format.rs"] pub mod fs_acl_format;
 #[path = "fs/dirent_types.rs"] pub mod fs_dirent_types;
 #[path = "fs/inode_format.rs"] pub mod fs_inode_format;
 #[path = "fs/inode_opts_types.rs"] pub mod fs_inode_opts_types;
@@ -251,7 +251,7 @@ pub mod c {
     pub use super::debug_async_objs_types::*;
     pub use super::debug_debug_types::*;
     pub use super::errcode_types::*;
-    pub use super::fs_acl_types::*;
+    pub use super::fs_acl_format::*;
     pub use super::fs_dirent_types::*;
     pub use super::fs_inode_format::*;
     pub use super::fs_inode_opts_types::*;
