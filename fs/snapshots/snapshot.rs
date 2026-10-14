@@ -2,10 +2,10 @@
 
 //! Snapshots: queries of the in-memory table, and lookups in the btrees.
 
-use crate::btree::bkey::{spos, BkeyI, BkeySC, BkeyISnapshot, SizedBkey};
+use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, BkeyISnapshot, BkeyISnapshotTree, SizedBkey};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey};
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_result, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::snapshots::check_snapshots;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
@@ -253,9 +253,14 @@ pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
 }
 
 pub fn tree_lookup(trans: &BtreeTrans<'_>, id: u32) -> Result<c::bch_snapshot_tree, BchError> {
-    let mut t = c::bch_snapshot_tree::default();
-    ret_to_result(unsafe { c::bch2_snapshot_tree_lookup(trans.raw(), id, &mut t) })?;
-    Ok(t)
+    trans.attempt_in_progress()
+        .bkey_get_val::<BkeyISnapshotTree>(c::btree_id::snapshot_trees, pos(0, id as u64),
+                                           BtreeIterFlags::empty())
+        .map_err(|e| if e.matches(c::ENOENT) {
+            trans.fs().err(bch_errcode::BCH_ERR_ENOENT_snapshot_tree)
+        } else {
+            e
+        })
 }
 
 /// At an unused id, queued for the commit, for the caller to fill in.
@@ -284,16 +289,16 @@ pub fn check_key_has_snapshot(
 
 /// ENOENT if there's none.
 pub fn lookup(trans: &BtreeTrans<'_>, id: u32) -> Result<Ffi<c::bch_snapshot>, BchError> {
-    let mut s: Ffi<c::bch_snapshot> = Default::default();
-    ret_to_result(unsafe { c::bch2_snapshot_lookup(trans.raw(), id, &mut s) })?;
-    Ok(s)
+    trans.attempt_in_progress()
+        .bkey_get_val::<BkeyISnapshot>(c::btree_id::snapshots, pos(0, id as u64),
+                                       BtreeIterFlags::empty())
 }
 
 /// ENOENT if there's none.
 pub fn lookup_key(trans: &BtreeTrans<'_>, id: u32) -> Result<BkeyI<Ffi<c::bch_snapshot>>, BchError> {
-    let mut k: BkeyI<Ffi<c::bch_snapshot>> = Default::default();
-    ret_to_result(unsafe { c::bch2_snapshot_lookup_key(trans.raw(), id, &mut k) })?;
-    Ok(k)
+    trans.attempt_in_progress()
+        .bkey_get_key::<BkeyISnapshot>(c::btree_id::snapshots, pos(0, id as u64),
+                                       BtreeIterFlags::empty())
 }
 
 /// Zero padded past the fields an older key lacks.
@@ -326,8 +331,9 @@ pub fn delete_dead_key<'a, 't>(
     t.result(ret)
 }
 
-/// The state codeword nearest @v, and its Hamming distance from @v: as
-/// bch2_snapshot_state_nearest().
+/// The state codeword nearest @v and its Hamming distance - the first, on a
+/// tie. Codewords are >= 14 bits apart, so within 6 bits the nearest is the
+/// original.
 pub fn state_nearest(v: u32) -> (c::bch_snapshot_state, u32) {
     let mut best = (c::bch_snapshot_state::SNAPSHOT_STATE_live, 33);
     for s in SNAPSHOT_STATES {
@@ -392,11 +398,12 @@ impl c::bch_snapshot__ffi {
     }
 }
 
-/// As bch2_snapshot_state_str().
 impl fmt::Display for c::bch_snapshot_state {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = unsafe { core::ffi::CStr::from_ptr(c::bch2_snapshot_state_str(*self).cast()) };
-        f.write_str(s.to_str().unwrap_or("?"))
+        let name = crate::snapshot_states::SNAPSHOT_STATE_VALUES.iter()
+            .find(|(_, v)| *v == self.0 as u64)
+            .map_or("(invalid state)", |(n, _)| n);
+        f.write_str(name)
     }
 }
 

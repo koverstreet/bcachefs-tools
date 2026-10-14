@@ -25,36 +25,6 @@ static inline enum bch_subvolume_state bch2_subvolume_state_compat(const struct 
 		: bch2_subvolume_state_from_flags(s);
 }
 
-static inline bool bch2_subvolume_state_valid(enum bch_subvolume_state state)
-{
-	switch (state) {
-#define x(n, v) case SUBVOLUME_STATE_##n:
-	BCH_SUBVOLUME_STATES()
-#undef x
-		return true;
-	default:
-		return false;
-	}
-}
-
-/* Nearest-codeword decode for a corrupted state field (see snapshot.h): */
-static inline enum bch_subvolume_state
-bch2_subvolume_state_nearest(u32 v, unsigned *dist)
-{
-	enum bch_subvolume_state best = SUBVOLUME_STATE_live;
-	unsigned best_dist = 33;
-
-#define x(n, val)						\
-	if (hweight32(v ^ (val)) < best_dist) {			\
-		best_dist = hweight32(v ^ (val));		\
-		best = SUBVOLUME_STATE_##n;			\
-	}
-	BCH_SUBVOLUME_STATES()
-#undef x
-	*dist = best_dist;
-	return best;
-}
-
 #define bch2_bkey_ops_subvolume ((struct bkey_ops) {		\
 	.key_validate	= bch2_subvolume_validate,		\
 	.val_to_text	= bch2_subvolume_to_text,		\
