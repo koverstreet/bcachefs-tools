@@ -51,12 +51,16 @@ endif
 endif
 
 # rustc_cfg: the kernel's, with its CONFIG_RUSTC_HAS_* replaced by ours, at
-# init/Kconfig's thresholds. Its own mkdir: target.json's above is x86 only.
+# init/Kconfig's thresholds - and CONFIG_RUST, which a CONFIG_RUST=n kernel's
+# lacks and kernel/lib.rs refuses to build without: this describes our Rust,
+# and that's always on. Its own mkdir: target.json's above is x86 only.
 bch-vr-rustc-has := SPAN_FILE:108800 UNNECESSARY_TRANSMUTES:108800 FILE_WITH_NUL:108900 \
 	FILE_AS_C_STR:109100 SUSPICIOUS_RUNTIME_SYMBOL_DEFINITIONS:109800
 bch-rustc-cfg := $(VRD_ABS)/rustc_cfg
 $(shell mkdir -p '$(VRD_ABS)' && \
-	{ grep -v '^--cfg=CONFIG_RUSTC_' '$(objtree)/include/generated/rustc_cfg'; \
+	{ grep -v -e '^--cfg=CONFIG_RUSTC_' -e '^--cfg=CONFIG_RUST$$' \
+		'$(objtree)/include/generated/rustc_cfg'; \
+	echo --cfg=CONFIG_RUST; \
 	$(foreach h,$(bch-vr-rustc-has),$(if $(call bch-rustc-min,$(lastword $(subst :, ,$(h)))),\
 		echo --cfg=CONFIG_RUSTC_HAS_$(firstword $(subst :, ,$(h)));)) } > '$(bch-rustc-cfg)')
 
