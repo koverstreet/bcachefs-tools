@@ -55,6 +55,10 @@ impl ReconcileType {
     fn all_except_pending() -> Vec<Self> {
         Self::all().into_iter().filter(|t| *t != Self::Pending).collect()
     }
+
+    fn supply_draining() -> Vec<Self> {
+        vec![Self::Replicas, Self::Checksum, Self::Compression, Self::Stripes]
+    }
 }
 
 /// Show status of background reconciliation
@@ -177,7 +181,7 @@ fn cmd_reconcile_status(cli: StatusCli) -> Result<()> {
 fn cmd_reconcile_wait(cli: WaitCli) -> Result<()> {
 
     let (display_types, wait_types) = if cli.types.is_empty() {
-        (ReconcileType::all(), ReconcileType::all_except_pending())
+        (ReconcileType::all(), ReconcileType::supply_draining())
     } else {
         (cli.types.clone(), cli.types)
     };
