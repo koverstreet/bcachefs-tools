@@ -2545,8 +2545,12 @@ fn emit_members(def: &CStructDef, items: &[CItem],
     // Consecutive fields under the same cfg share one #if.
     let mut body = String::new();
     let mut open: Option<String> = None;
+    // whether C has a member before this one: a flexible array, x[], needs
+    // one - a struct of only x[] is an error to gcc before 15 - so with none
+    // it's x[0], as bch_val's __nothing was written
+    let mut named = false;
     for (n, f) in def.fields.iter().enumerate() {
-        let last = n + 1 == def.fields.len();
+        let last = n + 1 == def.fields.len() && named;
         let text = if f.bitfield {
             let bf = items.iter().find_map(|i| match i {
                 CItem::Bitfield(b) if b.name == f.ty.trim() => Some(b),
@@ -2612,6 +2616,7 @@ fn emit_members(def: &CStructDef, items: &[CItem],
             (Some(_), None) => return Err(format!("{}.{}: after an alignment marker, but C declares it \
                                                    so __aligned() can't follow", def.name, f.name)),
         };
+        named |= !text.is_empty();
         let cond = f.cfg.as_ref().map(Cfg::to_c).transpose()?;
         if cond != open {
             if open.is_some() {
