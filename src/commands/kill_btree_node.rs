@@ -49,7 +49,7 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::BkeySC;
 use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter};
 use bcachefs_kernel::opt_set;
-use bcachefs_kernel::util::vstructs::{Ffi, SelfSized, Unvalidated};
+use bcachefs_kernel::util::vstructs::{cast_plain, Ffi, SelfSized};
 use clap::Parser;
 
 struct KillNode {
@@ -155,7 +155,7 @@ struct BsetLoc {
 /// empty still has to be corruptible: on a freshly formatted filesystem every
 /// btree leaf is one of those, which is exactly what the spin repro formats.
 fn first_bset(node: &[u8]) -> BsetLoc {
-    let n = c::btree_node::<Unvalidated>::from_bytes(node).expect("node buffer: aligned, holding its first bset");
+    let n = cast_plain::<Ffi<c::btree_node>>(node).expect("node buffer: aligned, at least a block");
 
     BsetLoc {
         at:     std::mem::offset_of!(Ffi<c::btree_node>, keys),
@@ -170,10 +170,10 @@ fn first_bset_with_keys(node: &[u8], written_sectors: usize, block_bits: u32) ->
     while off < written_sectors * 512 {
         // where the bset is, its u64s, and its container's sectors
         let (bset_at, u64s, sectors) = if off == 0 {
-            let n = c::btree_node::<Unvalidated>::from_bytes(&node[off..]).ok()?;
+            let n = cast_plain::<Ffi<c::btree_node>>(&node[off..])?;
             (std::mem::offset_of!(Ffi<c::btree_node>, keys), n.keys.u64s(), n.sectors(block_bits))
         } else {
-            let n = c::btree_node_entry::<Unvalidated>::from_bytes(&node[off..]).ok()?;
+            let n = cast_plain::<Ffi<c::btree_node_entry>>(&node[off..])?;
             (off + std::mem::offset_of!(Ffi<c::btree_node_entry>, keys), n.keys.u64s(), n.sectors(block_bits))
         };
 
