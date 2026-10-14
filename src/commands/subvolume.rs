@@ -2,7 +2,7 @@ use std::{collections::{HashMap, HashSet}, ffi::CStr, mem, os::fd::OwnedFd,
     path::{Path, PathBuf}, process::ExitCode};
 use chrono::{Local, TimeZone};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use bch_bindgen::c::{
     BCH_SUBVOL_SNAPSHOT_RO, bch_ioctl_snapshot_node_v2,
     bch_ioctl_snapshot_tree_query, bch_ioctl_snapshot_tree_query_v2,
@@ -11,7 +11,7 @@ use bch_bindgen::c::{
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human, open_dir, subvol_root};
-use bcachefs_kernel::util::vstructs::{FlexArray, Plain};
+use bcachefs_kernel::util::vstructs::{plain_bytes, FlexArray, Plain, UnvalidatedRefEntries};
 
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::{ioctl_ptr, ioctl_rw, Ioctl, IoctlBuf,
@@ -236,13 +236,12 @@ impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query_v2 {
 }
 
 fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {
-    let buf_size = 64 * 1024u32;
     // u64s: the kernel writes each dirent at a multiple of 8 from the start,
-    // aligned for it if the buffer is
-    let mut buf = vec![0u64; buf_size as usize / 8];
+    // aligned for one if the buffer is
+    let mut buf = Box::new([0u64; (64 << 10) / 8]);
     let mut arg = bch_ioctl_subvol_readdir {
         pos: *pos,
-        buf_size,
+        buf_size: mem::size_of_val(&*buf) as u32,
         buf: buf.as_mut_ptr() as u64,
         used: 0,
         pad: 0,
@@ -252,39 +251,28 @@ fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {
         .context("BCH_IOCTL_SUBVOLUME_LIST")?;
     *pos = arg.pos;
 
-    // SAFETY: u64s are plain data, their bytes too
-    let buf: &[u8] = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast(), buf.len() * 8) };
+    let reply = plain_bytes(&*buf).get(..arg.used as usize).ok_or_else(|| {
+        anyhow!("BCH_IOCTL_SUBVOLUME_LIST: {} bytes used, of {}", arg.used, arg.buf_size)
+    })?;
 
-    let mut entries = Vec::new();
-    let mut offset = 0usize;
-    let used = (arg.used as usize).min(buf.len());
-    let hdr_size = mem::size_of::<bch_ioctl_subvol_dirent>();
+    UnvalidatedRefEntries::<bch_ioctl_subvol_dirent>::new(reply)
+        .map(|d| {
+            let d = d?;
+            let path = &d.as_bytes()[mem::offset_of!(bch_ioctl_subvol_dirent, path)..];
+            let path = CStr::from_bytes_until_nul(path)
+                .map_err(|_| anyhow!("subvolume {}: path not NUL-terminated", d.subvolid))?;
 
-    while offset + hdr_size <= used {
-        // SAFETY: in the buffer, as checked above, at a multiple of 8 into
-        // it - aligned for a dirent - and a dirent is plain data
-        let dirent = unsafe { &*(buf.as_ptr().add(offset) as *const bch_ioctl_subvol_dirent) };
-        let reclen = dirent.reclen as usize;
-        // the next is at a multiple of 8 only if this one's length is
-        if reclen < hdr_size || reclen % 8 != 0 || offset + reclen > used { break; }
-
-        let path_bytes = &buf[offset + hdr_size..offset + reclen];
-        let path = CStr::from_bytes_until_nul(path_bytes)
-            .map(|c| c.to_string_lossy().into_owned())
-            .unwrap_or_default();
-
-        entries.push(SubvolEntry {
-            subvolid: dirent.subvolid,
-            flags: dirent.flags,
-            snapshot_parent: dirent.snapshot_parent,
-            otime_sec: dirent.otime_sec as i64,
-            otime_nsec: dirent.otime_nsec,
-            path,
-        });
-        offset += reclen;
-    }
-
-    Ok(entries)
+            Ok(SubvolEntry {
+                subvolid: d.subvolid,
+                flags: d.flags,
+                snapshot_parent: d.snapshot_parent,
+                otime_sec: d.otime_sec as i64,
+                otime_nsec: d.otime_nsec,
+                path: path.to_string_lossy().into_owned(),
+            })
+        })
+        .collect::<Result<_>>()
+        .context("BCH_IOCTL_SUBVOLUME_LIST reply")
 }
 
 fn list_children(fd: &OwnedFd) -> Result<Vec<SubvolEntry>> {

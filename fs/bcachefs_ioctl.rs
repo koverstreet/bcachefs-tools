@@ -748,7 +748,7 @@ pub struct bch_ioctl_query_counters {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_subvol_dirent {
     pub reclen: u32,
     pub subvolid: u32,
@@ -758,6 +758,13 @@ pub struct bch_ioctl_subvol_dirent {
     pub otime_nsec: u32,
     pub pad: u32,
     pub path: [c_char; 0],
+}
+
+impl crate::util::vstructs::SelfSized for bch_ioctl_subvol_dirent {
+    /// reclen: the header, the path and its NUL, padding to 8.
+    fn bytes(&self) -> usize {
+        self.reclen as usize
+    }
 }
 
 /*
