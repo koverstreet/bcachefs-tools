@@ -105,6 +105,15 @@ fn ensure_thread_init() {
     });
 }
 
+/// linux_shrinkers_init(), which registers its caller with RCU for the life of
+/// the process - so ensure_thread_init() mustn't register it again. That
+/// thread serves the session when it isn't spawned (an image file:
+/// fuser::mount2()), and destroy() runs on it.
+fn shrinkers_init() {
+    unsafe { c::linux_shrinkers_init() };
+    THREAD_INITIALIZED.with(|init| init.set(true));
+}
+
 use fuser::{
     Config, FileAttr, FileType, Filesystem, MountOption,
     ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,
@@ -2211,7 +2220,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     config.clone_fd = true;
 
     if cli.foreground {
-        unsafe { c::linux_shrinkers_init() };
+        shrinkers_init();
         let fd = fuse_claim(&fs, &cli.mountpoint, &mount)
             .map_err(|e| anyhow::anyhow!("Error mounting filesystem: {}", e))?;
         if let Err(e) = fs.start() {
@@ -2323,7 +2332,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         rustix::stdio::dup2_stderr(&f)?;
     }
 
-    unsafe { c::linux_shrinkers_init() };
+    shrinkers_init();
 
     // process::exit() skips destructors: drop fs explicitly before it.
     let fuse_fd = match fuse_claim(&fs, &cli.mountpoint, &mount) {
