@@ -422,6 +422,43 @@ impl<'a, 't> TransAttempt<'a, 't> {
         BchError::from_raw(-ret)
     }
 
+    /// What @alloc allocates, tried first without blocking - GFP_NOWAIT, the
+    /// locks held - and if that fails, again with them dropped, GFP_KERNEL,
+    /// then retaken: as C's allocate_dropping_locks(). None if it fails both
+    /// ways. A restart if the locks changed hands while they were dropped -
+    /// and what @alloc made then is dropped with it, where C has the caller
+    /// free it.
+    pub fn allocate_dropping_locks<T>(
+        &self,
+        mut alloc: impl FnMut(c::gfp_t) -> Option<T>,
+    ) -> Result<Option<T>, BchError> {
+        if let Some(p) = alloc(c::GFP_NOWAIT) {
+            return Ok(Some(p));
+        }
+        self.unlock();
+        let p = alloc(c::GFP_KERNEL);
+        self.relock()?;
+        Ok(p)
+    }
+
+    /// allocate_dropping_locks(), for an @alloc that says it couldn't by
+    /// ENOMEM: as C's allocate_dropping_locks_errcode(). Another error from
+    /// the first try is returned as is; one from the second, with the locks
+    /// still dropped, as C's drop_locks_do() does.
+    pub fn allocate_dropping_locks_errcode<T>(
+        &self,
+        mut alloc: impl FnMut(c::gfp_t) -> Result<T, BchError>,
+    ) -> Result<T, BchError> {
+        match alloc(c::GFP_NOWAIT) {
+            Err(e) if e.matches(c::ENOMEM) => {}
+            r => return r,
+        }
+        self.unlock();
+        let p = alloc(c::GFP_KERNEL)?;
+        self.relock()?;
+        Ok(p)
+    }
+
     /// Run @f as a nested transaction, as C's nested_lockrestart_do(): @f
     /// carries on this attempt - no bch2_trans_begin() - and is retried on
     /// restart.
