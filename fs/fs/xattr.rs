@@ -17,8 +17,9 @@ use cstruct_macros::c_export;
 
 use crate::acl;
 use crate::bkey_fsck_err_on;
-use crate::btree::bkey::{BKEY_U64S, BkeySC, BkeyIXattr, POS_MIN};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, UpdateTriggerFlags};
+use crate::btree::bkey::{BKEY_U64S, BkeyI, BkeySC, BkeyIXattr, POS_MIN};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey,
+                         UpdateTriggerFlags};
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
@@ -116,6 +117,31 @@ fn type_and_name(k: BkeySC<'_>) -> (u8, &[u8]) {
 pub fn value(k: BkeySC<'_>) -> &[u8] {
     let x = k.arm::<BkeyIXattr>().expect("an xattr").v();
     &x.x_name_and_value[x.x_name_len as usize..][..x.x_val_len.get() as usize]
+}
+
+/// @k's value, to fill in - @k an xattr, as new_key() makes one.
+pub fn value_mut(k: &mut BkeyI) -> &mut [u8] {
+    let x = k.arm_mut::<BkeyIXattr>().expect("an xattr").v_mut();
+    &mut x.x_name_and_value[x.x_name_len as usize..][..x.x_val_len.get() as usize]
+}
+
+/// An xattr key of type @type_ named @name, with @val_len bytes of value
+/// for the caller to fill in - value_mut(): None if they don't fit in a key.
+pub fn new_key<'a, 't>(t: &TransAttempt<'a, 't>, type_: u8, name: &[u8], val_len: usize)
+    -> Result<Option<TransBkey<'a, 't>>, BchError>
+{
+    let val_u64s = val_u64s(name.len(), val_len);
+    if BKEY_U64S + val_u64s > u8::MAX as usize {
+        return Ok(None);
+    }
+
+    let mut k = t.bkey_alloc_init(val_u64s, c::bch_bkey_type::KEY_TYPE_xattr.0 as u8, POS_MIN)?;
+    let x = k.k_i_mut().arm_mut::<BkeyIXattr>().expect("an xattr").v_mut();
+    x.x_type     = type_;
+    x.x_name_len = name.len() as u8;
+    x.x_val_len  = (val_len as u16).into();
+    x.x_name_and_value[..name.len()].copy_from_slice(name);
+    Ok(Some(k))
 }
 
 /// Check @v.k, an xattr: as bch2_xattr_validate().
@@ -269,22 +295,9 @@ pub fn set_key(
     type_:     u8,
     flags:     i32,
 ) -> Result<(), BchError> {
-    let name = name.as_bytes();
-    let val_u64s = val_u64s(name.len(), value.len());
-    if BKEY_U64S + val_u64s > u8::MAX as usize {
-        return Err(BchError::from(c::ERANGE));
-    }
-
-    let mut k = t.bkey_alloc_init(val_u64s, c::bch_bkey_type::KEY_TYPE_xattr.0 as u8, POS_MIN)?;
-    let x = k.k_i_mut().arm_mut::<BkeyIXattr>().expect("an xattr").v_mut();
-    x.x_type     = type_;
-    x.x_name_len = name.len() as u8;
-    x.x_val_len  = (value.len() as u16).into();
-
-    let mut s = crate::btree::bkey::BkeyS::from(k.k_i_mut());
-    let bytes = &mut s.val_bytes_mut()[NAME_OFFSET..];
-    bytes[..name.len()].copy_from_slice(name);
-    bytes[name.len()..][..value.len()].copy_from_slice(value);
+    let mut k = new_key(t, type_, name.as_bytes(), value.len())?
+        .ok_or(BchError::from(c::ERANGE))?;
+    value_mut(k.k_i_mut()).copy_from_slice(value);
 
     let mut iter_flags = BtreeIterFlags::empty();
     if flags & XATTR_CREATE != 0 {
