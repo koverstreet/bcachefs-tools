@@ -258,7 +258,7 @@ pub fn format(
 
     // Create ext field before setting options - some options (e.g.
     // dev_readahead) use set_ext which requires this field to exist
-    let ext_u64s = (std::mem::size_of::<Ffi<c::bch_sb_field_ext>>() / std::mem::size_of::<u64>()) as u32;
+    let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
     sb.field_get_minsize::<c::bch_sb_field_ext>(ext_u64s);
 
     opt_set_sb_all(sb.sb_mut(), -1, &mut fs_opts);
@@ -340,10 +340,10 @@ pub fn format(
     // Encryption
     if opts.encrypted {
         let crypt_u64s =
-            std::mem::size_of::<Ffi<c::bch_sb_field_crypt>>() / std::mem::size_of::<u64>();
+            std::mem::size_of::<c::bch_sb_field_crypt>() / std::mem::size_of::<u64>();
         let crypt = sb.field_resize::<c::bch_sb_field_crypt>(crypt_u64s as u32)
             .unwrap_or_else(|| die("failed to create crypt field"));
-        let crypt_ptr = crypt.as_ffi_mut();
+        let crypt_ptr: *mut c::bch_sb_field_crypt = crypt;
         unsafe { c::bch_sb_crypt_init(sb.sb, crypt_ptr, opts.passphrase) };
         sb.sb_mut().set_encryption_type(1);
     }

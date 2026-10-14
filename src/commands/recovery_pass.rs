@@ -1,7 +1,6 @@
 
 use anyhow::Result;
 use bcachefs_kernel::c;
-use bcachefs_kernel::util::vstructs::Ffi;
 use bcachefs_kernel::opt_set;
 use clap::Parser;
 
@@ -53,12 +52,11 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
     unsafe {
         let _sb_lock = crate::wrappers::sb_lock(fs.raw);
 
-        let ext_u64s = (std::mem::size_of::<Ffi<c::bch_sb_field_ext>>() / std::mem::size_of::<u64>()) as u32;
+        let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
         let ext = bcachefs_kernel::sb::io::sb_field_get_minsize::<c::bch_sb_field_ext>(
             &mut (*fs.raw).disk_sb,
             ext_u64s,
-        ).and_then(|v| v.whole_mut())
-         .ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))?;
+        ).ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))?;
 
         let mut scheduled = ext.recovery_passes_required[0].get();
 

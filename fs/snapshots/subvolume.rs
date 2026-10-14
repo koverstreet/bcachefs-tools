@@ -41,7 +41,6 @@ use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_notice, bkey_fsck_err_on, fs_inconsistent, fsck_err,
             fsck_err_on, fsck_err_report};
 use core::fmt;
-use crate::util::vstructs::Ffi;
 use core::mem::{offset_of, size_of};
 use cstruct_macros::c_export;
 
@@ -49,7 +48,7 @@ use cstruct_macros::c_export;
 macro_rules! has_field {
     ($k:expr, $field:ident) => {
         $k.val_bytes().len() >=
-            offset_of!(c::bch_subvolume__ffi, $field) + size_of_val(&c::bch_subvolume__ffi::default().$field)
+            offset_of!(c::bch_subvolume, repr.$field) + size_of_val(&c::bch_subvolume::default().$field)
     };
 }
 
@@ -76,7 +75,7 @@ pub fn get_key(
     trans:                     &BtreeTrans<'_>,
     subvol:                    u32,
     inconsistent_if_not_found: bool,
-) -> Result<BkeyI<Ffi<c::bch_subvolume>>, BchError> {
+) -> Result<BkeyI<c::bch_subvolume>, BchError> {
     let fs = trans.fs();
     let t = trans.attempt_in_progress();
 
@@ -97,7 +96,7 @@ pub fn get(
     trans:                     &BtreeTrans<'_>,
     subvol:                    u32,
     inconsistent_if_not_found: bool,
-) -> Result<Ffi<c::bch_subvolume>, BchError> {
+) -> Result<c::bch_subvolume, BchError> {
     Ok(get_key(trans, subvol, inconsistent_if_not_found)?.v)
 }
 
@@ -106,7 +105,7 @@ pub fn bch2_subvolume_get(
     trans:                     &Opaque<c::btree_trans>,
     subvol:                    core::ffi::c_uint,
     inconsistent_if_not_found: bool,
-    s:                         &mut Ffi<c::bch_subvolume>,
+    s:                         &mut c::bch_subvolume,
 ) -> core::ffi::c_int {
     ret_to_c(get(&BtreeTrans::from_c(trans), subvol, inconsistent_if_not_found).map(|v| *s = v))
 }
@@ -261,7 +260,7 @@ where
 // ── The state field ──────────────────────────────────────────────────────
 
 /// Zero padded past the fields an older key lacks.
-pub fn val(k: BkeySC<'_>) -> Option<Ffi<c::bch_subvolume>> {
+pub fn val(k: BkeySC<'_>) -> Option<c::bch_subvolume> {
     BkeyISubvolume::val_copy_pad(k)
 }
 
@@ -280,7 +279,7 @@ const SUBVOLUME_STATES: [c::bch_subvolume_state; 3] = [
     c::bch_subvolume_state::SUBVOLUME_STATE_deleted,
 ];
 
-impl c::bch_subvolume__ffi {
+impl c::bch_subvolume {
     pub fn snapshot(&self) -> u32 { self.snapshot.get() }
 
     pub fn fs_path_parent(&self) -> u32 { self.fs_path_parent.get() }
@@ -707,7 +706,7 @@ fn get_mut<'a, 't>(t: &TransAttempt<'a, 't>, subvol: u32)
 {
     let ret = t.bkey_get_mut(c::btree_id::subvolumes, pos(0, subvol as u64), BtreeIterFlags::CACHED,
                              UpdateTriggerFlags::empty(), c::bch_bkey_type::KEY_TYPE_subvolume,
-                             size_of::<BkeyI<Ffi<c::bch_subvolume>>>());
+                             size_of::<BkeyI<c::bch_subvolume>>());
     if let Err(e) = &ret {
         if e.matches(c::ENOENT) {
             missing(t.fs(), subvol)?;
@@ -744,7 +743,7 @@ fn reparent(
 
     let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty(),
                                 c::bch_bkey_type::KEY_TYPE_subvolume,
-                                size_of::<BkeyI<Ffi<c::bch_subvolume>>>())?;
+                                size_of::<BkeyI<c::bch_subvolume>>())?;
     u.k_i_mut().whole_mut::<BkeyISubvolume>().expect("a subvolume key").v.creation_parent = new.into();
     Ok(())
 }
@@ -902,7 +901,7 @@ pub fn unlink(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
 pub struct Created {
     pub subvol:   u32,
     pub snapshot: u32,
-    pub v:        Ffi<c::bch_subvolume>,
+    pub v:        c::bch_subvolume,
 }
 
 /// A subvolume rooted at @inode, under @parent in the filesystem tree; a

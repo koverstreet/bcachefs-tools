@@ -411,7 +411,7 @@ impl Passphrase {
     /// Errors if the superblock's KDF parameters are unusable - notably when
     /// the key was never wrapped with a passphrase, so nothing ever set them.
     fn derive(&self, crypt: &bch_sb_field_crypt) -> Result<bch_key> {
-        let crypt_ptr = crypt.as_ffi().cast_mut();
+        let crypt_ptr = core::ptr::from_ref(crypt).cast_mut();
         let mut key = bch_key::default();
 
         let ret = unsafe {

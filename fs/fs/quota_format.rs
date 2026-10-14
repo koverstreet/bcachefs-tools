@@ -65,4 +65,4 @@ pub struct bch_sb_field_quota {
     pub field: Ffi<c::bch_sb_field>,
     pub q: [c::bch_sb_quota_type; c::QTYP_NR as usize],
 }
-vstruct!(bch_sb_field_quota__ffi, field.u64s, start = 0);
+vstruct!(bch_sb_field_quota, field.u64s, start = 0);

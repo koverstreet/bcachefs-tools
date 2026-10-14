@@ -17,7 +17,6 @@ use crate::snapshots::{snapshot, subvolume};
 use crate::alloc::buckets::DiskReservation;
 use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::Printbuf;
-use crate::util::vstructs::Ffi;
 use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err};
 use core::mem::size_of;
 use core::ops::ControlFlow;
@@ -717,7 +716,7 @@ pub fn reconstruct_subvol(
     let mut s = bch_err_msg!(fs,
         t.bkey_get_mut(c::btree_id::snapshots, pos(0, snapshot as u64), BtreeIterFlags::empty(),
                        UpdateTriggerFlags::empty(),
-                       c::bch_bkey_type::KEY_TYPE_snapshot, size_of::<BkeyI<Ffi<c::bch_snapshot>>>()),
+                       c::bch_bkey_type::KEY_TYPE_snapshot, size_of::<BkeyI<c::bch_snapshot>>()),
         "getting snapshot {snapshot}")?;
     let s = &mut s.k_i_mut().whole_mut::<BkeyISnapshot>().expect("a snapshot key").v;
     let tree = s.tree();

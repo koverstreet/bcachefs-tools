@@ -26,7 +26,6 @@ use crate::str_hash;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
-use crate::util::vstructs::Ffi;
 use crate::{bch_err, bch_err_msg, bch_info, bch_notice, bch_verbose};
 use core::mem::size_of;
 use core::ops::ControlFlow;
@@ -322,7 +321,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
         let mut s = t.bkey_get_mut(c::btree_id::subvolumes, pos(0, inode.bi_subvol as u64),
                                    BtreeIterFlags::empty(), UpdateTriggerFlags::empty(),
                                    c::bch_bkey_type::KEY_TYPE_subvolume,
-                                   size_of::<BkeyI<Ffi<c::bch_subvolume>>>())?;
+                                   size_of::<BkeyI<c::bch_subvolume>>())?;
         s.k_i_mut().whole_mut::<BkeyISubvolume>().expect("a subvolume").v.fs_path_parent =
             c::BCACHEFS_ROOT_SUBVOL.into();
 

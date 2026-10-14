@@ -18,7 +18,6 @@ use crate::init::error::id;
 use crate::init::progress::Progress;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::os_str::{OsStr, OsStrExt};
-use crate::util::vstructs::Ffi;
 use crate::xattr::{self, Xattrs};
 use crate::{bch_err_msg, fsck_err, fsck_err_on, inode_fsck_err};
 use crate::dirent::{self, Dirent};
@@ -104,7 +103,7 @@ fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &c::bch_inode_unpacked, ty: c::bc
 }
 
 /// A snapshot node, or that there isn't one, for messages.
-struct MaybeSnapshot<'a>(Option<&'a Ffi<c::bch_snapshot>>);
+struct MaybeSnapshot<'a>(Option<&'a c::bch_snapshot>);
 
 impl fmt::Display for MaybeSnapshot<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

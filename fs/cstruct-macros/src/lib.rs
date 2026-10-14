@@ -286,11 +286,10 @@ pub fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand("#[unsized_vstruct]", || vstructs::unsized_vstruct(attr, item))
 }
 
-/// `#[grown(from = FIELD)]`, on C's definition of a type that grew between
-/// format versions, FIELD the first field an older value may lack: the
-/// family of its definitions - C's, the whole struct, X<Whole>; its floor;
-/// and X<Validated>, the floor and the bytes there are, at the value's
-/// length. See vstructs.rs.
+/// `#[grown(from = FIELD)]`, on the definition of a type that grew between
+/// format versions, FIELD the first field an older value may lack: X<S>, a
+/// generic struct - X<Whole>, X, the whole struct; X<Validated>, the floor
+/// and the bytes there are, at the value's length. See vstructs.rs.
 #[proc_macro_attribute]
 pub fn grown(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand("#[grown]", || vstructs::grown(attr, item))

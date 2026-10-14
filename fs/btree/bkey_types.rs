@@ -189,7 +189,7 @@ macro_rules! __bkey_typed {
         pub type [<bkey_s_c_ $name>] = BkeySC<'static, cs::[<bch_ $name>]>;
         pub type [<bkey_s_ $name>]   = BkeyS<'static, cs::[<bch_ $name>]>;
 
-        c_same! { struct [<bkey_i_ $name>]   == BkeyI<crate::btree::bkey::ValC<cs::[<bch_ $name>]>> { k, v } }
+        c_same! { struct [<bkey_i_ $name>]   == BkeyI<cs::[<bch_ $name>]> { k, v } }
         c_same! { struct [<bkey_s_c_ $name>] == BkeySC<'static, cs::[<bch_ $name>]> { k, v } }
         c_same! { struct [<bkey_s_ $name>]   == BkeyS<'static, cs::[<bch_ $name>]> { k, v } }
     )* } };

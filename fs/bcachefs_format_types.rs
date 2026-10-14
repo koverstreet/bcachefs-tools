@@ -943,10 +943,10 @@ pub struct bch_sb_field_crypt {
     pub kdf_flags: Le64,
     pub key: c::bch_encrypted_key,
 }
-vstruct!(bch_sb_field_crypt__ffi, field.u64s, start = 0);
+vstruct!(bch_sb_field_crypt, field.u64s, start = 0);
 
 c_bitmask! {
-    LE64_BITMASK(struct Ffi<bch_sb_field_crypt>, flags) {
+    LE64_BITMASK(struct bch_sb_field_crypt, flags) {
         BCH_CRYPT_KDF_TYPE(0, 4),
     }
 }
@@ -960,7 +960,7 @@ c_enum! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct Ffi<bch_sb_field_crypt>, kdf_flags) {
+    LE64_BITMASK(struct bch_sb_field_crypt, kdf_flags) {
         /* stored as base 2 log of scrypt params: */
         BCH_KDF_SCRYPT_N(0, 16),
         BCH_KDF_SCRYPT_R(16, 32),
@@ -1032,10 +1032,10 @@ pub struct bch_sb_field_ext {
      */
     pub btrees_clean: Le64,
 }
-vstruct!(bch_sb_field_ext__ffi, field.u64s, start = 0);
+vstruct!(bch_sb_field_ext, field.u64s, start = 0);
 
 c_bitmask! {
-    LE64_BITMASK(struct Ffi<bch_sb_field_ext>, flags0) {
+    LE64_BITMASK(struct bch_sb_field_ext, flags0) {
         BCH_SB_EXT_DEV_READAHEAD(0, 20),
         BCH_SB_EXT_EC_STRIPE_BUF_LIMIT(20, 26),
         BCH_SB_EXT_SCRUB_MAX_REWIND_SECS(26, 38),
@@ -1856,7 +1856,7 @@ pub struct jset_entry_blacklist {
     pub entry: Ffi<c::jset_entry>,
     pub seq: Le64,
 }
-vstruct!(jset_entry_blacklist__ffi, entry.u64s);
+vstruct!(jset_entry_blacklist, repr.entry.u64s);
 
 #[whole]
 #[repr(C)]
@@ -1866,7 +1866,7 @@ pub struct jset_entry_blacklist_v2 {
     pub start: Le64,
     pub end: Le64,
 }
-vstruct!(jset_entry_blacklist_v2__ffi, entry.u64s);
+vstruct!(jset_entry_blacklist_v2, repr.entry.u64s);
 
 c_xmacro! {
     BCH_FS_USAGE_TYPES(x) {
@@ -1891,7 +1891,7 @@ pub struct jset_entry_usage {
     pub entry: Ffi<c::jset_entry>,
     pub v: Le64,
 }
-vstruct!(jset_entry_usage__ffi, entry.u64s);
+vstruct!(jset_entry_usage, repr.entry.u64s);
 
 /* r's devs[] are in the tail: the entry's size is its u64s, not r's nr_devs */
 #[unsized_vstruct(tail = [u8])]
@@ -1913,7 +1913,7 @@ pub struct jset_entry_clock {
     pub pad: [u8; 7],
     pub time: Le64,
 }
-vstruct!(jset_entry_clock__ffi, entry.u64s);
+vstruct!(jset_entry_clock, repr.entry.u64s);
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
@@ -1956,7 +1956,7 @@ pub struct jset_entry_datetime {
     pub entry: Ffi<c::jset_entry>,
     pub seconds: Le64,
 }
-vstruct!(jset_entry_datetime__ffi, entry.u64s);
+vstruct!(jset_entry_datetime, repr.entry.u64s);
 
 #[whole]
 #[repr(C, align(8))]
@@ -1966,7 +1966,7 @@ pub struct jset_entry_rewind_limit {
     pub entry: Ffi<c::jset_entry>,
     pub seq: Le64,
 }
-vstruct!(jset_entry_rewind_limit__ffi, entry.u64s);
+vstruct!(jset_entry_rewind_limit, repr.entry.u64s);
 
 /*
  * Records a journal rewind in progress. Keys from journal entries
@@ -1981,7 +1981,7 @@ pub struct jset_entry_rewind {
     pub from: Le64,
     pub to: Le64,
 }
-vstruct!(jset_entry_rewind__ffi, entry.u64s);
+vstruct!(jset_entry_rewind, repr.entry.u64s);
 
 /*
  * On disk format for a journal entry:

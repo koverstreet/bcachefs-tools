@@ -256,6 +256,13 @@ macro_rules! vstruct {
     ($t:ty, $count:ident) => {
         $crate::util::vstructs::vstruct!(@impl $t, ::core::mem::size_of::<$t>(), $count);
     };
+    // past a header reached through a field - a #[whole] type's, repr.hdr
+    ($t:ty, $r:ident . $hdr:ident . $count:ident) => {
+        $crate::util::vstructs::vstruct!(@impl $t,
+            ::core::mem::offset_of!($t, $r.$hdr) + $crate::types::field_size(
+                |p: *const $t| unsafe { ::core::ptr::addr_of!((*p).$r.$hdr) }) as usize,
+            $r.$hdr.$count);
+    };
     ($t:ty, $hdr:ident . $count:ident) => {
         $crate::util::vstructs::vstruct!(@impl $t,
             ::core::mem::offset_of!($t, $hdr) + $crate::types::field_size(
@@ -575,6 +582,11 @@ pub struct Validated;
 /// inherent, and breaks other crates' impls of the same trait (E0119) - to
 /// their coherence check it could be any type.
 ///
+/// A #[grown] or #[whole] type's X<S> isn't an alias but a generic struct,
+/// #[repr(transparent)] over the definition: impls attach to X<Whole> or
+/// X<Validated> as they would to any type. (The unsized vstructs are still
+/// aliases.)
+///
 /// Every definition is made from its bytes the same way, ArmRef, and none
 /// borrows: so a container in state S can name a member as <S as
 /// State>::Of<its family> and hand it out in S - tagged_union!'s typed(),
@@ -611,11 +623,11 @@ impl State for Whole {
 }
 
 /// What C has of a family's type: its struct - an unsized vstruct's header,
-/// its tail zero-length, C's flexible array; a grown type's whole struct.
-/// The family's X__ffi. Implemented for each state's definition.
+/// its tail zero-length, C's flexible array, X__ffi; a #[grown] or #[whole]
+/// type's struct, X itself. Implemented for each state's definition.
 pub trait HasFfi {
     /// C's struct. An impl is never for Ffi<T> itself - a projection - but
-    /// for the family's definition by name, X__ffi.
+    /// for the family's definition by name.
     type Ffi;
 }
 

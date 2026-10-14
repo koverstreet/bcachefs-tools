@@ -29,8 +29,8 @@ use crate::snapshots::subvolume;
 use crate::str_hash::{self, HashTable};
 use crate::util::ffi::{bytes, c_char, opt_bytes, opt_bytes_mut, Opaque};
 use crate::util::os_str::{cstr_name, OsStr, OsStrExt};
+use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
-use crate::util::vstructs::Ffi;
 
 /// setxattr() flags - <uapi/linux/xattr.h>:
 pub const XATTR_CREATE:  i32 = 0x1;
@@ -81,7 +81,7 @@ pub struct XattrKey<'k> {
 // ── The value ────────────────────────────────────────────────────────────
 
 /// Where the name starts - the value follows it.
-const NAME_OFFSET: usize = offset_of!(Ffi<c::bch_xattr>, x_name_and_value);
+const NAME_OFFSET: usize = offset_of!(c::bch_xattr, repr.x_name_and_value);
 
 /// The u64s of value an xattr with these takes: as xattr_val_u64s().
 pub fn val_u64s(name_len: usize, val_len: usize) -> usize {
@@ -122,7 +122,7 @@ impl c::bch_xattr_type {
 }
 
 /// An xattr's value, as C reads it: valid, its lengths within it.
-impl c::bch_xattr__validated {
+impl c::bch_xattr<Validated> {
     pub fn ty(&self) -> c::bch_xattr_type {
         c::bch_xattr_type(self.x_type as u32)
     }
@@ -137,7 +137,7 @@ impl c::bch_xattr__validated {
     }
 }
 
-fn xattr(k: BkeySC<'_>) -> &c::bch_xattr__validated {
+fn xattr(k: BkeySC<'_>) -> &c::bch_xattr<Validated> {
     k.arm::<BkeyIXattr>().expect("an xattr").v()
 }
 
@@ -150,7 +150,8 @@ pub fn value(k: BkeySC<'_>) -> &[u8] {
 /// @k's value, to fill in - @k an xattr, as new_key() makes one.
 pub fn value_mut(k: &mut BkeyI) -> &mut [u8] {
     let x = k.arm_mut::<BkeyIXattr>().expect("an xattr").v_mut();
-    &mut x.x_name_and_value[x.x_name_len as usize..][..x.x_val_len.get() as usize]
+    let (name_len, val_len) = (x.x_name_len as usize, x.x_val_len.get() as usize);
+    &mut x.x_name_and_value[name_len..][..val_len]
 }
 
 /// An xattr key of type @ty named @name, with @val_len bytes of value for

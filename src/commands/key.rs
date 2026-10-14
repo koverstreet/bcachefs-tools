@@ -149,7 +149,7 @@ unsafe fn init_crypt_kdf(fs: &Fs) {
     let disk_sb = &mut (*fs.raw).disk_sb;
     let crypt = bcachefs_kernel::sb::io::sb_field_get_mut::<c::bch_sb_field_crypt>(disk_sb)
         .expect("filesystem has no crypt field");
-    c::bch_crypt_kdf_init(crypt.as_ffi_mut());
+    c::bch_crypt_kdf_init(crypt);
 }
 
 /// Write the changed crypt field out. The open was will_not_start, so the

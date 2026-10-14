@@ -191,8 +191,11 @@ struct Shape<'a> {
     fields:  &'a [CFieldDef],
     /// Those the family makes private: a counted type's count.
     private: &'a [&'a str],
-    /// What it derefs to: C's struct, or a grown type's floor.
+    /// What precedes the tail: C's struct, or a grown type's floor.
     head:    &'a str,
+    /// What it derefs to, #[repr(transparent)] over @head if not @head
+    /// itself: a #[whole] type's X<Whole>, where X's methods are.
+    deref:   &'a str,
     /// After the fields: @tail, a slice of @elem.
     tail:    &'a str,
     elem:    &'a str,
@@ -219,7 +222,7 @@ struct Shape<'a> {
 /// ArmRef, cast() from the bytes its storage says are its. @doc is its own;
 /// @methods, more of them.
 fn dst(ty: &str, doc: &str, shape: &Shape<'_>, methods: &str) -> String {
-    let Shape { repr, fields, private, head, tail, elem, ffi, tail_at } = *shape;
+    let Shape { repr, fields, private, head, deref, tail, elem, ffi, tail_at } = *shape;
     let tail_at = tail_at.map(str::to_string).unwrap_or_else(|| format!("::core::mem::size_of::<{head}>()"));
     let plain_fields: String = fields.iter()
         .map(|f| format!("{VS}::assert_plain::<{}>();\n", f.ty.trim()))
@@ -244,13 +247,14 @@ fn dst(ty: &str, doc: &str, shape: &Shape<'_>, methods: &str) -> String {
          }}\n\
          \n\
          impl ::core::ops::Deref for {ty} {{\n\
-             type Target = {head};\n\
+             type Target = {deref};\n\
              #[inline]\n\
-             fn deref(&self) -> &{head} {{\n\
+             fn deref(&self) -> &{deref} {{\n\
                  // SAFETY: its first size_of::<{head}>() bytes are {head}'s fields, at\n\
                  // {head}'s offsets - asserted below, each Plain - and any of its\n\
-                 // tail they reach: it's no shorter than {head}, as Unsized says\n\
-                 unsafe {{ &*(self as *const Self).cast::<{head}>() }}\n\
+                 // tail they reach: it's no shorter than {head}, as Unsized says;\n\
+                 // {deref} is {head}, or #[repr(transparent)] over it\n\
+                 unsafe {{ &*(self as *const Self).cast::<{deref}>() }}\n\
              }}\n\
          }}\n\
          \n\
@@ -325,16 +329,16 @@ fn dst(ty: &str, doc: &str, shape: &Shape<'_>, methods: &str) -> String {
 }
 
 /// @name's family, @name__family - its Unvalidated, Validated and Whole
-/// definitions - and @name<S>, which picks one, documented @doc. Every family
-/// has @name__unvalidated and @name__validated: a plain alias where a state
-/// shares another's definition, so a container's ArmOf impls can name each
-/// state's - concrete types, not projections.
+/// definitions. Every family has @name__unvalidated and @name__validated: a
+/// plain alias where a state shares another's definition, so a container's
+/// ArmOf impls can name each state's - concrete types, not projections.
 ///
 /// And __@name__state_impls!{ items }: the items, impl'd on each of
 /// @with_fields, the definitions with C's fields inline - for c_bitmask!'s
 /// setters, which the Deref to C's struct can't reach: there's no DerefMut.
-fn family(name: &str, unvalidated: &str, validated: &str, whole: &str, with_fields: &[String],
-          doc: &str) -> String {
+fn family(name: &str, unvalidated: &str, validated: &str, whole: &str, with_fields: &[String])
+    -> String
+{
     let aliases: String = [("unvalidated", unvalidated), ("validated", validated)].iter()
         .filter(|(st, def)| *def != format!("{name}__{st}"))
         .map(|(st, def)| format!("#[allow(non_camel_case_types)]\n\
@@ -361,10 +365,16 @@ fn family(name: &str, unvalidated: &str, validated: &str, whole: &str, with_fiel
          }}\n\
          \n\
          {aliases}\
-         {state_impls}\
-         {doc}\
-         #[allow(non_camel_case_types)]\n\
-         pub type {name}<S = {VS}::Validated> = <S as {VS}::State>::Of<{name}__family>;\n")
+         {state_impls}")
+}
+
+/// @name<S>, picking one of @name's family's definitions, documented @doc:
+/// for an unsized type, whose name is its family's - C's struct is only its
+/// header.
+fn state_alias(name: &str, doc: &str) -> String {
+    format!("{doc}\
+             #[allow(non_camel_case_types)]\n\
+             pub type {name}<S = {VS}::Validated> = <S as {VS}::State>::Of<{name}__family>;\n")
 }
 
 /// The methods of @name's state @st's definition, a family whose count is
@@ -445,13 +455,14 @@ fn own_count_family(name: &str, shape: &Shape<'_>) -> String {
                  }}\n")
     };
     format!(
-        "{}{}{}",
+        "{}{}{}{}",
         state("Unvalidated", "bytes from outside - off a device, from the kernel - its count \
                               checked against them when it's made"),
         state("Validated", "what C read and validated, its counts trusted as C trusts them"),
         family(name, &format!("{name}__unvalidated"), &format!("{name}__validated"),
                &format!("{name}__validated"),
-               &[format!("{name}__unvalidated"), format!("{name}__validated")],
+               &[format!("{name}__unvalidated"), format!("{name}__validated")]),
+        state_alias(name,
                &format!("/// {name}, in state S - Validated unless named: a reference to one\n\
                          /// reaches every byte of it and none past. C's struct {name} is\n\
                          /// Ffi<{name}>.\n")))
@@ -492,7 +503,8 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
     // where that's the tail
     let fields = if tail == last { &def.fields[..def.fields.len() - 1] } else { &def.fields[..] };
     let repr = repr_attrs(&item);
-    let shape = Shape { repr: &repr, fields, private: &[], head: &ffi, tail: &tail, elem: &elem, ffi: &ffi, tail_at: None };
+    let shape = Shape { repr: &repr, fields, private: &[], head: &ffi, deref: &ffi, tail: &tail, elem: &elem,
+                        ffi: &ffi, tail_at: None };
 
     let mut out = rename_struct(item, &name, &ffi)?;
     out.extend(tokens(&format!(
@@ -558,7 +570,8 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
     };
     let repr = repr_attrs(&item);
     let private = [count_field.as_str()];
-    let shape = Shape { repr: &repr, fields, private: &private, head: &ffi, tail: &tail, elem: &elem, ffi: &ffi, tail_at: None };
+    let shape = Shape { repr: &repr, fields, private: &private, head: &ffi, deref: &ffi, tail: &tail,
+                        elem: &elem, ffi: &ffi, tail_at: None };
 
     let mut out = rename_struct(item, &name, &ffi)?;
     out.extend(tokens(&format!(
@@ -582,13 +595,14 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
 /// versions, from C's struct as written - FIELD the first field a valid
 /// value may lack, written by a version from before it.
 ///
-/// C's definition is the item, renamed X__ffi, with #[c_name(X)]: the whole
-/// struct, X<Whole> - every field there, so every field a field. X__floor is
-/// the fields before FIELD, every valid value's. X<Validated> - Unvalidated
-/// too, as the cast checks the floor - is X__validated, a DST: the floor's
-/// fields, then the bytes there are, at exactly the value's length; it derefs
-/// to the floor, to read. A field from FIELD on is a getter, zero past the
-/// end, and whole() is all of it, if it's all there.
+/// X<S> is a generic struct over its definition in state S. X<Whole> - X -
+/// is the whole struct, every field a field: the item, renamed X__whole with
+/// #[c_name(X)], C's struct. X__floor is the fields before FIELD, every valid
+/// value's. X<Validated> - Unvalidated too, as the cast checks the floor - is
+/// a value in place, a DST: the floor's fields, then the bytes there are, at
+/// exactly the value's length; it derefs to the floor, to read. A field from
+/// FIELD on is a getter, zero past the end, and whole() is all of it, X, if
+/// it's all there.
 pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item.to_string())?;
     let name = def.name.clone();
@@ -608,10 +622,11 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 /// C's validate rejects one shorter - though it may be longer, written by a
 /// version since: a superblock section or journal entry of fixed fields.
 ///
-/// C's definition is the item, renamed X__ffi, with #[c_name(X)]. Every
-/// state of it is X__validated, a DST: C's fields, those that hold a count
-/// private, then the bytes past them there are, at exactly the value's
-/// length; it derefs to C's struct, to read.
+/// X<S> is a generic struct over its definition in state S. X<Whole> - X -
+/// is the struct: the item, renamed X__whole with #[c_name(X)], C's struct.
+/// X<Validated> and X<Unvalidated> are a value in place, a DST: X's fields,
+/// those that hold a count private, then the bytes past them there are, at
+/// exactly the value's length; it derefs to X, to read, and X's methods.
 ///
 /// Or `#[whole(tail = NAME: [E])]`: C's struct ends in NAME: [E; 0] - and
 /// perhaps other zero-length arrays, C's other names for where it starts - a
@@ -666,12 +681,22 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
     -> Result<TokenStream, String>
 {
     let name = def.name.clone();
-    let ffi = format!("{name}__ffi");
-    let all = match grew {
-        Some(_) => format!("{name}__whole"),
-        None => format!("{name}__validated"),
-    };
+    // The struct as written, renamed X__whole: X<Whole>'s representation,
+    // and C's struct X
+    let ffi = format!("{name}__whole");
+    // A value in place, as long as what holds it says: for a grown type the
+    // floor and the bytes there are, below; else all of its fields, then
+    // the bytes past them
+    let all = format!("{name}__validated");
     let repr = repr_attrs(&item);
+    let derives = derive_names(&item);
+    // X is generated: a derive generic_type() doesn't forward would be
+    // X__whole's alone, out of X's reach. CStruct is C's record of the
+    // struct as written, which is X__whole's
+    if let Some(d) = derives.iter().find(|d| *d != "CStruct" && !WHOLE_DERIVES.contains(&d.as_str())) {
+        return Err(format!("{name}: #[derive({d})], but {name} - {name}<Whole> - is generated, and has \
+                            only the derives generic_type() forwards to it: {}", WHOLE_DERIVES.join(", ")));
+    }
     // the tail, C's last field - or the bytes past C's fields
     let (fields, tail_name, elem, tail_at) = match &tail {
         Some((t, e)) => {
@@ -680,35 +705,38 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
         }
         None => (&def.fields[..], "_rest", "u8", None),
     };
-    let all_def = dst(&all,
-        &match &tail {
-            Some((t, _)) => format!("/// {name}, all of it: C's fields - those that hold a count private -\n\
-                                     /// then {t}, from where C has it, as long as the value is. It\n\
-                                     /// derefs to C's struct {name}, Ffi<{name}>, to read.\n"),
-            None => format!("/// {name}, all of it: C's fields - those that hold a count private - then\n\
-                             /// the bytes past them there are, written by a version since, at\n\
-                             /// exactly the value's length. It derefs to C's struct {name},\n\
-                             /// Ffi<{name}>, to read.\n"),
-        },
-        &Shape { repr: &repr, fields, private: &[], head: &ffi, tail: tail_name, elem, ffi: &ffi,
-                 tail_at: tail_at.as_deref() },
-        &format!("/// For C: a pointer to all of it.\n\
-                  pub fn as_ffi(&self) -> *const {ffi} {{\n\
-                      (self as *const Self).cast()\n\
-                  }}\n\
-                  \n\
-                  /// For C, to edit: a pointer to all of it.\n\
-                  pub fn as_ffi_mut(&mut self) -> *mut {ffi} {{\n\
-                      (self as *mut Self).cast()\n\
-                  }}\n"));
-
     let Some((from, at)) = grew else {
+        // Every valid value has all of it: in place, all its fields and the
+        // bytes past them, in every state but Whole, the struct itself
+        let all_def = dst(&all,
+            &match &tail {
+                Some((t, _)) => format!("/// {name} in place: its fields - those that hold a count private -\n\
+                                         /// then {t}, from where C has it, as long as the value is. It\n\
+                                         /// derefs to the struct, to read.\n"),
+                None => format!("/// {name} in place: its fields - those that hold a count private - then\n\
+                                 /// the bytes past them there are, written by a version since, at\n\
+                                 /// exactly the value's length. It derefs to the struct, to read.\n"),
+            },
+            &Shape { repr: &repr, fields, private: &[], head: &ffi, deref: &name, tail: tail_name, elem,
+                     ffi: &ffi, tail_at: tail_at.as_deref() },
+            &format!("/// For C: a pointer to all of it.\n\
+                      pub fn as_ffi(&self) -> *const {ffi} {{\n\
+                          (self as *const Self).cast()\n\
+                      }}\n\
+                      \n\
+                      /// For C, to edit: a pointer to all of it.\n\
+                      pub fn as_ffi_mut(&mut self) -> *mut {ffi} {{\n\
+                          (self as *mut Self).cast()\n\
+                      }}\n"));
         let mut out = rename_struct(item, &name, &ffi)?;
         out.extend(tokens(&format!(
-            "{all_def}{}",
-            family(&name, &all, &all, &all, std::slice::from_ref(&all),
-                   &format!("/// {name}, in state S - all of it in every one: C's validate rejects\n\
-                             /// one shorter. C's struct {name} is Ffi<{name}>.\n")))));
+            "{all_def}{}{}{}",
+            family(&name, &all, &all, &ffi, &[]),
+            whole_arm_ref(&ffi, derives.iter().any(|d| d == "Plain")),
+            generic_type(&name, &all, &ffi, &derives,
+                         &format!("/// {name}, in state S - Whole unless named: the struct, every field a field.\n\
+                                   /// Validated or Unvalidated, a value in place - all its fields, then\n\
+                                   /// the bytes past them a version since wrote, at the value's length.\n")))));
         return Ok(out);
     };
     let (floor, later) = def.fields.split_at(at);
@@ -745,14 +773,18 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
     }
 
     let methods = format!(
-        "/// All of it, {name}<Whole>, if it's all there - every field a field.\n\
-         pub fn whole(&self) -> Option<&{all}> {{\n\
-             {VS}::cast(self.as_bytes())\n\
+        "/// All of it, if it's all there - every field a field.\n\
+         pub fn whole(&self) -> Option<&{name}> {{\n\
+             // SAFETY: {name} is #[repr(transparent)] over {ffi}\n\
+             {VS}::cast_plain::<{ffi}>(self.as_bytes())\n\
+                 .map(|w| unsafe {{ &*(w as *const {ffi} as *const {name}) }})\n\
          }}\n\
          \n\
          /// whole(), to edit.\n\
-         pub fn whole_mut(&mut self) -> Option<&mut {all}> {{\n\
-             {VS}::cast_mut(self.as_bytes_mut())\n\
+         pub fn whole_mut(&mut self) -> Option<&mut {name}> {{\n\
+             // SAFETY: as whole()'s\n\
+             {VS}::cast_plain_mut::<{ffi}>(self.as_bytes_mut())\n\
+                 .map(|w| unsafe {{ &mut *(w as *mut {ffi} as *mut {name}) }})\n\
          }}\n\
          \n\
          {getters}");
@@ -773,27 +805,206 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
          }};\n\
          \n\
          {dst}\
-         {all_def}\
-         {family}",
+         {family}\
+         {whole}\
+         {generic}",
         plain = plain(&fl, &floor_tys),
         dst = dst(&ty,
-                  &format!("/// {name}<Validated>: what C read and validated, written by any version\n\
-                            /// since it had its floor - the floor's fields, those that hold a\n\
-                            /// count private, then the bytes there are, at exactly the value's\n\
-                            /// length. It derefs to the floor, to read. A field it gained later\n\
-                            /// is a getter, zero where the value ends before it; whole() is all\n\
-                            /// of it, {name}<Whole>, if it's all there.\n"),
-                  &Shape { repr: "#[repr(C)]\n", fields: floor, private: &[], head: &fl, tail: "_rest", elem: "u8",
-                           ffi: &ffi, tail_at: None },
+                  &format!("/// A {name} as it was written, by any version since it had its floor:\n\
+                            /// the floor's fields, those that hold a count private, then the\n\
+                            /// bytes there are, at exactly the value's length. It derefs to the\n\
+                            /// floor, to read. A field it gained later is a getter, zero where\n\
+                            /// the value ends before it; whole() is all of it, if it's all there.\n"),
+                  &Shape { repr: "#[repr(C)]\n", fields: floor, private: &[], head: &fl, deref: &fl,
+                           tail: "_rest", elem: "u8", ffi: &ffi, tail_at: None },
                   &methods),
-        // the cast checks the floor: an unvalidated one is as good. Its later
-        // fields are inline only in its Whole, so that's where c_bitmask!'s
-        // setters go
-        family = family(&name, &ty, &ty, &all, std::slice::from_ref(&all),
-                        &format!("/// {name}, in state S - Validated unless named: from any version since\n\
-                                  /// its floor, at its own length. {name}<Whole> is all of it, every\n\
-                                  /// field a field. C's struct {name} is Ffi<{name}>.\n")))));
+        // the cast checks the floor: an unvalidated one is as good
+        family = family(&name, &ty, &ty, &ffi, &[]),
+        whole = whole_arm_ref(&ffi, derives.iter().any(|d| d == "Plain")),
+        generic = generic_type(&name, &ty, &ffi, &derives,
+                               &format!("/// {name}, in state S - Whole unless named: the struct, every field a field.\n\
+                                         /// Validated or Unvalidated, a value in place, from any version since\n\
+                                         /// it had its floor: the floor's fields, then the bytes there are; a\n\
+                                         /// field it gained later is a getter, zero where the value ends.\n")))));
     Ok(out)
+}
+
+/// The traits @item derives.
+fn derive_names(item: &TokenStream) -> Vec<String> {
+    let tts: Vec<TokenTree> = item.clone().into_iter().collect();
+    let mut out = Vec::new();
+    for w in tts.windows(2) {
+        let (TokenTree::Punct(p), TokenTree::Group(g)) = (&w[0], &w[1]) else { continue };
+        if p.as_char() != '#' || g.delimiter() != Delimiter::Bracket {
+            continue;
+        }
+        let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+        if let [TokenTree::Ident(d), TokenTree::Group(args)] = inner.as_slice() {
+            if d.to_string() == "derive" {
+                out.extend(args.stream().into_iter().filter_map(|t| match t {
+                    TokenTree::Ident(i) => Some(i.to_string()),
+                    _ => None,
+                }));
+            }
+        }
+    }
+    out
+}
+
+/// @whole, a sized struct, from the bytes its storage says are its: all of
+/// it, aligned - a value longer than it, written by a version since, is
+/// still all of it. To edit, only if it's Plain (@plain): one with padding -
+/// a key value's header, rounded up into its tail - would write its padding
+/// over the tail.
+fn whole_arm_ref(whole: &str, plain: bool) -> String {
+    let (get, get_mut) = if plain {
+        (format!("{VS}::cast_plain(b)"), format!("{VS}::cast_plain_mut(b)"))
+    } else {
+        (format!("// SAFETY: that many bytes, aligned, and its fields - each Plain, as its\n\
+                  // value in place asserts - any bytes are; its padding is never read\n\
+                  (b.len() >= ::core::mem::size_of::<Self>() &&\n\
+                   b.as_ptr() as usize % ::core::mem::align_of::<Self>() == 0)\n\
+                      .then(|| unsafe {{ &*b.as_ptr().cast::<Self>() }})"),
+         "let _ = b;\nNone".to_string())
+    };
+    format!(
+        "impl {VS}::ArmRef for {whole} {{\n\
+             fn arm_ref(b: &[u8]) -> Option<&Self> {{\n\
+                 {get}\n\
+             }}\n\
+             \n\
+             fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {{\n\
+                 {get_mut}\n\
+             }}\n\
+         }}\n\
+         \n")
+}
+
+/// The derives generic_type() gives X<Whole> as the struct has them.
+const WHOLE_DERIVES: &[&str] = &["Clone", "Copy", "Default", "Plain", "TypeInfo"];
+
+/// @name<S>, documented @doc: a generic struct over its family's definition
+/// in state S - @whole, the struct, for Whole; @inplace, a value in place,
+/// for Validated and Unvalidated. #[repr(transparent)], so a reference to
+/// one is a reference to the other, and impls attach to @name<S> for the
+/// state they're for. What generic code goes by - ArmOf, ArmRef, Unsized -
+/// it has as its definition does; the value traits @derives names, @name -
+/// @name<Whole> - has as the struct does.
+fn generic_type(name: &str, inplace: &str, whole: &str, derives: &[String], doc: &str) -> String {
+    let fam = format!("{name}__family");
+    let mut out = format!(
+        "{doc}\
+         #[repr(transparent)]\n\
+         #[allow(non_camel_case_types)]\n\
+         pub struct {name}<S: {VS}::State = {VS}::Whole> {{\n\
+             _state:   ::core::marker::PhantomData<S>,\n\
+             /// Its definition in state S - for offset_of!(), repr.field.\n\
+             pub repr: <S as {VS}::State>::Of<{fam}>,\n\
+         }}\n\
+         \n\
+         impl<S: {VS}::State> ::core::ops::Deref for {name}<S> {{\n\
+             type Target = <S as {VS}::State>::Of<{fam}>;\n\
+             #[inline]\n\
+             fn deref(&self) -> &Self::Target {{\n\
+                 &self.repr\n\
+             }}\n\
+         }}\n\
+         \n\
+         impl<S: {VS}::State> ::core::ops::DerefMut for {name}<S> {{\n\
+             #[inline]\n\
+             fn deref_mut(&mut self) -> &mut Self::Target {{\n\
+                 &mut self.repr\n\
+             }}\n\
+         }}\n\
+         \n\
+         // An arm of what its value in place is an arm of: one tag, every state\n\
+         impl<U: ?Sized, S: {VS}::State> crate::types::ArmOf<U> for {name}<S>\n\
+         where\n\
+             {inplace}: crate::types::ArmOf<U>,\n\
+         {{\n\
+             type Tag = <{inplace} as crate::types::ArmOf<U>>::Tag;\n\
+             const TAG: Self::Tag = <{inplace} as crate::types::ArmOf<U>>::TAG;\n\
+         }}\n\
+         \n");
+
+    // In every state, as its definition in that state is had: the pointer
+    // cast keeps the definition's metadata, its last field being it
+    out.push_str(&format!(
+        "impl<S: {VS}::State> {VS}::ArmRef for {name}<S> {{\n\
+             fn arm_ref(b: &[u8]) -> Option<&Self> {{\n\
+                 // SAFETY: #[repr(transparent)] over its definition in S\n\
+                 <<S as {VS}::State>::Of<{fam}> as {VS}::ArmRef>::arm_ref(b)\n\
+                     .map(|d| unsafe {{ &*(d as *const <S as {VS}::State>::Of<{fam}> as *const Self) }})\n\
+             }}\n\
+             \n\
+             fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {{\n\
+                 // SAFETY: as arm_ref()'s\n\
+                 <<S as {VS}::State>::Of<{fam}> as {VS}::ArmRef>::arm_mut(b)\n\
+                     .map(|d| unsafe {{ &mut *(d as *mut <S as {VS}::State>::Of<{fam}> as *mut Self) }})\n\
+             }}\n\
+         }}\n\
+         \n"));
+
+    for st in ["Validated", "Unvalidated"] {
+        out.push_str(&format!(
+            "// SAFETY: #[repr(transparent)] over {inplace}, whose Unsized it is\n\
+             unsafe impl {VS}::Unsized for {name}<{VS}::{st}> {{\n\
+                 type Head = <{inplace} as {VS}::Unsized>::Head;\n\
+                 type Elem = <{inplace} as {VS}::Unsized>::Elem;\n\
+                 const TAIL: usize = <{inplace} as {VS}::Unsized>::TAIL;\n\
+                 #[inline]\n\
+                 fn from_raw(p: *const u8, bytes: usize) -> *const Self {{\n\
+                     <{inplace} as {VS}::Unsized>::from_raw(p, bytes) as *const Self\n\
+                 }}\n\
+                 #[inline]\n\
+                 fn from_raw_mut(p: *mut u8, bytes: usize) -> *mut Self {{\n\
+                     <{inplace} as {VS}::Unsized>::from_raw_mut(p, bytes) as *mut Self\n\
+                 }}\n\
+             }}\n\
+             \n\
+             impl {VS}::SelfSized for {name}<{VS}::{st}> {{\n\
+                 #[inline]\n\
+                 fn bytes(&self) -> usize {{\n\
+                     ::core::mem::size_of_val(self)\n\
+                 }}\n\
+             }}\n\
+             \n"));
+    }
+
+    let whole_ty = format!("{name}<{VS}::Whole>");
+    let has = |d: &str| derives.iter().any(|x| x == d);
+    if has("Clone") {
+        out.push_str(&format!(
+            "impl ::core::clone::Clone for {whole_ty} {{\n\
+                 fn clone(&self) -> Self {{\n\
+                     {name} {{ _state: ::core::marker::PhantomData, repr: self.repr.clone() }}\n\
+                 }}\n\
+             }}\n\n"));
+    }
+    if has("Copy") {
+        out.push_str(&format!("impl ::core::marker::Copy for {whole_ty} {{}}\n\n"));
+    }
+    if has("Default") {
+        out.push_str(&format!(
+            "impl ::core::default::Default for {whole_ty} {{\n\
+                 fn default() -> Self {{\n\
+                     {name} {{ _state: ::core::marker::PhantomData, repr: ::core::default::Default::default() }}\n\
+                 }}\n\
+             }}\n\n"));
+    }
+    if has("Plain") {
+        out.push_str(&format!(
+            "// SAFETY: #[repr(transparent)] over {whole}, which is Plain\n\
+             unsafe impl {VS}::Plain for {whole_ty} {{}}\n\n"));
+    }
+    if has("TypeInfo") {
+        out.push_str(&format!(
+            "impl crate::typeinfo::TypeInfo for {whole_ty} {{\n\
+                 const INFO: &'static crate::typeinfo::StructInfo =\n\
+                     <{whole} as crate::typeinfo::TypeInfo>::INFO;\n\
+             }}\n\n"));
+    }
+    out
 }
 
 /// @item, a struct, as @to - with #[c_name(@name)], C's name for it, after

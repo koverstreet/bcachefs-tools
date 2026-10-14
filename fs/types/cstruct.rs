@@ -2288,13 +2288,16 @@ fn ffi_arg(toks: &[Tok]) -> Option<&[Tok]> {
     }
 }
 
-/// foo, if @toks is BkeyI<Ffi<bch_foo>> by any path: C's struct bkey_i_foo.
+/// foo, if @toks is BkeyI<bch_foo> by any path - or BkeyI<Ffi<bch_foo>>, an
+/// unsized one's: C's struct bkey_i_foo.
 fn bkey_i_arg(toks: &[Tok]) -> Option<&str> {
     let b = toks.iter().position(|t| t.is_ident("BkeyI"))?;
     let path_ok = toks[..b].iter().all(|t| matches!(t, Tok::Ident(_) | Tok::Punct(':')));
     let [Tok::Punct('<'), inner @ .., Tok::Punct('>')] = &toks[b + 1..] else { return None };
-    match ffi_arg(inner)? {
-        [.., Tok::Ident(v)] if path_ok => v.strip_prefix("bch_"),
+    let inner = ffi_arg(inner).unwrap_or(inner);
+    let val_path_ok = inner.iter().all(|t| matches!(t, Tok::Ident(_) | Tok::Punct(':')));
+    match inner {
+        [.., Tok::Ident(v)] if path_ok && val_path_ok => v.strip_prefix("bch_"),
         _ => None,
     }
 }

@@ -729,8 +729,8 @@ pub struct bch_option {
     pub get_member: Option<unsafe extern "C" fn(*const c::bch_member) -> u64>,
     pub set_member: Option<unsafe extern "C" fn(*mut c::bch_member, u64)>,
 
-    pub get_ext: Option<unsafe extern "C" fn(*const Ffi<c::bch_sb_field_ext>) -> u64>,
-    pub set_ext: Option<unsafe extern "C" fn(*mut Ffi<c::bch_sb_field_ext>, u64)>,
+    pub get_ext: Option<unsafe extern "C" fn(*const c::bch_sb_field_ext) -> u64>,
+    pub set_ext: Option<unsafe extern "C" fn(*mut c::bch_sb_field_ext, u64)>,
 
     /* BCH_OPT_STR_MEMBER: the bch_member char[] field the string lives in */
     pub member_offset: c_uint,

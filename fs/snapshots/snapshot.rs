@@ -10,7 +10,6 @@ use crate::fs::Fs;
 use crate::snapshots::check_snapshots;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::rcu;
-use crate::util::vstructs::Ffi;
 use crate::util::Printbuf;
 use core::fmt;
 use core::marker::PhantomData;
@@ -152,7 +151,7 @@ impl c::bch_fs_snapshots {
 
     /// The unique live node claiming an edge with @id - as its parent if @parent,
     /// else as its child - other than those @s points at. None if none or several.
-    pub fn table_find_edge(&self, s: &Ffi<c::bch_snapshot>, id: u32, parent: bool) -> Option<u32> {
+    pub fn table_find_edge(&self, s: &c::bch_snapshot, id: u32, parent: bool) -> Option<u32> {
         match unsafe { c::bch2_snapshot_table_find_edge(self.c(), s, id, parent) } {
             0 => None,
             n => Some(n),
@@ -288,21 +287,21 @@ pub fn check_key_has_snapshot(
 }
 
 /// ENOENT if there's none.
-pub fn lookup(trans: &BtreeTrans<'_>, id: u32) -> Result<Ffi<c::bch_snapshot>, BchError> {
+pub fn lookup(trans: &BtreeTrans<'_>, id: u32) -> Result<c::bch_snapshot, BchError> {
     trans.attempt_in_progress()
         .bkey_get_val::<BkeyISnapshot>(c::btree_id::snapshots, pos(0, id as u64),
                                        BtreeIterFlags::empty())
 }
 
 /// ENOENT if there's none.
-pub fn lookup_key(trans: &BtreeTrans<'_>, id: u32) -> Result<BkeyI<Ffi<c::bch_snapshot>>, BchError> {
+pub fn lookup_key(trans: &BtreeTrans<'_>, id: u32) -> Result<BkeyI<c::bch_snapshot>, BchError> {
     trans.attempt_in_progress()
         .bkey_get_key::<BkeyISnapshot>(c::btree_id::snapshots, pos(0, id as u64),
                                        BtreeIterFlags::empty())
 }
 
 /// Zero padded past the fields an older key lacks.
-pub fn val(k: BkeySC<'_>) -> Option<Ffi<c::bch_snapshot>> {
+pub fn val(k: BkeySC<'_>) -> Option<c::bch_snapshot> {
     BkeyISnapshot::val_copy_pad(k)
 }
 
@@ -316,7 +315,7 @@ pub fn node_set_deleted(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchErro
 pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't>)
     -> Result<(), BchError>
 {
-    let ret = unsafe { c::bch2_snapshot_node_undelete(t.raw(), u.as_ptr() as *mut BkeyI<Ffi<c::bch_snapshot>>) };
+    let ret = unsafe { c::bch2_snapshot_node_undelete(t.raw(), u.as_ptr() as *mut BkeyI<c::bch_snapshot>) };
     t.result(ret)
 }
 
@@ -352,7 +351,7 @@ const SNAPSHOT_STATES: [c::bch_snapshot_state; 4] = [
     c::bch_snapshot_state::SNAPSHOT_STATE_deleted,
 ];
 
-impl c::bch_snapshot__ffi {
+impl c::bch_snapshot {
     pub fn parent(&self) -> u32       { self.parent.get() }
     pub fn children(&self) -> [u32; 2] { self.children.map(|c| c.get()) }
     pub fn subvol(&self) -> u32       { self.subvol.get() }
@@ -407,7 +406,7 @@ impl fmt::Display for c::bch_snapshot_state {
     }
 }
 
-impl fmt::Display for c::bch_snapshot__ffi {
+impl fmt::Display for c::bch_snapshot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         crate::printbuf_to_formatter(f, |out| unsafe { c::bch2_snapshot_to_text(out, self) })
     }

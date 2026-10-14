@@ -4,7 +4,6 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, Le32, Le64};
-use crate::util::vstructs::Ffi;
 use core::ffi::c_ulong;
 use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, grown, whole, CStruct, Plain, TypeInfo, View};
 
@@ -79,7 +78,7 @@ pub struct bch_alloc_v3 {
 }
 
 c_bitmask! {
-    LE32_BITMASK(struct Ffi<bch_alloc_v3>, flags), strip BCH_ALLOC_V3_ {
+    LE32_BITMASK(struct bch_alloc_v3, flags), strip BCH_ALLOC_V3_ {
         BCH_ALLOC_V3_NEED_DISCARD(0, 1),
         BCH_ALLOC_V3_NEED_INC_GEN(1, 2),
     }
@@ -134,11 +133,11 @@ pub struct bch_alloc_v4 {
 c_const! {
     #[c_int]
     pub const BCH_ALLOC_V4_U64s_V0: u32 = 6;
-    pub const BCH_ALLOC_V4_U64s: usize = size_of::<Ffi<c::bch_alloc_v4>>() / size_of::<u64>();
+    pub const BCH_ALLOC_V4_U64s: usize = size_of::<c::bch_alloc_v4>() / size_of::<u64>();
 }
 
 c_bitmask! {
-    BITMASK(struct Ffi<bch_alloc_v4>, flags), strip BCH_ALLOC_V4_ {
+    BITMASK(struct bch_alloc_v4, flags), strip BCH_ALLOC_V4_ {
         BCH_ALLOC_V4_NEED_DISCARD(0, 1),
         BCH_ALLOC_V4_NEED_INC_GEN(1, 2),
         BCH_ALLOC_V4_BACKPOINTERS_START(2, 8),

@@ -534,7 +534,7 @@ mod tests {
         assert_eq!((e.as_bytes().len(), size_of_val(e)), (88, 88));
 
         // and as the one arm sb_field_get() asks for
-        let e = f.arm::<c::bch_sb_field_ext>().expect("an ext section");
+        let e = f.arm::<c::bch_sb_field_ext<Validated>>().expect("an ext section");
         assert_eq!((e.errors_silent[0].get(), e.btrees_lost_data().get()), (0x5a, 0));
         assert!(f.arm::<c::bch_sb_field_crypt>().is_none());
     }
@@ -587,13 +587,13 @@ mod tests {
         let mut buf = [0u64; 16];
         buf[12] = 7;                            // flags0
         let f = field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_ext, 15);
-        let e = f.arm::<c::bch_sb_field_ext>().expect("an ext section");
+        let e = f.arm::<c::bch_sb_field_ext<Validated>>().expect("an ext section");
         let w = e.whole().expect("all of it");
         assert_eq!((w.flags0.get(), e.flags0().get(), size_of_val(e)), (7, 7, 120));
 
         let mut buf = [0u64; 16];
         let f = field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_ext, 10);
-        assert!(f.arm::<c::bch_sb_field_ext>().is_none());
+        assert!(f.arm::<c::bch_sb_field_ext<Validated>>().is_none());
         assert!(f.typed().is_err());
     }
 }

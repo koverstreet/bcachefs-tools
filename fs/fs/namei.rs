@@ -45,7 +45,6 @@ use crate::util::ffi::Opaque;
 use crate::util::kernel::{capable, Capability};
 use crate::util::os_str::{qstr_name, OsStr, OsStrExt};
 use crate::util::Printbuf;
-use crate::util::vstructs::Ffi;
 use crate::{bch_err, fs_inconsistent, fsck_err, fsck_err_on};
 use core::ffi::{c_int, c_uint};
 use core::fmt;
@@ -112,7 +111,7 @@ pub fn create_trans(
     dir:              c::subvol_inum,
     dir_u:            &mut c::bch_inode_unpacked,
     new_inode:        &mut c::bch_inode_unpacked,
-    new_subvol:       &mut Ffi<c::bch_subvolume>,
+    new_subvol:       &mut c::bch_subvolume,
     name:             Option<&OsStr>,
     uid:              c::uid_t,
     gid:              c::gid_t,
@@ -276,7 +275,7 @@ pub unsafe extern "C" fn bch2_create_trans(
     dir:          c::subvol_inum,
     dir_u:        &mut c::bch_inode_unpacked,
     new_inode:    &mut c::bch_inode_unpacked,
-    new_subvol:   &mut Ffi<c::bch_subvolume>,
+    new_subvol:   &mut c::bch_subvolume,
     name:         Option<&c::qstr>,
     uid:          c::uid_t,
     gid:          c::gid_t,
@@ -513,7 +512,7 @@ fn subvol_update_parent(t: &TransAttempt<'_, '_>, subvol: u32, new_parent: u32)
     let mut s = t.bkey_get_mut(c::btree_id::subvolumes, pos(0, subvol as u64),
                                BtreeIterFlags::CACHED, UpdateTriggerFlags::empty(),
                                c::bch_bkey_type::KEY_TYPE_subvolume,
-                               size_of::<BkeyI<Ffi<c::bch_subvolume>>>())?;
+                               size_of::<BkeyI<c::bch_subvolume>>())?;
     s.k_i_mut().whole_mut::<BkeyISubvolume>().expect("a subvolume").v.fs_path_parent = new_parent.into();
     Ok(())
 }

@@ -172,7 +172,7 @@ pub mod c {
         pub struct bch_crypt_flags(u64);
         pub TYPE, _: 4, 0;
     }
-    impl bch_sb_field_crypt__ffi {
+    impl bch_sb_field_crypt {
         pub fn scrypt_flags(&self) -> Option<bch_scrypt_flags> {
             use core::convert::TryInto;
             match bch_kdf_types(bch_crypt_flags(self.flags.get()).TYPE().try_into().ok()?) {

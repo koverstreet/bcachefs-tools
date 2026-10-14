@@ -9,7 +9,7 @@ use core::fmt;
 use core::str::FromStr;
 #[cfg(feature = "std")]
 use crate::errcode::{bch_errcode, BchError};
-use crate::util::vstructs::{ArmRef, Ffi, Floored, Unsized};
+use crate::util::vstructs::{ArmRef, Floored, Unsized};
 use core::marker::PhantomData;
 
 use c::bpos as Bpos;
@@ -453,16 +453,16 @@ macro_rules! bkey_val {
     ($name:ident, _)              => { bkey_val!(@sized $name); };
 
     (@family $name:ident, $field:tt) => { crate::paste! {
-        impl BkeyValC for c::[<bch_ $name>] {
-            type C = Ffi<c::[<bch_ $name>]>;
+        impl BkeyValC for c::[<bch_ $name>]<crate::util::vstructs::Validated> {
+            type C = c::[<bch_ $name>];
         }
 
         impl TypedBkey for c::[<bkey_i_ $name>] {
-            type Val = c::[<bch_ $name>];
+            type Val = c::[<bch_ $name>]<crate::util::vstructs::Validated>;
             const TYPE: c::bch_bkey_type = c::bch_bkey_type::[<KEY_TYPE_ $name>];
             // its family's head: C's struct, or a grown type's floor
             const MIN_VAL_SIZE: usize = size_of::<<Self::Val as Unsized>::Head>();
-            const WHOLE_VAL_SIZE: usize = size_of::<Ffi<c::[<bch_ $name>]>>();
+            const WHOLE_VAL_SIZE: usize = size_of::<c::[<bch_ $name>]>();
 
             unsafe fn cast(k: *const c::bkey_i) -> *const BkeyI<Self::Val> {
                 // SAFETY: the caller's: its value, after its header, as long
@@ -485,7 +485,7 @@ macro_rules! bkey_val {
         }
 
         const _: () = assert!(<c::[<bkey_i_ $name>] as TypedBkey>::MIN_VAL_SIZE ==
-                              bkey_val!(@min Ffi<c::[<bch_ $name>]>, $field),
+                              bkey_val!(@min_repr c::[<bch_ $name>], $field),
                               concat!("bch_", stringify!($name), ": its family's head isn't the \
                                        minimum BCH_BKEY_TYPES() names"));
     } };
@@ -564,6 +564,9 @@ macro_rules! bkey_val {
     // bch2_bkey_min_val_sizes[] has it: @val up to @field, or all of it
     (@min $val:ty, _)            => { size_of::<$val>() };
     (@min $val:ty, $field:ident) => { core::mem::offset_of!($val, $field) };
+    // a family's: its fields are its repr's
+    (@min_repr $val:ty, _)            => { size_of::<$val>() };
+    (@min_repr $val:ty, $field:ident) => { core::mem::offset_of!($val, repr.$field) };
 }
 
 /// Everything defined per key type, from BCH_BKEY_TYPES(): (name, KEY_TYPE
@@ -572,8 +575,8 @@ macro_rules! bkey_types {
     ($(($name:ident, $nr:literal, $flags:expr, $field:tt $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! {
         $(
         pub type [<BkeyI $name:camel>] = c::[<bkey_i_ $name>];
-        pub type [<BkeySC $name:camel>]<'a> = BkeySC<'a, c::[<bch_ $name>]>;
-        pub type [<BkeyS $name:camel>]<'a> = BkeyS<'a, c::[<bch_ $name>]>;
+        pub type [<BkeySC $name:camel>]<'a> = BkeySC<'a, <c::[<bkey_i_ $name>] as TypedBkey>::Val>;
+        pub type [<BkeyS $name:camel>]<'a> = BkeyS<'a, <c::[<bkey_i_ $name>] as TypedBkey>::Val>;
 
         bkey_val!($name, $field);
         )*
@@ -582,7 +585,7 @@ macro_rules! bkey_types {
         #[allow(non_camel_case_types)]
         #[derive(Clone, Copy)]
         pub enum BkeySCTyped<'a> {
-            $($name(BkeySC<'a, c::[<bch_ $name>]>),)*
+            $($name(BkeySC<'a, <c::[<bkey_i_ $name>] as TypedBkey>::Val>),)*
             /// A type this code doesn't know.
             unknown(BkeySC<'a>),
         }
@@ -600,7 +603,7 @@ macro_rules! bkey_types {
         /// BkeySCTyped, to edit: BkeyS::typed().
         #[allow(non_camel_case_types)]
         pub enum BkeySTyped<'a> {
-            $($name(BkeyS<'a, c::[<bch_ $name>]>),)*
+            $($name(BkeyS<'a, <c::[<bkey_i_ $name>] as TypedBkey>::Val>),)*
             /// A type this code doesn't know.
             unknown(BkeyS<'a>),
         }
@@ -615,11 +618,11 @@ macro_rules! bkey_types {
             }
         }
 
-        /// A key with its value inline, by its type, each arm one whose value
-        /// is all there: BkeyI::typed().
+        /// A key with its value inline, by its type, each arm as long as its
+        /// u64s say: BkeyI::typed().
         #[allow(non_camel_case_types)]
         pub enum BkeyITyped<'a> {
-            $($name(&'a [<BkeyI $name:camel>]),)*
+            $($name(&'a BkeyI<<[<BkeyI $name:camel>] as TypedBkey>::Val>),)*
             /// A type this code doesn't know.
             unknown(&'a BkeyI),
         }
@@ -627,7 +630,7 @@ macro_rules! bkey_types {
         /// BkeyITyped, to edit.
         #[allow(non_camel_case_types)]
         pub enum BkeyITypedMut<'a> {
-            $($name(&'a mut [<BkeyI $name:camel>]),)*
+            $($name(&'a mut BkeyI<<[<BkeyI $name:camel>] as TypedBkey>::Val>),)*
             /// A type this code doesn't know.
             unknown(&'a mut BkeyI),
         }
@@ -745,12 +748,12 @@ impl<'a> BkeySC<'a> {
 
         let len = self.val_bytes().len();
         match self.typed() {
-            BkeySCTyped::btree_ptr(_)    => offset_of!(Ffi<c::bch_btree_ptr>, start)..len,
-            BkeySCTyped::extent(_)       => offset_of!(Ffi<c::bch_extent>, start)..len,
-            BkeySCTyped::reflink_v(_)    => offset_of!(Ffi<c::bch_reflink_v>, start)..len,
-            BkeySCTyped::btree_ptr_v2(_) => offset_of!(Ffi<c::bch_btree_ptr_v2>, start)..len,
+            BkeySCTyped::btree_ptr(_)    => offset_of!(c::bch_btree_ptr, repr.start)..len,
+            BkeySCTyped::extent(_)       => offset_of!(c::bch_extent, repr.start)..len,
+            BkeySCTyped::reflink_v(_)    => offset_of!(c::bch_reflink_v, repr.start)..len,
+            BkeySCTyped::btree_ptr_v2(_) => offset_of!(c::bch_btree_ptr_v2, repr.start)..len,
             BkeySCTyped::stripe(s) => {
-                let start = offset_of!(Ffi<c::bch_stripe>, ptrs);
+                let start = offset_of!(c::bch_stripe, repr.ptrs);
                 start..(start + s.v().nr_blocks as usize * size_of::<c::bch_extent_ptr>()).min(len)
             }
             _ => 0..0,
@@ -1155,8 +1158,9 @@ mod tests {
         let b = [0u64; 3];
         // SAFETY: b's bytes, aligned for any value
         let b = unsafe { core::slice::from_raw_parts(b.as_ptr().cast::<u8>(), size_of_val(&b)) };
-        assert!(<c::bch_snapshot as ArmRef>::arm_ref(&b[..16]).is_none());
-        assert!(<c::bch_snapshot as ArmRef>::arm_ref(&b[..24]).is_some());
+        use crate::util::vstructs::Validated;
+        assert!(<c::bch_snapshot<Validated> as ArmRef>::arm_ref(&b[..16]).is_none());
+        assert!(<c::bch_snapshot<Validated> as ArmRef>::arm_ref(&b[..24]).is_some());
     }
 
     /// A subvolume key from before fs_path_parent - 16 bytes of its 48 - edited
