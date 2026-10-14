@@ -192,6 +192,73 @@ impl<T> Default for DArray<T> {
     }
 }
 
+// ---- Rust's own, in C's structs ---------------------------------------------
+
+/// A field of a struct C shares that's Rust's alone - a Mutex<KVVec<u32>>,
+/// say: C reserves its storage, as opaque bytes of its size and alignment,
+/// and never looks inside; Rust reaches it as a @T, by Deref. Declared with
+/// rust_only!(T), which sizes it.
+///
+/// To C, and to improper_ctypes, it's @U64S u64s. The lint looks through the
+/// *mut bch_fs that extern blocks pass into every struct bch_fs holds, and a
+/// @T - not FFI-safe, and none of C's business - would fail every one of
+/// them; @T is only a PhantomData, which the lint doesn't inspect.
+///
+/// C allocates the struct holding it, zeroed, which isn't a @T: init() it in
+/// place before Rust is handed the struct, and drop_in_place() it when the
+/// struct is freed - the containing struct's init and exit. Deref relies on
+/// that.
+#[repr(C)]
+pub struct RustOnly<T, const U64S: usize> {
+    /// UnsafeCell: a @T - a Mutex - may be written through a shared reference
+    storage: core::cell::UnsafeCell<[core::mem::MaybeUninit<u64>; U64S]>,
+    _t:      core::marker::PhantomData<T>,
+}
+
+// SAFETY: it's a @T, behind the storage C reserved
+unsafe impl<T: Send, const U64S: usize> Send for RustOnly<T, U64S> {}
+unsafe impl<T: Sync, const U64S: usize> Sync for RustOnly<T, U64S> {}
+
+impl<T, const U64S: usize> RustOnly<T, U64S> {
+    /// The storage holds a @T: rust_only!() sizes it, and u64 alignment is
+    /// all it has.
+    const FITS: () = assert!(core::mem::size_of::<T>() <= U64S * 8 &&
+                             core::mem::align_of::<T>() <= core::mem::align_of::<u64>(),
+                             "RustOnly: storage too small, or too little aligned, for its T");
+
+    /// Initialize the @T at @slot in place - it's pinned there - from @init.
+    ///
+    /// # Safety
+    /// @slot is valid for writes and holds no @T: what's there - C's zeroed
+    /// storage - is overwritten, not dropped. Once, before any use.
+    pub unsafe fn init(slot: *mut Self, init: impl crate::util::sync::PinInit<T>) {
+        let () = Self::FITS;
+        match unsafe { init.__pinned_init(slot.cast::<T>()) } {
+            Ok(()) => {}
+            Err(e) => match e {},
+        }
+    }
+
+    /// Drop the @T at @slot.
+    ///
+    /// # Safety
+    /// init() ran, and nothing uses it after.
+    pub unsafe fn drop_in_place(slot: *mut Self) {
+        unsafe { core::ptr::drop_in_place(slot.cast::<T>()) }
+    }
+}
+
+impl<T, const U64S: usize> core::ops::Deref for RustOnly<T, U64S> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        let () = Self::FITS;
+        // SAFETY: a @T, as init() made it - the containing struct's init ran
+        // before Rust was handed it
+        unsafe { &*self.storage.get().cast::<T>() }
+    }
+}
+
 /// util/darray.h's DEFINE_DARRAY()s: C's typedefs are its own, these the
 /// same types for Rust.
 #[allow(non_camel_case_types)]
