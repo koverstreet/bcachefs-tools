@@ -420,15 +420,13 @@ fn acl_from_xattr(value: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
 
-    let entries: Vec<acl::AclEntry> = entries.chunks_exact(8)
-        .map(|e| acl::AclEntry {
-            tag:  u16::from_le_bytes([e[0], e[1]]),
-            perm: u16::from_le_bytes([e[2], e[3]]),
-            id:   u32::from_le_bytes([e[4], e[5], e[6], e[7]]),
-        })
-        .collect();
+    let entries: Vec<c::AclEntry> = entries.chunks_exact(8)
+        .map(|e| c::AclEntry::new(u16::from_le_bytes([e[0], e[1]]),
+                                  u16::from_le_bytes([e[2], e[3]]),
+                                  u32::from_le_bytes([e[4], e[5], e[6], e[7]])).ok())
+        .collect::<Option<_>>()?;
 
-    let mut out = vec![0u8; acl::encoded_len(entries.iter().copied())?];
+    let mut out = vec![0u8; acl::encoded_len(entries.iter().copied())];
     acl::encode(entries.iter().copied(), &mut out);
     Some(out)
 }

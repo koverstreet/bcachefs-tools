@@ -1,150 +1,136 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! POSIX ACLs (fs/acl.c): stored as xattrs of types POSIX_ACL_ACCESS and
-//! POSIX_ACL_DEFAULT with an empty name, the value a bch_acl_header and its
-//! entries - and converted to and from the VFS's struct posix_acl, which Rust
+//! POSIX ACLs (fs/acl.c): their on-disk form, acl_format.rs's, read and
+//! written - and converted to and from the VFS's struct posix_acl, which Rust
 //! reaches through the shims of vfs/rust_types.rs.
+//!
+//! An entry is an AclEntry, a tagged_union! as long as its arm. A tag it
+//! doesn't know is one there's no stepping past, so an ACL with one isn't an
+//! ACL. An on-disk ACL is checked once, entries(), and read after.
 //!
 //! An inode records whether it has each kind (BCH_INODE_has_access_acl,
 //! _has_default_acl), so that getting the ACL of an inode without one -
 //! nearly every inode - needs no lookup.
 
-use crate::util::Printbuf;
+use core::mem::size_of;
 
-// <uapi/linux/posix_acl.h>:
-pub const ACL_USER_OBJ:  u16 = 0x01;
-pub const ACL_USER:      u16 = 0x02;
-pub const ACL_GROUP_OBJ: u16 = 0x04;
-pub const ACL_GROUP:     u16 = 0x08;
-pub const ACL_MASK:      u16 = 0x10;
-pub const ACL_OTHER:     u16 = 0x20;
+use crate::c::{self, AclEntry, BCH_ACL_VERSION};
+use crate::util::vstructs::{cast_plain, plain_bytes, ArmSized, ArmWalkError};
+use crate::util::Printbuf;
 
 pub const ACL_TYPE_ACCESS:  i32 = 0x8000;
 pub const ACL_TYPE_DEFAULT: i32 = 0x4000;
 
-/// bch_acl_header's a_version:
-const BCH_ACL_VERSION: u32 = 0x0001;
+impl AclEntry {
+    /// An entry as the VFS has it - for ACL_USER and ACL_GROUP, @id the uid
+    /// or gid; the others have none: Err(the tag) for a tag ACLs don't have.
+    /// Read from a long entry, whose start a short one is, as C overlays them.
+    pub fn new(tag: u16, perm: u16, id: u32) -> Result<Self, u16> {
+        let e = c::bch_acl_entry { e_tag: tag.into(), e_perm: perm.into(), e_id: id.into() };
+        Self::read(plain_bytes(&e)).map_err(|_| tag)
+    }
 
-const HEADER_SIZE: usize = 4;
-/// bch_acl_entry_short: tag and permissions.
-const SHORT_SIZE:  usize = 4;
-/// bch_acl_entry: and an id, for ACL_USER and ACL_GROUP.
-const LONG_SIZE:   usize = 8;
+    /// The uid or gid, for ACL_USER and ACL_GROUP; None for the others.
+    pub fn id(&self) -> Option<u32> {
+        match self {
+            Self::user(e) | Self::group(e) => Some(e.e_id.get()),
+            _                              => None,
+        }
+    }
+}
 
-/// One entry of an ACL. @id is the uid or gid, for ACL_USER and ACL_GROUP.
+/// Why an on-disk ACL isn't one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AclEntry {
-    pub tag:  u16,
-    pub perm: u16,
-    pub id:   u32,
+pub enum AclError {
+    /// Fewer bytes than a header: how many.
+    Short(usize),
+    /// A bch_acl_header of a version that isn't BCH_ACL_VERSION.
+    Version(u32),
+    /// An entry that's cut off, or has a tag ACLs don't have - at its byte
+    /// offset in the value.
+    Entry(ArmWalkError<u16>),
 }
 
-/// How big an entry with @tag is on disk - None for a tag ACLs don't have.
-fn entry_size(tag: u16) -> Option<usize> {
-    match tag {
-        ACL_USER_OBJ | ACL_GROUP_OBJ | ACL_MASK | ACL_OTHER => Some(SHORT_SIZE),
-        ACL_USER | ACL_GROUP                                => Some(LONG_SIZE),
-        _                                                   => None,
+impl core::fmt::Display for AclError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Short(len)  => write!(f, "{len} bytes, too few for its header"),
+            Self::Version(v)  => write!(f, "version {v}, not {BCH_ACL_VERSION}"),
+            Self::Entry(err)  => write!(f, "{err}"),
+        }
     }
 }
 
-fn le16(b: &[u8]) -> u16 { u16::from_le_bytes([b[0], b[1]]) }
-fn le32(b: &[u8]) -> u32 { u32::from_le_bytes([b[0], b[1], b[2], b[3]]) }
+const HEADER_BYTES: usize = size_of::<c::bch_acl_header>();
 
-/// Call @f on each entry of on-disk ACL @value: how many there were, or None
-/// if it isn't an ACL - the wrong version, an entry cut off, or a tag ACLs
-/// don't have. As bch2_acl_from_disk()'s checks.
-pub fn decode(value: &[u8], mut f: impl FnMut(AclEntry)) -> Option<usize> {
-    if le32(value.get(..HEADER_SIZE)?) != BCH_ACL_VERSION {
-        return None;
+/// On-disk ACL @value's entries, past its header: an error if the header
+/// isn't one.
+fn entry_bytes(value: &[u8]) -> Result<&[u8], AclError> {
+    let h = cast_plain::<c::bch_acl_header>(value).ok_or(AclError::Short(value.len()))?;
+    if h.a_version.get() != BCH_ACL_VERSION {
+        return Err(AclError::Version(h.a_version.get()));
     }
-
-    let mut p = &value[HEADER_SIZE..];
-    let mut nr = 0;
-    while !p.is_empty() {
-        let short = p.get(..SHORT_SIZE)?;
-        let tag = le16(&short[0..]);
-        let size = entry_size(tag)?;
-        let e = p.get(..size)?;
-
-        f(AclEntry {
-            tag,
-            perm: le16(&e[2..]),
-            id:   if size == LONG_SIZE { le32(&e[4..]) } else { 0 },
-        });
-        nr += 1;
-        p = &p[size..];
-    }
-    Some(nr)
+    Ok(&value[HEADER_BYTES..])
 }
 
-/// The size @entries take as an on-disk ACL, header included - None if one
-/// has a tag ACLs don't have: as bch2_acl_size().
-pub fn encoded_len(entries: impl Iterator<Item = AclEntry>) -> Option<usize> {
-    let mut len = HEADER_SIZE;
-    for e in entries {
-        len += entry_size(e.tag)?;
-    }
-    Some(len)
+/// The entries in @entries, an ACL's past its header: one that can't be read
+/// is an error, at its offset in the value, which ends the walk.
+fn walk(entries: &[u8]) -> impl Iterator<Item = Result<AclEntry, AclError>> + '_ {
+    AclEntry::walk(entries)
+        .map(|e| e.map_err(|e| AclError::Entry(ArmWalkError { at: HEADER_BYTES + e.at, ..e })))
+}
+
+/// The entries of on-disk ACL @value, checked first - the right version,
+/// and every entry there, of a tag ACLs have: as bch2_acl_from_disk()'s
+/// checks.
+pub fn entries(value: &[u8]) -> Result<impl Iterator<Item = AclEntry> + Clone + '_, AclError> {
+    let entries = entry_bytes(value)?;
+    walk(entries).try_for_each(|e| e.map(|_| ()))?;
+    Ok(AclEntry::walk(entries).map(|e| e.expect("an entry checked above")))
+}
+
+/// The size @entries take as an on-disk ACL, header included: as
+/// bch2_acl_size().
+pub fn encoded_len(entries: impl Iterator<Item = AclEntry>) -> usize {
+    HEADER_BYTES + entries.map(|e| e.bytes()).sum::<usize>()
 }
 
 /// Write @entries into @out as an on-disk ACL - @out encoded_len() of them
-/// long, so every tag is one ACLs have.
-pub fn encode(entries: impl Iterator<Item = AclEntry>, mut out: &mut [u8]) {
-    out[..HEADER_SIZE].copy_from_slice(&BCH_ACL_VERSION.to_le_bytes());
-    out = &mut out[HEADER_SIZE..];
+/// long.
+pub fn encode(entries: impl Iterator<Item = AclEntry>, out: &mut [u8]) {
+    let h = c::bch_acl_header { a_version: BCH_ACL_VERSION.into() };
+    out[..HEADER_BYTES].copy_from_slice(plain_bytes(&h));
 
+    let mut rest = &mut out[HEADER_BYTES..];
     for e in entries {
-        let size = entry_size(e.tag).expect("a tag ACLs have");
-        out[0..2].copy_from_slice(&e.tag.to_le_bytes());
-        out[2..4].copy_from_slice(&e.perm.to_le_bytes());
-        if size == LONG_SIZE {
-            out[4..8].copy_from_slice(&e.id.to_le_bytes());
-        }
-        out = &mut out[size..];
+        rest = e.write(rest);
     }
-    assert!(out.is_empty(), "encode() given a buffer encoded_len() didn't size");
+    assert!(rest.is_empty(), "encode() given a buffer encoded_len() didn't size");
 }
 
-/// On-disk ACL @value, as text: as bch2_acl_to_text(). Nothing, if it isn't
-/// one; an entry with a tag ACLs don't have ends it.
+/// On-disk ACL @value, as text: as bch2_acl_to_text(). Its entries, as far
+/// as they can be read; where they can't - or the header isn't one - what's
+/// wrong, and where.
 pub fn to_text(out: &mut Printbuf, value: &[u8]) {
-    match value.get(..HEADER_SIZE) {
-        Some(h) if le32(h) == BCH_ACL_VERSION => {}
-        _ => return,
-    }
-
-    let mut p = &value[HEADER_SIZE..];
-    while let Some(short) = p.get(..SHORT_SIZE) {
-        let tag = le16(&short[0..]);
-
-        let name = match tag {
-            ACL_USER_OBJ  => "user_obj",
-            ACL_USER      => "user",
-            ACL_GROUP_OBJ => "group_obj",
-            ACL_GROUP     => "group",
-            ACL_MASK      => "mask",
-            ACL_OTHER     => "other",
-            _ => {
-                write!(out, "(unknown tag {tag})");
-                return;
+    let mut entries = || -> Result<(), AclError> {
+        for (i, e) in walk(entry_bytes(value)?).enumerate() {
+            if i > 0 {
+                write!(out, " ");
             }
-        };
-        write!(out, "{name}");
-
-        let size = entry_size(tag).expect("a known tag");
-        let Some(e) = p.get(..size) else { return };
-        match tag {
-            ACL_USER  => write!(out, " uid {}", le32(&e[4..])),
-            ACL_GROUP => write!(out, " gid {}", le32(&e[4..])),
-            _         => {}
+            let e = e?;
+            write!(out, "{}", e.name());
+            match e {
+                AclEntry::user(u)  => write!(out, " uid {}", u.e_id.get()),
+                AclEntry::group(g) => write!(out, " gid {}", g.e_id.get()),
+                _                  => {}
+            }
+            write!(out, " {:o}", e.head().e_perm.get());
         }
-        write!(out, " {:o}", le16(&e[2..]));
+        Ok(())
+    };
 
-        p = &p[size..];
-        if !p.is_empty() {
-            write!(out, " ");
-        }
+    if let Err(err) = entries() {
+        write!(out, "(invalid acl: {err})");
     }
 }
 
@@ -166,7 +152,6 @@ mod vfs {
     use core::ptr::NonNull;
     use cstruct_macros::c_export;
     use crate::bch_err;
-    use crate::btree::bkey::{BkeyIXattr, BKEY_U64S, POS_MIN};
     use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                              TransAttempt, TransBkey, UpdateTriggerFlags};
     use crate::c;
@@ -239,21 +224,23 @@ mod vfs {
             self.0.as_ptr()
         }
 
-        fn entries(&self) -> impl Iterator<Item = AclEntry> + '_ {
+        /// Its entries - Err(the tag) for one with a tag ACLs don't have.
+        fn entries(&self) -> impl Iterator<Item = Result<AclEntry, u16>> + '_ {
             let nr = unsafe { c::rust_posix_acl_count(self.as_raw()) };
             (0..nr).map(|i| {
-                let mut e = AclEntry { tag: 0, perm: 0, id: 0 };
-                unsafe {
-                    c::rust_posix_acl_entry(self.as_raw(), i, &mut e.tag, &mut e.perm, &mut e.id)
-                };
-                e
+                let (mut tag, mut perm, mut id) = (0, 0, 0);
+                unsafe { c::rust_posix_acl_entry(self.as_raw(), i, &mut tag, &mut perm, &mut id) };
+                AclEntry::new(tag, perm, id)
             })
         }
 
         /// Set entry @i - below the count it was allocated with.
         fn set_entry(&mut self, i: u32, e: AclEntry) {
             assert!(i < unsafe { c::rust_posix_acl_count(self.as_raw()) });
-            unsafe { c::rust_posix_acl_set_entry(self.as_raw(), i, e.tag, e.perm, e.id) }
+            unsafe {
+                c::rust_posix_acl_set_entry(self.as_raw(), i, e.e_tag(), e.head().e_perm.get(),
+                                            e.id().unwrap_or(0))
+            }
         }
 
         /// This ACL with its permissions changed to match file mode @mode:
@@ -284,22 +271,19 @@ mod vfs {
     /// On-disk ACL @value as a posix_acl - None for one with no entries: as
     /// bch2_acl_from_disk(). May unlock to allocate: a restart then.
     fn from_disk(t: &TransAttempt<'_, '_>, value: &[u8]) -> Result<Option<PosixAcl>, BchError> {
-        let Some(nr) = decode(value, |_| {}) else {
-            bch_err!(t.fs(), "invalid acl entry");
-            return Err(BchError::from(c::EINVAL));
-        };
+        let entries = entries(value).map_err(|err| {
+            bch_err!(t.fs(), "invalid acl: {err}");
+            BchError::from(c::EINVAL)
+        })?;
+        let nr = entries.clone().count();
         if nr == 0 {
             return Ok(None);
         }
 
         let mut acl = PosixAcl::alloc(t, nr as u32)?;
-
-        let mut i = 0;
-        decode(value, |e| {
-            acl.set_entry(i, e);
-            i += 1;
-        });
-        assert_eq!(i as usize, nr);
+        for (i, e) in entries.enumerate() {
+            acl.set_entry(i as u32, e);
+        }
         Ok(Some(acl))
     }
 
@@ -308,24 +292,15 @@ mod vfs {
     fn to_xattr<'a, 't>(t: &TransAttempt<'a, 't>, acl: &PosixAcl, type_: i32)
         -> Result<TransBkey<'a, 't>, BchError>
     {
-        let len = encoded_len(acl.entries()).ok_or(BchError::from(c::EINVAL))?;
-
-        let val_u64s = xattr::val_u64s(0, len);
-        if BKEY_U64S + val_u64s > u8::MAX as usize {
-            return Err(BchError::from(c::E2BIG));
+        // A tag ACLs don't have: EINVAL, as bch2_acl_to_xattr()
+        if acl.entries().any(|e| e.is_err()) {
+            return Err(BchError::from(c::EINVAL));
         }
+        let entries = || acl.entries().map(|e| e.expect("checked above"));
 
-        let mut k = t.bkey_alloc_init(val_u64s, c::bch_bkey_type::KEY_TYPE_xattr.0 as u8,
-                                      POS_MIN)?;
-        let x = k.k_i_mut().arm_mut::<BkeyIXattr>().expect("an xattr").v_mut();
-        x.x_type     = xattr_type(type_);
-        x.x_name_len = 0;
-        x.x_val_len.set(len as u16);
-
-        let start = core::mem::offset_of!(crate::util::vstructs::Ffi<c::bch_xattr>, x_name_and_value);
-        let mut s = crate::btree::bkey::BkeyS::from(k.k_i_mut());
-        encode(acl.entries(), &mut s.val_bytes_mut()[start..][..len]);
-
+        let mut k = xattr::new_key(t, xattr_type(type_), b"", encoded_len(entries()))?
+            .ok_or(BchError::from(c::E2BIG))?;
+        encode(entries(), xattr::value_mut(k.k_i_mut()));
         Ok(k)
     }
 

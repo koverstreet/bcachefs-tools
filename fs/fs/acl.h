@@ -7,8 +7,6 @@
 struct bch_inode_unpacked;
 struct posix_acl;
 
-#define BCH_ACL_VERSION	0x0001
-
 #ifdef NO_BCACHEFS_FS
 
 static inline int bch2_acl_chmod(struct btree_trans *trans, subvol_inum inum,
