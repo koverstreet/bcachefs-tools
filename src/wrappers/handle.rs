@@ -22,7 +22,7 @@ use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::path_to_cstr;
 use errno::Errno;
 
-fn io_errno(e: std::io::Error) -> Errno {
+pub(crate) fn io_errno(e: std::io::Error) -> Errno {
     Errno(e.raw_os_error().unwrap_or(libc::EIO))
 }
 
@@ -459,27 +459,17 @@ impl BcachefsHandle {
     /// Read the filesystem superblock via BCH_IOCTL_READ_SUPER.
     ///
     /// Returns a heap-allocated buffer containing the raw superblock.
-    /// The kernel may return ERANGE if the buffer is too small, so we
-    /// start with a reasonable size and retry once if needed.
     pub(crate) fn read_super(&self) -> Result<Vec<u8>, Errno> {
-        let mut size: usize = 4096;
-
-        loop {
+        grow_on_erange(4096, 1 << 20, |size| {
             let mut buf = vec![0u8; size];
-
             let arg = bch_ioctl_read_super {
                 size: size as u64,
                 sb:   buf.as_mut_ptr() as u64,
                 ..Default::default()
             };
-
-            match ioctl_w::<BCH_IOCTL_READ_SUPER>(self.ioctl_fd(), &arg) {
-                Ok(_) => return Ok(buf),
-                Err(e) if e.raw_os_error() == Some(libc::ERANGE) && size < 1 << 20 =>
-                    size *= 4,
-                Err(e) => return Err(io_errno(e)),
-            }
-        }
+            ioctl_w::<BCH_IOCTL_READ_SUPER>(self.ioctl_fd(), &arg)?;
+            Ok(buf)
+        }).map_err(io_errno)
     }
 
     /// BCH_IOCTL_QUERY_BTREE_KEYS: fetch one buffer's worth of formatted
@@ -487,9 +477,8 @@ impl BcachefsHandle {
     /// advances `arg.start` past the last key returned; loop until
     /// `arg.done` is set. Returns ERANGE if `arg.buf_size` can't hold even
     /// a single key.
-    pub(crate) fn query_btree_keys(&self, arg: &mut bch_ioctl_query_btree_keys) -> Result<(), Errno> {
-        ioctl_rw::<BCH_IOCTL_QUERY_BTREE_KEYS>(self.ioctl_fd(), arg)
-            .map(|_| ()).map_err(io_errno)
+    pub(crate) fn query_btree_keys(&self, arg: &mut bch_ioctl_query_btree_keys) -> std::io::Result<()> {
+        ioctl_rw::<BCH_IOCTL_QUERY_BTREE_KEYS>(self.ioctl_fd(), arg).map(|_| ())
     }
 
     /// Read the on-disk metadata version from the filesystem superblock.

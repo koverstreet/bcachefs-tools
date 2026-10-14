@@ -31,7 +31,7 @@ use crate::commands::fs_usage::replicas_spare_redundancy;
 use crate::thread_with_file::StatusDisplay;
 use crate::wrappers::accounting::data_type;
 use crate::wrappers::ioctl::{
-    ioctl_ptr, ioctl_rw, IoctlBuf, BCH_IOCTL_FS_USAGE, BCH_IOCTL_RECOVERY_STATUS,
+    grow_on_erange, ioctl_ptr, ioctl_rw, IoctlBuf, BCH_IOCTL_FS_USAGE, BCH_IOCTL_RECOVERY_STATUS,
 };
 use crate::wrappers::sysfs::DevInfo;
 
@@ -401,23 +401,14 @@ impl FsUsage {
 /// name, and the replicas entries are exactly what we don't know in advance:
 /// which combinations of devices exist is the question.
 fn fs_usage(fd: BorrowedFd<'_>) -> io::Result<FsUsage> {
-    let mut bytes = 4096usize;
-
-    loop {
+    grow_on_erange(4096, 1 << 20, |bytes| {
         let mut buf = IoctlBuf::<c::bch_ioctl_fs_usage>::with_trailing_bytes(bytes);
         buf.hdr_mut().replica_entries_bytes = bytes as u32;
+        unsafe { ioctl_ptr::<BCH_IOCTL_FS_USAGE>(fd, buf.as_mut_ptr())? };
 
-        match unsafe { ioctl_ptr::<BCH_IOCTL_FS_USAGE>(fd, buf.as_mut_ptr()) } {
-            Ok(_) => {
-                let n = buf.hdr().replica_entries_bytes as usize;
-                return Ok(FsUsage { buf, bytes: n });
-            }
-            Err(e) if e.raw_os_error() == Some(libc::ERANGE) && bytes < 1 << 20 => {
-                bytes *= 2;
-            }
-            Err(e) => return Err(e),
-        }
-    }
+        let bytes = buf.hdr().replica_entries_bytes as usize;
+        Ok(FsUsage { buf, bytes })
+    })
 }
 
 fn mask_count(m: &c::bch_recovery_pass_mask) -> u32 {

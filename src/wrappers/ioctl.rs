@@ -56,6 +56,21 @@ pub unsafe fn ioctl_ptr<I: Ioctl>(fd: impl AsFd, arg: *mut I::Arg) -> io::Result
     ret(libc::ioctl(fd.as_fd().as_raw_fd(), I::OPCODE as libc::Ioctl, arg))
 }
 
+/// @call with a reply buffer of @bytes, then twice that, while the kernel
+/// says ERANGE - too small, and not by how much - up to @max: an ERANGE
+/// there is returned, a reply bigger than any we'd expect.
+pub fn grow_on_erange<T>(mut bytes: usize, max: usize,
+                         mut call: impl FnMut(usize) -> io::Result<T>) -> io::Result<T> {
+    assert!(bytes > 0, "grow_on_erange() from 0 bytes never grows");
+    loop {
+        match call(bytes) {
+            Err(e) if e.raw_os_error() == Some(libc::ERANGE) && bytes < max =>
+                bytes = (bytes * 2).min(max),
+            r => return r,
+        }
+    }
+}
+
 /// Owned, zeroed allocation for an ioctl argument that ends in a flexible
 /// array member: header `H`, then what follows it. The header is read and
 /// written through the struct; what follows, through this buffer - never the

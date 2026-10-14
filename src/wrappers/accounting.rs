@@ -5,7 +5,7 @@ use bcachefs_kernel::metadata_version;
 use bcachefs_kernel::util::vstructs::UnvalidatedRefEntries;
 
 use super::handle::BcachefsHandle;
-use super::ioctl::{ioctl_ptr, IoctlBuf, BCH_IOCTL_QUERY_ACCOUNTING, BCH_IOCTL_QUERY_ACCOUNTING_v2};
+use super::ioctl::{grow_on_erange, ioctl_ptr, IoctlBuf, BCH_IOCTL_QUERY_ACCOUNTING, BCH_IOCTL_QUERY_ACCOUNTING_v2};
 use super::sysfs::bcachefs_kernel_version;
 
 // Re-export types and functions from bcachefs_kernel::accounting for consumers
@@ -46,73 +46,49 @@ impl BcachefsHandle {
     }
 
     fn query_accounting_v2(&self, type_mask: u32) -> anyhow::Result<AccountingResult> {
-        let mut accounting_u64s: u32 = 128;
+        let buf = grow_on_erange(1 << 10, MAX_REPLY, |bytes| {
+            let mut buf = IoctlBuf::<c::bch_ioctl_query_accounting_v2>::with_trailing_bytes(bytes);
+            buf.hdr_mut().accounting_u64s = (bytes / 8) as u32;
+            buf.hdr_mut().accounting_types_mask = type_mask;
+            unsafe { ioctl_ptr::<BCH_IOCTL_QUERY_ACCOUNTING_v2>(&self.ioctl_fd(), buf.as_mut_ptr())? };
+            Ok(buf)
+        })?;
+        let hdr = buf.hdr();
 
-        loop {
-            let mut buf = IoctlBuf::<c::bch_ioctl_query_accounting_v2>::with_trailing_bytes(accounting_u64s as usize * 8);
-            let hdr = buf.hdr_mut();
-            hdr.accounting_u64s = accounting_u64s;
-            hdr.accounting_types_mask = type_mask;
-
-            let ret = unsafe {
-                ioctl_ptr::<BCH_IOCTL_QUERY_ACCOUNTING_v2>(&self.ioctl_fd(), buf.as_mut_ptr())
-            };
-
-            match ret {
-                Ok(_) => {
-                    let hdr = buf.hdr();
-                    let entries = parse_accounting_entries(
-                        buf.trailing_bytes(hdr.accounting_u64s as usize * 8))?;
-
-                    return Ok(AccountingResult {
-                        capacity: hdr.capacity,
-                        used: hdr.used,
-                        online_reserved: hdr.online_reserved,
-                        free: hdr.free.to_vec(),
-                        free_now: hdr.free_now.to_vec(),
-                        entries,
-                    });
-                }
-                Err(e) if e.raw_os_error() == Some(libc::ERANGE) => accounting_u64s *= 2,
-                Err(e) => return Err(e.into()),
-            }
-        }
+        Ok(AccountingResult {
+            capacity: hdr.capacity,
+            used: hdr.used,
+            online_reserved: hdr.online_reserved,
+            free: hdr.free.to_vec(),
+            free_now: hdr.free_now.to_vec(),
+            entries: parse_accounting_entries(buf.trailing_bytes(hdr.accounting_u64s as usize * 8))?,
+        })
     }
 
     fn query_accounting_v1(&self, type_mask: u32) -> anyhow::Result<AccountingResult> {
-        let mut accounting_u64s: u32 = 128;
+        let buf = grow_on_erange(1 << 10, MAX_REPLY, |bytes| {
+            let mut buf = IoctlBuf::<c::bch_ioctl_query_accounting>::with_trailing_bytes(bytes);
+            buf.hdr_mut().accounting_u64s = (bytes / 8) as u32;
+            buf.hdr_mut().accounting_types_mask = type_mask;
+            unsafe { ioctl_ptr::<BCH_IOCTL_QUERY_ACCOUNTING>(&self.ioctl_fd(), buf.as_mut_ptr())? };
+            Ok(buf)
+        })?;
+        let hdr = buf.hdr();
 
-        loop {
-            let mut buf = IoctlBuf::<c::bch_ioctl_query_accounting>::with_trailing_bytes(accounting_u64s as usize * 8);
-            let hdr = buf.hdr_mut();
-            hdr.accounting_u64s = accounting_u64s;
-            hdr.accounting_types_mask = type_mask;
-
-            let ret = unsafe {
-                ioctl_ptr::<BCH_IOCTL_QUERY_ACCOUNTING>(&self.ioctl_fd(), buf.as_mut_ptr())
-            };
-
-            match ret {
-                Ok(_) => {
-                    let hdr = buf.hdr();
-                    let entries = parse_accounting_entries(
-                        buf.trailing_bytes(hdr.accounting_u64s as usize * 8))?;
-
-                    return Ok(AccountingResult {
-                        capacity: hdr.capacity,
-                        used: hdr.used,
-                        online_reserved: hdr.online_reserved,
-                        free: Vec::new(),
-                        free_now: Vec::new(),
-                        entries,
-                    });
-                }
-                Err(e) if e.raw_os_error() == Some(libc::ERANGE) => accounting_u64s *= 2,
-                Err(e) => return Err(e.into()),
-            }
-        }
+        Ok(AccountingResult {
+            capacity: hdr.capacity,
+            used: hdr.used,
+            online_reserved: hdr.online_reserved,
+            free: Vec::new(),
+            free_now: Vec::new(),
+            entries: parse_accounting_entries(buf.trailing_bytes(hdr.accounting_u64s as usize * 8))?,
+        })
     }
 }
+
+/// A reply bigger than this is a kernel that won't stop saying ERANGE:
+/// per-inode accounting on a large filesystem is the most there is.
+const MAX_REPLY: usize = 1 << 30;
 
 /// The accounting keys of a QUERY_ACCOUNTING reply, one after another: each
 /// checked against the bytes there are, an error if it doesn't fit or isn't

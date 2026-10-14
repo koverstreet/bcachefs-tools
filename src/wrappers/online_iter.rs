@@ -18,7 +18,8 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::{BkeyI, BkeySC};
 use errno::Errno;
 
-use crate::wrappers::handle::BcachefsHandle;
+use crate::wrappers::handle::{io_errno, BcachefsHandle};
+use crate::wrappers::ioctl::grow_on_erange;
 
 /// Iteration flags, mirroring BCH_IOCTL_QUERY_BTREE_KEYS_*:
 #[derive(Clone, Copy, Default)]
@@ -84,23 +85,16 @@ impl<'h> OnlineBtreeIter<'h> {
         }
     }
 
+    /// ERANGE is a buffer too small for even one key: grown, and kept grown.
     fn refill(&mut self) -> Result<(), Errno> {
-        loop {
+        self.pos = 0;
+        grow_on_erange(self.buf.len(), 1 << 20, |bytes| {
+            self.buf.resize(bytes, 0);
             self.arg.buf = self.buf.as_mut_ptr() as u64;
-            self.arg.buf_size = self.buf.len() as u32;
+            self.arg.buf_size = bytes as u32;
             self.arg.used = 0;
-            self.pos = 0;
-
-            match self.fs.query_btree_keys(&mut self.arg) {
-                Ok(()) => return Ok(()),
-                // Buffer can't fit even one key - grow and retry:
-                Err(e) if e.0 == libc::ERANGE => {
-                    let new_len = self.buf.len() * 2;
-                    self.buf = vec![0; new_len];
-                }
-                Err(e) => return Err(e),
-            }
-        }
+            self.fs.query_btree_keys(&mut self.arg)
+        }).map_err(io_errno)
     }
 
     /// The next key, or None at the end of the range. Lending: the
