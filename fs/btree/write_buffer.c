@@ -214,6 +214,20 @@ static inline int wb_flush_one(struct btree_trans *trans,
 			bch2_accounting_accumulate_maybe_kill(trans->c,
 					bkey_i_to_accounting(&wb->k),
 					bkey_s_c_to_accounting(k));
+
+		/*
+		 * A zeroed inum key would otherwise sit in the btree forever. The
+		 * whiteout keeps its bversion so replay still sees the delta as
+		 * applied.
+		 */
+		struct disk_accounting_pos acc_k;
+		bpos_to_disk_accounting_pos(&acc_k, wb->k.k.p);
+
+		if (acc_k.type == BCH_DISK_ACCOUNTING_inum &&
+		    bch2_accounting_key_is_zero(bkey_i_to_s_c_accounting(&wb->k))) {
+			wb->k.k.type = KEY_TYPE_deleted;
+			set_bkey_val_u64s(&wb->k.k, 0);
+		}
 	}
 	*accounting_accumulated = true;
 
