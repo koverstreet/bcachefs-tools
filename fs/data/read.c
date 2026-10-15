@@ -1284,8 +1284,14 @@ static inline struct bch_read_bio *read_extent_rbio_alloc(struct btree_trans *tr
 	struct bch_fs *c = trans->c;
 	struct bpos data_pos = bkey_start_pos(k.k);
 
+	/*
+	 * No promote for a reconstruct: it's punted to bch2_rbio_retry() before
+	 * anything is read, and the promote would be started there with nothing
+	 * in its bounce buffer:
+	 */
 	struct bch_read_bio *rbio =
-		(orig->opts.promote_target && (flags & BCH_READ_may_promote)) ||
+		(orig->opts.promote_target && (flags & BCH_READ_may_promote) &&
+		 !pick.do_ec_reconstruct) ||
 		have_io_error(failed)
 		? promote_alloc(trans, iter, k, &pick, flags, orig,
 				&bounce, &read_full, failed)
