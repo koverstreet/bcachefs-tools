@@ -11,7 +11,8 @@ use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, grown, whole, CStruct
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
-pub struct bch_alloc {
+#[c_name(bch_alloc)]
+pub struct Alloc {
     pub v: c::bch_val,
     pub fields: u8,
     pub generation: u8,
@@ -42,7 +43,8 @@ c_enum! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
-pub struct bch_alloc_v2 {
+#[c_name(bch_alloc_v2)]
+pub struct AllocV2 {
     pub v: c::bch_val,
     pub nr_fields: u8,
     pub generation: u8,
@@ -66,7 +68,8 @@ c_xmacro! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bch_alloc_v3 {
+#[c_name(bch_alloc_v3)]
+pub struct AllocV3 {
     pub v: c::bch_val,
     pub journal_seq: Le64,
     pub flags: Le32,
@@ -78,7 +81,7 @@ pub struct bch_alloc_v3 {
 }
 
 c_bitmask! {
-    LE32_BITMASK(struct bch_alloc_v3, flags), strip BCH_ALLOC_V3_ {
+    LE32_BITMASK(struct AllocV3, flags), strip BCH_ALLOC_V3_ {
         BCH_ALLOC_V3_NEED_DISCARD(0, 1),
         BCH_ALLOC_V3_NEED_INC_GEN(1, 2),
     }
@@ -111,7 +114,8 @@ c_bitmask! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bch_alloc_v4 {
+#[c_name(bch_alloc_v4)]
+pub struct AllocV4 {
     pub v: c::bch_val,
     pub journal_seq_nonempty: u64,
     pub flags: u32,
@@ -133,11 +137,11 @@ pub struct bch_alloc_v4 {
 c_const! {
     #[c_int]
     pub const BCH_ALLOC_V4_U64s_V0: u32 = 6;
-    pub const BCH_ALLOC_V4_U64s: usize = size_of::<c::bch_alloc_v4>() / size_of::<u64>();
+    pub const BCH_ALLOC_V4_U64s: usize = size_of::<c::AllocV4>() / size_of::<u64>();
 }
 
 c_bitmask! {
-    BITMASK(struct bch_alloc_v4, flags), strip BCH_ALLOC_V4_ {
+    BITMASK(struct AllocV4, flags), strip BCH_ALLOC_V4_ {
         BCH_ALLOC_V4_NEED_DISCARD(0, 1),
         BCH_ALLOC_V4_NEED_INC_GEN(1, 2),
         BCH_ALLOC_V4_BACKPOINTERS_START(2, 8),
@@ -155,11 +159,12 @@ c_const! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, Plain, TypeInfo, View)]
 #[c_packed]
-pub struct bch_bucket_gens {
+#[c_name(bch_bucket_gens)]
+pub struct BucketGens {
     pub v: c::bch_val,
     pub gens: [u8; c::KEY_TYPE_BUCKET_GENS_NR as usize],
 }
-c_default!(bch_bucket_gens);
+c_default!(BucketGens);
 
 c_const! {
     pub const DATA_TYPES_MOVABLE: c_ulong =

@@ -110,7 +110,7 @@ use nestify::nest;
  * But in the interests of space efficiency, we don't want to store one
  * bch_extent_crc for each pointer if we don't have to.
  *
- * Thus, a bch_extent consists of bch_extent_crc32s, bch_extent_crc64s, and
+ * Thus, a Extent consists of bch_extent_crc32s, bch_extent_crc64s, and
  * bch_extent_ptrs appended arbitrarily one after the other. We determine the
  * type of a given entry with a scheme similar to utf8 (except we're encoding a
  * type, not a size), encoding the type in the position of the first set bit:
@@ -307,7 +307,8 @@ pub struct bch_extent_entry {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bch_btree_ptr {
+#[c_name(bch_btree_ptr)]
+pub struct BtreePtr {
     pub v: c::bch_val,
 
     pub _data: [u64; 0],
@@ -318,7 +319,8 @@ pub struct bch_btree_ptr {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bch_btree_ptr_v2 {
+#[c_name(bch_btree_ptr_v2)]
+pub struct BtreePtrV2 {
     pub v: c::bch_val,
 
     pub mem_ptr: u64,
@@ -331,7 +333,7 @@ pub struct bch_btree_ptr_v2 {
 }
 
 c_bitmask! {
-    LE16_BITMASK(struct bch_btree_ptr_v2, flags) {
+    LE16_BITMASK(struct BtreePtrV2, flags) {
         BTREE_PTR_RANGE_UPDATED(0, 1),
     }
 }
@@ -340,7 +342,8 @@ c_bitmask! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bch_extent {
+#[c_name(bch_extent)]
+pub struct Extent {
     pub v: c::bch_val,
 
     pub _data: [u64; 0],
@@ -379,7 +382,7 @@ c_const! {
      * sets of pointers coexist.
      */
     pub const BKEY_BTREE_PTR_VAL_U64s_MAX: usize =
-        (size_of::<c::bch_btree_ptr_v2>() +
+        (size_of::<c::BtreePtrV2>() +
          size_of::<c::bch_extent_ptr>() * c::BCH_REPLICAS_MAX as usize * 2 +
          size_of::<c::bch_extent_reconcile>() +
          size_of::<c::bch_extent_reconcile_bp>()) / size_of::<u64>();
@@ -389,7 +392,8 @@ c_const! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bch_reservation {
+#[c_name(bch_reservation)]
+pub struct Reservation {
     pub v: c::bch_val,
 
     pub generation: Le32,
@@ -400,7 +404,8 @@ pub struct bch_reservation {
 #[whole(tail = data: [u8])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_inline_data {
+#[c_name(bch_inline_data)]
+pub struct InlineData {
     pub v: c::bch_val,
     pub data: [u8; 0],
 }

@@ -185,13 +185,13 @@ BCH_BKEY_TYPES();
 
 macro_rules! __bkey_typed {
     ($( ($name:tt $(, $($rest:tt)*)?) ),* $(,)?) => { ::paste::paste! { $(
-        pub type [<bkey_i_ $name>]   = BkeyI<cs::[<bch_ $name>]>;
-        pub type [<bkey_s_c_ $name>] = BkeySC<'static, cs::[<bch_ $name>]>;
-        pub type [<bkey_s_ $name>]   = BkeyS<'static, cs::[<bch_ $name>]>;
+        pub type [<bkey_i_ $name>]   = BkeyI<cs::[<$name:camel>]>;
+        pub type [<bkey_s_c_ $name>] = BkeySC<'static, cs::[<$name:camel>]>;
+        pub type [<bkey_s_ $name>]   = BkeyS<'static, cs::[<$name:camel>]>;
 
-        c_same! { struct [<bkey_i_ $name>]   == BkeyI<cs::[<bch_ $name>]> { k, v } }
-        c_same! { struct [<bkey_s_c_ $name>] == BkeySC<'static, cs::[<bch_ $name>]> { k, v } }
-        c_same! { struct [<bkey_s_ $name>]   == BkeyS<'static, cs::[<bch_ $name>]> { k, v } }
+        c_same! { struct [<bkey_i_ $name>]   == BkeyI<cs::[<$name:camel>]> { k, v } }
+        c_same! { struct [<bkey_s_c_ $name>] == BkeySC<'static, cs::[<$name:camel>]> { k, v } }
+        c_same! { struct [<bkey_s_ $name>]   == BkeyS<'static, cs::[<$name:camel>]> { k, v } }
     )* } };
 }
 BCH_BKEY_TYPES!(__bkey_typed);

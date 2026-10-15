@@ -152,7 +152,7 @@ impl c::bch_fs_snapshots {
 
     /// The unique live node claiming an edge with @id - as its parent if @parent,
     /// else as its child - other than those @s points at. None if none or several.
-    pub fn table_find_edge(&self, s: &c::bch_snapshot, id: u32, parent: bool) -> Option<u32> {
+    pub fn table_find_edge(&self, s: &c::Snapshot, id: u32, parent: bool) -> Option<u32> {
         match unsafe { c::bch2_snapshot_table_find_edge(self.c(), s, id, parent) } {
             0 => None,
             n => Some(n),
@@ -252,9 +252,9 @@ pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
     Ok(ids)
 }
 
-pub fn tree_lookup(trans: &BtreeTrans<'_>, id: u32) -> Result<c::bch_snapshot_tree, BchError> {
+pub fn tree_lookup(trans: &BtreeTrans<'_>, id: u32) -> Result<c::SnapshotTree, BchError> {
     trans.attempt_in_progress()
-        .bkey_get_val::<c::bch_snapshot_tree>(c::btree_id::snapshot_trees, pos(0, id as u64),
+        .bkey_get_val::<c::SnapshotTree>(c::btree_id::snapshot_trees, pos(0, id as u64),
                                            BtreeIterFlags::empty())
         .map_err(|e| if e.matches(c::ENOENT) {
             trans.fs().err(bch_errcode::BCH_ERR_ENOENT_snapshot_tree)
@@ -288,22 +288,22 @@ pub fn check_key_has_snapshot(
 }
 
 /// ENOENT if there's none.
-pub fn lookup(trans: &BtreeTrans<'_>, id: u32) -> Result<c::bch_snapshot, BchError> {
+pub fn lookup(trans: &BtreeTrans<'_>, id: u32) -> Result<c::Snapshot, BchError> {
     trans.attempt_in_progress()
-        .bkey_get_val::<c::bch_snapshot>(c::btree_id::snapshots, pos(0, id as u64),
+        .bkey_get_val::<c::Snapshot>(c::btree_id::snapshots, pos(0, id as u64),
                                        BtreeIterFlags::empty())
 }
 
 /// ENOENT if there's none.
-pub fn lookup_key(trans: &BtreeTrans<'_>, id: u32) -> Result<BkeyI<c::bch_snapshot>, BchError> {
+pub fn lookup_key(trans: &BtreeTrans<'_>, id: u32) -> Result<BkeyI<c::Snapshot>, BchError> {
     trans.attempt_in_progress()
-        .bkey_get_key::<c::bch_snapshot>(c::btree_id::snapshots, pos(0, id as u64),
+        .bkey_get_key::<c::Snapshot>(c::btree_id::snapshots, pos(0, id as u64),
                                        BtreeIterFlags::empty())
 }
 
 /// Zero padded past the fields an older key lacks.
-pub fn val(k: BkeySC<'_>) -> Option<c::bch_snapshot> {
-    c::bch_snapshot::val_copy_pad(k)
+pub fn val(k: BkeySC<'_>) -> Option<c::Snapshot> {
+    c::Snapshot::val_copy_pad(k)
 }
 
 /// Mark node @id will_delete, its subvolume being deleted, if it's live.
@@ -316,7 +316,7 @@ pub fn node_set_deleted(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchErro
 pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't>)
     -> Result<(), BchError>
 {
-    let ret = unsafe { c::bch2_snapshot_node_undelete(t.raw(), u.as_ptr() as *mut BkeyI<c::bch_snapshot>) };
+    let ret = unsafe { c::bch2_snapshot_node_undelete(t.raw(), u.as_ptr() as *mut BkeyI<c::Snapshot>) };
     t.result(ret)
 }
 
@@ -353,7 +353,7 @@ const SNAPSHOT_STATES: [c::bch_snapshot_state; 4] = [
 ];
 
 /// Any snapshot node, in place or whole - the struct reaches these too.
-impl c::bch_snapshot<Validated> {
+impl c::Snapshot<Validated> {
     pub fn parent(&self) -> u32       { self.parent.get() }
     pub fn children(&self) -> [u32; 2] { self.children.map(|c| c.get()) }
     pub fn subvol(&self) -> u32       { self.subvol.get() }
@@ -389,7 +389,7 @@ impl c::bch_snapshot<Validated> {
 }
 
 /// The struct: a field an older key lacks, to set.
-impl c::bch_snapshot<Whole> {
+impl c::Snapshot<Whole> {
     /// And the legacy flags to match.
     pub fn set_state(&mut self, state: c::bch_snapshot_state) {
         unsafe { c::bch2_snapshot_state_set(self, state) }
@@ -405,7 +405,7 @@ impl fmt::Display for c::bch_snapshot_state {
     }
 }
 
-impl fmt::Display for c::bch_snapshot {
+impl fmt::Display for c::Snapshot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         crate::printbuf_to_formatter(f, |out| unsafe { c::bch2_snapshot_to_text(out, self) })
     }

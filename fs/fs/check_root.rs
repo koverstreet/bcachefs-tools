@@ -31,7 +31,7 @@ fn root_snapshot_from_snapshots(t: &TransAttempt<'_, '_>) -> Result<u32, BchErro
                                   BtreeIterFlags::empty());
 
     iter.for_each_norestart(t, |_, k| Ok(
-        match k.arm::<c::bch_snapshot>().map(|k| k.v()) {
+        match k.arm::<c::Snapshot>().map(|k| k.v()) {
             Some(s) if s.subvol.get() == c::BCACHEFS_ROOT_SUBVOL && s.children[0].get() == 0 =>
                 ControlFlow::Break(k.k.p.offset as u32),
             _ => ControlFlow::Continue(()),
@@ -56,10 +56,10 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
             let snapshot = if root_snapshot != 0 { root_snapshot } else { u32::MAX };
             let inum = c::BCACHEFS_ROOT_INO as u64;
 
-            let mut k = t.bkey_alloc_init(size_of::<c::bch_subvolume>() / size_of::<u64>(),
+            let mut k = t.bkey_alloc_init(size_of::<c::Subvolume>() / size_of::<u64>(),
                                           c::bch_bkey_type::KEY_TYPE_subvolume.0 as u8,
                                           pos(0, c::BCACHEFS_ROOT_SUBVOL as u64))?;
-            let v = &mut k.k_i_mut().whole_mut::<c::bch_subvolume>().expect("allocated as a subvolume").v;
+            let v = &mut k.k_i_mut().whole_mut::<c::Subvolume>().expect("allocated as a subvolume").v;
             v.flags    = 0.into();
             v.snapshot = snapshot.into();
             v.inode    = inum.into();

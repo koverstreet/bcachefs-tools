@@ -14,7 +14,8 @@ c_const! {
 #[grown(from = creation_parent)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_subvolume {
+#[c_name(bch_subvolume)]
+pub struct Subvolume {
     pub v: c::bch_val,
     pub flags: Le32,
     pub snapshot: Le32,
@@ -37,7 +38,7 @@ pub struct bch_subvolume {
 
 c_xmacro! {
     /*
-     * Subvolume lifecycle state: same codeword scheme as bch_snapshot.state
+     * Subvolume lifecycle state: same codeword scheme as Snapshot.state
      * (below), additionally >= 14 bit flips from every snapshot state so a value
      * copied across key types reads as garbage, not a legal state:
      *
@@ -59,7 +60,7 @@ c_enum! {
 }
 
 c_bitmask! {
-    LE32_BITMASK(struct bch_subvolume<Validated>, flags), strip BCH_SUBVOLUME_ {
+    LE32_BITMASK(struct Subvolume<Validated>, flags), strip BCH_SUBVOLUME_ {
         BCH_SUBVOLUME_RO(0, 1),
         /*
          * We need to know whether a subvolume is a snapshot so we can know whether we
@@ -74,13 +75,14 @@ c_bitmask! {
 #[grown(from = depth)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_snapshot {
+#[c_name(bch_snapshot)]
+pub struct Snapshot {
     pub v: c::bch_val,
     pub flags: Le32,
     pub parent: Le32,
     pub children: [Le32; 2],
     pub subvol: Le32,
-    /* corresponds to a bch_snapshot_tree in BTREE_ID_snapshot_trees */
+    /* corresponds to a SnapshotTree in BTREE_ID_snapshot_trees */
     pub tree: Le32,
     pub depth: Le32,
     pub skip: [Le32; 3],
@@ -173,7 +175,7 @@ const _: () = {
 };
 
 c_bitmask! {
-    LE32_BITMASK(struct bch_snapshot<Validated>, flags), strip BCH_SNAPSHOT_ {
+    LE32_BITMASK(struct Snapshot<Validated>, flags), strip BCH_SNAPSHOT_ {
         /* Obsolete */
         BCH_SNAPSHOT_WILL_DELETE_OBSOLETE(0, 1),
         BCH_SNAPSHOT_SUBVOL_OBSOLETE(1, 2),
@@ -186,12 +188,13 @@ c_bitmask! {
  * Snapshot trees:
  *
  * The snapshot_trees btree gives us persistent indentifier for each tree of
- * bch_snapshot nodes, and allow us to record and easily find the root/master
+ * Snapshot nodes, and allow us to record and easily find the root/master
  * subvolume that other snapshots were created from:
  */
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
-pub struct bch_snapshot_tree {
+#[c_name(bch_snapshot_tree)]
+pub struct SnapshotTree {
     pub v: c::bch_val,
     pub master_subvol: Le32,
     pub root_snapshot: Le32,

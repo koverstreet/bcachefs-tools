@@ -37,7 +37,8 @@ pub struct bch_quota_counter {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bch_quota {
+#[c_name(bch_quota)]
+pub struct Quota {
     pub v: c::bch_val,
     pub c: [c::bch_quota_counter; c::Q_COUNTERS as usize],
 }

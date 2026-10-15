@@ -50,7 +50,8 @@ use cstruct_macros::{c_const, c_enum, c_typedef, c_xmacro, tagged_union, whole, 
 #[whole(tail = d: [u64])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_accounting {
+#[c_name(bch_accounting)]
+pub struct Accounting {
     pub v: c::bch_val,
     pub d: [u64; 0],
 }

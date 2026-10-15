@@ -94,7 +94,7 @@ fn insert_cookie(fs: &Fs, btree: c::btree_id, k: &mut BkeyICookie) -> TestRet {
 fn trans_cookie_alloc<'a, 't>(
     t: &TransAttempt<'a, 't>,
 ) -> Result<crate::btree::iter::TransBkey<'a, 't>, BchError> {
-    t.bkey_alloc_typed::<c::bch_cookie>()
+    t.bkey_alloc_typed::<c::Cookie>()
 }
 
 fn test_delete(fs: &Fs, _nr: u64) -> TestRet {
@@ -153,7 +153,7 @@ fn test_iterate(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
     for i in 0..nr {
-        let mut k = BkeyI::<c::bch_cookie>::new();
+        let mut k = BkeyI::<c::Cookie>::new();
         k.k.p.offset = i;
         k.k.p.snapshot = u32::MAX;
         insert_cookie(fs, c::btree_id::xattrs, &mut k)?;
@@ -183,7 +183,7 @@ fn test_iterate_extents(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
     for i in (0..nr).step_by(8) {
-        let mut k = BkeyI::<c::bch_cookie>::new();
+        let mut k = BkeyI::<c::Cookie>::new();
         k.k.p.offset = i + 8;
         k.k.p.snapshot = u32::MAX;
         k.k.size = 8;
@@ -214,7 +214,7 @@ fn test_iterate_slots(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
     for i in 0..nr {
-        let mut k = BkeyI::<c::bch_cookie>::new();
+        let mut k = BkeyI::<c::Cookie>::new();
         k.k.p.offset = i * 2;
         k.k.p.snapshot = u32::MAX;
         insert_cookie(fs, c::btree_id::xattrs, &mut k)?;
@@ -248,7 +248,7 @@ fn test_iterate_slots_extents(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
     for i in (0..nr).step_by(16) {
-        let mut k = BkeyI::<c::bch_cookie>::new();
+        let mut k = BkeyI::<c::Cookie>::new();
         k.k.p.offset = i + 16;
         k.k.p.snapshot = u32::MAX;
         k.k.size = 8;
@@ -306,7 +306,7 @@ fn test_peek_end_extents(fs: &Fs, _nr: u64) -> TestRet {
 static TEST_VERSION: AtomicU64 = AtomicU64::new(0);
 
 fn insert_test_extent(fs: &Fs, start: u64, end: u64) -> TestRet {
-    let mut k = BkeyI::<c::bch_cookie>::new();
+    let mut k = BkeyI::<c::Cookie>::new();
     k.k.p.offset = end;
     k.k.p.snapshot = u32::MAX;
     k.k.size = (end - start) as u32;
@@ -610,7 +610,7 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
 }
 
 fn test_snapshot_filter(fs: &Fs, snapid_lo: u32, snapid_hi: u32) -> TestRet {
-    let mut cookie = BkeyI::<c::bch_cookie>::new();
+    let mut cookie = BkeyI::<c::Cookie>::new();
     cookie.k.p.snapshot = snapid_hi;
     insert_cookie(fs, c::btree_id::xattrs, &mut cookie)?;
 
@@ -626,7 +626,7 @@ fn test_snapshot_filter(fs: &Fs, snapid_lo: u32, snapid_hi: u32) -> TestRet {
 }
 
 fn test_snapshots(fs: &Fs, _nr: u64) -> TestRet {
-    let mut cookie = BkeyI::<c::bch_cookie>::new();
+    let mut cookie = BkeyI::<c::Cookie>::new();
     cookie.k.p.snapshot = u32::MAX;
     insert_cookie(fs, c::btree_id::xattrs, &mut cookie)?;
 

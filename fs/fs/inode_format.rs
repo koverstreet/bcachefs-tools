@@ -17,7 +17,8 @@ c_const! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
-pub struct bch_inode {
+#[c_name(bch_inode)]
+pub struct Inode {
     pub v: c::bch_val,
 
     pub bi_hash_seed: Le64,
@@ -30,7 +31,8 @@ pub struct bch_inode {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
-pub struct bch_inode_v2 {
+#[c_name(bch_inode_v2)]
+pub struct InodeV2 {
     pub v: c::bch_val,
 
     pub bi_journal_seq: Le64,
@@ -44,7 +46,8 @@ pub struct bch_inode_v2 {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bch_inode_v3 {
+#[c_name(bch_inode_v3)]
+pub struct InodeV3 {
     pub v: c::bch_val,
 
     pub bi_journal_seq: Le64,
@@ -64,7 +67,8 @@ c_const! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bch_inode_generation {
+#[c_name(bch_inode_generation)]
+pub struct InodeGeneration {
     pub v: c::bch_val,
 
     pub bi_generation: Le32,
@@ -237,7 +241,7 @@ c_enum! {
 }
 
 c_bitmask! {
-    LE32_BITMASK(struct bch_inode, bi_flags) {
+    LE32_BITMASK(struct Inode, bi_flags) {
         INODEv1_STR_HASH(20, 24),
         INODEv1_NR_FIELDS(24, 31),
         INODEv1_NEW_VARINT(31, 32),
@@ -245,14 +249,14 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_inode_v2, bi_flags) {
+    LE64_BITMASK(struct InodeV2, bi_flags) {
         INODEv2_STR_HASH(20, 24),
         INODEv2_NR_FIELDS(24, 31),
     }
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_inode_v3, bi_flags) {
+    LE64_BITMASK(struct InodeV3, bi_flags) {
         INODEv3_STR_HASH(20, 24),
         INODEv3_NR_FIELDS(24, 31),
         INODEv3_FIELDS_START(31, 36),
@@ -262,7 +266,8 @@ c_bitmask! {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_inode_alloc_cursor {
+#[c_name(bch_inode_alloc_cursor)]
+pub struct InodeAllocCursor {
     pub v: c::bch_val,
     pub bits: u8,
     pub pad: u8,

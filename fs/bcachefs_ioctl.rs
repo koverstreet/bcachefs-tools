@@ -695,7 +695,7 @@ pub struct bch_ioctl_query_accounting {
 
     /* C's typed keys: an accounting value's header, sized, its counters after */
     #[c("struct bkey_i_accounting accounting[]")]
-    pub accounting: [BkeyI<c::bch_accounting>; 0],
+    pub accounting: [BkeyI<c::Accounting>; 0],
 }
 
 c_const! {
@@ -737,7 +737,7 @@ pub struct bch_ioctl_query_accounting_v2 {
 
     /* C's typed keys: an accounting value's header, sized, its counters after */
     #[c("struct bkey_i_accounting accounting[]")]
-    pub accounting: [BkeyI<c::bch_accounting>; 0],
+    pub accounting: [BkeyI<c::Accounting>; 0],
 }
 
 c_const! {

@@ -65,7 +65,7 @@ fn lostfound_dirent(
 fn find_snapshot_tree_subvol(t: &TransAttempt<'_, '_>, tree: u32) -> Result<u32, BchError> {
     let mut iter = BtreeIter::new(t, c::btree_id::snapshots, POS_MIN, BtreeIterFlags::empty());
     iter.for_each_norestart(t, |_, k| Ok(
-        match k.arm::<c::bch_snapshot>().map(|k| k.v()) {
+        match k.arm::<c::Snapshot>().map(|k| k.v()) {
             Some(s) if s.tree.get() == tree && s.subvol.get() != 0 =>
                 ControlFlow::Break(Some(s.subvol.get())),
             _ => ControlFlow::Continue(()),
@@ -321,8 +321,8 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
         let mut s = t.bkey_get_mut(c::btree_id::subvolumes, pos(0, inode.bi_subvol as u64),
                                    BtreeIterFlags::empty(), UpdateTriggerFlags::empty(),
                                    c::bch_bkey_type::KEY_TYPE_subvolume,
-                                   size_of::<BkeyI<c::bch_subvolume>>())?;
-        s.k_i_mut().whole_mut::<c::bch_subvolume>().expect("a subvolume").v.fs_path_parent =
+                                   size_of::<BkeyI<c::Subvolume>>())?;
+        s.k_i_mut().whole_mut::<c::Subvolume>().expect("a subvolume").v.fs_path_parent =
             c::BCACHEFS_ROOT_SUBVOL.into();
 
         dirent_snapshot = subvolume::get_snapshot(trans, inode.bi_parent_subvol)?;

@@ -450,26 +450,30 @@ c_enum! {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_deleted {
+#[c_name(bch_deleted)]
+pub struct Deleted {
     pub v: c::bch_val,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_whiteout {
+#[c_name(bch_whiteout)]
+pub struct Whiteout {
     pub v: c::bch_val,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_extent_whiteout {
+#[c_name(bch_extent_whiteout)]
+pub struct ExtentWhiteout {
     pub v: c::bch_val,
 }
 
 #[grown(from = err)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_error {
+#[c_name(bch_error)]
+pub struct Error {
     pub v: c::bch_val,
     pub err: u8,
     pub pad: [u8; 7],
@@ -520,20 +524,23 @@ c_enum! {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_cookie {
+#[c_name(bch_cookie)]
+pub struct Cookie {
     pub v: c::bch_val,
     pub cookie: Le64,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_hash_whiteout {
+#[c_name(bch_hash_whiteout)]
+pub struct HashWhiteout {
     pub v: c::bch_val,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_set {
+#[c_name(bch_set)]
+pub struct Set {
     pub v: c::bch_val,
 }
 
@@ -549,7 +556,8 @@ pub struct bch_csum {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bch_backpointer {
+#[c_name(bch_backpointer)]
+pub struct Backpointer {
     pub v: c::bch_val,
     pub btree_id: u8,
     pub level: u8,
@@ -561,7 +569,7 @@ pub struct bch_backpointer {
 }
 
 c_bitmask! {
-    BITMASK(struct bch_backpointer, flags), strip BACKPOINTER_ {
+    BITMASK(struct Backpointer, flags), strip BACKPOINTER_ {
         /*
          * Denormalized cache of "is this bp's extent listed in reconcile_phys?":
          *

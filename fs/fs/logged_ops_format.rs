@@ -16,7 +16,8 @@ c_enum! {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_logged_op_truncate {
+#[c_name(bch_logged_op_truncate)]
+pub struct LoggedOpTruncate {
     pub v: c::bch_val,
     pub subvol: Le32,
     pub pad: Le32,
@@ -36,7 +37,8 @@ c_enum! {
 #[grown(from = src_offset)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_logged_op_finsert {
+#[c_name(bch_logged_op_finsert)]
+pub struct LoggedOpFinsert {
     pub v: c::bch_val,
     pub state: u8,
     pub pad: [u8; 3],
@@ -62,7 +64,8 @@ pub struct bch_logged_op_finsert {
  */
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_logged_op_inode_opt_propagate {
+#[c_name(bch_logged_op_inode_opt_propagate)]
+pub struct LoggedOpInodeOptPropagate {
     pub v: c::bch_val,
     pub inum: Le64,
     pub origin_snapshot: Le32,
@@ -71,7 +74,8 @@ pub struct bch_logged_op_inode_opt_propagate {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_logged_op_stripe_update {
+#[c_name(bch_logged_op_stripe_update)]
+pub struct LoggedOpStripeUpdate {
     pub v: c::bch_val,
     pub old_idx: Le64,
     pub new_idx: Le64,

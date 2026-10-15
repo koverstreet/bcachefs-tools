@@ -49,7 +49,7 @@ use cstruct_macros::c_export;
 macro_rules! has_field {
     ($k:expr, $field:ident) => {
         $k.val_bytes().len() >=
-            offset_of!(c::bch_subvolume, repr.$field) + size_of_val(&c::bch_subvolume::default().$field)
+            offset_of!(c::Subvolume, repr.$field) + size_of_val(&c::Subvolume::default().$field)
     };
 }
 
@@ -76,11 +76,11 @@ pub fn get_key(
     trans:                     &BtreeTrans<'_>,
     subvol:                    u32,
     inconsistent_if_not_found: bool,
-) -> Result<BkeyI<c::bch_subvolume>, BchError> {
+) -> Result<BkeyI<c::Subvolume>, BchError> {
     let fs = trans.fs();
     let t = trans.attempt_in_progress();
 
-    let mut ret = t.bkey_get_key::<c::bch_subvolume>(c::btree_id::subvolumes, pos(0, subvol as u64),
+    let mut ret = t.bkey_get_key::<c::Subvolume>(c::btree_id::subvolumes, pos(0, subvol as u64),
                                                    BtreeIterFlags::CACHED);
     if matches!(&ret, Ok(k) if k.v.state_decoded() == Some(c::bch_subvolume_state::SUBVOLUME_STATE_deleted)) {
         ret = Err(fs.err(bch_errcode::BCH_ERR_ENOENT_subvolume_deleted));
@@ -97,7 +97,7 @@ pub fn get(
     trans:                     &BtreeTrans<'_>,
     subvol:                    u32,
     inconsistent_if_not_found: bool,
-) -> Result<c::bch_subvolume, BchError> {
+) -> Result<c::Subvolume, BchError> {
     Ok(get_key(trans, subvol, inconsistent_if_not_found)?.v)
 }
 
@@ -106,7 +106,7 @@ pub fn bch2_subvolume_get(
     trans:                     &Opaque<c::btree_trans>,
     subvol:                    core::ffi::c_uint,
     inconsistent_if_not_found: bool,
-    s:                         &mut c::bch_subvolume,
+    s:                         &mut c::Subvolume,
 ) -> core::ffi::c_int {
     ret_to_c(get(&BtreeTrans::from_c(trans), subvol, inconsistent_if_not_found).map(|v| *s = v))
 }
@@ -117,7 +117,7 @@ fn __get_snapshot(trans: &BtreeTrans<'_>, subvol: u32, warn: bool) -> Result<u32
     let t = trans.attempt_in_progress();
     let mut iter = BtreeIter::new(trans, c::btree_id::subvolumes, pos(0, subvol as u64),
                                   BtreeIterFlags::CACHED);
-    match iter.peek_slot_typed::<c::bch_subvolume>(&t) {
+    match iter.peek_slot_typed::<c::Subvolume>(&t) {
         Ok(k) => Ok(k.v().snapshot()),
         Err(e) => {
             if warn && e.matches(c::ENOENT) {
@@ -261,8 +261,8 @@ where
 // ── The state field ──────────────────────────────────────────────────────
 
 /// Zero padded past the fields an older key lacks.
-pub fn val(k: BkeySC<'_>) -> Option<c::bch_subvolume> {
-    c::bch_subvolume::val_copy_pad(k)
+pub fn val(k: BkeySC<'_>) -> Option<c::Subvolume> {
+    c::Subvolume::val_copy_pad(k)
 }
 
 impl fmt::Display for c::bch_subvolume_state {
@@ -281,7 +281,7 @@ const SUBVOLUME_STATES: [c::bch_subvolume_state; 3] = [
 ];
 
 /// Any subvolume, in place or whole - the struct reaches these too.
-impl c::bch_subvolume<Validated> {
+impl c::Subvolume<Validated> {
     pub fn snapshot(&self) -> u32 { self.snapshot.get() }
 
     /// None if the field is 0 - the key predates it - or damaged.
@@ -302,7 +302,7 @@ impl c::bch_subvolume<Validated> {
 }
 
 /// The struct: a field an older key lacks, to set.
-impl c::bch_subvolume<Whole> {
+impl c::Subvolume<Whole> {
     /// Also sets the legacy flag for either non-live state: a state field
     /// wiped and recovered from the flag comes back unlinked, so the deletion
     /// reruns rather than being reverted, and an old kernel keeps deleting a
@@ -449,7 +449,7 @@ fn check_subvol<'a, 't>(
     let trans = t.trans();
     let fs = trans.fs();
 
-    let Some(mut s) = CowKey::<c::bch_subvolume>::new(iter, k) else { return Ok(()) };
+    let Some(mut s) = CowKey::<c::Subvolume>::new(iter, k) else { return Ok(()) };
     let id = s.pos().offset;
 
     // Predates the state field, or was wiped: silent mid-upgrade, an error
@@ -501,7 +501,7 @@ fn check_subvol<'a, 't>(
     let snapid = s.v().snapshot();
     let mut snap_iter = BtreeIter::new(trans, c::btree_id::snapshots, pos(0, snapid as u64),
                                        BtreeIterFlags::INTENT);
-    let (snap_iter, sk) = match snap_iter.peek_slot_typed_shared::<c::bch_snapshot>(t) {
+    let (snap_iter, sk) = match snap_iter.peek_slot_typed_shared::<c::Snapshot>(t) {
         Ok(r) => r,
         Err(e) if e.matches(c::ENOENT) => {
             let mut msg = Printbuf::new();
@@ -514,7 +514,7 @@ fn check_subvol<'a, 't>(
         }
         Err(e) => return Err(e),
     };
-    let mut n = CowKey::<c::bch_snapshot>::new(snap_iter, sk.s_c()).expect("a snapshot");
+    let mut n = CowKey::<c::Snapshot>::new(snap_iter, sk.s_c()).expect("a snapshot");
 
     // The repairs below assume we own this snapshot. If it backrefs another
     // subvolume that also points at it, that one is the owner - don't let
@@ -706,7 +706,7 @@ fn get_mut<'a, 't>(t: &TransAttempt<'a, 't>, subvol: u32)
 {
     let ret = t.bkey_get_mut(c::btree_id::subvolumes, pos(0, subvol as u64), BtreeIterFlags::CACHED,
                              UpdateTriggerFlags::empty(), c::bch_bkey_type::KEY_TYPE_subvolume,
-                             size_of::<BkeyI<c::bch_subvolume>>());
+                             size_of::<BkeyI<c::Subvolume>>());
     if let Err(e) = &ret {
         if e.matches(c::ENOENT) {
             missing(t.fs(), subvol)?;
@@ -720,7 +720,7 @@ fn set_state_trans(t: &TransAttempt<'_, '_>, subvol: u32, state: c::bch_subvolum
     -> Result<(), BchError>
 {
     let mut k = get_mut(t, subvol)?;
-    let s = &mut k.k_i_mut().whole_mut::<c::bch_subvolume>().expect("a subvolume key").v;
+    let s = &mut k.k_i_mut().whole_mut::<c::Subvolume>().expect("a subvolume key").v;
     s.set_state(state);
     s.fs_path_parent = 0.into();
     Ok(())
@@ -734,7 +734,7 @@ fn reparent(
     old:  u32,
     new:  u32,
 ) -> Result<(), BchError> {
-    let Some(s) = k.arm::<c::bch_subvolume>().map(|k| k.v()) else { return Ok(()) };
+    let Some(s) = k.arm::<c::Subvolume>().map(|k| k.v()) else { return Ok(()) };
 
     // A key without creation_parent predates the field: nobody's child
     if !has_field!(k, creation_parent) || s.creation_parent().get() != old {
@@ -743,8 +743,8 @@ fn reparent(
 
     let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty(),
                                 c::bch_bkey_type::KEY_TYPE_subvolume,
-                                size_of::<BkeyI<c::bch_subvolume>>())?;
-    u.k_i_mut().whole_mut::<c::bch_subvolume>().expect("a subvolume key").v.creation_parent = new.into();
+                                size_of::<BkeyI<c::Subvolume>>())?;
+    u.k_i_mut().whole_mut::<c::Subvolume>().expect("a subvolume key").v.creation_parent = new.into();
     Ok(())
 }
 
@@ -767,7 +767,7 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
 
     let mut iter = BtreeIter::new(trans, c::btree_id::subvolumes, pos(0, subvol as u64),
                                   BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
-    let k = match iter.peek_slot_typed::<c::bch_subvolume>(t) {
+    let k = match iter.peek_slot_typed::<c::Subvolume>(t) {
         Err(e) if e.matches(c::ENOENT) => {
             missing(fs, subvol)?;
             return Err(e);
@@ -778,7 +778,7 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
 
     let mut snapshot_iter = BtreeIter::new(trans, c::btree_id::snapshots, pos(0, snapid as u64),
                                            BtreeIterFlags::empty());
-    let sk = snapshot_iter.peek_slot_typed::<c::bch_snapshot>(t)
+    let sk = snapshot_iter.peek_slot_typed::<c::Snapshot>(t)
         .inspect_err(|e| if e.matches(c::ENOENT) {
             fs_inconsistent!(fs, "missing snapshot {snapid}");
         })?;
@@ -787,7 +787,7 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
     let mut tree_iter = BtreeIter::new(trans, c::btree_id::snapshot_trees, pos(0, tree as u64),
                                        BtreeIterFlags::empty());
     let (tree_iter, tk) = tree_iter
-        .peek_slot_typed_shared::<c::bch_snapshot_tree>(t)
+        .peek_slot_typed_shared::<c::SnapshotTree>(t)
         .inspect_err(|e| if e.matches(c::ENOENT) {
             fs_inconsistent!(fs, "missing snapshot tree {tree}");
         })?;
@@ -795,8 +795,8 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
     if tk.v().master_subvol.get() == subvol {
         let mut u = t.bkey_make_mut(tree_iter, tk.s_c(), UpdateTriggerFlags::empty(),
                                     c::bch_bkey_type::KEY_TYPE_snapshot_tree,
-                                    size_of::<c::bch_snapshot_tree>())?;
-        u.k_i_mut().arm_mut::<c::bch_snapshot_tree>().expect("a snapshot tree key").v_mut().master_subvol = 0.into();
+                                    size_of::<c::SnapshotTree>())?;
+        u.k_i_mut().arm_mut::<c::SnapshotTree>().expect("a snapshot tree key").v_mut().master_subvol = 0.into();
     }
 
     set_state_trans(t, subvol, c::bch_subvolume_state::SUBVOLUME_STATE_deleted)?;
@@ -901,7 +901,7 @@ pub fn unlink(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
 pub struct Created {
     pub subvol:   u32,
     pub snapshot: u32,
-    pub v:        c::bch_subvolume,
+    pub v:        c::Subvolume,
 }
 
 /// A subvolume rooted at @inode, under @parent in the filesystem tree; a
@@ -932,7 +932,7 @@ pub fn create(
     let mut parent_snapshot = 0;
     if src != 0 {
         let k = get_mut(t, src)?;
-        parent_snapshot = BkeySC::from(k.k_i()).arm::<c::bch_subvolume>().expect("a subvolume").v().snapshot.get();
+        parent_snapshot = BkeySC::from(k.k_i()).arm::<c::Subvolume>().expect("a subvolume").v().snapshot.get();
         src_k = Some(k);
     }
 
@@ -940,12 +940,12 @@ pub fn create(
     t.snapshot_node_create(parent_snapshot, &mut new_nodes[..nr], &snapshot_subvols[..nr])?;
 
     if let Some(mut k) = src_k {
-        k.k_i_mut().whole_mut::<c::bch_subvolume>().expect("a subvolume key").v.snapshot = new_nodes[1].into();
+        k.k_i_mut().whole_mut::<c::Subvolume>().expect("a subvolume key").v.snapshot = new_nodes[1].into();
     }
 
-    let mut k = t.bkey_alloc_typed::<c::bch_subvolume>()?;
+    let mut k = t.bkey_alloc_typed::<c::Subvolume>()?;
     k.k_i_mut().k.p = dst_iter.pos();
-    let v = &mut k.k_i_mut().whole_mut::<c::bch_subvolume>().expect("a subvolume key").v;
+    let v = &mut k.k_i_mut().whole_mut::<c::Subvolume>().expect("a subvolume key").v;
     v.flags           = 0.into();
     v.snapshot        = new_nodes[0].into();
     v.inode           = inode.into();
@@ -967,13 +967,13 @@ pub fn create(
 
 /// The root snapshot tree, snapshot and subvolume of a new filesystem.
 fn initialize(fs: &Fs) -> Result<(), BchError> {
-    let mut root_tree = BkeyI::<c::bch_snapshot_tree>::new();
+    let mut root_tree = BkeyI::<c::SnapshotTree>::new();
     root_tree.k.p.offset = 1;
     let v = &mut root_tree.v;
     v.master_subvol = (1u32).into();
     v.root_snapshot = (u32::MAX).into();
 
-    let mut root_snapshot = BkeyI::<c::bch_snapshot>::new();
+    let mut root_snapshot = BkeyI::<c::Snapshot>::new();
     root_snapshot.k.p.offset = u32::MAX as u64;
     let v = &mut root_snapshot.v;
     v.flags  = 0.into();
@@ -982,7 +982,7 @@ fn initialize(fs: &Fs) -> Result<(), BchError> {
     v.tree   = (1u32).into();
     v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
 
-    let mut root_volume = BkeyI::<c::bch_subvolume>::new();
+    let mut root_volume = BkeyI::<c::Subvolume>::new();
     root_volume.k.p.offset = c::BCACHEFS_ROOT_SUBVOL as u64;
     let v = &mut root_volume.v;
     v.flags    = 0.into();

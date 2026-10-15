@@ -57,7 +57,7 @@ BCH_INODE_FIELDS_v3!(__BKEY_INODE_BUF_XSUM_0);
 pub struct bkey_inode_buf {
     /* C's typed key: a v3 inode's header, its fields in _pad */
     #[c("struct bkey_i_inode_v3 inode")]
-    pub inode: BkeyI<c::bch_inode_v3>,
+    pub inode: BkeyI<c::InodeV3>,
     #[c("#define x(_name, _bits)		+ 8 + _bits / 8
 u8 _pad[0 + BCH_INODE_FIELDS_v3()];
 #undef x")]

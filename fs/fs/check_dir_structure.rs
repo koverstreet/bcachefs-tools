@@ -152,7 +152,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
 
         parent_iter.set_pos(pos(0, parent as u64));
         match parent_iter.peek_slot(t)? {
-            Some(pk) if pk.arm::<c::bch_subvolume>().is_some() => {
+            Some(pk) if pk.arm::<c::Subvolume>().is_some() => {
                 cur.reassemble(pk);
             }
             _ => {
@@ -257,7 +257,7 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
                                              spos(inode.bi_dir, inode.bi_dir_offset, snapshot),
                                              BtreeIterFlags::empty());
 
-        if let Err(e) = dirent_iter.peek_slot_typed::<c::bch_dirent>(t) {
+        if let Err(e) = dirent_iter.peek_slot_typed::<c::Dirent>(t) {
             if !e.matches(c::ENOENT) {
                 return Err(e);
             }

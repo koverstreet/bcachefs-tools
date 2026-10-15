@@ -103,7 +103,7 @@ fn has_xattr_type(t: &TransAttempt<'_, '_>, u: &c::bch_inode_unpacked, ty: c::bc
 }
 
 /// A snapshot node, or that there isn't one, for messages.
-struct MaybeSnapshot<'a>(Option<&'a c::bch_snapshot>);
+struct MaybeSnapshot<'a>(Option<&'a c::Snapshot>);
 
 impl fmt::Display for MaybeSnapshot<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

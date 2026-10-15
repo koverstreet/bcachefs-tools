@@ -111,7 +111,7 @@ pub fn create_trans(
     dir:              c::subvol_inum,
     dir_u:            &mut c::bch_inode_unpacked,
     new_inode:        &mut c::bch_inode_unpacked,
-    new_subvol:       &mut c::bch_subvolume,
+    new_subvol:       &mut c::Subvolume,
     name:             Option<&OsStr>,
     uid:              c::uid_t,
     gid:              c::gid_t,
@@ -275,7 +275,7 @@ pub unsafe extern "C" fn bch2_create_trans(
     dir:          c::subvol_inum,
     dir_u:        &mut c::bch_inode_unpacked,
     new_inode:    &mut c::bch_inode_unpacked,
-    new_subvol:   &mut c::bch_subvolume,
+    new_subvol:   &mut c::Subvolume,
     name:         Option<&c::qstr>,
     uid:          c::uid_t,
     gid:          c::gid_t,
@@ -512,8 +512,8 @@ fn subvol_update_parent(t: &TransAttempt<'_, '_>, subvol: u32, new_parent: u32)
     let mut s = t.bkey_get_mut(c::btree_id::subvolumes, pos(0, subvol as u64),
                                BtreeIterFlags::CACHED, UpdateTriggerFlags::empty(),
                                c::bch_bkey_type::KEY_TYPE_subvolume,
-                               size_of::<BkeyI<c::bch_subvolume>>())?;
-    s.k_i_mut().whole_mut::<c::bch_subvolume>().expect("a subvolume").v.fs_path_parent = new_parent.into();
+                               size_of::<BkeyI<c::Subvolume>>())?;
+    s.k_i_mut().whole_mut::<c::Subvolume>().expect("a subvolume").v.fs_path_parent = new_parent.into();
     Ok(())
 }
 
@@ -781,7 +781,7 @@ pub fn inode_get_dirent<'i, 't>(
     *iter = BtreeIter::new(t, c::btree_id::dirents,
                            spos(inode.bi_dir, inode.bi_dir_offset, *snapshot),
                            BtreeIterFlags::empty());
-    iter.peek_slot_typed::<c::bch_dirent>(t).map(BkeySC::s_c)
+    iter.peek_slot_typed::<c::Dirent>(t).map(BkeySC::s_c)
 }
 
 /// A path, as inum_to_path walks it: up from the inode, a name per step;
@@ -1136,7 +1136,7 @@ fn check_dirent_inode_dirent(
     let mut bp_iter = BtreeIter::new(t, c::btree_id::dirents,
                                      spos(target.bi_dir, target.bi_dir_offset, target.bi_snapshot),
                                      BtreeIterFlags::empty());
-    let bp = bp_iter.peek_slot_typed::<c::bch_dirent>(t).found()?;
+    let bp = bp_iter.peek_slot_typed::<c::Dirent>(t).found()?;
 
     let Some(bp) = bp else {
         if fsck_err!(t, id::inode_wrong_backpointer,
@@ -1248,7 +1248,7 @@ fn __check_dirent_target(
                     d_type_str(d_type),
                     d.k().to_text(fs))? {
         let mut n = t.bkey_reassemble(d.k())?;
-        let v = n.k_i_mut().arm_mut::<c::bch_dirent>().expect("a dirent").v_mut();
+        let v = n.k_i_mut().arm_mut::<c::Dirent>().expect("a dirent").v_mut();
 
         v.set_d_type(d_type);
         if d_type as u32 == c::DT_SUBVOL {

@@ -9,7 +9,8 @@ use cstruct_macros::{c_bitmask, whole, CStruct, Plain, TypeInfo};
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bch_reflink_p {
+#[c_name(bch_reflink_p)]
+pub struct ReflinkP {
     pub v: c::bch_val,
     pub idx_flags: Le64,
     /*
@@ -25,7 +26,7 @@ pub struct bch_reflink_p {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_reflink_p, idx_flags), strip REFLINK_P_ {
+    LE64_BITMASK(struct ReflinkP, idx_flags), strip REFLINK_P_ {
         REFLINK_P_IDX(0, 56),
         REFLINK_P_ERROR(56, 57),
         REFLINK_P_MAY_UPDATE_OPTIONS(57, 58),
@@ -36,7 +37,8 @@ c_bitmask! {
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bch_reflink_v {
+#[c_name(bch_reflink_v)]
+pub struct ReflinkV {
     pub v: c::bch_val,
     pub refcount: Le64,
     #[c("union bch_extent_entry start[0]")]
@@ -47,7 +49,8 @@ pub struct bch_reflink_v {
 #[whole(tail = data: [u8])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_indirect_inline_data {
+#[c_name(bch_indirect_inline_data)]
+pub struct IndirectInlineData {
     pub v: c::bch_val,
     pub refcount: Le64,
     pub data: [u8; 0],

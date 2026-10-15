@@ -84,7 +84,7 @@ c::BCH_INODE_FLAGS!(inode_flags_table);
 /// Where an inode_v3's packed fields start, in its value - past the fixed
 /// fields. Unpack reads them from here, not from INODEv3_FIELDS_START, as C
 /// always has: the validate check on that field is all it's used for.
-const V3_FIELDS_OFFSET: usize = offset_of!(c::bch_inode_v3, repr.fields);
+const V3_FIELDS_OFFSET: usize = offset_of!(c::InodeV3, repr.fields);
 
 /// The packed fields an inode's value ends with, decoded into @u: the first
 /// @nr_fields, in inode_fields_v3!() order if @v3, else inode_fields_v2!(),
@@ -201,7 +201,7 @@ fn try_unpack(k: BkeySC<'_>)
             u.bi_flags       = v.bi_flags.get() as u32;
             u.bi_mode        = v.bi_mode.get();
 
-            unpack_fields(&mut u, false, fields_at(offset_of!(c::bch_inode_v2, repr.fields)),
+            unpack_fields(&mut u, false, fields_at(offset_of!(c::InodeV2, repr.fields)),
                           v.inodev2_nr_fields() as usize, varint_field)
         }
         BkeySCTyped::inode(i) => {
@@ -210,7 +210,7 @@ fn try_unpack(k: BkeySC<'_>)
             u.bi_flags       = v.bi_flags.get();
             u.bi_mode        = v.bi_mode.get();
 
-            let in_ = fields_at(offset_of!(c::bch_inode, repr.fields));
+            let in_ = fields_at(offset_of!(c::Inode, repr.fields));
             let nr_fields = v.inodev1_nr_fields() as usize;
 
             if v.inodev1_new_varint() {
@@ -326,7 +326,7 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
     let k = &mut out.inode;
     *k = BkeyI { k: c::bkey::new(), v: Default::default() };
     k.k.type_ = c::bch_bkey_type::KEY_TYPE_inode_v3.0 as u8;
-    k.k.set_val_bytes(size_of::<c::bch_inode_v3>());
+    k.k.set_val_bytes(size_of::<c::InodeV3>());
     k.k.p.offset = inode.bi_inum;
     k.v.bi_journal_seq = inode.bi_journal_seq.into();
     k.v.bi_hash_seed   = inode.bi_hash_seed;
@@ -341,7 +341,7 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
     // buffer has for every one of them at its biggest:
     const _: () = assert!(offset_of!(c::bkey_inode_buf, _pad) ==
                           offset_of!(c::bkey_inode_buf, inode) +
-                          offset_of!(BkeyI<c::bch_inode_v3>, v) +
+                          offset_of!(BkeyI<c::InodeV3>, v) +
                           V3_FIELDS_OFFSET);
     let fields = &mut out._pad;
 
@@ -847,7 +847,7 @@ pub fn bch2_inode_validate(
     from: &c::bkey_validate_context,
 ) -> core::ffi::c_int {
     validate_c(c, k, from, |v| {
-        validate_str_hash(v, v.k.arm::<c::bch_inode>().expect("an inode").v().inodev1_str_hash())?;
+        validate_str_hash(v, v.k.arm::<c::Inode>().expect("an inode").v().inodev1_str_hash())?;
         validate_pos(v)
     })
 }
@@ -860,7 +860,7 @@ pub fn bch2_inode_v2_validate(
     from: &c::bkey_validate_context,
 ) -> core::ffi::c_int {
     validate_c(c, k, from, |v| {
-        validate_str_hash(v, v.k.arm::<c::bch_inode_v2>().expect("an inode_v2").v().inodev2_str_hash())?;
+        validate_str_hash(v, v.k.arm::<c::InodeV2>().expect("an inode_v2").v().inodev2_str_hash())?;
         validate_pos(v)
     })
 }
@@ -874,7 +874,7 @@ pub fn bch2_inode_v3_validate(
     from: &c::bkey_validate_context,
 ) -> core::ffi::c_int {
     validate_c(c, k, from, |v| {
-        let i = v.k.arm::<c::bch_inode_v3>().expect("an inode_v3").v();
+        let i = v.k.arm::<c::InodeV3>().expect("an inode_v3").v();
         let start = i.inodev3_fields_start();
         let min = c::INODEv3_FIELDS_START_INITIAL as u64;
         let max = v.k.k.u64s as u64 - crate::btree::bkey::BKEY_U64S as u64;
@@ -994,7 +994,7 @@ pub fn bch2_inode_generation_to_text(
     _c:  &Opaque<c::bch_fs>,
     k:   BkeySC<'_>,
 ) {
-    let generation = (k.arm::<c::bch_inode_generation>().expect("an inode_generation").v().bi_generation).get();
+    let generation = (k.arm::<c::InodeGeneration>().expect("an inode_generation").v().bi_generation).get();
     write!(out, "generation: {generation}");
 }
 
@@ -1101,7 +1101,7 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
     let mut cursor = match t.bkey_get_mut(c::btree_id::logged_ops, cursor_pos,
                                           BtreeIterFlags::CACHED, UpdateTriggerFlags::empty(),
                                           c::bch_bkey_type::KEY_TYPE_inode_alloc_cursor,
-                                          size_of::<c::bch_inode_alloc_cursor>()).found()? {
+                                          size_of::<c::InodeAllocCursor>()).found()? {
         Some(cursor) => cursor,
         None => {
             // No cursor there yet:
@@ -1109,7 +1109,7 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
                                           BtreeIterFlags::INTENT | BtreeIterFlags::CACHED);
             iter.traverse(t)?;
 
-            let k = t.bkey_alloc_init(size_of::<c::bch_inode_alloc_cursor>() / 8,
+            let k = t.bkey_alloc_init(size_of::<c::InodeAllocCursor>() / 8,
                                       c::bch_bkey_type::KEY_TYPE_inode_alloc_cursor.0 as u8,
                                       cursor_pos)?;
             t.update(&iter, &k, UpdateTriggerFlags::empty())?;
@@ -1117,7 +1117,7 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
         }
     };
 
-    let v = cursor.k_i_mut().arm_mut::<c::bch_inode_alloc_cursor>().expect("an inode alloc cursor").v_mut();
+    let v = cursor.k_i_mut().arm_mut::<c::InodeAllocCursor>().expect("an inode alloc cursor").v_mut();
     v.bits = fs.opts().shard_inode_numbers_bits;
 
     if v.idx.get() < min {
@@ -1149,7 +1149,7 @@ pub fn create<'t>(
 ) -> Result<(), BchError> {
     let fs = t.fs();
     let (mut cursor, min, max) = alloc_cursor_get(t, is_32bit)?;
-    let cursor = cursor.k_i_mut().arm_mut::<c::bch_inode_alloc_cursor>().expect("an inode alloc cursor").v_mut();
+    let cursor = cursor.k_i_mut().arm_mut::<c::InodeAllocCursor>().expect("an inode alloc cursor").v_mut();
 
     let mut start = cursor.idx.get();
     let mut inum = start;
@@ -1163,7 +1163,7 @@ pub fn create<'t>(
                 None => Some(0),
                 Some(k) if k.k.type_ == c::bch_bkey_type::KEY_TYPE_inode_generation.0 as u8 &&
                            crate::snapshots::snapshot::is_ancestor(t, snapshot, k.k.p.snapshot) =>
-                    Some((k.arm::<c::bch_inode_generation>().expect("a generation").v().bi_generation).get()),
+                    Some((k.arm::<c::InodeGeneration>().expect("a generation").v().bi_generation).get()),
                 Some(_) => None,
             };
 
@@ -1217,7 +1217,7 @@ pub fn bch2_inode_alloc_cursor_to_text(
     k:   BkeySC<'_>,
 ) {
     let fs = Fs::from_c(c);
-    let v = k.arm::<c::bch_inode_alloc_cursor>().expect("an inode alloc cursor").v();
+    let v = k.arm::<c::InodeAllocCursor>().expect("an inode alloc cursor").v();
 
     let idx = v.idx.get();
     let (min, max) = cursor_range(&fs, k.k.p.offset);

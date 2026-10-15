@@ -21,7 +21,8 @@ use cstruct_macros::{whole, CStruct, Plain, TypeInfo};
 #[whole(tail = entries: [c::bch_sb_field_error_entry_v2])]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
-pub struct bch_damage {
+#[c_name(bch_damage)]
+pub struct Damage {
     pub v: c::bch_val,
     pub entries: [c::bch_sb_field_error_entry_v2; 0],
 }

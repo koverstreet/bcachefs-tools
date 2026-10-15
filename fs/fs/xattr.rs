@@ -81,7 +81,7 @@ pub struct XattrKey<'k> {
 // ── The value ────────────────────────────────────────────────────────────
 
 /// Where the name starts - the value follows it.
-const NAME_OFFSET: usize = offset_of!(c::bch_xattr, repr.x_name_and_value);
+const NAME_OFFSET: usize = offset_of!(c::Xattr, repr.x_name_and_value);
 
 /// The u64s of value an xattr with these takes: as xattr_val_u64s().
 pub fn val_u64s(name_len: usize, val_len: usize) -> usize {
@@ -122,7 +122,7 @@ impl c::bch_xattr_type {
 }
 
 /// An xattr's value, as C reads it: valid, its lengths within it.
-impl c::bch_xattr<Validated> {
+impl c::Xattr<Validated> {
     pub fn ty(&self) -> c::bch_xattr_type {
         c::bch_xattr_type(self.x_type as u32)
     }
@@ -137,8 +137,8 @@ impl c::bch_xattr<Validated> {
     }
 }
 
-fn xattr(k: BkeySC<'_>) -> &c::bch_xattr<Validated> {
-    k.arm::<c::bch_xattr>().expect("an xattr").v()
+fn xattr(k: BkeySC<'_>) -> &c::Xattr<Validated> {
+    k.arm::<c::Xattr>().expect("an xattr").v()
 }
 
 /// @k's value - @k an xattr, valid.
@@ -149,7 +149,7 @@ pub fn value(k: BkeySC<'_>) -> &[u8] {
 
 /// @k's value, to fill in - @k an xattr, as new_key() makes one.
 pub fn value_mut(k: &mut BkeyI) -> &mut [u8] {
-    let x = k.arm_mut::<c::bch_xattr>().expect("an xattr").v_mut();
+    let x = k.arm_mut::<c::Xattr>().expect("an xattr").v_mut();
     let (name_len, val_len) = (x.x_name_len as usize, x.x_val_len.get() as usize);
     &mut x.x_name_and_value[name_len..][..val_len]
 }
@@ -165,7 +165,7 @@ pub fn new_key<'a, 't>(t: &TransAttempt<'a, 't>, ty: c::bch_xattr_type, name: &[
     }
 
     let mut k = t.bkey_alloc_init(val_u64s, c::bch_bkey_type::KEY_TYPE_xattr.0 as u8, POS_MIN)?;
-    let x = k.k_i_mut().arm_mut::<c::bch_xattr>().expect("an xattr").v_mut();
+    let x = k.k_i_mut().arm_mut::<c::Xattr>().expect("an xattr").v_mut();
     x.x_type     = ty.0 as u8;
     x.x_name_len = name.len() as u8;
     x.x_val_len  = (val_len as u16).into();

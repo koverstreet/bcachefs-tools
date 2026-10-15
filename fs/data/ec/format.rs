@@ -12,7 +12,8 @@ nest! {
     #[repr(C, align(8))]
     #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
     #[c_packed]
-    pub struct bch_stripe {
+    #[c_name(bch_stripe)]
+    pub struct Stripe {
         pub v: c::bch_val,
         pub sectors: Le16,
         #[c_bitfield]

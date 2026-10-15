@@ -229,7 +229,7 @@ fn create_or_update_file(
     let child_inum = dirent::lookup(fs, dir_inum, &dir_hash, name);
 
     let mut child_inode: c::bch_inode_unpacked = Default::default();
-    let mut child_subvol : c::bch_subvolume = Default::default();
+    let mut child_subvol : c::Subvolume = Default::default();
 
     if let Ok(child_inum) = child_inum {
         // Already exists — update

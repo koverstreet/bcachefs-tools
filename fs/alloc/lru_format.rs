@@ -9,7 +9,8 @@ use cstruct_macros::{c_const, c_enum, c_xmacro, CStruct, Plain, TypeInfo};
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
-pub struct bch_lru {
+#[c_name(bch_lru)]
+pub struct Lru {
     pub v: c::bch_val,
     pub idx: Le64,
 }

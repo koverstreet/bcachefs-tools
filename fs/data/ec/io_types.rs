@@ -53,7 +53,7 @@ nest! {
             pub csum_good: [c::bch_csum; c::BCH_BKEY_PTRS_MAX as usize],
             pub csum_bad: [c::bch_csum; c::BCH_BKEY_PTRS_MAX as usize],
 
-            pub key: BkeyI<c::bch_stripe>,
+            pub key: BkeyI<c::Stripe>,
             pub pad: [u64; 255],
         },
     }

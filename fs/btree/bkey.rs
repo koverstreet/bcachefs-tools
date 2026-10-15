@@ -239,7 +239,7 @@ pub type bkey_type = c::bch_bkey_type;
 
 /// A key and its value, borrowed: laid out as C's struct bkey_s_c, so a C entry
 /// point can take one by value. typed() switches on k.type_, each arm the key
-/// as its type's, in place - BkeySC<'a, bch_extent<Validated>>,
+/// as its type's, in place - BkeySC<'a, Extent<Validated>>,
 /// BkeySCExtent<'a, Validated> - whose value is v().
 /// @v is C's thin pointer to the value; @V is only its type, and v() makes the
 /// reference, sized or not.
@@ -467,12 +467,12 @@ macro_rules! bkey_val {
 
     // A family's: the key types in every state, named - BkeyISubvolume<Whole>
     (@family $name:ident, $field:tt) => { crate::paste! {
-        pub type [<BkeyI $name:camel>]<S> = BkeyI<c::[<bch_ $name>]<S>>;
-        pub type [<BkeySC $name:camel>]<'a, S> = BkeySC<'a, c::[<bch_ $name>]<S>>;
-        pub type [<BkeyS $name:camel>]<'a, S> = BkeyS<'a, c::[<bch_ $name>]<S>>;
+        pub type [<BkeyI $name:camel>]<S> = BkeyI<c::[<$name:camel>]<S>>;
+        pub type [<BkeySC $name:camel>]<'a, S> = BkeySC<'a, c::[<$name:camel>]<S>>;
+        pub type [<BkeyS $name:camel>]<'a, S> = BkeyS<'a, c::[<$name:camel>]<S>>;
 
-        impl TypedBkey for c::[<bch_ $name>] {
-            type InPlace = c::[<bch_ $name>]<crate::util::vstructs::Validated>;
+        impl TypedBkey for c::[<$name:camel>] {
+            type InPlace = c::[<$name:camel>]<crate::util::vstructs::Validated>;
             const TYPE: c::bch_bkey_type = c::bch_bkey_type::[<KEY_TYPE_ $name>];
             // its family's head: C's struct, or a grown type's floor
             const MIN_VAL_SIZE: usize = size_of::<<Self::InPlace as Unsized>::Head>();
@@ -498,8 +498,8 @@ macro_rules! bkey_val {
             }
         }
 
-        const _: () = assert!(<c::[<bch_ $name>] as TypedBkey>::MIN_VAL_SIZE ==
-                              bkey_val!(@min_repr c::[<bch_ $name>], $field),
+        const _: () = assert!(<c::[<$name:camel>] as TypedBkey>::MIN_VAL_SIZE ==
+                              bkey_val!(@min_repr c::[<$name:camel>], $field),
                               concat!("bch_", stringify!($name), ": its family's head isn't the \
                                        minimum BCH_BKEY_TYPES() names"));
     } };
@@ -508,15 +508,15 @@ macro_rules! bkey_val {
     (@grown $name:ident, $field:tt) => { crate::paste! {
         bkey_val!(@family $name, $field);
         // SAFETY: Plain, as #[grown] requires: no padding, any bytes a value
-        unsafe impl SizedBkey for c::[<bch_ $name>] {}
+        unsafe impl SizedBkey for c::[<$name:camel>] {}
     } };
 
     (@sized $name:ident) => { crate::paste! {
-        pub type [<BkeyI $name:camel>] = BkeyI<c::[<bch_ $name>]>;
-        pub type [<BkeySC $name:camel>]<'a> = BkeySC<'a, c::[<bch_ $name>]>;
-        pub type [<BkeyS $name:camel>]<'a> = BkeyS<'a, c::[<bch_ $name>]>;
+        pub type [<BkeyI $name:camel>] = BkeyI<c::[<$name:camel>]>;
+        pub type [<BkeySC $name:camel>]<'a> = BkeySC<'a, c::[<$name:camel>]>;
+        pub type [<BkeyS $name:camel>]<'a> = BkeyS<'a, c::[<$name:camel>]>;
 
-        impl TypedBkey for c::[<bch_ $name>] {
+        impl TypedBkey for c::[<$name:camel>] {
             type InPlace = Self;
             const TYPE: c::bch_bkey_type = c::bch_bkey_type::[<KEY_TYPE_ $name>];
             const MIN_VAL_SIZE: usize = size_of::<Self>();
@@ -533,11 +533,11 @@ macro_rules! bkey_val {
 
         // SAFETY: an on-disk value - integers, and structs, arrays and unions
         // of them - any bytes of which are one
-        unsafe impl SizedBkey for c::[<bch_ $name>] {}
+        unsafe impl SizedBkey for c::[<$name:camel>] {}
 
         // Whole, &T - and the Floored Min a View derefs to. A value is at the
         // u64 after its key's header, so it's aligned.
-        impl ArmRef for c::[<bch_ $name>] {
+        impl ArmRef for c::[<$name:camel>] {
             fn arm_ref(b: &[u8]) -> Option<&Self> {
                 // SAFETY: all of it, aligned
                 (b.len() >= size_of::<Self>() && b.as_ptr() as usize % align_of::<Self>() == 0)
@@ -551,7 +551,7 @@ macro_rules! bkey_val {
             }
         }
 
-        unsafe impl Floored for c::[<bch_ $name>] {
+        unsafe impl Floored for c::[<$name:camel>] {
             type Min = Self;
         }
     } };
@@ -578,7 +578,7 @@ macro_rules! bkey_types {
         #[allow(non_camel_case_types)]
         #[derive(Clone, Copy)]
         pub enum BkeySCTyped<'a> {
-            $($name(BkeySC<'a, <c::[<bch_ $name>] as TypedBkey>::InPlace>),)*
+            $($name(BkeySC<'a, <c::[<$name:camel>] as TypedBkey>::InPlace>),)*
             /// A type this code doesn't know.
             unknown(BkeySC<'a>),
         }
@@ -596,7 +596,7 @@ macro_rules! bkey_types {
         /// BkeySCTyped, to edit: BkeyS::typed().
         #[allow(non_camel_case_types)]
         pub enum BkeySTyped<'a> {
-            $($name(BkeyS<'a, <c::[<bch_ $name>] as TypedBkey>::InPlace>),)*
+            $($name(BkeyS<'a, <c::[<$name:camel>] as TypedBkey>::InPlace>),)*
             /// A type this code doesn't know.
             unknown(BkeyS<'a>),
         }
@@ -615,7 +615,7 @@ macro_rules! bkey_types {
         /// u64s say: BkeyI::typed().
         #[allow(non_camel_case_types)]
         pub enum BkeyITyped<'a> {
-            $($name(&'a BkeyI<<c::[<bch_ $name>] as TypedBkey>::InPlace>),)*
+            $($name(&'a BkeyI<<c::[<$name:camel>] as TypedBkey>::InPlace>),)*
             /// A type this code doesn't know.
             unknown(&'a BkeyI),
         }
@@ -623,7 +623,7 @@ macro_rules! bkey_types {
         /// BkeyITyped, to edit.
         #[allow(non_camel_case_types)]
         pub enum BkeyITypedMut<'a> {
-            $($name(&'a mut BkeyI<<c::[<bch_ $name>] as TypedBkey>::InPlace>),)*
+            $($name(&'a mut BkeyI<<c::[<$name:camel>] as TypedBkey>::InPlace>),)*
             /// A type this code doesn't know.
             unknown(&'a mut BkeyI),
         }
@@ -633,7 +633,7 @@ macro_rules! bkey_types {
                 match self.k.type_ as u32 {
                     $($nr =>
                         // SAFETY: as arm()'s
-                        BkeyITyped::$name(unsafe { &*<c::[<bch_ $name>] as TypedBkey>::cast(self.as_ffi()) }),)*
+                        BkeyITyped::$name(unsafe { &*<c::[<$name:camel>] as TypedBkey>::cast(self.as_ffi()) }),)*
                     _ => BkeyITyped::unknown(self),
                 }
             }
@@ -643,7 +643,7 @@ macro_rules! bkey_types {
                 match self.k.type_ as u32 {
                     $($nr =>
                         // SAFETY: as arm()'s
-                        BkeyITypedMut::$name(unsafe { &mut *<c::[<bch_ $name>] as TypedBkey>::cast_mut(self.as_ffi_mut()) }),)*
+                        BkeyITypedMut::$name(unsafe { &mut *<c::[<$name:camel>] as TypedBkey>::cast_mut(self.as_ffi_mut()) }),)*
                     _ => BkeyITypedMut::unknown(self),
                 }
             }
@@ -741,12 +741,12 @@ impl<'a> BkeySC<'a> {
 
         let len = self.val_bytes().len();
         match self.typed() {
-            BkeySCTyped::btree_ptr(_)    => offset_of!(c::bch_btree_ptr, repr.start)..len,
-            BkeySCTyped::extent(_)       => offset_of!(c::bch_extent, repr.start)..len,
-            BkeySCTyped::reflink_v(_)    => offset_of!(c::bch_reflink_v, repr.start)..len,
-            BkeySCTyped::btree_ptr_v2(_) => offset_of!(c::bch_btree_ptr_v2, repr.start)..len,
+            BkeySCTyped::btree_ptr(_)    => offset_of!(c::BtreePtr, repr.start)..len,
+            BkeySCTyped::extent(_)       => offset_of!(c::Extent, repr.start)..len,
+            BkeySCTyped::reflink_v(_)    => offset_of!(c::ReflinkV, repr.start)..len,
+            BkeySCTyped::btree_ptr_v2(_) => offset_of!(c::BtreePtrV2, repr.start)..len,
             BkeySCTyped::stripe(s) => {
-                let start = offset_of!(c::bch_stripe, repr.ptrs);
+                let start = offset_of!(c::Stripe, repr.ptrs);
                 start..(start + s.v().nr_blocks as usize * size_of::<c::bch_extent_ptr>()).min(len)
             }
             _ => 0..0,
@@ -1104,26 +1104,26 @@ mod tests {
     /// what's in the buffer past it.
     #[test]
     fn bkey_short_value() {
-        assert_eq!(c::bch_snapshot::MIN_VAL_SIZE, 24);
+        assert_eq!(c::Snapshot::MIN_VAL_SIZE, 24);
 
-        let mut k = BkeyI::<c::bch_snapshot>::new();
+        let mut k = BkeyI::<c::Snapshot>::new();
         k.v.subvol = Le32::new(5);
         k.v.children = [Le32::new(3), Le32::new(4)];
         k.v.depth = Le32::new(7);
         k.k.set_val_bytes(24);
 
-        let s = BkeySC::from(k.k_i()).arm::<c::bch_snapshot>().expect("a snapshot").v();
+        let s = BkeySC::from(k.k_i()).arm::<c::Snapshot>().expect("a snapshot").v();
         assert_eq!((s.subvol.get(), s.children[0].get(), s.children[1].get()), (5, 3, 4));
         assert_eq!(s.depth().get(), 0);
         assert!(s.whole().is_none());
-        assert!(BkeySC::from(k.k_i()).arm::<c::bch_subvolume>().is_none());
+        assert!(BkeySC::from(k.k_i()).arm::<c::Subvolume>().is_none());
     }
 
     /// A key by its type: a grown type's value its family's, an older value
     /// of it read as one - inline too: dispatch is by type, as C's.
     #[test]
     fn bkey_typed_short_values() {
-        let mut k = BkeyI::<c::bch_subvolume>::new();
+        let mut k = BkeyI::<c::Subvolume>::new();
         k.v.snapshot = Le32::new(5);
         k.k.set_val_bytes(16);
         match BkeySC::from(k.k_i()).typed() {
@@ -1137,9 +1137,9 @@ mod tests {
             _ => panic!("a subvolume"),
         }
 
-        let mut g = BkeyI::<c::bch_inode_generation>::new();
+        let mut g = BkeyI::<c::InodeGeneration>::new();
         g.v.bi_generation = Le32::new(3);
-        assert_eq!(BkeySC::from(g.k_i()).arm::<c::bch_inode_generation>().map(|g| g.v().bi_generation.get()),
+        assert_eq!(BkeySC::from(g.k_i()).arm::<c::InodeGeneration>().map(|g| g.v().bi_generation.get()),
                    Some(3));
         assert!(matches!(g.k_i().typed(), BkeyITyped::inode_generation(_)));
     }
@@ -1152,8 +1152,8 @@ mod tests {
         // SAFETY: b's bytes, aligned for any value
         let b = unsafe { core::slice::from_raw_parts(b.as_ptr().cast::<u8>(), size_of_val(&b)) };
         use crate::util::vstructs::Validated;
-        assert!(<c::bch_snapshot<Validated> as ArmRef>::arm_ref(&b[..16]).is_none());
-        assert!(<c::bch_snapshot<Validated> as ArmRef>::arm_ref(&b[..24]).is_some());
+        assert!(<c::Snapshot<Validated> as ArmRef>::arm_ref(&b[..16]).is_none());
+        assert!(<c::Snapshot<Validated> as ArmRef>::arm_ref(&b[..24]).is_some());
     }
 
     /// A subvolume key from before fs_path_parent - 16 bytes of its 48 - edited
@@ -1161,20 +1161,20 @@ mod tests {
     /// write the key wouldn't carry. One grown whole does.
     #[test]
     fn bkey_edit_short_value() {
-        let mut k = BkeyI::<c::bch_subvolume>::new();
+        let mut k = BkeyI::<c::Subvolume>::new();
         k.k.set_val_bytes(16);
         let k = k.k_i_mut();
 
-        assert!(k.arm_mut::<c::bch_snapshot>().is_none());
+        assert!(k.arm_mut::<c::Snapshot>().is_none());
 
         let mut s = BkeyS::from(&mut *k);
         let BkeySTyped::subvolume(mut s) = s.typed() else { panic!("a subvolume") };
         s.v_mut().snapshot = Le32::new(5);
 
-        let mut full = BkeyI::<c::bch_subvolume>::new();
-        full.k_i_mut().whole_mut::<c::bch_subvolume>().expect("whole").v.fs_path_parent = Le32::new(9);
+        let mut full = BkeyI::<c::Subvolume>::new();
+        full.k_i_mut().whole_mut::<c::Subvolume>().expect("whole").v.fs_path_parent = Le32::new(9);
         assert_eq!(full.v.fs_path_parent, 9);
-        let s = BkeySC::from(&*k).arm::<c::bch_subvolume>().expect("a subvolume").v();
+        let s = BkeySC::from(&*k).arm::<c::Subvolume>().expect("a subvolume").v();
         assert_eq!((s.snapshot.get(), s.fs_path_parent().get()), (5, 0));
     }
 
