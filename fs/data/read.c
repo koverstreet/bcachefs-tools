@@ -294,7 +294,7 @@ static struct bch_read_bio *__promote_alloc(struct btree_trans *trans,
 		update_opts.write_flags |= BCH_WRITE_only_specified_devs;
 	} else {
 		update_opts.type = BCH_DATA_UPDATE_self_heal;
-		update_opts.target = opts->foreground_target;
+		update_opts.target = opts->background_target;
 
 		struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 		unsigned ptr_bit = 1;
