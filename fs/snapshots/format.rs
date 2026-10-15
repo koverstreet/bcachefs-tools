@@ -59,7 +59,7 @@ c_enum! {
 }
 
 c_bitmask! {
-    LE32_BITMASK(struct bch_subvolume, flags), strip BCH_SUBVOLUME_ {
+    LE32_BITMASK(struct bch_subvolume<Validated>, flags), strip BCH_SUBVOLUME_ {
         BCH_SUBVOLUME_RO(0, 1),
         /*
          * We need to know whether a subvolume is a snapshot so we can know whether we
@@ -173,7 +173,7 @@ const _: () = {
 };
 
 c_bitmask! {
-    LE32_BITMASK(struct bch_snapshot, flags), strip BCH_SNAPSHOT_ {
+    LE32_BITMASK(struct bch_snapshot<Validated>, flags), strip BCH_SNAPSHOT_ {
         /* Obsolete */
         BCH_SNAPSHOT_WILL_DELETE_OBSOLETE(0, 1),
         BCH_SNAPSHOT_SUBVOL_OBSOLETE(1, 2),

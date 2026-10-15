@@ -237,7 +237,7 @@ fn check_dirent_to_subvol<'t>(
     // would say - this is a raw read, for the key. Else the dirent outlives it,
     // and fsck stops converging once the sweep removes it.
     let s = s.filter(|s| {
-        subvolume::val(*s).expect("typed").state() != Some(c::bch_subvolume_state::SUBVOLUME_STATE_deleted)
+        subvolume::val(*s).expect("typed").state_decoded() != Some(c::bch_subvolume_state::SUBVOLUME_STATE_deleted)
     });
 
     let Some(s) = s else {

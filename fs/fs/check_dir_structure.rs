@@ -104,7 +104,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
 
     // Unlinking zeroes fs_path_parent: a subvolume on its way to deletion has
     // no path by design, and isn't ours to reattach.
-    if start_sv.state() != Some(c::bch_subvolume_state::SUBVOLUME_STATE_live) {
+    if start_sv.state_decoded() != Some(c::bch_subvolume_state::SUBVOLUME_STATE_live) {
         return Ok(());
     }
 

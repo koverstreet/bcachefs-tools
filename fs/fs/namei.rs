@@ -130,7 +130,7 @@ pub fn create_trans(
 
     *new_subvol = subvolume::get(t, dir.subvol as u32, true)?;
     if new_subvol.ro() ||
-       new_subvol.state() == Some(c::bch_subvolume_state::SUBVOLUME_STATE_unlinked) {
+       new_subvol.state_decoded() == Some(c::bch_subvolume_state::SUBVOLUME_STATE_unlinked) {
         return Err(BchError::from(c::EROFS));
     }
 

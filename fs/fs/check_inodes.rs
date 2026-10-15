@@ -146,7 +146,7 @@ fn check_inode_subvol(
     // that's a deletion in flight, which reconstructing would revert. Anything
     // else strips the reference, below.
     let snapshot_agrees = snapshot.as_ref().is_some_and(|s| {
-        s.state() == Some(c::bch_snapshot_state::SNAPSHOT_STATE_live) &&
+        s.state_decoded() == Some(c::bch_snapshot_state::SNAPSHOT_STATE_live) &&
             s.subvol.get() == u.bi_subvol
     });
 

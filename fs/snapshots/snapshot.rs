@@ -3,6 +3,7 @@
 //! Snapshots: queries of the in-memory table, and lookups in the btrees.
 
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, BkeyISnapshot, BkeyISnapshotTree, SizedBkey};
+use crate::util::vstructs::{Validated, Whole};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey};
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
@@ -351,21 +352,16 @@ const SNAPSHOT_STATES: [c::bch_snapshot_state; 4] = [
     c::bch_snapshot_state::SNAPSHOT_STATE_deleted,
 ];
 
-impl c::bch_snapshot {
+/// Any snapshot node, in place or whole - the struct reaches these too.
+impl c::bch_snapshot<Validated> {
     pub fn parent(&self) -> u32       { self.parent.get() }
     pub fn children(&self) -> [u32; 2] { self.children.map(|c| c.get()) }
     pub fn subvol(&self) -> u32       { self.subvol.get() }
     pub fn tree(&self) -> u32         { self.tree.get() }
-    pub fn depth(&self) -> u32        { self.depth.get() }
 
-    /// 0 if the key predates the field.
-    pub fn state_raw(&self) -> u32 {
-        self.state.get()
-    }
-
-    /// None if the field is 0 or damaged.
+    /// None if the field is 0 - the key predates it - or damaged.
     pub fn state_field(&self) -> Option<c::bch_snapshot_state> {
-        SNAPSHOT_STATES.into_iter().find(|&s| s.0 == self.state_raw())
+        SNAPSHOT_STATES.into_iter().find(|&s| s.0 == self.state().get())
     }
 
     /// The state the legacy flags imply.
@@ -383,14 +379,17 @@ impl c::bch_snapshot {
 
     /// From the legacy flags if the key predates the state field; None if the
     /// field is damaged.
-    pub fn state(&self) -> Option<c::bch_snapshot_state> {
-        if self.state == 0 {
+    pub fn state_decoded(&self) -> Option<c::bch_snapshot_state> {
+        if self.state() == 0 {
             Some(self.state_from_flags())
         } else {
             self.state_field()
         }
     }
+}
 
+/// The struct: a field an older key lacks, to set.
+impl c::bch_snapshot<Whole> {
     /// And the legacy flags to match.
     pub fn set_state(&mut self, state: c::bch_snapshot_state) {
         unsafe { c::bch2_snapshot_state_set(self, state) }
