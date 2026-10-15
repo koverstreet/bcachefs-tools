@@ -863,8 +863,8 @@ pub unsafe fn bch2_subvolume_wait_for_pagecache_and_delete(work: *mut c::work_st
 
 /// On commit, queues the delete work.
 pub fn unlink(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
-    t.commit_hook(move |trans| {
-        let fs = trans.fs();
+    t.commit_hook(move |t| {
+        let fs = t.fs();
 
         {
             let mut unlinked = fs.snapshots.unlinked.lock();

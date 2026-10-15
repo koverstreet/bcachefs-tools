@@ -615,7 +615,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// it outlives this call, so 'static.
     pub fn commit_hook<F>(&self, f: F) -> Result<(), BchError>
     where
-        F: Fn(&BtreeTrans<'_>) -> Result<(), BchError> + Copy + 'static,
+        F: Fn(&TransAttempt<'_, '_>) -> Result<(), BchError> + Copy + 'static,
     {
         #[repr(C)]
         struct Hook<F> {
@@ -628,12 +628,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
             h:     *mut c::btree_trans_commit_hook,
         ) -> core::ffi::c_int
         where
-            F: Fn(&BtreeTrans<'_>) -> Result<(), BchError>,
+            F: Fn(&TransAttempt<'_, '_>) -> Result<(), BchError>,
         {
             // SAFETY: @h is the first field of the Hook<F> commit_hook() queued.
             let hook = unsafe { &*(h as *const Hook<F>) };
             let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-            crate::errcode::ret_to_c((hook.f)(&trans))
+            // SAFETY: C runs hooks in the commit, in the attempt being committed
+            let t = unsafe { trans.attempt_in_progress() };
+            crate::errcode::ret_to_c((hook.f)(&t))
         }
 
         // bch2_trans_kmalloc() gives 8 byte alignment:
