@@ -169,6 +169,7 @@ write_attribute(trigger_recalc_capacity);
 write_attribute(trigger_reconcile_wakeup);
 write_attribute(trigger_reconcile_pending_wakeup);
 write_attribute(trigger_delete_dead_snapshots);
+write_attribute(trigger_accounting_sweep_zero_inum);
 write_attribute(trigger_emergency_read_only);
 rw_attribute(logged_op_fail_next);
 read_attribute(gc_gens_pos);
@@ -516,6 +517,9 @@ STORE(bch2_fs)
 			__bch2_delete_dead_snapshots(c);
 	}
 
+	if (attr == &sysfs_trigger_accounting_sweep_zero_inum)
+		bch2_accounting_sweep_zero_inum(c);
+
 	if (attr == &sysfs_trigger_emergency_read_only) {
 		CLASS(bch_log_msg, msg)(c);
 
@@ -663,6 +667,7 @@ struct attribute *bch2_fs_internal_files[] = {
 	&sysfs_trigger_reconcile_wakeup,
 	&sysfs_trigger_reconcile_pending_wakeup,
 	&sysfs_trigger_delete_dead_snapshots,
+	&sysfs_trigger_accounting_sweep_zero_inum,
 	&sysfs_logged_op_fail_next,
 	&sysfs_trigger_emergency_read_only,
 
