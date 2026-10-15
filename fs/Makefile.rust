@@ -149,6 +149,16 @@ RUSTFLAGS_mod.o += --cfg kernel --cfg __KERNEL__
 # exists on one side only.
 RUSTFLAGS_mod.o += $(foreach f,$(bcachefs-config-cppflags),--cfg $(firstword $(subst =, ,$(patsubst -D%,%,$(f)))))
 
+# In kernel 7.3+, pin-init unified PinInit to use __init instead of __pinned_init
+# in-kernel.
+ifneq ($(bcachefs-vendor-rust),y)
+bch-pin-init-v2 := $(shell [ -f $(objtree)/rust/libpin_init.rmeta ] && \
+	! grep -qa "__pinned_init" $(objtree)/rust/libpin_init.rmeta 2>/dev/null && echo y)
+ifeq ($(bch-pin-init-v2),y)
+RUSTFLAGS_mod.o += --cfg bch_pin_init_v2
+endif
+endif
+
 # ---- crates kbuild doesn't build for us -------------------------------------
 # These, and Makefile.rust.vendor's. The crate name comes from the target -
 # foo.o, libfoo.so, libfoo.rmeta; per target, rs-flags (externs, cfgs) and

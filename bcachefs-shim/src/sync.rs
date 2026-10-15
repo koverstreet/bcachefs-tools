@@ -23,6 +23,19 @@ pub unsafe trait PinInit<T, E = Infallible> {
     ///
     /// `slot` must be valid for writes, and not move once this returns Ok.
     unsafe fn __pinned_init(self, slot: *mut T) -> Result<(), E>;
+
+    /// Initialize `slot`. Alias matching kernel 7.3+ PinInit API.
+    ///
+    /// # Safety
+    ///
+    /// Same as `__pinned_init`.
+    unsafe fn __init(self, slot: *mut T) -> Result<(), E>
+    where
+        Self: Sized,
+    {
+        // SAFETY: Same requirements as `__pinned_init`.
+        unsafe { self.__pinned_init(slot) }
+    }
 }
 
 // SAFETY: writes the whole of `slot`.

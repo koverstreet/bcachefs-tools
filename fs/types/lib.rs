@@ -233,7 +233,11 @@ impl<T, const U64S: usize> RustOnly<T, U64S> {
     /// storage - is overwritten, not dropped. Once, before any use.
     pub unsafe fn init(slot: *mut Self, init: impl crate::util::sync::PinInit<T>) {
         let () = Self::FITS;
-        match unsafe { init.__pinned_init(slot.cast::<T>()) } {
+        #[cfg(bch_pin_init_v2)]
+        let res = unsafe { init.__init(slot.cast::<T>()) };
+        #[cfg(not(bch_pin_init_v2))]
+        let res = unsafe { init.__pinned_init(slot.cast::<T>()) };
+        match res {
             Ok(()) => {}
             Err(e) => match e {},
         }

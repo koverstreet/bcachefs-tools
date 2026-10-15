@@ -16,6 +16,8 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(bch_cstruct_records)");
     // The kernel build's, as for C; types defined in Rust test it.
     println!("cargo::rustc-check-cfg=cfg(__KERNEL__)");
+    // Kernel 7.3+ pin-init uses __init instead of __pinned_init in-kernel.
+    println!("cargo::rustc-check-cfg=cfg(bch_pin_init_v2)");
     println!("cargo:rerun-if-changed=build_config.rs");
 
     let src = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"); // = fs/
