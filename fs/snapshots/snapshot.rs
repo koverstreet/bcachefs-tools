@@ -264,10 +264,13 @@ pub fn tree_lookup(trans: &BtreeTrans<'_>, id: u32) -> Result<c::SnapshotTree, B
 }
 
 /// At an unused id, queued for the commit, for the caller to fill in.
-pub fn tree_create<'a, 't>(t: &TransAttempt<'a, 't>) -> Result<TransBkey<'a, 't>, BchError> {
+pub fn tree_create<'a, 't>(t: &TransAttempt<'a, 't>)
+    -> Result<TransBkey<'a, 't, c::SnapshotTree>, BchError>
+{
+    // SAFETY: bch2_bkey_alloc(..., snapshot_tree): a whole snapshot tree key
     unsafe {
         let k = c::__bch2_snapshot_tree_create(t.raw());
-        TransBkey::from_raw(t, k as *mut c::bkey_i)
+        Ok(TransBkey::from_raw(t, k as *mut c::bkey_i)?.typed())
     }
 }
 
@@ -313,10 +316,10 @@ pub fn node_set_deleted(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchErro
 }
 
 /// Put deleted node @u back in the tree, under its parent.
-pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't>)
+pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::Snapshot>)
     -> Result<(), BchError>
 {
-    let ret = unsafe { c::bch2_snapshot_node_undelete(t.raw(), u.as_ptr() as *mut BkeyI<c::Snapshot>) };
+    let ret = unsafe { c::bch2_snapshot_node_undelete(t.raw(), u.as_ptr().cast()) };
     t.result(ret)
 }
 

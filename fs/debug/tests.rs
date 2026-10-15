@@ -93,7 +93,7 @@ fn insert_cookie(fs: &Fs, btree: c::btree_id, k: &mut BkeyICookie) -> TestRet {
 
 fn trans_cookie_alloc<'a, 't>(
     t: &TransAttempt<'a, 't>,
-) -> Result<crate::btree::iter::TransBkey<'a, 't>, BchError> {
+) -> Result<crate::btree::iter::TransBkey<'a, 't, c::Cookie>, BchError> {
     t.bkey_alloc_typed::<c::Cookie>()
 }
 

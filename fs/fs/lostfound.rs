@@ -12,7 +12,7 @@
 //! fsck-inject tests each path: creating vs restoring lost+found, adopting a
 //! reattach dirent after a partial commit, a taken name, the descendant fixup.
 
-use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, POS_MIN};
+use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
     is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
@@ -27,7 +27,6 @@ use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_info, bch_notice, bch_verbose};
-use core::mem::size_of;
 use core::ops::ControlFlow;
 
 const LOSTFOUND: &[u8] = b"lost+found";
@@ -318,12 +317,11 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
     if inode.bi_subvol != 0 {
         inode.bi_parent_subvol = c::BCACHEFS_ROOT_SUBVOL;
 
-        let mut s = t.bkey_get_mut(c::btree_id::subvolumes, pos(0, inode.bi_subvol as u64),
-                                   BtreeIterFlags::empty(), UpdateTriggerFlags::empty(),
-                                   c::bch_bkey_type::KEY_TYPE_subvolume,
-                                   size_of::<BkeyI<c::Subvolume>>())?;
-        s.k_i_mut().whole_mut::<c::Subvolume>().expect("a subvolume").v.fs_path_parent =
-            c::BCACHEFS_ROOT_SUBVOL.into();
+        let mut s = t.bkey_get_mut::<c::Subvolume>(c::btree_id::subvolumes,
+                                                   pos(0, inode.bi_subvol as u64),
+                                                   BtreeIterFlags::empty(),
+                                                   UpdateTriggerFlags::empty())?;
+        s.v_mut().fs_path_parent = c::BCACHEFS_ROOT_SUBVOL.into();
 
         dirent_snapshot = subvolume::get_snapshot(trans, inode.bi_parent_subvol)?;
         write!(name, "subvol-{}", inode.bi_subvol);

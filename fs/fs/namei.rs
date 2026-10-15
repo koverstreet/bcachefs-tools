@@ -26,7 +26,7 @@
 //! panic here.
 
 use crate::acl::PosixAcl;
-use crate::btree::bkey::{pos, spos, BkeyI, BkeySC};
+use crate::btree::bkey::{pos, spos, BkeySC};
 use crate::btree::iter::{
     is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
     UpdateTriggerFlags,
@@ -48,7 +48,6 @@ use crate::util::Printbuf;
 use crate::{bch_err, fs_inconsistent, fsck_err, fsck_err_on};
 use core::ffi::{c_int, c_uint};
 use core::fmt;
-use core::mem::size_of;
 use core::ops::ControlFlow;
 use cstruct_macros::c_export;
 
@@ -509,11 +508,9 @@ pub unsafe extern "C" fn bch2_unlink_trans(
 fn subvol_update_parent(t: &TransAttempt<'_, '_>, subvol: u32, new_parent: u32)
     -> Result<(), BchError>
 {
-    let mut s = t.bkey_get_mut(c::btree_id::subvolumes, pos(0, subvol as u64),
-                               BtreeIterFlags::CACHED, UpdateTriggerFlags::empty(),
-                               c::bch_bkey_type::KEY_TYPE_subvolume,
-                               size_of::<BkeyI<c::Subvolume>>())?;
-    s.k_i_mut().whole_mut::<c::Subvolume>().expect("a subvolume").v.fs_path_parent = new_parent.into();
+    let mut s = t.bkey_get_mut::<c::Subvolume>(c::btree_id::subvolumes, pos(0, subvol as u64),
+                                               BtreeIterFlags::CACHED, UpdateTriggerFlags::empty())?;
+    s.v_mut().fs_path_parent = new_parent.into();
     Ok(())
 }
 

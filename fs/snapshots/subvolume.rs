@@ -42,7 +42,7 @@ use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_notice, bkey_fsck_err_on, fs_inconsistent, fsck_err,
             fsck_err_on, fsck_err_report};
 use core::fmt;
-use core::mem::{offset_of, size_of};
+use core::mem::offset_of;
 use cstruct_macros::c_export;
 
 /// Whether subvolume key @k is long enough to have @field.
@@ -702,11 +702,10 @@ crate::recovery_pass!(bch2_check_subvol_children => check_subvol_children);
 
 /// Already queued as an update.
 fn get_mut<'a, 't>(t: &TransAttempt<'a, 't>, subvol: u32)
-    -> Result<crate::btree::iter::TransBkey<'a, 't>, BchError>
+    -> Result<crate::btree::iter::TransBkey<'a, 't, c::Subvolume>, BchError>
 {
-    let ret = t.bkey_get_mut(c::btree_id::subvolumes, pos(0, subvol as u64), BtreeIterFlags::CACHED,
-                             UpdateTriggerFlags::empty(), c::bch_bkey_type::KEY_TYPE_subvolume,
-                             size_of::<BkeyI<c::Subvolume>>());
+    let ret = t.bkey_get_mut::<c::Subvolume>(c::btree_id::subvolumes, pos(0, subvol as u64),
+                                             BtreeIterFlags::CACHED, UpdateTriggerFlags::empty());
     if let Err(e) = &ret {
         if e.matches(c::ENOENT) {
             missing(t.fs(), subvol)?;
@@ -720,7 +719,7 @@ fn set_state_trans(t: &TransAttempt<'_, '_>, subvol: u32, state: c::bch_subvolum
     -> Result<(), BchError>
 {
     let mut k = get_mut(t, subvol)?;
-    let s = &mut k.k_i_mut().whole_mut::<c::Subvolume>().expect("a subvolume key").v;
+    let s = k.v_mut();
     s.set_state(state);
     s.fs_path_parent = 0.into();
     Ok(())
@@ -741,10 +740,8 @@ fn reparent(
         return Ok(());
     }
 
-    let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty(),
-                                c::bch_bkey_type::KEY_TYPE_subvolume,
-                                size_of::<BkeyI<c::Subvolume>>())?;
-    u.k_i_mut().whole_mut::<c::Subvolume>().expect("a subvolume key").v.creation_parent = new.into();
+    let mut u = t.bkey_make_mut::<c::Subvolume>(iter, k, UpdateTriggerFlags::empty())?;
+    u.v_mut().creation_parent = new.into();
     Ok(())
 }
 
@@ -793,10 +790,8 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
         })?;
 
     if tk.v().master_subvol.get() == subvol {
-        let mut u = t.bkey_make_mut(tree_iter, tk.s_c(), UpdateTriggerFlags::empty(),
-                                    c::bch_bkey_type::KEY_TYPE_snapshot_tree,
-                                    size_of::<c::SnapshotTree>())?;
-        u.k_i_mut().arm_mut::<c::SnapshotTree>().expect("a snapshot tree key").v_mut().master_subvol = 0.into();
+        let mut u = t.bkey_make_mut::<c::SnapshotTree>(tree_iter, tk.s_c(), UpdateTriggerFlags::empty())?;
+        u.v_mut().master_subvol = 0.into();
     }
 
     set_state_trans(t, subvol, c::bch_subvolume_state::SUBVOLUME_STATE_deleted)?;
@@ -932,7 +927,7 @@ pub fn create(
     let mut parent_snapshot = 0;
     if src != 0 {
         let k = get_mut(t, src)?;
-        parent_snapshot = BkeySC::from(k.k_i()).arm::<c::Subvolume>().expect("a subvolume").v().snapshot.get();
+        parent_snapshot = k.v().snapshot.get();
         src_k = Some(k);
     }
 
@@ -940,12 +935,12 @@ pub fn create(
     t.snapshot_node_create(parent_snapshot, &mut new_nodes[..nr], &snapshot_subvols[..nr])?;
 
     if let Some(mut k) = src_k {
-        k.k_i_mut().whole_mut::<c::Subvolume>().expect("a subvolume key").v.snapshot = new_nodes[1].into();
+        k.v_mut().snapshot = new_nodes[1].into();
     }
 
     let mut k = t.bkey_alloc_typed::<c::Subvolume>()?;
-    k.k_i_mut().k.p = dst_iter.pos();
-    let v = &mut k.k_i_mut().whole_mut::<c::Subvolume>().expect("a subvolume key").v;
+    k.k_mut().p = dst_iter.pos();
+    let v = k.v_mut();
     v.flags           = 0.into();
     v.snapshot        = new_nodes[0].into();
     v.inode           = inode.into();
@@ -956,7 +951,7 @@ pub fn create(
     v.set_ro(ro);
     v.set_snap(src != 0);
     v.set_state(c::bch_subvolume_state::SUBVOLUME_STATE_live);
-    let v = val(BkeySC::from(k.k_i())).expect("a subvolume");
+    let v = *k.v();
 
     t.update(&dst_iter, &k, UpdateTriggerFlags::empty())?;
 

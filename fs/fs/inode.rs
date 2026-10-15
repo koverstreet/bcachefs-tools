@@ -1090,7 +1090,7 @@ fn cursor_range(fs: &Fs, idx: u64) -> (u64, u64) {
 /// wrapped, a new generation, if it's at the end. Queued as an update, so
 /// what the caller does to it is committed. Its range, too.
 fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
-    -> Result<(TransBkey<'a, 't>, u64, u64), BchError>
+    -> Result<(TransBkey<'a, 't, c::InodeAllocCursor>, u64, u64), BchError>
 {
     let fs = t.fs();
     let idx = if is_32bit { 0 } else { 1 + unsafe { c::rust_bch2_inode_shard_idx(fs.raw) } };
@@ -1098,10 +1098,10 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
 
     let cursor_pos = pos(c::logged_ops_inums::LOGGED_OPS_INUM_inode_cursors.0 as u64, idx);
 
-    let mut cursor = match t.bkey_get_mut(c::btree_id::logged_ops, cursor_pos,
-                                          BtreeIterFlags::CACHED, UpdateTriggerFlags::empty(),
-                                          c::bch_bkey_type::KEY_TYPE_inode_alloc_cursor,
-                                          size_of::<c::InodeAllocCursor>()).found()? {
+    let cursor = t.bkey_get_mut::<c::InodeAllocCursor>(c::btree_id::logged_ops, cursor_pos,
+                                                       BtreeIterFlags::CACHED,
+                                                       UpdateTriggerFlags::empty());
+    let mut cursor = match cursor.found()? {
         Some(cursor) => cursor,
         None => {
             // No cursor there yet:
@@ -1109,15 +1109,14 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
                                           BtreeIterFlags::INTENT | BtreeIterFlags::CACHED);
             iter.traverse(t)?;
 
-            let k = t.bkey_alloc_init(size_of::<c::InodeAllocCursor>() / 8,
-                                      c::bch_bkey_type::KEY_TYPE_inode_alloc_cursor.0 as u8,
-                                      cursor_pos)?;
+            let mut k = t.bkey_alloc_typed::<c::InodeAllocCursor>()?;
+            k.k_mut().p = cursor_pos;
             t.update(&iter, &k, UpdateTriggerFlags::empty())?;
             k
         }
     };
 
-    let v = cursor.k_i_mut().arm_mut::<c::InodeAllocCursor>().expect("an inode alloc cursor").v_mut();
+    let v = cursor.v_mut();
     v.bits = fs.opts().shard_inode_numbers_bits;
 
     if v.idx.get() < min {
@@ -1149,7 +1148,7 @@ pub fn create<'t>(
 ) -> Result<(), BchError> {
     let fs = t.fs();
     let (mut cursor, min, max) = alloc_cursor_get(t, is_32bit)?;
-    let cursor = cursor.k_i_mut().arm_mut::<c::InodeAllocCursor>().expect("an inode alloc cursor").v_mut();
+    let cursor = cursor.v_mut();
 
     let mut start = cursor.idx.get();
     let mut inum = start;

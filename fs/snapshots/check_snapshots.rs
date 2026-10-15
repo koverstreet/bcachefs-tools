@@ -48,7 +48,6 @@ use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err};
 use core::fmt;
-use core::mem::size_of;
 use cstruct_macros::c_export;
 
 /// Snapshot node @id's key, None if there's none: fsck can't assume a node
@@ -59,14 +58,11 @@ fn lookup_node(trans: &BtreeTrans<'_>, id: u32) -> Result<Option<BkeyI<c::Snapsh
 }
 
 /// Snapshot node @id's key, as a mutable copy queued for the commit.
-fn get_mut_node<'a, 't>(t: &TransAttempt<'a, 't>, id: u32) -> Result<TransBkey<'a, 't>, BchError> {
+fn get_mut_node<'a, 't>(t: &TransAttempt<'a, 't>, id: u32)
+    -> Result<TransBkey<'a, 't, c::Snapshot>, BchError>
+{
     t.bkey_get_mut(c::btree_id::snapshots, pos(0, id as u64), BtreeIterFlags::empty(),
-                   UpdateTriggerFlags::empty(),
-                   c::bch_bkey_type::KEY_TYPE_snapshot, size_of::<BkeyI<c::Snapshot>>())
-}
-
-fn snapshot_mut<'k>(k: &'k mut TransBkey<'_, '_>) -> &'k mut c::Snapshot {
-    &mut k.k_i_mut().whole_mut::<c::Snapshot>().expect("a snapshot key").v
+                   UpdateTriggerFlags::empty())
 }
 
 /// The id - offset - of the first key in @btree @pred accepts: for the
@@ -116,13 +112,12 @@ fn tree_master_subvol(t: &TransAttempt<'_, '_>, root: u32) -> Result<Option<u32>
     }
 
     let Some(oldest) = fs.snapshots.oldest_subvol(root) else { return Ok(None) };
-    let Some(mut u) = t.bkey_get_mut(c::btree_id::subvolumes, pos(0, oldest as u64),
-                                     BtreeIterFlags::empty(), UpdateTriggerFlags::empty(),
-                                     c::bch_bkey_type::KEY_TYPE_subvolume,
-                                     size_of::<BkeyI<c::Subvolume>>()).found()? else {
+    let Some(mut u) = t.bkey_get_mut::<c::Subvolume>(c::btree_id::subvolumes, pos(0, oldest as u64),
+                                                     BtreeIterFlags::empty(),
+                                                     UpdateTriggerFlags::empty()).found()? else {
         return Ok(None);
     };
-    u.k_i_mut().whole_mut::<c::Subvolume>().expect("a subvolume key").v.set_snap(false);
+    u.v_mut().set_snap(false);
     Ok(Some(oldest))
 }
 
@@ -185,10 +180,8 @@ fn check_snapshot_tree<'t>(
         return Ok(());   /* nothing to be done here */
     };
 
-    let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty(),
-                                c::bch_bkey_type::KEY_TYPE_snapshot_tree,
-                                size_of::<c::SnapshotTree>())?;
-    u.k_i_mut().arm_mut::<c::SnapshotTree>().expect("a snapshot tree key").v_mut().master_subvol = subvol.into();
+    let mut u = t.bkey_make_mut::<c::SnapshotTree>(iter, k, UpdateTriggerFlags::empty())?;
+    u.v_mut().master_subvol = subvol.into();
     Ok(())
 }
 
@@ -537,10 +530,10 @@ fn edge_repair_commit(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
 /// children it was never spliced out: setting it live is the whole repair,
 /// and node_undelete() rejects that shape. Otherwise it relinks through the
 /// parent, which has to be live first.
-fn undelete_owns_data<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't>)
+fn undelete_owns_data<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::Snapshot>)
     -> Result<(), BchError>
 {
-    let s = snapshot_mut(u);
+    let s = u.v_mut();
     if s.children()[1] != 0 {
         s.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
         return Ok(());
@@ -604,7 +597,7 @@ fn resurrect_child(t: &TransAttempt<'_, '_>, parent_id: u32, id: u32) -> Result<
     let mut n = t.bkey_alloc_typed::<c::Snapshot>()?;
     n.k_mut().p = pos(0, id as u64);
 
-    let v = snapshot_mut(&mut n);
+    let v = n.v_mut();
     v.parent    = parent_id.into();
     v.tree      = parent.v.tree;
     v.depth     = fs.snapshots.depth(parent_id).into();
@@ -827,7 +820,7 @@ fn check_edge<'a, 't>(
         EdgeRepair::Retarget(new) =>
             set_ptr(n.v_mut(t)?, role, other_id, new),
         EdgeRepair::Complete(old) =>
-            set_ptr(snapshot_mut(&mut get_mut_node(t, other_id)?), role.other(), old, n.id()),
+            set_ptr(get_mut_node(t, other_id)?.v_mut(), role.other(), old, n.id()),
         EdgeRepair::Resurrect =>
             resurrect_child(t, n.id(), other_id)?,
     }
@@ -861,13 +854,13 @@ fn tree_ptr_repair<'a, 't>(
     let tree = snapshot::tree_lookup(trans, tree_id).found()?;
     if tree.is_none_or(|st| st.root_snapshot.get() != root_id) {
         let mut new = snapshot::tree_create(t)?;
-        let v = new.k_i_mut().arm_mut::<c::SnapshotTree>().expect("a snapshot tree key").v_mut();
+        let v = new.v_mut();
         v.master_subvol = fs.snapshots.oldest_subvol(root_id).unwrap_or(0).into();
         v.root_snapshot = root_id.into();
         tree_id = new.k().p.offset as u32;
 
         if root_id != id {
-            snapshot_mut(&mut get_mut_node(t, root_id)?).tree = tree_id.into();
+            get_mut_node(t, root_id)?.v_mut().tree = tree_id.into();
         }
     }
 
@@ -1222,8 +1215,7 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
         Some(tree_id) => tree_id,
         None => {
             let mut tree = snapshot::tree_create(t)?;
-            tree.k_i_mut().arm_mut::<c::SnapshotTree>().expect("a snapshot tree key").v_mut().root_snapshot =
-                id.into();
+            tree.v_mut().root_snapshot = id.into();
             tree.k().p.offset as u32
         }
     };
@@ -1231,7 +1223,7 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     let mut n = t.bkey_alloc_typed::<c::Snapshot>()?;
     n.k_mut().p = pos(0, id as u64);
 
-    let v = snapshot_mut(&mut n);
+    let v = n.v_mut();
     v.tree     = tree_id.into();
     v.btime.lo = fs.current_time().into();
     v.subvol   = subvol_claiming(t, id)?.unwrap_or(0).into();

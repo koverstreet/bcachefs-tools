@@ -18,7 +18,6 @@ use crate::alloc::buckets::DiskReservation;
 use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err};
-use core::mem::size_of;
 use core::ops::ControlFlow;
 
 /// The snapshots of the keys seen so far at one position, while walking a
@@ -707,28 +706,26 @@ pub fn reconstruct_subvol(
 
     let mut k = t.bkey_alloc_typed::<c::Subvolume>()?;
     k.k_mut().p = pos(0, subvol as u64);
-    let v = &mut k.k_i_mut().whole_mut::<c::Subvolume>().expect("a subvolume key").v;
+    let v = k.v_mut();
     v.snapshot = snapshot.into();
     v.inode    = root.into();
     v.set_state(c::bch_subvolume_state::SUBVOLUME_STATE_live);
     t.insert(c::btree_id::subvolumes, k, UpdateTriggerFlags::empty())?;
 
     let mut s = bch_err_msg!(fs,
-        t.bkey_get_mut(c::btree_id::snapshots, pos(0, snapshot as u64), BtreeIterFlags::empty(),
-                       UpdateTriggerFlags::empty(),
-                       c::bch_bkey_type::KEY_TYPE_snapshot, size_of::<BkeyI<c::Snapshot>>()),
+        t.bkey_get_mut::<c::Snapshot>(c::btree_id::snapshots, pos(0, snapshot as u64),
+                                       BtreeIterFlags::empty(), UpdateTriggerFlags::empty()),
         "getting snapshot {snapshot}")?;
-    let s = &mut s.k_i_mut().whole_mut::<c::Snapshot>().expect("a snapshot key").v;
+    let s = s.v_mut();
     let tree = s.tree();
     s.subvol = subvol.into();
     s.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
 
     let mut st = bch_err_msg!(fs,
-        t.bkey_get_mut(c::btree_id::snapshot_trees, pos(0, tree as u64), BtreeIterFlags::empty(),
-                       UpdateTriggerFlags::empty(),
-                       c::bch_bkey_type::KEY_TYPE_snapshot_tree, size_of::<c::SnapshotTree>()),
+        t.bkey_get_mut::<c::SnapshotTree>(c::btree_id::snapshot_trees, pos(0, tree as u64),
+                                           BtreeIterFlags::empty(), UpdateTriggerFlags::empty()),
         "getting snapshot tree {tree}")?;
-    let st = st.k_i_mut().arm_mut::<c::SnapshotTree>().expect("a snapshot tree key").v_mut();
+    let st = st.v_mut();
     if st.master_subvol == 0 {
         st.master_subvol = subvol.into();
     }

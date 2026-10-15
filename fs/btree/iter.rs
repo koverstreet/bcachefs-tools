@@ -307,10 +307,13 @@ impl<B: Default> LoopControl for ControlFlow<B> {
     fn into_break(self) -> Option<B> { self.break_value() }
 }
 
-pub struct TransBkey<'a, 't> {
+/// A key in the transaction's memory, to update with: of key type @V, its
+/// value whole - as the typed constructors make one - or, untyped, any key.
+pub struct TransBkey<'a, 't, V: ?Sized = c::bch_val> {
     ptr:      NonNull<c::bkey_i>,
     buf_u64s: u32,
     t:        PhantomData<&'a mut TransAttempt<'a, 't>>,
+    v:        PhantomData<*const V>,
 }
 
 pub(crate) struct BtreeNodeRef {
@@ -603,10 +606,11 @@ impl<'a, 't> TransAttempt<'a, 't> {
             ptr:      NonNull::new(ptr).expect("transaction memory at NULL"),
             buf_u64s: u64s,
             t:        PhantomData,
+            v:        PhantomData,
         })
     }
 
-    pub fn bkey_alloc_typed<K: SizedBkey>(&self) -> Result<TransBkey<'a, 't>, BchError> {
+    pub fn bkey_alloc_typed<K: SizedBkey>(&self) -> Result<TransBkey<'a, 't, K>, BchError> {
         debug_assert_eq!(size_of::<BkeyI<K>>() % size_of::<u64>(), 0);
 
         let u64s = (size_of::<BkeyI<K>>() / size_of::<u64>()) as u32;
@@ -616,7 +620,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
             k.as_ptr().cast::<BkeyI<K>>().write(BkeyI::new());
         }
 
-        Ok(k)
+        // SAFETY: a @K's key, all of it
+        Ok(unsafe { k.typed() })
     }
 
     pub fn bkey_copy(&self, k: &BkeyI) -> Result<TransBkey<'a, 't>, BchError> {
@@ -717,9 +722,11 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// @k, a @K, as a mutable copy grown to a whole @K - not yet an update:
     /// ENOENT if it isn't one.
     pub fn bkey_make_mut_noupdate_typed<K: SizedBkey>(&self, k: BkeySC<'_>)
-        -> Result<TransBkey<'a, 't>, BchError>
+        -> Result<TransBkey<'a, 't, K>, BchError>
     {
-        self.make_mut_noupdate(k, K::TYPE, size_of::<BkeyI<K>>())
+        let k = self.make_mut_noupdate(k, K::TYPE, size_of::<BkeyI<K>>())?;
+        // SAFETY: a @K's, grown to all of it
+        Ok(unsafe { k.typed() })
     }
 
     /// The value of the @K at @pos in @btree, zero padded:
@@ -741,41 +748,39 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(BkeyI::from_key(k).expect("peek_slot_typed() checked the type"))
     }
 
-    /// The key at @pos in @btree, as a mutable copy already queued as its
-    /// update - an error unless it's of @type_; at least @min_bytes.
-    /// @iter_flags for the lookup - BtreeIterFlags::CACHED, for a btree read
-    /// through the key cache - and @flags for the update: C passes both in one
-    /// enum.
-    pub fn bkey_get_mut(
+    /// The @K at @pos in @btree, as a mutable copy already queued as its
+    /// update, grown to all of its value - ENOENT_bkey_type_mismatch if it
+    /// isn't a @K. @iter_flags for the lookup - BtreeIterFlags::CACHED, for a
+    /// btree read through the key cache - and @flags for the update: C passes
+    /// both in one enum.
+    pub fn bkey_get_mut<K: SizedBkey>(
         &self,
         btree:      c::btree_id,
         pos:        bpos,
         iter_flags: BtreeIterFlags,
         flags:      UpdateTriggerFlags,
-        type_:      c::bch_bkey_type,
-        min_bytes:  usize,
-    ) -> Result<TransBkey<'a, 't>, BchError> {
+    ) -> Result<TransBkey<'a, 't, K>, BchError> {
         let mut iter = BtreeIter::new(self.trans, btree, pos, iter_flags | BtreeIterFlags::INTENT);
-        let k = bkey_typed(self.fs(), iter.peek_slot(self)?.expect("a slot always has a key"), type_)?;
-        let k = self.make_mut_noupdate(k, c::bch_bkey_type::KEY_TYPE_deleted, min_bytes)?;
+        let k = iter.peek_slot_typed::<K>(self)?.s_c();
+        let k = self.make_mut_noupdate(k, K::TYPE, size_of::<BkeyI<K>>())?;
         self.update(&iter, &k, flags)?;
-        Ok(k)
+        // SAFETY: a @K's, grown to all of it
+        Ok(unsafe { k.typed() })
     }
 
-    /// @k, the key at @iter, as a mutable copy already queued as its update -
-    /// an error unless it's of @type_; at least @min_bytes, zero padded. Edits
-    /// to it go in with the commit.
-    pub fn bkey_make_mut(
+    /// @k, the @K at @iter, as a mutable copy already queued as its update,
+    /// grown to all of its value, zero padded - ENOENT unless it's a @K.
+    /// Edits to it go in with the commit.
+    pub fn bkey_make_mut<K: SizedBkey>(
         &self,
-        iter:      &BtreeIter<'t>,
-        k:         BkeySC<'_>,
-        flags:     UpdateTriggerFlags,
-        type_:     c::bch_bkey_type,
-        min_bytes: usize,
-    ) -> Result<TransBkey<'a, 't>, BchError> {
-        let k = self.make_mut_noupdate(k, type_, min_bytes)?;
+        iter:  &BtreeIter<'t>,
+        k:     BkeySC<'_>,
+        flags: UpdateTriggerFlags,
+    ) -> Result<TransBkey<'a, 't, K>, BchError> {
+        let k = self.make_mut_noupdate(k, K::TYPE, size_of::<BkeyI<K>>())?;
         self.update(iter, &k, flags)?;
-        Ok(k)
+        // SAFETY: a @K's, grown to all of it
+        Ok(unsafe { k.typed() })
     }
 
     /// Overwrite @old, the extent at @iter, with @new where they overlap.
@@ -807,10 +812,10 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// path, is the iterator's own business. @key is borrowed too: it's in
     /// transaction memory, where the update points, and the caller can go on
     /// reading it - where it went, say.
-    pub fn update(
+    pub fn update<V: ?Sized>(
         &self,
         iter:  &BtreeIter<'t>,
-        key:   &TransBkey<'_, 't>,
+        key:   &TransBkey<'_, 't, V>,
         flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
         // No caller ip: C's is the call site's, _THIS_IP_, which Rust has
@@ -881,20 +886,20 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.result(ret)
     }
 
-    pub fn insert(
+    pub fn insert<V: ?Sized>(
         &self,
         btree: impl Into<u32>,
-        key:   TransBkey<'_, 't>,
+        key:   TransBkey<'_, 't, V>,
         flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
         self.insert_with(btree, key, BtreeIterFlags::empty(), flags)
     }
 
     /// As insert(), with flags for the iterator the insert goes through, too.
-    pub fn insert_with(
+    pub fn insert_with<V: ?Sized>(
         &self,
         btree:      impl Into<u32>,
-        key:        TransBkey<'_, 't>,
+        key:        TransBkey<'_, 't, V>,
         iter_flags: BtreeIterFlags,
         flags:      UpdateTriggerFlags,
     ) -> Result<(), BchError> {
@@ -909,10 +914,10 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.result(ret)
     }
 
-    pub fn insert_nonextent(
+    pub fn insert_nonextent<V: ?Sized>(
         &self,
         btree: impl Into<u32>,
-        key:   TransBkey<'_, 't>,
+        key:   TransBkey<'_, 't, V>,
         flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
         let ret = unsafe {
@@ -1020,7 +1025,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 }
 
-impl<'a, 't> TransBkey<'a, 't> {
+impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
     pub fn as_ptr(&self) -> *mut c::bkey_i {
         self.ptr.as_ptr()
     }
@@ -1034,23 +1039,6 @@ impl<'a, 't> TransBkey<'a, 't> {
     pub fn k_mut(&mut self) -> &mut c::bkey {
         // SAFETY: as k()'s, and we have the buffer mutably
         unsafe { &mut (*self.ptr.as_ptr()).k }
-    }
-
-    /// A key C allocated in @t's transaction memory, sized by its own u64s -
-    /// what a C helper returning a struct bkey_i * in trans mem hands back.
-    ///
-    /// # Safety
-    /// @ptr is such a key, or an ERR_PTR().
-    pub(crate) unsafe fn from_raw(_t: &TransAttempt<'a, 't>, ptr: *mut c::bkey_i)
-        -> Result<Self, BchError>
-    {
-        let ptr = errptr_to_result(ptr)?;
-        let ptr = NonNull::new(ptr).expect("a trans mem key, or an error");
-        Ok(TransBkey {
-            buf_u64s: unsafe { ptr.as_ref().k.u64s as u32 },
-            ptr,
-            t:        PhantomData,
-        })
     }
 
     /// The key, all of it, as long as its u64s say.
@@ -1075,13 +1063,67 @@ impl<'a, 't> TransBkey<'a, 't> {
     }
 }
 
-impl AsRef<[u64]> for TransBkey<'_, '_> {
+impl<'a, 't, V: SizedBkey> TransBkey<'a, 't, V> {
+    /// The key, as a @V's: all of its value there, as the typed constructors
+    /// make it.
+    pub fn key(&self) -> &BkeyI<V> {
+        // SAFETY: the buffer holds a whole BkeyI<@V> - typed()'s - whatever
+        // the header has been set to since, and any bytes are a @V: SizedBkey
+        unsafe { &*self.ptr.as_ptr().cast() }
+    }
+
+    /// key(), to edit.
+    pub fn key_mut(&mut self) -> &mut BkeyI<V> {
+        // SAFETY: as key()'s, and we have the buffer mutably
+        unsafe { &mut *self.ptr.as_ptr().cast() }
+    }
+
+    pub fn v(&self) -> &V {
+        &self.key().v
+    }
+
+    pub fn v_mut(&mut self) -> &mut V {
+        &mut self.key_mut().v
+    }
+}
+
+impl<'a, 't> TransBkey<'a, 't> {
+    /// A key C allocated in @t's transaction memory, sized by its own u64s -
+    /// what a C helper returning a struct bkey_i * in trans mem hands back.
+    ///
+    /// # Safety
+    /// @ptr is such a key, or an ERR_PTR().
+    pub(crate) unsafe fn from_raw(_t: &TransAttempt<'a, 't>, ptr: *mut c::bkey_i)
+        -> Result<Self, BchError>
+    {
+        let ptr = errptr_to_result(ptr)?;
+        let ptr = NonNull::new(ptr).expect("a trans mem key, or an error");
+        Ok(TransBkey {
+            buf_u64s: unsafe { ptr.as_ref().k.u64s as u32 },
+            ptr,
+            t:        PhantomData,
+            v:        PhantomData,
+        })
+    }
+
+    /// The key as a @V's.
+    ///
+    /// # Safety
+    /// It's of @V's type, and the buffer holds a whole BkeyI<@V>.
+    pub(crate) unsafe fn typed<V: SizedBkey>(self) -> TransBkey<'a, 't, V> {
+        debug_assert!(self.k().is::<V>());
+        debug_assert!(self.buf_u64s as usize * size_of::<u64>() >= size_of::<BkeyI<V>>());
+        TransBkey { ptr: self.ptr, buf_u64s: self.buf_u64s, t: PhantomData, v: PhantomData }
+    }
+}
+
+impl<V: ?Sized> AsRef<[u64]> for TransBkey<'_, '_, V> {
     fn as_ref(&self) -> &[u64] {
         unsafe { slice::from_raw_parts(self.ptr.as_ptr() as *const u64, self.buf_u64s as usize) }
     }
 }
 
-impl AsMut<[u64]> for TransBkey<'_, '_> {
+impl<V: ?Sized> AsMut<[u64]> for TransBkey<'_, '_, V> {
     fn as_mut(&mut self) -> &mut [u64] {
         unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr() as *mut u64, self.buf_u64s as usize) }
     }
@@ -1264,14 +1306,6 @@ where
 {
     let trans = crate::btree_trans!(fs);
     lockrestart_do(&trans, f)
-}
-
-/// @k, if it's a @type_: ENOENT_bkey_type_mismatch if it isn't.
-fn bkey_typed<'k>(fs: &Fs, k: BkeySC<'k>, type_: c::bch_bkey_type) -> Result<BkeySC<'k>, BchError> {
-    if k.k.type_ as u32 != type_.0 {
-        return fs.throw(bch_errcode::BCH_ERR_ENOENT_bkey_type_mismatch);
-    }
-    Ok(k)
 }
 
 /// @k as a @K, its value in place, if it's one: ENOENT_bkey_type_mismatch if

@@ -22,7 +22,6 @@ use crate::init::error::id;
 use crate::inode;
 use crate::snapshots::subvolume;
 use crate::{bch_err_msg, mustfix_fsck_err, mustfix_fsck_err_on};
-use core::mem::size_of;
 use core::ops::ControlFlow;
 
 /// The leaf snapshot claiming the root subvolume, if any: 0 if none does.
@@ -56,10 +55,9 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
             let snapshot = if root_snapshot != 0 { root_snapshot } else { u32::MAX };
             let inum = c::BCACHEFS_ROOT_INO as u64;
 
-            let mut k = t.bkey_alloc_init(size_of::<c::Subvolume>() / size_of::<u64>(),
-                                          c::bch_bkey_type::KEY_TYPE_subvolume.0 as u8,
-                                          pos(0, c::BCACHEFS_ROOT_SUBVOL as u64))?;
-            let v = &mut k.k_i_mut().whole_mut::<c::Subvolume>().expect("allocated as a subvolume").v;
+            let mut k = t.bkey_alloc_typed::<c::Subvolume>()?;
+            k.k_mut().p = pos(0, c::BCACHEFS_ROOT_SUBVOL as u64);
+            let v = k.v_mut();
             v.flags    = 0.into();
             v.snapshot = snapshot.into();
             v.inode    = inum.into();
