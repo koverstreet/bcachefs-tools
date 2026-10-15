@@ -212,9 +212,9 @@ impl c::bch_fs_snapshots {
 }
 
 /// Whether @id is @ancestor or one of its descendants.
-pub fn is_ancestor(trans: &BtreeTrans<'_>, id: u32, ancestor: u32) -> bool {
+pub fn is_ancestor(t: &TransAttempt<'_, '_>, id: u32, ancestor: u32) -> bool {
     debug_assert!(id != 0 && ancestor != 0);
-    id == ancestor || unsafe { c::__bch2_snapshot_is_ancestor(trans.raw(), id, ancestor) }
+    id == ancestor || unsafe { c::__bch2_snapshot_is_ancestor(t.raw(), id, ancestor) }
 }
 
 /// If repairs asked for it.
@@ -230,21 +230,20 @@ pub fn table_rebuild_if_needed(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
 pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
     -> Result<KVVec<u32>, BchError>
 {
-    let trans: &BtreeTrans<'_> = t;
     let mut ids = KVVec::new();
 
-    if !trans.fs().snapshots.has_children(pos.snapshot) {
+    if !t.fs().snapshots.has_children(pos.snapshot) {
         return Ok(ids);
     }
 
     // From the version before @pos's - in the snapshot with the next lower
     // ID; @pos.snapshot has children, so it isn't 0 - down
-    let mut iter = BtreeIter::new(trans, btree, spos(pos.inode, pos.offset, pos.snapshot - 1),
+    let mut iter = BtreeIter::new(t, btree, spos(pos.inode, pos.offset, pos.snapshot - 1),
                                   BtreeIterFlags::ALL_SNAPSHOTS);
     iter.for_each_reverse_norestart(t, spos(pos.inode, pos.offset, 0), |_, k| {
         let id = k.k.p.snapshot;
-        if is_ancestor(trans, id, pos.snapshot) &&
-           !ids.iter().any(|&i| is_ancestor(trans, id, i)) {
+        if is_ancestor(t, id, pos.snapshot) &&
+           !ids.iter().any(|&i| is_ancestor(t, id, i)) {
             ids.push(id, GFP_KERNEL)?;
         }
         Ok(())
@@ -252,12 +251,11 @@ pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
     Ok(ids)
 }
 
-pub fn tree_lookup(trans: &BtreeTrans<'_>, id: u32) -> Result<c::SnapshotTree, BchError> {
-    trans.attempt_in_progress()
-        .bkey_get_val::<c::SnapshotTree>(c::btree_id::snapshot_trees, pos(0, id as u64),
-                                           BtreeIterFlags::empty())
+pub fn tree_lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::SnapshotTree, BchError> {
+    t.bkey_get_val::<c::SnapshotTree>(c::btree_id::snapshot_trees, pos(0, id as u64),
+                                      BtreeIterFlags::empty())
         .map_err(|e| if e.matches(c::ENOENT) {
-            trans.fs().err(bch_errcode::BCH_ERR_ENOENT_snapshot_tree)
+            t.fs().err(bch_errcode::BCH_ERR_ENOENT_snapshot_tree)
         } else {
             e
         })
@@ -277,31 +275,29 @@ pub fn tree_create<'a, 't>(t: &TransAttempt<'a, 't>)
 /// Whether @k is in a snapshot that doesn't exist - reported, and @k deleted
 /// or its snapshot reconstructed - for the caller to skip it.
 pub fn check_key_has_snapshot(
-    trans: &BtreeTrans<'_>,
-    iter:  &BtreeIter<'_>,
-    k:     BkeySC<'_>,
+    t:    &TransAttempt<'_, '_>,
+    iter: &BtreeIter<'_>,
+    k:    BkeySC<'_>,
 ) -> Result<bool, BchError> {
-    if trans.fs().snapshots.id_state(k.k.p.snapshot) == c::snapshot_id_state::SNAPSHOT_ID_live {
+    if t.fs().snapshots.id_state(k.k.p.snapshot) == c::snapshot_id_state::SNAPSHOT_ID_live {
         return Ok(false);
     }
     // SAFETY: BtreeIter holds its iterator in an UnsafeCell, and nothing else
     // has it for the call
     let iter = unsafe { &mut *iter.raw() };
-    check_snapshots::check_key_has_snapshot(&trans.attempt_in_progress(), Some(iter), k)
+    check_snapshots::check_key_has_snapshot(t, Some(iter), k)
 }
 
 /// ENOENT if there's none.
-pub fn lookup(trans: &BtreeTrans<'_>, id: u32) -> Result<c::Snapshot, BchError> {
-    trans.attempt_in_progress()
-        .bkey_get_val::<c::Snapshot>(c::btree_id::snapshots, pos(0, id as u64),
-                                       BtreeIterFlags::empty())
+pub fn lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::Snapshot, BchError> {
+    t.bkey_get_val::<c::Snapshot>(c::btree_id::snapshots, pos(0, id as u64),
+                                  BtreeIterFlags::empty())
 }
 
 /// ENOENT if there's none.
-pub fn lookup_key(trans: &BtreeTrans<'_>, id: u32) -> Result<BkeyI<c::Snapshot>, BchError> {
-    trans.attempt_in_progress()
-        .bkey_get_key::<c::Snapshot>(c::btree_id::snapshots, pos(0, id as u64),
-                                       BtreeIterFlags::empty())
+pub fn lookup_key(t: &TransAttempt<'_, '_>, id: u32) -> Result<BkeyI<c::Snapshot>, BchError> {
+    t.bkey_get_key::<c::Snapshot>(c::btree_id::snapshots, pos(0, id as u64),
+                                  BtreeIterFlags::empty())
 }
 
 /// Zero padded past the fields an older key lacks.

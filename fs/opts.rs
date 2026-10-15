@@ -1,4 +1,4 @@
-use crate::btree::iter::BtreeTrans;
+use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
@@ -341,14 +341,14 @@ impl c::inode_opt_change {
     /// the propagate.
     pub fn record(
         &mut self,
-        trans:    &BtreeTrans<'_>,
+        t:        &TransAttempt<'_, '_>,
         old:      &c::bch_extent_reconcile,
         inode:    &c::bch_inode_unpacked,
         snapshot: u32,
     ) -> Result<(), BchError> {
         // Only reads @old and @inode: C's signature isn't const.
         ret_to_result(unsafe {
-            c::bch2_inode_opt_change_trans(trans.raw(), old as *const _ as *mut _,
+            c::bch2_inode_opt_change_trans(t.raw(), old as *const _ as *mut _,
                                            inode as *const _ as *mut _, snapshot, self)
         })
     }

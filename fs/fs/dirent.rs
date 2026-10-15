@@ -369,14 +369,14 @@ pub unsafe extern "C" fn bch2_dirent_get_name(d: c::bkey_s_c_dirent) -> c::qstr 
 /// subvolume, or a subvolume's root: as bch2_dirent_read_target(). None for a
 /// subvolume's dirent that lists in another subvolume.
 pub fn read_target(
-    trans: &BtreeTrans<'_>,
-    dir:   c::subvol_inum,
-    d:     Dirent<'_>,
+    t:   &TransAttempt<'_, '_>,
+    dir: c::subvol_inum,
+    d:   Dirent<'_>,
 ) -> Result<Option<c::subvol_inum>, BchError> {
     match d.target() {
         DirentTarget::Subvol { parent, .. } if u64::from(parent) != dir.subvol => Ok(None),
         DirentTarget::Subvol { child, .. } => {
-            let s = subvolume::get(trans, child, true)?;
+            let s = subvolume::get(t, child, true)?;
             Ok(Some(c::subvol_inum { subvol: child as u64, inum: s.inode.get() }))
         }
         DirentTarget::Inode(inum) => Ok(Some(c::subvol_inum { subvol: dir.subvol, inum })),
@@ -397,7 +397,7 @@ pub unsafe extern "C" fn bch2_dirent_read_target(
 ) -> c_int {
     let k = c::bkey_s_c::from(d);
 
-    match read_target(&BtreeTrans::from_c(trans), dir,
+    match read_target(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, dir,
                       Dirent::new(BkeySC::from(&k)).expect("a dirent")) {
         Ok(Some(t)) => {
             target.write(t);
@@ -410,11 +410,11 @@ pub unsafe extern "C" fn bch2_dirent_read_target(
 
 /// What a lookup found: its target - ENOENT for a dirent @dir doesn't list.
 fn lookup_target(
-    trans: &BtreeTrans<'_>,
-    dir:   c::subvol_inum,
-    k:     BkeySC<'_>,
+    t:   &TransAttempt<'_, '_>,
+    dir: c::subvol_inum,
+    k:   BkeySC<'_>,
 ) -> Result<c::subvol_inum, BchError> {
-    read_target(trans, dir, Dirent::new(k).expect("a dirent"))?
+    read_target(t, dir, Dirent::new(k).expect("a dirent"))?
         .ok_or(BchError::from(c::ENOENT))
 }
 
@@ -463,7 +463,7 @@ pub unsafe extern "C" fn bch2_dirent_lookup_key(
     hash_info: &c::bch_hash_info,
     name:      &c::qstr,
 ) -> c::bkey_s_c {
-    match lookup_key(&BtreeTrans::from_c(trans).attempt_in_progress(), BtreeIter::from_c(iter),
+    match lookup_key(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, BtreeIter::from_c(iter),
                      dir, hash_info, unsafe { qstr_name(name) }, BtreeIterFlags::empty()) {
         Ok(k)  => k.to_raw(),
         Err(e) => c::bkey_s_c {
@@ -562,11 +562,11 @@ impl DirContext<'_> {
 
     /// Emit @d, pointing at @target - which may unlock @trans: as
     /// bch2_dir_emit(). False once the buffer is full.
-    fn emit(&mut self, trans: &BtreeTrans<'_>, d: Dirent<'_>, target: c::subvol_inum)
+    fn emit(&mut self, t: &TransAttempt<'_, '_>, d: Dirent<'_>, target: c::subvol_inum)
         -> Result<bool, BchError>
     {
         let d = d.k().to_c();
-        match unsafe { c::bch2_dir_emit(trans.raw(), self.0, d, target) } {
+        match unsafe { c::bch2_dir_emit(t.raw(), self.0, d, target) } {
             0              => Ok(true),
             ret if ret > 0 => Ok(false),
             ret            => Err(BchError::from_raw(-ret)),
@@ -594,21 +594,21 @@ pub fn readdir(
                                   BtreeIterFlags::empty());
 
     subvolume::for_each_in_subvolume_max_in_trans(&trans, &mut iter, pos(dir.inum, u64::MAX),
-                                                  dir.subvol as u32, BtreeIterFlags::empty(), |k| {
+                                                  dir.subvol as u32, BtreeIterFlags::empty(), |t, k| {
         let Some(d) = Dirent::new(k) else { return Ok(ControlFlow::Continue(())) };
 
         let mut need_second_pass = false;
-        match str_hash::check_key::<Dirents>(&trans, None, hash_info, k, &mut need_second_pass) {
+        match str_hash::check_key::<Dirents>(t, None, hash_info, k, &mut need_second_pass) {
             Err(e) if e.matches(bch_errcode::BCH_ERR_str_hash_key_repaired) =>
                 return Ok(ControlFlow::Continue(())),
             r => r?,
         }
 
-        let Some(target) = read_target(&trans, dir, d)? else {
+        let Some(target) = read_target(t, dir, d)? else {
             return Ok(ControlFlow::Continue(()));
         };
 
-        Ok(if ctx.emit(&trans, d, target)? {
+        Ok(if ctx.emit(t, d, target)? {
             ControlFlow::Continue(())
         } else {
             ControlFlow::Break(())

@@ -310,7 +310,7 @@ pub unsafe extern "C" fn bch2_xattr_get_trans(
 ) -> c_int {
     let buffer = unsafe { opt_bytes_mut(buffer, size) };
 
-    len_to_c(get_trans(&BtreeTrans::from_c(trans).attempt_in_progress(), inode, inum,
+    len_to_c(get_trans(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inode, inum,
                        ty, unsafe { cstr_name(name) }, buffer))
 }
 
@@ -362,7 +362,7 @@ pub unsafe extern "C" fn __bch2_xattr_set(
     ty:        c::bch_xattr_type,
     flags:     c_int,
 ) -> c_int {
-    ret_to_c(set_key(&BtreeTrans::from_c(trans).attempt_in_progress(), inum, hash_info,
+    ret_to_c(set_key(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum, hash_info,
                      unsafe { cstr_name(name) },
                      unsafe { bytes(value, size) }, ty, flags))
 }
@@ -441,7 +441,7 @@ pub unsafe extern "C" fn bch2_xattr_set(
 ) -> c_int {
     let value = unsafe { opt_bytes(value, size) };
 
-    ret_to_c(set_trans(&BtreeTrans::from_c(trans).attempt_in_progress(), inum, inode,
+    ret_to_c(set_trans(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum, inode,
                        unsafe { cstr_name(name) }, value, ty, flags))
 }
 
@@ -456,7 +456,7 @@ mod vfs {
     use super::*;
     use core::ffi::CStr;
     use crate::btree::bkey::pos;
-    use crate::btree::iter::{commit_do, lockrestart_do, CommitFlags};
+    use crate::btree::iter::{lockrestart_do, CommitFlags};
     use crate::errcode::{bch_errcode, ret_to_class};
     use crate::opts::{self, InodeOpt, OptChange};
     use crate::util::locking::MemallocFlags;
@@ -529,7 +529,7 @@ mod vfs {
 
         let ret = subvolume::for_each_in_subvolume_max_in_trans(
             &trans, &mut iter, pos(inum.inum, u64::MAX), inum.subvol as u32,
-            BtreeIterFlags::empty(), |k| {
+            BtreeIterFlags::empty(), |_, k| {
                 if k.k.type_ != c::bch_bkey_type::KEY_TYPE_xattr.0 as u8 {
                     return Ok(());
                 }
@@ -600,11 +600,16 @@ mod vfs {
         let value = unsafe { opt_bytes(value, size) };
         let mut inode = c::bch_inode_unpacked::default();
 
+        // Updating the VFS inode wants the inode's btree position still
+        // locked: in the attempt that wrote it, after its commit.
         let trans = crate::btree_trans!(v.fs());
-        let ret = commit_do(&trans, None, CommitFlags::empty(), |t| {
-            set_trans(t, v.inum(), &mut inode, name, value, ty, flags)
+        let ret = lockrestart_do(&trans, |t| {
+            set_trans(t, v.inum(), &mut inode, name, value, ty, flags)?;
+            t.commit(None, CommitFlags::empty())?;
+            v.update_after_write(t, &mut inode, ATTR_CTIME);
+            Ok(())
         });
-        ret_to_class(ret.map(|()| v.update_after_write(&trans, &mut inode, ATTR_CTIME)))
+        ret_to_class(ret)
     }
 
     // bcachefs.* and bcachefs_effective.*: inode options

@@ -39,16 +39,15 @@ fn check_acl_flag(
     k:   BkeySC<'_>,
     acl: AclType,
 ) -> Result<(), BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
     let flag = acl.inode_flag().bits();
 
-    for i in st.inode.visible_mut(trans, &st.s, k.k.p.snapshot) {
+    for i in st.inode.visible_mut(t, &st.s, k.k.p.snapshot) {
         // One repair per visible version, bounded only by snapshot count:
         t.commit_lazy_if_full(CommitFlags::NO_ENOSPC)?;
 
         if !i.whiteout &&
-           fsck_err_on!(trans, i.inode.bi_flags & flag == 0, acl.flag_wrong(),
+           fsck_err_on!(t, i.inode.bi_flags & flag == 0, acl.flag_wrong(),
                         "inode has {0} acl xattr but BCH_INODE_has_{0}_acl not set\n{1}\n{2}",
                         acl.name(), i.inode, k.to_text(fs))? {
             let mut u = i.inode;
@@ -66,10 +65,9 @@ fn check_xattr<'t>(
     k:    BkeySC<'_>,
     st:   &mut CheckXattrs,
 ) -> Result<(), BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
 
-    if snapshot::check_key_has_snapshot(trans, iter, k)? {
+    if snapshot::check_key_has_snapshot(t, iter, k)? {
         return Ok(());
     }
 
@@ -84,7 +82,7 @@ fn check_xattr<'t>(
         check_acl_flag(t, st, k, acl)?;
     }
 
-    if let Err(e) = str_hash::check_key::<Xattrs>(trans, None, &mut st.hash_info, k, &mut false) {
+    if let Err(e) = str_hash::check_key::<Xattrs>(t, None, &mut st.hash_info, k, &mut false) {
         // A hash info repair leaves the walker's inodes - and hash_info,
         // initialized from them - stale:
         st.inode.invalidate();

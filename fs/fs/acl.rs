@@ -470,7 +470,7 @@ mod vfs {
             inode::write(t, &mut inode_iter, &mut inode)?;
             t.commit(None, CommitFlags::empty())?;
 
-            v.update_after_write(t.trans(), &mut inode, ATTR_CTIME | ATTR_MODE);
+            v.update_after_write(t, &mut inode, ATTR_CTIME | ATTR_MODE);
             PosixAcl::set_cached(acl.as_deref(), &v, ty);
             Ok(())
         });
@@ -509,7 +509,7 @@ mod vfs {
         mode:    c::umode_t,
         new_acl: &mut *mut c::posix_acl,
     ) -> c_int {
-        ret_to_c(acl_chmod(&BtreeTrans::from_c(trans).attempt_in_progress(), inum, inode, mode)
+        ret_to_c(acl_chmod(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum, inode, mode)
                  .map(|acl| if let Some(acl) = acl { *new_acl = acl.into_raw() }))
     }
 }

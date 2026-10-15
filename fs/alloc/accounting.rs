@@ -1,4 +1,4 @@
-use crate::btree::iter::BtreeTrans;
+use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
@@ -85,7 +85,7 @@ pub fn mem_read(fs: &Fs, pos: &c::disk_accounting_pos, counters: &mut [u64]) {
 
 /// Add @d to accounting key @pos's counters, in @trans - the gc copy's, with
 /// @gc: as bch2_disk_accounting_mod(). For triggers.
-pub fn add(trans: &BtreeTrans<'_>, pos: &c::disk_accounting_pos, d: &[i64], gc: bool)
+pub fn add(t: &TransAttempt<'_, '_>, pos: &c::disk_accounting_pos, d: &[i64], gc: bool)
     -> Result<(), BchError>
 {
     // bch2_disk_accounting_mod(); C's signatures aren't const: a copy of
@@ -94,9 +94,9 @@ pub fn add(trans: &BtreeTrans<'_>, pos: &c::disk_accounting_pos, d: &[i64], gc: 
     let d_ptr = d.as_ptr() as *mut i64;
     ret_to_result(unsafe {
         if gc {
-            c::bch2_disk_accounting_mod_gc(trans.raw(), &raw mut acc, d_ptr, d.len() as u32)
+            c::bch2_disk_accounting_mod_gc(t.raw(), &raw mut acc, d_ptr, d.len() as u32)
         } else {
-            c::bch2_disk_accounting_mod_normal(trans.raw(), &raw mut acc, d_ptr, d.len() as u32)
+            c::bch2_disk_accounting_mod_normal(t.raw(), &raw mut acc, d_ptr, d.len() as u32)
         }
     })
 }

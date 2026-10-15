@@ -73,12 +73,11 @@ fn missing(fs: &Fs, subvol: u32) -> Result<(), BchError> {
 
 /// A tombstone is ENOENT_subvolume_deleted.
 pub fn get_key(
-    trans:                     &BtreeTrans<'_>,
+    t:                         &TransAttempt<'_, '_>,
     subvol:                    u32,
     inconsistent_if_not_found: bool,
 ) -> Result<BkeyI<c::Subvolume>, BchError> {
-    let fs = trans.fs();
-    let t = trans.attempt_in_progress();
+    let fs = t.fs();
 
     let mut ret = t.bkey_get_key::<c::Subvolume>(c::btree_id::subvolumes, pos(0, subvol as u64),
                                                    BtreeIterFlags::CACHED);
@@ -94,11 +93,11 @@ pub fn get_key(
 }
 
 pub fn get(
-    trans:                     &BtreeTrans<'_>,
+    t:                         &TransAttempt<'_, '_>,
     subvol:                    u32,
     inconsistent_if_not_found: bool,
 ) -> Result<c::Subvolume, BchError> {
-    Ok(get_key(trans, subvol, inconsistent_if_not_found)?.v)
+    Ok(get_key(t, subvol, inconsistent_if_not_found)?.v)
 }
 
 #[c_export]
@@ -108,16 +107,16 @@ pub fn bch2_subvolume_get(
     inconsistent_if_not_found: bool,
     s:                         &mut c::Subvolume,
 ) -> core::ffi::c_int {
-    ret_to_c(get(&BtreeTrans::from_c(trans), subvol, inconsistent_if_not_found).map(|v| *s = v))
+    ret_to_c(get(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, subvol,
+                 inconsistent_if_not_found).map(|v| *s = v))
 }
 
 /// Unlike get(), finds a tombstone's snapshot.
-fn __get_snapshot(trans: &BtreeTrans<'_>, subvol: u32, warn: bool) -> Result<u32, BchError> {
-    let fs = trans.fs();
-    let t = trans.attempt_in_progress();
-    let mut iter = BtreeIter::new(trans, c::btree_id::subvolumes, pos(0, subvol as u64),
+fn __get_snapshot(t: &TransAttempt<'_, '_>, subvol: u32, warn: bool) -> Result<u32, BchError> {
+    let fs = t.fs();
+    let mut iter = BtreeIter::new(t, c::btree_id::subvolumes, pos(0, subvol as u64),
                                   BtreeIterFlags::CACHED);
-    match iter.peek_slot_typed::<c::Subvolume>(&t) {
+    match iter.peek_slot_typed::<c::Subvolume>(t) {
         Ok(k) => Ok(k.v().snapshot()),
         Err(e) => {
             if warn && e.matches(c::ENOENT) {
@@ -128,13 +127,13 @@ fn __get_snapshot(trans: &BtreeTrans<'_>, subvol: u32, warn: bool) -> Result<u32
     }
 }
 
-pub fn get_snapshot(trans: &BtreeTrans<'_>, subvol: u32) -> Result<u32, BchError> {
-    __get_snapshot(trans, subvol, true)
+pub fn get_snapshot(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<u32, BchError> {
+    __get_snapshot(t, subvol, true)
 }
 
 /// For callers that handle a missing subvolume themselves: not reported.
-pub fn get_snapshot_nowarn(trans: &BtreeTrans<'_>, subvol: u32) -> Result<u32, BchError> {
-    __get_snapshot(trans, subvol, false)
+pub fn get_snapshot_nowarn(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<u32, BchError> {
+    __get_snapshot(t, subvol, false)
 }
 
 #[c_export]
@@ -144,7 +143,8 @@ pub fn __bch2_subvolume_get_snapshot(
     snapid: &mut u32,
     warn:   bool,
 ) -> core::ffi::c_int {
-    ret_to_c(__get_snapshot(&BtreeTrans::from_c(trans), subvol, warn).map(|s| *snapid = s))
+    ret_to_c(__get_snapshot(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, subvol, warn)
+             .map(|s| *snapid = s))
 }
 
 #[c_export]
@@ -153,13 +153,14 @@ pub fn bch2_subvolume_get_snapshot(
     subvol: u32,
     snapid: &mut u32,
 ) -> core::ffi::c_int {
-    ret_to_c(get_snapshot(&BtreeTrans::from_c(trans), subvol).map(|s| *snapid = s))
+    ret_to_c(get_snapshot(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, subvol)
+             .map(|s| *snapid = s))
 }
 
 /// Unlinked is the only state in which a subvolume's root may be an unlinked
 /// directory.
-pub fn is_unlinked(trans: &BtreeTrans<'_>, subvol: u32) -> Result<bool, BchError> {
-    match get(trans, subvol, false) {
+pub fn is_unlinked(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<bool, BchError> {
+    match get(t, subvol, false) {
         Ok(s) => Ok(s.state_decoded() == Some(c::bch_subvolume_state::SUBVOLUME_STATE_unlinked)),
         Err(e) if e.matches(c::ENOENT) => Ok(false),
         Err(e) => Err(e),
@@ -167,8 +168,8 @@ pub fn is_unlinked(trans: &BtreeTrans<'_>, subvol: u32) -> Result<bool, BchError
 }
 
 /// EROFS if @subvol is read-only or unlinked, else its snapshot.
-pub fn is_ro_trans(trans: &BtreeTrans<'_>, subvol: u32) -> Result<u32, BchError> {
-    let s = get(trans, subvol, true)?;
+pub fn is_ro_trans(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<u32, BchError> {
+    let s = get(t, subvol, true)?;
 
     if s.ro() || s.state_decoded() == Some(c::bch_subvolume_state::SUBVOLUME_STATE_unlinked) {
         return Err(BchError::from(c::EROFS));
@@ -182,7 +183,8 @@ pub fn bch2_subvol_is_ro_trans(
     subvol: u32,
     snapid: &mut u32,
 ) -> core::ffi::c_int {
-    ret_to_c(is_ro_trans(&BtreeTrans::from_c(trans), subvol).map(|s| *snapid = s))
+    ret_to_c(is_ro_trans(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, subvol)
+             .map(|s| *snapid = s))
 }
 
 pub fn is_ro(fs: &Fs, subvol: u32) -> Result<(), BchError> {
@@ -196,13 +198,12 @@ pub fn bch2_subvol_is_ro(c: &Opaque<c::bch_fs>, subvol: u32) -> core::ffi::c_int
 }
 
 /// ENOTEMPTY_subvol_not_empty if @subvol has subvolumes under it.
-pub fn require_no_children(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError> {
-    let t = trans.attempt_in_progress();
-    let mut iter = BtreeIter::new(trans, c::btree_id::subvolume_children, pos(subvol as u64, 0),
+pub fn require_no_children(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
+    let mut iter = BtreeIter::new(t, c::btree_id::subvolume_children, pos(subvol as u64, 0),
                                   BtreeIterFlags::empty());
-    match iter.peek(&t)? {
+    match iter.peek(t)? {
         Some(k) if k.k.p.inode == subvol as u64 =>
-            Err(trans.fs().err(bch_errcode::BCH_ERR_ENOTEMPTY_subvol_not_empty)),
+            Err(t.fs().err(bch_errcode::BCH_ERR_ENOTEMPTY_subvol_not_empty)),
         _ => Ok(()),
     }
 }
@@ -220,23 +221,23 @@ pub fn for_each_in_subvolume_max_in_trans<'t, F, R>(
     mut f:  F,
 ) -> Result<R::Break, BchError>
 where
-    F: FnMut(BkeySC<'_>) -> Result<R, BchError>,
+    F: FnMut(&TransAttempt<'_, 't>, BkeySC<'_>) -> Result<R, BchError>,
     R: LoopControl,
 {
-    let mut restart_count = trans.restart_count();
+    // One attempt for the walk, not one per key - readdir doesn't need a
+    // begin per key; a restart begins the next.
+    let mut t = trans.begin();
     let mut snapshot = 0;
 
     loop {
         let ret = (|| -> Result<Option<R::Break>, BchError> {
-            trans.relock()?;
+            t.relock()?;
             if snapshot == 0 {
-                snapshot = get_snapshot(trans, subvol)?;
+                snapshot = get_snapshot(&t, subvol)?;
                 iter.set_snapshot(snapshot);
             }
-            // We handle restarts ourselves, below
-            let t = trans.attempt_in_progress();
             Ok(match iter.peek_max_type(&t, end, flags)? {
-                Some(k) => f(k)?.into_break(),
+                Some(k) => f(&t, k)?.into_break(),
                 None    => Some(Default::default()),
             })
         })();
@@ -244,13 +245,13 @@ where
         match ret {
             Ok(Some(b)) => return Ok(b),
             Ok(None)    => {
-                trans.verify_not_restarted(restart_count);
+                t.verify_not_restarted();
                 if !iter.advance() {
                     return Ok(Default::default());
                 }
             }
             Err(e) if is_restart(&e) => {
-                restart_count = trans.begin_raw();
+                t = trans.begin();
                 snapshot = 0;
             }
             Err(e) => return Err(e),
@@ -421,17 +422,16 @@ fn children_mod(t: &TransAttempt<'_, '_>, p: c::bpos, set: bool) -> Result<(), B
     t.bit_mod(c::btree_id::subvolume_children, p, set)
 }
 
-fn trigger(trans: &BtreeTrans<'_>, op: &TriggerOp<'_>) -> Result<(), BchError> {
+fn trigger(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError> {
     if op.flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
-        passes::clear_btree_clean(trans.fs(), c::btree_id::subvolumes);
+        passes::clear_btree_clean(t.fs(), c::btree_id::subvolumes);
 
         let old = children_pos(op.old);
         let new = children_pos(op.new.as_sc());
 
         if old != new {
-            let t = trans.attempt_in_progress();
-            children_mod(&t, old, false)?;
-            children_mod(&t, new, true)?;
+            children_mod(t, old, false)?;
+            children_mod(t, new, true)?;
         }
     }
     Ok(())
@@ -446,8 +446,7 @@ fn check_subvol<'a, 't>(
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
 ) -> Result<(), BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
 
     let Some(mut s) = CowKey::<c::Subvolume>::new(iter, k) else { return Ok(()) };
     let id = s.pos().offset;
@@ -499,7 +498,7 @@ fn check_subvol<'a, 't>(
     }
 
     let snapid = s.v().snapshot();
-    let mut snap_iter = BtreeIter::new(trans, c::btree_id::snapshots, pos(0, snapid as u64),
+    let mut snap_iter = BtreeIter::new(t, c::btree_id::snapshots, pos(0, snapid as u64),
                                        BtreeIterFlags::INTENT);
     let (snap_iter, sk) = match snap_iter.peek_slot_typed_shared::<c::Snapshot>(t) {
         Ok(r) => r,
@@ -522,7 +521,7 @@ fn check_subvol<'a, 't>(
     let backref = n.v().subvol();
 
     if backref != 0 && backref as u64 != id {
-        match get(trans, backref, false) {
+        match get(t, backref, false) {
             Ok(other) if other.snapshot() == snapid => {
                 fsck_err_report!(fs, id::snapshot_subvol_backref_wrong,
                                  "snapshot {snapid} is claimed by subvolume {backref}, which it backrefs, and also by {id}:\n{}\n{}",
@@ -545,8 +544,12 @@ fn check_subvol<'a, 't>(
     }
 
     if s.v().state_decoded() == Some(c::bch_subvolume_state::SUBVOLUME_STATE_unlinked) {
-        bch_err_msg!(fs, set_deleted(trans, id as u32), "deleting subvolume {id}")?;
-        return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested));
+        // Repairs above may still be queued: commit them, and rerun
+        // check_subvol() - whose fixes are then in, and don't refire -
+        // before deleting. Free when nothing's queued.
+        t.commit_lazy(CommitFlags::NO_ENOSPC)?;
+        return Err(t.close(CommitFlags::NO_ENOSPC, |trans|
+            bch_err_msg!(fs, set_deleted(trans, id as u32), "deleting subvolume {id}")));
     }
 
     // A live subvolume's snapshot must be live and point back at it. This is
@@ -575,7 +578,7 @@ fn check_subvol<'a, 't>(
 
     if s.v().fs_path_parent() != 0 {
         let p = children_pos(s.key());
-        let mut children_iter = BtreeIter::new(trans, c::btree_id::subvolume_children, p,
+        let mut children_iter = BtreeIter::new(t, c::btree_id::subvolume_children, p,
                                                BtreeIterFlags::empty());
         let ck = children_iter.peek_slot(t)?.expect("a slot always has a key");
 
@@ -623,7 +626,7 @@ fn check_subvol<'a, 't>(
         let snapshot_root = fs.snapshots.root(s.v().snapshot());
         let tree = fs.snapshots.tree(snapshot_root);
 
-        let st = match snapshot::tree_lookup(trans, tree) {
+        let st = match snapshot::tree_lookup(t, tree) {
             Ok(st) => st,
             Err(e) => {
                 if e.matches(c::ENOENT) {
@@ -673,7 +676,7 @@ fn check_subvol_child(
     iter: &BtreeIter<'_>,
     k:    BkeySC<'_>,
 ) -> Result<(), BchError> {
-    let mut s_iter = BtreeIter::new(t.trans(), c::btree_id::subvolumes, pos(0, k.k.p.offset),
+    let mut s_iter = BtreeIter::new(t, c::btree_id::subvolumes, pos(0, k.k.p.offset),
                                     BtreeIterFlags::empty());
     let s = val(s_iter.peek_slot(t)?.expect("a slot always has a key"));
 
@@ -760,10 +763,9 @@ fn reparent_children(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError
 /// Make @subvol a tombstone, clear it as its tree's master, and mark its
 /// snapshot will_delete.
 fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
 
-    let mut iter = BtreeIter::new(trans, c::btree_id::subvolumes, pos(0, subvol as u64),
+    let mut iter = BtreeIter::new(t, c::btree_id::subvolumes, pos(0, subvol as u64),
                                   BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
     let k = match iter.peek_slot_typed::<c::Subvolume>(t) {
         Err(e) if e.matches(c::ENOENT) => {
@@ -774,7 +776,7 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
     };
     let snapid = k.v().snapshot();
 
-    let mut snapshot_iter = BtreeIter::new(trans, c::btree_id::snapshots, pos(0, snapid as u64),
+    let mut snapshot_iter = BtreeIter::new(t, c::btree_id::snapshots, pos(0, snapid as u64),
                                            BtreeIterFlags::empty());
     let sk = snapshot_iter.peek_slot_typed::<c::Snapshot>(t)
         .inspect_err(|e| if e.matches(c::ENOENT) {
@@ -782,7 +784,7 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
         })?;
     let tree = sk.v().tree();
 
-    let mut tree_iter = BtreeIter::new(trans, c::btree_id::snapshot_trees, pos(0, tree as u64),
+    let mut tree_iter = BtreeIter::new(t, c::btree_id::snapshot_trees, pos(0, tree as u64),
                                        BtreeIterFlags::empty());
     let (tree_iter, tk) = tree_iter
         .peek_slot_typed_shared::<c::SnapshotTree>(t)
@@ -800,11 +802,6 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
 }
 
 fn set_deleted(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError> {
-    // check_subvol() calls this with repairs still queued, which
-    // reparent_children()'s lockrestart_do would drop: commit them first.
-    // Free when nothing's queued; the restart reruns check_subvol(), whose
-    // fixes are then already in.
-    trans.attempt_in_progress().commit_lazy(CommitFlags::NO_ENOSPC)?;
     reparent_children(trans, subvol)?;
     commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| __set_deleted(t, subvol))
 }
@@ -1003,7 +1000,7 @@ pub fn bch2_initialize_subvolumes(c: &Opaque<c::bch_fs>) -> core::ffi::c_int {
 fn fs_upgrade_for_subvolumes(fs: &Fs) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| {
-        let mut iter = BtreeIter::new(t.trans(), c::btree_id::inodes,
+        let mut iter = BtreeIter::new(t, c::btree_id::inodes,
                                       c::bpos { inode: 0, offset: c::BCACHEFS_ROOT_INO as u64,
                                                 snapshot: u32::MAX },
                                       BtreeIterFlags::empty());

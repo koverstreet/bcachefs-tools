@@ -520,7 +520,7 @@ pub unsafe extern "C" fn __bch2_inode_peek(
 ) -> core::ffi::c_int {
     let warn = unsafe { opt_cstr(warn) };
 
-    ret_to_c(__peek(&BtreeTrans::from_c(trans).attempt_in_progress(), BtreeIter::from_c(iter),
+    ret_to_c(__peek(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, BtreeIter::from_c(iter),
                     inum, BtreeIterFlags::from_bits_retain(flags), warn)
              .map(|i| { inode.write(i); }))
 }
@@ -541,14 +541,13 @@ pub fn peek_snapshot<'t>(
 /// ENOENT_inode if there's no inode there. In the caller's transaction
 /// attempt.
 pub fn find_by_inum_snapshot(
-    trans:    &BtreeTrans<'_>,
+    t:        &TransAttempt<'_, '_>,
     inum:     u64,
     snapshot: u32,
     flags:    BtreeIterFlags,
 ) -> Result<c::bch_inode_unpacked, BchError> {
-    let t = trans.attempt_in_progress();
-    let mut iter = BtreeIter::new(&t, c::btree_id::inodes, spos(0, inum, snapshot), flags);
-    peek_slot(&t, &mut iter)
+    let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, snapshot), flags);
+    peek_slot(t, &mut iter)
 }
 
 /// For C's VFS and reconcile: bch2_inode_find_by_inum_snapshot().
@@ -560,8 +559,8 @@ pub extern "C" fn bch2_inode_find_by_inum_snapshot(
     inode:    &mut MaybeUninit<c::bch_inode_unpacked>,
     flags:    core::ffi::c_uint,
 ) -> core::ffi::c_int {
-    ret_to_c(find_by_inum_snapshot(&BtreeTrans::from_c(trans), inum, snapshot,
-                                   BtreeIterFlags::from_bits_retain(flags))
+    ret_to_c(find_by_inum_snapshot(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum,
+                                   snapshot, BtreeIterFlags::from_bits_retain(flags))
              .map(|i| { inode.write(i); }))
 }
 
@@ -582,7 +581,7 @@ pub unsafe extern "C" fn bch2_inode_find_by_inum_snapshot2(
     let warn = unsafe { opt_cstr(warn) };
     let mut iter = BtreeIter::uninit();
 
-    ret_to_c(__peek_snapshot(&BtreeTrans::from_c(trans).attempt_in_progress(), &mut iter,
+    ret_to_c(__peek_snapshot(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, &mut iter,
                              inum, snapshot, BtreeIterFlags::empty(), warn)
              .map(|i| { inode.write(i); }))
 }
@@ -591,12 +590,12 @@ pub unsafe extern "C" fn bch2_inode_find_by_inum_snapshot2(
 /// error is logged, naming @warn - pass c_function_name!(), as C passes
 /// __func__. In the caller's transaction attempt.
 pub fn find_by_inum_trans(
-    trans: &BtreeTrans<'_>,
-    inum:  c::subvol_inum,
-    warn:  &CStr,
+    t:    &TransAttempt<'_, '_>,
+    inum: c::subvol_inum,
+    warn: &CStr,
 ) -> Result<c::bch_inode_unpacked, BchError> {
     let mut iter = BtreeIter::uninit();
-    __peek(&trans.attempt_in_progress(), &mut iter, inum, BtreeIterFlags::empty(), Some(warn))
+    __peek(t, &mut iter, inum, BtreeIterFlags::empty(), Some(warn))
 }
 
 /// For C's VFS, recovery and FUSE, through bch2_inode_find_by_inum_trans():
@@ -614,7 +613,7 @@ pub unsafe extern "C" fn __bch2_inode_find_by_inum_trans(
     let warn = unsafe { opt_cstr(warn) };
     let mut iter = BtreeIter::uninit();
 
-    ret_to_c(__peek(&BtreeTrans::from_c(trans).attempt_in_progress(), &mut iter, inum,
+    ret_to_c(__peek(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, &mut iter, inum,
                     BtreeIterFlags::empty(), warn)
              .map(|i| { inode.write(i); }))
 }
@@ -643,22 +642,21 @@ pub extern "C" fn bch2_inode_find_by_inum(
 /// version that's an ancestor is the oldest. The first is the nearest -
 /// @snapshot's own, if it has one.
 pub fn find_oldest_snapshot(
-    trans:    &BtreeTrans<'_>,
+    t:        &TransAttempt<'_, '_>,
     inum:     u64,
     snapshot: u32,
 ) -> Result<c::bch_inode_unpacked, BchError> {
-    let t = trans.attempt_in_progress();
     let fs = t.fs();
     let mut root = None;
 
-    let mut iter = BtreeIter::new(&t, c::btree_id::inodes, spos(0, inum, snapshot),
+    let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, snapshot),
                                   BtreeIterFlags::ALL_SNAPSHOTS);
-    iter.for_each_norestart(&t, |_, k| Ok(
+    iter.for_each_norestart(t, |_, k| Ok(
         if k.k.p.offset != inum {
             ControlFlow::Break(())
         } else {
             if bkey_is_inode(k.k) &&
-               crate::snapshots::snapshot::is_ancestor(&t, snapshot, k.k.p.snapshot) {
+               crate::snapshots::snapshot::is_ancestor(t, snapshot, k.k.p.snapshot) {
                 root = Some(unpack(fs, k));
             }
             ControlFlow::Continue(())
@@ -677,13 +675,14 @@ pub fn find_oldest_snapshot(
 /// str_hash::repair_inode_hash_info() enforces. Anything that needs the
 /// authoritative version wants find_oldest_snapshot() instead - a
 /// descendant's other fields are not a valid stand-in for an ancestor's.
-pub fn find_any_snapshot(trans: &BtreeTrans<'_>, inum: u64) -> Result<c::bch_inode_unpacked, BchError> {
-    let t = trans.attempt_in_progress();
+pub fn find_any_snapshot(t: &TransAttempt<'_, '_>, inum: u64)
+    -> Result<c::bch_inode_unpacked, BchError>
+{
     let fs = t.fs();
 
-    let mut iter = BtreeIter::new(&t, c::btree_id::inodes, pos(0, inum),
+    let mut iter = BtreeIter::new(t, c::btree_id::inodes, pos(0, inum),
                                   BtreeIterFlags::ALL_SNAPSHOTS);
-    iter.for_each_norestart(&t, |_, k| Ok(
+    iter.for_each_norestart(t, |_, k| Ok(
         if k.k.p.offset != inum {
             ControlFlow::Break(None)
         } else if bkey_is_inode(k.k) {
@@ -727,7 +726,7 @@ pub extern "C" fn bch2_inode_write_flags(
     inode: &mut c::bch_inode_unpacked,
     flags: c::btree_iter_update_trigger_flags,
 ) -> core::ffi::c_int {
-    ret_to_c(write_flags(&BtreeTrans::from_c(trans).attempt_in_progress(), BtreeIter::from_c(iter),
+    ret_to_c(write_flags(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, BtreeIter::from_c(iter),
                          inode, UpdateTriggerFlags::from_bits_retain(flags.bits())))
 }
 
@@ -795,7 +794,7 @@ pub unsafe extern "C" fn bch2_inode_to_v3(trans: &Opaque<c::btree_trans>, k: *co
 {
     // SAFETY: the caller's - C's pointer reaches all of the key
     let k = unsafe { &*BkeyI::from_raw(k) };
-    match to_v3(&BtreeTrans::from_c(trans).attempt_in_progress(), k) {
+    match to_v3(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, k) {
         Ok(k)  => k.as_ptr(),
         Err(e) => (-(e.raw() as isize)) as *mut c::bkey_i,
     }
@@ -1294,17 +1293,16 @@ fn snapshot_parent<'i, 't>(
 /// Whether the inode at @pos has versions in descendant snapshots - only
 /// looked for if @pos's snapshot has any: as
 /// bch2_inode_has_child_snapshots(). In the caller's transaction attempt.
-pub fn has_child_snapshots(trans: &BtreeTrans<'_>, p: c::bpos) -> Result<bool, BchError> {
+pub fn has_child_snapshots(t: &TransAttempt<'_, '_>, p: c::bpos) -> Result<bool, BchError> {
     // As C: if leafness can't be told, look.
-    if let Ok(true) = trans.fs().snapshots.is_leaf(p.snapshot) {
+    if let Ok(true) = t.fs().snapshots.is_leaf(p.snapshot) {
         return Ok(false);
     }
 
-    let t = trans.attempt_in_progress();
-    let mut iter = BtreeIter::new(&t, c::btree_id::inodes, pos(0, p.offset),
+    let mut iter = BtreeIter::new(t, c::btree_id::inodes, pos(0, p.offset),
                                   BtreeIterFlags::ALL_SNAPSHOTS);
-    let found = iter.find_max_norestart(&t, p.predecessor(), |_, k| {
-        Ok(crate::snapshots::snapshot::is_ancestor(&t, k.k.p.snapshot, p.snapshot) &&
+    let found = iter.find_max_norestart(t, p.predecessor(), |_, k| {
+        Ok(crate::snapshots::snapshot::is_ancestor(t, k.k.p.snapshot, p.snapshot) &&
            bkey_is_inode(k.k))
     })?;
     Ok(found.is_some())
@@ -1313,10 +1311,10 @@ pub fn has_child_snapshots(trans: &BtreeTrans<'_>, p: c::bpos) -> Result<bool, B
 /// The inode @k is first being written in this snapshot: if it has no
 /// versions in descendants after all, its has_child_snapshot goes - and with
 /// @have_child, it's set. As update_inode_has_children().
-fn update_has_children(trans: &BtreeTrans<'_>, k: &mut BkeyS<'_>, have_child: bool)
+fn update_has_children(t: &TransAttempt<'_, '_>, k: &mut BkeyS<'_>, have_child: bool)
     -> Result<(), BchError>
 {
-    if !have_child && has_child_snapshots(trans, k.k.p)? {
+    if !have_child && has_child_snapshots(t, k.k.p)? {
         return Ok(());
     }
 
@@ -1362,25 +1360,23 @@ fn update_parent_has_children(t: &TransAttempt<'_, '_>, p: c::bpos, have_child: 
 ///    it's no longer; an inode made or deleted in a snapshot with a parent
 ///    updates has_child_snapshot on the version it inherited, and one first
 ///    written here, its own.
-pub fn trigger(trans: &BtreeTrans<'_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
-    let fs = trans.fs();
+pub fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
+    let fs = t.fs();
 
     if op.flags.contains(UpdateTriggerFlags::ATOMIC) &&
        op.flags.contains(UpdateTriggerFlags::INSERT) {
-        let seq = trans.journal_res_seq();
+        let seq = t.journal_res_seq();
         assert!(seq != 0, "atomic trigger without a journal reservation");
         set_journal_seq(&mut op.new, seq);
     }
 
     let nr = bkey_is_inode(op.new.k) as i64 - bkey_is_inode(op.old.k) as i64;
     if op.flags.intersects(UpdateTriggerFlags::TRANSACTIONAL | UpdateTriggerFlags::GC) && nr != 0 {
-        crate::accounting::add(trans, &c::disk_accounting_pos::from_arm(c::bch_acct_nr_inodes {}),
+        crate::accounting::add(t, &c::disk_accounting_pos::from_arm(c::bch_acct_nr_inodes {}),
                                &[nr], op.flags.contains(UpdateTriggerFlags::GC))?;
     }
 
     if op.flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
-        let t = trans.attempt_in_progress();
-
         let unlinked_delta = is_unlinked(flags_field_mut(&mut op.new)) as i32 -
                              is_unlinked(flags_field(op.old)) as i32;
         if unlinked_delta != 0 {
@@ -1393,13 +1389,13 @@ pub fn trigger(trans: &BtreeTrans<'_>, op: &mut TriggerOp<'_>) -> Result<(), Bch
         let deleted_delta = nr;
         if deleted_delta != 0 &&
            fs.snapshots.parent(op.new.k.p.snapshot).is_some() {
-            update_parent_has_children(&t, op.new.k.p, deleted_delta > 0)?;
+            update_parent_has_children(t, op.new.k.p, deleted_delta > 0)?;
         }
 
         // When an inode is first updated in a new snapshot, we may need to
         // clear has_child_snapshot
         if deleted_delta > 0 {
-            update_has_children(trans, &mut op.new, false)?;
+            update_has_children(t, &mut op.new, false)?;
         }
     }
 
@@ -1699,12 +1695,12 @@ fn __rm_snapshot(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<(),
 /// is open in the VFS: as bch2_inode_or_descendents_is_open(). Never, in
 /// userspace.
 #[cfg(kernel)]
-pub fn or_descendents_is_open(trans: &BtreeTrans<'_>, pos: c::bpos) -> Result<bool, BchError> {
-    Ok(crate::errcode::ret_to_result(unsafe { c::bch2_inode_or_descendents_is_open(trans.raw(), pos) })? != 0)
+pub fn or_descendents_is_open(t: &TransAttempt<'_, '_>, pos: c::bpos) -> Result<bool, BchError> {
+    Ok(crate::errcode::ret_to_result(unsafe { c::bch2_inode_or_descendents_is_open(t.raw(), pos) })? != 0)
 }
 
 #[cfg(not(kernel))]
-pub fn or_descendents_is_open(_trans: &BtreeTrans<'_>, _pos: c::bpos) -> Result<bool, BchError> {
+pub fn or_descendents_is_open(_t: &TransAttempt<'_, '_>, _pos: c::bpos) -> Result<bool, BchError> {
     Ok(false)
 }
 
@@ -1730,13 +1726,13 @@ fn delete_ancestor_snapshot_inodes(trans: &BtreeTrans<'_>, mut p: c::bpos) -> Re
 }
 
 /// Delete inode @inum in @snapshot, its contents, and the ancestors' versions
-/// nothing else sees - committing as it goes, so it returns
-/// transaction_restart_nested having succeeded: as bch2_inode_rm_snapshot().
-/// In the caller's transaction attempt.
+/// nothing else sees - committing as it goes, in iterations of its own: as
+/// bch2_inode_rm_snapshot(). From inside an attempt, through
+/// TransAttempt::close(), which returns the transaction_restart_nested C's
+/// returned itself.
 pub fn rm_snapshot(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<(), BchError> {
     __rm_snapshot(trans, inum, snapshot)?;
-    delete_ancestor_snapshot_inodes(trans, spos(0, inum, snapshot))?;
-    Err(trans.attempt_in_progress().restart(bch_errcode::BCH_ERR_transaction_restart_nested))
+    delete_ancestor_snapshot_inodes(trans, spos(0, inum, snapshot))
 }
 
 /// Delete the inodes on the deleted_inodes list that may be deleted, a
@@ -1788,11 +1784,8 @@ fn delete_dead_inodes(fs: &Fs) -> Result<(), BchError> {
                 // yet, so the loop retries this key.
                 t.commit(None, CommitFlags::NO_ENOSPC)?;
 
-                match rm_snapshot(&trans, p.offset, p.snapshot) {
-                    // Done: see above.
-                    Err(e) if is_restart(&e) => return Ok(Some(Next::Deleted)),
-                    r => r?,
-                }
+                rm_snapshot(&trans, p.offset, p.snapshot)?;
+                return Ok(Some(Next::Deleted));
             }
 
             t.commit(None, CommitFlags::NO_ENOSPC)?;
@@ -2001,16 +1994,16 @@ pub extern "C" fn bch2_inode_set_casefold(
     inode: &mut c::bch_inode_unpacked,
     v:     core::ffi::c_uint,
 ) -> core::ffi::c_int {
-    ret_to_c(set_casefold(&BtreeTrans::from_c(trans).attempt_in_progress(), inum, inode, v))
+    ret_to_c(set_casefold(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum, inode, v))
 }
 
 /// Check that @inode's options have been propagated to its descendants,
 /// repairing it if not: as bch2_check_inode_opts_propagated().
 pub fn check_opts_propagated(
-    trans: &BtreeTrans<'_>,
+    t:     &TransAttempt<'_, '_>,
     inode: &mut c::bch_inode_unpacked,
 ) -> Result<(), BchError> {
-    ret_to_result(unsafe { c::bch2_check_inode_opts_propagated(trans.raw(), inode) })
+    ret_to_result(unsafe { c::bch2_check_inode_opts_propagated(t.raw(), inode) })
 }
 
 /// @inode's reconcile options - the ones reconcile moves its data to match,
@@ -2176,16 +2169,16 @@ pub fn nlink_inc(inode: &mut c::bch_inode_unpacked) -> Result<(), BchError> {
 /// One link fewer to @inode - unlinked, when it had none left: as
 /// bch2_inode_nlink_dec(). An unlinked inode losing a link is a transaction
 /// inconsistency, and changes nothing.
-pub fn nlink_dec(trans: &BtreeTrans<'_>, inode: &mut c::bch_inode_unpacked) {
+pub fn nlink_dec(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked) {
     let unlinked = inode.flag(c::bch_inode_flags::BCH_INODE_unlinked);
 
     if unlinked && inode.bi_nlink != 0 {
-        trans_inconsistent!(trans, "inode {} unlinked but link count nonzero", inode.bi_inum);
+        trans_inconsistent!(t, "inode {} unlinked but link count nonzero", inode.bi_inum);
         return;
     }
 
     if unlinked {
-        trans_inconsistent!(trans, "inode {} link count underflow", inode.bi_inum);
+        trans_inconsistent!(t, "inode {} link count underflow", inode.bi_inum);
         return;
     }
 

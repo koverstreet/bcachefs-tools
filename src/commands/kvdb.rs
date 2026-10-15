@@ -486,7 +486,7 @@ fn cmd_read(fs: &Fs, op: ReadOp, btree: c::btree_id, pos: c::bpos, filtered: boo
             ReadOp::Get => RAW_EXACT,
             _ => BtreeIterFlags::ALL_SNAPSHOTS,
         };
-        let mut iter = BtreeIter::new(t.trans(), btree, pos, iter_flags(base, filtered));
+        let mut iter = BtreeIter::new(t, btree, pos, iter_flags(base, filtered));
         let out = match op {
             ReadOp::Get => iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS),
             ReadOp::Peek => iter.peek(t),
@@ -579,7 +579,7 @@ fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos,
         start,
         iter_flags(BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::PREFETCH, filtered),
     );
-    iter.for_each_max(&trans, end, |_, k| {
+    iter.for_each_max(&trans, end, |_, _, k| {
         if take_interrupt() {
             out.push_str("(interrupted)\n");
             return Ok(ControlFlow::Break(()));
@@ -674,7 +674,7 @@ fn cmd_update(
         CommitFlags::NO_ENOSPC,
         |t| {
             let mut iter = BtreeIter::new(
-                t.trans(),
+                t,
                 btree,
                 pos,
                 RAW_EXACT | BtreeIterFlags::INTENT,
@@ -725,7 +725,7 @@ fn cmd_copy(fs: &Fs, btree: c::btree_id, pos: c::bpos, new_pos: c::bpos, raw: bo
         None,
         CommitFlags::NO_ENOSPC,
         |t| {
-            let mut iter = BtreeIter::new(t.trans(), btree, pos, RAW_EXACT);
+            let mut iter = BtreeIter::new(t, btree, pos, RAW_EXACT);
             let k = iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS)?;
             let Some(k) = k.filter(|k| !k.is_deleted()) else {
                 let (inode, offset, snapshot) = (pos.inode, pos.offset, pos.snapshot);
@@ -733,7 +733,7 @@ fn cmd_copy(fs: &Fs, btree: c::btree_id, pos: c::bpos, new_pos: c::bpos, raw: bo
                 return Err(no_key_err());
             };
 
-            let mut new_iter = BtreeIter::new(t.trans(), btree, new_pos,
+            let mut new_iter = BtreeIter::new(t, btree, new_pos,
                                               RAW_EXACT | BtreeIterFlags::INTENT);
             let old = new_iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS)?;
             if old.is_some_and(|old| !old.is_deleted()) {
@@ -791,7 +791,7 @@ fn cmd_set(
             };
             let update_flags = raw_flags(update_flags, raw);
             let mut iter = BtreeIter::new(
-                t.trans(),
+                t,
                 btree,
                 pos,
                 iter_flags,

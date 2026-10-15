@@ -162,7 +162,7 @@ fn test_iterate(fs: &Fs, nr: u64) -> TestRet {
     let trans = crate::btree_trans!(fs);
     let mut i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
-    iter.for_each_max(&trans, pos(0, u64::MAX), |_, k| {
+    iter.for_each_max(&trans, pos(0, u64::MAX), |_, _, k| {
         assert!(k.k.p.offset == i);
         i += 1;
         Ok(())
@@ -170,7 +170,7 @@ fn test_iterate(fs: &Fs, nr: u64) -> TestRet {
     assert_eq!(i, nr);
 
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, u64::MAX, u32::MAX), BtreeIterFlags::empty());
-    iter.for_each_reverse(&trans, POS_MIN, |_, k| {
+    iter.for_each_reverse(&trans, POS_MIN, |_, _, k| {
         i -= 1;
         assert!(k.k.p.offset == i);
         Ok(())
@@ -193,7 +193,7 @@ fn test_iterate_extents(fs: &Fs, nr: u64) -> TestRet {
     let trans = crate::btree_trans!(fs);
     let mut i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
-    iter.for_each_max(&trans, pos(0, u64::MAX), |_, k| {
+    iter.for_each_max(&trans, pos(0, u64::MAX), |_, _, k| {
         assert_eq!(k.k.start_offset(), i);
         i = k.k.p.offset;
         Ok(())
@@ -201,7 +201,7 @@ fn test_iterate_extents(fs: &Fs, nr: u64) -> TestRet {
     assert_eq!(i, nr);
 
     let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, u64::MAX, u32::MAX), BtreeIterFlags::empty());
-    iter.for_each_reverse(&trans, POS_MIN, |_, k| {
+    iter.for_each_reverse(&trans, POS_MIN, |_, _, k| {
         assert!(k.k.p.offset == i);
         i = k.k.start_offset();
         Ok(())
@@ -223,7 +223,7 @@ fn test_iterate_slots(fs: &Fs, nr: u64) -> TestRet {
     let trans = crate::btree_trans!(fs);
     let mut i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
-    iter.for_each_max(&trans, pos(0, u64::MAX), |_, k| {
+    iter.for_each_max(&trans, pos(0, u64::MAX), |_, _, k| {
         assert!(k.k.p.offset == i);
         i += 2;
         Ok(())
@@ -232,7 +232,7 @@ fn test_iterate_slots(fs: &Fs, nr: u64) -> TestRet {
 
     i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, u32::MAX), BtreeIterFlags::SLOTS);
-    iter.for_each_max(&trans, pos(0, u64::MAX), |_, k| {
+    iter.for_each_max(&trans, pos(0, u64::MAX), |_, _, k| {
         if i >= nr * 2 {
             return Ok(ControlFlow::Break(()));
         }
@@ -258,7 +258,7 @@ fn test_iterate_slots_extents(fs: &Fs, nr: u64) -> TestRet {
     let trans = crate::btree_trans!(fs);
     let mut i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
-    iter.for_each_max(&trans, pos(0, u64::MAX), |_, k| {
+    iter.for_each_max(&trans, pos(0, u64::MAX), |_, _, k| {
         assert_eq!(k.k.start_offset(), i + 8);
         assert_eq!({ k.k.size }, 8);
         i += 16;
@@ -268,7 +268,7 @@ fn test_iterate_slots_extents(fs: &Fs, nr: u64) -> TestRet {
 
     i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, 0, u32::MAX), BtreeIterFlags::SLOTS);
-    iter.for_each_max(&trans, pos(0, u64::MAX), |_, k| {
+    iter.for_each_max(&trans, pos(0, u64::MAX), |_, _, k| {
         if i == nr {
             return Ok(ControlFlow::Break(()));
         }
@@ -401,7 +401,7 @@ fn test_btree_ptr_stale_dirty_key(
     k: BkeySC<'_>,
 ) -> Result<(), BchError> {
     let mut iter = BtreeIter::new(
-        t.trans(),
+        t,
         c::btree_id::extents,
         k.k.p,
         BtreeIterFlags::INTENT,
@@ -444,7 +444,7 @@ fn test_btree_ptr_stale_dirty(fs: &Fs, _nr: u64) -> TestRet {
     let trans = crate::btree_trans!(fs);
     lockrestart_do(&trans, |t| {
         let mut iter = BtreeNodeIter::new(
-            t.trans(),
+            t,
             c::btree_id::extents,
             POS_MIN,
             0,
@@ -804,7 +804,7 @@ fn seq_insert(fs: &Fs, nr: u64) -> TestRet {
 fn seq_lookup(fs: &Fs, _nr: u64) -> TestRet {
     let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
-    iter.for_each_max(&trans, pos(0, u64::MAX), |_, _| Ok(()))?;
+    iter.for_each_max(&trans, pos(0, u64::MAX), |_, _, _| Ok(()))?;
     Ok(())
 }
 

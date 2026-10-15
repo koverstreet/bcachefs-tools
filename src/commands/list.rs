@@ -34,7 +34,7 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
         flags,
     );
 
-    iter.for_each(&trans, |_, k| {
+    iter.for_each(&trans, |_, _, k| {
         if k.k.p > opt.end {
             return Ok(ControlFlow::Break(()));
         }

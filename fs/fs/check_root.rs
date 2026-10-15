@@ -26,7 +26,7 @@ use core::ops::ControlFlow;
 
 /// The leaf snapshot claiming the root subvolume, if any: 0 if none does.
 fn root_snapshot_from_snapshots(t: &TransAttempt<'_, '_>) -> Result<u32, BchError> {
-    let mut iter = BtreeIter::new(t.trans(), c::btree_id::snapshots, POS_MIN,
+    let mut iter = BtreeIter::new(t, c::btree_id::snapshots, POS_MIN,
                                   BtreeIterFlags::empty());
 
     iter.for_each_norestart(t, |_, k| Ok(
@@ -38,17 +38,16 @@ fn root_snapshot_from_snapshots(t: &TransAttempt<'_, '_>) -> Result<u32, BchErro
 }
 
 fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
 
-    let (snapshot, inum) = match subvolume::get(trans, c::BCACHEFS_ROOT_SUBVOL, false).found()? {
+    let (snapshot, inum) = match subvolume::get(t, c::BCACHEFS_ROOT_SUBVOL, false).found()? {
         Some(s) => (s.snapshot.get(), s.inode.get()),
         None => {
             // Inside the caller's commit_do(): restarts propagate out to it.
             let root_snapshot = root_snapshot_from_snapshots(t)?;
 
             // mustfix: true, or an error - never left unfixed.
-            if !mustfix_fsck_err!(trans, id::root_subvol_missing, "root subvol missing")? {
+            if !mustfix_fsck_err!(t, id::root_subvol_missing, "root subvol missing")? {
                 return Ok(());
             }
 
@@ -70,10 +69,10 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
 
     let root_dir_mode = (c::S_IFDIR | 0o755) as c::umode_t;
 
-    match inode::find_by_inum_snapshot(trans, c::BCACHEFS_ROOT_INO as u64, snapshot,
+    match inode::find_by_inum_snapshot(t, c::BCACHEFS_ROOT_INO as u64, snapshot,
                                        BtreeIterFlags::empty()).found()? {
         None => {
-            if mustfix_fsck_err!(trans, id::root_dir_missing, "root directory missing")? {
+            if mustfix_fsck_err!(t, id::root_dir_missing, "root directory missing")? {
                 let mut root_inode = inode::init(fs, 0, 0, root_dir_mode, 0, None);
                 root_inode.bi_inum     = inum;
                 root_inode.bi_snapshot = snapshot;
@@ -83,7 +82,7 @@ fn check_root_trans(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
             }
         }
         Some(mut root_inode) => {
-            if mustfix_fsck_err_on!(trans, !root_inode.is_dir(),
+            if mustfix_fsck_err_on!(t, !root_inode.is_dir(),
                                     id::root_inode_not_dir, "root inode not a directory")? {
                 // The inode exists: fix only the mode. Reinitializing it
                 // generates a fresh hash_seed - invalidating the hash offset of

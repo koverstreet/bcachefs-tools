@@ -14,7 +14,7 @@
 
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
-    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
+    BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
 };
 use crate::c;
 use crate::check::SnapshotsSeen;
@@ -52,7 +52,7 @@ fn add_nlink(fs: &Fs, t: &mut KVVec<Nlink>, inum: u64, snapshot: u32) -> Result<
 }
 
 fn inc_link(
-    trans:       &BtreeTrans<'_>,
+    t:           &TransAttempt<'_, '_>,
     s:           &mut SnapshotsSeen,
     links:       &mut [Nlink],
     range_start: u64,
@@ -67,7 +67,7 @@ fn inc_link(
     let first = links.partition_point(|l| l.inum < inum);
 
     for link in links[first..].iter_mut().take_while(|l| l.inum == inum) {
-        if s.ref_visible(trans, snapshot, link.snapshot) {
+        if s.ref_visible(t, snapshot, link.snapshot) {
             link.count += 1;
             if link.snapshot >= snapshot {
                 break;
@@ -93,7 +93,7 @@ fn check_nlinks_find_hardlinks(
     let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, c::btree_id::inodes, pos(0, start), iter_flags());
 
-    let ret = iter.for_each(&trans, |_, k| {
+    let ret = iter.for_each(&trans, |_, _, k| {
         if !inode::bkey_is_inode(k.k) {
             return Ok(ControlFlow::Continue(()));
         }
@@ -134,13 +134,13 @@ fn check_nlinks_walk_dirents(
     let mut s = SnapshotsSeen::new();
     let mut iter = BtreeIter::new(&trans, c::btree_id::dirents, POS_MIN, iter_flags());
 
-    let ret = iter.for_each(&trans, |_, k| {
+    let ret = iter.for_each(&trans, |t, _, k| {
         s.update(k.k.p)?;
 
         if let Some(d) = Dirent::new(k) {
             match d.target() {
                 DirentTarget::Inode(inum) if d.d_type() as u32 != c::DT_DIR =>
-                    inc_link(&trans, &mut s, links, range_start, range_end,
+                    inc_link(t, &mut s, links, range_start, range_end,
                              inum, k.k.p.snapshot),
                 _ => {}
             }

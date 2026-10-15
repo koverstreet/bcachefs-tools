@@ -134,12 +134,12 @@ pub fn mustfix_fsck_err_on(
 /// Against an inode: @pos, its (0, inum, snapshot), is where __bch2_fsck_err()
 /// records the damage - which takes a transaction.
 pub fn inode_fsck_err(
-    trans: &BtreeTrans<'_>,
-    pos:   c::bpos,
-    err:   bch_sb_error_id,
-    msg:   fmt::Arguments<'_>,
+    t:   &TransAttempt<'_, '_>,
+    pos: c::bpos,
+    err: bch_sb_error_id,
+    msg: fmt::Arguments<'_>,
 ) -> Result<bool, BchError> {
-    __fsck_err(trans, pos,
+    __fsck_err(t, pos,
                bch_fsck_flags::FSCK_CAN_FIX | bch_fsck_flags::FSCK_CAN_IGNORE, err, msg)
 }
 
@@ -177,11 +177,11 @@ pub fn sb_error_count(fs: &Fs, err: bch_sb_error_id) {
 }
 
 /// fs_inconsistent(), with what the transaction has queued in the message.
-pub fn trans_inconsistent(trans: &BtreeTrans<'_>, msg: fmt::Arguments<'_>) -> bool {
+pub fn trans_inconsistent(t: &TransAttempt<'_, '_>, msg: fmt::Arguments<'_>) -> bool {
     let mut buf = Printbuf::new();
     buf.write_fmt(msg);
 
-    unsafe { c::bch2_trans_inconsistent(trans.raw(), c"%s".as_ptr().cast(), buf.as_raw().buf) }
+    unsafe { c::bch2_trans_inconsistent(t.raw(), c"%s".as_ptr().cast(), buf.as_raw().buf) }
 }
 
 /// Acts as the errors option says - continue, go emergency read-only, or

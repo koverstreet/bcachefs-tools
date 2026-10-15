@@ -4,7 +4,7 @@
 
 use crate::btree::bkey::{bkey_extent_whiteout, pos, spos, BkeyI, BkeySC};
 use crate::btree::iter::{
-    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags,
+    BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
@@ -50,27 +50,27 @@ impl SnapshotsSeen {
 
     /// Whether a key in @ancestor is visible in its descendant @id: not
     /// overwritten by a key this list has seen.
-    pub fn key_visible(&self, trans: &BtreeTrans<'_>, id: u32, ancestor: u32) -> bool {
+    pub fn key_visible(&self, t: &TransAttempt<'_, '_>, id: u32, ancestor: u32) -> bool {
         debug_assert!(id <= ancestor);
 
         if id == ancestor {
             return true;
         }
-        if !snapshot::is_ancestor(trans, id, ancestor) {
+        if !snapshot::is_ancestor(t, id, ancestor) {
             return false;
         }
 
         // Overwritten by a key seen in a snapshot between the two?
-        !self.ids.iter().any(|&i| i != ancestor && snapshot::is_ancestor(trans, id, i))
+        !self.ids.iter().any(|&i| i != ancestor && snapshot::is_ancestor(t, id, i))
     }
 
     /// Whether a key in @src points at something visible as a key in @dst, in
     /// some snapshot. The @src keys must be walked in key order, recorded here.
-    pub fn ref_visible(&self, trans: &BtreeTrans<'_>, src: u32, dst: u32) -> bool {
+    pub fn ref_visible(&self, t: &TransAttempt<'_, '_>, src: u32, dst: u32) -> bool {
         if dst <= src {
-            self.key_visible(trans, dst, src)
+            self.key_visible(t, dst, src)
         } else {
-            snapshot::is_ancestor(trans, src, dst)
+            snapshot::is_ancestor(t, src, dst)
         }
     }
 
@@ -110,16 +110,16 @@ impl SnapshotsSeen {
 /// Whether a key in @src and one in @dst are both visible in some snapshot:
 /// one an ancestor of the other, not overwritten in between.
 pub fn ref_visible2(
-    trans:    &BtreeTrans<'_>,
+    t:        &TransAttempt<'_, '_>,
     src:      u32,
     src_seen: &SnapshotsSeen,
     dst:      u32,
     dst_seen: &SnapshotsSeen,
 ) -> bool {
     if dst > src {
-        dst_seen.key_visible(trans, src, dst)
+        dst_seen.key_visible(t, src, dst)
     } else {
-        src_seen.key_visible(trans, dst, src)
+        src_seen.key_visible(t, dst, src)
     }
 }
 
@@ -223,11 +223,9 @@ impl InodeWalker {
         iter: &BtreeIter<'t>,
         k:    BkeySC<'_>,
     ) -> Result<Option<usize>, BchError> {
-        let trans = t.trans();
-
         if self.last_pos.inode != k.k.p.inode {
             self.get_inodes_all_snapshots(t, k.k.p.inode)?;
-        } else if self.commit_count != trans.commit_count() {
+        } else if self.commit_count != t.commit_count() {
             // A commit may have changed cached inodes: refetch, and since we're partway
             // through this inode's keys, recount rather than complain
             self.get_inodes_all_snapshots(t, k.k.p.inode)?;
@@ -246,8 +244,7 @@ impl InodeWalker {
     fn get_inodes_all_snapshots(&mut self, t: &TransAttempt<'_, '_>, inum: u64)
         -> Result<(), BchError>
     {
-        let trans: &BtreeTrans<'_> = t;
-        let fs = trans.fs();
+        let fs = t.fs();
 
         // No inodes for last_pos now: clear it, or a restart here would confuse
         // check_i_sectors and check_subdir_count
@@ -256,7 +253,7 @@ impl InodeWalker {
         self.inodes.clear();
 
         let inodes = &mut self.inodes;
-        let mut iter = BtreeIter::new(trans, c::btree_id::inodes, pos(0, inum),
+        let mut iter = BtreeIter::new(t, c::btree_id::inodes, pos(0, inum),
                                       BtreeIterFlags::ALL_SNAPSHOTS);
         iter.for_each_max_norestart(t, spos(0, inum, u32::MAX), |_, k| {
             inodes.push(WalkerEntry::new(fs, k), GFP_KERNEL)?;
@@ -265,7 +262,7 @@ impl InodeWalker {
 
         self.first_this_inode = true;
         self.have_inodes = true;
-        self.commit_count = trans.commit_count();
+        self.commit_count = t.commit_count();
         Ok(())
     }
 
@@ -276,13 +273,12 @@ impl InodeWalker {
     fn lookup_inode_for_snapshot(&mut self, t: &TransAttempt<'_, '_>, k: BkeySC<'_>)
         -> Result<Option<usize>, BchError>
     {
-        let trans = t.trans();
-        let fs = trans.fs();
+        let fs = t.fs();
         let snapshot = k.k.p.snapshot;
         let k_snapshot = fs.snapshots.redundant_interior(snapshot).unwrap_or(snapshot);
 
         let Some(i) = self.inodes.iter()
-            .position(|i| snapshot::is_ancestor(trans, k_snapshot, i.inode.bi_snapshot)) else {
+            .position(|i| snapshot::is_ancestor(t, k_snapshot, i.inode.bi_snapshot)) else {
             return Ok(None);
         };
 
@@ -290,7 +286,7 @@ impl InodeWalker {
         let inode_snapshot = fs.snapshots.redundant_interior(e.inode.bi_snapshot)
             .unwrap_or(e.inode.bi_snapshot);
 
-        if !fsck_err_on!(trans, k_snapshot != inode_snapshot, id::snapshot_key_missing_inode_snapshot,
+        if !fsck_err_on!(t, k_snapshot != inode_snapshot, id::snapshot_key_missing_inode_snapshot,
                          "have key for inode {}:{snapshot} but have inode in ancestor snapshot {}\n\
                           unexpected because we should always update the inode when we update a key in that inode\n\
                           {}",
@@ -327,8 +323,7 @@ impl InodeWalker {
         i:    Option<usize>,
         k:    BkeySC<'_>,
     ) -> Result<(), BchError> {
-        let trans = t.trans();
-        let fs = trans.fs();
+        let fs = t.fs();
         let btree = iter.btree();
 
         // whiteouts and hash whiteouts are tombstones - they need no inode:
@@ -352,7 +347,7 @@ impl InodeWalker {
 
         let good_ancestor = inodes.iter().position(|i2| {
             !i2.whiteout &&
-            snapshot::is_ancestor(trans, k.k.p.snapshot, i2.inode.bi_snapshot) &&
+            snapshot::is_ancestor(t, k.k.p.snapshot, i2.inode.bi_snapshot) &&
             btree_matches_i_mode(btree, i2.inode.bi_mode)
         });
         if let Some(g) = good_ancestor {
@@ -387,7 +382,7 @@ impl InodeWalker {
                     writeln!(buf, "inode was deleted, will delete key");
                 }
 
-                if !inode_fsck_err!(trans, k.k.p, id::key_in_missing_inode, "{buf}")? {
+                if !inode_fsck_err!(t, k.k.p, id::key_in_missing_inode, "{buf}")? {
                     return Ok(());
                 }
 
@@ -431,7 +426,7 @@ impl InodeWalker {
                     writeln!(buf, "inode has no keys of its own type: changing its type to match");
                 }
 
-                if !inode_fsck_err!(trans, k.k.p, id::key_in_wrong_inode_type, "{buf}")? {
+                if !inode_fsck_err!(t, k.k.p, id::key_in_wrong_inode_type, "{buf}")? {
                     return Ok(());
                 }
 
@@ -472,13 +467,13 @@ impl InodeWalker {
     /// overwritten by a version in a descendant @s has seen.
     pub fn visible_mut<'a>(
         &'a mut self,
-        trans:    &'a BtreeTrans<'_>,
+        t:        &'a TransAttempt<'_, '_>,
         s:        &'a SnapshotsSeen,
         snapshot: u32,
     ) -> impl Iterator<Item = &'a mut WalkerEntry> {
         self.inodes.iter_mut()
             .take_while(move |i| i.inode.bi_snapshot <= snapshot)
-            .filter(move |i| s.key_visible(trans, i.inode.bi_snapshot, snapshot))
+            .filter(move |i| s.key_visible(t, i.inode.bi_snapshot, snapshot))
     }
 
     /// Load the versions of inode @inum that a reference from @s's position
@@ -491,21 +486,20 @@ impl InodeWalker {
         s:     &SnapshotsSeen,
         inum:  u64,
     ) -> Result<(), BchError> {
-        let trans: &BtreeTrans<'_> = t;
-        let fs = trans.fs();
+        let fs = t.fs();
         let snapshot = s.pos.snapshot;
 
         self.inodes.clear();
         self.deletes.clear();
 
         let (inodes, deletes) = (&mut self.inodes, &mut self.deletes);
-        let mut iter = BtreeIter::new(trans, c::btree_id::inodes, spos(0, inum, snapshot),
+        let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, snapshot),
                                       BtreeIterFlags::ALL_SNAPSHOTS);
         iter.for_each_reverse_norestart(t, pos(0, inum), |_, k| {
             let id = k.k.p.snapshot;
 
-            if !s.ref_visible(trans, snapshot, id) ||
-               deletes.iter().any(|&d| snapshot::is_ancestor(trans, id, d)) {
+            if !s.ref_visible(t, snapshot, id) ||
+               deletes.iter().any(|&d| snapshot::is_ancestor(t, id, d)) {
                 return Ok(());
             }
 
@@ -524,7 +518,7 @@ impl InodeWalker {
         // shared with the ancestor's other descendants: writers use own_version().
         if !self.inodes.iter().any(|i| i.inode.bi_snapshot == snapshot) &&
            !self.deletes.contains(&snapshot) {
-            if let Some(u) = inode::find_by_inum_snapshot(trans, inum, snapshot,
+            if let Some(u) = inode::find_by_inum_snapshot(t, inum, snapshot,
                                                           BtreeIterFlags::empty()).found()? {
                 if u.bi_snapshot != snapshot {
                     let e = WalkerEntry { inode: u, whiteout: false, count: 0 };
@@ -584,7 +578,7 @@ impl Default for InodeWalker {
 /// in. With an empty disk reservation: an extents update needs one, and a
 /// deletion charges nothing.
 fn delete_stray_key<'t>(t: &TransAttempt<'_, 't>, iter: &BtreeIter<'t>) -> Result<(), BchError> {
-    let res = DiskReservation::new(t.trans().fs());
+    let res = DiskReservation::new(t.fs());
     t.delete_at(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
     t.commit(Some(&res), CommitFlags::NO_ENOSPC)?;
     Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_commit))
@@ -617,8 +611,7 @@ pub fn reconstruct_inode(
     inum:     u64,
     d_type:   Option<u8>,
 ) -> Result<(), BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
 
     let (mode, size) = match btree {
         // may race with repair deleting the extents that triggered us
@@ -638,8 +631,8 @@ pub fn reconstruct_inode(
     // so a descendant will do. Node loss can take one snapshot's inode and leave
     // another's; a random seed would put every existing dirent at the wrong
     // offset, and the directory quietly becomes untraversable.
-    let hash_src = match inode::find_oldest_snapshot(trans, inum, snapshot) {
-        Err(e) if e.matches(c::ENOENT) => inode::find_any_snapshot(trans, inum),
+    let hash_src = match inode::find_oldest_snapshot(t, inum, snapshot) {
+        Err(e) if e.matches(c::ENOENT) => inode::find_any_snapshot(t, inum),
         r => r,
     }.found()?;
     if let Some(src) = hash_src {
@@ -661,8 +654,7 @@ pub fn reconstruct_subvol_root(
     subvol:   u32,
     inum:     Option<u64>,
 ) -> Result<u64, BchError> {
-    let trans: &BtreeTrans<'_> = t;
-    let fs = trans.fs();
+    let fs = t.fs();
 
     if !fs.snapshots.is_leaf(snapshot)? {
         bch_err!(fs, "need to reconstruct subvol {subvol}, but snapshot {snapshot} is an interior node");
@@ -677,7 +669,7 @@ pub fn reconstruct_subvol_root(
     // the inode with bi_subvol == @subvol is still there, and a second root would
     // orphan the real contents. Nor can it wait for a later pass: a subvolume key
     // with inode == 0 is rejected (subvol_inode_bad).
-    let mut iter = BtreeIter::new(trans, c::btree_id::inodes, pos(0, 0),
+    let mut iter = BtreeIter::new(t, c::btree_id::inodes, pos(0, 0),
                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
     let root = iter.for_each_norestart(t, |_, k| Ok(
         match inode::bkey_is_inode(k.k).then(|| inode::unpack(fs, k)) {
@@ -700,7 +692,7 @@ pub fn reconstruct_subvol(
     subvol:   u32,
     root:     u64,
 ) -> Result<(), BchError> {
-    let fs = t.trans().fs();
+    let fs = t.fs();
 
     bch_info!(fs, "reconstructing subvol {subvol} with root inode {root}");
 
@@ -784,8 +776,8 @@ fn count_inode_keys(
 /// with the ancestor's other descendants, and the repair goes in @snapshot
 /// instead, as a version of its own. Written in place, it would change what
 /// every other view of the ancestor sees.
-pub fn own_version(trans: &BtreeTrans<'_>, inode: &mut c::bch_inode_unpacked, snapshot: u32) {
-    if inode.bi_snapshot != snapshot && snapshot::is_ancestor(trans, snapshot, inode.bi_snapshot) {
+pub fn own_version(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked, snapshot: u32) {
+    if inode.bi_snapshot != snapshot && snapshot::is_ancestor(t, snapshot, inode.bi_snapshot) {
         inode.bi_snapshot = snapshot;
     }
 }
@@ -798,7 +790,6 @@ pub fn fsck_update_backpointers(
     s:   &mut SnapshotsSeen,
     new: &BkeyI,
 ) -> Result<(), BchError> {
-    let trans = t.trans();
     let Some(d) = Dirent::new(BkeySC::from(new)) else { return Ok(()) };
     let (dir, offset) = (new.k.p.inode, new.k.p.offset);
     let points_here = |i: &c::bch_inode_unpacked| i.bi_dir == dir && i.bi_dir_offset == offset;
@@ -809,8 +800,8 @@ pub fn fsck_update_backpointers(
         // dangling subvol dirent (subvol or root inode gone) is
         // check_subvols/check_dirents' problem, not ours.
         DirentTarget::Subvol { child, .. } => {
-            let Some(subvol) = subvolume::get(trans, child, false).found()? else { return Ok(()) };
-            let Some(mut root) = inode::find_by_inum_snapshot(trans, subvol.inode.get(),
+            let Some(subvol) = subvolume::get(t, child, false).found()? else { return Ok(()) };
+            let Some(mut root) = inode::find_by_inum_snapshot(t, subvol.inode.get(),
                                                               subvol.snapshot.get(),
                                                               BtreeIterFlags::empty()).found()? else {
                 return Ok(());
@@ -833,7 +824,7 @@ pub fn fsck_update_backpointers(
             // version, so a correct backpointer must cost nothing - and a re-run over
             // partly repaired state then shrinks instead of repeating.
             for i in target.inodes_mut().iter_mut().filter(|i| !points_here(&i.inode)) {
-                own_version(trans, &mut i.inode, new.k.p.snapshot);
+                own_version(t, &mut i.inode, new.k.p.snapshot);
                 i.inode.bi_dir        = dir;
                 i.inode.bi_dir_offset = offset;
                 inode::fsck_write(t, &mut i.inode)?;

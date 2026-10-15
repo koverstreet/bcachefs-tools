@@ -21,7 +21,7 @@ use core::mem::{size_of, ManuallyDrop, MaybeUninit};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::ptr::NonNull;
 use core::slice;
-use core::ops::{ControlFlow, Deref};
+use core::ops::ControlFlow;
 
 use c::bpos;
 
@@ -151,7 +151,12 @@ impl<'f> BtreeTrans<'f> {
     }
 
     /// The attempt C began, for Rust that C calls partway through one.
-    pub(crate) fn attempt_in_progress<'a>(&'a self) -> TransAttempt<'a, 'f> {
+    ///
+    /// # Safety
+    /// For C entry points only: C has an attempt in progress on this
+    /// transaction, for as long as the TransAttempt lives. Nothing else can
+    /// say that - Rust gets its attempts from begin() and the loops.
+    pub(crate) unsafe fn attempt_in_progress<'a>(&'a self) -> TransAttempt<'a, 'f> {
         TransAttempt {
             trans:         self,
             restart_count: unsafe { (*self.raw).restart_count },
@@ -163,10 +168,6 @@ impl<'f> BtreeTrans<'f> {
     /// restart count.
     pub(crate) fn begin_raw(&self) -> u32 {
         unsafe { c::bch2_trans_begin(self.raw) }
-    }
-
-    pub(crate) fn restart_count(&self) -> u32 {
-        unsafe { (*self.raw).restart_count }
     }
 
     /// Take back the locks unlock() dropped: a transaction restart if they've
@@ -250,6 +251,20 @@ pub struct TransAttempt<'a, 't> {
     trans:         &'a BtreeTrans<'t>,
     restart_count: u32,
     t:             PhantomData<&'a mut ()>,
+}
+
+/// What an iterator is made from: the transaction, or an attempt at it. An
+/// iterator belongs to the transaction, and outlives any one attempt.
+pub trait TransRef<'t> {
+    fn trans_raw(&self) -> *mut c::btree_trans;
+}
+
+impl<'t> TransRef<'t> for &BtreeTrans<'t> {
+    fn trans_raw(&self) -> *mut c::btree_trans { self.raw }
+}
+
+impl<'t> TransRef<'t> for &TransAttempt<'_, 't> {
+    fn trans_raw(&self) -> *mut c::btree_trans { self.trans.raw }
 }
 
 /// Exempts bch2_trans_begin() from the dropped-updates warning while it lives
@@ -340,20 +355,32 @@ impl BtreeNodeRef {
 }
 
 impl<'a, 't> TransAttempt<'a, 't> {
-    pub fn trans(&self) -> &'a BtreeTrans<'t> {
-        self.trans
-    }
-
     pub fn raw(&self) -> *mut c::btree_trans {
         self.trans.raw()
     }
 
-    pub(crate) fn fs(&self) -> &Fs {
+    pub(crate) fn fs(&self) -> &'t Fs {
         self.trans.fs()
     }
 
     pub fn verify_not_restarted(&self) {
         self.trans.verify_not_restarted(self.restart_count);
+    }
+
+    pub fn unlock(&self) {
+        self.trans.unlock()
+    }
+
+    pub fn relock(&self) -> Result<(), BchError> {
+        self.trans.relock()
+    }
+
+    pub fn commit_count(&self) -> u32 {
+        self.trans.commit_count()
+    }
+
+    pub fn journal_res_seq(&self) -> u64 {
+        self.trans.journal_res_seq()
     }
 
     /// Whether anything is queued for the next commit: key updates, journal
@@ -416,6 +443,35 @@ impl<'a, 't> TransAttempt<'a, 't> {
         }
 
         self.trans.commit_inner(None, flags.into(), true)
+    }
+
+    /// Close this attempt, for work at the transaction level - work that runs
+    /// loops of its own, beginning attempts as it goes: commit what's queued,
+    /// so its first begin drops nothing (a repair's fsck log entry, say), and
+    /// run @f on the transaction. Then begin the next attempt, for the restart
+    /// the caller returns: its loop retries against what @f did. As C's
+    /// helpers that commit their caller's updates, run their own loop and
+    /// return transaction_restart_nested - bch2_fpunch_snapshot().
+    ///
+    /// The restart is the caller's only way on: `return Err(t.close(..))`.
+    /// An error from the commit or from @f is returned instead.
+    ///
+    /// Keys peeked in this attempt aren't to be used after - as across a
+    /// commit, which the types don't yet enforce either.
+    #[must_use]
+    pub fn close<F>(&self, flags: impl Into<CommitOpts>, f: F) -> BchError
+    where
+        F: FnOnce(&'a BtreeTrans<'t>) -> Result<(), BchError>,
+    {
+        if self.has_updates() {
+            if let Err(e) = self.commit(None, flags) {
+                return e;
+            }
+        }
+        if let Err(e) = f(self.trans) {
+            return e;
+        }
+        self.trans.begin().restart(bch_errcode::BCH_ERR_transaction_restart_nested)
     }
 
     /// Commit only once the transaction's memory is getting full: for a key
@@ -521,35 +577,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 Err(e) => return Err(e),
             }
         }
-    }
-
-    /// Run @f, which doesn't work within this attempt: it begins and commits
-    /// attempts of its own - calls a helper that commits for itself, such as
-    /// C's bch2_fsck_write_inode() - and so spends this one. Whatever this
-    /// attempt had queued is dropped, and if @f began an attempt,
-    /// transaction_restart_nested is returned so the caller's loop retries
-    /// against what @f committed.
-    ///
-    /// Not nested(): that's for a body working within the attempt, which it
-    /// checks on success, and that check fires for this one.
-    ///
-    /// XXX: an odd contract, named rather than fixed - repairs that commit
-    /// should hand their commits back to the caller's loop instead. Nor do
-    /// lifetimes cover it: @f peeks under this attempt, but its commits end
-    /// it, and a key the caller peeked before is stale after.
-    pub fn self_committing<T, F>(&self, f: F) -> Result<T, BchError>
-    where
-        F: FnOnce(&TransAttempt<'a, 't>) -> Result<T, BchError>,
-    {
-        let trans = self.trans;
-        let _may_drop = TransMayDropUpdates::new(trans);
-
-        let v = f(self)?;
-
-        if unsafe { (*trans.raw()).restart_count } != self.restart_count {
-            return Err(BchError::from_raw(bch_errcode::BCH_ERR_transaction_restart_nested.0 as i32));
-        }
-        Ok(v)
     }
 
     /// Freed when the transaction next begins.
@@ -1160,14 +1187,6 @@ impl<V: ?Sized> AsMut<[u64]> for TransBkey<'_, '_, V> {
     }
 }
 
-impl<'a, 't> Deref for TransAttempt<'a, 't> {
-    type Target = BtreeTrans<'t>;
-
-    fn deref(&self) -> &Self::Target {
-        self.trans
-    }
-}
-
 bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct BtreeIterFlags: u32 {
@@ -1598,7 +1617,7 @@ impl<'t> BtreeIter<'t> {
     }
 
     pub fn new(
-        trans: &BtreeTrans<'t>,
+        trans: impl TransRef<'t>,
         btree: impl Into<u32>,
         pos: bpos,
         flags: BtreeIterFlags,
@@ -1607,7 +1626,7 @@ impl<'t> BtreeIter<'t> {
             let mut iter: MaybeUninit<c::btree_iter> = MaybeUninit::uninit();
 
             c::bch2_trans_iter_init_outlined(
-                trans.raw,
+                trans.trans_raw(),
                 iter.as_mut_ptr(),
                 c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 pos,
@@ -1620,7 +1639,7 @@ impl<'t> BtreeIter<'t> {
     }
 
     pub fn new_level(
-        trans: &BtreeTrans<'t>,
+        trans: impl TransRef<'t>,
         btree: impl Into<u32>,
         pos: bpos,
         level: u32,
@@ -1630,7 +1649,7 @@ impl<'t> BtreeIter<'t> {
             let mut iter: MaybeUninit<c::btree_iter> = MaybeUninit::uninit();
 
             c::__bch2_trans_node_iter_init(
-                trans.raw,
+                trans.trans_raw(),
                 iter.as_mut_ptr(),
                 c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 pos,
@@ -1751,6 +1770,9 @@ impl<'t> BtreeIter<'t> {
     /// the peek or from @f, retries the same position; any other error is
     /// returned.
     ///
+    /// @f runs in the attempt begun for its key, and gets it: what it does
+    /// beyond reading the key - a lookup, an update - is in that attempt.
+    ///
     /// @f gets the iterator too, as the C loop bodies do - to update at its
     /// position, or read where it is - shared, borrowed with the key: the
     /// key's header is in the iterator, and its value in the node the
@@ -1766,7 +1788,7 @@ impl<'t> BtreeIter<'t> {
     where
         P: FnMut(*mut c::btree_iter) -> c::bkey_s_c,
         S: FnMut(*mut c::btree_iter) -> bool,
-        F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: for<'a> FnMut(&'a TransAttempt<'_, 't>, &'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
     {
         loop {
@@ -1779,7 +1801,7 @@ impl<'t> BtreeIter<'t> {
                 Ok(Some(ik)) => ik,
             };
 
-            match f(iter, k) {
+            match f(&t, iter, k) {
                 Err(e) if is_restart(&e) => continue,
                 Err(e) => return Err(e),
                 Ok(flow) => {
@@ -1823,7 +1845,7 @@ impl<'t> BtreeIter<'t> {
     pub fn for_each_max<F, R>(&mut self, trans: &BtreeTrans<'t>, end: bpos, f: F)
         -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: for<'a> FnMut(&'a TransAttempt<'_, 't>, &'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
     {
         self.for_each_inner(trans,
@@ -1921,7 +1943,7 @@ impl<'t> BtreeIter<'t> {
 
     pub fn for_each<F, R>(&mut self, trans: &BtreeTrans<'t>, f: F) -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: for<'a> FnMut(&'a TransAttempt<'_, 't>, &'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
     {
         self.for_each_max(trans, SPOS_MAX, f)
@@ -2088,7 +2110,7 @@ impl<'t> BtreeIter<'t> {
     pub fn for_each_reverse<F, R>(&mut self, trans: &BtreeTrans<'t>, min: bpos, f: F)
         -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: for<'a> FnMut(&'a TransAttempt<'_, 't>, &'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
     {
         self.for_each_inner(trans,
@@ -2104,7 +2126,7 @@ impl<'t> BtreeIter<'t> {
         f:     F,
     ) -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
+        F: for<'a> FnMut(&'a TransAttempt<'_, 't>, &'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
         R: LoopControl,
     {
         self.for_each_inner(trans,
@@ -2138,7 +2160,7 @@ pub struct BtreeNodeIter<'t> {
 
 impl<'t> BtreeNodeIter<'t> {
     pub fn new(
-        trans: &BtreeTrans<'t>,
+        trans: impl TransRef<'t>,
         btree: impl Into<u32>,
         pos: bpos,
         locks_want: u32,
@@ -2148,7 +2170,7 @@ impl<'t> BtreeNodeIter<'t> {
         unsafe {
             let mut iter: MaybeUninit<c::btree_iter> = MaybeUninit::uninit();
             c::__bch2_trans_node_iter_init(
-                trans.raw,
+                trans.trans_raw(),
                 iter.as_mut_ptr(),
                 c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 pos,

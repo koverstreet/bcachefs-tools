@@ -53,8 +53,8 @@ use cstruct_macros::c_export;
 /// Snapshot node @id's key, None if there's none: fsck can't assume a node
 /// exists, and absence as a value can't be returned as an error by mistake.
 /// The whole key: the topology checks print nodes they didn't start from.
-fn lookup_node(trans: &BtreeTrans<'_>, id: u32) -> Result<Option<BkeyI<c::Snapshot>>, BchError> {
-    snapshot::lookup_key(trans, id).found()
+fn lookup_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<Option<BkeyI<c::Snapshot>>, BchError> {
+    snapshot::lookup_key(t, id).found()
 }
 
 /// Snapshot node @id's key, as a mutable copy queued for the commit.
@@ -101,11 +101,10 @@ impl fmt::Display for StateName {
 /// non-snapshot subvolume in the tree, or failing that the oldest one, made a
 /// non-snapshot subvolume. None if the tree has none.
 fn tree_master_subvol(t: &TransAttempt<'_, '_>, root: u32) -> Result<Option<u32>, BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
 
     let found = find_key(t, c::btree_id::subvolumes, |k| {
-        subvolume::val(k).is_some_and(|s| snapshot::is_ancestor(trans, s.snapshot(), root) && !s.snap())
+        subvolume::val(k).is_some_and(|s| snapshot::is_ancestor(t, s.snapshot(), root) && !s.snap())
     })?;
     if found.is_some() {
         return Ok(found);
@@ -128,14 +127,13 @@ fn check_snapshot_tree<'t>(
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
 ) -> Result<(), BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
 
     let Some(k) = k.arm::<c::SnapshotTree>() else { return Ok(()) };
     let st = k.v();
     let root_id = st.root_snapshot.get();
 
-    let root = match snapshot::lookup_key(trans, root_id) {
+    let root = match snapshot::lookup_key(t, root_id) {
         Err(e) if !e.matches(c::ENOENT) => return Err(e),
         r => r,
     };
@@ -162,11 +160,11 @@ fn check_snapshot_tree<'t>(
         return Ok(());
     }
 
-    let repair = match subvolume::get(trans, master, false).found()? {
+    let repair = match subvolume::get(t, master, false).found()? {
         None => fsck_err!(t, id::snapshot_tree_to_missing_subvol,
                           "snapshot tree points to missing subvolume:\n{}", k.to_text(fs))?,
         Some(s) =>
-            fsck_err_on!(t, !snapshot::is_ancestor(trans, s.snapshot(), root_id),
+            fsck_err_on!(t, !snapshot::is_ancestor(t, s.snapshot(), root_id),
                          id::snapshot_tree_to_wrong_subvol,
                          "snapshot tree points to subvolume that does not point to snapshot in this tree:\n{}",
                          k.to_text(fs))? ||
@@ -207,20 +205,20 @@ impl CowKey<'_, '_, '_, '_, c::Snapshot> {
 
 /// Whether anything points at node @s, @id: a subvolume, its parent, or a
 /// child. For a garbage state field: a referenced node must be live.
-fn referenced(trans: &BtreeTrans<'_>, s: &c::Snapshot, id: u32) -> Result<bool, BchError> {
+fn referenced(t: &TransAttempt<'_, '_>, s: &c::Snapshot, id: u32) -> Result<bool, BchError> {
     if s.subvol() != 0 &&
-       subvolume::get(trans, s.subvol(), false).found()?.is_some_and(|sv| sv.snapshot() == id) {
+       subvolume::get(t, s.subvol(), false).found()?.is_some_and(|sv| sv.snapshot() == id) {
         return Ok(true);
     }
 
     if s.parent() != 0 &&
-       lookup_node(trans, s.parent())?.is_some_and(|p| points_at(&p.v, Role::Parent, id)) {
+       lookup_node(t, s.parent())?.is_some_and(|p| points_at(&p.v, Role::Parent, id)) {
         return Ok(true);
     }
 
     for child in s.children() {
         if child != 0 &&
-           lookup_node(trans, child)?.is_some_and(|ch| points_at(&ch.v, Role::Child, id)) {
+           lookup_node(t, child)?.is_some_and(|ch| points_at(&ch.v, Role::Child, id)) {
             return Ok(true);
         }
     }
@@ -235,8 +233,7 @@ fn check_state<'a, 't>(
     t: &TransAttempt<'a, 't>,
     n: &mut CowKey<'_, '_, 'a, 't, c::Snapshot>,
 ) -> Result<(), BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
 
     // Predates the state field, or was wiped: the legacy flags, which old kernels
     // dual-wrote, are authoritative - past the upgrade too, for keys never
@@ -268,7 +265,7 @@ fn check_state<'a, 't>(
             fsck_err!(t, id::snapshot_state_bad,
                       "snapshot state {raw:#x} is {dist} bits from {nearest} - correcting:\n{}",
                       n.to_text(fs))?.then_some(nearest)
-        } else if referenced(trans, n.v(), n.id())? {
+        } else if referenced(t, n.v(), n.id())? {
             // Too far to decode, but if anything references it, it must be live
             fsck_err!(t, id::snapshot_state_bad,
                       "snapshot state {raw:#x} is garbage, but the node is referenced - marking live:\n{}",
@@ -319,7 +316,7 @@ fn check_has_data<'a, 't>(
     t: &TransAttempt<'a, 't>,
     n: &mut CowKey<'_, '_, 'a, 't, c::Snapshot>,
 ) -> Result<(), BchError> {
-    let fs = t.trans().fs();
+    let fs = t.fs();
     let state = n.v().state_field();
 
     if state != Some(c::bch_snapshot_state::SNAPSHOT_STATE_deleted) && state != Some(c::bch_snapshot_state::SNAPSHOT_STATE_no_keys) {
@@ -352,8 +349,7 @@ fn check_deleted<'a, 't>(
     t: &TransAttempt<'a, 't>,
     n: &mut CowKey<'_, '_, 'a, 't, c::Snapshot>,
 ) -> Result<bool, BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
     let id = n.id();
 
     if n.v().state().get() == c::bch_snapshot_state::SNAPSHOT_STATE_live.0 {
@@ -369,7 +365,7 @@ fn check_deleted<'a, 't>(
     let mut nr_live_children = 0;
     for child in n.v().children() {
         if child != 0 &&
-           lookup_node(trans, child)?.is_some_and(|ch| ch.v.state_decoded() == Some(c::bch_snapshot_state::SNAPSHOT_STATE_live) &&
+           lookup_node(t, child)?.is_some_and(|ch| ch.v.state_decoded() == Some(c::bch_snapshot_state::SNAPSHOT_STATE_live) &&
                                                       points_at(&ch.v, Role::Child, id)) {
             nr_live_children += 1;
         }
@@ -387,7 +383,7 @@ fn check_deleted<'a, 't>(
     // flag. (A tombstoned subvolume reads as ENOENT: normal mid-deletion.)
     let v = n.v();
     if v.children()[0] == 0 && v.subvol() != 0 {
-        let subvol_live = subvolume::get(trans, v.subvol(), false).found()?.is_some_and(|sv|
+        let subvol_live = subvolume::get(t, v.subvol(), false).found()?.is_some_and(|sv|
             sv.state_decoded() == Some(c::bch_subvolume_state::SUBVOLUME_STATE_live) && sv.snapshot() == id);
 
         if subvol_live &&
@@ -480,7 +476,7 @@ fn parent_child_consistent(s: &c::Snapshot, id: u32, role: Role,
 /// whose current target doesn't reciprocate - and if so, the value that
 /// would be displaced. Empty slots first, so a stale pointer keeps its own
 /// shot at repair when its node is visited.
-fn ptr_available(trans: &BtreeTrans<'_>, n: &c::Snapshot, n_id: u32, role: Role)
+fn ptr_available(t: &TransAttempt<'_, '_>, n: &c::Snapshot, n_id: u32, role: Role)
     -> Result<Option<u32>, BchError>
 {
     let parent = [n.parent()];
@@ -495,7 +491,7 @@ fn ptr_available(trans: &BtreeTrans<'_>, n: &c::Snapshot, n_id: u32, role: Role)
     }
 
     for &p in ptrs {
-        if !lookup_node(trans, p)?.is_some_and(|t| points_at(&t.v, role.other(), n_id)) {
+        if !lookup_node(t, p)?.is_some_and(|n| points_at(&n.v, role.other(), n_id)) {
             return Ok(Some(p));
         }
     }
@@ -521,7 +517,7 @@ fn has_accounting(fs: &Fs, id: u32) -> bool {
 /// only see settled state. The commit first - the restart would discard the
 /// repair.
 fn edge_repair_commit(t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
-    let fs = t.trans().fs();
+    let fs = t.fs();
     t.commit(None, CommitFlags::NO_ENOSPC)?;
     fs.snapshots.set_need_table_rebuild();
     Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))
@@ -546,12 +542,12 @@ fn undelete_owns_data<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c:
 
 /// The highest dead node from @id up: the one whose own parent is still in
 /// the tree.
-fn topmost_dead_ancestor(trans: &BtreeTrans<'_>, mut id: u32) -> Result<Option<u32>, BchError> {
+fn topmost_dead_ancestor(t: &TransAttempt<'_, '_>, mut id: u32) -> Result<Option<u32>, BchError> {
     let mut topmost = None;
 
     while id != 0 {
         // a missing parent is undelete's to report, against the node naming it
-        let Some(s) = lookup_node(trans, id)? else { break };
+        let Some(s) = lookup_node(t, id)? else { break };
         if s.v.state_decoded() != Some(c::bch_snapshot_state::SNAPSHOT_STATE_deleted) {
             break;
         }
@@ -574,7 +570,7 @@ fn topmost_dead_ancestor(trans: &BtreeTrans<'_>, mut id: u32) -> Result<Option<u
 /// they stay because the node below ends up live. Depth and skiplists are left
 /// for snapshot_bad_depth/snapshot_bad_skiplist.
 fn undelete_ancestors(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
-    let Some(topmost) = topmost_dead_ancestor(t.trans(), id)? else { return Ok(()) };
+    let Some(topmost) = topmost_dead_ancestor(t, id)? else { return Ok(()) };
 
     let mut u = get_mut_node(t, topmost)?;
     undelete_owns_data(t, &mut u)?;
@@ -588,10 +584,9 @@ fn undelete_ancestors(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError>
 /// their own parent pointers on a later pass. A subvolume claiming @id comes
 /// back with it.
 fn resurrect_child(t: &TransAttempt<'_, '_>, parent_id: u32, id: u32) -> Result<(), BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
 
-    let Some(parent) = lookup_node(trans, parent_id)? else {
+    let Some(parent) = lookup_node(t, parent_id)? else {
         return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_snapshot_edge_to_missing_node));
     };
 
@@ -650,7 +645,7 @@ impl fmt::Display for EdgeNodes<'_, '_> {
 /// Walking from deleted node @s past the deleted nodes beyond it, in the
 /// direction @role's pointer goes: the nearest one that isn't deleted, 0 if
 /// they all are - None if the chain is too long to be anything but damage.
-fn past_deleted(trans: &BtreeTrans<'_>, s: &c::Snapshot, role: Role)
+fn past_deleted(t: &TransAttempt<'_, '_>, s: &c::Snapshot, role: Role)
     -> Result<Option<u32>, BchError>
 {
     let next = |s: &c::Snapshot| match role {
@@ -663,7 +658,7 @@ fn past_deleted(trans: &BtreeTrans<'_>, s: &c::Snapshot, role: Role)
         if id == 0 {
             return Ok(Some(0));
         }
-        match lookup_node(trans, id)? {
+        match lookup_node(t, id)? {
             None => return Ok(Some(0)),
             Some(s) if s.v.state_decoded() != Some(c::bch_snapshot_state::SNAPSHOT_STATE_deleted) => return Ok(Some(id)),
             Some(s) => id = next(&s.v),
@@ -693,12 +688,11 @@ fn edge_repair(
     role:     Role,
     other_id: u32,
 ) -> Result<Option<EdgeRepair>, BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
     let id = n.id();
     let ptr = role.ptr_name();
 
-    let other = lookup_node(trans, other_id)?;
+    let other = lookup_node(t, other_id)?;
 
     // The live tree must be closed over nodes that aren't deleted: an edge into a
     // tombstone is left by an interrupted deletion, so rewrite ours past it - up
@@ -720,7 +714,7 @@ fn edge_repair(
             return Ok(fix.then_some(EdgeRepair::Undelete(other_id)));
         }
 
-        let Some(repl) = past_deleted(trans, &o.v, role)? else { return Ok(None) };
+        let Some(repl) = past_deleted(t, &o.v, role)? else { return Ok(None) };
         let fix = fsck_err!(t, id::snapshot_deleted_but_linked,
                             "snapshot {id} {ptr} pointer {other_id} is a deleted node - {} {repl}{}",
                             if repl != 0 { "re-linking past it to" } else { "clearing, dead in that direction:" },
@@ -736,7 +730,7 @@ fn edge_repair(
     // or holds a stale pointer - never a tombstone's, handled above.
     if let Some(o) = &other {
         if parent_child_consistent(n.v(), id, role, &o.v, other_id) {
-            if let Some(old) = ptr_available(trans, &o.v, other_id, role.other())? {
+            if let Some(old) = ptr_available(t, &o.v, other_id, role.other())? {
                 if fsck_err!(t, id::snapshot_edge_bad,
                              "snapshot {id} {ptr} pointer {other_id} is not reciprocated, but is corroborated by\n\
                               tree and depth and the target's position ({old}) is unattested - completing the edge{}",
@@ -749,7 +743,7 @@ fn edge_repair(
 
     // Or another node claims the edge and tree and depth agree - re-aim ours:
     if let Some(repl) = fs.snapshots.table_find_edge(n.v(), id, role == Role::Child) {
-        if let Some(r) = lookup_node(trans, repl)? {
+        if let Some(r) = lookup_node(t, repl)? {
             if parent_child_consistent(n.v(), id, role, &r.v, repl) &&
                fsck_err!(t, id::snapshot_edge_bad,
                          "snapshot {id} {ptr} pointer {other_id} is broken (target {}), but node {repl} claims the\n\
@@ -830,9 +824,9 @@ fn check_edge<'a, 't>(
 
 /// Whether @id's tree pointer, @tree, names a tree that exists and whose
 /// root @id descends from.
-fn tree_ptr_good(trans: &BtreeTrans<'_>, id: u32, tree: u32) -> Result<bool, BchError> {
-    let Some(st) = snapshot::tree_lookup(trans, tree).found()? else { return Ok(false) };
-    Ok(trans.fs().snapshots.is_ancestor_early(id, st.root_snapshot.get()))
+fn tree_ptr_good(t: &TransAttempt<'_, '_>, id: u32, tree: u32) -> Result<bool, BchError> {
+    let Some(st) = snapshot::tree_lookup(t, tree).found()? else { return Ok(false) };
+    Ok(t.fs().snapshots.is_ancestor_early(id, st.root_snapshot.get()))
 }
 
 /// Snapshot node @n's tree pointer was wrong: make sure its root's is right -
@@ -841,18 +835,17 @@ fn tree_ptr_repair<'a, 't>(
     t: &TransAttempt<'a, 't>,
     n: &mut CowKey<'_, '_, 'a, 't, c::Snapshot>,
 ) -> Result<(), BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
     let id = n.id();
     let root_id = fs.snapshots.root(id);
 
     let mut tree_id = if root_id == id {
         n.v().tree()
     } else {
-        snapshot::lookup_key(trans, root_id)?.v.tree()
+        snapshot::lookup_key(t, root_id)?.v.tree()
     };
 
-    let tree = snapshot::tree_lookup(trans, tree_id).found()?;
+    let tree = snapshot::tree_lookup(t, tree_id).found()?;
     if tree.is_none_or(|st| st.root_snapshot.get() != root_id) {
         let mut new = snapshot::tree_create(t)?;
         let v = new.v_mut();
@@ -876,8 +869,7 @@ fn check_depth<'a, 't>(
     t: &TransAttempt<'a, 't>,
     n: &mut CowKey<'_, '_, 'a, 't, c::Snapshot>,
 ) -> Result<(), BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
     let parent_id = n.v().parent();
 
     // No parent to derive depth from, and 0 would flatten an interior node to a
@@ -885,7 +877,7 @@ fn check_depth<'a, 't>(
     let real_depth = if parent_id == 0 {
         0
     } else {
-        let Some(parent) = lookup_node(trans, parent_id)? else { return Ok(()) };
+        let Some(parent) = lookup_node(t, parent_id)? else { return Ok(()) };
         parent.v.depth().get() + 1
     };
 
@@ -902,8 +894,7 @@ fn check_skiplists<'a, 't>(
     t: &TransAttempt<'a, 't>,
     n: &mut CowKey<'_, '_, 'a, 't, c::Snapshot>,
 ) -> Result<(), BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
     let id = n.id();
 
     for i in 0..n.v().skip.len() {
@@ -918,7 +909,7 @@ fn check_skiplists<'a, 't>(
         let mut msg = Printbuf::new();
         write!(msg, "snapshot with bad skiplist pointer {skip}:\n{}\n", n.to_text(fs));
         if skip != 0 {
-            let mut iter = BtreeIter::new(trans, c::btree_id::snapshots, pos(0, skip as u64),
+            let mut iter = BtreeIter::new(t, c::btree_id::snapshots, pos(0, skip as u64),
                                           BtreeIterFlags::empty());
             let skip_k = iter.peek_slot(t)?.expect("a slot always has a key");
             write!(msg, "points to\n  {}\n", skip_k.to_text(fs));
@@ -941,8 +932,7 @@ fn check_to_subvol<'a, 't>(
     t: &TransAttempt<'a, 't>,
     n: &mut CowKey<'_, '_, 'a, 't, c::Snapshot>,
 ) -> Result<(), BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
     let id = n.id();
 
     let state = n.v().state_field();
@@ -955,7 +945,7 @@ fn check_to_subvol<'a, 't>(
 
         // A raw read: subvolume::get() reports deleted subvolumes as ENOENT,
         // and the message should show what's actually there.
-        let mut iter = BtreeIter::new(trans, c::btree_id::subvolumes, pos(0, subvol_id as u64),
+        let mut iter = BtreeIter::new(t, c::btree_id::subvolumes, pos(0, subvol_id as u64),
                                       BtreeIterFlags::empty());
         let subvol_k = iter.peek_slot(t)?.expect("a slot always has a key");
         let subvol = subvolume::val(subvol_k);
@@ -1040,7 +1030,7 @@ fn check_to_subvol<'a, 't>(
         write!(msg, "snapshot node {id} has wrong subvol flag:\n{}", n.to_text(fs));
 
         if v.subvol() != 0 {
-            let mut iter = BtreeIter::new(trans, c::btree_id::subvolumes, pos(0, v.subvol() as u64),
+            let mut iter = BtreeIter::new(t, c::btree_id::subvolumes, pos(0, v.subvol() as u64),
                                           BtreeIterFlags::empty());
             let subvol_k = iter.peek_slot(t)?.expect("a slot always has a key");
             write!(msg, "\n{}", subvol_k.to_text(fs));
@@ -1060,8 +1050,7 @@ fn check_snapshot<'a, 't>(
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
 ) -> Result<(), BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
 
     let Some(mut n) = CowKey::<c::Snapshot>::new(iter, k) else { return Ok(()) };
 
@@ -1082,7 +1071,7 @@ fn check_snapshot<'a, 't>(
         }
     }
 
-    if !tree_ptr_good(trans, n.id(), n.v().tree())? &&
+    if !tree_ptr_good(t, n.id(), n.v().tree())? &&
        fsck_err!(t, id::snapshot_to_bad_snapshot_tree,
                  "snapshot points to missing/incorrect tree:\n{}", n.to_text(fs))? {
         tree_ptr_repair(t, &mut n)?;
@@ -1205,8 +1194,7 @@ fn add_nodup(ids: &mut KVVec<u32>, id: u32) -> Result<(), BchError> {
 /// Recreate missing node @id, a tree to itself: with a tree key, if there
 /// isn't one with it as the root.
 fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
 
     let tree_id = find_key(t, c::btree_id::snapshot_trees, |k| {
         k.arm::<c::SnapshotTree>().map(|k| k.v()).is_some_and(|st| st.root_snapshot.get() == id)
@@ -1237,7 +1225,7 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
 /// Recreate node @id of @tree if it's missing - only if it's a tree to
 /// itself: one we can't place.
 fn reconstruct_node(t: &TransAttempt<'_, '_>, id: u32, tree: &[u32]) -> Result<(), BchError> {
-    let fs = t.trans().fs();
+    let fs = t.fs();
 
     if fsck_err_on!(t, fs.snapshots.id_state(id) == IdState::SNAPSHOT_ID_empty,
                     id::snapshot_node_missing,
@@ -1311,7 +1299,7 @@ fn key_has_inode_in_snapshot(
         _ => return Ok(()),
     }
 
-    let Some(mut inode) = inode::find_by_inum_snapshot(t.trans(), inum, snapshot,
+    let Some(mut inode) = inode::find_by_inum_snapshot(t, inum, snapshot,
                                                        BtreeIterFlags::empty()).found()? else {
         return Ok(());
     };
@@ -1331,8 +1319,7 @@ pub(crate) fn check_key_has_snapshot(
     iter: Option<&mut c::btree_iter>,
     k:    BkeySC<'_>,
 ) -> Result<bool, BchError> {
-    let trans = t.trans();
-    let fs = trans.fs();
+    let fs = t.fs();
     let state = fs.snapshots.id_state(k.k.p.snapshot);
 
     let Some(iter) = iter else { return Ok(true) };
@@ -1388,12 +1375,12 @@ pub(crate) fn check_key_has_snapshot(
         // child pointer for live_descendent() to find. An error finding it, on a
         // table just checked clean, is real damage: report it, keep the key.
         match fs.snapshots.live_descendent(k.k.p.snapshot)? {
-            None => if inode_fsck_err!(trans, k.k.p, id::bkey_in_deleted_snapshot,
+            None => if inode_fsck_err!(t, k.k.p, id::bkey_in_deleted_snapshot,
                                        "key in deleted snapshot {buf}, delete?")? {
                 t.delete_at_raw(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
                 return Ok(true);
             },
-            Some(live_child) => if fsck_err!(trans, id::bkey_in_deleted_interior_snapshot,
+            Some(live_child) => if fsck_err!(t, id::bkey_in_deleted_interior_snapshot,
                                              "key in deleted interior snapshot {buf}, migrating to live descendant {live_child}")? {
                 let (btree, inum) = (iter.btree_id(), k.k.p.inode);
                 snapshot::delete_dead_key(t, iter, k, live_child)?;
@@ -1401,7 +1388,7 @@ pub(crate) fn check_key_has_snapshot(
                 return Ok(true);
             },
         }
-    } else if inode_fsck_err!(trans, k.k.p, id::bkey_in_missing_snapshot,
+    } else if inode_fsck_err!(t, k.k.p, id::bkey_in_missing_snapshot,
                               "key in missing snapshot {buf}, delete?")? {
         t.delete_at_raw(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
         return Ok(true);
@@ -1421,7 +1408,7 @@ pub unsafe extern "C" fn __bch2_check_key_has_snapshot(
     iter:  Option<&mut c::btree_iter>,
     k:     BkeySC<'_>,
 ) -> core::ffi::c_int {
-    match check_key_has_snapshot(&BtreeTrans::from_c(trans).attempt_in_progress(), iter, k) {
+    match check_key_has_snapshot(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, iter, k) {
         Ok(handled) => handled as core::ffi::c_int,
         Err(e)      => -e.raw(),
     }

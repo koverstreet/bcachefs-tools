@@ -69,12 +69,12 @@ impl InodeInfo<'_> {
         unsafe { &*c::rust_ei_inode(self.ei) }
     }
 
-    /// Update the VFS inode to @inode, just written in @trans, which still
-    /// holds the inode's btree position locked. @fields: the ATTR_* that
-    /// changed.
-    pub fn update_after_write(&self, trans: &BtreeTrans<'_>, inode: &mut c::bch_inode_unpacked,
+    /// Update the VFS inode to @inode, just written and committed in attempt
+    /// @t, which still holds the inode's btree position locked. @fields: the
+    /// ATTR_* that changed.
+    pub fn update_after_write(&self, t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked,
                               fields: u32) {
-        unsafe { c::bch2_inode_update_after_write(trans.raw(), self.ei, inode, fields) }
+        unsafe { c::bch2_inode_update_after_write(t.raw(), self.ei, inode, fields) }
     }
 
     /// Take ei_update_lock, until the guard is dropped.
@@ -115,7 +115,8 @@ impl UpdateLock<'_> {
             // @p is write_inode()'s @set, for the call:
             let set = unsafe { &mut *(p as *mut F) };
             let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-            ret_to_c(set(&trans.attempt_in_progress(), unsafe { &mut *bi }))
+            // SAFETY: bch2_write_inode() calls @set in its attempt
+            ret_to_c(set(&unsafe { trans.attempt_in_progress() }, unsafe { &mut *bi }))
         }
 
         let inode = self.inode;

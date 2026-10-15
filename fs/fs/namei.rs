@@ -297,7 +297,7 @@ pub unsafe extern "C" fn bch2_create_trans(
         (None, None)
     };
 
-    ret_to_c(create_trans(&trans.attempt_in_progress(), dir, dir_u, new_inode, new_subvol,
+    ret_to_c(create_trans(&unsafe { trans.attempt_in_progress() }, dir, dir_u, new_inode, new_subvol,
                           name.map(|name| unsafe { qstr_name(name) }),
                           uid, gid, mode, rdev, default_acl, acl, snapshot_src, flags))
 }
@@ -361,7 +361,7 @@ pub unsafe extern "C" fn bch2_link_trans(
     inode_u: &mut c::bch_inode_unpacked,
     name:    &c::qstr,
 ) -> c_int {
-    ret_to_c(link_trans(&BtreeTrans::from_c(trans).attempt_in_progress(), dir, dir_u, inum,
+    ret_to_c(link_trans(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, dir, dir_u, inum,
                         inode_u, unsafe { qstr_name(name) }))
 }
 
@@ -499,7 +499,7 @@ pub unsafe extern "C" fn bch2_unlink_trans(
     name:            &c::qstr,
     deleting_subvol: bool,
 ) -> c_int {
-    ret_to_c(unlink_trans(&BtreeTrans::from_c(trans).attempt_in_progress(), dir, dir_u, inode,
+    ret_to_c(unlink_trans(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, dir, dir_u, inode,
                           inode_u, unsafe { qstr_name(name) }, deleting_subvol))
 }
 
@@ -737,7 +737,7 @@ pub unsafe extern "C" fn bch2_rename_trans(
     src_opt_change: &mut c::inode_opt_change,
     dst_opt_change: &mut c::inode_opt_change,
 ) -> c_int {
-    ret_to_c(rename_trans(&BtreeTrans::from_c(trans).attempt_in_progress(), src_dir, src_dir_u,
+    ret_to_c(rename_trans(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, src_dir, src_dir_u,
                           dst_dir, dst_dir_u, src_inode_u, dst_inode_u,
                           unsafe { qstr_name(src_name) }, unsafe { qstr_name(dst_name) },
                           mode, src_opt_change, dst_opt_change))
@@ -932,10 +932,10 @@ fn __inum_to_path(
 
 /// Print @inum's path - its names through its dirents, from the root - to
 /// @out: as bch2_inum_to_path(). In the caller's transaction attempt.
-pub fn inum_to_path(trans: &BtreeTrans<'_>, inum: c::subvol_inum, out: &mut Printbuf)
+pub fn inum_to_path(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, out: &mut Printbuf)
     -> Result<(), BchError>
 {
-    __inum_to_path(&trans.attempt_in_progress(), inum.subvol as u32, inum.inum, 0, 0, false, out)
+    __inum_to_path(t, inum.subvol as u32, inum.inum, 0, 0, false, out)
 }
 
 /// For C's error reporting, ioctls and VFS: bch2_inum_to_path().
@@ -946,7 +946,7 @@ pub extern "C" fn bch2_inum_to_path(
     inum:  c::subvol_inum,
     out:   &mut Printbuf,
 ) -> c_int {
-    ret_to_c(inum_to_path(&BtreeTrans::from_c(trans), inum, out))
+    ret_to_c(inum_to_path(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum, out))
 }
 
 /// For C's ioctls: bch2_inum_to_path_in_subvol() - @inum's path from
@@ -962,7 +962,7 @@ pub extern "C" fn bch2_inum_to_path_in_subvol(
 ) -> c_int {
     const INUM_TO_PATH_FAIL_ON_ERR: c_uint = 1 << 0;
 
-    ret_to_c(__inum_to_path(&BtreeTrans::from_c(trans).attempt_in_progress(),
+    ret_to_c(__inum_to_path(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() },
                             inum.subvol as u32, inum.inum, 0,
                             stop_subvol, flags & INUM_TO_PATH_FAIL_ON_ERR != 0, out))
 }
@@ -970,12 +970,12 @@ pub extern "C" fn bch2_inum_to_path_in_subvol(
 /// Print the path of inode @inum as seen in @snapshot: as
 /// bch2_inum_snapshot_to_path(). In the caller's transaction attempt.
 pub fn inum_snapshot_to_path(
-    trans:    &BtreeTrans<'_>,
+    t:        &TransAttempt<'_, '_>,
     inum:     u64,
     snapshot: u32,
     out:      &mut Printbuf,
 ) -> Result<(), BchError> {
-    __inum_to_path(&trans.attempt_in_progress(), 0, inum, snapshot, 0, false, out)
+    __inum_to_path(t, 0, inum, snapshot, 0, false, out)
 }
 
 /// For C's error reporting and reconcile: bch2_inum_snapshot_to_path(). Its
@@ -988,7 +988,8 @@ pub extern "C" fn bch2_inum_snapshot_to_path(
     _snapshot_overwrites: *mut c::snapshot_id_list,
     out:       &mut Printbuf,
 ) -> c_int {
-    ret_to_c(inum_snapshot_to_path(&BtreeTrans::from_c(trans), inum, snapshot, out))
+    ret_to_c(inum_snapshot_to_path(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum,
+                                   snapshot, out))
 }
 
 /// Whether @inum is @ancestor or below it: the walk from inum_to_path(),
@@ -996,7 +997,7 @@ pub extern "C" fn bch2_inum_snapshot_to_path(
 /// parent subvolumes - until @ancestor or the root. A walk that's
 /// disconnected or loops isn't below anything. As bch2_inum_is_descendant().
 pub fn inum_is_descendant(
-    trans:    &BtreeTrans<'_>,
+    t:        &TransAttempt<'_, '_>,
     inum:     c::subvol_inum,
     ancestor: c::subvol_inum,
 ) -> Result<bool, BchError> {
@@ -1004,7 +1005,7 @@ pub fn inum_is_descendant(
     let mut cur = inum.inum;
     let mut seen: KVVec<(u32, u64)> = KVVec::new();
 
-    let mut snapshot = subvolume::get_snapshot(trans, subvol)?;
+    let mut snapshot = subvolume::get_snapshot(t, subvol)?;
 
     loop {
         if subvol as u64 == ancestor.subvol && cur == ancestor.inum {
@@ -1017,7 +1018,7 @@ pub fn inum_is_descendant(
         }
         seen.push(n, GFP_KERNEL)?;
 
-        let Some(inode) = inode::find_by_inum_snapshot(trans, cur, snapshot,
+        let Some(inode) = inode::find_by_inum_snapshot(t, cur, snapshot,
                                                        BtreeIterFlags::empty()).found()? else {
             return Ok(false);
         };
@@ -1028,7 +1029,7 @@ pub fn inum_is_descendant(
 
         if inode.bi_parent_subvol != 0 {
             subvol = inode.bi_parent_subvol;
-            snapshot = subvolume::get_snapshot(trans, subvol)?;
+            snapshot = subvolume::get_snapshot(t, subvol)?;
         }
         cur = inode.bi_dir;
     }
@@ -1041,7 +1042,7 @@ pub extern "C" fn bch2_inum_is_descendant(
     inum:     c::subvol_inum,
     ancestor: c::subvol_inum,
 ) -> c_int {
-    match inum_is_descendant(&BtreeTrans::from_c(trans), inum, ancestor) {
+    match inum_is_descendant(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum, ancestor) {
         Ok(yes) => yes as c_int,
         Err(e)  => -e.raw(),
     }
@@ -1294,7 +1295,7 @@ pub unsafe extern "C" fn __bch2_check_dirent_target(
 ) -> c_int {
     let k = c::bkey_s_c::from(d);
 
-    ret_to_c(__check_dirent_target(&BtreeTrans::from_c(trans).attempt_in_progress(),
+    ret_to_c(__check_dirent_target(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() },
                                    BtreeIter::from_c(dirent_iter),
                                    Dirent::new(BkeySC::from(&k)).expect("a dirent"),
                                    target, in_fsck))

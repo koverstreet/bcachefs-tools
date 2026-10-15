@@ -222,7 +222,7 @@ impl<'a> TriggerOp<'a> {
     }
 }
 
-/// @trigger, a `fn(&BtreeTrans, &mut TriggerOp) -> Result<(), E>` (or taking
+/// @trigger, a `fn(&TransAttempt, &mut TriggerOp) -> Result<(), E>` (or taking
 /// `&TriggerOp`) with E converting to BchError, as @name, the key type
 /// trigger C's bkey_ops calls:
 ///
@@ -239,8 +239,11 @@ macro_rules! key_trigger {
             mut op: $crate::c::btree_trigger_op,
         ) -> core::ffi::c_int {
             let mut op = unsafe { $crate::btree::bkey_methods::TriggerOp::from_raw(&mut op) };
+            let trans = $crate::btree::iter::BtreeTrans::from_c(trans);
+            // SAFETY: C runs triggers in the transaction's attempt, in its commit
+            let t = unsafe { trans.attempt_in_progress() };
 
-            $crate::errcode::ret_to_c($trigger(&$crate::btree::iter::BtreeTrans::from_c(trans), &mut op))
+            $crate::errcode::ret_to_c($trigger(&t, &mut op))
         }
     };
 }
