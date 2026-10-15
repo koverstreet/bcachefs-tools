@@ -120,11 +120,6 @@ c_typedef! {
     pub type bch_acct_replicas = Head<c::bch_replicas_entry_v1>;
 }
 
-/// The replicas arm's family, which disk_accounting_pos's get() hands it out
-/// in: its entry's.
-#[doc(hidden)]
-pub type bch_acct_replicas__family = c::bch_replicas_entry_v1__family;
-
 tagged_union! {
     #[derive(Clone, Copy, CStruct, TypeInfo)]*
     #[c_typedef]*

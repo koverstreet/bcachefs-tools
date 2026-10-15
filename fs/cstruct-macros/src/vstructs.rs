@@ -364,59 +364,12 @@ fn family(name: &str, unvalidated: &str, validated: &str, whole: &str, with_fiel
          {state_impls}")
 }
 
-/// @name<S>, picking one of @name's family's definitions, documented @doc:
-/// for an unsized type, whose name is its family's - C's struct is only its
-/// header.
-fn state_alias(name: &str, doc: &str) -> String {
-    format!("{doc}\
-             #[allow(non_camel_case_types)]\n\
-             pub type {name}<S = {VS}::Validated> = <S as {VS}::State>::Of<{name}__family>;\n")
-}
-
-/// The methods of @name's state @st's definition, a family whose count is
-/// its own - an unsized vstruct's, a counted type's: made from C's pointer,
-/// or, Unvalidated, from bytes; and handed back to C.
-fn state_methods(name: &str, ffi: &str, st: &str) -> String {
-    let from_bytes = if st == "Unvalidated" {
-        format!("/// The {name} at the start of @bytes - off a device, from the\n\
-                 /// kernel - as many as its count says: an error if they don't hold\n\
-                 /// its header, aligned, or that many.\n\
-                 pub fn from_bytes(bytes: &[u8]) -> Result<&Self, {VS}::VStructError> {{\n\
-                     {VS}::from_bytes::<Self>(bytes)\n\
-                 }}\n\
-                 \n\
-                 /// from_bytes(), mutably.\n\
-                 pub fn from_bytes_mut(bytes: &mut [u8]) -> Result<&mut Self, {VS}::VStructError> {{\n\
-                     {VS}::from_bytes_mut::<Self>(bytes)\n\
-                 }}\n")
-    } else {
-        String::new()
-    };
+/// The methods of a state's definition, of a family whose count is its own -
+/// an unsized vstruct's, a counted type's: handed back to C, @ffi. What
+/// makes one is X<S>'s (generic_type()).
+fn state_methods(ffi: &str) -> String {
     format!(
-        "/// The {name} C's pointer @p is to, as long as its count says: not\n\
-         /// widened from a reference to its header, which reaches only that.\n\
-         /// In the state the caller names - {name}::<Validated>, for what C\n\
-         /// read and validated - never one inferred.\n\
-         ///\n\
-         /// # Safety\n\
-         /// @p points to a {name} whose count is right, and what its state\n\
-         /// says of its entries' is true - for Validated, that C checked\n\
-         /// them; and those bytes stay valid, and unwritten, for 'a.\n\
-         pub unsafe fn from_ffi<'a>(p: *const {ffi}) -> &'a Self {{\n\
-             // SAFETY: the caller's\n\
-             unsafe {{ {VS}::from_ffi::<Self>(p) }}\n\
-         }}\n\
-         \n\
-         /// from_ffi(), mutably.\n\
-         ///\n\
-         /// # Safety\n\
-         /// As from_ffi()'s, and nothing else touches those bytes for 'a.\n\
-         pub unsafe fn from_ffi_mut<'a>(p: *mut {ffi}) -> &'a mut Self {{\n\
-             // SAFETY: the caller's\n\
-             unsafe {{ {VS}::from_ffi_mut::<Self>(p) }}\n\
-         }}\n\
-         \n\
-         /// For C: a pointer that reaches all of it.\n\
+        "/// For C: a pointer that reaches all of it.\n\
          pub fn as_ffi(&self) -> *const {ffi} {{\n\
              (self as *const Self).cast()\n\
          }}\n\
@@ -424,9 +377,7 @@ fn state_methods(name: &str, ffi: &str, st: &str) -> String {
          /// For C, to edit: a pointer that reaches all of it.\n\
          pub fn as_ffi_mut(&mut self) -> *mut {ffi} {{\n\
              (self as *mut Self).cast()\n\
-         }}\n\
-         \n\
-         {from_bytes}")
+         }}\n")
 }
 
 /// The family of a type whose count is its own - an unsized vstruct's, a
@@ -441,7 +392,7 @@ fn own_count_family(name: &str, shape: &Shape<'_>) -> String {
             &format!("/// {name}<{st}>: {what}. C's fields - those that hold a count\n\
                       /// private - then its tail, as long as its count says. It derefs\n\
                       /// to C's struct {name}, Head<{name}>, to read.\n"),
-            shape, &state_methods(name, shape.ffi, st))
+            shape, &state_methods(shape.ffi))
             + &format!(
                 "// a sized tagged union's arm: as many bytes as its count says\n\
                  impl {VS}::ArmAt for {ty} {{\n\
@@ -450,15 +401,18 @@ fn own_count_family(name: &str, shape: &Shape<'_>) -> String {
                      }}\n\
                  }}\n")
     };
+    let (unvalidated, validated) = (format!("{name}__unvalidated"), format!("{name}__validated"));
+    let unsized_states = [("Unvalidated", unvalidated.clone()), ("Validated", validated.clone()),
+                          ("Whole", validated.clone())];
     format!(
         "{}{}{}{}",
         state("Unvalidated", "bytes from outside - off a device, from the kernel - its count \
                               checked against them when it's made"),
         state("Validated", "what C read and validated, its counts trusted as C trusts them"),
-        family(name, &format!("{name}__unvalidated"), &format!("{name}__validated"),
-               &format!("{name}__validated"),
-               &[format!("{name}__unvalidated"), format!("{name}__validated")]),
-        state_alias(name,
+        family(name, &unvalidated, &validated, &validated, &[unvalidated.clone(), validated.clone()]),
+        generic_type(name,
+               &Generic { default: "Validated", unsized_states: &unsized_states, arm_of: None,
+                          whole: None, ffi: Some(shape.ffi) },
                &format!("/// {name}, in state S - Validated unless named: a reference to one\n\
                          /// reaches every byte of it and none past. C's struct {name} is\n\
                          /// Head<{name}>.\n")))
@@ -468,7 +422,8 @@ fn own_count_family(name: &str, shape: &Shape<'_>) -> String {
 /// per state (util/vstructs.rs' Family), from C's struct as written.
 ///
 /// C's definition is the item, renamed X__head, with #[c_name(X)]: C has it
-/// as struct X, Rust as Head<X> - the alias X is the family's. Each state's,
+/// as struct X, Rust as Head<X> - X<S> is the family's type in state S,
+/// Validated unless named (generic_type()). Each state's definition,
 /// X__unvalidated and X__validated, is Rust's alone: a DST, the header and
 /// then its tail, as long as its count says - which derefs to the header,
 /// where its fields and methods are, written once. Its header never grew:
@@ -573,7 +528,7 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
     out.extend(tokens(&format!(
         "{}\
          impl {VS}::CountedHead for {ffi} {{\n\
-             type Unvalidated = {name}__unvalidated;\n\
+             type Of<S: {VS}::State> = {name}<S>;\n\
          }}\n\
          \n\
          // a reference as long as its count says is a whole number of its\n\
@@ -684,6 +639,8 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
     // floor and the bytes there are, below; else all of its fields, then
     // the bytes past them
     let all = format!("{name}__validated");
+    // in place, the states but Whole: a DST
+    let states = [("Validated", all.clone()), ("Unvalidated", all.clone())];
     let repr = repr_attrs(&item);
     let derives = derive_names(&item);
     // X is generated: a derive generic_type() doesn't forward would be
@@ -729,7 +686,7 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
             "{all_def}{}{}{}",
             family(&name, &all, &all, &ffi, &[]),
             whole_arm_ref(&ffi, derives.iter().any(|d| d == "Plain")),
-            generic_type(&name, &all, &ffi, &derives,
+            generic_type(&name, &sized_generic(&all, &ffi, &derives, &states),
                          &format!("/// {name}, in state S - Whole unless named: the struct, every field a field.\n\
                                    /// Validated or Unvalidated, a value in place - all its fields, then\n\
                                    /// the bytes past them a version since wrote, at the value's length.\n")))));
@@ -817,12 +774,20 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
         // the cast checks the floor: an unvalidated one is as good
         family = family(&name, &ty, &ty, &ffi, &[]),
         whole = whole_arm_ref(&ffi, derives.iter().any(|d| d == "Plain")),
-        generic = generic_type(&name, &ty, &ffi, &derives,
+        generic = generic_type(&name, &sized_generic(&ty, &ffi, &derives, &states),
                                &format!("/// {name}, in state S - Whole unless named: the struct, every field a field.\n\
                                          /// Validated or Unvalidated, a value in place, from any version since\n\
                                          /// it had its floor: the floor's fields, then the bytes there are; a\n\
                                          /// field it gained later is a getter, zero where the value ends.\n")))));
     Ok(out)
+}
+
+/// A sized type's X<S>: Whole unless named, the struct @whole, with the value
+/// traits @derives names; in place, @inplace, an arm wherever that is.
+fn sized_generic<'a>(inplace: &'a str, whole: &'a str, derives: &'a [String],
+                     unsized_states: &'a [(&'a str, String)]) -> Generic<'a> {
+    Generic { default: "Whole", unsized_states, arm_of: Some(inplace), whole: Some((whole, derives)),
+              ffi: None }
 }
 
 /// The traits @item derives.
@@ -879,20 +844,41 @@ fn whole_arm_ref(whole: &str, plain: bool) -> String {
 /// The derives generic_type() gives X<Whole> as the struct has them.
 const WHOLE_DERIVES: &[&str] = &["Clone", "Copy", "Default", "Plain", "TypeInfo"];
 
+/// What a family's X<S> is made from: which states' definitions are DSTs,
+/// what it's an arm of, and what it's made by.
+struct Generic<'a> {
+    /// The state X alone names: Whole for a sized type, the struct;
+    /// Validated for an unsized one, whose Whole is its Validated.
+    default: &'a str,
+    /// The states whose definition is a DST, and each one's: these have
+    /// Unsized and SelfSized as it does.
+    unsized_states: &'a [(&'a str, String)],
+    /// Whose ArmOf it has: a sized type's value in place, in every state -
+    /// the struct, X<Whole>, is an arm wherever its value in place is - or,
+    /// None, its definition in each state's: an unsized type's, as a
+    /// container in that state has it.
+    arm_of: Option<&'a str>,
+    /// The sized struct, if Whole is one, and what it derives: X<Whole> has
+    /// the value traits among them that it has.
+    whole: Option<(&'a str, &'a [String])>,
+    /// C's struct, if X is made from C's pointer or from bytes - an unsized
+    /// type, whose count is its own: from_ffi() and from_bytes() on X<S>.
+    ffi: Option<&'a str>,
+}
+
 /// @name<S>, documented @doc: a generic struct over its family's definition
-/// in state S - @whole, the struct, for Whole; @inplace, a value in place,
-/// for Validated and Unvalidated. #[repr(transparent)], so a reference to
-/// one is a reference to the other, and impls attach to @name<S> for the
-/// state they're for. What generic code goes by - ArmOf, ArmRef, Unsized -
-/// it has as its definition does; the value traits @derives names, @name -
-/// @name<Whole> - has as the struct does.
-fn generic_type(name: &str, inplace: &str, whole: &str, derives: &[String], doc: &str) -> String {
+/// in state S, as @g says. #[repr(transparent)], so a reference to one is a
+/// reference to the other, and impls attach to @name<S> for the state
+/// they're for. What generic code goes by - ArmOf, ArmRef, Unsized - it has
+/// as its definition does.
+fn generic_type(name: &str, g: &Generic<'_>, doc: &str) -> String {
     let fam = format!("{name}__family");
+    let default = g.default;
     let mut out = format!(
         "{doc}\
          #[repr(transparent)]\n\
          #[allow(non_camel_case_types)]\n\
-         pub struct {name}<S: {VS}::State = {VS}::Whole> {{\n\
+         pub struct {name}<S: {VS}::State = {VS}::{default}> {{\n\
              _state:   ::core::marker::PhantomData<S>,\n\
              /// Its definition in state S - for offset_of!(), repr.field.\n\
              pub repr: <S as {VS}::State>::Of<{fam}>,\n\
@@ -912,16 +898,22 @@ fn generic_type(name: &str, inplace: &str, whole: &str, derives: &[String], doc:
                  &mut self.repr\n\
              }}\n\
          }}\n\
-         \n\
-         // An arm of what its value in place is an arm of: one tag, every state\n\
+         \n");
+
+    let arm_of_def = match g.arm_of {
+        Some(def) => def.to_string(),
+        None => format!("<S as {VS}::State>::Of<{fam}>"),
+    };
+    out.push_str(&format!(
+        "// An arm of what its definition is an arm of: the same tag\n\
          impl<U: ?Sized, S: {VS}::State> crate::types::ArmOf<U> for {name}<S>\n\
          where\n\
-             {inplace}: crate::types::ArmOf<U>,\n\
+             {arm_of_def}: crate::types::ArmOf<U>,\n\
          {{\n\
-             type Tag = <{inplace} as crate::types::ArmOf<U>>::Tag;\n\
-             const TAG: Self::Tag = <{inplace} as crate::types::ArmOf<U>>::TAG;\n\
+             type Tag = <{arm_of_def} as crate::types::ArmOf<U>>::Tag;\n\
+             const TAG: Self::Tag = <{arm_of_def} as crate::types::ArmOf<U>>::TAG;\n\
          }}\n\
-         \n");
+         \n"));
 
     // In every state, as its definition in that state is had: the pointer
     // cast keeps the definition's metadata, its last field being it
@@ -939,22 +931,33 @@ fn generic_type(name: &str, inplace: &str, whole: &str, derives: &[String], doc:
                      .map(|d| unsafe {{ &mut *(d as *mut <S as {VS}::State>::Of<{fam}> as *mut Self) }})\n\
              }}\n\
          }}\n\
+         \n\
+         impl<S: {VS}::State> {VS}::ArmAt for {name}<S>\n\
+         where\n\
+             <S as {VS}::State>::Of<{fam}>: {VS}::ArmAt,\n\
+         {{\n\
+             fn arm_at(b: &[u8]) -> Result<&Self, {VS}::VStructError> {{\n\
+                 // SAFETY: as arm_ref()'s\n\
+                 <<S as {VS}::State>::Of<{fam}> as {VS}::ArmAt>::arm_at(b)\n\
+                     .map(|d| unsafe {{ &*(d as *const <S as {VS}::State>::Of<{fam}> as *const Self) }})\n\
+             }}\n\
+         }}\n\
          \n"));
 
-    for st in ["Validated", "Unvalidated"] {
+    for (st, def) in g.unsized_states {
         out.push_str(&format!(
-            "// SAFETY: #[repr(transparent)] over {inplace}, whose Unsized it is\n\
+            "// SAFETY: #[repr(transparent)] over {def}, whose Unsized it is\n\
              unsafe impl {VS}::Unsized for {name}<{VS}::{st}> {{\n\
-                 type Head = <{inplace} as {VS}::Unsized>::Head;\n\
-                 type Elem = <{inplace} as {VS}::Unsized>::Elem;\n\
-                 const TAIL: usize = <{inplace} as {VS}::Unsized>::TAIL;\n\
+                 type Head = <{def} as {VS}::Unsized>::Head;\n\
+                 type Elem = <{def} as {VS}::Unsized>::Elem;\n\
+                 const TAIL: usize = <{def} as {VS}::Unsized>::TAIL;\n\
                  #[inline]\n\
                  fn from_raw(p: *const u8, bytes: usize) -> *const Self {{\n\
-                     <{inplace} as {VS}::Unsized>::from_raw(p, bytes) as *const Self\n\
+                     <{def} as {VS}::Unsized>::from_raw(p, bytes) as *const Self\n\
                  }}\n\
                  #[inline]\n\
                  fn from_raw_mut(p: *mut u8, bytes: usize) -> *mut Self {{\n\
-                     <{inplace} as {VS}::Unsized>::from_raw_mut(p, bytes) as *mut Self\n\
+                     <{def} as {VS}::Unsized>::from_raw_mut(p, bytes) as *mut Self\n\
                  }}\n\
              }}\n\
              \n\
@@ -965,8 +968,57 @@ fn generic_type(name: &str, inplace: &str, whole: &str, derives: &[String], doc:
                  }}\n\
              }}\n\
              \n"));
+
+        // made in the state the caller names: Whole, an unsized type's
+        // Validated, is never one made
+        if let Some(ffi) = g.ffi.filter(|_| *st != "Whole") {
+            let from_bytes = if *st == "Unvalidated" {
+                format!("/// The {name} at the start of @bytes - off a device, from the\n\
+                         /// kernel - as many as its count says: an error if they don't hold\n\
+                         /// its header, aligned, or that many.\n\
+                         pub fn from_bytes(bytes: &[u8]) -> Result<&Self, {VS}::VStructError> {{\n\
+                             {VS}::from_bytes::<Self>(bytes)\n\
+                         }}\n\
+                         \n\
+                         /// from_bytes(), mutably.\n\
+                         pub fn from_bytes_mut(bytes: &mut [u8]) -> Result<&mut Self, {VS}::VStructError> {{\n\
+                             {VS}::from_bytes_mut::<Self>(bytes)\n\
+                         }}\n")
+            } else {
+                String::new()
+            };
+            out.push_str(&format!(
+                "impl {name}<{VS}::{st}> {{\n\
+                     /// The {name} C's pointer @p is to, as long as its count says: not\n\
+                     /// widened from a reference to its header, which reaches only that.\n\
+                     /// In the state the caller names - {name}::<Validated>, for what C\n\
+                     /// read and validated - never one inferred.\n\
+                     ///\n\
+                     /// # Safety\n\
+                     /// @p points to a {name} whose count is right, and what its state\n\
+                     /// says of its entries' is true - for Validated, that C checked\n\
+                     /// them; and those bytes stay valid, and unwritten, for 'a.\n\
+                     pub unsafe fn from_ffi<'a>(p: *const {ffi}) -> &'a Self {{\n\
+                         // SAFETY: the caller's\n\
+                         unsafe {{ {VS}::from_ffi::<Self>(p) }}\n\
+                     }}\n\
+                     \n\
+                     /// from_ffi(), mutably.\n\
+                     ///\n\
+                     /// # Safety\n\
+                     /// As from_ffi()'s, and nothing else touches those bytes for 'a.\n\
+                     pub unsafe fn from_ffi_mut<'a>(p: *mut {ffi}) -> &'a mut Self {{\n\
+                         // SAFETY: the caller's\n\
+                         unsafe {{ {VS}::from_ffi_mut::<Self>(p) }}\n\
+                     }}\n\
+                     \n\
+                     {from_bytes}\
+                 }}\n\
+                 \n"));
+        }
     }
 
+    let Some((whole, derives)) = g.whole else { return out };
     let whole_ty = format!("{name}<{VS}::Whole>");
     let has = |d: &str| derives.iter().any(|x| x == d);
     if has("Clone") {

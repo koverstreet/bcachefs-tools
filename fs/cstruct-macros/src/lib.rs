@@ -280,7 +280,7 @@ pub fn bitfield(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// array - or `#[unsized_vstruct(tail = [E])]`, `tail = NAME: [E]`, saying
 /// what follows its header: the family of its definitions, one per state -
 /// C's, renamed X__head, and each state's, a DST of the header and its tail -
-/// and the alias X<S> that picks one. See vstructs.rs.
+/// and X<S>, a generic struct over the one for S. See vstructs.rs.
 #[proc_macro_attribute]
 pub fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand("#[unsized_vstruct]", || vstructs::unsized_vstruct(attr, item))

@@ -32,7 +32,7 @@
 //   struct_group(name, ...), its members both name's and the struct's own.
 //
 //   #[c_name(NAME)] on the struct: C's name for it, where Rust's differs - a
-//   family's C definition, X__head, whose name the family's alias X has in
+//   family's C definition, X__head, whose name the family's type X<S> has in
 //   Rust (util/vstructs.rs). C knows it only as NAME.
 //
 //   c_verbatim!(r#"..."#): C, carried as is - what hasn't been converted.
@@ -153,7 +153,7 @@ pub struct CStructDef {
     /// C's name - its Rust one too, but for #[c_name]: rust_name.
     pub name:      String,
     /// Its Rust name, where C's differs - #[c_name(NAME)]: a family's C
-    /// definition, X__head, whose own name the family's alias takes (see
+    /// definition, X__head, whose own name the family's type X<S> takes (see
     /// util/vstructs.rs). rust_ident() is the name to impl and lay out by.
     pub rust_name: Option<String>,
     pub kind:      CKind,

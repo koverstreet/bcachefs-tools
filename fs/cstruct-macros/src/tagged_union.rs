@@ -60,8 +60,8 @@
 //!    DiskAccountingPosRef<'_, St>`, an arm by reference: one of the arm
 //!    types the block declares, plain data, a reference to it; another's -
 //!    the replicas entry, a header and the devices it counts - its
-//!    family's, NAME__family, in the storage's state, as long as its own
-//!    header says (ArmAt);
+//!    #[counted] family's type, X<St>, in the storage's state, as long as
+//!    its own header says (CountedHead, ArmAt);
 //!  - `get()`: the arm the tag selects. Unvalidated, an error if the tag
 //!    isn't one of ours or the arm's header says it's longer than the
 //!    storage holds (ArmError); Validated, Err(the tag), and an arm that
@@ -86,10 +86,10 @@
 //! another's: a header its arms embed and run past, as far as its count
 //! says - a journal entry's, a superblock field's: an unsized vstruct
 //! (util/vstructs.rs), each reference to which has its arm's bytes, and its
-//! own C. Then what's generated is the Ref enum, ArmOf, and on each state's
-//! definition of the storage - X__unvalidated, X__validated - typed(): the
-//! arm its tag selects, over its bytes, in the storage's state - every arm
-//! type has a family (util/vstructs.rs), so an Unvalidated storage's arms are
+//! own C. Then what's generated is the Ref enum, ArmOf, and on the storage
+//! in each state - X<Unvalidated>, X<Validated> - typed(): the arm its tag
+//! selects, over its bytes, in the storage's state - every arm type has a
+//! family (util/vstructs.rs), so an Unvalidated storage's arms are
 //! Unvalidated. An arm may be shorter than its type - written by an older
 //! version, before the type grew - so it's what its definition's ArmRef says:
 //! a grown type's at the arm's length, its later fields zero
@@ -321,8 +321,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
         storage_attrs
     };
     // An unsized vstruct's storage is a family: each state its own
-    // definition, named - an impl for the alias X<St> would be for a
-    // projection (util/vstructs.rs)
+    // definition, named - what its tag is read from
     let states: Vec<(&str, String)> = if tu.size == CTaggedSize::Header {
         ["Unvalidated", "Validated"].iter()
             .map(|st| (*st, format!("{s_ty}__{}", st.to_lowercase())))
@@ -392,8 +391,9 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
 
     let by_value: String = arms.iter().map(|a| format!("    {}({}),\n", a.name, a.ty)).collect();
     // An arm type this declares is plain data: a reference to it, whatever
-    // the storage's state. Another's is a family's - a replicas entry - in the
-    // storage's state, as long as its own header says (ArmAt).
+    // the storage's state. Another's is a #[counted] family's head - a
+    // replicas entry's, as C's union holds it - the family's type in the
+    // storage's state, as long as its own header says (CountedHead, ArmAt).
     let declared = |a: &CTaggedArm| tu.defs.iter().any(|d| d.name == a.ty.trim());
     let stated = arms.iter().any(|a| !declared(a));
     let st_param = if stated { format!(", St: {vs}::State = {vs}::Validated") } else { String::new() };
@@ -402,7 +402,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
         .map(|a| if declared(a) {
             format!("    {}(&'a {}),\n", a.name, a.ty)
         } else {
-            format!("    {}(&'a <St as {vs}::State>::Of<{}__family>),\n", a.name, a.ty.trim())
+            format!("    {}(&'a <{} as {vs}::CountedHead>::Of<St>),\n", a.name, a.ty.trim())
         })
         .collect();
     // get()'s arms, in state @st: @bad, what an arm whose header says it's
@@ -415,7 +415,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                              // and aligned there: asserted below\n\
                              unsafe {{ &*b.as_ptr().cast::<{}>() }}", a.ty)
                 } else {
-                    format!("match <<{vs}::{st} as {vs}::State>::Of<{}__family> as {vs}::ArmAt>::arm_at(b) {{\n\
+                    format!("match <<{} as {vs}::CountedHead>::Of<{vs}::{st}> as {vs}::ArmAt>::arm_at(b) {{\n\
                                  Ok(arm) => arm,\n\
                                  Err(err) => {bad},\n\
                              }}", a.ty.trim())
@@ -628,18 +628,17 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
             .map(|a| if own(a) {
                 format!("    {}(&'a {s_ty}<St>),\n", a.name)
             } else {
-                format!("    {}(&'a <St as {vs}::State>::Of<{}__family>),\n", a.name, a.ty.trim())
+                format!("    {}(&'a {}<St>),\n", a.name, a.ty.trim())
             })
             .collect();
-        let det = format!("<{determinant} as {det_trait}<Self>>");
-        let tag_of_self = wrap_tag(&format!("{det}::get(self)"));
-        // ArmOf by each state's definitions, named - the storage's and the
-        // arm's: an arm of an Unvalidated storage is its Unvalidated definition
+        // ArmOf by state - the storage's, X<St>, for the arm's definition in
+        // that state, which the arm's X<St> has it by: an arm of an
+        // Unvalidated storage is Unvalidated
         let arms_of_by_state: String = states.iter()
-            .flat_map(|(st, s)| {
-                let st = st.to_lowercase();
+            .flat_map(|(st, _)| {
+                let (lower, s_ty) = (st.to_lowercase(), &s_ty);
                 arms.iter().filter(|a| !own(a)).map(move |a| format!(
-                    "impl {arm_of}<{s}> for {}__{st} {{\n\
+                    "impl {arm_of}<{s_ty}<{vs}::{st}>> for {}__{lower} {{\n\
                          type Tag = {tag_ty};\n\
                          const TAG: {tag_ty} = ({}) as {tag_ty};\n\
                      }}\n",
@@ -648,7 +647,8 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
             .collect();
         let impls: String = states.iter()
             .map(|(st, s)| {
-                let lower = st.to_lowercase();
+                let det = format!("<{determinant} as {det_trait}<{s}>>");
+                let tag_of_self = wrap_tag(&format!("{det}::get(&self.repr)"));
                 let selects: String = arms.iter()
                     .map(|a| format!("if t == ({}) as {tag_ty} {{\n\
                                           return {};\n\
@@ -657,14 +657,14 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                                      if own(a) {
                                          format!("Ok({en}Ref::{}(self))", a.name)
                                      } else {
-                                         format!("<{}__{lower} as {vs}::ArmRef>::arm_ref(self.as_bytes())\n\
+                                         format!("<{}<{vs}::{st}> as {vs}::ArmRef>::arm_ref(self.as_bytes())\n\
                                                       .map({en}Ref::{}).ok_or({t_tag})",
                                                  a.ty.trim(), a.name)
                                      }))
                     .collect();
                 let ref_args = format!("<'_, {vs}::{st}>");
                 format!(
-                    "impl {s} {{\n\
+                    "impl {s_ty}<{vs}::{st}> {{\n\
                          /// The tag, whether this version knows it or not.\n\
                          #[allow(dead_code)]\n\
                          {vis} fn {tag}(&self) -> {tag_enum} {{\n\
@@ -677,7 +677,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                          /// than its type is an older version, its missing fields zero.\n\
                          #[allow(dead_code)]\n\
                          {vis} fn typed(&self) -> Result<{en}Ref{ref_args}, {tag_enum}> {{\n\
-                             let t: {tag_ty} = {det}::get(self);\n\
+                             let t: {tag_ty} = {det}::get(&self.repr);\n\
                              {selects}\
                              Err({t_tag})\n\
                          }}\n\
@@ -686,9 +686,9 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                          #[allow(dead_code)]\n\
                          {vis} fn arm<A>(&self) -> Option<&A>\n\
                          where\n\
-                             A: {arm_of}<{s}, Tag = {tag_ty}> + {vs}::ArmRef + ?Sized,\n\
+                             A: {arm_of}<Self, Tag = {tag_ty}> + {vs}::ArmRef + ?Sized,\n\
                          {{\n\
-                             if {det}::get(self) != A::TAG {{\n\
+                             if {det}::get(&self.repr) != A::TAG {{\n\
                                  return None;\n\
                              }}\n\
                              A::arm_ref(self.as_bytes())\n\
@@ -698,9 +698,9 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
                          #[allow(dead_code)]\n\
                          {vis} fn arm_mut<A>(&mut self) -> Option<&mut A>\n\
                          where\n\
-                             A: {arm_of}<{s}, Tag = {tag_ty}> + {vs}::ArmRef + ?Sized,\n\
+                             A: {arm_of}<Self, Tag = {tag_ty}> + {vs}::ArmRef + ?Sized,\n\
                          {{\n\
-                             if {det}::get(self) != A::TAG {{\n\
+                             if {det}::get(&self.repr) != A::TAG {{\n\
                                  return None;\n\
                              }}\n\
                              A::arm_mut(self.as_bytes_mut())\n\

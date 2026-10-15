@@ -298,7 +298,7 @@ pub(crate) use vstruct;
 /// unsized - keys - as a View, or an UnvalidatedRef(Mut), of their own bytes.
 macro_rules! vstruct_container {
     ($t:ident, $entry:ident) => { $crate::paste! {
-        impl [<$t __validated>] {
+        impl $t<$crate::util::vstructs::Validated> {
             pub fn entries(&self)
                 -> $crate::util::vstructs::ValidatedEntries<'_, $entry<$crate::util::vstructs::Validated>>
             {
@@ -306,7 +306,7 @@ macro_rules! vstruct_container {
             }
         }
 
-        impl [<$t __unvalidated>] {
+        impl $t<$crate::util::vstructs::Unvalidated> {
             pub fn entries(&self)
                 -> $crate::util::vstructs::UnvalidatedEntries<'_, $entry<$crate::util::vstructs::Unvalidated>>
             {
@@ -323,13 +323,13 @@ macro_rules! vstruct_container {
         $crate::util::vstructs::vstruct_container!(@start $t);
     } };
     ($t:ident, thin $entry:ty) => { $crate::paste! {
-        impl [<$t __validated>] {
+        impl $t<$crate::util::vstructs::Validated> {
             pub fn entries(&self) -> $crate::util::vstructs::ViewEntries<'_, $entry> {
                 $crate::util::vstructs::ViewEntries::new(self.start_bytes())
             }
         }
 
-        impl [<$t __unvalidated>] {
+        impl $t<$crate::util::vstructs::Unvalidated> {
             pub fn entries(&self) -> $crate::util::vstructs::UnvalidatedRefEntries<'_, $entry> {
                 $crate::util::vstructs::UnvalidatedRefEntries::new(self.start_bytes())
             }
@@ -342,17 +342,17 @@ macro_rules! vstruct_container {
         $crate::util::vstructs::vstruct_container!(@start $t);
     } };
     (@start $t:ident) => { $crate::paste! {
-        $crate::util::vstructs::vstruct_container!(@start_of [<$t __unvalidated>], [<$t __head>]);
-        $crate::util::vstructs::vstruct_container!(@start_of [<$t __validated>], [<$t __head>]);
+        $crate::util::vstructs::vstruct_container!(@start_of $t<$crate::util::vstructs::Unvalidated>, [<$t __head>]);
+        $crate::util::vstructs::vstruct_container!(@start_of $t<$crate::util::vstructs::Validated>, [<$t __head>]);
 
-        impl [<$t __unvalidated>] {
+        impl $t<$crate::util::vstructs::Unvalidated> {
             /// start_bytes(), mutably: for entries_mut().
             fn start_bytes_mut(&mut self) -> &mut [u8] {
                 &mut self.as_bytes_mut()[::core::mem::offset_of!([<$t __head>], start)..]
             }
         }
     } };
-    (@start_of $s:ident, $ffi:ident) => {
+    (@start_of $s:ty, $ffi:ident) => {
         impl $s {
             /// Its entries' bytes: from its start[] to its end.
             fn start_bytes(&self) -> &[u8] {
@@ -572,20 +572,22 @@ pub struct Validated;
 
 /// A type's definitions, one per state: states that differ in structure are
 /// different types, so each is its own definition - written by macro,
-/// #[unsized_vstruct] - and X<S>, an alias, picks one:
+/// #[unsized_vstruct], #[counted], #[grown], #[whole] - and X<S> is a
+/// generic struct over the one for S:
 ///
-///   pub type jset<S = Validated> = <S as State>::Of<jset__family>;
+///   pub struct jset<S: State = Validated> {
+///       _state:   PhantomData<S>,
+///       pub repr: <S as State>::Of<jset__family>,
+///   }
 ///
-/// The definitions are named - X__head, X__unvalidated, X__validated - and an
-/// impl, hand-written or generated, is always for one of those by name:
-/// X<Validated> is a projection, and an impl for a projection is E0118 if
-/// inherent, and breaks other crates' impls of the same trait (E0119) - to
-/// their coherence check it could be any type.
-///
-/// A #[grown] or #[whole] type's X<S> isn't an alias but a generic struct,
-/// #[repr(transparent)] over the definition: impls attach to X<Whole> or
-/// X<Validated> as they would to any type. (The unsized vstructs are still
-/// aliases.)
+/// #[repr(transparent)], and its last field the definition, a DST or not: a
+/// reference to one is a reference to the other, metadata and all. Not an
+/// alias - <S as State>::Of<..> is a projection, and an impl for a projection
+/// is E0118 if inherent, and breaks other crates' impls of the same trait
+/// (E0119) - so impls attach to X<Validated>, X<Whole>, as to any type, and
+/// X is what code names in every state. It derefs to the definition; the
+/// definitions, named - X__head, X__unvalidated, X__validated, X__whole -
+/// are what the macros build it from.
 ///
 /// Every definition is made from its bytes the same way, ArmRef, and none
 /// borrows: so a container in state S can name a member as <S as
@@ -600,8 +602,9 @@ pub trait Family {
     type Whole: ?Sized + ArmRef + 'static;
 }
 
-/// A state: which of a Family's definitions X<S> is.
-pub trait State {
+/// A state: which of a Family's definitions X<S> is. 'static, as each
+/// definition is: X<S> holds only the state's name.
+pub trait State: 'static {
     type Of<F: Family>: ?Sized + ArmRef + 'static;
 }
 
@@ -623,11 +626,12 @@ impl State for Whole {
 }
 
 /// The head of a #[counted] family - a header, and an array it counts in
-/// elements: its Unvalidated definition, for what holds a value's bytes -
-/// an ioctl's buffer - to hand the value out as, the count checked against
-/// them.
+/// elements: the family's type in state S, X<S>, by its head - for what
+/// holds a value's bytes to hand it out as: an ioctl's buffer, Unvalidated,
+/// the count checked against them; a tagged union whose arm it is, in the
+/// union's state.
 pub trait CountedHead: FlexArray + Plain {
-    type Unvalidated: ?Sized + Unsized<Head = Self>;
+    type Of<S: State>: ?Sized;
 }
 
 /// Unsized type T's head, by T's name: for an unsized vstruct or a

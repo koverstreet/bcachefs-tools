@@ -34,7 +34,7 @@ const BSET_MAGIC: u64 = 0x90135c78b99e07f5;
 
 /// What walks its sections - C's walk, which trusts their counts: a
 /// validated superblock's.
-impl c::bch_sb__validated {
+impl c::bch_sb {
     pub fn field<F: SbField + ?Sized>(&self) -> Option<&F> {
         sb_field_get::<F>(self)
     }
