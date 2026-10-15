@@ -770,6 +770,21 @@ static void bch2_rbio_retry(struct work_struct *work)
 			rbio->bio.bi_end_io	= rbio->end_io;
 		}
 
+		/*
+		 * A promote must not be started from here: bch2_rbio_error()
+		 * sets ->ret before punting, so a promote with ->ret == 0 came
+		 * from the EC reconstruct punt in __bch2_read_extent(), which
+		 * runs before anything was read into the bounce buffer.
+		 * bch2_rbio_free() would then write that unfilled buffer as
+		 * the cached copy, under the extent's checksum - zeroes with
+		 * init_on_alloc, stale page contents without - and every
+		 * later read of the extent would pick it, fail the checksum
+		 * and reconstruct again. The retry reads without
+		 * BCH_READ_may_promote, so there's nothing to promote: drop it.
+		 */
+		if (rbio->promote && !rbio->ret)
+			rbio->ret = -BCH_ERR_data_read_retry;
+
 		rbio = bch2_rbio_free(rbio);
 
 		flags |= BCH_READ_in_retry;
