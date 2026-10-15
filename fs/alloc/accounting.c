@@ -11,6 +11,7 @@
 #include "btree/journal_overlay.h"
 #include "btree/update.h"
 #include "btree/write_buffer.h"
+#include "fs/inode.h"
 
 #include "data/compress.h"
 
@@ -709,6 +710,72 @@ int bch2_gc_accounting_start(struct bch_fs *c)
 	}
 
 	acc->gc_running = !ret;
+	return ret;
+}
+
+static int accounting_inum_live(struct btree_trans *trans, u64 inum, bool *live)
+{
+	struct bkey_s_c k;
+	int ret;
+
+	*live = false;
+
+	for_each_btree_key_max_norestart(trans, iter, BTREE_ID_inodes,
+					 SPOS(0, inum, 0), SPOS(0, inum, U32_MAX),
+					 BTREE_ITER_all_snapshots, k, ret)
+		if (bkey_is_inode(k.k)) {
+			*live = true;
+			break;
+		}
+
+	return ret;
+}
+
+static int accounting_sweep_zero_inum_key(struct btree_trans *trans, struct btree_iter *iter,
+					  struct bkey_s_c k, u64 before_seq, u64 *swept)
+{
+	if (k.k->type != KEY_TYPE_accounting ||
+	    !bch2_accounting_key_is_zero(bkey_s_c_to_accounting(k)))
+		return 0;
+
+	u64 seq = ((u64) k.k->bversion.hi << 32) | (k.k->bversion.lo >> 32);
+	if (seq >= before_seq)
+		return 0;
+
+	struct disk_accounting_pos acc_k;
+	bpos_to_disk_accounting_pos(&acc_k, k.k->p);
+
+	bool live;
+	try(accounting_inum_live(trans, acc_k.inum.inum, &live));
+	if (live)
+		return 0;
+
+	try(bch2_btree_delete_at(trans, iter, 0));
+	(*swept)++;
+	return 0;
+}
+
+/*
+ * Only deletes keys whose last delta predates every replayable journal entry,
+ * for inode numbers no inode holds.
+ */
+int bch2_accounting_sweep_zero_inum(struct bch_fs *c)
+{
+	struct disk_accounting_pos start = { .type = BCH_DISK_ACCOUNTING_inum };
+	struct disk_accounting_pos end = { .type = BCH_DISK_ACCOUNTING_inum, .inum.inum = U64_MAX };
+	u64 before_seq = READ_ONCE(c->journal.last_seq_ondisk);
+	u64 swept = 0;
+
+	CLASS(btree_trans, trans)(c);
+
+	int ret = for_each_btree_key_max_commit(trans, iter, BTREE_ID_accounting,
+				disk_accounting_pos_to_bpos(&start),
+				disk_accounting_pos_to_bpos(&end),
+				BTREE_ITER_prefetch, k,
+				NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+		accounting_sweep_zero_inum_key(trans, &iter, k, before_seq, &swept));
+
+	bch_info(c, "swept %llu zeroed per-inode accounting keys", swept);
 	return ret;
 }
 
