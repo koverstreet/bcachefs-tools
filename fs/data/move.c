@@ -1646,10 +1646,11 @@ static int scrub_journal_repair_one(struct moving_context *ctxt,
 
 	/* Repair it from whatever replica is good */
 	struct bch_inode_opts io_opts;
-	bch2_inode_opts_get(c, &io_opts, bkey_is_btree_ptr(k.k));
+	try(bch2_bkey_get_io_opts(trans, NULL, k, &io_opts));
 
 	struct data_update_opts data_opts = {
 		.type		= BCH_DATA_UPDATE_self_heal,
+		.target		= io_opts.background_target,
 		.ptrs_io_error	= bad_devs,
 		.ptrs_kill	= bad_devs,
 	};
