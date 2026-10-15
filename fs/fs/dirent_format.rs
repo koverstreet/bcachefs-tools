@@ -19,7 +19,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::bkey_fsck_err_on;
-use crate::btree::bkey::{BkeyIDirent, BkeySC};
+use crate::btree::bkey::BkeySC;
 use crate::btree::bkey_methods::{self, SetError};
 use crate::btree::iter::TransBkey;
 use crate::c;
@@ -209,7 +209,7 @@ impl<'k> RawNames<'k> {
     /// @k, a dirent at least min_val_size long, as bkey validate and to_text
     /// check before calling the type's.
     pub fn new(k: BkeySC<'k>) -> Self {
-        let d = k.arm::<BkeyIDirent>().expect("a dirent").v();
+        let d = k.arm::<c::bch_dirent>().expect("a dirent").v();
         let v = k.val_bytes();
         let casefold = d.d_casefold() != 0;
 
@@ -270,7 +270,7 @@ pub struct Dirent<'k> {
 impl<'k> Dirent<'k> {
     /// @k as a dirent, if it is one.
     pub fn new(k: BkeySC<'k>) -> Option<Self> {
-        let v = k.arm::<BkeyIDirent>().map(|k| k.v())?;
+        let v = k.arm::<c::bch_dirent>().map(|k| k.v())?;
         let names = RawNames::new(k).names()
             .expect("dirent names within the value, as validate checked");
         Some(Dirent { k, v, names })
@@ -298,7 +298,7 @@ impl<'k> Dirent<'k> {
 /// @k, a dirent, as text: as bch2_dirent_to_text(). @k may not have passed
 /// validate - a name that overruns the value is said to, not printed.
 pub fn to_text(out: &mut Printbuf, k: BkeySC<'_>) {
-    let d = k.arm::<BkeyIDirent>().expect("a dirent").v();
+    let d = k.arm::<c::bch_dirent>().expect("a dirent").v();
     let raw = RawNames::new(k);
 
     let Some(name) = raw.name() else {
@@ -356,7 +356,7 @@ pub fn bch2_dirent_to_text(
 /// Only new keys are held to BCH_NAME_MAX: it used to be bigger, and older
 /// keys can have longer names.
 pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<Dirent<'k>, BchError> {
-    let d = v.k.arm::<BkeyIDirent>().expect("a dirent").v();
+    let d = v.k.arm::<c::bch_dirent>().expect("a dirent").v();
     let raw = RawNames::new(v.k);
 
     bkey_fsck_err_on!(v, raw.name_len == 0, id::dirent_empty_name,
@@ -446,7 +446,7 @@ pub fn set_field<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, field: &'p str, val: &'
     }
 
     let v = bkey_methods::parse_val(k.k().type_, field, val)?;
-    let d = k.k_i_mut().arm_mut::<BkeyIDirent>().expect("a dirent").v_mut();
+    let d = k.k_i_mut().arm_mut::<c::bch_dirent>().expect("a dirent").v_mut();
 
     match field {
         "d_type" => {

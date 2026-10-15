@@ -19,7 +19,7 @@
 //! dirent commits; if the walker refetches partway through a directory, they're
 //! recounted from the btree (recalculate_sums).
 
-use crate::btree::bkey::{pos, spos, BkeyIDirent, BkeySC, BkeyISubvolume, POS_MIN};
+use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
     is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
     UpdateTriggerFlags,
@@ -143,7 +143,7 @@ fn find_snapshot_subvol(t: &TransAttempt<'_, '_>, snapshot: u32) -> Result<Optio
     let mut iter = BtreeIter::new(t, c::btree_id::subvolumes, POS_MIN, BtreeIterFlags::empty());
 
     iter.for_each_norestart(t, |_, k| Ok(
-        match k.arm::<BkeyISubvolume>().map(|k| k.v()) {
+        match k.arm::<c::bch_subvolume>().map(|k| k.v()) {
             Some(s) if snapshot::is_ancestor(t, s.snapshot.get(), snapshot) =>
                 ControlFlow::Break(Some(k.k.p.offset as u32)),
             _ => ControlFlow::Continue(()),
@@ -209,7 +209,7 @@ fn check_dirent_parent_subvol<'t>(
     // The dirent is rewritten at its own position, which may be an interior
     // snapshot node - dirents in old snapshots need this repair too:
     let mut n = t.bkey_reassemble(k)?;
-    n.k_i_mut().arm_mut::<BkeyIDirent>().expect("a dirent").v_mut().set_parent_subvol(new_parent);
+    n.k_i_mut().arm_mut::<c::bch_dirent>().expect("a dirent").v_mut().set_parent_subvol(new_parent);
     t.update(iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
     // The fs_path_parent check next repairs the subvolume to agree with the dirent:
@@ -262,8 +262,8 @@ fn check_dirent_to_subvol<'t>(
                      s.to_text(fs))? {
             // grown to a whole subvolume: one from before fs_path_parent is
             // shorter than the field
-            let mut n = t.bkey_make_mut_noupdate_typed::<BkeyISubvolume>(s)?;
-            n.k_i_mut().whole_mut::<BkeyISubvolume>().expect("grown to a whole subvolume").v
+            let mut n = t.bkey_make_mut_noupdate_typed::<c::bch_subvolume>(s)?;
+            n.k_i_mut().whole_mut::<c::bch_subvolume>().expect("grown to a whole subvolume").v
                 .fs_path_parent = parent.into();
             t.update(&subvol_iter, &n, UpdateTriggerFlags::empty())?;
         }

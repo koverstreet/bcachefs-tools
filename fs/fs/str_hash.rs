@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::bkey::{pos, spos, BkeyI, BkeyIDirent, BkeySC, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, SPOS_MAX};
 use crate::btree::iter::{
     polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransBkey,
     UpdateTriggerFlags,
@@ -450,7 +450,7 @@ fn needs_check<T: HashTable>(hash_info: &c::bch_hash_info, k: BkeySC<'_>) -> boo
     if T::hash_bkey(hash_info, k) != k.k.p.offset {
         return true;
     }
-    k.arm::<BkeyIDirent>().map(|k| k.v())
+    k.arm::<c::bch_dirent>().map(|k| k.v())
         .is_some_and(|d| (d.d_casefold() != 0) == hash_info.cf_encoding.is_null())
 }
 

@@ -27,7 +27,7 @@
 //! written by every repair, so one repair can't lose another's.
 
 use crate::accounting;
-use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyISnapshot, BkeyISnapshotTree, BkeyISubvolume, POS_MAX, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
     commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransBkey,
@@ -66,7 +66,7 @@ fn get_mut_node<'a, 't>(t: &TransAttempt<'a, 't>, id: u32) -> Result<TransBkey<'
 }
 
 fn snapshot_mut<'k>(k: &'k mut TransBkey<'_, '_>) -> &'k mut c::bch_snapshot {
-    &mut k.k_i_mut().whole_mut::<BkeyISnapshot>().expect("a snapshot key").v
+    &mut k.k_i_mut().whole_mut::<c::bch_snapshot>().expect("a snapshot key").v
 }
 
 /// The id - offset - of the first key in @btree @pred accepts: for the
@@ -122,7 +122,7 @@ fn tree_master_subvol(t: &TransAttempt<'_, '_>, root: u32) -> Result<Option<u32>
                                      size_of::<BkeyI<c::bch_subvolume>>()).found()? else {
         return Ok(None);
     };
-    u.k_i_mut().whole_mut::<BkeyISubvolume>().expect("a subvolume key").v.set_snap(false);
+    u.k_i_mut().whole_mut::<c::bch_subvolume>().expect("a subvolume key").v.set_snap(false);
     Ok(Some(oldest))
 }
 
@@ -136,7 +136,7 @@ fn check_snapshot_tree<'t>(
     let trans = t.trans();
     let fs = trans.fs();
 
-    let Some(st) = k.arm::<BkeyISnapshotTree>().map(|k| k.v()) else { return Ok(()) };
+    let Some(st) = k.arm::<c::bch_snapshot_tree>().map(|k| k.v()) else { return Ok(()) };
     let root_id = st.root_snapshot.get();
 
     let root = match snapshot::lookup_key(trans, root_id) {
@@ -187,8 +187,8 @@ fn check_snapshot_tree<'t>(
 
     let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty(),
                                 c::bch_bkey_type::KEY_TYPE_snapshot_tree,
-                                size_of::<c::bkey_i_snapshot_tree>())?;
-    u.k_i_mut().arm_mut::<BkeyISnapshotTree>().expect("a snapshot tree key").v_mut().master_subvol = subvol.into();
+                                size_of::<c::bch_snapshot_tree>())?;
+    u.k_i_mut().arm_mut::<c::bch_snapshot_tree>().expect("a snapshot tree key").v_mut().master_subvol = subvol.into();
     Ok(())
 }
 
@@ -205,7 +205,7 @@ crate::recovery_pass!(bch2_check_snapshot_trees => check_snapshot_trees);
 /* check_snapshots: */
 
 /// The node being checked.
-impl CowKey<'_, '_, '_, '_, c::bkey_i_snapshot> {
+impl CowKey<'_, '_, '_, '_, c::bch_snapshot> {
     fn id(&self) -> u32 {
         self.pos().offset as u32
     }
@@ -239,7 +239,7 @@ fn referenced(trans: &BtreeTrans<'_>, s: &c::bch_snapshot, id: u32) -> Result<bo
 /// a state left stale by a legacy flags-only tombstone.
 fn check_state<'a, 't>(
     t: &TransAttempt<'a, 't>,
-    n: &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
+    n: &mut CowKey<'_, '_, 'a, 't, c::bch_snapshot>,
 ) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
@@ -323,7 +323,7 @@ fn check_state<'a, 't>(
 /// no_keys is only ever marked, so setting it live is the whole repair.
 fn check_has_data<'a, 't>(
     t: &TransAttempt<'a, 't>,
-    n: &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
+    n: &mut CowKey<'_, '_, 'a, 't, c::bch_snapshot>,
 ) -> Result<(), BchError> {
     let fs = t.trans().fs();
     let state = n.v().state_field();
@@ -356,7 +356,7 @@ fn check_has_data<'a, 't>(
 /// subvolume. True if the node is a settled tombstone: no further checking.
 fn check_deleted<'a, 't>(
     t: &TransAttempt<'a, 't>,
-    n: &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
+    n: &mut CowKey<'_, '_, 'a, 't, c::bch_snapshot>,
 ) -> Result<bool, BchError> {
     let trans = t.trans();
     let fs = trans.fs();
@@ -601,7 +601,7 @@ fn resurrect_child(t: &TransAttempt<'_, '_>, parent_id: u32, id: u32) -> Result<
         return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_snapshot_edge_to_missing_node));
     };
 
-    let mut n = t.bkey_alloc_typed::<c::bkey_i_snapshot>()?;
+    let mut n = t.bkey_alloc_typed::<c::bch_snapshot>()?;
     n.k_mut().p = pos(0, id as u64);
 
     let v = snapshot_mut(&mut n);
@@ -632,7 +632,7 @@ struct EdgeNodes<'n, 'f> {
 impl<'n, 'f> EdgeNodes<'n, 'f> {
     fn new(
         fs:       &'f Fs,
-        node:     &'n CowKey<'_, '_, '_, '_, c::bkey_i_snapshot>,
+        node:     &'n CowKey<'_, '_, '_, '_, c::bch_snapshot>,
         target:   Option<&'n BkeyI<c::bch_snapshot>>,
         claimant: Option<&'n BkeyI<c::bch_snapshot>>,
     ) -> Self {
@@ -695,7 +695,7 @@ enum EdgeRepair {
 /// pointer names: a repair, if it needs one and fsck says to make it.
 fn edge_repair(
     t:        &TransAttempt<'_, '_>,
-    n:        &CowKey<'_, '_, '_, '_, c::bkey_i_snapshot>,
+    n:        &CowKey<'_, '_, '_, '_, c::bch_snapshot>,
     role:     Role,
     other_id: u32,
 ) -> Result<Option<EdgeRepair>, BchError> {
@@ -815,7 +815,7 @@ fn edge_repair(
 /// which its pointer names.
 fn check_edge<'a, 't>(
     t:        &TransAttempt<'a, 't>,
-    n:        &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
+    n:        &mut CowKey<'_, '_, 'a, 't, c::bch_snapshot>,
     role:     Role,
     other_id: u32,
 ) -> Result<(), BchError> {
@@ -845,7 +845,7 @@ fn tree_ptr_good(trans: &BtreeTrans<'_>, id: u32, tree: u32) -> Result<bool, Bch
 /// creating a tree if there isn't one for it - and point @n at that.
 fn tree_ptr_repair<'a, 't>(
     t: &TransAttempt<'a, 't>,
-    n: &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
+    n: &mut CowKey<'_, '_, 'a, 't, c::bch_snapshot>,
 ) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
@@ -861,7 +861,7 @@ fn tree_ptr_repair<'a, 't>(
     let tree = snapshot::tree_lookup(trans, tree_id).found()?;
     if tree.is_none_or(|st| st.root_snapshot.get() != root_id) {
         let mut new = snapshot::tree_create(t)?;
-        let v = new.k_i_mut().arm_mut::<BkeyISnapshotTree>().expect("a snapshot tree key").v_mut();
+        let v = new.k_i_mut().arm_mut::<c::bch_snapshot_tree>().expect("a snapshot tree key").v_mut();
         v.master_subvol = fs.snapshots.oldest_subvol(root_id).unwrap_or(0).into();
         v.root_snapshot = root_id.into();
         tree_id = new.k().p.offset as u32;
@@ -880,7 +880,7 @@ fn tree_ptr_repair<'a, 't>(
 /// Depth is derived from the parent - and the parent was visited first.
 fn check_depth<'a, 't>(
     t: &TransAttempt<'a, 't>,
-    n: &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
+    n: &mut CowKey<'_, '_, 'a, 't, c::bch_snapshot>,
 ) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
@@ -906,7 +906,7 @@ fn check_depth<'a, 't>(
 /// Every skiplist entry is an ancestor - none, for a root.
 fn check_skiplists<'a, 't>(
     t: &TransAttempt<'a, 't>,
-    n: &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
+    n: &mut CowKey<'_, '_, 'a, 't, c::bch_snapshot>,
 ) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
@@ -945,7 +945,7 @@ fn check_skiplists<'a, 't>(
 /// The subvolume backref, against the subvolume it names.
 fn check_to_subvol<'a, 't>(
     t: &TransAttempt<'a, 't>,
-    n: &mut CowKey<'_, '_, 'a, 't, c::bkey_i_snapshot>,
+    n: &mut CowKey<'_, '_, 'a, 't, c::bch_snapshot>,
 ) -> Result<(), BchError> {
     let trans = t.trans();
     let fs = trans.fs();
@@ -1069,7 +1069,7 @@ fn check_snapshot<'a, 't>(
     let trans = t.trans();
     let fs = trans.fs();
 
-    let Some(mut n) = CowKey::<c::bkey_i_snapshot>::new(iter, k) else { return Ok(()) };
+    let Some(mut n) = CowKey::<c::bch_snapshot>::new(iter, k) else { return Ok(()) };
 
     check_state(t, &mut n)?;
     check_has_data(t, &mut n)?;
@@ -1215,20 +1215,20 @@ fn recreate_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
     let fs = trans.fs();
 
     let tree_id = find_key(t, c::btree_id::snapshot_trees, |k| {
-        k.arm::<BkeyISnapshotTree>().map(|k| k.v()).is_some_and(|st| st.root_snapshot.get() == id)
+        k.arm::<c::bch_snapshot_tree>().map(|k| k.v()).is_some_and(|st| st.root_snapshot.get() == id)
     })?;
 
     let tree_id = match tree_id {
         Some(tree_id) => tree_id,
         None => {
             let mut tree = snapshot::tree_create(t)?;
-            tree.k_i_mut().arm_mut::<BkeyISnapshotTree>().expect("a snapshot tree key").v_mut().root_snapshot =
+            tree.k_i_mut().arm_mut::<c::bch_snapshot_tree>().expect("a snapshot tree key").v_mut().root_snapshot =
                 id.into();
             tree.k().p.offset as u32
         }
     };
 
-    let mut n = t.bkey_alloc_typed::<c::bkey_i_snapshot>()?;
+    let mut n = t.bkey_alloc_typed::<c::bch_snapshot>()?;
     n.k_mut().p = pos(0, id as u64);
 
     let v = snapshot_mut(&mut n);

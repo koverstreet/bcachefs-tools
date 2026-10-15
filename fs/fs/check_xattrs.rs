@@ -15,7 +15,7 @@
 //! the repair commits the walker refetches (see InodeWalker).
 
 use crate::acl::AclType;
-use crate::btree::bkey::{pos, BkeySC, BkeyIXattr};
+use crate::btree::bkey::{pos, BkeySC};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
 use crate::check::{InodeWalker, SnapshotsSeen};
@@ -80,7 +80,7 @@ fn check_xattr<'t>(
         st.hash_info = str_hash::hash_info_init(fs, w.inode)?;
     }
 
-    if let Some(acl) = k.arm::<BkeyIXattr>().and_then(|k| AclType::from_xattr_type(k.v().ty())) {
+    if let Some(acl) = k.arm::<c::bch_xattr>().and_then(|k| AclType::from_xattr_type(k.v().ty())) {
         check_acl_flag(t, st, k, acl)?;
     }
 

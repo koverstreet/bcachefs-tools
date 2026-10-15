@@ -1,6 +1,5 @@
 use anyhow::anyhow;
 use bch_bindgen::c;
-use bcachefs_kernel::btree::bkey::BkeyIAccounting;
 use bcachefs_kernel::metadata_version;
 use bcachefs_kernel::util::vstructs::UnvalidatedRefEntries;
 
@@ -102,7 +101,7 @@ fn parse_accounting_entries(data: &[u8]) -> anyhow::Result<Vec<AccountingEntry>>
     UnvalidatedRefEntries::<c::bkey_i>::new(data)
         .map(|k| {
             let k = k.map_err(|e| anyhow!("QUERY_ACCOUNTING reply: {e}"))?.key();
-            let a = k.arm::<BkeyIAccounting>().ok_or_else(|| {
+            let a = k.arm::<c::bch_accounting>().ok_or_else(|| {
                 anyhow!("QUERY_ACCOUNTING reply: a key of type {} at {}", k.k.type_, k.k.p)
             })?;
 

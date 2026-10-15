@@ -2,7 +2,7 @@
 
 //! Snapshots: queries of the in-memory table, and lookups in the btrees.
 
-use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, BkeyISnapshot, BkeyISnapshotTree, SizedBkey};
+use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, SizedBkey};
 use crate::util::vstructs::{Validated, Whole};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey};
 use crate::c;
@@ -254,7 +254,7 @@ pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
 
 pub fn tree_lookup(trans: &BtreeTrans<'_>, id: u32) -> Result<c::bch_snapshot_tree, BchError> {
     trans.attempt_in_progress()
-        .bkey_get_val::<BkeyISnapshotTree>(c::btree_id::snapshot_trees, pos(0, id as u64),
+        .bkey_get_val::<c::bch_snapshot_tree>(c::btree_id::snapshot_trees, pos(0, id as u64),
                                            BtreeIterFlags::empty())
         .map_err(|e| if e.matches(c::ENOENT) {
             trans.fs().err(bch_errcode::BCH_ERR_ENOENT_snapshot_tree)
@@ -290,20 +290,20 @@ pub fn check_key_has_snapshot(
 /// ENOENT if there's none.
 pub fn lookup(trans: &BtreeTrans<'_>, id: u32) -> Result<c::bch_snapshot, BchError> {
     trans.attempt_in_progress()
-        .bkey_get_val::<BkeyISnapshot>(c::btree_id::snapshots, pos(0, id as u64),
+        .bkey_get_val::<c::bch_snapshot>(c::btree_id::snapshots, pos(0, id as u64),
                                        BtreeIterFlags::empty())
 }
 
 /// ENOENT if there's none.
 pub fn lookup_key(trans: &BtreeTrans<'_>, id: u32) -> Result<BkeyI<c::bch_snapshot>, BchError> {
     trans.attempt_in_progress()
-        .bkey_get_key::<BkeyISnapshot>(c::btree_id::snapshots, pos(0, id as u64),
+        .bkey_get_key::<c::bch_snapshot>(c::btree_id::snapshots, pos(0, id as u64),
                                        BtreeIterFlags::empty())
 }
 
 /// Zero padded past the fields an older key lacks.
 pub fn val(k: BkeySC<'_>) -> Option<c::bch_snapshot> {
-    BkeyISnapshot::val_copy_pad(k)
+    c::bch_snapshot::val_copy_pad(k)
 }
 
 /// Mark node @id will_delete, its subvolume being deleted, if it's live.
