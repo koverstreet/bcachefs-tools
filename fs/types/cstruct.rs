@@ -1451,8 +1451,14 @@ fn parse_bitmask(body: &[Tok], cfg: Option<Cfg>) -> Result<CBitmask, String> {
         // fields, which each state's definition derefs to
         [Tok::Ident(s), Tok::Ident(f), Tok::Punct('<'), Tok::Ident(n), Tok::Punct('>')]
             if s == "struct" && f == "Head" => (format!("{n}__head"), format!("struct {n}")),
-        _ => return Err(format!("c_bitmask! {macro_name}: expected a struct type - struct foo, or \
-                                 struct Head<foo> for a family's")),
+        // a family's type in a state: a #[grown] type's value in place, for
+        // its floor's fields - every view of it reaches X<Validated>
+        [Tok::Ident(s), Tok::Ident(n), Tok::Punct('<'), Tok::Ident(st), Tok::Punct('>')]
+            if s == "struct" && matches!(st.as_str(), "Whole" | "Validated" | "Unvalidated") =>
+            (format!("{n}<crate::util::vstructs::{st}>"), format!("struct {n}")),
+        _ => return Err(format!("c_bitmask! {macro_name}: expected a struct type - struct foo, \
+                                 struct Head<foo> for a family's, or struct foo<STATE> for a \
+                                 family's type in a state")),
     };
 
     let mut i = args_end;
