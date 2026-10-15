@@ -365,6 +365,31 @@ impl<'a, 't> TransAttempt<'a, 't> {
             trans.accounting.u64s != 0
     }
 
+    /// Drop everything queued for the next commit: as C's
+    /// bch2_trans_reset_updates(), which every commit and begin runs.
+    fn reset_updates(&self) {
+        let raw = self.raw();
+        unsafe {
+            // bch2_path_put() changes the transaction: no reference to it
+            // is held across the calls
+            for i in 0..(*raw).nr_updates as usize {
+                c::bch2_path_put(raw, (*(*raw).updates.add(i)).path, true);
+            }
+
+            let trans = &mut *raw;
+            trans.nr_updates               = 0;
+            trans.journal_entries.u64s     = 0;
+            trans.journal_entries.size     = 0;
+            trans.accounting.u64s          = 0;
+            trans.accounting.size          = 0;
+            trans.hooks                    = core::ptr::null_mut();
+            trans.extra_disk_res           = 0;
+            trans.extra_disk_res_replicas  = 0;
+            trans.extra_journal_u64s       = 0;
+            trans.set_has_interior_updates(false);
+        }
+    }
+
     // ── The attempt's operations ─────────────────────────────────────────
     //
     // All take the attempt shared, and a restart is an error like any other:
@@ -1286,7 +1311,18 @@ where
 {
     let flags = flags.into();
     lockrestart_do(trans, |t| {
-        f(t)?;
+        // If @f fails, the commit - which resets the updates whether it
+        // succeeds or fails - never runs. An error that isn't a restart
+        // abandons the attempt: drop what @f queued, as the commit would
+        // have, so the next begin doesn't take them for updates someone
+        // forgot to commit. A restart's are dropped by the restart. As C's
+        // __commit_do().
+        if let Err(e) = f(t) {
+            if !is_restart(&e) {
+                t.reset_updates();
+            }
+            return Err(e);
+        }
         t.commit(disk_res, flags)
     })
 }
