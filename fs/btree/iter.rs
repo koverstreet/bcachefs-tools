@@ -254,16 +254,18 @@ pub struct TransAttempt<'a, 't> {
 }
 
 /// What an iterator is made from: the transaction, or an attempt at it. An
-/// iterator belongs to the transaction, and outlives any one attempt.
+/// iterator belongs to the transaction, and outlives any one attempt: @'t is
+/// the borrow of the transaction - the attempt's, for an attempt - that it's
+/// bound by, so it can't outlive the transaction its C iterator points into.
 pub trait TransRef<'t> {
     fn trans_raw(&self) -> *mut c::btree_trans;
 }
 
-impl<'t> TransRef<'t> for &BtreeTrans<'t> {
+impl<'i, 'f> TransRef<'i> for &'i BtreeTrans<'f> {
     fn trans_raw(&self) -> *mut c::btree_trans { self.raw }
 }
 
-impl<'t> TransRef<'t> for &TransAttempt<'_, 't> {
+impl<'a, 't> TransRef<'a> for &TransAttempt<'a, 't> {
     fn trans_raw(&self) -> *mut c::btree_trans { self.trans.raw }
 }
 
@@ -825,7 +827,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// queued as its update: edits to it go in with the commit.
     pub fn bkey_make_mut<V: MutBkey + ?Sized>(
         &self,
-        iter:  &BtreeIter<'t>,
+        iter:  &BtreeIter<'a>,
         k:     BkeySC<'_, V>,
         flags: UpdateTriggerFlags,
     ) -> Result<TransBkey<'a, 't, V::Mut>, BchError> {
@@ -837,7 +839,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// Overwrite @old, the extent at @iter, with @new where they overlap.
     pub fn update_extent_overwrite(
         &self,
-        iter:  &BtreeIter<'t>,
+        iter:  &BtreeIter<'a>,
         flags: UpdateTriggerFlags,
         old:   BkeySC<'_>,
         new:   BkeySC<'_>,
@@ -865,7 +867,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// reading it - where it went, say.
     pub fn update<V: ?Sized>(
         &self,
-        iter:  &BtreeIter<'t>,
+        iter:  &BtreeIter<'a>,
         key:   &TransBkey<'_, 't, V>,
         flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
@@ -922,7 +924,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// @start and @end, after the last key: ENOSPC_btree_slot if there's none.
     pub fn bkey_get_empty_slot(
         &self,
-        iter:  &mut BtreeIter<'t>,
+        iter:  &mut BtreeIter<'a>,
         btree: c::btree_id,
         start: bpos,
         end:   bpos,
@@ -997,7 +999,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     pub fn delete_at(
         &self,
-        iter:  &BtreeIter<'t>,
+        iter:  &BtreeIter<'a>,
         flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
         let ret = unsafe {
@@ -1012,7 +1014,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     pub(crate) fn btree_node_update_key(
         &self,
-        iter:          &mut BtreeIter<'t>,
+        iter:          &mut BtreeIter<'a>,
         node:          BtreeNodeRef,
         key:           TransBkey<'_, 't>,
         flags:         impl Into<CommitOpts>,
@@ -1070,7 +1072,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.result(ret)
     }
 
-    pub fn iter_traverse(&self, iter: &mut BtreeIter<'t>) -> Result<(), BchError> {
+    pub fn iter_traverse(&self, iter: &mut BtreeIter<'a>) -> Result<(), BchError> {
         let ret = unsafe { c::bch2_btree_iter_traverse(iter.raw_mut()) };
         self.result(ret)
     }

@@ -272,9 +272,9 @@ pub fn get_trans(
 
 /// Xattr @name of @ty on inode @inode (@inum), @iter pointed at it: ENOENT
 /// if there's no such xattr.
-pub fn lookup<'i, 't>(
-    t:     &'i TransAttempt<'_, 't>,
-    iter:  &'i mut BtreeIter<'t>,
+pub fn lookup<'i, 'a>(
+    t:     &'i TransAttempt<'a, '_>,
+    iter:  &'i mut BtreeIter<'a>,
     inode: &c::bch_inode_unpacked,
     inum:  c::subvol_inum,
     ty:    c::bch_xattr_type,

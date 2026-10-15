@@ -759,9 +759,9 @@ pub fn rename_opt_changes_finish(
 /// The dirent naming @inode, looked up through @iter: as
 /// bch2_inode_get_dirent(). @snapshot is where to look, and on return where
 /// the lookup looked - a subvolume root is named in its parent subvolume.
-pub fn inode_get_dirent<'i, 't>(
-    t:        &'i TransAttempt<'_, 't>,
-    iter:     &'i mut BtreeIter<'t>,
+pub fn inode_get_dirent<'i, 'a>(
+    t:        &'i TransAttempt<'a, '_>,
+    iter:     &'i mut BtreeIter<'a>,
     inode:    &c::bch_inode_unpacked,
     snapshot: &mut u32,
 ) -> Result<BkeySC<'i>, BchError> {

@@ -421,9 +421,9 @@ fn lookup_target(
 /// What @name in directory @dir points at, as seen in @snapshot: as
 /// bch2_dirent_lookup_snapshot(). @iter is left at the dirent.
 #[allow(clippy::too_many_arguments)]
-pub fn lookup_snapshot<'t>(
-    t:         &TransAttempt<'_, 't>,
-    iter:      &mut BtreeIter<'t>,
+pub fn lookup_snapshot<'a>(
+    t:         &TransAttempt<'a, '_>,
+    iter:      &mut BtreeIter<'a>,
     dir:       c::subvol_inum,
     snapshot:  u32,
     hash_info: &c::bch_hash_info,
@@ -438,9 +438,9 @@ pub fn lookup_snapshot<'t>(
 
 /// The dirent @name in directory @dir, through @iter - looked up by its
 /// casefolded name, in a casefolded directory.
-pub fn lookup_key<'i, 't>(
-    t:         &'i TransAttempt<'_, 't>,
-    iter:      &'i mut BtreeIter<'t>,
+pub fn lookup_key<'i, 'a>(
+    t:         &'i TransAttempt<'a, '_>,
+    iter:      &'i mut BtreeIter<'a>,
     dir:       c::subvol_inum,
     hash_info: &c::bch_hash_info,
     name:      &OsStr,
@@ -475,9 +475,9 @@ pub unsafe extern "C" fn bch2_dirent_lookup_key(
 
 /// What @name in directory @dir points at: as bch2_dirent_lookup_trans().
 /// @iter is left at the dirent.
-pub fn lookup_trans<'t>(
-    t:         &TransAttempt<'_, 't>,
-    iter:      &mut BtreeIter<'t>,
+pub fn lookup_trans<'a>(
+    t:         &TransAttempt<'a, '_>,
+    iter:      &mut BtreeIter<'a>,
     dir:       c::subvol_inum,
     hash_info: &c::bch_hash_info,
     name:      &OsStr,

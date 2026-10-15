@@ -327,7 +327,7 @@ mod vfs {
 
         /// Inode @inode's (@inum's) ACL of @ty, @iter pointed at its xattr -
         /// None if it has none, or one with no entries.
-        fn lookup<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>,
+        fn lookup<'a>(t: &TransAttempt<'a, '_>, iter: &mut BtreeIter<'a>,
                       inode: &c::bch_inode_unpacked, inum: c::subvol_inum, ty: AclType,
                       flags: BtreeIterFlags) -> Result<Option<Self>, BchError> {
             match xattr::lookup(t, iter, inode, inum, ty.xattr_type(), OsStr::from_bytes(b""), flags) {

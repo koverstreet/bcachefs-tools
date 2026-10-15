@@ -457,9 +457,9 @@ fn peek_slot<'t>(t: &TransAttempt<'_, 't>, iter: &mut BtreeIter<'t>)
 /// Peek inode @inum as seen in @snapshot, through @iter: ENOENT_inode if it
 /// isn't there. With @warn - C passes its __func__ - an error is logged,
 /// naming it. As __bch2_inode_peek_snapshot().
-fn __peek_snapshot<'t>(
-    t:        &TransAttempt<'_, 't>,
-    iter:     &mut BtreeIter<'t>,
+fn __peek_snapshot<'a>(
+    t:        &TransAttempt<'a, '_>,
+    iter:     &mut BtreeIter<'a>,
     inum:     c::subvol_inum,
     snapshot: u32,
     flags:    BtreeIterFlags,
@@ -478,9 +478,9 @@ fn __peek_snapshot<'t>(
 
 /// As __peek_snapshot(), in @inum's subvolume's snapshot: as
 /// __bch2_inode_peek().
-fn __peek<'t>(
-    t:     &TransAttempt<'_, 't>,
-    iter:  &mut BtreeIter<'t>,
+fn __peek<'a>(
+    t:     &TransAttempt<'a, '_>,
+    iter:  &mut BtreeIter<'a>,
     inum:  c::subvol_inum,
     flags: BtreeIterFlags,
     warn:  Option<&CStr>,
@@ -495,9 +495,9 @@ fn __peek<'t>(
 
 /// Peek inode @inum through @iter - for updating it through @iter: as
 /// bch2_inode_peek_nowarn(). ENOENT_inode if it isn't there.
-pub fn peek<'t>(
-    t:     &TransAttempt<'_, 't>,
-    iter:  &mut BtreeIter<'t>,
+pub fn peek<'a>(
+    t:     &TransAttempt<'a, '_>,
+    iter:  &mut BtreeIter<'a>,
     inum:  c::subvol_inum,
     flags: BtreeIterFlags,
 ) -> Result<c::bch_inode_unpacked, BchError> {
@@ -527,9 +527,9 @@ pub unsafe extern "C" fn __bch2_inode_peek(
 
 /// As peek(), as seen in @snapshot: as bch2_inode_peek_snapshot(), without
 /// the warning.
-pub fn peek_snapshot<'t>(
-    t:        &TransAttempt<'_, 't>,
-    iter:     &mut BtreeIter<'t>,
+pub fn peek_snapshot<'a>(
+    t:        &TransAttempt<'a, '_>,
+    iter:     &mut BtreeIter<'a>,
     inum:     c::subvol_inum,
     snapshot: u32,
     flags:    BtreeIterFlags,
@@ -1129,9 +1129,9 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
 /// visible in @snapshot; the new inode takes the higher of its generation
 /// and the cursor's. From the cursor to the end of its range, then from the
 /// start of it, once, in a new generation; ENOSPC_inode_create if it's full.
-pub fn create<'t>(
-    t:        &TransAttempt<'_, 't>,
-    iter:     &mut BtreeIter<'t>,
+pub fn create<'a>(
+    t:        &TransAttempt<'a, '_>,
+    iter:     &mut BtreeIter<'a>,
     inode:    &mut c::bch_inode_unpacked,
     snapshot: u32,
     is_32bit: bool,
@@ -1266,9 +1266,9 @@ fn set_journal_seq(k: &mut BkeyS<'_>, seq: u64) {
 /// ancestor's - through @iter, left at it; None if there's none, as
 /// bch2_inode_get_iter_snapshot_parent(). Skips non-inode keys, going on up
 /// from each.
-fn snapshot_parent<'i, 't>(
-    t:     &'i TransAttempt<'_, 't>,
-    iter:  &'i mut BtreeIter<'t>,
+fn snapshot_parent<'i, 'a>(
+    t:     &'i TransAttempt<'a, '_>,
+    iter:  &'i mut BtreeIter<'a>,
     mut p: c::bpos,
 ) -> Result<Option<BkeySC<'i>>, BchError> {
     loop {

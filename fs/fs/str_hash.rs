@@ -127,9 +127,9 @@ fn is_whiteout(k: BkeySC<'_>) -> bool {
 
 /// In inode @inum as seen in @snapshot: the key found, through @iter, or
 /// ENOENT_str_hash_lookup.
-pub fn lookup_in_snapshot<'i, 't, T: HashTable>(
-    t:         &'i TransAttempt<'_, 't>,
-    iter:      &'i mut BtreeIter<'t>,
+pub fn lookup_in_snapshot<'i, 'a, T: HashTable>(
+    t:         &'i TransAttempt<'a, '_>,
+    iter:      &'i mut BtreeIter<'a>,
     hash_info: &c::bch_hash_info,
     inum:      c::subvol_inum,
     key:       &T::Key<'_>,
@@ -156,9 +156,9 @@ pub fn lookup_in_snapshot<'i, 't, T: HashTable>(
 
 /// In subvolume and inode @inum: the key found, through @iter, or
 /// ENOENT_str_hash_lookup.
-pub fn lookup<'i, 't, T: HashTable>(
-    t:         &'i TransAttempt<'_, 't>,
-    iter:      &'i mut BtreeIter<'t>,
+pub fn lookup<'i, 'a, T: HashTable>(
+    t:         &'i TransAttempt<'a, '_>,
+    iter:      &'i mut BtreeIter<'a>,
     hash_info: &c::bch_hash_info,
     inum:      c::subvol_inum,
     key:       &T::Key<'_>,
@@ -171,9 +171,9 @@ pub fn lookup<'i, 't, T: HashTable>(
 /// Point @iter at the slot @key would be inserted at, in subvolume and inode
 /// @inum - the first that holds no visible key. ENOSPC_str_hash_create if the
 /// table is full.
-pub fn hole<'t, T: HashTable>(
-    t:         &TransAttempt<'_, 't>,
-    iter:      &mut BtreeIter<'t>,
+pub fn hole<'a, T: HashTable>(
+    t:         &TransAttempt<'a, '_>,
+    iter:      &mut BtreeIter<'a>,
     hash_info: &c::bch_hash_info,
     inum:      c::subvol_inum,
     key:       &T::Key<'_>,
@@ -219,9 +219,9 @@ pub fn needs_whiteout<'t, T: HashTable>(
 /// inserted; with STR_HASH_MUST_REPLACE, there must be one. None if it was
 /// inserted (queued).
 #[allow(clippy::too_many_arguments)]
-pub fn set_or_get_in_snapshot<'i, 't, T: HashTable>(
-    t:            &'i TransAttempt<'_, 't>,
-    iter:         &'i mut BtreeIter<'t>,
+pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
+    t:            &'i TransAttempt<'a, 't>,
+    iter:         &'i mut BtreeIter<'a>,
     hash_info:    &c::bch_hash_info,
     inum:         c::subvol_inum,
     snapshot:     u32,
@@ -242,7 +242,7 @@ pub fn set_or_get_in_snapshot<'i, 't, T: HashTable>(
                            peek_flags);
 
     // The first slot the key could go in, if there's no key of its name:
-    let mut slot: Option<BtreeIter<'t>> = None;
+    let mut slot: Option<BtreeIter<'a>> = None;
 
     // A key of its name, or a hole: the end of its probe sequence
     let found = iter.find_max_norestart(t, pos(inode, u64::MAX), |iter, k| Ok(
