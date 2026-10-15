@@ -106,8 +106,11 @@ bcachefs-codegen-skip-cflags := \
 # already in $(KBUILD_CPPFLAGS) and thus there's nothing to add.
 # For GCC, query the target from the cross compiler. The GCC target triple is
 # sometimes different from LLVM, but it is good enough for bindgen/libclang
-# for all supported arches.
-bcachefs-codegen-target := $(if $(CONFIG_CC_IS_CLANG),,--target=$(shell $(CC) -dumpmachine))
+# for all supported arches. Only when cross compiling: a native build's target
+# is the host's, which bindgen defaults to, and a distro GCC's own triple
+# (x86_64-redhat-linux, x86_64-pc-linux-gnu, ...) is one more thing that could
+# go wrong in the build every DKMS install does.
+bcachefs-codegen-target := $(if $(CONFIG_CC_IS_CLANG),,$(if $(CROSS_COMPILE),--target=$(shell $(CC) -dumpmachine)))
 
 bcachefs-codegen-cflags := \
 	$(LINUXINCLUDE) $(KBUILD_CPPFLAGS) \
