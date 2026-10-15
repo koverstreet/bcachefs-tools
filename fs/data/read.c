@@ -728,6 +728,97 @@ enum bch_sb_error_id bch2_data_read_sb_err(int ret)
 		: BCH_FSCK_ERR_data_read_io_err;
 }
 
+/*
+ * A cached pointer whose data failed its checksum is only a bad cache copy:
+ * drop it, or every read of the extent picks it again (reading it refreshes
+ * the bucket's LRU time, so it's never evicted while it's read).
+ *
+ * Queued from the read completion, which runs for the first attempt and for
+ * every retry alike; a retry's completion runs inside the retry's btree_trans,
+ * so the update gets a transaction of its own in a work item.
+ */
+struct drop_cached_ptr {
+	struct work_struct	work;
+	struct bch_fs		*c;
+	enum btree_id		btree;
+	struct bpos		pos;
+	struct bversion		version;
+	struct bch_extent_ptr	ptr;
+};
+
+static int __drop_cached_ptr(struct btree_trans *trans, struct drop_cached_ptr *d)
+{
+	struct bch_fs *c = trans->c;
+
+	CLASS(btree_iter, iter)(trans, d->btree, d->pos, BTREE_ITER_intent);
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
+
+	/* Rewritten since the read: the bad copy went with it */
+	if (bversion_cmp(k.k->bversion, d->version))
+		return 0;
+
+	struct bkey_i *new = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
+	struct bkey_ptrs ptrs = bch2_bkey_ptrs(bkey_i_to_s(new));
+	struct bch_extent_ptr *bad = NULL;
+
+	bkey_for_each_ptr(ptrs, ptr)
+		if (ptr->cached &&
+		    ptr->dev		== d->ptr.dev &&
+		    ptr->generation	== d->ptr.generation &&
+		    ptr->offset		== d->ptr.offset)
+			bad = ptr;
+	if (!bad)
+		return 0;
+
+	bch2_bkey_drop_ptr_noerror(c, bkey_i_to_s(new), bad);
+	return bch2_trans_update(trans, &iter, new, BTREE_UPDATE_internal_snapshot_node);
+}
+
+static void drop_cached_ptr_work(struct work_struct *work)
+{
+	struct drop_cached_ptr *d = container_of(work, struct drop_cached_ptr, work);
+	struct bch_fs *c = d->c;
+
+	{
+		CLASS(btree_trans, trans)(c);
+		CLASS(disk_reservation, res)(c);
+		int ret = commit_do(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc,
+				    __drop_cached_ptr(trans, d));
+		bch_err_fn_ratelimited(c, ret);
+	}
+
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_drop_cached_ptr);
+	kfree(d);
+}
+
+/*
+ * Best effort: without a write ref (read-only, recovery) or memory, the copy
+ * stays, and the next read that fails on it tries again.
+ */
+static void bch2_rbio_drop_cached_ptr(struct bch_read_bio *rbio)
+{
+	struct bch_fs *c = rbio->c;
+
+	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_drop_cached_ptr))
+		return;
+
+	struct drop_cached_ptr *d = kmalloc(sizeof(*d), GFP_NOWAIT|__GFP_NOWARN);
+	if (!d) {
+		enumerated_ref_put(&c->writes, BCH_WRITE_REF_drop_cached_ptr);
+		return;
+	}
+
+	*d = (struct drop_cached_ptr) {
+		.c		= c,
+		.btree		= rbio->data_btree,
+		.pos		= rbio->data_pos,
+		.version	= rbio->version,
+		.ptr		= rbio->pick.ptr,
+	};
+	INIT_WORK(&d->work, drop_cached_ptr_work);
+	queue_work(c->write_ref_wq, &d->work);
+}
+
 static void bch2_rbio_retry(struct work_struct *work)
 {
 	struct bch_read_bio *rbio =
@@ -1095,8 +1186,11 @@ static int __bch2_read_endio_work(struct bch_read_bio *rbio)
 		}
 	}
 
-	if (!csum_good)
+	if (!csum_good) {
+		if (rbio->pick.ptr.cached)
+			bch2_rbio_drop_cached_ptr(rbio);
 		return bch_err_throw(c, data_read_retry_csum_err);
+	}
 
 	if (rbio->promote) {
 		/*

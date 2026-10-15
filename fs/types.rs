@@ -508,6 +508,7 @@ c_xmacro! {
         (btree_node_scrub),
         (async_recovery_passes),
         (ioctl_data),
+        (drop_cached_ptr),
     }
 }
 
