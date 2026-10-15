@@ -412,7 +412,7 @@ fn own_count_family(name: &str, shape: &Shape<'_>) -> String {
         family(name, &unvalidated, &validated, &validated, &[unvalidated.clone(), validated.clone()]),
         generic_type(name,
                &Generic { default: "Validated", unsized_states: &unsized_states, arm_of: None,
-                          whole: None, ffi: Some(shape.ffi) },
+                          whole: None, ffi: Some(shape.ffi), typestate: false },
                &format!("/// {name}, in state S - Validated unless named: a reference to one\n\
                          /// reaches every byte of it and none past. C's struct {name} is\n\
                          /// Head<{name}>.\n")))
@@ -686,12 +686,16 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
             "{all_def}{}{}{}",
             family(&name, &all, &all, &ffi, &[]),
             whole_arm_ref(&ffi, derives.iter().any(|d| d == "Plain")),
-            generic_type(&name, &sized_generic(&all, &ffi, &derives, &states),
+            generic_type(&name, &sized_generic(&all, &ffi, &derives, &states, false),
                          &format!("/// {name}, in state S - Whole unless named: the struct, every field a field.\n\
                                    /// Validated or Unvalidated, a value in place - all its fields, then\n\
                                    /// the bytes past them a version since wrote, at the value's length.\n")))));
         return Ok(out);
     };
+    if !derives.iter().any(|d| d == "Plain") {
+        return Err(format!("{name}: #[grown] without Plain - the struct is a value in place, every \
+                            byte of it read, so it can't have padding"));
+    }
     let (floor, later) = def.fields.split_at(at);
 
     let fl = format!("{name}__floor");
@@ -760,8 +764,32 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
          {dst}\
          {family}\
          {whole}\
-         {generic}",
+         {generic}\
+         {in_place}",
         plain = plain(&fl, &floor_tys),
+        // all of it is a value in place, every field there: X's methods, on
+        // X<Validated>, are the struct's too
+        in_place = format!(
+            "impl ::core::ops::Deref for {ffi} {{\n\
+                 type Target = {name}<{VS}::Validated>;\n\
+                 #[inline]\n\
+                 fn deref(&self) -> &Self::Target {{\n\
+                     // SAFETY: all of its bytes - Plain, each a field's - which a value in\n\
+                     // place is as long as\n\
+                     unsafe {{ &*<Self::Target as {VS}::Unsized>::from_raw(\n\
+                         (self as *const Self).cast(), ::core::mem::size_of::<Self>()) }}\n\
+                 }}\n\
+             }}\n\
+             \n\
+             impl ::core::ops::DerefMut for {ffi} {{\n\
+                 #[inline]\n\
+                 fn deref_mut(&mut self) -> &mut Self::Target {{\n\
+                     // SAFETY: as deref()'s\n\
+                     unsafe {{ &mut *<Self::Target as {VS}::Unsized>::from_raw_mut(\n\
+                         (self as *mut Self).cast(), ::core::mem::size_of::<Self>()) }}\n\
+                 }}\n\
+             }}\n\
+             \n"),
         dst = dst(&ty,
                   &format!("/// A {name} as it was written, by any version since it had its floor:\n\
                             /// the floor's fields, those that hold a count private, then the\n\
@@ -774,7 +802,7 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
         // the cast checks the floor: an unvalidated one is as good
         family = family(&name, &ty, &ty, &ffi, &[]),
         whole = whole_arm_ref(&ffi, derives.iter().any(|d| d == "Plain")),
-        generic = generic_type(&name, &sized_generic(&ty, &ffi, &derives, &states),
+        generic = generic_type(&name, &sized_generic(&ty, &ffi, &derives, &states, true),
                                &format!("/// {name}, in state S - Whole unless named: the struct, every field a field.\n\
                                          /// Validated or Unvalidated, a value in place, from any version since\n\
                                          /// it had its floor: the floor's fields, then the bytes there are; a\n\
@@ -783,11 +811,12 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
 }
 
 /// A sized type's X<S>: Whole unless named, the struct @whole, with the value
-/// traits @derives names; in place, @inplace, an arm wherever that is.
+/// traits @derives names; in place, @inplace, an arm wherever that is - and
+/// if @typestate, Unvalidated a typestate over Validated.
 fn sized_generic<'a>(inplace: &'a str, whole: &'a str, derives: &'a [String],
-                     unsized_states: &'a [(&'a str, String)]) -> Generic<'a> {
+                     unsized_states: &'a [(&'a str, String)], typestate: bool) -> Generic<'a> {
     Generic { default: "Whole", unsized_states, arm_of: Some(inplace), whole: Some((whole, derives)),
-              ffi: None }
+              ffi: None, typestate }
 }
 
 /// The traits @item derives.
@@ -864,6 +893,11 @@ struct Generic<'a> {
     /// C's struct, if X is made from C's pointer or from bytes - an unsized
     /// type, whose count is its own: from_ffi() and from_bytes() on X<S>.
     ffi: Option<&'a str>,
+    /// Whether Unvalidated is a typestate over Validated, X<Unvalidated>
+    /// dereffing to X<Validated> - where X's methods are - not to their
+    /// definition: a #[grown] type's, which is one for both, and whose length
+    /// validate checks before anything reads it.
+    typestate: bool,
 }
 
 /// @name<S>, documented @doc: a generic struct over its family's definition
@@ -883,22 +917,40 @@ fn generic_type(name: &str, g: &Generic<'_>, doc: &str) -> String {
              /// Its definition in state S - for offset_of!(), repr.field.\n\
              pub repr: <S as {VS}::State>::Of<{fam}>,\n\
          }}\n\
-         \n\
-         impl<S: {VS}::State> ::core::ops::Deref for {name}<S> {{\n\
-             type Target = <S as {VS}::State>::Of<{fam}>;\n\
+         \n");
+
+    // To its definition in S - or, a typestate, to X<Validated>
+    let deref = |params: &str, ty: &str, target: &str, get: &str, get_mut: &str| format!(
+        "impl{params} ::core::ops::Deref for {ty} {{\n\
+             type Target = {target};\n\
              #[inline]\n\
              fn deref(&self) -> &Self::Target {{\n\
-                 &self.repr\n\
+                 {get}\n\
              }}\n\
          }}\n\
          \n\
-         impl<S: {VS}::State> ::core::ops::DerefMut for {name}<S> {{\n\
+         impl{params} ::core::ops::DerefMut for {ty} {{\n\
              #[inline]\n\
              fn deref_mut(&mut self) -> &mut Self::Target {{\n\
-                 &mut self.repr\n\
+                 {get_mut}\n\
              }}\n\
          }}\n\
          \n");
+    if g.typestate {
+        for st in ["Whole", "Validated"] {
+            out.push_str(&deref("", &format!("{name}<{VS}::{st}>"),
+                                &format!("<{VS}::{st} as {VS}::State>::Of<{fam}>"),
+                                "&self.repr", "&mut self.repr"));
+        }
+        out.push_str(&deref("", &format!("{name}<{VS}::Unvalidated>"), &format!("{name}<{VS}::Validated>"),
+            "// SAFETY: #[repr(transparent)], both, over the one definition\n\
+             unsafe { &*(self as *const Self as *const Self::Target) }",
+            "// SAFETY: as deref()'s\n\
+             unsafe { &mut *(self as *mut Self as *mut Self::Target) }"));
+    } else {
+        out.push_str(&deref(&format!("<S: {VS}::State>"), &format!("{name}<S>"),
+                            &format!("<S as {VS}::State>::Of<{fam}>"), "&self.repr", "&mut self.repr"));
+    }
 
     let arm_of_def = match g.arm_of {
         Some(def) => def.to_string(),
