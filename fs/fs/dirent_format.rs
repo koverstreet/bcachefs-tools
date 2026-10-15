@@ -13,8 +13,8 @@
 //! and nothing but validate and to_text sees one that hasn't - keys read from
 //! the btree were validated reading them in, and keys being committed are
 //! validated at commit. So there are two ways to read a value: RawNames, which
-//! takes nothing on faith and is for those two alone, and Dirent, which reads
-//! a valid dirent with nothing to check.
+//! takes nothing on faith and is for those two alone, and dirent.rs's Dirent,
+//! which reads a valid dirent with nothing to check.
 
 #![allow(non_camel_case_types)]
 
@@ -256,43 +256,6 @@ impl<'k> RawNames<'k> {
     }
 }
 
-// ── A valid dirent ───────────────────────────────────────────────────────
-
-/// A valid dirent - one that has passed validate, as every key from the
-/// btree has.
-#[derive(Clone, Copy)]
-pub struct Dirent<'k> {
-    k:     BkeySC<'k>,
-    v:     &'k c::bch_dirent,
-    names: DirentName<'k>,
-}
-
-impl<'k> Dirent<'k> {
-    /// @k as a dirent, if it is one.
-    pub fn new(k: BkeySC<'k>) -> Option<Self> {
-        let v = k.arm::<c::bch_dirent>().map(|k| k.v())?;
-        let names = RawNames::new(k).names()
-            .expect("dirent names within the value, as validate checked");
-        Some(Dirent { k, v, names })
-    }
-
-    pub fn k(&self) -> BkeySC<'k> { self.k }
-
-    pub fn v(&self) -> &'k c::bch_dirent { self.v }
-
-    pub fn d_type(&self) -> u8 { self.v.d_type() }
-
-    pub fn target(&self) -> DirentTarget { self.v.target() }
-
-    pub fn names(&self) -> DirentName<'k> { self.names }
-
-    /// The name as given.
-    pub fn name(&self) -> &'k OsStr { self.names.name() }
-
-    /// The name the dirent is hashed and looked up by.
-    pub fn lookup_name(&self) -> &'k OsStr { self.names.lookup_name() }
-}
-
 // ── to_text ──────────────────────────────────────────────────────────────
 
 /// @k, a dirent, as text: as bch2_dirent_to_text(). @k may not have passed
@@ -355,7 +318,7 @@ pub fn bch2_dirent_to_text(
 ///
 /// Only new keys are held to BCH_NAME_MAX: it used to be bigger, and older
 /// keys can have longer names.
-pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<Dirent<'k>, BchError> {
+pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<super::Dirent<'k>, BchError> {
     let d = v.k.arm::<c::bch_dirent>().expect("a dirent").v();
     let raw = RawNames::new(v.k);
 
@@ -399,7 +362,7 @@ pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<Dirent<'k>, BchError> {
                           "dirent has stray data after cf name's NUL")?;
     }
 
-    Ok(Dirent { k: v.k, v: d, names })
+    Ok(super::Dirent { k: v.k, v: d, names })
 }
 
 /// For C's bkey_ops: bch2_dirent_validate().

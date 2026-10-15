@@ -11,7 +11,7 @@
 #[path = "dirent_format.rs"]
 pub(crate) mod format;
 
-pub use format::{d_type_str, set_field, Dirent, DirentName, DirentTarget, RawNames};
+pub use format::{d_type_str, set_field, DirentName, DirentTarget, RawNames};
 use format::{D_NAME_OFFSET, D_NAMES_OFFSET};
 
 use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC};
@@ -31,6 +31,44 @@ use core::mem::MaybeUninit;
 use core::ffi::c_int;
 use core::ops::ControlFlow;
 use cstruct_macros::c_export;
+
+// ── A valid dirent ───────────────────────────────────────────────────────
+
+/// A valid dirent - one that has passed validate, as every key from the
+/// btree has.
+#[derive(Clone, Copy)]
+pub struct Dirent<'k> {
+    k:     BkeySC<'k>,
+    v:     &'k c::bch_dirent,
+    names: DirentName<'k>,
+}
+
+impl<'k> Dirent<'k> {
+    /// @k as a dirent, if it is one.
+    pub fn new(k: BkeySC<'k>) -> Option<Self> {
+        let v = k.arm::<c::bch_dirent>().map(|k| k.v())?;
+        let names = RawNames::new(k).names()
+            .expect("dirent names within the value, as validate checked");
+        Some(Dirent { k, v, names })
+    }
+
+    pub fn k(&self) -> BkeySC<'k> { self.k }
+
+    pub fn v(&self) -> &'k c::bch_dirent { self.v }
+
+    pub fn d_type(&self) -> u8 { self.v.d_type() }
+
+    pub fn target(&self) -> DirentTarget { self.v.target() }
+
+    pub fn names(&self) -> DirentName<'k> { self.names }
+
+    /// The name as given.
+    pub fn name(&self) -> &'k OsStr { self.names.name() }
+
+    /// The name the dirent is hashed and looked up by.
+    pub fn lookup_name(&self) -> &'k OsStr { self.names.lookup_name() }
+}
+
 
 // ── The hash table ───────────────────────────────────────────────────────
 
