@@ -142,6 +142,12 @@ nest! {
          * The fs/file's configured options - policy, not intent. @csum_type and
          * @compression_opt above are what we actually resolved to; where the two
          * disagree, they do so deliberately.
+         *
+         * TODO: this should be the compact reconcile opts, not a full
+         * bch_inode_opts - the write path doesn't need foreground vs background
+         * compression, its caller should be choosing that. Then the read bio
+         * can carry the effective opts per extent too, and
+         * read_extent_rbio_alloc() stops looking up a reflink_v's own.
          */
         pub opts: c::bch_inode_opts,
 

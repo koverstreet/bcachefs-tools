@@ -36,6 +36,7 @@
 #include "data/ec/io.h"
 #include "data/io_misc.h"
 #include "data/read.h"
+#include "data/reconcile/trigger.h"
 #include "data/reflink.h"
 #include "data/update.h"
 #include "data/write.h"
@@ -272,12 +273,13 @@ static struct bch_read_bio *__promote_alloc(struct btree_trans *trans,
 					    enum bch_read_flags flags,
 					    unsigned sectors,
 					    struct bch_read_bio *orig,
+					    struct bch_inode_opts *opts,
 					    struct bch_io_failures *failed)
 {
 	struct bch_fs *c = trans->c;
 
 	int ret = !failed
-		? should_promote(c, k, orig->opts, flags)
+		? should_promote(c, k, *opts, flags)
 		: 0;
 	if (ret)
 		return ERR_PTR(ret);
@@ -286,13 +288,13 @@ static struct bch_read_bio *__promote_alloc(struct btree_trans *trans,
 
 	if (!have_io_error(failed)) {
 		update_opts.type = BCH_DATA_UPDATE_promote;
-		update_opts.target = orig->opts.promote_target;
+		update_opts.target = opts->promote_target;
 		update_opts.extra_replicas = 1;
 		update_opts.write_flags |= BCH_WRITE_cached;
 		update_opts.write_flags |= BCH_WRITE_only_specified_devs;
 	} else {
 		update_opts.type = BCH_DATA_UPDATE_self_heal;
-		update_opts.target = orig->opts.foreground_target;
+		update_opts.target = opts->foreground_target;
 
 		struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 		unsigned ptr_bit = 1;
@@ -329,7 +331,7 @@ static struct bch_read_bio *__promote_alloc(struct btree_trans *trans,
 
 	ret = bch2_data_update_init(trans, NULL, NULL, &op->write,
 			writepoint_hashed((unsigned long) current),
-			&orig->opts,
+			opts,
 			update_opts,
 			btree_id, k);
 	/*
@@ -364,6 +366,7 @@ static struct bch_read_bio *promote_alloc(struct btree_trans *trans,
 					struct extent_ptr_decoded *pick,
 					enum bch_read_flags flags,
 					struct bch_read_bio *orig,
+					struct bch_inode_opts *opts,
 					bool *bounce,
 					bool *read_full,
 					struct bch_io_failures *failed)
@@ -407,7 +410,7 @@ static struct bch_read_bio *promote_alloc(struct btree_trans *trans,
 				k.k->type == KEY_TYPE_reflink_v
 				? BTREE_ID_reflink
 				: BTREE_ID_extents,
-				k, pos, pick, flags, sectors, orig, failed);
+				k, pos, pick, flags, sectors, orig, opts, failed);
 	int ret = PTR_ERR_OR_ZERO(promote);
 	if (unlikely(ret)) {
 		/*
@@ -1285,20 +1288,39 @@ static inline struct bch_read_bio *read_extent_rbio_alloc(struct btree_trans *tr
 	struct bpos data_pos = bkey_start_pos(k.k);
 
 	/*
+	 * Shared data has options of its own, and its readers go by them: the
+	 * promote's index update judges the copy by the extent's options, so a
+	 * copy made by the reader's would be dropped in the commit that adds
+	 * it, and written again on every read.
+	 *
+	 * TODO: carry the compact reconcile opts through the read and write
+	 * paths instead of a full bch_inode_opts; then the read bio can hold
+	 * the effective opts per extent, and this goes.
+	 */
+	struct bch_inode_opts indirect_opts, *opts = &orig->opts;
+	if (bkey_is_indirect(k.k)) {
+		int ret = bch2_bkey_get_io_opts(trans, NULL, k, &indirect_opts);
+		if (ret)
+			return ERR_PTR(ret);
+		opts = &indirect_opts;
+	}
+
+	/*
 	 * No promote for a reconstruct: it's punted to bch2_rbio_retry() before
 	 * anything is read, and the promote would be started there with nothing
 	 * in its bounce buffer:
 	 */
 	struct bch_read_bio *rbio =
-		(orig->opts.promote_target && (flags & BCH_READ_may_promote) &&
+		(opts->promote_target && (flags & BCH_READ_may_promote) &&
 		 !pick.do_ec_reconstruct) ||
 		have_io_error(failed)
-		? promote_alloc(trans, iter, k, &pick, flags, orig,
+		? promote_alloc(trans, iter, k, &pick, flags, orig, opts,
 				&bounce, &read_full, failed)
 		: NULL;
 	/*
-	 * promote_alloc() returns an ERR_PTR only on transaction restart;
-	 * propagate it before we consume @ca or unlock so the read retries:
+	 * An ERR_PTR here is a transaction restart, from promote setup or the
+	 * options lookup; propagate it before we consume @ca or unlock so the
+	 * read retries:
 	 */
 	if (IS_ERR(rbio))
 		return rbio;
@@ -1666,8 +1688,9 @@ int __bch2_read_extent(struct btree_trans *trans,
 				       bounce, read_full, narrow_crcs);
 	if (IS_ERR(rbio)) {
 		/*
-		 * Transaction restart during promote setup; @ca was not
-		 * consumed by read_extent_rbio_alloc() on this path:
+		 * Transaction restart during promote setup or the options
+		 * lookup; @ca was not consumed by read_extent_rbio_alloc() on
+		 * this path:
 		 */
 		if (ca)
 			enumerated_ref_put(&ca->io_ref[READ], BCH_DEV_READ_REF_io_read);
