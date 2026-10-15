@@ -16,7 +16,7 @@ use bcachefs_kernel::btree_id;
 use bcachefs_kernel::opts::{prt_compression_type, prt_data_type};
 use bcachefs_kernel::btree::iter::{BtreeIter, lockrestart_do};
 use bch_bindgen::c;
-use bcachefs_kernel::util::vstructs::{Ffi, Validated};
+use bcachefs_kernel::util::vstructs::{Head, Validated};
 use crate::copy_fs::{CopyFsState, copy_fs};
 use bch_bindgen::data::moving::MovingContext;
 use bcachefs_kernel::fs::{Fs, btree_id_is_alloc, bucket_bytes, bucket_to_sector, dev_to_target,
@@ -415,7 +415,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     let member_bytes = disk_sb.field::<c::bch_sb_field_members_v2>()
         .expect("members_v2 field missing")
         .member_bytes.get();
-    let u64s = (std::mem::size_of::<Ffi<c::bch_sb_field_members_v2>>() as u32 + member_bytes as u32)
+    let u64s = (std::mem::size_of::<Head<c::bch_sb_field_members_v2>>() as u32 + member_bytes as u32)
         .div_ceil(8) as u32;
     sb::io::sb_field_resize::<c::bch_sb_field_members_v2>(disk_sb, u64s);
     disk_sb.sb_mut().nr_devices = 1;

@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::Le64;
-use crate::util::vstructs::{vstruct, Ffi};
+use crate::util::vstructs::{vstruct, Head};
 use cstruct_macros::{c_enum, c_xmacro, unsized_vstruct, CStruct, Plain, TypeInfo};
 
 c_enum! {
@@ -178,7 +178,7 @@ c_enum! {
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_counters {
-    pub field: Ffi<c::bch_sb_field>,
+    pub field: Head<c::bch_sb_field>,
     pub d: [Le64; 0],
 }
 vstruct!(unsized bch_sb_field_counters, field.u64s, start = 0);

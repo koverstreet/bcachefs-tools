@@ -2,7 +2,7 @@ use crate::c;
 use crate::c::{bch_member, bch_sb, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
 use crate::sb::members;
 use crate::types::ArmOf;
-use crate::util::vstructs::{read_past, ArmRef, Ffi, SelfSized, Validated};
+use crate::util::vstructs::{read_past, ArmRef, Head, SelfSized, Validated};
 
 /// A superblock section's type: an arm of tagged_union! bch_sb_field, which
 /// gives its field type - handed out as its ArmRef says, a short one, written
@@ -13,7 +13,7 @@ pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef {
 
 impl<F: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef + ?Sized> SbField for F {}
 
-impl PartialEq for c::bch_sb__ffi {
+impl PartialEq for c::bch_sb__head {
     fn eq(&self, other: &Self) -> bool {
         self.magic.b == other.magic.b
             && self.user_uuid.b == other.user_uuid.b
@@ -50,7 +50,7 @@ impl c::bch_sb__validated {
 }
 
 /// Its header's: every state's, which each derefs to.
-impl c::bch_sb__ffi {
+impl c::bch_sb__head {
     pub fn uuid(&self) -> uuid::Uuid {
         uuid::Uuid::from_bytes(self.user_uuid.b)
     }
@@ -158,10 +158,10 @@ impl bch_sb_handle {
     /// with what it counts: an error if @f changed it, the header left as it
     /// was.
     pub fn edit_header<R>(&mut self, f: impl FnOnce(&mut [u8]) -> R) -> Result<R, &'static str> {
-        const N: usize = core::mem::size_of::<Ffi<bch_sb>>();
+        const N: usize = core::mem::size_of::<Head<bch_sb>>();
         let mut h: [u8; N] = self.sb_bytes()[..N].try_into().unwrap();
         let r = f(&mut h);
-        if read_past::<Ffi<bch_sb>>(&h, 0).u64s() != self.sb().u64s() {
+        if read_past::<Head<bch_sb>>(&h, 0).u64s() != self.sb().u64s() {
             return Err("u64s is the superblock's count: it changes with the fields it counts");
         }
         crate::util::vstructs::bytes_of_mut(self.sb_mut())[..N].copy_from_slice(&h);
@@ -175,7 +175,7 @@ impl bch_sb_handle {
         let nr = self.sb().nr_devices as u32;
         let mi = self.field::<c::bch_sb_field_members_v2>()?;
         let member_bytes = mi.member_bytes.get() as usize;
-        let end = core::mem::offset_of!(Ffi<c::bch_sb_field_members_v2>, _members) + (idx as usize + 1) * member_bytes;
+        let end = core::mem::offset_of!(Head<c::bch_sb_field_members_v2>, _members) + (idx as usize + 1) * member_bytes;
         if idx >= nr || member_bytes < size_of::<bch_member>() || end > mi.as_bytes().len() {
             return None;
         }
@@ -315,15 +315,15 @@ impl core::fmt::Display for SbParseError {
 
 /// Validate the extents; returns the vstruct size in bytes.
 fn sb_parse_checks(buf: &[u8]) -> Result<usize, SbParseError> {
-    let hdr = core::mem::size_of::<Ffi<bch_sb>>();
+    let hdr = core::mem::size_of::<Head<bch_sb>>();
     if buf.len() < hdr {
         return Err(SbParseError::BufferTooSmall { need: hdr, have: buf.len() });
     }
-    if buf.as_ptr() as usize % core::mem::align_of::<Ffi<bch_sb>>() != 0 {
+    if buf.as_ptr() as usize % core::mem::align_of::<Head<bch_sb>>() != 0 {
         return Err(SbParseError::Misaligned);
     }
     /* header extent and alignment just validated: */
-    let sb = unsafe { &*(buf.as_ptr() as *const Ffi<bch_sb>) };
+    let sb = unsafe { &*(buf.as_ptr() as *const Head<bch_sb>) };
 
     if sb.magic.b != BCACHE_MAGIC && sb.magic.b != BCHFS_MAGIC {
         return Err(SbParseError::BadMagic);
@@ -336,11 +336,11 @@ fn sb_parse_checks(buf: &[u8]) -> Result<usize, SbParseError> {
 
     let mut off = hdr;
     while off < bytes {
-        if bytes - off < core::mem::size_of::<Ffi<c::bch_sb_field>>() {
+        if bytes - off < core::mem::size_of::<Head<c::bch_sb_field>>() {
             return Err(SbParseError::FieldBeyondSb { field_offset: off });
         }
         /* field header extent just validated: */
-        let f = unsafe { &*(buf.as_ptr().add(off) as *const Ffi<c::bch_sb_field>) };
+        let f = unsafe { &*(buf.as_ptr().add(off) as *const Head<c::bch_sb_field>) };
         let f_u64s = f.u64s() as u64;
         if f_u64s == 0 {
             return Err(SbParseError::FieldBadU64s { field_offset: off });
@@ -486,12 +486,12 @@ impl SbAccess for SbBuf {
 mod tests {
     use crate::c;
     use crate::types::Le32;
-    use crate::util::vstructs::{Ffi, Unvalidated, Validated, VStruct, VStructError};
+    use crate::util::vstructs::{Head, Unvalidated, Validated, VStruct, VStructError};
 
     /// @buf as a superblock field of type @ty, @u64s long - its header written
     /// - as a superblock's walk would give it: as many bytes as it says.
     fn field(buf: &mut [u64], ty: c::bch_sb_field_type, u64s: usize) -> &c::bch_sb_field {
-        let f = buf.as_mut_ptr().cast::<Ffi<c::bch_sb_field>>();
+        let f = buf.as_mut_ptr().cast::<Head<c::bch_sb_field>>();
         // SAFETY: u64s, which any bytes are, aligned for a bch_sb_field, and
         // as many as u64s says
         unsafe {

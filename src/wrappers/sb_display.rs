@@ -15,7 +15,7 @@ use bch_bindgen::c;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::c::bch_sb_handle;
 use bcachefs_kernel::sb::{self, sb_field_type};
-use bcachefs_kernel::util::vstructs::Ffi;
+use bcachefs_kernel::util::vstructs::Head;
 
 use crate::device_scan;
 
@@ -45,8 +45,8 @@ fn find_dev(sbs: &[(PathBuf, bch_sb_handle)], idx: u32) -> Option<&(PathBuf, bch
 unsafe fn print_one_member(
     out: &mut Printbuf,
     sbs: &[(PathBuf, bch_sb_handle)],
-    sb: *mut Ffi<c::bch_sb>,
-    gi: *mut Ffi<c::bch_sb_field_disk_groups>,
+    sb: *mut Head<c::bch_sb>,
+    gi: *mut Head<c::bch_sb_field_disk_groups>,
     m: &mut c::bch_member,
     idx: u32,
 ) {
@@ -102,7 +102,7 @@ pub unsafe fn sb_to_text_with_names(
     let opts = bcachefs_kernel::opts::parse_mount_opts(None, None, true).unwrap_or_default();
     let sbs = device_scan::scan_sbs(&device_str, &opts).unwrap_or_default();
 
-    let sb_ptr = sb.as_ffi() as *mut Ffi<c::bch_sb>;
+    let sb_ptr = sb.as_ffi() as *mut Head<c::bch_sb>;
 
     if field_only >= 0 {
         let f = c::bch2_sb_field_get_id(sb_ptr, c::bch_sb_field_type(field_only as u32));
@@ -116,7 +116,7 @@ pub unsafe fn sb_to_text_with_names(
             | sb_field_type::members_v2.bit();
         c::bch2_sb_to_text(out.as_raw(), fs, sb_ptr, print_layout, fields & !member_mask);
 
-        let gi: *mut Ffi<c::bch_sb_field_disk_groups> =
+        let gi: *mut Head<c::bch_sb_field_disk_groups> =
             sb::io::sb_field_get::<c::bch_sb_field_disk_groups>(sb)
                 .map(|f| f.as_ffi() as *mut _)
                 .unwrap_or(std::ptr::null_mut());

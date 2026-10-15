@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::util::vstructs::Ffi;
+use crate::util::vstructs::Head;
 use crate::types::{DArray, bits_to_longs, c_default};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_ulong};
@@ -21,7 +21,7 @@ nest! {
     #[repr(C)]
     #[derive(CStruct, TypeInfo)]
     pub struct bch_sb_handle {
-        pub sb: *mut Ffi<c::bch_sb>,
+        pub sb: *mut Head<c::bch_sb>,
         pub s_bdev_file: *mut c::file,
         pub bdev: *mut c::block_device,
         pub sb_name: *mut c_char,

@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use crate::util::vstructs::Ffi;
+use crate::util::vstructs::Head;
 use core::ffi::c_uint;
 use cstruct_macros::{CStruct, TypeInfo};
 
@@ -13,7 +13,7 @@ use cstruct_macros::{CStruct, TypeInfo};
 #[derive(Clone, Copy, CStruct, TypeInfo)]
 pub struct bch_replicas_entry_cpu {
     pub ref_: c::atomic_t,
-    pub e: Ffi<c::bch_replicas_entry_v1>,
+    pub e: Head<c::bch_replicas_entry_v1>,
 }
 c_default!(bch_replicas_entry_cpu);
 
@@ -30,8 +30,8 @@ c_default!(bch_replicas_cpu);
 #[derive(Clone, Copy, CStruct, TypeInfo)]
 pub union bch_replicas_padded {
     #[c("u8 bytes[struct_size_t(struct bch_replicas_entry_v1, devs, BCH_BKEY_PTRS_MAX)]")]
-    pub bytes: [u8; core::mem::size_of::<Ffi<c::bch_replicas_entry_v1>>()
+    pub bytes: [u8; core::mem::size_of::<Head<c::bch_replicas_entry_v1>>()
                     + c::BCH_BKEY_PTRS_MAX as usize * core::mem::size_of::<u8>()],
-    pub e: Ffi<c::bch_replicas_entry_v1>,
+    pub e: Head<c::bch_replicas_entry_v1>,
 }
 c_default!(bch_replicas_padded);

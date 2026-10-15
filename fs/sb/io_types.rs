@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::util::vstructs::Ffi;
+use crate::util::vstructs::Head;
 use crate::types::{bits_to_longs, c_default};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong};
@@ -52,17 +52,17 @@ c_extern! {
     pub fn bch2_set_version_incompat(c: *mut c::bch_fs,
                                      version: c::bcachefs_metadata_version) -> c_int;
     pub fn __bch2_check_set_feature(c: *mut c::bch_fs, feat: c_uint);
-    pub fn bch2_sb_field_get_id(sb: *mut Ffi<c::bch_sb>,
-                                type_: c::bch_sb_field_type) -> *mut Ffi<c::bch_sb_field>;
+    pub fn bch2_sb_field_get_id(sb: *mut Head<c::bch_sb>,
+                                type_: c::bch_sb_field_type) -> *mut Head<c::bch_sb_field>;
     pub fn bch2_sb_field_resize_id(sb: *mut c::bch_sb_handle, type_: c::bch_sb_field_type,
-                                   u64s: c_uint) -> *mut Ffi<c::bch_sb_field>;
+                                   u64s: c_uint) -> *mut Head<c::bch_sb_field>;
     pub fn bch2_sb_field_get_minsize_id(sb: *mut c::bch_sb_handle, type_: c::bch_sb_field_type,
-                                        u64s: c_uint) -> *mut Ffi<c::bch_sb_field>;
+                                        u64s: c_uint) -> *mut Head<c::bch_sb_field>;
     pub fn bch2_sb_field_delete(sb: *mut c::bch_sb_handle, type_: c::bch_sb_field_type);
     pub static bch2_sb_fields: [*const c_char; 0];
     pub fn bch2_free_super(sb: *mut c::bch_sb_handle);
     pub fn bch2_sb_realloc(sb: *mut c::bch_sb_handle, u64s: c_uint) -> c_int;
-    pub fn bch2_sb_validate(sb: *mut Ffi<c::bch_sb>, opts: *mut c::bch_opts, read_offset: u64,
+    pub fn bch2_sb_validate(sb: *mut Head<c::bch_sb>, opts: *mut c::bch_opts, read_offset: u64,
                             flags: c::bch_validate_flags, out: *mut c::printbuf) -> c_int;
     pub fn bch2_read_super(path: *const c_char, opts: *mut c::bch_opts,
                            sb: *mut c::bch_sb_handle) -> c_int;
@@ -71,8 +71,8 @@ c_extern! {
     pub fn bch2_sb_update(c: *mut c::bch_fs);
     pub fn bch2_write_super_flags(c: *mut c::bch_fs, flags: c::bch_sb_write_flags) -> c_int;
     pub fn bch2_write_super(c: *mut c::bch_fs) -> c_int;
-    pub fn __bch2_sb_field_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, sb: *mut Ffi<c::bch_sb>,
-                                   f: *mut Ffi<c::bch_sb_field>);
-    pub fn bch2_sb_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, sb: *mut Ffi<c::bch_sb>,
+    pub fn __bch2_sb_field_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, sb: *mut Head<c::bch_sb>,
+                                   f: *mut Head<c::bch_sb_field>);
+    pub fn bch2_sb_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, sb: *mut Head<c::bch_sb>,
                            print_layout: bool, fields: c_uint);
 }

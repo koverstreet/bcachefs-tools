@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use bch_bindgen::c;
-use bcachefs_kernel::util::vstructs::{plain_bytes, Ffi, UnvalidatedRefEntries};
+use bcachefs_kernel::util::vstructs::{plain_bytes, Head, UnvalidatedRefEntries};
 use clap::{Parser, Subcommand};
 
 use crate::util::{open_dir, sb_error_name};
@@ -92,7 +92,7 @@ impl DamageEntry {
 fn get_damage(fd: &OwnedFd) -> std::io::Result<Vec<DamageEntry>> {
     let mut cap = 16u32;
     loop {
-        let mut buf = IoctlBuf::<Ffi<c::bch_ioctl_get_damage>>::new(cap as usize);
+        let mut buf = IoctlBuf::<Head<c::bch_ioctl_get_damage>>::new(cap as usize);
         buf.hdr_mut().nr_entries = cap;
         unsafe { ioctl_ptr::<BCHFS_IOC_GET_DAMAGE>(fd, buf.as_mut_ptr())? };
 

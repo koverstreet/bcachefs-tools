@@ -279,7 +279,7 @@ pub fn bitfield(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `#[unsized_vstruct]`, on C's definition of a struct ending in a flexible
 /// array - or `#[unsized_vstruct(tail = [E])]`, `tail = NAME: [E]`, saying
 /// what follows its header: the family of its definitions, one per state -
-/// C's, renamed X__ffi, and each state's, a DST of the header and its tail -
+/// C's, renamed X__head, and each state's, a DST of the header and its tail -
 /// and the alias X<S> that picks one. See vstructs.rs.
 #[proc_macro_attribute]
 pub fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -994,7 +994,7 @@ pub fn c_extern(input: TokenStream) -> TokenStream {
 /// @ret - is one: a compile error if it's fat, a pointer to an unsized type,
 /// whose metadata C has nowhere for. improper_ctypes can't say so: rustc
 /// doesn't report it in what a proc macro generates. A pointer to an unsized
-/// vstruct is to its header, Ffi<T>, which is C's struct.
+/// vstruct is to its header, Head<T>, which is C's struct.
 fn thin_pointers(name: &str, cfg: &Option<cstruct::Cfg>, params: &[(String, String)], ret: Option<&str>) -> String {
     params.iter()
         .map(|(n, ty)| (n.as_str(), ty.as_str()))
@@ -1003,7 +1003,7 @@ fn thin_pointers(name: &str, cfg: &Option<cstruct::Cfg>, params: &[(String, Stri
         .map(|(n, ty)| format!(
             "{}assert!(::core::mem::size_of::<{ty}>() == ::core::mem::size_of::<*const u8>(),\n\
                      \"{name}: {n}'s {ty} is a fat pointer, which C has no place for - \
-                      a pointer to an unsized vstruct T is to Ffi<T>\");\n",
+                      a pointer to an unsized vstruct T is to Head<T>\");\n",
             cfg_attr(cfg)))
         .collect()
 }
@@ -1214,10 +1214,10 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
              }}\n"));
     }
 
-    // A family's C struct, X__ffi: its state definitions, which have C's
+    // A family's C struct, X__head: its state definitions, which have C's
     // fields inline and no DerefMut to it, get the setters too - the getters
     // they reach through their Deref
-    let state_setters = match b.rust_type.strip_suffix("__ffi") {
+    let state_setters = match b.rust_type.strip_suffix("__head") {
         Some(family) => format!("__{family}__state_impls! {{\n{setters}}}\n"),
         None => String::new(),
     };

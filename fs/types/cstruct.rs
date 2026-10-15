@@ -32,7 +32,7 @@
 //   struct_group(name, ...), its members both name's and the struct's own.
 //
 //   #[c_name(NAME)] on the struct: C's name for it, where Rust's differs - a
-//   family's C definition, X__ffi, whose name the family's alias X has in
+//   family's C definition, X__head, whose name the family's alias X has in
 //   Rust (util/vstructs.rs). C knows it only as NAME.
 //
 //   c_verbatim!(r#"..."#): C, carried as is - what hasn't been converted.
@@ -153,7 +153,7 @@ pub struct CStructDef {
     /// C's name - its Rust one too, but for #[c_name]: rust_name.
     pub name:      String,
     /// Its Rust name, where C's differs - #[c_name(NAME)]: a family's C
-    /// definition, X__ffi, whose own name the family's alias takes (see
+    /// definition, X__head, whose own name the family's alias takes (see
     /// util/vstructs.rs). rust_ident() is the name to impl and lay out by.
     pub rust_name: Option<String>,
     pub kind:      CKind,
@@ -314,8 +314,8 @@ pub struct CBitmask {
     pub cfg:        Option<Cfg>,
     pub macro_name: String,
     pub c_type:     String,
-    /// The type the accessors are on: "foo" - or for `struct Ffi<foo>`, a
-    /// family's C definition, "foo__ffi".
+    /// The type the accessors are on: "foo" - or for `struct Head<foo>`, a
+    /// family's C definition, "foo__head".
     pub rust_type:  String,
     pub field:      String,
     pub strip:      Option<String>,
@@ -1447,12 +1447,12 @@ fn parse_bitmask(body: &[Tok], cfg: Option<Cfg>) -> Result<CBitmask, String> {
     };
     let (rust_type, c_type) = match ty {
         [Tok::Ident(s), Tok::Ident(n)] if s == "struct" => (n.clone(), tokens_to_c(ty)),
-        // a family's C definition, X__ffi (util/vstructs.rs): its header's
+        // a family's C definition, X__head (util/vstructs.rs): its header's
         // fields, which each state's definition derefs to
         [Tok::Ident(s), Tok::Ident(f), Tok::Punct('<'), Tok::Ident(n), Tok::Punct('>')]
-            if s == "struct" && f == "Ffi" => (format!("{n}__ffi"), format!("struct {n}")),
+            if s == "struct" && f == "Head" => (format!("{n}__head"), format!("struct {n}")),
         _ => return Err(format!("c_bitmask! {macro_name}: expected a struct type - struct foo, or \
-                                 struct Ffi<foo> for a family's")),
+                                 struct Head<foo> for a family's")),
     };
 
     let mut i = args_end;
@@ -2218,12 +2218,12 @@ fn proto_toks(toks: &[Tok], decl: String, konst: bool, last: bool,
               kind: &dyn Fn(&str) -> Option<String>)
     -> Option<String>
 {
-    // Ffi<T>, by any path: what C has of unsized T - C's T itself
-    if let Some(t) = ffi_arg(toks) {
+    // Head<T>, by any path: what C has of unsized T - C's T itself
+    if let Some(t) = head_arg(toks) {
         return proto_toks(t, decl, konst, last, kind);
     }
     let q = if konst { "const " } else { "" };
-    // BkeyI<Ffi<bch_foo>>, by any path: a key whose value is a family's,
+    // BkeyI<Head<bch_foo>>, by any path: a key whose value is a family's,
     // whole - C's typed key, struct bkey_i_foo
     if let Some(name) = bkey_i_arg(toks) {
         return Some(format!("{q}struct bkey_i_{name} {decl}").trim_end().to_string());
@@ -2277,10 +2277,10 @@ fn proto_toks(toks: &[Tok], decl: String, konst: bool, last: bool,
     }
 }
 
-/// T, if @toks is Ffi<T> by any path: a family's C definition, which C has
+/// T, if @toks is Head<T> by any path: a family's C definition, which C has
 /// as the struct T itself (util/vstructs.rs).
-fn ffi_arg(toks: &[Tok]) -> Option<&[Tok]> {
-    let f = toks.iter().position(|t| t.is_ident("Ffi"))?;
+fn head_arg(toks: &[Tok]) -> Option<&[Tok]> {
+    let f = toks.iter().position(|t| t.is_ident("Head"))?;
     let path_ok = toks[..f].iter().all(|t| matches!(t, Tok::Ident(_) | Tok::Punct(':')));
     match &toks[f + 1..] {
         [Tok::Punct('<'), inner @ .., Tok::Punct('>')] if path_ok => Some(inner),
@@ -2288,13 +2288,13 @@ fn ffi_arg(toks: &[Tok]) -> Option<&[Tok]> {
     }
 }
 
-/// foo, if @toks is BkeyI<bch_foo> by any path - or BkeyI<Ffi<bch_foo>>, an
+/// foo, if @toks is BkeyI<bch_foo> by any path - or BkeyI<Head<bch_foo>>, an
 /// unsized one's: C's struct bkey_i_foo.
 fn bkey_i_arg(toks: &[Tok]) -> Option<&str> {
     let b = toks.iter().position(|t| t.is_ident("BkeyI"))?;
     let path_ok = toks[..b].iter().all(|t| matches!(t, Tok::Ident(_) | Tok::Punct(':')));
     let [Tok::Punct('<'), inner @ .., Tok::Punct('>')] = &toks[b + 1..] else { return None };
-    let inner = ffi_arg(inner).unwrap_or(inner);
+    let inner = head_arg(inner).unwrap_or(inner);
     let val_path_ok = inner.iter().all(|t| matches!(t, Tok::Ident(_) | Tok::Punct(':')));
     match inner {
         [.., Tok::Ident(v)] if path_ok && val_path_ok => v.strip_prefix("bch_"),

@@ -26,7 +26,7 @@
 //! read and validated (from_ffi()): its counts are trusted, as C trusts
 //! them. Unvalidated is bytes from outside - off a device, from the kernel
 //! (from_bytes()): its count is checked against them, its entries' as
-//! they're walked. Each derefs to its header, C's struct, Ffi<T>. The count
+//! they're walked. Each derefs to its header, C's struct, Head<T>. The count
 //! is private, read as u64s(): it changes only through what holds the value,
 //! which has the room for it to grow.
 //!
@@ -204,30 +204,30 @@ pub(crate) use floored_by_self;
 /// field's does.
 ///
 /// vstruct!(unsized T, u64s), for an unsized vstruct, #[unsized_vstruct]'s
-/// family: the count is its header's, T__ffi's - and each state's length is
+/// family: the count is its header's, T__head's - and each state's length is
 /// its reference's, size_of_val(). Its count reads as u64s(), on the header,
 /// which each state derefs to; it's no field to set but the container's,
 /// which has the room for it - VStruct, on the header, builds one.
 macro_rules! vstruct {
     (unsized $t:ident, $count:ident) => { $crate::paste! {
-        $crate::util::vstructs::vstruct!(@impl [<$t __ffi>],
-            ::core::mem::size_of::<[<$t __ffi>]>(), $count);
+        $crate::util::vstructs::vstruct!(@impl [<$t __head>],
+            ::core::mem::size_of::<[<$t __head>]>(), $count);
         $crate::util::vstructs::vstruct!(@unsized $t, $count);
     } };
     // counted past the header it embeds - a btree node's bset, its keys; a
     // journal entry subtype's entry: the count is that header's, read as it
     (unsized $t:ident, $hdr:ident . $count:ident) => { $crate::paste! {
-        $crate::util::vstructs::vstruct!([<$t __ffi>], $hdr.$count);
+        $crate::util::vstructs::vstruct!([<$t __head>], $hdr.$count);
         $crate::util::vstructs::vstruct!(@u64s $t);
     } };
     // counted by the header it embeds first, from its start - a superblock
     // section's, by its field's u64s: start = 0
     (unsized $t:ident, $hdr:ident . $count:ident, start = $start:expr) => { $crate::paste! {
-        $crate::util::vstructs::vstruct!(@impl [<$t __ffi>], $start, $hdr.$count);
+        $crate::util::vstructs::vstruct!(@impl [<$t __head>], $start, $hdr.$count);
         $crate::util::vstructs::vstruct!(@u64s $t);
     } };
     (unsized $t:ident, $count:ident, start = $start:expr) => { $crate::paste! {
-        $crate::util::vstructs::vstruct!(@impl [<$t __ffi>], $start, $count);
+        $crate::util::vstructs::vstruct!(@impl [<$t __head>], $start, $count);
         $crate::util::vstructs::vstruct!(@unsized $t, $count);
     } };
     // its length - a count of u64s from a u64 aligned start, as @impl
@@ -235,13 +235,13 @@ macro_rules! vstruct {
     // more than 8: so a reference to one, as long as size_of_val(), claims
     // none past it, whatever its tail holds
     (@u64s $t:ident) => { $crate::paste! {
-        const _: () = assert!(::core::mem::align_of::<[<$t __ffi>]>() <= 8,
+        const _: () = assert!(::core::mem::align_of::<[<$t __head>]>() <= 8,
             concat!(stringify!($t), ": counted in u64s, so aligned to no more than 8"));
     } };
     (@unsized $t:ident, $count:ident) => { $crate::paste! {
         $crate::util::vstructs::vstruct!(@u64s $t);
 
-        impl [<$t __ffi>] {
+        impl [<$t __head>] {
             /// Its count, as a usize - to read: it changes only through what
             /// holds the value, which has room for it to grow.
             #[allow(dead_code)]
@@ -342,13 +342,13 @@ macro_rules! vstruct_container {
         $crate::util::vstructs::vstruct_container!(@start $t);
     } };
     (@start $t:ident) => { $crate::paste! {
-        $crate::util::vstructs::vstruct_container!(@start_of [<$t __unvalidated>], [<$t __ffi>]);
-        $crate::util::vstructs::vstruct_container!(@start_of [<$t __validated>], [<$t __ffi>]);
+        $crate::util::vstructs::vstruct_container!(@start_of [<$t __unvalidated>], [<$t __head>]);
+        $crate::util::vstructs::vstruct_container!(@start_of [<$t __validated>], [<$t __head>]);
 
         impl [<$t __unvalidated>] {
             /// start_bytes(), mutably: for entries_mut().
             fn start_bytes_mut(&mut self) -> &mut [u8] {
-                &mut self.as_bytes_mut()[::core::mem::offset_of!([<$t __ffi>], start)..]
+                &mut self.as_bytes_mut()[::core::mem::offset_of!([<$t __head>], start)..]
             }
         }
     } };
@@ -576,7 +576,7 @@ pub struct Validated;
 ///
 ///   pub type jset<S = Validated> = <S as State>::Of<jset__family>;
 ///
-/// The definitions are named - X__ffi, X__unvalidated, X__validated - and an
+/// The definitions are named - X__head, X__unvalidated, X__validated - and an
 /// impl, hand-written or generated, is always for one of those by name:
 /// X<Validated> is a projection, and an impl for a projection is E0118 if
 /// inherent, and breaks other crates' impls of the same trait (E0119) - to
@@ -622,27 +622,19 @@ impl State for Whole {
     type Of<F: Family> = F::Whole;
 }
 
-/// What C has of a family's type: its struct - an unsized vstruct's header,
-/// its tail zero-length, C's flexible array, X__ffi; a #[grown] or #[whole]
-/// type's struct, X itself. Implemented for each state's definition.
-pub trait HasFfi {
-    /// C's struct. An impl is never for Ffi<T> itself - a projection - but
-    /// for the family's definition by name.
-    type Ffi;
-}
-
-/// C's struct of a #[counted] family - a header, and an array it counts in
+/// The head of a #[counted] family - a header, and an array it counts in
 /// elements: its Unvalidated definition, for what holds a value's bytes -
 /// an ioctl's buffer - to hand the value out as, the count checked against
 /// them.
-pub trait CountedFfi: FlexArray + Plain {
+pub trait CountedHead: FlexArray + Plain {
     type Unvalidated: ?Sized + Unsized<Head = Self>;
 }
 
-/// What C has of family type T, by T's name: its struct - see HasFfi. What
-/// Rust names wherever it meets C: an extern's parameters, a pointer field,
-/// a struct that embeds one.
-pub type Ffi<T> = <T as HasFfi>::Ffi;
+/// Unsized type T's head, by T's name: for an unsized vstruct or a
+/// #[counted] type, C's struct - the header, its tail C's zero-length
+/// flexible array. What Rust names wherever it meets C - an extern's
+/// parameters, a pointer field - and a struct that embeds one.
+pub type Head<T> = <T as Unsized>::Head;
 
 /// A DST of ours, in a state: a sized head's fields, inline, then its tail -
 /// a slice. Its references are fat, with the tail's length, so a reference
@@ -1296,8 +1288,8 @@ mod tests {
         unsafe { core::slice::from_raw_parts(buf.as_ptr().cast(), buf.len() * 8) }
     }
 
-    fn entry(u64s: usize) -> Ffi<c::jset_entry> {
-        let mut e = Ffi::<c::jset_entry>::default();
+    fn entry(u64s: usize) -> Head<c::jset_entry> {
+        let mut e = Head::<c::jset_entry>::default();
         e.set_val_u64s(u64s);
         e
     }
@@ -1306,9 +1298,9 @@ mod tests {
     /// with @second's u64s for the second, the jset's u64s saying 1 + 1 + 1
     /// + 3 still.
     fn jset(second: usize) -> Vec<u64> {
-        let hdr = size_of::<Ffi<c::jset>>();
+        let hdr = size_of::<Head<c::jset>>();
         let mut buf = vec![0u64; hdr / 8 + 6];
-        let mut j = Ffi::<c::jset>::default();
+        let mut j = Head::<c::jset>::default();
         j.set_val_u64s(6);
         put(&mut buf, 0, &j);
         put(&mut buf, hdr, &entry(1));
@@ -1372,27 +1364,27 @@ mod tests {
         e.set_val_u64s(3);
         assert_eq!(e.bytes(), 8 + 24);
 
-        let mut f = Ffi::<c::bch_sb_field>::default();
+        let mut f = Head::<c::bch_sb_field>::default();
         f.set_val_u64s(3);
         assert_eq!(f.bytes(), 24);
 
-        let mut l = Ffi::<c::jset_entry_log>::default();
+        let mut l = Head::<c::jset_entry_log>::default();
         l.set_val_u64s(2);
         assert_eq!(l.bytes(), 8 + 16);
 
-        let mut b = Ffi::<c::btree_node_entry>::default();
+        let mut b = Head::<c::btree_node_entry>::default();
         b.set_val_u64s(3);
         assert_eq!(b.bytes(), 16 + 24 + 24);
     }
 
     /// A superblock of one u64 past its header, and in it a field of @u64s.
     fn sb(field_u64s: usize) -> Vec<u64> {
-        let hdr = size_of::<Ffi<c::bch_sb>>();
+        let hdr = size_of::<Head<c::bch_sb>>();
         let mut buf = vec![0u64; hdr / 8 + 1];
-        let mut sb = Ffi::<c::bch_sb>::default();
+        let mut sb = Head::<c::bch_sb>::default();
         sb.set_val_u64s(1);
         put(&mut buf, 0, &sb);
-        let mut f = Ffi::<c::bch_sb_field>::default();
+        let mut f = Head::<c::bch_sb_field>::default();
         f.set_val_u64s(field_u64s);
         put(&mut buf, hdr, &f);
         buf
@@ -1429,7 +1421,7 @@ mod tests {
         let es: Vec<_> = j.entries().collect();
         assert!(matches!(es[..], [Ok(_), Err(VStructError::Overrun { want: 40, have: 32, .. })]));
 
-        let hdr = size_of::<Ffi<c::jset>>();
+        let hdr = size_of::<Head<c::jset>>();
         assert!(matches!(c::jset::<Unvalidated>::from_bytes(&bytes(&buf)[..hdr + 8]),
                          Err(VStructError::Overrun { want, have, .. }) if want == hdr + 48 && have == hdr + 8));
     }
@@ -1448,9 +1440,9 @@ mod tests {
     /// unsized ones, each as long as it says.
     #[test]
     fn entries_start_at_start() {
-        let hdr = size_of::<Ffi<c::bch_sb_field_clean>>();
+        let hdr = size_of::<Head<c::bch_sb_field_clean>>();
         let mut buf = vec![0u64; hdr / 8 + 2];
-        let mut clean = Ffi::<c::bch_sb_field_clean>::default();
+        let mut clean = Head::<c::bch_sb_field_clean>::default();
         clean.set_val_u64s(hdr / 8 + 2);
         put(&mut buf, 0, &clean);
         put(&mut buf, hdr, &entry(1));
@@ -1539,7 +1531,7 @@ mod unsized_tests {
     pub struct tcont {
         u64s:      Le32,
         pub tag:   u32,
-        pub start: [Ffi<tent>; 0],
+        pub start: [Head<tent>; 0],
         pub _data: [u64; 0],
     }
     vstruct!(unsized tcont, u64s);
@@ -1562,13 +1554,13 @@ mod unsized_tests {
     fn buf(sizes: &[u16], extra: usize) -> Vec<u64> {
         let total: usize = sizes.iter().map(|&s| s as usize).sum();
         let mut buf = vec![0u64; 1 + total + extra];
-        let mut h = Ffi::<tcont>::default();
+        let mut h = Head::<tcont>::default();
         h.set_val_u64s(total);
         h.tag = 7;
         buf[0] = u64::from_le_bytes(plain_bytes(&h).try_into().unwrap());
         let mut at = 1;
         for (i, &s) in sizes.iter().enumerate() {
-            let mut e = Ffi::<tent>::default();
+            let mut e = Head::<tent>::default();
             e.set_val_u64s(s as usize);
             e.ty = i as u16 + 1;
             buf[at] = u64::from_le_bytes(plain_bytes(&e).try_into().unwrap());

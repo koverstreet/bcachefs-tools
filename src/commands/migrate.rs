@@ -21,7 +21,7 @@ use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::opt_set;
-use bcachefs_kernel::util::vstructs::Ffi;
+use bcachefs_kernel::util::vstructs::Head;
 use clap::Parser;
 
 use crate::commands::format::take_opt_value;
@@ -548,7 +548,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
     let sb_size = add_default_sb_layout(sb.sb_mut())?;
 
     // Zero the start of the disk to blow away the old superblock
-    let zeroes_len = ((c::BCH_SB_SECTOR as usize) << 9) + std::mem::size_of::<Ffi<c::bch_sb>>();
+    let zeroes_len = ((c::BCH_SB_SECTOR as usize) << 9) + std::mem::size_of::<Head<c::bch_sb>>();
     let zeroes = vec![0u8; zeroes_len];
     {
         use std::os::unix::fs::FileExt;

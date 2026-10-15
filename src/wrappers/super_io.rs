@@ -6,7 +6,7 @@ use std::os::unix::fs::FileExt;
 use std::os::unix::io::FromRawFd;
 
 use bch_bindgen::c;
-use bcachefs_kernel::util::vstructs::{Ffi, SelfSized};
+use bcachefs_kernel::util::vstructs::{Head, SelfSized};
 
 /// Print error to stderr and exit with failure status.
 /// Matches the C `die()` function behavior.
@@ -24,7 +24,7 @@ pub fn borrowed_file(fd: i32) -> std::mem::ManuallyDrop<std::fs::File> {
 }
 
 /// Compute the superblock checksum using the csum type stored in the sb.
-fn csum_vstruct_sb(sb: *mut Ffi<c::bch_sb>) -> c::bch_csum {
+fn csum_vstruct_sb(sb: *mut Head<c::bch_sb>) -> c::bch_csum {
     unsafe { c::rust_csum_vstruct_sb(sb) }
 }
 
@@ -36,7 +36,7 @@ pub fn bch2_super_write<S: SbAccess>(fd: i32, sb: &mut S) {
 
     let bs = crate::wrappers::bdev::get_blocksize_physical_hint(fd) as usize;
     let layout_range = {
-        let off = std::mem::offset_of!(Ffi<c::bch_sb>, layout);
+        let off = std::mem::offset_of!(Head<c::bch_sb>, layout);
         off..off + std::mem::size_of::<c::bch_sb_layout>()
     };
 
@@ -96,13 +96,13 @@ pub fn super_read(fd: i32, sector: u64) -> anyhow::Result<SbBuf> {
     let file = borrowed_file(fd);
 
     // Read the fixed-size header to learn the full extent
-    let header_size = std::mem::size_of::<Ffi<c::bch_sb>>();
+    let header_size = std::mem::size_of::<Head<c::bch_sb>>();
     let mut buf = vec![0u8; header_size];
     file.read_exact_at(&mut buf, sector << 9)
         .map_err(|e| anyhow::anyhow!("pread failed at offset {}: {}", sector << 9, e))?;
 
     // SAFETY: header_size bytes, and any bytes are a header
-    let hdr = unsafe { buf.as_ptr().cast::<Ffi<c::bch_sb>>().read_unaligned() };
+    let hdr = unsafe { buf.as_ptr().cast::<Head<c::bch_sb>>().read_unaligned() };
     let bytes = hdr.bytes();
 
     buf.resize(bytes, 0);

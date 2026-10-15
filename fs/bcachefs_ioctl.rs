@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::ffi::c_char;
 use crate::btree::bkey::BkeyI;
-use crate::util::vstructs::Ffi;
+use crate::util::vstructs::Head;
 use cstruct_macros::{c_const, c_enum, c_ioctl, c_xmacro, counted, CStruct, Plain, TypeInfo};
 use nestify::nest;
 
@@ -78,12 +78,12 @@ c_ioctl! {
     BCH_IOCTL_SUBVOLUME_DESTROY		= _IOW(0xbc,	17, c::bch_ioctl_subvolume),
     BCH_IOCTL_SUBVOLUME_DESTROY_v2	= _IOW(0xbc,	30, c::bch_ioctl_subvolume_v2),
 
-    BCH_IOCTL_DEV_USAGE_V2		= _IOWR(0xbc,	18, Ffi<c::bch_ioctl_dev_usage_v2>),
+    BCH_IOCTL_DEV_USAGE_V2		= _IOWR(0xbc,	18, Head<c::bch_ioctl_dev_usage_v2>),
 
-    BCH_IOCTL_FSCK_OFFLINE		= _IOW(0xbc,	19, Ffi<c::bch_ioctl_fsck_offline>),
+    BCH_IOCTL_FSCK_OFFLINE		= _IOW(0xbc,	19, Head<c::bch_ioctl_fsck_offline>),
     BCH_IOCTL_FSCK_ONLINE		= _IOW(0xbc,	20, c::bch_ioctl_fsck_online),
     BCH_IOCTL_QUERY_ACCOUNTING		= _IOW(0xbc,	21, c::bch_ioctl_query_accounting),
-    BCH_IOCTL_QUERY_COUNTERS		= _IOW(0xbc,	21, Ffi<c::bch_ioctl_query_counters>),
+    BCH_IOCTL_QUERY_COUNTERS		= _IOW(0xbc,	21, Head<c::bch_ioctl_query_counters>),
     BCH_IOCTL_SUBVOLUME_LIST		= _IOWR(0xbc,	31, c::bch_ioctl_subvol_readdir),
     BCH_IOCTL_SUBVOLUME_TO_PATH		= _IOWR(0xbc,	32, c::bch_ioctl_subvol_to_path),
     BCH_IOCTL_SNAPSHOT_TREE		= _IOWR(0xbc,	33, c::bch_ioctl_snapshot_tree_query),
@@ -102,7 +102,7 @@ c_ioctl! {
     BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS	= _IO(0xbc, 66),
     BCHFS_IOC_PREAD_RAW			= _IOWR(0xbc, 67, c::bch_ioctl_pread_raw),
     BCHFS_IOC_UNPOISON			= _IOW(0xbc, 68, c::bch_ioctl_unpoison),
-    BCHFS_IOC_GET_DAMAGE		= _IOWR(0xbc, 70, Ffi<c::bch_ioctl_get_damage>),
+    BCHFS_IOC_GET_DAMAGE		= _IOWR(0xbc, 70, Head<c::bch_ioctl_get_damage>),
     /* 69: retired - READDIR_FLAGS before its entries had a reclen */
     BCHFS_IOC_READDIR_FLAGS		= _IOWR(0xbc, 72, c::bch_ioctl_readdir_flags),
 
@@ -447,7 +447,7 @@ c_default!(bch_ioctl_data_event);
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_replicas_usage {
     pub sectors: u64,
-    pub r: Ffi<c::bch_replicas_entry_v1>,
+    pub r: Head<c::bch_replicas_entry_v1>,
 }
 
 /* Obsolete */
@@ -475,7 +475,7 @@ pub struct bch_ioctl_fs_usage {
     pub replica_entries_bytes: u32,
     pub pad: u32,
 
-    pub replicas: [Ffi<c::bch_replicas_usage>; 0],
+    pub replicas: [Head<c::bch_replicas_usage>; 0],
 }
 
 #[repr(C)]

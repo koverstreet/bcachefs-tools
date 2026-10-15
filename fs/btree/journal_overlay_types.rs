@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{DArray, NeBytes, c_default};
-use crate::util::vstructs::Ffi;
+use crate::util::vstructs::Head;
 use cstruct_macros::{bitfield, CStruct};
 use nestify::nest;
 
@@ -32,7 +32,7 @@ pub struct journal_replay {
     pub ignore_blacklisted: bool,
     pub ignore_not_dirty: bool,
     /* must be last: */
-    pub j: Ffi<c::jset>,
+    pub j: Head<c::jset>,
 }
 c_default!(journal_replay);
 

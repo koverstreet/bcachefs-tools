@@ -73,7 +73,7 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
-use crate::util::vstructs::{floored_by_self, vstruct, vstruct_container, Ffi, FlexArray};
+use crate::util::vstructs::{floored_by_self, vstruct, vstruct_container, Head, FlexArray};
 use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, grown, tagged_union,
                      unsized_vstruct, whole, CStruct, Plain, TypeInfo};
 #[cfg(__KERNEL__)]
@@ -883,7 +883,7 @@ c_const! {
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_journal {
-    pub field: Ffi<c::bch_sb_field>,
+    pub field: Head<c::bch_sb_field>,
     pub buckets: [Le64; 0],
 }
 vstruct!(unsized bch_sb_field_journal, field.u64s, start = 0);
@@ -899,7 +899,7 @@ pub struct bch_sb_field_journal_v2_entry {
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_journal_v2 {
-    pub field: Ffi<c::bch_sb_field>,
+    pub field: Head<c::bch_sb_field>,
 
     pub d: [c::bch_sb_field_journal_v2_entry; 0],
 }
@@ -937,7 +937,7 @@ pub struct bch_encrypted_key {
 #[repr(C)]
 #[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_crypt {
-    pub field: Ffi<c::bch_sb_field>,
+    pub field: Head<c::bch_sb_field>,
 
     pub flags: Le64,
     pub kdf_flags: Le64,
@@ -992,14 +992,14 @@ vstruct_container!(jset_entry, thin c::bkey_i);
 #[repr(C)]
 #[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_clean {
-    pub field: Ffi<c::bch_sb_field>,
+    pub field: Head<c::bch_sb_field>,
 
     pub flags: Le32,
     pub _read_clock: Le16, /* no longer used */
     pub _write_clock: Le16,
     pub journal_seq: Le64,
 
-    pub start: [Ffi<c::jset_entry>; 0],
+    pub start: [Head<c::jset_entry>; 0],
     pub _data: [u64; 0],
 }
 vstruct!(unsized bch_sb_field_clean, field.u64s, start = 0);
@@ -1010,7 +1010,7 @@ vstruct_container!(bch_sb_field_clean, jset_entry);
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_ext {
-    pub field: Ffi<c::bch_sb_field>,
+    pub field: Head<c::bch_sb_field>,
     pub recovery_passes_required: [Le64; 2],
     pub errors_silent: [Le64; 8],
     pub btrees_lost_data: Le64,
@@ -1303,15 +1303,15 @@ pub struct bch_sb {
 
     pub layout: c::bch_sb_layout,
 
-    pub start: [Ffi<c::bch_sb_field>; 0],
+    pub start: [Head<c::bch_sb_field>; 0],
     pub _data: [Le64; 0],
 }
 vstruct!(unsized bch_sb, u64s);
 vstruct_container!(bch_sb, bch_sb_field);
-c_default!(bch_sb__ffi);
+c_default!(bch_sb__head);
 
 c_bitmask! {
-    LE16_BITMASK(struct Ffi<bch_sb>, block_size), strip BCH_SB_ {
+    LE16_BITMASK(struct Head<bch_sb>, block_size), strip BCH_SB_ {
         BCH_SB_BLOCK_SIZE(0, 16),
     }
 }
@@ -1329,7 +1329,7 @@ c_bitmask! {
  */
 
 c_bitmask! {
-    LE64_BITMASK(struct Ffi<bch_sb>, flags[0]), strip BCH_SB_ {
+    LE64_BITMASK(struct Head<bch_sb>, flags[0]), strip BCH_SB_ {
         BCH_SB_INITIALIZED(0, 1),
         BCH_SB_CLEAN(1, 2),
         BCH_SB_CSUM_TYPE(2, 8),
@@ -1360,7 +1360,7 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct Ffi<bch_sb>, flags[1]), strip BCH_SB_ {
+    LE64_BITMASK(struct Head<bch_sb>, flags[1]), strip BCH_SB_ {
         BCH_SB_STR_HASH_TYPE(0, 4),
         BCH_SB_COMPRESSION_TYPE_LO(4, 8),
         BCH_SB_INODE_32BIT(8, 9),
@@ -1384,14 +1384,14 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct Ffi<bch_sb>, flags[2]), strip BCH_SB_ {
+    LE64_BITMASK(struct Head<bch_sb>, flags[2]), strip BCH_SB_ {
         BCH_SB_BACKGROUND_COMPRESSION_TYPE_LO(0, 4),
         BCH_SB_GC_RESERVE_BYTES(4, 64),
     }
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct Ffi<bch_sb>, flags[3]), strip BCH_SB_ {
+    LE64_BITMASK(struct Head<bch_sb>, flags[3]), strip BCH_SB_ {
         BCH_SB_ERASURE_CODE(0, 16),
         BCH_SB_METADATA_TARGET(16, 28),
         BCH_SB_SHARD_INUMS(28, 29),
@@ -1402,7 +1402,7 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct Ffi<bch_sb>, flags[4]), strip BCH_SB_ {
+    LE64_BITMASK(struct Head<bch_sb>, flags[4]), strip BCH_SB_ {
         BCH_SB_JOURNAL_RECLAIM_DELAY(0, 32),
         BCH_SB_JOURNAL_TRANSACTION_NAMES(32, 33),
         BCH_SB_NOCOW(33, 34),
@@ -1415,7 +1415,7 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct Ffi<bch_sb>, flags[5]), strip BCH_SB_ {
+    LE64_BITMASK(struct Head<bch_sb>, flags[5]), strip BCH_SB_ {
         BCH_SB_VERSION_UPGRADE_COMPLETE(0, 16),
         BCH_SB_ALLOCATOR_STUCK_TIMEOUT(16, 32),
         BCH_SB_VERSION_INCOMPAT(32, 48),
@@ -1424,7 +1424,7 @@ c_bitmask! {
 }
 
 c_bitmask! {
-    LE64_BITMASK(struct Ffi<bch_sb>, flags[6]), strip BCH_SB_ {
+    LE64_BITMASK(struct Head<bch_sb>, flags[6]), strip BCH_SB_ {
         BCH_SB_SHARD_INUMS_NBITS(0, 4),
         BCH_SB_WRITE_ERROR_TIMEOUT(4, 14),
         BCH_SB_CSUM_ERR_RETRY_NR(14, 20),
@@ -1756,7 +1756,7 @@ c_const! {
     pub const BCACHEFS_STATFS_MAGIC: u32 = 0xca451a4e;
 
     /* Journal */
-    pub const JSET_KEYS_U64s: usize = size_of::<Ffi<c::jset_entry>>() / size_of::<u64>();
+    pub const JSET_KEYS_U64s: usize = size_of::<Head<c::jset_entry>>() / size_of::<u64>();
 }
 
 c_xmacro! {
@@ -1853,7 +1853,7 @@ tagged_union! {
 #[repr(C)]
 #[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct jset_entry_blacklist {
-    pub entry: Ffi<c::jset_entry>,
+    pub entry: Head<c::jset_entry>,
     pub seq: Le64,
 }
 vstruct!(jset_entry_blacklist, repr.entry.u64s);
@@ -1862,7 +1862,7 @@ vstruct!(jset_entry_blacklist, repr.entry.u64s);
 #[repr(C)]
 #[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct jset_entry_blacklist_v2 {
-    pub entry: Ffi<c::jset_entry>,
+    pub entry: Head<c::jset_entry>,
     pub start: Le64,
     pub end: Le64,
 }
@@ -1888,7 +1888,7 @@ c_enum! {
 #[repr(C, packed)]
 #[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct jset_entry_usage {
-    pub entry: Ffi<c::jset_entry>,
+    pub entry: Head<c::jset_entry>,
     pub v: Le64,
 }
 vstruct!(jset_entry_usage, repr.entry.u64s);
@@ -1898,9 +1898,9 @@ vstruct!(jset_entry_usage, repr.entry.u64s);
 #[repr(C, packed)]
 #[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct jset_entry_data_usage {
-    pub entry: Ffi<c::jset_entry>,
+    pub entry: Head<c::jset_entry>,
     pub v: Le64,
-    pub r: Ffi<c::bch_replicas_entry_v1>,
+    pub r: Head<c::bch_replicas_entry_v1>,
 }
 vstruct!(unsized jset_entry_data_usage, entry.u64s);
 
@@ -1908,7 +1908,7 @@ vstruct!(unsized jset_entry_data_usage, entry.u64s);
 #[repr(C, packed)]
 #[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct jset_entry_clock {
-    pub entry: Ffi<c::jset_entry>,
+    pub entry: Head<c::jset_entry>,
     pub rw: u8,
     pub pad: [u8; 7],
     pub time: Le64,
@@ -1927,7 +1927,7 @@ pub struct jset_entry_dev_usage_type {
 #[repr(C)]
 #[derive(Default, CStruct, Plain, TypeInfo)]
 pub struct jset_entry_dev_usage {
-    pub entry: Ffi<c::jset_entry>,
+    pub entry: Head<c::jset_entry>,
     pub dev: Le32,
     pub pad: u32,
 
@@ -1943,7 +1943,7 @@ vstruct!(unsized jset_entry_dev_usage, entry.u64s);
 #[derive(Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct jset_entry_log {
-    pub entry: Ffi<c::jset_entry>,
+    pub entry: Head<c::jset_entry>,
     pub d: [u8; 0],
 }
 vstruct!(unsized jset_entry_log, entry.u64s);
@@ -1953,7 +1953,7 @@ vstruct!(unsized jset_entry_log, entry.u64s);
 #[derive(Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct jset_entry_datetime {
-    pub entry: Ffi<c::jset_entry>,
+    pub entry: Head<c::jset_entry>,
     pub seconds: Le64,
 }
 vstruct!(jset_entry_datetime, repr.entry.u64s);
@@ -1963,7 +1963,7 @@ vstruct!(jset_entry_datetime, repr.entry.u64s);
 #[derive(Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct jset_entry_rewind_limit {
-    pub entry: Ffi<c::jset_entry>,
+    pub entry: Head<c::jset_entry>,
     pub seq: Le64,
 }
 vstruct!(jset_entry_rewind_limit, repr.entry.u64s);
@@ -1977,7 +1977,7 @@ vstruct!(jset_entry_rewind_limit, repr.entry.u64s);
 #[derive(Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct jset_entry_rewind {
-    pub entry: Ffi<c::jset_entry>,
+    pub entry: Head<c::jset_entry>,
     pub from: Le64,
     pub to: Le64,
 }
@@ -2015,7 +2015,7 @@ pub struct jset {
     /* Sequence number of oldest dirty journal entry */
     pub last_seq: Le64,
 
-    pub start: [Ffi<c::jset_entry>; 0],
+    pub start: [Head<c::jset_entry>; 0],
     pub _data: [u64; 0],
 }
 vstruct!(unsized jset, u64s);
@@ -2025,7 +2025,7 @@ vstruct_container!(jset, jset_entry);
 floored_by_self!(bkey_i);
 
 c_bitmask! {
-    LE32_BITMASK(struct Ffi<jset>, flags), strip JSET_ {
+    LE32_BITMASK(struct Head<jset>, flags), strip JSET_ {
         JSET_CSUM_TYPE(0, 4),
         JSET_BIG_ENDIAN(4, 5),
         JSET_NO_FLUSH(5, 6),
@@ -2089,7 +2089,7 @@ pub struct bset {
 vstruct!(unsized bset, u64s);
 
 c_bitmask! {
-    LE32_BITMASK(struct Ffi<bset>, flags), strip BSET_ {
+    LE32_BITMASK(struct Head<bset>, flags), strip BSET_ {
         BSET_CSUM_TYPE(0, 4),
 
         BSET_BIG_ENDIAN(4, 5),
@@ -2126,13 +2126,13 @@ pub struct btree_node {
 			u64 _data[];
 		};
 	}")]
-    pub keys: Ffi<c::bset>,
+    pub keys: Head<c::bset>,
 }
 vstruct!(unsized btree_node, keys.u64s);
-c_default!(btree_node__ffi);
+c_default!(btree_node__head);
 
 c_bitmask! {
-    LE64_BITMASK(struct Ffi<btree_node>, flags), strip BTREE_NODE_ {
+    LE64_BITMASK(struct Head<btree_node>, flags), strip BTREE_NODE_ {
         BTREE_NODE_ID_LO(0, 4),
         BTREE_NODE_LEVEL(4, 8),
         BTREE_NODE_NEW_EXTENT_OVERWRITE(8, 9),
@@ -2158,10 +2158,10 @@ pub struct btree_node_entry {
 			u64 _data[];
 		};
 	}")]
-    pub keys: Ffi<c::bset>,
+    pub keys: Head<c::bset>,
 }
 vstruct!(unsized btree_node_entry, keys.u64s);
-c_default!(btree_node_entry__ffi);
+c_default!(btree_node_entry__head);
 
 c_verbatim!(r#"
 _Static_assert(offsetof(struct btree_node, u64s) == offsetof(struct btree_node, keys.u64s) &&

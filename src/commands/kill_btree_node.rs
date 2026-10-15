@@ -49,7 +49,7 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::BkeySC;
 use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter};
 use bcachefs_kernel::opt_set;
-use bcachefs_kernel::util::vstructs::{cast_plain, Ffi, SelfSized};
+use bcachefs_kernel::util::vstructs::{cast_plain, Head, SelfSized};
 use clap::Parser;
 
 struct KillNode {
@@ -155,10 +155,10 @@ struct BsetLoc {
 /// empty still has to be corruptible: on a freshly formatted filesystem every
 /// btree leaf is one of those, which is exactly what the spin repro formats.
 fn first_bset(node: &[u8]) -> BsetLoc {
-    let n = cast_plain::<Ffi<c::btree_node>>(node).expect("node buffer: aligned, at least a block");
+    let n = cast_plain::<Head<c::btree_node>>(node).expect("node buffer: aligned, at least a block");
 
     BsetLoc {
-        at:     std::mem::offset_of!(Ffi<c::btree_node>, keys),
+        at:     std::mem::offset_of!(Head<c::btree_node>, keys),
         sector: 0,
         u64s:   n.keys.u64s(),
     }
@@ -170,11 +170,11 @@ fn first_bset_with_keys(node: &[u8], written_sectors: usize, block_bits: u32) ->
     while off < written_sectors * 512 {
         // where the bset is, its u64s, and its container's sectors
         let (bset_at, u64s, sectors) = if off == 0 {
-            let n = cast_plain::<Ffi<c::btree_node>>(&node[off..])?;
-            (std::mem::offset_of!(Ffi<c::btree_node>, keys), n.keys.u64s(), n.sectors(block_bits))
+            let n = cast_plain::<Head<c::btree_node>>(&node[off..])?;
+            (std::mem::offset_of!(Head<c::btree_node>, keys), n.keys.u64s(), n.sectors(block_bits))
         } else {
-            let n = cast_plain::<Ffi<c::btree_node_entry>>(&node[off..])?;
-            (off + std::mem::offset_of!(Ffi<c::btree_node_entry>, keys), n.keys.u64s(), n.sectors(block_bits))
+            let n = cast_plain::<Head<c::btree_node_entry>>(&node[off..])?;
+            (off + std::mem::offset_of!(Head<c::btree_node_entry>, keys), n.keys.u64s(), n.sectors(block_bits))
         };
 
         if u64s != 0 {
@@ -277,13 +277,13 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                                      --error keys has nothing to corrupt"))?;
 
                             let (victim, what) = if cli.error == ErrorType::Csum {
-                                (bset.at + std::mem::offset_of!(Ffi<c::bset>, journal_seq),
+                                (bset.at + std::mem::offset_of!(Head<c::bset>, journal_seq),
                                  "bset header")
                             } else {
                                 /* midway into the keys: inside the checksummed
                                  * region, and corrupts a key rather than a
                                  * header field the keys don't depend on */
-                                (bset.at + size_of::<Ffi<c::bset>>() + bset.u64s * 8 / 2,
+                                (bset.at + size_of::<Head<c::bset>>() + bset.u64s * 8 / 2,
                                  "key data")
                             };
 

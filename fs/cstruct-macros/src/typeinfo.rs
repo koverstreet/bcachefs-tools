@@ -29,7 +29,7 @@ fn derives_type_info(name: &str) -> bool {
     name.starts_with("bch_") || matches!(name, "bpos" | "bkey" | "bversion")
 }
 
-/// By C's name: a family's C definition, X__ffi, is struct X to C.
+/// By C's name: a family's C definition, X__head, is struct X to C.
 pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&input.to_string())?;
     let name = &def.name;

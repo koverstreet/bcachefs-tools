@@ -12,7 +12,7 @@ use bcachefs_kernel::{metadata_version, opt_defined, opt_get, opt_set};
 
 use crate::wrappers::super_io::{die, SUPERBLOCK_SIZE_DEFAULT};
 use bcachefs_kernel::sb::io::BCHFS_MAGIC;
-use bcachefs_kernel::util::vstructs::Ffi;
+use bcachefs_kernel::util::vstructs::Head;
 
 /// Device options for formatting — Rust replacement for C struct dev_opts.
 ///
@@ -155,7 +155,7 @@ pub fn format(
     mut fs_opts: c::bch_opts,
     mut opts: c::format_opts,
     dev_slice: &mut [DevOpts],
-) -> *mut Ffi<c::bch_sb> {
+) -> *mut Head<c::bch_sb> {
 
     // Get device size if not specified (needed for block size threshold)
     for dev in dev_slice.iter_mut() {
@@ -272,7 +272,7 @@ pub fn format(
     sb.sb_mut().time_precision = 1u32.into();
 
     // Member info
-    let mi_size = std::mem::size_of::<Ffi<c::bch_sb_field_members_v2>>()
+    let mi_size = std::mem::size_of::<Head<c::bch_sb_field_members_v2>>()
         + std::mem::size_of::<c::bch_member>() * dev_slice.len();
     let mi_u64s = mi_size / std::mem::size_of::<u64>();
 

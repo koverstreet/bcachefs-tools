@@ -14,7 +14,7 @@ use std::os::fd::{AsFd, AsRawFd};
 
 pub use bcachefs_kernel::cstructs::bcachefs_ioctl::*;
 pub use bcachefs_kernel::util::ioctl::Ioctl;
-use bcachefs_kernel::util::vstructs::{from_bytes, from_bytes_mut, plain_bytes, plain_bytes_mut, read_past, CountedFfi, FlexArray, Plain, VStructError};
+use bcachefs_kernel::util::vstructs::{from_bytes, from_bytes_mut, plain_bytes, plain_bytes_mut, read_past, CountedHead, FlexArray, Plain, VStructError};
 
 fn ret(r: libc::c_int) -> io::Result<i32> {
     if r < 0 {
@@ -149,7 +149,7 @@ impl<H: FlexArray + Plain> IoctlBuf<H> {
     }
 }
 
-impl<H: CountedFfi> IoctlBuf<H> {
+impl<H: CountedHead> IoctlBuf<H> {
     /// The value, a #[counted] family's - its header, and its array as long
     /// as the header's count says: an error if the buffer doesn't hold that
     /// many, the kernel and us disagreeing. Unvalidated: the kernel's bytes.
@@ -217,7 +217,7 @@ mod tests {
         assert!(matches!(buf.tail_strided(stride), Err(VStructError::Overrun { .. })));
     }
 
-    type Counters = bcachefs_kernel::util::vstructs::Ffi<bch_ioctl_query_counters>;
+    type Counters = bcachefs_kernel::util::vstructs::Head<bch_ioctl_query_counters>;
 
     /// get() is the array as long as the header's count says, not as long as
     /// the buffer.

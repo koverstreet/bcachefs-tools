@@ -10,7 +10,7 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::metadata_version;
 use bcachefs_kernel::opt_set;
-use bcachefs_kernel::util::vstructs::Ffi;
+use bcachefs_kernel::util::vstructs::Head;
 use clap::Parser;
 
 use crate::wrappers::handle::BcachefsHandle;
@@ -291,7 +291,7 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
             }
         }
 
-        let mut buf = IoctlBuf::<Ffi<c::bch_ioctl_fsck_offline>>::new(dev_ptrs.len());
+        let mut buf = IoctlBuf::<Head<c::bch_ioctl_fsck_offline>>::new(dev_ptrs.len());
         let c_opts = CString::new(opts_str.as_str())?;
         let hdr = buf.hdr_mut();
         hdr.opts = c_opts.as_ptr() as u64;

@@ -17,7 +17,7 @@ use bch_bindgen::accounting::data_type;
 use crate::wrappers::ioctl::*;
 use crate::wrappers::sysfs;
 use bch_bindgen::c::bch_sb;
-use bcachefs_kernel::util::vstructs::Ffi;
+use bcachefs_kernel::util::vstructs::Head;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::path_to_cstr;
 use errno::Errno;
@@ -484,12 +484,12 @@ impl BcachefsHandle {
     /// Read the on-disk metadata version from the filesystem superblock.
     pub(crate) fn sb_version(&self) -> Result<u16, Errno> {
         let buf = self.read_super()?;
-        if buf.len() < mem::size_of::<Ffi<bch_sb>>() {
+        if buf.len() < mem::size_of::<Head<bch_sb>>() {
             return Err(Errno(libc::EIO));
         }
         // SAFETY: the header's bytes, as checked, and any bytes are one - read
         // unaligned: the buffer is bytes
-        let sb = unsafe { buf.as_ptr().cast::<Ffi<bch_sb>>().read_unaligned() };
+        let sb = unsafe { buf.as_ptr().cast::<Head<bch_sb>>().read_unaligned() };
         Ok(sb.version.get())
     }
 
@@ -497,7 +497,7 @@ impl BcachefsHandle {
     pub(crate) fn dev_usage(&self, dev_idx: u32) -> Result<DevUsage, Errno> {
         let nr_data_types = data_type::nr.0 as usize;
 
-        let mut buf = IoctlBuf::<Ffi<bch_ioctl_dev_usage_v2>>::new(nr_data_types);
+        let mut buf = IoctlBuf::<Head<bch_ioctl_dev_usage_v2>>::new(nr_data_types);
         let hdr = buf.hdr_mut();
         hdr.dev = dev_idx as u64;
         hdr.flags = BCH_BY_INDEX;

@@ -48,8 +48,8 @@
 //! Generated, for the first declaration:
 //!
 //!  - `union disk_accounting_pos__ffi`: the storage, what C and disk see -
-//!    C's struct disk_accounting_pos, Ffi<disk_accounting_pos>; Plain, its
-//!    pad being every byte of it;
+//!    C's struct disk_accounting_pos; Plain, its pad being every byte of
+//!    it;
 //!  - `disk_accounting_pos<S>`, the storage in a state, Validated unless
 //!    named, as a family's types are (util/vstructs.rs): Unvalidated, bytes
 //!    from outside - `from_bytes()`; Validated, what validate passed, or
@@ -732,7 +732,7 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
     with_defs(defs, name, &format!(
         "{storage}\
          \n\
-         /// {name}, in state S - Validated unless named: C's struct, Ffi<{name}>.\n\
+         /// {name}, in state S - Validated unless named: over C's struct, {s_ty}.\n\
          /// Unvalidated, bytes from outside - from the kernel, off a device - each\n\
          /// arm checked against the storage as get() hands it out; Validated,\n\
          /// what validate passed, or what's made here from an arm.\n\
@@ -747,10 +747,6 @@ fn generate(decl: &TokenStream, tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Resul
          }}\n\
          \n\
          impl<S> Copy for {name}<S> {{}}\n\
-         \n\
-         impl<S> {vs}::HasFfi for {name}<S> {{\n\
-             type Ffi = {s_ty};\n\
-         }}\n\
          \n\
          /// One of {name}'s arms, by value: what {name}::new() takes.\n\
          #[allow(non_camel_case_types, dead_code)]\n\

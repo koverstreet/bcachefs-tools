@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::util::vstructs::Ffi;
+use crate::util::vstructs::Head;
 use cstruct_macros::{c_const, c_enum, c_typedef, c_xmacro, tagged_union, whole, CStruct, Plain, TypeInfo};
 
 /*
@@ -117,7 +117,7 @@ c_enum! {
 }
 
 c_typedef! {
-    pub type bch_acct_replicas = Ffi<c::bch_replicas_entry_v1>;
+    pub type bch_acct_replicas = Head<c::bch_replicas_entry_v1>;
 }
 
 /// The replicas arm's family, which disk_accounting_pos's get() hands it out

@@ -52,7 +52,7 @@ use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::inode;
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::typeinfo::{self, FieldTarget, StructInfo, TypeInfo};
-use bcachefs_kernel::util::vstructs::Ffi;
+use bcachefs_kernel::util::vstructs::Head;
 use bch_bindgen::c::bch_degraded_actions;
 use clap::Parser;
 
@@ -822,7 +822,7 @@ fn cmd_set(
 // bch2_write_super so the csum is recomputed and every sb copy updated.
 
 fn sb_field(field: &str) -> Result<FieldTarget> {
-    typeinfo::resolve_with_bits(<Ffi<c::bch_sb> as typeinfo::TypeInfo>::INFO, field)
+    typeinfo::resolve_with_bits(<Head<c::bch_sb> as typeinfo::TypeInfo>::INFO, field)
         .map_err(|e| anyhow!("{e}"))
 }
 

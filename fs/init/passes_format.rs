@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use core::ffi::c_ulong;
 use crate::types::{Le32, Le64};
-use crate::util::vstructs::{vstruct, Ffi};
+use crate::util::vstructs::{vstruct, Head};
 use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, unsized_vstruct, CStruct, Plain, TypeInfo};
 
 c_const! {
@@ -294,7 +294,7 @@ c_bitmask! {
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_recovery_passes {
-    pub field: Ffi<c::bch_sb_field>,
+    pub field: Head<c::bch_sb_field>,
     pub start: [c::recovery_pass_entry; 0],
 }
 vstruct!(unsized bch_sb_field_recovery_passes, field.u64s, start = 0);

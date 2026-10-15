@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::Le64;
-use crate::util::vstructs::{vstruct, Ffi};
+use crate::util::vstructs::{vstruct, Head};
 use cstruct_macros::{c_bitmask, c_const, unsized_vstruct, CStruct, Plain, TypeInfo};
 
 c_const! {
@@ -33,7 +33,7 @@ c_bitmask! {
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_sb_field_disk_groups {
-    pub field: Ffi<c::bch_sb_field>,
+    pub field: Head<c::bch_sb_field>,
     pub entries: [c::bch_disk_group; 0],
 }
 vstruct!(unsized bch_sb_field_disk_groups, field.u64s, start = 0);

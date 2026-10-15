@@ -19,7 +19,7 @@ use crate::tokens;
 
 /// #[derive(Plain)], on a struct - not a union, whose bytes past a short
 /// arm's end are no field's. An unsized vstruct's states aren't: they're its
-/// C definition's - #[unsized_vstruct]'s X__ffi - and then its tail's
+/// C definition's - #[unsized_vstruct]'s X__head - and then its tail's
 /// elements, Plain too, as the attribute checks.
 pub(crate) fn derive_plain(input: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&input.to_string())?;
@@ -155,12 +155,12 @@ const VS: &str = "crate::util::vstructs";
 
 /// A field of C's struct as a state's definition has it, inline: pub only
 /// where C's is pub and holds no count - not the count, written private or
-/// pub(crate), nor an embedded header, Ffi<..>, whose own count it is, nor
+/// pub(crate), nor an embedded header, Head<..>, whose own count it is, nor
 /// one of @private, which the family names: a counted type's count. Those
 /// read through the definition's Deref to its head, and can't be written: a
 /// count changes only through what holds the value.
 fn inline_field(f: &CFieldDef, private: &[&str]) -> String {
-    let vis = if f.vis == "pub" && !f.ty.contains("Ffi<") && !private.contains(&f.rust_name().as_str()) {
+    let vis = if f.vis == "pub" && !f.ty.contains("Head<") && !private.contains(&f.rust_name().as_str()) {
         "pub "
     } else {
         ""
@@ -199,7 +199,7 @@ struct Shape<'a> {
     /// After the fields: @tail, a slice of @elem.
     tail:    &'a str,
     elem:    &'a str,
-    /// C's struct: its HasFfi.
+    /// C's struct: what as_ffi() points at.
     ffi:     &'a str,
     /// Where the tail starts, if not where the head ends: inside it, the
     /// head being C's struct rounded up into the tail's first bytes - a key
@@ -222,7 +222,7 @@ struct Shape<'a> {
 /// ArmRef, cast() from the bytes its storage says are its. @doc is its own;
 /// @methods, more of them.
 fn dst(ty: &str, doc: &str, shape: &Shape<'_>, methods: &str) -> String {
-    let Shape { repr, fields, private, head, deref, tail, elem, ffi, tail_at } = *shape;
+    let Shape { repr, fields, private, head, deref, tail, elem, ffi: _, tail_at } = *shape;
     let tail_at = tail_at.map(str::to_string).unwrap_or_else(|| format!("::core::mem::size_of::<{head}>()"));
     let plain_fields: String = fields.iter()
         .map(|f| format!("{VS}::assert_plain::<{}>();\n", f.ty.trim()))
@@ -256,10 +256,6 @@ fn dst(ty: &str, doc: &str, shape: &Shape<'_>, methods: &str) -> String {
                  // {deref} is {head}, or #[repr(transparent)] over it\n\
                  unsafe {{ &*(self as *const Self).cast::<{deref}>() }}\n\
              }}\n\
-         }}\n\
-         \n\
-         impl {VS}::HasFfi for {ty} {{\n\
-             type Ffi = {ffi};\n\
          }}\n\
          \n\
          // SAFETY: its head's fields, each Plain, then its tail at TAIL - as the\n\
@@ -444,7 +440,7 @@ fn own_count_family(name: &str, shape: &Shape<'_>) -> String {
         dst(&ty,
             &format!("/// {name}<{st}>: {what}. C's fields - those that hold a count\n\
                       /// private - then its tail, as long as its count says. It derefs\n\
-                      /// to C's struct {name}, Ffi<{name}>, to read.\n"),
+                      /// to C's struct {name}, Head<{name}>, to read.\n"),
             shape, &state_methods(name, shape.ffi, st))
             + &format!(
                 "// a sized tagged union's arm: as many bytes as its count says\n\
@@ -465,14 +461,14 @@ fn own_count_family(name: &str, shape: &Shape<'_>) -> String {
         state_alias(name,
                &format!("/// {name}, in state S - Validated unless named: a reference to one\n\
                          /// reaches every byte of it and none past. C's struct {name} is\n\
-                         /// Ffi<{name}>.\n")))
+                         /// Head<{name}>.\n")))
 }
 
 /// #[unsized_vstruct]: the family of an unsized vstruct's definitions, one
 /// per state (util/vstructs.rs' Family), from C's struct as written.
 ///
-/// C's definition is the item, renamed X__ffi, with #[c_name(X)]: C has it
-/// as struct X, Rust as Ffi<X> - the alias X is the family's. Each state's,
+/// C's definition is the item, renamed X__head, with #[c_name(X)]: C has it
+/// as struct X, Rust as Head<X> - the alias X is the family's. Each state's,
 /// X__unvalidated and X__validated, is Rust's alone: a DST, the header and
 /// then its tail, as long as its count says - which derefs to the header,
 /// where its fields and methods are, written once. Its header never grew:
@@ -497,7 +493,7 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
         },
         Some((tail, elem)) => (tail.unwrap_or_else(|| "_tail".to_string()), elem),
     };
-    let ffi = format!("{name}__ffi");
+    let ffi = format!("{name}__head");
     let last = last.rust_name();
     // C's fields, inline in each state's definition - but its flexible array,
     // where that's the tail
@@ -536,12 +532,12 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
 /// `_tail`, or `tail = NAME: [E]`, a field of a field the states call NAME.
 ///
 /// C's struct gets FlexArray from the count - its size, TAIL and the
-/// elements past it - and CountedFfi, the way to its Unvalidated definition
+/// elements past it - and CountedHead, the way to its Unvalidated definition
 /// from what holds its bytes.
 pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item.to_string())?;
     let name = def.name.clone();
-    let ffi = format!("{name}__ffi");
+    let ffi = format!("{name}__head");
 
     let args = parse_family_args(&attr.to_string(), &["count", "tail"]).map_err(|e| format!("{name}: {e}"))?;
     let count = args.count.unwrap_or_else(|| "nr_entries".to_string());
@@ -576,7 +572,7 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
     let mut out = rename_struct(item, &name, &ffi)?;
     out.extend(tokens(&format!(
         "{}\
-         impl {VS}::CountedFfi for {ffi} {{\n\
+         impl {VS}::CountedHead for {ffi} {{\n\
              type Unvalidated = {name}__unvalidated;\n\
          }}\n\
          \n\
