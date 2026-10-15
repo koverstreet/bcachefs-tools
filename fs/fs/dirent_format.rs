@@ -320,7 +320,8 @@ pub fn bch2_dirent_to_text(
 /// Only new keys are held to BCH_NAME_MAX: it used to be bigger, and older
 /// keys can have longer names.
 pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<super::Dirent<'k>, BchError> {
-    let d = v.k.arm::<c::Dirent>().expect("a dirent").v();
+    let k = v.k.arm::<c::Dirent>().expect("a dirent");
+    let d = k.v();
     let raw = RawNames::new(v.k);
 
     bkey_fsck_err_on!(v, raw.name_len == 0, id::dirent_empty_name,
@@ -363,7 +364,7 @@ pub fn validate<'k>(v: &BkeyValidate<'_, 'k>) -> Result<super::Dirent<'k>, BchEr
                           "dirent has stray data after cf name's NUL")?;
     }
 
-    Ok(super::Dirent { k: v.k, v: d, names })
+    Ok(super::Dirent { k, v: d, names })
 }
 
 /// For C's bkey_ops: bch2_dirent_validate().

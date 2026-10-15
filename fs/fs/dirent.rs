@@ -38,7 +38,7 @@ use cstruct_macros::c_export;
 /// btree has.
 #[derive(Clone, Copy)]
 pub struct Dirent<'k> {
-    k:     BkeySC<'k>,
+    k:     BkeySC<'k, c::Dirent>,
     v:     &'k c::Dirent,
     names: DirentName<'k>,
 }
@@ -46,13 +46,14 @@ pub struct Dirent<'k> {
 impl<'k> Dirent<'k> {
     /// @k as a dirent, if it is one.
     pub fn new(k: BkeySC<'k>) -> Option<Self> {
-        let v = k.arm::<c::Dirent>().map(|k| k.v())?;
-        let names = RawNames::new(k).names()
+        let k = k.arm::<c::Dirent>()?;
+        let v = k.v();
+        let names = RawNames::new(k.s_c()).names()
             .expect("dirent names within the value, as validate checked");
         Some(Dirent { k, v, names })
     }
 
-    pub fn k(&self) -> BkeySC<'k> { self.k }
+    pub fn k(&self) -> BkeySC<'k, c::Dirent> { self.k }
 
     pub fn v(&self) -> &'k c::Dirent { self.v }
 
@@ -564,7 +565,7 @@ impl DirContext<'_> {
     fn emit(&mut self, trans: &BtreeTrans<'_>, d: Dirent<'_>, target: c::subvol_inum)
         -> Result<bool, BchError>
     {
-        let d = d.k().arm::<c::Dirent>().expect("a dirent").to_c();
+        let d = d.k().to_c();
         match unsafe { c::bch2_dir_emit(trans.raw(), self.0, d, target) } {
             0              => Ok(true),
             ret if ret > 0 => Ok(false),

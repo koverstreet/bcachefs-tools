@@ -9,7 +9,7 @@
 //! and a repair that made its own mutable copy from the original key dropped
 //! every repair before it.
 
-use crate::btree::bkey::{BkeySC, BkeySCToText, SizedBkey};
+use crate::btree::bkey::{BkeySC, BkeySCToText, MutBkey, SizedBkey};
 use crate::btree::iter::{BtreeIter, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::errcode::BchError;
@@ -19,18 +19,21 @@ use core::marker::PhantomData;
 /// Key @k, of the type whose value is @K, at @iter.
 pub struct CowKey<'i, 'k, 'a, 't, K: SizedBkey> {
     iter: &'i BtreeIter<'t>,
-    k:    BkeySC<'k>,
+    k:    BkeySC<'k, K::InPlace>,
     /// The value as read, zero padded - until there's @u.
     v:    K,
     /// The key as it will be written, once anything has been repaired.
     u:    Option<TransBkey<'a, 't, K>>,
 }
 
-impl<'i, 'k, 'a, 't, K: SizedBkey> CowKey<'i, 'k, 'a, 't, K> {
+impl<'i, 'k, 'a, 't, K: SizedBkey> CowKey<'i, 'k, 'a, 't, K>
+where
+    K::InPlace: MutBkey<Mut = K>,
+{
     /// None if @k isn't of type @K.
     pub fn new(iter: &'i BtreeIter<'t>, k: BkeySC<'k>) -> Option<Self> {
         let v = K::val_copy_pad(k)?;
-        Some(CowKey { iter, k, v, u: None })
+        Some(CowKey { iter, k: k.arm::<K>()?, v, u: None })
     }
 
     pub fn pos(&self) -> c::bpos {
@@ -53,7 +56,7 @@ impl<'i, 'k, 'a, 't, K: SizedBkey> CowKey<'i, 'k, 'a, 't, K> {
     /// The key, made mutable and queued as its update if it isn't yet.
     pub fn u(&mut self, t: &TransAttempt<'a, 't>) -> Result<&mut TransBkey<'a, 't, K>, BchError> {
         if self.u.is_none() {
-            self.u = Some(t.bkey_make_mut::<K>(self.iter, self.k, UpdateTriggerFlags::empty())?);
+            self.u = Some(t.bkey_make_mut(self.iter, self.k, UpdateTriggerFlags::empty())?);
         }
         Ok(self.u.as_mut().expect("just made"))
     }

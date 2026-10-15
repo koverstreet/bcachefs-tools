@@ -131,7 +131,8 @@ fn check_snapshot_tree<'t>(
     let trans = t.trans();
     let fs = trans.fs();
 
-    let Some(st) = k.arm::<c::SnapshotTree>().map(|k| k.v()) else { return Ok(()) };
+    let Some(k) = k.arm::<c::SnapshotTree>() else { return Ok(()) };
+    let st = k.v();
     let root_id = st.root_snapshot.get();
 
     let root = match snapshot::lookup_key(trans, root_id) {
@@ -180,7 +181,7 @@ fn check_snapshot_tree<'t>(
         return Ok(());   /* nothing to be done here */
     };
 
-    let mut u = t.bkey_make_mut::<c::SnapshotTree>(iter, k, UpdateTriggerFlags::empty())?;
+    let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty())?;
     u.v_mut().master_subvol = subvol.into();
     Ok(())
 }

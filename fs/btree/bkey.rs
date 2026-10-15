@@ -429,6 +429,27 @@ impl<V: SizedBkey> BkeyI<V> {
     }
 }
 
+/// A value as a key is read with it, BkeySC<'_, Self>, and what a mutable copy
+/// of the key is: TransAttempt::bkey_make_mut_noupdate() makes a
+/// TransBkey<Self::Mut> of one, grown to MIN_BYTES. Any key's copy is any
+/// key's, as long as it is; a plain type's is itself, which a valid key has
+/// all of; a grown type's, read as X<Validated>, is X, the fields an older
+/// value lacks zeroed.
+///
+/// # Safety
+/// Mut is bch_val, or a SizedBkey whose key is MIN_BYTES: TransBkey<Mut>'s
+/// value is over that many.
+pub unsafe trait MutBkey {
+    type Mut: ?Sized;
+    const MIN_BYTES: usize;
+}
+
+// SAFETY: any key, no longer than it is
+unsafe impl MutBkey for c::bch_val {
+    type Mut = c::bch_val;
+    const MIN_BYTES: usize = 0;
+}
+
 /// Per value type, by its BCH_BKEY_TYPES() field column: `_` if every valid
 /// value is whole, else the first field a valid one may end before. A sized
 /// type's ArmRef is &T, whole. A DST is a family's (util/vstructs.rs), listed
@@ -509,6 +530,12 @@ macro_rules! bkey_val {
         bkey_val!(@family $name, $field);
         // SAFETY: Plain, as #[grown] requires: no padding, any bytes a value
         unsafe impl SizedBkey for c::[<$name:camel>] {}
+
+        // SAFETY: a SizedBkey, its key whole
+        unsafe impl MutBkey for c::[<$name:camel>]<crate::util::vstructs::Validated> {
+            type Mut = c::[<$name:camel>];
+            const MIN_BYTES: usize = size_of::<BkeyI<c::[<$name:camel>]>>();
+        }
     } };
 
     (@sized $name:ident) => { crate::paste! {
@@ -534,6 +561,12 @@ macro_rules! bkey_val {
         // SAFETY: an on-disk value - integers, and structs, arrays and unions
         // of them - any bytes of which are one
         unsafe impl SizedBkey for c::[<$name:camel>] {}
+
+        // SAFETY: a SizedBkey, its key whole
+        unsafe impl MutBkey for c::[<$name:camel>] {
+            type Mut = Self;
+            const MIN_BYTES: usize = size_of::<BkeyI<Self>>();
+        }
 
         // Whole, &T - and the Floored Min a View derefs to. A value is at the
         // u64 after its key's header, so it's aligned.

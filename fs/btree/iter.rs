@@ -634,7 +634,12 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(dst)
     }
 
-    pub fn bkey_reassemble(&self, k: BkeySC<'_>) -> Result<TransBkey<'a, 't>, BchError> {
+    /// @k, copied as it is, of the type it's read as: any key, or a type an
+    /// exact copy of is whole - a plain type, not a grown one, whose older
+    /// values bkey_make_mut_noupdate() grows.
+    pub fn bkey_reassemble<V: MutBkey<Mut = V> + ?Sized>(&self, k: BkeySC<'_, V>)
+        -> Result<TransBkey<'a, 't, V>, BchError>
+    {
         let mut dst = self.bkey_alloc(k.k.u64s as u32)?;
 
         unsafe {
@@ -646,7 +651,9 @@ impl<'a, 't> TransAttempt<'a, 't> {
             );
         }
 
-        Ok(dst)
+        debug_assert!(dst.buf_u64s as usize * size_of::<u64>() >= V::MIN_BYTES);
+        // SAFETY: @k's, which as a valid @V's is MIN_BYTES: MutBkey's
+        Ok(unsafe { dst.cast() })
     }
 
     /// bkey_reassemble() into a buffer with `val_u64s` of value space:
@@ -685,18 +692,13 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(k)
     }
 
-    /// @k as a mutable copy, for an update - ENOENT unless it's of @type_, any
-    /// type for KEY_TYPE_deleted - with at least @min_bytes: past @k's own
-    /// value, zeroes, which is what those fields read as, and the key covers
-    /// them, so writes there go in with the commit. A u64 more is allocated
-    /// past the end, for varint_decode_fast().
-    fn make_mut_noupdate(&self, k: BkeySC<'_>, type_: c::bch_bkey_type, min_bytes: usize)
+    /// @k as a mutable copy, for an update, with at least @min_bytes: past
+    /// @k's own value, zeroes, which is what those fields read as, and the key
+    /// covers them, so writes there go in with the commit. A u64 more is
+    /// allocated past the end, for varint_decode_fast().
+    fn make_mut_noupdate(&self, k: BkeySC<'_>, min_bytes: usize)
         -> Result<TransBkey<'a, 't>, BchError>
     {
-        if type_ != c::bch_bkey_type::KEY_TYPE_deleted && k.k.type_ as u32 != type_.0 {
-            return Err(BchError::from(c::ENOENT));
-        }
-
         let k_u64s = k.k.u64s as usize;
         let u64s   = k_u64s.max(min_bytes.div_ceil(size_of::<u64>()));
 
@@ -715,18 +717,15 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(dst)
     }
 
-    pub fn bkey_make_mut_noupdate(&self, k: BkeySC<'_>) -> Result<TransBkey<'a, 't>, BchError> {
-        self.make_mut_noupdate(k, c::bch_bkey_type::KEY_TYPE_deleted, 0)
-    }
-
-    /// @k, a @K, as a mutable copy grown to a whole @K - not yet an update:
-    /// ENOENT if it isn't one.
-    pub fn bkey_make_mut_noupdate_typed<K: SizedBkey>(&self, k: BkeySC<'_>)
-        -> Result<TransBkey<'a, 't, K>, BchError>
+    /// @k as a mutable copy, not yet an update: of the type @k is read as -
+    /// any key's, as it is, or a typed key's, grown to all of its value
+    /// (MutBkey).
+    pub fn bkey_make_mut_noupdate<V: MutBkey + ?Sized>(&self, k: BkeySC<'_, V>)
+        -> Result<TransBkey<'a, 't, V::Mut>, BchError>
     {
-        let k = self.make_mut_noupdate(k, K::TYPE, size_of::<BkeyI<K>>())?;
-        // SAFETY: a @K's, grown to all of it
-        Ok(unsafe { k.typed() })
+        let k = self.make_mut_noupdate(k.s_c(), V::MIN_BYTES)?;
+        // SAFETY: @k's, grown to MIN_BYTES: MutBkey's
+        Ok(unsafe { k.cast() })
     }
 
     /// The value of the @K at @pos in @btree, zero padded:
@@ -762,25 +761,23 @@ impl<'a, 't> TransAttempt<'a, 't> {
     ) -> Result<TransBkey<'a, 't, K>, BchError> {
         let mut iter = BtreeIter::new(self.trans, btree, pos, iter_flags | BtreeIterFlags::INTENT);
         let k = iter.peek_slot_typed::<K>(self)?.s_c();
-        let k = self.make_mut_noupdate(k, K::TYPE, size_of::<BkeyI<K>>())?;
+        let k = self.make_mut_noupdate(k, size_of::<BkeyI<K>>())?;
         self.update(&iter, &k, flags)?;
         // SAFETY: a @K's, grown to all of it
         Ok(unsafe { k.typed() })
     }
 
-    /// @k, the @K at @iter, as a mutable copy already queued as its update,
-    /// grown to all of its value, zero padded - ENOENT unless it's a @K.
-    /// Edits to it go in with the commit.
-    pub fn bkey_make_mut<K: SizedBkey>(
+    /// @k, the key at @iter, as bkey_make_mut_noupdate() makes it, already
+    /// queued as its update: edits to it go in with the commit.
+    pub fn bkey_make_mut<V: MutBkey + ?Sized>(
         &self,
         iter:  &BtreeIter<'t>,
-        k:     BkeySC<'_>,
+        k:     BkeySC<'_, V>,
         flags: UpdateTriggerFlags,
-    ) -> Result<TransBkey<'a, 't, K>, BchError> {
-        let k = self.make_mut_noupdate(k, K::TYPE, size_of::<BkeyI<K>>())?;
+    ) -> Result<TransBkey<'a, 't, V::Mut>, BchError> {
+        let k = self.bkey_make_mut_noupdate(k)?;
         self.update(iter, &k, flags)?;
-        // SAFETY: a @K's, grown to all of it
-        Ok(unsafe { k.typed() })
+        Ok(k)
     }
 
     /// Overwrite @old, the extent at @iter, with @new where they overlap.
@@ -1113,6 +1110,15 @@ impl<'a, 't> TransBkey<'a, 't> {
     pub(crate) unsafe fn typed<V: SizedBkey>(self) -> TransBkey<'a, 't, V> {
         debug_assert!(self.k().is::<V>());
         debug_assert!(self.buf_u64s as usize * size_of::<u64>() >= size_of::<BkeyI<V>>());
+        // SAFETY: the caller's
+        unsafe { self.cast() }
+    }
+
+    /// The key as a @V's, unchecked: typed(), for a @V that may be any key's.
+    ///
+    /// # Safety
+    /// As typed()'s, for a @V that's a SizedBkey.
+    unsafe fn cast<V: ?Sized>(self) -> TransBkey<'a, 't, V> {
         TransBkey { ptr: self.ptr, buf_u64s: self.buf_u64s, t: PhantomData, v: PhantomData }
     }
 }

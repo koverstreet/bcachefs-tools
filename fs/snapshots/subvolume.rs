@@ -733,14 +733,15 @@ fn reparent(
     old:  u32,
     new:  u32,
 ) -> Result<(), BchError> {
-    let Some(s) = k.arm::<c::Subvolume>().map(|k| k.v()) else { return Ok(()) };
+    let Some(k) = k.arm::<c::Subvolume>() else { return Ok(()) };
+    let s = k.v();
 
     // A key without creation_parent predates the field: nobody's child
     if !has_field!(k, creation_parent) || s.creation_parent().get() != old {
         return Ok(());
     }
 
-    let mut u = t.bkey_make_mut::<c::Subvolume>(iter, k, UpdateTriggerFlags::empty())?;
+    let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty())?;
     u.v_mut().creation_parent = new.into();
     Ok(())
 }
@@ -790,7 +791,7 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
         })?;
 
     if tk.v().master_subvol.get() == subvol {
-        let mut u = t.bkey_make_mut::<c::SnapshotTree>(tree_iter, tk.s_c(), UpdateTriggerFlags::empty())?;
+        let mut u = t.bkey_make_mut(tree_iter, tk, UpdateTriggerFlags::empty())?;
         u.v_mut().master_subvol = 0.into();
     }
 

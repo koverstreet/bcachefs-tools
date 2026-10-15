@@ -155,7 +155,7 @@ fn find_snapshot_subvol(t: &TransAttempt<'_, '_>, snapshot: u32) -> Result<Optio
 fn check_dirent_parent_subvol<'t>(
     t:      &TransAttempt<'_, 't>,
     iter:   &BtreeIter<'t>,
-    k:      BkeySC<'_>,
+    k:      BkeySC<'_, c::Dirent>,
     parent: u32,
 ) -> Result<u32, BchError> {
     let trans = t.trans();
@@ -209,7 +209,7 @@ fn check_dirent_parent_subvol<'t>(
     // The dirent is rewritten at its own position, which may be an interior
     // snapshot node - dirents in old snapshots need this repair too:
     let mut n = t.bkey_reassemble(k)?;
-    n.k_i_mut().arm_mut::<c::Dirent>().expect("a dirent").v_mut().set_parent_subvol(new_parent);
+    n.v_mut().set_parent_subvol(new_parent);
     t.update(iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
     // The fs_path_parent check next repairs the subvolume to agree with the dirent:
@@ -221,10 +221,11 @@ fn check_dirent_parent_subvol<'t>(
 fn check_dirent_to_subvol<'t>(
     t:      &TransAttempt<'_, 't>,
     iter:   &BtreeIter<'t>,
-    k:      BkeySC<'_>,
+    d:      Dirent<'_>,
     child:  u32,
     parent: u32,
 ) -> Result<(), BchError> {
+    let k = d.k();
     let parent = check_dirent_parent_subvol(t, iter, k, parent)?;
     let trans = t.trans();
     let fs = trans.fs();
@@ -262,7 +263,7 @@ fn check_dirent_to_subvol<'t>(
                      s.to_text(fs))? {
             // grown to a whole subvolume: one from before fs_path_parent is
             // shorter than the field
-            let mut n = t.bkey_make_mut_noupdate_typed::<c::Subvolume>(s.s_c())?;
+            let mut n = t.bkey_make_mut_noupdate(s)?;
             n.v_mut().fs_path_parent = parent.into();
             t.update(&subvol_iter, &n, UpdateTriggerFlags::empty())?;
         }
@@ -282,7 +283,7 @@ fn check_dirent_to_subvol<'t>(
         inode::fsck_write(t, &mut subvol_root)?;
     }
 
-    namei::check_dirent_target(t, iter, Dirent::new(k).expect("a dirent"), &mut subvol_root, true)
+    namei::check_dirent_target(t, iter, d, &mut subvol_root, true)
 }
 
 // ---------------------------------------------------------------------------
@@ -503,7 +504,7 @@ fn check_dirent<'t>(
     let have_dir = d.d_type() as u32 == c::DT_DIR;
 
     match d.target() {
-        DirentTarget::Subvol { child, parent } => check_dirent_to_subvol(t, iter, k, child, parent)?,
+        DirentTarget::Subvol { child, parent } => check_dirent_to_subvol(t, iter, d, child, parent)?,
         DirentTarget::Inode(inum) => {
             if check_dirent_to_inode(t, iter, k, inum, st)? {
                 return Ok(());

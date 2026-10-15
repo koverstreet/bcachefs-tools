@@ -1245,7 +1245,7 @@ fn __check_dirent_target(
                     d_type_str(d_type),
                     d.k().to_text(fs))? {
         let mut n = t.bkey_reassemble(d.k())?;
-        let v = n.k_i_mut().arm_mut::<c::Dirent>().expect("a dirent").v_mut();
+        let v = n.v_mut();
 
         v.set_d_type(d_type);
         if d_type as u32 == c::DT_SUBVOL {
