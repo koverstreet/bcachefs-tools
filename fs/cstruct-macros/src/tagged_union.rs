@@ -151,7 +151,7 @@ use crate::{comma_list, list_callback, record, through_list, tokens};
 /// arms are generated directly. The declaration goes to the list as tokens,
 /// not text: an arm type defined in it keeps its spans, so an error in one
 /// is reported where it is.
-pub fn tagged_union(input: TokenStream) -> Result<TokenStream, String> {
+pub(crate) fn tagged_union(input: TokenStream) -> Result<TokenStream, String> {
     let tu = parse(&input)?;
     match &tu.from {
         Some(f) => Ok(through_list(&f.list, "cstruct_macros::__tagged_union", input)),
@@ -207,7 +207,7 @@ fn arm_attrs_and_defs(decl: &TokenStream) -> (TokenStream, Vec<TokenStream>) {
 }
 
 /// The list's callback: its arms are the list's entries.
-pub fn from_list(input: TokenStream) -> Result<TokenStream, String> {
+pub(crate) fn from_list(input: TokenStream) -> Result<TokenStream, String> {
     let (decl, entries) = list_callback(input)?;
     let tu = parse(&decl)?;
     let arms = tagged_union_arms(&tu, &entries).map_err(|e| format!("{}: {e}", tu.name))?;

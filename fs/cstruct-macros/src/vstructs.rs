@@ -218,7 +218,7 @@ struct Shape<'a> {
 /// SelfSized, and its bytes, by its reference's length; and an arm's,
 /// ArmRef, cast() from the bytes its storage says are its. @doc is its own;
 /// @methods, more of them.
-fn dst(ty: &str, doc: &str, shape: &Shape, methods: &str) -> String {
+fn dst(ty: &str, doc: &str, shape: &Shape<'_>, methods: &str) -> String {
     let Shape { repr, fields, private, head, tail, elem, ffi, tail_at } = *shape;
     let tail_at = tail_at.map(str::to_string).unwrap_or_else(|| format!("::core::mem::size_of::<{head}>()"));
     let plain_fields: String = fields.iter()
@@ -431,7 +431,7 @@ fn state_methods(name: &str, ffi: &str, st: &str) -> String {
 /// from outside, its count checked against them; Validated, its count
 /// trusted as C trusts it - and Validated its Whole, the header never having
 /// grown.
-fn own_count_family(name: &str, shape: &Shape) -> String {
+fn own_count_family(name: &str, shape: &Shape<'_>) -> String {
     let state = |st: &str, what: &str| -> String {
         let ty = format!("{name}__{}", st.to_lowercase());
         dst(&ty,

@@ -35,7 +35,7 @@ struct Define {
 
 /// c_xmacro_from_c!'s input, NAME, "header": c_xmacro!'s input for the
 /// list, and the header's path, to include_bytes!.
-pub fn read(input: proc_macro::TokenStream) -> Result<(String, String), String> {
+pub(crate) fn read(input: proc_macro::TokenStream) -> Result<(String, String), String> {
     use proc_macro::TokenTree;
 
     let toks: Vec<TokenTree> = input.into_iter().collect();
