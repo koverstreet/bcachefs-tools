@@ -436,7 +436,7 @@ fn own_count_family(name: &str, shape: &Shape<'_>) -> String {
 /// `tail = NAME: [E]`, an array the states call NAME.
 pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item.to_string())?;
-    let name = def.name.clone();
+    let name = def.rust_ident().to_string();
     let last = def.fields.last().ok_or_else(|| format!("{name}: an unsized vstruct has fields"))?;
     let args = parse_family_args(&attr.to_string(), &["tail"]).map_err(|e| format!("{name}: {e}"))?;
     let (tail, elem) = match args.tail {
@@ -457,7 +457,7 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
     let shape = Shape { repr: &repr, fields, private: &[], head: &ffi, deref: &ffi, tail: &tail, elem: &elem,
                         ffi: &ffi, tail_at: None };
 
-    let mut out = rename_struct(item, &name, &ffi)?;
+    let mut out = rename_struct(item, &def, &ffi)?;
     out.extend(tokens(&format!(
         "const _: () = {{\n\
              // C's struct ends at its last field - its flexible array, or an\n\
@@ -491,7 +491,7 @@ pub(crate) fn unsized_vstruct(attr: TokenStream, item: TokenStream) -> Result<To
 /// from what holds its bytes.
 pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item.to_string())?;
-    let name = def.name.clone();
+    let name = def.rust_ident().to_string();
     let ffi = format!("{name}__head");
 
     let args = parse_family_args(&attr.to_string(), &["count", "tail"]).map_err(|e| format!("{name}: {e}"))?;
@@ -524,7 +524,7 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
     let shape = Shape { repr: &repr, fields, private: &private, head: &ffi, deref: &ffi, tail: &tail,
                         elem: &elem, ffi: &ffi, tail_at: None };
 
-    let mut out = rename_struct(item, &name, &ffi)?;
+    let mut out = rename_struct(item, &def, &ffi)?;
     out.extend(tokens(&format!(
         "{}\
          impl {VS}::CountedHead for {ffi} {{\n\
@@ -631,7 +631,7 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
                 tail: Option<(String, String)>)
     -> Result<TokenStream, String>
 {
-    let name = def.name.clone();
+    let name = def.rust_ident().to_string();
     // The struct as written, renamed X__whole: X<Whole>'s representation,
     // and C's struct X
     let ffi = format!("{name}__whole");
@@ -681,7 +681,7 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
                       pub fn as_ffi_mut(&mut self) -> *mut {ffi} {{\n\
                           (self as *mut Self).cast()\n\
                       }}\n"));
-        let mut out = rename_struct(item, &name, &ffi)?;
+        let mut out = rename_struct(item, &def, &ffi)?;
         out.extend(tokens(&format!(
             "{all_def}{}{}{}",
             family(&name, &all, &all, &ffi, &[]),
@@ -746,7 +746,7 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
          \n\
          {getters}");
 
-    let mut out = rename_struct(item, &name, &ffi)?;
+    let mut out = rename_struct(item, &def, &ffi)?;
     out.extend(tokens(&format!(
         "/// {name}'s floor: the fields every valid one has - all it had before\n\
          /// it grew, from {from} on.\n\
@@ -1107,15 +1107,21 @@ fn generic_type(name: &str, g: &Generic<'_>, doc: &str) -> String {
     out
 }
 
-/// @item, a struct, as @to - with #[c_name(@name)], C's name for it, after
-/// its other attributes, so the derives among them see it.
-fn rename_struct(item: TokenStream, name: &str, to: &str) -> Result<TokenStream, String> {
+/// @item, a struct, as @to - with #[c_name], C's name for it: its own, which
+/// it keeps, or added after its other attributes, so the derives among them
+/// see it.
+fn rename_struct(item: TokenStream, def: &CStructDef, to: &str) -> Result<TokenStream, String> {
+    let name = def.rust_ident();
     let mut tts: Vec<TokenTree> = item.into_iter().collect();
     let at = tts.windows(2)
         .position(|w| matches!((&w[0], &w[1]), (TokenTree::Ident(s), TokenTree::Ident(n))
                                if s.to_string() == "struct" && n.to_string() == name))
         .ok_or_else(|| format!("{name}: a family is made from a struct"))?;
     tts[at + 1] = TokenTree::Ident(Ident::new(to, tts[at + 1].span()));
+    // C's name: the item's #[c_name], which it keeps, or its own
+    if def.rust_name.is_some() {
+        return Ok(tts.into_iter().collect());
+    }
     let mut attrs_end = 0;
     while matches!((tts.get(attrs_end), tts.get(attrs_end + 1)),
                    (Some(TokenTree::Punct(p)), Some(TokenTree::Group(g)))
@@ -1123,7 +1129,7 @@ fn rename_struct(item: TokenStream, name: &str, to: &str) -> Result<TokenStream,
         attrs_end += 2;
     }
     let mut out: TokenStream = tts[..attrs_end].iter().cloned().collect();
-    out.extend(tokens(&format!("#[c_name({name})]")));
+    out.extend(tokens(&format!("#[c_name({})]", def.name)));
     out.extend(tts[attrs_end..].iter().cloned());
     Ok(out)
 }

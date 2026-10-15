@@ -313,6 +313,8 @@ pub struct CXMap {
 pub struct CBitmask {
     pub cfg:        Option<Cfg>,
     pub macro_name: String,
+    /// The struct as written, "struct foo": Rust's name, which the header
+    /// generator renders as C's.
     pub c_type:     String,
     /// The type the accessors are on: "foo" - or for `struct Head<foo>`, a
     /// family's C definition, "foo__head".
@@ -2231,7 +2233,7 @@ fn proto_toks(toks: &[Tok], decl: String, konst: bool, last: bool,
     let q = if konst { "const " } else { "" };
     // BkeyI<Head<bch_foo>>, by any path: a key whose value is a family's,
     // whole - C's typed key, struct bkey_i_foo
-    if let Some(name) = bkey_i_arg(toks) {
+    if let Some(name) = bkey_i_arg(toks, kind) {
         return Some(format!("{q}struct bkey_i_{name} {decl}").trim_end().to_string());
     }
     match toks {
@@ -2294,16 +2296,19 @@ fn head_arg(toks: &[Tok]) -> Option<&[Tok]> {
     }
 }
 
-/// foo, if @toks is BkeyI<bch_foo> by any path - or BkeyI<Head<bch_foo>>, an
-/// unsized one's: C's struct bkey_i_foo.
-fn bkey_i_arg(toks: &[Tok]) -> Option<&str> {
+/// foo, if @toks is BkeyI<V> by any path, V a key value type - or
+/// BkeyI<Head<V>>, an unsized one's: C's struct bkey_i_foo, V's C name being
+/// struct bch_foo, by @kind - V named as Rust names it, or as C does.
+fn bkey_i_arg(toks: &[Tok], kind: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     let b = toks.iter().position(|t| t.is_ident("BkeyI"))?;
     let path_ok = toks[..b].iter().all(|t| matches!(t, Tok::Ident(_) | Tok::Punct(':')));
     let [Tok::Punct('<'), inner @ .., Tok::Punct('>')] = &toks[b + 1..] else { return None };
     let inner = head_arg(inner).unwrap_or(inner);
     let val_path_ok = inner.iter().all(|t| matches!(t, Tok::Ident(_) | Tok::Punct(':')));
     match inner {
-        [.., Tok::Ident(v)] if path_ok && val_path_ok => v.strip_prefix("bch_"),
+        [.., Tok::Ident(v)] if path_ok && val_path_ok => kind(v)
+            .unwrap_or_else(|| format!("struct {v}"))
+            .strip_prefix("struct bch_").map(str::to_string),
         _ => None,
     }
 }
@@ -2849,10 +2854,16 @@ pub fn emit_items(items: &[CItem],
                 under_cfg(&x.cfg, t + "\n")?
             }
             CItem::Bitmask(b) => {
+                // the struct as Rust names it - if not as C does, C's, which
+                // @kind has from its record
+                let c_type = match b.c_type.strip_prefix("struct ").and_then(|n| Some((n, kind(n)?))) {
+                    Some((n, c)) if ![format!("struct {n}"), format!("union {n}"), n.to_string()].contains(&c) => c,
+                    _ => b.c_type.clone(),
+                };
                 let mut t = String::new();
                 for e in &b.entries {
                     t.push_str(&format!("{}({}, {}, {}, {}, {});\n",
-                                        b.macro_name, e.name, b.c_type, b.field, e.start, e.end));
+                                        b.macro_name, e.name, c_type, b.field, e.start, e.end));
                 }
                 under_cfg(&b.cfg, t)?
             }

@@ -515,7 +515,15 @@ fn main() {
             for r in &recs {
                 files.entry(&r.file).or_default().push(r);
                 match parse_items(&r.text).ok().and_then(|mut items| items.pop()) {
-                    Some(CItem::Struct(def)) => { structs.insert(def.name.clone(), def.c_type()); }
+                    // by C's name and Rust's - a family's definition, X__whole
+                    // or X__head, by X too, the type code names
+                    Some(CItem::Struct(def)) => {
+                        let rust = def.rust_ident();
+                        let family = rust.strip_suffix("__whole").or_else(|| rust.strip_suffix("__head"));
+                        for n in [Some(def.name.as_str()), Some(rust), family].into_iter().flatten() {
+                            structs.insert(n.to_string(), def.c_type());
+                        }
+                    }
                     Some(CItem::TaggedUnion(tu)) => {
                         structs.insert(tu.name.clone(), tu.c_type());
                     }

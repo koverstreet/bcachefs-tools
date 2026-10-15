@@ -1182,6 +1182,13 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
     let c_struct = b.c_type.trim_start_matches("struct ").trim();
     let table = format!("{c_struct}_{}_BITMASKS",
                         field.replace(|c: char| !c.is_alphanumeric(), "_").trim_end_matches('_'));
+    // Each entry's struct as typeinfo names it, C's name: its TypeInfo's - a
+    // family's type in a state has it as X<Whole>
+    let info_ty = match b.rust_type.split_once('<') {
+        Some((x, _)) => format!("{x}<crate::util::vstructs::Whole>"),
+        None         => b.rust_type.clone(),
+    };
+    let struct_name = format!("<{info_ty} as crate::typeinfo::TypeInfo>::INFO.name");
     let mut table_entries = String::new();
 
     let mut methods = String::new();
@@ -1195,7 +1202,7 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
         };
         let (start, end) = (&e.start, &e.end);
         table_entries.push_str(&format!(
-            "crate::typeinfo::BitmaskField {{ struct_name: {c_struct:?}, field: {field:?}, name: {set_m:?}, \
+            "crate::typeinfo::BitmaskField {{ struct_name: {struct_name}, field: {field:?}, name: {set_m:?}, \
              lo: ({start}) as u8, hi: ({end}) as u8 }},\n"));
         // One bit is a flag: bool, as the accessors on bindgen's structs had it.
         let one_bit = matches!((start.parse::<u32>(), end.parse::<u32>()), (Ok(s), Ok(e)) if e == s + 1);
