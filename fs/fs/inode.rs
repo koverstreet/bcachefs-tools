@@ -752,15 +752,6 @@ pub fn fsck_write(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked)
                   UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
-/// For C's subvolume repair: __bch2_fsck_write_inode().
-#[c_export]
-pub extern "C" fn __bch2_fsck_write_inode(
-    trans: &Opaque<c::btree_trans>,
-    inode: &mut c::bch_inode_unpacked,
-) -> core::ffi::c_int {
-    ret_to_c(fsck_write(&BtreeTrans::from_c(trans).attempt_in_progress(), inode))
-}
-
 /// As fsck_write(), committed: as bch2_fsck_write_inode().
 pub fn fsck_write_inode(trans: &BtreeTrans<'_>, inode: &mut c::bch_inode_unpacked)
     -> Result<(), BchError>
@@ -1915,22 +1906,6 @@ pub fn init_late(
     if inode.casefold(fs) {
         inode.set_flag(c::bch_inode_flags::BCH_INODE_has_case_insensitive, true);
     }
-}
-
-/// For C's subvolume creation: bch2_inode_init_late(). @parent may be NULL.
-#[c_export]
-#[allow(clippy::too_many_arguments)]
-pub extern "C" fn bch2_inode_init_late(
-    c:      &Opaque<c::bch_fs>,
-    inode:  &mut c::bch_inode_unpacked,
-    now:    u64,
-    uid:    c::uid_t,
-    gid:    c::gid_t,
-    mode:   c::umode_t,
-    rdev:   c::dev_t,
-    parent: Option<&c::bch_inode_unpacked>,
-) {
-    init_late(&Fs::from_c(c), inode, now, uid, gid, mode, rdev, parent)
 }
 
 /// A new inode, made now: init_early(), then init_late() - as
