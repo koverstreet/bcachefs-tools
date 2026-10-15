@@ -231,13 +231,13 @@ fn check_dirent_to_subvol<'t>(
 
     let mut subvol_iter = BtreeIter::new(trans, c::btree_id::subvolumes, pos(0, child as u64),
                                          BtreeIterFlags::empty());
-    let s = subvol_iter.peek_slot_typed(t, c::bch_bkey_type::KEY_TYPE_subvolume).found()?;
+    let s = subvol_iter.peek_slot_typed::<c::bch_subvolume>(t).found()?;
 
     // A deleted subvolume is a tombstone awaiting the sweep: missing, as get()
     // would say - this is a raw read, for the key. Else the dirent outlives it,
     // and fsck stops converging once the sweep removes it.
     let s = s.filter(|s| {
-        subvolume::val(*s).expect("typed").state_decoded() != Some(c::bch_subvolume_state::SUBVOLUME_STATE_deleted)
+        s.v().state_decoded() != Some(c::bch_subvolume_state::SUBVOLUME_STATE_deleted)
     });
 
     let Some(s) = s else {
@@ -248,8 +248,8 @@ fn check_dirent_to_subvol<'t>(
         return Ok(());
     };
 
-    let v = subvolume::val(s).expect("typed");
-    let fs_path_parent  = v.fs_path_parent.get();
+    let v = s.v();
+    let fs_path_parent  = v.fs_path_parent().get();
     let target_inum     = v.inode.get();
     let target_snapshot = v.snapshot.get();
 
@@ -262,7 +262,7 @@ fn check_dirent_to_subvol<'t>(
                      s.to_text(fs))? {
             // grown to a whole subvolume: one from before fs_path_parent is
             // shorter than the field
-            let mut n = t.bkey_make_mut_noupdate_typed::<c::bch_subvolume>(s)?;
+            let mut n = t.bkey_make_mut_noupdate_typed::<c::bch_subvolume>(s.s_c())?;
             n.k_i_mut().whole_mut::<c::bch_subvolume>().expect("grown to a whole subvolume").v
                 .fs_path_parent = parent.into();
             t.update(&subvol_iter, &n, UpdateTriggerFlags::empty())?;

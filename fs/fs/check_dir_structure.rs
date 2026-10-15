@@ -257,7 +257,7 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
                                              spos(inode.bi_dir, inode.bi_dir_offset, snapshot),
                                              BtreeIterFlags::empty());
 
-        if let Err(e) = dirent_iter.peek_slot_typed(t, c::bch_bkey_type::KEY_TYPE_dirent) {
+        if let Err(e) = dirent_iter.peek_slot_typed::<c::bch_dirent>(t) {
             if !e.matches(c::ENOENT) {
                 return Err(e);
             }

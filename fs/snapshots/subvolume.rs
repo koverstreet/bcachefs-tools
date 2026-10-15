@@ -117,8 +117,8 @@ fn __get_snapshot(trans: &BtreeTrans<'_>, subvol: u32, warn: bool) -> Result<u32
     let t = trans.attempt_in_progress();
     let mut iter = BtreeIter::new(trans, c::btree_id::subvolumes, pos(0, subvol as u64),
                                   BtreeIterFlags::CACHED);
-    match iter.peek_slot_typed(&t, c::bch_bkey_type::KEY_TYPE_subvolume) {
-        Ok(k) => Ok(val(k).expect("a subvolume").snapshot()),
+    match iter.peek_slot_typed::<c::bch_subvolume>(&t) {
+        Ok(k) => Ok(k.v().snapshot()),
         Err(e) => {
             if warn && e.matches(c::ENOENT) {
                 missing(fs, subvol)?;
@@ -501,7 +501,7 @@ fn check_subvol<'a, 't>(
     let snapid = s.v().snapshot();
     let mut snap_iter = BtreeIter::new(trans, c::btree_id::snapshots, pos(0, snapid as u64),
                                        BtreeIterFlags::INTENT);
-    let (snap_iter, sk) = match snap_iter.peek_slot_typed_shared(t, c::bch_bkey_type::KEY_TYPE_snapshot) {
+    let (snap_iter, sk) = match snap_iter.peek_slot_typed_shared::<c::bch_snapshot>(t) {
         Ok(r) => r,
         Err(e) if e.matches(c::ENOENT) => {
             let mut msg = Printbuf::new();
@@ -514,7 +514,7 @@ fn check_subvol<'a, 't>(
         }
         Err(e) => return Err(e),
     };
-    let mut n = CowKey::<c::bch_snapshot>::new(snap_iter, sk).expect("a snapshot");
+    let mut n = CowKey::<c::bch_snapshot>::new(snap_iter, sk.s_c()).expect("a snapshot");
 
     // The repairs below assume we own this snapshot. If it backrefs another
     // subvolume that also points at it, that one is the owner - don't let
@@ -767,33 +767,33 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
 
     let mut iter = BtreeIter::new(trans, c::btree_id::subvolumes, pos(0, subvol as u64),
                                   BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
-    let k = match iter.peek_slot_typed(t, c::bch_bkey_type::KEY_TYPE_subvolume) {
+    let k = match iter.peek_slot_typed::<c::bch_subvolume>(t) {
         Err(e) if e.matches(c::ENOENT) => {
             missing(fs, subvol)?;
             return Err(e);
         }
         r => r?,
     };
-    let snapid = val(k).expect("a subvolume").snapshot();
+    let snapid = k.v().snapshot();
 
     let mut snapshot_iter = BtreeIter::new(trans, c::btree_id::snapshots, pos(0, snapid as u64),
                                            BtreeIterFlags::empty());
-    let sk = snapshot_iter.peek_slot_typed(t, c::bch_bkey_type::KEY_TYPE_snapshot)
+    let sk = snapshot_iter.peek_slot_typed::<c::bch_snapshot>(t)
         .inspect_err(|e| if e.matches(c::ENOENT) {
             fs_inconsistent!(fs, "missing snapshot {snapid}");
         })?;
-    let tree = snapshot::val(sk).expect("a snapshot").tree();
+    let tree = sk.v().tree();
 
     let mut tree_iter = BtreeIter::new(trans, c::btree_id::snapshot_trees, pos(0, tree as u64),
                                        BtreeIterFlags::empty());
     let (tree_iter, tk) = tree_iter
-        .peek_slot_typed_shared(t, c::bch_bkey_type::KEY_TYPE_snapshot_tree)
+        .peek_slot_typed_shared::<c::bch_snapshot_tree>(t)
         .inspect_err(|e| if e.matches(c::ENOENT) {
             fs_inconsistent!(fs, "missing snapshot tree {tree}");
         })?;
 
-    if tk.arm::<c::bch_snapshot_tree>().expect("a snapshot tree").v().master_subvol.get() == subvol {
-        let mut u = t.bkey_make_mut(tree_iter, tk, UpdateTriggerFlags::empty(),
+    if tk.v().master_subvol.get() == subvol {
+        let mut u = t.bkey_make_mut(tree_iter, tk.s_c(), UpdateTriggerFlags::empty(),
                                     c::bch_bkey_type::KEY_TYPE_snapshot_tree,
                                     size_of::<c::bch_snapshot_tree>())?;
         u.k_i_mut().arm_mut::<c::bch_snapshot_tree>().expect("a snapshot tree key").v_mut().master_subvol = 0.into();

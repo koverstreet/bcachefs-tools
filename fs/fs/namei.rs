@@ -781,7 +781,7 @@ pub fn inode_get_dirent<'i, 't>(
     *iter = BtreeIter::new(t, c::btree_id::dirents,
                            spos(inode.bi_dir, inode.bi_dir_offset, *snapshot),
                            BtreeIterFlags::empty());
-    iter.peek_slot_typed(t, c::bch_bkey_type::KEY_TYPE_dirent)
+    iter.peek_slot_typed::<c::bch_dirent>(t).map(BkeySC::s_c)
 }
 
 /// A path, as inum_to_path walks it: up from the inode, a name per step;
@@ -1136,7 +1136,7 @@ fn check_dirent_inode_dirent(
     let mut bp_iter = BtreeIter::new(t, c::btree_id::dirents,
                                      spos(target.bi_dir, target.bi_dir_offset, target.bi_snapshot),
                                      BtreeIterFlags::empty());
-    let bp = bp_iter.peek_slot_typed(t, c::bch_bkey_type::KEY_TYPE_dirent).found()?;
+    let bp = bp_iter.peek_slot_typed::<c::bch_dirent>(t).found()?;
 
     let Some(bp) = bp else {
         if fsck_err!(t, id::inode_wrong_backpointer,
@@ -1183,7 +1183,7 @@ fn check_dirent_inode_dirent(
 
         if target.bi_subvol != 0 &&
            dirent_is_subvol_root_name(d, target) &&
-           !dirent_is_subvol_root_name(Dirent::new(bp).expect("a dirent"), target) {
+           !dirent_is_subvol_root_name(Dirent::new(bp.s_c()).expect("a dirent"), target) {
             remove              = bp.k.p;
             repoint_backpointer = true;
 

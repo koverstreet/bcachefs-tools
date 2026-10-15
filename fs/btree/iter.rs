@@ -728,7 +728,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         -> Result<K, BchError>
     {
         let mut iter = BtreeIter::new(self.trans, btree, pos, flags);
-        let k = iter.peek_slot_typed(self, K::TYPE)?;
+        let k = iter.peek_slot_typed::<K>(self)?.s_c();
         Ok(K::val_copy_pad(k).expect("peek_slot_typed() checked the type"))
     }
 
@@ -737,7 +737,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         -> Result<BkeyI<K>, BchError>
     {
         let mut iter = BtreeIter::new(self.trans, btree, pos, flags);
-        let k = iter.peek_slot_typed(self, K::TYPE)?;
+        let k = iter.peek_slot_typed::<K>(self)?.s_c();
         Ok(BkeyI::from_key(k).expect("peek_slot_typed() checked the type"))
     }
 
@@ -756,7 +756,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         min_bytes:  usize,
     ) -> Result<TransBkey<'a, 't>, BchError> {
         let mut iter = BtreeIter::new(self.trans, btree, pos, iter_flags | BtreeIterFlags::INTENT);
-        let k = iter.peek_slot_typed(self, type_)?;
+        let k = bkey_typed(self.fs(), iter.peek_slot(self)?.expect("a slot always has a key"), type_)?;
         let k = self.make_mut_noupdate(k, c::bch_bkey_type::KEY_TYPE_deleted, min_bytes)?;
         self.update(&iter, &k, flags)?;
         Ok(k)
@@ -1266,13 +1266,21 @@ where
     lockrestart_do(&trans, f)
 }
 
-/// @k, if it's a @type_ - any type, for KEY_TYPE_deleted:
-/// ENOENT_bkey_type_mismatch if it isn't.
+/// @k, if it's a @type_: ENOENT_bkey_type_mismatch if it isn't.
 fn bkey_typed<'k>(fs: &Fs, k: BkeySC<'k>, type_: c::bch_bkey_type) -> Result<BkeySC<'k>, BchError> {
-    if type_ != c::bch_bkey_type::KEY_TYPE_deleted && k.k.type_ as u32 != type_.0 {
+    if k.k.type_ as u32 != type_.0 {
         return fs.throw(bch_errcode::BCH_ERR_ENOENT_bkey_type_mismatch);
     }
     Ok(k)
+}
+
+/// @k as a @K, its value in place, if it's one: ENOENT_bkey_type_mismatch if
+/// it isn't.
+fn bkey_arm<'k, K: TypedBkey + ?Sized>(fs: &Fs, k: BkeySC<'k>) -> Result<BkeySC<'k, K::InPlace>, BchError> {
+    match k.arm::<K>() {
+        Some(k) => Ok(k),
+        None    => fs.throw(bch_errcode::BCH_ERR_ENOENT_bkey_type_mismatch),
+    }
 }
 
 impl c::btree_iter {
@@ -1592,27 +1600,26 @@ impl<'t> BtreeIter<'t> {
         self.peek_raw(t, |raw| unsafe { c::bch2_btree_iter_peek_slot(raw) })
     }
 
-    /// ENOENT_bkey_type_mismatch if it isn't a @type.
-    pub fn peek_slot_typed<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>,
-                                       type_: c::bch_bkey_type)
-        -> Result<BkeySC<'k>, BchError>
+    /// The key here as a @K, its value in place: ENOENT_bkey_type_mismatch if
+    /// it isn't one.
+    pub fn peek_slot_typed<'k, K: TypedBkey + ?Sized>(&'k mut self, t: &'k TransAttempt<'_, 't>)
+        -> Result<BkeySC<'k, K::InPlace>, BchError>
     {
         let k = self.peek_slot(t)?.expect("a slot always has a key");
-        bkey_typed(t.fs(), k, type_)
+        bkey_arm::<K>(t.fs(), k)
     }
 
     /// As peek_slot_typed(), for a key to update through this iterator: the
     /// iterator comes back shared, for as long as the key is used - as the
     /// for_each loops pass it - so the key can't be moved out from under.
-    pub fn peek_slot_typed_shared<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>,
-                                      type_: c::bch_bkey_type)
-        -> Result<(&'k Self, BkeySC<'k>), BchError>
+    pub fn peek_slot_typed_shared<'k, K: TypedBkey + ?Sized>(&'k mut self, t: &'k TransAttempt<'_, 't>)
+        -> Result<(&'k Self, BkeySC<'k, K::InPlace>), BchError>
     {
         let this: &'k Self = self;
         // 'k: the key is valid while the iterator is borrowed, within the
         // attempt - shared, it can't be moved or peeked again
         let k = unsafe { bkey_s_c_to_result::<'k>(c::bch2_btree_iter_peek_slot(this.raw.get()))? };
-        Ok((this, bkey_typed(t.fs(), k.expect("a slot always has a key"), type_)?))
+        Ok((this, bkey_arm::<K>(t.fs(), k.expect("a slot always has a key"))?))
     }
 
     pub fn peek_max_flags<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>, end: bpos,

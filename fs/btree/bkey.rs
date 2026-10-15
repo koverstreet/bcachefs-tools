@@ -670,6 +670,10 @@ impl<'a, V: ?Sized> BkeySC<'a, V> {
         self.cast()
     }
 
+    pub fn to_text<'f>(&self, fs: &'f Fs) -> BkeySCToText<'a, 'f> {
+        BkeySCToText { k: self.s_c(), fs }
+    }
+
     /// The key as C's typed key, bkey_s_c_<type>, for C functions that take
     /// one: the same key, its lifetime C's - none. Crate-private: it's to be
     /// handed to C within 'a, not kept.
@@ -728,10 +732,6 @@ impl<'a> BkeySC<'a> {
             core::ptr::copy_nonoverlapping(self.v.cast::<u8>(), v.as_mut_ptr().cast::<u8>(), n);
             v.assume_init()
         }
-    }
-
-    pub fn to_text<'f>(&self, fs: &'f Fs) -> BkeySCToText<'a, 'f> {
-        BkeySCToText { k: *self, fs }
     }
 
     /// Where in the value its extent entries - its pointers - are. Empty for a
