@@ -1561,14 +1561,20 @@ impl<'t> BtreeIter<'t> {
         unsafe { &*self.raw.get() }
     }
 
+    /// The node the iterator's path holds at its level, if it has one - a
+    /// level without one holds NULL or an error pointer, as IS_ERR_OR_NULL().
     pub(crate) fn node_at_iter_level<'a>(
-        &mut self,
+        &self,
         t: &TransAttempt<'a, 't>,
     ) -> Option<BtreeNodeRef> {
         unsafe {
             let path = (*t.raw()).paths.add(self.r().path as usize);
             let node = (*path).l[(*path).level() as usize].b;
 
+            // The top 4095 addresses are error pointers: -MAX_ERRNO..-1
+            if node as usize > usize::MAX - 4095 {
+                return None;
+            }
             NonNull::new(node).map(|raw| BtreeNodeRef { raw })
         }
     }
