@@ -50,11 +50,11 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
     let fs = crate::device_scan::open_scan(&devs, fs_opts)?;
 
     unsafe {
-        let _sb_lock = crate::wrappers::sb_lock(fs.raw);
+        let _sb_lock = crate::wrappers::sb_lock(fs.as_ptr());
 
         let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
         let ext = bcachefs_kernel::sb::io::sb_field_get_minsize::<c::bch_sb_field_ext>(
-            &mut (*fs.raw).disk_sb,
+            &mut (*fs.as_ptr()).disk_sb,
             ext_u64s,
         ).ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))?;
 

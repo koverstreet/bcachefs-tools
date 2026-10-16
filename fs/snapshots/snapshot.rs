@@ -220,7 +220,7 @@ pub fn is_ancestor(t: &TransAttempt<'_, '_>, id: u32, ancestor: u32) -> bool {
 
 /// If repairs asked for it.
 pub fn table_rebuild_if_needed(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
-    if !unsafe { (*trans.fs().raw).snapshots.need_table_rebuild } {
+    if !unsafe { (*trans.fs().as_ptr()).snapshots.need_table_rebuild } {
         return Ok(());
     }
     ret_to_result_void(unsafe { c::bch2_snapshot_table_rebuild(trans.raw()) })

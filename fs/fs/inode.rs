@@ -1008,7 +1008,7 @@ pub fn shard_cpu_init(fs: &Fs) {
         }
 
         // At filesystem startup, before anything reads it:
-        let shard_cpu = unsafe { &mut (*fs.raw).inode_shard_cpu };
+        let shard_cpu = unsafe { &mut (*fs.as_ptr()).inode_shard_cpu };
         let nr_shards = 1usize << bits;
         // The option's range, up to 8 bits, keeps it within inode_shard_cpu[]:
         assert!(nr_shards <= shard_cpu.len(), "{nr_shards} inode number shards");
@@ -1081,7 +1081,7 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
     -> Result<(TransBkey<'a, 't, c::InodeAllocCursor>, u64, u64), BchError>
 {
     let fs = t.fs();
-    let idx = if is_32bit { 0 } else { 1 + unsafe { c::rust_bch2_inode_shard_idx(fs.raw) } };
+    let idx = if is_32bit { 0 } else { 1 + unsafe { c::rust_bch2_inode_shard_idx(fs.as_ptr()) } };
     let (min, max) = cursor_range(fs, idx);
 
     let cursor_pos = pos(c::logged_ops_inums::LOGGED_OPS_INUM_inode_cursors.0 as u64, idx);
@@ -1936,7 +1936,7 @@ pub extern "C" fn bch2_inode_init(
 pub fn opts_get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_opts {
     let mut opts: c::bch_inode_opts = Default::default();
     unsafe {
-        c::bch2_inode_opts_get_inode(fs.raw, inode as *const _ as *mut _, &mut opts);
+        c::bch2_inode_opts_get_inode(fs.as_ptr(), inode as *const _ as *mut _, &mut opts);
     }
     opts
 }
@@ -2013,7 +2013,7 @@ pub fn reconcile_opts_get(fs: &Fs, inode: &c::bch_inode_unpacked)
 {
     let mut opts = c::bch_inode_opts::default();
     // Only reads @inode: C's signature isn't const.
-    unsafe { c::bch2_inode_opts_get_inode(fs.raw, inode as *const _ as *mut _, &mut opts) };
+    unsafe { c::bch2_inode_opts_get_inode(fs.as_ptr(), inode as *const _ as *mut _, &mut opts) };
 
     // io_opts_to_reconcile_opts()
     let mut r = c::bch_extent_reconcile::default();

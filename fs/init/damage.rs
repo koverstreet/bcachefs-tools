@@ -20,5 +20,5 @@ pub fn delete(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<(), 
 /// bch2_damage_record_lost_extents(). Has to run before check_extents' walk:
 /// to the walk, an inode that lost every extent it had looks sparse.
 pub fn record_lost_extents(fs: &Fs) {
-    unsafe { crate::c::bch2_damage_record_lost_extents(fs.raw) }
+    unsafe { crate::c::bch2_damage_record_lost_extents(fs.as_ptr()) }
 }

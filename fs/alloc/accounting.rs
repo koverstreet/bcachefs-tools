@@ -75,7 +75,7 @@ impl<S> c::disk_accounting_pos<S> {
 pub fn mem_read(fs: &Fs, pos: &c::disk_accounting_pos, counters: &mut [u64]) {
     unsafe {
         c::rust_bch2_accounting_mem_read(
-            fs.raw,
+            fs.as_ptr(),
             pos.to_bpos(),
             counters.as_mut_ptr(),
             counters.len() as u32,

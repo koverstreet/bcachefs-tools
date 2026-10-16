@@ -478,7 +478,7 @@ fn fuse_truncate(fs: &Fs, inum: c::subvol_inum, new_size: u64) -> Result<(), Bch
 /// the journal only as far as the inode's last update; we don't track that,
 /// so we flush all of it: more than the minimum, never less.
 fn fuse_fsync(fs: &Fs) -> Result<(), BchError> {
-    if unsafe { (*fs.raw).opts.journal_flush_disabled } != 0 {
+    if unsafe { (*fs.as_ptr()).opts.journal_flush_disabled } != 0 {
         return Ok(());
     }
     fs.journal_flush()
@@ -1608,7 +1608,7 @@ impl Filesystem for BcachefsFs {
 
         let ret = unsafe {
             c::rust_fuse_readdir(
-                self.fs().raw, dir, pos,
+                self.fs().as_ptr(), dir, pos,
                 &mut reply as *mut ReplyDirectory as *mut _,
                 Some(filldir),
             )
@@ -1635,7 +1635,7 @@ impl Filesystem for BcachefsFs {
 
         let mut buf = vec![0u8; size as usize];
         let ret = unsafe {
-            c::rust_fuse_xattr_get(self.fs().raw, inum, name.as_ptr(),
+            c::rust_fuse_xattr_get(self.fs().as_ptr(), inum, name.as_ptr(),
                               if size == 0 { std::ptr::null_mut() } else { buf.as_mut_ptr().cast() },
                               buf.len())
         };
@@ -1652,7 +1652,7 @@ impl Filesystem for BcachefsFs {
 
         let mut buf = vec![0u8; size as usize];
         let ret = unsafe {
-            c::rust_fuse_xattr_list(self.fs().raw, inum,
+            c::rust_fuse_xattr_list(self.fs().as_ptr(), inum,
                                if size == 0 { std::ptr::null_mut() } else { buf.as_mut_ptr().cast() },
                                buf.len(), show_trusted)
         };
@@ -1669,7 +1669,7 @@ impl Filesystem for BcachefsFs {
         };
 
         let ret = unsafe {
-            c::rust_fuse_xattr_set(self.fs().raw, inum, name.as_ptr(),
+            c::rust_fuse_xattr_set(self.fs().as_ptr(), inum, name.as_ptr(),
                               value.as_ptr().cast(), value.len(), flags)
         };
         match ret {
@@ -1688,7 +1688,7 @@ impl Filesystem for BcachefsFs {
 
         // As the VFS does: XATTR_REPLACE, so that a missing xattr is ENODATA
         let ret = unsafe {
-            c::rust_fuse_xattr_set(self.fs().raw, inum, name.as_ptr(), std::ptr::null(), 0,
+            c::rust_fuse_xattr_set(self.fs().as_ptr(), inum, name.as_ptr(), std::ptr::null(), 0,
                               libc::XATTR_REPLACE)
         };
         match ret {

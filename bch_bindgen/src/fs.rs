@@ -78,7 +78,7 @@ impl FsExt for Fs {
     fn accounting_mem_read(&self, pos: c::bpos, nr: u32) -> Vec<u64> {
         let mut v = vec![0u64; nr as usize];
         unsafe {
-            rust_accounting_mem_read(self.raw, pos, v.as_mut_ptr(), nr);
+            rust_accounting_mem_read(self.as_ptr(), pos, v.as_mut_ptr(), nr);
         }
         v
     }
@@ -86,7 +86,7 @@ impl FsExt for Fs {
     fn dev_add(&self, path: &str) -> Result<(), BchError> {
         let path_cstr = CString::new(path).unwrap();
         let mut err = c::printbuf::new();
-        let ret = unsafe { c::bch2_dev_add(self.raw, path_cstr.as_ptr(), &mut err) };
+        let ret = unsafe { c::bch2_dev_add(self.as_ptr(), path_cstr.as_ptr(), &mut err) };
         if ret != 0 {
             let msg = unsafe { std::ffi::CStr::from_ptr(err.buf) }.to_string_lossy();
             eprintln!("error adding device: {}", msg);

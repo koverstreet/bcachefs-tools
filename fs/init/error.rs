@@ -52,8 +52,8 @@ pub trait FsckErrCtx {
 
 impl FsckErrCtx for Fs {
     fn fsck_err_ptrs(&self) -> (*mut c::bch_fs, *mut c::btree_trans) {
-        crate::warn_on!(unsafe { c::bch2_current_has_btree_trans(self.raw) });
-        (self.raw, core::ptr::null_mut())
+        crate::warn_on!(unsafe { c::bch2_current_has_btree_trans(self.as_ptr()) });
+        (self.as_ptr(), core::ptr::null_mut())
     }
 }
 
@@ -169,11 +169,11 @@ pub fn fsck_err_report(fs: &Fs, err: bch_sb_error_id, msg: fmt::Arguments<'_>) {
 /// Whether to log @msg: not if it's a repeat or being ratelimited. If this is
 /// where ratelimiting starts, @msg says so.
 pub fn count_fsck_err(fs: &Fs, err: bch_sb_error_id, msg: &mut Printbuf) -> bool {
-    unsafe { c::__bch2_count_fsck_err(fs.raw, err, msg.as_raw()) }
+    unsafe { c::__bch2_count_fsck_err(fs.as_ptr(), err, msg.as_raw()) }
 }
 
 pub fn sb_error_count(fs: &Fs, err: bch_sb_error_id) {
-    unsafe { c::bch2_sb_error_count(fs.raw, err) }
+    unsafe { c::bch2_sb_error_count(fs.as_ptr(), err) }
 }
 
 /// fs_inconsistent(), with what the transaction has queued in the message.
@@ -191,7 +191,7 @@ pub fn fs_inconsistent(fs: &Fs, msg: fmt::Arguments<'_>) -> bool {
     let mut buf = Printbuf::new();
     buf.write_fmt(msg);
 
-    unsafe { c::bch2_fs_inconsistent(fs.raw, c"%s".as_ptr().cast(), buf.as_raw().buf) }
+    unsafe { c::bch2_fs_inconsistent(fs.as_ptr(), c"%s".as_ptr().cast(), buf.as_raw().buf) }
 }
 
 /// What C's bkey_fsck_err() finds by name in a key type's validate: c, k,
@@ -213,7 +213,7 @@ pub fn bkey_fsck_err(
     buf.write_fmt(msg);
 
     let ret = unsafe {
-        c::__bch2_bkey_fsck_err(v.fs.raw, v.k.to_raw(), v.from, err,
+        c::__bch2_bkey_fsck_err(v.fs.as_ptr(), v.k.to_raw(), v.from, err,
                                 c"%s".as_ptr().cast(), buf.as_raw().buf)
     };
     let e = BchError::from_raw(-ret);

@@ -113,7 +113,7 @@ impl WriteOp {
         let ret = unsafe {
             let state_ptr = &*state as *const WriteState as *mut WriteState;
             rust_write_submit(
-                fs.raw,
+                fs.as_ptr(),
                 &raw mut (*state_ptr).op,
                 (*state_ptr).bvecs.as_mut_ptr(),
                 MAX_BVECS as u32,
@@ -227,7 +227,7 @@ impl ReadOp {
         let mut opts: c::bch_inode_opts = unsafe { std::mem::zeroed() };
         unsafe {
             c::bch2_inode_opts_get_inode(
-                fs.raw,
+                fs.as_ptr(),
                 inode as *const _ as *mut _,
                 &mut opts,
             );
@@ -243,7 +243,7 @@ impl ReadOp {
         unsafe {
             let state_ptr = &*state as *const ReadState as *mut ReadState;
             rust_read_submit(
-                fs.raw,
+                fs.as_ptr(),
                 &raw mut (*state_ptr).rbio,
                 (*state_ptr).bvecs.as_mut_ptr(),
                 MAX_BVECS as u32,

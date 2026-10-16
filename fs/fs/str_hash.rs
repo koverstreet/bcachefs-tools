@@ -360,7 +360,7 @@ pub fn new_inode_type(fs: &Fs) -> c::bch_str_hash_type {
 /// Without hash_info_init()'s check that casefolding is enabled: for comparing
 /// hash info, not hashing with it.
 pub fn hash_info_init_unchecked(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_hash_info {
-    unsafe { c::__bch2_hash_info_init(fs.raw, inode) }
+    unsafe { c::__bch2_hash_info_init(fs.as_ptr(), inode) }
 }
 
 impl PartialEq for c::SIPHASH_KEY {
@@ -402,7 +402,7 @@ pub fn hash_info_init(
 ) -> Result<c::bch_hash_info, BchError> {
     let mut hash_info: c::bch_hash_info = Default::default();
     ret_to_result(unsafe {
-        c::bch2_hash_info_init(fs.raw, inode, &mut hash_info)
+        c::bch2_hash_info_init(fs.as_ptr(), inode, &mut hash_info)
     })?;
     Ok(hash_info)
 }

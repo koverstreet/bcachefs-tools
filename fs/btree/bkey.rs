@@ -984,7 +984,7 @@ impl fmt::Display for BkeySCToText<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         unsafe {
             printbuf_to_formatter(f, |buf| {
-                c::bch2_bkey_val_to_text(buf, self.fs.raw, self.k.to_raw())
+                c::bch2_bkey_val_to_text(buf, self.fs.as_ptr(), self.k.to_raw())
             })
         }
     }

@@ -93,7 +93,7 @@ impl UpdateLock<'_> {
     /// Move the inode to project @projid, quota and all.
     pub fn set_projid(&self, projid: u32) -> Result<(), BchError> {
         let inode = self.inode;
-        ret_to_result(unsafe { c::rust_ei_set_projid(inode.fs.raw, inode.ei, projid) })
+        ret_to_result(unsafe { c::rust_ei_set_projid(inode.fs.as_ptr(), inode.ei, projid) })
     }
 
     /// Change the inode with @set, in a transaction of its own that's
@@ -121,7 +121,7 @@ impl UpdateLock<'_> {
 
         let inode = self.inode;
         ret_to_result(unsafe {
-            c::bch2_write_inode(inode.fs.raw, inode.ei, Some(set_fn::<F>),
+            c::bch2_write_inode(inode.fs.as_ptr(), inode.ei, Some(set_fn::<F>),
                                 &mut set as *mut F as *mut c_void, fields)
         })
     }

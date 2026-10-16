@@ -335,7 +335,7 @@ fn run_userspace_fsck(devices: &[String], fs_opts: c::bch_opts) -> Result<()> {
     let fs = device_scan::open_scan(&dev_paths, fs_opts)?;
 
     let mut buf = Printbuf::new();
-    let ret = unsafe { c::bch2_fs_fsck_errcode(fs.raw, buf.as_raw()) };
+    let ret = unsafe { c::bch2_fs_fsck_errcode(fs.as_ptr(), buf.as_raw()) };
     if ret != 0 {
         eprint!("{}", buf);
     }

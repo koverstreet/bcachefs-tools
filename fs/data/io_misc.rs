@@ -21,6 +21,6 @@ pub fn fpunch(
     sectors_delta: &mut i64,
 ) -> Result<(), BchError> {
     ret_to_result(unsafe {
-        c::bch2_fpunch(fs.raw, inum, start, end, sectors_delta)
+        c::bch2_fpunch(fs.as_ptr(), inum, start, end, sectors_delta)
     })
 }

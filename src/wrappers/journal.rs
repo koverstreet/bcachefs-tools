@@ -29,7 +29,7 @@ impl<'a> JournalReplays<'a> {
     /// retain_recovery_info.
     pub fn collect(fs: &'a Fs) -> Self {
         // SAFETY: an Fs is open
-        Self { fs, entries: unsafe { c::rust_collect_journal_entries(fs.raw) } }
+        Self { fs, entries: unsafe { c::rust_collect_journal_entries(fs.as_ptr()) } }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -50,7 +50,7 @@ impl<'a> JournalReplays<'a> {
 impl Drop for JournalReplays<'_> {
     fn drop(&mut self) {
         // SAFETY: the array, and the ref, collect() took
-        unsafe { c::rust_journal_entries_put(self.fs.raw, &mut self.entries) }
+        unsafe { c::rust_journal_entries_put(self.fs.as_ptr(), &mut self.entries) }
     }
 }
 

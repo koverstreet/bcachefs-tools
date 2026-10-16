@@ -53,16 +53,16 @@ fn cmd_reset_counters(cli: Cli) -> Result<()> {
     unsafe {
         if to_reset.is_empty() {
             for i in 0..BCH_COUNTER_NR as usize {
-                c::bch2_counter_reset(fs.raw, i as u32);
+                c::bch2_counter_reset(fs.as_ptr(), i as u32);
             }
         } else {
             for &i in &to_reset {
-                c::bch2_counter_reset(fs.raw, i as u32);
+                c::bch2_counter_reset(fs.as_ptr(), i as u32);
             }
         }
 
         // persist to superblock
-        let _lock = crate::wrappers::sb_lock(fs.raw);
+        let _lock = crate::wrappers::sb_lock(fs.as_ptr());
         fs.write_super_ret()
             .map_err(|e| anyhow!("error writing superblock: {}", e))?;
     }

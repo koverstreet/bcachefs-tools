@@ -751,7 +751,7 @@ pub(crate) fn list_journal_run(
     nr_entries: Option<u32>,
     interrupted: Option<&dyn Fn() -> bool>,
 ) -> Result<()> {
-    let c_fs = fs.raw;
+    let c_fs = fs.as_ptr();
     let replays = JournalReplays::collect(fs);
 
     // Compute min_seq_to_print for contiguous checking

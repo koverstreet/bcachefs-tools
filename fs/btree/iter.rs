@@ -89,7 +89,7 @@ impl<'f> BtreeTrans<'f> {
     pub fn new_fn(fs: &'f Fs, fn_idx: u32) -> BtreeTrans<'f> {
         unsafe {
             BtreeTrans {
-                raw: &mut *c::__bch2_trans_get(fs.raw, fn_idx),
+                raw: &mut *c::__bch2_trans_get(fs.as_ptr(), fn_idx),
                 fs,
             }
         }
@@ -2307,7 +2307,7 @@ pub struct BtreeNodeToText<'b, 'f> {
 impl<'b, 'f> fmt::Display for BtreeNodeToText<'b, 'f> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         printbuf_to_formatter(f, |buf| unsafe {
-            c::bch2_btree_node_to_text(buf, self.fs.raw, self.b)
+            c::bch2_btree_node_to_text(buf, self.fs.as_ptr(), self.b)
         })
     }
 }
@@ -2320,7 +2320,7 @@ pub struct BtreeNodeOndiskToText<'b, 'f> {
 impl<'b, 'f> fmt::Display for BtreeNodeOndiskToText<'b, 'f> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         printbuf_to_formatter(f, |buf| unsafe {
-            c::bch2_btree_node_ondisk_to_text(buf, self.fs.raw, self.b)
+            c::bch2_btree_node_ondisk_to_text(buf, self.fs.as_ptr(), self.b)
         })
     }
 }

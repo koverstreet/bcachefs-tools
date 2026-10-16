@@ -593,7 +593,7 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
         }
 
         let ret = unsafe { c::bch2_trans_relock_notrace(updater.raw()) };
-        unsafe { c::bch2_stripe_handle_put(fs.raw, &mut handle) };
+        unsafe { c::bch2_stripe_handle_put(fs.as_ptr(), &mut handle) };
 
         if ret == 0 {
             kernel::pr_info!("opening stripe {} didn't invalidate a queued update's relock\n",

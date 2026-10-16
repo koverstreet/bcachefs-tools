@@ -385,11 +385,11 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
         if verbosity > 1 {
             println!("Stripping alloc info");
         }
-        unsafe { strip_fs_alloc(fs.raw) };
+        unsafe { strip_fs_alloc(fs.as_ptr()) };
     }
 
     // Drop temp device
-    unsafe { (*fs.raw).devs[1] = std::ptr::null_mut() };
+    unsafe { (*fs.as_ptr()).devs[1] = std::ptr::null_mut() };
 
     // Allow journal on primary device
     let m = unsafe { fs.member_mut(0) };

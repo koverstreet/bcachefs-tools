@@ -36,7 +36,7 @@ impl<'f> DiskReservation<'f> {
     ) -> Result<(), BchError> {
         ret_to_result(unsafe {
             c::rust_bch2_disk_reservation_add(
-                self.fs.raw,
+                self.fs.as_ptr(),
                 self.raw.get(),
                 sectors,
                 nr_replicas,
@@ -48,7 +48,7 @@ impl<'f> DiskReservation<'f> {
     /// Release what this reservation holds, keeping it usable: as
     /// bch2_disk_reservation_put(). For a loop reserving per iteration.
     pub fn put(&self) {
-        unsafe { c::rust_bch2_disk_reservation_put(self.fs.raw, self.raw.get()) };
+        unsafe { c::rust_bch2_disk_reservation_put(self.fs.as_ptr(), self.raw.get()) };
     }
 
     pub fn as_ptr(&self) -> *const c::disk_reservation {

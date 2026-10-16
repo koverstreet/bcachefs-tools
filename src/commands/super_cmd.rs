@@ -104,7 +104,7 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
 
         let mut buf = Printbuf::new();
         buf.set_human_readable(true);
-        unsafe { crate::wrappers::sb_display::sb_to_text_with_names(&mut buf, fs.raw, sb, cli.layout, fields, field_only) };
+        unsafe { crate::wrappers::sb_display::sb_to_text_with_names(&mut buf, fs.as_ptr(), sb, cli.layout, fields, field_only) };
         print!("{}", buf);
         ControlFlow::Continue(())
     });

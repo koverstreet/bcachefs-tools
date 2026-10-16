@@ -91,7 +91,7 @@ pub fn log(fs: &Fs, level: LogLevel, args: fmt::Arguments<'_>) {
     // KERN_SOH, level, then the message as data: a '%' in it is text.
     let fmt = [0x01, level.0, b'%', b's', 0];
     unsafe {
-        __bch2_print(fs.raw, fmt.as_ptr() as *const c_char, buf.as_raw().buf);
+        __bch2_print(fs.as_ptr(), fmt.as_ptr() as *const c_char, buf.as_raw().buf);
     }
 }
 
@@ -143,7 +143,7 @@ impl Drop for LogMsg<'_> {
         self.msg.tabstop_align();
         let buf = self.msg.as_raw().buf;
         if !buf.is_null() {
-            unsafe { bch2_print_str_loglevel(self.fs.raw, self.level.as_int(), buf) };
+            unsafe { bch2_print_str_loglevel(self.fs.as_ptr(), self.level.as_int(), buf) };
         }
     }
 }
@@ -191,7 +191,7 @@ impl Ratelimit {
             self.ready.store(true, Ordering::Release);
         }
 
-        unsafe { bch2_ratelimit_suppress(fs.raw, state, func.as_ptr().cast()) }
+        unsafe { bch2_ratelimit_suppress(fs.as_ptr(), state, func.as_ptr().cast()) }
     }
 }
 

@@ -46,7 +46,7 @@ pub struct SbLockGuard<'a> {
 
 impl Drop for SbLockGuard<'_> {
     fn drop(&mut self) {
-        unsafe { c::mutex_unlock(&mut (*self.fs.raw).sb_lock.lock); }
+        unsafe { c::mutex_unlock(&mut (*self.fs.as_ptr()).sb_lock.lock); }
     }
 }
 
@@ -57,13 +57,20 @@ pub struct Fs {
     pub raw: *mut c::bch_fs,
 }
 
+impl Fs {
+    /// For C that takes the filesystem.
+    pub fn as_ptr(&self) -> *mut c::bch_fs {
+        self.raw
+    }
+}
+
 /// bch_fs's members, as `fs.snapshots` - the syntax they keep as they become
 /// Rust types.
 impl core::ops::Deref for Fs {
     type Target = c::bch_fs;
 
     fn deref(&self) -> &c::bch_fs {
-        unsafe { &*self.raw }
+        unsafe { &*self.as_ptr() }
     }
 }
 
@@ -79,7 +86,7 @@ unsafe impl Sync for BorrowedFs {}
 impl BorrowedFs {
     /// A cross-thread non-owning handle: the bch_fs must outlive its users.
     pub fn new(fs: &Fs) -> Self {
-        Self(fs.raw)
+        Self(fs.as_ptr())
     }
 
     pub fn get(&self) -> core::mem::ManuallyDrop<Fs> {
@@ -97,7 +104,7 @@ impl core::fmt::Display for c::bcachefs_metadata_version {
 impl Fs {
     /// The filesystem's name, as its messages give it.
     pub fn name(&self) -> &core::ffi::CStr {
-        unsafe { core::ffi::CStr::from_ptr((*self.raw).name.as_ptr().cast()) }
+        unsafe { core::ffi::CStr::from_ptr((*self.as_ptr()).name.as_ptr().cast()) }
     }
 
     /// The filesystem's options, as resolved at open.
@@ -168,7 +175,7 @@ impl Fs {
     /// c->flags. Other threads set and clear them, so it's an atomic load.
     pub fn flag(&self, f: c::bch_fs_flags) -> bool {
         let flags = unsafe {
-            &*(core::ptr::addr_of!((*self.raw).flags) as *const core::sync::atomic::AtomicUsize)
+            &*(core::ptr::addr_of!((*self.as_ptr()).flags) as *const core::sync::atomic::AtomicUsize)
         };
         flags.load(core::sync::atomic::Ordering::Relaxed) & (1usize << f as u32) != 0
     }
@@ -176,7 +183,7 @@ impl Fs {
     /// The journal sequence number being written: C's journal_cur_seq().
     pub fn journal_cur_seq(&self) -> u64 {
         // atomic64_read(&j->seq)
-        let seq = unsafe { &*(&raw const (*self.raw).journal.seq).cast::<core::sync::atomic::AtomicI64>() };
+        let seq = unsafe { &*(&raw const (*self.as_ptr()).journal.seq).cast::<core::sync::atomic::AtomicI64>() };
         seq.load(core::sync::atomic::Ordering::Relaxed) as u64
     }
 
@@ -185,18 +192,18 @@ impl Fs {
     /// bch2_fs_emergency_read_only(). Whether this call is what did it - if
     /// so, @out says so, and is no longer suppressed.
     pub fn emergency_read_only(&self, out: &mut Printbuf) -> bool {
-        unsafe { c::bch2_fs_emergency_read_only(self.raw, out.as_raw()) }
+        unsafe { c::bch2_fs_emergency_read_only(self.as_ptr(), out.as_raw()) }
     }
 
     pub fn sb_lock(&self) -> SbLockGuard<'_> {
         let _noio = MemallocFlags::noio();
-        unsafe { c::mutex_lock(&mut (*self.raw).sb_lock.lock); }
+        unsafe { c::mutex_lock(&mut (*self.as_ptr()).sb_lock.lock); }
         SbLockGuard { fs: self, _noio }
     }
 
     /// Caller holds sb_lock.
     pub fn write_super(&self) {
-        unsafe { c::bch2_write_super(self.raw) };
+        unsafe { c::bch2_write_super(self.as_ptr()) };
     }
 
     /// Throw @error, as C's bch_err_throw() does: counted in error_throw and
@@ -204,7 +211,7 @@ impl Fs {
     /// Naming an error to compare or parse against isn't throwing it - that's
     /// BchError::from().
     pub fn err(&self, error: bch_errcode) -> BchError {
-        BchError::from_raw(-unsafe { c::__bch2_err_throw(self.raw, -(error.0 as i32)) })
+        BchError::from_raw(-unsafe { c::__bch2_err_throw(self.as_ptr(), -(error.0 as i32)) })
     }
 
     pub fn throw<T>(&self, error: bch_errcode) -> Result<T, BchError> {
@@ -230,12 +237,12 @@ impl Fs {
     /// Caller holds sb_lock.
     #[allow(clippy::mut_from_ref)] // interior mutability guarded by sb_lock
     pub unsafe fn member_mut(&self, dev_idx: u32) -> &mut c::bch_member {
-        unsafe { &mut *c::bch2_members_v2_get_mut((*self.raw).disk_sb.sb, dev_idx as i32) }
+        unsafe { &mut *c::bch2_members_v2_get_mut((*self.as_ptr()).disk_sb.sb, dev_idx as i32) }
     }
 
     /// Consumes self, and forgets it so Drop doesn't exit it twice.
     pub fn exit(self) -> i32 {
-        let ret = unsafe { c::bch2_fs_exit(self.raw) };
+        let ret = unsafe { c::bch2_fs_exit(self.as_ptr()) };
         core::mem::forget(self);
         ret
     }
@@ -248,7 +255,7 @@ impl Fs {
         let mut ca: *mut c::bch_dev = core::ptr::null_mut();
         loop {
             // any device state, READ ref-class, ref_idx 0.
-            ca = unsafe { c::rust_bch2_get_next_online_dev(self.raw, ca, !0u32, 0 /* READ */, 0) };
+            ca = unsafe { c::rust_bch2_get_next_online_dev(self.as_ptr(), ca, !0u32, 0 /* READ */, 0) };
             if ca.is_null() {
                 return ControlFlow::Continue(());
             }
@@ -261,7 +268,7 @@ impl Fs {
 
     pub fn btree_id_root(&self, id: u32) -> Option<&c::btree> {
         unsafe {
-            let c = &*self.raw;
+            let c = &*self.as_ptr();
             let nr_known = u32::from(c::btree_id::nr);
 
             let r = if id < nr_known {
@@ -282,7 +289,7 @@ impl Fs {
     /// Total number of btree IDs (known + dynamic) on this filesystem.
     pub fn btree_id_nr_alive(&self) -> u32 {
         unsafe {
-            let c = &*self.raw;
+            let c = &*self.as_ptr();
             u32::from(c::btree_id::nr) + c.btree.cache.roots_extra.nr as u32
         }
     }
@@ -295,7 +302,7 @@ impl Fs {
     /// Get a reference to a device by index. Returns None if the device
     /// doesn't exist or can't be referenced.
     pub fn dev_get(&self, dev: u32) -> Option<DevRef> {
-        let ca = unsafe { c::rust_bch2_dev_tryget_noerror(self.raw, dev) };
+        let ca = unsafe { c::rust_bch2_dev_tryget_noerror(self.as_ptr(), dev) };
         if ca.is_null() { None } else { Some(DevRef(ca)) }
     }
 
@@ -304,7 +311,7 @@ impl Fs {
         -> Result<(), BchError>
     {
         ret_to_result(unsafe {
-            c::bch2_opt_hook_pre_set(self.raw,
+            c::bch2_opt_hook_pre_set(self.as_ptr(),
                 dev.map_or(core::ptr::null_mut(), |d| d.as_mut_ptr()),
                 0, id, v, true, core::ptr::null_mut())
         })
@@ -315,7 +322,7 @@ impl Fs {
                       val_str: Option<&core::ffi::CStr>)
     {
         unsafe {
-            c::bch2_opt_set_sb(self.raw,
+            c::bch2_opt_set_sb(self.as_ptr(),
                 dev.map_or(core::ptr::null_mut(), |d| d.as_mut_ptr()),
                 opt, v,
                 val_str.map_or(core::ptr::null(), |s| s.as_ptr().cast()));
@@ -323,22 +330,22 @@ impl Fs {
     }
 
     pub fn start(&self) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_fs_start(self.raw) })
+        ret_to_result(unsafe { c::bch2_fs_start(self.as_ptr()) })
     }
 
     pub fn buckets_nouse_alloc(&self) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_buckets_nouse_alloc(self.raw) })
+        ret_to_result(unsafe { c::bch2_buckets_nouse_alloc(self.as_ptr()) })
     }
 
     /// Mark device superblock buckets in btree metadata.
     pub fn trans_mark_dev_sb(&self, ca: &DevRef, flags: UpdateTriggerFlags) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_trans_mark_dev_sb(self.raw, ca.as_mut_ptr(), c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits())) })
+        ret_to_result(unsafe { c::bch2_trans_mark_dev_sb(self.as_ptr(), ca.as_mut_ptr(), c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits())) })
     }
 
     /// Flush the journal: everything committed before the call is on disk when
     /// it returns.
     pub fn journal_flush(&self) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_journal_flush(&mut (*self.raw).journal) })
+        ret_to_result(unsafe { c::bch2_journal_flush(&mut (*self.as_ptr()).journal) })
     }
 
     /// Set @inum's i_size to @new_i_size and drop every extent past it, as a
@@ -347,7 +354,7 @@ impl Fs {
     /// in is the caller's job, as the VFS does it in the page cache.
     pub fn truncate(&self, inum: c::subvol_inum, new_i_size: u64) -> Result<(), BchError> {
         let mut i_sectors_delta = 0;
-        ret_to_result(unsafe { c::bch2_truncate(self.raw, inum, new_i_size, &mut i_sectors_delta) })
+        ret_to_result(unsafe { c::bch2_truncate(self.as_ptr(), inum, new_i_size, &mut i_sectors_delta) })
     }
 
     /// Make the filesystem incompatible with versions before @version, if
@@ -356,10 +363,10 @@ impl Fs {
     pub fn request_incompat_feature(&self, version: c::bcachefs_metadata_version)
         -> Result<(), BchError>
     {
-        if version.0 <= unsafe { (*self.raw).sb.version_incompat } as u32 {
+        if version.0 <= unsafe { (*self.as_ptr()).sb.version_incompat } as u32 {
             return Ok(());
         }
-        ret_to_result(unsafe { c::bch2_set_version_incompat(self.raw, version) })
+        ret_to_result(unsafe { c::bch2_set_version_incompat(self.as_ptr(), version) })
     }
 
     /// Whether the filesystem uses @feature: c->sb.features, the in-memory
@@ -372,7 +379,7 @@ impl Fs {
     /// wasn't already: as bch2_check_set_feature().
     pub fn check_set_feature(&self, feature: c::bch_sb_feature) {
         if !self.feature(feature) {
-            unsafe { c::__bch2_check_set_feature(self.raw, feature.0) }
+            unsafe { c::__bch2_check_set_feature(self.as_ptr(), feature.0) }
         }
     }
 
@@ -390,7 +397,7 @@ impl Fs {
 
     /// Caller holds sb_lock.
     pub fn write_super_ret(&self) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_write_super(self.raw) })
+        ret_to_result(unsafe { c::bch2_write_super(self.as_ptr()) })
     }
 
     /// A superblock write that's part of bringing the filesystem up, on a
@@ -398,7 +405,7 @@ impl Fs {
     /// like recovery's own. Caller must hold sb_lock.
     pub fn write_super_bringup(&self) -> Result<(), BchError> {
         ret_to_result(unsafe {
-            c::bch2_write_super_flags(self.raw, c::bch_sb_write_flags::BCH_SB_WRITE_bringup)
+            c::bch2_write_super_flags(self.as_ptr(), c::bch_sb_write_flags::BCH_SB_WRITE_bringup)
         })
     }
 
@@ -406,27 +413,27 @@ impl Fs {
     /// it (c->sb, member info) without writing - for an open that will start
     /// and persist them then. Caller must hold sb_lock.
     pub fn sb_update(&self) {
-        unsafe { c::bch2_sb_update(self.raw) }
+        unsafe { c::bch2_sb_update(self.as_ptr()) }
     }
 
     /// Check if a device index exists and has a device pointer.
     pub fn dev_exists(&self, dev: u32) -> bool {
         unsafe {
-            let c = &*self.raw;
+            let c = &*self.as_ptr();
             (dev as usize) < c.sb.nr_devices as usize
                 && !c.devs[dev as usize].is_null()
         }
     }
 
     pub fn read_only(&self) {
-        unsafe { c::bch2_fs_read_only(self.raw) };
+        unsafe { c::bch2_fs_read_only(self.as_ptr()) };
     }
 
     pub fn dev_allocator_set_rw(&self, dev: u32, rw: bool) {
         unsafe {
-            let ca = (*self.raw).devs[dev as usize];
+            let ca = (*self.as_ptr()).devs[dev as usize];
             if !ca.is_null() {
-                c::bch2_dev_allocator_set_rw(self.raw, ca, rw);
+                c::bch2_dev_allocator_set_rw(self.as_ptr(), ca, rw);
             }
         }
     }
@@ -434,7 +441,7 @@ impl Fs {
     pub fn journal_flush_all_pins(&self) {
         unsafe {
             c::bch2_journal_flush_pins(
-                &mut (*self.raw).journal,
+                &mut (*self.as_ptr()).journal,
                 u64::MAX,
             );
         }
@@ -442,7 +449,7 @@ impl Fs {
 
     /// Flush pins up to the current journal sequence.
     pub fn journal_flush_outstanding_pins(&self) -> bool {
-        unsafe { c::bch2_journal_flush_pins(&mut (*self.raw).journal, self.journal_cur_seq()) }
+        unsafe { c::bch2_journal_flush_pins(&mut (*self.as_ptr()).journal, self.journal_cur_seq()) }
     }
 
     pub fn btree_delete_range(
@@ -453,7 +460,7 @@ impl Fs {
         flags: BtreeIterFlags,
     ) -> Result<(), BchError> {
         ret_to_result(unsafe {
-            c::bch2_btree_delete_range(self.raw, btree_id, start, end, c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()))
+            c::bch2_btree_delete_range(self.as_ptr(), btree_id, start, end, c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()))
         })
     }
 
@@ -471,7 +478,7 @@ impl Fs {
 
         ret_to_result(unsafe {
             c::bch2_btree_insert(
-                self.raw,
+                self.as_ptr(),
                 btree_id,
                 key.as_bkey_i_mut().as_ffi_mut(),
                 disk_res,
@@ -483,7 +490,7 @@ impl Fs {
 
     pub fn dev_usage_full_read(&self, dev: u32) -> c::bch_dev_usage_full {
         unsafe {
-            let ca = (*self.raw).devs[dev as usize];
+            let ca = (*self.as_ptr()).devs[dev as usize];
             let mut usage: c::bch_dev_usage_full = core::mem::zeroed();
             c::bch2_dev_usage_full_read_fast(ca, &mut usage);
             usage
@@ -493,7 +500,7 @@ impl Fs {
     /// # Safety
     /// The device exists.
     pub unsafe fn dev_raw(&self, dev: u32) -> *mut c::bch_dev {
-        (*self.raw).devs[dev as usize]
+        (*self.as_ptr()).devs[dev as usize]
     }
 
     /// For resize.
@@ -502,7 +509,7 @@ impl Fs {
     /// Caller holds sb_lock.
     #[allow(clippy::mut_from_ref)] // interior mutability guarded by sb_lock
     pub unsafe fn disk_sb_mut(&self) -> &mut c::bch_sb_handle {
-        &mut (*self.raw).disk_sb
+        &mut (*self.as_ptr()).disk_sb
     }
 
     pub fn block_bytes(&self) -> u64 {
@@ -512,7 +519,7 @@ impl Fs {
     pub fn time_to_timespec(&self, time: i64) -> c::timespec64 {
         const NSEC_PER_SEC: i64 = 1_000_000_000;
 
-        let sb = unsafe { &(*self.raw).sb };
+        let sb = unsafe { &(*self.as_ptr()).sb };
         let time = time.wrapping_add(sb.time_base_lo as i64);
         let units = sb.time_units_per_sec as i64;
 
@@ -539,7 +546,7 @@ impl Fs {
     // targets
     #[allow(clippy::unnecessary_cast)]
     pub fn timespec_to_time(&self, ts: c::timespec64) -> i64 {
-        let sb = unsafe { &(*self.raw).sb };
+        let sb = unsafe { &(*self.as_ptr()).sb };
         // C's (int) tv_nsec / nsec_per_time_unit: an unsigned division
         (ts.tv_sec as i64).wrapping_mul(sb.time_units_per_sec as i64)
             .wrapping_add((ts.tv_nsec as i32 as u32 / sb.nsec_per_time_unit) as i64)
@@ -554,17 +561,17 @@ impl Fs {
     }
 
     pub fn usage_read_short(&self) -> c::bch_fs_usage_short {
-        unsafe { c::bch2_fs_usage_read_short(self.raw) }
+        unsafe { c::bch2_fs_usage_read_short(self.as_ptr()) }
     }
 
     pub fn set_loglevel(&self, level: u32) {
-        unsafe { (*self.raw).loglevel = level; }
+        unsafe { (*self.as_ptr()).loglevel = level; }
     }
 }
 
 impl Drop for Fs {
     fn drop(&mut self) {
-        unsafe { c::bch2_fs_exit(self.raw); }
+        unsafe { c::bch2_fs_exit(self.as_ptr()); }
     }
 }
 
@@ -579,7 +586,7 @@ impl Fs {
     /// A write ref of kind @idx, unless the filesystem is going read-only: as
     /// enumerated_ref_tryget(&c->writes, idx).
     pub fn write_ref_tryget(&self, idx: c::bch_write_ref) -> Option<WriteRef<'_>> {
-        unsafe { c::rust_enumerated_ref_tryget(&raw mut (*self.raw).writes, idx as u32) }
+        unsafe { c::rust_enumerated_ref_tryget(&raw mut (*self.as_ptr()).writes, idx as u32) }
             .then_some(WriteRef { fs: self, idx })
     }
 }
@@ -598,7 +605,7 @@ impl<'f> WriteRef<'f> {
     /// adopt()s it, and drops it when done. If @work is already queued, the
     /// run that's pending has a ref, and this one is put.
     pub fn queue_work(self, work: &Opaque<c::work_struct>) {
-        if unsafe { c::bch2_queue_work((*self.fs.raw).write_ref_wq, work.as_ptr()) } {
+        if unsafe { c::bch2_queue_work((*self.fs.as_ptr()).write_ref_wq, work.as_ptr()) } {
             core::mem::forget(self);
         }
     }
@@ -606,7 +613,7 @@ impl<'f> WriteRef<'f> {
 
 impl Drop for WriteRef<'_> {
     fn drop(&mut self) {
-        unsafe { c::rust_enumerated_ref_put(&raw mut (*self.fs.raw).writes, self.idx as u32) };
+        unsafe { c::rust_enumerated_ref_put(&raw mut (*self.fs.as_ptr()).writes, self.idx as u32) };
     }
 }
 

@@ -470,7 +470,7 @@ fn resize_offline(device: &str, size_sectors: u64) -> Result<()> {
 
     let mut err = Printbuf::new();
     let ret = unsafe {
-        c::bch2_dev_resize(fs.raw, ca.as_mut_ptr(), nbuckets, err.as_raw())
+        c::bch2_dev_resize(fs.as_ptr(), ca.as_mut_ptr(), nbuckets, err.as_raw())
     };
     if ret != 0 {
         bail!("resize error: {}\n{}", crate::wrappers::bch_err_str(ret), err);
@@ -524,7 +524,7 @@ fn resize_journal_offline(device: &str, size_sectors: u64) -> Result<()> {
 
     println!("resizing journal to {} buckets", nbuckets);
     let ret = unsafe {
-        c::bch2_set_nr_journal_buckets(fs.raw, ca.as_mut_ptr(), nbuckets as u32)
+        c::bch2_set_nr_journal_buckets(fs.as_ptr(), ca.as_mut_ptr(), nbuckets as u32)
     };
     if ret != 0 {
         bail!("resize error: {}", crate::wrappers::bch_err_str(ret));

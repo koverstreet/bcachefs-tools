@@ -31,7 +31,7 @@ impl MovingContext {
         unsafe {
             c::bch2_moving_ctxt_init(
                 &mut *raw.as_mut().get_unchecked_mut(),
-                fs.raw,
+                fs.as_ptr(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 wp,

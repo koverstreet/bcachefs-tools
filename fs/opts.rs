@@ -164,7 +164,7 @@ pub fn parse_mount_opts(fs: Option<&mut Fs>, optstr: Option<&str>, ignore_unknow
         let optstr_ptr = optstr.as_ptr();
 
         let ret = unsafe {
-            c::bch2_parse_mount_opts(fs.map_or(core::ptr::null_mut(), |f| f.raw),
+            c::bch2_parse_mount_opts(fs.map_or(core::ptr::null_mut(), |f| f.as_ptr()),
                                      &mut opts as *mut c::bch_opts,
                                      core::ptr::null_mut(),
                                      optstr_ptr as *mut c_char,
@@ -216,7 +216,7 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &c::bch_option, val: &core::ffi::CStr,
                  err: Option<&mut Printbuf>) -> Result<u64, i32> {
     let mut v = 0u64;
     let ret = unsafe {
-        c::bch2_opt_parse(fs.map_or(core::ptr::null_mut(), |f| f.raw),
+        c::bch2_opt_parse(fs.map_or(core::ptr::null_mut(), |f| f.as_ptr()),
                           opt, val.as_ptr().cast(), &mut v,
                           err.map_or(core::ptr::null_mut(), |e| e.as_raw()))
     };
@@ -224,7 +224,7 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &c::bch_option, val: &core::ffi::CStr,
 }
 
 pub fn opt_to_text(out: &mut Printbuf, fs: &Fs, opt: &c::bch_option, v: u64) {
-    unsafe { c::bch2_opt_to_text(out.as_raw(), fs.raw, fs.sb() as *const _ as *mut _, opt, v, 0) }
+    unsafe { c::bch2_opt_to_text(out.as_raw(), fs.as_ptr(), fs.sb() as *const _ as *mut _, opt, v, 0) }
 }
 
 impl c::bch_opt_id {
@@ -372,22 +372,22 @@ pub struct OptChange<'f> {
 
 impl<'f> OptChange<'f> {
     pub fn new(fs: &'f Fs) -> Self {
-        unsafe { c::bch2_opt_change_lock(fs.raw) };
+        unsafe { c::bch2_opt_change_lock(fs.as_ptr()) };
         // bch2_opt_change_scope_init(), a static inline:
-        OptChange { fs, scope: c::opt_change_scope { c: fs.raw, ..Default::default() } }
+        OptChange { fs, scope: c::opt_change_scope { c: fs.as_ptr(), ..Default::default() } }
     }
 
     /// Before setting option @id to @v, for inode @inum - 0 for the
     /// filesystem: records what the change needs, and fails if it may not.
     pub fn pre_set(&mut self, inum: u64, id: c::bch_opt_id, v: u64) -> Result<(), BchError> {
         ret_to_result(unsafe {
-            c::bch2_opt_hook_pre_set(self.fs.raw, core::ptr::null_mut(), inum, id, v, true,
+            c::bch2_opt_hook_pre_set(self.fs.as_ptr(), core::ptr::null_mut(), inum, id, v, true,
                                      &mut self.scope)
         })
     }
 
     pub fn post_set(&self, inum: u64, id: c::bch_opt_id, v: u64) {
-        unsafe { c::bch2_opt_hook_post_set(self.fs.raw, core::ptr::null_mut(), inum, id, v) }
+        unsafe { c::bch2_opt_hook_post_set(self.fs.as_ptr(), core::ptr::null_mut(), inum, id, v) }
     }
 }
 
@@ -395,7 +395,7 @@ impl Drop for OptChange<'_> {
     fn drop(&mut self) {
         unsafe {
             c::bch2_opt_change_scope_exit(&mut self.scope);
-            c::bch2_opt_change_unlock(self.fs.raw);
+            c::bch2_opt_change_unlock(self.fs.as_ptr());
         }
     }
 }

@@ -87,7 +87,7 @@ struct EntrySizes {
 impl EntrySizes {
     fn of(fs: &Fs) -> Self {
         // SAFETY: the filesystem's in-memory superblock info, live as long as it is
-        let sb = unsafe { &(*fs.raw).sb };
+        let sb = unsafe { &(*fs.as_ptr()).sb };
         EntrySizes { u64s: sb.extent_type_u64s, nr: sb.extent_types_known }
     }
 
@@ -249,7 +249,7 @@ pub fn bkey_extent_is_reservation(fs: &Fs, k: BkeySC<'_>) -> bool {
 
 /// For reserving space to rewrite @k: tolerates bad pointers.
 pub fn durability_safe(fs: &Fs, k: BkeySC<'_>) -> c::bkey_durability {
-    unsafe { c::bch2_bkey_durability_safe(fs.raw, k.to_raw()) }
+    unsafe { c::bch2_bkey_durability_safe(fs.as_ptr(), k.to_raw()) }
 }
 
 /// Drop @k's stale cached pointers, updating it through @iter.

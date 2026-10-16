@@ -817,7 +817,7 @@ fn evict_inodes(fs: &Fs, subvols: &[u32]) {
         size: subvols.len(),
         ..Default::default()
     };
-    unsafe { c::bch2_evict_subvolume_inodes(fs.raw, &mut list) }
+    unsafe { c::bch2_evict_subvolume_inodes(fs.as_ptr(), &mut list) }
 }
 
 #[cfg(not(kernel))]
@@ -1018,7 +1018,7 @@ crate::recovery_pass!(bch2_fs_upgrade_for_subvolumes => fs_upgrade_for_subvolume
 /// Once, from bch2_fs_init(), on a zeroed bch_fs before any use.
 #[c_export]
 pub unsafe fn bch2_fs_subvolumes_init_early(c: &Opaque<c::bch_fs>) {
-    let raw = Fs::from_c(c).raw;
+    let raw = Fs::from_c(c).as_ptr();
     unsafe { RustOnly::init(&raw mut (*raw).snapshots.unlinked, new_mutex!(KVVec::new())) }
 }
 
@@ -1027,6 +1027,6 @@ pub unsafe fn bch2_fs_subvolumes_init_early(c: &Opaque<c::bch_fs>) {
 /// can fail), and nothing uses it after.
 #[c_export]
 pub unsafe fn bch2_fs_subvolumes_exit(c: &Opaque<c::bch_fs>) {
-    let raw = Fs::from_c(c).raw;
+    let raw = Fs::from_c(c).as_ptr();
     unsafe { RustOnly::drop_in_place(&raw mut (*raw).snapshots.unlinked) }
 }

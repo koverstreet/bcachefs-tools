@@ -32,7 +32,7 @@ fn jset_encrypt(fs: &Fs, j: &mut c::jset<Unvalidated>, csum_type: u32) -> Result
     let (nonce, len) = (j.nonce(), size_of_val(j) - off);
     // SAFETY: the jset's bytes, past encrypted_start: its pointer reaches all of them
     ret_to_result_void(unsafe {
-        c::bch2_encrypt(fs.raw, csum_type, nonce, j.as_ffi_mut().cast::<u8>().add(off).cast(), len)
+        c::bch2_encrypt(fs.as_ptr(), csum_type, nonce, j.as_ffi_mut().cast::<u8>().add(off).cast(), len)
     })
 }
 
@@ -40,7 +40,7 @@ fn jset_csum_set(fs: &Fs, j: &mut c::jset<Unvalidated>, csum_type: u32) {
     let off = std::mem::size_of::<c::bch_csum>();
     // SAFETY: the jset's bytes, past its csum: its pointer reaches all of them
     j.csum = unsafe {
-        c::bch2_checksum(fs.raw, csum_type, j.nonce(), j.as_ffi().cast::<u8>().add(off).cast(),
+        c::bch2_checksum(fs.as_ptr(), csum_type, j.nonce(), j.as_ffi().cast::<u8>().add(off).cast(),
                          size_of_val(j) - off)
     };
 }
@@ -51,7 +51,7 @@ fn bset_csum_set(fs: &Fs, node: *mut u8, i: *mut Head<c::bset>, offset: u32,
                  csum_type: u32, vstruct_bytes: usize) {
     let off = std::mem::size_of::<c::bch_csum>();
     let csum = unsafe {
-        c::bch2_checksum(fs.raw, csum_type, (*i).nonce(offset),
+        c::bch2_checksum(fs.as_ptr(), csum_type, (*i).nonce(offset),
                          node.add(off) as *const core::ffi::c_void,
                          vstruct_bytes - off)
     };
@@ -349,7 +349,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) ->
             }
 
             let ret = unsafe {
-                btree::read::bset_encrypt(fs.raw, buf.as_mut_ptr().add(bset_off) as *mut Head<c::bset>,
+                btree::read::bset_encrypt(fs.as_ptr(), buf.as_mut_ptr().add(bset_off) as *mut Head<c::bset>,
                                           bset_byte_offset as u32)
             };
             ret.map_err(|e| anyhow!("decrypting btree node bset at {pos:#x}: {e}"))?;
@@ -419,7 +419,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) ->
             // over the btree_node (first bset) or btree_node_entry.
             let bset = unsafe { buf.as_mut_ptr().add(bset_off) } as *mut Head<c::bset>;
             if c::bch_csum_type(csum_type).is_encryption() {
-                unsafe { btree::read::bset_encrypt(fs.raw, bset, bset_byte_offset as u32) }
+                unsafe { btree::read::bset_encrypt(fs.as_ptr(), bset, bset_byte_offset as u32) }
                     .map_err(|e| anyhow!("re-encrypting btree node bset at {pos:#x}: {e}"))?;
             }
             let node = unsafe { buf.as_mut_ptr().add(pos) };
@@ -493,7 +493,7 @@ fn get_sb_journal(fs: &Fs, ca: &c::bch_dev, entire_journal: bool, d: &mut DumpDe
     }
 
     // Journal buckets
-    let last_seq_ondisk = unsafe { (*fs.raw).journal.last_seq_ondisk };
+    let last_seq_ondisk = unsafe { (*fs.as_ptr()).journal.last_seq_ondisk };
     for i in 0..ca.journal.nr as usize {
         let seq = unsafe { *ca.journal.bucket_seq.add(i) };
         if entire_journal || seq >= last_seq_ondisk {
@@ -567,7 +567,7 @@ fn write_dev_image(
     // --sanitize.
     if sanitize || single_replica {
         write_sanitized_ranges(
-            &mut img, fs.raw, &mut d.journal, bucket_bytes, opts, sanitize_journal,
+            &mut img, fs.as_ptr(), &mut d.journal, bucket_bytes, opts, sanitize_journal,
         )?;
     } else {
         img.write_ranges(&mut d.journal)?;
@@ -576,7 +576,7 @@ fn write_dev_image(
     // Btree nodes go through the modify path for --sanitize or --single-replica.
     if sanitize || single_replica {
         write_sanitized_ranges(
-            &mut img, fs.raw, &mut d.btree, bucket_bytes, opts, sanitize_btree,
+            &mut img, fs.as_ptr(), &mut d.btree, bucket_bytes, opts, sanitize_btree,
         )?;
     } else {
         img.write_ranges(&mut d.btree)?;

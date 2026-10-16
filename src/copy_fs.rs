@@ -452,7 +452,7 @@ fn link_data(
 ) -> Result<(), BchError> {
     let mut sectors_delta: i64 = 0;
     let ret = unsafe {
-        rust_link_data(fs.raw, dst.bi_inum, &mut sectors_delta, logical, physical, length)
+        rust_link_data(fs.as_ptr(), dst.bi_inum, &mut sectors_delta, logical, physical, length)
     };
     dst.bi_sectors = (dst.bi_sectors as i64 + sectors_delta) as u64;
     ret_to_result(ret)
