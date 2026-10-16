@@ -74,3 +74,9 @@ pub fn clear_btree_clean(fs: &Fs, btree: c::btree_id) {
 pub fn cancelled(fs: &Fs) -> Result<(), BchError> {
     ret_to_result_void(unsafe { c::rust_bch2_recovery_cancelled(fs.as_ptr()) })
 }
+
+/// lockdep_assert_held(&c->recovery.run_lock): passes run under it - and
+/// what runs as a pass, it serializes.
+pub fn assert_run_lock_held(fs: &Fs) {
+    unsafe { c::rust_bch2_recovery_run_lock_assert_held(fs.as_ptr()) }
+}

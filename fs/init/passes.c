@@ -961,3 +961,9 @@ int rust_bch2_recovery_cancelled(struct bch_fs *c)
 {
 	return bch2_recovery_cancelled(c);
 }
+
+/* For Rust: lockdep_assert_held() is a macro */
+void rust_bch2_recovery_run_lock_assert_held(struct bch_fs *c)
+{
+	lockdep_assert_held(&c->recovery.run_lock);
+}

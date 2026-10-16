@@ -43,7 +43,7 @@ use crate::init::error::id;
 use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::inode;
-use crate::snapshots::{snapshot, subvolume};
+use crate::snapshots::{delete, snapshot, subvolume};
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err};
@@ -325,7 +325,7 @@ fn check_has_data<'a, 't>(
     let no_keys = state == Some(c::bch_snapshot_state::SNAPSHOT_STATE_no_keys);
 
     let mut breakdown = Printbuf::new();
-    let (keys, sectors) = fs.snapshots.accounting_totals(n.id(), Some(&mut breakdown))?;
+    let (keys, sectors) = fs.snapshots.accounting_totals(n.id(), Some(&mut breakdown));
 
     if !fsck_err_on!(t, keys != 0 || sectors != 0, id::snapshot_deleted_but_has_data,
                      "{} snapshot node has data accounted - {}:{}\n{}",
@@ -537,7 +537,7 @@ fn undelete_owns_data<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c:
     }
 
     undelete_ancestors(t, s.parent())?;
-    snapshot::node_undelete(t, u)
+    delete::node_undelete(t, u)
 }
 
 /// The highest dead node from @id up: the one whose own parent is still in
@@ -705,7 +705,7 @@ fn edge_repair(
     if let Some(o) = other.as_ref().filter(|o| o.v.state_decoded() == Some(c::bch_snapshot_state::SNAPSHOT_STATE_deleted)) {
         // A deleted node with data has a lying state, and routing around it would
         // strand the keys: undelete it, and leave our edge to its own visit.
-        let (keys, sectors) = fs.snapshots.accounting_totals(other_id, None)?;
+        let (keys, sectors) = fs.snapshots.accounting_totals(other_id, None);
         if keys != 0 || sectors != 0 {
             let fix = fsck_err!(t, id::snapshot_deleted_but_has_data,
                                 "snapshot {id} {ptr} pointer {other_id} is deleted but has {keys} keys, \
@@ -1085,25 +1085,15 @@ fn check_snapshot<'a, 't>(
     check_to_subvol(t, &mut n)
 }
 
-fn check_snapshots_trans(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+/// check_snapshots, in @trans: also for snapshot deletion, which runs it
+/// before deleting interior nodes.
+pub(crate) fn check_snapshots_trans(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     // Backwards: fixing a node's depth needs its parent's to be right already.
     let mut iter = BtreeIter::new(trans, c::btree_id::snapshots, POS_MAX, BtreeIterFlags::PREFETCH);
     iter.for_each_reverse_commit(trans, POS_MIN, None, CommitFlags::NO_ENOSPC,
                                  |t, iter, k| check_snapshot(t, iter, k))?;
 
     snapshot::table_rebuild_if_needed(trans)
-}
-
-/// check_snapshots, in @trans: for snapshot deletion, which runs it when it
-/// finds the tree inconsistent.
-///
-/// # Safety
-/// @trans is a live transaction, with no attempt in progress.
-#[c_export]
-pub unsafe extern "C" fn bch2_check_snapshots_trans(trans: *mut c::btree_trans) -> core::ffi::c_int {
-    let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-
-    crate::errcode::ret_to_c(check_snapshots_trans(&trans))
 }
 
 fn check_snapshots(fs: &Fs) -> Result<(), BchError> {
@@ -1386,7 +1376,7 @@ pub(crate) fn check_key_has_snapshot(
             Some(live_child) => if fsck_err!(t, id::bkey_in_deleted_interior_snapshot,
                                              "key in deleted interior snapshot {buf}, migrating to live descendant {live_child}")? {
                 let (btree, inum) = (iter.btree_id(), k.k.p.inode);
-                snapshot::delete_dead_key(t, iter, k, live_child)?;
+                delete::delete_dead_key(t, iter, k, live_child)?;
                 key_has_inode_in_snapshot(t, btree, inum, live_child)?;
                 return Ok(true);
             },

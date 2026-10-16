@@ -791,7 +791,7 @@ fn __set_deleted(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> 
     }
 
     set_state_trans(t, subvol, c::bch_subvolume_state::SUBVOLUME_STATE_deleted)?;
-    snapshot::node_set_deleted(t, snapid)
+    crate::snapshots::delete::node_set_deleted(t, snapid)
 }
 
 fn set_deleted(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError> {

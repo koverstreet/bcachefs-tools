@@ -148,7 +148,6 @@ bcachefs-y		:=			\
 	sb/errors.o				\
 	sb/io.o					\
 	sb/members.o				\
-	snapshots/delete.o			\
 	snapshots/snapshot.o			\
 	util/clock.o				\
 	util/cuckoo.o				\

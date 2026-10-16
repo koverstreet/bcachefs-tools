@@ -1260,8 +1260,6 @@ void bch2_fs_snapshots_exit(struct bch_fs *c)
 void bch2_fs_snapshots_init_early(struct bch_fs *c)
 {
 	mutex_init(&c->snapshots.table_lock);
-
-	mutex_init(&c->snapshots.delete.progress_lock);
 }
 
 int bch2_fs_snapshots_init(struct bch_fs *c)

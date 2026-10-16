@@ -3,6 +3,7 @@
 #define _BCACHEFS_SNAPSHOT_H
 #include "snapshots/snapshot_gen.h"
 #include "snapshots/check_snapshots_gen.h"
+#include "snapshots/delete_gen.h"
 
 void bch2_snapshot_tree_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 int bch2_snapshot_tree_validate(struct bch_fs *, struct bkey_s_c,
@@ -17,8 +18,6 @@ void bch2_snapshot_key_to_text(struct printbuf *, struct bch_fs *, struct bkey_s
 int bch2_snapshot_validate(struct bch_fs *, struct bkey_s_c,
 			   const struct bkey_validate_context *);
 int bch2_snapshot_trigger(struct btree_trans *, struct btree_trigger_op);
-
-int bch2_check_snapshot_needs_deletion(struct btree_trans *, struct bkey_s_c, u32 *);
 
 #define bch2_bkey_ops_snapshot ((struct bkey_ops) {		\
 	.key_validate	= bch2_snapshot_validate,		\
@@ -351,8 +350,6 @@ static inline int bch2_get_snapshot_overwrites(struct btree_trans *trans,
 
 }
 
-int bch2_snapshot_node_delete(struct btree_trans *, u32);
-
 int __bch2_key_has_snapshot_overwrites(struct btree_trans *, enum btree_id, struct bpos);
 
 static inline int bch2_key_has_snapshot_overwrites(struct btree_trans *trans,
@@ -366,11 +363,6 @@ static inline int bch2_key_has_snapshot_overwrites(struct btree_trans *trans,
 	return __bch2_key_has_snapshot_overwrites(trans, id, pos);
 }
 
-int __bch2_delete_dead_snapshots(struct bch_fs *);
-int bch2_delete_dead_snapshots(struct bch_fs *);
-void bch2_snapshot_delete_status_to_text(struct printbuf *, struct bch_fs *);
-
-int bch2_delete_dead_interior_snapshots(struct bch_fs *);
 int bch2_snapshots_read(struct bch_fs *);
 void bch2_fs_snapshots_exit(struct bch_fs *);
 void bch2_fs_snapshots_init_early(struct bch_fs *);

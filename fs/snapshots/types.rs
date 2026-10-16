@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::types::{DArray, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::util::alloc::KVVec;
 use crate::util::sync::{new_mutex, Mutex};
-use core::ffi::{c_uint, c_ulong};
+use core::ffi::c_ulong;
 use cstruct_macros::{c_const, c_enum, CStruct, c_typedef, Init, TypeInfo};
 use pin_init::pin_data;
 
@@ -69,33 +69,6 @@ pub struct snapshot_table {
 }
 c_default!(snapshot_table);
 
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct snapshot_interior_delete {
-    pub id: u32,
-    pub live_child: u32,
-}
-
-c_typedef! {
-    pub type interior_delete_list = DArray<c::snapshot_interior_delete>;
-}
-
-#[repr(C)]
-#[derive(CStruct)]
-pub struct snapshot_delete {
-    pub progress_lock: c::mutex,
-    pub deleting_from_trees: c::snapshot_id_list,
-    pub delete_leaves: c::snapshot_id_list,
-    pub delete_interior: c::interior_delete_list,
-    pub no_keys: c::interior_delete_list,
-    pub eytzinger_delete_list: c::interior_delete_list,
-
-    pub running: bool,
-    pub version: c_uint,
-    pub progress: c::progress_indicator,
-}
-c_default!(snapshot_delete);
-
 /*
  * Snapshot creation must prevent userspace from dirtying the page cache while
  * the snapshot is being taken: sync_inodes_sb flushes existing dirty pages
@@ -121,7 +94,10 @@ pub struct bch_fs_snapshots {
     /* a topology repair invalidated descendants' is_ancestor bitmaps: */
     pub need_table_rebuild: bool,
     pub create_lock: c::percpu_rw_semaphore,
-    pub delete: c::snapshot_delete,
+    /// Snapshot deletion's state: Rust's alone - snapshots/delete.rs.
+    #[pin]
+    #[init(RustOnly::new(crate::snapshots::delete::SnapshotDelete::init()))]
+    pub(crate) delete: rust_only!(crate::snapshots::delete::SnapshotDelete),
     #[c("struct work_struct wait_for_pagecache_and_delete_work")]
     #[pin]
     #[init(crate::snapshots::subvolume::SubvolDelete::init())]

@@ -95,6 +95,15 @@ pub fn log(fs: &Fs, level: LogLevel, args: fmt::Arguments<'_>) {
     }
 }
 
+/// Print @msg at @level as it stands, one line at a time with no prefix -
+/// C's bch2_print_str().
+pub fn print_str(fs: &Fs, level: LogLevel, msg: &mut Printbuf) {
+    let buf = msg.as_raw().buf;
+    if !buf.is_null() {
+        unsafe { bch2_print_str_loglevel(fs.as_ptr(), level.as_int(), buf) };
+    }
+}
+
 /// A message built up in pieces and printed when dropped - C's
 /// CLASS(bch_log_msg). Continuation lines are indented under the first and
 /// raw `\t`/`\r` columns aligned; it goes out whole, through

@@ -195,6 +195,11 @@ impl c::progress_indicator {
         self.init_masks(fs, Some(msg), btree_mask(leaf_btrees), btree_mask(inner_btrees))
     }
 
+    /// init(), the btrees as masks - a bit per btree id.
+    pub(crate) fn init_mask(&self, fs: &Fs, msg: &'static CStr, leaf_mask: u64, inner_mask: u64) {
+        self.init_masks(fs, Some(msg), leaf_mask, inner_mask)
+    }
+
     fn init_masks(&self, fs: &Fs, msg: Option<&'static CStr>, leaf_mask: u64, inner_mask: u64) {
         let total = total_nodes(fs, leaf_mask, inner_mask);
         let new = ProgressState::new(msg, c::bch_progress_units::BCH_PROGRESS_UNITS_nodes, total);
@@ -384,14 +389,3 @@ pub fn bch2_progress_has_total(s: &c::progress_indicator) -> bool {
     s.status().2 != 0
 }
 
-/// For delete.c, while it's C: dmesg-silent.
-#[c_export]
-pub fn bch2_progress_set_silent(s: &c::progress_indicator) {
-    s.set_silent()
-}
-
-/// For delete.c, while it's C: back to nothing seen.
-#[c_export]
-pub fn bch2_progress_reset(s: &c::progress_indicator) {
-    s.reset()
-}

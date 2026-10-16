@@ -109,6 +109,19 @@ impl c::bch_fs_snapshots {
         Table::get(self, &g).entry(id).map_or(0, |s| s.tree)
     }
 
+    /// By table entry, whatever state the nodes are in.
+    pub fn same_tree(&self, id1: u32, id2: u32) -> bool {
+        if id1 == id2 {
+            return true;
+        }
+        let g = rcu::read_lock();
+        let t = Table::get(self, &g);
+        match (t.entry(id1), t.entry(id2)) {
+            (Some(s1), Some(s2)) => s1.tree == s2.tree,
+            _                    => false,
+        }
+    }
+
     pub fn root(&self, mut id: u32) -> u32 {
         let g = rcu::read_lock();
         let t = Table::get(self, &g);
@@ -204,16 +217,9 @@ impl c::bch_fs_snapshots {
 
     /// Keys and sectors accounted to @id across the snapshotted btrees, broken
     /// down per btree into @breakdown.
-    pub fn accounting_totals(&self, id: u32, breakdown: Option<&mut Printbuf>)
-        -> Result<(u64, u64), BchError>
-    {
-        let (mut keys, mut sectors) = (0, 0);
-        let out = breakdown.map_or(core::ptr::null_mut(), |b| b.as_raw() as *mut _);
-        ret_to_result_void(unsafe {
-            c::bch2_snapshot_accounting_totals(self.c(), id, &mut keys, &mut sectors,
-                                               core::ptr::null_mut(), out)
-        })?;
-        Ok((keys, sectors))
+    pub fn accounting_totals(&self, id: u32, breakdown: Option<&mut Printbuf>) -> (u64, u64) {
+        let t = crate::snapshots::delete::accounting_totals(self.fs(), id, breakdown);
+        (t.keys, t.sectors)
     }
 }
 
@@ -319,31 +325,6 @@ pub fn lookup_key(t: &TransAttempt<'_, '_>, id: u32) -> Result<BkeyI<c::Snapshot
 /// Zero padded past the fields an older key lacks.
 pub fn val(k: BkeySC<'_>) -> Option<c::Snapshot> {
     c::Snapshot::val_copy_pad(k)
-}
-
-/// Mark node @id will_delete, its subvolume being deleted, if it's live.
-pub fn node_set_deleted(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
-    let ret = unsafe { c::bch2_snapshot_node_set_deleted(t.raw(), id) };
-    t.result(ret)
-}
-
-/// Put deleted node @u back in the tree, under its parent.
-pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::Snapshot>)
-    -> Result<(), BchError>
-{
-    let ret = unsafe { c::bch2_snapshot_node_undelete(t.raw(), u.as_ptr().cast()) };
-    t.result(ret)
-}
-
-/// Move @k, in a dead snapshot, to @live_child; 0 deletes it.
-pub fn delete_dead_key<'a, 't>(
-    t:          &TransAttempt<'a, 't>,
-    iter:       &mut c::btree_iter,
-    k:          BkeySC<'_>,
-    live_child: u32,
-) -> Result<(), BchError> {
-    let ret = unsafe { c::bch2_delete_dead_snapshot_key(t.raw(), iter, k.to_raw(), live_child) };
-    t.result(ret)
 }
 
 /// The state codeword nearest @v and its Hamming distance - the first, on a
