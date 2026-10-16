@@ -228,6 +228,11 @@ pub struct RustOnly<T, const U64S: usize> {
 unsafe impl<T: Send, const U64S: usize> Send for RustOnly<T, U64S> {}
 unsafe impl<T: Sync, const U64S: usize> Sync for RustOnly<T, U64S> {}
 
+// SAFETY: zeroed storage is a zeroed @T - which, @T being Zeroable, is a @T,
+// as new() would have made one. A @T with invariants zeroes can't satisfy -
+// a Mutex - isn't Zeroable, so neither is its RustOnly.
+unsafe impl<T: ::pin_init::Zeroable, const U64S: usize> ::pin_init::Zeroable for RustOnly<T, U64S> {}
+
 impl<T, const U64S: usize> RustOnly<T, U64S> {
     /// The storage holds a @T: rust_only!() sizes it, and u64 alignment is
     /// all it has.
