@@ -66,6 +66,7 @@ c_extern! {
     pub fn rust_kzalloc_nofail(size: usize) -> *mut c_void;
     pub fn rust_kfree(p: *const c_void);
     pub fn bch2_local_clock() -> u64;
+    pub fn bch2_cond_resched();
     pub fn bch2_get_random_u64() -> u64;
     pub fn bch2_ktime_get_coarse_real_ts64(ts: *mut c::timespec64);
     pub fn bch2_queue_work(wq: *mut c::workqueue_struct, work: *mut c::work_struct) -> bool;

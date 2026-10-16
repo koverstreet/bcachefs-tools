@@ -1407,6 +1407,11 @@ u64 bch2_local_clock(void)
 	return local_clock();
 }
 
+void bch2_cond_resched(void)
+{
+	cond_resched();
+}
+
 u64 bch2_get_random_u64(void)
 {
 	return get_random_u64();
