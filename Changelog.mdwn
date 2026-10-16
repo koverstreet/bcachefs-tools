@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Performance
+
+- Changing `data_checksum` no longer rewrites eligible whole, uncompressed
+  extents just to replace checksum metadata; the completed read is reused.
+
 ## v1.39.7 - Sun Oct 4 2026
 
 ### Major changes:
