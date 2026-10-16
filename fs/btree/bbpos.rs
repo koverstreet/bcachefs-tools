@@ -26,6 +26,14 @@ impl Ord for c::bbpos {
     }
 }
 
+/// btree:pos, as bch2_bbpos_to_text().
+impl core::fmt::Display for c::bbpos {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        crate::printbuf_to_formatter(f, |out| unsafe { c::bch2_btree_id_to_text(out, self.btree) })?;
+        write!(f, ":{}", self.pos)
+    }
+}
+
 #[cfg(feature = "std")]
 impl FromStr for c::bbpos {
     type Err = BchError;
