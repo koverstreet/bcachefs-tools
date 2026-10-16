@@ -169,7 +169,7 @@ int rust_write_submit(struct bch_fs *c,
 	op->subvol	= subvol;
 	op->pos		= SPOS(inum, offset >> 9, U32_MAX);
 	op->new_i_size	= new_i_size;
-	op->flags	|= BCH_WRITE_sync|BCH_WRITE_only_specified_devs;
+	op->flags	|= BCH_WRITE_sync;
 
 	int ret = bch2_disk_reservation_add(c, &op->res, len >> 9,
 					    replicas, 0);
