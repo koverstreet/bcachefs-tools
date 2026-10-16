@@ -183,7 +183,10 @@ ifdef CONFIG_DEBUG_FS
 	bcachefs-y += debug/async_objs.o
 endif
 
-ifdef BCACHEFS_TESTS
+# CONFIG_BCACHEFS_TESTS in-tree (kernel .config) as well as BCACHEFS_TESTS
+# for the DKMS module build: sysfs.c calls bch2_compress_test() under
+# CONFIG_BCACHEFS_TESTS, so the object must be there in both builds.
+ifneq ($(or $(BCACHEFS_TESTS),$(CONFIG_BCACHEFS_TESTS)),)
 	bcachefs-y += debug/compress_test.o
 endif
 ifdef BCACHEFS_DKMS
