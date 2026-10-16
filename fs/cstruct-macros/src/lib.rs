@@ -63,6 +63,7 @@ mod cstruct {
 use cstruct::{enum_text, expand_enum_list, parse_c_export, parse_cstruct, parse_items, rust_ident,
               CEnumDef, CEnumKind, CItem, CXEntry};
 
+mod init;
 mod tagged_union;
 mod typeinfo;
 mod vstructs;
@@ -196,6 +197,13 @@ pub fn derive_cstruct(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(TypeInfo, attributes(c_name))]
 pub fn derive_type_info(input: TokenStream) -> TokenStream {
     expand("#[derive(TypeInfo)]", || typeinfo::derive(input))
+}
+
+/// `#[derive(Init)]`: `T::init()`, an initializer that zeroes every field but
+/// those with `#[init(EXPR)]` - see init.rs.
+#[proc_macro_derive(Init, attributes(init))]
+pub fn derive_init(input: TokenStream) -> TokenStream {
+    expand("#[derive(Init)]", || init::derive(input))
 }
 
 /// `#[derive(Plain)]`: util/vstructs.rs's Plain, checked at compile time -

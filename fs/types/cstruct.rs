@@ -249,6 +249,10 @@ pub struct CFieldDef {
     /// #[counted_by(FIELD)], on a trailing `[T; 0]`: the field its length
     /// is - C's __counted_by(), as the struct's FlexArray impl.
     pub counted_by: Option<String>,
+    /// #[init(EXPR)]: its initializer, for #[derive(Init)] - which zeroes the
+    /// fields without one.
+    #[allow(dead_code)] // read by the macros, not rust_types_gen
+    pub init:     Option<String>,
     pub cfg:      Option<Cfg>,
     /// C's __aligned() on the member: from an alignment marker before it.
     #[allow(dead_code)]
@@ -1187,6 +1191,7 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
         let mut bitfield = false;
         let mut bits = None;
         let mut counted_by = None;
+        let mut init = None;
         let mut cfg = None;
         while let Some((attr, next)) = attr_at(toks, i)? {
             if matches!(attr, [Tok::Ident(n)] if n == "c_bitfield") {
@@ -1226,6 +1231,12 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
                     [Tok::Ident(n)] => counted_by = Some(n.clone()),
                     _ => return Err(format!("{name}: #[counted_by(FIELD)] takes the field that counts it")),
                 }
+            }
+            if let Some(args) = attr_args(attr, "init") {
+                if args.is_empty() {
+                    return Err(format!("{name}: #[init(EXPR)] takes the field's initializer"));
+                }
+                init = Some(tokens_to_rust(args));
             }
             if let Some(args) = attr_args(attr, "cfg") {
                 cfg = Some(parse_cfg(args)?);
@@ -1280,7 +1291,7 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
                                 written in its place - one of them, and not a #[c] or #[c_anon] too"));
         }
         fields.push(CFieldDef { name: field, ty, vis, c_decl, anon, inline, group, bitfield, bits,
-                                counted_by, cfg, c_align: None });
+                                counted_by, init, cfg, c_align: None });
     }
 
     // A field of an alignment marker type is no field of C's, but its
