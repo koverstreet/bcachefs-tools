@@ -69,6 +69,8 @@ c_extern! {
     pub fn bch2_get_random_u64() -> u64;
     pub fn bch2_ktime_get_coarse_real_ts64(ts: *mut c::timespec64);
     pub fn bch2_queue_work(wq: *mut c::workqueue_struct, work: *mut c::work_struct) -> bool;
+    pub fn bch2_queue_delayed_work(wq: *mut c::workqueue_struct, work: *mut c::delayed_work,
+                                   delay: c_ulong) -> bool;
     pub fn bch2_capable(cap: c_int) -> bool;
     #[cfg(__KERNEL__)]
     pub fn bch2_cpumask_local_spread(i: c_uint) -> c_uint;
