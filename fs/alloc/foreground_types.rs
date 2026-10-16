@@ -103,6 +103,7 @@ nest! {
         pub domain_keys: [u64; c::BCH_SB_MEMBERS_MAX as usize],
         /* scratch for move_alloc_avoid_busy_devs(), same lifetime as devs_sorted above */
         pub move_pressure: [u32; c::BCH_SB_MEMBERS_MAX as usize],
+        pub move_alloc_has_alternative: bool,
         pub usage: c::bch_dev_usage,
 
         /* bch2_bucket_alloc_trans(): */

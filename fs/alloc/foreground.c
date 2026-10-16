@@ -1062,28 +1062,28 @@ static bool open_bucket_is_on_writepoint(struct bch_fs *c,
 	return false;
 }
 
-static u32 move_alloc_dev_busy(struct bch_fs *c,
-			       struct alloc_request *req,
-			       unsigned dev)
+static void move_alloc_dev_busy(struct bch_fs *c,
+				struct alloc_request *req)
 {
-	struct bch_fs_allocator *a = &c->allocator;
-	unsigned busy = 0;
+	for (unsigned i = 0; i < req->devs_sorted.nr; i++)
+		req->move_pressure[req->devs_sorted.data[i]] = 0;
 
+	struct bch_fs_allocator *a = &c->allocator;
 	for (struct open_bucket *ob = a->open_buckets;
 	     ob < a->open_buckets + ARRAY_SIZE(a->open_buckets);
 	     ob++) {
 		guard(spinlock)(&ob->lock);
 
 		if (!ob->valid ||
-		    ob->dev != dev ||
 		    ob->data_type != BCH_DATA_user ||
+		    !test_bit(ob->dev, req->devs_may_alloc.d) ||
 		    open_bucket_is_on_writepoint(c, req->wp, ob))
 			continue;
 
-		busy++;
+		req->move_pressure[ob->dev] = min_t(u32,
+			req->move_pressure[ob->dev] + MOVE_ALLOC_BUSY_BUCKET_WEIGHT,
+			2 * MOVE_ALLOC_BUSY_BUCKET_WEIGHT);
 	}
-
-	return min_t(u32, busy, 2) * MOVE_ALLOC_BUSY_BUCKET_WEIGHT;
 }
 
 #ifndef CONFIG_BCACHEFS_NO_LATENCY_ACCT
@@ -1146,59 +1146,57 @@ static u32 move_alloc_dev_pressure(struct bch_fs *c,
 		     move_alloc_dev_congested(ca, now) +
 		     move_alloc_dev_write_congested(ca),
 		     CONGESTED_MAX) +
-		move_alloc_dev_busy(c, req, dev);
+		req->move_pressure[dev];
 }
 
-static bool move_alloc_dev_stalled(struct bch_fs *c,
-				   struct alloc_request *req,
-				   unsigned dev, u64 now)
+static bool move_alloc_dev_stalled(struct alloc_request *req,
+				   unsigned dev)
 {
-	if (!(req->flags & BCH_WRITE_move) ||
-	    req->data_type != BCH_DATA_user ||
-	    (req->devs_required && test_bit(dev, req->devs_required->d)) ||
-	    move_alloc_dev_pressure(c, req, dev, now) <
-	    MOVE_ALLOC_STALLED_THRESHOLD)
-		return false;
-
-	unsigned alternative;
-	for_each_set_bit(alternative, req->devs_may_alloc.d, BCH_SB_MEMBERS_MAX)
-		if (alternative != dev &&
-		    move_alloc_dev_pressure(c, req, alternative, now) <
-		    MOVE_ALLOC_STALLED_THRESHOLD)
-			return true;
-
-	return false;
+	return (req->flags & BCH_WRITE_move) &&
+	       req->data_type == BCH_DATA_user &&
+	       !(req->devs_required && test_bit(dev, req->devs_required->d)) &&
+	       req->move_alloc_has_alternative &&
+	       req->move_pressure[dev] >= MOVE_ALLOC_STALLED_THRESHOLD;
 }
 
 static void move_alloc_avoid_busy_devs(struct bch_fs *c,
 				       struct alloc_request *req)
 {
+	req->move_alloc_has_alternative = false;
 	if (!(req->flags & BCH_WRITE_move) ||
 	    req->data_type != BCH_DATA_user ||
 	    req->devs_sorted.nr <= 1)
 		return;
 
-	/*
-	 * devs_sorted.nr can be up to BCH_SB_MEMBERS_MAX; keep this off the
-	 * (btree transaction path) stack and carry it on @req instead, same
-	 * as domain_keys above.
+	/* Cache pressure by device ID.  The bucket scan happens once here, outside
+	 * freelist_lock; want_bucket() can then test candidates without rescanning
+	 * the full open-bucket table while that lock is held.
 	 */
-	u32 *pressure = req->move_pressure;
+	move_alloc_dev_busy(c, req);
 	u64 now = local_clock();
+	guard(rcu)();
 
-	for (unsigned i = 0; i < req->devs_sorted.nr; i++)
-		pressure[i] = move_alloc_dev_pressure(c, req,
-						      req->devs_sorted.data[i],
-						      now);
+	for (unsigned i = 0; i < req->devs_sorted.nr; i++) {
+		unsigned dev = req->devs_sorted.data[i];
+		struct bch_dev *ca = bch2_dev_rcu_noerror(c, dev);
+
+		if (!ca) {
+			req->move_pressure[dev] = U32_MAX;
+			continue;
+		}
+
+		bch2_dev_usage_read_fast(ca, &req->usage);
+		if (!__dev_buckets_free(ca, req->usage, req->watermark)) {
+			req->move_pressure[dev] = U32_MAX;
+			continue;
+		}
+
+		req->move_pressure[dev] = move_alloc_dev_pressure(c, req, dev, now);
+		if (req->move_pressure[dev] < MOVE_ALLOC_STALLED_THRESHOLD)
+			req->move_alloc_has_alternative = true;
+	}
 
 	/*
-	 * Background moves can otherwise pick the same emptiest device that
-	 * foreground writepoints or other movers are already filling, or a
-	 * device that is currently congested from unrelated IO. Include a small
-	 * write-latency term here too: the global congestion counter is
-	 * read-oriented, but moving data should avoid a destination whose
-	 * write/flush path is already far slower than its recent norm.
-	 *
 	 * Keep the free-space weighted allocator order primary while devices are
 	 * not congested. Once a device is visibly falling behind, sink it behind
 	 * less stalled choices; otherwise a much larger, mostly empty disk can keep
@@ -1212,11 +1210,11 @@ static void move_alloc_avoid_busy_devs(struct bch_fs *c,
 		     (!req->devs_required ||
 		      test_bit(req->devs_sorted.data[i - 1], req->devs_required->d) ==
 		      test_bit(req->devs_sorted.data[i], req->devs_required->d)) &&
-		     pressure[i - 1] >= MOVE_ALLOC_STALLED_THRESHOLD &&
-		     pressure[i - 1] > pressure[i]; i--) {
+		     req->move_pressure[req->devs_sorted.data[i - 1]] >=
+			MOVE_ALLOC_STALLED_THRESHOLD &&
+		     req->move_pressure[req->devs_sorted.data[i - 1]] >
+				req->move_pressure[req->devs_sorted.data[i]]; i--)
 			swap(req->devs_sorted.data[i - 1], req->devs_sorted.data[i]);
-			swap(pressure[i - 1], pressure[i]);
-		}
 }
 
 static const u64 stripe_clock_hand_rescale	= 1ULL << 62; /* trigger rescale at */
@@ -1500,7 +1498,7 @@ static bool want_bucket(struct bch_fs *c,
 	if (req->ec != (ob->ec != NULL))
 		return false;
 
-	if (move_alloc_dev_stalled(c, req, ob->dev, local_clock()))
+	if (move_alloc_dev_stalled(req, ob->dev))
 		return false;
 
 	return true;
