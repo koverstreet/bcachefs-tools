@@ -513,7 +513,7 @@ pub unsafe extern "C" fn bch2_dirent_lookup(
     name:      &c::qstr,
     inum:      &mut MaybeUninit<c::subvol_inum>,
 ) -> c_int {
-    ret_to_c(lookup(&Fs::from_c(c), dir, hash_info, unsafe { qstr_name(name) })
+    ret_to_c(lookup(Fs::from_c(c), dir, hash_info, unsafe { qstr_name(name) })
              .map(|i| { inum.write(i); }))
 }
 
@@ -627,7 +627,7 @@ pub unsafe extern "C" fn bch2_readdir(
     hash_info: &mut c::bch_hash_info,
     ctx:       &mut c::dir_context,
 ) -> c_int {
-    ret_to_c(readdir(&Fs::from_c(c), dir, hash_info, ctx))
+    ret_to_c(readdir(Fs::from_c(c), dir, hash_info, ctx))
 }
 
 // ── Rename ───────────────────────────────────────────────────────────────

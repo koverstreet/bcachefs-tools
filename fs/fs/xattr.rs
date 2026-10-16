@@ -204,7 +204,7 @@ pub fn bch2_xattr_validate(
     from: &c::bkey_validate_context,
 ) -> c_int {
     let fs = Fs::from_c(c);
-    let v = BkeyValidate { fs: &fs, k, from };
+    let v = BkeyValidate { fs: fs, k, from };
     ret_to_c(validate(&v))
 }
 

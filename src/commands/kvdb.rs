@@ -48,7 +48,7 @@ use bcachefs_kernel::btree::iter::{
 };
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::{bch_errcode, BchError};
-use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::inode;
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::typeinfo::{self, FieldTarget, StructInfo, TypeInfo};
@@ -921,8 +921,8 @@ quit                                           exit (also ^D)
 /// opened noexcl|nostart purely for key formatting - never started, journal
 /// never read - and writes are refused).
 enum KvdbFs {
-    Offline(Fs),
-    Online(BcachefsHandle, Fs),
+    Offline(OpenFs),
+    Online(BcachefsHandle, OpenFs),
 }
 
 impl KvdbFs {

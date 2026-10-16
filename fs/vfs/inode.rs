@@ -16,7 +16,6 @@
 
 use core::ffi::{c_int, c_void};
 use core::marker::PhantomData;
-use core::mem::ManuallyDrop;
 
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
@@ -30,7 +29,7 @@ pub const ATTR_CTIME: u32 = 1 << 6;
 
 pub struct InodeInfo<'a> {
     ei:   *mut c::bch_inode_info,
-    fs:   ManuallyDrop<Fs>,
+    fs:   &'a Fs,
     _ref: PhantomData<&'a c::bch_inode_info>,
 }
 
@@ -57,7 +56,7 @@ impl InodeInfo<'_> {
     }
 
     pub fn fs(&self) -> &Fs {
-        &self.fs
+        self.fs
     }
 
     pub fn inum(&self) -> c::subvol_inum {

@@ -191,7 +191,7 @@ pub fn is_ro(fs: &Fs, subvol: u32) -> Result<(), BchError> {
 
 #[c_export]
 pub fn bch2_subvol_is_ro(c: &Opaque<c::bch_fs>, subvol: u32) -> core::ffi::c_int {
-    ret_to_c(is_ro(&Fs::from_c(c), subvol))
+    ret_to_c(is_ro(Fs::from_c(c), subvol))
 }
 
 /// ENOTEMPTY_subvol_not_empty if @subvol has subvolumes under it.
@@ -362,7 +362,7 @@ pub fn bch2_subvolume_validate(
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
 ) -> core::ffi::c_int {
-    ret_to_c(validate(&BkeyValidate { fs: &Fs::from_c(c), k, from }))
+    ret_to_c(validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
 #[cold]
@@ -836,7 +836,7 @@ pub unsafe fn bch2_subvolume_wait_for_pagecache_and_delete(work: *mut c::work_st
     };
     let fs = unsafe { Fs::borrow_raw(c) };
     let _write_ref = unsafe {
-        WriteRef::adopt(&fs, c::bch_write_ref::BCH_WRITE_REF_snapshot_delete_pagecache)
+        WriteRef::adopt(fs, c::bch_write_ref::BCH_WRITE_REF_snapshot_delete_pagecache)
     };
 
     loop {
@@ -845,7 +845,7 @@ pub unsafe fn bch2_subvolume_wait_for_pagecache_and_delete(work: *mut c::work_st
             break;
         }
 
-        evict_inodes(&fs, &subvols);
+        evict_inodes(fs, &subvols);
 
         let trans = crate::btree_trans!(&fs);
         for &id in subvols.iter() {
@@ -988,7 +988,7 @@ fn initialize(fs: &Fs) -> Result<(), BchError> {
 
 #[c_export]
 pub fn bch2_initialize_subvolumes(c: &Opaque<c::bch_fs>) -> core::ffi::c_int {
-    ret_to_c(initialize(&Fs::from_c(c)))
+    ret_to_c(initialize(Fs::from_c(c)))
 }
 
 /// Set bi_subvol on the root inode, upgrading to subvolumes.

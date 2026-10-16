@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use crate::c;
 use bcachefs_kernel::errcode::{self, BchError, errptr_to_result};
-use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::fs::{Fs, OpenFs};
 
 use crate::data::io::{ReadOp, WriteOp};
 
@@ -23,9 +23,9 @@ extern "C" {
 
 /// Userspace extension methods on the core [`Fs`].
 pub trait FsExt {
-    fn open(devs: &[PathBuf], opts: c::bch_opts) -> Result<Fs, BchError>;
+    fn open(devs: &[PathBuf], opts: c::bch_opts) -> Result<OpenFs, BchError>;
     fn open_with_key(devs: &[PathBuf], opts: c::bch_opts, user_key: Option<&c::bch_key>)
-        -> Result<Fs, BchError>;
+        -> Result<OpenFs, BchError>;
     fn write(&self, inum: u64, offset: u64, subvol: u32, replicas: u32, data: &[u8], new_i_size: u64) -> WriteOp;
     fn read<'a>(&'a self, inum: c::subvol_inum, offset: u64, inode: &c::bch_inode_unpacked, buf: &'a mut [u8]) -> ReadOp;
     fn accounting_mem_read(&self, pos: c::bpos, nr: u32) -> Vec<u64>;
@@ -33,7 +33,7 @@ pub trait FsExt {
 }
 
 impl FsExt for Fs {
-    fn open(devs: &[PathBuf], opts: c::bch_opts) -> Result<Fs, BchError> {
+    fn open(devs: &[PathBuf], opts: c::bch_opts) -> Result<OpenFs, BchError> {
         Self::open_with_key(devs, opts, None)
     }
 
@@ -41,7 +41,7 @@ impl FsExt for Fs {
     /// filesystem. Without it the open looks in the keyring, and failing
     /// that prompts for the passphrase on stdin itself (bch2_request_key()).
     fn open_with_key(devs: &[PathBuf], mut opts: c::bch_opts, user_key: Option<&c::bch_key>)
-        -> Result<Fs, BchError>
+        -> Result<OpenFs, BchError>
     {
         let devs_cstrs: Vec<_> = devs
             .iter()
@@ -58,7 +58,10 @@ impl FsExt for Fs {
                             user_key.map_or(std::ptr::null(), |k| k as *const _))
         };
 
-        errptr_to_result(ret).map(|fs| Fs { raw: fs })
+        // bch2_fs_open() returns the filesystem or an error, never NULL
+        errptr_to_result(ret).map(|fs| unsafe {
+            OpenFs::from_raw(core::ptr::NonNull::new_unchecked(fs))
+        })
     }
 
     fn write(&self, inum: u64, offset: u64, subvol: u32, replicas: u32, data: &[u8], new_i_size: u64) -> WriteOp {

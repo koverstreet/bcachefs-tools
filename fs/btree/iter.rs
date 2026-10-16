@@ -96,13 +96,12 @@ impl<'f> BtreeTrans<'f> {
     }
 
     /// A transaction C owns, for Rust that C calls with one: it isn't put when
-    /// dropped. Its filesystem is its own trans->c, borrowed in place - Fs is
-    /// transparent over the pointer.
+    /// dropped. Its filesystem is its own trans->c.
     ///
     /// # Safety
     /// @raw is a live transaction, for as long as this lives.
     pub unsafe fn borrow_raw(raw: *mut c::btree_trans) -> ManuallyDrop<BtreeTrans<'f>> {
-        let fs = unsafe { &*(&raw const (*raw).c as *const Fs) };
+        let fs = unsafe { &*(*raw).c };
         ManuallyDrop::new(BtreeTrans { raw, fs })
     }
 

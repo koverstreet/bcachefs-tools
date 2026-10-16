@@ -289,7 +289,7 @@ pub extern "C" fn bch2_inode_unpack(
     k:        BkeySC<'_>,
     unpacked: &mut MaybeUninit<c::bch_inode_unpacked>,
 ) {
-    unpacked.write(unpack(&Fs::from_c(c), k));
+    unpacked.write(unpack(Fs::from_c(c), k));
 }
 
 impl c::bkey_inode_buf {
@@ -628,7 +628,7 @@ pub extern "C" fn bch2_inode_find_by_inum(
     inum:  c::subvol_inum,
     inode: &mut MaybeUninit<c::bch_inode_unpacked>,
 ) -> core::ffi::c_int {
-    ret_to_c(find_by_inum(&Fs::from_c(c), inum).map(|i| { inode.write(i); }))
+    ret_to_c(find_by_inum(Fs::from_c(c), inum).map(|i| { inode.write(i); }))
 }
 
 /// The oldest version of @inum that a key in @snapshot sees - the version
@@ -823,7 +823,7 @@ fn validate_c(
     from:     &c::bkey_validate_context,
     validate: fn(&BkeyValidate<'_, '_>) -> Result<(), BchError>,
 ) -> core::ffi::c_int {
-    ret_to_c(validate(&BkeyValidate { fs: &Fs::from_c(c), k, from }))
+    ret_to_c(validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
 /// For C's bkey_ops: bch2_inode_validate().
@@ -969,7 +969,7 @@ pub fn bch2_inode_to_text(
     c:   &Opaque<c::bch_fs>,
     k:   BkeySC<'_>,
 ) {
-    let inode = unpack(&Fs::from_c(c), k);
+    let inode = unpack(Fs::from_c(c), k);
     fields_to_text(out, &inode)
 }
 
@@ -1028,7 +1028,7 @@ pub fn shard_cpu_init(fs: &Fs) {
 /// @c is a filesystem being started, nothing else using it.
 #[c_export]
 pub unsafe extern "C" fn bch2_fs_inode_shard_cpu_init(c: &Opaque<c::bch_fs>) {
-    shard_cpu_init(&Fs::from_c(c))
+    shard_cpu_init(Fs::from_c(c))
 }
 
 /// The default for shard_inode_numbers_bits, when it isn't set: as
@@ -1191,7 +1191,7 @@ pub fn bch2_inode_alloc_cursor_validate(
     k:    BkeySC<'_>,
     from: &c::bkey_validate_context,
 ) -> core::ffi::c_int {
-    ret_to_c(alloc_cursor_validate(&BkeyValidate { fs: &Fs::from_c(c), k, from }))
+    ret_to_c(alloc_cursor_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
 /// For C's bkey_ops: bch2_inode_alloc_cursor_to_text() - the cursor, and the
@@ -1207,7 +1207,7 @@ pub fn bch2_inode_alloc_cursor_to_text(
     let v = k.arm::<c::InodeAllocCursor>().expect("an inode alloc cursor").v();
 
     let idx = v.idx.get();
-    let (min, max) = cursor_range(&fs, k.k.p.offset);
+    let (min, max) = cursor_range(fs, k.k.p.offset);
 
     write!(out, "min {min} max {max} consumed {} idx {idx} generation {}",
            idx.wrapping_sub(min), v.generation.get());
@@ -1642,7 +1642,7 @@ pub fn rm(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
 /// For C's VFS: bch2_inode_rm().
 #[c_export]
 pub extern "C" fn bch2_inode_rm(c: &Opaque<c::bch_fs>, inum: c::subvol_inum) -> core::ffi::c_int {
-    ret_to_c(rm(&Fs::from_c(c), inum))
+    ret_to_c(rm(Fs::from_c(c), inum))
 }
 
 /// Delete inode @inum in @snapshot and its contents there - each content
@@ -1846,7 +1846,7 @@ pub extern "C" fn bch2_inode_init_early(
     c:     &Opaque<c::bch_fs>,
     inode: &mut MaybeUninit<c::bch_inode_unpacked>,
 ) {
-    init_early(&Fs::from_c(c), inode.write(Default::default()))
+    init_early(Fs::from_c(c), inode.write(Default::default()))
 }
 
 /// Finish a new inode, made at @now, in directory @parent: it inherits
@@ -1926,7 +1926,7 @@ pub extern "C" fn bch2_inode_init(
     rdev:   c::dev_t,
     parent: Option<&c::bch_inode_unpacked>,
 ) {
-    inode.write(init(&Fs::from_c(c), uid, gid, mode, rdev, parent));
+    inode.write(init(Fs::from_c(c), uid, gid, mode, rdev, parent));
 }
 
 // ── Options and casefolding ──────────────────────────────────────────────

@@ -50,27 +50,12 @@ impl Drop for SbLockGuard<'_> {
     }
 }
 
-/// Transparent: any `*mut bch_fs` in memory is an Fs in place - see
-/// BtreeTrans::borrow_raw().
-#[repr(transparent)]
-pub struct Fs {
-    pub raw: *mut c::bch_fs,
-}
+pub use crate::cstructs::types::Fs;
 
 impl Fs {
     /// For C that takes the filesystem.
-    pub fn as_ptr(&self) -> *mut c::bch_fs {
-        self.raw
-    }
-}
-
-/// bch_fs's members, as `fs.snapshots` - the syntax they keep as they become
-/// Rust types.
-impl core::ops::Deref for Fs {
-    type Target = c::bch_fs;
-
-    fn deref(&self) -> &c::bch_fs {
-        unsafe { &*self.as_ptr() }
+    pub fn as_ptr(&self) -> *mut Fs {
+        self as *const Fs as *mut Fs
     }
 }
 
@@ -89,7 +74,7 @@ impl BorrowedFs {
         Self(fs.as_ptr())
     }
 
-    pub fn get(&self) -> core::mem::ManuallyDrop<Fs> {
+    pub fn get(&self) -> &Fs {
         unsafe { Fs::borrow_raw(self.0) }
     }
 }
@@ -125,17 +110,15 @@ impl Fs {
         &self.disk_sb
     }
 
-    /// Non-owning: ManuallyDrop, so Fs::drop doesn't call bch2_fs_exit.
-    ///
     /// # Safety
-    /// @raw points to a live bch_fs.
-    pub unsafe fn borrow_raw(raw: *mut c::bch_fs) -> core::mem::ManuallyDrop<Fs> {
-        core::mem::ManuallyDrop::new(Fs { raw })
+    /// @raw points to a live bch_fs, that outlives 'a.
+    pub unsafe fn borrow_raw<'a>(raw: *mut c::bch_fs) -> &'a Fs {
+        unsafe { &*raw }
     }
 
-    /// As borrow_raw(), for an entry point C calls with its filesystem:
-    /// safe, as an Opaque is always a live one.
-    pub fn from_c(c: &crate::util::ffi::Opaque<c::bch_fs>) -> core::mem::ManuallyDrop<Fs> {
+    /// For an entry point C calls with its filesystem: safe, as an Opaque is
+    /// always a live one.
+    pub fn from_c(c: &crate::util::ffi::Opaque<c::bch_fs>) -> &Fs {
         unsafe { Self::borrow_raw(c.as_ptr()) }
     }
 
@@ -238,13 +221,6 @@ impl Fs {
     #[allow(clippy::mut_from_ref)] // interior mutability guarded by sb_lock
     pub unsafe fn member_mut(&self, dev_idx: u32) -> &mut c::bch_member {
         unsafe { &mut *c::bch2_members_v2_get_mut((*self.as_ptr()).disk_sb.sb, dev_idx as i32) }
-    }
-
-    /// Consumes self, and forgets it so Drop doesn't exit it twice.
-    pub fn exit(self) -> i32 {
-        let ret = unsafe { c::bch2_fs_exit(self.as_ptr()) };
-        core::mem::forget(self);
-        ret
     }
 
     /// Refs are put, including on early break.
@@ -569,9 +545,36 @@ impl Fs {
     }
 }
 
-impl Drop for Fs {
+/// A filesystem opened from userspace, which the holder closes:
+/// bch2_fs_exit() - stop it, and put the ref - on exit() or drop.
+pub struct OpenFs(core::ptr::NonNull<Fs>);
+
+impl OpenFs {
+    /// # Safety
+    /// @fs is from bch2_fs_open(), and this takes over its ref.
+    pub unsafe fn from_raw(fs: core::ptr::NonNull<Fs>) -> Self {
+        OpenFs(fs)
+    }
+
+    /// bch2_fs_exit()'s error, which Drop discards.
+    pub fn exit(self) -> i32 {
+        let ret = unsafe { c::bch2_fs_exit(self.0.as_ptr()) };
+        core::mem::forget(self);
+        ret
+    }
+}
+
+impl core::ops::Deref for OpenFs {
+    type Target = Fs;
+
+    fn deref(&self) -> &Fs {
+        unsafe { self.0.as_ref() }
+    }
+}
+
+impl Drop for OpenFs {
     fn drop(&mut self) {
-        unsafe { c::bch2_fs_exit(self.as_ptr()); }
+        unsafe { c::bch2_fs_exit(self.0.as_ptr()); }
     }
 }
 

@@ -28,7 +28,7 @@ use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::{c, opt_defined, opt_get, opt_set};
 use bcachefs_kernel::errcode::BchError;
-use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::util::darray::DarrayVec;
 use c::bch_sb_handle;
 use c::bch_opts;
@@ -714,7 +714,7 @@ pub fn scan_devices(device: &String, opts: &bch_opts) -> Result<OsString> {
 /// ioctl/sysfs) or offline (opened in userspace via libbcachefs):
 pub enum OpenedFs {
     Online(crate::wrappers::handle::BcachefsHandle),
-    Offline(Fs),
+    Offline(OpenFs),
 }
 
 /// The standard "operate on a filesystem that may or may not be mounted"
@@ -739,7 +739,7 @@ pub fn open_online_or_offline(devs: &[PathBuf], offline_opts: bch_opts)
 
 /// One device names a filesystem, so find its members the way mount does.
 /// Several were named deliberately, and pass through as-is.
-pub fn open_scan(devs: &[PathBuf], fs_opts: bch_opts) -> Result<Fs, BchError> {
+pub fn open_scan(devs: &[PathBuf], fs_opts: bch_opts) -> Result<OpenFs, BchError> {
     let devs = if devs.len() == 1 {
         let mut dev_str = devs[0].to_string_lossy().into_owned();
 

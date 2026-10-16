@@ -11,7 +11,7 @@ use bch_bindgen::c::{
     bch_degraded_actions,
     BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_METADATA_LOST,
 };
-use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::metadata_version;
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::path_to_cstr;
@@ -95,7 +95,7 @@ fn cmd_device_add_online(
 }
 
 fn cmd_device_add_offline(
-    fs: Fs,
+    fs: OpenFs,
     dev_path: &str,
     force: bool,
     matches: &clap::ArgMatches,

@@ -60,7 +60,7 @@ impl c::bch_fs_snapshots {
     }
 
     /// The filesystem these are in, whose errors they throw.
-    fn fs(&self) -> core::mem::ManuallyDrop<Fs> {
+    fn fs(&self) -> &Fs {
         unsafe { Fs::borrow_raw(self.c()) }
     }
 

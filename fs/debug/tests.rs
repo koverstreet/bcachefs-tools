@@ -914,7 +914,7 @@ impl TestJob {
 async fn btree_perf_test_one(job: Arc<TestJob>, wg: Arc<WaitGroup>) {
     if !job.abort.load(Ordering::Acquire) {
         let fs = job.fs.get();
-        if let Err(e) = (job.test)(&fs, job.nr / job.nr_threads as u64) {
+        if let Err(e) = (job.test)(fs, job.nr / job.nr_threads as u64) {
             job.ret
                 .compare_exchange(0, error_ret(e), Ordering::AcqRel, Ordering::Relaxed)
                 .ok();
@@ -962,18 +962,18 @@ pub unsafe extern "C" fn bch2_btree_perf_test(
     let fs = unsafe { Fs::borrow_raw(raw_fs) };
 
     if nr == 0 || nr_threads == 0 {
-        return errcode(&fs, bch_errcode::BCH_ERR_EINVAL_test_zero_nr_or_threads);
+        return errcode(fs, bch_errcode::BCH_ERR_EINVAL_test_zero_nr_or_threads);
     }
 
     let Some(testname) = (!testname.is_null()).then(|| unsafe { CStr::from_ptr(testname.cast()) }) else {
-        return errcode(&fs, bch_errcode::BCH_ERR_EINVAL_test_unknown_test);
+        return errcode(fs, bch_errcode::BCH_ERR_EINVAL_test_unknown_test);
     };
 
     let Some((name, test)) = lookup_test(testname) else {
-        return errcode(&fs, bch_errcode::BCH_ERR_EINVAL_test_unknown_test);
+        return errcode(fs, bch_errcode::BCH_ERR_EINVAL_test_unknown_test);
     };
 
-    let job = match TestJob::new(&fs, nr, nr_threads, test) {
+    let job = match TestJob::new(fs, nr, nr_threads, test) {
         Ok(job) => job,
         Err(e) => return error_ret(e),
     };
@@ -981,7 +981,7 @@ pub unsafe extern "C" fn bch2_btree_perf_test(
     let queue = system_unbound();
     let wg = match WaitGroup::new(nr_threads) {
         Ok(wg) => wg,
-        Err(_) => return error_ret(enomem(&fs)),
+        Err(_) => return error_ret(enomem(fs)),
     };
 
     // Fork the workers and wait for all of them: `block_on` drives the join on
@@ -1015,7 +1015,7 @@ pub unsafe extern "C" fn bch2_btree_perf_test(
     });
 
     let Some((start, ret_code)) = outcome else {
-        return error_ret(enomem(&fs));
+        return error_ret(enomem(fs));
     };
 
     let finish = local_clock();

@@ -375,7 +375,7 @@ pub fn bch2_dirent_validate(
     from: &c::bkey_validate_context,
 ) -> c_int {
     let fs = Fs::from_c(c);
-    let v = BkeyValidate { fs: &fs, k, from };
+    let v = BkeyValidate { fs: fs, k, from };
 
     match validate(&v) {
         Ok(_)  => 0,

@@ -519,9 +519,13 @@ c_enum! {
     }
 }
 
+/// The filesystem: struct bch_fs, to C. Allocated and freed by C for now -
+/// bch2_fs_open() and the kobject release - and borrowed by Rust as &Fs;
+/// OpenFs owns one opened from userspace.
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
-pub struct bch_fs {
+#[c_name(bch_fs)]
+pub struct Fs {
     pub cl: c::closure,
 
     pub list: c::list_head,
@@ -737,3 +741,6 @@ pub struct bch_fs {
     #[cfg(CONFIG_DEBUG_FS)]
     pub btree_debug: [c::btree_debug; c::BTREE_ID_NR as usize],
 }
+
+/// C's name, as FFI declarations spell it: *mut c::bch_fs.
+pub type bch_fs = Fs;

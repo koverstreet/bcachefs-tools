@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use bcachefs_kernel::c::{bch_key, bch_encrypted_key};
 use bch_bindgen::c;
 use bch_bindgen::fs::FsExt;
-use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::opt_set;
 use bch_bindgen::sb::io as sb_io;
 use clap::Parser;
@@ -85,7 +85,7 @@ fn parse_device_list(args: &[String]) -> Vec<PathBuf> {
 }
 
 /// Open a filesystem for superblock modification: never started.
-fn open_nostart(devs: &[PathBuf], user_key: Option<&bch_key>) -> Result<Fs> {
+fn open_nostart(devs: &[PathBuf], user_key: Option<&bch_key>) -> Result<OpenFs> {
     let mut opts = c::bch_opts::default();
     opt_set!(opts, nostart, 1);
     opt_set!(opts, will_not_start, 1);
@@ -103,7 +103,7 @@ fn open_nostart(devs: &[PathBuf], user_key: Option<&bch_key>) -> Result<Fs> {
 /// passphrase-protected filesystem needs the key, and without one the open
 /// asks for the passphrase itself - reading the line from stdin that we were
 /// going to read, so ours got EOF.
-fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
+fn open_and_verify(devs: &[PathBuf]) -> Result<(OpenFs, bch_key)> {
     let dev_str = devs.iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect::<Vec<_>>()

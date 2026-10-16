@@ -64,7 +64,7 @@ use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
 use bch_bindgen::data::io::block_on;
 use bcachefs_kernel::errcode::BchError;
-use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::{accounting, btree, dirent, namei, str_hash};
 use bcachefs_kernel::btree::iter::CommitFlags;
 use bcachefs_kernel::inode;
@@ -754,10 +754,10 @@ macro_rules! resolve {
 }
 
 struct BcachefsFs {
-    /// Shut down (Fs's Drop: bch2_fs_exit()) exactly once on every path:
+    /// Shut down (OpenFs's Drop: bch2_fs_exit()) exactly once on every path:
     /// destroy() takes it, and if the mount fails before fuser hands us to a
     /// FilesystemHolder - whose Drop calls destroy() - it goes down with us.
-    fs: Option<Fs>,
+    fs: Option<OpenFs>,
     /// Write end of a pipe used to signal the parent process that the
     /// FUSE mount is established. Written in init(), None in foreground mode.
     signal_fd: Option<OwnedFd>,

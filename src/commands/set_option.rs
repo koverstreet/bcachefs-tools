@@ -2,7 +2,7 @@ use std::ffi::CString;
 
 use anyhow::{bail, Result};
 use bcachefs_kernel::c;
-use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::opt_set;
 use clap::{Arg, ArgAction, Command};
 
@@ -155,7 +155,7 @@ fn set_option_online(
 }
 
 fn set_option_offline(
-    fs: Fs,
+    fs: OpenFs,
     devices: &[&String],
     dev_idxs: &[u32],
     opts: &[(String, String)],
