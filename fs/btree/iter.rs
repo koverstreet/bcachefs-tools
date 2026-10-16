@@ -1117,6 +1117,14 @@ impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
         unsafe { &mut (*self.ptr.as_ptr()).k }
     }
 
+    /// Make it a deletion - KEY_TYPE_deleted, no value - in place, wherever
+    /// it's queued. It's no longer a @V, so it's consumed.
+    pub fn set_deleted(mut self) {
+        let k = self.k_mut();
+        k.type_ = c::bch_bkey_type::KEY_TYPE_deleted.0 as u8;
+        k.u64s  = c::BKEY_U64s as u8;
+    }
+
     /// The key, all of it, as long as its u64s say.
     pub fn k_i(&self) -> &BkeyI {
         // SAFETY: a key in our buffer, which the pointer reaches all of
