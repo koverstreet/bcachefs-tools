@@ -336,7 +336,9 @@ fn check_extent_past_end(
     let mut punch = None;
 
     for i in st.w.visible_mut(t, &st.s, k.k.p.snapshot) {
-        let last_block = (i.inode.bi_size.div_ceil(block_bytes) * block_bytes) >> 9;
+        // An i_size that rounds up past u64::MAX has nothing past it
+        let last_block = i.inode.bi_size.checked_next_multiple_of(block_bytes)
+            .unwrap_or(u64::MAX) >> 9;
 
         if fsck_err_on!(t, k.k.p.offset > last_block &&
                         !extents::bkey_extent_is_reservation(fs, k),
