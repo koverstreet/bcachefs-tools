@@ -105,10 +105,18 @@ int bch2_parse_one_mount_opt(struct bch_fs *, struct bch_opts *,
 
 static inline void bch2_io_opts_fixups(struct bch_inode_opts *opts)
 {
-	if (!opts->background_target)
+	/*
+	 * A derived value comes from wherever its source did: shared data's
+	 * options keep only what's marked as the inode's, and would lose it.
+	 */
+	if (!opts->background_target) {
 		opts->background_target = opts->foreground_target;
-	if (!opts->background_compression)
+		opts->background_target_from_inode = opts->foreground_target_from_inode;
+	}
+	if (!opts->background_compression) {
 		opts->background_compression = opts->compression;
+		opts->background_compression_from_inode = opts->compression_from_inode;
+	}
 	if (opts->data_replicas == 1)
 		opts->erasure_code = 0;
 	if (opts->nocow) {
