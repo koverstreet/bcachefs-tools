@@ -50,3 +50,60 @@ macro_rules! new_mutex {
     };
 }
 pub use new_mutex;
+
+/// A reader/writer lock, as fs/'s in-kernel RwSem: read() and write() can't
+/// fail, and a panic while it was held doesn't poison it.
+pub struct RwSem<T>(std::sync::RwLock<T>);
+
+/// A read-held RwSem.
+pub struct RwSemReadGuard<'a, T>(std::sync::RwLockReadGuard<'a, T>);
+
+/// A write-held RwSem.
+pub struct RwSemWriteGuard<'a, T>(std::sync::RwLockWriteGuard<'a, T>);
+
+impl<T> RwSem<T> {
+    /// What new_rwsem!() expands to; use that, as in-kernel.
+    pub const fn new(v: T) -> Self {
+        RwSem(std::sync::RwLock::new(v))
+    }
+
+    pub fn read(&self) -> RwSemReadGuard<'_, T> {
+        RwSemReadGuard(self.0.read().unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+
+    pub fn write(&self) -> RwSemWriteGuard<'_, T> {
+        RwSemWriteGuard(self.0.write().unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+}
+
+impl<T> Deref for RwSemReadGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T> Deref for RwSemWriteGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for RwSemWriteGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+}
+
+/// An RwSem initializer for @inner: as fs/'s in-kernel new_rwsem!(), whose
+/// optional name (for lockdep) userspace has no use for.
+#[macro_export]
+macro_rules! new_rwsem {
+    ($inner:expr $(, $name:literal)? $(,)?) => {
+        $crate::sync::RwSem::new($inner)
+    };
+}
+pub use new_rwsem;
