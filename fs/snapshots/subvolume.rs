@@ -39,7 +39,8 @@ use crate::types::RustOnly;
 use crate::util::ffi::Opaque;
 use crate::util::sync::new_mutex;
 use crate::util::Printbuf;
-use crate::{bch_err, bch_err_msg, bch_notice, bkey_fsck_err_on, fs_inconsistent, fsck_err,
+use crate::util::log::{LogLevel, LogMsg};
+use crate::{bch_err, bch_err_msg, bkey_fsck_err_on, fs_inconsistent, fsck_err,
             fsck_err_on, fsck_err_report};
 use core::fmt;
 use core::mem::offset_of;
@@ -58,17 +59,13 @@ macro_rules! has_field {
 /// Report @subvol missing, and schedule check_inodes to recreate it.
 #[cold]
 fn missing(fs: &Fs, subvol: u32) -> Result<(), BchError> {
-    let mut msg = Printbuf::new();
+    let mut msg = LogMsg::new(fs);
     writeln!(msg, "missing subvolume {subvol}");
     let log = count_fsck_err(fs, id::subvol_missing, &mut msg);
     msg.set_suppressed(!log);
 
-    let ret = passes::run_explicit(fs, &mut msg, BCH_RECOVERY_PASS_check_inodes,
-                                   c::bch_run_recovery_pass_flags::from_bits_retain(0));
-    if !msg.is_suppressed() {
-        bch_err!(fs, "{}", msg);
-    }
-    ret
+    passes::run_explicit(fs, &mut msg, BCH_RECOVERY_PASS_check_inodes,
+                         c::bch_run_recovery_pass_flags::from_bits_retain(0))
 }
 
 /// A tombstone is ENOENT_subvolume_deleted.
@@ -503,12 +500,10 @@ fn check_subvol<'a, 't>(
     let (snap_iter, sk) = match snap_iter.peek_slot_typed_shared::<c::Snapshot>(t) {
         Ok(r) => r,
         Err(e) if e.matches(c::ENOENT) => {
-            let mut msg = Printbuf::new();
+            let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
             writeln!(msg, "subvolume points to missing snapshot\n{}", s.to_text(fs));
-            let ret = passes::run_explicit(fs, &mut msg, BCH_RECOVERY_PASS_reconstruct_snapshots,
-                                           c::bch_run_recovery_pass_flags::from_bits_retain(0));
-            bch_notice!(fs, "{}", msg);
-            ret?;
+            passes::run_explicit(fs, &mut msg, BCH_RECOVERY_PASS_reconstruct_snapshots,
+                                 c::bch_run_recovery_pass_flags::from_bits_retain(0))?;
             return Err(e);
         }
         Err(e) => return Err(e),

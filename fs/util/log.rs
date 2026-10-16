@@ -20,7 +20,7 @@ use crate::types::c_default;
 use crate::util::ffi::c_char;
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
-use core::ffi::{c_uint, CStr};
+use core::ffi::{c_int, c_uint, CStr};
 use core::fmt;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -56,6 +56,8 @@ c_extern! {
     pub fn bch2_ratelimit_suppress(c: *mut c::bch_fs, rs: *mut c::ratelimit_state,
                                    func: *const c_char) -> bool;
     pub fn bch2_rust_warn(file: *const c_char, line: c_uint);
+    pub fn bch2_print_str_loglevel(c: *mut c::bch_fs, loglevel: c_int, str: *const c_char);
+    pub fn __bch2_log_msg_start(fs_or_dev_name: *const c_char, out: *mut c::printbuf);
 }
 
 /// A printk loglevel: KERN_SOH followed by the level, as C's KERN_* strings.
@@ -68,6 +70,11 @@ impl LogLevel {
     pub const NOTICE: Self = LogLevel(b'5');
     pub const INFO:   Self = LogLevel(b'6');
     pub const DEBUG:  Self = LogLevel(b'7');
+
+    /// As C's LOGLEVEL_* numbers.
+    fn as_int(self) -> i32 {
+        (self.0 - b'0') as i32
+    }
 }
 
 /// Print @args at @level: what the bch_err!() family expands to.
@@ -85,6 +92,59 @@ pub fn log(fs: &Fs, level: LogLevel, args: fmt::Arguments<'_>) {
     let fmt = [0x01, level.0, b'%', b's', 0];
     unsafe {
         __bch2_print(fs.raw, fmt.as_ptr() as *const c_char, buf.as_raw().buf);
+    }
+}
+
+/// A message built up in pieces and printed when dropped - C's
+/// CLASS(bch_log_msg). Continuation lines are indented under the first and
+/// raw `\t`/`\r` columns aligned; it goes out whole, through
+/// bch2_print_str_loglevel() as C's does, unless suppressed - by
+/// count_fsck_err(), when it's a repeat or being ratelimited.
+pub struct LogMsg<'a> {
+    fs:    &'a Fs,
+    level: LogLevel,
+    msg:   Printbuf,
+}
+
+impl<'a> LogMsg<'a> {
+    /// At err.
+    pub fn new(fs: &'a Fs) -> Self {
+        Self::with_level(fs, LogLevel::ERR)
+    }
+
+    pub fn with_level(fs: &'a Fs, level: LogLevel) -> Self {
+        let mut msg = Printbuf::new();
+        // The fs name prefix, in-kernel, and the continuation indent:
+        unsafe { __bch2_log_msg_start(fs.name().as_ptr().cast(), msg.as_raw()) };
+        LogMsg { fs, level, msg }
+    }
+
+    /// For a message whose level depends on how things turned out.
+    pub fn set_level(&mut self, level: LogLevel) {
+        self.level = level;
+    }
+}
+
+impl core::ops::Deref for LogMsg<'_> {
+    type Target = Printbuf;
+    fn deref(&self) -> &Printbuf { &self.msg }
+}
+
+impl core::ops::DerefMut for LogMsg<'_> {
+    fn deref_mut(&mut self) -> &mut Printbuf { &mut self.msg }
+}
+
+impl Drop for LogMsg<'_> {
+    fn drop(&mut self) {
+        if self.msg.is_suppressed() {
+            return;
+        }
+
+        self.msg.tabstop_align();
+        let buf = self.msg.as_raw().buf;
+        if !buf.is_null() {
+            unsafe { bch2_print_str_loglevel(self.fs.raw, self.level.as_int(), buf) };
+        }
     }
 }
 

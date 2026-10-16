@@ -26,7 +26,8 @@ use crate::str_hash;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
-use crate::{bch_err, bch_err_msg, bch_info, bch_notice, bch_verbose};
+use crate::util::log::{LogLevel, LogMsg};
+use crate::{bch_err, bch_err_msg, bch_info, bch_verbose};
 use core::ops::ControlFlow;
 
 const LOSTFOUND: &[u8] = b"lost+found";
@@ -72,17 +73,16 @@ fn find_snapshot_tree_subvol(t: &TransAttempt<'_, '_>, tree: u32) -> Result<u32,
         .ok_or_else(|| t.fs().err(bch_errcode::BCH_ERR_ENOENT_no_snapshot_tree_subvol))
 }
 
-/// Logs @msg at notice, or at err with the error.
+/// @msg goes out at err if this fails.
 fn create_lostfound_dirent(
     t:          &TransAttempt<'_, '_>,
-    msg:        &mut Printbuf,
+    msg:        &mut LogMsg<'_>,
     root_inum:  c::subvol_inum,
     root_inode: &mut c::bch_inode_unpacked,
     snapshot:   u32,
     inum:       u64,
     dir_offset: &mut u64,
 ) -> Result<(), BchError> {
-    let fs = t.fs();
     let r = dirent::create_snapshot(t, root_inum.subvol as u32, snapshot, root_inode,
                                     c::DT_DIR as u8, OsStr::from_bytes(LOSTFOUND),
                                     DirentTarget::Inode(inum),
@@ -91,9 +91,9 @@ fn create_lostfound_dirent(
     match &r {
         Err(e) if !is_restart(e) => {
             write!(msg, "\nerror creating dirent: {}", e.msg());
-            bch_err!(fs, "{msg}");
+            msg.set_level(LogLevel::ERR);
         }
-        _ => bch_notice!(fs, "{msg}"),
+        _ => {}
     }
     r
 }
@@ -107,7 +107,7 @@ fn create_lostfound(
 ) -> Result<c::bch_inode_unpacked, BchError> {
     let fs = t.fs();
 
-    let mut msg = Printbuf::new();
+    let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
     write!(msg, "creating ");
     namei::inum_to_path(t, root_inum, &mut msg)?;
     write!(msg, "/lost+found in subvol {} snapshot {snapshot}", root_inum.subvol);
@@ -156,7 +156,7 @@ fn restore_lostfound(
         },
         "looking up lost+found inode {inum} in snapshot {snapshot} or {root_snapshot}")?;
 
-    let mut msg = Printbuf::new();
+    let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
     write!(msg, "restoring ");
     namei::inum_to_path(t, root_inum, &mut msg)?;
     write!(msg, "/lost+found in subvol {} snapshot {snapshot}: inode {inum}, deleted here, \

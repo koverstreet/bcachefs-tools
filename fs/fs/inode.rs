@@ -51,6 +51,7 @@ use crate::init::error::{id, BkeyValidate};
 use crate::snapshots::subvolume;
 use crate::util::ffi::{opt_cstr, Opaque};
 use crate::util::Printbuf;
+use crate::util::log::LogMsg;
 use core::mem::MaybeUninit;
 use crate::{bch_err_fn, bch_err_msg, bkey_fsck_err_on};
 use core::mem::size_of;
@@ -256,7 +257,7 @@ fn unpack_error(fs: &Fs, k: BkeySC<'_>, u: &c::bch_inode_unpacked, fieldnr: usiz
         ("bi_casefold",      BCH_RECOVERY_PASS_check_dirents),
     ];
 
-    let mut msg = Printbuf::new();
+    let mut msg = LogMsg::new(fs);
     msg.set_suppressed(true);
     writeln!(msg, "inode unpack error at field {fieldnr} ({}) in {}", names[fieldnr], k.k);
     unpacked_to_text(&mut msg, u);
@@ -268,10 +269,6 @@ fn unpack_error(fs: &Fs, k: BkeySC<'_>, u: &c::bch_inode_unpacked, fieldnr: usiz
             // As C: unpack has no error to return.
             let _ = passes::run_explicit(fs, &mut msg, pass, c::bch_run_recovery_pass_flags::from_bits_retain(0));
         }
-    }
-
-    if !msg.is_suppressed() {
-        crate::bch_err!(fs, "{}", msg);
     }
 }
 

@@ -197,7 +197,6 @@ BCH_DEBUG_PARAMS_ALL()
 
 #define bch2_fmt(_c, fmt)		bch2_log_msg(_c, fmt "\n")
 
-void bch2_print_str_loglevel(struct bch_fs *, int, const char *);
 void bch2_print_str(struct bch_fs *, const char *, const char *);
 
 /* For a person rather than a log - see bch_fs.stdio_user_only. */
@@ -460,8 +459,6 @@ static inline bool bch2_dev_rotational(struct bch_fs *c, unsigned dev)
 }
 
 /* Log messages: */
-
-void __bch2_log_msg_start(const char *, struct printbuf *);
 
 static inline void bch2_log_msg_start(struct bch_fs *c, struct printbuf *out)
 {

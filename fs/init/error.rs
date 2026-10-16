@@ -27,6 +27,7 @@ use crate::c::{bch_fsck_flags, bch_sb_error_id};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::util::Printbuf;
+use crate::util::log::LogMsg;
 use core::fmt;
 
 /// The fsck error ids by their BCH_SB_ERRS() names: id::inode_wrong_nlink.
@@ -158,12 +159,11 @@ pub fn fsck_err_flags(
 /// Without offering a repair, for damage another pass owns: counted in the
 /// superblock, and logged unless it's a repeat or being ratelimited.
 pub fn fsck_err_report(fs: &Fs, err: bch_sb_error_id, msg: fmt::Arguments<'_>) {
-    let mut buf = Printbuf::new();
+    let mut buf = LogMsg::new(fs);
     buf.write_fmt(msg);
 
-    if count_fsck_err(fs, err, &mut buf) {
-        crate::bch_err!(fs, "{}", buf);
-    }
+    let log = count_fsck_err(fs, err, &mut buf);
+    buf.set_suppressed(!log);
 }
 
 /// Whether to log @msg: not if it's a repeat or being ratelimited. If this is

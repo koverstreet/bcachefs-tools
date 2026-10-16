@@ -45,7 +45,8 @@ use crate::util::ffi::Opaque;
 use crate::util::kernel::{capable, Capability};
 use crate::util::os_str::{qstr_name, OsStr, OsStrExt};
 use crate::util::Printbuf;
-use crate::{bch_err, fs_inconsistent, fsck_err, fsck_err_on};
+use crate::util::log::LogMsg;
+use crate::{fs_inconsistent, fsck_err, fsck_err_on};
 use core::ffi::{c_int, c_uint};
 use core::fmt;
 use core::ops::ControlFlow;
@@ -375,26 +376,19 @@ fn report_bad_unlink(
     name:   &OsStr,
 ) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut msg = Printbuf::new();
+    let mut msg = LogMsg::new(fs);
 
     writeln!(msg, "vfs did bad unlink: wanted inum {}:{}, got {}:{}",
              wanted.subvol, wanted.inum, got.subvol, got.inum);
     writeln!(msg, "vfs d_name {:?}", name);
     write!(msg, "path ");
 
-    let ret = inum_to_path(t, wanted, &mut msg);
-    let print = match ret {
-        Ok(()) => {
-            fs.emergency_read_only(&mut msg);
-            count_fsck_err(fs, id::vfs_unlink_got_wrong_inum, &mut msg)
-        }
-        Err(_) => true,
-    };
+    inum_to_path(t, wanted, &mut msg)?;
+    fs.emergency_read_only(&mut msg);
 
-    if print {
-        bch_err!(fs, "{}", msg);
-    }
-    ret
+    let log = count_fsck_err(fs, id::vfs_unlink_got_wrong_inum, &mut msg);
+    msg.set_suppressed(!log);
+    Ok(())
 }
 
 /// Unlink @name from directory @dir - inode @inode, if the caller knows
