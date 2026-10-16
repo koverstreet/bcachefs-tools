@@ -971,11 +971,15 @@ int bch2_dev_start_member_reconcile_scans(struct bch_fs *c)
 	 * scan is queued, so anything that fails here is retried on the next
 	 * read-write transition.
 	 */
-	for_each_online_member(c, ca, BCH_DEV_READ_REF_member_reconcile_scan) {
+	unsigned nr_devices;
+	scoped_guard(mutex_noio, &c->sb_lock)
+		nr_devices = c->disk_sb.sb->nr_devices;
+
+	for (unsigned dev_idx = 0; dev_idx < nr_devices; dev_idx++) {
 		struct bch_member m;
 
 		scoped_guard(mutex_noio, &c->sb_lock)
-			m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
+			m = bch2_sb_member_get(c->disk_sb.sb, dev_idx);
 
 		if (!BCH_MEMBER_NEEDS_RECONCILE_SCAN(&m))
 			continue;
@@ -983,8 +987,19 @@ int bch2_dev_start_member_reconcile_scans(struct bch_fs *c)
 		int ret = bch2_set_reconcile_needs_scan(c,
 			(struct reconcile_scan) {
 				.type	= RECONCILE_SCAN_device,
-				.dev	= ca->dev_idx,
+				.dev	= dev_idx,
 			}, true);
+		if (ret) {
+			bch_err_fn(c, ret);
+			continue;
+		}
+
+		/* The superblock intent may only be cleared after the queued cookie
+		 * is durable; otherwise a crash here loses the only record of the scan.
+		 */
+		ret = bch2_journal_flush_seq(&c->journal,
+					     atomic64_read(&c->journal.seq),
+					     TASK_UNINTERRUPTIBLE);
 		if (ret) {
 			bch_err_fn(c, ret);
 			continue;
@@ -992,7 +1007,7 @@ int bch2_dev_start_member_reconcile_scans(struct bch_fs *c)
 
 		scoped_guard(mutex_noio, &c->sb_lock) {
 			struct bch_member *member =
-				bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
+				bch2_members_v2_get_mut(c->disk_sb.sb, dev_idx);
 			SET_BCH_MEMBER_NEEDS_RECONCILE_SCAN(member, false);
 			ret = bch2_write_super(c);
 		}
