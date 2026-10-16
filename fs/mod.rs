@@ -73,6 +73,7 @@ pub mod init {
 pub mod sb;
 pub mod snapshots {
     #[path = "check_snapshots.rs"] pub mod check_snapshots;
+    #[path = "delete.rs"] pub mod delete;
     #[path = "snapshot.rs"] pub mod snapshot;
     #[path = "subvolume.rs"] pub mod subvolume;
 }
