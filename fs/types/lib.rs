@@ -212,10 +212,11 @@ impl<T> Default for DArray<T> {
 /// @T - not FFI-safe, and none of C's business - would fail every one of
 /// them; @T is only a PhantomData, which the lint doesn't inspect.
 ///
-/// C allocates the struct holding it, zeroed, which isn't a @T: init() it in
-/// place before Rust is handed the struct, and drop_in_place() it when the
-/// struct is freed - the containing struct's init and exit. Deref relies on
-/// that.
+/// Rust allocates the struct holding it, with the struct's init() - see
+/// #[derive(Init)] - and new() is the field's initializer there, its
+/// #[init(...)]. So there's always a @T in it, for Deref, and Drop drops it.
+/// It isn't Zeroable, whatever @T is: a field of it with no #[init] is a
+/// compile error, not a zeroed @T.
 #[repr(C)]
 pub struct RustOnly<T, const U64S: usize> {
     /// UnsafeCell: a @T - a Mutex - may be written through a shared reference
@@ -234,29 +235,27 @@ impl<T, const U64S: usize> RustOnly<T, U64S> {
                              core::mem::align_of::<T>() <= core::mem::align_of::<u64>(),
                              "RustOnly: storage too small, or too little aligned, for its T");
 
-    /// Initialize the @T at @slot in place - it's pinned there - from @init.
-    ///
-    /// # Safety
-    /// @slot is valid for writes and holds no @T: what's there - C's zeroed
-    /// storage - is overwritten, not dropped. Once, before any use.
-    pub unsafe fn init(slot: *mut Self, init: impl crate::util::sync::PinInit<T>) {
+    /// A RustOnly holding the @T @init makes, in place - it's pinned there.
+    pub fn new<E>(init: impl ::pin_init::PinInit<T, E>) -> impl ::pin_init::PinInit<Self, E> {
         let () = Self::FITS;
-        #[cfg(bch_pin_init_v2)]
-        let res = unsafe { init.__init(slot.cast::<T>()) };
-        #[cfg(not(bch_pin_init_v2))]
-        let res = unsafe { init.__pinned_init(slot.cast::<T>()) };
-        match res {
-            Ok(()) => {}
-            Err(e) => match e {},
+        // SAFETY: the storage is a @T's, by FITS, so initializing the @T
+        // initializes the RustOnly; on Err, init left nothing to drop.
+        unsafe {
+            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
+                #[cfg(bch_pin_init_v2)]
+                let res = init.__init(slot.cast::<T>());
+                #[cfg(not(bch_pin_init_v2))]
+                let res = init.__pinned_init(slot.cast::<T>());
+                res
+            })
         }
     }
+}
 
-    /// Drop the @T at @slot.
-    ///
-    /// # Safety
-    /// init() ran, and nothing uses it after.
-    pub unsafe fn drop_in_place(slot: *mut Self) {
-        unsafe { core::ptr::drop_in_place(slot.cast::<T>()) }
+impl<T, const U64S: usize> Drop for RustOnly<T, U64S> {
+    fn drop(&mut self) {
+        // SAFETY: a @T, as new() made it - and nothing reaches it after
+        unsafe { core::ptr::drop_in_place(self.storage.get().cast::<T>()) }
     }
 }
 
@@ -265,8 +264,8 @@ impl<T, const U64S: usize> core::ops::Deref for RustOnly<T, U64S> {
 
     fn deref(&self) -> &T {
         let () = Self::FITS;
-        // SAFETY: a @T, as init() made it - the containing struct's init ran
-        // before Rust was handed it
+        // SAFETY: a @T, as new() made it - the containing struct's init()
+        // ran before anyone was handed it
         unsafe { &*self.storage.get().cast::<T>() }
     }
 }

@@ -9,8 +9,6 @@
 
 use core::ops::{Deref, DerefMut};
 
-pub use pin_init::PinInit;
-
 /// A mutex, as the kernel's: lock() can't fail. A panic while it was held
 /// doesn't poison it, as there's nothing in-kernel to poison.
 pub struct Mutex<T>(std::sync::Mutex<T>);

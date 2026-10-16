@@ -3,11 +3,12 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{DArray, bits_to_longs, c_default, rust_only};
+use crate::types::{DArray, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::util::alloc::KVVec;
-use crate::util::sync::Mutex;
+use crate::util::sync::{new_mutex, Mutex};
 use core::ffi::{c_uint, c_ulong};
-use cstruct_macros::{c_const, c_enum, CStruct, c_typedef, TypeInfo};
+use cstruct_macros::{c_const, c_enum, CStruct, c_typedef, Init, TypeInfo};
+use pin_init::pin_data;
 
 c_typedef! {
     pub type snapshot_id_list = DArray<u32>;
@@ -110,8 +111,9 @@ c_default!(snapshot_delete);
  * staleness window. Buffered writeback is fine too — each writeback insert
  * is atomic w.r.t. the snapshot transaction.
  */
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_snapshots {
     #[c("struct snapshot_table __rcu *table")]
     pub table: *mut c::snapshot_table,
@@ -121,9 +123,9 @@ pub struct bch_fs_snapshots {
     pub create_lock: c::percpu_rw_semaphore,
     pub delete: c::snapshot_delete,
     pub wait_for_pagecache_and_delete_work: c::work_struct,
-    /// Subvolumes unlinked and waiting for the delete work: Rust's alone,
-    /// initialized in place by bch2_fs_subvolumes_init_early() and dropped
-    /// by bch2_fs_subvolumes_exit() (subvolume.rs).
+    /// Subvolumes unlinked and waiting for the delete work: Rust's alone.
+    #[pin]
+    #[init(RustOnly::new(new_mutex!(KVVec::new())))]
     pub(crate) unlinked: rust_only!(Mutex<KVVec<u32>>),
 }
 

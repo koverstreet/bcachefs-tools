@@ -7,7 +7,8 @@ use crate::util::vstructs::Head;
 use crate::types::{GenRadix, bits_to_longs, c_default};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
-use cstruct_macros::{c_const, c_enum, c_xmacro, CStruct, TypeInfo};
+use cstruct_macros::{c_const, c_enum, c_xmacro, CStruct, Init, TypeInfo};
+use pin_init::pin_data;
 
 c_xmacro! {
     /* Parameters that are useful for debugging, but should always be compiled in: */
@@ -519,11 +520,14 @@ c_enum! {
     }
 }
 
-/// The filesystem: struct bch_fs, to C. Allocated and freed by C for now -
-/// bch2_fs_open() and the kobject release - and borrowed by Rust as &Fs;
-/// OpenFs owns one opened from userspace.
+/// The filesystem: struct bch_fs, to C. Rust allocates it and frees it -
+/// bch2_fs_alloc_mem(), bch2_fs_free_mem() - so its Rust-typed fields get
+/// their initializers, from Fs::init(), and their Drop; C's bch2_fs_init()
+/// and teardown do the rest, as they did with kvzalloc() and kvfree().
+/// Borrowed by Rust as &Fs; OpenFs owns one opened from userspace.
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo, Init)]
 #[c_name(bch_fs)]
 pub struct Fs {
     pub cl: c::closure,
@@ -651,6 +655,8 @@ pub struct Fs {
     pub allocator: c::bch_fs_allocator,
     pub discards: c::bch_fs_discards,
 
+    #[pin]
+    #[init(c::bch_fs_snapshots::init())]
     pub snapshots: c::bch_fs_snapshots,
 
     pub write_error_lock: c::spinlock_t,

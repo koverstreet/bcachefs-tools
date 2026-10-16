@@ -35,9 +35,7 @@ use crate::inode;
 use crate::snapshots::snapshot;
 use crate::snapshot_states::SUBVOLUME_STATE_VALUES;
 use crate::util::alloc::KVVec;
-use crate::types::RustOnly;
 use crate::util::ffi::Opaque;
-use crate::util::sync::new_mutex;
 use crate::util::Printbuf;
 use crate::util::log::{LogLevel, LogMsg};
 use crate::{bch_err, bch_err_msg, bkey_fsck_err_on, fs_inconsistent, fsck_err,
@@ -1013,20 +1011,3 @@ fn fs_upgrade_for_subvolumes(fs: &Fs) -> Result<(), BchError> {
 }
 
 crate::recovery_pass!(bch2_fs_upgrade_for_subvolumes => fs_upgrade_for_subvolumes);
-
-/// # Safety
-/// Once, from bch2_fs_init(), on a zeroed bch_fs before any use.
-#[c_export]
-pub unsafe fn bch2_fs_subvolumes_init_early(c: &Opaque<c::bch_fs>) {
-    let raw = Fs::from_c(c).as_ptr();
-    unsafe { RustOnly::init(&raw mut (*raw).snapshots.unlinked, new_mutex!(KVVec::new())) }
-}
-
-/// # Safety
-/// Once, freeing bch_fs: init_early ran (nothing before it in bch2_fs_init()
-/// can fail), and nothing uses it after.
-#[c_export]
-pub unsafe fn bch2_fs_subvolumes_exit(c: &Opaque<c::bch_fs>) {
-    let raw = Fs::from_c(c).as_ptr();
-    unsafe { RustOnly::drop_in_place(&raw mut (*raw).snapshots.unlinked) }
-}

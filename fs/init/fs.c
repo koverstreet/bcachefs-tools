@@ -719,7 +719,6 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_free_fsck_errs(c);
 	darray_exit(&c->recovery.logged_ops_unfinished);
 	bch2_fs_vfs_exit(c);
-	bch2_fs_subvolumes_exit(c);
 	bch2_fs_snapshots_exit(c);
 	bch2_fs_replicas_exit(c);
 	bch2_fs_reconcile_exit(c);
@@ -760,7 +759,7 @@ static void __bch2_fs_free(struct bch_fs *c)
 		destroy_workqueue(c->btree_update_wq);
 
 	bch2_free_super(&c->disk_sb);
-	kvfree(c);
+	bch2_fs_free_mem(c);
 	module_put(THIS_MODULE);
 }
 
@@ -1238,7 +1237,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	bch2_fs_quota_init(c);
 	bch2_fs_recovery_passes_init(c);
 	bch2_fs_snapshots_init_early(c);
-	bch2_fs_subvolumes_init_early(c);
 
 	INIT_LIST_HEAD(&c->list);
 
@@ -1443,7 +1441,7 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 				    const struct bch_key *user_key,
 				    struct printbuf *out)
 {
-	struct bch_fs *c = kvzalloc(sizeof(struct bch_fs), GFP_KERNEL);
+	struct bch_fs *c = bch2_fs_alloc_mem();
 	if (!c)
 		return ERR_PTR(-BCH_ERR_ENOMEM_fs_alloc);
 

@@ -545,6 +545,25 @@ impl Fs {
     }
 }
 
+/// The memory of a new bch_fs: Fs::init()'s - its Rust-typed fields'
+/// initializers run, everything else zeroed - for bch2_fs_init() to go on
+/// with, as it did from kvzalloc(). NULL if out of memory.
+#[cstruct_macros::c_export]
+pub fn bch2_fs_alloc_mem() -> *mut c::bch_fs {
+    crate::util::alloc::alloc_pinned(Fs::init()).unwrap_or(core::ptr::null_mut())
+}
+
+/// Drop @c and free it: the end of its teardown, as kvfree() was. Its
+/// Rust-typed fields are dropped; its C ones C's teardown has done, and their
+/// Drop - a printbuf's - finds them empty.
+///
+/// # Safety
+/// @c is from bch2_fs_alloc_mem(), and nothing uses it after.
+#[cstruct_macros::c_export]
+pub unsafe fn bch2_fs_free_mem(c: *mut c::bch_fs) {
+    unsafe { crate::util::alloc::free_pinned(c) }
+}
+
 /// A filesystem opened from userspace, which the holder closes:
 /// bch2_fs_exit() - stop it, and put the ref - on exit() or drop.
 pub struct OpenFs(core::ptr::NonNull<Fs>);
