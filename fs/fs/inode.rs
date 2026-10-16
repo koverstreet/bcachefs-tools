@@ -1081,7 +1081,7 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
     -> Result<(TransBkey<'a, 't, c::InodeAllocCursor>, u64, u64), BchError>
 {
     let fs = t.fs();
-    let idx = if is_32bit { 0 } else { 1 + unsafe { c::rust_bch2_inode_shard_idx(fs.as_ptr()) } };
+    let idx = if is_32bit { 0 } else { 1 + fs.inode_shard_idx() };
     let (min, max) = cursor_range(fs, idx);
 
     let cursor_pos = pos(c::logged_ops_inums::LOGGED_OPS_INUM_inode_cursors.0 as u64, idx);

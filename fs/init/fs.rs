@@ -101,6 +101,12 @@ impl Fs {
         self.block_bits as u32
     }
 
+    /// The inode number shard the current thread allocates from: as
+    /// bch2_inode_shard_idx().
+    pub fn inode_shard_idx(&self) -> u64 {
+        unsafe { c::rust_bch2_inode_shard_idx(self.as_ptr()) }
+    }
+
     pub fn chacha20_key_set(&self) -> bool {
         self.chacha20_key_set
     }
