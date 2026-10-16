@@ -29,6 +29,14 @@ pub mod c {
     unsafe impl<Storage> ::pin_init::Zeroable for __BindgenBitfieldUnit<Storage>
         where Storage: ::pin_init::Zeroable {}
 
+    // The kernel's kobject is Zeroable, and this stand-in for it isn't only
+    // because its darrays' zero-length preallocated[] come through as
+    // __IncompleteArrayField. Zeroed is where kobject_init() starts from, as
+    // in a kzalloc()'d struct.
+    //
+    // SAFETY: zeroed is a valid, uninitialized kobject - empty darrays
+    unsafe impl ::pin_init::Zeroable for kobject {}
+
     // The kernel's name: userspace's crc32c() is bch_crc32c(), so as not to
     // clash with libblkid's in a static build (include/linux/crc32c.h).
     pub use bch_crc32c as crc32c;

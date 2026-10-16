@@ -66,6 +66,11 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String]) 
 
     a.push("--formatter".into()); a.push("prettyplease".into());
     a.push("--with-derive-default".into());
+    // Zeroable when every field is, as the kernel's own bindgen_parameters
+    // and the shim's have it: a struct holding these - bch_fs, holding
+    // closures - can start zeroed in a Rust initializer
+    flag!("--with-derive-custom-struct", ".*=::pin_init::MaybeZeroable");
+    flag!("--with-derive-custom-union", ".*=::pin_init::MaybeZeroable");
     a.push("--use-core".into());
     a.push("--generate-inline-functions".into());
     a.push("--wrap-static-fns".into());

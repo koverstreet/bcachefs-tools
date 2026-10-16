@@ -243,7 +243,24 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         .map(|f| thin_pointers(name, &f.cfg, &[(f.rust_name(), f.ty.clone())], None))
         .collect();
     let flex = vstructs::flex_array(&def)?;
-    Ok(tokens(&format!("{forward}{flex}const _: () = {{\n{thin}}};\n{}", record(&text, &nums))))
+    let zeroable = maybe_zeroable(inst, &def);
+    Ok(tokens(&format!("{forward}{flex}{zeroable}const _: () = {{\n{thin}}};\n{}",
+                       record(&text, &nums))))
+}
+
+/// Zeroable when every field is - as bindgen's C structs are, deriving
+/// pin_init::MaybeZeroable, and the same way: the for<'__dummy> makes each
+/// bound a condition on the impl, not an error where it doesn't hold. So a
+/// struct holding a Rust type with invariants - a RustOnly - isn't, and
+/// #[derive(Init)] can't zero it.
+fn maybe_zeroable(inst: &str, def: &cstruct::CStructDef) -> String {
+    let bounds: Vec<String> = def.fields.iter()
+        .map(|f| format!("{}: for<'__dummy> ::pin_init::Zeroable", f.ty))
+        .collect();
+    let whr = if bounds.is_empty() { String::new() } else { format!("where {}", bounds.join(",\n")) };
+    format!("// SAFETY: every field is Zeroable, and padding may be zero\n\
+             #[automatically_derived]\n\
+             unsafe impl ::pin_init::Zeroable for {inst} {whr} {{}}\n")
 }
 
 /// bitfield_struct::bitfield, recorded - and __NAME_forward!(STRUCT, field),
@@ -385,6 +402,9 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     out.extend(s.item.clone());
     out.extend(tokens(&typeinfo::info(name, "Struct", "")));
     out.extend(tokens(&vstructs::plain(name, &[&held])));
+    out.extend(tokens(&format!(
+        "// SAFETY: Plain - its integer, any bytes of which are one\n\
+         unsafe impl ::pin_init::Zeroable for {name} {{}}\n")));
     Ok(out)
 }
 
@@ -909,6 +929,20 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
 
     if let Some(name) = &e.name {
         out.push_str(&typeinfo::info(name, "Enum", ""));
+
+        // Zeroed is a value of it - so a struct holding one can be Zeroable:
+        // any integer is an open enum's or flags', a closed enum's only if a
+        // variant is 0 - as written, or the first, counting from 0
+        let has_zero = e.kind != CEnumKind::Closed || e.variants.iter().enumerate()
+            .any(|(i, (_, value))| match value {
+                None    => i == 0,
+                Some(x) => x.trim() == "0",
+            });
+        if has_zero {
+            out.push_str(&format!(
+                "// SAFETY: zero is a {name}\n\
+                 unsafe impl ::pin_init::Zeroable for {name} {{}}\n"));
+        }
     }
 
     let mut nums = size_align(&ty);

@@ -103,6 +103,9 @@ macro_rules! le_int {
         // SAFETY: the integer, and nothing else
         unsafe impl crate::util::vstructs::Plain for $name {}
 
+        // SAFETY: the integer, and zero is one
+        unsafe impl ::pin_init::Zeroable for $name {}
+
         impl crate::util::vstructs::Native for $name {
             type Native = $t;
             fn to_native(self) -> $t { self.get() }
@@ -162,6 +165,11 @@ pub struct DArray<T, const N: usize = 0> {
     pub data:         *mut T,
     pub preallocated: [T; N],
 }
+
+// SAFETY: zeroed is empty, with nothing allocated - as a kzalloc()'d struct
+// holding one has always started out; the preallocated elements, if any, are
+// Ts zeroed
+unsafe impl<T: ::pin_init::Zeroable, const N: usize> ::pin_init::Zeroable for DArray<T, N> {}
 
 /// How a tagged_union! says which arm it holds: stabby's IDeterminant
 /// (docs.rs/stabby), n-way, over a layout that's given rather than chosen.
@@ -300,6 +308,9 @@ pub struct GenRadix<T> {
     pub _type: core::marker::PhantomData<T>,
 }
 
+// SAFETY: zeroed is empty - genradix_init() is a memset
+unsafe impl<T> ::pin_init::Zeroable for GenRadix<T> {}
+
 // Opaque to TypeInfo, as bindgen's were: size only.
 macro_rules! typeinfo_opaque {
     ($name:ident <$($g:tt),*>, $($bound:tt)*) => {
@@ -328,6 +339,9 @@ pub struct MinHeap<T, const N: usize = 0> {
     pub preallocated: [T; N],
 }
 
+// SAFETY: as DArray's: zeroed is empty, nothing allocated
+unsafe impl<T: ::pin_init::Zeroable, const N: usize> ::pin_init::Zeroable for MinHeap<T, N> {}
+
 /// FIFO(T), FIFO_U16_IDX(T)... - util/fifo.h: __FIFO(T, I).
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -338,6 +352,9 @@ pub struct Fifo<T, I = usize> {
     pub mask:  I,
     pub data:  *mut T,
 }
+
+// SAFETY: zeroed is empty, nothing allocated - as before init_fifo()
+unsafe impl<T, I: ::pin_init::Zeroable> ::pin_init::Zeroable for Fifo<T, I> {}
 
 /// XXX migration only: rip this out once the types are Rust's alone. It's
 /// here so the converted types keep the C layout exactly, where a run of C
@@ -481,6 +498,10 @@ pub struct CacheAligned([u8; 0]);
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct LongAligned([core::ffi::c_long; 0]);
+
+// SAFETY: no bytes
+unsafe impl ::pin_init::Zeroable for CacheAligned {}
+unsafe impl ::pin_init::Zeroable for LongAligned {}
 
 /// Default for a type C shares: all zeroes, C's `= {}` - as bindgen's was. For
 /// types whose every field is C's, to which all zeroes is a valid value - an

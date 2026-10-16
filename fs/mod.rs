@@ -136,6 +136,15 @@ pub mod c {
     #[cfg(kernel)]
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
+    // A union bindgen can't make a Rust union - a member isn't Copy: the
+    // closure's, holding a work_struct - is a struct of these markers over
+    // its storage. Zeroed storage is each member zeroed: Zeroable if they
+    // all are, which this leaves the derive to check.
+    //
+    // SAFETY: a PhantomData - no bytes
+    #[cfg(kernel)]
+    unsafe impl<T: ::pin_init::Zeroable> ::pin_init::Zeroable for __BindgenUnionField<T> {}
+
     // The types defined in Rust that C shares. printbuf the shim has too - ours.
     pub use crate::cstructs::c::*;
     pub use crate::cstructs::c::printbuf;

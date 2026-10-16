@@ -19,6 +19,10 @@ impl bindgen::callbacks::ParseCallbacks for MaybeZeroable {
     fn add_derives(&self, info: &bindgen::callbacks::DeriveInfo<'_>) -> Vec<String> {
         use bindgen::callbacks::TypeKind;
         match info.kind {
+            // kobject's Zeroable is by hand (src/lib.rs): the derive's
+            // condition fails on this stand-in's darrays, where the kernel's
+            // kobject has none
+            _ if info.name == "kobject" => vec![],
             TypeKind::Struct | TypeKind::Union => vec!["::pin_init::MaybeZeroable".into()],
             _ => vec![],
         }
