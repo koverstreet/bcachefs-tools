@@ -2482,8 +2482,8 @@ static void bch2_evict_inode(struct inode *vinode)
 	 * An unlinked subvolume's root inode reads i_nlink == 0, but its
 	 * deletion belongs to the subvolume deletion path, not us (see
 	 * bch2_inode_is_subvolume_root()): this eviction completing is what
-	 * bch2_subvolume_wait_for_pagecache_and_delete() is waiting on to
-	 * tombstone the subvolume and hand the keys to the snapshot sweep.
+	 * the subvolume delete work (SubvolDelete, subvolume.rs) is waiting on
+	 * to tombstone the subvolume and hand the keys to the snapshot sweep.
 	 */
 	bool delete = !inode->v.i_nlink && !is_bad_inode(&inode->v) &&
 		!bch2_inode_is_subvolume_root(&inode->ei_inode);

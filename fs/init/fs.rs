@@ -4,7 +4,6 @@ use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError}
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
 use crate::util::locking::MemallocFlags;
-use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use core::ops::ControlFlow;
 
@@ -626,11 +625,140 @@ impl<'f> WriteRef<'f> {
     /// Queue @work on @fs's write_ref_wq, handing it this ref - its function
     /// adopt()s it, and drops it when done. If @work is already queued, the
     /// run that's pending has a ref, and this one is put.
-    pub fn queue_work(self, work: &Opaque<c::work_struct>) {
+    pub fn queue_work(self, work: &FsWork) {
         if unsafe { c::bch2_queue_work((*self.fs.as_ptr()).write_ref_wq, work.as_ptr()) } {
             core::mem::forget(self);
         }
     }
+}
+
+/// A work item in the filesystem, run holding a write ref - struct
+/// work_struct to C. fs_work!() declares one: what it runs, the field it's
+/// in, the ref kind it holds - see there.
+#[repr(transparent)]
+pub struct FsWork {
+    work: core::cell::UnsafeCell<c::work_struct>,
+    _pin: core::marker::PhantomPinned,
+}
+
+impl FsWork {
+    /// For C, and the workqueue.
+    pub fn as_ptr(&self) -> *mut c::work_struct {
+        self.work.get()
+    }
+
+    /// INIT_WORK(): with @func, and a lockdep class of its own - @key, named
+    /// @name. fs_work!()'s init() is this, with a static key per work.
+    #[cfg(kernel)]
+    #[doc(hidden)]
+    pub fn new(
+        func: unsafe extern "C" fn(*mut c::work_struct),
+        name: &'static core::ffi::CStr,
+        key:  core::pin::Pin<&'static kernel::sync::LockClassKey>,
+    ) -> impl ::pin_init::PinInit<Self> {
+        // SAFETY: init_work_with_key() initializes all of it, and it's pinned
+        unsafe {
+            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
+                c::init_work_with_key(slot.cast(), Some(func), false, name.as_ptr().cast(),
+                                      key.as_ptr());
+                Ok(())
+            })
+        }
+    }
+
+    /// INIT_WORK(), as the shim has it: no lockdep.
+    #[cfg(not(kernel))]
+    #[doc(hidden)]
+    pub fn new(func: unsafe extern "C" fn(*mut c::work_struct)) -> impl ::pin_init::PinInit<Self> {
+        // SAFETY: each field, written in place - its entry lists itself
+        unsafe {
+            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
+                let w = slot.cast::<c::work_struct>();
+                (*w).data.counter = 0;
+                let entry = &raw mut (*w).entry;
+                (*entry).next = entry;
+                (*entry).prev = entry;
+                (*w).func = Some(func);
+                Ok(())
+            })
+        }
+    }
+}
+
+/// A work item in bch_fs, queued holding a write ref: one declaration for its
+/// function, its queueing and its initializer, so the ref kind the work
+/// adopts is the one queue() took.
+///
+/// ```text
+/// fs_work! {
+///     /// What it does
+///     pub(crate) work SubvolDelete:
+///         field snapshots.wait_for_pagecache_and_delete_work,
+///         write_ref BCH_WRITE_REF_snapshot_delete_pagecache;
+///
+///     fn run(fs: &Fs) { ... }
+/// }
+/// ```
+///
+/// is the unit struct SubvolDelete, with:
+/// - queue(&Fs): try for the write ref and queue the work, handing it the
+///   ref - Err(EROFS) going read-only; already queued, the pending run has one
+/// - init(): the field's initializer - its #[init(SubvolDelete::init())]
+/// and run() runs from the workqueue with the ref held, put when it returns.
+#[macro_export]
+macro_rules! fs_work {
+    (
+        $(#[$attr:meta])*
+        $vis:vis work $name:ident:
+            field $($field:ident).+,
+            write_ref $ref:ident;
+
+        fn run($fs:ident: &Fs) $body:block
+    ) => {
+        $(#[$attr])*
+        $vis struct $name;
+
+        impl $name {
+            $vis fn queue(fs: &$crate::fs::Fs) -> Result<(), $crate::errcode::BchError> {
+                let r = fs.write_ref_tryget($crate::c::bch_write_ref::$ref)
+                    .ok_or_else(|| $crate::errcode::BchError::from($crate::c::EROFS))?;
+                r.queue_work(&fs.$($field).+);
+                Ok(())
+            }
+
+            $vis fn init() -> impl ::pin_init::PinInit<$crate::fs::FsWork> {
+                #[cfg(kernel)]
+                {
+                    $crate::fs::FsWork::new(
+                        Self::work_fn,
+                        // SAFETY: NUL-terminated
+                        unsafe {
+                            ::core::ffi::CStr::from_bytes_with_nul_unchecked(
+                                concat!(stringify!($name), "\0").as_bytes())
+                        },
+                        ::kernel::static_lock_class!())
+                }
+                #[cfg(not(kernel))]
+                $crate::fs::FsWork::new(Self::work_fn)
+            }
+
+            fn run($fs: &$crate::fs::Fs) $body
+
+            /// # Safety
+            /// @work is the field's, queued by queue(), which handed it a ref.
+            unsafe extern "C" fn work_fn(work: *mut $crate::c::work_struct) {
+                let c = unsafe {
+                    work.byte_sub(::core::mem::offset_of!($crate::c::bch_fs, $($field).+))
+                        .cast::<$crate::c::bch_fs>()
+                };
+                let fs = unsafe { $crate::fs::Fs::borrow_raw(c) };
+                let _write_ref = unsafe {
+                    $crate::fs::WriteRef::adopt(fs, $crate::c::bch_write_ref::$ref)
+                };
+                Self::run(fs)
+            }
+        }
+    };
 }
 
 impl Drop for WriteRef<'_> {

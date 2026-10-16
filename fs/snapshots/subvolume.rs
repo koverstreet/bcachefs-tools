@@ -28,7 +28,7 @@ use crate::btree::iter::{
 use crate::c;
 use crate::c::bch_recovery_pass::*;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
-use crate::fs::{Fs, WriteRef};
+use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id, BkeyValidate};
 use crate::init::passes;
 use crate::inode;
@@ -799,12 +799,6 @@ fn set_deleted(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError> {
     commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| __set_deleted(t, subvol))
 }
 
-impl c::bch_fs_snapshots {
-    fn delete_work(&self) -> &Opaque<c::work_struct> {
-        unsafe { &*(&raw const self.wait_for_pagecache_and_delete_work).cast() }
-    }
-}
-
 /// Waits for inodes still in use.
 #[cfg(kernel)]
 fn evict_inodes(fs: &Fs, subvols: &[u32]) {
@@ -821,34 +815,27 @@ fn evict_inodes(fs: &Fs, subvols: &[u32]) {
 #[cfg(not(kernel))]
 fn evict_inodes(_fs: &Fs, _subvols: &[u32]) {}
 
-/// Holds the snapshot_delete_pagecache write ref unlink() took.
-///
-/// # Safety
-/// @work is c->snapshots.wait_for_pagecache_and_delete_work, queued through
-/// WriteRef::queue_work().
-#[c_export]
-pub unsafe fn bch2_subvolume_wait_for_pagecache_and_delete(work: *mut c::work_struct) {
-    let c = unsafe {
-        work.byte_sub(offset_of!(c::bch_fs, snapshots.wait_for_pagecache_and_delete_work))
-            .cast::<c::bch_fs>()
-    };
-    let fs = unsafe { Fs::borrow_raw(c) };
-    let _write_ref = unsafe {
-        WriteRef::adopt(fs, c::bch_write_ref::BCH_WRITE_REF_snapshot_delete_pagecache)
-    };
+crate::fs_work! {
+    /// Deletes unlinked subvolumes, once the VFS has let go of their inodes:
+    /// unlink() queues it, holding the snapshot_delete_pagecache write ref.
+    pub(crate) work SubvolDelete:
+        field snapshots.wait_for_pagecache_and_delete_work,
+        write_ref BCH_WRITE_REF_snapshot_delete_pagecache;
 
-    loop {
-        let subvols = core::mem::replace(&mut *fs.snapshots.unlinked.lock(), KVVec::new());
-        if subvols.is_empty() {
-            break;
-        }
+    fn run(fs: &Fs) {
+        loop {
+            let subvols = core::mem::replace(&mut *fs.snapshots.unlinked.lock(), KVVec::new());
+            if subvols.is_empty() {
+                break;
+            }
 
-        evict_inodes(fs, &subvols);
+            evict_inodes(fs, &subvols);
 
-        let trans = crate::btree_trans!(&fs);
-        for &id in subvols.iter() {
-            if bch_err_msg!(&fs, set_deleted(&trans, id), "deleting subvolume {id}").is_err() {
-                return;
+            let trans = crate::btree_trans!(fs);
+            for &id in subvols.iter() {
+                if bch_err_msg!(fs, set_deleted(&trans, id), "deleting subvolume {id}").is_err() {
+                    return;
+                }
             }
         }
     }
@@ -866,12 +853,7 @@ pub fn unlink(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
             }
         }
 
-        let Some(write_ref) =
-            fs.write_ref_tryget(c::bch_write_ref::BCH_WRITE_REF_snapshot_delete_pagecache) else {
-            return Err(BchError::from(c::EROFS));
-        };
-        write_ref.queue_work(fs.snapshots.delete_work());
-        Ok(())
+        SubvolDelete::queue(fs)
     })?;
 
     set_state_trans(t, subvol, c::bch_subvolume_state::SUBVOLUME_STATE_unlinked)?;

@@ -122,7 +122,10 @@ pub struct bch_fs_snapshots {
     pub need_table_rebuild: bool,
     pub create_lock: c::percpu_rw_semaphore,
     pub delete: c::snapshot_delete,
-    pub wait_for_pagecache_and_delete_work: c::work_struct,
+    #[c("struct work_struct wait_for_pagecache_and_delete_work")]
+    #[pin]
+    #[init(crate::snapshots::subvolume::SubvolDelete::init())]
+    pub wait_for_pagecache_and_delete_work: crate::fs::FsWork,
     /// Subvolumes unlinked and waiting for the delete work: Rust's alone.
     #[pin]
     #[init(RustOnly::new(new_mutex!(KVVec::new())))]
