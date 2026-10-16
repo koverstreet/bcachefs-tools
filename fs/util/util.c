@@ -11,6 +11,7 @@
 #include <linux/console.h>
 #include <linux/ctype.h>
 #include <linux/debugfs.h>
+#include <linux/delay.h>
 #include <linux/freezer.h>
 #include <linux/kthread.h>
 #include <linux/log2.h>
@@ -1410,6 +1411,11 @@ u64 bch2_local_clock(void)
 void bch2_cond_resched(void)
 {
 	cond_resched();
+}
+
+void bch2_msleep(unsigned ms)
+{
+	msleep(ms);
 }
 
 u64 bch2_get_random_u64(void)

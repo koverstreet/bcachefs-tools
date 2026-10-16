@@ -33,6 +33,10 @@ pub fn cond_resched() {
     unsafe { c::bch2_cond_resched() }
 }
 
+pub fn msleep(ms: u32) {
+    unsafe { c::bch2_msleep(ms) }
+}
+
 /// A capability, as the kernel's CAP_* - the values are ABI
 /// (uapi/linux/capability.h). Defined here because userspace's capable()
 /// ignores its argument, so it has no CAP_* constants to bind.
