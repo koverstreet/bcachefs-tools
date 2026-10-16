@@ -2,11 +2,9 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
-use crate::types::c_default;
-use crate::util::ffi::c_char;
-use core::ffi::{c_int, c_ulong};
-use cstruct_macros::{CStruct, c_extern};
+use crate::types::rust_only;
+use crate::util::sync::SeqLock;
+use cstruct_macros::CStruct;
 
 /*
  * Lame progress indicators
@@ -17,24 +15,13 @@ use cstruct_macros::{CStruct, c_extern};
  *
  * But some code is old and doesn't support that, or runs in a context where
  * that's not yet practical (mount).
+ *
+ * The state is Rust's, under a seqlock: readers - sysfs, the recovery status
+ * ioctl - copy it out whole while the work updates it. C embeds one, zeroed,
+ * and goes through init/progress.rs's functions.
  */
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct progress_indicator {
-    pub msg: *const c_char,
-    pub units: c::bch_progress_units,
-    pub pos: c::bbpos,
-    pub next_print: c_ulong,
-    pub seen: u64,
-    pub total: u64,
-    pub last_node: *mut c::btree,
-    pub silent: bool,
-}
-c_default!(progress_indicator);
-
-c_extern! {
-    pub fn bch2_progress_init(s: *mut c::progress_indicator, msg: *const c_char, c: *mut c::bch_fs,
-                              leaf_btree_id_mask: u64, inner_btree_id_mask: u64);
-    pub fn bch2_progress_update_iter(trans: *mut c::btree_trans, s: *mut c::progress_indicator,
-                                     iter: *mut c::btree_iter) -> c_int;
+    pub(crate) state: rust_only!(SeqLock<crate::init::progress::ProgressState>),
 }

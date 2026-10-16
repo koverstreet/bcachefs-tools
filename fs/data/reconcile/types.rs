@@ -8,7 +8,7 @@ use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, TypeInfo};
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo)]
 pub struct bch_fs_reconcile {
     #[c("struct task_struct __rcu *thread")]
     pub thread: *mut c::task_struct,

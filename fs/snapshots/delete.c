@@ -990,7 +990,7 @@ static int delete_dead_snapshot_keys_v1(struct btree_trans *trans)
 	struct snapshot_delete *d = &c->snapshots.delete;
 
 	bch2_progress_init(&d->progress, __func__, c, btree_has_snapshots_mask, 0);
-	d->progress.silent	= true;
+	bch2_progress_set_silent(&d->progress);
 	d->version		= 1;
 
 	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++)
@@ -1028,7 +1028,7 @@ static int delete_dead_snapshot_keys_v2(struct btree_trans *trans)
 	CLASS(disk_reservation, res)(c);
 
 	bch2_progress_init(&d->progress, __func__, c, BIT_ULL(BTREE_ID_inodes), 0);
-	d->progress.silent	= true;
+	bch2_progress_set_silent(&d->progress);
 	d->version		= 2;
 
 	CLASS(btree_iter, iter)(trans, BTREE_ID_inodes, POS_MIN,
@@ -1098,7 +1098,7 @@ static int delete_dead_snapshot_keys_v2(struct btree_trans *trans)
 		 * and version says the run degraded.
 		 */
 		bch2_progress_init(&d->progress, __func__, c, bad_btrees, 0);
-		d->progress.silent	= true;
+		bch2_progress_set_silent(&d->progress);
 		d->version		= 1;
 
 		for (unsigned btree = 0; btree < BTREE_ID_NR; btree++)
@@ -1507,7 +1507,7 @@ int __bch2_delete_dead_snapshots(struct bch_fs *c)
 	lockdep_assert_held(&c->recovery.run_lock);
 
 	d->running = true;
-	d->progress.pos = BBPOS_MIN;
+	bch2_progress_reset(&d->progress);
 
 	int ret = delete_dead_snapshots_locked(c);
 	if (snapshot_delete_refused(ret))

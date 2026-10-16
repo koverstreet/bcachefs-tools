@@ -933,7 +933,7 @@ __cold void bch2_recovery_pass_status_to_text(struct printbuf *out, struct bch_f
 		prt_newline(out);
 
 		/* Nothing to show for a pass with no estimate of its own size */
-		if (r->progress.total) {
+		if (bch2_progress_has_total(&r->progress)) {
 			prt_str(out, "Progress:\t");
 			bch2_progress_to_text(out, &r->progress);
 			prt_newline(out);

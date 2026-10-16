@@ -131,7 +131,6 @@ bcachefs-y		:=			\
 	init/damage.o				\
 	init/error.o				\
 	init/fs.o				\
-	init/progress.o				\
 	init/recovery.o				\
 	init/passes.o				\
 	journal/init.o				\

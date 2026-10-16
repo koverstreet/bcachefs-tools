@@ -234,7 +234,7 @@ int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, struct bch_dev *ca,
 	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
 	wb_maybe_flush_init(&last_flushed);
 
-	struct progress_indicator progress;
+	struct progress_indicator progress = {};
 	bch2_progress_init(&progress, "dropping device data", c,
 			   BIT(BTREE_ID_backpointers), 0);
 
@@ -319,7 +319,7 @@ int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, struct bch_dev *ca,
 int bch2_dev_data_drop(struct bch_fs *c, unsigned dev_idx,
 		       unsigned flags, struct printbuf *err)
 {
-	struct progress_indicator progress;
+	struct progress_indicator progress = {};
 	bch2_progress_init(&progress, "dropping user data", c,
 			   btree_has_data_ptrs_mask & ~BIT_ULL(BTREE_ID_stripes), 0);
 

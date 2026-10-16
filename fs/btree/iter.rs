@@ -356,6 +356,16 @@ impl BtreeNodeRef {
         self.key().into()
     }
 
+    pub(crate) fn btree_id(&self) -> c::btree_id {
+        c::btree_id(unsafe { self.raw.as_ref().c.btree_id }.into())
+    }
+
+    /// The node's identity, for telling whether it's the same node as
+    /// before - not for getting back to it.
+    pub(crate) fn addr(&self) -> usize {
+        self.raw.as_ptr() as usize
+    }
+
     fn as_ptr(&self) -> *mut c::btree {
         self.raw.as_ptr()
     }

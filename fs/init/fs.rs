@@ -168,6 +168,17 @@ impl Fs {
         flags.load(core::sync::atomic::Ordering::Relaxed) & (1usize << f as u32) != 0
     }
 
+    /// Whether a mount is drawing recovery progress from
+    /// BCH_IOCTL_RECOVERY_STATUS, so progress indicators needn't print it.
+    /// The ioctl sets it - WRITE_ONCE() - so it's an atomic load.
+    pub fn stdio_progress_reader(&self) -> bool {
+        let r = unsafe {
+            &*(core::ptr::addr_of!((*self.as_ptr()).stdio_progress_reader)
+               as *const core::sync::atomic::AtomicBool)
+        };
+        r.load(core::sync::atomic::Ordering::Relaxed)
+    }
+
     /// The journal sequence number being written: C's journal_cur_seq().
     pub fn journal_cur_seq(&self) -> u64 {
         // atomic64_read(&j->seq)

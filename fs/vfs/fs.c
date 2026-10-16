@@ -2900,9 +2900,7 @@ static long bch2_status_fd_ioctl(struct thread_with_stdio *thr,
 		}
 
 		status.passes_scheduled_sb.v[0] = c->sb.recovery_passes_required;
-		status.units	= r->progress.units;
-		status.seen	= r->progress.seen;
-		status.total	= r->progress.total;
+		bch2_progress_status(&r->progress, &status.units, &status.seen, &status.total);
 	}
 
 	return copy_to_user((void __user *) arg, &status, sizeof(status))
