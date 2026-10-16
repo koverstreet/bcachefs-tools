@@ -36,7 +36,8 @@ use crate::dirent::{self, Dirent};
 use crate::{inode, lostfound, namei};
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::Printbuf;
-use crate::{bch_err, bch_err_fn, bch_err_msg, bch_warn, c_function_name, inode_fsck_err};
+use crate::util::log::LogMsg;
+use crate::{bch_err_fn, bch_err_msg, bch_warn, c_function_name, inode_fsck_err};
 
 /// @k: a dirent, from a dirent lookup.
 fn dirent_points_to_inode(
@@ -259,13 +260,15 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
             }
 
             // The dirent is gone, and the name with it, but bi_dir says which directory:
-            // print its path. A restart propagates to the commit loop.
-            let mut buf = Printbuf::new();
-            write!(buf, "unreachable inode, naming dirent missing; was in directory ");
-            namei::inum_snapshot_to_path(t, inode.bi_dir, snapshot, &mut buf)?;
-            buf.newline();
-            write!(buf, "{}", inode);
-            bch_err!(fs, "{}", buf);
+            // print its path. A restart propagates to the commit loop, unprinted.
+            let mut msg = LogMsg::new(fs);
+            write!(msg, "unreachable inode, naming dirent missing; was in directory ");
+            if let Err(e) = namei::inum_snapshot_to_path(t, inode.bi_dir, snapshot, &mut msg) {
+                msg.set_suppressed(true);
+                return Err(e);
+            }
+            msg.newline();
+            write!(msg, "{}", inode);
             return Err(e);
         }
 

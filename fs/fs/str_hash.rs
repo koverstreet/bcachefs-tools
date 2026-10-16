@@ -16,7 +16,8 @@ use crate::printbuf_to_formatter;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::os_str::OsStrExt;
 use crate::util::Printbuf;
-use crate::{bch_err, fsck_err, fsck_err_on, inode_fsck_err};
+use crate::util::log::LogMsg;
+use crate::{fsck_err, fsck_err_on, inode_fsck_err};
 use core::ffi::c_void;
 use core::fmt;
 
@@ -636,15 +637,14 @@ impl Repair<'_> {
             }
         }
 
-        let mut buf = Printbuf::new();
-        write!(buf, "couldn't rename dirent to resolve hash collision: all 1000 \"");
-        buf.write_bytes(old_name.as_bytes());
-        write!(buf, ".fsck_renamed-N\" names in dir inum {} snapshot {} are taken\n\
+        let mut msg = LogMsg::new(fs);
+        write!(msg, "couldn't rename dirent to resolve hash collision: all 1000 \"");
+        msg.write_bytes(old_name.as_bytes());
+        write!(msg, ".fsck_renamed-N\" names in dir inum {} snapshot {} are taken\n\
                      renaming:\n  {}\ncollided with:",
                { old.k.p.inode }, { old.k.p.snapshot }, old.to_text(fs));
-        buf.indent_add(2);
-        write!(buf, "{collisions}");
-        bch_err!(fs, "{buf}");
+        msg.indent_add(2);
+        write!(msg, "{collisions}");
         Err(fs.err(bch_errcode::BCH_ERR_EEXIST_str_hash_set))
     }
 
