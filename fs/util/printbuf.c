@@ -222,15 +222,16 @@ const char *bch2_printbuf_str(const struct printbuf *buf)
 }
 
 /**
- * bch2_printbuf_exit() - exit a printbuf, freeing memory it owns and poisoning it
- * against accidental use.
+ * bch2_printbuf_exit() - exit a printbuf, freeing memory it owns, and leave it
+ * empty: exiting it again does nothing - as when C's teardown exits one that
+ * Rust's Drop then exits too.
  * @buf:	printbuf to exit
  */
 void bch2_printbuf_exit(struct printbuf *buf)
 {
 	if (buf->heap_allocated) {
 		kvfree(buf->buf);
-		buf->buf = ERR_PTR(-EINTR); /* poison value */
+		*buf = PRINTBUF;
 	}
 }
 
