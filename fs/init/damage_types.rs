@@ -31,4 +31,6 @@ c_typedef! {
 c_extern! {
     pub fn bch2_damage_delete(trans: *mut c::btree_trans, inum: u64, snapshot: u32) -> c_int;
     pub fn bch2_damage_record_lost_extents(c: *mut c::bch_fs);
+    pub fn bch2_damage_keys_merge(trans: *mut c::btree_trans, pos: c::bpos,
+                                  a: c::bkey_s_c, b: c::bkey_s_c) -> *mut c::bkey_i;
 }

@@ -28,8 +28,6 @@ void bch2_damage_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
 int bch2_inode_has_damage(struct btree_trans *, u64, u32);
 int bch2_damage_accumulate(struct btree_trans *, u64, u32, bch_sb_errors_cpu *);
-struct bkey_i *bch2_damage_keys_merge(struct btree_trans *, struct bpos,
-				      struct bkey_s_c, struct bkey_s_c);
 int bch2_damage_clear(struct btree_trans *, subvol_inum);
 int bch2_damage_record_key(struct btree_trans *, enum btree_id,
 			   struct bpos, enum bch_sb_error_id);
