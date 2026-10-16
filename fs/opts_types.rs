@@ -205,7 +205,7 @@ c_xmacro! {
          NULL,          "Constrain inode numbers to 32 bits"),
         (shard_inode_numbers_bits,      u8,
          OPT_FS | OPT_FORMAT,
-         OPT_UINT(0, 16),
+         OPT_UINT(0, 8),
          BCH_SB_SHARD_INUMS_NBITS,      0,
          NULL,          "Shard new inode numbers by CPU id"),
         (gc_reserve_percent,            u8,

@@ -1010,6 +1010,7 @@ pub fn shard_cpu_init(fs: &Fs) {
         // At filesystem startup, before anything reads it:
         let shard_cpu = unsafe { &mut (*fs.raw).inode_shard_cpu };
         let nr_shards = 1usize << bits;
+        // The option's range, up to 8 bits, keeps it within inode_shard_cpu[]:
         assert!(nr_shards <= shard_cpu.len(), "{nr_shards} inode number shards");
 
         for (shard, cpu) in shard_cpu[..nr_shards].iter_mut().enumerate() {
