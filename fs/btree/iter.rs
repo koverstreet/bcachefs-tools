@@ -441,6 +441,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.trans.commit(disk_res, flags)
     }
 
+    /// @msg into the journal, with this transaction's commit: as
+    /// bch2_trans_log_msg(). ENOMEM_trans_log_msg if building @msg ran out of
+    /// memory.
+    pub fn log_msg(&self, msg: &mut crate::util::Printbuf) -> Result<(), BchError> {
+        let ret = unsafe { c::bch2_trans_log_msg(self.raw(), msg.as_raw()) };
+        self.result(ret)
+    }
+
     /// Commit what's queued, if anything - and having committed, return
     /// transaction_restart_commit, so the caller's loop re-runs against the
     /// committed state.

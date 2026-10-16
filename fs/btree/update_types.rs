@@ -39,6 +39,7 @@ c_enum! {
 }
 
 c_extern! {
+    pub fn bch2_trans_log_msg(trans: *mut c::btree_trans, buf: *mut c::printbuf) -> c_int;
     pub fn bch2_btree_delete_at(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
                                 flags: c::btree_iter_update_trigger_flags) -> c_int;
     pub fn bch2_btree_delete(trans: *mut c::btree_trans, btree: c::btree_id, pos: c::bpos,
