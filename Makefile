@@ -512,7 +512,7 @@ dkms-reload:
 	@echo "    [DKMS]   bcachefs/$(VERSION)"
 	$(Q)dkms remove  -m bcachefs -v $(VERSION) --all 2>/dev/null || true
 	$(Q)dkms add     -m bcachefs -v $(VERSION)
-	$(Q)dkms build   -m bcachefs -v $(VERSION) -j $(DKMS_PARALLEL_JOBS)
+	$(Q)KBUILD_MODPOST_WARN=1 dkms build   -m bcachefs -v $(VERSION) -j $(DKMS_PARALLEL_JOBS)
 	$(Q)dkms install -m bcachefs -v $(VERSION)
 	$(Q)modprobe -r bcachefs 2>/dev/null || true
 	$(Q)modprobe bcachefs
