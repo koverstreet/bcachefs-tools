@@ -179,6 +179,12 @@ impl<'f> BtreeTrans<'f> {
         crate::errcode::ret_to_result(unsafe { c::__bch2_trans_relock(self.raw, true) }).map(|_| ())
     }
 
+    /// relock(), always attempted and without the tracepoint: as
+    /// bch2_trans_relock_notrace().
+    pub fn relock_notrace(&self) -> Result<(), BchError> {
+        crate::errcode::ret_to_result(unsafe { c::bch2_trans_relock_notrace(self.raw) }).map(|_| ())
+    }
+
     pub fn begin<'a>(&'a self) -> TransAttempt<'a, 'f> {
         TransAttempt {
             trans:         self,

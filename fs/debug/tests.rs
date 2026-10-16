@@ -555,7 +555,7 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
         })?;
 
         updater.unlock();
-        if unsafe { c::bch2_trans_relock_notrace(updater.raw()) } != 0 {
+        if updater.relock_notrace().is_err() {
             // A failed relock leaves the transaction in restart: end it, as a
             // restart loop would, before it's put.
             updater.begin_raw();
@@ -592,10 +592,10 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
             }
         }
 
-        let ret = unsafe { c::bch2_trans_relock_notrace(updater.raw()) };
+        let relocked = updater.relock_notrace();
         unsafe { c::bch2_stripe_handle_put(fs.as_ptr(), &mut handle) };
 
-        if ret == 0 {
+        if relocked.is_ok() {
             kernel::pr_info!("opening stripe {} didn't invalidate a queued update's relock\n",
                              idx);
             return fs.throw(bch_errcode::BCH_ERR_EINVAL_test_stripe_open_relock_not_invalidated);
