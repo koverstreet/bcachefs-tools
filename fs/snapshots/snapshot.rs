@@ -134,7 +134,8 @@ impl c::bch_fs_snapshots {
         let g = rcu::read_lock();
         let s = Table::get(self, &g).entry(parent)
             .unwrap_or_else(|| panic!("snapshot depth: parent {parent} not in the table"));
-        s.depth + 1
+        // A parent at the maximum is damaged, and check_depth()'s to repair
+        s.depth.saturating_add(1)
     }
 
     /// For a skiplist entry: @id itself for a root, 0 for 0.

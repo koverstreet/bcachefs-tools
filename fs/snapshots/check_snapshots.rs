@@ -469,7 +469,7 @@ fn parent_child_consistent(s: &c::Snapshot, id: u32, role: Role,
         Role::Child  => ((o, o_id), (s, id)),
     };
 
-    ch_id < pa_id && pa.tree == ch.tree && pa.depth().get() + 1 == ch.depth().get()
+    ch_id < pa_id && pa.tree == ch.tree && pa.depth().get().checked_add(1) == Some(ch.depth().get())
 }
 
 /// Whether node @n, @n_id, as @role, has a pointer slot that's empty, or
@@ -874,11 +874,14 @@ fn check_depth<'a, 't>(
 
     // No parent to derive depth from, and 0 would flatten an interior node to a
     // root. check_edge() reported the pointer; leave depth until it's fixed.
+    // Likewise a parent at the maximum depth: that's damage, reported at the
+    // parent, and still there if it wasn't repaired (fsck -n).
     let real_depth = if parent_id == 0 {
         0
     } else {
         let Some(parent) = lookup_node(t, parent_id)? else { return Ok(()) };
-        parent.v.depth().get() + 1
+        let Some(depth) = parent.v.depth().get().checked_add(1) else { return Ok(()) };
+        depth
     };
 
     if fsck_err_on!(t, n.v().depth() != real_depth, id::snapshot_bad_depth,
