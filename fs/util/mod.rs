@@ -1,6 +1,7 @@
 pub mod alloc;
 pub mod async_exec;
 pub mod darray;
+pub mod eytzinger;
 pub mod ffi;
 #[cfg(not(kernel))]
 pub mod ioctl;
