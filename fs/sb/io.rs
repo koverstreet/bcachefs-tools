@@ -596,55 +596,31 @@ mod tests {
         assert!(f.arm::<c::bch_sb_field_ext<Validated>>().is_none());
         assert!(f.typed().is_err());
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::util::bitmask::{le64_bitmask_get, le64_bitmask_set};
 
     #[test]
     fn zstd_early_abort_and_write_degraded_flags_are_independent() {
+        use crate::util::vstructs::Head;
+
+        // Bit 63 and the low word stand in for neighbouring fields: neither
+        // setter may disturb anything outside its own [start, end).
         let untouched = (1u64 << 63) | 0xdead_beef;
-        for action in 0..=3 {
-            for enabled in 0..=1 {
-                let mut flags = untouched.to_le();
-                le64_bitmask_set(
-                    &mut flags,
-                    c::BCH_SB_WRITE_DEGRADED_ACTION_OFFSET,
-                    c::BCH_SB_WRITE_DEGRADED_ACTION_BITS,
-                    action,
-                );
-                le64_bitmask_set(
-                    &mut flags,
-                    c::BCH_SB_ZSTD_COMPRESSION_EARLY_ABORT_OFFSET,
-                    c::BCH_SB_ZSTD_COMPRESSION_EARLY_ABORT_BITS,
-                    enabled,
-                );
-                assert_eq!(u64::from_le(flags), untouched | (action << 60) | (enabled << 62));
+        for action in 0..=3u64 {
+            for enabled in [false, true] {
+                let mut sb = Head::<c::bch_sb>::default();
+                sb.flags[6].set(untouched);
+                sb.set_write_degraded_action(action);
+                sb.set_zstd_compression_early_abort(enabled);
                 assert_eq!(
-                    le64_bitmask_get(
-                        flags,
-                        c::BCH_SB_WRITE_DEGRADED_ACTION_OFFSET,
-                        c::BCH_SB_WRITE_DEGRADED_ACTION_BITS,
-                    ),
-                    action,
+                    sb.flags[6].get(),
+                    untouched | (action << 60) | ((enabled as u64) << 62)
                 );
-                le64_bitmask_set(
-                    &mut flags,
-                    c::BCH_SB_WRITE_DEGRADED_ACTION_OFFSET,
-                    c::BCH_SB_WRITE_DEGRADED_ACTION_BITS,
-                    3 - action,
-                );
+                assert_eq!(sb.write_degraded_action(), action);
+                sb.set_write_degraded_action(3 - action);
+                assert_eq!(sb.zstd_compression_early_abort(), enabled);
                 assert_eq!(
-                    le64_bitmask_get(
-                        flags,
-                        c::BCH_SB_ZSTD_COMPRESSION_EARLY_ABORT_OFFSET,
-                        c::BCH_SB_ZSTD_COMPRESSION_EARLY_ABORT_BITS,
-                    ),
-                    enabled,
+                    sb.flags[6].get(),
+                    untouched | ((3 - action) << 60) | ((enabled as u64) << 62)
                 );
-                assert_eq!(u64::from_le(flags), untouched | ((3 - action) << 60) | (enabled << 62));
             }
         }
     }
