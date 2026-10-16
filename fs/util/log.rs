@@ -7,16 +7,56 @@
 //!
 //! In-kernel each message is prefixed with the filesystem's name, as
 //! bch2_log_msg() does under BCACHEFS_LOG_PREFIX; userspace prints it bare.
+//!
+//! What C shares - struct bch_log_msg, and the C this calls - is declared here
+//! too: util/log_gen.h.
+
+#![allow(non_camel_case_types)]
 
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
+use crate::types::c_default;
+use crate::util::ffi::c_char;
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
-use core::ffi::CStr;
+use core::ffi::{c_uint, CStr};
 use core::fmt;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
+use cstruct_macros::{CStruct, c_enum, c_extern, TypeInfo};
+
+#[repr(C)]
+#[derive(CStruct, TypeInfo)]
+pub struct bch_log_msg {
+    pub c: *mut c::bch_fs,
+    pub loglevel: u8,
+    pub m: c::printbuf,
+}
+c_default!(bch_log_msg);
+
+c_enum! {
+    #[closed]
+    pub enum kern_loglevels: u32 {
+        LOGLEVEL_emerg = 0,
+        LOGLEVEL_alert = 1,
+        LOGLEVEL_crit = 2,
+        LOGLEVEL_err = 3,
+        LOGLEVEL_warning = 4,
+        LOGLEVEL_notice = 5,
+        LOGLEVEL_info = 6,
+        LOGLEVEL_debug = 7,
+    }
+}
+
+c_extern! {
+    #[c_printf(2, 3)]
+    pub fn __bch2_print(c: *mut c::bch_fs, fmt: *const c_char, ...);
+    pub fn bch2_ratelimit_state_init(rs: *mut c::ratelimit_state);
+    pub fn bch2_ratelimit_suppress(c: *mut c::bch_fs, rs: *mut c::ratelimit_state,
+                                   func: *const c_char) -> bool;
+    pub fn bch2_rust_warn(file: *const c_char, line: c_uint);
+}
 
 /// A printk loglevel: KERN_SOH followed by the level, as C's KERN_* strings.
 #[derive(Clone, Copy)]
@@ -44,8 +84,7 @@ pub fn log(fs: &Fs, level: LogLevel, args: fmt::Arguments<'_>) {
     // KERN_SOH, level, then the message as data: a '%' in it is text.
     let fmt = [0x01, level.0, b'%', b's', 0];
     unsafe {
-        c::__bch2_print(fs.raw, fmt.as_ptr() as *const crate::util::ffi::c_char,
-                        buf.as_raw().buf);
+        __bch2_print(fs.raw, fmt.as_ptr() as *const c_char, buf.as_raw().buf);
     }
 }
 
@@ -88,11 +127,11 @@ impl Ratelimit {
             if self.claim.swap(true, Ordering::AcqRel) {
                 return false;
             }
-            unsafe { c::bch2_ratelimit_state_init(state) };
+            unsafe { bch2_ratelimit_state_init(state) };
             self.ready.store(true, Ordering::Release);
         }
 
-        unsafe { c::bch2_ratelimit_suppress(fs.raw, state, func.as_ptr().cast()) }
+        unsafe { bch2_ratelimit_suppress(fs.raw, state, func.as_ptr().cast()) }
     }
 }
 
@@ -189,7 +228,7 @@ macro_rules! warn_on {
         if cond {
             // SAFETY: a NUL-terminated string literal.
             unsafe {
-                $crate::c::bch2_rust_warn(
+                $crate::util::log::bch2_rust_warn(
                     concat!(file!(), "\0").as_ptr().cast(),
                     line!(),
                 )

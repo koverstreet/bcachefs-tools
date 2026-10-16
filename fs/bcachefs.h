@@ -207,6 +207,7 @@ __printf(2, 3)
 void bch2_print_opts(struct bch_opts *, const char *, ...);
 
 #include "bcachefs_gen.h"
+#include "util/log_gen.h"
 
 #define maybe_dev_to_fs(_c)	_Generic((_c),				\
 	struct bch_dev *:	((struct bch_dev *) (_c))->fs,		\
