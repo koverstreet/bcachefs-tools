@@ -61,7 +61,7 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
         let fs = bcachefs_kernel::fs::Fs::open(&[std::path::PathBuf::from(&cli.device)], fs_opts)?;
 
         let _ = fs.for_each_online_member(|ca| {
-            let sb = unsafe { &*ca.disk_sb.sb };
+            let sb = ca.disk_sb.sb();
             let mut buf = Printbuf::new();
             unsafe {
                 crate::wrappers::sb_display::sb_members_summary_to_text(

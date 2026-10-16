@@ -167,7 +167,7 @@ pub unsafe fn sb_members_summary_to_text(out: &mut Printbuf, sb: &c::bch_sb, dev
     let sbs = device_scan::scan_sbs(&device_str, &opts).unwrap_or_default();
 
     out.aligned(|sub| {
-        write!(sub, "Device\tPath\tState\tRead err\tWrite err\tChecksum err\tIssues\r\n").unwrap();
+        write!(sub, "Device\tPath\tState\tRead err\tWrite err\tChecksum err\tIssues\r\n");
 
         let mut print_member = |idx: u32, m: c::bch_member| {
             if !member_alive(&m) {
@@ -182,17 +182,17 @@ pub unsafe fn sb_members_summary_to_text(out: &mut Printbuf, sb: &c::bch_sb, dev
             let missing = path.is_none();
             let path = path.unwrap_or_else(|| "(not found)".to_string());
 
-            let state = m.member_state() as u8;
+            let state = (m.flags.get() & 0xf) as u8;
             let state_str = sb::members::member_state_str(state);
-            let err_read = u64::from_le(m.errors[0]);
-            let err_write = u64::from_le(m.errors[1]);
-            let err_checksum = u64::from_le(m.errors[2]);
+            let err_read = m.errors[0].get();
+            let err_write = m.errors[1].get();
+            let err_checksum = m.errors[2].get();
 
             let mut issues = Vec::new();
             if missing {
                 issues.push("missing".to_string());
             }
-            if state != c::bch_member_state::BCH_MEMBER_STATE_rw as u8 {
+            if state != c::bch_member_state::BCH_MEMBER_STATE_rw.0 as u8 {
                 issues.push(format!("state={state_str}"));
             }
             if err_read != 0 {
@@ -208,7 +208,7 @@ pub unsafe fn sb_members_summary_to_text(out: &mut Printbuf, sb: &c::bch_sb, dev
 
             write!(
                 sub, "{idx}\t{path}\t{state_str}\t{err_read}\t{err_write}\t{err_checksum}\t{issues}\r\n"
-            ).unwrap();
+            );
         };
 
         if let Some(members) = sb::members::members_v2(sb) {
