@@ -8,11 +8,12 @@
 //! the legacy UNLINKED_OBSOLETE flag; a key with state 0 predates the field,
 //! and the flag is its state.
 //!
-//! unlink() marks a subvolume unlinked and, on commit, queues the delete work,
-//! which waits for the VFS to drop the subvolume's inodes and then calls
-//! set_deleted(). A deleted subvolume is a tombstone until snapshot deletion
-//! reaps its snapshot: get() returns ENOENT for it, get_snapshot() doesn't.
-//! check_subvols deletes subvolumes a crash left unlinked.
+//! unlink() marks a subvolume unlinked and, on commit, queues nonblocking
+//! delete work that asks the VFS to drop its inodes and retries after one
+//! second while any remain held. Once the VFS has released them, the worker
+//! calls set_deleted(). A deleted subvolume is a tombstone until snapshot
+//! deletion reaps its snapshot: get() returns ENOENT for it, get_snapshot()
+//! doesn't. check_subvols deletes subvolumes a crash left unlinked.
 //!
 //! subvolume_children has a bit at (fs_path_parent, subvolume) for each nested
 //! subvolume, maintained by the trigger.
@@ -807,32 +808,115 @@ fn set_deleted(trans: &BtreeTrans<'_>, subvol: u32) -> Result<(), BchError> {
 }
 
 impl c::bch_fs_snapshots {
-    fn delete_work(&self) -> &Opaque<c::work_struct> {
+    fn delete_work(&self) -> &Opaque<c::delayed_work> {
         unsafe { &*(&raw const self.wait_for_pagecache_and_delete_work).cast() }
     }
 }
 
-/// Waits for inodes still in use.
+/// Marks inodes for eviction and returns subvolumes whose inodes are still held.
 #[cfg(kernel)]
-fn evict_inodes(fs: &Fs, subvols: &[u32]) {
-    // Borrowed: C only reads it
-    let mut list = c::snapshot_id_list {
+fn evict_inodes(fs: &Fs, subvols: &[u32]) -> Result<KVVec<u32>, BchError> {
+    let flags = crate::util::alloc::flags::GFP_KERNEL;
+    let mut busy_subvols = KVVec::with_capacity(subvols.len(), flags)?;
+    let mut pending = c::snapshot_id_list {
         data: subvols.as_ptr() as *mut u32,
-        nr:   subvols.len(),
+        nr: subvols.len(),
         size: subvols.len(),
         ..Default::default()
     };
-    unsafe { c::bch2_evict_subvolume_inodes(fs.raw, &mut list) }
+    let mut busy = c::snapshot_id_list {
+        data: busy_subvols.as_mut_ptr(),
+        nr: 0,
+        size: busy_subvols.capacity(),
+        ..Default::default()
+    };
+
+    // SAFETY: `pending.data` borrows the live input slice, which C only reads;
+    // `busy.data` has room for every pending id and is writable by C.
+    // The C helper reserves from this preallocated buffer before its RCU scan.
+    let ret = unsafe { c::bch2_evict_subvolume_inodes(fs.raw, &mut pending, &mut busy) };
+    crate::errcode::ret_to_result_void(ret)?;
+
+    // SAFETY: C initialized busy.data[0..busy.nr]; it can add no more ids than
+    // pending.nr, which fits in busy_subvols' reserved capacity.
+    for i in 0..busy.nr {
+        let subvol = unsafe { *busy.data.add(i) };
+        busy_subvols.push(subvol, flags)?;
+    }
+    Ok(busy_subvols)
 }
 
 #[cfg(not(kernel))]
-fn evict_inodes(_fs: &Fs, _subvols: &[u32]) {}
+fn evict_inodes(_fs: &Fs, _subvols: &[u32]) -> Result<KVVec<u32>, BchError> {
+    Ok(KVVec::new())
+}
 
-/// Holds the snapshot_delete_pagecache write ref unlink() took.
+fn pending_unlinked_subvolumes(fs: &Fs) -> Result<KVVec<u32>, BchError> {
+    let unlinked = fs.snapshots.unlinked.lock();
+    let flags = crate::util::alloc::flags::GFP_KERNEL;
+    let mut pending = KVVec::with_capacity(unlinked.len(), flags)?;
+    pending.extend_from_slice(&unlinked[..], flags)?;
+    Ok(pending)
+}
+
+fn remove_unlinked_subvolume(fs: &Fs, subvol: u32) {
+    let mut unlinked = fs.snapshots.unlinked.lock();
+    let Some(index) = unlinked.iter().position(|&id| id == subvol) else {
+        return;
+    };
+
+    let new_len = unlinked.len() - 1;
+    unlinked.copy_within(index + 1.., index);
+    unlinked.truncate(new_len);
+}
+
+fn delete_unlinked_subvolumes(fs: &Fs) -> Result<(), BchError> {
+    let pending = bch_err_msg!(
+        fs,
+        pending_unlinked_subvolumes(fs),
+        "copying pending subvolumes"
+    )?;
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    let busy = bch_err_msg!(
+        fs,
+        evict_inodes(fs, &pending),
+        "evicting inodes from pending subvolumes"
+    )?;
+    let trans = crate::btree_trans!(fs);
+    for &id in pending.iter() {
+        if busy.iter().any(|&busy_id| busy_id == id) {
+            continue;
+        }
+
+        bch_err_msg!(fs, set_deleted(&trans, id), "deleting subvolume {id}")?;
+        remove_unlinked_subvolume(fs, id);
+    }
+    Ok(())
+}
+
+fn retry_unlinked_subvolumes(fs: &Fs) {
+    if fs.snapshots.unlinked.lock().is_empty() {
+        return;
+    }
+
+    if let Some(write_ref) =
+        fs.write_ref_tryget(c::bch_write_ref::BCH_WRITE_REF_snapshot_delete_pagecache)
+    {
+        write_ref.queue_delayed_work(
+            fs.snapshots.delete_work(),
+            c::HZ as core::ffi::c_ulong,
+        );
+    }
+}
+
+/// Holds the snapshot_delete_pagecache write ref transferred to this work.
 ///
 /// # Safety
-/// @work is c->snapshots.wait_for_pagecache_and_delete_work, queued through
-/// WriteRef::queue_work().
+/// @work is the work member of c->snapshots.wait_for_pagecache_and_delete_work;
+/// delayed_work places it first and it is queued through WriteRef::queue_delayed_work().
 #[c_export]
 pub unsafe fn bch2_subvolume_wait_for_pagecache_and_delete(work: *mut c::work_struct) {
     let c = unsafe {
@@ -844,21 +928,9 @@ pub unsafe fn bch2_subvolume_wait_for_pagecache_and_delete(work: *mut c::work_st
         WriteRef::adopt(&fs, c::bch_write_ref::BCH_WRITE_REF_snapshot_delete_pagecache)
     };
 
-    loop {
-        let subvols = core::mem::replace(&mut *fs.snapshots.unlinked.lock(), KVVec::new());
-        if subvols.is_empty() {
-            break;
-        }
-
-        evict_inodes(&fs, &subvols);
-
-        let trans = crate::btree_trans!(&fs);
-        for &id in subvols.iter() {
-            if bch_err_msg!(&fs, set_deleted(&trans, id), "deleting subvolume {id}").is_err() {
-                return;
-            }
-        }
-    }
+    // Errors leave unfinished ids in unlinked; the delayed retry handles them.
+    let _ = delete_unlinked_subvolumes(&fs);
+    retry_unlinked_subvolumes(&fs);
 }
 
 /// On commit, queues the delete work.
@@ -877,7 +949,7 @@ pub fn unlink(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
             fs.write_ref_tryget(c::bch_write_ref::BCH_WRITE_REF_snapshot_delete_pagecache) else {
             return Err(BchError::from(c::EROFS));
         };
-        write_ref.queue_work(fs.snapshots.delete_work());
+        write_ref.queue_delayed_work(fs.snapshots.delete_work(), 0);
         Ok(())
     })?;
 

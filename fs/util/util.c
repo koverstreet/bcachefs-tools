@@ -1423,6 +1423,12 @@ bool bch2_queue_work(struct workqueue_struct *wq, struct work_struct *work)
 	return queue_work(wq, work);
 }
 
+bool bch2_queue_delayed_work(struct workqueue_struct *wq, struct delayed_work *work,
+			     unsigned long delay)
+{
+	return queue_delayed_work(wq, work, delay);
+}
+
 /* capable() is a function in the kernel, a macro (true) in userspace's blkdev.h */
 bool bch2_capable(int cap)
 {

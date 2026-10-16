@@ -97,5 +97,6 @@ c_extern! {
     pub fn bch2_write_inode(c: *mut c::bch_fs, ei: *mut c::bch_inode_info, set: c::inode_set_fn,
                             p: *mut c_void, fields: c_uint) -> c_int;
     pub fn bch2_inode_or_descendents_is_open(trans: *mut c::btree_trans, pos: c::bpos) -> c_int;
-    pub fn bch2_evict_subvolume_inodes(c: *mut c::bch_fs, s: *mut c::snapshot_id_list);
+    pub fn bch2_evict_subvolume_inodes(c: *mut c::bch_fs, pending: *mut c::snapshot_id_list,
+                                       busy: *mut c::snapshot_id_list) -> c_int;
 }

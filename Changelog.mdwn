@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Bugfixes
+
+- Subvolume deletion no longer blocks while VFS inodes are held; pending
+  deletions retry after one second until those holders drain.
+
 ## v1.39.7 - Sun Oct 4 2026
 
 ### Major changes:

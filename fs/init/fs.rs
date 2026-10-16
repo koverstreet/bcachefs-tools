@@ -602,6 +602,15 @@ impl<'f> WriteRef<'f> {
             core::mem::forget(self);
         }
     }
+
+    /// Queue delayed work and transfer this ref only when the work is queued.
+    pub fn queue_delayed_work(self, work: &Opaque<c::delayed_work>, delay: core::ffi::c_ulong) {
+        if unsafe {
+            c::bch2_queue_delayed_work((*self.fs.raw).write_ref_wq, work.as_ptr(), delay)
+        } {
+            core::mem::forget(self);
+        }
+    }
 }
 
 impl Drop for WriteRef<'_> {
