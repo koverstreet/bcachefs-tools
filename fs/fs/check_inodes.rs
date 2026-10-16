@@ -124,10 +124,16 @@ enum SubvolCheck {
 /// The subvolume must exist and point back at this inode, at a snapshot that
 /// sees this version.
 ///
-/// Not just at leaves: a snapshotted subvolume's root inode stays at a node
-/// that has since become interior, so a leaf check skipped every subvolume ever
-/// snapshotted. Live versus stale is whether the subvolume's snapshot descends
-/// from this key's (inode_bi_subvol_wrong).
+/// Only for a version at a leaf. bi_subvol at an interior node means something
+/// only as seen through a leaf, and that's checked from the subvolume's side:
+/// check_subvol() looks the root inode up in the subvolume's own snapshot,
+/// which finds the visible version wherever it is (subvol_root_wrong_bi_subvol).
+/// A version no subvolume sees is history, and may be stale: taking a snapshot
+/// writes the new subvolume's root at its own leaf and leaves the source's
+/// where it was, at what is now an interior node - which stays interior when
+/// the source is deleted, if it has other descendants. A subvolume key that
+/// went missing is reconstructed by check_snapshots(), from the leaf snapshot
+/// that still names it.
 fn check_inode_subvol(
     t:     &TransAttempt<'_, '_>,
     pos:   c::bpos,
@@ -345,7 +351,7 @@ fn check_inode<'t>(
         }
     }
 
-    if u.bi_subvol != 0 {
+    if u.bi_subvol != 0 && fs.snapshots.is_leaf(pos.snapshot)? {
         match check_inode_subvol(t, pos, &mut u)? {
             SubvolCheck::Ok                => {}
             SubvolCheck::Repaired          => changed = true,
