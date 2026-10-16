@@ -68,3 +68,9 @@ pub fn set_no_ratelimit(fs: &Fs, pass: c::bch_recovery_pass) {
 pub fn clear_btree_clean(fs: &Fs, btree: c::btree_id) {
     unsafe { c::bch2_clear_btree_clean(fs.as_ptr(), btree) }
 }
+
+/// Whether recovery work should stop - the filesystem going read-only, or
+/// the kthread running it told to: as bch2_recovery_cancelled().
+pub fn cancelled(fs: &Fs) -> Result<(), BchError> {
+    ret_to_result_void(unsafe { c::rust_bch2_recovery_cancelled(fs.as_ptr()) })
+}

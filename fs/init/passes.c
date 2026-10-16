@@ -955,3 +955,9 @@ void bch2_fs_recovery_passes_init(struct bch_fs *c)
 
 	INIT_WORK(&c->recovery.work, bch2_async_recovery_passes_work);
 }
+
+/* For Rust: a static inline, of kthread and task state */
+int rust_bch2_recovery_cancelled(struct bch_fs *c)
+{
+	return bch2_recovery_cancelled(c);
+}
