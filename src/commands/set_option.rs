@@ -30,7 +30,8 @@ fn schedule_reconcile_after_offline_io_opt_change(fs: &bcachefs_kernel::fs::Fs) 
 fn mark_reconcile_recovery_pass(ext: &mut c::bch_sb_field_ext) {
     let pass = 1u64 << c::bch_recovery_pass::BCH_RECOVERY_PASS_set_fs_needs_reconcile as u64;
     let stable_pass = unsafe { c::bch2_recovery_passes_to_stable(pass) };
-    ext.recovery_passes_required[0] |= stable_pass.to_le();
+    let r = &mut ext.recovery_passes_required[0];
+    r.set(r.get() | stable_pass);
 }
 
 fn set_option_cmd() -> Command {
@@ -266,7 +267,7 @@ fn set_option_offline(
         if needs_reconcile {
             schedule_reconcile_after_offline_io_opt_change(&fs)?;
         }
-        fs.write_super_force()
+        fs.write_super_ret()
             .map_err(|e| anyhow::anyhow!("error writing superblock: {e}"))?;
     }
 
@@ -302,17 +303,17 @@ mod tests {
         let pass = 1u64 << c::bch_recovery_pass::BCH_RECOVERY_PASS_set_fs_needs_reconcile as u64;
         let want = unsafe { c::bch2_recovery_passes_to_stable(pass) };
         assert_ne!(want, 0);
-        assert_eq!(u64::from_le(ext.recovery_passes_required[0]), want);
+        assert_eq!(ext.recovery_passes_required[0].get(), want);
     }
 
     #[test]
     fn reconcile_recovery_bit_is_idempotent_and_keeps_other_bits() {
         let mut ext = zeroed_ext();
-        ext.recovery_passes_required[0] = 1u64.to_le();
+        ext.recovery_passes_required[0].set(1);
         mark_reconcile_recovery_pass(&mut ext);
-        let once = ext.recovery_passes_required[0];
+        let once = ext.recovery_passes_required[0].get();
         mark_reconcile_recovery_pass(&mut ext);
-        assert_eq!(ext.recovery_passes_required[0], once);
-        assert_eq!(u64::from_le(once) & 1, 1);
+        assert_eq!(ext.recovery_passes_required[0].get(), once);
+        assert_eq!(once & 1, 1);
     }
 }
