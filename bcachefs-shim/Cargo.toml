@@ -9,7 +9,7 @@ rust-version = "1.85.0"
 crate-type = ["lib"]
 
 [dependencies]
-bcachefs-shim-macros = { path = "../bcachefs-shim-macros" }
+pin-init = { path = "pin-init" }
 
 [build-dependencies]
 pkg-config = "0.3"

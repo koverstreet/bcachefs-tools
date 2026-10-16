@@ -3,49 +3,13 @@
 //! same names, so fs/ code is written once against the kernel's API.
 //!
 //! The kernel's Mutex is pinned and built in place from a PinInit, because a
-//! struct mutex can't move; std's can, so here new_mutex!() is just the value,
-//! and PinInit is the trait the kernel's pin-init implements for any value:
-//! code that initializes in place - a Rust member of a C struct - is the same
-//! in both builds.
+//! struct mutex can't move; std's can, so here new_mutex!() is just the value -
+//! which pin-init takes as an initializer of itself: code that initializes in
+//! place - a Rust member of a C struct - is the same in both builds.
 
-use core::convert::Infallible;
 use core::ops::{Deref, DerefMut};
 
-/// An initializer for a T at a fixed address: as pin-init's PinInit.
-///
-/// # Safety
-///
-/// An implementation must leave `slot` fully initialized when it returns Ok.
-pub unsafe trait PinInit<T, E = Infallible> {
-    /// Initialize `slot`.
-    ///
-    /// # Safety
-    ///
-    /// `slot` must be valid for writes, and not move once this returns Ok.
-    unsafe fn __pinned_init(self, slot: *mut T) -> Result<(), E>;
-
-    /// Initialize `slot`. Alias matching kernel 7.3+ PinInit API.
-    ///
-    /// # Safety
-    ///
-    /// Same as `__pinned_init`.
-    unsafe fn __init(self, slot: *mut T) -> Result<(), E>
-    where
-        Self: Sized,
-    {
-        // SAFETY: Same requirements as `__pinned_init`.
-        unsafe { self.__pinned_init(slot) }
-    }
-}
-
-// SAFETY: writes the whole of `slot`.
-unsafe impl<T> PinInit<T> for T {
-    unsafe fn __pinned_init(self, slot: *mut T) -> Result<(), Infallible> {
-        // SAFETY: `slot` is valid for writes, per this function's contract.
-        unsafe { slot.write(self) };
-        Ok(())
-    }
-}
+pub use pin_init::PinInit;
 
 /// A mutex, as the kernel's: lock() can't fail. A panic while it was held
 /// doesn't poison it, as there's nothing in-kernel to poison.

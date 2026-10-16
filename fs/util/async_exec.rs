@@ -40,10 +40,9 @@ use kernel::{
 };
 
 #[cfg(not(kernel))]
-use bcachefs_shim::{
-    pin_data,
-    workqueue::{AllocError, Queue, Work, WorkItem},
-};
+use bcachefs_shim::workqueue::{AllocError, Queue, Work, WorkItem};
+#[cfg(not(kernel))]
+use pin_init::pin_data;
 #[cfg(not(kernel))]
 use std::sync::{Arc, Condvar, Mutex};
 

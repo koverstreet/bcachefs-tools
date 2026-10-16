@@ -20,6 +20,10 @@ std = ["dep:zeroize"]
 
 [dependencies]
 bcachefs-shim = { path = "../bcachefs-shim" }
+# The kernel build has pin_init as a crate too - --extern pin_init, the
+# kernel's or the vendored stack's: #[pin_data] and pin_init!() expand to
+# ::pin_init paths.
+pin-init = { path = "../bcachefs-shim/pin-init" }
 bcachefs-cstruct-macros = { path = "cstruct-macros" }
 bitfield-struct = { path = "vendor/bitfield-struct" }
 nestify = { path = "vendor/nestify" }

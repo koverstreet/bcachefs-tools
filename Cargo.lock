@@ -113,6 +113,7 @@ dependencies = [
  "linux-raw-sys",
  "nestify",
  "paste 1.0.15",
+ "pin-init",
  "uuid",
  "zerocopy",
  "zeroize",
@@ -122,18 +123,10 @@ dependencies = [
 name = "bcachefs-shim"
 version = "0.1.0"
 dependencies = [
- "bcachefs-shim-macros",
  "bindgen",
  "cc",
+ "pin-init",
  "pkg-config",
-]
-
-[[package]]
-name = "bcachefs-shim-macros"
-version = "0.1.0"
-dependencies = [
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -893,6 +886,22 @@ name = "paste-test-suite"
 version = "0.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f029fc0ea7dfccc5bc8a66caa5a1961407e84db5a8fa5e3d3ae9eb40367c9456"
+
+[[package]]
+name = "pin-init"
+version = "0.0.0"
+dependencies = [
+ "pin-init-internal",
+]
+
+[[package]]
+name = "pin-init-internal"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "pkg-config"

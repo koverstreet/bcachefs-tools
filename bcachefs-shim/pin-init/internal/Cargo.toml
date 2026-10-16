@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# pin-init's proc macros, for the userspace build: see ../Cargo.toml.
+[package]
+name = "pin-init-internal"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.85.0"
+publish = false
+
+[lib]
+proc-macro = true
+path = "../../../fs/vendor/kernel-rust/pin-init/internal/src/lib.rs"
+
+[dependencies]
+syn = { version = "2.0", features = ["full", "visit-mut"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(USE_RUSTC_FEATURES)", "cfg(kernel)"] }

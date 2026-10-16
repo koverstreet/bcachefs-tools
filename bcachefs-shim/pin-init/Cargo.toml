@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# The kernel's pin-init, for the userspace build: the vendored source as it is
+# (fs/vendor/kernel-rust/pin-init, replaced wholesale on update, so nothing of
+# ours lives there), built as a crate. In-kernel it's the kernel's own pin-init,
+# or this source when the module builds the vendored stack
+# (fs/Makefile.rust.vendor) - so in-place initializers are written once for
+# both.
+#
+# No features: no_std, and no allocator_api, so a stable rustc builds it.
+[package]
+name = "pin-init"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.85.0"
+publish = false
+
+[lib]
+path = "../../fs/vendor/kernel-rust/pin-init/src/lib.rs"
+# Its examples need allocator_api: the kernel's to run, not ours
+doctest = false
+
+[dependencies]
+pin-init-internal = { path = "internal" }
+
+# Declared so the cfgs the source tests aren't unknown; never enabled here.
+[features]
+std = []
+alloc = []
+unsafe-pinned = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(USE_RUSTC_FEATURES)", "cfg(kernel)", "cfg(CONFIG_RUSTC_HAS_UNSAFE_PINNED)"] }
