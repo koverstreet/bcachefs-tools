@@ -9,6 +9,22 @@ use std::path::PathBuf;
 include!("../clang_target.rs");
 include!("../fs/build_config.rs");
 
+/// Every struct and union is Zeroable when all its fields are, as the kernel's
+/// bindgen_parameters has it (fs/vendor/kernel-rust): a C struct embedded in a
+/// Rust-initialized one can start zeroed, as C's kzalloc() would leave it.
+#[derive(Debug)]
+struct MaybeZeroable;
+
+impl bindgen::callbacks::ParseCallbacks for MaybeZeroable {
+    fn add_derives(&self, info: &bindgen::callbacks::DeriveInfo<'_>) -> Vec<String> {
+        use bindgen::callbacks::TypeKind;
+        match info.kind {
+            TypeKind::Struct | TypeKind::Union => vec!["::pin_init::MaybeZeroable".into()],
+            _ => vec![],
+        }
+    }
+}
+
 fn main() {
     let out_dir: PathBuf = std::env::var_os("OUT_DIR")
         .expect("ENV Var 'OUT_DIR' Expected")
@@ -54,6 +70,7 @@ fn main() {
         .clang_arg("-fkeep-inline-functions")
         .derive_debug(true)
         .derive_default(true)
+        .parse_callbacks(Box::new(MaybeZeroable))
         .layout_tests(true)
         // Emit `::core::ffi` rather than `::std::os::raw`, so the bindings are
         // valid in both std (userspace) and no_std.

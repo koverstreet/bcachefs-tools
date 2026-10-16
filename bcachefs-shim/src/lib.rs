@@ -21,6 +21,14 @@ pub mod c {
     )]
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
+    // As the kernel's bindings have it - bindgen doesn't
+    // (rust-lang/rust-bindgen#3196) - so a struct with bitfields can be
+    // MaybeZeroable. Only this one: what's Zeroable here should be in-kernel.
+    //
+    // SAFETY: a newtype around its storage.
+    unsafe impl<Storage> ::pin_init::Zeroable for __BindgenBitfieldUnit<Storage>
+        where Storage: ::pin_init::Zeroable {}
+
     // The kernel's name: userspace's crc32c() is bch_crc32c(), so as not to
     // clash with libblkid's in a static build (include/linux/crc32c.h).
     pub use bch_crc32c as crc32c;
