@@ -3,6 +3,7 @@ use crate::btree::bkey::AsBkeyI;
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
+use crate::util::ffi::Opaque;
 use crate::util::locking::MemallocFlags;
 use crate::util::Printbuf;
 use core::ops::ControlFlow;
@@ -644,6 +645,15 @@ impl<'f> WriteRef<'f> {
     /// run that's pending has a ref, and this one is put.
     pub fn queue_work(self, work: &FsWork) {
         if unsafe { c::bch2_queue_work((*self.fs.as_ptr()).write_ref_wq, work.as_ptr()) } {
+            core::mem::forget(self);
+        }
+    }
+
+    /// Queue delayed work and transfer this ref only when the work is queued.
+    pub fn queue_delayed_work(self, work: &Opaque<c::delayed_work>, delay: core::ffi::c_ulong) {
+        if unsafe {
+            c::bch2_queue_delayed_work((*self.fs.as_ptr()).write_ref_wq, work.as_ptr(), delay)
+        } {
             core::mem::forget(self);
         }
     }

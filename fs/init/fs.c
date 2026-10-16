@@ -1377,6 +1377,8 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	try(bch2_fs_journal_init(&c->journal));
 	try(percpu_init_rwsem(&c->snapshots.create_lock));
 	try(percpu_init_rwsem(&c->snapshots.pagefault_lock));
+	INIT_DELAYED_WORK(&c->snapshots.wait_for_pagecache_and_delete_work,
+			  bch2_subvolume_wait_for_pagecache_and_delete);
 	try(bch2_fs_vfs_init(c));
 	try(bch2_io_clock_init(&c->io_clock[READ]));
 	try(bch2_io_clock_init(&c->io_clock[WRITE]));
