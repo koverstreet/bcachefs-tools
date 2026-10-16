@@ -125,7 +125,8 @@ static int drop_or_rewrite_btree_ptrs(struct btree_trans *trans,
 		ret = bch2_btree_node_rewrite_pos(trans, iter->btree_id,
 						  b->c.level + 1, b->key.k.p,
 						  btree_ptr_rewrite_target(trans->c),
-						  BCH_TRANS_COMMIT_no_enospc, 0);
+						  BCH_TRANS_COMMIT_no_enospc,
+						  BCH_WRITE_replicas_required);
 
 	if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 		goto out;

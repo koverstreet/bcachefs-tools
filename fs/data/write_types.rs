@@ -23,6 +23,7 @@ c_xmacro! {
         (flush),
         (move),
         (replicas_best_effort),
+        (replicas_required),
         (in_worker),
         (submitted),
         (convert_unwritten),
@@ -100,7 +101,7 @@ nest! {
         pub list_idx: c_uint,
 
         pub written: c_uint, /* sectors */
-        pub flags: u16,
+        pub flags: u32,
         pub error: i16, /* dio write path expects it to hold -ERESTARTSYS... */
         pub io_error: u8,
 

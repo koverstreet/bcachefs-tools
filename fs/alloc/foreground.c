@@ -1850,6 +1850,12 @@ retry:
 
 		if ((bch2_err_matches(ret, BCH_ERR_insufficient_devices) ||
 		     bch2_err_matches(ret, BCH_ERR_bucket_alloc_no_progress)) &&
+		    (req->flags & BCH_WRITE_replicas_required) &&
+		    req->nr_effective < req->nr_replicas)
+			goto err;
+
+		if ((bch2_err_matches(ret, BCH_ERR_insufficient_devices) ||
+		     bch2_err_matches(ret, BCH_ERR_bucket_alloc_no_progress)) &&
 		    req->nr_effective) {
 			/*
 			 * Fewer copies than asked for, returning success:
