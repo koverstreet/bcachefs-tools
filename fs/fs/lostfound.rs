@@ -179,7 +179,7 @@ fn lostfound_dir_link(t: &TransAttempt<'_, '_>, dir_inum: u64, snapshot: u32)
 {
     let mut dir = inode::find_by_inum_snapshot(t, dir_inum, snapshot,
                                                BtreeIterFlags::empty())?;
-    dir.bi_nlink += 1;
+    inode::nlink_add(t, &mut dir, 1)?;
     dir.bi_snapshot = snapshot;
     inode::fsck_write(t, &mut dir)
 }
@@ -372,7 +372,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
     // Not is_dir(): a subvolume root's DT_SUBVOL dirent doesn't count towards
     // its parent's links
     if !adopted && inode.is_subdir_for_nlink() {
-        lostfound.bi_nlink += 1;
+        inode::nlink_add(t, &mut lostfound, 1)?;
     }
 
     // lost+found needs a version where the dirent goes, or the dirent is in a

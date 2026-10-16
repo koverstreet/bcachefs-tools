@@ -2150,17 +2150,60 @@ const BCH_LINK_MAX: u32 = u32::MAX;
 
 /// One more link to @inode - or none less, for an unlinked inode coming
 /// back: as bch2_inode_nlink_inc(). too_many_links at BCH_LINK_MAX.
-pub fn nlink_inc(inode: &mut c::bch_inode_unpacked) -> Result<(), BchError> {
+pub fn nlink_inc(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked)
+    -> Result<(), BchError>
+{
     if inode.flag(c::bch_inode_flags::BCH_INODE_unlinked) {
         inode.set_flag(c::bch_inode_flags::BCH_INODE_unlinked, false);
     } else {
         if inode.bi_nlink == BCH_LINK_MAX - inode.nlink_bias() {
             return Err(BchError::from(bch_errcode::BCH_ERR_too_many_links));
         }
-        // Wraps, as C's did, past a damaged count: check_nlinks' to repair.
-        inode.bi_nlink = inode.bi_nlink.wrapping_add(1);
+        nlink_add(t, inode, 1)?;
     }
     Ok(())
+}
+
+/// @inode's raw link count moved by @delta - a directory's subdirectory count,
+/// or a link the caller accounts for itself - held at 0 or the maximum instead
+/// of wrapping. A count that would wrap is already wrong, read that way off
+/// disk, and the arithmetic must not panic on it: report it, and schedule the
+/// pass that recounts it - check_dirents for a directory, check_nlinks
+/// otherwise. In fsck, if that pass has already run, scheduling it returns the
+/// error that rewinds recovery to it, for the caller to pass up.
+pub fn nlink_add(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked, delta: i32)
+    -> Result<(), BchError>
+{
+    match inode.bi_nlink.checked_add_signed(delta) {
+        Some(n) => {
+            inode.bi_nlink = n;
+            Ok(())
+        }
+        None => nlink_out_of_range(t, inode, delta),
+    }
+}
+
+#[cold]
+fn nlink_out_of_range(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked, delta: i32)
+    -> Result<(), BchError>
+{
+    let fs = t.fs();
+    let old = inode.bi_nlink;
+    inode.bi_nlink = if delta < 0 { 0 } else { u32::MAX };
+
+    let (err, pass) = if inode.is_dir() {
+        (id::inode_dir_wrong_nlink, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_dirents)
+    } else {
+        (id::inode_wrong_nlink, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_nlinks)
+    };
+
+    let mut msg = LogMsg::new(fs);
+    writeln!(msg, "inode {}:{} link count {old} {delta:+} out of range, held at {}",
+             inode.bi_inum, inode.bi_snapshot, inode.bi_nlink);
+    let log = crate::init::error::count_fsck_err(fs, err, &mut msg);
+    msg.set_suppressed(!log);
+
+    passes::run_explicit(fs, &mut msg, pass, c::bch_run_recovery_pass_flags::from_bits_retain(0))
 }
 
 /// One link fewer to @inode - unlinked, when it had none left: as

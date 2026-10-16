@@ -21,9 +21,9 @@
 //! The VFS, ioctls, recovery and error reporting are C: each function they
 //! call is exported under its C name, at the end of its section.
 //!
-//! Unsigned arithmetic on link counts and depths wraps, as C's did: a link
-//! count that's wrong is fsck's to repair (check_nlinks), and must not be a
-//! panic here.
+//! A link count or depth that's wrong is fsck's to repair, and must not be a
+//! panic here: link counts saturate and schedule the repair
+//! (inode::nlink_add()), depths wrap, as C's did.
 
 use crate::acl::PosixAcl;
 use crate::btree::bkey::{pos, spos, BkeySC};
@@ -231,7 +231,7 @@ pub fn create_trans(
     if flags & c::BCH_CREATE_TMPFILE == 0 {
         let name = name.expect("create_trans: no name, and not BCH_CREATE_TMPFILE");
 
-        dir_u.bi_nlink = dir_u.bi_nlink.wrapping_add(new_inode.is_subdir_for_nlink() as u32);
+        inode::nlink_add(t, dir_u, new_inode.is_subdir_for_nlink() as i32)?;
         dir_u.bi_mtime = now;
         dir_u.bi_ctime = now;
 
@@ -327,7 +327,7 @@ pub fn link_trans(
     *inode_u = inode::peek(t, &mut inode_iter, inum, BtreeIterFlags::INTENT)?;
 
     inode_u.bi_ctime = now;
-    inode::nlink_inc(inode_u)?;
+    inode::nlink_inc(t, inode_u)?;
 
     *dir_u = inode::peek(t, &mut dir_iter, dir, BtreeIterFlags::INTENT)?;
 
@@ -471,7 +471,7 @@ pub fn unlink_trans(
     dir_u.bi_mtime   = now;
     dir_u.bi_ctime   = now;
     inode_u.bi_ctime = now;
-    dir_u.bi_nlink   = dir_u.bi_nlink.wrapping_sub(inode_u.is_subdir_for_nlink() as u32);
+    inode::nlink_add(t, dir_u, -(inode_u.is_subdir_for_nlink() as i32))?;
 
     str_hash::delete_at::<Dirents>(t, &dir_hash, &mut dirent_iter,
                                    UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
@@ -643,8 +643,8 @@ pub fn rename_trans(
         }
 
         if src_inode_u.is_subdir_for_nlink() {
-            src_dir_u.bi_nlink = src_dir_u.bi_nlink.wrapping_sub(1);
-            dst_dir_u!().bi_nlink = dst_dir_u!().bi_nlink.wrapping_add(1);
+            inode::nlink_add(t, src_dir_u, -1)?;
+            inode::nlink_add(t, dst_dir_u!(), 1)?;
         }
 
         if src_inode_u.is_dir() && src_inode_u.bi_subvol == 0 {
@@ -658,8 +658,8 @@ pub fn rename_trans(
     }
 
     if dst_inum.inum != 0 && dst_inode_u.is_subdir_for_nlink() {
-        dst_dir_u!().bi_nlink = dst_dir_u!().bi_nlink.wrapping_sub(1);
-        src_dir_u.bi_nlink = src_dir_u.bi_nlink.wrapping_add((mode == BCH_RENAME_EXCHANGE) as u32);
+        inode::nlink_add(t, dst_dir_u!(), -1)?;
+        inode::nlink_add(t, src_dir_u, (mode == BCH_RENAME_EXCHANGE) as i32)?;
     }
 
     if mode == BCH_RENAME_OVERWRITE {
