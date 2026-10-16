@@ -15,6 +15,7 @@
 #include "data/extent_update.h"
 #include "data/io_misc.h"
 #include "data/reconcile/trigger.h"
+#include "data/reflink.h"
 #include "data/write.h"
 
 #include "fs/inode.h"
@@ -375,6 +376,68 @@ static int adjust_i_size(struct btree_trans *trans, subvol_inum inum,
 	return bch2_inode_write(trans, &iter, &inode_u);
 }
 
+/*
+ * The shift reached @k in an ancestor snapshot, where it stays - the ancestor
+ * and its other descendants still see it - so moving it here is sharing it.
+ * Returns in @copy the key to move, from @src_pos on.
+ *
+ * Data is shared by reflink, as remap does: the ancestor's extent becomes
+ * indirect in place, in its own snapshot, and what moves is the reflink_p.
+ * Copying the extent's pointers instead would leave two keys at different
+ * offsets in the same space with no reflink_v between them: backpointers
+ * collide, the space is counted twice, and a move of one leaves the other
+ * pointing at freed space.
+ *
+ * An unwritten extent isn't reflinked: its space moves here, and the
+ * ancestor's key is deleted over the range that moves - reading as zeroes
+ * either way, and the extent update machinery keeps the rest visible.
+ */
+static int finsert_take_ancestor_extent(struct btree_trans *trans,
+					struct bkey_s_c k, struct bpos src_pos,
+					struct bkey_i **copy)
+{
+	struct bch_fs *c = trans->c;
+
+	if (bkey_extent_is_unwritten(c, k)) {
+		struct bpos start = bpos_max(bkey_start_pos(k.k), src_pos);
+		struct bkey_i *del = errptr_try(bch2_trans_kmalloc(trans, sizeof(*del)));
+
+		bkey_init(&del->k);
+		del->k.p = k.k->p;
+		bch2_key_resize(&del->k, k.k->p.offset - start.offset);
+
+		try(bch2_btree_insert_trans(trans, BTREE_ID_extents, del, 0));
+
+		*copy = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
+		return 0;
+	}
+
+	/*
+	 * As remap; asked for only here, as it may set the superblock's
+	 * incompat version:
+	 */
+	bch2_check_set_feature(c, BCH_FEATURE_reflink);
+	bool reflink_p_may_update_opts =
+		!bch2_request_incompat_feature(c, bcachefs_metadata_version_reflink_p_may_update_opts);
+
+	CLASS(btree_iter, src_iter)(trans, BTREE_ID_extents, k.k->p,
+				    BTREE_ITER_intent|
+				    BTREE_ITER_all_snapshots|
+				    BTREE_ITER_not_extents);
+	try(bch2_btree_iter_traverse(&src_iter));
+
+	/* Made a reflink_p in place: a one pointer extent's value is smaller */
+	struct bkey_i *orig = errptr_try(bch2_trans_kmalloc(trans,
+				bkey_bytes(k.k) + sizeof(struct bch_reflink_p)));
+	bkey_reassemble(orig, k);
+
+	try(bch2_make_extent_indirect(trans, &src_iter, orig, reflink_p_may_update_opts));
+
+	/* @orig is now the ancestor's reflink_p, queued as its update */
+	*copy = errptr_try(bch2_bkey_make_mut_noupdate(trans, bkey_i_to_s_c(orig)));
+	return 0;
+}
+
 static int __bch2_resume_logged_op_finsert(struct btree_trans *trans,
 					   struct bkey_i *op_k,
 					   u64 *i_sectors_delta)
@@ -450,8 +513,16 @@ case LOGGED_OP_FINSERT_shift_extents:
 		    bkey_le(k.k->p, POS(inum.inum, src_offset)))
 			break;
 
-		copy = bch2_bkey_make_mut_noupdate(trans, k);
-		if ((ret = PTR_ERR_OR_ZERO(copy)))
+		bool from_ancestor = snapshot != k.k->p.snapshot;
+		bool shared_data = from_ancestor && bkey_extent_is_direct_data(k.k);
+
+		if (shared_data) {
+			ret = finsert_take_ancestor_extent(trans, k, src_pos, &copy);
+		} else {
+			copy = bch2_bkey_make_mut_noupdate(trans, k);
+			ret = PTR_ERR_OR_ZERO(copy);
+		}
+		if (ret)
 			goto btree_err;
 
 		unsigned nr_replicas =
@@ -459,10 +530,12 @@ case LOGGED_OP_FINSERT_shift_extents:
 
 		/*
 		 * Only one of these fires: either the key lives in an ancestor
-		 * snapshot and we're adding a reference to it here, or it's
-		 * already ours and only a split adds anything.
+		 * snapshot and we're adding a reference to it here - a
+		 * reservation; shared data is a reflink_p now, or unwritten
+		 * space that moved - or it's already ours and only a split adds
+		 * anything.
 		 */
-		if (snapshot != k.k->p.snapshot) {
+		if (from_ancestor && !shared_data) {
 			ret = bch2_disk_reservation_add(c, &disk_res,
 					copy->k.size, nr_replicas, 0);
 			if (ret)
