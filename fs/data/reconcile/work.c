@@ -906,9 +906,7 @@ static void reconcile_set_move_limits(struct moving_context *ctxt,
 				      struct bbpos work)
 {
 	struct bch_fs *c = ctxt->trans->c;
-	unsigned target = data_opts->target ?:
-		opts->background_target ?:
-		opts->foreground_target;
+	unsigned target = data_opts->target;
 
 	if (!reconcile_target_has_rotational(c, target))
 		return;
@@ -929,7 +927,7 @@ static void reconcile_scan_set_move_limits(struct moving_context *ctxt,
 
 	bch2_inode_opts_get(c, &opts, s.type == RECONCILE_SCAN_metadata);
 
-	unsigned target = opts.background_target ?: opts.foreground_target;
+	unsigned target = opts.background_target;
 
 	if (reconcile_target_has_rotational(c, target))
 		bch2_moving_ctxt_set_rotational_limits(ctxt,

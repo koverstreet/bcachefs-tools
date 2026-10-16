@@ -104,6 +104,10 @@ static void move_write(struct data_update *u)
 	struct moving_context *ctxt = u->ctxt;
 	struct bch_read_bio *rbio = &u->rbio;
 
+	/* Keep completed reads charged until their writes can be submitted. */
+	atomic_sub(u->k.k->k.size, &ctxt->read_sectors);
+	atomic_dec(&ctxt->read_ios);
+
 	if (ctxt->stats) {
 		/*
 		 * A poisoned extent is data we've already lost, even when it
@@ -206,8 +210,10 @@ static void move_read_endio(struct bio *bio)
 	struct data_update *u = container_of(bio, struct data_update, rbio.bio);
 	struct moving_context *ctxt = u->ctxt;
 
-	atomic_sub(u->k.k->k.size, &ctxt->read_sectors);
-	atomic_dec(&ctxt->read_ios);
+	/*
+	 * Keep the read's window reservation until its queued write can be
+	 * submitted, so completed buffers continue to provide backpressure.
+	 */
 	u->read_done = true;
 
 	wake_up(&ctxt->wait);
@@ -306,12 +312,21 @@ void bch2_moving_ctxt_init(struct moving_context *ctxt,
 #define MOVE_ROTATIONAL_HIPRI_IOS_IN_FLIGHT	128U
 #define MOVE_ROTATIONAL_HIPRI_BYTES_IN_FLIGHT	(16U << 20)
 
-void bch2_moving_ctxt_reset_limits(struct moving_context *ctxt)
+static void bch2_moving_ctxt_refresh_limits(struct moving_context *ctxt)
 {
 	struct bch_fs *c = ctxt->trans->c;
 
-	ctxt->max_sectors_in_flight = c->opts.move_bytes_in_flight >> 9;
-	ctxt->max_ios_in_flight = c->opts.move_ios_in_flight;
+	ctxt->max_sectors_in_flight = min(c->opts.move_bytes_in_flight >> 9,
+					  ctxt->rotational_max_sectors_in_flight ?: UINT_MAX);
+	ctxt->max_ios_in_flight = min(c->opts.move_ios_in_flight,
+				      ctxt->rotational_max_ios_in_flight ?: UINT_MAX);
+}
+
+void bch2_moving_ctxt_reset_limits(struct moving_context *ctxt)
+{
+	ctxt->rotational_max_sectors_in_flight = 0;
+	ctxt->rotational_max_ios_in_flight = 0;
+	bch2_moving_ctxt_refresh_limits(ctxt);
 	ctxt->limit_source = MOVE_LIMITS_default;
 	ctxt->limit_source_id = 0;
 }
@@ -321,16 +336,13 @@ void bch2_moving_ctxt_set_rotational_limits(struct moving_context *ctxt,
 					    enum move_limit_source source,
 					    unsigned source_id)
 {
-	u32 max_ios = limit == MOVE_ROTATIONAL_LIMIT_hipri
+	ctxt->rotational_max_ios_in_flight = limit == MOVE_ROTATIONAL_LIMIT_hipri
 		? MOVE_ROTATIONAL_HIPRI_IOS_IN_FLIGHT
 		: MOVE_ROTATIONAL_BG_IOS_IN_FLIGHT;
-	u32 max_bytes = limit == MOVE_ROTATIONAL_LIMIT_hipri
+	ctxt->rotational_max_sectors_in_flight = (limit == MOVE_ROTATIONAL_LIMIT_hipri
 		? MOVE_ROTATIONAL_HIPRI_BYTES_IN_FLIGHT
-		: MOVE_ROTATIONAL_BG_BYTES_IN_FLIGHT;
-
-	ctxt->max_ios_in_flight = min(ctxt->max_ios_in_flight, max_ios);
-	ctxt->max_sectors_in_flight = min(ctxt->max_sectors_in_flight,
-					  max_bytes >> 9);
+		: MOVE_ROTATIONAL_BG_BYTES_IN_FLIGHT) >> 9;
+	bch2_moving_ctxt_refresh_limits(ctxt);
 	ctxt->limit_source = source;
 	ctxt->limit_source_id = source_id;
 }
@@ -626,6 +638,7 @@ int bch2_move_ratelimit(struct moving_context *ctxt)
 		}
 	} while (delay);
 
+	bch2_moving_ctxt_refresh_limits(ctxt);
 	move_ctxt_wait_event(ctxt,
 		atomic_read(&ctxt->write_sectors) < ctxt->max_sectors_in_flight &&
 		atomic_read(&ctxt->read_sectors) < ctxt->max_sectors_in_flight &&

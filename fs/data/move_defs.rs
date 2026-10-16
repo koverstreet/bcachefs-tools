@@ -68,6 +68,8 @@ pub struct moving_context {
     pub max_ios_in_flight: c_uint,
     pub limit_source: c::move_limit_source,
     pub limit_source_id: c_uint,
+    pub rotational_max_sectors_in_flight: c_uint,
+    pub rotational_max_ios_in_flight: c_uint,
 
     /* For waiting on outstanding reads and writes: */
     pub cl: c::closure,
