@@ -15,23 +15,42 @@ fn opt_flags() -> u32 {
     c::opt_flags::OPT_FS.bits() | c::opt_flags::OPT_DEVICE.bits()
 }
 
-fn schedule_reconcile_after_offline_io_opt_change(fs: &bcachefs_kernel::fs::Fs) -> Result<()> {
-    let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
-    let ext: &mut c::bch_sb_field_ext =
-        unsafe { bcachefs_kernel::sb::io::sb_field_get_minsize(&mut (*fs.raw).disk_sb, ext_u64s) }
-            .ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))?;
-    mark_reconcile_recovery_pass(ext);
-    Ok(())
+fn reconcile_stable_bit() -> u64 {
+    let pass = 1u64 << c::bch_recovery_pass::BCH_RECOVERY_PASS_set_fs_needs_reconcile as u64;
+    unsafe { c::bch2_recovery_passes_to_stable(pass) }
 }
 
-/// Set the stable recovery-pass bit that makes the next mount rescan for
-/// reconcile work. Idempotent; only called when an inode option really
-/// changed (`opt_set_sb` returned true), so unchanged values never reach it.
-fn mark_reconcile_recovery_pass(ext: &mut c::bch_sb_field_ext) {
-    let pass = 1u64 << c::bch_recovery_pass::BCH_RECOVERY_PASS_set_fs_needs_reconcile as u64;
-    let stable_pass = unsafe { c::bch2_recovery_passes_to_stable(pass) };
-    let r = &mut ext.recovery_passes_required[0];
-    r.set(r.get() | stable_pass);
+fn sb_ext(fs: &bcachefs_kernel::fs::Fs) -> Result<&mut c::bch_sb_field_ext> {
+    let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
+    unsafe { bcachefs_kernel::sb::io::sb_field_get_minsize(&mut (*fs.raw).disk_sb, ext_u64s) }
+        .ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))
+}
+
+/// Bit-math shared by preset/restore so the unit tests pin it down.
+fn with_marker_bit(cur: u64, set: bool) -> u64 {
+    let bit = reconcile_stable_bit();
+    if set { cur | bit } else { cur & !bit }
+}
+
+/// Pre-set the reconcile marker *before* Fs::opt_set_sb runs: opt_set_sb
+/// writes the superblock itself when the value changed, so setting the bit
+/// first makes the option change and its marker durable in that same write.
+/// A crash between them can then never persist the option without the scan.
+/// Returns the bit's previous state; when nothing actually changed the caller
+/// restores it, so re-setting an unchanged value schedules no scan.
+fn preset_reconcile_marker(fs: &bcachefs_kernel::fs::Fs) -> Result<bool> {
+    let _lock = fs.sb_lock();
+    let r = &mut sb_ext(fs)?.recovery_passes_required[0];
+    let was_set = r.get() & reconcile_stable_bit() != 0;
+    r.set(with_marker_bit(r.get(), true));
+    Ok(was_set)
+}
+
+fn restore_reconcile_marker(fs: &bcachefs_kernel::fs::Fs, was_set: bool) -> Result<()> {
+    let _lock = fs.sb_lock();
+    let r = &mut sb_ext(fs)?.recovery_passes_required[0];
+    r.set(with_marker_bit(r.get(), was_set));
+    Ok(())
 }
 
 fn set_option_cmd() -> Command {
@@ -182,6 +201,8 @@ fn set_option_offline(
     let mut modified = false;
     let mut failed = std::collections::BTreeSet::new();
     let mut needs_reconcile = false;
+    let mut marker_preset = false;
+    let mut marker_was_set = false;
 
     for (name, value) in opts {
 
@@ -211,12 +232,19 @@ fn set_option_offline(
                 failed.insert(name.as_str());
                 continue;
             }
-            // opt_set_sb() returns false when the value is unchanged: then
-            // neither `modified` nor `needs_reconcile` is set, so no
-            // superblock write and no recovery bit are forced.
+            // opt_set_sb() writes the superblock itself when the value
+            // changed, so pre-set the reconcile marker first: then the option
+            // change and the marker persist in the same write. When the value
+            // is unchanged (returns false) the marker is restored below, so
+            // no scan is scheduled spuriously.
+            let is_inode_opt = unsafe { c::bch2_opt_is_inode_opt(opt_id) };
+            if is_inode_opt && !marker_preset {
+                marker_was_set = preset_reconcile_marker(&fs)?;
+                marker_preset = true;
+            }
             if fs.opt_set_sb(None, opt, val, Some(&c_value)) {
                 modified = true;
-                needs_reconcile |= unsafe { c::bch2_opt_is_inode_opt(opt_id) };
+                needs_reconcile |= is_inode_opt;
             }
         }
 
@@ -262,11 +290,12 @@ fn set_option_offline(
         }
     }
 
+    if marker_preset && !needs_reconcile {
+        restore_reconcile_marker(&fs, marker_was_set)?;
+    }
+
     if modified {
         let _lock = fs.sb_lock();
-        if needs_reconcile {
-            schedule_reconcile_after_offline_io_opt_change(&fs)?;
-        }
         fs.write_super_ret()
             .map_err(|e| anyhow::anyhow!("error writing superblock: {e}"))?;
     }
@@ -292,28 +321,25 @@ pub const CMD: super::CmdDef = raw_cmd!("set-fs-option", "Set filesystem options
 mod tests {
     use super::*;
 
-    fn zeroed_ext() -> c::bch_sb_field_ext {
-        unsafe { std::mem::zeroed() }
-    }
-
     #[test]
-    fn reconcile_recovery_bit_is_set_and_stable() {
-        let mut ext = zeroed_ext();
-        mark_reconcile_recovery_pass(&mut ext);
+    fn reconcile_marker_bit_is_nonzero_and_stable() {
         let pass = 1u64 << c::bch_recovery_pass::BCH_RECOVERY_PASS_set_fs_needs_reconcile as u64;
         let want = unsafe { c::bch2_recovery_passes_to_stable(pass) };
         assert_ne!(want, 0);
-        assert_eq!(ext.recovery_passes_required[0].get(), want);
+        assert_eq!(with_marker_bit(0, true), want);
     }
 
     #[test]
-    fn reconcile_recovery_bit_is_idempotent_and_keeps_other_bits() {
-        let mut ext = zeroed_ext();
-        ext.recovery_passes_required[0].set(1);
-        mark_reconcile_recovery_pass(&mut ext);
-        let once = ext.recovery_passes_required[0].get();
-        mark_reconcile_recovery_pass(&mut ext);
-        assert_eq!(ext.recovery_passes_required[0].get(), once);
+    fn reconcile_marker_set_is_idempotent_and_keeps_other_bits() {
+        let once = with_marker_bit(1, true);
+        assert_eq!(with_marker_bit(once, true), once);
         assert_eq!(once & 1, 1);
+    }
+
+    #[test]
+    fn reconcile_marker_restore_clears_only_our_bit() {
+        let bit = reconcile_stable_bit();
+        assert_eq!(with_marker_bit(bit | 1, false), 1);
+        assert_eq!(with_marker_bit(1, true) & 1, 1);
     }
 }
