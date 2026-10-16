@@ -182,7 +182,7 @@ pub unsafe fn sb_members_summary_to_text(out: &mut Printbuf, sb: &c::bch_sb, dev
             let missing = path.is_none();
             let path = path.unwrap_or_else(|| "(not found)".to_string());
 
-            let state = (m.flags.get() & 0xf) as u8;
+            let state = m.state() as u8;
             let state_str = sb::members::member_state_str(state);
             let err_read = m.errors[0].get();
             let err_write = m.errors[1].get();
