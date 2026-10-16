@@ -125,6 +125,11 @@ impl c::bch_fs_snapshots {
         Table::get(self, &g).entry(id).map_or(c::snapshot_id_state::SNAPSHOT_ID_empty, |s| s.state)
     }
 
+    /// @id is a live node: as bch2_snapshot_exists().
+    pub fn exists(&self, id: u32) -> bool {
+        self.id_state(id) == c::snapshot_id_state::SNAPSHOT_ID_live
+    }
+
     /// Of a child of @parent; 0 for no parent. Panics if @parent isn't in the
     /// table, rather than have repair write a wrong depth.
     pub fn depth(&self, parent: u32) -> u32 {
@@ -293,6 +298,16 @@ pub fn check_key_has_snapshot(
 pub fn lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::Snapshot, BchError> {
     t.bkey_get_val::<c::Snapshot>(c::btree_id::snapshots, pos(0, id as u64),
                                   BtreeIterFlags::empty())
+}
+
+/// The snapshot keys of the tree @start is in, for an error message: as
+/// bch2_snapshot_tree_keys_to_text().
+#[cold]
+pub fn tree_keys_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, start: u32)
+    -> Result<(), BchError>
+{
+    let ret = unsafe { c::bch2_snapshot_tree_keys_to_text(out.as_raw(), t.raw(), start) };
+    t.result(ret)
 }
 
 /// ENOENT if there's none.

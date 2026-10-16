@@ -13,6 +13,9 @@ use core::ffi::{c_int, c_uint};
 use cstruct_macros::c_extern;
 
 c_extern! {
+    #[cold]
+    pub fn bch2_snapshot_tree_keys_to_text(out: *mut c::printbuf, trans: *mut c::btree_trans,
+                                           start: u32) -> c_int;
     pub fn __bch2_snapshot_tree_create(trans: *mut c::btree_trans) -> *mut c::bkey_i_snapshot_tree;
     pub fn bch2_snapshot_tree_lookup(trans: *mut c::btree_trans, id: u32,
                                      s: *mut c::SnapshotTree) -> c_int;
