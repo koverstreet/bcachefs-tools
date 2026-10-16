@@ -41,7 +41,6 @@ DECLARE_EVENT_CLASS(fs_str,
 	x(btree_path_lock)						\
 	x(btree_path_should_be_locked)					\
 	x(btree_path_clone)						\
-	x(btree_path_save_pos)						\
 	x(btree_path_get_ll)						\
 	x(btree_path_put_ll)						\
 	x(btree_path_get)						\

@@ -3034,25 +3034,6 @@ static struct bkey_s_c __bch2_btree_iter_peek_prev(struct btree_iter *iter, stru
 	return k;
 }
 
-/**
- * bch2_btree_iter_peek_prev_min() - returns first key less than or equal to
- * iterator's current position
- * @iter:	iterator to peek from
- * @end:	search limit: returns keys greater than or equal to @end
- *
- * Returns:	key if found, or an error extractable with bkey_err().
- */
-noinline __cold
-static void __btree_path_save_pos_trace(struct btree_trans *trans, unsigned old_idx,
-					btree_path_idx_t saved_path)
-{
-	__event_trace(trans->c, btree_path_save_pos, buf, ({
-		prt_printf(&buf, "%s: old %u\n", trans->fn, old_idx);
-		bch2_btree_path_to_text_short(&buf, trans, saved_path,
-					      trans->paths + saved_path);
-	}));
-}
-
 noinline __cold
 static void __btree_iter_peek_prev_min_trace(struct bch_fs *c, struct bkey_s_c k)
 {
@@ -3067,6 +3048,64 @@ static void __btree_iter_peek_prev_min_trace(struct bch_fs *c, struct bkey_s_c k
 	}));
 }
 
+/*
+ * The key visible in @iter->snapshot at exactly @pos - for an extents
+ * iterator, the extent ending at @pos - or bkey_s_c_null if nothing is: the
+ * nearest version among iter->snapshot and its ancestors, unless that's a
+ * whiteout.
+ *
+ * Resolved forwards, as peek_slot() does: our own snapshot's version comes
+ * first, then each ancestor's in turn, so the first one visible is the
+ * answer, journal keys and the transaction's updates included. Searching
+ * backwards meets the furthest ancestor first and would have to remember
+ * candidates.
+ *
+ * Done on a copy without is_extents, so the lookup is of exactly @pos: an
+ * extents peek_slot() of the extent containing @pos - 1 would scan on to the
+ * next visible extent, and a backward search calling this at each position
+ * through a run of whiteouts would rescan it from each.
+ *
+ * On success iter->path is the copy's, at the key, and iter->k holds it.
+ */
+static struct bkey_s_c btree_iter_peek_visible_at(struct btree_iter *iter, struct bpos pos)
+{
+	CLASS(btree_iter_copy, iter2)(iter);
+	iter2.flags &= ~(BTREE_ITER_is_extents|BTREE_ITER_nofilter_whiteouts);
+
+	bch2_btree_iter_set_pos(&iter2, SPOS(pos.inode, pos.offset, iter->snapshot));
+
+	struct bkey_s_c k = bch2_btree_iter_peek_slot(&iter2);
+	if (bkey_err(k))
+		return k;
+	/* A hole, or a whiteout - and it points into iter2: */
+	if (!k.k || bkey_deleted(k.k))
+		return bkey_s_c_null;
+
+	swap(iter->path,		iter2.path);
+	swap(iter->key_cache_path,	iter2.key_cache_path);
+	iter->k = iter2.k;
+	k.k = &iter->k;
+	return k;
+}
+
+/**
+ * bch2_btree_iter_peek_prev_min() - returns first key less than or equal to
+ * iterator's current position
+ * @iter:	iterator to peek from
+ * @end:	search limit: returns keys greater than or equal to @end
+ *
+ * With BTREE_ITER_filter_snapshots: the greatest key visible in
+ * iter->snapshot at or below iter->pos - for extents, starting before it -
+ * and at or above @end. What's visible at a position is the version there of
+ * the nearest of iter->snapshot and its ancestors, unless that's a whiteout:
+ * then nothing is.
+ *
+ * Snapshot IDs decrease from the root down, so searching backwards meets a
+ * position's versions furthest ancestor first; the nearest is found forwards
+ * instead (btree_iter_peek_visible_at()), once per position that has one.
+ *
+ * Returns:	key if found, or an error extractable with bkey_err().
+ */
 struct bkey_s_c bch2_btree_iter_peek_prev_min(struct btree_iter *iter, struct bpos end)
 {
 	if ((iter->flags & (BTREE_ITER_is_extents|BTREE_ITER_filter_snapshots)) &&
@@ -3095,7 +3134,14 @@ struct bkey_s_c bch2_btree_iter_peek_prev_min(struct btree_iter *iter, struct bp
 	struct btree_trans *trans = iter->trans;
 	struct bpos search_key = iter->pos;
 	struct bkey_s_c k;
-	btree_path_idx_t saved_path = 0;
+
+	/*
+	 * Every snapshot's key at this position: an ancestor's sorts after
+	 * iter->snapshot's, and searching back from iter->pos would skip it -
+	 * for extents, the one ending here:
+	 */
+	if (iter->flags & BTREE_ITER_filter_snapshots)
+		search_key.snapshot = U32_MAX;
 
 	bch2_trans_verify_not_unlocked_or_in_restart(trans);
 	bch2_btree_iter_verify_entry_exit(iter);
@@ -3115,21 +3161,6 @@ struct bkey_s_c bch2_btree_iter_peek_prev_min(struct btree_iter *iter, struct bp
 			goto out_no_locked;
 
 		if (iter->flags & BTREE_ITER_filter_snapshots) {
-			struct btree_path *s = saved_path ? trans->paths + saved_path : NULL;
-			if (s && bpos_lt(k.k->p, SPOS(s->pos.inode, s->pos.offset, iter->snapshot))) {
-				/*
-				 * If we have a saved candidate, and we're past
-				 * the last possible snapshot overwrite, return
-				 * it:
-				 */
-				bch2_path_put(trans, iter->path,
-					      iter->flags & BTREE_ITER_intent);
-				iter->path = saved_path;
-				saved_path = 0;
-				k = bch2_btree_path_peek_slot(btree_iter_path(trans, iter), &iter->k);
-				break;
-			}
-
 			/*
 			 * We need to check against @end before FILTER_SNAPSHOTS because
 			 * if we get to a different inode that requested we might be
@@ -3144,33 +3175,30 @@ struct bkey_s_c bch2_btree_iter_peek_prev_min(struct btree_iter *iter, struct bp
 				continue;
 			}
 
-			if (k.k->p.snapshot != iter->snapshot) {
+			/*
+			 * A version visible in iter->snapshot is at this
+			 * position: which one we see - if any - is decided
+			 * forwards, from iter->snapshot's own up:
+			 */
+			struct bpos pos = k.k->p;
+
+			k = btree_iter_peek_visible_at(iter, pos);
+			if (unlikely(bkey_err(k))) {
 				/*
-				 * Have a key visible in iter->snapshot, but
-				 * might have overwrites: - save it and keep
-				 * searching. Unless it's a whiteout - then drop
-				 * our previous saved candidate:
+				 * iter->k still holds the version
+				 * __bch2_btree_iter_peek_prev() found: make it
+				 * consistent with iter->pos, as its own error
+				 * path does:
 				 */
-				if (saved_path) {
-					bch2_path_put(trans, saved_path,
-						      iter->flags & BTREE_ITER_intent);
-					saved_path = 0;
-				}
-
-				if (!bkey_extent_whiteout(k.k)) {
-					saved_path = btree_path_clone(trans, iter->path,
-								iter->flags & BTREE_ITER_intent,
-								_THIS_IP_);
-					event_trace_fn(trans->c, btree_path_save_pos,
-						       __btree_path_save_pos_trace(trans, iter->path, saved_path));
-				}
-
-				search_key = bpos_predecessor(k.k->p);
-				continue;
+				bch2_btree_iter_set_pos(iter, iter->pos);
+				goto out_no_locked;
 			}
 
-			if (bkey_extent_whiteout(k.k)) {
-				search_key = bkey_predecessor(iter, k.k->p);
+			if (!k.k) {
+				if (!bkey_gt(pos, end))
+					goto end;
+
+				search_key = bkey_predecessor(iter, pos);
 				search_key.snapshot = U32_MAX;
 				continue;
 			}
@@ -3194,9 +3222,6 @@ struct bkey_s_c bch2_btree_iter_peek_prev_min(struct btree_iter *iter, struct bp
 	if (iter->flags & BTREE_ITER_filter_snapshots)
 		iter->pos.snapshot = iter->snapshot;
 out_no_locked:
-	if (saved_path)
-		bch2_path_put(trans, saved_path, iter->flags & BTREE_ITER_intent);
-
 	bch2_btree_iter_verify_entry_exit(iter);
 	bch2_btree_iter_verify(iter);
 
