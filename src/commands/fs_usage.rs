@@ -1,13 +1,11 @@
-use std::fmt::Write as FmtWrite;
-use std::os::unix::fs::MetadataExt;
-
 use anyhow::{anyhow, Result};
 use bch_bindgen::c;
+
 use clap::Parser;
 
 use crate::commands::DeviceNameArgs;
 use crate::wrappers::accounting::{
-    AccountingEntry, DiskAccountingKind, compression_type_from_u8, data_type, data_type_from_u8, data_type_is_empty,
+    AccountingEntry, compression_type_from_u8, data_type, data_type_from_u8, data_type_is_empty,
     disk_accounting_type, parse_accounting_counters, reconcile_type_from_u8,
 };
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
@@ -15,7 +13,6 @@ use bcachefs_kernel::util::vstructs::ArmError;
 use crate::wrappers::handle::{BcachefsHandle, DevUsage};
 use bcachefs_kernel::{btree, metadata_version};
 use bcachefs_kernel::opts::{prt_data_type, prt_compression_type, prt_reconcile_type};
-use bcachefs_kernel::btree::bkey::BkeyValSC;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
 use crate::wrappers::sysfs::{self, DeviceNameMode, DevInfo, bcachefs_kernel_version};
@@ -304,8 +301,7 @@ fn fs_usage_v1_to_text(
 
     if has(Field::Inodes) {
         let entry = path_inum.map(|inum| inode_accounting_entry(handle, inum)).transpose()?.flatten();
-        let entries: Vec<_> = entry.iter().collect();
-        inode_usage_to_text(out, &entries, path, path_inum);
+        inode_usage_to_text(out, entry.as_ref(), path, path_inum);
     }
     // Rebalance / reconcile work
     if has(Field::RebalanceWork) {
@@ -343,61 +339,60 @@ fn fs_usage_v1_to_text(
     Ok(())
 }
 
-fn inode_accounting_entry(handle: &BcachefsHandle, inum: u64) -> Result<Option<AccountingEntry>, errno::Errno> {
-    let pos = DiskAccountingKind::Inum { inum }.encode();
+fn inode_accounting_entry(handle: &BcachefsHandle, inum: u64) -> Result<Option<AccountingEntry>> {
+    let pos = c::disk_accounting_pos::from_bpos(
+        c::disk_accounting_pos::from_arm(c::bch_acct_inum { inum }).to_bpos(),
+    );
+    let bpos = pos.to_bpos();
     let mut iter = OnlineBtreeIter::with_buf_size(
         handle, bcachefs_kernel::btree_id::accounting, 0,
-        pos.as_bpos(), pos.as_bpos(), OnlineIterFlags::default(), 256,
+        bpos, bpos, OnlineIterFlags::default(), 256,
     );
     let Some(key) = iter.next()? else {
         return Ok(None);
     };
-    if key.pos() != pos.as_bpos() || !matches!(key.v(), BkeyValSC::accounting(_, _)) {
-        return Err(errno::Errno(libc::EPROTO));
+    if key.k.p != bpos || !key.k.is::<c::Accounting>() {
+        return Err(anyhow!("accounting btree returned a non-matching key for inode {inum}"));
     }
     Ok(Some(AccountingEntry {
         pos,
         counters: parse_accounting_counters(key.val_bytes()),
     }))
 }
+
 fn inode_usage_to_text(
     out: &mut Printbuf,
-    sorted: &[&AccountingEntry],
+    entry: Option<&AccountingEntry>,
     path: &str,
     path_inum: Option<u64>,
 ) {
-    write!(out, "\nInode usage for selected path").unwrap();
+    write!(out, "\nInode usage for selected path");
     if let Some(inum) = path_inum {
-        write!(out, " (inum {})", inum).unwrap();
+        write!(out, " (inum {})", inum);
     }
-    writeln!(out, ":\nbtree counters combine snapshots sharing this inode; not recursive directory totals").unwrap();
-    writeln!(out, "may lag pending accounting updates").unwrap();
+    writeln!(out, ":\nbtree counters combine snapshots sharing this inode; not recursive directory totals");
+    writeln!(out, "may lag pending accounting updates");
 
-    let Some(inum) = path_inum else {
-        writeln!(out, "{}:\tno local path inode available", path).unwrap();
+    if path_inum.is_none() {
+        writeln!(out, "{}:\tno local path inode available", path);
         return;
-    };
-
-    let entry = sorted.iter().find(|e| matches!(
-        e.pos.decode(),
-        DiskAccountingKind::Inum { inum: entry_inum } if entry_inum == inum
-    ));
+    }
 
     out.aligned(|sub| {
-        write!(sub, "Path\tExtents\tLogical\rOn disk\r\n").unwrap();
-        write!(sub, "{}:\t", path).unwrap();
+        write!(sub, "Path\tExtents\tLogical\rOn disk\r\n");
+        write!(sub, "{}:\t", path);
         if let Some(entry) = entry {
-            write!(sub, "{}\t", entry.counter(0)).unwrap();
+            write!(sub, "{}\t", entry.counter(0));
             sub.units_sectors(entry.counter(1));
-            write!(sub, "\r").unwrap();
+            write!(sub, "\r");
             sub.units_sectors(entry.counter(2));
         } else {
-            write!(sub, "0\t").unwrap();
+            write!(sub, "0\t");
             sub.units_sectors(0);
-            write!(sub, "\r").unwrap();
+            write!(sub, "\r");
             sub.units_sectors(0);
         }
-        write!(sub, "\r\n").unwrap();
+        write!(sub, "\r\n");
     });
 }
 
@@ -824,7 +819,7 @@ pub const CMD: super::CmdDef = typed_cmd!("usage", "Show filesystem disk usage",
 
 #[cfg(test)]
 mod tests {
-    use super::{inode_usage_to_text, AccountingEntry, Cli, DiskAccountingKind, Field, Printbuf};
+    use super::{c, inode_usage_to_text, AccountingEntry, Cli, Field, Printbuf};
     use clap::Parser;
 
     #[test]
@@ -837,15 +832,13 @@ mod tests {
     #[test]
     fn inode_usage_selects_only_the_requested_inode() {
         let selected = AccountingEntry {
-            pos: DiskAccountingKind::Inum { inum: 42 }.encode(),
+            pos: c::disk_accounting_pos::from_bpos(
+                c::disk_accounting_pos::from_arm(c::bch_acct_inum { inum: 42 }).to_bpos(),
+            ),
             counters: vec![3, 8, 16],
         };
-        let neighbour = AccountingEntry {
-            pos: DiskAccountingKind::Inum { inum: 43 }.encode(),
-            counters: vec![999, 999, 999],
-        };
         let mut out = Printbuf::new();
-        inode_usage_to_text(&mut out, &[&neighbour, &selected], "/selected", Some(42));
+        inode_usage_to_text(&mut out, Some(&selected), "/selected", Some(42));
         assert!(out.as_str().contains("(inum 42)"));
         assert!(out.as_str().contains("counters combine snapshots sharing this inode"));
         let row = out.as_str().lines().find(|row| row.starts_with("/selected:")).unwrap();
@@ -855,12 +848,12 @@ mod tests {
     #[test]
     fn inode_usage_distinguishes_missing_path_from_zero_accounting() {
         let mut missing = Printbuf::new();
-        inode_usage_to_text(&mut missing, &[], "filesystem-uuid", None);
+        inode_usage_to_text(&mut missing, None, "filesystem-uuid", None);
         assert!(missing.as_str().contains("no local path inode available"));
         assert!(!missing.as_str().contains("Logical"));
 
         let mut zero = Printbuf::new();
-        inode_usage_to_text(&mut zero, &[], "/empty", Some(42));
+        inode_usage_to_text(&mut zero, None, "/empty", Some(42));
         let row = zero.as_str().lines().find(|row| row.starts_with("/empty:")).unwrap();
         assert_eq!(row.split_whitespace().collect::<Vec<_>>(), vec!["/empty:", "0", "0", "0"]);
     }
