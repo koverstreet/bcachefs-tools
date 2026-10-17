@@ -210,11 +210,12 @@ mod vfs {
     }
 
     /// The warnings an accounting call has for after it unlocks: quota type,
-    /// netlink warning.
+    /// netlink warning. Two at most from each check_limit() - a below message
+    /// for each limit - and a transfer checks both counters, of each type.
     #[derive(Default)]
     struct QuotaMsgs {
         nr: usize,
-        m:  [(usize, u32); QTYP_NR * c::Q_COUNTERS as usize],
+        m:  [(usize, u32); QTYP_NR * c::Q_COUNTERS as usize * 2],
     }
 
     impl QuotaMsgs {
@@ -225,11 +226,13 @@ mod vfs {
             self.nr += 1;
         }
 
-        fn prepare_warning(&mut self, qc: &c::MemquotaCounter, qtype: usize, counter: usize, msg: QuotaMsg) {
+        /// Once, until usage goes back below the limit.
+        fn prepare_warning(&mut self, qc: &mut c::MemquotaCounter, qtype: usize, counter: usize, msg: QuotaMsg) {
             if qc.warning_issued & msg.bit() != 0 {
                 return;
             }
 
+            qc.warning_issued |= msg.bit();
             self.prepare(qtype, counter, msg);
         }
 
@@ -241,6 +244,30 @@ mod vfs {
                 }
             }
         }
+    }
+
+    /// Usage @n is over @limit - 0, no limit, it never is.
+    fn over(limit: u64, n: u64) -> bool {
+        limit != 0 && limit < n
+    }
+
+    /// For each limit usage @n isn't over, clear its warnings - and the soft
+    /// limit's grace period - so they're only set while it is, as the VFS's
+    /// are. Returns the warnings cleared.
+    fn clear_over(qc: &mut c::MemquotaCounter, n: u64) -> u32 {
+        let mut clear = 0;
+
+        if !over(qc.hardlimit, n) {
+            clear |= QuotaMsg::HardWarn.bit();
+        }
+        if !over(qc.softlimit, n) {
+            clear |= QuotaMsg::SoftWarn.bit() | QuotaMsg::SoftLongWarn.bit();
+            qc.timer = 0;
+        }
+
+        let cleared = qc.warning_issued & clear;
+        qc.warning_issued &= !clear;
+        cleared
     }
 
     /// One quota type, locked: its counters are touched only through this.
@@ -295,26 +322,23 @@ mod vfs {
             }
 
             if v <= 0 {
-                if n < qc.hardlimit && qc.warning_issued & QuotaMsg::HardWarn.bit() != 0 {
-                    qc.warning_issued &= !QuotaMsg::HardWarn.bit();
+                let cleared = clear_over(qc, n);
+
+                if cleared & QuotaMsg::HardWarn.bit() != 0 {
                     msgs.prepare(qtype, counter, QuotaMsg::HardBelow);
                 }
-
-                if n < qc.softlimit && qc.warning_issued & QuotaMsg::SoftWarn.bit() != 0 {
-                    qc.warning_issued &= !QuotaMsg::SoftWarn.bit();
+                if cleared & QuotaMsg::SoftWarn.bit() != 0 {
                     msgs.prepare(qtype, counter, QuotaMsg::SoftBelow);
                 }
-
-                qc.warning_issued = 0;
                 return Ok(());
             }
 
-            if qc.hardlimit != 0 && qc.hardlimit < n && !ignore_hardlimit() {
+            if over(qc.hardlimit, n) && !ignore_hardlimit() {
                 msgs.prepare_warning(qc, qtype, counter, QuotaMsg::HardWarn);
                 return Err(c::EDQUOT.into());
             }
 
-            if qc.softlimit != 0 && qc.softlimit < n {
+            if over(qc.softlimit, n) {
                 let now = unsafe { c::ktime_get_real_seconds() };
 
                 if qc.timer == 0 {
@@ -484,6 +508,13 @@ mod vfs {
             if mask & c::QC_INO_WARNS != 0 {
                 mq.c[Q_INO].warns = qdq.d_ino_warns;
             }
+        }
+
+        // New limits, which usage may not be over - as the VFS's
+        // do_set_dqblk(), without below messages
+        for qc in &mut mq.c {
+            let n = qc.v;
+            clear_over(qc, n);
         }
         Ok(())
     }
