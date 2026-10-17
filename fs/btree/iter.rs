@@ -159,7 +159,6 @@ impl<'f> BtreeTrans<'f> {
         TransAttempt {
             trans:         self,
             restart_count: unsafe { (*self.raw).restart_count },
-            t:             PhantomData,
         }
     }
 
@@ -189,7 +188,6 @@ impl<'f> BtreeTrans<'f> {
         TransAttempt {
             trans:         self,
             restart_count: self.begin_raw(),
-            t:             PhantomData,
         }
     }
 
@@ -255,7 +253,6 @@ impl<'f> Drop for BtreeTrans<'f> {
 pub struct TransAttempt<'a, 't> {
     trans:         &'a BtreeTrans<'t>,
     restart_count: u32,
-    t:             PhantomData<&'a mut ()>,
 }
 
 /// What an iterator is made from: the transaction, or an attempt at it. An
