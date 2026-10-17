@@ -228,6 +228,8 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
     }
 
     let name = def.rust_ident();
+    let inst = def.rust_type();
+    let inst = inst.as_str();
     // A #[c_bitfield] field's members, on the struct: its type's forwarders
     // (#[bitfield]), by the type's own path.
     let mut forward = String::new();
@@ -235,9 +237,8 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         let ty = f.ty.trim();
         let (path, ty) = ty.rsplit_once("::").map_or(("", ty), |(p, t)| (p, t));
         let path = if path.is_empty() { String::new() } else { format!("{path}::") };
-        forward.push_str(&format!("{path}__{ty}_forward!({name}, {});\n", f.rust_name()));
+        forward.push_str(&format!("{path}__{ty}_forward!({inst}, {});\n", f.rust_name()));
     }
-    let inst = def.rust_ident();
     let mut nums = size_align(inst);
     for f in &def.fields {
         let field = f.rust_name();
@@ -251,7 +252,7 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         .map(|f| thin_pointers(name, &f.cfg, &[(f.rust_name(), f.ty.clone())], None))
         .collect();
     let flex = vstructs::flex_array(&def)?;
-    let zeroable = maybe_zeroable(inst, &def);
+    let zeroable = maybe_zeroable(&def);
     Ok(tokens(&format!("{forward}{flex}{zeroable}const _: () = {{\n{thin}}};\n{}",
                        record(&text, &nums))))
 }
@@ -261,14 +262,15 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
 /// bound a condition on the impl, not an error where it doesn't hold. So a
 /// struct holding a Rust type with invariants - a RustOnly - isn't, and
 /// #[derive(Init)] can't zero it.
-fn maybe_zeroable(inst: &str, def: &cstruct::CStructDef) -> String {
+fn maybe_zeroable(def: &cstruct::CStructDef) -> String {
     let bounds: Vec<String> = def.fields.iter()
         .map(|f| format!("{}: for<'__dummy> ::pin_init::Zeroable", f.ty))
         .collect();
     let whr = if bounds.is_empty() { String::new() } else { format!("where {}", bounds.join(",\n")) };
+    let (generics, ty) = def.impl_generics();
     format!("// SAFETY: every field is Zeroable, and padding may be zero\n\
              #[automatically_derived]\n\
-             unsafe impl ::pin_init::Zeroable for {inst} {whr} {{}}\n")
+             unsafe impl{generics} ::pin_init::Zeroable for {ty} {whr} {{}}\n")
 }
 
 /// bitfield_struct::bitfield, recorded - and __NAME_forward!(STRUCT, field),
@@ -385,7 +387,7 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
         }
         out.push_str(&format!(
             "#[allow(unused_macros)]\n\
-             macro_rules! __{name}_forward {{ ($s:ident, $field:ident) => {{ impl $s {{\n{fns}}} }} }}\n\
+             macro_rules! __{name}_forward {{ ($s:ty, $field:ident) => {{ impl $s {{\n{fns}}} }} }}\n\
              #[allow(unused_imports)]\npub(crate) use __{name}_forward;\n"));
     }
 

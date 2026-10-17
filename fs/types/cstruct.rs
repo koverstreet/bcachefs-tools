@@ -156,6 +156,8 @@ pub struct CStructDef {
     /// definition, X__head, whose own name the family's type X<S> takes (see
     /// util/vstructs.rs). rust_ident() is the name to impl and lay out by.
     pub rust_name: Option<String>,
+    /// Its lifetime parameters, as written.
+    pub lifetimes: Vec<String>,
     pub kind:      CKind,
     pub cfg:       Option<Cfg>,
     pub repr:      CRepr,
@@ -177,6 +179,28 @@ impl CStructDef {
     /// Its Rust name: C's, but for #[c_name].
     pub fn rust_ident(&self) -> &str {
         self.rust_name.as_deref().unwrap_or(&self.name)
+    }
+
+    /// Its Rust type, its lifetimes elided - X<'_> - as an expression, or an
+    /// impl that doesn't name them, has it.
+    #[allow(dead_code)]
+    pub fn rust_type(&self) -> String {
+        self.rust_type_with(&vec!["'_".to_string(); self.lifetimes.len()])
+    }
+
+    /// impl<'a> and X<'a>: for an impl whose bounds name its lifetimes.
+    #[allow(dead_code)]
+    pub fn impl_generics(&self) -> (String, String) {
+        let g = if self.lifetimes.is_empty() { String::new() } else { format!("<{}>", self.lifetimes.join(", ")) };
+        (g, self.rust_type_with(&self.lifetimes))
+    }
+
+    #[allow(dead_code)]
+    fn rust_type_with(&self, lifetimes: &[String]) -> String {
+        match lifetimes {
+            [] => self.rust_ident().to_string(),
+            l  => format!("{}<{}>", self.rust_ident(), l.join(", ")),
+        }
     }
 
     /// #[repr(C)], in every configuration.
@@ -1175,6 +1199,25 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
     let name = name.to_string();
     i += 2;
 
+    // <'a, ...>: what it borrows, which C has no notion of - the only
+    // generics a CStruct takes
+    let mut lifetimes = Vec::new();
+    if toks.get(i).is_some_and(|t| t.is_punct('<')) {
+        i += 1;
+        loop {
+            match toks.get(i) {
+                Some(Tok::Lit(l)) if l.starts_with('\'') => lifetimes.push(l.clone()),
+                _ => return Err(format!("{name}: a CStruct's generics are lifetimes only")),
+            }
+            i += 1;
+            match toks.get(i) {
+                Some(Tok::Punct(',')) => i += 1,
+                Some(Tok::Punct('>')) => { i += 1; break }
+                _ => return Err(format!("{name}: a CStruct's generics are lifetimes only")),
+            }
+        }
+    }
+
     if !toks.get(i).is_some_and(|t| t.is_punct('{')) {
         return Err(format!("{name}: a CStruct has named fields, and no generics - an unsized \
                             vstruct's states are each its own definition: #[unsized_vstruct]"));
@@ -1323,7 +1366,7 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
     let typedef_anon = matches!(a.typedef, Some(None));
     let typedef = a.typedef.map(|t| t.unwrap_or_else(|| name.clone()));
     Ok(Some((CStructDef {
-        name, rust_name, kind, cfg: a.cfg, repr: a.repr, cfg_reprs: a.cfg_reprs, fields, typedef,
+        name, rust_name, lifetimes, kind, cfg: a.cfg, repr: a.repr, cfg_reprs: a.cfg_reprs, fields, typedef,
         typedef_anon, c_align,
     }, body_end + 1)))
 }
