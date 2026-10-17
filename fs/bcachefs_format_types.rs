@@ -1451,6 +1451,7 @@ c_bitmask! {
          */
         BCH_SB_DIRENTS_SANITIZED(59, 60),
         BCH_SB_WRITE_DEGRADED_ACTION(60, 62),
+        BCH_SB_ZSTD_COMPRESSION_EARLY_ABORT(62, 63),
     }
 }
 

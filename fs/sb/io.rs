@@ -596,4 +596,32 @@ mod tests {
         assert!(f.arm::<c::bch_sb_field_ext<Validated>>().is_none());
         assert!(f.typed().is_err());
     }
+
+    #[test]
+    fn zstd_early_abort_and_write_degraded_flags_are_independent() {
+        use crate::util::vstructs::Head;
+
+        // Bit 63 and the low word stand in for neighbouring fields: neither
+        // setter may disturb anything outside its own [start, end).
+        let untouched = (1u64 << 63) | 0xdead_beef;
+        for action in 0..=3u64 {
+            for enabled in [false, true] {
+                let mut sb = Head::<c::bch_sb>::default();
+                sb.flags[6].set(untouched);
+                sb.set_write_degraded_action(action);
+                sb.set_zstd_compression_early_abort(enabled);
+                assert_eq!(
+                    sb.flags[6].get(),
+                    untouched | (action << 60) | ((enabled as u64) << 62)
+                );
+                assert_eq!(sb.write_degraded_action(), action);
+                sb.set_write_degraded_action(3 - action);
+                assert_eq!(sb.zstd_compression_early_abort(), enabled);
+                assert_eq!(
+                    sb.flags[6].get(),
+                    untouched | ((3 - action) << 60) | ((enabled as u64) << 62)
+                );
+            }
+        }
+    }
 }
