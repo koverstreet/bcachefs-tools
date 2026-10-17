@@ -1803,6 +1803,7 @@ fn parse_extern(body: &[Tok], cfg: Option<Cfg>) -> Result<CExtern, String> {
 const C_EXPORT_TYPES: &[(&str, &str)] = &[
     ("Printbuf",       "c::printbuf"),
     ("BkeySC<'_>",     "c::bkey_s_c"),
+    ("BkeyS<'_>",      "c::bkey_s"),
     ("BtreeTrans<'_>", "c::btree_trans"),
     ("BtreeIter<'_>",  "c::btree_iter"),
 ];
