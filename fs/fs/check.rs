@@ -2,7 +2,7 @@
 
 //! Helpers shared by the fsck passes.
 
-use crate::btree::bkey::{bkey_extent_whiteout, pos, spos, BkeyI, BkeySC};
+use crate::btree::bkey::{pos, spos, BkeyI, BkeySC};
 use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
@@ -327,7 +327,7 @@ impl InodeWalker {
         let btree = iter.btree();
 
         // whiteouts and hash whiteouts are tombstones - they need no inode:
-        if bkey_extent_whiteout(k.k) || k.key_type() == c::bch_bkey_type::KEY_TYPE_hash_whiteout {
+        if k.k.is_extent_whiteout() || k.key_type() == c::bch_bkey_type::KEY_TYPE_hash_whiteout {
             return Ok(());
         }
 

@@ -1645,7 +1645,7 @@ impl<'t> BtreeIter<'t> {
     /// For an extents iterator: back to the start of the key it's at.
     pub fn set_pos_to_extent_start(&mut self) {
         debug_assert!(self.is_extents());
-        self.pos = bkey_start_pos(&self.k);
+        self.pos = self.k.start_pos();
     }
 
     /// Look in @snapshot, at the same position.

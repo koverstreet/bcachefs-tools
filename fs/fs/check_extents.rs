@@ -30,7 +30,7 @@
 //! the error injection tests.
 
 use crate::alloc::buckets::DiskReservation;
-use crate::btree::bkey::{bkey_extent_whiteout, bpos_gt, pos, spos, BkeySC, POS_MIN};
+use crate::btree::bkey::{bpos_gt, pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
     is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
     TransBkey, UpdateTriggerFlags,
@@ -94,7 +94,7 @@ fn count_inode_sectors(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Re
                                   BtreeIterFlags::empty());
 
     iter.for_each_max_norestart(t, pos(inum, u64::MAX), |_, k| {
-        if extents::bkey_extent_is_allocation(k.k) {
+        if k.k.extent_is_allocation() {
             sectors += k.k.size as u64;
         }
         Ok(core::ops::ControlFlow::<()>::Continue(()))
@@ -175,7 +175,7 @@ fn overwrite_extent<'a, 't>(
         old.k_mut().type_ = c::bch_bkey_type::KEY_TYPE_whiteout.0 as u8;
         t.update(iter, &old, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
     } else {
-        let d = extents::durability_safe(t.fs(), new);
+        let d = new.durability_safe(t.fs());
         t.extra_disk_res_add(d.sectors_compressed as u64, d.nr_replicas as u32);
 
         t.update_extent_overwrite(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE,
@@ -341,7 +341,7 @@ fn check_extent_past_end(
             .unwrap_or(u64::MAX) >> 9;
 
         if fsck_err_on!(t, k.k.p.offset > last_block &&
-                        !extents::bkey_extent_is_reservation(fs, k),
+                        !k.extent_is_reservation(fs),
                         id::extent_past_end_of_inode,
                         "extent type past end of inode {}:{}, i_size {}\n{}",
                         i.inode.bi_inum, i.inode.bi_snapshot, i.inode.bi_size,
@@ -387,7 +387,7 @@ fn check_extent<'t>(
         st.w.set_recalculate_sums();
     }
 
-    if !bkey_extent_whiteout(k.k) {
+    if !k.k.is_extent_whiteout() {
         check_extent_past_end(t, st, k)?;
     }
 
@@ -396,7 +396,7 @@ fn check_extent<'t>(
 
     let p          = k.k.p;
     let size       = k.k.size as u64;
-    let allocation = extents::bkey_extent_is_allocation(k.k);
+    let allocation = k.k.extent_is_allocation();
     let whiteout   = k.key_type() == c::bch_bkey_type::KEY_TYPE_whiteout;
 
     t.commit(Some(&st.res), CommitFlags::NO_ENOSPC)?;
