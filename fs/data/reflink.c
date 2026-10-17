@@ -367,10 +367,9 @@ static s64 gc_trigger_reflink_p_segment(struct btree_trans *trans,
 	if (*idx < next_idx)
 		goto not_found;
 
-	BUG_ON((s64) r->refcount + add < 0);
-
+	/* gc's own marking, and commits' gc triggers behind it, at once: */
 	if (flags & BTREE_TRIGGER_gc)
-		r->refcount += add;
+		BUG_ON(atomic_add_return(add, &r->refcount) < 0);
 	*idx = r->offset;
 	return 0;
 not_found:
@@ -766,19 +765,21 @@ static int bch2_gc_write_reflink_key(struct btree_trans *trans,
 		return bch_err_throw(c, EINVAL_reflink_gc_table_mismatch);
 	}
 
-	if (ret_fsck_err_on(r->refcount != le64_to_cpu(*refcount),
+	u32 r_refcount = atomic_read(&r->refcount);
+
+	if (ret_fsck_err_on(r_refcount != le64_to_cpu(*refcount),
 			trans, reflink_v_refcount_wrong,
 			"reflink key has wrong refcount:\n"
 			"%s\n"
 			"should be %u",
 			(bch2_bkey_val_to_text(&buf, c, k), buf.buf),
-			r->refcount)) {
+			r_refcount)) {
 		struct bkey_i *new = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
 
-		if (!r->refcount)
+		if (!r_refcount)
 			new->k.type = KEY_TYPE_deleted;
 		else
-			*bkey_refcount(bkey_i_to_s(new)) = cpu_to_le64(r->refcount);
+			*bkey_refcount(bkey_i_to_s(new)) = cpu_to_le64(r_refcount);
 		try(bch2_trans_update(trans, iter, new, 0));
 	}
 
@@ -820,7 +821,7 @@ int bch2_gc_reflink_start(struct bch_fs *c)
 
 			r->offset	= k.k->p.offset;
 			r->size		= k.k->size;
-			r->refcount	= 0;
+			atomic_set(&r->refcount, 0);
 			0;
 		}));
 
