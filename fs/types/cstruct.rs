@@ -1188,6 +1188,25 @@ fn ident_at(toks: &[Tok], i: usize) -> Option<&str> {
 
 /// The struct or union at @i, after its attributes @a, and the index after
 /// it; None if there isn't one.
+/// The lifetimes of generics at @i - <'a, ...>, or none - and the index after.
+fn lifetimes_at(toks: &[Tok], mut i: usize) -> Result<(Vec<String>, usize), String> {
+    let mut lifetimes = Vec::new();
+    if !toks.get(i).is_some_and(|t| t.is_punct('<')) {
+        return Ok((lifetimes, i));
+    }
+    loop {
+        match toks.get(i + 1) {
+            Some(Tok::Lit(l)) if l.starts_with('\'') => lifetimes.push(l.clone()),
+            _ => return Err("generics are lifetimes only".into()),
+        }
+        match toks.get(i + 2) {
+            Some(Tok::Punct(',')) => i += 2,
+            Some(Tok::Punct('>')) => return Ok((lifetimes, i + 3)),
+            _ => return Err("generics are lifetimes only".into()),
+        }
+    }
+}
+
 fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructDef, usize)>, String> {
     let mut i = skip_vis(toks, i)?;
     let kind = match ident_at(toks, i) {
@@ -1199,24 +1218,10 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
     let name = name.to_string();
     i += 2;
 
-    // <'a, ...>: what it borrows, which C has no notion of - the only
-    // generics a CStruct takes
-    let mut lifetimes = Vec::new();
-    if toks.get(i).is_some_and(|t| t.is_punct('<')) {
-        i += 1;
-        loop {
-            match toks.get(i) {
-                Some(Tok::Lit(l)) if l.starts_with('\'') => lifetimes.push(l.clone()),
-                _ => return Err(format!("{name}: a CStruct's generics are lifetimes only")),
-            }
-            i += 1;
-            match toks.get(i) {
-                Some(Tok::Punct(',')) => i += 1,
-                Some(Tok::Punct('>')) => { i += 1; break }
-                _ => return Err(format!("{name}: a CStruct's generics are lifetimes only")),
-            }
-        }
-    }
+    // what it borrows, which C has no notion of - the only generics a CStruct
+    // takes
+    let lifetimes;
+    (lifetimes, i) = lifetimes_at(toks, i).map_err(|e| format!("{name}: a CStruct's {e}"))?;
 
     if !toks.get(i).is_some_and(|t| t.is_punct('{')) {
         return Err(format!("{name}: a CStruct has named fields, and no generics - an unsized \
@@ -1796,9 +1801,15 @@ fn parse_extern(body: &[Tok], cfg: Option<Cfg>) -> Result<CExtern, String> {
 /// them, and C's, as c_extern! does: #[repr(transparent)], or c_same! - one
 /// layout either way. References are c_export_type()'s.
 const C_EXPORT_TYPES: &[(&str, &str)] = &[
-    ("Printbuf",   "c::printbuf"),
-    ("BkeySC<'_>", "c::bkey_s_c"),
+    ("Printbuf",       "c::printbuf"),
+    ("BkeySC<'_>",     "c::bkey_s_c"),
+    ("BtreeTrans<'_>", "c::btree_trans"),
+    ("BtreeIter<'_>",  "c::btree_iter"),
 ];
+
+/// Of C_EXPORT_TYPES, those over an Opaque, which C changes behind a shared
+/// reference: their pointer isn't const, as an Opaque's isn't.
+const C_EXPORT_OPAQUE: &[&str] = &["BtreeTrans<'_>"];
 
 /// @toks with each path's qualifiers dropped: `&crate::util::ffi::Opaque<c::bch_fs>`
 /// is `&Opaque<bch_fs>`.
@@ -1851,6 +1862,8 @@ fn c_export_type(ty: &[Tok]) -> (String, bool) {
                 (mutable, pointee) = (true, t);
             } else if let Some(t) = generic_arg(pointee, "MaybeUninit") {
                 pointee = t;
+            } else if C_EXPORT_OPAQUE.iter().any(|r| tokenize(r).is_ok_and(|r| r == unqualified(pointee))) {
+                mutable = true;
             }
             let q = if mutable { "mut" } else { "const" };
             return (format!("*{q} {}", c_export_type(pointee).0), true);
@@ -1885,7 +1898,7 @@ pub struct CExport {
 }
 
 /// A #[c_export] fn, at @i, past its attributes: `[pub] [unsafe] [extern
-/// "C"] fn NAME(p: T, ...) [-> R] { ... }`; and the index after it.
+/// "C"] fn NAME[<'a, ...>](p: T, ...) [-> R] { ... }`; and the index after it.
 fn parse_export(toks: &[Tok], i: usize, a: ItemAttrs)
     -> Result<(CExport, usize), String>
 {
@@ -1901,24 +1914,37 @@ fn parse_export(toks: &[Tok], i: usize, a: ItemAttrs)
     if extern_c {
         j += 2;
     }
+    let expected = "#[c_export]: expected [pub] [unsafe] [extern \"C\"] fn NAME[<'a, ...>](..)";
     let name = match &toks[j.min(toks.len())..] {
-        [f, Tok::Ident(name), p, ..] if f.is_ident("fn") && p.is_punct('(') => name.clone(),
-        _ => return Err("#[c_export]: expected [pub] [unsafe] [extern \"C\"] fn NAME(..), \
-                         not generic".into()),
+        [f, Tok::Ident(name), ..] if f.is_ident("fn") => name.clone(),
+        _ => return Err(expected.into()),
     };
-    let close = skip_group(toks, j + 2)?;
+    // Its lifetimes are '_ to the definition with C's signature, which calls
+    // it: the call infers them
+    let (lifetimes, paren) = lifetimes_at(toks, j + 2).map_err(|e| format!("#[c_export] fn {name}: {e}"))?;
+    if !toks.get(paren).is_some_and(|t| t.is_punct('(')) {
+        return Err(expected.into());
+    }
+    let elided = |ty: &[Tok]| -> Vec<Tok> {
+        ty.iter().map(|t| match t {
+            Tok::Lit(l) if lifetimes.contains(l) => Tok::Lit("'_".into()),
+            t => t.clone(),
+        }).collect()
+    };
+    let close = skip_group(toks, paren)?;
     let mut params = Vec::new();
     let mut rust_params = Vec::new();
-    for p in split_top(&toks[j + 3..close - 1], ',') {
+    for p in split_top(&toks[paren + 1..close - 1], ',') {
         let p = match p {
             [m, rest @ ..] if m.is_ident("mut") => rest,
             p => p,
         };
         match p {
             [Tok::Ident(n), Tok::Punct(':'), ty @ ..] if !ty.is_empty() => {
-                let (c, converts) = c_export_type(ty);
+                let ty = elided(ty);
+                let (c, converts) = c_export_type(&ty);
                 params.push((n.clone(), c));
-                rust_params.push(converts.then(|| tokens_to_rust(ty)));
+                rust_params.push(converts.then(|| tokens_to_rust(&ty)));
             }
             _ => return Err(format!("#[c_export] fn {name}: parameter {} not understood",
                                     tokens_to_rust(p))),
@@ -1929,8 +1955,9 @@ fn parse_export(toks: &[Tok], i: usize, a: ItemAttrs)
     let (ret, rust_ret) = match &toks[close..body] {
         [] => (None, None),
         [Tok::Punct('-'), Tok::Punct('>'), ty @ ..] if !ty.is_empty() => {
-            let (c, converts) = c_export_type(ty);
-            (Some(c), converts.then(|| tokens_to_rust(ty)))
+            let ty = elided(ty);
+            let (c, converts) = c_export_type(&ty);
+            (Some(c), converts.then(|| tokens_to_rust(&ty)))
         }
         rest => return Err(format!("#[c_export] fn {name}: {} after the parameters",
                                    tokens_to_rust(rest))),
