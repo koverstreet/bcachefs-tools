@@ -215,11 +215,81 @@ impl c::bch_fs_snapshots {
         self.fs().throw(err)
     }
 
-    /// Keys and sectors accounted to @id across the snapshotted btrees, broken
-    /// down per btree into @breakdown.
-    pub fn accounting_totals(&self, id: u32, breakdown: Option<&mut Printbuf>) -> (u64, u64) {
-        let t = crate::snapshots::delete::accounting_totals(self.fs(), id, breakdown);
-        (t.keys, t.sectors)
+    /// What's accounted to snapshot @id.
+    ///
+    /// In-mem: bch2_accounting_is_mem() covers everything but
+    /// BCH_DISK_ACCOUNTING_inum, so the counters are current as deltas are
+    /// applied. No btree read, no transaction, and no write buffer flush to
+    /// make the values trustworthy.
+    ///
+    /// The key count catches metadata-only stranding (dirents, xattrs, empty
+    /// inodes) that the sectors counter can't see. It's only trusted once
+    /// check_allocations has rebuilt it (scheduled by the
+    /// per_dev_fragmentation_lru upgrade); before that it reads as zero, and
+    /// only sectors count.
+    pub fn accounting(&self, id: u32) -> SnapshotAccounting {
+        let fs = self.fs();
+        let trust_keys = fs.version_upgrade_complete().0 >=
+            c::bcachefs_metadata_version::bcachefs_metadata_version_per_dev_fragmentation_lru.0;
+
+        let mut btrees = crate::btrees_in(crate::BTREE_HAS_SNAPSHOTS_MASK);
+        SnapshotAccounting(core::array::from_fn(|_| {
+            let btree = btrees.next().expect("NR_SNAPSHOT_BTREES is the mask's popcount");
+
+            let mut v = [0u64; 3];
+            crate::accounting::mem_read(fs, &c::disk_accounting_pos::from_arm(
+                    c::bch_acct_snapshot { id, btree: btree.0 }), &mut v);
+
+            BtreeAccounting {
+                btree,
+                keys:      if trust_keys { v[0] } else { 0 },
+                key_bytes: if trust_keys { v[1] } else { 0 },
+                sectors:   v[2],
+            }
+        }))
+    }
+}
+
+const NR_SNAPSHOT_BTREES: usize = crate::BTREE_HAS_SNAPSHOTS_MASK.count_ones() as usize;
+
+#[derive(Clone, Copy)]
+struct BtreeAccounting {
+    btree:     c::btree_id,
+    keys:      u64,
+    key_bytes: u64,
+    sectors:   u64,
+}
+
+impl BtreeAccounting {
+    fn is_empty(&self) -> bool {
+        self.keys == 0 && self.sectors == 0
+    }
+}
+
+/// Keys and sectors accounted to a snapshot, per snapshotted btree. Displays
+/// as the per-btree breakdown, a line for each btree with anything in it.
+pub struct SnapshotAccounting([BtreeAccounting; NR_SNAPSHOT_BTREES]);
+
+impl SnapshotAccounting {
+    pub fn keys(&self) -> u64    { self.0.iter().map(|b| b.keys).sum() }
+    pub fn sectors(&self) -> u64 { self.0.iter().map(|b| b.sectors).sum() }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.iter().all(BtreeAccounting::is_empty)
+    }
+
+    /// A bit per btree with anything accounted.
+    pub fn btrees(&self) -> u64 {
+        self.0.iter().filter(|b| !b.is_empty()).fold(0, |m, b| m | 1u64 << b.btree.0)
+    }
+}
+
+impl fmt::Display for SnapshotAccounting {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for b in self.0.iter().filter(|b| !b.is_empty()) {
+            write!(f, "\n  {}: {} keys ({} bytes), {} sectors", b.btree, b.keys, b.key_bytes, b.sectors)?;
+        }
+        Ok(())
     }
 }
 

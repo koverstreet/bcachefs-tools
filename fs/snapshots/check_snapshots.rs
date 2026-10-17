@@ -324,14 +324,13 @@ fn check_has_data<'a, 't>(
     }
     let no_keys = state == Some(c::bch_snapshot_state::SNAPSHOT_STATE_no_keys);
 
-    let mut breakdown = Printbuf::new();
-    let (keys, sectors) = fs.snapshots.accounting_totals(n.id(), Some(&mut breakdown));
+    let acct = fs.snapshots.accounting(n.id());
 
-    if !fsck_err_on!(t, keys != 0 || sectors != 0, id::snapshot_deleted_but_has_data,
+    if !fsck_err_on!(t, !acct.is_empty(), id::snapshot_deleted_but_has_data,
                      "{} snapshot node has data accounted - {}:{}\n{}",
                      StateName(state),
                      if no_keys { "clearing state" } else { "undeleting" },
-                     breakdown, n.to_text(fs))? {
+                     acct, n.to_text(fs))? {
         return Ok(());
     }
 
@@ -705,12 +704,12 @@ fn edge_repair(
     if let Some(o) = other.as_ref().filter(|o| o.v.state_decoded() == Some(c::bch_snapshot_state::SNAPSHOT_STATE_deleted)) {
         // A deleted node with data has a lying state, and routing around it would
         // strand the keys: undelete it, and leave our edge to its own visit.
-        let (keys, sectors) = fs.snapshots.accounting_totals(other_id, None);
-        if keys != 0 || sectors != 0 {
+        let acct = fs.snapshots.accounting(other_id);
+        if !acct.is_empty() {
             let fix = fsck_err!(t, id::snapshot_deleted_but_has_data,
-                                "snapshot {id} {ptr} pointer {other_id} is deleted but has {keys} keys, \
-                                 {sectors} sectors accounted - undeleting rather than splicing past it:{}",
-                                EdgeNodes::new(fs, n, Some(o), None))?;
+                                "snapshot {id} {ptr} pointer {other_id} is deleted but has {} keys, \
+                                 {} sectors accounted - undeleting rather than splicing past it:{}",
+                                acct.keys(), acct.sectors(), EdgeNodes::new(fs, n, Some(o), None))?;
             return Ok(fix.then_some(EdgeRepair::Undelete(other_id)));
         }
 

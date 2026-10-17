@@ -343,6 +343,11 @@ macro_rules! btree_ids_known {
 }
 c::BCH_BTREE_IDS!(btree_ids_known);
 
+/// The btrees in @mask, a bit per btree id.
+pub fn btrees_in(mask: u64) -> impl Iterator<Item = c::btree_id> {
+    BTREE_IDS_KNOWN.iter().copied().filter(move |b| mask & (1u64 << b.0) != 0)
+}
+
 // Position constructors/sentinels live with bkey; re-exported here for the
 // `crate::POS_MIN` / `crate::SPOS_MAX` spelling used across the tree and the
 // tools binary.
