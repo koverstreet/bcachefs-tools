@@ -508,6 +508,7 @@ c_xmacro! {
         (btree_write_buffer),
         (btree_node_scrub),
         (async_recovery_passes),
+        (vfs_check_dirents),
         (ioctl_data),
     }
 }
