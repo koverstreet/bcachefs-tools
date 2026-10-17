@@ -121,7 +121,9 @@ struct DeleteNodes {
 
 #[pin_data]
 pub(crate) struct SnapshotDelete {
-    /// None when no deletion is running.
+    /// None when no deletion is running. The deletion holds it for read
+    /// across its btree work, so it's never taken for write with btree
+    /// locks held: lockdep sees the cycle.
     #[pin]
     nodes:    RwSem<Option<DeleteNodes>>,
     /// Which sweep the progress describes: 1 or 2.
@@ -1300,6 +1302,8 @@ fn delete_dead_snapshots_locked(fs: &Fs) -> Result<(), BchError> {
     }
     Eytzinger1::sort_by(&mut dying, |l, r| l.id.cmp(&r.id));
 
+    // The walk's btree locks go first: see nodes
+    trans.unlock();
     *d.nodes.write() = Some(coll.nodes);
     let nodes = d.nodes.read();
     let run = Run {
