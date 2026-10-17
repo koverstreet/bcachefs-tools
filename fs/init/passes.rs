@@ -3,21 +3,23 @@
 //! Recovery passes (init/passes.h). The pass table and the code that runs
 //! it are C; a pass converted to Rust is a function the table calls by name.
 
-/// Export @pass, a `fn(&Fs) -> Result<(), E>` with E converting to BchError,
-/// as the recovery pass the C pass table calls @name - its prototype C's
-/// from the header of the file this is in, as #[c_export]'s:
+/// Export @pass, a function or closure of `&Fs` returning `Result<(), E>`
+/// with E converting to BchError, as the recovery pass the C pass table calls
+/// @name - its prototype C's from the header of the file this is in, as
+/// #[c_export]'s:
 ///
 /// `recovery_pass!(bch2_check_dirents => check_dirents);`
+/// `recovery_pass!(bch2_resume_logged_ops_early => |fs| resume_logged_ops(fs, true));`
 #[macro_export]
 macro_rules! recovery_pass {
-    ($name:ident => $pass:path) => {
+    ($name:ident => $pass:expr) => {
         /// # Safety
         /// @c is a live filesystem: the pass table's caller.
         #[::cstruct_macros::c_export]
         pub unsafe extern "C" fn $name(c: *mut $crate::c::bch_fs) -> core::ffi::c_int {
             let fs = unsafe { $crate::fs::Fs::borrow_raw(c) };
 
-            $crate::errcode::ret_to_c($pass(&fs))
+            $crate::errcode::ret_to_c(($pass)(fs))
         }
     };
 }

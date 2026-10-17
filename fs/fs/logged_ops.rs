@@ -156,16 +156,8 @@ pub fn bch2_logged_ops_note_unfinished(c: &Opaque<c::bch_fs>) -> c_int {
     }))
 }
 
-fn resume_logged_ops_early(fs: &Fs) -> Result<(), BchError> {
-    resume_logged_ops(fs, true)
-}
-
-fn resume_logged_ops_late(fs: &Fs) -> Result<(), BchError> {
-    resume_logged_ops(fs, false)
-}
-
-crate::recovery_pass!(bch2_resume_logged_ops_early => resume_logged_ops_early);
-crate::recovery_pass!(bch2_resume_logged_ops => resume_logged_ops_late);
+crate::recovery_pass!(bch2_resume_logged_ops_early => |fs| resume_logged_ops(fs, true));
+crate::recovery_pass!(bch2_resume_logged_ops => |fs| resume_logged_ops(fs, false));
 
 /// Queue @k as a new op, in the first empty slot - where @k's position is
 /// set to.
