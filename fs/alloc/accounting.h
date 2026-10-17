@@ -331,6 +331,7 @@ int bch2_fs_accounting_read_key(struct btree_trans *, struct disk_accounting_pos
 })
 
 int bch2_gc_accounting_start(struct bch_fs *);
+int bch2_accounting_sweep_zero_inum(struct bch_fs *);
 int bch2_gc_accounting_done(struct bch_fs *);
 
 int bch2_accounting_read(struct bch_fs *);
