@@ -84,7 +84,4 @@ s64 bch2_remap_range(struct bch_fs *, subvol_inum, u64,
 		     subvol_inum, u64, u64, u64, s64 *,
 		     bool);
 
-int bch2_gc_reflink_done(struct bch_fs *);
-int bch2_gc_reflink_start(struct bch_fs *);
-
 #endif /* _BCACHEFS_REFLINK_H */

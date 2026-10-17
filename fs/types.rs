@@ -722,9 +722,10 @@ pub struct Fs {
     pub copygc: c::bch_fs_copygc,
     pub ec: c::bch_fs_ec,
 
-    /* REFLINK */
-    pub reflink_gc_table: c::reflink_gc_table,
-    pub reflink_gc_nr: usize,
+    /// gc's count of references to indirect extents: reflink.rs's alone.
+    #[pin]
+    #[init(RustOnly::new(crate::data::reflink::ReflinkGc::new()))]
+    pub(crate) reflink_gc: rust_only!(crate::data::reflink::ReflinkGc),
 
     #[cfg(not(NO_BCACHEFS_FS))]
     pub vfs: c::bch_fs_vfs,
