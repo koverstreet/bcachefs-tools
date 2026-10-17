@@ -38,7 +38,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::check::{self, InodeWalker, SnapshotsSeen};
-use crate::data::extents::{self, Ptrs};
+use crate::data::ptrs::{self, Ptrs};
 use crate::data::io_misc;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
@@ -318,7 +318,7 @@ fn check_extent_overbig(fs: &Fs, k: BkeySC<'_>) {
     let Some(p) = k.arm::<Ptrs>() else { return };
 
     for crc in p.crcs(fs) {
-        if extents::crc_is_encoded(&crc) && crc.uncompressed_size > max_sectors {
+        if ptrs::crc_is_encoded(&crc) && crc.uncompressed_size > max_sectors {
             bch_err!(fs, "overbig encoded extent, please report this:\n  {}", k.to_text(fs));
         }
     }
@@ -394,7 +394,7 @@ fn check_extent<'t>(
     }
 
     check_extent_overbig(fs, k);
-    extents::drop_stale_ptrs(t, iter, k)?;
+    ptrs::drop_stale_ptrs(t, iter, k)?;
 
     let p          = k.k.p;
     let size       = k.k.size as u64;
@@ -464,7 +464,7 @@ fn check_indirect_extents(fs: &Fs) -> Result<(), BchError> {
         res.put();
         progress.update(t, iter)?;
         check_extent_overbig(fs, k);
-        extents::drop_stale_ptrs(t, iter, k)
+        ptrs::drop_stale_ptrs(t, iter, k)
     })
 }
 

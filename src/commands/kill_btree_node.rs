@@ -48,7 +48,7 @@ use std::path::PathBuf;
 use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::BkeySC;
-use bcachefs_kernel::data::extents::Ptrs;
+use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter};
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::util::vstructs::{cast_plain, Head, SelfSized};

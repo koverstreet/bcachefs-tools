@@ -8,7 +8,7 @@ use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
     CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
-use crate::data::extents::{ExtentEntry, ExtentEntryMut, Ptrs};
+use crate::data::ptrs::{ExtentEntry, ExtentEntryMut, Ptrs};
 use crate::errcode::{
     bch_errcode,
     BchError,

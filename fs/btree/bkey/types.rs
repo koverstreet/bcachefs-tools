@@ -335,7 +335,7 @@ pub trait BkeyVMut: BkeyV {
 pub mod prelude {
     pub use super::{BkeyV, BkeyVMut};
     pub use crate::data::extents::BkeyVExtents;
-    pub use crate::data::extents::BkeyVPtrs;
+    pub use crate::data::ptrs::BkeyVPtrs;
 }
 
 impl<'a, V: ?Sized + BkeyVal> BkeyV for BkeySC<'a, V> {
@@ -713,7 +713,7 @@ macro_rules! bkey_family {
                 Ptrs, |k| true;
             }]);
         crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs =>
-            crate::btree::bkey::bkey_family_members { crate::data::extents::PtrsTypes; }]);
+            crate::btree::bkey::bkey_family_members { crate::data::ptrs::PtrsTypes; }]);
     };
     (Extents) => {
         crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_extent =>
@@ -855,4 +855,4 @@ macro_rules! bkey_types {
 c::BCH_BKEY_TYPES!(bkey_types);
 
 bkey_family_conv!(AllTypes);
-bkey_family_conv!(crate::data::extents::PtrsTypes);
+bkey_family_conv!(crate::data::ptrs::PtrsTypes);

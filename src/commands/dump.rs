@@ -9,7 +9,7 @@ use clap::Parser;
 
 use bcachefs_kernel::btree;
 use bcachefs_kernel::btree::bkey::{BkeyI, BkeyS};
-use bcachefs_kernel::data::extents::Ptrs;
+use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::{ret_to_result_void, BchError};
 use bcachefs_kernel::fs::Fs;

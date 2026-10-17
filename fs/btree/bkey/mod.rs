@@ -27,7 +27,7 @@
 //! **Key families.** BkeyFamily is a set of key types - what a key narrows
 //! to: one type (every BkeyTag), or a family, the union of several, made
 //! by bkey_family! from the BCH_BKEY_TYPES() rows a flag picks: Ptrs
-//! (BKEY_TYPE_ptrs, data/extents.rs), Extents (BKEY_TYPE_extent,
+//! (BKEY_TYPE_ptrs, data/ptrs.rs), Extents (BKEY_TYPE_extent,
 //! data/extents.rs). A family's value is read through typed(), the enum of
 //! its types - Typed's arms but its own, PtrsTyped - and it can require more
 //! than the type: an Extents key's size is nonzero. contains() decides.
