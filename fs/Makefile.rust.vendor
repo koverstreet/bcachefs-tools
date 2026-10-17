@@ -246,7 +246,7 @@ $(VRD)/helpers.o: $(VENDOR)/helpers/helpers.c $(wildcard $(VENDOR)/helpers/*.c) 
 # the kbuild path: unused_attributes, fatal under CONFIG_WERROR).
 quiet_cmd_bch_vr_mod = RUSTC M  $@
       cmd_bch_vr_mod = OUT_DIR=$(abspath $(obj)/rust) OBJTREE=$(VRD_ABS) \
-	$(RUSTC) $(filter-out --edition=%,$(_rust_flags)) @$(bch-rustc-cfg) \
+	$(RUSTC) $(filter-out --edition=%,$(_rust_flags)) $(bch-rust-gc-flags) @$(bch-rustc-cfg) \
 	--edition=2021 -Awarnings -Zunstable-options --sysroot=/dev/null \
 	-L$(VRD) -Zcrate-attr=no_std -Zcrate-attr='feature($(rust_allowed_features))' \
 	--crate-type rlib --crate-name bcachefs_mod \
@@ -257,10 +257,12 @@ quiet_cmd_bch_vr_mod = RUSTC M  $@
 $(obj)/mod.o: $(src)/mod.rs $(obj)/rust/bindings.rs $(VRD)/kernel.o $(VRD)/zerocopy.o FORCE
 	$(call if_changed,bch_vr_mod)
 
+# The Rust goes into rust.o (Makefile.rust), its C helpers into the module.
 bch-vr-objs := $(addprefix vrust/,core.o compiler_builtins.o ffi.o build_error.o \
-	zerocopy.o pin_init.o bindings.o uapi.o kernel.o helpers.o)
-bcachefs-y += $(bch-vr-objs)
-targets += $(bch-vr-objs) $(addprefix vrust/,libmacros.so libpin_init_internal.so \
+	zerocopy.o pin_init.o bindings.o uapi.o kernel.o)
+bch-rust-gc-in += $(bch-vr-objs)
+bcachefs-y += vrust/helpers.o
+targets += $(bch-vr-objs) vrust/helpers.o $(addprefix vrust/,libmacros.so libpin_init_internal.so \
 	libzerocopy_derive.so) \
 	$(patsubst $(obj)/%,%,$(vr-arch-gen-rs) $(addprefix $(VRD)/rust/,\
 	bindings/bindings_generated.rs bindings/bindings_helpers_generated.rs uapi/uapi_generated.rs))
