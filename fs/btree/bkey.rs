@@ -362,6 +362,11 @@ impl<V: ?Sized> BkeyI<V> {
         unsafe { &mut *BkeyI::from_raw_mut((self as *mut Self).cast()) }
     }
 
+    /// To read, keeping its type: a typed key's bkey_i_to_s_c().
+    pub fn as_sc(&self) -> BkeySC<'_, V> {
+        BkeySC { k: &self.k, v: (&raw const self.v).cast(), iter: PhantomData, val: PhantomData }
+    }
+
     pub fn v(&self) -> &V {
         &self.v
     }
