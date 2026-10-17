@@ -48,7 +48,30 @@ extern "C" {
 
 // --- Core logic, converted from C ---
 
-/// Recursively count allocated bytes in a directory tree.
+/// Count logical data (non-hole) bytes in a single file.
+fn file_data_bytes(path: &std::path::Path, size: u64) -> u64 {
+    use rustix::fs::{seek, SeekFrom};
+
+    let Ok(file) = std::fs::File::open(path) else {
+        return size;
+    };
+
+    let mut bytes = 0;
+    let mut pos = 0;
+    while pos < size {
+        let Ok(start) = seek(&file, SeekFrom::Data(pos)) else { break };
+        let end = seek(&file, SeekFrom::Hole(start)).unwrap_or(size).min(size);
+        if end <= start {
+            break;
+        }
+        bytes += end - start;
+        pos = end;
+    }
+
+    bytes
+}
+
+/// Recursively count data bytes in a directory tree.
 fn count_input_size(dir: &std::fs::File) -> u64 {
     use std::os::unix::fs::MetadataExt;
 
@@ -71,7 +94,20 @@ fn count_input_size(dir: &std::fs::File) -> u64 {
             Err(_) => continue,
         };
 
-        bytes += meta.blocks() * 512;
+        // Best-effort estimate of the future on-disk size of the file
+        // (as will be observed in the future image).
+        // We have to explicitly iterate over all non-hole regions because:
+        // - using on-disk size (meta.blocks()) directly will underestimate
+        //   image size for source filesystems with strong compression;
+        // - using total logical size (meta.size()) directly will overestimate
+        //   image size for heavily sparse files.
+        // However, we can avoid the expensive iteration if the two sizes match,
+        // i.e. it is known that none of these scenarios apply.
+        bytes += if meta.is_file() && meta.blocks() * 512 < meta.size() {
+            file_data_bytes(&entry.path(), meta.size())
+        } else {
+            meta.size()
+        };
 
         if meta.is_dir() {
             if let Ok(subdir) = std::fs::File::open(entry.path()) {
