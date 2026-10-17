@@ -127,6 +127,37 @@ impl Printbuf {
         fmt::Write::write_fmt(self, format_args!("{}", sub)).unwrap();
     }
 
+    /// Where the text stands, for state_restore() to go back to:
+    /// printbuf_state_save().
+    pub fn state_save(&self) -> c::printbuf_restore {
+        c::printbuf_restore {
+            pos:          self.0.pos,
+            last_newline: self.0.last_newline,
+            last_field:   self.0.last_field,
+            indent:       self.0.indent,
+            cur_tabstop:  self.0.cur_tabstop,
+        }
+    }
+
+    /// Undo what's been written since @s: printbuf_state_restore().
+    pub fn state_restore(&mut self, s: c::printbuf_restore) {
+        self.0.pos          = s.pos;
+        self.0.last_newline = s.last_newline;
+        self.0.last_field   = s.last_field;
+        self.0.indent       = s.indent;
+        self.0.cur_tabstop  = s.cur_tabstop;
+    }
+
+    pub fn indent_level(&self) -> u32 {
+        self.0.indent
+    }
+
+    /// Room for @extra more bytes, allocated with @gfp: false if it
+    /// couldn't. bch2_printbuf_make_room_gfp().
+    pub fn make_room_gfp(&mut self, extra: u32, gfp: c::gfp_t) -> bool {
+        unsafe { c::bch2_printbuf_make_room_gfp(&mut self.0, extra, gfp) == 0 }
+    }
+
     /// `\n` in a format string.
     pub fn newline(&mut self) {
         unsafe { c::bch2_prt_newline(&mut self.0) };

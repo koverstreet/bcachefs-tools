@@ -73,6 +73,7 @@ pub struct printbuf_restore {
 
 c_extern! {
     pub fn bch2_printbuf_exit(buf: *mut c::printbuf);
+    pub fn bch2_printbuf_make_room_gfp(buf: *mut c::printbuf, extra: c_uint, gfp: c::gfp_t) -> c_int;
     pub fn bch2_printbuf_tabstops_reset(buf: *mut c::printbuf);
     pub fn bch2_printbuf_tabstop_push(buf: *mut c::printbuf, spaces: c_uint) -> c_int;
     pub fn bch2_printbuf_indent_add(buf: *mut c::printbuf, spaces: c_uint);

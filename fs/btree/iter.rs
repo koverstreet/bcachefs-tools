@@ -543,6 +543,18 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(p)
     }
 
+    /// allocate_dropping_locks(), leaving the locks dropped: for the end of an
+    /// attempt, as C's allocate_dropping_locks_norelock().
+    pub fn allocate_dropping_locks_norelock<T>(&self, mut alloc: impl FnMut(c::gfp_t) -> Option<T>)
+        -> Option<T>
+    {
+        if let Some(p) = alloc(c::GFP_NOWAIT) {
+            return Some(p);
+        }
+        self.unlock();
+        alloc(c::GFP_KERNEL)
+    }
+
     /// allocate_dropping_locks(), for an @alloc that says it couldn't by
     /// ENOMEM: as C's allocate_dropping_locks_errcode(). Another error from
     /// the first try is returned as is; one from the second, with the locks
