@@ -1796,17 +1796,17 @@ static int do_reconcile_phase_iter(struct reconcile_pass *p, u32 kick,
 
 		if (bch2_err_matches(ret, BCH_ERR_data_update_fail_need_copygc)) {
 			bch2_trans_unlock_long(trans);
-			bch2_copygc_wakeup(c);
+			bch2_copygc_wakeup_for_pressure(c);
 			/*
 			 * Freezable: copygc freezes in place, so a plain
 			 * wait_event() here would stall the freezer. Idle: a
 			 * copygc run can take longer than the hung task timeout:
 			 */
 			wait_event_state(c->copygc.running_wq,
-					 c->copygc.run_count != *p->copygc_run_count ||
+					 READ_ONCE(c->copygc.run_count) != *p->copygc_run_count ||
 					 kthread_should_stop(),
 					 (TASK_IDLE|TASK_FREEZABLE));
-			*p->copygc_run_count = c->copygc.run_count;
+			*p->copygc_run_count = READ_ONCE(c->copygc.run_count);
 			ret = 0;
 			continue;
 		}
@@ -1886,7 +1886,7 @@ static int do_reconcile(struct moving_context *ctxt)
 	struct bch_fs_reconcile *r = &c->reconcile;
 	u64 sectors_scanned = 0;
 	u32 kick = r->kick;
-	u32 copygc_run_count = c->copygc.run_count;
+	u32 copygc_run_count = READ_ONCE(c->copygc.run_count);
 	int ret = 0;
 
 	CLASS(darray_reconcile_work, work)();
