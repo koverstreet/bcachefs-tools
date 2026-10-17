@@ -219,7 +219,8 @@ static void flush_warnings(struct bch_qid qid,
 	unsigned i;
 
 	for (i = 0; i < msgs->nr; i++)
-		quota_send_warning(make_kqid(&init_user_ns, msgs->m[i].qtype, qid.q[i]),
+		quota_send_warning(make_kqid(&init_user_ns, msgs->m[i].qtype,
+					     qid.q[msgs->m[i].qtype]),
 				   sb->s_dev, msgs->m[i].msg);
 }
 
@@ -543,7 +544,7 @@ int bch2_fs_quota_read(struct bch_fs *c)
 
 /* Enable/disable/delete quotas for an entire filesystem: */
 
-static int bch2_quota_enable(struct super_block	*sb, unsigned uflags)
+static int __bch2_quota_enable(struct super_block *sb, unsigned uflags)
 {
 	struct bch_fs *c = sb->s_fs_info;
 	struct bch_sb_field_quota *sb_quota;
@@ -586,6 +587,11 @@ static int bch2_quota_enable(struct super_block	*sb, unsigned uflags)
 	return 0;
 }
 
+static int bch2_quota_enable(struct super_block *sb, unsigned uflags)
+{
+	return bch2_err_class(__bch2_quota_enable(sb, uflags));
+}
+
 static int bch2_quota_disable(struct super_block *sb, unsigned uflags)
 {
 	struct bch_fs *c = sb->s_fs_info;
@@ -607,7 +613,7 @@ static int bch2_quota_disable(struct super_block *sb, unsigned uflags)
 	return 0;
 }
 
-static int bch2_quota_remove(struct super_block *sb, unsigned uflags)
+static int __bch2_quota_remove(struct super_block *sb, unsigned uflags)
 {
 	struct bch_fs *c = sb->s_fs_info;
 
@@ -644,6 +650,11 @@ static int bch2_quota_remove(struct super_block *sb, unsigned uflags)
 	return 0;
 }
 
+static int bch2_quota_remove(struct super_block *sb, unsigned uflags)
+{
+	return bch2_err_class(__bch2_quota_remove(sb, uflags));
+}
+
 /*
  * Return quota status information, such as enforcements, quota file inode
  * numbers etc.
@@ -677,8 +688,8 @@ static int bch2_quota_get_state(struct super_block *sb, struct qc_state *state)
 /*
  * Adjust quota timers & warnings
  */
-static int bch2_quota_set_info(struct super_block *sb, int type,
-			       struct qc_info *info)
+static int __bch2_quota_set_info(struct super_block *sb, int type,
+				 struct qc_info *info)
 {
 	struct bch_fs *c = sb->s_fs_info;
 	struct bch_sb_field_quota *sb_quota;
@@ -708,7 +719,7 @@ static int bch2_quota_set_info(struct super_block *sb, int type,
 	if (!sb_quota) {
 		int ret = bch_err_throw(c, ENOSPC_sb_quota);
 		bch_err_fn(c, ret);
-		return bch2_err_class(ret);
+		return ret;
 	}
 
 	if (info->i_fieldmask & QC_SPC_TIMER)
@@ -731,6 +742,12 @@ static int bch2_quota_set_info(struct super_block *sb, int type,
 
 	bch2_write_super(c);
 	return 0;
+}
+
+static int bch2_quota_set_info(struct super_block *sb, int type,
+			       struct qc_info *info)
+{
+	return bch2_err_class(__bch2_quota_set_info(sb, type, info));
 }
 
 /* Get/set individual quotas: */
