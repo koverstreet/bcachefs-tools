@@ -9,10 +9,10 @@
 //! builds - the kernel crate has none, and it's only atomics.
 
 #[cfg(kernel)]
-pub use kernel::sync::{new_mutex, Mutex};
+pub use kernel::sync::{new_mutex, Mutex, MutexGuard};
 
 #[cfg(not(kernel))]
-pub use bcachefs_shim::sync::{new_mutex, Mutex};
+pub use bcachefs_shim::sync::{new_mutex, Mutex, MutexGuard};
 
 #[cfg(not(kernel))]
 pub use bcachefs_shim::sync::{new_rwsem, RwSem, RwSemReadGuard, RwSemWriteGuard};

@@ -5,19 +5,10 @@
 #include "snapshots/check_snapshots_gen.h"
 #include "snapshots/delete_gen.h"
 
-void bch2_snapshot_tree_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
-int bch2_snapshot_tree_validate(struct bch_fs *, struct bkey_s_c,
-				const struct bkey_validate_context *);
-
 #define bch2_bkey_ops_snapshot_tree ((struct bkey_ops) {	\
 	.key_validate	= bch2_snapshot_tree_validate,		\
 	.val_to_text	= bch2_snapshot_tree_to_text,		\
 })
-
-void bch2_snapshot_key_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
-int bch2_snapshot_validate(struct bch_fs *, struct bkey_s_c,
-			   const struct bkey_validate_context *);
-int bch2_snapshot_trigger(struct btree_trans *, struct btree_trigger_op);
 
 #define bch2_bkey_ops_snapshot ((struct bkey_ops) {		\
 	.key_validate	= bch2_snapshot_validate,		\
@@ -85,8 +76,6 @@ static inline const struct snapshot_t *snapshot_t(struct bch_fs *c, u32 id)
 {
 	return __snapshot_t(rcu_dereference(c->snapshots.table), id);
 }
-
-struct snapshot_t *bch2_snapshot_t_mut(struct bch_fs *, u32);
 
 static inline u32 bch2_snapshot_tree(struct bch_fs *c, u32 id)
 {
@@ -309,21 +298,6 @@ static inline int snapshot_list_merge(struct bch_fs *c, snapshot_id_list *dst, s
 	return 0;
 }
 
-void bch2_snapshot_id_list_to_text(struct printbuf *, snapshot_id_list *);
-
-u32 __bch2_snapshot_tree_next(struct bch_fs *, struct snapshot_table *, u32, unsigned *);
-u32 bch2_snapshot_tree_next(struct bch_fs *, u32, unsigned *);
-
-#define __for_each_snapshot_child(_c, _t, _start, _depth, _id)		\
-	for (u32 _id = _start;						\
-	     _id && _id <= _start;					\
-	     _id = __bch2_snapshot_tree_next(_c, _t, _id, _depth))
-
-#define for_each_snapshot_child(_c, _start, _depth, _id)		\
-	for (u32 _id = _start;						\
-	     _id && _id <= _start;					\
-	     _id = bch2_snapshot_tree_next(_c, _id, _depth))
-
 static inline int bch2_check_key_has_snapshot(struct btree_trans *trans,
 					      struct btree_iter *iter,
 					      struct bkey_s_c k)
@@ -362,10 +336,5 @@ static inline int bch2_key_has_snapshot_overwrites(struct btree_trans *trans,
 
 	return __bch2_key_has_snapshot_overwrites(trans, id, pos);
 }
-
-int bch2_snapshots_read(struct bch_fs *);
-void bch2_fs_snapshots_exit(struct bch_fs *);
-void bch2_fs_snapshots_init_early(struct bch_fs *);
-int bch2_fs_snapshots_init(struct bch_fs *);
 
 #endif /* _BCACHEFS_SNAPSHOT_H */

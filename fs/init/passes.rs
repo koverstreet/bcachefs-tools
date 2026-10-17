@@ -63,6 +63,13 @@ pub fn set_no_ratelimit(fs: &Fs, pass: c::bch_recovery_pass) {
     unsafe { c::bch2_recovery_pass_set_no_ratelimit(fs.as_ptr(), pass) }
 }
 
+/// Whether recovery has @pass still to run, or running: as
+/// recovery_pass_will_run(). Never true outside recovery.
+pub fn will_run(fs: &Fs, pass: c::bch_recovery_pass) -> bool {
+    fs.flag(c::bch_fs_flags::BCH_FS_in_recovery) &&
+        unsafe { (*fs.as_ptr()).recovery.current_passes } & (1u64 << pass as u32) != 0
+}
+
 /// Btree @btree is being changed, so no longer known consistent: as
 /// bch2_clear_btree_clean().
 pub fn clear_btree_clean(fs: &Fs, btree: c::btree_id) {

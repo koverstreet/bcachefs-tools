@@ -1,40 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! What Rust calls of snapshots/snapshot.h - C gets it as prototypes, in
-//! snapshots/snapshot_gen.h, which is generated from this file: see
+//! What Rust calls of snapshots/snapshot.h - nothing now: what's left of
+//! snapshot.c, the overwrite checks, only C calls. C gets snapshot.rs's
+//! #[c_export]s as prototypes in snapshots/snapshot_gen.h: see
 //! fs/types/lib.rs.
-
-#![allow(non_camel_case_types)]
-
-use crate::btree::bkey::BkeyI;
-use crate::cstructs::c;
-use crate::util::ffi::c_char;
-use core::ffi::{c_int, c_uint};
-use cstruct_macros::c_extern;
-
-c_extern! {
-    #[cold]
-    pub fn bch2_snapshot_tree_keys_to_text(out: *mut c::printbuf, trans: *mut c::btree_trans,
-                                           start: u32) -> c_int;
-    pub fn __bch2_snapshot_tree_create(trans: *mut c::btree_trans) -> *mut c::bkey_i_snapshot_tree;
-    pub fn bch2_snapshot_tree_lookup(trans: *mut c::btree_trans, id: u32,
-                                     s: *mut c::SnapshotTree) -> c_int;
-    pub fn bch2_snapshot_to_text(out: *mut c::printbuf, s: *const c::Snapshot);
-    pub fn bch2_snapshot_state_str(s: c::bch_snapshot_state) -> *const c_char;
-    pub fn bch2_snapshot_state_set(s: *mut c::Snapshot, n: c::bch_snapshot_state);
-    pub fn bch2_snapshot_table_make_room(c: *mut c::bch_fs, id: u32) -> c_int;
-    pub fn bch2_snapshot_skiplist_get(c: *mut c::bch_fs, id: u32) -> u32;
-    pub fn bch2_snapshot_oldest_subvol(c: *mut c::bch_fs, root: u32) -> u32;
-    pub fn bch2_snapshot_table_find_edge(c: *mut c::bch_fs, s: *const c::Snapshot, id: u32,
-                                         parent: bool) -> u32;
-    pub fn bch2_snapshot_redundant_interior(c: *mut c::bch_fs, id: u32) -> u32;
-    pub fn __bch2_snapshot_is_ancestor(trans: *mut c::btree_trans, id: u32, ancestor: u32) -> bool;
-    pub fn bch2_snapshot_is_ancestor_early(c: *mut c::bch_fs, id: u32, ancestor: u32) -> bool;
-    pub fn bch2_snapshot_lookup(trans: *mut c::btree_trans, id: u32,
-                                s: *mut c::Snapshot) -> c_int;
-    pub fn bch2_snapshot_lookup_key(trans: *mut c::btree_trans, id: u32,
-                                    k: *mut BkeyI<c::Snapshot>) -> c_int;
-    pub fn bch2_snapshot_node_create(trans: *mut c::btree_trans, parent: u32, new_snapids: *mut u32,
-                                     snapshot_subvols: *mut u32, nr_snapids: c_uint) -> c_int;
-    pub fn bch2_snapshot_table_rebuild(trans: *mut c::btree_trans) -> c_int;
-}

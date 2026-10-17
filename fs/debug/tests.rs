@@ -634,7 +634,7 @@ fn test_snapshots(fs: &Fs, _nr: u64) -> TestRet {
     let snapid_subvols = [1u32, 1u32];
 
     trans_commit_do(fs, None, NO_ENOSPC, |t| {
-        t.snapshot_node_create(u32::MAX, &mut snapids, &snapid_subvols)
+        crate::snapshots::snapshot::node_create(t, u32::MAX, &mut snapids, &snapid_subvols)
     })?;
 
     if snapids[0] > snapids[1] {

@@ -719,7 +719,7 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_free_fsck_errs(c);
 	darray_exit(&c->recovery.logged_ops_unfinished);
 	bch2_fs_vfs_exit(c);
-	bch2_fs_snapshots_exit(c);
+	percpu_free_rwsem(&c->snapshots.create_lock);
 	bch2_fs_replicas_exit(c);
 	bch2_fs_reconcile_exit(c);
 	bch2_fs_quota_exit(c);
@@ -1236,7 +1236,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	bch2_fs_nocow_locking_init_early(c);
 	bch2_fs_quota_init(c);
 	bch2_fs_recovery_passes_init(c);
-	bch2_fs_snapshots_init_early(c);
 
 	INIT_LIST_HEAD(&c->list);
 
@@ -1375,7 +1374,7 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	try(bch2_fs_encryption_init(c));
 	try(bch2_fs_io_read_init(c));
 	try(bch2_fs_journal_init(&c->journal));
-	try(bch2_fs_snapshots_init(c));
+	try(percpu_init_rwsem(&c->snapshots.create_lock));
 	try(bch2_fs_vfs_init(c));
 	try(bch2_io_clock_init(&c->io_clock[READ]));
 	try(bch2_io_clock_init(&c->io_clock[WRITE]));

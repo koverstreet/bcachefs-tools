@@ -3,10 +3,11 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{DArray, RustOnly, bits_to_longs, c_default, rust_only};
+use crate::types::{DArray, RustOnly, bits_to_longs, rust_only};
 use crate::util::alloc::KVVec;
 use crate::util::sync::{new_mutex, Mutex};
 use core::ffi::c_ulong;
+use core::sync::atomic::{AtomicU32, AtomicUsize};
 use cstruct_macros::{c_const, c_enum, CStruct, c_typedef, Init, TypeInfo};
 use pin_init::pin_data;
 
@@ -42,34 +43,46 @@ c_enum! {
     }
 }
 
+/*
+ * A table entry: rewritten in place by mark_snapshot() (snapshot.rs) under
+ * table_lock while readers read it under RCU alone, so every field is an
+ * atomic - C still sees plain integers.
+ */
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct snapshot_t {
-    pub state: c::snapshot_id_state,
-    pub parent: u32,
+    #[c("enum snapshot_id_state state")]
+    pub state: AtomicU32,
+    #[c("u32 parent")]
+    pub parent: AtomicU32,
     /* skiplist: random ancestors, sorted ascending; try [2] first */
-    pub skip: [u32; 3],
-    pub depth: u32,
-    pub children: [u32; 2], /* normalized: [0] >= [1] */
-    pub subvol: u32, /* Nonzero only if a subvolume points to this node: */
-    pub tree: u32,
+    #[c("u32 skip[3]")]
+    pub skip: [AtomicU32; 3],
+    #[c("u32 depth")]
+    pub depth: AtomicU32,
+    #[c("u32 children[2]")]
+    pub children: [AtomicU32; 2], /* normalized: [0] >= [1] */
+    #[c("u32 subvol")]
+    pub subvol: AtomicU32, /* Nonzero only if a subvolume points to this node: */
+    #[c("u32 tree")]
+    pub tree: AtomicU32,
     /* bit (ancestor - id - 1) set for ancestors within 128 IDs */
     #[c("unsigned long is_ancestor[BITS_TO_LONGS(IS_ANCESTOR_BITMAP)]")]
-    pub is_ancestor: [c_ulong; bits_to_longs(c::IS_ANCESTOR_BITMAP as usize)],
+    pub is_ancestor: [AtomicUsize; bits_to_longs(c::IS_ANCESTOR_BITMAP as usize)],
 }
-c_default!(snapshot_t);
+
+const _: () = assert!(core::mem::size_of::<c_ulong>() == core::mem::size_of::<AtomicUsize>());
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct snapshot_table {
     pub rcu: c::rcu_head,
     pub nr: usize,
     #[c("DECLARE_FLEX_ARRAY(struct snapshot_t, s)")]
     pub s: [c::snapshot_t; 0],
 }
-c_default!(snapshot_table);
 
-// SAFETY: Copy, of integers and a snapshot_id_state, whose 0 is empty
+// SAFETY: atomic integers; all zeroes is SNAPSHOT_ID_empty
 unsafe impl crate::util::rcu::RcuElement for snapshot_t {}
 
 // C's view of the table bch_fs_snapshots.table is an RcuArray of
@@ -102,7 +115,10 @@ const _: () = {
 pub struct bch_fs_snapshots {
     #[c("struct snapshot_table __rcu *table")]
     pub table: crate::util::rcu::RcuArray<c::snapshot_t>,
-    pub table_lock: c::mutex,
+    /// The table's writers' lock: taken by table_write(), in snapshot.rs.
+    #[pin]
+    #[init(RustOnly::new(new_mutex!(())))]
+    pub(crate) table_lock: rust_only!(Mutex<()>),
     /* a topology repair invalidated descendants' is_ancestor bitmaps: */
     pub need_table_rebuild: bool,
     pub create_lock: c::percpu_rw_semaphore,

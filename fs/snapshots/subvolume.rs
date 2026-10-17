@@ -905,7 +905,7 @@ pub fn create(
     }
 
     let nr = if src != 0 { 2 } else { 1 };
-    t.snapshot_node_create(parent_snapshot, &mut new_nodes[..nr], &snapshot_subvols[..nr])?;
+    snapshot::node_create(t, parent_snapshot, &mut new_nodes[..nr], &snapshot_subvols[..nr])?;
 
     if let Some(mut k) = src_k {
         k.v_mut().snapshot = new_nodes[1].into();

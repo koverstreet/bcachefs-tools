@@ -102,7 +102,9 @@ impl<T: ?Sized + RcuPointee> RcuBuf<T> {
     /// rcu_dereference_protected(): the writer's view.
     ///
     /// # Safety
-    /// The caller holds the writers' lock, until it's done with the &T.
+    /// The caller holds the writers' lock, and doesn't replace() - which
+    /// frees this one, and the writer isn't in a read-side section - until
+    /// it's done with the &T.
     pub unsafe fn get_locked(&self) -> Option<&T> {
         let p = self.p.load(Ordering::Relaxed);
         // SAFETY: only a writer replaces or frees it, and we're the writer

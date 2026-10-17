@@ -218,14 +218,9 @@ fn lookup_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<BkeyI<c::Snapshot>, 
 
 /// The raw field: 0 on keys that predate it, which matches no state - so a
 /// legacy node is never == deleted, and always != live. What the node
-/// actually is: state_compat().
+/// actually is: snapshot::state_compat().
 fn state(v: &c::Snapshot) -> c::bch_snapshot_state {
     c::bch_snapshot_state(v.state().get())
-}
-
-/// On keys that predate the state field, the old flag bits.
-fn state_compat(v: &c::Snapshot) -> c::bch_snapshot_state {
-    if v.state().get() != 0 { state(v) } else { v.state_from_flags() }
 }
 
 /// The node's child, if it has exactly one: then it's redundant, and its keys
@@ -455,6 +450,9 @@ fn normalize_child_pointers(s: &mut c::Snapshot) {
 ///
 /// So this is separable from the deletion on purpose: a caller that is about
 /// to commit to a set of nodes asks first, and drops the refused ones.
+///
+/// The refusals that want the tree shown say so to the caller, which prints
+/// them after the attempt: see refusal_to_text().
 fn check_deletable(t: &TransAttempt<'_, '_>, id: u32, delete_interior: bool, run: Option<&Run<'_>>)
     -> Result<(), BchError>
 {
@@ -471,10 +469,6 @@ fn check_deletable(t: &TransAttempt<'_, '_>, id: u32, delete_interior: bool, run
     }
 
     if v.children()[1] != 0 {
-        let mut msg = LogMsg::new(fs);
-        let _ = writeln!(msg, "deleting node with two children:");
-        let _ = snapshot::tree_keys_to_text(&mut msg, t, id);
-        nodes_to_text(&mut msg, run.map(|r| r.nodes), true);
         return fs.throw(bch_errcode::BCH_ERR_EINVAL_snapshot_delete_has_two_children);
     }
 
@@ -495,14 +489,34 @@ fn check_deletable(t: &TransAttempt<'_, '_>, id: u32, delete_interior: bool, run
     }
 
     if v.children()[0] != 0 && !delete_interior {
-        let mut msg = LogMsg::new(fs);
-        let _ = writeln!(msg, "deleting interior node {id} with child {} at runtime:", v.children()[0]);
-        let _ = snapshot::tree_keys_to_text(&mut msg, t, id);
-        nodes_to_text(&mut msg, run.map(|r| r.nodes), true);
         return fs.throw(bch_errcode::BCH_ERR_EINVAL_snapshot_delete_interior_at_runtime);
     }
 
     Ok(())
+}
+
+/// check_deletable()'s refusals of node @id that show the tree, printed
+/// after its attempt: the tree dump is attempts of its own.
+#[cold]
+fn refusal_to_text(trans: &BtreeTrans<'_>, ret: &Result<(), BchError>, id: u32, run: Option<&Run<'_>>) {
+    let fs = trans.fs();
+    let Err(e) = ret else { return };
+
+    let mut msg = if *e == bch_errcode::BCH_ERR_EINVAL_snapshot_delete_has_two_children.into() {
+        let mut msg = LogMsg::new(fs);
+        let _ = writeln!(msg, "deleting node with two children:");
+        msg
+    } else if *e == bch_errcode::BCH_ERR_EINVAL_snapshot_delete_interior_at_runtime.into() {
+        let mut msg = LogMsg::new(fs);
+        let _ = writeln!(msg, "deleting interior node {id} with child {} at runtime:",
+                         fs.snapshots.first_child(id));
+        msg
+    } else {
+        return;
+    };
+
+    let _ = snapshot::tree_keys_to_text(&mut msg, trans, id);
+    nodes_to_text(&mut msg, run.map(|r| r.nodes), true);
 }
 
 /// Splice node @id out of its tree, and tombstone it. Callers are
@@ -579,7 +593,7 @@ fn node_delete(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
 /// remount precisely so ancestry still resolves - and carries child pointers
 /// like any other node, so it is a perfectly ordinary neighbour to attach to.
 fn in_tree(v: &c::Snapshot) -> bool {
-    state_compat(v) != c::bch_snapshot_state::SNAPSHOT_STATE_deleted
+    snapshot::state_compat(v) != c::bch_snapshot_state::SNAPSHOT_STATE_deleted
 }
 
 /// Where to splice back in from below.
@@ -1323,10 +1337,12 @@ fn delete_dead_snapshots_locked(fs: &Fs) -> Result<(), BchError> {
     }
 
     for &i in run.nodes.delete_leaves.iter() {
-        commit_do(&trans, None, CommitFlags::empty(), |t| {
+        let ret = commit_do(&trans, None, CommitFlags::empty(), |t| {
             check_deletable(t, i, false, Some(&run))?;
             node_delete(t, i)
-        })?;
+        });
+        refusal_to_text(&trans, &ret, i, Some(&run));
+        ret?;
     }
 
     for i in run.nodes.delete_interior.iter() {
@@ -1447,7 +1463,9 @@ fn delete_dead_interior_snapshots(fs: &Fs) -> Result<(), BchError> {
         // that never happened - skip[] pointing above parent, which
         // validation rejects on the next write.
         for i in delete.iter() {
-            lockrestart_do(&trans, |t| check_deletable(t, i.id, true, None))?;
+            let ret = lockrestart_do(&trans, |t| check_deletable(t, i.id, true, None));
+            refusal_to_text(&trans, &ret, i.id, None);
+            ret?;
         }
 
         // Fixing children of deleted snapshots can't be done completely
@@ -1486,12 +1504,12 @@ fn delete_dead_interior_snapshots_pass(fs: &Fs) -> Result<(), BchError> {
 
 crate::recovery_pass!(bch2_delete_dead_interior_snapshots => delete_dead_interior_snapshots_pass);
 
-/// For check_snapshots' walk (snapshot.c): count the emptied interior nodes,
-/// and schedule deletion for a node that needs it.
-fn check_snapshot_needs_deletion(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, nr_empty_interior: &mut u32) {
+/// For snapshots_read()'s walk: count the emptied interior nodes, and
+/// schedule deletion for a node that needs it.
+pub(crate) fn check_snapshot_needs_deletion(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, nr_empty_interior: &mut u32) {
     let Some(v) = snapshot::val(k) else { return };
 
-    let needs_delete = match state_compat(&v) {
+    let needs_delete = match snapshot::state_compat(&v) {
         c::bch_snapshot_state::SNAPSHOT_STATE_deleted     => false,
         c::bch_snapshot_state::SNAPSHOT_STATE_no_keys     => { *nr_empty_interior += 1; false }
         c::bch_snapshot_state::SNAPSHOT_STATE_will_delete => true,
@@ -1507,15 +1525,4 @@ fn check_snapshot_needs_deletion(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, nr_emp
         let _ = passes::run_explicit(t.fs(), &mut buf, BCH_RECOVERY_PASS_delete_dead_snapshots,
                                      c::bch_run_recovery_pass_flags::RUN_RECOVERY_PASS_ephemeral);
     }
-}
-
-#[c_export]
-pub fn bch2_check_snapshot_needs_deletion(
-    trans:             &Opaque<c::btree_trans>,
-    k:                 BkeySC<'_>,
-    nr_empty_interior: &mut u32,
-) -> core::ffi::c_int {
-    check_snapshot_needs_deletion(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() },
-                                  k, nr_empty_interior);
-    0
 }

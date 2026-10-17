@@ -1085,28 +1085,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.result(ret)
     }
 
-    pub fn snapshot_node_create(
-        &self,
-        parent:           u32,
-        new_snapids:      &mut [u32],
-        snapshot_subvols: &[u32],
-    ) -> Result<(), BchError> {
-        if new_snapids.len() != snapshot_subvols.len() {
-            self.fs().throw(crate::errcode::invalid_snapshot_node)?;
-        }
-
-        let ret = unsafe {
-            c::bch2_snapshot_node_create(
-                self.raw(),
-                parent,
-                new_snapids.as_mut_ptr(),
-                snapshot_subvols.as_ptr() as *mut u32,
-                new_snapids.len() as u32,
-            )
-        };
-        self.result(ret)
-    }
-
     pub fn iter_traverse(&self, iter: &mut BtreeIter<'a>) -> Result<(), BchError> {
         let ret = unsafe { c::bch2_btree_iter_traverse(iter.raw_mut()) };
         self.result(ret)
