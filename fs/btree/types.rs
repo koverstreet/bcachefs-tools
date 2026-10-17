@@ -408,6 +408,13 @@ c_xmacro! {
      *
      * BTREE_TRIGGER_gc - we're in gc/fsck: running triggers to recalculate e.g. disk usage
      *
+     * transactional, atomic and gc are the phase a trigger runs in, and every
+     * caller passes exactly one - commit's three passes, gc's check, interior
+     * updates. Triggers rely on it: the reflink_p trigger's transactional and
+     * gc passes share one walk position, right only because one of them runs.
+     * XXX: a bitmask can't say "exactly one"; the phase wants to be in the
+     * trigger's type, dependent typing over the flags.
+     *
      * BTREE_TRIGGER_insert - @new is entering the btree
      * BTREE_TRIGGER_overwrite - @old is leaving the btree
      */
