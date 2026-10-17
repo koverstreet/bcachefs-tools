@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use core::ffi::c_uint;
+use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, c_const, c_enum, c_extern, c_xmacro};
 use nestify::nest;
 
@@ -65,4 +65,6 @@ c_default!(opt_change_scope);
 
 c_extern! {
     pub fn bch2_opt_change_scope_exit(scope: *mut c::opt_change_scope);
+    pub fn bch2_set_reconcile_needs_scan_trans(trans: *mut c::btree_trans, s: c::reconcile_scan) -> c_int;
+    pub fn rust_bch2_reconcile_wakeup(c: *mut c::bch_fs);
 }

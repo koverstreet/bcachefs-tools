@@ -2167,6 +2167,12 @@ __cold void bch2_reconcile_scan_pending_to_text(struct printbuf *out, struct bch
 	prt_printf(out, "%u\n", iter.pos.inode == 0);
 }
 
+/* For Rust: a static inline, of rcu and task state */
+void rust_bch2_reconcile_wakeup(struct bch_fs *c)
+{
+	bch2_reconcile_wakeup(c);
+}
+
 void bch2_reconcile_stop(struct bch_fs *c)
 {
 	struct task_struct *p;
