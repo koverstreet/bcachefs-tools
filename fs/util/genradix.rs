@@ -17,11 +17,14 @@
 //! where C shares the radix, Rust's access is under the lock C's is.
 //!
 //! No Drop: GenRadix is Copy, as the C structs holding one are, and those free
-//! theirs in C. free() is genradix_free().
+//! theirs in C. free() is genradix_free(). SharedGenRadix, for one allocated
+//! from several threads at once, is Rust's own, and frees on drop.
 
 use crate::c;
 use crate::types::GenRadix;
 use crate::util::alloc::AllocError;
+use core::cell::UnsafeCell;
+use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ptr::NonNull;
 use pin_init::Zeroable;
@@ -89,9 +92,7 @@ impl<T: Zeroable> GenRadix<T> {
     /// allocated node, written or not: as genradix_for_each_from().
     #[inline]
     pub fn iter_from(&self, idx: usize) -> Iter<'_, T> {
-        // genradix_iter_init(): an offset past usize is the end
-        let offset = Self::offset(idx).unwrap_or(usize::MAX);
-        Iter { radix: self, iter: c::genradix_iter { offset, pos: idx } }
+        Iter(RawIter::new(self.tree(), idx))
     }
 
     /// Free every node: as genradix_free(). Empty after, as a new one is.
@@ -100,13 +101,95 @@ impl<T: Zeroable> GenRadix<T> {
     }
 }
 
-pub struct Iter<'a, T> {
-    radix: &'a GenRadix<T>,
-    iter:  c::genradix_iter,
+/// A GenRadix allocated through shared references, as C uses one from
+/// several threads at once: genradix_ptr_alloc() is safe against concurrent
+/// allocation and lookup, and a node never moves. Its entries aren't its to
+/// lend, then - it hands out pointers, for whatever serializes access to
+/// them to make references of. Rust's own: not Copy, and freed on drop.
+pub struct SharedGenRadix<T>(UnsafeCell<GenRadix<T>>);
+
+// SAFETY: allocation and lookup are C's, safe from any thread; the entries
+// are reached only through pointers, whose users answer for them
+unsafe impl<T: Send> Send for SharedGenRadix<T> {}
+unsafe impl<T: Send> Sync for SharedGenRadix<T> {}
+
+// SAFETY: zeroed is empty, as GenRadix's is
+unsafe impl<T> Zeroable for SharedGenRadix<T> {}
+
+impl<T> SharedGenRadix<T> {
+    /// Empty: as genradix_init().
+    pub fn new() -> Self {
+        // SAFETY: Zeroable's
+        unsafe { core::mem::zeroed() }
+    }
 }
+
+impl<T: Zeroable> SharedGenRadix<T> {
+    fn tree(&self) -> *mut c::__genradix {
+        // SAFETY: the UnsafeCell's - C's to write, and only C's
+        unsafe { core::ptr::addr_of_mut!((*self.0.get()).tree) }
+    }
+
+    /// Allocate @idx's node, zeroed, if it hasn't been - as
+    /// genradix_ptr_alloc(), without the entry.
+    #[inline]
+    pub fn prealloc(&self, idx: usize, gfp: c::gfp_t) -> Result<(), AllocError> {
+        let offset = GenRadix::<T>::offset(idx).ok_or(AllocError)?;
+        let p = unsafe { c::__genradix_ptr_alloc(self.tree(), offset, core::ptr::null_mut(), gfp) };
+        if p.is_null() { Err(AllocError) } else { Ok(()) }
+    }
+
+    /// The entry at @idx - None if its node was never allocated: as
+    /// genradix_ptr(). A T, by Zeroable, if nothing has written it.
+    #[inline]
+    pub fn get_raw(&self, idx: usize) -> Option<NonNull<T>> {
+        let p = unsafe { c::__genradix_ptr(self.tree(), GenRadix::<T>::offset(idx)?) };
+        NonNull::new(p.cast::<T>())
+    }
+
+    /// GenRadix::iter_from(), the entries as get_raw()'s.
+    #[inline]
+    pub fn iter_from_raw(&self, idx: usize) -> RawIter<'_, T> {
+        RawIter::new(self.tree(), idx)
+    }
+}
+
+impl<T> Drop for SharedGenRadix<T> {
+    fn drop(&mut self) {
+        unsafe { c::__genradix_free(&mut self.0.get_mut().tree) }
+    }
+}
+
+/// GenRadix::iter_from()'s walk, the entries as pointers.
+pub struct RawIter<'a, T> {
+    tree: *mut c::__genradix,
+    iter: c::genradix_iter,
+    _t:   PhantomData<&'a T>,
+}
+
+impl<T: Zeroable> RawIter<'_, T> {
+    #[inline]
+    fn new(tree: *mut c::__genradix, idx: usize) -> Self {
+        // genradix_iter_init(): an offset past usize is the end
+        let offset = GenRadix::<T>::offset(idx).unwrap_or(usize::MAX);
+        RawIter { tree, iter: c::genradix_iter { offset, pos: idx }, _t: PhantomData }
+    }
+}
+
+pub struct Iter<'a, T>(RawIter<'a, T>);
 
 impl<'a, T: Zeroable> Iterator for Iter<'a, T> {
     type Item = (usize, &'a T);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        // SAFETY: as GenRadix::get()'s
+        self.0.next().map(|(pos, p)| (pos, unsafe { p.as_ref() }))
+    }
+}
+
+impl<T: Zeroable> Iterator for RawIter<'_, T> {
+    type Item = (usize, NonNull<T>);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -114,9 +197,8 @@ impl<'a, T: Zeroable> Iterator for Iter<'a, T> {
 
         // genradix_iter_peek(): which skips unallocated nodes, moving the
         // iterator to the next allocated one
-        let p = unsafe { c::__genradix_iter_peek(&mut self.iter, self.radix.tree(), NODE_SIZE / size) };
-        // SAFETY: as GenRadix::get()'s
-        let item = (self.iter.pos, unsafe { NonNull::new(p.cast::<T>())?.as_ref() });
+        let p = unsafe { c::__genradix_iter_peek(&mut self.iter, self.tree, NODE_SIZE / size) };
+        let item = (self.iter.pos, NonNull::new(p.cast::<T>())?);
 
         // genradix_iter_advance(): past the node's last whole entry, to the
         // next node
