@@ -17,6 +17,9 @@
 //!                        the whole list
 //!   c_xmacro_from_c!(..) a list C still defines, read from its header: the
 //!                        same NAME!(cb), no record (xmacro_from_c.rs)
+//!   xmacro_select!       NAME!(xmacro_select [TOKEN => cb]): cb! handed
+//!                        the rows with TOKEN in them - a flag in a flags
+//!                        column
 //!   c_bitmask! { .. }    bitfields in a flags word: Rust gets a getter and
 //!                        a setter on the struct for each
 //!   c_ioctl! { .. }      ioctl numbers: C gets the _IO*() #defines, Rust a
@@ -723,6 +726,49 @@ pub fn c_xmacro_from_c(input: TokenStream) -> TokenStream {
         let mut out = tokens(&format!("const _: &[u8] = include_bytes!({path:?});"));
         out.extend(xmacro(list, false)?);
         Ok(out)
+    })
+}
+
+/// An x-macro list's rows, selected: NAME!(xmacro_select [TOKEN => cb])
+/// expands to cb! { (args), ... } of the rows with the identifier TOKEN among
+/// their own tokens - a flag in a flags column, as BKEY_TYPE_ptrs is in
+/// BCH_BKEY_TYPES(). cb may be a path; [TOKEN => cb { args }] hands it args
+/// before the rows, cb! { args (args), ... }. Selecting in a macro_rules!
+/// muncher instead nests an expansion per token, which runs into the
+/// recursion limit as lists grow.
+#[proc_macro]
+pub fn xmacro_select(input: TokenStream) -> TokenStream {
+    expand("xmacro_select!", || {
+        let mut input = input.into_iter();
+        let Some(TokenTree::Group(pre)) = input.next().filter(|t| matches!(t,
+            TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket)) else {
+            return Err("expected [TOKEN => cb] before the list".into());
+        };
+        let pre: Vec<TokenTree> = pre.stream().into_iter().collect();
+        let (token, cb) = match pre.as_slice() {
+            [TokenTree::Ident(token), TokenTree::Punct(eq), TokenTree::Punct(gt), cb @ ..]
+                if eq.as_char() == '=' && gt.as_char() == '>' && !cb.is_empty() => (token.to_string(), cb),
+            _ => return Err("expected [TOKEN => cb] before the list".into()),
+        };
+        let (cb, args) = match cb {
+            [cb @ .., TokenTree::Group(g)] if g.delimiter() == Delimiter::Brace => (cb, g.stream().to_string()),
+            cb => (cb, String::new()),
+        };
+        let cb = cb.iter().cloned().collect::<TokenStream>();
+
+        let mut rows = Vec::new();
+        for t in input {
+            match t {
+                TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis => {
+                    if g.stream().into_iter().any(|t| matches!(&t, TokenTree::Ident(i) if i.to_string() == token)) {
+                        rows.push(g.to_string());
+                    }
+                }
+                TokenTree::Punct(p) if p.as_char() == ',' => {}
+                t => return Err(format!("expected a list of (args) rows, found {t}")),
+            }
+        }
+        Ok(tokens(&format!("{cb}! {{ {args} {} }}", rows.join(", "))))
     })
 }
 
