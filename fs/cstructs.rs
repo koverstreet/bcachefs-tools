@@ -140,7 +140,6 @@
 #[path = "btree/cache_types.rs"] pub mod btree_cache_types;
 #[path = "data/checksum_types.rs"] pub mod data_checksum_types;
 #[path = "data/ec/trigger_types.rs"] pub mod data_ec_trigger_types;
-#[path = "data/io_misc_types.rs"] pub mod data_io_misc_types;
 #[path = "fs/check_types.rs"] pub mod fs_check_types;
 #[path = "fs/namei_types.rs"] pub mod fs_namei_types;
 #[path = "init/fs_types.rs"] pub mod init_fs_types;
@@ -326,7 +325,6 @@ pub mod c {
     pub use super::btree_cache_types::*;
     pub use super::data_checksum_types::*;
     pub use super::data_ec_trigger_types::*;
-    pub use super::data_io_misc_types::*;
     pub use super::fs_check_types::*;
     pub use super::fs_namei_types::*;
     pub use super::init_fs_types::*;

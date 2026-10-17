@@ -3,7 +3,7 @@
 //! Logged operations: an operation too big for one transaction - a truncate,
 //! an finsert, a stripe update, an inode option propagation - keeps a key in
 //! BTREE_ID_logged_ops while it runs, so that if we crash part way, recovery
-//! can resume it. The ops are in io_misc.c, ec/create.c and inode_opts.rs;
+//! can resume it. The ops are in io_misc.rs, ec/create.c and inode_opts.rs;
 //! this is starting and finishing one, and recovery resuming what's left.
 
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN};
@@ -42,13 +42,9 @@ const LOGGED_OPS: [LoggedOp; 4] = {
     type T = c::bch_bkey_type;
     [
         LoggedOp { name: "truncate", ty: T::KEY_TYPE_logged_op_truncate, early: false,
-                   resume: |trans, k| ret_to_result_void(unsafe {
-                       c::bch2_resume_logged_op_truncate(trans.raw(), k.as_ffi_mut())
-                   }) },
+                   resume: crate::data::io_misc::resume_truncate },
         LoggedOp { name: "finsert", ty: T::KEY_TYPE_logged_op_finsert, early: false,
-                   resume: |trans, k| ret_to_result_void(unsafe {
-                       c::bch2_resume_logged_op_finsert(trans.raw(), k.as_ffi_mut())
-                   }) },
+                   resume: crate::data::io_misc::resume_finsert },
         LoggedOp { name: "stripe_update", ty: T::KEY_TYPE_logged_op_stripe_update, early: true,
                    resume: |trans, k| ret_to_result_void(unsafe {
                        c::bch2_resume_logged_op_stripe_update(trans.raw(), k.as_ffi_mut())
