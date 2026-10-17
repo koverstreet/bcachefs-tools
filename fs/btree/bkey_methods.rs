@@ -27,6 +27,7 @@
 use crate::btree::bkey::{BkeyS, BkeySC, BKEY_U64S};
 use crate::btree::iter::{TransBkey, UpdateTriggerFlags};
 use crate::c;
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::{dirent, inode};
 use crate::snapshot_states::{SNAPSHOT_STATE_VALUES, SUBVOLUME_STATE_VALUES};
@@ -219,6 +220,22 @@ impl<'a> TriggerOp<'a> {
             new:   BkeyS { k: unsafe { &mut *new.k }, v: new.v, val: core::marker::PhantomData },
             flags: UpdateTriggerFlags::from_bits_retain(op.flags.bits()),
         }
+    }
+
+    /// Run @f on the key going out, as an overwrite, then on the key coming
+    /// in, as an insert - each that isn't a deletion: as C's
+    /// trigger_run_overwrite_then_insert().
+    pub fn run_overwrite_then_insert<F>(&self, mut f: F) -> Result<(), BchError>
+    where
+        F: FnMut(BkeySC<'_>, UpdateTriggerFlags) -> Result<(), BchError>,
+    {
+        if !self.old.k.is_deleted() {
+            f(self.old, self.flags - UpdateTriggerFlags::INSERT)?;
+        }
+        if !self.new.k.is_deleted() {
+            f(self.new.s_c(), self.flags - UpdateTriggerFlags::OVERWRITE)?;
+        }
+        Ok(())
     }
 }
 

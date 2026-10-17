@@ -1319,6 +1319,7 @@ bitflags! {
     /// btree_iter_update_trigger_flags: how an update commits, and which
     /// triggers it runs. Apart from the iterator half because the str_hash
     /// inserts take both.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct UpdateTriggerFlags: u32 {
         const INTERNAL_SNAPSHOT_NODE   = c::btree_iter_update_trigger_flags::BTREE_UPDATE_internal_snapshot_node.bits();
         const NOJOURNAL                = c::btree_iter_update_trigger_flags::BTREE_UPDATE_nojournal.bits();
