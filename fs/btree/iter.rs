@@ -1314,6 +1314,11 @@ impl CommitOpts {
         self.0
     }
 
+    /// A C caller's flags and watermark, as one unsigned.
+    pub(crate) const fn from_bits(bits: u32) -> Self {
+        CommitOpts(bits)
+    }
+
     pub(crate) const fn to_c(self) -> c::bch_trans_commit_flags {
         c::bch_trans_commit_flags::from_bits_retain(self.0)
     }
