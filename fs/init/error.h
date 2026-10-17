@@ -236,9 +236,6 @@ do {									\
  * mode - pretty much just due to metadata IO errors:
  */
 
-__printf(3, 4)
-void bch2_fatal_error(struct bch_fs *c, const char *func, const char *fmt, ...);
-
 #define bch2_fs_fatal_error(c, ...)					\
 	bch2_fatal_error(c, __func__, __VA_ARGS__)
 

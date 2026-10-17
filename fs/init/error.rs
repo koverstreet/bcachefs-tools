@@ -28,6 +28,7 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::util::Printbuf;
 use crate::util::log::LogMsg;
+use core::ffi::CStr;
 use core::fmt;
 
 /// The fsck error ids by their BCH_SB_ERRS() names: id::inode_wrong_nlink.
@@ -194,6 +195,17 @@ pub fn fs_inconsistent(fs: &Fs, msg: fmt::Arguments<'_>) -> bool {
     unsafe { c::bch2_fs_inconsistent(fs.as_ptr(), c"%s".as_ptr().cast(), buf.as_raw().buf) }
 }
 
+/// Go emergency read-only, logging @msg as a fatal error in @func - if this
+/// is what took us read-only: as bch2_fs_fatal_error().
+pub fn fs_fatal_error(fs: &Fs, func: &CStr, msg: fmt::Arguments<'_>) {
+    let mut buf = Printbuf::new();
+    buf.write_fmt(msg);
+
+    unsafe {
+        c::bch2_fatal_error(fs.as_ptr(), func.as_ptr().cast(), c"%s".as_ptr().cast(), buf.as_raw().buf)
+    }
+}
+
 /// What C's bkey_fsck_err() finds by name in a key type's validate: c, k,
 /// from.
 pub struct BkeyValidate<'a, 'k> {
@@ -303,6 +315,13 @@ macro_rules! trans_inconsistent {
 macro_rules! fs_inconsistent {
     ($fs:expr, $($msg:tt)*) => {
         $crate::init::error::fs_inconsistent($fs, format_args!($($msg)*))
+    };
+}
+
+#[macro_export]
+macro_rules! fs_fatal_error {
+    ($fs:expr, $($msg:tt)*) => {
+        $crate::init::error::fs_fatal_error($fs, $crate::c_function_name!(), format_args!($($msg)*))
     };
 }
 
