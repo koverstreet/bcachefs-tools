@@ -3587,11 +3587,6 @@ void rust_dir_casefold_changed(struct dentry *dentry)
 	bch2_dir_casefold_changed(dentry);
 }
 
-int rust_xattr_handler_flags(const struct xattr_handler *handler)
-{
-	return handler->flags;
-}
-
 unsigned rust_posix_acl_count(const struct posix_acl *acl)
 {
 	return acl->a_count;

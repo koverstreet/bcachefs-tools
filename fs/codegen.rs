@@ -19,6 +19,8 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/crc32.h",			// crc32c(), a string hash
     "linux/crc64.h",			// crc64_be(), a string hash
     "linux/generic-radix-tree.h",	// GenRadix<T>'s __genradix
+    "linux/xattr.h",			// xattr_handler, which fs.h only declares
+    "linux/posix_acl_xattr.h",		// nop_posix_acl_*, xattr.rs's ACL handlers
 ];
 
 /// Vendored library code bound, by path under fs/ - which the clang args have
@@ -32,14 +34,17 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/crc32.h",
     "linux/crc64.h",
     "linux/generic-radix-tree.h",
+    "linux/xattr.h",
+    "linux/posix_acl_xattr.h",
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
     "crc32c", "crc64_be",
     "__genradix_ptr", "__genradix_ptr_alloc", "__genradix_iter_peek", "__genradix_free",
 ];
-const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter"];
-const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE"];
+const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",
+                                  "xattr_handler"];
+const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default"];
 
 /// Run the bindgen CLI and write `bindings.rs`, and `extern.c` - C wrappers for
 /// whatever of it is a static inline - into `out`. Kbuild supplies
@@ -76,6 +81,10 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String]) 
     flag!("--with-derive-custom-struct", ".*=::pin_init::MaybeZeroable");
     flag!("--with-derive-custom-union", ".*=::pin_init::MaybeZeroable");
     a.push("--use-core".into());
+    // C's char as the kernel compiles it, u8, as kernel::bindings has it -
+    // not core's, i8 on x86: a fn pointer field taking char * has to take
+    // what the Rust fns it points to do
+    flag!("--ctypes-prefix", "crate::util::ffi");
     a.push("--generate-inline-functions".into());
     a.push("--wrap-static-fns".into());
     flag!("--wrap-static-fns-path", &extern_c);

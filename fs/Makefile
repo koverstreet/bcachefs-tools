@@ -123,7 +123,6 @@ bcachefs-y		:=			\
 	fs/dirent.o				\
 	fs/quota.o				\
 	fs/str_hash.o				\
-	fs/xattr.o				\
 	init/chardev.o				\
 	init/dev.o				\
 	init/damage.o				\

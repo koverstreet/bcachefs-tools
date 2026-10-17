@@ -10,10 +10,4 @@
 	.val_to_text	= bch2_xattr_to_text,		\
 })
 
-#ifndef NO_BCACHEFS_FS
-
-extern const struct xattr_handler * const bch2_xattr_handlers[];
-
-#endif /* NO_BCACHEFS_FS */
-
 #endif /* _BCACHEFS_XATTR_H */

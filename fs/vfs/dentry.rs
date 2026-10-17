@@ -48,11 +48,8 @@ impl<'a> Dentry<'a> {
     }
 
     /// The prefix xattrs of @ty list under, here - None for a type that
-    /// isn't listed, or that the caller may not see: as
-    /// bch2_xattr_list_prefix().
+    /// isn't listed, or that the caller may not see.
     pub fn xattr_list_prefix(&self, ty: c::bch_xattr_type) -> Option<&'static CStr> {
-        let p = unsafe { c::bch2_xattr_list_prefix(ty, self.raw) };
-        // The handlers' prefixes are static strings:
-        (!p.is_null()).then(|| unsafe { CStr::from_ptr(p.cast()) })
+        crate::xattr::list_prefix(ty, self.raw)
     }
 }

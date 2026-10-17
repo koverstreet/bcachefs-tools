@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Xattrs (fs/xattr.c): extended attributes - a hash table per inode in the
-//! xattrs btree, keyed by type and name - and their VFS end: get, set and
-//! listxattr, and the bcachefs.* namespace, which is inode options.
-//!
-//! The xattr_handler tables the VFS dispatches through stay C, in xattr.c,
-//! pointing at the handlers here; so does what an xattr of a given type lists
-//! under for a given caller, which depends on the handler.
+//! Xattrs: extended attributes - a hash table per inode in the xattrs btree,
+//! keyed by type and name - and their VFS end: get, set and listxattr, the
+//! xattr_handler tables the VFS dispatches through, and the bcachefs.*
+//! namespace, which is inode options.
 //!
 //! POSIX ACLs are xattrs too - types POSIX_ACL_ACCESS and POSIX_ACL_DEFAULT,
 //! with an empty name - and are acl.rs's.
@@ -448,9 +445,8 @@ pub unsafe extern "C" fn bch2_xattr_set(
 #[cfg(kernel)]
 pub use vfs::*;
 
-/// The VFS's entry points: listxattr, the handlers xattr.c's tables point
-/// at, and the bcachefs.* namespace - kernel only, as C's #ifndef
-/// NO_BCACHEFS_FS.
+/// The VFS's entry points: listxattr, the handlers and their tables, and the
+/// bcachefs.* namespace - kernel only, as C's #ifndef NO_BCACHEFS_FS.
 #[cfg(kernel)]
 mod vfs {
     use super::*;
@@ -460,6 +456,7 @@ mod vfs {
     use crate::errcode::{bch_errcode, ret_to_class};
     use crate::inode_opts::{self, InodeOpt};
     use crate::opts::{self, OptChange};
+    use crate::types::CStatic;
     use crate::util::locking::MemallocFlags;
     use crate::vfs::dentry::Dentry;
     use crate::vfs::inode::{InodeInfo, ATTR_CTIME};
@@ -549,11 +546,10 @@ mod vfs {
         }
     }
 
-    /// For xattr.c's user, trusted and security handlers: ->get().
+    /// The user, trusted and security handlers' ->get().
     ///
     /// # Safety
     /// The arguments are the VFS's.
-    #[c_export]
     pub unsafe extern "C" fn bch2_xattr_get_handler(
         handler: *const c::xattr_handler,
         _dentry: *mut c::dentry,
@@ -563,7 +559,7 @@ mod vfs {
         size:    usize,
     ) -> c_int {
         let v = unsafe { InodeInfo::from_inode(vinode) };
-        let ty = c::bch_xattr_type(unsafe { c::rust_xattr_handler_flags(handler) } as u32);
+        let ty = c::bch_xattr_type(unsafe { (*handler).flags } as u32);
         let name = unsafe { cstr_name(name) };
         let mut buffer = unsafe { opt_bytes_mut(buffer, size) };
 
@@ -579,11 +575,10 @@ mod vfs {
         }
     }
 
-    /// For xattr.c's user, trusted and security handlers: ->set().
+    /// The user, trusted and security handlers' ->set().
     ///
     /// # Safety
     /// The arguments are the VFS's.
-    #[c_export]
     #[allow(clippy::too_many_arguments)]
     pub unsafe extern "C" fn bch2_xattr_set_handler(
         handler: *const c::xattr_handler,
@@ -596,7 +591,7 @@ mod vfs {
         flags:   c_int,
     ) -> c_int {
         let v = unsafe { InodeInfo::from_inode(vinode) };
-        let ty = c::bch_xattr_type(unsafe { c::rust_xattr_handler_flags(handler) } as u32);
+        let ty = c::bch_xattr_type(unsafe { (*handler).flags } as u32);
         let name = unsafe { cstr_name(name) };
         let value = unsafe { opt_bytes(value, size) };
         let mut inode = c::bch_inode_unpacked::default();
@@ -647,11 +642,10 @@ mod vfs {
         copy_out(buffer, out.as_bytes())
     }
 
-    /// For xattr.c's bcachefs.* handler: ->get().
+    /// The bcachefs.* handler's ->get().
     ///
     /// # Safety
     /// The arguments are the VFS's.
-    #[c_export]
     pub unsafe extern "C" fn bch2_xattr_bcachefs_get(
         _handler: *const c::xattr_handler,
         _dentry:  *mut c::dentry,
@@ -666,11 +660,10 @@ mod vfs {
         })
     }
 
-    /// For xattr.c's bcachefs_effective.* handler: ->get().
+    /// The bcachefs_effective.* handler's ->get().
     ///
     /// # Safety
     /// The arguments are the VFS's.
-    #[c_export]
     pub unsafe extern "C" fn bch2_xattr_bcachefs_get_effective(
         _handler: *const c::xattr_handler,
         _dentry:  *mut c::dentry,
@@ -788,11 +781,10 @@ mod vfs {
         Ok(())
     }
 
-    /// For xattr.c's bcachefs.* handler: ->set().
+    /// The bcachefs.* handler's ->set().
     ///
     /// # Safety
     /// The arguments are the VFS's.
-    #[c_export]
     #[allow(clippy::too_many_arguments)]
     pub unsafe extern "C" fn bch2_xattr_bcachefs_set(
         _handler: *const c::xattr_handler,
@@ -811,9 +803,8 @@ mod vfs {
         })
     }
 
-    /// For xattr.c's bcachefs_effective.* handler: ->set(), which does
-    /// nothing - xattrs in that namespace are inherited.
-    #[c_export]
+    /// The bcachefs_effective.* handler's ->set(), which does nothing -
+    /// xattrs in that namespace are inherited.
     #[allow(clippy::too_many_arguments)]
     pub extern "C" fn bch2_xattr_bcachefs_set_effective(
         _handler: *const c::xattr_handler,
@@ -826,5 +817,95 @@ mod vfs {
         _flags:   c_int,
     ) -> c_int {
         0
+    }
+
+    // ── The handler tables ───────────────────────────────────────────────
+
+    /// The trusted handler's ->list().
+    unsafe extern "C" fn trusted_list(_dentry: *mut c::dentry) -> bool {
+        unsafe { c::capable(c::CAP_SYS_ADMIN as c_int) }
+    }
+
+    const fn handler(
+        prefix: &'static CStr,
+        flags:  c::bch_xattr_type,
+        list:   Option<unsafe extern "C" fn(*mut c::dentry) -> bool>,
+    ) -> c::xattr_handler {
+        c::xattr_handler {
+            prefix: prefix.as_ptr().cast(),
+            flags:  flags.0 as c_int,
+            list,
+            get:    Some(bch2_xattr_get_handler),
+            set:    Some(bch2_xattr_set_handler),
+            // SAFETY: a C struct, all pointers and integers; name unused
+            ..unsafe { core::mem::zeroed() }
+        }
+    }
+
+    // SAFETY, of the CStatics: immutable, their only parts that aren't Sync
+    // pointers to static strings and fns
+    static USER_HANDLER: CStatic<c::xattr_handler> = unsafe {
+        CStatic::new(handler(c"user.", c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_USER, None))
+    };
+    static TRUSTED_HANDLER: CStatic<c::xattr_handler> = unsafe {
+        CStatic::new(handler(c"trusted.", c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_TRUSTED,
+                             Some(trusted_list)))
+    };
+    static SECURITY_HANDLER: CStatic<c::xattr_handler> = unsafe {
+        CStatic::new(handler(c"security.", c::bch_xattr_type::KEY_TYPE_XATTR_INDEX_SECURITY, None))
+    };
+    static BCACHEFS_HANDLER: CStatic<c::xattr_handler> = unsafe {
+        CStatic::new(c::xattr_handler {
+            prefix: c"bcachefs.".as_ptr().cast(),
+            get:    Some(bch2_xattr_bcachefs_get),
+            set:    Some(bch2_xattr_bcachefs_set),
+            ..core::mem::zeroed()
+        })
+    };
+    static BCACHEFS_EFFECTIVE_HANDLER: CStatic<c::xattr_handler> = unsafe {
+        CStatic::new(c::xattr_handler {
+            prefix: c"bcachefs_effective.".as_ptr().cast(),
+            get:    Some(bch2_xattr_bcachefs_get_effective),
+            set:    Some(bch2_xattr_bcachefs_set_effective),
+            ..core::mem::zeroed()
+        })
+    };
+
+    /// The VFS's: sb->s_xattr.
+    #[c_export]
+    pub static bch2_xattr_handlers: [*const c::xattr_handler; 6] = [
+        core::ptr::addr_of!(USER_HANDLER).cast(),
+        core::ptr::addr_of!(TRUSTED_HANDLER).cast(),
+        core::ptr::addr_of!(SECURITY_HANDLER).cast(),
+        core::ptr::addr_of!(BCACHEFS_HANDLER).cast(),
+        core::ptr::addr_of!(BCACHEFS_EFFECTIVE_HANDLER).cast(),
+        core::ptr::null(),
+    ];
+
+    /// What an xattr of @ty lists under for @dentry's caller - None if it
+    /// doesn't: the handler's prefix, or its name for a POSIX ACL's. As
+    /// bch2_xattr_list_prefix().
+    pub fn list_prefix(ty: c::bch_xattr_type, dentry: *mut c::dentry) -> Option<&'static CStr> {
+        type T = c::bch_xattr_type;
+        let handler: &c::xattr_handler = match ty {
+            T::KEY_TYPE_XATTR_INDEX_USER              => &USER_HANDLER,
+            // SAFETY: the kernel's, and immutable
+            T::KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS  => unsafe { &c::nop_posix_acl_access },
+            T::KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT => unsafe { &c::nop_posix_acl_default },
+            T::KEY_TYPE_XATTR_INDEX_TRUSTED           => &TRUSTED_HANDLER,
+            T::KEY_TYPE_XATTR_INDEX_SECURITY          => &SECURITY_HANDLER,
+            _ => return None,
+        };
+
+        // xattr_handler_can_list()
+        if let Some(list) = handler.list {
+            if !unsafe { list(dentry) } {
+                return None;
+            }
+        }
+
+        // xattr_prefix(): the handlers' strings are static
+        let p = if handler.prefix.is_null() { handler.name } else { handler.prefix };
+        Some(unsafe { CStr::from_ptr(p.cast()) })
     }
 }

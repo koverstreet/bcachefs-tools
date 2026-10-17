@@ -8,7 +8,6 @@
 //! own contract promises, and these only restate.
 
 use core::cell::UnsafeCell;
-use core::ffi::c_void;
 use core::marker::PhantomPinned;
 
 /// A C object - a transaction, an iterator, the filesystem - as an entry
@@ -51,6 +50,11 @@ impl<T> Opaque<T> {
 pub type c_char = u8;
 #[cfg(not(kernel))]
 pub use core::ffi::c_char;
+
+/// The rest of C's types, which are the same in either build: with c_char,
+/// codegen.rs's bindings' --ctypes-prefix.
+pub use core::ffi::{c_int, c_long, c_longlong, c_schar, c_short, c_uchar, c_uint, c_ulong,
+                    c_ulonglong, c_ushort, c_void};
 
 /// The C string at @p, None for a NULL @p.
 ///

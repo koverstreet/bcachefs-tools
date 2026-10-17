@@ -82,7 +82,6 @@
 #[path = "fs/quota_types.rs"] pub mod fs_quota_types;
 #[path = "fs/str_hash_types.rs"] pub mod fs_str_hash_types;
 #[path = "fs/xattr_format.rs"] pub mod fs_xattr_format;
-#[path = "fs/xattr_types.rs"] pub mod fs_xattr_types;
 #[path = "init/damage_format.rs"] pub mod init_damage_format;
 #[path = "init/damage_types.rs"] pub mod init_damage_types;
 #[path = "init/dev_types.rs"] pub mod init_dev_types;
@@ -262,7 +261,6 @@ pub mod c {
     pub use super::fs_quota_types::*;
     pub use super::fs_str_hash_types::*;
     pub use super::fs_xattr_format::*;
-    pub use super::fs_xattr_types::*;
     pub use super::init_damage_format::*;
     pub use super::init_damage_types::*;
     pub use super::init_dev_types::*;

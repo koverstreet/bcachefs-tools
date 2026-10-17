@@ -32,9 +32,6 @@ c_extern! {
     pub fn rust_dentry_parent_inode_opt(dentry: *mut c::dentry, opt: c_uint, v: *mut u64) -> bool;
     pub fn rust_dir_casefold_changed(dentry: *mut c::dentry);
 
-    /* xattr handlers: */
-    pub fn rust_xattr_handler_flags(handler: *const c::xattr_handler) -> c_int;
-
     /* posix ACLs: */
     pub fn posix_acl_alloc(count: c_uint, flags: c::gfp_t) -> *mut c::posix_acl;
     pub fn rust_posix_acl_count(acl: *const c::posix_acl) -> c_uint;
