@@ -7,7 +7,9 @@
 //! rcu_read_lock() is.
 //!
 //! RcuBuf<T> is C's `T __rcu *`, laid out as C's pointer, so C still reads
-//! it. A reader gets a &T for as long as its ReadGuard. A writer - serialized
+//! it. A reader gets a &T for as long as its ReadGuard - or for as long as a
+//! closure runs, from with(), which takes the read lock itself: the guard is
+//! for a reader doing several things under one section. A writer - serialized
 //! by a lock the owner keeps, which RcuBuf can't see, hence unsafe - replaces
 //! it, and the old buffer is freed with kvfree_rcu() once the readers that
 //! might hold it are gone. RcuArray<T> is an RcuBuf of C's
@@ -97,6 +99,13 @@ impl<T: ?Sized + RcuPointee> RcuBuf<T> {
         // SAFETY: what's published is a valid T, and a replaced one is freed
         // only after a grace period - after @_g's section ends
         (!p.is_null()).then(|| unsafe { &*T::from_thin(p) })
+    }
+
+    /// read(), in a read-side section of its own for as long as @f runs: for
+    /// a reader that needs nothing else under the same one.
+    pub fn with<R>(&self, f: impl FnOnce(Option<&T>) -> R) -> R {
+        let g = read_lock();
+        f(self.read(&g))
     }
 
     /// rcu_dereference_protected(): the writer's view.
@@ -203,6 +212,11 @@ impl<T: RcuElement> RcuArray<T> {
     /// is.
     pub fn read<'a>(&'a self, g: &'a ReadGuard) -> &'a [T] {
         self.0.read(g).map_or(&[], |b| &b.s)
+    }
+
+    /// read(), in a read-side section of its own for as long as @f runs.
+    pub fn with<R>(&self, f: impl FnOnce(&[T]) -> R) -> R {
+        self.0.with(|b| f(b.map_or(&[], |b| &b.s)))
     }
 
     /// The writer's view.
