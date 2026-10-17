@@ -109,7 +109,8 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String]) 
         std::process::exit(1);
     }
 
-    let bindings = String::from_utf8(result.stdout).expect("bindgen output utf8");
+    let mut bindings = String::from_utf8(result.stdout).expect("bindgen output utf8");
+    append_opaque_array_zeroable_impls(&mut bindings);
     std::fs::write(format!("{out}/bindings.rs"), bindings).expect("write bindings.rs");
 
     // None, or one with the wrapper's path baked into its #include: the bare
@@ -170,4 +171,45 @@ fn not_prefixed(prefixes: &[&str]) -> String {
         alts.push(format!("{}{}", regex_escape(&c.to_string()), not_prefixed(&rest)));
     }
     format!("(?:{})", alts.join("|"))
+}
+
+/// bindgen emits its own `__BindgenOpaqueArrayN<T>` wrapper (rust-bindgen
+/// #3280) with a fixed derive list, so `--with-derive-custom-*` never reaches
+/// it - the same limitation as rust-bindgen #3196 for `__BindgenBitfieldUnit`.
+/// `closure`'s anonymous union holds a `work_struct`, which bindgen binds as
+/// `__BindgenOpaqueArray8<[u8; 32]>`; without a `Zeroable` impl on the wrapper,
+/// `closure` is not `Zeroable`, and `Fs`'s `#[derive(Init)]` needs it to be.
+///
+/// Post-processed rather than `--raw-line`: the wrapper is emitted only for
+/// some configurations, and an impl for a missing type is E0412.
+///
+/// Remove once bindgen applies custom derives to its helper types.
+fn append_opaque_array_zeroable_impls(bindings: &mut String) {
+    let mut impls = Vec::new();
+
+    for line in bindings.lines() {
+        let Some(rest) = line.trim().strip_prefix("pub struct ") else { continue };
+        let Some(ident_end) = rest.find(['<', '(', '{', ' ']) else { continue };
+        let ident = &rest[..ident_end];
+        let Some(suffix) = ident.strip_prefix("__BindgenOpaqueArray") else { continue };
+        if !suffix.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+
+        let sig = rest[ident_end..].trim();
+        if sig == "<T>(pub T);" {
+            let target = format!("{ident}<T>");
+            let marker = format!("Zeroable for {target}");
+            if !bindings.contains(&marker) {
+                impls.push(format!(
+                    "\n// SAFETY: repr(C, align(N)) newtype around T is all-zeroes-valid if T is.\n\
+                     unsafe impl<T: ::pin_init::Zeroable> ::pin_init::Zeroable for {target} {{}}\n"
+                ));
+            }
+        }
+    }
+
+    for im in impls {
+        bindings.push_str(&im);
+    }
 }
