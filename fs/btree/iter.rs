@@ -921,6 +921,32 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.result(ret)
     }
 
+    /// update(), with a key that isn't in transaction memory - a C caller's,
+    /// as bch2_trans_update() takes. Mutably: the update may rewrite it, a
+    /// deletion that needs a whiteout becoming one.
+    ///
+    /// # Safety
+    /// @key stays where it is, unchanged, until the commit - or until the
+    /// attempt is over, if it doesn't commit. The update points at it.
+    pub unsafe fn update_key(
+        &self,
+        iter:  &BtreeIter<'a>,
+        key:   &mut BkeyI,
+        flags: UpdateTriggerFlags,
+    ) -> Result<(), BchError> {
+        let ret = unsafe {
+            c::bch2_trans_update_ip(
+                self.raw(),
+                iter.raw(),
+                key.as_ffi_mut(),
+                key.k.u64s as u32,
+                c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
+                0,
+            )
+        };
+        self.result(ret)
+    }
+
     /// A key moved from @old_pos to @new_pos, in the same snapshot: in every
     /// descendant snapshot where it was overwritten at @old_pos, whiteout
     /// @new_pos too, so it stays hidden there.
