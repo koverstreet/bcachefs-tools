@@ -485,7 +485,7 @@ STORE(bch2_fs)
 		unsigned type;
 
 		try(bch2_logged_op_fail_next_parse(buf, &type));
-		WRITE_ONCE(c->logged_op_fail_next, type);
+		WRITE_ONCE(c->logged_ops.fail_next, type);
 	}
 
 	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_sysfs))

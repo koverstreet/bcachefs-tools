@@ -132,6 +132,7 @@
 #include "debug/async_objs_gen.h"
 #include "debug/trace.h"
 
+#include "fs/logged_ops_gen.h"
 #include "fs/quota_gen.h"
 
 #include "init/damage_gen.h"

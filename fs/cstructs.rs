@@ -77,6 +77,7 @@
 #[path = "fs/inode_opts_types.rs"] pub mod fs_inode_opts_types;
 #[path = "fs/inode_types.rs"] pub mod fs_inode_types;
 #[path = "fs/logged_ops_format.rs"] pub mod fs_logged_ops_format;
+#[path = "fs/logged_ops_types.rs"] pub mod fs_logged_ops_types;
 #[path = "fs/quota_format.rs"] pub mod fs_quota_format;
 #[path = "fs/quota_types.rs"] pub mod fs_quota_types;
 #[path = "fs/str_hash_types.rs"] pub mod fs_str_hash_types;
@@ -256,6 +257,7 @@ pub mod c {
     pub use super::fs_inode_opts_types::*;
     pub use super::fs_inode_types::*;
     pub use super::fs_logged_ops_format::*;
+    pub use super::fs_logged_ops_types::*;
     pub use super::fs_quota_format::*;
     pub use super::fs_quota_types::*;
     pub use super::fs_str_hash_types::*;

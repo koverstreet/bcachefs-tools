@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{DArray, c_default};
+use crate::types::c_default;
 use crate::util::ffi::c_char;
 use core::ffi::c_int;
 use cstruct_macros::{CStruct, c_extern, TypeInfo};
@@ -60,13 +60,6 @@ pub struct bch_fs_recovery {
     pub passes_failing_ratelimit: [c::recovery_pass_entry; c::BCH_RECOVERY_PASS_NR as usize],
     /* Consecutive failures, for exponential backoff; zeroed on success */
     pub passes_failing_nr: [u8; c::BCH_RECOVERY_PASS_NR as usize],
-
-    /*
-     * Logged ops in the btree when we went rw - the ones from before this
-     * mount, which recovery resumes. Positions in BTREE_ID_logged_ops,
-     * ascending: see bch2_logged_ops_note_unfinished().
-     */
-    pub logged_ops_unfinished: DArray<u64>,
 
     pub lock: c::spinlock_t,
     pub run_lock: c::mutex,

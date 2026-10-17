@@ -59,7 +59,7 @@ int bch2_logged_op_fail_next_parse(const char *buf, unsigned *type)
 
 void bch2_logged_op_fail_next_to_text(struct printbuf *out, struct bch_fs *c)
 {
-	unsigned type = READ_ONCE(c->logged_op_fail_next);
+	unsigned type = READ_ONCE(c->logged_ops.fail_next);
 
 	for (unsigned i = 0; i < ARRAY_SIZE(logged_op_fns); i++)
 		if (logged_op_fns[i].type == type) {
@@ -87,7 +87,7 @@ static int resume_logged_op(struct btree_trans *trans, struct btree_iter *iter,
 	int ret = 0;
 
 	/* Started this mount, and live: see bch2_logged_ops_note_unfinished() */
-	if (!darray_find(c->recovery.logged_ops_unfinished, k.k->p.offset))
+	if (!darray_find(c->logged_ops.unfinished, k.k->p.offset))
 		return 0;
 
 	/* Unknown types go with the late pass, which deletes them: */
@@ -151,7 +151,7 @@ int bch2_logged_ops_note_unfinished(struct bch_fs *c)
 				   POS(LOGGED_OPS_INUM_logged_ops, 0),
 				   POS(LOGGED_OPS_INUM_logged_ops, U64_MAX),
 				   BTREE_ITER_prefetch, k,
-			darray_push(&c->recovery.logged_ops_unfinished, k.k->p.offset));
+			darray_push(&c->logged_ops.unfinished, k.k->p.offset));
 }
 
 int bch2_resume_logged_ops_early(struct bch_fs *c)

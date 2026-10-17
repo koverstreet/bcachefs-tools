@@ -26,8 +26,8 @@
  */
 static inline int bch2_logged_op_inject_fail(struct bch_fs *c, unsigned type)
 {
-	if (unlikely(READ_ONCE(c->logged_op_fail_next) == type) &&
-	    cmpxchg(&c->logged_op_fail_next, type, 0) == type)
+	if (unlikely(READ_ONCE(c->logged_ops.fail_next) == type) &&
+	    cmpxchg(&c->logged_ops.fail_next, type, 0) == type)
 		return bch_err_throw(c, injected_logged_op_fail);
 	return 0;
 }

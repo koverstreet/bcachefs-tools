@@ -642,6 +642,10 @@ pub struct Fs {
 
     pub recovery: c::bch_fs_recovery,
 
+    #[pin]
+    #[init(c::bch_fs_logged_ops::init())]
+    pub logged_ops: c::bch_fs_logged_ops,
+
     pub btree: c::bch_fs_btree,
 
     pub gc: c::bch_fs_gc,
@@ -731,12 +735,6 @@ pub struct Fs {
     pub quotas: [c::bch_memquota_type; c::QTYP_NR as usize],
 
     /* DEBUG JUNK */
-
-    /*
-     * Test knob: KEY_TYPE_logged_op_* whose next cursor update should fail,
-     * or 0. Armed via sysfs, one shot, disarms itself as it fires.
-     */
-    pub logged_op_fail_next: c_uint,
 
     #[cfg(CONFIG_DEBUG_FS)]
     pub fs_debug_dir: *mut c::dentry,
