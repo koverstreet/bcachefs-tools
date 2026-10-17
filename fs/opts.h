@@ -12,6 +12,8 @@
 
 #include "opts_gen.h"
 
+#define BCH_ENCODED_EXTENT_MAX SZ_2M
+
 extern const char * const bch2_error_actions[];
 extern const char * const bch2_degraded_actions[];
 extern const char * const bch2_write_degraded_actions[];
@@ -60,6 +62,7 @@ static inline const char *bch2_d_type_str(unsigned d_type)
  *  - default value
  *  - helptext
  */
+
 
 extern const struct bch_opts bch2_opts_default;
 

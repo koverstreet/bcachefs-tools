@@ -226,3 +226,92 @@ pub(crate) fn parse_opt_val(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::c;
+    use bcachefs_kernel::opts;
+    use bcachefs_kernel::util::vstructs::{from_ffi_mut, Head, SelfSized, VStruct};
+    use std::mem::size_of;
+
+    fn encoded_extent_option() -> (&'static c::bch_option, c::bch_opt_id) {
+        let (index, option) = opts::opt_table().iter().enumerate()
+            .find(|(_, option)| option.name() == Some("encoded_extent_max")).unwrap();
+        (option, opts::opt_id(index))
+    }
+
+    fn superblock(ext_bytes: usize, read_max: u64) -> Vec<u64> {
+        let sb_bytes = size_of::<Head<c::bch_sb>>();
+        let mut storage = vec![0u64; (sb_bytes + ext_bytes).div_ceil(8)];
+        let (option, _) = encoded_extent_option();
+        unsafe {
+            let sb = storage.as_mut_ptr().cast::<Head<c::bch_sb>>();
+            (*sb).set_val_u64s(ext_bytes / 8);
+            option.set_sb.unwrap()(sb, (read_max >> 9).ilog2() as u64);
+
+            if ext_bytes != 0 {
+                let field = storage.as_mut_ptr().cast::<u8>().add(sb_bytes)
+                    .cast::<Head<c::bch_sb_field>>();
+                (*field).set_val_u64s(ext_bytes / 8);
+                (*field).type_ = c::bch_sb_field_type::ext.0.into();
+                let sb = from_ffi_mut::<c::bch_sb>(sb);
+                let ext = bcachefs_kernel::sb::io::sb_field_get::<c::bch_sb_field_ext>(sb).unwrap();
+                assert_eq!(ext.bytes(), ext_bytes);
+            }
+        }
+        storage
+    }
+
+    fn write_max(storage: &mut [u64]) -> u64 {
+        let (_, id) = encoded_extent_option();
+        unsafe { c::bch2_opt_from_sb(storage.as_mut_ptr().cast(), id, -1) }
+    }
+
+    fn legacy_read_max(storage: &mut [u64]) -> u64 {
+        let (option, _) = encoded_extent_option();
+        let sb = storage.as_mut_ptr().cast::<Head<c::bch_sb>>();
+        unsafe { 512u64 << option.get_sb.unwrap()(sb) }
+    }
+
+    fn set_write_max(storage: &mut [u64], value: u64) {
+        let (option, _) = encoded_extent_option();
+        let sb = storage.as_mut_ptr().cast::<Head<c::bch_sb>>();
+        unsafe { opts::opt_set_sb(from_ffi_mut(sb), -1, option, value); }
+    }
+
+    #[test]
+    fn encoded_extent_legacy_superblocks_keep_their_limit() {
+        let ext_bytes = size_of::<c::bch_sb_field_ext>() + size_of::<u64>();
+        for bytes in [0, ext_bytes - size_of::<u64>()] {
+            let mut storage = superblock(bytes, 256 << 10);
+            assert_eq!(write_max(&mut storage), 256 << 10);
+        }
+    }
+
+    #[test]
+    fn encoded_extent_lower_write_limit_preserves_legacy_read_limit() {
+        let ext_bytes = size_of::<c::bch_sb_field_ext>() + size_of::<u64>();
+        let mut storage = superblock(ext_bytes, 256 << 10);
+        assert_eq!(legacy_read_max(&mut storage), 256 << 10);
+        set_write_max(&mut storage, 64 << 10);
+        assert_eq!(write_max(&mut storage), 64 << 10);
+        assert_eq!(legacy_read_max(&mut storage), 256 << 10);
+        let mut reloaded = storage.clone();
+        assert_eq!(write_max(&mut reloaded), 64 << 10);
+        assert_eq!(legacy_read_max(&mut reloaded), 256 << 10);
+    }
+
+    #[test]
+    fn encoded_extent_read_limit_tracks_high_water_mark() {
+        let ext_bytes = size_of::<c::bch_sb_field_ext>() + size_of::<u64>();
+        let mut storage = superblock(ext_bytes, 256 << 10);
+        let mut highest = 256 << 10;
+        for requested in [64 << 10, 512 << 10, 32 << 10, 2 << 20, 4096] {
+            set_write_max(&mut storage, requested);
+            highest = highest.max(requested);
+            assert_eq!(write_max(&mut storage), requested);
+            assert_eq!(legacy_read_max(&mut storage), highest);
+        }
+    }
+
+}

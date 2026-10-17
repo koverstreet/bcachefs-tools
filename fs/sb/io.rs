@@ -586,10 +586,10 @@ mod tests {
     fn sb_field_ext_whole_and_too_short() {
         let mut buf = [0u64; 16];
         buf[12] = 7;                            // flags0
-        let f = field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_ext, 15);
+        let f = field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_ext, 16);
         let e = f.arm::<c::bch_sb_field_ext<Validated>>().expect("an ext section");
         let w = e.whole().expect("all of it");
-        assert_eq!((w.flags0.get(), e.flags0().get(), size_of_val(e)), (7, 7, 120));
+        assert_eq!((w.flags0.get(), e.flags0().get(), size_of_val(e)), (7, 7, 128));
 
         let mut buf = [0u64; 16];
         let f = field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_ext, 10);

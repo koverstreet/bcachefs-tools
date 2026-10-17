@@ -124,6 +124,7 @@ static inline void SET_##name(type *k, __u64 v)				\
 	 ((__u64) '*' << 32)|((__u64) 'k' << 40)|		\
 	 ((__u64) 'e' << 48)|((__u64) 'y' << 56))
 
+
 #define BCH_VERSION_MAJOR(_v)		((__u16) ((_v) >> 10))
 #define BCH_VERSION_MINOR(_v)		((__u16) ((_v) & ~(~0U << 10)))
 #define BCH_VERSION(_major, _minor)	(((_major) << 10)|(_minor) << 0)

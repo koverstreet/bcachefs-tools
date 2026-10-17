@@ -123,7 +123,7 @@ c_xmacro! {
          BCH_SB_DATA_REPLICAS_WANT,     1,
          "#",           "Number of data replicas (erasure coding currently caps this at 3, RAID6)"),
         (encoded_extent_max,            u32,
-         OPT_FS | OPT_FORMAT |
+         OPT_FS | OPT_FORMAT | OPT_RUNTIME |
          OPT_HUMAN_READABLE | OPT_MUST_BE_POW_2 | OPT_SB_FIELD_SECTORS | OPT_SB_FIELD_ILOG2,
          OPT_UINT(4096, 2U << 20),
          BCH_SB_ENCODED_EXTENT_MAX_BITS, 256 << 10,
@@ -795,6 +795,7 @@ c_extern! {
     pub fn bch2_opt_defined_by_id(opts: *const c::bch_opts, id: c::bch_opt_id) -> bool;
     pub fn bch2_opt_get_by_id(opts: *const c::bch_opts, id: c::bch_opt_id) -> u64;
     pub fn bch2_opt_set_by_id(opts: *mut c::bch_opts, id: c::bch_opt_id, v: u64);
+    pub fn bch2_opt_from_sb(sb: *mut Head<c::bch_sb>, id: c::bch_opt_id, dev_idx: c_int) -> u64;
     pub fn bch2_opts_from_sb(opts: *mut c::bch_opts, sb: *mut Head<c::bch_sb>) -> c_int;
     pub fn __bch2_opt_set_sb(sb: *mut Head<c::bch_sb>, dev_idx: c_int, opt: *const c::bch_option, v: u64,
                              val: *const c_char) -> bool;
