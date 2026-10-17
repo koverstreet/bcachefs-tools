@@ -1306,9 +1306,9 @@ fn key_has_inode_in_snapshot(
 /// Key @k is in a snapshot that's missing or dead: repair it - deleted, or
 /// moved to a live descendant - true if so, for the caller to skip it. With
 /// no @iter - the promote path - it can't be repaired, and is just skipped.
-pub(crate) fn check_key_has_snapshot(
-    t:    &TransAttempt<'_, '_>,
-    iter: Option<&mut c::btree_iter>,
+pub(crate) fn check_key_has_snapshot<'a>(
+    t:    &TransAttempt<'a, '_>,
+    iter: Option<&BtreeIter<'a>>,
     k:    BkeySC<'_>,
 ) -> Result<bool, BchError> {
     let fs = t.fs();
@@ -1369,7 +1369,7 @@ pub(crate) fn check_key_has_snapshot(
         match fs.snapshots.live_descendent(k.k.p.snapshot)? {
             None => if inode_fsck_err!(t, k.k.p, id::bkey_in_deleted_snapshot,
                                        "key in deleted snapshot {buf}, delete?")? {
-                t.delete_at_raw(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+                t.delete_at(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
                 return Ok(true);
             },
             Some(live_child) => if fsck_err!(t, id::bkey_in_deleted_interior_snapshot,
@@ -1382,7 +1382,7 @@ pub(crate) fn check_key_has_snapshot(
         }
     } else if inode_fsck_err!(t, k.k.p, id::bkey_in_missing_snapshot,
                               "key in missing snapshot {buf}, delete?")? {
-        t.delete_at_raw(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+        t.delete_at(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
         return Ok(true);
     }
 
@@ -1397,9 +1397,11 @@ pub(crate) fn check_key_has_snapshot(
 #[c_export]
 pub unsafe extern "C" fn __bch2_check_key_has_snapshot(
     trans: &crate::util::ffi::Opaque<c::btree_trans>,
-    iter:  Option<&mut c::btree_iter>,
+    iter:  Option<&mut crate::util::ffi::Opaque<c::btree_iter>>,
     k:     BkeySC<'_>,
 ) -> core::ffi::c_int {
+    let iter = iter.map(|i| &*BtreeIter::from_c(i));
+
     match check_key_has_snapshot(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, iter, k) {
         Ok(handled) => handled as core::ffi::c_int,
         Err(e)      => -e.raw(),

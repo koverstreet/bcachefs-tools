@@ -1083,18 +1083,6 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.result(ret)
     }
 
-    /// delete_at() on an iterator C owns, for Rust that C calls with one.
-    pub(crate) fn delete_at_raw(
-        &self,
-        iter:  &mut c::btree_iter,
-        flags: UpdateTriggerFlags,
-    ) -> Result<(), BchError> {
-        let ret = unsafe {
-            c::bch2_btree_delete_at(self.raw(), iter, c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()))
-        };
-        self.result(ret)
-    }
-
     pub fn delete_at(
         &self,
         iter:  &BtreeIter<'a>,

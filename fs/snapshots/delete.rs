@@ -814,10 +814,10 @@ fn snapshot_id_dying<'r>(run: &Run<'r>, id: u32) -> Option<&'r InteriorDelete> {
 /// leaf) the key is just deleted.
 ///
 /// Shared by the deletion pass (process_key()) and the fsck repair
-/// (check_key_has_snapshot()), which has C's iterator.
+/// (check_key_has_snapshot()).
 pub fn delete_dead_key<'a, 't>(
     t:          &TransAttempt<'a, 't>,
-    iter:       &mut c::btree_iter,
+    iter:       &BtreeIter<'a>,
     k:          BkeySC<'_>,
     live_child: u32,
 ) -> Result<(), BchError> {
@@ -851,20 +851,16 @@ pub fn delete_dead_key<'a, 't>(
         }
     }
 
-    t.delete_at_raw(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+    t.delete_at(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
-fn process_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_>, run: &Run<'_>)
+fn process_key<'a>(t: &TransAttempt<'a, '_>, iter: &BtreeIter<'a>, k: BkeySC<'_>, run: &Run<'_>)
     -> Result<(), BchError>
 {
     let fs = t.fs();
 
-    // SAFETY: the loop lends us its iterator, and doesn't touch it until we
-    // return
-    let raw = unsafe { &mut *iter.raw() };
-
     if !fs.snapshots.exists(k.k.p.snapshot) &&
-       check_snapshots::check_key_has_snapshot(t, Some(&mut *raw), k)? {
+       check_snapshots::check_key_has_snapshot(t, Some(iter), k)? {
         return t.commit_lazy(CommitFlags::NO_ENOSPC);
     }
 
@@ -872,7 +868,7 @@ fn process_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_>, ru
         return Ok(());
     };
 
-    delete_dead_key(t, raw, k, dying.live_child)
+    delete_dead_key(t, iter, k, dying.live_child)
 }
 
 fn delete_dead_snapshot_keys_v1_btree(trans: &BtreeTrans<'_>, btree: c::btree_id, run: &Run<'_>)

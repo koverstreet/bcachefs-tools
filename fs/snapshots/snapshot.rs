@@ -1517,17 +1517,14 @@ pub fn lookup_key(t: &TransAttempt<'_, '_>, id: u32) -> Result<BkeyI<c::Snapshot
 
 /// Whether @k is in a snapshot that doesn't exist - reported, and @k deleted
 /// or its snapshot reconstructed - for the caller to skip it.
-pub fn check_key_has_snapshot(
-    t:    &TransAttempt<'_, '_>,
-    iter: &BtreeIter<'_>,
+pub fn check_key_has_snapshot<'a>(
+    t:    &TransAttempt<'a, '_>,
+    iter: &BtreeIter<'a>,
     k:    BkeySC<'_>,
 ) -> Result<bool, BchError> {
     if t.fs().snapshots.id_state(k.k.p.snapshot) == c::snapshot_id_state::SNAPSHOT_ID_live {
         return Ok(false);
     }
-    // SAFETY: BtreeIter holds its iterator in an UnsafeCell, and nothing else
-    // has it for the call
-    let iter = unsafe { &mut *iter.raw() };
     check_snapshots::check_key_has_snapshot(t, Some(iter), k)
 }
 
