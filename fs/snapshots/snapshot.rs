@@ -6,42 +6,33 @@ use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, SizedBkey};
 use crate::util::vstructs::{Validated, Whole};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey};
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::snapshots::check_snapshots;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::rcu;
+use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
+use core::ffi::c_int;
 use core::fmt;
-use core::marker::PhantomData;
+use cstruct_macros::c_export;
 
 /// The in-memory snapshot table: C's array of snapshot_t, indexed by
 /// U32_MAX - id. Ids descend, so a table covering a node covers its
-/// ancestors. Read in place, unsafely, until it's a Rust structure.
-struct Table<'g> {
-    t:  *const c::snapshot_table,
-    _g: PhantomData<&'g rcu::ReadGuard>,
-}
+/// ancestors.
+struct Table<'g>(&'g [c::snapshot_t]);
 
 impl<'g> Table<'g> {
-    /// Valid while @g's section is open.
-    fn get(snapshots: &c::bch_fs_snapshots, g: &'g rcu::ReadGuard) -> Self {
-        let t = unsafe { rcu::dereference(&raw const snapshots.table, g) };
-        Table { t, _g: PhantomData }
+    fn get(snapshots: &'g c::bch_fs_snapshots, g: &'g rcu::ReadGuard) -> Self {
+        Table(snapshots.table.read(g))
     }
 
     /// Not immutable, whatever the reference says: bch2_mark_snapshot() rewrites
     /// entries in place under table_lock, which readers don't take - RCU only
     /// covers the table being replaced. Too big to copy per lookup; atomic fields
-    /// are the fix, once the table is Rust's.
+    /// are the fix, once snapshot.c is Rust.
     fn entry(&self, id: u32) -> Option<&'g c::snapshot_t> {
-        let idx = (u32::MAX - id) as usize;
-        unsafe {
-            if self.t.is_null() || idx >= (*self.t).nr {
-                return None;
-            }
-            Some(&*(&raw const (*self.t).s).cast::<c::snapshot_t>().add(idx))
-        }
+        self.0.get((u32::MAX - id) as usize)
     }
 
     /// 0 for none.
@@ -291,6 +282,16 @@ impl fmt::Display for SnapshotAccounting {
         }
         Ok(())
     }
+}
+
+/// Room in the table for snapshot @id: bch2_snapshot_t_mut()'s slow path.
+///
+/// # Safety
+/// The caller holds table_lock, the table's writers' lock.
+#[c_export]
+pub unsafe fn bch2_snapshot_table_grow(c: &Opaque<c::bch_fs>, id: u32) -> c_int {
+    let fs = Fs::from_c(c);
+    ret_to_c(unsafe { fs.snapshots.table.grow_to((u32::MAX - id) as usize + 1) }.map_err(BchError::from))
 }
 
 /// Whether @id is @ancestor or one of its descendants.

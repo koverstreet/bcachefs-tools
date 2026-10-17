@@ -69,6 +69,18 @@ pub struct snapshot_table {
 }
 c_default!(snapshot_table);
 
+// SAFETY: Copy, of integers and a snapshot_id_state, whose 0 is empty
+unsafe impl crate::util::rcu::RcuElement for snapshot_t {}
+
+// C's view of the table bch_fs_snapshots.table is an RcuArray of
+const _: () = {
+    use crate::util::rcu::RcuArrayBuf;
+    use core::mem::offset_of;
+    assert!(offset_of!(snapshot_table, rcu) == 0);
+    assert!(offset_of!(snapshot_table, nr) == core::mem::size_of::<c::rcu_head>());
+    assert!(offset_of!(snapshot_table, s) == RcuArrayBuf::<c::snapshot_t>::TAIL);
+};
+
 /*
  * Snapshot creation must prevent userspace from dirtying the page cache while
  * the snapshot is being taken: sync_inodes_sb flushes existing dirty pages
@@ -89,7 +101,7 @@ c_default!(snapshot_table);
 #[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_snapshots {
     #[c("struct snapshot_table __rcu *table")]
-    pub table: *mut c::snapshot_table,
+    pub table: crate::util::rcu::RcuArray<c::snapshot_t>,
     pub table_lock: c::mutex,
     /* a topology repair invalidated descendants' is_ancestor bitmaps: */
     pub need_table_rebuild: bool,

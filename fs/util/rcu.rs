@@ -59,15 +59,6 @@ impl Drop for ReadGuard {
     }
 }
 
-/// rcu_dereference(*@p): the pointer, as published - good while @_g is.
-///
-/// # Safety
-/// @p is a pointer RCU publishes, and the caller only uses what it points
-/// to within @_g's section.
-pub unsafe fn dereference<T>(p: *const *mut T, _g: &ReadGuard) -> *mut T {
-    unsafe { (*(p as *const AtomicPtr<T>)).load(Ordering::Acquire) }
-}
-
 // ── RcuBuf ───────────────────────────────────────────────────────────────
 
 /// What an RcuBuf can point to: a buffer starting with an rcu_head, which a

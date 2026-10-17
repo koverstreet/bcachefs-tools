@@ -633,30 +633,11 @@ bool __bch2_snapshot_is_ancestor(struct btree_trans *trans, u32 id, u32 ancestor
 
 static noinline struct snapshot_t *__snapshot_t_mut(struct bch_fs *c, u32 id)
 {
-	size_t idx = U32_MAX - id;
-	struct snapshot_table *new, *old;
-
-	size_t new_bytes = roundup_pow_of_two(struct_size(new, s, idx + 1));
-	size_t new_size = (new_bytes - sizeof(*new)) / sizeof(new->s[0]);
-
-	if (unlikely(new_bytes > INT_MAX))
+	if (bch2_snapshot_table_grow(c, id))
 		return NULL;
-
-	new = kvzalloc(new_bytes, GFP_KERNEL);
-	if (!new)
-		return NULL;
-
-	new->nr = new_size;
-
-	old = rcu_dereference_protected(c->snapshots.table, true);
-	if (old)
-		memcpy(new->s, old->s, sizeof(old->s[0]) * old->nr);
-
-	rcu_assign_pointer(c->snapshots.table, new);
-	kvfree_rcu(old, rcu);
 
 	return &rcu_dereference_protected(c->snapshots.table,
-				lockdep_is_held(&c->snapshots.table_lock))->s[idx];
+				lockdep_is_held(&c->snapshots.table_lock))->s[U32_MAX - id];
 }
 
 struct snapshot_t *bch2_snapshot_t_mut(struct bch_fs *c, u32 id)
@@ -1254,7 +1235,6 @@ int bch2_snapshots_read(struct bch_fs *c)
 void bch2_fs_snapshots_exit(struct bch_fs *c)
 {
 	percpu_free_rwsem(&c->snapshots.create_lock);
-	kvfree(rcu_dereference_protected(c->snapshots.table, true));
 }
 
 void bch2_fs_snapshots_init_early(struct bch_fs *c)
