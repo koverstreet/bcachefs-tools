@@ -9,7 +9,7 @@ use core::ffi::CStr;
 use core::marker::PhantomData;
 
 use crate::c;
-use crate::opts::InodeOpt;
+use crate::inode_opts::InodeOpt;
 
 use super::inode::InodeInfo;
 

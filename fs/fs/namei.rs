@@ -37,7 +37,7 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::inode;
-use crate::opts::reinherit_attrs;
+use crate::inode_opts::reinherit_attrs;
 use crate::snapshots::subvolume;
 use crate::str_hash;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};

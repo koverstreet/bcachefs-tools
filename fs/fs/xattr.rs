@@ -458,7 +458,8 @@ mod vfs {
     use crate::btree::bkey::pos;
     use crate::btree::iter::{lockrestart_do, CommitFlags};
     use crate::errcode::{bch_errcode, ret_to_class};
-    use crate::opts::{self, InodeOpt, OptChange};
+    use crate::inode_opts::{self, InodeOpt};
+    use crate::opts::{self, OptChange};
     use crate::util::locking::MemallocFlags;
     use crate::vfs::dentry::Dentry;
     use crate::vfs::inode::{InodeInfo, ATTR_CTIME};
@@ -622,7 +623,7 @@ mod vfs {
     {
         let fs = v.fs();
         let inode = v.inode();
-        let inode_opts = opts::inode_opts_to_opts(inode);
+        let inode_opts = inode_opts::inode_opts_to_opts(inode);
 
         let Some((id, opt)) = opts::opt_lookup(name)
             .filter(|(id, _)| id.is_inode_opt()) else {
