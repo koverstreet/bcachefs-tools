@@ -403,8 +403,8 @@ static int finsert_take_ancestor_extent(struct btree_trans *trans,
 		struct bkey_i *del = errptr_try(bch2_trans_kmalloc(trans, sizeof(*del)));
 
 		bkey_init(&del->k);
-		del->k.p = k.k->p;
-		bch2_key_resize(&del->k, k.k->p.offset - start.offset);
+		del->k.p	= k.k->p;
+		del->k.size	= k.k->p.offset - start.offset;
 
 		try(bch2_btree_insert_trans(trans, BTREE_ID_extents, del, 0));
 
