@@ -345,8 +345,7 @@ impl Fs {
     /// EOF. Block granular: zeroing the rest of the block @new_i_size falls
     /// in is the caller's job, as the VFS does it in the page cache.
     pub fn truncate(&self, inum: c::subvol_inum, new_i_size: u64) -> Result<(), BchError> {
-        let mut i_sectors_delta = 0;
-        ret_to_result(unsafe { c::bch2_truncate(self.as_ptr(), inum, new_i_size, &mut i_sectors_delta) })
+        crate::data::io_misc::truncate(self, inum, new_i_size, &mut 0)
     }
 
     /// Make the filesystem incompatible with versions before @version, if

@@ -107,7 +107,7 @@ pub fn bch2_subvolume_get(
 }
 
 /// Unlike get(), finds a tombstone's snapshot.
-fn __get_snapshot(t: &TransAttempt<'_, '_>, subvol: u32, warn: bool) -> Result<u32, BchError> {
+pub(crate) fn __get_snapshot(t: &TransAttempt<'_, '_>, subvol: u32, warn: bool) -> Result<u32, BchError> {
     let fs = t.fs();
     let mut iter = BtreeIter::new(t, c::btree_id::subvolumes, pos(0, subvol as u64),
                                   BtreeIterFlags::CACHED);

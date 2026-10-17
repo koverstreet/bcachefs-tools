@@ -475,7 +475,7 @@ fn __peek_snapshot<'a>(
 
 /// As __peek_snapshot(), in @inum's subvolume's snapshot: as
 /// __bch2_inode_peek().
-fn __peek<'a>(
+pub(crate) fn __peek<'a>(
     t:     &TransAttempt<'a, '_>,
     iter:  &mut BtreeIter<'a>,
     inum:  c::subvol_inum,
