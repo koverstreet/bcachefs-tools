@@ -418,7 +418,7 @@ c_xmacro! {
          "Root entry for a snapshot tree structure"),
         (logged_op_truncate,    32, BKEY_TYPE_strict_btree_checks, _,
          "Logged truncate operation for crash recovery"),
-        (logged_op_finsert,     33, BKEY_TYPE_strict_btree_checks, src_offset,
+        (logged_op_finsert,     33, BKEY_TYPE_strict_btree_checks, _,
          "Logged file insert/collapse operation for crash recovery"),
         (accounting,            34, BKEY_TYPE_strict_btree_checks, _,
          "Disk accounting delta "
