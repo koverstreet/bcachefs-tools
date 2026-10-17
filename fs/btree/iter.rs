@@ -836,11 +836,11 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(k)
     }
 
-    /// @k as a mutable copy, for an update, with at least @min_bytes: past
-    /// @k's own value, zeroes, which is what those fields read as, and the key
-    /// covers them, so writes there go in with the commit. A u64 more is
-    /// allocated past the end, for varint_decode_fast().
-    fn make_mut_noupdate(&self, k: BkeySC<'_>, min_bytes: usize)
+    /// A copy of @k in a buffer of at least @min_bytes - as C's
+    /// bkey_reassemble() into one it allocated: the key as long as it was,
+    /// with room for a callee to grow it. A u64 more is allocated past the
+    /// end, for varint_decode_fast().
+    pub fn bkey_reassemble_room(&self, k: BkeySC<'_>, min_bytes: usize)
         -> Result<TransBkey<'a, 't>, BchError>
     {
         let k_u64s = k.k.u64s as usize;
@@ -857,7 +857,17 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 k_u64s - BKEY_U64S,
             );
         }
-        dst.k_mut().u64s = u64s as u8;
+        Ok(dst)
+    }
+
+    /// @k as a mutable copy, for an update, with at least @min_bytes: past
+    /// @k's own value, zeroes, which is what those fields read as, and the key
+    /// covers them, so writes there go in with the commit.
+    fn make_mut_noupdate(&self, k: BkeySC<'_>, min_bytes: usize)
+        -> Result<TransBkey<'a, 't>, BchError>
+    {
+        let mut dst = self.bkey_reassemble_room(k, min_bytes)?;
+        dst.k_mut().u64s = dst.buf_u64s as u8;
         Ok(dst)
     }
 
