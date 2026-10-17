@@ -111,6 +111,7 @@ pub mod data {
     pub mod checksum;
     pub mod extents;
     pub mod io_misc;
+    pub mod reflink;
 }
 pub mod errcode;
 pub mod opts;
