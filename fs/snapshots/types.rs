@@ -7,7 +7,7 @@ use crate::types::{DArray, RustOnly, bits_to_longs, rust_only};
 use crate::util::alloc::KVVec;
 use crate::util::sync::{new_mutex, Mutex};
 use core::ffi::c_ulong;
-use core::sync::atomic::{AtomicU32, AtomicUsize};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize};
 use cstruct_macros::{c_const, c_enum, CStruct, c_typedef, Init, TypeInfo};
 use pin_init::pin_data;
 
@@ -120,7 +120,9 @@ pub struct bch_fs_snapshots {
     #[init(RustOnly::new(new_mutex!(())))]
     pub(crate) table_lock: rust_only!(Mutex<()>),
     /* a topology repair invalidated descendants' is_ancestor bitmaps: */
-    pub need_table_rebuild: bool,
+    #[c("bool need_table_rebuild")]
+    #[init(AtomicBool::new(false))]
+    pub(crate) need_table_rebuild: AtomicBool,
     pub create_lock: c::percpu_rw_semaphore,
     /// Snapshot deletion's state: Rust's alone - snapshots/delete.rs.
     #[pin]

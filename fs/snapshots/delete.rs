@@ -218,7 +218,7 @@ fn lookup_node(t: &TransAttempt<'_, '_>, id: u32) -> Result<BkeyI<c::Snapshot>, 
 
 /// The raw field: 0 on keys that predate it, which matches no state - so a
 /// legacy node is never == deleted, and always != live. What the node
-/// actually is: snapshot::state_compat().
+/// actually is: state_compat().
 fn state(v: &c::Snapshot) -> c::bch_snapshot_state {
     c::bch_snapshot_state(v.state().get())
 }
@@ -593,7 +593,7 @@ fn node_delete(t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
 /// remount precisely so ancestry still resolves - and carries child pointers
 /// like any other node, so it is a perfectly ordinary neighbour to attach to.
 fn in_tree(v: &c::Snapshot) -> bool {
-    snapshot::state_compat(v) != c::bch_snapshot_state::SNAPSHOT_STATE_deleted
+    v.state_compat() != c::bch_snapshot_state::SNAPSHOT_STATE_deleted
 }
 
 /// Where to splice back in from below.
@@ -1509,7 +1509,7 @@ crate::recovery_pass!(bch2_delete_dead_interior_snapshots => delete_dead_interio
 pub(crate) fn check_snapshot_needs_deletion(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, nr_empty_interior: &mut u32) {
     let Some(v) = snapshot::val(k) else { return };
 
-    let needs_delete = match snapshot::state_compat(&v) {
+    let needs_delete = match v.state_compat() {
         c::bch_snapshot_state::SNAPSHOT_STATE_deleted     => false,
         c::bch_snapshot_state::SNAPSHOT_STATE_no_keys     => { *nr_empty_interior += 1; false }
         c::bch_snapshot_state::SNAPSHOT_STATE_will_delete => true,
