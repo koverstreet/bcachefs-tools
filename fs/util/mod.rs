@@ -18,3 +18,9 @@ pub mod varint;
 pub mod vstructs;
 
 pub use printbuf::Printbuf;
+
+/// The largest value @_x's type holds: a field's, without naming its type -
+/// `max_of(&k.size)`, C's KEY_SIZE_MAX.
+pub fn max_of<T: num_traits::Bounded>(_x: &T) -> T {
+    T::max_value()
+}
