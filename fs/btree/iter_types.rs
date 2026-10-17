@@ -44,6 +44,7 @@ c_extern! {
     pub fn bch2_btree_iter_peek_max(iter: *mut c::btree_iter, end: *const c::bpos) -> c::bkey_s_c;
     pub fn bch2_btree_iter_peek_prev_min(iter: *mut c::btree_iter, end: c::bpos) -> c::bkey_s_c;
     pub fn bch2_btree_iter_peek_slot(iter: *mut c::btree_iter) -> c::bkey_s_c;
+    pub fn bch2_btree_iter_prev_slot(iter: *mut c::btree_iter) -> c::bkey_s_c;
     pub fn bch2_btree_iter_advance(iter: *mut c::btree_iter) -> bool;
     pub fn bch2_btree_iter_rewind(iter: *mut c::btree_iter) -> bool;
     pub fn bch2_trans_iter_exit(iter: *mut c::btree_iter);

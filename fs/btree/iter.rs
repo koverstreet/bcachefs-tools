@@ -1736,6 +1736,14 @@ impl<'t> BtreeIter<'t> {
         self.peek_raw(t, |raw| unsafe { c::bch2_btree_iter_peek_slot(raw) })
     }
 
+    /// Back one position, and the key there, or a deleted key for a hole -
+    /// None if there's nowhere further back to go.
+    pub fn prev_slot<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>)
+        -> Result<Option<BkeySC<'k>>, BchError>
+    {
+        self.peek_raw(t, |raw| unsafe { c::bch2_btree_iter_prev_slot(raw) })
+    }
+
     /// The key here as a @K, its value in place: ENOENT_bkey_type_mismatch if
     /// it isn't one.
     pub fn peek_slot_typed<'k, K: TypedBkey + ?Sized>(&'k mut self, t: &'k TransAttempt<'_, 't>)
