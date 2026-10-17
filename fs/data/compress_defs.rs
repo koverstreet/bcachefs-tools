@@ -28,6 +28,19 @@ nest! {
 }
 c_default!(bch_compression_opt);
 
+impl bch_compression_opt {
+    /// A type there is, and a level only with one: as
+    /// bch2_compression_opt_valid(), compress.h's - a copy, until compress.c
+    /// is Rust.
+    pub fn valid(v: u8) -> bool {
+        // SAFETY: every bit pattern is a value of both
+        let bits = unsafe { bch_compression_opt { value: v }.fields.bits };
+
+        (bits.type_() as u32) < c::bch_compression_opts::BCH_COMPRESSION_OPT_NR.0 &&
+            !(bits.type_() == 0 && bits.level() != 0)
+    }
+}
+
 c_enum! {
     #[closed]
     pub enum bbuf_type: u32 {
