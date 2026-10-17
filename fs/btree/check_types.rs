@@ -43,7 +43,8 @@ nest! {
 pub struct reflink_gc {
     pub offset: u64,
     pub size: u32,
-    pub refcount: u32,
+    /* gc's marking and commits' gc triggers count at once */
+    pub refcount: c::atomic_t,
 }
 
 c_typedef! {
