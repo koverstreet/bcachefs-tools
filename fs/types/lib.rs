@@ -283,6 +283,35 @@ macro_rules! rust_only {
 }
 pub(crate) use rust_only;
 
+// ---- Rust's own, that C reads ------------------------------------------------
+
+/// A static C reads, defined in Rust - a #[c_export] static, C's `extern const
+/// T`. Sync for the pointers a C struct holds, which aren't: C reads it from
+/// anywhere, and nothing writes it.
+#[repr(transparent)]
+pub struct CStatic<T>(T);
+
+// SAFETY: new()'s
+unsafe impl<T> Sync for CStatic<T> {}
+
+impl<T> CStatic<T> {
+    /// # Safety
+    /// Nothing in @v is written through a shared reference - no Cell, no
+    /// atomic: its pointers are its only parts that aren't Sync. #[c_export]
+    /// calls this for its statics.
+    pub const unsafe fn new(v: T) -> Self {
+        CStatic(v)
+    }
+}
+
+impl<T> core::ops::Deref for CStatic<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
 /// util/darray.h's DEFINE_DARRAY()s: C's typedefs are its own, these the
 /// same types for Rust.
 #[allow(non_camel_case_types)]

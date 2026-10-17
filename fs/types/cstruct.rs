@@ -1847,6 +1847,9 @@ fn parse_export(toks: &[Tok], i: usize, a: ItemAttrs)
     -> Result<(CExport, usize), String>
 {
     let mut j = skip_vis(toks, i)?;
+    if toks.get(j).is_some_and(|t| t.is_ident("static")) {
+        return parse_export_static(toks, j + 1, a);
+    }
     if toks.get(j).is_some_and(|t| t.is_ident("unsafe")) {
         j += 1;
     }
@@ -1895,12 +1898,48 @@ fn parse_export(toks: &[Tok], i: usize, a: ItemAttrs)
     Ok((CExport { ex, extern_c, params: rust_params, ret: rust_ret }, skip_group(toks, body)?))
 }
 
-/// @item onto @items, where a #[c_export] fn after another joins its block: a
+/// The index of the first of @stops in @toks from @i, outside any group.
+fn find_top(toks: &[Tok], mut i: usize, stops: &[char]) -> Option<usize> {
+    let mut depth = 0;
+    while i < toks.len() {
+        match &toks[i] {
+            Tok::Punct(c) if depth == 0 && stops.contains(c) => return Some(i),
+            Tok::Punct('(' | '[' | '{') => depth += 1,
+            Tok::Punct(')' | ']' | '}') => depth -= 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// A #[c_export] static, at @i, past `static`: `NAME: TYPE [= EXPR];` - C
+/// gets its extern declaration, as a c_extern! static's; and the index after
+/// it. Not mut: what C reads of Rust's is C's const.
+fn parse_export_static(toks: &[Tok], i: usize, a: ItemAttrs)
+    -> Result<(CExport, usize), String>
+{
+    let name = match &toks[i.min(toks.len())..] {
+        [Tok::Ident(name), Tok::Punct(':'), ..] if name != "mut" => name.clone(),
+        _ => return Err("#[c_export]: expected static NAME: TYPE = EXPR; - not mut".into()),
+    };
+    let ty_end = find_top(toks, i + 2, &['=', ';'])
+        .ok_or_else(|| format!("#[c_export] static {name}: no ';'"))?;
+    let end = find_top(toks, ty_end, &[';'])
+        .ok_or_else(|| format!("#[c_export] static {name}: no ';'"))?;
+    let s = CStaticDecl { cfg: a.cfg, name, ty: tokens_to_rust(&toks[i + 2..ty_end]),
+                          mutable: false, c_decl: a.c_decl };
+    let ex = CExtern { cfg: None, fns: Vec::new(), statics: vec![s], export: true };
+    Ok((CExport { ex, extern_c: false, params: Vec::new(), ret: None }, end + 1))
+}
+
+/// @item onto @items, where a #[c_export] after another joins its block: a
 /// run of them is one block of prototypes, as a c_extern!'s is.
 fn push_item(items: &mut Vec<CItem>, mut item: CItem) {
     if let (CItem::Extern(ex), Some(CItem::Extern(prev))) = (&mut item, items.last_mut()) {
         if ex.export && prev.export {
             prev.fns.append(&mut ex.fns);
+            prev.statics.append(&mut ex.statics);
             return;
         }
     }

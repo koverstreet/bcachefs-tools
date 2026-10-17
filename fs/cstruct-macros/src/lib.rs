@@ -1065,6 +1065,15 @@ fn thin_pointers(name: &str, cfg: &Option<cstruct::Cfg>, params: &[(String, Stri
 /// every call through a pointer against a hash of the callee's type, and a fn
 /// in Rust's types (&Opaque<bch_fs>, BkeySC) never hashes as C's prototype
 /// does.
+///
+/// And a static C reads - an ops table:
+///
+///   #[c_export]
+///   pub static bch2_xattr_handlers: [*const c::xattr_handler; 6] = [..];
+///
+/// C gets its extern declaration, `extern const struct xattr_handler *const
+/// bch2_xattr_handlers[6];`; Rust a CStatic<T>, which derefs to the T. A fn
+/// pointer in one has to be to an extern "C" fn in C's types, for kCFI.
 #[proc_macro_attribute]
 pub fn c_export(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand("#[c_export]", || c_export_expand(attr, item))
@@ -1073,6 +1082,9 @@ pub fn c_export(attr: TokenStream, item: TokenStream) -> TokenStream {
 fn c_export_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     if !attr.is_empty() {
         return Err("takes no arguments".into());
+    }
+    if item.clone().into_iter().any(|t| matches!(&t, TokenTree::Ident(i) if i.to_string() == "static")) {
+        return c_export_static(item);
     }
     // What the record has: the signature, the body dropped - and $crate,
     // from a macro_rules!, as the crate this is.
@@ -1127,6 +1139,43 @@ fn c_export_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     let mut out = item;
     out.extend(tokens(&def));
     Ok(out)
+}
+
+/// A #[c_export] static: the symbol C reads - #[no_mangle], in a CStatic,
+/// Sync for the pointers C's structs hold - and C's extern declaration of it,
+/// as a c_extern! static's: `extern const struct foo NAME;`.
+fn c_export_static(item: TokenStream) -> Result<TokenStream, String> {
+    let toks: Vec<TokenTree> = item.into_iter().collect();
+    let text_of = |t: &[TokenTree]| t.iter().cloned().collect::<TokenStream>().to_string();
+    let is_punct = |t: &TokenTree, c: char| matches!(t, TokenTree::Punct(p) if p.as_char() == c);
+
+    let s = toks.iter().position(|t| matches!(t, TokenTree::Ident(i) if i.to_string() == "static"))
+        .ok_or("on a fn or a static")?;
+    let (name, colon) = match &toks[s + 1..] {
+        [TokenTree::Ident(n), c, ..] if is_punct(c, ':') && n.to_string() != "mut" => (n.to_string(), s + 2),
+        _ => return Err("expected static NAME: TYPE = EXPR; - not mut".into()),
+    };
+    let eq = (colon + 1..toks.len()).find(|&i| is_punct(&toks[i], '='))
+        .ok_or("a static needs a value")?;
+    if !toks.last().is_some_and(|t| is_punct(t, ';')) {
+        return Err("expected static NAME: TYPE = EXPR;".into());
+    }
+
+    let prefix = text_of(&toks[..s]);
+    let ty = text_of(&toks[colon + 1..eq]);
+    let expr = text_of(&toks[eq + 1..toks.len() - 1]);
+
+    let text = format!("#[c_export] {prefix} static {name}: {ty};").replace("$crate", "crate");
+    cstruct::parse_c_export(&text)?;
+
+    // SAFETY, of the CStatic: a static C reads is immutable, and its only
+    // parts that aren't Sync are its pointers - to other statics, and fns
+    Ok(tokens(&format!(
+        "#[no_mangle]\n\
+         #[allow(non_upper_case_globals)]\n\
+         {prefix} static {name}: crate::types::CStatic<{ty}> =\n\
+             unsafe {{ crate::types::CStatic::new({expr}) }};\n\
+         {}", record(&text, &[]))))
 }
 
 /// Integer constants - C's #defines: c_const! { pub const NAME: u32 = EXPR; ... }
