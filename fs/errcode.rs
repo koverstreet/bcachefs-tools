@@ -126,6 +126,13 @@ impl From<std::io::Error> for BchError {
     }
 }
 
+/// What can't fail - an infallible initializer, where a fallible one goes.
+impl From<core::convert::Infallible> for BchError {
+    fn from(e: core::convert::Infallible) -> BchError {
+        match e {}
+    }
+}
+
 /// A failed allocation is a bare -ENOMEM, as darray_push()'s is: callers that
 /// want to say where map it to their own ENOMEM_* code.
 impl From<crate::util::alloc::AllocError> for BchError {

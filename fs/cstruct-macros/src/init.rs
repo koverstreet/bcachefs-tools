@@ -7,6 +7,11 @@
 //! EXPR: a Rust type's real initializer, or a struct's own init(). So a C
 //! field costs nothing here, now or as it stays C.
 //!
+//! An initializer may fail - a percpu rwsem allocates - with a BchError, or
+//! an error that converts to one; the infallible ones convert from
+//! Infallible. Then the fields initialized so far are dropped, and init()
+//! fails with it.
+//!
 //! Forgetting one is a compile error, not a zeroed Mutex: a field without
 //! `#[init]` gets `pin_init::init_zeroed()`, which only a Zeroable type
 //! takes - C's are, a Rust type with invariants, or a struct holding one,
@@ -45,8 +50,8 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
         "#[automatically_derived]\n\
          impl {inst} {{\n\
              /// Zeroed, but for its #[init] fields: see #[derive(Init)].\n\
-             pub fn init() -> impl ::pin_init::PinInit<Self> {{\n\
-                 ::pin_init::pin_init!({inst} {{\n{fields}}})\n\
+             pub fn init() -> impl ::pin_init::PinInit<Self, crate::errcode::BchError> {{\n\
+                 ::pin_init::pin_init!({inst} {{\n{fields}}}? crate::errcode::BchError)\n\
              }}\n\
          }}\n")))
 }

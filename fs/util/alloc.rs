@@ -12,15 +12,15 @@ pub use bcachefs_shim::alloc::{flags, AllocError, KVVec};
 
 /// A @T for C to hold, built in place by @init in memory that starts zeroed -
 /// padding too, as kvzalloc()'s did - and pinned there: a KVBox in-kernel,
-/// given up to a raw pointer. free_pinned() takes it back.
-pub fn alloc_pinned<T>(init: impl ::pin_init::PinInit<T>) -> Result<*mut T, AllocError> {
+/// given up to a raw pointer. free_pinned() takes it back. Fails with @init's
+/// error, or the allocation's.
+pub fn alloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>) -> Result<*mut T, E> {
     #[cfg(kernel)]
     {
         use kernel::alloc::{flags::__GFP_ZERO, KVBox};
         use kernel::init::InPlaceInit;
 
-        // Its init can't fail: only the allocation
-        let b = KVBox::pin_init(init, flags::GFP_KERNEL | __GFP_ZERO).map_err(|_| AllocError)?;
+        let b = KVBox::try_pin_init(init, flags::GFP_KERNEL | __GFP_ZERO)?;
         // SAFETY: pinned still - C has the pointer, and gives it back to free_pinned()
         Ok(KVBox::into_raw(unsafe { core::pin::Pin::into_inner_unchecked(b) }))
     }
@@ -30,12 +30,17 @@ pub fn alloc_pinned<T>(init: impl ::pin_init::PinInit<T>) -> Result<*mut T, Allo
         // SAFETY: not zero sized - what C holds a pointer to has bytes
         let p = unsafe { std::alloc::alloc_zeroed(layout) }.cast::<T>();
         if p.is_null() {
-            return Err(AllocError);
+            return Err(AllocError.into());
         }
         // SAFETY: valid for writes, and it won't move: it's C's from here
         match unsafe { init.__pinned_init(p) } {
             Ok(()) => Ok(p),
-            Err(e) => match e {},
+            Err(e) => {
+                // SAFETY: alloc_zeroed()'s, with this layout; a failed init
+                // has dropped what it made
+                unsafe { std::alloc::dealloc(p.cast(), layout) };
+                Err(e)
+            }
         }
     }
 }
