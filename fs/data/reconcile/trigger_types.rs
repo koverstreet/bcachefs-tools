@@ -4,7 +4,8 @@
 
 use crate::cstructs::c;
 use crate::types::DArray;
-use cstruct_macros::{c_enum, CStruct};
+use core::ffi::{c_int, c_uint};
+use cstruct_macros::{c_enum, c_extern, CStruct};
 
 c_enum! {
     #[closed]
@@ -35,4 +36,13 @@ pub struct per_snapshot_io_opts {
 
     pub fs_io_opts: c::bch_inode_opts,
     pub d: DArray<c::snapshot_io_opts_entry>,
+}
+
+c_extern! {
+    pub fn bch2_bkey_get_io_opts(trans: *mut c::btree_trans, snapshot_io_opts: *mut c::per_snapshot_io_opts,
+                                 k: c::bkey_s_c, opts: *mut c::bch_inode_opts) -> c_int;
+    pub fn bch2_bkey_set_needs_reconcile(trans: *mut c::btree_trans,
+                                         snapshot_io_opts: *mut c::per_snapshot_io_opts,
+                                         opts: *mut c::bch_inode_opts, k: c::bkey_s, buf_u64s: c_uint,
+                                         ctx: c::set_needs_reconcile_ctx, flags: u32) -> c_int;
 }
