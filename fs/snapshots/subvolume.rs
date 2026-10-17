@@ -23,7 +23,7 @@ use crate::btree::bkey_methods::TriggerOp;
 use crate::btree::cow_key::CowKey;
 use crate::btree::iter::{
     commit_do, is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
-    LoopControl, TransAttempt, UpdateTriggerFlags,
+    LoopControl, Step, TransAttempt, UpdateTriggerFlags,
 };
 use crate::c;
 use crate::c::bch_recovery_pass::*;
@@ -225,25 +225,29 @@ where
     let mut snapshot = 0;
 
     loop {
-        let ret = (|| -> Result<Option<R::Break>, BchError> {
+        let ret = (|| -> Result<Step<R::Break>, BchError> {
             t.relock()?;
             if snapshot == 0 {
                 snapshot = get_snapshot(&t, subvol)?;
                 iter.set_snapshot(snapshot);
             }
             Ok(match iter.peek_max_type(&t, end, flags)? {
-                Some(k) => f(&t, k)?.into_break(),
-                None    => Some(Default::default()),
+                Some(k) => f(&t, k)?.into_step(),
+                None    => Step::Break(Default::default()),
             })
         })();
 
         match ret {
-            Ok(Some(b)) => return Ok(b),
-            Ok(None)    => {
+            Ok(Step::Break(b)) => return Ok(b),
+            Ok(Step::Next)     => {
                 t.verify_not_restarted();
                 if !iter.advance() {
                     return Ok(Default::default());
                 }
+            }
+            Ok(Step::From(pos)) => {
+                t.verify_not_restarted();
+                iter.set_pos(pos);
             }
             Err(e) if is_restart(&e) => {
                 t = trans.begin();

@@ -303,30 +303,67 @@ pub fn is_restart(e: &BchError) -> bool {
     e.matches(bch_errcode::BCH_ERR_transaction_restart)
 }
 
-/// What a for_each body returns on success: whether the loop goes on, and
-/// if not, what it stopped with. `()` for a body that always goes on - most
-/// of them, as a C loop body returns 0 - and `ControlFlow` for one that can
-/// stop early, breaking with what the loop returns.
+/// What a for_each body returns on success: whether the loop goes on - to the
+/// next key, or from a position of the body's - and if not, what it stopped
+/// with. `()` for a body that always goes on to the next key - most of them,
+/// as a C loop body returns 0 - `ControlFlow` for one that can stop early,
+/// breaking with what the loop returns, and `LoopFlow` for one that can also
+/// move the loop on.
 ///
 /// A loop that runs to the end returns Break's default: `()`, `None`,
 /// `false` - nothing found.
 pub trait LoopControl {
     type Break: Default;
 
-    /// What the body stopped with; None to go on.
-    fn into_break(self) -> Option<Self::Break>;
+    fn into_step(self) -> Step<Self::Break>;
+}
+
+/// Where a for_each loop goes after a key.
+pub enum Step<B> {
+    /// The next key.
+    Next,
+    /// The keys from @pos, in place of the next. A C loop body's
+    /// bch2_btree_iter_set_pos(p) is followed by the loop's advance, from p:
+    /// its From is where that lands - p's successor, or for extents p.
+    From(bpos),
+    Break(B),
 }
 
 impl LoopControl for () {
     type Break = ();
 
-    fn into_break(self) -> Option<()> { None }
+    fn into_step(self) -> Step<()> { Step::Next }
 }
 
 impl<B: Default> LoopControl for ControlFlow<B> {
     type Break = B;
 
-    fn into_break(self) -> Option<B> { self.break_value() }
+    fn into_step(self) -> Step<B> {
+        match self {
+            ControlFlow::Continue(()) => Step::Next,
+            ControlFlow::Break(b)     => Step::Break(b),
+        }
+    }
+}
+
+/// ControlFlow, and continuing from a position: for a body that moves the
+/// loop on - past the rest of an inode's snapshot versions, say.
+pub enum LoopFlow<B = ()> {
+    Continue,
+    ContinueFrom(bpos),
+    Break(B),
+}
+
+impl<B: Default> LoopControl for LoopFlow<B> {
+    type Break = B;
+
+    fn into_step(self) -> Step<B> {
+        match self {
+            LoopFlow::Continue          => Step::Next,
+            LoopFlow::ContinueFrom(pos) => Step::From(pos),
+            LoopFlow::Break(b)          => Step::Break(b),
+        }
+    }
 }
 
 /// A key in the transaction's memory, to update with: of key type @V, its
@@ -1871,19 +1908,21 @@ impl<'t> BtreeIter<'t> {
                 Ok(Some(ik)) => ik,
             };
 
-            match f(&t, iter, k) {
+            let step_to = match f(&t, iter, k) {
                 Err(e) if is_restart(&e) => continue,
                 Err(e) => return Err(e),
                 Ok(flow) => {
                     t.verify_not_restarted();
-                    if let Some(b) = flow.into_break() {
-                        return Ok(b);
-                    }
+                    flow.into_step()
                 }
-            }
+            };
 
-            if !step(self.raw.get_mut()) {
-                return Ok(Default::default());
+            match step_to {
+                Step::Next => if !step(self.raw.get_mut()) {
+                    return Ok(Default::default());
+                },
+                Step::From(pos) => self.set_pos(pos),
+                Step::Break(b)  => return Ok(b),
             }
         }
     }
@@ -1953,11 +1992,12 @@ impl<'t> BtreeIter<'t> {
                 return Ok(Default::default());
             };
 
-            if let Some(b) = f(iter, k)?.into_break() {
-                return Ok(b);
-            }
-            if !self.advance() {
-                return Ok(Default::default());
+            match f(iter, k)?.into_step() {
+                Step::Next => if !self.advance() {
+                    return Ok(Default::default());
+                },
+                Step::From(pos) => self.set_pos(pos),
+                Step::Break(b)  => return Ok(b),
             }
         }
     }
@@ -2002,11 +2042,12 @@ impl<'t> BtreeIter<'t> {
                 return Ok(Default::default());
             };
 
-            if let Some(b) = f(iter, k)?.into_break() {
-                return Ok(b);
-            }
-            if !self.rewind() {
-                return Ok(Default::default());
+            match f(iter, k)?.into_step() {
+                Step::Next => if !self.rewind() {
+                    return Ok(Default::default());
+                },
+                Step::From(pos) => self.set_pos(pos),
+                Step::Break(b)  => return Ok(b),
             }
         }
     }
