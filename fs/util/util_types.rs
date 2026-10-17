@@ -65,6 +65,9 @@ c_extern! {
     pub fn bch2_get_random_u64_below(ceil: u64) -> u64;
     pub fn rust_kzalloc_nofail(size: usize) -> *mut c_void;
     pub fn rust_kfree(p: *const c_void);
+    pub fn rust_kvzalloc(size: usize) -> *mut c_void;
+    pub fn rust_kvfree(p: *mut c_void);
+    pub fn rust_kvfree_rcu(p: *mut c_void);
     pub fn bch2_local_clock() -> u64;
     pub fn bch2_cond_resched();
     pub fn bch2_msleep(ms: c_uint);

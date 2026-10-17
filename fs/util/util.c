@@ -19,6 +19,7 @@
 #include <linux/percpu.h>
 #include <linux/preempt.h>
 #include <linux/random.h>
+#include <linux/rcupdate.h>
 #include <linux/seq_buf.h>
 #include <linux/seq_file.h>
 #include <linux/string.h>
@@ -1397,6 +1398,26 @@ void *rust_kzalloc_nofail(size_t size)
 void rust_kfree(const void *p)
 {
 	kfree(p);
+}
+
+/* For util/rcu.rs: kvfree_rcu() is a macro, of a struct's rcu_head field */
+void *rust_kvzalloc(size_t size)
+{
+	return kvzalloc(size, GFP_KERNEL);
+}
+
+void rust_kvfree(void *p)
+{
+	kvfree(p);
+}
+
+struct rust_rcu_head_first {
+	struct rcu_head		rcu;
+};
+
+void rust_kvfree_rcu(void *p)
+{
+	kvfree_rcu((struct rust_rcu_head_first *) p, rcu);
 }
 
 /*
