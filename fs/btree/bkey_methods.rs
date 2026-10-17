@@ -235,11 +235,10 @@ macro_rules! key_trigger {
         /// commit: bkey_ops' caller.
         #[::cstruct_macros::c_export]
         pub unsafe fn $name(
-            trans:  &$crate::util::ffi::Opaque<$crate::c::btree_trans>,
+            trans:  &$crate::btree::iter::BtreeTrans<'_>,
             mut op: $crate::c::btree_trigger_op,
         ) -> core::ffi::c_int {
             let mut op = unsafe { $crate::btree::bkey_methods::TriggerOp::from_raw(&mut op) };
-            let trans = $crate::btree::iter::BtreeTrans::from_c(trans);
             // SAFETY: C runs triggers in the transaction's attempt, in its commit
             let t = unsafe { trans.attempt_in_progress() };
 

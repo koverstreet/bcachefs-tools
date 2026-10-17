@@ -1395,14 +1395,12 @@ pub(crate) fn check_key_has_snapshot<'a>(
 /// # Safety
 /// @iter NULL - the promote path - or the iterator @k was read from.
 #[c_export]
-pub unsafe extern "C" fn __bch2_check_key_has_snapshot(
-    trans: &crate::util::ffi::Opaque<c::btree_trans>,
-    iter:  Option<&mut crate::util::ffi::Opaque<c::btree_iter>>,
+pub unsafe extern "C" fn __bch2_check_key_has_snapshot<'t>(
+    trans: &'t BtreeTrans<'t>,
+    iter:  Option<&BtreeIter<'t>>,
     k:     BkeySC<'_>,
 ) -> core::ffi::c_int {
-    let iter = iter.map(|i| &*BtreeIter::from_c(i));
-
-    match check_key_has_snapshot(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, iter, k) {
+    match check_key_has_snapshot(&unsafe { trans.attempt_in_progress() }, iter, k) {
         Ok(handled) => handled as core::ffi::c_int,
         Err(e)      => -e.raw(),
     }

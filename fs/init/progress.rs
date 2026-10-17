@@ -352,13 +352,12 @@ pub unsafe extern "C" fn bch2_progress_init_count(
 
 /// bch2_progress_update_iter().
 #[c_export]
-pub fn bch2_progress_update_iter(
-    trans: &Opaque<c::btree_trans>,
+pub fn bch2_progress_update_iter<'t>(
+    trans: &'t BtreeTrans<'t>,
     s:     &c::progress_indicator,
-    iter:  &mut Opaque<c::btree_iter>,
+    iter:  &mut BtreeIter<'t>,
 ) -> core::ffi::c_int {
-    ret_to_c(s.update(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() },
-                      BtreeIter::from_c(iter)))
+    ret_to_c(s.update(&unsafe { trans.attempt_in_progress() }, iter))
 }
 
 /// bch2_progress_update_count().

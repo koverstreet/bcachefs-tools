@@ -41,7 +41,6 @@ use crate::inode_opts::reinherit_attrs;
 use crate::snapshots::subvolume;
 use crate::str_hash;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
-use crate::util::ffi::Opaque;
 use crate::util::kernel::{capable, Capability};
 use crate::util::os_str::{qstr_name, OsStr, OsStrExt};
 use crate::util::Printbuf;
@@ -271,7 +270,7 @@ pub fn create_trans(
 #[c_export]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn bch2_create_trans(
-    trans:        &Opaque<c::btree_trans>,
+    trans:        &BtreeTrans<'_>,
     dir:          c::subvol_inum,
     dir_u:        &mut c::bch_inode_unpacked,
     new_inode:    &mut c::bch_inode_unpacked,
@@ -286,7 +285,6 @@ pub unsafe extern "C" fn bch2_create_trans(
     snapshot_src: c::subvol_inum,
     flags:        c_uint,
 ) -> c_int {
-    let trans = BtreeTrans::from_c(trans);
 
     #[cfg(kernel)]
     let acls = unsafe { (PosixAcl::borrow_raw(default_acl), PosixAcl::borrow_raw(acl)) };
@@ -355,14 +353,14 @@ pub fn link_trans(
 /// @name valid for the call.
 #[c_export]
 pub unsafe extern "C" fn bch2_link_trans(
-    trans:   &Opaque<c::btree_trans>,
+    trans:   &BtreeTrans<'_>,
     dir:     c::subvol_inum,
     dir_u:   &mut c::bch_inode_unpacked,
     inum:    c::subvol_inum,
     inode_u: &mut c::bch_inode_unpacked,
     name:    &c::qstr,
 ) -> c_int {
-    ret_to_c(link_trans(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, dir, dir_u, inum,
+    ret_to_c(link_trans(&unsafe { trans.attempt_in_progress() }, dir, dir_u, inum,
                         inode_u, unsafe { qstr_name(name) }))
 }
 
@@ -485,7 +483,7 @@ pub fn unlink_trans(
 /// @name valid for the call.
 #[c_export]
 pub unsafe extern "C" fn bch2_unlink_trans(
-    trans:           &Opaque<c::btree_trans>,
+    trans:           &BtreeTrans<'_>,
     dir:             c::subvol_inum,
     dir_u:           &mut c::bch_inode_unpacked,
     inode:           c::subvol_inum,
@@ -493,7 +491,7 @@ pub unsafe extern "C" fn bch2_unlink_trans(
     name:            &c::qstr,
     deleting_subvol: bool,
 ) -> c_int {
-    ret_to_c(unlink_trans(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, dir, dir_u, inode,
+    ret_to_c(unlink_trans(&unsafe { trans.attempt_in_progress() }, dir, dir_u, inode,
                           inode_u, unsafe { qstr_name(name) }, deleting_subvol))
 }
 
@@ -718,7 +716,7 @@ pub fn rename_trans(
 #[c_export]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn bch2_rename_trans(
-    trans:          &Opaque<c::btree_trans>,
+    trans:          &BtreeTrans<'_>,
     src_dir:        c::subvol_inum,
     src_dir_u:      &mut c::bch_inode_unpacked,
     dst_dir:        c::subvol_inum,
@@ -731,7 +729,7 @@ pub unsafe extern "C" fn bch2_rename_trans(
     src_opt_change: &mut c::inode_opt_change,
     dst_opt_change: &mut c::inode_opt_change,
 ) -> c_int {
-    ret_to_c(rename_trans(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, src_dir, src_dir_u,
+    ret_to_c(rename_trans(&unsafe { trans.attempt_in_progress() }, src_dir, src_dir_u,
                           dst_dir, dst_dir_u, src_inode_u, dst_inode_u,
                           unsafe { qstr_name(src_name) }, unsafe { qstr_name(dst_name) },
                           mode, src_opt_change, dst_opt_change))
@@ -936,11 +934,11 @@ pub fn inum_to_path(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, out: &mut Pr
 ///
 #[c_export]
 pub extern "C" fn bch2_inum_to_path(
-    trans: &Opaque<c::btree_trans>,
+    trans: &BtreeTrans<'_>,
     inum:  c::subvol_inum,
     out:   &mut Printbuf,
 ) -> c_int {
-    ret_to_c(inum_to_path(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum, out))
+    ret_to_c(inum_to_path(&unsafe { trans.attempt_in_progress() }, inum, out))
 }
 
 /// For C's ioctls: bch2_inum_to_path_in_subvol() - @inum's path from
@@ -948,7 +946,7 @@ pub extern "C" fn bch2_inum_to_path(
 /// the walk can't get there.
 #[c_export]
 pub extern "C" fn bch2_inum_to_path_in_subvol(
-    trans:       &Opaque<c::btree_trans>,
+    trans:       &BtreeTrans<'_>,
     inum:        c::subvol_inum,
     stop_subvol: u32,
     flags:       c_uint,
@@ -956,7 +954,7 @@ pub extern "C" fn bch2_inum_to_path_in_subvol(
 ) -> c_int {
     const INUM_TO_PATH_FAIL_ON_ERR: c_uint = 1 << 0;
 
-    ret_to_c(__inum_to_path(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() },
+    ret_to_c(__inum_to_path(&unsafe { trans.attempt_in_progress() },
                             inum.subvol as u32, inum.inum, 0,
                             stop_subvol, flags & INUM_TO_PATH_FAIL_ON_ERR != 0, out))
 }
@@ -976,13 +974,13 @@ pub fn inum_snapshot_to_path(
 /// snapshot list was never used.
 #[c_export]
 pub extern "C" fn bch2_inum_snapshot_to_path(
-    trans:     &Opaque<c::btree_trans>,
+    trans:     &BtreeTrans<'_>,
     inum:      u64,
     snapshot:  u32,
     _snapshot_overwrites: *mut c::snapshot_id_list,
     out:       &mut Printbuf,
 ) -> c_int {
-    ret_to_c(inum_snapshot_to_path(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum,
+    ret_to_c(inum_snapshot_to_path(&unsafe { trans.attempt_in_progress() }, inum,
                                    snapshot, out))
 }
 
@@ -1032,11 +1030,11 @@ pub fn inum_is_descendant(
 /// For C's ioctls: bch2_inum_is_descendant() - 1 yes, 0 no.
 #[c_export]
 pub extern "C" fn bch2_inum_is_descendant(
-    trans:    &Opaque<c::btree_trans>,
+    trans:    &BtreeTrans<'_>,
     inum:     c::subvol_inum,
     ancestor: c::subvol_inum,
 ) -> c_int {
-    match inum_is_descendant(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum, ancestor) {
+    match inum_is_descendant(&unsafe { trans.attempt_in_progress() }, inum, ancestor) {
         Ok(yes) => yes as c_int,
         Err(e)  => -e.raw(),
     }
@@ -1280,17 +1278,16 @@ pub fn check_dirent_target(
 /// # Safety
 /// @d a dirent from the btree, valid for the call.
 #[c_export]
-pub unsafe extern "C" fn __bch2_check_dirent_target(
-    trans:       &Opaque<c::btree_trans>,
-    dirent_iter: &mut Opaque<c::btree_iter>,
+pub unsafe extern "C" fn __bch2_check_dirent_target<'t>(
+    trans:       &'t BtreeTrans<'t>,
+    dirent_iter: &mut BtreeIter<'t>,
     d:           c::bkey_s_c_dirent,
     target:      &mut c::bch_inode_unpacked,
     in_fsck:     bool,
 ) -> c_int {
     let k = c::bkey_s_c::from(d);
 
-    ret_to_c(__check_dirent_target(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() },
-                                   BtreeIter::from_c(dirent_iter),
+    ret_to_c(__check_dirent_target(&unsafe { trans.attempt_in_progress() }, dirent_iter,
                                    Dirent::new(BkeySC::from(&k)).expect("a dirent"),
                                    target, in_fsck))
 }

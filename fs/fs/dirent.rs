@@ -390,14 +390,14 @@ pub fn read_target(
 /// @d a dirent from the btree, valid for the call.
 #[c_export]
 pub unsafe extern "C" fn bch2_dirent_read_target(
-    trans:  &Opaque<c::btree_trans>,
+    trans:  &BtreeTrans<'_>,
     dir:    c::subvol_inum,
     d:      c::bkey_s_c_dirent,
     target: &mut MaybeUninit<c::subvol_inum>,
 ) -> c_int {
     let k = c::bkey_s_c::from(d);
 
-    match read_target(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, dir,
+    match read_target(&unsafe { trans.attempt_in_progress() }, dir,
                       Dirent::new(BkeySC::from(&k)).expect("a dirent")) {
         Ok(Some(t)) => {
             target.write(t);
@@ -456,14 +456,14 @@ pub fn lookup_key<'i, 'a>(
 /// # Safety
 /// @name valid for the call.
 #[c_export]
-pub unsafe extern "C" fn bch2_dirent_lookup_key(
-    trans:     &Opaque<c::btree_trans>,
-    iter:      &mut Opaque<c::btree_iter>,
+pub unsafe extern "C" fn bch2_dirent_lookup_key<'t>(
+    trans:     &'t BtreeTrans<'t>,
+    iter:      &mut BtreeIter<'t>,
     dir:       c::subvol_inum,
     hash_info: &c::bch_hash_info,
     name:      &c::qstr,
 ) -> c::bkey_s_c {
-    match lookup_key(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, BtreeIter::from_c(iter),
+    match lookup_key(&unsafe { trans.attempt_in_progress() }, iter,
                      dir, hash_info, unsafe { qstr_name(name) }, BtreeIterFlags::empty()) {
         Ok(k)  => k.to_raw(),
         Err(e) => c::bkey_s_c {

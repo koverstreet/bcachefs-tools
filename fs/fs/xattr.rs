@@ -297,7 +297,7 @@ fn copy_out(buffer: Option<&mut [u8]>, v: &[u8]) -> Result<usize, BchError> {
 /// @name NUL terminated, @buffer NULL or valid for @size.
 #[c_export]
 pub unsafe extern "C" fn bch2_xattr_get_trans(
-    trans:  &Opaque<c::btree_trans>,
+    trans:  &BtreeTrans<'_>,
     inode:  &c::bch_inode_unpacked,
     inum:   c::subvol_inum,
     ty:     c::bch_xattr_type,
@@ -307,7 +307,7 @@ pub unsafe extern "C" fn bch2_xattr_get_trans(
 ) -> c_int {
     let buffer = unsafe { opt_bytes_mut(buffer, size) };
 
-    len_to_c(get_trans(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inode, inum,
+    len_to_c(get_trans(&unsafe { trans.attempt_in_progress() }, inode, inum,
                        ty, unsafe { cstr_name(name) }, buffer))
 }
 
@@ -350,7 +350,7 @@ pub fn set_key(
 #[c_export]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn __bch2_xattr_set(
-    trans:     &Opaque<c::btree_trans>,
+    trans:     &BtreeTrans<'_>,
     inum:      c::subvol_inum,
     hash_info: &c::bch_hash_info,
     name:      *const c_char,
@@ -359,7 +359,7 @@ pub unsafe extern "C" fn __bch2_xattr_set(
     ty:        c::bch_xattr_type,
     flags:     c_int,
 ) -> c_int {
-    ret_to_c(set_key(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum, hash_info,
+    ret_to_c(set_key(&unsafe { trans.attempt_in_progress() }, inum, hash_info,
                      unsafe { cstr_name(name) },
                      unsafe { bytes(value, size) }, ty, flags))
 }
@@ -427,7 +427,7 @@ pub fn set(
 #[c_export]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn bch2_xattr_set(
-    trans: &Opaque<c::btree_trans>,
+    trans: &BtreeTrans<'_>,
     inum:  c::subvol_inum,
     inode: &mut c::bch_inode_unpacked,
     name:  *const c_char,
@@ -438,7 +438,7 @@ pub unsafe extern "C" fn bch2_xattr_set(
 ) -> c_int {
     let value = unsafe { opt_bytes(value, size) };
 
-    ret_to_c(set_trans(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum, inode,
+    ret_to_c(set_trans(&unsafe { trans.attempt_in_progress() }, inum, inode,
                        unsafe { cstr_name(name) }, value, ty, flags))
 }
 

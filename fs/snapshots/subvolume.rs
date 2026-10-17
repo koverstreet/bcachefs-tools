@@ -97,12 +97,12 @@ pub fn get(
 
 #[c_export]
 pub fn bch2_subvolume_get(
-    trans:                     &Opaque<c::btree_trans>,
+    trans:                     &BtreeTrans<'_>,
     subvol:                    core::ffi::c_uint,
     inconsistent_if_not_found: bool,
     s:                         &mut c::Subvolume,
 ) -> core::ffi::c_int {
-    ret_to_c(get(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, subvol,
+    ret_to_c(get(&unsafe { trans.attempt_in_progress() }, subvol,
                  inconsistent_if_not_found).map(|v| *s = v))
 }
 
@@ -133,22 +133,22 @@ pub fn get_snapshot_nowarn(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<u32,
 
 #[c_export]
 pub fn __bch2_subvolume_get_snapshot(
-    trans:  &Opaque<c::btree_trans>,
+    trans:  &BtreeTrans<'_>,
     subvol: u32,
     snapid: &mut u32,
     warn:   bool,
 ) -> core::ffi::c_int {
-    ret_to_c(__get_snapshot(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, subvol, warn)
+    ret_to_c(__get_snapshot(&unsafe { trans.attempt_in_progress() }, subvol, warn)
              .map(|s| *snapid = s))
 }
 
 #[c_export]
 pub fn bch2_subvolume_get_snapshot(
-    trans:  &Opaque<c::btree_trans>,
+    trans:  &BtreeTrans<'_>,
     subvol: u32,
     snapid: &mut u32,
 ) -> core::ffi::c_int {
-    ret_to_c(get_snapshot(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, subvol)
+    ret_to_c(get_snapshot(&unsafe { trans.attempt_in_progress() }, subvol)
              .map(|s| *snapid = s))
 }
 
@@ -174,11 +174,11 @@ pub fn is_ro_trans(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<u32, BchErro
 
 #[c_export]
 pub fn bch2_subvol_is_ro_trans(
-    trans:  &Opaque<c::btree_trans>,
+    trans:  &BtreeTrans<'_>,
     subvol: u32,
     snapid: &mut u32,
 ) -> core::ffi::c_int {
-    ret_to_c(is_ro_trans(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, subvol)
+    ret_to_c(is_ro_trans(&unsafe { trans.attempt_in_progress() }, subvol)
              .map(|s| *snapid = s))
 }
 

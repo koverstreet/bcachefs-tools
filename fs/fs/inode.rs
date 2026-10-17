@@ -507,9 +507,9 @@ pub fn peek<'a>(
 /// # Safety
 /// @warn NULL or a string, valid for the call.
 #[c_export]
-pub unsafe extern "C" fn __bch2_inode_peek(
-    trans: &Opaque<c::btree_trans>,
-    iter:  &mut Opaque<c::btree_iter>,
+pub unsafe extern "C" fn __bch2_inode_peek<'t>(
+    trans: &'t BtreeTrans<'t>,
+    iter:  &mut BtreeIter<'t>,
     inode: &mut MaybeUninit<c::bch_inode_unpacked>,
     inum:  c::subvol_inum,
     flags: core::ffi::c_uint,
@@ -517,7 +517,7 @@ pub unsafe extern "C" fn __bch2_inode_peek(
 ) -> core::ffi::c_int {
     let warn = unsafe { opt_cstr(warn) };
 
-    ret_to_c(__peek(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, BtreeIter::from_c(iter),
+    ret_to_c(__peek(&unsafe { trans.attempt_in_progress() }, iter,
                     inum, BtreeIterFlags::from_bits_retain(flags), warn)
              .map(|i| { inode.write(i); }))
 }
@@ -550,13 +550,13 @@ pub fn find_by_inum_snapshot(
 /// For C's VFS and reconcile: bch2_inode_find_by_inum_snapshot().
 #[c_export]
 pub extern "C" fn bch2_inode_find_by_inum_snapshot(
-    trans:    &Opaque<c::btree_trans>,
+    trans:    &BtreeTrans<'_>,
     inum:     u64,
     snapshot: u32,
     inode:    &mut MaybeUninit<c::bch_inode_unpacked>,
     flags:    core::ffi::c_uint,
 ) -> core::ffi::c_int {
-    ret_to_c(find_by_inum_snapshot(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum,
+    ret_to_c(find_by_inum_snapshot(&unsafe { trans.attempt_in_progress() }, inum,
                                    snapshot, BtreeIterFlags::from_bits_retain(flags))
              .map(|i| { inode.write(i); }))
 }
@@ -568,7 +568,7 @@ pub extern "C" fn bch2_inode_find_by_inum_snapshot(
 /// @warn NULL or a string, valid for the call.
 #[c_export]
 pub unsafe extern "C" fn bch2_inode_find_by_inum_snapshot2(
-    trans:    &Opaque<c::btree_trans>,
+    trans:    &BtreeTrans<'_>,
     inum:     c::subvol_inum,
     snapshot: u32,
     inode:    &mut MaybeUninit<c::bch_inode_unpacked>,
@@ -578,7 +578,7 @@ pub unsafe extern "C" fn bch2_inode_find_by_inum_snapshot2(
     let warn = unsafe { opt_cstr(warn) };
     let mut iter = BtreeIter::uninit();
 
-    ret_to_c(__peek_snapshot(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, &mut iter,
+    ret_to_c(__peek_snapshot(&unsafe { trans.attempt_in_progress() }, &mut iter,
                              inum, snapshot, BtreeIterFlags::empty(), warn)
              .map(|i| { inode.write(i); }))
 }
@@ -611,7 +611,7 @@ pub fn find_by_inum_nowarn_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum)
 /// @warn NULL or a string, valid for the call.
 #[c_export]
 pub unsafe extern "C" fn __bch2_inode_find_by_inum_trans(
-    trans: &Opaque<c::btree_trans>,
+    trans: &BtreeTrans<'_>,
     inum:  c::subvol_inum,
     inode: &mut MaybeUninit<c::bch_inode_unpacked>,
     warn:  *const crate::util::ffi::c_char,
@@ -619,7 +619,7 @@ pub unsafe extern "C" fn __bch2_inode_find_by_inum_trans(
     let warn = unsafe { opt_cstr(warn) };
     let mut iter = BtreeIter::uninit();
 
-    ret_to_c(__peek(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, &mut iter, inum,
+    ret_to_c(__peek(&unsafe { trans.attempt_in_progress() }, &mut iter, inum,
                     BtreeIterFlags::empty(), warn)
              .map(|i| { inode.write(i); }))
 }
@@ -726,13 +726,13 @@ pub fn write_flags<'t>(
 
 /// For C's inode options, and bch2_inode_write(): bch2_inode_write_flags().
 #[c_export]
-pub extern "C" fn bch2_inode_write_flags(
-    trans: &Opaque<c::btree_trans>,
-    iter:  &mut Opaque<c::btree_iter>,
+pub extern "C" fn bch2_inode_write_flags<'t>(
+    trans: &'t BtreeTrans<'t>,
+    iter:  &mut BtreeIter<'t>,
     inode: &mut c::bch_inode_unpacked,
     flags: c::btree_iter_update_trigger_flags,
 ) -> core::ffi::c_int {
-    ret_to_c(write_flags(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, BtreeIter::from_c(iter),
+    ret_to_c(write_flags(&unsafe { trans.attempt_in_progress() }, iter,
                          inode, UpdateTriggerFlags::from_bits_retain(flags.bits())))
 }
 
@@ -795,12 +795,12 @@ pub fn to_v3<'a, 't>(t: &TransAttempt<'a, 't>, k: &BkeyI) -> Result<TransBkey<'a
 /// # Safety
 /// @k a key, its u64s covering its value.
 #[c_export]
-pub unsafe extern "C" fn bch2_inode_to_v3(trans: &Opaque<c::btree_trans>, k: *const c::bkey_i)
+pub unsafe extern "C" fn bch2_inode_to_v3(trans: &BtreeTrans<'_>, k: *const c::bkey_i)
     -> *mut c::bkey_i
 {
     // SAFETY: the caller's - C's pointer reaches all of the key
     let k = unsafe { &*BkeyI::from_raw(k) };
-    match to_v3(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, k) {
+    match to_v3(&unsafe { trans.attempt_in_progress() }, k) {
         Ok(k)  => k.as_ptr(),
         Err(e) => (-(e.raw() as isize)) as *mut c::bkey_i,
     }
@@ -1986,12 +1986,12 @@ pub fn set_casefold(
 /// For C's VFS: bch2_inode_set_casefold().
 #[c_export]
 pub extern "C" fn bch2_inode_set_casefold(
-    trans: &Opaque<c::btree_trans>,
+    trans: &BtreeTrans<'_>,
     inum:  c::subvol_inum,
     inode: &mut c::bch_inode_unpacked,
     v:     core::ffi::c_uint,
 ) -> core::ffi::c_int {
-    ret_to_c(set_casefold(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum, inode, v))
+    ret_to_c(set_casefold(&unsafe { trans.attempt_in_progress() }, inum, inode, v))
 }
 
 /// @inode's reconcile options - the ones reconcile moves its data to match,

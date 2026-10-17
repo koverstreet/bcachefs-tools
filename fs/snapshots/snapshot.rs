@@ -966,8 +966,7 @@ fn is_ancestor_debug(t: &TransAttempt<'_, '_>, id: u32, ancestor: u32, fastpath:
 }
 
 #[c_export]
-pub fn __bch2_snapshot_is_ancestor(trans: &Opaque<c::btree_trans>, id: u32, ancestor: u32) -> bool {
-    let trans = BtreeTrans::from_c(trans);
+pub fn __bch2_snapshot_is_ancestor(trans: &BtreeTrans<'_>, id: u32, ancestor: u32) -> bool {
     is_ancestor_table(&unsafe { trans.attempt_in_progress() }, id, ancestor)
 }
 
@@ -1301,8 +1300,7 @@ pub fn tree_lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::SnapshotTree,
 }
 
 #[c_export]
-pub fn bch2_snapshot_tree_lookup(trans: &Opaque<c::btree_trans>, id: u32, s: &mut c::SnapshotTree) -> c_int {
-    let trans = BtreeTrans::from_c(trans);
+pub fn bch2_snapshot_tree_lookup(trans: &BtreeTrans<'_>, id: u32, s: &mut c::SnapshotTree) -> c_int {
     // SAFETY: C looks up in the attempt it's in
     match tree_lookup(&unsafe { trans.attempt_in_progress() }, id) {
         Ok(v)  => { *s = v; 0 }

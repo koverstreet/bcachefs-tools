@@ -128,12 +128,6 @@ impl<'f> BtreeTrans<'f> {
         unsafe { &*raw.cast() }
     }
 
-    /// As borrow_raw(), for an entry point C calls with a transaction: safe,
-    /// as an Opaque is always a live one, and lives as long as the borrow.
-    pub fn from_c(trans: &'f Opaque<c::btree_trans>) -> &'f BtreeTrans<'f> {
-        unsafe { Self::borrow_raw(trans.as_ptr()) }
-    }
-
     /// How many times this transaction has committed: what's cached from the
     /// btree is stale once it moves on.
     pub fn commit_count(&self) -> u32 {
@@ -1610,22 +1604,6 @@ pub(crate) unsafe fn bkey_s_c_to_result<'i>(k: c::bkey_s_c)
 }
 
 impl<'t> BtreeIter<'t> {
-    /// A C caller's iterator, for Rust that C calls with one: borrowed, so
-    /// it's still the caller's to exit.
-    ///
-    /// # Safety
-    /// @raw is an iterator, initialized or not, that nothing else touches
-    /// for 'a.
-    pub(crate) unsafe fn borrow_raw<'a>(raw: *mut c::btree_iter) -> &'a mut BtreeIter<'t> {
-        unsafe { &mut *raw.cast() }
-    }
-
-    /// As borrow_raw(), for an entry point C calls with an iterator: safe,
-    /// as an Opaque is always C's, and the &mut says nothing else is using it.
-    pub fn from_c<'a>(iter: &'a mut Opaque<c::btree_iter>) -> &'a mut BtreeIter<'t> {
-        unsafe { Self::borrow_raw(iter.as_ptr()) }
-    }
-
     pub fn uninit() -> BtreeIter<'t> {
         // SAFETY: all zeroes is an iterator with no paths - whose exit, its
         // drop, puts none

@@ -503,13 +503,13 @@ mod vfs {
     /// For C's setattr. @new_acl is left as it was if there's none.
     #[c_export]
     pub extern "C" fn bch2_acl_chmod(
-        trans:   &Opaque<c::btree_trans>,
+        trans:   &BtreeTrans<'_>,
         inum:    c::subvol_inum,
         inode:   &c::bch_inode_unpacked,
         mode:    c::umode_t,
         new_acl: &mut *mut c::posix_acl,
     ) -> c_int {
-        ret_to_c(acl_chmod(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum, inode, mode)
+        ret_to_c(acl_chmod(&unsafe { trans.attempt_in_progress() }, inum, inode, mode)
                  .map(|acl| if let Some(acl) = acl { *new_acl = acl.into_raw() }))
     }
 }

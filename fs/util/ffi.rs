@@ -10,9 +10,9 @@
 use core::cell::UnsafeCell;
 use core::marker::PhantomPinned;
 
-/// A C object - a transaction, an iterator, the filesystem - as an entry
-/// point's argument: `&Opaque<c::btree_trans>` where C passes a
-/// `struct btree_trans *`. Same ABI; transparent.
+/// A C object as an entry point's argument: `&Opaque<c::bch_fs>` where C
+/// passes a `struct bch_fs *`. Same ABI; transparent. A transaction is
+/// BtreeTrans, itself over one.
 ///
 /// Not a plain reference to the C struct, because Rust promises things about
 /// those that aren't true of these. `&T` says the memory doesn't change for
@@ -23,9 +23,8 @@ use core::marker::PhantomPinned;
 /// the second - as the kernel crate's Opaque<T>, which userspace doesn't have.
 ///
 /// There's no constructor: only C hands these out, so one always refers to a
-/// live, initialized object of its type - what the safe from_c() constructors
-/// (Fs, BtreeTrans, BtreeIter) rely on. Safe code can't make one from a C
-/// struct with made-up fields.
+/// live, initialized object of its type - what Fs::from_c() relies on. Safe
+/// code can't make one from a C struct with made-up fields.
 #[repr(transparent)]
 pub struct Opaque<T> {
     value: UnsafeCell<T>,

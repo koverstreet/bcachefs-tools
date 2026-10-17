@@ -221,8 +221,7 @@ pub fn update(t: &TransAttempt<'_, '_>, op: &BkeyI) -> Result<(), BchError> {
 /// # Safety
 /// @k is a key that stays put until the transaction commits.
 #[c_export]
-pub unsafe extern "C" fn __bch2_logged_op_start(trans: &Opaque<c::btree_trans>, k: *mut c::bkey_i) -> c_int {
-    let trans = BtreeTrans::from_c(trans);
+pub unsafe extern "C" fn __bch2_logged_op_start(trans: &BtreeTrans<'_>, k: *mut c::bkey_i) -> c_int {
     let k = unsafe { &mut *BkeyI::from_raw_mut(k) };
 
     ret_to_c(unsafe { logged_op_start(&trans.attempt_in_progress(), k) })
@@ -231,8 +230,7 @@ pub unsafe extern "C" fn __bch2_logged_op_start(trans: &Opaque<c::btree_trans>, 
 /// # Safety
 /// @k is a key.
 #[c_export]
-pub unsafe extern "C" fn bch2_logged_op_start(trans: &Opaque<c::btree_trans>, k: *mut c::bkey_i) -> c_int {
-    let trans = BtreeTrans::from_c(trans);
+pub unsafe extern "C" fn bch2_logged_op_start(trans: &BtreeTrans<'_>, k: *mut c::bkey_i) -> c_int {
     let k = unsafe { &mut *BkeyI::from_raw_mut(k) };
 
     // SAFETY: @k stays put across the commit_do(): it's the caller's
@@ -288,12 +286,11 @@ pub fn finish(
 /// @k is a key.
 #[c_export]
 pub unsafe extern "C" fn bch2_logged_op_finish(
-    trans:        &Opaque<c::btree_trans>,
+    trans:        &BtreeTrans<'_>,
     k:            *mut c::bkey_i,
     op_ret:       c_int,
     commit_flags: c_uint,
 ) -> c_int {
-    let trans = BtreeTrans::from_c(trans);
     let k = unsafe { &*BkeyI::from_raw(k) };
 
     ret_to_c(finish(&trans, k, ret_to_result_void(op_ret), CommitOpts::from_bits(commit_flags)))
