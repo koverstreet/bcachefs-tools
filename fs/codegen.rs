@@ -34,8 +34,12 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/generic-radix-tree.h",
 ];
 
-const ALLOWLIST_FUNCTION: &[&str] = &["crc32c", "crc64_be"];
-const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix"];
+const ALLOWLIST_FUNCTION: &[&str] = &[
+    "crc32c", "crc64_be",
+    "__genradix_ptr", "__genradix_ptr_alloc", "__genradix_iter_peek", "__genradix_free",
+];
+const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter"];
+const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE"];
 
 /// Run the bindgen CLI and write `bindings.rs`, and `extern.c` - C wrappers for
 /// whatever of it is a static inline - into `out`. Kbuild supplies
@@ -78,6 +82,7 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String]) 
 
     for x in ALLOWLIST_FUNCTION { flag!("--allowlist-function", *x); }
     for x in ALLOWLIST_TYPE     { flag!("--allowlist-type", *x); }
+    for x in ALLOWLIST_VAR      { flag!("--allowlist-var", *x); }
     for d in blocklist_dirs     { flag!("--blocklist-file", d.as_str()); }
 
     a.push("--".into());

@@ -3,6 +3,7 @@ pub mod async_exec;
 pub mod darray;
 pub mod eytzinger;
 pub mod ffi;
+pub mod genradix;
 #[cfg(not(kernel))]
 pub mod ioctl;
 pub mod kernel;
