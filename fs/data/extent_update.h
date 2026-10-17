@@ -3,8 +3,6 @@
 #define _BCACHEFS_EXTENT_UPDATE_H
 
 #include "bcachefs.h"
-
-int bch2_extent_trim_atomic(struct btree_trans *, struct btree_iter *,
-			    struct bkey_i *);
+#include "data/extent_update_gen.h"
 
 #endif /* _BCACHEFS_EXTENT_UPDATE_H */

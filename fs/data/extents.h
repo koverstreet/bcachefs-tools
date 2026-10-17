@@ -770,9 +770,6 @@ static inline enum bch_extent_overlap bch2_extent_overlap(const struct bkey *k,
 	return (cmp1 << 1) + cmp2;
 }
 
-int bch2_cut_front_s(const struct bch_fs *, struct bpos, struct bkey_s);
-int bch2_cut_back_s(struct bpos, struct bkey_s);
-
 static inline void bch2_cut_front(const struct bch_fs *c, struct bpos where, struct bkey_i *k)
 {
 	bch2_cut_front_s(c, where, bkey_i_to_s(k));

@@ -55,6 +55,7 @@
 #[path = "data/extents_defs.rs"] pub mod data_extents_defs;
 #[path = "data/extents_format.rs"] pub mod data_extents_format;
 #[path = "data/extents_sb_format.rs"] pub mod data_extents_sb_format;
+#[path = "data/extent_update_types.rs"] pub mod data_extent_update_types;
 #[path = "data/extents_types.rs"] pub mod data_extents_types;
 #[path = "data/keylist_types.rs"] pub mod data_keylist_types;
 #[path = "data/move_defs.rs"] pub mod data_move_defs;
@@ -66,6 +67,7 @@
 #[path = "data/reconcile/types.rs"] pub mod data_reconcile_types;
 #[path = "data/reconcile/work_types.rs"] pub mod data_reconcile_work_types;
 #[path = "data/reflink_format.rs"] pub mod data_reflink_format;
+#[path = "data/reflink_types.rs"] pub mod data_reflink_types;
 #[path = "data/update_types.rs"] pub mod data_update_types;
 #[path = "data/write_types.rs"] pub mod data_write_types;
 #[path = "debug/async_objs_types.rs"] pub mod debug_async_objs_types;
@@ -234,6 +236,7 @@ pub mod c {
     pub use super::data_extents_defs::*;
     pub use super::data_extents_format::*;
     pub use super::data_extents_sb_format::*;
+    pub use super::data_extent_update_types::*;
     pub use super::data_extents_types::*;
     pub use super::data_keylist_types::*;
     pub use super::data_move_defs::*;
@@ -245,6 +248,7 @@ pub mod c {
     pub use super::data_reconcile_types::*;
     pub use super::data_reconcile_work_types::*;
     pub use super::data_reflink_format::*;
+    pub use super::data_reflink_types::*;
     pub use super::data_update_types::*;
     pub use super::data_write_types::*;
     pub use super::debug_async_objs_types::*;

@@ -4,8 +4,8 @@
 
 use crate::cstructs::c;
 use crate::types::{NeBytes, c_default};
-use core::ffi::c_uint;
-use cstruct_macros::{CStruct, bitfield, c_enum, c_xmacro, TypeInfo};
+use core::ffi::{c_int, c_uint};
+use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro, TypeInfo};
 use nestify::nest;
 
 c_xmacro! {
@@ -196,3 +196,11 @@ nest! {
     }
 }
 c_default!(bch_write_op);
+
+c_extern! {
+    pub fn bch2_extent_update(trans: *mut c::btree_trans, inum: c::subvol_inum,
+                              iter: *mut c::btree_iter, k: *mut c::bkey_i, k_buf_u64s: c_uint,
+                              disk_res: *mut c::disk_reservation, new_i_size: u64,
+                              i_sectors_delta_total: *mut i64, check_enospc: bool,
+                              change_cookie: u32, flush: *mut c::closure) -> c_int;
+}

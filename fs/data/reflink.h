@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_REFLINK_H
 #define _BCACHEFS_REFLINK_H
 
+#include "data/reflink_gen.h"
+
 int bch2_reflink_p_validate(struct bch_fs *, struct bkey_s_c,
 			    const struct bkey_validate_context *);
 void bch2_reflink_p_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
@@ -77,8 +79,6 @@ struct bkey_s_c bch2_lookup_indirect_extent(struct btree_trans *, struct btree_i
 					    s64 *, struct bkey_s_c_reflink_p,
 					    bool, unsigned);
 
-int bch2_make_extent_indirect(struct btree_trans *, struct btree_iter *,
-			      struct bkey_i *, bool);
 
 s64 bch2_remap_range(struct bch_fs *, subvol_inum, u64,
 		     subvol_inum, u64, u64, u64, s64 *,
