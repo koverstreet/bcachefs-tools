@@ -1297,6 +1297,11 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
         table_entries.push_str(&format!(
             "crate::typeinfo::BitmaskField {{ struct_name: {struct_name}, field: {field:?}, name: {set_m:?}, \
              lo: ({start}) as u8, hi: ({end}) as u8 }},\n"));
+        // C's LE*_BITMASK() defines NAME_MAX: the largest value it holds
+        methods.push_str(&format!(
+            "#[allow(dead_code)]\n\
+             pub const {}_MAX: u64 = u64::MAX >> (64 - (({end}) - ({start})));\n",
+            m.to_uppercase()));
         // One bit is a flag: bool, as the accessors on bindgen's structs had it.
         let one_bit = matches!((start.parse::<u32>(), end.parse::<u32>()), (Ok(s), Ok(e)) if e == s + 1);
         let (ty, from, to) = if one_bit { ("bool", " != 0", " as u64") } else { ("u64", "", "") };
