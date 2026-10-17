@@ -595,6 +595,15 @@ pub fn find_by_inum_trans(
     __peek(t, &mut iter, inum, BtreeIterFlags::empty(), Some(warn))
 }
 
+/// find_by_inum_trans(), logging nothing: as
+/// bch2_inode_find_by_inum_nowarn_trans().
+pub fn find_by_inum_nowarn_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum)
+    -> Result<c::bch_inode_unpacked, BchError>
+{
+    let mut iter = BtreeIter::uninit();
+    __peek(t, &mut iter, inum, BtreeIterFlags::empty(), None)
+}
+
 /// For C's VFS, recovery and FUSE, through bch2_inode_find_by_inum_trans():
 /// __bch2_inode_find_by_inum_trans().
 ///
