@@ -231,25 +231,56 @@ pub fn crc_is_encoded(crc: &c::bch_extent_crc_unpacked) -> bool {
     crc.csum_type as u32 != c::bch_csum_type::BCH_CSUM_none.0 || compressed
 }
 
-/// Whether @k is counted in its inode's i_sectors.
-pub fn bkey_extent_is_allocation(k: &c::bkey) -> bool {
-    use c::bch_bkey_type as t;
+impl c::bkey {
+    /// Whether it's counted in its inode's i_sectors.
+    pub fn extent_is_allocation(&self) -> bool {
+        use c::bch_bkey_type as t;
 
-    [t::KEY_TYPE_extent, t::KEY_TYPE_reservation, t::KEY_TYPE_reflink_p, t::KEY_TYPE_reflink_v,
-     t::KEY_TYPE_inline_data, t::KEY_TYPE_indirect_inline_data, t::KEY_TYPE_error]
-        .iter().any(|ty| ty.0 == k.type_ as u32)
+        matches!(self.key_type(),
+                 t::KEY_TYPE_extent | t::KEY_TYPE_reservation | t::KEY_TYPE_reflink_p |
+                 t::KEY_TYPE_reflink_v | t::KEY_TYPE_inline_data |
+                 t::KEY_TYPE_indirect_inline_data | t::KEY_TYPE_error)
+    }
+
+    /// Whether its value is pointers to its data, and not to another key's.
+    pub fn extent_is_direct_data(&self) -> bool {
+        use c::bch_bkey_type as t;
+
+        matches!(self.key_type(),
+                 t::KEY_TYPE_btree_ptr | t::KEY_TYPE_btree_ptr_v2 | t::KEY_TYPE_extent |
+                 t::KEY_TYPE_reflink_v)
+    }
 }
 
-/// Whether @k reserves space rather than holding data - a reservation, or
-/// an extent with unwritten pointers.
-pub fn bkey_extent_is_reservation(fs: &Fs, k: BkeySC<'_>) -> bool {
-    k.k.type_ as u32 == c::bch_bkey_type::KEY_TYPE_reservation.0 ||
-        k.ptrs(fs).any(|p| p.unwritten() != 0)
+impl BkeySC<'_> {
+    /// Whether it has space allocated and not yet written: an unwritten
+    /// pointer.
+    pub fn extent_is_unwritten(self, fs: &Fs) -> bool {
+        self.ptrs(fs).any(|p| p.unwritten() != 0)
+    }
+
+    /// Whether it reserves space rather than holding data - a reservation, or
+    /// an extent with unwritten pointers.
+    pub fn extent_is_reservation(self, fs: &Fs) -> bool {
+        self.k.key_type() == c::bch_bkey_type::KEY_TYPE_reservation || self.extent_is_unwritten(fs)
+    }
+
+    /// For reserving space to rewrite it: tolerates bad pointers.
+    pub fn durability_safe(self, fs: &Fs) -> c::bkey_durability {
+        unsafe { c::bch2_bkey_durability_safe(fs.as_ptr(), self.to_raw()) }
+    }
 }
 
-/// For reserving space to rewrite @k: tolerates bad pointers.
-pub fn durability_safe(fs: &Fs, k: BkeySC<'_>) -> c::bkey_durability {
-    unsafe { c::bch2_bkey_durability_safe(fs.as_ptr(), k.to_raw()) }
+impl<V: ?Sized> BkeyS<'_, V> {
+    /// Cut it to start at @where_: bch2_cut_front_s().
+    pub fn cut_front(&mut self, fs: &Fs, where_: c::bpos) {
+        unsafe { c::bch2_cut_front_s(fs.as_ptr(), where_, self.as_raw()) };
+    }
+
+    /// Cut it to end at @where_: bch2_cut_back_s().
+    pub fn cut_back(&mut self, where_: c::bpos) {
+        unsafe { c::bch2_cut_back_s(where_, self.as_raw()) };
+    }
 }
 
 /// Drop @k's stale cached pointers, updating it through @iter.

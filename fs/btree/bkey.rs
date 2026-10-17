@@ -78,19 +78,28 @@ impl c::bkey {
     }
 
     pub fn start_pos(&self) -> c::bpos {
-        bkey_start_pos(self)
+        c::bpos { offset: self.start_offset(), ..self.p }
     }
 
     pub fn start_offset(&self) -> u64 {
-        bkey_start_offset(self)
+        self.p.offset.wrapping_sub(self.size as u64)
     }
 
     pub fn is_deleted(&self) -> bool {
-        bkey_deleted(self)
+        self.key_type() == c::bch_bkey_type::KEY_TYPE_deleted
+    }
+
+    /// A tombstone in an extents btree.
+    pub fn is_extent_whiteout(&self) -> bool {
+        matches!(self.key_type(),
+                 c::bch_bkey_type::KEY_TYPE_deleted |
+                 c::bch_bkey_type::KEY_TYPE_whiteout |
+                 c::bch_bkey_type::KEY_TYPE_extent_whiteout)
     }
 
     pub fn is_btree_ptr(&self) -> bool {
-        bkey_is_btree_ptr(self)
+        matches!(self.key_type(),
+                 c::bch_bkey_type::KEY_TYPE_btree_ptr | c::bch_bkey_type::KEY_TYPE_btree_ptr_v2)
     }
 }
 
@@ -809,22 +818,19 @@ impl<'a> BkeySC<'a> {
     }
 
     pub fn is_deleted(&self) -> bool {
-        self.key_type() == c::bch_bkey_type::KEY_TYPE_deleted
+        self.k.is_deleted()
     }
 
     pub fn is_btree_ptr(&self) -> bool {
-        matches!(
-            self.key_type(),
-            c::bch_bkey_type::KEY_TYPE_btree_ptr | c::bch_bkey_type::KEY_TYPE_btree_ptr_v2
-        )
+        self.k.is_btree_ptr()
     }
 
     pub fn start_pos(&self) -> c::bpos {
-        bkey_start_pos(self.k)
+        self.k.start_pos()
     }
 
     pub fn start_offset(&self) -> u64 {
-        bkey_start_offset(self.k)
+        self.k.start_offset()
     }
 }
 
@@ -897,6 +903,11 @@ pub struct BkeyS<'a, V: ?Sized = c::bch_val> {
 impl<'a, V: ?Sized> BkeyS<'a, V> {
     pub fn key_type(&self) -> c::bch_bkey_type {
         c::bch_bkey_type(self.k.type_ as u32)
+    }
+
+    /// The key as C's bkey_s, lent to C for as long as it's borrowed.
+    pub(crate) fn as_raw(&mut self) -> c::bkey_s {
+        c::bkey_s { split: c::bkey_s_split { kv: c::bkey_s_kv { k: &mut *self.k, v: self.v } } }
     }
 
     /// To read: a typed key's C .c.
@@ -977,11 +988,12 @@ impl<'a> BkeyS<'a> {
     }
 }
 
-impl<'a> From<&'a mut BkeyI> for BkeyS<'a> {
-    fn from(k: &'a mut BkeyI) -> Self {
+/// A key of any type, as one of any type.
+impl<'a, V: ?Sized> From<&'a mut BkeyI<V>> for BkeyS<'a> {
+    fn from(k: &'a mut BkeyI<V>) -> Self {
         BkeyS {
             k:   &mut k.k,
-            v:   k.v.as_mut_ptr().cast(),
+            v:   (&raw mut k.v).cast(),
             val: PhantomData,
         }
     }
@@ -1101,42 +1113,11 @@ pub fn bkey_cmp(l: Bpos, r: Bpos) -> i32 {
     }
 }
 
-pub fn bkey_start_pos(k: &c::bkey) -> c::bpos {
-    c::bpos {
-        inode: k.p.inode,
-        offset: k.p.offset.wrapping_sub(k.size as u64),
-        snapshot: k.p.snapshot,
-    }
-}
-
-pub fn bkey_start_offset(k: &c::bkey) -> u64 {
-    k.p.offset.wrapping_sub(k.size as u64)
-}
-
-pub fn bkey_deleted(k: &c::bkey) -> bool {
-    c::bch_bkey_type(k.type_ as u32) == c::bch_bkey_type::KEY_TYPE_deleted
-}
-
-/// A tombstone in an extents btree.
-pub fn bkey_extent_whiteout(k: &c::bkey) -> bool {
-    matches!(c::bch_bkey_type(k.type_ as u32),
-             c::bch_bkey_type::KEY_TYPE_deleted |
-             c::bch_bkey_type::KEY_TYPE_whiteout |
-             c::bch_bkey_type::KEY_TYPE_extent_whiteout)
-}
-
 /// Without its value.
 impl fmt::Display for c::bkey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         printbuf_to_formatter(f, |buf| unsafe { c::bch2_bkey_to_text(buf, self) })
     }
-}
-
-pub fn bkey_is_btree_ptr(k: &c::bkey) -> bool {
-    matches!(
-        c::bch_bkey_type(k.type_ as u32),
-        c::bch_bkey_type::KEY_TYPE_btree_ptr | c::bch_bkey_type::KEY_TYPE_btree_ptr_v2
-    )
 }
 
 #[cfg(test)]
