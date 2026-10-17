@@ -773,6 +773,18 @@ impl c::bch_fs_snapshots {
 
     /// @id, or the live snapshot it collapses into if it's dead. An error if the
     /// tree is damaged on the way.
+    ///
+    /// We can have partially deleted nodes in the no_keys state: part of the
+    /// tree - interior nodes can't be removed from it at runtime - but every
+    /// key at that id has been removed and no new ones can be made. This walks
+    /// to the single live descendant to use instead: None if the subtree has
+    /// been fully deleted and there is none (a stray key in such a node has no
+    /// live home and should just be dropped).
+    ///
+    /// A missing node mid-walk means a deleted interior node's child pointer
+    /// is dangling - the tree is damaged - and is an error rather than
+    /// conflated with None, so the caller doesn't drop a key a live
+    /// descendant should still see.
     pub fn live_descendent(&self, mut id: u32) -> Result<Option<u32>, BchError> {
         let err = {
             let g = rcu::read_lock();

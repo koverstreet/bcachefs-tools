@@ -51,18 +51,6 @@ static inline enum bch_snapshot_state bch2_snapshot_state_compat(const struct bc
 		: bch2_snapshot_state_from_flags(s);
 }
 
-static inline bool bch2_snapshot_state_valid(enum bch_snapshot_state state)
-{
-	switch (state) {
-#define x(n, v) case SNAPSHOT_STATE_##n:
-	BCH_SNAPSHOT_STATES()
-#undef x
-		return true;
-	default:
-		return false;
-	}
-}
-
 static inline struct snapshot_t *__snapshot_t(struct snapshot_table *t, u32 id)
 {
 	u32 idx = U32_MAX - id;
@@ -84,39 +72,6 @@ static inline u32 bch2_snapshot_tree(struct bch_fs *c, u32 id)
 	return s ? s->tree : 0;
 }
 
-static inline bool bch2_snapshots_same_tree(struct bch_fs *c, u32 id1, u32 id2)
-{
-	if (id1 == id2)
-		return true;
-
-	guard(rcu)();
-	const struct snapshot_t *s1 = snapshot_t(c, id1);
-	const struct snapshot_t *s2 = snapshot_t(c, id2);
-	return s1 && s2 && s1->tree == s2->tree;
-}
-
-static inline u32 __bch2_snapshot_parent_early(struct bch_fs *c, u32 id)
-{
-	const struct snapshot_t *s = snapshot_t(c, id);
-	return s ? s->parent : 0;
-}
-
-static inline u32 bch2_snapshot_parent_early(struct bch_fs *c, u32 id)
-{
-	guard(rcu)();
-	return __bch2_snapshot_parent_early(c, id);
-}
-
-/*
- * No depth consistency check here: depth == parent's depth + 1 is not an
- * invariant this can rely on. delete_dead_interior_snapshots() writes every
- * surviving child's new depth in one loop and only splices the deleted nodes
- * out in the next, so for that whole span - and on disk, if we crash in it - a
- * child carries its new depth and its old parent pointer. fsck owns the check
- * instead: snapshot_bad_depth in check_snapshot(), which has a transaction, is
- * FSCK_AUTOFIX, and re-derives depth from the parent rather than just
- * complaining about it.
- */
 static inline u32 __bch2_snapshot_parent(struct snapshot_table *t, u32 id)
 {
 	const struct snapshot_t *s = __snapshot_t(t, id);
@@ -129,27 +84,6 @@ static inline u32 bch2_snapshot_parent(struct bch_fs *c, u32 id)
 	return __bch2_snapshot_parent(rcu_dereference(c->snapshots.table), id);
 }
 
-static inline u32 bch2_snapshot_nth_parent(struct bch_fs *c, u32 id, u32 n)
-{
-	guard(rcu)();
-	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
-
-	while (n--)
-		id = __bch2_snapshot_parent(t, id);
-	return id;
-}
-
-static inline u32 bch2_snapshot_root(struct bch_fs *c, u32 id)
-{
-	guard(rcu)();
-	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
-
-	u32 parent;
-	while ((parent = __bch2_snapshot_parent(t, id)))
-		id = parent;
-	return id;
-}
-
 static inline enum snapshot_id_state __bch2_snapshot_id_state(struct snapshot_table *t, u32 id)
 {
 	const struct snapshot_t *s = __snapshot_t(t, id);
@@ -160,11 +94,6 @@ static inline enum snapshot_id_state bch2_snapshot_id_state(struct bch_fs *c, u3
 {
 	guard(rcu)();
 	return __bch2_snapshot_id_state(rcu_dereference(c->snapshots.table), id);
-}
-
-static inline bool __bch2_snapshot_exists(struct snapshot_table *t, u32 id)
-{
-	return __bch2_snapshot_id_state(t, id) == SNAPSHOT_ID_live;
 }
 
 static inline bool bch2_snapshot_exists(struct bch_fs *c, u32 id)
@@ -185,60 +114,6 @@ static inline int bch2_snapshot_is_leaf(struct bch_fs *c, u32 id)
 	if (ret < 0)
 		return ret;
 	return !ret;
-}
-
-/*
- * No NULL check, unlike the helpers above: @parent must be an ancestor of a node
- * the caller already found in the table. The table is indexed by U32_MAX - id
- * and IDs descend, so a table covering a node covers all its ancestors.
- *
- * Returning 0 for a missing entry would write a wrong depth during repair; an
- * oops at least stops.
- */
-static inline u32 bch2_snapshot_depth(struct bch_fs *c, u32 parent)
-{
-	guard(rcu)();
-	return parent ? snapshot_t(c, parent)->depth + 1 : 0;
-}
-
-/*
- * We can have partially deleted snapshot nodes in the NO_KEYS state: they're
- * part of the tree of snapshots - we can't remove them from the tree of
- * snapshots at runtime - but all keys with that snapshot ID have been removed
- * and we can't create new ones. Walk to the single live descendant we can use
- * instead.
- *
- * Returns 0, with *live set to the live descendant - or *live == 0 if the
- * subtree has been fully deleted and there is none (a stray key in such a node
- * has no live home and should just be dropped).
- *
- * A missing node mid-walk means a deleted interior node's child pointer is
- * dangling - the tree is damaged - and is returned as an error rather than
- * conflated with "no live descendant", so the caller doesn't drop a key a live
- * descendant should still see.
- */
-static inline int bch2_snapshot_live_descendent(struct bch_fs *c, u32 id, u32 *live)
-{
-	*live = 0;
-
-	guard(rcu)();
-	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
-
-	while (true) {
-		const struct snapshot_t *s = __snapshot_t(t, id);
-		if (!s)
-			return bch_err_throw(c, invalid_snapshot_node);
-		if (s->state == SNAPSHOT_ID_live) {
-			*live = id;
-			return 0;
-		}
-
-		if (s->children[1])	/* deleted nodes are single-child */
-			return bch_err_throw(c, snapshot_multiple_descendents);
-		if (!s->children[0])
-			return 0;
-		id = s->children[0];
-	}
 }
 
 static inline bool bch2_snapshot_is_ancestor(struct btree_trans *trans, u32 id, u32 ancestor)
@@ -275,27 +150,6 @@ static inline int snapshot_list_add(struct bch_fs *c, snapshot_id_list *s, u32 i
 	if (ret)
 		bch_err(c, "error reallocating snapshot_id_list (size %zu)", s->size);
 	return ret;
-}
-
-static inline int snapshot_list_add_nodup(struct bch_fs *c, snapshot_id_list *s, u32 id)
-{
-	int ret = snapshot_list_has_id(s, id)
-		? 0
-		: darray_push(s, id);
-	if (ret)
-		bch_err(c, "error reallocating snapshot_id_list (size %zu)", s->size);
-	return ret;
-}
-
-static inline int snapshot_list_merge(struct bch_fs *c, snapshot_id_list *dst, snapshot_id_list *src)
-{
-	darray_for_each(*src, i) {
-		int ret = snapshot_list_add_nodup(c, dst, *i);
-		if (ret)
-			return ret;
-	}
-
-	return 0;
 }
 
 static inline int bch2_check_key_has_snapshot(struct btree_trans *trans,
