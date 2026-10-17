@@ -6,7 +6,8 @@
 //!
 //! RwSem is ours in-kernel: the kernel crate has no reader/writer lock - its
 //! Lock<T, Backend> only hands out exclusive guards. SeqLock is ours in both
-//! builds - the kernel crate has none, and it's only atomics.
+//! builds - the kernel crate has none, and it's only atomics. PercpuRwSem is
+//! ours in both too, over C's struct in both: C takes it as well.
 
 #[cfg(kernel)]
 pub use kernel::sync::{new_mutex, Mutex, MutexGuard};
@@ -24,6 +25,107 @@ pub use crate::new_rwsem;
 pub use rwsem::{RwSem, RwSemReadGuard, RwSemWriteGuard};
 
 pub use seqlock::SeqLock;
+
+pub use percpu_rwsem::{PercpuRwSem, PercpuRwSemReadGuard, PercpuRwSemWriteGuard};
+
+mod percpu_rwsem {
+    use crate::c;
+    use crate::errcode::{ret_to_result_void, BchError};
+    use core::cell::UnsafeCell;
+    use core::ffi::{c_void, CStr};
+    use core::marker::{PhantomData, PhantomPinned};
+
+    /// The kernel's percpu_rw_semaphore, as C's struct: readers - many and
+    /// cheap, a per-CPU count each - share it, a writer has it alone, at the
+    /// cost of waiting out every reader. It guards no Rust data: what it
+    /// orders is C's as much as Rust's, and C takes it through the same
+    /// struct.
+    #[repr(transparent)]
+    pub struct PercpuRwSem {
+        sem:  UnsafeCell<c::percpu_rw_semaphore>,
+        _pin: PhantomPinned,
+    }
+
+    // SAFETY: a lock, taken and released through C
+    unsafe impl Send for PercpuRwSem {}
+    unsafe impl Sync for PercpuRwSem {}
+
+    impl PercpuRwSem {
+        /// percpu_init_rwsem(), with a lockdep class of its own - @key, named
+        /// @name. new_percpu_rwsem!() is this, with a static key per call
+        /// site. Fails if the per-CPU counts can't be allocated.
+        #[doc(hidden)]
+        pub fn new(name: &'static CStr, key: *mut c_void) -> impl ::pin_init::PinInit<Self, BchError> {
+            // SAFETY: rust_percpu_init_rwsem() initializes the semaphore in
+            // place - it's pinned - and that's all of it
+            unsafe {
+                ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
+                    ret_to_result_void(c::rust_percpu_init_rwsem((&raw mut (*slot).sem).cast(),
+                                                                 name.as_ptr().cast(), key))
+                })
+            }
+        }
+
+        /// percpu_down_read(): shared with other readers.
+        pub fn read(&self) -> PercpuRwSemReadGuard<'_> {
+            unsafe { c::rust_percpu_down_read(self.sem.get()) };
+            PercpuRwSemReadGuard(self, PhantomData)
+        }
+
+        /// percpu_down_write(): alone, once every reader has gone.
+        pub fn write(&self) -> PercpuRwSemWriteGuard<'_> {
+            unsafe { c::rust_percpu_down_write(self.sem.get()) };
+            PercpuRwSemWriteGuard(self, PhantomData)
+        }
+    }
+
+    impl Drop for PercpuRwSem {
+        fn drop(&mut self) {
+            unsafe { c::rust_percpu_free_rwsem(self.sem.get_mut()) }
+        }
+    }
+
+    /// Not Send: released by the task that took it, as lockdep checks.
+    type NotSend = PhantomData<*mut ()>;
+
+    /// A read-held PercpuRwSem: percpu_up_read() when dropped.
+    pub struct PercpuRwSemReadGuard<'a>(&'a PercpuRwSem, NotSend);
+
+    impl Drop for PercpuRwSemReadGuard<'_> {
+        fn drop(&mut self) {
+            unsafe { c::rust_percpu_up_read(self.0.sem.get()) }
+        }
+    }
+
+    /// A write-held PercpuRwSem: percpu_up_write() when dropped.
+    pub struct PercpuRwSemWriteGuard<'a>(&'a PercpuRwSem, NotSend);
+
+    impl Drop for PercpuRwSemWriteGuard<'_> {
+        fn drop(&mut self) {
+            unsafe { c::rust_percpu_up_write(self.0.sem.get()) }
+        }
+    }
+}
+
+/// A PercpuRwSem initializer, named @name for lockdep, with a lock class of
+/// its own.
+#[macro_export]
+macro_rules! new_percpu_rwsem {
+    ($name:literal $(,)?) => {{
+        #[cfg(kernel)]
+        let key = ::kernel::static_lock_class!().as_ptr().cast();
+        #[cfg(not(kernel))]
+        let key = ::core::ptr::null_mut();
+
+        $crate::util::sync::PercpuRwSem::new(
+            // SAFETY: NUL-terminated, no NUL before it - a literal's text
+            unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked(
+                ::core::concat!($name, "\0").as_bytes()) },
+            key)
+    }};
+}
+
+pub use crate::new_percpu_rwsem;
 
 mod seqlock {
     use core::cell::UnsafeCell;

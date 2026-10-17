@@ -4,7 +4,8 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use core::ffi::c_uint;
+use crate::util::ffi::c_char;
+use core::ffi::{c_int, c_uint, c_void};
 use cstruct_macros::{CStruct, c_extern};
 
 /*
@@ -52,4 +53,12 @@ c_default!(percpu_rwsem_noio);
 c_extern! {
     pub fn rust_memalloc_noio_save() -> c_uint;
     pub fn rust_memalloc_flags_restore(flags: c_uint);
+
+    pub fn rust_percpu_init_rwsem(sem: *mut c::percpu_rw_semaphore, name: *const c_char,
+                                  key: *mut c_void) -> c_int;
+    pub fn rust_percpu_free_rwsem(sem: *mut c::percpu_rw_semaphore);
+    pub fn rust_percpu_down_read(sem: *mut c::percpu_rw_semaphore);
+    pub fn rust_percpu_up_read(sem: *mut c::percpu_rw_semaphore);
+    pub fn rust_percpu_down_write(sem: *mut c::percpu_rw_semaphore);
+    pub fn rust_percpu_up_write(sem: *mut c::percpu_rw_semaphore);
 }

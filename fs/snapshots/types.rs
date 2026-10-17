@@ -123,7 +123,10 @@ pub struct bch_fs_snapshots {
     #[c("bool need_table_rebuild")]
     #[init(AtomicBool::new(false))]
     pub(crate) need_table_rebuild: AtomicBool,
-    pub create_lock: c::percpu_rw_semaphore,
+    #[c("struct percpu_rw_semaphore create_lock")]
+    #[pin]
+    #[init(crate::new_percpu_rwsem!("&c->snapshots.create_lock"))]
+    pub create_lock: crate::util::sync::PercpuRwSem,
     /// Snapshot deletion's state: Rust's alone - snapshots/delete.rs.
     #[pin]
     #[init(RustOnly::new(crate::snapshots::delete::SnapshotDelete::init()))]

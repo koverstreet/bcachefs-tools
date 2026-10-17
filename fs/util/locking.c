@@ -25,3 +25,43 @@ void rust_memalloc_flags_restore(unsigned int flags)
 {
 	memalloc_flags_restore(flags);
 }
+
+/*
+ * For PercpuRwSem (util/sync.rs): percpu_init_rwsem() is a macro, with a
+ * lockdep class per call site - Rust passes its own, @key - and the rest are
+ * static inlines in one build or the other.
+ */
+
+int rust_percpu_init_rwsem(struct percpu_rw_semaphore *sem, const char *name, void *key)
+{
+#ifdef __KERNEL__
+	return __percpu_init_rwsem(sem, name, key);
+#else
+	return percpu_init_rwsem(sem);
+#endif
+}
+
+void rust_percpu_free_rwsem(struct percpu_rw_semaphore *sem)
+{
+	percpu_free_rwsem(sem);
+}
+
+void rust_percpu_down_read(struct percpu_rw_semaphore *sem)
+{
+	percpu_down_read(sem);
+}
+
+void rust_percpu_up_read(struct percpu_rw_semaphore *sem)
+{
+	percpu_up_read(sem);
+}
+
+void rust_percpu_down_write(struct percpu_rw_semaphore *sem)
+{
+	percpu_down_write(sem);
+}
+
+void rust_percpu_up_write(struct percpu_rw_semaphore *sem)
+{
+	percpu_up_write(sem);
+}
