@@ -41,11 +41,12 @@ fn extra_cflags_defines() -> Vec<String> {
 /// them builds without them.
 const PER_BUILD_CONFIG: &[&str] = &["CONFIG_BCACHEFS_DEBUG", "CONFIG_VALGRIND"];
 
-/// The kernel's options the types test, which no userspace build sets:
-/// declared too, as the kernel build has them.
+/// The kernel's options the types and the kernel-only code test, which no
+/// userspace build sets: declared too, as the kernel build has them.
 const KERNEL_CONFIG: &[&str] = &[
     "CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS",
     "CONFIG_BCACHEFS_LOCK_TIME_STATS",
+    "CONFIG_BCACHEFS_QUOTA",
     "CONFIG_BCACHEFS_TESTS",
     "CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE",
     "CONFIG_DEBUG_LOCK_ALLOC",

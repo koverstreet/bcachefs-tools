@@ -3,9 +3,11 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{GenRadix, c_default};
-use core::ffi::c_int;
-use cstruct_macros::{c_enum, c_typedef, CStruct, TypeInfo};
+use crate::util::genradix::SharedGenRadix;
+use crate::util::sync::{new_mutex, Mutex};
+use core::sync::atomic::AtomicU32;
+use cstruct_macros::{c_enum, CStruct, TypeInfo};
+use pin_init::{pin_data, pin_init, PinInit};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -22,39 +24,84 @@ c_enum! {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct memquota_counter {
-    pub v: u64,
-    pub hardlimit: u64,
-    pub softlimit: u64,
-    pub timer: i64,
-    pub warns: c_int,
-    pub warning_issued: c_int,
+/// One counter of one id's in-memory quota: its usage, its limits, and the
+/// grace period's end and warnings.
+#[derive(Clone, Copy, Default, PartialEq, ::pin_init::Zeroable)]
+pub struct MemquotaCounter {
+    pub v:              u64,
+    pub hardlimit:      u64,
+    pub softlimit:      u64,
+    pub timer:          i64,
+    pub warns:          i32,
+    pub warning_issued: u32,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-pub struct bch_memquota {
-    pub c: [c::memquota_counter; c::Q_COUNTERS as usize],
+/// One id's in-memory quota - a uid's, a gid's or a project's.
+#[derive(Clone, Copy, Default, PartialEq, ::pin_init::Zeroable)]
+pub struct Memquota {
+    pub c: [MemquotaCounter; c::Q_COUNTERS as usize],
 }
 
-c_typedef! {
-    pub type bch_memquota_table = GenRadix<c::bch_memquota>;
+/// A limit from the superblock: written under sb_lock, read without a lock,
+/// as C's are.
+#[derive(Default)]
+pub struct QuotaLimit {
+    pub timelimit: AtomicU32,
+    pub warnlimit: AtomicU32,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct quota_limit {
-    pub timelimit: u32,
-    pub warnlimit: u32,
+/// The in-memory quotas of one type, as C's struct bch_memquota_type: the
+/// limits, and the counters by id - allocated without the lock, genradix
+/// being safe against concurrent allocation and lookup, and touched only
+/// with it held. quota.rs's guard is the way in.
+#[pin_data]
+pub struct MemquotaType {
+    pub limits:       [QuotaLimit; c::Q_COUNTERS as usize],
+    #[pin]
+    pub(crate) lock:  Mutex<()>,
+    pub(crate) table: SharedGenRadix<Memquota>,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
-pub struct bch_memquota_type {
-    pub limits: [c::quota_limit; c::Q_COUNTERS as usize],
-    pub table: c::bch_memquota_table,
-    pub lock: c::mutex,
+impl MemquotaType {
+    fn new(lock: impl PinInit<Mutex<()>>) -> impl PinInit<Self> {
+        pin_init!(Self {
+            limits:  Default::default(),
+            lock    <- lock,
+            table:   SharedGenRadix::new(),
+        })
+    }
 }
-c_default!(bch_memquota_type);
+
+/// The in-memory quotas, by type - c->quotas, Rust's alone: quota.rs.
+#[pin_data]
+pub struct Quotas {
+    #[pin]
+    usr: MemquotaType,
+    #[pin]
+    grp: MemquotaType,
+    #[pin]
+    prj: MemquotaType,
+}
+
+impl Quotas {
+    /// No limits, and empty tables. A new_mutex!() each, so a lock class
+    /// each: they're taken together, in type order, as C's are with
+    /// mutex_lock_nested().
+    pub fn new() -> impl PinInit<Self> {
+        pin_init!(Self {
+            usr <- MemquotaType::new(new_mutex!(())),
+            grp <- MemquotaType::new(new_mutex!(())),
+            prj <- MemquotaType::new(new_mutex!(())),
+        })
+    }
+
+    /// Type @qtype's: a quota_types.
+    pub fn get(&self, qtype: usize) -> &MemquotaType {
+        match qtype {
+            0 => &self.usr,
+            1 => &self.grp,
+            2 => &self.prj,
+            _ => panic!("quota type {qtype} out of range"),
+        }
+    }
+}

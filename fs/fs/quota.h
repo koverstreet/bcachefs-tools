@@ -5,12 +5,6 @@
 #include "inode.h"
 #include "fs/quota_gen.h"
 
-extern const struct bch_sb_field_ops bch_sb_field_ops_quota;
-
-int bch2_quota_validate(struct bch_fs *, struct bkey_s_c,
-			const struct bkey_validate_context *);
-void bch2_quota_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
-
 #define bch2_bkey_ops_quota ((struct bkey_ops) {	\
 	.key_validate	= bch2_quota_validate,		\
 	.val_to_text	= bch2_quota_to_text,		\
@@ -32,21 +26,7 @@ static inline unsigned enabled_qtypes(struct bch_fs *c)
 		(c->opts.prjquota << QTYP_PRJ));
 }
 
-#ifdef CONFIG_BCACHEFS_QUOTA
-
-int bch2_quota_acct(struct bch_fs *, struct bch_qid, enum quota_counters,
-		    s64, enum quota_acct_mode);
-
-int bch2_quota_transfer(struct bch_fs *, unsigned, struct bch_qid,
-			struct bch_qid, u64, enum quota_acct_mode);
-
-void bch2_fs_quota_exit(struct bch_fs *);
-void bch2_fs_quota_init(struct bch_fs *);
-int bch2_fs_quota_read(struct bch_fs *);
-
-extern const struct quotactl_ops bch2_quotactl_operations;
-
-#else
+#ifndef CONFIG_BCACHEFS_QUOTA
 
 static inline int bch2_quota_acct(struct bch_fs *c, struct bch_qid qid,
 				  enum quota_counters counter, s64 v,
@@ -63,8 +43,6 @@ static inline int bch2_quota_transfer(struct bch_fs *c, unsigned qtypes,
 	return 0;
 }
 
-static inline void bch2_fs_quota_exit(struct bch_fs *c) {}
-static inline void bch2_fs_quota_init(struct bch_fs *c) {}
 static inline int bch2_fs_quota_read(struct bch_fs *c) { return 0; }
 
 #endif

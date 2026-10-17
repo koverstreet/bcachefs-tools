@@ -72,6 +72,7 @@ pub mod init {
 #[path = "fs/lostfound.rs"]    pub mod lostfound;
 #[path = "journal/read.rs"]     pub mod journal;
 #[path = "fs/namei.rs"]        pub mod namei;
+#[path = "fs/quota.rs"]        pub mod quota;
 pub mod sb;
 pub mod snapshots {
     #[path = "check_snapshots.rs"] pub mod check_snapshots;

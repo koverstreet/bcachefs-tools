@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::util::vstructs::Head;
-use crate::types::{GenRadix, bits_to_longs, c_default};
+use crate::types::{GenRadix, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
 use cstruct_macros::{c_const, c_enum, c_xmacro, CStruct, Init, TypeInfo};
@@ -731,8 +731,10 @@ pub struct Fs {
     #[cfg(not(NO_BCACHEFS_FS))]
     pub fdm_table: c::fdm_hash,
 
-    /* QUOTAS */
-    pub quotas: [c::bch_memquota_type; c::QTYP_NR as usize],
+    /// The in-memory quotas: quota.rs's alone.
+    #[pin]
+    #[init(RustOnly::new(c::Quotas::new()))]
+    pub(crate) quotas: rust_only!(c::Quotas),
 
     /* DEBUG JUNK */
 

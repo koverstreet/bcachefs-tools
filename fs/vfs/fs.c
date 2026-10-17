@@ -3587,6 +3587,25 @@ void rust_dir_casefold_changed(struct dentry *dentry)
 	bch2_dir_casefold_changed(dentry);
 }
 
+#ifdef CONFIG_BCACHEFS_QUOTA
+
+#include <linux/cred.h>
+#include <linux/quota.h>
+
+/* For quota.rs: make_kqid() is a static inline, current_user_ns() a macro */
+
+void rust_quota_send_warning(unsigned qtype, u32 id, dev_t dev, int msg)
+{
+	quota_send_warning(make_kqid(&init_user_ns, qtype, id), dev, msg);
+}
+
+struct kqid rust_make_kqid_current(unsigned qtype, u32 id)
+{
+	return make_kqid(current_user_ns(), qtype, id);
+}
+
+#endif
+
 unsigned rust_posix_acl_count(const struct posix_acl *acl)
 {
 	return acl->a_count;

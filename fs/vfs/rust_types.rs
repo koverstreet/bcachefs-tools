@@ -32,6 +32,12 @@ c_extern! {
     pub fn rust_dentry_parent_inode_opt(dentry: *mut c::dentry, opt: c_uint, v: *mut u64) -> bool;
     pub fn rust_dir_casefold_changed(dentry: *mut c::dentry);
 
+    /* quotas: */
+    #[cfg(CONFIG_BCACHEFS_QUOTA)]
+    pub fn rust_quota_send_warning(qtype: c_uint, id: u32, dev: c::dev_t, msg: c_int);
+    #[cfg(CONFIG_BCACHEFS_QUOTA)]
+    pub fn rust_make_kqid_current(qtype: c_uint, id: u32) -> c::kqid;
+
     /* posix ACLs: */
     pub fn posix_acl_alloc(count: c_uint, flags: c::gfp_t) -> *mut c::posix_acl;
     pub fn rust_posix_acl_count(acl: *const c::posix_acl) -> c_uint;
