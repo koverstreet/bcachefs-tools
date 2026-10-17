@@ -317,6 +317,8 @@ use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cstruct_macros::c_export;
 
+// ── The table ────────────────────────────────────────────────────────────
+
 /// The in-memory snapshot table: C's array of snapshot_t, indexed by
 /// U32_MAX - id. Ids descend, so a table covering a node covers its
 /// ancestors.
@@ -601,6 +603,8 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
     Ok(())
 }
 
+// ── Queries, and accounting ──────────────────────────────────────────────
+
 impl c::bch_fs_snapshots {
     /// The filesystem these are in, whose errors they throw.
     fn fs(&self) -> &Fs {
@@ -867,6 +871,8 @@ impl fmt::Display for SnapshotAccounting {
     }
 }
 
+// ── Ancestry ─────────────────────────────────────────────────────────────
+
 /// Whether @id is @ancestor or one of its descendants.
 pub fn is_ancestor(t: &TransAttempt<'_, '_>, id: u32, ancestor: u32) -> bool {
     debug_assert!(id != 0 && ancestor != 0);
@@ -970,354 +976,7 @@ pub fn bch2_snapshot_skiplist_get(c: &Opaque<c::bch_fs>, id: u32) -> u32 {
     Fs::from_c(c).snapshots.skiplist_get(id)
 }
 
-/// table_rebuild(), if repairs set need_table_rebuild.
-pub fn table_rebuild_if_needed(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
-    if !trans.fs().snapshots.need_table_rebuild.load(Ordering::Relaxed) {
-        return Ok(());
-    }
-    table_rebuild(trans)
-}
-
-/// A topology repair rewrote a parent pointer: mark_snapshot recomputed that
-/// node's table entry, but descendants' is_ancestor bitmaps were built under
-/// the old topology. Re-mark everything (reverse: ancestors first). Ancestor
-/// queries during check_snapshots itself use the parent-walking _early
-/// variants, so the stale window ends before anything trusts the bitmaps.
-fn table_rebuild(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
-    let fs = trans.fs();
-    let mut iter = BtreeIter::new(trans, c::btree_id::snapshots, POS_MAX, BtreeIterFlags::empty());
-    iter.for_each_reverse(trans, POS_MIN, |_, _, k| mark_snapshot(fs, k))?;
-
-    fs.snapshots.need_table_rebuild.store(false, Ordering::Relaxed);
-    Ok(())
-}
-
-/// The table, from the btree - and the deletions it finds to schedule: the
-/// snapshots_read recovery pass.
-fn snapshots_read(fs: &Fs) -> Result<(), BchError> {
-    // It's important that we check if we need to reconstruct snapshots before
-    // going RW, so we mark that pass as required in the superblock -
-    // otherwise, we could end up deleting keys with missing snapshot nodes
-    // instead
-    assert!(fs.flag(c::bch_fs_flags::BCH_FS_new_fs) || !fs.flag(c::bch_fs_flags::BCH_FS_may_go_rw),
-            "snapshots_read after going rw");
-
-    // Initializing the is_ancestor bitmaps requires ancestors to already be
-    // initialized - so mark in reverse:
-    let trans = crate::btree_trans!(fs);
-    let mut nr_empty_interior = 0;
-    let mut iter = BtreeIter::new(&trans, c::btree_id::snapshots, POS_MAX, BtreeIterFlags::empty());
-    iter.for_each_reverse(&trans, POS_MIN, |t, _, k| {
-        mark_snapshot(fs, k)?;
-        delete::check_snapshot_needs_deletion(t, k, &mut nr_empty_interior);
-        Ok(())
-    })?;
-
-    if nr_empty_interior != 0 {
-        let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
-
-        let _ = writeln!(msg, "Found {nr_empty_interior} empty interior snapshot nodes");
-        passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_delete_dead_interior_snapshots,
-                             c::bch_run_recovery_pass_flags::empty())?;
-    }
-    Ok(())
-}
-
-crate::recovery_pass!(bch2_snapshots_read => snapshots_read);
-
-/// The snapshots that have overwritten the key at @pos in @btree: on each
-/// branch, the one closest to @pos.snapshot.
-pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
-    -> Result<KVVec<u32>, BchError>
-{
-    let mut ids = KVVec::new();
-
-    if !t.fs().snapshots.has_children(pos.snapshot) {
-        return Ok(ids);
-    }
-
-    // From the version before @pos's - in the snapshot with the next lower
-    // ID; @pos.snapshot has children, so it isn't 0 - down
-    let mut iter = BtreeIter::new(t, btree, spos(pos.inode, pos.offset, pos.snapshot - 1),
-                                  BtreeIterFlags::ALL_SNAPSHOTS);
-    iter.for_each_reverse_norestart(t, spos(pos.inode, pos.offset, 0), |_, k| {
-        let id = k.k.p.snapshot;
-        if is_ancestor(t, id, pos.snapshot) &&
-           !ids.iter().any(|&i| is_ancestor(t, id, i)) {
-            ids.push(id, GFP_KERNEL)?;
-        }
-        Ok(())
-    })?;
-    Ok(ids)
-}
-
-pub fn tree_lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::SnapshotTree, BchError> {
-    t.bkey_get_val::<c::SnapshotTree>(c::btree_id::snapshot_trees, pos(0, id as u64),
-                                      BtreeIterFlags::empty())
-        .map_err(|e| if e.matches(c::ENOENT) {
-            t.fs().err(bch_errcode::BCH_ERR_ENOENT_snapshot_tree)
-        } else {
-            e
-        })
-}
-
-#[c_export]
-pub fn bch2_snapshot_tree_lookup(trans: &Opaque<c::btree_trans>, id: u32, s: &mut c::SnapshotTree) -> c_int {
-    let trans = BtreeTrans::from_c(trans);
-    // SAFETY: C looks up in the attempt it's in
-    match tree_lookup(&unsafe { trans.attempt_in_progress() }, id) {
-        Ok(v)  => { *s = v; 0 }
-        Err(e) => ret_to_c(Err(e)),
-    }
-}
-
-/// At an unused id, queued for the commit, for the caller to fill in.
-pub fn tree_create<'a, 't>(t: &TransAttempt<'a, 't>)
-    -> Result<TransBkey<'a, 't, c::SnapshotTree>, BchError>
-{
-    let mut iter = BtreeIter::uninit();
-    match t.bkey_get_empty_slot(&mut iter, c::btree_id::snapshot_trees, POS_MIN,
-                                pos(0, u32::MAX as u64)) {
-        Err(e) if e.matches(bch_errcode::BCH_ERR_ENOSPC_btree_slot) =>
-            return t.fs().throw(bch_errcode::BCH_ERR_ENOSPC_snapshot_tree),
-        r => r?,
-    }
-
-    let mut k = t.bkey_alloc_typed::<c::SnapshotTree>()?;
-    k.k_mut().p = iter.pos();
-    t.update(&iter, &k, UpdateTriggerFlags::empty())?;
-    Ok(k)
-}
-
-// ── Node creation ────────────────────────────────────────────────────────
-
-/// @new_snapids.len() new nodes under @parent, in @tree, each with its
-/// subvolume from @subvols: at the free ids below the lowest in use - ids
-/// descend - and in the table already, before the commit, for what the rest
-/// of the transaction asks about them.
-fn create_snapids(
-    t:           &TransAttempt<'_, '_>,
-    parent:      u32,
-    tree:        u32,
-    new_snapids: &mut [u32],
-    subvols:     &[u32],
-) -> Result<(), BchError> {
-    let fs = t.fs();
-    let depth = fs.snapshots.depth(parent);
-
-    let mut iter = BtreeIter::new(t, c::btree_id::snapshots, POS_MIN, BtreeIterFlags::INTENT);
-    iter.peek(t)?;
-
-    for (new_id, &subvol) in new_snapids.iter_mut().zip(subvols) {
-        let p = match iter.prev_slot(t)? {
-            Some(k) if k.k.p.offset != 0 => k.k.p,
-            _ => return fs.throw(bch_errcode::BCH_ERR_ENOSPC_snapshot_create),
-        };
-
-        let mut n = t.bkey_alloc_typed::<c::Snapshot>()?;
-        n.k_mut().p = p;
-
-        let v = n.v_mut();
-        v.flags    = 0u32.into();
-        v.parent   = parent.into();
-        v.subvol   = subvol.into();
-        v.tree     = tree.into();
-        v.depth    = depth.into();
-        v.btime.lo = fs.current_time().into();
-        v.btime.hi = 0u64.into();
-
-        let mut skip: [u32; 3] = core::array::from_fn(|_| fs.snapshots.skiplist_get(parent));
-        skip.sort_unstable();
-        v.skip = skip.map(Into::into);
-
-        v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
-
-        t.update(&iter, &n, UpdateTriggerFlags::empty())?;
-        mark_snapshot(fs, BkeySC::from(n.k_i()))?;
-
-        *new_id = p.offset as u32;
-    }
-    Ok(())
-}
-
-/// Two new nodes, children of the existing @parent - a snapshot.
-fn node_create_children(
-    t:           &TransAttempt<'_, '_>,
-    parent:      u32,
-    new_snapids: &mut [u32],
-    subvols:     &[u32],
-) -> Result<(), BchError> {
-    let fs = t.fs();
-
-    let mut n_parent: TransBkey<'_, '_, c::Snapshot> =
-        match t.bkey_get_mut(c::btree_id::snapshots, pos(0, parent as u64),
-                             BtreeIterFlags::empty(), UpdateTriggerFlags::empty()) {
-            Err(e) if e.matches(c::ENOENT) => {
-                bch_err!(fs, "snapshot {parent} not found");
-                return Err(e);
-            }
-            r => r?,
-        };
-
-    if n_parent.v().children() != [0, 0] {
-        bch_err!(fs, "Trying to add child snapshot nodes to parent that already has children");
-        return fs.throw(bch_errcode::BCH_ERR_EINVAL_snapshot_parent_already_has_children);
-    }
-
-    create_snapids(t, parent, n_parent.v().tree(), new_snapids, subvols)?;
-
-    let v = n_parent.v_mut();
-    v.children = [new_snapids[0].into(), new_snapids[1].into()];
-    v.subvol   = 0u32.into();
-    v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
-    Ok(())
-}
-
-/// One new node, the root of a new tree.
-fn node_create_tree(t: &TransAttempt<'_, '_>, new_snapids: &mut [u32], subvols: &[u32])
-    -> Result<(), BchError>
-{
-    let mut n_tree = tree_create(t)?;
-
-    create_snapids(t, 0, n_tree.k().p.offset as u32, new_snapids, subvols)?;
-
-    let v = n_tree.v_mut();
-    v.master_subvol = subvols[0].into();
-    v.root_snapshot = new_snapids[0].into();
-    Ok(())
-}
-
-/// New snapshot nodes, one for each of @subvols: two children of @parent, or
-/// with @parent 0 the root of a new tree. Their ids go in @new_snapids.
-pub fn node_create(t: &TransAttempt<'_, '_>, parent: u32, new_snapids: &mut [u32], subvols: &[u32])
-    -> Result<(), BchError>
-{
-    if new_snapids.len() != subvols.len() {
-        return t.fs().throw(bch_errcode::BCH_ERR_invalid_snapshot_node);
-    }
-    assert_eq!(parent == 0, new_snapids.len() == 1);
-    assert_eq!(parent != 0, new_snapids.len() == 2);
-
-    if parent != 0 {
-        node_create_children(t, parent, new_snapids, subvols)
-    } else {
-        node_create_tree(t, new_snapids, subvols)
-    }
-}
-
-/// Whether @k is in a snapshot that doesn't exist - reported, and @k deleted
-/// or its snapshot reconstructed - for the caller to skip it.
-pub fn check_key_has_snapshot(
-    t:    &TransAttempt<'_, '_>,
-    iter: &BtreeIter<'_>,
-    k:    BkeySC<'_>,
-) -> Result<bool, BchError> {
-    if t.fs().snapshots.id_state(k.k.p.snapshot) == c::snapshot_id_state::SNAPSHOT_ID_live {
-        return Ok(false);
-    }
-    // SAFETY: BtreeIter holds its iterator in an UnsafeCell, and nothing else
-    // has it for the call
-    let iter = unsafe { &mut *iter.raw() };
-    check_snapshots::check_key_has_snapshot(t, Some(iter), k)
-}
-
-/// ENOENT if there's none.
-pub fn lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::Snapshot, BchError> {
-    t.bkey_get_val::<c::Snapshot>(c::btree_id::snapshots, pos(0, id as u64),
-                                  BtreeIterFlags::empty())
-}
-
-/// Node @id's line of tree_keys_to_text(): its state, its subvolume's path,
-/// its data.
-#[cold]
-fn node_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
-    let _ = write!(out, "{id} \t");
-
-    match lookup(t, id) {
-        Err(e) if is_restart(&e) => return Err(e),
-        Err(e) => { let _ = write!(out, "{}", e.msg()); }
-        Ok(s) => {
-            let _ = write!(out, "{} ", c::bch_snapshot_state(s.state.get()));
-            let subvol = s.subvol.get();
-            if subvol != 0 {
-                let _ = write!(out, "subvol {subvol}");
-            }
-            out.tab();
-
-            if subvol != 0 {
-                match subvolume::get(t, subvol, false) {
-                    Err(e) if is_restart(&e) => return Err(e),
-                    Err(e) => { let _ = write!(out, "{}", e.msg()); }
-                    Ok(sv) => crate::namei::inum_to_path(
-                        t, c::subvol_inum { subvol: subvol as u64, inum: sv.inode.get() }, out)?,
-                }
-            }
-            out.tab();
-
-            // external_sectors is counter 2, and only the extents btree
-            // (btree 0, the default here) carries it - so this one read is
-            // the snapshot's total on-disk usage.
-            let mut v = [0u64; 3];
-            crate::accounting::mem_read(t.fs(), &c::disk_accounting_pos::from_arm(
-                    c::bch_acct_snapshot { id, btree: 0 }), &mut v);
-            out.human_readable_u64(v[2] << 9);
-            out.tab_rjust();
-        }
-    }
-    out.newline();
-
-    // Room for the next line now, while dropping locks to get it is cheap:
-    // the next attempt relocks
-    let _ = t.allocate_dropping_locks_norelock(|gfp| out.make_room_gfp(1024, gfp).then_some(()));
-    Ok(())
-}
-
-/// The snapshot keys of the tree @start is in, indented by depth, for an
-/// error message. Each node is its own attempt - so not for a caller in the
-/// middle of one: the dump would restart it.
-#[cold]
-pub fn tree_keys_to_text(out: &mut Printbuf, trans: &BtreeTrans<'_>, start: u32)
-    -> Result<(), BchError>
-{
-    let fs = trans.fs();
-    let max_depth = fs.snapshots.with_table(|t| t.subtree(start).map(|(_, d)| d).max().unwrap_or(0));
-
-    out.tabstops_reset();
-    out.tabstop_push(out.indent_level() + 12 + 2 * max_depth as u32);
-    out.tabstop_push(20);
-    out.tabstop_push(40);
-    out.tabstop_push(12);
-
-    let (mut depth, mut prev_depth) = (0i32, 0i32);
-    let mut id = start;
-    while id != 0 && id <= start {
-        let d = depth - prev_depth;
-        if d > 0 {
-            out.indent_add(d as u32 * 2);
-        } else {
-            out.indent_sub((-d) as u32 * 2);
-        }
-        prev_depth = depth;
-
-        lockrestart_do(trans, |t| {
-            let restore = out.state_save();
-            node_to_text(out, t, id).inspect_err(|e| if is_restart(e) {
-                out.state_restore(restore);
-            })
-        })?;
-
-        id = fs.snapshots.with_table(|t| t.tree_next(id, &mut depth));
-    }
-
-    out.indent_sub(prev_depth as u32 * 2);
-    Ok(())
-}
-
-/// ENOENT if there's none.
-pub fn lookup_key(t: &TransAttempt<'_, '_>, id: u32) -> Result<BkeyI<c::Snapshot>, BchError> {
-    t.bkey_get_key::<c::Snapshot>(c::btree_id::snapshots, pos(0, id as u64),
-                                  BtreeIterFlags::empty())
-}
+// ── Snapshot node keys ───────────────────────────────────────────────────
 
 /// Zero padded past the fields an older key lacks.
 pub fn val(k: BkeySC<'_>) -> Option<c::Snapshot> {
@@ -1499,8 +1158,6 @@ fn state_field(state: u32) -> Option<c::bch_snapshot_state> {
     SNAPSHOT_STATES.into_iter().find(|&s| s.0 == state)
 }
 
-// ── Keys: validate, to_text, the trigger ─────────────────────────────────
-
 /// Whether snapshot key @k is long enough to have all of @field: bkey_has_field().
 macro_rules! has_field {
     ($k:expr, $field:ident) => {
@@ -1631,4 +1288,359 @@ pub fn bch2_snapshot_tree_validate(
 pub fn bch2_snapshot_tree_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
     let t = c::SnapshotTree::val_copy_pad(k).expect("a snapshot_tree");
     write!(out, "subvol {} root snapshot {}", t.master_subvol.get(), t.root_snapshot.get());
+}
+
+pub fn tree_lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::SnapshotTree, BchError> {
+    t.bkey_get_val::<c::SnapshotTree>(c::btree_id::snapshot_trees, pos(0, id as u64),
+                                      BtreeIterFlags::empty())
+        .map_err(|e| if e.matches(c::ENOENT) {
+            t.fs().err(bch_errcode::BCH_ERR_ENOENT_snapshot_tree)
+        } else {
+            e
+        })
+}
+
+#[c_export]
+pub fn bch2_snapshot_tree_lookup(trans: &Opaque<c::btree_trans>, id: u32, s: &mut c::SnapshotTree) -> c_int {
+    let trans = BtreeTrans::from_c(trans);
+    // SAFETY: C looks up in the attempt it's in
+    match tree_lookup(&unsafe { trans.attempt_in_progress() }, id) {
+        Ok(v)  => { *s = v; 0 }
+        Err(e) => ret_to_c(Err(e)),
+    }
+}
+
+/// At an unused id, queued for the commit, for the caller to fill in.
+pub fn tree_create<'a, 't>(t: &TransAttempt<'a, 't>)
+    -> Result<TransBkey<'a, 't, c::SnapshotTree>, BchError>
+{
+    let mut iter = BtreeIter::uninit();
+    match t.bkey_get_empty_slot(&mut iter, c::btree_id::snapshot_trees, POS_MIN,
+                                pos(0, u32::MAX as u64)) {
+        Err(e) if e.matches(bch_errcode::BCH_ERR_ENOSPC_btree_slot) =>
+            return t.fs().throw(bch_errcode::BCH_ERR_ENOSPC_snapshot_tree),
+        r => r?,
+    }
+
+    let mut k = t.bkey_alloc_typed::<c::SnapshotTree>()?;
+    k.k_mut().p = iter.pos();
+    t.update(&iter, &k, UpdateTriggerFlags::empty())?;
+    Ok(k)
+}
+
+// ── Node creation ────────────────────────────────────────────────────────
+
+/// @new_snapids.len() new nodes under @parent, in @tree, each with its
+/// subvolume from @subvols: at the free ids below the lowest in use - ids
+/// descend - and in the table already, before the commit, for what the rest
+/// of the transaction asks about them.
+fn create_snapids(
+    t:           &TransAttempt<'_, '_>,
+    parent:      u32,
+    tree:        u32,
+    new_snapids: &mut [u32],
+    subvols:     &[u32],
+) -> Result<(), BchError> {
+    let fs = t.fs();
+    let depth = fs.snapshots.depth(parent);
+
+    let mut iter = BtreeIter::new(t, c::btree_id::snapshots, POS_MIN, BtreeIterFlags::INTENT);
+    iter.peek(t)?;
+
+    for (new_id, &subvol) in new_snapids.iter_mut().zip(subvols) {
+        let p = match iter.prev_slot(t)? {
+            Some(k) if k.k.p.offset != 0 => k.k.p,
+            _ => return fs.throw(bch_errcode::BCH_ERR_ENOSPC_snapshot_create),
+        };
+
+        let mut n = t.bkey_alloc_typed::<c::Snapshot>()?;
+        n.k_mut().p = p;
+
+        let v = n.v_mut();
+        v.flags    = 0u32.into();
+        v.parent   = parent.into();
+        v.subvol   = subvol.into();
+        v.tree     = tree.into();
+        v.depth    = depth.into();
+        v.btime.lo = fs.current_time().into();
+        v.btime.hi = 0u64.into();
+
+        let mut skip: [u32; 3] = core::array::from_fn(|_| fs.snapshots.skiplist_get(parent));
+        skip.sort_unstable();
+        v.skip = skip.map(Into::into);
+
+        v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
+
+        t.update(&iter, &n, UpdateTriggerFlags::empty())?;
+        mark_snapshot(fs, BkeySC::from(n.k_i()))?;
+
+        *new_id = p.offset as u32;
+    }
+    Ok(())
+}
+
+/// Two new nodes, children of the existing @parent - a snapshot.
+fn node_create_children(
+    t:           &TransAttempt<'_, '_>,
+    parent:      u32,
+    new_snapids: &mut [u32],
+    subvols:     &[u32],
+) -> Result<(), BchError> {
+    let fs = t.fs();
+
+    let mut n_parent: TransBkey<'_, '_, c::Snapshot> =
+        match t.bkey_get_mut(c::btree_id::snapshots, pos(0, parent as u64),
+                             BtreeIterFlags::empty(), UpdateTriggerFlags::empty()) {
+            Err(e) if e.matches(c::ENOENT) => {
+                bch_err!(fs, "snapshot {parent} not found");
+                return Err(e);
+            }
+            r => r?,
+        };
+
+    if n_parent.v().children() != [0, 0] {
+        bch_err!(fs, "Trying to add child snapshot nodes to parent that already has children");
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_snapshot_parent_already_has_children);
+    }
+
+    create_snapids(t, parent, n_parent.v().tree(), new_snapids, subvols)?;
+
+    let v = n_parent.v_mut();
+    v.children = [new_snapids[0].into(), new_snapids[1].into()];
+    v.subvol   = 0u32.into();
+    v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
+    Ok(())
+}
+
+/// One new node, the root of a new tree.
+fn node_create_tree(t: &TransAttempt<'_, '_>, new_snapids: &mut [u32], subvols: &[u32])
+    -> Result<(), BchError>
+{
+    let mut n_tree = tree_create(t)?;
+
+    create_snapids(t, 0, n_tree.k().p.offset as u32, new_snapids, subvols)?;
+
+    let v = n_tree.v_mut();
+    v.master_subvol = subvols[0].into();
+    v.root_snapshot = new_snapids[0].into();
+    Ok(())
+}
+
+/// New snapshot nodes, one for each of @subvols: two children of @parent, or
+/// with @parent 0 the root of a new tree. Their ids go in @new_snapids.
+pub fn node_create(t: &TransAttempt<'_, '_>, parent: u32, new_snapids: &mut [u32], subvols: &[u32])
+    -> Result<(), BchError>
+{
+    if new_snapids.len() != subvols.len() {
+        return t.fs().throw(bch_errcode::BCH_ERR_invalid_snapshot_node);
+    }
+    assert_eq!(parent == 0, new_snapids.len() == 1);
+    assert_eq!(parent != 0, new_snapids.len() == 2);
+
+    if parent != 0 {
+        node_create_children(t, parent, new_snapids, subvols)
+    } else {
+        node_create_tree(t, new_snapids, subvols)
+    }
+}
+
+// ── Reading the table ────────────────────────────────────────────────────
+
+/// table_rebuild(), if repairs set need_table_rebuild.
+pub fn table_rebuild_if_needed(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+    if !trans.fs().snapshots.need_table_rebuild.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    table_rebuild(trans)
+}
+
+/// A topology repair rewrote a parent pointer: mark_snapshot recomputed that
+/// node's table entry, but descendants' is_ancestor bitmaps were built under
+/// the old topology. Re-mark everything (reverse: ancestors first). Ancestor
+/// queries during check_snapshots itself use the parent-walking _early
+/// variants, so the stale window ends before anything trusts the bitmaps.
+fn table_rebuild(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+    let fs = trans.fs();
+    let mut iter = BtreeIter::new(trans, c::btree_id::snapshots, POS_MAX, BtreeIterFlags::empty());
+    iter.for_each_reverse(trans, POS_MIN, |_, _, k| mark_snapshot(fs, k))?;
+
+    fs.snapshots.need_table_rebuild.store(false, Ordering::Relaxed);
+    Ok(())
+}
+
+/// The table, from the btree - and the deletions it finds to schedule: the
+/// snapshots_read recovery pass.
+fn snapshots_read(fs: &Fs) -> Result<(), BchError> {
+    // It's important that we check if we need to reconstruct snapshots before
+    // going RW, so we mark that pass as required in the superblock -
+    // otherwise, we could end up deleting keys with missing snapshot nodes
+    // instead
+    assert!(fs.flag(c::bch_fs_flags::BCH_FS_new_fs) || !fs.flag(c::bch_fs_flags::BCH_FS_may_go_rw),
+            "snapshots_read after going rw");
+
+    // Initializing the is_ancestor bitmaps requires ancestors to already be
+    // initialized - so mark in reverse:
+    let trans = crate::btree_trans!(fs);
+    let mut nr_empty_interior = 0;
+    let mut iter = BtreeIter::new(&trans, c::btree_id::snapshots, POS_MAX, BtreeIterFlags::empty());
+    iter.for_each_reverse(&trans, POS_MIN, |t, _, k| {
+        mark_snapshot(fs, k)?;
+        delete::check_snapshot_needs_deletion(t, k, &mut nr_empty_interior);
+        Ok(())
+    })?;
+
+    if nr_empty_interior != 0 {
+        let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
+
+        let _ = writeln!(msg, "Found {nr_empty_interior} empty interior snapshot nodes");
+        passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_delete_dead_interior_snapshots,
+                             c::bch_run_recovery_pass_flags::empty())?;
+    }
+    Ok(())
+}
+
+crate::recovery_pass!(bch2_snapshots_read => snapshots_read);
+
+// ── Lookups ──────────────────────────────────────────────────────────────
+
+/// ENOENT if there's none.
+pub fn lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::Snapshot, BchError> {
+    t.bkey_get_val::<c::Snapshot>(c::btree_id::snapshots, pos(0, id as u64),
+                                  BtreeIterFlags::empty())
+}
+
+/// ENOENT if there's none.
+pub fn lookup_key(t: &TransAttempt<'_, '_>, id: u32) -> Result<BkeyI<c::Snapshot>, BchError> {
+    t.bkey_get_key::<c::Snapshot>(c::btree_id::snapshots, pos(0, id as u64),
+                                  BtreeIterFlags::empty())
+}
+
+/// Whether @k is in a snapshot that doesn't exist - reported, and @k deleted
+/// or its snapshot reconstructed - for the caller to skip it.
+pub fn check_key_has_snapshot(
+    t:    &TransAttempt<'_, '_>,
+    iter: &BtreeIter<'_>,
+    k:    BkeySC<'_>,
+) -> Result<bool, BchError> {
+    if t.fs().snapshots.id_state(k.k.p.snapshot) == c::snapshot_id_state::SNAPSHOT_ID_live {
+        return Ok(false);
+    }
+    // SAFETY: BtreeIter holds its iterator in an UnsafeCell, and nothing else
+    // has it for the call
+    let iter = unsafe { &mut *iter.raw() };
+    check_snapshots::check_key_has_snapshot(t, Some(iter), k)
+}
+
+/// The snapshots that have overwritten the key at @pos in @btree: on each
+/// branch, the one closest to @pos.snapshot.
+pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
+    -> Result<KVVec<u32>, BchError>
+{
+    let mut ids = KVVec::new();
+
+    if !t.fs().snapshots.has_children(pos.snapshot) {
+        return Ok(ids);
+    }
+
+    // From the version before @pos's - in the snapshot with the next lower
+    // ID; @pos.snapshot has children, so it isn't 0 - down
+    let mut iter = BtreeIter::new(t, btree, spos(pos.inode, pos.offset, pos.snapshot - 1),
+                                  BtreeIterFlags::ALL_SNAPSHOTS);
+    iter.for_each_reverse_norestart(t, spos(pos.inode, pos.offset, 0), |_, k| {
+        let id = k.k.p.snapshot;
+        if is_ancestor(t, id, pos.snapshot) &&
+           !ids.iter().any(|&i| is_ancestor(t, id, i)) {
+            ids.push(id, GFP_KERNEL)?;
+        }
+        Ok(())
+    })?;
+    Ok(ids)
+}
+
+// ── The tree, for error messages ─────────────────────────────────────────
+
+/// Node @id's line of tree_keys_to_text(): its state, its subvolume's path,
+/// its data.
+#[cold]
+fn node_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, id: u32) -> Result<(), BchError> {
+    let _ = write!(out, "{id} \t");
+
+    match lookup(t, id) {
+        Err(e) if is_restart(&e) => return Err(e),
+        Err(e) => { let _ = write!(out, "{}", e.msg()); }
+        Ok(s) => {
+            let _ = write!(out, "{} ", c::bch_snapshot_state(s.state.get()));
+            let subvol = s.subvol.get();
+            if subvol != 0 {
+                let _ = write!(out, "subvol {subvol}");
+            }
+            out.tab();
+
+            if subvol != 0 {
+                match subvolume::get(t, subvol, false) {
+                    Err(e) if is_restart(&e) => return Err(e),
+                    Err(e) => { let _ = write!(out, "{}", e.msg()); }
+                    Ok(sv) => crate::namei::inum_to_path(
+                        t, c::subvol_inum { subvol: subvol as u64, inum: sv.inode.get() }, out)?,
+                }
+            }
+            out.tab();
+
+            // external_sectors is counter 2, and only the extents btree
+            // (btree 0, the default here) carries it - so this one read is
+            // the snapshot's total on-disk usage.
+            let mut v = [0u64; 3];
+            crate::accounting::mem_read(t.fs(), &c::disk_accounting_pos::from_arm(
+                    c::bch_acct_snapshot { id, btree: 0 }), &mut v);
+            out.human_readable_u64(v[2] << 9);
+            out.tab_rjust();
+        }
+    }
+    out.newline();
+
+    // Room for the next line now, while dropping locks to get it is cheap:
+    // the next attempt relocks
+    let _ = t.allocate_dropping_locks_norelock(|gfp| out.make_room_gfp(1024, gfp).then_some(()));
+    Ok(())
+}
+
+/// The snapshot keys of the tree @start is in, indented by depth, for an
+/// error message. Each node is its own attempt - so not for a caller in the
+/// middle of one: the dump would restart it.
+#[cold]
+pub fn tree_keys_to_text(out: &mut Printbuf, trans: &BtreeTrans<'_>, start: u32)
+    -> Result<(), BchError>
+{
+    let fs = trans.fs();
+    let max_depth = fs.snapshots.with_table(|t| t.subtree(start).map(|(_, d)| d).max().unwrap_or(0));
+
+    out.tabstops_reset();
+    out.tabstop_push(out.indent_level() + 12 + 2 * max_depth as u32);
+    out.tabstop_push(20);
+    out.tabstop_push(40);
+    out.tabstop_push(12);
+
+    let (mut depth, mut prev_depth) = (0i32, 0i32);
+    let mut id = start;
+    while id != 0 && id <= start {
+        let d = depth - prev_depth;
+        if d > 0 {
+            out.indent_add(d as u32 * 2);
+        } else {
+            out.indent_sub((-d) as u32 * 2);
+        }
+        prev_depth = depth;
+
+        lockrestart_do(trans, |t| {
+            let restore = out.state_save();
+            node_to_text(out, t, id).inspect_err(|e| if is_restart(e) {
+                out.state_restore(restore);
+            })
+        })?;
+
+        id = fs.snapshots.with_table(|t| t.tree_next(id, &mut depth));
+    }
+
+    out.indent_sub(prev_depth as u32 * 2);
+    Ok(())
 }
