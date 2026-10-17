@@ -145,6 +145,8 @@ c_bitmask! {
         BCH_MEMBER_ROTATIONAL_SET(33, 34),
         BCH_MEMBER_INITIALIZED(34, 38),
         /* 38-46 free, was FAILURE_DOMAIN (now a string, member.failure_domain) */
+        BCH_MEMBER_NEEDS_RECONCILE_SCAN(46, 47),
+        /* 47-63 unused: never previously assigned */
     }
 }
 
