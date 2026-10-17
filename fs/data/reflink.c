@@ -177,11 +177,13 @@ static int bch2_indirect_extent_not_missing(struct btree_trans *trans, struct bk
 		btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
 }
 
-static int bch2_indirect_extent_missing_error(struct btree_trans *trans,
-					      struct bkey_s_c_reflink_p p,
-					      u64 missing_start, u64 missing_end,
-					      bool should_commit)
+int bch2_indirect_extent_missing_error(struct btree_trans *trans,
+				       struct bkey_s_c k,
+				       u64 missing_start, u64 missing_end,
+				       bool should_commit)
 {
+	struct bkey_s_c_reflink_p p = bkey_s_c_to_reflink_p(k);
+
 	if (REFLINK_P_ERROR(p.v))
 		return 0;
 
@@ -274,7 +276,7 @@ struct bkey_s_c bch2_lookup_indirect_extent(struct btree_trans *trans,
 				      REFLINK_P_IDX(p.v) + p.k->size + le32_to_cpu(p.v->back_pad));
 		BUG_ON(reflink_offset == missing_end);
 
-		int ret = bch2_indirect_extent_missing_error(trans, p, reflink_offset,
+		int ret = bch2_indirect_extent_missing_error(trans, p.s_c, reflink_offset,
 							     missing_end, should_commit);
 		if (ret)
 			return bkey_s_c_err(ret);
@@ -347,62 +349,6 @@ fsck_err:
 	return ret;
 }
 
-static s64 gc_trigger_reflink_p_segment(struct btree_trans *trans,
-				struct bkey_s_c_reflink_p p, u64 *idx,
-				enum btree_iter_update_trigger_flags flags,
-				size_t r_idx, bool check_repair)
-{
-	struct bch_fs *c = trans->c;
-	struct reflink_gc *r;
-	int add = !(flags & BTREE_TRIGGER_overwrite) ? 1 : -1;
-	u64 next_idx = REFLINK_P_IDX(p.v) + p.k->size + le32_to_cpu(p.v->back_pad);
-	s64 ret = 0;
-	CLASS(printbuf, buf)();
-
-	if (r_idx >= c->reflink_gc_nr)
-		goto not_found;
-
-	r = genradix_ptr(&c->reflink_gc_table, r_idx);
-	next_idx = min(next_idx, r->offset - r->size);
-	if (*idx < next_idx)
-		goto not_found;
-
-	/* gc's own marking, and commits' gc triggers behind it, at once: */
-	if (flags & BTREE_TRIGGER_gc)
-		BUG_ON(atomic_add_return(add, &r->refcount) < 0);
-	*idx = r->offset;
-	return 0;
-not_found:
-	if (check_repair)
-		try(bch2_indirect_extent_missing_error(trans, p, *idx, next_idx, false));
-
-	*idx = next_idx;
-	return ret;
-}
-
-static int reflink_p_gc_idx(struct btree_trans *trans, struct bkey_s_c_reflink_p p,
-			    u64 idx, u64 end,
-			    enum btree_iter_update_trigger_flags flags, bool check_repair)
-{
-	struct bch_fs *c = trans->c;
-	int ret = 0;
-	size_t l = 0, r = c->reflink_gc_nr;
-
-	while (l < r) {
-		size_t m = l + (r - l) / 2;
-		struct reflink_gc *ref = genradix_ptr(&c->reflink_gc_table, m);
-		if (ref->offset <= idx)
-			l = m + 1;
-		else
-			r = m;
-	}
-
-	while (idx < end && !ret)
-		ret = gc_trigger_reflink_p_segment(trans, p, &idx, flags, l++, check_repair);
-
-	return ret;
-}
-
 static int __trigger_reflink_p(struct btree_trans *trans,
 		enum btree_id btree_id, unsigned level, struct bkey_s_c k,
 		enum btree_iter_update_trigger_flags flags)
@@ -419,7 +365,7 @@ static int __trigger_reflink_p(struct btree_trans *trans,
 	}
 
 	if (flags & BTREE_TRIGGER_gc)
-		ret = reflink_p_gc_idx(trans, p, idx, end, flags, false);
+		ret = bch2_reflink_p_gc_idx(trans, k, idx, end, flags, false);
 
 	return ret;
 }
@@ -444,7 +390,7 @@ int bch2_reflink_p_check_repair(struct btree_trans *trans, struct btree_iter *it
 	u64 idx = REFLINK_P_IDX(p.v) - le32_to_cpu(p.v->front_pad);
 	u64 end = REFLINK_P_IDX(p.v) + p.k->size + le32_to_cpu(p.v->back_pad);
 
-	return reflink_p_gc_idx(trans, p, idx, end, 0, true);
+	return bch2_reflink_p_gc_idx(trans, k, idx, end, 0, true);
 }
 
 /* indirect extent trigger */
@@ -737,94 +683,4 @@ s64 bch2_remap_range(struct bch_fs *c,
 	enumerated_ref_put(&c->writes, BCH_WRITE_REF_reflink);
 
 	return dst_done ?: ret ?: ret2;
-}
-
-/* fsck */
-
-static int bch2_gc_write_reflink_key(struct btree_trans *trans,
-				     struct btree_iter *iter,
-				     struct bkey_s_c k,
-				     size_t *idx)
-{
-	struct bch_fs *c = trans->c;
-	const __le64 *refcount = bkey_refcount_c(k);
-	CLASS(printbuf, buf)();
-	struct reflink_gc *r;
-
-	if (!refcount)
-		return 0;
-
-	while ((r = genradix_ptr(&c->reflink_gc_table, *idx)) &&
-	       r->offset < k.k->p.offset)
-		++*idx;
-
-	if (!r ||
-	    r->offset != k.k->p.offset ||
-	    r->size != k.k->size) {
-		bch_err(c, "unexpected inconsistency walking reflink table at gc finish");
-		return bch_err_throw(c, EINVAL_reflink_gc_table_mismatch);
-	}
-
-	u32 r_refcount = atomic_read(&r->refcount);
-
-	if (ret_fsck_err_on(r_refcount != le64_to_cpu(*refcount),
-			trans, reflink_v_refcount_wrong,
-			"reflink key has wrong refcount:\n"
-			"%s\n"
-			"should be %u",
-			(bch2_bkey_val_to_text(&buf, c, k), buf.buf),
-			r_refcount)) {
-		struct bkey_i *new = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
-
-		if (!r_refcount)
-			new->k.type = KEY_TYPE_deleted;
-		else
-			*bkey_refcount(bkey_i_to_s(new)) = cpu_to_le64(r_refcount);
-		try(bch2_trans_update(trans, iter, new, 0));
-	}
-
-	return 0;
-}
-
-int bch2_gc_reflink_done(struct bch_fs *c)
-{
-	CLASS(btree_trans, trans)(c);
-	size_t idx = 0;
-
-	int ret = for_each_btree_key_commit(trans, iter,
-				BTREE_ID_reflink, POS_MIN,
-				BTREE_ITER_prefetch, k,
-				NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
-			bch2_gc_write_reflink_key(trans, &iter, k, &idx));
-	c->reflink_gc_nr = 0;
-	return ret;
-}
-
-int bch2_gc_reflink_start(struct bch_fs *c)
-{
-	CLASS(btree_trans, trans)(c);
-	c->reflink_gc_nr = 0;
-
-	int ret = for_each_btree_key(trans, iter, BTREE_ID_reflink, POS_MIN,
-				   BTREE_ITER_prefetch, k, ({
-			const __le64 *refcount = bkey_refcount_c(k);
-
-			if (!refcount)
-				continue;
-
-			struct reflink_gc *r = genradix_ptr_alloc(&c->reflink_gc_table,
-							c->reflink_gc_nr++, GFP_KERNEL);
-			if (!r) {
-				ret = bch_err_throw(c, ENOMEM_gc_reflink_start);
-				break;
-			}
-
-			r->offset	= k.k->p.offset;
-			r->size		= k.k->size;
-			atomic_set(&r->refcount, 0);
-			0;
-		}));
-
-	bch_err_fn(c, ret);
-	return ret;
 }

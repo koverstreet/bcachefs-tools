@@ -3,8 +3,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{GenRadix, c_default};
-use cstruct_macros::{bitfield, c_enum, c_typedef, c_xmacro, CStruct, TypeInfo};
+use crate::types::c_default;
+use cstruct_macros::{bitfield, c_enum, c_xmacro, CStruct, TypeInfo};
 use nestify::nest;
 
 c_xmacro! {
@@ -36,19 +36,6 @@ nest! {
         pub level: u16,
         pub pos: c::bpos,
     }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct reflink_gc {
-    pub offset: u64,
-    pub size: u32,
-    /* gc's marking and commits' gc triggers count at once */
-    pub refcount: c::atomic_t,
-}
-
-c_typedef! {
-    pub type reflink_gc_table = GenRadix<c::reflink_gc>;
 }
 
 #[repr(C)]

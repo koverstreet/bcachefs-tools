@@ -14,4 +14,7 @@ c_extern! {
     pub fn bch2_make_extent_indirect(trans: *mut c::btree_trans, extent_iter: *mut c::btree_iter,
                                      orig: *mut c::bkey_i,
                                      reflink_p_may_update_opts_field: bool) -> c_int;
+    pub fn bch2_indirect_extent_missing_error(trans: *mut c::btree_trans, k: c::bkey_s_c,
+                                              missing_start: u64, missing_end: u64,
+                                              should_commit: bool) -> c_int;
 }

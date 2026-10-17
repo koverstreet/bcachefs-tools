@@ -933,7 +933,7 @@ static void bch2_gc_free(struct bch_fs *c)
 {
 	bch2_accounting_gc_free(c);
 
-	genradix_free(&c->reflink_gc_table);
+	bch2_gc_reflink_free(c);
 	genradix_free(&c->ec.gc_stripes);
 
 	for_each_member_device(c, ca)
