@@ -61,7 +61,6 @@ int bch2_inode_opt_propagate_start(struct btree_trans *, u64, u32,
 int bch2_inode_opt_propagate_finish(struct btree_trans *,
 				    struct bkey_i_logged_op_inode_opt_propagate *);
 
-int bch2_resume_logged_op_inode_opt_propagate(struct btree_trans *, struct bkey_i *);
 void bch2_logged_op_inode_opt_propagate_to_text(struct printbuf *, struct bch_fs *,
 						struct bkey_s_c);
 

@@ -16,15 +16,11 @@ void bch2_logged_op_truncate_to_text(struct printbuf *, struct bch_fs *, struct 
 	.val_to_text	= bch2_logged_op_truncate_to_text,	\
 })
 
-int bch2_resume_logged_op_truncate(struct btree_trans *, struct bkey_i *);
-
 void bch2_logged_op_finsert_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
 #define bch2_bkey_ops_logged_op_finsert ((struct bkey_ops) {	\
 	.val_to_text	= bch2_logged_op_finsert_to_text,	\
 })
-
-int bch2_resume_logged_op_finsert(struct btree_trans *, struct bkey_i *);
 
 int bch2_fcollapse_finsert(struct bch_fs *, subvol_inum, u64, u64, bool, s64 *);
 

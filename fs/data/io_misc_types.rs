@@ -15,4 +15,6 @@ c_extern! {
                        i_sectors_delta: *mut i64) -> c_int;
     pub fn bch2_truncate(c: *mut c::bch_fs, inum: c::subvol_inum, new_i_size: u64,
                          i_sectors_delta: *mut u64) -> c_int;
+    pub fn bch2_resume_logged_op_truncate(trans: *mut c::btree_trans, op_k: *mut c::bkey_i) -> c_int;
+    pub fn bch2_resume_logged_op_finsert(trans: *mut c::btree_trans, op_k: *mut c::bkey_i) -> c_int;
 }

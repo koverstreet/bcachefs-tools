@@ -36,4 +36,6 @@ c_extern! {
                                         ch: *mut c::inode_opt_change) -> c_int;
     pub fn bch2_check_inode_opts_propagated(trans: *mut c::btree_trans,
                                             inode: *mut c::bch_inode_unpacked) -> c_int;
+    pub fn bch2_resume_logged_op_inode_opt_propagate(trans: *mut c::btree_trans,
+                                                     op_k: *mut c::bkey_i) -> c_int;
 }

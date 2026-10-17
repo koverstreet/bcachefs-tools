@@ -2,7 +2,9 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::types::DArray;
+use crate::types::{RustOnly, rust_only};
+use crate::util::alloc::KVVec;
+use crate::util::sync::{new_mutex, Mutex};
 use core::sync::atomic::AtomicU32;
 use cstruct_macros::{CStruct, Init, TypeInfo};
 use pin_init::pin_data;
@@ -23,5 +25,7 @@ pub struct bch_fs_logged_ops {
      * mount, which recovery resumes. Positions in BTREE_ID_logged_ops,
      * ascending: see bch2_logged_ops_note_unfinished().
      */
-    pub unfinished: DArray<u64>,
+    #[pin]
+    #[init(RustOnly::new(new_mutex!(KVVec::new())))]
+    pub(crate) unfinished: rust_only!(Mutex<KVVec<u64>>),
 }

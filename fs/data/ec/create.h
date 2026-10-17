@@ -120,6 +120,4 @@ void bch2_logged_op_stripe_update_to_text(struct printbuf *, struct bch_fs *, st
 	.val_to_text	= bch2_logged_op_stripe_update_to_text,		\
 })
 
-int bch2_resume_logged_op_stripe_update(struct btree_trans *, struct bkey_i *);
-
 #endif /* _BCACHEFS_DATA_EC_CREATE_H */

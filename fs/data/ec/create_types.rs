@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{DArray, bits_to_longs, c_default};
 use core::ffi::{c_int, c_uint, c_ulong};
-use cstruct_macros::{bitfield, c_enum, c_xmacro, CStruct, c_typedef};
+use cstruct_macros::{bitfield, c_enum, c_extern, c_xmacro, CStruct, c_typedef};
 use nestify::nest;
 
 #[repr(C)]
@@ -178,4 +178,8 @@ pub struct widen_cache_entry {
 
 c_typedef! {
     pub type widen_cache = DArray<c::widen_cache_entry>;
+}
+
+c_extern! {
+    pub fn bch2_resume_logged_op_stripe_update(trans: *mut c::btree_trans, op_k: *mut c::bkey_i) -> c_int;
 }
