@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_enum, grown, CStruct, Plain, TypeInfo};
+use cstruct_macros::{c_enum, CStruct, Plain, TypeInfo};
 
 c_enum! {
     #[open]
@@ -34,7 +34,6 @@ c_enum! {
     }
 }
 
-#[grown(from = src_offset)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_name(bch_logged_op_finsert)]

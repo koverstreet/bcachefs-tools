@@ -499,7 +499,6 @@ macro_rules! bkey_val {
     (subvolume, $f:tt)            => { bkey_val!(@grown subvolume, $f); };
     (snapshot, $f:tt)             => { bkey_val!(@grown snapshot, $f); };
     (alloc_v4, $f:tt)             => { bkey_val!(@grown alloc_v4, $f); };
-    (logged_op_finsert, $f:tt)    => { bkey_val!(@grown logged_op_finsert, $f); };
 
     // Its field column says gens, but every valid one is whole:
     // bch2_bucket_gens_validate() takes no other length
