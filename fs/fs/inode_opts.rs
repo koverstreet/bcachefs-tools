@@ -26,6 +26,33 @@ use cstruct_macros::c_export;
 
 const NR: usize = c::inode_opt_id::Inode_opt_nr.0 as usize;
 
+struct Desc {
+    name: &'static CStr,
+    /// The filesystem option it is
+    opt:  c::bch_opt_id,
+    get:  fn(&c::bch_inode_unpacked) -> u64,
+    set:  fn(&mut c::bch_inode_unpacked, u64),
+}
+
+const fn c_str(s: &'static str) -> &'static CStr {
+    match CStr::from_bytes_with_nul(s.as_bytes()) {
+        Ok(s)  => s,
+        Err(_) => panic!("not a C string"),
+    }
+}
+
+macro_rules! descs {
+    ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! { [$(Desc {
+        name: c_str(concat!(stringify!($name), "\0")),
+        opt:  c::bch_opt_id::[<Opt_ $name>],
+        get:  |inode| inode.[<bi_ $name>] as u64,
+        set:  |inode, v| inode.[<bi_ $name>] = v as _,
+    }),*] } };
+}
+
+/// In BCH_INODE_OPTS() order, which is inode_opt_id's.
+const DESCS: [Desc; NR] = c::BCH_INODE_OPTS!(descs);
+
 /// An inode option: an inode_opt_id below Inode_opt_nr.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct InodeOpt(c::inode_opt_id);
@@ -38,72 +65,37 @@ impl InodeOpt {
     /// The inode option filesystem option @id is, if it's one: as
     /// bch2_opt_to_inode_opt().
     pub fn from_opt_id(id: c::bch_opt_id) -> Option<InodeOpt> {
-        macro_rules! from_opt_id {
-            ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! { $(
-                if id == c::bch_opt_id::[<Opt_ $name>] {
-                    return Some(InodeOpt(c::inode_opt_id::[<Inode_opt_ $name>]));
-                }
-            )* } };
-        }
-        c::BCH_INODE_OPTS!(from_opt_id);
-        None
+        Self::all().find(|opt| opt.opt_id() == id)
     }
 
     pub fn id(self) -> c::inode_opt_id {
         self.0
     }
 
-    /// The filesystem option it is.
+    fn idx(self) -> usize {
+        self.0.0 as usize
+    }
+
+    fn desc(self) -> &'static Desc {
+        &DESCS[self.idx()]
+    }
+
     pub fn opt_id(self) -> c::bch_opt_id {
-        macro_rules! opt_id {
-            ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! { $(
-                if self.0 == c::inode_opt_id::[<Inode_opt_ $name>] {
-                    return c::bch_opt_id::[<Opt_ $name>];
-                }
-            )* } };
-        }
-        c::BCH_INODE_OPTS!(opt_id);
-        panic!("inode option {} out of range", self.0.0)
+        self.desc().opt
     }
 
     pub fn name(self) -> &'static CStr {
-        macro_rules! names {
-            ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { [$(
-                match CStr::from_bytes_with_nul(concat!(stringify!($name), "\0").as_bytes()) {
-                    Ok(s)  => s,
-                    Err(_) => panic!("an option name with a NUL in it"),
-                }
-            ),*] };
-        }
-        const NAMES: [&CStr; NR] = c::BCH_INODE_OPTS!(names);
-        NAMES[self.0.0 as usize]
+        self.desc().name
     }
 
     /// Its value on @inode, biased: 0 for not set.
     pub fn get(self, inode: &c::bch_inode_unpacked) -> u64 {
-        macro_rules! get {
-            ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! { $(
-                if self.0 == c::inode_opt_id::[<Inode_opt_ $name>] {
-                    return inode.[<bi_ $name>] as u64;
-                }
-            )* } };
-        }
-        c::BCH_INODE_OPTS!(get);
-        panic!("inode option {} out of range", self.0.0)
+        (self.desc().get)(inode)
     }
 
     /// @v biased, 0 for not set.
     pub fn set(self, inode: &mut c::bch_inode_unpacked, v: u64) {
-        macro_rules! set {
-            ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => { crate::paste! { $(
-                if self.0 == c::inode_opt_id::[<Inode_opt_ $name>] {
-                    inode.[<bi_ $name>] = v as _;
-                    return;
-                }
-            )* } };
-        }
-        c::BCH_INODE_OPTS!(set);
-        panic!("inode option {} out of range", self.0.0)
+        (self.desc().set)(inode, v)
     }
 
     /// Whether it's set on @inode itself, not inherited: bi_fields_set.
@@ -250,8 +242,7 @@ fn claimed_off_path(t: &TransAttempt<'_, '_>, inum: u64, ancestor: u32, origin_s
         let inode = inode::unpack(fs, k);
 
         for opt in InodeOpt::all() {
-            let c = &mut claimed[opt.id().0 as usize];
-            *c = (*c).max(opt.get(&inode));
+            claimed[opt.idx()] = claimed[opt.idx()].max(opt.get(&inode));
         }
         Ok(())
     })?;
@@ -299,7 +290,7 @@ fn merge_into_ancestor(
     let mut changed = false;
 
     for opt in InodeOpt::all() {
-        let claimed = claimed[opt.id().0 as usize];
+        let claimed = claimed[opt.idx()];
         let mut v = opt.get(src);
         if v == 0 {
             continue;
