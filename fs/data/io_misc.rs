@@ -21,6 +21,7 @@ use crate::btree::iter::{commit_do, is_restart, lockrestart_do, BtreeIter, Btree
                          CommitFlags, CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::extents::Extents;
+use crate::data::reflink;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
@@ -337,11 +338,9 @@ fn finsert_take_ancestor_extent<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>,
     t.iter_traverse(&mut src_iter)?;
 
     /* Made a reflink_p in place: a one pointer extent's value is smaller */
-    let orig = t.bkey_reassemble_room(k, k.k.u64s as usize * size_of::<u64>() + size_of::<c::ReflinkP>())?;
+    let mut orig = t.bkey_reassemble_room(k, k.k.u64s as usize * size_of::<u64>() + size_of::<c::ReflinkP>())?;
 
-    t.result(unsafe {
-        c::bch2_make_extent_indirect(t.raw(), src_iter.raw_mut(), orig.as_ptr(), reflink_p_may_update_opts)
-    })?;
+    reflink::make_extent_indirect(t, &src_iter, &mut orig, reflink_p_may_update_opts)?;
 
     /* @orig is now the ancestor's reflink_p, queued as its update */
     t.bkey_make_mut_noupdate(BkeySC::from(&orig))

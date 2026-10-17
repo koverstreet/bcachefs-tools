@@ -37,7 +37,7 @@ static inline int bch2_read_indirect_extent(struct btree_trans *trans,
 	CLASS(btree_iter_uninit, iter)(trans);
 	struct bkey_s_c k = bkey_try(bch2_lookup_indirect_extent(trans, &iter,
 						offset_into_extent,
-						bkey_i_to_s_c_reflink_p(extent->k),
+						bkey_i_to_s_c(extent->k),
 						true, 0));
 
 	if (bkey_deleted(k.k))

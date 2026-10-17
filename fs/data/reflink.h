@@ -4,14 +4,6 @@
 
 #include "data/reflink_gen.h"
 
-int bch2_reflink_p_validate(struct bch_fs *, struct bkey_s_c,
-			    const struct bkey_validate_context *);
-void bch2_reflink_p_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
-bool bch2_reflink_p_merge(struct bch_fs *, struct bkey_s, struct bkey_s_c);
-int bch2_trigger_reflink_p(struct btree_trans *, struct btree_trigger_op);
-int bch2_reflink_p_check_repair(struct btree_trans *, struct btree_iter *,
-				enum btree_id, unsigned, struct bkey_s_c);
-
 #define bch2_bkey_ops_reflink_p ((struct bkey_ops) {		\
 	.key_validate	= bch2_reflink_p_validate,		\
 	.val_to_text	= bch2_reflink_p_to_text,		\
@@ -20,11 +12,6 @@ int bch2_reflink_p_check_repair(struct btree_trans *, struct btree_iter *,
 	.check_repair	= bch2_reflink_p_check_repair,		\
 })
 
-int bch2_reflink_v_validate(struct bch_fs *, struct bkey_s_c,
-			    const struct bkey_validate_context *);
-void bch2_reflink_v_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
-int bch2_trigger_reflink_v(struct btree_trans *, struct btree_trigger_op);
-
 #define bch2_bkey_ops_reflink_v ((struct bkey_ops) {		\
 	.key_validate	= bch2_reflink_v_validate,		\
 	.val_to_text	= bch2_reflink_v_to_text,		\
@@ -32,12 +19,6 @@ int bch2_trigger_reflink_v(struct btree_trans *, struct btree_trigger_op);
 	.trigger	= bch2_trigger_reflink_v,		\
 	.check_repair	= bch2_check_fix_ptrs,			\
 })
-
-int bch2_indirect_inline_data_validate(struct bch_fs *, struct bkey_s_c,
-				       const struct bkey_validate_context *);
-void bch2_indirect_inline_data_to_text(struct printbuf *,
-				struct bch_fs *, struct bkey_s_c);
-int bch2_trigger_indirect_inline_data(struct btree_trans *, struct btree_trigger_op);
 
 #define bch2_bkey_ops_indirect_inline_data ((struct bkey_ops) {	\
 	.key_validate	= bch2_indirect_inline_data_validate,	\
@@ -50,38 +31,5 @@ static inline bool bkey_is_indirect(const struct bkey *k)
 	return  k->type == KEY_TYPE_reflink_v ||
 		k->type == KEY_TYPE_indirect_inline_data;
 }
-
-static inline const __le64 *bkey_refcount_c(struct bkey_s_c k)
-{
-	switch (k.k->type) {
-	case KEY_TYPE_reflink_v:
-		return &bkey_s_c_to_reflink_v(k).v->refcount;
-	case KEY_TYPE_indirect_inline_data:
-		return &bkey_s_c_to_indirect_inline_data(k).v->refcount;
-	default:
-		return NULL;
-	}
-}
-
-static inline __le64 *bkey_refcount(struct bkey_s k)
-{
-	switch (k.k->type) {
-	case KEY_TYPE_reflink_v:
-		return &bkey_s_to_reflink_v(k).v->refcount;
-	case KEY_TYPE_indirect_inline_data:
-		return &bkey_s_to_indirect_inline_data(k).v->refcount;
-	default:
-		return NULL;
-	}
-}
-
-struct bkey_s_c bch2_lookup_indirect_extent(struct btree_trans *, struct btree_iter *,
-					    s64 *, struct bkey_s_c_reflink_p,
-					    bool, unsigned);
-
-
-s64 bch2_remap_range(struct bch_fs *, subvol_inum, u64,
-		     subvol_inum, u64, u64, u64, s64 *,
-		     bool);
 
 #endif /* _BCACHEFS_REFLINK_H */

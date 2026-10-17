@@ -43,6 +43,16 @@ impl c::bkey {
                  t::KEY_TYPE_indirect_inline_data | t::KEY_TYPE_error)
     }
 
+    /// Whether it's data a file reads: pointers to it, the data inline, or a
+    /// reflink_p to it - bkey_extent_is_data().
+    pub fn extent_is_data(&self) -> bool {
+        use c::bch_bkey_type as t;
+
+        self.extent_is_direct_data() ||
+            matches!(self.key_type(),
+                     t::KEY_TYPE_inline_data | t::KEY_TYPE_indirect_inline_data | t::KEY_TYPE_reflink_p)
+    }
+
     /// Whether its value is pointers to its data, and not to another key's.
     pub fn extent_is_direct_data(&self) -> bool {
         use c::bch_bkey_type as t;

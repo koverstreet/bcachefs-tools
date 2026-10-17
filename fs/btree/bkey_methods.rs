@@ -214,6 +214,8 @@ pub struct TriggerOp<'a> {
     pub old:   BkeySC<'a>,
     pub new:   BkeyS<'a>,
     pub flags: UpdateTriggerFlags,
+    /// The room @new has - for a C trigger it's handed back to
+    new_buf_u64s: u32,
 }
 
 impl<'a> TriggerOp<'a> {
@@ -228,6 +230,20 @@ impl<'a> TriggerOp<'a> {
             old:   unsafe { BkeySC::from_c(&op.old) },
             new:   BkeyS { k: unsafe { &mut *new.k }, v: new.v, val: core::marker::PhantomData },
             flags: UpdateTriggerFlags::from_bits_retain(op.flags.bits()),
+            new_buf_u64s: op.new_buf_u64s,
+        }
+    }
+
+    /// As C's btree_trigger_op, for a C trigger this one runs: @new lent to it
+    /// for as long as this is borrowed.
+    pub(crate) fn to_raw(&mut self) -> c::btree_trigger_op {
+        c::btree_trigger_op {
+            btree:        self.btree,
+            level:        self.level,
+            old:          self.old.into(),
+            new:          self.new.as_raw(),
+            new_buf_u64s: self.new_buf_u64s,
+            flags:        c::btree_iter_update_trigger_flags::from_bits_retain(self.flags.bits()),
         }
     }
 
