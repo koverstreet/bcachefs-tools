@@ -318,6 +318,8 @@ c_enum! {
         BKEY_TYPE_ptrs                = 1 << 1,
         /* An extents btree may hold it - deleted, and what BCH_BTREE_IDS() allows them */
         BKEY_TYPE_extent              = 1 << 2,
+        /* An indirect extent - refcounted, in the reflink btree: what a reflink_p points to */
+        BKEY_TYPE_indirect            = 1 << 3,
     }
 }
 
@@ -385,14 +387,14 @@ c_xmacro! {
         (reflink_p,             15, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
          "Pointer from the extents btree to an indirect extent "
          "in the reflink btree"),
-        (reflink_v,             16, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_extent, _,
+        (reflink_v,             16, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_extent | BKEY_TYPE_indirect, _,
          "Indirect extent with refcount in the reflink btree"),
         (inline_data,           17, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
          "Small file data stored inline in the btree"),
         (btree_ptr_v2,          18, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs, _,
          "Btree node pointer (v2) with sequence number and "
          "min_key for more efficient traversal"),
-        (indirect_inline_data,  19, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
+        (indirect_inline_data,  19, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent | BKEY_TYPE_indirect, _,
          "Reflinked inline data with refcount"),
         (alloc_v2,              20, BKEY_TYPE_strict_btree_checks, _,
          "Bucket allocation metadata (v2, legacy)"),

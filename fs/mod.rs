@@ -112,6 +112,7 @@ pub mod data {
     pub mod extents;
     pub mod io_misc;
     pub mod ptrs;
+    pub mod reflink;
 }
 pub mod errcode;
 pub mod opts;

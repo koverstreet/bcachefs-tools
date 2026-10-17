@@ -26,7 +26,7 @@
 //!  - BkeyTyped: what typed() switches a key over, by V - every type, or a
 //!    family's;
 //!  - FamilyTypes: a key family's types, F in FamilyVal<F> - its value, any of
-//!    theirs, as long as the key is: Ptrs, Extents;
+//!    theirs, as long as the key is: Ptrs, Extents, Indirect;
 //!  - BkeyWhole: a key type whose value can be had by value - BkeyI::new(),
 //!    from_key();
 //!  - MutBkey: what a mutable copy of a key read as V is - bkey_make_mut();
@@ -37,7 +37,7 @@
 //!
 //! The macros generate the per-type impls from BCH_BKEY_TYPES(): bkey_val!
 //! per type, bkey_typed! the typed() enums, bkey_family! a family (Ptrs,
-//! Extents), bkey_family_members! a family's InFamily markers, and
+//! Extents, Indirect), bkey_family_members! a family's InFamily markers, and
 //! bkey_family_conv! its From impls - one per form pair, generic over the
 //! key's type and state, so a single into() erases, narrows the family and
 //! weakens the state at once. What's per kind is at a value's definition:
@@ -726,6 +726,17 @@ macro_rules! bkey_family {
                 Extents, |k| k.size != 0;
             }]);
     };
+    (Indirect) => {
+        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_indirect =>
+            crate::btree::bkey::bkey_family { @def
+                /// An indirect extent, BKEY_TYPE_indirect - refcounted, in the
+                /// reflink btree, what a reflink_p points to: a key armed to it
+                /// is a BkeySC<'_, Indirect>, BkeyS<'_, Indirect>, &BkeyI<Indirect>.
+                Indirect, |k| true;
+            }]);
+        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_indirect =>
+            crate::btree::bkey::bkey_family_members { crate::data::reflink::IndirectTypes; }]);
+    };
 
     (@def $(#[$meta:meta])* $family:ident, |$k:ident| $contains:expr;
      $(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => { crate::paste! {
@@ -856,3 +867,4 @@ c::BCH_BKEY_TYPES!(bkey_types);
 
 bkey_family_conv!(AllTypes);
 bkey_family_conv!(crate::data::ptrs::PtrsTypes);
+bkey_family_conv!(crate::data::reflink::IndirectTypes);
