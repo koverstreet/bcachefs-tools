@@ -114,6 +114,32 @@ impl BcachefsHandle {
         Self::open_via_superblock(path)
     }
 
+    pub(crate) fn open_inode_path<P: AsRef<Path>>(path: P) -> Result<Option<(Self, u64)>, BchError> {
+        let path = path.as_ref();
+        if parse_uuid(&path.to_string_lossy()).is_ok() {
+            return Ok(None);
+        }
+
+        let path_fd = rustix::fs::open(
+            path,
+            rustix::fs::OFlags::RDONLY,
+            rustix::fs::Mode::empty(),
+        ).map_err(|e| BchError::from_raw(-e.raw_os_error()))?;
+        let stat = rustix::fs::fstat(&path_fd)
+            .map_err(|e| BchError::from_raw(-e.raw_os_error()))?;
+        if !matches!(rustix::fs::FileType::from_raw_mode(stat.st_mode),
+            rustix::fs::FileType::RegularFile | rustix::fs::FileType::Directory)
+        {
+            return Ok(None);
+        }
+
+        let mut query_uuid = bch_ioctl_query_uuid::default();
+        ioctl_rw::<BCH_IOCTL_QUERY_UUID>(&path_fd, &mut query_uuid)
+            .map_err(|e| BchError::from_raw(-io_errno(e).0))?;
+        Self::open_mounted_path(path_fd, query_uuid.uuid.b)
+            .map(|handle| Some((handle, stat.st_ino)))
+    }
+
     /// Opens the filesystem a path belongs to, if it's currently mounted:
     /// a UUID, a path on a mounted filesystem, or a block device that's a
     /// member of one. Returns Ok(None) — instead of falling back to reading
