@@ -17,7 +17,7 @@ use crate::SPOS_MAX;
 use bitflags::bitflags;
 use core::fmt;
 use core::marker::PhantomData;
-use core::mem::{size_of, ManuallyDrop, MaybeUninit};
+use core::mem::{size_of, MaybeUninit};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::ptr::NonNull;
 use core::slice;
@@ -36,7 +36,7 @@ use c::bpos;
 macro_rules! btree_trans {
     ($fs:expr) => {{
         static FN: $crate::btree::iter::TransFnName = $crate::btree::iter::TransFnName::new();
-        $crate::btree::iter::BtreeTrans::new_fn($fs, FN.idx($crate::function_name!()))
+        $crate::btree::iter::TransGuard::new_fn($fs, FN.idx($crate::function_name!()))
     }};
 }
 
@@ -78,49 +78,72 @@ impl TransFnName {
     }
 }
 
+/// A btree transaction, on filesystem 'f: what C's struct btree_trans *
+/// points at, its fields C's. Rust has it borrowed - &'t BtreeTrans, from the
+/// TransGuard that got it or from C, at an entry point - and an iterator's
+/// lifetime is that borrow.
+#[repr(transparent)]
 pub struct BtreeTrans<'f> {
-    raw: *mut c::btree_trans,
-    fs:  &'f Fs,
+    inner: Opaque<c::btree_trans>,
+    fs:    PhantomData<&'f Fs>,
+}
+
+/// A transaction Rust got, and puts when dropped: btree_trans!()'s, used as
+/// the &BtreeTrans it derefs to - nothing else names it.
+#[doc(hidden)]
+pub struct TransGuard<'f> {
+    trans: NonNull<BtreeTrans<'f>>,
+}
+
+impl<'f> TransGuard<'f> {
+    /// Use btree_trans!(), which names the transaction for its caller.
+    #[doc(hidden)]
+    pub fn new_fn(fs: &'f Fs, fn_idx: u32) -> TransGuard<'f> {
+        let raw = unsafe { c::__bch2_trans_get(fs.as_ptr(), fn_idx) };
+        TransGuard { trans: NonNull::new(raw.cast()).expect("bch2_trans_get() never fails") }
+    }
+}
+
+impl<'f> core::ops::Deref for TransGuard<'f> {
+    type Target = BtreeTrans<'f>;
+
+    fn deref(&self) -> &BtreeTrans<'f> {
+        // SAFETY: ours until dropped
+        unsafe { self.trans.as_ref() }
+    }
+}
+
+impl Drop for TransGuard<'_> {
+    fn drop(&mut self) {
+        unsafe { c::bch2_trans_put(self.raw()) }
+    }
 }
 
 impl<'f> BtreeTrans<'f> {
-    /// Use btree_trans!(), which names the transaction for its caller.
-    #[doc(hidden)]
-    pub fn new_fn(fs: &'f Fs, fn_idx: u32) -> BtreeTrans<'f> {
-        unsafe {
-            BtreeTrans {
-                raw: &mut *c::__bch2_trans_get(fs.as_ptr(), fn_idx),
-                fs,
-            }
-        }
-    }
-
-    /// A transaction C owns, for Rust that C calls with one: it isn't put when
-    /// dropped. Its filesystem is its own trans->c.
+    /// A transaction C has, for Rust that C calls with one.
     ///
     /// # Safety
-    /// @raw is a live transaction, for as long as this lives.
-    pub unsafe fn borrow_raw(raw: *mut c::btree_trans) -> ManuallyDrop<BtreeTrans<'f>> {
-        let fs = unsafe { &*(*raw).c };
-        ManuallyDrop::new(BtreeTrans { raw, fs })
+    /// @raw is a live transaction, for 'a, on a filesystem that lives for 'f.
+    pub unsafe fn borrow_raw<'a>(raw: *mut c::btree_trans) -> &'a BtreeTrans<'f> {
+        unsafe { &*raw.cast() }
     }
 
     /// As borrow_raw(), for an entry point C calls with a transaction: safe,
     /// as an Opaque is always a live one, and lives as long as the borrow.
-    pub fn from_c(trans: &'f Opaque<c::btree_trans>) -> ManuallyDrop<BtreeTrans<'f>> {
+    pub fn from_c(trans: &'f Opaque<c::btree_trans>) -> &'f BtreeTrans<'f> {
         unsafe { Self::borrow_raw(trans.as_ptr()) }
     }
 
     /// How many times this transaction has committed: what's cached from the
     /// btree is stale once it moves on.
     pub fn commit_count(&self) -> u32 {
-        unsafe { (*self.raw).commit_count }
+        unsafe { (*self.raw()).commit_count }
     }
 
     /// The journal sequence number the commit in progress is going into: for
     /// atomic triggers, which run with the journal reservation held.
     pub fn journal_res_seq(&self) -> u64 {
-        unsafe { (*self.raw).journal_res.seq }
+        unsafe { (*self.raw()).journal_res.seq }
     }
 
     /// Delete [@start, @end) in @btree, committing as it goes. It drives its
@@ -135,7 +158,7 @@ impl<'f> BtreeTrans<'f> {
         flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
         crate::errcode::ret_to_result(unsafe {
-            c::bch2_btree_delete_range_trans(self.raw, btree, start, end,
+            c::bch2_btree_delete_range_trans(self.raw(), btree, start, end,
                                              c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()))
         }).map(|_| ())
     }
@@ -145,7 +168,7 @@ impl<'f> BtreeTrans<'f> {
     /// access has to begin it again.
     pub fn write_buffer_flush_sync(&self) -> Result<(), BchError> {
         crate::errcode::ret_to_result(unsafe {
-            c::bch2_btree_write_buffer_flush_sync(self.raw)
+            c::bch2_btree_write_buffer_flush_sync(self.raw())
         }).map(|_| ())
     }
 
@@ -158,7 +181,7 @@ impl<'f> BtreeTrans<'f> {
     pub(crate) unsafe fn attempt_in_progress<'a>(&'a self) -> TransAttempt<'a, 'f> {
         TransAttempt {
             trans:         self,
-            restart_count: unsafe { (*self.raw).restart_count },
+            restart_count: unsafe { (*self.raw()).restart_count },
             t:             PhantomData,
         }
     }
@@ -166,23 +189,23 @@ impl<'f> BtreeTrans<'f> {
     /// bch2_trans_begin(), for a loop that tracks restarts itself: the new
     /// restart count.
     pub(crate) fn begin_raw(&self) -> u32 {
-        unsafe { c::bch2_trans_begin(self.raw) }
+        unsafe { c::bch2_trans_begin(self.raw()) }
     }
 
     /// Take back the locks unlock() dropped: a transaction restart if they've
     /// changed hands meanwhile.
     pub fn relock(&self) -> Result<(), BchError> {
-        let trans = unsafe { &*self.raw };
+        let trans = unsafe { &*self.raw() };
         if trans.locked() && trans.restarted().0 == 0 {
             return Ok(());
         }
-        crate::errcode::ret_to_result(unsafe { c::__bch2_trans_relock(self.raw, true) }).map(|_| ())
+        crate::errcode::ret_to_result(unsafe { c::__bch2_trans_relock(self.raw(), true) }).map(|_| ())
     }
 
     /// relock(), always attempted and without the tracepoint: as
     /// bch2_trans_relock_notrace().
     pub fn relock_notrace(&self) -> Result<(), BchError> {
-        crate::errcode::ret_to_result(unsafe { c::bch2_trans_relock_notrace(self.raw) }).map(|_| ())
+        crate::errcode::ret_to_result(unsafe { c::bch2_trans_relock_notrace(self.raw()) }).map(|_| ())
     }
 
     pub fn begin<'a>(&'a self) -> TransAttempt<'a, 'f> {
@@ -195,26 +218,27 @@ impl<'f> BtreeTrans<'f> {
 
     pub fn verify_not_restarted(&self, restart_count: u32) {
         unsafe {
-            if (*self.raw).restart_count != restart_count {
-                c::bch2_trans_restart_error(self.raw, restart_count);
+            if (*self.raw()).restart_count != restart_count {
+                c::bch2_trans_restart_error(self.raw(), restart_count);
             }
         }
     }
 
     pub fn raw(&self) -> *mut c::btree_trans {
-        self.raw
+        self.inner.as_ptr()
     }
 
     pub(crate) fn fs(&self) -> &'f Fs {
-        self.fs
+        // SAFETY: trans->c, as the type says, outlives it
+        unsafe { Fs::borrow_raw((*self.raw()).c) }
     }
 
     pub fn unlock(&self) {
-        unsafe { c::bch2_trans_unlock(self.raw) };
+        unsafe { c::bch2_trans_unlock(self.raw()) };
     }
 
     pub fn unlock_long(&self) {
-        unsafe { c::bch2_trans_unlock_long(self.raw) };
+        unsafe { c::bch2_trans_unlock_long(self.raw()) };
     }
 
     pub fn commit(
@@ -236,19 +260,13 @@ impl<'f> BtreeTrans<'f> {
         lazy:     bool,
     ) -> Result<(), BchError> {
         let ret = unsafe {
-            let trans = self.raw;
+            let trans = self.raw();
             (*trans).disk_res    = disk_res.map_or(core::ptr::null_mut(), |r| r.as_mut_ptr());
             (*trans).journal_seq = core::ptr::null_mut();
             (*trans).flush       = core::ptr::null_mut();
             c::__bch2_trans_commit(trans, flags.to_c(), lazy)
         };
         ret_to_result(ret)
-    }
-}
-
-impl<'f> Drop for BtreeTrans<'f> {
-    fn drop(&mut self) {
-        unsafe { c::bch2_trans_put(&mut *self.raw) }
     }
 }
 
@@ -267,11 +285,15 @@ pub trait TransRef<'t> {
 }
 
 impl<'i, 'f> TransRef<'i> for &'i BtreeTrans<'f> {
-    fn trans_raw(&self) -> *mut c::btree_trans { self.raw }
+    fn trans_raw(&self) -> *mut c::btree_trans { self.raw() }
+}
+
+impl<'i, 'f> TransRef<'i> for &'i TransGuard<'f> {
+    fn trans_raw(&self) -> *mut c::btree_trans { self.raw() }
 }
 
 impl<'a, 't> TransRef<'a> for &TransAttempt<'a, 't> {
-    fn trans_raw(&self) -> *mut c::btree_trans { self.trans.raw }
+    fn trans_raw(&self) -> *mut c::btree_trans { self.trans.raw() }
 }
 
 /// Exempts bch2_trans_begin() from the dropped-updates warning while it lives
