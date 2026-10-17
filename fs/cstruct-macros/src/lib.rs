@@ -216,6 +216,14 @@ pub fn derive_plain(input: TokenStream) -> TokenStream {
     expand("#[derive(Plain)]", || vstructs::derive_plain(input))
 }
 
+/// `#[derive(SizedVal)]`: a key value that's itself in place, any bytes of it
+/// a valid one - btree/bkey/types.rs's SizedVal, what a sized key type's
+/// value is.
+#[proc_macro_derive(SizedVal)]
+pub fn derive_sized_val(input: TokenStream) -> TokenStream {
+    expand("#[derive(SizedVal)]", || vstructs::derive_sized_val(input))
+}
+
 /// `#[derive(View)]`: a projection for each field, on util/vstructs.rs's
 /// View and ViewMut of the type - see vstructs.rs.
 #[proc_macro_derive(View)]

@@ -3,6 +3,7 @@
 //! Helpers shared by the fsck passes.
 
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC};
+use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
@@ -327,7 +328,7 @@ impl InodeWalker {
         let btree = iter.btree();
 
         // whiteouts and hash whiteouts are tombstones - they need no inode:
-        if k.k.is_extent_whiteout() || k.key_type() == c::bch_bkey_type::KEY_TYPE_hash_whiteout {
+        if k.k.is_extent_whiteout() || k.k.key_type() == c::bch_bkey_type::KEY_TYPE_hash_whiteout {
             return Ok(());
         }
 
@@ -756,7 +757,7 @@ fn count_inode_keys(
         // Error keys count: they're placeholders for unreadable data,
         // evidence the inode had contents. Hash whiteouts are just
         // tombstones:
-        if k.key_type() == c::bch_bkey_type::KEY_TYPE_hash_whiteout {
+        if k.k.key_type() == c::bch_bkey_type::KEY_TYPE_hash_whiteout {
             return Ok(ControlFlow::Continue(()));
         }
 

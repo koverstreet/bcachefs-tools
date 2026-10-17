@@ -11,6 +11,7 @@
 //! node, and a subvolume pointing at it is subvol_snapshot_not_leaf, which
 //! has no repair.
 
+use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, POS_MIN};
 use crate::btree::iter::{
     commit_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,

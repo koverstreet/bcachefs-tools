@@ -2,7 +2,7 @@ use std::ops::ControlFlow;
 
 use anyhow::{bail, Result};
 use bcachefs_kernel::{btree_id, c};
-use bcachefs_kernel::btree::bkey::BkeySC;
+use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::btree::iter::BtreeIter;
 use bcachefs_kernel::btree::iter::BtreeIterFlags;
 use bcachefs_kernel::btree::iter::BtreeNodeIter;
@@ -94,7 +94,7 @@ fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
                 return ControlFlow::Break(());
             }
 
-            println!("{}", BkeySC::from(b.key_i()).to_text(fs));
+            println!("{}", b.key_i().to_text(fs));
             ControlFlow::Continue(())
         })?;
     }

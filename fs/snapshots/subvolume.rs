@@ -17,7 +17,8 @@
 //! subvolume_children has a bit at (fs_path_parent, subvolume) for each nested
 //! subvolume, maintained by the trigger.
 
-use crate::btree::bkey::{pos, BkeyI, BkeySC, SizedBkey, POS_MIN};
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
 use crate::util::vstructs::{Validated, Whole};
 use crate::btree::bkey_methods::TriggerOp;
 use crate::btree::cow_key::CowKey;
@@ -426,7 +427,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError>
         passes::clear_btree_clean(t.fs(), c::btree_id::subvolumes);
 
         let old = children_pos(op.old);
-        let new = children_pos(op.new.as_sc());
+        let new = children_pos(BkeySC::from(&op.new));
 
         if old != new {
             children_mod(t, old, false)?;
@@ -510,7 +511,7 @@ fn check_subvol<'a, 't>(
         }
         Err(e) => return Err(e),
     };
-    let mut n = CowKey::<c::Snapshot>::new(snap_iter, sk.s_c()).expect("a snapshot");
+    let mut n = CowKey::<c::Snapshot>::new(snap_iter, sk.untyped()).expect("a snapshot");
 
     // The repairs below assume we own this snapshot. If it backrefs another
     // subvolume that also points at it, that one is the owner - don't let

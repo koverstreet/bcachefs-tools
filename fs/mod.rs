@@ -21,7 +21,7 @@
 // rather than re-styling the hand-written fs/ code and bindgen's output.
 #![allow(unsafe_op_in_unsafe_fn)]
 // The in-kernel build enables missing_docs; the generated bindings (bindgen's C
-// enums + the codegen Bkey*Typed enums) have undocumented variants. The kernel's
+// enums + the codegen *Typed enums) have undocumented variants. The kernel's
 // own bindings crate allows it for the same reason.
 #![allow(missing_docs)]
 // The kernel passes its whole rust_allowed_features list as a crate attribute,

@@ -4,6 +4,7 @@
 //! older than bcachefs_metadata_version_reflink_p_fix, zero front_pad and
 //! back_pad on every reflink pointer, without running triggers.
 
+use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN};
 use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,

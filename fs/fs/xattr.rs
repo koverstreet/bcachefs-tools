@@ -8,6 +8,7 @@
 //! POSIX ACLs are xattrs too - types POSIX_ACL_ACCESS and POSIX_ACL_DEFAULT,
 //! with an empty name - and are acl.rs's.
 
+use crate::btree::bkey::prelude::*;
 use core::ffi::{c_int, c_void};
 use core::mem::{offset_of, size_of};
 use cstruct_macros::c_export;
@@ -146,7 +147,7 @@ pub fn value(k: BkeySC<'_>) -> &[u8] {
 
 /// @k's value, to fill in - @k an xattr, as new_key() makes one.
 pub fn value_mut(k: &mut BkeyI) -> &mut [u8] {
-    let x = k.arm_mut::<c::Xattr>().expect("an xattr").v_mut();
+    let x = k.arm::<c::Xattr>().expect("an xattr").v_mut();
     let (name_len, val_len) = (x.x_name_len as usize, x.x_val_len.get() as usize);
     &mut x.x_name_and_value[name_len..][..val_len]
 }
@@ -162,7 +163,7 @@ pub fn new_key<'a, 't>(t: &TransAttempt<'a, 't>, ty: c::bch_xattr_type, name: &[
     }
 
     let mut k = t.bkey_alloc_init(val_u64s, c::bch_bkey_type::KEY_TYPE_xattr.0 as u8, POS_MIN)?;
-    let x = k.k_i_mut().arm_mut::<c::Xattr>().expect("an xattr").v_mut();
+    let x = k.as_mut().arm::<c::Xattr>().expect("an xattr").v_mut();
     x.x_type     = ty.0 as u8;
     x.x_name_len = name.len() as u8;
     x.x_val_len  = (val_len as u16).into();
@@ -333,7 +334,7 @@ pub fn set_key(
 ) -> Result<(), BchError> {
     let mut k = new_key(t, ty, name.as_bytes(), value.len())?
         .ok_or(BchError::from(c::ERANGE))?;
-    value_mut(k.k_i_mut()).copy_from_slice(value);
+    value_mut(k.as_mut()).copy_from_slice(value);
 
     let mut iter_flags = BtreeIterFlags::empty();
     iter_flags.set(BtreeIterFlags::STR_HASH_MUST_CREATE,  flags & XATTR_CREATE != 0);

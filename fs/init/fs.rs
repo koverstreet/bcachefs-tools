@@ -1,5 +1,5 @@
 use crate::c;
-use crate::btree::bkey::AsBkeyI;
+use crate::btree::bkey::BkeyI;
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
@@ -455,12 +455,26 @@ impl Fs {
         })
     }
 
-    pub fn btree_insert(
+    /// @key, a validated key of any type, inserted in a transaction of its
+    /// own.
+    pub fn btree_insert<'k>(
         &self,
         btree_id:     c::btree_id,
-        key:          &mut (impl AsBkeyI + ?Sized),
+        key:          impl Into<&'k mut BkeyI>,
         disk_res:     Option<&DiskReservation<'_>>,
         commit_flags: impl Into<CommitOpts>,
+        iter_flags:   BtreeIterFlags,
+    ) -> Result<(), BchError> {
+        self.btree_insert_k_i(btree_id, key.into(), disk_res, commit_flags.into(), iter_flags)
+    }
+
+    /// btree_insert(), once: not monomorphized per key type.
+    fn btree_insert_k_i(
+        &self,
+        btree_id:     c::btree_id,
+        key:          &mut BkeyI,
+        disk_res:     Option<&DiskReservation<'_>>,
+        commit_flags: CommitOpts,
         iter_flags:   BtreeIterFlags,
     ) -> Result<(), BchError> {
         let disk_res = disk_res
@@ -471,9 +485,9 @@ impl Fs {
             c::bch2_btree_insert(
                 self.as_ptr(),
                 btree_id,
-                key.as_bkey_i_mut().as_ffi_mut(),
+                key.as_ffi_mut(),
                 disk_res,
-                commit_flags.into().to_c(),
+                commit_flags.to_c(),
                 c::btree_iter_update_trigger_flags::from_bits_retain(iter_flags.bits()),
             )
         })

@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{Le16, Le32, Le64};
-use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, whole, CStruct, Plain, TypeInfo};
+use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, whole, CStruct, Plain, TypeInfo, SizedVal};
 use nestify::nest;
 
 /* DOC_LATEX(extent-checksums)
@@ -303,7 +303,7 @@ pub struct bch_extent_entry {
     _opaque: [u64; 0],
 }
 
-#[whole(tail = _data: [u64])]
+#[whole(tail = _data: [u64], bkey)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
@@ -315,7 +315,7 @@ pub struct BtreePtr {
     pub start: [c::bch_extent_ptr; 0],
 }
 
-#[whole(tail = _data: [u64])]
+#[whole(tail = _data: [u64], bkey)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
@@ -338,7 +338,7 @@ c_bitmask! {
     }
 }
 
-#[whole(tail = _data: [u64])]
+#[whole(tail = _data: [u64], bkey)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
@@ -390,7 +390,7 @@ c_const! {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_packed]
 #[c_name(bch_reservation)]
 pub struct Reservation {
@@ -401,7 +401,7 @@ pub struct Reservation {
     pub pad: [u8; 3],
 }
 
-#[whole(tail = data: [u8])]
+#[whole(tail = data: [u8], bkey)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_name(bch_inline_data)]

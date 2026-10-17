@@ -25,6 +25,7 @@
 //! enum-coded field the codeword's name.
 
 use crate::btree::bkey::{BkeyS, BkeySC, BKEY_U64S};
+use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::errcode::BchError;
@@ -159,12 +160,12 @@ impl TransBkey<'_, '_> {
             self.k_mut().u64s = need_u64s as u8;
         }
 
-        let mut k = BkeyS::from(self.k_i_mut());
+        let mut k = BkeyS::from(&mut *self);
         write(k.val_bytes_mut(), field, &target, v)
     }
 
     fn set_inode<'p>(&mut self, fs: &Fs, field: &'p str, val: &'p str) -> Result<(), SetError<'p>> {
-        let mut u = inode::unpack(fs, BkeySC::from(self.k_i()));
+        let mut u = inode::unpack(fs, BkeySC::from(&*self));
 
         let target = typeinfo::resolve_with_bits(
             <c::bch_inode_unpacked as TypeInfo>::INFO, field)?;
@@ -187,7 +188,7 @@ impl TransBkey<'_, '_> {
 
         // The packed key, header first - within the buffer pack() sized for it:
         let packed_u64s = unsafe {
-            core::slice::from_raw_parts(packed.k_i().as_ffi().cast::<u64>(),
+            core::slice::from_raw_parts(packed.as_ref().as_ffi().cast::<u64>(),
                                         need_u64s)
         };
         self.as_mut_u64s()[..need_u64s].copy_from_slice(packed_u64s);
@@ -224,7 +225,7 @@ impl<'a> TriggerOp<'a> {
         TriggerOp {
             btree: op.btree,
             level: op.level,
-            old:   BkeySC::from(&op.old),
+            old:   unsafe { BkeySC::from_c(&op.old) },
             new:   BkeyS { k: unsafe { &mut *new.k }, v: new.v, val: core::marker::PhantomData },
             flags: UpdateTriggerFlags::from_bits_retain(op.flags.bits()),
         }
@@ -241,7 +242,7 @@ impl<'a> TriggerOp<'a> {
             f(self.old, self.flags - UpdateTriggerFlags::INSERT)?;
         }
         if !self.new.k.is_deleted() {
-            f(self.new.s_c(), self.flags - UpdateTriggerFlags::OVERWRITE)?;
+            f(BkeySC::from(&self.new).untyped(), self.flags - UpdateTriggerFlags::OVERWRITE)?;
         }
         Ok(())
     }

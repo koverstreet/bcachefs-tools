@@ -983,7 +983,7 @@ fn attr_args<'a>(attr: &'a [Tok], name: &str) -> Option<&'a [Tok]> {
 
 /// A family attribute's arguments (cstruct-macros' vstructs.rs):
 /// `#[counted(PATH, tail = ..)]`, `#[unsized_vstruct(tail = ..)]`,
-/// `#[grown(from = FIELD)]`.
+/// `#[grown(from = FIELD)]`; `bkey`, for a key's value.
 #[derive(Debug, Default)]
 pub struct FamilyArgs {
     /// The one argument that isn't `key = value`: the count, a field path.
@@ -993,6 +993,8 @@ pub struct FamilyArgs {
     pub tail: Option<(Option<String>, String)>,
     /// `from = FIELD`.
     pub from: Option<String>,
+    /// `bkey`: a key's value - its btree/bkey/types.rs impls too.
+    pub bkey: bool,
 }
 
 /// @src, a family attribute's arguments: an error for one it doesn't take -
@@ -1027,6 +1029,7 @@ pub fn parse_family_args(src: &str, takes: &[&str]) -> Result<FamilyArgs, String
                     _ => return Err(format!("no argument {k}")),
                 }
             }
+            [Tok::Ident(k)] if k == "bkey" => ("bkey", core::mem::replace(&mut args.bkey, true)),
             p => ("count", args.count.replace(tokens_to_rust(p)).is_some()),
         };
         if !takes.contains(&kind) {

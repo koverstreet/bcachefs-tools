@@ -14,11 +14,13 @@
 //! crashing, resumes it in only one of the snapshots - so both run under
 //! snapshots.create_lock, for read.
 
+use crate::btree::bkey::prelude::*;
 use crate::alloc::buckets::DiskReservation;
-use crate::btree::bkey::{bkey_lt, bpos_max, pos, spos, BkeyI, BkeyS, BkeySC, SizedBkey};
+use crate::btree::bkey::{bkey_lt, bpos_max, pos, spos, BkeyI, BkeySC, BkeyWhole};
 use crate::btree::iter::{commit_do, is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
+use crate::data::extents::Extents;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
@@ -60,7 +62,8 @@ pub fn fpunch_snapshot(trans: &BtreeTrans<'_>, start: c::bpos, end: c::bpos) -> 
         /* create the biggest key we can */
         let max_sectors = max_of(&delete.k().size) & (!0 << fs.block_bits());
         delete.k_mut().resize(max_sectors);
-        BkeyS::from(delete.k_i_mut()).cut_back(end);
+        let delete = delete.arm::<Extents>().expect("sized just above")
+            .cut_back(end).expect("peek_max() of an extents btree stops at end: iter.pos() < end");
 
         // trim_atomic() only reads @iter: it walks a copy
         t.result(unsafe { c::bch2_extent_trim_atomic(t.raw(), iter.raw(), delete.as_ptr()) })?;
@@ -228,9 +231,9 @@ pub fn truncate(fs: &Fs, inum: c::subvol_inum, new_i_size: u64, i_sectors_delta:
     let _create_lock = fs.snapshots.create_lock.read();
     let trans = crate::btree_trans!(fs);
 
-    commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| logged_ops::start(t, op.k_i_mut()))?;
+    commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| logged_ops::start(t, op.as_mut()))?;
     let ret = __resume_truncate(&trans, &op, Some(i_sectors_delta));
-    logged_ops::finish(&trans, op.k_i(), ret, CommitOpts::new())
+    logged_ops::finish(&trans, op.as_ref(), ret, CommitOpts::new())
 }
 
 /// C's i_sectors_delta is a u64 * here, where it's an s64 * everywhere else,
@@ -311,7 +314,7 @@ fn finsert_take_ancestor_extent<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>,
     let fs = t.fs();
 
     if k.extent_is_unwritten(fs) {
-        let start = bpos_max(k.start_pos(), src_pos);
+        let start = bpos_max(k.k.start_pos(), src_pos);
         let mut del = delete_key(t, k.k.p)?;
         del.k_mut().size = (k.k.p.offset - start.offset) as u32;
 
@@ -341,7 +344,7 @@ fn finsert_take_ancestor_extent<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>,
     })?;
 
     /* @orig is now the ancestor's reflink_p, queued as its update */
-    t.bkey_make_mut_noupdate(BkeySC::from(orig.k_i()))
+    t.bkey_make_mut_noupdate(BkeySC::from(&orig))
 }
 
 /// Errors are reported when there's @i_sectors_delta: not on resume.
@@ -382,7 +385,7 @@ fn __resume_finsert(
             if insert {
                 commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| {
                     adjust_i_size(t, inum, src_offset, len as i64, warn_errors)?;
-                    logged_ops::update(t, op.k_i())
+                    logged_ops::update(t, op.as_ref())
                 })?;
             } else {
                 iter.set_pos(pos(inum.inum, src_offset));
@@ -394,7 +397,7 @@ fn __resume_finsert(
                 }
 
                 // Unchecked, as in C: the shift below runs either way
-                let _ = commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| logged_ops::update(t, op.k_i()));
+                let _ = commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| logged_ops::update(t, op.as_ref()));
             }
         }
 
@@ -420,7 +423,7 @@ fn __resume_finsert(
 
                 let from_ancestor = snapshot != k.k.p.snapshot;
                 let shared_data = from_ancestor && k.k.extent_is_direct_data();
-                let k_start = k.start_pos();
+                let k_start = k.k.start_pos();
                 let k_snapshot = k.k.p.snapshot;
 
                 let mut copy = if shared_data {
@@ -429,7 +432,7 @@ fn __resume_finsert(
                     t.bkey_make_mut_noupdate(k)?
                 };
 
-                let nr_replicas = BkeySC::from(copy.k_i()).durability_safe(fs).total as u32;
+                let nr_replicas = BkeySC::from(&copy).durability_safe(fs).total as u32;
 
                 /*
                  * Only one of these fires: either the key lives in an ancestor
@@ -443,7 +446,8 @@ fn __resume_finsert(
                 }
 
                 if bkey_lt(k_start, src_pos) {
-                    BkeyS::from(copy.k_i_mut()).cut_front(fs, src_pos);
+                    copy.as_mut().arm::<Extents>().and_then(|e| e.cut_front(fs, src_pos))
+                        .expect("it starts before src_pos and ends after");
 
                     /* Splitting compressed extent? */
                     if snapshot == k_snapshot {
@@ -463,7 +467,7 @@ fn __resume_finsert(
 
                 t.insert(c::btree_id::extents, delete, UpdateTriggerFlags::empty())?;
                 t.insert(c::btree_id::extents, copy, UpdateTriggerFlags::empty())?;
-                logged_ops::update(&t, op.k_i())?;
+                logged_ops::update(&t, op.as_ref())?;
                 t.commit(Some(&disk_res), CommitFlags::NO_ENOSPC)?;
                 Ok(false)
             })();
@@ -485,7 +489,7 @@ fn __resume_finsert(
         let (offset, len) = if insert { (0, 0) } else { (src_offset, shift) };
         commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| {
             adjust_i_size(t, inum, offset, len, warn_errors)?;
-            logged_ops::update(t, op.k_i())
+            logged_ops::update(t, op.as_ref())
         })
     })();
 
@@ -498,7 +502,7 @@ fn __resume_finsert(
 
 /// For recovery's logged ops table.
 pub fn resume_finsert(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), BchError> {
-    __resume_finsert(trans, op_k.arm_mut::<c::LoggedOpFinsert>().expect("a finsert op"), None)
+    __resume_finsert(trans, op_k.arm::<c::LoggedOpFinsert>().expect("a finsert op"), None)
 }
 
 /// Insert @len sectors of hole into @inum at @offset, shifting what's after
@@ -523,9 +527,9 @@ pub fn fcollapse_finsert(
     let _create_lock = fs.snapshots.create_lock.read();
     let trans = crate::btree_trans!(fs);
 
-    commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| logged_ops::start(t, op.k_i_mut()))?;
+    commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| logged_ops::start(t, op.as_mut()))?;
     let ret = __resume_finsert(&trans, &mut op, Some(i_sectors_delta));
-    logged_ops::finish(&trans, op.k_i(), ret, CommitOpts::new())
+    logged_ops::finish(&trans, op.as_ref(), ret, CommitOpts::new())
 }
 
 /// # Safety

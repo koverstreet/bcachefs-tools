@@ -29,6 +29,7 @@
 //! inode_opts.c - option inheritance and propagation - is still C, called
 //! from here.
 
+use crate::btree::bkey::prelude::*;
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError, Found};
 use crate::fs::Fs;
@@ -36,7 +37,7 @@ use crate::dirent::{self, DirentTarget};
 use crate::namei;
 use crate::util::kernel::random_u64;
 use crate::{bch_err_ratelimited, bch_warn, trans_inconsistent};
-use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC, BkeySCTyped, BkeySTyped, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC, Typed, POS_MIN, SPOS_MAX};
 use crate::init::passes;
 use crate::util::varint;
 use core::mem::offset_of;
@@ -182,7 +183,7 @@ fn try_unpack(k: BkeySC<'_>)
     // bi_flags is 32 bits: the flags field's bits above that - most of v3's
     // fields_start, and its mode - are dropped.
     let ret = match k.typed() {
-        BkeySCTyped::inode_v3(i) => {
+        Typed::inode_v3(i) => {
             let v = i.v();
             u.bi_journal_seq = v.bi_journal_seq.get();
             u.bi_hash_seed   = v.bi_hash_seed;
@@ -195,7 +196,7 @@ fn try_unpack(k: BkeySC<'_>)
             unpack_fields(&mut u, true, fields_at(V3_FIELDS_OFFSET),
                           v.inodev3_nr_fields() as usize, varint_field)
         }
-        BkeySCTyped::inode_v2(i) => {
+        Typed::inode_v2(i) => {
             let v = i.v();
             u.bi_journal_seq = v.bi_journal_seq.get();
             u.bi_hash_seed   = v.bi_hash_seed;
@@ -205,7 +206,7 @@ fn try_unpack(k: BkeySC<'_>)
             unpack_fields(&mut u, false, fields_at(offset_of!(c::InodeV2, repr.fields)),
                           v.inodev2_nr_fields() as usize, varint_field)
         }
-        BkeySCTyped::inode(i) => {
+        Typed::inode(i) => {
             let v = i.v();
             u.bi_hash_seed   = v.bi_hash_seed;
             u.bi_flags       = v.bi_flags.get();
@@ -243,7 +244,7 @@ fn unpack_error(fs: &Fs, k: BkeySC<'_>, u: &c::bch_inode_unpacked, fieldnr: usiz
     macro_rules! names {
         ($($name:ident = $bits:literal,)*) => { &[$(stringify!($name),)*] };
     }
-    let names: &[&str] = if matches!(k.typed(), BkeySCTyped::inode_v3(_)) {
+    let names: &[&str] = if matches!(k.typed(), Typed::inode_v3(_)) {
         inode_fields_v3!(names)
     } else {
         inode_fields_v2!(names)
@@ -292,18 +293,25 @@ pub extern "C" fn bch2_inode_unpack(
     unpacked.write(unpack(Fs::from_c(c), k));
 }
 
-impl c::bkey_inode_buf {
-    /// Its key, all of it: the typed key's header, then the fields packed
-    /// past it, in _pad - which the typed key, inode, doesn't reach.
-    pub fn k_i(&self) -> &BkeyI {
+impl<'a> From<&'a c::bkey_inode_buf> for BkeySC<'a> {
+    fn from(b: &'a c::bkey_inode_buf) -> Self {
+        BkeySC::from(b.as_ref())
+    }
+}
+
+/// Its key, all of it: the typed key's header, then the fields packed past
+/// it, in _pad - which the typed key, inode, doesn't reach.
+impl AsRef<BkeyI> for c::bkey_inode_buf {
+    fn as_ref(&self) -> &BkeyI {
         // SAFETY: the key at the start of the buffer, its u64s within it, as
         // pack() sizes them; from a pointer to all of the buffer
         unsafe { &*BkeyI::from_raw((&raw const self.inode).cast()) }
     }
+}
 
-    /// k_i(), to edit.
-    pub fn k_i_mut(&mut self) -> &mut BkeyI {
-        // SAFETY: as k_i()'s
+impl AsMut<BkeyI> for c::bkey_inode_buf {
+    fn as_mut(&mut self) -> &mut BkeyI {
+        // SAFETY: as as_ref()'s
         unsafe { &mut *BkeyI::from_raw_mut((&raw mut self.inode).cast()) }
     }
 }
@@ -370,7 +378,7 @@ pub fn pack(inode: &c::bch_inode_unpacked) -> c::bkey_inode_buf {
 
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     {
-        let u = try_unpack(BkeySC::from(out.k_i()))
+        let u = try_unpack(BkeySC::from(&out))
             .unwrap_or_else(|(_, fieldnr)| panic!("packed inode doesn't unpack, at field {fieldnr}"));
 
         macro_rules! check {
@@ -413,10 +421,10 @@ pub fn bkey_is_inode(k: &c::bkey) -> bool {
 /// else.
 pub fn mode(k: BkeySC<'_>) -> u32 {
     match k.typed() {
-        BkeySCTyped::inode(i)    => i.v().bi_mode.get() as u32,
-        BkeySCTyped::inode_v2(i) => i.v().bi_mode.get() as u32,
-        BkeySCTyped::inode_v3(i) => i.v().inodev3_mode() as u32,
-        _                        => 0,
+        Typed::inode(i)    => i.v().bi_mode.get() as u32,
+        Typed::inode_v2(i) => i.v().bi_mode.get() as u32,
+        Typed::inode_v3(i) => i.v().inodev3_mode() as u32,
+        _                  => 0,
     }
 }
 
@@ -425,10 +433,10 @@ pub fn mode(k: BkeySC<'_>) -> u32 {
 /// and other packed fields above bit 20.
 fn flags_field(k: BkeySC<'_>) -> u64 {
     match k.typed() {
-        BkeySCTyped::inode(i)    => i.v().bi_flags.get() as u64,
-        BkeySCTyped::inode_v2(i) => i.v().bi_flags.get(),
-        BkeySCTyped::inode_v3(i) => i.v().bi_flags.get(),
-        _                        => 0,
+        Typed::inode(i)    => i.v().bi_flags.get() as u64,
+        Typed::inode_v2(i) => i.v().bi_flags.get(),
+        Typed::inode_v3(i) => i.v().bi_flags.get(),
+        _                  => 0,
     }
 }
 
@@ -773,7 +781,7 @@ pub fn write_cached(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchErr
     packed.inode.k.p.snapshot = u32::MAX;
     fs.btree_insert(
         btree_id::inodes,
-        packed.k_i_mut(),
+        packed.as_mut(),
         None,
         CommitFlags::empty(),
         BtreeIterFlags::CACHED,
@@ -1239,33 +1247,33 @@ fn is_unlinked(flags: u64) -> bool {
 
 /// @k's flags field: flags_field(), for a key being edited.
 fn flags_field_mut(k: &mut BkeyS<'_>) -> u64 {
-    match k.typed() {
-        BkeySTyped::inode(i)    => i.v().bi_flags.get() as u64,
-        BkeySTyped::inode_v2(i) => i.v().bi_flags.get(),
-        BkeySTyped::inode_v3(i) => i.v().bi_flags.get(),
-        _                       => 0,
+    match k.as_s().typed() {
+        Typed::inode(i)    => i.v().bi_flags.get() as u64,
+        Typed::inode_v2(i) => i.v().bi_flags.get(),
+        Typed::inode_v3(i) => i.v().bi_flags.get(),
+        _                  => 0,
     }
 }
 
 /// Set @k's flags field, all of it: as bkey_inode_flags_set(). @k is an
 /// inode.
 fn set_flags_field(k: &mut BkeyS<'_>, f: u64) {
-    match k.typed() {
-        BkeySTyped::inode(mut i)    => i.v_mut().bi_flags = (f as u32).into(),
-        BkeySTyped::inode_v2(mut i) => i.v_mut().bi_flags = f.into(),
-        BkeySTyped::inode_v3(mut i) => i.v_mut().bi_flags = f.into(),
-        _                           => panic!("setting the flags of a key that isn't an inode"),
+    match k.as_s().typed() {
+        Typed::inode(mut i)    => i.v_mut().bi_flags = (f as u32).into(),
+        Typed::inode_v2(mut i) => i.v_mut().bi_flags = f.into(),
+        Typed::inode_v3(mut i) => i.v_mut().bi_flags = f.into(),
+        _                      => panic!("setting the flags of a key that isn't an inode"),
     }
 }
 
 /// Stamp @k with the journal sequence number it's committed in - an inode v1
 /// has nowhere to: as bkey_inode_journal_seq_set(). @k is an inode.
 fn set_journal_seq(k: &mut BkeyS<'_>, seq: u64) {
-    match k.typed() {
-        BkeySTyped::inode(_)      => {}
-        BkeySTyped::inode_v2(mut i) => i.v_mut().bi_journal_seq = seq.into(),
-        BkeySTyped::inode_v3(mut i) => i.v_mut().bi_journal_seq = seq.into(),
-        _                           => panic!("setting the journal_seq of a key that isn't an inode"),
+    match k.as_s().typed() {
+        Typed::inode(_)        => {}
+        Typed::inode_v2(mut i) => i.v_mut().bi_journal_seq = seq.into(),
+        Typed::inode_v3(mut i) => i.v_mut().bi_journal_seq = seq.into(),
+        _                      => panic!("setting the journal_seq of a key that isn't an inode"),
     }
 }
 
@@ -1352,7 +1360,7 @@ fn update_parent_has_children(t: &TransAttempt<'_, '_>, p: c::bpos, have_child: 
         // As bch2_bkey_make_mut(): a copy, queued as the update.
         let mut u = t.bkey_make_mut_noupdate(k)?;
         t.update(&iter, &u, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
-        set_flags_field(&mut BkeyS::from(u.k_i_mut()), f ^ has);
+        set_flags_field(&mut BkeyS::from(&mut u), f ^ has);
     }
     Ok(())
 }
@@ -2249,7 +2257,7 @@ mod tests {
     fn pack_unpack_round_trip() {
         let u = sample();
         let packed = pack(&u);
-        let v = try_unpack(BkeySC::from(packed.k_i())).expect("unpacks");
+        let v = try_unpack(BkeySC::from(&packed)).expect("unpacks");
 
         assert_eq!(v.bi_inum, u.bi_inum);
         assert_eq!(v.bi_hash_seed, u.bi_hash_seed);
@@ -2276,7 +2284,7 @@ mod tests {
         let nr_fields = packed.inode.v.inodev3_nr_fields();
         set_fields_len(&mut packed, 8, nr_fields);
 
-        let (v, fieldnr) = try_unpack(BkeySC::from(packed.k_i()))
+        let (v, fieldnr) = try_unpack(BkeySC::from(&packed))
             .expect_err("a truncated value doesn't unpack");
 
         assert_eq!(fieldnr, 1);
@@ -2301,7 +2309,7 @@ mod tests {
         len += varint::encode(&mut packed._pad[len..], 1 << 40);
         set_fields_len(&mut packed, len, 5);
 
-        let (v, fieldnr) = try_unpack(BkeySC::from(packed.k_i()))
+        let (v, fieldnr) = try_unpack(BkeySC::from(&packed))
             .expect_err("an oversized field doesn't unpack");
         assert_eq!(fieldnr, 4);
         assert_eq!(v.bi_uid, 0);

@@ -21,6 +21,7 @@
 //! may be queued on a path that renumbers. Today the walk only reads, and
 //! repairs return before it.
 
+use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
@@ -121,7 +122,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
     cur.reassemble(k);
 
     loop {
-        let s = cur.sc();
+        let s = BkeySC::from(&cur);
         let sv = subvolume::val(s).expect("cur only ever holds subvolume keys");
 
         if s.k.p.offset == c::BCACHEFS_ROOT_SUBVOL as u64 {

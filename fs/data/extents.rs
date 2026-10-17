@@ -1,5 +1,9 @@
-//! A key's extent entries - its pointers, and what applies to them - as the
-//! arms they are.
+//! Keys with pointers - btree node pointers, extents, indirect extents,
+//! stripes: the key types BCH_BKEY_TYPES() flags BKEY_TYPE_ptrs. A key
+//! narrows to one with arm::<Ptrs>() - BkeySC<'_, Ptrs> and the rest, the
+//! same keys with the other arms dropped; each value type says where its
+//! extent entries are (PtrsBkey), and the entries - its pointers, and what
+//! applies to them - are walked as the arms they are (BkeyVPtrs).
 //!
 //! An entry's type is the lowest set bit of its first word; how long a type
 //! newer than this code is, only the filesystem's table says (sb
@@ -9,14 +13,15 @@
 //! the value's end - the rest of the value is one last Unknown entry, so
 //! printing a damaged key shows the damage.
 
-use crate::btree::bkey::{BkeyS, BkeySC};
+use crate::btree::bkey::{bkey_family, BkeySC, BkeyV, BkeyVal, BkeyVMut};
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::errcode::BchError;
 use crate::c;
 use crate::fs::Fs;
 use crate::types::Le64;
-use crate::util::vstructs::{cast_plain, cast_plain_mut};
-use core::mem::size_of;
+use crate::util::vstructs::{cast_plain, cast_plain_mut, Validated};
+use core::mem::{offset_of, size_of};
+use core::ops::Range;
 
 macro_rules! extent_entries {
     ($(($name:tt, $nr:literal)),* $(,)?) => { ::paste::paste! {
@@ -141,41 +146,97 @@ impl<'a> Iterator for EntriesMut<'a> {
     }
 }
 
-impl<'a> BkeySC<'a> {
-    fn entries(self, fs: &Fs) -> Entries<'a> {
-        Entries { sizes: EntrySizes::of(fs), b: self.extent_entry_bytes() }
+// ── keys with pointers ───────────────────────────────────────────────────
+
+/// A value with pointers - of a BKEY_TYPE_ptrs type, or Ptrs, any of them:
+/// where in it its extent entries are.
+pub trait PtrsBkey: BkeyVal {
+    fn entry_range(k: BkeySC<'_, Self>) -> Range<usize>;
+}
+
+/// The types whose extent entries run from their start[] to the value's end.
+macro_rules! entries_to_end {
+    ($($ty:ident),*) => { $(
+        impl PtrsBkey for c::$ty<Validated> {
+            fn entry_range(k: BkeySC<'_, Self>) -> Range<usize> {
+                offset_of!(c::$ty, repr.start)..k.val_bytes().len()
+            }
+        }
+    )* };
+}
+entries_to_end!(BtreePtr, BtreePtrV2, Extent, ReflinkV);
+
+/// A stripe's are its ptrs[nr_blocks] - cut short at the value's end: to_text
+/// and swab run before validate has checked nr_blocks against it.
+impl PtrsBkey for c::Stripe<Validated> {
+    fn entry_range(k: BkeySC<'_, Self>) -> Range<usize> {
+        let start = offset_of!(c::Stripe, repr.ptrs);
+        start..(start + k.v().nr_blocks as usize * size_of::<c::bch_extent_ptr>()).min(k.val_bytes().len())
+    }
+}
+
+bkey_family!(Ptrs);
+
+macro_rules! ptrs_bkey {
+    ($(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
+        impl PtrsBkey for Ptrs {
+            fn entry_range(k: BkeySC<'_, Ptrs>) -> Range<usize> {
+                match k.typed() {
+                    $(PtrsTyped::$name(k) => PtrsBkey::entry_range(k),)*
+                }
+            }
+        }
+    };
+}
+c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs => ptrs_bkey]);
+
+/// The extent entries of a key with pointers, in whichever form it's held:
+/// any BkeyV whose value is a PtrsBkey - armed to Ptrs, or to one of them.
+pub trait BkeyVPtrs: BkeyV {
+    fn extent_entries(&self, fs: &Fs) -> impl Iterator<Item = ExtentEntry<'_>>
+    where Self::V: PtrsBkey
+    {
+        let k = self.as_sc();
+        // Empty for a value too short to hold them
+        let b = k.val_bytes().get(<Self::V as PtrsBkey>::entry_range(k)).unwrap_or_default();
+        Entries { sizes: EntrySizes::of(fs), b }.map(|(ty, b)| ExtentEntry::new(ty, b))
     }
 
-    /// None, for a key without.
-    pub fn extent_entries(self, fs: &Fs) -> impl Iterator<Item = ExtentEntry<'a>> {
-        self.entries(fs).map(|(ty, b)| ExtentEntry::new(ty, b))
-    }
-
-    pub fn ptrs(self, fs: &Fs) -> impl Iterator<Item = &'a c::bch_extent_ptr> {
+    fn ptrs(&self, fs: &Fs) -> impl Iterator<Item = &c::bch_extent_ptr>
+    where Self::V: PtrsBkey
+    {
         self.extent_entries(fs).filter_map(|e| match e {
             ExtentEntry::ptr(p) => Some(p),
             _ => None,
         })
     }
 
-    pub fn crcs(self, fs: &Fs) -> impl Iterator<Item = c::bch_extent_crc_unpacked> + 'a {
-        self.extent_entries(fs).filter_map(move |e| crc_unpack(self.k, e))
-    }
-}
-
-impl BkeyS<'_> {
-    pub fn extent_entries_mut(&mut self, fs: &Fs) -> impl Iterator<Item = ExtentEntryMut<'_>> {
-        EntriesMut { sizes: EntrySizes::of(fs), b: self.extent_entry_bytes_mut() }
-            .map(|(ty, b)| ExtentEntryMut::new(ty, b))
+    fn crcs(&self, fs: &Fs) -> impl Iterator<Item = c::bch_extent_crc_unpacked>
+    where Self::V: PtrsBkey
+    {
+        let k = self.k();
+        self.extent_entries(fs).filter_map(move |e| crc_unpack(k, e))
     }
 
-    pub fn ptrs_mut(&mut self, fs: &Fs) -> impl Iterator<Item = &mut c::bch_extent_ptr> {
+    fn extent_entries_mut(&mut self, fs: &Fs) -> impl Iterator<Item = ExtentEntryMut<'_>>
+    where Self: BkeyVMut, Self::V: PtrsBkey
+    {
+        let range = <Self::V as PtrsBkey>::entry_range(self.as_sc());
+        let b = self.as_s().into_val_bytes_mut().get_mut(range).unwrap_or_default();
+        EntriesMut { sizes: EntrySizes::of(fs), b }.map(|(ty, b)| ExtentEntryMut::new(ty, b))
+    }
+
+    fn ptrs_mut(&mut self, fs: &Fs) -> impl Iterator<Item = &mut c::bch_extent_ptr>
+    where Self: BkeyVMut, Self::V: PtrsBkey
+    {
         self.extent_entries_mut(fs).filter_map(|e| match e {
             ExtentEntryMut::ptr(p) => Some(p),
             _ => None,
         })
     }
 }
+
+impl<K: BkeyV> BkeyVPtrs for K {}
 
 /// @entry, if it's a crc entry of @k, unpacked: the sizes unbiased, the
 /// checksum's bytes where bch_csum has them.
@@ -231,6 +292,31 @@ pub fn crc_is_encoded(crc: &c::bch_extent_crc_unpacked) -> bool {
     crc.csum_type as u32 != c::bch_csum_type::BCH_CSUM_none.0 || compressed
 }
 
+/*
+ * BKEY_TYPE_extent flags the key types an extents btree may hold - checked
+ * against BCH_BTREE_IDS(), which is what says: deleted, which every btree
+ * may, and what each BTREE_IS_extents btree allows.
+ */
+macro_rules! extents_btrees_key_types {
+    ($(($name:tt, $nr:literal, $($flag:ident)|+, $(BIT_ULL($t:ident))|+ $(, $($rest:tt)*)?)),* $(,)?) => {
+        const EXTENTS_BTREES_KEY_TYPES: u64 =
+            1 << c::bch_bkey_type::KEY_TYPE_deleted.0 $($(| 1 << c::bch_bkey_type::$t.0)+)*;
+    };
+}
+c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_extents => extents_btrees_key_types]);
+
+macro_rules! extent_types {
+    ($(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
+        const EXTENT_KEY_TYPES: u64 = 0 $(| 1 << $nr)*;
+    };
+}
+c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_extent => extent_types]);
+
+bkey_family!(Extents);
+
+const _: () = assert!(EXTENT_KEY_TYPES == EXTENTS_BTREES_KEY_TYPES,
+                      "BKEY_TYPE_extent isn't on exactly the key types BCH_BTREE_IDS()' extents btrees hold");
+
 impl c::bkey {
     /// Whether it's counted in its inode's i_sectors.
     pub fn extent_is_allocation(&self) -> bool {
@@ -256,7 +342,7 @@ impl BkeySC<'_> {
     /// Whether it has space allocated and not yet written: an unwritten
     /// pointer.
     pub fn extent_is_unwritten(self, fs: &Fs) -> bool {
-        self.ptrs(fs).any(|p| p.unwritten() != 0)
+        self.arm::<Ptrs>().is_some_and(|k| k.ptrs(fs).any(|p| p.unwritten() != 0))
     }
 
     /// Whether it reserves space rather than holding data - a reservation, or
@@ -265,21 +351,40 @@ impl BkeySC<'_> {
         self.k.key_type() == c::bch_bkey_type::KEY_TYPE_reservation || self.extent_is_unwritten(fs)
     }
 
-    /// For reserving space to rewrite it: tolerates bad pointers.
-    pub fn durability_safe(self, fs: &Fs) -> c::bkey_durability {
-        unsafe { c::bch2_bkey_durability_safe(fs.as_ptr(), self.to_raw()) }
+}
+
+/*
+ * A cut that leaves nothing - which makes the key a size 0 deletion - gives
+ * back None, not an empty extent: what's left isn't to be inserted, and the
+ * caller branches on it. One that leaves anything leaves its type, so it's
+ * still an extent.
+ */
+
+/// What an extent, armed to Extents, does in whichever form it's held.
+pub trait BkeyVExtents: BkeyV {
+    /// Cut to start at @where_: bch2_cut_front_s().
+    fn cut_front(mut self, fs: &Fs, where_: c::bpos) -> Option<Self>
+    where Self: BkeyVMut<V = Extents>
+    {
+        unsafe { c::bch2_cut_front_s(fs.as_ptr(), where_, self.as_s().as_raw()) };
+        (self.k().size != 0).then_some(self)
+    }
+
+    /// Cut to end at @where_: bch2_cut_back_s().
+    fn cut_back(mut self, where_: c::bpos) -> Option<Self>
+    where Self: BkeyVMut<V = Extents>
+    {
+        unsafe { c::bch2_cut_back_s(where_, self.as_s().as_raw()) };
+        (self.k().size != 0).then_some(self)
     }
 }
 
-impl<V: ?Sized> BkeyS<'_, V> {
-    /// Cut it to start at @where_: bch2_cut_front_s().
-    pub fn cut_front(&mut self, fs: &Fs, where_: c::bpos) {
-        unsafe { c::bch2_cut_front_s(fs.as_ptr(), where_, self.as_raw()) };
-    }
+impl<K: BkeyV> BkeyVExtents for K {}
 
-    /// Cut it to end at @where_: bch2_cut_back_s().
-    pub fn cut_back(&mut self, where_: c::bpos) {
-        unsafe { c::bch2_cut_back_s(where_, self.as_raw()) };
+impl BkeySC<'_> {
+    /// For reserving space to rewrite it: tolerates bad pointers.
+    pub fn durability_safe(self, fs: &Fs) -> c::bkey_durability {
+        unsafe { c::bch2_bkey_durability_safe(fs.as_ptr(), self.into()) }
     }
 }
 
@@ -289,7 +394,7 @@ pub fn drop_stale_ptrs<'a, 't>(
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
 ) -> Result<(), BchError> {
-    let ret = unsafe { c::bch2_bkey_drop_stale_ptrs(t.raw(), iter.raw(), k.to_raw()) };
+    let ret = unsafe { c::bch2_bkey_drop_stale_ptrs(t.raw(), iter.raw(), k.into()) };
     t.result(ret)
 }
 

@@ -9,7 +9,8 @@
 //! and a repair that made its own mutable copy from the original key dropped
 //! every repair before it.
 
-use crate::btree::bkey::{BkeySC, BkeySCToText, MutBkey, SizedBkey};
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{BkeySC, BkeySCToText, MutBkey, BkeyWhole};
 use crate::btree::iter::{BtreeIter, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::errcode::BchError;
@@ -17,18 +18,18 @@ use crate::fs::Fs;
 use core::marker::PhantomData;
 
 /// Key @k, of the type whose value is @K, at @iter.
-pub struct CowKey<'i, 'k, 'a, 't, K: SizedBkey> {
+pub struct CowKey<'i, 'k, 'a, 't, K: BkeyWhole> {
     iter: &'i BtreeIter<'t>,
-    k:    BkeySC<'k, K::InPlace>,
+    k:    BkeySC<'k, K::Validated>,
     /// The value as read, zero padded - until there's @u.
     v:    K,
     /// The key as it will be written, once anything has been repaired.
     u:    Option<TransBkey<'a, 't, K>>,
 }
 
-impl<'i, 'k, 'a, 't, K: SizedBkey> CowKey<'i, 'k, 'a, 't, K>
+impl<'i, 'k, 'a, 't, K: BkeyWhole> CowKey<'i, 'k, 'a, 't, K>
 where
-    K::InPlace: MutBkey<Mut = K>,
+    K::Validated: MutBkey<Mut = K>,
 {
     /// None if @k isn't of type @K.
     pub fn new(iter: &'i BtreeIter<'t>, k: BkeySC<'k>) -> Option<Self> {
@@ -69,12 +70,12 @@ where
     /// The key as it is now, to print.
     pub fn key(&self) -> BkeySC<'_> {
         match &self.u {
-            Some(u) => BkeySC::from(u.k_i()),
+            Some(u) => BkeySC::from(u.as_ref()),
             None    => BkeySC { k: self.k.k, v: self.k.v, iter: PhantomData, val: PhantomData },
         }
     }
 
     pub fn to_text<'f>(&self, fs: &'f Fs) -> BkeySCToText<'_, 'f> {
-        self.key().to_text(fs)
+        BkeySCToText { k: self.key().untyped(), fs }
     }
 }

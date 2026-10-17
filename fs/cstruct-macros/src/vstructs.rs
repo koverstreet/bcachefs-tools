@@ -30,6 +30,20 @@ pub(crate) fn derive_plain(input: TokenStream) -> Result<TokenStream, String> {
     Ok(tokens(&plain(def.rust_ident(), &tys)))
 }
 
+/// #[derive(SizedVal)]: the marker, for a key value - as an on-disk value,
+/// any bytes of it are one.
+pub(crate) fn derive_sized_val(input: TokenStream) -> Result<TokenStream, String> {
+    let def = parse_cstruct(&input.to_string())?;
+    let name = def.rust_ident();
+    // the same struct in every state, but from outside: OfSized
+    Ok(tokens(&format!("// SAFETY: an on-disk value, any bytes of which are one\n\
+                        unsafe impl crate::btree::bkey::SizedVal for {name} {{}}\n\
+                        impl {VS}::InState for {name} {{\n\
+                            type In<S: {VS}::State> = S::OfSized<Self>;\n\
+                            type State = {VS}::Validated;\n\
+                        }}\n")))
+}
+
 /// Plain for @name, whose fields are of types @tys: the impl, and the
 /// checks that make it sound - a compile error if it isn't. Native too, as
 /// itself.
@@ -557,7 +571,7 @@ pub(crate) fn counted(attr: TokenStream, item: TokenStream) -> Result<TokenStrea
 pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item.to_string())?;
     let name = def.name.clone();
-    let args = parse_family_args(&attr.to_string(), &["from"]).map_err(|e| format!("{name}: {e}"))?;
+    let args = parse_family_args(&attr.to_string(), &["from", "bkey"]).map_err(|e| format!("{name}: {e}"))?;
     let from = args.from.as_deref()
         .ok_or_else(|| format!("{name}: #[grown(from = FIELD)], FIELD the first field an older \
                                 version's value may lack"))?;
@@ -566,7 +580,7 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
     if at == 0 {
         return Err(format!("{name}: #[grown(from = {from})]: every valid value has at least one field"));
     }
-    sized_family(&def, item, Some((from, at)), None)
+    sized_family(&def, item, Some((from, at)), None, args.bkey)
 }
 
 /// #[whole]: the family of a type every valid value of which has all of it -
@@ -592,7 +606,7 @@ pub(crate) fn grown(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 /// pointers, then checksums and sector counts its header sizes.
 pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     let def = parse_cstruct(&item.to_string())?;
-    let args = parse_family_args(&attr.to_string(), &["tail"]).map_err(|e| format!("{}: {e}", def.name))?;
+    let args = parse_family_args(&attr.to_string(), &["tail", "bkey"]).map_err(|e| format!("{}: {e}", def.name))?;
     let tail = match args.tail {
         None => None,
         Some((None, _)) => return Err(format!("{}: #[whole(tail = NAME: [E])] - the tail is C's last \
@@ -617,7 +631,7 @@ pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
             Some((tail, elem))
         }
     };
-    sized_family(&def, item, None, tail)
+    sized_family(&def, item, None, tail, args.bkey)
 }
 
 /// #[grown] and #[whole]: the family of sized C struct @def, written @item -
@@ -628,10 +642,33 @@ pub(crate) fn whole(attr: TokenStream, item: TokenStream) -> Result<TokenStream,
 /// grew - its Whole; else X__validated, its every state. Only that one is
 /// handed to C, as_ffi(): it's the one sure to hold all of C's struct.
 fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>,
-                tail: Option<(String, String)>)
+                tail: Option<(String, String)>, bkey: bool)
     -> Result<TokenStream, String>
 {
     let name = def.rust_ident().to_string();
+    // A key's value: what a mutable copy of a key read as one is - and a
+    // grown type's struct, had by value
+    let bkey_impls = match (bkey, grew) {
+        (false, _) => String::new(),
+        (true, None) => format!(
+            "// SAFETY: every valid value has its head\n\
+             unsafe impl crate::btree::bkey::MutBkey for {name}<{VS}::Validated> {{\n\
+                 type Mut = Self;\n\
+                 const MIN_BYTES: usize = 0;\n\
+             }}\n\n"),
+        (true, Some(_)) => format!(
+            "// SAFETY: Plain, as #[grown] requires: no padding, any bytes a value\n\
+             unsafe impl crate::btree::bkey::BkeyWhole for {name} {{}}\n\
+             \n\
+             // SAFETY: every key is one of AllTypes'\n\
+             unsafe impl crate::btree::bkey::InFamily<crate::btree::bkey::AllTypes> for {name} {{}}\n\
+             \n\
+             // SAFETY: a BkeyWhole, its key whole\n\
+             unsafe impl crate::btree::bkey::MutBkey for {name}<{VS}::Validated> {{\n\
+                 type Mut = {name};\n\
+                 const MIN_BYTES: usize = ::core::mem::size_of::<crate::btree::bkey::BkeyI<{name}>>();\n\
+             }}\n\n"),
+    };
     // The struct as written, renamed X__whole: X<Whole>'s representation,
     // and C's struct X
     let ffi = format!("{name}__whole");
@@ -683,7 +720,7 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
                       }}\n"));
         let mut out = rename_struct(item, &def, &ffi)?;
         out.extend(tokens(&format!(
-            "{all_def}{}{}{}",
+            "{all_def}{}{}{}{bkey_impls}",
             family(&name, &all, &all, &ffi, &[]),
             whole_arm_ref(&ffi, derives.iter().any(|d| d == "Plain")),
             generic_type(&name, &sized_generic(&all, &ffi, &derives, &states, false),
@@ -765,7 +802,8 @@ fn sized_family(def: &CStructDef, item: TokenStream, grew: Option<(&str, usize)>
          {family}\
          {whole}\
          {generic}\
-         {in_place}",
+         {in_place}\
+         {bkey_impls}",
         plain = plain(&fl, &floor_tys),
         // all of it is a value in place, every field there: X's methods, on
         // X<Validated>, are the struct's too

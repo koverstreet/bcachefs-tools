@@ -293,7 +293,7 @@
  * mount by re-scanning for snapshots still marked for deletion.
  */
 
-use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, BkeyI, BkeySC, SizedBkey, POS_MAX, POS_MIN};
+use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole, POS_MAX, POS_MIN};
 use crate::btree::bkey_methods::TriggerOp;
 use crate::util::vstructs::{Validated, Whole};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans,
@@ -1253,7 +1253,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError>
         passes::clear_btree_clean(t.fs(), c::btree_id::snapshots);
     }
     if op.flags.contains(UpdateTriggerFlags::ATOMIC) {
-        mark_snapshot(t.fs(), op.new.as_sc())?;
+        mark_snapshot(t.fs(), BkeySC::from(&op.new))?;
     }
     Ok(())
 }
@@ -1370,7 +1370,7 @@ fn create_snapids(
         v.set_state(c::bch_snapshot_state::SNAPSHOT_STATE_live);
 
         t.update(&iter, &n, UpdateTriggerFlags::empty())?;
-        mark_snapshot(fs, BkeySC::from(n.k_i()))?;
+        mark_snapshot(fs, BkeySC::from(n.as_ref()))?;
 
         *new_id = p.offset as u32;
     }

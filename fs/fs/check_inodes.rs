@@ -7,6 +7,7 @@
 
 use crate::acl::AclType;
 use crate::btree::bkey::{spos, BkeySC, POS_MIN};
+use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{
     BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,
 };
@@ -84,7 +85,7 @@ fn check_inode_dirent_inode(t: &TransAttempt<'_, '_>, u: &mut c::bch_inode_unpac
 /// Whether the inode at @pos is on the deleted_inodes list.
 fn on_deleted_list(t: &TransAttempt<'_, '_>, pos: c::bpos) -> Result<bool, BchError> {
     let mut iter = BtreeIter::new(t, c::btree_id::deleted_inodes, pos, BtreeIterFlags::empty());
-    Ok(iter.peek_slot(t)?.is_some_and(|k| k.key_type() == c::bch_bkey_type::KEY_TYPE_set))
+    Ok(iter.peek_slot(t)?.is_some_and(|k| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_set))
 }
 
 /// What the has_*_acl flags record.

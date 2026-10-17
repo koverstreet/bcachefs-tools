@@ -12,7 +12,7 @@
 //! only, as C's #ifdef CONFIG_BCACHEFS_QUOTA; the superblock section and the
 //! keys are both builds'.
 
-use crate::btree::bkey::{BkeySC, SizedBkey};
+use crate::btree::bkey::{BkeySC, BkeyWhole};
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
@@ -906,7 +906,7 @@ mod vfs {
             new_quota.v.c[Q_INO].hardlimit = qdq.d_ino_hardlimit.into();
         }
 
-        t.update(&iter, &t.bkey_copy(new_quota.k_i())?, UpdateTriggerFlags::empty())
+        t.update(&iter, &t.bkey_copy(new_quota.as_ref())?, UpdateTriggerFlags::empty())
     }
 
     fn set_quota(sb: *mut c::super_block, kqid: c::kqid, qdq: &c::qc_dqblk) -> Result<(), BchError> {
@@ -925,7 +925,7 @@ mod vfs {
 
         let trans = crate::btree_trans!(fs);
         commit_do(&trans, None, CommitOpts::new(), |t| set_quota_trans(t, &mut new_quota, qdq))?;
-        set(fs, BkeySC::from(new_quota.k_i()), Some(qdq))
+        set(fs, BkeySC::from(new_quota.as_ref()), Some(qdq))
     }
 
     unsafe extern "C" fn set_dqblk(sb: *mut c::super_block, kqid: c::kqid, qdq: *mut c::qc_dqblk) -> c_int {

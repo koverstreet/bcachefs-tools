@@ -47,7 +47,7 @@ use cstruct_macros::{c_const, c_enum, c_typedef, c_xmacro, tagged_union, whole, 
  * updates from journal replay to be lost.
  */
 
-#[whole(tail = d: [u64])]
+#[whole(tail = d: [u64], bkey)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_name(bch_accounting)]

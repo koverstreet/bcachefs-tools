@@ -7,6 +7,7 @@
 //! this is starting and finishing one, and recovery resuming what's left.
 
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN};
+use crate::btree::bkey::prelude::*;
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags};
@@ -95,7 +96,7 @@ fn resume_logged_op(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, early: bool) -> Res
     }
 
     /* Unknown types go with the late pass, which deletes them: */
-    let op = logged_op(k.key_type());
+    let op = logged_op(k.k.key_type());
     if op.map_or(early, |op| op.early != early) {
         return Ok(());
     }
@@ -112,7 +113,7 @@ fn resume_logged_op(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, early: bool) -> Res
 
     Err(t.close(CommitFlags::NO_ENOSPC, |trans| {
         if let Some(op) = op {
-            let _ = (op.resume)(trans, sk.k_i_mut());
+            let _ = (op.resume)(trans, sk.as_mut());
         }
 
         /*
@@ -120,7 +121,7 @@ fn resume_logged_op(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, early: bool) -> Res
          * Recovery finishes the op either way, so that an op that can't
          * complete doesn't wedge every subsequent mount.
          */
-        finish(trans, sk.k_i(), Ok(()), CommitOpts::new())
+        finish(trans, sk.as_ref(), Ok(()), CommitOpts::new())
     }))
 }
 
@@ -272,7 +273,7 @@ pub fn finish(
          * been shut down, but make sure of that here:
          */
         let fs = trans.fs();
-        fs_fatal_error!(fs, "deleting logged operation {}: {}", BkeySC::from(k).to_text(fs), e);
+        fs_fatal_error!(fs, "deleting logged operation {}: {}", k.to_text(fs), e);
     })?;
 
     op_ret

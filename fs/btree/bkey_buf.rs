@@ -32,7 +32,7 @@ impl BkeyBuf {
     /// Holding a deleted key, as bch2_bkey_buf_init() leaves it.
     pub fn new() -> Self {
         let mut b = BkeyBuf { onstack: [0; ONSTACK_U64S], heap: None };
-        b.k_i_mut().k = c::bkey::new();
+        b.as_mut().k = c::bkey::new();
         b
     }
 
@@ -77,21 +77,26 @@ impl BkeyBuf {
                                            buf[BKEY_U64S..].as_mut_ptr(), u64s - BKEY_U64S);
         }
     }
+}
 
-    /// The key, all of it, as long as its u64s say.
-    pub fn k_i(&self) -> &BkeyI {
+impl<'a> From<&'a BkeyBuf> for BkeySC<'a> {
+    fn from(b: &'a BkeyBuf) -> Self {
+        BkeySC::from(b.as_ref())
+    }
+}
+
+/// The key, all of it, as long as its u64s say.
+impl AsRef<BkeyI> for BkeyBuf {
+    fn as_ref(&self) -> &BkeyI {
         // SAFETY: a key at the start of the buffer, as reassemble() sizes it
         unsafe { &*BkeyI::from_raw(self.buf().as_ptr().cast()) }
     }
+}
 
-    /// k_i(), to edit.
-    pub fn k_i_mut(&mut self) -> &mut BkeyI {
-        // SAFETY: as k_i()'s
+impl AsMut<BkeyI> for BkeyBuf {
+    fn as_mut(&mut self) -> &mut BkeyI {
+        // SAFETY: as as_ref()'s
         unsafe { &mut *BkeyI::from_raw_mut(self.buf_mut().as_mut_ptr().cast()) }
-    }
-
-    pub fn sc(&self) -> BkeySC<'_> {
-        BkeySC::from(self.k_i())
     }
 }
 

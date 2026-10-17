@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use crate::btree::bkey::prelude::*;
 use crate::alloc::buckets::DiskReservation;
-use crate::btree::bkey::{pos, spos, BkeyI, BkeyICookie, BkeyS, BkeySC, BKEY_U64S, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, BKEY_U64S, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
     CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
-use crate::data::extents::{ExtentEntry, ExtentEntryMut};
+use crate::data::extents::{ExtentEntry, ExtentEntryMut, Ptrs};
 use crate::errcode::{
     bch_errcode,
     BchError,
@@ -74,7 +75,7 @@ fn delete_test_keys(fs: &Fs) -> TestRet {
     )
 }
 
-fn insert_cookie(fs: &Fs, btree: c::btree_id, k: &mut BkeyICookie) -> TestRet {
+fn insert_cookie(fs: &Fs, btree: c::btree_id, k: &mut BkeyI<c::Cookie>) -> TestRet {
     /*
      * A cookie has no pointers, so nothing can charge trans->extra_disk_res
      * for it - but an extents leaf update is required to have somewhere to
@@ -413,11 +414,11 @@ fn test_btree_ptr_stale_dirty_key(
     let b = fs.require(iter.node_at_iter_level(t), ENOENT_bkey_type_mismatch)?;
     fs.ensure(b.level() == 0, ENOENT_bkey_type_mismatch)?;
 
-    let mut update = t.bkey_make_mut_noupdate(b.key_sc())?;
+    let mut update = t.bkey_make_mut_noupdate(b.key_sc())?
+        .arm::<Ptrs>().expect("a btree node's key has pointers");
 
     let mut updated = false;
-    let mut update_k = BkeyS::from(update.k_i_mut());
-    for ptr_entry in update_k.ptrs_mut(t.fs()) {
+    for ptr_entry in update.ptrs_mut(t.fs()) {
         if ptr_entry.cached() == 0 && u64::from(ptr_entry.dev()) != c::BCH_SB_MEMBER_INVALID as u64 {
             // gen is 8 bits: one less, as C's ptr->gen-- - the setter checks
             // that the value fits
@@ -454,7 +455,7 @@ fn test_btree_ptr_stale_dirty(fs: &Fs, _nr: u64) -> TestRet {
 
         let fs = t.fs();
         let k = fs.require(iter.peek_max_type(SPOS_MAX, BtreeIterFlags::empty())?, ENOENT_bkey_type_mismatch)?;
-        fs.ensure(k.is_btree_ptr(), ENOENT_bkey_type_mismatch)?;
+        fs.ensure(k.k.is_btree_ptr(), ENOENT_bkey_type_mismatch)?;
 
         test_btree_ptr_stale_dirty_key(t, k)
     })
@@ -490,15 +491,14 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
                 return Ok(Some(false));
             };
 
-            let striped = k.extent_entries(t.fs())
-                .any(|e| matches!(e, ExtentEntry::stripe_ptr(_)));
+            let striped = k.arm::<Ptrs>().is_some_and(|k| k.extent_entries(t.fs())
+                .any(|e| matches!(e, ExtentEntry::stripe_ptr(_))));
             if !striped {
                 return Ok(None);
             }
 
-            let mut u = t.bkey_make_mut_noupdate(k)?;
-            let mut u_k = BkeyS::from(u.k_i_mut());
-            let sp = u_k.extent_entries_mut(t.fs())
+            let mut u = t.bkey_make_mut_noupdate(k)?.arm::<Ptrs>().expect("a striped extent has pointers");
+            let sp = u.extent_entries_mut(t.fs())
                 .find_map(|e| match e {
                     ExtentEntryMut::stripe_ptr(sp) => Some(sp),
                     _ => None,
@@ -665,7 +665,7 @@ fn bkey_buf_test_key(buf: &mut [u64], seed: u64) -> BkeySC<'_> {
 }
 
 fn bkey_buf_holds(b: &BkeyBuf, k: BkeySC<'_>) -> bool {
-    let held = b.sc();
+    let held = BkeySC::from(b);
     held.k.u64s == k.k.u64s && held.k.p.offset == k.k.p.offset &&
         held.val_bytes() == k.val_bytes()
 }
@@ -678,7 +678,7 @@ fn test_bkey_buf(_fs: &Fs, _nr: u64) -> TestRet {
     let mut big = [0u64; 64];
 
     let mut b = BkeyBuf::new();
-    assert!(b.sc().is_deleted());
+    assert!(b.as_ref().k.is_deleted());
 
     let k = bkey_buf_test_key(&mut small, 100);
     b.reassemble(k);

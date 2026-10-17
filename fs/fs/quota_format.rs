@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
 use crate::util::vstructs::{vstruct, Head};
-use cstruct_macros::{c_enum, whole, CStruct, Plain, TypeInfo};
+use cstruct_macros::{c_enum, whole, CStruct, Plain, TypeInfo, SizedVal};
 
 /* KEY_TYPE_quota: */
 c_enum! {
@@ -35,7 +35,7 @@ pub struct bch_quota_counter {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_packed]
 #[c_name(bch_quota)]
 pub struct Quota {

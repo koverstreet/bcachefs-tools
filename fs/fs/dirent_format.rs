@@ -18,6 +18,7 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::bkey::prelude::*;
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::BkeySC;
 use crate::btree::bkey_methods::{self, SetError};
@@ -35,7 +36,7 @@ use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
 use core::ffi::{c_int, CStr};
 use core::mem::offset_of;
-use cstruct_macros::{bitfield, c_const, c_export, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, c_const, c_export, CStruct, TypeInfo, SizedVal};
 use nestify::nest;
 use zerocopy::byteorder::little_endian as le;
 
@@ -53,6 +54,7 @@ use zerocopy::byteorder::little_endian as le;
  */
 nest! {
     #[derive(Clone, Copy, CStruct, TypeInfo)]*
+    #[derive(SizedVal)]
     #[repr(C, align(8))]
     #[c_packed]
     #[c_name(bch_dirent)]
@@ -411,7 +413,7 @@ pub fn set_field<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, field: &'p str, val: &'
     }
 
     let v = bkey_methods::parse_val(k.k().type_, field, val)?;
-    let d = k.k_i_mut().arm_mut::<c::Dirent>().expect("a dirent").v_mut();
+    let d = k.as_mut().arm::<c::Dirent>().expect("a dirent").v_mut();
 
     match field {
         "d_type" => {
@@ -449,6 +451,6 @@ fn set_name<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, val: &'p str) -> Result<(), 
 
     // Only cf_encoding is read, and NULL means not casefolded:
     let hash_info = c::bch_hash_info::default();
-    super::init_name(fs, k.k_i_mut(), &hash_info, OsStr::from_bytes(val.as_bytes()), None)
+    super::init_name(fs, k.as_mut(), &hash_info, OsStr::from_bytes(val.as_bytes()), None)
         .map_err(|_| SetError::BadName { val })
 }

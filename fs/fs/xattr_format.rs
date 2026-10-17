@@ -18,7 +18,7 @@ c_enum! {
     }
 }
 
-#[whole(tail = x_name_and_value: [u8])]
+#[whole(tail = x_name_and_value: [u8], bkey)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]

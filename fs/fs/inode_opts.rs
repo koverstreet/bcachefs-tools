@@ -9,7 +9,8 @@
 //! propagated from a parent. Nothing outside this file should touch
 //! bi_<option> directly.
 
-use crate::btree::bkey::{spos, BkeyI, BkeySC, SizedBkey, POS_MIN};
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{spos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags};
 use crate::c;
@@ -408,7 +409,7 @@ fn needs_scan(t: &TransAttempt<'_, '_>, inum: u64) -> Result<(), BchError> {
 /// bch2_resume_logged_op_inode_opt_propagate().
 pub fn resume_propagate(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), BchError> {
     let fs = trans.fs();
-    let op = op_k.arm_mut::<c::LoggedOpInodeOptPropagate>().expect("an inode_opt_propagate op");
+    let op = op_k.arm::<c::LoggedOpInodeOptPropagate>().expect("an inode_opt_propagate op");
     let inum = op.v.inum.get();
     let origin_snapshot = op.v.origin_snapshot.get();
 
@@ -419,7 +420,7 @@ pub fn resume_propagate(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), 
         let mut done = false;
         commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| {
             done = propagate_one(t, inum, origin_snapshot, ancestor, None)?.is_break();
-            logged_ops::update(t, op.k_i())
+            logged_ops::update(t, op.as_ref())
         })?;
         if done {
             break;
@@ -460,15 +461,15 @@ fn propagate_start(
     op.v.origin_snapshot = snapshot.into();
     op.v.cursor_snapshot = snapshot.into();
 
-    logged_ops::start(t, op.k_i_mut())
+    logged_ops::start(t, op.as_mut())
 }
 
 /* After that transaction has committed: climb, then drop the op */
 fn propagate_finish(trans: &BtreeTrans<'_>, op: &mut c::bkey_i_logged_op_inode_opt_propagate)
     -> Result<(), BchError>
 {
-    let ret = resume_propagate(trans, op.k_i_mut());
-    logged_ops::finish(trans, op.k_i(), ret, CommitOpts::new())
+    let ret = resume_propagate(trans, op.as_mut());
+    logged_ops::finish(trans, op.as_ref(), ret, CommitOpts::new())
 }
 
 impl c::inode_opt_change {

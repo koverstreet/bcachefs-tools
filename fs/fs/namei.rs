@@ -27,6 +27,7 @@
 
 use crate::acl::PosixAcl;
 use crate::btree::bkey::{pos, spos, BkeySC};
+use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{
     is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
     UpdateTriggerFlags,
@@ -770,7 +771,7 @@ pub fn inode_get_dirent<'i, 'a>(
     *iter = BtreeIter::new(t, c::btree_id::dirents,
                            spos(inode.bi_dir, inode.bi_dir_offset, *snapshot),
                            BtreeIterFlags::empty());
-    iter.peek_slot_typed::<c::Dirent>(t).map(BkeySC::s_c)
+    iter.peek_slot_typed::<c::Dirent>(t).map(BkeySC::untyped)
 }
 
 /// A path, as inum_to_path walks it: up from the inode, a name per step;
@@ -1173,7 +1174,7 @@ fn check_dirent_inode_dirent(
 
         if target.bi_subvol != 0 &&
            dirent_is_subvol_root_name(d, target) &&
-           !dirent_is_subvol_root_name(Dirent::new(bp.s_c()).expect("a dirent"), target) {
+           !dirent_is_subvol_root_name(Dirent::new(bp.untyped()).expect("a dirent"), target) {
             remove              = bp.k.p;
             repoint_backpointer = true;
 
@@ -1288,7 +1289,7 @@ pub unsafe extern "C" fn __bch2_check_dirent_target<'t>(
     let k = c::bkey_s_c::from(d);
 
     ret_to_c(__check_dirent_target(&unsafe { trans.attempt_in_progress() }, dirent_iter,
-                                   Dirent::new(BkeySC::from(&k)).expect("a dirent"),
+                                   Dirent::new(unsafe { BkeySC::from_c(&k) }).expect("a dirent"),
                                    target, in_fsck))
 }
 

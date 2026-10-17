@@ -225,7 +225,7 @@ pub fn bkey_fsck_err(
     buf.write_fmt(msg);
 
     let ret = unsafe {
-        c::__bch2_bkey_fsck_err(v.fs.as_ptr(), v.k.to_raw(), v.from, err,
+        c::__bch2_bkey_fsck_err(v.fs.as_ptr(), v.k.into(), v.from, err,
                                 c"%s".as_ptr().cast(), buf.as_raw().buf)
     };
     let e = BchError::from_raw(-ret);

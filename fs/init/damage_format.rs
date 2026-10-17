@@ -18,7 +18,7 @@ use cstruct_macros::{whole, CStruct, Plain, TypeInfo};
  * for "what happened": the sb section counts per-filesystem, damage
  * keys count per-inode.
  */
-#[whole(tail = entries: [c::bch_sb_field_error_entry_v2])]
+#[whole(tail = entries: [c::bch_sb_field_error_entry_v2], bkey)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_name(bch_damage)]

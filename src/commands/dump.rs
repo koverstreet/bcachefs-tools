@@ -1,3 +1,4 @@
+use bcachefs_kernel::btree::bkey::prelude::*;
 use std::ops::ControlFlow;
 use std::os::fd::{AsFd, BorrowedFd};
 use std::path::Path;
@@ -8,11 +9,12 @@ use clap::Parser;
 
 use bcachefs_kernel::btree;
 use bcachefs_kernel::btree::bkey::{BkeyI, BkeyS};
+use bcachefs_kernel::data::extents::Ptrs;
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::{ret_to_result_void, BchError};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::{entry_type, journal_entry_type};
-use bcachefs_kernel::util::vstructs::{cast_plain, Head, SelfSized, Unvalidated};
+use bcachefs_kernel::util::vstructs::{assume_validated, cast_plain, Head, SelfSized, Unvalidated};
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::POS_MIN;
 
@@ -189,7 +191,8 @@ const MEMBER_INVALID: u8 = c::BCH_SB_MEMBER_INVALID as u8;
 /// device index and set every other pointer's device to `BCH_SB_MEMBER_INVALID`.
 /// Returns whether it changed anything. The surviving replica is the one the
 /// dump actually wrote, and the only one the read path will consider.
-fn derep(fs: &Fs, mut k: BkeyS) -> bool {
+fn derep(fs: &Fs, k: BkeyS) -> bool {
+    let Some(mut k) = k.arm::<Ptrs>() else { return false };
     let min_dev = k.ptrs_mut(fs)
         .map(|p| p.dev())
         .filter(|&d| d != MEMBER_INVALID)
@@ -218,7 +221,7 @@ fn sanitize_val(fs: &Fs, mut k: BkeyS, opts: SanitizeOpts) -> bool {
     const INDIRECT_INLINE_DATA: c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_indirect_inline_data;
     const DIRENT:               c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_dirent;
 
-    match k.key_type() {
+    match k.k.key_type() {
         BTREE_PTR | BTREE_PTR_V2 if opts.single_replica => derep(fs, k),
         INLINE_DATA if opts.sanitize => {
             k.val_bytes_mut().fill(0);
@@ -274,7 +277,10 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
                                      | journal_entry_type::btree_root
                                      | journal_entry_type::write_buffer_keys) {
                 for k in e.entries_mut() {
-                    let mut k = k.map_err(|e| anyhow!("journal entry at {pos:#x}: {e}"))?;
+                    let k = k.map_err(|e| anyhow!("journal entry at {pos:#x}: {e}"))?;
+                    // SAFETY: XXX: off disk, not validated - sanitize_val()
+                    // should take an Unvalidated key
+                    let mut k = unsafe { assume_validated(k) };
                     modified |= sanitize_val(&fs, BkeyS::from(k.key_mut()), opts);
                 }
             }
@@ -458,6 +464,7 @@ fn dump_node(fs: &Fs, devs: &mut [DumpDev], k: btree::BkeySC<'_>, btree_node_siz
     // Capture the length by value so the filter closure doesn't borrow `devs`,
     // which we mutate via range_add below.
     let ndevs = devs.len();
+    let Some(k) = k.arm::<Ptrs>() else { return };
     let exists = |p: &&c::bch_extent_ptr| {
         let dev = p.dev() as usize;
         dev < ndevs && fs.dev_exists(dev as u32)

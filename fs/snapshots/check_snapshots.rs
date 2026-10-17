@@ -26,6 +26,7 @@
 //! The node being checked is a CowKey: one copy, read by every check and
 //! written by every repair, so one repair can't lose another's.
 
+use crate::btree::bkey::prelude::*;
 use crate::accounting;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::cow_key::CowKey;
@@ -146,7 +147,7 @@ fn check_snapshot_tree<'t>(
         let mut found = Printbuf::new();
         match &root {
             Err(e) => write!(found, "({})", e.msg()),
-            Ok(r)  => write!(found, "{}", BkeySC::from(r.k_i()).to_text(fs)),
+            Ok(r)  => write!(found, "{}", r.to_text(fs)),
         }
         if fsck_err!(t, id::snapshot_tree_to_missing_snapshot,
                      "snapshot tree points to missing/incorrect snapshot:\n{}\n{}",
@@ -632,10 +633,10 @@ impl fmt::Display for EdgeNodes<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "\nnode:     {}", self.node.to_text(self.fs))?;
         if let Some(t) = self.target {
-            write!(f, "\ntarget:   {}", BkeySC::from(t.k_i()).to_text(self.fs))?;
+            write!(f, "\ntarget:   {}", t.to_text(self.fs))?;
         }
         if let Some(c) = self.claimant {
-            write!(f, "\nclaimant: {}", BkeySC::from(c.k_i()).to_text(self.fs))?;
+            write!(f, "\nclaimant: {}", c.to_text(self.fs))?;
         }
         Ok(())
     }

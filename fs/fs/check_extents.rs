@@ -29,6 +29,7 @@
 //! reported past an i_size of 0 and punched from block 0. Unverified; one for
 //! the error injection tests.
 
+use crate::btree::bkey::prelude::*;
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::bkey::{bpos_gt, pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
@@ -37,7 +38,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::check::{self, InodeWalker, SnapshotsSeen};
-use crate::data::extents;
+use crate::data::extents::{self, Ptrs};
 use crate::data::io_misc;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
@@ -179,7 +180,7 @@ fn overwrite_extent<'a, 't>(
         t.extra_disk_res_add(d.sectors_compressed as u64, d.nr_replicas as u32);
 
         t.update_extent_overwrite(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE,
-                                  BkeySC::from(old.k_i()), new)
+                                  BkeySC::from(&old), new)
     }
 }
 
@@ -237,8 +238,8 @@ fn overlapping_extents_found(
         return Err(fs.err(bch_errcode::BCH_ERR_internal_fsck_err));
     };
 
-    let k1_whiteout = k1.key_type() == c::bch_bkey_type::KEY_TYPE_extent_whiteout;
-    let k2_whiteout = k2.key_type() == c::bch_bkey_type::KEY_TYPE_extent_whiteout;
+    let k1_whiteout = k1.k.key_type() == c::bch_bkey_type::KEY_TYPE_extent_whiteout;
+    let k2_whiteout = k2.k.key_type() == c::bch_bkey_type::KEY_TYPE_extent_whiteout;
     let first = if k1_whiteout || k2_whiteout { k1_whiteout } else { pos1.snapshot >= pos2.p.snapshot };
 
     write!(buf, "\noverwriting {} extent", if first { "first" } else { "second" });
@@ -297,7 +298,7 @@ fn check_overlapping_extents(
     }
 
     for i in extent_ends.e.iter_mut() {
-        if i.offset <= k.start_offset() ||
+        if i.offset <= k.k.start_offset() ||
            !check::ref_visible2(t, k.k.p.snapshot, s, i.snapshot, &i.seen) {
             continue;
         }
@@ -314,8 +315,9 @@ fn check_overlapping_extents(
 /// damage - reported, not repaired.
 fn check_extent_overbig(fs: &Fs, k: BkeySC<'_>) {
     let max_sectors = fs.opts().encoded_extent_max() >> 9;
+    let Some(p) = k.arm::<Ptrs>() else { return };
 
-    for crc in k.crcs(fs) {
+    for crc in p.crcs(fs) {
         if extents::crc_is_encoded(&crc) && crc.uncompressed_size > max_sectors {
             bch_err!(fs, "overbig encoded extent, please report this:\n  {}", k.to_text(fs));
         }
@@ -382,7 +384,7 @@ fn check_extent<'t>(
 
     st.w.walk(t, iter, k)?;
 
-    if k.key_type() != c::bch_bkey_type::KEY_TYPE_whiteout &&
+    if k.k.key_type() != c::bch_bkey_type::KEY_TYPE_whiteout &&
        check_overlapping_extents(t, &st.res, &mut st.s, &mut st.extent_ends, k)? {
         st.w.set_recalculate_sums();
     }
@@ -397,7 +399,7 @@ fn check_extent<'t>(
     let p          = k.k.p;
     let size       = k.k.size as u64;
     let allocation = k.k.extent_is_allocation();
-    let whiteout   = k.key_type() == c::bch_bkey_type::KEY_TYPE_whiteout;
+    let whiteout   = k.k.key_type() == c::bch_bkey_type::KEY_TYPE_whiteout;
 
     t.commit(Some(&st.res), CommitFlags::NO_ENOSPC)?;
 

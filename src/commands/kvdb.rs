@@ -41,6 +41,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
+use bcachefs_kernel::btree::bkey::prelude::*;
 use bcachefs_kernel::btree::bkey_methods;
 use bcachefs_kernel::btree::iter::{
     commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
@@ -458,7 +459,7 @@ fn render_read(fs: &Fs, k: &BkeySC<'_>, how: Render<'_>) -> Result<String> {
     match how {
         Render::Full => Ok(render_key(fs, k, false)),
         Render::KeyOnly => Ok(render_key(fs, k, true)),
-        Render::Fields(_) | Render::RawFields(_) if k.is_deleted() => {
+        Render::Fields(_) | Render::RawFields(_) if k.k.is_deleted() => {
             let (inode, offset, snapshot) = (k.k.p.inode, k.k.p.offset, k.k.p.snapshot);
             Err(anyhow!("no key at {inode}:{offset}:{snapshot}"))
         }
@@ -680,7 +681,7 @@ fn cmd_update(
                 RAW_EXACT | BtreeIterFlags::INTENT,
             );
             let k = iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS)?;
-            let Some(k) = k.filter(|k| !k.is_deleted()) else {
+            let Some(k) = k.filter(|k| !k.k.is_deleted()) else {
                 let (inode, offset, snapshot) = (pos.inode, pos.offset, pos.snapshot);
                 user_err = Some(anyhow!("no key at {inode}:{offset}:{snapshot}"));
                 return Err(no_key_err());
@@ -727,7 +728,7 @@ fn cmd_copy(fs: &Fs, btree: c::btree_id, pos: c::bpos, new_pos: c::bpos, raw: bo
         |t| {
             let mut iter = BtreeIter::new(t, btree, pos, RAW_EXACT);
             let k = iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS)?;
-            let Some(k) = k.filter(|k| !k.is_deleted()) else {
+            let Some(k) = k.filter(|k| !k.k.is_deleted()) else {
                 let (inode, offset, snapshot) = (pos.inode, pos.offset, pos.snapshot);
                 user_err = Some(anyhow!("no key at {inode}:{offset}:{snapshot}"));
                 return Err(no_key_err());
@@ -736,7 +737,7 @@ fn cmd_copy(fs: &Fs, btree: c::btree_id, pos: c::bpos, new_pos: c::bpos, raw: bo
             let mut new_iter = BtreeIter::new(t, btree, new_pos,
                                               RAW_EXACT | BtreeIterFlags::INTENT);
             let old = new_iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS)?;
-            if old.is_some_and(|old| !old.is_deleted()) {
+            if old.is_some_and(|old| !old.k.is_deleted()) {
                 let (inode, offset, snapshot) = (new_pos.inode, new_pos.offset, new_pos.snapshot);
                 user_err = Some(anyhow!("{inode}:{offset}:{snapshot} is occupied"));
                 return Err(no_key_err());

@@ -4,14 +4,14 @@
 
 use crate::cstructs::c;
 use crate::types::{Le32, Le64};
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, grown, CStruct, Plain, TypeInfo, View};
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, grown, CStruct, Plain, TypeInfo, View, SizedVal};
 
 c_const! {
     #[c_int]
     pub const BCACHEFS_ROOT_SUBVOL: u32 = 1;
 }
 
-#[grown(from = creation_parent)]
+#[grown(from = creation_parent, bkey)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_name(bch_subvolume)]
@@ -72,7 +72,7 @@ c_bitmask! {
     }
 }
 
-#[grown(from = depth)]
+#[grown(from = depth, bkey)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_name(bch_snapshot)]
@@ -192,7 +192,7 @@ c_bitmask! {
  * subvolume that other snapshots were created from:
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, View, SizedVal)]
 #[c_name(bch_snapshot_tree)]
 pub struct SnapshotTree {
     pub v: c::bch_val,

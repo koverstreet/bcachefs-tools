@@ -17,7 +17,7 @@ use std::ops::ControlFlow;
 use anyhow::anyhow;
 use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::BkeySC;
-use bcachefs_kernel::util::vstructs::{plain_bytes, VstructRef};
+use bcachefs_kernel::util::vstructs::{assume_validated, plain_bytes, VstructRef};
 
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::grow_on_erange;
@@ -127,6 +127,9 @@ impl<'h> OnlineBtreeIter<'h> {
             .map_err(|e| anyhow!("reply at byte {}: {e}", self.pos))?;
         self.pos += k.as_bytes().len();
 
+        // SAFETY: XXX: the kernel validated it - by its version's validate,
+        // not ours: the iterator should hand out Unvalidated keys
+        let k = unsafe { assume_validated(k) };
         Ok(Some(BkeySC::from(k.key())))
     }
 

@@ -747,9 +747,9 @@ pub type Head<T> = <T as Unsized>::Head;
 /// # Safety
 /// Self is Head's fields, every bit pattern of each valid, then its tail at
 /// TAIL - size_of::<Head>(), or within it; from_raw() and from_raw_mut() make
-/// a pointer to all of @bytes, which are no fewer than Head's - a reference
-/// from it claims them, and none past, if they're a whole number of Self's
-/// alignment long too.
+/// a pointer to all of @bytes - a sized Self's, to its first size_of::<Self>()
+/// - which are no fewer than Head's: a reference from it claims them, and none
+/// past, if they're a whole number of Self's alignment long too.
 pub unsafe trait Unsized {
     /// What precedes the tail: what it derefs to.
     type Head;

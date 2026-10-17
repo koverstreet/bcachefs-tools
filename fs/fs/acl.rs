@@ -349,7 +349,7 @@ mod vfs {
 
             let mut k = xattr::new_key(t, ty.xattr_type(), b"", encoded_len(entries()))?
                 .ok_or(BchError::from(c::E2BIG))?;
-            encode(entries(), xattr::value_mut(k.k_i_mut()));
+            encode(entries(), xattr::value_mut(k.as_mut()));
             Ok(k)
         }
     }

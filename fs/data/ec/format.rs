@@ -8,7 +8,7 @@ use cstruct_macros::{bitfield, whole, CStruct, Plain, TypeInfo};
 use nestify::nest;
 
 nest! {
-    #[whole(tail = ptrs: [u8])]
+    #[whole(tail = ptrs: [u8], bkey)]
     #[repr(C, align(8))]
     #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
     #[c_packed]

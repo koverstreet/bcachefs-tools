@@ -5,9 +5,9 @@
 use crate::cstructs::c;
 use crate::types::{c_default, Le32, Le64};
 use core::ffi::c_ulong;
-use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, grown, whole, CStruct, Plain, TypeInfo, View};
+use cstruct_macros::{c_bitmask, c_const, c_enum, c_xmacro, grown, whole, CStruct, Plain, TypeInfo, View, SizedVal};
 
-#[whole(tail = data: [u8])]
+#[whole(tail = data: [u8], bkey)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
@@ -39,7 +39,7 @@ c_enum! {
     }
 }
 
-#[whole(tail = data: [u8])]
+#[whole(tail = data: [u8], bkey)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 #[c_packed]
@@ -64,7 +64,7 @@ c_xmacro! {
     }
 }
 
-#[whole(tail = data: [u8])]
+#[whole(tail = data: [u8], bkey)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
@@ -110,7 +110,7 @@ c_bitmask! {
  *     bucket can't be reused until this seq is flushed to disk.
  *     0 means no journal delay needed (noflush/fast discard path).
  */
-#[grown(from = journal_seq_empty)]
+#[grown(from = journal_seq_empty, bkey)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
@@ -157,7 +157,7 @@ c_const! {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, CStruct, Plain, TypeInfo, View)]
+#[derive(Clone, Copy, CStruct, Plain, TypeInfo, View, SizedVal)]
 #[c_packed]
 #[c_name(bch_bucket_gens)]
 pub struct BucketGens {

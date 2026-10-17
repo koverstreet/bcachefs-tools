@@ -27,7 +27,7 @@ pub fn keys_merge<'a, 't>(
     b:   BkeySC<'_>,
 ) -> Result<TransBkey<'a, 't>, BchError> {
     unsafe {
-        TransBkey::from_raw(t, c::bch2_damage_keys_merge(t.raw(), pos, a.to_raw(), b.to_raw()))
+        TransBkey::from_raw(t, c::bch2_damage_keys_merge(t.raw(), pos, a.into(), b.into()))
     }
 }
 

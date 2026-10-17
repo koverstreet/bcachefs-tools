@@ -12,7 +12,8 @@
 //! fsck-inject tests each path: creating vs restoring lost+found, adopting a
 //! reattach dirent after a partial commit, a taken name, the descendant fixup.
 
-use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN};
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{pos, spos, POS_MIN};
 use crate::btree::iter::{
     is_restart, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
@@ -244,7 +245,7 @@ fn lookup_lostfound(t: &TransAttempt<'_, '_>, snapshot: u32)
     let mut root_inode = bch_err_msg!(fs,
         inode::find_by_inum_snapshot(t, root_inum.inum, snapshot, BtreeIterFlags::empty()),
         "looking up root inode {} in snapshot {snapshot}, from\n  {}",
-        root_inum.inum, BkeySC::from(subvol.k_i()).to_text(fs))?;
+        root_inum.inum, (&subvol).to_text(fs))?;
 
     let root_hash = str_hash::hash_info_init(fs, &root_inode)?;
 

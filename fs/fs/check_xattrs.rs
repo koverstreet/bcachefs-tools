@@ -14,6 +14,7 @@
 //! walker's inodes: a restarted commit must see the check fire again, and once
 //! the repair commits the walker refetches (see InodeWalker).
 
+use crate::btree::bkey::prelude::*;
 use crate::acl::AclType;
 use crate::btree::bkey::{pos, BkeySC};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};

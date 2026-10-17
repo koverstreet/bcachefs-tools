@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, SPOS_MAX};
 use crate::btree::iter::{
     polonius_key, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey,
@@ -239,7 +240,7 @@ pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
 
     let inode = insert.k().p.inode;
     *iter = BtreeIter::new(t, T::BTREE.0,
-                           spos(inode, T::hash_bkey(hash_info, BkeySC::from(insert.k_i())), snapshot),
+                           spos(inode, T::hash_bkey(hash_info, BkeySC::from(&*insert)), snapshot),
                            peek_flags);
 
     // The first slot the key could go in, if there's no key of its name:
@@ -248,7 +249,7 @@ pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
     // A key of its name, or a hole: the end of its probe sequence
     let found = iter.find_max_norestart(t, pos(inode, u64::MAX), |iter, k| Ok(
         if is_visible_key::<T>(inum, k) {
-            T::same_name(k, BkeySC::from(insert.k_i()))     // else a hash collision
+            T::same_name(k, BkeySC::from(&*insert))     // else a hash collision
         } else {
             if slot.is_none() && !must_replace {
                 slot = Some(iter.copy());
@@ -620,7 +621,7 @@ impl Repair<'_> {
             write!(name, ".fsck_renamed-{i}");
 
             new.k_mut().u64s = u8::MAX;
-            dirent::init_name(fs, new.k_i_mut(), self.hash_info, name.as_os_str(), None)?;
+            dirent::init_name(fs, new.as_mut(), self.hash_info, name.as_os_str(), None)?;
 
             let mut iter = BtreeIter::uninit();
             match set_or_get_in_snapshot::<Dirents>(t, &mut iter, self.hash_info, dir,
@@ -629,7 +630,7 @@ impl Repair<'_> {
                                                     UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)? {
                 None => {
                     *self.updated_before_k_pos |= new.k().p < old.k.p;
-                    return self.update_backpointers::<Dirents>(t, old.k.p, new.k_i());
+                    return self.update_backpointers::<Dirents>(t, old.k.p, new.as_ref());
                 }
                 // name taken - record a sample of the dirents that hold them
                 Some(dup) if i < 10 => write!(collisions, "\n{}", dup.to_text(fs)),
@@ -720,7 +721,7 @@ impl Repair<'_> {
         t.iter_traverse(&mut k_iter)?;
         delete_at::<T>(t, self.hash_info, &mut k_iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
-        self.update_backpointers::<T>(t, k.k.p, new.k_i())?;
+        self.update_backpointers::<T>(t, k.k.p, new.as_ref())?;
         t.commit_lazy(CommitFlags::NO_ENOSPC)
     }
 
@@ -768,7 +769,7 @@ impl Repair<'_> {
         delete_at::<Dirents>(t, self.hash_info, &mut iter,
                              UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
-        self.repair_key::<Dirents>(t, BkeySC::from(new.k_i()), None)?;
+        self.repair_key::<Dirents>(t, BkeySC::from(&new), None)?;
         Err(fs.err(bch_errcode::BCH_ERR_str_hash_key_repaired))
     }
 
@@ -790,11 +791,11 @@ impl Repair<'_> {
         let found = iter.find_max_norestart(t, SPOS_MAX, |_, k| Ok(
             k.k.p == hash_k.k.p ||
             (k.k.type_ == T::KEY_TYPE.0 as u8 && T::same_name(k, hash_k)) ||
-            k.is_deleted()))?;
+            k.k.is_deleted()))?;
 
         match found {
             Some(k) if k.k.p == hash_k.k.p => {}
-            Some(hole) if hole.is_deleted() => return self.bad_hash::<T>(t, hash_k, hash),
+            Some(hole) if hole.k.is_deleted() => return self.bad_hash::<T>(t, hash_k, hash),
             Some(dup) => {
                 // A repair of the hash info commits, and restarts: past this,
                 // nothing's been committed and @dup is still good
@@ -804,7 +805,7 @@ impl Repair<'_> {
             None => {}
         }
 
-        if hash_k.key_type() == c::bch_bkey_type::KEY_TYPE_dirent {
+        if hash_k.k.key_type() == c::bch_bkey_type::KEY_TYPE_dirent {
             self.check_dirent(t, hash_k)?;
         }
         Ok(())

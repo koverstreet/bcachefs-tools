@@ -1,3 +1,4 @@
+use bcachefs_kernel::btree::bkey::prelude::*;
 use anyhow::anyhow;
 use bch_bindgen::c;
 use bcachefs_kernel::metadata_version;

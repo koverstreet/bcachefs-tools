@@ -52,7 +52,8 @@
 //! outside it, with its own lock.
 
 use crate::alloc::buckets::DiskReservation;
-use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, BkeySCTyped, POS_MIN};
+use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, Typed, POS_MIN};
+use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{
     commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
     TransBkey, UpdateTriggerFlags,
@@ -330,7 +331,7 @@ fn check_no_data(t: &TransAttempt<'_, '_>, id: u32, op: &str, run: Option<&Run<'
     let mut msg = Printbuf::new();
     let _ = writeln!(msg, "{op} snapshot node {id} ({shape}) still has {} keys / {} sectors accounted to it - refusing, to prevent data loss; scheduling repair:{acct}",
                      acct.keys(), acct.sectors());
-    let _ = writeln!(msg, "  {}", BkeySC::from(s.k_i()).to_text(fs));
+    let _ = writeln!(msg, "  {}", (&s).to_text(fs));
 
     // The content passes, per btree, because their key_has_snapshot repairs
     // are what can remove stranded keys - check_inodes alone can't repair a
@@ -485,7 +486,7 @@ fn check_deletable(t: &TransAttempt<'_, '_>, id: u32, delete_interior: bool, run
             c::bcachefs_metadata_version::bcachefs_metadata_version_per_dev_fragmentation_lru.0) {
             let mut msg = LogMsg::new(fs);
             let _ = writeln!(msg, "deleting node with bad subvolume pointer:");
-            let _ = write!(msg, "{}", BkeySC::from(s.k_i()).to_text(fs));
+            let _ = write!(msg, "{}", (&s).to_text(fs));
             return fs.throw(bch_errcode::BCH_ERR_EINVAL_snapshot_delete_bad_subvol);
         }
     }
@@ -665,7 +666,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::
     let id = u.k().p.offset as u32;
 
     let mut msg = LogMsg::new(fs);
-    let _ = writeln!(msg, "{}", BkeySC::from(u.k_i()).to_text(fs));
+    let _ = writeln!(msg, "{}", u.to_text(fs));
 
     if u.v().children()[1] != 0 {
         bch_err!(fs, "cannot undelete a node with two children");
@@ -719,7 +720,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::
         return fs.throw(bch_errcode::BCH_ERR_fsck_repair_unimplemented);
     };
 
-    let _ = writeln!(msg, "attaching to child  {}", BkeySC::from(child.k_i()).to_text(fs));
+    let _ = writeln!(msg, "attaching to child  {}", child.to_text(fs));
 
     let parent_id = child.v().parent();
     if parent_id != 0 && parent_id <= id {
@@ -733,7 +734,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::
             return cannot_undelete(fs, &mut msg, "parent no longer exists");
         };
 
-        let _ = writeln!(msg, "attaching to parent {}", BkeySC::from(parent.k_i()).to_text(fs));
+        let _ = writeln!(msg, "attaching to parent {}", parent.to_text(fs));
 
         if !in_tree(parent.v()) {
             return cannot_undelete(fs, &mut msg, "parent is itself deleted");
@@ -751,7 +752,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::
             Err(e) => return Err(e),
             Ok(mut s_t) => if s_t.v().root_snapshot.get() == child_id {
                 s_t.v_mut().root_snapshot = id.into();
-                let _ = writeln!(msg, "updated tree {}", BkeySC::from(s_t.k_i()).to_text(fs));
+                let _ = writeln!(msg, "updated tree {}", s_t.to_text(fs));
             },
         }
     }
@@ -835,14 +836,14 @@ pub fn delete_dead_key<'a, 't>(
 
         match dst_iter.peek_slot(t)? {
             Some(dst_k) if btree == c::btree_id::damage &&
-                           k.key_type() == damage && dst_k.key_type() == damage => {
+                           k.k.key_type() == damage && dst_k.k.key_type() == damage => {
                 // Damage entries merge instead of dropping: the dying key can
                 // hold counts recorded after the descendant's key was created,
                 // so "descendant overwrote it" never applies:
                 let new = damage::keys_merge(t, dst, dst_k, k)?;
                 t.update(&dst_iter, &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
             }
-            Some(dst_k) if !dst_k.is_deleted() => {}
+            Some(dst_k) if !dst_k.k.is_deleted() => {}
             _ => {
                 let mut new = t.bkey_make_mut_noupdate(k)?;
                 new.k_mut().p = dst;
@@ -1221,7 +1222,7 @@ fn fix_child_of_deleted_snapshot(
     let fs = t.fs();
     let id = k.k.p.offset as u32;
 
-    let BkeySCTyped::snapshot(k) = k.typed() else { return Ok(()) };
+    let Typed::snapshot(k) = k.typed() else { return Ok(()) };
 
     if live_child_of(deleted, id).is_some() {
         return Ok(());

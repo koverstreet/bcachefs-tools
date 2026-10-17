@@ -75,7 +75,7 @@ use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
 use crate::util::vstructs::{floored_by_self, vstruct, vstruct_container, Head, FlexArray};
 use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, grown, tagged_union,
-                     unsized_vstruct, whole, CStruct, Plain, TypeInfo};
+                     unsized_vstruct, whole, CStruct, Plain, TypeInfo, SizedVal};
 #[cfg(__KERNEL__)]
 use cstruct_macros::c_typedef;
 
@@ -314,6 +314,10 @@ c_enum! {
     #[flags]
     pub enum bch_bkey_type_flags: u32 {
         BKEY_TYPE_strict_btree_checks = 1 << 0,
+        /* Its value has pointers - extent entries: bch2_bkey_ptrs_c()'s types */
+        BKEY_TYPE_ptrs                = 1 << 1,
+        /* An extents btree may hold it - deleted, and what BCH_BTREE_IDS() allows them */
+        BKEY_TYPE_extent              = 1 << 2,
     }
 }
 
@@ -343,26 +347,26 @@ c_xmacro! {
      * - accounting's, damage's - checks it has an entry in its own validate.
      */
     BCH_BKEY_TYPES(x) {
-        (deleted,               0,  0, _,
+        (deleted,               0,  BKEY_TYPE_extent, _,
          "Transient during btree updates; inserting a deleted key "
          "removes any existing key at that position. "
          "Stripped during btree node writes."),
-        (whiteout,              1,  0, _,
+        (whiteout,              1,  BKEY_TYPE_extent, _,
          "Blocks visibility of ancestor snapshot versions of a key"),
-        (error,                 2,  0, err,
+        (error,                 2,  BKEY_TYPE_extent, err,
          "Marks an extent as containing unrecoverable errors"),
-        (cookie,                3,  0, _,
+        (cookie,                3,  BKEY_TYPE_extent, _,
          "Used by reconcile to track option changes via "
          "incrementing version numbers in the reconcile_scan btree"),
         (hash_whiteout,         4,  BKEY_TYPE_strict_btree_checks, _,
          "Whiteout for hash table btrees (dirents, xattrs) that "
          "preserves hash chain integrity"),
-        (btree_ptr,             5,  BKEY_TYPE_strict_btree_checks, _,
+        (btree_ptr,             5,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs, _,
          "Btree node pointer (v1, legacy)"),
-        (extent,                6,  BKEY_TYPE_strict_btree_checks, _,
+        (extent,                6,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_extent, _,
          "File data extent with device pointers, checksums, and "
          "optional compression metadata"),
-        (reservation,           7,  BKEY_TYPE_strict_btree_checks, _,
+        (reservation,           7,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
          "Disk space reservation for a file region"),
         (inode,                 8,  BKEY_TYPE_strict_btree_checks, _,
          "Inode metadata (v1, legacy)"),
@@ -376,19 +380,19 @@ c_xmacro! {
          "Bucket allocation metadata (v1, legacy)"),
         (quota,                 13, BKEY_TYPE_strict_btree_checks, _,
          "Quota counters for a user, group, or project"),
-        (stripe,                14, BKEY_TYPE_strict_btree_checks, _,
+        (stripe,                14, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs, _,
          "Erasure code stripe metadata with parity pointers"),
-        (reflink_p,             15, BKEY_TYPE_strict_btree_checks, _,
+        (reflink_p,             15, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
          "Pointer from the extents btree to an indirect extent "
          "in the reflink btree"),
-        (reflink_v,             16, BKEY_TYPE_strict_btree_checks, _,
+        (reflink_v,             16, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_extent, _,
          "Indirect extent with refcount in the reflink btree"),
-        (inline_data,           17, BKEY_TYPE_strict_btree_checks, _,
+        (inline_data,           17, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
          "Small file data stored inline in the btree"),
-        (btree_ptr_v2,          18, BKEY_TYPE_strict_btree_checks, _,
+        (btree_ptr_v2,          18, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs, _,
          "Btree node pointer (v2) with sequence number and "
          "min_key for more efficient traversal"),
-        (indirect_inline_data,  19, BKEY_TYPE_strict_btree_checks, _,
+        (indirect_inline_data,  19, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
          "Reflinked inline data with refcount"),
         (alloc_v2,              20, BKEY_TYPE_strict_btree_checks, _,
          "Bucket allocation metadata (v2, legacy)"),
@@ -401,7 +405,7 @@ c_xmacro! {
          "Inode metadata (v2) with journal sequence number"),
         (alloc_v3,              24, BKEY_TYPE_strict_btree_checks, _,
          "Bucket allocation metadata (v3, legacy)"),
-        (set,                   25, 0, _,
+        (set,                   25, BKEY_TYPE_extent, _,
          "Empty value; presence of the key is the information"),
         (lru,                   26, BKEY_TYPE_strict_btree_checks, _,
          "LRU tracking entry for cache eviction"),
@@ -425,7 +429,7 @@ c_xmacro! {
          "(replicas, compression, device usage)"),
         (inode_alloc_cursor,    35, BKEY_TYPE_strict_btree_checks, _,
          "Per-CPU inode number allocation cursor"),
-        (extent_whiteout,       36, BKEY_TYPE_strict_btree_checks, _,
+        (extent_whiteout,       36, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
          "Whiteout specific to the extents btree, blocking "
          "visibility of ancestor snapshot extent versions"),
         (logged_op_stripe_update, 37, BKEY_TYPE_strict_btree_checks, _,
@@ -449,27 +453,27 @@ c_enum! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_name(bch_deleted)]
 pub struct Deleted {
     pub v: c::bch_val,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_name(bch_whiteout)]
 pub struct Whiteout {
     pub v: c::bch_val,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_name(bch_extent_whiteout)]
 pub struct ExtentWhiteout {
     pub v: c::bch_val,
 }
 
-#[grown(from = err)]
+#[grown(from = err, bkey)]
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_name(bch_error)]
@@ -523,7 +527,7 @@ c_enum! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_name(bch_cookie)]
 pub struct Cookie {
     pub v: c::bch_val,
@@ -531,14 +535,14 @@ pub struct Cookie {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_name(bch_hash_whiteout)]
 pub struct HashWhiteout {
     pub v: c::bch_val,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_name(bch_set)]
 pub struct Set {
     pub v: c::bch_val,
@@ -554,7 +558,7 @@ pub struct bch_csum {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo, SizedVal)]
 #[c_packed]
 #[c_name(bch_backpointer)]
 pub struct Backpointer {

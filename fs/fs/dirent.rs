@@ -12,6 +12,7 @@
 pub(crate) mod format;
 
 pub use format::{d_type_str, set_field, DirentName, DirentTarget, RawNames};
+use crate::btree::bkey::prelude::*;
 use format::{D_NAME_OFFSET, D_NAMES_OFFSET};
 
 use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC};
@@ -48,7 +49,7 @@ impl<'k> Dirent<'k> {
     pub fn new(k: BkeySC<'k>) -> Option<Self> {
         let k = k.arm::<c::Dirent>()?;
         let v = k.v();
-        let names = RawNames::new(k.s_c()).names()
+        let names = RawNames::new(k.untyped()).names()
             .expect("dirent names within the value, as validate checked");
         Some(Dirent { k, v, names })
     }
@@ -130,7 +131,7 @@ pub fn alloc_max<'a, 't>(t: &TransAttempt<'a, 't>, pos: c::bpos)
 
 /// Point @dst, a dirent, at what @src points at: as dirent_copy_target().
 pub fn copy_target(dst: &mut TransBkey<'_, '_>, src: Dirent<'_>) {
-    let d = dst.k_i_mut().arm_mut::<c::Dirent>().expect("a dirent").v_mut();
+    let d = dst.as_mut().arm::<c::Dirent>().expect("a dirent").v_mut();
     d.target = src.v().target;
     d.set_d_type(src.d_type());
 }
@@ -155,7 +156,7 @@ pub fn init_name(
 
     let casefold = !hash_info.cf_encoding.is_null();
     debug_assert!(casefold || cf_name.is_none(), "a casefolded name for a dirent that isn't");
-    k.arm_mut::<c::Dirent>().expect("a dirent").v_mut().set_d_casefold(casefold as u8);
+    k.arm::<c::Dirent>().expect("a dirent").v_mut().set_d_casefold(casefold as u8);
 
     let end = if !casefold {
         let mut s = BkeyS::from(&mut *k);
@@ -200,7 +201,7 @@ fn casefold_name(
     };
 
     let cf_block = unsafe {
-        &mut k.arm_mut::<c::Dirent>().expect("a dirent").v_mut().name_block.d_cf_name_block
+        &mut k.arm::<c::Dirent>().expect("a dirent").v_mut().name_block.d_cf_name_block
     };
     cf_block.d_name_len    = (name.len() as u16).into();
     cf_block.d_cf_name_len = (cf_len as u16).into();
@@ -234,7 +235,7 @@ pub fn create_key<'a, 't>(
 ) -> Result<TransBkey<'a, 't>, BchError> {
     let mut k = alloc_max(t, pos(dir.inum, 0))?;
 
-    let d = k.k_i_mut().arm_mut::<c::Dirent>().expect("a dirent").v_mut();
+    let d = k.as_mut().arm::<c::Dirent>().expect("a dirent").v_mut();
     d.set_d_type(d_type);
     if d_type as u32 != c::DT_SUBVOL {
         d.target.d_inum = target.into();
@@ -245,7 +246,7 @@ pub fn create_key<'a, 't>(
         };
     }
 
-    init_name(t.fs(), k.k_i_mut(), hash_info, name, cf_name)?;
+    init_name(t.fs(), k.as_mut(), hash_info, name, cf_name)?;
     Ok(k)
 }
 
@@ -362,7 +363,7 @@ pub fn maybe_casefold<'a>(
 #[c_export]
 pub unsafe extern "C" fn bch2_dirent_get_name(d: c::bkey_s_c_dirent) -> c::qstr {
     let k = c::bkey_s_c::from(d);
-    qstr(Dirent::new(BkeySC::from(&k)).expect("a dirent").name())
+    qstr(Dirent::new(unsafe { BkeySC::from_c(&k) }).expect("a dirent").name())
 }
 
 /// What @d, a dirent in directory @dir, points at - an inode in @dir's
@@ -398,7 +399,7 @@ pub unsafe extern "C" fn bch2_dirent_read_target(
     let k = c::bkey_s_c::from(d);
 
     match read_target(&unsafe { trans.attempt_in_progress() }, dir,
-                      Dirent::new(BkeySC::from(&k)).expect("a dirent")) {
+                      Dirent::new(unsafe { BkeySC::from_c(&k) }).expect("a dirent")) {
         Ok(Some(t)) => {
             target.write(t);
             0
@@ -465,7 +466,7 @@ pub unsafe extern "C" fn bch2_dirent_lookup_key<'t>(
 ) -> c::bkey_s_c {
     match lookup_key(&unsafe { trans.attempt_in_progress() }, iter,
                      dir, hash_info, unsafe { qstr_name(name) }, BtreeIterFlags::empty()) {
-        Ok(k)  => k.to_raw(),
+        Ok(k)  => k.into(),
         Err(e) => c::bkey_s_c {
             k: (-(e.raw() as isize)) as *mut c::bkey,
             v: core::ptr::null_mut(),
@@ -565,7 +566,8 @@ impl DirContext<'_> {
     fn emit(&mut self, t: &TransAttempt<'_, '_>, d: Dirent<'_>, target: c::subvol_inum)
         -> Result<bool, BchError>
     {
-        let d = d.k().to_c();
+        // SAFETY: for bch2_dir_emit(), which copies the entry out, not keeping it
+        let d = unsafe { d.k().to_c() };
         match unsafe { c::bch2_dir_emit(t.raw(), self.0, d, target) } {
             0              => Ok(true),
             ret if ret > 0 => Ok(false),
@@ -652,7 +654,7 @@ impl OldDirent {
 
     /// Point @dst at what this pointed at: as dirent_copy_target().
     fn copy_target_to(&self, dst: &mut TransBkey<'_, '_>) {
-        let d = dst.k_i_mut().arm_mut::<c::Dirent>().expect("a dirent").v_mut();
+        let d = dst.as_mut().arm::<c::Dirent>().expect("a dirent").v_mut();
         d.target = self.target;
         d.set_d_type(self.d_type);
     }
@@ -661,7 +663,7 @@ impl OldDirent {
 /// If @k is a subvolume's dirent, it lists in @dir's subvolume - the
 /// directory it's being moved into.
 fn set_subvol_parent(k: &mut TransBkey<'_, '_>, dir: c::subvol_inum) {
-    if let Some(d) = k.k_i_mut().arm_mut::<c::Dirent>().map(|k| k.v_mut()) {
+    if let Some(d) = k.as_mut().arm::<c::Dirent>().map(|k| k.v_mut()) {
         if d.d_type() as u32 == c::DT_SUBVOL {
             d.set_parent_subvol(dir.subvol as u32);
         }
