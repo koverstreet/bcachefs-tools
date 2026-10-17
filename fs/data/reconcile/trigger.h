@@ -144,10 +144,6 @@ DEFINE_CLASS(per_snapshot_io_opts, struct per_snapshot_io_opts,
 	     per_snapshot_io_opts_init(c),
 	     struct bch_fs *c);
 
-int bch2_bkey_get_io_opts(struct btree_trans *,
-			  struct per_snapshot_io_opts *, struct bkey_s_c,
-			  struct bch_inode_opts *opts);
-
 int bch2_update_reconcile_opts(struct btree_trans *,
 			       struct per_snapshot_io_opts *,
 			       struct bch_inode_opts *,
@@ -155,11 +151,6 @@ int bch2_update_reconcile_opts(struct btree_trans *,
 			       unsigned level,
 			       struct bkey_s_c,
 			       enum set_needs_reconcile_ctx);
-
-int bch2_bkey_set_needs_reconcile(struct btree_trans *,
-				  struct per_snapshot_io_opts *, struct bch_inode_opts *,
-				  struct bkey_s, unsigned,
-				  enum set_needs_reconcile_ctx, u32);
 
 int bch2_extent_trigger_set_needs_reconcile(struct btree_trans *,
 					    struct btree_trigger_op *);

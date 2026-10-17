@@ -148,4 +148,5 @@ c_extern! {
     pub fn bch2_trans_mark_dev_sb(c: *mut c::bch_fs, ca: *mut c::bch_dev,
                                   flags: c::btree_iter_update_trigger_flags) -> c_int;
     pub fn bch2_buckets_nouse_alloc(c: *mut c::bch_fs) -> c_int;
+    pub fn bch2_trigger_extent(trans: *mut c::btree_trans, op: c::btree_trigger_op) -> c_int;
 }

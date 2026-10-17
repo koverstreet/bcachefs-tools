@@ -743,10 +743,6 @@ int bch2_bkey_drop_extra_ec_durability(struct btree_trans *,
 				       struct bkey_i *, unsigned);
 
 void bch2_extent_ptr_to_text(struct printbuf *out, struct bch_fs *, const struct bch_extent_ptr *);
-void bch2_bkey_ptrs_to_text(struct printbuf *, struct bch_fs *,
-			    struct bkey_s_c);
-int bch2_bkey_ptrs_validate(struct bch_fs *, struct bkey_s_c,
-			    const struct bkey_validate_context *);
 
 static inline bool bch2_extent_ptr_eq(struct bch_extent_ptr ptr1,
 				      struct bch_extent_ptr ptr2)

@@ -42,6 +42,8 @@ pub struct bch_fs_errors {
 c_default!(bch_fs_errors);
 
 c_extern! {
+    pub fn bch2_inum_offset_err_msg_trans_norestart(trans: *mut c::btree_trans, out: *mut c::printbuf,
+                                                    subvol: u32, pos: c::bpos) -> c_int;
     #[c_printf(2, 3)]
     pub fn bch2_fs_inconsistent(c: *mut c::bch_fs, fmt: *const c_char, ...) -> bool;
     #[c_printf(2, 3)]

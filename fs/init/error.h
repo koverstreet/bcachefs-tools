@@ -297,7 +297,6 @@ static inline void bch2_account_io_completion(struct bch_dev *ca,
 	bch2_account_io_success_fail(ca, type, success);
 }
 
-int bch2_inum_offset_err_msg_trans_norestart(struct btree_trans *, struct printbuf *, u32, struct bpos);
 void bch2_inum_offset_err_msg_trans(struct btree_trans *, struct printbuf *, u32, struct bpos);
 
 void bch2_fs_errors_exit(struct bch_fs *);
