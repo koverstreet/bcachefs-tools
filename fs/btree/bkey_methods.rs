@@ -199,6 +199,14 @@ impl TransBkey<'_, '_> {
 
 /// What a key type's trigger is called with. @new is mutable: an atomic
 /// trigger can edit the key going in, in place.
+///
+/// XXX: TriggerOp ought to be generic over its key type V, @new a V::Mut -
+/// grown to MutBkey::MIN_BYTES before any trigger runs, as
+/// bkey_make_mut_noupdate()'s copy is, the fields an older value lacks
+/// zeroed - so a trigger only ever edits fields in place. Today one can grow the key:
+/// bch2_trigger_get_mutable_new() moves the queued update to a bigger buffer
+/// mid-commit, and refuses in the atomic phase. That isn't necessarily safe,
+/// and a trigger shouldn't have to.
 pub struct TriggerOp<'a> {
     pub btree: c::btree_id,
     pub level: u32,
