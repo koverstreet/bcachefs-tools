@@ -824,7 +824,7 @@ pub fn delete_dead_key<'a, 't>(
     if live_child != 0 {
         assert!(fs.snapshots.exists(live_child), "migrating to missing snapshot {live_child}");
 
-        let btree = iter.btree_id();
+        let btree = iter.btree();
         let dst = c::bpos { snapshot: live_child, ..k.k.p };
 
         let mut dst_iter = BtreeIter::new(t, btree, dst,

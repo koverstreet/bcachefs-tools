@@ -1,4 +1,5 @@
 use super::bkey::*;
+pub use super::types::BtreeIter;
 use crate::alloc::buckets::DiskReservation;
 use crate::c;
 use crate::errcode::{
@@ -14,7 +15,6 @@ use crate::util::ffi::Opaque;
 use crate::util::log::CFnName;
 use crate::SPOS_MAX;
 use bitflags::bitflags;
-use core::cell::UnsafeCell;
 use core::fmt;
 use core::marker::PhantomData;
 use core::mem::{size_of, ManuallyDrop, MaybeUninit};
@@ -1471,7 +1471,11 @@ fn bkey_arm<'k, K: TypedBkey + ?Sized>(fs: &Fs, k: BkeySC<'k>) -> Result<BkeySC<
     }
 }
 
-impl c::btree_iter {
+/*
+ * The iterator's own: what C has as static inlines, in Rust for Rust - and
+ * the raw peeks, which the loops below wrap.
+ */
+impl BtreeIter<'_> {
     fn iter_flags(&self) -> BtreeIterFlags {
         BtreeIterFlags::from_bits_retain(self.flags)
     }
@@ -1500,44 +1504,43 @@ impl c::btree_iter {
     /// The next key up to @end, walking as @flags say: backwards with prev, a
     /// slot at a time - holes included - with slots. The static inline
     /// bch2_btree_iter_peek_max_type().
-    pub fn peek_max_type(&mut self, end: c::bpos, flags: BtreeIterFlags) -> c::bkey_s_c {
+    fn peek_max_type_raw(&mut self, end: c::bpos, flags: BtreeIterFlags) -> c::bkey_s_c {
         let slots = flags.contains(BtreeIterFlags::SLOTS);
         let prev  = flags.contains(BtreeIterFlags::PREV);
 
         unsafe {
             match (prev, slots) {
-                (false, false) => return c::bch2_btree_iter_peek_max(self, &end),
-                (true,  false) => return c::bch2_btree_iter_peek_prev_min(self, end),
+                (false, false) => return c::bch2_btree_iter_peek_max(self.raw_mut(), &end),
+                (true,  false) => return c::bch2_btree_iter_peek_prev_min(self.raw_mut(), end),
                 (true,  true)  if bkey_lt(self.pos, end) => return c::bkey_s_c::default(),
                 (false, true)  if bkey_gt(self.pos, end) => return c::bkey_s_c::default(),
                 _ => {}
             }
-            c::bch2_btree_iter_peek_slot(self)
+            c::bch2_btree_iter_peek_slot(self.raw_mut())
         }
     }
 
     /// The previous key, or with slots the slot here: the static inline
     /// bch2_btree_iter_peek_prev_type().
-    pub fn peek_prev_type(&mut self, flags: BtreeIterFlags) -> c::bkey_s_c {
+    fn peek_prev_type_raw(&mut self, flags: BtreeIterFlags) -> c::bkey_s_c {
         unsafe {
             if flags.contains(BtreeIterFlags::SLOTS) {
-                c::bch2_btree_iter_peek_slot(self)
+                c::bch2_btree_iter_peek_slot(self.raw_mut())
             } else {
-                c::bch2_btree_iter_peek_prev_min(self, POS_MIN)
+                c::bch2_btree_iter_peek_prev_min(self.raw_mut(), POS_MIN)
             }
         }
     }
-}
 
-/// A btree iterator. Its position, and the key a peek returned - whose
-/// header is in the iterator, iter->k - only change through &mut self;
-/// what changes through &self is internal state the outside world doesn't
-/// see, as an update setting up the iterator's key cache path. Hence the
-/// UnsafeCell.
-#[repr(transparent)]
-pub struct BtreeIter<'t> {
-    raw:   UnsafeCell<c::btree_iter>,
-    trans: PhantomData<&'t BtreeTrans<'t>>,
+    /// For C that takes the iterator without moving it - an update, which
+    /// may set key_cache_path, its Cell.
+    pub(crate) fn raw(&self) -> *mut c::btree_iter {
+        core::ptr::from_ref(self).cast_mut().cast()
+    }
+
+    pub(crate) fn raw_mut(&mut self) -> *mut c::btree_iter {
+        core::ptr::from_mut(self).cast()
+    }
 }
 
 /// XXX polonius: NLL problem case #3. A loop that returns the key it stops
@@ -1604,7 +1607,7 @@ impl<'t> BtreeIter<'t> {
     /// @raw is an iterator, initialized or not, that nothing else touches
     /// for 'a.
     pub(crate) unsafe fn borrow_raw<'a>(raw: *mut c::btree_iter) -> &'a mut BtreeIter<'t> {
-        unsafe { &mut *(raw as *mut BtreeIter<'t>) }
+        unsafe { &mut *raw.cast() }
     }
 
     /// As borrow_raw(), for an entry point C calls with an iterator: safe,
@@ -1614,27 +1617,9 @@ impl<'t> BtreeIter<'t> {
     }
 
     pub fn uninit() -> BtreeIter<'t> {
-        Self::from_raw(Default::default())
-    }
-
-    fn from_raw(raw: c::btree_iter) -> BtreeIter<'t> {
-        BtreeIter {
-            raw:   UnsafeCell::new(raw),
-            trans: PhantomData,
-        }
-    }
-
-    /// For C that takes the iterator without moving it - an update.
-    pub(crate) fn raw(&self) -> *mut c::btree_iter {
-        self.raw.get()
-    }
-
-    pub(crate) fn raw_mut(&mut self) -> *mut c::btree_iter {
-        self.raw.get_mut()
-    }
-
-    fn r(&self) -> &c::btree_iter {
-        unsafe { &*self.raw.get() }
+        // SAFETY: all zeroes is an iterator with no paths - whose exit, its
+        // drop, puts none
+        unsafe { core::mem::zeroed() }
     }
 
     /// The node the iterator's path holds at its level, if it has one - a
@@ -1644,7 +1629,7 @@ impl<'t> BtreeIter<'t> {
         t: &TransAttempt<'a, 't>,
     ) -> Option<BtreeNodeRef> {
         unsafe {
-            let path = (*t.raw()).paths.add(self.r().path as usize);
+            let path = (*t.raw()).paths.add(self.path as usize);
             let node = (*path).l[(*path).level() as usize].b;
 
             // The top 4095 addresses are error pointers: -MAX_ERRNO..-1
@@ -1656,62 +1641,52 @@ impl<'t> BtreeIter<'t> {
     }
 
     pub fn pos(&self) -> c::bpos {
-        self.r().pos
-    }
-
-    pub fn btree(&self) -> c::btree_id {
-        self.r().btree_id()
-    }
-
-    pub fn set_pos(&mut self, pos: c::bpos) {
-        self.raw.get_mut().set_pos(pos);
+        self.pos
     }
 
     /// For an extents iterator: back to the start of the key it's at.
     pub fn set_pos_to_extent_start(&mut self) {
         debug_assert!(self.is_extents());
-        let iter = self.raw.get_mut();
-        iter.pos = bkey_start_pos(&iter.k);
+        self.pos = bkey_start_pos(&self.k);
     }
 
     /// Look in @snapshot, at the same position.
     pub fn set_snapshot(&mut self, snapshot: u32) {
-        let iter = self.raw.get_mut();
-        iter.snapshot = snapshot;
-        iter.set_pos(c::bpos { snapshot, ..iter.pos });
+        self.snapshot = snapshot;
+        self.set_pos(c::bpos { snapshot, ..self.pos });
     }
 
     pub fn snapshot(&self) -> u32 {
-        self.r().snapshot
+        self.snapshot
     }
 
     /// Whether it walks extents - keys covering a range, ending at their
     /// position.
     pub fn is_extents(&self) -> bool {
-        self.r().flags & BtreeIterFlags::IS_EXTENTS.bits() != 0
+        self.iter_flags().contains(BtreeIterFlags::IS_EXTENTS)
     }
 
     /// Turn on @flags: for walking an iterator with flags it wasn't made
     /// with - the loops peek with the iterator's own - as C's _continue
     /// loops pass theirs.
     pub fn set_flags(&mut self, flags: BtreeIterFlags) {
-        self.raw.get_mut().flags |= flags.bits();
+        self.flags |= flags.bits();
     }
 
     /// Turn off @flags: for an iterator going on with flags it was made
     /// without.
     pub fn clear_flags(&mut self, flags: BtreeIterFlags) {
-        self.raw.get_mut().flags &= !flags.bits();
+        self.flags &= !flags.bits();
     }
 
     /// A second iterator at the same position, sharing this one's paths.
     pub fn copy(&self) -> BtreeIter<'t> {
         unsafe {
-            let mut iter: MaybeUninit<c::btree_iter> = MaybeUninit::uninit();
+            let mut iter = MaybeUninit::<BtreeIter<'t>>::uninit();
 
-            c::bch2_trans_copy_iter(iter.as_mut_ptr(), self.raw());
+            c::bch2_trans_copy_iter(iter.as_mut_ptr().cast(), self.raw());
 
-            Self::from_raw(iter.assume_init())
+            iter.assume_init()
         }
     }
 
@@ -1722,18 +1697,18 @@ impl<'t> BtreeIter<'t> {
         flags: BtreeIterFlags,
     ) -> BtreeIter<'t> {
         unsafe {
-            let mut iter: MaybeUninit<c::btree_iter> = MaybeUninit::uninit();
+            let mut iter = MaybeUninit::<BtreeIter<'t>>::uninit();
 
             c::bch2_trans_iter_init_outlined(
                 trans.trans_raw(),
-                iter.as_mut_ptr(),
+                iter.as_mut_ptr().cast(),
                 c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 pos,
                 c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
                 0
             );
 
-            Self::from_raw(iter.assume_init())
+            iter.assume_init()
         }
     }
 
@@ -1745,11 +1720,11 @@ impl<'t> BtreeIter<'t> {
         flags: BtreeIterFlags,
     ) -> BtreeIter<'t> {
         unsafe {
-            let mut iter: MaybeUninit<c::btree_iter> = MaybeUninit::uninit();
+            let mut iter = MaybeUninit::<BtreeIter<'t>>::uninit();
 
             c::__bch2_trans_node_iter_init(
                 trans.trans_raw(),
-                iter.as_mut_ptr(),
+                iter.as_mut_ptr().cast(),
                 c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 pos,
                 0,
@@ -1757,7 +1732,7 @@ impl<'t> BtreeIter<'t> {
                 c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits())
             );
 
-            Self::from_raw(iter.assume_init())
+            iter.assume_init()
         }
     }
 
@@ -1778,7 +1753,7 @@ impl<'t> BtreeIter<'t> {
         -> Result<Option<BkeySC<'k>>, BchError>
     {
         // 'k: the key is valid while self is borrowed, within the attempt
-        unsafe { bkey_s_c_to_result::<'k>(peek(self.raw.get_mut())) }
+        unsafe { bkey_s_c_to_result::<'k>(peek(self.raw_mut())) }
     }
 
     pub fn peek_max<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>, end: bpos)
@@ -1820,7 +1795,7 @@ impl<'t> BtreeIter<'t> {
         let this: &'k Self = self;
         // 'k: the key is valid while the iterator is borrowed, within the
         // attempt - shared, it can't be moved or peeked again
-        let k = unsafe { bkey_s_c_to_result::<'k>(c::bch2_btree_iter_peek_slot(this.raw.get()))? };
+        let k = unsafe { bkey_s_c_to_result::<'k>(c::bch2_btree_iter_peek_slot(this.raw()))? };
         Ok((this, bkey_arm::<K>(t.fs(), k.expect("a slot always has a key"))?))
     }
 
@@ -1841,7 +1816,7 @@ impl<'t> BtreeIter<'t> {
                                      flags: BtreeIterFlags)
         -> Result<Option<BkeySC<'k>>, BchError>
     {
-        self.peek_raw(t, |raw| unsafe { (*raw).peek_max_type(end, flags) })
+        self.peek_raw(t, |raw| unsafe { (*raw).peek_max_type_raw(end, flags) })
     }
 
     pub fn peek<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>)
@@ -1918,7 +1893,7 @@ impl<'t> BtreeIter<'t> {
             };
 
             match step_to {
-                Step::Next => if !step(self.raw.get_mut()) {
+                Step::Next => if !step(self.raw_mut()) {
                     return Ok(Default::default());
                 },
                 Step::From(pos) => self.set_pos(pos),
@@ -1936,7 +1911,7 @@ impl<'t> BtreeIter<'t> {
         P: FnMut(*mut c::btree_iter) -> c::bkey_s_c,
     {
         // 'k: the key is valid while self is borrowed, shared, within the attempt
-        let k = unsafe { bkey_s_c_to_result::<'k>(peek(self.raw.get_mut())) }?;
+        let k = unsafe { bkey_s_c_to_result::<'k>(peek(self.raw_mut())) }?;
         Ok(k.map(|k| (&*self, k)))
     }
 
@@ -1947,7 +1922,7 @@ impl<'t> BtreeIter<'t> {
     fn peek_own_type(raw: *mut c::btree_iter, end: bpos) -> c::bkey_s_c {
         unsafe {
             let flags = (*raw).iter_flags();
-            (*raw).peek_max_type(end, flags)
+            (*raw).peek_max_type_raw(end, flags)
         }
     }
 
@@ -2109,7 +2084,7 @@ impl<'t> BtreeIter<'t> {
                 Err(e) if is_restart(&e) => continue,
                 Err(e) if e.matches(bch_errcode::BCH_ERR_fc_continue) => {
                     t.verify_not_restarted();
-                    if !step(self.raw.get_mut()) {
+                    if !step(self.raw_mut()) {
                         return Ok(());
                     }
                     continue;
@@ -2130,7 +2105,7 @@ impl<'t> BtreeIter<'t> {
 
             t.verify_not_restarted();
 
-            if !step(self.raw.get_mut()) {
+            if !step(self.raw_mut()) {
                 return Ok(());
             }
         }
@@ -2213,7 +2188,7 @@ impl<'t> BtreeIter<'t> {
         ) -> Result<(), BchError>,
     {
         self.for_each_attempt_inner(trans, Some((disk_res, flags.into())),
-            |raw| unsafe { (*raw).peek_max_type(end, iter_flags) },
+            |raw| unsafe { (*raw).peek_max_type_raw(end, iter_flags) },
             |raw| unsafe { c::bch2_btree_iter_advance(raw) },
             f)
     }
@@ -2241,32 +2216,31 @@ impl<'t> BtreeIter<'t> {
         R: LoopControl,
     {
         self.for_each_inner(trans,
-            |raw| unsafe { (*raw).peek_prev_type(flags) },
+            |raw| unsafe { (*raw).peek_prev_type_raw(flags) },
             |raw| unsafe { c::bch2_btree_iter_rewind(raw) },
             f)
     }
 
     /// Step past the key just returned: false at the end of the btree.
     pub fn advance(&mut self) -> bool {
-        unsafe { c::bch2_btree_iter_advance(self.raw.get_mut()) }
+        unsafe { c::bch2_btree_iter_advance(self.raw_mut()) }
     }
 
     /// Step back past the key just returned, for walking backwards: false at
     /// the start of the btree.
     pub fn rewind(&mut self) -> bool {
-        unsafe { c::bch2_btree_iter_rewind(self.raw.get_mut()) }
+        unsafe { c::bch2_btree_iter_rewind(self.raw_mut()) }
     }
 }
 
 impl<'t> Drop for BtreeIter<'t> {
     fn drop(&mut self) {
-        unsafe { c::bch2_trans_iter_exit(self.raw.get_mut()) }
+        unsafe { c::bch2_trans_iter_exit(self.raw_mut()) }
     }
 }
 
 pub struct BtreeNodeIter<'t> {
-    raw:   c::btree_iter,
-    trans: PhantomData<&'t BtreeTrans<'t>>,
+    raw:   BtreeIter<'t>,
 }
 
 impl<'t> BtreeNodeIter<'t> {
@@ -2279,10 +2253,10 @@ impl<'t> BtreeNodeIter<'t> {
         flags: BtreeIterFlags,
     ) -> BtreeNodeIter<'t> {
         unsafe {
-            let mut iter: MaybeUninit<c::btree_iter> = MaybeUninit::uninit();
+            let mut iter = MaybeUninit::<BtreeIter<'t>>::uninit();
             c::__bch2_trans_node_iter_init(
                 trans.trans_raw(),
-                iter.as_mut_ptr(),
+                iter.as_mut_ptr().cast(),
                 c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 pos,
                 locks_want,
@@ -2290,16 +2264,13 @@ impl<'t> BtreeNodeIter<'t> {
                 c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()),
             );
 
-            BtreeNodeIter {
-                raw:   iter.assume_init(),
-                trans: PhantomData,
-            }
+            BtreeNodeIter { raw: iter.assume_init() }
         }
     }
 
     pub fn peek(&mut self) -> Result<Option<&c::btree>, BchError> {
         unsafe {
-            let b = c::bch2_btree_iter_peek_node(&mut self.raw);
+            let b = c::bch2_btree_iter_peek_node(self.raw.raw_mut());
             errptr_to_result_c(b).map(|b| if !b.is_null() { Some(&*b) } else { None })
         }
     }
@@ -2309,14 +2280,14 @@ impl<'t> BtreeNodeIter<'t> {
         end: bpos,
         flags: BtreeIterFlags,
     ) -> Result<Option<BkeySC<'i>>, BchError> {
-        unsafe { bkey_s_c_to_result(self.raw.peek_max_type(end, flags)) }
+        unsafe { bkey_s_c_to_result(self.raw.peek_max_type_raw(end, flags)) }
     }
 
     pub fn for_each<F>(&mut self, trans: &BtreeTrans<'_>, mut f: F) -> Result<(), BchError>
     where
         F: for<'a> FnMut(&'a c::btree) -> ControlFlow<()>,
     {
-        let raw = &mut self.raw as *mut c::btree_iter;
+        let raw = self.raw.raw_mut();
         loop {
             let t = trans.begin();
             let b = unsafe { c::bch2_btree_iter_peek_node(raw) };
@@ -2345,12 +2316,6 @@ impl<'t> BtreeNodeIter<'t> {
             }
             unsafe { (*raw).set_pos(end.successor()) };
         }
-    }
-}
-
-impl<'t> Drop for BtreeNodeIter<'t> {
-    fn drop(&mut self) {
-        unsafe { c::bch2_trans_iter_exit(&mut self.raw) }
     }
 }
 

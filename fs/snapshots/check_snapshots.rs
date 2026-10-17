@@ -1355,7 +1355,7 @@ pub(crate) fn check_key_has_snapshot(
 
     ret?;
 
-    write!(buf, "{} {}", iter.btree_id(), k.to_text(fs));
+    write!(buf, "{} {}", iter.btree(), k.to_text(fs));
 
     if state == IdState::SNAPSHOT_ID_deleted {
         // At runtime - data moves, bch2_data_update_init() - not in fsck, where
@@ -1374,7 +1374,7 @@ pub(crate) fn check_key_has_snapshot(
             },
             Some(live_child) => if fsck_err!(t, id::bkey_in_deleted_interior_snapshot,
                                              "key in deleted interior snapshot {buf}, migrating to live descendant {live_child}")? {
-                let (btree, inum) = (iter.btree_id(), k.k.p.inode);
+                let (btree, inum) = (iter.btree(), k.k.p.inode);
                 delete::delete_dead_key(t, iter, k, live_child)?;
                 key_has_inode_in_snapshot(t, btree, inum, live_child)?;
                 return Ok(true);

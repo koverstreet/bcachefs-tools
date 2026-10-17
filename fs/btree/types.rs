@@ -514,42 +514,61 @@ c_default!(btree_path);
  * Multiple iterators can share the same btree_path via refcounting.
  */
 nest! {
+    /// A btree iterator, in transaction 't - C's struct btree_iter. Its
+    /// position, and the key a peek returned - whose header is in the
+    /// iterator, k - change only through &mut self, iter.rs's methods; through
+    /// &self, only key_cache_path, which an update sets up. Hence its Cell.
     #[repr(C)]
-    #[derive(Clone, Copy, CStruct)]
-    pub struct btree_iter {
-        pub trans: *mut cs::btree_trans,
-        pub path: cs::btree_path_idx_t,
-        pub update_path: cs::btree_path_idx_t,
-        pub key_cache_path: cs::btree_path_idx_t,
+    #[derive(CStruct)]
+    #[c_name(btree_iter)]
+    pub struct BtreeIter<'t> {
+        pub(in crate::btree) trans: *mut cs::btree_trans,
+        pub(in crate::btree) path: cs::btree_path_idx_t,
+        pub(in crate::btree) update_path: cs::btree_path_idx_t,
+        #[c("btree_path_idx_t key_cache_path")]
+        pub(in crate::btree) key_cache_path: core::cell::Cell<cs::btree_path_idx_t>,
 
         #[c_bitfield]
         #>[bitfield(u8)]
-        pub bits: pub struct btree_iter_bits {
-            #[bits(8)] pub btree_id: cs::btree_id,
+        pub(in crate::btree) bits: pub struct btree_iter_bits {
+            #[bits(8)] pub(self) btree_id: cs::btree_id,
         },
-        pub min_depth: u8,
+        pub(in crate::btree) min_depth: u8,
 
         /* btree_iter_copy starts here: */
-        pub flags: u32,
+        pub(in crate::btree) flags: u32,
 
         /* When we're filtering by snapshot, the snapshot ID we're looking for: */
-        pub snapshot: c_uint,
+        pub(in crate::btree) snapshot: c_uint,
 
-        pub pos: cs::bpos,
+        pub(in crate::btree) pos: cs::bpos,
         /*
          * Current unpacked key - so that bch2_btree_iter_next()/
          * bch2_btree_iter_next_slot() can correctly advance pos.
          */
-        pub k: cs::bkey,
+        pub(in crate::btree) k: cs::bkey,
 
         /* BTREE_ITER_with_journal: */
-        pub journal_idx: usize,
+        pub(in crate::btree) journal_idx: usize,
         /* C's TRACK_PATH_ALLOCATED: see btree_path */
         #[cfg(any(CONFIG_BCACHEFS_LOCK_TIME_STATS, CONFIG_BCACHEFS_DEBUG))]
-        pub ip_allocated: c_ulong,
+        pub(in crate::btree) ip_allocated: c_ulong,
+
+        /* It mustn't outlive the transaction its paths are in */
+        #[c_anon("")]
+        _trans: core::marker::PhantomData<&'t cs::btree_trans>,
     }
 }
-c_default!(btree_iter);
+
+impl BtreeIter<'_> {
+    /// Set only by C, when it initializes the iterator.
+    pub fn btree(&self) -> cs::btree_id {
+        self.bits.btree_id()
+    }
+}
+
+/// C's name, as FFI declarations spell it: *mut c::btree_iter.
+pub type btree_iter = BtreeIter<'static>;
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
