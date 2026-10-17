@@ -444,9 +444,16 @@ impl<V: SizedBkey> BkeyI<V> {
     }
 
     /// @k, if it's of type @V, as an owned key: the value zero padded, u64s
-    /// as on disk.
+    /// as on disk - short of V for an older value, so to_text() doesn't print
+    /// fields it hasn't. A newer version's longer value is cut to V, its u64s
+    /// with it, as __bch2_bkey_get_i_typed() clamps it: else u64s claims value
+    /// past the copy. Written back, the copy drops the fields this version
+    /// doesn't know - which it couldn't have kept consistent with its update.
     pub fn from_key(k: BkeySC<'_>) -> Option<Self> {
-        Some(BkeyI { k: *k.k, v: V::val_copy_pad(k)? })
+        let v = V::val_copy_pad(k)?;
+        let mut hdr = *k.k;
+        hdr.set_val_bytes(hdr.val_bytes().min(size_of::<V>()));
+        Some(BkeyI { k: hdr, v })
     }
 }
 
