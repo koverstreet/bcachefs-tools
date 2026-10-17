@@ -29,6 +29,7 @@ bitfield-struct = { path = "vendor/bitfield-struct" }
 nestify = { path = "vendor/nestify" }
 bitfield = { path = "vendor/bitfield" }
 bitflags = { path = "vendor/bitflags" }
+num-traits = { path = "vendor/num-traits", default-features = false }
 paste    = { path = "vendor/paste" }
 uuid     = "1.2.2"
 # The target's ioctl number layout (util/ioctl.rs): bindgen output of each
