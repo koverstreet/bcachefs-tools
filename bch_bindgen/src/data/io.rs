@@ -224,14 +224,7 @@ impl ReadOp {
         inode: &c::bch_inode_unpacked,
         buf: &mut [u8],
     ) -> Self {
-        let mut opts: c::bch_inode_opts = unsafe { std::mem::zeroed() };
-        unsafe {
-            c::bch2_inode_opts_get_inode(
-                fs.as_ptr(),
-                inode as *const _ as *mut _,
-                &mut opts,
-            );
-        }
+        let opts = bcachefs_kernel::inode_opts::get_inode(fs, inode);
 
         let state = Box::pin(ReadState {
             rbio:       unsafe { std::mem::zeroed() },

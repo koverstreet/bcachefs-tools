@@ -1166,7 +1166,7 @@ use_clean:
 		}
 
 		/*
-		 * check_inodes runs bch2_check_inode_opts_propagated(), so
+		 * check_inodes runs inode_opts::check_propagated(), so
 		 * after it every inode's options have reached its ancestor
 		 * snapshots - and a later violation is a bug, not legacy state.
 		 */

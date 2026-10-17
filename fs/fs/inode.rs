@@ -30,7 +30,7 @@
 //! from here.
 
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void as ret_to_result, BchError, Found};
+use crate::errcode::{bch_errcode, ret_to_c, BchError, Found};
 use crate::fs::Fs;
 use crate::dirent::{self, DirentTarget};
 use crate::namei;
@@ -1931,16 +1931,6 @@ pub extern "C" fn bch2_inode_init(
 
 // ── Options and casefolding ──────────────────────────────────────────────
 
-/// @inode's options: each its own if it sets it, otherwise the filesystem's,
-/// with which it is: as bch2_inode_opts_get_inode().
-pub fn opts_get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_opts {
-    let mut opts: c::bch_inode_opts = Default::default();
-    unsafe {
-        c::bch2_inode_opts_get_inode(fs.as_ptr(), inode as *const _ as *mut _, &mut opts);
-    }
-    opts
-}
-
 /// The unicode map directory @inode's names are casefolded with, or NULL if
 /// it isn't casefolded: for its bch_hash_info.
 pub fn cf_encoding(fs: &Fs, inode: &c::bch_inode_unpacked) -> *mut c::unicode_map {
@@ -1995,15 +1985,6 @@ pub extern "C" fn bch2_inode_set_casefold(
     ret_to_c(set_casefold(&unsafe { BtreeTrans::from_c(trans).attempt_in_progress() }, inum, inode, v))
 }
 
-/// Check that @inode's options have been propagated to its descendants,
-/// repairing it if not: as bch2_check_inode_opts_propagated().
-pub fn check_opts_propagated(
-    t:     &TransAttempt<'_, '_>,
-    inode: &mut c::bch_inode_unpacked,
-) -> Result<(), BchError> {
-    ret_to_result(unsafe { c::bch2_check_inode_opts_propagated(t.raw(), inode) })
-}
-
 /// @inode's reconcile options - the ones reconcile moves its data to match,
 /// and for each whether @inode set it or inherited it: as
 /// bch2_inode_reconcile_opts_get(). An option too big for its field in
@@ -2011,9 +1992,7 @@ pub fn check_opts_propagated(
 pub fn reconcile_opts_get(fs: &Fs, inode: &c::bch_inode_unpacked)
     -> Result<c::bch_extent_reconcile, BchError>
 {
-    let mut opts = c::bch_inode_opts::default();
-    // Only reads @inode: C's signature isn't const.
-    unsafe { c::bch2_inode_opts_get_inode(fs.as_ptr(), inode as *const _ as *mut _, &mut opts) };
+    let opts = crate::inode_opts::get_inode(fs, inode);
 
     // io_opts_to_reconcile_opts()
     let mut r = c::bch_extent_reconcile::default();
@@ -2135,7 +2114,7 @@ impl c::bch_inode_unpacked {
     }
 
     /// Whether any per-inode option is set - what BCH_INODE_has_inode_opts
-    /// records: as bch2_inode_has_opts().
+    /// records.
     pub fn has_opts(&self) -> bool {
         macro_rules! any_set {
             ($($name:ident = $bits:literal,)*) => { crate::paste! {

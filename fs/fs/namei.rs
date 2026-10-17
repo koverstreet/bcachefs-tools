@@ -83,8 +83,8 @@ fn mode_to_type(mode: c::umode_t) -> u8 {
     ((mode as u32 >> 12) & 15) as u8
 }
 
-/// Whether @dir's new inodes go below 2^32: as inode_opt_get(c, dir,
-/// inodes_32bit). Inode options are stored +1, 0 for unset.
+/// Whether @dir's new inodes go below 2^32: its own inodes_32bit, else the
+/// filesystem's. Inode options are stored +1, 0 for unset.
 fn inodes_32bit(fs: &Fs, dir: &c::bch_inode_unpacked) -> bool {
     match dir.bi_inodes_32bit {
         0 => fs.opts().inodes_32bit != 0,

@@ -67,7 +67,7 @@ use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::{accounting, btree, dirent, namei, str_hash};
 use bcachefs_kernel::btree::iter::CommitFlags;
-use bcachefs_kernel::inode;
+use bcachefs_kernel::{inode, inode_opts};
 use bcachefs_kernel::snapshots::subvolume;
 use bcachefs_kernel::opt_set;
 
@@ -464,7 +464,7 @@ fn fuse_truncate(fs: &Fs, inum: c::subvol_inum, new_size: u64) -> Result<(), Bch
 
         if buf[tail..].iter().any(|&b| b != 0) {
             buf[tail..].fill(0);
-            let replicas = std::cmp::max(inode::opts_get_inode(fs, &bi).data_replicas as u32, 1);
+            let replicas = std::cmp::max(inode_opts::get_inode(fs, &bi).data_replicas as u32, 1);
             block_on(fs.write(bi.bi_inum, block_start, inum.subvol as u32,
                               replicas, &buf, new_size))?;
         }
@@ -1484,7 +1484,7 @@ impl Filesystem for BcachefsFs {
         buf[pad_start..pad_start + size].copy_from_slice(data);
 
         // Get inode opts for replicas
-        let opts = inode::opts_get_inode(fs, &bi);
+        let opts = inode_opts::get_inode(fs, &bi);
         let replicas = std::cmp::max(opts.data_replicas as u32, 1);
 
         // Write aligned buffer. new_i_size is the file's size after the write,

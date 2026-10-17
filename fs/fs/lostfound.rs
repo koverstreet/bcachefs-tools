@@ -19,7 +19,7 @@ use crate::btree::iter::{
 use crate::c;
 use crate::dirent::{self, Dirent, DirentTarget, Dirents};
 use crate::errcode::{bch_errcode, BchError, Found};
-use crate::inode;
+use crate::{inode, inode_opts};
 use crate::namei;
 use crate::snapshots::{snapshot, subvolume};
 use crate::str_hash;
@@ -117,7 +117,7 @@ fn create_lostfound(
     lostfound.bi_dir      = root_inode.bi_inum;
     lostfound.bi_snapshot = snapshot;
 
-    let is_32bit = inode::opts_get_inode(fs, root_inode).inodes_32bit != 0;
+    let is_32bit = inode_opts::get_inode(fs, root_inode).inodes_32bit != 0;
     let mut iter = BtreeIter::uninit();
     inode::create(t, &mut iter, &mut lostfound, snapshot, is_32bit)?;
 

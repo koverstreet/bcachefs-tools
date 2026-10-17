@@ -121,7 +121,6 @@ bcachefs-y		:=			\
 	errcode.o				\
 	fs/check.o				\
 	fs/dirent.o				\
-	fs/inode_opts.o				\
 	fs/quota.o				\
 	fs/str_hash.o				\
 	fs/xattr.o				\

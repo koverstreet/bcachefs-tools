@@ -21,7 +21,7 @@ use crate::util::os_str::{OsStr, OsStrExt};
 use crate::xattr::{self, Xattrs};
 use crate::{bch_err_msg, fsck_err, fsck_err_on, inode_fsck_err};
 use crate::dirent::{self, Dirent};
-use crate::{inode, namei, str_hash};
+use crate::{inode, inode_opts, namei, str_hash};
 use core::fmt;
 
 struct CheckInodes {
@@ -337,7 +337,7 @@ fn check_inode<'t>(
     }
 
     // After the flag check: the flag gates the walk
-    inode::check_opts_propagated(t, &mut u)?;
+    inode_opts::check_propagated(t, &u)?;
 
     // Only flag set, xattr missing: a lookup per flagged inode, which are
     // rare. Flag clear with an xattr - which breaks bch2_get_acl()'s short

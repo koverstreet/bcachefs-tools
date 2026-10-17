@@ -3,8 +3,8 @@
 //! Logged operations: an operation too big for one transaction - a truncate,
 //! an finsert, a stripe update, an inode option propagation - keeps a key in
 //! BTREE_ID_logged_ops while it runs, so that if we crash part way, recovery
-//! can resume it. The ops are C (io_misc.c, ec/create.c, inode_opts.c); this
-//! is starting and finishing one, and recovery resuming what's left.
+//! can resume it. The ops are in io_misc.c, ec/create.c and inode_opts.rs;
+//! this is starting and finishing one, and recovery resuming what's left.
 
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -35,20 +35,26 @@ struct LoggedOp {
     /// repaired what they walk. Either pass resumes only the ops from before
     /// this mount: see bch2_logged_ops_note_unfinished().
     early:  bool,
-    resume: unsafe extern "C" fn(*mut c::btree_trans, *mut c::bkey_i) -> c_int,
+    resume: fn(&BtreeTrans<'_>, &mut BkeyI) -> Result<(), BchError>,
 }
 
 const LOGGED_OPS: [LoggedOp; 4] = {
     type T = c::bch_bkey_type;
     [
         LoggedOp { name: "truncate", ty: T::KEY_TYPE_logged_op_truncate, early: false,
-                   resume: c::bch2_resume_logged_op_truncate },
+                   resume: |trans, k| ret_to_result_void(unsafe {
+                       c::bch2_resume_logged_op_truncate(trans.raw(), k.as_ffi_mut())
+                   }) },
         LoggedOp { name: "finsert", ty: T::KEY_TYPE_logged_op_finsert, early: false,
-                   resume: c::bch2_resume_logged_op_finsert },
+                   resume: |trans, k| ret_to_result_void(unsafe {
+                       c::bch2_resume_logged_op_finsert(trans.raw(), k.as_ffi_mut())
+                   }) },
         LoggedOp { name: "stripe_update", ty: T::KEY_TYPE_logged_op_stripe_update, early: true,
-                   resume: c::bch2_resume_logged_op_stripe_update },
+                   resume: |trans, k| ret_to_result_void(unsafe {
+                       c::bch2_resume_logged_op_stripe_update(trans.raw(), k.as_ffi_mut())
+                   }) },
         LoggedOp { name: "inode_opt_propagate", ty: T::KEY_TYPE_logged_op_inode_opt_propagate,
-                   early: false, resume: c::bch2_resume_logged_op_inode_opt_propagate },
+                   early: false, resume: crate::inode_opts::resume_propagate },
     ]
 };
 
@@ -110,7 +116,7 @@ fn resume_logged_op(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, early: bool) -> Res
 
     Err(t.close(CommitFlags::NO_ENOSPC, |trans| {
         if let Some(op) = op {
-            unsafe { (op.resume)(trans.raw(), sk.k_i_mut().as_ffi_mut()) };
+            let _ = (op.resume)(trans, sk.k_i_mut());
         }
 
         /*
@@ -118,7 +124,7 @@ fn resume_logged_op(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, early: bool) -> Res
          * Recovery finishes the op either way, so that an op that can't
          * complete doesn't wedge every subsequent mount.
          */
-        logged_op_finish(trans, sk.k_i(), CommitOpts::new())
+        finish(trans, sk.k_i(), Ok(()), CommitOpts::new())
     }))
 }
 
@@ -174,6 +180,44 @@ unsafe fn logged_op_start(t: &TransAttempt<'_, '_>, k: &mut BkeyI) -> Result<(),
     unsafe { t.update_key(&iter, k, UpdateTriggerFlags::empty()) }
 }
 
+/// Queue @k as a new op in the transaction, in the first empty slot - where
+/// @k's position is set to: as __bch2_logged_op_start(), the update a copy
+/// in transaction memory, so @k needn't outlive the call.
+pub fn start(t: &TransAttempt<'_, '_>, k: &mut BkeyI) -> Result<(), BchError> {
+    let mut iter = BtreeIter::uninit();
+    t.bkey_get_empty_slot(&mut iter, c::btree_id::logged_ops, POS_MIN, pos(INUM, u64::MAX))?;
+
+    k.k.p = iter.pos();
+
+    t.update(&iter, &t.bkey_copy(k)?, UpdateTriggerFlags::empty())
+}
+
+/// Fails once if logged_op_fail_next is armed for @ty, standing in for a crash
+/// at this point: as bch2_logged_op_inject_fail(), logged_ops.h's - a copy,
+/// while C calls that.
+///
+/// compare_exchange: arming is by type, so two ops of that type in flight
+/// would both fire.
+pub fn inject_fail(fs: &Fs, ty: c::bch_bkey_type) -> Result<(), BchError> {
+    let knob = &fs.logged_ops.fail_next;
+
+    if knob.load(Ordering::Relaxed) == ty.0 &&
+       knob.compare_exchange(ty.0, 0, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+        return fs.throw(bch_errcode::BCH_ERR_injected_logged_op_fail);
+    }
+    Ok(())
+}
+
+/// Every op with a cursor advances it through here, so it's the one place to
+/// interrupt one: the op is then left at a cursor the real code produced. As
+/// bch2_logged_op_update(), logged_ops.h's - a copy, while C calls that.
+pub fn update(t: &TransAttempt<'_, '_>, op: &BkeyI) -> Result<(), BchError> {
+    inject_fail(t.fs(), op.k.key_type())?;
+
+    t.insert_with(c::btree_id::logged_ops, t.bkey_copy(op)?, BtreeIterFlags::CACHED,
+                  UpdateTriggerFlags::empty())
+}
+
 /// # Safety
 /// @k is a key that stays put until the transaction commits.
 #[c_export]
@@ -195,18 +239,34 @@ pub unsafe extern "C" fn bch2_logged_op_start(trans: &Opaque<c::btree_trans>, k:
     ret_to_c(commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| unsafe { logged_op_start(t, k) }))
 }
 
-/*
- * Callers must hold a write ref (BCH_WRITE_REF_stripe_create,
- * BCH_WRITE_REF_fallocate, VFS sb->s_writers, or recovery context).
- *
- * We use no_check_rw because the logged operation has already completed
- * and the cleanup delete must succeed regardless of fs shutdown state —
- * otherwise we get spurious EROFS during umount.
- *
- * TODO: encode the write ref requirement in the type system so the compiler
- * enforces it.
- */
-fn logged_op_finish(trans: &BtreeTrans<'_>, k: &BkeyI, flags: CommitOpts) -> Result<(), BchError> {
+/// Delete op @k, which returned @op_ret: @op_ret, unless the delete fails.
+///
+/// Callers must hold a write ref (BCH_WRITE_REF_stripe_create,
+/// BCH_WRITE_REF_fallocate, VFS sb->s_writers, or recovery context).
+///
+/// We use no_check_rw because the logged operation has already completed
+/// and the cleanup delete must succeed regardless of fs shutdown state —
+/// otherwise we get spurious EROFS during umount.
+///
+/// TODO: encode the write ref requirement in the type system so the compiler
+/// enforces it.
+///
+/// The key goes even when @op_ret is an error: it protects against the process
+/// dying, not against the operation failing. The injected failure is the
+/// exception - it simulates the process dying, so the op has to survive.
+///
+/// From @op_ret and not the knob: the knob is one-shot and global, so by now it
+/// may have been re-armed or claimed by another op.
+pub fn finish(
+    trans:  &BtreeTrans<'_>,
+    k:      &BkeyI,
+    op_ret: Result<(), BchError>,
+    flags:  CommitOpts,
+) -> Result<(), BchError> {
+    if op_ret.as_ref().is_err_and(|e| e.matches(bch_errcode::BCH_ERR_injected_logged_op_fail)) {
+        return op_ret;
+    }
+
     commit_do(trans, None, flags.flags(CommitFlags::NO_CHECK_RW | CommitFlags::NO_ENOSPC),
               |t| t.delete(c::btree_id::logged_ops, k.k.p, UpdateTriggerFlags::empty()))
     .inspect_err(|e| {
@@ -219,16 +279,11 @@ fn logged_op_finish(trans: &BtreeTrans<'_>, k: &BkeyI, flags: CommitOpts) -> Res
          */
         let fs = trans.fs();
         fs_fatal_error!(fs, "deleting logged operation {}: {}", BkeySC::from(k).to_text(fs), e);
-    })
+    })?;
+
+    op_ret
 }
 
-/// The key goes even when @op_ret is an error: it protects against the process
-/// dying, not against the operation failing. The injected failure is the
-/// exception - it simulates the process dying, so the op has to survive.
-///
-/// From @op_ret and not the knob: the knob is one-shot and global, so by now it
-/// may have been re-armed or claimed by another op.
-///
 /// # Safety
 /// @k is a key.
 #[c_export]
@@ -238,12 +293,8 @@ pub unsafe extern "C" fn bch2_logged_op_finish(
     op_ret:       c_int,
     commit_flags: c_uint,
 ) -> c_int {
-    if ret_to_result_void(op_ret).is_err_and(|e| e.matches(bch_errcode::BCH_ERR_injected_logged_op_fail)) {
-        return op_ret;
-    }
-
     let trans = BtreeTrans::from_c(trans);
     let k = unsafe { &*BkeyI::from_raw(k) };
 
-    ret_to_c(logged_op_finish(&trans, k, CommitOpts::from_bits(commit_flags)))
+    ret_to_c(finish(&trans, k, ret_to_result_void(op_ret), CommitOpts::from_bits(commit_flags)))
 }

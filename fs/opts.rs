@@ -265,8 +265,7 @@ impl c::bch_opt_id {
     }
 
     pub fn inode_opt(self) -> Option<InodeOpt> {
-        let id = unsafe { c::bch2_opt_to_inode_opt(self.0 as core::ffi::c_int) };
-        u32::try_from(id).ok().and_then(InodeOpt::from_index)
+        InodeOpt::from_opt_id(self)
     }
 }
 
