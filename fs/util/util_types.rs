@@ -71,6 +71,7 @@ c_extern! {
     pub fn bch2_local_clock() -> u64;
     pub fn bch2_cond_resched();
     pub fn bch2_msleep(ms: c_uint);
+    pub fn bch2_fatal_signal_pending() -> bool;
     pub fn bch2_get_random_u64() -> u64;
     pub fn bch2_ktime_get_coarse_real_ts64(ts: *mut c::timespec64);
     pub fn bch2_queue_work(wq: *mut c::workqueue_struct, work: *mut c::work_struct) -> bool;

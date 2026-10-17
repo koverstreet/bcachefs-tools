@@ -1439,6 +1439,11 @@ void bch2_msleep(unsigned ms)
 	msleep(ms);
 }
 
+bool bch2_fatal_signal_pending(void)
+{
+	return fatal_signal_pending(current);
+}
+
 u64 bch2_get_random_u64(void)
 {
 	return get_random_u64();
