@@ -187,6 +187,25 @@ pub fn mutex_trylock(m: &c::mutex) -> Option<MutexGuard<'_>> {
     (locked as i32 != 0).then(|| MutexGuard(m))
 }
 
+/// An SRCU read-side section, open until dropped: srcu_read_lock().
+#[must_use = "the SRCU read section ends as soon as the guard is dropped"]
+pub struct SrcuReadGuard<'a> {
+    srcu: &'a c::srcu_struct,
+    idx:  core::ffi::c_int,
+}
+
+pub fn srcu_read_lock(srcu: &c::srcu_struct) -> SrcuReadGuard<'_> {
+    // SAFETY: an srcu_struct is changed through a shared pointer, as a mutex is
+    let idx = unsafe { c::rust_srcu_read_lock(core::ptr::from_ref(srcu).cast_mut()) };
+    SrcuReadGuard { srcu, idx }
+}
+
+impl Drop for SrcuReadGuard<'_> {
+    fn drop(&mut self) {
+        unsafe { c::rust_srcu_read_unlock(core::ptr::from_ref(self.srcu).cast_mut(), self.idx) };
+    }
+}
+
 // ── seqmutex ────────────────────────────────────────────────────────────────
 //
 // util/seqmutex.h's static inlines: a mutex, and a count of the times it's been

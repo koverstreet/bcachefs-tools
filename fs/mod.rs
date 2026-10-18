@@ -298,8 +298,6 @@ pub mod c {
     // define opaque stand-ins there.
     #[cfg(not(kernel))]
     pub enum rhash_lock_head {}
-    #[cfg(not(kernel))]
-    pub enum srcu_struct {}
 }
 
 #[allow(non_camel_case_types)]

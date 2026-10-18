@@ -85,3 +85,18 @@ void rust_mutex_assert_held(struct mutex *lock)
 {
 	lockdep_assert_held(lock);
 }
+
+/*
+ * For SrcuReadGuard: static inlines, whose kernel Rust helpers are newer than
+ * the oldest kernel we build against.
+ */
+
+int rust_srcu_read_lock(struct srcu_struct *ssp)
+{
+	return srcu_read_lock(ssp);
+}
+
+void rust_srcu_read_unlock(struct srcu_struct *ssp, int idx)
+{
+	srcu_read_unlock(ssp, idx);
+}
