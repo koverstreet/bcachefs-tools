@@ -27,6 +27,7 @@ use crate::sb::counters::events;
 use crate::types::Le64;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, Validated};
+use arrayvec::ArrayVec;
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
 
@@ -662,21 +663,19 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     }
 
     /// set_cached() each pointer of @mask, by index among the pointers, the
-    /// highest first: bch2_bkey_set_ptrs_cached_mask().
-    ///
-    /// XXX: C's - set_cached() can drop cached pointers anywhere in the key,
-    /// below a lower bit's pointer too, which the bit then misses.
-    fn set_ptrs_cached_mask(&mut self, fs: &Fs, opts: &c::bch_inode_opts, mut mask: u32)
+    /// highest first: bch2_bkey_set_ptrs_cached_mask(). The mask is read as
+    /// devices before any is made cached - set_cached() can drop cached
+    /// pointers anywhere in the key, moving the ones after them.
+    fn set_ptrs_cached_mask(&mut self, fs: &Fs, opts: &c::bch_inode_opts, mask: u32)
     where Self: BkeyVMut
     {
-        while mask != 0 {
-            let i = 31 - mask.leading_zeros();
-            mask &= !(1 << i);
+        let devs: ArrayVec<u32, { c::BCH_BKEY_PTRS_MAX as usize }> = self.ptrs(fs).enumerate()
+            .filter(|&(i, _)| i < 32 && mask & (1 << i) != 0)
+            .map(|(_, p)| u32::from(p.dev()))
+            .collect();
 
-            let dev = self.ptrs(fs).nth(i as usize).map(|p| u32::from(p.dev()));
-            if let Some(dev) = dev {
-                self.set_cached(fs, opts, dev);
-            }
+        for dev in devs.into_iter().rev() {
+            self.set_cached(fs, opts, dev);
         }
     }
 
