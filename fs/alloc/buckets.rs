@@ -4,6 +4,7 @@ use crate::btree::bkey::pos;
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
+use crate::util::rcu::ReadGuard;
 use core::cell::UnsafeCell;
 
 // ── Bucket addressing ────────────────────────────────────────────────────
@@ -41,6 +42,32 @@ impl c::bch_dev {
     /// PTR_BUCKET_POS().
     pub fn ptr_bucket_pos(&self, ptr: &c::bch_extent_ptr) -> c::bpos {
         pos(ptr.dev().into(), self.ptr_bucket(ptr))
+    }
+}
+
+// ── Bucket generations ───────────────────────────────────────────────────
+
+/// How far generation @a is past @b, or 0 if it isn't - wrapping, as gens
+/// do: gen_after().
+pub fn gen_after(a: u8, b: u8) -> u8 {
+    (a.wrapping_sub(b) as i8).max(0) as u8
+}
+
+/// A device's bucket generations, under RCU: alloc/buckets.h's.
+impl c::bch_dev {
+    /// Bucket @b's generation, for as long as @rcu's section - None if it
+    /// isn't one of the device's: bucket_gen_get_rcu().
+    pub fn bucket_gen(&self, b: u64, rcu: &ReadGuard) -> Option<u8> {
+        let (h, gens) = self.bucket_gens.read_head(rcu)?;
+        (b.wrapping_sub(h.first_bucket.into()) < h.nbuckets_minus_first as u64)
+            .then(|| gens.get(b as usize).copied())
+            .flatten()
+    }
+
+    /// How many generations @ptr's bucket has moved on from it - None for a
+    /// bucket the device doesn't have: dev_ptr_stale_rcu(), which is -1 there.
+    pub fn ptr_stale(&self, ptr: &c::bch_extent_ptr, rcu: &ReadGuard) -> Option<u8> {
+        Some(gen_after(self.bucket_gen(self.ptr_bucket(ptr), rcu)?, ptr.generation()))
     }
 }
 

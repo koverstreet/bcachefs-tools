@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{LongAligned, c_default};
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, bitfield, c_const, c_extern, TypeInfo};
+use cstruct_macros::{CStruct, bitfield, c_const, c_extern, c_rcu_array, TypeInfo};
 use nestify::nest;
 
 c_const! {
@@ -69,17 +69,23 @@ nest! {
     }
 }
 
+/// The header of a device's bucket generations: C's bucket_gens fields
+/// between nbuckets and b[].
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
-pub struct bucket_gens {
-    pub rcu: c::rcu_head,
+#[derive(CStruct)]
+pub struct BucketGensHead {
     pub first_bucket: u16,
-    pub nbuckets: usize,
     pub nbuckets_minus_first: usize,
-    #[c("u8 b[] __counted_by(nbuckets)")]
-    pub b: [u8; 0],
 }
-c_default!(bucket_gens);
+
+// SAFETY: integers; all zeroes is an empty table
+unsafe impl crate::util::rcu::RcuElement for BucketGensHead {}
+
+c_rcu_array! {
+    /// ca->bucket_gens: a device's bucket generations, published under RCU.
+    pub type BucketGensArray = crate::util::rcu::RcuArray<u8, c::BucketGensHead>
+        as struct bucket_gens { nbuckets, b };
+}
 
 /* Only info on bucket countns: */
 #[repr(C)]

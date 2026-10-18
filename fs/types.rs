@@ -352,8 +352,7 @@ pub struct bch_dev {
      * state_lock, for device resize.
      */
     pub buckets_gc: GenRadix<c::bucket>,
-    #[c("struct bucket_gens __rcu *bucket_gens")]
-    pub bucket_gens: *mut c::bucket_gens,
+    pub bucket_gens: c::BucketGensArray,
     pub oldest_gen: *mut u8,
     pub buckets_nouse: *mut c_ulong,
 
