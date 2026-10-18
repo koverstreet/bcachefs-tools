@@ -306,8 +306,8 @@ use crate::fs::Fs;
 use crate::init::passes;
 use crate::snapshots::{check_snapshots, delete, subvolume};
 use crate::util::log::{LogLevel, LogMsg};
-use crate::types::bits_to_longs;
 use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
+use crate::util::bitmap::BitArray;
 use crate::util::rcu::RcuArray;
 use crate::util::ffi::Opaque;
 use crate::util::sync::MutexGuard;
@@ -407,7 +407,7 @@ impl<'g> Table<'g> {
     /// @ancestor's bit in @id's is_ancestor[]: @ancestor is above @id, by
     /// fewer than IS_ANCESTOR_BITMAP.
     fn ancestor_bit(&self, id: u32, ancestor: u32) -> bool {
-        self.entry(id).is_some_and(|s| s.is_ancestor_bit((ancestor - id - 1) as usize))
+        self.entry(id).is_some_and(|s| s.is_ancestor.test((ancestor - id - 1) as usize))
     }
 
     /// The next node of a preorder walk: left child first, then up to the
@@ -481,11 +481,6 @@ impl c::snapshot_t {
     fn tree(&self) -> u32          { self.tree.load(Ordering::Relaxed) }
     fn subvol(&self) -> u32        { self.subvol.load(Ordering::Relaxed) }
     fn skip(&self) -> [u32; 3]     { self.skip.each_ref().map(|s| s.load(Ordering::Relaxed)) }
-
-    fn is_ancestor_bit(&self, bit: usize) -> bool {
-        let word = self.is_ancestor[bit / usize::BITS as usize].load(Ordering::Relaxed);
-        word & (1 << (bit % usize::BITS as usize)) != 0
-    }
 }
 
 // ── The table's writer ───────────────────────────────────────────────────
@@ -530,9 +525,7 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
             .chain(&e.skip).chain(&e.children) {
             store(a, 0);
         }
-        for b in &e.is_ancestor {
-            b.store(0, Ordering::Relaxed);
-        }
+        e.is_ancestor.store(&BitArray::default());
         return Ok(());
     };
 
@@ -573,7 +566,7 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
     //
     // Ids descend, so an ancestor's bit is parent - id - 1; a parent that
     // doesn't descend is damage, and wraps out of range.
-    let mut is_ancestor = [0usize; bits_to_longs(c::IS_ANCESTOR_BITMAP as usize)];
+    let mut is_ancestor = BitArray::default();
     let mut parent = id;
     loop {
         parent = table.parent(parent);
@@ -581,11 +574,9 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
         if parent == 0 || bit >= c::IS_ANCESTOR_BITMAP as usize {
             break;
         }
-        is_ancestor[bit / usize::BITS as usize] |= 1 << (bit % usize::BITS as usize);
+        is_ancestor.set(bit);
     }
-    for (a, b) in e.is_ancestor.iter().zip(is_ancestor) {
-        a.store(b, Ordering::Relaxed);
-    }
+    e.is_ancestor.store(&is_ancestor);
 
     if state == c::bch_snapshot_state::SNAPSHOT_STATE_will_delete {
         // Schedule the deleter. This may run as a BTREE_TRIGGER_atomic

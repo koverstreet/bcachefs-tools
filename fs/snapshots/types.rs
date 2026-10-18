@@ -5,9 +5,9 @@
 use crate::cstructs::c;
 use crate::types::{DArray, RustOnly, bits_to_longs, rust_only};
 use crate::util::alloc::KVVec;
+use crate::util::bitmap::AtomicBitArray;
 use crate::util::sync::{new_mutex, Mutex};
-use core::ffi::c_ulong;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize};
+use core::sync::atomic::{AtomicBool, AtomicU32};
 use cstruct_macros::{c_const, c_enum, CStruct, c_typedef, Init, TypeInfo};
 use pin_init::pin_data;
 
@@ -68,10 +68,8 @@ pub struct snapshot_t {
     pub tree: AtomicU32,
     /* bit (ancestor - id - 1) set for ancestors within 128 IDs */
     #[c("unsigned long is_ancestor[BITS_TO_LONGS(IS_ANCESTOR_BITMAP)]")]
-    pub is_ancestor: [AtomicUsize; bits_to_longs(c::IS_ANCESTOR_BITMAP as usize)],
+    pub is_ancestor: AtomicBitArray<{ bits_to_longs(c::IS_ANCESTOR_BITMAP as usize) }>,
 }
-
-const _: () = assert!(core::mem::size_of::<c_ulong>() == core::mem::size_of::<AtomicUsize>());
 
 #[repr(C)]
 #[derive(CStruct)]
