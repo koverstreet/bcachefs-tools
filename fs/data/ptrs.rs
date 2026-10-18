@@ -15,7 +15,8 @@
 //! validate reports as different errors, and to_text prints differently.
 //!
 //! The bkey methods - validate, to_text, swab - are ptrs_ops.rs's; editing a
-//! key's entries, ptrs_edit.rs's; C's names for all of it, ptrs_c_export.rs's.
+//! key's entries, ptrs_edit.rs's; picking a pointer to read, ptrs_read.rs's;
+//! C's names for all of it, ptrs_c_export.rs's.
 
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{bkey_family, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut};
@@ -33,6 +34,8 @@ use core::ops::Range;
 
 #[path = "ptrs_edit.rs"]
 mod edit;
+#[path = "ptrs_read.rs"]
+mod read;
 #[path = "ptrs_ops.rs"]
 mod ops;
 #[path = "ptrs_c_export.rs"]

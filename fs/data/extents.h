@@ -360,18 +360,6 @@ DEFINE_CLASS(bch_io_failures, struct bch_io_failures,
 	     ((struct bch_io_failures) { .ec_msg = PRINTBUF }),
 	     void)
 
-void bch2_io_failures_to_text(struct printbuf *, struct bch_fs *,
-			      struct bch_io_failures *);
-bool bch2_io_failures_all_dev_removed(struct bch_io_failures *);
-struct bch_dev_io_failures *bch2_dev_io_failures(struct bch_io_failures *, unsigned);
-struct bch_dev_io_failures *bch2_dev_io_failures_mut(struct bch_io_failures *, unsigned);
-void bch2_mark_io_failure(struct bch_io_failures *, struct extent_ptr_decoded *, int);
-void bch2_mark_dev_io_failure(struct bch_io_failures *, unsigned, int);
-int bch2_bkey_pick_read_device(struct bch_fs *, struct bkey_s_c,
-			       struct bch_io_failures *,
-			       struct extent_ptr_decoded *, unsigned,
-			       enum bch_read_flags);
-
 /* KEY_TYPE_btree_ptr: */
 
 #define bch2_bkey_ops_btree_ptr ((struct bkey_ops) {		\

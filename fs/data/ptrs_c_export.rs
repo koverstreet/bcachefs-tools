@@ -125,6 +125,52 @@ pub fn bch2_extents_match(c: &Fs, k1: BkeySC<'_>, k2: BkeySC<'_>) -> bool {
     extents_match(c, k1, k2)
 }
 
+// ── reading ──────────────────────────────────────────────────────────────
+
+#[cold]
+#[c_export]
+pub fn bch2_io_failures_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, failed: &c::bch_io_failures) {
+    failed.to_text(out, Fs::from_c(c));
+}
+
+#[c_export]
+pub fn bch2_io_failures_all_dev_removed(failed: &c::bch_io_failures) -> bool {
+    failed.all_dev_removed()
+}
+
+/// Mutable, as C's: a caller may update the record.
+#[c_export]
+pub fn bch2_dev_io_failures(failed: &mut c::bch_io_failures, dev: c_uint) -> *mut c::bch_dev_io_failures {
+    let nr = usize::from(failed.nr);
+    failed.data[..nr].iter_mut().find(|f| u32::from(f.dev) == dev).map_or(core::ptr::null_mut(), |f| f)
+}
+
+#[c_export]
+pub fn bch2_dev_io_failures_mut(failed: &mut c::bch_io_failures, dev: c_uint) -> *mut c::bch_dev_io_failures {
+    failed.dev_mut(dev)
+}
+
+#[c_export]
+pub fn bch2_mark_io_failure(failed: &mut c::bch_io_failures, p: &c::extent_ptr_decoded, err: c_int) {
+    failed.mark(p, BchError::from_raw(-err));
+}
+
+/// 1 and @pick written, 0 for nothing to read, or an error. @failed may be
+/// NULL, and @pick is written, not read.
+#[c_export]
+pub fn bch2_bkey_pick_read_device(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, failed: Option<&c::bch_io_failures>,
+                                  pick: &mut MaybeUninit<c::extent_ptr_decoded>, preferred_dev: c_uint,
+                                  flags: c_uint) -> c_int {
+    match k.pick_read_device(Fs::from_c(c), failed, preferred_dev, c::bch_read_flags::from_bits_retain(flags)) {
+        Ok(Some(p)) => {
+            pick.write(p);
+            1
+        }
+        Ok(None) => 0,
+        Err(e) => -e.raw(),
+    }
+}
+
 // ── editing ──────────────────────────────────────────────────────────────
 
 /// Where @p, a pointer C has into one of @k's entries, is: its EntryPos.
