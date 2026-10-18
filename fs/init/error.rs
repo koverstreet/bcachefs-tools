@@ -15,10 +15,11 @@
 //! }
 //! ```
 //!
-//! format_args!() is lazy, so the work is in plain functions; the macros of
-//! the same names only write the format_args!(), so call sites read as C's
-//! do. The message goes down as "%s": prefixing, ratelimiting and the
-//! superblock error counters stay __bch2_fsck_err()'s.
+//! The work is in plain functions, the message a &dyn ToText - not written
+//! when there's no error to report; the macros of the same names make the
+//! message with message!() - a format string, or a ToText - so call sites
+//! read as C's do. The message goes down as "%s": prefixing, ratelimiting and
+//! the superblock error counters stay __bch2_fsck_err()'s.
 
 use crate::btree::bkey::{BkeySC, POS_MIN};
 use crate::btree::iter::{BtreeTrans, TransAttempt};
@@ -26,10 +27,9 @@ use crate::c;
 use crate::c::{bch_fsck_flags, bch_sb_error_id};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;
 use core::ffi::CStr;
-use core::fmt;
 
 /// The fsck error ids by their BCH_SB_ERRS() names: id::inode_wrong_nlink.
 pub mod id {
@@ -75,10 +75,10 @@ fn __fsck_err(
     pos:   c::bpos,
     flags: bch_fsck_flags,
     err:   bch_sb_error_id,
-    msg:   fmt::Arguments<'_>,
+    msg:   &dyn ToText,
 ) -> Result<bool, BchError> {
     let mut buf = Printbuf::new();
-    buf.write_fmt(msg);
+    msg.to_text(&mut buf);
 
     let (fs, trans) = ctx.fsck_err_ptrs();
     let ret = unsafe {
@@ -100,7 +100,7 @@ fn __fsck_err(
 pub fn fsck_err(
     ctx: &impl FsckErrCtx,
     err: bch_sb_error_id,
-    msg: fmt::Arguments<'_>,
+    msg: &dyn ToText,
 ) -> Result<bool, BchError> {
     __fsck_err(ctx, POS_MIN,
                bch_fsck_flags::FSCK_CAN_FIX | bch_fsck_flags::FSCK_CAN_IGNORE, err, msg)
@@ -110,7 +110,7 @@ pub fn fsck_err_on(
     ctx:  &impl FsckErrCtx,
     cond: bool,
     err:  bch_sb_error_id,
-    msg:  fmt::Arguments<'_>,
+    msg:  &dyn ToText,
 ) -> Result<bool, BchError> {
     if cond { fsck_err(ctx, err, msg) } else { Ok(false) }
 }
@@ -119,7 +119,7 @@ pub fn fsck_err_on(
 pub fn mustfix_fsck_err(
     ctx: &impl FsckErrCtx,
     err: bch_sb_error_id,
-    msg: fmt::Arguments<'_>,
+    msg: &dyn ToText,
 ) -> Result<bool, BchError> {
     __fsck_err(ctx, POS_MIN, bch_fsck_flags::FSCK_CAN_FIX, err, msg)
 }
@@ -128,7 +128,7 @@ pub fn mustfix_fsck_err_on(
     ctx:  &impl FsckErrCtx,
     cond: bool,
     err:  bch_sb_error_id,
-    msg:  fmt::Arguments<'_>,
+    msg:  &dyn ToText,
 ) -> Result<bool, BchError> {
     if cond { mustfix_fsck_err(ctx, err, msg) } else { Ok(false) }
 }
@@ -139,7 +139,7 @@ pub fn inode_fsck_err(
     t:   &TransAttempt<'_, '_>,
     pos: c::bpos,
     err: bch_sb_error_id,
-    msg: fmt::Arguments<'_>,
+    msg: &dyn ToText,
 ) -> Result<bool, BchError> {
     __fsck_err(t, pos,
                bch_fsck_flags::FSCK_CAN_FIX | bch_fsck_flags::FSCK_CAN_IGNORE, err, msg)
@@ -152,16 +152,16 @@ pub fn fsck_err_flags(
     pos:   c::bpos,
     flags: bch_fsck_flags,
     err:   bch_sb_error_id,
-    msg:   fmt::Arguments<'_>,
+    msg:   &dyn ToText,
 ) -> Result<bool, BchError> {
     __fsck_err(ctx, pos, flags, err, msg)
 }
 
 /// Without offering a repair, for damage another pass owns: counted in the
 /// superblock, and logged unless it's a repeat or being ratelimited.
-pub fn fsck_err_report(fs: &Fs, err: bch_sb_error_id, msg: fmt::Arguments<'_>) {
+pub fn fsck_err_report(fs: &Fs, err: bch_sb_error_id, msg: &dyn ToText) {
     let mut buf = LogMsg::new(fs);
-    buf.write_fmt(msg);
+    msg.to_text(&mut buf);
 
     let log = count_fsck_err(fs, err, &mut buf);
     buf.set_suppressed(!log);
@@ -178,9 +178,9 @@ pub fn sb_error_count(fs: &Fs, err: bch_sb_error_id) {
 }
 
 /// fs_inconsistent(), with what the transaction has queued in the message.
-pub fn trans_inconsistent(t: &TransAttempt<'_, '_>, msg: fmt::Arguments<'_>) -> bool {
+pub fn trans_inconsistent(t: &TransAttempt<'_, '_>, msg: &dyn ToText) -> bool {
     let mut buf = Printbuf::new();
-    buf.write_fmt(msg);
+    msg.to_text(&mut buf);
 
     unsafe { c::bch2_trans_inconsistent(t.raw(), c"%s".as_ptr().cast(), buf.as_raw().buf) }
 }
@@ -188,18 +188,18 @@ pub fn trans_inconsistent(t: &TransAttempt<'_, '_>, msg: fmt::Arguments<'_>) -> 
 /// Acts as the errors option says - continue, go emergency read-only, or
 /// panic - and returns whether we're going read-only. Unlike C's, not from
 /// atomic context: formatting the message allocates, and can sleep.
-pub fn fs_inconsistent(fs: &Fs, msg: fmt::Arguments<'_>) -> bool {
+pub fn fs_inconsistent(fs: &Fs, msg: &dyn ToText) -> bool {
     let mut buf = Printbuf::new();
-    buf.write_fmt(msg);
+    msg.to_text(&mut buf);
 
     unsafe { c::bch2_fs_inconsistent(fs.as_ptr(), c"%s".as_ptr().cast(), buf.as_raw().buf) }
 }
 
 /// Go emergency read-only, logging @msg as a fatal error in @func - if this
 /// is what took us read-only: as bch2_fs_fatal_error().
-pub fn fs_fatal_error(fs: &Fs, func: &CStr, msg: fmt::Arguments<'_>) {
+pub fn fs_fatal_error(fs: &Fs, func: &CStr, msg: &dyn ToText) {
     let mut buf = Printbuf::new();
-    buf.write_fmt(msg);
+    msg.to_text(&mut buf);
 
     unsafe {
         c::bch2_fatal_error(fs.as_ptr(), func.as_ptr().cast(), c"%s".as_ptr().cast(), buf.as_raw().buf)
@@ -219,10 +219,10 @@ pub struct BkeyValidate<'a, 'k> {
 pub fn bkey_fsck_err(
     v:   &BkeyValidate<'_, '_>,
     err: bch_sb_error_id,
-    msg: fmt::Arguments<'_>,
+    msg: &dyn ToText,
 ) -> BchError {
     let mut buf = Printbuf::new();
-    buf.write_fmt(msg);
+    msg.to_text(&mut buf);
 
     let ret = unsafe {
         c::__bch2_bkey_fsck_err(v.fs.as_ptr(), v.k.into(), v.from, err,
@@ -241,93 +241,93 @@ pub fn bkey_fsck_err_on(
     v:    &BkeyValidate<'_, '_>,
     cond: bool,
     err:  bch_sb_error_id,
-    msg:  fmt::Arguments<'_>,
+    msg:  &dyn ToText,
 ) -> Result<(), BchError> {
     if cond { Err(bkey_fsck_err(v, err, msg)) } else { Ok(()) }
 }
 
-// ── Macros: the functions above, with format_args!() written for you ──────
+// ── Macros: the functions above, with message!() written for you ──────────
 
 #[macro_export]
 macro_rules! bkey_fsck_err {
     ($v:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::bkey_fsck_err($v, $err, format_args!($($msg)*))
+        $crate::init::error::bkey_fsck_err($v, $err, $crate::message!($($msg)*))
     };
 }
 
 #[macro_export]
 macro_rules! bkey_fsck_err_on {
     ($v:expr, $cond:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::bkey_fsck_err_on($v, $cond, $err, format_args!($($msg)*))
+        $crate::init::error::bkey_fsck_err_on($v, $cond, $err, $crate::message!($($msg)*))
     };
 }
 
 #[macro_export]
 macro_rules! fsck_err {
     ($ctx:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::fsck_err($ctx, $err, format_args!($($msg)*))
+        $crate::init::error::fsck_err($ctx, $err, $crate::message!($($msg)*))
     };
 }
 
 #[macro_export]
 macro_rules! fsck_err_on {
     ($ctx:expr, $cond:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::fsck_err_on($ctx, $cond, $err, format_args!($($msg)*))
+        $crate::init::error::fsck_err_on($ctx, $cond, $err, $crate::message!($($msg)*))
     };
 }
 
 #[macro_export]
 macro_rules! mustfix_fsck_err {
     ($ctx:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::mustfix_fsck_err($ctx, $err, format_args!($($msg)*))
+        $crate::init::error::mustfix_fsck_err($ctx, $err, $crate::message!($($msg)*))
     };
 }
 
 #[macro_export]
 macro_rules! mustfix_fsck_err_on {
     ($ctx:expr, $cond:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::mustfix_fsck_err_on($ctx, $cond, $err, format_args!($($msg)*))
+        $crate::init::error::mustfix_fsck_err_on($ctx, $cond, $err, $crate::message!($($msg)*))
     };
 }
 
 #[macro_export]
 macro_rules! fsck_err_flags {
     ($ctx:expr, $pos:expr, $flags:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::fsck_err_flags($ctx, $pos, $flags, $err, format_args!($($msg)*))
+        $crate::init::error::fsck_err_flags($ctx, $pos, $flags, $err, $crate::message!($($msg)*))
     };
 }
 
 #[macro_export]
 macro_rules! fsck_err_report {
     ($fs:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::fsck_err_report($fs, $err, format_args!($($msg)*))
+        $crate::init::error::fsck_err_report($fs, $err, $crate::message!($($msg)*))
     };
 }
 
 #[macro_export]
 macro_rules! trans_inconsistent {
     ($trans:expr, $($msg:tt)*) => {
-        $crate::init::error::trans_inconsistent($trans, format_args!($($msg)*))
+        $crate::init::error::trans_inconsistent($trans, $crate::message!($($msg)*))
     };
 }
 
 #[macro_export]
 macro_rules! fs_inconsistent {
     ($fs:expr, $($msg:tt)*) => {
-        $crate::init::error::fs_inconsistent($fs, format_args!($($msg)*))
+        $crate::init::error::fs_inconsistent($fs, $crate::message!($($msg)*))
     };
 }
 
 #[macro_export]
 macro_rules! fs_fatal_error {
     ($fs:expr, $($msg:tt)*) => {
-        $crate::init::error::fs_fatal_error($fs, $crate::c_function_name!(), format_args!($($msg)*))
+        $crate::init::error::fs_fatal_error($fs, $crate::c_function_name!(), $crate::message!($($msg)*))
     };
 }
 
 #[macro_export]
 macro_rules! inode_fsck_err {
     ($trans:expr, $pos:expr, $err:expr, $($msg:tt)*) => {
-        $crate::init::error::inode_fsck_err($trans, $pos, $err, format_args!($($msg)*))
+        $crate::init::error::inode_fsck_err($trans, $pos, $err, $crate::message!($($msg)*))
     };
 }

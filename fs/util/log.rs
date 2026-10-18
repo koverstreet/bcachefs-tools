@@ -18,10 +18,9 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::types::c_default;
 use crate::util::ffi::c_char;
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 use core::cell::UnsafeCell;
 use core::ffi::{c_int, c_uint, CStr};
-use core::fmt;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
 use cstruct_macros::{CStruct, c_enum, c_extern, TypeInfo};
@@ -77,15 +76,15 @@ impl LogLevel {
     }
 }
 
-/// Print @args at @level: what the bch_err!() family expands to.
-pub fn log(fs: &Fs, level: LogLevel, args: fmt::Arguments<'_>) {
+/// Print @msg at @level: what the bch_err!() family expands to.
+pub fn log(fs: &Fs, level: LogLevel, msg: &dyn ToText) {
     let mut buf = Printbuf::new();
 
     #[cfg(kernel)]
     {
         write!(buf, "bcachefs ({}): ", fs.name().to_str().unwrap_or("?"));
     }
-    buf.write_fmt(args);
+    msg.to_text(&mut buf);
     buf.newline();
 
     // KERN_SOH, level, then the message as data: a '%' in it is text.
@@ -212,7 +211,7 @@ macro_rules! bch_log_ratelimited {
         static RATELIMIT: $crate::util::log::Ratelimit = $crate::util::log::Ratelimit::new();
         let fs: &$crate::fs::Fs = $fs;
         if !RATELIMIT.suppress(fs, $crate::c_function_name!()) {
-            $crate::util::log::log(fs, $level, format_args!($($arg)*));
+            $crate::util::log::log(fs, $level, $crate::message!($($arg)*));
         }
     }};
 }
@@ -253,28 +252,28 @@ pub fn should_print_err(err: &BchError) -> bool {
 #[macro_export]
 macro_rules! bch_err {
     ($fs:expr, $($arg:tt)*) => {
-        $crate::util::log::log($fs, $crate::util::log::LogLevel::ERR, format_args!($($arg)*))
+        $crate::util::log::log($fs, $crate::util::log::LogLevel::ERR, $crate::message!($($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! bch_warn {
     ($fs:expr, $($arg:tt)*) => {
-        $crate::util::log::log($fs, $crate::util::log::LogLevel::WARN, format_args!($($arg)*))
+        $crate::util::log::log($fs, $crate::util::log::LogLevel::WARN, $crate::message!($($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! bch_notice {
     ($fs:expr, $($arg:tt)*) => {
-        $crate::util::log::log($fs, $crate::util::log::LogLevel::NOTICE, format_args!($($arg)*))
+        $crate::util::log::log($fs, $crate::util::log::LogLevel::NOTICE, $crate::message!($($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! bch_info {
     ($fs:expr, $($arg:tt)*) => {
-        $crate::util::log::log($fs, $crate::util::log::LogLevel::INFO, format_args!($($arg)*))
+        $crate::util::log::log($fs, $crate::util::log::LogLevel::INFO, $crate::message!($($arg)*))
     };
 }
 
@@ -282,7 +281,7 @@ macro_rules! bch_info {
 #[macro_export]
 macro_rules! bch_verbose {
     ($fs:expr, $($arg:tt)*) => {
-        $crate::util::log::log($fs, $crate::util::log::LogLevel::DEBUG, format_args!($($arg)*))
+        $crate::util::log::log($fs, $crate::util::log::LogLevel::DEBUG, $crate::message!($($arg)*))
     };
 }
 

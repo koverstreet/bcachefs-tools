@@ -366,6 +366,26 @@ pub trait ToText {
     fn to_text(&self, out: &mut Printbuf);
 }
 
+/// A message: format_args!() is one, written as given.
+impl ToText for fmt::Arguments<'_> {
+    fn to_text(&self, out: &mut Printbuf) {
+        out.write_fmt(*self);
+    }
+}
+
+/// A message, for the logging and fsck error macros: a format string and its
+/// arguments, or anything ToText - a message object.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! message {
+    ($fmt:literal $($args:tt)*) => {
+        &format_args!($fmt $($args)*) as &dyn $crate::util::ToText
+    };
+    ($msg:expr) => {
+        &$msg as &dyn $crate::util::ToText
+    };
+}
+
 /// Display through a C *_to_text(), via a printbuf that lives only for the
 /// call. Its indent and tabstops start from scratch; the `\n`, `\t` and `\r`
 /// it leaves raw are interpreted by the destination, if that's a Printbuf.
