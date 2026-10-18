@@ -210,6 +210,7 @@ c_xmacro! {
         (journal_read),
         (fs_journal_alloc),
         (fs_resize_on_mount),
+        (member_reconcile_scan),
         (fs_mi_field_upgrades),
         (sb_journal_sort),
         (btree_node_read),

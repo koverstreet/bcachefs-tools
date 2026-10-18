@@ -26,6 +26,7 @@
 
 #include "init/error.h"
 #include "init/fs.h"
+#include "init/dev.h"
 #include "init/passes.h"
 #include "init/progress.h"
 #include "init/recovery.h"
@@ -1260,6 +1261,8 @@ int bch2_fs_initialize(struct bch_fs *c)
 
 	try(bch2_set_may_go_rw(c));
 	try(bch2_journal_replay(c));
+	if (!c->opts.read_only)
+		try(bch2_dev_start_member_reconcile_scans(c));
 	try(bch2_initialize_subvolumes(c));
 	try(bch2_snapshots_read(c));
 	try(bch2_presplit_shard_boundaries(c));

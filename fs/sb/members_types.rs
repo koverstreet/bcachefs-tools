@@ -17,6 +17,7 @@ pub struct bch_member_cpu {
     pub group: u16,
     pub failure_domain: u16,
     pub state: u8,
+    pub needs_reconcile_scan: u8,
     pub discard: u8,
     pub data_allowed: u8,
     pub durability: u8,
