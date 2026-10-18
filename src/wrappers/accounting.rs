@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use bch_bindgen::c;
 use bcachefs_kernel::metadata_version;
-use bcachefs_kernel::util::vstructs::UnvalidatedRefEntries;
+use bcachefs_kernel::util::vstructs::VstructRefEntries;
 
 use super::handle::BcachefsHandle;
 use super::ioctl::{grow_on_erange, ioctl_ptr, IoctlBuf, BCH_IOCTL_QUERY_ACCOUNTING, BCH_IOCTL_QUERY_ACCOUNTING_v2};
@@ -98,7 +98,7 @@ fn parse_accounting_entries(data: &[u8]) -> anyhow::Result<Vec<AccountingEntry>>
     let need_swab = kernel_version > 0
         && kernel_version < u32::from(metadata_version::disk_accounting_big_endian) as u64;
 
-    UnvalidatedRefEntries::<c::bkey_i>::new(data)
+    VstructRefEntries::<c::bkey_i>::new(data)
         .map(|k| {
             let k = k.map_err(|e| anyhow!("QUERY_ACCOUNTING reply: {e}"))?.key();
             let a = k.arm::<c::Accounting>().ok_or_else(|| {

@@ -332,7 +332,7 @@ impl BkeyI {
 
 /// From a walk over keys in bytes, which checked each one's u64s against its
 /// bytes.
-impl<'a> crate::util::vstructs::UnvalidatedRef<'a, c::bkey_i> {
+impl<'a> crate::util::vstructs::VstructRef<'a, c::bkey_i> {
     pub fn key(&self) -> &'a BkeyI {
         // SAFETY: the walk checked its u64s against its bytes, all of which
         // as_bytes() is
@@ -341,7 +341,7 @@ impl<'a> crate::util::vstructs::UnvalidatedRef<'a, c::bkey_i> {
 }
 
 /// key(), mutably: a journal entry's walk.
-impl crate::util::vstructs::UnvalidatedMut<'_, c::bkey_i> {
+impl crate::util::vstructs::VstructMut<'_, c::bkey_i> {
     pub fn key_mut(&mut self) -> &mut BkeyI {
         // SAFETY: the walk checked its u64s against its bytes, which
         // as_mut_ptr() reaches all of

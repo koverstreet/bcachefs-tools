@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use bch_bindgen::c;
-use bcachefs_kernel::util::vstructs::{plain_bytes, Head, UnvalidatedRefEntries};
+use bcachefs_kernel::util::vstructs::{plain_bytes, Head, VstructRefEntries};
 use clap::{Parser, Subcommand};
 
 use crate::util::{open_dir, sb_error_name};
@@ -141,7 +141,7 @@ fn readdir_flags(fd: &OwnedFd, flags: u32, pos: &mut [u64; 2]) -> Result<Vec<Ent
     let reply = plain_bytes(&*buf).get(..arg.used as usize)
         .ok_or_else(|| anyhow!("{} bytes used, of {}", arg.used, arg.buf_size))?;
 
-    UnvalidatedRefEntries::<c::bch_ioctl_readdir_entry>::new(reply)
+    VstructRefEntries::<c::bch_ioctl_readdir_entry>::new(reply)
         .map(|e| {
             let e = e?;
             let name = &e.as_bytes()[mem::offset_of!(c::bch_ioctl_readdir_entry, name)..];

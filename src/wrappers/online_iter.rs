@@ -17,7 +17,7 @@ use std::ops::ControlFlow;
 use anyhow::anyhow;
 use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::BkeySC;
-use bcachefs_kernel::util::vstructs::{plain_bytes, UnvalidatedRef};
+use bcachefs_kernel::util::vstructs::{plain_bytes, VstructRef};
 
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::grow_on_erange;
@@ -123,7 +123,7 @@ impl<'h> OnlineBtreeIter<'h> {
         let reply = plain_bytes(&self.buf[..]).get(..self.arg.used as usize).ok_or_else(|| {
             anyhow!("{} bytes used, of {}", self.arg.used, self.buf.len() * 8)
         })?;
-        let k = UnvalidatedRef::<c::bkey_i>::new(&reply[self.pos..])
+        let k = VstructRef::<c::bkey_i>::new(&reply[self.pos..])
             .map_err(|e| anyhow!("reply at byte {}: {e}", self.pos))?;
         self.pos += k.as_bytes().len();
 

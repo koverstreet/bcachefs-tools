@@ -31,7 +31,8 @@
 //! which has the room for it to grow.
 //!
 //! A key is thin - its size is its k.u64s, not its reference's - and walked
-//! as an UnvalidatedRef of the bytes its count was checked against.
+//! as a VstructRef of the bytes its count was checked against, in its
+//! container's state.
 //!
 //! A value shorter than its type, written before the type grew, can't be a
 //! &T: it's a View, reading only its own bytes, the fields past its end zero;
@@ -295,7 +296,7 @@ pub(crate) use vstruct;
 /// from its start[]. T's entries() are E's in T's state - a Validated one's
 /// trusted, as C trusts them; an Unvalidated one's each checked against
 /// what's left, an error ending the walk. With `thin E`, entries that aren't
-/// unsized - keys - as a View, or an UnvalidatedRef(Mut), of their own bytes.
+/// unsized - keys - as a VstructRef(Mut) of their own bytes, in T's state.
 macro_rules! vstruct_container {
     ($t:ident, $entry:ident) => { $crate::paste! {
         impl $t<$crate::util::vstructs::Validated> {
@@ -330,12 +331,12 @@ macro_rules! vstruct_container {
         }
 
         impl $t<$crate::util::vstructs::Unvalidated> {
-            pub fn entries(&self) -> $crate::util::vstructs::UnvalidatedRefEntries<'_, $entry> {
-                $crate::util::vstructs::UnvalidatedRefEntries::new(self.start_bytes())
+            pub fn entries(&self) -> $crate::util::vstructs::VstructRefEntries<'_, $entry> {
+                $crate::util::vstructs::VstructRefEntries::new(self.start_bytes())
             }
 
-            pub fn entries_mut(&mut self) -> $crate::util::vstructs::UnvalidatedRefEntriesMut<'_, $entry> {
-                $crate::util::vstructs::UnvalidatedRefEntriesMut::new(self.start_bytes_mut())
+            pub fn entries_mut(&mut self) -> $crate::util::vstructs::VstructRefEntriesMut<'_, $entry> {
+                $crate::util::vstructs::VstructRefEntriesMut::new(self.start_bytes_mut())
             }
         }
 
@@ -363,7 +364,7 @@ macro_rules! vstruct_container {
 }
 pub(crate) use vstruct_container;
 
-// ---- UnvalidatedRef: bytes whose counts haven't been checked ---------------
+// ---- VstructRef: bytes whose counts haven't been checked ---------------
 
 /// Bytes that can't be the value read from them: they don't hold its header,
 /// aligned, or as many as its count says. What from_bytes() and the checked
@@ -417,55 +418,71 @@ fn checked_bytes<T: Plain + SelfSized>(bytes: &[u8]) -> Result<usize, VStructErr
     Ok(len)
 }
 
-/// A T and its bytes, from bytes nothing has validated it against - off a
-/// device, from the kernel. Its header's count is checked against them when
-/// it's made, an overrun an error; then it's those bytes exactly, header and
-/// tail, and the header's fields are fields.
-pub struct UnvalidatedRef<'a, T> {
+/// A thin entry - a T whose header says how long it is: a key - and its
+/// bytes, in state S: its container's, walked out of one, or Unvalidated,
+/// bytes from outside - off a device, from the kernel. Its header's count is
+/// checked against them when it's made, an overrun an error; then it's those
+/// bytes exactly, header and tail, and the header's fields are fields.
+pub struct VstructRef<'a, T, S: State = Unvalidated> {
     bytes: &'a [u8],
-    _t:    PhantomData<&'a T>,
+    _t:    PhantomData<(&'a T, S)>,
 }
 
-impl<T> Clone for UnvalidatedRef<'_, T> {
+impl<T, S: State> Clone for VstructRef<'_, T, S> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T> Copy for UnvalidatedRef<'_, T> {}
+impl<T, S: State> Copy for VstructRef<'_, T, S> {}
 
-impl<T> Deref for UnvalidatedRef<'_, T> {
+impl<T, S: State> Deref for VstructRef<'_, T, S> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        // SAFETY: new() checked the header is there, aligned, and T is Plain
+        // SAFETY: its maker checked the header is there, aligned, and T is Plain
         unsafe { &*self.bytes.as_ptr().cast::<T>() }
     }
 }
 
-impl<'a, T: Plain + SelfSized> UnvalidatedRef<'a, T> {
-    /// The T at the start of @bytes, as many of them as its header says.
+impl<'a, T: Plain + SelfSized> VstructRef<'a, T> {
+    /// The T at the start of @bytes from outside, as many of them as its
+    /// header says.
     pub fn new(bytes: &'a [u8]) -> Result<Self, VStructError> {
         let len = checked_bytes::<T>(bytes)?;
         Ok(Self { bytes: &bytes[..len], _t: PhantomData })
     }
+}
 
+impl<'a, T, S: State> VstructRef<'a, T, S> {
     /// Its bytes, header and tail.
     pub fn as_bytes(&self) -> &'a [u8] {
         self.bytes
     }
 }
 
-/// An unsized container's thin entries, keys - each an UnvalidatedRef of
+impl<'a, T, S: State> InState for VstructRef<'a, T, S> {
+    type In<U: State> = VstructRef<'a, T, U>;
+    type State = S;
+}
+
+// SAFETY: the same bytes in every state
+unsafe impl<'a, T, S: State> Restate for VstructRef<'a, T, S> {
+    unsafe fn restate<U: State>(self) -> VstructRef<'a, T, U> {
+        VstructRef { bytes: self.bytes, _t: PhantomData }
+    }
+}
+
+/// An unsized container's thin entries, keys - each an VstructRef of
 /// its own bytes, checked against what's left: an Unvalidated
 /// jset_entry's entries().
-pub struct UnvalidatedRefEntries<'a, E> {
+pub struct VstructRefEntries<'a, E> {
     /// None after an error
     rest:   Option<&'a [u8]>,
     _entry: PhantomData<&'a E>,
 }
 
-impl<'a, E> UnvalidatedRefEntries<'a, E> {
+impl<'a, E> VstructRefEntries<'a, E> {
     /// The entries in @rest: an unsized container's, from its start[] - or
     /// an ioctl's reply, keys one after another.
     pub fn new(rest: &'a [u8]) -> Self {
@@ -473,12 +490,12 @@ impl<'a, E> UnvalidatedRefEntries<'a, E> {
     }
 }
 
-impl<'a, E: Plain + SelfSized + 'a> Iterator for UnvalidatedRefEntries<'a, E> {
-    type Item = Result<UnvalidatedRef<'a, E>, VStructError>;
+impl<'a, E: Plain + SelfSized + 'a> Iterator for VstructRefEntries<'a, E> {
+    type Item = Result<VstructRef<'a, E>, VStructError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let rest = self.rest.filter(|r| !r.is_empty())?;
-        match UnvalidatedRef::<E>::new(rest) {
+        match VstructRef::<E>::new(rest) {
             Ok(e) => {
                 self.rest = Some(&rest[e.bytes.len()..]);
                 Some(Ok(e))
@@ -491,35 +508,37 @@ impl<'a, E: Plain + SelfSized + 'a> Iterator for UnvalidatedRefEntries<'a, E> {
     }
 }
 
-/// An UnvalidatedRef, mutably.
-pub struct UnvalidatedMut<'a, T> {
+/// A VstructRef, mutably.
+pub struct VstructMut<'a, T, S: State = Unvalidated> {
     bytes: &'a mut [u8],
-    _t:    PhantomData<&'a mut T>,
+    _t:    PhantomData<(&'a mut T, S)>,
 }
 
-impl<T> Deref for UnvalidatedMut<'_, T> {
+impl<T, S: State> Deref for VstructMut<'_, T, S> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        // SAFETY: as UnvalidatedRef's
+        // SAFETY: as VstructRef's
         unsafe { &*self.bytes.as_ptr().cast::<T>() }
     }
 }
 
-impl<T> DerefMut for UnvalidatedMut<'_, T> {
+impl<T, S: State> DerefMut for VstructMut<'_, T, S> {
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: as deref()
         unsafe { &mut *self.bytes.as_mut_ptr().cast::<T>() }
     }
 }
 
-impl<'a, T: Plain + SelfSized> UnvalidatedMut<'a, T> {
-    /// As UnvalidatedRef::new(), mutably.
+impl<'a, T: Plain + SelfSized> VstructMut<'a, T> {
+    /// As VstructRef::new(), mutably.
     pub fn new(bytes: &'a mut [u8]) -> Result<Self, VStructError> {
         let len = checked_bytes::<T>(bytes)?;
         Ok(Self { bytes: &mut bytes[..len], _t: PhantomData })
     }
+}
 
+impl<T, S: State> VstructMut<'_, T, S> {
     /// A pointer to it that reaches all its bytes, for C: one from the &T
     /// reaches only the header.
     pub fn as_mut_ptr(&mut self) -> *mut T {
@@ -527,21 +546,33 @@ impl<'a, T: Plain + SelfSized> UnvalidatedMut<'a, T> {
     }
 }
 
-/// UnvalidatedRefEntries, mutably: each an UnvalidatedMut.
-pub struct UnvalidatedRefEntriesMut<'a, E> {
+impl<'a, T, S: State> InState for VstructMut<'a, T, S> {
+    type In<U: State> = VstructMut<'a, T, U>;
+    type State = S;
+}
+
+// SAFETY: the same bytes in every state
+unsafe impl<'a, T, S: State> Restate for VstructMut<'a, T, S> {
+    unsafe fn restate<U: State>(self) -> VstructMut<'a, T, U> {
+        VstructMut { bytes: self.bytes, _t: PhantomData }
+    }
+}
+
+/// VstructRefEntries, mutably: each an VstructMut.
+pub struct VstructRefEntriesMut<'a, E> {
     rest:   Option<&'a mut [u8]>,
     _entry: PhantomData<&'a mut E>,
 }
 
-impl<'a, E> UnvalidatedRefEntriesMut<'a, E> {
+impl<'a, E> VstructRefEntriesMut<'a, E> {
     /// The entries in @rest: an unsized container's, from its start[].
     pub(crate) fn new(rest: &'a mut [u8]) -> Self {
         Self { rest: Some(rest), _entry: PhantomData }
     }
 }
 
-impl<'a, E: Plain + SelfSized + 'a> Iterator for UnvalidatedRefEntriesMut<'a, E> {
-    type Item = Result<UnvalidatedMut<'a, E>, VStructError>;
+impl<'a, E: Plain + SelfSized + 'a> Iterator for VstructRefEntriesMut<'a, E> {
+    type Item = Result<VstructMut<'a, E>, VStructError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let rest = self.rest.take().filter(|r| !r.is_empty())?;
@@ -549,7 +580,7 @@ impl<'a, E: Plain + SelfSized + 'a> Iterator for UnvalidatedRefEntriesMut<'a, E>
             Ok(len) => {
                 let (e, rest) = rest.split_at_mut(len);
                 self.rest = Some(rest);
-                Some(Ok(UnvalidatedMut { bytes: e, _t: PhantomData }))
+                Some(Ok(VstructMut { bytes: e, _t: PhantomData }))
             }
             Err(err) => Some(Err(err)),
         }
@@ -606,14 +637,40 @@ pub trait Family {
 /// definition is: X<S> holds only the state's name.
 pub trait State: 'static {
     type Of<F: Family>: ?Sized + ArmRef + 'static;
+
+    /// A sized type T, whose definition is the same in every state, in this
+    /// one: T, or for Unvalidated a type of its own - so that a value from
+    /// outside is still one where it's been read as a T.
+    type OfSized<T: 'static>: 'static;
 }
 
 impl State for Unvalidated {
     type Of<F: Family> = F::Unvalidated;
+    type OfSized<T: 'static> = UnvalidatedSized<T>;
 }
 
 impl State for Validated {
     type Of<F: Family> = F::Validated;
+    type OfSized<T: 'static> = T;
+}
+
+/// A sized T from outside, Unvalidated: its bytes, as T's - read as one,
+/// through Deref.
+#[repr(transparent)]
+pub struct UnvalidatedSized<T>(T);
+
+impl<T> core::ops::Deref for UnvalidatedSized<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T> core::ops::DerefMut for UnvalidatedSized<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
 }
 
 /// What a Validated value of a type that grew is, extended to the current
@@ -623,6 +680,39 @@ pub struct Whole;
 
 impl State for Whole {
     type Of<F: Family> = F::Whole;
+    type OfSized<T: 'static> = T;
+}
+
+/// A family's type, X<S>, in another state: In<T> is X<T> - for code generic
+/// over X that names it in a state, X<Validated> from X. State is S.
+pub trait InState {
+    type In<T: State>: ?Sized;
+    type State: State;
+}
+
+/// What's the same bytes in every state - a thin entry - so it's in another
+/// by a cast: restate().
+///
+/// # Safety
+/// Self and Self::In<S> have the same representation, for every S.
+pub unsafe trait Restate: InState + Sized {
+    /// Self, in state S.
+    ///
+    /// # Safety
+    /// What S says of it is true.
+    unsafe fn restate<S: State>(self) -> Self::In<S>
+        where Self::In<S>: Sized;
+}
+
+/// @t, Validated - the unsafe way up, from Unvalidated.
+///
+/// # Safety
+/// It is: what Validated says of it is true - validate passed.
+pub unsafe fn assume_validated<T>(t: T) -> T::In<Validated>
+    where T: Restate<State = Unvalidated>, T::In<Validated>: Sized
+{
+    // SAFETY: the caller's
+    unsafe { t.restate() }
 }
 
 /// The head of a #[counted] family - a header, and an array it counts in
@@ -1006,8 +1096,8 @@ impl<'a, T: Plain> View<'a, T> {
     }
 }
 
-/// An unsized container's thin entries, keys - each a View of its own
-/// bytes: a Validated jset_entry's entries(). One that doesn't fit, or says
+/// An unsized container's thin entries, keys - each a VstructRef of its own
+/// bytes, Validated: a Validated jset_entry's entries(). One that doesn't fit, or says
 /// it's shorter than its header - which would never end the walk - ends it,
 /// rather than being read past.
 pub struct ViewEntries<'a, E> {
@@ -1024,7 +1114,7 @@ impl<'a, E> ViewEntries<'a, E> {
 }
 
 impl<'a, E: SelfSized + Plain + 'a> Iterator for ViewEntries<'a, E> {
-    type Item = View<'a, E>;
+    type Item = VstructRef<'a, E, Validated>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let rest = self.rest;
@@ -1038,7 +1128,7 @@ impl<'a, E: SelfSized + Plain + 'a> Iterator for ViewEntries<'a, E> {
         };
         let (e, rest) = rest.split_at(len);
         self.rest = rest;
-        Some(View::new(e))
+        Some(VstructRef { bytes: e, _t: PhantomData })
     }
 }
 

@@ -917,6 +917,11 @@ fn generic_type(name: &str, g: &Generic<'_>, doc: &str) -> String {
              /// Its definition in state S - for offset_of!(), repr.field.\n\
              pub repr: <S as {VS}::State>::Of<{fam}>,\n\
          }}\n\
+         \n\
+         impl<S: {VS}::State> {VS}::InState for {name}<S> {{\n\
+             type In<T: {VS}::State> = {name}<T>;\n\
+             type State = S;\n\
+         }}\n\
          \n");
 
     // To its definition in S - or, a typestate, to X<Validated>
@@ -1072,6 +1077,26 @@ fn generic_type(name: &str, g: &Generic<'_>, doc: &str) -> String {
 
     let Some((whole, derives)) = g.whole else { return out };
     let whole_ty = format!("{name}<{VS}::Whole>");
+
+    // Sized: in place, its first size_of bytes - for what holds a value it
+    // knows is whole, as a key in state Whole does, to make one from them
+    out.push_str(&format!(
+        "// SAFETY: a reference from it claims size_of::<Self>() of @bytes, the\n\
+         // first: the struct, every field Plain\n\
+         unsafe impl {VS}::Unsized for {whole_ty} {{\n\
+             type Head = {whole};\n\
+             type Elem = u8;\n\
+             const TAIL: usize = ::core::mem::size_of::<Self>();\n\
+             #[inline]\n\
+             fn from_raw(p: *const u8, _bytes: usize) -> *const Self {{\n\
+                 p.cast()\n\
+             }}\n\
+             #[inline]\n\
+             fn from_raw_mut(p: *mut u8, _bytes: usize) -> *mut Self {{\n\
+                 p.cast()\n\
+             }}\n\
+         }}\n\
+         \n"));
     let has = |d: &str| derives.iter().any(|x| x == d);
     if has("Clone") {
         out.push_str(&format!(

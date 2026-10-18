@@ -11,7 +11,7 @@ use bch_bindgen::c::{
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human, open_dir, subvol_root};
-use bcachefs_kernel::util::vstructs::{plain_bytes, FlexArray, Plain, UnvalidatedRefEntries};
+use bcachefs_kernel::util::vstructs::{plain_bytes, FlexArray, Plain, VstructRefEntries};
 
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::{ioctl_ptr, ioctl_rw, Ioctl, IoctlBuf,
@@ -255,7 +255,7 @@ fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {
         anyhow!("BCH_IOCTL_SUBVOLUME_LIST: {} bytes used, of {}", arg.used, arg.buf_size)
     })?;
 
-    UnvalidatedRefEntries::<bch_ioctl_subvol_dirent>::new(reply)
+    VstructRefEntries::<bch_ioctl_subvol_dirent>::new(reply)
         .map(|d| {
             let d = d?;
             let path = &d.as_bytes()[mem::offset_of!(bch_ioctl_subvol_dirent, path)..];
