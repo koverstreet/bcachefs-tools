@@ -87,3 +87,18 @@ pub unsafe fn opt_bytes<'a>(p: *const c_void, size: usize) -> Option<&'a [u8]> {
 pub unsafe fn opt_bytes_mut<'a>(p: *mut c_void, size: usize) -> Option<&'a mut [u8]> {
     (!p.is_null()).then(|| unsafe { core::slice::from_raw_parts_mut(p as *mut u8, size) })
 }
+
+/// @f, given @s as a C string - a copy, NUL terminated, and as C would see
+/// it: up to a NUL in @s, if there's one.
+pub fn with_cstr<R>(s: &str, f: impl FnOnce(&core::ffi::CStr) -> R)
+    -> Result<R, crate::util::alloc::AllocError>
+{
+    use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+
+    let mut buf = KVVec::new();
+    buf.extend_from_slice(s.as_bytes(), GFP_KERNEL)?;
+    buf.push(0, GFP_KERNEL)?;
+
+    // can't fail: the NUL pushed ends it, if nothing in @s did
+    Ok(f(core::ffi::CStr::from_bytes_until_nul(&buf).unwrap()))
+}
