@@ -8,6 +8,7 @@ use std::os::unix::fs::FileExt;
 use std::os::unix::io::RawFd;
 
 use bch_bindgen::c;
+use bcachefs_kernel::alloc::disk_groups::Target;
 use bcachefs_kernel::{metadata_version, opt_defined, opt_get, opt_set};
 
 use crate::wrappers::super_io::{die, SUPERBLOCK_SIZE_DEFAULT};
@@ -91,23 +92,12 @@ const BCH_SB_FEATURES_ALL: u64 = {
     (1 << c::bch_sb_feature::BCH_FEATURE_incompat_version_field.0 as u64)
 };
 
-const TARGET_DEV_START: u32 = 1;
-const TARGET_GROUP_START: u32 = 256 + TARGET_DEV_START;
-
-fn dev_to_target(dev: usize) -> u32 {
-    TARGET_DEV_START + dev as u32
-}
-
-fn group_to_target(group: u32) -> u32 {
-    TARGET_GROUP_START + group
-}
-
 /// Resolve a target string (device path or disk group name) to a target id.
 fn parse_target(
-    sb: &mut c::bch_sb_handle,
+    sb: &c::bch_sb_handle,
     devs: &[DevOpts],
     s: *const std::os::raw::c_char,
-) -> u32 {
+) -> u16 {
     if s.is_null() {
         return 0;
     }
@@ -117,12 +107,12 @@ fn parse_target(
 
     for (idx, dev) in devs.iter().enumerate() {
         if target_str_slice == dev.path.as_bytes() {
-            return dev_to_target(idx);
+            return Target::Dev(idx as u32).encode();
         }
     }
 
     if let Some(idx) = sb.disk_path_find(target_str_slice) {
-        return group_to_target(idx);
+        return Target::Group(idx).encode();
     }
 
     die(&format!("Invalid target {}", target_str.to_string_lossy()));
@@ -326,7 +316,7 @@ pub fn format(
 
     // Targets
     let target_strs = unsafe { &fs_opt_strs.__bindgen_anon_1.__bindgen_anon_1 };
-    let sb_handle = &mut *sb;
+    let sb_handle = &*sb;
     let foreground = parse_target(sb_handle, dev_slice, target_strs.foreground_target);
     let background = parse_target(sb_handle, dev_slice, target_strs.background_target);
     let promote    = parse_target(sb_handle, dev_slice, target_strs.promote_target);
