@@ -1,11 +1,11 @@
 //! Keys and positions to and from text: Debug and FromStr for positions,
-//! Display for a key's header, and BkeySCToText for a key with its value.
+//! ToText for a key's header, and BkeySCToText for a key with its value.
 
 use super::{AllTypes, BkeySC, BkeyVal, FamilyVal};
 use crate::c;
 use crate::c::bpos as Bpos;
 use crate::fs::Fs;
-use crate::printbuf_to_formatter;
+use crate::util::{Printbuf, ToText};
 use core::fmt;
 #[cfg(feature = "std")]
 use core::str::FromStr;
@@ -85,19 +85,18 @@ pub struct BkeySCToText<'a, 'f, V: ?Sized + BkeyVal = FamilyVal<AllTypes>> {
     pub(crate) fs: &'f Fs,
 }
 
-impl<V: ?Sized + BkeyVal> fmt::Display for BkeySCToText<'_, '_, V> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        unsafe {
-            printbuf_to_formatter(f, |buf| {
-                c::bch2_bkey_val_to_text(buf, self.fs.as_ptr(), self.k.into())
-            })
-        }
+impl<V: ?Sized + BkeyVal> ToText for BkeySCToText<'_, '_, V> {
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { c::bch2_bkey_val_to_text(out.as_raw(), self.fs.as_ptr(), self.k.into()) }
     }
 }
 
+crate::display_via_to_text!(impl[V: ?Sized + BkeyVal] BkeySCToText<'_, '_, V>);
+
 /// Without its value.
-impl fmt::Display for c::bkey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        printbuf_to_formatter(f, |buf| unsafe { c::bch2_bkey_to_text(buf, self) })
+impl ToText for c::bkey {
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { c::bch2_bkey_to_text(out.as_raw(), self) }
     }
 }
+crate::display_via_to_text!(c::bkey);

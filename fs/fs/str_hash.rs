@@ -13,14 +13,12 @@ use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError,
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode;
-use crate::printbuf_to_formatter;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::os_str::OsStrExt;
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;
 use crate::{fsck_err, fsck_err_on, inode_fsck_err};
 use core::ffi::c_void;
-use core::fmt;
 
 /// A btree that's a hash table keyed by name: dirents, xattrs. The keys passed
 /// to these are valid - from the btree, or built to be inserted.
@@ -394,18 +392,19 @@ impl PartialEq for c::bch_hash_info {
 /// An INODE_STR_HASH() value, for formatting with {}.
 pub struct StrHashType(pub u64);
 
-impl fmt::Display for StrHashType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl ToText for StrHashType {
+    fn to_text(&self, out: &mut Printbuf) {
         let t = match self.0 {
             0 => c::bch_str_hash_type::BCH_STR_HASH_crc32c,
             1 => c::bch_str_hash_type::BCH_STR_HASH_crc64,
             2 => c::bch_str_hash_type::BCH_STR_HASH_siphash_old,
             3 => c::bch_str_hash_type::BCH_STR_HASH_siphash,
-            n => return write!(f, "(invalid str_hash type {n})"),
+            n => return write!(out, "(invalid str_hash type {n})"),
         };
-        printbuf_to_formatter(f, |out| unsafe { c::bch2_prt_str_hash_type(out, t) })
+        unsafe { c::bch2_prt_str_hash_type(out.as_raw(), t) }
     }
 }
+crate::display_via_to_text!(StrHashType);
 
 pub fn hash_info_init(
     fs:    &Fs,

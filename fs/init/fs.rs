@@ -69,11 +69,12 @@ impl BorrowedFs {
 }
 
 /// The version's number and name.
-impl core::fmt::Display for c::bcachefs_metadata_version {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        crate::printbuf_to_formatter(f, |out| unsafe { c::bch2_version_to_text(out, *self) })
+impl crate::util::ToText for c::bcachefs_metadata_version {
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { c::bch2_version_to_text(out.as_raw(), *self) }
     }
 }
+crate::display_via_to_text!(c::bcachefs_metadata_version);
 
 impl Fs {
     /// The filesystem's name, as its messages give it.

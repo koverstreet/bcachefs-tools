@@ -360,7 +360,6 @@ pub fn btrees_in(mask: u64) -> impl Iterator<Item = c::btree_id> {
 // `crate::POS_MIN` / `crate::SPOS_MAX` spelling used across the tree and the
 // tools binary.
 pub use btree::bkey::{pos, spos, POS_MAX, POS_MIN, SPOS_MAX};
-pub use util::printbuf::printbuf_to_formatter;
 #[doc(hidden)]
 pub use cstruct_macros::__prt;
 #[cfg(feature = "std")]

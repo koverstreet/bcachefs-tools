@@ -351,11 +351,12 @@ impl Drop for c::printbuf {
     }
 }
 
-impl fmt::Display for Bpos {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        printbuf_to_formatter(f, |buf| unsafe { c::bch2_bpos_to_text(buf, *self) })
+impl ToText for Bpos {
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { c::bch2_bpos_to_text(out.as_raw(), *self) }
     }
 }
+crate::display_via_to_text!(Bpos);
 
 /// What prints itself to a Printbuf. A printbuf is a superset of a Formatter:
 /// tabstops, indent and modes (human-readable units) are its state, which a
@@ -365,6 +366,43 @@ impl fmt::Display for Bpos {
 /// either: what's ToText is to_text()'d into the printbuf.
 pub trait ToText {
     fn to_text(&self, out: &mut Printbuf);
+}
+
+/// Display for a type that's ToText, from its to_text(), for a format string
+/// that isn't a message - format!(), println!(): through a printbuf of its
+/// own, text_fmt(). (Not a blanket impl: Display is core's.) A generic type's
+/// parameters go first:
+/// `display_via_to_text!(impl[V: BkeyVal] BkeySCToText<'_, '_, V>)`.
+#[macro_export]
+macro_rules! display_via_to_text {
+    (impl[$($g:tt)*] $t:ty) => {
+        impl<$($g)*> ::core::fmt::Display for $t {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                $crate::util::printbuf::text_fmt(self, f)
+            }
+        }
+    };
+    ($t:ty) => {
+        $crate::display_via_to_text!(impl[] $t);
+    };
+}
+
+/// @t as Display, via a printbuf that lives only for the call. Its indent and
+/// tabstops start from scratch; the `\n`, `\t` and `\r` it leaves raw are
+/// interpreted by the destination, if that's a Printbuf. Invalid UTF-8 comes
+/// out as U+FFFD without allocating, so this works in-kernel too.
+#[doc(hidden)]
+pub fn text_fmt(t: &(impl ToText + ?Sized), f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let mut buf = Printbuf::new();
+    t.to_text(&mut buf);
+
+    for chunk in buf.as_bytes().utf8_chunks() {
+        f.write_str(chunk.valid())?;
+        if !chunk.invalid().is_empty() {
+            f.write_char(char::REPLACEMENT_CHARACTER)?;
+        }
+    }
+    Ok(())
 }
 
 impl<T: ToText + ?Sized> ToText for &T {
@@ -444,32 +482,4 @@ macro_rules! message {
     ($msg:expr) => {
         &$msg as &dyn $crate::util::ToText
     };
-}
-
-/// Display through a C *_to_text(), via a printbuf that lives only for the
-/// call. Its indent and tabstops start from scratch; the `\n`, `\t` and `\r`
-/// it leaves raw are interpreted by the destination, if that's a Printbuf.
-///
-/// Invalid UTF-8 comes out as U+FFFD without allocating, so this works
-/// in-kernel too.
-pub fn printbuf_to_formatter<F>(f: &mut fmt::Formatter<'_>, func: F) -> fmt::Result
-where
-    F: FnOnce(*mut c::printbuf),
-{
-    let mut buf = c::printbuf::new();
-
-    func(&mut buf);
-
-    if buf.buf.is_null() {
-        return Ok(());
-    }
-
-    let bytes = unsafe { CStr::from_ptr(buf.buf.cast()) }.to_bytes();
-    for chunk in bytes.utf8_chunks() {
-        f.write_str(chunk.valid())?;
-        if !chunk.invalid().is_empty() {
-            f.write_char(char::REPLACEMENT_CHARACTER)?;
-        }
-    }
-    Ok(())
 }

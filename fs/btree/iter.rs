@@ -10,12 +10,11 @@ use crate::errcode::{
     ret_to_result_void as ret_to_result,
 };
 use crate::fs::Fs;
-use crate::printbuf_to_formatter;
 use crate::util::ffi::Opaque;
 use crate::util::log::CFnName;
+use crate::util::{Printbuf, ToText};
 use crate::SPOS_MAX;
 use bitflags::bitflags;
-use core::fmt;
 use core::marker::PhantomData;
 use core::mem::{size_of, MaybeUninit};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -2441,23 +2440,21 @@ pub struct BtreeNodeToText<'b, 'f> {
     fs: &'f Fs,
 }
 
-impl<'b, 'f> fmt::Display for BtreeNodeToText<'b, 'f> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        printbuf_to_formatter(f, |buf| unsafe {
-            c::bch2_btree_node_to_text(buf, self.fs.as_ptr(), self.b)
-        })
+impl ToText for BtreeNodeToText<'_, '_> {
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { c::bch2_btree_node_to_text(out.as_raw(), self.fs.as_ptr(), self.b) }
     }
 }
+crate::display_via_to_text!(BtreeNodeToText<'_, '_>);
 
 pub struct BtreeNodeOndiskToText<'b, 'f> {
     b:  &'b c::btree,
     fs: &'f Fs,
 }
 
-impl<'b, 'f> fmt::Display for BtreeNodeOndiskToText<'b, 'f> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        printbuf_to_formatter(f, |buf| unsafe {
-            c::bch2_btree_node_ondisk_to_text(buf, self.fs.as_ptr(), self.b)
-        })
+impl ToText for BtreeNodeOndiskToText<'_, '_> {
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { c::bch2_btree_node_ondisk_to_text(out.as_raw(), self.fs.as_ptr(), self.b) }
     }
 }
+crate::display_via_to_text!(BtreeNodeOndiskToText<'_, '_>);
