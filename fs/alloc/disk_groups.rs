@@ -173,7 +173,7 @@ fn sb_groups(sb: &c::bch_sb) -> &[c::bch_disk_group] {
 }
 
 /// "ssd.fast." is "ssd.fast".
-fn path_labels(name: &[u8]) -> impl Iterator<Item = &[u8]> {
+fn path_labels(name: &[u8]) -> impl Iterator<Item = &[u8]> + Clone {
     name.strip_suffix(b".").unwrap_or(name).split(|&b| b == b'.')
 }
 
@@ -190,26 +190,33 @@ fn group_find(groups: &[c::bch_disk_group], parent: u32, name: &[u8]) -> Option<
         .map(|i| i as u32)
 }
 
-/// Reuses the first deleted slot, else grows the section.
-fn group_add(sb: &mut c::bch_sb_handle, parent: u32, name: &[u8]) -> Result<u32, BchError> {
-    if !label_valid(name) {
-        return Err(c::EINVAL.into());
-    }
-
+/// At least @n deleted slots, growing the section if need be: so the adds
+/// after can't fail, and a path is made whole or not at all.
+fn groups_reserve(sb: &mut c::bch_sb_handle, n: usize) -> Result<(), BchError> {
     let groups = sb_groups(sb.sb());
     let nr = groups.len();
-    let i = groups.iter().position(|g| g.deleted()).unwrap_or(nr);
-
-    if i == nr {
-        let u64s = (size_of::<Head<c::bch_sb_field>>() +
-                    size_of::<c::bch_disk_group>() * (nr + 1)) / size_of::<u64>();
-
-        sb.field_resize::<c::bch_sb_field_disk_groups>(u64s as u32)
-            .ok_or(BchError::from(bch_errcode::BCH_ERR_ENOSPC_disk_label_add))?;
+    let free = groups.iter().filter(|g| g.deleted()).count();
+    if free >= n {
+        return Ok(());
     }
 
+    let u64s = (size_of::<Head<c::bch_sb_field>>() +
+                size_of::<c::bch_disk_group>() * (nr + n - free)) / size_of::<u64>();
+    let groups = sb.field_resize::<c::bch_sb_field_disk_groups>(u64s as u32)
+        .ok_or(BchError::from(bch_errcode::BCH_ERR_ENOSPC_disk_label_add))?;
+
+    for g in &mut groups.entries[nr..] {
+        g.set_bch_group_deleted(true);
+    }
+    Ok(())
+}
+
+/// In the first deleted slot: groups_reserve() first.
+fn group_add(sb: &mut c::bch_sb_handle, parent: u32, name: &[u8]) -> u32 {
     let groups = sb.field_mut::<c::bch_sb_field_disk_groups>()
-        .expect("disk groups section: had a deleted group, or was just sized");
+        .expect("disk groups section: reserved");
+    let i = groups.entries.iter().position(|g| g.deleted())
+        .expect("disk groups section: reserved");
     let g = &mut groups.entries[i];
 
     g.label = Default::default();
@@ -218,7 +225,7 @@ fn group_add(sb: &mut c::bch_sb_handle, parent: u32, name: &[u8]) -> Result<u32,
     g.set_bch_group_parent(parent.into());
     g.set_bch_group_data_allowed(c::bch_disk_group::BCH_GROUP_DATA_ALLOWED_MAX);
 
-    Ok(i as u32)
+    i as u32
 }
 
 impl c::bch_sb_handle {
@@ -232,15 +239,26 @@ impl c::bch_sb_handle {
         Some(v - 1)
     }
 
-    /// An error leaves the ancestors added before it.
+    /// All or nothing: an error leaves the superblock as it was.
     pub fn disk_path_find_or_create(&mut self, name: &[u8]) -> Result<u32, BchError> {
+        if !path_labels(name).all(label_valid) {
+            return Err(c::EINVAL.into());
+        }
+
+        let mut labels = path_labels(name).peekable();
         let mut v = 0;
-        for l in path_labels(name) {
-            let g = match group_find(sb_groups(self.sb()), v, l) {
-                Some(g) => g,
-                None    => group_add(self, v, l)?,
-            };
-            v = g + 1;
+        {
+            let groups = sb_groups(self.sb());
+            while let Some(g) = labels.peek().and_then(|l| group_find(groups, v, l)) {
+                v = g + 1;
+                labels.next();
+            }
+        }
+
+        groups_reserve(self, labels.clone().count())?;
+
+        for l in labels {
+            v = group_add(self, v, l) + 1;
         }
         Ok(v - 1)
     }
@@ -786,7 +804,7 @@ mod tests {
         assert_eq!(sb.disk_path_find(&full), Some(0));
         assert_eq!(path(sb_groups(sb.sb()), 0).as_bytes(), full);
 
-        for bad in [&over[..], b"", b".a"] {
+        for bad in [&over[..], b"", b".a", b"x..", b"x..y"] {
             assert!(sb.disk_path_find_or_create(bad).unwrap_err().matches(c::EINVAL));
         }
         assert_eq!(sb_groups(sb.sb()).len(), 1);
