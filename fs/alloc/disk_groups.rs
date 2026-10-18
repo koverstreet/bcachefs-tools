@@ -336,29 +336,30 @@ fn sb_disk_groups_to_cpu(fs: &Fs) -> Result<(), BchError> {
     };
     let src = &groups.entries;
 
-    let fill = |dst: &mut [c::bch_disk_group_cpu]| {
-        for (d, s) in dst.iter_mut().zip(src.iter()) {
-            d.deleted = s.bch_group_deleted();
-            d.parent  = s.bch_group_parent() as u16;
-            d.label   = s.label;
-        }
-
-        for i in 0..sb.sb().nr_devices as u32 {
-            let m = members::sb_member(sb.sb(), i);
-            let Some(m) = m.filter(|m| m.alive()) else { continue };
-
-            let mut g = m.group() as usize;
-            for _ in 0..dst.len() {
-                let Some(d) = g.checked_sub(1).and_then(|g| dst.get_mut(g)) else { break };
-                d.devs.d.set(i as usize);
-                g = d.parent as usize;
-            }
-        }
-    };
-
     // SAFETY: under sb_lock, the table's writers'
-    unsafe { fs.disk_groups.rebuild(src.len(), fill) }
+    unsafe { fs.disk_groups.rebuild(src.len(), |dst| groups_to_cpu(dst, src, sb.sb())) }
         .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_disk_groups_to_cpu))
+}
+
+fn groups_to_cpu(dst: &mut [c::bch_disk_group_cpu], src: &[c::bch_disk_group], sb: &c::bch_sb) {
+    for (d, s) in dst.iter_mut().zip(src.iter()) {
+        d.deleted = s.bch_group_deleted();
+        d.parent  = s.bch_group_parent() as u16;
+        d.label   = s.label;
+    }
+
+    for i in 0..u32::from(sb.nr_devices) {
+        let m = members::sb_member(sb, i);
+        let Some(m) = m.filter(|m| m.alive()) else { continue };
+
+        // validate allows parent cycles: bound the walk up
+        let mut g = m.group() as usize;
+        for _ in 0..dst.len() {
+            let Some(d) = g.checked_sub(1).and_then(|g| dst.get_mut(g)) else { break };
+            d.devs.d.set(i as usize);
+            g = d.parent as usize;
+        }
+    }
 }
 
 #[c_export]
@@ -688,3 +689,196 @@ impl SbFieldOps for c::bch_sb_field_disk_groups {
 #[c_export]
 pub static bch_sb_field_ops_disk_groups: c::bch_sb_field_ops =
     sb_field_ops::<c::bch_sb_field_disk_groups>();
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn new_sb() -> c::bch_sb_handle {
+        let mut sb = c::bch_sb_handle::default();
+        sb.sb_realloc(0).unwrap();
+        sb
+    }
+
+    /// (alive, group) per member, group an index + 1.
+    fn add_members(sb: &mut c::bch_sb_handle, members: &[(bool, u64)]) {
+        let bytes = size_of::<Head<c::bch_sb_field_members_v2>>() +
+                    size_of::<c::bch_member>() * members.len();
+        let mi = sb.field_resize::<c::bch_sb_field_members_v2>((bytes / 8) as u32).unwrap();
+        mi.member_bytes = (size_of::<c::bch_member>() as u16).into();
+        sb.sb_mut().nr_devices = members.len() as u8;
+
+        for (i, &(alive, group)) in members.iter().enumerate() {
+            let m = sb.member_mut(i as u32).unwrap();
+            m.uuid.b = [alive as u8; 16];
+            m.set_group(group);
+        }
+    }
+
+    fn label(s: &str) -> [u8; c::BCH_SB_LABEL_SIZE as usize] {
+        let mut l = [0; c::BCH_SB_LABEL_SIZE as usize];
+        l[..s.len()].copy_from_slice(s.as_bytes());
+        l
+    }
+
+    /// @parent: index + 1.
+    fn group(name: &str, parent: u32, deleted: bool) -> c::bch_disk_group {
+        let mut g = c::bch_disk_group { label: label(name), ..Default::default() };
+        g.set_bch_group_parent(parent.into());
+        g.set_bch_group_deleted(deleted);
+        g
+    }
+
+    fn path<G: DiskGroup>(groups: &[G], v: u32) -> String {
+        let mut out = Printbuf::new();
+        disk_path_to_text_in(&mut out, groups, v);
+        out.as_str().to_owned()
+    }
+
+    fn validate(sb: &c::bch_sb_handle, groups: &[c::bch_disk_group]) -> Result<(), String> {
+        let mut err = Printbuf::new();
+        disk_groups_validate(sb.sb(), groups, &mut err).map_err(|e| {
+            assert_eq!(e, bch_errcode::BCH_ERR_invalid_sb_disk_groups.into());
+            err.as_str().to_owned()
+        })
+    }
+
+    #[test]
+    fn path_labels_split_at_dots() {
+        let split = |s: &'static [u8]| path_labels(s).collect::<Vec<_>>();
+        assert_eq!(split(b"ssd.fast"), [&b"ssd"[..], b"fast"]);
+        assert_eq!(split(b"ssd."),     [&b"ssd"[..]]);
+        assert_eq!(split(b"a..b"),     [&b"a"[..], b"", b"b"]);
+        assert_eq!(split(b".a"),       [&b""[..], b"a"]);
+        assert_eq!(split(b""),         [&b""[..]]);
+    }
+
+    #[test]
+    fn disk_paths_find_and_create() {
+        let mut sb = new_sb();
+        assert_eq!(sb.disk_path_find(b"ssd"), None);
+
+        assert_eq!(sb.disk_path_find_or_create(b"ssd.fast").unwrap(), 1);
+        assert_eq!(sb.disk_path_find_or_create(b"ssd.slow").unwrap(), 2);
+        assert_eq!(sb.disk_path_find_or_create(b"hdd").unwrap(), 3);
+        assert_eq!(sb.disk_path_find_or_create(b"ssd.fast").unwrap(), 1);
+
+        assert_eq!(sb.disk_path_find(b"ssd"),       Some(0));
+        assert_eq!(sb.disk_path_find(b"ssd.slow."), Some(2));
+        assert_eq!(sb.disk_path_find(b"fast"),      None);
+        assert_eq!(sb.disk_path_find(b"hdd.fast"),  None);
+        assert_eq!(sb.disk_path_find(b""),          None);
+
+        let groups = sb_groups(sb.sb());
+        assert_eq!(groups.iter().map(|g| g.parent()).collect::<Vec<_>>(), [0, 1, 1, 0]);
+        assert!(groups.iter().all(|g| !g.deleted() &&
+            g.bch_group_data_allowed() == c::bch_disk_group::BCH_GROUP_DATA_ALLOWED_MAX));
+        assert_eq!(path(groups, 2), "ssd.slow");
+    }
+
+    #[test]
+    fn disk_path_label_lengths() {
+        let mut sb = new_sb();
+        let full = [b'x'; c::BCH_SB_LABEL_SIZE as usize];
+        let over = [b'x'; c::BCH_SB_LABEL_SIZE as usize + 1];
+
+        assert_eq!(sb.disk_path_find_or_create(&full).unwrap(), 0);
+        assert_eq!(sb.disk_path_find(&full), Some(0));
+        assert_eq!(path(sb_groups(sb.sb()), 0).as_bytes(), full);
+
+        for bad in [&over[..], b"", b".a"] {
+            assert!(sb.disk_path_find_or_create(bad).unwrap_err().matches(c::EINVAL));
+        }
+        assert_eq!(sb_groups(sb.sb()).len(), 1);
+    }
+
+    #[test]
+    fn deleted_slot_is_reused() {
+        let mut sb = new_sb();
+        sb.disk_path_find_or_create(b"a_longer_label").unwrap();
+        sb.disk_path_find_or_create(b"b").unwrap();
+        sb.field_mut::<c::bch_sb_field_disk_groups>().unwrap().entries[0].set_bch_group_deleted(true);
+
+        assert_eq!(sb.disk_path_find(b"a_longer_label"), None);
+        assert_eq!(sb.disk_path_find_or_create(b"c").unwrap(), 0);
+
+        let groups = sb_groups(sb.sb());
+        assert_eq!(groups.len(), 2);
+        assert!(!groups[0].deleted());
+        assert_eq!(groups[0].label, label("c"));
+    }
+
+    #[test]
+    fn disk_path_invalid() {
+        let groups = [group("ssd", 0, false), group("fast", 1, false),
+                      group("gone", 0, true), group("orphan", 3, false)];
+
+        assert_eq!(path(&groups, 0), "ssd");
+        assert_eq!(path(&groups, 1), "ssd.fast");
+        assert_eq!(path(&groups, 2), "invalid label 2");
+        assert_eq!(path(&groups, 3), "invalid label 2");
+        assert_eq!(path(&groups, 4), "invalid label 4");
+    }
+
+    /// validate allows parent cycles.
+    #[test]
+    fn parent_cycles_end() {
+        let groups = [group("a", 2, false), group("b", 1, false)];
+        assert!(path(&groups, 0).starts_with("invalid label"));
+
+        let mut sb = new_sb();
+        add_members(&mut sb, &[(true, 1)]);
+        let mut dst = [c::bch_disk_group_cpu::default(); 2];
+        groups_to_cpu(&mut dst, &groups, sb.sb());
+        assert!(dst.iter().all(|d| d.devs.d.test(0)));
+    }
+
+    #[test]
+    fn groups_to_cpu_sets_ancestors() {
+        let groups = [group("ssd", 0, false), group("fast", 1, false), group("hdd", 0, false)];
+        let mut sb = new_sb();
+        add_members(&mut sb, &[(true, 2), (true, 3), (false, 2), (true, 0)]);
+
+        let mut dst = [c::bch_disk_group_cpu::default(); 3];
+        groups_to_cpu(&mut dst, &groups, sb.sb());
+
+        let devs = |g: usize| dst[g].devs.d.iter().collect::<Vec<_>>();
+        assert_eq!((devs(0), devs(1), devs(2)), (vec![0], vec![0], vec![1]));
+        assert_eq!((dst[1].parent, dst[1].label), (1, label("fast")));
+    }
+
+    #[test]
+    fn validate_groups() {
+        let mut sb = new_sb();
+        add_members(&mut sb, &[(true, 2), (true, 0)]);
+
+        let ok = [group("ssd", 0, false), group("fast", 1, false),
+                  group("fast", 0, false), group("fast", 1, true)];
+        assert_eq!(validate(&sb, &ok), Ok(()));
+
+        let bad = |groups: &[c::bch_disk_group]| validate(&sb, groups).unwrap_err();
+        assert_eq!(bad(&[group("ssd", 0, false), group("ssd", 0, false)]),
+                   "duplicate label 0.ssd");
+        assert_eq!(bad(&[group("a", 0, false), group("b", 1, false), group("c", 0, false),
+                         group("b", 1, false)]),
+                   "duplicate label 1.b");
+        assert_eq!(bad(&[group("ssd", 0, false), group("", 0, false)]),
+                   "label 1 empty");
+        assert_eq!(bad(&[group("ssd", 0, false), group("x", 3, false)]),
+                   "label 1 has invalid parent 2 (have 2)");
+    }
+
+    /// Dead members are checked too.
+    #[test]
+    fn validate_member_labels() {
+        let groups = [group("ssd", 0, false), group("old", 0, true)];
+
+        let mut sb = new_sb();
+        add_members(&mut sb, &[(true, 3)]);
+        assert_eq!(validate(&sb, &groups).unwrap_err(), "disk 0 has invalid label 2 (have 2)");
+
+        let mut sb = new_sb();
+        add_members(&mut sb, &[(false, 2)]);
+        assert_eq!(validate(&sb, &groups).unwrap_err(), "disk 0 has deleted label 1");
+    }
+}
