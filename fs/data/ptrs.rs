@@ -199,34 +199,28 @@ c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs => ptrs_bkey]);
 
 /// The extent entries of a key with pointers, in whichever form it's held:
 /// any BkeyV whose value is a PtrsBkey - armed to Ptrs, or to one of them.
-pub trait BkeyVPtrs: BkeyV {
-    fn extent_entries(&self, fs: &Fs) -> impl Iterator<Item = ExtentEntry<'_>>
-    where Self::V: PtrsBkey
-    {
+pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
+    fn extent_entries(&self, fs: &Fs) -> impl Iterator<Item = ExtentEntry<'_>> {
         let k = self.as_sc();
         // Empty for a value too short to hold them
         let b = k.val_bytes().get(<Self::V as PtrsBkey>::entry_range(k)).unwrap_or_default();
         Entries { sizes: EntrySizes::of(fs), b }.map(|(ty, b)| ExtentEntry::new(ty, b))
     }
 
-    fn ptrs(&self, fs: &Fs) -> impl Iterator<Item = &c::bch_extent_ptr>
-    where Self::V: PtrsBkey
-    {
+    fn ptrs(&self, fs: &Fs) -> impl Iterator<Item = &c::bch_extent_ptr> {
         self.extent_entries(fs).filter_map(|e| match e {
             ExtentEntry::ptr(p) => Some(p),
             _ => None,
         })
     }
 
-    fn crcs(&self, fs: &Fs) -> impl Iterator<Item = c::bch_extent_crc_unpacked>
-    where Self::V: PtrsBkey
-    {
+    fn crcs(&self, fs: &Fs) -> impl Iterator<Item = c::bch_extent_crc_unpacked> {
         let k = self.k();
         self.extent_entries(fs).filter_map(move |e| crc_unpack(k, e))
     }
 
     fn extent_entries_mut(&mut self, fs: &Fs) -> impl Iterator<Item = ExtentEntryMut<'_>>
-    where Self: BkeyVMut, Self::V: PtrsBkey
+    where Self: BkeyVMut
     {
         let range = <Self::V as PtrsBkey>::entry_range(self.as_sc());
         let b = self.as_s().into_val_bytes_mut().get_mut(range).unwrap_or_default();
@@ -234,7 +228,7 @@ pub trait BkeyVPtrs: BkeyV {
     }
 
     fn ptrs_mut(&mut self, fs: &Fs) -> impl Iterator<Item = &mut c::bch_extent_ptr>
-    where Self: BkeyVMut, Self::V: PtrsBkey
+    where Self: BkeyVMut
     {
         self.extent_entries_mut(fs).filter_map(|e| match e {
             ExtentEntryMut::ptr(p) => Some(p),
@@ -243,7 +237,7 @@ pub trait BkeyVPtrs: BkeyV {
     }
 }
 
-impl<K: BkeyV> BkeyVPtrs for K {}
+impl<K: BkeyV<V: PtrsBkey>> BkeyVPtrs for K {}
 
 /// @entry, if it's a crc entry of @k, unpacked: the sizes unbiased, the
 /// checksum's bytes where bch_csum has them.
