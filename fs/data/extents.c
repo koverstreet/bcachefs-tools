@@ -834,13 +834,6 @@ static unsigned bch2_dev_durability_desired(struct bch_fs *c, unsigned dev)
 	return ca ? ca->mi.durability : 0;
 }
 
-static unsigned __bch2_dev_durability(struct bch_fs *c, unsigned dev, bool desired)
-{
-	return desired
-		? bch2_dev_durability_desired(c, dev)
-		: bch2_dev_durability(c, dev);
-}
-
 struct stripe_dev_durability {
 	u8	dev;
 	u8	durability;
@@ -977,22 +970,18 @@ out:
 	return ret2;
 }
 
-int __bch2_extent_ptr_durability(struct btree_trans *trans, struct extent_ptr_decoded *p, bool desired)
+int bch2_extent_ptr_durability(struct btree_trans *trans, struct extent_ptr_decoded *p)
 {
 	if (p->ptr.cached)
 		return 0;
 
-	if (likely(!p->has_ec)) {
-		guard(rcu)();
-		return __bch2_dev_durability(trans->c, p->ptr.dev, desired);
-	}
+	if (likely(!p->has_ec))
+		return bch2_dev_durability(trans->c, p->ptr.dev);
 
 	struct durability_dedup seen = {};
 	struct bkey_durability d = {};
-	unsigned desired_total = 0;
-	int ret = bch2_stripe_durability(trans, *p, &d, &seen,
-					 desired ? &desired_total : NULL);
-	return ret ?: (int) (desired ? desired_total : d.total);
+	int ret = bch2_stripe_durability(trans, *p, &d, &seen, NULL);
+	return ret ?: (int) d.total;
 }
 
 /*

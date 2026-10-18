@@ -306,9 +306,6 @@ static inline struct bkey_ptrs bch2_bkey_ptrs(struct bkey_s k)
 	     ((_ptr) = __bkey_ptr_next(_ptr, _end));			\
 	     (_ptr)++)
 
-#define bkey_ptr_next(_p, _ptr)						\
-	__bkey_ptr_next(_ptr, (_p).end)
-
 #define bkey_for_each_ptr(_p, _ptr)					\
 	__bkey_for_each_ptr(&(_p).start->ptr, (_p).end, _ptr)
 
@@ -375,9 +372,6 @@ out:									\
 	__bkey_for_each_crc(_k, (_p).start, (_p).end, _crc, _iter)
 
 /* Iterate over pointers in KEY_TYPE_extent: */
-
-#define extent_ptr_next(_e, _ptr)					\
-	__bkey_ptr_next(_ptr, extent_entry_last(_e))
 
 #define extent_for_each_ptr(_e, _ptr)					\
 	__bkey_for_each_ptr(&(_e).v->start->ptr, extent_entry_last(_e), _ptr)
@@ -603,17 +597,7 @@ static inline bool bch2_stripe_block_dev_bad(struct bch_fs *c, unsigned dev)
 	return !bch2_dev_durability(c, dev);
 }
 
-int __bch2_extent_ptr_durability(struct btree_trans *, struct extent_ptr_decoded *, bool);
-
-static inline int bch2_extent_ptr_desired_durability(struct btree_trans *trans, struct extent_ptr_decoded *p)
-{
-	return __bch2_extent_ptr_durability(trans, p, true);
-}
-
-static inline int bch2_extent_ptr_durability(struct btree_trans *trans, struct extent_ptr_decoded *p)
-{
-	return __bch2_extent_ptr_durability(trans, p, false);
-}
+int bch2_extent_ptr_durability(struct btree_trans *, struct extent_ptr_decoded *);
 
 int bch2_bkey_durability(struct btree_trans *, struct bkey_s_c, struct bkey_durability *);
 struct bkey_durability bch2_btree_ptr_durability(struct bch_fs *, struct bkey_s_c);
@@ -755,16 +739,6 @@ static inline bool bch2_extent_ptr_eq(struct bch_extent_ptr ptr1,
 }
 
 void bch2_ptr_swab(const struct bch_fs *, struct bkey_s);
-
-/* Returns how k overlaps with m */
-static inline enum bch_extent_overlap bch2_extent_overlap(const struct bkey *k,
-							  const struct bkey *m)
-{
-	int cmp1 = bkey_lt(k->p, m->p);
-	int cmp2 = bkey_gt(bkey_start_pos(k), bkey_start_pos(m));
-
-	return (cmp1 << 1) + cmp2;
-}
 
 static inline void bch2_cut_front(const struct bch_fs *c, struct bpos where, struct bkey_i *k)
 {

@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::c_uint;
-use cstruct_macros::{c_enum, CStruct, TypeInfo};
+use cstruct_macros::{CStruct, TypeInfo};
 
 #[repr(C, align(8))]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -95,15 +95,4 @@ pub struct bkey_durability {
      * sharing the stripe. Space and replication are different questions.
      */
     pub replicas: u8,
-}
-
-/* Generic extent code: */
-c_enum! {
-    #[closed]
-    pub enum bch_extent_overlap: u32 {
-        BCH_EXTENT_OVERLAP_ALL = 0,
-        BCH_EXTENT_OVERLAP_BACK = 1,
-        BCH_EXTENT_OVERLAP_FRONT = 2,
-        BCH_EXTENT_OVERLAP_MIDDLE = 3,
-    }
 }
