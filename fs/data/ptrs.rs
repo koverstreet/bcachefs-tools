@@ -19,12 +19,13 @@
 
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{bkey_family, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut};
-use crate::btree::iter::{BtreeIter, TransAttempt};
+use crate::btree::iter::{BtreeIter, TransAttempt, UpdateTriggerFlags};
 use crate::errcode::BchError;
 use crate::c;
 use crate::fs::Fs;
+use crate::sb::counters::events;
 use crate::types::Le64;
-use crate::util::rcu::read_lock;
+use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, Validated};
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
@@ -558,9 +559,185 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
             mask ^= 1 << drop;
         }
     }
+
+    /// Drop its cached pointer at @at, with a cached_ptr_drop event saying
+    /// @why: drop_cached_pointer_trace(). Not in a read-side section, as C's
+    /// is: the trace's printbuf allocates.
+    fn drop_cached_ptr(&mut self, fs: &Fs, at: EntryPos, why: &str)
+    where Self: BkeyVMut
+    {
+        let k = self.as_sc();
+        let ptr = *self.ptrs_decoded(fs).find(|d| d.pos == at)
+            .expect("a cached pointer at the position to drop").ptr;
+
+        fs.event_add_trace(events::cached_ptr_drop, k.k.size.into(), |out| {
+            write!(out, "{why}\ndropping pointer\n  ");
+            extent_ptr_to_text(&mut out.atomic(), Some(fs), &ptr, &read_lock());
+            crate::prt!(out, "\nfrom:\n{}", k.to_text(fs));
+        });
+
+        self.drop_ptr_noerror(fs, at);
+    }
+
+    /// The first of its cached pointers that shouldn't be, and why.
+    fn cached_ptr_to_drop(&self, fs: &Fs, opts: &c::bch_inode_opts) -> Option<(EntryPos, &'static str)> {
+        let rcu = read_lock();
+        let mut have_cached = false;
+
+        for d in self.ptrs_decoded(fs) {
+            if let Some(why) = cached_ptr_drop_reason(fs, opts, &d, have_cached, &rcu) {
+                return Some((d.pos, why));
+            }
+            have_cached |= d.ptr.cached() != 0;
+        }
+        None
+    }
+
+    /// Its cached pointers that shouldn't be, dropped:
+    /// bch2_bkey_drop_extra_cached_ptrs().
+    fn drop_extra_cached_ptrs(&mut self, fs: &Fs, opts: &c::bch_inode_opts)
+    where Self: BkeyVMut
+    {
+        while let Some((at, why)) = self.cached_ptr_to_drop(fs, opts) {
+            self.drop_cached_ptr(fs, at, why);
+        }
+    }
+
+    /// Its pointer to @dev made cached, after its cached pointers that
+    /// shouldn't be are dropped - and dropped itself if it shouldn't be, or
+    /// if the first walk finds it erasure coded: bch2_extent_ptr_set_cached().
+    ///
+    /// XXX: C's - if a walk dropped the pointer itself, C dereferences NULL
+    /// where this panics; only cached pointers are dropped, and the callers
+    /// pass pointers that aren't.
+    fn set_cached(&mut self, fs: &Fs, opts: &c::bch_inode_opts, dev: u32)
+    where Self: BkeyVMut
+    {
+        // C's pointer to it, forgotten once a drop moves the entries
+        let mut ptr_known = true;
+
+        let have_cached = loop {
+            let rcu = read_lock();
+            let mut have_cached = false;
+            let mut to_drop = None;
+
+            for d in self.ptrs_decoded(fs) {
+                if ptr_known && u32::from(d.ptr.dev()) == dev && d.p.has_ec {
+                    to_drop = Some((d.pos, "ptr->cached && ec currently incompatible", true));
+                    break;
+                }
+                if let Some(why) = cached_ptr_drop_reason(fs, opts, &d, have_cached, &rcu) {
+                    to_drop = Some((d.pos, why, false));
+                    break;
+                }
+                have_cached |= d.ptr.cached() != 0;
+            }
+            drop(rcu);
+
+            match to_drop {
+                Some((at, why, done)) => {
+                    self.drop_cached_ptr(fs, at, why);
+                    if done {
+                        return;
+                    }
+                    ptr_known = false;
+                }
+                None => break have_cached,
+            }
+        };
+
+        let at = self.ptrs_decoded(fs).filter(|d| u32::from(d.ptr.dev()) == dev).last()
+            .unwrap_or_else(|| panic!("making the pointer to dev {dev} cached, which a walk dropped"))
+            .pos;
+        self.ptr_mut_at(fs, at).expect("the pointer just found").set_cached(1);
+
+        let why = {
+            let rcu = read_lock();
+            let d = self.ptrs_decoded(fs).find(|d| d.pos == at).expect("the pointer just found");
+            cached_ptr_drop_reason(fs, opts, &d, have_cached, &rcu)
+        };
+        if let Some(why) = why {
+            self.drop_cached_ptr(fs, at, why);
+        }
+    }
+
+    /// set_cached() each pointer of @mask, by index among the pointers, the
+    /// highest first: bch2_bkey_set_ptrs_cached_mask().
+    ///
+    /// XXX: C's - set_cached() can drop cached pointers anywhere in the key,
+    /// below a lower bit's pointer too, which the bit then misses.
+    fn set_ptrs_cached_mask(&mut self, fs: &Fs, opts: &c::bch_inode_opts, mut mask: u32)
+    where Self: BkeyVMut
+    {
+        while mask != 0 {
+            let i = 31 - mask.leading_zeros();
+            mask &= !(1 << i);
+
+            let dev = self.ptrs(fs).nth(i as usize).map(|p| u32::from(p.dev()));
+            if let Some(dev) = dev {
+                self.set_cached(fs, opts, dev);
+            }
+        }
+    }
+
+    /// Whether it has a cached pointer that's stale: bch2_bkey_has_stale_ptrs().
+    fn has_stale_ptrs(&self, fs: &Fs) -> bool {
+        let rcu = read_lock();
+        self.ptrs(fs).any(|p| {
+            p.cached() != 0 &&
+                fs.dev_rcu(p.dev().into(), &rcu)
+                    .is_some_and(|ca| ca.ptr_stale(p, &rcu).is_some_and(|stale| stale > 0))
+        })
+    }
+
+    /// Its stale cached pointers dropped - and its cached pointers to devices
+    /// that aren't there, which has_stale_ptrs() doesn't count:
+    /// __bch2_bkey_drop_stale_ptrs().
+    fn drop_stale_ptrs(&mut self, fs: &Fs)
+    where Self: BkeyVMut
+    {
+        let rcu = read_lock();
+        self.drop_ptrs_noerror(fs, |d| {
+            d.ptr.cached() != 0 &&
+                fs.dev_rcu(d.ptr.dev().into(), &rcu)
+                    .is_none_or(|ca| ca.ptr_stale(d.ptr, &rcu).is_some_and(|stale| stale > 0))
+        });
+    }
 }
 
 impl<K: BkeyV<V: PtrsBkey>> BkeyVPtrs for K {}
+
+/// Why @d shouldn't be cached, if it's a cached pointer - @have_cached if one
+/// before it is: maybe_drop_cached_ptr()'s tests. A bucket its device doesn't
+/// have is stale, as C's -1 is.
+fn cached_ptr_drop_reason(fs: &Fs, opts: &c::bch_inode_opts, d: &DecodedPtr<'_>, have_cached: bool,
+                          rcu: &ReadGuard) -> Option<&'static str> {
+    let ptr = d.ptr;
+    if ptr.cached() == 0 {
+        return None;
+    }
+    if have_cached {
+        return Some("extent already has another cached pointer");
+    }
+    if d.p.has_ec {
+        return Some("cached ptr incompatible with erasure coding");
+    }
+
+    let dev = u32::from(ptr.dev());
+    let ca = fs.dev_rcu(dev, rcu);
+    if ca.is_some_and(|ca| ca.ptr_stale(ptr, rcu) != Some(0)) {
+        return Some("pointer is stale");
+    }
+    if ca.is_none_or(|ca| u32::from(ca.mi.state) == c::bch_member_state::BCH_MEMBER_STATE_evacuating.0) {
+        return Some("device bad or evacuating");
+    }
+
+    let target = if opts.promote_target != 0 { opts.promote_target } else { opts.foreground_target };
+    if target != 0 && !fs.dev_in_target(dev, Target::decode(target.into()), rcu) {
+        return Some("incorrect target");
+    }
+    None
+}
 
 /// A pointer, decoded: ptrs_decoded()'s. @p is C's extent_ptr_decoded, a
 /// copy - its read path's fields zero; @ptr is the pointer in the key, and
@@ -731,14 +908,21 @@ pub fn crc_is_encoded(crc: &c::bch_extent_crc_unpacked) -> bool {
     crc.csum_type as u32 != c::bch_csum_type::BCH_CSUM_none.0 || crc_is_compressed(crc)
 }
 
-/// Drop @k's stale cached pointers, updating it through @iter.
+/// Drop @k's stale cached pointers, if it has any, as an update through @iter:
+/// bch2_bkey_drop_stale_ptrs().
 pub fn drop_stale_ptrs<'a, 't>(
     t:    &TransAttempt<'a, 't>,
     iter: &BtreeIter<'t>,
     k:    BkeySC<'_>,
 ) -> Result<(), BchError> {
-    let ret = unsafe { c::bch2_bkey_drop_stale_ptrs(t.raw(), iter.raw(), k.into()) };
-    t.result(ret)
+    let fs = t.fs();
+    if !k.arm::<Ptrs>().is_some_and(|p| p.has_stale_ptrs(fs)) {
+        return Ok(());
+    }
+
+    let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
+    BkeyS::from(&mut u).arm::<Ptrs>().expect("a key with pointers, as checked").drop_stale_ptrs(fs);
+    Ok(())
 }
 
 // ── queries ──────────────────────────────────────────────────────────────

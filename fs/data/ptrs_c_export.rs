@@ -6,6 +6,7 @@
 use super::*;
 use super::ops::{btree_ptr_validate, btree_ptr_v2_validate};
 use crate::btree::bkey::BkeyI;
+use crate::btree::iter::BtreeTrans;
 use crate::errcode::ret_to_c;
 use crate::init::error::BkeyValidate;
 use crate::util::ffi::Opaque;
@@ -206,6 +207,22 @@ pub unsafe fn bch2_bkey_drop_ec(c: &Fs, k: *mut c::bkey_i, dev: c_uint) {
 pub unsafe fn bch2_bkey_drop_ec_mask(c: &Fs, k: *mut c::bkey_i, mask: c_uint) {
     // SAFETY: the caller's
     ptrs_mut(unsafe { bkey_i_s(k) }).drop_ec_mask(c, mask);
+}
+
+#[c_export]
+pub fn bch2_bkey_drop_extra_cached_ptrs(c: &Fs, opts: &c::bch_inode_opts, k: BkeyS<'_>) {
+    if let Some(mut k) = k.arm::<Ptrs>() {
+        k.drop_extra_cached_ptrs(c, opts);
+    }
+}
+
+/// # Safety
+/// C has an attempt in progress on @trans.
+#[c_export]
+pub unsafe fn bch2_bkey_drop_stale_ptrs(trans: &BtreeTrans<'_>, iter: &BtreeIter<'_>, k: BkeySC<'_>) -> c_int {
+    // SAFETY: the caller's
+    let t = unsafe { trans.attempt_in_progress() };
+    ret_to_c(drop_stale_ptrs(&t, iter, k))
 }
 
 /// # Safety

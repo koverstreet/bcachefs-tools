@@ -624,16 +624,6 @@ do {										\
 	} while (dropped);							\
 } while (0)
 
-void bch2_extent_ptr_set_cached(struct bch_fs *, struct bch_inode_opts *,
-				struct bkey_s, struct bch_extent_ptr *);
-
-void bch2_bkey_drop_extra_cached_ptrs(struct bch_fs *, struct bch_inode_opts *, struct bkey_s);
-int bch2_bkey_drop_extra_durability(struct btree_trans *, struct bch_inode_opts *,
-				    struct bkey_i *, unsigned, bool);
-int bch2_bkey_drop_extra_ec_durability(struct btree_trans *,
-				       struct bch_inode_opts *,
-				       struct bkey_i *, unsigned);
-
 static inline bool bch2_extent_ptr_eq(struct bch_extent_ptr ptr1,
 				      struct bch_extent_ptr ptr2)
 {
