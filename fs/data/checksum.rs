@@ -33,6 +33,22 @@ impl c::bch_csum_type {
                        c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128)
     }
 
+    /// Its checksum's size in bytes - None for a type this version doesn't
+    /// know: bch_crc_bytes[].
+    pub fn bytes(self) -> Option<u32> {
+        Some(match self {
+            c::bch_csum_type::BCH_CSUM_none                     => 0,
+            c::bch_csum_type::BCH_CSUM_crc32c_nonzero |
+            c::bch_csum_type::BCH_CSUM_crc32c                   => 4,
+            c::bch_csum_type::BCH_CSUM_crc64_nonzero |
+            c::bch_csum_type::BCH_CSUM_crc64 |
+            c::bch_csum_type::BCH_CSUM_xxhash                   => 8,
+            c::bch_csum_type::BCH_CSUM_chacha20_poly1305_80     => 10,
+            c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128    => 16,
+            _ => return None,
+        })
+    }
+
     /// Whether checksums of two adjacent ranges combine into the whole's -
     /// bch2_checksum_merge() - so an extent with it can merge:
     /// bch2_checksum_mergeable().

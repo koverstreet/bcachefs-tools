@@ -284,6 +284,87 @@ fn crc_unpack(k: &c::bkey, entry: ExtentEntry<'_>) -> Option<c::bch_extent_crc_u
     })
 }
 
+// Packing, bch2_extent_crc_pack(): each entry type's pack() is None unless
+// @crc fits it exactly, where C truncates.
+
+/// A size as a crc entry has it, biased by 1.
+fn crc_size_raw<T: TryFrom<u32>>(size: u32) -> Option<T> {
+    T::try_from(size.checked_sub(1)?).ok()
+}
+
+/// @crc's checksum type's size in bytes, if it's one this version knows.
+fn crc_csum_bytes(crc: &c::bch_extent_crc_unpacked) -> Option<u32> {
+    c::bch_csum_type(u32::from(crc.csum_type)).bytes()
+}
+
+/// The checksum's bytes, lo's then hi's - where a packed entry's come from.
+fn csum_bytes(csum: &c::bch_csum) -> [u8; 16] {
+    let mut b = [0u8; 16];
+    b[..8].copy_from_slice(&csum.lo.get().to_le_bytes());
+    b[8..].copy_from_slice(&csum.hi.get().to_le_bytes());
+    b
+}
+
+impl c::bch_extent_crc32 {
+    /// @crc as a crc32 entry, if it fits: a checksum of at most 4 bytes, and
+    /// no nonce.
+    pub fn pack(crc: &c::bch_extent_crc_unpacked) -> Option<Self> {
+        if crc_csum_bytes(crc)? > 4 || u32::from(crc.nonce) > c::CRC32_NONCE_MAX {
+            return None;
+        }
+        let csum = csum_bytes(&crc.csum);
+
+        Self::new()
+            .with_compressed_size_raw_checked(crc_size_raw(crc.compressed_size)?).ok()?
+            .with_uncompressed_size_raw_checked(crc_size_raw(crc.uncompressed_size)?).ok()?
+            .with_offset_checked(crc.offset.try_into().ok()?).ok()?
+            .with_csum_type_checked(crc.csum_type).ok()?
+            .with_compression_type_checked(crc.compression_type).ok()?
+            .with_csum_checked(u32::from_ne_bytes([csum[0], csum[1], csum[2], csum[3]])).ok()
+    }
+}
+
+impl c::bch_extent_crc64 {
+    /// @crc as a crc64 entry, if it fits: a checksum of at most 10 bytes.
+    pub fn pack(crc: &c::bch_extent_crc_unpacked) -> Option<Self> {
+        if crc_csum_bytes(crc)? > 10 {
+            return None;
+        }
+        let csum = csum_bytes(&crc.csum);
+
+        Some(c::bch_extent_crc64 {
+            bits: c::bch_extent_crc64_bits::new()
+                .with_compressed_size_raw_checked(crc_size_raw(crc.compressed_size)?).ok()?
+                .with_uncompressed_size_raw_checked(crc_size_raw(crc.uncompressed_size)?).ok()?
+                .with_offset_checked(crc.offset).ok()?
+                .with_nonce_checked(crc.nonce).ok()?
+                .with_csum_type_checked(crc.csum_type).ok()?
+                .with_compression_type_checked(crc.compression_type).ok()?
+                .with_csum_hi_checked(u16::from_ne_bytes([csum[8], csum[9]])).ok()?,
+            csum_lo: u64::from_ne_bytes(csum[..8].try_into().unwrap()),
+        })
+    }
+}
+
+impl c::bch_extent_crc128 {
+    /// @crc as a crc128 entry, if it fits - a checksum type this version
+    /// knows, any of which this holds.
+    pub fn pack(crc: &c::bch_extent_crc_unpacked) -> Option<Self> {
+        crc_csum_bytes(crc)?;
+
+        Some(c::bch_extent_crc128 {
+            bits: c::bch_extent_crc128_bits::new()
+                .with_compressed_size_raw_checked(crc_size_raw(crc.compressed_size)?).ok()?
+                .with_uncompressed_size_raw_checked(crc_size_raw(crc.uncompressed_size)?).ok()?
+                .with_offset_checked(crc.offset).ok()?
+                .with_nonce_checked(crc.nonce).ok()?
+                .with_csum_type_checked(crc.csum_type).ok()?
+                .with_compression_type_checked(crc.compression_type).ok()?,
+            csum: crc.csum,
+        })
+    }
+}
+
 /// Whether @crc's data is checksummed or compressed - read back whole, so
 /// bounded by encoded_extent_max.
 pub fn crc_is_encoded(crc: &c::bch_extent_crc_unpacked) -> bool {
