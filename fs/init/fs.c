@@ -612,7 +612,8 @@ static int __bch2_fs_read_write(struct bch_fs *c, bool early)
 	bch_info(c, "going read-write");
 
 	try(bch2_fs_init_rw(c));
-	try(bch2_sb_members_v2_init(c));
+	scoped_guard(mutex_noio, &c->sb_lock)
+		try(bch2_sb_members_v2_init(c));
 
 	clear_bit(BCH_FS_clean_shutdown, &c->flags);
 
