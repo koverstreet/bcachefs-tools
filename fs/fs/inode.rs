@@ -51,7 +51,7 @@ use crate::btree::iter::{
 use crate::init::error::{id, BkeyValidate};
 use crate::snapshots::subvolume;
 use crate::util::ffi::{opt_cstr, Opaque};
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;
 use core::mem::MaybeUninit;
 use crate::{bch_err_fn, bch_err_msg, bkey_fsck_err_on};
@@ -59,7 +59,6 @@ use core::mem::size_of;
 use core::ops::ControlFlow;
 use crate::btree_id;
 use core::ffi::CStr;
-use core::fmt;
 use cstruct_macros::c_export;
 
 // The inode x-macros as m! { name = arg, ... }, the way C uses them: each
@@ -261,7 +260,7 @@ fn unpack_error(fs: &Fs, k: BkeySC<'_>, u: &c::bch_inode_unpacked, fieldnr: usiz
     let mut msg = LogMsg::new(fs);
     msg.set_suppressed(true);
     writeln!(msg, "inode unpack error at field {fieldnr} ({}) in {}", names[fieldnr], k.k);
-    unpacked_to_text(&mut msg, u);
+    u.to_text(&mut msg);
 
     crate::init::error::count_fsck_err(fs, id::inode_unpack_error, &mut msg);
 
@@ -955,27 +954,21 @@ fn fields_to_text(out: &mut Printbuf, inode: &c::bch_inode_unpacked) {
     inode_fields_v3!(field);
 }
 
-/// @inode, by number and snapshot, then its fields: as
-/// bch2_inode_unpacked_to_text().
-pub fn unpacked_to_text(out: &mut Printbuf, inode: &c::bch_inode_unpacked) {
-    write!(out, "inum: {}:{} ", inode.bi_inum, inode.bi_snapshot);
-    let mut out = out.indent(2);
-    fields_to_text(&mut out, inode);
+impl ToText for c::bch_inode_unpacked {
+    /// By number and snapshot, then its fields: as
+    /// bch2_inode_unpacked_to_text().
+    fn to_text(&self, out: &mut Printbuf) {
+        write!(out, "inum: {}:{} ", self.bi_inum, self.bi_snapshot);
+        let mut out = out.indent(2);
+        fields_to_text(&mut out, self);
+    }
 }
 
 /// For C's subvolume, VFS and inode option code: bch2_inode_unpacked_to_text().
 #[c_export]
 #[cold]
 pub extern "C" fn bch2_inode_unpacked_to_text(out: &mut Printbuf, inode: &c::bch_inode_unpacked) {
-    unpacked_to_text(out, inode)
-}
-
-impl fmt::Display for c::bch_inode_unpacked {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut buf = Printbuf::new();
-        unpacked_to_text(&mut buf, self);
-        write!(f, "{buf}")
-    }
+    inode.to_text(out)
 }
 
 /// For C's bkey_ops: bch2_inode_to_text() - an inode key's fields, unpacked.
@@ -1626,7 +1619,7 @@ pub fn rm(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
             // For the message: not finding the path isn't an error.
             let _ = lockrestart_do(&trans, |t| crate::namei::inum_to_path(t, inum, &mut buf));
             buf.newline();
-            unpacked_to_text(&mut buf, &inode);
+            inode.to_text(&mut buf);
         }
 
         ret = bch_err_msg!(fs, ret, "{}", buf);

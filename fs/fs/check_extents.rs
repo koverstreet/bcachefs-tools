@@ -48,7 +48,7 @@ use crate::init::progress::Progress;
 use crate::snapshots::snapshot;
 use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::Printbuf;
-use crate::{bch_err, bch_err_fn, bch_err_ratelimited, fsck_err_on, inode_fsck_err};
+use crate::{bch_err, bch_err_fn, bch_err_ratelimited, fsck_err_on, inode_fsck_err, prt};
 use crate::namei;
 
 /// Where the last extent seen in a snapshot ended.
@@ -128,7 +128,7 @@ fn check_i_sectors_notnested(t: &TransAttempt<'_, '_>, w: &mut InodeWalker)
                 return Err(e);
             }
         }
-        write!(buf, "\n{}", i.inode);
+        prt!(&mut buf, "\n{}", i.inode);
 
         let count2 = count_inode_sectors(t, inum, i.inode.bi_snapshot)?;
 

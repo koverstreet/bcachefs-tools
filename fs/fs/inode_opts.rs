@@ -19,7 +19,7 @@ use crate::fs::Fs;
 use crate::init::error::id;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::ffi::Opaque;
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 use crate::{fsck_err_flags, inode, logged_ops, opts};
 use core::ffi::{c_int, CStr};
 use core::ops::ControlFlow;
@@ -371,7 +371,7 @@ fn propagate_one(
         let mut buf = Printbuf::new();
         writeln!(buf, "inode options not propagated to ancestor snapshot");
         writeln!(buf, "inum {inum} set at snapshot {origin_snapshot}, ancestor {ancestor} should be:");
-        inode::unpacked_to_text(&mut buf, &ancestor_inode);
+        ancestor_inode.to_text(&mut buf);
 
         if !fsck_err_flags!(t, POS_MIN, flags, id::inode_opts_not_propagated, "{}", buf.as_str())? {
             return Ok(ControlFlow::Continue(()));

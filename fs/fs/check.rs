@@ -18,7 +18,7 @@ use crate::snapshots::{snapshot, subvolume};
 use crate::alloc::buckets::DiskReservation;
 use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::Printbuf;
-use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err};
+use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err, prt};
 use core::ops::ControlFlow;
 
 /// The snapshots of the keys seen so far at one position, while walking a
@@ -352,7 +352,7 @@ impl InodeWalker {
             btree_matches_i_mode(btree, i2.inode.bi_mode)
         });
         if let Some(g) = good_ancestor {
-            writeln!(buf, ", but found good inode in older snapshot{}", inodes[g].inode);
+            prt!(&mut buf, ", but found good inode in older snapshot{}\n", inodes[g].inode);
         }
 
         write!(buf, "\nfound keys:\n");

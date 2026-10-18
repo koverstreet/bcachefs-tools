@@ -44,11 +44,10 @@ use crate::str_hash;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::kernel::{capable, Capability};
 use crate::util::os_str::{qstr_name, OsStr, OsStrExt};
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;
-use crate::{fs_inconsistent, fsck_err, fsck_err_on};
+use crate::{fs_inconsistent, fsck_err, fsck_err_on, prt};
 use core::ffi::{c_int, c_uint};
-use core::fmt;
 use core::ops::ControlFlow;
 use cstruct_macros::c_export;
 
@@ -1074,10 +1073,10 @@ pub struct DirentInodeMismatch<'a, 'k> {
     inode: &'a c::bch_inode_unpacked,
 }
 
-impl fmt::Display for DirentInodeMismatch<'_, '_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "inode points to dirent that does not point back:\n{}\n{}",
-               self.k.to_text(self.fs), self.inode)
+impl ToText for DirentInodeMismatch<'_, '_> {
+    fn to_text(&self, out: &mut Printbuf) {
+        prt!(out, "inode points to dirent that does not point back:\n{}\n{}",
+                    self.k.to_text(self.fs), self.inode);
     }
 }
 

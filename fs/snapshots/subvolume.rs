@@ -594,7 +594,7 @@ fn check_subvol<'a, 't>(
             if fsck_err_on!(t, inode.bi_subvol as u64 != id, id::subvol_root_wrong_bi_subvol,
                             "subvol root {}:{} has wrong bi_subvol field: got {}, should be {id}\n{}\nsnapshot {snapid}: {}\n{}",
                             inode.bi_inum, inode.bi_snapshot, inode.bi_subvol,
-                            s.to_text(fs), n.v(), InodeText(&inode))? {
+                            s.to_text(fs), n.v(), inode)? {
                 inode.bi_subvol = id as u32;
                 inode.bi_snapshot = s.v().snapshot();
                 inode::fsck_write(t, &mut inode)?;
@@ -641,16 +641,6 @@ fn check_subvol<'a, 't>(
         }
     }
     Ok(())
-}
-
-struct InodeText<'i>(&'i c::bch_inode_unpacked);
-
-impl fmt::Display for InodeText<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut out = Printbuf::new();
-        inode::unpacked_to_text(&mut out, self.0);
-        write!(f, "{out}")
-    }
 }
 
 fn check_subvols(fs: &Fs) -> Result<(), BchError> {

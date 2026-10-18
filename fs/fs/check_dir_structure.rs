@@ -38,7 +38,7 @@ use crate::{inode, lostfound, namei};
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::Printbuf;
 use crate::util::log::LogMsg;
-use crate::{bch_err_fn, bch_err_msg, bch_warn, c_function_name, inode_fsck_err};
+use crate::{bch_err_fn, bch_err_msg, bch_warn, c_function_name, inode_fsck_err, prt};
 
 /// @k: a dirent, from a dirent lookup.
 fn dirent_points_to_inode(
@@ -269,7 +269,7 @@ fn check_path_loop(t: &TransAttempt<'_, '_>, inode_k: BkeySC<'_>) -> Result<(), 
                 return Err(e);
             }
             msg.newline();
-            write!(msg, "{}", inode);
+            prt!(msg, "{}", inode);
             return Err(e);
         }
 
