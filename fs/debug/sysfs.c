@@ -438,10 +438,15 @@ STORE(bch2_fs)
 	if (!test_bit(BCH_FS_started, &c->flags))
 		return -EPERM;
 
-	/* Debugging: */
+	/*
+	 * Debugging - these need no write ref: wakeups, shrinks, and work that
+	 * takes its own (discards, invalidates):
+	 */
 
-	if (attr == &sysfs_trigger_btree_updates)
+	if (attr == &sysfs_trigger_btree_updates) {
 		queue_work(c->btree.interior_updates.worker, &c->btree.interior_updates.work);
+		return size;
+	}
 
 	if (attr == &sysfs_trigger_btree_cache_shrink) {
 		struct bch_fs_btree_cache *bc = &c->btree.cache;
@@ -450,6 +455,7 @@ STORE(bch2_fs)
 		sc.gfp_mask = GFP_KERNEL;
 		sc.nr_to_scan = strtoul_or_return(buf);
 		bc->live[0].shrink->scan_objects(bc->live[0].shrink, &sc);
+		return size;
 	}
 
 	if (attr == &sysfs_trigger_btree_key_cache_shrink) {
@@ -458,34 +464,47 @@ STORE(bch2_fs)
 		sc.gfp_mask = GFP_KERNEL;
 		sc.nr_to_scan = strtoul_or_return(buf);
 		c->btree.key_cache.shrink->scan_objects(c->btree.key_cache.shrink, &sc);
+		return size;
 	}
 
-	if (attr == &sysfs_trigger_discards)
+	if (attr == &sysfs_trigger_discards) {
 		bch2_do_discards_async(c);
+		return size;
+	}
 
-	if (attr == &sysfs_trigger_invalidates)
+	if (attr == &sysfs_trigger_invalidates) {
 		bch2_do_invalidates(c);
+		return size;
+	}
 
-	if (attr == &sysfs_trigger_freelist_wakeup)
+	if (attr == &sysfs_trigger_freelist_wakeup) {
 		bch2_alloc_wake_all(c);
+		return size;
+	}
 
 	if (attr == &sysfs_trigger_recalc_capacity) {
 		guard(rwsem_read)(&c->state_lock);
 		bch2_recalc_capacity(c);
+		return size;
 	}
 
-	if (attr == &sysfs_trigger_reconcile_wakeup)
+	if (attr == &sysfs_trigger_reconcile_wakeup) {
 		bch2_reconcile_wakeup(c);
+		return size;
+	}
 
-	if (attr == &sysfs_trigger_reconcile_pending_wakeup)
+	if (attr == &sysfs_trigger_reconcile_pending_wakeup) {
 		bch2_reconcile_pending_wakeup(c);
+		return size;
+	}
 
-	/* Only arms the knob, so no write ref - and it can fail: */
+	/* Only arms the knob - and it can fail: */
 	if (attr == &sysfs_logged_op_fail_next) {
 		unsigned type;
 
 		try(bch2_logged_op_fail_next_parse(buf, &type));
 		WRITE_ONCE(c->logged_ops.fail_next, type);
+		return size;
 	}
 
 	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_sysfs))
