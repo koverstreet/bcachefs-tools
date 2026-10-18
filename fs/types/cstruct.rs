@@ -465,6 +465,21 @@ pub struct CTypedef {
     pub c_decl: Option<String>,
 }
 
+/// c_rcu_array!: an RcuArray<@elem[, @head]> C reads, as `struct @c_name {
+/// struct rcu_head rcu; size_t @nr; [@head's fields;] @elem @elems[]; }` - a
+/// field of type @alias is, to C, a __rcu pointer to one.
+#[derive(Debug)]
+pub struct CRcuArray {
+    pub cfg:    Option<Cfg>,
+    pub alias:  String,
+    pub ty:     String,
+    pub elem:   String,
+    pub head:   Option<String>,
+    pub c_name: String,
+    pub nr:     String,
+    pub elems:  String,
+}
+
 /// c_same!: a Rust type with the layout of a C type. The generator checks it:
 /// size, alignment, and the offsets of @fields, which both name. (No cfg: a
 /// c_same! a build leaves out has no record, so nothing to check.)
@@ -696,6 +711,7 @@ pub enum CItem {
     Const(CConst),
     Typedef(CTypedef),
     Same(CSame),
+    RcuArray(CRcuArray),
 }
 
 const RUST_KEYWORDS: &[&str] = &[
@@ -1674,6 +1690,43 @@ fn parse_typedef(body: &[Tok], cfg: Option<Cfg>) -> Result<CTypedef, String> {
     }
 }
 
+/// c_rcu_array!'s body: pub type ALIAS = RcuArray<T[, H]> as struct NAME { NR, ELEMS };
+fn parse_rcu_array(body: &[Tok], cfg: Option<Cfg>) -> Result<CRcuArray, String> {
+    const EXPECTED: &str = "c_rcu_array!: expected pub type ALIAS = RcuArray<T[, H]> as struct NAME { NR, ELEMS };";
+    let i = skip_vis(body, skip_attrs(body, 0)?)?;
+    let [Tok::Ident(t), Tok::Ident(alias), Tok::Punct('='), rest @ ..] = &body[i..] else {
+        return Err(EXPECTED.into());
+    };
+    if t != "type" {
+        return Err(EXPECTED.into());
+    }
+    let as_at = rest.iter().position(|t| t.is_ident("as")).ok_or(EXPECTED)?;
+    let ty = tokens_to_rust(&rest[..as_at]);
+    let (elem, head) = match container_args(&ty, "RcuArray")?.as_deref() {
+        Some([elem]) => (elem.clone(), None),
+        Some([elem, head]) => (elem.clone(), Some(head.clone())),
+        _ => return Err(format!("c_rcu_array! {alias}: {ty} isn't an RcuArray<T> or RcuArray<T, H>")),
+    };
+    let [Tok::Ident(kw), Tok::Ident(c_name), ..] = &rest[as_at + 1..] else {
+        return Err(EXPECTED.into());
+    };
+    if kw != "struct" {
+        return Err(EXPECTED.into());
+    }
+    let brace = as_at + 3;
+    if !rest.get(brace).is_some_and(|t| t.is_punct('{')) {
+        return Err(EXPECTED.into());
+    }
+    let (list, _) = macro_body(rest, brace)?;
+    let [[Tok::Ident(nr)], [Tok::Ident(elems)]] = split_top(list, ',').as_slice() else {
+        return Err(format!("c_rcu_array! {alias}: its fields are {{ NR, ELEMS }}: the length's name and the array's"));
+    };
+    Ok(CRcuArray {
+        cfg, alias: alias.clone(), ty, elem, head, c_name: c_name.clone(),
+        nr: nr.clone(), elems: elems.clone(),
+    })
+}
+
 /// c_same!'s body: struct|union NAME == TYPE [{ field, ... }]
 fn parse_same(body: &[Tok]) -> Result<CSame, String> {
     let i = skip_attrs(body, 0)?;
@@ -2403,10 +2456,17 @@ fn proto_toks(toks: &[Tok], decl: String, konst: bool, last: bool,
         [Tok::Punct('!')] => Some(format!("void {decl}")),
         [Tok::Ident(ns), Tok::Punct(':'), Tok::Punct(':'), Tok::Ident(name)] if is_c_ns(ns) => {
             let base = kind(name).unwrap_or_else(|| canon_base(toks).unwrap());
-            Some(format!("{q}{base} {decl}").trim_end().to_string())
+            Some(base_decl(q, &base, &decl))
         }
-        _ => canon_base(toks).map(|b| format!("{q}{b} {decl}").trim_end().to_string()),
+        _ => canon_base(toks).map(|b| base_decl(q, &b, &decl)),
     }
+}
+
+/// A declaration of @decl as @base - which may itself end in a pointer, as a
+/// c_rcu_array!'s does.
+fn base_decl(q: &str, base: &str, decl: &str) -> String {
+    let sep = if base.ends_with('*') { "" } else { " " };
+    format!("{q}{base}{sep}{decl}").trim_end().to_string()
 }
 
 /// T, if @toks is Head<T> by any path: a family's C definition, which C has
@@ -2668,15 +2728,56 @@ pub fn in_place_def<'a>(f: &CFieldDef, items: &'a [CItem]) -> Option<&'a CStruct
 /// definition of its own for them.
 #[allow(dead_code)]
 pub fn in_place_types(items: &[CItem]) -> Vec<&str> {
-    items.iter()
+    let fields = items.iter()
         .filter_map(|i| match i {
             CItem::Struct(d) => Some(d),
             _ => None,
         })
         .flat_map(|d| d.fields.iter())
-        .filter_map(|f| in_place_def(f, items))
-        .map(|d| d.name.as_str())
-        .collect()
+        .filter_map(|f| in_place_def(f, items));
+    // and a c_rcu_array!'s header, written in its struct
+    let heads = items.iter()
+        .filter_map(|i| match i {
+            CItem::RcuArray(a) => rcu_array_head(a, items),
+            _ => None,
+        });
+    fields.chain(heads).map(|d| d.name.as_str()).collect()
+}
+
+/// @a's header's definition, if it has one and it's a struct of @items.
+pub fn rcu_array_head<'a>(a: &CRcuArray, items: &'a [CItem]) -> Option<&'a CStructDef> {
+    let head = a.head.as_deref()?;
+    let name = head.rsplit("::").next()?.trim();
+    items.iter().find_map(|i| match i {
+        CItem::Struct(d) if d.name == name || d.rust_ident() == name => Some(d),
+        _ => None,
+    })
+}
+
+/// c_rcu_array!'s C: the struct of its buffer, laid out as util/rcu.rs's
+/// RcuArrayBuf - the header's fields an anonymous struct, so they're laid out
+/// as Rust's nested header is, and C names them as the buffer's.
+fn emit_rcu_array(a: &CRcuArray, items: &[CItem],
+                  opaque: &dyn Fn(&CStructDef, &CFieldDef) -> Result<String, String>,
+                  kind: &dyn Fn(&str) -> Option<String>)
+    -> Result<String, String>
+{
+    let elems = canon_c(&a.elem, &format!("{}[] __counted_by({})", a.elems, a.nr), true, kind)
+        .ok_or_else(|| format!("its element type {} has no C rendering", a.elem))?;
+    let head = match &a.head {
+        None => String::new(),
+        Some(h) => {
+            let def = rcu_array_head(a, items)
+                .ok_or_else(|| format!("its header {h} isn't a #[repr(C)] struct of this file"))?;
+            let members: String = emit_members(def, items, opaque, kind)?
+                .lines()
+                .map(|l| if l.starts_with('#') { format!("{l}\n") } else { format!("\t{l}\n") })
+                .collect();
+            format!("\tstruct {{\n{members}\t}};\n")
+        }
+    };
+    under_cfg(&a.cfg, format!("struct {} {{\n\tstruct rcu_head\trcu;\n\tsize_t\t\t{};\n{head}\t{elems};\n}};\n",
+                              a.c_name, a.nr))
 }
 
 /// A zero-length array in a union: C can't have a flexible array member
@@ -3049,6 +3150,8 @@ pub fn emit_items(items: &[CItem],
             },
             // C's own definition: the generator asserts it's the Rust type's.
             CItem::Same(_) => continue,
+            CItem::RcuArray(a) => emit_rcu_array(a, items, opaque, kind)
+                .map_err(|e| format!("c_rcu_array! {}: {e}", a.alias))?,
         };
         out.push('\n');
         out.push_str(&text);
@@ -3146,6 +3249,12 @@ pub fn parse_items(src: &str) -> Result<Vec<CItem>, String> {
             (Some("c_same"), Some(t)) if t.is_punct('!') => {
                 let (body, next) = macro_body(&toks, j + 2)?;
                 out.push(CItem::Same(parse_same(body)?));
+                i = next;
+                continue;
+            }
+            (Some("c_rcu_array"), Some(t)) if t.is_punct('!') => {
+                let (body, next) = macro_body(&toks, j + 2)?;
+                out.push(CItem::RcuArray(parse_rcu_array(body, a.cfg)?));
                 i = next;
                 continue;
             }

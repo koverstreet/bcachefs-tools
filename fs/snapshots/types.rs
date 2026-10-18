@@ -8,7 +8,7 @@ use crate::util::alloc::KVVec;
 use crate::util::bitmap::AtomicBitArray;
 use crate::util::sync::{new_mutex, Mutex};
 use core::sync::atomic::{AtomicBool, AtomicU32};
-use cstruct_macros::{c_const, c_enum, CStruct, c_typedef, Init, TypeInfo};
+use cstruct_macros::{c_const, c_enum, c_rcu_array, CStruct, c_typedef, Init, TypeInfo};
 use pin_init::pin_data;
 
 c_typedef! {
@@ -71,26 +71,14 @@ pub struct snapshot_t {
     pub is_ancestor: AtomicBitArray<{ bits_to_longs(c::IS_ANCESTOR_BITMAP as usize) }>,
 }
 
-#[repr(C)]
-#[derive(CStruct)]
-pub struct snapshot_table {
-    pub rcu: c::rcu_head,
-    pub nr: usize,
-    #[c("DECLARE_FLEX_ARRAY(struct snapshot_t, s)")]
-    pub s: [c::snapshot_t; 0],
-}
-
 // SAFETY: atomic integers; all zeroes is SNAPSHOT_ID_empty
 unsafe impl crate::util::rcu::RcuElement for snapshot_t {}
 
-// C's view of the table bch_fs_snapshots.table is an RcuArray of
-const _: () = {
-    use crate::util::rcu::RcuArrayBuf;
-    use core::mem::offset_of;
-    assert!(offset_of!(snapshot_table, rcu) == 0);
-    assert!(offset_of!(snapshot_table, nr) == core::mem::size_of::<c::rcu_head>());
-    assert!(offset_of!(snapshot_table, s) == RcuArrayBuf::<c::snapshot_t>::TAIL);
-};
+c_rcu_array! {
+    /// c->snapshots.table, published under RCU.
+    pub type SnapshotTable = crate::util::rcu::RcuArray<c::snapshot_t>
+        as struct snapshot_table { nr, s };
+}
 
 /*
  * Snapshot creation must prevent userspace from dirtying the page cache while
@@ -111,8 +99,7 @@ const _: () = {
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_snapshots {
-    #[c("struct snapshot_table __rcu *table")]
-    pub table: crate::util::rcu::RcuArray<c::snapshot_t>,
+    pub table: c::SnapshotTable,
     /// The table's writers' lock: taken by table_write(), in snapshot.rs.
     #[pin]
     #[init(RustOnly::new(new_mutex!(())))]

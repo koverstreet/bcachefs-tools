@@ -28,6 +28,8 @@
 //!                        the type that is, and its values as constants
 //!   c_const! { .. }      integer constants: C gets a #define each
 //!   c_typedef! { .. }    a type alias: C gets a typedef
+//!   c_rcu_array! { .. }  an RcuArray C reads: C gets the struct of its
+//!                        buffer, a field of it a __rcu pointer to one
 //!   c_same! { .. }       a Rust type with a C type's layout: checked in C
 //!   c_extern! { .. }     what Rust calls of a C header: C gets the
 //!                        prototypes, which its own must agree with
@@ -1024,6 +1026,28 @@ pub fn c_typedef(input: TokenStream) -> TokenStream {
         let t = one_item!(&text, Typedef, "pub type NAME = TYPE;");
         Ok(tokens(&format!("#[allow(non_camel_case_types)]\npub type {} = {};\n{}",
                            t.name, t.ty, record(&text, &[]))))
+    })
+}
+
+/// An array published under RCU that C reads:
+///
+///   c_rcu_array! { pub type DiskGroups = RcuArray<c::bch_disk_group_cpu>
+///                  as struct bch_disk_groups_cpu { nr, entries }; }
+///
+/// Rust gets the alias; C the struct its buffer is - `struct NAME { struct
+/// rcu_head rcu; size_t NR; [H's fields;] T ELEMS[]; }`, H's in place, H a
+/// #[repr(C)] struct of the same file - checked against RcuArray's layout. A
+/// field of the alias's type is, to C, `struct NAME __rcu *`.
+#[proc_macro]
+pub fn c_rcu_array(input: TokenStream) -> TokenStream {
+    expand("c_rcu_array!", || {
+        let text = format!("c_rcu_array! {{ {input} }}");
+        let a = one_item!(&text, RcuArray, "pub type ALIAS = RcuArray<T[, H]> as struct NAME { NR, ELEMS };");
+        let nums: Vec<String> = ["NR", "HEAD", "TAIL"].iter()
+            .map(|n| format!("<{}>::{n} as u64", a.ty))
+            .collect();
+        Ok(tokens(&format!("#[allow(non_camel_case_types)]\npub type {} = {};\n{}",
+                           a.alias, a.ty, record(&text, &nums))))
     })
 }
 

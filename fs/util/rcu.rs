@@ -252,6 +252,12 @@ pub struct RcuArray<T: RcuElement, H: RcuElement = ()>(RcuBuf<RcuArrayBuf<T, H>>
 unsafe impl<T: RcuElement, H: RcuElement> ::pin_init::Zeroable for RcuArray<T, H> {}
 
 impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
+    /// Its buffer's layout - where nr, the header and the elements are - for
+    /// c_rcu_array!'s record, which C's definition is checked against.
+    pub const NR: usize = RcuArrayBuf::<T, H>::NR;
+    pub const HEAD: usize = RcuArrayBuf::<T, H>::HEAD;
+    pub const TAIL: usize = RcuArrayBuf::<T, H>::TAIL;
+
     /// The elements published, for as long as @g's section: none if nothing
     /// is.
     pub fn read<'a>(&'a self, g: &'a ReadGuard) -> &'a [T] {

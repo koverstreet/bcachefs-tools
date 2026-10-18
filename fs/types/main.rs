@@ -311,6 +311,7 @@ fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>,
     let mut layouts = BTreeMap::new();
     let mut enum_sizes = Vec::new();
     let mut sames = Vec::new();
+    let mut rcu_arrays = BTreeMap::new();
     let mut opcodes = Vec::new();
     for r in records {
         let at = |e: String| format!("{}:{}: {e}", r.file, r.line);
@@ -364,6 +365,12 @@ fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>,
                     opcodes.extend(io.entries.iter().map(|e| e.name.clone()).zip(r.nums.iter().copied())),
                 n => return Err(at(format!("{n} opcodes for {} ioctls", io.entries.len()))),
             },
+            CItem::RcuArray(a) => {
+                let &[nr, head, tail] = r.nums.as_slice() else {
+                    return Err(at("a c_rcu_array!'s record has its nr, header and elements' offsets".into()));
+                };
+                rcu_arrays.insert(a.alias.clone(), [nr, head, tail]);
+            }
             CItem::Same(s) => {
                 let [size, align, offsets @ ..] = r.nums.as_slice() else {
                     return Err(at("a c_same!'s record has the type's size and alignment".into()));
@@ -469,6 +476,25 @@ fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>,
                        l.size, l.align);
         field_asserts(&mut asserts, &ty, def, 0, "", &items, &layouts);
     }
+    // A c_rcu_array!'s struct: where RcuArray's buffer has nr, the header's
+    // fields and the elements.
+    for item in &items {
+        let CItem::RcuArray(a) = item else { continue };
+        let [nr, head, tail] = rcu_arrays[&a.alias];
+        let ty = format!("struct {}", a.c_name);
+        let mut offsets = vec![(a.nr.clone(), nr)];
+        if let Some(def) = rcu_array_head(a, &items) {
+            for (f, (offset, _, _)) in def.fields.iter().zip(&layouts[&def.name].fields) {
+                offsets.push((c_ident(&f.name), head + offset));
+            }
+        }
+        offsets.push((a.elems.clone(), tail));
+        asserts.push('\n');
+        for (f, offset) in offsets {
+            let _ = writeln!(asserts, "_Static_assert(__builtin_offsetof({ty}, {f}) == {offset}, \
+                                       \"{ty}.{f}: offset differs from RcuArray's\");");
+        }
+    }
     // The ioctl numbers: C's _IO*() and Rust's, each from the target's own
     // constants, must make the same one.
     if !opcodes.is_empty() {
@@ -530,6 +556,10 @@ fn main() {
                     // a C typedef: by its own name - u##_bits in an x-macro
                     // struct body is u96 as well as u64
                     Some(CItem::Typedef(t)) => { structs.insert(t.name.clone(), t.name.clone()); }
+                    // a field of one is C's pointer to its buffer's struct
+                    Some(CItem::RcuArray(a)) => {
+                        structs.insert(a.alias.clone(), format!("struct {} __rcu *", a.c_name));
+                    }
                     // how a prototype names it
                     Some(CItem::Enum(CEnumDef { name: Some(n), .. })) => {
                         structs.insert(n.clone(), format!("enum {n}"));
