@@ -45,6 +45,14 @@ impl c::bch_member {
     }
 }
 
+/// From members_v2 if the superblock has it, else members_v1.
+pub fn sb_member(sb: &c::bch_sb, idx: u32) -> Option<c::bch_member> {
+    match members_v2(sb) {
+        Some(v2) => v2.get(idx),
+        None     => members_v1(sb)?.get(idx),
+    }
+}
+
 /// Member @idx of a members section, its bytes @b: one of @member_bytes from
 /// @start, copied - zero past the end of one shorter than bch_member. None
 /// if it's past the section's end.
