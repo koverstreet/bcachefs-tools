@@ -14,11 +14,11 @@
 
 use crate::btree::bkey::{BkeySC, BkeyWhole};
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
+use crate::sb::io::{sb_field_ops, SbFieldOps};
 use crate::util::ffi::Opaque;
-use crate::util::vstructs::Head;
 use crate::util::Printbuf;
 use crate::bkey_fsck_err_on;
 use core::ffi::c_int;
@@ -29,48 +29,20 @@ const COUNTERS: [&str; c::Q_COUNTERS as usize] = ["space", "inodes"];
 
 // ── The superblock section ───────────────────────────────────────────────
 
-unsafe extern "C" fn sb_quota_validate(
-    _sb:    *mut Head<c::bch_sb>,
-    f:      *mut Head<c::bch_sb_field>,
-    _flags: c::bch_validate_flags,
-    err:    *mut c::printbuf,
-) -> c_int {
-    let err = unsafe { Printbuf::borrow_raw(err) };
-    let bytes = unsafe { (*f).u64s.get() } as usize * 8;
-    let want = core::mem::size_of::<c::bch_sb_field_quota>();
-
-    if bytes < want {
-        let _ = write!(err, "wrong size (got {bytes} should be {want})");
-        return -(bch_errcode::BCH_ERR_invalid_sb_quota.0 as c_int);
-    }
-    0
-}
-
-#[cold]
-unsafe extern "C" fn sb_quota_to_text(
-    out: *mut c::printbuf,
-    _c:  *mut c::bch_fs,
-    _sb: *mut Head<c::bch_sb>,
-    f:   *mut Head<c::bch_sb_field>,
-) {
-    let out = unsafe { Printbuf::borrow_raw(out) };
-    // SAFETY: a quota section - as long as one, validate says
-    let q = unsafe { &*f.cast::<c::bch_sb_field_quota>() };
-
-    for (t, name) in q.q.iter().zip(TYPES) {
-        write!(out, "{name}: flags {:x}", t.flags.get());
-        for (c, counter) in t.c.iter().zip(COUNTERS) {
-            write!(out, " {counter} timelimit {} warnlimit {}", c.timelimit.get(), c.warnlimit.get());
+impl SbFieldOps for c::bch_sb_field_quota {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, q: &Self) {
+        for (t, name) in q.q.iter().zip(TYPES) {
+            write!(out, "{name}: flags {:x}", t.flags.get());
+            for (c, counter) in t.c.iter().zip(COUNTERS) {
+                write!(out, " {counter} timelimit {} warnlimit {}", c.timelimit.get(), c.warnlimit.get());
+            }
+            writeln!(out);
         }
-        writeln!(out);
     }
 }
 
 #[c_export]
-pub static bch_sb_field_ops_quota: c::bch_sb_field_ops = c::bch_sb_field_ops {
-    validate: Some(sb_quota_validate),
-    to_text:  Some(sb_quota_to_text),
-};
+pub static bch_sb_field_ops_quota: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_quota>();
 
 // ── Keys ─────────────────────────────────────────────────────────────────
 
@@ -104,7 +76,7 @@ mod vfs {
     use crate::btree::bkey::{pos, BkeyI, POS_MIN};
     use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitOpts, LoopFlow,
                              TransAttempt, UpdateTriggerFlags};
-    use crate::errcode::ret_to_class;
+    use crate::errcode::{bch_errcode, ret_to_class};
     use crate::util::sync::MutexGuard;
     use crate::{bch_err_fn, bch_info, fs_inconsistent, inode};
     use crate::snapshots::snapshot;

@@ -1,8 +1,12 @@
 use crate::c;
 use crate::c::{bch_member, bch_sb, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::fs::Fs;
 use crate::sb::members;
+use crate::util::Printbuf;
 use crate::types::ArmOf;
 use crate::util::vstructs::{read_past, ArmRef, Head, SelfSized, Validated};
+use core::ffi::c_int;
 
 /// A superblock section's type: an arm of tagged_union! bch_sb_field, which
 /// gives its field type - handed out as its ArmRef says, a short one, written
@@ -12,6 +16,72 @@ pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef {
 }
 
 impl<F: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef + ?Sized> SbField for F {}
+
+/// A section's bch_sb_field_ops, from sb_field_ops::<Self>(). Both get the
+/// section as Self; one too short to be read as Self fails validation
+/// before validate() is called, and isn't printed.
+pub trait SbFieldOps: SbField {
+    fn validate(_sb: &bch_sb, _f: &Self, _flags: c::bch_validate_flags,
+                _err: &mut Printbuf) -> Result<(), BchError> {
+        Ok(())
+    }
+
+    fn to_text(_out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb, _f: &Self) {}
+}
+
+pub const fn sb_field_ops<F: SbFieldOps + ?Sized>() -> c::bch_sb_field_ops {
+    c::bch_sb_field_ops {
+        validate: Some(sb_field_validate::<F>),
+        to_text:  Some(sb_field_to_text::<F>),
+    }
+}
+
+/// # Safety
+/// bch2_sb_field_validate()'s arguments: it has checked every section's
+/// extent first.
+unsafe extern "C" fn sb_field_validate<F: SbFieldOps + ?Sized>(
+    sb:    *mut Head<bch_sb>,
+    f:     *mut Head<c::bch_sb_field>,
+    flags: c::bch_validate_flags,
+    err:   *mut c::printbuf,
+) -> c_int {
+    // SAFETY: the caller's
+    let (sb, f, err) = unsafe {
+        (bch_sb::<Validated>::from_ffi(sb),
+         c::bch_sb_field::<Validated>::from_ffi(f),
+         Printbuf::borrow_raw(err))
+    };
+
+    match f.arm::<F>() {
+        Some(f) => ret_to_c(F::validate(sb, f, flags, err)),
+        None => {
+            write!(err, "too short ({} bytes)", f.as_bytes().len());
+            ret_to_c(Err::<(), _>(bch_errcode::BCH_ERR_invalid_sb_field_size))
+        }
+    }
+}
+
+/// # Safety
+/// bch2_sb_field_to_text()'s arguments: @c may be NULL.
+#[cold]
+unsafe extern "C" fn sb_field_to_text<F: SbFieldOps + ?Sized>(
+    out: *mut c::printbuf,
+    c:   *mut c::bch_fs,
+    sb:  *mut Head<bch_sb>,
+    f:   *mut Head<c::bch_sb_field>,
+) {
+    // SAFETY: the caller's
+    let (out, fs, sb, f) = unsafe {
+        (Printbuf::borrow_raw(out),
+         (!c.is_null()).then(|| Fs::borrow_raw(c)),
+         bch_sb::<Validated>::from_ffi(sb),
+         c::bch_sb_field::<Validated>::from_ffi(f))
+    };
+
+    if let Some(f) = f.arm::<F>() {
+        F::to_text(out, fs, sb, f);
+    }
+}
 
 impl PartialEq for c::bch_sb__head {
     fn eq(&self, other: &Self) -> bool {
@@ -514,6 +584,28 @@ mod tests {
 
         let f = field(&mut buf, T::BCH_SB_FIELD_NR, 3);
         assert!(matches!(f.typed(), Err(t) if t == T::BCH_SB_FIELD_NR));
+    }
+
+    /// A section too short to be its type fails validation, and isn't printed.
+    #[test]
+    fn sb_field_ops_short_section() {
+        use crate::util::Printbuf;
+
+        let mut sb = [0u64; 32];
+        let mut buf = [0u64; 4];
+        field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_quota, 2);
+        let (sb, f) = (sb.as_mut_ptr().cast(), buf.as_mut_ptr().cast());
+        let ops = super::sb_field_ops::<c::bch_sb_field_quota>();
+
+        let mut err = Printbuf::new();
+        let flags = c::bch_validate_flags::from_bits_retain(0);
+        let ret = unsafe { ops.validate.unwrap()(sb, f, flags, err.as_raw()) };
+        assert_eq!(ret, -(c::bch_errcode::BCH_ERR_invalid_sb_field_size.0 as i32));
+        assert_eq!(err.as_str(), "too short (16 bytes)");
+
+        let mut out = Printbuf::new();
+        unsafe { ops.to_text.unwrap()(out.as_raw(), core::ptr::null_mut(), sb, f) };
+        assert_eq!(out.as_str(), "");
     }
 
     /// An ext section from before btrees_lost_data, 88 bytes, is an ext
