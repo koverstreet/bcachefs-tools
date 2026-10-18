@@ -164,67 +164,6 @@ read_attribute(write_refs);
 read_attribute(has_data);
 read_attribute(alloc_debug);
 
-#define x(t, n, ...)							\
-	static struct attribute sysfs_counter_##t = { .name = #t, .mode = 0644 };
-BCH_PERSISTENT_COUNTERS()
-#undef x
-
-/* counters dir */
-
-SHOW(bch2_fs_counters)
-{
-	struct bch_fs *c = container_of(kobj, struct bch_fs, counters_kobj);
-	u64 counter = 0;
-	u64 counter_since_mount = 0;
-
-	printbuf_tabstop_push(out, 32);
-
-	#define x(t, n, f, ...) \
-		if (attr == &sysfs_counter_##t) {					\
-			counter             = percpu_u64_get(&c->counters.now[BCH_COUNTER_##t]);\
-			counter_since_mount = counter - c->counters.mount[BCH_COUNTER_##t];\
-			if (f & TYPE_SECTORS) {					\
-				counter <<= 9;					\
-				counter_since_mount <<= 9;			\
-			}							\
-										\
-			prt_printf(out, "since mount:\t");			\
-			(f & TYPE_COUNTER) ? prt_u64(out, counter_since_mount) :\
-			prt_human_readable_u64(out, counter_since_mount);	\
-			prt_newline(out);					\
-										\
-			prt_printf(out, "since filesystem creation:\t");	\
-			(f & TYPE_COUNTER) ? prt_u64(out, counter) :		\
-			prt_human_readable_u64(out, counter);			\
-			prt_newline(out);					\
-		}
-	BCH_PERSISTENT_COUNTERS()
-	#undef x
-	return 0;
-}
-
-STORE(bch2_fs_counters)
-{
-	struct bch_fs *c = container_of(kobj, struct bch_fs, counters_kobj);
-
-#define x(t, ...)							\
-	if (attr == &sysfs_counter_##t)					\
-		bch2_counter_reset(c, BCH_COUNTER_##t);
-	BCH_PERSISTENT_COUNTERS()
-#undef x
-	return size;
-}
-
-SYSFS_OPS(bch2_fs_counters);
-
-struct attribute *bch2_fs_counters_files[] = {
-#define x(t, ...) \
-	&sysfs_counter_##t,
-	BCH_PERSISTENT_COUNTERS()
-#undef x
-	NULL
-};
-
 /* options */
 
 static ssize_t sysfs_opt_show(struct bch_fs *c,

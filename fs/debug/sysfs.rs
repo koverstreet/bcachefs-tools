@@ -8,7 +8,7 @@
 //! - a table of Attrs - name, mode, what reading and writing do: the fs dir,
 //!   internal/;
 //! - a ListAttrs, a file per entry of an x-macro list: time_stats/,
-//!   time_stats_json/.
+//!   time_stats_json/, counters/.
 //!
 //! internal/btree_trans_stats_json is a bin_attribute, apart from the rest.
 //!
@@ -31,6 +31,7 @@ use crate::errcode::BchError;
 use crate::fs::{Fs, WriteRef};
 use crate::init::passes;
 use crate::opts::prt_compression_type;
+use crate::sb::io::COUNTERS;
 use crate::util::ffi::c_char;
 use crate::util::kernel::{READ, WRITE};
 use crate::util::locking::mutex_lock;
@@ -338,6 +339,71 @@ pub static bch2_fs_time_stats_json_files: Files<{ c::BCH_TIME_STAT_NR as usize +
 
 #[c_export]
 pub static bch2_fs_time_stats_json_sysfs_ops: c::sysfs_ops = sysfs::ops::<TimeStatsDir<true>>();
+
+// ── counters/ ───────────────────────────────────────────────────────────────
+//
+// A file per BCH_PERSISTENT_COUNTERS() entry: the count since mount and
+// since the filesystem was made; writing one resets it.
+
+macro_rules! counter_names {
+    ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => {
+        const COUNTER_NAMES: [&CStr; c::BCH_COUNTER_NR as usize] = [$(file_name!($name),)*];
+    };
+}
+c::BCH_PERSISTENT_COUNTERS!(counter_names);
+
+static COUNTER_FILES: ListAttrs<{ c::BCH_COUNTER_NR as usize }> = ListAttrs::new(&COUNTER_NAMES, 0o644);
+
+fn counter_idx(attr: &c::attribute) -> Result<usize, BchError> {
+    COUNTER_FILES.index(attr).ok_or(c::EINVAL.into())
+}
+
+struct CountersDir;
+
+unsafe impl Dir for CountersDir {
+    type Obj = Fs;
+    const KOBJ: usize = offset_of!(Fs, counters_kobj);
+
+    fn show(c: &Fs, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
+        let i = counter_idx(attr)?;
+        let sectors = COUNTERS[i].is_sectors;
+
+        let mut count = c.counter_read(i);
+        let mut since_mount = count.wrapping_sub(c.counters.mount[i]);
+        if sectors {
+            count <<= 9;
+            since_mount <<= 9;
+        }
+
+        let prt = |out: &mut Printbuf, v: u64| if sectors {
+            out.human_readable_u64(v)
+        } else {
+            write!(out, "{v}")
+        };
+
+        out.tabstop_push(32);
+        write!(out, "since mount:\t");
+        prt(out, since_mount);
+        out.newline();
+
+        write!(out, "since filesystem creation:\t");
+        prt(out, count);
+        out.newline();
+        Ok(())
+    }
+
+    fn store(c: &Fs, attr: &c::attribute, _: &str) -> Result<(), BchError> {
+        c.counter_reset(counter_idx(attr)?);
+        Ok(())
+    }
+}
+
+#[c_export]
+#[c("struct attribute *bch2_fs_counters_files[]")]
+pub static bch2_fs_counters_files: Files<{ c::BCH_COUNTER_NR as usize + 1 }> = Files::list(&COUNTER_FILES);
+
+#[c_export]
+pub static bch2_fs_counters_sysfs_ops: c::sysfs_ops = sysfs::ops::<CountersDir>();
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
