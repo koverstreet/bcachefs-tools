@@ -4,8 +4,9 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use crate::util::{Printbuf, ToText};
 use core::ffi::{c_uint, c_ulong};
-use cstruct_macros::{CStruct, TypeInfo};
+use cstruct_macros::{CStruct, TypeInfo, c_extern};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -39,4 +40,21 @@ c_default!(bch_fs_btree_key_cache);
 pub struct bkey_cached_key {
     pub btree_id: u32,
     pub pos: c::bpos,
+}
+
+c_extern! {
+    pub fn bch2_btree_key_cache_to_text(out: *mut c::printbuf, bc: *mut c::bch_fs_btree_key_cache);
+}
+
+impl ToText for c::bch_fs_btree_key_cache {
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_btree_key_cache_to_text(out.as_raw(), core::ptr::from_ref(self).cast_mut()) }
+    }
+}
+
+impl c::bch_fs_btree_key_cache {
+    /// Ask the shrinker to free @nr keys, as memory pressure would.
+    pub fn shrink(&self, nr: c_ulong) {
+        unsafe { crate::util::kernel::shrinker_scan(self.shrink, nr) }
+    }
 }

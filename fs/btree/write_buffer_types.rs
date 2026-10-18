@@ -3,6 +3,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::fs::Fs;
+use crate::util::Printbuf;
 use crate::types::{DArray, c_default};
 use core::ffi::c_int;
 use cstruct_macros::{CStruct, c_const, c_enum, c_extern, c_xmacro, TypeInfo};
@@ -176,4 +178,11 @@ c_default!(bch_fs_btree_write_buffer);
 
 c_extern! {
     pub fn bch2_btree_write_buffer_flush_sync(trans: *mut c::btree_trans) -> c_int;
+    pub fn bch2_btree_write_buffer_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
+}
+
+impl Fs {
+    pub fn btree_write_buffer_to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_btree_write_buffer_to_text(out.as_raw(), self.as_ptr()) }
+    }
 }

@@ -4,7 +4,10 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use cstruct_macros::{bitfield, c_enum, c_xmacro, CStruct, TypeInfo};
+use crate::errcode::{ret_to_result_void, BchError};
+use crate::fs::Fs;
+use core::ffi::c_int;
+use cstruct_macros::{bitfield, c_enum, c_extern, c_xmacro, CStruct, TypeInfo};
 use nestify::nest;
 
 c_xmacro! {
@@ -60,3 +63,14 @@ pub struct bch_fs_gc_gens {
     pub lock: c::mutex,
 }
 c_default!(bch_fs_gc_gens);
+
+c_extern! {
+    pub fn bch2_gc_gens(c: *mut c::bch_fs) -> c_int;
+}
+
+impl Fs {
+    /// Recalculate each bucket's oldest gen, so gens can wrap.
+    pub fn gc_gens(&self) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { bch2_gc_gens(self.as_ptr()) })
+    }
+}

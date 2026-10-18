@@ -3,7 +3,9 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::fs::Fs;
 use crate::types::c_default;
+use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, c_const, c_extern, TypeInfo};
 
@@ -74,4 +76,17 @@ c_extern! {
     pub fn bch2_btree_node_update_key(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
                                       b: *mut c::btree, new_key: *mut c::bkey_i,
                                       commit_flags: c_uint, skip_triggers: bool) -> c_int;
+    pub fn bch2_btree_reserve_cache_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
+}
+
+impl Fs {
+    pub fn btree_reserve_cache_to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_btree_reserve_cache_to_text(out.as_raw(), self.as_ptr()) }
+    }
+
+    /// Run the interior update worker now.
+    pub fn btree_interior_updates_kick(&self) {
+        let u = &self.btree.interior_updates;
+        unsafe { c::bch2_queue_work(u.worker, (&raw const u.work).cast_mut()) };
+    }
 }
