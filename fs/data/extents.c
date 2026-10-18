@@ -471,52 +471,6 @@ void bch2_extent_crc_append(const struct bch_fs *c,
 
 /* Generic code for keys with pointers: */
 
-bool bch2_bkey_is_incompressible(const struct bch_fs *c, struct bkey_s_c k)
-{
-	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
-	const union bch_extent_entry *entry;
-	struct bch_extent_crc_unpacked crc;
-
-	bkey_for_each_crc(k.k, ptrs, crc, entry)
-		if (crc.compression_type == BCH_COMPRESSION_TYPE_incompressible)
-			return true;
-	return false;
-}
-
-void bch2_bkey_propagate_incompressible(const struct bch_fs *c, struct bkey_i *dst, struct bkey_s_c src)
-{
-	if (!bch2_bkey_is_incompressible(c, src))
-		return;
-
-	struct bkey_ptrs ptrs = bch2_bkey_ptrs(bkey_i_to_s(dst));
-	union bch_extent_entry *entry;
-
-	/*
-	 * XXX: if some data actually is compressed, we want
-	 * bch_extent_reconcile.wont_recompress_smaller
-	 */
-
-	bkey_extent_entry_for_each(ptrs, entry) {
-		switch (extent_entry_type(entry)) {
-		case BCH_EXTENT_ENTRY_crc32:
-			if (entry->crc32.compression_type == BCH_COMPRESSION_TYPE_none)
-				entry->crc32.compression_type = BCH_COMPRESSION_TYPE_incompressible;
-			break;
-		case BCH_EXTENT_ENTRY_crc64:
-			if (entry->crc64.compression_type == BCH_COMPRESSION_TYPE_none)
-				entry->crc64.compression_type = BCH_COMPRESSION_TYPE_incompressible;
-			break;
-		case BCH_EXTENT_ENTRY_crc128:
-			if (entry->crc128.compression_type == BCH_COMPRESSION_TYPE_none)
-				entry->crc128.compression_type = BCH_COMPRESSION_TYPE_incompressible;
-			break;
-		default:
-			break;
-		}
-	}
-}
-
-
 /*
  * What a copy already on @dev is worth: nothing if the device is gone or being
  * evacuated. For what a new copy written there would be worth,
@@ -858,24 +812,6 @@ struct bkey_durability bch2_bkey_durability_safe(const struct bch_fs *c, struct 
 	return ret;
 }
 
-void bch2_bkey_extent_entry_drop_s(const struct bch_fs *c, struct bkey_s k, union bch_extent_entry *entry)
-{
-	union bch_extent_entry *end = bkey_val_end(k);
-	union bch_extent_entry *next = extent_entry_next(c, entry);
-
-	memmove_u64s(entry, next, (u64 *) end - (u64 *) next);
-	k.k->u64s -= extent_entry_u64s(c, entry);
-}
-
-void bch2_bkey_extent_entry_drop(const struct bch_fs *c, struct bkey_i *k, union bch_extent_entry *entry)
-{
-	union bch_extent_entry *end = bkey_val_end(bkey_i_to_s(k));
-	union bch_extent_entry *next = extent_entry_next(c, entry);
-
-	memmove_u64s(entry, next, (u64 *) end - (u64 *) next);
-	k->k.u64s -= extent_entry_u64s(c, entry);
-}
-
 static union bch_extent_entry *bkey_find_crc(const struct bch_fs *c, struct bkey_s k,
 					     struct bch_extent_crc_unpacked crc)
 {
@@ -911,129 +847,6 @@ void bch2_extent_ptr_decoded_append(const struct bch_fs *c, struct bkey_i *k,
 	if (p->has_ec) {
 		p->ec.type = 1 << BCH_EXTENT_ENTRY_stripe_ptr;
 		__extent_entry_insert(c, k, pos, to_entry(&p->ec));
-	}
-}
-
-static union bch_extent_entry *extent_entry_prev(const struct bch_fs *c, struct bkey_ptrs ptrs,
-						 union bch_extent_entry *entry)
-{
-	union bch_extent_entry *i = ptrs.start;
-
-	if (i == entry)
-		return NULL;
-
-	while (extent_entry_next(c, i) != entry)
-		i = extent_entry_next(c, i);
-	return i;
-}
-
-/*
- * Returns pointer to the next entry after the one being dropped:
- */
-void bch2_bkey_drop_ptr_noerror(const struct bch_fs *c, struct bkey_s k, struct bch_extent_ptr *ptr)
-{
-	struct bkey_ptrs ptrs = bch2_bkey_ptrs(k);
-	union bch_extent_entry *entry = to_entry(ptr), *next;
-	bool drop_crc = true;
-
-	if (k.k->type == KEY_TYPE_stripe) {
-		ptr->dev = BCH_SB_MEMBER_INVALID;
-		return;
-	}
-
-	EBUG_ON(ptr < &ptrs.start->ptr ||
-		ptr >= &ptrs.end->ptr);
-	EBUG_ON(ptr->type != 1 << BCH_EXTENT_ENTRY_ptr);
-
-	for (next = extent_entry_next(c, entry);
-	     next != ptrs.end;
-	     next = extent_entry_next(c, next)) {
-		if (extent_entry_is_crc(next)) {
-			break;
-		} else if (extent_entry_is_ptr(next)) {
-			drop_crc = false;
-			break;
-		}
-	}
-
-	extent_entry_drop(c, k, entry);
-
-	while ((entry = extent_entry_prev(c, ptrs, entry))) {
-		if (extent_entry_is_ptr(entry))
-			break;
-
-		if ((extent_entry_is_crc(entry) && drop_crc) ||
-		    extent_entry_is_stripe_ptr(entry))
-			extent_entry_drop(c, k, entry);
-	}
-}
-
-void bch2_bkey_drop_ptr(const struct bch_fs *c, struct bkey_s k, struct bch_extent_ptr *ptr)
-{
-	if (k.k->type != KEY_TYPE_stripe) {
-		struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k.s_c);
-		const union bch_extent_entry *entry;
-		struct extent_ptr_decoded p;
-
-		bkey_for_each_ptr_decode(k.k, ptrs, p, entry)
-			if (p.ptr.dev == ptr->dev && p.has_ec) {
-				ptr->dev = BCH_SB_MEMBER_INVALID;
-				return;
-			}
-	}
-
-	bch2_bkey_drop_ptr_noerror(c, k, ptr);
-}
-
-void bch2_bkey_drop_ptrs_mask(const struct bch_fs *c, struct bkey_i *k, unsigned ptrs)
-{
-	while (ptrs) {
-		unsigned i = 0, drop = __fls(ptrs);
-
-		bch2_bkey_drop_ptrs_noerror(bkey_i_to_s(k), p, entry, i++ == drop);
-		ptrs  ^= 1U << drop;
-	}
-}
-
-void bch2_bkey_drop_device_noerror(const struct bch_fs *c, struct bkey_s k, unsigned dev)
-{
-	bch2_bkey_drop_ptrs_noerror(k, p, entry, p.ptr.dev == dev);
-}
-
-void bch2_bkey_drop_device(const struct bch_fs *c, struct bkey_s k, unsigned dev)
-{
-	bch2_bkey_drop_ptrs(k, p, entry, p.ptr.dev == dev);
-}
-
-static void bch2_bkey_drop_ec(const struct bch_fs *c, struct bkey_i *k, unsigned dev)
-{
-	struct bkey_ptrs ptrs = bch2_bkey_ptrs(bkey_i_to_s(k));
-	union bch_extent_entry *entry, *ec = NULL;
-
-	bkey_extent_entry_for_each(ptrs, entry) {
-		if (extent_entry_type(entry) == BCH_EXTENT_ENTRY_stripe_ptr)
-			ec = entry;
-		else if (extent_entry_type(entry) == BCH_EXTENT_ENTRY_ptr &&
-			 entry->ptr.dev == dev) {
-			bch2_bkey_extent_entry_drop(c, k, ec);
-			return;
-		}
-	}
-}
-
-void bch2_bkey_drop_ec_mask(const struct bch_fs *c, struct bkey_i *k, unsigned mask)
-{
-	while (mask) {
-		struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(bkey_i_to_s_c(k));
-		unsigned ptr_bit = 1;
-		bkey_for_each_ptr(ptrs, ptr) {
-			if (mask & ptr_bit) {
-				bch2_bkey_drop_ec(c, k, ptr->dev);
-				mask &= ~ptr_bit;
-				break;
-			}
-			ptr_bit <<= 1;
-		}
 	}
 }
 

@@ -234,10 +234,17 @@ impl<'a> Iterator for EntriesMut<'a> {
 
 // ── keys with pointers ───────────────────────────────────────────────────
 
-/// A value with pointers - of a BKEY_TYPE_ptrs type, or Ptrs, any of them:
-/// where in it its extent entries are.
-pub trait PtrsBkey: BkeyVal {
+/// A value with pointers: where its extent entries are, and how one of its
+/// pointers is dropped.
+pub trait PtrsBkey: BkeyVal<State = Validated> {
     fn entry_range(k: BkeySC<'_, Self>) -> Range<usize>;
+
+    /// Drop the pointer at @at, and what was only its; a type whose entries
+    /// can't be dropped overrides it.
+    fn drop_ptr_noerror(k: BkeyS<'_, Self>, fs: &Fs, at: EntryPos) {
+        k.untyped().arm::<PtrsMut>().expect("dropping a pointer of a key whose entries can't be")
+            .drop_ptr_entries(fs, at);
+    }
 }
 
 /// The types whose extent entries run from their start[] to the value's end.
@@ -261,19 +268,31 @@ impl PtrsBkey for c::Stripe<Validated> {
         let Some(s) = Self::arm_ref(k.val_bytes()) else { return start..start };
         start..(start + s.nr_blocks as usize * size_of::<c::bch_extent_ptr>()).min(k.val_bytes().len())
     }
+
+    /// A stripe's pointers are its blocks, which can't be dropped: one is made
+    /// to point nowhere, its dev BCH_SB_MEMBER_INVALID - for fsck's repairs.
+    fn drop_ptr_noerror(mut k: BkeyS<'_, Self>, fs: &Fs, at: EntryPos) {
+        k.ptr_mut_at(fs, at).expect("a pointer at the position to drop")
+            .set_dev(c::BCH_SB_MEMBER_INVALID as u8);
+    }
 }
 
 bkey_family!(Ptrs);
 bkey_family!(PtrsMut);
 
-/// A family of key types with pointers is a PtrsBkey: its entries are where
-/// its member's are.
+/// A family of key types with pointers is a PtrsBkey as its member is.
 macro_rules! ptrs_bkey {
     ($family:ident, $typed:ident; $(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
         impl PtrsBkey for $family {
             fn entry_range(k: BkeySC<'_, $family>) -> Range<usize> {
                 match k.typed() {
                     $($typed::$name(k) => PtrsBkey::entry_range(k),)*
+                }
+            }
+
+            fn drop_ptr_noerror(k: BkeyS<'_, $family>, fs: &Fs, at: EntryPos) {
+                match k.typed() {
+                    $($typed::$name(k) => PtrsBkey::drop_ptr_noerror(k, fs, at),)*
                 }
             }
         }
@@ -360,6 +379,40 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
         })
     }
 
+    /// Whether it has data that didn't compress - a crc of compression type
+    /// incompressible: bch2_bkey_is_incompressible().
+    fn is_incompressible(&self, fs: &Fs) -> bool {
+        let incompressible = c::bch_compression_type::BCH_COMPRESSION_TYPE_incompressible.0 as u8;
+        self.crcs(fs).any(|crc| crc.compression_type == incompressible)
+    }
+
+    /// If @src has data that didn't compress, so does this, copied from it:
+    /// its uncompressed crcs made incompressible, in place -
+    /// bch2_bkey_propagate_incompressible(). @src of any type; one without
+    /// pointers has no such data.
+    ///
+    /// XXX (C's): if some data actually is compressed, we want
+    /// bch_extent_reconcile.wont_recompress_smaller
+    fn propagate_incompressible(&mut self, fs: &Fs, src: BkeySC<'_>)
+    where Self: BkeyVMut
+    {
+        if !src.arm::<Ptrs>().is_some_and(|s| s.is_incompressible(fs)) {
+            return;
+        }
+
+        use c::bch_compression_type as t;
+        let (none, incompressible) = (t::BCH_COMPRESSION_TYPE_none.0 as u8,
+                                      t::BCH_COMPRESSION_TYPE_incompressible.0 as u8);
+        for e in self.extent_entries_mut(fs) {
+            match e {
+                ExtentEntryMut::crc32(e) if e.compression_type() == none => e.set_compression_type(incompressible),
+                ExtentEntryMut::crc64(e) if e.compression_type() == none => e.set_compression_type(incompressible),
+                ExtentEntryMut::crc128(e) if e.compression_type() == none => e.set_compression_type(incompressible),
+                _ => {}
+            }
+        }
+    }
+
     /// Its pointer to device @dev, if it has one: bch2_bkey_has_device_c().
     fn has_device(&self, fs: &Fs, dev: u32) -> Option<&c::bch_extent_ptr> {
         self.ptrs(fs).find(|p| u32::from(p.dev()) == dev)
@@ -421,6 +474,89 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
             ExtentEntryMut::ptr(p) => Some(p),
             _ => None,
         })
+    }
+
+    /// Its pointer at @at, to edit.
+    fn ptr_mut_at(&mut self, fs: &Fs, at: EntryPos) -> Option<&mut c::bch_extent_ptr>
+    where Self: BkeyVMut
+    {
+        let val = self.as_sc().val_bytes().as_ptr() as usize;
+        self.extent_entries_mut(fs).find_map(|e| match e {
+            ExtentEntryMut::ptr(p) if (&raw const *p as usize - val) / 8 == at.0 => Some(p),
+            _ => None,
+        })
+    }
+
+    /// Drop the pointer at @at, as its type does - a stripe's can't be, and is
+    /// made to point nowhere: bch2_bkey_drop_ptr_noerror().
+    fn drop_ptr_noerror(&mut self, fs: &Fs, at: EntryPos)
+    where Self: BkeyVMut
+    {
+        <Self::V as PtrsBkey>::drop_ptr_noerror(self.as_s(), fs, at);
+    }
+
+    /// drop_ptr_noerror() - unless a pointer to its device has a stripe,
+    /// whose redundancy it keeps: then it's made to point nowhere, its dev
+    /// BCH_SB_MEMBER_INVALID. bch2_bkey_drop_ptr().
+    fn drop_ptr(&mut self, fs: &Fs, at: EntryPos)
+    where Self: BkeyVMut
+    {
+        let dev = self.ptrs_decoded(fs).find(|p| p.pos == at)
+            .expect("a pointer at the position to drop").p.ptr.dev();
+        if self.ptrs_decoded(fs).any(|p| p.p.ptr.dev() == dev && p.p.has_ec) {
+            self.ptr_mut_at(fs, at).expect("a pointer at the position to drop")
+                .set_dev(c::BCH_SB_MEMBER_INVALID as u8);
+        } else {
+            self.drop_ptr_noerror(fs, at);
+        }
+    }
+
+    /// drop_ptr_noerror() each pointer @cond picks, the walk restarted after
+    /// each: bch2_bkey_drop_ptrs_noerror().
+    fn drop_ptrs_noerror(&mut self, fs: &Fs, mut cond: impl FnMut(&DecodedPtr<'_>) -> bool)
+    where Self: BkeyVMut
+    {
+        while let Some(at) = { let at = self.ptrs_decoded(fs).find(|p| cond(p)).map(|p| p.pos); at } {
+            self.drop_ptr_noerror(fs, at);
+        }
+    }
+
+    /// drop_ptrs_noerror(), with drop_ptr(): bch2_bkey_drop_ptrs().
+    fn drop_ptrs(&mut self, fs: &Fs, mut cond: impl FnMut(&DecodedPtr<'_>) -> bool)
+    where Self: BkeyVMut
+    {
+        while let Some(at) = { let at = self.ptrs_decoded(fs).find(|p| cond(p)).map(|p| p.pos); at } {
+            self.drop_ptr(fs, at);
+        }
+    }
+
+    /// Its pointers to @dev: bch2_bkey_drop_device_noerror().
+    fn drop_device_noerror(&mut self, fs: &Fs, dev: u32)
+    where Self: BkeyVMut
+    {
+        self.drop_ptrs_noerror(fs, |p| u32::from(p.p.ptr.dev()) == dev);
+    }
+
+    /// Its pointers to @dev, with drop_ptr(): bch2_bkey_drop_device().
+    fn drop_device(&mut self, fs: &Fs, dev: u32)
+    where Self: BkeyVMut
+    {
+        self.drop_ptrs(fs, |p| u32::from(p.p.ptr.dev()) == dev);
+    }
+
+    /// The pointers of @mask, by index among the pointers - the highest first,
+    /// so the lower are where they were: bch2_bkey_drop_ptrs_mask().
+    fn drop_ptrs_mask(&mut self, fs: &Fs, mut mask: u32)
+    where Self: BkeyVMut
+    {
+        while mask != 0 {
+            let drop = 31 - mask.leading_zeros();
+            let at = self.ptrs_decoded(fs).nth(drop as usize).map(|p| p.pos);
+            if let Some(at) = at {
+                self.drop_ptr_noerror(fs, at);
+            }
+            mask ^= 1 << drop;
+        }
     }
 }
 

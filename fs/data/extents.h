@@ -99,11 +99,6 @@ static inline bool extent_entry_is_ptr(const union bch_extent_entry *e)
 	return extent_entry_type(e) == BCH_EXTENT_ENTRY_ptr;
 }
 
-static inline bool extent_entry_is_stripe_ptr(const union bch_extent_entry *e)
-{
-	return extent_entry_type(e) == BCH_EXTENT_ENTRY_stripe_ptr;
-}
-
 static inline bool extent_entry_is_crc(const union bch_extent_entry *e)
 {
 	switch (extent_entry_type(e)) {
@@ -534,10 +529,6 @@ static inline struct bch_devs_list bch2_bkey_devs(const struct bch_fs *c, struct
 	return ret;
 }
 
-bool bch2_bkey_is_incompressible(const struct bch_fs *, struct bkey_s_c);
-void bch2_bkey_propagate_incompressible(const struct bch_fs *, struct bkey_i *, struct bkey_s_c);
-
-
 unsigned bch2_dev_durability(struct bch_fs *, unsigned);
 
 /*
@@ -577,9 +568,6 @@ static inline unsigned bch2_bkey_dev_ptr_bit(struct bch_fs *c, struct bkey_s_c k
 	return 0;
 }
 
-void bch2_bkey_extent_entry_drop_s(const struct bch_fs *, struct bkey_s, union bch_extent_entry *);
-void bch2_bkey_extent_entry_drop(const struct bch_fs *, struct bkey_i *, union bch_extent_entry *);
-
 static inline void bch2_bkey_append_ptr(const struct bch_fs *c, struct bkey_i *k, struct bch_extent_ptr ptr)
 {
 	struct bch_extent_ptr *dest;
@@ -604,13 +592,6 @@ static inline void bch2_bkey_append_ptr(const struct bch_fs *c, struct bkey_i *k
 
 void bch2_extent_ptr_decoded_append(const struct bch_fs *, struct bkey_i *,
 				    struct extent_ptr_decoded *);
-void bch2_bkey_drop_ptr_noerror(const struct bch_fs *, struct bkey_s, struct bch_extent_ptr *);
-void bch2_bkey_drop_ptr(const struct bch_fs *, struct bkey_s, struct bch_extent_ptr *);
-void bch2_bkey_drop_ptrs_mask(const struct bch_fs *, struct bkey_i *, unsigned);
-
-void bch2_bkey_drop_device_noerror(const struct bch_fs *, struct bkey_s, unsigned);
-void bch2_bkey_drop_device(const struct bch_fs *, struct bkey_s, unsigned);
-void bch2_bkey_drop_ec_mask(const struct bch_fs *, struct bkey_i *k, unsigned);
 
 #define bch2_bkey_drop_ptrs_noerror(_k, _p, _entry, _cond)			\
 do {										\
