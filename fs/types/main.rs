@@ -96,7 +96,8 @@ fn records(mut b: &[u8]) -> Result<Vec<Record>, String> {
 
 /// The header for source file @file, under @src: foo/bar_types.rs - foo/bar.h's
 /// types and what Rust calls of it - is foo/bar_gen.h, and foo/bar.rs - what
-/// C calls of Rust - too; foo/types.rs is foo/types_gen.h.
+/// C calls of Rust - too, as is foo/bar_c_export.rs, bar.rs's wrappers for C;
+/// foo/types.rs is foo/types_gen.h.
 fn gen_header(src: &std::path::Path, file: &str) -> Result<String, String> {
     let path = std::fs::canonicalize(file)
         .map_err(|e| format!("{file}: {e} - rust_types_gen runs from where rustc did"))?;
@@ -104,7 +105,10 @@ fn gen_header(src: &std::path::Path, file: &str) -> Result<String, String> {
         .map_err(|_| format!("{file} isn't under {}", src.display()))?;
     let rel = rel.to_str().ok_or_else(|| format!("{file}: not UTF-8"))?;
     let stem = rel.trim_end_matches(".rs");
-    Ok(stem.strip_suffix("_types").unwrap_or(stem).to_string() + "_gen.h")
+    let stem = stem.strip_suffix("_types")
+        .or_else(|| stem.strip_suffix("_c_export"))
+        .unwrap_or(stem);
+    Ok(stem.to_string() + "_gen.h")
 }
 
 /// The typedefs @c's DEFINE_DARRAY*()s make - util/darray.h:
