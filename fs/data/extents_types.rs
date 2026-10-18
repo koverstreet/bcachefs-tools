@@ -92,7 +92,6 @@ c_enum! {
 }
 
 c_extern! {
-    pub fn bch2_bkey_durability_safe(c: *const c::bch_fs, k: c::bkey_s_c) -> c::bkey_durability;
     pub fn bch2_bkey_drop_stale_ptrs(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
                                      k: c::bkey_s_c) -> c_int;
     pub fn bch2_cut_front_s(c: *const c::bch_fs, where_: c::bpos, k: c::bkey_s) -> c_int;

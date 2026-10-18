@@ -19,7 +19,7 @@ use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::util::ffi::Opaque;
 use crate::util::rcu::read_lock;
-use crate::util::vstructs::cast_plain;
+use crate::util::vstructs::{cast_plain, Validated};
 use crate::util::Printbuf;
 use crate::bkey_fsck_err_on;
 use core::ffi::c_int;
@@ -59,6 +59,40 @@ impl c::Stripe {
     fn val_u64s(&self) -> u32 {
         self.blockcount_offset(self.nr_blocks.into()).div_ceil(8)
     }
+}
+
+/// Block @i's pointer, in stripe value @val - if it's long enough to hold it,
+/// as validate checks it is.
+fn block_ptr(val: &[u8], i: u32) -> Option<&c::bch_extent_ptr> {
+    let at = STRIPE_PTRS + size_of::<c::bch_extent_ptr>() * i as usize;
+    val.get(at..at + size_of::<c::bch_extent_ptr>()).and_then(cast_plain)
+}
+
+/// Each block's pointer, as far as the value goes.
+pub fn stripe_block_ptrs<'a>(s: BkeySC<'a, c::Stripe<Validated>>) -> impl Iterator<Item = &'a c::bch_extent_ptr> {
+    let val = s.val_bytes();
+    (0..u32::from(s.v().nr_blocks)).map_while(move |i| block_ptr(val, i))
+}
+
+/// Whether @p is the data block its stripe_ptr names in @s:
+/// bch2_ptr_matches_stripe(). A block past the value matches nothing.
+pub fn ptr_matches_stripe(s: BkeySC<'_, c::Stripe<Validated>>, p: &c::extent_ptr_decoded) -> bool {
+    assert!(p.has_ec, "matching a pointer without a stripe against one");
+
+    let v = s.v();
+    // unsigned, as C's: nr_redundant past nr_blocks is damage
+    let nr_data = u32::from(v.nr_blocks).wrapping_sub(v.nr_redundant.into());
+    let block = u32::from(p.ec.block());
+    if block >= nr_data {
+        return false;
+    }
+    let Some(sp) = block_ptr(s.val_bytes(), block) else { return false };
+
+    let invalid = c::BCH_SB_MEMBER_INVALID as u8;
+    (p.ptr.dev() == sp.dev() || p.ptr.dev() == invalid || sp.dev() == invalid) &&
+        p.ptr.generation() == sp.generation() &&
+        p.ptr.offset() >= sp.offset() &&
+        p.ptr.offset() < sp.offset() + u64::from(v.sectors.get())
 }
 
 fn stripe_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
@@ -129,10 +163,7 @@ pub fn bch2_stripe_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, k: BkeySC<
     let counts_found = s.csum_type < c::bch_csum_type::BCH_CSUM_NR.0 as u8 && s.csum_granularity_bits < 31;
 
     for i in 0..u32::from(s.nr_blocks) {
-        let at = STRIPE_PTRS + size_of::<c::bch_extent_ptr>() * i as usize;
-        let Some(ptr) = val.get(at..at + size_of::<c::bch_extent_ptr>()).and_then(cast_plain) else {
-            break;
-        };
+        let Some(ptr) = block_ptr(val, i) else { break };
 
         out.newline();
         extent_ptr_to_text(&mut out, Some(fs), ptr, &rcu);

@@ -5,6 +5,7 @@
 #include "bcachefs.h"
 #include "alloc/check_data.h"
 #include "btree/bkey.h"
+#include "data/durability_gen.h"
 #include "data/extents_gen.h"
 #include "data/ptrs_gen.h"
 
@@ -529,8 +530,6 @@ static inline struct bch_devs_list bch2_bkey_devs(const struct bch_fs *c, struct
 	return ret;
 }
 
-unsigned bch2_dev_durability(struct bch_fs *, unsigned);
-
 /*
  * A stripe block counts for nothing if its device's durability is 0: missing,
  * evacuating, or set to durability 0. Not bch2_dev_bad_or_evacuating(): an
@@ -542,12 +541,6 @@ static inline bool bch2_stripe_block_dev_bad(struct bch_fs *c, unsigned dev)
 	return !bch2_dev_durability(c, dev);
 }
 
-int bch2_extent_ptr_durability(struct btree_trans *, struct extent_ptr_decoded *);
-
-int bch2_bkey_durability(struct btree_trans *, struct bkey_s_c, struct bkey_durability *);
-struct bkey_durability bch2_btree_ptr_durability(struct bch_fs *, struct bkey_s_c);
-
-bool bch2_bkey_can_read(const struct bch_fs *, struct bkey_s_c);
 
 static inline struct bch_extent_ptr *bch2_bkey_has_device(const struct bch_fs *c,
 							  struct bkey_s k, unsigned dev)

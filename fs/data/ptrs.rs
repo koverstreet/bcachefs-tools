@@ -731,13 +731,6 @@ pub fn crc_is_encoded(crc: &c::bch_extent_crc_unpacked) -> bool {
     crc.csum_type as u32 != c::bch_csum_type::BCH_CSUM_none.0 || crc_is_compressed(crc)
 }
 
-impl BkeySC<'_> {
-    /// For reserving space to rewrite it: tolerates bad pointers.
-    pub fn durability_safe(self, fs: &Fs) -> c::bkey_durability {
-        unsafe { c::bch2_bkey_durability_safe(fs.as_ptr(), self.into()) }
-    }
-}
-
 /// Drop @k's stale cached pointers, updating it through @iter.
 pub fn drop_stale_ptrs<'a, 't>(
     t:    &TransAttempt<'a, 't>,
