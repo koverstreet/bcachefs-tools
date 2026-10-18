@@ -349,6 +349,11 @@ endif
 # are a member's. objtool runs on rust.o, as on any member - or on bcachefs.o,
 # when kbuild delays it - not on its inputs: their ORC, return-site and mcount
 # tables would make every function reachable.
+#
+# rust.o is linked, a file symbol from each input: objtool refuses that
+# without --link (since 6.15). kbuild passes it only when it delays objtool to
+# bcachefs.o - IBT, LTO_CLANG, KLP_BUILD - when objtool doesn't run on rust.o
+# at all; without those, rust.o's run needs its own.
 bch-rust-gc-objs := $(addprefix $(obj)/,$(bch-rust-gc-in))
 ifeq ($(CONFIG_BCACHEFS_FS),m)
 $(bch-rust-gc-objs): private part-of-module := y
@@ -356,6 +361,7 @@ else
 $(bch-rust-gc-objs): private part-of-builtin := y
 endif
 OBJECT_FILES_NON_STANDARD_mod.o := y
+$(obj)/rust.o: private objtool-args += --link
 
 quiet_cmd_bch_rust_gc = LD $(quiet_modtag)  $@
       cmd_bch_rust_gc = LD='$(LD) $(ld_flags)' NM='$(NM)' OBJCOPY='$(OBJCOPY)' \
