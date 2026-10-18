@@ -38,7 +38,6 @@ static inline struct bch_member bch2_members_v1_get(struct bch_sb_field_members_
 	return ret;
 }
 
-int bch2_sb_members_v2_init(struct bch_fs *c);
 
 /* Superblock only - usable before the filesystem has been opened: */
 void bch2_member_to_text_short_sb(struct printbuf *, struct bch_member *,

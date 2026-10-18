@@ -337,7 +337,7 @@ pub fn format(
         sb.sb_mut().set_encryption_type(1);
     }
 
-    sb.members_cpy_v2_v1();
+    sb.members_cpy_v2_v1().unwrap_or_else(|e| die(&format!("copying members to members_v1: {e}")));
 
     // Write superblocks to each device
     for (idx, dev) in dev_slice.iter_mut().enumerate() {

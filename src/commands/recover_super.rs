@@ -12,6 +12,7 @@ use clap::Parser;
 
 use crate::util::{file_size, parse_human_size};
 use bcachefs_kernel::sb::io::{SbBuf, SbParseError, BCACHE_MAGIC, BCHFS_MAGIC};
+use bcachefs_kernel::sb::members::sb_member;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::wrappers::super_io::{self, SUPERBLOCK_SIZE_DEFAULT};
 
@@ -55,7 +56,7 @@ pub struct RecoverSuperCli {
 fn sb_last_mount_time(sb: &c::bch_sb) -> u64 {
     (0..sb.nr_devices as i32)
         .map(|i| {
-            let m = unsafe { c::bch2_sb_member_get(sb as *const _ as *mut _, i) };
+            let m = sb_member(sb, i as u32).unwrap_or_default();
             m.last_mount.get()
         })
         .max()
@@ -192,7 +193,7 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
                            dev_idx, nr_devices));
     }
 
-    let m = unsafe { c::bch2_sb_member_get(src_sb.sb, dev_idx) };
+    let m = sb_member(src_sb.sb(), dev_idx as u32).unwrap_or_default();
     if m.uuid.b == [0u8; 16] {
         return Err(anyhow!("Member {} does not exist in source superblock", dev_idx));
     }

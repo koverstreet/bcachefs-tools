@@ -1,12 +1,11 @@
 use crate::c;
-use crate::c::{bch_member, bch_sb, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
+use crate::c::{bch_sb, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::sb::members;
 use crate::util::Printbuf;
 use crate::types::ArmOf;
-use crate::util::strided::StridedMut;
-use crate::util::vstructs::{bytes_of_mut, read_past, ArmRef, Head, SelfSized, Validated};
+use crate::util::vstructs::{read_past, ArmRef, Head, SelfSized, Validated};
 use core::ffi::c_int;
 
 /// A superblock section's type: an arm of tagged_union! bch_sb_field, which
@@ -203,11 +202,6 @@ impl bch_sb_handle {
         }
     }
 
-    /// Copy members_v2 into the members_v1 mirror, for old kernels.
-    pub fn members_cpy_v2_v1(&mut self) {
-        unsafe { c::bch2_sb_members_cpy_v2_v1(self) };
-    }
-
     /// The superblock's full vstruct extent as bytes.
     pub fn sb_bytes(&self) -> &[u8] {
         self.sb().as_bytes()
@@ -226,20 +220,6 @@ impl bch_sb_handle {
         }
         crate::util::vstructs::bytes_of_mut(self.sb_mut())[..N].copy_from_slice(&h);
         Ok(r)
-    }
-
-    /// Member @idx, to edit: None if there's no such member in the section,
-    /// or it's shorter than a bch_member - written before it grew - which a
-    /// write to would run past, into the next member.
-    pub fn member_mut(&mut self, idx: u32) -> Option<&mut bch_member> {
-        if idx >= u32::from(self.sb().nr_devices) {
-            return None;
-        }
-        let mi = self.field_mut::<c::bch_sb_field_members_v2>()?;
-        let stride = mi.member_bytes.get().into();
-        let members = bytes_of_mut(mi)
-            .get_mut(core::mem::offset_of!(Head<c::bch_sb_field_members_v2>, _members)..)?;
-        StridedMut::<bch_member>::new(members, stride)?.into_whole_mut(idx as usize)
     }
 
     /// Read-only, bounds-checked access to members_v2.
@@ -297,7 +277,16 @@ pub fn sb_field_get<F: SbField + ?Sized>(sb: &c::bch_sb) -> Option<&F> {
 /// To edit: a field past the section's end is no write it will carry -
 /// whole_mut() for all of it, if it's all there.
 pub fn sb_field_get_mut<F: SbField + ?Sized>(disk_sb: &mut c::bch_sb_handle) -> Option<&mut F> {
-    let f = unsafe { c::bch2_sb_field_get_id(disk_sb.sb, F::FIELD_TYPE) };
+    // SAFETY: the handle's superblock, borrowed mutably with it
+    unsafe { sb_field_get_raw_mut(disk_sb.sb) }
+}
+
+/// sb_field_get_mut(), for a superblock C hands Rust without its handle.
+///
+/// # Safety
+/// @sb is validated, and nothing else uses it for 'a.
+pub unsafe fn sb_field_get_raw_mut<'a, F: SbField + ?Sized>(sb: *mut Head<bch_sb>) -> Option<&'a mut F> {
+    let f = unsafe { c::bch2_sb_field_get_id(sb, F::FIELD_TYPE) };
     // SAFETY: as sb_field_get()'s
     (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
 }

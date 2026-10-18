@@ -1,14 +1,15 @@
 use crate::btree::bkey::BkeySC;
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::util::kernel::{READ, WRITE};
 use crate::util::Printbuf;
 use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::strided::Strided;
-use crate::util::vstructs::Head;
-use core::ffi::CStr;
-use core::mem::offset_of;
+use crate::util::ffi::Opaque;
+use crate::util::strided::{Strided, StridedMut};
+use crate::util::vstructs::{bytes_of_mut, plain_bytes, Head, Unsized, Validated};
+use core::ffi::{c_int, CStr};
+use cstruct_macros::c_export;
 use super::io::*;
 
 // ---------------------------------------------------------------------------
@@ -33,6 +34,8 @@ pub fn member_state_str(state: u8) -> &'static str {
 }
 
 const BCH_MEMBER_V1_BYTES: usize = 56;
+const MEMBERS_V2_HEAD: usize = size_of::<Head<c::bch_sb_field_members_v2>>();
+const MEMBERS_V1_HEAD: usize = size_of::<Head<c::bch_sb_field_members_v1>>();
 
 /// bcachefs_format.h's BCH_SB_MEMBER_DELETED_UUID.
 const MEMBER_DELETED_UUID: [u8; 16] = [
@@ -56,8 +59,6 @@ pub fn sb_member(sb: &c::bch_sb, idx: u32) -> Option<c::bch_member> {
     }
 }
 
-/// A members section's members, each @stride bytes: View::get()'s copies,
-/// zero past the end of one written before bch_member grew.
 fn members_in(f: &[u8], start: usize, stride: usize) -> Option<Strided<'_, c::bch_member>> {
     Strided::new(f.get(start..)?, stride)
 }
@@ -115,8 +116,7 @@ pub fn dev_ptr(ca: Option<&c::bch_dev>) -> *mut c::bch_dev {
 pub fn members_v2(sb: &c::bch_sb) -> Option<MembersV2<'_>> {
     let f = sb_field_get::<c::bch_sb_field_members_v2>(sb)?;
     Some(MembersV2 {
-        members: members_in(f.as_bytes(), offset_of!(Head<c::bch_sb_field_members_v2>, _members),
-                            f.member_bytes.get().into())?,
+        members: members_in(f.as_bytes(), MEMBERS_V2_HEAD, f.member_bytes.get().into())?,
         nr_devices: sb.nr_devices.into(),
     })
 }
@@ -125,10 +125,118 @@ pub fn members_v2(sb: &c::bch_sb) -> Option<MembersV2<'_>> {
 pub fn members_v1(sb: &c::bch_sb) -> Option<MembersV1<'_>> {
     let f = sb_field_get::<c::bch_sb_field_members_v1>(sb)?;
     Some(MembersV1 {
-        members: members_in(f.as_bytes(), offset_of!(Head<c::bch_sb_field_members_v1>, _members),
-                            BCH_MEMBER_V1_BYTES)?,
+        members: members_in(f.as_bytes(), MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES)?,
         nr_devices: sb.nr_devices.into(),
     })
+}
+
+fn members_v2_mut(mi: &mut c::bch_sb_field_members_v2) -> Option<StridedMut<'_, c::bch_member>> {
+    let stride = mi.member_bytes.get().into();
+    StridedMut::new(bytes_of_mut(mi).get_mut(MEMBERS_V2_HEAD..)?, stride)
+}
+
+impl c::bch_sb_handle {
+    /// Member @idx, to edit: None if there's no such member in the section,
+    /// or it's shorter than a bch_member - written before it grew.
+    pub fn member_mut(&mut self, idx: u32) -> Option<&mut c::bch_member> {
+        if idx >= u32::from(self.sb().nr_devices) {
+            return None;
+        }
+        members_v2_mut(self.field_mut::<c::bch_sb_field_members_v2>()?)?.into_whole_mut(idx as usize)
+    }
+
+    /// members_v1, the mirror of members_v2 that versions before
+    /// extent_flags read - or none, for a superblock they can't.
+    pub fn members_cpy_v2_v1(&mut self) -> Result<(), BchError> {
+        if self.sb().version_incompat() > c::bcachefs_metadata_version::extent_flags.0.into() {
+            self.field_resize::<c::bch_sb_field_members_v1>(0);
+            return Ok(());
+        }
+
+        let nr = u32::from(self.sb().nr_devices);
+        let u64s = (MEMBERS_V1_HEAD + BCH_MEMBER_V1_BYTES * nr as usize).div_ceil(size_of::<u64>());
+        self.field_resize::<c::bch_sb_field_members_v1>(u64s as u32)
+            .ok_or(BchError::from(bch_errcode::BCH_ERR_ENOSPC_sb_members))?;
+
+        for i in 0..nr {
+            let m = members_v2(self.sb()).and_then(|v2| v2.get(i)).expect("members_v2: every member");
+            self.put_member_v1::<c::bch_sb_field_members_v1>(MEMBERS_V1_HEAD, i, &m);
+        }
+        Ok(())
+    }
+
+    fn put_member_v1<F: SbField + Unsized + ?Sized>(&mut self, start: usize, i: u32, m: &c::bch_member) {
+        let at = start + i as usize * BCH_MEMBER_V1_BYTES;
+        let f = bytes_of_mut(self.field_mut::<F>().expect("members: just sized"));
+        f[at..at + BCH_MEMBER_V1_BYTES].copy_from_slice(&plain_bytes(m)[..BCH_MEMBER_V1_BYTES]);
+    }
+
+    /// After, every member of members_v2 is whole. None if there isn't room.
+    pub fn members_v2_init(&mut self) -> Option<()> {
+        let nr = u32::from(self.sb().nr_devices);
+        let member = size_of::<c::bch_member>();
+        let u64s = ((MEMBERS_V2_HEAD + member * nr as usize).div_ceil(size_of::<u64>())) as u32;
+
+        if self.field::<c::bch_sb_field_members_v2>().is_none() {
+            let mi = self.field_resize::<c::bch_sb_field_members_v2>(u64s)?;
+            mi.pad = Default::default();
+            mi.member_bytes = (BCH_MEMBER_V1_BYTES as u16).into();
+
+            for i in 0..nr {
+                let m = members_v1(self.sb()).and_then(|v1| v1.get(i)).unwrap_or_default();
+                self.put_member_v1::<c::bch_sb_field_members_v2>(MEMBERS_V2_HEAD, i, &m);
+            }
+        }
+
+        let stride: usize = self.field::<c::bch_sb_field_members_v2>()?.member_bytes.get().into();
+        if stride < member {
+            let mi = self.field_resize::<c::bch_sb_field_members_v2>(u64s)?;
+            StridedMut::<c::bch_member>::grow(&mut bytes_of_mut(mi)[MEMBERS_V2_HEAD..], nr as usize, stride, member)
+                .expect("members_v2: validated, and just sized");
+            mi.member_bytes = (member as u16).into();
+        }
+        Some(())
+    }
+}
+
+#[c_export]
+pub fn bch2_sb_members_v2_init(c: &Opaque<c::bch_fs>) -> c_int {
+    let fs = Fs::from_c(c);
+    // SAFETY: under sb_lock
+    let sb = unsafe { fs.disk_sb_mut() };
+    ret_to_c(sb.members_v2_init().ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ENOSPC_sb_members_v2)))
+}
+
+/// # Safety
+/// @disk_sb is valid, and nothing else uses it meanwhile.
+#[c_export]
+pub unsafe fn bch2_sb_members_cpy_v2_v1(disk_sb: *mut c::bch_sb_handle) -> c_int {
+    // SAFETY: the caller's
+    ret_to_c(unsafe { &mut *disk_sb }.members_cpy_v2_v1())
+}
+
+/// Member @i of members_v2, whole - as every one is, on an open filesystem.
+///
+/// # Safety
+/// @sb is validated, and nothing else uses it meanwhile: under sb_lock.
+#[c_export]
+pub unsafe fn bch2_members_v2_get_mut(sb: *mut Head<c::bch_sb>, i: c_int) -> *mut c::bch_member {
+    // SAFETY: the caller's
+    unsafe { sb_field_get_raw_mut::<c::bch_sb_field_members_v2>(sb) }
+        .and_then(members_v2_mut)
+        .and_then(|m| m.into_whole_mut(i as usize))
+        .expect("members_v2: a member, whole")
+}
+
+/// Member @i, from members_v2 or members_v1: zero if there's none.
+///
+/// # Safety
+/// @sb is validated.
+#[c_export]
+pub unsafe fn bch2_sb_member_get(sb: *mut Head<c::bch_sb>, i: c_int) -> c::bch_member {
+    // SAFETY: the caller's
+    let sb = unsafe { c::bch_sb::<Validated>::from_ffi(sb) };
+    sb_member(sb, i as u32).unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -557,5 +665,93 @@ impl c::bch_dev {
     /// bch2_dev_rw_durability().
     pub fn rw_durability(&self) -> u32 {
         if self.is_rw() { self.mi.durability.into() } else { 0 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::vstructs::plain_bytes_mut;
+
+    fn new_sb(nr: u8) -> c::bch_sb_handle {
+        let mut sb = c::bch_sb_handle::default();
+        sb.sb_realloc(0).unwrap();
+        sb.sb_mut().nr_devices = nr;
+        sb
+    }
+
+    fn member(i: u8) -> c::bch_member {
+        let mut m = c::bch_member::default();
+        m.uuid.b = [i + 1; 16];
+        m.nbuckets = (1000 * u64::from(i) + 1).into();
+        m
+    }
+
+    /// @nr members, each its first @bytes, at a stride of @bytes - as an
+    /// older version wrote them.
+    fn put_v2(sb: &mut c::bch_sb_handle, nr: u8, bytes: usize) {
+        let u64s = (MEMBERS_V2_HEAD + bytes * usize::from(nr)).div_ceil(8) as u32;
+        let mi = sb.field_resize::<c::bch_sb_field_members_v2>(u64s).unwrap();
+        mi.member_bytes = (bytes as u16).into();
+        let mut m = members_v2_mut(mi).unwrap();
+        for i in 0..nr {
+            m.slot_bytes_mut(i.into()).unwrap().copy_from_slice(&plain_bytes(&member(i))[..bytes]);
+        }
+    }
+
+    fn whole(sb: &mut c::bch_sb_handle, i: u8) -> c::bch_member {
+        *sb.member_mut(i.into()).expect("a whole member")
+    }
+
+    /// From members_v1: each member as it was, zero past the 56 bytes v1 has.
+    #[test]
+    fn members_v2_from_v1() {
+        let mut sb = new_sb(3);
+        let u64s = (MEMBERS_V1_HEAD + BCH_MEMBER_V1_BYTES * 3).div_ceil(8) as u32;
+        sb.field_resize::<c::bch_sb_field_members_v1>(u64s).unwrap();
+        for i in 0..3 {
+            sb.put_member_v1::<c::bch_sb_field_members_v1>(MEMBERS_V1_HEAD, i.into(), &member(i));
+        }
+
+        sb.members_v2_init().unwrap();
+        let mi = sb.field::<c::bch_sb_field_members_v2>().unwrap();
+        assert_eq!(usize::from(mi.member_bytes.get()), size_of::<c::bch_member>());
+        for i in 0..3 {
+            assert_eq!(plain_bytes(&whole(&mut sb, i)), plain_bytes(&member(i)));
+        }
+    }
+
+    /// Grown in place: each member moved whole, and the bytes past what it
+    /// had - the next member's, before - zero.
+    #[test]
+    fn members_v2_grown() {
+        let mut sb = new_sb(3);
+        put_v2(&mut sb, 3, BCH_MEMBER_V1_BYTES);
+        assert!(sb.member_mut(0).is_none());
+
+        sb.members_v2_init().unwrap();
+        for i in 0..3 {
+            let mut want = c::bch_member::default();
+            plain_bytes_mut(&mut want)[..BCH_MEMBER_V1_BYTES]
+                .copy_from_slice(&plain_bytes(&member(i))[..BCH_MEMBER_V1_BYTES]);
+            assert_eq!(plain_bytes(&whole(&mut sb, i)), plain_bytes(&want));
+        }
+    }
+
+    /// The mirror is each member's first 56 bytes - and, past extent_flags,
+    /// gone: versions that read it can't read the superblock.
+    #[test]
+    fn members_v1_mirror() {
+        let mut sb = new_sb(2);
+        put_v2(&mut sb, 2, size_of::<c::bch_member>());
+        sb.members_cpy_v2_v1().unwrap();
+        for i in 0..2 {
+            let m = members_v1(sb.sb()).unwrap().get(i.into()).unwrap();
+            assert_eq!(plain_bytes(&m)[..BCH_MEMBER_V1_BYTES], plain_bytes(&member(i))[..BCH_MEMBER_V1_BYTES]);
+        }
+
+        sb.sb_mut().set_version_incompat(c::bcachefs_metadata_version::extent_flags.0 as u64 + 1);
+        sb.members_cpy_v2_v1().unwrap();
+        assert!(sb.field::<c::bch_sb_field_members_v1>().is_none());
     }
 }

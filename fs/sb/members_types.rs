@@ -30,9 +30,6 @@ pub struct bch_member_cpu {
 }
 
 c_extern! {
-    pub fn bch2_sb_members_cpy_v2_v1(disk_sb: *mut c::bch_sb_handle) -> c_int;
-    pub fn bch2_members_v2_get_mut(sb: *mut Head<c::bch_sb>, i: c_int) -> *mut c::bch_member;
-    pub fn bch2_sb_member_get(sb: *mut Head<c::bch_sb>, i: c_int) -> c::bch_member;
     pub fn bch2_member_to_text(out: *mut c::printbuf, m: *mut c::bch_member,
                                gi: *mut Head<c::bch_sb_field_disk_groups>, sb: *mut Head<c::bch_sb>,
                                idx: c_uint);
