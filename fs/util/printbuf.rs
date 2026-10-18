@@ -233,6 +233,45 @@ impl Printbuf {
         self.0.set_suppress(v);
     }
 
+    /// A UUID as printk's %pU: lowercase, hyphenated.
+    pub fn uuid(&mut self, u: &c::__uuid_t) {
+        for (i, b) in u.b.iter().enumerate() {
+            if matches!(i, 4 | 6 | 8 | 10) {
+                self.write_bytes(b"-");
+            }
+            write!(self, "{b:02x}");
+        }
+    }
+
+    /// Empty, to write again - its buffer kept: printbuf_reset().
+    pub fn reset(&mut self) {
+        let b = &mut self.0;
+        b.pos = 0;
+        b.set_allocation_failure(false);
+        b.last_newline = 0;
+        b.last_field = 0;
+        b.indent = 0;
+        b.cur_tabstop = 0;
+        b.nr_tabstops = 0;
+        if b.size != 0 {
+            // SAFETY: a buffer of size bytes
+            unsafe { *b.buf = 0 };
+        }
+    }
+
+    /// Whether an allocation failed, and what's written is cut short.
+    pub fn allocation_failure(&self) -> bool {
+        self.0.allocation_failure()
+    }
+
+    /// A newline at the end, unless there's one or nothing's written:
+    /// bch2_printbuf_ensure_trailing_newline().
+    pub fn ensure_trailing_newline(&mut self) {
+        if self.as_bytes().last().is_some_and(|&b| b != b'\n') {
+            self.newline();
+        }
+    }
+
     pub fn human_readable_u64(&mut self, v: u64) {
         unsafe { c::bch2_prt_human_readable_u64(&mut self.0, v) };
     }
@@ -316,6 +355,15 @@ impl fmt::Display for Bpos {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         printbuf_to_formatter(f, |buf| unsafe { c::bch2_bpos_to_text(buf, *self) })
     }
+}
+
+/// What prints itself to a Printbuf. A printbuf is a superset of a Formatter:
+/// tabstops, indent and modes (human-readable units) are its state, which a
+/// Display impl can't reach - so an object laid out over lines is ToText. A
+/// value with nothing to lay out - a position, a name - is Display, and
+/// write!() takes it directly.
+pub trait ToText {
+    fn to_text(&self, out: &mut Printbuf);
 }
 
 /// Display through a C *_to_text(), via a printbuf that lives only for the
