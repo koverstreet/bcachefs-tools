@@ -11,4 +11,5 @@ use cstruct_macros::c_extern;
 
 c_extern! {
     pub fn bch2_dev_allocator_set_rw(c: *mut c::bch_fs, ca: *mut c::bch_dev, rw: bool);
+    pub fn bch2_recalc_capacity(c: *mut c::bch_fs);
 }

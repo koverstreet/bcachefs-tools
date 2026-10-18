@@ -3,9 +3,11 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::fs::Fs;
+use crate::util::Printbuf;
 use crate::types::{CacheAligned, DArray, c_default};
 use core::ffi::{c_uint, c_ulong};
-use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, c_const, c_enum, c_extern, c_typedef, c_xmacro, CStruct, TypeInfo};
 use nestify::nest;
 
 c_xmacro! {
@@ -321,3 +323,34 @@ pub struct bch_fs_discards {
     pub s: c::discard_state,
 }
 c_default!(bch_fs_discards);
+
+c_extern! {
+    pub fn bch2_discards_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, s: *mut c::discard_state);
+    pub fn bch2_do_discards_async(c: *mut c::bch_fs);
+    pub fn bch2_do_invalidates(c: *mut c::bch_fs);
+    pub fn bch2_fast_discards_to_text(out: *mut c::printbuf, ca: *mut c::bch_dev);
+}
+
+impl c::bch_dev {
+    /// Its discards in flight - the fast path's.
+    pub fn fast_discards_to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_fast_discards_to_text(out.as_raw(), core::ptr::from_ref(self).cast_mut()) }
+    }
+}
+
+impl Fs {
+    pub fn discards_to_text(&self, out: &mut Printbuf, s: &c::discard_state) {
+        unsafe { bch2_discards_to_text(out.as_raw(), self.as_ptr(), core::ptr::from_ref(s).cast_mut()) }
+    }
+
+    /// Kick the discard worker - unless the filesystem is going read-only;
+    /// it takes its own write ref.
+    pub fn do_discards_async(&self) {
+        unsafe { bch2_do_discards_async(self.as_ptr()) }
+    }
+
+    /// Kick each device's invalidate worker - which takes its own refs.
+    pub fn do_invalidates(&self) {
+        unsafe { bch2_do_invalidates(self.as_ptr()) }
+    }
+}

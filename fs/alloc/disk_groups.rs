@@ -437,34 +437,39 @@ pub unsafe fn bch2_disk_path_to_text_sb(out: &mut Printbuf, sb: *mut Head<c::bch
     disk_path_to_text_in(out, sb_groups(sb), v);
 }
 
-/// sysfs disk_groups.
 #[cold]
 #[c_export]
 pub fn bch2_disk_groups_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
+    Fs::from_c(c).disk_groups_to_text(out);
+}
 
-    out.make_room_gfp(4096, c::GFP_KERNEL);
+impl Fs {
+    /// sysfs disk_groups.
+    #[cold]
+    pub fn disk_groups_to_text(&self, out: &mut Printbuf) {
+        out.make_room_gfp(4096, c::GFP_KERNEL);
 
-    let mut out = out.atomic();
-    let rcu = read_lock();
-    let groups = fs.disk_groups.read(&rcu);
+        let mut out = out.atomic();
+        let rcu = read_lock();
+        let groups = self.disk_groups.read(&rcu);
 
-    for (i, e) in groups.iter().enumerate() {
-        write!(out, "{i:2}: ");
+        for (i, e) in groups.iter().enumerate() {
+            write!(out, "{i:2}: ");
 
-        if !e.deleted {
-            disk_path_to_text_in(&mut out, groups, i as u32);
+            if !e.deleted {
+                disk_path_to_text_in(&mut out, groups, i as u32);
 
-            write!(out, " devs");
-            for ca in fs.devs_rcu_in(e.devs.d.iter(), &rcu) {
-                write!(out, " ");
-                out.write_bytes(ca.name().to_bytes());
+                write!(out, " devs");
+                for ca in self.devs_rcu_in(e.devs.d.iter(), &rcu) {
+                    write!(out, " ");
+                    out.write_bytes(ca.name().to_bytes());
+                }
+            } else {
+                write!(out, "[deleted]");
             }
-        } else {
-            write!(out, "[deleted]");
-        }
 
-        out.newline();
+            out.newline();
+        }
     }
 }
 

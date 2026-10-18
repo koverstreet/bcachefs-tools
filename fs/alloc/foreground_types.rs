@@ -3,9 +3,11 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::fs::Fs;
 use crate::types::{DArray, c_default};
+use crate::util::Printbuf;
 use core::ffi::c_uint;
-use cstruct_macros::{bitfield, c_enum, CStruct};
+use cstruct_macros::{bitfield, c_enum, c_extern, CStruct};
 use nestify::nest;
 
 #[repr(C)]
@@ -145,3 +147,42 @@ nest! {
     }
 }
 c_default!(alloc_request);
+
+c_extern! {
+    pub fn bch2_alloc_wake_all(c: *mut c::bch_fs);
+    pub fn bch2_open_buckets_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, ca: *mut c::bch_dev);
+    pub fn bch2_open_buckets_partial_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
+    pub fn bch2_fs_open_buckets_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
+    pub fn bch2_fs_alloc_debug_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
+    pub fn bch2_dev_alloc_debug_to_text(out: *mut c::printbuf, ca: *mut c::bch_dev);
+}
+
+impl c::bch_dev {
+    pub fn alloc_debug_to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_dev_alloc_debug_to_text(out.as_raw(), core::ptr::from_ref(self).cast_mut()) }
+    }
+}
+
+impl Fs {
+    /// Wake everything waiting on the allocator.
+    pub fn alloc_wake_all(&self) {
+        unsafe { bch2_alloc_wake_all(self.as_ptr()) }
+    }
+
+    /// The open buckets - on @ca, or all of them.
+    pub fn open_buckets_to_text(&self, out: &mut Printbuf, ca: Option<&c::bch_dev>) {
+        unsafe { bch2_open_buckets_to_text(out.as_raw(), self.as_ptr(), crate::sb::members::dev_ptr(ca)) }
+    }
+
+    pub fn open_buckets_partial_to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_open_buckets_partial_to_text(out.as_raw(), self.as_ptr()) }
+    }
+
+    pub fn fs_open_buckets_to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_fs_open_buckets_to_text(out.as_raw(), self.as_ptr()) }
+    }
+
+    pub fn alloc_debug_to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_fs_alloc_debug_to_text(out.as_raw(), self.as_ptr()) }
+    }
+}

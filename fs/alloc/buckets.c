@@ -93,6 +93,14 @@ __bch2_fs_usage_read_short(struct bch_fs *c)
 	return ret;
 }
 
+struct bch_fs_usage_base bch2_fs_usage_base_read(struct bch_fs *c)
+{
+	struct bch_fs_usage_base b = {};
+
+	acc_u64s_percpu(&b.hidden, &c->capacity.pcpu->usage.hidden, sizeof(b) / sizeof(u64));
+	return b;
+}
+
 struct bch_fs_usage_short
 bch2_fs_usage_read_short(struct bch_fs *c)
 {
