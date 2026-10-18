@@ -169,12 +169,6 @@ read_attribute(alloc_debug);
 BCH_PERSISTENT_COUNTERS()
 #undef x
 
-#define x(_name, ...)						\
-	static struct attribute sysfs_time_stat_##_name =		\
-		{ .name = #_name, .mode = 0644 };
-	BCH_TIME_STATS()
-#undef x
-
 /* counters dir */
 
 SHOW(bch2_fs_counters)
@@ -380,78 +374,6 @@ int bch2_opts_create_sysfs_files(struct kobject *kobj, unsigned type)
 
 	return 0;
 }
-
-/* time stats */
-
-SHOW(bch2_fs_time_stats)
-{
-	struct bch_fs *c = container_of(kobj, struct bch_fs, time_stats);
-
-#define x(name, ...)							\
-	if (attr == &sysfs_time_stat_##name)				\
-		bch2_time_stats_to_text(out, &c->times[BCH_TIME_##name]);
-	BCH_TIME_STATS()
-#undef x
-
-	return 0;
-}
-
-STORE(bch2_fs_time_stats)
-{
-	struct bch_fs *c = container_of(kobj, struct bch_fs, time_stats);
-
-#define x(name, ...)							\
-	if (attr == &sysfs_time_stat_##name)				\
-		bch2_time_stats_reset(&c->times[BCH_TIME_##name]);
-	BCH_TIME_STATS()
-#undef x
-	return size;
-}
-SYSFS_OPS(bch2_fs_time_stats);
-
-struct attribute *bch2_fs_time_stats_files[] = {
-#define x(name, ...)					\
-	&sysfs_time_stat_##name,
-	BCH_TIME_STATS()
-#undef x
-	NULL
-};
-
-/* time stats - JSON */
-
-SHOW(bch2_fs_time_stats_json)
-{
-	struct bch_fs *c = container_of(kobj, struct bch_fs, time_stats_json);
-
-#define x(name, ...)							\
-	if (attr == &sysfs_time_stat_##name)				\
-		bch2_time_stats_json_to_text(out, &c->times[BCH_TIME_##name], NULL, 0);
-	BCH_TIME_STATS()
-#undef x
-
-	return 0;
-}
-
-STORE(bch2_fs_time_stats_json)
-{
-	struct bch_fs *c = container_of(kobj, struct bch_fs, time_stats_json);
-
-#define x(name, ...)							\
-	if (attr == &sysfs_time_stat_##name)				\
-		bch2_time_stats_reset(&c->times[BCH_TIME_##name]);
-	BCH_TIME_STATS()
-#undef x
-	return size;
-}
-SYSFS_OPS(bch2_fs_time_stats_json);
-
-struct attribute *bch2_fs_time_stats_json_files[] = {
-#define x(name, ...)					\
-	&sysfs_time_stat_##name,
-	BCH_TIME_STATS()
-#undef x
-	NULL
-};
 
 static const char * const bch2_rw[] = {
 	"read",

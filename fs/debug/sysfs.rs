@@ -6,7 +6,9 @@
 //! and foo_sysfs_ops that init's KTYPE()s name - the kobjects and their
 //! lifetimes are init's. Its files are one of:
 //! - a table of Attrs - name, mode, what reading and writing do: the fs dir,
-//!   internal/.
+//!   internal/;
+//! - a ListAttrs, a file per entry of an x-macro list: time_stats/,
+//!   time_stats_json/.
 //!
 //! internal/btree_trans_stats_json is a bin_attribute, apart from the rest.
 //!
@@ -33,7 +35,7 @@ use crate::util::ffi::c_char;
 use crate::util::kernel::{READ, WRITE};
 use crate::util::locking::mutex_lock;
 use crate::util::log::LogMsg;
-use crate::util::sysfs::{self, parse_human_u64, parse_int, Attr, Dir, Files};
+use crate::util::sysfs::{self, parse_human_u64, parse_int, Attr, Dir, Files, ListAttrs};
 use crate::util::{Printbuf, ToText};
 
 // ── the fs dir ──────────────────────────────────────────────────────────────
@@ -269,6 +271,73 @@ pub static bin_attr_btree_trans_stats_json: c::bin_attribute = {
     a.write = Some(trans_stats_json_write);
     a
 };
+
+// ── time_stats/, time_stats_json/ ───────────────────────────────────────────
+//
+// A file per BCH_TIME_STATS() entry, the same attributes in both; writing
+// one resets the stat.
+
+/// An x-macro entry's name, as a file's.
+macro_rules! file_name {
+    ($name:ident) => {
+        match CStr::from_bytes_with_nul(concat!(stringify!($name), "\0").as_bytes()) {
+            Ok(name) => name,
+            Err(_)   => panic!(),
+        }
+    };
+}
+
+macro_rules! time_stat_names {
+    ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => {
+        const TIME_STAT_NAMES: [&CStr; c::BCH_TIME_STAT_NR as usize] = [$(file_name!($name),)*];
+    };
+}
+c::BCH_TIME_STATS!(time_stat_names);
+
+static TIME_STATS: ListAttrs<{ c::BCH_TIME_STAT_NR as usize }> = ListAttrs::new(&TIME_STAT_NAMES, 0o644);
+
+fn time_stat<'a>(c: &'a Fs, attr: &c::attribute) -> Result<&'a c::bch2_time_stats, BchError> {
+    TIME_STATS.index(attr)
+        .map(|i| &c.times[i])
+        .ok_or(c::EINVAL.into())
+}
+
+/// time_stats/, or as JSON time_stats_json/.
+struct TimeStatsDir<const JSON: bool>;
+
+unsafe impl<const JSON: bool> Dir for TimeStatsDir<JSON> {
+    type Obj = Fs;
+    const KOBJ: usize = if JSON { offset_of!(Fs, time_stats_json) } else { offset_of!(Fs, time_stats) };
+
+    fn show(c: &Fs, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
+        let s = time_stat(c, attr)?;
+        if JSON {
+            s.json_to_text(out)
+        } else {
+            s.to_text(out)
+        }
+        Ok(())
+    }
+
+    fn store(c: &Fs, attr: &c::attribute, _: &str) -> Result<(), BchError> {
+        time_stat(c, attr)?.reset();
+        Ok(())
+    }
+}
+
+#[c_export]
+#[c("struct attribute *bch2_fs_time_stats_files[]")]
+pub static bch2_fs_time_stats_files: Files<{ c::BCH_TIME_STAT_NR as usize + 1 }> = Files::list(&TIME_STATS);
+
+#[c_export]
+pub static bch2_fs_time_stats_sysfs_ops: c::sysfs_ops = sysfs::ops::<TimeStatsDir<false>>();
+
+#[c_export]
+#[c("struct attribute *bch2_fs_time_stats_json_files[]")]
+pub static bch2_fs_time_stats_json_files: Files<{ c::BCH_TIME_STAT_NR as usize + 1 }> = Files::list(&TIME_STATS);
+
+#[c_export]
+pub static bch2_fs_time_stats_json_sysfs_ops: c::sysfs_ops = sysfs::ops::<TimeStatsDir<true>>();
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
