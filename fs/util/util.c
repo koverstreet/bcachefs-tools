@@ -32,6 +32,7 @@
 #include "eytzinger.h"
 #include "mean_and_variance.h"
 #include "util.h"
+#include "util/percpu_gen.h"
 
 static const char si_units[] = "?kMGTPEZY";
 
@@ -1319,6 +1320,16 @@ u64 *bch2_acc_percpu_u64s(u64 __percpu *p, unsigned nr)
 	}
 
 	return ret;
+}
+
+/*
+ * this_cpu_add(), for Rust where it has no asm of its own (util/percpu.rs).
+ * @pcp is a u64 __percpu *: the prototype Rust generates can't say so, and
+ * on x86 __percpu can be an address space of its own.
+ */
+void bch2_this_cpu_add_u64(u64 *pcp, u64 val)
+{
+	this_cpu_add(*(u64 __percpu *) (unsigned long) pcp, val);
 }
 
 /*

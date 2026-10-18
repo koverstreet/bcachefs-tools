@@ -216,13 +216,12 @@ $(VRD)/uapi.o: $(VENDOR)/uapi/lib.rs $(VRD)/ffi.o $(VRD)/pin_init.o \
 	$(VRD)/rust/uapi/uapi_generated.rs FORCE
 	$(call if_changed_dep,bch_rlib)
 
-# The kernel crate, and the arch asm it includes, preprocessed from .rs.S:
-quiet_cmd_bch_vr_rscpp = RSCPP   $@
-      cmd_bch_vr_rscpp = $(CPP) $(c_flags) -xc -C -P $< | sed '1,/^\/\/ Cut here.$$/d' >$@
+# The kernel crate, and the arch asm it includes, preprocessed from .rs.S
+# (Makefile.rust's bch_rscpp):
 vr-arch-gen-rs := $(foreach f,static_branch warn reachable,$(VRD)/rust/kernel/generated_arch_$(f)_asm.rs)
 $(vr-arch-gen-rs): $(VRD)/rust/kernel/%.rs: $(VENDOR)/kernel/%.rs.S FORCE
 	$(Q)mkdir -p $(@D)
-	$(call if_changed,bch_vr_rscpp)
+	$(call if_changed,bch_rscpp)
 
 $(VRD)/kernel.o: private rs-flags := $(vr-kernel-deps) \
 	--extern build_error=$(VRD)/libbuild_error.rmeta --extern macros=$(VRD)/libmacros.so \
