@@ -1050,7 +1050,7 @@ SHOW(bch2_dev)
 	struct bch_dev *ca = container_of(kobj, struct bch_dev, kobj);
 	struct bch_fs *c = ca->fs;
 
-	sysfs_printf(uuid,		"%pU\n", ca->uuid.b);
+	sysfs_printf(uuid,		"%pU", ca->uuid.b);
 
 	sysfs_print(first_bucket,	ca->mi.first_bucket);
 	sysfs_print(nbuckets,		ca->mi.nbuckets);
