@@ -3,8 +3,20 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::fs::Fs;
 use crate::types::c_default;
-use cstruct_macros::{CStruct, TypeInfo};
+use crate::util::Printbuf;
+use cstruct_macros::{CStruct, TypeInfo, c_extern};
+
+c_extern! {
+    pub fn bch2_copygc_wait_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
+}
+
+impl Fs {
+    pub fn copygc_wait_to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_copygc_wait_to_text(out.as_raw(), self.as_ptr()) }
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]

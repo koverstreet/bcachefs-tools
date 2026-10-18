@@ -3,6 +3,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::fs::Fs;
+use crate::util::Printbuf;
 use crate::types::{DArray, c_default};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_void};
@@ -98,4 +100,11 @@ c_extern! {
     pub fn bch2_move_data_btree(ctxt: *mut c::moving_context, start: c::bpos, end: c::bpos,
                                 pred: c::move_pred_fn, arg: *mut c_void, btree_id: c::btree_id,
                                 level: c_uint) -> c_int;
+    pub fn bch2_fs_moving_ctxts_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
+}
+
+impl Fs {
+    pub fn moving_ctxts_to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_fs_moving_ctxts_to_text(out.as_raw(), self.as_ptr()) }
+    }
 }

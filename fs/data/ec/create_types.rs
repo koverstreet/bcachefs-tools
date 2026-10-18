@@ -3,6 +3,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::fs::Fs;
+use crate::util::Printbuf;
 use crate::types::{DArray, bits_to_longs, c_default};
 use core::ffi::{c_int, c_uint, c_ulong};
 use cstruct_macros::{bitfield, c_enum, c_extern, c_xmacro, CStruct, c_typedef};
@@ -182,4 +184,11 @@ c_typedef! {
 
 c_extern! {
     pub fn bch2_resume_logged_op_stripe_update(trans: *mut c::btree_trans, op_k: *mut c::bkey_i) -> c_int;
+    pub fn bch2_new_stripes_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
+}
+
+impl Fs {
+    pub fn new_stripes_to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_new_stripes_to_text(out.as_raw(), self.as_ptr()) }
+    }
 }

@@ -4,7 +4,8 @@
 
 use crate::cstructs::c;
 use crate::types::{CacheAligned, c_default};
-use cstruct_macros::{c_const, CStruct};
+use crate::util::{Printbuf, ToText};
+use cstruct_macros::{c_const, c_extern, CStruct};
 
 c_const! {
     #[c_int]
@@ -32,3 +33,13 @@ pub struct bucket_nocow_lock_table {
     pub l: [c::nocow_lock_bucket; c::BUCKET_NOCOW_LOCKS as usize],
 }
 c_default!(bucket_nocow_lock_table);
+
+c_extern! {
+    pub fn bch2_nocow_locks_to_text(out: *mut c::printbuf, t: *mut c::bucket_nocow_lock_table);
+}
+
+impl ToText for bucket_nocow_lock_table {
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_nocow_locks_to_text(out.as_raw(), core::ptr::from_ref(self).cast_mut()) }
+    }
+}

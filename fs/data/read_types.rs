@@ -3,9 +3,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::util::Printbuf;
 use crate::types::c_default;
 use core::ffi::c_uint;
-use cstruct_macros::{bitfield, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, c_extern, CStruct, TypeInfo};
 use nestify::nest;
 
 #[repr(C)]
@@ -105,3 +106,16 @@ nest! {
     }
 }
 c_default!(bch_read_bio);
+
+c_extern! {
+    #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+    pub fn bch2_dev_congested_to_text(out: *mut c::printbuf, ca: *mut c::bch_dev);
+}
+
+#[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+impl c::bch_dev {
+    /// How congested its IO is - its latency, against what's expected.
+    pub fn congested_to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_dev_congested_to_text(out.as_raw(), core::ptr::from_ref(self).cast_mut()) }
+    }
+}
