@@ -171,16 +171,40 @@ static void bch2_sb_recovery_pass_complete(struct bch_fs *c,
 	bch2_write_super(c);
 }
 
+/*
+ * Have @pass run at the next mount, unratelimited: record the requirement in
+ * the superblock and clear the pass's ratelimit, so the deferred work is
+ * neither skipped nor throttled.
+ *
+ * Unlike bch2_run_explicit_recovery_pass(), recording here never starts @pass
+ * against the running filesystem. Callers defer work that must not run while
+ * the state that created it is still live - an unlinked subvolume may still
+ * have held inodes, and check_subvols() tombstones what it finds, handing the
+ * keys to the snapshot sweep. The requirement survives until a mount actually
+ * runs the pass, which is when the leftover state is safe to reap.
+ */
 void bch2_recovery_pass_set_no_ratelimit(struct bch_fs *c,
 					 enum bch_recovery_pass pass)
 {
 	guard(mutex_noio)(&c->sb_lock);
 
+	/*
+	 * ext first: bch2_sb_recovery_pass_entry() may resize the superblock,
+	 * invalidating the ext pointer - same order as
+	 * bch2_sb_recovery_pass_complete().
+	 */
+	struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
+	bool changed = !__test_and_set_bit_le64(bch2_recovery_pass_to_stable(pass),
+						ext->recovery_passes_required);
+
 	struct recovery_pass_entry *e = bch2_sb_recovery_pass_entry(c, pass);
 	if (e && !BCH_RECOVERY_PASS_NO_RATELIMIT(e)) {
 		SET_BCH_RECOVERY_PASS_NO_RATELIMIT(e, true);
-		bch2_write_super(c);
+		changed = true;
 	}
+
+	if (changed)
+		bch2_write_super(c);
 }
 
 static bool bch2_recovery_pass_entry_get_locked(struct bch_fs *c, enum bch_recovery_pass pass,

@@ -60,7 +60,8 @@ pub fn set_btree_clean(fs: &Fs, btree: c::btree_id) {
 }
 
 /// Have recovery pass @pass run at the next mount, unratelimited: as
-/// bch2_recovery_pass_set_no_ratelimit().
+/// bch2_recovery_pass_set_no_ratelimit(). Records the requirement in the
+/// superblock without starting the pass against the running filesystem.
 pub fn set_no_ratelimit(fs: &Fs, pass: c::bch_recovery_pass) {
     unsafe { c::bch2_recovery_pass_set_no_ratelimit(fs.as_ptr(), pass) }
 }

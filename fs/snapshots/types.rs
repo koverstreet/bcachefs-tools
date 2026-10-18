@@ -99,15 +99,22 @@ const _: () = {
  * the snapshot is being taken: sync_inodes_sb flushes existing dirty pages
  * before the snapshot transaction, but if new pages get dirtied in the window
  * between sync_inodes_sb returning and the snapshot transaction running, those
- * dirty pages can be partially flushed (e.g. data page flushed but redo log
- * page not yet) such that the snapshot captures an inconsistent state — the
- * shape that bit MySQL/InnoDB.
+ * dirty pages can be partially flushed such that the snapshot captures an
+ * inconsistent state.
  *
- * Page-cache dirtying paths (buffered write_iter and mmap mkdirty) take this
- * lock as readers; snapshot creation takes it as a writer. O_DIRECT doesn't
- * need it — direct writes commit as atomic btree transactions, no page cache
- * staleness window. Buffered writeback is fine too — each writeback insert
- * is atomic w.r.t. the snapshot transaction.
+ * Page-cache dirtying paths take these locks as readers; snapshot creation
+ * takes them as writers. O_DIRECT doesn't need them — direct writes commit as
+ * atomic btree transactions, no page-cache staleness window. Buffered writeback
+ * is fine too — each writeback insert is atomic w.r.t. the snapshot transaction.
+ *
+ * There are two locks because write_iter and page_mkwrite sit on opposite sides
+ * of mmap_lock, mirroring SB_FREEZE_WRITE vs SB_FREEZE_PAGEFAULT:
+ *
+ *   write_iter:   create_lock -> mmap_lock (faulting in user pages)
+ *   page_mkwrite: mmap_lock (held by caller) -> pagefault_lock
+ *
+ * One lock can't sit both above and below mmap_lock — that's an ABBA
+ * inversion. Snapshot creation takes create_lock first, then pagefault_lock.
  */
 #[pin_data]
 #[repr(C)]
@@ -124,14 +131,12 @@ pub struct bch_fs_snapshots {
     #[init(AtomicBool::new(false))]
     pub(crate) need_table_rebuild: AtomicBool,
     pub create_lock: c::percpu_rw_semaphore,
+    pub pagefault_lock: c::percpu_rw_semaphore,
     /// Snapshot deletion's state: Rust's alone - snapshots/delete.rs.
     #[pin]
     #[init(RustOnly::new(crate::snapshots::delete::SnapshotDelete::init()))]
     pub(crate) delete: rust_only!(crate::snapshots::delete::SnapshotDelete),
-    #[c("struct work_struct wait_for_pagecache_and_delete_work")]
-    #[pin]
-    #[init(crate::snapshots::subvolume::SubvolDelete::init())]
-    pub wait_for_pagecache_and_delete_work: crate::fs::FsWork,
+    pub wait_for_pagecache_and_delete_work: c::delayed_work,
     /// Subvolumes unlinked and waiting for the delete work: Rust's alone.
     #[pin]
     #[init(RustOnly::new(new_mutex!(KVVec::new())))]

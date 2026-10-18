@@ -152,6 +152,16 @@ static inline int snapshot_list_add(struct bch_fs *c, snapshot_id_list *s, u32 i
 	return ret;
 }
 
+static inline int snapshot_list_add_nodup(struct bch_fs *c, snapshot_id_list *s, u32 id)
+{
+	int ret = snapshot_list_has_id(s, id)
+		? 0
+		: darray_push(s, id);
+	if (ret)
+		bch_err(c, "error reallocating snapshot_id_list (size %zu)", s->size);
+	return ret;
+}
+
 static inline int bch2_check_key_has_snapshot(struct btree_trans *trans,
 					      struct btree_iter *iter,
 					      struct bkey_s_c k)
