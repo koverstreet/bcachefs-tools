@@ -3,7 +3,7 @@
 //! them, are data/ptrs.rs's.
 
 use crate::bkey_fsck_err_on;
-use crate::btree::bkey::{bkey_family, BkeyS, BkeySC, BkeyV, BkeyVMut};
+use crate::btree::bkey::{bkey_family, bkey_ge, bkey_gt, bkey_le, bkey_lt, BkeyS, BkeySC, BkeyV, BkeyVMut};
 use crate::c;
 use crate::data::ptrs::{crc_is_compressed, crc_unpack, BkeyVPtrs, ExtentEntry, ExtentEntryMut, Ptrs};
 use crate::errcode::{ret_to_c, BchError};
@@ -99,7 +99,7 @@ pub trait BkeyVExtents: BkeyV {
     fn cut_front(mut self, fs: &Fs, where_: c::bpos) -> Option<Self>
     where Self: BkeyVMut<V = Extents>
     {
-        unsafe { c::bch2_cut_front_s(fs.as_ptr(), where_, self.as_s().as_raw()) };
+        self.cut_front_in_place(fs, where_);
         (self.k().size != 0).then_some(self)
     }
 
@@ -107,12 +107,151 @@ pub trait BkeyVExtents: BkeyV {
     fn cut_back(mut self, where_: c::bpos) -> Option<Self>
     where Self: BkeyVMut<V = Extents>
     {
-        unsafe { c::bch2_cut_back_s(where_, self.as_s().as_raw()) };
+        self.cut_back_in_place(where_);
         (self.k().size != 0).then_some(self)
+    }
+
+    /// Cut to start at @where_, if it starts before it: what's cut off is
+    /// skipped in its value too - a pointer's offset moved on, or a crc's
+    /// into its data, a reflink_p's idx, inline data dropped - and a cut that
+    /// leaves nothing makes it a deletion. The u64s its value gives up are
+    /// zeroed. bch2_cut_front_s().
+    fn cut_front_in_place(&mut self, fs: &Fs, where_: c::bpos)
+    where Self: BkeyVMut<V = Extents>
+    {
+        use c::bch_bkey_type as t;
+
+        let mut k = self.as_s().untyped();
+        if bkey_le(where_, k.k.start_pos()) {
+            return;
+        }
+        debug_assert!(!bkey_gt(where_, k.k.p), "cutting the front of an extent past its end");
+
+        // as C's: a u64 into a u32 size, wrapping
+        let sub = where_.offset.wrapping_sub(k.k.start_offset());
+        k.k.size = k.k.size.wrapping_sub(sub as u32);
+
+        let mut new_val_u64s = k.k.val_bytes() / size_of::<u64>();
+        if k.k.size == 0 {
+            k.k.type_ = t::KEY_TYPE_deleted.0 as u8;
+            new_val_u64s = 0;
+        }
+
+        match k.k.key_type() {
+            t::KEY_TYPE_extent | t::KEY_TYPE_reflink_v => {
+                let mut p = k.as_s().arm::<Ptrs>().expect("an extent has pointers");
+                // a pointer after a crc points to the crc's data, whose
+                // offset moves instead
+                let mut seen_crc = false;
+                let pk = *p.k();
+
+                for e in p.extent_entries_mut(fs) {
+                    match e {
+                        ExtentEntryMut::ptr(ptr) => if !seen_crc {
+                            ptr.set_offset(ptr.offset() + sub);
+                        },
+                        mut e => if let Some(mut crc) = crc_unpack(&pk, e.as_entry()) {
+                            crc.offset = (u64::from(crc.offset) + sub) as u16;
+                            e.set_crc(&crc).expect("a crc's offset, moved within its data, fits its entry");
+                            seen_crc = true;
+                        },
+                    }
+                }
+            }
+            t::KEY_TYPE_reflink_p => {
+                let mut p = k.as_s().arm::<c::ReflinkP>().expect("a reflink_p");
+                let v = p.v_mut();
+                v.set_idx(v.idx() + sub);
+            }
+            ty @ (t::KEY_TYPE_inline_data | t::KEY_TYPE_indirect_inline_data) => {
+                let off = inline_data_offset(ty);
+                let val = k.val_bytes_mut();
+                let bytes = val.len() - off;
+                let sub = (sub << 9).min(bytes as u64) as usize;
+
+                val.copy_within(off + sub.., off);
+                new_val_u64s -= sub / size_of::<u64>();
+            }
+            _ => {}
+        }
+
+        shrink_val(k, new_val_u64s);
+    }
+
+    /// Cut to end at @where_, if it ends after it - inline data past it
+    /// dropped - and a cut that leaves nothing makes it a deletion. The u64s
+    /// its value gives up are zeroed. bch2_cut_back_s().
+    fn cut_back_in_place(&mut self, where_: c::bpos)
+    where Self: BkeyVMut<V = Extents>
+    {
+        use c::bch_bkey_type as t;
+
+        let k = self.as_s().untyped();
+        if bkey_ge(where_, k.k.p) {
+            return;
+        }
+        debug_assert!(!bkey_lt(where_, k.k.start_pos()), "cutting the back of an extent before its start");
+
+        let len = where_.offset.wrapping_sub(k.k.start_offset());
+        k.k.p.offset = where_.offset;
+        k.k.size = len as u32;
+
+        let mut new_val_u64s = k.k.val_bytes() / size_of::<u64>();
+        if len == 0 {
+            k.k.type_ = t::KEY_TYPE_deleted.0 as u8;
+            new_val_u64s = 0;
+        }
+
+        if let ty @ (t::KEY_TYPE_inline_data | t::KEY_TYPE_indirect_inline_data) = k.k.key_type() {
+            let off = inline_data_offset(ty);
+            let bytes = k.k.val_bytes() - off;
+            new_val_u64s = (off + bytes.min((k.k.size as usize) << 9)) / size_of::<u64>();
+        }
+
+        shrink_val(k, new_val_u64s);
     }
 }
 
 impl<K: BkeyV> BkeyVExtents for K {}
+
+/// Where an inline data key's data starts in its value - after an indirect
+/// one's refcount: bkey_inline_data_offset().
+fn inline_data_offset(ty: c::bch_bkey_type) -> usize {
+    match ty {
+        c::bch_bkey_type::KEY_TYPE_inline_data          => size_of::<c::InlineData>(),
+        c::bch_bkey_type::KEY_TYPE_indirect_inline_data => size_of::<c::IndirectInlineData>(),
+        _ => unreachable!("inline data offset of a {ty:?}"),
+    }
+}
+
+/// @k's value made @val_u64s long, the u64s past it zeroed: a cut's end. It
+/// never grows.
+fn shrink_val(mut k: BkeyS<'_>, val_u64s: usize) {
+    let val = k.val_bytes_mut();
+    let bytes = val_u64s * size_of::<u64>();
+    assert!(bytes <= val.len(), "a cut growing its key's value, {} to {bytes} bytes", val.len());
+
+    val[bytes..].fill(0);
+    k.k.set_val_bytes(bytes);
+}
+
+/// The change in @k's u64s, never above 0.
+#[c_export]
+pub fn bch2_cut_front_s(c: &Fs, where_: c::bpos, k: BkeyS<'_>) -> c_int {
+    let u64s = c_int::from(k.k.u64s);
+    let mut k = k.arm::<Extents>().expect("cutting a key an extents btree can't hold");
+    k.cut_front_in_place(c, where_);
+    c_int::from(k.k().u64s) - u64s
+}
+
+/// The change in @k's u64s, never above 0.
+#[c_export]
+pub fn bch2_cut_back_s(where_: c::bpos, k: BkeyS<'_>) -> c_int {
+    let u64s = c_int::from(k.k.u64s);
+    let mut k = k.arm::<Extents>().expect("cutting a key an extents btree can't hold");
+    k.cut_back_in_place(where_);
+    c_int::from(k.k().u64s) - u64s
+}
 
 // ── merging ──────────────────────────────────────────────────────────────
 

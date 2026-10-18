@@ -3,8 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use core::ffi::c_int;
-use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro, TypeInfo};
+use cstruct_macros::{CStruct, bitfield, c_enum, c_xmacro, TypeInfo};
 use nestify::nest;
 
 #[repr(C)]
@@ -89,9 +88,4 @@ c_enum! {
     pub enum bch_read_flags: u32 {
         BCH_READ_FLAGS(n) => BCH_READ_ ## n = 1 << (c::__BCH_READ_ ## n as u32),
     }
-}
-
-c_extern! {
-    pub fn bch2_cut_front_s(c: *const c::bch_fs, where_: c::bpos, k: c::bkey_s) -> c_int;
-    pub fn bch2_cut_back_s(where_: c::bpos, k: c::bkey_s) -> c_int;
 }
