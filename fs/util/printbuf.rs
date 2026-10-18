@@ -32,6 +32,26 @@ impl DerefMut for PrintbufIndent<'_> {
     fn deref_mut(&mut self) -> &mut Printbuf { self.buf }
 }
 
+/// Undoes Printbuf::atomic() on drop.
+pub struct PrintbufAtomic<'a> {
+    buf: &'a mut Printbuf,
+}
+
+impl Drop for PrintbufAtomic<'_> {
+    fn drop(&mut self) {
+        self.buf.0.atomic -= 1;
+    }
+}
+
+impl Deref for PrintbufAtomic<'_> {
+    type Target = Printbuf;
+    fn deref(&self) -> &Printbuf { self.buf }
+}
+
+impl DerefMut for PrintbufAtomic<'_> {
+    fn deref_mut(&mut self) -> &mut Printbuf { self.buf }
+}
+
 impl Printbuf {
     pub fn new() -> Self {
         Printbuf(c::printbuf::new())
@@ -99,6 +119,13 @@ impl Printbuf {
     pub fn indent(&mut self, spaces: u32) -> PrintbufIndent<'_> {
         self.indent_add(spaces);
         PrintbufIndent { buf: self, spaces }
+    }
+
+    /// Allocating as from atomic context - under RCU, a spinlock - until the
+    /// guard drops: guard(printbuf_atomic).
+    pub fn atomic(&mut self) -> PrintbufAtomic<'_> {
+        self.0.atomic += 1;
+        PrintbufAtomic { buf: self }
     }
 
     /// `\t` in a format string.
