@@ -12,7 +12,9 @@
 //! C has its own in data/checksum.h: BCH_NONCE_*, nonce_add().
 
 use crate::c;
+use crate::fs::Fs;
 use crate::types::Le32;
+use core::fmt;
 
 /// ChaCha20's block, in bytes: what a nonce's first word counts.
 pub const CHACHA_BLOCK_SIZE: u32 = 64;
@@ -29,6 +31,38 @@ impl c::bch_csum_type {
     pub fn is_encryption(self) -> bool {
         matches!(self, c::bch_csum_type::BCH_CSUM_chacha20_poly1305_80 |
                        c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128)
+    }
+
+    /// Whether checksums of two adjacent ranges combine into the whole's -
+    /// bch2_checksum_merge() - so an extent with it can merge:
+    /// bch2_checksum_mergeable().
+    pub fn mergeable(self) -> bool {
+        matches!(self, c::bch_csum_type::BCH_CSUM_none |
+                       c::bch_csum_type::BCH_CSUM_crc32c |
+                       c::bch_csum_type::BCH_CSUM_crc64)
+    }
+
+    /// Whether @fs can use it - a type this version knows, and an encryption
+    /// type only with the key loaded: bch2_checksum_type_valid().
+    pub fn valid(self, fs: &Fs) -> bool {
+        self.0 < c::bch_csum_type::BCH_CSUM_NR.0 && (!self.is_encryption() || fs.chacha20_key_set)
+    }
+}
+
+/// Its name, from BCH_CSUM_TYPES(): bch2_prt_csum_type().
+impl fmt::Display for c::bch_csum_type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        macro_rules! csum_type_names {
+            ($(($name:tt, $n:expr)),* $(,)?) => {
+                const NAMES: &[(&str, u32)] = &[$((stringify!($name), $n),)*];
+            };
+        }
+        c::BCH_CSUM_TYPES!(csum_type_names);
+
+        match NAMES.iter().find(|&&(_, n)| n == self.0) {
+            Some((name, _)) => f.write_str(name),
+            None => write!(f, "(unknown csum_type {})", self.0),
+        }
     }
 }
 
