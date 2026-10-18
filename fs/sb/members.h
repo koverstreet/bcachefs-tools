@@ -479,11 +479,6 @@ int bch2_btree_bitmap_gc(struct bch_fs *);
 void bch2_maybe_schedule_btree_bitmap_gc_stop(struct bch_fs *);
 void bch2_maybe_schedule_btree_bitmap_gc(struct bch_fs *);
 
-/* Member management: */
-
-int bch2_sb_member_alloc(struct bch_fs *);
-void bch2_sb_members_clean_deleted(struct bch_fs *);
-
 void bch2_dev_mi_field_read(struct bch_dev *, struct bch_dev_identity *);
 void bch2_dev_mi_field_upgrades_locked(struct bch_fs *, struct bch_dev *,
 				       const struct bch_dev_identity *, struct sb_write *);

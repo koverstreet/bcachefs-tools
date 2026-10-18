@@ -9,7 +9,7 @@ use crate::alloc::disk_groups;
 use crate::util::ffi::Opaque;
 use crate::util::strided::{Strided, StridedMut};
 use crate::util::vstructs::{bytes_of_mut, plain_bytes, Head, Unsized, Validated};
-use core::ffi::{c_int, CStr};
+use core::ffi::{c_int, c_uint, CStr};
 use cstruct_macros::c_export;
 use super::io::*;
 
@@ -47,8 +47,109 @@ const MEMBER_DELETED_UUID: [u8; 16] = [
 impl c::bch_member {
     /// Not an empty slot or a deleted member.
     pub fn alive(&self) -> bool {
-        let uuid = crate::util::vstructs::plain_bytes(&self.uuid);
-        uuid != [0; 16] && uuid != MEMBER_DELETED_UUID
+        self.uuid.b != [0; 16] && !self.deleted()
+    }
+
+    /// Removed: its slot isn't free until fsck clears it.
+    pub fn deleted(&self) -> bool {
+        self.uuid.b == MEMBER_DELETED_UUID
+    }
+}
+
+pub fn member_exists(sb: &c::bch_sb, dev: u32) -> bool {
+    dev < u32::from(sb.nr_devices) && sb_member(sb, dev).is_some_and(|m| m.alive())
+}
+
+impl c::bch_sb {
+    /// Its members that exist, of nr_devices' slots.
+    pub fn number_of_devices(&self) -> u32 {
+        (0..u32::from(self.nr_devices)).filter(|&i| member_exists(self, i)).count() as u32
+    }
+}
+
+/// # Safety
+/// @sb is validated.
+#[c_export]
+pub unsafe fn bch2_sb_nr_devices(sb: *const Head<c::bch_sb>) -> c_uint {
+    // SAFETY: the caller's
+    unsafe { c::bch_sb::<Validated>::from_ffi(sb) }.number_of_devices()
+}
+
+/// A free member slot: past the last one in use if there's room, else the
+/// empty one least recently mounted - never BCH_SB_MEMBER_INVALID, the
+/// sentinel. Deleted ones aren't free until fsck clears them.
+fn sb_member_find_slot(fs: &Fs) -> Result<u32, BchError> {
+    let nr = fs.nr_devices();
+    if nr < c::BCH_SB_MEMBERS_MAX && nr != c::BCH_SB_MEMBER_INVALID {
+        return Ok(nr);
+    }
+
+    let sb = fs.disk_sb().sb();
+    let mut best: Option<(u64, u32)> = None;
+    let mut nr_deleted = 0;
+
+    for dev in (0..c::BCH_SB_MEMBERS_MAX).filter(|&i| i != c::BCH_SB_MEMBER_INVALID) {
+        let m = sb_member(sb, dev).unwrap_or_default();
+        nr_deleted += m.deleted() as u32;
+
+        let last_mount = m.last_mount.get();
+        if m.uuid.b == [0; 16] && best.is_none_or(|(l, _)| last_mount < l) {
+            best = Some((last_mount, dev));
+        }
+    }
+
+    if let Some((_, dev)) = best {
+        return Ok(dev);
+    }
+    if nr_deleted != 0 {
+        crate::bch_err!(fs, "unable to allocate new member, but have {nr_deleted} deleted: run fsck");
+    }
+    Err(bch_errcode::BCH_ERR_ENOSPC_sb_members.into())
+}
+
+/// A member slot for a new device, members_v2 and nr_devices grown to hold
+/// it. Under sb_lock.
+fn sb_member_alloc(fs: &Fs) -> Result<u32, BchError> {
+    let dev = sb_member_find_slot(fs)?;
+    let nr = (dev + 1).max(fs.nr_devices());
+
+    // SAFETY: under sb_lock
+    let sb = unsafe { fs.disk_sb_mut() };
+    let stride = usize::from(sb.field::<c::bch_sb_field_members_v2>().expect("members_v2").member_bytes.get());
+    let u64s = (MEMBERS_V2_HEAD + stride * nr as usize).div_ceil(size_of::<u64>());
+
+    sb.field_resize::<c::bch_sb_field_members_v2>(u64s as u32)
+        .ok_or(BchError::from(bch_errcode::BCH_ERR_ENOSPC_sb_members))?;
+    sb.sb_mut().nr_devices = nr as u8;
+    Ok(dev)
+}
+
+/// The new member's index, or an error.
+#[c_export]
+pub fn bch2_sb_member_alloc(c: &Opaque<c::bch_fs>) -> c_int {
+    match sb_member_alloc(Fs::from_c(c)) {
+        Ok(dev) => dev as c_int,
+        Err(e)  => -e.raw(),
+    }
+}
+
+/// Deleted members' slots made free: fsck's, once nothing points to them.
+#[c_export]
+pub fn bch2_sb_members_clean_deleted(c: &Opaque<c::bch_fs>) {
+    let fs = Fs::from_c(c);
+    let _lock = fs.sb_lock();
+    let mut dirty = false;
+
+    for i in 0..fs.nr_devices() {
+        // SAFETY: under sb_lock
+        let m = unsafe { fs.member_mut(i) };
+        if m.deleted() {
+            m.uuid.b = [0; 16];
+            dirty = true;
+        }
+    }
+    if dirty {
+        fs.write_super();
     }
 }
 

@@ -5,7 +5,6 @@
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, c_extern, TypeInfo};
 use crate::cstructs::c;
-use crate::util::vstructs::Head;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -30,7 +29,6 @@ pub struct bch_member_cpu {
 }
 
 c_extern! {
-    pub fn bch2_sb_nr_devices(sb: *const Head<c::bch_sb>) -> c_uint;
     pub fn rust_bch2_dev_put(ca: *mut c::bch_dev);
     pub fn rust_bch2_dev_get(ca: *mut c::bch_dev);
     pub fn rust_bch2_dev_get_outer(ca: *mut c::bch_dev);

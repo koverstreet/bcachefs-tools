@@ -397,15 +397,6 @@ void bch2_maybe_schedule_btree_bitmap_gc(struct bch_fs *c)
 	bch2_maybe_schedule_btree_bitmap_gc_work(&c->maybe_schedule_btree_bitmap_gc.work);
 }
 
-unsigned bch2_sb_nr_devices(const struct bch_sb *sb)
-{
-	unsigned nr = 0;
-
-	for (unsigned i = 0; i < sb->nr_devices; i++)
-		nr += bch2_member_exists((struct bch_sb *) sb, i);
-	return nr;
-}
-
 /*
  * Worst observed IO latency (@rw) across @devs, in jiffies - used to scale
  * timeouts and "held too long" warnings so slow storage doesn't trip them.
@@ -419,82 +410,6 @@ unsigned long bch2_dev_latency_max(struct bch_fs *c, struct bch_devs_mask *devs,
 		nsecs = max(nsecs, ca->io_latency[rw].stats.max_duration);
 
 	return nsecs_to_jiffies(nsecs);
-}
-
-static int bch2_sb_member_find_slot(struct bch_fs *c)
-{
-	int best = -1;
-	u64 best_last_mount = 0;
-	unsigned nr_deleted = 0;
-
-	/* The sentinel must never be allocated as a real device: */
-	if (c->sb.nr_devices < BCH_SB_MEMBERS_MAX &&
-	    c->sb.nr_devices != BCH_SB_MEMBER_INVALID)
-		return c->sb.nr_devices;
-
-	for (unsigned dev_idx = 0; dev_idx < BCH_SB_MEMBERS_MAX; dev_idx++) {
-		/* eventually BCH_SB_MEMBERS_MAX will be raised */
-		if (dev_idx == BCH_SB_MEMBER_INVALID)
-			continue;
-
-		struct bch_member m = bch2_sb_member_get(c->disk_sb.sb, dev_idx);
-
-		nr_deleted += uuid_equal(&m.uuid, &BCH_SB_MEMBER_DELETED_UUID);
-
-		if (!bch2_is_zero(&m.uuid, sizeof(m.uuid)))
-			continue;
-
-		u64 last_mount = le64_to_cpu(m.last_mount);
-		if (best < 0 || last_mount < best_last_mount) {
-			best = dev_idx;
-			best_last_mount = last_mount;
-		}
-	}
-	if (best >= 0)
-		return best;
-
-	if (nr_deleted)
-		bch_err(c, "unable to allocate new member, but have %u deleted: run fsck",
-			nr_deleted);
-
-	return -BCH_ERR_ENOSPC_sb_members;
-}
-
-int bch2_sb_member_alloc(struct bch_fs *c)
-{
-	int dev_idx = bch2_sb_member_find_slot(c);
-	if (dev_idx < 0)
-		return dev_idx;
-
-	EBUG_ON(dev_idx == BCH_SB_MEMBER_INVALID);
-
-	struct bch_sb_field_members_v2 *mi = bch2_sb_field_get(c->disk_sb.sb, members_v2);
-
-	unsigned nr_devices = max_t(unsigned, dev_idx + 1, c->sb.nr_devices);
-	unsigned u64s = DIV_ROUND_UP(sizeof(struct bch_sb_field_members_v2) +
-			    le16_to_cpu(mi->member_bytes) * nr_devices, sizeof(u64));
-
-	mi = bch2_sb_field_resize(&c->disk_sb, members_v2, u64s);
-	if (!mi)
-		return -BCH_ERR_ENOSPC_sb_members;
-
-	c->disk_sb.sb->nr_devices = nr_devices;
-	return dev_idx;
-}
-
-void bch2_sb_members_clean_deleted(struct bch_fs *c)
-{
-	guard(mutex_noio)(&c->sb_lock);
-	CLASS(sb_write, w)(c);
-
-	for (unsigned i = 0; i < c->sb.nr_devices; i++) {
-		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, i);
-
-		if (uuid_equal(&m->uuid, &BCH_SB_MEMBER_DELETED_UUID)) {
-			memset(&m->uuid, 0, sizeof(m->uuid));
-			sb_dirty(&w);
-		}
-	}
 }
 
 static void dev_mi_update_str(void *dst, size_t dst_size, const char *src,

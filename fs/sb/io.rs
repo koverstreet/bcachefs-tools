@@ -113,10 +113,6 @@ impl c::bch_sb {
     pub fn crypt(&self) -> Option<&bch_sb_field_crypt> {
         self.field::<bch_sb_field_crypt>()
     }
-
-    pub fn number_of_devices(&self) -> u32 {
-        unsafe { c::bch2_sb_nr_devices(self.as_ffi()) }
-    }
 }
 
 /// Its header's: every state's, which each derefs to.
