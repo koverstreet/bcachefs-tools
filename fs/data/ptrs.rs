@@ -13,21 +13,31 @@
 //! printing a damaged key shows the damage: Invalid, of a type the filesystem
 //! doesn't know, or PastEnd, one that runs past the value's end - which
 //! validate reports as different errors, and to_text prints differently.
+//!
+//! The bkey methods - validate, to_text, swab - are ptrs_ops.rs's; editing a
+//! key's entries, ptrs_edit.rs's; C's names for all of it, ptrs_c_export.rs's.
 
-use crate::btree::bkey::{bkey_family, BkeySC, BkeyV, BkeyVal, BkeyVMut};
+use crate::btree::bkey::{bkey_family, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut};
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::errcode::BchError;
 use crate::c;
 use crate::fs::Fs;
 use crate::types::Le64;
+use crate::util::rcu::read_lock;
 use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, Validated};
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
 
 #[path = "ptrs_edit.rs"]
 mod edit;
+#[path = "ptrs_ops.rs"]
+mod ops;
+#[path = "ptrs_c_export.rs"]
+mod c_export;
 
 pub use edit::BkeyVPtrsMut;
+pub use ops::{bkey_ptrs_to_text, bkey_ptrs_validate, btree_ptr_v2_compat, btree_ptr_v2_to_text, ptr_swab};
+pub(crate) use ops::extent_ptr_to_text;
 
 macro_rules! extent_entries {
     ($(($name:tt, $nr:literal)),* $(,)?) => { ::paste::paste! {
@@ -636,5 +646,62 @@ mod tests {
         assert!(matches!(ExtentEntryMut::new(4, bytes(&mut w), None), ExtentEntryMut::stripe_ptr(_)));
         assert!(matches!(ExtentEntryMut::new(3, bytes(&mut w), None), ExtentEntryMut::Unknown { ty: 3, .. }),
                 "a crc128 doesn't fit in a word");
+    }
+
+    fn crc(csum_type: c::bch_csum_type, size: u32, offset: u16, nonce: u16) -> c::bch_extent_crc_unpacked {
+        // a checksum as wide as its type, every byte nonzero
+        let n = csum_type.bytes().unwrap() as usize;
+        let mut b = [0u8; 16];
+        b.iter_mut().take(n).enumerate().for_each(|(i, x)| *x = 0xa0 + i as u8);
+        c::bch_extent_crc_unpacked {
+            compressed_size:   size,
+            uncompressed_size: size,
+            live_size:         size - u32::from(offset),
+            csum_type:         csum_type.0 as u8,
+            compression_type:  0,
+            offset,
+            nonce,
+            csum: c::bch_csum { lo: Le64::new(u64::from_le_bytes(b[..8].try_into().unwrap())),
+                                hi: Le64::new(u64::from_le_bytes(b[8..].try_into().unwrap())) },
+        }
+    }
+
+    /// @v's words, as this machine has them.
+    fn words_of<T: crate::util::vstructs::Plain>(v: &T) -> std::vec::Vec<u64> {
+        // SAFETY: Plain, and a whole number of u64s
+        let b = unsafe { core::slice::from_raw_parts((v as *const T).cast::<u8>(), size_of::<T>()) };
+        b.chunks_exact(8).map(|w| u64::from_ne_bytes(w.try_into().unwrap())).collect()
+    }
+
+    #[test]
+    fn ptr_swab_reads_the_other_endianness() {
+        use c::bch_csum_type as t;
+
+        let c32 = c::bch_extent_crc32::pack(&crc(t::BCH_CSUM_crc32c, 8, 0, 0)).unwrap();
+        let c64 = c::bch_extent_crc64::pack(&crc(t::BCH_CSUM_chacha20_poly1305_80, 8, 0, 3)).unwrap();
+        let c128 = c::bch_extent_crc128::pack(&crc(t::BCH_CSUM_chacha20_poly1305_128, 8, 0, 3)).unwrap();
+        let ptr = word(0, 0x123456789);
+
+        let native: std::vec::Vec<u64> = [words_of(&c32), vec![ptr], words_of(&c64), vec![ptr],
+                                          words_of(&c128), vec![ptr]].concat();
+
+        // As the other endianness writes it: each word's value the same, so its
+        // bytes reversed - but checksums are bytes: crc128's csum and crc64's
+        // csum_lo the same bytes, and the checksum bits in crc32's and crc64's
+        // first word byte-swapped values.
+        let mut b32 = c32;
+        b32.set_csum(c32.csum().swap_bytes());
+        let mut b64 = c64;
+        b64.set_csum_hi(c64.csum_hi().swap_bytes());
+        let c64w = words_of(&c64);
+        let c128w = words_of(&c128);
+        let mut other: std::vec::Vec<u64> = [
+            vec![words_of(&b32)[0].swap_bytes(), ptr.swap_bytes()],
+            vec![words_of(&b64)[0].swap_bytes(), c64w[1], ptr.swap_bytes()],
+            vec![c128w[0].swap_bytes(), c128w[1], c128w[2], ptr.swap_bytes()],
+        ].concat();
+
+        ops::entries_swab(sizes(&ours()), bytes(&mut other));
+        assert_eq!(other, native);
     }
 }

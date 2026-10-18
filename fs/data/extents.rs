@@ -2,10 +2,17 @@
 //! cut, merged and counted as file data. Their pointers, where they have
 //! them, are data/ptrs.rs's.
 
-use crate::btree::bkey::{bkey_family, BkeySC, BkeyV, BkeyVMut};
+use crate::bkey_fsck_err_on;
+use crate::btree::bkey::{bkey_family, BkeyS, BkeySC, BkeyV, BkeyVMut};
 use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
+use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
+use crate::init::error::{id, BkeyValidate};
+use crate::util::ffi::Opaque;
+use crate::util::Printbuf;
+use core::ffi::c_int;
+use cstruct_macros::c_export;
 
 /*
  * BKEY_TYPE_extent flags the key types an extents btree may hold - checked
@@ -105,3 +112,42 @@ pub trait BkeyVExtents: BkeyV {
 }
 
 impl<K: BkeyV> BkeyVExtents for K {}
+
+// ── reservations ─────────────────────────────────────────────────────────
+
+fn reservation_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+    let r = v.k.arm::<c::Reservation>().expect("a reservation").v();
+
+    bkey_fsck_err_on!(v, r.nr_replicas == 0 || u32::from(r.nr_replicas) > c::BCH_REPLICAS_MAX,
+                      id::reservation_key_nr_replicas_invalid,
+                      "invalid nr_replicas ({})", r.nr_replicas)
+}
+
+#[c_export]
+pub fn bch2_reservation_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
+    -> c_int
+{
+    ret_to_c(reservation_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
+}
+
+#[cold]
+#[c_export]
+pub fn bch2_reservation_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+    let r = k.arm::<c::Reservation>().expect("a reservation").v();
+
+    write!(out, "generation {} replicas {}", r.generation.get(), r.nr_replicas);
+}
+
+/// Adjacent reservations of the same generation and replicas are one.
+#[c_export]
+pub fn bch2_reservation_merge(_c: &Opaque<c::bch_fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
+    let lv = l.as_sc().arm::<c::Reservation>().expect("a reservation").v();
+    let rv = r.arm::<c::Reservation>().expect("a reservation").v();
+
+    if lv.generation.get() != rv.generation.get() || lv.nr_replicas != rv.nr_replicas {
+        return false;
+    }
+
+    l.k.resize(l.k.size + r.k.size);
+    true
+}

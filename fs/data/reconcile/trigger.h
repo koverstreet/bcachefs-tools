@@ -4,10 +4,6 @@
 
 #include "data/extents.h"
 
-int bch2_extent_reconcile_validate(struct bch_fs *, struct bkey_s_c,
-				   const struct bkey_validate_context *,
-				   const struct bch_extent_reconcile *);
-
 static inline struct bpos data_to_rb_work_pos(enum btree_id btree, struct bpos pos)
 {
 	if (btree == BTREE_ID_reflink ||
@@ -92,11 +88,6 @@ static inline bool extent_has_rotational(struct bch_fs *c, struct bkey_s_c k)
 			return true;
 	return false;
 }
-
-void bch2_extent_rebalance_v1_to_text(struct printbuf *, struct bch_fs *,
-				      const struct bch_extent_rebalance_v1 *);
-void bch2_extent_reconcile_to_text(struct printbuf *, struct bch_fs *,
-				      const struct bch_extent_reconcile *);
 
 const struct bch_extent_reconcile *bch2_bkey_reconcile_opts(const struct bch_fs *, struct bkey_s_c);
 

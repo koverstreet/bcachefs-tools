@@ -37,7 +37,7 @@ use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, 
 use crate::c;
 use crate::data::extents::Extents;
 use crate::data::io_misc::fpunch_at;
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::snapshots::subvolume;
@@ -467,7 +467,7 @@ fn reflink_v_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     bkey_fsck_err_on!(v, bkey_gt(v.k.k.p, pos(0, c::ReflinkP::IDX_MAX)), id::reflink_v_pos_bad,
                       "indirect extent above maximum position 0:{}", c::ReflinkP::IDX_MAX)?;
 
-    ret_to_result_void(unsafe { c::bch2_bkey_ptrs_validate(v.fs.as_ptr(), v.k.into(), v.from) })
+    crate::data::ptrs::bkey_ptrs_validate(v)
 }
 
 #[c_export]
@@ -482,7 +482,7 @@ pub fn bch2_reflink_v_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::b
 pub fn bch2_reflink_v_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
     write!(out, "refcount: {} ", k.arm::<c::ReflinkV>().expect("a reflink_v").refcount().get());
 
-    unsafe { c::bch2_bkey_ptrs_to_text(out.as_raw(), Fs::from_c(c).as_ptr(), k.into()) };
+    crate::data::ptrs::bkey_ptrs_to_text(out, Some(Fs::from_c(c)), k);
 }
 
 /*

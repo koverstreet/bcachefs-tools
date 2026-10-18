@@ -1,0 +1,147 @@
+// SPDX-License-Identifier: GPL-2.0
+
+//! Stripe keys - ec/trigger.c's, as it converts: their bkey methods, and
+//! where in a stripe's value each of its parts is.
+//!
+//! A stripe's value is its header, then its blocks' pointers, ptrs[nr_blocks]
+//! - the extent entries data/ptrs.rs walks - then the checksums, a 2D array
+//! of [block][checksum block] of the type's size, then a u16 sector count per
+//! block. So everything after the pointers is found through csum_type: with
+//! one this version doesn't know, a stripe stays readable but its block counts
+//! can't be found - validate passes it on purpose, and only what would update
+//! it stops.
+
+use crate::btree::bkey::{bkey_eq, bpos_gt, pos, BkeySC, BkeyV, POS_MIN};
+use crate::c;
+use crate::data::ptrs::{bkey_ptrs_validate, extent_ptr_to_text};
+use crate::errcode::{ret_to_c, BchError};
+use crate::fs::Fs;
+use crate::init::error::{id, BkeyValidate};
+use crate::util::ffi::Opaque;
+use crate::util::rcu::read_lock;
+use crate::util::vstructs::cast_plain;
+use crate::util::Printbuf;
+use crate::bkey_fsck_err_on;
+use core::ffi::c_int;
+use core::mem::{offset_of, size_of};
+use cstruct_macros::c_export;
+
+/// Where a stripe's pointers start: sizeof(struct bch_stripe).
+const STRIPE_PTRS: usize = offset_of!(c::Stripe, repr.ptrs);
+
+/// The offsets of a stripe's parts in its value: ec/trigger.h's inlines. In
+/// C's unsigned arithmetic; csum_granularity_bits is under 31, as validate
+/// checks first.
+impl c::Stripe {
+    /// stripe_csums_per_device().
+    fn csums_per_device(&self) -> u32 {
+        u32::from(self.sectors.get()).div_ceil(1 << self.csum_granularity_bits)
+    }
+
+    /// A checksum's size - for a type this version doesn't know, the widest
+    /// it does: stripe_csum_bytes().
+    fn csum_bytes(&self) -> u32 {
+        c::bch_csum_type(self.csum_type.into()).bytes().unwrap_or(16)
+    }
+
+    /// stripe_csum_offset().
+    fn csum_offset(&self, dev: u32, csum_idx: u32) -> u32 {
+        STRIPE_PTRS as u32 + size_of::<c::bch_extent_ptr>() as u32 * u32::from(self.nr_blocks) +
+            (dev * self.csums_per_device() + csum_idx) * self.csum_bytes()
+    }
+
+    /// stripe_blockcount_offset().
+    fn blockcount_offset(&self, idx: u32) -> u32 {
+        self.csum_offset(self.nr_blocks.into(), 0) + size_of::<u16>() as u32 * idx
+    }
+
+    /// stripe_val_u64s().
+    fn val_u64s(&self) -> u32 {
+        self.blockcount_offset(self.nr_blocks.into()).div_ceil(8)
+    }
+}
+
+fn stripe_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+    let s = v.k.arm::<c::Stripe>().expect("a stripe").v();
+
+    // checked before val_u64s(), which shifts by it
+    bkey_fsck_err_on!(v, s.csum_granularity_bits >= 31, id::stripe_csum_granularity_bad,
+                      "invalid csum granularity ({} >= 31)", s.csum_granularity_bits)?;
+
+    bkey_fsck_err_on!(v, bkey_eq(v.k.k.p, POS_MIN) || bpos_gt(v.k.k.p, pos(0, u32::MAX.into())),
+                      id::stripe_pos_bad, "stripe at bad pos")?;
+
+    let val_u64s = v.k.val_bytes().len() / 8;
+    bkey_fsck_err_on!(v, val_u64s < s.val_u64s() as usize, id::stripe_val_size_bad,
+                      "incorrect value size ({} < {})", val_u64s, s.val_u64s())?;
+
+    bkey_fsck_err_on!(v, s.sectors.get() == 0, id::stripe_sectors_zero, "invalid sectors zero")?;
+
+    bkey_ptrs_validate(v)
+}
+
+#[c_export]
+pub fn bch2_stripe_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c::bkey_validate_context)
+    -> c_int
+{
+    ret_to_c(stripe_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
+}
+
+/// Its header, then a line per block - each block's pointer, and its sector
+/// count where it can be found - as far as the value goes: this prints keys
+/// validate rejected.
+#[cold]
+#[c_export]
+pub fn bch2_stripe_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+    let fs = Fs::from_c(c);
+    // the header's there - bch2_val_to_text() checks min_val_size, all of it,
+    // before calling this - but not what's after it
+    let s = k.arm::<c::Stripe>().expect("a stripe").v();
+    let val = k.val_bytes();
+    // unsigned, as C's - nr_redundant > nr_blocks is damage, printed as is
+    let nr_data = u32::from(s.nr_blocks).wrapping_sub(s.nr_redundant.into());
+
+    write!(out, "algo {} sectors {} blocks {}:{} csum {} gran ",
+           s.algorithm(), s.sectors.get(), nr_data, s.nr_redundant, c::bch_csum_type(s.csum_type.into()));
+    match 1u64.checked_shl(s.csum_granularity_bits.into()) {
+        Some(gran) => write!(out, "{gran}"),
+        None => write!(out, "(invalid shift {})", s.csum_granularity_bits),
+    }
+
+    write!(out, " label=");
+    if s.disk_label != 0 {
+        fs.disk_path_to_text(out, u32::from(s.disk_label) - 1);
+    } else {
+        write!(out, "(none)");
+    }
+
+    if s.needs_reconcile() != 0 {
+        write!(out, " needs_reconcile");
+    }
+    if s.can_widen() != 0 {
+        write!(out, " can_widen={}", s.can_widen());
+    }
+
+    let mut out = out.indent(2);
+    let mut out = out.atomic();
+    let rcu = read_lock();
+
+    let counts_found = s.csum_type < c::bch_csum_type::BCH_CSUM_NR.0 as u8 && s.csum_granularity_bits < 31;
+
+    for i in 0..u32::from(s.nr_blocks) {
+        let at = STRIPE_PTRS + size_of::<c::bch_extent_ptr>() * i as usize;
+        let Some(ptr) = val.get(at..at + size_of::<c::bch_extent_ptr>()).and_then(cast_plain) else {
+            break;
+        };
+
+        out.newline();
+        extent_ptr_to_text(&mut out, Some(fs), ptr, &rcu);
+
+        if counts_found {
+            let at = s.blockcount_offset(i) as usize;
+            if let Some(n) = val.get(at..at + 2) {
+                write!(out, "#{}", u16::from_le_bytes([n[0], n[1]]));
+            }
+        }
+    }
+}

@@ -112,6 +112,9 @@ pub mod vfs {
 #[path = "fs/xattr.rs"]        pub mod xattr;
 pub mod data {
     pub mod checksum;
+    pub mod ec {
+        pub mod trigger;
+    }
     pub mod extents;
     pub mod extents_sb;
     pub mod io_misc;

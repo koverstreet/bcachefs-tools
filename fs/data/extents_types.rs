@@ -97,7 +97,4 @@ c_extern! {
                                      k: c::bkey_s_c) -> c_int;
     pub fn bch2_cut_front_s(c: *const c::bch_fs, where_: c::bpos, k: c::bkey_s) -> c_int;
     pub fn bch2_cut_back_s(where_: c::bpos, k: c::bkey_s) -> c_int;
-    pub fn bch2_bkey_ptrs_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, k: c::bkey_s_c);
-    pub fn bch2_bkey_ptrs_validate(c: *mut c::bch_fs, k: c::bkey_s_c,
-                                   from: *const c::bkey_validate_context) -> c_int;
 }

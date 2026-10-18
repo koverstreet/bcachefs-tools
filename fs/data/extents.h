@@ -6,6 +6,7 @@
 #include "alloc/check_data.h"
 #include "btree/bkey.h"
 #include "data/extents_gen.h"
+#include "data/ptrs_gen.h"
 
 #include "data/extents_defs_gen.h"
 
@@ -192,8 +193,6 @@ static inline bool crc_is_encoded(struct bch_extent_crc_unpacked crc)
 	return crc.csum_type != BCH_CSUM_none || crc_is_compressed(crc);
 }
 
-void bch2_extent_crc_unpacked_to_text(struct printbuf *, struct bch_extent_crc_unpacked *);
-
 static inline struct bkey_ptrs_c bch2_bkey_ptrs_c(struct bkey_s_c k)
 {
 	switch (k.k->type) {
@@ -240,33 +239,6 @@ static inline struct bkey_ptrs_c bch2_bkey_ptrs_c(struct bkey_s_c k)
 	default:
 		return (struct bkey_ptrs_c) { NULL, NULL };
 	}
-}
-
-/*
- * For the callers that run before the key has been validated - to_text(), and
- * swab() via bch2_bkey_compat(), which bch2_validate_bset_keys() calls ahead
- * of bset_key_validate().
- *
- * Only stripes need anything extra: every other type here already ends at the
- * key, while a stripe's ends at ptrs[nr_blocks], and nr_blocks is a __u8 off
- * disk that bch2_stripe_validate()'s value size check hasn't bounded yet. u64s
- * is checked before the swab, so bkey_val_end() can be trusted here.
- */
-static inline struct bkey_ptrs_c bch2_bkey_ptrs_c_safe(struct bkey_s_c k)
-{
-	struct bkey_ptrs_c p = bch2_bkey_ptrs_c(k);
-
-	if (k.k->type == KEY_TYPE_stripe)
-		p.end = min(p.end, (const union bch_extent_entry *) bkey_val_end(k));
-
-	return p;
-}
-
-static inline struct bkey_ptrs bch2_bkey_ptrs_safe(struct bkey_s k)
-{
-	struct bkey_ptrs_c p = bch2_bkey_ptrs_c_safe(k.s_c);
-
-	return (struct bkey_ptrs) { (void *) p.start, (void *) p.end };
 }
 
 static inline struct bkey_ptrs bch2_bkey_ptrs(struct bkey_s k)
@@ -406,17 +378,6 @@ int bch2_bkey_pick_read_device(struct bch_fs *, struct bkey_s_c,
 
 /* KEY_TYPE_btree_ptr: */
 
-int bch2_btree_ptr_validate(struct bch_fs *, struct bkey_s_c,
-			    const struct bkey_validate_context *);
-void bch2_btree_ptr_to_text(struct printbuf *, struct bch_fs *,
-			    struct bkey_s_c);
-
-int bch2_btree_ptr_v2_validate(struct bch_fs *, struct bkey_s_c,
-			       const struct bkey_validate_context *);
-void bch2_btree_ptr_v2_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
-void bch2_btree_ptr_v2_compat(enum btree_id, unsigned, unsigned,
-			      int, struct bkey_s);
-
 #define bch2_bkey_ops_btree_ptr ((struct bkey_ops) {		\
 	.key_validate	= bch2_btree_ptr_validate,		\
 	.val_to_text	= bch2_btree_ptr_to_text,		\
@@ -448,11 +409,6 @@ bool bch2_extent_merge(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 })
 
 /* KEY_TYPE_reservation: */
-
-int bch2_reservation_validate(struct bch_fs *, struct bkey_s_c,
-			      const struct bkey_validate_context *);
-void bch2_reservation_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
-bool bch2_reservation_merge(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 
 #define bch2_bkey_ops_reservation ((struct bkey_ops) {		\
 	.key_validate	= bch2_reservation_validate,		\
@@ -726,8 +682,6 @@ int bch2_bkey_drop_extra_ec_durability(struct btree_trans *,
 				       struct bch_inode_opts *,
 				       struct bkey_i *, unsigned);
 
-void bch2_extent_ptr_to_text(struct printbuf *out, struct bch_fs *, const struct bch_extent_ptr *);
-
 static inline bool bch2_extent_ptr_eq(struct bch_extent_ptr ptr1,
 				      struct bch_extent_ptr ptr2)
 {
@@ -737,8 +691,6 @@ static inline bool bch2_extent_ptr_eq(struct bch_extent_ptr ptr1,
 		ptr1.dev	== ptr2.dev &&
 		ptr1.generation	== ptr2.generation);
 }
-
-void bch2_ptr_swab(const struct bch_fs *, struct bkey_s);
 
 static inline void bch2_cut_front(const struct bch_fs *c, struct bpos where, struct bkey_i *k)
 {

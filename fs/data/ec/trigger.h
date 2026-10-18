@@ -3,10 +3,6 @@
 #define _BCACHEFS_DATA_EC_TRIGGER_H
 #include "data/ec/trigger_gen.h"
 
-int bch2_stripe_validate(struct bch_fs *, struct bkey_s_c,
-			 const struct bkey_validate_context *);
-void bch2_stripe_to_text(struct printbuf *, struct bch_fs *,
-			 struct bkey_s_c);
 int bch2_trigger_stripe(struct btree_trans *, struct btree_trigger_op);
 
 #define bch2_bkey_ops_stripe ((struct bkey_ops) {	\
