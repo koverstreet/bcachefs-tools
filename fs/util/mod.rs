@@ -1,5 +1,6 @@
 pub mod alloc;
 pub mod async_exec;
+pub mod bitmap;
 pub mod darray;
 pub mod eytzinger;
 pub mod ffi;
