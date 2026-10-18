@@ -527,7 +527,7 @@ pub fn bch2_target_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, v: c_uint)
 
 // ── Options: target, and disk_label ──────────────────────────────────────
 
-fn opt_target_parse(fs: &Fs, val: &[u8]) -> Result<Target, BchError> {
+fn opt_target_parse(fs: &Fs, val: &[u8], err: Option<&mut Printbuf>) -> Result<Target, BchError> {
     if val.is_empty() || val == b"none" {
         return Ok(Target::Null);
     }
@@ -547,10 +547,16 @@ fn opt_target_parse(fs: &Fs, val: &[u8]) -> Result<Target, BchError> {
         let _lock = fs.sb_lock();
         fs.disk_sb().disk_path_find(val)
     };
-    match g {
-        Some(g) => Ok(Target::Group(g)),
-        None    => fs.throw(bch_errcode::BCH_ERR_EINVAL_opt_target_parse_not_found),
+    if let Some(g) = g {
+        return Ok(Target::Group(g));
     }
+
+    if let Some(err) = err {
+        write!(err, "no device or disk label ");
+        err.write_bytes(val);
+        writeln!(err);
+    }
+    fs.throw(bch_errcode::BCH_ERR_EINVAL_opt_target_parse_not_found)
 }
 
 /// # Safety
@@ -572,13 +578,13 @@ unsafe fn opt_parse_args<'a>(c: Option<&'a Opaque<c::bch_fs>>, val: *const c_cha
 /// @val is a C string, or NULL.
 #[c_export]
 pub unsafe fn bch2_opt_target_parse(c: Option<&Opaque<c::bch_fs>>, val: *const c_char,
-                                    res: &mut u64, _err: Option<&mut Printbuf>) -> c_int {
+                                    res: &mut u64, err: Option<&mut Printbuf>) -> c_int {
     // SAFETY: the caller's
     let (fs, val) = match unsafe { opt_parse_args(c, val) } {
         Ok(a)  => a,
         Err(e) => return e,
     };
-    ret_to_c(opt_target_parse(fs, val).map(|t| *res = t.encode().into()))
+    ret_to_c(opt_target_parse(fs, val, err).map(|t| *res = t.encode().into()))
 }
 
 /// # Safety
