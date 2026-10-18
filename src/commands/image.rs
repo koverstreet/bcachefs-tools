@@ -19,8 +19,7 @@ use bch_bindgen::c;
 use bcachefs_kernel::util::vstructs::{Head, Validated};
 use crate::copy_fs::{CopyFsState, copy_fs};
 use bch_bindgen::data::moving::MovingContext;
-use bcachefs_kernel::fs::{Fs, btree_id_is_alloc, bucket_bytes, bucket_to_sector, dev_to_target,
-                      writepoint_hashed};
+use bcachefs_kernel::fs::{Fs, btree_id_is_alloc, dev_to_target, writepoint_hashed};
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::sb;
@@ -220,7 +219,7 @@ fn print_data_type_usage(
     let d = &usage.d[data_type.0 as usize];
     if d.buckets != 0 {
         prt_data_type(out, data_type);
-        prt_sectors(out, bucket_to_sector(ca, d.buckets));
+        prt_sectors(out, ca.bucket_to_sector(d.buckets));
     }
     if d.fragmented != 0 {
         prt_data_type(out, data_type);
@@ -334,7 +333,7 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
     }
 
     write!(&mut buf, "image size");
-    prt_sectors(&mut buf, bucket_to_sector(ca, nbuckets));
+    prt_sectors(&mut buf, ca.bucket_to_sector(nbuckets));
 
     buf.tabstop_align();
     print!("{}", buf);
@@ -373,7 +372,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
 
     // Truncate image to used size
     let ca = unsafe { &*fs.dev_raw(0) };
-    let image_size = nbuckets * bucket_bytes(ca);
+    let image_size = nbuckets * ca.bucket_bytes();
     let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw((*ca.disk_sb.bdev).bd_fd) };
     rustix::fs::ftruncate(fd, image_size)
         .map_err(|e| anyhow!("truncate error: {}", e))?;

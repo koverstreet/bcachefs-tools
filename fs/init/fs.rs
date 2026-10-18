@@ -736,14 +736,6 @@ impl Drop for WriteRef<'_> {
 
 // Standalone helpers — pure Rust reimplementations of C static inlines.
 
-pub fn bucket_to_sector(ca: &c::bch_dev, b: u64) -> u64 {
-    b * ca.mi.bucket_size as u64
-}
-
-pub fn bucket_bytes(ca: &c::bch_dev) -> u64 {
-    ca.mi.bucket_size as u64 * 512
-}
-
 /// Build a hashed writepoint specifier (sets low bit to mark as hashed).
 pub fn writepoint_hashed(v: usize) -> c::write_point_specifier {
     c::write_point_specifier { v: (v | 1) as _ }
