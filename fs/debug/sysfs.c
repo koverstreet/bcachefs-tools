@@ -492,10 +492,8 @@ STORE(bch2_fs)
 		return size;
 	}
 
-	if (attr == &sysfs_trigger_reconcile_pending_wakeup) {
-		bch2_reconcile_pending_wakeup(c);
-		return size;
-	}
+	if (attr == &sysfs_trigger_reconcile_pending_wakeup)
+		return bch2_reconcile_pending_wakeup(c) ?: (ssize_t) size;
 
 	/* Only arms the knob - and it can fail: */
 	if (attr == &sysfs_logged_op_fail_next) {
@@ -509,29 +507,31 @@ STORE(bch2_fs)
 	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_sysfs))
 		return -EROFS;
 
+	int ret = 0;
+
 	if (attr == &sysfs_trigger_journal_commit)
-		bch2_journal_flush(&c->journal);
+		ret = bch2_journal_flush(&c->journal);
 
 	if (attr == &sysfs_trigger_journal_flush) {
 		bch2_journal_flush_outstanding_pins(&c->journal);
-		bch2_journal_meta(&c->journal);
+		ret = bch2_journal_meta(&c->journal);
 	}
 
 	if (attr == &sysfs_trigger_journal_writes)
 		bch2_journal_do_writes(&c->journal);
 
-	if (attr == &sysfs_trigger_btree_write_buffer_flush)
-		bch2_trans_do(c,
-			      (bch2_btree_write_buffer_flush_sync(trans),
-			       bch2_trans_begin(trans)));
+	if (attr == &sysfs_trigger_btree_write_buffer_flush) {
+		CLASS(btree_trans, trans)(c);
+		ret = bch2_btree_write_buffer_flush_sync(trans);
+	}
 
 	if (attr == &sysfs_trigger_gc)
-		bch2_gc_gens(c);
+		ret = bch2_gc_gens(c);
 
 	if (attr == &sysfs_trigger_delete_dead_snapshots) {
 		/* debug force: bypass auto_snapshot_deletion; serialize via run_lock */
 		scoped_guard(mutex, &c->recovery.run_lock)
-			__bch2_delete_dead_snapshots(c);
+			ret = __bch2_delete_dead_snapshots(c);
 	}
 
 	if (attr == &sysfs_trigger_emergency_read_only) {
@@ -549,19 +549,16 @@ STORE(bch2_fs)
 		char *threads_str	= strsep(&p, " \t\n");
 		unsigned threads;
 		u64 nr;
-		int ret = -EINVAL;
 
+		ret = -EINVAL;
 		if (threads_str &&
 		    !(ret = kstrtouint(threads_str, 10, &threads)) &&
 		    !(ret = bch2_strtoull_h(nr_str, &nr)))
 			ret = bch2_btree_perf_test(c, test, nr, threads);
-
-		if (ret)
-			size = ret;
 	}
 #endif
 	enumerated_ref_put(&c->writes, BCH_WRITE_REF_sysfs);
-	return size;
+	return ret ?: (ssize_t) size;
 }
 SYSFS_OPS(bch2_fs);
 
