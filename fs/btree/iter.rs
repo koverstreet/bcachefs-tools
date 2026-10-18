@@ -15,6 +15,7 @@ use crate::util::log::CFnName;
 use crate::util::{Printbuf, ToText};
 use crate::SPOS_MAX;
 use bitflags::bitflags;
+use core::fmt;
 use core::marker::PhantomData;
 use core::mem::{size_of, MaybeUninit};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -23,7 +24,7 @@ use core::slice;
 use core::ops::ControlFlow;
 
 use c::bpos;
-use crate::util::vstructs::Validated;
+use crate::util::vstructs::{State, Validated};
 
 /// btree_trans!(fs): a transaction named for the function it's created in.
 /// Transaction stats and lock contention are reported per function, under that
@@ -389,6 +390,20 @@ pub struct TransBkey<'a, 't, V: ?Sized = FamilyVal<AllTypes>> {
     buf_u64s: u32,
     t:        PhantomData<&'a mut TransAttempt<'a, 't>>,
     v:        PhantomData<*const V>,
+}
+
+/// A key that won't fit where it is: @need_u64s, header and all, where its
+/// buffer has @have_u64s - or a key can, which is at most a u8's worth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NoRoom {
+    pub need_u64s: usize,
+    pub have_u64s: usize,
+}
+
+impl fmt::Display for NoRoom {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "key needs {} u64s, buffer has {}", self.need_u64s, self.have_u64s)
+    }
 }
 
 pub(crate) struct BtreeNodeRef {
@@ -1223,6 +1238,30 @@ impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
     pub fn as_mut_u64s(&mut self) -> &mut [u64] {
         // SAFETY: as as_u64s()'s, and we have the buffer mutably
         unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr() as *mut u64, self.buf_u64s as usize) }
+    }
+}
+
+/// A key of a family - any key's, or a family's - is as long as its header
+/// says, within its buffer. Not a typed whole one's: that's read as all of its
+/// value, whatever its u64s.
+impl<'a, 't, F: 'static, S: State> TransBkey<'a, 't, FamilyVal<F, S>> {
+    /// Its value made @val_u64s long, within its buffer. Grown, the new u64s
+    /// are zeroes - what fields past an older value read as; shrunk, the u64s
+    /// past it are left as they were. NoRoom if the buffer, or a key's u8 of
+    /// u64s, can't hold it.
+    pub fn set_val_u64s(&mut self, val_u64s: usize) -> Result<(), NoRoom> {
+        let need_u64s = BKEY_U64S + val_u64s;
+        let have_u64s = (self.buf_u64s as usize).min(u8::MAX.into());
+        if need_u64s > have_u64s {
+            return Err(NoRoom { need_u64s, have_u64s });
+        }
+
+        let u64s = self.k().u64s as usize;
+        if need_u64s > u64s {
+            self.as_mut_u64s()[u64s..need_u64s].fill(0);
+        }
+        self.k_mut().u64s = need_u64s as u8;
+        Ok(())
     }
 }
 

@@ -24,9 +24,9 @@
 //! A value is an integer (decimal, 0x hex, or negative), or for an
 //! enum-coded field the codeword's name.
 
-use crate::btree::bkey::{BkeyS, BkeySC, BKEY_U64S};
+use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
-use crate::btree::iter::{TransBkey, UpdateTriggerFlags};
+use crate::btree::iter::{NoRoom, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -42,7 +42,7 @@ pub enum SetError<'p> {
     Resolve(ResolveError<'p>),
     Access { field: &'p str, err: AccessError },
     BadValue { field: &'p str, val: &'p str, valid: Option<EnumValues> },
-    NoRoom { need_u64s: usize, have_u64s: usize },
+    NoRoom(NoRoom),
     /// A dirent name that isn't one: empty, or past BCH_NAME_MAX.
     BadName { val: &'p str },
     Unsupported { type_: u8 },
@@ -62,8 +62,7 @@ impl fmt::Display for SetError<'_> {
                 }
                 write!(f, ")")
             }
-            SetError::NoRoom { need_u64s, have_u64s } =>
-                write!(f, "key needs {need_u64s} u64s, buffer has {have_u64s}"),
+            SetError::NoRoom(e) => write!(f, "{e}"),
             SetError::BadName { val } =>
                 write!(f, "d_name: '{val}' isn't a valid dirent name"),
             SetError::Unsupported { type_ } =>
@@ -75,6 +74,12 @@ impl fmt::Display for SetError<'_> {
 impl<'p> From<ResolveError<'p>> for SetError<'p> {
     fn from(e: ResolveError<'p>) -> Self {
         SetError::Resolve(e)
+    }
+}
+
+impl From<NoRoom> for SetError<'_> {
+    fn from(e: NoRoom) -> Self {
+        SetError::NoRoom(e)
     }
 }
 
@@ -148,16 +153,10 @@ impl TransBkey<'_, '_> {
         let target = typeinfo::resolve_with_bits(info, field)?;
         let v = parse_val(type_, field, val)?;
 
-        let need_u64s = BKEY_U64S + (target.0.offset + target.0.len).div_ceil(8);
-        let have_u64s = self.as_u64s().len();
-        let u64s = self.k().u64s as usize;
-
-        if u64s < need_u64s {
-            if need_u64s > have_u64s {
-                return Err(SetError::NoRoom { need_u64s, have_u64s });
-            }
-            self.as_mut_u64s()[u64s..need_u64s].fill(0);
-            self.k_mut().u64s = need_u64s as u8;
+        // grown to reach the field, if it doesn't
+        let need_val_u64s = (target.0.offset + target.0.len).div_ceil(8);
+        if self.k().val_bytes() < need_val_u64s * size_of::<u64>() {
+            self.set_val_u64s(need_val_u64s)?;
         }
 
         let mut k = BkeyS::from(&mut *self);
@@ -183,7 +182,7 @@ impl TransBkey<'_, '_> {
         let need_u64s = packed.inode.k.u64s as usize;
         let have_u64s = self.as_u64s().len();
         if need_u64s > have_u64s {
-            return Err(SetError::NoRoom { need_u64s, have_u64s });
+            return Err(NoRoom { need_u64s, have_u64s }.into());
         }
 
         // The packed key, header first - within the buffer pack() sized for it:
