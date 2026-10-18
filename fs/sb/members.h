@@ -9,8 +9,6 @@
 
 /* Superblock member access: */
 
-extern char * const bch2_member_error_strs[];
-
 static inline struct bch_member *
 __bch2_members_v2_get_mut(struct bch_sb_field_members_v2 *mi, unsigned i)
 {
@@ -37,8 +35,6 @@ static inline struct bch_member bch2_members_v1_get(struct bch_sb_field_members_
 	memcpy(&ret, p, min_t(size_t, BCH_MEMBER_V1_BYTES, sizeof(ret)));
 	return ret;
 }
-
-unsigned long bch2_dev_latency_max(struct bch_fs *, struct bch_devs_mask *, int);
 
 /* Device online state: */
 
@@ -391,38 +387,6 @@ static inline bool bch2_member_exists(struct bch_sb *sb, unsigned dev)
 	return false;
 }
 
-static inline struct bch_member_cpu bch2_mi_to_cpu(struct bch_member *mi)
-{
-	return (struct bch_member_cpu) {
-		.nbuckets	= le64_to_cpu(mi->nbuckets),
-		.nbuckets_minus_first = le64_to_cpu(mi->nbuckets) -
-			le16_to_cpu(mi->first_bucket),
-		.first_bucket	= le16_to_cpu(mi->first_bucket),
-		.bucket_size	= le16_to_cpu(mi->bucket_size),
-		.group		= BCH_MEMBER_GROUP(mi),
-		/* .failure_domain is interned in bch2_sb_members_to_cpu() */
-		.state		= BCH_MEMBER_STATE(mi),
-		.discard	= BCH_MEMBER_DISCARD(mi),
-		.data_allowed	= BCH_MEMBER_DATA_ALLOWED(mi),
-		.durability	= BCH_MEMBER_DURABILITY(mi)
-			? BCH_MEMBER_DURABILITY(mi) - 1
-			: 1,
-		.freespace_initialized = BCH_MEMBER_FREESPACE_INITIALIZED(mi),
-		.initialized		= BCH_MEMBER_INITIALIZED(mi),
-		.resize_on_mount	= BCH_MEMBER_RESIZE_ON_MOUNT(mi),
-		.rotational		= BCH_MEMBER_ROTATIONAL(mi),
-		.valid			= bch2_member_alive(mi),
-		.btree_bitmap_shift	= mi->btree_bitmap_shift,
-		.btree_allocated_bitmap = le64_to_cpu(mi->btree_allocated_bitmap),
-	};
-}
-
-void bch2_sb_members_from_cpu(struct bch_fs *);
-void bch2_sb_members_to_cpu(struct bch_fs *);
-
-void bch2_dev_io_errors_to_text(struct printbuf *, struct bch_dev *);
-void bch2_dev_errors_reset(struct bch_dev *);
-
 /* Btree allocation bitmap: */
 
 static inline bool __bch2_dev_btree_bitmap_marked_sectors(struct bch_dev *ca, u64 start,
@@ -478,12 +442,6 @@ void bch2_dev_btree_bitmap_mark(struct bch_fs *, struct bkey_s_c);
 int bch2_btree_bitmap_gc(struct bch_fs *);
 void bch2_maybe_schedule_btree_bitmap_gc_stop(struct bch_fs *);
 void bch2_maybe_schedule_btree_bitmap_gc(struct bch_fs *);
-
-void bch2_dev_mi_field_read(struct bch_dev *, struct bch_dev_identity *);
-void bch2_dev_mi_field_upgrades_locked(struct bch_fs *, struct bch_dev *,
-				       const struct bch_dev_identity *, struct sb_write *);
-void bch2_dev_mi_field_upgrades(struct bch_dev *);
-void bch2_fs_mi_field_upgrades(struct bch_fs *);
 
 static inline void bch2_prt_member_name(struct printbuf *out, struct bch_fs *c, unsigned idx)
 {

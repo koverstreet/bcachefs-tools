@@ -2,14 +2,16 @@ use crate::btree::bkey::BkeySC;
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::util::kernel::{READ, WRITE};
+use crate::util::kernel::{nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
+use crate::util::percpu::acc_u64s_percpu;
 use crate::util::Printbuf;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::alloc::disk_groups;
-use crate::util::ffi::Opaque;
+use crate::util::ffi::{c_char, Opaque};
 use crate::util::strided::{Strided, StridedMut};
 use crate::util::vstructs::{bytes_of_mut, plain_bytes, Head, Unsized, Validated};
-use core::ffi::{c_int, c_uint, CStr};
+use core::ffi::{c_int, c_uint, c_ulong, CStr};
+use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
 use super::io::*;
 
@@ -618,6 +620,186 @@ pub fn bch2_devs_mask_to_text_locked(out: &mut Printbuf, c: &Opaque<c::bch_fs>, 
     }
 }
 
+// ── In memory: ca->mi, and what goes back ────────────────────────────────
+//
+// ca->mi is the superblock's member, decoded: written under sb_lock - set_mi()
+// takes the guard - and read without it, as C's readers always have, so a
+// reader can see a copy half made.
+
+impl c::bch_member {
+    /// As ca->mi has it - all but the failure domain, which takes the other
+    /// members to number: bch2_mi_to_cpu().
+    pub fn to_cpu(&self) -> c::bch_member_cpu {
+        let nbuckets = self.nbuckets.get();
+        let first_bucket = self.first_bucket.get();
+
+        c::bch_member_cpu {
+            nbuckets,
+            nbuckets_minus_first:   nbuckets.wrapping_sub(first_bucket.into()),
+            first_bucket,
+            bucket_size:            self.bucket_size.get(),
+            group:                  self.group() as u16,
+            failure_domain:         0,
+            state:                  self.state() as u8,
+            discard:                self.discard() as u8,
+            data_allowed:           self.data_allowed() as u8,
+            // one-biased on disk: 0 is the default, 1
+            durability:             self.durability().checked_sub(1).unwrap_or(1) as u8,
+            freespace_initialized:  self.freespace_initialized() as u8,
+            initialized:            self.initialized() as u8,
+            resize_on_mount:        self.resize_on_mount() as u8,
+            rotational:             self.rotational() as u8,
+            valid:                  self.alive() as u8,
+            btree_bitmap_shift:     self.btree_bitmap_shift,
+            btree_allocated_bitmap: self.btree_allocated_bitmap.get(),
+        }
+    }
+}
+
+#[c_export]
+pub fn bch2_mi_to_cpu(mi: &c::bch_member) -> c::bch_member_cpu {
+    mi.to_cpu()
+}
+
+/// Member @dev's failure domain, as an id: one more than the first member
+/// with the same string, 0 for none. Only compared for equality, so it
+/// needn't be dense.
+fn failure_domain_id(sb: &c::bch_sb, dev: u32, m: &c::bch_member) -> u16 {
+    if m.failure_domain[0] == 0 {
+        return 0;
+    }
+    (0..=dev).find(|&i| sb_member(sb, i).unwrap_or_default().failure_domain == m.failure_domain)
+        .map_or(0, |i| i as u16 + 1)
+}
+
+/// ca->mi, and the masks of rotational and removed devices, from the
+/// superblock.
+fn members_to_cpu(fs: &Fs, sb: &SbLockGuard) {
+    for ca in fs.members() {
+        let dev = u32::from(ca.dev_idx);
+        let m = sb_member(sb.sb(), dev).unwrap_or_default();
+        let mut mi = m.to_cpu();
+        mi.failure_domain = failure_domain_id(sb.sb(), dev, &m);
+
+        ca.set_mi(sb, mi);
+        fs.devs_rotational.assign(dev as usize, mi.rotational != 0);
+    }
+
+    if let Some(mi2) = members_v2(sb.sb()) {
+        for i in 0..fs.nr_devices() {
+            fs.devs_removed.assign(i as usize, mi2.get(i).unwrap_or_default().deleted());
+        }
+    }
+}
+
+#[c_export]
+pub fn bch2_sb_members_to_cpu(c: &Opaque<c::bch_fs>) {
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    members_to_cpu(fs, &unsafe { fs.sb_lock_held() });
+}
+
+/// The error counts, into the superblock's members - for a superblock write.
+#[c_export]
+pub fn bch2_sb_members_from_cpu(c: &Opaque<c::bch_fs>) {
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    let mut sb = unsafe { fs.sb_lock_held() };
+
+    let rcu = read_lock();
+    for ca in fs.devs_rcu(&rcu) {
+        let m = sb.fs_member_mut(ca.dev_idx.into());
+        for (d, e) in m.errors.iter_mut().zip(&ca.errors) {
+            *d = (e.load(Ordering::Relaxed) as u64).into();
+        }
+    }
+}
+
+/// The worst IO latency seen, reading or writing as @rw, of @devs, in jiffies:
+/// to scale timeouts and "held too long" warnings so slow storage doesn't
+/// trip them.
+#[c_export]
+pub fn bch2_dev_latency_max(c: &Opaque<c::bch_fs>, devs: &c::bch_devs_mask, rw: c_int) -> c_ulong {
+    let fs = Fs::from_c(c);
+    let rcu = read_lock();
+    let ns = fs.devs_rcu_in(devs.d.iter(), &rcu)
+        .map(|ca| ca.io_latency[rw as usize].stats.max_duration)
+        .max()
+        .unwrap_or(0);
+    nsecs_to_jiffies(ns)
+}
+
+// ── Device identity, recorded in the member ──────────────────────────────
+
+/// @dst, one of the member's fixed-size strings, made @src - NUL padded, cut
+/// to fit - unless @src is empty. Whether it changed.
+fn mi_update_str(dst: &mut [u8], src: &[c_char]) -> bool {
+    let src = &src[..src.len().min(dst.len())];
+    let n = src.iter().position(|&b| b == 0).unwrap_or(src.len());
+    if n == 0 {
+        return false;
+    }
+
+    let mut changed = false;
+    for (i, d) in dst.iter_mut().enumerate() {
+        let b = if i < n { src[i] as u8 } else { 0 };
+        changed |= *d != b;
+        *d = b;
+    }
+    changed
+}
+
+/// Member @dev's name, model and serial made @id's, and its rotational
+/// flag if it's never been set. Whether anything changed.
+fn mi_field_upgrades(sb: &mut SbLockGuard, dev: u32, id: &c::bch_dev_identity) -> bool {
+    let m = sb.fs_member_mut(dev);
+    let mut dirty = false;
+
+    dirty |= mi_update_str(&mut m.device_name, &id.name);
+    dirty |= mi_update_str(&mut m.device_model, &id.model);
+    dirty |= mi_update_str(&mut m.device_serial, &id.serial);
+
+    if !m.rotational_set() {
+        m.set_rotational(id.rotational);
+        m.set_rotational_set(true);
+        dirty = true;
+    }
+    dirty
+}
+
+/// @w, the caller's superblock write, is dirtied if anything changed.
+#[c_export]
+pub fn bch2_dev_mi_field_upgrades_locked(c: &Opaque<c::bch_fs>, ca: &c::bch_dev,
+                                         id: &c::bch_dev_identity, w: &mut c::sb_write) {
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    w.dirty |= mi_field_upgrades(&mut unsafe { fs.sb_lock_held() }, ca.dev_idx.into(), id);
+}
+
+#[c_export]
+pub fn bch2_dev_mi_field_read(ca: &c::bch_dev, id: &mut c::bch_dev_identity) {
+    *id = ca.identity();
+}
+
+#[c_export]
+pub fn bch2_dev_mi_field_upgrades(ca: &c::bch_dev) {
+    ca.mi_field_upgrades();
+}
+
+/// Every online device's identity, recorded.
+#[c_export]
+pub fn bch2_fs_mi_field_upgrades(c: &Opaque<c::bch_fs>) {
+    let fs = Fs::from_c(c);
+    for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_fs_mi_field_upgrades) {
+        /*
+         * Reads sysfs, so it can't happen under sb_lock - which is why this
+         * writes per dirty device instead of once at the end. Only the first
+         * mount after these fields were added dirties more than one.
+         */
+        ca.mi_field_upgrades();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Devices - c->devs[], the filesystem's bch_devs, and what's known of each:
 // members.h's in-memory side.
@@ -963,25 +1145,100 @@ impl c::bch_dev {
         core::ptr::from_ref(self).cast_mut()
     }
 
+    /// ca->mi made @mi: see "In memory" above.
+    fn set_mi(&self, _sb: &SbLockGuard, mi: c::bch_member_cpu) {
+        // SAFETY: sb_lock, held, is ca->mi's writers' lock; its readers take
+        // none, as in C
+        unsafe { (&raw const self.mi).cast_mut().write(mi) }
+    }
+
     /// Its IO errors, by kind: since the filesystem was made, and since they
     /// were last reset.
     pub fn io_errors_to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_dev_io_errors_to_text(out.as_raw(), self.as_ptr()) }
+        let m = sb_member(self.fs().sb_lock().sb(), self.dev_idx.into()).unwrap_or_default();
+        let errors = || MEMBER_ERROR_NAMES.iter().zip(&self.errors).map(|(n, e)| (n, e.load(Ordering::Relaxed) as u64));
+
+        out.tabstop_push(12);
+
+        write!(out, "IO errors since filesystem creation\n");
+        {
+            let mut out = out.indent(2);
+            for (name, n) in errors() {
+                write!(out, "{name}:\t{n}\n");
+            }
+        }
+
+        let since = (unsafe { c::ktime_get_real_seconds() } as u64).wrapping_sub(m.errors_reset_time.get());
+        write!(out, "IO errors since ");
+        out.time_units(since.wrapping_mul(NSEC_PER_SEC));
+        write!(out, " ago\n");
+        {
+            let mut out = out.indent(2);
+            for ((name, n), at_reset) in errors().zip(&m.errors_at_reset) {
+                write!(out, "{name}:\t{}\n", n.wrapping_sub(at_reset.get()));
+            }
+        }
+
+        if m.flush_errors.get() != 0 {
+            write!(out, "Flush errors (device not honoring FUA/flush):\t{}\n", m.flush_errors.get());
+        }
     }
 
     /// Start counting IO errors again from now, in the superblock.
     pub fn errors_reset(&self) {
-        unsafe { c::bch2_dev_errors_reset(self.as_ptr()) }
+        let fs = self.fs();
+        let mut sb = fs.sb_lock();
+        let m = sb.fs_member_mut(self.dev_idx.into());
+
+        for (r, e) in m.errors_at_reset.iter_mut().zip(&self.errors) {
+            *r = (e.load(Ordering::Relaxed) as u64).into();
+        }
+        m.errors_reset_time = (unsafe { c::ktime_get_real_seconds() } as u64).into();
+
+        fs.write_super(&mut sb);
     }
 
-    /// The sectors read and written, by data type.
+    /// The sectors read and written, by data type: every CPU's count summed.
     pub fn io_done(&self) -> c::io_count {
-        unsafe { c::bch2_dev_io_done(self.as_ptr()) }
+        let mut ret = c::io_count::default();
+        let src: *const u64 = self.io_done.cast();
+        for (i, row) in ret.sectors.iter_mut().enumerate() {
+            let at = i * row.len();
+            // SAFETY: ca->io_done is a per-CPU io_count, live as long as the
+            // device; row @i starts @at u64s into it
+            unsafe { acc_u64s_percpu(row, src.add(at)) };
+        }
+        ret
+    }
+
+    /// Its block device's name, model and serial, and whether it's rotational.
+    fn identity(&self) -> c::bch_dev_identity {
+        let mut id = c::bch_dev_identity::default();
+        let bdev = self.disk_sb.bdev;
+        unsafe {
+            c::bch2_dev_read_identity(bdev,
+                                      id.name.as_mut_ptr(), id.name.len(),
+                                      id.model.as_mut_ptr(), id.model.len(),
+                                      id.serial.as_mut_ptr(), id.serial.len());
+            id.rotational = c::bch2_bdev_rot(bdev);
+        }
+        id
+    }
+
+    /// Its identity, recorded in its member.
+    pub fn mi_field_upgrades(&self) {
+        let id = self.identity();
+
+        let fs = self.fs();
+        let mut sb = fs.sb_lock();
+        if mi_field_upgrades(&mut sb, self.dev_idx.into(), &id) {
+            fs.write_super(&mut sb);
+        }
     }
 
     /// The latest IO's latency, for reads (READ) or writes (WRITE).
     pub fn cur_latency(&self, rw: usize) -> i64 {
-        self.cur_latency[rw].load(core::sync::atomic::Ordering::Relaxed)
+        self.cur_latency[rw].load(Ordering::Relaxed)
     }
 
     /// The IO refs held, by kind - for reads (READ) or writes (WRITE).

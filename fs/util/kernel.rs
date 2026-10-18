@@ -4,6 +4,8 @@ use crate::c;
 pub const READ:  usize = 0;
 pub const WRITE: usize = 1;
 
+pub const NSEC_PER_SEC: u64 = 1_000_000_000;
+
 #[cfg(kernel)]
 pub const PAGE_SIZE: usize = kernel::page::PAGE_SIZE;
 /// The shim's, include/linux/page.h

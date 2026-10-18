@@ -353,9 +353,7 @@ pub fn present_devices(sbs: &[(PathBuf, bch_sb_handle)]) -> HashSet<u8> {
 /// a member the superblock names and we didn't turn up is missing, whichever
 /// way it went missing.
 ///
-/// Durability is one-biased on disk, zero meaning one, as bch2_mi_to_cpu()
-/// reads it. Taking the raw field would report every default device as
-/// contributing no durability at all.
+/// Durability as to_cpu() decodes it: one-biased on disk, zero meaning one.
 pub fn devices_from_superblocks(sbs: &[(PathBuf, bch_sb_handle)]) -> Vec<DevInfo> {
     let Some((_, first)) = sbs.first() else { return Vec::new() };
     let Some(members) = bcachefs_kernel::sb::members::members_v2(first.sb()) else {
@@ -373,7 +371,6 @@ pub fn devices_from_superblocks(sbs: &[(PathBuf, bch_sb_handle)]) -> Vec<DevInfo
                 return None;
             }
 
-            let raw = m.durability();
 
             Some(DevInfo {
                 idx,
@@ -382,7 +379,7 @@ pub fn devices_from_superblocks(sbs: &[(PathBuf, bch_sb_handle)]) -> Vec<DevInfo
                     .unwrap_or_else(|| format!("dev-{idx}")),
                 label:          None,
                 failure_domain: None,
-                durability:     if raw != 0 { raw as u32 - 1 } else { 1 },
+                durability:     m.to_cpu().durability.into(),
                 online:         have.contains(&(idx as u8)),
             })
         })

@@ -75,4 +75,8 @@ c_extern! {
     pub fn bch2_dev_add(c: *mut c::bch_fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
     pub fn bch2_dev_resize(c: *mut c::bch_fs, ca: *mut c::bch_dev, nbuckets: u64,
                            err: *mut c::printbuf) -> c_int;
+    pub fn bch2_dev_read_identity(bdev: *mut c::block_device,
+                                  name: *mut c_char, name_size: usize,
+                                  model: *mut c_char, model_size: usize,
+                                  serial: *mut c_char, serial_size: usize);
 }
