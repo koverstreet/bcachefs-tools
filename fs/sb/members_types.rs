@@ -30,9 +30,6 @@ pub struct bch_member_cpu {
 }
 
 c_extern! {
-    pub fn bch2_member_to_text(out: *mut c::printbuf, m: *mut c::bch_member,
-                               gi: *mut Head<c::bch_sb_field_disk_groups>, sb: *mut Head<c::bch_sb>,
-                               idx: c_uint);
     pub fn bch2_sb_nr_devices(sb: *const Head<c::bch_sb>) -> c_uint;
     pub fn rust_bch2_dev_put(ca: *mut c::bch_dev);
     pub fn rust_bch2_dev_get(ca: *mut c::bch_dev);

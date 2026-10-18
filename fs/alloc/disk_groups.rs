@@ -433,7 +433,10 @@ pub fn bch2_disk_path_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>>,
 #[c_export]
 pub unsafe fn bch2_disk_path_to_text_sb(out: &mut Printbuf, sb: *mut Head<c::bch_sb>, v: c_uint) {
     // SAFETY: the caller's
-    let sb = unsafe { c::bch_sb::<Validated>::from_ffi(sb) };
+    disk_path_to_text_sb(out, unsafe { c::bch_sb::<Validated>::from_ffi(sb) }, v);
+}
+
+pub fn disk_path_to_text_sb(out: &mut Printbuf, sb: &c::bch_sb, v: u32) {
     disk_path_to_text_in(out, sb_groups(sb), v);
 }
 

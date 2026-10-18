@@ -190,6 +190,10 @@ impl Printbuf {
         self.0.cur_tabstop  = s.cur_tabstop;
     }
 
+    pub fn nr_tabstops(&self) -> u32 {
+        self.0.nr_tabstops.into()
+    }
+
     pub fn indent_level(&self) -> u32 {
         self.0.indent
     }

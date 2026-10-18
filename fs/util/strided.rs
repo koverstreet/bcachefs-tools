@@ -35,6 +35,14 @@ impl<'a, T: Plain> Strided<'a, T> {
         Some(Strided { bytes: &bytes[..len], stride, _t: PhantomData })
     }
 
+    pub fn len(&self) -> usize {
+        self.bytes.len() / self.stride
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
     pub fn stride(&self) -> usize {
         self.stride
     }

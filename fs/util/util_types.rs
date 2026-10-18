@@ -60,6 +60,7 @@ pub struct memalloc_flags {
 
 c_extern! {
     pub fn bch2_prt_datetime(out: *mut c::printbuf, sec: c::time64_t);
+    pub fn bch2_prt_u64_base2_nbits(out: *mut c::printbuf, v: u64, nr_bits: c_uint);
     pub fn bch2_strtoull_h(cp: *const c_char, res: *mut c_ulonglong) -> c_int;
     pub fn bch2_read_flag_list(opt: *const c_char, list: *const *const c_char) -> u64;
     pub fn bch2_get_random_u64_below(ceil: u64) -> u64;

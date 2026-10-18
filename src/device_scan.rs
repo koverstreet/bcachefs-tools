@@ -369,7 +369,7 @@ pub fn devices_from_superblocks(sbs: &[(PathBuf, bch_sb_handle)]) -> Vec<DevInfo
     (0..members.nr_devices())
         .filter_map(|idx| {
             let m = members.get(idx)?;
-            if !crate::wrappers::sb_display::member_alive(&m) {
+            if !m.alive() {
                 return None;
             }
 

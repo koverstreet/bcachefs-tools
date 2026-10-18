@@ -5,6 +5,7 @@ use crate::fs::Fs;
 use crate::util::kernel::{READ, WRITE};
 use crate::util::Printbuf;
 use crate::util::rcu::{read_lock, ReadGuard};
+use crate::alloc::disk_groups;
 use crate::util::ffi::Opaque;
 use crate::util::strided::{Strided, StridedMut};
 use crate::util::vstructs::{bytes_of_mut, plain_bytes, Head, Unsized, Validated};
@@ -33,7 +34,7 @@ pub fn member_state_str(state: u8) -> &'static str {
     MEMBER_STATE_NAMES.get(state as usize).copied().unwrap_or("unknown")
 }
 
-const BCH_MEMBER_V1_BYTES: usize = 56;
+const BCH_MEMBER_V1_BYTES: usize = c::BCH_MEMBER_V1_BYTES as usize;
 const MEMBERS_V2_HEAD: usize = size_of::<Head<c::bch_sb_field_members_v2>>();
 const MEMBERS_V1_HEAD: usize = size_of::<Head<c::bch_sb_field_members_v1>>();
 
@@ -237,6 +238,286 @@ pub unsafe fn bch2_sb_member_get(sb: *mut Head<c::bch_sb>, i: c_int) -> c::bch_m
     // SAFETY: the caller's
     let sb = unsafe { c::bch_sb::<Validated>::from_ffi(sb) };
     sb_member(sb, i as u32).unwrap_or_default()
+}
+
+// ── Validating, and printing ─────────────────────────────────────────────
+
+macro_rules! member_error_names {
+    ($(($name:tt, $n:tt)),* $(,)?) => { const MEMBER_ERROR_NAMES: &[&str] = &[$(stringify!($name),)*]; };
+}
+c::BCH_MEMBER_ERROR_TYPES!(member_error_names);
+
+macro_rules! iops_names {
+    ($(($name:tt, $n:tt)),* $(,)?) => { const IOPS_NAMES: &[&str] = &[$(stringify!($name),)*]; };
+}
+c::BCH_IOPS_MEASUREMENTS!(iops_names);
+
+/// A __nonstring field: NUL terminated only if shorter than the field.
+fn nonstring(b: &[u8]) -> &[u8] {
+    &b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())]
+}
+
+fn invalid() -> Result<(), BchError> {
+    Err(bch_errcode::BCH_ERR_invalid_sb_members.into())
+}
+
+fn validate_member(err: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb, i: u32) -> Result<(), BchError> {
+    let nbuckets = m.nbuckets.get();
+    if nbuckets > c::BCH_MEMBER_NBUCKETS_MAX.into() {
+        write!(err, "device {i}: too many buckets (got {nbuckets}, max {})", c::BCH_MEMBER_NBUCKETS_MAX);
+        return invalid();
+    }
+
+    // wrapping, as C's: a first_bucket past nbuckets isn't caught here
+    let usable = nbuckets.wrapping_sub(m.first_bucket.get().into());
+    if usable < c::BCH_MIN_NR_NBUCKETS.into() {
+        write!(err, "device {i}: not enough buckets (got {usable}, min {})", c::BCH_MIN_NR_NBUCKETS);
+        return invalid();
+    }
+
+    let (bucket_size, block_size) = (m.bucket_size.get(), sb.block_size.get());
+    if bucket_size < block_size {
+        write!(err, "device {i}: bucket size {bucket_size} smaller than block size {block_size}");
+        return invalid();
+    }
+
+    if u64::from(bucket_size) < sb.btree_node_size() {
+        write!(err, "device {i}: bucket size {bucket_size} smaller than btree node size {}", sb.btree_node_size());
+        return invalid();
+    }
+
+    if u32::from(m.btree_bitmap_shift) >= c::BCH_MI_BTREE_BITMAP_SHIFT_MAX {
+        write!(err, "device {i}: invalid btree_bitmap_shift {}", m.btree_bitmap_shift);
+        return invalid();
+    }
+
+    if m.freespace_initialized() &&
+       sb.features[0].get() & (1 << c::bch_sb_feature::BCH_FEATURE_no_alloc_info.0) != 0 {
+        write!(err, "device {i}: freespace initialized but fs has no alloc info");
+        return invalid();
+    }
+    Ok(())
+}
+
+fn members_validate(sb: &c::bch_sb, members: Option<Strided<'_, c::bch_member>>,
+                    err: &mut Printbuf) -> Result<(), BchError> {
+    let nr = usize::from(sb.nr_devices);
+    let have = members.as_ref().map_or(0, |m| m.len());
+    let Some(members) = members.filter(|_| have >= nr) else {
+        write!(err, "section too small: {nr} devices, room for {have}");
+        return invalid();
+    };
+
+    for i in 0..nr {
+        validate_member(err, &members.get(i).unwrap().get(), sb, i as u32)?;
+    }
+    Ok(())
+}
+
+/// Every member there's room for, nr_devices or not: printed sections
+/// include ones that failed validation.
+fn members_to_text(out: &mut Printbuf, sb: &c::bch_sb, members: Option<Strided<'_, c::bch_member>>) {
+    let Some(members) = members else {
+        write!(out, "member_bytes 0");
+        return;
+    };
+
+    let nr = usize::from(sb.nr_devices);
+    if members.len() != nr {
+        write!(out, "nr_devices mismatch: have {} entries, should be {nr}", members.len());
+    }
+
+    for i in 0..nr.min(members.len()) {
+        let m = members.get(i).unwrap().get();
+        if m.alive() {
+            write!(out, "Device:\t{i}\n");
+            member_to_text(&mut out.indent(2), &m, sb, i as u32);
+        }
+    }
+}
+
+impl SbFieldOps for c::bch_sb_field_members_v1 {
+    fn validate(sb: &c::bch_sb, f: &Self, _flags: c::bch_validate_flags,
+                err: &mut Printbuf) -> Result<(), BchError> {
+        members_validate(sb, members_in(f.as_bytes(), MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES), err)
+    }
+
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, sb: &c::bch_sb, f: &Self) {
+        members_to_text(out, sb, members_in(f.as_bytes(), MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES));
+    }
+}
+
+impl SbFieldOps for c::bch_sb_field_members_v2 {
+    fn validate(sb: &c::bch_sb, f: &Self, _flags: c::bch_validate_flags,
+                err: &mut Printbuf) -> Result<(), BchError> {
+        members_validate(sb, members_in(f.as_bytes(), MEMBERS_V2_HEAD, f.member_bytes.get().into()), err)
+    }
+
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, sb: &c::bch_sb, f: &Self) {
+        members_to_text(out, sb, members_in(f.as_bytes(), MEMBERS_V2_HEAD, f.member_bytes.get().into()));
+    }
+}
+
+#[c_export]
+pub static bch_sb_field_ops_members_v1: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_members_v1>();
+
+#[c_export]
+pub static bch_sb_field_ops_members_v2: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_members_v2>();
+
+fn data_types_to_text(out: &mut Printbuf, types: u64) {
+    match types {
+        // SAFETY: a NULL terminated table of names
+        t if t != 0 => unsafe { out.prt_bitflags(c::__bch2_data_types.as_ptr(), t) },
+        _           => write!(out, "(none)"),
+    }
+}
+
+fn label_to_text(out: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb) {
+    write!(out, "Label:\t");
+    match m.group() {
+        0 => write!(out, "(none)"),
+        g => disk_groups::disk_path_to_text_sb(out, sb, g as u32 - 1),
+    }
+    out.newline();
+}
+
+fn failure_domain_to_text(out: &mut Printbuf, m: &c::bch_member) {
+    if m.failure_domain[0] != 0 {
+        write!(out, "Failure domain:\t");
+        out.write_bytes(nonstring(&m.failure_domain));
+        out.newline();
+    }
+}
+
+fn has_data_to_text(out: &mut Printbuf, sb: &c::bch_sb, idx: u32) {
+    write!(out, "Has data:\t");
+    // SAFETY: validated
+    data_types_to_text(out, unsafe { c::bch2_sb_dev_has_data(sb.as_ffi() as *mut _, idx) }.into());
+    out.newline();
+}
+
+/// show-super's member: every field.
+pub fn member_to_text(out: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb, idx: u32) {
+    let bucket_size = u64::from(m.bucket_size.get());
+
+    label_to_text(out, m, sb);
+    failure_domain_to_text(out, m);
+    write!(out, "UUID:\t{}\n", uuid::Uuid::from_bytes(m.uuid.b));
+    write!(out, "Size:\t");
+    out.units_u64((m.nbuckets.get() * bucket_size) << 9);
+    out.newline();
+
+    for (name, e) in MEMBER_ERROR_NAMES.iter().zip(&m.errors) {
+        write!(out, "{name} errors:\t{}\n", e.get());
+    }
+    for (name, iops) in IOPS_NAMES.iter().zip(&m.iops) {
+        write!(out, "{name} iops:\t{}\n", iops.get());
+    }
+
+    write!(out, "Bucket size:\t");
+    out.units_u64(bucket_size << 9);
+    out.newline();
+    write!(out, "First bucket:\t{}\n", m.first_bucket.get());
+    write!(out, "Buckets:\t{}\n", m.nbuckets.get());
+
+    write!(out, "Last mount:\t");
+    match m.last_mount.get() {
+        0 => write!(out, "(never)"),
+        // SAFETY: only formats
+        t => unsafe { c::bch2_prt_datetime(out.as_raw(), t as i64) },
+    }
+    out.newline();
+    write!(out, "Last superblock write:\t{}\n", m.seq.get());
+
+    write!(out, "State:\t{}\n", member_state_str(m.state() as u8));
+    write!(out, "Data allowed:\t");
+    data_types_to_text(out, m.data_allowed());
+    out.newline();
+    has_data_to_text(out, sb, idx);
+    write!(out, "Rotational:\t{}\n", m.rotational() as u8);
+
+    write!(out, "Btree allocated bitmap blocksize:\t");
+    match m.btree_bitmap_shift {
+        s if s < 64 => out.units_u64(1 << s),
+        s           => write!(out, "(invalid shift {s})"),
+    }
+    out.newline();
+    write!(out, "Btree allocated bitmap:\t");
+    // SAFETY: only formats
+    unsafe { c::bch2_prt_u64_base2_nbits(out.as_raw(), m.btree_allocated_bitmap.get(), 64) };
+    out.newline();
+
+    write!(out, "Durability:\t{}\n", m.durability().checked_sub(1).unwrap_or(1));
+    write!(out, "Discard:\t{}\n", m.discard() as u8);
+    write!(out, "Freespace initialized:\t{}\n", m.freespace_initialized() as u8);
+    write!(out, "Resize on mount:\t{}\n", m.resize_on_mount() as u8);
+
+    for (name, f) in [("Last device name", &m.device_name[..]),
+                      ("Last device model", &m.device_model[..]),
+                      ("Last device serial", &m.device_serial[..])] {
+        write!(out, "{name}:\t");
+        out.write_bytes(nonstring(f));
+        out.newline();
+    }
+
+    if m.flush_errors.get() != 0 {
+        write!(out, "Flush errors:\t{}\n", m.flush_errors.get());
+    }
+}
+
+/// For messages, to say which disk is meant: what's empty is left out. The
+/// superblock's alone, for mount to name a device it hasn't opened.
+fn member_to_text_short(out: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb, idx: u32) {
+    if out.nr_tabstops() == 0 {
+        out.tabstop_push(16 + out.indent_level());
+    }
+
+    if m.group() != 0 {
+        label_to_text(out, m, sb);
+    }
+    failure_domain_to_text(out, m);
+
+    for (name, f) in [("Device", &m.device_name[..]),
+                      ("Model", &m.device_model[..]),
+                      ("Serial", &m.device_serial[..])] {
+        if f[0] != 0 {
+            write!(out, "{name}:\t");
+            out.write_bytes(nonstring(f));
+            out.newline();
+        }
+    }
+
+    write!(out, "State:\t{}\n", member_state_str(m.state() as u8));
+    has_data_to_text(out, sb, idx);
+}
+
+fn dev_to_text_short_locked(out: &mut Printbuf, fs: &Fs, dev: u32) {
+    let sb = fs.disk_sb().sb();
+    member_to_text_short(out, &sb_member(sb, dev).unwrap_or_default(), sb, dev);
+}
+
+/// Under sb_lock.
+#[c_export]
+pub fn bch2_member_to_text_short_locked(out: &mut Printbuf, c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {
+    dev_to_text_short_locked(out, Fs::from_c(c), ca.dev_idx.into());
+}
+
+#[c_export]
+pub fn bch2_member_to_text_short(out: &mut Printbuf, c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {
+    let fs = Fs::from_c(c);
+    let _lock = fs.sb_lock();
+    dev_to_text_short_locked(out, fs, ca.dev_idx.into());
+}
+
+/// Under sb_lock.
+#[c_export]
+pub fn bch2_devs_mask_to_text_locked(out: &mut Printbuf, c: &Opaque<c::bch_fs>, devs: &c::bch_devs_mask) {
+    let fs = Fs::from_c(c);
+    for dev in devs.d.iter() {
+        if fs.dev_rcu(dev as u32, &read_lock()).is_some() {
+            dev_to_text_short_locked(out, fs, dev as u32);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -736,6 +1017,24 @@ mod tests {
                 .copy_from_slice(&plain_bytes(&member(i))[..BCH_MEMBER_V1_BYTES]);
             assert_eq!(plain_bytes(&whole(&mut sb, i)), plain_bytes(&want));
         }
+    }
+
+    /// members_v1's to_text counts its members by its own stride: C's used
+    /// bch_member's, so printed a few and said nr_devices didn't match.
+    #[test]
+    fn members_v1_to_text() {
+        let mut sb = new_sb(3);
+        let u64s = (MEMBERS_V1_HEAD + BCH_MEMBER_V1_BYTES * 3).div_ceil(8) as u32;
+        sb.field_resize::<c::bch_sb_field_members_v1>(u64s).unwrap();
+        for i in 0..3 {
+            sb.put_member_v1::<c::bch_sb_field_members_v1>(MEMBERS_V1_HEAD, i.into(), &member(i));
+        }
+
+        let mut out = Printbuf::new();
+        let f = sb.field::<c::bch_sb_field_members_v1>().unwrap();
+        members_to_text(&mut out, sb.sb(), members_in(f.as_bytes(), MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES));
+        assert!(!out.as_str().contains("mismatch"));
+        assert_eq!(out.as_str().matches("Device:").count(), 3);
     }
 
     /// The mirror is each member's first 56 bytes - and, past extent_flags,

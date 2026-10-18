@@ -38,16 +38,6 @@ static inline struct bch_member bch2_members_v1_get(struct bch_sb_field_members_
 	return ret;
 }
 
-
-/* Superblock only - usable before the filesystem has been opened: */
-void bch2_member_to_text_short_sb(struct printbuf *, struct bch_member *,
-				  struct bch_sb_field_disk_groups *,
-				  struct bch_sb *, unsigned);
-
-void bch2_member_to_text_short_locked(struct printbuf *, struct bch_fs *, struct bch_dev *);
-void bch2_member_to_text_short(struct printbuf *, struct bch_fs *, struct bch_dev *);
-void bch2_devs_mask_to_text_locked(struct printbuf *, struct bch_fs *, struct bch_devs_mask *);
-
 unsigned long bch2_dev_latency_max(struct bch_fs *, struct bch_devs_mask *, int);
 
 /* Device online state: */
@@ -385,9 +375,6 @@ static inline struct bch_dev *bch2_dev_get_ioref(struct bch_fs *c, unsigned dev,
 }
 
 /* Member properties: */
-
-extern const struct bch_sb_field_ops bch_sb_field_ops_members_v1;
-extern const struct bch_sb_field_ops bch_sb_field_ops_members_v2;
 
 static inline bool bch2_member_alive(struct bch_member *m)
 {
