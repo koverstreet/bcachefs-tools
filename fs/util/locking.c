@@ -65,3 +65,23 @@ void rust_percpu_up_write(struct percpu_rw_semaphore *sem)
 {
 	percpu_up_write(sem);
 }
+
+/*
+ * For MutexNoio (util/locking.rs): mutex_init() is a macro, with a lockdep
+ * class per call site - Rust passes its own, @key - and lockdep_assert_held()
+ * is one too.
+ */
+
+void rust_mutex_init(struct mutex *lock, const char *name, void *key)
+{
+#ifdef __KERNEL__
+	__mutex_init(lock, name, key);
+#else
+	mutex_init(lock);
+#endif
+}
+
+void rust_mutex_assert_held(struct mutex *lock)
+{
+	lockdep_assert_held(lock);
+}

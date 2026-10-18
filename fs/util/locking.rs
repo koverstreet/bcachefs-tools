@@ -16,6 +16,10 @@
 //! reach Rust through bindgen.
 
 use crate::c;
+use core::cell::UnsafeCell;
+use core::ffi::{c_void, CStr};
+use core::marker::{PhantomData, PhantomPinned};
+use core::ops::{Deref, DerefMut};
 
 /// RAII guard for a process-context memalloc scope. Restores the previous
 /// flags when dropped.
@@ -57,3 +61,119 @@ impl Drop for MutexGuard<'_> {
         unsafe { c::mutex_unlock(core::ptr::from_ref(self.0).cast_mut()) };
     }
 }
+
+/// A T that a C struct mutex_noio guards: C takes the same lock -
+/// guard(mutex_noio) - and Rust reaches the T only through a guard, which is
+/// the NOIO scope as C's is. Laid out as C's two members, the lock then the T,
+/// so a struct C shares can declare it as them: #[c_anon("struct mutex_noio
+/// lock; T v")].
+#[repr(C)]
+pub struct MutexNoio<T> {
+    lock: LockCell,
+    data: UnsafeCell<T>,
+}
+
+/// The lock: pinned - a kernel mutex mustn't move - and transparent, so C
+/// sees only the struct mutex_noio.
+#[repr(transparent)]
+struct LockCell(UnsafeCell<c::mutex_noio>, PhantomPinned);
+
+impl LockCell {
+    fn get(&self) -> *mut c::mutex {
+        // SAFETY: a field of it, not a read
+        unsafe { &raw mut (*self.0.get()).lock }
+    }
+}
+
+// SAFETY: a lock: the T is reached only with it held
+unsafe impl<T: Send> Send for MutexNoio<T> {}
+unsafe impl<T: Send> Sync for MutexNoio<T> {}
+
+impl<T> MutexNoio<T> {
+    /// mutex_init(), with a lockdep class of its own - @key, named @name.
+    /// new_mutex_noio!() is this, with a static key per call site.
+    #[doc(hidden)]
+    pub fn new(t: T, name: &'static CStr, key: *mut c_void) -> impl ::pin_init::PinInit<Self> {
+        // SAFETY: the mutex is initialized in place - it's pinned, and first in
+        // the transparent cell's mutex_noio - and the value written; that's all
+        // of it
+        unsafe {
+            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
+                c::rust_mutex_init((&raw mut (*slot).lock).cast(), name.as_ptr().cast(), key);
+                (&raw mut (*slot).data).write(UnsafeCell::new(t));
+                Ok(())
+            })
+        }
+    }
+
+    pub fn lock(&self) -> MutexNoioGuard<'_, T> {
+        let noio = MemallocFlags::noio();
+        unsafe { c::mutex_lock(self.lock.get()) };
+        MutexNoioGuard { m: self, noio: Some(noio), _not_send: PhantomData }
+    }
+
+    /// The lock, as a caller holds it - C's, calling in: its guard isn't ours
+    /// to release, and nor is the NOIO scope it's in.
+    ///
+    /// # Safety
+    /// The caller holds the lock, and holds it for as long as this guard
+    /// lives; nothing else this task holds has the T.
+    pub unsafe fn held(&self) -> MutexNoioGuard<'_, T> {
+        unsafe { c::rust_mutex_assert_held(self.lock.get()) };
+        MutexNoioGuard { m: self, noio: None, _not_send: PhantomData }
+    }
+}
+
+/// A held MutexNoio: unlocked when dropped, the NOIO scope ended after - if
+/// lock() took it; held()'s is the caller's.
+#[must_use = "the mutex is unlocked as soon as the guard is dropped"]
+pub struct MutexNoioGuard<'a, T> {
+    m:         &'a MutexNoio<T>,
+    noio:      Option<MemallocFlags>,
+    _not_send: PhantomData<*mut ()>,
+}
+
+impl<T> Deref for MutexNoioGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        // SAFETY: held
+        unsafe { &*self.m.data.get() }
+    }
+}
+
+impl<T> DerefMut for MutexNoioGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: held
+        unsafe { &mut *self.m.data.get() }
+    }
+}
+
+impl<T> Drop for MutexNoioGuard<'_, T> {
+    fn drop(&mut self) {
+        if self.noio.is_some() {
+            unsafe { c::mutex_unlock(self.m.lock.get()) };
+        }
+    }
+}
+
+/// A MutexNoio initializer for @t, named @name for lockdep, with a lock class
+/// of its own.
+#[macro_export]
+macro_rules! new_mutex_noio {
+    ($t:expr, $name:literal $(,)?) => {{
+        #[cfg(kernel)]
+        let key = ::kernel::static_lock_class!().as_ptr().cast();
+        #[cfg(not(kernel))]
+        let key = ::core::ptr::null_mut();
+
+        $crate::util::locking::MutexNoio::new(
+            $t,
+            // SAFETY: NUL-terminated, no NUL before it - a literal's text
+            unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked(
+                ::core::concat!($name, "\0").as_bytes()) },
+            key)
+    }};
+}
+
+pub use crate::new_mutex_noio;

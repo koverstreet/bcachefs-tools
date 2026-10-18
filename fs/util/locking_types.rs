@@ -54,6 +54,9 @@ c_extern! {
     pub fn rust_memalloc_noio_save() -> c_uint;
     pub fn rust_memalloc_flags_restore(flags: c_uint);
 
+    pub fn rust_mutex_init(lock: *mut c::mutex, name: *const c_char, key: *mut c_void);
+    pub fn rust_mutex_assert_held(lock: *mut c::mutex);
+
     pub fn rust_percpu_init_rwsem(sem: *mut c::percpu_rw_semaphore, name: *const c_char,
                                   key: *mut c_void) -> c_int;
     pub fn rust_percpu_free_rwsem(sem: *mut c::percpu_rw_semaphore);
