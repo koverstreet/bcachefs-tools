@@ -346,7 +346,7 @@ void bch2_journal_space_available(struct journal *j)
 		return;
 	}
 
-	nr_devs_want = min_t(unsigned, nr_online, c->opts.metadata_replicas);
+	nr_devs_want = min_t(unsigned, nr_online, bch2_journal_replicas(c));
 
 	for (unsigned i = 0; i < journal_space_nr; i++)
 		j->space[i] = __journal_space_available(j, nr_devs_want, i);
@@ -1317,7 +1317,7 @@ int bch2_journal_flush_device_pins(struct journal *j, int dev_idx)
 		fifo_for_each_entry_ptr(p, &j->pin, iter)
 			if (dev_idx >= 0
 			    ? journal_pin_has_dev(p, dev_idx)
-			    : p->devs.nr < c->opts.metadata_replicas)
+			    : p->devs.nr < bch2_journal_replicas(c))
 				seq = iter;
 
 	bch2_journal_flush_pins(j, seq);
@@ -1355,7 +1355,7 @@ int bch2_journal_flush_device_pins(struct journal *j, int dev_idx)
 void bch2_journal_flush_dev_ro(struct journal *j, unsigned dev_idx)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
-	unsigned want = READ_ONCE(c->opts.metadata_replicas);
+	unsigned want = bch2_journal_replicas(c);
 
 	while (true) {
 		unsigned nr_devs = 0, nr_with_space = 0;

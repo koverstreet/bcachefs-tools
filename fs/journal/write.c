@@ -162,7 +162,7 @@ static int journal_write_alloc(struct journal *j, struct journal_buf *w,
 	unsigned sectors = vstruct_sectors(w->data, c->block_bits);
 	unsigned target = c->opts.metadata_target ?:
 		c->opts.foreground_target;
-	unsigned replicas_want = READ_ONCE(c->opts.metadata_replicas);
+	unsigned replicas_want = bch2_journal_replicas(c);
 	bool advance_done = false;
 
 retry_target:

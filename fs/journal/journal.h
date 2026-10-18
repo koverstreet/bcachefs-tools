@@ -115,6 +115,12 @@
 
 #include "journal/journal_gen.h"
 
+/* journal_replicas, or metadata_replicas when it isn't set: */
+static inline unsigned bch2_journal_replicas(struct bch_fs *c)
+{
+	return READ_ONCE(c->opts.journal_replicas) ?: READ_ONCE(c->opts.metadata_replicas);
+}
+
 static inline void journal_wake(struct journal *j)
 {
 	closure_wake_up(&j->async_wait);

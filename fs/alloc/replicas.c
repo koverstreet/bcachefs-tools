@@ -976,9 +976,9 @@ bool bch2_can_write_fs_with_devs(struct bch_fs *c, struct bch_devs_mask devs,
 
 	if (!(flags & BCH_FORCE_IF_METADATA_DEGRADED)) {
 		if (nr_online[BCH_DATA_journal] < nr_have[BCH_DATA_journal] &&
-		    nr_online[BCH_DATA_journal] < c->opts.metadata_replicas) {
+		    nr_online[BCH_DATA_journal] < bch2_journal_replicas(c)) {
 			prt_printf(err, "Insufficient rw journal devices (%u < %u) online\n",
-				   nr_online[BCH_DATA_journal], c->opts.metadata_replicas);
+				   nr_online[BCH_DATA_journal], bch2_journal_replicas(c));
 			return false;
 		}
 

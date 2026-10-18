@@ -1562,7 +1562,7 @@ __cold void __bch2_journal_debug_to_text(struct printbuf *out, struct journal *j
 		prt_printf(out, "cur_idx\t%u (seq %llu)\n",	ja->cur_idx,		ja->bucket_seq[ja->cur_idx]);
 	}
 
-	prt_printf(out, "replicas %u\n", c->opts.metadata_replicas);
+	prt_printf(out, "replicas %u\n", bch2_journal_replicas(c));
 }
 
 __cold void bch2_journal_debug_to_text(struct printbuf *out, struct journal *j)
