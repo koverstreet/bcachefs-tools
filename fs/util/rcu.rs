@@ -183,43 +183,52 @@ impl<T: ?Sized + RcuPointee> Drop for RcuBuf<T> {
 
 // ── RcuArray ─────────────────────────────────────────────────────────────
 
-/// RcuArray's buffer: C's `struct { struct rcu_head rcu; size_t nr; T s[]; }`.
+/// RcuArray's buffer: C's `struct { struct rcu_head rcu; size_t nr; T s[]; }`
+/// - or with fields of its own between nr and s[], as @H, its header: bucket
+/// gens' first_bucket.
 #[repr(C)]
-pub struct RcuArrayBuf<T> {
+pub struct RcuArrayBuf<T, H = ()> {
     rcu: c::rcu_head,
     nr:  usize,
+    h:   H,
     s:   [T],
 }
 
 /// RcuArrayBuf's head: what C's pointer is to.
 #[repr(C)]
-pub struct RcuArrayHead {
+pub struct RcuArrayHead<H = ()> {
     rcu: c::rcu_head,
     nr:  usize,
+    h:   H,
 }
 
-// SAFETY: as its elements: rcu is touched only by kvfree_rcu(), freeing it
-unsafe impl<T: Send> Send for RcuArrayBuf<T> {}
-unsafe impl<T: Sync> Sync for RcuArrayBuf<T> {}
+// SAFETY: as its elements and header: rcu is touched only by kvfree_rcu(),
+// freeing it
+unsafe impl<T: Send, H: Send> Send for RcuArrayBuf<T, H> {}
+unsafe impl<T: Sync, H: Sync> Sync for RcuArrayBuf<T, H> {}
 
-impl<T> RcuArrayBuf<T> {
-    /// Where s[] starts - offsetof(), for checking a C struct's layout matches.
-    pub const TAIL: usize = size_of::<RcuArrayHead>().next_multiple_of(align_of::<T>());
+impl<T, H> RcuArrayBuf<T, H> {
+    /// Where nr, the header and s[] start - offsetof(), for checking a C
+    /// struct's layout matches.
+    pub const NR: usize = core::mem::offset_of!(RcuArrayHead<H>, nr);
+    pub const HEAD: usize = core::mem::offset_of!(RcuArrayHead<H>, h);
+    pub const TAIL: usize = size_of::<RcuArrayHead<H>>().next_multiple_of(align_of::<T>());
 }
 
-// SAFETY: starts with rcu, and its length is nr; RcuElements have no Drop
-unsafe impl<T: RcuElement> RcuPointee for RcuArrayBuf<T> {
-    type Head = RcuArrayHead;
+// SAFETY: starts with rcu, and its length is nr; RcuElements have no Drop,
+// and neither does a header that's one
+unsafe impl<T: RcuElement, H: RcuElement> RcuPointee for RcuArrayBuf<T, H> {
+    type Head = RcuArrayHead<H>;
 
-    unsafe fn from_thin(p: *mut RcuArrayHead) -> *mut Self {
+    unsafe fn from_thin(p: *mut RcuArrayHead<H>) -> *mut Self {
         // a slice pointer's length is the DST's tail's
         core::ptr::slice_from_raw_parts_mut(p.cast::<T>(), unsafe { (*p).nr }) as *mut Self
     }
 }
 
-/// What an RcuArray holds: elements a writer copies bytewise into a grown
-/// buffer while readers still read the old one - so a writer changing one in
-/// place, with readers looking, needs it to be atomics.
+/// What an RcuArray holds - its elements, and its header: what a writer copies
+/// bytewise into a grown buffer while readers still read the old one - so a
+/// writer changing one in place, with readers looking, needs it to be atomics.
 ///
 /// # Safety
 /// A bytewise copy of a T is a valid T, owning nothing: no Drop. All-zero
@@ -229,24 +238,30 @@ pub unsafe trait RcuElement: Sync {}
 macro_rules! rcu_element {
     ($($t:ty),*) => { $(unsafe impl RcuElement for $t {})* };
 }
-// SAFETY: plain integers, and atomics of them
-rcu_element!(u8, u16, u32, u64, usize,
+// SAFETY: plain integers, and atomics of them - and (), no header
+rcu_element!((), u8, u16, u32, u64, usize,
              core::sync::atomic::AtomicU8, core::sync::atomic::AtomicU16,
              core::sync::atomic::AtomicU32, core::sync::atomic::AtomicU64,
              core::sync::atomic::AtomicUsize);
 
-/// An RcuBuf of an array: see the top of the file.
+/// An RcuBuf of an array, with header @H: see the top of the file.
 #[repr(transparent)]
-pub struct RcuArray<T: RcuElement>(RcuBuf<RcuArrayBuf<T>>);
+pub struct RcuArray<T: RcuElement, H: RcuElement = ()>(RcuBuf<RcuArrayBuf<T, H>>);
 
 // SAFETY: an RcuBuf, zeroed
-unsafe impl<T: RcuElement> ::pin_init::Zeroable for RcuArray<T> {}
+unsafe impl<T: RcuElement, H: RcuElement> ::pin_init::Zeroable for RcuArray<T, H> {}
 
-impl<T: RcuElement> RcuArray<T> {
+impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
     /// The elements published, for as long as @g's section: none if nothing
     /// is.
     pub fn read<'a>(&'a self, g: &'a ReadGuard) -> &'a [T] {
         self.0.read(g).map_or(&[], |b| &b.s)
+    }
+
+    /// The header and elements published, for as long as @g's section: None
+    /// if nothing is.
+    pub fn read_head<'a>(&'a self, g: &'a ReadGuard) -> Option<(&'a H, &'a [T])> {
+        self.0.read(g).map(|b| (&b.h, &b.s))
     }
 
     /// read(), in a read-side section of its own for as long as @f runs.
@@ -261,6 +276,11 @@ impl<T: RcuElement> RcuArray<T> {
     pub unsafe fn get_locked(&self) -> &[T] {
         unsafe { self.0.get_locked() }.map_or(&[], |b| &b.s)
     }
+}
+
+/// Growing one without a header: a header's fields are its writer's to
+/// carry over, and the only writer of one with a header is C's.
+impl<T: RcuElement> RcuArray<T> {
 
     /// Room for at least @nr elements: if there isn't, a new buffer, sized to
     /// a power of two bytes as C's tables are, the old elements copied and the
