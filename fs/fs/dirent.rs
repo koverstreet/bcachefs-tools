@@ -47,11 +47,7 @@ pub struct Dirent<'k> {
 impl<'k> Dirent<'k> {
     /// @k as a dirent, if it is one.
     pub fn new(k: BkeySC<'k>) -> Option<Self> {
-        let k = k.arm::<c::Dirent>()?;
-        let v = k.v();
-        let names = RawNames::new(k.untyped()).names()
-            .expect("dirent names within the value, as validate checked");
-        Some(Dirent { k, v, names })
+        k.arm::<c::Dirent>().map(Dirent::from)
     }
 
     pub fn k(&self) -> BkeySC<'k, c::Dirent> { self.k }
@@ -71,6 +67,15 @@ impl<'k> Dirent<'k> {
     pub fn lookup_name(&self) -> &'k OsStr { self.names.lookup_name() }
 }
 
+impl<'k> From<BkeySC<'k, c::Dirent>> for Dirent<'k> {
+    fn from(k: BkeySC<'k, c::Dirent>) -> Self {
+        let v = k.v();
+        let names = RawNames::new(k.into()).names()
+            .expect("dirent names within the value, as validate checked");
+        Dirent { k, v, names }
+    }
+}
+
 
 // ── The hash table ───────────────────────────────────────────────────────
 
@@ -81,30 +86,29 @@ pub struct Dirents;
 /// casefolded directory.
 impl HashTable for Dirents {
     type Key<'k> = OsStr;
+    type Val = c::Dirent;
 
-    const BTREE:    c::btree_id      = c::btree_id::dirents;
-    const KEY_TYPE: c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_dirent;
+    const BTREE: c::btree_id = c::btree_id::dirents;
 
     fn hash_key(info: &c::bch_hash_info, key: &OsStr) -> u64 {
         hash(info, key)
     }
 
-    fn hash_bkey(info: &c::bch_hash_info, k: BkeySC<'_>) -> u64 {
-        hash(info, Dirent::new(k).expect("a dirent").lookup_name())
+    fn hash_bkey(info: &c::bch_hash_info, k: BkeySC<'_, c::Dirent>) -> u64 {
+        hash(info, Dirent::from(k).lookup_name())
     }
 
-    fn matches(k: BkeySC<'_>, key: &OsStr) -> bool {
-        Dirent::new(k).expect("a dirent").lookup_name() == key
+    fn matches(k: BkeySC<'_, c::Dirent>, key: &OsStr) -> bool {
+        Dirent::from(k).lookup_name() == key
     }
 
-    fn same_name(a: BkeySC<'_>, b: BkeySC<'_>) -> bool {
-        Dirent::new(a).expect("a dirent").lookup_name() ==
-            Dirent::new(b).expect("a dirent").lookup_name()
+    fn same_name(a: BkeySC<'_, c::Dirent>, b: BkeySC<'_, c::Dirent>) -> bool {
+        Dirent::from(a).lookup_name() == Dirent::from(b).lookup_name()
     }
 
     /// A subvolume's dirent lists only in its parent subvolume.
-    fn is_visible(inum: c::subvol_inum, k: BkeySC<'_>) -> bool {
-        match Dirent::new(k).expect("a dirent").target() {
+    fn is_visible(inum: c::subvol_inum, k: BkeySC<'_, c::Dirent>) -> bool {
+        match Dirent::from(k).target() {
             DirentTarget::Subvol { parent, .. } => u64::from(parent) == inum.subvol,
             DirentTarget::Inode(_)              => true,
         }
@@ -413,9 +417,9 @@ pub unsafe extern "C" fn bch2_dirent_read_target(
 fn lookup_target(
     t:   &TransAttempt<'_, '_>,
     dir: c::subvol_inum,
-    k:   BkeySC<'_>,
+    k:   BkeySC<'_, c::Dirent>,
 ) -> Result<c::subvol_inum, BchError> {
-    read_target(t, dir, Dirent::new(k).expect("a dirent"))?
+    read_target(t, dir, Dirent::from(k))?
         .ok_or(BchError::from(c::ENOENT))
 }
 
@@ -446,7 +450,7 @@ pub fn lookup_key<'i, 'a>(
     hash_info: &c::bch_hash_info,
     name:      &OsStr,
     flags:     BtreeIterFlags,
-) -> Result<BkeySC<'i>, BchError> {
+) -> Result<BkeySC<'i, c::Dirent>, BchError> {
     let lookup_name = maybe_casefold(t, hash_info, name)?;
     str_hash::lookup::<Dirents>(t, iter, hash_info, dir, lookup_name, flags)
 }
@@ -707,7 +711,7 @@ pub fn rename(
         let k = str_hash::lookup::<Dirents>(t, &mut src_iter, src_hash, src_dir,
                                             src_lookup, BtreeIterFlags::INTENT)?;
         r.src_inum = lookup_target(t, src_dir, k)?;
-        OldDirent::of(Dirent::new(k).expect("a dirent"))
+        OldDirent::of(Dirent::from(k))
     };
 
     let dst_lookup = maybe_casefold(t, dst_hash, dst_name)?;
@@ -720,7 +724,7 @@ pub fn rename(
         let k = str_hash::lookup::<Dirents>(t, &mut dst_iter, dst_hash, dst_dir,
                                             dst_lookup, BtreeIterFlags::INTENT)?;
         r.dst_inum = lookup_target(t, dst_dir, k)?;
-        Some(OldDirent::of(Dirent::new(k).expect("a dirent")))
+        Some(OldDirent::of(Dirent::from(k)))
     };
 
     let src_pos = src_iter.pos();

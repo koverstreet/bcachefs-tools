@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, AllTypes, BkeyFamily, BkeyI, BkeySC, InFamily, SPOS_MAX};
 use crate::btree::iter::{
     polonius_key, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey,
     UpdateTriggerFlags,
@@ -28,22 +28,27 @@ pub trait HashTable {
     /// A name, or for xattrs a name and type.
     type Key<'k>: ?Sized;
 
-    const BTREE:    c::btree_id;
-    const KEY_TYPE: c::bch_bkey_type;
+    /// The type of the table's keys - a TableKey, as arm() narrows one.
+    type Val: ?Sized + BkeyFamily<Validated: InFamily<AllTypes>> + 'static;
+
+    const BTREE: c::btree_id;
 
     fn hash_key(info: &c::bch_hash_info, key: &Self::Key<'_>) -> u64;
 
-    fn hash_bkey(info: &c::bch_hash_info, k: BkeySC<'_>) -> u64;
+    fn hash_bkey(info: &c::bch_hash_info, k: TableKey<'_, Self>) -> u64;
 
-    fn matches(k: BkeySC<'_>, key: &Self::Key<'_>) -> bool;
+    fn matches(k: TableKey<'_, Self>, key: &Self::Key<'_>) -> bool;
 
-    fn same_name(a: BkeySC<'_>, b: BkeySC<'_>) -> bool;
+    fn same_name(a: TableKey<'_, Self>, b: TableKey<'_, Self>) -> bool;
 
     /// Whether @k is in the table as subvolume @inum.subvol sees it.
-    fn is_visible(_inum: c::subvol_inum, _k: BkeySC<'_>) -> bool {
+    fn is_visible(_inum: c::subvol_inum, _k: TableKey<'_, Self>) -> bool {
         true
     }
 }
+
+/// A key of @T's.
+pub type TableKey<'k, T> = BkeySC<'k, <<T as HashTable>::Val as BkeyFamily>::Validated>;
 
 /// The name hash, as it's running: what @info's type hashes with. crc32c and
 /// crc64 are keyed with the first word of the siphash key, hashed first.
@@ -117,10 +122,10 @@ pub fn hash_parts(info: &c::bch_hash_info, parts: &[&[u8]], maybe_31bit: bool) -
 // deleting leaves a whiteout when a later key in the sequence would be cut
 // off.
 
-/// Whether @k is one of @T's keys, visible to subvolume @inum.subvol - all of
+/// @k, if it's one of @T's keys, visible to subvolume @inum.subvol - all of
 /// them are, with no inode number.
-fn is_visible_key<T: HashTable>(inum: c::subvol_inum, k: BkeySC<'_>) -> bool {
-    k.k.type_ == T::KEY_TYPE.0 as u8 && (inum.inum == 0 || T::is_visible(inum, k))
+fn visible_key<T: HashTable>(inum: c::subvol_inum, k: BkeySC<'_>) -> Option<TableKey<'_, T>> {
+    k.arm::<T::Val>().filter(|&k| inum.inum == 0 || T::is_visible(inum, k))
 }
 
 fn is_whiteout(k: BkeySC<'_>) -> bool {
@@ -137,23 +142,20 @@ pub fn lookup_in_snapshot<'i, 'a, T: HashTable>(
     key:       &T::Key<'_>,
     flags:     BtreeIterFlags,
     snapshot:  u32,
-) -> Result<BkeySC<'i>, BchError> {
+) -> Result<TableKey<'i, T>, BchError> {
     let flags = BtreeIterFlags::SLOTS | flags;
     *iter = BtreeIter::new(t, T::BTREE.0,
                            spos(inum.inum, T::hash_key(hash_info, key), snapshot), flags);
 
     // The key, or a hole: the end of its probe sequence
     let found = iter.find_max_norestart(t, pos(inum.inum, u64::MAX), |_, k| Ok(
-        if is_visible_key::<T>(inum, k) {
-            T::matches(k, key)
-        } else {
-            !is_whiteout(k)
+        match visible_key::<T>(inum, k) {
+            Some(k) => T::matches(k, key),
+            None    => !is_whiteout(k),
         }))?;
 
-    match found {
-        Some(k) if is_visible_key::<T>(inum, k) => Ok(k),
-        _ => Err(t.fs().err(bch_errcode::BCH_ERR_ENOENT_str_hash_lookup)),
-    }
+    found.and_then(|k| visible_key::<T>(inum, k))
+        .ok_or_else(|| t.fs().err(bch_errcode::BCH_ERR_ENOENT_str_hash_lookup))
 }
 
 /// In subvolume and inode @inum: the key found, through @iter, or
@@ -165,7 +167,7 @@ pub fn lookup<'i, 'a, T: HashTable>(
     inum:      c::subvol_inum,
     key:       &T::Key<'_>,
     flags:     BtreeIterFlags,
-) -> Result<BkeySC<'i>, BchError> {
+) -> Result<TableKey<'i, T>, BchError> {
     let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
     lookup_in_snapshot::<T>(t, iter, hash_info, inum, key, flags, snapshot)
 }
@@ -186,7 +188,7 @@ pub fn hole<'a, T: HashTable>(
                            spos(inum.inum, T::hash_key(hash_info, key), snapshot), flags);
 
     match iter.find_max_norestart(t, pos(inum.inum, u64::MAX),
-                                  |_, k| Ok(!is_visible_key::<T>(inum, k)))? {
+                                  |_, k| Ok(visible_key::<T>(inum, k).is_none()))? {
         Some(_) => Ok(()),
         None    => Err(t.fs().err(bch_errcode::BCH_ERR_ENOSPC_str_hash_create)),
     }
@@ -203,17 +205,14 @@ pub fn needs_whiteout<'t, T: HashTable>(
     iter.set_flags(BtreeIterFlags::SLOTS);
     iter.advance();
 
-    let ours = |k: BkeySC<'_>| k.k.type_ == T::KEY_TYPE.0 as u8;
-
     // A key that hashes at or before @start, or the end of the sequence
     let found = iter.find_max_norestart(t, SPOS_MAX, |_, k| Ok(
-        if ours(k) {
-            T::hash_bkey(hash_info, k) <= start.pos().offset
-        } else {
-            !is_whiteout(k)
+        match k.arm::<T::Val>() {
+            Some(k) => T::hash_bkey(hash_info, k) <= start.pos().offset,
+            None    => !is_whiteout(k),
         }))?;
 
-    Ok(found.is_some_and(ours))
+    Ok(found.is_some_and(|k| k.arm::<T::Val>().is_some()))
 }
 
 /// In inode @inum as seen in @snapshot. With STR_HASH_MUST_CREATE, a key of
@@ -230,7 +229,7 @@ pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
     insert:       &mut TransBkey<'_, 't>,
     iter_flags:   BtreeIterFlags,
     update_flags: UpdateTriggerFlags,
-) -> Result<Option<BkeySC<'i>>, BchError> {
+) -> Result<Option<TableKey<'i, T>>, BchError> {
     let fs = t.fs();
     let flags = iter_flags.bits() | update_flags.bits();
     let peek_flags = BtreeIterFlags::from_bits_retain(flags) |
@@ -239,8 +238,8 @@ pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
     let must_replace = iter_flags.contains(BtreeIterFlags::STR_HASH_MUST_REPLACE);
 
     let inode = insert.k().p.inode;
-    *iter = BtreeIter::new(t, T::BTREE.0,
-                           spos(inode, T::hash_bkey(hash_info, BkeySC::from(&*insert)), snapshot),
+    let insert_k = BkeySC::from(&*insert).arm::<T::Val>().expect("a key of the table's type");
+    *iter = BtreeIter::new(t, T::BTREE.0, spos(inode, T::hash_bkey(hash_info, insert_k), snapshot),
                            peek_flags);
 
     // The first slot the key could go in, if there's no key of its name:
@@ -248,20 +247,21 @@ pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
 
     // A key of its name, or a hole: the end of its probe sequence
     let found = iter.find_max_norestart(t, pos(inode, u64::MAX), |iter, k| Ok(
-        if is_visible_key::<T>(inum, k) {
-            T::same_name(k, BkeySC::from(&*insert))     // else a hash collision
-        } else {
-            if slot.is_none() && !must_replace {
-                slot = Some(iter.copy());
+        match visible_key::<T>(inum, k) {
+            Some(k) => T::same_name(k, insert_k),     // else a hash collision
+            None    => {
+                if slot.is_none() && !must_replace {
+                    slot = Some(iter.copy());
+                }
+                !is_whiteout(k)
             }
-            !is_whiteout(k)
         }))?;
 
     let Some(k) = found else {
         return Err(fs.err(bch_errcode::BCH_ERR_ENOSPC_str_hash_create));
     };
 
-    if is_visible_key::<T>(inum, k) {
+    if let Some(k) = visible_key::<T>(inum, k) {
         if must_create {
             // XXX polonius: returned here, @iter used below
             return Ok(Some(unsafe { polonius_key(k) }));
@@ -431,9 +431,9 @@ pub fn check_key<T: HashTable>(
         return Ok(());
     }
 
-    if !needs_check::<T>(hash_info, k) {
+    let Some(k) = needs_check::<T>(hash_info, k) else {
         return Ok(());
-    }
+    };
 
     let s = match s {
         Some(s) => Seen::Walk(s),
@@ -443,17 +443,16 @@ pub fn check_key<T: HashTable>(
     r.check_key::<T>(t, k)
 }
 
-/// The cheap test, before walking anything: whether @k is at the offset it
-/// hashes to, and for a dirent, casefolded as its directory is.
-fn needs_check<T: HashTable>(hash_info: &c::bch_hash_info, k: BkeySC<'_>) -> bool {
-    if k.k.type_ != T::KEY_TYPE.0 as u8 {
-        return false;
-    }
-    if T::hash_bkey(hash_info, k) != k.k.p.offset {
-        return true;
-    }
-    k.arm::<c::Dirent>().map(|k| k.v())
-        .is_some_and(|d| (d.d_casefold() != 0) == hash_info.cf_encoding.is_null())
+/// The cheap test, before walking anything: @k, if it's @T's and not at the
+/// offset it hashes to, or for a dirent, not casefolded as its directory is.
+fn needs_check<'k, T: HashTable>(hash_info: &c::bch_hash_info, k: BkeySC<'k>)
+    -> Option<TableKey<'k, T>>
+{
+    let k = k.arm::<T::Val>()?;
+    let miscased = k.arm::<c::Dirent>().map(|k| k.v())
+        .is_some_and(|d| (d.d_casefold() != 0) == hash_info.cf_encoding.is_null());
+
+    (T::hash_bkey(hash_info, k) != k.k.p.offset || miscased).then_some(k)
 }
 
 // ── fsck: repairing hash table keys ──────────────────────────────────────
@@ -513,7 +512,7 @@ enum DupResolution {
     RenameK,
 }
 
-fn hash_pick_winner<T: HashTable>(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, dup: BkeySC<'_>)
+fn hash_pick_winner<T: HashTable>(t: &TransAttempt<'_, '_>, k: TableKey<'_, T>, dup: TableKey<'_, T>)
     -> Result<DupResolution, BchError>
 {
     use DupResolution::*;
@@ -524,9 +523,9 @@ fn hash_pick_winner<T: HashTable>(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, dup: 
     } else if k.k.p.snapshot != dup.k.p.snapshot {
         // Delete the older key from the newer snapshot
         if k.k.p.snapshot < dup.k.p.snapshot { DeleteDup } else { DeleteK }
-    } else if T::BTREE != c::btree_id::dirents || !dirent_has_target(t, k)? {
+    } else if T::BTREE != c::btree_id::dirents || !dirent_has_target(t, k.into())? {
         DeleteK
-    } else if !dirent_has_target(t, dup)? {
+    } else if !dirent_has_target(t, dup.into())? {
         DeleteDup
     } else {
         RenameK
@@ -654,8 +653,8 @@ impl Repair<'_> {
     fn dup_entries<T: HashTable>(
         &mut self,
         t:   &TransAttempt<'_, '_>,
-        k:   BkeySC<'_>,
-        dup: BkeySC<'_>,
+        k:   TableKey<'_, T>,
+        dup: TableKey<'_, T>,
     ) -> Result<(), BchError> {
         let fs = t.fs();
 
@@ -670,7 +669,7 @@ impl Repair<'_> {
         }
 
         if rename {
-            self.rename_dirent(t, k)?;
+            self.rename_dirent(t, k.into())?;
         }
 
         // @dup was found by a lookup from @k's snapshot, so if they're in
@@ -693,8 +692,8 @@ impl Repair<'_> {
     fn repair_key<T: HashTable>(
         &mut self,
         t:   &TransAttempt<'_, '_>,
-        k:   BkeySC<'_>,
-        dup: Option<BkeySC<'_>>,
+        k:   TableKey<'_, T>,
+        dup: Option<TableKey<'_, T>>,
     ) -> Result<(), BchError> {
         let btree = T::BTREE;
 
@@ -702,7 +701,8 @@ impl Repair<'_> {
             return self.dup_entries::<T>(t, k, dup);
         }
 
-        let mut new = t.bkey_make_mut_noupdate(k)?;
+        let k_any: BkeySC<'_> = k.into();
+        let mut new = t.bkey_make_mut_noupdate(k_any)?;
         let mut iter = BtreeIter::uninit();
         let dir = c::subvol_inum { subvol: 0, inum: k.k.p.inode };
 
@@ -727,7 +727,7 @@ impl Repair<'_> {
 
     /// @k can't be found by lookup - it's before the slot @hash it hashes
     /// to, or there's a hole in between: move it.
-    fn bad_hash<T: HashTable>(&mut self, t: &TransAttempt<'_, '_>, k: BkeySC<'_>, hash: u64)
+    fn bad_hash<T: HashTable>(&mut self, t: &TransAttempt<'_, '_>, k: TableKey<'_, T>, hash: u64)
         -> Result<(), BchError>
     {
         self.check_hash_info(t, k.k.p.inode)?;
@@ -769,13 +769,14 @@ impl Repair<'_> {
         delete_at::<Dirents>(t, self.hash_info, &mut iter,
                              UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
-        self.repair_key::<Dirents>(t, BkeySC::from(&new), None)?;
+        let new = BkeySC::from(&new).arm::<c::Dirent>().expect("a dirent, as just made");
+        self.repair_key::<Dirents>(t, new, None)?;
         Err(fs.err(bch_errcode::BCH_ERR_str_hash_key_repaired))
     }
 
     /// The rest of check_key(), for a key not at the offset it hashes to:
     /// walk its probe sequence for an empty slot or a duplicate.
-    fn check_key<T: HashTable>(&mut self, t: &TransAttempt<'_, '_>, hash_k: BkeySC<'_>)
+    fn check_key<T: HashTable>(&mut self, t: &TransAttempt<'_, '_>, hash_k: TableKey<'_, T>)
         -> Result<(), BchError>
     {
         let hash = T::hash_bkey(self.hash_info, hash_k);
@@ -790,13 +791,14 @@ impl Repair<'_> {
                                       BtreeIterFlags::SLOTS);
         let found = iter.find_max_norestart(t, SPOS_MAX, |_, k| Ok(
             k.k.p == hash_k.k.p ||
-            (k.k.type_ == T::KEY_TYPE.0 as u8 && T::same_name(k, hash_k)) ||
+            k.arm::<T::Val>().is_some_and(|k| T::same_name(k, hash_k)) ||
             k.k.is_deleted()))?;
 
         match found {
             Some(k) if k.k.p == hash_k.k.p => {}
             Some(hole) if hole.k.is_deleted() => return self.bad_hash::<T>(t, hash_k, hash),
             Some(dup) => {
+                let dup = dup.arm::<T::Val>().expect("a key of the same name");
                 // A repair of the hash info commits, and restarts: past this,
                 // nothing's been committed and @dup is still good
                 self.check_hash_info(t, hash_k.k.p.inode)?;
@@ -806,7 +808,7 @@ impl Repair<'_> {
         }
 
         if hash_k.k.key_type() == c::bch_bkey_type::KEY_TYPE_dirent {
-            self.check_dirent(t, hash_k)?;
+            self.check_dirent(t, hash_k.into())?;
         }
         Ok(())
     }

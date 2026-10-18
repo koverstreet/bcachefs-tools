@@ -42,25 +42,25 @@ pub struct Xattrs;
 /// Keys are a type and a name.
 impl HashTable for Xattrs {
     type Key<'k> = XattrKey<'k>;
+    type Val = c::Xattr;
 
-    const BTREE:    c::btree_id      = c::btree_id::xattrs;
-    const KEY_TYPE: c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_xattr;
+    const BTREE: c::btree_id = c::btree_id::xattrs;
 
     fn hash_key(info: &c::bch_hash_info, key: &XattrKey<'_>) -> u64 {
         hash(info, key.ty, key.name.as_bytes())
     }
 
-    fn hash_bkey(info: &c::bch_hash_info, k: BkeySC<'_>) -> u64 {
-        let (ty, name) = xattr(k).key();
+    fn hash_bkey(info: &c::bch_hash_info, k: BkeySC<'_, c::Xattr<Validated>>) -> u64 {
+        let (ty, name) = k.v().key();
         hash(info, ty, name)
     }
 
-    fn matches(k: BkeySC<'_>, key: &XattrKey<'_>) -> bool {
-        xattr(k).key() == (key.ty, key.name.as_bytes())
+    fn matches(k: BkeySC<'_, c::Xattr<Validated>>, key: &XattrKey<'_>) -> bool {
+        k.v().key() == (key.ty, key.name.as_bytes())
     }
 
-    fn same_name(a: BkeySC<'_>, b: BkeySC<'_>) -> bool {
-        xattr(a).key() == xattr(b).key()
+    fn same_name(a: BkeySC<'_, c::Xattr<Validated>>, b: BkeySC<'_, c::Xattr<Validated>>) -> bool {
+        a.v().key() == b.v().key()
     }
 }
 
@@ -140,8 +140,8 @@ fn xattr(k: BkeySC<'_>) -> &c::Xattr<Validated> {
 }
 
 /// @k's value - @k an xattr, valid.
-pub fn value(k: BkeySC<'_>) -> &[u8] {
-    let x = xattr(k);
+pub fn value(k: BkeySC<'_, c::Xattr<Validated>>) -> &[u8] {
+    let x = k.v();
     &x.x_name_and_value[x.x_name_len as usize..][..x.x_val_len.get() as usize]
 }
 
@@ -278,7 +278,7 @@ pub fn lookup<'i, 'a>(
     ty:    c::bch_xattr_type,
     name:  &OsStr,
     flags: BtreeIterFlags,
-) -> Result<BkeySC<'i>, BchError> {
+) -> Result<BkeySC<'i, c::Xattr<Validated>>, BchError> {
     let hash_info = str_hash::hash_info_init(t.fs(), inode)?;
     str_hash::lookup::<Xattrs>(t, iter, &hash_info, inum, &XattrKey { ty, name }, flags)
 }

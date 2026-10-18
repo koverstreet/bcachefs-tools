@@ -51,7 +51,7 @@ fn lostfound_dirent(
                                                            BtreeIterFlags::empty(), snapshot)
         .found()? else { return Ok(None) };
 
-    let d = Dirent::new(k).expect("a dirent");
+    let d = Dirent::from(k);
     match d.target() {
         DirentTarget::Inode(inum) if d.d_type() as u32 == c::DT_DIR => Ok(Some(inum)),
         _ => {
@@ -352,7 +352,7 @@ pub fn reattach_inode(t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacke
             probe.as_os_str(), BtreeIterFlags::empty(), dirent_snapshot).found()?;
 
         match existing {
-            Some(k) if Dirent::new(k).expect("a dirent").target() == inode.dirent_target() => {
+            Some(k) if Dirent::from(k).target() == inode.dirent_target() => {
                 inode.bi_dir        = lostfound.bi_inum;
                 inode.bi_dir_offset = k.k.p.offset;
                 adopted = true;

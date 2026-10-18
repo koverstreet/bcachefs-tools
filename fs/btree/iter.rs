@@ -1644,8 +1644,8 @@ impl BtreeIter<'_> {
 /// # Safety
 /// The iterator @k borrows mustn't be touched again before the caller
 /// returns @k - which ends its use of it.
-pub(crate) unsafe fn polonius_key<'i>(k: BkeySC<'_>) -> BkeySC<'i> {
-    unsafe { core::mem::transmute::<BkeySC<'_>, BkeySC<'i>>(k) }
+pub(crate) unsafe fn polonius_key<'i, V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> BkeySC<'i, V> {
+    BkeySC { k: unsafe { &*(k.k as *const c::bkey) }, v: k.v, iter: PhantomData, val: PhantomData }
 }
 
 /// A key C returned - a peek, a lookup - or its error.
