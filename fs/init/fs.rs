@@ -638,7 +638,7 @@ impl Fs {
     /// enumerated_ref_tryget(&c->writes, idx).
     pub fn write_ref_tryget(&self, idx: c::bch_write_ref) -> Option<WriteRef<'_>> {
         unsafe { c::rust_enumerated_ref_tryget(&raw mut (*self.as_ptr()).writes, idx as u32) }
-            .then_some(WriteRef { fs: self, idx })
+            .then(|| WriteRef { fs: self, idx })
     }
 }
 
