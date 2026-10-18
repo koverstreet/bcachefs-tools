@@ -32,6 +32,13 @@ macro_rules! extent_entries {
             })
         }
 
+        pub fn extent_entry_type_name(ty: u32) -> Option<&'static str> {
+            Some(match ty {
+                $($nr => stringify!($name),)*
+                _ => return None,
+            })
+        }
+
         #[allow(non_camel_case_types)]
         #[derive(Clone, Copy)]
         pub enum ExtentEntry<'a> {
