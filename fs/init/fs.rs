@@ -473,6 +473,11 @@ impl Fs {
         self.opts().block_size as u64
     }
 
+    /// A btree node's size, in sectors: btree_sectors().
+    pub fn btree_sectors(&self) -> u32 {
+        self.opts().btree_node_size >> 9
+    }
+
     pub fn time_to_timespec(&self, time: i64) -> c::timespec64 {
         const NSEC_PER_SEC: i64 = 1_000_000_000;
 

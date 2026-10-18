@@ -1,4 +1,6 @@
-use crate::btree::bkey::{BkeySC, BkeyV};
+use crate::btree::bkey::{BkeySC, BkeyV, POS_MIN};
+use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeNodeIter};
+use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
@@ -803,6 +805,208 @@ pub fn bch2_fs_mi_field_upgrades(c: &Opaque<c::bch_fs>) {
     }
 }
 
+// ── Where btree nodes are: each member's bitmap ──────────────────────────
+//
+// So that if we ever have to scan for btree nodes to repair, we needn't scan
+// whole devices: a bit per 1 << btree_bitmap_shift sectors, 64 of them, set
+// for every range a btree node has been written to. The shift grows - the
+// bitmap coarsens - as nodes are written further out. gc rebuilds it into
+// ca->btree_allocated_bitmap_gc, and replaces it.
+
+/// The bits of a bitmap at @shift that cover sectors [@start, @end).
+fn bitmap_bits(start: u64, end: u64, shift: u8) -> u64 {
+    (start >> shift..).take_while(|&bit| bit << shift < end).fold(0, |b, bit| b | 1 << bit)
+}
+
+/// @bitmap, its shift grown by @by: each bit folded into the one now covering it.
+fn bitmap_coarsen(bitmap: u64, by: u32) -> u64 {
+    (0..64).filter(|i| bitmap & 1 << i != 0).fold(0, |new, i| new | 1 << (i >> by))
+}
+
+impl c::bch_dev {
+    /// Whether all of [@start, @start + @sectors) is marked in its member's
+    /// bitmap - and, @with_gc, in the one gc is rebuilding. members.h has
+    /// C's, an inline the allocator calls.
+    fn btree_bitmap_marked_sectors(&self, start: u64, sectors: u32, with_gc: bool) -> bool {
+        let shift = self.mi.btree_bitmap_shift;
+        let end = start + u64::from(sectors);
+        if end > 64u64 << shift {
+            return false;
+        }
+
+        let gc = if with_gc { self.btree_allocated_bitmap_gc } else { !0 };
+        let want = bitmap_bits(start, end, shift);
+        self.mi.btree_allocated_bitmap & gc & want == want
+    }
+
+    /// ca->btree_allocated_bitmap_gc made @v: written under sb_lock, @_sb,
+    /// and read without it, as ca->mi.
+    fn set_btree_bitmap_gc(&self, _sb: &SbLockGuard, v: u64) {
+        // SAFETY: as set_mi()
+        unsafe { (&raw const self.btree_allocated_bitmap_gc).cast_mut().write(v) }
+    }
+
+    /// [@start, @start + @sectors) marked in its member's bitmap, and in gc's
+    /// - the bitmap coarsened first if it doesn't reach that far. Whether the
+    /// member changed.
+    fn btree_bitmap_mark_sectors(&self, sb: &mut SbLockGuard, start: u64, sectors: u32) -> bool {
+        let end = start + u64::from(sectors);
+        let mut gc = self.btree_allocated_bitmap_gc;
+        let mut dirty = false;
+
+        let m = sb.fs_member_mut(self.dev_idx.into());
+
+        let resize = end.next_power_of_two().trailing_zeros() as i32 - (i32::from(m.btree_bitmap_shift) + 6);
+        if resize > 0 {
+            m.btree_allocated_bitmap = bitmap_coarsen(m.btree_allocated_bitmap.get(), resize as u32).into();
+            m.btree_bitmap_shift += resize as u8;
+            gc = bitmap_coarsen(gc, resize as u32);
+            dirty = true;
+        }
+
+        let shift = m.btree_bitmap_shift;
+        assert!(u32::from(shift) < c::BCH_MI_BTREE_BITMAP_SHIFT_MAX);
+        assert!(end <= 64u64 << shift);
+
+        let bits = bitmap_bits(start, end, shift);
+        let old = m.btree_allocated_bitmap.get();
+        dirty |= old | bits != old;
+        m.btree_allocated_bitmap = (old | bits).into();
+
+        self.set_btree_bitmap_gc(sb, gc | bits);
+        dirty
+    }
+}
+
+impl Fs {
+    /// Whether every device @k points to has its node marked - a device
+    /// that isn't there doesn't count against it.
+    fn btree_bitmap_marked(&self, k: BkeySC<'_>, with_gc: bool) -> bool {
+        let Some(k) = k.arm::<Ptrs>() else { return true };
+        let rcu = read_lock();
+        let marked = k.ptrs(self).all(|p| self.dev_rcu(p.dev().into(), &rcu)
+            .is_none_or(|ca| ca.btree_bitmap_marked_sectors(p.offset(), self.btree_sectors(), with_gc)));
+        marked
+    }
+
+    /// @k's node marked on each device it points to. Whether a member
+    /// changed.
+    fn btree_bitmap_mark_locked(&self, sb: &mut SbLockGuard, k: BkeySC<'_>) -> bool {
+        let Some(k) = k.arm::<Ptrs>() else { return false };
+        let rcu = read_lock();
+        let mut dirty = false;
+        for p in k.ptrs(self) {
+            if let Some(ca) = self.dev_rcu(p.dev().into(), &rcu) {
+                dirty |= ca.btree_bitmap_mark_sectors(sb, p.offset(), self.btree_sectors());
+            }
+        }
+        dirty
+    }
+
+    fn btree_bitmap_mark(&self, k: BkeySC<'_>) {
+        let mut sb = self.sb_lock();
+        if self.btree_bitmap_mark_locked(&mut sb, k) {
+            self.write_super(&mut sb);
+        }
+    }
+
+    fn btree_bitmap_mark_if_unmarked(&self, k: BkeySC<'_>) {
+        if !self.btree_bitmap_marked(k, true) {
+            self.btree_bitmap_mark(k);
+        }
+    }
+
+    /// The bitmaps rebuilt from the btree nodes there are: every interior
+    /// node's key, and each root's.
+    fn btree_bitmap_gc(&self) -> Result<(), BchError> {
+        let progress = &self.recovery.progress;
+        progress.init_mask(self, c"bch2_btree_bitmap_gc", 0, !0);
+
+        {
+            let sb = self.sb_lock();
+            let rcu = read_lock();
+            for ca in self.devs_rcu(&rcu) {
+                ca.set_btree_bitmap_gc(&sb, 0);
+            }
+        }
+
+        {
+            let trans = crate::btree_trans!(self);
+
+            for btree in 0..self.btree_id_nr_alive() {
+                for level in 1..c::BTREE_MAX_DEPTH {
+                    BtreeIter::new_level(&trans, btree, POS_MIN, level, BtreeIterFlags::PREFETCH)
+                        .for_each(&trans, |t, iter, k| {
+                            self.btree_bitmap_mark_if_unmarked(k);
+                            progress.update(t, iter)
+                        })?;
+                }
+
+                let root = self.btree_id_root(btree).expect("a root for every btree");
+                let mut iter = BtreeNodeIter::new(&trans, btree, POS_MIN, 0, root.c.level.into(),
+                                                  BtreeIterFlags::empty());
+                lockrestart_do(&trans, |_| {
+                    let b = iter.peek()?.expect("the root node");
+                    self.btree_bitmap_mark_if_unmarked(b.key_i().as_sc());
+                    Ok(())
+                })?;
+            }
+        }
+
+        let (mut old, mut new) = (0u64, 0u64);
+        {
+            let mut sb = self.sb_lock();
+            {
+                let rcu = read_lock();
+                for ca in self.devs_rcu(&rcu) {
+                    let shift = ca.mi.btree_bitmap_shift;
+                    old += u64::from(ca.mi.btree_allocated_bitmap.count_ones()) << shift;
+                    new += u64::from(ca.btree_allocated_bitmap_gc.count_ones()) << shift;
+
+                    sb.fs_member_mut(ca.dev_idx.into()).btree_allocated_bitmap = ca.btree_allocated_bitmap_gc.into();
+                }
+            }
+            self.write_super(&mut sb);
+        }
+
+        let mut buf = Printbuf::new();
+        write!(buf, "mi_btree_bitmap sectors ");
+        buf.human_readable_u64(old << 9);
+        write!(buf, " -> ");
+        buf.human_readable_u64(new << 9);
+        crate::bch_info!(self, "{buf}");
+        Ok(())
+    }
+}
+
+#[c_export]
+pub fn bch2_dev_btree_bitmap_marked(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) -> bool {
+    Fs::from_c(c).btree_bitmap_marked(k, true)
+}
+
+#[c_export]
+pub fn bch2_dev_btree_bitmap_marked_nogc(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) -> bool {
+    Fs::from_c(c).btree_bitmap_marked(k, false)
+}
+
+/// @w, the caller's superblock write, is dirtied if a member changed.
+#[c_export]
+pub fn bch2_dev_btree_bitmap_mark_locked(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, w: &mut c::sb_write) {
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    w.dirty |= fs.btree_bitmap_mark_locked(&mut unsafe { fs.sb_lock_held() }, k);
+}
+
+#[c_export]
+pub fn bch2_dev_btree_bitmap_mark(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
+    Fs::from_c(c).btree_bitmap_mark(k)
+}
+
+#[c_export]
+pub fn bch2_btree_bitmap_gc(c: &Opaque<c::bch_fs>) -> c_int {
+    ret_to_c(Fs::from_c(c).btree_bitmap_gc())
+}
+
 // ---------------------------------------------------------------------------
 // Devices - c->devs[], the filesystem's bch_devs, and what's known of each:
 // members.h's in-memory side.
@@ -1486,5 +1690,20 @@ mod tests {
         sb.sb_mut().set_version_incompat(c::bcachefs_metadata_version::extent_flags.0 as u64 + 1);
         sb.members_cpy_v2_v1().unwrap();
         assert!(sb.field::<c::bch_sb_field_members_v1>().is_none());
+    }
+
+    /// A range's bits, then coarsened, are the bits it has at the coarser
+    /// shift: what's marked stays marked, and only the bits covering it.
+    #[test]
+    fn btree_bitmap_bits() {
+        assert_eq!(bitmap_bits(3, 9, 2), 0b111);
+        assert_eq!(bitmap_bits(4, 8, 2), 0b10);
+        assert_eq!(bitmap_coarsen(0b1100_0001, 1), 0b1001);
+
+        for (start, end) in [(0, 1), (3, 9), (4, 8), (100, 1000), (63 << 4, 64 << 4)] {
+            for by in 1..4 {
+                assert_eq!(bitmap_coarsen(bitmap_bits(start, end, 4), by), bitmap_bits(start, end, 4 + by as u8));
+            }
+        }
     }
 }

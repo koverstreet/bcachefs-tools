@@ -428,16 +428,8 @@ static inline bool bch2_dev_btree_bitmap_marked_sectors_any(struct bch_dev *ca, 
 	return false;
 }
 
-bool bch2_dev_btree_bitmap_marked(struct bch_fs *, struct bkey_s_c);
-bool bch2_dev_btree_bitmap_marked_nogc(struct bch_fs *, struct bkey_s_c);
-
 #include "sb/members_defs_gen.h"
 
-struct sb_write;
-void bch2_dev_btree_bitmap_mark_locked(struct bch_fs *, struct bkey_s_c, struct sb_write *);
-void bch2_dev_btree_bitmap_mark(struct bch_fs *, struct bkey_s_c);
-
-int bch2_btree_bitmap_gc(struct bch_fs *);
 void bch2_maybe_schedule_btree_bitmap_gc_stop(struct bch_fs *);
 void bch2_maybe_schedule_btree_bitmap_gc(struct bch_fs *);
 
