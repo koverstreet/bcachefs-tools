@@ -57,6 +57,21 @@ static void journal_advance_devs_to_next_bucket(struct journal *j,
 	}
 }
 
+/*
+ * Each new set of journal devices is a new replicas entry, a superblock write:
+ * stick with the last write's devices unless another is this much faster.
+ */
+#define JOURNAL_DEV_STICKINESS		8
+
+static u64 journal_dev_score(struct journal *j, struct bch_dev *ca)
+{
+	u64 latency = atomic64_read(&ca->cur_latency[WRITE]) + 1;
+
+	return test_bit(ca->dev_idx, j->wp_prev_devs.d)
+		? latency
+		: latency * JOURNAL_DEV_STICKINESS;
+}
+
 static void __journal_write_alloc(struct journal *j,
 				  struct journal_buf *w,
 				  struct bch_devs_mask *devs,
@@ -80,29 +95,36 @@ static void __journal_write_alloc(struct journal *j,
 		bch2_dev_alloc_list_devs(c, &j->wp.stripe, devs,
 					 &chosen, j->wp_domain_keys, &devs_sorted);
 
+		/* The lowest score in the best failure domain, ties in sort order: */
 		struct bch_dev *ca = NULL;
 		darray_for_each(devs_sorted, i) {
-			ca = bch2_dev_get_ioref(c, *i, WRITE,
+			if (ca && j->wp_domain_keys[*i] != j->wp_domain_keys[ca->dev_idx])
+				break;
+
+			struct bch_dev *cand = bch2_dev_get_ioref(c, *i, WRITE,
 						BCH_DEV_WRITE_REF_journal_write);
-			if (!ca)
+			if (!cand)
 				continue;
 
-			struct journal_device *ja = &ca->journal;
+			struct journal_device *ja = &cand->journal;
 
 			/*
 			 * Check that we can use this device, and aren't
 			 * already using it:
 			 */
 			if (!ja->nr ||
-			    bch2_bkey_has_device_c(c, bkey_i_to_s_c(&w->key), ca->dev_idx) ||
-			    sectors > ja->sectors_free) {
-				enumerated_ref_put(&ca->io_ref[WRITE],
+			    bch2_bkey_has_device_c(c, bkey_i_to_s_c(&w->key), cand->dev_idx) ||
+			    sectors > ja->sectors_free ||
+			    (ca && journal_dev_score(j, cand) >= journal_dev_score(j, ca))) {
+				enumerated_ref_put(&cand->io_ref[WRITE],
 						   BCH_DEV_WRITE_REF_journal_write);
-				ca = NULL;
 				continue;
 			}
 
-			break;
+			if (ca)
+				enumerated_ref_put(&ca->io_ref[WRITE],
+						   BCH_DEV_WRITE_REF_journal_write);
+			ca = cand;
 		}
 
 		if (!ca)
@@ -145,6 +167,11 @@ static int journal_write_alloc(struct journal *j, struct journal_buf *w,
 
 retry_target:
 	devs = target_rw_devs(c, BCH_DATA_journal, target);
+
+	/* The last write's devices, if out of room, move to their next bucket: */
+	struct bch_devs_mask prev;
+	bitmap_and(prev.d, devs.d, j->wp_prev_devs.d, BCH_SB_MEMBERS_MAX);
+	journal_advance_devs_to_next_bucket(j, &prev, sectors, w->data->seq);
 retry_alloc:
 	__journal_write_alloc(j, w, &devs, sectors, replicas, replicas_want);
 
@@ -165,6 +192,12 @@ retry_alloc:
 	}
 done:
 	BUG_ON(bkey_val_u64s(&w->key.k) > BCH_REPLICAS_MAX);
+
+	if (*replicas) {
+		j->wp_prev_devs = (struct bch_devs_mask) {};
+		bkey_for_each_ptr(bch2_bkey_ptrs_c(bkey_i_to_s_c(&w->key)), ptr)
+			__set_bit(ptr->dev, j->wp_prev_devs.d);
+	}
 
 #if 0
 	/*

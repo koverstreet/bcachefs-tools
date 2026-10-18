@@ -446,6 +446,11 @@ nest! {
          * wp.stripe, protected by journal writes being allocated in order:
          */
         pub wp_domain_keys: [u64; c::BCH_SB_MEMBERS_MAX as usize],
+        /*
+         * The devices the last journal write went to, which the next one
+         * prefers - same protection as wp_domain_keys:
+         */
+        pub wp_prev_devs: c::bch_devs_mask,
         pub err_lock: c::spinlock_t,
 
         pub reclaim_lock: c::mutex,
