@@ -31,6 +31,20 @@ pub fn member_state_str(state: u8) -> &'static str {
 
 const BCH_MEMBER_V1_BYTES: usize = 56;
 
+/// bcachefs_format.h's BCH_SB_MEMBER_DELETED_UUID.
+const MEMBER_DELETED_UUID: [u8; 16] = [
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef,
+];
+
+impl c::bch_member {
+    /// Not an empty slot or a deleted member.
+    pub fn alive(&self) -> bool {
+        let uuid = crate::util::vstructs::plain_bytes(&self.uuid);
+        uuid != [0; 16] && uuid != MEMBER_DELETED_UUID
+    }
+}
+
 /// Member @idx of a members section, its bytes @b: one of @member_bytes from
 /// @start, copied - zero past the end of one shorter than bch_member. None
 /// if it's past the section's end.
