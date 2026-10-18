@@ -8,6 +8,8 @@
 //! - a table of Attrs - name, mode, what reading and writing do: the fs dir,
 //!   internal/.
 //!
+//! internal/btree_trans_stats_json is a bin_attribute, apart from the rest.
+//!
 //! The fs dir and internal/ are one filesystem's two views, debugging under
 //! internal/. A store to either is refused until the filesystem has started
 //! (EPERM). Triggers whose work needs the filesystem writable hold a write ref
@@ -15,7 +17,9 @@
 //! wakeups, cache shrinks, the logged-op knob, work that takes its own ref -
 //! need none.
 
+use core::ffi::CStr;
 use core::mem::offset_of;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 use cstruct_macros::c_export;
 
@@ -25,7 +29,9 @@ use crate::errcode::BchError;
 use crate::fs::{Fs, WriteRef};
 use crate::init::passes;
 use crate::opts::prt_compression_type;
+use crate::util::ffi::c_char;
 use crate::util::kernel::{READ, WRITE};
+use crate::util::locking::mutex_lock;
 use crate::util::log::LogMsg;
 use crate::util::sysfs::{self, parse_human_u64, parse_int, Attr, Dir, Files};
 use crate::util::{Printbuf, ToText};
@@ -151,6 +157,118 @@ pub static bch2_fs_internal_files: Files<{ INTERNAL.len() + 1 }> = Files::new(IN
 
 #[c_export]
 pub static bch2_fs_internal_sysfs_ops: c::sysfs_ops = sysfs::ops::<InternalDir>();
+
+// internal/btree_trans_stats_json, a bin_attribute: kernfs reads one a page a
+// call, so the JSON is made only at offset 0 - kept in
+// c->btree.trans.stats_json_buf - and the pages read are of one whole.
+
+/// Each btree transaction's name - bch2_btree_transaction_fns[], up to the
+/// first not yet registered - and its stats.
+fn trans_stats(c: &Fs) -> impl Iterator<Item = (&[u8], &c::btree_transaction_stats)> {
+    // SAFETY: a slot is written - set once, by bch2_trans_get_fn_idx() - as
+    // we read: a word, read as one
+    let fns = unsafe {
+        &*(&raw const c::bch2_btree_transaction_fns)
+            .cast::<[AtomicPtr<c_char>; c::BCH_TRANSACTIONS_NR as usize]>()
+    };
+    fns.iter()
+        .map(|f| f.load(Ordering::Relaxed))
+        .take_while(|f| !f.is_null())
+        // SAFETY: a registered name is a static string
+        .map(|f| unsafe { CStr::from_ptr(f.cast()) }.to_bytes())
+        .zip(c.btree.trans.stats.iter())
+}
+
+fn trans_stats_json(c: &Fs, out: &mut Printbuf) {
+    write!(out, "{{");
+    for (i, (name, s)) in trans_stats(c).enumerate() {
+        if i > 0 {
+            write!(out, ",");
+        }
+        write!(out, "\"");
+        out.write_bytes(name);
+        write!(out, "\":{{");
+
+        write!(out, "\"max_mem\":{},", s.max_mem);
+
+        write!(out, "\"duration\":");
+        s.duration.json_to_text(out);
+
+        if cfg!(CONFIG_BCACHEFS_LOCK_TIME_STATS) {
+            write!(out, ",\"lock_hold_times\":");
+            s.lock_hold_times.json_to_text(out);
+            write!(out, ",\"lock_wait_times\":");
+            s.lock_wait_times.json_to_text(out);
+        }
+
+        write!(out, "}}");
+    }
+    write!(out, "}}\n");
+}
+
+unsafe extern "C" fn trans_stats_json_read(_file: *mut c::file, kobj: *mut c::kobject,
+                                           _attr: *const c::bin_attribute, buf: *mut c_char,
+                                           off: c::loff_t, count: usize) -> isize {
+    // SAFETY: internal/'s kobject, which has this file
+    let c = unsafe { sysfs::obj_of::<InternalDir>(kobj) };
+
+    let _lock = mutex_lock(&c.btree.trans.stats_json_lock);
+    // SAFETY: the buffer is the lock's
+    let out = unsafe { Printbuf::borrow_raw(&raw mut (*c.as_ptr()).btree.trans.stats_json_buf) };
+
+    if off == 0 {
+        out.reset();
+        trans_stats_json(c, out);
+        if out.allocation_failure() {
+            return -(c::ENOMEM as isize);
+        }
+    }
+
+    let bytes = out.as_bytes();
+    let Some(rest) = bytes.get(off as usize..).filter(|r| !r.is_empty()) else {
+        return 0;
+    };
+    let n = count.min(rest.len());
+    // SAFETY: kernfs's buffer, of @count bytes
+    unsafe { core::ptr::copy_nonoverlapping(rest.as_ptr(), buf.cast::<u8>(), n) };
+    n as isize
+}
+
+/// Any write resets every transaction's stats.
+unsafe extern "C" fn trans_stats_json_write(_file: *mut c::file, kobj: *mut c::kobject,
+                                            _attr: *const c::bin_attribute, _buf: *mut c_char,
+                                            _off: c::loff_t, count: usize) -> isize {
+    // SAFETY: internal/'s kobject, which has this file
+    let c = unsafe { sysfs::obj_of::<InternalDir>(kobj) };
+
+    for (_, s) in trans_stats(c) {
+        let _lock = mutex_lock(&s.lock);
+        s.duration.reset();
+        s.lock_hold_times.reset();
+        s.lock_wait_times.reset();
+
+        // SAFETY: these are the stats' lock's
+        unsafe {
+            let s = core::ptr::from_ref(s).cast_mut();
+            (*s).nr_max_paths = 0;
+            (*s).max_mem = 0;
+            c::rust_kfree((*s).max_paths_text.cast());
+            (*s).max_paths_text = core::ptr::null_mut();
+        }
+    }
+    count as isize
+}
+
+#[c_export]
+pub static bin_attr_btree_trans_stats_json: c::bin_attribute = {
+    // SAFETY: the rest of a bin_attribute is NULL or zero
+    let mut a: c::bin_attribute = unsafe { core::mem::zeroed() };
+    a.attr.name = c"btree_trans_stats_json".as_ptr().cast();
+    a.attr.mode = 0o644;
+    a.read = Some(trans_stats_json_read);
+    a.write = Some(trans_stats_json_write);
+    a
+};
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
