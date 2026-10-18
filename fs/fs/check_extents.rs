@@ -210,7 +210,7 @@ fn overlapping_extents_found(
 
     let k1 = iter1.peek_max(t, end)?;
     if let Some(k1) = k1 {
-        write!(buf, "\n{}", k1.to_text(fs));
+        prt!(&mut buf, "\n{}", k1.to_text(fs));
     }
 
     let Some(k1) = k1.filter(|k1| k1.k.p == pos1) else {
@@ -230,7 +230,7 @@ fn overlapping_extents_found(
 
     let k2 = iter2.peek_max(t, end)?;
     if let Some(k2) = k2 {
-        write!(buf, "\n{}", k2.to_text(fs));
+        prt!(&mut buf, "\n{}", k2.to_text(fs));
     }
 
     let Some(k2) = k2.filter(|k2| k2.k.p == pos2.p && k2.k.size == pos2.size) else {

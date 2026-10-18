@@ -763,7 +763,7 @@ fn count_inode_keys(
 
         nr_keys += 1;
         if let Some(out) = out.as_deref_mut().filter(|_| nr_keys <= 10) {
-            writeln!(out, "{}", k.to_text(fs));
+            prt!(out, "{}\n", k.to_text(fs));
         }
 
         Ok(if nr_keys >= COUNT_INODE_KEYS_MAX { ControlFlow::Break(()) } else { ControlFlow::Continue(()) })

@@ -46,8 +46,8 @@ use crate::init::progress::Progress;
 use crate::inode;
 use crate::snapshots::{delete, snapshot, subvolume};
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
-use crate::util::Printbuf;
-use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err};
+use crate::util::{Printbuf, ToText};
+use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err, prt};
 use core::fmt;
 use cstruct_macros::c_export;
 
@@ -147,7 +147,7 @@ fn check_snapshot_tree<'t>(
         let mut found = Printbuf::new();
         match &root {
             Err(e) => write!(found, "({})", e.msg()),
-            Ok(r)  => write!(found, "{}", r.to_text(fs)),
+            Ok(r)  => prt!(&mut found, "{}", r.to_text(fs)),
         }
         if fsck_err!(t, id::snapshot_tree_to_missing_snapshot,
                      "snapshot tree points to missing/incorrect snapshot:\n{}\n{}",
@@ -629,16 +629,15 @@ impl<'n, 'f> EdgeNodes<'n, 'f> {
     }
 }
 
-impl fmt::Display for EdgeNodes<'_, '_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "\nnode:     {}", self.node.to_text(self.fs))?;
+impl ToText for EdgeNodes<'_, '_> {
+    fn to_text(&self, out: &mut Printbuf) {
+        prt!(out, "\nnode:     {}", self.node.to_text(self.fs));
         if let Some(t) = self.target {
-            write!(f, "\ntarget:   {}", t.to_text(self.fs))?;
+            prt!(out, "\ntarget:   {}", t.to_text(self.fs));
         }
         if let Some(c) = self.claimant {
-            write!(f, "\nclaimant: {}", c.to_text(self.fs))?;
+            prt!(out, "\nclaimant: {}", c.to_text(self.fs));
         }
-        Ok(())
     }
 }
 
@@ -910,12 +909,12 @@ fn check_skiplists<'a, 't>(
         }
 
         let mut msg = Printbuf::new();
-        write!(msg, "snapshot with bad skiplist pointer {skip}:\n{}\n", n.to_text(fs));
+        prt!(&mut msg, "snapshot with bad skiplist pointer {skip}:\n{}\n", n.to_text(fs));
         if skip != 0 {
             let mut iter = BtreeIter::new(t, c::btree_id::snapshots, pos(0, skip as u64),
                                           BtreeIterFlags::empty());
             let skip_k = iter.peek_slot(t)?.expect("a slot always has a key");
-            write!(msg, "points to\n  {}\n", skip_k.to_text(fs));
+            prt!(&mut msg, "points to\n  {}\n", skip_k.to_text(fs));
         }
 
         if fsck_err!(t, id::snapshot_bad_skiplist, "{msg}")? {
@@ -1030,13 +1029,13 @@ fn check_to_subvol<'a, 't>(
     let v = n.v();
     if v.state().get() == c::bch_snapshot_state::SNAPSHOT_STATE_live.0 && v.subvol_obsolete() != (v.subvol() != 0) {
         let mut msg = Printbuf::new();
-        write!(msg, "snapshot node {id} has wrong subvol flag:\n{}", n.to_text(fs));
+        prt!(&mut msg, "snapshot node {id} has wrong subvol flag:\n{}", n.to_text(fs));
 
         if v.subvol() != 0 {
             let mut iter = BtreeIter::new(t, c::btree_id::subvolumes, pos(0, v.subvol() as u64),
                                           BtreeIterFlags::empty());
             let subvol_k = iter.peek_slot(t)?.expect("a slot always has a key");
-            write!(msg, "\n{}", subvol_k.to_text(fs));
+            prt!(&mut msg, "\n{}", subvol_k.to_text(fs));
         }
 
         if fsck_err!(t, id::snapshot_subvol_flag_wrong, "{msg}")? {
@@ -1356,7 +1355,7 @@ pub(crate) fn check_key_has_snapshot<'a>(
 
     ret?;
 
-    write!(buf, "{} {}", iter.btree(), k.to_text(fs));
+    prt!(&mut buf, "{} {}", iter.btree(), k.to_text(fs));
 
     if state == IdState::SNAPSHOT_ID_deleted {
         // At runtime - data moves, bch2_data_update_init() - not in fsck, where

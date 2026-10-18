@@ -73,7 +73,8 @@ use crate::util::ffi::Opaque;
 use crate::util::log::{self, LogLevel, LogMsg};
 use crate::util::sync::{new_rwsem, RwSem};
 use crate::util::Printbuf;
-use crate::{bch_err, bch_err_msg, bch_info, bch_notice, fs_inconsistent, fsck_err, trans_inconsistent};
+use crate::{bch_err, bch_err_msg, bch_info, bch_notice, fs_inconsistent, fsck_err, prt,
+            trans_inconsistent};
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cstruct_macros::c_export;
@@ -192,7 +193,7 @@ impl Fs {
         };
 
         let _ = writeln!(out, "Snapshot deletion v{}", d.version.load(Ordering::Relaxed));
-        let _ = writeln!(out, "Progress: {}", d.progress);
+        prt!(out, "Progress: {}\n", d.progress);
         nodes_to_text(out, Some(nodes), false);
     }
 }
@@ -330,7 +331,7 @@ fn check_no_data(t: &TransAttempt<'_, '_>, id: u32, op: &str, run: Option<&Run<'
     let mut msg = Printbuf::new();
     let _ = writeln!(msg, "{op} snapshot node {id} ({shape}) still has {} keys / {} sectors accounted to it - refusing, to prevent data loss; scheduling repair:{acct}",
                      acct.keys(), acct.sectors());
-    let _ = writeln!(msg, "  {}", (&s).to_text(fs));
+    prt!(&mut msg, "  {}\n", (&s).to_text(fs));
 
     // The content passes, per btree, because their key_has_snapshot repairs
     // are what can remove stranded keys - check_inodes alone can't repair a
@@ -485,7 +486,7 @@ fn check_deletable(t: &TransAttempt<'_, '_>, id: u32, delete_interior: bool, run
             c::bcachefs_metadata_version::bcachefs_metadata_version_per_dev_fragmentation_lru.0) {
             let mut msg = LogMsg::new(fs);
             let _ = writeln!(msg, "deleting node with bad subvolume pointer:");
-            let _ = write!(msg, "{}", (&s).to_text(fs));
+            prt!(&mut msg, "{}", (&s).to_text(fs));
             return fs.throw(bch_errcode::BCH_ERR_EINVAL_snapshot_delete_bad_subvol);
         }
     }
@@ -665,7 +666,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::
     let id = u.k().p.offset as u32;
 
     let mut msg = LogMsg::new(fs);
-    let _ = writeln!(msg, "{}", u.to_text(fs));
+    prt!(&mut msg, "{}\n", u.to_text(fs));
 
     if u.v().children()[1] != 0 {
         bch_err!(fs, "cannot undelete a node with two children");
@@ -719,7 +720,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::
         return fs.throw(bch_errcode::BCH_ERR_fsck_repair_unimplemented);
     };
 
-    let _ = writeln!(msg, "attaching to child  {}", child.to_text(fs));
+    prt!(&mut msg, "attaching to child  {}\n", child.to_text(fs));
 
     let parent_id = child.v().parent();
     if parent_id != 0 && parent_id <= id {
@@ -733,7 +734,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::
             return cannot_undelete(fs, &mut msg, "parent no longer exists");
         };
 
-        let _ = writeln!(msg, "attaching to parent {}", parent.to_text(fs));
+        prt!(&mut msg, "attaching to parent {}\n", parent.to_text(fs));
 
         if !in_tree(parent.v()) {
             return cannot_undelete(fs, &mut msg, "parent is itself deleted");
@@ -751,7 +752,7 @@ pub fn node_undelete<'t>(t: &TransAttempt<'_, 't>, u: &mut TransBkey<'_, 't, c::
             Err(e) => return Err(e),
             Ok(mut s_t) => if s_t.v().root_snapshot.get() == child_id {
                 s_t.v_mut().root_snapshot = id.into();
-                let _ = writeln!(msg, "updated tree {}", s_t.to_text(fs));
+                prt!(&mut msg, "updated tree {}\n", s_t.to_text(fs));
             },
         }
     }
@@ -1036,7 +1037,7 @@ fn check_should_delete_leaf(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, v: &c::Snap
     let fs = t.fs();
 
     let mut buf = Printbuf::new();
-    let _ = write!(buf, "{}", k.to_text(fs));
+    prt!(&mut buf, "{}", k.to_text(fs));
 
     match state(v) {
         c::bch_snapshot_state::SNAPSHOT_STATE_live => Ok(false),
@@ -1160,7 +1161,7 @@ fn check_should_delete_snapshot(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, coll: &
         let mut msg = LogMsg::new(fs);
 
         let _ = writeln!(msg, "snapshot deletion found damaged topology (resolved live child {live_child}):");
-        let _ = write!(msg, "{}", k.to_text(fs));
+        prt!(&mut msg, "{}", k.to_text(fs));
 
         passes::run_explicit(fs, &mut msg, BCH_RECOVERY_PASS_check_snapshots,
                              c::bch_run_recovery_pass_flags::empty())?;

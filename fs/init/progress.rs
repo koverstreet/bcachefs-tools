@@ -23,8 +23,8 @@ use crate::fs::Fs;
 use crate::init::passes;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::local_clock;
+use crate::util::{Printbuf, ToText};
 use core::ffi::CStr;
-use core::fmt;
 use cstruct_macros::c_export;
 
 crate::module_param! {
@@ -111,20 +111,19 @@ impl ProgressState {
 }
 
 /// How far it's got: as bch2_progress_to_text().
-impl fmt::Display for ProgressState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl ToText for ProgressState {
+    fn to_text(&self, out: &mut Printbuf) {
         let percent = if self.total != 0 {
             (self.seen.wrapping_mul(100) / self.total) as u32
         } else {
             0
         };
-        write!(f, "{percent}%, done {}/{} {}", self.seen, self.total, units_str(self.units))?;
+        write!(out, "{percent}%, done {}/{} {}", self.seen, self.total, units_str(self.units));
 
         // No node means no position: a counter-based indicator, or nothing seen yet
         if self.last_node != 0 {
-            write!(f, ", at {}", self.pos)?;
+            crate::prt!(out, ", at {}", self.pos);
         }
-        Ok(())
     }
 }
 
@@ -277,9 +276,9 @@ impl c::progress_indicator {
 }
 
 /// How far the work has got: as bch2_progress_to_text().
-impl fmt::Display for c::progress_indicator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.state.read().fmt(f)
+impl ToText for c::progress_indicator {
+    fn to_text(&self, out: &mut Printbuf) {
+        self.state.read().to_text(out)
     }
 }
 
@@ -370,8 +369,7 @@ pub fn bch2_progress_update_count(c: &Opaque<c::bch_fs>, s: &c::progress_indicat
 #[c_export]
 #[cold]
 pub fn bch2_progress_to_text(out: &mut c::printbuf, s: &c::progress_indicator) {
-    let out = unsafe { crate::util::Printbuf::borrow_raw(out) };
-    let _ = write!(out, "{s}");
+    s.to_text(unsafe { Printbuf::borrow_raw(out) });
 }
 
 /// What BCH_IOCTL_RECOVERY_STATUS copies out, from one consistent read.

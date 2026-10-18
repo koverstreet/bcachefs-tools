@@ -17,7 +17,7 @@ use crate::snapshots::{snapshot, subvolume};
 use crate::util::os_str::OsStrExt;
 use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;
-use crate::{fsck_err, fsck_err_on, inode_fsck_err};
+use crate::{fsck_err, fsck_err_on, inode_fsck_err, prt};
 use core::ffi::c_void;
 
 /// A btree that's a hash table keyed by name: dirents, xattrs. The keys passed
@@ -641,7 +641,7 @@ impl Repair<'_> {
                     return self.update_backpointers::<Dirents>(t, old.k.p, new.as_ref());
                 }
                 // name taken - record a sample of the dirents that hold them
-                Some(dup) if i < 10 => write!(collisions, "\n{}", dup.to_text(fs)),
+                Some(dup) if i < 10 => prt!(&mut collisions, "\n{}", dup.to_text(fs)),
                 Some(_) => {}
             }
         }
@@ -649,9 +649,9 @@ impl Repair<'_> {
         let mut msg = LogMsg::new(fs);
         write!(msg, "couldn't rename dirent to resolve hash collision: all 1000 \"");
         msg.write_bytes(old_name.as_bytes());
-        write!(msg, ".fsck_renamed-N\" names in dir inum {} snapshot {} are taken\n\
-                     renaming:\n  {}\ncollided with:",
-               { old.k.p.inode }, { old.k.p.snapshot }, old.to_text(fs));
+        prt!(&mut msg, ".fsck_renamed-N\" names in dir inum {} snapshot {} are taken\n\
+                        renaming:\n  {}\ncollided with:",
+             { old.k.p.inode }, { old.k.p.snapshot }, old.to_text(fs));
         msg.indent_add(2);
         write!(msg, "{collisions}");
         Err(fs.err(bch_errcode::BCH_ERR_EEXIST_str_hash_set))

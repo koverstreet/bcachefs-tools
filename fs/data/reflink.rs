@@ -46,7 +46,7 @@ use crate::util::ffi::Opaque;
 use crate::util::kernel::fatal_signal_pending;
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Validated};
 use crate::util::Printbuf;
-use crate::{bch_err, bch_err_fn, bkey_fsck_err_on, fsck_err_flags, fsck_err_on, inode, inode_fsck_err};
+use crate::{bch_err, bch_err_fn, bkey_fsck_err_on, fsck_err_flags, fsck_err_on, inode, inode_fsck_err, prt};
 use core::cell::UnsafeCell;
 use core::ffi::{c_int, c_uint};
 use core::mem::{offset_of, size_of};
@@ -564,7 +564,7 @@ fn indirect_extent_missing_error(
     t.result(unsafe { c::bch2_inum_offset_err_msg_trans_norestart(t.raw(), buf.as_raw(), 0, missing_pos) })?;
 
     write!(buf, "-{}\n", missing_pos.offset.wrapping_add(missing.end - missing.start) << 9);
-    write!(buf, "{}", p.to_text(fs));
+    prt!(&mut buf, "{}", p.to_text(fs));
     write!(buf, "\nmissing reflink btree range {}-{}", missing.start, missing.end);
 
     if inode_fsck_err!(t, p.k.p, id::reflink_p_to_missing_reflink_v, "{}", buf.as_str())? {

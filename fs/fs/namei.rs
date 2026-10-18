@@ -1144,7 +1144,7 @@ fn check_dirent_inode_dirent(
     };
 
     let mut buf = Printbuf::new();
-    write!(buf, "{}\n{}", d.k().to_text(fs), bp.to_text(fs));
+    prt!(&mut buf, "{}\n{}", d.k().to_text(fs), bp.to_text(fs));
 
     if target.is_dir() || target.bi_subvol != 0 {
         // Which of the two is wrong?

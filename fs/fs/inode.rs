@@ -54,7 +54,7 @@ use crate::util::ffi::{opt_cstr, Opaque};
 use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;
 use core::mem::MaybeUninit;
-use crate::{bch_err_fn, bch_err_msg, bkey_fsck_err_on};
+use crate::{bch_err_fn, bch_err_msg, bkey_fsck_err_on, prt};
 use core::mem::size_of;
 use core::ops::ControlFlow;
 use crate::btree_id;
@@ -259,7 +259,7 @@ fn unpack_error(fs: &Fs, k: BkeySC<'_>, u: &c::bch_inode_unpacked, fieldnr: usiz
 
     let mut msg = LogMsg::new(fs);
     msg.set_suppressed(true);
-    writeln!(msg, "inode unpack error at field {fieldnr} ({}) in {}", names[fieldnr], k.k);
+    prt!(&mut msg, "inode unpack error at field {fieldnr} ({}) in {}\n", names[fieldnr], k.k);
     u.to_text(&mut msg);
 
     crate::init::error::count_fsck_err(fs, id::inode_unpack_error, &mut msg);
@@ -941,7 +941,7 @@ fn fields_to_text(out: &mut Printbuf, inode: &c::bch_inode_unpacked) {
 
     writeln!(out, "journal_seq={}", inode.bi_journal_seq);
     writeln!(out, "hash_seed={:x}", inode.bi_hash_seed);
-    writeln!(out, "hash_type={}", crate::str_hash::StrHashType(inode.inode_str_hash()));
+    prt!(out, "hash_type={}\n", crate::str_hash::StrHashType(inode.inode_str_hash()));
     writeln!(out, "bi_size={}", inode.bi_size);
     writeln!(out, "bi_sectors={}", inode.bi_sectors);
     writeln!(out, "bi_version={}", inode.bi_version);

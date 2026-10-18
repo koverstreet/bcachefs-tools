@@ -40,7 +40,7 @@ use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use crate::util::log::{LogLevel, LogMsg};
 use crate::{bch_err, bch_err_msg, bkey_fsck_err_on, fs_inconsistent, fsck_err,
-            fsck_err_on, fsck_err_report};
+            fsck_err_on, fsck_err_report, prt};
 use core::fmt;
 use core::mem::offset_of;
 use cstruct_macros::c_export;
@@ -504,7 +504,7 @@ fn check_subvol<'a, 't>(
         Ok(r) => r,
         Err(e) if e.matches(c::ENOENT) => {
             let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
-            writeln!(msg, "subvolume points to missing snapshot\n{}", s.to_text(fs));
+            prt!(&mut msg, "subvolume points to missing snapshot\n{}\n", s.to_text(fs));
             passes::run_explicit(fs, &mut msg, BCH_RECOVERY_PASS_reconstruct_snapshots,
                                  c::bch_run_recovery_pass_flags::from_bits_retain(0))?;
             return Err(e);
