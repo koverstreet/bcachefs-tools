@@ -8,7 +8,10 @@
 //! - a table of Attrs - name, mode, what reading and writing do: the fs dir,
 //!   internal/;
 //! - a ListAttrs, a file per entry of an x-macro list: time_stats/,
-//!   time_stats_json/, counters/.
+//!   time_stats_json/, counters/;
+//! - the options' own attributes, added at runtime by
+//!   bch2_opts_create_sysfs_files(): options/. opts.c is still C: opt_show()
+//!   and opt_store() are over opts.rs's wrappers.
 //!
 //! internal/btree_trans_stats_json is a bin_attribute, apart from the rest.
 //!
@@ -19,7 +22,7 @@
 //! wakeups, cache shrinks, the logged-op knob, work that takes its own ref -
 //! need none.
 
-use core::ffi::CStr;
+use core::ffi::{c_int, c_uint, CStr};
 use core::mem::offset_of;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
@@ -27,14 +30,15 @@ use cstruct_macros::c_export;
 
 use crate::accounting;
 use crate::c;
-use crate::errcode::BchError;
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, WriteRef};
 use crate::init::passes;
-use crate::opts::prt_compression_type;
+use crate::opts::{self, prt_compression_type, OptChange};
 use crate::sb::io::COUNTERS;
-use crate::util::ffi::c_char;
+use crate::sb::members;
+use crate::util::ffi::{c_char, with_cstr};
 use crate::util::kernel::{READ, WRITE};
-use crate::util::locking::mutex_lock;
+use crate::util::locking::{mutex_lock, MemallocFlags};
 use crate::util::log::LogMsg;
 use crate::util::sysfs::{self, parse_human_u64, parse_int, Attr, Dir, Files, ListAttrs};
 use crate::util::{Printbuf, ToText};
@@ -404,6 +408,145 @@ pub static bch2_fs_counters_files: Files<{ c::BCH_COUNTER_NR as usize + 1 }> = F
 
 #[c_export]
 pub static bch2_fs_counters_sysfs_ops: c::sysfs_ops = sysfs::ops::<CountersDir>();
+
+// ── options/ ────────────────────────────────────────────────────────────────
+//
+// An option's file is its bch_option's attribute, added at runtime -
+// bch2_opts_create_sysfs_files() - to options/ for the filesystem options,
+// and to a device's dir for the device options, among its own files.
+
+fn opt_show(c: &Fs, ca: Option<&c::bch_dev>, id: c::bch_opt_id, out: &mut Printbuf)
+    -> Result<(), BchError>
+{
+    let opt = &opts::opt_table()[id.0 as usize];
+
+    // c->disk_sb.sb is reallocated and freed under sb_lock: hold it across
+    // the reads
+    let _sb_lock = c.sb_lock();
+
+    let v = match ca {
+        Some(ca) if opt.type_ == c::opt_type::BCH_OPT_STR_MEMBER => {
+            // The value lives in the member, not a u64 - render it here:
+            let Some(m) = members::sb_member(c.sb(), ca.dev_idx as u32) else {
+                return c.throw(bch_errcode::BCH_ERR_ENOENT_dev_idx_not_found);
+            };
+            out.write_bytes(opt.member_str(&m));
+            out.write_bytes(b"\n");
+            return Ok(());
+        }
+        Some(ca) => {
+            if !(opt.has(c::opt_flags::OPT_DEVICE) && opt.get_member.is_some()) {
+                return c.throw(bch_errcode::BCH_ERR_EINVAL_sysfs_opt_not_found);
+            }
+            opts::opt_from_sb(c.sb(), id, ca.dev_idx as u32)
+        }
+        None => {
+            if !opt.has(c::opt_flags::OPT_FS) {
+                return c.throw(bch_errcode::BCH_ERR_EINVAL_sysfs_opt_not_found);
+            }
+            opts::opt_get_by_id(&c.opts, id)
+        }
+    };
+
+    opts::opt_to_text(out, c, opt, v, c::OPT_SHOW_FULL_LIST);
+    out.write_bytes(b"\n");
+    Ok(())
+}
+
+fn opt_store(c: &Fs, ca: Option<&c::bch_dev>, id: c::bch_opt_id, s: &str) -> Result<(), BchError> {
+    let opt = &opts::opt_table()[id.0 as usize];
+    // strim()
+    let val = s.trim_matches(|ch| matches!(ch, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r'));
+
+    with_cstr(val, |val| {
+        // We don't need c->writes for correctness, but it eliminates an
+        // unsightly error message in the dmesg log when we're RO:
+        let _ref = write_ref(c)?;
+        let _noio = MemallocFlags::noio();
+        let mut change = OptChange::new(c);
+
+        let v = opts::opt_parse(Some(c), opt, val, None).map_err(|e| BchError::from_raw(-e))?;
+        change.pre_set(ca, 0, id, v)?;
+
+        let changed = if opt.in_sb() {
+            change.set_sb(ca, opt, v, val)
+        } else if ca.is_none() {
+            opts::opt_get_by_id(&c.opts, id) != v
+        } else {
+            panic!("device option {:?} isn't a superblock option: not supported", opt.name())
+        };
+
+        if changed {
+            if ca.is_none() {
+                change.set_fs_opt(id, v);
+            }
+            change.post_set(ca, 0, id, v);
+        }
+        Ok(())
+    })?
+}
+
+/// The option @attr is the file of: only options' files are added where
+/// this is asked.
+fn attr_opt(attr: &c::attribute) -> Result<c::bch_opt_id, BchError> {
+    opts::opt_from_attr(attr).ok_or(c::EINVAL.into())
+}
+
+struct OptsDir;
+
+unsafe impl Dir for OptsDir {
+    type Obj = Fs;
+    const KOBJ: usize = offset_of!(Fs, opts_dir);
+
+    fn show(c: &Fs, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
+        opt_show(c, None, attr_opt(attr)?, out)
+    }
+
+    fn store(c: &Fs, attr: &c::attribute, s: &str) -> Result<(), BchError> {
+        opt_store(c, None, attr_opt(attr)?, s)
+    }
+}
+
+#[c_export]
+#[c("struct attribute *bch2_fs_opts_dir_files[]")]
+pub static bch2_fs_opts_dir_files: Files<1> = Files::new::<Fs>(&[]);
+
+#[c_export]
+pub static bch2_fs_opts_dir_sysfs_ops: c::sysfs_ops = sysfs::ops::<OptsDir>();
+
+/// Add a file for each option of @ty - OPT_FS, OPT_DEVICE - to @kobj: the
+/// filesystem's options/, or a device's dir.
+///
+/// # Safety
+/// @kobj is a live, added kobject, whose sysfs_ops handle options' files.
+#[c_export]
+pub unsafe extern "C" fn bch2_opts_create_sysfs_files(kobj: *mut c::kobject, ty: c_uint) -> c_int {
+    let fs_opts = ty == c::opt_flags::OPT_FS.bits();
+
+    for opt in opts::opt_table() {
+        if opt.has(c::opt_flags::OPT_HIDDEN) || opt.flags.bits() & ty == 0 {
+            continue;
+        }
+
+        /*
+         * For options that are both OPT_FS and OPT_DEVICE (currently only
+         * @discard), expose only the per-device sysfs entry: the FS-level
+         * entry would alias to c->opts but member-backed options have no
+         * FS-wide superblock field, so writes via the FS path are silent
+         * no-ops and reads can't disambiguate which scope is being shown.
+         * Mount-time @-o discard= remains the only fs-scope handle.
+         */
+        if fs_opts && opt.has(c::opt_flags::OPT_DEVICE) {
+            continue;
+        }
+
+        // SAFETY: the caller's; an option's attribute is static
+        if let Err(e) = unsafe { sysfs::create_file(kobj, &opt.attr) } {
+            return -e.raw();
+        }
+    }
+    0
+}
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 

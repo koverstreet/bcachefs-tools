@@ -9,12 +9,8 @@ struct sysfs_ops;
 
 #include "debug/sysfs_gen.h"
 
-extern struct attribute *bch2_fs_opts_dir_files[];
 extern struct attribute *bch2_dev_files[];
 
-extern const struct sysfs_ops bch2_fs_opts_dir_sysfs_ops;
 extern const struct sysfs_ops bch2_dev_sysfs_ops;
-
-int bch2_opts_create_sysfs_files(struct kobject *, unsigned);
 
 #endif  /* _BCACHEFS_SYSFS_H_ */
