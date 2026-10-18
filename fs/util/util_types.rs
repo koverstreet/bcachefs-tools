@@ -76,6 +76,7 @@ c_extern! {
     pub fn bch2_ktime_get_coarse_real_ts64(ts: *mut c::timespec64);
     pub fn bch2_queue_work(wq: *mut c::workqueue_struct, work: *mut c::work_struct) -> bool;
     pub fn bch2_capable(cap: c_int) -> bool;
+    pub fn bch2_sysfs_create_file(kobj: *mut c::kobject, attr: *const c::attribute) -> c_int;
     #[cfg(__KERNEL__)]
     pub fn bch2_cpumask_local_spread(i: c_uint) -> c_uint;
     #[cfg(__KERNEL__)]

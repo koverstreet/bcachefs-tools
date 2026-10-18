@@ -1477,6 +1477,11 @@ bool bch2_capable(int cap)
 	return capable(cap);
 }
 
+int bch2_sysfs_create_file(struct kobject *kobj, const struct attribute *attr)
+{
+	return sysfs_create_file(kobj, attr);
+}
+
 #ifdef __KERNEL__
 #include <linux/cpumask.h>
 #include <linux/numa.h>
