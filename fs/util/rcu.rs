@@ -61,6 +61,41 @@ impl Drop for ReadGuard {
     }
 }
 
+// ── RcuPtr ───────────────────────────────────────────────────────────────
+
+/// C's `T __rcu *` to an object C owns - a bch_dev in c->devs[] - laid out as
+/// C's pointer: C publishes it with rcu_assign_pointer(), and frees what it
+/// replaces only after a grace period.
+#[repr(transparent)]
+pub struct RcuPtr<T>(AtomicPtr<T>);
+
+// SAFETY: zeroed is NULL, nothing published
+unsafe impl<T> ::pin_init::Zeroable for RcuPtr<T> {}
+
+impl<T> RcuPtr<T> {
+    /// rcu_dereference(): what's published, for as long as @_g's section.
+    pub fn read<'a>(&'a self, _g: &'a ReadGuard) -> Option<&'a T> {
+        // SAFETY: what's published is a valid T, freed only after a grace
+        // period - past @_g's section
+        unsafe { self.0.load(Ordering::Acquire).as_ref() }
+    }
+
+    /// The pointer as it is, for C that takes it: rcu_dereference_protected()'s
+    /// - its holder's lock, or a ref, keeps it alive, not this.
+    pub fn as_ptr(&self) -> *mut T {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    /// rcu_assign_pointer() @p.
+    ///
+    /// # Safety
+    /// The caller is the writer - holds the writers' lock - and what it
+    /// replaces is freed only after a grace period.
+    pub unsafe fn assign(&self, p: *mut T) {
+        self.0.store(p, Ordering::Release)
+    }
+}
+
 // ── RcuBuf ───────────────────────────────────────────────────────────────
 
 /// What an RcuBuf can point to: a buffer starting with an rcu_head, which a

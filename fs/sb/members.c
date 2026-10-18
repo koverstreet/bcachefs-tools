@@ -1024,13 +1024,17 @@ void rust_bch2_dev_put(struct bch_dev *ca)
 	bch2_dev_put(ca);
 }
 
-struct bch_dev *rust_bch2_dev_tryget_noerror(struct bch_fs *c, unsigned dev)
+void rust_bch2_dev_get(struct bch_dev *ca)
 {
-	return bch2_dev_tryget_noerror(c, dev);
+	bch2_dev_get(ca);
 }
 
-struct bch_dev *rust_bch2_get_next_online_dev(struct bch_fs *c, struct bch_dev *ca,
-					      unsigned state_mask, int rw, unsigned ref_idx)
+void rust_bch2_dev_get_outer(struct bch_dev *ca)
 {
-	return bch2_get_next_online_dev(c, ca, state_mask, rw, ref_idx);
+	bch2_dev_get_outer(ca);
+}
+
+void rust_bch2_dev_put_outer(struct bch_dev *ca)
+{
+	bch2_dev_put_outer(ca);
 }

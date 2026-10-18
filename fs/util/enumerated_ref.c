@@ -137,6 +137,11 @@ void rust_enumerated_ref_put(struct enumerated_ref *ref, unsigned idx)
 	enumerated_ref_put(ref, idx);
 }
 
+bool rust_enumerated_ref_is_zero(struct enumerated_ref *ref)
+{
+	return enumerated_ref_is_zero(ref);
+}
+
 __cold void enumerated_ref_to_text(struct printbuf *out,
 			    struct enumerated_ref *ref,
 			    const char * const names[])

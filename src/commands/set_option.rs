@@ -3,6 +3,7 @@ use std::ffi::CString;
 use anyhow::{bail, Result};
 use bcachefs_kernel::c;
 use bcachefs_kernel::fs::{Fs, OpenFs};
+use bcachefs_kernel::util::rcu;
 use bcachefs_kernel::opt_set;
 use clap::{Arg, ArgAction, Command};
 
@@ -254,9 +255,9 @@ fn set_option_offline(
 }
 
 fn name_to_dev_idx(fs: &Fs, name: &str) -> Option<usize> {
-    (0..fs.nr_devices())
-        .find(|&i| fs.dev_get(i).is_some_and(|ca| ca.name().to_bytes() == name.as_bytes()))
-        .map(|i| i as usize)
+    fs.devs_rcu(&rcu::read_lock())
+        .find(|ca| ca.name().to_bytes() == name.as_bytes())
+        .map(|ca| ca.dev_idx as usize)
 }
 
 pub const CMD: super::CmdDef = raw_cmd!("set-fs-option", "Set filesystem options", cmd_set_option);

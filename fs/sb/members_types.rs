@@ -38,7 +38,10 @@ c_extern! {
                                idx: c_uint);
     pub fn bch2_sb_nr_devices(sb: *const Head<c::bch_sb>) -> c_uint;
     pub fn rust_bch2_dev_put(ca: *mut c::bch_dev);
-    pub fn rust_bch2_dev_tryget_noerror(c: *mut c::bch_fs, dev: c_uint) -> *mut c::bch_dev;
-    pub fn rust_bch2_get_next_online_dev(c: *mut c::bch_fs, ca: *mut c::bch_dev, state_mask: c_uint,
-                                         rw: c_int, ref_idx: c_uint) -> *mut c::bch_dev;
+    pub fn rust_bch2_dev_get(ca: *mut c::bch_dev);
+    pub fn rust_bch2_dev_get_outer(ca: *mut c::bch_dev);
+    pub fn rust_bch2_dev_put_outer(ca: *mut c::bch_dev);
+    pub fn bch2_dev_missing_atomic(c: *mut c::bch_fs, dev: c_uint);
+    pub fn bch2_dev_missing_bkey(c: *mut c::bch_fs, k: c::bkey_s_c, dev: c_uint) -> c_int;
+    pub fn bch2_dev_bucket_missing(ca: *mut c::bch_dev, bucket: u64);
 }

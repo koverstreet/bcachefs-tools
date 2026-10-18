@@ -9,7 +9,6 @@
 // header for scripting use (e.g. `bcachefs show-super -F version`).
 
 use std::ffi::CString;
-use std::ops::ControlFlow;
 
 use anyhow::{anyhow, Result};
 use bch_bindgen::fs::FsExt;
@@ -89,7 +88,7 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
 
     // Use the per-device superblock, not c->disk_sb.sb — the filesystem-level
     // copy omits fields like magic and layout that __copy_super doesn't transfer.
-    let _ = fs.for_each_online_member(|ca| {
+    for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_bch2_online_devs) {
         let sb = ca.disk_sb.sb();
 
         let mut fields = fields;
@@ -106,8 +105,7 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
         buf.set_human_readable(true);
         unsafe { crate::wrappers::sb_display::sb_to_text_with_names(&mut buf, fs.as_ptr(), sb, cli.layout, fields, field_only) };
         print!("{}", buf);
-        ControlFlow::Continue(())
-    });
+    }
 
     Ok(())
 }

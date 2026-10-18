@@ -587,7 +587,7 @@ pub struct Fs {
     pub read_only_work: c::work_struct,
 
     #[c("struct bch_dev __rcu *devs[BCH_SB_MEMBERS_MAX]")]
-    pub devs: [*mut c::bch_dev; c::BCH_SB_MEMBERS_MAX as usize],
+    pub devs: [crate::util::rcu::RcuPtr<c::bch_dev>; c::BCH_SB_MEMBERS_MAX as usize],
     #[c("struct bch_devs_mask devs_online")]
     pub devs_online: c::AtomicDevsMask,
     #[c("struct bch_devs_mask devs_removed")]

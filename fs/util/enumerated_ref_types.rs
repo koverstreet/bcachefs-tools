@@ -28,4 +28,5 @@ c_default!(enumerated_ref);
 c_extern! {
     pub fn rust_enumerated_ref_tryget(r: *mut c::enumerated_ref, idx: c_uint) -> bool;
     pub fn rust_enumerated_ref_put(r: *mut c::enumerated_ref, idx: c_uint);
+    pub fn rust_enumerated_ref_is_zero(r: *mut c::enumerated_ref) -> bool;
 }

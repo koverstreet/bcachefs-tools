@@ -168,7 +168,7 @@ unsafe fn mark_nouse_range(ca: *const c::bch_dev, sector_from: u64, sector_to: u
 /// Mark all space NOT covered by the reserved extents as nouse,
 /// plus the space for the default superblock layout.
 unsafe fn mark_unreserved_space(fs: *mut c::bch_fs, extents: &[CRange]) {
-    let ca = (*fs).devs[0];
+    let ca = (*fs).devs[0].as_ptr();
     let bucket_size = (*ca).mi.bucket_size as u32;
     let nbuckets = (*ca).mi.nbuckets;
 
@@ -473,7 +473,7 @@ fn migrate_fs(
 
     // Calculate reserve_start: round up (superblock_size * 2 + BCH_SB_SECTOR) sectors
     // to bucket boundary (in bytes)
-    let bucket_bytes = unsafe { (*(*fs.as_ptr()).devs[0]).mi.bucket_size as u64 } << 9;
+    let bucket_bytes = unsafe { (*(*fs.as_ptr()).devs[0].as_ptr()).mi.bucket_size as u64 } << 9;
     let reserve_start = (((superblock_size as u64 * 2 + c::BCH_SB_SECTOR as u64) << 9)
         .div_ceil(bucket_bytes)) * bucket_bytes;
 
@@ -573,7 +573,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
         .map_err(|e| anyhow!("Error allocating buckets_nouse: {}", e))?;
 
     // Mark the new sb bucket range as nouse
-    let ca = unsafe { (*fs.as_ptr()).devs[0] };
+    let ca = unsafe { (*fs.as_ptr()).devs[0].as_ptr() };
     unsafe { mark_nouse_range(ca, 0, c::BCH_SB_SECTOR as u64 + sb_size as u64 * 2) };
 
     // Clear no_default_sb feature so recovery doesn't force ro

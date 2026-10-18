@@ -607,27 +607,14 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
     let block_size = fs.opts().block_size as u32;
 
     let mut nr_online = 0u32;
-    let mut bucket_err: Option<String> = None;
-    let _ = fs.for_each_online_member(|ca| {
+    for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_bch2_online_devs) {
         if (sanitize || cli.single_replica) && (ca.mi.bucket_size as u32) % (block_size >> 9) != 0 {
-            // bch_dev.name is a [c_char; 32] array
-            let ca_name_bytes = &ca.name;
-            let len = ca_name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
-            // c_char is i8, but from_utf8 wants u8 - use from_raw_parts to reinterpret
-            let ca_name_bytes_u8 = unsafe {
-                std::slice::from_raw_parts(ca_name_bytes[..len].as_ptr() as *const u8, len)
-            };
-            let name = std::str::from_utf8(ca_name_bytes_u8).unwrap_or("?");
-            bucket_err = Some(format!("{} has unaligned buckets, cannot sanitize or de-replicate", name));
-            return ControlFlow::Break(());
+            return Err(anyhow!("{} has unaligned buckets, cannot sanitize or de-replicate",
+                               ca.name().to_string_lossy()));
         }
 
-        get_sb_journal(fs, ca, entire_journal, &mut devs[ca.dev_idx as usize]);
+        get_sb_journal(fs, &ca, entire_journal, &mut devs[ca.dev_idx as usize]);
         nr_online += 1;
-        ControlFlow::Continue(())
-    });
-    if let Some(err) = bucket_err {
-        return Err(anyhow!("{}", err));
     }
 
     // Walk all btree types (including dynamic) to collect metadata locations.
@@ -659,8 +646,7 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
     }
 
     // Write qcow2 image(s)
-    let mut write_err: Option<anyhow::Error> = None;
-    let _ = fs.for_each_online_member(|ca| {
+    for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_bch2_online_devs) {
         let dev_idx = ca.dev_idx;
         let path = if nr_online > 1 {
             format!("{}.{}.qcow2", cli.output, dev_idx)
@@ -668,17 +654,8 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
             format!("{}.qcow2", cli.output)
         };
 
-        match write_dev_image(fs, ca, &path, cli.force, sanitize, sanitize_filenames,
-                              cli.single_replica, block_size, &mut devs[dev_idx as usize]) {
-            Ok(()) => ControlFlow::Continue(()),
-            Err(e) => {
-                write_err = Some(e);
-                ControlFlow::Break(())
-            }
-        }
-    });
-    if let Some(e) = write_err {
-        return Err(e);
+        write_dev_image(fs, &ca, &path, cli.force, sanitize, sanitize_filenames,
+                        cli.single_replica, block_size, &mut devs[dev_idx as usize])?;
     }
 
     Ok(())

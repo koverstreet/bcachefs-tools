@@ -3,6 +3,7 @@
 #define _BCACHEFS_SB_MEMBERS_H
 
 #include "btree/bkey_gen.h"
+#include "sb/members_gen.h"
 #include "util/enumerated_ref.h"
 #include "util/darray.h"
 
@@ -280,9 +281,6 @@ static inline bool bch2_dev_bad_or_evacuating(struct bch_fs *c, unsigned dev)
 }
 
 int bch2_dev_missing_bkey_msg(struct bch_fs *, struct bkey_s_c, unsigned, struct printbuf *out);
-int bch2_dev_missing_bkey(struct bch_fs *, struct bkey_s_c, unsigned);
-
-void bch2_dev_missing_atomic(struct bch_fs *, unsigned);
 
 static inline struct bch_dev *bch2_dev_rcu(struct bch_fs *c, unsigned dev)
 {
@@ -338,8 +336,6 @@ static inline struct bch_dev *bch2_dev_bucket_tryget_noerror(struct bch_fs *c, s
 DEFINE_CLASS(bch2_dev_bucket_tryget_noerror, struct bch_dev *,
 	     bch2_dev_put(_T), bch2_dev_bucket_tryget_noerror(c, bucket),
 	     struct bch_fs *c, struct bpos bucket);
-
-void bch2_dev_bucket_missing(struct bch_dev *, u64);
 
 static inline struct bch_dev *bch2_dev_bucket_tryget(struct bch_fs *c, struct bpos bucket)
 {

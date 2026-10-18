@@ -5,35 +5,8 @@ use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
 use crate::util::locking::MemallocFlags;
 use crate::util::Printbuf;
-use core::ops::ControlFlow;
 
-/// A device ref, put on drop. Derefs to &bch_dev.
-pub struct DevRef(*mut c::bch_dev);
-
-impl DevRef {
-    /// For C functions taking *mut bch_dev.
-    pub fn as_mut_ptr(&self) -> *mut c::bch_dev {
-        self.0
-    }
-
-    /// The device name (sdX etc).
-    pub fn name(&self) -> &core::ffi::CStr {
-        unsafe { core::ffi::CStr::from_ptr((*self.0).name.as_ptr().cast()) }
-    }
-}
-
-impl core::ops::Deref for DevRef {
-    type Target = c::bch_dev;
-    fn deref(&self) -> &c::bch_dev {
-        unsafe { &*self.0 }
-    }
-}
-
-impl Drop for DevRef {
-    fn drop(&mut self) {
-        unsafe { c::rust_bch2_dev_put(self.0) };
-    }
-}
+pub use crate::sb::members::DevRef;
 
 /// sb_lock, unlocked on drop. It guards allocations that mustn't recurse into
 /// reclaim IO, so it brackets a PF_MEMALLOC_NOIO scope: Drop unlocks before the
@@ -239,25 +212,6 @@ impl Fs {
         unsafe { &mut *c::bch2_members_v2_get_mut((*self.as_ptr()).disk_sb.sb, dev_idx as i32) }
     }
 
-    /// Refs are put, including on early break.
-    pub fn for_each_online_member<F>(&self, mut f: F) -> ControlFlow<()>
-    where
-        F: FnMut(&c::bch_dev) -> ControlFlow<()>,
-    {
-        let mut ca: *mut c::bch_dev = core::ptr::null_mut();
-        loop {
-            // any device state, READ ref-class, ref_idx 0.
-            ca = unsafe { c::rust_bch2_get_next_online_dev(self.as_ptr(), ca, !0u32, 0 /* READ */, 0) };
-            if ca.is_null() {
-                return ControlFlow::Continue(());
-            }
-            if f(unsafe { &*ca }).is_break() {
-                unsafe { c::rust_enumerated_ref_put(&mut (*ca).io_ref[0 /* READ */], 0) };
-                return ControlFlow::Break(());
-            }
-        }
-    }
-
     pub fn btree_id_root(&self, id: u32) -> Option<&c::btree> {
         unsafe {
             let c = &*self.as_ptr();
@@ -289,13 +243,6 @@ impl Fs {
     /// Number of devices in the filesystem superblock.
     pub fn nr_devices(&self) -> u32 {
         self.sb.nr_devices as u32
-    }
-
-    /// Get a reference to a device by index. Returns None if the device
-    /// doesn't exist or can't be referenced.
-    pub fn dev_get(&self, dev: u32) -> Option<DevRef> {
-        let ca = unsafe { c::rust_bch2_dev_tryget_noerror(self.as_ptr(), dev) };
-        if ca.is_null() { None } else { Some(DevRef(ca)) }
     }
 
     /// Run an option's pre-set hook; None dev = filesystem scope.
@@ -407,25 +354,15 @@ impl Fs {
         unsafe { c::bch2_sb_update(self.as_ptr()) }
     }
 
-    /// Check if a device index exists and has a device pointer.
-    pub fn dev_exists(&self, dev: u32) -> bool {
-        unsafe {
-            let c = &*self.as_ptr();
-            (dev as usize) < c.sb.nr_devices as usize
-                && !c.devs[dev as usize].is_null()
-        }
-    }
 
     pub fn read_only(&self) {
         unsafe { c::bch2_fs_read_only(self.as_ptr()) };
     }
 
     pub fn dev_allocator_set_rw(&self, dev: u32, rw: bool) {
-        unsafe {
-            let ca = (*self.as_ptr()).devs[dev as usize];
-            if !ca.is_null() {
-                c::bch2_dev_allocator_set_rw(self.as_ptr(), ca, rw);
-            }
+        let ca = self.devs[dev as usize].as_ptr();
+        if !ca.is_null() {
+            unsafe { c::bch2_dev_allocator_set_rw(self.as_ptr(), ca, rw) };
         }
     }
 
@@ -495,7 +432,7 @@ impl Fs {
 
     pub fn dev_usage_full_read(&self, dev: u32) -> c::bch_dev_usage_full {
         unsafe {
-            let ca = (*self.as_ptr()).devs[dev as usize];
+            let ca = self.devs[dev as usize].as_ptr();
             let mut usage: c::bch_dev_usage_full = core::mem::zeroed();
             c::bch2_dev_usage_full_read_fast(ca, &mut usage);
             usage
@@ -505,7 +442,7 @@ impl Fs {
     /// # Safety
     /// The device exists.
     pub unsafe fn dev_raw(&self, dev: u32) -> *mut c::bch_dev {
-        (*self.as_ptr()).devs[dev as usize]
+        self.devs[dev as usize].as_ptr()
     }
 
     /// For resize.

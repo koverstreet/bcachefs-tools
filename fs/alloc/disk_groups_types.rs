@@ -30,4 +30,5 @@ c_default!(bch_disk_groups_cpu);
 c_extern! {
     pub fn bch2_disk_path_find(sb: *mut c::bch_sb_handle, name: *const c_char) -> c_int;
     pub fn bch2_disk_path_find_or_create(sb: *mut c::bch_sb_handle, name: *const c_char) -> c_int;
+    pub fn bch2_dev_in_target_rcu(c: *mut c::bch_fs, dev: c_uint, target: c_uint) -> bool;
 }

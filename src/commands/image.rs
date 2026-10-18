@@ -389,7 +389,8 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     }
 
     // Drop temp device
-    unsafe { (*fs.as_ptr()).devs[1] = std::ptr::null_mut() };
+    // SAFETY: offline, so ours alone - and the device isn't freed
+    unsafe { fs.devs[1].assign(std::ptr::null_mut()) };
 
     // Allow journal on primary device
     let m = unsafe { fs.member_mut(0) };
@@ -400,11 +401,9 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     unsafe { fs.member_mut(0) }.nbuckets = nbuckets.into();
 
     // Set resize_on_mount for all online members
-    let _ = fs.for_each_online_member(|ca| {
-        let m = unsafe { fs.member_mut(ca.dev_idx as u32) };
-        m.set_resize_on_mount(true);
-        std::ops::ControlFlow::Continue(())
-    });
+    for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_bch2_online_devs) {
+        unsafe { fs.member_mut(ca.dev_idx as u32) }.set_resize_on_mount(true);
+    }
 
     // Set small_image feature
     let disk_sb = unsafe { fs.disk_sb_mut() };

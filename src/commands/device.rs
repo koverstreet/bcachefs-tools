@@ -429,25 +429,16 @@ fn cmd_device_resize(cli: ResizeCli) -> Result<()> {
 /// Find the single online device in a filesystem.
 /// Offline operations (resize, resize-journal) require exactly one device.
 fn find_single_online_dev(fs: &Fs) -> Result<bcachefs_kernel::fs::DevRef> {
-    use std::ops::ControlFlow;
-
-    let mut count = 0u32;
-    let mut found_idx = 0u32;
-    let _ = fs.for_each_online_member(|ca| {
-        found_idx = ca.dev_idx as u32;
-        count += 1;
-        ControlFlow::Continue(())
-    });
-
-    if count == 0 {
+    let mut online = fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_bch2_online_devs);
+    let Some(ca) = online.next() else {
         bail!("no online device found");
-    }
-    if count > 1 {
+    };
+    if online.next().is_some() {
         bail!("multiple devices online, offline resize requires exactly one");
     }
 
-    fs.dev_get(found_idx)
-        .ok_or_else(|| anyhow!("could not get reference to device {}", found_idx))
+    fs.dev_get(ca.dev_idx.into())
+        .ok_or_else(|| anyhow!("could not get reference to device {}", ca.dev_idx))
 }
 
 fn resize_offline(device: &str, size_sectors: u64) -> Result<()> {
