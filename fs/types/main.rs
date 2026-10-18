@@ -111,6 +111,22 @@ fn gen_header(src: &std::path::Path, file: &str) -> Result<String, String> {
     Ok(stem.to_string() + "_gen.h")
 }
 
+/// The structs and unions @c, verbatim C, defines - `struct NAME {` or `union
+/// NAME {` opening a line - as their names and C types: what a Rust type of
+/// the name, opaque, is to a prototype.
+fn verbatim_types(c: &str) -> Vec<(String, String)> {
+    c.lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            let (kind, rest) = l.split_once(' ')?;
+            let name = rest.strip_suffix('{')?.trim();
+            (matches!(kind, "struct" | "union") &&
+             !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_'))
+                .then(|| (name.to_string(), format!("{kind} {name}")))
+        })
+        .collect()
+}
+
 /// The typedefs @c's DEFINE_DARRAY*()s make - util/darray.h:
 /// DEFINE_DARRAY(foo) and the like are darray_foo, DEFINE_DARRAY_NAMED(name,
 /// ...) name.
@@ -576,6 +592,10 @@ fn main() {
                     Some(CItem::Verbatim(v)) => {
                         for n in darray_typedefs(&v.text) {
                             structs.insert(n.clone(), n);
+                        }
+                        // a Rust type's own definition wins
+                        for (n, ty) in verbatim_types(&v.text) {
+                            structs.entry(n).or_insert(ty);
                         }
                     }
                     _ => {}
