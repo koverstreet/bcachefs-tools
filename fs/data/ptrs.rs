@@ -9,9 +9,10 @@
 //! newer than this code is, only the filesystem's table says (sb
 //! extent_type_u64s). So a walk steps by that table, and hands out a type
 //! this code doesn't know as Unknown, its bytes - validate passes those.
-//! Where the walk can't step - a type the filesystem doesn't know, or past
-//! the value's end - the rest of the value is one last Unknown entry, so
-//! printing a damaged key shows the damage.
+//! Where the walk can't step, the rest of the value is one last entry, so
+//! printing a damaged key shows the damage: Invalid, of a type the filesystem
+//! doesn't know, or PastEnd, one that runs past the value's end - which
+//! validate reports as different errors, and to_text prints differently.
 
 use crate::btree::bkey::{bkey_family, BkeySC, BkeyV, BkeyVal, BkeyVMut};
 use crate::btree::iter::{BtreeIter, TransAttempt};
@@ -19,7 +20,7 @@ use crate::errcode::BchError;
 use crate::c;
 use crate::fs::Fs;
 use crate::types::Le64;
-use crate::util::vstructs::{cast_plain, cast_plain_mut, Validated};
+use crate::util::vstructs::{cast_plain, cast_plain_mut, ArmRef, Validated};
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
 
@@ -43,20 +44,43 @@ macro_rules! extent_entries {
         #[derive(Clone, Copy)]
         pub enum ExtentEntry<'a> {
             $($name(&'a c::[<bch_extent_ $name>]),)*
-            /// One of a type this code doesn't know.
+            /// One of a type this code doesn't know, the filesystem's table
+            /// stepping over it.
             Unknown { ty: u32, bytes: &'a [u8] },
+            /// One of a type the filesystem doesn't know: the rest of the value.
+            Invalid { ty: u32, bytes: &'a [u8] },
+            /// One that runs past the value's end: the rest of the value.
+            PastEnd { ty: u32, bytes: &'a [u8] },
         }
 
-        /// An Unknown entry can't be edited.
+        /// An Unknown, Invalid or PastEnd entry can't be edited.
         #[allow(non_camel_case_types)]
         pub enum ExtentEntryMut<'a> {
             $($name(&'a mut c::[<bch_extent_ $name>]),)*
             Unknown { ty: u32, bytes: &'a [u8] },
+            Invalid { ty: u32, bytes: &'a [u8] },
+            PastEnd { ty: u32, bytes: &'a [u8] },
+        }
+
+        impl ExtentEntry<'_> {
+            /// Its type: extent_entry_type().
+            pub fn ty(&self) -> u32 {
+                match self {
+                    $(Self::$name(_) => $nr,)*
+                    Self::Unknown { ty, .. } | Self::Invalid { ty, .. } | Self::PastEnd { ty, .. } => *ty,
+                }
+            }
         }
 
         impl<'a> ExtentEntry<'a> {
-            /// Unknown unless @b is exactly an arm of type @ty.
-            fn new(ty: u32, b: &'a [u8]) -> Self {
+            /// The entry where the walk had to @stop, or else Unknown unless
+            /// @b is exactly an arm of type @ty.
+            fn new(ty: u32, b: &'a [u8], stop: Option<Stop>) -> Self {
+                match stop {
+                    Some(Stop::Invalid) => return Self::Invalid { ty, bytes: b },
+                    Some(Stop::PastEnd) => return Self::PastEnd { ty, bytes: b },
+                    None => {}
+                }
                 match ty {
                     $($nr if b.len() == size_of::<c::[<bch_extent_ $name>]>() =>
                         if let Some(a) = cast_plain(b) { return Self::$name(a) },)*
@@ -67,7 +91,12 @@ macro_rules! extent_entries {
         }
 
         impl<'a> ExtentEntryMut<'a> {
-            fn new(ty: u32, b: &'a mut [u8]) -> Self {
+            fn new(ty: u32, b: &'a mut [u8], stop: Option<Stop>) -> Self {
+                match stop {
+                    Some(Stop::Invalid) => return Self::Invalid { ty, bytes: b },
+                    Some(Stop::PastEnd) => return Self::PastEnd { ty, bytes: b },
+                    None => {}
+                }
                 match ty {
                     $($nr if b.len() == size_of::<c::[<bch_extent_ $name>]>() &&
                              cast_plain::<c::[<bch_extent_ $name>]>(b).is_some() =>
@@ -110,15 +139,28 @@ impl EntrySizes {
     }
 }
 
+/// Why a walk can't step past an entry, whose bytes are then the rest of the
+/// value - in C's order of checking: bch2_bkey_ptrs_validate()'s.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Stop {
+    /// A type the filesystem doesn't know - so not its length either.
+    Invalid,
+    /// A known type's length is more than what's left.
+    PastEnd,
+}
+
 /// The type and length of the entry @b starts with, as @sizes has it - or,
-/// if it can't step there, @b's: None at the end.
-fn entry_len(sizes: &EntrySizes, b: &[u8]) -> Option<(u32, usize)> {
+/// if it can't step there, @b's and why: None at the end.
+fn entry_len(sizes: &EntrySizes, b: &[u8]) -> Option<(u32, usize, Option<Stop>)> {
     if b.is_empty() {
         return None;
     }
     let ty = entry_type(b).unwrap_or(u32::MAX);
-    let len = sizes.bytes(ty).filter(|len| *len <= b.len()).unwrap_or(b.len());
-    Some((ty, len))
+    Some(match sizes.bytes(ty) {
+        None                        => (ty, b.len(), Some(Stop::Invalid)),
+        Some(len) if len > b.len()  => (ty, b.len(), Some(Stop::PastEnd)),
+        Some(len)                   => (ty, len, None),
+    })
 }
 
 struct Entries<'a> {
@@ -127,13 +169,13 @@ struct Entries<'a> {
 }
 
 impl<'a> Iterator for Entries<'a> {
-    type Item = (u32, &'a [u8]);
+    type Item = (u32, &'a [u8], Option<Stop>);
 
-    fn next(&mut self) -> Option<(u32, &'a [u8])> {
-        let (ty, len) = entry_len(&self.sizes, self.b)?;
+    fn next(&mut self) -> Option<Self::Item> {
+        let (ty, len, stop) = entry_len(&self.sizes, self.b)?;
         let (e, rest) = self.b.split_at(len);
         self.b = rest;
-        Some((ty, e))
+        Some((ty, e, stop))
     }
 }
 
@@ -143,13 +185,13 @@ struct EntriesMut<'a> {
 }
 
 impl<'a> Iterator for EntriesMut<'a> {
-    type Item = (u32, &'a mut [u8]);
+    type Item = (u32, &'a mut [u8], Option<Stop>);
 
-    fn next(&mut self) -> Option<(u32, &'a mut [u8])> {
-        let (ty, len) = entry_len(&self.sizes, self.b)?;
+    fn next(&mut self) -> Option<Self::Item> {
+        let (ty, len, stop) = entry_len(&self.sizes, self.b)?;
         let (e, rest) = core::mem::take(&mut self.b).split_at_mut(len);
         self.b = rest;
-        Some((ty, e))
+        Some((ty, e, stop))
     }
 }
 
@@ -174,11 +216,13 @@ macro_rules! entries_to_end {
 entries_to_end!(BtreePtr, BtreePtrV2, Extent, ReflinkV);
 
 /// A stripe's are its ptrs[nr_blocks] - cut short at the value's end: to_text
-/// and swab run before validate has checked nr_blocks against it.
+/// and swab run before validate has checked nr_blocks against it, or that
+/// there's a stripe header to read it from - none, if there isn't.
 impl PtrsBkey for c::Stripe<Validated> {
     fn entry_range(k: BkeySC<'_, Self>) -> Range<usize> {
         let start = offset_of!(c::Stripe, repr.ptrs);
-        start..(start + k.v().nr_blocks as usize * size_of::<c::bch_extent_ptr>()).min(k.val_bytes().len())
+        let Some(s) = Self::arm_ref(k.val_bytes()) else { return start..start };
+        start..(start + s.nr_blocks as usize * size_of::<c::bch_extent_ptr>()).min(k.val_bytes().len())
     }
 }
 
@@ -204,7 +248,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
         let k = self.as_sc();
         // Empty for a value too short to hold them
         let b = k.val_bytes().get(<Self::V as PtrsBkey>::entry_range(k)).unwrap_or_default();
-        Entries { sizes: EntrySizes::of(fs), b }.map(|(ty, b)| ExtentEntry::new(ty, b))
+        Entries { sizes: EntrySizes::of(fs), b }.map(|(ty, b, stop)| ExtentEntry::new(ty, b, stop))
     }
 
     fn ptrs(&self, fs: &Fs) -> impl Iterator<Item = &c::bch_extent_ptr> {
@@ -224,7 +268,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     {
         let range = <Self::V as PtrsBkey>::entry_range(self.as_sc());
         let b = self.as_s().into_val_bytes_mut().get_mut(range).unwrap_or_default();
-        EntriesMut { sizes: EntrySizes::of(fs), b }.map(|(ty, b)| ExtentEntryMut::new(ty, b))
+        EntriesMut { sizes: EntrySizes::of(fs), b }.map(|(ty, b, stop)| ExtentEntryMut::new(ty, b, stop))
     }
 
     fn ptrs_mut(&mut self, fs: &Fs) -> impl Iterator<Item = &mut c::bch_extent_ptr>
@@ -365,13 +409,16 @@ impl c::bch_extent_crc128 {
     }
 }
 
+/// Whether @crc's data is compressed - incompressible isn't: crc_is_compressed().
+pub fn crc_is_compressed(crc: &c::bch_extent_crc_unpacked) -> bool {
+    crc.compression_type as u32 != c::bch_compression_type::BCH_COMPRESSION_TYPE_none.0 &&
+        crc.compression_type as u32 != c::bch_compression_type::BCH_COMPRESSION_TYPE_incompressible.0
+}
+
 /// Whether @crc's data is checksummed or compressed - read back whole, so
 /// bounded by encoded_extent_max.
 pub fn crc_is_encoded(crc: &c::bch_extent_crc_unpacked) -> bool {
-    let compressed = crc.compression_type as u32 != c::bch_compression_type::BCH_COMPRESSION_TYPE_none.0 &&
-        crc.compression_type as u32 != c::bch_compression_type::BCH_COMPRESSION_TYPE_incompressible.0;
-
-    crc.csum_type as u32 != c::bch_csum_type::BCH_CSUM_none.0 || compressed
+    crc.csum_type as u32 != c::bch_csum_type::BCH_CSUM_none.0 || crc_is_compressed(crc)
 }
 
 impl BkeySC<'_> {
@@ -411,8 +458,10 @@ mod tests {
         (0..c::BCH_EXTENT_ENTRY_MAX).map(|ty| extent_entry_type_u64s(ty).unwrap() as u8).collect()
     }
 
-    /// walk()'s type for an Unknown entry.
+    /// walk()'s types for an Unknown, Invalid or PastEnd entry.
     const UNKNOWN: u32 = u32::MAX;
+    const INVALID: u32 = u32::MAX - 1;
+    const PAST_END: u32 = u32::MAX - 2;
 
     /// The type of each entry in @words, and where it is, in u64s: walked by
     /// @table, as a filesystem's.
@@ -422,7 +471,7 @@ mod tests {
         let start = words.as_ptr() as usize;
         let at = |p: *const u8| (p as usize - start) / 8;
         Entries { sizes, b: bytes(&mut words) }
-            .map(|(ty, b)| ExtentEntry::new(ty, b))
+            .map(|(ty, b, stop)| ExtentEntry::new(ty, b, stop))
             .map(|e| match e {
                 ExtentEntry::ptr(a)        => (0, at(a as *const _ as _)),
                 ExtentEntry::crc32(a)      => (1, at(a as *const _ as _)),
@@ -430,6 +479,8 @@ mod tests {
                 ExtentEntry::crc128(a)     => (3, at(a as *const _ as _)),
                 ExtentEntry::stripe_ptr(a) => (4, at(a as *const _ as _)),
                 ExtentEntry::Unknown { bytes, .. } => (UNKNOWN, at(bytes.as_ptr())),
+                ExtentEntry::Invalid { bytes, .. } => (INVALID, at(bytes.as_ptr())),
+                ExtentEntry::PastEnd { bytes, .. } => (PAST_END, at(bytes.as_ptr())),
                 _ => panic!("an entry type the test doesn't use"),
             })
             .collect()
@@ -443,11 +494,11 @@ mod tests {
                                       word(4, 10), word(3, 11), 0, 0, word(0, 12)]),
                    [(1, 0), (0, 1), (0, 2), (2, 3), (0, 5), (4, 6), (3, 7), (0, 10)]);
 
-        // where it can't step - a type the filesystem doesn't know, a crc128
-        // two u64s long, a type word of zero - the rest of the value
-        assert_eq!(walk(&ours(), vec![word(0, 1), word(20, 0), word(0, 1)]), [(0, 0), (UNKNOWN, 1)]);
-        assert_eq!(walk(&ours(), vec![word(0, 1), word(3, 0), 0]), [(0, 0), (UNKNOWN, 1)]);
-        assert_eq!(walk(&ours(), vec![word(0, 1), 0, word(0, 1)]), [(0, 0), (UNKNOWN, 1)]);
+        // where it can't step, the rest of the value: a type the filesystem
+        // doesn't know, a type word of zero - and a crc128 two u64s long
+        assert_eq!(walk(&ours(), vec![word(0, 1), word(20, 0), word(0, 1)]), [(0, 0), (INVALID, 1)]);
+        assert_eq!(walk(&ours(), vec![word(0, 1), 0, word(0, 1)]), [(0, 0), (INVALID, 1)]);
+        assert_eq!(walk(&ours(), vec![word(0, 1), word(3, 0), 0]), [(0, 0), (PAST_END, 1)]);
 
         // stepping over one only the filesystem knows, by its table's size
         let mut newer = ours();
@@ -460,8 +511,8 @@ mod tests {
     #[test]
     fn extent_entry_arm_by_type() {
         let mut w = [word(4, 3)];
-        assert!(matches!(ExtentEntryMut::new(4, bytes(&mut w)), ExtentEntryMut::stripe_ptr(_)));
-        assert!(matches!(ExtentEntryMut::new(3, bytes(&mut w)), ExtentEntryMut::Unknown { ty: 3, .. }),
+        assert!(matches!(ExtentEntryMut::new(4, bytes(&mut w), None), ExtentEntryMut::stripe_ptr(_)));
+        assert!(matches!(ExtentEntryMut::new(3, bytes(&mut w), None), ExtentEntryMut::Unknown { ty: 3, .. }),
                 "a crc128 doesn't fit in a word");
     }
 }
