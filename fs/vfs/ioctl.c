@@ -1557,11 +1557,12 @@ static int bch2_unpoison_extent(struct btree_trans *trans, struct btree_iter *it
 	if (!(flags & BIT_ULL(BCH_EXTENT_FLAG_poisoned)))
 		return 0;
 
-	struct bkey_i *new = errptr_try(bch2_trans_kmalloc(trans,
-					bkey_bytes(k.k) + sizeof(struct bch_extent_flags)));
+	/* room for a flags entry, if it has none */
+	unsigned u64s = k.k->u64s + sizeof(struct bch_extent_flags) / sizeof(u64);
+	struct bkey_i *new = errptr_try(bch2_trans_kmalloc(trans, u64s * sizeof(u64)));
 
 	bkey_reassemble(new, k);
-	try(bch2_bkey_extent_flags_set(trans->c, new,
+	try(bch2_bkey_extent_flags_set(trans, new, u64s,
 				       flags & ~BIT_ULL(BCH_EXTENT_FLAG_poisoned)));
 	try(bch2_trans_update(trans, iter, new, 0));
 	return 0;

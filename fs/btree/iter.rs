@@ -1309,6 +1309,18 @@ impl<'a, 't> TransBkey<'a, 't> {
         })
     }
 
+    /// A key C allocated in @t's transaction memory with room past its own
+    /// u64s - @buf_u64s long, for what grows it.
+    ///
+    /// # Safety
+    /// @ptr is a key in @t's memory, and @buf_u64s u64s there are its.
+    pub(crate) unsafe fn from_raw_room(_t: &TransAttempt<'a, 't>, ptr: *mut c::bkey_i, buf_u64s: u32) -> Self {
+        let ptr = NonNull::new(ptr).expect("a trans mem key");
+        assert!(buf_u64s >= unsafe { ptr.as_ref().k.u64s }.into(),
+                "a key's buffer of {buf_u64s} u64s, shorter than it is");
+        TransBkey { buf_u64s, ptr, t: PhantomData, v: PhantomData }
+    }
+
     /// The key as a @V's, whole, unchecked.
     ///
     /// # Safety

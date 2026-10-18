@@ -669,6 +669,4 @@ static inline u64 bch2_bkey_extent_flags(struct bkey_s_c k)
 	return bch2_bkey_extent_ptrs_flags(bch2_bkey_ptrs_c(k));
 }
 
-int bch2_bkey_extent_flags_set(struct bch_fs *, struct bkey_i *, u64);
-
 #endif /* _BCACHEFS_EXTENTS_H */

@@ -144,4 +144,20 @@ impl TransBkey<'_, '_, PtrsMut> {
         val[at.0..][..entry.len()].copy_from_slice(entry);
         Ok(())
     }
+
+    /// Its extent flags made @flags: its flags entry's, which comes first, or
+    /// one inserted first - NoRoom if the buffer can't hold it. The caller
+    /// requests the extent_flags incompat feature. bch2_bkey_extent_flags_set().
+    pub fn extent_flags_set(&mut self, fs: &Fs, flags: u64) -> Result<(), NoRoom> {
+        // the field's 57 bits, as C's bitfield assignment truncates to
+        let flags = flags & ((1 << 57) - 1);
+
+        if let Some(ExtentEntryMut::flags(f)) = self.extent_entries_mut(fs).next() {
+            f.set_flags(flags);
+            return Ok(());
+        }
+
+        let start = EntryPos(PtrsMut::entry_range(self.as_sc()).start / size_of::<u64>());
+        self.insert_entry(start, &[c::bch_extent_flags::new().with_flags(flags).into_bits()])
+    }
 }

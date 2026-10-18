@@ -515,23 +515,3 @@ const char * const bch2_extent_entry_types[] = {
 #undef x
 	NULL
 };
-
-int bch2_bkey_extent_flags_set(struct bch_fs *c, struct bkey_i *k, u64 flags)
-{
-	try(bch2_request_incompat_feature(c, bcachefs_metadata_version_extent_flags));
-
-	struct bkey_ptrs ptrs = bch2_bkey_ptrs(bkey_i_to_s(k));
-
-	if (ptrs.start != ptrs.end &&
-	    extent_entry_type(ptrs.start) == BCH_EXTENT_ENTRY_flags) {
-		ptrs.start->flags.flags = flags;
-	} else {
-		struct bch_extent_flags f = {
-			.type	= BIT(BCH_EXTENT_ENTRY_flags),
-			.flags	= flags,
-		};
-		__extent_entry_insert(c, k, ptrs.start, (union bch_extent_entry *) &f);
-	}
-
-	return 0;
-}

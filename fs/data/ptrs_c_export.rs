@@ -6,7 +6,7 @@
 use super::*;
 use super::ops::{btree_ptr_validate, btree_ptr_v2_validate};
 use crate::btree::bkey::BkeyI;
-use crate::btree::iter::BtreeTrans;
+use crate::btree::iter::{BtreeTrans, TransBkey};
 use crate::errcode::ret_to_c;
 use crate::init::error::BkeyValidate;
 use crate::util::ffi::Opaque;
@@ -223,6 +223,30 @@ pub unsafe fn bch2_bkey_drop_stale_ptrs(trans: &BtreeTrans<'_>, iter: &BtreeIter
     // SAFETY: the caller's
     let t = unsafe { trans.attempt_in_progress() };
     ret_to_c(drop_stale_ptrs(&t, iter, k))
+}
+
+/// @k is in @trans's memory, @buf_u64s long: room for a flags entry, if it
+/// has none, that the caller allocates.
+///
+/// # Safety
+/// C has an attempt in progress on @trans, and @k is a key in its memory,
+/// @buf_u64s u64s of it its.
+#[c_export]
+pub unsafe fn bch2_bkey_extent_flags_set(trans: &BtreeTrans<'_>, k: *mut c::bkey_i, buf_u64s: c_uint,
+                                         flags: u64) -> c_int {
+    // SAFETY: the caller's
+    let t = unsafe { trans.attempt_in_progress() };
+    let fs = t.fs();
+
+    ret_to_c((|| -> Result<(), BchError> {
+        fs.request_incompat_feature(c::bcachefs_metadata_version::extent_flags)?;
+
+        // SAFETY: the caller's
+        let k = unsafe { TransBkey::from_raw_room(&t, k, buf_u64s) };
+        k.arm::<PtrsMut>().expect("extent flags on a key whose entries can't be edited")
+            .extent_flags_set(fs, flags).expect("room for an extent flags entry: its caller allocates it");
+        Ok(())
+    })())
 }
 
 /// # Safety
