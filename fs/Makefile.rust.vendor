@@ -163,7 +163,7 @@ $(VRD)/compiler_builtins.o: $(VENDOR)/compiler_builtins.rs $(VRD)/core.o FORCE
 # Everything else is built on those two - our leaf crates too:
 vr-base := $(vr-core) --extern compiler_builtins=$(VRD)/libcompiler_builtins.rmeta
 vr-base-deps := $(VRD)/compiler_builtins.o FORCE
-$(obj)/bitfield.o $(obj)/bitflags.o $(obj)/num_traits.o $(obj)/uuid.o: $(VRD)/compiler_builtins.o
+$(obj)/arrayvec.o $(obj)/bitfield.o $(obj)/bitflags.o $(obj)/num_traits.o $(obj)/uuid.o: $(VRD)/compiler_builtins.o
 
 $(VRD)/ffi.o $(VRD)/build_error.o: private rs-flags := $(vr-base)
 $(VRD)/ffi.o: $(VENDOR)/ffi.rs $(vr-base-deps)
