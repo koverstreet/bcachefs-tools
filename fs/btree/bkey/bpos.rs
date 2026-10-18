@@ -46,6 +46,18 @@ impl c::bpos {
         }
     }
 
+    /// The previous position ignoring the snapshot field, at snapshot 0.
+    /// Panics before POS_MIN.
+    pub fn nosnap_predecessor(self) -> Self {
+        let (inode, offset) = (self.inode, self.offset);
+
+        if let Some(offset) = offset.checked_sub(1) {
+            spos(inode, offset, 0)
+        } else {
+            spos(inode.checked_sub(1).expect("no position before POS_MIN"), u64::MAX, 0)
+        }
+    }
+
     /// The previous position, snapshot field first. None before POS_MIN:
     /// panics.
     pub fn predecessor(self) -> Self {

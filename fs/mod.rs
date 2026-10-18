@@ -340,6 +340,11 @@ macro_rules! btree_has_snapshots {
     (BTREE_IS_snapshots $($rest:tt)*) => { true };
     ($first:tt $($rest:tt)*) => { btree_has_snapshots!($($rest)*) };
 }
+macro_rules! btree_is_extents {
+    () => { false };
+    (BTREE_IS_extents $($rest:tt)*) => { true };
+    ($first:tt $($rest:tt)*) => { btree_is_extents!($($rest)*) };
+}
 macro_rules! btree_ids_known {
     ($(($name:tt, $nr:literal, $($flag:tt)|+ $(, $($rest:tt)*)?)),* $(,)?) => { ::paste::paste! {
         pub const BTREE_IDS_KNOWN: &[c::btree_id] = &[$(c::btree_id::[<BTREE_ID_ $name>],)*];
@@ -347,9 +352,20 @@ macro_rules! btree_ids_known {
         /// Btrees whose keys are snapshotted; mirrors the C btree_has_snapshots_mask.
         pub const BTREE_HAS_SNAPSHOTS_MASK: u64 =
             0 $(| if btree_has_snapshots!($($flag)*) { 1u64 << $nr } else { 0 })*;
+
+        /// Btrees of extents; C's btree_is_extents_mask.
+        pub const BTREE_IS_EXTENTS_MASK: u64 =
+            0 $(| if btree_is_extents!($($flag)*) { 1u64 << $nr } else { 0 })*;
     } };
 }
 c::BCH_BTREE_IDS!(btree_ids_known);
+
+impl c::btree_id {
+    /// Whether its keys are extents, covering ranges: btree_id_is_extents().
+    pub fn is_extents(self) -> bool {
+        self.0 < 64 && BTREE_IS_EXTENTS_MASK & (1 << self.0) != 0
+    }
+}
 
 /// The btrees in @mask, a bit per btree id.
 pub fn btrees_in(mask: u64) -> impl Iterator<Item = c::btree_id> {
