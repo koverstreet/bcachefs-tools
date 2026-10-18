@@ -173,6 +173,10 @@ impl Fs {
         SbLockGuard { fs: self, _noio }
     }
 
+    pub fn assert_sb_lock_held(&self) {
+        unsafe { c::rust_bch2_sb_lock_assert_held(self.as_ptr()) }
+    }
+
     /// Caller holds sb_lock.
     pub fn write_super(&self) {
         unsafe { c::bch2_write_super(self.as_ptr()) };

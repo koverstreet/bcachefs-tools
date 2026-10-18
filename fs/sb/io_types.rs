@@ -48,6 +48,7 @@ pub struct bch_sb_cpu {
 c_default!(bch_sb_cpu);
 
 c_extern! {
+    pub fn rust_bch2_sb_lock_assert_held(c: *mut c::bch_fs);
     pub fn bch2_version_to_text(out: *mut c::printbuf, v: c::bcachefs_metadata_version);
     pub fn bch2_set_version_incompat(c: *mut c::bch_fs,
                                      version: c::bcachefs_metadata_version) -> c_int;
