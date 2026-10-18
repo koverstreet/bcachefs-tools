@@ -20,9 +20,14 @@ use crate::errcode::BchError;
 use crate::c;
 use crate::fs::Fs;
 use crate::types::Le64;
-use crate::util::vstructs::{cast_plain, cast_plain_mut, ArmRef, Validated};
+use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, Validated};
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
+
+#[path = "ptrs_edit.rs"]
+mod edit;
+
+pub use edit::BkeyVPtrsMut;
 
 macro_rules! extent_entries {
     ($(($name:tt, $nr:literal)),* $(,)?) => { ::paste::paste! {
@@ -73,6 +78,15 @@ macro_rules! extent_entries {
         }
 
         impl<'a> ExtentEntry<'a> {
+            /// Its bytes, in the key.
+            pub fn bytes(&self) -> &'a [u8] {
+                match *self {
+                    $(Self::$name(e) => plain_bytes(e),)*
+                    Self::Unknown { bytes, .. } | Self::Invalid { bytes, .. } |
+                    Self::PastEnd { bytes, .. } => bytes,
+                }
+            }
+
             /// The entry where the walk had to @stop, or else Unknown unless
             /// @b is exactly an arm of type @ty.
             fn new(ty: u32, b: &'a [u8], stop: Option<Stop>) -> Self {
@@ -239,19 +253,34 @@ impl PtrsBkey for c::Stripe<Validated> {
 }
 
 bkey_family!(Ptrs);
+bkey_family!(PtrsMut);
 
+/// A family of key types with pointers is a PtrsBkey: its entries are where
+/// its member's are.
 macro_rules! ptrs_bkey {
-    ($(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
-        impl PtrsBkey for Ptrs {
-            fn entry_range(k: BkeySC<'_, Ptrs>) -> Range<usize> {
+    ($family:ident, $typed:ident; $(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
+        impl PtrsBkey for $family {
+            fn entry_range(k: BkeySC<'_, $family>) -> Range<usize> {
                 match k.typed() {
-                    $(PtrsTyped::$name(k) => PtrsBkey::entry_range(k),)*
+                    $($typed::$name(k) => PtrsBkey::entry_range(k),)*
                 }
             }
         }
     };
 }
-c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs => ptrs_bkey]);
+c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs => ptrs_bkey { Ptrs, PtrsTyped; }]);
+c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs_mut => ptrs_bkey { PtrsMut, PtrsMutTyped; }]);
+
+macro_rules! key_types_mask {
+    ($mask:ident; $(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
+        const $mask: u64 = 0 $(| 1 << $nr)*;
+    };
+}
+c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs => key_types_mask { PTRS_KEY_TYPES; }]);
+c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs_mut => key_types_mask { PTRS_MUT_KEY_TYPES; }]);
+
+const _: () = assert!(PTRS_MUT_KEY_TYPES & !PTRS_KEY_TYPES == 0,
+                      "a BKEY_TYPE_ptrs_mut type that isn't BKEY_TYPE_ptrs");
 
 /// The extent entries of a key with pointers, in whichever form it's held:
 /// any BkeyV whose value is a PtrsBkey - armed to Ptrs, or to one of them.
@@ -261,6 +290,12 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
         // Empty for a value too short to hold them
         let b = k.val_bytes().get(<Self::V as PtrsBkey>::entry_range(k)).unwrap_or_default();
         Entries { sizes: EntrySizes::of(fs), b }.map(|(ty, b, stop)| ExtentEntry::new(ty, b, stop))
+    }
+
+    /// extent_entries(), each with where it is.
+    fn extent_entries_at(&self, fs: &Fs) -> impl Iterator<Item = (EntryPos, ExtentEntry<'_>)> {
+        let val = self.as_sc().val_bytes().as_ptr() as usize;
+        self.extent_entries(fs).map(move |e| (EntryPos((e.bytes().as_ptr() as usize - val) / 8), e))
     }
 
     fn ptrs(&self, fs: &Fs) -> impl Iterator<Item = &c::bch_extent_ptr> {
@@ -289,7 +324,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
         };
         let mut ec = None;
 
-        self.extent_entries(fs).filter_map(move |e| match e {
+        self.extent_entries_at(fs).filter_map(move |(pos, e)| match e {
             ExtentEntry::ptr(ptr) => Some(DecodedPtr {
                 p: c::extent_ptr_decoded {
                     has_ec: ec.is_some(),
@@ -299,6 +334,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
                     ..Default::default()
                 },
                 ptr,
+                pos,
             }),
             ExtentEntry::stripe_ptr(s) => {
                 ec = Some(*s);
@@ -334,13 +370,20 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
 impl<K: BkeyV<V: PtrsBkey>> BkeyVPtrs for K {}
 
 /// A pointer, decoded: ptrs_decoded()'s. @p is C's extent_ptr_decoded, a
-/// copy - its read path's fields zero; @ptr is the pointer in the key, for
-/// where it is.
+/// copy - its read path's fields zero; @ptr is the pointer in the key, and
+/// @pos where it is, to edit it by.
 #[derive(Clone, Copy)]
 pub struct DecodedPtr<'a> {
     pub p: c::extent_ptr_decoded,
     pub ptr: &'a c::bch_extent_ptr,
+    pub pos: EntryPos,
 }
+
+/// Where an entry is in its key's value, in u64s from the value's start: what
+/// a key's entries are edited by. Only the walk makes one, and it holds for as
+/// long as nothing before it is inserted or dropped.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct EntryPos(usize);
 
 /// @entry, if it's a crc entry of @k, unpacked: the sizes unbiased, the
 /// checksum's bytes where bch_csum has them.

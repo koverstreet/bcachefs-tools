@@ -320,6 +320,12 @@ c_enum! {
         BKEY_TYPE_extent              = 1 << 2,
         /* An indirect extent - refcounted, in the reflink btree: what a reflink_p points to */
         BKEY_TYPE_indirect            = 1 << 3,
+        /*
+         * Its pointers can be edited in place - its extent entries run to the
+         * value's end, so entries can be inserted and dropped: not a stripe's,
+         * whose checksums and block counts follow them
+         */
+        BKEY_TYPE_ptrs_mut            = 1 << 4,
     }
 }
 
@@ -363,9 +369,9 @@ c_xmacro! {
         (hash_whiteout,         4,  BKEY_TYPE_strict_btree_checks, _,
          "Whiteout for hash table btrees (dirents, xattrs) that "
          "preserves hash chain integrity"),
-        (btree_ptr,             5,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs, _,
+        (btree_ptr,             5,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut, _,
          "Btree node pointer (v1, legacy)"),
-        (extent,                6,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_extent, _,
+        (extent,                6,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut | BKEY_TYPE_extent, _,
          "File data extent with device pointers, checksums, and "
          "optional compression metadata"),
         (reservation,           7,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
@@ -387,11 +393,11 @@ c_xmacro! {
         (reflink_p,             15, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
          "Pointer from the extents btree to an indirect extent "
          "in the reflink btree"),
-        (reflink_v,             16, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_extent | BKEY_TYPE_indirect, _,
+        (reflink_v,             16, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut | BKEY_TYPE_extent | BKEY_TYPE_indirect, _,
          "Indirect extent with refcount in the reflink btree"),
         (inline_data,           17, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
          "Small file data stored inline in the btree"),
-        (btree_ptr_v2,          18, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs, _,
+        (btree_ptr_v2,          18, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut, _,
          "Btree node pointer (v2) with sequence number and "
          "min_key for more efficient traversal"),
         (indirect_inline_data,  19, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent | BKEY_TYPE_indirect, _,

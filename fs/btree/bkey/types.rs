@@ -715,6 +715,18 @@ macro_rules! bkey_family {
         crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs =>
             crate::btree::bkey::bkey_family_members { crate::data::ptrs::PtrsTypes; }]);
     };
+    (PtrsMut) => {
+        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs_mut =>
+            crate::btree::bkey::bkey_family { @def
+                /// The key types with pointers that can be edited in place,
+                /// BKEY_TYPE_ptrs_mut: their extent entries run to the value's
+                /// end, so entries can be inserted and dropped - every Ptrs type
+                /// but a stripe.
+                PtrsMut, |k| true;
+            }]);
+        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs_mut =>
+            crate::btree::bkey::bkey_family_members { crate::data::ptrs::PtrsMutTypes; }]);
+    };
     (Extents) => {
         crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_extent =>
             crate::btree::bkey::bkey_family { @def
