@@ -1154,6 +1154,8 @@ fn thin_pointers(name: &str, cfg: &Option<cstruct::Cfg>, params: &[(String, Stri
 /// C gets its extern declaration, `extern const struct xattr_handler *const
 /// bch2_xattr_handlers[6];`; Rust a CStatic<T>, which derefs to the T. A fn
 /// pointer in one has to be to an extern "C" fn in C's types, for kCFI.
+/// #[c("...")] after #[c_export] is the declaration, where the Rust type
+/// doesn't say it - or C's isn't const, as attribute_group's attrs aren't.
 #[proc_macro_attribute]
 pub fn c_export(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand("#[c_export]", || c_export_expand(attr, item))
@@ -1248,12 +1250,29 @@ fn c_export_static(item: TokenStream) -> Result<TokenStream, String> {
     let text = format!("#[c_export] {prefix} static {name}: {ty};").replace("$crate", "crate");
     cstruct::parse_c_export(&text)?;
 
+    // #[c("...")], C's declaration where the Rust type doesn't say it, is the
+    // record's alone
+    let is_c_attr = |t: &TokenTree| matches!(t, TokenTree::Group(g)
+        if g.delimiter() == Delimiter::Bracket &&
+           matches!(g.stream().into_iter().next(), Some(TokenTree::Ident(i)) if i.to_string() == "c"));
+    let mut rust_prefix = Vec::new();
+    let mut i = 0;
+    while i < s {
+        if is_punct(&toks[i], '#') && toks.get(i + 1).is_some_and(is_c_attr) {
+            i += 2;
+        } else {
+            rust_prefix.push(toks[i].clone());
+            i += 1;
+        }
+    }
+    let rust_prefix = text_of(&rust_prefix);
+
     // SAFETY, of the CStatic: a static C reads is immutable, and its only
     // parts that aren't Sync are its pointers - to other statics, and fns
     Ok(tokens(&format!(
         "#[no_mangle]\n\
          #[allow(non_upper_case_globals)]\n\
-         {prefix} static {name}: crate::types::CStatic<{ty}> =\n\
+         {rust_prefix} static {name}: crate::types::CStatic<{ty}> =\n\
              unsafe {{ crate::types::CStatic::new({expr}) }};\n\
          {}", record(&text, &[]))))
 }
