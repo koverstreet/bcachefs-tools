@@ -625,6 +625,15 @@ void bch2_dev_errors_reset(struct bch_dev *ca)
 	bch2_write_super(c);
 }
 
+/* The sectors read and written, by data type: every CPU's count summed */
+struct io_count bch2_dev_io_done(struct bch_dev *ca)
+{
+	struct io_count ret = {};
+
+	acc_u64s_percpu((u64 *) &ret, (u64 __percpu *) ca->io_done, sizeof(ret) / sizeof(u64));
+	return ret;
+}
+
 /*
  * Per member "range has btree nodes" bitmap:
  *

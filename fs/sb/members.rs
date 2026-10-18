@@ -3,6 +3,7 @@ use crate::c;
 use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::util::kernel::{READ, WRITE};
+use crate::util::Printbuf;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::{Head, View};
 use core::ffi::CStr;
@@ -476,6 +477,54 @@ impl Fs {
 }
 
 impl c::bch_dev {
+    /// Its filesystem.
+    pub fn fs(&self) -> &Fs {
+        // SAFETY: a device's filesystem outlives it
+        unsafe { Fs::borrow_raw(self.fs) }
+    }
+
+    fn as_ptr(&self) -> *mut c::bch_dev {
+        core::ptr::from_ref(self).cast_mut()
+    }
+
+    /// Its IO errors, by kind: since the filesystem was made, and since they
+    /// were last reset.
+    pub fn io_errors_to_text(&self, out: &mut Printbuf) {
+        unsafe { c::bch2_dev_io_errors_to_text(out.as_raw(), self.as_ptr()) }
+    }
+
+    /// Start counting IO errors again from now, in the superblock.
+    pub fn errors_reset(&self) {
+        unsafe { c::bch2_dev_errors_reset(self.as_ptr()) }
+    }
+
+    /// The sectors read and written, by data type.
+    pub fn io_done(&self) -> c::io_count {
+        unsafe { c::bch2_dev_io_done(self.as_ptr()) }
+    }
+
+    /// The latest IO's latency, for reads (READ) or writes (WRITE).
+    pub fn cur_latency(&self, rw: usize) -> i64 {
+        // atomic64_read()
+        let l = unsafe { &*(&raw const self.cur_latency[rw]).cast::<core::sync::atomic::AtomicI64>() };
+        l.load(core::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The IO refs held, by kind - for reads (READ) or writes (WRITE).
+    pub fn io_refs_to_text(&self, out: &mut Printbuf, rw: usize) {
+        let names = match rw {
+            READ => unsafe { c::bch2_dev_read_refs.as_ptr() },
+            _    => unsafe { c::bch2_dev_write_refs.as_ptr() },
+        };
+        // SAFETY: the names of io_ref[rw]'s kinds
+        unsafe { self.io_ref[rw].to_text(out, names) }
+    }
+
+    /// The data types with data on it: a mask of bch_data_types.
+    pub fn has_data(&self) -> u32 {
+        unsafe { c::bch2_dev_has_data(self.fs, self.as_ptr()) }
+    }
+
     /// A ref on it - bch2_dev_get(): the device is alive, being in hand, so
     /// the get can't fail.
     pub fn get_ref(&self) -> DevRef {

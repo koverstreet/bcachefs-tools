@@ -169,6 +169,11 @@ int bch2_fs_counters_init_late(struct bch_fs *c)
 	return 0;
 }
 
+u64 bch2_counter_read(struct bch_fs *c, unsigned idx)
+{
+	return percpu_u64_get(&c->counters.now[idx]);
+}
+
 void bch2_counter_reset(struct bch_fs *c, unsigned idx)
 {
 	if (idx < BCH_COUNTER_NR)

@@ -41,6 +41,9 @@ c_extern! {
     pub fn rust_bch2_dev_get(ca: *mut c::bch_dev);
     pub fn rust_bch2_dev_get_outer(ca: *mut c::bch_dev);
     pub fn rust_bch2_dev_put_outer(ca: *mut c::bch_dev);
+    pub fn bch2_dev_io_errors_to_text(out: *mut c::printbuf, ca: *mut c::bch_dev);
+    pub fn bch2_dev_errors_reset(ca: *mut c::bch_dev);
+    pub fn bch2_dev_io_done(ca: *mut c::bch_dev) -> c::io_count;
     pub fn bch2_dev_missing_atomic(c: *mut c::bch_fs, dev: c_uint);
     pub fn bch2_dev_missing_bkey(c: *mut c::bch_fs, k: c::bkey_s_c, dev: c_uint) -> c_int;
     pub fn bch2_dev_bucket_missing(ca: *mut c::bch_dev, bucket: u64);

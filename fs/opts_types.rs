@@ -801,6 +801,7 @@ c_extern! {
                                               t: c::bch_reconcile_accounting_type);
     pub static bch2_opts_default: c::bch_opts;
     pub static bch2_opt_table: [c::bch_option; 0];
+    pub static __bch2_data_types: [*const c_char; 0];
     pub fn bch2_opt_defined_by_id(opts: *const c::bch_opts, id: c::bch_opt_id) -> bool;
     pub fn bch2_opt_get_by_id(opts: *const c::bch_opts, id: c::bch_opt_id) -> u64;
     pub fn bch2_opt_set_by_id(opts: *mut c::bch_opts, id: c::bch_opt_id, v: u64);
