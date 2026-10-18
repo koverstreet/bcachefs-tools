@@ -41,6 +41,7 @@ const UNBLOCKLISTED: &[&str] = &[
 const ALLOWLIST_FUNCTION: &[&str] = &[
     "crc32c", "crc64_be",
     "__genradix_ptr", "__genradix_ptr_alloc", "__genradix_iter_peek", "__genradix_free",
+    "closure_get_not_zero", "closure_put",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",
                                   "xattr_handler"];
