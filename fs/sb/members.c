@@ -523,15 +523,8 @@ void bch2_sb_members_from_cpu(struct bch_fs *c)
 	}
 }
 
-struct failure_domain {
-	u8	name[32];
-};
-
 void bch2_sb_members_to_cpu(struct bch_fs *c)
 {
-	BUILD_BUG_ON(sizeof(((struct failure_domain *) NULL)->name) !=
-		     sizeof(((struct bch_member *) NULL)->failure_domain));
-
 	for_each_member_device(c, ca) {
 		struct bch_member m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
 		ca->mi = bch2_mi_to_cpu(&m);
@@ -540,35 +533,24 @@ void bch2_sb_members_to_cpu(struct bch_fs *c)
 	}
 
 	/*
-	 * Intern failure domain strings to small ids: two devices are in the
-	 * same failure domain iff their (non-empty) strings match. The id is the
-	 * 1-based index into the set of distinct strings, 0 = unset. The table is
-	 * transient - the ids stored on ca->mi are what we keep.
+	 * Two devices are in the same failure domain iff their (non-empty)
+	 * strings match: the id is one more than the first member with the same
+	 * string, 0 = unset. Only compared for equality, so it needn't be dense.
 	 */
-	DARRAY(struct failure_domain) domains = {};
 	for_each_member_device(c, ca) {
 		struct bch_member m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
 		if (!m.failure_domain[0])
 			continue;
 
-		u16 id = 0;
-		darray_for_each(domains, d)
-			if (!memcmp(d->name, m.failure_domain, sizeof(d->name))) {
-				id = (d - domains.data) + 1;
+		for (unsigned i = 0; i <= ca->dev_idx; i++) {
+			struct bch_member o = bch2_sb_member_get(c->disk_sb.sb, i);
+
+			if (!memcmp(o.failure_domain, m.failure_domain, sizeof(m.failure_domain))) {
+				ca->mi.failure_domain = i + 1;
 				break;
 			}
-
-		if (!id) {
-			struct failure_domain d;
-			memcpy(d.name, m.failure_domain, sizeof(d.name));
-			if (darray_push(&domains, d))
-				continue;	/* -ENOMEM: leave unset, safe */
-			id = domains.nr;
 		}
-
-		ca->mi.failure_domain = id;
 	}
-	darray_exit(&domains);
 
 	struct bch_sb_field_members_v2 *mi2 = bch2_sb_field_get(c->disk_sb.sb, members_v2);
 	if (mi2)
