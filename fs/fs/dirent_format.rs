@@ -451,6 +451,7 @@ fn set_name<'p>(k: &mut TransBkey<'_, '_>, fs: &Fs, val: &'p str) -> Result<(), 
 
     // Only cf_encoding is read, and NULL means not casefolded:
     let hash_info = c::bch_hash_info::default();
-    super::init_name(fs, k.as_mut(), &hash_info, OsStr::from_bytes(val.as_bytes()), None)
+    let k = k.as_mut().arm::<c::Dirent>().expect("a dirent");
+    super::init_name(fs, k, &hash_info, OsStr::from_bytes(val.as_bytes()), None)
         .map_err(|_| SetError::BadName { val })
 }

@@ -127,26 +127,25 @@ pub fn hash(info: &c::bch_hash_info, name: &OsStr) -> u64 {
 /// A dirent key at @pos with room for any name, to be filled in with
 /// copy_target() and init_name().
 pub fn alloc_max<'a, 't>(t: &TransAttempt<'a, 't>, pos: c::bpos)
-    -> Result<TransBkey<'a, 't>, BchError>
+    -> Result<TransBkey<'a, 't, c::Dirent>, BchError>
 {
-    t.bkey_alloc_init(u8::MAX as usize - BKEY_U64S,
-                      c::bch_bkey_type::KEY_TYPE_dirent.0 as u8, pos)
+    t.bkey_alloc_init::<c::Dirent>(u8::MAX as usize - BKEY_U64S, pos)
 }
 
-/// Point @dst, a dirent, at what @src points at: as dirent_copy_target().
-pub fn copy_target(dst: &mut TransBkey<'_, '_>, src: Dirent<'_>) {
-    let d = dst.as_mut().arm::<c::Dirent>().expect("a dirent").v_mut();
+/// Point @dst at what @src points at: as dirent_copy_target().
+pub fn copy_target(dst: &mut TransBkey<'_, '_, c::Dirent>, src: Dirent<'_>) {
+    let d = dst.v_mut();
     d.target = src.v().target;
     d.set_d_type(src.d_type());
 }
 
-/// Give @k, a dirent sized to the room it has, the name @name, and size it to
-/// fit: as bch2_dirent_init_name(). In a casefolded directory - per
-/// @hash_info - the casefolded name follows it: @cf_name if the caller has
-/// it, otherwise made here.
+/// Give @k, sized to the room it has, the name @name, and size it to fit: as
+/// bch2_dirent_init_name(). In a casefolded directory - per @hash_info - the
+/// casefolded name follows it: @cf_name if the caller has it, otherwise made
+/// here.
 pub fn init_name(
     fs:        &Fs,
-    k:         &mut BkeyI,
+    k:         &mut BkeyI<c::Dirent>,
     hash_info: &c::bch_hash_info,
     name:      &OsStr,
     cf_name:   Option<&OsStr>,
@@ -160,11 +159,10 @@ pub fn init_name(
 
     let casefold = !hash_info.cf_encoding.is_null();
     debug_assert!(casefold || cf_name.is_none(), "a casefolded name for a dirent that isn't");
-    k.arm::<c::Dirent>().expect("a dirent").v_mut().set_d_casefold(casefold as u8);
+    k.v_mut().set_d_casefold(casefold as u8);
 
     let end = if !casefold {
-        let mut s = BkeyS::from(&mut *k);
-        let v = s.val_bytes_mut();
+        let v = BkeyS::<c::Dirent>::from(&mut *k).into_val_bytes_mut();
         v[D_NAME_OFFSET..][..name.len()].copy_from_slice(name);
         D_NAME_OFFSET + name.len()
     } else {
@@ -174,7 +172,7 @@ pub fn init_name(
 
     // NUL padding to the end of the u64: what the name's length is read from.
     let val_u64s = end.div_ceil(8);
-    BkeyS::from(&mut *k).val_bytes_mut()[end..val_u64s * 8].fill(0);
+    (&mut *k).val_bytes_mut()[end..val_u64s * 8].fill(0);
 
     assert!(BKEY_U64S + val_u64s <= k.k.u64s as usize,
             "dirent name ({} bytes) overruns its key ({} u64s)", end, k.k.u64s);
@@ -186,13 +184,12 @@ pub fn init_name(
 /// their lengths. Where the names end.
 #[cfg(CONFIG_UNICODE)]
 fn casefold_name(
-    k:         &mut BkeyI,
+    k:         &mut BkeyI<c::Dirent>,
     hash_info: &c::bch_hash_info,
     name:      &[u8],
     cf_name:   Option<&[u8]>,
 ) -> Result<usize, BchError> {
-    let mut s = BkeyS::from(&mut *k);
-    let v = s.val_bytes_mut();
+    let v = BkeyS::<c::Dirent>::from(&mut *k).into_val_bytes_mut();
     let (names, out) = v[D_NAMES_OFFSET..].split_at_mut(name.len());
     names.copy_from_slice(name);
 
@@ -205,7 +202,7 @@ fn casefold_name(
     };
 
     let cf_block = unsafe {
-        &mut k.arm::<c::Dirent>().expect("a dirent").v_mut().name_block.d_cf_name_block
+        &mut k.v_mut().name_block.d_cf_name_block
     };
     cf_block.d_name_len    = (name.len() as u16).into();
     cf_block.d_cf_name_len = (cf_len as u16).into();
@@ -216,7 +213,7 @@ fn casefold_name(
 /// Without CONFIG_UNICODE, bch2_fs_casefold_enabled() has refused already.
 #[cfg(not(CONFIG_UNICODE))]
 fn casefold_name(
-    _k:         &mut BkeyI,
+    _k:         &mut BkeyI<c::Dirent>,
     _hash_info: &c::bch_hash_info,
     _name:      &[u8],
     _cf_name:   Option<&[u8]>,
@@ -236,10 +233,10 @@ pub fn create_key<'a, 't>(
     name:      &OsStr,
     cf_name:   Option<&OsStr>,
     target:    u64,
-) -> Result<TransBkey<'a, 't>, BchError> {
+) -> Result<TransBkey<'a, 't, c::Dirent>, BchError> {
     let mut k = alloc_max(t, pos(dir.inum, 0))?;
 
-    let d = k.as_mut().arm::<c::Dirent>().expect("a dirent").v_mut();
+    let d = k.v_mut();
     d.set_d_type(d_type);
     if d_type as u32 != c::DT_SUBVOL {
         d.target.d_inum = target.into();
@@ -250,7 +247,7 @@ pub fn create_key<'a, 't>(
         };
     }
 
-    init_name(t.fs(), k.as_mut(), hash_info, name, cf_name)?;
+    init_name(t.fs(), k.key_mut(), hash_info, name, cf_name)?;
     Ok(k)
 }
 
@@ -657,8 +654,8 @@ impl OldDirent {
     }
 
     /// Point @dst at what this pointed at: as dirent_copy_target().
-    fn copy_target_to(&self, dst: &mut TransBkey<'_, '_>) {
-        let d = dst.as_mut().arm::<c::Dirent>().expect("a dirent").v_mut();
+    fn copy_target_to(&self, dst: &mut TransBkey<'_, '_, c::Dirent>) {
+        let d = dst.v_mut();
         d.target = self.target;
         d.set_d_type(self.d_type);
     }
@@ -736,9 +733,13 @@ pub fn rename(
 
     let cf = |hash: &c::bch_hash_info, lookup| (!hash.cf_encoding.is_null()).then_some(lookup);
 
-    let mut new_dst = create_key(t, dst_hash, dst_dir, 0, dst_name, cf(dst_hash, dst_lookup), 0)?;
-    old_src.copy_target_to(&mut new_dst);
-    new_dst.k_mut().p = dst_pos;
+    // Untyped, as new_src may be a deletion or a whiteout:
+    let mut new_dst: TransBkey<'_, '_> = {
+        let mut k = create_key(t, dst_hash, dst_dir, 0, dst_name, cf(dst_hash, dst_lookup), 0)?;
+        old_src.copy_target_to(&mut k);
+        k.k_mut().p = dst_pos;
+        k.into()
+    };
 
     // Positions as the hash table orders them, by inode and offset:
     let le = |l: c::bpos, r: c::bpos| (l.inode, l.offset) <= (r.inode, r.offset);
@@ -748,29 +749,22 @@ pub fn rename(
         let mut k = create_key(t, src_hash, src_dir, 0, src_name, cf(src_hash, src_lookup), 0)?;
         old_dst.expect("exchange looked dst up").copy_target_to(&mut k);
         k.k_mut().p = src_pos;
-        Some(k)
-    } else {
-        let mut k = t.bkey_alloc_init(0, c::bch_bkey_type::KEY_TYPE_deleted.0 as u8, src_pos)?;
-
-        if le(dst_hashed, src_pos) && lt(src_pos, dst_pos) {
-            // A hash collision for the new dst, and src - the key we're
-            // deleting - is between dst's hashed slot and the slot it's going
-            // in: deleting src would break the probe sequence.
-            if mode == BCH_RENAME {
-                // Not overwriting: new dst can go in src's slot instead.
-                None
-            } else {
-                // Overwriting: new dst has to go where old dst is, so src
-                // gets a whiteout.
-                k.k_mut().type_ = c::bch_bkey_type::KEY_TYPE_hash_whiteout.0 as u8;
-                Some(k)
-            }
+        Some(k.into())
+    } else if le(dst_hashed, src_pos) && lt(src_pos, dst_pos) {
+        // A hash collision for the new dst, and src - the key we're deleting -
+        // is between dst's hashed slot and the slot it's going in: deleting
+        // src would break the probe sequence.
+        if mode == BCH_RENAME {
+            // Not overwriting: new dst can go in src's slot instead.
+            None
         } else {
-            if str_hash::needs_whiteout::<Dirents>(t, src_hash, &src_iter)? {
-                k.k_mut().type_ = c::bch_bkey_type::KEY_TYPE_hash_whiteout.0 as u8;
-            }
-            Some(k)
+            // Overwriting: new dst has to go where old dst is, so src gets a
+            // whiteout.
+            Some(str_hash::deletion(t, src_pos, true)?)
         }
+    } else {
+        let whiteout = str_hash::needs_whiteout::<Dirents>(t, src_hash, &src_iter)?;
+        Some(str_hash::deletion(t, src_pos, whiteout)?)
     };
 
     let (new_src, new_dst_pos) = match new_src.take() {

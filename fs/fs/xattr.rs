@@ -15,7 +15,7 @@ use cstruct_macros::c_export;
 
 use crate::acl;
 use crate::bkey_fsck_err_on;
-use crate::btree::bkey::{BKEY_U64S, BkeyI, BkeySC, POS_MIN};
+use crate::btree::bkey::{BKEY_U64S, BkeySC, POS_MIN};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey,
                          UpdateTriggerFlags};
 use crate::c;
@@ -146,8 +146,8 @@ pub fn value(k: BkeySC<'_, c::Xattr<Validated>>) -> &[u8] {
 }
 
 /// @k's value, to fill in - @k an xattr, as new_key() makes one.
-pub fn value_mut(k: &mut BkeyI) -> &mut [u8] {
-    let x = k.arm::<c::Xattr>().expect("an xattr").v_mut();
+pub fn value_mut<'k>(k: &'k mut TransBkey<'_, '_, c::Xattr<Validated>>) -> &'k mut [u8] {
+    let x = k.v_mut();
     let (name_len, val_len) = (x.x_name_len as usize, x.x_val_len.get() as usize);
     &mut x.x_name_and_value[name_len..][..val_len]
 }
@@ -155,15 +155,15 @@ pub fn value_mut(k: &mut BkeyI) -> &mut [u8] {
 /// An xattr key of type @ty named @name, with @val_len bytes of value for
 /// the caller to fill in - value_mut(): None if they don't fit in a key.
 pub fn new_key<'a, 't>(t: &TransAttempt<'a, 't>, ty: c::bch_xattr_type, name: &[u8], val_len: usize)
-    -> Result<Option<TransBkey<'a, 't>>, BchError>
+    -> Result<Option<TransBkey<'a, 't, c::Xattr<Validated>>>, BchError>
 {
     let val_u64s = val_u64s(name.len(), val_len);
     if BKEY_U64S + val_u64s > u8::MAX as usize {
         return Ok(None);
     }
 
-    let mut k = t.bkey_alloc_init(val_u64s, c::bch_bkey_type::KEY_TYPE_xattr.0 as u8, POS_MIN)?;
-    let x = k.as_mut().arm::<c::Xattr>().expect("an xattr").v_mut();
+    let mut k = t.bkey_alloc_init::<c::Xattr>(val_u64s, POS_MIN)?;
+    let x = k.v_mut();
     x.x_type     = ty.0 as u8;
     x.x_name_len = name.len() as u8;
     x.x_val_len  = (val_len as u16).into();
@@ -334,7 +334,7 @@ pub fn set_key(
 ) -> Result<(), BchError> {
     let mut k = new_key(t, ty, name.as_bytes(), value.len())?
         .ok_or(BchError::from(c::ERANGE))?;
-    value_mut(k.as_mut()).copy_from_slice(value);
+    value_mut(&mut k).copy_from_slice(value);
 
     let mut iter_flags = BtreeIterFlags::empty();
     iter_flags.set(BtreeIterFlags::STR_HASH_MUST_CREATE,  flags & XATTR_CREATE != 0);

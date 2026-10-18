@@ -1569,7 +1569,7 @@ fn delete_keys(trans: &BtreeTrans<'_>, inum: c::subvol_inum, btree: c::btree_id)
             let k_end = k.k.p;
 
             let at = iter.pos();
-            let mut delete = t.bkey_alloc_init(0, c::bch_bkey_type::KEY_TYPE_deleted.0 as u8, at)?;
+            let mut delete = t.bkey_alloc_init::<c::Deleted>(0, at)?;
             if iter.is_extents() {
                 delete.k_mut().resize((core::cmp::min(end, k_end).offset - at.offset) as u32);
             }
@@ -1698,7 +1698,7 @@ fn __rm_snapshot(trans: &BtreeTrans<'_>, inum: u64, snapshot: u32) -> Result<(),
     let ret = bch_err_msg!(fs, ret, "deleting content of inode {inum}:{snapshot}, leaving whiteout");
 
     commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| {
-        let whiteout = t.bkey_alloc_init(0, c::bch_bkey_type::KEY_TYPE_whiteout.0 as u8,
+        let whiteout = t.bkey_alloc_init::<c::Whiteout>(0,
                                          spos(0, inum, snapshot))?;
         t.insert(c::btree_id::inodes, whiteout, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
         crate::init::damage::delete(t, inum, snapshot)

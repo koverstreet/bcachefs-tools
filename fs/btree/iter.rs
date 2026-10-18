@@ -823,18 +823,21 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(dst)
     }
 
-    /// A fresh key: bkey_init()ed header with `type_` at `pos`, and
-    /// `val_u64s` of zeroed value space.
-    pub fn bkey_alloc_init(&self, val_u64s: usize, type_: u8, pos: c::bpos)
-        -> Result<TransBkey<'a, 't>, BchError>
+    /// A fresh @K: bkey_init()ed header at `pos`, and `val_u64s` of zeroed
+    /// value space - at least a @K's min_val_size.
+    pub fn bkey_alloc_init<K: BkeyTag + BkeyFamily>(&self, val_u64s: usize, pos: c::bpos)
+        -> Result<TransBkey<'a, 't, K::Validated>, BchError>
     {
+        assert!(val_u64s * size_of::<u64>() >= K::MIN_VAL_SIZE,
+                "{val_u64s} u64s of value, shorter than a {:?}'s {}", K::TYPE, K::MIN_VAL_SIZE);
         let mut k = self.bkey_alloc((BKEY_U64S + val_u64s) as u32)?;
         k.as_mut_u64s().fill(0);
         *k.k_mut() = c::bkey::new();
         k.k_mut().u64s = (BKEY_U64S + val_u64s) as u8;
-        k.k_mut().type_ = type_;
+        k.k_mut().type_ = K::TYPE.0 as u8;
         k.k_mut().p = pos;
-        Ok(k)
+        // SAFETY: a @K by its type, as long as one
+        Ok(unsafe { k.arm_unchecked::<K>() })
     }
 
     /// A copy of @k in a buffer of at least @min_bytes - as C's

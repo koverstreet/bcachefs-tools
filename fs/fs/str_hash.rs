@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, spos, AllTypes, BkeyFamily, BkeyI, BkeySC, InFamily, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, AllTypes, BkeyFamily, BkeyI, BkeySC, InFamily, MutBkey, SPOS_MAX};
 use crate::btree::iter::{
     polonius_key, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt, TransBkey,
     UpdateTriggerFlags,
@@ -29,7 +29,8 @@ pub trait HashTable {
     type Key<'k>: ?Sized;
 
     /// The type of the table's keys - a TableKey, as arm() narrows one.
-    type Val: ?Sized + BkeyFamily<Validated: InFamily<AllTypes>> + 'static;
+    type Val: ?Sized + BkeyFamily<Validated: InFamily<AllTypes> + MutBkey<Mut = TableVal<Self>>>
+        + 'static;
 
     const BTREE: c::btree_id;
 
@@ -47,8 +48,11 @@ pub trait HashTable {
     }
 }
 
+/// The value of a key of @T's.
+pub type TableVal<T> = <<T as HashTable>::Val as BkeyFamily>::Validated;
+
 /// A key of @T's.
-pub type TableKey<'k, T> = BkeySC<'k, <<T as HashTable>::Val as BkeyFamily>::Validated>;
+pub type TableKey<'k, T> = BkeySC<'k, TableVal<T>>;
 
 /// The name hash, as it's running: what @info's type hashes with. crc32c and
 /// crc64 are keyed with the first word of the siphash key, hashed first.
@@ -226,7 +230,7 @@ pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
     hash_info:    &c::bch_hash_info,
     inum:         c::subvol_inum,
     snapshot:     u32,
-    insert:       &mut TransBkey<'_, 't>,
+    insert:       &mut TransBkey<'_, 't, TableVal<T>>,
     iter_flags:   BtreeIterFlags,
     update_flags: UpdateTriggerFlags,
 ) -> Result<Option<TableKey<'i, T>>, BchError> {
@@ -238,7 +242,7 @@ pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
     let must_replace = iter_flags.contains(BtreeIterFlags::STR_HASH_MUST_REPLACE);
 
     let inode = insert.k().p.inode;
-    let insert_k = BkeySC::from(&*insert).arm::<T::Val>().expect("a key of the table's type");
+    let insert_k = insert.as_sc();
     *iter = BtreeIter::new(t, T::BTREE.0, spos(inode, T::hash_bkey(hash_info, insert_k), snapshot),
                            peek_flags);
 
@@ -285,7 +289,7 @@ pub fn set_in_snapshot<'t, T: HashTable>(
     hash_info:    &c::bch_hash_info,
     inum:         c::subvol_inum,
     snapshot:     u32,
-    insert:       &mut TransBkey<'_, 't>,
+    insert:       &mut TransBkey<'_, 't, TableVal<T>>,
     iter_flags:   BtreeIterFlags,
     update_flags: UpdateTriggerFlags,
 ) -> Result<(), BchError> {
@@ -302,7 +306,7 @@ pub fn set<'t, T: HashTable>(
     t:            &TransAttempt<'_, 't>,
     hash_info:    &c::bch_hash_info,
     inum:         c::subvol_inum,
-    insert:       &mut TransBkey<'_, 't>,
+    insert:       &mut TransBkey<'_, 't, TableVal<T>>,
     iter_flags:   BtreeIterFlags,
     update_flags: UpdateTriggerFlags,
 ) -> Result<(), BchError> {
@@ -319,14 +323,20 @@ pub fn delete_at<'t, T: HashTable>(
     iter:      &mut BtreeIter<'t>,
     flags:     UpdateTriggerFlags,
 ) -> Result<(), BchError> {
-    let type_ = if needs_whiteout::<T>(t, hash_info, iter)? {
-        c::bch_bkey_type::KEY_TYPE_hash_whiteout
-    } else {
-        c::bch_bkey_type::KEY_TYPE_deleted
-    };
-
-    let k = t.bkey_alloc_init(0, type_.0 as u8, iter.pos())?;
+    let k = deletion(t, iter.pos(), needs_whiteout::<T>(t, hash_info, iter)?)?;
     t.update(iter, &k, flags)
+}
+
+/// A key deleting @pos: a whiteout, if a later key in its probe sequence needs
+/// one - @whiteout - else a deletion.
+pub fn deletion<'a, 't>(t: &TransAttempt<'a, 't>, pos: c::bpos, whiteout: bool)
+    -> Result<TransBkey<'a, 't>, BchError>
+{
+    Ok(if whiteout {
+        t.bkey_alloc_init::<c::HashWhiteout>(0, pos)?.into()
+    } else {
+        t.bkey_alloc_init::<c::Deleted>(0, pos)?.into()
+    })
 }
 
 /// In subvolume and inode @inum. ENOENT_str_hash_lookup if it isn't there.
@@ -620,7 +630,7 @@ impl Repair<'_> {
             write!(name, ".fsck_renamed-{i}");
 
             new.k_mut().u64s = u8::MAX;
-            dirent::init_name(fs, new.as_mut(), self.hash_info, name.as_os_str(), None)?;
+            dirent::init_name(fs, new.key_mut(), self.hash_info, name.as_os_str(), None)?;
 
             let mut iter = BtreeIter::uninit();
             match set_or_get_in_snapshot::<Dirents>(t, &mut iter, self.hash_info, dir,
@@ -701,8 +711,7 @@ impl Repair<'_> {
             return self.dup_entries::<T>(t, k, dup);
         }
 
-        let k_any: BkeySC<'_> = k.into();
-        let mut new = t.bkey_make_mut_noupdate(k_any)?;
+        let mut new = t.bkey_make_mut_noupdate(k)?;
         let mut iter = BtreeIter::uninit();
         let dir = c::subvol_inum { subvol: 0, inum: k.k.p.inode };
 
@@ -769,8 +778,7 @@ impl Repair<'_> {
         delete_at::<Dirents>(t, self.hash_info, &mut iter,
                              UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
-        let new = BkeySC::from(&new).arm::<c::Dirent>().expect("a dirent, as just made");
-        self.repair_key::<Dirents>(t, new, None)?;
+        self.repair_key::<Dirents>(t, new.as_sc(), None)?;
         Err(fs.err(bch_errcode::BCH_ERR_str_hash_key_repaired))
     }
 

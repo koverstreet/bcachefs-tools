@@ -300,7 +300,7 @@ impl InodeWalker {
             new.bi_snapshot = snapshot;
             inode::fsck_write(t, &mut new)?;
         } else {
-            let whiteout = t.bkey_alloc_init(0, c::bch_bkey_type::KEY_TYPE_whiteout.0 as u8,
+            let whiteout = t.bkey_alloc_init::<c::Whiteout>(0,
                                              spos(0, e.inode.bi_inum, snapshot))?;
             t.insert_with(c::btree_id::inodes, whiteout, BtreeIterFlags::CACHED,
                           UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;

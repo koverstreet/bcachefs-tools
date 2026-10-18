@@ -802,7 +802,9 @@ fn cmd_set(
             // A zeroed value of the struct's fixed size, in a buffer set()
             // can grow it into - vartail elements (damage errors[n]) lie
             // beyond the struct:
-            let mut new = t.bkey_alloc_init(BKEY_VAL_U64S_MAX, ti.type_ as u8, pos)?;
+            // of the type the user named: erased, then retyped
+            let mut new: TransBkey<'_, '_> = t.bkey_alloc_init::<c::Deleted>(BKEY_VAL_U64S_MAX, pos)?.into();
+            new.k_mut().type_ = ti.type_ as u8;
             new.k_mut().u64s = (BKEY_U64S + ti.info.size.div_ceil(8)) as u8;
 
             set_fields(fs, &mut new, assigns, false, &mut user_err)?;

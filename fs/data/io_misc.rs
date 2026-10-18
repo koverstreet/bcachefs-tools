@@ -38,11 +38,6 @@ const MAX_LFS_FILESIZE: u64 = (usize::MAX as u64) << kernel::page::PAGE_SHIFT;
 #[cfg(not(all(kernel, target_pointer_width = "32")))]
 const MAX_LFS_FILESIZE: u64 = i64::MAX as u64;
 
-/// A deleted key at @p - size 0, for the caller to give one.
-fn delete_key<'a, 't>(t: &TransAttempt<'a, 't>, p: c::bpos) -> Result<TransBkey<'a, 't>, BchError> {
-    t.bkey_alloc_init(0, c::bch_bkey_type::KEY_TYPE_deleted.0 as u8, p)
-}
-
 // ── fpunch ───────────────────────────────────────────────────────────────
 
 /// For fsck: delete the extents from @start to @end in @start's snapshot, in a
@@ -58,7 +53,7 @@ pub fn fpunch_snapshot(trans: &BtreeTrans<'_>, start: c::bpos, end: c::bpos) -> 
 
     iter.for_each_max_commit(trans, end, BtreeIterFlags::empty(), Some(&res), CommitFlags::NO_ENOSPC,
                              |t, iter, _| {
-        let mut delete = delete_key(t, iter.pos())?;
+        let mut delete = t.bkey_alloc_init::<c::Deleted>(0, iter.pos())?;
 
         /* create the biggest key we can */
         let max_sectors = max_of(&delete.k().size) & (!0 << fs.block_bits());
@@ -99,7 +94,7 @@ pub fn fpunch_at<'t>(
             let Some(k) = iter.peek_max(&t, end_pos)? else { return Ok(true) };
             let k_end = k.k.p.offset;
 
-            let mut delete = delete_key(&t, iter.pos())?;
+            let mut delete = t.bkey_alloc_init::<c::Deleted>(0, iter.pos())?;
             delete.k_mut().resize((end.min(k_end) - iter.pos().offset) as u32);
 
             let delta = i_sectors_delta.as_deref_mut().map_or(core::ptr::null_mut(), core::ptr::from_mut);
@@ -316,7 +311,7 @@ fn finsert_take_ancestor_extent<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>,
 
     if k.extent_is_unwritten(fs) {
         let start = bpos_max(k.k.start_pos(), src_pos);
-        let mut del = delete_key(t, k.k.p)?;
+        let mut del = t.bkey_alloc_init::<c::Deleted>(0, k.k.p)?;
         del.k_mut().size = (k.k.p.offset - start.offset) as u32;
 
         t.insert(c::btree_id::extents, del, UpdateTriggerFlags::empty())?;
@@ -455,7 +450,7 @@ fn __resume_finsert(
                     }
                 }
 
-                let mut delete = delete_key(&t, c::bpos { snapshot, ..copy.k().p })?;
+                let mut delete = t.bkey_alloc_init::<c::Deleted>(0, c::bpos { snapshot, ..copy.k().p })?;
                 delete.k_mut().size = copy.k().size;
 
                 let p = &mut copy.k_mut().p;

@@ -198,6 +198,7 @@ mod vfs {
     use crate::str_hash;
     use crate::util::ffi::Opaque;
     use crate::util::os_str::{OsStr, OsStrExt};
+    use crate::util::vstructs::Validated;
     use crate::vfs::dentry::Dentry;
     use crate::vfs::inode::{InodeInfo, ATTR_CTIME, ATTR_MODE};
     use crate::xattr::{self, Xattrs};
@@ -339,7 +340,7 @@ mod vfs {
 
         /// The xattr key storing it: E2BIG if it doesn't fit in a key.
         fn to_xattr<'a, 't>(&self, t: &TransAttempt<'a, 't>, ty: AclType)
-            -> Result<TransBkey<'a, 't>, BchError>
+            -> Result<TransBkey<'a, 't, c::Xattr<Validated>>, BchError>
         {
             // A tag ACLs don't have: EINVAL
             if self.entries().any(|e| e.is_err()) {
@@ -349,7 +350,7 @@ mod vfs {
 
             let mut k = xattr::new_key(t, ty.xattr_type(), b"", encoded_len(entries()))?
                 .ok_or(BchError::from(c::E2BIG))?;
-            encode(entries(), xattr::value_mut(k.as_mut()));
+            encode(entries(), xattr::value_mut(&mut k));
             Ok(k)
         }
     }

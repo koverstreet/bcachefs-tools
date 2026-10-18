@@ -298,7 +298,7 @@ fn maybe_delete_dirent(t: &TransAttempt<'_, '_>, d_pos: c::bpos, snapshot: u32)
     // Explicit: delete_at() needs need_whiteout_for_snapshot() to see the
     // uncommitted dirent, which iterators couldn't when this was written.
     // XXX: they can now - switch once fault injection covers this path.
-    let whiteout = t.bkey_alloc_init(0, c::bch_bkey_type::KEY_TYPE_whiteout.0 as u8, iter.pos())?;
+    let whiteout = t.bkey_alloc_init::<c::Whiteout>(0, iter.pos())?;
     t.update(&iter, &whiteout, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
