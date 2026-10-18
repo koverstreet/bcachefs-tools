@@ -261,7 +261,6 @@ static size_t bch2_btree_cache_size(struct bch_fs *c)
 
 static __cold int bch2_compression_stats_to_text(struct printbuf *out, struct bch_fs *c)
 {
-	prt_str(out, "type");
 	printbuf_tabstop_push(out, 12);
 	printbuf_tabstop_push(out, 16);
 	printbuf_tabstop_push(out, 16);
