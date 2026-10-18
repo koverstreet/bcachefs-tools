@@ -20,6 +20,7 @@ use core::cell::UnsafeCell;
 use core::ffi::{c_void, CStr};
 use core::marker::{PhantomData, PhantomPinned};
 use core::ops::{Deref, DerefMut};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 /// RAII guard for a process-context memalloc scope. Restores the previous
 /// flags when dropped.
@@ -177,3 +178,60 @@ macro_rules! new_mutex_noio {
 }
 
 pub use crate::new_mutex_noio;
+
+/// mutex_trylock(): the guard if @m wasn't held.
+pub fn mutex_trylock(m: &c::mutex) -> Option<MutexGuard<'_>> {
+    // SAFETY: as mutex_lock()'s
+    let locked = unsafe { c::mutex_trylock(core::ptr::from_ref(m).cast_mut()) };
+    // then(), not then_some(): a guard made and dropped unlocks
+    (locked as i32 != 0).then(|| MutexGuard(m))
+}
+
+// ── seqmutex ────────────────────────────────────────────────────────────────
+//
+// util/seqmutex.h's static inlines: a mutex, and a count of the times it's been
+// taken. C reads the count plainly, outside the lock; here it's atomic.
+
+impl c::seqmutex {
+    fn seq_atomic(&self) -> &AtomicU32 {
+        // SAFETY: a u32, aligned as one, that C writes under the mutex
+        unsafe { AtomicU32::from_ptr((&raw const self.seq).cast_mut()) }
+    }
+
+    /// seqmutex_lock().
+    pub fn lock(&self) -> SeqMutexGuard<'_> {
+        let mutex = mutex_lock(&self.lock);
+        self.seq_atomic().fetch_add(1, Ordering::Relaxed);
+        SeqMutexGuard { lock: self, _mutex: mutex }
+    }
+
+    /// seqmutex_relock(): held again, if no one has taken it since the unlock
+    /// that gave @seq.
+    pub fn relock(&self, seq: SeqMutexSeq) -> Option<SeqMutexGuard<'_>> {
+        if self.seq_atomic().load(Ordering::Relaxed) != seq.0 {
+            return None;
+        }
+        let mutex = mutex_trylock(&self.lock)?;
+        if self.seq_atomic().load(Ordering::Relaxed) != seq.0 {
+            return None;    // unlocked, as the guard drops
+        }
+        Some(SeqMutexGuard { lock: self, _mutex: mutex })
+    }
+}
+
+/// A seqmutex, held: unlocked on drop.
+#[must_use = "the seqmutex is unlocked as soon as the guard is dropped"]
+pub struct SeqMutexGuard<'a> {
+    lock:   &'a c::seqmutex,
+    _mutex: MutexGuard<'a>,
+}
+
+/// What relock() takes: the count at an unlock.
+pub struct SeqMutexSeq(u32);
+
+impl SeqMutexGuard<'_> {
+    /// seqmutex_unlock().
+    pub fn unlock(self) -> SeqMutexSeq {
+        SeqMutexSeq(self.lock.seq_atomic().load(Ordering::Relaxed))
+    }
+}
