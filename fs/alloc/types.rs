@@ -226,7 +226,8 @@ c_default!(bch_fs_capacity);
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_allocator {
-    pub rw_devs: [c::bch_devs_mask; c::BCH_DATA_NR as usize],
+    #[c("struct bch_devs_mask rw_devs[BCH_DATA_NR]")]
+    pub rw_devs: [c::AtomicDevsMask; c::BCH_DATA_NR as usize],
     pub rw_devs_change_count: c_ulong,
 
     /* fs-wide allocator wake generation; see bch2_alloc_wake_all() */

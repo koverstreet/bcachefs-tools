@@ -588,9 +588,12 @@ pub struct Fs {
 
     #[c("struct bch_dev __rcu *devs[BCH_SB_MEMBERS_MAX]")]
     pub devs: [*mut c::bch_dev; c::BCH_SB_MEMBERS_MAX as usize],
-    pub devs_online: c::bch_devs_mask,
-    pub devs_removed: c::bch_devs_mask,
-    pub devs_rotational: c::bch_devs_mask,
+    #[c("struct bch_devs_mask devs_online")]
+    pub devs_online: c::AtomicDevsMask,
+    #[c("struct bch_devs_mask devs_removed")]
+    pub devs_removed: c::AtomicDevsMask,
+    #[c("struct bch_devs_mask devs_rotational")]
+    pub devs_rotational: c::AtomicDevsMask,
 
     pub opts: c::bch_opts,
     pub opt_change_lock: c::mutex,

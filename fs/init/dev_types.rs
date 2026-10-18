@@ -5,8 +5,9 @@
 use crate::cstructs::c;
 use crate::util::vstructs::Head;
 use crate::types::{DArray, bits_to_longs, c_default};
+use crate::util::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::c_char;
-use core::ffi::{c_int, c_ulong};
+use core::ffi::c_int;
 use cstruct_macros::{CStruct, bitfield, c_extern, c_typedef, TypeInfo};
 use nestify::nest;
 
@@ -47,11 +48,18 @@ c_typedef! {
     pub type bch_sb_handles = DArray<c::bch_sb_handle>;
 }
 
+/// A set of devices, by index.
+pub type DevsMask = BitArray<{ bits_to_longs(c::BCH_SB_MEMBERS_MAX as usize) }>;
+
+/// One changed under readers - c->devs_online, the allocator's rw_devs[] -
+/// declared as such where it's a field: still a struct bch_devs_mask to C.
+pub type AtomicDevsMask = AtomicBitArray<{ bits_to_longs(c::BCH_SB_MEMBERS_MAX as usize) }>;
+
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
 pub struct bch_devs_mask {
     #[c("unsigned long d[BITS_TO_LONGS(BCH_SB_MEMBERS_MAX)]")]
-    pub d: [c_ulong; bits_to_longs(c::BCH_SB_MEMBERS_MAX as usize)],
+    pub d: DevsMask,
 }
 
 #[repr(C)]
