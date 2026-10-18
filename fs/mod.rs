@@ -46,6 +46,7 @@ pub mod alloc {
 }
 pub mod btree;
 pub mod debug {
+    pub mod params;
     pub mod sysfs;
     pub mod tests;
 }
