@@ -953,7 +953,9 @@ pub fn unlink(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
     set_state_trans(t, subvol, c::bch_subvolume_state::SUBVOLUME_STATE_unlinked)?;
 
     // There's no unlinked-subvolumes btree, as there is for inodes: if we
-    // crash while it's still open, check_subvols finds and deletes it
+    // crash while it's still open, check_subvols finds and deletes it.
+    // Scheduled for the next mount only - check_subvols() tombstones what it
+    // finds, so it must not run while this deletion still has held inodes.
     passes::set_no_ratelimit(t.fs(), BCH_RECOVERY_PASS_check_subvols);
     Ok(())
 }

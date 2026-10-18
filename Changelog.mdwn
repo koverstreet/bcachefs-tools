@@ -6,6 +6,9 @@
 
 - Subvolume deletion no longer blocks while VFS inodes are held; pending
   deletions retry after one second until those holders drain.
+- A deletion interrupted by unmount or a crash no longer strands its subvolume
+  in `unlinked` state until an explicit fsck: the next mount reaps it with
+  `check_subvols`, as subvolume deletion always intended.
 
 ## v1.39.7 - Sun Oct 4 2026
 
