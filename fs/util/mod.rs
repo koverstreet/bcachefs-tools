@@ -16,6 +16,7 @@ pub mod os_str;
 pub mod percpu;
 pub mod printbuf;
 pub mod rcu;
+pub mod strided;
 pub mod sysfs;
 pub mod sync;
 pub mod varint;
