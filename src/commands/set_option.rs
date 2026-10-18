@@ -3,6 +3,7 @@ use std::ffi::CString;
 use anyhow::{bail, Result};
 use bcachefs_kernel::c;
 use bcachefs_kernel::fs::{Fs, OpenFs};
+use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::util::rcu;
 use bcachefs_kernel::opt_set;
 use clap::{Arg, ArgAction, Command};
@@ -180,8 +181,12 @@ fn set_option_offline(
         }
 
         let c_value = CString::new(value.as_str())?;
-        let Ok(val) = bcachefs_kernel::opts::opt_parse(Some(&fs), opt, &c_value, None) else {
-            eprintln!("Error parsing {name}={value}");
+        let mut err = Printbuf::new();
+        let Ok(val) = bcachefs_kernel::opts::opt_parse(Some(&fs), opt, &c_value, Some(&mut err)) else {
+            match err.as_str().trim_end() {
+                ""  => eprintln!("Error parsing {name}={value}"),
+                msg => eprintln!("Error parsing {name}={value}: {msg}"),
+            }
             failed.insert(name.as_str());
             continue;
         };
