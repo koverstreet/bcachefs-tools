@@ -17,5 +17,7 @@
 
 #include <linux/blktrace_api.h>
 
+/* And rust_do_trace_<name>(), each tracepoint's, for sb/counters.rs */
 #define CREATE_TRACE_POINTS
+#define CREATE_RUST_TRACE_POINTS
 #include "debug/trace.h"

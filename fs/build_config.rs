@@ -51,6 +51,7 @@ const KERNEL_CONFIG: &[&str] = &[
     "CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE",
     "CONFIG_DEBUG_LOCK_ALLOC",
     "CONFIG_POWER_SUPPLY",
+    "CONFIG_TRACEPOINTS",
 ];
 
 /// Make the configuration's CONFIG_* defines Rust cfgs, as the kernel's

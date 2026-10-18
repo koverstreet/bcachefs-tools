@@ -1,3 +1,4 @@
+pub mod counters;
 pub mod io;
 pub mod members;
 
