@@ -558,11 +558,6 @@ struct bkey_durability bch2_btree_ptr_durability(struct bch_fs *, struct bkey_s_
 
 bool bch2_bkey_can_read(const struct bch_fs *, struct bkey_s_c);
 
-const struct bch_extent_ptr *bch2_bkey_has_device_c(const struct bch_fs *,
-						    struct bkey_s_c, unsigned);
-bool bch2_bkey_has_device_decode(const struct bch_fs *, struct bkey_s_c, unsigned,
-				 struct extent_ptr_decoded *);
-
 static inline struct bch_extent_ptr *bch2_bkey_has_device(const struct bch_fs *c,
 							  struct bkey_s k, unsigned dev)
 {
@@ -581,13 +576,6 @@ static inline unsigned bch2_bkey_dev_ptr_bit(struct bch_fs *c, struct bkey_s_c k
 	}
 	return 0;
 }
-
-bool bch2_bkey_devs_rw(struct bch_fs *, struct bkey_s_c);
-
-bool bch2_bkey_has_target(struct bch_fs *, struct bkey_s_c, unsigned);
-bool bch2_bkey_in_target(struct bch_fs *, struct bkey_s_c, unsigned);
-
-bool bch2_bkey_has_dev_bad_or_evacuating(struct bch_fs *, struct bkey_s_c);
 
 void bch2_bkey_extent_entry_drop_s(const struct bch_fs *, struct bkey_s, union bch_extent_entry *);
 void bch2_bkey_extent_entry_drop(const struct bch_fs *, struct bkey_i *, union bch_extent_entry *);
@@ -661,14 +649,6 @@ do {										\
 			}							\
 	} while (dropped);							\
 } while (0)
-
-bool bch2_bkey_matches_ptr(struct bch_fs *, struct bkey_s_c,
-			   struct bch_extent_ptr, u64);
-bool bch2_bkey_ptrs_match(struct bkey_s_c, struct extent_ptr_decoded,
-			  struct bkey_s_c, struct extent_ptr_decoded);
-bool bch2_extents_match(const struct bch_fs *c, struct bkey_s_c, struct bkey_s_c);
-struct bch_extent_ptr *
-bch2_extent_has_ptr(const struct bch_fs *, struct bkey_s_c, struct extent_ptr_decoded, struct bkey_s);
 
 void bch2_extent_ptr_set_cached(struct bch_fs *, struct bch_inode_opts *,
 				struct bkey_s, struct bch_extent_ptr *);

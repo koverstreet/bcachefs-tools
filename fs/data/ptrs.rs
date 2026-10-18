@@ -17,6 +17,7 @@
 //! The bkey methods - validate, to_text, swab - are ptrs_ops.rs's; editing a
 //! key's entries, ptrs_edit.rs's; C's names for all of it, ptrs_c_export.rs's.
 
+use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{bkey_family, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut};
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::errcode::BchError;
@@ -359,6 +360,52 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
         })
     }
 
+    /// Its pointer to device @dev, if it has one: bch2_bkey_has_device_c().
+    fn has_device(&self, fs: &Fs, dev: u32) -> Option<&c::bch_extent_ptr> {
+        self.ptrs(fs).find(|p| u32::from(p.dev()) == dev)
+    }
+
+    /// Its pointer to device @dev, decoded: bch2_bkey_has_device_decode().
+    fn has_device_decode(&self, fs: &Fs, dev: u32) -> Option<DecodedPtr<'_>> {
+        self.ptrs_decoded(fs).find(|d| u32::from(d.ptr.dev()) == dev)
+    }
+
+    /// Whether the allocator writes to every device it points to:
+    /// bch2_bkey_devs_rw().
+    fn devs_rw(&self, fs: &Fs) -> bool {
+        let rcu = read_lock();
+        self.ptrs(fs).all(|p| fs.dev_rcu(p.dev().into(), &rcu).is_some_and(|ca| ca.is_rw()))
+    }
+
+    /// Whether it has its data in target @target - a pointer there that isn't
+    /// cached, or is and isn't stale: bch2_bkey_has_target().
+    fn has_target(&self, fs: &Fs, target: Target) -> bool {
+        let rcu = read_lock();
+        self.ptrs(fs).any(|p| {
+            fs.dev_in_target(p.dev().into(), target, &rcu) &&
+                fs.dev_rcu(p.dev().into(), &rcu)
+                    .is_some_and(|ca| p.cached() == 0 || ca.ptr_stale(p, &rcu) == Some(0))
+        })
+    }
+
+    /// Whether every pointer is in target @target: bch2_bkey_in_target().
+    fn in_target(&self, fs: &Fs, target: Target) -> bool {
+        let rcu = read_lock();
+        self.ptrs(fs).all(|p| fs.dev_in_target(p.dev().into(), target, &rcu))
+    }
+
+    /// Whether it has pointer @m, to data @offset sectors into its extent -
+    /// the device, gen and place on disk, given where each extent starts:
+    /// bch2_bkey_matches_ptr().
+    fn matches_ptr(&self, fs: &Fs, m: &c::bch_extent_ptr, offset: u64) -> bool {
+        let start = self.k().start_offset();
+        self.ptrs_decoded(fs).any(|d| {
+            d.p.ptr.dev() == m.dev() &&
+                d.p.ptr.generation() == m.generation() &&
+                ptr_data_start(&d.p, start) == m.offset().wrapping_sub(offset)
+        })
+    }
+
     fn extent_entries_mut(&mut self, fs: &Fs) -> impl Iterator<Item = ExtentEntryMut<'_>>
     where Self: BkeyVMut
     {
@@ -563,6 +610,58 @@ pub fn drop_stale_ptrs<'a, 't>(
 ) -> Result<(), BchError> {
     let ret = unsafe { c::bch2_bkey_drop_stale_ptrs(t.raw(), iter.raw(), k.into()) };
     t.result(ret)
+}
+
+// ── queries ──────────────────────────────────────────────────────────────
+
+/// Where on @p's device the data of its extent, starting at @start, would
+/// start: C's (s64) ptr.offset + crc.offset - bkey_start_offset(), which
+/// wraps - two are compared, so wrapping or not doesn't matter.
+fn ptr_data_start(p: &c::extent_ptr_decoded, start: u64) -> u64 {
+    p.ptr.offset().wrapping_add(p.crc.offset.into()).wrapping_sub(start)
+}
+
+/// Whether @p1 of @k1 and @p2 of @k2 point to the same data: the same
+/// device - or the same block of the same stripe - and gen, the same place
+/// given where each extent starts (one may have been trimmed), and
+/// overlapping on disk: bch2_bkey_ptrs_match().
+pub fn ptrs_match(k1: &c::bkey, p1: &c::extent_ptr_decoded, k2: &c::bkey, p2: &c::extent_ptr_decoded) -> bool {
+    let overlaps = |a: &c::extent_ptr_decoded, b: &c::extent_ptr_decoded| {
+        a.ptr.offset() >= b.ptr.offset() && a.ptr.offset() < b.ptr.offset() + u64::from(b.crc.compressed_size)
+    };
+
+    (p1.ptr.dev() == p2.ptr.dev() ||
+     (p1.has_ec && p2.has_ec && p1.ec.idx() == p2.ec.idx() && p1.ec.block() == p2.ec.block())) &&
+        p1.ptr.generation() == p2.ptr.generation() &&
+        ptr_data_start(p1, k1.start_offset()) == ptr_data_start(p2, k2.start_offset()) &&
+        /*
+         * The same place, given where they start, can be a coincidence when
+         * one is partially overwritten by an extent written right after it
+         * and compression is in use - adjacent on disk, not the same data:
+         * they must overlap too.
+         */
+        (overlaps(p1, p2) || overlaps(p2, p1))
+}
+
+/// Whether @k1 and @k2 refer to the same data: of the same type, and for a
+/// type with its data's pointers, both unwritten or neither, with a pointer
+/// pair that ptrs_match(). Any other type - KEY_TYPE_deleted, say - always
+/// does: bch2_extents_match().
+pub fn extents_match(fs: &Fs, k1: BkeySC<'_>, k2: BkeySC<'_>) -> bool {
+    if k1.k.key_type() != k2.k.key_type() {
+        return false;
+    }
+    if !k1.k.extent_is_direct_data() {
+        return true;
+    }
+    if k1.extent_is_unwritten(fs) != k2.extent_is_unwritten(fs) {
+        return false;
+    }
+
+    let p1 = k1.arm::<Ptrs>().expect("a key with direct data has pointers");
+    let p2 = k2.arm::<Ptrs>().expect("a key with direct data has pointers");
+    let matched = p1.ptrs_decoded(fs).any(|a| p2.ptrs_decoded(fs).any(|b| ptrs_match(k1.k, &a.p, k2.k, &b.p)));
+    matched
 }
 
 #[cfg(test)]
