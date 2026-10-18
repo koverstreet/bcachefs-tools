@@ -168,6 +168,18 @@ impl<T: ?Sized + RcuPointee> RcuBuf<T> {
             unsafe { c::rust_kvfree_rcu(old.cast()) };
         }
     }
+
+    /// For owners C frees, which never run Drop.
+    ///
+    /// # Safety
+    /// No readers or writers are left.
+    pub unsafe fn free(&self) {
+        let p = self.p.swap(core::ptr::null_mut(), Ordering::Relaxed);
+        if !p.is_null() {
+            // SAFETY: from rust_kvzalloc(), and nothing reads it now
+            unsafe { c::rust_kvfree(p.cast()) };
+        }
+    }
 }
 
 impl<T: ?Sized + RcuPointee> Drop for RcuBuf<T> {
@@ -296,8 +308,6 @@ impl<T: RcuElement> RcuArray<T> {
     /// # Safety
     /// As RcuBuf::replace(): the caller holds the writers' lock.
     pub unsafe fn grow_to(&self, nr: usize) -> Result<(), AllocError> {
-        const { assert!(size_of::<T>() != 0) };
-
         let old = unsafe { self.get_locked() };
         if nr <= old.len() {
             return Ok(());
@@ -307,21 +317,47 @@ impl<T: RcuElement> RcuArray<T> {
         let bytes = nr.checked_mul(size_of::<T>())
             .and_then(|b| b.checked_add(tail))
             .and_then(usize::checked_next_power_of_two)
+            .ok_or(AllocError)?;
+
+        // SAFETY: the caller's; the old elements don't change under the
+        // writers' lock, and a bytewise copy of one is valid (RcuElement)
+        unsafe {
+            self.rebuild((bytes - tail) / size_of::<T>(), |new| {
+                core::ptr::copy_nonoverlapping(old.as_ptr(), new.as_mut_ptr(), old.len())
+            })
+        }
+    }
+
+    /// A zeroed buffer of exactly @nr elements, filled by @fill - the old one
+    /// isn't copied.
+    ///
+    /// # Safety
+    /// As RcuBuf::replace(): the caller holds the writers' lock.
+    pub unsafe fn rebuild(&self, nr: usize, fill: impl FnOnce(&mut [T])) -> Result<(), AllocError> {
+        const { assert!(size_of::<T>() != 0) };
+
+        let tail = RcuArrayBuf::<T>::TAIL;
+        let bytes = nr.checked_mul(size_of::<T>())
+            .and_then(|b| b.checked_add(tail))
             .filter(|&b| b <= i32::MAX as usize)
             .ok_or(AllocError)?;
 
         let new = NonNull::new(unsafe { c::rust_kvzalloc(bytes) }.cast::<RcuArrayHead>())
             .ok_or(AllocError)?;
 
-        // SAFETY: @bytes are ours, zeroed - a valid head and elements but for
-        // nr; the old elements don't change under the writers' lock
+        // SAFETY: @bytes are ours, zeroed - valid elements; no reader sees
+        // them until replace() publishes them
         unsafe {
-            (*new.as_ptr()).nr = (bytes - tail) / size_of::<T>();
-            core::ptr::copy_nonoverlapping(old.as_ptr(),
-                                           new.as_ptr().byte_add(tail).cast::<T>(),
-                                           old.len());
+            (*new.as_ptr()).nr = nr;
+            fill(core::slice::from_raw_parts_mut(new.as_ptr().byte_add(tail).cast::<T>(), nr));
             self.0.replace(new);
         }
         Ok(())
+    }
+
+    /// # Safety
+    /// As RcuBuf::free().
+    pub unsafe fn free(&self) {
+        unsafe { self.0.free() }
     }
 }
