@@ -250,7 +250,8 @@ impl Fs {
     /// Caller holds sb_lock.
     #[allow(clippy::mut_from_ref)] // interior mutability guarded by sb_lock
     pub unsafe fn member_mut(&self, dev_idx: u32) -> &mut c::bch_member {
-        unsafe { &mut *c::bch2_members_v2_get_mut((*self.as_ptr()).disk_sb.sb, dev_idx as i32) }
+        unsafe { self.disk_sb_mut() }.member_mut(dev_idx)
+            .expect("a member, whole: bch2_sb_members_v2_init() grew them at open")
     }
 
     pub fn btree_id_root(&self, id: u32) -> Option<&c::btree> {

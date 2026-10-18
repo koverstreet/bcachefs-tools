@@ -5,7 +5,8 @@ use crate::fs::Fs;
 use crate::sb::members;
 use crate::util::Printbuf;
 use crate::types::ArmOf;
-use crate::util::vstructs::{read_past, ArmRef, Head, SelfSized, Validated};
+use crate::util::strided::StridedMut;
+use crate::util::vstructs::{bytes_of_mut, read_past, ArmRef, Head, SelfSized, Validated};
 use core::ffi::c_int;
 
 /// A superblock section's type: an arm of tagged_union! bch_sb_field, which
@@ -231,15 +232,14 @@ impl bch_sb_handle {
     /// or it's shorter than a bch_member - written before it grew - which a
     /// write to would run past, into the next member.
     pub fn member_mut(&mut self, idx: u32) -> Option<&mut bch_member> {
-        let nr = self.sb().nr_devices as u32;
-        let mi = self.field::<c::bch_sb_field_members_v2>()?;
-        let member_bytes = mi.member_bytes.get() as usize;
-        let end = core::mem::offset_of!(Head<c::bch_sb_field_members_v2>, _members) + (idx as usize + 1) * member_bytes;
-        if idx >= nr || member_bytes < size_of::<bch_member>() || end > mi.as_bytes().len() {
+        if idx >= u32::from(self.sb().nr_devices) {
             return None;
         }
-        // SAFETY: the member's in the section, all of it
-        unsafe { Some(&mut *c::bch2_members_v2_get_mut(self.sb, idx as i32)) }
+        let mi = self.field_mut::<c::bch_sb_field_members_v2>()?;
+        let stride = mi.member_bytes.get().into();
+        let members = bytes_of_mut(mi)
+            .get_mut(core::mem::offset_of!(Head<c::bch_sb_field_members_v2>, _members)..)?;
+        StridedMut::<bch_member>::new(members, stride)?.into_whole_mut(idx as usize)
     }
 
     /// Read-only, bounds-checked access to members_v2.

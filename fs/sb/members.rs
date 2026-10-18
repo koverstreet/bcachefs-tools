@@ -5,7 +5,8 @@ use crate::fs::Fs;
 use crate::util::kernel::{READ, WRITE};
 use crate::util::Printbuf;
 use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::vstructs::{Head, View};
+use crate::util::strided::Strided;
+use crate::util::vstructs::Head;
 use core::ffi::CStr;
 use core::mem::offset_of;
 use super::io::*;
@@ -55,34 +56,25 @@ pub fn sb_member(sb: &c::bch_sb, idx: u32) -> Option<c::bch_member> {
     }
 }
 
-/// Member @idx of a members section, its bytes @b: one of @member_bytes from
-/// @start, copied - zero past the end of one shorter than bch_member. None
-/// if it's past the section's end.
-fn member_at(b: &[u8], start: usize, member_bytes: usize, idx: u32) -> Option<c::bch_member> {
-    let at = start + idx as usize * member_bytes;
-    Some(View::<c::bch_member>::new(b.get(at..at + member_bytes)?).get())
+/// A members section's members, each @stride bytes: View::get()'s copies,
+/// zero past the end of one written before bch_member grew.
+fn members_in(f: &[u8], start: usize, stride: usize) -> Option<Strided<'_, c::bch_member>> {
+    Strided::new(f.get(start..)?, stride)
 }
 
 /// Read-only view of members_v2 with bounds-checked access.
 pub struct MembersV2<'a> {
-    /// The section's
-    bytes: &'a [u8],
-    member_bytes: usize,
+    members:    Strided<'a, c::bch_member>,
     nr_devices: u32,
 }
 
 impl<'a> MembersV2<'a> {
-    /// Get a copy of the member at `idx`, zero-extending if member_bytes
-    /// is smaller than sizeof(bch_member).
     pub fn get(&self, idx: u32) -> Option<c::bch_member> {
-        if idx >= self.nr_devices {
-            return None;
-        }
-        member_at(self.bytes, offset_of!(Head<c::bch_sb_field_members_v2>, _members), self.member_bytes, idx)
+        (idx < self.nr_devices).then(|| self.members.get(idx as usize))?.map(|m| m.get())
     }
 
     pub fn member_bytes(&self) -> usize {
-        self.member_bytes
+        self.members.stride()
     }
 
     pub fn nr_devices(&self) -> u32 {
@@ -96,17 +88,13 @@ impl<'a> MembersV2<'a> {
 
 /// Read-only view of members_v1 with bounds-checked access.
 pub struct MembersV1<'a> {
-    /// The section's
-    bytes: &'a [u8],
+    members:    Strided<'a, c::bch_member>,
     nr_devices: u32,
 }
 
 impl<'a> MembersV1<'a> {
     pub fn get(&self, idx: u32) -> Option<c::bch_member> {
-        if idx >= self.nr_devices {
-            return None;
-        }
-        member_at(self.bytes, offset_of!(Head<c::bch_sb_field_members_v1>, _members), BCH_MEMBER_V1_BYTES, idx)
+        (idx < self.nr_devices).then(|| self.members.get(idx as usize))?.map(|m| m.get())
     }
 
     pub fn nr_devices(&self) -> u32 {
@@ -125,20 +113,21 @@ pub fn dev_ptr(ca: Option<&c::bch_dev>) -> *mut c::bch_dev {
 
 /// Construct a MembersV2 reader from a superblock.
 pub fn members_v2(sb: &c::bch_sb) -> Option<MembersV2<'_>> {
-    let field = sb_field_get::<c::bch_sb_field_members_v2>(sb)?;
+    let f = sb_field_get::<c::bch_sb_field_members_v2>(sb)?;
     Some(MembersV2 {
-        member_bytes: field.member_bytes.get() as usize,
-        nr_devices: sb.nr_devices as u32,
-        bytes: field.as_bytes(),
+        members: members_in(f.as_bytes(), offset_of!(Head<c::bch_sb_field_members_v2>, _members),
+                            f.member_bytes.get().into())?,
+        nr_devices: sb.nr_devices.into(),
     })
 }
 
 /// Construct a MembersV1 reader from a superblock.
 pub fn members_v1(sb: &c::bch_sb) -> Option<MembersV1<'_>> {
-    let field = sb_field_get::<c::bch_sb_field_members_v1>(sb)?;
+    let f = sb_field_get::<c::bch_sb_field_members_v1>(sb)?;
     Some(MembersV1 {
-        nr_devices: sb.nr_devices as u32,
-        bytes: field.as_bytes(),
+        members: members_in(f.as_bytes(), offset_of!(Head<c::bch_sb_field_members_v1>, _members),
+                            BCH_MEMBER_V1_BYTES)?,
+        nr_devices: sb.nr_devices.into(),
     })
 }
 
