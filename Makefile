@@ -299,13 +299,21 @@ bcachefs: $(BCACHEFS_DEPS) $(RUST_SRCS)
 bindgen-test: $(BCACHEFS_DEPS)
 	$(Q)$(CARGO_TEST) -- --nocapture
 
+# The objects' list, replaced only when it changes: an object that's newer
+# than the archive rebuilds it, but so must one that's gone - else a deleted
+# .c's object stays in it, and its symbols collide with what replaced them.
+build/objs: force
+	$(Q)mkdir -p $(dir $@)
+	$(Q)echo $(OBJS) > $@.new
+	$(Q)cmp -s $@.new $@ || mv $@.new $@
+
 # Cargo builds on this - and the Rust include_str!s version.h, so make it here
-# too: the nix checks run `make libbcachefs.a`, then cargo. (Order-only, to
-# keep it out of $+.)
-libbcachefs.a: $(OBJS) | version.h
+# too: the nix checks run `make libbcachefs.a`, then cargo. (Order-only: the
+# archive doesn't change with it.)
+libbcachefs.a: $(OBJS) build/objs | version.h
 	@echo "    [AR]     $@"
 	$(Q)$(RM) $@
-	$(Q)$(AR) -rc $@ $+
+	$(Q)$(AR) -rc $@ $(OBJS)
 
 .PHONY: force
 
