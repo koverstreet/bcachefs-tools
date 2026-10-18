@@ -78,6 +78,7 @@ c_extern! {
     pub fn bch2_printbuf_tabstop_push(buf: *mut c::printbuf, spaces: c_uint) -> c_int;
     pub fn bch2_printbuf_indent_add(buf: *mut c::printbuf, spaces: c_uint);
     pub fn bch2_printbuf_indent_sub(buf: *mut c::printbuf, spaces: c_uint);
+    pub fn bch2_printbuf_indent_add_nextline(buf: *mut c::printbuf, spaces: c_uint);
     pub fn bch2_prt_newline(buf: *mut c::printbuf);
     pub fn bch2_prt_tab(out: *mut c::printbuf);
     pub fn bch2_prt_tab_rjust(buf: *mut c::printbuf);

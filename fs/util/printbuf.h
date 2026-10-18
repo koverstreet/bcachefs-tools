@@ -99,8 +99,6 @@ const char *bch2_printbuf_str(const struct printbuf *);
 
 void bch2_printbuf_tabstop_pop(struct printbuf *);
 
-void bch2_printbuf_indent_add_nextline(struct printbuf *, unsigned);
-
 void bch2_printbuf_ensure_trailing_newline(struct printbuf *);
 void bch2_printbuf_strip_trailing_newline(struct printbuf *);
 

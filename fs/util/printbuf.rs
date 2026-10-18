@@ -76,6 +76,16 @@ impl Printbuf {
         }
     }
 
+    /// What's been written, as a C string: to hand to C.
+    pub fn as_c_str(&self) -> &CStr {
+        if self.0.buf.is_null() {
+            c""
+        } else {
+            // SAFETY: a printbuf's buffer is NUL-terminated
+            unsafe { CStr::from_ptr(self.0.buf.cast()) }
+        }
+    }
+
     /// What's been written, as bytes - which needn't be UTF-8, after
     /// write_bytes().
     pub fn as_bytes(&self) -> &[u8] {
@@ -119,6 +129,11 @@ impl Printbuf {
     pub fn indent(&mut self, spaces: u32) -> PrintbufIndent<'_> {
         self.indent_add(spaces);
         PrintbufIndent { buf: self, spaces }
+    }
+
+    /// The lines after this one - not this one - indented by @spaces more.
+    pub fn indent_add_nextline(&mut self, spaces: u32) {
+        unsafe { c::bch2_printbuf_indent_add_nextline(&mut self.0, spaces) };
     }
 
     /// Allocating as from atomic context - under RCU, a spinlock - until the
