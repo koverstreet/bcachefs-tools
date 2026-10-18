@@ -1855,8 +1855,11 @@ fn parse_extern(body: &[Tok], cfg: Option<Cfg>) -> Result<CExtern, String> {
 
 /// Rust's types for C's that a #[c_export] fn may take, as unqualified() has
 /// them, and C's, as c_extern! does: #[repr(transparent)], or c_same! - one
-/// layout either way. References are c_export_type()'s.
+/// layout either way. References are c_export_type()'s. Fs is struct bch_fs
+/// itself, defined in Rust: &Fs is the const struct bch_fs * C passes, where
+/// &Opaque<bch_fs> is the non-const one.
 const C_EXPORT_TYPES: &[(&str, &str)] = &[
+    ("Fs",             "c::bch_fs"),
     ("Printbuf",       "c::printbuf"),
     ("BkeySC<'_>",     "c::bkey_s_c"),
     ("BkeyS<'_>",      "c::bkey_s"),
