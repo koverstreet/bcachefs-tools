@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::debug::params as debug_params;
-use crate::errcode::{bch_errcode, ret_to_result_void};
+use crate::errcode::bch_errcode;
 use crate::util::Printbuf;
 use core::sync::atomic::{AtomicI64, Ordering};
 
@@ -225,8 +225,7 @@ impl BkeySC<'_> {
                 let missing = fs.dev_rcu(dev, &rcu).is_none() && dev != c::BCH_SB_MEMBER_INVALID;
                 if missing {
                     drop(rcu);
-                    // SAFETY: plain
-                    ret_to_result_void(unsafe { c::bch2_dev_missing_bkey(fs.as_ptr(), self.into(), dev) })?;
+                    fs.dev_missing_bkey(self, dev)?;
                     rcu = read_lock();
                 }
                 let ca = if missing { None } else { fs.dev_rcu(dev, &rcu) };

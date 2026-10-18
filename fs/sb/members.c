@@ -17,60 +17,6 @@
 #include "init/passes.h"
 #include "init/progress.h"
 
-int bch2_dev_missing_bkey_msg(struct bch_fs *c, struct bkey_s_c k, unsigned dev,
-			      struct printbuf *out)
-{
-	if (dev == BCH_SB_MEMBER_INVALID)
-		return 0;
-
-	bool removed = test_bit(dev, c->devs_removed.d);
-
-	prt_printf(out, "pointer to %s device %u in key\n",
-		   removed ? "removed" : "nonexistent", dev);
-	bch2_bkey_val_to_text(out, c, k);
-	prt_newline(out);
-
-	if (removed)
-		bch2_count_fsck_err(c, ptr_to_removed_device, out);
-	else
-		bch2_count_fsck_err(c, ptr_to_invalid_device, out);
-
-	return bch2_run_explicit_recovery_pass(c, out,
-					BCH_RECOVERY_PASS_check_allocations, 0);
-}
-
-int bch2_dev_missing_bkey(struct bch_fs *c, struct bkey_s_c k, unsigned dev)
-{
-	CLASS(bch_log_msg, msg)(c);
-	return bch2_dev_missing_bkey_msg(c, k, dev, &msg.m);
-}
-
-void bch2_dev_missing_atomic(struct bch_fs *c, unsigned dev)
-{
-	if (dev == BCH_SB_MEMBER_INVALID)
-		return;
-
-	CLASS(printbuf, buf)();
-	guard(printbuf_atomic)(&buf);
-
-	bch2_log_msg_start(c, &buf);
-
-	prt_printf(&buf, "pointer to %s device %u\n",
-		   test_bit(dev, c->devs_removed.d)
-		   ? "removed" : "nonexistent", dev);
-	bch2_prt_task_backtrace(&buf, current, 1, GFP_ATOMIC);
-
-	__bch2_inconsistent_error(c, &buf);
-	bch2_print_str(c, KERN_ERR, buf.buf);
-}
-
-void bch2_dev_bucket_missing(struct bch_dev *ca, u64 bucket)
-{
-	bch2_fs_inconsistent(ca->fs,
-		"pointer to nonexistent bucket %llu on device %s (valid range %u-%llu)",
-		bucket, ca->name, ca->mi.first_bucket, ca->mi.nbuckets);
-}
-
 /*
  * Per member "range has btree nodes" bitmap:
  *

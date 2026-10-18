@@ -1,10 +1,13 @@
-use crate::btree::bkey::BkeySC;
+use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::util::kernel::{nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
 use crate::util::percpu::acc_u64s_percpu;
 use crate::util::Printbuf;
+use crate::util::log::{print_str, LogLevel, LogMsg};
+use crate::init::error::{count_fsck_err, id};
+use crate::init::passes;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::alloc::disk_groups;
 use crate::util::ffi::{c_char, Opaque};
@@ -886,10 +889,9 @@ impl Fs {
         self.dev_rcu(dev, rcu).ok_or_else(|| self.dev_missing(dev))
     }
 
-    /// bch2_dev_missing_atomic(): reported - from an atomic context, which is
-    /// what it's safe from - and the error for it.
+    /// dev_missing_atomic(), and the error for it.
     fn dev_missing(&self, dev: u32) -> BchError {
-        unsafe { c::bch2_dev_missing_atomic(self.as_ptr(), dev) };
+        self.dev_missing_atomic(dev);
         self.err(bch_errcode::BCH_ERR_ENOENT_dev_not_found)
     }
 
@@ -916,7 +918,7 @@ impl Fs {
     pub fn dev_bkey_tryget(&self, k: BkeySC<'_>, dev: u32) -> Result<Option<DevRef>, BchError> {
         let ca = self.dev_get(dev);
         if ca.is_none() && dev != c::BCH_SB_MEMBER_INVALID {
-            ret_to_result_void(unsafe { c::bch2_dev_missing_bkey(self.as_ptr(), k.into(), dev) })?;
+            self.dev_missing_bkey(k, dev)?;
         }
         Ok(ca)
     }
@@ -932,7 +934,7 @@ impl Fs {
     pub fn dev_bucket_tryget(&self, bucket: c::bpos) -> Result<DevRef, BchError> {
         let ca = self.dev_tryget(bucket.inode as u32)?;
         if !ca.bucket_valid(bucket.offset) {
-            unsafe { c::bch2_dev_bucket_missing(ca.as_mut_ptr(), bucket.offset) };
+            ca.bucket_missing(bucket.offset);
             return Err(self.err(bch_errcode::BCH_ERR_ENOENT_dev_bucket_not_found));
         }
         Ok(ca)
@@ -991,6 +993,83 @@ impl Fs {
         self.io_members(1 << c::bch_member_state::BCH_MEMBER_STATE_rw.0 |
                         1 << c::bch_member_state::BCH_MEMBER_STATE_ro.0, ref_idx)
     }
+}
+
+// ── Missing devices and buckets, reported ────────────────────────────────
+
+impl Fs {
+    /// A pointer in @k to device @dev, which there isn't: said to @out,
+    /// counted as the fsck error it is, and check_allocations scheduled to
+    /// repair it - the error is scheduling's. Nothing for
+    /// BCH_SB_MEMBER_INVALID, which names no device.
+    pub fn dev_missing_bkey_msg(&self, k: BkeySC<'_>, dev: u32, out: &mut Printbuf) -> Result<(), BchError> {
+        if dev == c::BCH_SB_MEMBER_INVALID {
+            return Ok(());
+        }
+
+        let removed = self.devs_removed.test(dev as usize);
+        crate::prt!(out, "pointer to {} device {dev} in key\n{}\n",
+                    if removed { "removed" } else { "nonexistent" }, k.to_text(self));
+
+        count_fsck_err(self, if removed { id::ptr_to_removed_device } else { id::ptr_to_invalid_device }, out);
+        passes::run_explicit(self, out, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_allocations,
+                             c::bch_run_recovery_pass_flags::empty())
+    }
+
+    /// dev_missing_bkey_msg(), logged.
+    pub fn dev_missing_bkey(&self, k: BkeySC<'_>, dev: u32) -> Result<(), BchError> {
+        self.dev_missing_bkey_msg(k, dev, &mut LogMsg::new(self))
+    }
+
+    /// A pointer to device @dev, which there isn't, from where there's no key
+    /// to show: logged, with a backtrace, as an inconsistency. Safe from
+    /// atomic context - nothing it allocates can sleep.
+    fn dev_missing_atomic(&self, dev: u32) {
+        if dev == c::BCH_SB_MEMBER_INVALID {
+            return;
+        }
+
+        let mut buf = Printbuf::new();
+        let mut buf = buf.atomic();
+
+        unsafe { crate::util::log::__bch2_log_msg_start(self.name().as_ptr().cast(), buf.as_raw()) };
+        write!(buf, "pointer to {} device {dev}\n",
+               if self.devs_removed.test(dev as usize) { "removed" } else { "nonexistent" });
+        unsafe {
+            c::bch2_prt_current_backtrace(buf.as_raw(), 1, c::GFP_ATOMIC);
+            c::__bch2_inconsistent_error(self.as_ptr(), buf.as_raw());
+        }
+        print_str(self, LogLevel::ERR, &mut buf);
+    }
+}
+
+#[c_export]
+pub fn bch2_dev_missing_bkey_msg(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, dev: c_uint, out: &mut Printbuf) -> c_int {
+    ret_to_c(Fs::from_c(c).dev_missing_bkey_msg(k, dev, out))
+}
+
+#[c_export]
+pub fn bch2_dev_missing_bkey(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, dev: c_uint) -> c_int {
+    ret_to_c(Fs::from_c(c).dev_missing_bkey(k, dev))
+}
+
+#[c_export]
+pub fn bch2_dev_missing_atomic(c: &Opaque<c::bch_fs>, dev: c_uint) {
+    Fs::from_c(c).dev_missing_atomic(dev)
+}
+
+impl c::bch_dev {
+    /// A pointer to bucket @bucket, which this device hasn't: an
+    /// inconsistency.
+    pub fn bucket_missing(&self, bucket: u64) {
+        crate::fs_inconsistent!(self.fs(), "pointer to nonexistent bucket {bucket} on device {} (valid range {}-{})",
+                                self.name().to_str().unwrap_or("?"), self.mi.first_bucket, self.mi.nbuckets);
+    }
+}
+
+#[c_export]
+pub fn bch2_dev_bucket_missing(ca: &c::bch_dev, bucket: u64) {
+    ca.bucket_missing(bucket)
 }
 
 // ── References ───────────────────────────────────────────────────────────

@@ -1470,6 +1470,11 @@ bool bch2_bdev_rot(struct block_device *bdev)
 	return bdev_rot(bdev);
 }
 
+int bch2_prt_current_backtrace(struct printbuf *out, unsigned skipnr, gfp_t gfp)
+{
+	return bch2_prt_task_backtrace(out, current, skipnr, gfp);
+}
+
 u64 bch2_get_random_u64(void)
 {
 	return get_random_u64();

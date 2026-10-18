@@ -265,8 +265,6 @@ static inline bool bch2_dev_bad_or_evacuating(struct bch_fs *c, unsigned dev)
 	return bch2_dev_bad_or_evacuating_rcu(c, dev);
 }
 
-int bch2_dev_missing_bkey_msg(struct bch_fs *, struct bkey_s_c, unsigned, struct printbuf *out);
-
 static inline struct bch_dev *bch2_dev_rcu(struct bch_fs *c, unsigned dev)
 {
 	struct bch_dev *ca = bch2_dev_rcu_noerror(c, dev);

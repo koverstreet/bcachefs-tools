@@ -52,6 +52,7 @@ c_extern! {
     pub fn bch2_fatal_error(c: *mut c::bch_fs, func: *const c_char, fmt: *const c_char, ...);
     pub fn __bch2_count_fsck_err(c: *mut c::bch_fs, id: c::bch_sb_error_id,
                                  msg: *mut c::printbuf) -> bool;
+    pub fn __bch2_inconsistent_error(c: *mut c::bch_fs, out: *mut c::printbuf) -> bool;
     #[c_printf(6, 7)]
     #[cold]
     pub fn __bch2_fsck_err(c: *mut c::bch_fs, trans: *mut c::btree_trans, pos: c::bpos,
