@@ -410,7 +410,7 @@ macro_rules! bch_err_msg {
             let e: $crate::errcode::BchError = (*e).into();
             if $crate::util::log::should_print_err(&e) {
                 $crate::bch_err!($fs, "{}(): error {} {}", $crate::function_name!(),
-                                 format_args!($($arg)*), e.msg());
+                                 $crate::message!($($arg)*), e.msg());
             }
         }
         result

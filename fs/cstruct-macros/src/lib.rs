@@ -54,6 +54,9 @@
 //!   #[grown(from = F)]   on C's struct of a type that grew: its family - the
 //!                        whole struct, and the floor and the bytes there
 //!                        are (vstructs.rs)
+//!   __prt!(..)           message!()'s and prt!()'s format strings, written
+//!                        into a printbuf - a ToText argument to_text()'d
+//!                        into it; nothing C sees (prt.rs)
 //!
 //! Zero dependencies: the kernel build compiles this with a bare rustc.
 
@@ -69,6 +72,7 @@ use cstruct::{enum_text, expand_enum_list, parse_c_export, parse_cstruct, parse_
               CEnumDef, CEnumKind, CItem, CXEntry};
 
 mod init;
+mod prt;
 mod tagged_union;
 mod typeinfo;
 mod vstructs;
@@ -85,6 +89,14 @@ pub fn tagged_union(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn __tagged_union(input: TokenStream) -> TokenStream {
     expand("tagged_union!", || tagged_union::from_list(input))
+}
+
+/// message!()'s format string written into a printbuf, ToText arguments
+/// to_text()'d into it: see prt.rs.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __prt(input: TokenStream) -> TokenStream {
+    expand("message!", || prt::prt(input))
 }
 
 fn compile_error(msg: &str) -> TokenStream {

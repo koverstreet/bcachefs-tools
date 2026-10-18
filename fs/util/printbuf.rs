@@ -361,25 +361,85 @@ impl fmt::Display for Bpos {
 /// tabstops, indent and modes (human-readable units) are its state, which a
 /// Display impl can't reach - so an object laid out over lines is ToText. A
 /// value with nothing to lay out - a position, a name - is Display, and
-/// write!() takes it directly.
+/// write!() takes it directly. A message's format string, or prt!()'s, takes
+/// either: what's ToText is to_text()'d into the printbuf.
 pub trait ToText {
     fn to_text(&self, out: &mut Printbuf);
 }
 
-/// A message: format_args!() is one, written as given.
-impl ToText for fmt::Arguments<'_> {
+impl<T: ToText + ?Sized> ToText for &T {
     fn to_text(&self, out: &mut Printbuf) {
-        out.write_fmt(*self);
+        (**self).to_text(out)
     }
 }
 
+impl<T: ToText + ?Sized> ToText for &mut T {
+    fn to_text(&self, out: &mut Printbuf) {
+        (**self).to_text(out)
+    }
+}
+
+/// A message made by message!() from a format string: what writes it.
+#[doc(hidden)]
+pub struct Msg<F>(pub F);
+
+impl<F: Fn(&mut Printbuf)> ToText for Msg<F> {
+    fn to_text(&self, out: &mut Printbuf) {
+        (self.0)(out)
+    }
+}
+
+/// How __prt!() writes an argument with no format spec: to_text() if it's
+/// ToText, else as Display - picked at compile time, by method resolution
+/// trying Arg before &Arg.
+#[doc(hidden)]
+pub mod prt_arg {
+    use super::{Printbuf, ToText};
+    use core::fmt;
+
+    pub struct Arg<'a, T: ?Sized>(pub &'a T);
+
+    pub trait ViaText {
+        fn prt(&self, out: &mut Printbuf);
+    }
+
+    impl<T: ToText + ?Sized> ViaText for Arg<'_, T> {
+        fn prt(&self, out: &mut Printbuf) {
+            self.0.to_text(out)
+        }
+    }
+
+    pub trait ViaDisplay {
+        fn prt(&self, out: &mut Printbuf);
+    }
+
+    impl<T: fmt::Display + ?Sized> ViaDisplay for &Arg<'_, T> {
+        fn prt(&self, out: &mut Printbuf) {
+            write!(out, "{}", self.0)
+        }
+    }
+}
+
+/// write!() into a printbuf, with what's ToText to_text()'d into it, as in a
+/// message!(): @out derefs to the Printbuf - `out`, `&mut buf`, a LogMsg.
+#[macro_export]
+macro_rules! prt {
+    ($out:expr, $($fmt:tt)*) => {
+        $crate::__prt!($crate, $out, $($fmt)*)
+    };
+}
+
 /// A message, for the logging and fsck error macros: a format string and its
-/// arguments, or anything ToText - a message object.
+/// arguments, written into the message's printbuf by __prt!() - an argument
+/// that's ToText to_text()'d into it, with no printbuf of its own; or anything
+/// ToText, a message object.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! message {
     ($fmt:literal $($args:tt)*) => {
-        &format_args!($fmt $($args)*) as &dyn $crate::util::ToText
+        &$crate::util::printbuf::Msg(|out: &mut $crate::util::Printbuf| {
+            $crate::__prt!($crate, out, $fmt $($args)*)
+        }) as &dyn $crate::util::ToText
     };
     ($msg:expr) => {
         &$msg as &dyn $crate::util::ToText
