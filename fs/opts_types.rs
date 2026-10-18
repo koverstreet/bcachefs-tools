@@ -70,6 +70,10 @@ c_const! {
 
     /* the verbose option's default: on in debug builds */
     pub const BCACHEFS_VERBOSE_DEFAULT: bool = cfg!(CONFIG_BCACHEFS_DEBUG);
+
+    /* bch2_opt_to_text()'s flags */
+    pub const OPT_SHOW_FULL_LIST: u32 = 1 << 0;
+    pub const OPT_SHOW_MOUNT_STYLE: u32 = 1 << 1;
 }
 
 c_xmacro! {
@@ -806,6 +810,7 @@ c_extern! {
     pub fn bch2_opt_set_sb(c: *mut c::bch_fs, ca: *mut c::bch_dev, opt: *const c::bch_option,
                            v: u64, val: *const c_char) -> bool;
     pub fn bch2_opt_lookup(name: *const c_char) -> c_int;
+    pub fn bch2_opt_from_sb(sb: *mut Head<c::bch_sb>, id: c::bch_opt_id, dev_idx: c_int) -> u64;
     pub fn bch2_opt_parse(c: *mut c::bch_fs, opt: *const c::bch_option, val: *const c_char,
                           res: *mut u64, err: *mut c::printbuf) -> c_int;
     pub fn bch2_opt_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, sb: *mut Head<c::bch_sb>,

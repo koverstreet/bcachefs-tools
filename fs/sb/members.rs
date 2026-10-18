@@ -117,6 +117,11 @@ impl<'a> MembersV1<'a> {
     }
 }
 
+/// @ca as C takes a device that may be none: NULL.
+pub fn dev_ptr(ca: Option<&c::bch_dev>) -> *mut c::bch_dev {
+    ca.map_or(core::ptr::null_mut(), |ca| core::ptr::from_ref(ca).cast_mut())
+}
+
 /// Construct a MembersV2 reader from a superblock.
 pub fn members_v2(sb: &c::bch_sb) -> Option<MembersV2<'_>> {
     let field = sb_field_get::<c::bch_sb_field_members_v2>(sb)?;

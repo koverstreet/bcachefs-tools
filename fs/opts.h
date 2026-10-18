@@ -88,9 +88,6 @@ u64 bch2_opt_from_sb(struct bch_sb *, enum bch_opt_id, int);
 
 int bch2_opt_validate(const struct bch_option *, u64, struct printbuf *);
 
-#define OPT_SHOW_FULL_LIST	(1 << 0)
-#define OPT_SHOW_MOUNT_STYLE	(1 << 1)
-
 void bch2_opts_to_text(struct printbuf *,
 		       struct bch_opts,
 		       struct bch_fs *, struct bch_sb *,

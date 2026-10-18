@@ -634,7 +634,7 @@ mod vfs {
         }
 
         let mut out = Printbuf::new();
-        opts::opt_to_text(&mut out, fs, opt, opts::opt_get_by_id(&inode_opts, id));
+        opts::opt_to_text(&mut out, fs, opt, opts::opt_get_by_id(&inode_opts, id), 0);
 
         if out.as_raw().allocation_failure() {
             return Err(BchError::from(c::ENOMEM));
@@ -748,7 +748,7 @@ mod vfs {
 
             v_parsed = opts::opt_parse(Some(fs), opt, value, None)
                 .map_err(|ret| BchError::from_raw(-ret))?;
-            change.pre_set(v.inode().bi_inum, opt_id, v_parsed)?;
+            change.pre_set(None, v.inode().bi_inum, opt_id, v_parsed)?;
 
             // +1 bias for inode options:
             inode_v = v_parsed + 1;
@@ -778,7 +778,7 @@ mod vfs {
             dentry.casefold_changed();
         }
 
-        change.post_set(v.inode().bi_inum, opt_id, v_parsed);
+        change.post_set(None, v.inode().bi_inum, opt_id, v_parsed);
         Ok(())
     }
 

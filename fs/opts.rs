@@ -2,7 +2,9 @@ use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::inode_opts::InodeOpt;
+use crate::sb::members::dev_ptr;
 use crate::util::printbuf::Printbuf;
+use crate::util::vstructs::plain_bytes;
 use core::ffi::CStr;
 #[cfg(feature = "std")]
 use crate::util::ffi::c_char;
@@ -101,6 +103,22 @@ pub fn opt_set_by_id(opts: &mut c::bch_opts, id: c::bch_opt_id, v: u64) {
     unsafe { c::bch2_opt_set_by_id(opts, id, v) }
 }
 
+/// Option @id as the superblock has it - a device option, as member
+/// @dev_idx's: bch2_opt_from_sb().
+pub fn opt_from_sb(sb: &c::bch_sb, id: c::bch_opt_id, dev_idx: u32) -> u64 {
+    unsafe { c::bch2_opt_from_sb(sb.as_ffi() as *mut _, id, dev_idx as i32) }
+}
+
+/// The option whose sysfs attribute @attr is, if it's one: each option's is
+/// in its bch_option.
+pub fn opt_from_attr(attr: &c::attribute) -> Option<c::bch_opt_id> {
+    let table = opt_table();
+    let i = (core::ptr::from_ref(attr) as usize)
+        .wrapping_sub(core::mem::offset_of!(c::bch_option, attr))
+        .wrapping_sub(table.as_ptr() as usize) / size_of::<c::bch_option>();
+    (i < table.len() && core::ptr::eq(&table[i].attr, attr)).then(|| opt_id(i))
+}
+
 impl c::bch_inode_opts {
     /// The options that follow from others, and what doesn't combine: as
     /// bch2_io_opts_fixups(), opts.h's - a copy, until opts.c is Rust.
@@ -161,6 +179,27 @@ impl c::bch_option {
         unsafe { CStr::from_ptr(self.help.cast()) }
             .to_str()
             .ok()
+    }
+
+    pub fn has(&self, flag: c::opt_flags) -> bool {
+        self.flags.bits() & flag.bits() != 0
+    }
+
+    /// Whether the superblock has it: a field, a member's, the ext section's.
+    pub fn in_sb(&self) -> bool {
+        self.get_sb.is_some() ||
+        self.get_member.is_some() ||
+        self.get_ext.is_some() ||
+        self.type_ == c::opt_type::BCH_OPT_STR_MEMBER
+    }
+
+    /// A BCH_OPT_STR_MEMBER option's value: the string in member @m's char
+    /// field, up to a NUL.
+    pub fn member_str<'a>(&self, m: &'a c::bch_member) -> &'a [u8] {
+        assert_eq!(self.type_, c::opt_type::BCH_OPT_STR_MEMBER);
+
+        let field = &plain_bytes(m)[self.member_offset as usize..][..self.member_size as usize];
+        field.split(|&b| b == 0).next().unwrap_or_default()
     }
 
     /// Invalid UTF-8 entries are skipped.
@@ -255,8 +294,9 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &c::bch_option, val: &core::ffi::CStr,
     if ret < 0 { Err(ret) } else { Ok(v) }
 }
 
-pub fn opt_to_text(out: &mut Printbuf, fs: &Fs, opt: &c::bch_option, v: u64) {
-    unsafe { c::bch2_opt_to_text(out.as_raw(), fs.as_ptr(), fs.sb() as *const _ as *mut _, opt, v, 0) }
+/// @flags: OPT_SHOW_*.
+pub fn opt_to_text(out: &mut Printbuf, fs: &Fs, opt: &c::bch_option, v: u64, flags: u32) {
+    unsafe { c::bch2_opt_to_text(out.as_raw(), fs.as_ptr(), fs.sb() as *const _ as *mut _, opt, v, flags) }
 }
 
 impl c::bch_opt_id {
@@ -286,17 +326,39 @@ impl<'f> OptChange<'f> {
         OptChange { fs, scope: c::opt_change_scope { c: fs.as_ptr(), ..Default::default() } }
     }
 
-    /// Before setting option @id to @v, for inode @inum - 0 for the
-    /// filesystem: records what the change needs, and fails if it may not.
-    pub fn pre_set(&mut self, inum: u64, id: c::bch_opt_id, v: u64) -> Result<(), BchError> {
+    /// Before setting option @id to @v - for device @ca, or inode @inum, or
+    /// with neither (0) the filesystem: records what the change needs, and
+    /// fails if it may not.
+    pub fn pre_set(&mut self, ca: Option<&c::bch_dev>, inum: u64, id: c::bch_opt_id, v: u64)
+        -> Result<(), BchError>
+    {
         ret_to_result(unsafe {
-            c::bch2_opt_hook_pre_set(self.fs.as_ptr(), core::ptr::null_mut(), inum, id, v, true,
-                                     &mut self.scope)
+            c::bch2_opt_hook_pre_set(self.fs.as_ptr(), dev_ptr(ca), inum, id, v, true, &mut self.scope)
         })
     }
 
-    pub fn post_set(&self, inum: u64, id: c::bch_opt_id, v: u64) {
-        unsafe { c::bch2_opt_hook_post_set(self.fs.as_ptr(), core::ptr::null_mut(), inum, id, v) }
+    pub fn post_set(&self, ca: Option<&c::bch_dev>, inum: u64, id: c::bch_opt_id, v: u64) {
+        unsafe { c::bch2_opt_hook_post_set(self.fs.as_ptr(), dev_ptr(ca), inum, id, v) }
+    }
+
+    /// Set @opt in the superblock - in device @ca's member for a device
+    /// option - @val its string for a BCH_OPT_STR_MEMBER: whether it changed.
+    pub fn set_sb(&self, ca: Option<&c::bch_dev>, opt: &c::bch_option, v: u64, val: &CStr) -> bool {
+        unsafe { c::bch2_opt_set_sb(self.fs.as_ptr(), dev_ptr(ca), opt, v, val.as_ptr().cast()) }
+    }
+
+    /// Set filesystem option @id: c->opts, no longer as mount set it.
+    pub fn set_fs_opt(&self, id: c::bch_opt_id, v: u64) {
+        // SAFETY: c->opts changes under the option change lock, which this holds
+        unsafe { c::bch2_opt_set_by_id(&raw mut (*self.fs.as_ptr()).opts, id, v) };
+
+        let mount_opts = &self.fs.mount_opts.d;
+        // SAFETY: unsigned longs, which C changes with clear_bit()
+        let words = unsafe {
+            core::slice::from_raw_parts(mount_opts.as_ptr().cast::<core::sync::atomic::AtomicUsize>(),
+                                        mount_opts.len())
+        };
+        crate::util::bitmap::AtomicBitmap::from_words(words).clear(id.0 as usize);
     }
 }
 
