@@ -5,6 +5,7 @@ pub mod darray;
 pub mod eytzinger;
 pub mod ffi;
 pub mod genradix;
+pub mod inline_vec;
 #[cfg(not(kernel))]
 pub mod ioctl;
 pub mod kernel;

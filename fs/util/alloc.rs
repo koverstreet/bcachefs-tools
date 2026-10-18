@@ -5,10 +5,10 @@
 //! An allocation failure is an AllocError to handle, never an abort.
 
 #[cfg(kernel)]
-pub use kernel::alloc::{flags, AllocError, KVVec};
+pub use kernel::alloc::{flags, AllocError, Flags, KVVec};
 
 #[cfg(not(kernel))]
-pub use bcachefs_shim::alloc::{flags, AllocError, KVVec};
+pub use bcachefs_shim::alloc::{flags, AllocError, Flags, KVVec};
 
 /// A @T for C to hold, built in place by @init in memory that starts zeroed -
 /// padding too, as kvzalloc()'s did - and pinned there: a KVBox in-kernel,
