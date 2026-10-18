@@ -207,17 +207,6 @@ impl bch_sb_handle {
         unsafe { c::bch2_sb_members_cpy_v2_v1(self) };
     }
 
-    /// A disk path is a label group.
-    pub fn disk_path_find(&mut self, name: &core::ffi::CStr) -> Option<u32> {
-        let v = unsafe { c::bch2_disk_path_find(self, name.as_ptr().cast()) };
-        (v >= 0).then_some(v as u32)
-    }
-
-    pub fn disk_path_find_or_create(&mut self, name: &core::ffi::CStr) -> Result<u32, i32> {
-        let v = unsafe { c::bch2_disk_path_find_or_create(self, name.as_ptr().cast()) };
-        if v >= 0 { Ok(v as u32) } else { Err(-v) }
-    }
-
     /// The superblock's full vstruct extent as bytes.
     pub fn sb_bytes(&self) -> &[u8] {
         self.sb().as_bytes()

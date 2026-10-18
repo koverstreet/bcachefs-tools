@@ -71,7 +71,6 @@ bcachefs-y		:=			\
 	alloc/check.o				\
 	alloc/check_data.o			\
 	alloc/discard.o				\
-	alloc/disk_groups.o			\
 	alloc/foreground.o			\
 	alloc/lru.o				\
 	alloc/replicas.o			\

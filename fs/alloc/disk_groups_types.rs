@@ -3,10 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::c_default;
-use crate::util::ffi::c_char;
-use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, c_extern, TypeInfo};
+use cstruct_macros::{CStruct, c_rcu_array, TypeInfo};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo)]
@@ -17,18 +14,11 @@ pub struct bch_disk_group_cpu {
     pub devs: c::bch_devs_mask,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
-pub struct bch_disk_groups_cpu {
-    pub rcu: c::rcu_head,
-    pub nr: c_uint,
-    #[c("struct bch_disk_group_cpu entries[] __counted_by(nr)")]
-    pub entries: [c::bch_disk_group_cpu; 0],
-}
-c_default!(bch_disk_groups_cpu);
+// SAFETY: plain data, a bitmap of devices among it; all zeroes is a group
+unsafe impl crate::util::rcu::RcuElement for bch_disk_group_cpu {}
 
-c_extern! {
-    pub fn bch2_disk_path_find(sb: *mut c::bch_sb_handle, name: *const c_char) -> c_int;
-    pub fn bch2_disk_path_find_or_create(sb: *mut c::bch_sb_handle, name: *const c_char) -> c_int;
-    pub fn bch2_dev_in_target_rcu(c: *mut c::bch_fs, dev: c_uint, target: c_uint) -> bool;
+c_rcu_array! {
+    /// c->disk_groups, published under RCU.
+    pub type DiskGroups = crate::util::rcu::RcuArray<c::bch_disk_group_cpu>
+        as struct bch_disk_groups_cpu { nr, entries };
 }

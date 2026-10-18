@@ -655,8 +655,7 @@ pub struct Fs {
 
     pub accounting: c::bch_accounting_mem,
     pub replicas: c::bch_replicas_cpu,
-    #[c("struct bch_disk_groups_cpu __rcu *disk_groups")]
-    pub disk_groups: *mut c::bch_disk_groups_cpu,
+    pub disk_groups: c::DiskGroups,
     pub capacity: c::bch_fs_capacity,
     pub allocator: c::bch_fs_allocator,
     pub discards: c::bch_fs_discards,

@@ -745,11 +745,6 @@ pub fn writepoint_hashed(v: usize) -> c::write_point_specifier {
     c::write_point_specifier { v: (v | 1) as _ }
 }
 
-/// Convert a device index to a target (TARGET_DEV_START = 1).
-pub fn dev_to_target(dev: u32) -> u16 {
-    1 + dev as u16
-}
-
 pub fn btree_id_is_alloc(id: u32) -> bool {
     matches!(
         c::btree_id::from_raw(id),

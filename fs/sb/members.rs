@@ -471,11 +471,6 @@ impl Fs {
             ca.mi.state as u32 == c::bch_member_state::BCH_MEMBER_STATE_evacuating.0
         })
     }
-
-    /// Whether @dev is in target @target: bch2_dev_in_target_rcu().
-    pub fn dev_in_target(&self, dev: u32, target: u32, _rcu: &ReadGuard) -> bool {
-        unsafe { c::bch2_dev_in_target_rcu(self.as_ptr(), dev, target) }
-    }
 }
 
 impl c::bch_dev {

@@ -121,7 +121,7 @@ fn parse_target(
         }
     }
 
-    if let Some(idx) = sb.disk_path_find(target_str) {
+    if let Some(idx) = sb.disk_path_find(target_str_slice) {
         return group_to_target(idx);
     }
 
@@ -304,9 +304,8 @@ pub fn format(
         for (opt_id, val) in &dev.opt_strs {
             match *opt_id {
                 c::bch_opt_id::Opt_label => {
-                    let path_idx = sb.disk_path_find_or_create(val).unwrap_or_else(|e|
-                        die(&format!("error creating disk path: {}",
-                                     std::io::Error::from_raw_os_error(e))));
+                    let path_idx = sb.disk_path_find_or_create(val.to_bytes()).unwrap_or_else(|e|
+                        die(&format!("error creating disk path {}: {e}", val.to_string_lossy())));
                     // Recompute m after sb modification (may have been reallocated)
                     sb.member_mut(idx as u32).unwrap().set_group(path_idx as u64 + 1);
                 }

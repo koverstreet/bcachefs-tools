@@ -5,8 +5,14 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::c_uint;
-use cstruct_macros::{c_enum, CStruct};
+use cstruct_macros::{c_const, c_enum, CStruct};
 use nestify::nest;
+
+/* a target is 0 for none, then a device's index, then a disk group's */
+c_const! {
+    pub const TARGET_DEV_START: u32 = 1;
+    pub const TARGET_GROUP_START: u32 = 256 + TARGET_DEV_START;
+}
 
 /* target.type_: what a target names */
 c_enum! {

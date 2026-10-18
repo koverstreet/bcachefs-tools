@@ -745,7 +745,7 @@ static void __bch2_fs_free(struct bch_fs *c)
 #endif
 
 	enumerated_ref_exit(&c->writes);
-	kfree(rcu_dereference_protected(c->disk_groups, 1));
+	bch2_fs_disk_groups_exit(c);
 	kfree(c->journal_seq_blacklist_table);
 
 	if (c->promote_wq)
