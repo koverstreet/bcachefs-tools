@@ -100,7 +100,6 @@ bcachefs-y		:=			\
 	data/ec/io.o				\
 	data/ec/trigger.o			\
 	data/extents.o				\
-	data/extents_sb.o			\
 	data/extent_update.o			\
 	data/io_misc.o				\
 	data/keylist.o				\

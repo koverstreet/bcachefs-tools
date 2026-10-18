@@ -111,6 +111,7 @@ pub mod vfs {
 pub mod data {
     pub mod checksum;
     pub mod extents;
+    pub mod extents_sb;
     pub mod io_misc;
     pub mod ptrs;
     pub mod reflink;

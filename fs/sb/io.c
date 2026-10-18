@@ -7,7 +7,7 @@
 #include "alloc/replicas.h"
 
 #include "data/checksum.h"
-#include "data/extents_sb.h"
+#include "data/extents_sb_gen.h"
 
 #include "journal/journal.h"
 #include "journal/sb.h"
