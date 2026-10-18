@@ -113,7 +113,6 @@ bcachefs-y		:=			\
 	data/update.o				\
 	data/write.o				\
 	debug/debug.o				\
-	debug/sysfs.o				\
 	debug/trace.o				\
 	errcode.o				\
 	fs/check.o				\

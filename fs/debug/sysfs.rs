@@ -6,12 +6,13 @@
 //! and foo_sysfs_ops that init's KTYPE()s name - the kobjects and their
 //! lifetimes are init's. Its files are one of:
 //! - a table of Attrs - name, mode, what reading and writing do: the fs dir,
-//!   internal/;
+//!   internal/, a device's own files;
 //! - a ListAttrs, a file per entry of an x-macro list: time_stats/,
 //!   time_stats_json/, counters/;
 //! - the options' own attributes, added at runtime by
-//!   bch2_opts_create_sysfs_files(): options/. opts.c is still C: opt_show()
-//!   and opt_store() are over opts.rs's wrappers.
+//!   bch2_opts_create_sysfs_files(): options/, and a device's options in its
+//!   dir. opts.c is still C: opt_show() and opt_store() are over opts.rs's
+//!   wrappers.
 //!
 //! internal/btree_trans_stats_json is a bin_attribute, apart from the rest.
 //!
@@ -33,7 +34,7 @@ use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, WriteRef};
 use crate::init::passes;
-use crate::opts::{self, prt_compression_type, OptChange};
+use crate::opts::{self, prt_compression_type, prt_data_type, OptChange};
 use crate::sb::io::COUNTERS;
 use crate::sb::members;
 use crate::util::ffi::{c_char, with_cstr};
@@ -547,6 +548,91 @@ pub unsafe extern "C" fn bch2_opts_create_sysfs_files(kobj: *mut c::kobject, ty:
     }
     0
 }
+
+// ── a device's dir: /sys/fs/bcachefs/<uuid>/dev-N/ ───────────────────────────
+//
+// Its own files, and the device options' - added at runtime, as options/'s.
+
+const DEV: &[Attr<c::bch_dev>] = &[
+    Attr::ro(c"uuid",                   |ca, out| { out.uuid(&ca.uuid); out.newline() }),
+    Attr::ro(c"first_bucket",           |ca, out| writeln!(out, "{}", ca.mi.first_bucket)),
+    Attr::ro(c"nbuckets",               |ca, out| writeln!(out, "{}", ca.mi.nbuckets)),
+
+    Attr::ro(c"has_data",               |ca, out| {
+        // SAFETY: the data types' names, NULL terminated
+        unsafe { out.prt_bitflags(c::__bch2_data_types.as_ptr(), ca.has_data() as u64) };
+        out.newline();
+    }),
+    Attr::ro(c"io_done",                io_done_to_text),
+    Attr::ro(c"io_errors",              |ca, out| ca.io_errors_to_text(out)),
+    Attr::wo(c"io_errors_reset",        |ca, _| Ok(ca.errors_reset())),
+
+    Attr::ro(c"io_latency_read",        |ca, out| writeln!(out, "{}", ca.cur_latency(READ))),
+    Attr::ro(c"io_latency_write",       |ca, out| writeln!(out, "{}", ca.cur_latency(WRITE))),
+    Attr::ro(c"io_latency_stats_read",  |ca, out| ca.io_latency[READ].stats.to_text(out)),
+    Attr::ro(c"io_latency_stats_write", |ca, out| ca.io_latency[WRITE].stats.to_text(out)),
+    Attr::ro(c"io_latency_stats_read_json",  |ca, out| ca.io_latency[READ].stats.json_to_text(out)),
+    Attr::ro(c"io_latency_stats_write_json", |ca, out| ca.io_latency[WRITE].stats.json_to_text(out)),
+    #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+    Attr::ro(c"congested",              |ca, out| ca.congested_to_text(out)),
+
+    // debug:
+    Attr::ro(c"alloc_debug",            |ca, out| ca.alloc_debug_to_text(out)),
+    Attr::ro(c"open_buckets",           |ca, out| ca.fs().open_buckets_to_text(out, Some(ca))),
+    Attr::ro(c"discards",               |ca, out| ca.fast_discards_to_text(out)),
+
+    Attr::ro(c"read_refs",              |ca, out| ca.io_refs_to_text(out, READ)),
+    Attr::ro(c"write_refs",             |ca, out| ca.io_refs_to_text(out, WRITE)),
+];
+
+/// Sectors read and written, by data type, as JSON.
+#[cold]
+fn io_done_to_text(ca: &c::bch_dev, out: &mut Printbuf) {
+    let done = ca.io_done();
+    let nr = c::BCH_DATA_NR as usize;
+
+    writeln!(out, "{{");
+    for (rw, name) in ["read", "write"].into_iter().enumerate() {
+        writeln!(out, "  \"{name}\": {{");
+        for i in 1..nr {
+            write!(out, "    \"");
+            prt_data_type(out, c::bch_data_type(i as u32));
+            writeln!(out, "\": {}{}", done.sectors[rw][i] << 9, if i < nr - 1 { "," } else { "" });
+        }
+        writeln!(out, "  }}{}", if rw == READ { "," } else { "" });
+    }
+    writeln!(out, "}}");
+}
+
+struct DevDir;
+
+unsafe impl Dir for DevDir {
+    type Obj = c::bch_dev;
+    const KOBJ: usize = offset_of!(c::bch_dev, kobj);
+
+    fn show(ca: &c::bch_dev, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
+        match opts::opt_from_attr(attr) {
+            Some(id) => opt_show(ca.fs(), Some(ca), id, out),
+            // SAFETY: a device's files that aren't options' are DEV's
+            None     => unsafe { sysfs::attr_show(ca, attr, out) },
+        }
+    }
+
+    fn store(ca: &c::bch_dev, attr: &c::attribute, s: &str) -> Result<(), BchError> {
+        match opts::opt_from_attr(attr) {
+            Some(id) => opt_store(ca.fs(), Some(ca), id, s),
+            // SAFETY: as show()'s
+            None     => unsafe { sysfs::attr_store(ca, attr, s) },
+        }
+    }
+}
+
+#[c_export]
+#[c("struct attribute *bch2_dev_files[]")]
+pub static bch2_dev_files: Files<{ DEV.len() + 1 }> = Files::new(DEV);
+
+#[c_export]
+pub static bch2_dev_sysfs_ops: c::sysfs_ops = sysfs::ops::<DevDir>();
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 

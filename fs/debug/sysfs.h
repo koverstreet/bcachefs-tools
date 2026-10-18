@@ -4,13 +4,7 @@
 
 #include <linux/sysfs.h>
 
-struct attribute;
-struct sysfs_ops;
-
+/* debug/sysfs.rs: each directory's files and sysfs_ops, for init's KTYPE()s */
 #include "debug/sysfs_gen.h"
-
-extern struct attribute *bch2_dev_files[];
-
-extern const struct sysfs_ops bch2_dev_sysfs_ops;
 
 #endif  /* _BCACHEFS_SYSFS_H_ */
