@@ -245,8 +245,7 @@ fn set_option_offline(
     }
 
     if modified {
-        let _lock = fs.sb_lock();
-        fs.write_super_ret()
+        fs.write_super_ret(&mut fs.sb_lock())
             .map_err(|e| anyhow::anyhow!("error writing superblock: {e}"))?;
     }
 

@@ -1208,7 +1208,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	c->disk_sb.fs_sb	= true;
 
 	init_rwsem(&c->state_lock);
-	mutex_noio_init(&c->sb_lock);
 	INIT_WORK(&c->read_only_work, bch2_fs_read_only_work);
 
 	refcount_set(&c->ro_ref, 1);

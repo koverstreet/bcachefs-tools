@@ -249,7 +249,7 @@ fn sanitize_val(fs: &Fs, mut k: BkeyS, opts: SanitizeOpts) -> bool {
 /// zero inline data, optionally scramble filenames, clear checksums.
 fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
     let fs = unsafe { Fs::borrow_raw(fs_raw) };
-    let jset_magic = fs.disk_sb().sb().jset_magic();
+    let jset_magic = fs.sb_lock().sb().jset_magic();
     let block_bits = fs.block_bits();
 
     // A jset that overruns what holds it - or an entry or key one - is an
@@ -306,7 +306,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
 /// encryption, zero inline data, optionally scramble filenames.
 fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) -> Result<()> {
     let fs = unsafe { Fs::borrow_raw(fs_raw) };
-    let bset_magic = fs.disk_sb().sb().bset_magic();
+    let bset_magic = fs.sb_lock().sb().bset_magic();
     let block_bits = fs.block_bits();
 
     // The node's packed-key format lives in the btree_node header at the start

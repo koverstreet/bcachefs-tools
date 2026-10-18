@@ -463,11 +463,11 @@ fn migrate_fs(
         .map_err(|e| anyhow!("Error starting new filesystem: {}", e))?;
 
     // Set no_default_sb feature — prevents rw mount until migrate-superblock is run
-    let sb = unsafe { &mut *(*fs.as_ptr()).disk_sb.sb };
-    sb.features[0].set(sb.features[0].get() | (1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64));
     {
-        let _lock = fs.sb_lock();
-        fs.write_super_ret()
+        let mut sb = fs.sb_lock();
+        let f = &mut sb.sb_mut().features[0];
+        f.set(f.get() | (1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64));
+        fs.write_super_ret(&mut sb)
             .map_err(|e| anyhow!("Error writing superblock: {}", e))?;
     }
 
@@ -579,12 +579,12 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
     // Clear no_default_sb feature so recovery doesn't force ro
     unsafe {
         let fs_raw = fs.as_ptr();
-        let _lock = fs.sb_lock();
-        let sb = &mut *(*fs_raw).disk_sb.sb;
-        sb.features[0].set(sb.features[0].get() & !(1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64));
+        let mut sb = fs.sb_lock();
+        let f = &mut sb.sb_mut().features[0];
+        f.set(f.get() & !(1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64));
         // Also update the cached copy — c->sb.features is host-endian
         (*fs_raw).sb.features &= !(1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64);
-        fs.write_super_ret()
+        fs.write_super_ret(&mut sb)
             .map_err(|e| anyhow!("Error writing superblock: {}", e))?;
 
         // This is normall set in fs_init if BCH_FEATURE_no_default_sb is

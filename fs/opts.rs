@@ -294,9 +294,10 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &c::bch_option, val: &core::ffi::CStr,
     if ret < 0 { Err(ret) } else { Ok(v) }
 }
 
-/// @flags: OPT_SHOW_*.
+/// @flags: OPT_SHOW_*. No superblock: that's for rendering without a
+/// filesystem.
 pub fn opt_to_text(out: &mut Printbuf, fs: &Fs, opt: &c::bch_option, v: u64, flags: u32) {
-    unsafe { c::bch2_opt_to_text(out.as_raw(), fs.as_ptr(), fs.sb() as *const _ as *mut _, opt, v, flags) }
+    unsafe { c::bch2_opt_to_text(out.as_raw(), fs.as_ptr(), core::ptr::null_mut(), opt, v, flags) }
 }
 
 impl c::bch_opt_id {

@@ -69,7 +69,7 @@
 
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
-use crate::fs::Fs;
+use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{sb_field_get, sb_field_ops, SbFieldOps};
 use crate::sb::members;
 use crate::util::ffi::{c_char, Opaque};
@@ -345,10 +345,7 @@ fn target_to_text_sb(out: &mut Printbuf, sb: &c::bch_sb, target: Target) {
 // ── The table ────────────────────────────────────────────────────────────
 
 /// Without a disk groups section the table is left as it is.
-fn sb_disk_groups_to_cpu(fs: &Fs) -> Result<(), BchError> {
-    fs.assert_sb_lock_held();
-
-    let sb = fs.disk_sb();
+fn sb_disk_groups_to_cpu(fs: &Fs, sb: &SbLockGuard) -> Result<(), BchError> {
     let Some(groups) = sb.field::<c::bch_sb_field_disk_groups>() else {
         return Ok(());
     };
@@ -382,7 +379,9 @@ fn groups_to_cpu(dst: &mut [c::bch_disk_group_cpu], src: &[c::bch_disk_group], s
 
 #[c_export]
 pub fn bch2_sb_disk_groups_to_cpu(c: &Opaque<c::bch_fs>) -> c_int {
-    ret_to_c(sb_disk_groups_to_cpu(Fs::from_c(c)))
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    ret_to_c(sb_disk_groups_to_cpu(fs, &unsafe { fs.sb_lock_held() }))
 }
 
 /// # Safety
@@ -393,22 +392,18 @@ pub unsafe fn bch2_fs_disk_groups_exit(c: &Opaque<c::bch_fs>) {
     unsafe { Fs::from_c(c).disk_groups.free() }
 }
 
-fn dev_group_set(fs: &Fs, dev: u32, name: &[u8]) -> Result<(), BchError> {
-    fs.assert_sb_lock_held();
-
-    let v = dev_label_resolve(fs, name)?;
-    // SAFETY: under sb_lock
-    unsafe { fs.member_mut(dev) }.set_group(v.into());
-    sb_disk_groups_to_cpu(fs)
+fn dev_group_set(fs: &Fs, sb: &mut SbLockGuard, dev: u32, name: &[u8]) -> Result<(), BchError> {
+    let v = dev_label_resolve(sb, name)?;
+    sb.fs_member_mut(dev).set_group(v.into());
+    sb_disk_groups_to_cpu(fs, sb)
 }
 
-/// As a member's group field: index + 1, 0 for none. Caller holds sb_lock.
-fn dev_label_resolve(fs: &Fs, name: &[u8]) -> Result<u32, BchError> {
+/// As a member's group field: index + 1, 0 for none.
+fn dev_label_resolve(sb: &mut c::bch_sb_handle, name: &[u8]) -> Result<u32, BchError> {
     if name.is_empty() || name == b"none" {
         return Ok(0);
     }
-    // SAFETY: under sb_lock
-    Ok(unsafe { fs.disk_sb_mut() }.disk_path_find_or_create(name)? + 1)
+    Ok(sb.disk_path_find_or_create(name)? + 1)
 }
 
 /// # Safety
@@ -417,7 +412,9 @@ fn dev_label_resolve(fs: &Fs, name: &[u8]) -> Result<u32, BchError> {
 pub unsafe fn __bch2_dev_group_set(c: &Opaque<c::bch_fs>, ca: &c::bch_dev, name: *const c_char) -> c_int {
     // SAFETY: the caller's
     let name = unsafe { CStr::from_ptr(name.cast()) };
-    ret_to_c(dev_group_set(Fs::from_c(c), ca.dev_idx.into(), name.to_bytes()))
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    ret_to_c(dev_group_set(fs, &mut unsafe { fs.sb_lock_held() }, ca.dev_idx.into(), name.to_bytes()))
 }
 
 /// @c may be NULL: every label is invalid then.
@@ -545,10 +542,7 @@ fn opt_target_parse(fs: &Fs, val: &[u8], err: Option<&mut Printbuf>) -> Result<T
         return Ok(Target::Dev(dev.into()));
     }
 
-    let g = {
-        let _lock = fs.sb_lock();
-        fs.disk_sb().disk_path_find(val)
-    };
+    let g = fs.sb_lock().disk_path_find(val);
     if let Some(g) = g {
         return Ok(Target::Group(g));
     }
@@ -612,8 +606,7 @@ pub unsafe fn bch2_opt_disk_label_parse(c: Option<&Opaque<c::bch_fs>>, val: *con
         Ok(a)  => a,
         Err(e) => return e,
     };
-    let _lock = fs.sb_lock();
-    ret_to_c(dev_label_resolve(fs, val).map(|v| *res = v.into()))
+    ret_to_c(dev_label_resolve(&mut fs.sb_lock(), val).map(|v| *res = v.into()))
 }
 
 /// # Safety

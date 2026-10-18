@@ -3,22 +3,20 @@ use crate::btree::bkey::BkeyI;
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
-use crate::util::locking::MemallocFlags;
+use crate::util::locking::MutexNoioGuard;
 use crate::util::Printbuf;
 
 pub use crate::sb::members::DevRef;
 
-/// sb_lock, unlocked on drop. It guards allocations that mustn't recurse into
-/// reclaim IO, so it brackets a PF_MEMALLOC_NOIO scope: Drop unlocks before the
-/// _noio field restores, as the C does.
-pub struct SbLockGuard<'a> {
-    fs: &'a Fs,
-    _noio: MemallocFlags,
-}
+/// sb_lock held: the superblock, through it.
+pub type SbLockGuard<'a> = MutexNoioGuard<'a, c::bch_sb_handle>;
 
-impl Drop for SbLockGuard<'_> {
-    fn drop(&mut self) {
-        unsafe { c::mutex_unlock(&mut (*self.fs.as_ptr()).sb_lock.lock); }
+impl SbLockGuard<'_> {
+    /// Member @dev_idx, of an open filesystem's superblock - where every one
+    /// is whole: bch2_sb_members_v2_init() grew them at open.
+    pub fn fs_member_mut(&mut self, dev_idx: u32) -> &mut c::bch_member {
+        self.member_mut(dev_idx)
+            .expect("a member, whole: bch2_sb_members_v2_init() grew them at open")
     }
 }
 
@@ -102,10 +100,6 @@ impl Fs {
         self.chacha20_key_set
     }
 
-    pub fn disk_sb(&self) -> &c::bch_sb_handle {
-        &self.disk_sb
-    }
-
     /// # Safety
     /// @raw points to a live bch_fs, that outlives 'a.
     pub unsafe fn borrow_raw<'a>(raw: *mut c::bch_fs) -> &'a Fs {
@@ -116,14 +110,6 @@ impl Fs {
     /// always a live one.
     pub fn from_c(c: &crate::util::ffi::Opaque<c::bch_fs>) -> &Fs {
         unsafe { Self::borrow_raw(c.as_ptr()) }
-    }
-
-    pub fn sb_handle(&self) -> &c::bch_sb_handle {
-        &self.disk_sb
-    }
-
-    pub fn sb(&self) -> &c::bch_sb {
-        self.sb_handle().sb()
     }
 
     /// The metadata version the filesystem is at: C's c->sb.version, the
@@ -189,13 +175,15 @@ impl Fs {
     }
 
     pub fn sb_lock(&self) -> SbLockGuard<'_> {
-        let _noio = MemallocFlags::noio();
-        unsafe { c::mutex_lock(&mut (*self.as_ptr()).sb_lock.lock); }
-        SbLockGuard { fs: self, _noio }
+        self.disk_sb.lock()
     }
 
-    pub fn assert_sb_lock_held(&self) {
-        unsafe { c::rust_bch2_sb_lock_assert_held(self.as_ptr()) }
+    /// sb_lock, as C calling in holds it.
+    ///
+    /// # Safety
+    /// The caller holds sb_lock, for as long as the guard lives.
+    pub unsafe fn sb_lock_held(&self) -> SbLockGuard<'_> {
+        unsafe { self.disk_sb.held() }
     }
 
     /// The BCH_FS_* flags set.
@@ -214,8 +202,10 @@ impl Fs {
         StateLockRead(self)
     }
 
-    /// Caller holds sb_lock.
-    pub fn write_super(&self) {
+    /// It changes the superblock - its seq, its checksum - and calls back into
+    /// Rust that takes sb_lock as held: so @_sb, the lock held, is borrowed
+    /// mutably, and nothing in the superblock is borrowed across the write.
+    pub fn write_super(&self, _sb: &mut SbLockGuard) {
         unsafe { c::bch2_write_super(self.as_ptr()) };
     }
 
@@ -244,14 +234,6 @@ impl Fs {
         } else {
             self.throw(error)
         }
-    }
-
-    /// # Safety
-    /// Caller holds sb_lock.
-    #[allow(clippy::mut_from_ref)] // interior mutability guarded by sb_lock
-    pub unsafe fn member_mut(&self, dev_idx: u32) -> &mut c::bch_member {
-        unsafe { self.disk_sb_mut() }.member_mut(dev_idx)
-            .expect("a member, whole: bch2_sb_members_v2_init() grew them at open")
     }
 
     pub fn btree_id_root(&self, id: u32) -> Option<&c::btree> {
@@ -375,15 +357,14 @@ impl Fs {
         Ok(())
     }
 
-    /// Caller holds sb_lock.
-    pub fn write_super_ret(&self) -> Result<(), BchError> {
+    pub fn write_super_ret(&self, _sb: &mut SbLockGuard) -> Result<(), BchError> {
         ret_to_result(unsafe { c::bch2_write_super(self.as_ptr()) })
     }
 
     /// A superblock write that's part of bringing the filesystem up, on a
     /// nostart open that will start it afterwards - allowed before start,
-    /// like recovery's own. Caller must hold sb_lock.
-    pub fn write_super_bringup(&self) -> Result<(), BchError> {
+    /// like recovery's own.
+    pub fn write_super_bringup(&self, _sb: &mut SbLockGuard) -> Result<(), BchError> {
         ret_to_result(unsafe {
             c::bch2_write_super_flags(self.as_ptr(), c::bch_sb_write_flags::BCH_SB_WRITE_bringup)
         })
@@ -391,8 +372,9 @@ impl Fs {
 
     /// Apply in-memory superblock edits to the in-memory state derived from
     /// it (c->sb, member info) without writing - for an open that will start
-    /// and persist them then. Caller must hold sb_lock.
-    pub fn sb_update(&self) {
+    /// and persist them then. @_sb mutably, as write_super()'s: it calls back
+    /// into Rust too.
+    pub fn sb_update(&self, _sb: &mut SbLockGuard) {
         unsafe { c::bch2_sb_update(self.as_ptr()) }
     }
 
@@ -485,15 +467,6 @@ impl Fs {
     /// The device exists.
     pub unsafe fn dev_raw(&self, dev: u32) -> *mut c::bch_dev {
         self.devs[dev as usize].as_ptr()
-    }
-
-    /// For resize.
-    ///
-    /// # Safety
-    /// Caller holds sb_lock.
-    #[allow(clippy::mut_from_ref)] // interior mutability guarded by sb_lock
-    pub unsafe fn disk_sb_mut(&self) -> &mut c::bch_sb_handle {
-        &mut (*self.as_ptr()).disk_sb
     }
 
     pub fn block_bytes(&self) -> u64 {

@@ -23,7 +23,6 @@ use bcachefs_kernel::alloc::disk_groups::Target;
 use bcachefs_kernel::fs::{Fs, btree_id_is_alloc, writepoint_hashed};
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::util::printbuf::Printbuf;
-use bcachefs_kernel::sb;
 use bcachefs_kernel::sb::sb_field_type;
 use bcachefs_kernel::{POS_MIN, SPOS_MAX, pos};
 use clap::Parser;
@@ -86,21 +85,18 @@ fn count_input_size(dir: &std::fs::File) -> u64 {
 /// Set data_allowed on both devices for image update:
 /// dev 0 gets user data only, dev 1 gets journal+btree.
 fn set_data_allowed_for_image_update(fs: &Fs) {
-    let _lock = fs.sb_lock();
+    let mut sb = fs.sb_lock();
 
-    let m0 = unsafe { fs.member_mut(0) };
-    m0.set_data_allowed(data_type::user.bit());
+    sb.fs_member_mut(0).set_data_allowed(data_type::user.bit());
 
-    let m1 = unsafe { fs.member_mut(1) };
-    m1.set_data_allowed(
+    sb.fs_member_mut(1).set_data_allowed(
         data_type::journal.bit()
             | data_type::btree.bit(),
     );
 
     // Not started yet: the start persists this. It needs the in-memory
     // member info updated now, for the allocator.
-    fs.sb_update();
-    drop(_lock);
+    fs.sb_update(&mut sb);
 
     fs.dev_allocator_set_rw(0, true);
     fs.dev_allocator_set_rw(1, true);
@@ -351,11 +347,11 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
 
     // Allow btree data on primary device
     {
-        let _lock = fs.sb_lock();
-        let m = unsafe { fs.member_mut(0) };
+        let mut sb = fs.sb_lock();
+        let m = sb.fs_member_mut(0);
         let allowed = m.data_allowed() | data_type::btree.bit();
         m.set_data_allowed(allowed);
-        fs.write_super();
+        fs.write_super(&mut sb);
     }
 
     fs.dev_allocator_set_rw(0, true);
@@ -379,7 +375,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
         .map_err(|e| anyhow!("truncate error: {}", e))?;
 
     // Lock sb and finalize
-    let _lock = fs.sb_lock();
+    let mut sb = fs.sb_lock();
 
     if !keep_alloc {
         if verbosity > 1 {
@@ -393,34 +389,33 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     unsafe { fs.devs[1].assign(std::ptr::null_mut()) };
 
     // Allow journal on primary device
-    let m = unsafe { fs.member_mut(0) };
+    let m = sb.fs_member_mut(0);
     let allowed = m.data_allowed() | data_type::journal.bit();
     m.set_data_allowed(allowed);
 
     // Set nbuckets
-    unsafe { fs.member_mut(0) }.nbuckets = nbuckets.into();
+    sb.fs_member_mut(0).nbuckets = nbuckets.into();
 
     // Set resize_on_mount for all online members
     for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_bch2_online_devs) {
-        unsafe { fs.member_mut(ca.dev_idx as u32) }.set_resize_on_mount(true);
+        sb.fs_member_mut(ca.dev_idx as u32).set_resize_on_mount(true);
     }
 
     // Set small_image feature
-    let disk_sb = unsafe { fs.disk_sb_mut() };
-    let f = &mut disk_sb.sb_mut().features[0];
+    let f = &mut sb.sb_mut().features[0];
     f.set(f.get() | (1u64 << c::bch_sb_feature::BCH_FEATURE_small_image.0 as u64));
 
     // Resize members_v2 to contain only one device
-    let member_bytes = disk_sb.field::<c::bch_sb_field_members_v2>()
+    let member_bytes = sb.field::<c::bch_sb_field_members_v2>()
         .expect("members_v2 field missing")
         .member_bytes.get();
     let u64s = (std::mem::size_of::<Head<c::bch_sb_field_members_v2>>() as u32 + member_bytes as u32)
         .div_ceil(8) as u32;
-    sb::io::sb_field_resize::<c::bch_sb_field_members_v2>(disk_sb, u64s);
-    disk_sb.sb_mut().nr_devices = 1;
-    disk_sb.sb_mut().set_multi_device(false);
+    sb.field_resize::<c::bch_sb_field_members_v2>(u64s);
+    sb.sb_mut().nr_devices = 1;
+    sb.sb_mut().set_multi_device(false);
 
-    fs.write_super();
+    fs.write_super(&mut sb);
 
     Ok(())
 }

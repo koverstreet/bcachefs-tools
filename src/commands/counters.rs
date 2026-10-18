@@ -62,8 +62,7 @@ fn cmd_reset_counters(cli: Cli) -> Result<()> {
         }
 
         // persist to superblock
-        let _lock = crate::wrappers::sb_lock(fs.as_ptr());
-        fs.write_super_ret()
+        fs.write_super_ret(&mut fs.sb_lock())
             .map_err(|e| anyhow!("error writing superblock: {}", e))?;
     }
 

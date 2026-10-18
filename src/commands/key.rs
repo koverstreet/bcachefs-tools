@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use bcachefs_kernel::c::{bch_key, bch_encrypted_key};
 use bch_bindgen::c;
 use bch_bindgen::fs::FsExt;
-use bcachefs_kernel::fs::{Fs, OpenFs};
+use bcachefs_kernel::fs::{Fs, OpenFs, SbLockGuard};
 use bcachefs_kernel::opt_set;
 use bch_bindgen::sb::io as sb_io;
 use clap::Parser;
@@ -130,33 +130,24 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(OpenFs, bch_key)> {
 }
 
 /// Write a new encrypted key to the crypt superblock field.
-///
-/// # Safety
-/// Caller must hold sb_lock.
-unsafe fn set_crypt_key(fs: &Fs, key: c::bch_encrypted_key) {
-    let disk_sb = &mut (*fs.as_ptr()).disk_sb;
-    let crypt = bcachefs_kernel::sb::io::sb_field_get_mut::<c::bch_sb_field_crypt>(disk_sb)
-        .expect("filesystem has no crypt field");
-    crypt.key = key;
+fn set_crypt_key(sb: &mut c::bch_sb_handle, key: c::bch_encrypted_key) {
+    sb.field_mut::<c::bch_sb_field_crypt>()
+        .expect("filesystem has no crypt field")
+        .key = key;
 }
 
 /// Give the crypt field scrypt parameters, for a key that has never been
 /// wrapped with a passphrase: --no_passphrase leaves them unset.
-///
-/// # Safety
-/// Caller must hold sb_lock.
-unsafe fn init_crypt_kdf(fs: &Fs) {
-    let disk_sb = &mut (*fs.as_ptr()).disk_sb;
-    let crypt = bcachefs_kernel::sb::io::sb_field_get_mut::<c::bch_sb_field_crypt>(disk_sb)
+fn init_crypt_kdf(sb: &mut c::bch_sb_handle) {
+    let crypt = sb.field_mut::<c::bch_sb_field_crypt>()
         .expect("filesystem has no crypt field");
-    c::bch_crypt_kdf_init(crypt);
+    unsafe { c::bch_crypt_kdf_init(crypt) };
 }
 
 /// Write the changed crypt field out. The open was will_not_start, so the
 /// in-memory superblock is what's on disk plus our edit.
-fn write_crypt_super(fs: &Fs) -> Result<()> {
-    let _lock = fs.sb_lock();
-    fs.write_super_ret()
+fn write_crypt_super(fs: &Fs, sb: &mut SbLockGuard) -> Result<()> {
+    fs.write_super_ret(sb)
         .map_err(|e| anyhow!("error writing superblock: {e}"))
 }
 
@@ -176,17 +167,16 @@ fn cmd_set_passphrase(cli: SetPassphraseCli) -> Result<()> {
     let new_passphrase = Passphrase::ask_for_new_passphrase()
         .context("reading new passphrase")?;
 
-    if !sb_is_encrypted(fs.sb_handle()) {
-        unsafe { init_crypt_kdf(&fs); }
+    let mut sb = fs.sb_lock();
+    if !sb_is_encrypted(&sb) {
+        init_crypt_kdf(&mut sb);
     }
 
-    let encrypted_key = new_passphrase.encrypt_key(fs.sb_handle(), raw_key)?;
+    let encrypted_key = new_passphrase.encrypt_key(&sb, raw_key)?;
 
-    unsafe {
-        set_crypt_key(&fs, encrypted_key);
-        c::bch2_revoke_key(fs.sb_handle().sb);
-    }
-    write_crypt_super(&fs)
+    set_crypt_key(&mut sb, encrypted_key);
+    unsafe { c::bch2_revoke_key(sb.sb) };
+    write_crypt_super(&fs, &mut sb)
 }
 
 // ---- remove-passphrase ----
@@ -202,8 +192,9 @@ pub struct RemovePassphraseCli {
 fn cmd_remove_passphrase(cli: RemovePassphraseCli) -> Result<()> {
     let (fs, raw_key) = open_and_verify(&parse_device_list(&cli.devices))?;
 
-    unsafe { set_crypt_key(&fs, bch_encrypted_key::new_unencrypted(raw_key)); }
-    write_crypt_super(&fs)
+    let mut sb = fs.sb_lock();
+    set_crypt_key(&mut sb, bch_encrypted_key::new_unencrypted(raw_key));
+    write_crypt_super(&fs, &mut sb)
 }
 
 pub const CMD_UNLOCK: super::CmdDef = typed_cmd!("unlock", "Unlock an encrypted filesystem", UnlockCli, cmd_unlock);

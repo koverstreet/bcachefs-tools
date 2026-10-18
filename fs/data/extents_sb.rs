@@ -8,7 +8,7 @@
 use crate::c;
 use crate::data::ptrs::{extent_entry_type_name, extent_entry_type_u64s};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
-use crate::fs::Fs;
+use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{sb_field_ops, SbFieldOps};
 use crate::util::ffi::Opaque;
 use crate::util::vstructs::Head;
@@ -41,19 +41,18 @@ fn sizes_to_cpu(cpu: &mut c::bch_sb_cpu, theirs: &[u8]) {
 #[c_export]
 pub fn bch2_sb_extent_type_u64s_to_cpu(c: &Opaque<c::bch_fs>) {
     let fs = Fs::from_c(c);
-    let theirs = fs.disk_sb().field::<c::bch_sb_field_extent_type_u64s>().map_or(&[][..], sizes);
+    // SAFETY: C calls it under sb_lock
+    let sb = unsafe { fs.sb_lock_held() };
+    let theirs = sb.field::<c::bch_sb_field_extent_type_u64s>().map_or(&[][..], sizes);
 
     // SAFETY: under sb_lock, the in-memory superblock's writers'
     sizes_to_cpu(unsafe { &mut (*fs.as_ptr()).sb }, theirs);
 }
 
-fn sb_extent_type_u64s_from_cpu(fs: &Fs) -> Result<(), BchError> {
-    fs.assert_sb_lock_held();
-
+fn sb_extent_type_u64s_from_cpu(fs: &Fs, sb: &mut SbLockGuard) -> Result<(), BchError> {
     let u64s = (size_of::<Head<c::bch_sb_field>>() + c::BCH_EXTENT_ENTRY_MAX as usize)
         .div_ceil(size_of::<u64>());
-    // SAFETY: under sb_lock
-    let e = unsafe { fs.disk_sb_mut() }.field_get_minsize::<c::bch_sb_field_extent_type_u64s>(u64s as u32);
+    let e = sb.field_get_minsize::<c::bch_sb_field_extent_type_u64s>(u64s as u32);
     let Some(e) = e else {
         crate::bch_err!(fs, "error allocating superblock space for extent_type_u64s");
         return fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_extent_type_u64s);
@@ -67,7 +66,9 @@ fn sb_extent_type_u64s_from_cpu(fs: &Fs) -> Result<(), BchError> {
 
 #[c_export]
 pub fn bch2_sb_extent_type_u64s_from_cpu(c: &Opaque<c::bch_fs>) -> c_int {
-    ret_to_c(sb_extent_type_u64s_from_cpu(Fs::from_c(c)))
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    ret_to_c(sb_extent_type_u64s_from_cpu(fs, &mut unsafe { fs.sb_lock_held() }))
 }
 
 impl SbFieldOps for c::bch_sb_field_extent_type_u64s {

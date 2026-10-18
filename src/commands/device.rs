@@ -371,9 +371,9 @@ fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
 
 
     {
-        let _lock = fs.sb_lock();
-        unsafe { fs.member_mut(dev_idx) }.set_state(new_state as u64);
-        fs.write_super_ret()
+        let mut sb = fs.sb_lock();
+        sb.fs_member_mut(dev_idx).set_state(new_state as u64);
+        fs.write_super_ret(&mut sb)
             .map_err(|e| anyhow!("error writing superblock: {}", e))?;
     }
     Ok(())

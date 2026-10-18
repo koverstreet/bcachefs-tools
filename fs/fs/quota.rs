@@ -494,7 +494,7 @@ mod vfs {
     // ── Reading them in ─────────────────────────────────────────────────
 
     /// The quota section, made with the default grace period if there isn't
-    /// one. Under sb_lock.
+    /// one.
     fn sb_get_or_create_quota(sb: &mut c::bch_sb_handle) -> Option<&mut c::bch_sb_field_quota> {
         if sb.field::<c::bch_sb_field_quota>().is_some() {
             return sb.field_mut::<c::bch_sb_field_quota>();
@@ -511,9 +511,9 @@ mod vfs {
         Some(q)
     }
 
-    /// The superblock's time and warning limits, into memory. Under sb_lock.
-    fn sb_quota_read(fs: &Fs) {
-        let Some(sb_quota) = fs.disk_sb().field::<c::bch_sb_field_quota>() else {
+    /// The superblock's time and warning limits, into memory.
+    fn sb_quota_read(fs: &Fs, sb: &c::bch_sb_handle) {
+        let Some(sb_quota) = sb.field::<c::bch_sb_field_quota>() else {
             return;
         };
 
@@ -564,13 +564,12 @@ mod vfs {
     /// btree; the usage, counted from the inodes. As bch2_fs_quota_read().
     pub fn fs_quota_read(fs: &Fs) -> Result<(), BchError> {
         {
-            let _lock = fs.sb_lock();
-            // SAFETY: under sb_lock
-            if sb_get_or_create_quota(unsafe { fs.disk_sb_mut() }).is_none() {
+            let mut sb = fs.sb_lock();
+            if sb_get_or_create_quota(&mut sb).is_none() {
                 return fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_quota);
             }
 
-            sb_quota_read(fs);
+            sb_quota_read(fs, &sb);
         }
 
         bch_err_fn!(fs, read_keys(fs))
@@ -610,10 +609,8 @@ mod vfs {
         flags & (1 << SB_RDONLY_BIT) != 0
     }
 
-    /// Under sb_lock.
-    fn set_sb_quotas(fs: &Fs, uflags: u32, on: bool) {
-        // SAFETY: the caller's - sb_lock
-        let sb = unsafe { fs.disk_sb_mut() }.sb_mut();
+    fn set_sb_quotas(sb: &mut c::bch_sb_handle, uflags: u32, on: bool) {
+        let sb = sb.sb_mut();
         if uflags & c::FS_QUOTA_UDQ_ENFD != 0 {
             sb.set_usrquota(on);
         }
@@ -650,14 +647,13 @@ mod vfs {
             return fs.throw(bch_errcode::BCH_ERR_EINVAL_quota_enable_prjquota);
         }
 
-        let _lock = fs.sb_lock();
-        // SAFETY: under sb_lock
-        if sb_get_or_create_quota(unsafe { fs.disk_sb_mut() }).is_none() {
+        let mut sb = fs.sb_lock();
+        if sb_get_or_create_quota(&mut sb).is_none() {
             return bch_err_fn!(fs, fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_quota));
         }
 
-        set_sb_quotas(fs, uflags, true);
-        fs.write_super();
+        set_sb_quotas(&mut sb, uflags, true);
+        fs.write_super(&mut sb);
         Ok(())
     }
 
@@ -672,9 +668,9 @@ mod vfs {
             return -(c::EROFS as c_int);
         }
 
-        let _lock = fs.sb_lock();
-        set_sb_quotas(fs, uflags, false);
-        fs.write_super();
+        let mut sb = fs.sb_lock();
+        set_sb_quotas(&mut sb, uflags, false);
+        fs.write_super(&mut sb);
         0
     }
 
@@ -766,9 +762,8 @@ mod vfs {
             return fs.throw(bch_errcode::BCH_ERR_EINVAL_quota_set_info_bad_field);
         }
 
-        let _lock = fs.sb_lock();
-        // SAFETY: under sb_lock
-        let Some(sb_quota) = sb_get_or_create_quota(unsafe { fs.disk_sb_mut() }) else {
+        let mut sb = fs.sb_lock();
+        let Some(sb_quota) = sb_get_or_create_quota(&mut sb) else {
             return bch_err_fn!(fs, fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_quota));
         };
 
@@ -786,9 +781,9 @@ mod vfs {
             q.c[Q_INO].warnlimit = info.i_ino_warnlimit.into();
         }
 
-        sb_quota_read(fs);
+        sb_quota_read(fs, &sb);
 
-        fs.write_super();
+        fs.write_super(&mut sb);
         Ok(())
     }
 

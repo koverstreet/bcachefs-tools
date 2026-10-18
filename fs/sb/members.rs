@@ -1,7 +1,7 @@
 use crate::btree::bkey::BkeySC;
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
-use crate::fs::Fs;
+use crate::fs::{Fs, SbLockGuard};
 use crate::util::kernel::{READ, WRITE};
 use crate::util::Printbuf;
 use crate::util::rcu::{read_lock, ReadGuard};
@@ -78,13 +78,12 @@ pub unsafe fn bch2_sb_nr_devices(sb: *const Head<c::bch_sb>) -> c_uint {
 /// A free member slot: past the last one in use if there's room, else the
 /// empty one least recently mounted - never BCH_SB_MEMBER_INVALID, the
 /// sentinel. Deleted ones aren't free until fsck clears them.
-fn sb_member_find_slot(fs: &Fs) -> Result<u32, BchError> {
+fn sb_member_find_slot(fs: &Fs, sb: &c::bch_sb) -> Result<u32, BchError> {
     let nr = fs.nr_devices();
     if nr < c::BCH_SB_MEMBERS_MAX && nr != c::BCH_SB_MEMBER_INVALID {
         return Ok(nr);
     }
 
-    let sb = fs.disk_sb().sb();
     let mut best: Option<(u64, u32)> = None;
     let mut nr_deleted = 0;
 
@@ -108,13 +107,11 @@ fn sb_member_find_slot(fs: &Fs) -> Result<u32, BchError> {
 }
 
 /// A member slot for a new device, members_v2 and nr_devices grown to hold
-/// it. Under sb_lock.
-fn sb_member_alloc(fs: &Fs) -> Result<u32, BchError> {
-    let dev = sb_member_find_slot(fs)?;
+/// it.
+fn sb_member_alloc(fs: &Fs, sb: &mut SbLockGuard) -> Result<u32, BchError> {
+    let dev = sb_member_find_slot(fs, sb.sb())?;
     let nr = (dev + 1).max(fs.nr_devices());
 
-    // SAFETY: under sb_lock
-    let sb = unsafe { fs.disk_sb_mut() };
     let stride = usize::from(sb.field::<c::bch_sb_field_members_v2>().expect("members_v2").member_bytes.get());
     let u64s = (MEMBERS_V2_HEAD + stride * nr as usize).div_ceil(size_of::<u64>());
 
@@ -127,7 +124,9 @@ fn sb_member_alloc(fs: &Fs) -> Result<u32, BchError> {
 /// The new member's index, or an error.
 #[c_export]
 pub fn bch2_sb_member_alloc(c: &Opaque<c::bch_fs>) -> c_int {
-    match sb_member_alloc(Fs::from_c(c)) {
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    match sb_member_alloc(fs, &mut unsafe { fs.sb_lock_held() }) {
         Ok(dev) => dev as c_int,
         Err(e)  => -e.raw(),
     }
@@ -137,19 +136,18 @@ pub fn bch2_sb_member_alloc(c: &Opaque<c::bch_fs>) -> c_int {
 #[c_export]
 pub fn bch2_sb_members_clean_deleted(c: &Opaque<c::bch_fs>) {
     let fs = Fs::from_c(c);
-    let _lock = fs.sb_lock();
+    let mut sb = fs.sb_lock();
     let mut dirty = false;
 
     for i in 0..fs.nr_devices() {
-        // SAFETY: under sb_lock
-        let m = unsafe { fs.member_mut(i) };
+        let m = sb.fs_member_mut(i);
         if m.deleted() {
             m.uuid.b = [0; 16];
             dirty = true;
         }
     }
     if dirty {
-        fs.write_super();
+        fs.write_super(&mut sb);
     }
 }
 
@@ -304,8 +302,8 @@ impl c::bch_sb_handle {
 #[c_export]
 pub fn bch2_sb_members_v2_init(c: &Opaque<c::bch_fs>) -> c_int {
     let fs = Fs::from_c(c);
-    // SAFETY: under sb_lock
-    let sb = unsafe { fs.disk_sb_mut() };
+    // SAFETY: C calls it under sb_lock
+    let mut sb = unsafe { fs.sb_lock_held() };
     ret_to_c(sb.members_v2_init().ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ENOSPC_sb_members_v2)))
 }
 
@@ -592,31 +590,30 @@ fn member_to_text_short(out: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb, i
     has_data_to_text(out, sb, idx);
 }
 
-fn dev_to_text_short_locked(out: &mut Printbuf, fs: &Fs, dev: u32) {
-    let sb = fs.disk_sb().sb();
+fn dev_to_text_short(out: &mut Printbuf, sb: &c::bch_sb, dev: u32) {
     member_to_text_short(out, &sb_member(sb, dev).unwrap_or_default(), sb, dev);
 }
 
-/// Under sb_lock.
 #[c_export]
 pub fn bch2_member_to_text_short_locked(out: &mut Printbuf, c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {
-    dev_to_text_short_locked(out, Fs::from_c(c), ca.dev_idx.into());
+    // SAFETY: C calls it under sb_lock
+    dev_to_text_short(out, unsafe { Fs::from_c(c).sb_lock_held() }.sb(), ca.dev_idx.into());
 }
 
 #[c_export]
 pub fn bch2_member_to_text_short(out: &mut Printbuf, c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {
     let fs = Fs::from_c(c);
-    let _lock = fs.sb_lock();
-    dev_to_text_short_locked(out, fs, ca.dev_idx.into());
+    dev_to_text_short(out, fs.sb_lock().sb(), ca.dev_idx.into());
 }
 
-/// Under sb_lock.
 #[c_export]
 pub fn bch2_devs_mask_to_text_locked(out: &mut Printbuf, c: &Opaque<c::bch_fs>, devs: &c::bch_devs_mask) {
     let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    let sb = unsafe { fs.sb_lock_held() };
     for dev in devs.d.iter() {
         if fs.dev_rcu(dev as u32, &read_lock()).is_some() {
-            dev_to_text_short_locked(out, fs, dev as u32);
+            dev_to_text_short(out, sb.sb(), dev as u32);
         }
     }
 }

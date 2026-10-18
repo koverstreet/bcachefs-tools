@@ -1575,12 +1575,6 @@ int bch2_write_super(struct bch_fs *c)
 	return bch2_write_super_flags(c, 0);
 }
 
-/* For Rust: lockdep_assert_held() is a macro */
-void rust_bch2_sb_lock_assert_held(struct bch_fs *c)
-{
-	lockdep_assert_held(&c->sb_lock.lock);
-}
-
 /*
  * How much of the filesystem's metadata we're willing to leave on devices a
  * replicas superblock write skips. Tunable: lower is more conservative.

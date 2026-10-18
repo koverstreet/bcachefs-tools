@@ -840,9 +840,11 @@ fn sb_dev(fs: &Fs, dev: u32) -> Result<bcachefs_kernel::fs::DevRef> {
 fn cmd_sb_get(fs: &Fs, dev: Option<u32>, field: &str) -> Result<String> {
     let (r, bm) = sb_field(field)?;
     let ca = dev.map(|d| sb_dev(fs, d)).transpose()?;
+    // ca->disk_sb is sb_lock's too: bch2_write_super() writes it
+    let sb = fs.sb_lock();
     let buf = match &ca {
         Some(ca) => ca.disk_sb.sb_bytes(),
-        None     => fs.disk_sb().sb_bytes(),
+        None     => sb.sb_bytes(),
     };
     let v = match bm {
         Some(bm) => typeinfo::read_bits(buf, &r, bm),
@@ -855,21 +857,21 @@ fn cmd_sb_set(fs: &Fs, dev: Option<u32>, field: &str, v: u64) -> Result<String> 
     let target = sb_field(field)?;
     let ca = dev.map(|d| sb_dev(fs, d)).transpose()?;
 
-    let _lock = unsafe { crate::wrappers::sb_lock(fs.as_ptr()) };
+    let mut sb = fs.sb_lock();
 
-    /* sb_lock is held above - disk_sb_mut's contract, and ca->disk_sb's: */
-    let sb = match &ca {
+    let edit = match &ca {
+        // SAFETY: ca->disk_sb is sb_lock's too, held
         Some(ca) => unsafe { &mut (*ca.as_mut_ptr()).disk_sb },
-        None     => unsafe { fs.disk_sb_mut() },
+        None     => &mut *sb,
     };
-    sb.edit_header(|h| typeinfo::write(h, &target, v))
+    edit.edit_header(|h| typeinfo::write(h, &target, v))
         .map_err(|e| anyhow!("{field}: {e}"))?
         .map_err(|e| anyhow!("{field}: {e}"))?;
 
     // Only --rw (started) and --nostart (opened will_not_start, which makes
     // no version decisions to persist) get here - see the check in the
     // command loop.
-    fs.write_super_ret()
+    fs.write_super_ret(&mut sb)
         .map_err(|e| anyhow!("bch2_write_super failed: {e}"))?;
     Ok(String::new())
 }

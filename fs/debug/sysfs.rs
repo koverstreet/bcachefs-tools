@@ -421,14 +421,12 @@ fn opt_show(c: &Fs, ca: Option<&c::bch_dev>, id: c::bch_opt_id, out: &mut Printb
 {
     let opt = &opts::opt_table()[id.0 as usize];
 
-    // c->disk_sb.sb is reallocated and freed under sb_lock: hold it across
-    // the reads
-    let _sb_lock = c.sb_lock();
+    let sb = c.sb_lock();
 
     let v = match ca {
         Some(ca) if opt.type_ == c::opt_type::BCH_OPT_STR_MEMBER => {
             // The value lives in the member, not a u64 - render it here:
-            let Some(m) = members::sb_member(c.sb(), ca.dev_idx as u32) else {
+            let Some(m) = members::sb_member(sb.sb(), ca.dev_idx as u32) else {
                 return c.throw(bch_errcode::BCH_ERR_ENOENT_dev_idx_not_found);
             };
             out.write_bytes(opt.member_str(&m));
@@ -439,7 +437,7 @@ fn opt_show(c: &Fs, ca: Option<&c::bch_dev>, id: c::bch_opt_id, out: &mut Printb
             if !(opt.has(c::opt_flags::OPT_DEVICE) && opt.get_member.is_some()) {
                 return c.throw(bch_errcode::BCH_ERR_EINVAL_sysfs_opt_not_found);
             }
-            opts::opt_from_sb(c.sb(), id, ca.dev_idx as u32)
+            opts::opt_from_sb(sb.sb(), id, ca.dev_idx as u32)
         }
         None => {
             if !opt.has(c::opt_flags::OPT_FS) {

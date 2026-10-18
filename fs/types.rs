@@ -6,6 +6,7 @@ use crate::cstructs::c;
 use crate::util::vstructs::Head;
 use crate::types::{Atomic64, GenRadix, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::util::ffi::c_char;
+use crate::util::locking::MutexNoio;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
 use cstruct_macros::{c_const, c_enum, c_xmacro, CStruct, Init, TypeInfo};
 use pin_init::pin_data;
@@ -602,9 +603,12 @@ pub struct Fs {
     pub mount_opts: c::bch_opts_mask,
 
     pub sb: c::bch_sb_cpu,
-    pub disk_sb: c::bch_sb_handle,
     pub sb_write: c::closure,
-    pub sb_lock: c::mutex_noio,
+    /// The superblock, behind sb_lock: Fs::sb_lock() is the way in.
+    #[pin]
+    #[init(crate::new_mutex_noio!(Default::default(), "&c->sb_lock"))]
+    #[c_anon("struct mutex_noio sb_lock; struct bch_sb_handle disk_sb")]
+    pub disk_sb: MutexNoio<c::bch_sb_handle>,
     #[c("unsigned long incompat_versions_requested[BITS_TO_LONGS(BCH_VERSION_MINOR(bcachefs_metadata_version_current))]")]
     pub incompat_versions_requested: [c_ulong;
         bits_to_longs(c::BCH_VERSION_MINOR(c::bcachefs_metadata_version_current as u64) as usize)],
