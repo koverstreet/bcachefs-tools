@@ -4,7 +4,6 @@
 #include "bcachefs.h"
 
 #include "data/compress.h"
-#include "data/compress_types.h"
 
 #include "tests.h"
 
