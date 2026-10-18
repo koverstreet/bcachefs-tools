@@ -18,4 +18,8 @@ c_extern! {
     pub fn bch2_fs_exit(c: *mut c::bch_fs) -> c_int;
     pub fn bch2_fs_open(devices: *mut c::darray_const_str, opts: *mut c::bch_opts,
                         user_key: *const c::bch_key) -> *mut c::bch_fs;
+    pub static bch2_fs_flag_strs: [*const crate::util::ffi::c_char; 0];
+    pub static bch2_write_refs: [*const crate::util::ffi::c_char; 0];
+    pub static bch2_dev_read_refs: [*const crate::util::ffi::c_char; 0];
+    pub static bch2_dev_write_refs: [*const crate::util::ffi::c_char; 0];
 }

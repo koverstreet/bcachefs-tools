@@ -22,6 +22,23 @@ impl Drop for SbLockGuard<'_> {
     }
 }
 
+/// state_lock, held for read; up_read() on drop. What needs it held is a
+/// method here.
+pub struct StateLockRead<'a>(&'a Fs);
+
+impl Drop for StateLockRead<'_> {
+    fn drop(&mut self) {
+        unsafe { c::up_read(&raw mut (*self.0.as_ptr()).state_lock) };
+    }
+}
+
+impl StateLockRead<'_> {
+    /// Recompute the filesystem's capacity from its devices.
+    pub fn recalc_capacity(&self) {
+        unsafe { c::bch2_recalc_capacity(self.0.as_ptr()) }
+    }
+}
+
 pub use crate::cstructs::types::Fs;
 
 impl Fs {
@@ -135,10 +152,15 @@ impl Fs {
     /// Whether filesystem flag @f (BCH_FS_*) is set: C's test_bit() on
     /// c->flags. Other threads set and clear them, so it's an atomic load.
     pub fn flag(&self, f: c::bch_fs_flags) -> bool {
+        self.flags() & (1usize << f as u32) != 0
+    }
+
+    /// c->flags, which C changes with set_bit() and the like.
+    fn flags(&self) -> usize {
         let flags = unsafe {
             &*(core::ptr::addr_of!((*self.as_ptr()).flags) as *const core::sync::atomic::AtomicUsize)
         };
-        flags.load(core::sync::atomic::Ordering::Relaxed) & (1usize << f as u32) != 0
+        flags.load(core::sync::atomic::Ordering::Relaxed)
     }
 
     /// Whether a mount is drawing recovery progress from
@@ -175,6 +197,22 @@ impl Fs {
 
     pub fn assert_sb_lock_held(&self) {
         unsafe { c::rust_bch2_sb_lock_assert_held(self.as_ptr()) }
+    }
+
+    /// The BCH_FS_* flags set.
+    pub fn flags_to_text(&self, out: &mut Printbuf) {
+        unsafe { out.prt_bitflags(c::bch2_fs_flag_strs.as_ptr(), self.flags() as u64) }
+    }
+
+    /// The write refs held, by kind.
+    pub fn write_refs_to_text(&self, out: &mut Printbuf) {
+        unsafe { self.writes.to_text(out, c::bch2_write_refs.as_ptr()) }
+    }
+
+    /// state_lock for read: devices and capacity don't change under it.
+    pub fn state_lock_read(&self) -> StateLockRead<'_> {
+        unsafe { c::down_read(&raw mut (*self.as_ptr()).state_lock) };
+        StateLockRead(self)
     }
 
     /// Caller holds sb_lock.

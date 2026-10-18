@@ -79,4 +79,5 @@ c_extern! {
                                            flags: c::bch_run_recovery_pass_flags) -> c_int;
     pub fn bch2_require_recovery_pass(c: *mut c::bch_fs, out: *mut c::printbuf,
                                       pass: c::bch_recovery_pass) -> c_int;
+    pub fn bch2_recovery_pass_status_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
 }
