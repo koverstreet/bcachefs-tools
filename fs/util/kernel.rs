@@ -1,5 +1,30 @@
 use crate::c;
 
+/// C's READ and WRITE, as indices: io_ref[], io_clock[]...
+pub const READ:  usize = 0;
+pub const WRITE: usize = 1;
+
+#[cfg(kernel)]
+pub const PAGE_SIZE: usize = kernel::page::PAGE_SIZE;
+/// The shim's, include/linux/page.h
+#[cfg(not(kernel))]
+pub const PAGE_SIZE: usize = 4096;
+
+/// Ask @shrink to free @nr objects, as memory pressure would: its
+/// scan_objects(), GFP_KERNEL.
+///
+/// # Safety
+/// @shrink is a live shrinker.
+pub unsafe fn shrinker_scan(shrink: *mut c::shrinker, nr: core::ffi::c_ulong) {
+    // SAFETY: integers and a pointer, each valid as zero
+    let mut sc: c::shrink_control = unsafe { core::mem::zeroed() };
+    sc.gfp_mask = c::GFP_KERNEL;
+    sc.nr_to_scan = nr as _;
+
+    let scan = unsafe { (*shrink).scan_objects }.expect("shrinker without scan_objects");
+    unsafe { scan(shrink, &mut sc) };
+}
+
 /// The @i'th CPU of a spread across the online CPUs, NUMA-local ones first:
 /// as cpumask_local_spread(i, NUMA_NO_NODE).
 #[cfg(kernel)]

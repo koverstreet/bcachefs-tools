@@ -2,6 +2,7 @@ use crate::btree::bkey::BkeySC;
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
 use crate::fs::Fs;
+use crate::util::kernel::{READ, WRITE};
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::{Head, View};
 use core::ffi::CStr;
@@ -329,10 +330,6 @@ impl Fs {
 }
 
 // ── References ───────────────────────────────────────────────────────────
-
-/// io_ref[]'s, by C's READ and WRITE.
-const READ:  usize = 0;
-const WRITE: usize = 1;
 
 /// A ref on a device - ca->ref: it stays a member while this is held. Put
 /// on drop; cloned with bch2_dev_get().
