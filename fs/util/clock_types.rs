@@ -4,8 +4,9 @@
 
 use crate::cstructs::c;
 use crate::types::{MinHeap, c_default};
+use crate::util::{Printbuf, ToText};
 use core::ffi::{c_uint, c_void};
-use cstruct_macros::{c_const, c_typedef, CStruct};
+use cstruct_macros::{c_const, c_extern, c_typedef, CStruct};
 
 c_const! {
     #[c_int]
@@ -54,3 +55,14 @@ pub struct io_clock {
     pub timers: c::io_timer_heap,
 }
 c_default!(io_clock);
+
+c_extern! {
+    pub fn bch2_io_timers_to_text(out: *mut c::printbuf, clock: *mut c::io_clock);
+}
+
+impl ToText for io_clock {
+    /// The clock, and its pending timers.
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_io_timers_to_text(out.as_raw(), core::ptr::from_ref(self).cast_mut()) }
+    }
+}

@@ -5,8 +5,9 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::ffi::c_char;
+use crate::util::{Printbuf, ToText};
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, c_const};
+use cstruct_macros::{CStruct, c_const, c_extern};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
@@ -99,4 +100,32 @@ c_default!(bch2_time_stats);
 pub struct bch2_time_stats_quantiles {
     pub stats: c::bch2_time_stats,
     pub quantiles: c::quantiles,
+}
+
+c_extern! {
+    pub fn bch2_time_stats_to_text(out: *mut c::printbuf, stats: *mut c::bch2_time_stats);
+    pub fn bch2_time_stats_json_to_text(out: *mut c::printbuf, stats: *mut c::bch2_time_stats,
+                                        epoch_name: *const c_char, flags: c_uint);
+    pub fn bch2_time_stats_reset(stats: *mut c::bch2_time_stats);
+}
+
+impl bch2_time_stats {
+    fn as_ptr(&self) -> *mut bch2_time_stats {
+        core::ptr::from_ref(self).cast_mut()
+    }
+
+    /// As JSON.
+    pub fn json_to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_time_stats_json_to_text(out.as_raw(), self.as_ptr(), core::ptr::null(), 0) }
+    }
+
+    pub fn reset(&self) {
+        unsafe { bch2_time_stats_reset(self.as_ptr()) }
+    }
+}
+
+impl ToText for bch2_time_stats {
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { bch2_time_stats_to_text(out.as_raw(), self.as_ptr()) }
+    }
 }

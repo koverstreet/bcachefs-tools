@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::util::Printbuf;
 use crate::types::c_default;
 use core::ffi::c_uint;
 use cstruct_macros::{c_extern, CStruct};
@@ -29,4 +30,17 @@ c_extern! {
     pub fn rust_enumerated_ref_tryget(r: *mut c::enumerated_ref, idx: c_uint) -> bool;
     pub fn rust_enumerated_ref_put(r: *mut c::enumerated_ref, idx: c_uint);
     pub fn rust_enumerated_ref_is_zero(r: *mut c::enumerated_ref) -> bool;
+    pub fn enumerated_ref_to_text(out: *mut c::printbuf, r: *mut c::enumerated_ref,
+                                  names: *const *const crate::util::ffi::c_char);
+}
+
+impl enumerated_ref {
+    /// Each kind's count of refs held - @names the kinds', NULL terminated.
+    ///
+    /// # Safety
+    /// @names has an entry for each of this ref's kinds.
+    pub unsafe fn to_text(&self, out: &mut Printbuf,
+                          names: *const *const crate::util::ffi::c_char) {
+        unsafe { enumerated_ref_to_text(out.as_raw(), core::ptr::from_ref(self).cast_mut(), names) }
+    }
 }
