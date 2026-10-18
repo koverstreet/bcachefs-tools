@@ -40,3 +40,20 @@ impl Drop for MemallocFlags {
         unsafe { c::rust_memalloc_flags_restore(self.saved) }
     }
 }
+
+/// A C struct's mutex, held: mutex_unlock() on drop - guard(mutex).
+#[must_use = "the mutex is unlocked as soon as the guard is dropped"]
+pub struct MutexGuard<'a>(&'a c::mutex);
+
+/// mutex_lock(): the C code that shares @m locks it the same way.
+pub fn mutex_lock(m: &c::mutex) -> MutexGuard<'_> {
+    // SAFETY: a mutex is changed through a shared pointer - it's what it's for
+    unsafe { c::mutex_lock(core::ptr::from_ref(m).cast_mut()) };
+    MutexGuard(m)
+}
+
+impl Drop for MutexGuard<'_> {
+    fn drop(&mut self) {
+        unsafe { c::mutex_unlock(core::ptr::from_ref(self.0).cast_mut()) };
+    }
+}
