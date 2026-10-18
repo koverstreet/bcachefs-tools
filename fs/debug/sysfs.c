@@ -615,8 +615,16 @@ SHOW(bch2_fs_counters)
 	return 0;
 }
 
-STORE(bch2_fs_counters) {
-	return 0;
+STORE(bch2_fs_counters)
+{
+	struct bch_fs *c = container_of(kobj, struct bch_fs, counters_kobj);
+
+#define x(t, ...)							\
+	if (attr == &sysfs_counter_##t)					\
+		bch2_counter_reset(c, BCH_COUNTER_##t);
+	BCH_PERSISTENT_COUNTERS()
+#undef x
+	return size;
 }
 
 SYSFS_OPS(bch2_fs_counters);

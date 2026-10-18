@@ -39,7 +39,7 @@ impl Fs {
         unsafe { bch2_counter_read(self.as_ptr(), idx as c_uint) }
     }
 
-    /// Zero persistent counter @idx.
+    /// Zero persistent counter @idx, and its count at mount and recent samples.
     pub fn counter_reset(&self, idx: usize) {
         unsafe { bch2_counter_reset(self.as_ptr(), idx as c_uint) }
     }

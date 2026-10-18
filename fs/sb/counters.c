@@ -174,10 +174,19 @@ u64 bch2_counter_read(struct bch_fs *c, unsigned idx)
 	return percpu_u64_get(&c->counters.now[idx]);
 }
 
+/*
+ * Zero a counter - and what's relative to it, the count at mount and the
+ * recent samples, which would otherwise read as having gone backwards:
+ */
 void bch2_counter_reset(struct bch_fs *c, unsigned idx)
 {
-	if (idx < BCH_COUNTER_NR)
-		percpu_u64_set(&c->counters.now[idx], 0);
+	if (idx >= BCH_COUNTER_NR)
+		return;
+
+	percpu_u64_set(&c->counters.now[idx], 0);
+	c->counters.mount[idx] = 0;
+	for (unsigned i = 0; i < NR_RECENT_COUNTERS; i++)
+		c->counters.recent[i][idx] = 0;
 }
 
 const struct bch_sb_field_ops bch_sb_field_ops_counters = {
