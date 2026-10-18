@@ -34,7 +34,6 @@
 #include "data/reconcile/work.h"
 
 #include "debug/sysfs.h"
-#include "debug/tests.h"
 
 #include "fs/dirent.h"
 #include "fs/inode.h"
@@ -126,12 +125,6 @@ do {									\
 		snprint(out, var);					\
 } while (0)
 
-#define sysfs_hprint(file, val)						\
-do {									\
-	if (attr == &sysfs_ ## file)					\
-		prt_human_readable_s64(out, val);			\
-} while (0)
-
 #define sysfs_strtoul(file, var)					\
 do {									\
 	if (attr == &sysfs_ ## file)					\
@@ -145,37 +138,7 @@ do {									\
 			?: (ssize_t) size;				\
 } while (0)
 
-#define strtoul_or_return(cp)						\
-({									\
-	unsigned long _v;						\
-	int _r = kstrtoul(cp, 10, &_v);					\
-	if (_r)								\
-		return _r;						\
-	_v;								\
-})
-
-write_attribute(trigger_gc);
-write_attribute(trigger_discards);
-write_attribute(trigger_invalidates);
-write_attribute(trigger_journal_commit);
-write_attribute(trigger_journal_flush);
-write_attribute(trigger_journal_writes);
-write_attribute(trigger_btree_cache_shrink);
-write_attribute(trigger_btree_key_cache_shrink);
-write_attribute(trigger_btree_write_buffer_flush);
-write_attribute(trigger_btree_updates);
-write_attribute(trigger_freelist_wakeup);
-write_attribute(trigger_recalc_capacity);
-write_attribute(trigger_reconcile_wakeup);
-write_attribute(trigger_reconcile_pending_wakeup);
-write_attribute(trigger_delete_dead_snapshots);
-write_attribute(trigger_emergency_read_only);
-rw_attribute(logged_op_fail_next);
-read_attribute(gc_gens_pos);
-
 read_attribute(uuid);
-read_attribute(minor);
-read_attribute(flags);
 read_attribute(first_bucket);
 read_attribute(nbuckets);
 read_attribute(io_done);
@@ -192,394 +155,25 @@ read_attribute(io_latency_stats_write_json);
 read_attribute(congested);
 #endif
 
-read_attribute(btree_write_stats);
-
-read_attribute(btree_cache_size);
-read_attribute(compression_stats);
-read_attribute(errors);
-read_attribute(journal_debug);
-read_attribute(journal_reclaim);
-read_attribute(btree_cache);
-read_attribute(btree_key_cache);
-read_attribute(btree_reserve_cache);
-read_attribute(btree_write_buffer);
 read_attribute(open_buckets);
-read_attribute(open_buckets_partial);
 read_attribute(discards);
-read_attribute(nocow_lock_table);
-read_attribute(replicas);
 
 read_attribute(read_refs);
 read_attribute(write_refs);
 
-read_attribute(internal_uuid);
-read_attribute(disk_groups);
-
 read_attribute(has_data);
 read_attribute(alloc_debug);
-read_attribute(usage_base);
-read_attribute(filldir64_specialization);
 
 #define x(t, n, ...)							\
 	static struct attribute sysfs_counter_##t = { .name = #t, .mode = 0644 };
 BCH_PERSISTENT_COUNTERS()
 #undef x
 
-read_attribute(copy_gc_wait);
-
-read_attribute(reconcile_status);
-read_attribute(reconcile_scan_pending);
-read_attribute(snapshot_delete_status);
-read_attribute(recovery_status);
-
-read_attribute(new_stripes);
-
-read_attribute(io_timers_read);
-read_attribute(io_timers_write);
-
-read_attribute(moving_ctxts);
-
-read_attribute(recent_counters);
-
-#ifdef CONFIG_BCACHEFS_TESTS
-write_attribute(perf_test);
-#endif
-
 #define x(_name, ...)						\
 	static struct attribute sysfs_time_stat_##_name =		\
 		{ .name = #_name, .mode = 0644 };
 	BCH_TIME_STATS()
 #undef x
-
-static size_t bch2_btree_cache_size(struct bch_fs *c)
-{
-	struct bch_fs_btree_cache *bc = &c->btree.cache;
-
-	return (btree_cache_list_nr(&bc->live[0]) +
-		btree_cache_list_nr(&bc->live[1])) * c->opts.btree_node_size;
-}
-
-static __cold int bch2_compression_stats_to_text(struct printbuf *out, struct bch_fs *c)
-{
-	printbuf_tabstop_push(out, 12);
-	printbuf_tabstop_push(out, 16);
-	printbuf_tabstop_push(out, 16);
-	printbuf_tabstop_push(out, 24);
-	prt_printf(out, "type\tcompressed\runcompressed\raverage extent size\r\n");
-
-	for (unsigned i = 1; i < BCH_COMPRESSION_TYPE_NR; i++) {
-		struct disk_accounting_pos a;
-		disk_accounting_key_init(a, compression, .type = i);
-		struct bpos p = disk_accounting_pos_to_bpos(&a);
-		u64 v[3];
-		bch2_accounting_mem_read(c, p, v, ARRAY_SIZE(v));
-
-		u64 nr_extents			= v[0];
-		u64 sectors_uncompressed	= v[1];
-		u64 sectors_compressed		= v[2];
-
-		bch2_prt_compression_type(out, i);
-		prt_tab(out);
-
-		prt_human_readable_u64(out, sectors_compressed << 9);
-		prt_tab_rjust(out);
-
-		prt_human_readable_u64(out, sectors_uncompressed << 9);
-		prt_tab_rjust(out);
-
-		prt_human_readable_u64(out, nr_extents
-				       ? div64_u64(sectors_uncompressed << 9, nr_extents)
-				       : 0);
-		prt_tab_rjust(out);
-		prt_newline(out);
-	}
-
-	return 0;
-}
-
-static __cold void bch2_gc_gens_pos_to_text(struct printbuf *out, struct bch_fs *c)
-{
-	bch2_bbpos_to_text(out, c->gc_gens.pos);
-	prt_printf(out, "\n");
-}
-
-static __cold void bch2_fs_usage_base_to_text(struct printbuf *out, struct bch_fs *c)
-{
-	struct bch_fs_usage_base b = {};
-
-	acc_u64s_percpu(&b.hidden, &c->capacity.pcpu->usage.hidden, sizeof(b) / sizeof(u64));
-
-	prt_printf(out, "hidden:\t\t%llu\n",	b.hidden);
-	prt_printf(out, "btree:\t\t%llu\n",	b.btree);
-	prt_printf(out, "data:\t\t%llu\n",	b.data);
-	prt_printf(out, "cached:\t%llu\n",	b.cached);
-	prt_printf(out, "reserved:\t\t%llu\n",	b.reserved);
-}
-
-SHOW(bch2_fs)
-{
-	struct bch_fs *c = container_of(kobj, struct bch_fs, kobj);
-
-	sysfs_print(minor,			c->minor);
-	sysfs_printf(internal_uuid, "%pU",	c->sb.uuid.b);
-
-	if (attr == &sysfs_flags)
-		prt_bitflags(out, bch2_fs_flag_strs, c->flags);
-
-	if (attr == &sysfs_logged_op_fail_next)
-		bch2_logged_op_fail_next_to_text(out, c);
-
-	sysfs_hprint(btree_cache_size,		bch2_btree_cache_size(c));
-
-	if (attr == &sysfs_btree_write_stats)
-		bch2_btree_write_stats_to_text(out, c);
-
-	if (attr == &sysfs_gc_gens_pos)
-		bch2_gc_gens_pos_to_text(out, c);
-
-	if (attr == &sysfs_copy_gc_wait)
-		bch2_copygc_wait_to_text(out, c);
-
-	if (attr == &sysfs_reconcile_status)
-		bch2_reconcile_status_to_text(out, c);
-
-	if (attr == &sysfs_reconcile_scan_pending)
-		bch2_reconcile_scan_pending_to_text(out, c);
-
-	if (attr == &sysfs_snapshot_delete_status)
-		bch2_snapshot_delete_status_to_text(out, c);
-
-	if (attr == &sysfs_recovery_status)
-		bch2_recovery_pass_status_to_text(out, c);
-
-	/* Debugging: */
-
-	if (attr == &sysfs_journal_debug)
-		bch2_journal_debug_to_text(out, &c->journal);
-
-	if (attr == &sysfs_journal_reclaim)
-		bch2_journal_reclaim_to_text(out, &c->journal);
-
-	if (attr == &sysfs_btree_cache)
-		bch2_btree_cache_to_text(out, &c->btree.cache);
-
-	if (attr == &sysfs_btree_key_cache)
-		bch2_btree_key_cache_to_text(out, &c->btree.key_cache);
-
-	if (attr == &sysfs_btree_reserve_cache)
-		bch2_btree_reserve_cache_to_text(out, c);
-
-	if (attr == &sysfs_btree_write_buffer)
-		bch2_btree_write_buffer_to_text(out, c);
-
-	if (attr == &sysfs_open_buckets)
-		bch2_open_buckets_to_text(out, c, NULL);
-
-	if (attr == &sysfs_open_buckets_partial)
-		bch2_open_buckets_partial_to_text(out, c);
-
-	if (attr == &sysfs_discards)
-		bch2_discards_to_text(out, c, &c->discards.s);
-
-	if (attr == &sysfs_compression_stats)
-		bch2_compression_stats_to_text(out, c);
-
-	if (attr == &sysfs_errors)
-		bch2_fs_errors_to_text(out, c);
-
-	if (attr == &sysfs_new_stripes)
-		bch2_new_stripes_to_text(out, c);
-
-	if (attr == &sysfs_io_timers_read)
-		bch2_io_timers_to_text(out, &c->io_clock[READ]);
-
-	if (attr == &sysfs_io_timers_write)
-		bch2_io_timers_to_text(out, &c->io_clock[WRITE]);
-
-	if (attr == &sysfs_moving_ctxts)
-		bch2_fs_moving_ctxts_to_text(out, c);
-
-	if (attr == &sysfs_recent_counters)
-		bch2_sb_recent_counters_to_text(out, &c->counters);
-
-	if (attr == &sysfs_write_refs)
-		enumerated_ref_to_text(out, &c->writes, bch2_write_refs);
-
-	if (attr == &sysfs_nocow_lock_table)
-		bch2_nocow_locks_to_text(out, &c->nocow_locks);
-
-	if (attr == &sysfs_replicas)
-		bch2_cpu_replicas_to_text(out, &c->replicas);
-
-	if (attr == &sysfs_disk_groups)
-		bch2_disk_groups_to_text(out, c);
-
-	if (attr == &sysfs_alloc_debug) {
-		bch2_fs_alloc_debug_to_text(out, c);
-		bch2_fs_open_buckets_to_text(out, c);
-	}
-
-	if (attr == &sysfs_usage_base)
-		bch2_fs_usage_base_to_text(out, c);
-
-	if (attr == &sysfs_filldir64_specialization)
-		bch2_filldir64_specialization_to_text(out);
-
-	return 0;
-}
-
-STORE(bch2_fs)
-{
-	struct bch_fs *c = container_of(kobj, struct bch_fs, kobj);
-
-	/* Debugging: */
-
-	if (!test_bit(BCH_FS_started, &c->flags))
-		return -EPERM;
-
-	/*
-	 * Debugging - these need no write ref: wakeups, shrinks, and work that
-	 * takes its own (discards, invalidates):
-	 */
-
-	if (attr == &sysfs_trigger_btree_updates) {
-		queue_work(c->btree.interior_updates.worker, &c->btree.interior_updates.work);
-		return size;
-	}
-
-	if (attr == &sysfs_trigger_btree_cache_shrink) {
-		struct bch_fs_btree_cache *bc = &c->btree.cache;
-		struct shrink_control sc;
-
-		sc.gfp_mask = GFP_KERNEL;
-		sc.nr_to_scan = strtoul_or_return(buf);
-		bc->live[0].shrink->scan_objects(bc->live[0].shrink, &sc);
-		return size;
-	}
-
-	if (attr == &sysfs_trigger_btree_key_cache_shrink) {
-		struct shrink_control sc;
-
-		sc.gfp_mask = GFP_KERNEL;
-		sc.nr_to_scan = strtoul_or_return(buf);
-		c->btree.key_cache.shrink->scan_objects(c->btree.key_cache.shrink, &sc);
-		return size;
-	}
-
-	if (attr == &sysfs_trigger_discards) {
-		bch2_do_discards_async(c);
-		return size;
-	}
-
-	if (attr == &sysfs_trigger_invalidates) {
-		bch2_do_invalidates(c);
-		return size;
-	}
-
-	if (attr == &sysfs_trigger_freelist_wakeup) {
-		bch2_alloc_wake_all(c);
-		return size;
-	}
-
-	if (attr == &sysfs_trigger_recalc_capacity) {
-		guard(rwsem_read)(&c->state_lock);
-		bch2_recalc_capacity(c);
-		return size;
-	}
-
-	if (attr == &sysfs_trigger_reconcile_wakeup) {
-		bch2_reconcile_wakeup(c);
-		return size;
-	}
-
-	if (attr == &sysfs_trigger_reconcile_pending_wakeup)
-		return bch2_reconcile_pending_wakeup(c) ?: (ssize_t) size;
-
-	/* Only arms the knob - and it can fail: */
-	if (attr == &sysfs_logged_op_fail_next) {
-		unsigned type;
-
-		try(bch2_logged_op_fail_next_parse(buf, &type));
-		WRITE_ONCE(c->logged_ops.fail_next, type);
-		return size;
-	}
-
-	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_sysfs))
-		return -EROFS;
-
-	int ret = 0;
-
-	if (attr == &sysfs_trigger_journal_commit)
-		ret = bch2_journal_flush(&c->journal);
-
-	if (attr == &sysfs_trigger_journal_flush) {
-		bch2_journal_flush_outstanding_pins(&c->journal);
-		ret = bch2_journal_meta(&c->journal);
-	}
-
-	if (attr == &sysfs_trigger_journal_writes)
-		bch2_journal_do_writes(&c->journal);
-
-	if (attr == &sysfs_trigger_btree_write_buffer_flush) {
-		CLASS(btree_trans, trans)(c);
-		ret = bch2_btree_write_buffer_flush_sync(trans);
-	}
-
-	if (attr == &sysfs_trigger_gc)
-		ret = bch2_gc_gens(c);
-
-	if (attr == &sysfs_trigger_delete_dead_snapshots) {
-		/* debug force: bypass auto_snapshot_deletion; serialize via run_lock */
-		scoped_guard(mutex, &c->recovery.run_lock)
-			ret = __bch2_delete_dead_snapshots(c);
-	}
-
-	if (attr == &sysfs_trigger_emergency_read_only) {
-		CLASS(bch_log_msg, msg)(c);
-
-		prt_printf(&msg.m, "shutdown by sysfs\n");
-		bch2_fs_emergency_read_only(c, &msg.m);
-	}
-
-#ifdef CONFIG_BCACHEFS_TESTS
-	if (attr == &sysfs_perf_test) {
-		char *tmp __free(kfree) = kstrdup(buf, GFP_KERNEL), *p = tmp;
-		char *test		= strsep(&p, " \t\n");
-		char *nr_str		= strsep(&p, " \t\n");
-		char *threads_str	= strsep(&p, " \t\n");
-		unsigned threads;
-		u64 nr;
-
-		ret = -EINVAL;
-		if (threads_str &&
-		    !(ret = kstrtouint(threads_str, 10, &threads)) &&
-		    !(ret = bch2_strtoull_h(nr_str, &nr)))
-			ret = bch2_btree_perf_test(c, test, nr, threads);
-	}
-#endif
-	enumerated_ref_put(&c->writes, BCH_WRITE_REF_sysfs);
-	return ret ?: (ssize_t) size;
-}
-SYSFS_OPS(bch2_fs);
-
-struct attribute *bch2_fs_files[] = {
-	&sysfs_minor,
-	&sysfs_btree_cache_size,
-	&sysfs_btree_write_stats,
-
-	&sysfs_reconcile_status,
-	&sysfs_reconcile_scan_pending,
-	&sysfs_snapshot_delete_status,
-	&sysfs_recovery_status,
-
-	&sysfs_compression_stats,
-	&sysfs_errors,
-
-#ifdef CONFIG_BCACHEFS_TESTS
-	&sysfs_perf_test,
-#endif
-	NULL
-};
 
 /* counters dir */
 
@@ -634,74 +228,6 @@ struct attribute *bch2_fs_counters_files[] = {
 	&sysfs_counter_##t,
 	BCH_PERSISTENT_COUNTERS()
 #undef x
-	NULL
-};
-/* internal dir - just a wrapper */
-
-SHOW(bch2_fs_internal)
-{
-	struct bch_fs *c = container_of(kobj, struct bch_fs, internal);
-
-	return bch2_fs_to_text(out, &c->kobj, attr);
-}
-
-STORE(bch2_fs_internal)
-{
-	struct bch_fs *c = container_of(kobj, struct bch_fs, internal);
-
-	return bch2_fs_store(&c->kobj, attr, buf, size);
-}
-SYSFS_OPS(bch2_fs_internal);
-
-struct attribute *bch2_fs_internal_files[] = {
-	&sysfs_flags,
-	&sysfs_journal_debug,
-	&sysfs_journal_reclaim,
-	&sysfs_btree_cache,
-	&sysfs_btree_key_cache,
-	&sysfs_btree_reserve_cache,
-	&sysfs_btree_write_buffer,
-	&sysfs_new_stripes,
-	&sysfs_open_buckets,
-	&sysfs_open_buckets_partial,
-	&sysfs_discards,
-	&sysfs_write_refs,
-	&sysfs_nocow_lock_table,
-	&sysfs_replicas,
-	&sysfs_io_timers_read,
-	&sysfs_io_timers_write,
-
-	&sysfs_trigger_gc,
-	&sysfs_trigger_discards,
-	&sysfs_trigger_invalidates,
-	&sysfs_trigger_journal_commit,
-	&sysfs_trigger_journal_flush,
-	&sysfs_trigger_journal_writes,
-	&sysfs_trigger_btree_cache_shrink,
-	&sysfs_trigger_btree_key_cache_shrink,
-	&sysfs_trigger_btree_write_buffer_flush,
-	&sysfs_trigger_btree_updates,
-	&sysfs_trigger_freelist_wakeup,
-	&sysfs_trigger_recalc_capacity,
-	&sysfs_trigger_reconcile_wakeup,
-	&sysfs_trigger_reconcile_pending_wakeup,
-	&sysfs_trigger_delete_dead_snapshots,
-	&sysfs_logged_op_fail_next,
-	&sysfs_trigger_emergency_read_only,
-
-	&sysfs_gc_gens_pos,
-
-	&sysfs_copy_gc_wait,
-
-	&sysfs_moving_ctxts,
-	&sysfs_recent_counters,
-
-	&sysfs_internal_uuid,
-
-	&sysfs_disk_groups,
-	&sysfs_alloc_debug,
-	&sysfs_usage_base,
-	&sysfs_filldir64_specialization,
 	NULL
 };
 

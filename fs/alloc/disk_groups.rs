@@ -437,12 +437,6 @@ pub unsafe fn bch2_disk_path_to_text_sb(out: &mut Printbuf, sb: *mut Head<c::bch
     disk_path_to_text_in(out, sb_groups(sb), v);
 }
 
-#[cold]
-#[c_export]
-pub fn bch2_disk_groups_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>) {
-    Fs::from_c(c).disk_groups_to_text(out);
-}
-
 impl Fs {
     /// sysfs disk_groups.
     #[cold]

@@ -14,18 +14,16 @@ use crate::errcode::{
     BchError,
     ENOENT_bkey_type_mismatch,
     ret_to_result,
+    ret_to_result_void,
 };
 use crate::fs::{BorrowedFs, Fs};
 use crate::util::async_exec::{block_on, spawn, system_unbound, WaitGroup};
 use crate::util::kernel::{local_clock, random_u64_below};
-use crate::util::ffi::c_char;
 use crate::util::printbuf::Printbuf;
 use crate::c;
 
-use core::ffi::{c_int, CStr};
 use core::ops::ControlFlow;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
-use cstruct_macros::c_export;
 
 #[cfg(kernel)]
 use kernel::prelude::*;
@@ -45,10 +43,6 @@ const INTERNAL_SNAPSHOT_NODE: UpdateTriggerFlags = UpdateTriggerFlags::INTERNAL_
 
 fn error_ret(error: BchError) -> i32 {
     -error.raw()
-}
-
-fn errcode(fs: &Fs, code: bch_errcode) -> i32 {
-    error_ret(fs.err(code))
 }
 
 fn enomem(fs: &Fs) -> BchError {
@@ -841,7 +835,7 @@ fn seq_delete(fs: &Fs, _nr: u64) -> TestRet {
     )
 }
 
-fn lookup_test(testname: &CStr) -> Option<(&'static [u8], TestFn)> {
+fn lookup_test(testname: &[u8]) -> Option<(&'static [u8], TestFn)> {
     const TESTS: &[(&[u8], TestFn)] = &[
         (b"rand_insert", rand_insert),
         (b"rand_insert_multi", rand_insert_multi),
@@ -873,7 +867,7 @@ fn lookup_test(testname: &CStr) -> Option<(&'static [u8], TestFn)> {
         (b"test_bkey_buf", test_bkey_buf),
     ];
 
-    TESTS.iter().copied().find(|(name, _)| testname.to_bytes() == *name)
+    TESTS.iter().copied().find(|(name, _)| testname == *name)
 }
 
 struct TestJob {
@@ -948,41 +942,19 @@ fn print_perf_result(
 
 /// Run perf test @testname, @nr iterations on @nr_threads threads: what
 /// sysfs's perf_test does.
-///
-/// # Safety
-/// @raw_fs is a live filesystem for the call, and @testname NULL or a
-/// NUL-terminated string.
-#[c_export]
-pub unsafe extern "C" fn bch2_btree_perf_test(
-    raw_fs:     *mut c::bch_fs,
-    testname:   *const c_char,
-    nr:         u64,
-    nr_threads: u32,
-) -> c_int {
-    let fs = unsafe { Fs::borrow_raw(raw_fs) };
-
+pub fn btree_perf_test(fs: &Fs, testname: &str, nr: u64, nr_threads: u32) -> Result<(), BchError> {
     if nr == 0 || nr_threads == 0 {
-        return errcode(fs, bch_errcode::BCH_ERR_EINVAL_test_zero_nr_or_threads);
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_test_zero_nr_or_threads);
     }
 
-    let Some(testname) = (!testname.is_null()).then(|| unsafe { CStr::from_ptr(testname.cast()) }) else {
-        return errcode(fs, bch_errcode::BCH_ERR_EINVAL_test_unknown_test);
+    let Some((name, test)) = lookup_test(testname.as_bytes()) else {
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_test_unknown_test);
     };
 
-    let Some((name, test)) = lookup_test(testname) else {
-        return errcode(fs, bch_errcode::BCH_ERR_EINVAL_test_unknown_test);
-    };
-
-    let job = match TestJob::new(fs, nr, nr_threads, test) {
-        Ok(job) => job,
-        Err(e) => return error_ret(e),
-    };
+    let job = TestJob::new(fs, nr, nr_threads, test)?;
 
     let queue = system_unbound();
-    let wg = match WaitGroup::new(nr_threads) {
-        Ok(wg) => wg,
-        Err(_) => return error_ret(enomem(fs)),
-    };
+    let wg = WaitGroup::new(nr_threads).map_err(|_| enomem(fs))?;
 
     // Fork the workers and wait for all of them: `block_on` drives the join on
     // this thread, parking until the last worker reports in, and hands back the
@@ -1015,7 +987,7 @@ pub unsafe extern "C" fn bch2_btree_perf_test(
     });
 
     let Some((start, ret_code)) = outcome else {
-        return error_ret(enomem(fs));
+        return Err(enomem(fs));
     };
 
     let finish = local_clock();
@@ -1035,5 +1007,5 @@ pub unsafe extern "C" fn bch2_btree_perf_test(
 
     print_perf_result(name, nr_threads, time, nsec_per_iter, &nr_buf, &per_sec_buf);
 
-    ret_code
+    ret_to_result_void(ret_code)
 }

@@ -46,6 +46,7 @@ pub mod alloc {
 }
 pub mod btree;
 pub mod debug {
+    pub mod sysfs;
     pub mod tests;
 }
 #[path = "fs/acl.rs"]          pub mod acl;

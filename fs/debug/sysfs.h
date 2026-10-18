@@ -7,17 +7,15 @@
 struct attribute;
 struct sysfs_ops;
 
-extern struct attribute *bch2_fs_files[];
+#include "debug/sysfs_gen.h"
+
 extern struct attribute *bch2_fs_counters_files[];
-extern struct attribute *bch2_fs_internal_files[];
 extern struct attribute *bch2_fs_opts_dir_files[];
 extern struct attribute *bch2_fs_time_stats_files[];
 extern struct attribute *bch2_fs_time_stats_json_files[];
 extern struct attribute *bch2_dev_files[];
 
-extern const struct sysfs_ops bch2_fs_sysfs_ops;
 extern const struct sysfs_ops bch2_fs_counters_sysfs_ops;
-extern const struct sysfs_ops bch2_fs_internal_sysfs_ops;
 extern const struct sysfs_ops bch2_fs_opts_dir_sysfs_ops;
 extern const struct sysfs_ops bch2_fs_time_stats_sysfs_ops;
 extern const struct sysfs_ops bch2_fs_time_stats_json_sysfs_ops;

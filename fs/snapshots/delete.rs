@@ -180,22 +180,21 @@ fn nodes_to_text(out: &mut Printbuf, nodes: Option<&DeleteNodes>, full: bool) {
     list_to_text(out, "interior",            &d.delete_interior,     limit);
 }
 
-#[c_export]
-#[cold]
-pub fn bch2_snapshot_delete_status_to_text(out: &mut c::printbuf, c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
-    let d = &fs.snapshots.delete;
-    let out = unsafe { Printbuf::borrow_raw(out) };
+impl Fs {
+    #[cold]
+    pub fn snapshot_delete_status_to_text(&self, out: &mut Printbuf) {
+        let d = &self.snapshots.delete;
 
-    let nodes = d.nodes.read();
-    let Some(nodes) = nodes.as_ref() else {
-        let _ = write!(out, "(not running)");
-        return;
-    };
+        let nodes = d.nodes.read();
+        let Some(nodes) = nodes.as_ref() else {
+            let _ = write!(out, "(not running)");
+            return;
+        };
 
-    let _ = writeln!(out, "Snapshot deletion v{}", d.version.load(Ordering::Relaxed));
-    let _ = writeln!(out, "Progress: {}", d.progress);
-    nodes_to_text(out, Some(nodes), false);
+        let _ = writeln!(out, "Snapshot deletion v{}", d.version.load(Ordering::Relaxed));
+        let _ = writeln!(out, "Progress: {}", d.progress);
+        nodes_to_text(out, Some(nodes), false);
+    }
 }
 
 // ── Node state ───────────────────────────────────────────────────────────

@@ -16,10 +16,10 @@ use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::util::alloc::flags::GFP_KERNEL;
-use crate::util::ffi::{c_char, Opaque};
+use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use crate::{fs_fatal_error, fsck_err_on};
-use core::ffi::{c_int, c_uint, CStr};
+use core::ffi::{c_int, c_uint};
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
 
@@ -59,31 +59,28 @@ fn logged_op(ty: c::bch_bkey_type) -> Option<&'static LoggedOp> {
     LOGGED_OPS.iter().find(|op| op.ty == ty)
 }
 
-/// Empty (or a bare newline) disarms; anything unrecognised is rejected.
-///
-/// # Safety
-/// @buf is a NUL-terminated string.
-#[c_export]
-pub unsafe extern "C" fn bch2_logged_op_fail_next_parse(buf: *const c_char, ty: &mut u32) -> c_int {
-    let buf = unsafe { CStr::from_ptr(buf.cast()) }.to_bytes();
-    let parsed = match buf.split(|b| b" \t\n".contains(b)).next().unwrap_or_default() {
-        b""  => Some(0),
-        name => LOGGED_OPS.iter().find(|op| op.name.as_bytes() == name).map(|op| op.ty.0),
-    };
-    let Some(parsed) = parsed else {
-        return -(c::EINVAL as c_int);
-    };
+impl Fs {
+    /// Arm the logged_op_fail_next knob with an op's name: the next op of
+    /// that type fails once. Empty (or a bare newline) disarms; anything
+    /// unrecognised is rejected.
+    pub fn logged_op_fail_next_set(&self, s: &str) -> Result<(), BchError> {
+        let ty = match s.split([' ', '\t', '\n']).next().unwrap_or_default() {
+            ""   => 0,
+            name => LOGGED_OPS.iter().find(|op| op.name == name)
+                .ok_or(BchError::from(c::EINVAL))?
+                .ty.0,
+        };
 
-    *ty = parsed;
-    0
-}
+        self.logged_ops.fail_next.store(ty, Ordering::Relaxed);
+        Ok(())
+    }
 
-#[c_export]
-pub fn bch2_logged_op_fail_next_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>) {
-    let ty = Fs::from_c(c).logged_ops.fail_next.load(Ordering::Relaxed);
-    let name = logged_op(c::bch_bkey_type(ty)).map_or("(none)", |op| op.name);
+    pub fn logged_op_fail_next_to_text(&self, out: &mut Printbuf) {
+        let ty = self.logged_ops.fail_next.load(Ordering::Relaxed);
+        let name = logged_op(c::bch_bkey_type(ty)).map_or("(none)", |op| op.name);
 
-    let _ = writeln!(out, "{name}");
+        let _ = writeln!(out, "{name}");
+    }
 }
 
 fn resume_logged_op(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, early: bool) -> Result<(), BchError> {
