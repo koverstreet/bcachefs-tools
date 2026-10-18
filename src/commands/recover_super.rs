@@ -284,9 +284,7 @@ fn cmd_recover_super(cli: RecoverSuperCli) -> Result<()> {
         crate::wrappers::super_io::bch2_super_write(dev_file.as_raw_fd(), &mut sb_buf);
     }
 
-    let _ = std::process::Command::new("udevadm")
-        .args(["trigger", "--settle", &cli.device])
-        .status();
+    crate::commands::format_util::trigger_udev_for_paths(&[&cli.device]);
 
     if cli.src_device.is_some() {
         println!("Recovered device will no longer have a journal, please run fsck");

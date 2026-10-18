@@ -386,22 +386,34 @@ pub fn format(
         crate::wrappers::super_io::bch2_super_write(fd, &mut *sb);
     }
 
-    let paths: Vec<&str> = dev_slice
+    let paths: Vec<&std::ffi::OsStr> = dev_slice
         .iter()
-        .map(|dev| dev.path.to_str().unwrap_or(""))
+        .map(|dev| std::os::unix::ffi::OsStrExt::from_bytes(dev.path.as_bytes()))
         .collect();
     trigger_udev_for_paths(&paths);
 
     sb.sb
 }
 
-pub fn trigger_udev_for_paths(paths: &[&str]) {
-    let mut udevadm = std::process::Command::new("udevadm");
-    udevadm.args(["trigger", "--settle"]);
-    for path in paths {
-        udevadm.arg(path);
+/// Have udev re-read the devices we just wrote superblocks to, so that
+/// 'bcachefs mount' finds them by UUID in its database. Only block devices:
+/// an image file has no udev device - udevadm refuses it - and a trigger
+/// naming no devices would trigger every device on the system.
+pub fn trigger_udev_for_paths<P: AsRef<std::path::Path>>(paths: &[P]) {
+    use std::os::unix::fs::FileTypeExt;
+
+    let devs: Vec<&std::path::Path> = paths.iter()
+        .map(AsRef::as_ref)
+        .filter(|p| std::fs::metadata(p).is_ok_and(|m| m.file_type().is_block_device()))
+        .collect();
+    if devs.is_empty() {
+        return;
     }
-    let _ = udevadm.status();
+
+    let _ = std::process::Command::new("udevadm")
+        .args(["trigger", "--settle"])
+        .args(devs)
+        .status();
 }
 
 /// Format a single device for addition to an existing filesystem.
