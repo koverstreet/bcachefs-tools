@@ -493,7 +493,7 @@ pub fn bch2_reflink_v_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, k: Bkey
 pub fn bch2_reflink_v_merge(c: &Opaque<c::bch_fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
     l.as_sc().arm::<c::ReflinkV>().expect("a reflink_v").refcount() ==
         r.arm::<c::ReflinkV>().expect("a reflink_v").refcount() &&
-        unsafe { c::bch2_extent_merge(c, l.as_raw(), r.into()) }
+        crate::data::extents::extent_merge(Fs::from_c(c), l, r)
 }
 
 // ── indirect inline data ─────────────────────────────────────────────────

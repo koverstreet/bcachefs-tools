@@ -5,11 +5,12 @@
 use crate::bkey_fsck_err_on;
 use crate::btree::bkey::{bkey_family, BkeyS, BkeySC, BkeyV, BkeyVMut};
 use crate::c;
-use crate::data::ptrs::{BkeyVPtrs, Ptrs};
+use crate::data::ptrs::{crc_is_compressed, crc_unpack, BkeyVPtrs, ExtentEntry, ExtentEntryMut, Ptrs};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::util::ffi::Opaque;
+use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::Printbuf;
 use core::ffi::c_int;
 use cstruct_macros::c_export;
@@ -112,6 +113,177 @@ pub trait BkeyVExtents: BkeyV {
 }
 
 impl<K: BkeyV> BkeyVExtents for K {}
+
+// ── merging ──────────────────────────────────────────────────────────────
+
+/// Which crc covers two adjacent ranges' data merged.
+enum CrcMerge {
+    /// Left's: its data runs on past both ranges.
+    Left,
+    /// Right's: its data starts before left's range.
+    Right,
+    /// Neither: their checksums merged, if they can be.
+    Both,
+}
+
+fn crc_merge(l: &c::bch_extent_crc_unpacked, r: &c::bch_extent_crc_unpacked) -> CrcMerge {
+    if u32::from(l.offset) + l.live_size + r.live_size <= l.uncompressed_size {
+        CrcMerge::Left
+    } else if l.live_size <= u32::from(r.offset) {
+        CrcMerge::Right
+    } else {
+        CrcMerge::Both
+    }
+}
+
+/// Whether @r continues @l on disk, so the two can be one pointer of the
+/// merged extent.
+fn ptrs_mergeable(fs: &Fs, rcu: &ReadGuard, l: &c::extent_ptr_decoded, r: &c::extent_ptr_decoded) -> bool {
+    let (lc, rc) = (&l.crc, &r.crc);
+
+    if l.ptr.offset() + u64::from(lc.offset) + u64::from(lc.live_size) != r.ptr.offset() + u64::from(rc.offset) ||
+        l.ptr.dev() != r.ptr.dev() ||
+        l.ptr.generation() != r.ptr.generation() ||
+        l.ptr.unwritten() != r.ptr.unwritten() ||
+        l.has_ec != r.has_ec {
+        return false;
+    }
+
+    // Extents may not straddle buckets:
+    match fs.dev_rcu(l.ptr.dev().into(), rcu) {
+        Some(ca) if ca.ptr_bucket(&l.ptr) == ca.ptr_bucket(&r.ptr) => {}
+        _ => return false,
+    }
+
+    if l.has_ec &&
+        (l.ec.block() != r.ec.block() ||
+         l.ec.redundancy() != r.ec.redundancy() ||
+         l.ec.idx() != r.ec.idx()) {
+        return false;
+    }
+
+    if lc.compression_type != rc.compression_type || lc.nonce != rc.nonce {
+        return false;
+    }
+
+    /*
+     * Compressed extents may only merge if they're pieces of the same
+     * compressed blob. The address continuity check above doesn't establish
+     * that: for compressed extents it adds uncompressed sectors (crc.offset,
+     * live_size) to a device address (ptr.offset), so pieces of two different
+     * blobs can satisfy it by coincidence - and then merging remaps one range
+     * onto the other blob's data:
+     */
+    if crc_is_compressed(lc) &&
+        (l.ptr.offset() != r.ptr.offset() ||
+         lc.uncompressed_size != rc.uncompressed_size ||
+         lc.compressed_size != rc.compressed_size ||
+         lc.csum.lo != rc.csum.lo || lc.csum.hi != rc.csum.hi) {
+        return false;
+    }
+
+    match crc_merge(lc, rc) {
+        CrcMerge::Left | CrcMerge::Right => true,
+        // the checksums merge, of adjacent ranges each checksummed whole,
+        // into one as long as a checksummed extent may be
+        CrcMerge::Both =>
+            lc.csum_type == rc.csum_type &&
+            lc.nonce == rc.nonce &&
+            !crc_is_compressed(lc) &&
+            c::bch_csum_type(lc.csum_type.into()).mergeable() &&
+            u32::from(lc.offset) + lc.live_size == lc.compressed_size &&
+            rc.offset == 0 &&
+            (lc.csum_type == 0 ||
+             lc.uncompressed_size + rc.uncompressed_size <= fs.opts().encoded_extent_max >> 9),
+    }
+}
+
+/// The largest data a crc entry of @e's type can describe, if @e is one:
+/// bch2_crc_field_size_max[].
+fn crc_size_max(e: ExtentEntry<'_>) -> Option<u32> {
+    Some(match e {
+        ExtentEntry::crc32(_)  => c::CRC32_SIZE_MAX,
+        ExtentEntry::crc64(_)  => c::CRC64_SIZE_MAX,
+        ExtentEntry::crc128(_) => c::CRC128_SIZE_MAX,
+        _ => return None,
+    })
+}
+
+/// Whether @l and @r, @r starting where @l ends, can be one extent - their
+/// entries pairing up by type, each pointer pair continuing on disk - and if
+/// so, @l made it: bch2_extent_merge(). The caller checked the merged size
+/// fits a key.
+pub fn extent_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
+    let mut l = l.arm::<Ptrs>().expect("->key_merge of a key type with pointers");
+    let r = r.arm::<Ptrs>().expect("->key_merge of a key type with pointers");
+
+    if !l.extent_entries(fs).map(|e| e.ty()).eq(r.extent_entries(fs).map(|e| e.ty())) {
+        return false;
+    }
+
+    {
+        let rcu = read_lock();
+        if !l.ptrs_decoded(fs).zip(r.ptrs_decoded(fs)).all(|(lp, rp)| ptrs_mergeable(fs, &rcu, &lp.p, &rp.p)) {
+            return false;
+        }
+    }
+
+    // Each crc entry pair's data, summed, must fit their type - whichever crc
+    // the pair takes:
+    let (lk, rk) = (*l.k(), *r.k());
+    let size = |k: &c::bkey, e: ExtentEntry<'_>| crc_unpack(k, e).expect("a crc entry pair: their types matched").uncompressed_size;
+    for (el, er) in l.extent_entries(fs).zip(r.extent_entries(fs)) {
+        if crc_size_max(el).is_some_and(|max| size(&lk, el) + size(&rk, er) > max) {
+            return false;
+        }
+    }
+
+    let mut use_right_ptr = false;
+    for (el, er) in l.extent_entries_mut(fs).zip(r.extent_entries(fs)) {
+        let mut el = match (el, er) {
+            (ExtentEntryMut::ptr(lp), ExtentEntry::ptr(rp)) => {
+                if use_right_ptr {
+                    *lp = *rp;
+                }
+                continue;
+            }
+            (el, _) => el,
+        };
+        let Some(mut cl) = crc_unpack(&lk, el.as_entry()) else { continue };
+        let mut cr = crc_unpack(&rk, er).expect("a crc entry pair: their types matched");
+
+        use_right_ptr = false;
+        match crc_merge(&cl, &cr) {
+            CrcMerge::Left => {}
+            CrcMerge::Right => {
+                // live_size <= offset, by crc_merge(): it fits
+                cr.offset -= cl.live_size as u16;
+                el.set_crc(&cr).expect("right's crc, its offset less, fits the entry right's was in");
+                use_right_ptr = true;
+            }
+            CrcMerge::Both => {
+                // SAFETY: plain values. The csum type is mergeable, as
+                // bch2_checksum_merge() BUG()s if it isn't: ptrs_mergeable()
+                // checked it, with the pointer after this entry - validate
+                // has one after every crc entry
+                cl.csum = unsafe { c::bch2_checksum_merge(cl.csum_type.into(), cl.csum, cr.csum,
+                                                          (cr.uncompressed_size << 9) as usize) };
+                cl.uncompressed_size += cr.uncompressed_size;
+                cl.compressed_size += cr.compressed_size;
+                el.set_crc(&cl).expect("a merged crc fits: its size was checked against the entry's");
+            }
+        }
+    }
+
+    let size = l.k().size + r.k.size;
+    l.as_s().k.resize(size);
+    true
+}
+
+#[c_export]
+pub fn bch2_extent_merge(c: &Opaque<c::bch_fs>, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
+    extent_merge(Fs::from_c(c), l, r)
+}
 
 // ── reservations ─────────────────────────────────────────────────────────
 

@@ -397,8 +397,6 @@ int bch2_bkey_pick_read_device(struct bch_fs *, struct bkey_s_c,
 
 /* KEY_TYPE_extent: */
 
-bool bch2_extent_merge(struct bch_fs *, struct bkey_s, struct bkey_s_c);
-
 #define bch2_bkey_ops_extent ((struct bkey_ops) {		\
 	.key_validate	= bch2_bkey_ptrs_validate,		\
 	.val_to_text	= bch2_bkey_ptrs_to_text,		\
