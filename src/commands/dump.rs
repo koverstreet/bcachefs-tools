@@ -1,5 +1,4 @@
 use bcachefs_kernel::btree::bkey::prelude::*;
-use std::ops::ControlFlow;
 use std::os::fd::{AsFd, BorrowedFd};
 use std::path::Path;
 use std::path::PathBuf;
@@ -639,7 +638,7 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
             node_iter.for_each(&trans, |b| {
                 dump_node(fs, &mut devs, btree::BkeySC::from(b.key_i()), btree_node_size,
                           cli.single_replica);
-                ControlFlow::Continue(())
+                Ok(())
             }).map_err(|e| anyhow!("error walking btree {}: {}",
                 btree::types::btree_id_str(id), e))?;
         }

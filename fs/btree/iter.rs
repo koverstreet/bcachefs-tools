@@ -2414,9 +2414,12 @@ impl<'t> BtreeNodeIter<'t> {
         unsafe { bkey_s_c_to_result(self.raw.peek_max_type_raw(end, flags)) }
     }
 
-    pub fn for_each<F>(&mut self, trans: &BtreeTrans<'_>, mut f: F) -> Result<(), BchError>
+    /// for_each_btree_node(): @f's result as BtreeIter::for_each()'s body's. A
+    /// restart retries the node.
+    pub fn for_each<F, R>(&mut self, trans: &BtreeTrans<'_>, mut f: F) -> Result<R::Break, BchError>
     where
-        F: for<'a> FnMut(&'a c::btree) -> ControlFlow<()>,
+        F: for<'a> FnMut(&'a c::btree) -> Result<R, BchError>,
+        R: LoopControl,
     {
         let raw = self.raw.raw_mut();
         loop {
@@ -2425,7 +2428,7 @@ impl<'t> BtreeNodeIter<'t> {
             let b = match errptr_to_result_c(b) {
                 Err(e) if is_restart(&e) => continue,
                 Err(e) => return Err(e),
-                Ok(b) if b.is_null() => return Ok(()),
+                Ok(b) if b.is_null() => return Ok(Default::default()),
                 Ok(b) => unsafe { &*b },
             };
 
@@ -2438,14 +2441,18 @@ impl<'t> BtreeNodeIter<'t> {
             // the journal overlay applies and journal-only nodes aren't skipped
             // the way next_node()'s sibling walk did. Matches for_each_btree_node().
             let end = b.key.k.p;
-            if let ControlFlow::Break(()) = f(b) {
-                return Ok(());
+            match f(b).map(LoopControl::into_step) {
+                Err(e) if is_restart(&e) => continue,
+                Err(e) => return Err(e),
+                Ok(Step::Break(v)) => return Ok(v),
+                Ok(Step::From(pos)) => unsafe { (*raw).set_pos(pos) },
+                Ok(Step::Next) => {
+                    if end == SPOS_MAX {
+                        return Ok(Default::default());
+                    }
+                    unsafe { (*raw).set_pos(end.successor()) };
+                }
             }
-
-            if end == SPOS_MAX {
-                return Ok(());
-            }
-            unsafe { (*raw).set_pos(end.successor()) };
         }
     }
 }

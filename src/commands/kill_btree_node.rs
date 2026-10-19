@@ -232,12 +232,12 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
 
         iter.for_each(&trans, |b| {
             if b.c.level != kill.level as u8 {
-                return ControlFlow::Continue(());
+                return Ok(ControlFlow::Continue(()));
             }
 
             if kill.idx > 0 {
                 kill.idx -= 1;
-                return ControlFlow::Continue(());
+                return Ok(ControlFlow::Continue(()));
             }
 
             found = true;
@@ -313,12 +313,12 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                  */
                 if let Err(e) = damage() {
                     damage_err = Some(anyhow!("dev {dev}: {e}"));
-                    return ControlFlow::Break(());
+                    return Ok(ControlFlow::Break(()));
                 }
                 damaged += 1;
             }
 
-            ControlFlow::Break(())
+            Ok(ControlFlow::Break(()))
         }).map_err(|e| anyhow!("error walking btree nodes: {}", e))?;
 
         if !found {
