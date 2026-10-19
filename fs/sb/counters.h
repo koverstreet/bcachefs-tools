@@ -5,23 +5,7 @@
 #include "bcachefs.h"
 #include "sb/io.h"
 
-int bch2_sb_counters_to_cpu(struct bch_fs *);
-int bch2_sb_counters_from_cpu(struct bch_fs *);
-
-void bch2_fs_counters_exit(struct bch_fs *);
-void bch2_fs_counters_init_early(struct bch_fs *);
-int bch2_fs_counters_init(struct bch_fs *);
-int bch2_fs_counters_init_late(struct bch_fs *);
-
-extern const char * const bch2_counter_names[];
-extern const enum bch_counters_flags bch2_counter_flags_map[];
-extern const u16 bch2_counter_stable_map[];
-extern const struct bch_sb_field_ops bch_sb_field_ops_counters;
-
-long bch2_ioctl_query_counters(struct bch_fs *,
-			struct bch_ioctl_query_counters __user *);
-
-void bch2_sb_recent_counters_to_text(struct printbuf *out, struct bch_fs_counters *c);
+/* The counters themselves are counters.rs's: sb/counters_gen.h, in bcachefs.h */
 
 #define counter_typecheck(_name, _type)					\
 	BUILD_BUG_ON(bch2_counter_flags[BCH_COUNTER_##_name] != _type)

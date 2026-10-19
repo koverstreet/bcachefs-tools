@@ -133,7 +133,6 @@ bcachefs-y		:=			\
 	journal/write.o				\
 	opts.o					\
 	sb/clean.o				\
-	sb/counters.o				\
 	sb/downgrade.o				\
 	sb/errors.o				\
 	sb/io.o					\

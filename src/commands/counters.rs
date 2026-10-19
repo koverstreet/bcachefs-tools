@@ -50,21 +50,19 @@ fn cmd_reset_counters(cli: Cli) -> Result<()> {
     let fs = Fs::open(&devs, fs_opts)
         .context("opening filesystem")?;
 
-    unsafe {
-        if to_reset.is_empty() {
-            for i in 0..BCH_COUNTER_NR as usize {
-                c::bch2_counter_reset(fs.as_ptr(), i as u32);
-            }
-        } else {
-            for &i in &to_reset {
-                c::bch2_counter_reset(fs.as_ptr(), i as u32);
-            }
+    if to_reset.is_empty() {
+        for i in 0..BCH_COUNTER_NR as usize {
+            fs.counter_reset(i);
         }
-
-        // persist to superblock
-        fs.write_super_ret(&mut fs.sb_lock())
-            .map_err(|e| anyhow!("error writing superblock: {}", e))?;
+    } else {
+        for &i in &to_reset {
+            fs.counter_reset(i);
+        }
     }
+
+    // persist to superblock
+    fs.write_super_ret(&mut fs.sb_lock())
+        .map_err(|e| anyhow!("error writing superblock: {}", e))?;
 
     Ok(())
 }

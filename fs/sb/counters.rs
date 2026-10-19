@@ -21,9 +21,21 @@
 //! XXX: a tracepoint fired only from Rust gets no __tracepoint_check entry, as
 //! C's use sites leave, so a WARN_ON_UNUSED_TRACEPOINTS build calls it unused.
 
+use core::ffi::c_int;
+use core::mem::size_of;
+
+use cstruct_macros::c_export;
+
 use crate::c;
 use crate::fs::Fs;
-use crate::util::percpu::this_cpu_add;
+use crate::prt;
+use crate::sb::io::{sb_field_ops, SbFieldOps, COUNTERS};
+use crate::types::Le64;
+use crate::util::ffi::Opaque;
+use crate::util::kernel::{nsecs_to_jiffies, NSEC_PER_SEC};
+use crate::util::percpu::{percpu_u64_get, percpu_u64_set, this_cpu_add};
+use crate::util::vstructs::Head;
+use crate::util::workqueue::system_dfl_wq;
 use crate::util::Printbuf;
 
 /// What an event's counter counts.
@@ -171,5 +183,224 @@ impl Fs {
                                                     msg: impl FnOnce(&mut Printbuf)) {
         self.event_trace(e, msg);
         self.event_add(e, nr);
+    }
+}
+
+// ── The counters, in memory and in the superblock ──────────────────────────
+//
+// In memory by BCH_COUNTER_* index, COUNTERS' order; in the superblock and the
+// ioctl by stable id. mount[] and recent[] are plain u64s, written racing
+// readers that only print them, as in C.
+
+const NR: usize = c::BCH_COUNTER_NR as usize;
+const NR_STABLE: usize = c::BCH_COUNTER_STABLE_NR as usize;
+
+impl c::bch_fs_counters {
+    /// Counter @i, every CPU's count summed.
+    fn now(&self, i: usize) -> u64 {
+        // SAFETY: now is per CPU, NR of them, for the filesystem's life
+        unsafe { percpu_u64_get(self.now.wrapping_add(i)) }
+    }
+
+    fn set_now(&self, i: usize, v: u64) {
+        // SAFETY: as now()'s
+        unsafe { percpu_u64_set(self.now.wrapping_add(i), v) }
+    }
+
+    /// For mount[] and recent[], which change under shared references.
+    fn raw(&self) -> *mut Self {
+        core::ptr::from_ref(self).cast_mut()
+    }
+
+    /// The counters that changed in the last ten seconds: each with what
+    /// it's gone up by in each half second since, newest first.
+    pub fn recent_to_text(&self, out: &mut Printbuf) {
+        let oldest = &self.recent[c::NR_RECENT_COUNTERS as usize - 1];
+
+        for (i, ctr) in COUNTERS.iter().enumerate() {
+            let mut prev = self.now(i);
+            if oldest[i] == prev {
+                continue;
+            }
+
+            prt!(out, "{}:", ctr.name);
+            for sample in &self.recent {
+                prt!(out, "\t{}", prev.wrapping_sub(sample[i]));
+                prev = sample[i];
+            }
+            prt!(out, "\n");
+        }
+    }
+}
+
+#[c_export]
+pub fn bch2_sb_recent_counters_to_text(out: &mut Printbuf, ctrs: &c::bch_fs_counters) {
+    ctrs.recent_to_text(out)
+}
+
+impl Fs {
+    pub fn counter_read(&self, idx: usize) -> u64 {
+        assert!(idx < NR);
+        self.counters.now(idx)
+    }
+
+    /// Zero counter @idx - and what's relative to it, its count at mount and
+    /// its recent samples, which would otherwise read as having gone backwards.
+    pub fn counter_reset(&self, idx: usize) {
+        if idx >= NR {
+            return;
+        }
+
+        self.counters.set_now(idx, 0);
+        let ctrs = self.counters.raw();
+        // SAFETY: see the top of the section
+        unsafe {
+            (*ctrs).mount[idx] = 0;
+            for sample in &mut (*ctrs).recent {
+                sample[idx] = 0;
+            }
+        }
+    }
+}
+
+impl SbFieldOps for c::bch_sb_field_counters {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {
+        for ctr in COUNTERS {
+            if let Some(v) = f.d.get(ctr.stable_id as usize) {
+                prt!(out, "{} \t{}\n", ctr.name, v.get());
+            }
+        }
+    }
+}
+
+#[c_export]
+pub static bch_sb_field_ops_counters: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_counters>();
+
+/// The counters into the superblock, for a superblock write - its field
+/// grown to a slot for every stable id if it can be, else as it is.
+#[c_export]
+pub fn bch2_sb_counters_from_cpu(c: &Opaque<c::bch_fs>) {
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    let mut sb = unsafe { fs.sb_lock_held() };
+
+    let u64s = size_of::<Head<c::bch_sb_field>>() / size_of::<u64>() + NR_STABLE;
+    let _ = sb.field_get_minsize::<c::bch_sb_field_counters>(u64s as u32);
+    let Some(f) = sb.field_mut::<c::bch_sb_field_counters>() else { return };
+
+    for (i, ctr) in COUNTERS.iter().enumerate() {
+        if let Some(d) = f.d.get_mut(ctr.stable_id as usize) {
+            *d = Le64::new(fs.counters.now(i));
+        }
+    }
+}
+
+crate::fs_delayed_work! {
+    /// Every half second: the counters sampled into recent[], newest first.
+    pub(crate) work RecentCounters: field counters_recent;
+
+    fn run(fs: &Fs) {
+        let ctrs = fs.counters.raw();
+        // SAFETY: see the top of the section
+        let recent = unsafe { &mut (*ctrs).recent };
+        let n = recent.len();
+        recent.copy_within(..n - 1, 1);
+        for (i, v) in recent[0].iter_mut().enumerate() {
+            *v = fs.counters.now(i);
+        }
+
+        Self::queue(fs);
+    }
+}
+
+impl RecentCounters {
+    fn queue(fs: &Fs) {
+        fs.counters_recent.queue(system_dfl_wq(), nsecs_to_jiffies(NSEC_PER_SEC / 2));
+    }
+}
+
+/// The superblock's counters into memory, as both the counts now and at
+/// mount. A counter the superblock has no slot for starts at 0.
+#[c_export]
+pub fn bch2_fs_counters_init(c: &Opaque<c::bch_fs>) -> c_int {
+    let fs = Fs::from_c(c);
+    let sb = fs.sb_lock();
+    let d: &[Le64] = sb.field::<c::bch_sb_field_counters>().map_or(&[], |f| &f.d);
+    let ctrs = fs.counters.raw();
+
+    for (i, ctr) in COUNTERS.iter().enumerate() {
+        let v = d.get(ctr.stable_id as usize).map(|v| v.get());
+        if let Some(v) = v {
+            fs.counters.set_now(i, v);
+        }
+        // SAFETY: filesystem init, before anything reads them
+        unsafe { (*ctrs).mount[i] = v.unwrap_or(0) };
+    }
+    0
+}
+
+#[c_export]
+pub fn bch2_fs_counters_init_late(c: &Opaque<c::bch_fs>) -> c_int {
+    RecentCounters::queue(Fs::from_c(c));
+    0
+}
+
+/// Before counters.now is freed.
+#[c_export]
+pub fn bch2_fs_counters_exit(c: &Opaque<c::bch_fs>) {
+    Fs::from_c(c).counters_recent.cancel_sync();
+}
+
+// ── BCH_IOCTL_QUERY_COUNTERS ─────────────────────────────────────────────────
+
+#[cfg(not(NO_BCACHEFS_CHARDEV))]
+mod ioctl {
+    use core::ffi::c_long;
+    use core::mem::offset_of;
+
+    use kernel::transmute::AsBytes;
+    use kernel::uaccess::{UserPtr, UserSlice};
+
+    use super::*;
+    use crate::errcode::{bch_errcode, ret_to_c, BchError};
+
+    /// The ioctl's argument, short of d[], the counters.
+    type Args = Head<c::bch_ioctl_query_counters>;
+
+    /// @v to the user's memory at @at.
+    fn put<T: AsBytes>(at: UserPtr, v: T) -> Result<(), BchError> {
+        Ok(UserSlice::new(at, size_of::<T>()).writer().write(&v)?)
+    }
+
+    /// The counters, by stable id, up to the user's @nr of them: now, or at
+    /// mount (BCH_IOCTL_QUERY_COUNTERS_MOUNT). @nr comes back as the number
+    /// filled.
+    fn query_counters(fs: &Fs, user: UserPtr) -> Result<(), BchError> {
+        let arg: Args = UserSlice::new(user, size_of::<Args>()).reader().read()?;
+
+        let flags = u32::from(arg.flags);
+        if flags & !c::BCH_IOCTL_QUERY_COUNTERS_MOUNT != 0 || arg.pad != 0 {
+            return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_query_counters_bad_flags);
+        }
+        let mount = flags & c::BCH_IOCTL_QUERY_COUNTERS_MOUNT != 0;
+
+        let nr = arg.nr.min(NR_STABLE as u16);
+        put(user.wrapping_byte_add(offset_of!(Args, nr)), nr)?;
+
+        // d[] follows the head
+        let d = user.wrapping_byte_add(size_of::<Args>());
+        for (i, ctr) in COUNTERS.iter().enumerate() {
+            if ctr.stable_id < nr {
+                let v = if mount { fs.counters.mount[i] } else { fs.counters.now(i) };
+                put(d.wrapping_byte_add(usize::from(ctr.stable_id) * size_of::<u64>()), v)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[c_export]
+    pub fn bch2_ioctl_query_counters(c: &Opaque<c::bch_fs>,
+                                     user: *mut Head<c::bch_ioctl_query_counters>) -> c_long {
+        ret_to_c(query_counters(Fs::from_c(c), UserPtr::from_ptr(user.cast()))).into()
     }
 }

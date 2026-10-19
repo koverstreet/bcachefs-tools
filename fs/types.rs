@@ -630,6 +630,10 @@ pub struct Fs {
     pub maybe_schedule_btree_bitmap_gc: crate::util::workqueue::DelayedWork,
 
     pub counters: c::bch_fs_counters,
+    #[c("struct delayed_work counters_recent")]
+    #[pin]
+    #[init(crate::sb::counters::RecentCounters::init())]
+    pub counters_recent: crate::util::workqueue::DelayedWork,
     pub times: [c::bch2_time_stats; c::BCH_TIME_STAT_NR as usize],
     pub errors: c::bch_fs_errors,
 
