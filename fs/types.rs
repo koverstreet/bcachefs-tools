@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::util::vstructs::Head;
-use crate::types::{GenRadix, RustOnly, bits_to_longs, c_default, rust_only};
+use crate::types::{Atomic64, GenRadix, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
 use cstruct_macros::{c_const, c_enum, c_xmacro, CStruct, Init, TypeInfo};
@@ -332,7 +332,8 @@ pub struct bch_dev {
      */
     pub mi: c::bch_member_cpu,
     pub btree_allocated_bitmap_gc: u64,
-    pub errors: [c::atomic64_t; c::BCH_MEMBER_ERROR_NR as usize],
+    #[c("atomic64_t errors[BCH_MEMBER_ERROR_NR]")]
+    pub errors: [Atomic64; c::BCH_MEMBER_ERROR_NR as usize],
     pub write_errors_start: c_ulong,
     pub flags: c_ulong,
 
@@ -400,7 +401,8 @@ pub struct bch_dev {
     pub io_error_work: c::work_struct,
 
     /* The rest of this all shows up in sysfs */
-    pub cur_latency: [c::atomic64_t; 2],
+    #[c("atomic64_t cur_latency[2]")]
+    pub cur_latency: [Atomic64; 2],
     pub io_latency: [c::bch2_time_stats_quantiles; 2],
 
     pub congested: c::atomic_t,

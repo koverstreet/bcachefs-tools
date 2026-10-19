@@ -177,9 +177,7 @@ impl Fs {
 
     /// The journal sequence number being written: C's journal_cur_seq().
     pub fn journal_cur_seq(&self) -> u64 {
-        // atomic64_read(&j->seq)
-        let seq = unsafe { &*(&raw const (*self.as_ptr()).journal.seq).cast::<core::sync::atomic::AtomicI64>() };
-        seq.load(core::sync::atomic::Ordering::Relaxed) as u64
+        self.journal.seq.load(core::sync::atomic::Ordering::Relaxed) as u64
     }
 
     /// Go emergency read-only: the journal halts, so nothing more commits,

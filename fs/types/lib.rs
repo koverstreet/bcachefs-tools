@@ -536,6 +536,24 @@ pub struct LongAligned([core::ffi::c_long; 0]);
 unsafe impl ::pin_init::Zeroable for CacheAligned {}
 unsafe impl ::pin_init::Zeroable for LongAligned {}
 
+/// C's atomic64_t, in a struct Rust defines: an AtomicI64 - its one s64 - and
+/// Zeroable, which pin_init has no impl of for atomics. Declared to C with
+/// #[c("atomic64_t ...")].
+#[repr(transparent)]
+#[derive(Default)]
+pub struct Atomic64(core::sync::atomic::AtomicI64);
+
+// SAFETY: an integer, and zero is one
+unsafe impl ::pin_init::Zeroable for Atomic64 {}
+
+impl core::ops::Deref for Atomic64 {
+    type Target = core::sync::atomic::AtomicI64;
+
+    fn deref(&self) -> &core::sync::atomic::AtomicI64 {
+        &self.0
+    }
+}
+
 /// Default for a type C shares: all zeroes, C's `= {}` - as bindgen's was. For
 /// types whose every field is C's, to which all zeroes is a valid value - an
 /// unsized vstruct's C definition too, by name: c_default!(T__head).

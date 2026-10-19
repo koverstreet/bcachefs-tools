@@ -505,9 +505,7 @@ impl c::bch_dev {
 
     /// The latest IO's latency, for reads (READ) or writes (WRITE).
     pub fn cur_latency(&self, rw: usize) -> i64 {
-        // atomic64_read()
-        let l = unsafe { &*(&raw const self.cur_latency[rw]).cast::<core::sync::atomic::AtomicI64>() };
-        l.load(core::sync::atomic::Ordering::Relaxed)
+        self.cur_latency[rw].load(core::sync::atomic::Ordering::Relaxed)
     }
 
     /// The IO refs held, by kind - for reads (READ) or writes (WRITE).
