@@ -484,23 +484,20 @@ err:
 int bch2_accounting_mem_insert(struct bch_fs *c, struct bkey_s_c_accounting a,
 			       enum bch_accounting_mode mode)
 {
-	union bch_replicas_padded r;
-
-	if (mode != BCH_ACCOUNTING_read &&
-	    accounting_to_replicas(&r.e, a.k->p) &&
-	    !bch2_replicas_marked(c, &r.e))
-		return bch_err_throw(c, btree_insert_need_mark_replicas);
-
 	/*
 	 * Raw of the inner rwsem: our caller holds mark_lock read via
 	 * percpu_read_noio, so PF_MEMALLOC_NOIO stays set across this temporary
 	 * upgrade to write - the raw up/down only move the lock, not the
 	 * memalloc scope.
+	 *
+	 * The replicas entry is checked for under the write lock, not before:
+	 * between up_read and down_write replicas gc can drop it, as nothing in
+	 * memory references it until this insert.
 	 */
 	percpu_up_read(&c->capacity.mark_lock.lock);
 	int ret;
 	scoped_guard(percpu_write_noio, &c->capacity.mark_lock)
-		ret = __bch2_accounting_mem_insert(c, a);
+		ret = bch2_accounting_mem_insert_locked(c, a, mode);
 	percpu_down_read(&c->capacity.mark_lock.lock);
 	return ret;
 }
