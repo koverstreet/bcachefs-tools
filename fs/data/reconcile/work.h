@@ -5,8 +5,6 @@
 #include "data/compress.h"
 #include "alloc/disk_groups.h"
 
-extern const char * const bch2_reconcile_opts[];
-
 #include "data/reconcile/work_gen.h"
 
 static inline struct opt_change_scope bch2_opt_change_scope_init(struct bch_fs *c)

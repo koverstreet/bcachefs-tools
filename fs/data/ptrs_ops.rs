@@ -5,7 +5,8 @@
 use super::*;
 use crate::{bkey_fsck_err, bkey_fsck_err_on};
 use crate::btree::bkey::{bkey_eq, bpos_ge, POS_MIN};
-use crate::errcode::ret_to_result_void;
+use crate::data::reconcile::trigger::{extent_rebalance_v1_to_text, extent_reconcile_to_text,
+                                      extent_reconcile_validate};
 use crate::init::error::{id, BkeyValidate};
 use crate::opts::prt_compression_type;
 use crate::util::rcu::ReadGuard;
@@ -159,9 +160,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                 bkey_fsck_err_on!(v, have_ec, id::ptr_stripe_redundant, "redundant stripe entry")?;
                 have_ec = true;
             }
-            ExtentEntry::reconcile(r) => ret_to_result_void(unsafe {
-                c::bch2_extent_reconcile_validate(fs.as_ptr(), k.into(), v.from, r)
-            })?,
+            ExtentEntry::reconcile(r) => extent_reconcile_validate(v, r)?,
             ExtentEntry::flags(_) =>
                 bkey_fsck_err_on!(v, i != 0, id::extent_flags_not_at_start,
                                   "extent flags entry not at start")?,
@@ -300,10 +299,8 @@ pub fn bkey_ptrs_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
             ExtentEntry::crc32(_) | ExtentEntry::crc64(_) | ExtentEntry::crc128(_) =>
                 crc_unpacked_to_text(&mut out, &crc_unpack(k.k, e).expect("a crc")),
             ExtentEntry::stripe_ptr(ec) => write!(out, "idx {} block {}", ec.idx(), ec.block()),
-            ExtentEntry::rebalance_v1(r) =>
-                unsafe { c::bch2_extent_rebalance_v1_to_text(out.as_raw(), fs.as_ptr(), r) },
-            ExtentEntry::reconcile(r) =>
-                unsafe { c::bch2_extent_reconcile_to_text(out.as_raw(), fs.as_ptr(), r) },
+            ExtentEntry::rebalance_v1(r) => extent_rebalance_v1_to_text(&mut out, Some(fs), r),
+            ExtentEntry::reconcile(r) => extent_reconcile_to_text(&mut out, Some(fs), r),
             ExtentEntry::flags(f) => extent_flags_to_text(&mut out, f.flags()),
             ExtentEntry::reconcile_bp(r) => write!(out, "idx {}", r.idx()),
             ExtentEntry::Unknown { bytes, .. } | ExtentEntry::Invalid { bytes, .. } |

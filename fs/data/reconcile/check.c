@@ -421,7 +421,7 @@ static int check_reconcile_work_btree_key(struct btree_trans *trans,
 		bkey_reassemble(n, k);
 
 		try(reconcile_bp_add(trans, iter->btree_id, level, bkey_i_to_s(n), &bp_pos));
-		bch2_bkey_set_reconcile_bp(c, bkey_i_to_s(n),
+		bch2_bkey_set_reconcile_bp(trans, bkey_i_to_s(n),
 					   BKEY_BTREE_PTR_U64s_MAX, bp_pos.offset);
 		return bch2_btree_node_update_key_at_pos(trans, iter->btree_id, level, n);
 	}
@@ -434,7 +434,7 @@ static int check_reconcile_work_btree_key(struct btree_trans *trans,
 						BKEY_BTREE_PTR_U64s_MAX * sizeof(u64)));
 
 		bkey_reassemble(n, k);
-		bch2_bkey_set_reconcile_bp(c, bkey_i_to_s(n),
+		bch2_bkey_set_reconcile_bp(trans, bkey_i_to_s(n),
 					   BKEY_BTREE_PTR_U64s_MAX, 0);
 
 		return bch2_btree_node_update_key_at_pos(trans, iter->btree_id, level, n);
@@ -469,7 +469,7 @@ static int check_reconcile_work_btree_key(struct btree_trans *trans,
 						BKEY_BTREE_PTR_U64s_MAX * sizeof(u64)));
 				bkey_reassemble(n, k);
 
-				bch2_bkey_set_reconcile_bp(c, bkey_i_to_s(n),
+				bch2_bkey_set_reconcile_bp(trans, bkey_i_to_s(n),
 							   BKEY_BTREE_PTR_U64s_MAX,
 							   rb_iter.pos.offset);
 

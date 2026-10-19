@@ -19,164 +19,6 @@
 
 #include "init/error.h"
 
-int bch2_extent_reconcile_validate(struct bch_fs *c,
-				   struct bkey_s_c k,
-				   const struct bkey_validate_context *from,
-				   const struct bch_extent_reconcile *r)
-{
-	int ret = 0;
-
-	bkey_fsck_err_on(r->pending && !r->need_rb,
-			 c, extent_reconcile_bad_pending,
-			 "pending incorrectly set");
-
-	bkey_fsck_err_on(r->hipri && !(r->need_rb & BIT(BCH_RECONCILE_data_replicas)),
-			 c, extent_reconcile_bad_hipri,
-			 "hipri incorrectly set");
-
-	bkey_fsck_err_on(!r->data_replicas,
-			 c, extent_reconcile_bad_replicas,
-			 "bad replicas");
-
-fsck_err:
-	return ret;
-}
-
-static const struct bch_extent_reconcile *bch2_bkey_ptrs_reconcile_opts(const struct bch_fs *c,
-									struct bkey_ptrs_c ptrs)
-{
-	const union bch_extent_entry *entry;
-
-	bkey_extent_entry_for_each(ptrs, entry)
-		if (extent_entry_type(entry) == BCH_EXTENT_ENTRY_reconcile)
-			return &entry->reconcile;
-
-	return NULL;
-}
-
-const struct bch_extent_reconcile *bch2_bkey_reconcile_opts(const struct bch_fs *c,
-							    struct bkey_s_c k)
-{
-	return bch2_bkey_ptrs_reconcile_opts(c, bch2_bkey_ptrs_c(k));
-}
-
-enum reconcile_work_id bch2_bkey_reconcile_work_id(const struct bch_fs *c, struct bkey_s_c k)
-{
-	if (k.k->type == KEY_TYPE_stripe) {
-		return bkey_s_c_to_stripe(k).v->needs_reconcile
-			? RECONCILE_WORK_hipri
-			: RECONCILE_WORK_none;
-	} else {
-		return rb_work_id(bch2_bkey_reconcile_opts(c, k));
-	}
-}
-
-__cold void bch2_extent_rebalance_v1_to_text(struct printbuf *out, struct bch_fs *c,
-				      const struct bch_extent_rebalance_v1 *r)
-{
-	prt_printf(out, "replicas=%u", r->data_replicas);
-	if (r->data_replicas_from_inode)
-		prt_str(out, " (inode)");
-
-	prt_str(out, " checksum=");
-	bch2_prt_csum_opt(out, r->data_checksum);
-	if (r->data_checksum_from_inode)
-		prt_str(out, " (inode)");
-
-	if (r->background_compression || r->background_compression_from_inode) {
-		prt_str(out, " background_compression=");
-		bch2_compression_opt_to_text(out, r->background_compression);
-
-		if (r->background_compression_from_inode)
-			prt_str(out, " (inode)");
-	}
-
-	if (r->background_target || r->background_target_from_inode) {
-		prt_str(out, " background_target=");
-		if (c)
-			bch2_target_to_text(out, c, r->background_target);
-		else
-			prt_printf(out, "%u", r->background_target);
-
-		if (r->background_target_from_inode)
-			prt_str(out, " (inode)");
-	}
-
-	if (r->promote_target || r->promote_target_from_inode) {
-		prt_str(out, " promote_target=");
-		if (c)
-			bch2_target_to_text(out, c, r->promote_target);
-		else
-			prt_printf(out, "%u", r->promote_target);
-
-		if (r->promote_target_from_inode)
-			prt_str(out, " (inode)");
-	}
-
-	if (r->erasure_code || r->erasure_code_from_inode) {
-		prt_printf(out, " ec=%u", r->erasure_code);
-		if (r->erasure_code_from_inode)
-			prt_str(out, " (inode)");
-	}
-}
-
-__cold void bch2_extent_reconcile_to_text(struct printbuf *out, struct bch_fs *c,
-				      const struct bch_extent_reconcile *r)
-{
-	prt_str(out, "need_rb=");
-	prt_bitflags(out, bch2_reconcile_opts, r->need_rb);
-
-	if (r->hipri)
-		prt_str(out, " hipri");
-	if (r->pending)
-		prt_str(out, " pending");
-
-	prt_printf(out, " replicas=%u", r->data_replicas);
-	if (r->data_replicas_from_inode)
-		prt_str(out, " (inode)");
-
-	prt_str(out, " checksum=");
-	bch2_prt_csum_opt(out, r->data_checksum);
-	if (r->data_checksum_from_inode)
-		prt_str(out, " (inode)");
-
-	if (r->background_compression || r->background_compression_from_inode) {
-		prt_str(out, " background_compression=");
-		bch2_compression_opt_to_text(out, r->background_compression);
-
-		if (r->background_compression_from_inode)
-			prt_str(out, " (inode)");
-	}
-
-	if (r->background_target || r->background_target_from_inode) {
-		prt_str(out, " background_target=");
-		if (c)
-			bch2_target_to_text(out, c, r->background_target);
-		else
-			prt_printf(out, "%u", r->background_target);
-
-		if (r->background_target_from_inode)
-			prt_str(out, " (inode)");
-	}
-
-	if (r->promote_target || r->promote_target_from_inode) {
-		prt_str(out, " promote_target=");
-		if (c)
-			bch2_target_to_text(out, c, r->promote_target);
-		else
-			prt_printf(out, "%u", r->promote_target);
-
-		if (r->promote_target_from_inode)
-			prt_str(out, " (inode)");
-	}
-
-	if (r->erasure_code || r->erasure_code_from_inode) {
-		prt_printf(out, " ec=%u", r->erasure_code);
-		if (r->erasure_code_from_inode)
-			prt_str(out, " (inode)");
-	}
-}
-
 static inline unsigned rb_accounting_counters(const struct bch_extent_reconcile *r)
 {
 	if (!r)
@@ -191,50 +33,6 @@ static inline unsigned rb_accounting_counters(const struct bch_extent_reconcile 
 		ret |=  BIT(BCH_RECONCILE_ACCOUNTING_high_priority);
 	}
 	return ret;
-}
-
-static u64 bch2_bkey_get_reconcile_bp(const struct bch_fs *c, struct bkey_s_c k)
-{
-	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
-	const union bch_extent_entry *entry;
-	bkey_extent_entry_for_each(ptrs, entry)
-		if (extent_entry_type(entry) == BCH_EXTENT_ENTRY_reconcile_bp)
-			return entry->reconcile_bp.idx;
-	return 0;
-}
-
-struct bpos bch2_bkey_get_reconcile_bp_pos(const struct bch_fs *c, struct bkey_s_c k)
-{
-	return POS(rb_work_id(bch2_bkey_reconcile_opts(c, k)),
-		   bch2_bkey_get_reconcile_bp(c, k));
-}
-
-void bch2_bkey_set_reconcile_bp(const struct bch_fs *c, struct bkey_s k,
-				unsigned buf_u64s, u64 idx)
-{
-	struct bkey_ptrs ptrs = bch2_bkey_ptrs(k);
-	union bch_extent_entry *entry;
-	bkey_extent_entry_for_each(ptrs, entry)
-		if (extent_entry_type(entry) == BCH_EXTENT_ENTRY_reconcile_bp) {
-			if (idx)
-				entry->reconcile_bp.idx = idx;
-			else
-				bch2_bkey_extent_entry_drop_s(c, k, entry);
-			return;
-		}
-
-	if (!idx)
-		return;
-
-	struct bch_extent_reconcile_bp r = {
-		.type	= BIT(BCH_EXTENT_ENTRY_reconcile_bp),
-		.idx	= idx,
-	};
-	BUG_ON(k.k->u64s + sizeof(r) / sizeof(u64) > buf_u64s);
-
-	union bch_extent_entry *end = bkey_val_end(k);
-	memcpy_u64s(end, &r, sizeof(r) / sizeof(u64));
-	k.k->u64s += sizeof(r) / sizeof(u64);
 }
 
 int reconcile_bp_del(struct btree_trans *trans, enum btree_id btree, unsigned level,
@@ -393,7 +191,7 @@ int __bch2_trigger_extent_reconcile(struct btree_trans *trans,
 			}
 		} else {
 			struct bch_fs *c = trans->c;
-			struct bpos bp = POS(old_work, bch2_bkey_get_reconcile_bp(c, op.old));
+			struct bpos bp = POS(old_work, bch2_bkey_get_reconcile_bp_pos(c, op.old).offset);
 
 			if (bp.inode != new_work && bp.offset) {
 				try(reconcile_bp_del(trans, op.btree, op.level, op.old, bp));
@@ -412,7 +210,7 @@ int __bch2_trigger_extent_reconcile(struct btree_trans *trans,
 					try(reconcile_bp_add(trans, op.btree, op.level,
 							     mut, &bp));
 
-				bch2_bkey_set_reconcile_bp(c, mut, needed, bp.offset);
+				bch2_bkey_set_reconcile_bp(trans, mut, needed, bp.offset);
 			}
 		}
 	}
@@ -593,7 +391,7 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 	    bch2_request_incompat_feature(c, bcachefs_metadata_version_reconcile))
 		*need_update_invalid_devs = 0;
 
-	const struct bch_extent_reconcile *old = bch2_bkey_ptrs_reconcile_opts(c, ptrs);
+	const struct bch_extent_reconcile *old = bch2_bkey_reconcile_opts(c, k);
 	if (old && !(old->need_rb & ~r.need_rb)) {
 		r.pending = old->pending;
 		if (r.hipri && !old->hipri)

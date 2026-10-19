@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use cstruct_macros::{CStruct, TypeInfo};
+use cstruct_macros::{c_extern, CStruct, TypeInfo};
 
 /*
  * Compressing and decompressing want wildly different amounts of scratch
@@ -27,3 +27,7 @@ pub struct bch_fs_compress {
     pub zstd_workspace_size: usize,
 }
 c_default!(bch_fs_compress);
+
+c_extern! {
+    pub fn bch2_compression_opt_to_text(out: *mut c::printbuf, v: u64);
+}

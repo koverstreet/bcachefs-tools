@@ -33,7 +33,6 @@ extern const char * const bch2_d_types[];
 extern const char * const bch2_scrub_journal_opts[];
 
 void bch2_prt_fs_usage_type(struct printbuf *,		enum bch_fs_usage_type);
-void bch2_prt_csum_opt(struct printbuf *,		enum bch_csum_opt);
 void bch2_prt_csum_type(struct printbuf *,		enum bch_csum_type);
 void bch2_prt_key_type_error_reason(struct printbuf *,	enum bch_key_type_errors);
 

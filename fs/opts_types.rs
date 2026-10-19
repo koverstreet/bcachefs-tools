@@ -796,6 +796,7 @@ c_extern! {
     pub fn bch2_prt_jset_entry_type(out: *mut c::printbuf, t: c::bch_jset_entry_type);
     pub fn bch2_prt_data_type(out: *mut c::printbuf, t: c::bch_data_type);
     pub fn bch2_prt_compression_type(out: *mut c::printbuf, t: c::bch_compression_type);
+    pub fn bch2_prt_csum_opt(out: *mut c::printbuf, t: c::bch_csum_opt);
     pub fn bch2_inode_opts_get(c: *mut c::bch_fs, ret: *mut c::bch_inode_opts, metadata: bool);
     pub fn bch2_prt_str_hash_type(out: *mut c::printbuf, t: c::bch_str_hash_type);
     pub fn bch2_prt_reconcile_accounting_type(out: *mut c::printbuf,

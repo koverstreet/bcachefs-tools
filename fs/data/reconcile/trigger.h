@@ -3,6 +3,7 @@
 #define _BCACHEFS_RECONCILE_TRIGGER_H
 
 #include "data/extents.h"
+#include "data/reconcile/trigger_gen.h"
 
 static inline struct bpos data_to_rb_work_pos(enum btree_id btree, struct bpos pos)
 {
@@ -58,9 +59,6 @@ static inline struct bch_extent_reconcile io_opts_to_reconcile_opts(struct bch_f
 	};
 };
 
-struct bpos bch2_bkey_get_reconcile_bp_pos(const struct bch_fs *, struct bkey_s_c);
-void bch2_bkey_set_reconcile_bp(const struct bch_fs *, struct bkey_s, unsigned, u64);
-
 int reconcile_bp_del(struct btree_trans *, enum btree_id, unsigned,
 		     struct bkey_s_c, struct bpos bp_pos);
 int reconcile_bp_add(struct btree_trans *trans, enum btree_id, unsigned,
@@ -89,10 +87,6 @@ static inline bool extent_has_rotational(struct bch_fs *c, struct bkey_s_c k)
 	return false;
 }
 
-const struct bch_extent_reconcile *bch2_bkey_reconcile_opts(const struct bch_fs *, struct bkey_s_c);
-
-enum reconcile_work_id bch2_bkey_reconcile_work_id(const struct bch_fs *, struct bkey_s_c);
-
 int __bch2_trigger_extent_reconcile(struct btree_trans *,
 				    struct btree_trigger_op,
 				    const struct bch_extent_reconcile *,
@@ -114,8 +108,6 @@ static inline int bch2_trigger_extent_reconcile(struct btree_trans *trans,
 		? __bch2_trigger_extent_reconcile(trans, op, old_r, new_r)
 		: 0;
 }
-
-#include "data/reconcile/trigger_gen.h"
 
 static inline struct per_snapshot_io_opts per_snapshot_io_opts_init(struct bch_fs *c)
 {

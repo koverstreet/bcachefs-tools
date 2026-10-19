@@ -46,11 +46,4 @@ c_extern! {
                                          snapshot_io_opts: *mut c::per_snapshot_io_opts,
                                          opts: *mut c::bch_inode_opts, k: c::bkey_s, buf_u64s: c_uint,
                                          ctx: c::set_needs_reconcile_ctx, flags: u32) -> c_int;
-    pub fn bch2_extent_reconcile_validate(c: *mut c::bch_fs, k: c::bkey_s_c,
-                                          from: *const c::bkey_validate_context,
-                                          r: *const c::bch_extent_reconcile) -> c_int;
-    pub fn bch2_extent_rebalance_v1_to_text(out: *mut c::printbuf, c: *mut c::bch_fs,
-                                            r: *const c::bch_extent_rebalance_v1);
-    pub fn bch2_extent_reconcile_to_text(out: *mut c::printbuf, c: *mut c::bch_fs,
-                                         r: *const c::bch_extent_reconcile);
 }

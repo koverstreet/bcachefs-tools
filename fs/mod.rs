@@ -145,6 +145,9 @@ pub mod data {
     pub mod extents_sb;
     pub mod io_misc;
     pub mod ptrs;
+    pub mod reconcile {
+        pub mod trigger;
+    }
     pub mod reflink;
 }
 pub mod errcode;

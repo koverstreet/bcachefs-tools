@@ -6,6 +6,7 @@ use crate::cstructs::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::types::c_default;
+use crate::util::ffi::c_char;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, c_const, c_enum, c_extern, c_xmacro};
@@ -67,6 +68,7 @@ pub struct opt_change_scope {
 c_default!(opt_change_scope);
 
 c_extern! {
+    pub static bch2_reconcile_opts: [*const c_char; 0];
     pub fn bch2_opt_change_scope_exit(scope: *mut c::opt_change_scope);
     pub fn bch2_set_reconcile_needs_scan_trans(trans: *mut c::btree_trans, s: c::reconcile_scan) -> c_int;
     pub fn bch2_set_reconcile_needs_scan(c: *mut c::bch_fs, s: c::reconcile_scan, wakeup: bool) -> c_int;
