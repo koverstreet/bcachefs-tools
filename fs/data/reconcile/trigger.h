@@ -59,11 +59,6 @@ static inline struct bch_extent_reconcile io_opts_to_reconcile_opts(struct bch_f
 	};
 };
 
-int reconcile_bp_del(struct btree_trans *, enum btree_id, unsigned,
-		     struct bkey_s_c, struct bpos bp_pos);
-int reconcile_bp_add(struct btree_trans *trans, enum btree_id, unsigned,
-		     struct bkey_s, struct bpos *);
-
 struct bkey_s_c reconcile_bp_get_key(struct btree_trans *,
 				     struct btree_iter *,
 				     struct bkey_s_c_backpointer);
@@ -85,28 +80,6 @@ static inline bool extent_has_rotational(struct bch_fs *c, struct bkey_s_c k)
 		if (bch2_dev_rotational(c, ptr->dev))
 			return true;
 	return false;
-}
-
-int __bch2_trigger_extent_reconcile(struct btree_trans *,
-				    struct btree_trigger_op,
-				    const struct bch_extent_reconcile *,
-				    const struct bch_extent_reconcile *);
-
-static inline unsigned rb_needs_trigger(const struct bch_extent_reconcile *r)
-{
-	return r ? r->need_rb|r->ptrs_moving : 0;
-}
-
-static inline int bch2_trigger_extent_reconcile(struct btree_trans *trans,
-						struct btree_trigger_op op)
-{
-	struct bch_fs *c = trans->c;
-	const struct bch_extent_reconcile *old_r = bch2_bkey_reconcile_opts(c, op.old);
-	const struct bch_extent_reconcile *new_r = bch2_bkey_reconcile_opts(c, op.new.s_c);
-
-	return rb_needs_trigger(old_r) || rb_needs_trigger(new_r)
-		? __bch2_trigger_extent_reconcile(trans, op, old_r, new_r)
-		: 0;
 }
 
 static inline struct per_snapshot_io_opts per_snapshot_io_opts_init(struct bch_fs *c)

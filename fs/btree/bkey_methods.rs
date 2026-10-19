@@ -26,7 +26,7 @@
 
 use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
-use crate::btree::iter::{NoRoom, TransBkey, UpdateTriggerFlags};
+use crate::btree::iter::{NoRoom, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -34,7 +34,7 @@ use crate::{dirent, inode};
 use crate::snapshot_states::{SNAPSHOT_STATE_VALUES, SUBVOLUME_STATE_VALUES};
 use crate::typeinfo::{self, AccessError, FieldTarget, ResolveError, TypeInfo};
 use core::fmt;
-use core::mem::size_of;
+use core::mem::{size_of, MaybeUninit};
 
 type EnumValues = &'static [(&'static str, u64)];
 
@@ -244,6 +244,28 @@ impl<'a> TriggerOp<'a> {
             new_buf_u64s: self.new_buf_u64s,
             flags:        c::btree_iter_update_trigger_flags::from_bits_retain(self.flags.bits()),
         }
+    }
+
+    /// @new with room for @needed_u64s, to edit: the queued update moved to a
+    /// bigger buffer if it hasn't the room - bch2_trigger_get_mutable_new() -
+    /// and @new repointed there. An insert's, outside the atomic phase.
+    ///
+    /// The key borrows the op: it can be @new itself.
+    pub fn new_with_room<'s, 't>(&'s mut self, t: &TransAttempt<'s, 't>, needed_u64s: u32)
+        -> Result<TransBkey<'s, 't>, BchError>
+    {
+        let mut out = MaybeUninit::<c::bkey_s>::uninit();
+        // SAFETY: the op the trigger was called with, in its commit
+        t.result(unsafe { c::bch2_trigger_get_mutable_new(t.raw(), self.to_raw(), needed_u64s, out.as_mut_ptr()) })?;
+        // SAFETY: written on success - the update's key, in transaction
+        // memory, which outlives the op
+        let out = unsafe { out.assume_init().split.kv };
+        self.new = BkeyS { k: unsafe { &mut *out.k }, v: out.v, val: core::marker::PhantomData };
+        self.new_buf_u64s = self.new_buf_u64s.max(needed_u64s);
+
+        // SAFETY: @new, @new_buf_u64s long, the trigger's to edit while the
+        // attempt runs
+        Ok(unsafe { TransBkey::from_raw_room(t, core::ptr::from_mut(self.new.k).cast(), self.new_buf_u64s) })
     }
 
     /// Run @f on the key going out, as an overwrite, then on the key coming

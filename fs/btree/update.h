@@ -49,11 +49,6 @@ static inline enum bch_bkey_type extent_whiteout_type(struct bch_fs *c, enum btr
 		: KEY_TYPE_whiteout;
 }
 
-int bch2_trigger_get_mutable_new(struct btree_trans *,
-				 struct btree_trigger_op,
-				 unsigned needed_u64s,
-				 struct bkey_s *);
-
 static inline int __must_check
 bch2_trans_update_buf(struct btree_trans *trans, struct btree_iter *iter,
 		      struct bkey_i *k, unsigned k_buf_u64s,
