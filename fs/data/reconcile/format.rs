@@ -127,6 +127,32 @@ c_enum! {
     }
 }
 
+impl bch_extent_reconcile {
+    /// An entry with @opts' reconcile options, and whether the inode set
+    /// each: io_opts_to_reconcile_opts(). Truncated to the entry's fields,
+    /// as C's bitfield assignments truncate.
+    pub fn from_io_opts(opts: &c::bch_inode_opts) -> Self {
+        let mut r = Self::new();
+        macro_rules! opts {
+            ($(($name:tt)),* $(,)?) => { crate::paste! { $(
+                let mask = (1u64 << Self::[<$name:upper _BITS>]) - 1;
+                r.[<set_ $name>]((u64::from(opts.$name) & mask) as _);
+                r.[<set_ $name _from_inode>](opts.[<$name _from_inode>]().into());
+            )* } };
+        }
+        c::BCH_RECONCILE_OPTS!(opts);
+        r
+    }
+
+    /// Pointer @i - by index among the key's pointers - marked moving; past
+    /// ptrs_moving's bits it isn't tracked, as C's |= of the bit truncates.
+    pub fn set_ptr_moving(&mut self, i: usize) {
+        if i < Self::PTRS_MOVING_BITS {
+            self.update_ptrs_moving(|m| m | 1 << i);
+        }
+    }
+}
+
 c_xmacro! {
     BCH_RECONCILE_ACCOUNTING(x) {
         (replicas, 0),
