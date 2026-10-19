@@ -174,7 +174,7 @@ static int check_reconcile_work_one(struct btree_trans *trans,
 	bkey_init(&r_deleted);
 	r_deleted.p = pos;
 
-	if (bpos_lt(pos, data_iter->pos)) {
+	if (bpos_lt(pos, data_to_rb_work_pos(data_iter->btree_id, data_iter->pos))) {
 		data_k.k	= &d_deleted;
 		data_iter->k	= d_deleted;
 	}
