@@ -331,6 +331,21 @@ macro_rules! warn_on {
     }};
 }
 
+/// As C's WARN_ONCE(): warn_on!(), the first time @cond holds at this call
+/// site; @msg goes to the log with it. Evaluates to @cond.
+#[macro_export]
+macro_rules! warn_once {
+    ($cond:expr, $fs:expr, $($msg:tt)*) => {{
+        static WARNED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+        let cond: bool = $cond;
+        if cond && !WARNED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+            $crate::bch_err!($fs, $($msg)*);
+            $crate::warn_on!(true);
+        }
+        cond
+    }};
+}
+
 /// The name of the function this is expanded in, as C's __func__ - the
 /// function, not a closure inside it.
 #[macro_export]
