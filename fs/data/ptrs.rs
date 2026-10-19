@@ -418,6 +418,15 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
         }
     }
 
+    /// Its extent flags - its flags entry's, which comes first, if it has one:
+    /// bch2_bkey_extent_flags().
+    fn extent_flags(&self, fs: &Fs) -> u64 {
+        match self.extent_entries(fs).next() {
+            Some(ExtentEntry::flags(f)) => f.flags(),
+            _ => 0,
+        }
+    }
+
     /// Its pointer to device @dev, if it has one: bch2_bkey_has_device_c().
     fn has_device(&self, fs: &Fs, dev: u32) -> Option<&c::bch_extent_ptr> {
         self.ptrs(fs).find(|p| u32::from(p.dev()) == dev)
