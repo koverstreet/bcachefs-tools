@@ -22,9 +22,12 @@
 
 use cstruct_macros::c_extern;
 
-// C's this_cpu_add(), out of line: where Rust has no asm of its own.
+// C's this_cpu_add() - out of line, where Rust has no asm of its own - and
+// percpu_u64_get() and _set(), which walk every possible CPU.
 c_extern! {
     pub fn bch2_this_cpu_add_u64(pcp: *mut u64, val: u64);
+    pub fn bch2_percpu_u64_get(pcp: *mut u64) -> u64;
+    pub fn bch2_percpu_u64_set(pcp: *mut u64, val: u64);
 }
 
 #[cfg(all(kernel, any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -65,6 +68,22 @@ pub unsafe fn this_cpu_add(pcp: *mut u64, val: u64) {
     unsafe {
         bch2_this_cpu_add_u64(pcp, val);
     }
+}
+
+/// Every CPU's @pcp, summed: percpu_u64_get().
+///
+/// # Safety
+/// As this_cpu_add()'s.
+pub unsafe fn percpu_u64_get(pcp: *mut u64) -> u64 {
+    unsafe { bch2_percpu_u64_get(pcp) }
+}
+
+/// @pcp to @val: this CPU's to @val, every other's to 0 - percpu_u64_set().
+///
+/// # Safety
+/// As this_cpu_add()'s.
+pub unsafe fn percpu_u64_set(pcp: *mut u64, val: u64) {
+    unsafe { bch2_percpu_u64_set(pcp, val) }
 }
 
 /// Every CPU's @acc.len() u64s at @src, added into @acc: acc_u64s_percpu().

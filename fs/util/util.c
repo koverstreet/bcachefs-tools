@@ -1333,6 +1333,17 @@ void bch2_this_cpu_add_u64(u64 *pcp, u64 val)
 	this_cpu_add(*(u64 __percpu *) (unsigned long) pcp, val);
 }
 
+/* ...and percpu_u64_get() and _set(), static inlines */
+u64 bch2_percpu_u64_get(u64 *pcp)
+{
+	return percpu_u64_get((u64 __percpu *) (unsigned long) pcp);
+}
+
+void bch2_percpu_u64_set(u64 *pcp, u64 val)
+{
+	percpu_u64_set((u64 __percpu *) (unsigned long) pcp, val);
+}
+
 /*
  * Split a colon-separated device list and APPEND it to @ret, which the caller
  * must have initialized and which the caller owns either way - including a
