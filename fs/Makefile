@@ -128,7 +128,6 @@ bcachefs-y		:=			\
 	journal/journal.o			\
 	journal/read.o				\
 	journal/reclaim.o			\
-	journal/sb.o				\
 	journal/seq_blacklist.o			\
 	journal/validate.o			\
 	journal/write.o				\

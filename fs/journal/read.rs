@@ -1,3 +1,5 @@
+#[path = "sb.rs"] pub mod sb;
+
 use crate::c;
 use crate::data::checksum::BCH_NONCE_JOURNAL;
 use crate::types::Le32;
