@@ -1461,9 +1461,10 @@ unsigned long bch2_nsecs_to_jiffies(u64 ns)
 	return nsecs_to_jiffies(ns);
 }
 
-void bch2_acc_u64s_percpu(u64 *acc, const u64 __percpu *src, unsigned nr)
+/* @src is a const u64 __percpu *: as bch2_this_cpu_add_u64()'s @pcp */
+void bch2_acc_u64s_percpu(u64 *acc, const u64 *src, unsigned nr)
 {
-	acc_u64s_percpu(acc, src, nr);
+	acc_u64s_percpu(acc, (const u64 __percpu *) (unsigned long) src, nr);
 }
 
 bool bch2_bdev_rot(struct block_device *bdev)
