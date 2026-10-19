@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::ffi::c_char;
-use core::ffi::c_int;
+use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, c_extern, TypeInfo};
 
 #[repr(C)]
@@ -72,6 +72,8 @@ c_extern! {
     pub fn bch2_recovery_passes_to_stable(v: u64) -> u64;
     pub fn bch2_recovery_passes_from_stable(v: u64) -> u64;
     pub fn bch2_recovery_pass_set_no_ratelimit(c: *mut c::bch_fs, pass: c::bch_recovery_pass);
+    pub fn bch2_recovery_pass_want_ratelimit(c: *mut c::bch_fs, pass: c::bch_recovery_pass,
+                                             runtime_fraction: c_uint) -> bool;
     pub fn rust_bch2_recovery_cancelled(c: *mut c::bch_fs) -> core::ffi::c_int;
     pub fn rust_bch2_recovery_run_lock_assert_held(c: *mut c::bch_fs);
     pub fn bch2_run_explicit_recovery_pass(c: *mut c::bch_fs, out: *mut c::printbuf,

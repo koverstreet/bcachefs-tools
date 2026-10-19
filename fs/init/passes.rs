@@ -66,6 +66,13 @@ pub fn set_no_ratelimit(fs: &Fs, pass: c::bch_recovery_pass) {
     unsafe { c::bch2_recovery_pass_set_no_ratelimit(fs.as_ptr(), pass) }
 }
 
+/// Whether recovery pass @pass should hold off: it last ran less than
+/// @runtime_fraction times its last runtime ago, and isn't marked never to
+/// be ratelimited - as bch2_recovery_pass_want_ratelimit().
+pub fn want_ratelimit(fs: &Fs, pass: c::bch_recovery_pass, runtime_fraction: u32) -> bool {
+    unsafe { c::bch2_recovery_pass_want_ratelimit(fs.as_ptr(), pass, runtime_fraction) }
+}
+
 /// Whether recovery has @pass still to run, or running: as
 /// recovery_pass_will_run(). Never true outside recovery.
 pub fn will_run(fs: &Fs, pass: c::bch_recovery_pass) -> bool {

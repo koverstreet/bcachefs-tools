@@ -45,6 +45,18 @@ impl c::bch_dev {
     }
 }
 
+// ── Usage ────────────────────────────────────────────────────────────────
+
+impl c::bch_dev {
+    /// Its buckets by data type, every CPU's count summed - not under any
+    /// lock, so only near enough: bch2_dev_usage_read_fast().
+    pub fn usage_read_fast(&self) -> c::bch_dev_usage {
+        let mut u = c::bch_dev_usage::default();
+        unsafe { c::bch2_dev_usage_read_fast(core::ptr::from_ref(self).cast_mut(), &mut u) };
+        u
+    }
+}
+
 // ── Bucket generations ───────────────────────────────────────────────────
 
 /// How far generation @a is past @b, or 0 if it isn't - wrapping, as gens

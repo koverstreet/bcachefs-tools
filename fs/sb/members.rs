@@ -6,6 +6,7 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::util::kernel::{nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
 use crate::util::percpu::acc_u64s_percpu;
+use crate::util::workqueue::system_long_wq;
 use crate::util::Printbuf;
 use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::init::error::{count_fsck_err, id};
@@ -1005,6 +1006,56 @@ pub fn bch2_dev_btree_bitmap_mark(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) {
 #[c_export]
 pub fn bch2_btree_bitmap_gc(c: &Opaque<c::bch_fs>) -> c_int {
     ret_to_c(Fs::from_c(c).btree_bitmap_gc())
+}
+
+crate::fs_delayed_work! {
+    /// Daily, while rw: btree_bitmap_gc scheduled - ratelimited - if a
+    /// device's bitmap marks four times the sectors of its btree buckets.
+    pub(crate) work BtreeBitmapGcSchedule: field maybe_schedule_btree_bitmap_gc;
+
+    fn run(fs: &Fs) {
+        if passes::want_ratelimit(fs, c::bch_recovery_pass::BCH_RECOVERY_PASS_btree_bitmap_gc, 1000) {
+            return;
+        }
+
+        let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
+        msg.set_suppressed(true); // run_explicit() unsuppresses
+
+        let mut want_schedule = false;
+        for ca in fs.members() {
+            let u = ca.usage_read_fast();
+            let btree_sectors = ca.bucket_to_sector(u.buckets[c::bch_data_type::BCH_DATA_btree.0 as usize]);
+            let bitmap_sectors = u64::from(ca.mi.btree_allocated_bitmap.count_ones()) << ca.mi.btree_bitmap_shift;
+
+            if btree_sectors * 4 < bitmap_sectors {
+                write!(msg, "{} has ", ca.name().to_str().unwrap_or("?"));
+                msg.human_readable_u64(btree_sectors << 9);
+                write!(msg, " btree buckets and ");
+                msg.human_readable_u64(bitmap_sectors << 9);
+                write!(msg, " marked in bitmap\n");
+                want_schedule = true;
+            }
+        }
+
+        if want_schedule {
+            // Ignored, as C ignored it
+            let _ = passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_btree_bitmap_gc,
+                                         c::bch_run_recovery_pass_flags::RUN_RECOVERY_PASS_ratelimit);
+        }
+
+        fs.maybe_schedule_btree_bitmap_gc.queue(system_long_wq(), nsecs_to_jiffies(24 * 60 * 60 * NSEC_PER_SEC));
+    }
+}
+
+/// Going rw: the check now, and daily after.
+#[c_export]
+pub fn bch2_maybe_schedule_btree_bitmap_gc(c: &Opaque<c::bch_fs>) {
+    BtreeBitmapGcSchedule::run(Fs::from_c(c));
+}
+
+#[c_export]
+pub fn bch2_maybe_schedule_btree_bitmap_gc_stop(c: &Opaque<c::bch_fs>) {
+    Fs::from_c(c).maybe_schedule_btree_bitmap_gc.cancel_sync();
 }
 
 // ---------------------------------------------------------------------------

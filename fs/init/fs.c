@@ -372,7 +372,6 @@ static void __bch2_fs_read_only(struct bch_fs *c)
 	bch2_copygc_stop(c);
 	bch2_btree_write_buffer_stop(c);
 	bch2_fs_ec_flush(c);
-	cancel_delayed_work_sync(&c->maybe_schedule_btree_bitmap_gc);
 
 	bch_verbose(c, "flushing journal and stopping allocators, journal seq %llu",
 		    journal_cur_seq(&c->journal));

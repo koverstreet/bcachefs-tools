@@ -623,7 +623,10 @@ pub struct Fs {
      */
     pub inode_shard_cpu: [u16; 256],
 
-    pub maybe_schedule_btree_bitmap_gc: c::delayed_work,
+    #[c("struct delayed_work maybe_schedule_btree_bitmap_gc")]
+    #[pin]
+    #[init(crate::sb::members::BtreeBitmapGcSchedule::init())]
+    pub maybe_schedule_btree_bitmap_gc: crate::util::workqueue::DelayedWork,
 
     pub counters: c::bch_fs_counters,
     pub times: [c::bch2_time_stats; c::BCH_TIME_STAT_NR as usize],

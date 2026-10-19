@@ -430,9 +430,6 @@ static inline bool bch2_dev_btree_bitmap_marked_sectors_any(struct bch_dev *ca, 
 
 #include "sb/members_defs_gen.h"
 
-void bch2_maybe_schedule_btree_bitmap_gc_stop(struct bch_fs *);
-void bch2_maybe_schedule_btree_bitmap_gc(struct bch_fs *);
-
 static inline void bch2_prt_member_name(struct printbuf *out, struct bch_fs *c, unsigned idx)
 {
 	if (idx == BCH_SB_MEMBER_INVALID) {
