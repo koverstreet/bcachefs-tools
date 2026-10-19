@@ -95,6 +95,7 @@ c_extern! {
                                    delay: c_ulong) -> bool;
     pub fn bch2_cancel_delayed_work_sync(dwork: *mut c::delayed_work) -> bool;
     pub fn bch2_system_long_wq() -> *mut c::workqueue_struct;
+    pub fn bch2_system_dfl_wq() -> *mut c::workqueue_struct;
     pub fn bch2_capable(cap: c_int) -> bool;
     pub fn bch2_sysfs_create_file(kobj: *mut c::kobject, attr: *const c::attribute) -> c_int;
     #[cfg(__KERNEL__)]

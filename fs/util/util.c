@@ -1530,6 +1530,11 @@ struct workqueue_struct *bch2_system_long_wq(void)
 	return system_long_wq;
 }
 
+struct workqueue_struct *bch2_system_dfl_wq(void)
+{
+	return system_dfl_wq;
+}
+
 /* capable() is a function in the kernel, a macro (true) in userspace's blkdev.h */
 bool bch2_capable(int cap)
 {

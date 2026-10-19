@@ -83,3 +83,8 @@ impl DelayedWork {
 pub fn system_long_wq() -> *mut c::workqueue_struct {
     unsafe { c::bch2_system_long_wq() }
 }
+
+/// system_dfl_wq: the default, unbound - system_unbound_wq before 6.17.
+pub fn system_dfl_wq() -> *mut c::workqueue_struct {
+    unsafe { c::bch2_system_dfl_wq() }
+}
