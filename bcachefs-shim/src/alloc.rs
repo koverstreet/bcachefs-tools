@@ -57,6 +57,17 @@ impl<T> KVVec<T> {
         Ok(())
     }
 
+    /// @n clones of @value.
+    pub fn from_elem(value: T, n: usize, _flags: Flags) -> Result<Self, AllocError>
+    where
+        T: Clone,
+    {
+        let mut v = Vec::new();
+        v.try_reserve(n).map_err(|_| AllocError)?;
+        v.resize(n, value);
+        Ok(KVVec(v))
+    }
+
     pub fn clear(&mut self) {
         self.0.clear()
     }
