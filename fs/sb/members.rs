@@ -498,8 +498,7 @@ fn failure_domain_to_text(out: &mut Printbuf, m: &c::bch_member) {
 
 fn has_data_to_text(out: &mut Printbuf, sb: &c::bch_sb, idx: u32) {
     write!(out, "Has data:\t");
-    // SAFETY: validated
-    data_types_to_text(out, unsafe { c::bch2_sb_dev_has_data(sb.as_ffi() as *mut _, idx) }.into());
+    data_types_to_text(out, sb.dev_has_data(idx).into());
     out.newline();
 }
 
@@ -1475,10 +1474,6 @@ impl c::bch_dev {
         unsafe { Fs::borrow_raw(self.fs) }
     }
 
-    fn as_ptr(&self) -> *mut c::bch_dev {
-        core::ptr::from_ref(self).cast_mut()
-    }
-
     /// ca->mi made @mi: see "In memory" above.
     fn set_mi(&self, _sb: &SbLockGuard, mi: c::bch_member_cpu) {
         // SAFETY: sb_lock, held, is ca->mi's writers' lock; its readers take
@@ -1585,9 +1580,10 @@ impl c::bch_dev {
         unsafe { self.io_ref[rw].to_text(out, names) }
     }
 
-    /// The data types with data on it: a mask of bch_data_types.
+    /// The data types with data on it, by the superblock's replicas: a mask
+    /// of bch_data_types.
     pub fn has_data(&self) -> u32 {
-        unsafe { c::bch2_dev_has_data(self.fs, self.as_ptr()) }
+        self.fs().sb_lock().sb().dev_has_data(self.dev_idx.into())
     }
 
     /// A ref on it - bch2_dev_get(): the device is alive, being in hand, so

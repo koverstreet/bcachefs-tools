@@ -43,6 +43,7 @@ const __LOG_PREFIX: &[u8] = b"bcachefs\0";
 pub mod alloc {
     pub mod buckets;
     pub mod disk_groups;
+    pub mod replicas;
 }
 pub mod btree;
 pub mod debug {

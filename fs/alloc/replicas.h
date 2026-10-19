@@ -6,24 +6,13 @@
 #include "alloc/replicas_gen.h"
 #include "util/eytzinger.h"
 
-void bch2_replicas_entry_sort(struct bch_replicas_entry_v1 *);
-void bch2_replicas_entry_to_text(struct printbuf *,
-				 struct bch_replicas_entry_v1 *);
-int bch2_replicas_entry_validate(struct bch_replicas_entry_v1 *,
-				 struct bch_fs *, struct printbuf *);
 void bch2_cpu_replicas_to_text(struct printbuf *, struct bch_replicas_cpu *);
-
-void bch2_devlist_to_replicas(struct bch_replicas_entry_v1 *,
-			      enum bch_data_type,
-			      struct bch_devs_list);
 
 bool bch2_replicas_marked_locked(struct bch_fs *,
 			  struct bch_replicas_entry_v1 *);
 bool bch2_replicas_marked(struct bch_fs *, struct bch_replicas_entry_v1 *);
 int bch2_mark_replicas(struct bch_fs *,
 		       struct bch_replicas_entry_v1 *);
-
-void bch2_bkey_to_replicas(const struct bch_fs *, struct bch_replicas_entry_v1 *, struct bkey_s_c);
 
 static inline void bch2_replicas_entry_cached(struct bch_replicas_entry_v1 *e,
 					      unsigned dev)
@@ -34,19 +23,9 @@ static inline void bch2_replicas_entry_cached(struct bch_replicas_entry_v1 *e,
 	e->devs[0]	= dev;
 }
 
-bool bch2_can_read_replicas_with_devs(struct bch_fs *, struct bch_devs_mask *,
-				      struct bch_replicas_entry_v1 *,
-				      unsigned, struct printbuf *);
 bool bch2_can_read_fs_with_devs(struct bch_fs *, struct bch_devs_mask *,
 				unsigned, struct printbuf *);
 #include "alloc/replicas_defs_gen.h"
-
-bool bch2_can_write_fs_with_devs(struct bch_fs *, struct bch_devs_mask,
-				 enum bch_write_check, unsigned, struct printbuf *);
-
-bool bch2_sb_has_journal(struct bch_sb *);
-unsigned bch2_sb_dev_has_data(struct bch_sb *, unsigned);
-unsigned bch2_dev_has_data(struct bch_fs *, struct bch_dev *);
 
 void bch2_replicas_entry_put_many(struct bch_fs *, struct bch_replicas_entry_v1 *, unsigned);
 static inline void bch2_replicas_entry_put(struct bch_fs *c, struct bch_replicas_entry_v1 *r)

@@ -39,8 +39,6 @@ c_default!(bch_replicas_padded);
 
 c_extern! {
     pub fn bch2_cpu_replicas_to_text(out: *mut c::printbuf, r: *mut c::bch_replicas_cpu);
-    pub fn bch2_dev_has_data(c: *mut c::bch_fs, ca: *mut c::bch_dev) -> c_uint;
-    pub fn bch2_sb_dev_has_data(sb: *mut Head<c::bch_sb>, dev: c_uint) -> c_uint;
 }
 
 impl ToText for bch_replicas_cpu {

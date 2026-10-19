@@ -67,11 +67,6 @@ static void verify_replicas_entry(struct bch_replicas_entry_v1 *e)
 #endif
 }
 
-void bch2_replicas_entry_sort(struct bch_replicas_entry_v1 *e)
-{
-	bubble_sort(e->devs, e->nr_devs, u8_cmp);
-}
-
 static void bch2_cpu_replicas_sort(struct bch_replicas_cpu *r)
 {
 	eytzinger0_sort_r(r->entries, r->nr, r->entry_size,
@@ -79,86 +74,11 @@ static void bch2_cpu_replicas_sort(struct bch_replicas_cpu *r)
 			  (void *)(size_t)r->entry_size);
 }
 
-static __cold void bch2_replicas_entry_v0_to_text(struct printbuf *out,
-					   struct bch_replicas_entry_v0 *e)
-{
-	bch2_prt_data_type(out, e->data_type);
-
-	prt_printf(out, ": %u [", e->nr_devs);
-	for (unsigned i = 0; i < e->nr_devs; i++)
-		prt_printf(out, i ? " %u" : "%u", e->devs[i]);
-	prt_printf(out, "]");
-}
-
-__cold void bch2_replicas_entry_to_text(struct printbuf *out,
-				 struct bch_replicas_entry_v1 *e)
-{
-	bch2_prt_data_type(out, e->data_type);
-
-	prt_printf(out, ": %u/%u [", e->nr_required, e->nr_devs);
-	for (unsigned i = 0; i < e->nr_devs; i++)
-		prt_printf(out, i ? " %u" : "%u", e->devs[i]);
-	prt_printf(out, "]");
-}
-
 static __cold void bch2_replicas_entry_cpu_to_text(struct printbuf *out,
 					    struct bch_replicas_entry_cpu *e)
 {
 	prt_printf(out, "ref=%u ", atomic_read(&e->ref));
 	bch2_replicas_entry_to_text(out, &e->e);
-}
-
-__printf(3, 4)
-static int replicas_entry_invalid(struct bch_replicas_entry_v1 *r,
-				  struct printbuf *err,
-				  const char *fmt, ...)
-{
-	va_list args;
-	va_start(args, fmt);
-	prt_vprintf(err, fmt, args);
-	va_end(args);
-
-	prt_str(err, " in entry ");
-	bch2_replicas_entry_to_text(err, r);
-	return -BCH_ERR_invalid_replicas_entry;
-}
-
-static int bch2_replicas_entry_sb_validate(struct bch_replicas_entry_v1 *r,
-					   struct bch_sb *sb,
-					   struct printbuf *err)
-{
-	if (!r->nr_devs)
-		return replicas_entry_invalid(r, err, "no devices");
-
-	if (r->nr_required > 1 &&
-	    r->nr_required >= r->nr_devs)
-		return replicas_entry_invalid(r, err, "bad nr_required");
-
-	for (unsigned i = 0; i < r->nr_devs; i++)
-		if (r->devs[i] != BCH_SB_MEMBER_INVALID &&
-		    !bch2_member_exists(sb, r->devs[i]))
-			return replicas_entry_invalid(r, err, "invalid device %u", r->devs[i]);
-
-	return 0;
-}
-
-int bch2_replicas_entry_validate(struct bch_replicas_entry_v1 *r,
-				 struct bch_fs *c,
-				 struct printbuf *err)
-{
-	if (!r->nr_devs)
-		return replicas_entry_invalid(r, err, "no devices");
-
-	if (r->nr_required > 1 &&
-	    r->nr_required >= r->nr_devs)
-		return replicas_entry_invalid(r, err, "bad nr_required");
-
-	for (unsigned i = 0; i < r->nr_devs; i++)
-		if (r->devs[i] != BCH_SB_MEMBER_INVALID &&
-		    !bch2_dev_exists(c, r->devs[i]))
-			return replicas_entry_invalid(r, err, "invalid device %u", r->devs[i]);
-
-	return 0;
 }
 
 __cold void bch2_cpu_replicas_to_text(struct printbuf *out,
@@ -173,83 +93,6 @@ __cold void bch2_cpu_replicas_to_text(struct printbuf *out,
 
 		bch2_replicas_entry_cpu_to_text(out, i);
 	}
-}
-
-static void extent_to_replicas(const struct bch_fs *c, struct bkey_s_c k,
-			       struct bch_replicas_entry_v1 *r)
-{
-	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
-	const union bch_extent_entry *entry;
-	struct extent_ptr_decoded p;
-
-	r->nr_required	= 1;
-
-	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
-		if (p.ptr.cached)
-			continue;
-
-		if (!p.has_ec)
-			replicas_entry_add_dev(r, p.ptr.dev);
-		else
-			r->nr_required = 0;
-	}
-}
-
-static void stripe_to_replicas(struct bkey_s_c k,
-			       struct bch_replicas_entry_v1 *r)
-{
-	struct bkey_s_c_stripe s = bkey_s_c_to_stripe(k);
-	const struct bch_extent_ptr *ptr;
-
-	r->nr_required	= s.v->nr_blocks - s.v->nr_redundant;
-
-	for (ptr = s.v->ptrs;
-	     ptr < s.v->ptrs + s.v->nr_blocks;
-	     ptr++)
-		replicas_entry_add_dev(r, ptr->dev);
-}
-
-void bch2_bkey_to_replicas(const struct bch_fs *c, struct bch_replicas_entry_v1 *e,
-			   struct bkey_s_c k)
-{
-	e->nr_devs = 0;
-
-	switch (k.k->type) {
-	case KEY_TYPE_btree_ptr:
-	case KEY_TYPE_btree_ptr_v2:
-		e->data_type = BCH_DATA_btree;
-		extent_to_replicas(c, k, e);
-		break;
-	case KEY_TYPE_extent:
-	case KEY_TYPE_reflink_v:
-		e->data_type = BCH_DATA_user;
-		extent_to_replicas(c, k, e);
-		break;
-	case KEY_TYPE_stripe:
-		e->data_type = BCH_DATA_parity;
-		stripe_to_replicas(k, e);
-		break;
-	}
-
-	bch2_replicas_entry_sort(e);
-}
-
-void bch2_devlist_to_replicas(struct bch_replicas_entry_v1 *e,
-			      enum bch_data_type data_type,
-			      struct bch_devs_list devs)
-{
-	BUG_ON(!data_type ||
-	       data_type == BCH_DATA_sb ||
-	       data_type >= BCH_DATA_NR);
-
-	e->data_type	= data_type;
-	e->nr_devs	= 0;
-	e->nr_required	= 1;
-
-	darray_for_each(devs, i)
-		replicas_entry_add_dev(e, *i);
-
-	bch2_replicas_entry_sort(e);
 }
 
 /* @l is bch_replicas_entry_v1, @r is bch_replicas_entry_cpu */
@@ -867,51 +710,6 @@ const struct bch_sb_field_ops bch_sb_field_ops_replicas_v0 = {
 
 /* Query replicas: */
 
-bool bch2_can_read_replicas_with_devs(struct bch_fs *c, struct bch_devs_mask *devs,
-				      struct bch_replicas_entry_v1 *e,
-				      unsigned flags, struct printbuf *err)
-{
-	unsigned nr_online = 0, nr_invalid = 0, dflags = 0;
-	bool metadata = e->data_type < BCH_DATA_user;
-
-	if (e->data_type == BCH_DATA_cached)
-		return true;
-
-	for (unsigned i = 0; i < e->nr_devs; i++) {
-		if (e->devs[i] == BCH_SB_MEMBER_INVALID) {
-			nr_invalid++;
-			continue;
-		}
-
-		nr_online += test_bit(e->devs[i], devs->d);
-	}
-
-	if (nr_invalid == e->nr_devs)
-		return true;
-
-	if (nr_online < e->nr_required)
-		dflags |= metadata
-			? BCH_FORCE_IF_METADATA_LOST
-			: BCH_FORCE_IF_DATA_LOST;
-
-	if (nr_online + nr_invalid < e->nr_devs)
-		dflags |= metadata
-			? BCH_FORCE_IF_METADATA_DEGRADED
-			: BCH_FORCE_IF_DATA_DEGRADED;
-
-	if (dflags & ~flags) {
-		if (err) {
-			prt_printf(err, "insufficient devices online (%u) for replicas entry ",
-				   nr_online);
-			bch2_replicas_entry_to_text(err, e);
-			prt_newline(err);
-		}
-		return false;
-	}
-
-	return true;
-}
-
 bool bch2_can_read_fs_with_devs(struct bch_fs *c, struct bch_devs_mask *devs,
 				unsigned flags, struct printbuf *err)
 {
@@ -925,140 +723,6 @@ bool bch2_can_read_fs_with_devs(struct bch_fs *c, struct bch_devs_mask *devs,
 	}
 
 	return true;
-}
-
-/*
- * @devs: the rw devices we'd be writing with - at start, the rw set; for a
- * device leaving rw, the rw set without it
- */
-bool bch2_can_write_fs_with_devs(struct bch_fs *c, struct bch_devs_mask devs,
-				 enum bch_write_check check,
-				 unsigned flags, struct printbuf *err)
-{
-	unsigned nr_have[BCH_DATA_NR];
-	memset(nr_have, 0, sizeof(nr_have));
-
-	unsigned nr_online[BCH_DATA_NR];
-	memset(nr_online, 0, sizeof(nr_online));
-
-	/* nr_have: what the rw set has now; nr_online: what @devs would have */
-	scoped_guard(rcu)
-		for_each_member_device_rcu(c, ca, &c->allocator.rw_devs[0]) {
-			if (!ca->mi.durability)
-				continue;
-
-			bool online = test_bit(ca->dev_idx, devs.d);
-			for (unsigned i = 0; i < BCH_DATA_NR; i++) {
-				nr_have[i] += ca->mi.data_allowed & BIT(i) ? ca->mi.durability : 0;
-
-				if (online)
-					nr_online[i] += ca->mi.data_allowed & BIT(i) ? ca->mi.durability : 0;
-			}
-		}
-
-	if (!nr_online[BCH_DATA_journal]) {
-		prt_printf(err, "No rw journal devices online\n");
-		return false;
-	}
-
-	if (!nr_online[BCH_DATA_btree]) {
-		prt_printf(err, "No rw btree devices online\n");
-		return false;
-	}
-
-	if (!nr_online[BCH_DATA_user]) {
-		prt_printf(err, "No rw user data devices online\n");
-		return false;
-	}
-
-	if (check == BCH_WRITE_CHECK_start)
-		return true;
-
-	if (!(flags & BCH_FORCE_IF_METADATA_DEGRADED)) {
-		if (nr_online[BCH_DATA_journal] < nr_have[BCH_DATA_journal] &&
-		    nr_online[BCH_DATA_journal] < bch2_journal_replicas(c)) {
-			prt_printf(err, "Insufficient rw journal devices (%u < %u) online\n",
-				   nr_online[BCH_DATA_journal], bch2_journal_replicas(c));
-			return false;
-		}
-
-		if (nr_online[BCH_DATA_btree] < nr_have[BCH_DATA_btree] &&
-		    nr_online[BCH_DATA_btree] < c->opts.metadata_replicas) {
-			prt_printf(err, "Insufficient rw btree devices (%u < %u) online\n",
-				   nr_online[BCH_DATA_btree], c->opts.metadata_replicas);
-			return false;
-		}
-	}
-
-	if (!(flags & BCH_FORCE_IF_DATA_DEGRADED)) {
-		if (nr_online[BCH_DATA_user] < nr_have[BCH_DATA_user] &&
-		    nr_online[BCH_DATA_user] < c->opts.data_replicas) {
-			prt_printf(err, "Insufficient rw user data devices (%u < %u) online\n",
-				   nr_online[BCH_DATA_user], c->opts.data_replicas);
-			return false;
-		}
-	}
-
-	return true;
-}
-
-bool bch2_sb_has_journal(struct bch_sb *sb)
-{
-	struct bch_sb_field_replicas *replicas = bch2_sb_field_get(sb, replicas);
-	struct bch_sb_field_replicas_v0 *replicas_v0 = bch2_sb_field_get(sb, replicas_v0);
-
-	if (replicas) {
-		for_each_replicas_entry(replicas, r)
-			if (r->data_type == BCH_DATA_journal)
-				return true;
-	} else if (replicas_v0) {
-		for_each_replicas_entry(replicas_v0, r)
-			if (r->data_type == BCH_DATA_journal)
-				return true;
-	}
-
-
-	return false;
-}
-
-unsigned bch2_sb_dev_has_data(struct bch_sb *sb, unsigned dev)
-{
-	struct bch_sb_field_replicas *replicas;
-	struct bch_sb_field_replicas_v0 *replicas_v0;
-	unsigned data_has = 0;
-
-	replicas = bch2_sb_field_get(sb, replicas);
-	replicas_v0 = bch2_sb_field_get(sb, replicas_v0);
-
-	if (replicas) {
-		for_each_replicas_entry(replicas, r) {
-			if (r->data_type >= sizeof(data_has) * 8)
-				continue;
-
-			for (unsigned i = 0; i < r->nr_devs; i++)
-				if (r->devs[i] == dev)
-					data_has |= 1 << r->data_type;
-		}
-
-	} else if (replicas_v0) {
-		for_each_replicas_entry(replicas_v0, r) {
-			if (r->data_type >= sizeof(data_has) * 8)
-				continue;
-
-			for (unsigned i = 0; i < r->nr_devs; i++)
-				if (r->devs[i] == dev)
-					data_has |= 1 << r->data_type;
-		}
-	}
-
-
-	return data_has;
-}
-
-unsigned bch2_dev_has_data(struct bch_fs *c, struct bch_dev *ca)
-{
-	guard(mutex_noio)(&c->sb_lock);
-	return bch2_sb_dev_has_data(c->disk_sb.sb, ca->dev_idx);
 }
 
 void bch2_verify_replicas_refs_clean(struct bch_fs *c)

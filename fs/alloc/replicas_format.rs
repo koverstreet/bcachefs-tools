@@ -6,6 +6,7 @@ use crate::cstructs::c;
 use crate::util::vstructs::{vstruct, Head};
 use cstruct_macros::{counted, unsized_vstruct, CStruct, Plain, TypeInfo};
 
+#[counted(nr_devs)]
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_replicas_entry_v0 {
@@ -21,7 +22,7 @@ pub struct bch_replicas_entry_v0 {
 #[c_packed]
 pub struct bch_sb_field_replicas_v0 {
     pub field: Head<c::bch_sb_field>,
-    pub entries: [c::bch_replicas_entry_v0; 0],
+    pub entries: [Head<c::bch_replicas_entry_v0>; 0],
 }
 vstruct!(unsized bch_sb_field_replicas_v0, field.u64s, start = 0);
 
