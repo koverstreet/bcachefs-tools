@@ -1756,6 +1756,21 @@ impl<'t> BtreeIter<'t> {
         }
     }
 
+    /// btree_iter_path()->l[0]: None with no node there.
+    ///
+    /// # Safety
+    /// The transaction doesn't unlock while it's used - the borrow of @t
+    /// doesn't see to that, as unlock() takes &self.
+    pub unsafe fn leaf<'a>(&self, t: &'a TransAttempt<'_, 't>) -> Option<PathLeaf<'a>> {
+        unsafe {
+            let path = (*t.raw()).paths.add(self.path as usize);
+            let l = &raw mut (*path).l[0];
+            // NULL, or an error pointer
+            errptr_to_result((*l).b).ok().filter(|b| !b.is_null())?;
+            Some(PathLeaf { l, _trans: PhantomData })
+        }
+    }
+
     pub fn pos(&self) -> c::bpos {
         self.pos
     }
@@ -2483,6 +2498,26 @@ impl c::btree {
                 return ControlFlow::Break(());
             }
             unsafe { c::bch2_btree_node_iter_advance(&mut node_iter, b) };
+        }
+    }
+}
+
+pub struct PathLeaf<'a> {
+    l:      *mut c::btree_path_level,
+    _trans: PhantomData<&'a ()>,
+}
+
+impl<'a> PathLeaf<'a> {
+    pub fn node(&self) -> &'a c::btree {
+        unsafe { &*(*self.l).b }
+    }
+
+    /// Where the bset search tree failed at the path's key, if it did:
+    /// bch2_bfloat_to_text(). Peeks the node iterator, moving it past deleted
+    /// keys.
+    pub fn bfloat_to_text(&self, out: &mut Printbuf) {
+        unsafe {
+            c::bch2_btree_node_iter_bfloat_to_text(out.as_raw(), (*self.l).b, &raw mut (*self.l).iter)
         }
     }
 }

@@ -1805,3 +1805,13 @@ __cold void bch2_bfloat_to_text(struct printbuf *out, struct btree *b,
 		break;
 	}
 }
+
+/* For Rust, which doesn't see a packed key: that of the key @iter is at. */
+__cold void bch2_btree_node_iter_bfloat_to_text(struct printbuf *out, struct btree *b,
+						struct btree_node_iter *iter)
+{
+	struct bkey_packed *k = bch2_btree_node_iter_peek(iter, b);
+
+	if (k)
+		bch2_bfloat_to_text(out, b, k);
+}
