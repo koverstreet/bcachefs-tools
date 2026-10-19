@@ -1545,6 +1545,19 @@ void **bch2_rht_bucket(const struct bucket_table *tbl, unsigned hash)
 	return (void **) rht_bucket(tbl, hash);
 }
 
+/* For util/debugfs.rs: copy_to_user() is a static inline in either build */
+unsigned long bch2_copy_to_user(void __user *to, const void *from, unsigned long n)
+{
+	return copy_to_user(to, (void *) from, n);
+}
+
+/* ...and debugfs_create_file(), in the kernel, a _Generic() over its fops' type */
+struct dentry *bch2_debugfs_create_file(const char *name, umode_t mode, struct dentry *parent,
+					void *data, const struct file_operations *fops)
+{
+	return debugfs_create_file(name, mode, parent, data, fops);
+}
+
 #ifdef __KERNEL__
 #include <linux/cpumask.h>
 #include <linux/numa.h>

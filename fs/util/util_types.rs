@@ -66,6 +66,9 @@ c_extern! {
     pub fn bch2_rht_table(ht: *const c::rhashtable) -> *const c::bucket_table;
     pub fn bch2_rht_nr_buckets(tbl: *const c::bucket_table) -> c_uint;
     pub fn bch2_rht_bucket(tbl: *const c::bucket_table, hash: c_uint) -> *mut *mut c_void;
+    pub fn bch2_copy_to_user(to: *mut c_void, from: *const c_void, n: c_ulong) -> c_ulong;
+    pub fn bch2_debugfs_create_file(name: *const c_char, mode: c::umode_t, parent: *mut c::dentry,
+                                    data: *mut c_void, fops: *const c::file_operations) -> *mut c::dentry;
     pub fn bch2_strtoull_h(cp: *const c_char, res: *mut c_ulonglong) -> c_int;
     pub fn bch2_read_flag_list(opt: *const c_char, list: *const *const c_char) -> u64;
     pub fn bch2_get_random_u64_below(ceil: u64) -> u64;

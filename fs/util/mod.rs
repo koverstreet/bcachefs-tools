@@ -3,6 +3,8 @@ pub mod async_exec;
 pub mod bitmap;
 pub mod closure;
 pub mod darray;
+#[cfg(CONFIG_DEBUG_FS)]
+pub mod debugfs;
 pub mod eytzinger;
 pub mod ffi;
 pub mod genradix;
