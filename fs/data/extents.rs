@@ -61,6 +61,13 @@ impl c::bkey {
                      t::KEY_TYPE_inline_data | t::KEY_TYPE_indirect_inline_data | t::KEY_TYPE_reflink_p)
     }
 
+    /// Whether it's a file's data in the extents btree, not through a
+    /// reflink_p: bkey_is_user_data().
+    pub fn is_user_data(&self) -> bool {
+        use c::bch_bkey_type as t;
+        matches!(self.key_type(), t::KEY_TYPE_extent | t::KEY_TYPE_inline_data | t::KEY_TYPE_reservation)
+    }
+
     /// Whether its value is pointers to its data, and not to another key's.
     pub fn extent_is_direct_data(&self) -> bool {
         use c::bch_bkey_type as t;
