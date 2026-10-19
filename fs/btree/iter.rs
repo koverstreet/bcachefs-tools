@@ -1771,6 +1771,34 @@ pub(crate) unsafe fn polonius_key<'i, V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> 
     BkeySC { k: unsafe { &*(k.k as *const c::bkey) }, v: k.v, iter: PhantomData, val: PhantomData }
 }
 
+/// Btrees walked in parallel, by position: each of @iters peeked from where it
+/// is, and the positions they're at compared - each as @to_walk has it, for a
+/// btree the walk keys apart from the others - giving where the walk is, the
+/// least of them, and each iterator with its key there: None for one that's
+/// ahead. The keys are borrowed from their iterators, shared, as the
+/// iterators are from here.
+pub fn peek_parallel<'k, 't, const N: usize>(
+    _t:      &'k TransAttempt<'_, 't>,
+    mut iters: [&'k mut BtreeIter<'t>; N],
+    to_walk:   impl Fn(usize, &BtreeIter<'t>) -> bpos,
+) -> Result<(bpos, [(&'k BtreeIter<'t>, Option<BkeySC<'k>>); N]), BchError>
+{
+    // Stop at the first error: it may be a restart, and nothing may peek in a
+    // transaction that's restarting
+    let mut keys: [Option<BkeySC<'k>>; N] = [None; N];
+    for (iter, k) in iters.iter_mut().zip(&mut keys) {
+        // SAFETY: the key, valid while the iterator's borrowed - shared, from
+        // here, within the attempt
+        *k = unsafe { bkey_s_c_to_result::<'k>(c::bch2_btree_iter_peek_max(iter.raw_mut(), &SPOS_MAX)) }?;
+    }
+    let iters = iters.map(|iter| -> &'k BtreeIter<'t> { iter });
+
+    let pos: [bpos; N] = core::array::from_fn(|i| to_walk(i, iters[i]));
+    let at = pos.iter().copied().reduce(bpos_min).expect("an iterator to walk");
+
+    Ok((at, core::array::from_fn(|i| (iters[i], if bpos_lt(at, pos[i]) { None } else { keys[i] }))))
+}
+
 /// A key C returned - a peek, a lookup - or its error.
 ///
 /// # Safety
