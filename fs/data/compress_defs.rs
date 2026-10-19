@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::fs::Fs;
 use crate::types::c_default;
 use core::ffi::{c_int, c_void};
 use cstruct_macros::{bitfield, c_enum, CStruct, TypeInfo};
@@ -38,6 +39,26 @@ impl bch_compression_opt {
 
         (bits.type_() as u32) < c::bch_compression_opts::BCH_COMPRESSION_OPT_NR.0 &&
             !(bits.type_() == 0 && bits.level() != 0)
+    }
+
+    /// The compression type @v writes: bch2_compression_opt_to_type(). An
+    /// unknown type is none - options are validated, so that's warned about.
+    pub fn to_type(v: u8, fs: &Fs) -> c::bch_compression_type {
+        use c::bch_compression_opts as o;
+        use c::bch_compression_type as t;
+        // SAFETY: every bit pattern is a value of both
+        let bits = unsafe { bch_compression_opt { value: v }.fields.bits };
+
+        match o(bits.type_().into()) {
+            o::BCH_COMPRESSION_OPT_none => t::BCH_COMPRESSION_TYPE_none,
+            o::BCH_COMPRESSION_OPT_lz4  => t::BCH_COMPRESSION_TYPE_lz4,
+            o::BCH_COMPRESSION_OPT_gzip => t::BCH_COMPRESSION_TYPE_gzip,
+            o::BCH_COMPRESSION_OPT_zstd => t::BCH_COMPRESSION_TYPE_zstd,
+            _ => {
+                crate::warn_once!(true, fs, "unknown compression opt {v}");
+                t::BCH_COMPRESSION_TYPE_none
+            }
+        }
     }
 }
 

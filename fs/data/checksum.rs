@@ -72,6 +72,41 @@ impl c::bch_csum_type {
     }
 }
 
+impl c::bch_csum_opt {
+    /// The checksum type it writes, for data or metadata - metadata's crcs
+    /// are the nonzero variants: bch2_csum_opt_to_type(). An unknown opt is
+    /// an incompat feature, so warned about, and crc32c.
+    pub fn to_type(self, fs: &Fs, data: bool) -> c::bch_csum_type {
+        use c::bch_csum_opt as o;
+        use c::bch_csum_type as t;
+        match self {
+            o::BCH_CSUM_OPT_none   => t::BCH_CSUM_none,
+            o::BCH_CSUM_OPT_crc32c => if data { t::BCH_CSUM_crc32c } else { t::BCH_CSUM_crc32c_nonzero },
+            o::BCH_CSUM_OPT_crc64  => if data { t::BCH_CSUM_crc64 } else { t::BCH_CSUM_crc64_nonzero },
+            o::BCH_CSUM_OPT_xxhash => t::BCH_CSUM_xxhash,
+            _ => {
+                crate::warn_once!(true, fs, "unknown checksum opt {}", self.0);
+                if data { t::BCH_CSUM_crc32c } else { t::BCH_CSUM_crc32c_nonzero }
+            }
+        }
+    }
+}
+
+impl Fs {
+    /// The checksum type data reconciled to @r is written with - encrypted,
+    /// whatever @r says, on an encrypted filesystem: bch2_data_checksum_type_rb().
+    pub fn data_checksum_type_rb(&self, r: &c::bch_extent_reconcile) -> c::bch_csum_type {
+        if self.sb.encryption_type.get() != 0 {
+            return if self.opts().wide_macs != 0 {
+                c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128
+            } else {
+                c::bch_csum_type::BCH_CSUM_chacha20_poly1305_80
+            };
+        }
+        c::bch_csum_opt(r.data_checksum().into()).to_type(self, true)
+    }
+}
+
 /// Its name, from BCH_CSUM_TYPES(): bch2_prt_csum_type().
 impl fmt::Display for c::bch_csum_type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
