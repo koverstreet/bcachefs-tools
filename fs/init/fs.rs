@@ -3,13 +3,13 @@ use crate::btree::bkey::BkeyI;
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
-use crate::util::locking::MutexNoioGuard;
+use crate::util::locking::{CMutexGuard, NoioGuard};
 use crate::util::Printbuf;
 
 pub use crate::sb::members::DevRef;
 
 /// sb_lock held: the superblock, through it.
-pub type SbLockGuard<'a> = MutexNoioGuard<'a, c::bch_sb_handle>;
+pub type SbLockGuard<'a> = NoioGuard<CMutexGuard<'a, c::bch_sb_handle>>;
 
 impl SbLockGuard<'_> {
     /// Member @dev_idx, of an open filesystem's superblock - where every one
