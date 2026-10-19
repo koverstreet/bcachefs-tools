@@ -141,6 +141,15 @@ impl From<crate::util::alloc::AllocError> for BchError {
     }
 }
 
+/// The kernel crate's errors, a negative errno: from its APIs - uaccess's
+/// EFAULT, say.
+#[cfg(kernel)]
+impl From<kernel::error::Error> for BchError {
+    fn from(e: kernel::error::Error) -> BchError {
+        BchError(-e.to_errno())
+    }
+}
+
 pub fn ret_to_result(ret: c_int) -> Result<c_int, BchError> {
     if ret < 0 && ret > -4096 {
         Err(BchError(-ret))
