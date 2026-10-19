@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{DArray, c_default};
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{bitfield, CStruct, c_typedef};
+use cstruct_macros::{bitfield, CStruct, c_extern, c_typedef};
 use nestify::nest;
 
 nest! {
@@ -46,3 +46,8 @@ pub struct find_btree_nodes {
     pub nodes: c::darray_found_btree_node,
 }
 c_default!(find_btree_nodes);
+
+c_extern! {
+    pub fn bch2_found_btree_node_to_text(out: *mut c::printbuf, c: *mut c::bch_fs,
+                                         n: *const c::found_btree_node);
+}

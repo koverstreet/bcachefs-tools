@@ -22,4 +22,6 @@ c_typedef! {
 c_extern! {
     pub fn bch2_journal_flush_pins(j: *mut c::journal, seq_to_flush: u64) -> bool;
     pub fn bch2_journal_reclaim_to_text(out: *mut c::printbuf, j: *mut c::journal);
+    pub fn bch2_journal_seq_pins_to_text(out: *mut c::printbuf, j: *mut c::journal, seq: *mut u64,
+                                         pin_type: *mut c_uint) -> bool;
 }

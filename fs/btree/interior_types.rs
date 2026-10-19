@@ -73,6 +73,7 @@ pub struct bch_fs_btree_node_rewrites {
 c_default!(bch_fs_btree_node_rewrites);
 
 c_extern! {
+    pub fn bch2_btree_updates_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
     pub fn bch2_btree_node_update_key(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
                                       b: *mut c::btree, new_key: *mut c::bkey_i,
                                       commit_flags: c_uint, skip_triggers: bool) -> c_int;

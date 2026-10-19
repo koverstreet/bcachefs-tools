@@ -4,23 +4,14 @@
 
 #include "bcachefs.h"
 
+/* With CONFIG_DEBUG_FS, the debugfs entry points are debug.rs's, in here: */
 #include "debug/debug_gen.h"
 
-#ifdef CONFIG_DEBUG_FS
-
-ssize_t bch2_debugfs_flush_buf(struct dump_iter *);
-int bch2_dump_release(struct inode *, struct file *);
-
-void bch2_fs_debug_exit(struct bch_fs *);
-void bch2_fs_debug_init(struct bch_fs *);
-void bch2_debug_exit(void);
-int bch2_debug_init(void);
-#else
+#ifndef CONFIG_DEBUG_FS
 static inline void bch2_fs_debug_exit(struct bch_fs *c) {}
 static inline void bch2_fs_debug_init(struct bch_fs *c) {}
 static inline void bch2_debug_exit(void) {}
 static inline int bch2_debug_init(void) { return 0; }
 #endif
-
 
 #endif /* _BCACHEFS_DEBUG_H */

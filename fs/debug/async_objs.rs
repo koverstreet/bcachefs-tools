@@ -14,8 +14,6 @@ use core::ffi::CStr;
 use core::mem::{offset_of, size_of};
 use core::ptr::NonNull;
 
-use cstruct_macros::c_export;
-
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
@@ -76,18 +74,16 @@ macro_rules! list_names {
 }
 c::BCH_ASYNC_OBJ_LISTS!(list_names);
 
-/// fs_debug_dir/async_objs/, a file per list.
-#[c_export]
-pub fn bch2_fs_async_obj_debugfs_init(c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
-    let dir = debugfs::create_dir(c"async_objs", NonNull::new(fs.fs_debug_dir));
-    // SAFETY: bch2_fs_debug_init()'s, before anything reads it
+/// bch2_fs_debug_init()'s, in its directory @parent.
+pub(crate) fn debugfs_init(c: &Opaque<c::bch_fs>, parent: NonNull<c::dentry>) {
+    let dir = debugfs::create_dir(c"async_objs", Some(parent));
+    // SAFETY: filesystem init, before anything reads it
     unsafe { (*c.as_ptr()).async_obj_dir = dir.map_or(core::ptr::null_mut(), NonNull::as_ptr) };
 
     let Some(dir) = dir else { return };
+    let fs = Fs::from_c(c);
     for (list, name) in fs.async_objs.iter().zip(LIST_NAMES) {
-        // SAFETY: the filesystem's own list, which outlives its debugfs
-        // files: bch2_fs_debug_exit() removes them first
+        // SAFETY: bch2_fs_debug_exit() removes them first
         unsafe { debugfs::create_file::<AsyncObjList>(name, dir, list) };
     }
 }

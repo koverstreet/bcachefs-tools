@@ -24,7 +24,7 @@ use core::ptr::NonNull;
 use pin_init::{pin_data, pin_init};
 
 /// A debugfs file - the type is the file's cursor, Default at open.
-pub trait DebugFile: Default + 'static {
+pub trait DebugFile: Default + Unpin + 'static {
     /// What the file is of: what create_file() was given.
     type Obj;
 
@@ -191,5 +191,6 @@ pub unsafe fn create_file<F: DebugFile>(name: &CStr, parent: NonNull<c::dentry>,
 }
 
 pub fn remove_recursive(dir: NonNull<c::dentry>) {
-    unsafe { c::debugfs_remove_recursive(dir.as_ptr()) }
+    // debugfs_remove_recursive() is a macro for it, in-kernel
+    unsafe { c::debugfs_remove(dir.as_ptr()) }
 }

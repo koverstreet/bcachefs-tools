@@ -35,7 +35,6 @@ static inline int __async_object_list_add(void)
 }
 #define async_object_list_add(_c, _n, obj, idx)		__async_object_list_add()
 
-static inline void bch2_fs_async_obj_debugfs_init(struct bch_fs *c) {}
 static inline void bch2_fs_async_obj_exit(struct bch_fs *c) {}
 static inline int bch2_fs_async_obj_init(struct bch_fs *c) { return 0; }
 

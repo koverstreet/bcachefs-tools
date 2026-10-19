@@ -42,6 +42,8 @@ pub struct bch_fs_errors {
 c_default!(bch_fs_errors);
 
 c_extern! {
+    pub fn bch2_fsck_damaged_path_to_text(out: *mut c::printbuf, trans: *mut c::btree_trans,
+                                          p: *const c::fsck_damaged_path);
     pub fn bch2_inum_offset_err_msg_trans_norestart(trans: *mut c::btree_trans, out: *mut c::printbuf,
                                                     subvol: u32, pos: c::bpos) -> c_int;
     #[c_printf(2, 3)]

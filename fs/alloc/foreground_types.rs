@@ -152,6 +152,7 @@ c_extern! {
     pub fn bch2_alloc_wake_all(c: *mut c::bch_fs);
     pub fn bch2_open_buckets_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, ca: *mut c::bch_dev);
     pub fn bch2_open_buckets_partial_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
+    pub fn bch2_write_points_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
     pub fn bch2_fs_open_buckets_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
     pub fn bch2_fs_alloc_debug_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
     pub fn bch2_dev_alloc_debug_to_text(out: *mut c::printbuf, ca: *mut c::bch_dev);
