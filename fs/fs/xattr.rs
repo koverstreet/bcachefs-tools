@@ -336,11 +336,11 @@ pub fn set_key(
         .ok_or(BchError::from(c::ERANGE))?;
     value_mut(&mut k).copy_from_slice(value);
 
-    let mut iter_flags = BtreeIterFlags::empty();
-    iter_flags.set(BtreeIterFlags::STR_HASH_MUST_CREATE,  flags & XATTR_CREATE != 0);
-    iter_flags.set(BtreeIterFlags::STR_HASH_MUST_REPLACE, flags & XATTR_REPLACE != 0);
+    let mut set_flags = str_hash::SetFlags::empty();
+    set_flags.set(str_hash::SetFlags::MUST_CREATE,  flags & XATTR_CREATE != 0);
+    set_flags.set(str_hash::SetFlags::MUST_REPLACE, flags & XATTR_REPLACE != 0);
 
-    str_hash::set::<Xattrs>(t, hash_info, inum, &mut k, iter_flags,
+    str_hash::set::<Xattrs>(t, hash_info, inum, &mut k, set_flags,
                             UpdateTriggerFlags::empty())
 }
 

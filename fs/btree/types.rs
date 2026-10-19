@@ -379,13 +379,6 @@ c_xmacro! {
 }
 
 c_xmacro! {
-    STR_HASH_FLAGS(x) {
-        (must_create),
-        (must_replace),
-    }
-}
-
-c_xmacro! {
     BTREE_UPDATE_FLAGS(x) {
         (internal_snapshot_node),
         (nojournal),
@@ -434,7 +427,6 @@ c_enum! {
     #[closed]
     pub enum _: u32 {
         BTREE_ITER_FLAGS(n) => BTREE_ITER_FLAG_BIT_ ## n,
-        STR_HASH_FLAGS(n) => BTREE_ITER_FLAG_BIT_ ## n,
         BTREE_UPDATE_FLAGS(n) => BTREE_ITER_FLAG_BIT_ ## n,
         BTREE_TRIGGER_FLAGS(n) => BTREE_ITER_FLAG_BIT_ ## n,
     }
@@ -444,7 +436,6 @@ c_enum! {
     #[flags]
     pub enum btree_iter_update_trigger_flags: u32 {
         BTREE_ITER_FLAGS(n) => BTREE_ITER_ ## n = 1 << (cs::BTREE_ITER_FLAG_BIT_ ## n as u32),
-        STR_HASH_FLAGS(n) => STR_HASH_ ## n = 1 << (cs::BTREE_ITER_FLAG_BIT_ ## n as u32),
         BTREE_UPDATE_FLAGS(n) => BTREE_UPDATE_ ## n = 1 << (cs::BTREE_ITER_FLAG_BIT_ ## n as u32),
         BTREE_TRIGGER_FLAGS(n) => BTREE_TRIGGER_ ## n = 1 << (cs::BTREE_ITER_FLAG_BIT_ ## n as u32),
     }

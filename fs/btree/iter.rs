@@ -1457,17 +1457,13 @@ bitflags! {
         const CACHED_NOFILL = c::btree_iter_update_trigger_flags::BTREE_ITER_cached_nofill.bits();
         const KEY_CACHE_FILL = c::btree_iter_update_trigger_flags::BTREE_ITER_key_cache_fill.bits();
         const COMMITTED = c::btree_iter_update_trigger_flags::BTREE_ITER_committed.bits();
-        // For hash table inserts, which take them with the iterator flags:
-        const STR_HASH_MUST_CREATE = c::btree_iter_update_trigger_flags::STR_HASH_must_create.bits();
-        const STR_HASH_MUST_REPLACE = c::btree_iter_update_trigger_flags::STR_HASH_must_replace.bits();
     }
 }
 
 bitflags! {
     /// The BTREE_UPDATE_* and BTREE_TRIGGER_* half of C's
     /// btree_iter_update_trigger_flags: how an update commits, and which
-    /// triggers it runs. Apart from the iterator half because the str_hash
-    /// inserts take both.
+    /// triggers it runs.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct UpdateTriggerFlags: u32 {
         const INTERNAL_SNAPSHOT_NODE   = c::btree_iter_update_trigger_flags::BTREE_UPDATE_internal_snapshot_node.bits();

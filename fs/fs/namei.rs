@@ -237,7 +237,7 @@ pub fn create_trans(
         let mut dir_offset = 0;
         dirent::create_snapshot(t, dir.subvol as u32, dir_snapshot, dir_u, dir_type, name,
                                 dir_target, &mut dir_offset,
-                                BtreeIterFlags::STR_HASH_MUST_CREATE,
+                                str_hash::SetFlags::MUST_CREATE,
                                 UpdateTriggerFlags::empty())?;
         inode::write(t, &mut dir_iter, dir_u)?;
 
@@ -337,7 +337,7 @@ pub fn link_trans(
     dir_u.bi_ctime = now;
 
     dirent::create(t, dir, dir_u, mode_to_type(inode_u.bi_mode), name, inum.inum,
-                   &mut dir_offset, BtreeIterFlags::STR_HASH_MUST_CREATE,
+                   &mut dir_offset, str_hash::SetFlags::MUST_CREATE,
                    UpdateTriggerFlags::empty())?;
 
     inode_u.bi_dir        = dir.inum;

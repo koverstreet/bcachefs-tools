@@ -406,7 +406,7 @@ mod vfs {
 
         if let Some(acl) = acl {
             let mut k = acl.to_xattr(t, ty)?;
-            str_hash::set::<Xattrs>(t, &hash_info, inum, &mut k, BtreeIterFlags::empty(),
+            str_hash::set::<Xattrs>(t, &hash_info, inum, &mut k, str_hash::SetFlags::empty(),
                                     UpdateTriggerFlags::empty())?;
             inode.bi_flags |= ty.inode_flag().bits();
         } else {

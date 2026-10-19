@@ -33,8 +33,8 @@ use core::ops::ControlFlow;
 
 const LOSTFOUND: &[u8] = b"lost+found";
 
-const CREATE: (BtreeIterFlags, UpdateTriggerFlags) =
-    (BtreeIterFlags::STR_HASH_MUST_CREATE, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE);
+const CREATE: (str_hash::SetFlags, UpdateTriggerFlags) =
+    (str_hash::SetFlags::MUST_CREATE, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE);
 
 /// The inode lost+found names in @root at @snapshot. Not a directory is an
 /// error, not None: we'd fail to create one over it.

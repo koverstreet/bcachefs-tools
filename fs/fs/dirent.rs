@@ -264,7 +264,7 @@ pub fn create_snapshot(
     name:         &OsStr,
     target:       DirentTarget,
     dir_offset:   &mut u64,
-    iter_flags:   BtreeIterFlags,
+    set_flags:    str_hash::SetFlags,
     update_flags: UpdateTriggerFlags,
 ) -> Result<(), BchError> {
     let dir_inum = c::subvol_inum { subvol: subvol as u64, inum: dir.bi_inum };
@@ -278,7 +278,7 @@ pub fn create_snapshot(
 
     let mut k = create_key(t, &hash_info, dir_inum, d_type, name, None, target)?;
     let ret = str_hash::set_in_snapshot::<Dirents>(t, &hash_info, dir_inum, snapshot, &mut k,
-                                                   iter_flags, update_flags);
+                                                   set_flags, update_flags);
     *dir_offset = k.k().p.offset;
     ret
 }
@@ -295,13 +295,13 @@ pub fn create(
     name:         &OsStr,
     target:       u64,
     dir_offset:   &mut u64,
-    iter_flags:   BtreeIterFlags,
+    set_flags:    str_hash::SetFlags,
     update_flags: UpdateTriggerFlags,
 ) -> Result<(), BchError> {
     let hash_info = str_hash::hash_info_init(t.fs(), dir_u)?;
 
     let mut k = create_key(t, &hash_info, dir, d_type, name, None, target)?;
-    let ret = str_hash::set::<Dirents>(t, &hash_info, dir, &mut k, iter_flags, update_flags);
+    let ret = str_hash::set::<Dirents>(t, &hash_info, dir, &mut k, set_flags, update_flags);
     *dir_offset = k.k().p.offset;
     ret
 }

@@ -20,6 +20,7 @@ use crate::util::os_str::OsStrExt;
 use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;
 use crate::{fsck_err, fsck_err_on, inode_fsck_err, prt};
+use bitflags::bitflags;
 use core::ffi::{c_int, c_void};
 use cstruct_macros::c_export;
 
@@ -220,10 +221,22 @@ pub fn needs_whiteout<'t, T: HashTable>(
     Ok(found.is_some_and(|k| k.arm::<T::Val>().is_some()))
 }
 
-/// In inode @inum as seen in @snapshot. With STR_HASH_MUST_CREATE, a key of
-/// the same name already there is returned, through @iter, and nothing
-/// inserted; with STR_HASH_MUST_REPLACE, there must be one. None if it was
-/// inserted (queued).
+bitflags! {
+    /// What a set does about a key of the same name. Both, as xattrs'
+    /// XATTR_CREATE | XATTR_REPLACE may be: an error either way.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct SetFlags: u8 {
+        /// There mustn't be one: it's returned, and nothing inserted.
+        const MUST_CREATE  = 1 << 0;
+        /// There must be one, to replace.
+        const MUST_REPLACE = 1 << 1;
+    }
+}
+
+/// In inode @inum as seen in @snapshot. With SetFlags::MUST_CREATE, a key
+/// of the same name already there is returned, through @iter, and nothing
+/// inserted; with MUST_REPLACE, there must be one. None if it was inserted
+/// (queued).
 #[allow(clippy::too_many_arguments)]
 pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
     t:            &'i TransAttempt<'a, 't>,
@@ -232,15 +245,14 @@ pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
     inum:         c::subvol_inum,
     snapshot:     u32,
     insert:       &mut TransBkey<'_, 't, TableVal<T>>,
-    iter_flags:   BtreeIterFlags,
+    set_flags:    SetFlags,
     update_flags: UpdateTriggerFlags,
 ) -> Result<Option<TableKey<'i, T>>, BchError> {
     let fs = t.fs();
-    let flags = iter_flags.bits() | update_flags.bits();
-    let peek_flags = BtreeIterFlags::from_bits_retain(flags) |
+    let peek_flags = BtreeIterFlags::from_bits_retain(update_flags.bits()) |
         BtreeIterFlags::SLOTS | BtreeIterFlags::INTENT;
-    let must_create  = iter_flags.contains(BtreeIterFlags::STR_HASH_MUST_CREATE);
-    let must_replace = iter_flags.contains(BtreeIterFlags::STR_HASH_MUST_REPLACE);
+    let must_create  = set_flags.contains(SetFlags::MUST_CREATE);
+    let must_replace = set_flags.contains(SetFlags::MUST_REPLACE);
 
     let inode = insert.k().p.inode;
     let insert_k = insert.as_sc();
@@ -278,8 +290,7 @@ pub fn set_or_get_in_snapshot<'i, 'a, 't, T: HashTable>(
     }
 
     insert.k_mut().p = iter.pos();
-    // The iterator flags go along with the update's, as C passes them:
-    t.update(iter, insert, UpdateTriggerFlags::from_bits_retain(flags))?;
+    t.update(iter, insert, update_flags)?;
     Ok(None)
 }
 
@@ -291,12 +302,12 @@ pub fn set_in_snapshot<'t, T: HashTable>(
     inum:         c::subvol_inum,
     snapshot:     u32,
     insert:       &mut TransBkey<'_, 't, TableVal<T>>,
-    iter_flags:   BtreeIterFlags,
+    set_flags:    SetFlags,
     update_flags: UpdateTriggerFlags,
 ) -> Result<(), BchError> {
     let mut iter = BtreeIter::uninit();
     match set_or_get_in_snapshot::<T>(t, &mut iter, hash_info, inum, snapshot, insert,
-                                      iter_flags, update_flags)? {
+                                      set_flags, update_flags)? {
         Some(_) => Err(t.fs().err(bch_errcode::BCH_ERR_EEXIST_str_hash_set)),
         None    => Ok(()),
     }
@@ -308,13 +319,13 @@ pub fn set<'t, T: HashTable>(
     hash_info:    &c::bch_hash_info,
     inum:         c::subvol_inum,
     insert:       &mut TransBkey<'_, 't, TableVal<T>>,
-    iter_flags:   BtreeIterFlags,
+    set_flags:    SetFlags,
     update_flags: UpdateTriggerFlags,
 ) -> Result<(), BchError> {
     insert.k_mut().p.inode = inum.inum;
 
     let snapshot = subvolume::get_snapshot(t, inum.subvol as u32)?;
-    set_in_snapshot::<T>(t, hash_info, inum, snapshot, insert, iter_flags, update_flags)
+    set_in_snapshot::<T>(t, hash_info, inum, snapshot, insert, set_flags, update_flags)
 }
 
 /// Leaves a whiteout if a later key in the same probe sequence needs one.
@@ -672,7 +683,7 @@ impl Repair<'_> {
             let mut iter = BtreeIter::uninit();
             match set_or_get_in_snapshot::<Dirents>(t, &mut iter, self.hash_info, dir,
                                                     old.k.p.snapshot, &mut new,
-                                                    BtreeIterFlags::STR_HASH_MUST_CREATE,
+                                                    SetFlags::MUST_CREATE,
                                                     UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)? {
                 None => {
                     *self.updated_before_k_pos |= new.k().p < old.k.p;
@@ -746,7 +757,7 @@ impl Repair<'_> {
 
         if let Some(dup) = set_or_get_in_snapshot::<T>(t, &mut iter, self.hash_info, dir,
                                                        k.k.p.snapshot, &mut new,
-                                                       BtreeIterFlags::STR_HASH_MUST_CREATE,
+                                                       SetFlags::MUST_CREATE,
                                                        UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)? {
             return self.dup_entries::<T>(t, k, dup);
         }
