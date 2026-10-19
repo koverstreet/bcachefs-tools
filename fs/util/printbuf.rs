@@ -351,6 +351,26 @@ impl Printbuf {
 
 impl fmt::Write for Printbuf {
     fn write_str(&mut self, s: &str) -> fmt::Result {
+        if self.0.atomic & Printbuf::FMT_JOB != 0 {
+            self.0.atomic &= !Printbuf::FMT_JOB;
+            // SAFETY: after Probe::Job, pass_through()'s empty str: its
+            // address is that of a job on pass_through()'s stack, exposed
+            let job = unsafe {
+                *core::ptr::with_exposed_provenance::<&dyn Fn(&mut Printbuf)>(s.as_ptr().addr())
+            };
+            job(self);
+            return Ok(());
+        }
+
+        match Probe::of(s) {
+            Some(Probe::IsPrintbuf) => return Err(fmt::Error),
+            Some(Probe::Job) => {
+                self.0.atomic |= Printbuf::FMT_JOB;
+                return Ok(());
+            }
+            None => {}
+        }
+
         unsafe {
             c::bch2_prt_bytes_indented(
                 &mut self.0,
@@ -405,9 +425,9 @@ pub trait ToText {
 }
 
 /// Display for a type that's ToText, from its to_text(), for a format string
-/// that isn't a message - format!(), println!(): through a printbuf of its
-/// own, text_fmt(). (Not a blanket impl: Display is core's.) A generic type's
-/// parameters go first:
+/// that isn't a message: text_fmt() - into the printbuf, for write!() into
+/// one; through a printbuf of its own for format!(), println!(). (Not a
+/// blanket impl: Display is core's.) A generic type's parameters go first:
 /// `display_via_to_text!(impl[V: BkeyVal] BkeySCToText<'_, '_, V>)`.
 #[macro_export]
 macro_rules! display_via_to_text {
@@ -423,12 +443,78 @@ macro_rules! display_via_to_text {
     };
 }
 
-/// @t as Display, via a printbuf that lives only for the call. Its indent and
-/// tabstops start from scratch; the `\n`, `\t` and `\r` it leaves raw are
-/// interpreted by the destination, if that's a Printbuf. Invalid UTF-8 comes
-/// out as U+FFFD without allocating, so this works in-kernel too.
+/// A message to the writer under a Formatter, which Display can't otherwise
+/// see: f.write_str() of an empty str whose address is the message. Every
+/// writer gets it as a write of nothing; Printbuf's write_str() alone knows
+/// the address. The addresses are inside PROBES, so no other empty str has
+/// them: one off the end of an object next to it is at PROBES[0] or past its
+/// end.
+#[derive(Clone, Copy)]
+enum Probe {
+    /// Answered with Err - the one bit write_str() returns - by a Printbuf.
+    IsPrintbuf,
+    /// The next write is pass_through()'s job: Printbuf::FMT_JOB.
+    Job,
+}
+
+static PROBES: [u8; 3] = [0; 3];
+
+impl Probe {
+    const ALL: [Probe; 2] = [Probe::IsPrintbuf, Probe::Job];
+
+    fn as_str(self) -> &'static str {
+        let i = self as usize + 1;
+        core::str::from_utf8(&PROBES[i..i]).unwrap()
+    }
+
+    fn of(s: &str) -> Option<Probe> {
+        Probe::ALL.into_iter().find(|q| core::ptr::eq(s.as_ptr(), q.as_str().as_ptr()))
+    }
+}
+
+impl Printbuf {
+    /// Set by Probe::Job, until the job's write: the top bit of atomic, a
+    /// nesting count that never gets near it. Set only between two writes
+    /// that allocate nothing, so C's test of atomic never sees it.
+    const FMT_JOB: u8 = 1 << 7;
+}
+
+/// Whether @f writes to a Printbuf - not through a Formatter's PadAdapter
+/// (`{:#?}`), which drops empty writes.
+pub fn is_printbuf(f: &mut fmt::Formatter<'_>) -> bool {
+    f.write_str(Probe::IsPrintbuf.as_str()).is_err()
+}
+
+/// Run @job on the Printbuf @f writes to: Probe::Job, then an empty str at
+/// the job's address - exposed, as an empty str carries no provenance.
+fn pass_through(f: &mut fmt::Formatter<'_>, job: &dyn Fn(&mut Printbuf)) -> fmt::Result {
+    f.write_str(Probe::Job.as_str())?;
+
+    let addr = core::ptr::from_ref(&job).expose_provenance();
+    // SAFETY: empty, so it reads nothing, at an address that isn't null
+    let s = unsafe {
+        core::str::from_utf8_unchecked(core::slice::from_raw_parts(core::ptr::without_provenance::<u8>(addr), 0))
+    };
+    f.write_str(s)
+}
+
+/// @t as Display: to_text() into the destination, if that's a Printbuf - its
+/// indent, tabstops and atomic as they are; else via a printbuf of its own.
 #[doc(hidden)]
 pub fn text_fmt(t: &(impl ToText + ?Sized), f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    if is_printbuf(f) {
+        pass_through(f, &|out| t.to_text(out))
+    } else {
+        text_fmt_via_printbuf(t, f)
+    }
+}
+
+/// For a destination that isn't a Printbuf: a printbuf that lives only for
+/// the call - out of line, so text_fmt() into one doesn't have it on its
+/// stack. Its indent and tabstops start from scratch. Invalid UTF-8 comes out
+/// as U+FFFD without allocating, so this works in-kernel too.
+#[inline(never)]
+fn text_fmt_via_printbuf(t: &(impl ToText + ?Sized), f: &mut fmt::Formatter<'_>) -> fmt::Result {
     let mut buf = Printbuf::new();
     t.to_text(&mut buf);
 
