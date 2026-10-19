@@ -21,7 +21,7 @@ static inline size_t btree_cache_nr_dirty(const struct bch_fs_btree_cache *bc)
 }
 
 /* iter flags must fit in struct btree_iter.flags: */
-static_assert(BTREE_ITER_FLAG_BIT_committed < 32);
+static_assert(BTREE_ITER_FLAG_BIT_trim < 32);
 
 #if defined(CONFIG_BCACHEFS_LOCK_TIME_STATS) || defined(CONFIG_BCACHEFS_DEBUG)
 #define TRACK_PATH_ALLOCATED

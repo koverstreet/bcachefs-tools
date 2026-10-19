@@ -190,6 +190,44 @@ fn test_iterate_extents(fs: &Fs, nr: u64) -> TestRet {
     Ok(())
 }
 
+/// BtreeIterFlags::TRIM: each extent comes back cut to the window - the
+/// iterator's position to the end it's peeked to - while the walk still steps
+/// over whole keys; a slot peeked mid-extent starts where it was peeked.
+fn test_iterate_extents_trim(fs: &Fs, nr: u64) -> TestRet {
+    delete_test_keys(fs)?;
+
+    for i in (0..nr).step_by(8) {
+        let mut k = BkeyI::<c::Cookie>::new();
+        k.k.p.offset = i + 8;
+        k.k.p.snapshot = u32::MAX;
+        k.k.size = 8;
+        insert_cookie(fs, c::btree_id::extents, &mut k)?;
+    }
+
+    let (start, end) = (4, nr - 4);
+    let trans = crate::btree_trans!(fs);
+
+    let mut i = start;
+    let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, start, u32::MAX),
+                                  BtreeIterFlags::TRIM);
+    iter.for_each_max(&trans, pos(0, end), |_, _, k| {
+        assert_eq!(k.k.start_offset(), i);
+        assert!(k.k.p.offset <= end, "{} past the end, {end}", k.k);
+        i = k.k.p.offset;
+        Ok(())
+    })?;
+    assert_eq!(i, end);
+
+    let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, start, u32::MAX),
+                                  BtreeIterFlags::SLOTS | BtreeIterFlags::TRIM);
+    let slot = lockrestart_do(&trans, |t| {
+        let k = iter.peek_slot(t)?.expect("a slot always has a key");
+        Ok((k.k.start_offset(), k.k.p.offset))
+    })?;
+    assert_eq!(slot, (start, 8));
+    Ok(())
+}
+
 fn test_iterate_slots(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
@@ -835,6 +873,7 @@ fn lookup_test(testname: &[u8]) -> Option<(&'static [u8], TestFn)> {
         (b"test_delete_written", test_delete_written),
         (b"test_iterate", test_iterate),
         (b"test_iterate_extents", test_iterate_extents),
+        (b"test_iterate_extents_trim", test_iterate_extents_trim),
         (b"test_iterate_slots", test_iterate_slots),
         (b"test_iterate_slots_extents", test_iterate_slots_extents),
         (b"test_peek_end", test_peek_end),

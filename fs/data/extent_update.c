@@ -123,6 +123,8 @@ int bch2_extent_trim_atomic(struct btree_trans *trans,
 
 	CLASS(btree_iter_copy, copy)(iter);
 	copy.flags |= BTREE_ITER_nofilter_whiteouts;
+	/* whole keys: what's overwritten is counted from where they start */
+	copy.flags &= ~BTREE_ITER_trim;
 
 	try(bch2_btree_iter_traverse(&copy));
 

@@ -375,6 +375,7 @@ c_xmacro! {
         (cached_nofill),
         (key_cache_fill),
         (committed),
+        (trim),
     }
 }
 

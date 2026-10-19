@@ -2818,6 +2818,46 @@ btree_iter_filter_snapshots(struct btree_trans *trans,
 	return FILTER_SNAP_OK;
 }
 
+/*
+ * BTREE_ITER_trim: an extent that straddles the window - the iterator's
+ * position to @end - is returned cut to it, in a copy from the transaction's
+ * memory. The btree's key is as it was, and so is iter->k, that the iterator
+ * advances by: only what the caller sees is cut. An update of what it was
+ * handed replaces only the window - the rest of the extent stays.
+ */
+static noinline struct bkey_s_c btree_iter_trim(struct btree_iter *iter, struct bkey_s_c k,
+						struct bpos end)
+{
+	if (bkey_le(iter->pos, bkey_start_pos(k.k)) && bkey_le(k.k->p, end))
+		return k;
+
+	struct bkey_i *t = bch2_trans_kmalloc_nomemzero(iter->trans, bkey_bytes(k.k));
+	if (IS_ERR(t))
+		return bkey_s_c_err(PTR_ERR(t));
+
+	bkey_reassemble(t, k);
+	bch2_cut_front(iter->trans->c, iter->pos, t);
+	bch2_cut_back(end, t);
+	return bkey_i_to_s_c(t);
+}
+
+static inline struct bkey_s_c btree_iter_maybe_trim(struct btree_iter *iter, struct bkey_s_c k,
+						    struct bpos end)
+{
+	if (likely((iter->flags & (BTREE_ITER_trim|BTREE_ITER_is_extents)) !=
+		   (BTREE_ITER_trim|BTREE_ITER_is_extents)) ||
+	    !k.k || bkey_err(k))
+		return k;
+
+	k = btree_iter_trim(iter, k, end);
+	/* what trimming promises: all of it in the window, and something */
+	EBUG_ON(!bkey_err(k) &&
+		(!k.k->size ||
+		 bkey_lt(bkey_start_pos(k.k), iter->pos) ||
+		 bkey_gt(k.k->p, end)));
+	return k;
+}
+
 /**
  * bch2_btree_iter_peek_max() - returns first key greater than or equal to
  * iterator's current position
@@ -2915,6 +2955,8 @@ out_no_locked:
 	}
 
 	bch2_btree_iter_verify_entry_exit(iter);
+
+	k = btree_iter_maybe_trim(iter, k, *end);
 
 	event_trace_fn(trans->c, btree_iter_peek_max,
 		       __btree_iter_peek_max_trace(trans->c, k));
@@ -3108,6 +3150,9 @@ static struct bkey_s_c btree_iter_peek_visible_at(struct btree_iter *iter, struc
  */
 struct bkey_s_c bch2_btree_iter_peek_prev_min(struct btree_iter *iter, struct bpos end)
 {
+	/* reverse peeks don't trim - and peek_slot() below would */
+	EBUG_ON(iter->flags & BTREE_ITER_trim);
+
 	if ((iter->flags & (BTREE_ITER_is_extents|BTREE_ITER_filter_snapshots)) &&
 	   !bkey_eq(iter->pos, POS_MAX) &&
 	   !((iter->flags & BTREE_ITER_is_extents) &&
@@ -3358,6 +3403,8 @@ struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_iter *iter)
 
 		CLASS(btree_iter_copy, iter2)(iter);
 		iter2.flags |= BTREE_ITER_nofilter_whiteouts;
+		/* k below is iter2's value under iter->k, a copy of iter2.k: untrimmed, they agree */
+		iter2.flags &= ~BTREE_ITER_trim;
 
 		while (1) {
 			k = bch2_btree_iter_peek_max(&iter2, &end);
@@ -3412,6 +3459,8 @@ out:
 	ret = bch2_btree_iter_verify_ret(iter, k);
 	if (unlikely(ret))
 		k = bkey_s_c_err(ret);
+
+	k = btree_iter_maybe_trim(iter, k, SPOS_MAX);
 out2:
 	event_trace_fn(trans->c, btree_iter_peek_slot,
 		       __btree_iter_peek_slot_trace(trans->c, k));

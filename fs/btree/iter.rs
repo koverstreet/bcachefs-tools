@@ -1497,6 +1497,11 @@ bitflags! {
         const CACHED_NOFILL = c::btree_iter_update_trigger_flags::BTREE_ITER_cached_nofill.bits();
         const KEY_CACHE_FILL = c::btree_iter_update_trigger_flags::BTREE_ITER_key_cache_fill.bits();
         const COMMITTED = c::btree_iter_update_trigger_flags::BTREE_ITER_committed.bits();
+        /// Extents: what a peek returns is cut to the window - from the
+        /// iterator's position to the end it's peeking to - in a copy. The walk
+        /// still steps over whole keys, and an update of what it returned
+        /// replaces only the window.
+        const TRIM = c::btree_iter_update_trigger_flags::BTREE_ITER_trim.bits();
     }
 }
 
