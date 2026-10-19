@@ -8,6 +8,9 @@
 //! Lock<T, Backend> only hands out exclusive guards. SeqLock is ours in both
 //! builds - the kernel crate has none, and it's only atomics. PercpuRwSem is
 //! ours in both too, over C's struct in both: C takes it as well.
+//!
+//! Lock and RwLock are how a guard is had from any of them, for what takes a
+//! lock generically - util::locking::Noio.
 
 #[cfg(kernel)]
 pub use kernel::sync::{new_mutex, Mutex, MutexGuard};
@@ -27,6 +30,45 @@ pub use rwsem::{RwSem, RwSemReadGuard, RwSemWriteGuard};
 pub use seqlock::SeqLock;
 
 pub use percpu_rwsem::{PercpuRwSem, PercpuRwSemReadGuard, PercpuRwSemWriteGuard};
+
+/// A lock, generically - what util::locking::Noio wraps: how a guard is had
+/// from it. Its guard derefs to what it guards.
+pub trait Lock {
+    type Guard<'a>: core::ops::Deref where Self: 'a;
+
+    fn lock(&self) -> Self::Guard<'_>;
+}
+
+/// A reader/writer lock, generically: readers share it, a writer has it
+/// alone.
+pub trait RwLock {
+    type ReadGuard<'a>: core::ops::Deref where Self: 'a;
+    type WriteGuard<'a>: core::ops::Deref where Self: 'a;
+
+    fn read(&self) -> Self::ReadGuard<'_>;
+    fn write(&self) -> Self::WriteGuard<'_>;
+}
+
+impl<T> Lock for Mutex<T> {
+    type Guard<'a> = MutexGuard<'a, T> where T: 'a;
+
+    fn lock(&self) -> MutexGuard<'_, T> {
+        Mutex::lock(self)
+    }
+}
+
+impl<T> RwLock for RwSem<T> {
+    type ReadGuard<'a> = RwSemReadGuard<'a, T> where T: 'a;
+    type WriteGuard<'a> = RwSemWriteGuard<'a, T> where T: 'a;
+
+    fn read(&self) -> RwSemReadGuard<'_, T> {
+        RwSem::read(self)
+    }
+
+    fn write(&self) -> RwSemWriteGuard<'_, T> {
+        RwSem::write(self)
+    }
+}
 
 mod percpu_rwsem {
     use crate::c;

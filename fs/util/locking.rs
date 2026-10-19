@@ -6,8 +6,8 @@
 //! certain locks, so allocations under the lock can't recurse into reclaim IO -
 //! a filesystem driving the block layer directly mustn't let reclaim loop back
 //! through the device it's allocating for. On the C side the lock type carries
-//! the scope (`struct mutex_noio`); on the Rust side the guard is composed
-//! explicitly, holding a [`MemallocFlags`] alongside the lock.
+//! the scope (`struct mutex_noio`); on the Rust side so does [`Noio`], over any
+//! lock - its guard holds a [`MemallocFlags`] alongside the lock's.
 //!
 //! [`MemallocFlags`] saves the current flags on construction and restores them
 //! on drop, mirroring the C memalloc_flags_save/restore pairing - scoped (LIFO)
@@ -16,6 +16,7 @@
 //! reach Rust through bindgen.
 
 use crate::c;
+use crate::util::sync::{Lock, RwLock};
 use core::cell::UnsafeCell;
 use core::ffi::{c_void, CStr};
 use core::marker::{PhantomData, PhantomPinned};
@@ -43,6 +44,64 @@ impl Drop for MemallocFlags {
     fn drop(&mut self) {
         // SAFETY: `saved` is the value returned by the paired save above.
         unsafe { c::rust_memalloc_flags_restore(self.saved) }
+    }
+}
+
+/// Lock @L, its holding a PF_MEMALLOC_NOIO scope - as C's mutex_noio and
+/// percpu_rwsem_noio are: what's allocated under it can't recurse into
+/// reclaim IO. The flags are saved before the lock is taken, and restored
+/// after it's released.
+#[::pin_init::pin_data]
+#[repr(transparent)]
+pub struct Noio<L> {
+    #[pin]
+    lock: L,
+}
+
+impl<L> Noio<L> {
+    pub fn new<E>(lock: impl ::pin_init::PinInit<L, E>) -> impl ::pin_init::PinInit<Self, E> {
+        ::pin_init::pin_init!(Self { lock <- lock }? E)
+    }
+}
+
+impl<L: Lock> Noio<L> {
+    pub fn lock(&self) -> NoioGuard<L::Guard<'_>> {
+        let noio = MemallocFlags::noio();
+        NoioGuard { guard: self.lock.lock(), _noio: noio }
+    }
+}
+
+impl<L: RwLock> Noio<L> {
+    pub fn read(&self) -> NoioGuard<L::ReadGuard<'_>> {
+        let noio = MemallocFlags::noio();
+        NoioGuard { guard: self.lock.read(), _noio: noio }
+    }
+
+    pub fn write(&self) -> NoioGuard<L::WriteGuard<'_>> {
+        let noio = MemallocFlags::noio();
+        NoioGuard { guard: self.lock.write(), _noio: noio }
+    }
+}
+
+/// A Noio lock held: @G, its guard, released before the NOIO scope ends -
+/// fields drop in order.
+#[must_use = "the lock is released as soon as the guard is dropped"]
+pub struct NoioGuard<G> {
+    guard: G,
+    _noio: MemallocFlags,
+}
+
+impl<G: Deref> Deref for NoioGuard<G> {
+    type Target = G::Target;
+
+    fn deref(&self) -> &G::Target {
+        &self.guard
+    }
+}
+
+impl<G: DerefMut> DerefMut for NoioGuard<G> {
+    fn deref_mut(&mut self) -> &mut G::Target {
+        &mut self.guard
     }
 }
 
