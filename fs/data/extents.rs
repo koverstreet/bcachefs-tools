@@ -151,8 +151,17 @@ pub trait BkeyVExtents: BkeyV {
                             ptr.set_offset(ptr.offset() + sub);
                         },
                         mut e => if let Some(mut crc) = crc_unpack(&pk, e.as_entry()) {
+                            let old_offset = crc.offset;
                             crc.offset = (u64::from(crc.offset) + sub) as u16;
-                            e.set_crc(&crc).expect("a crc's offset, moved within its data, fits its entry");
+                            // C's bitfield would truncate: past its entry, the offset was
+                            // past its data - a cut past the key's end, or a key whose
+                            // crc offset + size was past its uncompressed size
+                            if e.set_crc(&crc).is_none() {
+                                panic!("cutting an extent's front at {where_}, by {sub}, leaving {pk}: crc offset \
+                                        {old_offset} + {sub} is past what its entry holds (uncompressed size {}, \
+                                        compressed {})",
+                                       crc.uncompressed_size, crc.compressed_size);
+                            }
                             seen_crc = true;
                         },
                     }
