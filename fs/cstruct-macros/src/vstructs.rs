@@ -54,9 +54,16 @@ pub(crate) fn plain(name: &str, tys: &[&str]) -> String {
     let sizes: String = tys.iter()
         .map(|ty| format!(" + ::core::mem::size_of::<{ty}>()"))
         .collect();
-    // and Native as itself: a struct reads as a struct
+    // and Native as itself: a struct reads as a struct. In-kernel, the
+    // kernel's own FromBytes and AsBytes - what uaccess's UserSlice reads and
+    // writes - whose conditions are Plain's: any bytes are one, every byte is
+    // a field's, and no field is a cell
     format!(
         "unsafe impl crate::util::vstructs::Plain for {name} {{}}\n\
+         #[cfg(kernel)]\n\
+         unsafe impl ::kernel::transmute::FromBytes for {name} {{}}\n\
+         #[cfg(kernel)]\n\
+         unsafe impl ::kernel::transmute::AsBytes for {name} {{}}\n\
          impl crate::util::vstructs::Native for {name} {{\n\
              type Native = Self;\n\
              fn to_native(self) -> Self {{ self }}\n\
