@@ -1120,6 +1120,17 @@ impl<'a> SbWrite<'a> {
         was_new
     }
 
+    /// fsck error @err silenced - expected, not damage - in the ext section,
+    /// recorded: whether it wasn't already. sb_set_err_silent().
+    pub fn set_err_silent(&mut self, err: c::bch_sb_error_id) -> bool {
+        let ext = self.field_mut::<c::bch_sb_field_ext<Validated>>()
+            .expect("an ext section: a mounted filesystem's superblock has one");
+        let (word, bit) = (err.0 as usize / 64, 1u64 << (err.0 % 64));
+        let v = ext.errors_silent[word].get();
+        ext.errors_silent[word].set(v | bit);
+        self.record(v & bit == 0)
+    }
+
     /// Write now, if dirtied, for an error to report; after, nothing is to
     /// write until something is dirtied again.
     pub fn flush(&mut self) -> Result<(), BchError> {
