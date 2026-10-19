@@ -1276,6 +1276,12 @@ impl<'a, 't, V: ?Sized> TransBkey<'a, 't, V> {
         TransBkey { ptr: self.ptr, buf_u64s: self.buf_u64s, t: PhantomData, v: PhantomData }
     }
 
+    /// The key, borrowed from this handle: to arm, or edit, where the caller
+    /// keeps the key.
+    pub fn reborrow(&mut self) -> TransBkey<'_, 't, V> {
+        TransBkey { ptr: self.ptr, buf_u64s: self.buf_u64s, t: PhantomData, v: PhantomData }
+    }
+
     /// Its header - whatever its u64s say, which may be being set.
     pub fn k(&self) -> &c::bkey {
         // SAFETY: the header at the start of our buffer
@@ -1670,7 +1676,7 @@ fn bkey_arm<'k, K: BkeyFamily + ?Sized>(fs: &Fs, k: BkeySC<'k>) -> Result<BkeySC
  * the raw peeks, which the loops below wrap.
  */
 impl BtreeIter<'_> {
-    fn iter_flags(&self) -> BtreeIterFlags {
+    pub(crate) fn iter_flags(&self) -> BtreeIterFlags {
         BtreeIterFlags::from_bits_retain(self.flags)
     }
 
@@ -2541,6 +2547,18 @@ impl<'t> BtreeNodeIter<'t> {
             // NULL past the last
             Ok(errptr_or_null(b)?.map(|b| b.as_ref()))
         }
+    }
+
+    /// peek(), the node held to update its key: btree_node_update_key()
+    /// takes it, with iter().
+    pub(crate) fn peek_ref(&mut self) -> Result<Option<BtreeNodeRef>, BchError> {
+        // SAFETY: an initialized iterator; the node, while its path holds it
+        let b = unsafe { c::bch2_btree_iter_peek_node(self.raw.raw_mut()) };
+        Ok(errptr_or_null(b)?.map(|raw| BtreeNodeRef { raw }))
+    }
+
+    pub(crate) fn iter(&mut self) -> &mut BtreeIter<'t> {
+        &mut self.raw
     }
 
     pub fn peek_max_type<'i>(
