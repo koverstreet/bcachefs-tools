@@ -46,6 +46,23 @@ impl c::reconcile_work_id {
             _ => return None,
         })
     }
+
+    /// The work its backpointers' phys bits track: pending work has none,
+    /// as there's nothing to move yet - rb_work_id_phys().
+    pub fn phys(self) -> Self {
+        if self == Self::RECONCILE_WORK_pending { Self::RECONCILE_WORK_none } else { self }
+    }
+
+    /// The phys btree work with this id is tracked in, by bucket position:
+    /// reconcile_work_phys_btree[].
+    pub fn phys_btree(self) -> Option<c::btree_id> {
+        use c::reconcile_work_id as w;
+        Some(match self {
+            w::RECONCILE_WORK_hipri  => c::btree_id::reconcile_hipri_phys,
+            w::RECONCILE_WORK_normal => c::btree_id::reconcile_work_phys,
+            _ => return None,
+        })
+    }
 }
 
 /// Where a key at @p in @btree is in the work btrees: stripes at inode 0,
