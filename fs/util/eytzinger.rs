@@ -231,16 +231,23 @@ eytzinger_impl!(u16);
 eytzinger_impl!(u32);
 eytzinger_impl!(usize);
 
-/// The @n nodes stored in @v from @base - v[pos - base] is Eytzinger1 node
-/// pos - sorted into eytzinger order, as eytzinger1_sort_r().
-fn sort_by_impl<T>(v: &mut [T], n: usize, base: usize, mut cmp: impl FnMut(&T, &T) -> Ordering) {
+/// The @n nodes stored in @v from @base - index pos - base is Eytzinger1 node
+/// pos - sorted into eytzinger order, as eytzinger1_sort_r(): compared and
+/// swapped by index, @v whatever holds them.
+fn sort_impl<S: ?Sized>(
+    v:        &mut S,
+    n:        usize,
+    base:     usize,
+    mut cmp:  impl FnMut(&S, usize, usize) -> Ordering,
+    mut swap: impl FnMut(&mut S, usize, usize),
+) {
     let e = Eytzinger1::<usize>::new(n);
     let pos = |inorder: usize| e.from_inorder(inorder) - base;
 
     // Heapsort over inorder positions 1..=n, each stored at its eytzinger
     // position - so when the inorder sequence is sorted, the tree is.
-    let mut gt = |v: &[T], l: usize, r: usize| cmp(&v[pos(l)], &v[pos(r)]);
-    let swap = |v: &mut [T], l: usize, r: usize| v.swap(pos(l), pos(r));
+    let mut gt = |v: &S, l: usize, r: usize| cmp(v, pos(l), pos(r));
+    let mut swap = |v: &mut S, l: usize, r: usize| swap(v, pos(l), pos(r));
 
     // heapify
     for i in (1..=n / 2).rev() {
@@ -303,14 +310,16 @@ fn sort_by_impl<T>(v: &mut [T], n: usize, base: usize, mut cmp: impl FnMut(&T, &
     }
 }
 
-/// The node of @n stored in @v from @base that @f says is the one searched
-/// for (Equal), by Eytzinger1 position.
-fn find_by_impl<T>(v: &[T], n: usize, base: usize, mut f: impl FnMut(&T) -> Ordering)
-    -> Option<usize>
-{
+fn sort_by_impl<T>(v: &mut [T], n: usize, base: usize, mut cmp: impl FnMut(&T, &T) -> Ordering) {
+    sort_impl(v, n, base, |v, l, r| cmp(&v[l], &v[r]), |v, l, r| v.swap(l, r))
+}
+
+/// The node of @n stored from @base that @f - given its index, pos - base -
+/// says is the one searched for (Equal), by Eytzinger1 position.
+fn find_impl(n: usize, base: usize, mut f: impl FnMut(usize) -> Ordering) -> Option<usize> {
     let mut i = 1;
     while i <= n {
-        match f(&v[i - base]) {
+        match f(i - base) {
             Ordering::Equal => return Some(i),
             o => i = Eytzinger1::<usize>::child(i, (o == Ordering::Less) as usize),
         }
@@ -325,8 +334,8 @@ impl Eytzinger1<usize> {
     }
 
     /// The node of @v that @f says is the one searched for (Equal), if any.
-    pub fn find_by<T>(v: &[T], f: impl FnMut(&T) -> Ordering) -> Option<usize> {
-        find_by_impl(v, Self::of(v).size, 0, f)
+    pub fn find_by<T>(v: &[T], mut f: impl FnMut(&T) -> Ordering) -> Option<usize> {
+        find_impl(Self::of(v).size, 0, |i| f(&v[i]))
     }
 
     /// @v's nodes, slot 0 aside, sorted into eytzinger order.
@@ -342,8 +351,8 @@ impl Eytzinger0<usize> {
     }
 
     /// The node of @v that @f says is the one searched for (Equal), if any.
-    pub fn find_by<T>(v: &[T], f: impl FnMut(&T) -> Ordering) -> Option<usize> {
-        find_by_impl(v, v.len(), 1, f).map(|i| i - 1)
+    pub fn find_by<T>(v: &[T], mut f: impl FnMut(&T) -> Ordering) -> Option<usize> {
+        Self::of(v).find(|i| f(&v[i]))
     }
 
     /// The greatest node of @v <= what @f compares against, if any.
@@ -379,6 +388,21 @@ impl Eytzinger0<usize> {
     /// @v sorted into eytzinger order.
     pub fn sort_by<T>(v: &mut [T], cmp: impl FnMut(&T, &T) -> Ordering) {
         sort_by_impl(v, v.len(), 1, cmp)
+    }
+
+    // By index, for nodes that aren't a slice's - a table of runtime-sized
+    // entries:
+
+    /// The node @f says is the one searched for (Equal), if any.
+    pub fn find(&self, f: impl FnMut(usize) -> Ordering) -> Option<usize> {
+        find_impl(self.0.size, 1, f).map(|i| i - 1)
+    }
+
+    /// @v's nodes sorted into eytzinger order: compared, and swapped, in @v
+    /// by index.
+    pub fn sort<S: ?Sized>(&self, v: &mut S, cmp: impl FnMut(&S, usize, usize) -> Ordering,
+                           swap: impl FnMut(&mut S, usize, usize)) {
+        sort_impl(v, self.0.size, 1, cmp, swap)
     }
 }
 
