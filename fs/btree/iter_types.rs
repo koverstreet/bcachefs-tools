@@ -29,6 +29,7 @@ pub struct trans_may_drop_updates {
 c_default!(trans_may_drop_updates);
 
 c_extern! {
+    pub fn bch2_btree_trans_to_text(out: *mut c::printbuf, trans: *mut c::btree_trans);
     pub fn bch2_path_put(trans: *mut c::btree_trans, path_idx: c::btree_path_idx_t, intent: bool);
     pub fn __bch2_trans_relock(trans: *mut c::btree_trans, trace: bool) -> c_int;
     pub fn bch2_trans_relock_notrace(trans: *mut c::btree_trans) -> c_int;

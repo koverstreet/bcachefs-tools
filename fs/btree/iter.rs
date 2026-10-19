@@ -10,6 +10,7 @@ use crate::errcode::{
     ret_to_result_void as ret_to_result,
 };
 use crate::fs::Fs;
+use crate::util::closure::{closure_get_not_zero, ClosureRef};
 use crate::util::ffi::Opaque;
 use crate::util::log::CFnName;
 use crate::util::{Printbuf, ToText};
@@ -2509,3 +2510,119 @@ impl ToText for BtreeNodeOndiskToText<'_, '_> {
     }
 }
 crate::display_via_to_text!(BtreeNodeOndiskToText<'_, '_>);
+
+// ── The filesystem's transactions: c->btree.trans.list ──────────────────────
+
+/// A transaction off the list, kept live - its paths, its task - by the ref.
+pub struct ListedTrans<'a> {
+    trans: *mut c::btree_trans,
+    _ref:  ClosureRef<'a>,
+}
+
+impl ListedTrans<'_> {
+    /// Whether it holds the SRCU lock btree nodes are freed under.
+    pub fn srcu_held(&self) -> bool {
+        // its own thread changes it: READ_ONCE()
+        unsafe { core::ptr::read_volatile(&raw const (*self.trans).bits) }.srcu_held()
+    }
+
+    pub fn backtrace_to_text(&self, out: &mut Printbuf) {
+        unsafe {
+            let task = core::ptr::read_volatile(&raw const (*self.trans).locking_wait.task);
+            c::bch2_prt_task_backtrace(out.as_raw(), task, 0, c::GFP_KERNEL);
+        }
+    }
+
+    /// The cycle, if it's in one, written to @out.
+    pub fn check_for_deadlock(&self, out: &mut Printbuf) -> bool {
+        unsafe { c::bch2_check_for_deadlock(self.trans, out.as_raw()) != 0 }
+    }
+}
+
+impl ToText for ListedTrans<'_> {
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { c::bch2_btree_trans_to_text(out.as_raw(), self.trans) }
+    }
+}
+
+impl Fs {
+    /// Each transaction above @cursor (an address) that @pred takes, in
+    /// address order, given to @f with the list unlocked - @f's to drop before
+    /// anything that might wait. Printing sleeps, so the list's seqmutex is
+    /// dropped for @f and relocked only if no one took it, else the walk
+    /// starts over: sorted by address, it resumes from @cursor.
+    pub fn for_each_trans_from<E>(
+        &self,
+        cursor: &mut usize,
+        pred:   impl Fn(&ListedTrans<'_>) -> bool,
+        mut f:  impl FnMut(ListedTrans<'_>) -> Result<ControlFlow<()>, E>,
+    ) -> Result<(), E> {
+        let lock = &self.btree.trans.lock;
+        let head = (&raw const self.btree.trans.list).cast_mut();
+
+        // SAFETY, throughout: the list, under its lock
+        'restart: loop {
+            let mut guard = lock.lock();
+            unsafe { list_sort_by_addr(head) };
+
+            let mut pos = unsafe { (*head).next };
+            while pos != head {
+                let trans: *mut c::btree_trans =
+                    unsafe { pos.byte_sub(core::mem::offset_of!(c::btree_trans, list)) }.cast();
+
+                if trans as usize > *cursor {
+                    *cursor = trans as usize;
+
+                    let t = closure_get_not_zero(unsafe { &(*trans).ref_ })
+                        .map(|r| ListedTrans { trans, _ref: r })
+                        .filter(|t| pred(t));
+
+                    if let Some(t) = t {
+                        let seq = guard.unlock();
+                        if f(t)?.is_break() {
+                            return Ok(());
+                        }
+                        match lock.relock(seq) {
+                            Some(g) => guard = g,
+                            None    => continue 'restart,
+                        }
+                    }
+                }
+                pos = unsafe { (*pos).next };
+            }
+            return Ok(());
+        }
+    }
+}
+
+/// debug.c's list_sort(), by address: an insertion sort - the list is kept
+/// sorted, so only what's been added since moves.
+///
+/// # Safety
+/// @head is a list nothing else changes meanwhile.
+unsafe fn list_sort_by_addr(head: *mut c::list_head) {
+    unsafe {
+        let mut pos = (*head).next;
+        while pos != head {
+            while (*pos).next != head && pos > (*pos).next {
+                // list_del() the one after pos...
+                let next = (*pos).next;
+                (*pos).next = (*next).next;
+                (*(*next).next).prev = pos;
+
+                // ...and list_add_tail() it before the first above it: pos,
+                // at the latest
+                let mut pos2 = (*head).next;
+                while pos2 != head && next > pos2 {
+                    pos2 = (*pos2).next;
+                }
+                assert!(pos2 != head);
+                (*next).prev = (*pos2).prev;
+                (*next).next = pos2;
+                (*(*pos2).prev).next = next;
+                (*pos2).prev = next;
+            }
+            pos = (*pos).next;
+        }
+    }
+}

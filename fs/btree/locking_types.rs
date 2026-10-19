@@ -4,12 +4,13 @@
 
 use crate::cstructs::c;
 use crate::types::{DArray, c_default};
-use core::ffi::c_uint;
+use core::ffi::{c_int, c_uint};
 use cstruct_macros::{bitfield, c_extern, CStruct};
 use nestify::nest;
 
 c_extern! {
     pub fn rust_bch2_inode_shard_idx(c: *mut c::bch_fs) -> u64;
+    pub fn bch2_check_for_deadlock(trans: *mut c::btree_trans, cycle: *mut c::printbuf) -> c_int;
 }
 
 /* State used for the cycle detector */
