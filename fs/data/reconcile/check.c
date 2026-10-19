@@ -460,7 +460,7 @@ static int check_reconcile_work_btree_key(struct btree_trans *trans,
 				new_bp->v = bp;
 			} else {
 				try(bch2_bkey_get_empty_slot(trans, &rb_iter, BTREE_ID_reconcile_scan,
-							     POS(1, 1), POS(1, U64_MAX)));
+							     POS(bp_pos.inode, 1), POS(bp_pos.inode, U64_MAX)));
 
 				struct bkey_i_backpointer *new_bp = errptr_try(bch2_bkey_alloc(trans, &rb_iter, 0, backpointer));
 				new_bp->v = bp;
@@ -534,7 +534,7 @@ static int check_reconcile_btree_bps(struct btree_trans *trans)
 	bch2_progress_init(&trans->c->recovery.progress, __func__, trans->c, BIT_ULL(BTREE_ID_reconcile_scan), 0);
 
 	return for_each_btree_key_max(trans, iter, BTREE_ID_reconcile_scan,
-				      POS(1, 0), POS(1, U64_MAX),
+				      POS(RECONCILE_WORK_hipri, 0), POS(RECONCILE_WORK_pending, U64_MAX),
 				      BTREE_ITER_prefetch, k, ({
 		bch2_progress_update_iter(trans, &trans->c->recovery.progress, &iter) ?:
 		check_reconcile_btree_bp(trans, k);
