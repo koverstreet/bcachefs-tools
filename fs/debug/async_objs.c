@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Async obj debugging: keep asynchronous objects on (very fast) lists, make
- * them visibile in debugfs:
+ * them visibile in debugfs - the files are async_objs.rs's:
  */
 
 #include "bcachefs.h"
@@ -15,9 +15,6 @@
 #include "data/write.h"
 
 #include "debug/async_objs.h"
-#include "debug/debug.h"
-
-#include <linux/debugfs.h>
 
 static __cold void promote_obj_to_text(struct printbuf *out,
 				struct bch_fs *c,
@@ -54,73 +51,6 @@ static __cold void btree_write_bio_obj_to_text(struct printbuf *out,
 {
 	struct btree_write_bio *wbio = obj;
 	bch2_bio_to_text(out, &wbio->wbio.bio);
-}
-
-static int bch2_async_obj_list_open(struct inode *inode, struct file *file)
-{
-	struct async_obj_list *list = inode->i_private;
-	struct dump_iter *i;
-
-	i = kzalloc(sizeof(struct dump_iter), GFP_KERNEL);
-	if (!i)
-		return -ENOMEM;
-
-	file->private_data = i;
-	i->from = POS_MIN;
-	i->iter	= 0;
-	i->c	= container_of(list, struct bch_fs, async_objs[list->idx]);
-	i->list	= list;
-	i->buf	= PRINTBUF;
-	return 0;
-}
-
-static ssize_t bch2_async_obj_list_read(struct file *file, char __user *buf,
-					size_t size, loff_t *ppos)
-{
-	struct dump_iter *i = file->private_data;
-	struct async_obj_list *list = i->list;
-	bool done = false;
-
-	i->ubuf = buf;
-	i->size	= size;
-	i->ret	= 0;
-
-	struct genradix_iter iter = genradix_iter_init(&list->list.items, i->iter);
-	while (!done) {
-		try(bch2_debugfs_flush_buf(i));
-
-		scoped_guard(rcu) {
-			void *obj = fast_list_iter_peek(&iter, &list->list);
-			done = !obj;
-			if (done)
-				break;
-
-			list->obj_to_text(&i->buf, i->c, obj);
-			genradix_iter_advance(&iter, &list->list.items);
-			i->iter = iter.pos;
-		}
-	}
-
-	try(bch2_debugfs_flush_buf(i));
-
-	return i->buf.allocation_failure ? -ENOMEM : i->ret;
-}
-
-static const struct file_operations async_obj_ops = {
-	.owner		= THIS_MODULE,
-	.open		= bch2_async_obj_list_open,
-	.release	= bch2_dump_release,
-	.read		= bch2_async_obj_list_read,
-};
-
-void bch2_fs_async_obj_debugfs_init(struct bch_fs *c)
-{
-	c->async_obj_dir = debugfs_create_dir("async_objs", c->fs_debug_dir);
-
-#define x(n) debugfs_create_file(#n, 0400, c->async_obj_dir,		\
-			    &c->async_objs[BCH_ASYNC_OBJ_LIST_##n], &async_obj_ops);
-	BCH_ASYNC_OBJ_LISTS()
-#undef x
 }
 
 void bch2_fs_async_obj_exit(struct bch_fs *c)

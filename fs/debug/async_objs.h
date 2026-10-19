@@ -22,7 +22,6 @@ static inline int __async_object_list_add(struct fast_list *head, void *obj, uns
 #define async_object_list_add(_c, _list, obj, idx)		\
 	__async_object_list_add(&(_c)->async_objs[BCH_ASYNC_OBJ_LIST_##_list].list, obj, idx)
 
-void bch2_fs_async_obj_debugfs_init(struct bch_fs *);
 void bch2_fs_async_obj_exit(struct bch_fs *);
 int bch2_fs_async_obj_init(struct bch_fs *);
 
