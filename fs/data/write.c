@@ -2181,8 +2181,6 @@ static int bch2_nocow_write_convert_one_unwritten(struct btree_trans *trans,
 				new_buf_u64s * sizeof(u64)));
 
 	bkey_reassemble(new, k);
-	bch2_cut_front(c, bkey_start_pos(&orig->k), new);
-	bch2_cut_back(orig->k.p, new);
 
 	struct bkey_ptrs ptrs = bch2_bkey_ptrs(bkey_i_to_s(new));
 	bkey_for_each_ptr(ptrs, ptr)
@@ -2219,7 +2217,7 @@ static void bch2_nocow_write_convert_unwritten(struct bch_write_op *op)
 		for_each_keylist_key(&op->insert_keys, orig) {
 			ret = for_each_btree_key_max(trans, iter, BTREE_ID_extents,
 					     bkey_start_pos(&orig->k), orig->k.p,
-					     BTREE_ITER_intent, k,
+					     BTREE_ITER_intent|BTREE_ITER_trim, k,
 					     ({
 				bool flush = (op->flags & BCH_WRITE_flush) &&
 					bkey_next(orig) == op->insert_keys.top &&
