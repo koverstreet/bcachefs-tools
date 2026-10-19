@@ -95,6 +95,12 @@ impl<T: Zeroable> GenRadix<T> {
         Iter(RawIter::new(self.tree(), idx))
     }
 
+    /// iter_from(), the entries as pointers: for one C writes as it's read.
+    #[inline]
+    pub fn iter_from_raw(&self, idx: usize) -> RawIter<'_, T> {
+        RawIter::new(self.tree(), idx)
+    }
+
     /// Free every node: as genradix_free(). Empty after, as a new one is.
     pub fn free(&mut self) {
         unsafe { c::__genradix_free(&mut self.tree) }
