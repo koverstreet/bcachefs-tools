@@ -203,7 +203,7 @@ static int check_reconcile_work_one(struct btree_trans *trans,
 		CLASS(printbuf, buf)();
 		prt_str(&buf, "extent should be set in ");
 		if (btree_want_set)
-			bch2_btree_id_str(btree_want_set);
+			bch2_btree_id_to_text(&buf, btree_want_set);
 		else
 			prt_str(&buf, "(none)");
 		prt_printf(&buf, "\nbut set in: ");
@@ -349,7 +349,7 @@ static int check_reconcile_work_phys_one(struct btree_trans *trans,
 		CLASS(printbuf, buf)();
 		prt_str(&buf, "backpointer should be set in ");
 		if (btree_want_set)
-			bch2_btree_id_str(btree_want_set);
+			bch2_btree_id_to_text(&buf, btree_want_set);
 		else
 			prt_str(&buf, "(none)");
 		prt_printf(&buf, "\nbut set in: ");
