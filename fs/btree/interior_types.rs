@@ -77,6 +77,8 @@ c_extern! {
     pub fn bch2_btree_node_update_key(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
                                       b: *mut c::btree, new_key: *mut c::bkey_i,
                                       commit_flags: c_uint, skip_triggers: bool) -> c_int;
+    pub fn bch2_btree_node_update_key_at_pos(trans: *mut c::btree_trans, btree: c::btree_id, level: c_uint,
+                                             new_key: *mut c::bkey_i) -> c_int;
     pub fn bch2_btree_reserve_cache_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
 }
 

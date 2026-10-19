@@ -1022,3 +1022,9 @@ int bch2_journal_log_msg(struct bch_fs *c, const char *fmt, ...)
 	va_end(args);
 	return ret;
 }
+
+/* For Rust: a static inline */
+int rust_bch2_trans_update_buffered(struct btree_trans *trans, enum btree_id btree, struct bkey_i *k)
+{
+	return bch2_trans_update_buffered(trans, btree, k);
+}

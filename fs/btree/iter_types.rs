@@ -34,6 +34,8 @@ c_extern! {
     pub fn bch2_trans_kmalloc_trace_to_text(out: *mut c::printbuf,
                                             trace: *mut c::darray_trans_kmalloc_trace);
     pub fn bch2_path_put(trans: *mut c::btree_trans, path_idx: c::btree_path_idx_t, intent: bool);
+    pub fn bch2_btree_iter_peek_root(trans: *mut c::btree_trans, iter: *mut c::btree_iter, btree: c::btree_id,
+                                     level: c_uint) -> c::bkey_s_c;
     pub fn __bch2_trans_relock(trans: *mut c::btree_trans, trace: bool) -> c_int;
     pub fn bch2_trans_relock_notrace(trans: *mut c::btree_trans) -> c_int;
     pub fn __bch2_trans_kmalloc(trans: *mut c::btree_trans, size: usize,

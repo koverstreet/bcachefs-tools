@@ -1124,6 +1124,16 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.result(ret)
     }
 
+    /// @key, for write buffered @btree, through the write buffer: as
+    /// bch2_trans_update_buffered(). Copied - into the transaction's journal
+    /// entries, or before journal replay's done, an update of its own.
+    pub fn update_buffered<V: ?Sized>(&self, btree: c::btree_id, key: &TransBkey<'_, 't, V>)
+        -> Result<(), BchError>
+    {
+        // SAFETY: a key, which is only read
+        self.result(unsafe { c::rust_bch2_trans_update_buffered(self.raw(), btree, key.as_ptr()) })
+    }
+
     pub fn insert<V: ?Sized>(
         &self,
         btree: impl Into<u32>,
@@ -1183,6 +1193,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
             )
         };
         self.result(ret)
+    }
+
+    /// The pointer to the node at @level of @btree, at @key's position, made
+    /// @key, committed: bch2_btree_node_update_key_at_pos().
+    pub fn btree_node_update_key_at_pos<V: ?Sized>(&self, btree: c::btree_id, level: u32,
+                                                   key: TransBkey<'_, 't, V>) -> Result<(), BchError> {
+        // SAFETY: our transaction, @key in memory its attempt may edit
+        self.result(unsafe { c::bch2_btree_node_update_key_at_pos(self.raw(), btree, level, key.as_ptr()) })
     }
 
     pub(crate) fn btree_node_update_key<V: ?Sized>(
@@ -1766,6 +1784,17 @@ impl<'t> BtreeIter<'t> {
         // SAFETY: all zeroes is an iterator with no paths - whose exit, its
         // drop, puts none
         unsafe { core::mem::zeroed() }
+    }
+
+    /// The key pointing to @btree's root - none, if its root's below @level -
+    /// with this iterator initialized at it, and given back shared with the
+    /// key: bch2_btree_iter_peek_root(), for for_btree_root_key_at_level().
+    pub fn peek_root<'i>(&'i mut self, t: &TransAttempt<'_, 't>, btree: c::btree_id, level: u32)
+        -> Result<Option<(&'i BtreeIter<'t>, BkeySC<'i>)>, BchError>
+    {
+        // SAFETY: the key, in the iterator's path, for as long as it's borrowed
+        let k = unsafe { bkey_s_c_to_result::<'i>(c::bch2_btree_iter_peek_root(t.raw(), self.raw_mut(), btree, level)) }?;
+        Ok(k.map(|k| (&*self, k)))
     }
 
     /// The node the iterator's path holds at its level, if it has one - a

@@ -1231,9 +1231,6 @@ DEFINE_CLASS(trans_may_drop_updates, struct trans_may_drop_updates,
 
 struct bkey_s_c bch2_btree_iter_peek_and_restart_outlined(struct btree_iter *);
 
-struct bkey_s_c bch2_btree_iter_peek_root(struct btree_trans *, struct btree_iter *,
-					  enum btree_id, unsigned);
-
 #define for_btree_root_key_at_level(_trans, _iter, _btree_id, _level, _k, _do)		\
 	lockrestart_do(trans, ({							\
 		CLASS(btree_iter_uninit, iter)(trans);					\
