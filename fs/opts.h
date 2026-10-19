@@ -126,7 +126,6 @@ static inline void bch2_io_opts_fixups(struct bch_inode_opts *opts)
 		opts->data_replicas = min(opts->data_replicas, 3);
 }
 
-void bch2_inode_opts_get(struct bch_fs *, struct bch_inode_opts *, bool);
 void bch2_inode_opts_to_text(struct printbuf *, struct bch_fs *, struct bch_inode_opts);
 
 DEFINE_GUARD(opt_change_lock, struct bch_fs *,
