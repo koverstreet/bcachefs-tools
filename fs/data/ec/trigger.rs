@@ -153,6 +153,25 @@ pub fn ptr_matches_stripe(s: BkeySC<'_, c::Stripe<Validated>>, p: &c::extent_ptr
         p.ptr.offset() < sp.offset() + u64::from(v.sectors.get())
 }
 
+/// How many data blocks @nr_devs devices could give a stripe with
+/// @nr_redundant parity blocks - the pool's widening target - capped at
+/// BCH_BKEY_PTRS_MAX, and at @max_data_blocks if that's set (the
+/// ec_max_data_blocks option): stripe_widen_target_nr_data().
+pub fn stripe_widen_target_nr_data(nr_devs: u32, nr_redundant: u32, max_data_blocks: u32) -> u32 {
+    if nr_devs <= nr_redundant {
+        return 0;
+    }
+    // unsigned, as C's
+    let t = nr_devs.min(c::BCH_BKEY_PTRS_MAX).wrapping_sub(nr_redundant);
+    if max_data_blocks != 0 { t.min(max_data_blocks) } else { t }
+}
+
+/// What a stripe's can_widen holds: target - actual data blocks, clamped to
+/// its three bits - stripe_widen_value().
+pub fn stripe_widen_value(target_nr_data: u32, actual_nr_data: u32) -> u8 {
+    (target_nr_data as i32).wrapping_sub(actual_nr_data as i32).clamp(0, 7) as u8
+}
+
 fn stripe_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let s = v.k.arm::<c::Stripe>().expect("a stripe").v();
 

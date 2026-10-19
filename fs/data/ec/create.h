@@ -47,10 +47,6 @@ void bch2_disk_label_ec_rw_member_devs(struct bch_fs *, unsigned,
 
 bool bch2_can_form_ec_stripe(struct bch_fs *, unsigned, unsigned, struct printbuf *);
 
-int bch2_widen_cache_init(widen_cache *);
-int bch2_widen_cache_lookup(widen_cache *, struct bch_fs *,
-			    u8 disk_label, u16 sectors, unsigned *nr_devs);
-
 void bch2_ec_stripe_new_cancel(struct bch_fs *, struct ec_stripe_head *,
 			       struct ec_stripe_new *, int);
 void bch2_ec_bucket_cancel(struct bch_fs *, struct open_bucket *, int);

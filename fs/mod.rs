@@ -138,6 +138,7 @@ pub mod data {
     pub mod checksum;
     pub mod durability;
     pub mod ec {
+        pub mod create;
         pub mod trigger;
     }
     pub mod extents;

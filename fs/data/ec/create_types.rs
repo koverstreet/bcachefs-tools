@@ -185,6 +185,9 @@ c_typedef! {
 c_extern! {
     pub fn bch2_resume_logged_op_stripe_update(trans: *mut c::btree_trans, op_k: *mut c::bkey_i) -> c_int;
     pub fn bch2_new_stripes_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
+    pub fn bch2_widen_cache_init(cache: *mut c::widen_cache) -> c_int;
+    pub fn bch2_widen_cache_lookup(cache: *mut c::widen_cache, c: *mut c::bch_fs, disk_label: u8, sectors: u16,
+                                   nr_devs: *mut c_uint) -> c_int;
 }
 
 impl Fs {
