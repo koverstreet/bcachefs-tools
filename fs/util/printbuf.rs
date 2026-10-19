@@ -276,6 +276,11 @@ impl Printbuf {
         unsafe { c::bch2_prt_human_readable_u64(&mut self.0, v) };
     }
 
+    /// @ns in the largest unit it has two of, truncated: bch2_pr_time_units().
+    pub fn time_units(&mut self, ns: u64) {
+        unsafe { c::bch2_pr_time_units(&mut self.0, ns) };
+    }
+
     /// # Safety
     /// `fs` must be a valid pointer to a `bch_fs` or null.
     pub unsafe fn sb_to_text(&mut self, fs: *mut c::bch_fs, sb: &c::bch_sb,

@@ -1455,6 +1455,21 @@ bool bch2_fatal_signal_pending(void)
 	return fatal_signal_pending(current);
 }
 
+unsigned long bch2_nsecs_to_jiffies(u64 ns)
+{
+	return nsecs_to_jiffies(ns);
+}
+
+void bch2_acc_u64s_percpu(u64 *acc, const u64 __percpu *src, unsigned nr)
+{
+	acc_u64s_percpu(acc, src, nr);
+}
+
+bool bch2_bdev_rot(struct block_device *bdev)
+{
+	return bdev_rot(bdev);
+}
+
 u64 bch2_get_random_u64(void)
 {
 	return get_random_u64();

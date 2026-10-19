@@ -62,6 +62,10 @@ pub fn msleep(ms: u32) {
     unsafe { c::bch2_msleep(ms) }
 }
 
+pub fn nsecs_to_jiffies(ns: u64) -> core::ffi::c_ulong {
+    unsafe { c::bch2_nsecs_to_jiffies(ns) }
+}
+
 /// Whether this task has been sent a fatal signal: as
 /// fatal_signal_pending(current).
 pub fn fatal_signal_pending() -> bool {

@@ -66,3 +66,12 @@ pub unsafe fn this_cpu_add(pcp: *mut u64, val: u64) {
         bch2_this_cpu_add_u64(pcp, val);
     }
 }
+
+/// Every CPU's @acc.len() u64s at @src, added into @acc: acc_u64s_percpu().
+///
+/// # Safety
+/// @src is a per-CPU array of at least @acc.len() u64s, allocated for every
+/// possible CPU and live.
+pub unsafe fn acc_u64s_percpu(acc: &mut [u64], src: *const u64) {
+    unsafe { crate::c::bch2_acc_u64s_percpu(acc.as_mut_ptr(), src, acc.len() as core::ffi::c_uint) }
+}
