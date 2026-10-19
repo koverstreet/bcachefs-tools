@@ -414,8 +414,11 @@ impl<B: Default> LoopControl for LoopFlow<B> {
     }
 }
 
-/// A key in the transaction's memory, to update with: of key type @V, its
-/// value whole - as the typed constructors make one - or, untyped, any key.
+/// A key to update with, valid and ours to edit while the attempt runs - in
+/// the transaction's memory, or a buffer C hands over (from_raw_room()): of
+/// key type @V, its value whole - as the typed constructors make one - or,
+/// untyped, any key. It's edited in place, in its buffer, never moved: what
+/// won't fit is NoRoom.
 pub struct TransBkey<'a, 't, V: ?Sized = FamilyVal<AllTypes>> {
     ptr:      NonNull<c::bkey_i>,
     buf_u64s: u32,
@@ -1371,13 +1374,14 @@ impl<'a, 't> TransBkey<'a, 't> {
         })
     }
 
-    /// A key C allocated in @t's transaction memory with room past its own
-    /// u64s - @buf_u64s long, for what grows it.
+    /// A key C has with room past its own u64s - @buf_u64s long, for what
+    /// grows it: in @t's memory, or a trigger's update's.
     ///
     /// # Safety
-    /// @ptr is a key in @t's memory, and @buf_u64s u64s there are its.
+    /// @ptr is a key valid and the caller's to edit while @t's attempt runs,
+    /// and @buf_u64s u64s there are its.
     pub(crate) unsafe fn from_raw_room(_t: &TransAttempt<'a, 't>, ptr: *mut c::bkey_i, buf_u64s: u32) -> Self {
-        let ptr = NonNull::new(ptr).expect("a trans mem key");
+        let ptr = NonNull::new(ptr).expect("a key with room");
         assert!(buf_u64s >= unsafe { ptr.as_ref().k.u64s }.into(),
                 "a key's buffer of {buf_u64s} u64s, shorter than it is");
         TransBkey { buf_u64s, ptr, t: PhantomData, v: PhantomData }
