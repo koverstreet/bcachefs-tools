@@ -3,6 +3,7 @@
 #define _BCACHEFS_RECONCILE_TRIGGER_H
 
 #include "data/extents.h"
+#include "data/reconcile/needs_reconcile_gen.h"
 #include "data/reconcile/trigger_gen.h"
 
 static inline struct bpos data_to_rb_work_pos(enum btree_id btree, struct bpos pos)
@@ -99,16 +100,5 @@ DEFINE_CLASS(per_snapshot_io_opts, struct per_snapshot_io_opts,
 	     per_snapshot_io_opts_exit(&_T),
 	     per_snapshot_io_opts_init(c),
 	     struct bch_fs *c);
-
-int bch2_update_reconcile_opts(struct btree_trans *,
-			       struct per_snapshot_io_opts *,
-			       struct bch_inode_opts *,
-			       struct btree_iter *,
-			       unsigned level,
-			       struct bkey_s_c,
-			       enum set_needs_reconcile_ctx);
-
-int bch2_extent_trigger_set_needs_reconcile(struct btree_trans *,
-					    struct btree_trigger_op *);
 
 #endif /* _BCACHEFS_RECONCILE_TRIGGER_H */

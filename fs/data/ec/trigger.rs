@@ -11,7 +11,7 @@
 //! can't be found - validate passes it on purpose, and only what would update
 //! it stops.
 
-use crate::btree::bkey::{bkey_eq, bpos_gt, pos, BkeySC, BkeyV, POS_MIN};
+use crate::btree::bkey::{bkey_eq, bpos_gt, pos, BkeySC, BkeyV, BkeyVMut, POS_MIN};
 use crate::c;
 use crate::data::ptrs::{bkey_ptrs_validate, extent_ptr_to_text};
 use crate::errcode::{ret_to_c, BchError};
@@ -19,7 +19,7 @@ use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::util::ffi::Opaque;
 use crate::util::rcu::read_lock;
-use crate::util::vstructs::{cast_plain, Validated};
+use crate::util::vstructs::{cast_plain, ArmRef, Validated};
 use crate::util::Printbuf;
 use crate::bkey_fsck_err_on;
 use core::ffi::c_int;
@@ -151,6 +151,13 @@ pub fn ptr_matches_stripe(s: BkeySC<'_, c::Stripe<Validated>>, p: &c::extent_ptr
         p.ptr.generation() == sp.generation() &&
         p.ptr.offset() >= sp.offset() &&
         p.ptr.offset() < sp.offset() + u64::from(v.sectors.get())
+}
+
+/// Stripe @k's header, the sized part of its value, to edit in place: the
+/// value is a DST, and its pointers and checksums after the header aren't
+/// touched.
+pub fn stripe_header_mut(k: &mut impl BkeyVMut) -> &mut c::Stripe {
+    <c::Stripe as ArmRef>::arm_mut(k.val_bytes_mut()).expect("a stripe's header")
 }
 
 /// How many data blocks @nr_devs devices could give a stripe with

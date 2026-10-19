@@ -883,11 +883,9 @@ unsafe fn __make_extent_indirect(
     refcount.fill(0);
     val.copy_from_slice(BkeySC::from(&*orig).val_bytes());
 
-    t.result(unsafe {
-        c::bch2_bkey_set_needs_reconcile(t.raw(), core::ptr::null_mut(), opts.as_mut_ptr(),
-                                         BkeyS::from(&mut r_v).as_raw(), r_v_buf_u64s,
-                                         c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other, 0)
-    })?;
+    // SAFETY: written by get_io_opts(), which succeeded
+    let opts = unsafe { opts.assume_init_ref() };
+    r_v.set_needs_reconcile(t, None, opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other, 0)?;
 
     t.update(&reflink_iter, &r_v, UpdateTriggerFlags::empty())?;
 
