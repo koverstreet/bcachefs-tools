@@ -20,6 +20,12 @@ impl SbLockGuard<'_> {
         self.member_mut(dev_idx)
             .expect("a member, whole: bch2_sb_members_v2_init() grew them at open")
     }
+
+    /// @ca's own superblock: sb_lock's, as the filesystem's is.
+    pub fn dev_sb<'a>(&'a mut self, ca: &'a c::bch_dev) -> &'a mut c::bch_sb_handle {
+        // SAFETY: changed only under sb_lock, which we hold
+        unsafe { &mut *(&raw const ca.disk_sb).cast_mut() }
+    }
 }
 
 /// state_lock, held for read; up_read() on drop. What needs it held is a
