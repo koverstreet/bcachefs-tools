@@ -80,6 +80,15 @@ impl<T> KVVec<T> {
         self.0.capacity()
     }
 
+    /// # Safety
+    /// As Vec::from_raw_parts(): @ptr from this allocator - malloc()'s, which
+    /// a kvmalloc()'d buffer in userspace is - @capacity long, @length of it
+    /// initialized; or dangling, for none.
+    pub unsafe fn from_raw_parts(ptr: *mut T, length: usize, capacity: usize) -> Self {
+        // SAFETY: the caller's
+        KVVec(unsafe { Vec::from_raw_parts(ptr, length, capacity) })
+    }
+
     /// Its buffer, length and capacity, for C to own: the buffer is
     /// malloc()'d, which C's kvfree() frees.
     pub fn into_raw_parts(self) -> (*mut T, usize, usize) {

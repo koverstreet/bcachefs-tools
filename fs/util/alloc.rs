@@ -96,6 +96,65 @@ unsafe fn free_in<const KMALLOC: bool, T>(p: *mut T) {
     drop(unsafe { std::boxed::Box::from_raw(p) });
 }
 
+/// A darray C owns, lent to Rust as a KVVec while this lives; given back -
+/// its buffer, length and capacity, however the vector grew it - when it
+/// drops, even unwinding, so C's darray_exit() frees it as ever. Zero copy:
+/// a darray is kvmalloc()'d and kvfree()'d, as a KVVec is in-kernel; in
+/// userspace, posix_memalign()'d and free()'d, which the shim's Vec's malloc()
+/// allocator reallocs and frees.
+pub struct DArrayLoan<'d, T> {
+    d: &'d mut crate::types::DArray<T>,
+    v: core::mem::ManuallyDrop<KVVec<T>>,
+}
+
+impl<'d, T> DArrayLoan<'d, T> {
+    /// # Safety
+    /// @d is a darray: @nr of its @size initialized, its buffer kvmalloc()'d -
+    /// none of C's preallocated storage, which DArray<T> has none of.
+    pub unsafe fn new(d: &'d mut crate::types::DArray<T>) -> Self {
+        let data = if d.size != 0 { d.data } else { core::ptr::NonNull::dangling().as_ptr() };
+        // SAFETY: the caller's; NULL, for an empty darray, made dangling
+        let v = unsafe { KVVec::from_raw_parts(data, d.nr, d.size) };
+        DArrayLoan { d, v: core::mem::ManuallyDrop::new(v) }
+    }
+}
+
+impl<T> core::ops::Deref for DArrayLoan<'_, T> {
+    type Target = KVVec<T>;
+
+    fn deref(&self) -> &KVVec<T> {
+        &self.v
+    }
+}
+
+impl<T> core::ops::DerefMut for DArrayLoan<'_, T> {
+    fn deref_mut(&mut self) -> &mut KVVec<T> {
+        &mut self.v
+    }
+}
+
+impl<T> Drop for DArrayLoan<'_, T> {
+    fn drop(&mut self) {
+        // SAFETY: taken once, here; nothing reads it after
+        let v = unsafe { core::mem::ManuallyDrop::take(&mut self.v) };
+        let (data, nr, size) = v.into_raw_parts();
+        self.d.data = if size != 0 { data } else { core::ptr::null_mut() };
+        self.d.nr   = nr;
+        self.d.size = size;
+    }
+}
+
+/// Free darray @d, left empty: C's darray_exit(), for a darray a Rust type
+/// owns and drops.
+///
+/// # Safety
+/// As DArrayLoan::new(): @d is a darray, its buffer kvmalloc()'d.
+pub unsafe fn darray_exit<T>(d: &mut crate::types::DArray<T>) {
+    // SAFETY: the caller's; the vector it was lent as dropped, freeing the
+    // buffer, and an empty one given back
+    *unsafe { DArrayLoan::new(d) } = KVVec::new();
+}
+
 /// Insert @v at @idx, moving what's after it up one: neither build's KVVec
 /// has insert(), so it's a push and a rotate.
 pub fn kvvec_insert<T>(vec: &mut KVVec<T>, idx: usize, v: T) -> Result<(), AllocError> {
