@@ -70,6 +70,7 @@ c_extern! {
     pub fn bch2_opt_change_scope_exit(scope: *mut c::opt_change_scope);
     pub fn bch2_set_reconcile_needs_scan_trans(trans: *mut c::btree_trans, s: c::reconcile_scan) -> c_int;
     pub fn bch2_set_reconcile_needs_scan(c: *mut c::bch_fs, s: c::reconcile_scan, wakeup: bool) -> c_int;
+    pub fn bch2_reconcile_scan_cookie_is_set(trans: *mut c::btree_trans, inum: u64) -> c_int;
     pub fn rust_bch2_reconcile_wakeup(c: *mut c::bch_fs);
     pub fn bch2_reconcile_status_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
     pub fn bch2_reconcile_scan_pending_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
