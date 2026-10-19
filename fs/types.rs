@@ -7,6 +7,7 @@ use crate::util::vstructs::Head;
 use crate::types::{Atomic64, GenRadix, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::util::ffi::c_char;
 use crate::util::locking::{CMutex, Noio};
+use crate::util::sync::PercpuRwSem;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
 use cstruct_macros::{c_const, c_enum, c_xmacro, CStruct, Init, TypeInfo};
 use pin_init::pin_data;
@@ -663,7 +664,11 @@ pub struct Fs {
     pub gc_gens: c::bch_fs_gc_gens,
 
     pub accounting: c::bch_accounting_mem,
-    pub replicas: c::bch_replicas_cpu,
+    /// The replicas table, behind its own lock: alloc/replicas.rs's alone.
+    #[pin]
+    #[init(RustOnly::new(Noio::new(crate::new_percpu_rwsem!(crate::alloc::replicas::ReplicasCpu::new(),
+                                                            "&c->replicas"))))]
+    pub(crate) replicas: rust_only!(Noio<PercpuRwSem<crate::alloc::replicas::ReplicasCpu>>),
     pub disk_groups: c::DiskGroups,
     pub capacity: c::bch_fs_capacity,
     pub allocator: c::bch_fs_allocator,

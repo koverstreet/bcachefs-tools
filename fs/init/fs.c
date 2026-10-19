@@ -718,7 +718,6 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_free_pending_node_rewrites(c);
 	bch2_free_fsck_errs(c);
 	bch2_fs_vfs_exit(c);
-	bch2_fs_replicas_exit(c);
 	bch2_fs_reconcile_exit(c);
 	bch2_fs_nocow_locking_exit(c);
 	bch2_fs_journal_exit(&c->journal);
@@ -1553,7 +1552,7 @@ static int __bch2_fs_start(struct bch_fs *c, struct printbuf *err)
 	 * bump only happens lazily inside __bch2_accounting_maybe_kill (when
 	 * a user-data accounting entry zeroes), and a fresh fs that gets
 	 * forcibly shut down before that ever fires never persists the
-	 * version_incompat bump - on next mount, bch2_replicas_marked_locked
+	 * version_incompat bump - on next mount, bch2_replicas_marked
 	 * doesn't short-circuit for user data and accounting_read fsck_err's
 	 * for replicas not in the (no-longer-storing-them) sb.
 	 */

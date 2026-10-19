@@ -488,7 +488,7 @@ int bch2_accounting_mem_insert(struct bch_fs *c, struct bkey_s_c_accounting a,
 
 	if (mode != BCH_ACCOUNTING_read &&
 	    accounting_to_replicas(&r.e, a.k->p) &&
-	    !bch2_replicas_marked_locked(c, &r.e))
+	    !bch2_replicas_marked(c, &r.e))
 		return bch_err_throw(c, btree_insert_need_mark_replicas);
 
 	/*
@@ -512,7 +512,7 @@ int bch2_accounting_mem_insert_locked(struct bch_fs *c, struct bkey_s_c_accounti
 
 	if (mode != BCH_ACCOUNTING_read &&
 	    accounting_to_replicas(&r.e, a.k->p) &&
-	    !bch2_replicas_marked_locked(c, &r.e))
+	    !bch2_replicas_marked(c, &r.e))
 		return bch_err_throw(c, btree_insert_need_mark_replicas);
 
 	return __bch2_accounting_mem_insert(c, a);
@@ -927,7 +927,7 @@ static int bch2_disk_accounting_validate_late(struct btree_trans *trans,
 		 */
 		BUG_ON(bch2_replicas_entry_validate(&r.e, c, &buf));
 
-		if (fsck_err_on(!bch2_replicas_marked_locked(c, &r.e),
+		if (fsck_err_on(!bch2_replicas_marked(c, &r.e),
 				trans, accounting_replicas_not_marked,
 				"accounting not marked in superblock replicas\n%s",
 				(printbuf_reset(&buf),
@@ -1487,4 +1487,19 @@ void bch2_fs_accounting_exit(struct bch_fs *c)
 void rust_bch2_accounting_mem_read(struct bch_fs *c, struct bpos p, u64 *v, unsigned nr)
 {
 	bch2_accounting_mem_read(c, p, v, nr);
+}
+
+/* For Rust's replicas gc: whether @r has accounting - under mark_lock */
+bool bch2_accounting_mem_has_replicas(struct bch_fs *c, const struct bch_replicas_entry_v1 *r)
+{
+	percpu_rwsem_assert_held(&c->capacity.mark_lock.lock);
+
+	struct disk_accounting_pos k = { .type = BCH_DISK_ACCOUNTING_replicas };
+	unsafe_memcpy(&k.replicas, r, replicas_entry_bytes(r),
+		      "embedded variable length struct");
+
+	struct bpos p = disk_accounting_pos_to_bpos(&k);
+	struct bch_accounting_mem *acc = &c->accounting;
+	return eytzinger0_find(acc->k.data, acc->k.nr, sizeof(acc->k.data[0]),
+			       accounting_pos_cmp, &p) < acc->k.nr;
 }

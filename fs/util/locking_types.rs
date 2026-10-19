@@ -64,6 +64,7 @@ c_extern! {
     pub fn rust_percpu_up_read(sem: *mut c::percpu_rw_semaphore);
     pub fn rust_percpu_down_write(sem: *mut c::percpu_rw_semaphore);
     pub fn rust_percpu_up_write(sem: *mut c::percpu_rw_semaphore);
+    pub fn rust_percpu_rwsem_assert_held(sem: *mut c::percpu_rw_semaphore);
 
     pub fn rust_srcu_read_lock(ssp: *mut c::srcu_struct) -> c_int;
     pub fn rust_srcu_read_unlock(ssp: *mut c::srcu_struct, idx: c_int);

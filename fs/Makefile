@@ -73,7 +73,6 @@ bcachefs-y		:=			\
 	alloc/discard.o				\
 	alloc/foreground.o			\
 	alloc/lru.o				\
-	alloc/replicas.o			\
 	btree/bkey.o				\
 	btree/bkey_methods.o			\
 	btree/bset.o				\

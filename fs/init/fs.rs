@@ -3,7 +3,9 @@ use crate::btree::bkey::BkeyI;
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
-use crate::util::locking::{CMutexGuard, NoioGuard};
+use crate::util::locking::{CMutexGuard, Noio, NoioGuard};
+use crate::util::sync::PercpuRwSem;
+use core::mem::size_of;
 use crate::util::Printbuf;
 
 pub use crate::sb::members::DevRef;
@@ -186,6 +188,19 @@ impl Fs {
         unsafe { self.disk_sb.held() }
     }
 
+    /// c->capacity.mark_lock, C's - C initializes and frees it - as what it
+    /// is: struct percpu_rwsem_noio is one percpu_rw_semaphore, as a
+    /// PercpuRwSem over nothing.
+    pub fn mark_lock(&self) -> &Noio<PercpuRwSem> {
+        const _: () = assert!(size_of::<Noio<PercpuRwSem>>() == size_of::<c::percpu_rwsem_noio>());
+        // SAFETY: the same layout; borrowed, never dropped
+        unsafe { &*(&raw const self.capacity.mark_lock).cast() }
+    }
+
+    pub fn mark_lock_assert_held(&self) {
+        unsafe { c::rust_percpu_rwsem_assert_held(&raw const self.capacity.mark_lock.lock as *mut _) }
+    }
+
     /// The BCH_FS_* flags set.
     pub fn flags_to_text(&self, out: &mut Printbuf) {
         unsafe { out.prt_bitflags(c::bch2_fs_flag_strs.as_ptr(), self.flags() as u64) }
@@ -207,6 +222,12 @@ impl Fs {
     /// mutably, and nothing in the superblock is borrowed across the write.
     pub fn write_super(&self, _sb: &mut SbLockGuard) {
         unsafe { c::bch2_write_super(self.as_ptr()) };
+    }
+
+    /// write_super(), for a write whose only reason is a replicas entry coming
+    /// or going: it may leave the slow disks behind - bch2_write_super_replicas().
+    pub fn write_super_replicas(&self, _sb: &mut SbLockGuard) {
+        unsafe { c::bch2_write_super_replicas(self.as_ptr()) };
     }
 
     /// Throw @error, as C's bch_err_throw() does: counted in error_throw and

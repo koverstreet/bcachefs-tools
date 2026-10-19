@@ -108,7 +108,7 @@ const INTERNAL: &[Attr<Fs>] = &[
     Attr::ro(c"discards",               |c, out| c.discards_to_text(out, &c.discards.s)),
     Attr::ro(c"write_refs",             |c, out| c.write_refs_to_text(out)),
     Attr::ro(c"nocow_lock_table",       |c, out| c.nocow_locks.to_text(out)),
-    Attr::ro(c"replicas",               |c, out| c.replicas.to_text(out)),
+    Attr::ro(c"replicas",               |c, out| c.replicas.read().to_text(out)),
     Attr::ro(c"io_timers_read",         |c, out| c.io_clock[READ].to_text(out)),
     Attr::ro(c"io_timers_write",        |c, out| c.io_clock[WRITE].to_text(out)),
 
