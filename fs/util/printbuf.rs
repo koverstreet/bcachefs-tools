@@ -268,6 +268,33 @@ impl Printbuf {
         self.0.allocation_failure()
     }
 
+    pub fn set_may_vmalloc(&mut self, v: bool) {
+        self.0.set_may_vmalloc(v);
+    }
+
+    /// Drop the first @n bytes written, moving the rest - and the positions in
+    /// it - to the front.
+    pub fn drop_front(&mut self, n: usize) {
+        let pos = self.as_bytes().len();
+        assert!(n <= pos, "Printbuf::drop_front({n}) of {pos} bytes");
+        if n == 0 {
+            return;
+        }
+
+        let b = &mut self.0;
+        // SAFETY: n <= pos < size: the bytes written and their NUL, in the buffer
+        unsafe { core::ptr::copy(b.buf.add(n), b.buf, pos - n + 1) };
+
+        let n = n as u32;
+        b.pos -= n;
+        if b.last_newline >= n {
+            b.last_newline -= n;
+        }
+        if b.last_field >= n {
+            b.last_field -= n;
+        }
+    }
+
     /// A newline at the end, unless there's one or nothing's written:
     /// bch2_printbuf_ensure_trailing_newline().
     pub fn ensure_trailing_newline(&mut self) {
