@@ -172,10 +172,10 @@ static int bch2_next_fiemap_extent(struct btree_trans *trans,
 	try(bch2_subvolume_get_snapshot(trans, inode_inum(inode).subvol, &snapshot));
 
 	CLASS(btree_iter, iter)(trans, BTREE_ID_extents,
-				SPOS(inode_inum(inode).inum, start, snapshot), 0);
+				SPOS(inode_inum(inode).inum, start, snapshot), BTREE_ITER_trim);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(&iter, &POS(inode_inum(inode).inum, end)));
 
-	u64 pagecache_end = k.k ? max(start, bkey_start_offset(k.k)) : end;
+	u64 pagecache_end = k.k ? bkey_start_offset(k.k) : end;
 
 	try(bch2_next_fiemap_pagecache_extent(trans, inode, start, pagecache_end, cur));
 
@@ -196,11 +196,8 @@ static int bch2_next_fiemap_extent(struct btree_trans *trans,
 	 * and we don't provide a way for userspace to lock that out.
 	 */
 	if (k.k &&
-	    bkey_le(bpos_max(iter.pos, bkey_start_pos(k.k)),
-		    pagecache_start)) {
+	    bkey_le(bkey_start_pos(k.k), pagecache_start)) {
 		bch2_bkey_buf_reassemble(&cur->kbuf, k);
-		bch2_cut_front(trans->c, iter.pos, cur->kbuf.k);
-		bch2_cut_back(POS(inode_inum(inode).inum, end), cur->kbuf.k);
 		cur->flags = 0;
 	} else if (k.k) {
 		bch2_cut_back(bkey_start_pos(k.k), cur->kbuf.k);
