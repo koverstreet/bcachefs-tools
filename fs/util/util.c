@@ -20,6 +20,7 @@
 #include <linux/preempt.h>
 #include <linux/random.h>
 #include <linux/rcupdate.h>
+#include <linux/rhashtable.h>
 #include <linux/seq_buf.h>
 #include <linux/seq_file.h>
 #include <linux/string.h>
@@ -1526,6 +1527,22 @@ bool bch2_capable(int cap)
 int bch2_sysfs_create_file(struct kobject *kobj, const struct attribute *attr)
 {
 	return sysfs_create_file(kobj, attr);
+}
+
+/* For util/rhashtable.rs, to which struct bucket_table is opaque */
+const struct bucket_table *bch2_rht_table(const struct rhashtable *ht)
+{
+	return rht_dereference_rcu(ht->tbl, ht);
+}
+
+unsigned bch2_rht_nr_buckets(const struct bucket_table *tbl)
+{
+	return tbl->size;
+}
+
+void **bch2_rht_bucket(const struct bucket_table *tbl, unsigned hash)
+{
+	return (void **) rht_bucket(tbl, hash);
 }
 
 #ifdef __KERNEL__

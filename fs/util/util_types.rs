@@ -63,6 +63,9 @@ c_extern! {
     pub fn bch2_prt_u64_base2_nbits(out: *mut c::printbuf, v: u64, nr_bits: c_uint);
     pub fn bch2_prt_task_backtrace(out: *mut c::printbuf, task: *mut c::task_struct, skipnr: c_uint,
                                    gfp: c::gfp_t) -> c_int;
+    pub fn bch2_rht_table(ht: *const c::rhashtable) -> *const c::bucket_table;
+    pub fn bch2_rht_nr_buckets(tbl: *const c::bucket_table) -> c_uint;
+    pub fn bch2_rht_bucket(tbl: *const c::bucket_table, hash: c_uint) -> *mut *mut c_void;
     pub fn bch2_strtoull_h(cp: *const c_char, res: *mut c_ulonglong) -> c_int;
     pub fn bch2_read_flag_list(opt: *const c_char, list: *const *const c_char) -> u64;
     pub fn bch2_get_random_u64_below(ceil: u64) -> u64;
