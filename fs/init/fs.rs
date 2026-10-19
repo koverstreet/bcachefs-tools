@@ -769,6 +769,68 @@ macro_rules! fs_work {
     };
 }
 
+/// A delayed work item in bch_fs: one declaration for its function and its
+/// initializer, as fs_work!() - but holding no write ref: it's stopped with
+/// cancel_sync() going read-only, not drained.
+///
+/// ```text
+/// fs_delayed_work! {
+///     /// What it does
+///     pub(crate) work BtreeBitmapGcSchedule: field maybe_schedule_btree_bitmap_gc;
+///
+///     fn run(fs: &Fs) { ... }
+/// }
+/// ```
+///
+/// is the unit struct BtreeBitmapGcSchedule, with init() - the field's
+/// #[init(BtreeBitmapGcSchedule::init())] - and run(), run from the workqueue.
+/// Queueing and cancelling are the field's, a DelayedWork.
+#[macro_export]
+macro_rules! fs_delayed_work {
+    (
+        $(#[$attr:meta])*
+        $vis:vis work $name:ident: field $($field:ident).+;
+
+        fn run($fs:ident: &Fs) $body:block
+    ) => {
+        $(#[$attr])*
+        $vis struct $name;
+
+        impl $name {
+            $vis fn init() -> impl ::pin_init::PinInit<$crate::util::workqueue::DelayedWork> {
+                #[cfg(kernel)]
+                {
+                    // SAFETY: NUL-terminated
+                    let name = |s: &'static str| unsafe {
+                        ::core::ffi::CStr::from_bytes_with_nul_unchecked(s.as_bytes())
+                    };
+                    $crate::util::workqueue::DelayedWork::new(
+                        Self::work_fn,
+                        name(concat!(stringify!($name), "\0")),
+                        ::kernel::static_lock_class!(),
+                        name(concat!(stringify!($name), ".timer\0")),
+                        ::kernel::static_lock_class!())
+                }
+                #[cfg(not(kernel))]
+                $crate::util::workqueue::DelayedWork::new(Self::work_fn)
+            }
+
+            fn run($fs: &$crate::fs::Fs) $body
+
+            /// # Safety
+            /// @work is the field's.
+            unsafe extern "C" fn work_fn(work: *mut $crate::c::work_struct) {
+                let c = unsafe {
+                    work.byte_sub(::core::mem::offset_of!($crate::c::delayed_work, work))
+                        .byte_sub(::core::mem::offset_of!($crate::c::bch_fs, $($field).+))
+                        .cast::<$crate::c::bch_fs>()
+                };
+                Self::run(unsafe { $crate::fs::Fs::borrow_raw(c) })
+            }
+        }
+    };
+}
+
 impl Drop for WriteRef<'_> {
     fn drop(&mut self) {
         unsafe { c::rust_enumerated_ref_put(&raw mut (*self.fs.as_ptr()).writes, self.idx as u32) };

@@ -79,6 +79,12 @@ c_extern! {
     pub fn bch2_get_random_u64() -> u64;
     pub fn bch2_ktime_get_coarse_real_ts64(ts: *mut c::timespec64);
     pub fn bch2_queue_work(wq: *mut c::workqueue_struct, work: *mut c::work_struct) -> bool;
+    pub fn bch2_init_delayed_work(dwork: *mut c::delayed_work,
+                                  func: Option<unsafe extern "C" fn(*mut c::work_struct)>);
+    pub fn bch2_queue_delayed_work(wq: *mut c::workqueue_struct, dwork: *mut c::delayed_work,
+                                   delay: c_ulong) -> bool;
+    pub fn bch2_cancel_delayed_work_sync(dwork: *mut c::delayed_work) -> bool;
+    pub fn bch2_system_long_wq() -> *mut c::workqueue_struct;
     pub fn bch2_capable(cap: c_int) -> bool;
     pub fn bch2_sysfs_create_file(kobj: *mut c::kobject, attr: *const c::attribute) -> c_int;
     #[cfg(__KERNEL__)]

@@ -21,6 +21,7 @@ pub mod sysfs;
 pub mod sync;
 pub mod varint;
 pub mod vstructs;
+pub mod workqueue;
 
 pub use printbuf::{Printbuf, ToText};
 

@@ -1486,6 +1486,32 @@ bool bch2_queue_work(struct workqueue_struct *wq, struct work_struct *work)
 	return queue_work(wq, work);
 }
 
+/*
+ * For DelayedWork (util/workqueue.rs). The kernel build initializes with a
+ * lockdep class per Rust call site, as the kernel crate does - this is the
+ * shim's INIT_DELAYED_WORK().
+ */
+void bch2_init_delayed_work(struct delayed_work *dwork, work_func_t func)
+{
+	INIT_DELAYED_WORK(dwork, func);
+}
+
+bool bch2_queue_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork,
+			     unsigned long delay)
+{
+	return queue_delayed_work(wq, dwork, delay);
+}
+
+bool bch2_cancel_delayed_work_sync(struct delayed_work *dwork)
+{
+	return cancel_delayed_work_sync(dwork);
+}
+
+struct workqueue_struct *bch2_system_long_wq(void)
+{
+	return system_long_wq;
+}
+
 /* capable() is a function in the kernel, a macro (true) in userspace's blkdev.h */
 bool bch2_capable(int cap)
 {
