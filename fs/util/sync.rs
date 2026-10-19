@@ -7,7 +7,8 @@
 //! RwSem is ours in-kernel: the kernel crate has no reader/writer lock - its
 //! Lock<T, Backend> only hands out exclusive guards. SeqLock is ours in both
 //! builds - the kernel crate has none, and it's only atomics. PercpuRwSem is
-//! ours in both too, over C's struct in both: C takes it as well.
+//! ours in both too, over C's struct in both: C takes it as well, or it
+//! guards a T of Rust's.
 //!
 //! Lock and RwLock are how a guard is had from any of them, for what takes a
 //! lock generically - util::locking::Noio.
@@ -77,51 +78,71 @@ mod percpu_rwsem {
     use core::ffi::{c_void, CStr};
     use core::marker::{PhantomData, PhantomPinned};
 
-    /// The kernel's percpu_rw_semaphore, as C's struct: readers - many and
-    /// cheap, a per-CPU count each - share it, a writer has it alone, at the
-    /// cost of waiting out every reader. It guards no Rust data: what it
-    /// orders is C's as much as Rust's, and C takes it through the same
-    /// struct.
-    #[repr(transparent)]
-    pub struct PercpuRwSem {
+    /// The kernel's percpu_rw_semaphore, as C's struct, over a T: readers -
+    /// many and cheap, a per-CPU count each - share it, a writer has it alone,
+    /// at the cost of waiting out every reader. With no T, what it orders is
+    /// C's as much as Rust's, and C takes it through the same struct - the T
+    /// is after it, so C sees only the semaphore.
+    #[repr(C)]
+    pub struct PercpuRwSem<T = ()> {
         sem:  UnsafeCell<c::percpu_rw_semaphore>,
-        _pin: PhantomPinned,
+        data: UnsafeCell<T>,
+        // in a PhantomData: a bare PhantomPinned isn't FFI-safe in a repr(C)
+        // struct, and C structs hold this one
+        _pin: PhantomData<PhantomPinned>,
     }
 
-    // SAFETY: a lock, taken and released through C
-    unsafe impl Send for PercpuRwSem {}
-    unsafe impl Sync for PercpuRwSem {}
+    // SAFETY: as std's RwLock - a writer may be on any thread, so T: Send;
+    // readers share &T across threads, so T: Sync.
+    unsafe impl<T: Send> Send for PercpuRwSem<T> {}
+    unsafe impl<T: Send + Sync> Sync for PercpuRwSem<T> {}
 
-    impl PercpuRwSem {
+    impl<T> PercpuRwSem<T> {
         /// percpu_init_rwsem(), with a lockdep class of its own - @key, named
-        /// @name. new_percpu_rwsem!() is this, with a static key per call
-        /// site. Fails if the per-CPU counts can't be allocated.
+        /// @name - over @t. new_percpu_rwsem!() is this, with a static key
+        /// per call site. Fails if the per-CPU counts can't be allocated.
         #[doc(hidden)]
-        pub fn new(name: &'static CStr, key: *mut c_void) -> impl ::pin_init::PinInit<Self, BchError> {
+        pub fn new(t: T, name: &'static CStr, key: *mut c_void) -> impl ::pin_init::PinInit<Self, BchError> {
             // SAFETY: rust_percpu_init_rwsem() initializes the semaphore in
-            // place - it's pinned - and that's all of it
+            // place - it's pinned - and the value is written; that's all of
+            // it. On failure there's no T to drop: it's written after.
             unsafe {
                 ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
                     ret_to_result_void(c::rust_percpu_init_rwsem((&raw mut (*slot).sem).cast(),
-                                                                 name.as_ptr().cast(), key))
+                                                                 name.as_ptr().cast(), key))?;
+                    (&raw mut (*slot).data).write(UnsafeCell::new(t));
+                    Ok(())
                 })
             }
         }
 
         /// percpu_down_read(): shared with other readers.
-        pub fn read(&self) -> PercpuRwSemReadGuard<'_> {
+        pub fn read(&self) -> PercpuRwSemReadGuard<'_, T> {
             unsafe { c::rust_percpu_down_read(self.sem.get()) };
             PercpuRwSemReadGuard(self, PhantomData)
         }
 
         /// percpu_down_write(): alone, once every reader has gone.
-        pub fn write(&self) -> PercpuRwSemWriteGuard<'_> {
+        pub fn write(&self) -> PercpuRwSemWriteGuard<'_, T> {
             unsafe { c::rust_percpu_down_write(self.sem.get()) };
             PercpuRwSemWriteGuard(self, PhantomData)
         }
     }
 
-    impl Drop for PercpuRwSem {
+    impl<T> super::RwLock for PercpuRwSem<T> {
+        type ReadGuard<'a> = PercpuRwSemReadGuard<'a, T> where T: 'a;
+        type WriteGuard<'a> = PercpuRwSemWriteGuard<'a, T> where T: 'a;
+
+        fn read(&self) -> PercpuRwSemReadGuard<'_, T> {
+            PercpuRwSem::read(self)
+        }
+
+        fn write(&self) -> PercpuRwSemWriteGuard<'_, T> {
+            PercpuRwSem::write(self)
+        }
+    }
+
+    impl<T> Drop for PercpuRwSem<T> {
         fn drop(&mut self) {
             unsafe { c::rust_percpu_free_rwsem(self.sem.get_mut()) }
         }
@@ -131,35 +152,64 @@ mod percpu_rwsem {
     type NotSend = PhantomData<*mut ()>;
 
     /// A read-held PercpuRwSem: percpu_up_read() when dropped.
-    pub struct PercpuRwSemReadGuard<'a>(&'a PercpuRwSem, NotSend);
+    pub struct PercpuRwSemReadGuard<'a, T = ()>(&'a PercpuRwSem<T>, NotSend);
 
-    impl Drop for PercpuRwSemReadGuard<'_> {
+    impl<T> core::ops::Deref for PercpuRwSemReadGuard<'_, T> {
+        type Target = T;
+
+        fn deref(&self) -> &T {
+            // SAFETY: read-held - writers are excluded
+            unsafe { &*self.0.data.get() }
+        }
+    }
+
+    impl<T> Drop for PercpuRwSemReadGuard<'_, T> {
         fn drop(&mut self) {
             unsafe { c::rust_percpu_up_read(self.0.sem.get()) }
         }
     }
 
     /// A write-held PercpuRwSem: percpu_up_write() when dropped.
-    pub struct PercpuRwSemWriteGuard<'a>(&'a PercpuRwSem, NotSend);
+    pub struct PercpuRwSemWriteGuard<'a, T = ()>(&'a PercpuRwSem<T>, NotSend);
 
-    impl Drop for PercpuRwSemWriteGuard<'_> {
+    impl<T> core::ops::Deref for PercpuRwSemWriteGuard<'_, T> {
+        type Target = T;
+
+        fn deref(&self) -> &T {
+            // SAFETY: write-held - everyone else is excluded
+            unsafe { &*self.0.data.get() }
+        }
+    }
+
+    impl<T> core::ops::DerefMut for PercpuRwSemWriteGuard<'_, T> {
+        fn deref_mut(&mut self) -> &mut T {
+            // SAFETY: write-held - everyone else is excluded
+            unsafe { &mut *self.0.data.get() }
+        }
+    }
+
+    impl<T> Drop for PercpuRwSemWriteGuard<'_, T> {
         fn drop(&mut self) {
             unsafe { c::rust_percpu_up_write(self.0.sem.get()) }
         }
     }
 }
 
-/// A PercpuRwSem initializer, named @name for lockdep, with a lock class of
-/// its own.
+/// A PercpuRwSem initializer, over @t - or nothing - named @name for lockdep,
+/// with a lock class of its own.
 #[macro_export]
 macro_rules! new_percpu_rwsem {
-    ($name:literal $(,)?) => {{
+    ($name:literal $(,)?) => {
+        $crate::new_percpu_rwsem!((), $name)
+    };
+    ($t:expr, $name:literal $(,)?) => {{
         #[cfg(kernel)]
         let key = ::kernel::static_lock_class!().as_ptr().cast();
         #[cfg(not(kernel))]
         let key = ::core::ptr::null_mut();
 
         $crate::util::sync::PercpuRwSem::new(
+            $t,
             // SAFETY: NUL-terminated, no NUL before it - a literal's text
             unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked(
                 ::core::concat!($name, "\0").as_bytes()) },
