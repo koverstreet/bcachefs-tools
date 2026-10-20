@@ -134,12 +134,21 @@ static void __journal_write_alloc(struct journal *j,
 
 		bch2_dev_stripe_increment(ca, &j->wp.stripe);
 
+		u64 offset = bucket_to_sector(ca, ja->buckets[ja->cur_idx]) +
+			ca->mi.bucket_size - ja->sectors_free;
+
+		/*
+		 * Checked here, not at submit: flush writes are submitted after
+		 * their preflushes, so behind later noflush writes - a device's
+		 * submissions aren't in allocation order, and a ring lap can
+		 * make two consecutive ones the same sector, legitimately:
+		 */
+		BUG_ON(offset == ca->prev_journal_sector);
+		ca->prev_journal_sector = offset;
+
 		bch2_bkey_append_ptr(c, &w->key,
 			(struct bch_extent_ptr) {
-				  .offset = bucket_to_sector(ca,
-					ja->buckets[ja->cur_idx]) +
-					ca->mi.bucket_size -
-					ja->sectors_free,
+				  .offset = offset,
 				  .dev = ca->dev_idx,
 		});
 
@@ -622,9 +631,6 @@ static CLOSURE_CALLBACK(journal_write_submit)
 			     sectors);
 
 		struct journal_device *ja = &ca->journal;
-
-		BUG_ON(ptr->offset == ca->prev_journal_sector);
-		ca->prev_journal_sector = ptr->offset;
 
 		/*
 		 * blk-wbt.c throttles all writes except those that have both
