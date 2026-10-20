@@ -136,7 +136,12 @@ const INTERNAL: &[Attr<Fs>] = &[
     Attr::wo(c"trigger_delete_dead_snapshots", |c, _| writable(c, |c| {
         // debug force: bypass auto_snapshot_deletion; serialize via run_lock
         let _run = passes::run_lock(c);
-        crate::snapshots::delete::delete_dead_snapshots_forced(c)
+        // Deletion stopping because it was told to isn't the write failing -
+        // and cancelled's errno is EINTR, which a write must not return:
+        match crate::snapshots::delete::delete_dead_snapshots_forced(c) {
+            Err(e) if e.matches(bch_errcode::BCH_ERR_cancelled) => Ok(()),
+            ret => ret,
+        }
     })),
     Attr::wo(c"trigger_emergency_read_only", |c, _| writable(c, |c| {
         let mut msg = LogMsg::new(c);
