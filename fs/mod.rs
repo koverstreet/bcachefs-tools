@@ -159,7 +159,8 @@ pub mod c {
     // A union bindgen can't make a Rust union - a member isn't Copy: the
     // closure's, holding a work_struct - is a struct of these markers over
     // its storage. Zeroed storage is each member zeroed: Zeroable if they
-    // all are, which this leaves the derive to check.
+    // all are, which this leaves the derive to check. (The storage, from
+    // bindgen 0.73 an __BindgenOpaqueArrayN, codegen.rs makes Zeroable.)
     //
     // SAFETY: a PhantomData - no bytes
     #[cfg(kernel)]

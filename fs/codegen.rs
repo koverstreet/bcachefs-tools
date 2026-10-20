@@ -110,7 +110,8 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String]) 
         std::process::exit(1);
     }
 
-    let bindings = String::from_utf8(result.stdout).expect("bindgen output utf8");
+    let mut bindings = String::from_utf8(result.stdout).expect("bindgen output utf8");
+    bindings += &opaque_arrays_zeroable(&bindings);
     std::fs::write(format!("{out}/bindings.rs"), bindings).expect("write bindings.rs");
 
     // None, or one with the wrapper's path baked into its #include: the bare
@@ -118,6 +119,24 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String]) 
     let fixed = std::fs::read_to_string(&extern_c).unwrap_or_default()
         .replace(&format!("\"{wrapper}\""), "\"codegen-wrapper.h\"");
     std::fs::write(&extern_c, fixed).expect("write extern.c");
+}
+
+/// bindgen 0.73 stores an opaque blob - the storage of a union it can't make a
+/// Rust union, the closure's - as __BindgenOpaqueArrayN<T>, aligned as the C,
+/// where 0.72 had a [u64; N]. It's bindgen's own helper, so --with-derive-custom
+/// doesn't reach it, and without Zeroable neither is a closure, nor bch_fs
+/// holding one. The impls, for the ones this bindgen defined: 0.72 defines
+/// none, and an impl of a type that isn't there doesn't compile. The union's
+/// members are __BindgenUnionField, made Zeroable in mod.rs.
+fn opaque_arrays_zeroable(bindings: &str) -> String {
+    bindings.lines()
+        .filter_map(|l| l.strip_prefix("pub struct __BindgenOpaqueArray"))
+        .filter_map(|rest| rest.split('<').next())
+        .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        .map(|n| format!("\n// SAFETY: repr(C, align({n})) over a T: zeroed bytes are a zeroed T\n\
+                          unsafe impl<T: ::pin_init::Zeroable> ::pin_init::Zeroable \
+                          for __BindgenOpaqueArray{n}<T> {{}}\n"))
+        .collect()
 }
 
 /// Escape regex metacharacters in a path, for --blocklist-file: unescaped, the
