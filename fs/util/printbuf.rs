@@ -57,6 +57,19 @@ impl Printbuf {
         Printbuf(c::printbuf::new())
     }
 
+    /// A printbuf over @size bytes at @buf that it doesn't own: it never
+    /// grows past them - what doesn't fit is cut off - or frees them.
+    /// PRINTBUF_EXTERN.
+    ///
+    /// # Safety
+    /// @buf is @size writable bytes, for as long as this lives.
+    pub unsafe fn new_extern(buf: *mut crate::util::ffi::c_char, size: usize) -> Self {
+        let mut p = c::printbuf::default();
+        p.buf  = buf;
+        p.size = size as u32;
+        Printbuf(p)
+    }
+
     /// A C caller's printbuf, to write to - for a to_text C calls. Borrowed:
     /// it's the caller's to free.
     ///

@@ -222,29 +222,22 @@ unsafe extern "C" fn store<D: Dir>(kobj: *mut c::kobject, attr: *mut c::attribut
     unsafe { store_buf(buf, size, |s| D::store(obj, &*attr, s)) }
 }
 
-/// A show: what @f writes, to sysfs's page @buf - or @f's error, as an errno.
+/// A show: what @f writes - into sysfs's page @buf itself, cut off at its end -
+/// or @f's error, as an errno.
 ///
 /// # Safety
 /// @buf is a PAGE_SIZE buffer.
 pub unsafe fn show_page(buf: *mut c_char, f: impl FnOnce(&mut Printbuf) -> Result<(), BchError>) -> isize {
-    let mut out = Printbuf::new();
+    // SAFETY: the caller's
+    let mut out = unsafe { Printbuf::new_extern(buf, crate::util::kernel::PAGE_SIZE) };
 
-    let ret = f(&mut out).and_then(|()| {
-        out.ensure_trailing_newline();
-        if out.allocation_failure() {
-            return Err(c::ENOMEM.into());
+    match f(&mut out) {
+        Ok(()) => {
+            out.ensure_trailing_newline();
+            out.as_bytes().len() as isize
         }
-        Ok(())
-    });
-    if let Err(e) = ret {
-        return e.class() as isize;
+        Err(e) => e.class() as isize,
     }
-
-    let bytes = out.as_bytes();
-    let n = bytes.len().min(crate::util::kernel::PAGE_SIZE - 1);
-    // SAFETY: @buf's, and @n is under PAGE_SIZE
-    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.cast::<u8>(), n) };
-    n as isize
 }
 
 /// A store: @f given what was written, @size bytes at @buf - all of it taken
