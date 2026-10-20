@@ -12,8 +12,10 @@
 use crate::accounting::{data_type, data_type_from_u8, data_type_is_empty};
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, BkeySC};
+use crate::btree::bkey::{pos, BkeyI, BkeySC};
+use crate::btree::iter::{TransAttempt, TransBkey};
 use crate::c;
+use crate::errcode::{errptr_to_result, BchError};
 use crate::util::kernel::READ;
 
 /// Alloc key @k, of whatever version, as a current one - one that isn't an
@@ -24,6 +26,23 @@ pub fn alloc_to_v4(k: BkeySC<'_>) -> c::AllocV4 {
     // SAFETY: @k is a key, @a an alloc_v4 to fill
     unsafe { c::__bch2_alloc_to_v4(k.into(), &mut a) };
     a
+}
+
+impl<'a, 't> TransAttempt<'a, 't> {
+    /// alloc_to_v4(), as a key in transaction memory to edit and update with
+    /// - not queued as an update: bch2_alloc_to_v4_mut().
+    pub fn alloc_to_v4_mut(&self, k: BkeySC<'_>) -> Result<TransBkey<'a, 't, c::AllocV4>, BchError> {
+        // SAFETY: @k is a key
+        let a = errptr_to_result(unsafe { c::bch2_alloc_to_v4_mut(self.raw(), k.into()) })?;
+
+        // Grown to all of an alloc_v4, or as long as @k if it's longer:
+        let u64s = u32::from(unsafe { (*a).k.u64s })
+            .max((size_of::<BkeyI<c::AllocV4>>() / size_of::<u64>()) as u32);
+        // SAFETY: an alloc_v4 key in our memory, with @u64s u64s of room
+        let a = unsafe { TransBkey::from_raw_room(self, a.cast(), u64s) };
+        // SAFETY: all of an alloc_v4
+        Ok(unsafe { a.whole_unchecked() })
+    }
 }
 
 impl c::AllocV4 {
