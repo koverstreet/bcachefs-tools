@@ -121,7 +121,6 @@ bcachefs-y		:=			\
 	init/error.o				\
 	init/fs.o				\
 	init/recovery.o				\
-	init/passes.o				\
 	journal/init.o				\
 	journal/journal.o			\
 	journal/read.o				\

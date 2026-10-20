@@ -345,6 +345,18 @@ impl Printbuf {
         c::bch2_prt_bitflags(&mut self.0, list, flags);
     }
 
+    /// The names of the bits set in @flags, comma separated: prt_bitflags(),
+    /// of a Rust table - a bit past its end has none, and isn't printed.
+    pub fn bitflags(&mut self, names: &[&str], flags: u64) {
+        let set = names.iter().enumerate().filter(|&(i, _)| i < 64 && flags & 1 << i != 0);
+        for (n, (_, name)) in set.enumerate() {
+            if n != 0 {
+                write!(self, ",");
+            }
+            write!(self, "{name}");
+        }
+    }
+
     /// For the C prt_*() functions.
     pub fn as_raw(&mut self) -> &mut c::printbuf {
         &mut self.0

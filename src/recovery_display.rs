@@ -12,7 +12,6 @@
 //! numbers are one interval stale.
 
 use std::{
-    ffi::CStr,
     fmt::Write as _,
     fs::{File, OpenOptions},
     io::{self, IsTerminal, Write},
@@ -25,6 +24,7 @@ use anyhow::Context;
 use rustix::fs::{flock, FlockOperation};
 
 use bch_bindgen::c;
+use bcachefs_kernel::init::passes;
 use bcachefs_kernel::util::vstructs::{Unvalidated, UnvalidatedEntries};
 
 use crate::commands::fs_usage::replicas_spare_redundancy;
@@ -415,21 +415,8 @@ fn mask_count(m: &c::bch_recovery_pass_mask) -> u32 {
     m.v.iter().map(|w| w.count_ones()).sum()
 }
 
-/// bindgen types the unsized `bch2_recovery_passes[]` as `[*const c_char; 0]`,
-/// so `.get()` returns None for every index, not just out-of-range ones - a
-/// lookup that reads like a miss and cannot succeed. Index off the address.
 fn pass_name(pass: u32) -> &'static str {
-    if pass >= c::bch_recovery_pass::BCH_RECOVERY_PASS_NR as u32 {
-        return "(unknown)";
-    }
-
-    unsafe {
-        let p = *c::bch2_recovery_passes.as_ptr().add(pass as usize);
-        if p.is_null() {
-            return "(unknown)";
-        }
-        CStr::from_ptr(p).to_str().unwrap_or("(unknown)")
-    }
+    passes::name(pass).unwrap_or("(unknown)")
 }
 
 fn units_name(units: u32) -> &'static str {

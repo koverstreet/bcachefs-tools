@@ -4,9 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use crate::util::ffi::c_char;
-use core::ffi::c_int;
-use cstruct_macros::{CStruct, c_extern, TypeInfo};
+use cstruct_macros::{CStruct, TypeInfo};
 
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
@@ -63,19 +61,8 @@ pub struct bch_fs_recovery {
 
     pub lock: c::spinlock_t,
     pub run_lock: c::mutex,
-    pub work: c::work_struct,
+    /* the async runner: bch2_run_async_recovery_passes() */
+    #[c("struct work_struct work")]
+    pub work: crate::fs::FsWork,
 }
 c_default!(bch_fs_recovery);
-
-c_extern! {
-    pub static bch2_recovery_passes: [*const c_char; 0];
-    pub fn bch2_fsck_recovery_passes() -> u64;
-    pub fn rust_bch2_recovery_cancelled(c: *mut c::bch_fs) -> core::ffi::c_int;
-    pub fn rust_bch2_recovery_run_lock_assert_held(c: *mut c::bch_fs);
-    pub fn bch2_run_explicit_recovery_pass(c: *mut c::bch_fs, out: *mut c::printbuf,
-                                           pass: c::bch_recovery_pass,
-                                           flags: c::bch_run_recovery_pass_flags) -> c_int;
-    pub fn bch2_require_recovery_pass(c: *mut c::bch_fs, out: *mut c::printbuf,
-                                      pass: c::bch_recovery_pass) -> c_int;
-    pub fn bch2_recovery_pass_status_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
-}

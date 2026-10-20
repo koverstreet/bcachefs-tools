@@ -1,14 +1,7 @@
 #ifndef _BCACHEFS_RECOVERY_PASSES_H
 #define _BCACHEFS_RECOVERY_PASSES_H
 
-#include <linux/kthread.h>
-
-extern const char * const bch2_recovery_passes[];
-
 #include "init/passes_gen.h"
-
-u64 bch2_fsck_recovery_passes(void);
-
 #include "init/passes_defs_gen.h"
 
 /*
@@ -18,9 +11,9 @@ u64 bch2_fsck_recovery_passes(void);
  * runs before us precisely so that we can see it here - that pass has no way
  * to ask for writes later, it just fails with erofs_trans_commit.
  *
- * Both scheduled sets: which one a pass lands in is recovery_pass_is_persistent(),
- * which says nothing about whether it writes. c->opts.recovery_passes stays
- * because bch2_fs_start() calls us before recovery seeds the ephemeral set.
+ * Both scheduled sets: which one a pass lands in is is_persistent() in
+ * passes.rs, which says nothing about whether it writes. c->opts.recovery_passes
+ * stays because bch2_fs_start() calls us before recovery seeds the ephemeral set.
  */
 static inline bool go_rw_in_recovery(struct bch_fs *c)
 {
@@ -39,30 +32,5 @@ static inline bool recovery_pass_will_run(struct bch_fs *c, enum bch_recovery_pa
 	return unlikely(test_bit(BCH_FS_in_recovery, &c->flags) &&
 			c->recovery.current_passes & BIT_ULL(pass));
 }
-
-static inline int bch2_recovery_cancelled(struct bch_fs *c)
-{
-	if (test_bit(BCH_FS_going_ro, &c->flags))
-		return bch_err_throw(c, erofs_recovery_cancelled);
-
-	if ((current->flags & PF_KTHREAD) && kthread_should_stop())
-		return bch_err_throw(c, recovery_cancelled);
-
-	return 0;
-}
-
-int __bch2_run_explicit_recovery_pass(struct bch_fs *, struct printbuf *,
-				      enum bch_recovery_pass,
-				      enum bch_run_recovery_pass_flags,
-				      struct sb_write *);
-
-u64 bch2_recovery_passes_match(unsigned);
-void bch2_run_async_recovery_passes(struct bch_fs *);
-int bch2_run_recovery_passes(struct bch_fs *, u64, bool);
-int bch2_run_recovery_passes_startup(struct bch_fs *, enum bch_recovery_pass);
-
-void bch2_recovery_pass_status_to_text(struct printbuf *, struct bch_fs *);
-
-void bch2_fs_recovery_passes_init(struct bch_fs *);
 
 #endif /* _BCACHEFS_RECOVERY_PASSES_H */

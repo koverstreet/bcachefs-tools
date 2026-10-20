@@ -197,8 +197,7 @@ fn ext(sb: &mut c::bch_sb_handle) -> &mut c::bch_sb_field_ext<Validated> {
 fn set_upgrade(sb: &mut c::bch_sb_handle, table: &[UpDown], old: u32, new: u32) {
     let ext = ext(sb);
     for i in table.iter().filter(|i| old < i.version.0 && i.version.0 <= new) {
-        // SAFETY: C's table of the passes
-        let fsck = if i.all_fsck { unsafe { c::bch2_fsck_recovery_passes() } } else { 0 };
+        let fsck = if i.all_fsck { passes::fsck_passes() } else { 0 };
         let passes = passes::passes_to_stable(i.passes | fsck);
         ext.recovery_passes_required[0] |= passes;
         for e in i.errors {
