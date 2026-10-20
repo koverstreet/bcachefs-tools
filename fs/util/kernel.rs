@@ -79,6 +79,17 @@ pub fn ktime_get_real_seconds() -> i64 {
     unsafe { c::ktime_get_real_seconds() as i64 }
 }
 
+/// The monotonic clock, in nanoseconds: ktime_get_ns().
+pub fn ktime_get_ns() -> u64 {
+    unsafe { c::bch2_ktime_get_ns() }
+}
+
+/// Whether this task is a kthread told to stop: kthread_should_stop(),
+/// which only a kthread may ask.
+pub fn kthread_should_stop() -> bool {
+    unsafe { c::bch2_kthread_should_stop() }
+}
+
 /// A capability, as the kernel's CAP_* - the values are ABI
 /// (uapi/linux/capability.h). Defined here because userspace's capable()
 /// ignores its argument, so it has no CAP_* constants to bind.

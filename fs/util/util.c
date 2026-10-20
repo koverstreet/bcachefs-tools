@@ -1467,6 +1467,16 @@ bool bch2_fatal_signal_pending(void)
 	return fatal_signal_pending(current);
 }
 
+u64 bch2_ktime_get_ns(void)
+{
+	return ktime_get_ns();
+}
+
+bool bch2_kthread_should_stop(void)
+{
+	return (current->flags & PF_KTHREAD) && kthread_should_stop();
+}
+
 unsigned long bch2_nsecs_to_jiffies(u64 ns)
 {
 	return nsecs_to_jiffies(ns);

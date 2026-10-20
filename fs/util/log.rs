@@ -78,17 +78,38 @@ impl LogLevel {
 
 /// Print @msg at @level: what the bch_err!() family expands to.
 pub fn log(fs: &Fs, level: LogLevel, msg: &dyn ToText) {
+    print(fs, level.0, true, msg, true)
+}
+
+/// log(), without the newline: a line for log_cont() to finish - C's
+/// bch2_print(c, KERN_INFO bch2_log_msg(c, ...)).
+pub fn log_start(fs: &Fs, level: LogLevel, msg: &dyn ToText) {
+    print(fs, level.0, true, msg, false)
+}
+
+/// The rest of the line log_start() began: KERN_CONT.
+pub fn log_cont(fs: &Fs, msg: &dyn ToText) {
+    print(fs, b'c', false, msg, true)
+}
+
+/// @msg at printk level @level, after the filesystem's name if @prefix, and
+/// a newline if @newline.
+fn print(fs: &Fs, level: u8, prefix: bool, msg: &dyn ToText, newline: bool) {
     let mut buf = Printbuf::new();
 
     #[cfg(kernel)]
-    {
+    if prefix {
         write!(buf, "bcachefs ({}): ", fs.name().to_str().unwrap_or("?"));
     }
+    #[cfg(not(kernel))]
+    let _ = prefix;
     msg.to_text(&mut buf);
-    buf.newline();
+    if newline {
+        buf.newline();
+    }
 
     // KERN_SOH, level, then the message as data: a '%' in it is text.
-    let fmt = [0x01, level.0, b'%', b's', 0];
+    let fmt = [0x01, level, b'%', b's', 0];
     unsafe {
         __bch2_print(fs.as_ptr(), fmt.as_ptr() as *const c_char, buf.as_raw().buf);
     }
