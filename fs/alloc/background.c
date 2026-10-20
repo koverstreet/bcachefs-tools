@@ -1036,7 +1036,7 @@ int bch2_alloc_read(struct bch_fs *c)
 			if (k.k->type != KEY_TYPE_bucket_gens)
 				continue;
 
-			ca = bch2_dev_iterate(c, ca, k.k->p.inode);
+			ca = bch2_dev_iterate_noerror(c, ca, k.k->p.inode);
 			/*
 			 * Not a fsck error because this is checked/repaired by
 			 * bch2_check_alloc_key() which runs later:
@@ -1057,7 +1057,7 @@ int bch2_alloc_read(struct bch_fs *c)
 	} else {
 		ret = for_each_btree_key(trans, iter, BTREE_ID_alloc, POS_MIN,
 					 BTREE_ITER_prefetch, k, ({
-			ca = bch2_dev_iterate(c, ca, k.k->p.inode);
+			ca = bch2_dev_iterate_noerror(c, ca, k.k->p.inode);
 			/*
 			 * Not a fsck error because this is checked/repaired by
 			 * bch2_check_alloc_key() which runs later:
@@ -1255,6 +1255,16 @@ int bch2_trigger_alloc(struct btree_trans *trans, struct btree_trigger_op op)
 {
 	struct bch_fs *c = trans->c;
 	int ret = 0;
+
+	/*
+	 * An alloc key for a bucket that doesn't exist is check_alloc_info's
+	 * to delete (alloc_key_to_missing_dev_bucket): gc has nothing to
+	 * account for it, and deleting it nothing to undo. Inserting one is
+	 * the inconsistency:
+	 */
+	if (unlikely(!bch2_dev_bucket_exists(c, op.new.k->p)) &&
+	    ((op.flags & BTREE_TRIGGER_gc) || bkey_deleted(op.new.k)))
+		return 0;
 
 	CLASS(bch2_dev_bucket_tryget, ca)(c, op.new.k->p);
 	if (!ca)
