@@ -265,8 +265,9 @@ pub fn bch2_fs_mark_dirty(c: &Opaque<c::bch_fs>) {
 
 /// Marked clean: the clean section written, so the next mount needn't read
 /// the journal - its btree roots, the key version and io clocks, as of the
-/// journal's seq now. An error is logged, and the superblock's marked clean
-/// anyway, as in C: the flag is set before the section's written.
+/// journal's seq now. The flag is set once the section is written and valid:
+/// on an error, logged, the superblock stays dirty, and the next mount reads
+/// the journal.
 #[c_export]
 pub fn bch2_fs_mark_clean(c: &Opaque<c::bch_fs>) {
     let fs = Fs::from_c(c);
@@ -277,10 +278,8 @@ pub fn bch2_fs_mark_clean(c: &Opaque<c::bch_fs>) {
     }
 
     let (version, big_endian) = (sb.sb().version.get(), sb.sb().big_endian());
-    let s = sb.sb_mut();
-    s.set_clean(true);
-    s.compat[0] |= 1 << c::bch_sb_compat::BCH_COMPAT_alloc_info.0 |
-                   1 << c::bch_sb_compat::BCH_COMPAT_alloc_metadata.0;
+    sb.sb_mut().compat[0] |= 1 << c::bch_sb_compat::BCH_COMPAT_alloc_info.0 |
+                             1 << c::bch_sb_compat::BCH_COMPAT_alloc_metadata.0;
 
     let u64s = SECTION_HEAD / size_of::<u64>() + fs.journal.entry_u64s_reserved as usize;
     let Some(f) = sb.field_resize::<Section>(u64s as u32) else {
@@ -312,6 +311,7 @@ pub fn bch2_fs_mark_clean(c: &Opaque<c::bch_fs>) {
         bch_err!(fs, "error writing marking filesystem clean: validate error");
         return;
     }
+    sb.sb_mut().set_clean(true);
 
     // SAFETY: under sb_lock, which it needs
     unsafe { c::bch2_journal_pos_from_member_info_set(fs.as_ptr()) };
