@@ -58,9 +58,15 @@ impl c::bch_dev {
 }
 
 /// The bucket @v encodes - device in the top 16 bits, bucket in the low 48 -
-/// as the lru btree's targets do: u64_to_bucket().
+/// as the lru btree's targets and need_discard's positions do:
+/// u64_to_bucket().
 pub fn u64_to_bucket(v: u64) -> c::bpos {
     pos(v >> 48, v & ((1 << 48) - 1))
+}
+
+/// u64_to_bucket()'s inverse: bucket_to_u64().
+pub fn bucket_to_u64(bucket: c::bpos) -> u64 {
+    bucket.inode << 48 | (bucket.offset & ((1 << 48) - 1))
 }
 
 // ── Bucket generations ───────────────────────────────────────────────────

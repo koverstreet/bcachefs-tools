@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Alloc keys - background.c's, as it converts. So far, what check_lrus needs
-//! to know where a bucket belongs in the lrus.
+//! Alloc keys - background.c's, as it converts. So far, what fsck needs to
+//! know where a bucket belongs in the lrus, and in need_discard, freespace and
+//! bucket_gens.
 //!
 //! These are background.h's inlines, for Rust, while C still has its own: the
-//! alloc trigger writes lru entries by C's, check_lrus checks them by these.
-//! The two must agree exactly - to the C integer types, wrapping and all -
-//! or fsck calls good entries bad.
+//! alloc trigger writes the entries by C's, fsck checks them by these. The two
+//! must agree exactly - to the C integer types, wrapping and all - or fsck
+//! calls good entries bad.
 
 use crate::accounting::{data_type, data_type_from_u8, data_type_is_empty};
-use crate::btree::bkey::BkeySC;
+use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{pos, BkeySC};
 use crate::c;
 use crate::util::kernel::READ;
 
@@ -82,5 +85,103 @@ impl c::AllocV4 {
         let bucket_size = u64::from(ca.mi.bucket_size);
         let d = self.sectors_dirty().min(bucket_size as i64) as u64;
         d * (1 << 31) / bucket_size
+    }
+
+    /// How far its generation is past its oldest pointer's, wrapping:
+    /// alloc_gc_gen().
+    pub fn gc_gen(&self) -> u8 {
+        self.generation.wrapping_sub(self.oldest_gen)
+    }
+}
+
+// ── Positions in the btrees an alloc key indexes into ────────────────────
+//
+// need_discard, freespace and bucket_gens are indexes of the alloc btree,
+// each with its own encoding of a bucket's position - background.h's
+// inlines, for Rust: positions as their own types, converted to and from
+// bpos at the btree.
+
+/// A bucket's entry in the need_discard btree: the journal seq it became
+/// empty at, then the bucket, as bucket_to_u64().
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NeedDiscardPos {
+    pub journal_seq_empty: u64,
+    pub bucket:            c::bpos,
+}
+
+impl NeedDiscardPos {
+    /// Where bucket @bucket, alloc key @a, belongs.
+    pub fn new(bucket: c::bpos, a: &c::AllocV4) -> Self {
+        Self { journal_seq_empty: a.journal_seq_empty, bucket }
+    }
+
+    pub fn from_bpos(p: c::bpos) -> Self {
+        Self { journal_seq_empty: p.inode, bucket: u64_to_bucket(p.offset) }
+    }
+
+    pub fn to_bpos(self) -> c::bpos {
+        pos(self.journal_seq_empty, bucket_to_u64(self.bucket))
+    }
+}
+
+/// Where in a free bucket's offset, in the freespace btree, the high bits of
+/// its gc gen go.
+const FREESPACE_GENBITS_SHIFT: u32 = 56;
+
+/// A free bucket's place in the freespace btree: the bucket, with the high
+/// bits of its gc gen in the top bits of the offset - alloc_freespace_pos().
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FreespacePos {
+    pub bucket:  c::bpos,
+    /// The bucket's gc gen >> 4: alloc_freespace_genbits() >> 56. Read from
+    /// the btree, whatever the top 8 bits hold.
+    pub genbits: u8,
+}
+
+impl FreespacePos {
+    /// Where bucket @bucket, alloc key @a, belongs.
+    pub fn new(bucket: c::bpos, a: &c::AllocV4) -> Self {
+        Self { bucket, genbits: a.gc_gen() >> 4 }
+    }
+
+    pub fn from_bpos(p: c::bpos) -> Self {
+        Self {
+            bucket:  pos(p.inode, p.offset & ((1 << FREESPACE_GENBITS_SHIFT) - 1)),
+            genbits: (p.offset >> FREESPACE_GENBITS_SHIFT) as u8,
+        }
+    }
+
+    pub fn to_bpos(self) -> c::bpos {
+        pos(self.bucket.inode, self.bucket.offset | u64::from(self.genbits) << FREESPACE_GENBITS_SHIFT)
+    }
+}
+
+/// Where a bucket's generation is in the bucket_gens btree: the key - one per
+/// KEY_TYPE_BUCKET_GENS_NR buckets - and its index in the key's gens[]:
+/// alloc_gens_pos().
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BucketGensPos {
+    pub key: c::bpos,
+    /// < KEY_TYPE_BUCKET_GENS_NR
+    pub idx: usize,
+}
+
+impl BucketGensPos {
+    pub fn new(bucket: c::bpos) -> Self {
+        Self {
+            key: pos(bucket.inode, bucket.offset >> c::KEY_TYPE_BUCKET_GENS_BITS),
+            idx: (bucket.offset & u64::from(c::KEY_TYPE_BUCKET_GENS_MASK)) as usize,
+        }
+    }
+
+    /// The bucket it's the gen of: bucket_gens_pos_to_alloc().
+    pub fn bucket(self) -> c::bpos {
+        pos(self.key.inode, self.key.offset << c::KEY_TYPE_BUCKET_GENS_BITS | self.idx as u64)
+    }
+
+    /// The bucket's gen in @k, its bucket_gens key - 0 if it hasn't one:
+    /// alloc_gen().
+    pub fn bucket_gen(self, k: BkeySC<'_>) -> u8 {
+        k.arm::<c::BucketGens>().map_or(0, |g| g.v().gens[self.idx])
     }
 }
