@@ -14,17 +14,18 @@
 //! An error id is a permanent on-disk number, never reused or renumbered:
 //! the ids are checked at build time to be exactly 0..=MAX.
 
-use core::cmp::Reverse;
+use core::cmp::{Ordering, Reverse};
+use core::ffi::c_int;
 
 use cstruct_macros::c_export;
 
 use crate::c;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::prt;
-use crate::sb::io::{sb_field_ops, SbFieldOps};
-use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
-use crate::util::ffi::c_char;
+use crate::sb::io::{sb_field_ops, sb_field_u64s, SbFieldOps};
+use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
+use crate::util::ffi::{c_char, Opaque};
 use crate::util::{Printbuf, ToText};
 
 // ── Error ids, and their names ───────────────────────────────────────────────
@@ -242,3 +243,142 @@ pub static bch_sb_field_ops_errors: c::bch_sb_field_ops = sb_field_ops::<c::bch_
 
 #[c_export]
 pub static bch_sb_field_ops_errors_v2: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_errors_v2>();
+
+// ── The counts, in memory ────────────────────────────────────────────────────
+//
+// c->errors.counts, sorted by id: read in from the superblock at mount, counted
+// in as errors happen, and written out with every superblock write. Lock
+// order: sb_lock, then counts - bch2_sb_errors_from_cpu() takes counts under
+// bch2_write_super()'s sb_lock.
+
+/// The largest in-memory count: nr is 48 bits.
+const CPU_NR_MAX: u64 = (1 << 48) - 1;
+
+fn cpu_entry(id: c::bch_sb_error_id, nr: u64, first: u64, last: u64) -> c::bch_sb_error_entry_cpu {
+    let mut e = c::bch_sb_error_entry_cpu {
+        first_error_time: first,
+        last_error_time:  last,
+        ..Default::default()
+    };
+    e.set_id(id.0 as u16);
+    e.set_nr(nr.min(CPU_NR_MAX));
+    e
+}
+
+impl<E: ErrorEntry> From<&E> for c::bch_sb_error_entry_cpu {
+    fn from(e: &E) -> Self {
+        cpu_entry(e.id(), e.nr(), e.first(), e.last())
+    }
+}
+
+/// One error's counts from both sections: summed, over the union of their
+/// time ranges.
+fn merge(a: c::bch_sb_error_entry_cpu, b: c::bch_sb_error_entry_cpu) -> c::bch_sb_error_entry_cpu {
+    cpu_entry(c::bch_sb_error_id(a.id().into()), a.nr().saturating_add(b.nr()),
+              a.first_error_time.min(b.first_error_time),
+              a.last_error_time.max(b.last_error_time))
+}
+
+impl Fs {
+    /// Count @err, as having happened now. With no memory for a new entry,
+    /// it isn't counted.
+    pub fn sb_error_count(&self, err: c::bch_sb_error_id) {
+        // SAFETY: reads the clock
+        let now = unsafe { c::ktime_get_real_seconds() } as u64;
+        let mut counts = self.errors.counts.lock();
+
+        match counts.binary_search_by_key(&err.0, |e| e.id().into()) {
+            Ok(i) => {
+                let e = &mut counts[i];
+                e.set_nr((e.nr() + 1).min(CPU_NR_MAX));
+                e.last_error_time = now;
+            }
+            Err(i) => {
+                let _ = kvvec_insert(&mut counts, i, cpu_entry(err, 1, now, now));
+            }
+        }
+    }
+
+    /// The superblock's counts into memory, at mount. Both sections present
+    /// means the filesystem was downgraded: writing v2 always deletes v1 in
+    /// the same superblock write, so a v1 alongside v2 was written by an old
+    /// kernel since, and holds exactly the counts accrued since. They're
+    /// merged - nothing lost or counted twice across a downgrade and upgrade
+    /// - and the next superblock write folds everything back into v2.
+    pub fn sb_errors_to_cpu(&self) -> Result<(), BchError> {
+        let sb = self.sb_lock();
+        let v2: &[c::bch_sb_field_error_entry_v2] = sb.field::<c::bch_sb_field_errors_v2>().map_or(&[], |f| &f.entries);
+        let v1: &[c::bch_sb_field_error_entry]    = sb.field::<c::bch_sb_field_errors>().map_or(&[], |f| &f.entries);
+
+        let mut counts = self.errors.counts.lock();
+        counts.clear();
+        counts.reserve(v2.len() + v1.len(), GFP_KERNEL)?;
+
+        // validated strictly ascending by id: a sorted merge, a section
+        // that's run out reading as past every id
+        let (mut v2, mut v1) = (v2.iter().peekable(), v1.iter().peekable());
+        loop {
+            let a = v2.peek().map_or(u64::MAX, |e| e.id().0.into());
+            let b = v1.peek().map_or(u64::MAX, |e| e.id().0.into());
+            let e = match a.cmp(&b) {
+                Ordering::Less    => v2.next().unwrap().into(),
+                Ordering::Greater => v1.next().unwrap().into(),
+                Ordering::Equal if a == u64::MAX => return Ok(()),
+                Ordering::Equal   => merge(v2.next().unwrap().into(), v1.next().unwrap().into()),
+            };
+            counts.push(e, GFP_KERNEL)?;
+        }
+    }
+
+    /// The counts in memory, by id.
+    pub fn errors_to_text(&self, out: &mut Printbuf) {
+        for (i, w) in [48, 8, 16, 16].into_iter().enumerate() {
+            if out.nr_tabstops() <= i as u32 {
+                out.tabstop_push(w);
+            }
+        }
+
+        for e in self.errors.counts.lock().iter() {
+            prt!(out, "{}\t{}\t", c::bch_sb_error_id(e.id().into()), e.nr());
+            out.datetime(e.first_error_time as i64);
+            out.tab();
+            out.datetime(e.last_error_time as i64);
+            out.newline();
+        }
+    }
+}
+
+#[c_export]
+pub fn bch2_sb_error_count(c: &Opaque<c::bch_fs>, err: c::bch_sb_error_id) {
+    Fs::from_c(c).sb_error_count(err)
+}
+
+#[c_export]
+pub fn bch2_sb_errors_to_cpu(c: &Opaque<c::bch_fs>) -> c_int {
+    ret_to_c(Fs::from_c(c).sb_errors_to_cpu())
+}
+
+/// For a superblock write: the counts in memory into v2, and v1 deleted -
+/// to_cpu() merged it in. If v2 can't be grown, the superblock keeps what it
+/// had until the next write.
+#[c_export]
+pub fn bch2_sb_errors_from_cpu(c: &Opaque<c::bch_fs>) {
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock, from bch2_write_super()
+    let mut sb = unsafe { fs.sb_lock_held() };
+    let counts = fs.errors.counts.lock();
+
+    let u64s = sb_field_u64s::<c::bch_sb_field_errors_v2>(counts.len());
+    let Some(f) = sb.field_resize::<c::bch_sb_field_errors_v2>(u64s) else { return };
+
+    // every field of each entry is set: what the resize left there doesn't matter
+    for (d, s) in f.entries.iter_mut().zip(counts.iter()) {
+        d.v.set_id(s.id());
+        d.v.set_nr(s.nr().min(c::BCH_SB_ERROR_ENTRY_V2_NR_MAX) as u32);
+        d.v.set_first_error_time(s.first_error_time.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
+        d.v.set_last_error_time(s.last_error_time.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
+    }
+
+    sb.field_delete(c::bch_sb_field_type::BCH_SB_FIELD_errors);
+}
+

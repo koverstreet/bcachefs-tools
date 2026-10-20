@@ -174,7 +174,7 @@ pub fn count_fsck_err(fs: &Fs, err: bch_sb_error_id, msg: &mut Printbuf) -> bool
 }
 
 pub fn sb_error_count(fs: &Fs, err: bch_sb_error_id) {
-    unsafe { c::bch2_sb_error_count(fs.as_ptr(), err) }
+    fs.sb_error_count(err)
 }
 
 /// fs_inconsistent(), with what the transaction has queued in the message.

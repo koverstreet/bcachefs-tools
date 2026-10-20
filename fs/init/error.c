@@ -976,7 +976,6 @@ void bch2_inum_offset_err_msg_trans(struct btree_trans *trans, struct printbuf *
 void bch2_fs_errors_exit(struct bch_fs *c)
 {
 	darray_exit(&c->errors.damaged_paths);
-	darray_exit(&c->errors.counts);
 }
 
 void bch2_fs_errors_init_early(struct bch_fs *c)
@@ -984,9 +983,6 @@ void bch2_fs_errors_init_early(struct bch_fs *c)
 	darray_init(&c->errors.msgs);
 	darray_init(&c->errors.damaged_paths);
 	mutex_init(&c->errors.msgs_lock);
-
-	mutex_init(&c->errors.counts_lock);
-	darray_init(&c->errors.counts);
 }
 
 int bch2_fs_errors_init(struct bch_fs *c)

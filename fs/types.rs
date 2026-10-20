@@ -635,6 +635,8 @@ pub struct Fs {
     #[init(crate::sb::counters::RecentCounters::init())]
     pub counters_recent: crate::util::workqueue::DelayedWork,
     pub times: [c::bch2_time_stats; c::BCH_TIME_STAT_NR as usize],
+    #[pin]
+    #[init(c::bch_fs_errors::init())]
     pub errors: c::bch_fs_errors,
 
     /* C's CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS, which bcachefs.h defines from

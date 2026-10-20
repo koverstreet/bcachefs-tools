@@ -4,8 +4,6 @@
 
 #include "sb/errors_gen.h"
 
-void bch2_fs_errors_to_text(struct printbuf *, struct bch_fs *);
-
 /*
  * Block statuses we count separately: what the device said is the first
  * thing worth knowing from a filesystem that's logging IO errors - media
@@ -77,8 +75,5 @@ enum bch_sb_error_id bch2_blk_sts_sb_err(int);
 
 enum bch_sb_error_id bch2_decompress_sb_err(int);
 enum bch_key_type_errors bch2_decompress_key_type_error(int);
-
-void bch2_sb_errors_from_cpu(struct bch_fs *);
-int bch2_sb_errors_to_cpu(struct bch_fs *);
 
 #endif /* _BCACHEFS_SB_ERRORS_H */

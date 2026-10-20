@@ -3,10 +3,13 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{DArray, c_default};
+use crate::types::{DArray, RustOnly, rust_only};
+use crate::util::alloc::KVVec;
 use crate::util::ffi::c_char;
+use crate::util::sync::{new_mutex, Mutex};
 use core::ffi::c_int;
-use cstruct_macros::{CStruct, c_extern, TypeInfo};
+use cstruct_macros::{CStruct, c_extern, Init, TypeInfo};
+use pin_init::pin_data;
 
 /*
  * A path that fsck damaged or couldn't fully recover, remembered so we can
@@ -26,8 +29,9 @@ pub struct fsck_damaged_path {
     pub errors: [u16; 7],
 }
 
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_errors {
     pub msgs: DArray<*mut c::fsck_err_state>,
     pub msgs_lock: c::mutex,
@@ -36,10 +40,11 @@ pub struct bch_fs_errors {
     pub damaged_paths: DArray<c::fsck_damaged_path>,
     pub damaged_paths_alloc_err: bool,
 
-    pub counts: c::bch_sb_errors_cpu,
-    pub counts_lock: c::mutex,
+    /* The superblock's error counts, by id: sb/errors.rs */
+    #[pin]
+    #[init(RustOnly::new(new_mutex!(KVVec::new())))]
+    pub(crate) counts: rust_only!(Mutex<KVVec<c::bch_sb_error_entry_cpu>>),
 }
-c_default!(bch_fs_errors);
 
 c_extern! {
     pub fn bch2_fsck_damaged_path_to_text(out: *mut c::printbuf, trans: *mut c::btree_trans,
