@@ -14,24 +14,16 @@ use crate::errcode::{
     BchError,
     ENOENT_bkey_type_mismatch,
     ret_to_result,
-    ret_to_result_void,
 };
-use crate::fs::{BorrowedFs, Fs};
-use crate::util::async_exec::{block_on, spawn, system_unbound, WaitGroup};
+use crate::fs::Fs;
 use crate::util::kernel::{local_clock, random_u64_below};
+use crate::util::par::{self, Backend};
 use crate::prt;
 use crate::util::printbuf::{HumanReadable, Printbuf};
 use crate::c;
 
 use core::ops::ControlFlow;
-use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
-
-#[cfg(kernel)]
-use kernel::prelude::*;
-#[cfg(kernel)]
-use kernel::sync::Arc;
-#[cfg(not(kernel))]
-use std::sync::Arc;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(not(kernel))]
 use bcachefs_shim as kernel;
@@ -41,14 +33,6 @@ type TestFn = fn(&Fs, u64) -> TestRet;
 
 const NO_ENOSPC: CommitFlags = CommitFlags::NO_ENOSPC;
 const INTERNAL_SNAPSHOT_NODE: UpdateTriggerFlags = UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE;
-
-fn error_ret(error: BchError) -> i32 {
-    -error.raw()
-}
-
-fn enomem(fs: &Fs) -> BchError {
-    fs.err(bch_errcode::BCH_ERR_ENOMEM_perf_test_job)
-}
 
 fn round_up(v: u64, by: u64) -> u64 {
     v.div_ceil(by) * by
@@ -871,54 +855,6 @@ fn lookup_test(testname: &[u8]) -> Option<(&'static [u8], TestFn)> {
     TESTS.iter().copied().find(|(name, _)| testname == *name)
 }
 
-struct TestJob {
-    fs:         BorrowedFs,
-    nr:         u64,
-    nr_threads: u32,
-    test:       TestFn,
-
-    abort:      AtomicBool,
-    ret:        AtomicI32,
-}
-
-impl TestJob {
-    fn new(fs: &Fs, nr: u64, nr_threads: u32, test: TestFn) -> Result<Arc<Self>, BchError> {
-        let job = TestJob {
-            fs:         BorrowedFs::new(fs),
-            nr,
-            nr_threads,
-            test,
-            abort:      AtomicBool::new(false),
-            ret:        AtomicI32::new(0),
-        };
-
-        // The only logic-level cfg left after the async conversion: kernel
-        // `Arc::new` is fallible and demands a GFP context, userspace's isn't. If
-        // kernel alloc inherited its context from `current` (scoped memalloc
-        // flags) instead of threading GFP per call, even this would unify.
-        #[cfg(kernel)]
-        let job = Arc::new(job, GFP_KERNEL).map_err(|_| enomem(fs))?;
-        #[cfg(not(kernel))]
-        let job = Arc::new(job);
-
-        Ok(job)
-    }
-}
-
-/// One worker: run the test (unless the batch aborted), report to `wg`.
-async fn btree_perf_test_one(job: Arc<TestJob>, wg: Arc<WaitGroup>) {
-    if !job.abort.load(Ordering::Acquire) {
-        let fs = job.fs.get();
-        if let Err(e) = (job.test)(fs, job.nr / job.nr_threads as u64) {
-            job.ret
-                .compare_exchange(0, error_ret(e), Ordering::AcqRel, Ordering::Relaxed)
-                .ok();
-        }
-    }
-
-    wg.done();
-}
-
 fn print_perf_result(
     name:          &[u8],
     nr_threads:    u32,
@@ -949,43 +885,19 @@ pub fn btree_perf_test(fs: &Fs, testname: &str, nr: u64, nr_threads: u32) -> Res
         return fs.throw(bch_errcode::BCH_ERR_EINVAL_test_unknown_test);
     };
 
-    let job = TestJob::new(fs, nr, nr_threads, test)?;
-
-    let queue = system_unbound();
-    let wg = WaitGroup::new(nr_threads).map_err(|_| enomem(fs))?;
-
-    // Fork the workers and wait for all of them: `block_on` drives the join on
-    // this thread, parking until the last worker reports in, and hands back the
-    // shared timing/result so nothing has to outlive the moved `job`. `None` means
-    // a worker failed to spawn (the start was never taken, so we can't time it).
-    let outcome = block_on(async move {
-        let mut spawned = 0;
-        for _ in 0..nr_threads {
-            if spawn(queue, btree_perf_test_one(job.clone(), wg.clone())).is_err() {
-                break;
-            }
-            spawned += 1;
+    // A kthread each, as C's, all made before any starts - the scope starts
+    // them together as its body returns - and timed from then until the last
+    // is done. A short spawn starts none, and has nothing to time
+    let mut start = None;
+    let ret = par::scope(Backend::Kthreads, |s| {
+        for i in 0..nr_threads {
+            s.spawn(format_args!("bcachefs perf test[{i}]"), move || test(fs, nr / u64::from(nr_threads)))?;
         }
-
-        // A short spawn can't be timed (the missing workers never run), so flag
-        // the batch aborted and balance the group for the ones that won't report.
-        if spawned != nr_threads {
-            job.abort.store(true, Ordering::Release);
-            for _ in spawned..nr_threads {
-                wg.done();
-            }
-        }
-
-        // Start the clock once the workers are launched; they run as the queue
-        // schedules them, and block_on parks here until the last reports in.
-        let start = local_clock();
-        wg.wait().await;
-
-        (spawned == nr_threads).then(|| (start, job.ret.load(Ordering::Acquire)))
+        start = Some(local_clock());
+        Ok(())
     });
-
-    let Some((start, ret_code)) = outcome else {
-        return Err(enomem(fs));
+    let Some(start) = start else {
+        return ret;
     };
 
     let finish = local_clock();
@@ -1002,5 +914,5 @@ pub fn btree_perf_test(fs: &Fs, testname: &str, nr: u64, nr_threads: u32) -> Res
 
     print_perf_result(name, nr_threads, time, nsec_per_iter, nr, per_sec);
 
-    ret_to_result_void(ret_code)
+    ret
 }

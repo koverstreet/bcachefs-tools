@@ -54,25 +54,11 @@ impl Fs {
     }
 }
 
-#[derive(Copy, Clone)]
-pub struct BorrowedFs(*mut c::bch_fs);
-
-// SAFETY: BorrowedFs is a non-owning pointer to a live filesystem supplied by
-// C. Users must ensure the borrowed bch_fs outlives all cross-thread users.
-unsafe impl Send for BorrowedFs {}
-// SAFETY: bch_fs internal synchronization is handled by the filesystem code.
-unsafe impl Sync for BorrowedFs {}
-
-impl BorrowedFs {
-    /// A cross-thread non-owning handle: the bch_fs must outlive its users.
-    pub fn new(fs: &Fs) -> Self {
-        Self(fs.as_ptr())
-    }
-
-    pub fn get(&self) -> &Fs {
-        unsafe { Fs::borrow_raw(self.0) }
-    }
-}
+// SAFETY: the filesystem is every thread's: C shares a bch_fs with all of
+// them, its state behind its own locks, atomics and RCU - so a &Fs goes to
+// any thread too. What Rust reads through it is as synchronized as the C it
+// reads: that's each field's, as in C.
+unsafe impl Sync for Fs {}
 
 /// The version's number and name.
 impl crate::util::ToText for c::bcachefs_metadata_version {
