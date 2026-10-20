@@ -27,6 +27,8 @@
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::types::Le64;
+
 const BITS: usize = usize::BITS as usize;
 
 /// C's words are unsigned longs.
@@ -273,5 +275,62 @@ impl<const W: usize> Deref for AtomicBitArray<W> {
 
     fn deref(&self) -> &AtomicBitmap {
         AtomicBitmap::from_words(&self.0)
+    }
+}
+
+// ── On disk ──────────────────────────────────────────────────────────────
+
+/// A bitmap on disk - a superblock section's: little-endian u64 words, so
+/// bit i is the same bit on every machine, and the words are u64 aligned as
+/// the structs that hold them are. C's *_bit_le64().
+#[repr(transparent)]
+pub struct LeBitmap([Le64]);
+
+impl LeBitmap {
+    pub fn from_words(w: &[Le64]) -> &LeBitmap {
+        // SAFETY: repr(transparent) over [Le64]
+        unsafe { &*(w as *const [Le64] as *const LeBitmap) }
+    }
+
+    pub fn from_words_mut(w: &mut [Le64]) -> &mut LeBitmap {
+        // SAFETY: repr(transparent) over [Le64]
+        unsafe { &mut *(w as *mut [Le64] as *mut LeBitmap) }
+    }
+
+    /// test_bit_le64(): false past the end.
+    pub fn test(&self, bit: usize) -> bool {
+        self.0.get(bit / 64).is_some_and(|w| w.get() & 1 << (bit % 64) != 0)
+    }
+
+    /// __set_bit_le64().
+    pub fn set(&mut self, bit: usize) {
+        self.0[bit / 64] |= 1 << (bit % 64);
+    }
+
+    /// __clear_bit_le64().
+    pub fn clear(&mut self, bit: usize) {
+        let w = &mut self.0[bit / 64];
+        *w = Le64::new(w.get() & !(1 << (bit % 64)));
+    }
+
+    /// __test_and_set_bit_le64(): whether it was set.
+    pub fn test_and_set(&mut self, bit: usize) -> bool {
+        let was = self.test(bit);
+        self.set(bit);
+        was
+    }
+
+    /// The set bits, in order.
+    pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.0.iter().enumerate().flat_map(|(i, w)| {
+            let mut w = w.get();
+            core::iter::from_fn(move || {
+                (w != 0).then(|| {
+                    let b = w.trailing_zeros() as usize;
+                    w &= w - 1;
+                    i * 64 + b
+                })
+            })
+        })
     }
 }
