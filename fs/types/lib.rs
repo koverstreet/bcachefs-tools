@@ -122,6 +122,11 @@ macro_rules! le_int {
             fn from(v: $t) -> Self { Self::new(v) }
         }
 
+        /// Bits set: OR is the same in either byte order.
+        impl core::ops::BitOrAssign<$t> for $name {
+            fn bitor_assign(&mut self, v: $t) { self.0 |= v.to_le() }
+        }
+
         impl From<$name> for $t {
             fn from(v: $name) -> Self { v.get() }
         }
