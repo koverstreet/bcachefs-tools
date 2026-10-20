@@ -120,6 +120,10 @@ c_extern! {
     pub fn bch2_wake_up_process(p: *mut c::task_struct);
     pub fn bch2_get_task_struct(p: *mut c::task_struct);
     pub fn bch2_put_task_struct(p: *mut c::task_struct);
+    pub fn bch2_current() -> *mut c::task_struct;
+    pub fn bch2_set_current_state_idle(freezable: bool);
+    pub fn bch2_set_current_state_running();
+    pub fn bch2_schedule();
     pub fn bch2_capable(cap: c_int) -> bool;
     pub fn bch2_sysfs_create_file(kobj: *mut c::kobject, attr: *const c::attribute) -> c_int;
     #[cfg(__KERNEL__)]

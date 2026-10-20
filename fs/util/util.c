@@ -1592,6 +1592,31 @@ void bch2_put_task_struct(struct task_struct *p)
 	put_task_struct(p);
 }
 
+/*
+ * For util/gather.rs's sync wait, as closure_sync()'s: current and
+ * set_current_state() are macros.
+ */
+struct task_struct *bch2_current(void)
+{
+	return current;
+}
+
+/* TASK_IDLE: no hung task warnings, as closure_sync_unbounded() avoids them */
+void bch2_set_current_state_idle(bool freezable)
+{
+	set_current_state(TASK_IDLE|(freezable ? TASK_FREEZABLE : 0));
+}
+
+void bch2_set_current_state_running(void)
+{
+	__set_current_state(TASK_RUNNING);
+}
+
+void bch2_schedule(void)
+{
+	schedule();
+}
+
 /* capable() is a function in the kernel, a macro (true) in userspace's blkdev.h */
 bool bch2_capable(int cap)
 {
