@@ -131,7 +131,6 @@ bcachefs-y		:=			\
 	journal/write.o				\
 	opts.o					\
 	sb/clean.o				\
-	sb/downgrade.o				\
 	sb/io.o					\
 	sb/members.o				\
 	util/clock.o				\

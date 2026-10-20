@@ -974,7 +974,7 @@ use_clean:
 	/* some mount options can only be checked after the btree is running */
 	try(bch2_opts_hooks_pre_set(c));
 
-	try(bch2_sb_set_upgrade_extra(c));
+	bch2_sb_set_upgrade_extra(c);
 
 	if (bch2_journal_scrub_will_run(c)) {
 		u64 rewind_seq = 0;

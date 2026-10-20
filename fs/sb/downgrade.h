@@ -4,10 +4,4 @@
 
 #include "sb/downgrade_gen.h"
 
-int bch2_sb_downgrade_update(struct bch_fs *);
-void bch2_sb_set_upgrade(struct bch_fs *, unsigned, unsigned);
-void bch2_sb_set_upgrade_incompat(struct bch_fs *, unsigned, unsigned);
-int bch2_sb_set_upgrade_extra(struct bch_fs *);
-void bch2_sb_set_downgrade(struct bch_fs *, unsigned, unsigned);
-
 #endif /* _BCACHEFS_SB_DOWNGRADE_H */
