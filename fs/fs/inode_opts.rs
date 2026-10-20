@@ -21,7 +21,7 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::snapshots::{snapshot, subvolume};
-use crate::util::alloc::{flags, DArrayLoan};
+use crate::util::alloc::{darray_exit, flags, DArrayLoan};
 use crate::util::ffi::Opaque;
 use crate::util::{Printbuf, ToText};
 use crate::{fsck_err_flags, inode, logged_ops, opts};
@@ -231,6 +231,36 @@ pub fn bch2_inode_opts_get_inode(
 }
 
 // ── A key's io options ───────────────────────────────────────────────────
+
+/// A walk's per_snapshot_io_opts, Rust's: C's CLASS(per_snapshot_io_opts).
+/// Made as per_snapshot_io_opts_init() makes it - the change cookie one
+/// behind, so the first get_io_opts() takes the filesystem's - and its
+/// darray freed on drop, as _exit() frees it.
+pub struct PerSnapshotIoOpts(c::per_snapshot_io_opts);
+
+impl PerSnapshotIoOpts {
+    pub fn new(fs: &Fs) -> Self {
+        let mut s = c::per_snapshot_io_opts::default();
+        s.fs_io_opts.change_cookie = fs.opt_change_cookie.wrapping_sub(1);
+        PerSnapshotIoOpts(s)
+    }
+}
+
+impl core::ops::Deref for PerSnapshotIoOpts {
+    type Target = c::per_snapshot_io_opts;
+    fn deref(&self) -> &c::per_snapshot_io_opts { &self.0 }
+}
+
+impl core::ops::DerefMut for PerSnapshotIoOpts {
+    fn deref_mut(&mut self) -> &mut c::per_snapshot_io_opts { &mut self.0 }
+}
+
+impl Drop for PerSnapshotIoOpts {
+    fn drop(&mut self) {
+        // SAFETY: a darray get_io_opts() grew
+        unsafe { darray_exit(&mut self.0.d) };
+    }
+}
 
 /// The io options @k's data is written with: a btree node pointer's, the
 /// filesystem's metadata options; a file's data, its inode's, as of its

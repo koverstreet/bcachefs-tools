@@ -61,10 +61,6 @@ static inline struct bch_extent_reconcile io_opts_to_reconcile_opts(struct bch_f
 	};
 };
 
-struct bkey_s_c reconcile_bp_get_key(struct btree_trans *,
-				     struct btree_iter *,
-				     struct bkey_s_c_backpointer);
-
 static inline struct bch_backpointer rb_bp(enum btree_id btree, unsigned level, struct bkey_s_c k)
 {
 	return (struct bch_backpointer) {

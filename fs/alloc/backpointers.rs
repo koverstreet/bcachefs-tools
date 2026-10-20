@@ -122,11 +122,6 @@ pub fn bch2_backpointer_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c:
     ret_to_c(backpointer_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
-macro_rules! reconcile_work_id_strs {
-    ($(($n:ident)),* $(,)?) => { [$(stringify!($n)),*] };
-}
-const RECONCILE_WORK_ID_STRS: [&str; 4] = c::RECONCILE_WORK_IDS!(reconcile_work_id_strs);
-
 #[cold]
 #[c_export]
 pub fn bch2_backpointer_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>>, k: BkeySC<'_>) {
@@ -158,7 +153,7 @@ pub fn bch2_backpointer_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>
     prt!(out, "{}", { v.pos });
 
     if v.reconcile_phys() != 0 {
-        prt!(out, " reconcile_phys={}", RECONCILE_WORK_ID_STRS[v.reconcile_phys() as usize]);
+        prt!(out, " reconcile_phys={}", v.reconcile_work_phys());
     }
     if v.erasure_coded() {
         prt!(out, " ec");

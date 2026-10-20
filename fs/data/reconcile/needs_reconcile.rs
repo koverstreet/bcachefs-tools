@@ -420,7 +420,7 @@ fn extent_trigger_set_needs_reconcile(t: &TransAttempt<'_, '_>, op: &mut Trigger
 /// transaction restarted. Nothing if it's right already:
 /// bch2_update_reconcile_opts().
 pub fn update_reconcile_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>,
-                             opts: &c::bch_inode_opts, iter: &mut BtreeIter<'_>, level: u32, k: BkeySC<'_>,
+                             opts: &c::bch_inode_opts, iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>,
                              ctx: c::set_needs_reconcile_ctx) -> Result<(), BchError> {
     let flags = iter.iter_flags();
     assert!(!flags.contains(BtreeIterFlags::IS_EXTENTS), "update_reconcile_opts() on an extents iterator");

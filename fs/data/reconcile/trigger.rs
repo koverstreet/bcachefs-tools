@@ -7,7 +7,7 @@
 
 use crate::{accounting, bkey_fsck_err_on, fsck_err};
 use crate::alloc::disk_groups::Target;
-use crate::btree::bkey::{bpos_max, bpos_min, pos, BkeyS, BkeySC, BkeyV};
+use crate::btree::bkey::{bpos_max, bpos_min, pos, BkeySC, BkeyV};
 use crate::btree::bkey_methods::TriggerOp;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, NoRoom, TransAttempt, TransBkey,
                          UpdateTriggerFlags};
@@ -16,10 +16,9 @@ use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Pt
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
-use crate::util::ffi::Opaque;
 use crate::util::vstructs::plain_bytes;
 use crate::util::Printbuf;
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_int;
 use core::mem::size_of;
 use cstruct_macros::c_export;
 
@@ -80,6 +79,35 @@ pub fn data_to_rb_work_pos(btree: c::btree_id, mut p: c::bpos) -> c::bpos {
         p.inode += 1;
     }
     p
+}
+
+/// The data btree position at @p in the work btrees: rb_work_to_data_pos(),
+/// data_to_rb_work_pos() backwards.
+pub fn rb_work_to_data_pos(mut p: c::bpos) -> c::bbpos {
+    let btree = if p.inode == 0 {
+        c::btree_id::stripes
+    } else if p.inode < c::BCACHEFS_ROOT_INO as u64 {
+        p.inode -= 1;
+        c::btree_id::reflink
+    } else {
+        c::btree_id::extents
+    };
+    c::bbpos { btree, pos: p }
+}
+
+/// Its name, from RECONCILE_WORK_IDS(): bch2_reconcile_work_ids[].
+impl core::fmt::Display for c::reconcile_work_id {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        macro_rules! names {
+            ($(($name:tt)),* $(,)?) => { const NAMES: &[&str] = &[$(stringify!($name),)*]; };
+        }
+        c::RECONCILE_WORK_IDS!(names);
+
+        match NAMES.get(self.0 as usize) {
+            Some(name) => f.write_str(name),
+            None => write!(f, "(unknown reconcile work id {})", self.0),
+        }
+    }
 }
 
 /// What a key with pointers carries for reconcile.
@@ -151,7 +179,7 @@ impl TransBkey<'_, '_, PtrsMut> {
 
 /// The reconcile backpointer btree node pointer @k, in @btree at @level, has:
 /// rb_bp().
-fn rb_bp(btree: c::btree_id, level: u32, k: BkeySC<'_>) -> c::Backpointer {
+pub(crate) fn rb_bp(btree: c::btree_id, level: u32, k: BkeySC<'_>) -> c::Backpointer {
     c::Backpointer { btree_id: btree.0 as u8, level: level as u8, pos: k.k.p, ..Default::default() }
 }
 
@@ -175,7 +203,7 @@ fn del_reconcile_bp(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k:
 
 /// A reconcile backpointer to btree node pointer @k, in the first empty slot
 /// of work id @work's: where it went. reconcile_bp_add().
-fn add_reconcile_bp(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: BkeySC<'_>,
+pub(crate) fn add_reconcile_bp(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: BkeySC<'_>,
                     work: u64) -> Result<c::bpos, BchError> {
     let mut iter = BtreeIter::uninit();
     t.bkey_get_empty_slot(&mut iter, c::btree_id::reconcile_scan, pos(work, 1), pos(work, u64::MAX))?;
@@ -388,13 +416,6 @@ pub fn extent_reconcile_to_text(out: &mut Printbuf, fs: Option<&Fs>, r: &c::bch_
 
 // ── C's ──────────────────────────────────────────────────────────────────
 
-#[cold]
-#[c_export]
-pub fn bch2_extent_reconcile_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>>,
-                                     r: &c::bch_extent_reconcile) {
-    extent_reconcile_to_text(out, c.map(Fs::from_c), r);
-}
-
 #[c_export]
 pub fn bch2_bkey_reconcile_opts(c: &Fs, k: BkeySC<'_>) -> *const c::bch_extent_reconcile {
     k.arm::<Ptrs>().and_then(|k| k.reconcile_opts(c).map(|r| r as *const _)).unwrap_or(core::ptr::null())
@@ -412,36 +433,10 @@ pub fn bch2_bkey_get_reconcile_bp_pos(c: &Fs, k: BkeySC<'_>) -> c::bpos {
 }
 
 /// # Safety
-/// C has an attempt in progress on @trans, and @k is a key it can edit while
-/// that runs, @buf_u64s u64s of it its.
-#[c_export]
-pub unsafe fn bch2_bkey_set_reconcile_bp(trans: &BtreeTrans<'_>, k: BkeyS<'_>, buf_u64s: c_uint, idx: u64) {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    // SAFETY: the caller's - a struct bkey heads its struct bkey_i
-    let k = unsafe { TransBkey::from_raw_room(&t, core::ptr::from_mut(k.k).cast(), buf_u64s) };
-    k.arm::<PtrsMut>().expect("a reconcile bp on a key whose entries can't be edited")
-        .set_reconcile_bp(t.fs(), idx)
-        .expect("room for a reconcile_bp entry: its caller allocates it");
-}
-
-/// # Safety
 /// @op is the update the extent trigger is running for, in its commit.
 #[c_export]
 pub unsafe fn bch2_trigger_extent_reconcile(trans: &BtreeTrans<'_>, mut op: c::btree_trigger_op) -> c_int {
     // SAFETY: the caller's
     let (t, op) = unsafe { (trans.attempt_in_progress(), TriggerOp::from_raw(&mut op)) };
     ret_to_c(trigger_extent_reconcile(&t, op))
-}
-
-/// @bp_pos: in, the work id - its inode; out, where the backpointer went.
-///
-/// # Safety
-/// C has an attempt in progress on @trans.
-#[c_export]
-pub unsafe fn reconcile_bp_add(trans: &BtreeTrans<'_>, btree: c::btree_id, level: c_uint, k: BkeyS<'_>,
-                               bp_pos: &mut c::bpos) -> c_int {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(add_reconcile_bp(&t, btree, level, k.as_sc(), bp_pos.inode).map(|p| *bp_pos = p))
 }

@@ -146,6 +146,7 @@ pub mod data {
     pub mod io_misc;
     pub mod ptrs;
     pub mod reconcile {
+        pub mod check;
         pub mod needs_reconcile;
         pub mod trigger;
     }
