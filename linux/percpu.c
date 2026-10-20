@@ -26,9 +26,9 @@
  * Per-thread setup runs through bch_percpu_thread_init() (called from
  * kthread_start_fn(), linux_shrinkers_init(), rust_fuse_rcu_register(),
  * and a constructor here that bootstraps slot 0 before any module_init
- * runs). Subsystems that need per-instance setup register init_one /
- * exit_one callbacks via bch_percpu_register(); the registry runs them
- * for every live chunk plus future ones.
+ * runs). Subsystems that need per-instance setup register an init_one
+ * callback via bch_percpu_register(); the registry runs it for every live
+ * chunk plus future ones.
  *
  * A slot is a CPU: a thread holds one while it lives and returns it when it
  * exits, and the next new thread takes it over, chunk contents and all. So
@@ -36,6 +36,13 @@
  * matters for kernel code that starts a short-lived kthread per operation
  * (reconcile's per-device passes), each of which used to take a slot for
  * good.
+ *
+ * Chunks are never unmapped, and a published slot never changes: readers
+ * walk [0, bch_percpu_nr_cpus) unlocked, as the kernel walks its possible CPUs.
+ * Nothing is torn down at exit either - exit() runs destructors while other
+ * threads (workqueue workers, the shrinker thread, liburcu's call_rcu thread)
+ * are still running and may still touch percpu memory, and the process's
+ * memory goes away with it anyway.
  *
  * The dynamic allocator is bump + freelist. Allocations return zeroed
  * memory across all live chunks; new threads get zeroed chunks via
@@ -54,7 +61,6 @@
 #include <sys/mman.h>
 
 #include <linux/percpu.h>
-#include <linux/rcupdate.h>
 
 #include "fs/util/darray.h"
 #include "fs/util/util.h"
@@ -75,7 +81,6 @@ size_t  bch_percpu_dynamic_size;
 
 struct bch_percpu_callback {
 	void (*init_one)(void *);
-	void (*exit_one)(void *);
 	void *pcv;
 };
 
@@ -137,9 +142,7 @@ static bool size_at_grain_resize(size_t nr)
 
 static pthread_mutex_t	bch_percpu_lock = PTHREAD_MUTEX_INITIALIZER;
 
-void bch_percpu_register(void (*init_one)(void *),
-			 void (*exit_one)(void *),
-			 void *pcv)
+void bch_percpu_register(void (*init_one)(void *), void *pcv)
 {
 	pthread_mutex_lock(&bch_percpu_lock);
 
@@ -150,7 +153,7 @@ void bch_percpu_register(void (*init_one)(void *),
 	}
 
 	int idx = nr_callbacks++;
-	callbacks[idx] = (struct bch_percpu_callback){ init_one, exit_one, pcv };
+	callbacks[idx] = (struct bch_percpu_callback){ init_one, pcv };
 
 	for (int cpu = 0; cpu < bch_percpu_nr_cpus; cpu++)
 		if (bch_percpu_chunks[cpu] && init_one)
@@ -245,9 +248,7 @@ static void bch_percpu_claim_slot(int id, void *chunk)
 static void bch_percpu_thread_exit(void *chunk)
 {
 	pthread_mutex_lock(&bch_percpu_lock);
-	/* Unless bch_percpu_module_exit() has already unmapped everything: */
-	if (bch_percpu_chunks[bch_percpu_my_id] == chunk)
-		free_slots[nr_free_slots++] = bch_percpu_my_id;
+	free_slots[nr_free_slots++] = bch_percpu_my_id;
 	pthread_mutex_unlock(&bch_percpu_lock);
 
 	bch_percpu_my_chunk = NULL;
@@ -485,37 +486,4 @@ __attribute__((constructor(110)))
 static void bch_percpu_module_init(void)
 {
 	bch_percpu_thread_init();
-}
-
-/*
- * Runs at exit, while other threads may still be running: liburcu's call_rcu
- * thread in particular, working through callbacks whose rcu_heads live in
- * percpu memory (rcu_pending). Wait for those before unmapping it - the
- * callback thread otherwise reads the next rcu_head out of a chunk we just
- * unmapped, and the process segfaults after the program is already done.
- */
-__attribute__((destructor))
-static void bch_percpu_module_exit(void)
-{
-	rcu_barrier();
-
-	pthread_mutex_lock(&bch_percpu_lock);
-	for (int cpu = 0; cpu < bch_percpu_nr_cpus; cpu++) {
-		void *chunk = bch_percpu_chunks[cpu];
-		if (!chunk)
-			continue;
-
-		for (int i = nr_callbacks - 1; i >= 0; i--)
-			if (callbacks[i].exit_one)
-				callbacks[i].exit_one(__bch_percpu_resolve(callbacks[i].pcv, chunk));
-
-		munmap(chunk, bch_percpu_static_size + bch_percpu_dynamic_size);
-		bch_percpu_chunks[cpu] = NULL;
-	}
-	darray_exit(&free_runs);
-	darray_exit(&dynamic_inits);
-	free(size_at_grain);
-	size_at_grain	 = NULL;
-	nr_size_at_grain = 0;
-	pthread_mutex_unlock(&bch_percpu_lock);
 }

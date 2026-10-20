@@ -69,8 +69,7 @@ extern int   bch_percpu_nr_cpus;
 extern size_t bch_percpu_static_size;
 
 void bch_percpu_thread_init(void);
-void bch_percpu_register(void (*init_one)(void *), void (*exit_one)(void *),
-			 void *pcv);
+void bch_percpu_register(void (*init_one)(void *), void *pcv);
 
 
 
