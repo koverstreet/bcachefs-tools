@@ -29,11 +29,17 @@ macro_rules! recovery_pass {
 
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
-use crate::fs::Fs;
+use crate::fs::{Fs, SbLockGuard};
 use crate::locking::{Guard, Lock};
 use crate::sb::io::{sb_field_ops, SbFieldOps};
-use crate::util::kernel::NSEC_PER_SEC;
+use crate::types::{Le32, Le64};
+use crate::util::bitmap::LeBitmap;
+use crate::util::ffi::Opaque;
+use crate::util::kernel::{ktime_get_real_seconds, NSEC_PER_SEC};
+use crate::util::vstructs::{Head, Validated};
 use crate::util::Printbuf;
+use core::ffi::c_uint;
+use core::mem::size_of;
 use cstruct_macros::c_export;
 
 /// Schedule recovery pass @pass, saying so to @out: as
@@ -64,19 +70,6 @@ pub fn btree_is_clean(fs: &Fs, btree: c::btree_id) -> bool {
 /// Record btree @btree as checked consistent: as bch2_set_btree_clean().
 pub fn set_btree_clean(fs: &Fs, btree: c::btree_id) {
     unsafe { c::bch2_set_btree_clean(fs.as_ptr(), btree) }
-}
-
-/// Have recovery pass @pass run at the next mount, unratelimited: as
-/// bch2_recovery_pass_set_no_ratelimit().
-pub fn set_no_ratelimit(fs: &Fs, pass: c::bch_recovery_pass) {
-    unsafe { c::bch2_recovery_pass_set_no_ratelimit(fs.as_ptr(), pass) }
-}
-
-/// Whether recovery pass @pass should hold off: it last ran less than
-/// @runtime_fraction times its last runtime ago, and isn't marked never to
-/// be ratelimited - as bch2_recovery_pass_want_ratelimit().
-pub fn want_ratelimit(fs: &Fs, pass: c::bch_recovery_pass, runtime_fraction: u32) -> bool {
-    unsafe { c::bch2_recovery_pass_want_ratelimit(fs.as_ptr(), pass, runtime_fraction) }
 }
 
 /// Whether recovery has @pass still to run, or running: as
@@ -246,6 +239,100 @@ impl SbFieldOps for c::bch_sb_field_recovery_passes {
 #[c_export]
 pub static bch_sb_field_ops_recovery_passes: c::bch_sb_field_ops =
     sb_field_ops::<c::bch_sb_field_recovery_passes>();
+
+// ── Its entries ──────────────────────────────────────────────────────────────
+
+type Section = c::bch_sb_field_recovery_passes;
+
+/// @pass's entry, if the section has one.
+fn entry(sb: &c::bch_sb, pass: c::bch_recovery_pass) -> Option<c::recovery_pass_entry> {
+    sb.field::<Section>()?.start.get(pass.to_stable().0 as usize).copied()
+}
+
+/// @pass's entry, the section made or grown to hold it: None if there's no
+/// room in the superblock.
+fn entry_mut<'a>(fs: &Fs, sb: &'a mut SbLockGuard, pass: c::bch_recovery_pass)
+    -> Option<&'a mut c::recovery_pass_entry>
+{
+    let stable = pass.to_stable().0 as usize;
+    let bytes = size_of::<Head<Section>>() + (stable + 1) * size_of::<c::recovery_pass_entry>();
+    let Some(r) = sb.field_get_minsize::<Section>((bytes / size_of::<u64>()) as u32) else {
+        crate::bch_err!(fs, "error creating recovery_passes sb section");
+        return None;
+    };
+    Some(&mut r.start[stable])
+}
+
+/// Whether a pass that last ran as @e says should hold off: its last runtime
+/// was more than 1/@runtime_fraction of the time since, and it isn't marked
+/// never to be. Both ratelimits go by it: the superblock's, of expensive
+/// passes, and the in-memory one of failing passes, each with its own entries.
+pub fn entry_ratelimited(e: &c::recovery_pass_entry, runtime_fraction: u32) -> bool {
+    let now = ktime_get_real_seconds() as u64;
+    !e.bch_recovery_pass_no_ratelimit() &&
+        u64::from(e.last_runtime.get()) * u64::from(runtime_fraction) > now.wrapping_sub(e.last_run.get())
+}
+
+fn want_ratelimit_locked(sb: &c::bch_sb, pass: c::bch_recovery_pass, runtime_fraction: u32) -> bool {
+    entry(sb, pass).is_some_and(|e| entry_ratelimited(&e, runtime_fraction))
+}
+
+/// Whether recovery pass @pass should hold off, by when it last ran and how
+/// long it took: entry_ratelimited().
+pub fn want_ratelimit(fs: &Fs, pass: c::bch_recovery_pass, runtime_fraction: u32) -> bool {
+    want_ratelimit_locked(fs.sb_lock().sb(), pass, runtime_fraction)
+}
+
+/// Have recovery pass @pass run when it's next wanted, however recently it
+/// ran: a repair that found more to do.
+pub fn set_no_ratelimit(fs: &Fs, pass: c::bch_recovery_pass) {
+    let mut sb = fs.sb_lock();
+    if let Some(e) = entry_mut(fs, &mut sb, pass).filter(|e| !e.bch_recovery_pass_no_ratelimit()) {
+        e.set_bch_recovery_pass_no_ratelimit(true);
+        fs.write_super(&mut sb);
+    }
+}
+
+/// Recovery pass @pass, started at @start_time, has completed: it's no
+/// longer required, and its entry says when it ran and for how long. If it
+/// was the last of this run's passes, the errors to fix silently - which came
+/// with the passes required - are done with too.
+fn pass_complete(fs: &Fs, pass: c::bch_recovery_pass, start_time: i64) {
+    let mut sb = fs.sb_lock();
+    let ext = sb.field_mut::<c::bch_sb_field_ext<Validated>>().expect("an ext section");
+    LeBitmap::from_words_mut(&mut ext.recovery_passes_required).clear(pass.to_stable().0 as usize);
+    // SAFETY: read without recovery.lock, as C does; the runner, calling,
+    // took this pass off it before running it
+    if unsafe { (*fs.as_ptr()).recovery.current_passes } == 0 {
+        ext.errors_silent.fill(Le64::new(0));
+    }
+
+    if let Some(e) = entry_mut(fs, &mut sb, pass) {
+        let end_time = ktime_get_real_seconds();
+        e.last_run = Le64::new(end_time as u64);
+        e.last_runtime = Le32::new((end_time - start_time).max(0) as u32);
+        e.set_bch_recovery_pass_no_ratelimit(false);
+    }
+    fs.write_super(&mut sb);
+}
+
+#[c_export]
+pub fn bch2_sb_recovery_pass_complete(c: &Opaque<c::bch_fs>, pass: c::bch_recovery_pass, start_time: i64) {
+    pass_complete(Fs::from_c(c), pass, start_time)
+}
+
+#[c_export]
+pub fn bch2_recovery_pass_want_ratelimit_locked(c: &Opaque<c::bch_fs>, pass: c::bch_recovery_pass,
+                                                runtime_fraction: c_uint) -> bool {
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    want_ratelimit_locked(unsafe { fs.sb_lock_held() }.sb(), pass, runtime_fraction)
+}
+
+#[c_export]
+pub fn bch2_recovery_pass_entry_ratelimited(e: &c::recovery_pass_entry, runtime_fraction: c_uint) -> bool {
+    entry_ratelimited(e, runtime_fraction)
+}
 
 #[cfg(test)]
 mod tests {

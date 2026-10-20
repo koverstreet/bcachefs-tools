@@ -40,95 +40,6 @@ const char * const bch2_recovery_passes[] = {
 	NULL
 };
 
-static struct recovery_pass_entry *bch2_sb_recovery_pass_entry(struct bch_fs *c,
-							       enum bch_recovery_pass pass)
-{
-	enum bch_recovery_pass_stable stable = bch2_recovery_pass_to_stable(pass);
-
-	lockdep_assert_held(&c->sb_lock.lock);
-
-	struct bch_sb_field_recovery_passes *r =
-		bch2_sb_field_get(c->disk_sb.sb, recovery_passes);
-
-	if (stable >= recovery_passes_nr_entries(r)) {
-		unsigned u64s = struct_size(r, start, stable + 1) / sizeof(u64);
-
-		r = bch2_sb_field_resize(&c->disk_sb, recovery_passes, u64s);
-		if (!r) {
-			bch_err(c, "error creating recovery_passes sb section");
-			return NULL;
-		}
-	}
-
-	return r->start + stable;
-}
-
-static void bch2_sb_recovery_pass_complete(struct bch_fs *c,
-					   enum bch_recovery_pass pass,
-					   s64 start_time)
-{
-	guard(mutex_noio)(&c->sb_lock);
-	struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
-	__clear_bit_le64(bch2_recovery_pass_to_stable(pass),
-			 ext->recovery_passes_required);
-
-	struct bch_fs_recovery *r = &c->recovery;
-	if (!r->current_passes)
-		memset(ext->errors_silent, 0, sizeof(ext->errors_silent));
-
-	struct recovery_pass_entry *e = bch2_sb_recovery_pass_entry(c, pass);
-	if (e) {
-		s64 end_time	= ktime_get_real_seconds();
-		e->last_run	= cpu_to_le64(end_time);
-		e->last_runtime	= cpu_to_le32(max(0, end_time - start_time));
-		SET_BCH_RECOVERY_PASS_NO_RATELIMIT(e, false);
-	}
-
-	bch2_write_super(c);
-}
-
-void bch2_recovery_pass_set_no_ratelimit(struct bch_fs *c,
-					 enum bch_recovery_pass pass)
-{
-	guard(mutex_noio)(&c->sb_lock);
-
-	struct recovery_pass_entry *e = bch2_sb_recovery_pass_entry(c, pass);
-	if (e && !BCH_RECOVERY_PASS_NO_RATELIMIT(e)) {
-		SET_BCH_RECOVERY_PASS_NO_RATELIMIT(e, true);
-		bch2_write_super(c);
-	}
-}
-
-static bool bch2_recovery_pass_entry_get_locked(struct bch_fs *c, enum bch_recovery_pass pass,
-						struct recovery_pass_entry *e)
-{
-	lockdep_assert_held(&c->sb_lock.lock);
-
-	struct bch_sb_field_recovery_passes *r =
-		bch2_sb_field_get(c->disk_sb.sb, recovery_passes);
-
-	enum bch_recovery_pass_stable stable = bch2_recovery_pass_to_stable(pass);
-	bool found = stable < recovery_passes_nr_entries(r);
-	if (found)
-		*e = r->start[stable];
-
-	return found;
-}
-
-/*
- * Ratelimit if the last runtime was more than 1/runtime_fraction of the time
- * since the pass last ran. Shared by the sb-persisted ratelimit (expensive
- * passes) and the in-memory failing-pass ratelimit, which feed it an entry
- * from different places.
- */
-static bool recovery_pass_entry_ratelimited(const struct recovery_pass_entry *e,
-					    unsigned runtime_fraction)
-{
-	return !BCH_RECOVERY_PASS_NO_RATELIMIT(e) &&
-		(u64) le32_to_cpu(e->last_runtime) * runtime_fraction >
-		ktime_get_real_seconds() - le64_to_cpu(e->last_run);
-}
-
 /*
  * For self healing - e.g. missing backpointers - that would otherwise keep
  * scheduling an expensive repair pass that can wait: run it at most once per
@@ -136,23 +47,6 @@ static bool recovery_pass_entry_ratelimited(const struct recovery_pass_entry *e,
  * RECOVERY_PASS_FAILING_RATELIMIT.
  */
 #define RECOVERY_PASS_SELF_HEAL_RATELIMIT	100
-
-static bool bch2_recovery_pass_want_ratelimit_locked(struct bch_fs *c, enum bch_recovery_pass pass,
-						     unsigned runtime_fraction)
-{
-	struct recovery_pass_entry e;
-	if (!bch2_recovery_pass_entry_get_locked(c, pass, &e))
-		return false;
-
-	return recovery_pass_entry_ratelimited(&e, runtime_fraction);
-}
-
-bool bch2_recovery_pass_want_ratelimit(struct bch_fs *c, enum bch_recovery_pass pass,
-				       unsigned runtime_fraction)
-{
-	guard(mutex_noio)(&c->sb_lock);
-	return bch2_recovery_pass_want_ratelimit_locked(c, pass, runtime_fraction);
-}
 
 /* Fake recovery pass, so that scan_for_btree_nodes isn't 0: */
 static int bch2_recovery_pass_empty(struct bch_fs *c)
@@ -619,7 +513,7 @@ int bch2_run_recovery_passes(struct bch_fs *c, u64 orig_passes_to_run, bool fail
 			unsigned pass = __ffs64(failing);
 			failing &= ~BIT_ULL(pass);
 
-			if (recovery_pass_entry_ratelimited(&r->passes_failing_ratelimit[pass],
+			if (bch2_recovery_pass_entry_ratelimited(&r->passes_failing_ratelimit[pass],
 							    failing_pass_backoff(r, pass)))
 				orig_passes_to_run &= ~BIT_ULL(pass);
 		}
