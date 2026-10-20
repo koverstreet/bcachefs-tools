@@ -2,6 +2,9 @@
 #ifndef _BCACHEFS_LRU_H
 #define _BCACHEFS_LRU_H
 
+/* The lru btree is lru.rs's; these inlines are its position encoding, for C */
+#include "alloc/lru_gen.h"
+
 static inline u64 lru_pos_id(struct bpos pos)
 {
 	return pos.inode >> LRU_TIME_BITS;
@@ -39,66 +42,10 @@ static inline u16 bucket_fragmentation_lru(unsigned dev)
 	return BCH_LRU_BUCKET_FRAGMENTATION_START + dev;
 }
 
-/*
- * Inverse of the per-device id encodings - bucket_fragmentation_lru() above,
- * and the read lrus, which use the device index as the id directly.
- *
- * This is the device a *well-formed* entry in this lru refers to. The device
- * an entry actually refers to comes from its own dev_bucket, via
- * lru_pos_to_bp(); the two agree exactly when the entry is in the lru it
- * belongs in, which is what check_lrus() is there to verify.
- *
- * False for the lrus that aren't per-device: the stripe lru, the obsolete
- * fs-wide fragmentation lru (whose entries span every device), and ids
- * nothing uses.
- */
-static inline bool lru_id_to_dev(u16 lru_id, unsigned *dev)
-{
-	if (lru_id < BCH_LRU_READ_MAX) {
-		*dev = lru_id;
-		return true;
-	}
-
-	if (lru_id >= BCH_LRU_BUCKET_FRAGMENTATION_START &&
-	    lru_id <  BCH_LRU_BUCKET_FRAGMENTATION_END) {
-		*dev = lru_id - BCH_LRU_BUCKET_FRAGMENTATION_START;
-		return true;
-	}
-
-	return false;
-}
-
-static inline enum bch_lru_type lru_type(struct bkey_s_c l)
-{
-	u16 lru_id = l.k->p.inode >> 48;
-
-	if (lru_id < BCH_LRU_READ_MAX)
-		return BCH_LRU_read;
-	if (lru_id < BCH_LRU_BUCKET_FRAGMENTATION_END)
-		return BCH_LRU_fragmentation;
-
-	switch (lru_id) {
-	case BCH_LRU_BUCKET_FRAGMENTATION_OLD:
-		return BCH_LRU_fragmentation;
-	case BCH_LRU_STRIPE_FRAGMENTATION:
-		return BCH_LRU_stripes;
-	default:
-		return BCH_LRU_read;
-	}
-}
-
-int bch2_lru_validate(struct bch_fs *, struct bkey_s_c, const struct bkey_validate_context *);
-void bch2_lru_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
-
-void bch2_lru_pos_to_text(struct printbuf *, struct bpos);
-
 #define bch2_bkey_ops_lru ((struct bkey_ops) {	\
 	.key_validate	= bch2_lru_validate,	\
 	.val_to_text	= bch2_lru_to_text,	\
 })
-
-int bch2_lru_set(struct btree_trans *, u16, u64, u64);
-int __bch2_lru_change(struct btree_trans *, u16, u64, u64, u64);
 
 static inline int bch2_lru_change(struct btree_trans *trans,
 		      u16 lru_id, u64 dev_bucket,
@@ -108,12 +55,5 @@ static inline int bch2_lru_change(struct btree_trans *trans,
 		? __bch2_lru_change(trans, lru_id, dev_bucket, old_time, new_time)
 		: 0;
 }
-
-int bch2_dev_remove_lrus(struct bch_fs *, struct bch_dev *);
-
-struct wb_maybe_flush;
-int bch2_lru_check_set(struct btree_trans *, u16, u64, u64, struct bkey_s_c,
-		       struct wb_maybe_flush *);
-int bch2_check_lrus(struct bch_fs *);
 
 #endif /* _BCACHEFS_LRU_H */
