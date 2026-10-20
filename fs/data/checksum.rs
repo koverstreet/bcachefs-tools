@@ -10,11 +10,18 @@
 //! in btree/read.rs, jset::nonce() in journal/read.rs.
 //!
 //! C has its own in data/checksum.h: BCH_NONCE_*, nonce_add().
+//!
+//! And the superblock's crypt section: the filesystem's key, encrypted under
+//! one derived from the passphrase, and how it's derived.
 
 use crate::c;
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
+use crate::sb::io::{sb_field_ops, SbFieldOps};
 use crate::types::Le32;
+use crate::util::Printbuf;
 use core::fmt;
+use cstruct_macros::c_export;
 
 /// ChaCha20's block, in bytes: what a nonce's first word counts.
 pub const CHACHA_BLOCK_SIZE: u32 = 64;
@@ -94,3 +101,29 @@ impl core::ops::Add<u32> for c::nonce {
         self
     }
 }
+
+// ── The superblock's crypt section ───────────────────────────────────────
+
+/// A section shorter than the struct is refused before validate(), as too
+/// short to be one.
+impl SbFieldOps for c::bch_sb_field_crypt {
+    fn validate(_sb: &c::bch_sb, crypt: &Self, _flags: c::bch_validate_flags,
+                err: &mut Printbuf) -> Result<(), BchError> {
+        let kdf = crypt.bch_crypt_kdf_type();
+        if kdf != u64::from(c::bch_kdf_types::BCH_KDF_SCRYPT.0) {
+            write!(err, "bad kdf type {kdf}");
+            return Err(bch_errcode::BCH_ERR_invalid_sb_crypt.into());
+        }
+        Ok(())
+    }
+
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, crypt: &Self) {
+        write!(out, "KFD:               {}\n", crypt.bch_crypt_kdf_type());
+        write!(out, "scrypt n:          {}\n", crypt.bch_kdf_scrypt_n());
+        write!(out, "scrypt r:          {}\n", crypt.bch_kdf_scrypt_r());
+        write!(out, "scrypt p:          {}\n", crypt.bch_kdf_scrypt_p());
+    }
+}
+
+#[c_export]
+pub static bch_sb_field_ops_crypt: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_crypt>();
