@@ -27,7 +27,7 @@ pub mod varint;
 pub mod vstructs;
 pub mod workqueue;
 
-pub use printbuf::{Printbuf, ToText};
+pub use printbuf::{HumanReadable, Printbuf, ToText};
 
 /// The largest value @_x's type holds: a field's, without naming its type -
 /// `max_of(&k.size)`, C's KEY_SIZE_MAX.

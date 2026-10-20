@@ -7,7 +7,7 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::util::kernel::{nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
 use crate::util::percpu::acc_u64s_percpu;
 use crate::util::workqueue::system_long_wq;
-use crate::util::Printbuf;
+use crate::util::{HumanReadable, Printbuf};
 use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
@@ -969,12 +969,8 @@ impl Fs {
             self.write_super(&mut sb);
         }
 
-        let mut buf = Printbuf::new();
-        write!(buf, "mi_btree_bitmap sectors ");
-        buf.human_readable_u64(old << 9);
-        write!(buf, " -> ");
-        buf.human_readable_u64(new << 9);
-        crate::bch_info!(self, "{buf}");
+        crate::bch_info!(self, "mi_btree_bitmap sectors {} -> {}",
+                         HumanReadable(old << 9), HumanReadable(new << 9));
         Ok(())
     }
 }

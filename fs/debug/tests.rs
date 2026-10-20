@@ -19,7 +19,7 @@ use crate::errcode::{
 use crate::fs::{BorrowedFs, Fs};
 use crate::util::async_exec::{block_on, spawn, system_unbound, WaitGroup};
 use crate::util::kernel::{local_clock, random_u64_below};
-use crate::util::printbuf::Printbuf;
+use crate::util::printbuf::HumanReadable;
 use crate::c;
 
 use core::ops::ControlFlow;
@@ -923,8 +923,8 @@ fn print_perf_result(
     nr_threads:    u32,
     time:          u64,
     nsec_per_iter: u64,
-    nr_buf:        &Printbuf,
-    per_sec_buf:   &Printbuf,
+    nr:            u64,
+    per_sec:       u64,
 ) {
     let name = core::str::from_utf8(name).unwrap_or("<invalid>");
     let secs = time / c::NSEC_PER_SEC as u64;
@@ -932,11 +932,11 @@ fn print_perf_result(
     kernel::pr_info!(
         "{}: {} with {} threads in {} sec, {} nsec per iter, {} per sec\n",
         name,
-        nr_buf.as_str(),
+        HumanReadable(nr),
         nr_threads,
         secs,
         nsec_per_iter,
-        per_sec_buf.as_str(),
+        HumanReadable(per_sec),
     );
 }
 
@@ -993,19 +993,16 @@ pub fn btree_perf_test(fs: &Fs, testname: &str, nr: u64, nr_threads: u32) -> Res
     let finish = local_clock();
     let time = finish - start;
 
-    let mut nr_buf = Printbuf::new();
-    let mut per_sec_buf = Printbuf::new();
-    nr_buf.human_readable_u64(nr);
     // nr is caller-supplied — for the unit tests it's an inode number, not an op
     // count — so nr * NSEC_PER_SEC overflows u64 (C wrapped it silently; the debug
     // build BUGs on the overflow check). saturating_mul caps instead: real perf
     // runs (sane nr) stay exact, the unit tests get a bounded-nonsense number.
     // NOT u128 — 128-bit division pulls in __udivti3, which the kernel lacks.
-    per_sec_buf.human_readable_u64(nr.saturating_mul(c::NSEC_PER_SEC as u64).checked_div(time).unwrap_or(0));
+    let per_sec = nr.saturating_mul(c::NSEC_PER_SEC as u64).checked_div(time).unwrap_or(0);
 
     let nsec_per_iter = (time * nr_threads as u64).checked_div(nr).unwrap_or(0);
 
-    print_perf_result(name, nr_threads, time, nsec_per_iter, &nr_buf, &per_sec_buf);
+    print_perf_result(name, nr_threads, time, nsec_per_iter, nr, per_sec);
 
     ret_to_result_void(ret_code)
 }

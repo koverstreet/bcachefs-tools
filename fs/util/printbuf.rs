@@ -427,6 +427,17 @@ impl ToText for Bpos {
 }
 crate::display_via_to_text!(Bpos);
 
+/// A size in bytes, in human-readable units whatever the printbuf's mode, for
+/// a format string: `prt!(out, "{}", HumanReadable(sectors << 9))`.
+pub struct HumanReadable(pub u64);
+
+impl ToText for HumanReadable {
+    fn to_text(&self, out: &mut Printbuf) {
+        out.human_readable_u64(self.0)
+    }
+}
+crate::display_via_to_text!(HumanReadable);
+
 /// What prints itself to a Printbuf. A printbuf is a superset of a Formatter:
 /// tabstops, indent and modes (human-readable units) are its state, which a
 /// Display impl can't reach - so an object laid out over lines is ToText. A
