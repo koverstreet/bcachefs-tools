@@ -790,7 +790,7 @@ fsck_err:
 
 static int __bch2_fs_recovery(struct bch_fs *c)
 {
-	struct bch_sb_field_clean *clean __free(kfree) = NULL;
+	struct bch_sb_field_clean *clean __free(kvfree) = NULL;
 	struct journal_start_info journal_start = {};
 	int ret = 0;
 

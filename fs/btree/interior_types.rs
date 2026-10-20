@@ -6,6 +6,7 @@ use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::types::c_default;
 use crate::util::Printbuf;
+use crate::util::vstructs::Head;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, c_const, c_extern, TypeInfo};
 
@@ -73,6 +74,8 @@ pub struct bch_fs_btree_node_rewrites {
 c_default!(bch_fs_btree_node_rewrites);
 
 c_extern! {
+    pub fn bch2_btree_roots_to_journal_entries(c: *mut c::bch_fs, end: *mut Head<c::jset_entry>,
+                                               skip: core::ffi::c_ulong) -> *mut Head<c::jset_entry>;
     pub fn bch2_btree_updates_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
     pub fn bch2_btree_node_update_key(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
                                       b: *mut c::btree, new_key: *mut c::bkey_i,

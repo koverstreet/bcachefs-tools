@@ -19,6 +19,7 @@ c_typedef! {
 }
 
 c_extern! {
+    pub fn bch2_journal_pos_from_member_info_set(c: *mut c::bch_fs);
     pub fn bch2_journal_ptrs_to_text(out: *mut c::printbuf, c: *mut c::bch_fs,
                                      j: *mut c::journal_replay);
     pub fn bch2_journal_entry_missing_range(c: *mut c::bch_fs, start: u64,

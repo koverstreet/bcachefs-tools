@@ -79,6 +79,13 @@ impl<T> KVVec<T> {
     pub fn capacity(&self) -> usize {
         self.0.capacity()
     }
+
+    /// Its buffer, length and capacity, for C to own: the buffer is
+    /// malloc()'d, which C's kvfree() frees.
+    pub fn into_raw_parts(self) -> (*mut T, usize, usize) {
+        let mut v = core::mem::ManuallyDrop::new(self.0);
+        (v.as_mut_ptr(), v.len(), v.capacity())
+    }
 }
 
 impl<T> Default for KVVec<T> {
