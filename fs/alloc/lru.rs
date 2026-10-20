@@ -180,7 +180,7 @@ pub fn bch2_lru_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<'_
 // ── Setting entries ──────────────────────────────────────────────────────
 
 /// Set or clear @pos's bit - there's none at time 0: nothing to do.
-fn lru_mod(t: &TransAttempt<'_, '_>, pos: LruPos, set: bool) -> Result<(), BchError> {
+pub(crate) fn lru_mod(t: &TransAttempt<'_, '_>, pos: LruPos, set: bool) -> Result<(), BchError> {
     if pos.time == 0 {
         return Ok(());
     }
@@ -261,7 +261,7 @@ fn dev_remove_lrus(fs: &Fs, ca: &c::bch_dev) -> Result<(), BchError> {
 
 /// Whether the upgrade to the per-device fragmentation lrus is done: before
 /// it, entries can be in the old fs-wide one.
-fn per_dev_fragmentation_lru(fs: &Fs) -> bool {
+pub(crate) fn per_dev_fragmentation_lru(fs: &Fs) -> bool {
     fs.version_upgrade_complete().0 >=
         c::bcachefs_metadata_version::bcachefs_metadata_version_per_dev_fragmentation_lru.0
 }
@@ -277,7 +277,7 @@ pub fn bch2_dev_remove_lrus(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) -> c_int {
 /// That the entry at @pos, which @referring_k - an alloc or stripe key - says
 /// it has, is there: set it if not, as fsck says. The write buffer is flushed
 /// first, in case it's there, once per referring key - @last_flushed's.
-fn lru_check_set(
+pub(crate) fn lru_check_set(
     t:            &TransAttempt<'_, '_>,
     pos:          LruPos,
     referring_k:  BkeySC<'_>,
