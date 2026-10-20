@@ -6,7 +6,6 @@ use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::util::Printbuf;
 use crate::types::DArray;
-use crate::util::ffi::c_char;
 use cstruct_macros::{CStruct, bitfield, c_extern, c_typedef, TypeInfo};
 use nestify::nest;
 
@@ -31,7 +30,6 @@ c_typedef! {
 }
 
 c_extern! {
-    pub static bch2_sb_error_strs: [*const c_char; 0];
     pub fn bch2_sb_error_count(c: *mut c::bch_fs, err: c::bch_sb_error_id);
     pub fn bch2_fs_errors_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
 }

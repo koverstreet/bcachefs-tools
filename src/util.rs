@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::fs::File;
 use std::io;
 use std::os::fd::OwnedFd;
@@ -123,12 +123,9 @@ pub fn subvol_root(path: &Path) -> Result<std::path::PathBuf> {
 /// The name of a bch_sb_error_id - the same table fsck and the
 /// superblock error counters use.
 pub fn sb_error_name(id: u32) -> String {
-    if id < c::bch_sb_error_id::BCH_FSCK_ERR_MAX.0 {
-        unsafe { CStr::from_ptr(*c::bch2_sb_error_strs.as_ptr().add(id as usize)) }
-            .to_string_lossy()
-            .into_owned()
-    } else {
-        format!("(unknown error {id})")
+    match c::bch_sb_error_id(id).name() {
+        Some(n) => n.to_owned(),
+        None => format!("(unknown error {id})"),
     }
 }
 
