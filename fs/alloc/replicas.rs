@@ -21,7 +21,7 @@ use crate::data::ec::trigger::stripe_block_ptrs;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::opts::prt_data_type;
-use crate::sb::io::{sb_field_get, sb_field_ops, SbField, SbFieldOps};
+use crate::sb::io::{entries_end, sb_field_get, sb_field_ops, SbField, SbFieldOps};
 use crate::sb::members::member_exists;
 use crate::util::ffi::Opaque;
 use crate::util::rcu::read_lock;
@@ -696,6 +696,10 @@ impl SbFieldOps for c::bch_sb_field_replicas {
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {
         section_to_text(out, v1_entries(f))
     }
+
+    fn entries_end(b: &[u8]) -> Option<usize> {
+        entries_end::<Entry>(b, SECTION_HEAD, |e| e.data_type != 0)
+    }
 }
 
 impl SbFieldOps for c::bch_sb_field_replicas_v0 {
@@ -706,6 +710,10 @@ impl SbFieldOps for c::bch_sb_field_replicas_v0 {
 
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {
         section_to_text(out, v0_entries(f))
+    }
+
+    fn entries_end(b: &[u8]) -> Option<usize> {
+        entries_end::<c::bch_replicas_entry_v0<Validated>>(b, SECTION_HEAD, |e| e.data_type != 0)
     }
 }
 
@@ -1060,5 +1068,41 @@ mod tests {
 
         let mut r = r.with(entry(&e)).unwrap();
         assert!(r.validate(sb.sb(), &mut err).unwrap_err().matches(bch_errcode::BCH_ERR_invalid_sb_replicas));
+    }
+
+    /// An entry cut short at a section's end - C's walk stopped there - is
+    /// dropped at read with a warning, the rest of its u64 zeroed; at write,
+    /// it's invalid.
+    #[test]
+    fn partial_entry() {
+        type V0 = c::bch_sb_field_replicas_v0;
+        let validate = |write: bool| {
+            let invalid = c::BCH_SB_MEMBER_INVALID as u8;
+            let mut sb = c::bch_sb_handle::default();
+            sb.sb_realloc(0).unwrap();
+            assert!(ReplicasCpu::new().with(entry(&bytes(BTREE, 1, &[invalid]))).unwrap().to_sb(&mut sb));
+
+            // a u64 more: past the whole entry, 3 bytes, the start of one
+            // claiming 20 devices
+            let f = sb.field_resize::<V0>(3).unwrap();
+            bytes_of_mut(f)[SECTION_HEAD + 3..][..2].copy_from_slice(&[BTREE, 20]);
+
+            let flags = if write { c::bch_validate_flags::BCH_VALIDATE_write } else { c::bch_validate_flags::empty() };
+            let f = unsafe { c::bch2_sb_field_get_id(sb.sb, V0::FIELD_TYPE) };
+            let mut err = Printbuf::new();
+            let ret = unsafe { sb_field_ops::<V0>().validate.unwrap()(sb.sb, f, flags, err.as_raw()) };
+            (sb, ret, err)
+        };
+
+        let (sb, ret, err) = validate(false);
+        assert_eq!((ret, err.as_str()), (0, "8 bytes past its last whole entry, dropped"));
+        let f = sb.field::<V0>().unwrap();
+        assert_eq!(f.as_bytes().len(), 16);
+        assert!(f.as_bytes()[SECTION_HEAD + 3..].iter().all(|&b| b == 0));
+        assert_eq!(sb_entries(sb.sb()).count(), 1);
+
+        let (_, ret, err) = validate(true);
+        assert!(ret != 0);
+        assert_eq!(err.as_str(), "13 bytes past its last whole entry");
     }
 }
