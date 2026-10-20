@@ -832,6 +832,22 @@ fn fits<T: Unsized + ?Sized>(b: &[u8]) -> bool {
         && (b.len() - T::TAIL) % size_of::<T::Elem>() == 0
 }
 
+/// The longest of @len bytes a T can be: its head and as many whole tail
+/// elements as fit, a multiple of its alignment - what cast() of a buffer
+/// with a partial element at its end would take. None if not even its head
+/// fits.
+pub fn whole_len<T: Unsized + ?Sized>(len: usize) -> Option<usize> {
+    let (head, align, elem) = (size_of::<T::Head>(), align_of::<T::Head>(), size_of::<T::Elem>());
+    let mut n = len.checked_sub(T::TAIL)?.checked_div(elem).unwrap_or(0);
+    loop {
+        let l = T::TAIL + n * elem;
+        if l >= head && l % align == 0 {
+            return Some(l);
+        }
+        n = n.checked_sub(1)?;
+    }
+}
+
 /// @b as a T, every byte of it - an arm, as long as what holds it says: None
 /// if it can't be one, fits().
 pub fn cast<T: Unsized + ?Sized>(b: &[u8]) -> Option<&T> {
@@ -1223,6 +1239,13 @@ pub fn read_past<T: Plain>(rest: &[u8], at: usize) -> T {
 pub trait ArmRef {
     fn arm_ref(b: &[u8]) -> Option<&Self>;
     fn arm_mut(b: &mut [u8]) -> Option<&mut Self>;
+
+    /// How much of @len bytes arm_ref() takes, at most: an unsized vstruct
+    /// takes only whole elements - whole_len() - and every other arm all of
+    /// them.
+    fn whole_len(len: usize) -> Option<usize> {
+        Some(len)
+    }
 }
 
 /// An arm of a sized tagged union, from the storage's bytes past the tag:

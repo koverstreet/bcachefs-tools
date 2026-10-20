@@ -326,6 +326,10 @@ fn dst(ty: &str, doc: &str, shape: &Shape<'_>, methods: &str) -> String {
              fn arm_mut(b: &mut [u8]) -> Option<&mut Self> {{\n\
                  {VS}::cast_mut(b)\n\
              }}\n\
+             \n\
+             fn whole_len(len: usize) -> Option<usize> {{\n\
+                 {VS}::whole_len::<Self>(len)\n\
+             }}\n\
          }}\n\
          \n\
          #[allow(dead_code)]\n\
@@ -1031,6 +1035,10 @@ fn generic_type(name: &str, g: &Generic<'_>, doc: &str) -> String {
                  // SAFETY: as arm_ref()'s\n\
                  <<S as {VS}::State>::Of<{fam}> as {VS}::ArmRef>::arm_mut(b)\n\
                      .map(|d| unsafe {{ &mut *(d as *mut <S as {VS}::State>::Of<{fam}> as *mut Self) }})\n\
+             }}\n\
+             \n\
+             fn whole_len(len: usize) -> Option<usize> {{\n\
+                 <<S as {VS}::State>::Of<{fam}> as {VS}::ArmRef>::whole_len(len)\n\
              }}\n\
          }}\n\
          \n\
