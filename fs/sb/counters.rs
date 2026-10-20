@@ -33,7 +33,7 @@ use crate::types::Le64;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{nsecs_to_jiffies, NSEC_PER_SEC};
 use crate::util::percpu::{percpu_u64_get, percpu_u64_set, this_cpu_add};
-use crate::util::workqueue::system_dfl_wq;
+use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
 
 /// What an event's counter counts.
@@ -313,7 +313,7 @@ crate::fs_delayed_work! {
 
 impl RecentCounters {
     fn queue(fs: &Fs) {
-        fs.counters_recent.queue(system_dfl_wq(), nsecs_to_jiffies(NSEC_PER_SEC / 2));
+        fs.counters_recent.queue(Queue::system_dfl(), nsecs_to_jiffies(NSEC_PER_SEC / 2));
     }
 }
 

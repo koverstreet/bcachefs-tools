@@ -6,10 +6,24 @@ use crate::cstructs::c;
 use crate::types::DArray;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ulonglong, c_void};
-use cstruct_macros::{CStruct, c_extern, c_typedef, TypeInfo};
+use cstruct_macros::{CStruct, c_const, c_extern, c_typedef, TypeInfo};
 
 c_typedef! {
     pub type bch_stacktrace = DArray<c_ulong>;
+}
+
+c_const! {
+    /* alloc_workqueue()'s WQ_* flags, for util/workqueue.rs: util.c checks them */
+    #[c_int]
+    pub const BCH_WQ_UNBOUND: u32 = 1 << 1;
+    #[c_int]
+    pub const BCH_WQ_FREEZABLE: u32 = 1 << 2;
+    #[c_int]
+    pub const BCH_WQ_MEM_RECLAIM: u32 = 1 << 3;
+    #[c_int]
+    pub const BCH_WQ_HIGHPRI: u32 = 1 << 4;
+    #[c_int]
+    pub const BCH_WQ_CPU_INTENSIVE: u32 = 1 << 5;
 }
 
 #[repr(C)]
@@ -97,6 +111,8 @@ c_extern! {
     pub fn bch2_cancel_delayed_work_sync(dwork: *mut c::delayed_work) -> bool;
     pub fn bch2_system_long_wq() -> *mut c::workqueue_struct;
     pub fn bch2_system_dfl_wq() -> *mut c::workqueue_struct;
+    pub fn bch2_alloc_workqueue(name: *const c_char, flags: c_uint, max_active: c_int) -> *mut c::workqueue_struct;
+    pub fn bch2_destroy_workqueue(wq: *mut c::workqueue_struct);
     pub fn bch2_kthread_create(func: Option<unsafe extern "C" fn(*mut c_void) -> c_int>, data: *mut c_void,
                                name: *const c_char) -> *mut c::task_struct;
     pub fn bch2_kthread_stop(p: *mut c::task_struct) -> c_int;

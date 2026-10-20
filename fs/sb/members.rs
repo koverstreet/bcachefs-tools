@@ -6,7 +6,7 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::util::kernel::{ktime_get_real_seconds, nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
 use crate::util::percpu::acc_u64s_percpu;
-use crate::util::workqueue::system_long_wq;
+use crate::util::workqueue::Queue;
 use crate::util::{HumanReadable, Printbuf};
 use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::init::error::{count_fsck_err, id};
@@ -1037,7 +1037,7 @@ crate::fs_delayed_work! {
                                          c::bch_run_recovery_pass_flags::RUN_RECOVERY_PASS_ratelimit);
         }
 
-        fs.maybe_schedule_btree_bitmap_gc.queue(system_long_wq(), nsecs_to_jiffies(24 * 60 * 60 * NSEC_PER_SEC));
+        fs.maybe_schedule_btree_bitmap_gc.queue(Queue::system_long(), nsecs_to_jiffies(24 * 60 * 60 * NSEC_PER_SEC));
     }
 }
 

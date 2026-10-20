@@ -1540,6 +1540,24 @@ struct workqueue_struct *bch2_system_dfl_wq(void)
 	return system_dfl_wq;
 }
 
+/* For util/workqueue.rs: alloc_workqueue() is a macro, its name a format */
+struct workqueue_struct *bch2_alloc_workqueue(const char *name, unsigned flags, int max_active)
+{
+	return alloc_workqueue("%s", flags, max_active, name);
+}
+
+void bch2_destroy_workqueue(struct workqueue_struct *wq)
+{
+	destroy_workqueue(wq);
+}
+
+/* util/workqueue.rs's WqFlags are C's WQ_* */
+static_assert(BCH_WQ_UNBOUND		== WQ_UNBOUND);
+static_assert(BCH_WQ_FREEZABLE		== WQ_FREEZABLE);
+static_assert(BCH_WQ_MEM_RECLAIM	== WQ_MEM_RECLAIM);
+static_assert(BCH_WQ_HIGHPRI		== WQ_HIGHPRI);
+static_assert(BCH_WQ_CPU_INTENSIVE	== WQ_CPU_INTENSIVE);
+
 /*
  * For util/kthread.rs: kthread_create() is a macro in the kernel, a function
  * in userspace; get/put_task_struct() are static inlines.
