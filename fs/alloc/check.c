@@ -96,7 +96,22 @@ static struct bkey_s_c bch2_get_key_or_real_bucket_hole(struct btree_iter *iter,
 			struct bpos hole_start = bkey_start_pos(k.k);
 
 			if (!*ca || !bucket_valid(*ca, hole_start.offset)) {
-				if (!next_bucket(c, ca, &hole_start))
+				/*
+				 * A hole outside every device's buckets needs no
+				 * checking - on to the next device's first bucket,
+				 * unless a key comes first: a key for a bucket that
+				 * doesn't exist, check_alloc_key()'s to delete.
+				 */
+				bool next_dev = next_bucket(c, ca, &hole_start);
+
+				struct bkey_s_c next_k = bch2_btree_iter_peek(iter);
+				if (bkey_err(next_k))
+					return next_k;
+
+				if (next_k.k && (!next_dev || bpos_lt(next_k.k->p, hole_start)))
+					return next_k;
+
+				if (!next_dev)
 					return bkey_s_c_null;
 
 				bch2_btree_iter_set_pos(iter, hole_start);
