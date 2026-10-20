@@ -620,9 +620,17 @@ impl Repair<'_> {
         let mut new = dirent::alloc_max(t, old.k.p)?;
         dirent::copy_target(&mut new, old_d);
 
-        // dirents already at each fsck_renamed-N name, gathered for diagnosis
-        let mut collisions = Printbuf::new();
+        // printed only if every name is taken, with a sample of the dirents
+        // already at the fsck_renamed-N names
+        let mut msg = LogMsg::new(fs);
+        msg.set_suppressed(true);
+        write!(msg, "couldn't rename dirent to resolve hash collision: all 1000 \"");
+        msg.write_bytes(old_name.as_bytes());
+        prt!(&mut msg, ".fsck_renamed-N\" names in dir inum {} snapshot {} are taken\n\
+                        renaming:\n  {}\ncollided with:",
+             { old.k.p.inode }, { old.k.p.snapshot }, old.to_text(fs));
 
+        let mut msg = msg.indent(2);
         for i in 0..1000 {
             let mut name = Printbuf::new();
             name.write_bytes(old_name.as_bytes());
@@ -641,19 +649,11 @@ impl Repair<'_> {
                     return self.update_backpointers::<Dirents>(t, old.k.p, new.as_ref());
                 }
                 // name taken - record a sample of the dirents that hold them
-                Some(dup) if i < 10 => prt!(&mut collisions, "\n{}", dup.to_text(fs)),
+                Some(dup) if i < 10 => prt!(msg, "\n{}", dup.to_text(fs)),
                 Some(_) => {}
             }
         }
-
-        let mut msg = LogMsg::new(fs);
-        write!(msg, "couldn't rename dirent to resolve hash collision: all 1000 \"");
-        msg.write_bytes(old_name.as_bytes());
-        prt!(&mut msg, ".fsck_renamed-N\" names in dir inum {} snapshot {} are taken\n\
-                        renaming:\n  {}\ncollided with:",
-             { old.k.p.inode }, { old.k.p.snapshot }, old.to_text(fs));
-        msg.indent_add(2);
-        write!(msg, "{collisions}");
+        msg.set_suppressed(false);
         Err(fs.err(bch_errcode::BCH_ERR_EEXIST_str_hash_set))
     }
 
