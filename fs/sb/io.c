@@ -25,6 +25,7 @@
 #include "sb/counters.h"
 #include "sb/downgrade.h"
 #include "sb/errors.h"
+#include "sb/ext_gen.h"
 #include "sb/members.h"
 #include "sb/io.h"
 
@@ -1768,67 +1769,6 @@ void bch2_sb_upgrade_incompat(struct bch_fs *c)
 
 	bch2_run_async_recovery_passes(c);
 }
-
-static int bch2_sb_ext_validate(struct bch_sb *sb, struct bch_sb_field *f,
-				enum bch_validate_flags flags, struct printbuf *err)
-{
-	if (vstruct_bytes(f) < 88) {
-		prt_printf(err, "field too small (%zu < %u)", vstruct_bytes(f), 88);
-		return -BCH_ERR_invalid_sb_ext;
-	}
-
-	return 0;
-}
-
-static __cold void bch2_sb_ext_to_text(struct printbuf *out,
-				struct bch_fs *c,
-				struct bch_sb *sb,
-				struct bch_sb_field *f)
-{
-	struct bch_sb_field_ext *e = field_to_type(f, ext);
-
-	prt_printf(out, "Recovery passes required:\t");
-	prt_bitflags(out, bch2_recovery_passes,
-		     bch2_recovery_passes_from_stable(le64_to_cpu(e->recovery_passes_required[0])));
-	prt_newline(out);
-
-	unsigned long *errors_silent = kmalloc(sizeof(e->errors_silent), GFP_KERNEL);
-	if (errors_silent) {
-		le_bitvector_to_cpu(errors_silent, (void *) e->errors_silent, sizeof(e->errors_silent) * 8);
-
-		prt_printf(out, "Errors to silently fix:\t");
-		prt_bitflags_vector(out, bch2_sb_error_strs, errors_silent,
-				    min(BCH_FSCK_ERR_MAX, sizeof(e->errors_silent) * 8));
-		prt_newline(out);
-
-		kfree(errors_silent);
-	}
-
-	prt_printf(out, "Btrees with missing data:\t");
-	prt_bitflags(out, __bch2_btree_ids, le64_to_cpu(e->btrees_lost_data));
-	prt_newline(out);
-
-	/* Appended member - older superblocks may have a smaller field: */
-	if (vstruct_bytes(f) >= offsetof(struct bch_sb_field_ext, btrees_lost_data_ever) +
-				sizeof(e->btrees_lost_data_ever)) {
-		prt_printf(out, "Btrees that have ever lost data:\t");
-		prt_bitflags(out, __bch2_btree_ids, le64_to_cpu(e->btrees_lost_data_ever));
-		prt_newline(out);
-	}
-
-	/* Appended member - older superblocks may have a smaller field: */
-	if (vstruct_bytes(f) >= offsetof(struct bch_sb_field_ext, btrees_clean) +
-				sizeof(e->btrees_clean)) {
-		prt_printf(out, "Btrees validated clean:\t");
-		prt_bitflags(out, __bch2_btree_ids, le64_to_cpu(e->btrees_clean));
-		prt_newline(out);
-	}
-}
-
-static const struct bch_sb_field_ops bch_sb_field_ops_ext = {
-	.validate	= bch2_sb_ext_validate,
-	.to_text	= bch2_sb_ext_to_text,
-};
 
 static const struct bch_sb_field_ops *bch2_sb_field_ops[] = {
 #define x(f, nr, ...)					\

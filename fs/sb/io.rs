@@ -661,6 +661,9 @@ mod tests {
         // too short for its entries to start, and for its type
         assert_eq!(short::<c::bch_sb_field_clean>(T::BCH_SB_FIELD_clean, 2),
                    "too short (16 < 24 bytes)");
+        // a grown type's floor
+        assert_eq!(short::<c::bch_sb_field_ext<Validated>>(T::BCH_SB_FIELD_ext, 10),
+                   "too short (80 < 88 bytes)");
         assert_eq!(short::<c::bch_sb_field_quota>(T::BCH_SB_FIELD_quota, 2),
                    format!("too short (16 < {} bytes)", size_of::<c::bch_sb_field_quota>()));
     }
