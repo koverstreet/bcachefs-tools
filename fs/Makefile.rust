@@ -385,14 +385,16 @@ targets += $(bch-rust-gc-in)
 # bindings it's built from can't - they come first.
 #
 # Each record is a section of its own, all of the same name: ld -r makes them
-# one, which objcopy extracts.
+# one, which objcopy extracts. A record's source path is relative to where
+# rustc ran - or, since 7.0's --remap-path-prefix=$(srcroot)/=, to srcroot:
+# not where this runs in an in-tree O= build, so rust_types_gen is given it.
 $(obj)/rust_types_gen: $(src)/types/main.rs $(src)/types/cstruct.rs FORCE
 	$(call if_changed,bch_codegen_host)
 
 quiet_cmd_bch_cstruct_gen = GEN     $(obj)/rust/*_gen.h
       cmd_bch_cstruct_gen = $(LD) -r -o $(obj)/rust/cstruct.o $< && \
 	$(OBJCOPY) -O binary -j .discard.bch_cstruct $(obj)/rust/cstruct.o $(obj)/rust/cstruct.bin && \
-	$(obj)/rust_types_gen $(obj)/rust/cstruct.bin $(src) $(obj)/rust && \
+	$(obj)/rust_types_gen $(obj)/rust/cstruct.bin $(src) $(obj)/rust $(srcroot) && \
 	touch $@
 
 $(obj)/rust/cstruct.stamp: $(obj)/mod.o $(obj)/rust_types_gen FORCE

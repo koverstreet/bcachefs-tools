@@ -2,7 +2,7 @@
 
 //! rust_types_gen: writes the C of the types defined in Rust that C shares.
 //!
-//!   rust_types_gen RECORDS SRC OUT_DIR
+//!   rust_types_gen RECORDS SRC OUT_DIR [ROOT]
 //!
 //! RECORDS is the .discard.bch_cstruct section of the fs crate's target
 //! object, as objcopy -O binary extracts it - see lib.rs for what's in it.
@@ -11,7 +11,9 @@
 //! foo/types_gen.h, foo/bar_types.rs foo/bar_gen.h - and foo/bar.rs's, what
 //! C calls of the Rust that is bar.c (#[c_export]), follow bar_types.rs's in
 //! foo/bar_gen.h. Run from where rustc ran: a record's file is file!(),
-//! which is relative to that. A Rust-only field is opaque storage of its
+//! which is relative to that - or, if rustc remapped source paths
+//! (--remap-path-prefix, as kernels since 7.0 build with), relative to ROOT,
+//! the kernel's srcroot. A Rust-only field is opaque storage of its
 //! size and alignment; after the definitions come _Static_asserts of the
 //! Rust layout, so a C declaration that doesn't match its Rust type fails
 //! the C build, naming the field - and of the ioctl numbers, which C and
@@ -98,9 +100,17 @@ fn records(mut b: &[u8]) -> Result<Vec<Record>, String> {
 /// types and what Rust calls of it - is foo/bar_gen.h, and foo/bar.rs - what
 /// C calls of Rust - too, as is foo/bar_c_export.rs, bar.rs's wrappers for C;
 /// foo/types.rs is foo/types_gen.h.
-fn gen_header(src: &std::path::Path, file: &str) -> Result<String, String> {
+///
+/// @file is where rustc ran from - or, relative, under @root, if there's one:
+/// what rustc remapped the source paths to be relative to.
+fn gen_header(src: &std::path::Path, root: Option<&std::path::Path>, file: &str) -> Result<String, String> {
     let path = std::fs::canonicalize(file)
-        .map_err(|e| format!("{file}: {e} - rust_types_gen runs from where rustc did"))?;
+        .or_else(|e| match root {
+            Some(root) if std::path::Path::new(file).is_relative() => std::fs::canonicalize(root.join(file)),
+            _ => Err(e),
+        })
+        .map_err(|e| format!("{file}: {e} - rust_types_gen runs from where rustc did, \
+                              or is given the root rustc remaps source paths to"))?;
     let rel = path.strip_prefix(src)
         .map_err(|_| format!("{file} isn't under {}", src.display()))?;
     let rel = rel.to_str().ok_or_else(|| format!("{file}: not UTF-8"))?;
@@ -550,7 +560,8 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     match args.as_slice() {
-        [_, records_file, src, out_dir] => {
+        [_, records_file, src, out_dir, root @ ..] if root.len() <= 1 => {
+            let root = root.first().map(std::path::Path::new);
             let b = std::fs::read(records_file).unwrap_or_else(|e| die(format!("reading {records_file}: {e}")));
             let recs = records(&b).unwrap_or_else(|e| die(format!("{records_file}: {e}")));
             let src = std::fs::canonicalize(src).unwrap_or_else(|e| die(format!("{src}: {e}")));
@@ -604,7 +615,7 @@ fn main() {
             // foo_types.rs's records, then foo.rs's
             let mut headers: BTreeMap<String, Vec<(&str, Vec<&Record>)>> = BTreeMap::new();
             for (file, rs) in files {
-                let header = gen_header(&src, file).unwrap_or_else(|e| die(e));
+                let header = gen_header(&src, root, file).unwrap_or_else(|e| die(e));
                 let srcs = headers.entry(header).or_default();
                 srcs.push((file, rs));
                 srcs.sort_by_key(|(f, _)| !f.ends_with("_types.rs"));
@@ -629,6 +640,6 @@ fn main() {
                 die(errors.join("\n"));
             }
         }
-        _ => die("usage: rust_types_gen RECORDS SRC OUT_DIR".into()),
+        _ => die("usage: rust_types_gen RECORDS SRC OUT_DIR [ROOT]".into()),
     }
 }
