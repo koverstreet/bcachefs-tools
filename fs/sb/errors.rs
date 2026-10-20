@@ -26,6 +26,7 @@ use crate::prt;
 use crate::sb::io::{sb_field_ops, sb_field_u64s, SbFieldOps};
 use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::ffi::{c_char, Opaque};
+use crate::util::kernel::ktime_get_real_seconds;
 use crate::util::{Printbuf, ToText};
 
 // ── Error ids, and their names ───────────────────────────────────────────────
@@ -330,8 +331,7 @@ impl Fs {
     /// Count @err, as having happened now. With no memory for a new entry,
     /// it isn't counted.
     pub fn sb_error_count(&self, err: c::bch_sb_error_id) {
-        // SAFETY: reads the clock
-        let now = unsafe { c::ktime_get_real_seconds() } as u64;
+        let now = ktime_get_real_seconds() as u64;
         let mut counts = self.errors.counts.lock();
 
         match counts.binary_search_by_key(&err.0, |e| e.id().into()) {

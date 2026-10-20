@@ -4,7 +4,7 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::util::kernel::{nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
+use crate::util::kernel::{ktime_get_real_seconds, nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
 use crate::util::percpu::acc_u64s_percpu;
 use crate::util::workqueue::system_long_wq;
 use crate::util::{HumanReadable, Printbuf};
@@ -1497,7 +1497,7 @@ impl c::bch_dev {
             }
         }
 
-        let since = (unsafe { c::ktime_get_real_seconds() } as u64).wrapping_sub(m.errors_reset_time.get());
+        let since = (ktime_get_real_seconds() as u64).wrapping_sub(m.errors_reset_time.get());
         write!(out, "IO errors since ");
         out.time_units(since.wrapping_mul(NSEC_PER_SEC));
         write!(out, " ago\n");
@@ -1522,7 +1522,7 @@ impl c::bch_dev {
         for (r, e) in m.errors_at_reset.iter_mut().zip(&self.errors) {
             *r = (e.load(Ordering::Relaxed) as u64).into();
         }
-        m.errors_reset_time = (unsafe { c::ktime_get_real_seconds() } as u64).into();
+        m.errors_reset_time = (ktime_get_real_seconds() as u64).into();
 
         fs.write_super(&mut sb);
     }

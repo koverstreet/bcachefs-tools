@@ -77,6 +77,7 @@ mod vfs {
     use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitOpts, LoopFlow,
                              TransAttempt, UpdateTriggerFlags};
     use crate::errcode::{bch_errcode, ret_to_class};
+    use crate::util::kernel::ktime_get_real_seconds;
     use crate::util::sync::MutexGuard;
     use crate::{bch_err_fn, bch_info, fs_inconsistent, inode};
     use crate::snapshots::snapshot;
@@ -311,7 +312,7 @@ mod vfs {
             }
 
             if over(qc.softlimit, n) {
-                let now = unsafe { c::ktime_get_real_seconds() };
+                let now = ktime_get_real_seconds();
 
                 if qc.timer == 0 {
                     qc.timer = now + q.limits[counter].timelimit.load(Ordering::Relaxed) as i64;
