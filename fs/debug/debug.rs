@@ -97,8 +97,12 @@ impl DebugFile for Formats {
                 prt!(out, "{}", b.to_text(fs));
                 self.from = if b.key.k.p != SPOS_MAX { b.key.k.p.successor() } else { b.key.k.p };
 
+                // C's drop_locks_do(): the next level's iterator is made
+                // from this trans, and needs it locked
                 trans.unlock();
-                Ok(out.flush()?.map_break(|()| true))
+                let flow = out.flush()?;
+                trans.relock()?;
+                Ok(flow.map_break(|()| true))
             })?;
             if full {
                 return Ok(());
