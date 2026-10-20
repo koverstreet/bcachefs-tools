@@ -41,6 +41,7 @@ const __LOG_PREFIX: &[u8] = b"bcachefs\0";
 
 #[path = "alloc/accounting.rs"] pub mod accounting;
 pub mod alloc {
+    pub mod background;
     pub mod buckets;
     pub mod disk_groups;
     pub mod lru;
