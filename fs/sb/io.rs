@@ -1,7 +1,7 @@
 use crate::c;
 use crate::c::{bch_sb, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
-use crate::fs::Fs;
+use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
+use crate::fs::{Fs, SbLockGuard};
 use crate::sb::members;
 use crate::util::Printbuf;
 use crate::types::{ArmOf, Le32};
@@ -319,6 +319,115 @@ macro_rules! counter_table {
     };
 }
 c::BCH_PERSISTENT_COUNTERS!(counter_table);
+
+// ── Writing it back ──────────────────────────────────────────────────────
+
+/// Permission to change the superblock, and what writes it back: C's
+/// CLASS(sb_write). It holds sb_lock, so changes go through it; dropped, it
+/// writes - if anything was dirtied - before the lock goes, which in C was
+/// the order of two declarations.
+///
+/// Or a C caller's, from_c(): its CLASS(sb_write), under its sb_lock -
+/// dirtied here, and written when C's guard goes.
+pub struct SbWrite<'a> {
+    fs: &'a Fs,
+    sb: SbLockGuard<'a>,
+    w:  SbWriteState<'a>,
+}
+
+enum SbWriteState<'a> {
+    Own(c::sb_write),
+    C(&'a mut c::sb_write),
+}
+
+impl Fs {
+    pub fn sb_write(&self) -> SbWrite<'_> {
+        let w = c::sb_write { c: self.as_ptr(), ..Default::default() };
+        SbWrite { fs: self, sb: self.sb_lock(), w: SbWriteState::Own(w) }
+    }
+
+    /// sb_write(), for a write whose only reason is a replicas entry coming
+    /// or going: it may leave the slow disks behind.
+    pub fn sb_write_replicas(&self) -> SbWrite<'_> {
+        let w = c::sb_write { c: self.as_ptr(), replicas: true, ..Default::default() };
+        SbWrite { fs: self, sb: self.sb_lock(), w: SbWriteState::Own(w) }
+    }
+}
+
+impl<'a> SbWrite<'a> {
+    /// C's @w, for @fs.
+    ///
+    /// # Safety
+    /// C holds sb_lock for 'a, and @w is its CLASS(sb_write) under it.
+    pub unsafe fn from_c(fs: &'a Fs, w: &'a mut c::sb_write) -> Self {
+        SbWrite { fs, sb: unsafe { fs.sb_lock_held() }, w: SbWriteState::C(w) }
+    }
+
+    fn state(&mut self) -> &mut c::sb_write {
+        match &mut self.w {
+            SbWriteState::Own(w) => w,
+            SbWriteState::C(w) => w,
+        }
+    }
+
+    /// The caller changed the superblock: write it.
+    pub fn dirty(&mut self) {
+        self.state().dirty = true;
+    }
+
+    /// @was_new from a test-and-set: the superblock changed if it was, and
+    /// whether it was - a different question from whether to write - is
+    /// returned.
+    pub fn record(&mut self, was_new: bool) -> bool {
+        if was_new {
+            self.dirty();
+        }
+        was_new
+    }
+
+    /// Write now, if dirtied, for an error to report; after, nothing is to
+    /// write until something is dirtied again.
+    pub fn flush(&mut self) -> Result<(), BchError> {
+        let w = self.state();
+        if !core::mem::take(&mut w.dirty) {
+            return Ok(());
+        }
+        let (replicas, flags) = (w.replicas, w.flags);
+        // SAFETY: under sb_lock, which the write - and Rust it calls into,
+        // taking it as held - expects; nothing of the superblock is borrowed
+        ret_to_result_void(unsafe {
+            if replicas {
+                c::bch2_write_super_replicas(self.fs.as_ptr())
+            } else {
+                c::bch2_write_super_flags(self.fs.as_ptr(), flags)
+            }
+        })
+    }
+}
+
+impl<'a> core::ops::Deref for SbWrite<'a> {
+    type Target = SbLockGuard<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.sb
+    }
+}
+
+impl core::ops::DerefMut for SbWrite<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.sb
+    }
+}
+
+/// An error writing is the write's to report; as C's guard, nothing here to
+/// return it to.
+impl Drop for SbWrite<'_> {
+    fn drop(&mut self) {
+        if matches!(self.w, SbWriteState::Own(_)) {
+            let _ = self.flush();
+        }
+    }
+}
 
 // ── Sections, through a bch_sb_handle ────────────────────────────────────
 //

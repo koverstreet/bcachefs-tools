@@ -776,8 +776,11 @@ fn mi_field_upgrades(sb: &mut SbLockGuard, dev: u32, id: &c::bch_dev_identity) -
 pub fn bch2_dev_mi_field_upgrades_locked(c: &Opaque<c::bch_fs>, ca: &c::bch_dev,
                                          id: &c::bch_dev_identity, w: &mut c::sb_write) {
     let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    w.dirty |= mi_field_upgrades(&mut unsafe { fs.sb_lock_held() }, ca.dev_idx.into(), id);
+    // SAFETY: C calls it under sb_lock, with its CLASS(sb_write)
+    let mut w = unsafe { SbWrite::from_c(fs, w) };
+    if mi_field_upgrades(&mut w, ca.dev_idx.into(), id) {
+        w.dirty();
+    }
 }
 
 #[c_export]
@@ -988,8 +991,11 @@ pub fn bch2_dev_btree_bitmap_marked_nogc(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) -
 #[c_export]
 pub fn bch2_dev_btree_bitmap_mark_locked(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, w: &mut c::sb_write) {
     let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    w.dirty |= fs.btree_bitmap_mark_locked(&mut unsafe { fs.sb_lock_held() }, k);
+    // SAFETY: C calls it under sb_lock, with its CLASS(sb_write)
+    let mut w = unsafe { SbWrite::from_c(fs, w) };
+    if fs.btree_bitmap_mark_locked(&mut w, k) {
+        w.dirty();
+    }
 }
 
 #[c_export]
