@@ -255,11 +255,8 @@ impl bch_sb_handle {
     }
 
     /// @u64s 0 for the minimum.
-    pub fn sb_realloc(&mut self, u64s: u32) -> Result<(), i32> {
-        match unsafe { c::bch2_sb_realloc(self, u64s) } {
-            0 => Ok(()),
-            e => Err(e),
-        }
+    pub fn sb_realloc(&mut self, u64s: u32) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { c::bch2_sb_realloc(self, u64s) })
     }
 
     /// The superblock's full vstruct extent as bytes.
