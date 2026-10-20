@@ -244,6 +244,53 @@ pub static bch_sb_field_ops_errors: c::bch_sb_field_ops = sb_field_ops::<c::bch_
 #[c_export]
 pub static bch_sb_field_ops_errors_v2: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_errors_v2>();
 
+// ── Which error an errcode is counted as ─────────────────────────────────────
+//
+// Each is passed a failure, negative, and matches on its magnitude.
+
+/// @err a BCH_ERR_BLK_STS_* errcode, as blk_status_to_bch_err() throws: its
+/// status's error, blk_sts_unknown for one BCH_BLK_STS_SB_ERRS() leaves out.
+#[c_export]
+pub fn bch2_blk_sts_sb_err(err: c_int) -> c::bch_sb_error_id {
+    macro_rules! map {
+        ($(($sts:ident, $name:ident)),* $(,)?) => { ::paste::paste! {
+            match bch_errcode(err.unsigned_abs()) {
+                $(bch_errcode::[<BCH_ERR_BLK_STS_ $sts>] => c::bch_sb_error_id::[<BCH_FSCK_ERR_blk_sts_ $name>],)*
+                _ => c::bch_sb_error_id::BCH_FSCK_ERR_blk_sts_unknown,
+            }
+        } };
+    }
+    c::BCH_BLK_STS_SB_ERRS!(map)
+}
+
+/// @err's variant of $ty: $prefix and its BCH_DECOMPRESS_SB_ERRS() name -
+/// zstd_unknown for a zstd error the list leaves out, unknown for the rest.
+macro_rules! decompress_map {
+    ([$err:expr, $ty:ident, $prefix:ident] $(($code:ident, $name:ident)),* $(,)?) => { ::paste::paste! {
+        match bch_errcode($err.unsigned_abs()) {
+            $(bch_errcode::[<BCH_ERR_ $code>] => c::$ty::[<$prefix $name>],)*
+            code if BchError::from(code).matches(bch_errcode::BCH_ERR_zstd_error) =>
+                c::$ty::[<$prefix zstd_unknown>],
+            _ => c::$ty::[<$prefix unknown>],
+        }
+    } };
+}
+
+/// @err a BCH_ERR_decompress errcode, as buf_uncompress() throws: what it's
+/// counted as.
+#[c_export]
+pub fn bch2_decompress_sb_err(err: c_int) -> c::bch_sb_error_id {
+    c::BCH_DECOMPRESS_SB_ERRS!(decompress_map [err, bch_sb_error_id, BCH_FSCK_ERR_data_decompress_err_])
+}
+
+/// The same, as the reason stamped into the KEY_TYPE_error key when it's
+/// what we finally gave up on: the count says how often decompression failed
+/// this way, the key which extent it cost us.
+#[c_export]
+pub fn bch2_decompress_key_type_error(err: c_int) -> c::bch_key_type_errors {
+    c::BCH_DECOMPRESS_SB_ERRS!(decompress_map [err, bch_key_type_errors, KEY_TYPE_ERROR_decompress_])
+}
+
 // ── The counts, in memory ────────────────────────────────────────────────────
 //
 // c->errors.counts, sorted by id: read in from the superblock at mount, counted
@@ -381,4 +428,3 @@ pub fn bch2_sb_errors_from_cpu(c: &Opaque<c::bch_fs>) {
 
     sb.field_delete(c::bch_sb_field_type::BCH_SB_FIELD_errors);
 }
-

@@ -134,7 +134,6 @@ bcachefs-y		:=			\
 	opts.o					\
 	sb/clean.o				\
 	sb/downgrade.o				\
-	sb/errors.o				\
 	sb/io.o					\
 	sb/members.o				\
 	snapshots/snapshot.o			\
