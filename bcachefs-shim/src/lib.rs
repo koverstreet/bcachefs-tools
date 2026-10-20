@@ -66,4 +66,3 @@ macro_rules! pr_info {
 }
 
 pub mod sync;
-pub mod workqueue;
