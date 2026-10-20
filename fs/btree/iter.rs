@@ -5,8 +5,8 @@ use crate::c;
 use crate::errcode::{
     BchError,
     bch_errcode,
+    errptr_or_null,
     errptr_to_result,
-    errptr_to_result_c,
     ret_to_result_void as ret_to_result,
 };
 use crate::fs::Fs;
@@ -728,7 +728,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
         unsafe {
             let top = (*trans).mem_top as usize;
             if top + size > (*trans).mem_bytes as usize {
-                return Ok(errptr_to_result(c::__bch2_trans_kmalloc(trans, size, 0))? as *mut u8);
+                let p = NonNull::new(c::__bch2_trans_kmalloc(trans, size, 0)).expect("memory, or an error");
+                return Ok(errptr_to_result(p)?.as_ptr().cast());
             }
 
             let p = ((*trans).mem as *mut u8).add(top);
@@ -1331,8 +1332,7 @@ impl<'a, 't> TransBkey<'a, 't> {
     pub(crate) unsafe fn from_raw(_t: &TransAttempt<'a, 't>, ptr: *mut c::bkey_i)
         -> Result<Self, BchError>
     {
-        let ptr = errptr_to_result(ptr)?;
-        let ptr = NonNull::new(ptr).expect("a trans mem key, or an error");
+        let ptr = errptr_to_result(NonNull::new(ptr).expect("a trans mem key, or an error"))?;
         Ok(TransBkey {
             buf_u64s: unsafe { ptr.as_ref().k.u64s as u32 },
             ptr,
@@ -1750,24 +1750,19 @@ pub(crate) unsafe fn polonius_key<'i, V: ?Sized + BkeyVal>(k: BkeySC<'_, V>) -> 
 pub(crate) unsafe fn bkey_s_c_to_result<'i>(k: c::bkey_s_c)
     -> Result<Option<BkeySC<'i>>, BchError>
 {
-    errptr_to_result_c(k.k).map(|_| {
-        if !k.k.is_null() {
-            unsafe {
-                Some(BkeySC {
-                    k:    &*k.k,
-                    // Hole slots (peek_slot) return a deleted key with a NULL
-                    // val: a dangling, aligned one instead, as val_bytes()
-                    // makes a slice of it - empty, a deleted key's value, but
-                    // a slice's pointer is never null.
-                    v:    if !k.v.is_null() { k.v } else { NonNull::dangling().as_ptr() },
-                    iter: PhantomData,
-                    val:  PhantomData,
-                })
-            }
-        } else {
-            None
+    // NULL past the end
+    Ok(errptr_or_null(k.k.cast_mut())?.map(|kp| unsafe {
+        BkeySC {
+            k:    kp.as_ref(),
+            // Hole slots (peek_slot) return a deleted key with a NULL val: a
+            // dangling, aligned one instead, as val_bytes() makes a slice of
+            // it - empty, a deleted key's value, but a slice's pointer is
+            // never null.
+            v:    if !k.v.is_null() { k.v } else { NonNull::dangling().as_ptr() },
+            iter: PhantomData,
+            val:  PhantomData,
         }
-    })
+    }))
 }
 
 impl<'t> BtreeIter<'t> {
@@ -1787,11 +1782,7 @@ impl<'t> BtreeIter<'t> {
             let path = (*t.raw()).paths.add(self.path as usize);
             let node = (*path).l[(*path).level() as usize].b;
 
-            // The top 4095 addresses are error pointers: -MAX_ERRNO..-1
-            if node as usize > usize::MAX - 4095 {
-                return None;
-            }
-            NonNull::new(node).map(|raw| BtreeNodeRef { raw })
+            errptr_or_null(node).ok()?.map(|raw| BtreeNodeRef { raw })
         }
     }
 
@@ -1804,8 +1795,8 @@ impl<'t> BtreeIter<'t> {
         unsafe {
             let path = (*t.raw()).paths.add(self.path as usize);
             let l = &raw mut (*path).l[0];
-            // NULL, or an error pointer
-            errptr_to_result((*l).b).ok().filter(|b| !b.is_null())?;
+            // NULL above the root, or an error pointer
+            errptr_or_null((*l).b).ok()??;
             Some(PathLeaf { l, _trans: PhantomData })
         }
     }
@@ -2454,7 +2445,8 @@ impl<'t> BtreeNodeIter<'t> {
     pub fn peek(&mut self) -> Result<Option<&c::btree>, BchError> {
         unsafe {
             let b = c::bch2_btree_iter_peek_node(self.raw.raw_mut());
-            errptr_to_result_c(b).map(|b| if !b.is_null() { Some(&*b) } else { None })
+            // NULL past the last
+            Ok(errptr_or_null(b)?.map(|b| b.as_ref()))
         }
     }
 
@@ -2477,11 +2469,11 @@ impl<'t> BtreeNodeIter<'t> {
         loop {
             let t = trans.begin();
             let b = unsafe { c::bch2_btree_iter_peek_node(raw) };
-            let b = match errptr_to_result_c(b) {
+            let b = match errptr_or_null(b) {
                 Err(e) if is_restart(&e) => continue,
                 Err(e) => return Err(e),
-                Ok(b) if b.is_null() => return Ok(Default::default()),
-                Ok(b) => unsafe { &*b },
+                Ok(None) => return Ok(Default::default()),
+                Ok(Some(b)) => unsafe { b.as_ref() },
             };
 
             t.verify_not_restarted();

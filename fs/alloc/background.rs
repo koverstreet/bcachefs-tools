@@ -18,6 +18,7 @@ use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
 use crate::fs::Fs;
 use crate::util::kernel::READ;
+use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI64, Ordering};
 
 /// Alloc key @k, of whatever version, as a current one - one that isn't an
@@ -45,7 +46,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// - not queued as an update: bch2_alloc_to_v4_mut().
     pub fn alloc_to_v4_mut(&self, k: BkeySC<'_>) -> Result<TransBkey<'a, 't, c::AllocV4>, BchError> {
         // SAFETY: @k is a key
-        let a = errptr_to_result(unsafe { c::bch2_alloc_to_v4_mut(self.raw(), k.into()) })?;
+        let a = unsafe { c::bch2_alloc_to_v4_mut(self.raw(), k.into()) };
+        let a = errptr_to_result(NonNull::new(a).expect("an alloc_v4 in trans mem, or an error"))?.as_ptr();
 
         // Grown to all of an alloc_v4, or as long as @k if it's longer:
         let u64s = u32::from(unsafe { (*a).k.u64s })

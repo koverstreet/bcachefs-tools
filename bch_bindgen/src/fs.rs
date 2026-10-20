@@ -59,9 +59,8 @@ impl FsExt for Fs {
         };
 
         // bch2_fs_open() returns the filesystem or an error, never NULL
-        errptr_to_result(ret).map(|fs| unsafe {
-            OpenFs::from_raw(core::ptr::NonNull::new_unchecked(fs))
-        })
+        let ret = core::ptr::NonNull::new(ret).expect("a filesystem, or an error");
+        errptr_to_result(ret).map(|fs| unsafe { OpenFs::from_raw(fs) })
     }
 
     fn write(&self, inum: u64, offset: u64, subvol: u32, replicas: u32, data: &[u8], new_i_size: u64) -> WriteOp {

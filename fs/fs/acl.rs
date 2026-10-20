@@ -191,7 +191,7 @@ mod vfs {
     use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                              TransAttempt, TransBkey, UpdateTriggerFlags};
     use crate::c;
-    use crate::errcode::{bch_errcode, ret_to_c, ret_to_class, ret_to_result_void as ret_to_result,
+    use crate::errcode::{bch_errcode, err_ptr, ret_to_c, ret_to_class, ret_to_result_void as ret_to_result,
                          BchError};
     use crate::inode;
     use crate::snapshots::subvolume;
@@ -212,11 +212,6 @@ mod vfs {
                 _ => panic!("acl type {type_}"),
             }
         }
-    }
-
-    /// ERR_PTR(), for the VFS.
-    fn err_ptr<T>(e: BchError) -> *mut T {
-        (-(e.raw() as isize)) as *mut T
     }
 
     /// A struct posix_acl we hold a reference on, released when dropped. One

@@ -21,7 +21,7 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{bch_errcode, err_ptr, ret_to_c, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::inode;
 use crate::snapshots::subvolume;
@@ -469,7 +469,7 @@ pub unsafe extern "C" fn bch2_dirent_lookup_key<'t>(
                      dir, hash_info, unsafe { qstr_name(name) }, BtreeIterFlags::empty()) {
         Ok(k)  => k.into(),
         Err(e) => c::bkey_s_c {
-            k: (-(e.raw() as isize)) as *mut c::bkey,
+            k: err_ptr(e),
             v: core::ptr::null_mut(),
         },
     }

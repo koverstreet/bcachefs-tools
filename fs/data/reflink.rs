@@ -37,7 +37,7 @@ use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, 
 use crate::c;
 use crate::data::extents::Extents;
 use crate::data::io_misc::fpunch_at;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::snapshots::subvolume;
@@ -659,7 +659,7 @@ pub fn bch2_lookup_indirect_extent<'t>(
                                  BtreeIterFlags::from_bits_retain(iter_flags)) {
         Ok(k)  => k.into(),
         Err(e) => c::bkey_s_c {
-            k: (-(e.raw() as isize)) as *mut c::bkey,
+            k: err_ptr(e),
             v: core::ptr::null_mut(),
         },
     }

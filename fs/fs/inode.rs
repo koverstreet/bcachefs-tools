@@ -31,7 +31,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, BchError, Found};
+use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError, Found};
 use crate::fs::Fs;
 use crate::dirent::{self, DirentTarget};
 use crate::namei;
@@ -809,7 +809,7 @@ pub unsafe extern "C" fn bch2_inode_to_v3(trans: &BtreeTrans<'_>, k: *const c::b
     let k = unsafe { &*BkeyI::from_raw(k) };
     match to_v3(&unsafe { trans.attempt_in_progress() }, k) {
         Ok(k)  => k.as_ptr(),
-        Err(e) => (-(e.raw() as isize)) as *mut c::bkey_i,
+        Err(e) => err_ptr(e),
     }
 }
 

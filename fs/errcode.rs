@@ -1,6 +1,7 @@
 use crate::c;
 use core::ffi::{c_int, CStr};
 use core::fmt;
+use core::ptr::NonNull;
 
 pub use crate::c::bch_errcode;
 
@@ -175,22 +176,24 @@ pub fn ret_to_class<E: Into<BchError>>(ret: Result<(), E>) -> c_int {
     ret.map_or_else(|e| e.into().class(), |()| 0)
 }
 
-pub fn errptr_to_result<T>(p: *mut T) -> Result<*mut T, BchError> {
-    let addr = p as usize;
-    let max_err: isize = -4096;
-    if addr > max_err as usize {
+/// A pointer from C that's an ERR_PTR() on failure, and never NULL: its
+/// error, or it. An ERR_PTR() is a -errno as a pointer - one of the top
+/// MAX_ERRNO (4095) addresses.
+pub fn errptr_to_result<T>(p: NonNull<T>) -> Result<NonNull<T>, BchError> {
+    let addr = p.as_ptr() as usize;
+    if addr > usize::MAX - 4095 {
         Err(BchError(-(addr as i32)))
     } else {
         Ok(p)
     }
 }
 
-pub fn errptr_to_result_c<T>(p: *const T) -> Result<*const T, BchError> {
-    let addr = p as usize;
-    let max_err: isize = -4096;
-    if addr > max_err as usize {
-        Err(BchError(-(addr as i32)))
-    } else {
-        Ok(p)
-    }
+/// One that may be NULL too, as IS_ERR_OR_NULL() tests: None for NULL.
+pub fn errptr_or_null<T>(p: *mut T) -> Result<Option<NonNull<T>>, BchError> {
+    NonNull::new(p).map(errptr_to_result).transpose()
+}
+
+/// ERR_PTR(): @e as the pointer C returns for it.
+pub fn err_ptr<T>(e: BchError) -> *mut T {
+    (-(e.raw() as isize)) as *mut T
 }
