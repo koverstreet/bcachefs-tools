@@ -4,10 +4,10 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::sb::members;
 use crate::util::Printbuf;
-use crate::types::ArmOf;
-use crate::util::vstructs::{read_past, ArmRef, Head, SelfSized, Unsized, Validated};
+use crate::types::{ArmOf, Le32};
+use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, read_past, ArmRef, Head, Plain, SelfSized, Unsized, Validated, ValidatedEntries};
 use core::ffi::c_int;
-use core::mem::size_of;
+use core::mem::{size_of, size_of_val};
 
 /// A superblock section's type: an arm of tagged_union! bch_sb_field, which
 /// gives its field type - handed out as its ArmRef says, a short one, written
@@ -28,6 +28,26 @@ pub trait SbFieldOps: SbField {
     }
 
     fn to_text(_out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb, _f: &Self) {}
+
+    /// Where the whole entries of the section in @b - its bytes, its header's
+    /// included - end: past that, rounded up to a u64, is a partial entry,
+    /// dropped at read and invalid at write. None if it's too short to be
+    /// one. A section of fixed-size entries is as its arm says; one of
+    /// variable-size entries walks them, entries_end().
+    fn entries_end(b: &[u8]) -> Option<usize> {
+        <Self as ArmRef>::whole_len(b.len())
+    }
+}
+
+/// entries_end() for a section of variable-size entries @E, from @head on:
+/// up to the first that doesn't fit, or that @is_entry says ends the walk -
+/// a terminator, zeroes.
+pub fn entries_end<E>(b: &[u8], head: usize, is_entry: impl Fn(&E) -> bool) -> Option<usize>
+where
+    E: Unsized<Head: Plain + SelfSized> + ?Sized,
+{
+    let entries = ValidatedEntries::<E>::new(b.get(head..)?);
+    Some(head + entries.take_while(|e| is_entry(e)).map(size_of_val).sum::<usize>())
 }
 
 pub const fn sb_field_ops<F: SbFieldOps + ?Sized>() -> c::bch_sb_field_ops {
@@ -35,6 +55,30 @@ pub const fn sb_field_ops<F: SbFieldOps + ?Sized>() -> c::bch_sb_field_ops {
         validate: Some(sb_field_validate::<F>),
         to_text:  Some(sb_field_to_text::<F>),
     }
+}
+
+/// The section at @f in @sb, @len bytes, read with a partial entry past its
+/// whole ones, which end at @end - C's readers ignored one: shrunk to them,
+/// the rest of its last u64 zeroed as a writer leaves it, the sections after
+/// it moved down, and a warning in @err. Repaired as it's read, as
+/// bch2_sb_validate() repairs version_incompat_allowed, and written whole
+/// with the next superblock write; unrepaired, a reader would find no
+/// section, or not all of it. The section itself doesn't move, so
+/// bch2_sb_validate()'s walk goes on from where the next one now is.
+fn sb_field_drop_partial(sb: &mut bch_sb, f: usize, len: usize, end: usize, err: &mut Printbuf) {
+    let whole = end.next_multiple_of(size_of::<u64>());
+    let dropped = len - whole;
+
+    let bytes = bytes_of_mut(sb);
+    bytes[f + end..f + whole].fill(0);
+    bytes.copy_within(f + len.., f + whole);
+    let sb_end = bytes.len();
+    bytes[sb_end - dropped..].fill(0);
+    cast_plain_mut::<Head<c::bch_sb_field>>(&mut bytes[f..]).expect("a section's header").u64s =
+        Le32::new((whole / size_of::<u64>()) as u32);
+    sb.sub_u64s((dropped / size_of::<u64>()) as u32);
+
+    write!(err, "{dropped} bytes past its last whole entry, dropped");
 }
 
 /// # Safety
@@ -47,17 +91,36 @@ unsafe extern "C" fn sb_field_validate<F: SbFieldOps + ?Sized>(
     err:   *mut c::printbuf,
 ) -> c_int {
     // SAFETY: the caller's
-    let (sb, f, err) = unsafe {
-        (bch_sb::<Validated>::from_ffi(sb),
-         c::bch_sb_field::<Validated>::from_ffi(f),
-         Printbuf::borrow_raw(err))
-    };
+    let err = unsafe { Printbuf::borrow_raw(err) };
+    let invalid = || ret_to_c(Err::<(), _>(bch_errcode::BCH_ERR_invalid_sb_field_size));
 
+    // SAFETY: the caller's
+    let b = unsafe { c::bch_sb_field::<Validated>::from_ffi(f) }.as_bytes();
+    let len = b.len();
+    let Some(end) = F::entries_end(b) else {
+        write!(err, "too short ({len} bytes)");
+        return invalid();
+    };
+    if end.next_multiple_of(size_of::<u64>()) < len {
+        if flags.contains(c::bch_validate_flags::BCH_VALIDATE_write) {
+            write!(err, "{} bytes past its last whole entry", len - end);
+            return invalid();
+        }
+        // SAFETY: the caller's - all of the superblock, which its walk holds
+        // no reference into; @f is a section of it
+        let sb_mut = unsafe { bch_sb::<Validated>::from_ffi_mut(sb) };
+        sb_field_drop_partial(sb_mut, f as usize - sb as usize, len, end, err);
+    }
+
+    // SAFETY: the caller's
+    let (sb, f) = unsafe {
+        (bch_sb::<Validated>::from_ffi(sb), c::bch_sb_field::<Validated>::from_ffi(f))
+    };
     match f.arm::<F>() {
         Some(f) => ret_to_c(F::validate(sb, f, flags, err)),
         None => {
             write!(err, "too short ({} bytes)", f.as_bytes().len());
-            ret_to_c(Err::<(), _>(bch_errcode::BCH_ERR_invalid_sb_field_size))
+            invalid()
         }
     }
 }
@@ -535,9 +598,12 @@ impl SbAccess for SbBuf {
 
 #[cfg(test)]
 mod tests {
+    use super::{sb_field_u64s, sb_field_validate, SbField};
     use crate::c;
     use crate::types::Le32;
     use crate::util::vstructs::{Head, Unvalidated, Validated, VStruct, VStructError};
+    use crate::util::Printbuf;
+    use core::ffi::c_int;
 
     /// @buf as a superblock field of type @ty, @u64s long - its header written
     /// - as a superblock's walk would give it: as many bytes as it says.
@@ -668,5 +734,46 @@ mod tests {
         let f = field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_ext, 10);
         assert!(f.arm::<c::bch_sb_field_ext<Validated>>().is_none());
         assert!(f.typed().is_err());
+    }
+
+    /// A superblock with an errors_v2 section of two entries and a partial
+    /// third - 8 bytes of one - then a counters section; and validate() of the
+    /// errors_v2 section, as a read or a write would.
+    fn validate_partial(flags: c::bch_validate_flags) -> (c::bch_sb_handle, c_int, Printbuf) {
+        type E = c::bch_sb_field_errors_v2;
+        type Ctrs = c::bch_sb_field_counters;
+
+        let mut sb = c::bch_sb_handle::default();
+        sb.sb_realloc(0).unwrap();
+        for (i, e) in sb.field_resize::<E>(sb_field_u64s::<E>(2)).unwrap().entries.iter_mut().enumerate() {
+            e.v.set_id(3 + i as u16);
+            e.v.set_nr(1);
+        }
+        for (i, d) in sb.field_resize::<Ctrs>(sb_field_u64s::<Ctrs>(3)).unwrap().d.iter_mut().enumerate() {
+            *d = (100 + i as u64).into();
+        }
+        sb.field_resize::<E>(sb_field_u64s::<E>(2) + 1);
+        assert!(sb.field::<E>().is_none());
+
+        let f = unsafe { c::bch2_sb_field_get_id(sb.sb, E::FIELD_TYPE) };
+        let mut err = Printbuf::new();
+        let ret = unsafe { sb_field_validate::<E>(sb.sb, f, flags, err.as_raw()) };
+        (sb, ret, err)
+    }
+
+    /// A partial entry at a section's end, which C ignored, is dropped at read
+    /// with a warning - the sections after it intact - and invalid at write.
+    #[test]
+    fn partial_entry() {
+        let (sb, ret, err) = validate_partial(c::bch_validate_flags::empty());
+        assert_eq!((ret, err.as_str()), (0, "8 bytes past its last whole entry, dropped"));
+        let ids: Vec<u16> = sb.field::<c::bch_sb_field_errors_v2>().unwrap().entries.iter().map(|e| e.v.id()).collect();
+        assert_eq!(ids, [3, 4]);
+        let d: Vec<u64> = sb.field::<c::bch_sb_field_counters>().unwrap().d.iter().map(|d| d.get()).collect();
+        assert_eq!(d, [100, 101, 102]);
+
+        let (_, ret, err) = validate_partial(c::bch_validate_flags::BCH_VALIDATE_write);
+        assert!(ret != 0);
+        assert_eq!(err.as_str(), "8 bytes past its last whole entry");
     }
 }

@@ -1860,6 +1860,10 @@ static int bch2_sb_field_validate(struct bch_sb *sb, struct bch_sb_field *f,
 			   bch2_sb_fields[type], field_err.buf);
 		prt_newline(err);
 		bch2_sb_field_to_text(err, NULL, sb, f);
+	} else if (field_err.pos) {
+		/* repaired as read: bch2_read_super() prints it */
+		prt_printf(err, "Superblock section %s: %s", bch2_sb_fields[type], field_err.buf);
+		prt_newline(err);
 	}
 
 	return ret;
