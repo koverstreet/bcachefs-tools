@@ -58,14 +58,6 @@ impl Fs {
 // reads: that's each field's, as in C.
 unsafe impl Sync for Fs {}
 
-/// The version's number and name.
-impl crate::util::ToText for c::bcachefs_metadata_version {
-    fn to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_version_to_text(out.as_raw(), *self) }
-    }
-}
-crate::display_via_to_text!(c::bcachefs_metadata_version);
-
 impl Fs {
     /// The filesystem's name, as its messages give it.
     pub fn name(&self) -> &core::ffi::CStr {
@@ -350,10 +342,10 @@ impl Fs {
     pub fn request_incompat_feature(&self, version: c::bcachefs_metadata_version)
         -> Result<(), BchError>
     {
-        if version.0 <= unsafe { (*self.as_ptr()).sb.version_incompat } as u32 {
+        if version.0 <= self.sb.version_incompat.into() {
             return Ok(());
         }
-        ret_to_result(unsafe { c::bch2_set_version_incompat(self.as_ptr(), version) })
+        self.set_version_incompat(version)
     }
 
     /// Whether the filesystem uses @feature: c->sb.features, the in-memory
@@ -366,7 +358,7 @@ impl Fs {
     /// wasn't already: as bch2_check_set_feature().
     pub fn check_set_feature(&self, feature: c::bch_sb_feature) {
         if !self.feature(feature) {
-            unsafe { c::__bch2_check_set_feature(self.as_ptr(), feature.0) }
+            self.set_feature(feature)
         }
     }
 

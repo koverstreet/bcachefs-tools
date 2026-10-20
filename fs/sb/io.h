@@ -17,8 +17,6 @@ static inline bool bch2_version_compatible(u16 version)
 		version >= bcachefs_metadata_version_min;
 }
 
-enum bcachefs_metadata_version bch2_latest_compatible_version(enum bcachefs_metadata_version);
-
 /* Whether bch2_request_incompat_feature() would succeed, without asking: */
 static inline bool bch2_incompat_feature_allowed(struct bch_fs *c,
 						 enum bcachefs_metadata_version version)
@@ -88,10 +86,6 @@ static inline void bch2_check_set_feature(struct bch_fs *c, unsigned feat)
 	if (!(c->sb.features & (1ULL << feat)))
 		__bch2_check_set_feature(c, feat);
 }
-
-bool bch2_check_version_downgrade(struct bch_fs *);
-void bch2_sb_upgrade(struct bch_fs *, unsigned, bool);
-void bch2_sb_upgrade_incompat(struct bch_fs *);
 
 static inline struct sb_write sb_write_init(struct bch_fs *c)
 {

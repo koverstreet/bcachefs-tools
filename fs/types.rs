@@ -614,8 +614,8 @@ pub struct Fs {
     #[c_anon("struct mutex_noio sb_lock; struct bch_sb_handle disk_sb")]
     pub disk_sb: MutexNoio<c::bch_sb_handle>,
     #[c("unsigned long incompat_versions_requested[BITS_TO_LONGS(BCH_VERSION_MINOR(bcachefs_metadata_version_current))]")]
-    pub incompat_versions_requested: [c_ulong;
-        bits_to_longs(c::BCH_VERSION_MINOR(c::bcachefs_metadata_version_current as u64) as usize)],
+    pub incompat_versions_requested: crate::util::bitmap::AtomicBitArray<{
+        bits_to_longs(c::BCH_VERSION_MINOR(c::bcachefs_metadata_version_current as u64) as usize) }>,
     pub cf_encoding: *mut c::unicode_map,
 
     pub block_bits: c_ushort, /* ilog2(block_size) */

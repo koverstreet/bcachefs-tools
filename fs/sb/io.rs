@@ -3,12 +3,12 @@ use crate::c::{bch_sb, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::members;
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 use crate::prt;
-use crate::types::{ArmOf, Le32};
+use crate::types::{ArmOf, Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, read_past, ArmRef, Head, Plain, SelfSized, Unsized, VStruct, Validated, ValidatedEntries};
 use core::ffi::{c_int, c_uint, CStr};
-use crate::util::ffi::c_char;
+use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::NSEC_PER_SEC;
 use cstruct_macros::c_export;
 use core::mem::{size_of, size_of_val};
@@ -528,6 +528,200 @@ pub unsafe fn validate(sb: *mut Head<bch_sb>, opts: &c::bch_opts, read_offset: u
 pub unsafe fn bch2_sb_validate(sb: *mut Head<c::bch_sb>, opts: &c::bch_opts, read_offset: u64,
                                flags: c::bch_validate_flags, out: &mut Printbuf) -> c_int {
     ret_to_c(unsafe { validate(sb, opts, read_offset, flags, out) })
+}
+
+// ── Versions ─────────────────────────────────────────────────────────────
+
+macro_rules! metadata_versions {
+    ($(($name:tt, $v:expr, $($rest:tt)*)),* $(,)?) => {
+        /// The versions this one knows, oldest first, and their names.
+        const VERSIONS: &[(u32, &str)] = {
+            use crate::c::BCH_VERSION;
+            &[$(($v as u32, stringify!($name))),*]
+        };
+    };
+}
+c::BCH_METADATA_VERSIONS!(metadata_versions);
+
+impl c::bcachefs_metadata_version {
+    /// Its name, if it's a version this one knows.
+    pub fn name(self) -> Option<&'static str> {
+        VERSIONS.iter().find(|&&(v, _)| v == self.0).map(|&(_, name)| name)
+    }
+
+    /// The newest version this one knows of the same major - itself at
+    /// major 0: bch2_latest_compatible_version().
+    pub fn latest_compatible(self) -> Self {
+        let major = |v: u32| c::BCH_VERSION_MAJOR(v.into());
+        if major(self.0) == 0 {
+            return self;
+        }
+        Self(VERSIONS.iter().map(|&(v, _)| v).filter(|&v| major(v) == major(self.0)).fold(self.0, u32::max))
+    }
+}
+
+/// The version's name and number.
+impl ToText for c::bcachefs_metadata_version {
+    fn to_text(&self, out: &mut Printbuf) {
+        let v = u64::from(self.0);
+        prt!(out, "{} ({}.{})", self.name().unwrap_or("(unknown version)"),
+             c::BCH_VERSION_MAJOR(v), c::BCH_VERSION_MINOR(v));
+    }
+}
+crate::display_via_to_text!(c::bcachefs_metadata_version);
+
+#[c_export]
+pub fn bch2_version_to_text(out: &mut Printbuf, v: c::bcachefs_metadata_version) {
+    v.to_text(out)
+}
+
+#[c_export]
+pub fn bch2_latest_compatible_version(v: c::bcachefs_metadata_version) -> c::bcachefs_metadata_version {
+    v.latest_compatible()
+}
+
+impl Fs {
+    /// Whether features of @version may be used, without asking:
+    /// bch2_incompat_feature_allowed().
+    fn incompat_feature_allowed(&self, version: c::bcachefs_metadata_version) -> bool {
+        version.0 <= self.sb.version_incompat.into() ||
+            (self.feature(c::bch_sb_feature::BCH_FEATURE_incompat_version_field) &&
+             version.0 <= self.sb.version_incompat_allowed.into())
+    }
+
+    /// Make the filesystem incompatible with versions before @version, if
+    /// that's allowed, writing the superblock: bch2_set_version_incompat().
+    /// If it isn't, the first request for each version says so.
+    pub fn set_version_incompat(&self, version: c::bcachefs_metadata_version) -> Result<(), BchError> {
+        if self.incompat_feature_allowed(version) {
+            let mut sb = self.sb_lock();
+            if version.0 > self.sb.version_incompat.into() {
+                let s = sb.sb_mut();
+                let max = s.version_incompat().max(version.0.into());
+                s.set_version_incompat(max);
+                self.write_super(&mut sb);
+            }
+            return Ok(());
+        }
+
+        // a bit per minor: one major
+        const _: () = assert!(c::BCH_VERSION_MAJOR(c::bcachefs_metadata_version_current as u64) == 1);
+        let minor = c::BCH_VERSION_MINOR(version.0.into()) as usize;
+        let requested = &self.incompat_versions_requested;
+        if !requested.test(minor) && !requested.test_and_set(minor) {
+            crate::bch_notice!(self, "requested incompat feature {} currently not enabled, allowed up to {}\n  set version_upgrade=incompatible to enable",
+                               version, self::version(self.sb.version_incompat_allowed));
+        }
+
+        self.throw(bch_errcode::BCH_ERR_may_not_use_incompat_feature)
+    }
+
+    /// Mark the filesystem as using @feature, writing the superblock if it
+    /// didn't - checked again under sb_lock: __bch2_check_set_feature().
+    pub(crate) fn set_feature(&self, feature: c::bch_sb_feature) {
+        let mut sb = self.sb_lock();
+        if !self.feature(feature) {
+            sb.sb_mut().features[0] |= 1 << feature.0;
+            self.write_super(&mut sb);
+        }
+    }
+
+    /// Allow incompatible features up to the filesystem's version, as an
+    /// upgrade to it would have: version_upgrade=incompatible, set at
+    /// runtime - bch2_sb_upgrade_incompat().
+    fn upgrade_incompat(&self) {
+        let mut sb = self.sb_lock();
+        let (v, allowed) = (self.sb.version, self.sb.version_incompat_allowed);
+        if v == allowed {
+            return;
+        }
+
+        crate::bch_notice!(self, "Now allowing incompatible features up to {}, previously allowed up to {}\n",
+                           version(v), version(allowed));
+
+        let s = sb.sb_mut();
+        s.features[0] |= c::BCH_SB_FEATURES_ALL;
+        let max = s.version_incompat_allowed().max(v.into());
+        s.set_version_incompat_allowed(max);
+
+        crate::sb::downgrade::set_upgrade_incompat(&mut sb, allowed.into(), v.into());
+        self.write_super(&mut sb);
+
+        crate::init::passes::run_async(self);
+    }
+}
+
+#[c_export]
+pub fn bch2_set_version_incompat(c: &Opaque<c::bch_fs>, version: c::bcachefs_metadata_version) -> c_int {
+    ret_to_c(Fs::from_c(c).set_version_incompat(version))
+}
+
+#[c_export]
+pub fn __bch2_check_set_feature(c: &Opaque<c::bch_fs>, feat: c_uint) {
+    Fs::from_c(c).set_feature(c::bch_sb_feature(feat))
+}
+
+#[c_export]
+pub fn bch2_sb_upgrade_incompat(c: &Opaque<c::bch_fs>) {
+    Fs::from_c(c).upgrade_incompat()
+}
+
+/// A superblock newer than this version brought down to it - what it's at
+/// and what it allows - and the compat bits this version doesn't know
+/// cleared: whether it was newer. bch2_check_version_downgrade().
+///
+/// The superblock only: c->sb keeps the version it's coming from, which
+/// bch2_sb_set_downgrade() wants next, until the write's sb_update() brings
+/// it up to date.
+fn check_version_downgrade(fs: &Fs, sb: &mut SbLockGuard) -> bool {
+    let current = c::bcachefs_metadata_version_current;
+    let s = sb.sb_mut();
+
+    if s.version_upgrade_complete() > current.into() {
+        s.set_version_upgrade_complete(current.into());
+    }
+    if s.version_incompat_allowed() > current.into() {
+        s.set_version_incompat_allowed(current.into());
+    }
+    if u32::from(fs.sb.version) > current {
+        s.version = Le16::new(current as u16);
+    }
+    if u32::from(fs.sb.version_min) > current {
+        s.version_min = Le16::new(current as u16);
+    }
+    s.compat[0] = Le64::new(s.compat[0].get() & ((1 << c::bch_sb_compat::BCH_COMPAT_NR.0) - 1));
+
+    current < fs.sb.version.into()
+}
+
+#[c_export]
+pub fn bch2_check_version_downgrade(c: &Opaque<c::bch_fs>) -> bool {
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    check_version_downgrade(fs, &mut unsafe { fs.sb_lock_held() })
+}
+
+/// The superblock at @new, and allowing incompatible features up to it if
+/// @incompat; a new major drops the downgrade section, which is for
+/// downgrades within one. bch2_sb_upgrade().
+fn sb_upgrade(sb: &mut SbLockGuard, new: u32, incompat: bool) {
+    if c::BCH_VERSION_MAJOR(new.into()) > c::BCH_VERSION_MAJOR(sb.sb().version.get().into()) {
+        sb.field_resize::<c::bch_sb_field_downgrade>(0);
+    }
+
+    let s = sb.sb_mut();
+    s.version = Le16::new(new as u16);
+    if incompat {
+        s.features[0] |= c::BCH_SB_FEATURES_ALL;
+        let max = s.version_incompat_allowed().max(new.into());
+        s.set_version_incompat_allowed(max);
+    }
+}
+
+#[c_export]
+pub fn bch2_sb_upgrade(c: &Opaque<c::bch_fs>, new_version: c_uint, incompat: bool) {
+    // SAFETY: C calls it under sb_lock
+    sb_upgrade(&mut unsafe { Fs::from_c(c).sb_lock_held() }, new_version, incompat)
 }
 
 // ── Printing ─────────────────────────────────────────────────────────────

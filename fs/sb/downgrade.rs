@@ -209,10 +209,9 @@ pub fn bch2_sb_set_upgrade(c: &Opaque<c::bch_fs>, old: c_uint, new: c_uint) {
     set_upgrade(&mut *unsafe { Fs::from_c(c).sb_lock_held() }, UPGRADE, old, new)
 }
 
-#[c_export]
-pub fn bch2_sb_set_upgrade_incompat(c: &Opaque<c::bch_fs>, old: c_uint, new: c_uint) {
-    // SAFETY: C calls it under sb_lock
-    set_upgrade(&mut *unsafe { Fs::from_c(c).sb_lock_held() }, UPGRADE_INCOMPAT, old, new)
+/// set_upgrade(), by the table for allowing incompatible features.
+pub(crate) fn set_upgrade_incompat(sb: &mut c::bch_sb_handle, old: u32, new: u32) {
+    set_upgrade(sb, UPGRADE_INCOMPAT, old, new)
 }
 
 impl Fs {

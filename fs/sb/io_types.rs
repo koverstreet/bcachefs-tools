@@ -47,10 +47,6 @@ pub struct bch_sb_cpu {
 c_default!(bch_sb_cpu);
 
 c_extern! {
-    pub fn bch2_version_to_text(out: *mut c::printbuf, v: c::bcachefs_metadata_version);
-    pub fn bch2_set_version_incompat(c: *mut c::bch_fs,
-                                     version: c::bcachefs_metadata_version) -> c_int;
-    pub fn __bch2_check_set_feature(c: *mut c::bch_fs, feat: c_uint);
     pub fn bch2_write_super_replicas(c: *mut c::bch_fs) -> c_int;
     pub static bch2_sb_features: [*const c_char; 0];
     pub static bch2_sb_compat: [*const c_char; 0];
