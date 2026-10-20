@@ -15,14 +15,50 @@ pub use bcachefs_shim::alloc::{flags, AllocError, Flags, KVVec};
 /// given up to a raw pointer. free_pinned() takes it back. Fails with @init's
 /// error, or the allocation's.
 pub fn alloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>) -> Result<*mut T, E> {
+    alloc_in::<false, T, E>(init)
+}
+
+/// Drop and free @p.
+///
+/// # Safety
+/// @p is from alloc_pinned(), and nothing uses it after.
+pub unsafe fn free_pinned<T>(p: *mut T) {
+    unsafe { free_in::<false, T>(p) }
+}
+
+/// alloc_pinned(), kmalloc()'d - a KBox in-kernel - for what's freed from
+/// any context: kfree() is safe anywhere, and kvfree() isn't - vfree() may
+/// sleep, outside interrupt context. kfree_pinned() takes it back.
+pub fn kalloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>) -> Result<*mut T, E> {
+    alloc_in::<true, T, E>(init)
+}
+
+/// Drop and free @p - from any context, if dropping it can be.
+///
+/// # Safety
+/// @p is from kalloc_pinned(), and nothing uses it after.
+pub unsafe fn kfree_pinned<T>(p: *mut T) {
+    unsafe { free_in::<true, T>(p) }
+}
+
+fn alloc_in<const KMALLOC: bool, T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>)
+    -> Result<*mut T, E>
+{
     #[cfg(kernel)]
     {
-        use kernel::alloc::{flags::__GFP_ZERO, KVBox};
+        use core::pin::Pin;
+        use kernel::alloc::{flags::__GFP_ZERO, KBox, KVBox};
         use kernel::init::InPlaceInit;
 
-        let b = KVBox::try_pin_init(init, flags::GFP_KERNEL | __GFP_ZERO)?;
-        // SAFETY: pinned still - C has the pointer, and gives it back to free_pinned()
-        Ok(KVBox::into_raw(unsafe { core::pin::Pin::into_inner_unchecked(b) }))
+        let gfp = flags::GFP_KERNEL | __GFP_ZERO;
+        // SAFETY: pinned still: given up to its holder, and back to free_in()
+        Ok(unsafe {
+            if KMALLOC {
+                KBox::into_raw(Pin::into_inner_unchecked(KBox::try_pin_init(init, gfp)?))
+            } else {
+                KVBox::into_raw(Pin::into_inner_unchecked(KVBox::try_pin_init(init, gfp)?))
+            }
+        })
     }
     #[cfg(not(kernel))]
     {
@@ -45,13 +81,17 @@ pub fn alloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>
     }
 }
 
-/// Drop and free @p.
-///
 /// # Safety
-/// @p is from alloc_pinned(), and nothing uses it after.
-pub unsafe fn free_pinned<T>(p: *mut T) {
+/// @p is from alloc_in::<KMALLOC>(), and nothing uses it after.
+unsafe fn free_in<const KMALLOC: bool, T>(p: *mut T) {
     #[cfg(kernel)]
-    drop(unsafe { kernel::alloc::KVBox::from_raw(p) });
+    unsafe {
+        if KMALLOC {
+            drop(kernel::alloc::KBox::from_raw(p));
+        } else {
+            drop(kernel::alloc::KVBox::from_raw(p));
+        }
+    }
     #[cfg(not(kernel))]
     drop(unsafe { std::boxed::Box::from_raw(p) });
 }

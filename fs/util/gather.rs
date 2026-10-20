@@ -11,7 +11,7 @@
 //!     stack_pin_init!(let g = Gather::<Result<(), BchError>>::new());
 //!     let r = g.get();                // one more in flight
 //!     r.put(ret);                     // folded in; dropped unput, nothing is
-//!     let ret = g.as_mut().wait_sync();   // or g.as_mut().wait().await
+//!     let ret = g.as_mut().wait_sync();   // or g.as_mut().wait().resume_on(..).await
 //!
 //! The Gather is its owner's, and so is the wait: it takes the Gather by
 //! Pin<&mut>, so there's only ever one waiter. What's in flight holds refs -
@@ -52,7 +52,7 @@
 
 use crate::c;
 use crate::errcode::BchError;
-use core::future::Future;
+use crate::util::task::Resumable;
 use core::marker::PhantomPinned;
 use core::mem::ManuallyDrop;
 use core::pin::Pin;
@@ -462,19 +462,19 @@ impl<T: Fold, W: Width> Drop for GatherRef<T, W> {
     }
 }
 
-/// Gather::wait()'s future: the result, once every ref is put. Dropped
-/// unfinished, it takes its Waker back.
-#[must_use = "a future does nothing unless awaited"]
+/// Gather::wait()'s: the result, once every ref is put - awaited through
+/// resume_on(). Dropped unfinished, it takes its Waker back.
+#[must_use = "a wait does nothing unless awaited"]
 pub struct Wait<'a, T: Fold, W: Width = usize> {
     g:          Pin<&'a mut Gather<T, W>>,
     /// Our Waker is in the slot.
     registered: bool,
 }
 
-impl<T: Fold, W: Width> Future for Wait<'_, T, W> {
+impl<T: Fold, W: Width> Resumable for Wait<'_, T, W> {
     type Output = T;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
+    fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
         let this = self.get_mut();
         let g = this.g.as_ref().get_ref();
         if g.start_wait() {

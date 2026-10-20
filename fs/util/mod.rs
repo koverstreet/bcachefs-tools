@@ -24,6 +24,7 @@ pub mod rcu;
 pub mod rhashtable;
 pub mod strided;
 pub mod sysfs;
+pub mod task;
 pub mod sync;
 pub mod varint;
 pub mod vstructs;
