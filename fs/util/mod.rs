@@ -12,6 +12,7 @@ pub mod inline_vec;
 #[cfg(not(kernel))]
 pub mod ioctl;
 pub mod kernel;
+pub mod kthread;
 pub mod locking;
 pub mod log;
 pub mod module_param;

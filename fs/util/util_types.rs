@@ -82,7 +82,6 @@ c_extern! {
     pub fn bch2_msleep(ms: c_uint);
     pub fn bch2_fatal_signal_pending() -> bool;
     pub fn bch2_ktime_get_ns() -> u64;
-    pub fn bch2_kthread_should_stop() -> bool;
     pub fn bch2_nsecs_to_jiffies(ns: u64) -> c_ulong;
     pub fn bch2_acc_u64s_percpu(acc: *mut u64, src: *const u64, nr: c_uint);
     pub fn bch2_bdev_rot(bdev: *mut c::block_device) -> bool;
@@ -98,6 +97,13 @@ c_extern! {
     pub fn bch2_cancel_delayed_work_sync(dwork: *mut c::delayed_work) -> bool;
     pub fn bch2_system_long_wq() -> *mut c::workqueue_struct;
     pub fn bch2_system_dfl_wq() -> *mut c::workqueue_struct;
+    pub fn bch2_kthread_create(func: Option<unsafe extern "C" fn(*mut c_void) -> c_int>, data: *mut c_void,
+                               name: *const c_char) -> *mut c::task_struct;
+    pub fn bch2_kthread_stop(p: *mut c::task_struct) -> c_int;
+    pub fn bch2_kthread_should_stop() -> bool;
+    pub fn bch2_wake_up_process(p: *mut c::task_struct);
+    pub fn bch2_get_task_struct(p: *mut c::task_struct);
+    pub fn bch2_put_task_struct(p: *mut c::task_struct);
     pub fn bch2_capable(cap: c_int) -> bool;
     pub fn bch2_sysfs_create_file(kobj: *mut c::kobject, attr: *const c::attribute) -> c_int;
     #[cfg(__KERNEL__)]

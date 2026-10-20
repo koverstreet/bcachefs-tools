@@ -1472,11 +1472,6 @@ u64 bch2_ktime_get_ns(void)
 	return ktime_get_ns();
 }
 
-bool bch2_kthread_should_stop(void)
-{
-	return (current->flags & PF_KTHREAD) && kthread_should_stop();
-}
-
 unsigned long bch2_nsecs_to_jiffies(u64 ns)
 {
 	return nsecs_to_jiffies(ns);
@@ -1543,6 +1538,40 @@ struct workqueue_struct *bch2_system_long_wq(void)
 struct workqueue_struct *bch2_system_dfl_wq(void)
 {
 	return system_dfl_wq;
+}
+
+/*
+ * For util/kthread.rs: kthread_create() is a macro in the kernel, a function
+ * in userspace; get/put_task_struct() are static inlines.
+ */
+struct task_struct *bch2_kthread_create(int (*fn)(void *), void *data, const char *name)
+{
+	return kthread_create(fn, data, "%s", name);
+}
+
+int bch2_kthread_stop(struct task_struct *p)
+{
+	return kthread_stop(p);
+}
+
+bool bch2_kthread_should_stop(void)
+{
+	return (current->flags & PF_KTHREAD) && kthread_should_stop();
+}
+
+void bch2_wake_up_process(struct task_struct *p)
+{
+	wake_up_process(p);
+}
+
+void bch2_get_task_struct(struct task_struct *p)
+{
+	get_task_struct(p);
+}
+
+void bch2_put_task_struct(struct task_struct *p)
+{
+	put_task_struct(p);
 }
 
 /* capable() is a function in the kernel, a macro (true) in userspace's blkdev.h */
