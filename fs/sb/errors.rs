@@ -96,6 +96,16 @@ pub fn bch2_sb_error_id_to_text(out: &mut Printbuf, id: c::bch_sb_error_id) {
     id.to_text(out)
 }
 
+/// @ids by name, comma separated.
+pub fn prt_error_ids(out: &mut Printbuf, ids: impl IntoIterator<Item = c::bch_sb_error_id>) {
+    for (i, id) in ids.into_iter().enumerate() {
+        if i != 0 {
+            write!(out, ",");
+        }
+        prt!(out, "{}", id);
+    }
+}
+
 /// A v2 count, which saturates: one that did is a floor, not an exact value.
 pub fn prt_error_nr(out: &mut Printbuf, nr: u64) {
     write!(out, "{nr}");

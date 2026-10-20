@@ -108,3 +108,10 @@ pub fn run_lock(fs: &Fs) -> MutexGuard<'_> {
 pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
     unsafe { c::bch2_recovery_pass_status_to_text(out.as_raw(), fs.as_ptr()) }
 }
+
+/// The recovery passes in @stable - bits of their stable index, as the
+/// superblock stores them - by name.
+pub fn prt_stable(out: &mut Printbuf, stable: u64) {
+    // SAFETY: the names are C's, for every pass
+    unsafe { out.prt_bitflags(c::bch2_recovery_passes.as_ptr(), c::bch2_recovery_passes_from_stable(stable)) }
+}
