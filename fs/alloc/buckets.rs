@@ -57,6 +57,12 @@ impl c::bch_dev {
     }
 }
 
+/// The bucket @v encodes - device in the top 16 bits, bucket in the low 48 -
+/// as the lru btree's targets do: u64_to_bucket().
+pub fn u64_to_bucket(v: u64) -> c::bpos {
+    pos(v >> 48, v & ((1 << 48) - 1))
+}
+
 // ── Bucket generations ───────────────────────────────────────────────────
 
 /// How far generation @a is past @b, or 0 if it isn't - wrapping, as gens
