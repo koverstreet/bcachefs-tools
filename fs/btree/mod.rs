@@ -2,6 +2,7 @@ pub mod bbpos;
 pub mod bkey;
 pub mod bkey_buf;
 pub mod bkey_methods;
+pub mod cache;
 pub mod compat;
 pub mod cow_key;
 pub mod interior;

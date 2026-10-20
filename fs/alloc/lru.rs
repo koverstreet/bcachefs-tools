@@ -19,6 +19,7 @@ use crate::alloc::background::alloc_to_v4;
 use crate::alloc::buckets::u64_to_bucket;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN, SPOS_MAX};
+use crate::btree::cache::BtreeCachePins;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbMaybeFlush;
@@ -387,26 +388,20 @@ fn check_lru_key(
 /// are its device's slice of the alloc btree, the stripe lru's the stripes
 /// btree. The others' entries - the old fs-wide fragmentation lru, ids nothing
 /// uses - are scattered or bogus, stragglers to be deleted: no pin.
-fn pin_backing(trans: &BtreeTrans<'_>, lru: LruId) -> Result<(), BchError> {
+fn pin_backing(trans: &BtreeTrans<'_>, pins: &BtreeCachePins<'_>, lru: LruId) -> Result<(), BchError> {
     let (btree, start, end) = match lru {
         LruId::Read { dev } | LruId::Fragmentation { dev } =>
             (c::btree_id::alloc, pos(dev.into(), 0), spos(dev.into(), u64::MAX, u32::MAX)),
         LruId::Stripes =>
             (c::btree_id::stripes, POS_MIN, SPOS_MAX),
         LruId::FragmentationOld | LruId::Unknown(_) => {
-            // SAFETY: the btree cache's
-            unsafe { c::bch2_btree_cache_unpin(trans.fs().as_ptr()) };
+            pins.unpin();
             return Ok(());
         }
     };
     let mask = 1 << btree.0;
     let end = c::bbpos { btree, pos: end };
-    let mut pinned_end = end;
-    // SAFETY: @trans is ours
-    ret_to_result_void(unsafe {
-        c::bch2_btree_cache_pin(trans.raw(), mask, mask, c::bbpos { btree, pos: start }, end,
-                                &mut pinned_end)
-    })?;
+    let pinned_end = pins.pin(trans, mask, mask, c::bbpos { btree, pos: start }..=end)?;
 
     if pinned_end != end {
         let fs = trans.fs();
@@ -421,7 +416,9 @@ fn pin_backing(trans: &BtreeTrans<'_>, lru: LruId) -> Result<(), BchError> {
 /// Every lru entry, an lru at a time, its backing keys pinned in the btree
 /// node cache: the lookups are random-order, so on a cold cache that turns a
 /// read per key into cache hits.
-fn check_lrus_pinned(fs: &Fs, trans: &BtreeTrans<'_>) -> Result<(), BchError> {
+fn check_lrus(fs: &Fs) -> Result<(), BchError> {
+    let trans = &crate::btree_trans!(fs);
+    let pins = fs.btree_cache_pins();
     let mut last_flushed = WbMaybeFlush::new()?;
     let progress = Progress::recovery(fs, c"bch2_check_lrus", &[c::btree_id::lru], &[]);
     let mut next = POS_MIN;
@@ -434,7 +431,7 @@ fn check_lrus_pinned(fs: &Fs, trans: &BtreeTrans<'_>) -> Result<(), BchError> {
         })? else { return Ok(()) };
 
         let lru = LruId::from(id);
-        pin_backing(trans, lru)?;
+        pin_backing(trans, &pins, lru)?;
 
         let range = LruPos::range(lru);
         let mut iter = BtreeIter::new(trans, c::btree_id::lru, range.start().to_bpos(),
@@ -449,14 +446,6 @@ fn check_lrus_pinned(fs: &Fs, trans: &BtreeTrans<'_>) -> Result<(), BchError> {
         let Some(id) = id.checked_add(1) else { return Ok(()) };
         next = LruPos::new(id, 0, 0).to_bpos();
     }
-}
-
-fn check_lrus(fs: &Fs) -> Result<(), BchError> {
-    let trans = crate::btree_trans!(fs);
-    let ret = check_lrus_pinned(fs, &trans);
-    // SAFETY: the btree cache's
-    unsafe { c::bch2_btree_cache_unpin(fs.as_ptr()) };
-    ret
 }
 
 crate::recovery_pass!(bch2_check_lrus => check_lrus);

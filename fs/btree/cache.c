@@ -298,6 +298,17 @@ struct btree *__bch2_btree_node_mem_alloc(struct bch_fs *c)
 
 /* Pinning */
 
+/*
+ * The memory the fsck passes may spend on pinned btree nodes. They prefetch
+ * and pin a keyspace range so that the random-order lookups they're about to
+ * make against it become cache hits, and stop once they've spent this much -
+ * pinning is always best effort, the passes are correct either way.
+ */
+u64 bch2_btree_cache_pin_budget(struct bch_fs *c)
+{
+	return div_u64(system_totalram_bytes() * c->opts.fsck_memory_usage_percent, 100);
+}
+
 static inline bool __btree_node_pinned(struct bch_fs_btree_cache *bc, struct btree *b)
 {
 	struct bbpos pos = BBPOS(b->c.btree_id, b->key.k.p);
