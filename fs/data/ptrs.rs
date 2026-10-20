@@ -476,9 +476,19 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     fn extent_entries_mut(&mut self, fs: &Fs) -> impl Iterator<Item = ExtentEntryMut<'_>>
     where Self: BkeyVMut
     {
+        self.extent_entries_mut_at(fs).map(|(_, e)| e)
+    }
+
+    /// extent_entries_mut(), each with where it is.
+    fn extent_entries_mut_at(&mut self, fs: &Fs) -> impl Iterator<Item = (EntryPos, ExtentEntryMut<'_>)>
+    where Self: BkeyVMut
+    {
+        let val = self.as_sc().val_bytes().as_ptr() as usize;
         let range = <Self::V as PtrsBkey>::entry_range(self.as_sc());
         let b = self.as_s().into_val_bytes_mut().get_mut(range).unwrap_or_default();
-        EntriesMut { sizes: EntrySizes::of(fs), b }.map(|(ty, b, stop)| ExtentEntryMut::new(ty, b, stop))
+        EntriesMut { sizes: EntrySizes::of(fs), b }.map(move |(ty, b, stop)| {
+            (EntryPos((b.as_ptr() as usize - val) / 8), ExtentEntryMut::new(ty, b, stop))
+        })
     }
 
     fn ptrs_mut(&mut self, fs: &Fs) -> impl Iterator<Item = &mut c::bch_extent_ptr>
@@ -494,9 +504,8 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     fn ptr_mut_at(&mut self, fs: &Fs, at: EntryPos) -> Option<&mut c::bch_extent_ptr>
     where Self: BkeyVMut
     {
-        let val = self.as_sc().val_bytes().as_ptr() as usize;
-        self.extent_entries_mut(fs).find_map(|e| match e {
-            ExtentEntryMut::ptr(p) if (&raw const *p as usize - val) / 8 == at.0 => Some(p),
+        self.extent_entries_mut_at(fs).find_map(|(pos, e)| match e {
+            ExtentEntryMut::ptr(p) if pos == at => Some(p),
             _ => None,
         })
     }
