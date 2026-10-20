@@ -6,7 +6,9 @@
 //! Every await says where its task resumes: what we await - a Gather's
 //! wait(), a JoinHandle - isn't a Future until .resume_on() makes it one:
 //!
-//!     let ret = g.as_mut().wait().resume_on(Resume::Queue(wq)).await;
+//! ```ignore
+//! let ret = g.as_mut().wait().resume_on(Resume::Queue(wq)).await;
+//! ```
 //!
 //! Resume::Queue resumes the task on that workqueue; Resume::Thread on the
 //! task's own kthread - spawn_thread()'s, kept for its life, for work that
