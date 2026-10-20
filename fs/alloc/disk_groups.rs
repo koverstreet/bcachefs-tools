@@ -70,7 +70,7 @@
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::sb::io::{sb_field_get, sb_field_ops, SbFieldOps};
+use crate::sb::io::{sb_field_get, sb_field_ops, sb_field_u64s, SbFieldOps};
 use crate::sb::members;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::rcu::{read_lock, ReadGuard};
@@ -200,9 +200,8 @@ fn groups_reserve(sb: &mut c::bch_sb_handle, n: usize) -> Result<(), BchError> {
         return Ok(());
     }
 
-    let u64s = (size_of::<Head<c::bch_sb_field>>() +
-                size_of::<c::bch_disk_group>() * (nr + n - free)) / size_of::<u64>();
-    let groups = sb.field_resize::<c::bch_sb_field_disk_groups>(u64s as u32)
+    let u64s = sb_field_u64s::<c::bch_sb_field_disk_groups>(nr + n - free);
+    let groups = sb.field_resize::<c::bch_sb_field_disk_groups>(u64s)
         .ok_or(BchError::from(bch_errcode::BCH_ERR_ENOSPC_disk_label_add))?;
 
     for g in &mut groups.entries[nr..] {

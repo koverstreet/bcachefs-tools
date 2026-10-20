@@ -22,19 +22,17 @@
 //! C's use sites leave, so a WARN_ON_UNUSED_TRACEPOINTS build calls it unused.
 
 use core::ffi::c_int;
-use core::mem::size_of;
 
 use cstruct_macros::c_export;
 
 use crate::c;
 use crate::fs::Fs;
 use crate::prt;
-use crate::sb::io::{sb_field_ops, SbFieldOps, COUNTERS};
+use crate::sb::io::{sb_field_ops, sb_field_u64s, SbFieldOps, COUNTERS};
 use crate::types::Le64;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{nsecs_to_jiffies, NSEC_PER_SEC};
 use crate::util::percpu::{percpu_u64_get, percpu_u64_set, this_cpu_add};
-use crate::util::vstructs::Head;
 use crate::util::workqueue::system_dfl_wq;
 use crate::util::Printbuf;
 
@@ -284,8 +282,8 @@ pub fn bch2_sb_counters_from_cpu(c: &Opaque<c::bch_fs>) {
     // SAFETY: C calls it under sb_lock
     let mut sb = unsafe { fs.sb_lock_held() };
 
-    let u64s = size_of::<Head<c::bch_sb_field>>() / size_of::<u64>() + NR_STABLE;
-    let _ = sb.field_get_minsize::<c::bch_sb_field_counters>(u64s as u32);
+    let u64s = sb_field_u64s::<c::bch_sb_field_counters>(NR_STABLE);
+    let _ = sb.field_get_minsize::<c::bch_sb_field_counters>(u64s);
     let Some(f) = sb.field_mut::<c::bch_sb_field_counters>() else { return };
 
     for (i, ctr) in COUNTERS.iter().enumerate() {
@@ -356,13 +354,14 @@ pub fn bch2_fs_counters_exit(c: &Opaque<c::bch_fs>) {
 #[cfg(not(NO_BCACHEFS_CHARDEV))]
 mod ioctl {
     use core::ffi::c_long;
-    use core::mem::offset_of;
+    use core::mem::{offset_of, size_of};
 
     use kernel::transmute::AsBytes;
     use kernel::uaccess::{UserPtr, UserSlice};
 
     use super::*;
     use crate::errcode::{bch_errcode, ret_to_c, BchError};
+    use crate::util::vstructs::Head;
 
     /// The ioctl's argument, short of d[], the counters.
     type Args = Head<c::bch_ioctl_query_counters>;

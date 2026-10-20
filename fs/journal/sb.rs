@@ -5,7 +5,6 @@
 //! buckets per entry. Both are validated as runs - v1's of one bucket.
 
 use core::ffi::{c_int, c_uint};
-use core::mem::size_of;
 use core::ops::Range;
 
 use cstruct_macros::c_export;
@@ -14,12 +13,11 @@ use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::prt;
-use crate::sb::io::{sb_field_ops, SbFieldOps};
+use crate::sb::io::{sb_field_ops, sb_field_u64s, SbFieldOps};
 use crate::sb::members::sb_member;
 use crate::types::Le64;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::ffi::Opaque;
-use crate::util::vstructs::Head;
 use crate::util::Printbuf;
 
 fn invalid() -> BchError {
@@ -130,9 +128,8 @@ fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard, ca: &c::bch_dev, buckets: &[u64]
     }
 
     let runs = || buckets.chunk_by(|a, b| a + 1 == *b);
-    let u64s = (size_of::<Head<c::bch_sb_field>>() +
-                size_of::<c::bch_sb_field_journal_v2_entry>() * runs().count()) / size_of::<u64>();
-    let Some(j) = dev_sb.field_resize::<c::bch_sb_field_journal_v2>(u64s as u32) else {
+    let u64s = sb_field_u64s::<c::bch_sb_field_journal_v2>(runs().count());
+    let Some(j) = dev_sb.field_resize::<c::bch_sb_field_journal_v2>(u64s) else {
         return fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_journal);
     };
 

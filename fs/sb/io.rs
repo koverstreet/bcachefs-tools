@@ -5,8 +5,9 @@ use crate::fs::Fs;
 use crate::sb::members;
 use crate::util::Printbuf;
 use crate::types::ArmOf;
-use crate::util::vstructs::{read_past, ArmRef, Head, SelfSized, Validated};
+use crate::util::vstructs::{read_past, ArmRef, Head, SelfSized, Unsized, Validated};
 use core::ffi::c_int;
+use core::mem::size_of;
 
 /// A superblock section's type: an arm of tagged_union! bch_sb_field, which
 /// gives its field type - handed out as its ArmRef says, a short one, written
@@ -285,6 +286,12 @@ pub unsafe fn sb_field_get_raw_mut<'a, F: SbField + ?Sized>(sb: *mut Head<bch_sb
     let f = unsafe { c::bch2_sb_field_get_id(sb, F::FIELD_TYPE) };
     // SAFETY: as sb_field_get()'s
     (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
+}
+
+/// The u64s section @F is with @nr of its tail's entries: for
+/// sb_field_resize() and sb_field_get_minsize().
+pub fn sb_field_u64s<F: SbField + Unsized + ?Sized>(nr: usize) -> u32 {
+    (F::TAIL + nr * size_of::<F::Elem>()).div_ceil(size_of::<u64>()) as u32
 }
 
 /// Resize the section of type @F to @u64s, making it if there's none: the
