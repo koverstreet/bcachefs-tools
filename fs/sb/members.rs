@@ -1154,6 +1154,11 @@ impl Fs {
         self.dev_rcu(dev, &read_lock()).map(c::bch_dev::get_ref)
     }
 
+    /// The first device at index @dev or after, with a ref: __bch2_next_dev_idx().
+    pub fn next_dev(&self, dev: u32) -> Option<DevRef> {
+        (dev..self.nr_devices()).find_map(|i| self.dev_get(i))
+    }
+
     /// dev_get(), a missing device reported: bch2_dev_tryget().
     pub fn dev_tryget(&self, dev: u32) -> Result<DevRef, BchError> {
         self.dev_get(dev).ok_or_else(|| self.dev_missing(dev))

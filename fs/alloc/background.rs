@@ -16,7 +16,9 @@ use crate::btree::bkey::{pos, BkeyI, BkeySC};
 use crate::btree::iter::{TransAttempt, TransBkey};
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
+use crate::fs::Fs;
 use crate::util::kernel::READ;
+use core::sync::atomic::{AtomicI64, Ordering};
 
 /// Alloc key @k, of whatever version, as a current one - one that isn't an
 /// alloc key, the slot of a bucket without one, as a zeroed one:
@@ -26,6 +28,16 @@ pub fn alloc_to_v4(k: BkeySC<'_>) -> c::AllocV4 {
     // SAFETY: @k is a key, @a an alloc_v4 to fill
     unsafe { c::__bch2_alloc_to_v4(k.into(), &mut a) };
     a
+}
+
+impl Fs {
+    /// The io clock for @rw, as a bucket's io_time holds it - never 0, which
+    /// is none: bch2_current_io_time().
+    pub fn current_io_time(&self, rw: usize) -> u64 {
+        // SAFETY: an atomic64_t, which C updates: atomic64_read()
+        let now = unsafe { &*(&raw const self.io_clock[rw].now).cast::<AtomicI64>() };
+        (now.load(Ordering::Relaxed) as u64 & c::LRU_TIME_MAX).max(1)
+    }
 }
 
 impl<'a, 't> TransAttempt<'a, 't> {

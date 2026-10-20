@@ -1117,6 +1117,12 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.result(ret)
     }
 
+    /// bit_mod(), at @iter's position: bch2_btree_bit_mod_iter().
+    pub fn bit_mod_iter(&self, iter: &BtreeIter<'a>, set: bool) -> Result<(), BchError> {
+        let ret = unsafe { c::bch2_btree_bit_mod_iter(self.raw(), iter.raw(), set) };
+        self.result(ret)
+    }
+
     pub fn insert<V: ?Sized>(
         &self,
         btree: impl Into<u32>,
@@ -1450,6 +1456,7 @@ bitflags! {
         const NOPRESERVE = c::btree_iter_update_trigger_flags::BTREE_ITER_nopreserve.bits();
         const CACHED_NOFILL = c::btree_iter_update_trigger_flags::BTREE_ITER_cached_nofill.bits();
         const KEY_CACHE_FILL = c::btree_iter_update_trigger_flags::BTREE_ITER_key_cache_fill.bits();
+        const COMMITTED = c::btree_iter_update_trigger_flags::BTREE_ITER_committed.bits();
         // For hash table inserts, which take them with the iterator flags:
         const STR_HASH_MUST_CREATE = c::btree_iter_update_trigger_flags::STR_HASH_must_create.bits();
         const STR_HASH_MUST_REPLACE = c::btree_iter_update_trigger_flags::STR_HASH_must_replace.bits();
@@ -1635,6 +1642,13 @@ fn bkey_arm<'k, K: BkeyFamily + ?Sized>(fs: &Fs, k: BkeySC<'k>) -> Result<BkeySC
 impl BtreeIter<'_> {
     fn iter_flags(&self) -> BtreeIterFlags {
         BtreeIterFlags::from_bits_retain(self.flags)
+    }
+
+    /// Its path isn't wanted after this: not preserved, and - if only this
+    /// iterator holds it - not needing to stay locked.
+    /// bch2_set_btree_iter_dontneed().
+    pub fn set_dontneed(&mut self) {
+        unsafe { c::bch2_set_btree_iter_dontneed(self.raw()) }
     }
 
     /// Move to @pos - in the iterator's own snapshot, unless it's

@@ -63,6 +63,7 @@ c_extern! {
                               set: bool) -> c_int;
     pub fn bch2_btree_bit_mod_buffered(trans: *mut c::btree_trans, btree: c::btree_id, pos: c::bpos,
                                        set: bool) -> c_int;
+    pub fn bch2_btree_bit_mod_iter(trans: *mut c::btree_trans, iter: *mut c::btree_iter, set: bool) -> c_int;
     pub fn __bch2_insert_snapshot_whiteouts(trans: *mut c::btree_trans, btree: c::btree_id,
                                             pos: c::bpos, s: *mut c::snapshot_id_list) -> c_int;
     #[must_use]
