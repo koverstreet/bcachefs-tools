@@ -1,3 +1,4 @@
+pub mod clean;
 pub mod counters;
 pub mod downgrade;
 pub mod errors;

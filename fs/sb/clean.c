@@ -202,62 +202,6 @@ void bch2_journal_super_entries_add_common(struct bch_fs *c,
 	}
 }
 
-static int bch2_sb_clean_validate(struct bch_sb *sb, struct bch_sb_field *f,
-				  enum bch_validate_flags flags, struct printbuf *err)
-{
-	struct bch_sb_field_clean *clean = field_to_type(f, clean);
-
-	if (vstruct_bytes(&clean->field) < sizeof(*clean)) {
-		prt_printf(err, "wrong size (got %zu should be %zu)",
-		       vstruct_bytes(&clean->field), sizeof(*clean));
-		return -BCH_ERR_invalid_sb_clean;
-	}
-
-	for (struct jset_entry *entry = clean->start;
-	     entry != vstruct_end(&clean->field);
-	     entry = vstruct_next(entry)) {
-		if ((void *) vstruct_next(entry) > vstruct_end(&clean->field)) {
-			prt_str(err, "entry type ");
-			bch2_prt_jset_entry_type(err, entry->type);
-			prt_str(err, " overruns end of section");
-			return -BCH_ERR_invalid_sb_clean;
-		}
-	}
-
-	return 0;
-}
-
-static __cold void bch2_sb_clean_to_text(struct printbuf *out,
-				  struct bch_fs *c,
-				  struct bch_sb *sb,
-				  struct bch_sb_field *f)
-{
-	struct bch_sb_field_clean *clean = field_to_type(f, clean);
-	struct jset_entry *entry;
-
-	prt_printf(out, "flags:          %x\n",		le32_to_cpu(clean->flags));
-	prt_printf(out, "journal_seq:    %llu\n",	le64_to_cpu(clean->journal_seq));
-
-	for (entry = clean->start;
-	     entry != vstruct_end(&clean->field);
-	     entry = vstruct_next(entry)) {
-		if ((void *) vstruct_next(entry) > vstruct_end(&clean->field))
-			break;
-
-		if (entry->type == BCH_JSET_ENTRY_btree_keys &&
-		    !entry->u64s)
-			continue;
-
-		bch2_journal_entry_to_text(out, c, entry);
-		prt_newline(out);
-	}
-}
-
-const struct bch_sb_field_ops bch_sb_field_ops_clean = {
-	.validate	= bch2_sb_clean_validate,
-	.to_text	= bch2_sb_clean_to_text,
-};
-
 void bch2_fs_mark_dirty(struct bch_fs *c)
 {
 	SET_BCH_SB_CLEAN(c->disk_sb.sb, false);
