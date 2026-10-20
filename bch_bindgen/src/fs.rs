@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use crate::c;
 use bcachefs_kernel::errcode::{self, BchError, errptr_to_result};
 use bcachefs_kernel::fs::{Fs, OpenFs};
+use bcachefs_kernel::util::printbuf::Printbuf;
 
 use crate::data::io::{ReadOp, WriteOp};
 
@@ -87,11 +88,13 @@ impl FsExt for Fs {
 
     fn dev_add(&self, path: &str) -> Result<(), BchError> {
         let path_cstr = CString::new(path).unwrap();
-        let mut err = c::printbuf::new();
-        let ret = unsafe { c::bch2_dev_add(self.as_ptr(), path_cstr.as_ptr(), &mut err) };
+        let mut err = Printbuf::new();
+        let ret = unsafe { c::bch2_dev_add(self.as_ptr(), path_cstr.as_ptr(), err.as_raw()) };
         if ret != 0 {
-            let msg = unsafe { std::ffi::CStr::from_ptr(err.buf) }.to_string_lossy();
-            eprintln!("error adding device: {}", msg);
+            match err.as_str().trim_end() {
+                ""  => eprintln!("error adding device {path}"),
+                msg => eprintln!("error adding device {path}: {msg}"),
+            }
         }
         errcode::ret_to_result(ret).map(|_| ())
     }
