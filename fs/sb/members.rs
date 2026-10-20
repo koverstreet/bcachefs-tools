@@ -529,8 +529,7 @@ pub fn member_to_text(out: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb, idx
     write!(out, "Last mount:\t");
     match m.last_mount.get() {
         0 => write!(out, "(never)"),
-        // SAFETY: only formats
-        t => unsafe { c::bch2_prt_datetime(out.as_raw(), t as i64) },
+        t => out.datetime(t as i64),
     }
     out.newline();
     write!(out, "Last superblock write:\t{}\n", m.seq.get());

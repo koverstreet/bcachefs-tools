@@ -231,6 +231,11 @@ impl Printbuf {
         self.units_u64(sectors << 9);
     }
 
+    /// A time in seconds since the epoch: bch2_prt_datetime().
+    pub fn datetime(&mut self, sec: i64) {
+        unsafe { c::bch2_prt_datetime(&mut self.0, sec) };
+    }
+
     pub fn is_human_readable(&self) -> bool {
         self.0.human_readable_units()
     }
