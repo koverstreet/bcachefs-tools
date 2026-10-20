@@ -119,38 +119,6 @@ pub fn opt_from_attr(attr: &c::attribute) -> Option<c::bch_opt_id> {
     (i < table.len() && core::ptr::eq(&table[i].attr, attr)).then(|| opt_id(i))
 }
 
-impl c::bch_inode_opts {
-    /// The options that follow from others, and what doesn't combine: as
-    /// bch2_io_opts_fixups(), opts.h's - a copy, until opts.c is Rust.
-    pub fn fixups(&mut self) {
-        /*
-         * A derived value comes from wherever its source did: shared data's
-         * options keep only what's marked as the inode's, and would lose it.
-         */
-        if self.background_target == 0 {
-            self.background_target = self.foreground_target;
-            self.set_background_target_from_inode(self.foreground_target_from_inode());
-        }
-        if self.background_compression == 0 {
-            self.background_compression = self.compression;
-            self.set_background_compression_from_inode(self.compression_from_inode());
-        }
-        if self.data_replicas == 1 {
-            self.erasure_code = 0;
-        }
-        if self.nocow != 0 {
-            self.compression = 0;
-            self.background_compression = 0;
-            self.data_checksum = 0;
-            self.erasure_code = 0;
-        }
-        /* We currently only support up to RAID6: */
-        if self.erasure_code != 0 {
-            self.data_replicas = self.data_replicas.min(3);
-        }
-    }
-}
-
 /// The option table's strings are static. None for a null pointer or invalid
 /// UTF-8.
 impl c::bch_option {

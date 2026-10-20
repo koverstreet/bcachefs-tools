@@ -3,6 +3,10 @@
 //! Per-inode io path options: storage, resolution against filesystem defaults,
 //! inheritance, propagation to ancestor snapshots.
 //!
+//! And struct bch_inode_opts, the io options data is written with: the
+//! filesystem's, an inode's, and a key's - get_io_opts(), by what the key is,
+//! the options of the inode it's in as of its snapshot for a file's data.
+//!
 //! BCH_INODE_OPTS(): the options an inode can set for itself and what's below
 //! it. Stored with a +1 bias: 0 is unset (inherit), 1 is an explicit "none";
 //! bi_fields_set says which were set on the inode itself, rather than
@@ -163,6 +167,38 @@ pub fn inode_opts_to_opts(inode: &c::bch_inode_unpacked) -> c::bch_opts {
     }
 
     ret
+}
+
+impl c::bch_inode_opts {
+    /// The options that follow from others, and what doesn't combine: as
+    /// bch2_io_opts_fixups(), opts.h's - a copy, until opts.c is Rust.
+    pub fn fixups(&mut self) {
+        /*
+         * A derived value comes from wherever its source did: shared data's
+         * options keep only what's marked as the inode's, and would lose it.
+         */
+        if self.background_target == 0 {
+            self.background_target = self.foreground_target;
+            self.set_background_target_from_inode(self.foreground_target_from_inode());
+        }
+        if self.background_compression == 0 {
+            self.background_compression = self.compression;
+            self.set_background_compression_from_inode(self.compression_from_inode());
+        }
+        if self.data_replicas == 1 {
+            self.erasure_code = 0;
+        }
+        if self.nocow != 0 {
+            self.compression = 0;
+            self.background_compression = 0;
+            self.data_checksum = 0;
+            self.erasure_code = 0;
+        }
+        /* We currently only support up to RAID6: */
+        if self.erasure_code != 0 {
+            self.data_replicas = self.data_replicas.min(3);
+        }
+    }
 }
 
 /// The filesystem's io options, or for metadata its metadata options:
