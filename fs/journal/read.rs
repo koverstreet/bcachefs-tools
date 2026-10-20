@@ -1,3 +1,4 @@
+#[path = "entries.rs"] pub mod entries;
 #[path = "sb.rs"] pub mod sb;
 
 use crate::c;
