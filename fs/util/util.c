@@ -1485,6 +1485,13 @@ u64 bch2_ktime_get_ns(void)
 	return ktime_get_ns();
 }
 
+#ifdef __KERNEL__
+unsigned bch2_num_online_cpus(void)
+{
+	return num_online_cpus();
+}
+#endif
+
 unsigned long bch2_nsecs_to_jiffies(u64 ns)
 {
 	return nsecs_to_jiffies(ns);

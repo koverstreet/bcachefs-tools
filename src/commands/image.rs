@@ -487,15 +487,9 @@ fn image_create_inner(
     if verbosity > 1 {
         let mut buf = Printbuf::new();
         buf.set_human_readable(true);
-        unsafe {
-            buf.sb_to_text(
-                std::ptr::null_mut(),
-                // the superblock format() built, as long as its count says
-                c::bch_sb::<Validated>::from_ffi(sb),
-                false,
-                sb_field_type::members_v2.bit(),
-            );
-        }
+        // SAFETY: the superblock format() built, as long as its count says
+        let sb = unsafe { c::bch_sb::<Validated>::from_ffi(sb) };
+        bcachefs_kernel::sb::io::sb_to_text(&mut buf, None, sb, false, sb_field_type::members_v2.bit());
         print!("{}", buf);
     }
 

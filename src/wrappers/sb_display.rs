@@ -15,7 +15,7 @@ use bch_bindgen::c;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::c::bch_sb_handle;
 use bcachefs_kernel::sb::{self, sb_field_type};
-use bcachefs_kernel::util::vstructs::Head;
+use bcachefs_kernel::util::vstructs::{Head, Validated};
 
 use crate::device_scan;
 
@@ -83,17 +83,19 @@ pub unsafe fn sb_to_text_with_names(
 
     let sb_ptr = sb.as_ffi() as *mut Head<c::bch_sb>;
 
+    let fs_ref = (!fs.is_null()).then(|| bcachefs_kernel::fs::Fs::borrow_raw(fs));
+
     if field_only >= 0 {
         let f = sb::io::bch2_sb_field_get_id(sb_ptr, c::bch_sb_field_type(field_only as u32));
         if !f.is_null() {
-            c::__bch2_sb_field_to_text(out.as_raw(), fs, sb_ptr, f);
+            sb::io::field_ops_to_text(out, fs_ref, sb, c::bch_sb_field::<Validated>::from_ffi(f));
         }
     } else {
         out.tabstop_push(44);
 
         let member_mask = sb_field_type::members_v1.bit()
             | sb_field_type::members_v2.bit();
-        c::bch2_sb_to_text(out.as_raw(), fs, sb_ptr, print_layout, fields & !member_mask);
+        sb::io::sb_to_text(out, fs_ref, sb, print_layout, fields & !member_mask);
 
         // members_v1
         if (fields & sb_field_type::members_v1.bit()) != 0 {

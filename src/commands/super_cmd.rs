@@ -56,7 +56,7 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
         } else {
             let c_str = CString::new(f.as_str())?;
             let v = unsafe {
-                c::bch2_read_flag_list(c_str.as_ptr(), c::bch2_sb_fields.as_ptr())
+                c::bch2_read_flag_list(c_str.as_ptr(), bcachefs_kernel::sb::io::bch2_sb_fields.as_ptr())
             };
             if v == u64::MAX {
                 return Err(anyhow!("invalid superblock field: {}", f));
@@ -69,7 +69,7 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
     if let Some(ref f) = cli.field_only {
         let c_str = CString::new(f.as_str())?;
         let v = unsafe {
-            c::match_string(c::bch2_sb_fields.as_ptr(), usize::MAX, c_str.as_ptr())
+            c::match_string(bcachefs_kernel::sb::io::bch2_sb_fields.as_ptr(), usize::MAX, c_str.as_ptr())
         };
         if v < 0 {
             return Err(anyhow!("invalid superblock field: {}", f));

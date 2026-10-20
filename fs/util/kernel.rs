@@ -84,6 +84,12 @@ pub fn ktime_get_ns() -> u64 {
     unsafe { c::bch2_ktime_get_ns() }
 }
 
+/// The CPUs online: num_online_cpus().
+#[cfg(kernel)]
+pub fn num_online_cpus() -> u32 {
+    unsafe { c::bch2_num_online_cpus() }
+}
+
 /// A capability, as the kernel's CAP_* - the values are ABI
 /// (uapi/linux/capability.h). Defined here because userspace's capable()
 /// ignores its argument, so it has no CAP_* constants to bind.

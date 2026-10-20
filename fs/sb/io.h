@@ -58,8 +58,6 @@ static inline size_t bch2_sb_field_bytes(struct bch_sb_field *f)
 	       sizeof(_f->entries[0]))					\
 	    : 0)
 
-extern const char * const bch2_sb_fields[];
-
 #include "sb/io_defs_gen.h"
 
 static inline __le64 bch2_sb_magic(struct bch_fs *c)
@@ -94,10 +92,6 @@ static inline void bch2_check_set_feature(struct bch_fs *c, unsigned feat)
 bool bch2_check_version_downgrade(struct bch_fs *);
 void bch2_sb_upgrade(struct bch_fs *, unsigned, bool);
 void bch2_sb_upgrade_incompat(struct bch_fs *);
-
-void bch2_sb_field_to_text(struct printbuf *, struct bch_fs *, struct bch_sb *,
-			   struct bch_sb_field *);
-void bch2_sb_layout_to_text(struct printbuf *, struct bch_sb_layout *);
 
 static inline struct sb_write sb_write_init(struct bch_fs *c)
 {

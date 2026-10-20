@@ -65,9 +65,10 @@ fn sb_last_mount_time(sb: &c::bch_sb) -> u64 {
 
 fn validate_sb(sb: &mut c::bch_sb, offset_sectors: u64) -> (i32, Printbuf) {
     let mut err = Printbuf::new();
-    let mut opts = c::bch_opts::default();
+    let opts = c::bch_opts::default();
     let ret = unsafe {
-        c::bch2_sb_validate(sb.as_ffi_mut(), &mut opts, offset_sectors, c::bch_validate_flags::from_bits_retain(0), err.as_raw())
+        bcachefs_kernel::sb::io::bch2_sb_validate(sb.as_ffi_mut(), &opts, offset_sectors,
+                                                  c::bch_validate_flags::empty(), &mut err)
     };
     (ret, err)
 }
@@ -265,14 +266,7 @@ fn cmd_recover_super(cli: RecoverSuperCli) -> Result<()> {
     };
 
     let mut buf = Printbuf::new();
-    unsafe {
-        buf.sb_to_text(
-            std::ptr::null_mut(),
-            sb_buf.sb(),
-            true,
-            sb_field_type::members_v2.bit(),
-        );
-    }
+    bcachefs_kernel::sb::io::sb_to_text(&mut buf, None, sb_buf.sb(), true, sb_field_type::members_v2.bit());
     println!("Found superblock:\n{}", buf);
 
     if cli.yes {
