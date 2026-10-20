@@ -11,17 +11,22 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{spos, BkeyI, BkeySC, BkeyWhole, POS_MIN};
-use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
+use crate::btree::iter::{commit_do, is_restart, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags};
 use crate::c;
+use crate::data::ptrs::Ptrs;
+use crate::data::reconcile::trigger::BkeyVReconcile;
+use crate::data::reflink::Indirect;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::snapshots::{snapshot, subvolume};
+use crate::util::alloc::{flags, DArrayLoan};
 use crate::util::ffi::Opaque;
 use crate::util::{Printbuf, ToText};
 use crate::{fsck_err_flags, inode, logged_ops, opts};
 use core::ffi::{c_int, CStr};
+use core::mem::MaybeUninit;
 use core::ops::ControlFlow;
 use cstruct_macros::c_export;
 
@@ -160,6 +165,17 @@ pub fn inode_opts_to_opts(inode: &c::bch_inode_unpacked) -> c::bch_opts {
     ret
 }
 
+/// The filesystem's io options, or for metadata its metadata options:
+/// bch2_inode_opts_get().
+pub fn get_fs(fs: &Fs, metadata: bool) -> c::bch_inode_opts {
+    let mut opts = MaybeUninit::uninit();
+    // SAFETY: the filesystem, live as @fs is; @opts written, from a memset()
+    unsafe {
+        c::bch2_inode_opts_get(fs.as_ptr().cast(), opts.as_mut_ptr(), metadata);
+        opts.assume_init()
+    }
+}
+
 /// @inode's io options: its own where it sets them, the filesystem's where it
 /// doesn't, and for each which - as bch2_inode_opts_get_inode().
 pub fn get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_opts {
@@ -212,6 +228,140 @@ pub fn bch2_inode_opts_get_inode(
     ret:   &mut c::bch_inode_opts,
 ) {
     *ret = get_inode(Fs::from_c(c), inode);
+}
+
+// ── A key's io options ───────────────────────────────────────────────────
+
+/// The io options @k's data is written with: a btree node pointer's, the
+/// filesystem's metadata options; a file's data, its inode's, as of its
+/// snapshot; reflinked data, the filesystem's, with those its reconcile entry
+/// has from an inode; anything else, the filesystem's: bch2_bkey_get_io_opts().
+///
+/// @s caches them across a scan in key order: the filesystem's, and every
+/// snapshot version of the inode it's on.
+pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>, k: BkeySC<'_>)
+    -> Result<c::bch_inode_opts, BchError>
+{
+    enum Mode { Metadata, Reflink, User }
+    let fs = t.fs();
+
+    let mode = if k.k.is_btree_ptr() {
+        Mode::Metadata
+    } else if k.arm::<Indirect>().is_some() {
+        Mode::Reflink
+    } else if k.k.is_user_data() || k.k.key_type() == c::bch_bkey_type::KEY_TYPE_reflink_p {
+        if k.k.p.snapshot == 0 {
+            crate::bch_err!(fs, "user data key with snapshot == 0\n{}", k.to_text(fs));
+            crate::warn_on!(true);
+            return Ok(get_fs(fs, false));
+        }
+        Mode::User
+    } else {
+        // KEY_TYPE_error?
+        return Ok(get_fs(fs, false));
+    };
+    let metadata = matches!(mode, Mode::Metadata);
+    let inum = k.k.p.inode;
+
+    let mut opts = match s {
+        None => {
+            let mut opts = get_fs(fs, metadata);
+            if matches!(mode, Mode::User) {
+                match inode::find_by_inum_snapshot(t, inum, k.k.p.snapshot, BtreeIterFlags::CACHED) {
+                    Ok(inode) => opts = get_inode(fs, &inode),
+                    Err(e) if is_restart(&e) => return Err(e),
+                    Err(_) => {}
+                }
+            }
+            opts
+        }
+        Some(s) => {
+            if s.fs_io_opts.change_cookie != fs.opt_change_cookie || s.metadata != metadata {
+                s.fs_io_opts = get_fs(fs, metadata);
+                s.metadata   = metadata;
+                s.cur_inum   = 0;
+                s.d.nr       = 0;
+            }
+
+            if matches!(mode, Mode::User) {
+                // SAFETY: C's darray, as darray_push() grows it
+                let mut d = unsafe { DArrayLoan::new(&mut s.d) };
+
+                if s.cur_inum != inum {
+                    d.clear();
+
+                    // norestart: callers - fsck repair paths - may have
+                    // updates queued, which an internal trans_begin() would
+                    // clobber
+                    let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, 0),
+                                                  BtreeIterFlags::ALL_SNAPSHOTS);
+                    iter.for_each_max_norestart(t, spos(0, inum, u32::MAX), |_, inode_k| {
+                        if inode::bkey_is_inode(inode_k.k) {
+                            let inode = inode::unpack(fs, inode_k);
+                            let e = c::snapshot_io_opts_entry {
+                                snapshot: inode_k.k.p.snapshot,
+                                io_opts:  get_inode(fs, &inode),
+                            };
+                            d.push(e, flags::GFP_KERNEL)?;
+                        }
+                        Ok(())
+                    })?;
+
+                    s.cur_inum = inum;
+                    s.inum_scan_cookie = false;
+                }
+
+                if let Some(e) = d.iter().find(|e| snapshot::is_ancestor(t, k.k.p.snapshot, e.snapshot)) {
+                    return Ok(e.io_opts);
+                }
+            }
+            s.fs_io_opts
+        }
+    };
+
+    let old = if matches!(mode, Mode::Reflink) {
+        k.arm::<Ptrs>().and_then(|k| k.reconcile_opts(fs).copied())
+    } else {
+        None
+    };
+    if let Some(old) = old {
+        macro_rules! from_inode {
+            ($(($name:tt)),* $(,)?) => { crate::paste! { $(
+                if old.[<$name _from_inode>]() != 0 {
+                    opts.$name = old.$name() as _;
+                }
+                opts.[<set_ $name _from_inode>](old.[<$name _from_inode>]() != 0);
+            )* } };
+        }
+        c::BCH_RECONCILE_OPTS!(from_inode);
+
+        // The entry was written under the fixups of its day: today's may
+        // have grown, and downstream needs a combination valid under them.
+        opts.fixups();
+
+        // A checksum or compression type we don't know is an incompat
+        // feature, so shouldn't have mounted - this is for a versioning
+        // mistake: the filesystem's options, as get_inode() falls back to.
+        if opts.data_checksum as u32 >= c::bch_csum_opt::BCH_CSUM_OPT_NR.0 {
+            opts.data_checksum = fs.opts.data_checksum as _;
+            opts.set_data_checksum_from_inode(false);
+        }
+        if !c::bch_compression_opt::valid(opts.background_compression as u8) {
+            opts.background_compression = fs.opts.background_compression as _;
+            opts.set_background_compression_from_inode(false);
+        }
+    }
+    Ok(opts)
+}
+
+/// # Safety
+/// C has an attempt in progress on @trans; @s's darray is C's.
+#[c_export]
+pub unsafe fn bch2_bkey_get_io_opts(trans: &BtreeTrans<'_>, s: Option<&mut c::per_snapshot_io_opts>, k: BkeySC<'_>,
+                                    opts: &mut MaybeUninit<c::bch_inode_opts>) -> c_int {
+    // SAFETY: the caller's
+    let t = unsafe { trans.attempt_in_progress() };
+    ret_to_c(get_io_opts(&t, s, k).map(|o| { opts.write(o); }))
 }
 
 // ── Propagation to ancestor snapshots ────────────────────────────────────

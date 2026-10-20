@@ -850,10 +850,7 @@ unsafe fn __make_extent_indirect(
      * or the inode's options match the defaults, this is a no-op.) The
      * allocation below reserves room for the entry + invalid-device padding.
      */
-    let mut opts = core::mem::MaybeUninit::<c::bch_inode_opts>::uninit();
-    t.result(unsafe {
-        c::bch2_bkey_get_io_opts(t.raw(), core::ptr::null_mut(), BkeySC::from(&*orig).into(), opts.as_mut_ptr())
-    })?;
+    let opts = crate::inode_opts::get_io_opts(t, None, BkeySC::from(&*orig))?;
 
     let mut reflink_iter = BtreeIter::new(t, c::btree_id::reflink, POS_MAX, BtreeIterFlags::INTENT);
     reflink_iter.peek_prev(t)?;
@@ -883,9 +880,7 @@ unsafe fn __make_extent_indirect(
     refcount.fill(0);
     val.copy_from_slice(BkeySC::from(&*orig).val_bytes());
 
-    // SAFETY: written by get_io_opts(), which succeeded
-    let opts = unsafe { opts.assume_init_ref() };
-    r_v.set_needs_reconcile(t, None, opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other, 0)?;
+    r_v.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other, 0)?;
 
     t.update(&reflink_iter, &r_v, UpdateTriggerFlags::empty())?;
 

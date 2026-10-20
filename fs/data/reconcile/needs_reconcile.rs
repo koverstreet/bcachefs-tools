@@ -17,11 +17,12 @@ use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Pt
 use crate::data::reconcile::trigger::{extent_reconcile_to_text, BkeyVReconcile};
 use crate::errcode::{ret_to_c, BchError};
 use crate::init::error::id;
+use crate::inode_opts::get_io_opts;
 use crate::util::printbuf::Msg;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
-use core::mem::{size_of, MaybeUninit};
+use core::mem::size_of;
 use cstruct_macros::c_export;
 
 /// Option @o's need_rb bit.
@@ -407,14 +408,7 @@ const SET_NEEDS_RECONCILE_ROOM: u32 = 1 + c::BCH_REPLICAS_MAX;
 /// fragments don't reserve it. Its io options are looked up each time:
 /// bch2_extent_trigger_set_needs_reconcile().
 fn extent_trigger_set_needs_reconcile(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
-    let mut opts = MaybeUninit::<c::bch_inode_opts>::uninit();
-    // SAFETY: plain; @opts written on success
-    t.result(unsafe {
-        c::bch2_bkey_get_io_opts(t.raw(), core::ptr::null_mut(), BkeySC::from(&op.new).untyped().into(),
-                                 opts.as_mut_ptr())
-    })?;
-    let opts = unsafe { opts.assume_init() };
-
+    let opts = get_io_opts(t, None, BkeySC::from(&op.new).untyped())?;
     let needed = u32::from(op.new.k.u64s) + SET_NEEDS_RECONCILE_ROOM;
     op.new_with_room(t, needed)?
         .set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other, 0)

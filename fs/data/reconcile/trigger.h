@@ -5,6 +5,7 @@
 #include "data/extents.h"
 #include "data/reconcile/needs_reconcile_gen.h"
 #include "data/reconcile/trigger_gen.h"
+#include "fs/inode_opts_gen.h"
 
 static inline struct bpos data_to_rb_work_pos(enum btree_id btree, struct bpos pos)
 {
