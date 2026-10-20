@@ -193,7 +193,11 @@ int bch2_bucket_backpointer_mod_nowritebuffer(struct btree_trans *trans,
 		set_bkey_val_u64s(&bp->k, 0);
 	}
 
-	return bch2_trans_update(trans, &bp_iter, &bp->k_i, 0);
+	/* The update points at its key until commit: @bp is often on the caller's stack */
+	struct bkey_i_backpointer *n = errptr_try(bch2_trans_kmalloc(trans, sizeof(*n)));
+	bkey_copy(&n->k_i, &bp->k_i);
+
+	return bch2_trans_update(trans, &bp_iter, &n->k_i, 0);
 }
 
 static int bch2_backpointer_del(struct btree_trans *trans, enum btree_id btree, struct bpos pos)
