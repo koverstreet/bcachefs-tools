@@ -533,6 +533,8 @@ unsafe impl<T> BkeyWhole for T
 
 // A value is at the u64 after its key's header, so it's aligned.
 impl<T: SizedVal> ArmRef for T {
+    const MIN_LEN: usize = size_of::<Self>();
+
     fn arm_ref(b: &[u8]) -> Option<&Self> {
         (b.len() >= size_of::<Self>() && b.as_ptr() as usize % align_of::<Self>() == 0)
             .then(|| unsafe { &*b.as_ptr().cast() })

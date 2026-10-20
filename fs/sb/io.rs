@@ -93,13 +93,16 @@ unsafe extern "C" fn sb_field_validate<F: SbFieldOps + ?Sized>(
     // SAFETY: the caller's
     let err = unsafe { Printbuf::borrow_raw(err) };
     let invalid = || ret_to_c(Err::<(), _>(bch_errcode::BCH_ERR_invalid_sb_field_size));
+    let too_short = |err: &mut Printbuf, len| {
+        write!(err, "too short ({len} < {} bytes)", <F as ArmRef>::MIN_LEN);
+        invalid()
+    };
 
     // SAFETY: the caller's
     let b = unsafe { c::bch_sb_field::<Validated>::from_ffi(f) }.as_bytes();
     let len = b.len();
     let Some(end) = F::entries_end(b) else {
-        write!(err, "too short ({len} bytes)");
-        return invalid();
+        return too_short(err, len);
     };
     if end.next_multiple_of(size_of::<u64>()) < len {
         if flags.contains(c::bch_validate_flags::BCH_VALIDATE_write) {
@@ -118,10 +121,7 @@ unsafe extern "C" fn sb_field_validate<F: SbFieldOps + ?Sized>(
     };
     match f.arm::<F>() {
         Some(f) => ret_to_c(F::validate(sb, f, flags, err)),
-        None => {
-            write!(err, "too short ({} bytes)", f.as_bytes().len());
-            invalid()
-        }
+        None => too_short(err, f.as_bytes().len()),
     }
 }
 
@@ -633,26 +633,36 @@ mod tests {
         assert!(matches!(f.typed(), Err(t) if t == T::BCH_SB_FIELD_NR));
     }
 
-    /// A section too short to be its type fails validation, and isn't printed.
+    /// A section too short to be its type fails validation, saying how short
+    /// - against its whole size, or a grown type's floor - and isn't printed.
     #[test]
     fn sb_field_ops_short_section() {
         use crate::util::Printbuf;
 
-        let mut sb = [0u64; 32];
-        let mut buf = [0u64; 4];
-        field(&mut buf, c::bch_sb_field_type::BCH_SB_FIELD_quota, 2);
-        let (sb, f) = (sb.as_mut_ptr().cast(), buf.as_mut_ptr().cast());
-        let ops = super::sb_field_ops::<c::bch_sb_field_quota>();
+        fn short<F: super::SbFieldOps + ?Sized>(ty: c::bch_sb_field_type, u64s: usize) -> String {
+            let mut sb = [0u64; 32];
+            let mut buf = [0u64; 16];
+            field(&mut buf, ty, u64s);
+            let (sb, f) = (sb.as_mut_ptr().cast(), buf.as_mut_ptr().cast());
+            let ops = super::sb_field_ops::<F>();
 
-        let mut err = Printbuf::new();
-        let flags = c::bch_validate_flags::from_bits_retain(0);
-        let ret = unsafe { ops.validate.unwrap()(sb, f, flags, err.as_raw()) };
-        assert_eq!(ret, -(c::bch_errcode::BCH_ERR_invalid_sb_field_size.0 as i32));
-        assert_eq!(err.as_str(), "too short (16 bytes)");
+            let mut err = Printbuf::new();
+            let flags = c::bch_validate_flags::from_bits_retain(0);
+            let ret = unsafe { ops.validate.unwrap()(sb, f, flags, err.as_raw()) };
+            assert_eq!(ret, -(c::bch_errcode::BCH_ERR_invalid_sb_field_size.0 as i32));
 
-        let mut out = Printbuf::new();
-        unsafe { ops.to_text.unwrap()(out.as_raw(), core::ptr::null_mut(), sb, f) };
-        assert_eq!(out.as_str(), "");
+            let mut out = Printbuf::new();
+            unsafe { ops.to_text.unwrap()(out.as_raw(), core::ptr::null_mut(), sb, f) };
+            assert_eq!(out.as_str(), "");
+            err.as_str().to_owned()
+        }
+
+        type T = c::bch_sb_field_type;
+        // too short for its entries to start, and for its type
+        assert_eq!(short::<c::bch_sb_field_clean>(T::BCH_SB_FIELD_clean, 2),
+                   "too short (16 < 24 bytes)");
+        assert_eq!(short::<c::bch_sb_field_quota>(T::BCH_SB_FIELD_quota, 2),
+                   format!("too short (16 < {} bytes)", size_of::<c::bch_sb_field_quota>()));
     }
 
     /// An ext section from before btrees_lost_data, 88 bytes, is an ext

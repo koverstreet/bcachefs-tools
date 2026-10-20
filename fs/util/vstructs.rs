@@ -1246,6 +1246,9 @@ pub fn read_past<T: Plain>(rest: &[u8], at: usize) -> T {
 /// (#[unsized_vstruct]), as long as its count says. None if the bytes can't
 /// be one: fewer than every valid one has.
 pub trait ArmRef {
+    /// Every valid one's bytes, at least: its head, or a grown type's floor.
+    const MIN_LEN: usize;
+
     fn arm_ref(b: &[u8]) -> Option<&Self>;
     fn arm_mut(b: &mut [u8]) -> Option<&mut Self>;
 

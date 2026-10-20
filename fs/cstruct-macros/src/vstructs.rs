@@ -319,6 +319,8 @@ fn dst(ty: &str, doc: &str, shape: &Shape<'_>, methods: &str) -> String {
          \n\
          // as a tagged union's arm, over the bytes its storage says are its\n\
          impl {VS}::ArmRef for {ty} {{\n\
+             const MIN_LEN: usize = ::core::mem::size_of::<<Self as {VS}::Unsized>::Head>();\n\
+             \n\
              fn arm_ref(b: &[u8]) -> Option<&Self> {{\n\
                  {VS}::cast(b)\n\
              }}\n\
@@ -908,6 +910,8 @@ fn whole_arm_ref(whole: &str, plain: bool) -> String {
     };
     format!(
         "impl {VS}::ArmRef for {whole} {{\n\
+             const MIN_LEN: usize = ::core::mem::size_of::<Self>();\n\
+             \n\
              fn arm_ref(b: &[u8]) -> Option<&Self> {{\n\
                  {get}\n\
              }}\n\
@@ -1025,6 +1029,8 @@ fn generic_type(name: &str, g: &Generic<'_>, doc: &str) -> String {
     // cast keeps the definition's metadata, its last field being it
     out.push_str(&format!(
         "impl<S: {VS}::State> {VS}::ArmRef for {name}<S> {{\n\
+             const MIN_LEN: usize = <<S as {VS}::State>::Of<{fam}> as {VS}::ArmRef>::MIN_LEN;\n\
+             \n\
              fn arm_ref(b: &[u8]) -> Option<&Self> {{\n\
                  // SAFETY: #[repr(transparent)] over its definition in S\n\
                  <<S as {VS}::State>::Of<{fam}> as {VS}::ArmRef>::arm_ref(b)\n\
