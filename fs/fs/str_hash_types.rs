@@ -4,8 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use core::ffi::c_int;
-use cstruct_macros::{CStruct, c_extern, TypeInfo};
+use cstruct_macros::{CStruct, TypeInfo};
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct, TypeInfo)]
@@ -22,9 +21,3 @@ pub struct bch_hash_info {
 }
 c_default!(bch_hash_info);
 
-c_extern! {
-    pub fn __bch2_hash_info_init(c: *mut c::bch_fs,
-                                 bi: *const c::bch_inode_unpacked) -> c::bch_hash_info;
-    pub fn bch2_hash_info_init(c: *mut c::bch_fs, bi: *const c::bch_inode_unpacked,
-                               ret: *mut c::bch_hash_info) -> c_int;
-}

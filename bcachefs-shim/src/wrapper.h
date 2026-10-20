@@ -27,6 +27,7 @@
 #include "include/linux/unicode.h"
 #include "include/linux/wait_bit.h"
 #include "include/linux/xattr.h"
+#include "include/crypto/sha2.h"	/* after linux/: it isn't self-contained */
 #include "fs/vendor/closure.h"
 
 #include <errno.h>

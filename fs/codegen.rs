@@ -21,6 +21,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/generic-radix-tree.h",	// GenRadix<T>'s __genradix
     "linux/xattr.h",			// xattr_handler, which fs.h only declares
     "linux/posix_acl_xattr.h",		// nop_posix_acl_*, xattr.rs's ACL handlers
+    "crypto/sha2.h",			// sha256(), siphash_old's string hash key
 ];
 
 /// Vendored library code bound, by path under fs/ - which the clang args have
@@ -36,10 +37,11 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/generic-radix-tree.h",
     "linux/xattr.h",
     "linux/posix_acl_xattr.h",
+    "crypto/sha2.h",
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
-    "crc32c", "crc64_be",
+    "crc32c", "crc64_be", "sha256",
     "__genradix_ptr", "__genradix_ptr_alloc", "__genradix_iter_peek", "__genradix_free",
     "closure_get_not_zero", "closure_put",
 ];

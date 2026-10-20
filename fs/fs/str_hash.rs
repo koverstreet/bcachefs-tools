@@ -9,16 +9,19 @@ use crate::btree::iter::{
 use crate::c;
 use crate::check::{self, SnapshotsSeen};
 use crate::dirent::{self, Dirent, DirentTarget, Dirents};
-use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError, Found};
+use crate::errcode::{bch_errcode, ret_to_c, BchError, Found};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::inode;
 use crate::snapshots::{snapshot, subvolume};
+use crate::util::ffi::Opaque;
+use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use crate::util::os_str::OsStrExt;
 use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;
 use crate::{fsck_err, fsck_err_on, inode_fsck_err, prt};
-use core::ffi::c_void;
+use core::ffi::{c_int, c_void};
+use cstruct_macros::c_export;
 
 /// A btree that's a hash table keyed by name: dirents, xattrs. The keys passed
 /// to these are valid - from the btree, or built to be inserted.
@@ -369,7 +372,25 @@ pub fn new_inode_type(fs: &Fs) -> c::bch_str_hash_type {
 /// Without hash_info_init()'s check that casefolding is enabled: for comparing
 /// hash info, not hashing with it.
 pub fn hash_info_init_unchecked(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_hash_info {
-    unsafe { c::__bch2_hash_info_init(fs.as_ptr(), inode) }
+    let mut info = c::bch_hash_info {
+        inum_snapshot: inode.bi_snapshot,
+        type_:         inode.inode_str_hash() as u8,
+        is_31bit:      inode.flag(c::bch_inode_flags::BCH_INODE_31bit_dirent_offset),
+        cf_encoding:   inode::cf_encoding(fs, inode),
+        siphash_key:   c::SIPHASH_KEY { k0: inode.bi_hash_seed, ..Default::default() },
+    };
+
+    // siphash_old's key is the first 16 bytes of the seed's sha256
+    if info.type_ == c::bch_str_hash_type::BCH_STR_HASH_siphash_old.0 as u8 {
+        let seed = plain_bytes(&inode.bi_hash_seed);
+        let mut digest = [0u8; 32];
+        // SAFETY: @seed's bytes in, a sha256 digest's out
+        unsafe { c::sha256(seed.as_ptr(), seed.len() as _, digest.as_mut_ptr()) };
+
+        let key = plain_bytes_mut(&mut info.siphash_key);
+        key.copy_from_slice(&digest[..key.len()]);
+    }
+    info
 }
 
 impl PartialEq for c::SIPHASH_KEY {
@@ -406,15 +427,24 @@ impl ToText for StrHashType {
 }
 crate::display_via_to_text!(StrHashType);
 
+/// @inode's string hash: its type and seed, and if it's a casefolded
+/// directory, the unicode map to fold names with - which the filesystem has to
+/// have.
 pub fn hash_info_init(
     fs:    &Fs,
     inode: &c::bch_inode_unpacked,
 ) -> Result<c::bch_hash_info, BchError> {
-    let mut hash_info: c::bch_hash_info = Default::default();
-    ret_to_result(unsafe {
-        c::bch2_hash_info_init(fs.as_ptr(), inode, &mut hash_info)
-    })?;
-    Ok(hash_info)
+    if inode.casefold(fs) && fs.cf_encoding.is_null() {
+        return fs.throw(bch_errcode::BCH_ERR_casefold_dir_but_disabled);
+    }
+    Ok(hash_info_init_unchecked(fs, inode))
+}
+
+/// hash_info_init(), for C: @ret is set only on success.
+#[c_export]
+pub fn bch2_hash_info_init(c: &Opaque<c::bch_fs>, bi: &c::bch_inode_unpacked,
+                           ret: &mut c::bch_hash_info) -> c_int {
+    ret_to_c(hash_info_init(Fs::from_c(c), bi).map(|info| *ret = info))
 }
 
 /// Check that @k is where its hash says it should be, repairing it if not. @s,

@@ -116,7 +116,6 @@ bcachefs-y		:=			\
 	errcode.o				\
 	fs/check.o				\
 	fs/dirent.o				\
-	fs/str_hash.o				\
 	init/chardev.o				\
 	init/dev.o				\
 	init/damage.o				\

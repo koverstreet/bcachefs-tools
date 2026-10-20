@@ -15,8 +15,6 @@
 
 #include "util/siphash.h"
 
-#include <crypto/sha2.h>
-
 static inline enum bch_str_hash_type
 bch2_str_hash_opt_to_type(struct bch_fs *c, enum bch_str_hash_opts opt)
 {
