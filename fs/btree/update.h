@@ -32,32 +32,6 @@ static inline int bch2_btree_delete_at_buffered(struct btree_trans *trans,
 	return bch2_btree_bit_mod_buffered(trans, btree, pos, false);
 }
 
-/*
- * For use when splitting extents in existing snapshots:
- *
- * If @old_pos is an interior snapshot node, iterate over descendent snapshot
- * nodes: for every descendent snapshot in whiche @old_pos is overwritten and
- * not visible, emit a whiteout at @new_pos.
- */
-static inline int bch2_insert_snapshot_whiteouts(struct btree_trans *trans,
-						 enum btree_id btree,
-						 struct bpos old_pos,
-						 struct bpos new_pos)
-{
-	BUG_ON(old_pos.snapshot != new_pos.snapshot);
-
-	if (!btree_type_has_snapshots(btree) ||
-	    bkey_eq(old_pos, new_pos))
-		return 0;
-
-	CLASS(snapshot_id_list, s)();
-	try(bch2_get_snapshot_overwrites(trans, btree, old_pos, &s));
-
-	return s.nr
-		? __bch2_insert_snapshot_whiteouts(trans, btree, new_pos, &s)
-		: 0;
-}
-
 static inline enum bch_bkey_type extent_whiteout_type(struct bch_fs *c, enum btree_id btree,
 						      const struct bkey *k)
 {

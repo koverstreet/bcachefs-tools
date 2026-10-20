@@ -136,7 +136,6 @@ bcachefs-y		:=			\
 	sb/downgrade.o				\
 	sb/io.o					\
 	sb/members.o				\
-	snapshots/snapshot.o			\
 	util/clock.o				\
 	util/cuckoo.o				\
 	util/darray.o				\

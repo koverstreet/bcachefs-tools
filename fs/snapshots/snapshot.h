@@ -126,30 +126,9 @@ static inline bool bch2_snapshot_is_ancestor(struct btree_trans *trans, u32 id, 
 		: __bch2_snapshot_is_ancestor(trans, id, ancestor);
 }
 
-static inline bool bch2_snapshot_has_children(struct bch_fs *c, u32 id)
-{
-	guard(rcu)();
-	const struct snapshot_t *t = snapshot_t(c, id);
-	return t && (t->children[0]|t->children[1]) != 0;
-}
-
 static inline bool snapshot_list_has_id(snapshot_id_list *s, u32 id)
 {
 	return darray_find(*s, id) != NULL;
-}
-
-static inline bool snapshot_list_has_ancestor(struct btree_trans *trans, snapshot_id_list *s, u32 id)
-{
-	return darray_find_p(*s, i, bch2_snapshot_is_ancestor(trans, id, *i)) != NULL;
-}
-
-static inline int snapshot_list_add(struct bch_fs *c, snapshot_id_list *s, u32 id)
-{
-	BUG_ON(snapshot_list_has_id(s, id));
-	int ret = darray_push(s, id);
-	if (ret)
-		bch_err(c, "error reallocating snapshot_id_list (size %zu)", s->size);
-	return ret;
 }
 
 static inline int bch2_check_key_has_snapshot(struct btree_trans *trans,
@@ -160,25 +139,6 @@ static inline int bch2_check_key_has_snapshot(struct btree_trans *trans,
 		? 0
 		: __bch2_check_key_has_snapshot(trans, iter, k);
 }
-
-int __bch2_get_snapshot_overwrites(struct btree_trans *,
-				   enum btree_id, struct bpos,
-				   snapshot_id_list *);
-
-/*
- * Get a list of snapshot IDs that have overwritten a given key:
- */
-static inline int bch2_get_snapshot_overwrites(struct btree_trans *trans,
-					       enum btree_id btree, struct bpos pos,
-					       snapshot_id_list *s)
-{
-	return bch2_snapshot_has_children(trans->c, pos.snapshot)
-		? __bch2_get_snapshot_overwrites(trans, btree, pos, s)
-		: 0;
-
-}
-
-int __bch2_key_has_snapshot_overwrites(struct btree_trans *, enum btree_id, struct bpos);
 
 static inline int bch2_key_has_snapshot_overwrites(struct btree_trans *trans,
 					  enum btree_id id,

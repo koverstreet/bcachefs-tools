@@ -314,6 +314,7 @@ use crate::util::sync::MutexGuard;
 use crate::util::Printbuf;
 use core::ffi::c_int;
 use core::fmt;
+use core::ops::ControlFlow;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cstruct_macros::c_export;
 
@@ -1541,6 +1542,56 @@ pub fn overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
         Ok(())
     })?;
     Ok(ids)
+}
+
+/// Whether a descendant of @pos.snapshot has its own version of the key at
+/// @pos in @btree: overwrote it there.
+pub fn has_overwrites(t: &TransAttempt<'_, '_>, btree: c::btree_id, pos: c::bpos)
+    -> Result<bool, BchError>
+{
+    // Descendants have lower IDs: none below snapshot 0
+    let Some(below) = pos.snapshot.checked_sub(1) else { return Ok(false) };
+
+    let mut iter = BtreeIter::new(t, btree, spos(pos.inode, pos.offset, below),
+                                  BtreeIterFlags::NOT_EXTENTS | BtreeIterFlags::ALL_SNAPSHOTS);
+    iter.for_each_reverse_norestart(t, spos(pos.inode, pos.offset, 0), |_, k| {
+        Ok(if is_ancestor(t, k.k.p.snapshot, pos.snapshot) {
+            ControlFlow::Break(true)
+        } else {
+            ControlFlow::Continue(())
+        })
+    })
+}
+
+/// bch2_key_has_snapshot_overwrites()'s slow path, past its leaf check.
+///
+/// # Safety
+/// @trans is in an attempt.
+#[c_export]
+pub unsafe extern "C" fn __bch2_key_has_snapshot_overwrites<'t>(
+    trans: &'t BtreeTrans<'t>,
+    btree: c::btree_id,
+    pos:   c::bpos,
+) -> c_int {
+    match has_overwrites(&unsafe { trans.attempt_in_progress() }, btree, pos) {
+        Ok(has) => has as c_int,
+        Err(e)  => -e.raw(),
+    }
+}
+
+/// TransAttempt::insert_snapshot_whiteouts(), for C: splitting an extent in
+/// a snapshot with descendants.
+///
+/// # Safety
+/// @trans is in an attempt.
+#[c_export]
+pub unsafe extern "C" fn bch2_insert_snapshot_whiteouts<'t>(
+    trans:   &'t BtreeTrans<'t>,
+    btree:   c::btree_id,
+    old_pos: c::bpos,
+    new_pos: c::bpos,
+) -> c_int {
+    ret_to_c(unsafe { trans.attempt_in_progress() }.insert_snapshot_whiteouts(btree, old_pos, new_pos))
 }
 
 // ── The tree, for error messages ─────────────────────────────────────────
