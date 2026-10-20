@@ -40,90 +40,6 @@ const char * const bch2_recovery_passes[] = {
 	NULL
 };
 
-static const u8 passes_to_stable_map[] = {
-#define x(n, id, ...)	[BCH_RECOVERY_PASS_##n] = BCH_RECOVERY_PASS_STABLE_##n,
-	BCH_RECOVERY_PASSES()
-#undef x
-};
-
-static const u8 passes_from_stable_map[] = {
-#define x(n, id, ...)	[BCH_RECOVERY_PASS_STABLE_##n] = BCH_RECOVERY_PASS_##n,
-	BCH_RECOVERY_PASSES()
-#undef x
-};
-
-static enum bch_recovery_pass_stable bch2_recovery_pass_to_stable(enum bch_recovery_pass pass)
-{
-	return passes_to_stable_map[pass];
-}
-
-u64 bch2_recovery_passes_to_stable(u64 v)
-{
-	u64 ret = 0;
-	for (unsigned i = 0; i < ARRAY_SIZE(passes_to_stable_map); i++)
-		if (v & BIT_ULL(i))
-			ret |= BIT_ULL(passes_to_stable_map[i]);
-	return ret;
-}
-
-static enum bch_recovery_pass bch2_recovery_pass_from_stable(enum bch_recovery_pass_stable pass)
-{
-	return pass < ARRAY_SIZE(passes_from_stable_map)
-		? passes_from_stable_map[pass]
-		: 0;
-}
-
-u64 bch2_recovery_passes_from_stable(u64 v)
-{
-	u64 ret = 0;
-	for (unsigned i = 0; i < ARRAY_SIZE(passes_from_stable_map); i++)
-		if (v & BIT_ULL(i))
-			ret |= BIT_ULL(passes_from_stable_map[i]);
-	return ret;
-}
-
-static int bch2_sb_recovery_passes_validate(struct bch_sb *sb, struct bch_sb_field *f,
-					    enum bch_validate_flags flags, struct printbuf *err)
-{
-	return 0;
-}
-
-static __cold void bch2_sb_recovery_passes_to_text(struct printbuf *out,
-					    struct bch_fs *c,
-					    struct bch_sb *sb,
-					    struct bch_sb_field *f)
-{
-	struct bch_sb_field_recovery_passes *r =
-		field_to_type(f, recovery_passes);
-	unsigned nr = recovery_passes_nr_entries(r);
-
-	if (out->nr_tabstops < 1)
-		printbuf_tabstop_push(out, 32);
-	if (out->nr_tabstops < 2)
-		printbuf_tabstop_push(out, 32);
-
-	prt_printf(out, "Pass\tLast run\tLast runtime\n");
-
-	for (struct recovery_pass_entry *i = r->start; i < r->start + nr; i++) {
-		if (!i->last_run)
-			continue;
-
-		unsigned idx = i - r->start;
-
-		prt_printf(out, "%s\t", bch2_recovery_passes[bch2_recovery_pass_from_stable(idx)]);
-
-		bch2_prt_datetime(out, le64_to_cpu(i->last_run));
-		prt_tab(out);
-
-		bch2_pr_time_units(out, (u64) le32_to_cpu(i->last_runtime) * NSEC_PER_SEC);
-
-		if (BCH_RECOVERY_PASS_NO_RATELIMIT(i))
-			prt_str(out, " (no ratelimit)");
-
-		prt_newline(out);
-	}
-}
-
 static struct recovery_pass_entry *bch2_sb_recovery_pass_entry(struct bch_fs *c,
 							       enum bch_recovery_pass pass)
 {
@@ -237,11 +153,6 @@ bool bch2_recovery_pass_want_ratelimit(struct bch_fs *c, enum bch_recovery_pass 
 	guard(mutex_noio)(&c->sb_lock);
 	return bch2_recovery_pass_want_ratelimit_locked(c, pass, runtime_fraction);
 }
-
-const struct bch_sb_field_ops bch_sb_field_ops_recovery_passes = {
-	.validate	= bch2_sb_recovery_passes_validate,
-	.to_text	= bch2_sb_recovery_passes_to_text
-};
 
 /* Fake recovery pass, so that scan_for_btree_nodes isn't 0: */
 static int bch2_recovery_pass_empty(struct bch_fs *c)

@@ -69,8 +69,6 @@ c_default!(bch_fs_recovery);
 
 c_extern! {
     pub static bch2_recovery_passes: [*const c_char; 0];
-    pub fn bch2_recovery_passes_to_stable(v: u64) -> u64;
-    pub fn bch2_recovery_passes_from_stable(v: u64) -> u64;
     pub fn bch2_fsck_recovery_passes() -> u64;
     pub fn bch2_recovery_pass_set_no_ratelimit(c: *mut c::bch_fs, pass: c::bch_recovery_pass);
     pub fn bch2_recovery_pass_want_ratelimit(c: *mut c::bch_fs, pass: c::bch_recovery_pass,

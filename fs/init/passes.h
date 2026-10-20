@@ -5,7 +5,7 @@
 
 extern const char * const bch2_recovery_passes[];
 
-extern const struct bch_sb_field_ops bch_sb_field_ops_recovery_passes;
+#include "init/passes_gen.h"
 
 u64 bch2_fsck_recovery_passes(void);
 

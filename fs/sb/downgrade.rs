@@ -197,10 +197,9 @@ fn ext(sb: &mut c::bch_sb_handle) -> &mut c::bch_sb_field_ext<Validated> {
 fn set_upgrade(sb: &mut c::bch_sb_handle, table: &[UpDown], old: u32, new: u32) {
     let ext = ext(sb);
     for i in table.iter().filter(|i| old < i.version.0 && i.version.0 <= new) {
-        // SAFETY: C's tables of the passes
-        let passes = unsafe {
-            c::bch2_recovery_passes_to_stable(i.passes | if i.all_fsck { c::bch2_fsck_recovery_passes() } else { 0 })
-        };
+        // SAFETY: C's table of the passes
+        let fsck = if i.all_fsck { unsafe { c::bch2_fsck_recovery_passes() } } else { 0 };
+        let passes = passes::passes_to_stable(i.passes | fsck);
         ext.recovery_passes_required[0] |= passes;
         for e in i.errors {
             LeBitmap::from_words_mut(&mut ext.errors_silent).set(e.0 as usize);
@@ -308,8 +307,7 @@ fn downgrade_entries(major: u64, version_incompat: u32, have_stripes: bool) -> R
     for src in DOWNGRADE.iter().filter(|s| {
         c::BCH_VERSION_MAJOR(s.version.0.into()) == major && s.version.0 >= version_incompat
     }) {
-        // SAFETY: C's table of the passes
-        let mut passes = unsafe { c::bch2_recovery_passes_to_stable(src.passes) };
+        let mut passes = passes::passes_to_stable(src.passes);
         let mut nr_errors = src.errors.len();
         // what the table can't say: on a filesystem with stripes, downgrading
         // past bucket_stripe_sectors needs check_allocations, and the bucket

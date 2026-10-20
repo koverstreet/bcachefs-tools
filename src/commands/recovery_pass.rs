@@ -1,6 +1,7 @@
 
 use anyhow::Result;
 use bcachefs_kernel::c;
+use bcachefs_kernel::init::passes;
 use bcachefs_kernel::opt_set;
 use clap::Parser;
 
@@ -38,8 +39,8 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
         passes_to_unset |= read_flag_list(s, unsafe { &c::bch2_recovery_passes }, "recovery pass")?;
     }
 
-    passes_to_set = unsafe { c::bch2_recovery_passes_to_stable(passes_to_set) };
-    passes_to_unset = unsafe { c::bch2_recovery_passes_to_stable(passes_to_unset) };
+    passes_to_set = passes::passes_to_stable(passes_to_set);
+    passes_to_unset = passes::passes_to_stable(passes_to_unset);
 
     let devs: Vec<std::path::PathBuf> = cli.devices.iter().map(|d| d.as_str().into()).collect();
 
@@ -67,21 +68,14 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
         scheduled
     };
 
-    unsafe {
-        let mut buf = Printbuf::new();
-        write!(buf, "Scheduled recovery passes: ");
-
-        if scheduled != 0 {
-            buf.prt_bitflags(
-                c::bch2_recovery_passes.as_ptr(),
-                c::bch2_recovery_passes_from_stable(scheduled),
-            );
-        } else {
-            write!(buf, "(none)");
-        }
-
-        println!("{}", buf);
+    let mut buf = Printbuf::new();
+    write!(buf, "Scheduled recovery passes: ");
+    if scheduled != 0 {
+        passes::prt_stable(&mut buf, scheduled);
+    } else {
+        write!(buf, "(none)");
     }
+    println!("{}", buf);
 
     Ok(())
 }

@@ -2,6 +2,9 @@
 
 //! Recovery passes (init/passes.h). The pass table and the code that runs
 //! it are C; a pass converted to Rust is a function the table calls by name.
+//!
+//! What the superblock records of passes is here: their stable ids, and the
+//! recovery_passes section.
 
 /// Export @pass, a function or closure of `&Fs` returning `Result<(), E>`
 /// with E converting to BchError, as the recovery pass the C pass table calls
@@ -28,7 +31,10 @@ use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::locking::{Guard, Lock};
+use crate::sb::io::{sb_field_ops, SbFieldOps};
+use crate::util::kernel::NSEC_PER_SEC;
 use crate::util::Printbuf;
+use cstruct_macros::c_export;
 
 /// Schedule recovery pass @pass, saying so to @out: as
 /// bch2_run_explicit_recovery_pass(). An error - a restart of recovery - only
@@ -109,9 +115,159 @@ pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
     unsafe { c::bch2_recovery_pass_status_to_text(out.as_raw(), fs.as_ptr()) }
 }
 
+// ── Stable ids ───────────────────────────────────────────────────────────────
+//
+// Passes are numbered in the order they run, which changes as passes are
+// added and reordered; the superblock records them by stable id, which never
+// changes. An id no pass has now - a pass since removed - is pass 0,
+// recovery_pass_empty, as in C.
+
+const NR: usize = c::bch_recovery_pass::BCH_RECOVERY_PASS_NR as usize;
+
+macro_rules! pass_table {
+    ($(($name:ident, $stable:literal, $($rest:tt)*)),* $(,)?) => {
+        /// By pass.
+        const NAMES: [&str; NR] = [$(stringify!($name)),*];
+        /// Each pass's stable id, by pass.
+        const TO_STABLE: [u8; NR] = [$($stable),*];
+    };
+}
+c::BCH_RECOVERY_PASSES!(pass_table);
+
+const STABLE_NR: usize = {
+    let (mut max, mut i) = (0, 0);
+    while i < NR {
+        if TO_STABLE[i] > max {
+            max = TO_STABLE[i];
+        }
+        i += 1;
+    }
+    max as usize + 1
+};
+
+/// Each stable id's pass, by id. Evaluated at build time, so an id two passes
+/// have fails the build.
+const FROM_STABLE: [u8; STABLE_NR] = {
+    let (mut map, mut seen, mut i) = ([0; STABLE_NR], [false; STABLE_NR], 0);
+    while i < NR {
+        let id = TO_STABLE[i] as usize;
+        assert!(!seen[id], "recovery pass stable id reused");
+        (map[id], seen[id]) = (i as u8, true);
+        i += 1;
+    }
+    map
+};
+
+// a mask of either is a u64
+const _: () = assert!(NR <= 64 && STABLE_NR <= 64);
+
+impl c::bch_recovery_pass {
+    pub fn to_stable(self) -> c::bch_recovery_pass_stable {
+        c::bch_recovery_pass_stable(TO_STABLE[self as usize].into())
+    }
+
+    pub fn name(self) -> &'static str {
+        NAMES[self as usize]
+    }
+}
+
+/// Stable id @stable's pass, as an index.
+fn from_stable(stable: usize) -> usize {
+    FROM_STABLE.get(stable).map_or(0, |&p| p.into())
+}
+
+/// Mask @v, each bit @i moved to @map[i].
+fn map_bits(v: u64, map: &[u8]) -> u64 {
+    map.iter().enumerate().filter(|&(i, _)| v & 1 << i != 0).fold(0, |r, (_, &to)| r | 1 << to)
+}
+
+/// A mask of passes as their stable ids.
+pub fn passes_to_stable(v: u64) -> u64 {
+    map_bits(v, &TO_STABLE)
+}
+
+/// A mask of stable ids as the passes they are.
+pub fn passes_from_stable(v: u64) -> u64 {
+    map_bits(v, &FROM_STABLE)
+}
+
+#[c_export]
+pub fn bch2_recovery_pass_to_stable(pass: c::bch_recovery_pass) -> c::bch_recovery_pass_stable {
+    pass.to_stable()
+}
+
+#[c_export]
+pub fn bch2_recovery_passes_to_stable(v: u64) -> u64 {
+    passes_to_stable(v)
+}
+
+#[c_export]
+pub fn bch2_recovery_passes_from_stable(v: u64) -> u64 {
+    passes_from_stable(v)
+}
+
 /// The recovery passes in @stable - bits of their stable index, as the
 /// superblock stores them - by name.
 pub fn prt_stable(out: &mut Printbuf, stable: u64) {
-    // SAFETY: the names are C's, for every pass
-    unsafe { out.prt_bitflags(c::bch2_recovery_passes.as_ptr(), c::bch2_recovery_passes_from_stable(stable)) }
+    let passes = passes_from_stable(stable);
+    let names = NAMES.iter().enumerate().filter(|&(p, _)| passes & 1 << p != 0);
+    for (i, (_, name)) in names.enumerate() {
+        if i != 0 {
+            write!(out, ",");
+        }
+        write!(out, "{name}");
+    }
+}
+
+// ── The superblock section ───────────────────────────────────────────────────
+
+/// When each pass last ran and how long it took, by stable id: what
+/// ratelimiting a pass goes by.
+impl SbFieldOps for c::bch_sb_field_recovery_passes {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, r: &Self) {
+        while out.nr_tabstops() < 2 {
+            out.tabstop_push(32);
+        }
+
+        write!(out, "Pass\tLast run\tLast runtime\n");
+        for (stable, e) in r.start.iter().enumerate().filter(|(_, e)| e.last_run.get() != 0) {
+            write!(out, "{}\t", NAMES[from_stable(stable)]);
+            out.datetime(e.last_run.get() as i64);
+            out.tab();
+            out.time_units(u64::from(e.last_runtime.get()) * NSEC_PER_SEC);
+            if e.bch_recovery_pass_no_ratelimit() {
+                write!(out, " (no ratelimit)");
+            }
+            out.newline();
+        }
+    }
+}
+
+#[c_export]
+pub static bch_sb_field_ops_recovery_passes: c::bch_sb_field_ops =
+    sb_field_ops::<c::bch_sb_field_recovery_passes>();
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every pass is its stable id's; an id no pass has is pass 0; and a mask
+    /// goes there and back.
+    #[test]
+    fn stable_ids() {
+        for p in 0..NR {
+            assert_eq!(from_stable(TO_STABLE[p].into()), p);
+        }
+        let unused = (0..STABLE_NR).find(|&id| !TO_STABLE.contains(&(id as u8)));
+        if let Some(id) = unused {
+            assert_eq!(from_stable(id), 0);
+        }
+        assert_eq!(from_stable(STABLE_NR), 0);
+
+        let all = u64::MAX >> (64 - NR);
+        assert_eq!(passes_from_stable(passes_to_stable(all)), all);
+
+        let check_topology = c::bch_recovery_pass::BCH_RECOVERY_PASS_check_topology;
+        assert_eq!((check_topology.to_stable().0, check_topology.name()), (4, "check_topology"));
+    }
 }
