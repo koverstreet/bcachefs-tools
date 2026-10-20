@@ -1,5 +1,6 @@
 #[path = "entries.rs"] pub mod entries;
 #[path = "sb.rs"] pub mod sb;
+#[path = "seq_blacklist.rs"] pub mod seq_blacklist;
 
 use crate::c;
 use crate::data::checksum::BCH_NONCE_JOURNAL;

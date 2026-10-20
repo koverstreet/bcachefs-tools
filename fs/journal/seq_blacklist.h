@@ -19,8 +19,6 @@ u64 bch2_journal_last_blacklisted_seq(struct bch_fs *);
 int bch2_journal_seq_blacklist_add(struct bch_fs *c, u64, u64);
 int bch2_blacklist_table_initialize(struct bch_fs *);
 
-extern const struct bch_sb_field_ops bch_sb_field_ops_journal_seq_blacklist;
-
 bool bch2_blacklist_entries_gc(struct bch_fs *);
 
 #endif /* _BCACHEFS_JOURNAL_SEQ_BLACKLIST_H */

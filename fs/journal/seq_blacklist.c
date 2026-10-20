@@ -9,35 +9,7 @@
 
 #include "util/eytzinger.h"
 
-/*
- * journal_seq_blacklist machinery:
- *
- * To guarantee order of btree updates after a crash, we need to detect when a
- * btree node entry (bset) is newer than the newest journal entry that was
- * successfully written, and ignore it - effectively ignoring any btree updates
- * that didn't make it into the journal.
- *
- * If we didn't do this, we might have two btree nodes, a and b, both with
- * updates that weren't written to the journal yet: if b was updated after a,
- * but b was flushed and not a - oops; on recovery we'll find that the updates
- * to b happened, but not the updates to a that happened before it.
- *
- * Ignoring bsets that are newer than the newest journal entry is always safe,
- * because everything they contain will also have been journalled - and must
- * still be present in the journal on disk until a journal entry has been
- * written _after_ that bset was written.
- *
- * To accomplish this, bsets record the newest journal sequence number they
- * contain updates for; then, on startup, the btree code queries the journal
- * code to ask "Is this sequence number newer than the newest journal entry? If
- * so, ignore it."
- *
- * When this happens, we must blacklist that journal sequence number: the
- * journal must not write any entries with that sequence number, and it must
- * record that it was blacklisted so that a) on recovery we don't think we have
- * missing journal entries and b) so that the btree code continues to ignore
- * that bset, until that btree node is rewritten.
- */
+/* See seq_blacklist.rs */
 
 static unsigned sb_blacklist_u64s(unsigned nr)
 {
@@ -216,61 +188,6 @@ int bch2_blacklist_table_initialize(struct bch_fs *c)
 	c->journal_seq_blacklist_table = t;
 	return 0;
 }
-
-static int bch2_sb_journal_seq_blacklist_validate(struct bch_sb *sb, struct bch_sb_field *f,
-				enum bch_validate_flags flags, struct printbuf *err)
-{
-	struct bch_sb_field_journal_seq_blacklist *bl =
-		field_to_type(f, journal_seq_blacklist);
-	unsigned i, nr = blacklist_nr_entries(bl);
-
-	for (i = 0; i < nr; i++) {
-		struct journal_seq_blacklist_entry *e = bl->start + i;
-
-		if (le64_to_cpu(e->start) >=
-		    le64_to_cpu(e->end)) {
-			prt_printf(err, "entry %u start >= end (%llu >= %llu)",
-			       i, le64_to_cpu(e->start), le64_to_cpu(e->end));
-			return -BCH_ERR_invalid_sb_journal_seq_blacklist;
-		}
-
-		if (i + 1 < nr &&
-		    le64_to_cpu(e[0].end) >
-		    le64_to_cpu(e[1].start)) {
-			prt_printf(err, "entry %u out of order with next entry (%llu > %llu)",
-			       i + 1, le64_to_cpu(e[0].end), le64_to_cpu(e[1].start));
-			return -BCH_ERR_invalid_sb_journal_seq_blacklist;
-		}
-	}
-
-	return 0;
-}
-
-static __cold void bch2_sb_journal_seq_blacklist_to_text(struct printbuf *out,
-						  struct bch_fs *c,
-						  struct bch_sb *sb,
-						  struct bch_sb_field *f)
-{
-	struct bch_sb_field_journal_seq_blacklist *bl =
-		field_to_type(f, journal_seq_blacklist);
-	struct journal_seq_blacklist_entry *i;
-	unsigned nr = blacklist_nr_entries(bl);
-
-	for (i = bl->start; i < bl->start + nr; i++) {
-		if (i != bl->start)
-			prt_printf(out, " ");
-
-		prt_printf(out, "%llu-%llu",
-		       le64_to_cpu(i->start),
-		       le64_to_cpu(i->end));
-	}
-	prt_newline(out);
-}
-
-const struct bch_sb_field_ops bch_sb_field_ops_journal_seq_blacklist = {
-	.validate	= bch2_sb_journal_seq_blacklist_validate,
-	.to_text	= bch2_sb_journal_seq_blacklist_to_text
-};
 
 bool bch2_blacklist_entries_gc(struct bch_fs *c)
 {
