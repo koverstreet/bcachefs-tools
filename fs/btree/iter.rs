@@ -276,6 +276,31 @@ pub struct TransAttempt<'a, 't> {
 /// iterator belongs to the transaction, and outlives any one attempt: @'t is
 /// the borrow of the transaction - the attempt's, for an attempt - that it's
 /// bound by, so it can't outlive the transaction its C iterator points into.
+///
+/// XXX: making an iterator needs the transaction locked and not in a restart,
+/// and nothing here says so. bch2_path_get() reuses the transaction's paths
+/// and set_pos()es them, reading the bsets of the nodes they hold: unlocked,
+/// those nodes can be rewritten or freed. C checks, and panics
+/// (bch2_trans_unlocked_or_in_restart_error()); C's loops get it right by
+/// bch2_trans_begin() before the iterator's init. A &BtreeTrans or
+/// &TransGuard vouches for nothing - an unlock() before, with no relock, and
+/// it's that panic, at runtime. An attempt vouches for it only until its
+/// first unlock() or error.
+///
+/// Next steps, in order:
+/// - Iterators made only from a &TransAttempt: drop the &BtreeTrans and
+///   &TransGuard impls, and the compiler lists the callers to convert.
+///   TransAttempt::unlock() consumes the attempt; drop_locks_do() for
+///   unlock, f, relock.
+/// - That's lifetimes standing in for the state, and approximately. What we
+///   want is the verifier tracking it: locked, unlocked or in restart, a Cell
+///   in BtreeTrans, changed only by begin(), relock(), unlock() and anything
+///   that returns an error - each proven to have its effect, construction
+///   proven to need locked, and runtime asserts where a proof can't reach,
+///   which later proofs can then assume. Verus can express this now (a
+///   PCell and its permission); Aeneas, which we're leaning towards, first
+///   needs UnsafeCell support - shared borrows of !Freeze types as heap
+///   locations, reads and writes through them as effects.
 pub trait TransRef<'t> {
     fn trans_raw(&self) -> *mut c::btree_trans;
 }
