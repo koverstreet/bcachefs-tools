@@ -1559,8 +1559,8 @@ static_assert(BCH_WQ_HIGHPRI		== WQ_HIGHPRI);
 static_assert(BCH_WQ_CPU_INTENSIVE	== WQ_CPU_INTENSIVE);
 
 /*
- * For util/kthread.rs: kthread_create() is a macro in the kernel, a function
- * in userspace; get/put_task_struct() are static inlines.
+ * For util/kthread.rs and util/task.rs: kthread_create() is a macro in the
+ * kernel, a function in userspace; get/put_task_struct() are static inlines.
  */
 struct task_struct *bch2_kthread_create(int (*fn)(void *), void *data, const char *name)
 {

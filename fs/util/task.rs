@@ -8,7 +8,9 @@
 //!
 //!     let ret = g.as_mut().wait().resume_on(Resume::Queue(wq)).await;
 //!
-//! Resume::Queue resumes the task on that workqueue. Resume::Inline resumes
+//! Resume::Queue resumes the task on that workqueue; Resume::Thread on the
+//! task's own kthread - spawn_thread()'s, kept for its life, for work that
+//! blocks, seen in ps by its name. Resume::Inline resumes
 //! it right where it's woken - in the waker's context, an endio's - as C's
 //! continue_at(cl, fn, NULL) does: no hop through a workqueue, for a
 //! continuation that's cheap and safe there. What runs inline is everything
@@ -21,7 +23,8 @@
 //! that isn't inline never resumes the task in an endio. A Queue is
 //! recorded in the task by the await, while it's pending: a wake without
 //! the tag dispatches there - or, for a future we didn't write, awaited
-//! without resume_on(), to the queue it was spawned on.
+//! without resume_on(), to where it was spawned. A thread's dispatch is a
+//! flag and wake_up_process(): safe from an endio, as queue_work() is.
 //!
 //! A task's state is one word: SCHEDULED, RUNNING, NOTIFIED, COMPLETE, and
 //! a refcount. It's what keeps a task from being polled twice at once - not
@@ -43,10 +46,14 @@
 //! completes.
 
 use crate::c;
+use crate::errcode::{errptr_to_result, BchError};
 use crate::util::alloc::{kalloc_pinned, kfree_pinned, AllocError};
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::workqueue::Queue;
+use crate::util::Printbuf;
 use core::cell::UnsafeCell;
+use core::ffi::{c_int, c_void};
+use core::fmt;
 use core::future::Future;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::pin::Pin;
@@ -61,6 +68,8 @@ pub enum Resume<'a> {
     /// In the waker's context - an endio's, perhaps: see the module notes.
     Inline,
     Queue(&'a Queue),
+    /// On the task's own kthread: a task spawn_thread() made.
+    Thread,
 }
 
 /// What's awaited once it's said where to resume: resume_on() makes it a
@@ -92,7 +101,8 @@ impl<F: Future> Resumable for F {
 pub struct Resumed<'r, A> {
     inner:    A,
     target:   Resume<'r>,
-    /// The task and queue we recorded, to clear when we're done.
+    /// The task, and where we recorded it's to resume, to clear when we're
+    /// done.
     recorded: Option<(NonNull<Header>, usize)>,
 }
 
@@ -115,13 +125,21 @@ impl<A: Resumable> Future for Resumed<'_, A> {
             return inner.poll_resume(cx);
         };
 
+        // SAFETY: we're being polled by it: it's alive
+        let hr = unsafe { task.as_ref() };
         let tag = match this.target {
             Resume::Inline => INLINE,
-            Resume::Queue(q) => {
-                let q = core::ptr::from_ref(q) as usize;
-                // SAFETY: we're being polled by it: it's alive
-                unsafe { task.as_ref() }.next.store(q, Ordering::Release);
-                this.recorded = Some((task, q));
+            r => {
+                let at = match r {
+                    Resume::Queue(q) => core::ptr::from_ref(q) as usize,
+                    Resume::Thread => {
+                        assert!(!hr.thread.is_null(), "Resume::Thread in a task without a thread: spawn_thread() it");
+                        THREAD
+                    }
+                    Resume::Inline => unreachable!(),
+                };
+                hr.next.store(at, Ordering::Release);
+                this.recorded = Some((task, at));
                 0
             }
         };
@@ -160,16 +178,25 @@ const REF:             usize = 1 << 6;
 /// The Waker tag for Resume::Inline: tasks are aligned well past it.
 const INLINE: usize = 1;
 
+/// Where a task's to resume, or was spawned, or is: a Queue's address, or
+/// this - no Queue's - for its kthread.
+const THREAD: usize = 1;
+
 /// What every task is, whatever its future: its work first, so a
 /// work_struct pointer is one to it.
 #[repr(C)]
 struct Header {
     work:     c::work_struct,
     state:    AtomicUsize,
-    /// Where a wake that isn't inline resumes it: the queue the await in
+    /// Where a wake that isn't inline resumes it: what the await in
     /// progress recorded, or 0 for @spawned.
     next:     AtomicUsize,
-    spawned:  &'static Queue,
+    /// A 'static Queue, or THREAD.
+    spawned:  usize,
+    /// Its kthread, if spawn_thread() made it, and a ref on it.
+    thread:   *mut c::task_struct,
+    /// Dispatched to its thread: the thread runs it.
+    thread_go: core::sync::atomic::AtomicBool,
     vtable:   &'static TaskVTable,
 }
 
@@ -254,6 +281,11 @@ impl<F: Future> Task<F> {
         // dropped, must find it complete - else we'd drop the output too
         // SAFETY: the task's ref, taken once
         unsafe { drop((*(*task).head.done_ref.get()).take()) };
+        if !hr.thread.is_null() {
+            // done: its thread exits - it has its own ref
+            // SAFETY: the task's ref on its thread
+            unsafe { c::bch2_wake_up_process(hr.thread) };
+        }
         // SAFETY: the task's own ref
         unsafe { put_ref(h) };
     }
@@ -273,16 +305,66 @@ where
     F: Future + Send + 'static,
     F::Output: Send,
 {
+    let task = make(core::ptr::from_ref(wq) as usize, fut)?;
+    // SAFETY: just made: ours to dispatch
+    unsafe { Ok(start(task)) }
+}
+
+/// Spawn @fut on a kthread of its own, named @name - first polled there,
+/// and resumed there by Resume::Thread, or a wake that hasn't said where.
+/// The thread's the task's till it's done, sleeping while it runs elsewhere.
+pub fn spawn_thread<F>(name: fmt::Arguments<'_>, fut: F) -> Result<JoinHandle<F::Output>, BchError>
+where
+    F: Future + Send + 'static,
+    F::Output: Send,
+{
+    let mut name_buf = Printbuf::new();
+    write!(name_buf, "{name}");
+
+    // the task first, the thread its data - discarded unstarted if the
+    // thread can't be made
+    let task = make(THREAD, fut)?;
+    // SAFETY: just made; the thread's data, from when it's woken
+    let thread = unsafe {
+        let h = &raw mut (*task).head.header;
+        c::bch2_kthread_create(Some(run_thread), h.cast(), name_buf.as_c_str().as_ptr().cast())
+    };
+    match errptr_to_result(NonNull::new(thread).expect("kthread_create() gives a task or an error")) {
+        // SAFETY: just made, and nobody else has it: the thread's not woken
+        Err(e) => unsafe {
+            discard(task);
+            Err(e)
+        },
+        // SAFETY: a ref on the thread, the task's; and one on the task, the
+        // thread's; both before it can run
+        Ok(thread) => unsafe {
+            c::bch2_get_task_struct(thread.as_ptr());
+            let h = &raw mut (*task).head.header;
+            (*h).thread = thread.as_ptr();
+            (*h).state.fetch_add(REF, Ordering::Relaxed);
+            Ok(start(task))
+        },
+    }
+}
+
+/// A task made, not yet started: its own ref and its JoinHandle's.
+fn make<F>(spawned: usize, fut: F) -> Result<*mut Task<F>, AllocError>
+where
+    F: Future + Send + 'static,
+    F::Output: Send,
+{
     let init = pin_init!(Task::<F> {
         head <- pin_init!(TaskHead {
             header: Header {
                 // SAFETY: plain C; bch2_init_work() below initializes it
-                work:    unsafe { core::mem::zeroed() },
-                // its own ref, and the JoinHandle's; dispatched below
-                state:   AtomicUsize::new(2 * REF | JOIN | SCHEDULED),
-                next:    AtomicUsize::new(0),
-                spawned: wq,
-                vtable:  &Task::<F>::VTABLE,
+                work:      unsafe { core::mem::zeroed() },
+                // dispatched by start()
+                state:     AtomicUsize::new(2 * REF | JOIN | SCHEDULED),
+                next:      AtomicUsize::new(0),
+                spawned,
+                thread:    core::ptr::null_mut(),
+                thread_go: core::sync::atomic::AtomicBool::new(false),
+                vtable:    &Task::<F>::VTABLE,
             },
             done <- Gather::new(),
             done_ref: UnsafeCell::new(None),
@@ -300,15 +382,38 @@ where
     };
     let task = kalloc_pinned::<Task<F>, AllocError>(init)?;
 
-    // SAFETY: just made, and nobody else has it till it's dispatched
+    // SAFETY: just made: nobody else has it
     unsafe {
         let head = &raw mut (*task).head;
         *(*head).done_ref.get() = Some((*head).done.get());
         c::bch2_init_work(&raw mut (*head).header.work, Some(run_work));
+    }
+    Ok(task)
+}
 
-        let h = NonNull::new_unchecked(&raw mut (*head).header);
-        dispatch(h, false);
-        Ok(JoinHandle { head: NonNull::new_unchecked(head), wait: None, taken: false })
+/// Dispatch a task make() made, for its JoinHandle.
+///
+/// # Safety
+/// @task is make()'s, and not started.
+unsafe fn start<F: Future>(task: *mut Task<F>) -> JoinHandle<F::Output> {
+    // SAFETY: the caller's
+    unsafe {
+        let head = &raw mut (*task).head;
+        dispatch(NonNull::new_unchecked(&raw mut (*head).header), false);
+        JoinHandle { head: NonNull::new_unchecked(head), wait: None, taken: false }
+    }
+}
+
+/// Drop and free a task make() made, never started: its future unpolled.
+///
+/// # Safety
+/// @task is make()'s, not started, and nobody else has it.
+unsafe fn discard<F: Future>(task: *mut Task<F>) {
+    // SAFETY: the caller's
+    unsafe {
+        ManuallyDrop::drop(&mut *(*task).future.get());
+        drop((*(*task).head.done_ref.get()).take());
+        kfree_pinned(task);
     }
 }
 
@@ -319,14 +424,14 @@ where
 enum Here {
     /// In a waker's context.
     Inline,
-    /// On this queue.
-    Queue(usize),
+    /// On a Queue, by its address, or the task's thread: THREAD.
+    At(usize),
 }
 
 /// Where a wake that isn't inline resumes it.
 fn target(h: &Header) -> usize {
     match h.next.load(Ordering::Acquire) {
-        0 => core::ptr::from_ref(h.spawned) as usize,
+        0 => h.spawned,
         q => q,
     }
 }
@@ -342,11 +447,17 @@ unsafe fn dispatch(h: NonNull<Header>, inline: bool) {
         // SAFETY: the caller's
         unsafe { run(h, Here::Inline) };
     } else {
-        let q = target(hr);
-        // SAFETY: a queue an await recorded, borrowed till it's done, or the
-        // task's 'static one; the work's the task's, alive till it's done -
-        // and SCHEDULED, so not on a queue already
-        unsafe { (*(q as *const Queue)).queue_work(h.as_ptr().cast()) };
+        let at = target(hr);
+        if at == THREAD {
+            hr.thread_go.store(true, Ordering::Release);
+            // SAFETY: the task's ref on its thread
+            unsafe { c::bch2_wake_up_process(hr.thread) };
+        } else {
+            // SAFETY: a queue an await recorded, borrowed till it's done, or
+            // the task's 'static one; the work's the task's, alive till it's
+            // done - and SCHEDULED, so not on a queue already
+            unsafe { (*(at as *const Queue)).queue_work(h.as_ptr().cast()) };
+        }
     }
 }
 
@@ -354,8 +465,35 @@ unsafe extern "C" fn run_work(work: *mut c::work_struct) {
     // SAFETY: a task's work, first in it, queued by dispatch() - to where
     // it's to resume, which only a poll changes, and it's not been polled
     let h = unsafe { NonNull::new_unchecked(work.cast::<Header>()) };
-    let here = Here::Queue(target(unsafe { h.as_ref() }));
+    let here = Here::At(target(unsafe { h.as_ref() }));
     unsafe { run(h, here) };
+}
+
+/// A task's kthread: runs it when it's dispatched here, till it's done -
+/// wherever that is. Holds a ref on it.
+unsafe extern "C" fn run_thread(data: *mut c_void) -> c_int {
+    // SAFETY: spawn_thread()'s, and our ref keeps it
+    let h = unsafe { NonNull::new_unchecked(data.cast::<Header>()) };
+    let hr = unsafe { h.as_ref() };
+    loop {
+        // the state set before the checks: a dispatch or completion after
+        // them wakes us
+        unsafe { c::bch2_set_current_state_idle(false) };
+        if hr.thread_go.swap(false, Ordering::AcqRel) {
+            unsafe { c::bch2_set_current_state_running() };
+            // SAFETY: dispatched here: SCHEDULED for us
+            unsafe { run(h, Here::At(THREAD)) };
+            continue;
+        }
+        if hr.state.load(Ordering::Acquire) & COMPLETE != 0 {
+            break;
+        }
+        unsafe { c::bch2_schedule() };
+    }
+    unsafe { c::bch2_set_current_state_running() };
+    // SAFETY: the thread's ref
+    unsafe { put_ref(h) };
+    0
 }
 
 /// Poll the task, until it's done or idle - or wants to run elsewhere.
@@ -388,7 +526,7 @@ unsafe fn run(h: NonNull<Header>, here: Here) {
         let mut s = hr.state.load(Ordering::Acquire);
         let repoll = loop {
             let (new, repoll) = if s & NOTIFIED != 0 {
-                if here == Here::Queue(target(hr)) {
+                if here == Here::At(target(hr)) {
                     (s & !(NOTIFIED|NOTIFIED_INLINE), true)
                 } else {
                     // to run where it's to resume, not here
@@ -423,6 +561,10 @@ unsafe fn put_ref(h: NonNull<Header>) {
     // SAFETY: the caller's
     let hr = unsafe { h.as_ref() };
     if hr.state.fetch_sub(REF, Ordering::AcqRel) & !(REF - 1) == REF {
+        if !hr.thread.is_null() {
+            // SAFETY: the task's ref on its thread - exited, or exiting
+            unsafe { c::bch2_put_task_struct(hr.thread) };
+        }
         // SAFETY: the last ref
         unsafe { (hr.vtable.dealloc)(h) };
     }
