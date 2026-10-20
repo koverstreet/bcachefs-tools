@@ -136,36 +136,6 @@ static inline u8 stripe_widen_value(unsigned target_nr_data, unsigned actual_nr_
 	return clamp_t(int, (int)target_nr_data - (int)actual_nr_data, 0, 7);
 }
 
-#define STRIPE_LRU_POS_EMPTY	1
-
-static inline u64 stripe_lru_pos(const struct bch_stripe *s)
-{
-	if (!s)
-		return 0;
-
-	unsigned nr_data = s->nr_blocks - s->nr_redundant, blocks_empty = 0;
-
-	for (unsigned i = 0; i < nr_data; i++)
-		blocks_empty += !stripe_blockcount_get(s, i);
-
-	/* Will be picked up by the stripe_delete worker */
-	if (blocks_empty == nr_data)
-		return STRIPE_LRU_POS_EMPTY;
-
-	/*
-	 * Score by total reusable capacity: empty data slots we can pack
-	 * fresh data into, plus can_widen blocks we can grow into when
-	 * reusing this stripe at a wider target geometry. More = picked
-	 * for reuse first.
-	 */
-	unsigned reusable = blocks_empty + s->can_widen;
-	if (!reusable)
-		return 0;
-
-	/* invert: more reusable = reuse first */
-	return LRU_TIME_MAX - reusable;
-}
-
 static inline bool __bch2_ptr_matches_stripe(const struct bch_extent_ptr *stripe_ptr,
 					     const struct bch_extent_ptr *data_ptr,
 					     unsigned sectors)

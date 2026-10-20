@@ -24,7 +24,7 @@ use crate::util::Printbuf;
 use crate::bkey_fsck_err_on;
 use core::ffi::c_int;
 use core::mem::{offset_of, size_of};
-use cstruct_macros::c_export;
+use cstruct_macros::{c_const, c_export};
 
 /// Where a stripe's pointers start: sizeof(struct bch_stripe).
 const STRIPE_PTRS: usize = offset_of!(c::Stripe, repr.ptrs);
@@ -59,6 +59,64 @@ impl c::Stripe {
     fn val_u64s(&self) -> u32 {
         self.blockcount_offset(self.nr_blocks.into()).div_ceil(8)
     }
+
+    /// Block @idx's sector count, in @val, this stripe's value - if it's long
+    /// enough to hold it: stripe_blockcount_get().
+    fn blockcount(&self, val: &[u8], idx: u32) -> Option<u16> {
+        let at = self.blockcount_offset(idx) as usize;
+        val.get(at..at + 2).map(|n| u16::from_le_bytes([n[0], n[1]]))
+    }
+
+    /// Its time in the stripe lru, @val its value: 0, not in it, if it has
+    /// no room for new data; STRIPE_LRU_POS_EMPTY if it has no data, for the
+    /// stripe_delete worker; else earlier the more it can take - empty data
+    /// blocks, and blocks it could be widened by - to be reused first.
+    ///
+    /// Written by the stripe trigger, checked by check_lrus. nr_data is
+    /// unsigned, as C's: nr_redundant past nr_blocks is damage validate
+    /// doesn't catch, and only blocks the value has are counted.
+    pub fn lru_pos(&self, val: &[u8]) -> u64 {
+        let nr_blocks = u32::from(self.nr_blocks);
+        let nr_data = nr_blocks.wrapping_sub(self.nr_redundant.into());
+        let blocks_empty = (0..nr_data.min(nr_blocks))
+            .filter(|&i| self.blockcount(val, i) == Some(0))
+            .count() as u32;
+
+        if blocks_empty == nr_data {
+            return STRIPE_LRU_POS_EMPTY;
+        }
+
+        match blocks_empty + u32::from(self.can_widen()) {
+            0        => 0,
+            reusable => c::LRU_TIME_MAX - u64::from(reusable),
+        }
+    }
+}
+
+c_const! {
+    pub const STRIPE_LRU_POS_EMPTY: u64 = 1;
+}
+
+/// Stripe::lru_pos(), for C.
+///
+/// XXX: "validate passed" isn't true of the new key in the stripe trigger:
+/// without CONFIG_BCACHEFS_DEBUG, keys are validated when their btree node or
+/// journal entry is written, after the triggers - so a stripe with
+/// csum_granularity_bits >= 32 would panic here, in val_u64s()'s shift, where
+/// C's was UB and went on. The same is true of any trigger trusting its new
+/// key's Validated. The fix is proving we never make a key validate would
+/// reject - formal verification - not checking for it here.
+///
+/// # Safety
+/// @s is NULL - no stripe, 0 - or a stripe value validate passed: as long as
+/// its header says.
+#[c_export]
+pub unsafe extern "C" fn stripe_lru_pos(s: *const c::Stripe) -> u64 {
+    // SAFETY: the caller's
+    let Some(s) = (unsafe { s.as_ref() }) else { return 0 };
+    let val = unsafe { core::slice::from_raw_parts((s as *const c::Stripe).cast::<u8>(),
+                                                   s.val_u64s() as usize * 8) };
+    s.lru_pos(val)
 }
 
 /// Block @i's pointer, in stripe value @val - if it's long enough to hold it,
@@ -169,9 +227,8 @@ pub fn bch2_stripe_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, k: BkeySC<
         extent_ptr_to_text(&mut out, Some(fs), ptr, &rcu);
 
         if counts_found {
-            let at = s.blockcount_offset(i) as usize;
-            if let Some(n) = val.get(at..at + 2) {
-                write!(out, "#{}", u16::from_le_bytes([n[0], n[1]]));
+            if let Some(n) = s.blockcount(val, i) {
+                write!(out, "#{n}");
             }
         }
     }
