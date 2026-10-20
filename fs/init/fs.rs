@@ -389,10 +389,9 @@ impl Fs {
 
     /// Apply in-memory superblock edits to the in-memory state derived from
     /// it (c->sb, member info) without writing - for an open that will start
-    /// and persist them then. @_sb mutably, as write_super()'s: it calls back
-    /// into Rust too.
-    pub fn sb_update(&self, _sb: &mut SbLockGuard) {
-        unsafe { c::bch2_sb_update(self.as_ptr()) }
+    /// and persist them then.
+    pub fn sb_update(&self, sb: &SbLockGuard) {
+        crate::sb::io::sb_update(self, sb)
     }
 
 

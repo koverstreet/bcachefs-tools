@@ -76,9 +76,6 @@ static inline __u64 bset_magic(struct bch_fs *c)
 	return __le64_to_cpu(bch2_sb_magic(c) ^ BSET_MAGIC);
 }
 
-int bch2_sb_to_fs(struct bch_fs *, struct bch_sb *);
-int bch2_sb_from_fs(struct bch_fs *, struct bch_dev *);
-
 int bch2_write_super_replicas(struct bch_fs *);
 
 static inline void bch2_check_set_feature(struct bch_fs *c, unsigned feat)

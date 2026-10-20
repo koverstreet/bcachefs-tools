@@ -38,11 +38,8 @@ fn sizes_to_cpu(cpu: &mut c::bch_sb_cpu, theirs: &[u8]) {
     cpu.extent_types_known = nr.max(c::BCH_EXTENT_ENTRY_MAX as usize) as u8;
 }
 
-#[c_export]
-pub fn bch2_sb_extent_type_u64s_to_cpu(c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    let sb = unsafe { fs.sb_lock_held() };
+/// c->sb's extent entry sizes, from the superblock's section.
+pub(crate) fn sb_extent_type_u64s_to_cpu(fs: &Fs, sb: &SbLockGuard) {
     let theirs = sb.field::<c::bch_sb_field_extent_type_u64s>().map_or(&[][..], sizes);
 
     // SAFETY: under sb_lock, the in-memory superblock's writers'

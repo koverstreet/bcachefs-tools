@@ -19,7 +19,7 @@ use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::ec::trigger::stripe_block_ptrs;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
-use crate::fs::Fs;
+use crate::fs::{Fs, SbLockGuard};
 use crate::opts::prt_data_type;
 use crate::sb::io::{entries_end, sb_field_get, SbField, SbFieldOps};
 use crate::sb::members::member_exists;
@@ -954,19 +954,14 @@ pub fn bch2_replicas_gc_accounted(c: &Opaque<c::bch_fs>) -> c_int {
 }
 
 /// The table, from the superblock: at open - after, it would lose the refs.
-#[c_export]
-pub fn bch2_sb_replicas_to_cpu_replicas(c: &Opaque<c::bch_fs>) -> c_int {
-    let fs = Fs::from_c(c);
+pub(crate) fn sb_replicas_to_cpu(fs: &Fs, sb: &SbLockGuard) -> Result<(), BchError> {
     assert!(!fs.flag(c::bch_fs_flags::BCH_FS_started), "replicas table rebuilt with refs held");
 
-    // SAFETY: C calls it under sb_lock
-    let sb = unsafe { fs.sb_lock_held() };
-    ret_to_c(ReplicasCpu::from_entries(|| sb_entries(sb.sb()), |t| !fs.replicas_obsolete(t))
-        .map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_cpu_replicas))
-        .map(|mut new| {
-            new.sort();
-            *fs.replicas.write() = new;
-        }))
+    let mut new = ReplicasCpu::from_entries(|| sb_entries(sb.sb()), |t| !fs.replicas_obsolete(t))
+        .map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_cpu_replicas))?;
+    new.sort();
+    *fs.replicas.write() = new;
+    Ok(())
 }
 
 #[c_export]

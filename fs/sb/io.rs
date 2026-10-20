@@ -3,9 +3,10 @@ use crate::c::{bch_sb, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::members;
+use crate::util::bitmap::LeBitmap;
 use crate::util::{Printbuf, ToText};
 use crate::prt;
-use crate::types::{ArmOf, Le16, Le32, Le64};
+use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, read_past, ArmRef, Head, Plain, SelfSized, Unsized, VStruct, Validated, ValidatedEntries};
 use core::ffi::{c_int, c_uint, CStr};
 use crate::util::ffi::{c_char, Opaque};
@@ -1306,20 +1307,6 @@ pub fn bch2_sb_field_get_minsize_id(sb: &mut c::bch_sb_handle, ty: c::bch_sb_fie
     sb.field_ptr(off)
 }
 
-/// The section at @f - NULL for a new one - resized in place, the buffer
-/// already big enough: for C's __copy_super(), which reallocates first.
-///
-/// # Safety
-/// @f is NULL, or a section of @sb's superblock.
-#[c_export]
-pub unsafe fn __bch2_sb_field_resize(sb: &mut c::bch_sb_handle, f: *mut Head<c::bch_sb_field>, u64s: c_uint)
-    -> *mut Head<c::bch_sb_field>
-{
-    let off = (!f.is_null()).then(|| f as usize - sb.sb as usize);
-    let off = sb.field_resize_at(off, u64s);
-    sb.field_ptr(off)
-}
-
 #[c_export]
 pub fn bch2_sb_field_delete(sb: &mut c::bch_sb_handle, ty: c::bch_sb_field_type) {
     if let Some(off) = field_offset(sb.sb(), ty) {
@@ -1352,6 +1339,150 @@ pub fn sb_field_get_minsize<F: SbField + ?Sized>(
     let off = disk_sb.field_get_minsize_id(F::FIELD_TYPE, min_u64s)?;
     // SAFETY: as sb_field_resize()'s
     unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(field_at(disk_sb.sb, off)) }.arm_mut::<F>()
+}
+
+// ── The filesystem's copies ──────────────────────────────────────────────
+
+/// c->sb, what's read of the superblock without sb_lock, from the superblock:
+/// bch2_sb_update(). And ca->mi, each member's.
+pub(crate) fn sb_update(fs: &Fs, sb: &SbLockGuard) {
+    let src = sb.sb();
+    // SAFETY: under sb_lock, c->sb's writers'
+    let cpu = unsafe { &mut (*fs.as_ptr()).sb };
+
+    cpu.uuid                     = src.uuid;
+    cpu.user_uuid                = src.user_uuid;
+    cpu.version                  = src.version.get();
+    cpu.version_incompat         = src.version_incompat() as u16;
+    cpu.version_incompat_allowed = src.version_incompat_allowed() as u16;
+    cpu.version_min              = src.version_min.get();
+    cpu.version_upgrade_complete = src.version_upgrade_complete() as u16;
+    cpu.nr_devices               = src.nr_devices;
+    cpu.clean                    = src.clean() as u8;
+    cpu.encryption_type          = src.encryption_type() as u8;
+
+    cpu.extent_bp_shift = match src.extent_bp_shift() {
+        0 => c::BCH_SB_EXTENT_BP_SHIFT_DEFAULT as u8,
+        shift => shift as u8,
+    };
+
+    cpu.nsec_per_time_unit = src.time_precision.get();
+    cpu.time_units_per_sec = (NSEC_PER_SEC / u64::from(cpu.nsec_per_time_unit)) as u32;
+
+    /* XXX this is wrong, we need a 96 or 128 bit integer type */
+    cpu.time_base_lo = src.time_base_lo.get() / u64::from(cpu.nsec_per_time_unit);
+    cpu.time_base_hi = src.time_base_hi.get();
+
+    cpu.features          = src.features[0].get();
+    cpu.compat            = src.compat[0].get();
+    cpu.multi_device      = src.multi_device();
+    cpu.dirents_sanitized = src.dirents_sanitized();
+
+    match sb.field::<c::bch_sb_field_ext<Validated>>() {
+        Some(e) => {
+            cpu.recovery_passes_required =
+                crate::init::passes::passes_from_stable(e.recovery_passes_required[0].get());
+
+            // the section's little-endian words as longs: le_bitvector_to_cpu()
+            const _: () = assert!(size_of::<[core::ffi::c_ulong; bits_to_longs(c::BCH_FSCK_ERR_MAX as usize)]>()
+                                  <= size_of::<[Le64; 8]>());
+            let silent = LeBitmap::from_words(&e.errors_silent);
+            let bits = core::ffi::c_ulong::BITS as usize;
+            for (i, d) in cpu.errors_silent.iter_mut().enumerate() {
+                *d = (0..bits).filter(|&b| silent.test(i * bits + b)).fold(0, |w, b| w | 1 << b);
+            }
+
+            cpu.btrees_lost_data = e.btrees_lost_data().get();
+            // grown since: 0 in an older version's section
+            cpu.btrees_clean = e.btrees_clean().get();
+        }
+        None => cpu.errors_silent.fill(0),
+    }
+
+    members::members_to_cpu(fs, sb);
+}
+
+#[c_export]
+pub fn bch2_sb_update(c: &Opaque<c::bch_fs>) {
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    sb_update(fs, &unsafe { fs.sb_lock_held() })
+}
+
+/// @src's header and sections into @dst - all but those each device has its
+/// own of, BCH_SINGLE_DEVICE_SB_FIELDS: __copy_super().
+fn copy_super(dst: &mut bch_sb_handle, src: &bch_sb) -> Result<(), BchError> {
+    let d = dst.sb_mut();
+    d.version        = src.version;
+    d.version_min    = src.version_min;
+    d.seq            = src.seq;
+    d.uuid           = src.uuid;
+    d.user_uuid      = src.user_uuid;
+    d.label          = src.label;
+
+    d.block_size     = src.block_size;
+    d.nr_devices     = src.nr_devices;
+
+    d.time_base_lo   = src.time_base_lo;
+    d.time_base_hi   = src.time_base_hi;
+    d.time_precision = src.time_precision;
+    d.write_time     = src.write_time;
+
+    d.flags          = src.flags;
+    d.features       = src.features;
+    d.compat         = src.compat;
+
+    for ty in (0..FIELD_NR as u32).map(c::bch_sb_field_type) {
+        if c::BCH_SINGLE_DEVICE_SB_FIELDS & (1 << ty.0) != 0 {
+            continue;
+        }
+
+        let src_f = field_get_id(src, ty).map(|f| f.as_bytes());
+        let u64s = src_f.map_or(0, |f| f.len() / size_of::<u64>());
+        let grow = u64s.saturating_sub(field_bytes(dst.sb(), ty) / size_of::<u64>());
+        if grow > 0 {
+            dst.sb_realloc((dst.sb().u64s() + grow) as u32)?;
+        }
+
+        let off = dst.field_resize_at(field_offset(dst.sb(), ty), u64s as u32);
+        if let (Some(off), Some(f)) = (off, src_f) {
+            dst.buffer_mut()[off..][..f.len()].copy_from_slice(f);
+        }
+    }
+    Ok(())
+}
+
+/// The filesystem's superblock from @src, and what it derives from it:
+/// bch2_sb_to_fs().
+fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard, src: &bch_sb) -> Result<(), BchError> {
+    sb.sb_realloc(0)?;
+    copy_super(sb, src)?;
+    crate::alloc::replicas::sb_replicas_to_cpu(fs, sb)?;
+    crate::alloc::disk_groups::sb_disk_groups_to_cpu(fs, sb)?;
+    crate::data::extents_sb::sb_extent_type_u64s_to_cpu(fs, sb);
+    sb_update(fs, sb);
+    Ok(())
+}
+
+/// # Safety
+/// @src is a validated superblock, not the filesystem's.
+#[c_export]
+pub unsafe fn bch2_sb_to_fs(c: &Opaque<c::bch_fs>, src: *mut Head<c::bch_sb>) -> c_int {
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock; @src is the caller's
+    ret_to_c(sb_to_fs(fs, &mut unsafe { fs.sb_lock_held() }, unsafe { bch_sb::<Validated>::from_ffi(src) }))
+}
+
+/// @ca's superblock from the filesystem's: bch2_sb_from_fs().
+#[c_export]
+pub fn bch2_sb_from_fs(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) -> c_int {
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    let sb = unsafe { fs.sb_lock_held() };
+    // SAFETY: changed only under sb_lock, which we hold - and not the
+    // filesystem's, which is @sb's
+    let dst = unsafe { &mut *(&raw const ca.disk_sb).cast_mut() };
+    ret_to_c(copy_super(dst, sb.sb()))
 }
 
 // ── Superblocks in byte buffers ──────────────────────────────────────────

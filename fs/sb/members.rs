@@ -672,7 +672,7 @@ fn failure_domain_id(sb: &c::bch_sb, dev: u32, m: &c::bch_member) -> u16 {
 
 /// ca->mi, and the masks of rotational and removed devices, from the
 /// superblock.
-fn members_to_cpu(fs: &Fs, sb: &SbLockGuard) {
+pub(crate) fn members_to_cpu(fs: &Fs, sb: &SbLockGuard) {
     for ca in fs.members() {
         let dev = u32::from(ca.dev_idx);
         let m = sb_member(sb.sb(), dev).unwrap_or_default();

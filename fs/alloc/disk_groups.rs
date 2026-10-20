@@ -344,7 +344,7 @@ fn target_to_text_sb(out: &mut Printbuf, sb: &c::bch_sb, target: Target) {
 // ── The table ────────────────────────────────────────────────────────────
 
 /// Without a disk groups section the table is left as it is.
-fn sb_disk_groups_to_cpu(fs: &Fs, sb: &SbLockGuard) -> Result<(), BchError> {
+pub(crate) fn sb_disk_groups_to_cpu(fs: &Fs, sb: &SbLockGuard) -> Result<(), BchError> {
     let Some(groups) = sb.field::<c::bch_sb_field_disk_groups>() else {
         return Ok(());
     };
