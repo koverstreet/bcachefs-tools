@@ -140,15 +140,23 @@ impl Fs {
     /// Whether filesystem flag @f (BCH_FS_*) is set: C's test_bit() on
     /// c->flags. Other threads set and clear them, so it's an atomic load.
     pub fn flag(&self, f: c::bch_fs_flags) -> bool {
-        self.flags() & (1usize << f as u32) != 0
+        self.flags().load(core::sync::atomic::Ordering::Relaxed) & (1usize << f as u32) != 0
+    }
+
+    /// Set filesystem flag @f: C's set_bit(), which orders nothing.
+    pub fn set_flag(&self, f: c::bch_fs_flags) {
+        self.flags().fetch_or(1usize << f as u32, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Clear filesystem flag @f: C's clear_bit().
+    pub fn clear_flag(&self, f: c::bch_fs_flags) {
+        self.flags().fetch_and(!(1usize << f as u32), core::sync::atomic::Ordering::Relaxed);
     }
 
     /// c->flags, which C changes with set_bit() and the like.
-    fn flags(&self) -> usize {
-        let flags = unsafe {
-            &*(core::ptr::addr_of!((*self.as_ptr()).flags) as *const core::sync::atomic::AtomicUsize)
-        };
-        flags.load(core::sync::atomic::Ordering::Relaxed)
+    fn flags(&self) -> &core::sync::atomic::AtomicUsize {
+        // SAFETY: an unsigned long, which C's bitops change atomically
+        unsafe { &*(core::ptr::addr_of!((*self.as_ptr()).flags) as *const core::sync::atomic::AtomicUsize) }
     }
 
     /// Whether a mount is drawing recovery progress from
@@ -198,7 +206,7 @@ impl Fs {
 
     /// The BCH_FS_* flags set.
     pub fn flags_to_text(&self, out: &mut Printbuf) {
-        unsafe { out.prt_bitflags(c::bch2_fs_flag_strs.as_ptr(), self.flags() as u64) }
+        unsafe { out.prt_bitflags(c::bch2_fs_flag_strs.as_ptr(), self.flags().load(core::sync::atomic::Ordering::Relaxed) as u64) }
     }
 
     /// The write refs held, by kind.
@@ -630,7 +638,17 @@ impl<'f> WriteRef<'f> {
     /// adopt()s it, and drops it when done. If @work is already queued, the
     /// run that's pending has a ref, and this one is put.
     pub fn queue_work(self, work: &FsWork) {
-        if unsafe { c::bch2_queue_work((*self.fs.as_ptr()).write_ref_wq, work.as_ptr()) } {
+        // SAFETY: the filesystem's, for as long as it is
+        let wq = unsafe { crate::util::workqueue::Queue::from_raw((*self.fs.as_ptr()).write_ref_wq) };
+        self.queue_work_on(wq, work)
+    }
+
+    /// queue_work(), on @wq: one for long-running work - Queue::system_long()
+    /// - that shouldn't hold up the filesystem's own.
+    pub fn queue_work_on(self, wq: &crate::util::workqueue::Queue, work: &FsWork) {
+        // SAFETY: FsWork is pinned and initialized; the filesystem it's in
+        // outlives its run, which holds this ref
+        if unsafe { wq.queue_work(work.as_ptr()) } {
             core::mem::forget(self);
         }
     }
@@ -644,6 +662,10 @@ pub struct FsWork {
     work: core::cell::UnsafeCell<c::work_struct>,
     _pin: core::marker::PhantomPinned,
 }
+
+// SAFETY: all zeroes is a work_struct as kvzalloc() leaves it, before
+// INIT_WORK() - which a struct C initializes, bch_fs_recovery's, has
+unsafe impl ::pin_init::Zeroable for FsWork {}
 
 impl FsWork {
     /// For C, and the workqueue.
