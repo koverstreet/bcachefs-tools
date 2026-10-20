@@ -294,8 +294,6 @@ static inline bool bch2_btree_interior_updates_pending(struct bch_fs *c)
 bool bch2_btree_interior_updates_flush(struct bch_fs *);
 
 void bch2_journal_entry_to_btree_root(struct bch_fs *, struct jset_entry *);
-struct jset_entry *bch2_btree_roots_to_journal_entries(struct bch_fs *,
-					struct jset_entry *, unsigned long);
 
 void bch2_async_btree_node_rewrites_flush(struct bch_fs *);
 void bch2_do_pending_node_rewrites(struct bch_fs *);

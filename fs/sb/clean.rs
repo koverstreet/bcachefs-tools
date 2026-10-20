@@ -15,14 +15,16 @@ use cstruct_macros::c_export;
 use zerocopy::IntoBytes;
 
 use crate::btree::bkey::BkeySCToText;
+use crate::btree::interior::btree_roots_to_journal_entries;
 use crate::c;
 use crate::errcode::{bch_errcode, err_ptr, ret_to_c, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
+use crate::journal::entries::{EntryWriter, NoRoom};
 use crate::sb::io::{entries_end, sb_field_ops, SbFieldOps};
 use crate::types::{Le32, Le64};
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::ffi::Opaque;
-use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, UnvalidatedEntriesMut, Validated, VStruct, VstructRef};
+use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, UnvalidatedEntriesMut, Validated, VstructRef};
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, fsck_err, mustfix_fsck_err_on, prt};
 
@@ -208,50 +210,41 @@ fn atomic64_read(a: &c::atomic64_t) -> u64 {
     unsafe { &*(&raw const *a).cast::<AtomicI64>() }.load(Relaxed) as u64
 }
 
-/// @e at *@end, which this moves past it: jset_entry_init()'s.
-///
-/// # Safety
-/// There's room for it at *@end.
-unsafe fn entry_push<E: VStruct>(end: &mut *mut Head<c::jset_entry>, mut e: E) {
-    const { assert!(size_of::<E>() % size_of::<u64>() == 0) };
-    e.set_val_u64s(size_of::<E>() / size_of::<u64>() - 1);
-    // SAFETY: the caller's
-    unsafe {
-        end.cast::<E>().write_unaligned(e);
-        *end = end.byte_add(size_of::<E>());
-    }
-}
+/// The bytes super_entries_add_common() writes.
+const COMMON_BYTES: usize = size_of::<c::jset_entry_usage>() + 2 * size_of::<c::jset_entry_clock>();
 
 /// The entries every journal write carries, and the clean section: the key
-/// version, and both io clocks' times - at *@end, which this moves past them.
-///
-/// # Safety
-/// There's room for them at *@end.
-unsafe fn super_entries_add_common(fs: &Fs, end: &mut *mut Head<c::jset_entry>) {
+/// version, and both io clocks' times.
+fn super_entries_add_common(fs: &Fs, w: &mut EntryWriter<'_>) -> Result<(), NoRoom> {
     let mut u = c::jset_entry_usage::default();
     u.entry.type_ = c::bch_jset_entry_type::BCH_JSET_ENTRY_usage.0 as u8;
     u.entry.btree_id = c::bch_fs_usage_type::BCH_FS_USAGE_key_version.0 as u8;
     u.v = Le64::new(atomic64_read(&fs.key_version));
-    // SAFETY: the caller's
-    unsafe { entry_push(end, u) };
+    w.push_entry(u)?;
 
     for (rw, clock) in fs.io_clock.iter().enumerate() {
         let mut e = c::jset_entry_clock::default();
         e.entry.type_ = c::bch_jset_entry_type::BCH_JSET_ENTRY_clock.0 as u8;
         e.rw = rw as u8;
         e.time = Le64::new(atomic64_read(&clock.now));
-        // SAFETY: the caller's
-        unsafe { entry_push(end, e) };
+        w.push_entry(e)?;
     }
+    Ok(())
 }
 
+/// super_entries_add_common(), for C's journal write: at *@end, which it
+/// moves past them.
+///
 /// # Safety
 /// There's room for them at *@end.
 #[c_export]
 pub unsafe fn bch2_journal_super_entries_add_common(c: &Opaque<c::bch_fs>, end: *mut *mut Head<c::jset_entry>,
                                                     _seq: u64) {
-    // SAFETY: the caller's
-    unsafe { super_entries_add_common(Fs::from_c(c), &mut *end) }
+    // SAFETY: the caller's - room for these
+    let buf = unsafe { core::slice::from_raw_parts_mut((*end).cast(), COMMON_BYTES) };
+    super_entries_add_common(Fs::from_c(c), &mut EntryWriter::new(buf)).expect("sized for them");
+    // SAFETY: as long as what was written
+    unsafe { *end = (*end).byte_add(COMMON_BYTES) };
 }
 
 #[c_export]
@@ -292,18 +285,14 @@ pub fn bch2_fs_mark_clean(c: &Opaque<c::bch_fs>) {
     // Trying to catch outstanding bug:
     assert!(f.journal_seq.get() <= i64::MAX as u64, "journal seq {} past S64_MAX", f.journal_seq.get());
 
-    let bytes = bytes_of_mut(f);
-    let range = bytes[SECTION_HEAD..].as_mut_ptr_range();
-    // SAFETY: entry_u64s_reserved u64s are room for what every journal entry
-    // carries - the common entries, the btree roots
-    let end = unsafe {
-        let mut end = range.start.cast::<Head<c::jset_entry>>();
-        super_entries_add_common(fs, &mut end);
-        c::bch2_btree_roots_to_journal_entries(fs.as_ptr(), end, 0).cast::<u8>()
-    };
-    assert!(end <= range.end, "clean section entries overran entry_u64s_reserved");
-    let written = end as usize - range.start as usize;
-    bytes[SECTION_HEAD + written..].fill(0);
+    let entries = &mut bytes_of_mut(f)[SECTION_HEAD..];
+    let mut w = EntryWriter::new(entries);
+    if super_entries_add_common(fs, &mut w).and_then(|()| btree_roots_to_journal_entries(fs, &mut w, 0)).is_err() {
+        bch_err!(fs, "error setting filesystem clean: its entries overran entry_u64s_reserved");
+        return;
+    }
+    let written = w.len();
+    entries[written..].fill(0);
 
     // this should be in the write path, and we should be validating every
     // superblock section:

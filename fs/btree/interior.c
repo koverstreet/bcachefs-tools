@@ -3926,27 +3926,6 @@ void bch2_journal_entry_to_btree_root(struct bch_fs *c, struct jset_entry *entry
 	bkey_copy(&r->key, (struct bkey_i *) entry->start);
 }
 
-struct jset_entry *
-bch2_btree_roots_to_journal_entries(struct bch_fs *c,
-				    struct jset_entry *end,
-				    unsigned long skip)
-{
-	/* root_lock owns the on-disk root fields; see above */
-	guard(mutex)(&c->btree.cache.root_lock);
-
-	for (unsigned i = 0; i < btree_id_nr_alive(c); i++) {
-		struct btree_root *r = bch2_btree_id_root(c, i);
-
-		if (r->alive && !test_bit(i, &skip)) {
-			journal_entry_set(end, BCH_JSET_ENTRY_btree_root,
-					  i, r->level, &r->key, r->key.k.u64s);
-			end = vstruct_next(end);
-		}
-	}
-
-	return end;
-}
-
 static __cold void bch2_btree_alloc_to_text(struct printbuf *out,
 				     struct bch_fs *c,
 				     struct btree_alloc *a)
