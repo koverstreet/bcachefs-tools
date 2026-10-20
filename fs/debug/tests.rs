@@ -19,7 +19,8 @@ use crate::errcode::{
 use crate::fs::{BorrowedFs, Fs};
 use crate::util::async_exec::{block_on, spawn, system_unbound, WaitGroup};
 use crate::util::kernel::{local_clock, random_u64_below};
-use crate::util::printbuf::HumanReadable;
+use crate::prt;
+use crate::util::printbuf::{HumanReadable, Printbuf};
 use crate::c;
 
 use core::ops::ControlFlow;
@@ -929,15 +930,12 @@ fn print_perf_result(
     let name = core::str::from_utf8(name).unwrap_or("<invalid>");
     let secs = time / c::NSEC_PER_SEC as u64;
 
-    kernel::pr_info!(
-        "{}: {} with {} threads in {} sec, {} nsec per iter, {} per sec\n",
-        name,
-        HumanReadable(nr),
-        nr_threads,
-        secs,
-        nsec_per_iter,
-        HumanReadable(per_sec),
-    );
+    // Through a printbuf: pr_info!() takes the kernel crate's Display, which
+    // HumanReadable isn't
+    let mut msg = Printbuf::new();
+    prt!(&mut msg, "{name}: {} with {nr_threads} threads in {secs} sec, {nsec_per_iter} nsec per iter, {} per sec\n",
+         HumanReadable(nr), HumanReadable(per_sec));
+    kernel::pr_info!("{}", msg.as_str());
 }
 
 /// Run perf test @testname, @nr iterations on @nr_threads threads: what
