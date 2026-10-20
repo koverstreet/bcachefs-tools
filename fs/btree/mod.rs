@@ -7,6 +7,7 @@ pub mod cow_key;
 pub mod iter;
 pub mod read;
 pub mod types;
+pub mod write_buffer;
 
 pub use bkey::BkeySC;
 pub use iter::BtreeIter;
