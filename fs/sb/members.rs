@@ -465,12 +465,6 @@ impl SbFieldOps for c::bch_sb_field_members_v2 {
     }
 }
 
-#[c_export]
-pub static bch_sb_field_ops_members_v1: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_members_v1>();
-
-#[c_export]
-pub static bch_sb_field_ops_members_v2: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_members_v2>();
-
 fn data_types_to_text(out: &mut Printbuf, types: u64) {
     match types {
         // SAFETY: a NULL terminated table of names

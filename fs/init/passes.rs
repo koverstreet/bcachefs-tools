@@ -44,7 +44,7 @@ use crate::c::{bch_recovery_runner as Runner, RecoveryWords};
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Fs, FsWork, SbLockGuard, WriteRef};
 use crate::locking::Guard;
-use crate::sb::io::{sb_field_ops, SbFieldOps, SbWrite};
+use crate::sb::io::{SbFieldOps, SbWrite};
 use crate::snapshots::subvolume;
 use crate::types::{Le32, Le64};
 use crate::util::bitmap::LeBitmap;
@@ -275,10 +275,6 @@ impl SbFieldOps for c::bch_sb_field_recovery_passes {
         }
     }
 }
-
-#[c_export]
-pub static bch_sb_field_ops_recovery_passes: c::bch_sb_field_ops =
-    sb_field_ops::<c::bch_sb_field_recovery_passes>();
 
 // ── Its entries ──────────────────────────────────────────────────────────────
 

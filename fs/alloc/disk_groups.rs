@@ -70,7 +70,7 @@
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::sb::io::{sb_field_get, sb_field_ops, sb_field_u64s, SbFieldOps};
+use crate::sb::io::{sb_field_get, sb_field_u64s, SbFieldOps};
 use crate::sb::members;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::rcu::{read_lock, ReadGuard};
@@ -703,10 +703,6 @@ impl SbFieldOps for c::bch_sb_field_disk_groups {
         }
     }
 }
-
-#[c_export]
-pub static bch_sb_field_ops_disk_groups: c::bch_sb_field_ops =
-    sb_field_ops::<c::bch_sb_field_disk_groups>();
 
 #[cfg(test)]
 mod tests {

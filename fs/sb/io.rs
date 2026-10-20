@@ -22,9 +22,9 @@ pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef {
 
 impl<F: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef + ?Sized> SbField for F {}
 
-/// A section's bch_sb_field_ops, from sb_field_ops::<Self>(). Both get the
-/// section as Self; one too short to be read as Self fails validation
-/// before validate() is called, and isn't printed.
+/// How a section type is validated and printed - by the sections! table, as
+/// its type says. Both get the section as Self; one too short to be read as
+/// Self fails validation before validate() is called, and isn't printed.
 pub trait SbFieldOps: SbField {
     fn validate(_sb: &bch_sb, _f: &Self, _flags: c::bch_validate_flags,
                 _err: &mut Printbuf) -> Result<(), BchError> {
@@ -54,13 +54,6 @@ where
     Some(head + entries.take_while(|e| is_entry(e)).map(size_of_val).sum::<usize>())
 }
 
-pub const fn sb_field_ops<F: SbFieldOps + ?Sized>() -> c::bch_sb_field_ops {
-    c::bch_sb_field_ops {
-        validate: Some(sb_field_validate::<F>),
-        to_text:  Some(sb_field_to_text::<F>),
-    }
-}
-
 /// The section at @f in @sb, @len bytes, read with a partial entry past its
 /// whole ones, which end at @end - C's readers ignored one: shrunk to them,
 /// the rest of its last u64 zeroed as a writer leaves it, the sections after
@@ -85,18 +78,18 @@ fn sb_field_drop_partial(sb: &mut bch_sb, f: usize, len: usize, end: usize, err:
     write!(err, "{dropped} bytes past its last whole entry, dropped");
 }
 
+/// Section @f of @sb validated as an F: a partial entry at its end repaired
+/// at read, invalid at write; then its type's own checks.
+///
 /// # Safety
-/// bch2_sb_field_validate()'s arguments: it has checked every section's
-/// extent first.
-unsafe extern "C" fn sb_field_validate<F: SbFieldOps + ?Sized>(
+/// @sb's sections' extents are checked, and @f is one of them.
+pub(crate) unsafe fn validate_as<F: SbFieldOps + ?Sized>(
     sb:    *mut Head<bch_sb>,
     f:     *mut Head<c::bch_sb_field>,
     flags: c::bch_validate_flags,
-    err:   *mut c::printbuf,
-) -> c_int {
-    // SAFETY: the caller's
-    let err = unsafe { Printbuf::borrow_raw(err) };
-    let invalid = || ret_to_c(Err::<(), _>(bch_errcode::BCH_ERR_invalid_sb_field_size));
+    err:   &mut Printbuf,
+) -> Result<(), BchError> {
+    let invalid = || Err(bch_errcode::BCH_ERR_invalid_sb_field_size.into());
     let too_short = |err: &mut Printbuf, len| {
         write!(err, "too short ({len} < {} bytes)", <F as ArmRef>::MIN_LEN);
         invalid()
@@ -124,28 +117,13 @@ unsafe extern "C" fn sb_field_validate<F: SbFieldOps + ?Sized>(
         (bch_sb::<Validated>::from_ffi(sb), c::bch_sb_field::<Validated>::from_ffi(f))
     };
     match f.arm::<F>() {
-        Some(f) => ret_to_c(F::validate(sb, f, flags, err)),
+        Some(f) => F::validate(sb, f, flags, err),
         None => too_short(err, f.as_bytes().len()),
     }
 }
 
-/// # Safety
-/// bch2_sb_field_to_text()'s arguments: @c may be NULL.
-#[cold]
-unsafe extern "C" fn sb_field_to_text<F: SbFieldOps + ?Sized>(
-    out: *mut c::printbuf,
-    c:   *mut c::bch_fs,
-    sb:  *mut Head<bch_sb>,
-    f:   *mut Head<c::bch_sb_field>,
-) {
-    // SAFETY: the caller's
-    let (out, fs, sb, f) = unsafe {
-        (Printbuf::borrow_raw(out),
-         (!c.is_null()).then(|| Fs::borrow_raw(c)),
-         bch_sb::<Validated>::from_ffi(sb),
-         c::bch_sb_field::<Validated>::from_ffi(f))
-    };
-
+/// Section @f printed as an F - nothing, if it's too short to be one.
+fn to_text_as<F: SbFieldOps + ?Sized>(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb, f: &c::bch_sb_field) {
     if let Some(f) = f.arm::<F>() {
         F::to_text(out, fs, sb, f);
     }
@@ -166,20 +144,6 @@ macro_rules! sb_fields {
         pub static bch2_sb_fields: [*const c_char; FIELD_NR + 1] =
             [$(concat!(stringify!($name), "\0").as_ptr().cast(),)* core::ptr::null()];
 
-        // each section's, where it's defined
-        unsafe extern "C" {
-            $(static [<bch_sb_field_ops_ $name>]: c::bch_sb_field_ops;)*
-        }
-
-        /// Section type @ty's ops: None for a type this version doesn't know.
-        fn field_ops(ty: u32) -> Option<&'static c::bch_sb_field_ops> {
-            // SAFETY: statics, never written
-            match ty {
-                $($nr => Some(unsafe { &[<bch_sb_field_ops_ $name>] }),)*
-                _ => None,
-            }
-        }
-
         // by type, as C's table is by position: in order, from 0
         const _: () = {
             let mut i = 0;
@@ -189,6 +153,62 @@ macro_rules! sb_fields {
     } };
 }
 c::BCH_SB_FIELDS!(sb_fields);
+
+/// Each section type's Rust type, whose SbFieldOps validate and print it.
+macro_rules! sections {
+    ($($name:ident => $t:ty),* $(,)?) => { ::paste::paste! {
+        // each type the arm of its section, and every section a type
+        const _: () = {
+            $(assert!(<$t as SbField>::FIELD_TYPE.0 == c::bch_sb_field_type::[<BCH_SB_FIELD_ $name>].0,
+                      concat!(stringify!($t), ": not section ", stringify!($name)));)*
+            assert!([$(stringify!($name)),*].len() == FIELD_NR, "sections!: a section type missing");
+        };
+
+        /// Section @f validated as its type - nothing to do for a type this
+        /// version doesn't know.
+        ///
+        /// # Safety
+        /// As validate_as()'s.
+        unsafe fn validate_typed(sb: *mut Head<bch_sb>, f: *mut Head<c::bch_sb_field>,
+                                 flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+            let ty = unsafe { (*f).type_.get() };
+            $(if ty == c::bch_sb_field_type::[<BCH_SB_FIELD_ $name>].0 {
+                return unsafe { validate_as::<$t>(sb, f, flags, err) };
+            })*
+            Ok(())
+        }
+
+        /// Section @f printed as its type - nothing, for a type this version
+        /// doesn't know.
+        fn to_text_typed(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb, f: &c::bch_sb_field) {
+            let ty = f.type_.get();
+            $(if ty == c::bch_sb_field_type::[<BCH_SB_FIELD_ $name>].0 {
+                return to_text_as::<$t>(out, fs, sb, f);
+            })*
+        }
+    } };
+}
+
+sections! {
+    journal                 => c::bch_sb_field_journal,
+    members_v1              => c::bch_sb_field_members_v1,
+    crypt                   => c::bch_sb_field_crypt,
+    replicas_v0             => c::bch_sb_field_replicas_v0,
+    quota                   => c::bch_sb_field_quota,
+    disk_groups             => c::bch_sb_field_disk_groups,
+    clean                   => c::bch_sb_field_clean,
+    replicas                => c::bch_sb_field_replicas,
+    journal_seq_blacklist   => c::bch_sb_field_journal_seq_blacklist,
+    journal_v2              => c::bch_sb_field_journal_v2,
+    counters                => c::bch_sb_field_counters,
+    members_v2              => c::bch_sb_field_members_v2,
+    errors                  => c::bch_sb_field_errors,
+    ext                     => c::bch_sb_field_ext<Validated>,
+    downgrade               => c::bch_sb_field_downgrade,
+    recovery_passes         => c::bch_sb_field_recovery_passes,
+    extent_type_u64s        => c::bch_sb_field_extent_type_u64s,
+    errors_v2               => c::bch_sb_field_errors_v2,
+}
 
 impl c::bch_sb_field_type {
     /// Its name: None for a type this version doesn't know.
@@ -208,11 +228,8 @@ unsafe fn field_validate(sb: *mut Head<bch_sb>, f: *mut Head<c::bch_sb_field>,
     let name = c::bch_sb_field_type(ty).name().unwrap_or("(unknown)");
     let mut field_err = Printbuf::new();
 
-    let ret = match field_ops(ty).and_then(|ops| ops.validate) {
-        // SAFETY: the caller's
-        Some(validate) => ret_to_result_void(unsafe { validate(sb, f, flags, field_err.as_raw()) }),
-        None => Ok(()),
-    };
+    // SAFETY: the caller's
+    let ret = unsafe { validate_typed(sb, f, flags, &mut field_err) };
 
     if ret.is_err() {
         write!(err, "Invalid superblock section {name}: {}", field_err.as_str());
@@ -234,11 +251,7 @@ pub fn field_ops_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb, f: &c
         out.tabstop_push(32);
     }
 
-    if let Some(to_text) = field_ops(f.type_.get()).and_then(|ops| ops.to_text) {
-        let c = fs.map_or(core::ptr::null_mut(), |fs| fs.as_ptr());
-        // SAFETY: a section of @sb, both borrowed for the call
-        unsafe { to_text(out.as_raw(), c, sb.as_ffi() as *mut _, f.as_ffi() as *mut _) }
-    }
+    to_text_typed(out, fs, sb, f);
 }
 
 /// Section @f: its type, its size, and what it holds.
@@ -1367,7 +1380,7 @@ impl SbAccess for SbBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{sb_field_u64s, sb_field_validate, SbField};
+    use super::{sb_field_u64s, validate_as, SbField};
     use crate::c;
     use crate::types::Le32;
     use crate::util::vstructs::{Head, Unvalidated, Validated, VStruct, VStructError};
@@ -1413,15 +1426,16 @@ mod tests {
             let mut buf = [0u64; 16];
             field(&mut buf, ty, u64s);
             let (sb, f) = (sb.as_mut_ptr().cast(), buf.as_mut_ptr().cast());
-            let ops = super::sb_field_ops::<F>();
 
             let mut err = Printbuf::new();
             let flags = c::bch_validate_flags::from_bits_retain(0);
-            let ret = unsafe { ops.validate.unwrap()(sb, f, flags, err.as_raw()) };
-            assert_eq!(ret, -(c::bch_errcode::BCH_ERR_invalid_sb_field_size.0 as i32));
+            let ret = unsafe { validate_as::<F>(sb, f, flags, &mut err) };
+            assert_eq!(crate::errcode::ret_to_c(ret), -(c::bch_errcode::BCH_ERR_invalid_sb_field_size.0 as i32));
 
             let mut out = Printbuf::new();
-            unsafe { ops.to_text.unwrap()(out.as_raw(), core::ptr::null_mut(), sb, f) };
+            // SAFETY: the superblock and section above
+            let (sb, f) = unsafe { (c::bch_sb::<Validated>::from_ffi(sb), c::bch_sb_field::<Validated>::from_ffi(f)) };
+            super::to_text_as::<F>(&mut out, None, sb, f);
             assert_eq!(out.as_str(), "");
             err.as_str().to_owned()
         }
@@ -1542,7 +1556,7 @@ mod tests {
 
         let f = unsafe { crate::sb::io::bch2_sb_field_get_id(sb.sb, E::FIELD_TYPE) };
         let mut err = Printbuf::new();
-        let ret = unsafe { sb_field_validate::<E>(sb.sb, f, flags, err.as_raw()) };
+        let ret = crate::errcode::ret_to_c(unsafe { validate_as::<E>(sb.sb, f, flags, &mut err) });
         (sb, ret, err)
     }
 

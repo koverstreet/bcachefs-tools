@@ -28,7 +28,7 @@ use cstruct_macros::c_export;
 use crate::c;
 use crate::fs::Fs;
 use crate::prt;
-use crate::sb::io::{sb_field_ops, sb_field_u64s, SbFieldOps, COUNTERS};
+use crate::sb::io::{sb_field_u64s, SbFieldOps, COUNTERS};
 use crate::types::Le64;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{nsecs_to_jiffies, NSEC_PER_SEC};
@@ -270,9 +270,6 @@ impl SbFieldOps for c::bch_sb_field_counters {
         }
     }
 }
-
-#[c_export]
-pub static bch_sb_field_ops_counters: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_counters>();
 
 /// The counters into the superblock, for a superblock write - its field
 /// grown to a slot for every stable id if it can be, else as it is.

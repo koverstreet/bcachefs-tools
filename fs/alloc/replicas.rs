@@ -21,7 +21,7 @@ use crate::data::ec::trigger::stripe_block_ptrs;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::opts::prt_data_type;
-use crate::sb::io::{entries_end, sb_field_get, sb_field_ops, SbField, SbFieldOps};
+use crate::sb::io::{entries_end, sb_field_get, SbField, SbFieldOps};
 use crate::sb::members::member_exists;
 use crate::util::ffi::Opaque;
 use crate::util::rcu::read_lock;
@@ -717,12 +717,6 @@ impl SbFieldOps for c::bch_sb_field_replicas_v0 {
     }
 }
 
-#[c_export]
-pub static bch_sb_field_ops_replicas: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_replicas>();
-
-#[c_export]
-pub static bch_sb_field_ops_replicas_v0: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_replicas_v0>();
-
 // ── Marking, refs, gc ────────────────────────────────────────────────────
 
 impl Fs {
@@ -1090,7 +1084,7 @@ mod tests {
             let flags = if write { c::bch_validate_flags::BCH_VALIDATE_write } else { c::bch_validate_flags::empty() };
             let f = unsafe { crate::sb::io::bch2_sb_field_get_id(sb.sb, V0::FIELD_TYPE) };
             let mut err = Printbuf::new();
-            let ret = unsafe { sb_field_ops::<V0>().validate.unwrap()(sb.sb, f, flags, err.as_raw()) };
+            let ret = crate::errcode::ret_to_c(unsafe { crate::sb::io::validate_as::<V0>(sb.sb, f, flags, &mut err) });
             (sb, ret, err)
         };
 

@@ -6,13 +6,11 @@
 
 use core::mem::{offset_of, size_of};
 
-use cstruct_macros::c_export;
-
 use crate::c;
 use crate::fs::Fs;
 use crate::init::passes;
 use crate::sb::errors::prt_error_ids;
-use crate::sb::io::{sb_field_ops, SbFieldOps};
+use crate::sb::io::SbFieldOps;
 use crate::types::Le64;
 use crate::util::bitmap::LeBitmap;
 use crate::util::vstructs::Validated;
@@ -58,9 +56,6 @@ impl SbFieldOps for Section {
     }
 }
 
-#[c_export]
-pub static bch_sb_field_ops_ext: c::bch_sb_field_ops = sb_field_ops::<Section>();
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,7 +63,8 @@ mod tests {
     use crate::types::Le32;
     use crate::util::vstructs::{Head, VStruct};
 
-    /// to_text() of an ext section of @u64s, @buf's first, through its ops.
+    /// An ext section of @u64s, @buf's first, as the superblock's printer
+    /// prints it - by its type.
     fn to_text(buf: &mut [u64], u64s: usize) -> String {
         let mut sb = [0u64; 32];
         let mut out = Printbuf::new();
@@ -78,7 +74,8 @@ mod tests {
         unsafe {
             (*f).set_val_u64s(u64s);
             (*f).type_ = Le32::new(c::bch_sb_field_type::BCH_SB_FIELD_ext.0);
-            bch_sb_field_ops_ext.to_text.unwrap()(out.as_raw(), core::ptr::null_mut(), sb.as_mut_ptr().cast(), f);
+            crate::sb::io::field_ops_to_text(&mut out, None, c::bch_sb::<Validated>::from_ffi(sb.as_mut_ptr().cast()),
+                                             c::bch_sb_field::<Validated>::from_ffi(f));
         }
         out.as_str().to_owned()
     }

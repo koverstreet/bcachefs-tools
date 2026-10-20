@@ -17,11 +17,10 @@
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
-use crate::sb::io::{sb_field_ops, SbFieldOps};
+use crate::sb::io::SbFieldOps;
 use crate::types::Le32;
 use crate::util::Printbuf;
 use core::fmt;
-use cstruct_macros::c_export;
 
 /// ChaCha20's block, in bytes: what a nonce's first word counts.
 pub const CHACHA_BLOCK_SIZE: u32 = 64;
@@ -125,5 +124,3 @@ impl SbFieldOps for c::bch_sb_field_crypt {
     }
 }
 
-#[c_export]
-pub static bch_sb_field_ops_crypt: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_crypt>();

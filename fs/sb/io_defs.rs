@@ -3,18 +3,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::util::vstructs::Head;
 use crate::types::c_default;
-use core::ffi::c_int;
-use cstruct_macros::{c_enum, CStruct, TypeInfo};
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
-pub struct bch_sb_field_ops {
-    pub validate: Option<unsafe extern "C" fn(*mut Head<c::bch_sb>, *mut Head<c::bch_sb_field>,
-                                              c::bch_validate_flags, *mut c::printbuf) -> c_int>,
-    pub to_text: Option<unsafe extern "C" fn(*mut c::printbuf, *mut c::bch_fs, *mut Head<c::bch_sb>, *mut Head<c::bch_sb_field>)>,
-}
+use cstruct_macros::{c_enum, CStruct};
 
 /*
  * bringup: this write is part of bringing the filesystem up - allowed before

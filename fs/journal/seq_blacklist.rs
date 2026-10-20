@@ -40,7 +40,7 @@ use crate::bch_verbose;
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::sb::io::{sb_field_ops, sb_field_u64s, SbFieldOps};
+use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::types::Le64;
 use crate::util::eytzinger::Eytzinger0;
 use crate::util::ffi::Opaque;
@@ -77,9 +77,6 @@ impl SbFieldOps for Section {
         out.newline();
     }
 }
-
-#[c_export]
-pub static bch_sb_field_ops_journal_seq_blacklist: c::bch_sb_field_ops = sb_field_ops::<Section>();
 
 // ── The table, in memory ─────────────────────────────────────────────────────
 //

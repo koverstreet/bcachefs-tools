@@ -13,7 +13,7 @@ use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::prt;
-use crate::sb::io::{sb_field_ops, sb_field_u64s, SbFieldOps};
+use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::sb::members::sb_member;
 use crate::types::Le64;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
@@ -102,12 +102,6 @@ impl SbFieldOps for c::bch_sb_field_journal_v2 {
         prt!(out, "\n");
     }
 }
-
-#[c_export]
-pub static bch_sb_field_ops_journal: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_journal>();
-
-#[c_export]
-pub static bch_sb_field_ops_journal_v2: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_journal_v2>();
 
 /// @ca's journal buckets, in ring order, to its superblock: journal_v2, a
 /// run of contiguous buckets per entry, replacing v1.

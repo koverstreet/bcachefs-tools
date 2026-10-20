@@ -23,7 +23,7 @@ use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::prt;
-use crate::sb::io::{sb_field_ops, sb_field_u64s, SbFieldOps};
+use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::ktime_get_real_seconds;
@@ -248,12 +248,6 @@ impl SbFieldOps for c::bch_sb_field_errors_v2 {
         to_text(out, &f.entries)
     }
 }
-
-#[c_export]
-pub static bch_sb_field_ops_errors: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_errors>();
-
-#[c_export]
-pub static bch_sb_field_ops_errors_v2: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_errors_v2>();
 
 // ── Which error an errcode is counted as ─────────────────────────────────────
 //

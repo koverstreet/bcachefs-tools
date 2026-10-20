@@ -19,7 +19,7 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::init::passes;
 use crate::prt;
 use crate::sb::errors::prt_error_ids;
-use crate::sb::io::{entries_end, sb_field_ops, SbFieldOps};
+use crate::sb::io::{entries_end, SbFieldOps};
 use crate::types::Le64;
 use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
 use crate::util::bitmap::LeBitmap;
@@ -74,9 +74,6 @@ impl SbFieldOps for Section {
         entries_end::<Entry>(b, SECTION_HEAD, |_| true)
     }
 }
-
-#[c_export]
-pub static bch_sb_field_ops_downgrade: c::bch_sb_field_ops = sb_field_ops::<Section>();
 
 // ── The upgrade and downgrade tables ─────────────────────────────────────────
 

@@ -17,7 +17,7 @@ use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
-use crate::sb::io::{sb_field_ops, SbFieldOps};
+use crate::sb::io::SbFieldOps;
 use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use crate::bkey_fsck_err_on;
@@ -40,9 +40,6 @@ impl SbFieldOps for c::bch_sb_field_quota {
         }
     }
 }
-
-#[c_export]
-pub static bch_sb_field_ops_quota: c::bch_sb_field_ops = sb_field_ops::<c::bch_sb_field_quota>();
 
 // ── Keys ─────────────────────────────────────────────────────────────────
 

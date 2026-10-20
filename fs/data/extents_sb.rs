@@ -9,7 +9,7 @@ use crate::c;
 use crate::data::ptrs::{extent_entry_type_name, extent_entry_type_u64s};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::sb::io::{sb_field_ops, SbFieldOps};
+use crate::sb::io::SbFieldOps;
 use crate::util::ffi::Opaque;
 use crate::util::vstructs::Head;
 use crate::util::Printbuf;
@@ -94,10 +94,6 @@ impl SbFieldOps for c::bch_sb_field_extent_type_u64s {
         }
     }
 }
-
-#[c_export]
-pub static bch_sb_field_ops_extent_type_u64s: c::bch_sb_field_ops =
-    sb_field_ops::<c::bch_sb_field_extent_type_u64s>();
 
 #[cfg(test)]
 mod tests {

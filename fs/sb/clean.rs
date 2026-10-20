@@ -20,7 +20,7 @@ use crate::c;
 use crate::errcode::{bch_errcode, err_ptr, ret_to_c, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::journal::entries::{EntryWriter, NoRoom};
-use crate::sb::io::{entries_end, sb_field_ops, SbFieldOps};
+use crate::sb::io::{entries_end, SbFieldOps};
 use crate::types::{Le32, Le64};
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::ffi::Opaque;
@@ -55,9 +55,6 @@ impl SbFieldOps for Section {
         entries_end::<c::jset_entry<Validated>>(b, SECTION_HEAD, |_| true)
     }
 }
-
-#[c_export]
-pub static bch_sb_field_ops_clean: c::bch_sb_field_ops = sb_field_ops::<Section>();
 
 // ── Recovery's: the section read, and checked against the journal ──────────
 
