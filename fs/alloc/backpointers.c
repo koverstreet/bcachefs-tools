@@ -803,6 +803,9 @@ static int bch2_get_btree_in_memory_pos(struct btree_trans *trans,
 			bch2_node_pin(c, b);
 			0;
 		})));
+
+		if (mem_may_pin <= 0)
+			break;
 	}
 
 	return 0;
