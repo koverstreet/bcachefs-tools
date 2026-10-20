@@ -1623,6 +1623,12 @@ void bch2_init_work(struct work_struct *work, work_func_t func)
 	INIT_WORK(work, func);
 }
 
+/* For util/par.rs: set_worker_desc() takes a format */
+void bch2_set_worker_desc(const char *desc)
+{
+	set_worker_desc("%s", desc);
+}
+
 /* capable() is a function in the kernel, a macro (true) in userspace's blkdev.h */
 bool bch2_capable(int cap)
 {

@@ -18,6 +18,7 @@ pub mod locking;
 pub mod log;
 pub mod module_param;
 pub mod os_str;
+pub mod par;
 pub mod percpu;
 pub mod printbuf;
 pub mod rcu;
