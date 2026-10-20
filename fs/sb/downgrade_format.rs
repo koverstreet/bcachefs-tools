@@ -5,12 +5,13 @@
 use crate::cstructs::c;
 use zerocopy::byteorder::little_endian as le;
 use crate::util::vstructs::{vstruct, Head};
-use cstruct_macros::{unsized_vstruct, CStruct, Plain, TypeInfo};
+use cstruct_macros::{counted, unsized_vstruct, CStruct, Plain, TypeInfo};
 
 /*
  * Packed, recovery_passes at offset 2: zerocopy's le:: types, aligned to 1,
  * not Le16/Le64, which Rust would pad for.
  */
+#[counted(nr_errors)]
 #[repr(C, align(2))]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 #[c_packed]
@@ -27,6 +28,6 @@ pub struct bch_sb_field_downgrade_entry {
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_sb_field_downgrade {
     pub field: Head<c::bch_sb_field>,
-    pub entries: [c::bch_sb_field_downgrade_entry; 0],
+    pub entries: [Head<c::bch_sb_field_downgrade_entry>; 0],
 }
 vstruct!(unsized bch_sb_field_downgrade, field.u64s, start = 0);

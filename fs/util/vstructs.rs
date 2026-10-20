@@ -186,6 +186,15 @@ macro_rules! count_le {
 }
 count_le!(Le16, Le32, Le64);
 
+// zerocopy's, aligned to 1: a packed struct's
+macro_rules! count_zerocopy_le {
+    ($($t:ident),*) => { $(impl Count for zerocopy::byteorder::little_endian::$t {
+        fn count(&self) -> usize { self.get() as usize }
+        fn from_count(n: usize) -> Option<Self> { Some(Self::new(n.try_into().ok()?)) }
+    })* };
+}
+count_zerocopy_le!(U16, U32, U64);
+
 /// floored_by_self!(T, ..): each T is whole in every valid value of it - a
 /// header, whose count includes itself - so a View of one derefs to all of
 /// it: a container's, or an entry's.

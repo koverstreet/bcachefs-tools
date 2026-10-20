@@ -1,4 +1,5 @@
 pub mod counters;
+pub mod downgrade;
 pub mod errors;
 pub mod io;
 pub mod members;
