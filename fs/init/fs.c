@@ -746,7 +746,6 @@ static void __bch2_fs_free(struct bch_fs *c)
 
 	enumerated_ref_exit(&c->writes);
 	bch2_fs_disk_groups_exit(c);
-	kfree(c->journal_seq_blacklist_table);
 
 	if (c->promote_wq)
 		destroy_workqueue(c->promote_wq);

@@ -472,21 +472,6 @@ c_const! {
     pub const BCH_LINK_MAX: u32 = c::U32_MAX;
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct journal_seq_blacklist_table_entry {
-    pub start: u64,
-    pub end: u64,
-    pub dirty: bool,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct journal_seq_blacklist_table {
-    pub nr: usize,
-    pub entries: [c::journal_seq_blacklist_table_entry; 0],
-}
-
 c_xmacro! {
     BCH_WRITE_REFS(x) {
         (journal),
@@ -656,7 +641,10 @@ pub struct Fs {
     pub journal_entries_base_seq: u64,
     pub journal_keys: c::journal_keys,
     pub journal_iters: c::list_head,
-    pub journal_seq_blacklist_table: *mut c::journal_seq_blacklist_table,
+    /// The blacklist, in memory: journal/seq_blacklist.rs's alone.
+    #[pin]
+    #[init(RustOnly::new(::pin_init::zeroed::<crate::journal::seq_blacklist::JournalSeqBlacklist>()))]
+    pub(crate) journal_seq_blacklist: rust_only!(crate::journal::seq_blacklist::JournalSeqBlacklist),
 
     pub recovery: c::bch_fs_recovery,
 

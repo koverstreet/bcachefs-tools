@@ -392,7 +392,7 @@ fn journal_replay_print(c_fs: *mut c::bch_fs, f: &JournalFilter, p: &c::journal_
     let mut buf = Printbuf::new();
     let seq = p.j.seq.get();
     let blacklisted = p.ignore_blacklisted
-        || unsafe { c::bch2_journal_seq_is_blacklisted(c_fs, seq, false) };
+        || unsafe { Fs::borrow_raw(c_fs) }.journal_seq_is_blacklisted(seq, false);
     let mut printed_header = false;
 
     if f.datetime_only {
@@ -845,7 +845,7 @@ pub(crate) fn list_journal_run(
 
         if !f.blacklisted
             && (p.ignore_blacklisted
-                || unsafe { c::bch2_journal_seq_is_blacklisted(c_fs, p_seq, false) })
+                || unsafe { Fs::borrow_raw(c_fs) }.journal_seq_is_blacklisted(p_seq, false))
         {
             continue;
         }
