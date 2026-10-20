@@ -254,65 +254,6 @@ const char * const bch2_sb_fields[] = {
 static int bch2_sb_field_validate(struct bch_sb *, struct bch_sb_field *,
 				  enum bch_validate_flags, struct printbuf *);
 
-struct bch_sb_field *bch2_sb_field_get_id(struct bch_sb *sb,
-				      enum bch_sb_field_type type)
-{
-	/* XXX: need locking around superblock to access optional fields */
-
-	vstruct_for_each(sb, f)
-		if (le32_to_cpu(f->type) == type)
-			return f;
-	return NULL;
-}
-
-static struct bch_sb_field *__bch2_sb_field_resize(struct bch_sb_handle *sb,
-						   struct bch_sb_field *f,
-						   unsigned u64s)
-{
-	unsigned old_u64s = f ? le32_to_cpu(f->u64s) : 0;
-	unsigned sb_u64s = le32_to_cpu(sb->sb->u64s) + u64s - old_u64s;
-
-	BUG_ON(__vstruct_bytes(struct bch_sb, sb_u64s) > sb->buffer_size);
-
-	if (!f && !u64s) {
-		/* nothing to do: */
-	} else if (!f) {
-		f = vstruct_last(sb->sb);
-		memset(f, 0, sizeof(u64) * u64s);
-		f->u64s = cpu_to_le32(u64s);
-		f->type = 0;
-	} else {
-		void *src, *dst;
-
-		src = vstruct_end(f);
-
-		if (u64s) {
-			f->u64s = cpu_to_le32(u64s);
-			dst = vstruct_end(f);
-		} else {
-			dst = f;
-		}
-
-		memmove(dst, src, vstruct_end(sb->sb) - src);
-
-		if (dst > src)
-			memset(src, 0, dst - src);
-	}
-
-	sb->sb->u64s = cpu_to_le32(sb_u64s);
-
-	return u64s ? f : NULL;
-}
-
-void bch2_sb_field_delete(struct bch_sb_handle *sb,
-			  enum bch_sb_field_type type)
-{
-	struct bch_sb_field *f = bch2_sb_field_get_id(sb->sb, type);
-
-	if (f)
-		__bch2_sb_field_resize(sb, f, 0);
-}
-
 /* Superblock realloc/free: */
 
 void bch2_free_super(struct bch_sb_handle *sb)
@@ -383,52 +324,6 @@ int bch2_sb_realloc(struct bch_sb_handle *sb, unsigned u64s)
 	sb->buffer_size = new_buffer_size;
 
 	return 0;
-}
-
-struct bch_sb_field *bch2_sb_field_resize_id(struct bch_sb_handle *sb,
-					  enum bch_sb_field_type type,
-					  unsigned u64s)
-{
-	struct bch_sb_field *f = bch2_sb_field_get_id(sb->sb, type);
-	ssize_t old_u64s = f ? le32_to_cpu(f->u64s) : 0;
-	ssize_t d = -old_u64s + u64s;
-
-	if (bch2_sb_realloc(sb, le32_to_cpu(sb->sb->u64s) + d))
-		return NULL;
-
-	if (sb->fs_sb) {
-		struct bch_fs *c = container_of(sb, struct bch_fs, disk_sb);
-
-		lockdep_assert_held(&c->sb_lock.lock);
-
-		/* XXX: we're not checking that offline device have enough space */
-
-		for_each_online_member(c, ca, BCH_DEV_READ_REF_sb_field_resize) {
-			struct bch_sb_handle *dev_sb = &ca->disk_sb;
-
-			if (bch2_sb_realloc(dev_sb, le32_to_cpu(dev_sb->sb->u64s) + d)) {
-				enumerated_ref_put(&ca->io_ref[READ], BCH_DEV_READ_REF_sb_field_resize);
-				return NULL;
-			}
-		}
-	}
-
-	f = bch2_sb_field_get_id(sb->sb, type);
-	f = __bch2_sb_field_resize(sb, f, u64s);
-	if (f)
-		f->type = cpu_to_le32(type);
-	return f;
-}
-
-struct bch_sb_field *bch2_sb_field_get_minsize_id(struct bch_sb_handle *sb,
-						  enum bch_sb_field_type type,
-						  unsigned u64s)
-{
-	struct bch_sb_field *f = bch2_sb_field_get_id(sb->sb, type);
-
-	if (!f || le32_to_cpu(f->u64s) < u64s)
-		f = bch2_sb_field_resize_id(sb, type, u64s);
-	return f;
 }
 
 /* Superblock validate: */

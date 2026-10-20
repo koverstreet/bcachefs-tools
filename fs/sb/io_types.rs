@@ -52,13 +52,6 @@ c_extern! {
     pub fn bch2_set_version_incompat(c: *mut c::bch_fs,
                                      version: c::bcachefs_metadata_version) -> c_int;
     pub fn __bch2_check_set_feature(c: *mut c::bch_fs, feat: c_uint);
-    pub fn bch2_sb_field_get_id(sb: *mut Head<c::bch_sb>,
-                                type_: c::bch_sb_field_type) -> *mut Head<c::bch_sb_field>;
-    pub fn bch2_sb_field_resize_id(sb: *mut c::bch_sb_handle, type_: c::bch_sb_field_type,
-                                   u64s: c_uint) -> *mut Head<c::bch_sb_field>;
-    pub fn bch2_sb_field_get_minsize_id(sb: *mut c::bch_sb_handle, type_: c::bch_sb_field_type,
-                                        u64s: c_uint) -> *mut Head<c::bch_sb_field>;
-    pub fn bch2_sb_field_delete(sb: *mut c::bch_sb_handle, type_: c::bch_sb_field_type);
     pub fn bch2_write_super_replicas(c: *mut c::bch_fs) -> c_int;
     pub static bch2_sb_fields: [*const c_char; 0];
     pub fn bch2_free_super(sb: *mut c::bch_sb_handle);

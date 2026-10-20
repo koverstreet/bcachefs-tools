@@ -1088,7 +1088,7 @@ mod tests {
             bytes_of_mut(f)[SECTION_HEAD + 3..][..2].copy_from_slice(&[BTREE, 20]);
 
             let flags = if write { c::bch_validate_flags::BCH_VALIDATE_write } else { c::bch_validate_flags::empty() };
-            let f = unsafe { c::bch2_sb_field_get_id(sb.sb, V0::FIELD_TYPE) };
+            let f = unsafe { crate::sb::io::bch2_sb_field_get_id(sb.sb, V0::FIELD_TYPE) };
             let mut err = Printbuf::new();
             let ret = unsafe { sb_field_ops::<V0>().validate.unwrap()(sb.sb, f, flags, err.as_raw()) };
             (sb, ret, err)

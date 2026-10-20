@@ -5,8 +5,9 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::sb::members;
 use crate::util::Printbuf;
 use crate::types::{ArmOf, Le32};
-use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, read_past, ArmRef, Head, Plain, SelfSized, Unsized, Validated, ValidatedEntries};
-use core::ffi::c_int;
+use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, read_past, ArmRef, Head, Plain, SelfSized, Unsized, VStruct, Validated, ValidatedEntries};
+use core::ffi::{c_int, c_uint};
+use cstruct_macros::c_export;
 use core::mem::{size_of, size_of_val};
 
 /// A superblock section's type: an arm of tagged_union! bch_sb_field, which
@@ -251,7 +252,7 @@ impl bch_sb_handle {
     }
 
     pub fn field_delete(&mut self, ty: c::bch_sb_field_type) {
-        unsafe { c::bch2_sb_field_delete(self, ty) }
+        bch2_sb_field_delete(self, ty)
     }
 
     /// @u64s 0 for the minimum.
@@ -431,13 +432,35 @@ impl Drop for SbWrite<'_> {
 // Resizing takes &mut bch_sb_handle - it can reallocate the superblock - so
 // no section borrowed from the handle outlives it.
 
+/// The section of type @ty in @sb: the walk trusts the sections' counts, a
+/// validated superblock's.
+fn field_get_id(sb: &bch_sb, ty: c::bch_sb_field_type) -> Option<&c::bch_sb_field<Validated>> {
+    sb.entries().find(|f| f.type_.get() == ty.0)
+}
+
+/// Its length in bytes, header and all - 0 if there's none.
+fn field_bytes(sb: &bch_sb, ty: c::bch_sb_field_type) -> usize {
+    field_get_id(sb, ty).map_or(0, |f| f.as_bytes().len())
+}
+
+/// Where it is, in bytes from the superblock's start.
+fn field_offset(sb: &bch_sb, ty: c::bch_sb_field_type) -> Option<usize> {
+    let base = core::ptr::from_ref(sb).cast::<u8>() as usize;
+    field_get_id(sb, ty).map(|f| core::ptr::from_ref(f).cast::<u8>() as usize - base)
+}
+
+/// The section at @off in the superblock at @sb.
+///
+/// # Safety
+/// @sb is validated, @off a section's offset in it: field_offset()'s.
+unsafe fn field_at(sb: *mut Head<bch_sb>, off: usize) -> *mut Head<c::bch_sb_field> {
+    unsafe { sb.byte_add(off).cast() }
+}
+
 /// The superblock's section of type @F, if it has one, over the bytes its
 /// header says are its - one written before F grew reads as zero past them.
 pub fn sb_field_get<F: SbField + ?Sized>(sb: &c::bch_sb) -> Option<&F> {
-    let f = unsafe { c::bch2_sb_field_get_id(sb.as_ffi() as *mut _, F::FIELD_TYPE) };
-    // SAFETY: C's walk of the sections the superblock's count says it has -
-    // validated, so the section and its bytes are there
-    (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi(f) })?.arm::<F>()
+    field_get_id(sb, F::FIELD_TYPE)?.arm::<F>()
 }
 
 /// To edit: a field past the section's end is no write it will carry -
@@ -452,9 +475,151 @@ pub fn sb_field_get_mut<F: SbField + ?Sized>(disk_sb: &mut c::bch_sb_handle) -> 
 /// # Safety
 /// @sb is validated, and nothing else uses it for 'a.
 pub unsafe fn sb_field_get_raw_mut<'a, F: SbField + ?Sized>(sb: *mut Head<bch_sb>) -> Option<&'a mut F> {
-    let f = unsafe { c::bch2_sb_field_get_id(sb, F::FIELD_TYPE) };
+    // SAFETY: the caller's
+    let off = field_offset(unsafe { bch_sb::<Validated>::from_ffi(sb) }, F::FIELD_TYPE)?;
     // SAFETY: as sb_field_get()'s
-    (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
+    unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(field_at(sb, off)) }.arm_mut::<F>()
+}
+
+/// # Safety
+/// @sb's sections' counts are validated.
+#[c_export]
+pub unsafe fn bch2_sb_field_get_id(sb: *mut Head<c::bch_sb>, ty: c::bch_sb_field_type) -> *mut Head<c::bch_sb_field> {
+    // SAFETY: the caller's
+    match field_offset(unsafe { bch_sb::<Validated>::from_ffi(sb) }, ty) {
+        Some(off) => unsafe { field_at(sb, off) },
+        None => core::ptr::null_mut(),
+    }
+}
+
+impl bch_sb_handle {
+    /// The superblock's buffer, all of it: what the superblock can grow into.
+    fn buffer_mut(&mut self) -> &mut [u8] {
+        // SAFETY: the handle's, buffer_size bytes, borrowed with it
+        unsafe { core::slice::from_raw_parts_mut(self.sb.cast(), self.buffer_size) }
+    }
+
+    /// The section at @off - or a new one at the end, None - resized in place
+    /// to @u64s, those after it moved: grown, zeroed; 0, deleted. Its offset,
+    /// if it's still there. The buffer must have room.
+    fn field_resize_at(&mut self, off: Option<usize>, u64s: u32) -> Option<usize> {
+        let new = u64s as usize * size_of::<u64>();
+        let buf = self.buffer_mut();
+        let sb = cast_plain_mut::<Head<bch_sb>>(buf).expect("a superblock's head");
+        let (end, sb_u64s) = (sb.bytes(), sb.u64s());
+
+        let old = off.map_or(0, |off| {
+            cast_plain_mut::<Head<c::bch_sb_field>>(&mut buf[off..]).expect("a section's head").bytes()
+        });
+        let new_end = end + new - old;
+        assert!(new_end <= buf.len(), "superblock resized past its buffer ({new_end} > {})", buf.len());
+
+        let ret = match off {
+            None if u64s == 0 => None,
+            None => {
+                buf[end..new_end].fill(0);
+                cast_plain_mut::<Head<c::bch_sb_field>>(&mut buf[end..]).expect("a section's head")
+                    .set_val_u64s(u64s as usize);
+                Some(end)
+            }
+            Some(off) => {
+                let (src, dst) = (off + old, off + new);
+                buf.copy_within(src..end, if u64s != 0 { dst } else { off });
+                if u64s != 0 {
+                    if dst > src {
+                        buf[src..dst].fill(0);
+                    }
+                    cast_plain_mut::<Head<c::bch_sb_field>>(&mut buf[off..]).expect("a section's head")
+                        .set_val_u64s(u64s as usize);
+                }
+                (u64s != 0).then_some(off)
+            }
+        };
+
+        cast_plain_mut::<Head<bch_sb>>(buf).expect("a superblock's head")
+            .set_val_u64s(sb_u64s + new / size_of::<u64>() - old / size_of::<u64>());
+        ret
+    }
+
+    /// The section of type @ty resized to @u64s - made if there's none - with
+    /// the superblock grown to hold it, and if this is the filesystem's, each
+    /// online device's too: its offset, None if there's no room.
+    fn field_resize_id(&mut self, ty: c::bch_sb_field_type, u64s: u32) -> Option<usize> {
+        let d = u64s as isize - (field_bytes(self.sb(), ty) / size_of::<u64>()) as isize;
+        // each superblock grown by the section's change: a device's is its own size
+        let grow = |sb: &mut bch_sb_handle| sb.sb_realloc((sb.sb().u64s() as isize + d) as u32).ok();
+
+        grow(self)?;
+
+        if self.bits.fs_sb() != 0 {
+            // SAFETY: the filesystem's handle, its disk_sb, under sb_lock -
+            // the filesystem only for its devices, whose handles are theirs
+            let fs = unsafe { Fs::from_disk_sb(self) };
+            fs.disk_sb.assert_held();
+
+            // XXX: we're not checking that offline device have enough space
+            for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_sb_field_resize) {
+                // SAFETY: changed only under sb_lock, which we hold
+                grow(unsafe { &mut *(&raw const ca.disk_sb).cast_mut() })?;
+            }
+        }
+
+        let off = self.field_resize_at(field_offset(self.sb(), ty), u64s)?;
+        // SAFETY: the section just resized
+        unsafe { (*field_at(self.sb, off)).type_ = Le32::new(ty.0) };
+        Some(off)
+    }
+
+    /// The section of type @ty, made or grown to at least @u64s.
+    fn field_get_minsize_id(&mut self, ty: c::bch_sb_field_type, u64s: u32) -> Option<usize> {
+        if field_get_id(self.sb(), ty).is_some_and(|f| f.as_bytes().len() >= u64s as usize * size_of::<u64>()) {
+            return field_offset(self.sb(), ty);
+        }
+        self.field_resize_id(ty, u64s)
+    }
+
+    /// The section's pointer, C's or a typed arm's to make.
+    fn field_ptr(&mut self, off: Option<usize>) -> *mut Head<c::bch_sb_field> {
+        // SAFETY: a section of the handle's superblock
+        off.map_or(core::ptr::null_mut(), |off| unsafe { field_at(self.sb, off) })
+    }
+}
+
+#[c_export]
+pub fn bch2_sb_field_resize_id(sb: &mut c::bch_sb_handle, ty: c::bch_sb_field_type, u64s: c_uint)
+    -> *mut Head<c::bch_sb_field>
+{
+    let off = sb.field_resize_id(ty, u64s);
+    sb.field_ptr(off)
+}
+
+#[c_export]
+pub fn bch2_sb_field_get_minsize_id(sb: &mut c::bch_sb_handle, ty: c::bch_sb_field_type, u64s: c_uint)
+    -> *mut Head<c::bch_sb_field>
+{
+    let off = sb.field_get_minsize_id(ty, u64s);
+    sb.field_ptr(off)
+}
+
+/// The section at @f - NULL for a new one - resized in place, the buffer
+/// already big enough: for C's __copy_super(), which reallocates first.
+///
+/// # Safety
+/// @f is NULL, or a section of @sb's superblock.
+#[c_export]
+pub unsafe fn __bch2_sb_field_resize(sb: &mut c::bch_sb_handle, f: *mut Head<c::bch_sb_field>, u64s: c_uint)
+    -> *mut Head<c::bch_sb_field>
+{
+    let off = (!f.is_null()).then(|| f as usize - sb.sb as usize);
+    let off = sb.field_resize_at(off, u64s);
+    sb.field_ptr(off)
+}
+
+#[c_export]
+pub fn bch2_sb_field_delete(sb: &mut c::bch_sb_handle, ty: c::bch_sb_field_type) {
+    if let Some(off) = field_offset(sb.sb(), ty) {
+        sb.field_resize_at(Some(off), 0);
+    }
 }
 
 /// The u64s section @F is with @nr of its tail's entries: for
@@ -469,9 +634,9 @@ pub fn sb_field_resize<F: SbField + ?Sized>(
     disk_sb: &mut c::bch_sb_handle,
     u64s: u32,
 ) -> Option<&mut F> {
-    let f = unsafe { c::bch2_sb_field_resize_id(disk_sb, F::FIELD_TYPE, u64s) };
-    // SAFETY: C's resize, which reallocates the superblock if it has to
-    (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
+    let off = disk_sb.field_resize_id(F::FIELD_TYPE, u64s)?;
+    // SAFETY: the section just resized, borrowed with the handle
+    unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(field_at(disk_sb.sb, off)) }.arm_mut::<F>()
 }
 
 /// The section of type @F, made or grown to at least @min_u64s.
@@ -479,9 +644,9 @@ pub fn sb_field_get_minsize<F: SbField + ?Sized>(
     disk_sb: &mut c::bch_sb_handle,
     min_u64s: u32,
 ) -> Option<&mut F> {
-    let f = unsafe { c::bch2_sb_field_get_minsize_id(disk_sb, F::FIELD_TYPE, min_u64s) };
+    let off = disk_sb.field_get_minsize_id(F::FIELD_TYPE, min_u64s)?;
     // SAFETY: as sb_field_resize()'s
-    (!f.is_null()).then(|| unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(f) })?.arm_mut::<F>()
+    unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(field_at(disk_sb.sb, off)) }.arm_mut::<F>()
 }
 
 // ── Superblocks in byte buffers ──────────────────────────────────────────
@@ -877,7 +1042,7 @@ mod tests {
         sb.field_resize::<E>(sb_field_u64s::<E>(2) + 1);
         assert!(sb.field::<E>().is_none());
 
-        let f = unsafe { c::bch2_sb_field_get_id(sb.sb, E::FIELD_TYPE) };
+        let f = unsafe { crate::sb::io::bch2_sb_field_get_id(sb.sb, E::FIELD_TYPE) };
         let mut err = Printbuf::new();
         let ret = unsafe { sb_field_validate::<E>(sb.sb, f, flags, err.as_raw()) };
         (sb, ret, err)

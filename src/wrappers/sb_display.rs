@@ -84,7 +84,7 @@ pub unsafe fn sb_to_text_with_names(
     let sb_ptr = sb.as_ffi() as *mut Head<c::bch_sb>;
 
     if field_only >= 0 {
-        let f = c::bch2_sb_field_get_id(sb_ptr, c::bch_sb_field_type(field_only as u32));
+        let f = sb::io::bch2_sb_field_get_id(sb_ptr, c::bch_sb_field_type(field_only as u32));
         if !f.is_null() {
             c::__bch2_sb_field_to_text(out.as_raw(), fs, sb_ptr, f);
         }
