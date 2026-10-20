@@ -19,8 +19,9 @@ c_extern! {
     pub fn bch2_btree_node_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, b: *const c::btree);
     pub fn bch2_btree_cache_to_text(out: *mut c::printbuf, bc: *const c::bch_fs_btree_cache);
     pub fn bch2_btree_cache_unpin(c: *mut c::bch_fs);
-    pub fn bch2_btree_cache_pin_range(trans: *mut c::btree_trans, btree: c::btree_id,
-                                      start: c::bpos, end: c::bpos) -> core::ffi::c_int;
+    pub fn bch2_btree_cache_pin(trans: *mut c::btree_trans, leaf_mask: u64, interior_mask: u64,
+                                start: c::bbpos, end: c::bbpos, pinned_end: *mut c::bbpos)
+                                -> core::ffi::c_int;
     pub static bch2_btree_node_flags: [*const c_char; 0];
 }
 

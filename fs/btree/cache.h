@@ -33,8 +33,8 @@ static inline u64 bch2_btree_cache_pin_budget(struct bch_fs *c)
 
 void bch2_node_pin(struct bch_fs *, struct btree *);
 void bch2_btree_cache_unpin(struct bch_fs *);
-int bch2_btree_cache_pin_range(struct btree_trans *, enum btree_id,
-			       struct bpos, struct bpos);
+int bch2_btree_cache_pin(struct btree_trans *, u64, u64,
+			 struct bbpos, struct bbpos, struct bbpos *);
 
 void bch2_btree_node_set_dirty(struct bch_fs *, struct btree *);
 void bch2_btree_node_write_done_clean(struct bch_fs *, struct btree *);

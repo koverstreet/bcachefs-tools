@@ -358,17 +358,22 @@ void bch2_btree_cache_unpin(struct bch_fs *c)
 }
 
 /*
- * Prefetch and pin one keyspace range of one btree: replaces any previously
- * pinned range (there is only one), walks [start, end] with prefetch so the
- * nodes are faulted in with async parallel reads rather than synchronous
- * misses, and marks them shrinker-exempt.
+ * Prefetch and pin [start, end]: the btrees of @interior_mask down to their
+ * interior nodes, and of @leaf_mask down to their leaves. Replaces any
+ * previously pinned window (there is only one), walks it with prefetch so
+ * the nodes are faulted in with async parallel reads rather than synchronous
+ * misses, and marks them shrinker-exempt - and nodes read into the cache
+ * inside the window later are pinned as they come in.
  *
- * Best-effort: pinning stops at bch2_btree_cache_pin_budget(). Lookups beyond
- * the pinned portion still work, they're just slow paths. Callers must
- * bch2_btree_cache_unpin() when done.
+ * Best-effort: pinning stops at bch2_btree_cache_pin_budget(), and the window
+ * ends there; @pinned_end is where - @end if it all fit. Lookups beyond it
+ * still work, they're just slow paths. Callers must bch2_btree_cache_unpin()
+ * when done.
  */
-int bch2_btree_cache_pin_range(struct btree_trans *trans, enum btree_id btree,
-			       struct bpos start, struct bpos end)
+int bch2_btree_cache_pin(struct btree_trans *trans,
+			 u64 leaf_mask, u64 interior_mask,
+			 struct bbpos start, struct bbpos end,
+			 struct bbpos *pinned_end)
 {
 	struct bch_fs *c = trans->c;
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
@@ -376,34 +381,40 @@ int bch2_btree_cache_pin_range(struct btree_trans *trans, enum btree_id btree,
 
 	bch2_btree_cache_unpin(c);
 
-	bc->pinned_nodes_mask[0]	= BIT_ULL(btree);
-	bc->pinned_nodes_mask[1]	= BIT_ULL(btree);
-	bc->pinned_nodes_start		= BBPOS(btree, start);
-	bc->pinned_nodes_end		= BBPOS(btree, end);
+	interior_mask |= leaf_mask;
 
-	return for_each_btree_node(trans, iter, btree, start, 0,
-				   BTREE_ITER_prefetch, b, ({
-		if (bpos_gt(b->data->min_key, end))
-			break;
-		mem_may_pin -= btree_buf_bytes(b);
-		if (mem_may_pin <= 0) {
-			bc->pinned_nodes_end = BBPOS(btree, b->key.k.p);
+	bc->pinned_nodes_mask[0]	= leaf_mask;
+	bc->pinned_nodes_mask[1]	= interior_mask;
+	bc->pinned_nodes_start		= start;
+	bc->pinned_nodes_end		= *pinned_end = end;
 
-			CLASS(printbuf, buf)();
-			prt_printf(&buf, "memory budget (%u%% of ram) exhausted pinning btree ",
-				   c->opts.fsck_memory_usage_percent);
-			bch2_btree_id_to_text(&buf, btree);
-			prt_str(&buf, " at ");
-			bch2_bpos_to_text(&buf, b->key.k.p);
-			prt_str(&buf, ", requested range end ");
-			bch2_bpos_to_text(&buf, end);
-			prt_str(&buf, "; continuing, lookups past this point will be uncached");
-			bch_warn_ratelimited(c, "%s", buf.buf);
+	for (enum btree_id btree = start.btree; btree <= end.btree; btree++) {
+		if (!(BIT_ULL(btree) & interior_mask))
+			continue;
+
+		unsigned depth = BIT_ULL(btree) & leaf_mask ? 0 : 1;
+		struct bpos btree_end = btree == end.btree ? end.pos : SPOS_MAX;
+
+		try(for_each_btree_node(trans, iter, btree,
+				      btree == start.btree ? start.pos : POS_MIN,
+				      depth, BTREE_ITER_prefetch, b, ({
+			if (bpos_gt(b->data->min_key, btree_end))
+				break;
+			mem_may_pin -= btree_buf_bytes(b);
+			if (mem_may_pin <= 0) {
+				bc->pinned_nodes_end = *pinned_end =
+					BBPOS(btree, b->key.k.p);
+				break;
+			}
+			bch2_node_pin(c, b);
+			0;
+		})));
+
+		if (mem_may_pin <= 0)
 			break;
-		}
-		bch2_node_pin(c, b);
-		0;
-	}));
+	}
+
+	return 0;
 }
 
 /* Cache state transitions — see DOC at top of file. */

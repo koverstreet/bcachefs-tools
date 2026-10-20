@@ -399,8 +399,23 @@ fn pin_backing(trans: &BtreeTrans<'_>, lru: LruId) -> Result<(), BchError> {
             return Ok(());
         }
     };
+    let mask = 1 << btree.0;
+    let end = c::bbpos { btree, pos: end };
+    let mut pinned_end = end;
     // SAFETY: @trans is ours
-    ret_to_result_void(unsafe { c::bch2_btree_cache_pin_range(trans.raw(), btree, start, end) })
+    ret_to_result_void(unsafe {
+        c::bch2_btree_cache_pin(trans.raw(), mask, mask, c::bbpos { btree, pos: start }, end,
+                                &mut pinned_end)
+    })?;
+
+    if pinned_end != end {
+        let fs = trans.fs();
+        crate::bch_warn_ratelimited!(fs,
+            "memory budget ({}% of ram) exhausted pinning btree {btree} at {}, requested range end {}; \
+             continuing, lookups past this point will be uncached",
+            fs.opts.fsck_memory_usage_percent, pinned_end.pos, end.pos);
+    }
+    Ok(())
 }
 
 /// Every lru entry, an lru at a time, its backing keys pinned in the btree
