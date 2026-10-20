@@ -90,11 +90,14 @@ impl SbEntry<'_> {
     }
 }
 
-impl Entry {
-    pub fn to_text(&self, out: &mut Printbuf) {
+impl ToText for Entry {
+    fn to_text(&self, out: &mut Printbuf) {
         SbEntry::from(self).to_text(out)
     }
+}
+crate::display_via_to_text!(Entry);
 
+impl Entry {
     /// Devices, nr_required fewer than them - or 1, a single device's - and
     /// none that @dev_ok says isn't one.
     fn validate(&self, dev_ok: impl Fn(u8) -> bool, err: &mut Printbuf) -> Result<(), BchError> {
@@ -806,9 +809,7 @@ impl Fs {
                 Some(v) if v > 0 => return,
                 Some(0) => {}
                 _ => {
-                    let mut buf = Printbuf::new();
-                    e.to_text(&mut buf);
-                    warn(self, format_args!("refcount error putting {buf}"));
+                    warn(self, format_args!("refcount error putting {e}"));
                     return;
                 }
             }
@@ -936,11 +937,7 @@ pub unsafe fn bch2_replicas_entry_kill(c: &Opaque<c::bch_fs>, e: *const Head<c::
     let mut r = fs.replicas.write();
     match r.find(e) {
         Some(i) => fs.replicas_kill(&mut r, &mut sb, i),
-        None => {
-            let mut buf = Printbuf::new();
-            e.to_text(&mut buf);
-            warn(fs, format_args!("replicas entry not found in sb: {buf}"));
-        }
+        None => warn(fs, format_args!("replicas entry not found in sb: {e}")),
     }
 }
 
@@ -981,10 +978,7 @@ pub fn bch2_can_read_fs_with_devs(c: &Opaque<c::bch_fs>, devs: &c::bch_devs_mask
 pub fn bch2_verify_replicas_refs_clean(c: &Opaque<c::bch_fs>) {
     let fs = Fs::from_c(c);
     for (e, r) in fs.replicas.read().with_refs().filter(|(_, r)| r.load(Ordering::Relaxed) != 0) {
-        let mut buf = Printbuf::new();
-        write!(buf, "ref={} ", r.load(Ordering::Relaxed) as u32);
-        e.to_text(&mut buf);
-        warn(fs, format_args!("replicas entry ref leaked:\n{buf}"));
+        warn(fs, format_args!("replicas entry ref leaked:\nref={} {e}", r.load(Ordering::Relaxed) as u32));
     }
 }
 
