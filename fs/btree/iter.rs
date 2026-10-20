@@ -1956,6 +1956,19 @@ impl<'t> BtreeIter<'t> {
         bkey_arm::<K>(t.fs(), k)
     }
 
+    /// As peek_slot(), for a key to update through this iterator: the
+    /// iterator comes back shared, for as long as the key is used, as
+    /// peek_slot_typed_shared().
+    pub fn peek_slot_shared<'k>(&'k mut self, _t: &'k TransAttempt<'_, 't>)
+        -> Result<(&'k Self, BkeySC<'k>), BchError>
+    {
+        let this: &'k Self = self;
+        // 'k: the key is valid while the iterator is borrowed, within the
+        // attempt - shared, it can't be moved or peeked again
+        let k = unsafe { bkey_s_c_to_result::<'k>(c::bch2_btree_iter_peek_slot(this.raw()))? };
+        Ok((this, k.expect("a slot always has a key")))
+    }
+
     /// As peek_slot_typed(), for a key to update through this iterator: the
     /// iterator comes back shared, for as long as the key is used - as the
     /// for_each loops pass it - so the key can't be moved out from under.

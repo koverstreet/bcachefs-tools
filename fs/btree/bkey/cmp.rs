@@ -122,6 +122,11 @@ pub fn bkey_ge(l: Bpos, r: Bpos) -> bool {
     bkey_le(r, l)
 }
 
+#[inline]
+pub fn bkey_min(l: Bpos, r: Bpos) -> Bpos {
+    if bkey_lt(l, r) { l } else { r }
+}
+
 #[inline(always)]
 pub fn bkey_cmp(l: Bpos, r: Bpos) -> i32 {
     if l.inode != r.inode {
