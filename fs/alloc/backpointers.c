@@ -196,11 +196,11 @@ int bch2_bucket_backpointer_mod_nowritebuffer(struct btree_trans *trans,
 	return bch2_trans_update(trans, &bp_iter, &bp->k_i, 0);
 }
 
-static int bch2_backpointer_del(struct btree_trans *trans, struct bpos pos)
+static int bch2_backpointer_del(struct btree_trans *trans, enum btree_id btree, struct bpos pos)
 {
 	return (!static_branch_unlikely(&bch2_backpointers_no_use_write_buffer)
-		? bch2_btree_delete_at_buffered(trans, BTREE_ID_backpointers, pos)
-		: bch2_btree_delete(trans, BTREE_ID_backpointers, pos, 0)) ?:
+		? bch2_btree_delete_at_buffered(trans, btree, pos)
+		: bch2_btree_delete(trans, btree, pos, 0)) ?:
 		 bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
 }
 
@@ -251,7 +251,7 @@ static int backpointer_target_not_found(struct btree_trans *trans,
 
 	if (ret_fsck_err(trans, backpointer_to_missing_ptr,
 		     "%s", buf.buf)) {
-		try(bch2_backpointer_del(trans, bp.k->p));
+		try(bch2_backpointer_del(trans, backpointer_btree(bp.v), bp.k->p));
 
 		/*
 		 * Normally, on transaction commit from inside a transaction,
@@ -405,7 +405,7 @@ static int bch2_check_backpointer_has_valid_bucket(struct btree_trans *trans, st
 		if (ret_fsck_err(trans, backpointer_to_missing_device,
 			     "backpointer for missing device:\n%s",
 			     (bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
-			try(bch2_backpointer_del(trans, k.k->p));
+			try(bch2_backpointer_del(trans, BTREE_ID_backpointers, k.k->p));
 
 		return 0;
 	}
@@ -420,7 +420,7 @@ static int bch2_check_backpointer_has_valid_bucket(struct btree_trans *trans, st
 			     "backpointer for nonexistent alloc key: %llu:%llu:0\n%s",
 			     alloc_iter.pos.inode, alloc_iter.pos.offset,
 			     (bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
-			try(bch2_backpointer_del(trans, k.k->p));
+			try(bch2_backpointer_del(trans, BTREE_ID_backpointers, k.k->p));
 	}
 
 	return 0;
@@ -909,7 +909,7 @@ static int check_bucket_backpointer_mismatch(struct btree_trans *trans, struct b
 		if (c->sb.version_upgrade_complete < bcachefs_metadata_version_backpointer_bucket_gen &&
 		    (bp.v->bucket_gen != a->generation ||
 		     bp.v->flags)) {
-			try(bch2_backpointer_del(trans, bp_k.k->p));
+			try(bch2_backpointer_del(trans, BTREE_ID_backpointers, bp_k.k->p));
 			nr_deletes++;
 
 			if (nr_deletes > 256)
