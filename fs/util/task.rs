@@ -49,6 +49,7 @@ use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
 use crate::util::alloc::{kalloc_pinned, kfree_pinned, AllocError};
 use crate::util::gather::{Gather, GatherRef};
+use crate::util::kthread::Kthread;
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
@@ -204,6 +205,8 @@ struct Header {
 struct TaskVTable {
     /// Poll the future once; Ready, the task's complete - and maybe freed.
     poll:    unsafe fn(NonNull<Header>, &mut Context<'_>) -> Poll<()>,
+    /// Drop and free it, never started: Unstarted's Drop.
+    discard: unsafe fn(NonNull<Header>),
     dealloc: unsafe fn(NonNull<Header>),
 }
 
@@ -231,6 +234,7 @@ struct Task<F: Future> {
 impl<F: Future> Task<F> {
     const VTABLE: TaskVTable = TaskVTable {
         poll:    Self::poll,
+        discard: Self::discard,
         dealloc: Self::dealloc,
     };
 
@@ -291,6 +295,24 @@ impl<F: Future> Task<F> {
     }
 
     /// # Safety
+    /// @h is a Task<F>'s, made and never started, and nobody else's.
+    unsafe fn discard(h: NonNull<Header>) {
+        let task = h.cast::<Self>().as_ptr();
+        // SAFETY: the caller's; its thread, if it has one, never woken: stopped,
+        // it exits without touching the task
+        unsafe {
+            let thread = (*task).head.header.thread;
+            if !thread.is_null() {
+                c::bch2_kthread_stop(thread);
+                c::bch2_put_task_struct(thread);
+            }
+            ManuallyDrop::drop(&mut *(*task).future.get());
+            drop((*(*task).head.done_ref.get()).take());
+            kfree_pinned(task);
+        }
+    }
+
+    /// # Safety
     /// @h is a Task<F>'s, and its last ref's gone.
     unsafe fn dealloc(h: NonNull<Header>) {
         // SAFETY: the caller's; kalloc_pinned()'s
@@ -300,14 +322,13 @@ impl<F: Future> Task<F> {
 
 /// Spawn @fut on @wq - first polled there, and resumed there by a wake
 /// that hasn't said where - for its JoinHandle.
-pub fn spawn<F>(wq: &'static Queue, fut: F) -> Result<JoinHandle<F::Output>, AllocError>
+pub fn spawn<F>(wq: &'static Queue, fut: F) -> Result<JoinHandle<F::Output>, BchError>
 where
     F: Future + Send + 'static,
     F::Output: Send,
 {
-    let task = make(core::ptr::from_ref(wq) as usize, fut)?;
-    // SAFETY: just made: ours to dispatch
-    unsafe { Ok(start(task)) }
+    // SAFETY: 'static: it borrows nothing
+    Ok(unsafe { spawn_unstarted(Spawn::Queue(wq), fut) }?.start())
 }
 
 /// Spawn @fut on a kthread of its own, named @name - first polled there,
@@ -318,39 +339,98 @@ where
     F: Future + Send + 'static,
     F::Output: Send,
 {
-    let mut name_buf = Printbuf::new();
-    write!(name_buf, "{name}");
+    // SAFETY: 'static: it borrows nothing
+    Ok(unsafe { spawn_unstarted(Spawn::Thread(name), fut) }?.start())
+}
 
-    // the task first, the thread its data - discarded unstarted if the
-    // thread can't be made
-    let task = make(THREAD, fut)?;
-    // SAFETY: just made; the thread's data, from when it's woken
-    let thread = unsafe {
-        let h = &raw mut (*task).head.header;
-        c::bch2_kthread_create(Some(run_thread), h.cast(), name_buf.as_c_str().as_ptr().cast())
-    };
-    match errptr_to_result(NonNull::new(thread).expect("kthread_create() gives a task or an error")) {
-        // SAFETY: just made, and nobody else has it: the thread's not woken
-        Err(e) => unsafe {
-            discard(task);
-            Err(e)
-        },
-        // SAFETY: a ref on the thread, the task's; and one on the task, the
-        // thread's; both before it can run
-        Ok(thread) => unsafe {
-            c::bch2_get_task_struct(thread.as_ptr());
-            let h = &raw mut (*task).head.header;
-            (*h).thread = thread.as_ptr();
-            (*h).state.fetch_add(REF, Ordering::Relaxed);
-            Ok(start(task))
-        },
+/// Where a spawned task's first polled, and resumed by a wake that hasn't
+/// said where: spawn()'s, or spawn_thread()'s.
+pub enum Spawn<'a> {
+    Queue(&'a Queue),
+    /// A kthread of its own, named.
+    Thread(fmt::Arguments<'a>),
+}
+
+/// A task made, to be started - or, dropped, discarded: its future dropped
+/// unpolled, its thread stopped unwoken.
+pub struct Unstarted<T> {
+    head: NonNull<TaskHead<T>>,
+}
+
+// SAFETY: as JoinHandle's: what it holds is a task, its output a T
+unsafe impl<T: Send> Send for Unstarted<T> {}
+
+impl<T> Unstarted<T> {
+    /// Dispatched, for its JoinHandle.
+    pub fn start(self) -> JoinHandle<T> {
+        let head = ManuallyDrop::new(self).head;
+        // SAFETY: made, not started: ours to dispatch
+        unsafe { dispatch(NonNull::new_unchecked(&raw mut (*head.as_ptr()).header), false) };
+        JoinHandle { head, wait: None, taken: false }
     }
+}
+
+impl<T> Drop for Unstarted<T> {
+    fn drop(&mut self) {
+        // SAFETY: made, not started, and ours alone
+        unsafe {
+            let h = NonNull::new_unchecked(&raw mut (*self.head.as_ptr()).header);
+            (h.as_ref().vtable.discard)(h);
+        }
+    }
+}
+
+/// A task for @fut, made - its thread too, if it's to have one - to be
+/// started.
+///
+/// # Safety
+/// What @fut borrows, and @at's Queue, outlive the task: whoever made it
+/// joins it - or drops it unstarted - before they're gone. spawn() and
+/// spawn_thread() are this for what's 'static.
+pub unsafe fn spawn_unstarted<F>(at: Spawn<'_>, fut: F) -> Result<Unstarted<F::Output>, BchError>
+where
+    F: Future + Send,
+    F::Output: Send,
+{
+    let task = match at {
+        Spawn::Queue(wq) => make(core::ptr::from_ref(wq) as usize, fut)?,
+        Spawn::Thread(name) => {
+            let mut name_buf = Printbuf::new();
+            write!(name_buf, "{name}");
+
+            let task = make(THREAD, fut)?;
+            // SAFETY: just made; the thread's data, from when it's woken - and
+            // if it's stopped unwoken, it doesn't touch it
+            let thread = unsafe {
+                let h = &raw mut (*task).head.header;
+                c::bch2_kthread_create(Some(run_thread), h.cast(), name_buf.as_c_str().as_ptr().cast())
+            };
+            match errptr_to_result(NonNull::new(thread).expect("kthread_create() gives a task or an error")) {
+                // SAFETY: just made, and nobody else has it
+                Err(e) => unsafe {
+                    Task::<F>::discard(NonNull::new_unchecked(&raw mut (*task).head.header));
+                    return Err(e);
+                },
+                // SAFETY: a ref on the thread, the task's; and one on the task,
+                // the thread's; both before it can run
+                Ok(thread) => unsafe {
+                    c::bch2_get_task_struct(thread.as_ptr());
+                    let h = &raw mut (*task).head.header;
+                    (*h).thread = thread.as_ptr();
+                    (*h).state.fetch_add(REF, Ordering::Relaxed);
+                    task
+                },
+            }
+        }
+    };
+    // SAFETY: just made
+    Ok(Unstarted { head: unsafe { NonNull::new_unchecked(&raw mut (*task).head) } })
 }
 
 /// A task made, not yet started: its own ref and its JoinHandle's.
 fn make<F>(spawned: usize, fut: F) -> Result<*mut Task<F>, AllocError>
 where
-    F: Future + Send + 'static,
+    F: Future + Send,
     F::Output: Send,
 {
     let init = pin_init!(Task::<F> {
@@ -389,32 +469,6 @@ where
         c::bch2_init_work(&raw mut (*head).header.work, Some(run_work));
     }
     Ok(task)
-}
-
-/// Dispatch a task make() made, for its JoinHandle.
-///
-/// # Safety
-/// @task is make()'s, and not started.
-unsafe fn start<F: Future>(task: *mut Task<F>) -> JoinHandle<F::Output> {
-    // SAFETY: the caller's
-    unsafe {
-        let head = &raw mut (*task).head;
-        dispatch(NonNull::new_unchecked(&raw mut (*head).header), false);
-        JoinHandle { head: NonNull::new_unchecked(head), wait: None, taken: false }
-    }
-}
-
-/// Drop and free a task make() made, never started: its future unpolled.
-///
-/// # Safety
-/// @task is make()'s, not started, and nobody else has it.
-unsafe fn discard<F: Future>(task: *mut Task<F>) {
-    // SAFETY: the caller's
-    unsafe {
-        ManuallyDrop::drop(&mut *(*task).future.get());
-        drop((*(*task).head.done_ref.get()).take());
-        kfree_pinned(task);
-    }
 }
 
 /* Running a task: */
@@ -472,7 +526,12 @@ unsafe extern "C" fn run_work(work: *mut c::work_struct) {
 /// A task's kthread: runs it when it's dispatched here, till it's done -
 /// wherever that is. Holds a ref on it.
 unsafe extern "C" fn run_thread(data: *mut c_void) -> c_int {
-    // SAFETY: spawn_thread()'s, and our ref keeps it
+    // Discarded, stopped before it was woken: the task's not ours to touch -
+    // in userspace, a stopped kthread runs anyway
+    if Kthread::should_stop() {
+        return 0;
+    }
+    // SAFETY: spawn_unstarted()'s, and our ref keeps it
     let h = unsafe { NonNull::new_unchecked(data.cast::<Header>()) };
     let hr = unsafe { h.as_ref() };
     loop {
@@ -677,11 +736,26 @@ impl<T> JoinHandle<T> {
         unsafe { (*(*self.head.as_ptr()).output.get()).assume_init_read() }
     }
 
-    /// Wait for what it returns, sleeping: for a thread, not a task.
-    pub fn join_sync(mut self) -> T {
+    /// Wait for what it returns, sleeping TASK_IDLE: for a thread, not a
+    /// task.
+    pub fn join_sync(self) -> T {
+        self.join_sync_state(false)
+    }
+
+    /// join_sync(), freezable: for a task that freezes in place, whose
+    /// joiner must too.
+    pub fn join_sync_freezable(self) -> T {
+        self.join_sync_state(true)
+    }
+
+    fn join_sync_state(mut self, freezable: bool) -> T {
         // an await of it begun: its borrow of the wait ended first
         self.wait = None;
-        self.done().wait_sync();
+        if freezable {
+            self.done().wait_sync_freezable();
+        } else {
+            self.done().wait_sync();
+        }
         // SAFETY: waited on
         unsafe { self.take() }
     }
