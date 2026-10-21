@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use crate::util::projections::Publish;
 use core::cell::UnsafeCell;
 use core::ffi::{c_void, CStr};
 use core::marker::{PhantomData, PhantomPinned};
@@ -52,8 +53,10 @@ pub unsafe trait RawRwLock: RawLock {
 
 /// Lock @R, over two things: @G, protected - reached only with it held, its
 /// guard derefs to it - and @P, published: anyone's, the lock derefs to it,
-/// held or not. Laid out as C's members, the lock then G then P, so a struct
-/// C shares can declare it as them: #[c_anon("struct mutex lock; G g")].
+/// held or not; written through the guard's published(), so the lock a
+/// writer holds is the one it's in. Laid out as C's members, the lock then G
+/// then P, so a struct C shares can declare it as them:
+/// #[c_anon("struct mutex lock; G g")].
 #[repr(C)]
 pub struct Lock<R: RawLock, G = (), P = ()> {
     raw:       UnsafeCell<R>,
@@ -161,6 +164,28 @@ impl<'a, R: RawLock, G, P> Guard<'a, R, G, P> {
 impl<R: RawLock, G, P> Guard<'_, R, G, P> {
     pub fn protected(&mut self) -> &mut G {
         self
+    }
+
+    /// Borrows the guard mutably, so writers had through it are one at a time:
+    /// a FakePlaceRef held across another's store is caught, as far as it can
+    /// be.
+    pub fn published(&mut self) -> &P::Writer
+    where
+        P: Publish,
+    {
+        // P::Writer is laid out as P (Publish)
+        unsafe { &*core::ptr::from_ref(&self.lock.published).cast::<P::Writer>() }
+    }
+
+    /// protected() and published() at once: borrowing the guard once for both.
+    pub fn parts(&mut self) -> (&mut G, &P::Writer)
+    where
+        P: Publish,
+    {
+        unsafe {
+            (&mut *self.lock.protected.get(),
+             &*core::ptr::from_ref(&self.lock.published).cast::<P::Writer>())
+        }
     }
 }
 

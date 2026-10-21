@@ -15,7 +15,8 @@
 //! bug, as a slice's.
 
 use crate::util::alloc::{flags, AllocError, KVVec};
-use crate::util::vstructs::{cast_plain_mut, Plain, View};
+use crate::util::projections::View;
+use crate::util::vstructs::{cast_plain_mut, Plain};
 use core::marker::PhantomData;
 
 pub struct Strided<'a, T> {

@@ -104,11 +104,11 @@ pub(crate) fn derive_view(input: TokenStream) -> Result<TokenStream, String> {
         }
         let off = format!("::core::mem::offset_of!({name}, {field})");
         get.push_str(&format!(
-            "pub fn {field}(&self) -> crate::util::vstructs::View<'a, {ty}> {{\n\
+            "pub fn {field}(&self) -> crate::util::projections::View<'a, {ty}> {{\n\
                  self.project({off}, \"{field}\")\n\
              }}\n"));
         get_mut.push_str(&format!(
-            "pub fn {field}(&mut self) -> crate::util::vstructs::ViewMut<'_, {ty}> {{\n\
+            "pub fn {field}(&mut self) -> crate::util::projections::ViewMut<'_, {ty}> {{\n\
                  self.project({off}, \"{field}\")\n\
              }}\n"));
     }
@@ -117,9 +117,9 @@ pub(crate) fn derive_view(input: TokenStream) -> Result<TokenStream, String> {
         .collect();
     Ok(tokens(&format!(
         "#[allow(dead_code)]\n\
-         impl<'a> crate::util::vstructs::View<'a, {name}> {{\n{get}}}\n\
+         impl<'a> crate::util::projections::View<'a, {name}> {{\n{get}}}\n\
          #[allow(dead_code)]\n\
-         impl<'a> crate::util::vstructs::ViewMut<'a, {name}> {{\n{get_mut}}}\n\
+         impl<'a> crate::util::projections::ViewMut<'a, {name}> {{\n{get_mut}}}\n\
          #[allow(unused_macros)]\n\
          macro_rules! __{name}_min {{\n{arms}}}\n\
          #[allow(unused_imports)]\n\
@@ -157,7 +157,7 @@ fn min_arm(name: &str, before: &[CFieldDef], field: &str) -> String {
                  #[allow(non_camel_case_types)]\n\
                  pub struct {min} {{\n{fields}}}\n\
                  {plain}\
-                 unsafe impl crate::util::vstructs::Floored for crate::cstructs::c::{name} {{\n\
+                 unsafe impl crate::util::projections::Floored for crate::cstructs::c::{name} {{\n\
                      type Min = {min};\n\
                  }}\n\
                  const _: () = {{\n\

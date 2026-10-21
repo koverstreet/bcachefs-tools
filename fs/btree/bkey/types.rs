@@ -45,7 +45,8 @@
 
 use crate::btree::iter::{BtreeIter, TransBkey};
 use crate::c;
-use crate::util::vstructs::{ArmRef, Floored, InState, State, Unsized, Unvalidated, UnvalidatedSized, Validated, Whole};
+use crate::util::projections::Floored;
+use crate::util::vstructs::{ArmRef, InState, State, Unsized, Unvalidated, UnvalidatedSized, Validated, Whole};
 use core::marker::PhantomData;
 
 #[repr(C)]

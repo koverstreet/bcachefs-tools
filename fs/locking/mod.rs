@@ -7,9 +7,9 @@
 //! initialized, taken and released, implemented on C's types themselves
 //! (raw.rs), in both builds. Lock<R, G, P> is lock R and the things it
 //! protects: G, reached only with it held - its guard derefs to it - and P,
-//! published: read by anyone, held or not - the lock derefs to it. A plain
-//! mutex over a T is Lock<c::mutex, T>; readers share a RawRwLock's, through
-//! read().
+//! published: read by anyone, held or not - the lock derefs to it - and
+//! written only by its holder. A plain mutex over a T is Lock<c::mutex, T>;
+//! readers share a RawRwLock's, through read().
 //!
 //! Noio<R> (noio.rs) is any lock, held in a PF_MEMALLOC_NOIO scope - itself
 //! a RawLock, C's struct mutex_noio when R is a mutex. A seqmutex

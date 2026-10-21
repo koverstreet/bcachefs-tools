@@ -20,6 +20,7 @@ pub mod os_str;
 pub mod par;
 pub mod percpu;
 pub mod printbuf;
+pub mod projections;
 pub mod rcu;
 pub mod rhashtable;
 pub mod strided;
