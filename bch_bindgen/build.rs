@@ -118,7 +118,6 @@ fn main() {
         .allowlist_function("bch2_opt_strs_free")
         .allowlist_function("bch2_parse_opts")
         .allowlist_function("bch2_passphrase_check")
-        .allowlist_function("bch2_sb_is_encrypted")
         // tools-util and libbcachefs types/functions for Rust command conversions
         .allowlist_type("format_opts")
         .allowlist_type("dev_opts")

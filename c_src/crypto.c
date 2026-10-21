@@ -115,14 +115,6 @@ int derive_passphrase(struct bch_sb_field_crypt *crypt,
 	return 0;
 }
 
-bool bch2_sb_is_encrypted(struct bch_sb *sb)
-{
-	struct bch_sb_field_crypt *crypt;
-
-	return (crypt = bch2_sb_field_get(sb, crypt)) &&
-		bch2_key_is_encrypted(&crypt->key);
-}
-
 bool bch2_passphrase_check(struct bch_sb *sb, const char *passphrase,
 			   struct bch_key *passphrase_key,
 			   struct bch_encrypted_key *sb_key)

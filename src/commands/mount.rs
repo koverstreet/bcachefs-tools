@@ -748,7 +748,7 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
     let devices = device_scan::joined_device_str(&sbs);
 
     let first_sb = &sbs[0].1;
-    let unlocked = if unsafe { bch_bindgen::c::bch2_sb_is_encrypted(first_sb.sb) } {
+    let unlocked = if crate::key::sb_is_encrypted(first_sb) {
         Some(handle_unlock(cli, first_sb)?)
     } else {
         None
