@@ -92,7 +92,7 @@ struct CheckExtents<'f> {
 fn count_inode_sectors(t: &TransAttempt<'_, '_>, inum: u64, snapshot: u32) -> Result<u64, BchError> {
     let mut sectors = 0;
     let mut iter = BtreeIter::new(t, c::btree_id::extents, spos(inum, 0, snapshot),
-                                  BtreeIterFlags::empty());
+                                  BtreeIterFlags::TRIM);
 
     iter.for_each_max_norestart(t, pos(inum, u64::MAX), |_, k| {
         if k.k.extent_is_allocation() {
