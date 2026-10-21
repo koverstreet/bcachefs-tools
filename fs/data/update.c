@@ -236,6 +236,13 @@ static int data_update_index_update_key(struct btree_trans *trans,
 	struct bch_fs *c = trans->c;
 	struct bkey_s_c old = bkey_i_to_s_c(u->k.k);
 
+	/*
+	 * Not BTREE_ITER_trim: @k must be whole. Where @insert ends before @k, the
+	 * rewritten part is a key at a new position, insert->k.p, and descendant
+	 * snapshots' overwrites of @k, at k.k->p, don't hide it there:
+	 * bch2_insert_snapshot_whiteouts() below adds whiteouts for them by
+	 * comparing the two ends - which a trimmed @k would make equal.
+	 */
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(iter));
 
 	/* make a local copy, so that we can trace it after the transaction commit:  */
@@ -428,6 +435,7 @@ static int data_update_index_update_key(struct btree_trans *trans,
 	try(bch2_trans_log_str(trans, bch2_data_update_type_strs[u->opts.type]));
 	try(bch2_trans_log_bkey(trans, u->btree_id, 0, u->k.k));
 
+	/* needs k.k->p, the whole key's end - see the peek above: */
 	try(bch2_insert_snapshot_whiteouts(trans, u->btree_id, k.k->p, insert->k.p));
 
 	/*
