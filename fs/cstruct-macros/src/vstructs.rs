@@ -1099,6 +1099,40 @@ fn generic_type(name: &str, g: &Generic<'_>, doc: &str) -> String {
                          /// from_bytes(), mutably.\n\
                          pub fn from_bytes_mut(bytes: &mut [u8]) -> Result<&mut Self, {VS}::VStructError> {{\n\
                              {VS}::from_bytes_mut::<Self>(bytes)\n\
+                         }}\n\
+                         \n\
+                         /// It, Validated - the unsafe way up: both states are laid out\n\
+                         /// alike, so it's the same bytes, at the same length.\n\
+                         ///\n\
+                         /// # Safety\n\
+                         /// What Validated says of it is true: validate passed.\n\
+                         pub unsafe fn assume_validated(&self) -> &{name}<{VS}::Validated> {{\n\
+                             let p = <{name}<{VS}::Validated> as {VS}::Unsized>::from_raw(\n\
+                                 (self as *const Self).cast(), ::core::mem::size_of_val(self));\n\
+                             // SAFETY: its bytes, as long as they are; the caller's, that\n\
+                             // they're Validated\n\
+                             unsafe {{ &*p }}\n\
+                         }}\n\
+                         \n\
+                         /// assume_validated(), mutably.\n\
+                         ///\n\
+                         /// # Safety\n\
+                         /// As assume_validated()'s.\n\
+                         pub unsafe fn assume_validated_mut(&mut self) -> &mut {name}<{VS}::Validated> {{\n\
+                             let p = <{name}<{VS}::Validated> as {VS}::Unsized>::from_raw_mut(\n\
+                                 (self as *mut Self).cast(), ::core::mem::size_of_val(self));\n\
+                             // SAFETY: as assume_validated()'s\n\
+                             unsafe {{ &mut *p }}\n\
+                         }}\n")
+            } else if *st == "Validated" {
+                format!("/// It, Unvalidated - the safe way down: both states are laid out\n\
+                         /// alike, and an Unvalidated one trusts nothing - for what reads\n\
+                         /// one that may not be valid, a printer.\n\
+                         pub fn as_unvalidated(&self) -> &{name}<{VS}::Unvalidated> {{\n\
+                             let p = <{name}<{VS}::Unvalidated> as {VS}::Unsized>::from_raw(\n\
+                                 (self as *const Self).cast(), ::core::mem::size_of_val(self));\n\
+                             // SAFETY: its bytes, as long as they are\n\
+                             unsafe {{ &*p }}\n\
                          }}\n")
             } else {
                 String::new()
