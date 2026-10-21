@@ -38,8 +38,6 @@ int bch2_extent_fallocate(struct btree_trans *trans,
 	    c->sb.version >= bcachefs_metadata_version_unwritten_extents;
 	int ret;
 
-	struct bkey_buf old __cleanup(bch2_bkey_buf_exit);
-	bch2_bkey_buf_init(&old);
 	struct bkey_buf new __cleanup(bch2_bkey_buf_exit);
 	bch2_bkey_buf_init(&new);
 
@@ -79,8 +77,6 @@ int bch2_extent_fallocate(struct btree_trans *trans,
 			goto err_noprint;
 		}
 	}
-
-	bch2_bkey_buf_reassemble(&old, k);
 
 	unsigned new_buf_u64s;
 	if (!unwritten) {
