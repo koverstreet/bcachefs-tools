@@ -202,11 +202,14 @@ err:
 	return ret;
 }
 
+/* Bit masks, a bit per pointer: */
 struct ptrs_repair {
-	u8	drop;
-	u8	drop_stripe;
-	u8	reset_gen;
+	unsigned	drop;
+	unsigned	drop_stripe;
+	unsigned	reset_gen;
 };
+
+static_assert(BCH_BKEY_PTRS_MAX <= sizeof(unsigned) * BITS_PER_BYTE);
 
 static inline int drop_this_ptr(struct ptrs_repair *r, unsigned ptr_bit)
 {
