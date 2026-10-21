@@ -1286,7 +1286,7 @@ impl Fs {
         let mut buf = Printbuf::new();
         let mut buf = buf.atomic();
 
-        unsafe { crate::util::log::__bch2_log_msg_start(self.name().as_ptr().cast(), buf.as_raw()) };
+        crate::util::log::log_msg_start(&mut buf, self.name());
         write!(buf, "pointer to {} device {dev}\n",
                if self.devs_removed.test(dev as usize) { "removed" } else { "nonexistent" });
         unsafe {

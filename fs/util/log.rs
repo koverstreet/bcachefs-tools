@@ -135,6 +135,11 @@ pub struct LogMsg<'a> {
     msg:   Printbuf,
 }
 
+/// @name's prefix, in-kernel, and the continuation indent.
+pub fn log_msg_start(out: &mut Printbuf, name: &CStr) {
+    unsafe { __bch2_log_msg_start(name.as_ptr().cast(), out.as_raw()) }
+}
+
 impl<'a> LogMsg<'a> {
     /// At err.
     pub fn new(fs: &'a Fs) -> Self {
@@ -143,8 +148,7 @@ impl<'a> LogMsg<'a> {
 
     pub fn with_level(fs: &'a Fs, level: LogLevel) -> Self {
         let mut msg = Printbuf::new();
-        // The fs name prefix, in-kernel, and the continuation indent:
-        unsafe { __bch2_log_msg_start(fs.name().as_ptr().cast(), msg.as_raw()) };
+        log_msg_start(&mut msg, fs.name());
         LogMsg { fs, level, msg }
     }
 
