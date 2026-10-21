@@ -522,7 +522,8 @@ bucket_alloc_scan(struct btree_trans *trans, struct alloc_request *req,
 	 */
 	CLASS(btree_iter, iter)(trans, BTREE_ID_freespace,
 				POS(ca->dev_idx, pos),
-				BTREE_ITER_committed|BTREE_ITER_nopreserve);
+				BTREE_ITER_committed|BTREE_ITER_nopreserve|
+				(forwards ? BTREE_ITER_trim : 0));
 
 	while (1) {
 		if (!forwards && pos < min.offset)
@@ -539,8 +540,9 @@ bucket_alloc_scan(struct btree_trans *trans, struct alloc_request *req,
 		if (!k.k)
 			return NULL;
 
+		/* forwards, trimmed: the free extent starts at @pos at the earliest */
 		u64 cand = forwards
-			? max(pos, bkey_start_offset(k.k))
+			? bkey_start_offset(k.k)
 			: min(pos, k.k->p.offset - 1);
 		u64 bucket = cand & bucket_mask;
 
