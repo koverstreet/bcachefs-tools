@@ -42,7 +42,7 @@ nest! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo)]
 pub struct bch_fs_gc {
     pub pos_lock: c::seqcount_t,
     pub pos: c::gc_pos,
@@ -56,7 +56,7 @@ pub struct bch_fs_gc {
 c_default!(bch_fs_gc);
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo)]
 pub struct bch_fs_gc_gens {
     pub pos: c::bbpos,
     pub work: c::work_struct,

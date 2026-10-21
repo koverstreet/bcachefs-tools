@@ -77,6 +77,8 @@ pub struct SrcuReadGuard<'a> {
 }
 
 pub fn srcu_read_lock(srcu: &c::srcu_struct) -> SrcuReadGuard<'_> {
+    // XXX: c::srcu_struct isn't an Opaque, as C's locks are - written
+    // through a &
     let idx = unsafe { rust_srcu_read_lock(core::ptr::from_ref(srcu).cast_mut()) };
     SrcuReadGuard { srcu, idx }
 }

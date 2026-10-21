@@ -11,7 +11,7 @@ use cstruct_macros::{bitfield, c_enum, c_extern, c_xmacro, CStruct, c_typedef};
 use nestify::nest;
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct ec_dev_stripe_state {
     pub list: c::list_head,
     pub lock: c::mutex,
@@ -139,7 +139,7 @@ nest! {
 c_default!(ec_stripe_new);
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct ec_stripe_head {
     pub list: c::list_head,
     pub lock: c::mutex,

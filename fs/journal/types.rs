@@ -120,7 +120,7 @@ c_enum! {
 }
 
 nest! {
-    #[derive(Clone, Copy, CStruct)]*
+    #[derive(CStruct)]*
     #[repr(C)]*
     pub struct journal_entry_pin_list {
         pub lock: c::spinlock_t,

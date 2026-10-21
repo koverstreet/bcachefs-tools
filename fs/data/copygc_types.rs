@@ -19,7 +19,7 @@ impl Fs {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo)]
 pub struct bch_fs_copygc {
     #[c("struct task_struct __rcu *thread")]
     pub thread: *mut c::task_struct,

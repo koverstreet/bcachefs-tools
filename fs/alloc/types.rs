@@ -53,7 +53,7 @@ c_typedef! {
 
 nest! {
     #[repr(C)]
-    #[derive(Clone, Copy, CStruct)]
+    #[derive(CStruct)]
     pub struct open_bucket {
         pub lock: c::spinlock_t,
         pub pin: c::atomic_t,
@@ -132,7 +132,7 @@ c_enum! {
 }
 
 nest! {
-    #[derive(Clone, Copy, CStruct)]*
+    #[derive(CStruct)]*
     #[repr(C)]*
     pub struct write_point {
         #[c_anon]

@@ -172,6 +172,10 @@ pub mod c {
     // printbuf is its own.
     pub use super::util_printbuf_types::printbuf;
 
+    // C's locks, as the structs C shares hold them: written through shared
+    // references - locking/raw.rs.
+    pub use crate::locking::{mutex, percpu_rw_semaphore, rw_semaphore, spinlock_t};
+
     // C's limits, which the constants use.
     pub const U8_MAX:  u8  = u8::MAX;
     pub const U16_MAX: u16 = u16::MAX;

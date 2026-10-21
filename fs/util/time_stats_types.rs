@@ -71,7 +71,7 @@ c_const! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct bch2_time_stats {
     pub lock: c::spinlock_t,
     pub have_quantiles: bool,
@@ -96,7 +96,7 @@ pub struct bch2_time_stats {
 c_default!(bch2_time_stats);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Default, CStruct)]
 pub struct bch2_time_stats_quantiles {
     pub stats: c::bch2_time_stats,
     pub quantiles: c::quantiles,

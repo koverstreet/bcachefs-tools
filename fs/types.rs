@@ -258,7 +258,7 @@ c_enum! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct bucket_bitmap {
     pub buckets: *mut c_ulong,
     pub nr: u64,

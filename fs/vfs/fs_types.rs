@@ -12,7 +12,7 @@ use cstruct_macros::{c_enum, CStruct, TypeInfo};
 use cstruct_macros::{c_extern, c_typedef};
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo)]
 pub struct bch_inode_info {
     pub v: c::inode,
     pub hash: c::rhash_head,

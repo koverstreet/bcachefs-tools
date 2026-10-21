@@ -32,7 +32,7 @@ pub struct StateLockRead<'a>(&'a Fs);
 
 impl Drop for StateLockRead<'_> {
     fn drop(&mut self) {
-        unsafe { c::up_read(&raw mut (*self.0.as_ptr()).state_lock) };
+        unsafe { c::up_read((&raw mut (*self.0.as_ptr()).state_lock).cast()) };
     }
 }
 
@@ -199,7 +199,7 @@ impl Fs {
 
     /// state_lock for read: devices and capacity don't change under it.
     pub fn state_lock_read(&self) -> StateLockRead<'_> {
-        unsafe { c::down_read(&raw mut (*self.as_ptr()).state_lock) };
+        unsafe { c::down_read((&raw mut (*self.as_ptr()).state_lock).cast()) };
         StateLockRead(self)
     }
 

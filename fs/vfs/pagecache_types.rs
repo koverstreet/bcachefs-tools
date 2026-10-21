@@ -48,7 +48,7 @@ nest! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo)]
 pub struct bch_folio {
     pub lock: c::spinlock_t,
     pub write_count: c::atomic_t,
