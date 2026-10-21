@@ -442,7 +442,8 @@ fn check_btree_alloc(fs: &Fs, trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     let mut iter = BtreeIter::new(trans, c::btree_id::alloc, POS_MIN, BtreeIterFlags::PREFETCH);
     let mut iters = DerivedIters {
         discard:     BtreeIter::new(trans, c::btree_id::need_discard, POS_MIN, BtreeIterFlags::PREFETCH),
-        freespace:   BtreeIter::new(trans, c::btree_id::freespace, POS_MIN, BtreeIterFlags::PREFETCH),
+        freespace:   BtreeIter::new(trans, c::btree_id::freespace, POS_MIN,
+                                    BtreeIterFlags::PREFETCH | BtreeIterFlags::TRIM),
         bucket_gens: BtreeIter::new(trans, c::btree_id::bucket_gens, POS_MIN, BtreeIterFlags::PREFETCH),
     };
 
@@ -572,7 +573,8 @@ fn check_alloc_info(fs: &Fs) -> Result<(), BchError> {
 
     // The freespace btree, every position of its keys:
     {
-        let mut iter = BtreeIter::new(&trans, c::btree_id::freespace, POS_MIN, BtreeIterFlags::PREFETCH);
+        let mut iter = BtreeIter::new(&trans, c::btree_id::freespace, POS_MIN,
+                                      BtreeIterFlags::PREFETCH | BtreeIterFlags::TRIM);
         loop {
             passes::cancelled(fs)?;
 
