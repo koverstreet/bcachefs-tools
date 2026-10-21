@@ -116,6 +116,28 @@ impl Bio {
         opf & ((1 << c::REQ_OP_BITS) - 1)
     }
 
+    /// @len bytes from @buf added to its bvecs: bch2_bio_map(). Panics if
+    /// they don't fit - __bio_add_page() would write past the bvecs.
+    ///
+    /// # Safety
+    /// @buf is the allocators' - in the direct map, or vmalloc - and outlives
+    /// its place in the bvecs; nothing has the bio in flight.
+    unsafe fn map(&self, buf: *mut u8, len: usize) {
+        let len = u32::try_from(len).expect("mapping a buffer of 4G or more into a bio");
+        let bio = self.as_ptr();
+        // SAFETY: the caller's
+        unsafe {
+            #[cfg(kernel)]
+            if c::is_vmalloc_addr(buf.cast()) {
+                assert!(c::bio_add_vmalloc(bio, buf.cast(), len),
+                        "mapping {len} bytes of vmalloc memory: more pages than the bio's bvecs");
+                return;
+            }
+            assert!((*bio).bi_vcnt < (*bio).bi_max_vecs, "mapping {len} bytes: the bio's bvecs are full");
+            c::bio_add_virt_nofail(bio, buf.cast(), len);
+        }
+    }
+
     /// Whether it's a clone: its bvecs are another bio's, bi_vcnt 0.
     pub fn cloned(&self) -> bool {
         // SAFETY: as has_data()'s
@@ -150,7 +172,7 @@ impl ToText for Bio {
 }
 
 /// What allocated a bio, and holds it: it may walk all of the bio's bvecs,
-/// wherever its position is, and submit it.
+/// wherever its position is, and build and submit its IOs.
 ///
 /// # Safety
 /// bio() is the implementor's own, which nothing else has - in flight, or
@@ -177,6 +199,64 @@ pub unsafe trait BioOwner {
     fn submit_wait(&mut self) -> Result<(), BchError> {
         // SAFETY: the owner's bio, held for the IO
         ret_to_result_void(unsafe { c::submit_bio_wait(self.bio().as_ptr()) })
+    }
+
+    /// Emptied for another IO, to @bdev, by @opf: bio_reset(). Its bvecs go
+    /// with the rest.
+    fn reset(&mut self, bdev: *mut c::block_device, opf: u32) {
+        // SAFETY: the owner's bio, not in flight: it's had by &mut
+        unsafe { c::bio_reset(self.bio().as_ptr(), bdev, opf as _) }
+    }
+
+    fn set_sector(&mut self, sector: u64) {
+        // SAFETY: as reset()'s
+        unsafe { (*self.bio().as_ptr()).bi_iter.bi_sector = sector }
+    }
+
+    /// Mapped to @buf, for the read into it. Panics if it's for another op,
+    /// or hasn't the bvecs for @buf.
+    fn map_read<'a>(&'a mut self, buf: &'a mut [u8]) -> Mapped<'a, Self, &'a mut [u8]>
+    where
+        Self: Sized,
+    {
+        assert_eq!(self.bio().op(), c::req_op_REQ_OP_READ, "map_read() of a bio for another op");
+        // SAFETY: @buf's borrowed as long as the mapping is
+        unsafe { self.bio().map(buf.as_mut_ptr(), buf.len()) };
+        Mapped { owner: self, _buf: PhantomData }
+    }
+
+    /// Mapped to @buf, for the write of it. Panics as map_read() does.
+    fn map_write<'a>(&'a mut self, buf: &'a [u8]) -> Mapped<'a, Self, &'a [u8]>
+    where
+        Self: Sized,
+    {
+        assert_eq!(self.bio().op(), c::req_op_REQ_OP_WRITE, "map_write() of a bio for another op");
+        // SAFETY: as map_read()'s; a write only reads it
+        unsafe { self.bio().map(buf.as_ptr().cast_mut(), buf.len()) };
+        Mapped { owner: self, _buf: PhantomData }
+    }
+}
+
+/// An owner's bio mapped to a buffer it borrows, for an IO: B is the borrow -
+/// &mut [u8] for a read, which writes it, & for a write. The bvecs are the
+/// mapping's: dropped, it resets the bio, so none outlives the borrow.
+pub struct Mapped<'a, O: BioOwner, B> {
+    owner: &'a mut O,
+    _buf:  PhantomData<B>,
+}
+
+impl<O: BioOwner, B> Mapped<'_, O, B> {
+    pub fn submit_wait(&mut self) -> Result<(), BchError> {
+        self.owner.submit_wait()
+    }
+}
+
+impl<O: BioOwner, B> Drop for Mapped<'_, O, B> {
+    fn drop(&mut self) {
+        let bio = self.owner.bio().as_ptr();
+        // SAFETY: the owner's, idle - its IO waited on - and the same device
+        // and op
+        unsafe { c::bio_reset(bio, (*bio).bi_bdev, (*bio).bi_opf) }
     }
 }
 

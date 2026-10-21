@@ -334,4 +334,17 @@ mod tests {
         drop(buf);
         assert_eq!((a, b, c_), ([1; 8], [2, 2, 9, 9], [9, 3, 3, 3, 0, 0]));
     }
+
+    /// A mapping's bvecs are its own: dropped, the bio has none, so none
+    /// outlives the buffer's borrow.
+    #[test]
+    fn mapping_ends_with_its_borrow() {
+        let buf = [5u8; 512];
+        let mut bio = BioBuf::<Bio>::new::<BchError, _>(1, core::ptr::null_mut(),
+                                                        c::req_op_REQ_OP_WRITE, |b| b.init()).unwrap();
+        let m = bio.map_write(&buf);
+        assert_eq!(m.owner.range_all().len(), 512);
+        drop(m);
+        assert_eq!(bio.range_all().len(), 0);
+    }
 }
