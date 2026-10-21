@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! C's locks, as RawLocks: struct mutex, rw_semaphore and
-//! percpu_rw_semaphore - in both builds, the shim's pthread-backed ones in
-//! userspace.
+//! C's locks, as RawLocks: struct mutex, spinlock_t (taken irqsave),
+//! rw_semaphore and percpu_rw_semaphore - in both builds, the shim's
+//! pthread-backed ones in userspace.
 //!
 //! What C has as a macro or a static inline in one build or the other -
-//! initializing in a lockdep class, lockdep's asserts - Rust calls through
-//! locking.c's rust_* functions.
+//! initializing in a lockdep class, lockdep's asserts, spin_lock_irqsave() -
+//! Rust calls through locking.c's rust_* functions.
 
 use super::RawLock;
 use super::RawRwLock;
@@ -14,12 +14,17 @@ use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::ffi::c_char;
 use core::convert::Infallible;
-use core::ffi::{c_int, c_void, CStr};
+use core::ffi::{c_int, c_ulong, c_void, CStr};
 use cstruct_macros::c_extern;
 
 c_extern! {
     pub fn rust_mutex_init(lock: *mut c::mutex, name: *const c_char, key: *mut c_void);
     pub fn rust_mutex_assert_held(lock: *mut c::mutex);
+
+    pub fn rust_spin_lock_init(lock: *mut c::spinlock_t, name: *const c_char, key: *mut c_void);
+    pub fn rust_spin_lock_irqsave(lock: *mut c::spinlock_t) -> c_ulong;
+    pub fn rust_spin_unlock_irqrestore(lock: *mut c::spinlock_t, flags: c_ulong);
+    pub fn rust_spin_lock_assert_held(lock: *mut c::spinlock_t);
 
     pub fn rust_init_rwsem(sem: *mut c::rw_semaphore, name: *const c_char, key: *mut c_void);
     pub fn rust_rwsem_assert_held(sem: *mut c::rw_semaphore);
@@ -57,6 +62,34 @@ unsafe impl RawLock for c::mutex {
 
     unsafe fn assert_held(l: *mut Self) {
         unsafe { rust_mutex_assert_held(l) }
+    }
+}
+
+// ── spinlock_t, taken irqsave ────────────────────────────────────────────
+
+// Taken with interrupts off - spin_lock_irqsave() - for what interrupt
+// context takes too, an endio; held, it mustn't sleep. The kernel crate's
+// SpinLock leaves interrupts on. In userspace, where there are no
+// interrupts, it's the shim's spinlock, a pthread mutex.
+unsafe impl RawLock for c::spinlock_t {
+    type GuardState = c_ulong;
+    type InitError = Infallible;
+
+    unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
+        unsafe { rust_spin_lock_init(l, name.as_ptr().cast(), key) };
+        Ok(())
+    }
+
+    unsafe fn lock(l: *mut Self) -> c_ulong {
+        unsafe { rust_spin_lock_irqsave(l) }
+    }
+
+    unsafe fn unlock(l: *mut Self, flags: c_ulong) {
+        unsafe { rust_spin_unlock_irqrestore(l, flags) }
+    }
+
+    unsafe fn assert_held(l: *mut Self) {
+        unsafe { rust_spin_lock_assert_held(l) }
     }
 }
 

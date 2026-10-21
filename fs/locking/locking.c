@@ -2,8 +2,8 @@
 
 /*
  * The C that Rust's locks call (locking/): what C has as a macro - lockdep's
- * classes and asserts, PF_MEMALLOC_NOIO - or as a static inline in one build
- * or the other.
+ * classes and asserts, spin_lock_irqsave(), PF_MEMALLOC_NOIO - or as a static
+ * inline in one build or the other.
  *
  * A lock initialized from Rust has a lockdep class per call site, as C's
  * init macros give theirs: Rust passes its own, @key.
@@ -41,6 +41,39 @@ void rust_mutex_init(struct mutex *lock, const char *name, void *key)
 }
 
 void rust_mutex_assert_held(struct mutex *lock)
+{
+	lockdep_assert_held(lock);
+}
+
+/* raw.rs: spinlock_t, as the kernel's Rust helper initializes it */
+
+void rust_spin_lock_init(spinlock_t *lock, const char *name, void *key)
+{
+#if defined(__KERNEL__) && defined(CONFIG_DEBUG_SPINLOCK)
+# ifdef CONFIG_PREEMPT_RT
+	__spin_lock_init(lock, name, key, false);
+# else
+	__raw_spin_lock_init(spinlock_check(lock), name, key, LD_WAIT_CONFIG);
+# endif
+#else
+	spin_lock_init(lock);
+#endif
+}
+
+unsigned long rust_spin_lock_irqsave(spinlock_t *lock)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(lock, flags);
+	return flags;
+}
+
+void rust_spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
+{
+	spin_unlock_irqrestore(lock, flags);
+}
+
+void rust_spin_lock_assert_held(spinlock_t *lock)
 {
 	lockdep_assert_held(lock);
 }

@@ -14,8 +14,8 @@ use core::ops::{Deref, DerefMut};
 /// released through a *mut, from any thread. Callers pass an initialized
 /// lock, except to init(), and unlock() the state their lock() returned.
 pub unsafe trait RawLock {
-    /// What releasing it needs: the memalloc flags a Noio saved, or
-    /// nothing.
+    /// What releasing it needs: the interrupt state spin_lock_irqsave()
+    /// saved, the memalloc flags a Noio saved, or nothing.
     type GuardState;
     /// init()'s, for a lock that allocates: Infallible otherwise.
     type InitError;
@@ -123,7 +123,8 @@ impl<R: RawLock, G> Drop for Lock<R, G> {
 }
 
 /// A held Lock: released when dropped, if lock() took it. Not Send: released
-/// by the task that took it, as lockdep checks.
+/// by the task that took it, as lockdep checks - and a spin_lock_irqsave()'s
+/// interrupt state is its CPU's.
 #[must_use = "the lock is released as soon as the guard is dropped"]
 pub struct Guard<'a, R: RawLock, G = ()> {
     lock:      &'a Lock<R, G>,
