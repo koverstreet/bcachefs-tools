@@ -899,8 +899,10 @@ const BSET_MAGIC: u64 = 0x90135c78b99e07f5;
 /// What walks its sections - C's walk, which trusts their counts: a
 /// validated superblock's.
 impl c::bch_sb {
+    /// Its section of type @F, if it has one, over the bytes its header says
+    /// are its - one written before F grew reads as zero past them.
     pub fn field<F: SbField + ?Sized>(&self) -> Option<&F> {
-        sb_field_get::<F>(self)
+        field_get_id(self, F::FIELD_TYPE)?.arm::<F>()
     }
 
     /// Its crypt section - whole, or none: validate rejects a shorter one.
@@ -965,19 +967,26 @@ impl bch_sb_handle {
     }
 
     pub fn field<F: SbField + ?Sized>(&self) -> Option<&F> {
-        sb_field_get::<F>(self.sb())
+        self.sb().field()
     }
 
+    /// To edit: a field past the section's end is no write it will carry -
+    /// whole_mut() for all of it, if it's all there.
     pub fn field_mut<F: SbField + ?Sized>(&mut self) -> Option<&mut F> {
-        sb_field_get_mut::<F>(self)
+        // SAFETY: the handle's superblock, borrowed mutably with it
+        unsafe { sb_field_get_raw_mut(self.sb) }
     }
 
+    /// Resized to @u64s, made if there's none: at its (possibly new) place.
     pub fn field_resize<F: SbField + ?Sized>(&mut self, u64s: u32) -> Option<&mut F> {
-        sb_field_resize::<F>(self, u64s)
+        let off = self.field_resize_id(F::FIELD_TYPE, u64s)?;
+        self.arm_mut_at(off)
     }
 
+    /// Made or grown to at least @min_u64s.
     pub fn field_get_minsize<F: SbField + ?Sized>(&mut self, min_u64s: u32) -> Option<&mut F> {
-        sb_field_get_minsize::<F>(self, min_u64s)
+        let off = self.field_get_minsize_id(F::FIELD_TYPE, min_u64s)?;
+        self.arm_mut_at(off)
     }
 
     pub fn field_delete(&mut self, ty: c::bch_sb_field_type) {
@@ -1218,27 +1227,15 @@ unsafe fn field_at(sb: *mut Head<bch_sb>, off: usize) -> *mut Head<c::bch_sb_fie
     unsafe { sb.byte_add(off).cast() }
 }
 
-/// The superblock's section of type @F, if it has one, over the bytes its
-/// header says are its - one written before F grew reads as zero past them.
-pub fn sb_field_get<F: SbField + ?Sized>(sb: &c::bch_sb) -> Option<&F> {
-    field_get_id(sb, F::FIELD_TYPE)?.arm::<F>()
-}
-
-/// To edit: a field past the section's end is no write it will carry -
-/// whole_mut() for all of it, if it's all there.
-pub fn sb_field_get_mut<F: SbField + ?Sized>(disk_sb: &mut c::bch_sb_handle) -> Option<&mut F> {
-    // SAFETY: the handle's superblock, borrowed mutably with it
-    unsafe { sb_field_get_raw_mut(disk_sb.sb) }
-}
-
-/// sb_field_get_mut(), for a superblock C hands Rust without its handle.
+/// bch_sb_handle::field_mut(), for a superblock C hands Rust without its
+/// handle.
 ///
 /// # Safety
 /// @sb is validated, and nothing else uses it for 'a.
 pub unsafe fn sb_field_get_raw_mut<'a, F: SbField + ?Sized>(sb: *mut Head<bch_sb>) -> Option<&'a mut F> {
     // SAFETY: the caller's
     let off = field_offset(unsafe { bch_sb::<Validated>::from_ffi(sb) }, F::FIELD_TYPE)?;
-    // SAFETY: as sb_field_get()'s
+    // SAFETY: a section of it, borrowed as it is
     unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(field_at(sb, off)) }.arm_mut::<F>()
 }
 
@@ -1339,7 +1336,13 @@ impl bch_sb_handle {
         self.field_resize_id(ty, u64s)
     }
 
-    /// The section's pointer, C's or a typed arm's to make.
+    /// The section at @off, as an F: whole_mut() if that's all of F.
+    fn arm_mut_at<F: SbField + ?Sized>(&mut self, off: usize) -> Option<&mut F> {
+        // SAFETY: a section of the handle's superblock, borrowed with it
+        unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(field_at(self.sb, off)) }.arm_mut::<F>()
+    }
+
+    /// The section's pointer, for C.
     fn field_ptr(&mut self, off: Option<usize>) -> *mut Head<c::bch_sb_field> {
         // SAFETY: a section of the handle's superblock
         off.map_or(core::ptr::null_mut(), |off| unsafe { field_at(self.sb, off) })
@@ -1370,30 +1373,9 @@ pub fn bch2_sb_field_delete(sb: &mut c::bch_sb_handle, ty: c::bch_sb_field_type)
 }
 
 /// The u64s section @F is with @nr of its tail's entries: for
-/// sb_field_resize() and sb_field_get_minsize().
+/// field_resize() and field_get_minsize().
 pub fn sb_field_u64s<F: SbField + Unsized + ?Sized>(nr: usize) -> u32 {
     (F::TAIL + nr * size_of::<F::Elem>()).div_ceil(size_of::<u64>()) as u32
-}
-
-/// Resize the section of type @F to @u64s, making it if there's none: the
-/// section, at its (possibly new) location - whole_mut() if that's all of F.
-pub fn sb_field_resize<F: SbField + ?Sized>(
-    disk_sb: &mut c::bch_sb_handle,
-    u64s: u32,
-) -> Option<&mut F> {
-    let off = disk_sb.field_resize_id(F::FIELD_TYPE, u64s)?;
-    // SAFETY: the section just resized, borrowed with the handle
-    unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(field_at(disk_sb.sb, off)) }.arm_mut::<F>()
-}
-
-/// The section of type @F, made or grown to at least @min_u64s.
-pub fn sb_field_get_minsize<F: SbField + ?Sized>(
-    disk_sb: &mut c::bch_sb_handle,
-    min_u64s: u32,
-) -> Option<&mut F> {
-    let off = disk_sb.field_get_minsize_id(F::FIELD_TYPE, min_u64s)?;
-    // SAFETY: as sb_field_resize()'s
-    unsafe { c::bch_sb_field::<Validated>::from_ffi_mut(field_at(disk_sb.sb, off)) }.arm_mut::<F>()
 }
 
 // ── The filesystem's copies ──────────────────────────────────────────────
@@ -1791,7 +1773,7 @@ mod tests {
         assert!(e.whole().is_none());
         assert_eq!((e.as_bytes().len(), size_of_val(e)), (88, 88));
 
-        // and as the one arm sb_field_get() asks for
+        // and as the one arm field() asks for
         let e = f.arm::<c::bch_sb_field_ext<Validated>>().expect("an ext section");
         assert_eq!((e.errors_silent[0].get(), e.btrees_lost_data().get()), (0x5a, 0));
         assert!(f.arm::<c::bch_sb_field_crypt>().is_none());
