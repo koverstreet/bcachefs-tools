@@ -16,7 +16,9 @@
 //! it, and the old buffer is freed with kvfree_rcu() once the readers that
 //! might hold it are gone. RcuArray<T> is an RcuBuf of C's
 //! `{ rcu_head rcu; size_t nr; T s[]; }`, read as a &[T], and grown by copy
-//! and replace.
+//! and replace. Published by a Lock (locking/), it's the lock that
+//! serializes its writers, and its guard's published() an RcuArrayWriter, which
+//! replaces it safely.
 //!
 //! Buffers are kvmalloc()'d and freed through C - a kvfree_rcu()'d buffer
 //! has to come from C's allocator - and freed as bytes: what they hold has no
@@ -31,6 +33,7 @@ use cstruct_macros::c_extern;
 
 use crate::c;
 use crate::util::alloc::AllocError;
+use crate::util::projections::Publish;
 
 #[cfg(not(kernel))]
 unsafe extern "C" {
@@ -193,6 +196,17 @@ impl<T: ?Sized + RcuPointee> RcuBuf<T> {
         if !old.is_null() {
             // SAFETY: its Head starts with an rcu_head; readers still in it
             // are what the grace period waits out
+            unsafe { c::rust_kvfree_rcu(old.cast()) };
+        }
+    }
+
+    /// Publish nothing, and kvfree_rcu() what was: readers may still be in it.
+    ///
+    /// # Safety
+    /// The caller holds the writers' lock.
+    pub unsafe fn clear(&self) {
+        let old = self.p.swap(core::ptr::null_mut(), Ordering::Release);
+        if !old.is_null() {
             unsafe { c::rust_kvfree_rcu(old.cast()) };
         }
     }
@@ -387,5 +401,39 @@ impl<T: RcuElement> RcuArray<T> {
     /// As RcuBuf::free().
     pub unsafe fn free(&self) {
         unsafe { self.0.free() }
+    }
+}
+
+// SAFETY: RcuArrayWriter is an RcuArray; what it writes - a new buffer - is
+// published by rcu_assign_pointer(), the old one freed after a grace period
+unsafe impl<T: RcuElement, H: RcuElement> Publish for RcuArray<T, H> {
+    type Writer = RcuArrayWriter<T, H>;
+}
+
+/// An RcuArray, as the holder of the lock it's published under has it: its
+/// one writer, so replacing it is safe. The writer reads it as any reader
+/// does - with(), read() - in a read-side section: nothing it's handed
+/// outlives one, so a replace can't free what it's reading.
+#[repr(transparent)]
+pub struct RcuArrayWriter<T: RcuElement, H: RcuElement = ()>(RcuArray<T, H>);
+
+impl<T: RcuElement, H: RcuElement> core::ops::Deref for RcuArrayWriter<T, H> {
+    type Target = RcuArray<T, H>;
+
+    fn deref(&self) -> &RcuArray<T, H> {
+        &self.0
+    }
+}
+
+impl<T: RcuElement> RcuArrayWriter<T> {
+    /// Allocates, and may sleep: not under a spinlock.
+    pub fn rebuild(&self, nr: usize, fill: impl FnOnce(&mut [T])) -> Result<(), AllocError> {
+        // SAFETY: we're the writer - a writer is had only through its lock's
+        // guard
+        unsafe { self.0.rebuild(nr, fill) }
+    }
+
+    pub fn clear(&self) {
+        unsafe { self.0 .0.clear() }
     }
 }
