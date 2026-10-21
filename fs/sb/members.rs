@@ -5,7 +5,6 @@ use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::util::kernel::{ktime_get_real_seconds, nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
-use crate::util::percpu::acc_u64s_percpu;
 use crate::util::workqueue::Queue;
 use crate::util::{HumanReadable, Printbuf};
 use crate::util::log::{print_str, LogLevel, LogMsg};
@@ -1507,25 +1506,12 @@ impl c::bch_dev {
         fs.write_super(&mut sb);
     }
 
-    /// The sectors read and written, by data type: every CPU's count summed.
-    pub fn io_done(&self) -> c::io_count {
-        let mut ret = c::io_count::default();
-        let src: *const u64 = self.io_done.cast();
-        for (i, row) in ret.sectors.iter_mut().enumerate() {
-            let at = i * row.len();
-            // SAFETY: ca->io_done is a per-CPU io_count, live as long as the
-            // device; row @i starts @at u64s into it
-            unsafe { acc_u64s_percpu(row, src.add(at)) };
-        }
-        ret
-    }
-
     /// @sectors of IO of @data_type, reading or writing as @rw, counted in
     /// io_done: this_cpu_add(ca->io_done->sectors[rw][data_type], sectors).
     pub fn io_done_add(&self, rw: usize, data_type: c::bch_data_type, sectors: u64) {
         let at = rw * c::BCH_DATA_NR as usize + data_type.0 as usize;
-        // SAFETY: as io_done()'s - a per-CPU address, offset, not dereferenced
-        unsafe { crate::util::percpu::this_cpu_add(self.io_done.cast::<u64>().wrapping_add(at), sectors) };
+        // SAFETY: a per-CPU address, offset within the io_count, not dereferenced
+        unsafe { crate::util::percpu::this_cpu_add(self.io_done.as_ptr().cast::<u64>().wrapping_add(at), sectors) };
     }
 
     /// Its block device's name, model and serial, and whether it's rotational.

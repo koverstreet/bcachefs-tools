@@ -591,7 +591,7 @@ const DEV: &[Attr<c::bch_dev>] = &[
 /// Sectors read and written, by data type, as JSON.
 #[cold]
 fn io_done_to_text(ca: &c::bch_dev, out: &mut Printbuf) {
-    let done = ca.io_done();
+    let done = ca.io_done.sum();
     let nr = c::BCH_DATA_NR as usize;
 
     writeln!(out, "{{");

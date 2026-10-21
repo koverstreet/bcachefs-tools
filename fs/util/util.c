@@ -1346,15 +1346,26 @@ bool bch2_static_branch_unlikely(struct static_key_false *key)
 	return static_key_enabled(&key->key);
 }
 
-/* ...and percpu_u64_get() and _set(), static inlines */
-u64 bch2_percpu_u64_get(u64 *pcp)
-{
-	return percpu_u64_get((u64 __percpu *) (unsigned long) pcp);
-}
-
+/* ...and percpu_u64_set(), a static inline */
 void bch2_percpu_u64_set(u64 *pcp, u64 val)
 {
 	percpu_u64_set((u64 __percpu *) (unsigned long) pcp, val);
+}
+
+/* ...per_cpu_ptr(), and the possible CPUs: the one after @cpu, -1 at the end */
+void *bch2_per_cpu_ptr(void *pcp, unsigned cpu)
+{
+	return per_cpu_ptr((void __percpu *) (unsigned long) pcp, cpu);
+}
+
+int bch2_cpu_possible_next(int cpu)
+{
+#ifdef __KERNEL__
+	cpu = cpumask_next(cpu, cpu_possible_mask);
+	return cpu < nr_cpu_ids ? cpu : -1;
+#else
+	return cpu + 1 < bch_percpu_nr_cpus ? cpu + 1 : -1;
+#endif
 }
 
 /*
@@ -1491,12 +1502,6 @@ unsigned bch2_num_online_cpus(void)
 	return num_online_cpus();
 }
 #endif
-
-/* @src is a const u64 __percpu *: as bch2_this_cpu_add_u64()'s @pcp */
-void bch2_acc_u64s_percpu(u64 *acc, const u64 *src, unsigned nr)
-{
-	acc_u64s_percpu(acc, (const u64 __percpu *) (unsigned long) src, nr);
-}
 
 bool bch2_bdev_rot(struct block_device *bdev)
 {

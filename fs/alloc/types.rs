@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::util::Printbuf;
 use crate::types::{CacheAligned, DArray, c_default};
-use crate::util::percpu::Counters;
+use crate::util::percpu::{Counters, PerCpu};
 use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::{bitfield, c_const, c_enum, c_extern, c_typedef, c_xmacro, CStruct, Fieldwise, TypeInfo};
 use nestify::nest;
@@ -221,7 +221,7 @@ pub struct bch_fs_capacity {
     pub placement_allowance: u64,
 
     #[c("struct bch_fs_capacity_pcpu __percpu *pcpu")]
-    pub pcpu: *mut c::bch_fs_capacity_pcpu,
+    pub pcpu: PerCpu<c::bch_fs_capacity_pcpu>,
 
     pub mark_lock: c::percpu_rwsem_noio,
 }

@@ -1,17 +1,23 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Per-CPU variables: this_cpu_add(), for Rust - the kernel has none of its
-//! own (as of 7.3; a posted series is x86_64 only), so it's ours, the C
-//! macros as they were.
+//! Per-CPU counters: PerCpu<T>, a `T __percpu *` as C's structs hold it,
+//! added to on this CPU and summed over every possible one. The kernel has no
+//! per-CPU operations for Rust (as of 7.3; a posted series is x86_64 only), so
+//! they're ours, the C macros as they were.
 //!
-//! On x86_64 and arm64 it's inline, as C's is: the asm is the kernel's own,
-//! from the headers of the kernel being built against (percpu_asm.rs.S,
+//! A sum is a fold of each CPU's copy, read volatile - no reference into
+//! memory its CPU is writing - by the T's Counters: wrapping, as the deltas
+//! are signed, and sum_nonnegative() clamped, for reads that race the adds.
+//!
+//! The add on x86_64 and arm64 is inline, as C's is: the asm is the kernel's
+//! own, from the headers of the kernel being built against (percpu_asm.rs.S,
 //! preprocessed by Makefile.rust), so what the kernel patches at boot - arm64's
 //! choices of tpidr_el1 or tpidr_el2, and of LL/SC or LSE atomics - comes
 //! from that kernel, never a copy that could fall behind it. x86_64's is one
 //! instruction, %gs-relative. Elsewhere, and in userspace - whose per-CPU
 //! areas are per thread, found through a C thread-local - it's C's
-//! this_cpu_add(), out of line.
+//! this_cpu_add(), out of line; per_cpu_ptr() and the possible CPUs are C's
+//! everywhere.
 //!
 //! arm64's doesn't disable preemption, as C's does: it reads this CPU's
 //! offset, then adds atomically at it, so a task moved between the two adds
@@ -20,14 +26,17 @@
 //! counter summed over every CPU, which is what this is for - not for a
 //! per-CPU variable that only its own CPU may touch.
 
+use core::ffi::{c_int, c_uint, c_void};
+use core::marker::PhantomData;
 use cstruct_macros::c_extern;
 
 // C's this_cpu_add() - out of line, where Rust has no asm of its own - and
-// percpu_u64_get() and _set(), which walk every possible CPU.
+// percpu_u64_set(), per_cpu_ptr() and the possible CPUs.
 c_extern! {
     pub fn bch2_this_cpu_add_u64(pcp: *mut u64, val: u64);
-    pub fn bch2_percpu_u64_get(pcp: *mut u64) -> u64;
     pub fn bch2_percpu_u64_set(pcp: *mut u64, val: u64);
+    pub fn bch2_per_cpu_ptr(pcp: *mut c_void, cpu: c_uint) -> *mut c_void;
+    pub fn bch2_cpu_possible_next(cpu: c_int) -> c_int;
 }
 
 #[cfg(all(kernel, any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -39,7 +48,7 @@ include!(concat!(env!("OUT_DIR"), "/percpu_asm.rs"));
 /// # Safety
 /// @pcp is a per-CPU u64, allocated for every possible CPU and live.
 #[inline(always)]
-pub unsafe fn this_cpu_add(pcp: *mut u64, val: u64) {
+pub(crate) unsafe fn this_cpu_add(pcp: *mut u64, val: u64) {
     #[cfg(all(kernel, target_arch = "x86_64"))]
     // SAFETY: the caller's - @pcp is a per-CPU address, %gs this CPU's base
     unsafe {
@@ -65,29 +74,101 @@ pub unsafe fn this_cpu_add(pcp: *mut u64, val: u64) {
     }
 }
 
-/// Every CPU's @pcp, summed: percpu_u64_get().
-///
-/// # Safety
-/// As this_cpu_add()'s.
-pub unsafe fn percpu_u64_get(pcp: *mut u64) -> u64 {
-    unsafe { bch2_percpu_u64_get(pcp) }
+/// The possible CPUs: for_each_possible_cpu().
+fn possible_cpus() -> impl Iterator<Item = c_uint> {
+    let mut cpu: c_int = -1;
+    core::iter::from_fn(move || {
+        cpu = unsafe { bch2_cpu_possible_next(cpu) };
+        (cpu >= 0).then_some(cpu as c_uint)
+    })
 }
 
-/// @pcp to @val: this CPU's to @val, every other's to 0 - percpu_u64_set().
+/// A per-CPU @T: C's `T __percpu *`, a field of a struct C shares.
 ///
-/// # Safety
-/// As this_cpu_add()'s.
-pub unsafe fn percpu_u64_set(pcp: *mut u64, val: u64) {
-    unsafe { bch2_percpu_u64_set(pcp, val) }
+/// C allocates it at init and frees it at exit; between, it's live for every
+/// possible CPU, which the methods take as given - as C's per-CPU operations
+/// do. Not an address: an offset into each CPU's area. Not Copy: a copy could
+/// outlive the struct, where a PerCpuRef borrows it.
+#[repr(transparent)]
+pub struct PerCpu<T>(*mut T);
+
+// Null: not yet allocated, as C's init finds it.
+unsafe impl<T> ::pin_init::Zeroable for PerCpu<T> {}
+
+/// A PerCpu, or a part of one, for as long as it's borrowed.
+pub struct PerCpuRef<'a, T>(*mut T, PhantomData<&'a PerCpu<T>>);
+
+impl<T> Clone for PerCpuRef<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
-/// Every CPU's @acc.len() u64s at @src, added into @acc: acc_u64s_percpu().
-///
-/// # Safety
-/// @src is a per-CPU array of at least @acc.len() u64s, allocated for every
-/// possible CPU and live.
-pub unsafe fn acc_u64s_percpu(acc: &mut [u64], src: *const u64) {
-    unsafe { crate::c::bch2_acc_u64s_percpu(acc.as_mut_ptr(), src, acc.len() as core::ffi::c_uint) }
+impl<T> Copy for PerCpuRef<'_, T> {}
+
+impl<T> PerCpu<T> {
+    pub fn get(&self) -> PerCpuRef<'_, T> {
+        PerCpuRef(self.0, PhantomData)
+    }
+
+    /// The per-CPU address: for io_done_add(), until fields project.
+    pub(crate) fn as_ptr(&self) -> *mut T {
+        self.0
+    }
+}
+
+impl<T, const N: usize> PerCpu<[T; N]> {
+    /// Element @i of each CPU's array.
+    pub fn at(&self, i: usize) -> PerCpuRef<'_, T> {
+        assert!(i < N);
+        PerCpuRef(self.0.cast::<T>().wrapping_add(i), PhantomData)
+    }
+}
+
+impl<T: Counters> PerCpu<T> {
+    pub fn sum(&self) -> T {
+        self.get().sum()
+    }
+
+    pub fn sum_nonnegative(&self) -> T {
+        self.get().sum_nonnegative()
+    }
+}
+
+impl<T: Counters> PerCpuRef<'_, T> {
+    /// @cpu's copy, read volatile: its CPU may be writing it.
+    fn read(&self, cpu: c_uint) -> T {
+        unsafe { core::ptr::read_volatile(bch2_per_cpu_ptr(self.0.cast(), cpu).cast::<T>()) }
+    }
+
+    /// Every CPU's, summed: exact only with the adders excluded.
+    pub fn sum(&self) -> T {
+        let mut cpus = possible_cpus();
+        let first = cpus.next().expect("CPU 0 is always possible");
+        cpus.fold(self.read(first), |acc, cpu| acc.wrapping_add(self.read(cpu)))
+    }
+
+    /// sum(), each counter clamped at 0: for a read that races the adds.
+    pub fn sum_nonnegative(&self) -> T {
+        self.sum().clamp_nonnegative()
+    }
+}
+
+impl PerCpuRef<'_, u64> {
+    /// Add @v to this CPU's: this_cpu_add().
+    #[inline(always)]
+    pub fn add(&self, v: u64) {
+        unsafe { this_cpu_add(self.0, v) }
+    }
+
+    /// This CPU's to @v, every other's to 0.
+    ///
+    /// # Safety
+    /// An add racing it may or may not count. Whether that's sound is up to
+    /// what the variable is for - or there are no adders yet.
+    pub unsafe fn set(&self, v: u64) {
+        unsafe { bch2_percpu_u64_set(self.0, v) }
+    }
 }
 
 /// Per-CPU counters: a u64, or a struct or array of them, summed over the

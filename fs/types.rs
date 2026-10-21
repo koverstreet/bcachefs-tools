@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::locking::{Lock, LockedBy, MutexNoio, PercpuRwsemNoio};
-use crate::util::percpu::Counters;
+use crate::util::percpu::{Counters, PerCpu};
 use crate::util::vstructs::Head;
 use crate::types::{Atomic64, GenRadix, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::util::ffi::c_char;
@@ -388,7 +388,7 @@ pub struct bch_dev {
     pub bucket_backpointer_empty: c::bucket_bitmap,
 
     #[c("struct bch_dev_usage_full __percpu *usage")]
-    pub usage: *mut c::bch_dev_usage_full,
+    pub usage: PerCpu<c::bch_dev_usage_full>,
 
     /* Allocator: */
     pub alloc_cursor: [u64; 3],
@@ -436,7 +436,7 @@ pub struct bch_dev {
     pub congested_last: u64,
 
     #[c("struct io_count __percpu *io_done")]
-    pub io_done: *mut c::io_count,
+    pub io_done: PerCpu<c::io_count>,
 }
 c_default!(bch_dev);
 

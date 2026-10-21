@@ -10,7 +10,7 @@
 //! (TYPE_SECTORS) - so event_inc() takes the one and event_add() the other,
 //! as C's counter_typecheck() checks.
 //!
-//! Counters are added to with util/percpu.rs's this_cpu_add(). A tracepoint is
+//! Counters are util/percpu.rs's PerCpu, added to on this CPU. A tracepoint is
 //! checked as C's trace_<name>_enabled() is, a static branch on its key -
 //! util/jump_label.rs's static_branch_unlikely!() - so a disabled one costs a NOP; its
 //! message is built only once it's on, out of line, as __event_trace() builds
@@ -34,7 +34,6 @@ use crate::sb::io::{sb_field_u64s, SbFieldOps, COUNTERS};
 use crate::types::Le64;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{nsecs_to_jiffies, NSEC_PER_SEC};
-use crate::util::percpu::{percpu_u64_get, percpu_u64_set, this_cpu_add};
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::sb::io::SbResize;
@@ -148,9 +147,7 @@ impl Fs {
 
     #[inline(always)]
     fn event_count<E: Event>(&self, nr: u64) {
-        // SAFETY: counters.now is per CPU, BCH_COUNTER_NR of them, from
-        // bch2_fs_counters_init() until the filesystem is freed
-        unsafe { this_cpu_add(self.counters.now.wrapping_add(E::IDX), nr) };
+        self.counters.now.at(E::IDX).add(nr);
     }
 
     /// Fire @e's tracepoint, if it's on, with the message @msg writes - its
@@ -199,13 +196,7 @@ const NR_STABLE: usize = c::BCH_COUNTER_STABLE_NR as usize;
 impl c::bch_fs_counters {
     /// Counter @i, every CPU's count summed.
     fn now(&self, i: usize) -> u64 {
-        // SAFETY: now is per CPU, NR of them, for the filesystem's life
-        unsafe { percpu_u64_get(self.now.wrapping_add(i)) }
-    }
-
-    fn set_now(&self, i: usize, v: u64) {
-        // SAFETY: as now()'s
-        unsafe { percpu_u64_set(self.now.wrapping_add(i), v) }
+        self.now.at(i).sum()
     }
 
     /// For mount[] and recent[], which change under shared references.
@@ -252,7 +243,8 @@ impl Fs {
             return;
         }
 
-        self.counters.set_now(idx, 0);
+        // SAFETY: an event counted as it's reset may as well not have been
+        unsafe { self.counters.now.at(idx).set(0) };
         let ctrs = self.counters.raw();
         // SAFETY: see the top of the section
         unsafe {
@@ -279,7 +271,8 @@ impl SbFieldOps for c::bch_sb_field_counters {
         let d: &[Le64] = sb.field::<c::bch_sb_field_counters>().map_or(&[], |f| &f.d);
         for (i, ctr) in COUNTERS.iter().enumerate() {
             if let Some(v) = d.get(ctr.stable_id as usize) {
-                fs.counters.set_now(i, v.get());
+                // SAFETY: an event counted as it's set may as well not have been
+                unsafe { fs.counters.now.at(i).set(v.get()) };
             }
         }
         Ok(())
