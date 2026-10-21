@@ -23,6 +23,8 @@ c_extern! {
                                        d: *mut i64, nr: c_uint) -> c_int;
     pub fn rust_bch2_accounting_mem_read(c: *mut c::bch_fs, p: c::bpos, v: *mut u64, nr: c_uint);
     pub fn bch2_accounting_mem_gc(c: *mut c::bch_fs);
+    pub fn bch2_mod_dev_cached_sectors(trans: *mut c::btree_trans, dev: c_uint, sectors: i64,
+                                       gc: bool) -> c_int;
     pub fn bch2_accounting_mem_has_replicas(c: *mut c::bch_fs,
                                             r: *const crate::util::vstructs::Head<c::bch_replicas_entry_v1>)
         -> bool;

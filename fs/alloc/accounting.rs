@@ -138,3 +138,20 @@ pub fn data_type_is_empty(t: bch_data_type) -> bool {
 pub fn data_type_is_hidden(t: bch_data_type) -> bool {
     t == data_type::sb || t == data_type::journal
 }
+
+/// What a bucket holding @t is: cached and stripe data are in user buckets.
+pub fn bucket_data_type(t: bch_data_type) -> bch_data_type {
+    if t == data_type::cached || t == data_type::stripe { data_type::user } else { t }
+}
+
+/// Whether a bucket of type @bucket can't hold a pointer of type @ptr.
+pub fn bucket_data_type_mismatch(bucket: bch_data_type, ptr: bch_data_type) -> bool {
+    !data_type_is_empty(bucket) &&
+        bucket != data_type::multiple &&
+        bucket_data_type(bucket) != bucket_data_type(ptr)
+}
+
+/// Whether copygc moves data of type @t.
+pub fn data_type_movable(t: bch_data_type) -> bool {
+    c::DATA_TYPES_MOVABLE & (1 << t.0) != 0
+}

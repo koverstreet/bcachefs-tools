@@ -28,9 +28,6 @@ static inline struct bpos u64_to_bucket(u64 bucket)
 
 /* Generation tracking */
 
-/* How out of date a pointer gen is allowed to be: */
-#define BUCKET_GC_GEN_MAX	96U
-
 static inline u8 alloc_gc_gen(struct bch_alloc_v4 a)
 {
 	return a.generation - a.oldest_gen;

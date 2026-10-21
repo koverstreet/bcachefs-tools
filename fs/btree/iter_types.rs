@@ -30,6 +30,7 @@ c_default!(trans_may_drop_updates);
 
 c_extern! {
     pub fn bch2_btree_trans_to_text(out: *mut c::printbuf, trans: *mut c::btree_trans);
+    pub fn bch2_trans_updates_to_text(out: *mut c::printbuf, trans: *mut c::btree_trans);
     #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
     pub fn bch2_trans_kmalloc_trace_to_text(out: *mut c::printbuf,
                                             trace: *mut c::darray_trans_kmalloc_trace);

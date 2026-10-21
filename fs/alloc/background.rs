@@ -9,7 +9,7 @@
 //! must agree exactly - to the C integer types, wrapping and all - or fsck
 //! calls good entries bad.
 
-use crate::accounting::{data_type, data_type_from_u8, data_type_is_empty};
+use crate::accounting::{bucket_data_type, data_type, data_type_from_u8, data_type_is_empty, data_type_movable};
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC};
@@ -109,7 +109,7 @@ impl c::AllocV4 {
     /// alloc_lru_idx_fragmentation().
     pub fn lru_idx_fragmentation(&self, ca: &c::bch_dev) -> u64 {
         if self.data_type >= c::BCH_DATA_NR as u8 ||
-           c::DATA_TYPES_MOVABLE & (1 << self.data_type) == 0 ||
+           !data_type_movable(self.data_type()) ||
            self.sectors_fragmented(ca) == 0 {
             return 0;
         }
@@ -124,6 +124,30 @@ impl c::AllocV4 {
     /// alloc_gc_gen().
     pub fn gc_gen(&self) -> u8 {
         self.generation.wrapping_sub(self.oldest_gen)
+    }
+
+    /// Its type, from what it holds: @t is what's being added to it, or
+    /// need_discard for one just emptied.
+    pub fn alloc_data_type(&self, t: data_type) -> data_type {
+        if self.data_type() == data_type::multiple {
+            data_type::multiple
+        } else if self.stripe_refcount != 0 {
+            if t == data_type::parity { t } else { data_type::stripe }
+        } else if self.sectors_dirty() != 0 {
+            bucket_data_type(t)
+        } else if self.cached_sectors != 0 {
+            data_type::cached
+        } else if t == data_type::need_discard {
+            data_type::need_discard
+        } else if u32::from(self.gc_gen()) >= c::BUCKET_GC_GEN_MAX {
+            data_type::need_gc_gens
+        } else {
+            data_type::free
+        }
+    }
+
+    pub fn set_data_type(&mut self, t: data_type) {
+        self.data_type = self.alloc_data_type(t).0 as u8;
     }
 }
 

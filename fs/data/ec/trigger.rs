@@ -14,7 +14,7 @@
 use crate::btree::bkey::{bkey_eq, bpos_gt, pos, BkeySC, BkeyV, BkeyVMut, POS_MIN};
 use crate::c;
 use crate::data::ptrs::{bkey_ptrs_validate, extent_ptr_to_text};
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::util::ffi::Opaque;
@@ -146,11 +146,44 @@ pub fn ptr_matches_stripe(s: BkeySC<'_, c::Stripe<Validated>>, p: &c::extent_ptr
     }
     let Some(sp) = block_ptr(s.val_bytes(), block) else { return false };
 
+    ptr_in_block(sp, &p.ptr, u64::from(v.sectors.get()))
+}
+
+/// ptr_matches_stripe(), against gc's copy of the stripe.
+pub fn ptr_matches_stripe_m(m: &c::gc_stripe, p: &c::extent_ptr_decoded) -> bool {
+    assert!(p.has_ec, "matching a pointer without a stripe against one");
+
+    // unsigned, as C's
+    let nr_data = u32::from(m.nr_blocks).wrapping_sub(m.nr_redundant.into());
+    let block = u32::from(p.ec.block());
+    block < nr_data && ptr_in_block(&m.ptrs[block as usize], &p.ptr, u64::from(m.sectors))
+}
+
+/// Whether @data_ptr is in the block of @sectors at @stripe_ptr.
+fn ptr_in_block(stripe_ptr: &c::bch_extent_ptr, data_ptr: &c::bch_extent_ptr, sectors: u64) -> bool {
     let invalid = c::BCH_SB_MEMBER_INVALID as u8;
-    (p.ptr.dev() == sp.dev() || p.ptr.dev() == invalid || sp.dev() == invalid) &&
-        p.ptr.generation() == sp.generation() &&
-        p.ptr.offset() >= sp.offset() &&
-        p.ptr.offset() < sp.offset() + u64::from(v.sectors.get())
+    (data_ptr.dev() == stripe_ptr.dev() || data_ptr.dev() == invalid || stripe_ptr.dev() == invalid) &&
+        data_ptr.generation() == stripe_ptr.generation() &&
+        data_ptr.offset() >= stripe_ptr.offset() &&
+        data_ptr.offset() < stripe_ptr.offset() + sectors
+}
+
+/// @sectors added to block @idx's count in stripe @k, wrapping to a u16 as C's.
+pub fn stripe_blockcount_add(k: &mut impl BkeyVMut, idx: u32, sectors: i64) {
+    let at = stripe_header_mut(k).blockcount_offset(idx) as usize;
+    let n = &mut k.val_bytes_mut()[at..at + 2];
+    let v = (i64::from(u16::from_le_bytes([n[0], n[1]])) + sectors) as u16;
+    n.copy_from_slice(&v.to_le_bytes());
+}
+
+impl c::Stripe {
+    /// A checksum type this version doesn't know is an error, not a guess.
+    pub fn csum_type_check(&self, fs: &Fs) -> Result<(), BchError> {
+        if u32::from(self.csum_type) >= c::bch_csum_type::BCH_CSUM_NR.0 {
+            return fs.throw(bch_errcode::BCH_ERR_stripe_unknown_csum_type);
+        }
+        Ok(())
+    }
 }
 
 /// Stripe @k's header, the sized part of its value, to edit in place: the

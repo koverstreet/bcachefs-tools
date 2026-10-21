@@ -134,6 +134,7 @@ c_extern! {
     pub fn bch2_dev_in_fs(fs: *mut Head<c::bch_sb>, fs_bdev: *mut c::block_device,
                           sb: *mut c::bch_sb_handle, opts: *mut c::bch_opts) -> c_int;
     pub fn bch2_dev_add(c: *mut c::bch_fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
+    pub fn bch2_dev_add_initialize(c: *mut c::bch_fs, ca: *mut c::bch_dev) -> c_int;
     pub fn bch2_dev_resize(c: *mut c::bch_fs, ca: *mut c::bch_dev, nbuckets: u64,
                            err: *mut c::printbuf) -> c_int;
     pub static bch2_sb_handle_bdev_ops: c::blk_holder_ops;
