@@ -14,7 +14,10 @@ use std::path::PathBuf;
 use bch_bindgen::c;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::c::bch_sb_handle;
+use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::sb::{self, sb_field_type};
+use bcachefs_kernel::sb::io::SbState;
+use bcachefs_kernel::util::vstructs::Unvalidated;
 
 use crate::device_scan;
 
@@ -60,18 +63,14 @@ fn print_one_member(
 ///
 /// Scans for devices matching the superblock's UUID, then prints
 /// superblock fields and per-member details with device paths and
-/// hardware model names.
-///
-/// # Safety
-/// `fs` must be a valid pointer to a `bch_fs` or null.
-/// `sb` must point to a valid `bch_sb`.
-pub unsafe fn sb_to_text_with_names(
+/// hardware model names - or, with @field_only, that section alone.
+pub fn sb_to_text_with_names(
     out: &mut Printbuf,
-    fs: *mut c::bch_fs,
+    fs: Option<&Fs>,
     sb: &c::bch_sb,
     print_layout: bool,
     fields: u32,
-    field_only: i32,
+    field_only: Option<sb_field_type>,
 ) {
     // Build UUID= device string for scanning
     let uuid = uuid::Uuid::from_bytes(sb.user_uuid.b);
@@ -82,19 +81,16 @@ pub unsafe fn sb_to_text_with_names(
 
     let sb_as_read = sb.as_unvalidated();
 
-    let fs_ref = (!fs.is_null()).then(|| bcachefs_kernel::fs::Fs::borrow_raw(fs));
-
-    if field_only >= 0 {
-        let ty = field_only as u32;
-        if let Some(f) = sb_as_read.entries().map_while(Result::ok).find(|f| f.type_.get() == ty) {
-            sb::io::field_ops_to_text(out, fs_ref, sb_as_read, f);
+    if let Some(ty) = field_only {
+        if let Some(f) = Unvalidated::field(sb_as_read, ty) {
+            sb::io::field_ops_to_text(out, fs, sb_as_read, f);
         }
     } else {
         out.tabstop_push(44);
 
         let member_mask = sb_field_type::members_v1.bit()
             | sb_field_type::members_v2.bit();
-        sb::io::sb_to_text(out, fs_ref, sb_as_read, print_layout, fields & !member_mask);
+        sb::io::sb_to_text(out, fs, sb_as_read, print_layout, fields & !member_mask);
 
         // members_v1
         if (fields & sb_field_type::members_v1.bit()) != 0 {

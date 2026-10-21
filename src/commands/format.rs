@@ -650,7 +650,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         let mut buf = Printbuf::new();
         buf.set_human_readable(true);
         let fields = sb_field_type::members_v2.bit();
-        unsafe { crate::wrappers::sb_display::sb_to_text_with_names(&mut buf, std::ptr::null_mut(), sb.sb(), false, fields, -1) };
+        crate::wrappers::sb_display::sb_to_text_with_names(&mut buf, None, sb.sb(), false, fields, None);
         print!("{}", buf);
     }
     drop(sb);

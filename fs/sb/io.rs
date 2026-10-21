@@ -10,7 +10,7 @@ use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, VStructError, Validated, ValidatedEntries};
 use core::ffi::{c_int, c_uint, CStr};
-use crate::util::ffi::{c_char, Opaque};
+use crate::util::ffi::Opaque;
 use crate::util::kernel::NSEC_PER_SEC;
 use cstruct_macros::c_export;
 use core::mem::{size_of, size_of_val};
@@ -153,15 +153,9 @@ where
 const FIELD_NR: usize = c::bch_sb_field_type::BCH_SB_FIELD_NR.0 as usize;
 
 macro_rules! sb_fields {
-    ($(($name:ident, $nr:literal, $($desc:literal)*)),* $(,)?) => { ::paste::paste! {
+    ($(($name:ident, $nr:literal, $($desc:literal)*)),* $(,)?) => {
         /// By type.
         const FIELD_NAMES: [&str; FIELD_NR] = [$(stringify!($name)),*];
-
-        /// The names, by type, NULL terminated: for C's flag parsing.
-        #[c_export]
-        #[c("const char * const bch2_sb_fields[]")]
-        pub static bch2_sb_fields: [*const c_char; FIELD_NR + 1] =
-            [$(concat!(stringify!($name), "\0").as_ptr().cast(),)* core::ptr::null()];
 
         // by type, as C's table is by position: in order, from 0
         const _: () = {
@@ -169,7 +163,7 @@ macro_rules! sb_fields {
             $(assert!($nr == i, "BCH_SB_FIELDS(): types out of order"); i += 1;)*
             let _ = i;
         };
-    } };
+    };
 }
 c::BCH_SB_FIELDS!(sb_fields);
 
@@ -231,6 +225,11 @@ impl c::bch_sb_field_type {
     /// Its name: None for a type this version doesn't know.
     pub fn name(self) -> Option<&'static str> {
         FIELD_NAMES.get(self.0 as usize).copied()
+    }
+
+    /// The type named @name.
+    pub fn from_name(name: &str) -> Option<Self> {
+        FIELD_NAMES.iter().position(|&n| n == name).map(|t| Self(t as u32))
     }
 }
 

@@ -8,7 +8,6 @@
 // flag selects specific sections (or "all"), -F prints a single field with no
 // header for scripting use (e.g. `bcachefs show-super -F version`).
 
-use std::ffi::CString;
 
 use anyhow::{anyhow, Result};
 use bch_bindgen::fs::FsExt;
@@ -47,34 +46,23 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
 
     let ext_bit = sb_field_type::ext.bit();
     let mut fields = ext_bit;
-    let mut field_only: i32 = -1;
+    let mut field_only = None;
     let mut print_default_fields = true;
 
+    let field_type = |name: &str| sb_field_type::from_name(name)
+        .ok_or_else(|| anyhow!("invalid superblock field: {name}"));
+
     if let Some(ref f) = cli.fields {
-        if f == "all" {
-            fields = !0;
+        fields = if f == "all" {
+            !0
         } else {
-            let c_str = CString::new(f.as_str())?;
-            let v = unsafe {
-                c::bch2_read_flag_list(c_str.as_ptr(), bcachefs_kernel::sb::io::bch2_sb_fields.as_ptr())
-            };
-            if v == u64::MAX {
-                return Err(anyhow!("invalid superblock field: {}", f));
-            }
-            fields = v as u32;
-        }
+            f.split(',').map(field_type).try_fold(0, |m, t| t.map(|t| m | t.bit()))?
+        };
         print_default_fields = false;
     }
 
     if let Some(ref f) = cli.field_only {
-        let c_str = CString::new(f.as_str())?;
-        let v = unsafe {
-            c::match_string(bcachefs_kernel::sb::io::bch2_sb_fields.as_ptr(), usize::MAX, c_str.as_ptr())
-        };
-        if v < 0 {
-            return Err(anyhow!("invalid superblock field: {}", f));
-        }
-        field_only = v as i32;
+        field_only = Some(field_type(f)?);
         print_default_fields = false;
     }
 
@@ -103,7 +91,7 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
 
         let mut buf = Printbuf::new();
         buf.set_human_readable(true);
-        unsafe { crate::wrappers::sb_display::sb_to_text_with_names(&mut buf, fs.as_ptr(), sb, cli.layout, fields, field_only) };
+        crate::wrappers::sb_display::sb_to_text_with_names(&mut buf, Some(&fs), sb, cli.layout, fields, field_only);
         print!("{}", buf);
     }
 
