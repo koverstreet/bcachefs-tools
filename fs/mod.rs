@@ -57,6 +57,7 @@ pub mod alloc {
     pub mod backpointers;
     pub mod buckets;
     pub mod check;
+    pub mod check_backpointers;
     pub mod disk_groups;
     pub mod lru;
     pub mod replicas;

@@ -186,6 +186,7 @@ static inline bool bch2_backpointers_match(struct bch_backpointer l, struct bch_
 
 struct wb_maybe_flush;
 #include "alloc/backpointers_gen.h"
+#include "alloc/check_backpointers_gen.h"
 
 DEFINE_CLASS(backpointer_scan_iter, struct bp_scan_iter,
 	     darray_exit(&_T.bps),
