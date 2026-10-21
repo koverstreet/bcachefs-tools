@@ -355,7 +355,7 @@ static inline u64 bch2_online_reserved(struct bch_fs *c)
 	u64 ret = 0;
 
 	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
-		ret += percpu_u64_get(&c->capacity.pcpu->online_reserved[i]);
+		ret += percpu_u64_get_nonnegative(&c->capacity.pcpu->online_reserved[i]);
 	return ret;
 }
 

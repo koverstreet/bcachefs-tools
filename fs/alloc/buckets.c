@@ -52,13 +52,16 @@ void bch2_dev_usage_read_fast(struct bch_dev *ca, struct bch_dev_usage *usage)
 		for (unsigned i = 0; i < BCH_DATA_NR; i++)
 			usage->buckets[i] += u->d[i].buckets;
 	}
+
+	/* as percpu_u64s_get_nonnegative(): a racing sum can be negative */
+	for (unsigned i = 0; i < BCH_DATA_NR; i++)
+		usage->buckets[i] = max_t(s64, usage->buckets[i], 0);
 }
 
 void bch2_dev_usage_full_read_fast(struct bch_dev *ca, struct bch_dev_usage_full *usage)
 {
-	memset(usage, 0, sizeof(*usage));
-	acc_u64s_percpu((u64 *) usage, (u64 __percpu *) ca->usage,
-			sizeof(struct bch_dev_usage_full) / sizeof(u64));
+	percpu_u64s_get_nonnegative((u64 *) usage, (u64 __percpu *) ca->usage,
+				    sizeof(struct bch_dev_usage_full) / sizeof(u64));
 }
 
 static u64 reserve_factor(u64 r)
@@ -73,9 +76,9 @@ __bch2_fs_usage_read_short(struct bch_fs *c)
 	 * Sum the whole per-cpu struct in a single sweep (one cache line per
 	 * cpu); sectors_available is summed into the throwaway and ignored.
 	 */
-	struct bch_fs_capacity_pcpu b = {};
-	acc_u64s_percpu((u64 *) &b, (u64 __percpu *) c->capacity.pcpu,
-			sizeof(b) / sizeof(u64));
+	struct bch_fs_capacity_pcpu b;
+	percpu_u64s_get_nonnegative((u64 *) &b, (u64 __percpu *) c->capacity.pcpu,
+				    sizeof(b) / sizeof(u64));
 
 	struct bch_fs_usage_short ret;
 	ret.capacity	= c->capacity.capacity - b.usage.hidden;
@@ -95,9 +98,10 @@ __bch2_fs_usage_read_short(struct bch_fs *c)
 
 struct bch_fs_usage_base bch2_fs_usage_base_read(struct bch_fs *c)
 {
-	struct bch_fs_usage_base b = {};
+	struct bch_fs_usage_base b;
 
-	acc_u64s_percpu(&b.hidden, &c->capacity.pcpu->usage.hidden, sizeof(b) / sizeof(u64));
+	percpu_u64s_get_nonnegative(&b.hidden, &c->capacity.pcpu->usage.hidden,
+				    sizeof(b) / sizeof(u64));
 	return b;
 }
 
@@ -1261,9 +1265,9 @@ static void __bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out, u64 *out_now
 	}
 
 	/* reserved but not yet written, so not in the bucket counts */
-	struct bch_fs_capacity_pcpu b = {};
-	acc_u64s_percpu((u64 *) &b, (u64 __percpu *) c->capacity.pcpu,
-			sizeof(b) / sizeof(u64));
+	struct bch_fs_capacity_pcpu b;
+	percpu_u64s_get_nonnegative((u64 *) &b, (u64 __percpu *) c->capacity.pcpu,
+				    sizeof(b) / sizeof(u64));
 
 	dev_free_dist_partition(&eventual, b.online_reserved, b.usage.reserved, out);
 	if (out_now)

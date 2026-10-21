@@ -676,6 +676,25 @@ static inline void acc_u64s_percpu(u64 *acc, const u64 __percpu *src,
 		acc_u64s(acc, per_cpu_ptr(src, cpu), nr);
 }
 
+/*
+ * For counters of signed deltas, added to on any cpu: a sum taken while they
+ * change can be negative, which as a u64 is nearly 2^64.
+ */
+static inline u64 percpu_u64_get_nonnegative(u64 __percpu *src)
+{
+	return max_t(s64, percpu_u64_get(src), 0);
+}
+
+static inline void percpu_u64s_get_nonnegative(u64 *dst, const u64 __percpu *src,
+					       unsigned nr)
+{
+	memset(dst, 0, nr * sizeof(u64));
+	acc_u64s_percpu(dst, src, nr);
+
+	for (unsigned i = 0; i < nr; i++)
+		dst[i] = max_t(s64, dst[i], 0);
+}
+
 static inline void percpu_memset(void __percpu *p, int c, size_t bytes)
 {
 	int cpu;

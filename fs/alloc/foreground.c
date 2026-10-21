@@ -2182,16 +2182,16 @@ __cold void bch2_fs_alloc_debug_to_text(struct printbuf *out, struct bch_fs *c)
 	prt_printf(out, "capacity\t%llu\n",		c->capacity.capacity);
 	prt_printf(out, "used\t%llu\n",			bch2_fs_usage_read_short(c).used);
 	prt_printf(out, "reserved\t%llu\n",		c->capacity.reserved);
-	prt_printf(out, "hidden\t%llu\n",		percpu_u64_get(&c->capacity.pcpu->usage.hidden));
-	prt_printf(out, "btree\t%llu\n",		percpu_u64_get(&c->capacity.pcpu->usage.btree));
-	prt_printf(out, "data\t%llu\n",			percpu_u64_get(&c->capacity.pcpu->usage.data));
-	prt_printf(out, "cached\t%llu\n",		percpu_u64_get(&c->capacity.pcpu->usage.cached));
-	prt_printf(out, "reserved\t%llu\n",		percpu_u64_get(&c->capacity.pcpu->usage.reserved));
+	prt_printf(out, "hidden\t%llu\n",		percpu_u64_get_nonnegative(&c->capacity.pcpu->usage.hidden));
+	prt_printf(out, "btree\t%llu\n",		percpu_u64_get_nonnegative(&c->capacity.pcpu->usage.btree));
+	prt_printf(out, "data\t%llu\n",			percpu_u64_get_nonnegative(&c->capacity.pcpu->usage.data));
+	prt_printf(out, "cached\t%llu\n",		percpu_u64_get_nonnegative(&c->capacity.pcpu->usage.cached));
+	prt_printf(out, "reserved\t%llu\n",		percpu_u64_get_nonnegative(&c->capacity.pcpu->usage.reserved));
 	/* Per replica count: an ENOSPC at 3x with raw space free needs this */
 	prt_printf(out, "online_reserved\n");
 	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
 		prt_printf(out, "  %ux\t%llu\n", i + 1,
-			   percpu_u64_get(&c->capacity.pcpu->online_reserved[i]));
+			   percpu_u64_get_nonnegative(&c->capacity.pcpu->online_reserved[i]));
 
 	/*
 	 * Computed, not read back: "cached" below is only what the reservation
