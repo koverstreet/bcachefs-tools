@@ -11,8 +11,11 @@
 # have, for one.
 #
 # Roots: what C can call - the defined globals that aren't v0-mangled (_R*),
-# which is the #[no_mangle] set. And every allocated section that isn't code
-# or data is kept whole: metadata nothing references, which the GC would
+# which is the #[no_mangle] set - less kCFI's __cfi_<fn> preambles
+# (CONFIG_CFI_CLANG): one per function, global with it, in its section; as
+# roots they'd keep every function, so nothing would be collected, and the
+# GC keeps or drops each with its function. And every allocated section that
+# isn't code or data is kept whole: metadata nothing references, which the GC would
 # otherwise drop silently - .modinfo, __param, __bug_table, __jump_table,
 # __ex_table, .altinstructions, and whatever else turns up. Taken from the
 # objects themselves, so a new one is kept, not lost.
@@ -53,7 +56,7 @@ lds=$work/gc.lds
 	echo '}'
 
 	$NM --defined-only --extern-only "$@" |
-		awk 'NF == 3 && $3 !~ /^_R/ { print "EXTERN(" $3 ")" }' | sort -u
+		awk 'NF == 3 && $3 !~ /^(_R|__cfi_)/ { print "EXTERN(" $3 ")" }' | sort -u
 } > "$lds"
 
 $LD -r --gc-sections -T "$lds" -o "$out" "$@"
