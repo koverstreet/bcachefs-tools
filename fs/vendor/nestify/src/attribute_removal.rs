@@ -3,12 +3,6 @@ use proc_macro2::{TokenStream, TokenTree};
 use quote::{quote, ToTokens};
 use syn::{Meta, MetaList};
 
-enum AttributeRemoval {
-    NoMatch,
-    RemoveWhole,
-    ReplaceWith(Meta),
-}
-
 enum ExistingAfter {
     RemoveWhole,
     ReplaceWith(Meta),
@@ -327,6 +321,12 @@ pub fn remove_or_subtract_attr(stack: &mut Vec<Attribute>, removal: &Attribute) 
 mod tests {
     use super::*;
     use syn::Meta;
+
+    enum AttributeRemoval {
+        NoMatch,
+        RemoveWhole,
+        ReplaceWith(Meta),
+    }
 
     fn meta(input: &str) -> Meta {
         syn::parse_str::<Meta>(input).unwrap()

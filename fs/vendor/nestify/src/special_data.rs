@@ -31,21 +31,16 @@ pub enum Body {
 
 /// Structure Body aka Data in syn
 pub struct BodyStruct {
-    struct_token: Token![struct],
     pub fields: SpecialFields,
-    semi_token: Option<Token![;]>,
 }
 
 /// Enumeration Body aka Data in syn
 pub struct BodyEnum {
-    enum_token: Token![enum],
-    brace_token: token::Brace,
     pub variants: Punctuated<SpecialVariant, Token![,]>,
 }
 
 /// Union Body aka Data in syn: a union's fields are always named
 pub struct BodyUnion {
-    union_token: Token![union],
     pub fields: FieldsNamed,
 }
 
@@ -92,13 +87,11 @@ pub enum SpecialFields {
 /// y: f64
 /// }`
 pub struct FieldsNamed {
-    pub brace_token: token::Brace,
     pub named: Punctuated<SpecialField, Token![,]>,
 }
 
 /// Unnamed fields of a tuple struct or tuple variant such as `Some(T)`.
 pub struct FieldsUnnamed {
-    pub paren_token: token::Paren,
     pub unnamed: Punctuated<SpecialField, Token![,]>,
 }
 
@@ -111,7 +104,6 @@ pub struct SpecialField {
     pub mutability: FieldMutability,
     /// Name of the field if any
     pub ident: Option<Ident>,
-    pub colon_token: Option<Token![:]>,
     pub ty: SpecialType,
     pub fish: Option<FishHook>,
 }
@@ -123,10 +115,10 @@ impl Parse for Special {
 
         let lookahead = input.lookahead1();
         if lookahead.peek(Token![struct]) {
-            let struct_token = input.parse::<Token![struct]>()?;
+            input.parse::<Token![struct]>()?;
             let ident = input.parse::<Ident>()?;
             let generics = input.parse::<Generics>()?;
-            let (where_clause, fields, semi) = parse_data_struct(input)?;
+            let (where_clause, fields, _) = parse_data_struct(input)?;
             Ok(Special {
                 attrs,
                 vis,
@@ -135,17 +127,13 @@ impl Parse for Special {
                     where_clause,
                     ..generics
                 },
-                body: Body::Struct(BodyStruct {
-                    struct_token,
-                    fields,
-                    semi_token: semi,
-                }),
+                body: Body::Struct(BodyStruct { fields }),
             })
         } else if lookahead.peek(Token![enum]) {
-            let enum_token = input.parse::<Token![enum]>()?;
+            input.parse::<Token![enum]>()?;
             let ident = input.parse::<Ident>()?;
             let generics = input.parse::<Generics>()?;
-            let (where_clause, brace, variants) = parse_data_enum(input)?;
+            let (where_clause, _, variants) = parse_data_enum(input)?;
             Ok(Special {
                 attrs,
                 vis,
@@ -154,14 +142,10 @@ impl Parse for Special {
                     where_clause,
                     ..generics
                 },
-                body: Body::Enum(BodyEnum {
-                    enum_token,
-                    brace_token: brace,
-                    variants,
-                }),
+                body: Body::Enum(BodyEnum { variants }),
             })
         } else if lookahead.peek(Token![union]) {
-            let union_token = input.parse::<Token![union]>()?;
+            input.parse::<Token![union]>()?;
             let ident = input.parse::<Ident>()?;
             let generics = input.parse::<Generics>()?;
             let where_clause = input.parse::<Option<WhereClause>>()?;
@@ -174,10 +158,7 @@ impl Parse for Special {
                     where_clause,
                     ..generics
                 },
-                body: Body::Union(BodyUnion {
-                    union_token,
-                    fields,
-                }),
+                body: Body::Union(BodyUnion { fields }),
             })
         } else {
             Err(lookahead.error())
@@ -271,8 +252,8 @@ impl Parse for SpecialVariant {
 impl Parse for FieldsNamed {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let content;
+        braced!(content in input);
         Ok(FieldsNamed {
-            brace_token: braced!(content in input),
             named: content.parse_terminated(SpecialField::parse_named, Token![,])?,
         })
     }
@@ -281,8 +262,8 @@ impl Parse for FieldsNamed {
 impl Parse for FieldsUnnamed {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let content;
+        parenthesized!(content in input);
         Ok(FieldsUnnamed {
-            paren_token: parenthesized!(content in input),
             unnamed: content.parse_terminated(SpecialField::parse_unnamed, Token![,])?,
         })
     }
@@ -302,7 +283,7 @@ impl SpecialField {
             input.parse()
         }?;
 
-        let colon_token: Token![:] = input.parse()?;
+        input.parse::<Token![:]>()?;
 
         let ty: SpecialType = if unnamed_field
             && (input.peek(Token![struct])
@@ -327,7 +308,6 @@ impl SpecialField {
             mutability: FieldMutability::None,
             ident: Some(ident),
             fish,
-            colon_token: Some(colon_token),
             ty,
         })
     }
@@ -345,7 +325,6 @@ impl SpecialField {
             vis,
             mutability: FieldMutability::None,
             ident: None,
-            colon_token: None,
             ty,
             fish,
         })

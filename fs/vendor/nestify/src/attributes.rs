@@ -33,7 +33,6 @@ pub struct Attribute {
 
 pub struct NestedAttribute {
     pub pound_token: Token![#],
-    pub ident_token: Token![>],
     pub bracket_token: token::Bracket,
     pub meta: Meta,
     pub modifier: Option<AttributeModifier>,
@@ -49,9 +48,9 @@ pub struct CompositeAttribute {
 
 #[derive(Clone, Copy)]
 pub enum AttributeModifier {
-    Star(Token![*]),
-    Slash(Token![/]),
-    Minus(Token![-]),
+    Star,
+    Slash,
+    Minus,
 }
 
 pub trait ParseAttribute: Sized {
@@ -69,11 +68,11 @@ impl Parse for AttributeModifier {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let lookahead = input.lookahead1();
         if lookahead.peek(Token![*]) {
-            input.parse().map(Self::Star)
+            input.parse::<Token![*]>().map(|_| Self::Star)
         } else if lookahead.peek(Token![/]) {
-            input.parse().map(Self::Slash)
+            input.parse::<Token![/]>().map(|_| Self::Slash)
         } else if lookahead.peek(Token![-]) {
-            input.parse().map(Self::Minus)
+            input.parse::<Token![-]>().map(|_| Self::Minus)
         } else {
             Err(lookahead.error())
         }
@@ -105,7 +104,7 @@ impl ParseAttribute for NestedAttribute {
     fn parse_single_outer(mut input: ParseStream) -> syn::Result<Self> {
         let content;
         let pound_token = input.parse()?;
-        let ident_token = input.parse()?;
+        input.parse::<Token![>]>()?;
         let bracket_token = bracketed!(content in input);
         let meta = content.parse()?;
 
@@ -113,7 +112,6 @@ impl ParseAttribute for NestedAttribute {
 
         Ok(Self {
             pound_token,
-            ident_token,
             bracket_token,
             meta,
             modifier,

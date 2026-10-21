@@ -28,7 +28,7 @@ impl UnpackContext {
 
                 // handle attribute with modifier
                 match modifier {
-                    AttributeModifier::Star(_) => {
+                    AttributeModifier::Star => {
                         let a: Attribute = ca.into();
 
                         // already defined so lets error
@@ -43,7 +43,7 @@ impl UnpackContext {
                         // return the attribute
                         Some(a)
                     }
-                    AttributeModifier::Slash(_) => {
+                    AttributeModifier::Slash => {
                         let a: Attribute = ca.into();
 
                         // remove from freeze
@@ -59,7 +59,7 @@ impl UnpackContext {
                         // remove it from the current
                         None
                     }
-                    AttributeModifier::Minus(_) => {
+                    AttributeModifier::Minus => {
                         let a: Attribute = ca.into();
 
                         // remove from freeze

@@ -250,7 +250,6 @@ pub(crate) mod augmented {
             if input.peek(Token![super])
                 || input.peek(Token![self])
                 || input.peek(Token![crate])
-                || cfg!(feature = "full") && input.peek(Token![try])
             {
                 let ident = input.call(syn::Ident::parse_any)?;
                 return Ok(PathSegment::from(ident));
