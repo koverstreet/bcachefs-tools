@@ -3,15 +3,13 @@ use crate::btree::bkey::BkeyI;
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
-use crate::util::locking::{CMutexGuard, Noio, NoioGuard};
-use crate::util::sync::PercpuRwSem;
-use core::mem::size_of;
+use crate::locking::{Guard, Lock, Noio, PercpuRwsemNoio};
 use crate::util::Printbuf;
 
 pub use crate::sb::members::DevRef;
 
 /// sb_lock held: the superblock, through it.
-pub type SbLockGuard<'a> = NoioGuard<CMutexGuard<'a, c::bch_sb_handle>>;
+pub type SbLockGuard<'a> = Guard<'a, Noio<c::mutex>, c::bch_sb_handle>;
 
 impl SbLockGuard<'_> {
     /// Member @dev_idx, of an open filesystem's superblock - where every one
@@ -180,17 +178,13 @@ impl Fs {
         unsafe { self.disk_sb.held() }
     }
 
-    /// c->capacity.mark_lock, C's - C initializes and frees it - as what it
-    /// is: struct percpu_rwsem_noio is one percpu_rw_semaphore, as a
-    /// PercpuRwSem over nothing.
-    pub fn mark_lock(&self) -> &Noio<PercpuRwSem> {
-        const _: () = assert!(size_of::<Noio<PercpuRwSem>>() == size_of::<c::percpu_rwsem_noio>());
-        // SAFETY: the same layout; borrowed, never dropped
-        unsafe { &*(&raw const self.capacity.mark_lock).cast() }
+    /// c->capacity.mark_lock, C's - C initializes and frees it.
+    pub fn mark_lock(&self) -> &PercpuRwsemNoio {
+        Lock::from_c(&self.capacity.mark_lock)
     }
 
     pub fn mark_lock_assert_held(&self) {
-        unsafe { c::rust_percpu_rwsem_assert_held(&raw const self.capacity.mark_lock.lock as *mut _) }
+        self.mark_lock().assert_held_any()
     }
 
     /// The BCH_FS_* flags set.

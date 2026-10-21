@@ -34,12 +34,12 @@ use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, WriteRef};
 use crate::init::passes;
+use crate::locking::{Lock, MemallocFlags};
 use crate::opts::{self, prt_compression_type, prt_data_type, OptChange};
 use crate::sb::io::COUNTERS;
 use crate::sb::members;
 use crate::util::ffi::{c_char, with_cstr};
 use crate::util::kernel::{READ, WRITE};
-use crate::util::locking::{mutex_lock, MemallocFlags};
 use crate::util::log::LogMsg;
 use crate::util::sysfs::{self, parse_human_u64, parse_int, Attr, Dir, Files, ListAttrs};
 use crate::util::{Printbuf, ToText};
@@ -225,7 +225,7 @@ unsafe extern "C" fn trans_stats_json_read(_file: *mut c::file, kobj: *mut c::ko
     // SAFETY: internal/'s kobject, which has this file
     let c = unsafe { sysfs::obj_of::<InternalDir>(kobj) };
 
-    let _lock = mutex_lock(&c.btree.trans.stats_json_lock);
+    let _lock = Lock::from_c(&c.btree.trans.stats_json_lock).lock();
     // SAFETY: the buffer is the lock's
     let out = unsafe { Printbuf::borrow_raw(&raw mut (*c.as_ptr()).btree.trans.stats_json_buf) };
 
@@ -255,7 +255,7 @@ unsafe extern "C" fn trans_stats_json_write(_file: *mut c::file, kobj: *mut c::k
     let c = unsafe { sysfs::obj_of::<InternalDir>(kobj) };
 
     for (_, s) in trans_stats(c) {
-        let _lock = mutex_lock(&s.lock);
+        let _lock = Lock::from_c(&s.lock).lock();
         s.duration.reset();
         s.lock_hold_times.reset();
         s.lock_wait_times.reset();

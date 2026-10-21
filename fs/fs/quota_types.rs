@@ -3,8 +3,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::locking::{new_mutex, Mutex};
 use crate::util::genradix::SharedGenRadix;
-use crate::util::sync::{new_mutex, Mutex};
 use core::sync::atomic::AtomicU32;
 use cstruct_macros::{c_enum, CStruct, TypeInfo};
 use pin_init::{pin_data, pin_init, PinInit};

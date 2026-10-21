@@ -4,7 +4,9 @@
 //!
 //! read_lock() is rcu_read_lock() until the guard drops: the kernel's, or in
 //! userspace liburcu's - the memb flavor, which the tools link and C's
-//! rcu_read_lock() is.
+//! rcu_read_lock() is. srcu_read_lock() is an SRCU section, of a C
+//! srcu_struct, through rcu.c: the kernel's Rust helpers for it are newer
+//! than the oldest kernel we build against.
 //!
 //! RcuBuf<T> is C's `T __rcu *`, laid out as C's pointer, so C still reads
 //! it. A reader gets a &T for as long as its ReadGuard - or for as long as a
@@ -20,10 +22,12 @@
 //! has to come from C's allocator - and freed as bytes: what they hold has no
 //! Drop.
 
+use core::ffi::c_int;
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, Ordering};
+use cstruct_macros::c_extern;
 
 use crate::c;
 use crate::util::alloc::AllocError;
@@ -58,6 +62,28 @@ pub fn read_lock() -> ReadGuard {
 impl Drop for ReadGuard {
     fn drop(&mut self) {
         unsafe { urcu_memb_read_unlock() };
+    }
+}
+
+c_extern! {
+    pub fn rust_srcu_read_lock(ssp: *mut c::srcu_struct) -> c_int;
+    pub fn rust_srcu_read_unlock(ssp: *mut c::srcu_struct, idx: c_int);
+}
+
+#[must_use = "the SRCU read section ends as soon as the guard is dropped"]
+pub struct SrcuReadGuard<'a> {
+    srcu: &'a c::srcu_struct,
+    idx:  c_int,
+}
+
+pub fn srcu_read_lock(srcu: &c::srcu_struct) -> SrcuReadGuard<'_> {
+    let idx = unsafe { rust_srcu_read_lock(core::ptr::from_ref(srcu).cast_mut()) };
+    SrcuReadGuard { srcu, idx }
+}
+
+impl Drop for SrcuReadGuard<'_> {
+    fn drop(&mut self) {
+        unsafe { rust_srcu_read_unlock(core::ptr::from_ref(self.srcu).cast_mut(), self.idx) };
     }
 }
 

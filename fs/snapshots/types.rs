@@ -3,10 +3,11 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::locking::{new_mutex, Lock, Mutex};
+use crate::new_lock;
 use crate::types::{DArray, RustOnly, bits_to_longs, rust_only};
 use crate::util::alloc::KVVec;
 use crate::util::bitmap::AtomicBitArray;
-use crate::util::sync::{new_mutex, Mutex};
 use core::sync::atomic::{AtomicBool, AtomicU32};
 use cstruct_macros::{c_const, c_enum, c_rcu_array, CStruct, c_typedef, Init, TypeInfo};
 use pin_init::pin_data;
@@ -110,8 +111,8 @@ pub struct bch_fs_snapshots {
     pub(crate) need_table_rebuild: AtomicBool,
     #[c("struct percpu_rw_semaphore create_lock")]
     #[pin]
-    #[init(crate::new_percpu_rwsem!("&c->snapshots.create_lock"))]
-    pub create_lock: crate::util::sync::PercpuRwSem,
+    #[init(new_lock!((), "&c->snapshots.create_lock"))]
+    pub create_lock: Lock<c::percpu_rw_semaphore>,
     /// Snapshot deletion's state: Rust's alone - snapshots/delete.rs.
     #[pin]
     #[init(RustOnly::new(crate::snapshots::delete::SnapshotDelete::init()))]

@@ -3,11 +3,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::locking::{MutexNoio, PercpuRwsemNoio};
 use crate::util::vstructs::Head;
 use crate::types::{Atomic64, GenRadix, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::util::ffi::c_char;
-use crate::util::locking::{CMutex, Noio};
-use crate::util::sync::PercpuRwSem;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
 use cstruct_macros::{c_const, c_enum, c_xmacro, CStruct, Init, TypeInfo};
 use pin_init::pin_data;
@@ -592,9 +591,9 @@ pub struct Fs {
     pub sb_write: c::closure,
     /// The superblock, behind sb_lock: Fs::sb_lock() is the way in.
     #[pin]
-    #[init(Noio::new(crate::new_cmutex!(Default::default(), "&c->sb_lock")))]
+    #[init(crate::new_lock!(Default::default(), "&c->sb_lock"))]
     #[c_anon("struct mutex_noio sb_lock; struct bch_sb_handle disk_sb")]
-    pub disk_sb: Noio<CMutex<c::bch_sb_handle>>,
+    pub disk_sb: MutexNoio<c::bch_sb_handle>,
     #[c("unsigned long incompat_versions_requested[BITS_TO_LONGS(BCH_VERSION_MINOR(bcachefs_metadata_version_current))]")]
     pub incompat_versions_requested: [c_ulong;
         bits_to_longs(c::BCH_VERSION_MINOR(c::bcachefs_metadata_version_current as u64) as usize)],
@@ -660,9 +659,8 @@ pub struct Fs {
     pub accounting: c::bch_accounting_mem,
     /// The replicas table, behind its own lock: alloc/replicas.rs's alone.
     #[pin]
-    #[init(RustOnly::new(Noio::new(crate::new_percpu_rwsem!(crate::alloc::replicas::ReplicasCpu::new(),
-                                                            "&c->replicas"))))]
-    pub(crate) replicas: rust_only!(Noio<PercpuRwSem<crate::alloc::replicas::ReplicasCpu>>),
+    #[init(RustOnly::new(crate::new_lock!(crate::alloc::replicas::ReplicasCpu::new(), "&c->replicas")))]
+    pub(crate) replicas: rust_only!(PercpuRwsemNoio<crate::alloc::replicas::ReplicasCpu>),
     pub disk_groups: c::DiskGroups,
     pub capacity: c::bch_fs_capacity,
     pub allocator: c::bch_fs_allocator,

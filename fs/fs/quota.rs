@@ -78,7 +78,7 @@ mod vfs {
                              TransAttempt, UpdateTriggerFlags};
     use crate::errcode::{bch_errcode, ret_to_class};
     use crate::util::kernel::ktime_get_real_seconds;
-    use crate::util::sync::MutexGuard;
+    use crate::locking::MutexGuard;
     use crate::{bch_err_fn, bch_info, fs_inconsistent, inode};
     use crate::snapshots::snapshot;
     use core::ffi::c_uint;

@@ -115,11 +115,9 @@
 #[path = "util/cuckoo_types.rs"] pub mod util_cuckoo_types;
 #[path = "util/enumerated_ref_types.rs"] pub mod util_enumerated_ref_types;
 #[path = "util/fast_list_types.rs"] pub mod util_fast_list_types;
-#[path = "util/locking_types.rs"] pub mod util_locking_types;
 #[path = "util/mean_and_variance_types.rs"] pub mod util_mean_and_variance_types;
 #[path = "util/printbuf_types.rs"] pub mod util_printbuf_types;
 #[path = "util/rcu_pending_types.rs"] pub mod util_rcu_pending_types;
-#[path = "util/seqmutex_types.rs"] pub mod util_seqmutex_types;
 #[path = "util/siphash_types.rs"] pub mod util_siphash_types;
 #[path = "util/six_types.rs"] pub mod util_six_types;
 #[path = "util/thread_with_file_defs.rs"] pub mod util_thread_with_file_defs;
@@ -294,11 +292,11 @@ pub mod c {
     pub use super::util_cuckoo_types::*;
     pub use super::util_enumerated_ref_types::*;
     pub use super::util_fast_list_types::*;
-    pub use super::util_locking_types::*;
+    pub use crate::locking::{mutex_noio, percpu_rwsem_noio};
     pub use super::util_mean_and_variance_types::*;
     pub use super::util_printbuf_types::*;
     pub use super::util_rcu_pending_types::*;
-    pub use super::util_seqmutex_types::*;
+    pub use crate::locking::seqmutex::seqmutex;
     pub use super::util_siphash_types::*;
     pub use super::util_six_types::*;
     pub use super::util_thread_with_file_defs::*;

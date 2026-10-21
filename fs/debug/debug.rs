@@ -24,10 +24,10 @@ use crate::btree::BtreeIter;
 use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
+use crate::locking::Lock;
 use crate::util::debugfs::{self, DebugFile, DebugOut};
 use crate::util::eytzinger::Eytzinger0;
 use crate::util::ffi::Opaque;
-use crate::util::locking::{mutex_lock, srcu_read_lock};
 use crate::util::{rcu, rhashtable, Printbuf};
 use crate::{btree_trans, prt, SPOS_MAX};
 
@@ -234,7 +234,7 @@ impl DebugFile for BtreeTransactions {
     type Obj = Fs;
 
     fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
-        let _srcu = srcu_read_lock(&fs.btree.trans.barrier);
+        let _srcu = rcu::srcu_read_lock(&fs.btree.trans.barrier);
 
         fs.for_each_trans_from(&mut self.cursor, |t| t.srcu_held(), |t| {
             prt!(out, "{}", t);
@@ -299,7 +299,7 @@ impl DebugFile for TransactionStats {
 
             let s = &fs.btree.trans.stats[self.idx];
             let mut out = out.indent(2);
-            let _lock = mutex_lock(&s.lock);
+            let _lock = Lock::from_c(&s.lock).lock();
 
             prt!(out, "Max mem used: {}\n", s.max_mem);
             #[cfg(CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE)]
@@ -343,7 +343,7 @@ impl DebugFile for BtreeNodeScan {
     fn read(&mut self, fs: &Fs, out: &mut DebugOut<'_>) -> Result<(), BchError> {
         let f = &fs.btree.node_scan;
         out.print_each(|out| {
-            let _lock = mutex_lock(&f.lock);
+            let _lock = Lock::from_c(&f.lock).lock();
             let nr = f.nodes.nr;
             if self.next >= nr {
                 return Ok(false);
@@ -380,7 +380,7 @@ impl DebugFile for FsckDamagedPaths {
             // Copied under the lock, resolved outside it: resolving takes
             // btree locks, and fsck's error paths take msgs_lock under those
             let entry = {
-                let _lock = mutex_lock(&fs.errors.msgs_lock);
+                let _lock = Lock::from_c(&fs.errors.msgs_lock).lock();
                 let paths = &fs.errors.damaged_paths;
                 (self.next < paths.nr).then(|| unsafe { *paths.data.add(self.next) })
             };

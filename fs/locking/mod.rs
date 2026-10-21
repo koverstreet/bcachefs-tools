@@ -1,0 +1,46 @@
+// SPDX-License-Identifier: GPL-2.0
+
+//! Locks.
+//!
+//! A lock is C's lock state - struct mutex, rw_semaphore, percpu_rw_semaphore
+//! - and that's all it is: RawLock (lock.rs) is how one is initialized, taken
+//! and released, implemented on C's types themselves (raw.rs), in both
+//! builds. Lock<R, G> is lock R and what it protects, G: reached only with it
+//! held, its guard derefs to it. Readers share a RawRwLock's, through read().
+//!
+//! Noio<R> (noio.rs) is any lock, held in a PF_MEMALLOC_NOIO scope - itself
+//! a RawLock, C's struct mutex_noio when R is a mutex. A seqmutex
+//! (seqmutex.rs) is a mutex that can be dropped and taken back only if no one
+//! took it meanwhile. SeqLock (seqlock.rs) is the one lock with no C state:
+//! atomics, its readers copying out.
+//!
+//! compat.rs is what exists because C owns the lock or holds it calling in,
+//! and goes as the C does.
+//!
+//! Initializing a lock in place, new_lock!(), gives it a lockdep class of
+//! its own: one per call site, as C's mutex_init() is.
+//!
+//! Mutex is the kernel crate's in-kernel, the shim's copy of its API in
+//! userspace: a lock of Rust's own, over a T.
+//!
+//! The C side: locking.h, C's guards for the noio locks; seqmutex.h, C's
+//! seqmutex API; locking.c, the C that Rust calls where C has a macro, or a
+//! static inline in one build or the other.
+
+mod compat;
+mod lock;
+mod noio;
+mod raw;
+mod seqlock;
+pub mod seqmutex;
+
+#[cfg(kernel)]
+pub use kernel::sync::{new_mutex, Mutex, MutexGuard};
+#[cfg(not(kernel))]
+pub use bcachefs_shim::sync::{new_mutex, Mutex, MutexGuard};
+
+pub use crate::new_lock;
+pub use lock::{Guard, Lock, RawLock, RawRwLock, ReadGuard};
+pub use noio::{mutex_noio, percpu_rwsem_noio, MemallocFlags, MutexNoio, Noio, PercpuRwsemNoio};
+pub use seqlock::SeqLock;
+pub use seqmutex::SeqMutexSeq;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The VFS, for Rust: shims out of line in vfs/fs.c, as util/locking.c's are.
+//! The VFS, for Rust: shims out of line in vfs/fs.c, as locking/locking.c's are.
 //! C gets the prototypes, in vfs/rust_gen.h. Kernel only, as the VFS is.
 //!
 //! struct bch_inode_info is kernel types all the way down - struct inode,

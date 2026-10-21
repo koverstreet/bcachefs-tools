@@ -1424,7 +1424,7 @@ __sched int bch2_bit_wait_io_timeout(struct wait_bit_key *word, int mode)
 
 /*
  * For Rust: the kernel's Rust allocator API has no __GFP_NOFAIL. Out of line,
- * as util/locking.c's shims are, for the same reason.
+ * as locking/locking.c's shims are, for the same reason.
  */
 void *rust_kzalloc_nofail(size_t size)
 {

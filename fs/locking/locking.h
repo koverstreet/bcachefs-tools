@@ -3,8 +3,10 @@
 #define _BCACHEFS_LOCKING_H
 
 /*
- * bcachefs locking primitives that bundle a lock with the memory-reclaim
- * context it implies. See util/locking.rs for the Rust counterparts.
+ * bcachefs's locks that hold a PF_MEMALLOC_NOIO scope while held - struct
+ * mutex_noio and percpu_rwsem_noio, Rust's Noio<R> (locking/noio.rs) - and
+ * their guards, which save the flags before the lock is taken and restore them
+ * after it's released, as Rust's do.
  */
 
 #include <linux/cleanup.h>
@@ -12,7 +14,8 @@
 #include <linux/percpu-rwsem.h>
 #include <linux/sched/mm.h>
 
-#include "util/locking_gen.h"
+#include "locking/noio_gen.h"
+#include "locking/raw_gen.h"
 
 static inline void mutex_noio_init(struct mutex_noio *m)
 {

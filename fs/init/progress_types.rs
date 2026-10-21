@@ -2,8 +2,8 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::locking::SeqLock;
 use crate::types::rust_only;
-use crate::util::sync::SeqLock;
 use cstruct_macros::CStruct;
 
 /*

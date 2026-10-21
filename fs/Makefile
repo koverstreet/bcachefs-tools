@@ -128,6 +128,7 @@ bcachefs-y		:=			\
 	journal/reclaim.o			\
 	journal/validate.o			\
 	journal/write.o				\
+	locking/locking.o			\
 	opts.o					\
 	sb/io.o					\
 	sb/members.o				\
@@ -137,9 +138,9 @@ bcachefs-y		:=			\
 	util/enumerated_ref.o			\
 	util/eytzinger.o			\
 	util/fast_list.o			\
-	util/locking.o				\
 	util/mean_and_variance.o		\
 	util/printbuf.o				\
+	util/rcu.o				\
 	util/rcu_pending.o			\
 	util/siphash.o				\
 	util/six.o				\

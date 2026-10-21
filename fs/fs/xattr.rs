@@ -456,9 +456,9 @@ mod vfs {
     use crate::btree::iter::{lockrestart_do, CommitFlags};
     use crate::errcode::{bch_errcode, ret_to_class};
     use crate::inode_opts::{self, InodeOpt};
+    use crate::locking::MemallocFlags;
     use crate::opts::{self, OptChange};
     use crate::types::CStatic;
-    use crate::util::locking::MemallocFlags;
     use crate::vfs::dentry::Dentry;
     use crate::vfs::inode::{InodeInfo, ATTR_CTIME};
 

@@ -27,7 +27,7 @@ macro_rules! recovery_pass {
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
-use crate::util::locking::{mutex_lock, MutexGuard};
+use crate::locking::{Guard, Lock};
 use crate::util::Printbuf;
 
 /// Schedule recovery pass @pass, saying so to @out: as
@@ -100,8 +100,8 @@ pub fn assert_run_lock_held(fs: &Fs) {
 
 /// recovery.run_lock, held: no recovery pass runs - to run one's work outside
 /// the pass framework.
-pub fn run_lock(fs: &Fs) -> MutexGuard<'_> {
-    mutex_lock(&fs.recovery.run_lock)
+pub fn run_lock(fs: &Fs) -> Guard<'_, c::mutex> {
+    Lock::from_c(&fs.recovery.run_lock).lock()
 }
 
 /// Each pass's state: bch2_recovery_pass_status_to_text().

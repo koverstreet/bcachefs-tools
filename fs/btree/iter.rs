@@ -10,6 +10,7 @@ use crate::errcode::{
     ret_to_result_void as ret_to_result,
 };
 use crate::fs::Fs;
+use crate::locking::Lock;
 use crate::util::closure::{closure_get_not_zero, ClosureRef};
 use crate::util::ffi::Opaque;
 use crate::util::log::CFnName;
@@ -2668,7 +2669,7 @@ impl Fs {
         pred:   impl Fn(&ListedTrans<'_>) -> bool,
         mut f:  impl FnMut(ListedTrans<'_>) -> Result<ControlFlow<()>, E>,
     ) -> Result<(), E> {
-        let lock = &self.btree.trans.lock;
+        let lock = Lock::from_c(&self.btree.trans.lock);
         let head = (&raw const self.btree.trans.list).cast_mut();
 
         // SAFETY, throughout: the list, under its lock

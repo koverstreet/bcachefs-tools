@@ -2,9 +2,9 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::locking::{new_mutex, Mutex};
 use crate::types::{RustOnly, rust_only};
 use crate::util::alloc::KVVec;
-use crate::util::sync::{new_mutex, Mutex};
 use core::sync::atomic::AtomicU32;
 use cstruct_macros::{CStruct, Init, TypeInfo};
 use pin_init::pin_data;

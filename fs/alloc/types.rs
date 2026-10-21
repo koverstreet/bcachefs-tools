@@ -187,7 +187,7 @@ pub struct bch_fs_capacity_pcpu {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo)]
 pub struct bch_fs_capacity {
     pub capacity: u64, /* sectors */
     pub reserved: u64, /* sectors */

@@ -3,10 +3,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::locking::{new_mutex, Mutex};
 use crate::types::{DArray, RustOnly, rust_only};
 use crate::util::alloc::KVVec;
 use crate::util::ffi::c_char;
-use crate::util::sync::{new_mutex, Mutex};
 use core::ffi::c_int;
 use cstruct_macros::{CStruct, c_extern, Init, TypeInfo};
 use pin_init::pin_data;

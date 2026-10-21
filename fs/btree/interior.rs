@@ -12,14 +12,14 @@ use zerocopy::IntoBytes;
 use crate::c;
 use crate::fs::Fs;
 use crate::journal::entries::{EntryWriter, NoRoom};
+use crate::locking::{Guard, Lock};
 use crate::util::ffi::Opaque;
-use crate::util::locking::{mutex_lock, MutexGuard};
 use crate::util::vstructs::{plain_bytes, Head};
 
 /// The live roots, but those whose bit is set in @skip - a btree past bit 63
 /// can't be. Under root_lock, which owns their on-disk fields: key, level,
 /// alive.
-fn roots<'a>(fs: &'a Fs, _root_lock: &'a MutexGuard<'_>, skip: u64)
+fn roots<'a>(fs: &'a Fs, _root_lock: &'a Guard<'_, c::mutex>, skip: u64)
     -> impl Iterator<Item = (u32, &'a c::btree_root)>
 {
     (0..fs.btree_id_nr_alive())
@@ -39,7 +39,7 @@ fn entry_bytes(r: &c::btree_root) -> usize {
     size_of::<Head<c::jset_entry>>() + usize::from(r.key.k.u64s) * size_of::<u64>()
 }
 
-fn push_roots(fs: &Fs, root_lock: &MutexGuard<'_>, skip: u64, w: &mut EntryWriter<'_>)
+fn push_roots(fs: &Fs, root_lock: &Guard<'_, c::mutex>, skip: u64, w: &mut EntryWriter<'_>)
     -> Result<(), NoRoom>
 {
     for (id, r) in roots(fs, root_lock, skip) {
@@ -50,7 +50,7 @@ fn push_roots(fs: &Fs, root_lock: &MutexGuard<'_>, skip: u64, w: &mut EntryWrite
 
 /// Each live btree root as a btree_root journal entry, but those in @skip.
 pub fn btree_roots_to_journal_entries(fs: &Fs, w: &mut EntryWriter<'_>, skip: u64) -> Result<(), NoRoom> {
-    push_roots(fs, &mutex_lock(&fs.btree.cache.root_lock), skip, w)
+    push_roots(fs, &Lock::from_c(&fs.btree.cache.root_lock).lock(), skip, w)
 }
 
 /// btree_roots_to_journal_entries(), for C's journal write: at @end, the end
@@ -62,7 +62,7 @@ pub fn btree_roots_to_journal_entries(fs: &Fs, w: &mut EntryWriter<'_>, skip: u6
 pub unsafe fn bch2_btree_roots_to_journal_entries(c: &Opaque<c::bch_fs>, end: *mut Head<c::jset_entry>,
                                                   skip: c_ulong) -> *mut Head<c::jset_entry> {
     let fs = Fs::from_c(c);
-    let root_lock = mutex_lock(&fs.btree.cache.root_lock);
+    let root_lock = Lock::from_c(&fs.btree.cache.root_lock).lock();
     let bytes = roots(fs, &root_lock, skip.into()).map(|(_, r)| entry_bytes(r)).sum();
 
     // SAFETY: the caller's - room for these

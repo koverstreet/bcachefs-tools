@@ -13,9 +13,9 @@
 
 use crate::c;
 use crate::errcode::{errptr_to_result, ret_to_class, BchError};
+use crate::locking::{new_mutex, Mutex};
 use crate::util::alloc::{alloc_pinned, free_pinned};
 use crate::util::ffi::c_char;
-use crate::util::sync::{new_mutex, Mutex};
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_ulong, c_void, CStr};
 use core::marker::PhantomData;

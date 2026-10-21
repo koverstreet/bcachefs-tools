@@ -310,7 +310,7 @@ use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
 use crate::util::bitmap::BitArray;
 use crate::util::rcu::RcuArray;
 use crate::util::ffi::Opaque;
-use crate::util::sync::MutexGuard;
+use crate::locking::MutexGuard;
 use crate::util::Printbuf;
 use core::ffi::c_int;
 use core::fmt;

@@ -65,13 +65,14 @@ use crate::fs::Fs;
 use crate::init::damage;
 use crate::init::error::id;
 use crate::init::passes;
+use crate::locking::Lock;
+use crate::new_lock;
 use crate::snapshots::check_snapshots;
 use crate::snapshots::snapshot;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::eytzinger::Eytzinger1;
 use crate::util::ffi::Opaque;
 use crate::util::log::{self, LogLevel, LogMsg};
-use crate::util::sync::{new_rwsem, RwSem};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_info, bch_notice, fs_inconsistent, fsck_err, prt,
             trans_inconsistent};
@@ -127,7 +128,7 @@ pub(crate) struct SnapshotDelete {
     /// across its btree work, so it's never taken for write with btree
     /// locks held: lockdep sees the cycle.
     #[pin]
-    nodes:    RwSem<Option<DeleteNodes>>,
+    nodes:    Lock<c::rw_semaphore, Option<DeleteNodes>>,
     /// Which sweep the progress describes: 1 or 2.
     version:  AtomicU32,
     progress: c::progress_indicator,
@@ -136,7 +137,7 @@ pub(crate) struct SnapshotDelete {
 impl SnapshotDelete {
     pub(crate) fn init() -> impl PinInit<Self> {
         pin_init!(Self {
-            nodes    <- new_rwsem!(None),
+            nodes    <- new_lock!(None),
             version:  AtomicU32::new(0),
             progress: ::pin_init::Zeroable::zeroed(),
         })
