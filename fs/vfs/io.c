@@ -676,7 +676,7 @@ static noinline int __bchfs_fallocate(struct bch_inode_info *inode, int mode,
 	CLASS(btree_trans, trans)(c);
 	CLASS(btree_iter, iter)(trans, BTREE_ID_extents,
 			POS(inode_inum(inode).inum, start_sector),
-			BTREE_ITER_slots|BTREE_ITER_intent);
+			BTREE_ITER_slots|BTREE_ITER_intent|BTREE_ITER_trim);
 
 	while (!ret) {
 		s64 i_sectors_delta = 0;
@@ -699,12 +699,12 @@ static noinline int __bchfs_fallocate(struct bch_inode_info *inode, int mode,
 
 		bch2_btree_iter_set_snapshot(&iter, snapshot);
 
-		k = bch2_btree_iter_peek_slot(&iter);
+		k = bch2_btree_iter_peek_slot_max(&iter, end_pos);
 		if ((ret = bkey_err(k)))
 			goto bkey_err;
 
-		hole_start	= iter.pos.offset;
-		hole_end	= bpos_min(k.k->p, end_pos).offset;
+		hole_start	= bkey_start_offset(k.k);
+		hole_end	= k.k->p.offset;
 		is_allocation	= bkey_extent_is_allocation(k.k);
 
 		/* already reserved */
