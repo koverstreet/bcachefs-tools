@@ -6,8 +6,9 @@ use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::util::Printbuf;
 use crate::types::{CacheAligned, DArray, c_default};
+use crate::util::percpu::Counters;
 use core::ffi::{c_uint, c_ulong};
-use cstruct_macros::{bitfield, c_const, c_enum, c_extern, c_typedef, c_xmacro, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, c_const, c_enum, c_extern, c_typedef, c_xmacro, CStruct, Fieldwise, TypeInfo};
 use nestify::nest;
 
 c_xmacro! {
@@ -179,7 +180,8 @@ pub struct write_point_specifier {
 
 /* Indexed by disk_res_slot(); physical sectors, not data size */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo, Fieldwise)]
+#[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_fs_capacity_pcpu {
     pub usage: c::bch_fs_usage_base,
     pub sectors_available: [u64; c::BCH_REPLICAS_MAX as usize],

@@ -89,3 +89,37 @@ pub unsafe fn percpu_u64_set(pcp: *mut u64, val: u64) {
 pub unsafe fn acc_u64s_percpu(acc: &mut [u64], src: *const u64) {
     unsafe { crate::c::bch2_acc_u64s_percpu(acc.as_mut_ptr(), src, acc.len() as core::ffi::c_uint) }
 }
+
+/// Per-CPU counters: a u64, or a struct or array of them, summed over the
+/// CPUs. Each CPU's count is a signed delta - added to on one CPU, taken off
+/// on another - so the additions wrap, and a sum taken while they change can
+/// be negative: as a u64, nearly 2^64. A struct gets it with
+/// #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)].
+pub trait Counters: Copy {
+    fn wrapping_add(self, rhs: Self) -> Self;
+    fn clamp_nonnegative(self) -> Self;
+}
+
+impl Counters for u64 {
+    #[inline]
+    fn wrapping_add(self, rhs: u64) -> u64 {
+        u64::wrapping_add(self, rhs)
+    }
+
+    #[inline]
+    fn clamp_nonnegative(self) -> u64 {
+        (self as i64).max(0) as u64
+    }
+}
+
+impl<T: Counters, const N: usize> Counters for [T; N] {
+    #[inline]
+    fn wrapping_add(self, rhs: Self) -> Self {
+        core::array::from_fn(|i| self[i].wrapping_add(rhs[i]))
+    }
+
+    #[inline]
+    fn clamp_nonnegative(self) -> Self {
+        self.map(Counters::clamp_nonnegative)
+    }
+}

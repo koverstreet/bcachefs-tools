@@ -71,6 +71,7 @@ mod cstruct {
 use cstruct::{enum_text, expand_enum_list, parse_c_export, parse_cstruct, parse_items, rust_ident,
               CEnumDef, CEnumKind, CItem, CXEntry};
 
+mod fieldwise;
 mod init;
 mod prt;
 mod tagged_union;
@@ -229,6 +230,13 @@ pub fn derive_type_info(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Init, attributes(init))]
 pub fn derive_init(input: TokenStream) -> TokenStream {
     expand("#[derive(Init)]", || init::derive(input))
+}
+
+/// `#[derive(Fieldwise)]`: each method `#[fieldwise(...)]` names, applied to
+/// every field - see fieldwise.rs.
+#[proc_macro_derive(Fieldwise, attributes(fieldwise))]
+pub fn derive_fieldwise(input: TokenStream) -> TokenStream {
+    expand("#[derive(Fieldwise)]", || fieldwise::derive(input))
 }
 
 /// `#[derive(Plain)]`: util/vstructs.rs's Plain, checked at compile time -

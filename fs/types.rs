@@ -4,11 +4,12 @@
 
 use crate::cstructs::c;
 use crate::locking::{Lock, LockedBy, MutexNoio, PercpuRwsemNoio};
+use crate::util::percpu::Counters;
 use crate::util::vstructs::Head;
 use crate::types::{Atomic64, GenRadix, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
-use cstruct_macros::{c_const, c_enum, c_rcu_array, c_xmacro, CStruct, Init, TypeInfo};
+use cstruct_macros::{c_const, c_enum, c_rcu_array, c_xmacro, CStruct, Fieldwise, Init, TypeInfo};
 use pin_init::pin_data;
 
 c_xmacro! {
@@ -196,7 +197,8 @@ c_const! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, CStruct, Fieldwise)]
+#[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct io_count {
     pub sectors: [[u64; c::BCH_DATA_NR as usize]; 2],
 }

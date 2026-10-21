@@ -5,8 +5,9 @@
 use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::types::{LongAligned, c_default};
+use crate::util::percpu::Counters;
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, bitfield, c_const, c_extern, c_rcu_array, TypeInfo};
+use cstruct_macros::{CStruct, bitfield, c_const, c_extern, c_rcu_array, Fieldwise, TypeInfo};
 use nestify::nest;
 
 c_const! {
@@ -90,13 +91,15 @@ c_rcu_array! {
 
 /* Only info on bucket countns: */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo, Fieldwise)]
+#[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_dev_usage {
     pub buckets: [u64; c::BCH_DATA_NR as usize],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo, Fieldwise)]
+#[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_dev_usage_type {
     pub buckets: u64,
     pub sectors: u64, /* _compressed_ sectors: */
@@ -109,13 +112,15 @@ pub struct bch_dev_usage_type {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo, Fieldwise)]
+#[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_dev_usage_full {
     pub d: [c::bch_dev_usage_type; c::BCH_DATA_NR as usize],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo, Fieldwise)]
+#[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
 pub struct bch_fs_usage_base {
     pub hidden: u64,
     pub btree: u64,

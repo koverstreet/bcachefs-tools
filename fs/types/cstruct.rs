@@ -173,6 +173,20 @@ pub struct CStructDef {
     /// an alignment marker leading the struct: Rust's repr(align) takes only
     /// a literal. The generated header asserts the two agree.
     pub c_align:   Option<String>,
+    /// #[fieldwise(...)]: the methods #[derive(Fieldwise)] lifts.
+    #[allow(dead_code)] // read by the macros, not rust_types_gen
+    pub fieldwise: Vec<Fieldwise>,
+}
+
+/// A method #[derive(Fieldwise)] lifts: unary, or binary with a parameter of
+/// this name - #[fieldwise(method)] or #[fieldwise(method(rhs))] - and an
+/// inherent one, or Trait::method, of that trait's impl.
+#[derive(Debug)]
+#[allow(dead_code)] // read by the macros, not rust_types_gen
+pub struct Fieldwise {
+    pub tr:     Option<String>,
+    pub method: String,
+    pub rhs:    Option<String>,
 }
 
 impl CStructDef {
@@ -1101,6 +1115,8 @@ struct ItemAttrs {
     cold:      bool,
     /// #[c_printf(FMT, ARGS)] on a fn: its arguments.
     c_printf:  Option<String>,
+    /// #[fieldwise(...)] on a struct.
+    fieldwise: Vec<Fieldwise>,
 }
 
 fn parse_repr(args: &[Tok], into: &mut CRepr) -> Result<(), String> {
@@ -1176,6 +1192,21 @@ fn item_attrs(toks: &[Tok], mut i: usize) -> Result<(ItemAttrs, usize), String> 
         }
         if let Some([Tok::Ident(n)]) = attr_args(attr, "c_name") {
             a.c_name = Some(n.clone());
+        }
+        if let Some(args) = attr_args(attr, "fieldwise") {
+            for m in split_top(args, ',') {
+                let (tr, m) = match m {
+                    [Tok::Ident(t), Tok::Punct(':'), Tok::Punct(':'), rest @ ..] => (Some(t.clone()), rest),
+                    m => (None, m),
+                };
+                a.fieldwise.push(match m {
+                    [Tok::Ident(m)] => Fieldwise { tr, method: m.clone(), rhs: None },
+                    [Tok::Ident(m), Tok::Punct('('), Tok::Ident(rhs), Tok::Punct(')')] =>
+                        Fieldwise { tr, method: m.clone(), rhs: Some(rhs.clone()) },
+                    _ => return Err(format!("#[fieldwise]: expected [Trait::]method or [Trait::]method(rhs), \
+                                             not {}", tokens_to_rust(m))),
+                });
+            }
         }
         i = next;
     }
@@ -1391,7 +1422,7 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
     let typedef = a.typedef.map(|t| t.unwrap_or_else(|| name.clone()));
     Ok(Some((CStructDef {
         name, rust_name, lifetimes, kind, cfg: a.cfg, repr: a.repr, cfg_reprs: a.cfg_reprs, fields, typedef,
-        typedef_anon, c_align,
+        typedef_anon, c_align, fieldwise: a.fieldwise,
     }, body_end + 1)))
 }
 
