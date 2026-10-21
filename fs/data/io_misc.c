@@ -43,10 +43,18 @@ int bch2_extent_fallocate(struct btree_trans *trans,
 
 	CLASS(closure_stack, cl)();
 
-	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(iter));
+	/* the slot cut to @sectors - trimmed, whatever @iter's flags: */
+	unsigned nr_overwritable;
+	{
+		CLASS(btree_iter_copy, slot_iter)(iter);
+		slot_iter.flags |= BTREE_ITER_trim;
 
-	sectors = min_t(u64, sectors, k.k->p.offset - iter->pos.offset);
-	unsigned nr_overwritable = bch2_bkey_durability_safe(c, k).nr_overwritable;
+		struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot_max(&slot_iter,
+					POS(iter->pos.inode, iter->pos.offset + sectors)));
+
+		sectors		= k.k->size;
+		nr_overwritable	= bch2_bkey_durability_safe(c, k).nr_overwritable;
+	}
 
 	new_replicas = max(0, (int) opts.data_replicas - (int) nr_overwritable);
 
