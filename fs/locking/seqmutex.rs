@@ -58,9 +58,9 @@ unsafe impl RawLock for seqmutex {
 /// What relock() takes: the count at an unlock.
 pub struct SeqMutexSeq(u32);
 
-impl<G> Lock<seqmutex, G> {
+impl<G, P> Lock<seqmutex, G, P> {
     /// Held again, if no one has taken it since the unlock that gave @at.
-    pub fn relock(&self, at: SeqMutexSeq) -> Option<Guard<'_, seqmutex, G>> {
+    pub fn relock(&self, at: SeqMutexSeq) -> Option<Guard<'_, seqmutex, G, P>> {
         let l = self.raw();
         if unsafe { seq(l) }.load(Ordering::Relaxed) != at.0 {
             return None;
@@ -78,7 +78,7 @@ impl<G> Lock<seqmutex, G> {
     }
 }
 
-impl<G> Guard<'_, seqmutex, G> {
+impl<G, P> Guard<'_, seqmutex, G, P> {
     /// Released, with the count relock() takes.
     pub fn unlock(self) -> SeqMutexSeq {
         SeqMutexSeq(unsafe { seq(self.lock().raw()) }.load(Ordering::Relaxed))

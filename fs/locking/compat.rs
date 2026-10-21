@@ -18,7 +18,7 @@ impl<R: RawLock> Lock<R> {
     }
 }
 
-impl<R: RawLock, G> Lock<R, G> {
+impl<R: RawLock, G, P> Lock<R, G, P> {
     /// The lock, as a caller holds it - C's, calling in: its guard isn't ours
     /// to release.
     ///
@@ -26,7 +26,7 @@ impl<R: RawLock, G> Lock<R, G> {
     /// The caller holds the lock exclusively - not as one of its readers -
     /// and holds it for as long as this guard lives; nothing else this task
     /// holds has the G.
-    pub unsafe fn held(&self) -> Guard<'_, R, G> {
+    pub unsafe fn held(&self) -> Guard<'_, R, G, P> {
         self.assert_held();
         unsafe { Guard::from_held(self, None) }
     }

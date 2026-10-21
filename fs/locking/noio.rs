@@ -112,8 +112,8 @@ c_default!(percpu_rwsem_noio);
 
 /// Locks over @G held in a NOIO scope: C's mutex_noio and percpu_rwsem_noio,
 /// and what they protect.
-pub type MutexNoio<G = ()> = Lock<mutex_noio, G>;
-pub type PercpuRwsemNoio<G = ()> = Lock<percpu_rwsem_noio, G>;
+pub type MutexNoio<G = (), P = ()> = Lock<mutex_noio, G, P>;
+pub type PercpuRwsemNoio<G = (), P = ()> = Lock<percpu_rwsem_noio, G, P>;
 
 c_verbatim!(r#"
 /*
