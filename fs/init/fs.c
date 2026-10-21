@@ -1228,7 +1228,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	bch2_fs_journal_keys_init(c);
 	bch2_fs_move_init(c);
 	bch2_fs_nocow_locking_init_early(c);
-	bch2_fs_recovery_passes_init(c);
 
 	INIT_LIST_HEAD(&c->list);
 

@@ -12,12 +12,10 @@
 //! passes it needs run, and in the recovery_passes section, when each last ran
 //! and for how long - which ratelimits expensive repairs.
 //!
-//! The runner's state, bch_fs_recovery, is C's struct, under recovery.lock
-//! with interrupts off - scheduling can come from where they are - and its
-//! runs serialized by run_lock. C reads parts of it unlocked, as flags:
-//! passes_complete, pass_done, current_pass; so does Rust, reading. Writes
-//! here all take the lock, where C took it for most - the runner's failure
-//! counts and startup's seeding of the ephemeral set it wrote without.
+//! The runner's state is bch_fs_recovery's, its runs serialized by run_lock:
+//! recovery.runner, a spinlock - taken with interrupts off, as scheduling can
+//! come from where they are - over what only the runner reads, publishing
+//! what others read unlocked, a word at a time.
 
 /// Export @pass, a function or closure of `&Fs` returning `Result<(), E>`
 /// with E converting to BchError, as the recovery pass the pass table calls
@@ -42,9 +40,10 @@ macro_rules! recovery_pass {
 
 use crate::btree::iter::lockrestart_do;
 use crate::c;
+use crate::c::{bch_recovery_runner as Runner, RecoveryWords};
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
-use crate::fs::{Fs, SbLockGuard, WriteRef};
-use crate::locking::{Guard, Lock, RawLock};
+use crate::fs::{Fs, FsWork, SbLockGuard, WriteRef};
+use crate::locking::Guard;
 use crate::sb::io::{sb_field_ops, SbFieldOps, SbWrite};
 use crate::snapshots::subvolume;
 use crate::types::{Le32, Le64};
@@ -53,13 +52,14 @@ use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::{ktime_get_ns, ktime_get_real_seconds, NSEC_PER_SEC};
 use crate::util::kthread::Kthread;
 use crate::util::log::{log_cont, log_start, LogLevel, LogMsg};
+use crate::util::projections::AtomicWord;
 use crate::util::vstructs::{Head, Validated};
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::{bch_err, bch_info, c_function_name, inode, message, prt};
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::mem::{offset_of, size_of};
-use core::ops::{Deref, DerefMut};
+use core::sync::atomic::{AtomicU32, Ordering};
 use cstruct_macros::c_export;
 
 type Pass = c::bch_recovery_pass;
@@ -347,7 +347,7 @@ fn pass_complete(fs: &Fs, pass: Pass, start_time: i64) {
     LeBitmap::from_words_mut(&mut ext.recovery_passes_required).clear(pass.to_stable().0 as usize);
     // the runner takes each pass off current_passes before running it: none
     // left, this was the last
-    if fs.recovery.current_passes == 0 {
+    if fs.recovery.runner.current_passes.get() == 0 {
         ext.errors_silent.fill(Le64::new(0));
     }
 
@@ -381,41 +381,32 @@ pub fn clear_btree_clean(fs: &Fs, btree: c::btree_id) {
 
 // ── The runner's state ───────────────────────────────────────────────────────
 
-/// recovery.lock, held - interrupts off - and what it covers: the passes
-/// scheduled, running and done. Nothing sleeps while it's held.
-struct Recovery<'a> {
-    r:      *mut c::bch_fs_recovery,
-    _lock:  Guard<'a, c::spinlock_t>,
+/// The runner's lock, held: its state, and permission to write what of
+/// recovery's is published. Nothing sleeps while it's held.
+type Recovery<'a> = Guard<'a, c::spinlock_t, Runner, RecoveryWords>;
+
+fn lock(fs: &Fs) -> Recovery<'_> {
+    fs.recovery.runner.lock()
 }
 
-impl Recovery<'_> {
-    fn lock(fs: &Fs) -> Recovery<'_> {
-        let r = unsafe { &raw mut (*fs.as_ptr()).recovery };
-        Recovery { r, _lock: Lock::from_c(&fs.recovery.lock).lock() }
+// SAFETY: C's enum, a u32; zeroes are pass 0, NONE - and it's only ever set()
+// to a Pass
+unsafe impl AtomicWord for Pass {
+    type Atomic = AtomicU32;
+
+    fn load(a: &AtomicU32) -> Pass {
+        Pass::from_bits(a.load(Ordering::Relaxed))
     }
-}
 
-impl Deref for Recovery<'_> {
-    type Target = c::bch_fs_recovery;
-
-    fn deref(&self) -> &Self::Target {
-        // SAFETY: held - its other writers are excluded
-        unsafe { &*self.r }
-    }
-}
-
-impl DerefMut for Recovery<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        // SAFETY: held - its other writers are excluded; C's unlocked
-        // readers read single fields, as flags
-        unsafe { &mut *self.r }
+    fn store(a: &AtomicU32, pass: Pass) {
+        a.store(pass as u32, Ordering::Relaxed)
     }
 }
 
 /// Whether recovery has @pass still to run, or running: as
 /// recovery_pass_will_run(). Never true outside recovery.
 pub fn will_run(fs: &Fs, pass: Pass) -> bool {
-    fs.flag(c::bch_fs_flags::BCH_FS_in_recovery) && fs.recovery.current_passes & bit(pass) != 0
+    fs.flag(c::bch_fs_flags::BCH_FS_in_recovery) && fs.recovery.runner.current_passes.get() & bit(pass) != 0
 }
 
 /// Whether recovery work should stop - the filesystem going read-only, or
@@ -433,37 +424,29 @@ pub fn cancelled(fs: &Fs) -> Result<(), BchError> {
 /// recovery.run_lock is held: passes run under it - and what runs as a pass,
 /// it serializes.
 pub fn assert_run_lock_held(fs: &Fs) {
-    Lock::from_c(&fs.recovery.run_lock).assert_held()
+    fs.recovery.run_lock.assert_held()
 }
 
 /// recovery.run_lock, held: no recovery pass runs - to run one's work outside
 /// the pass framework.
 pub fn run_lock(fs: &Fs) -> Guard<'_, c::mutex> {
-    Lock::from_c(&fs.recovery.run_lock).lock()
+    fs.recovery.run_lock.lock()
 }
 
-/// recovery.lock, run_lock and the async runner, at bch_fs init.
+/// Recovery done through @pass, without the runner: a new filesystem's,
+/// which has nothing to recover.
 #[c_export]
-pub fn bch2_fs_recovery_passes_init(c: &Opaque<c::bch_fs>) {
-    let r = unsafe { &raw mut (*Fs::from_c(c).as_ptr()).recovery };
+pub fn bch2_recovery_set_pass_done(c: &Opaque<c::bch_fs>, pass: c::bch_recovery_pass) {
+    let fs = Fs::from_c(c);
+    lock(fs).published().pass_done.set(pass);
+}
 
+/// The async runner's work item, for bch_fs_recovery's init.
+pub fn async_work_init() -> impl ::pin_init::PinInit<FsWork> {
     #[cfg(kernel)]
-    let (lock_key, mutex_key) = (::kernel::static_lock_class!().as_ptr().cast(),
-                                 ::kernel::static_lock_class!().as_ptr().cast());
+    return FsWork::new(async_work, c"&c->recovery.work", ::kernel::static_lock_class!());
     #[cfg(not(kernel))]
-    let (lock_key, mutex_key) = (core::ptr::null_mut(), core::ptr::null_mut());
-
-    #[cfg(kernel)]
-    let work = crate::fs::FsWork::new(async_work, c"&c->recovery.work", ::kernel::static_lock_class!());
-    #[cfg(not(kernel))]
-    let work = crate::fs::FsWork::new(async_work);
-
-    // SAFETY: bch_fs's, zeroed and not yet used: each initialized in place
-    unsafe {
-        let Ok(()) = c::spinlock_t::init(&raw mut (*r).lock, c"&c->recovery.lock", lock_key);
-        let Ok(()) = c::mutex::init(&raw mut (*r).run_lock, c"&c->recovery.run_lock", mutex_key);
-        let Ok(()) = ::pin_init::PinInit::__pinned_init(work, &raw mut (*r).work);
-    }
+    return FsWork::new(async_work);
 }
 
 // ── Scheduling ───────────────────────────────────────────────────────────────
@@ -500,9 +483,9 @@ fn may_run_now(fs: &Fs, pass: Pass) -> bool {
 
 /// Whether running @pass means going back for it: the pass loop is running,
 /// is past it, and hasn't run it this run.
-fn needs_rewind(fs: &Fs, r: &c::bch_fs_recovery, pass: Pass) -> bool {
+fn needs_rewind(fs: &Fs, r: &Recovery<'_>, pass: Pass) -> bool {
     fs.flag(c::bch_fs_flags::BCH_FS_running_recovery_passes) &&
-        r.current_pass > pass &&
+        fs.recovery.runner.current_pass.get() > pass &&
         r.passes_attempted & bit(pass) == 0
 }
 
@@ -515,8 +498,9 @@ fn is_persistent(pass: Pass) -> bool {
 /// Whether scheduling @pass would do anything. With RUN_RECOVERY_PASS_ratelimit
 /// in @flags, the superblock - @sb, under sb_lock - decides whether it's to be
 /// ratelimited, and if not it's taken out of @flags.
-fn needs_set(fs: &Fs, r: &c::bch_fs_recovery, pass: Pass, flags: &mut Flags, sb: Option<&c::bch_sb>) -> bool {
-    if flags.contains(Flags::RUN_RECOVERY_PASS_skip_if_complete) && r.passes_complete & bit(pass) != 0 {
+fn needs_set(fs: &Fs, r: &Recovery<'_>, pass: Pass, flags: &mut Flags, sb: Option<&c::bch_sb>) -> bool {
+    if flags.contains(Flags::RUN_RECOVERY_PASS_skip_if_complete) &&
+       fs.recovery.runner.passes_complete.get() & bit(pass) != 0 {
         return false;
     }
 
@@ -545,7 +529,7 @@ fn needs_set(fs: &Fs, r: &c::bch_fs_recovery, pass: Pass, flags: &mut Flags, sb:
     let already_running = if !in_recovery || is_persistent(pass) {
         fs.sb.recovery_passes_required
     } else {
-        r.current_passes
+        fs.recovery.runner.current_passes.get()
     };
 
     if already_running & bit(pass) == 0 {
@@ -576,7 +560,8 @@ fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags, w:
 
     out.make_room_gfp(1024, c::GFP_KERNEL);
     let mut out = out.atomic();
-    let mut r = Recovery::lock(fs);
+    let mut r = lock(fs);
+    let rec = &fs.recovery.runner;
 
     if !needs_set(fs, &r, pass, &mut flags, w.as_ref().map(|w| w.sb())) {
         return Ok(());
@@ -588,7 +573,7 @@ fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags, w:
     let ratelimit = flags.contains(Flags::RUN_RECOVERY_PASS_ratelimit);
 
     if flags.contains(Flags::RUN_RECOVERY_PASS_ephemeral) || !is_persistent(pass) {
-        r.scheduled_passes_ephemeral |= bit(pass);
+        *r.published().scheduled_passes_ephemeral.place() |= bit(pass);
     } else {
         let w = w.expect("not ephemeral: an sb_write");
         let ext = w.field_mut::<c::bch_sb_field_ext<Validated>>().expect("an ext section");
@@ -643,7 +628,7 @@ fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags, w:
      */
     let run_now = may_run_now(fs, pass) &&
         (rewind ||
-         (!should_defer(pass as usize, r.current_passes) && r.passes_attempted & bit(pass) == 0));
+         (!should_defer(pass as usize, rec.current_passes.get()) && r.passes_attempted & bit(pass) == 0));
 
     /*
      * Ephemeral scheduling is best-effort and must never rewind: the caller
@@ -654,14 +639,14 @@ fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags, w:
      */
     if running && !ratelimit && run_now && !(rewind && flags.contains(Flags::RUN_RECOVERY_PASS_ephemeral)) {
         write!(out, "running recovery pass {} ({}), currently at {} ({}){}\n",
-               pass.name(), pass as u32, r.current_pass.name(), r.current_pass as u32,
+               pass.name(), pass as u32, rec.current_pass.get().name(), rec.current_pass.get() as u32,
                if rewind { " - rewinding" } else { "" });
 
-        r.current_passes |= bit(pass);
+        *r.published().current_passes.place() |= bit(pass);
 
         if rewind {
             let rewound_to = if r.rewound_to != NONE { r.rewound_to.min(pass) } else { pass };
-            let current = r.current_pass;
+            let current = rec.current_pass.get();
             /*
              * Only log when the rewind target actually changes - the same
              * rewind gets re-requested on every call that finds the same
@@ -694,13 +679,13 @@ fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags, w:
 pub fn run_explicit(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags) -> Result<(), BchError> {
     // with RUN_RECOVERY_PASS_ratelimit, needs_set() needs sb_lock
     if !flags.contains(Flags::RUN_RECOVERY_PASS_ratelimit) &&
-       !needs_set(fs, &fs.recovery, pass, &mut flags, None) {
+       !needs_set(fs, &lock(fs), pass, &mut flags, None) {
         return Ok(());
     }
 
     /*
-     * An ephemeral schedule only touches in-memory recovery state under
-     * recovery.lock. Its callers may hold btree locks, so sb_lock is
+     * An ephemeral schedule only touches in-memory recovery state under the
+     * runner's lock. Its callers may hold btree locks, so sb_lock is
      * unavailable to them - and with no sb_lock there's no permission to
      * persist:
      */
@@ -716,7 +701,7 @@ pub fn run_explicit(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags) -
 /// it; else recovery_pass_will_run - it's scheduled, and runs later.
 pub fn require(fs: &Fs, out: &mut Printbuf, pass: Pass) -> Result<(), BchError> {
     if fs.flag(c::bch_fs_flags::BCH_FS_running_recovery_passes) &&
-       fs.recovery.passes_complete & bit(pass) != 0 {
+       fs.recovery.runner.passes_complete.get() & bit(pass) != 0 {
         return Ok(());
     }
 
@@ -763,7 +748,7 @@ pub fn bch2_run_explicit_recovery_pass(c: &Opaque<c::bch_fs>, out: &mut Printbuf
 /// SELF_HEAL_RATELIMIT: that one throttles repairs that succeed.
 const FAILING_RATELIMIT: u32 = 20;
 
-fn failing_pass_backoff(r: &c::bch_fs_recovery, pass: usize) -> u32 {
+fn failing_pass_backoff(r: &Runner, pass: usize) -> u32 {
     match r.passes_failing_nr[pass] {
         nr @ 0..5 => (1 << nr).min(FAILING_RATELIMIT),
         _ => FAILING_RATELIMIT,
@@ -785,7 +770,7 @@ fn run_pass(fs: &Fs, pass: Pass) -> Result<(), BchError> {
             let end_time = ktime_get_real_seconds();
             let runtime = (end_time - start_time).max(0);
 
-            let mut r = Recovery::lock(fs);
+            let mut r = lock(fs);
             let p = pass as usize;
             r.passes_failing |= bit(pass);
             r.passes_failing_nr[p] = r.passes_failing_nr[p].saturating_add(1);
@@ -814,7 +799,7 @@ fn run_pass(fs: &Fs, pass: Pass) -> Result<(), BchError> {
         log_cont(fs, message!(" done ({} seconds)", ktime_get_real_seconds() - start_time));
     }
 
-    let mut r = Recovery::lock(fs);
+    let mut r = lock(fs);
     r.passes_failing = 0;
     r.passes_failing_nr[pass as usize] = 0;
     drop(r);
@@ -838,7 +823,8 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
      */
     fs.set_flag(c::bch_fs_flags::BCH_FS_running_recovery_passes);
 
-    let mut r = Recovery::lock(fs);
+    let rec = &fs.recovery.runner;
+    let mut r = lock(fs);
 
     if fs.sb.features & 1 << c::bch_sb_feature::BCH_FEATURE_no_alloc_info.0 != 0 {
         passes &= !passes_match(c::PASS_ALLOC);
@@ -864,7 +850,7 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
         }
     }
 
-    r.current_passes = passes;
+    r.published().current_passes.set(passes);
     /*
      * Fresh attempt-epoch per run: a pass attempted in a previous (online)
      * run is fair game again; within one run, attempted passes are never
@@ -883,29 +869,32 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
     let mut ret = Ok(());
     let mut prev = NONE;
 
-    while r.current_passes != 0 {
-        scheduled |= r.current_passes;
+    while rec.current_passes.get() != 0 {
+        scheduled |= rec.current_passes.get();
 
-        let pass = Pass::from_bits(r.current_passes.trailing_zeros());
+        let pass = Pass::from_bits(rec.current_passes.get().trailing_zeros());
 
-        r.current_pass = pass;
-        r.pass_start_time = ktime_get_ns();
-        r.current_passes &= !bit(pass);
-        r.scheduled_passes_ephemeral &= !bit(pass);
-        r.passes_attempted |= bit(pass);
+        let (runner, w) = r.parts();
+        w.current_pass.set(pass);
+        runner.pass_start_time = ktime_get_ns();
+        *w.current_passes.place() &= !bit(pass);
+        *w.scheduled_passes_ephemeral.place() &= !bit(pass);
+        runner.passes_attempted |= bit(pass);
 
         drop(r);
         let ret2 = run_pass(fs, pass).and_then(|()| fs.journal_flush());
-        r = Recovery::lock(fs);
+        r = lock(fs);
 
         if r.rewound_to != NONE {
             r.rewound_from = r.rewound_from.max(pass);
             // Restore current_passes up to and including rewound_to
-            r.current_passes |= scheduled & (!0u64 << r.rewound_to as u32);
-            r.rewound_to = NONE;
+            let (runner, w) = r.parts();
+            *w.current_passes.place() |= scheduled & (!0u64 << runner.rewound_to as u32);
+            runner.rewound_to = NONE;
         } else if ret2.is_ok() {
-            r.pass_done = r.pass_done.max(pass);
-            r.passes_complete |= bit(pass);
+            let w = r.published();
+            w.pass_done.set(w.pass_done.get().max(pass));
+            *w.passes_complete.place() |= bit(pass);
         } else {
             ret = ret2;
         }
@@ -923,7 +912,7 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
         prev = pass;
     }
 
-    r.current_pass = NONE;
+    r.published().current_pass.set(NONE);
     drop(r);
 
     fs.clear_flag(c::bch_fs_flags::BCH_FS_running_recovery_passes);
@@ -943,7 +932,7 @@ unsafe extern "C" fn async_work(work: *mut c::work_struct) {
     let fs = unsafe { Fs::borrow_raw(work.byte_sub(offset_of!(c::bch_fs, recovery.work)).cast()) };
     let _ref = unsafe { WriteRef::adopt(fs, c::bch_write_ref::BCH_WRITE_REF_async_recovery_passes) };
 
-    let Some(_run) = Lock::from_c(&fs.recovery.run_lock).try_lock() else { return };
+    let Some(_run) = fs.recovery.run_lock.try_lock() else { return };
 
     /*
      * A persistent pass is recorded by the same sb_lock section that kicks
@@ -956,8 +945,8 @@ unsafe extern "C" fn async_work(work: *mut c::work_struct) {
         fs.sb.recovery_passes_required
     };
 
-    let r = &fs.recovery;
-    let passes = (required | r.scheduled_passes_ephemeral) & !r.passes_ratelimiting & passes_match(c::PASS_ONLINE);
+    let ratelimiting = lock(fs).passes_ratelimiting;
+    let passes = (required | fs.recovery.runner.scheduled_passes_ephemeral.get()) & !ratelimiting & passes_match(c::PASS_ONLINE);
     let _ = run_passes(fs, passes, false);
 }
 
@@ -990,7 +979,7 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
     unsafe { (*fs.as_ptr()).opts.recovery_passes_exclude &= !bit(Pass::BCH_RECOVERY_PASS_set_may_go_rw) };
     let opts = fs.opts();
 
-    Recovery::lock(fs).scheduled_passes_ephemeral = opts.recovery_passes;
+    lock(fs).published().scheduled_passes_ephemeral.set(opts.recovery_passes);
 
     /*
      * Scheduled passes are repair the superblock is asking for - an upgrade
@@ -1043,7 +1032,7 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
         write!(msg, "Running the following recovery passes in the background:\n");
         msg.bitflags(&NAMES, defer);
 
-        Recovery::lock(fs).scheduled_passes_ephemeral |= defer;
+        *lock(fs).published().scheduled_passes_ephemeral.place() |= defer;
     }
 
     /*
@@ -1054,7 +1043,7 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
      * we went rw, so their own kick was a no-op. (Itself a no-op in
      * nochanges - see run_async().)
      */
-    if fs.recovery.scheduled_passes_ephemeral != 0 {
+    if fs.recovery.runner.scheduled_passes_ephemeral.get() != 0 {
         run_async(fs);
     }
 
@@ -1073,6 +1062,11 @@ pub fn bch2_run_recovery_passes_startup(c: &Opaque<c::bch_fs>, from: c::bch_reco
 #[cold]
 pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
     let r = &fs.recovery;
+    // the runner's, copied out: printing allocates, which it can't under the lock
+    let (failing, start_time, rewound_from) = {
+        let runner = lock(fs);
+        (runner.passes_failing, runner.pass_start_time, runner.rewound_from)
+    };
     let line = |out: &mut Printbuf, what: &str, passes: u64| {
         write!(out, "{what}:\t");
         out.bitflags(&NAMES, passes);
@@ -1081,16 +1075,17 @@ pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
 
     out.tabstop_push(32);
     line(out, "Scheduled (superblock)", fs.sb.recovery_passes_required);
-    line(out, "Scheduled (ephemeral)", r.scheduled_passes_ephemeral);
+    line(out, "Scheduled (ephemeral)", r.runner.scheduled_passes_ephemeral.get());
 
-    line(out, "Completed", r.passes_complete);
-    line(out, "Failing", r.passes_failing);
+    line(out, "Completed", r.runner.passes_complete.get());
+    line(out, "Failing", failing);
 
-    if r.current_pass != NONE {
-        write!(out, "Currently running:\t{} ({})\n", r.current_pass.name(), r.current_pass as u32);
+    let current = r.runner.current_pass.get();
+    if current != NONE {
+        write!(out, "Currently running:\t{} ({})\n", current.name(), current as u32);
 
         write!(out, "Elapsed:\t");
-        out.time_units(ktime_get_ns().wrapping_sub(r.pass_start_time));
+        out.time_units(ktime_get_ns().wrapping_sub(start_time));
         out.newline();
 
         // Nothing to show for a pass with no estimate of its own size
@@ -1100,10 +1095,10 @@ pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
             out.newline();
         }
 
-        line(out, "Next", r.current_passes);
+        line(out, "Next", r.runner.current_passes.get());
 
-        if fs.flag(c::bch_fs_flags::BCH_FS_in_recovery) && r.rewound_from != NONE {
-            write!(out, "Rewound from:\t{} ({})\n", r.rewound_from.name(), r.rewound_from as u32);
+        if fs.flag(c::bch_fs_flags::BCH_FS_in_recovery) && rewound_from != NONE {
+            write!(out, "Rewound from:\t{} ({})\n", rewound_from.name(), rewound_from as u32);
         }
     }
 }

@@ -1289,7 +1289,7 @@ int bch2_fs_initialize(struct bch_fs *c)
 	if (ret)
 		return ret;
 
-	c->recovery.pass_done = BCH_RECOVERY_PASS_NR - 1;
+	bch2_recovery_set_pass_done(c, BCH_RECOVERY_PASS_NR - 1);
 
 	bch2_copygc_wakeup(c);
 	bch2_reconcile_wakeup(c);
