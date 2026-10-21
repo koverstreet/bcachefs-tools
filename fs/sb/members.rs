@@ -424,13 +424,13 @@ fn members_validate(sb: &c::bch_sb<Unvalidated>, members: Option<Strided<'_, c::
 
 /// Every member there's room for, nr_devices or not: printed sections
 /// include ones that failed validation.
-fn members_to_text(out: &mut Printbuf, sb: &c::bch_sb, members: Option<Strided<'_, c::bch_member>>) {
+fn members_to_text<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, members: Option<Strided<'_, c::bch_member>>) {
     let Some(members) = members else {
         write!(out, "member_bytes 0");
         return;
     };
 
-    let nr = usize::from(sb.nr_devices);
+    let nr = usize::from(S::head(sb).nr_devices);
     if members.len() != nr {
         write!(out, "nr_devices mismatch: have {} entries, should be {nr}", members.len());
     }
@@ -474,7 +474,7 @@ fn data_types_to_text(out: &mut Printbuf, types: u64) {
     }
 }
 
-fn label_to_text(out: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb) {
+fn label_to_text<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb<S>) {
     write!(out, "Label:\t");
     match m.group() {
         0 => write!(out, "(none)"),
@@ -491,14 +491,14 @@ fn failure_domain_to_text(out: &mut Printbuf, m: &c::bch_member) {
     }
 }
 
-fn has_data_to_text(out: &mut Printbuf, sb: &c::bch_sb, idx: u32) {
+fn has_data_to_text<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, idx: u32) {
     write!(out, "Has data:\t");
     data_types_to_text(out, sb.dev_has_data(idx).into());
     out.newline();
 }
 
 /// show-super's member: every field.
-pub fn member_to_text(out: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb, idx: u32) {
+pub fn member_to_text<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb<S>, idx: u32) {
     let bucket_size = u64::from(m.bucket_size.get());
 
     label_to_text(out, m, sb);
@@ -567,7 +567,7 @@ pub fn member_to_text(out: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb, idx
 
 /// For messages, to say which disk is meant: what's empty is left out. The
 /// superblock's alone, for mount to name a device it hasn't opened.
-fn member_to_text_short(out: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb, idx: u32) {
+fn member_to_text_short<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb<S>, idx: u32) {
     if out.nr_tabstops() == 0 {
         out.tabstop_push(16 + out.indent_level());
     }

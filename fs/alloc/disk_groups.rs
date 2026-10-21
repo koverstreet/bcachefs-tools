@@ -70,7 +70,7 @@
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::sb::io::{sb_field_get, sb_field_u64s, SbFieldOps, SbState};
+use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState};
 use crate::sb::members;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::rcu::{read_lock, ReadGuard};
@@ -168,8 +168,10 @@ fn disk_path_to_text_in<G: DiskGroup>(out: &mut Printbuf, groups: &[G], mut v: u
     }
 }
 
-fn sb_groups(sb: &c::bch_sb) -> &[c::bch_disk_group] {
-    sb_field_get::<c::bch_sb_field_disk_groups>(sb).map_or(&[], |g| &g.entries)
+fn sb_groups<S: SbState>(sb: &c::bch_sb<S>) -> &[c::bch_disk_group] {
+    S::field(sb, c::bch_sb_field_type::BCH_SB_FIELD_disk_groups)
+        .and_then(|f| f.arm::<c::bch_sb_field_disk_groups<Unvalidated>>())
+        .map_or(&[], |g| &g.entries)
 }
 
 /// "ssd.fast." is "ssd.fast".
@@ -432,7 +434,7 @@ pub unsafe fn bch2_disk_path_to_text_sb(out: &mut Printbuf, sb: *mut Head<c::bch
     disk_path_to_text_sb(out, unsafe { c::bch_sb::<Validated>::from_ffi(sb) }, v);
 }
 
-pub fn disk_path_to_text_sb(out: &mut Printbuf, sb: &c::bch_sb, v: u32) {
+pub fn disk_path_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, v: u32) {
     disk_path_to_text_in(out, sb_groups(sb), v);
 }
 
