@@ -1038,7 +1038,7 @@ static loff_t bch2_seek_data(struct file *file, u64 offset)
 		for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_extents,
 				   POS(inode_inum(inode).inum, offset >> 9),
 				   POS(inode_inum(inode).inum, U64_MAX),
-				   inum.subvol, 0, k, ({
+				   inum.subvol, BTREE_ITER_trim, k, ({
 			if (bkey_extent_is_data(k.k)) {
 				next_data = max(offset, bkey_start_offset(k.k) << 9);
 				break;
@@ -1072,15 +1072,10 @@ static loff_t bch2_seek_hole(struct file *file, u64 offset)
 	try(for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_extents,
 				   POS(inode_inum(inode).inum, offset >> 9),
 				   POS(inode_inum(inode).inum, U64_MAX),
-				   inum.subvol, BTREE_ITER_slots, k, ({
-		if (k.k->p.inode != inode_inum(inode).inum ||
-		    !bkey_extent_is_data(k.k)) {
-			loff_t start_offset = k.k->p.inode == inode_inum(inode).inum
-				? max(offset, bkey_start_offset(k.k) << 9)
-				: offset;
-			loff_t end_offset = k.k->p.inode == inode_inum(inode).inum
-				? MAX_LFS_FILESIZE
-				: k.k->p.offset << 9;
+				   inum.subvol, BTREE_ITER_slots|BTREE_ITER_trim, k, ({
+		if (!bkey_extent_is_data(k.k)) {
+			loff_t start_offset = max(offset, bkey_start_offset(k.k) << 9);
+			loff_t end_offset = MAX_LFS_FILESIZE;
 
 			/*
 			 * Found a hole in the btree, now make sure it's
