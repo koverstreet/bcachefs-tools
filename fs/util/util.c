@@ -28,11 +28,13 @@
 #include <linux/sched/clock.h>
 #include <linux/sched/debug.h>
 #include <linux/sched/signal.h>
+#include <linux/static_key.h>
 #include <linux/version.h>
 
 #include "eytzinger.h"
 #include "mean_and_variance.h"
 #include "util.h"
+#include "util/jump_label_gen.h"
 #include "util/percpu_gen.h"
 
 static const char si_units[] = "?kMGTPEZY";
@@ -1331,6 +1333,17 @@ u64 *bch2_acc_percpu_u64s(u64 __percpu *p, unsigned nr)
 void bch2_this_cpu_add_u64(u64 *pcp, u64 val)
 {
 	this_cpu_add(*(u64 __percpu *) (unsigned long) pcp, val);
+}
+
+/*
+ * static_branch_unlikely(), for Rust where it has no asm of its own
+ * (util/jump_label.rs): out of line, @key isn't a constant the asm can name -
+ * the key's count, as static_branch_unlikely() reads it without
+ * CONFIG_JUMP_LABEL.
+ */
+bool bch2_static_branch_unlikely(struct static_key_false *key)
+{
+	return static_key_enabled(&key->key);
 }
 
 /* ...and percpu_u64_get() and _set(), static inlines */

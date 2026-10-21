@@ -11,6 +11,7 @@ pub mod genradix;
 pub mod inline_vec;
 #[cfg(not(kernel))]
 pub mod ioctl;
+pub mod jump_label;
 pub mod kernel;
 pub mod kthread;
 pub mod locking;

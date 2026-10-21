@@ -31,11 +31,6 @@ c_extern! {
 }
 
 #[cfg(all(kernel, any(target_arch = "x86_64", target_arch = "aarch64")))]
-macro_rules! concat_literals {
-    ($($s:literal)*) => { ::core::concat!($($s),*) };
-}
-
-#[cfg(all(kernel, any(target_arch = "x86_64", target_arch = "aarch64")))]
 include!(concat!(env!("OUT_DIR"), "/percpu_asm.rs"));
 
 /// Add @val to @pcp, a `u64 __percpu *` - to this CPU's, or on arm64 the

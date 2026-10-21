@@ -12,7 +12,7 @@
 //!
 //! Counters are added to with util/percpu.rs's this_cpu_add(). A tracepoint is
 //! checked as C's trace_<name>_enabled() is, a static branch on its key -
-//! kernel::static_branch_unlikely!() - so a disabled one costs a NOP; its
+//! util/jump_label.rs's static_branch_unlikely!() - so a disabled one costs a NOP; its
 //! message is built only once it's on, out of line, as __event_trace() builds
 //! it, and handed to C's rust_do_trace_<name>(), which debug/trace.c makes for
 //! every tracepoint with CREATE_RUST_TRACE_POINTS. Userspace has no
@@ -89,8 +89,8 @@ macro_rules! events {
                 fn trace_enabled() -> bool {
                     // SAFETY: a tracepoint's key, which C defines
                     unsafe {
-                        ::kernel::static_branch_unlikely!(tracepoints::[<__tracepoint_ $name>],
-                                                          c::tracepoint, key)
+                        crate::static_branch_unlikely!(tracepoints::[<__tracepoint_ $name>],
+                                                       c::tracepoint, key)
                     }
                 }
 

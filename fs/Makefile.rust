@@ -286,16 +286,18 @@ $(obj)/uuid.o: $(src)/vendor/uuid/src/lib.rs FORCE
 
 # Asm from the kernel's own headers, as kbuild makes the kernel crate's
 # (generated_arch_*_asm.rs): the C preprocessor over a .rs.S with the C
-# build's flags, what precedes "// Cut here." the C and the rest Rust. Ours is
-# util/percpu.rs's; Makefile.rust.vendor's, the vendored kernel crate's.
+# build's flags, what precedes "// Cut here." the C and the rest Rust. Ours are
+# util/'s *_asm.rs.S; Makefile.rust.vendor's, the vendored kernel crate's.
 quiet_cmd_bch_rscpp = RSCPP   $@
       cmd_bch_rscpp = $(CPP) $(c_flags) -xc -C -P $< | sed '1,/^\/\/ Cut here.$$/d' >$@
 
-$(obj)/rust/percpu_asm.rs: $(src)/util/percpu_asm.rs.S FORCE
+bch-arch-asm-rs := $(addprefix rust/,percpu_asm.rs jump_label_asm.rs)
+
+$(addprefix $(obj)/,$(bch-arch-asm-rs)): $(obj)/rust/%.rs: $(src)/util/%.rs.S FORCE
 	$(Q)mkdir -p $(@D)
 	$(call if_changed_dep,bch_rscpp)
 
-targets += rust/percpu_asm.rs
+targets += $(bch-arch-asm-rs)
 
 # mod.o gets them as externs, and the codegen output via OUT_DIR, as in
 # userspace - and the crate's directory as cargo gives it, CARGO_MANIFEST_DIR,
@@ -308,7 +310,7 @@ bch-externs := paste:libpaste.so \
 RUSTFLAGS_mod.o += $(foreach e,$(bch-externs),--extern $(subst :,=$(obj)/,$(e)))
 $(obj)/mod.o: export OUT_DIR := $(abspath $(obj)/rust)
 $(obj)/mod.o: export CARGO_MANIFEST_DIR := $(abspath $(src))
-$(obj)/mod.o: $(obj)/rust/bindings.rs $(obj)/rust/percpu_asm.rs $(obj)/libpaste.so \
+$(obj)/mod.o: $(obj)/rust/bindings.rs $(addprefix $(obj)/,$(bch-arch-asm-rs)) $(obj)/libpaste.so \
 	$(obj)/libcstruct_macros.so $(obj)/libbitfield_struct.so $(obj)/libnestify.so \
 	$(obj)/arrayvec.o $(obj)/bitfield.o $(obj)/bitflags.o $(obj)/num_traits.o $(obj)/uuid.o
 

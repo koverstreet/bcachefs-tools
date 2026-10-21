@@ -39,6 +39,18 @@
 #[cfg(kernel)]
 const __LOG_PREFIX: &[u8] = b"bcachefs\0";
 
+/// The kernel crate's concat_literals!(), for the asm the C preprocessor makes
+/// from the kernel's headers (util/*_asm.rs.S, Makefile.rust): what C's asm
+/// macros expand to is string literals side by side, which Rust concatenates
+/// only through concat!(). Here, before every module: the asm's macros are
+/// expanded where they're used - static_branch_unlikely!()'s anywhere - and
+/// that's where concat_literals!() is looked up.
+#[cfg(kernel)]
+#[allow(unused_macros)] // the architectures with no such asm
+macro_rules! concat_literals {
+    ($($s:literal)*) => { ::core::concat!($($s),*) };
+}
+
 #[path = "alloc/accounting.rs"] pub mod accounting;
 pub mod alloc {
     pub mod background;
