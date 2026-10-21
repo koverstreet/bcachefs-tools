@@ -898,12 +898,10 @@ static int quota_reserve_range(struct bch_inode_info *inode,
 				BTREE_ID_extents,
 				POS(inode_inum(inode).inum, start),
 				POS(inode_inum(inode).inum, end),
-				inode_inum(inode).subvol, 0, k, ({
+				inode_inum(inode).subvol, BTREE_ITER_trim, k, ({
 			if (bkey_extent_is_allocation(k.k)) {
-				u64 s = min(end, k.k->p.offset) -
-					max(start, bkey_start_offset(k.k));
-				BUG_ON(s > sectors);
-				sectors -= s;
+				BUG_ON(k.k->size > sectors);
+				sectors -= k.k->size;
 			}
 
 			0;
