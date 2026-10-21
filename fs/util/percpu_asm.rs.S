@@ -21,10 +21,30 @@ macro_rules! this_cpu_add_asm {
     () => { concat_literals!("addq {val}, %" __stringify(__percpu_seg) ":({ptr})") };
 }
 
+macro_rules! this_cpu_cmpxchg_asm {
+    () => { concat_literals!("cmpxchgq {new}, %" __stringify(__percpu_seg) ":({ptr})") };
+}
+
+macro_rules! this_cpu_xchg_asm {
+    () => { concat_literals!("movq %" __stringify(__percpu_seg) ":({ptr}), %rax\n"
+                             "2:\tcmpxchgq {new}, %" __stringify(__percpu_seg) ":({ptr})\n"
+                             "\tjnz 2b") };
+}
+
 #elif defined(CONFIG_X86_64)
 
 macro_rules! this_cpu_add_asm {
     () => { concat_literals!("addq {val}, ({ptr})") };
+}
+
+macro_rules! this_cpu_cmpxchg_asm {
+    () => { concat_literals!("cmpxchgq {new}, ({ptr})") };
+}
+
+macro_rules! this_cpu_xchg_asm {
+    () => { concat_literals!("movq ({ptr}), %rax\n"
+                             "2:\tcmpxchgq {new}, ({ptr})\n"
+                             "\tjnz 2b") };
 }
 
 #elif defined(CONFIG_ARM64)

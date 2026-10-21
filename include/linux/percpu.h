@@ -268,8 +268,14 @@ do {									\
 	_r;								\
 })
 
-#define this_cpu_cmpxchg(pcp, oval, nval) \
-	__pcpu_size_call_return2(this_cpu_cmpxchg_, pcp, oval, nval)
+#define this_cpu_cmpxchg(pcp, oval, nval)				\
+({									\
+	typeof(pcp) *_p = this_cpu_ptr(&(pcp));				\
+	typeof(pcp) _r = *_p;						\
+	if (_r == (oval))						\
+		*_p = (nval);						\
+	_r;								\
+})
 #define this_cpu_cmpxchg_double(pcp1, pcp2, oval1, oval2, nval1, nval2) \
 	__pcpu_double_call_return_bool(this_cpu_cmpxchg_double_, pcp1, pcp2, oval1, oval2, nval1, nval2)
 

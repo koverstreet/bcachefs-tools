@@ -1346,12 +1346,6 @@ bool bch2_static_branch_unlikely(struct static_key_false *key)
 	return static_key_enabled(&key->key);
 }
 
-/* ...and percpu_u64_set(), a static inline */
-void bch2_percpu_u64_set(u64 *pcp, u64 val)
-{
-	percpu_u64_set((u64 __percpu *) (unsigned long) pcp, val);
-}
-
 /* ...per_cpu_ptr(), and the possible CPUs: the one after @cpu, -1 at the end */
 void *bch2_per_cpu_ptr(void *pcp, unsigned cpu)
 {
@@ -1366,6 +1360,32 @@ int bch2_cpu_possible_next(int cpu)
 #else
 	return cpu + 1 < bch_percpu_nr_cpus ? cpu + 1 : -1;
 #endif
+}
+
+/* ...this CPU's: its copy, xchg and cmpxchg, and preemption */
+void *bch2_this_cpu_ptr(void *pcp)
+{
+	return this_cpu_ptr((void __percpu *) (unsigned long) pcp);
+}
+
+u64 bch2_this_cpu_xchg_u64(u64 *pcp, u64 val)
+{
+	return this_cpu_xchg(*(u64 __percpu *) (unsigned long) pcp, val);
+}
+
+u64 bch2_this_cpu_cmpxchg_u64(u64 *pcp, u64 old, u64 new)
+{
+	return this_cpu_cmpxchg(*(u64 __percpu *) (unsigned long) pcp, old, new);
+}
+
+void bch2_preempt_disable(void)
+{
+	preempt_disable();
+}
+
+void bch2_preempt_enable(void)
+{
+	preempt_enable();
 }
 
 /*
