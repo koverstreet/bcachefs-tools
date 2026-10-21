@@ -137,7 +137,7 @@ fn opt_set_sb_all(sb: &mut c::bch_sb, dev_idx: i32, opts: &mut c::bch_opts) {
 
 /// Format one or more devices as a bcachefs filesystem.
 ///
-/// Returns a pointer to the superblock (caller must free with `free()`).
+/// Returns the superblock written, or None if a device's layout didn't fit.
 ///
 /// Exits on fatal errors (matching the C `die()` behavior).
 pub fn format(
@@ -145,7 +145,7 @@ pub fn format(
     mut fs_opts: c::bch_opts,
     mut opts: c::format_opts,
     dev_slice: &mut [DevOpts],
-) -> *mut Head<c::bch_sb> {
+) -> Option<c::bch_sb_handle> {
 
     // Get device size if not specified (needed for block size threshold)
     for dev in dev_slice.iter_mut() {
@@ -203,10 +203,7 @@ pub fn format(
         opts.uuid.b = *uuid::Uuid::new_v4().as_bytes();
     }
 
-    // Allocate superblock
-    // ManuallyDrop: we return sb.sb to the caller (who frees it),
-    // so we must not let bch_sb_handle's Drop call bch2_free_super.
-    let mut sb = std::mem::ManuallyDrop::new(c::bch_sb_handle::default());
+    let mut sb = c::bch_sb_handle::default();
     if sb.sb_realloc(0).is_err() {
         die("insufficient memory");
     }
@@ -316,11 +313,10 @@ pub fn format(
 
     // Targets
     let target_strs = unsafe { &fs_opt_strs.__bindgen_anon_1.__bindgen_anon_1 };
-    let sb_handle = &*sb;
-    let foreground = parse_target(sb_handle, dev_slice, target_strs.foreground_target);
-    let background = parse_target(sb_handle, dev_slice, target_strs.background_target);
-    let promote    = parse_target(sb_handle, dev_slice, target_strs.promote_target);
-    let metadata   = parse_target(sb_handle, dev_slice, target_strs.metadata_target);
+    let foreground = parse_target(&sb, dev_slice, target_strs.foreground_target);
+    let background = parse_target(&sb, dev_slice, target_strs.background_target);
+    let promote    = parse_target(&sb, dev_slice, target_strs.promote_target);
+    let metadata   = parse_target(&sb, dev_slice, target_strs.metadata_target);
     sb.sb_mut().set_foreground_target(foreground as u64);
     sb.sb_mut().set_background_target(background as u64);
     sb.sb_mut().set_promote_target(promote as u64);
@@ -359,7 +355,7 @@ pub fn format(
             opts.no_sb_at_end,
         ) {
             eprintln!("Error: {}", e);
-            return std::ptr::null_mut();
+            return None;
         }
 
         let fd = dev.fd();
@@ -372,7 +368,7 @@ pub fn format(
                 .unwrap_or_else(|e| die(&format!("zeroing start of disk: {}", e)));
         }
 
-        crate::wrappers::super_io::bch2_super_write(fd, &mut *sb);
+        crate::wrappers::super_io::bch2_super_write(fd, &mut sb);
     }
 
     let paths: Vec<&std::ffi::OsStr> = dev_slice
@@ -381,7 +377,7 @@ pub fn format(
         .collect();
     trigger_udev_for_paths(&paths);
 
-    sb.sb
+    Some(sb)
 }
 
 /// Have udev re-read the devices we just wrote superblocks to, so that
@@ -417,8 +413,7 @@ pub fn format_for_device_add(
     opt_set!(fs_opts, btree_node_size, btree_node_size);
 
     let fmt_opts = format_opts_default();
-    let sb = format(fs_opt_strs, fs_opts, fmt_opts, std::slice::from_mut(dev));
-    unsafe { libc::free(sb as *mut _) };
+    format(fs_opt_strs, fs_opts, fmt_opts, std::slice::from_mut(dev));
 
     0
 }

@@ -426,21 +426,19 @@ fn migrate_fs(
     let passphrase = format_opts.passphrase;
     let superblock_size = format_opts.superblock_size;
 
-    let sb = crate::commands::format_util::format(fs_opt_strs, fs_opts, format_opts, std::slice::from_mut(&mut c_dev));
-    if sb.is_null() {
+    let Some(mut sb) = crate::commands::format_util::format(fs_opt_strs, fs_opts, format_opts, std::slice::from_mut(&mut c_dev)) else {
         bail!("format failed");
-    }
+    };
 
-    let sb_offset_val = (unsafe { (*sb).layout.sb_offset[0] }).get();
+    let sb_offset_val = sb.sb().layout.sb_offset[0].get();
 
     // Add encryption key if needed
     if !passphrase.is_null() {
         let type_cstr = CString::new("user").unwrap();
         let desc_cstr = CString::new("user").unwrap();
-        unsafe { c::bch2_add_key(sb, type_cstr.as_ptr(), desc_cstr.as_ptr(), passphrase) };
+        unsafe { c::bch2_add_key(sb.sb_mut().as_ffi_mut(), type_cstr.as_ptr(), desc_cstr.as_ptr(), passphrase) };
     }
-
-    unsafe { libc::free(sb as *mut _) };
+    drop(sb);
 
     // Open the new filesystem
     let dev_path_pb = std::path::PathBuf::from(&dev_path);

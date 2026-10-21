@@ -16,7 +16,7 @@ use bcachefs_kernel::btree_id;
 use bcachefs_kernel::opts::{prt_compression_type, prt_data_type};
 use bcachefs_kernel::btree::iter::{BtreeIter, lockrestart_do};
 use bch_bindgen::c;
-use bcachefs_kernel::util::vstructs::{Head, Validated};
+use bcachefs_kernel::util::vstructs::Head;
 use crate::copy_fs::{CopyFsState, copy_fs};
 use bch_bindgen::data::moving::MovingContext;
 use bcachefs_kernel::alloc::disk_groups::Target;
@@ -479,19 +479,17 @@ fn image_create_inner(
 
     format_opts.no_sb_at_end = true;
 
-    let sb = crate::commands::format_util::format(fs_opt_strs, fs_opts, format_opts, &mut devs);
-    if sb.is_null() {
-        bail!("format returned null");
-    }
+    let Some(sb) = crate::commands::format_util::format(fs_opt_strs, fs_opts, format_opts, &mut devs) else {
+        bail!("format failed");
+    };
 
     if verbosity > 1 {
         let mut buf = Printbuf::new();
         buf.set_human_readable(true);
-        // SAFETY: the superblock format() built, as long as its count says
-        let sb = unsafe { c::bch_sb::<Validated>::from_ffi(sb) };
-        bcachefs_kernel::sb::io::sb_to_text(&mut buf, None, sb.as_unvalidated(), false, sb_field_type::members_v2.bit());
+        bcachefs_kernel::sb::io::sb_to_text(&mut buf, None, sb.sb().as_unvalidated(), false, sb_field_type::members_v2.bit());
         print!("{}", buf);
     }
+    drop(sb);
 
     // Collect paths before dropping devs — Fs::open needs O_EXCL and
     // the format fds are still holding it.
