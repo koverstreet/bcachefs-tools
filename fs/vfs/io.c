@@ -304,7 +304,7 @@ static inline int range_has_data(struct bch_fs *c, u32 subvol,
 {
 	CLASS(btree_trans, trans)(c);
 	return for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_extents, start, end,
-						    subvol, 0, k, ({
+						    subvol, BTREE_ITER_trim, k, ({
 		bkey_extent_is_data(k.k) && !bkey_extent_is_unwritten(c, k);
 	}));
 }
