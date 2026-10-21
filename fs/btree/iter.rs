@@ -1719,16 +1719,27 @@ impl BtreeIter<'_> {
     fn peek_max_type_raw(&mut self, end: c::bpos, flags: BtreeIterFlags) -> c::bkey_s_c {
         let slots = flags.contains(BtreeIterFlags::SLOTS);
         let prev  = flags.contains(BtreeIterFlags::PREV);
+        let trim  = self.iter_flags().contains(BtreeIterFlags::TRIM | BtreeIterFlags::IS_EXTENTS);
 
         unsafe {
             match (prev, slots) {
-                (false, false) => return c::bch2_btree_iter_peek_max(self.raw_mut(), &end),
-                (true,  false) => return c::bch2_btree_iter_peek_prev_min(self.raw_mut(), end),
-                (true,  true)  if bkey_lt(self.pos, end) => return c::bkey_s_c::default(),
-                (false, true)  if bkey_gt(self.pos, end) => return c::bkey_s_c::default(),
-                _ => {}
+                (false, false) => c::bch2_btree_iter_peek_max(self.raw_mut(), &end),
+                (true,  false) => c::bch2_btree_iter_peek_prev_min(self.raw_mut(), end),
+                (true,  true)  => {
+                    // reverse peeks don't trim - and peek_slot() would, at the back end
+                    debug_assert!(!self.iter_flags().contains(BtreeIterFlags::TRIM));
+                    if bkey_lt(self.pos, end) { c::bkey_s_c::default() }
+                    else { c::bch2_btree_iter_peek_slot(self.raw_mut()) }
+                }
+                // trimming, a slot is cut to the window, and an extents window
+                // ends where @end starts: the slot there is past it
+                (false, true) if trim =>
+                    if bkey_ge(self.pos, end) { c::bkey_s_c::default() }
+                    else { c::bch2_btree_iter_peek_slot_max(self.raw_mut(), end) },
+                (false, true) =>
+                    if bkey_gt(self.pos, end) { c::bkey_s_c::default() }
+                    else { c::bch2_btree_iter_peek_slot(self.raw_mut()) },
             }
-            c::bch2_btree_iter_peek_slot(self.raw_mut())
         }
     }
 
@@ -1737,6 +1748,8 @@ impl BtreeIter<'_> {
     fn peek_prev_type_raw(&mut self, flags: BtreeIterFlags) -> c::bkey_s_c {
         unsafe {
             if flags.contains(BtreeIterFlags::SLOTS) {
+                // reverse peeks don't trim - and peek_slot() would, at the back end
+                debug_assert!(!self.iter_flags().contains(BtreeIterFlags::TRIM));
                 c::bch2_btree_iter_peek_slot(self.raw_mut())
             } else {
                 c::bch2_btree_iter_peek_prev_min(self.raw_mut(), POS_MIN)
@@ -2032,6 +2045,14 @@ impl<'t> BtreeIter<'t> {
         -> Result<Option<BkeySC<'k>>, BchError>
     {
         self.peek_raw(t, |raw| unsafe { c::bch2_btree_iter_peek_slot(raw) })
+    }
+
+    /// peek_slot() with an end, past the position: for extents a hole ends
+    /// there at the latest, and with TRIM the key is cut to [position, @end).
+    pub fn peek_slot_max<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>, end: bpos)
+        -> Result<Option<BkeySC<'k>>, BchError>
+    {
+        self.peek_raw(t, |raw| unsafe { c::bch2_btree_iter_peek_slot_max(raw, end) })
     }
 
     /// Back one position, and the key there, or a deleted key for a hole -

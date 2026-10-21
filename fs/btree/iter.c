@@ -3309,7 +3309,8 @@ static void __btree_iter_peek_slot_trace(struct bch_fs *c, struct bkey_s_c k)
 	}));
 }
 
-struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_iter *iter)
+static struct bkey_s_c __bch2_btree_iter_peek_slot(struct btree_iter *iter, struct bpos end,
+						   unsigned long ip)
 {
 	struct btree_trans *trans = iter->trans;
 	struct bpos search_key;
@@ -3321,7 +3322,7 @@ struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_iter *iter)
 	bch2_btree_iter_verify_entry_exit(iter);
 	EBUG_ON(btree_iter_path(trans, iter)->level && (iter->flags & BTREE_ITER_with_key_cache));
 
-	ret = trans_maybe_inject_restart(trans, _RET_IP_);
+	ret = trans_maybe_inject_restart(trans, ip);
 	if (unlikely(ret)) {
 		k = bkey_s_c_err(ret);
 		goto out;
@@ -3394,10 +3395,15 @@ struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_iter *iter)
 			iter->k.type = KEY_TYPE_deleted;
 	} else {
 		struct bpos next;
-		struct bpos end = iter->pos;
+		struct bpos search_end = iter->pos;
 
+		/*
+		 * To the inode's end, not @end: an extent is in the leaf its end is
+		 * in, and one starting before @end can end past the leaf a peek to
+		 * @end stops in
+		 */
 		if (iter->flags & BTREE_ITER_is_extents)
-			end.offset = U64_MAX;
+			search_end.offset = U64_MAX;
 
 		EBUG_ON(btree_iter_path(trans, iter)->level);
 
@@ -3407,7 +3413,7 @@ struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_iter *iter)
 		iter2.flags &= ~BTREE_ITER_trim;
 
 		while (1) {
-			k = bch2_btree_iter_peek_max(&iter2, &end);
+			k = bch2_btree_iter_peek_max(&iter2, &search_end);
 			if ((iter2.flags & BTREE_ITER_is_extents) &&
 			    k.k &&
 			    !bkey_err(k) &&
@@ -3435,6 +3441,9 @@ struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_iter *iter)
 			iter->k.type = KEY_TYPE_deleted;
 
 		next = k.k ? bkey_start_pos(k.k) : POS_MAX;
+		/* a hole ends at @end at the latest */
+		if ((iter->flags & BTREE_ITER_is_extents) && bkey_lt(end, next))
+			next = end;
 
 		if (bkey_lt(iter->pos, next)) {
 			bkey_init(&iter->k);
@@ -3460,12 +3469,40 @@ out:
 	if (unlikely(ret))
 		k = bkey_s_c_err(ret);
 
-	k = btree_iter_maybe_trim(iter, k, SPOS_MAX);
+	k = btree_iter_maybe_trim(iter, k, end);
 out2:
 	event_trace_fn(trans->c, btree_iter_peek_slot,
 		       __btree_iter_peek_slot_trace(trans->c, k));
 
 	return k;
+}
+
+/**
+ * bch2_btree_iter_peek_slot() - the key at the iterator's position, or a hole
+ * there - a deleted key - if there's none
+ * @iter:	iterator to peek from
+ *
+ * Returns:	key if found, or an error extractable with bkey_err().
+ */
+struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_iter *iter)
+{
+	return __bch2_btree_iter_peek_slot(iter, SPOS_MAX, _RET_IP_);
+}
+
+/**
+ * bch2_btree_iter_peek_slot_max() - bch2_btree_iter_peek_slot() with an end:
+ * for extents, a hole ends at @end at the latest, and with BTREE_ITER_trim the
+ * key is cut to [iter->pos, @end)
+ * @iter:	iterator to peek from
+ * @end:	the end of the window, past the iterator's position
+ *
+ * Returns:	key if found, or an error extractable with bkey_err().
+ */
+struct bkey_s_c bch2_btree_iter_peek_slot_max(struct btree_iter *iter, struct bpos end)
+{
+	EBUG_ON((iter->flags & BTREE_ITER_is_extents) && !bkey_lt(iter->pos, end));
+
+	return __bch2_btree_iter_peek_slot(iter, end, _RET_IP_);
 }
 
 struct bkey_s_c bch2_btree_iter_next_slot(struct btree_iter *iter)
@@ -3478,6 +3515,9 @@ struct bkey_s_c bch2_btree_iter_next_slot(struct btree_iter *iter)
 
 struct bkey_s_c bch2_btree_iter_prev_slot(struct btree_iter *iter)
 {
+	/* reverse peeks don't trim - and peek_slot() would, at the back end */
+	EBUG_ON(iter->flags & BTREE_ITER_trim);
+
 	if (!bch2_btree_iter_rewind(iter))
 		return bkey_s_c_null;
 

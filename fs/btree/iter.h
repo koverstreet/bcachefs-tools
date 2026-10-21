@@ -1036,6 +1036,9 @@ static inline int __bch2_bkey_get_i_typed(struct btree_trans *trans,
 static inline struct bkey_s_c bch2_btree_iter_peek_prev_type(struct btree_iter *iter,
 							     enum btree_iter_update_trigger_flags flags)
 {
+	/* reverse peeks don't trim - and peek_slot() would, at the back end */
+	EBUG_ON((flags & BTREE_ITER_slots) && (iter->flags & BTREE_ITER_trim));
+
 	return  flags & BTREE_ITER_slots      ? bch2_btree_iter_peek_slot(iter) :
 						bch2_btree_iter_peek_prev(iter);
 }
@@ -1066,12 +1069,29 @@ static inline struct bkey_s_c bch2_btree_iter_peek_max_type(struct btree_iter *i
 		if (!(flags & BTREE_ITER_slots))
 			return bch2_btree_iter_peek_prev_min(iter, end);
 
+		/* reverse peeks don't trim - and peek_slot() would, at the back end */
+		EBUG_ON(iter->flags & BTREE_ITER_trim);
+
 		if (bkey_lt(iter->pos, end))
 			return bkey_s_c_null;
-	} else {
-		if (bkey_gt(iter->pos, end))
-			return bkey_s_c_null;
+
+		return bch2_btree_iter_peek_slot(iter);
 	}
+
+	/*
+	 * Trimming, a slot is cut to the window, and an extents window ends where
+	 * @end starts: the slot there is past it.
+	 */
+	if ((iter->flags & (BTREE_ITER_trim|BTREE_ITER_is_extents)) ==
+	    (BTREE_ITER_trim|BTREE_ITER_is_extents)) {
+		if (bkey_ge(iter->pos, end))
+			return bkey_s_c_null;
+
+		return bch2_btree_iter_peek_slot_max(iter, end);
+	}
+
+	if (bkey_gt(iter->pos, end))
+		return bkey_s_c_null;
 
 	return bch2_btree_iter_peek_slot(iter);
 }

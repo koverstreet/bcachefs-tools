@@ -225,6 +225,36 @@ fn test_iterate_extents_trim(fs: &Fs, nr: u64) -> TestRet {
         Ok((k.k.start_offset(), k.k.p.offset))
     })?;
     assert_eq!(slot, (start, 8));
+
+    // peek_slot_max(): a key cut to the window, a hole ending where it does -
+    // the hole past the last key, which ends on a multiple of 8
+    let keys_end = nr.next_multiple_of(8);
+    let (hole, hole_end) = (keys_end + 2, keys_end + 6);
+    let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, start, u32::MAX),
+                                  BtreeIterFlags::SLOTS | BtreeIterFlags::TRIM);
+    let slots = lockrestart_do(&trans, |t| {
+        let k = iter.peek_slot_max(t, pos(0, 6))?.expect("a slot always has a key");
+        let k = (k.k.start_offset(), k.k.p.offset);
+        iter.set_pos(spos(0, hole, u32::MAX));
+        let h = iter.peek_slot_max(t, pos(0, hole_end))?.expect("a slot always has a key");
+        Ok((k, (h.k.is_deleted(), h.k.start_offset(), h.k.p.offset)))
+    })?;
+    assert_eq!(slots, ((start, 6), (true, hole, hole_end)));
+
+    // A slots walk: contiguous - the keys, then the hole past the last -
+    // and inside the window, ending at its end
+    let end = keys_end + 12;
+    let mut i = start;
+    let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, start, u32::MAX),
+                                  BtreeIterFlags::SLOTS | BtreeIterFlags::TRIM);
+    iter.for_each_max(&trans, pos(0, end), |_, _, k| {
+        assert_eq!(k.k.start_offset(), i);
+        assert!(k.k.p.offset <= end, "{} past the end, {end}", k.k);
+        assert_eq!(k.k.is_deleted(), i >= keys_end, "{} at {i}", k.k);
+        i = k.k.p.offset;
+        Ok(())
+    })?;
+    assert_eq!(i, end);
     Ok(())
 }
 
