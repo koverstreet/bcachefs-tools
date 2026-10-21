@@ -412,9 +412,9 @@ pub(super) fn entries_swab(sizes: EntrySizes, b: &mut [u8]) {
 
     for e in (EntriesMut { sizes, b }).map(|(ty, b, stop)| ExtentEntryMut::new(ty, b, stop)) {
         match e {
-            ExtentEntryMut::crc32(e) => e.set_csum(e.csum().swap_bytes()),
+            ExtentEntryMut::crc32(e) => e.update_csum(|c| c.swap_bytes()),
             ExtentEntryMut::crc64(e) => {
-                e.set_csum_hi(e.csum_hi().swap_bytes());
+                e.update_csum_hi(|c| c.swap_bytes());
                 e.csum_lo = { e.csum_lo }.swap_bytes();
             }
             ExtentEntryMut::crc128(e) => {

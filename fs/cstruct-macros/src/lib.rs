@@ -386,6 +386,23 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     let bf = one_item!(&text, Bitfield, "a bitfield struct");
     let mut out = record(&text, &[]);
 
+    // update_x(f): set_x(f(x())), each member's, as visible as its setter -
+    // bitfield_struct's, which has the getter and setter but not this.
+    // XXX Deprecated when real field projections arrive: x op= v through a
+    // projected place instead.
+    let mut update = String::new();
+    for (m, ty, _) in &bf.fields {
+        let m = rust_ident(m);
+        if m.starts_with('_') {
+            continue;
+        }
+        let vis = s.vis.iter().find(|(n, _)| *n == m).map_or("pub", |(_, v)| v.as_str());
+        update.push_str(&format!(
+            "#[allow(dead_code)]\n\
+             {vis} fn update_{m}(&mut self, f: impl FnOnce({ty}) -> {ty}) {{ self.set_{m}(f(self.{m}())) }}\n"));
+    }
+    out.push_str(&format!("impl {name} {{\n{update}}}\n"));
+
     if s.c_struct {
         let repr = if args.align8 { "#[repr(C, align(8))]" } else { "#[repr(C)]" };
         let packed = if s.packed { "#[c_packed]" } else { "" };
@@ -407,7 +424,10 @@ fn bitfield_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
             if !m.starts_with('_') && vis.replace(' ', "") != "pub(self)" {
                 fns.push_str(&format!(
                     "{vis} fn {m}(&self) -> {ty} {{ let b = self.$field; b.{m}() }}\n\
-                     {vis} fn set_{m}(&mut self, v: {ty}) {{ let mut b = self.$field; b.set_{m}(v); self.$field = b; }}\n"));
+                     {vis} fn set_{m}(&mut self, v: {ty}) {{ let mut b = self.$field; b.set_{m}(v); self.$field = b; }}\n\
+                     {vis} fn update_{m}(&mut self, f: impl FnOnce({ty}) -> {ty}) {{\n\
+                         let mut b = self.$field; b.set_{m}(f(b.{m}())); self.$field = b;\n\
+                     }}\n"));
             }
         }
         out.push_str(&format!(
@@ -1419,12 +1439,18 @@ fn bitmask_expand(input: TokenStream) -> Result<TokenStream, String> {
              pub fn {m}(&self) -> {ty} {{\n\
                  (({get} >> ({start})) & (u64::MAX >> (64 - (({end}) - ({start}))))){from}\n\
              }}\n"));
+        // update_x(f): set_x(f(x())). XXX Deprecated when real field
+        // projections arrive: x op= v through a projected place instead.
         setters.push_str(&format!(
             "#[allow(dead_code)]\n\
              pub fn set_{set_m}(&mut self, v: {ty}) {{\n\
                  let mask = (u64::MAX >> (64 - (({end}) - ({start})))) << ({start});\n\
                  let new = ({get} & !mask) | (((v{to}) << ({start})) & mask);\n\
                  {set};\n\
+             }}\n\
+             #[allow(dead_code)]\n\
+             pub fn update_{set_m}(&mut self, f: impl FnOnce({ty}) -> {ty}) {{\n\
+                 self.set_{set_m}(f(self.{m}()))\n\
              }}\n"));
     }
 

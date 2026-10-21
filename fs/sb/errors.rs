@@ -347,7 +347,7 @@ impl Fs {
         match counts.binary_search_by_key(&err.0, |e| e.id().into()) {
             Ok(i) => {
                 let e = &mut counts[i];
-                e.set_nr((e.nr() + 1).min(CPU_NR_MAX));
+                e.update_nr(|n| (n + 1).min(CPU_NR_MAX));
                 e.last_error_time = now;
             }
             Err(i) => {

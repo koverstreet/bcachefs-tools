@@ -401,7 +401,7 @@ fn test_btree_ptr_stale_dirty_key(
         if ptr_entry.cached() == 0 && u64::from(ptr_entry.dev()) != c::BCH_SB_MEMBER_INVALID as u64 {
             // gen is 8 bits: one less, as C's ptr->gen-- - the setter checks
             // that the value fits
-            ptr_entry.set_generation(ptr_entry.generation().wrapping_sub(1));
+            ptr_entry.update_generation(|g| g.wrapping_sub(1));
             updated = true;
             break;
         }
@@ -483,7 +483,7 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
                     _ => None,
                 });
             if let Some(sp) = sp {
-                sp.set_block(sp.block() + 1);
+                sp.update_block(|b| b + 1);
             }
 
             t.update(&iter, &u, UpdateTriggerFlags::NORUN)?;

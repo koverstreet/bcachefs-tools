@@ -59,7 +59,7 @@ impl c::bch_io_failures {
             f.ec_errcode = code;
         } else if err.raw() == bch_errcode::BCH_ERR_data_read_retry_csum_err.0 as i32 {
             // its 7 bits, wrapping as C's bitfield does
-            f.bits.set_csum_nr(f.bits.csum_nr().wrapping_add(1) & 0x7f);
+            f.bits.update_csum_nr(|n| n.wrapping_add(1) & 0x7f);
         } else {
             f.errcode = code;
         }

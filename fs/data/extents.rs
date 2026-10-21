@@ -155,7 +155,7 @@ pub trait BkeyVExtents: BkeyV {
                 for e in p.extent_entries_mut(fs) {
                     match e {
                         ExtentEntryMut::ptr(ptr) => if !seen_crc {
-                            ptr.set_offset(ptr.offset() + sub);
+                            ptr.update_offset(|o| o + sub);
                         },
                         mut e => if let Some(mut crc) = crc_unpack(&pk, e.as_entry()) {
                             let old_offset = crc.offset;
@@ -177,7 +177,7 @@ pub trait BkeyVExtents: BkeyV {
             t::KEY_TYPE_reflink_p => {
                 let mut p = k.as_s().arm::<c::ReflinkP>().expect("a reflink_p");
                 let v = p.v_mut();
-                v.set_idx(v.idx() + sub);
+                v.update_idx(|i| i + sub);
             }
             ty @ (t::KEY_TYPE_inline_data | t::KEY_TYPE_indirect_inline_data) => {
                 let off = inline_data_offset(ty);
