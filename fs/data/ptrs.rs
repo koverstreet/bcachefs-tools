@@ -39,7 +39,7 @@ mod read;
 #[path = "ptrs_ops.rs"]
 mod ops;
 #[path = "ptrs_c_export.rs"]
-mod c_export;
+pub mod c_export;
 
 pub use edit::BkeyVPtrsMut;
 pub use ops::{bkey_ptrs_to_text, bkey_ptrs_validate, btree_ptr_v2_compat, btree_ptr_v2_to_text, ptr_swab};

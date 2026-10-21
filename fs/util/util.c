@@ -1663,7 +1663,8 @@ int bch2_sysfs_create_file(struct kobject *kobj, const struct attribute *attr)
 /* For util/rhashtable.rs, to which struct bucket_table is opaque */
 const struct bucket_table *bch2_rht_table(const struct rhashtable *ht)
 {
-	return rht_dereference_rcu(ht->tbl, ht);
+	/* lockdep_rht_mutex_is_held() only reads it, but isn't const */
+	return rht_dereference_rcu(ht->tbl, (struct rhashtable *) ht);
 }
 
 unsigned bch2_rht_nr_buckets(const struct bucket_table *tbl)

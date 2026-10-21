@@ -188,7 +188,7 @@ impl Fs {
     /// The table, from the superblock's section. A filesystem that's never
     /// blacklisted anything has none: nothing's published, and lookups find
     /// nothing.
-    fn journal_seq_blacklist_rebuild(&self, sb: &SbLockGuard) -> Result<(), BchError> {
+    fn journal_seq_blacklist_rebuild(&self, sb: &SbLockGuard<'_>) -> Result<(), BchError> {
         let Some(bl) = sb.field::<Section>() else { return Ok(()) };
 
         // SAFETY: under sb_lock, the writers' lock

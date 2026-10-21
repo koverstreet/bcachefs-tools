@@ -122,8 +122,8 @@ macro_rules! events {
 
             extern "C" {
                 $(
-                    pub static [<__tracepoint_ $name>]: c::tracepoint;
-                    pub fn [<rust_do_trace_ $name>](c: *mut c::bch_fs, str: *const ::core::ffi::c_char);
+                    pub(super) static [<__tracepoint_ $name>]: c::tracepoint;
+                    pub(super) fn [<rust_do_trace_ $name>](c: *mut c::bch_fs, str: *const ::core::ffi::c_char);
                 )*
             }
         }
@@ -351,7 +351,7 @@ pub fn bch2_fs_counters_exit(c: &Opaque<c::bch_fs>) {
 // ── BCH_IOCTL_QUERY_COUNTERS ─────────────────────────────────────────────────
 
 #[cfg(not(NO_BCACHEFS_CHARDEV))]
-mod ioctl {
+pub mod ioctl {
     use core::ffi::c_long;
     use core::mem::{offset_of, size_of};
 

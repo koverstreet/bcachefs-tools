@@ -196,7 +196,6 @@ mod vfs {
     use crate::inode;
     use crate::snapshots::subvolume;
     use crate::str_hash;
-    use crate::util::ffi::Opaque;
     use crate::util::os_str::{OsStr, OsStrExt};
     use crate::util::vstructs::Validated;
     use crate::vfs::dentry::Dentry;

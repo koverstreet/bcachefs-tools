@@ -341,7 +341,7 @@ fn downgrade_entries(major: u64, version_incompat: u32, have_stripes: bool) -> R
 impl Fs {
     /// The downgrade section, from downgrade_entries() - for a superblock
     /// write.
-    fn sb_downgrade_update(&self, sb: &mut SbLockGuard) -> Result<(), BchError> {
+    fn sb_downgrade_update(&self, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         // have_stripes() reads the btree roots
         if !self.flag(c::bch_fs_flags::BCH_FS_btree_running) {
             return Ok(());

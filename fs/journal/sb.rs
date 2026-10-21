@@ -113,7 +113,7 @@ impl SbFieldOps for c::bch_sb_field_journal_v2 {
 /// v2, if it was added after v1 - so v2 can't be written through a pointer
 /// from before (C did: its entries landed v1's size past v2). And on failure,
 /// the superblock is as it was.
-fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard, ca: &c::bch_dev, buckets: &[u64])
+fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &c::bch_dev, buckets: &[u64])
     -> Result<(), BchError>
 {
     let dev_sb = sb.dev_sb(ca);

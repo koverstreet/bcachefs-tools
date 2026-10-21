@@ -346,7 +346,7 @@ fn target_to_text_sb(out: &mut Printbuf, sb: &c::bch_sb, target: Target) {
 // ── The table ────────────────────────────────────────────────────────────
 
 /// Without a disk groups section the table is left as it is.
-pub(crate) fn sb_disk_groups_to_cpu(fs: &Fs, sb: &SbLockGuard) -> Result<(), BchError> {
+pub(crate) fn sb_disk_groups_to_cpu(fs: &Fs, sb: &SbLockGuard<'_>) -> Result<(), BchError> {
     let Some(groups) = sb.field::<c::bch_sb_field_disk_groups>() else {
         return Ok(());
     };
@@ -393,7 +393,7 @@ pub unsafe fn bch2_fs_disk_groups_exit(c: &Opaque<c::bch_fs>) {
     unsafe { Fs::from_c(c).disk_groups.free() }
 }
 
-fn dev_group_set(fs: &Fs, sb: &mut SbLockGuard, dev: u32, name: &[u8]) -> Result<(), BchError> {
+fn dev_group_set(fs: &Fs, sb: &mut SbLockGuard<'_>, dev: u32, name: &[u8]) -> Result<(), BchError> {
     let v = dev_label_resolve(sb, name)?;
     sb.fs_member_mut(dev).set_group(v.into());
     sb_disk_groups_to_cpu(fs, sb)

@@ -965,7 +965,7 @@ pub fn bch2_replicas_gc_accounted(c: &Opaque<c::bch_fs>) -> c_int {
 }
 
 /// The table, from the superblock: at open - after, it would lose the refs.
-pub(crate) fn sb_replicas_to_cpu(fs: &Fs, sb: &SbLockGuard) -> Result<(), BchError> {
+pub(crate) fn sb_replicas_to_cpu(fs: &Fs, sb: &SbLockGuard<'_>) -> Result<(), BchError> {
     assert!(!fs.flag(c::bch_fs_flags::BCH_FS_started), "replicas table rebuilt with refs held");
 
     let mut new = ReplicasCpu::from_entries(|| sb_entries(sb.sb()), |t| !fs.replicas_obsolete(t))

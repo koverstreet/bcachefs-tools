@@ -13,7 +13,7 @@
 #![cfg(not(NO_BCACHEFS_FS))]
 
 use crate::cstructs::c;
-use core::ffi::{c_int, c_uint, c_void};
+use core::ffi::{c_int, c_uint};
 use cstruct_macros::c_extern;
 
 c_extern! {

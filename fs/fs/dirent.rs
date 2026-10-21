@@ -13,7 +13,9 @@ pub(crate) mod format;
 
 pub use format::{d_type_str, set_field, DirentName, DirentTarget, RawNames};
 use crate::btree::bkey::prelude::*;
-use format::{D_NAME_OFFSET, D_NAMES_OFFSET};
+use format::D_NAME_OFFSET;
+#[cfg(CONFIG_UNICODE)]
+use format::D_NAMES_OFFSET;
 
 use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC};
 use crate::btree::iter::{
@@ -21,7 +23,9 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::c;
-use crate::errcode::{bch_errcode, err_ptr, ret_to_c, ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
+#[cfg(CONFIG_UNICODE)]
+use crate::errcode::ret_to_result_void as ret_to_result;
 use crate::fs::Fs;
 use crate::inode;
 use crate::snapshots::subvolume;

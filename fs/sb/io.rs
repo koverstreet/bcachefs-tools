@@ -8,7 +8,9 @@ use crate::util::projections::{AtomicWord, Volatile, VolatileWriter};
 use crate::util::{Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64};
-use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, VStructError, Validated, ValidatedEntries};
+use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
+#[cfg(feature = "std")]
+use crate::util::vstructs::VStructError;
 use core::ffi::{c_int, c_uint, CStr};
 use crate::util::ffi::Opaque;
 use crate::util::kernel::NSEC_PER_SEC;
@@ -696,7 +698,7 @@ pub fn bch2_sb_upgrade_incompat(c: &Opaque<c::bch_fs>) {
 /// The superblock only: c->sb keeps the version it's coming from, which
 /// bch2_sb_set_downgrade() wants next, until the write's sb_update() brings
 /// it up to date.
-fn check_version_downgrade(fs: &Fs, sb: &mut SbLockGuard) -> bool {
+fn check_version_downgrade(fs: &Fs, sb: &mut SbLockGuard<'_>) -> bool {
     let current = c::bcachefs_metadata_version_current;
     let s = sb.sb_mut();
 
@@ -727,7 +729,7 @@ pub fn bch2_check_version_downgrade(c: &Opaque<c::bch_fs>) -> bool {
 /// The superblock at @new, and allowing incompatible features up to it if
 /// @incompat; a new major drops the downgrade section, which is for
 /// downgrades within one. bch2_sb_upgrade().
-fn sb_upgrade(sb: &mut SbLockGuard, new: u32, incompat: bool) {
+fn sb_upgrade(sb: &mut SbLockGuard<'_>, new: u32, incompat: bool) {
     if c::BCH_VERSION_MAJOR(new.into()) > c::BCH_VERSION_MAJOR(sb.sb().version.get().into()) {
         sb.field_resize::<c::bch_sb_field_downgrade>(0);
     }
@@ -1419,7 +1421,7 @@ impl c::bch_sb_cpu {
 }
 
 /// c->sb, from the superblock: bch2_sb_update(). And ca->mi, each member's.
-pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard) {
+pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard<'_>) {
     let (handle, cpu) = sb.parts();
     let src = handle.sb();
 
@@ -1528,7 +1530,7 @@ fn copy_super(dst: &mut bch_sb_handle, src: &bch_sb) -> Result<(), BchError> {
 
 /// The filesystem's superblock from @src, and what it derives from it:
 /// bch2_sb_to_fs().
-fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard, src: &bch_sb) -> Result<(), BchError> {
+fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &bch_sb) -> Result<(), BchError> {
     sb.sb_realloc(0)?;
     copy_super(sb, src)?;
     crate::alloc::replicas::sb_replicas_to_cpu(fs, sb)?;

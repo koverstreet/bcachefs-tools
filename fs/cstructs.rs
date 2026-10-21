@@ -145,7 +145,6 @@
 #[path = "init/recovery_types.rs"] pub mod init_recovery_types;
 #[path = "journal/init_types.rs"] pub mod journal_init_types;
 #[path = "journal/validate_types.rs"] pub mod journal_validate_types;
-#[path = "snapshots/snapshot_types.rs"] pub mod snapshots_snapshot_types;
 #[path = "util/varint_types.rs"] pub mod util_varint_types;
 
 /// What C's types are to Rust: every type and constant above, and the
@@ -334,6 +333,5 @@ pub mod c {
     pub use super::init_recovery_types::*;
     pub use super::journal_init_types::*;
     pub use super::journal_validate_types::*;
-    pub use super::snapshots_snapshot_types::*;
     pub use super::util_varint_types::*;
 }

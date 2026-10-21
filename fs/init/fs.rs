@@ -216,13 +216,13 @@ impl Fs {
     /// It changes the superblock - its seq, its checksum - and calls back into
     /// Rust that takes sb_lock as held: so @_sb, the lock held, is borrowed
     /// mutably, and nothing in the superblock is borrowed across the write.
-    pub fn write_super(&self, _sb: &mut SbLockGuard) {
+    pub fn write_super(&self, _sb: &mut SbLockGuard<'_>) {
         unsafe { c::bch2_write_super(self.as_ptr()) };
     }
 
     /// write_super(), for a write whose only reason is a replicas entry coming
     /// or going: it may leave the slow disks behind - bch2_write_super_replicas().
-    pub fn write_super_replicas(&self, _sb: &mut SbLockGuard) {
+    pub fn write_super_replicas(&self, _sb: &mut SbLockGuard<'_>) {
         unsafe { c::bch2_write_super_replicas(self.as_ptr()) };
     }
 
@@ -375,14 +375,14 @@ impl Fs {
         Ok(())
     }
 
-    pub fn write_super_ret(&self, _sb: &mut SbLockGuard) -> Result<(), BchError> {
+    pub fn write_super_ret(&self, _sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         ret_to_result(unsafe { c::bch2_write_super(self.as_ptr()) })
     }
 
     /// A superblock write that's part of bringing the filesystem up, on a
     /// nostart open that will start it afterwards - allowed before start,
     /// like recovery's own.
-    pub fn write_super_bringup(&self, _sb: &mut SbLockGuard) -> Result<(), BchError> {
+    pub fn write_super_bringup(&self, _sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         ret_to_result(unsafe {
             c::bch2_write_super_flags(self.as_ptr(), c::bch_sb_write_flags::BCH_SB_WRITE_bringup)
         })
@@ -391,7 +391,7 @@ impl Fs {
     /// Apply in-memory superblock edits to the in-memory state derived from
     /// it (c->sb, member info) without writing - for an open that will start
     /// and persist them then.
-    pub fn sb_update(&self, sb: &mut SbLockGuard) {
+    pub fn sb_update(&self, sb: &mut SbLockGuard<'_>) {
         crate::sb::io::sb_update(self, sb)
     }
 

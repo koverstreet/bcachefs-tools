@@ -116,7 +116,7 @@ fn sb_member_find_slot(fs: &Fs, sb: &c::bch_sb) -> Result<u32, BchError> {
 
 /// A member slot for a new device, members_v2 and nr_devices grown to hold
 /// it.
-fn sb_member_alloc(fs: &Fs, sb: &mut SbLockGuard) -> Result<u32, BchError> {
+fn sb_member_alloc(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<u32, BchError> {
     let dev = sb_member_find_slot(fs, sb.sb())?;
     let nr = (dev + 1).max(fs.nr_devices());
 
@@ -675,7 +675,7 @@ fn failure_domain_id(sb: &c::bch_sb, dev: u32, m: &c::bch_member) -> u16 {
 
 /// ca->mi, and the masks of rotational and removed devices, from the
 /// superblock.
-pub(crate) fn members_to_cpu(fs: &Fs, sb: &SbLockGuard) {
+pub(crate) fn members_to_cpu(fs: &Fs, sb: &SbLockGuard<'_>) {
     for ca in fs.members() {
         let dev = u32::from(ca.dev_idx);
         let m = sb_member(sb.sb(), dev).unwrap_or_default();
@@ -752,7 +752,7 @@ fn mi_update_str(dst: &mut [u8], src: &[c_char]) -> bool {
 
 /// Member @dev's name, model and serial made @id's, and its rotational
 /// flag if it's never been set. Whether anything changed.
-fn mi_field_upgrades(sb: &mut SbLockGuard, dev: u32, id: &c::bch_dev_identity) -> bool {
+fn mi_field_upgrades(sb: &mut SbLockGuard<'_>, dev: u32, id: &c::bch_dev_identity) -> bool {
     let m = sb.fs_member_mut(dev);
     let mut dirty = false;
 
@@ -840,7 +840,7 @@ impl c::bch_dev {
 
     /// ca->btree_allocated_bitmap_gc made @v: written under sb_lock, @_sb,
     /// and read without it, as ca->mi.
-    fn set_btree_bitmap_gc(&self, _sb: &SbLockGuard, v: u64) {
+    fn set_btree_bitmap_gc(&self, _sb: &SbLockGuard<'_>, v: u64) {
         // SAFETY: as set_mi()
         unsafe { (&raw const self.btree_allocated_bitmap_gc).cast_mut().write(v) }
     }
@@ -848,7 +848,7 @@ impl c::bch_dev {
     /// [@start, @start + @sectors) marked in its member's bitmap, and in gc's
     /// - the bitmap coarsened first if it doesn't reach that far. Whether the
     /// member changed.
-    fn btree_bitmap_mark_sectors(&self, sb: &mut SbLockGuard, start: u64, sectors: u32) -> bool {
+    fn btree_bitmap_mark_sectors(&self, sb: &mut SbLockGuard<'_>, start: u64, sectors: u32) -> bool {
         let end = start + u64::from(sectors);
         let mut gc = self.btree_allocated_bitmap_gc;
         let mut dirty = false;
@@ -890,7 +890,7 @@ impl Fs {
 
     /// @k's node marked on each device it points to. Whether a member
     /// changed.
-    fn btree_bitmap_mark_locked(&self, sb: &mut SbLockGuard, k: BkeySC<'_>) -> bool {
+    fn btree_bitmap_mark_locked(&self, sb: &mut SbLockGuard<'_>, k: BkeySC<'_>) -> bool {
         let Some(k) = k.arm::<Ptrs>() else { return false };
         let rcu = read_lock();
         let mut dirty = false;
@@ -1478,7 +1478,7 @@ impl c::bch_dev {
     }
 
     /// ca->mi made @mi: see "In memory" above.
-    fn set_mi(&self, _sb: &SbLockGuard, mi: c::bch_member_cpu) {
+    fn set_mi(&self, _sb: &SbLockGuard<'_>, mi: c::bch_member_cpu) {
         // SAFETY: sb_lock, held, is ca->mi's writers' lock; its readers take
         // none, as in C
         unsafe { (&raw const self.mi).cast_mut().write(mi) }

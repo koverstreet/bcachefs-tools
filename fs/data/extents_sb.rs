@@ -39,7 +39,7 @@ fn sizes_to_cpu(theirs: &[u8]) -> ([u8; 31], u8) {
 }
 
 /// c->sb's extent entry sizes, from the superblock's section.
-pub(crate) fn sb_extent_type_u64s_to_cpu(sb: &mut SbLockGuard) {
+pub(crate) fn sb_extent_type_u64s_to_cpu(sb: &mut SbLockGuard<'_>) {
     let (handle, cpu) = sb.parts();
     let theirs = handle.field::<c::bch_sb_field_extent_type_u64s>().map_or(&[][..], |e| sizes(&e.d));
     let (u64s, known) = sizes_to_cpu(theirs);
@@ -48,7 +48,7 @@ pub(crate) fn sb_extent_type_u64s_to_cpu(sb: &mut SbLockGuard) {
     cpu.extent_types_known.set(known);
 }
 
-fn sb_extent_type_u64s_from_cpu(fs: &Fs, sb: &mut SbLockGuard) -> Result<(), BchError> {
+fn sb_extent_type_u64s_from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
     let u64s = (size_of::<Head<c::bch_sb_field>>() + c::BCH_EXTENT_ENTRY_MAX as usize)
         .div_ceil(size_of::<u64>());
     let e = sb.field_get_minsize::<c::bch_sb_field_extent_type_u64s>(u64s as u32);

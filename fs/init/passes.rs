@@ -75,11 +75,11 @@ mod pass_fns {
     macro_rules! pass_fns {
         ($(($name:ident, $($rest:tt)*)),* $(,)?) => { ::paste::paste! {
             unsafe extern "C" {
-                $(pub fn [<bch2_ $name>](c: *mut crate::c::bch_fs) -> core::ffi::c_int;)*
+                $(pub(super) fn [<bch2_ $name>](c: *mut crate::c::bch_fs) -> core::ffi::c_int;)*
             }
 
             /// By pass.
-            pub const RUN: [unsafe extern "C" fn(*mut crate::c::bch_fs) -> core::ffi::c_int; super::NR] =
+            pub(super) const RUN: [unsafe extern "C" fn(*mut crate::c::bch_fs) -> core::ffi::c_int; super::NR] =
                 [$([<bch2_ $name>]),*];
         } };
     }
@@ -294,7 +294,7 @@ fn entry(sb: &c::bch_sb, pass: Pass) -> Option<c::recovery_pass_entry> {
 
 /// @pass's entry, the section made or grown to hold it: None if there's no
 /// room in the superblock.
-fn entry_mut<'a>(fs: &Fs, sb: &'a mut SbLockGuard, pass: Pass) -> Option<&'a mut c::recovery_pass_entry> {
+fn entry_mut<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, pass: Pass) -> Option<&'a mut c::recovery_pass_entry> {
     let stable = pass.to_stable().0 as usize;
     let bytes = size_of::<Head<Section>>() + (stable + 1) * size_of::<c::recovery_pass_entry>();
     let Some(r) = sb.field_get_minsize::<Section>((bytes / size_of::<u64>()) as u32) else {
