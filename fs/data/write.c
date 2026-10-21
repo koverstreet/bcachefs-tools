@@ -879,14 +879,15 @@ int bch2_sum_sector_overwrites(struct btree_trans *trans,
 	 */
 	*new_nr_replicas	= new_d.nr_replicas;
 
+	/* @extent_iter is at @new's start: each slot, trimmed, is what @new overwrites */
 	CLASS(btree_iter_copy, iter)(extent_iter);
+	iter.flags |= BTREE_ITER_trim;
+
 	struct bkey_s_c old;
 	int ret = 0;
 	for_each_btree_key_max_continue_norestart(iter,
 				new->k.p, BTREE_ITER_slots, old, ret) {
-		s64 sectors = min(new->k.p.offset, old.k->p.offset) -
-			max(bkey_start_offset(&new->k),
-			    bkey_start_offset(old.k));
+		s64 sectors = old.k->size;
 
 		struct bkey_durability old_d = bch2_bkey_durability_safe(c, old);
 
