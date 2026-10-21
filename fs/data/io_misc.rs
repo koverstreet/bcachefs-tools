@@ -88,14 +88,23 @@ pub fn fpunch_at<'t>(
             let snapshot = subvolume::get_snapshot(&t, inum.subvol as u32)?;
             iter.set_snapshot(snapshot);
 
-            /*
-             * peek_max() doesn't have ideal semantics for extents:
-             */
-            let Some(k) = iter.peek_max(&t, end_pos)? else { return Ok(true) };
-            let k_end = k.k.p.offset;
+            // Trimmed through a copy, @iter's flags being the caller's; @iter is
+            // moved where the peek would have left it - at the extent, or with
+            // none left at @end, which reflink's remap loops on
+            let next = {
+                let mut window = iter.copy();
+                window.set_flags(BtreeIterFlags::TRIM);
+                let k = window.peek_max(&t, end_pos)?;
+                k.map(|k| k.k.size).map(|sectors| (window.pos(), sectors))
+            };
+            let Some((start, sectors)) = next else {
+                iter.set_pos(end_pos);
+                return Ok(true);
+            };
+            iter.set_pos(start);
 
-            let mut delete = t.bkey_alloc_init::<c::Deleted>(0, iter.pos())?;
-            delete.k_mut().resize((end.min(k_end) - iter.pos().offset) as u32);
+            let mut delete = t.bkey_alloc_init::<c::Deleted>(0, start)?;
+            delete.k_mut().resize(sectors);
 
             let delta = i_sectors_delta.as_deref_mut().map_or(core::ptr::null_mut(), core::ptr::from_mut);
             t.result(unsafe {
