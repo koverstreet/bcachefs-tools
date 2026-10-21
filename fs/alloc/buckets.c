@@ -1313,8 +1313,10 @@ static void disk_reservation_caches_reset(struct bch_fs *c, u64 *avail)
 {
 	lockdep_assert_held(&c->capacity.sectors_available_lock);
 
-	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
-		percpu_u64_set(&c->capacity.pcpu->sectors_available[i], 0);
+	int cpu;
+	for_each_possible_cpu(cpu)
+		for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
+			WRITE_ONCE(per_cpu_ptr(c->capacity.pcpu, cpu)->sectors_available[i], 0);
 
 	__bch2_fs_sectors_placeable(c, avail, NULL, true);
 }
@@ -1413,11 +1415,17 @@ int bch2_disk_reservation_add_slowpath(struct bch_fs *c, struct disk_reservation
 		pcpu->sectors_available[slot] += get;
 	}
 
+	/*
+	 * A recalc on another cpu may zero our cache: read it once, so the
+	 * subtract is from what we checked.
+	 */
+	u64 avail = READ_ONCE(pcpu->sectors_available[slot]);
+
 	/* the recalc zeroes the caches, so what we drew above isn't lost */
-	if (unlikely(pcpu->sectors_available[slot] < sectors))
+	if (unlikely(avail < sectors))
 		return disk_reservation_recalc_sectors_available(c, res, sectors, flags);
 
-	pcpu->sectors_available[slot]	-= sectors;
+	WRITE_ONCE(pcpu->sectors_available[slot], avail - sectors);
 	pcpu->online_reserved[slot]	+= sectors;
 	res->sectors			+= sectors;
 	return 0;
