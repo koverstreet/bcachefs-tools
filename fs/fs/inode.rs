@@ -1536,9 +1536,8 @@ fn delete_keys(trans: &BtreeTrans<'_>, inum: c::subvol_inum, btree: c::btree_id)
     // disk_reservation.
     let res = crate::alloc::buckets::DiskReservation::new(fs);
 
-    // We're never going to be deleting partial extents, no need to use an
-    // extent iterator:
-    let mut iter = BtreeIter::new(trans, btree, pos(inum.inum, 0), BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(trans, btree, pos(inum.inum, 0),
+                                  BtreeIterFlags::INTENT | BtreeIterFlags::TRIM);
 
     loop {
         let t = trans.begin();
@@ -1548,12 +1547,11 @@ fn delete_keys(trans: &BtreeTrans<'_>, inum: c::subvol_inum, btree: c::btree_id)
             iter.set_snapshot(snapshot);
 
             let Some(k) = iter.peek_max(&t, end)? else { return Ok(true) };
-            let k_end = k.k.p;
+            let size = k.k.size;
 
-            let at = iter.pos();
-            let mut delete = t.bkey_alloc_init::<c::Deleted>(0, at)?;
+            let mut delete = t.bkey_alloc_init::<c::Deleted>(0, iter.pos())?;
             if iter.is_extents() {
-                delete.k_mut().resize((core::cmp::min(end, k_end).offset - at.offset) as u32);
+                delete.k_mut().resize(size);
             }
 
             t.update(&iter, &delete, UpdateTriggerFlags::empty())?;
