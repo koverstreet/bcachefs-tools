@@ -39,6 +39,7 @@ pub struct per_snapshot_io_opts {
 }
 
 c_extern! {
+    pub fn bch2_bkey_reconcile_work_id(c: *const c::bch_fs, k: c::bkey_s_c) -> c::reconcile_work_id;
     pub fn bch2_bkey_get_io_opts(trans: *mut c::btree_trans, snapshot_io_opts: *mut c::per_snapshot_io_opts,
                                  k: c::bkey_s_c, opts: *mut c::bch_inode_opts) -> c_int;
     pub fn bch2_bkey_set_needs_reconcile(trans: *mut c::btree_trans,

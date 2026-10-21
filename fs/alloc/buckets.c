@@ -1484,8 +1484,8 @@ int bch2_dev_buckets_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 		       sizeof(bucket_gens->b[0]) * copy);
 	}
 
-	try(bch2_bucket_bitmap_resize(ca, &ca->bucket_backpointer_mismatch, ca->mi.nbuckets, nbuckets));
-	try(bch2_bucket_bitmap_resize(ca, &ca->bucket_backpointer_empty, ca->mi.nbuckets, nbuckets));
+	try(bch2_bucket_bitmap_resize(ca, &ca->bucket_backpointer_mismatch, nbuckets));
+	try(bch2_bucket_bitmap_resize(ca, &ca->bucket_backpointer_empty, nbuckets));
 
 	rcu_assign_pointer(ca->bucket_gens, bucket_gens);
 	bucket_gens	= old_bucket_gens;

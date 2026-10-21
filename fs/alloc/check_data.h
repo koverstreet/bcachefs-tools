@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_ALLOC_CHECK_DATA_H
 #define _BCACHEFS_ALLOC_CHECK_DATA_H
 
+#include "alloc/check_data_gen.h"
+
 int bch2_bkey_drop_device_and_update(struct btree_trans *, enum btree_id, unsigned,
 				     struct bkey_s_c, unsigned, enum bch_key_type_errors);
 

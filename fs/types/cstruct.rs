@@ -2551,8 +2551,9 @@ fn is_c_ns(s: &str) -> bool {
 
 /// The C base type Rust type @toks renders as - the canonical rendering, by
 /// which a field needs no #[c]: integers by their plain names, endian
-/// integers - Le16..Le64, zerocopy's le::/be:: - as __leN/__beN, c::foo as
-/// struct foo - unless foo ends in _t, a typedef.
+/// integers - Le16..Le64, zerocopy's le::/be:: - as __leN/__beN, a bitmap's
+/// atomic word as unsigned long, c::foo as struct foo - unless foo ends in
+/// _t, a typedef.
 fn canon_base(toks: &[Tok]) -> Option<String> {
     let path: Vec<&str> = toks.iter().filter_map(|t| match t {
         Tok::Ident(s) => Some(s.as_str()),
@@ -2567,6 +2568,7 @@ fn canon_base(toks: &[Tok]) -> Option<String> {
         [.., "c_short"] => "short", [.., "c_ushort"] => "unsigned short",
         [.., "c_int"] => "int", [.., "c_uint"] => "unsigned",
         [.., "c_long"] => "long", [.., "c_ulong"] => "unsigned long",
+        [.., "AtomicULong"] => "unsigned long",
         [.., "c_longlong"] => "long long", [.., "c_ulonglong"] => "unsigned long long",
         [.., "Le16"] => "__le16", [.., "Le32"] => "__le32", [.., "Le64"] => "__le64",
         [e, u] if (*e == "le" || *e == "be") && u.starts_with('U') => {

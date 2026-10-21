@@ -26,6 +26,25 @@ impl Ord for c::bbpos {
     }
 }
 
+impl c::bbpos {
+    pub const MIN: Self = c::bbpos { btree: c::btree_id(0), pos: crate::btree::bkey::POS_MIN };
+    /// The last of BTREE_ID_NR - 1.
+    pub const MAX: Self = c::bbpos {
+        btree: c::btree_id(c::BTREE_ID_NR as u32 - 1),
+        pos:   crate::btree::bkey::SPOS_MAX,
+    };
+
+    /// Past the last btree's last, panics.
+    pub fn successor(self) -> Self {
+        if self.pos != crate::btree::bkey::SPOS_MAX {
+            return c::bbpos { pos: self.pos.successor(), ..self };
+        }
+
+        assert!(self.btree.0 != c::BTREE_ID_NR as u32, "no position after the last btree's last");
+        c::bbpos { btree: c::btree_id(self.btree.0 + 1), pos: crate::btree::bkey::POS_MIN }
+    }
+}
+
 /// btree:pos, as bch2_bbpos_to_text().
 impl crate::util::ToText for c::bbpos {
     fn to_text(&self, out: &mut crate::util::Printbuf) {

@@ -221,6 +221,10 @@ impl<'f> BtreeTrans<'f> {
         }
     }
 
+    pub fn restart_count(&self) -> u32 {
+        unsafe { (*self.raw()).restart_count }
+    }
+
     pub fn raw(&self) -> *mut c::btree_trans {
         self.inner.as_ptr()
     }
@@ -477,6 +481,13 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     pub fn verify_not_restarted(&self) {
         self.trans.verify_not_restarted(self.restart_count);
+    }
+
+    /// For what a step does to the transaction itself - a write buffer flush, a
+    /// nested loop: those end this attempt, leaving a restart for the step to
+    /// return.
+    pub fn trans(&self) -> &'a BtreeTrans<'t> {
+        self.trans
     }
 
     pub fn unlock(&self) {
@@ -1831,6 +1842,17 @@ impl<'t> BtreeIter<'t> {
         self.pos
     }
 
+    /// @k is a key at the iterator's level, above the leaves.
+    pub fn prefetch_child(&self, t: &TransAttempt<'_, 't>, k: &BkeyI) -> Result<(), BchError> {
+        let ret = unsafe {
+            let path = (*t.raw()).paths.add(self.path as usize);
+            assert!((*path).level() != 0, "prefetching below the leaves");
+            c::bch2_btree_node_prefetch(t.raw(), path, k.as_ffi(), (*path).btree_id(),
+                                        u32::from((*path).level()) - 1)
+        };
+        t.result(ret)
+    }
+
     /// For an extents iterator: back to the start of the key it's at.
     pub fn set_pos_to_extent_start(&mut self) {
         debug_assert!(self.is_extents());
@@ -1947,6 +1969,19 @@ impl<'t> BtreeIter<'t> {
         -> Result<Option<BkeySC<'k>>, BchError>
     {
         self.peek_raw(t, |raw| unsafe { c::bch2_btree_iter_peek_max(raw, &end) })
+    }
+
+    /// At the iterator's level - new_level()'s; None if the btree isn't that deep.
+    pub fn peek_node<'k>(&'k mut self, _t: &'k TransAttempt<'_, 't>)
+        -> Result<Option<&'k c::btree>, BchError>
+    {
+        // SAFETY: the node is locked by the iterator's path, while self is
+        // borrowed, within the attempt
+        unsafe {
+            let b = c::bch2_btree_iter_peek_node(self.raw_mut());
+            // NULL past the last
+            Ok(errptr_or_null(b)?.map(|b| b.as_ref()))
+        }
     }
 
     /// The key at the iterator's position, or a deleted key for a hole.
@@ -2546,6 +2581,11 @@ impl c::btree {
 
     pub fn is_fake(&self) -> bool {
         (self.flags >> c::btree_flags::BTREE_NODE_fake as u64) & 1 != 0
+    }
+
+    /// Not yet reachable: an interior update in flight will make it so.
+    pub fn will_make_reachable(&self) -> bool {
+        (self.flags >> c::btree_flags::BTREE_NODE_will_make_reachable as u64) & 1 != 0
     }
 
     /// The node's keys, unpacked, in order.

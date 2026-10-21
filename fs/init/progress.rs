@@ -302,9 +302,20 @@ impl<'f> Progress<'f> {
         Progress { p }
     }
 
+    pub fn recovery_masks(fs: &'f Fs, msg: &'static CStr, leaf_mask: u64, inner_mask: u64) -> Self {
+        let p = &fs.recovery.progress;
+
+        p.init_masks(fs, Some(msg), leaf_mask, inner_mask);
+        Progress { p }
+    }
+
     /// Report the walk reaching @iter's position.
     pub fn update<'a, 't>(&self, t: &TransAttempt<'a, 't>, iter: &BtreeIter<'t>) -> Result<(), BchError> {
         self.p.update(t, iter)
+    }
+
+    pub fn as_raw(&self) -> *mut c::progress_indicator {
+        core::ptr::from_ref(self.p).cast_mut()
     }
 }
 

@@ -3,12 +3,12 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::locking::{MutexNoio, PercpuRwsemNoio};
+use crate::locking::{Lock, MutexNoio, PercpuRwsemNoio};
 use crate::util::vstructs::Head;
 use crate::types::{Atomic64, GenRadix, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
-use cstruct_macros::{c_const, c_enum, c_xmacro, CStruct, Init, TypeInfo};
+use cstruct_macros::{c_const, c_enum, c_rcu_array, c_xmacro, CStruct, Init, TypeInfo};
 use pin_init::pin_data;
 
 c_xmacro! {
@@ -257,12 +257,31 @@ c_enum! {
     }
 }
 
+c_rcu_array! {
+    /// A bucket_bitmap's words: replaced by a copy when the device grows.
+    pub type BucketBitmapWords = crate::util::rcu::RcuArray<crate::util::bitmap::AtomicULong>
+        as struct bucket_bitmap_words { nr, d };
+}
+
+crate::published! {
+    /// A bucket_bitmap's bits: read without its lock - by copygc, while a
+    /// check sets and frees them - so they're atomic words under RCU.
+    pub struct BucketBits {
+        pub buckets: c::BucketBitmapWords,
+        /// Bits set
+        pub nr:      crate::util::projections::Volatile<u64>,
+    }
+}
+
+/// One bit per bucket of a device, allocated when the first is set:
+/// check_extents_to_backpointers' buckets whose backpointers don't add up, and
+/// those with none. The lock serializes setting, growing and freeing; C only
+/// initializes it, and calls Rust for the rest.
 #[repr(C)]
 #[derive(CStruct)]
 pub struct bucket_bitmap {
-    pub buckets: *mut c_ulong,
-    pub nr: u64,
-    pub lock: c::mutex,
+    #[c_anon("struct mutex lock; struct bucket_bitmap_words __rcu *buckets; u64 nr")]
+    pub bits: Lock<c::mutex, (), BucketBits>,
 }
 c_default!(bucket_bitmap);
 

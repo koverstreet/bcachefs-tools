@@ -34,6 +34,10 @@ const BITS: usize = usize::BITS as usize;
 /// C's words are unsigned longs.
 const _: () = assert!(size_of::<core::ffi::c_ulong>() == size_of::<usize>());
 
+/// An AtomicBitmap's word, named as C sees it - unsigned long - for a struct
+/// C shares to declare its words with.
+pub type AtomicULong = AtomicUsize;
+
 /// Bit @bit's word, and its mask in that word.
 fn pos(bit: usize) -> (usize, usize) {
     (bit / BITS, 1 << (bit % BITS))
@@ -240,6 +244,23 @@ impl AtomicBitmap {
     pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         self.0.iter().enumerate().flat_map(|(i, w)| word_bits(i, w.load(Ordering::Relaxed)))
     }
+
+    /// The first bit from @start, below @end, set here and clear in @not; @not's
+    /// bits past its words count as clear.
+    pub fn next_andnot(&self, not: &AtomicBitmap, start: usize, end: usize) -> Option<usize> {
+        let mut bit = start;
+        while bit < end {
+            let i = bit / BITS;
+            let not_w = not.0.get(i).map_or(0, |w| w.load(Ordering::Relaxed));
+            let w = self.0.get(i)?.load(Ordering::Relaxed) & !not_w & (!0 << (bit % BITS));
+
+            if w != 0 {
+                return Some(i * BITS + w.trailing_zeros() as usize).filter(|&b| b < end);
+            }
+            bit = (i + 1) * BITS;
+        }
+        None
+    }
 }
 
 /// A fixed-size AtomicBitmap, of @W words: C's `unsigned long d[W]`, set_bit()
@@ -332,5 +353,33 @@ impl LeBitmap {
                 })
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bitmap(words: &[usize]) -> std::vec::Vec<AtomicUsize> {
+        words.iter().map(|&w| AtomicUsize::new(w)).collect()
+    }
+
+    #[test]
+    fn next_andnot_is_find_next_andnot_bit() {
+        let set = bitmap(&[1 << 3 | 1 << 63, 1 << 0 | 1 << 5]);
+        let not = bitmap(&[1 << 63]);
+        let (set, not) = (AtomicBitmap::from_words(&set), AtomicBitmap::from_words(&not));
+        let none = AtomicBitmap::from_words(&[]);
+
+        assert_eq!(set.next_andnot(none, 0, 128), Some(3));
+        assert_eq!(set.next_andnot(none, 4, 128), Some(63));
+        // masked out, and past the end of @not's words: clear there
+        assert_eq!(set.next_andnot(not, 4, 128), Some(64));
+        assert_eq!(set.next_andnot(not, 65, 128), Some(69));
+        // @end bounds it, mid-word too
+        assert_eq!(set.next_andnot(not, 65, 69), None);
+        assert_eq!(set.next_andnot(none, 70, 128), None);
+        // past the bitmap's words
+        assert_eq!(set.next_andnot(none, 70, 1000), None);
     }
 }

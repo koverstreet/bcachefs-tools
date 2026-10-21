@@ -9,7 +9,7 @@ use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::util::ffi::c_char;
 use crate::util::{Printbuf, ToText};
-use core::ffi::c_uint;
+use core::ffi::{c_int, c_uint};
 use cstruct_macros::c_extern;
 
 c_extern! {
@@ -20,6 +20,8 @@ c_extern! {
     pub fn bch2_btree_cache_to_text(out: *mut c::printbuf, bc: *const c::bch_fs_btree_cache);
     pub fn bch2_btree_cache_pin_budget(c: *mut c::bch_fs) -> u64;
     pub fn bch2_node_pin(c: *mut c::bch_fs, b: *mut c::btree);
+    pub fn bch2_btree_node_prefetch(trans: *mut c::btree_trans, path: *mut c::btree_path,
+                                    k: *const c::bkey_i, btree: c::btree_id, level: c_uint) -> c_int;
     pub fn bch2_btree_cache_unpin(c: *mut c::bch_fs);
     pub fn bch2_btree_cache_pin(trans: *mut c::btree_trans, leaf_mask: u64, interior_mask: u64,
                                 start: c::bbpos, end: c::bbpos, pinned_end: *mut c::bbpos)

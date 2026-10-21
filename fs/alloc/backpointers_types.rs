@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{DArray, c_default};
-use cstruct_macros::{CStruct, c_typedef};
+use cstruct_macros::{CStruct, c_extern, c_typedef};
 
 c_typedef! {
     pub type darray_bkey_i_backpointer = DArray<c::bkey_i_backpointer>;
@@ -21,3 +21,8 @@ pub struct bp_scan_iter {
     pub bps: c::darray_bkey_i_backpointer,
 }
 c_default!(bp_scan_iter);
+
+c_extern! {
+    pub fn rust_bp_scan_iter_peek(trans: *mut c::btree_trans, iter: *mut c::bp_scan_iter, end: c::bpos,
+                                  last_flushed: *mut c::wb_maybe_flush) -> c::bkey_s_c;
+}
