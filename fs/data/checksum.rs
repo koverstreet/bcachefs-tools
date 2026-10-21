@@ -15,6 +15,7 @@
 //! one derived from the passphrase, and how it's derived.
 
 use crate::c;
+use crate::util::vstructs::Unvalidated;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::sb::io::SbFieldOps;
@@ -106,8 +107,8 @@ impl core::ops::Add<u32> for c::nonce {
 /// A section shorter than the struct is refused before validate(), as too
 /// short to be one.
 impl SbFieldOps for c::bch_sb_field_crypt {
-    fn validate(_sb: &c::bch_sb, crypt: &Self, _flags: c::bch_validate_flags,
-                err: &mut Printbuf) -> Result<(), BchError> {
+    fn validate(_sb: &c::bch_sb<Unvalidated>, crypt: &c::bch_sb_field_crypt<Unvalidated>,
+                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
         let kdf = crypt.bch_crypt_kdf_type();
         if kdf != u64::from(c::bch_kdf_types::BCH_KDF_SCRYPT.0) {
             write!(err, "bad kdf type {kdf}");

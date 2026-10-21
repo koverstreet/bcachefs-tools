@@ -21,14 +21,15 @@ use crate::data::ec::trigger::stripe_block_ptrs;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::opts::prt_data_type;
-use crate::sb::io::{entries_end, sb_field_get, SbField, SbFieldOps};
+use crate::sb::io::{entries_as_read, entries_end, sb_field_get, SbField, SbFieldOps, SbState};
 use crate::sb::members::member_exists;
 use crate::util::ffi::Opaque;
 use crate::util::rcu::read_lock;
 use crate::util::alloc::{flags, AllocError, KVVec};
 use crate::util::eytzinger::Eytzinger0;
 use crate::util::strided::StridedBuf;
-use crate::util::vstructs::{bytes_of, bytes_of_mut, from_ffi, from_ffi_mut, Head, Unsized, Validated, ValidatedEntries};
+use crate::util::vstructs::{bytes_of, bytes_of_mut, from_ffi, from_ffi_mut, Head, Unsized, Unvalidated,
+                            Validated, ValidatedEntries};
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_int, c_uint};
 use core::fmt;
@@ -74,6 +75,18 @@ impl<'a> From<&'a Entry> for SbEntry<'a> {
 
 impl<'a> From<&'a c::bch_replicas_entry_v0<Validated>> for SbEntry<'a> {
     fn from(e: &'a c::bch_replicas_entry_v0<Validated>) -> Self {
+        SbEntry { data_type: e.data_type, nr_required: None, devs: &e.devs }
+    }
+}
+
+impl<'a> From<&'a c::bch_replicas_entry_v1<Unvalidated>> for SbEntry<'a> {
+    fn from(e: &'a c::bch_replicas_entry_v1<Unvalidated>) -> Self {
+        SbEntry { data_type: e.data_type, nr_required: Some(e.nr_required), devs: &e.devs }
+    }
+}
+
+impl<'a> From<&'a c::bch_replicas_entry_v0<Unvalidated>> for SbEntry<'a> {
+    fn from(e: &'a c::bch_replicas_entry_v0<Unvalidated>) -> Self {
         SbEntry { data_type: e.data_type, nr_required: None, devs: &e.devs }
     }
 }
@@ -270,6 +283,18 @@ fn v1_entries(f: &c::bch_sb_field_replicas) -> impl Iterator<Item = SbEntry<'_>>
 fn v0_entries(f: &c::bch_sb_field_replicas_v0) -> impl Iterator<Item = SbEntry<'_>> {
     ValidatedEntries::<c::bch_replicas_entry_v0<Validated>>::new(&f.as_bytes()[SECTION_HEAD..]).map(SbEntry::from)
         .take_while(|e| e.data_type != 0)
+}
+
+/// v1_entries(), of a section as read.
+fn v1_entries_as_read(b: &[u8]) -> impl Iterator<Item = SbEntry<'_>> {
+    entries_as_read::<c::bch_sb_field_replicas, c::bch_replicas_entry_v1<Unvalidated>>(b, SECTION_HEAD)
+        .map(SbEntry::from)
+}
+
+/// v1_entries_as_read(), of replicas_v0.
+fn v0_entries_as_read(b: &[u8]) -> impl Iterator<Item = SbEntry<'_>> {
+    entries_as_read::<c::bch_sb_field_replicas_v0, c::bch_replicas_entry_v0<Unvalidated>>(b, SECTION_HEAD)
+        .map(SbEntry::from)
 }
 
 /// The superblock's replicas entries: replicas', if it has the section, else
@@ -627,7 +652,7 @@ impl ReplicasCpu {
 
     /// Validated as a section is, its entries against @sb's members: none
     /// twice.
-    fn validate(&mut self, sb: &c::bch_sb, err: &mut Printbuf) -> Result<(), BchError> {
+    fn validate<S: SbState>(&mut self, sb: &c::bch_sb<S>, err: &mut Printbuf) -> Result<(), BchError> {
         self.sort();
 
         let mut prev: Option<usize> = None;
@@ -675,7 +700,7 @@ fn verify_entry(_e: &Entry) {
 
 /// A section's entries, @walk, validated as the section: against @sb's
 /// members, none twice.
-fn section_validate<'a, I: Iterator<Item = SbEntry<'a>>>(sb: &c::bch_sb, walk: impl Fn() -> I,
+fn section_validate<'a, I: Iterator<Item = SbEntry<'a>>>(sb: &c::bch_sb<Unvalidated>, walk: impl Fn() -> I,
                                                          err: &mut Printbuf) -> Result<(), BchError> {
     ReplicasCpu::from_entries(walk, |_| true)
         .map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_cpu_replicas))?
@@ -688,9 +713,9 @@ fn section_to_text<'a>(out: &mut Printbuf, entries: impl Iterator<Item = SbEntry
 }
 
 impl SbFieldOps for c::bch_sb_field_replicas {
-    fn validate(sb: &c::bch_sb, f: &Self, _flags: c::bch_validate_flags,
-                err: &mut Printbuf) -> Result<(), BchError> {
-        section_validate(sb, || v1_entries(f), err)
+    fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_replicas<Unvalidated>,
+                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+        section_validate(sb, || v1_entries_as_read(f.as_bytes()), err)
     }
 
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {
@@ -703,9 +728,9 @@ impl SbFieldOps for c::bch_sb_field_replicas {
 }
 
 impl SbFieldOps for c::bch_sb_field_replicas_v0 {
-    fn validate(sb: &c::bch_sb, f: &Self, _flags: c::bch_validate_flags,
-                err: &mut Printbuf) -> Result<(), BchError> {
-        section_validate(sb, || v0_entries(f), err)
+    fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_replicas_v0<Unvalidated>,
+                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+        section_validate(sb, || v0_entries_as_read(f.as_bytes()), err)
     }
 
     fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {

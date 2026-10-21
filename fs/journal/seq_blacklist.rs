@@ -38,6 +38,7 @@ use cstruct_macros::c_export;
 
 use crate::bch_verbose;
 use crate::c;
+use crate::util::vstructs::Unvalidated;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
@@ -50,8 +51,8 @@ use crate::util::Printbuf;
 type Section = c::bch_sb_field_journal_seq_blacklist;
 
 impl SbFieldOps for Section {
-    fn validate(_sb: &c::bch_sb, f: &Self, _flags: c::bch_validate_flags,
-                err: &mut Printbuf) -> Result<(), BchError> {
+    fn validate(_sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_journal_seq_blacklist<Unvalidated>,
+                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
         for (i, e) in f.start.iter().enumerate() {
             let (start, end) = (e.start.get(), e.end.get());
             if start >= end {

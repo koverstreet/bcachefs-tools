@@ -19,12 +19,12 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::init::passes;
 use crate::prt;
 use crate::sb::errors::prt_error_ids;
-use crate::sb::io::{entries_end, SbFieldOps};
+use crate::sb::io::{entries_as_read, entries_end, SbFieldOps};
 use crate::types::Le64;
 use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
 use crate::util::bitmap::LeBitmap;
 use crate::util::ffi::Opaque;
-use crate::util::vstructs::{bytes_of_mut, Head, Validated, ValidatedEntries};
+use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, Validated, ValidatedEntries};
 use crate::util::Printbuf;
 
 type Section = c::bch_sb_field_downgrade;
@@ -38,11 +38,18 @@ fn entries(f: &Section) -> ValidatedEntries<'_, Entry> {
     ValidatedEntries::new(&f.as_bytes()[SECTION_HEAD..])
 }
 
+/// entries(), of a section as read.
+fn entries_read(f: &c::bch_sb_field_downgrade<Unvalidated>)
+    -> impl Iterator<Item = &c::bch_sb_field_downgrade_entry<Unvalidated>>
+{
+    entries_as_read::<Section, _>(f.as_bytes(), SECTION_HEAD)
+}
+
 impl SbFieldOps for Section {
-    fn validate(sb: &c::bch_sb, f: &Self, _flags: c::bch_validate_flags,
-                err: &mut Printbuf) -> Result<(), BchError> {
+    fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_downgrade<Unvalidated>,
+                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
         let sb_major = c::BCH_VERSION_MAJOR(sb.version.get().into());
-        for e in entries(f) {
+        for e in entries_read(f) {
             let major = c::BCH_VERSION_MAJOR(e.version.get().into());
             if major != sb_major {
                 write!(err, "downgrade entry with mismatched major version ({major} != {sb_major})");

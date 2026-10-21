@@ -15,7 +15,7 @@ use crate::util::rcu::{read_lock, ReadGuard};
 use crate::alloc::disk_groups;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::strided::{Strided, StridedMut};
-use crate::util::vstructs::{bytes_of_mut, plain_bytes, Head, Unsized, Validated};
+use crate::util::vstructs::{bytes_of_mut, cast_plain, plain_bytes, Head, Unsized, Unvalidated, Validated};
 use core::ffi::{c_int, c_uint, c_ulong, CStr};
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
@@ -64,8 +64,8 @@ impl c::bch_member {
     }
 }
 
-pub fn member_exists(sb: &c::bch_sb, dev: u32) -> bool {
-    dev < u32::from(sb.nr_devices) && sb_member(sb, dev).is_some_and(|m| m.alive())
+pub fn member_exists<S: SbState>(sb: &c::bch_sb<S>, dev: u32) -> bool {
+    dev < u32::from(S::head(sb).nr_devices) && sb_member(sb, dev).is_some_and(|m| m.alive())
 }
 
 impl c::bch_sb {
@@ -160,7 +160,7 @@ pub fn bch2_sb_members_clean_deleted(c: &Opaque<c::bch_fs>) {
 }
 
 /// From members_v2 if the superblock has it, else members_v1.
-pub fn sb_member(sb: &c::bch_sb, idx: u32) -> Option<c::bch_member> {
+pub fn sb_member<S: SbState>(sb: &c::bch_sb<S>, idx: u32) -> Option<c::bch_member> {
     match members_v2(sb) {
         Some(v2) => v2.get(idx),
         None     => members_v1(sb)?.get(idx),
@@ -221,20 +221,21 @@ pub fn dev_ptr(ca: Option<&c::bch_dev>) -> *mut c::bch_dev {
 }
 
 /// Construct a MembersV2 reader from a superblock.
-pub fn members_v2(sb: &c::bch_sb) -> Option<MembersV2<'_>> {
-    let f = sb_field_get::<c::bch_sb_field_members_v2>(sb)?;
+pub fn members_v2<S: SbState>(sb: &c::bch_sb<S>) -> Option<MembersV2<'_>> {
+    let f = S::field(sb, c::bch_sb_field_type::BCH_SB_FIELD_members_v2)?.as_bytes();
+    let stride = cast_plain::<Head<c::bch_sb_field_members_v2>>(f)?.member_bytes.get().into();
     Some(MembersV2 {
-        members: members_in(f.as_bytes(), MEMBERS_V2_HEAD, f.member_bytes.get().into())?,
-        nr_devices: sb.nr_devices.into(),
+        members: members_in(f, MEMBERS_V2_HEAD, stride)?,
+        nr_devices: S::head(sb).nr_devices.into(),
     })
 }
 
 /// Construct a MembersV1 reader from a superblock.
-pub fn members_v1(sb: &c::bch_sb) -> Option<MembersV1<'_>> {
-    let f = sb_field_get::<c::bch_sb_field_members_v1>(sb)?;
+pub fn members_v1<S: SbState>(sb: &c::bch_sb<S>) -> Option<MembersV1<'_>> {
+    let f = S::field(sb, c::bch_sb_field_type::BCH_SB_FIELD_members_v1)?.as_bytes();
     Some(MembersV1 {
-        members: members_in(f.as_bytes(), MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES)?,
-        nr_devices: sb.nr_devices.into(),
+        members: members_in(f, MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES)?,
+        nr_devices: S::head(sb).nr_devices.into(),
     })
 }
 
@@ -368,7 +369,7 @@ fn invalid() -> Result<(), BchError> {
     Err(bch_errcode::BCH_ERR_invalid_sb_members.into())
 }
 
-fn validate_member(err: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb, i: u32) -> Result<(), BchError> {
+fn validate_member(err: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb<Unvalidated>, i: u32) -> Result<(), BchError> {
     let nbuckets = m.nbuckets.get();
     if nbuckets > c::BCH_MEMBER_NBUCKETS_MAX.into() {
         write!(err, "device {i}: too many buckets (got {nbuckets}, max {})", c::BCH_MEMBER_NBUCKETS_MAX);
@@ -406,7 +407,7 @@ fn validate_member(err: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb, i: u32
     Ok(())
 }
 
-fn members_validate(sb: &c::bch_sb, members: Option<Strided<'_, c::bch_member>>,
+fn members_validate(sb: &c::bch_sb<Unvalidated>, members: Option<Strided<'_, c::bch_member>>,
                     err: &mut Printbuf) -> Result<(), BchError> {
     let nr = usize::from(sb.nr_devices);
     let have = members.as_ref().map_or(0, |m| m.len());
@@ -444,8 +445,8 @@ fn members_to_text(out: &mut Printbuf, sb: &c::bch_sb, members: Option<Strided<'
 }
 
 impl SbFieldOps for c::bch_sb_field_members_v1 {
-    fn validate(sb: &c::bch_sb, f: &Self, _flags: c::bch_validate_flags,
-                err: &mut Printbuf) -> Result<(), BchError> {
+    fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_members_v1<Unvalidated>,
+                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
         members_validate(sb, members_in(f.as_bytes(), MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES), err)
     }
 
@@ -455,8 +456,8 @@ impl SbFieldOps for c::bch_sb_field_members_v1 {
 }
 
 impl SbFieldOps for c::bch_sb_field_members_v2 {
-    fn validate(sb: &c::bch_sb, f: &Self, _flags: c::bch_validate_flags,
-                err: &mut Printbuf) -> Result<(), BchError> {
+    fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_members_v2<Unvalidated>,
+                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
         members_validate(sb, members_in(f.as_bytes(), MEMBERS_V2_HEAD, f.member_bytes.get().into()), err)
     }
 

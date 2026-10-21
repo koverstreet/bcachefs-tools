@@ -8,7 +8,7 @@ use crate::util::projections::{AtomicWord, Volatile, VolatileWriter};
 use crate::util::{Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64};
-use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, read_past, ArmRef, Head, Plain, SelfSized, Unsized, VStruct, Validated, ValidatedEntries};
+use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
 use core::ffi::{c_int, c_uint, CStr};
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::NSEC_PER_SEC;
@@ -25,10 +25,12 @@ pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef {
 impl<F: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef + ?Sized> SbField for F {}
 
 /// How a section type is validated and printed - by the sections! table, as
-/// its type says. Both get the section as Self; one too short to be read as
-/// Self fails validation before validate() is called, and isn't printed.
-pub trait SbFieldOps: SbField {
-    fn validate(_sb: &bch_sb, _f: &Self, _flags: c::bch_validate_flags,
+/// its type says. validate() gets the section as read, Unvalidated, from a
+/// superblock that's Unvalidated too - validating is what finds out; to_text()
+/// gets it as Self, Validated. One too short to be read as its type fails
+/// validation before validate() is called, and isn't printed.
+pub trait SbFieldOps: SbField + InState {
+    fn validate(_sb: &bch_sb<Unvalidated>, _f: &Self::In<Unvalidated>, _flags: c::bch_validate_flags,
                 _err: &mut Printbuf) -> Result<(), BchError> {
         Ok(())
     }
@@ -54,6 +56,17 @@ where
 {
     let entries = ValidatedEntries::<E>::new(b.get(head..)?);
     Some(head + entries.take_while(|e| is_entry(e)).map(size_of_val).sum::<usize>())
+}
+
+/// The entries @E of a section of type @F, as read - @b its bytes, from
+/// @head on: those F::entries_end() finds, each of which fits.
+pub fn entries_as_read<'a, F, E>(b: &'a [u8], head: usize) -> impl Iterator<Item = &'a E>
+where
+    F: SbFieldOps + ?Sized,
+    E: Unsized<Head: Plain + SelfSized> + ?Sized + 'a,
+{
+    let end = F::entries_end(b).unwrap_or(head);
+    UnvalidatedEntries::<E>::new(b.get(head..end).unwrap_or(&[])).map_while(Result::ok)
 }
 
 /// The section at @f in @sb, @len bytes, read with a partial entry past its
@@ -90,7 +103,10 @@ pub(crate) unsafe fn validate_as<F: SbFieldOps + ?Sized>(
     f:     *mut Head<c::bch_sb_field>,
     flags: c::bch_validate_flags,
     err:   &mut Printbuf,
-) -> Result<(), BchError> {
+) -> Result<(), BchError>
+where
+    F::In<Unvalidated>: ArmOf<c::bch_sb_field<Unvalidated>, Tag = u32> + ArmRef,
+{
     let invalid = || Err(bch_errcode::BCH_ERR_invalid_sb_field_size.into());
     let too_short = |err: &mut Printbuf, len| {
         write!(err, "too short ({len} < {} bytes)", <F as ArmRef>::MIN_LEN);
@@ -116,9 +132,9 @@ pub(crate) unsafe fn validate_as<F: SbFieldOps + ?Sized>(
 
     // SAFETY: the caller's
     let (sb, f) = unsafe {
-        (bch_sb::<Validated>::from_ffi(sb), c::bch_sb_field::<Validated>::from_ffi(f))
+        (bch_sb::<Unvalidated>::from_ffi(sb), c::bch_sb_field::<Unvalidated>::from_ffi(f))
     };
-    match f.arm::<F>() {
+    match f.arm::<F::In<Unvalidated>>() {
         Some(f) => F::validate(sb, f, flags, err),
         None => too_short(err, f.as_bytes().len()),
     }
@@ -1139,6 +1155,38 @@ impl Drop for SbWrite<'_> {
 // Resizing takes &mut bch_sb_handle - it can reallocate the superblock - so
 // no section borrowed from the handle outlives it.
 
+/// A superblock's state, for what reads one in either - validate reading
+/// members, a printer, as the rest reads them: its header, and a section by
+/// type, as read - Unvalidated, whatever the superblock's state, for what
+/// reads one that may not be valid. Validated, the walk trusts the sections'
+/// counts; Unvalidated, each is checked, and the walk ends at one that
+/// doesn't fit - which validate reports.
+pub trait SbState: State + Sized {
+    fn head(sb: &bch_sb<Self>) -> &Head<bch_sb>;
+
+    fn field(sb: &bch_sb<Self>, ty: c::bch_sb_field_type) -> Option<&c::bch_sb_field<Unvalidated>>;
+}
+
+impl SbState for Validated {
+    fn head(sb: &bch_sb) -> &Head<bch_sb> {
+        sb
+    }
+
+    fn field(sb: &bch_sb, ty: c::bch_sb_field_type) -> Option<&c::bch_sb_field<Unvalidated>> {
+        field_get_id(sb, ty).map(|f| f.as_unvalidated())
+    }
+}
+
+impl SbState for Unvalidated {
+    fn head(sb: &bch_sb<Unvalidated>) -> &Head<bch_sb> {
+        sb
+    }
+
+    fn field(sb: &bch_sb<Unvalidated>, ty: c::bch_sb_field_type) -> Option<&c::bch_sb_field<Unvalidated>> {
+        sb.entries().map_while(Result::ok).find(|f| f.type_.get() == ty.0)
+    }
+}
+
 /// The section of type @ty in @sb: the walk trusts the sections' counts, a
 /// validated superblock's.
 fn field_get_id(sb: &bch_sb, ty: c::bch_sb_field_type) -> Option<&c::bch_sb_field<Validated>> {
@@ -1774,8 +1822,12 @@ mod tests {
     fn sb_field_ops_short_section() {
         use crate::util::Printbuf;
 
-        fn short<F: super::SbFieldOps + ?Sized>(ty: c::bch_sb_field_type, u64s: usize) -> String {
-            let mut sb = [0u64; 32];
+        fn short<F: super::SbFieldOps + ?Sized>(ty: c::bch_sb_field_type, u64s: usize) -> String
+        where
+            F::In<Unvalidated>: crate::types::ArmOf<c::bch_sb_field<Unvalidated>, Tag = u32> + crate::util::vstructs::ArmRef,
+        {
+            // a superblock of no sections: its header
+            let mut sb = [0u64; size_of::<Head<c::bch_sb>>() / size_of::<u64>()];
             let mut buf = [0u64; 16];
             field(&mut buf, ty, u64s);
             let (sb, f) = (sb.as_mut_ptr().cast(), buf.as_mut_ptr().cast());

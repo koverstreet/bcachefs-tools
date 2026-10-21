@@ -70,11 +70,11 @@
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::sb::io::{sb_field_get, sb_field_u64s, SbFieldOps};
+use crate::sb::io::{sb_field_get, sb_field_u64s, SbFieldOps, SbState};
 use crate::sb::members;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::vstructs::{Head, Validated};
+use crate::util::vstructs::{Head, Unvalidated, Validated};
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint, CStr};
 use cstruct_macros::c_export;
@@ -632,12 +632,12 @@ fn invalid() -> Result<(), BchError> {
 }
 
 /// Parents are walked, so must be in range; a deleted parent is allowed.
-fn disk_groups_validate(sb: &c::bch_sb, groups: &[c::bch_disk_group], err: &mut Printbuf)
+fn disk_groups_validate<S: SbState>(sb: &c::bch_sb<S>, groups: &[c::bch_disk_group], err: &mut Printbuf)
     -> Result<(), BchError>
 {
     let nr = groups.len();
 
-    for i in 0..u32::from(sb.nr_devices) {
+    for i in 0..u32::from(S::head(sb).nr_devices) {
         let Some(m) = members::sb_member(sb, i) else { continue };
         let Some(g) = (m.group() as usize).checked_sub(1) else { continue };
 
@@ -682,8 +682,8 @@ fn disk_groups_validate(sb: &c::bch_sb, groups: &[c::bch_disk_group], err: &mut 
 }
 
 impl SbFieldOps for c::bch_sb_field_disk_groups {
-    fn validate(sb: &c::bch_sb, f: &Self, _flags: c::bch_validate_flags,
-                err: &mut Printbuf) -> Result<(), BchError> {
+    fn validate(sb: &c::bch_sb<Unvalidated>, f: &c::bch_sb_field_disk_groups<Unvalidated>,
+                _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
         disk_groups_validate(sb, &f.entries, err)
     }
 
