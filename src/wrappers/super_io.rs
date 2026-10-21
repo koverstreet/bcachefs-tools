@@ -6,7 +6,7 @@ use std::os::unix::fs::FileExt;
 use std::os::unix::io::FromRawFd;
 
 use bch_bindgen::c;
-use bcachefs_kernel::util::vstructs::{Head, SelfSized};
+use bcachefs_kernel::util::vstructs::{plain_bytes_mut, Head, SelfSized, Unvalidated};
 
 /// Print error to stderr and exit with failure status.
 /// Matches the C `die()` function behavior.
@@ -90,22 +90,18 @@ pub fn bch2_super_write<S: SbAccess>(fd: i32, sb: &mut S) {
     }
 }
 
-/// Read a superblock from disk at the given sector offset, into an
-/// owned, validated buffer.
-pub fn super_read(fd: i32, sector: u64) -> anyhow::Result<SbBuf> {
+/// Read a superblock from disk at the given sector offset, into a buffer of
+/// its own, as read: Unvalidated, its count checked against what was read.
+pub fn super_read(fd: i32, sector: u64) -> anyhow::Result<SbBuf<Unvalidated>> {
     let file = borrowed_file(fd);
 
     // Read the fixed-size header to learn the full extent
-    let header_size = std::mem::size_of::<Head<c::bch_sb>>();
-    let mut buf = vec![0u8; header_size];
-    file.read_exact_at(&mut buf, sector << 9)
+    let mut hdr = Head::<c::bch_sb>::default();
+    file.read_exact_at(plain_bytes_mut(&mut hdr), sector << 9)
         .map_err(|e| anyhow::anyhow!("pread failed at offset {}: {}", sector << 9, e))?;
-
-    // SAFETY: header_size bytes, and any bytes are a header
-    let hdr = unsafe { buf.as_ptr().cast::<Head<c::bch_sb>>().read_unaligned() };
     let bytes = hdr.bytes();
 
-    buf.resize(bytes, 0);
+    let mut buf = vec![0u8; bytes];
     file.read_exact_at(&mut buf, sector << 9)
         .map_err(|e| anyhow::anyhow!("pread failed at offset {}: {}", sector << 9, e))?;
 

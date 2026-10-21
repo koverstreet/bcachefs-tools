@@ -302,27 +302,27 @@ fn find_superblock_space(extents: &[CRange], sb_size: u32, bucket_bytes: u32) ->
 
 /// Add default superblock layout entries (sector 8 and sector 8+sb_size).
 /// Returns the sb_size.
-fn add_default_sb_layout(sb: &mut c::bch_sb) -> Result<u32> {
-    let sb_size = 1u32 << sb.layout.sb_max_size_bits;
+fn add_default_sb_layout(layout: &mut c::bch_sb_layout) -> Result<u32> {
+    let sb_size = 1u32 << layout.sb_max_size_bits;
     let bch_sb_sector = c::BCH_SB_SECTOR as u64;
 
-    if sb.layout.nr_superblocks as usize >= sb.layout.sb_offset.len() {
+    if layout.nr_superblocks as usize >= layout.sb_offset.len() {
         bail!("Can't add superblock: no space left in superblock layout");
     }
 
-    for i in 0..sb.layout.nr_superblocks as usize {
-        let off = sb.layout.sb_offset[i].get();
+    for i in 0..layout.nr_superblocks as usize {
+        let off = layout.sb_offset[i].get();
         if off == bch_sb_sector || off == bch_sb_sector + sb_size as u64 {
             bail!("Superblock layout already has default superblocks");
         }
     }
 
     // Shift existing entries down by 2
-    let nr = sb.layout.nr_superblocks as usize;
-    sb.layout.sb_offset.copy_within(0..nr, 2);
-    sb.layout.nr_superblocks += 2;
-    sb.layout.sb_offset[0] = bch_sb_sector.into();
-    sb.layout.sb_offset[1] = (bch_sb_sector + sb_size as u64).into();
+    let nr = layout.nr_superblocks as usize;
+    layout.sb_offset.copy_within(0..nr, 2);
+    layout.nr_superblocks += 2;
+    layout.sb_offset[0] = bch_sb_sector.into();
+    layout.sb_offset[1] = (bch_sb_sector + sb_size as u64).into();
 
     Ok(sb_size)
 }
@@ -545,7 +545,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
     let mut sb = super_io::super_read(dev_file.as_raw_fd(), sb_offset)?;
 
     // Validate and add default layout (catches errors early)
-    let sb_size = add_default_sb_layout(sb.sb_mut())?;
+    let sb_size = add_default_sb_layout(&mut sb.sb_mut().layout)?;
 
     // Zero the start of the disk to blow away the old superblock
     let zeroes_len = ((c::BCH_SB_SECTOR as usize) << 9) + std::mem::size_of::<Head<c::bch_sb>>();
@@ -601,7 +601,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
 
     // Apply superblock layout changes (FS is already RW)
     let sb_ref = unsafe { (*ca).disk_sb.sb_mut() };
-    add_default_sb_layout(sb_ref)?;
+    add_default_sb_layout(&mut sb_ref.layout)?;
 
     // Mark the new sb buckets in FS metadata
     let ca_ref = fs.dev_get(0)

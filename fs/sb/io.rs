@@ -8,7 +8,7 @@ use crate::util::projections::{AtomicWord, Volatile, VolatileWriter};
 use crate::util::{Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64};
-use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
+use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, VStructError, Validated, ValidatedEntries};
 use core::ffi::{c_int, c_uint, CStr};
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::NSEC_PER_SEC;
@@ -1569,12 +1569,10 @@ pub fn bch2_sb_from_fs(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) -> c_int {
 
 // ── Superblocks in byte buffers ──────────────────────────────────────────
 //
-// For device scans and recovery, without a bch_sb_handle. Construction checks
-// every extent once - the header and vstruct within the buffer, each section
-// within the superblock - so the C lookups after walk only what parse()
-// checked. That's memory safety only: whether the contents make sense is
-// bch2_sb_validate()'s. A buffer can't be reallocated, so resizing and
-// deleting sections stay bch_sb_handle's.
+// For device scans and recovery, without a bch_sb_handle: a superblock in a
+// buffer of its own - as read, Unvalidated, its count checked against its
+// bytes, and Validated only once validate() passes. A buffer can't be
+// reallocated, so resizing and deleting sections stay bch_sb_handle's.
 
 pub const BCACHE_MAGIC: [u8; 16] = [
     0xc6, 0x85, 0x73, 0xf6, 0x4e, 0x1a, 0x45, 0xca,
@@ -1585,139 +1583,9 @@ pub const BCHFS_MAGIC: [u8; 16] = [
     0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef,
 ];
 
-/// Why a buffer failed to parse as a superblock. Precise by design:
-/// recovery reports these against scan candidates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SbParseError {
-    BufferTooSmall { need: usize, have: usize },
-    Misaligned,
-    BadMagic,
-    ExtentBeyondBuffer { need: usize, have: usize },
-    FieldBeyondSb { field_offset: usize },
-    FieldBadU64s { field_offset: usize },
-}
-
-impl core::fmt::Display for SbParseError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            SbParseError::BufferTooSmall { need, have } =>
-                write!(f, "buffer too small for superblock header: need {need}, have {have}"),
-            SbParseError::Misaligned =>
-                write!(f, "buffer not sufficiently aligned for a superblock"),
-            SbParseError::BadMagic =>
-                write!(f, "not a bcachefs superblock (bad magic)"),
-            SbParseError::ExtentBeyondBuffer { need, have } =>
-                write!(f, "superblock u64s extends beyond buffer: need {need}, have {have}"),
-            SbParseError::FieldBeyondSb { field_offset } =>
-                write!(f, "superblock field at offset {field_offset} extends beyond superblock"),
-            SbParseError::FieldBadU64s { field_offset } =>
-                write!(f, "superblock field at offset {field_offset} with u64s 0"),
-        }
-    }
-}
-
-/// Validate the extents; returns the vstruct size in bytes.
-fn sb_parse_checks(buf: &[u8]) -> Result<usize, SbParseError> {
-    let hdr = core::mem::size_of::<Head<bch_sb>>();
-    if buf.len() < hdr {
-        return Err(SbParseError::BufferTooSmall { need: hdr, have: buf.len() });
-    }
-    if buf.as_ptr() as usize % core::mem::align_of::<Head<bch_sb>>() != 0 {
-        return Err(SbParseError::Misaligned);
-    }
-    /* header extent and alignment just validated: */
-    let sb = unsafe { &*(buf.as_ptr() as *const Head<bch_sb>) };
-
-    if sb.magic.b != BCACHE_MAGIC && sb.magic.b != BCHFS_MAGIC {
-        return Err(SbParseError::BadMagic);
-    }
-
-    let bytes = sb.bytes();
-    if bytes > buf.len() {
-        return Err(SbParseError::ExtentBeyondBuffer { need: bytes, have: buf.len() });
-    }
-
-    let mut off = hdr;
-    while off < bytes {
-        if bytes - off < core::mem::size_of::<Head<c::bch_sb_field>>() {
-            return Err(SbParseError::FieldBeyondSb { field_offset: off });
-        }
-        /* field header extent just validated: */
-        let f = unsafe { &*(buf.as_ptr().add(off) as *const Head<c::bch_sb_field>) };
-        let f_u64s = f.u64s() as u64;
-        if f_u64s == 0 {
-            return Err(SbParseError::FieldBadU64s { field_offset: off });
-        }
-        let next = off as u64 + f_u64s * 8;
-        if next > bytes as u64 {
-            return Err(SbParseError::FieldBeyondSb { field_offset: off });
-        }
-        off = next as usize;
-    }
-
-    Ok(bytes)
-}
-
-/// A validated read-only superblock in a byte buffer.
-pub struct SbRef<'a> {
-    buf:   &'a [u8],
-    bytes: usize,
-}
-
-impl<'a> SbRef<'a> {
-    pub fn parse(buf: &'a [u8]) -> Result<Self, SbParseError> {
-        let bytes = sb_parse_checks(buf)?;
-        Ok(SbRef { buf, bytes })
-    }
-
-    pub fn sb(&self) -> &'a bch_sb {
-        // SAFETY: parse() checked every count it has
-        unsafe { bch_sb::<Validated>::from_ffi(self.buf.as_ptr().cast()) }
-    }
-
-    pub fn bytes(&self) -> &'a [u8] {
-        &self.buf[..self.bytes]
-    }
-
-    pub fn field<F: SbField + ?Sized>(&self) -> Option<&'a F> {
-        sb_field_get::<F>(self.sb())
-    }
-}
-
-/// A validated superblock in a byte buffer, for in-place mutation.
-pub struct SbMut<'a> {
-    buf:   &'a mut [u8],
-    bytes: usize,
-}
-
-impl<'a> SbMut<'a> {
-    pub fn parse(buf: &'a mut [u8]) -> Result<Self, SbParseError> {
-        let bytes = sb_parse_checks(buf)?;
-        Ok(SbMut { buf, bytes })
-    }
-
-    pub fn sb(&self) -> &bch_sb {
-        // SAFETY: parse() checked every count it has
-        unsafe { bch_sb::<Validated>::from_ffi(self.buf.as_ptr().cast()) }
-    }
-
-    pub fn sb_mut(&mut self) -> &mut bch_sb {
-        // SAFETY: as sb()'s
-        unsafe { bch_sb::<Validated>::from_ffi_mut(self.buf.as_mut_ptr().cast()) }
-    }
-
-    pub fn bytes(&self) -> &[u8] {
-        &self.buf[..self.bytes]
-    }
-
-    pub fn field<F: SbField + ?Sized>(&self) -> Option<&F> {
-        sb_field_get::<F>(self.sb())
-    }
-}
-
-/// Anything holding a superblock that can be viewed as bytes and
-/// mutated in place: SbMut/SbBuf over raw buffers, bch_sb_handle for
-/// C-owned superblocks. Superblock IO takes any of them.
+/// Anything holding a valid superblock that can be viewed as bytes and
+/// mutated in place: SbBuf, and bch_sb_handle for C-owned superblocks.
+/// Superblock IO takes any of them.
 pub trait SbAccess {
     fn sb(&self) -> &bch_sb;
     fn sb_mut(&mut self) -> &mut bch_sb;
@@ -1731,65 +1599,90 @@ impl SbAccess for bch_sb_handle {
     fn sb_bytes(&self) -> &[u8] { bch_sb_handle::sb_bytes(self) }
 }
 
-impl SbAccess for SbMut<'_> {
-    fn sb(&self) -> &bch_sb { SbMut::sb(self) }
-    fn sb_mut(&mut self) -> &mut bch_sb { SbMut::sb_mut(self) }
-    fn sb_bytes(&self) -> &[u8] { SbMut::bytes(self) }
-}
-
-/// An owned superblock: aligned storage, extents validated at construction -
-/// for recovery, which carries superblocks around as values.
+/// An owned superblock, in state @S: Unvalidated as read, from_bytes();
+/// Validated once validate() passes, or copied from one that's valid.
 #[cfg(feature = "std")]
-pub struct SbBuf {
-    buf:   Vec<u64>,
-    bytes: usize,
+pub struct SbBuf<S: State = Validated> {
+    /// In u64s: a superblock's alignment. As long as its count says.
+    buf:    Vec<u64>,
+    _state: core::marker::PhantomData<S>,
 }
 
 #[cfg(feature = "std")]
-impl SbBuf {
-    /// @src needn't be aligned.
-    pub fn from_bytes(src: &[u8]) -> Result<Self, SbParseError> {
-        let mut buf = vec![0u64; src.len().div_ceil(8)];
-        let dst = unsafe {
-            core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, src.len())
-        };
-        dst.copy_from_slice(src);
+impl<S: State> SbBuf<S> {
+    /// @b, in a buffer of its own.
+    fn copied(b: &[u8]) -> Self {
+        let mut buf = vec![0u64; b.len().div_ceil(size_of::<u64>())];
+        crate::util::vstructs::plain_bytes_mut(&mut buf[..])[..b.len()].copy_from_slice(b);
+        SbBuf { buf, _state: core::marker::PhantomData }
+    }
 
-        let bytes = sb_parse_checks(&dst[..])?;
-        Ok(SbBuf { buf, bytes })
+    fn raw(&self) -> &[u8] {
+        crate::util::vstructs::plain_bytes(&self.buf[..])
+    }
+
+    fn raw_mut(&mut self) -> &mut [u8] {
+        crate::util::vstructs::plain_bytes_mut(&mut self.buf[..])
+    }
+}
+
+#[cfg(feature = "std")]
+impl SbBuf<Unvalidated> {
+    /// The superblock at the start of @src - which needn't be aligned - as
+    /// read: an error if @src doesn't hold its header, or as many bytes as
+    /// its count says.
+    pub fn from_bytes(src: &[u8]) -> Result<Self, VStructError> {
+        let mut sb = Self::copied(src);
+        let len = bch_sb::<Unvalidated>::from_bytes(sb.raw())?.as_bytes().len();
+        sb.buf.truncate(len.div_ceil(size_of::<u64>()));
+        Ok(sb)
+    }
+
+    pub fn sb(&self) -> &bch_sb<Unvalidated> {
+        bch_sb::<Unvalidated>::from_bytes(self.raw()).expect("its count, checked when it was made")
+    }
+
+    pub fn sb_mut(&mut self) -> &mut bch_sb<Unvalidated> {
+        bch_sb::<Unvalidated>::from_bytes_mut(self.raw_mut()).expect("its count, checked when it was made")
+    }
+
+    /// validate(), as read from @read_offset: Validated if it passes.
+    pub fn validate(mut self, opts: &c::bch_opts, read_offset: u64, flags: c::bch_validate_flags,
+                    out: &mut Printbuf) -> Result<SbBuf<Validated>, BchError> {
+        validate(self.sb_mut(), opts, read_offset, flags, out)?;
+        Ok(SbBuf { buf: self.buf, _state: core::marker::PhantomData })
+    }
+}
+
+#[cfg(feature = "std")]
+impl SbBuf<Validated> {
+    /// A copy of @sb: as valid as it is.
+    pub fn from_sb(sb: &bch_sb) -> Self {
+        Self::copied(sb.as_bytes())
     }
 
     pub fn sb(&self) -> &bch_sb {
-        // SAFETY: parse() checked every count it has
-        unsafe { bch_sb::<Validated>::from_ffi(self.buf.as_ptr().cast()) }
+        let sb = bch_sb::<Unvalidated>::from_bytes(self.raw()).expect("its count, validated");
+        // SAFETY: validate() passed, or it's a copy of one that did
+        unsafe { sb.assume_validated() }
     }
 
     pub fn sb_mut(&mut self) -> &mut bch_sb {
+        let sb = bch_sb::<Unvalidated>::from_bytes_mut(self.raw_mut()).expect("its count, validated");
         // SAFETY: as sb()'s
-        unsafe { bch_sb::<Validated>::from_ffi_mut(self.buf.as_mut_ptr().cast()) }
+        unsafe { sb.assume_validated_mut() }
     }
 
     pub fn bytes(&self) -> &[u8] {
-        unsafe { core::slice::from_raw_parts(self.buf.as_ptr() as *const u8, self.bytes) }
-    }
-
-    /// validate(), of its superblock as read from @read_offset.
-    pub fn validate(&mut self, opts: &c::bch_opts, read_offset: u64, flags: c::bch_validate_flags,
-                    out: &mut Printbuf) -> Result<(), BchError> {
-        validate_bytes(crate::util::vstructs::plain_bytes_mut(&mut self.buf[..]), opts, read_offset, flags, out)
-            .map(drop)
-    }
-
-    pub fn field<F: SbField + ?Sized>(&self) -> Option<&F> {
-        sb_field_get::<F>(self.sb())
+        self.sb().as_bytes()
     }
 }
 
 #[cfg(feature = "std")]
 impl SbAccess for SbBuf {
-    fn sb(&self) -> &bch_sb { SbBuf::sb(self) }
-    fn sb_mut(&mut self) -> &mut bch_sb { SbBuf::sb_mut(self) }
-    fn sb_bytes(&self) -> &[u8] { SbBuf::bytes(self) }
+    fn sb(&self) -> &bch_sb { SbBuf::<Validated>::sb(self) }
+    fn sb_mut(&mut self) -> &mut bch_sb { SbBuf::<Validated>::sb_mut(self) }
+    fn sb_bytes(&self) -> &[u8] { SbBuf::<Validated>::bytes(self) }
 }
 
 /// validate_as(), of @sb's section of type F, as a read or a write of it

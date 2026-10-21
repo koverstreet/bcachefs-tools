@@ -11,7 +11,8 @@ use bch_bindgen::sb::sb_field_type;
 use clap::Parser;
 
 use crate::util::{file_size, parse_human_size};
-use bcachefs_kernel::sb::io::{SbBuf, SbParseError, BCACHE_MAGIC, BCHFS_MAGIC};
+use bcachefs_kernel::sb::io::{SbBuf, BCACHE_MAGIC, BCHFS_MAGIC};
+use bcachefs_kernel::util::vstructs::Unvalidated;
 use bcachefs_kernel::sb::members::sb_member;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::wrappers::super_io::{self, SUPERBLOCK_SIZE_DEFAULT};
@@ -63,7 +64,7 @@ fn sb_last_mount_time(sb: &c::bch_sb) -> u64 {
         .unwrap_or(0)
 }
 
-fn validate_sb(sb: &mut SbBuf, offset_sectors: u64) -> Result<(), Printbuf> {
+fn validate_sb(sb: SbBuf<Unvalidated>, offset_sectors: u64) -> Result<SbBuf, Printbuf> {
     let mut err = Printbuf::new();
     sb.validate(&c::bch_opts::default(), offset_sectors, c::bch_validate_flags::empty(), &mut err)
         .map_err(|_| err)
@@ -82,10 +83,7 @@ fn probe_one_super(dev: &File, sb_size: usize, offset: u64, verbose: bool) -> Op
         return None;
     }
 
-    let mut sb = SbBuf::from_bytes(&buf).ok()?;
-    if validate_sb(&mut sb, offset >> 9).is_err() {
-        return None;
-    }
+    let sb = validate_sb(SbBuf::from_bytes(&buf).ok()?, offset >> 9).ok()?;
 
     if verbose {
         println!("found superblock at {}", prt_offset(offset));
@@ -117,26 +115,23 @@ fn probe_sb_range(dev: &File, start: u64, end: u64, verbose: bool) -> Vec<SbBuf>
             continue;
         }
 
-        let mut sb = match SbBuf::from_bytes(&buf[offset..]) {
+        let sb = match SbBuf::from_bytes(&buf[offset..]) {
             Ok(sb) => sb,
-            Err(e @ (SbParseError::ExtentBeyondBuffer { .. } |
-                     SbParseError::FieldBeyondSb { .. } |
-                     SbParseError::FieldBadU64s { .. })) => {
+            Err(e) => {
                 eprintln!("found sb {} {}", start + offset as u64, e);
-                offset += 512;
-                continue;
-            }
-            Err(_) => {
                 offset += 512;
                 continue;
             }
         };
 
-        if let Err(err) = validate_sb(&mut sb, (start + offset as u64) >> 9) {
-            eprintln!("found sb {} that failed to validate: {}", start + offset as u64, err);
-            offset += 512;
-            continue;
-        }
+        let sb = match validate_sb(sb, (start + offset as u64) >> 9) {
+            Ok(sb) => sb,
+            Err(err) => {
+                eprintln!("found sb {} that failed to validate: {}", start + offset as u64, err);
+                offset += 512;
+                continue;
+            }
+        };
 
         if verbose {
             println!("found superblock at {}", prt_offset(start + offset as u64));
@@ -214,8 +209,7 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
     )?;
 
     // Copy to an owned buffer; src_sb's Drop will free the C allocation
-    SbBuf::from_bytes(src_sb.sb_bytes())
-        .map_err(|e| anyhow!("copying superblock from {}: {}", src_device, e))
+    Ok(SbBuf::from_sb(src_sb.sb()))
 }
 
 fn cmd_recover_super(cli: RecoverSuperCli) -> Result<()> {
