@@ -17,7 +17,7 @@ use bch_bindgen::accounting::data_type;
 use crate::wrappers::ioctl::*;
 use crate::wrappers::sysfs;
 use bch_bindgen::c::bch_sb;
-use bcachefs_kernel::util::vstructs::Head;
+use bcachefs_kernel::util::vstructs::{read_past, Head};
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::path_to_cstr;
 use errno::Errno;
@@ -304,7 +304,7 @@ impl BcachefsHandle {
         let uuid = sb.sb().user_uuid.b;
         let uuid_str = format_uuid(&uuid);
 
-        unsafe { bch_bindgen::sb::io::bch2_free_super(&sb as *const _ as *mut _) };
+        drop(sb);
 
         let mut handle = Self::open_by_name(&uuid_str, Some(uuid))
             .map_err(|e| {
@@ -487,10 +487,7 @@ impl BcachefsHandle {
         if buf.len() < mem::size_of::<Head<bch_sb>>() {
             return Err(Errno(libc::EIO));
         }
-        // SAFETY: the header's bytes, as checked, and any bytes are one - read
-        // unaligned: the buffer is bytes
-        let sb = unsafe { buf.as_ptr().cast::<Head<bch_sb>>().read_unaligned() };
-        Ok(sb.version.get())
+        Ok(read_past::<Head<bch_sb>>(&buf, 0).version.get())
     }
 
     /// Query device usage (v2 with flex array, v1 fallback).

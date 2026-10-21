@@ -24,8 +24,8 @@ pub fn borrowed_file(fd: i32) -> std::mem::ManuallyDrop<std::fs::File> {
 }
 
 /// Compute the superblock checksum using the csum type stored in the sb.
-fn csum_vstruct_sb(sb: *mut Head<c::bch_sb>) -> c::bch_csum {
-    unsafe { c::rust_csum_vstruct_sb(sb) }
+fn csum_vstruct_sb(sb: &mut c::bch_sb) -> c::bch_csum {
+    unsafe { c::rust_csum_vstruct_sb(sb.as_ffi_mut()) }
 }
 
 /// Write superblock to all layout locations on disk.
@@ -46,7 +46,7 @@ pub fn bch2_super_write<S: SbAccess>(fd: i32, sb: &mut S) {
         let offset_sectors = offset_le.get();
 
         sb.sb_mut().offset = offset_le;
-        sb.sb_mut().csum = csum_vstruct_sb(sb.sb_mut().as_ffi_mut());
+        sb.sb_mut().csum = csum_vstruct_sb(sb.sb_mut());
 
         let sb_src = sb.sb_bytes();
         let sb_bytes = sb_src.len();

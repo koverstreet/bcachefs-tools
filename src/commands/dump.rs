@@ -483,7 +483,7 @@ fn dump_node(fs: &Fs, devs: &mut [DumpDev], k: btree::BkeySC<'_>, btree_node_siz
 }
 
 fn get_sb_journal(fs: &Fs, ca: &c::bch_dev, entire_journal: bool, d: &mut DumpDev) {
-    let sb = unsafe { &*ca.disk_sb.sb };
+    let sb = ca.disk_sb.sb();
     let sb_bytes = sb.bytes() as u64;
     let bucket_bytes = (ca.mi.bucket_size as u64) << 9;
 

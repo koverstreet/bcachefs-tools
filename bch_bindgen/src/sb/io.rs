@@ -3,8 +3,6 @@ use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::path_to_cstr;
 use anyhow::anyhow;
 
-pub use c::bch2_free_super;
-
 pub fn read_super_opts(
     path: &std::path::Path,
     mut opts: c::bch_opts,

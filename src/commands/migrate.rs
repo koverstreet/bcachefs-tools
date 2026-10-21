@@ -187,7 +187,7 @@ unsafe fn mark_unreserved_space(fs: *mut c::bch_fs, extents: &[CRange]) {
     }
 
     // Also mark space for the default sb layout
-    let sb_size = 1u64 << (*(*ca).disk_sb.sb).layout.sb_max_size_bits;
+    let sb_size = 1u64 << (*ca).disk_sb.sb().layout.sb_max_size_bits;
     mark_nouse_range(ca, 0, c::BCH_SB_SECTOR as u64 + sb_size * 2);
 }
 
@@ -594,7 +594,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
         .map_err(|e| anyhow!("Error starting filesystem: {}", e))?;
 
     // Verify sb_size consistency
-    let actual_sb_size = 1u32 << unsafe { (*(*ca).disk_sb.sb).layout.sb_max_size_bits };
+    let actual_sb_size = 1u32 << unsafe { (*ca).disk_sb.sb().layout.sb_max_size_bits };
     assert_eq!(actual_sb_size, sb_size, "sb_max_size_bits mismatch after recovery");
 
     // Apply superblock layout changes (FS is already RW)
