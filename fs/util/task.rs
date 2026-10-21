@@ -457,7 +457,11 @@ where
     // SAFETY: @init's own
     let init = unsafe {
         pin_init::pin_init_from_closure(move |slot| {
-            init.__pinned_init(slot).map_err(|e: core::convert::Infallible| match e {})
+            #[cfg(bch_pin_init_v2)]
+            let res = init.__init(slot);
+            #[cfg(not(bch_pin_init_v2))]
+            let res = init.__pinned_init(slot);
+            res.map_err(|e: core::convert::Infallible| match e {})
         })
     };
     let task = kalloc_pinned::<Task<F>, AllocError>(init)?;
