@@ -229,8 +229,8 @@ impl Fs {
     pub fn sb_set_upgrade_extra(&self) {
         let mut sb = self.sb_lock();
         let v = c::bcachefs_metadata_version::bcachefs_metadata_version_bucket_stripe_sectors.0;
-        let new = u32::from(self.sb.version);
-        let old = match self.sb.version_upgrade_complete {
+        let new = u32::from(self.sb.version.get());
+        let old = match self.sb.version_upgrade_complete.get() {
             0 => new,
             v => u32::from(v),
         };
@@ -261,7 +261,8 @@ pub fn bch2_sb_set_downgrade(c: &Opaque<c::bch_fs>, new_minor: c_uint, old_minor
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
     let mut sb = unsafe { fs.sb_lock_held() };
-    let Some(d) = sb.field::<Section>() else { return };
+    let (handle, cpu) = sb.parts();
+    let Some(d) = handle.field::<Section>() else { return };
 
     let mut passes = [0; 2];
     let mut silent = [Le64::new(0); 8];
@@ -276,8 +277,7 @@ pub fn bch2_sb_set_downgrade(c: &Opaque<c::bch_fs>, new_minor: c_uint, old_minor
         for id in e.errors.iter().map(|id| usize::from(id.get())) {
             if id < c::BCH_FSCK_ERR_MAX as usize {
                 let bits = c_ulong::BITS as usize;
-                // SAFETY: c->sb, which its writers change under sb_lock
-                unsafe { (*fs.as_ptr()).sb.errors_silent[id / bits] |= 1 << (id % bits) };
+                *cpu.errors_silent[id / bits].place() |= 1 << (id % bits);
             }
             if id < silent.len() * 64 {
                 LeBitmap::from_words_mut(&mut silent).set(id);
@@ -340,7 +340,7 @@ impl Fs {
         }
 
         let table = downgrade_entries(c::BCH_VERSION_MAJOR(sb.sb().version.get().into()),
-                                      self.sb.version_incompat.into(), self.have_stripes())?;
+                                      self.sb.version_incompat.get().into(), self.have_stripes())?;
 
         let bytes = (SECTION_HEAD + table.len()).next_multiple_of(size_of::<u64>());
 

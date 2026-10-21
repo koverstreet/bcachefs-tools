@@ -361,7 +361,7 @@ fn pass_complete(fs: &Fs, pass: Pass, start_time: i64) {
 /// Whether btree @btree has been checked consistent and not changed since: as
 /// bch2_btree_is_clean().
 pub fn btree_is_clean(fs: &Fs, btree: c::btree_id) -> bool {
-    fs.sb.btrees_clean & (1u64 << btree.0) != 0
+    fs.sb.btrees_clean.get() & (1u64 << btree.0) != 0
 }
 
 /// Record btree @btree as checked consistent: as bch2_set_btree_clean().
@@ -523,7 +523,7 @@ fn needs_set(fs: &Fs, r: &Recovery<'_>, pass: Pass, flags: &mut Flags, sb: Optio
      */
     let in_recovery = fs.flag(c::bch_fs_flags::BCH_FS_in_recovery);
     let already_running = if !in_recovery || is_persistent(pass) {
-        fs.sb.recovery_passes_required
+        fs.sb.recovery_passes_required.get()
     } else {
         fs.recovery.runner.current_passes.get()
     };
@@ -822,7 +822,7 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
     let rec = &fs.recovery.runner;
     let mut r = lock(fs);
 
-    if fs.sb.features & 1 << c::bch_sb_feature::BCH_FEATURE_no_alloc_info.0 != 0 {
+    if fs.sb.features.get() & 1 << c::bch_sb_feature::BCH_FEATURE_no_alloc_info.0 != 0 {
         passes &= !passes_match(c::PASS_ALLOC);
     }
 
@@ -938,7 +938,7 @@ unsafe extern "C" fn async_work(work: *mut c::work_struct) {
      */
     let required = {
         let _sb = fs.sb_lock();
-        fs.sb.recovery_passes_required
+        fs.sb.recovery_passes_required.get()
     };
 
     let ratelimiting = lock(fs).passes_ratelimiting;
@@ -986,10 +986,10 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
      * before the first command is the opposite of what was asked for.
      */
     let mut passes = passes_match(c::PASS_ALWAYS)
-        | if fs.sb.clean == 0 { passes_match(c::PASS_UNCLEAN) } else { 0 }
+        | if fs.sb.clean.get() == 0 { passes_match(c::PASS_UNCLEAN) } else { 0 }
         | if opts.fsck != 0 { fsck_passes() } else { 0 }
         | opts.recovery_passes
-        | if opts.recovery_passes_skip_scheduled == 0 { fs.sb.recovery_passes_required } else { 0 };
+        | if opts.recovery_passes_skip_scheduled == 0 { fs.sb.recovery_passes_required.get() } else { 0 };
 
     if opts.recovery_pass_last != 0 {
         passes &= 1u64.checked_shl(u32::from(opts.recovery_pass_last) + 1).map_or(!0, |b| b - 1);
@@ -1070,7 +1070,7 @@ pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
     };
 
     out.tabstop_push(32);
-    line(out, "Scheduled (superblock)", fs.sb.recovery_passes_required);
+    line(out, "Scheduled (superblock)", fs.sb.recovery_passes_required.get());
     line(out, "Scheduled (ephemeral)", r.runner.scheduled_passes_ephemeral.get());
 
     line(out, "Completed", r.runner.passes_complete.get());

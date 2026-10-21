@@ -606,13 +606,14 @@ pub struct Fs {
     pub opt_change_cookie: u32,
     pub mount_opts: c::bch_opts_mask,
 
-    pub sb: c::bch_sb_cpu,
     pub sb_write: c::closure,
-    /// The superblock, behind sb_lock: Fs::sb_lock() is the way in.
+    /// The superblock, c->disk_sb, behind sb_lock - Fs::sb_lock() is the way
+    /// in - and what of it is read without the lock, c->sb, which it
+    /// publishes.
     #[pin]
-    #[init(crate::new_lock!(Default::default(), "&c->sb_lock"))]
-    #[c_anon("struct mutex_noio sb_lock; struct bch_sb_handle disk_sb")]
-    pub disk_sb: MutexNoio<c::bch_sb_handle>,
+    #[init(crate::new_lock!(Default::default(), ::pin_init::zeroed(), "&c->sb_lock"))]
+    #[c_anon("struct mutex_noio sb_lock; struct bch_sb_handle disk_sb; struct bch_sb_cpu sb")]
+    pub sb: MutexNoio<c::bch_sb_handle, c::bch_sb_cpu>,
     #[c("unsigned long incompat_versions_requested[BITS_TO_LONGS(BCH_VERSION_MINOR(bcachefs_metadata_version_current))]")]
     pub incompat_versions_requested: crate::util::bitmap::AtomicBitArray<{
         bits_to_longs(c::BCH_VERSION_MINOR(c::bcachefs_metadata_version_current as u64) as usize) }>,

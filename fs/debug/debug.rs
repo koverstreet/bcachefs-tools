@@ -476,8 +476,8 @@ pub fn bch2_fs_debug_init(c: &Opaque<c::bch_fs>) {
     let fs = Fs::from_c(c);
 
     let mut name = Printbuf::new();
-    if fs.sb.multi_device {
-        name.uuid(&fs.sb.user_uuid);
+    if fs.sb.multi_device.get() {
+        name.uuid(&fs.sb.user_uuid());
     } else {
         name.write_bytes(fs.name().to_bytes());
     }

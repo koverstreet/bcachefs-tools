@@ -73,7 +73,7 @@ pub struct BackpointerPos {
 
 impl BackpointerPos {
     pub fn from_bpos(fs: &Fs, p: c::bpos) -> Self {
-        let shift = fs.sb.extent_bp_shift;
+        let shift = fs.sb.extent_bp_shift.get();
         Self {
             dev:       p.inode,
             sector:    p.offset >> shift,
@@ -82,7 +82,7 @@ impl BackpointerPos {
     }
 
     pub fn to_bpos(self, fs: &Fs) -> c::bpos {
-        pos(self.dev, (self.sector << fs.sb.extent_bp_shift) + u64::from(self.suboffset))
+        pos(self.dev, (self.sector << fs.sb.extent_bp_shift.get()) + u64::from(self.suboffset))
     }
 
     pub fn bucket(self, ca: &c::bch_dev) -> c::bpos {
@@ -143,7 +143,7 @@ pub fn bch2_backpointer_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>
 
     match (fs, bucket) {
         (_, Some((b, offset))) => prt!(out, "bucket={}:{}:{offset} ", { b.inode }, { b.offset }),
-        (Some(fs), None)       => prt!(out, "sector={}:{} ", { p.inode }, { p.offset } >> fs.sb.extent_bp_shift),
+        (Some(fs), None)       => prt!(out, "sector={}:{} ", { p.inode }, { p.offset } >> fs.sb.extent_bp_shift.get()),
         (None, _)              => prt!(out, "pos={}:{} ", { p.inode }, { p.offset }),
     }
 
@@ -244,7 +244,7 @@ fn ptr_disk_sectors(sectors: u64, p: &c::extent_ptr_decoded) -> u64 {
 
 /// A stripe's is past the end of its blocks, clear of its extents' backpointers.
 fn extent_ptr_to_bp_pos(fs: &Fs, k: BkeySC<'_>, p: &c::extent_ptr_decoded) -> c::bpos {
-    let shift = fs.sb.extent_bp_shift;
+    let shift = fs.sb.extent_bp_shift.get();
     let dev = u64::from(p.ptr.dev());
 
     if let Some(s) = k.arm::<c::Stripe>() {

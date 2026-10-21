@@ -733,7 +733,7 @@ impl Fs {
     /// data's don't, past no_sb_user_data_replicas.
     fn replicas_obsolete(&self, data_type: u8) -> bool {
         u32::from(data_type) > c::bch_data_type::BCH_DATA_btree.0 &&
-            u32::from(self.sb.version_incompat) >= c::bcachefs_metadata_version::no_sb_user_data_replicas.0
+            u32::from(self.sb.version_incompat.get()) >= c::bcachefs_metadata_version::no_sb_user_data_replicas.0
     }
 
     /// Whether @e is marked in the superblock - or needn't be: obsolete, or

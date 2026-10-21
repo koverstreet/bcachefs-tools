@@ -747,7 +747,7 @@ pub fn bch2_dev_freespace_init(c: &Opaque<c::bch_fs>, ca: &c::bch_dev, bucket_st
 /// Every device whose freespace isn't initialized - checked on every mount,
 /// for a crash in the middle of adding a device: bch2_fs_freespace_init().
 fn fs_freespace_init(fs: &Fs) -> Result<(), BchError> {
-    if fs.sb.features & (1 << c::bch_sb_feature::BCH_FEATURE_small_image.0) != 0 {
+    if fs.sb.features.get() & (1 << c::bch_sb_feature::BCH_FEATURE_small_image.0) != 0 {
         return Ok(());
     }
 

@@ -651,7 +651,7 @@ fn backpointer_node_has_missing(fs: &Fs, k: BkeySC<'_>) -> bool {
             let rcu = read_lock();
             let mut p = k.arm::<c::BtreePtrV2>().expect("a btree_ptr_v2").v().min_key;
 
-            while p.inode <= k.k.p.inode && p.inode < u64::from(fs.sb.nr_devices) {
+            while p.inode <= k.k.p.inode && p.inode < u64::from(fs.sb.nr_devices.get()) {
                 if let Some(ca) = fs.dev_rcu(p.inode as u32, &rcu) {
                     let bucket = BackpointerPos::from_bpos(fs, p).bucket(ca);
                     let nbuckets = ca.mi.nbuckets;

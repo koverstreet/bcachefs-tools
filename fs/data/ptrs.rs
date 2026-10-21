@@ -169,9 +169,7 @@ struct EntrySizes {
 
 impl EntrySizes {
     fn of(fs: &Fs) -> Self {
-        // SAFETY: the filesystem's in-memory superblock info, live as long as it is
-        let sb = unsafe { &(*fs.as_ptr()).sb };
-        EntrySizes { u64s: sb.extent_type_u64s, nr: sb.extent_types_known }
+        EntrySizes { u64s: fs.sb.extent_type_u64s(), nr: fs.sb.extent_types_known.get() }
     }
 
     /// An entry of type @ty's bytes: None for a type it doesn't know.

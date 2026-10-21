@@ -364,7 +364,7 @@ fn propagate_one(
          * finding work is the upgrade, not a bug.
          */
         let mut flags = c::bch_fsck_flags::FSCK_CAN_FIX | c::bch_fsck_flags::FSCK_CAN_IGNORE;
-        if t.fs().sb.compat & (1 << c::bch_sb_compat::BCH_COMPAT_inode_opts_propagated.0) == 0 {
+        if t.fs().sb.compat.get() & (1 << c::bch_sb_compat::BCH_COMPAT_inode_opts_propagated.0) == 0 {
             flags |= c::bch_fsck_flags::FSCK_ERR_SILENT;
         }
 

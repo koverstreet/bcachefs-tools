@@ -8,8 +8,9 @@ use crate::util::Printbuf;
 
 pub use crate::sb::members::DevRef;
 
-/// sb_lock held: the superblock, through it.
-pub type SbLockGuard<'a> = Guard<'a, Noio<c::mutex>, c::bch_sb_handle>;
+/// sb_lock held: the superblock, through it - and c->sb, through its
+/// published().
+pub type SbLockGuard<'a> = Guard<'a, Noio<c::mutex>, c::bch_sb_handle, c::bch_sb_cpu>;
 
 impl SbLockGuard<'_> {
     /// Member @dev_idx, of an open filesystem's superblock - where every one
@@ -101,32 +102,32 @@ impl Fs {
     /// # Safety
     /// @sb is a live filesystem's disk_sb - its fs_sb bit set.
     pub unsafe fn from_disk_sb<'a>(sb: *const c::bch_sb_handle) -> &'a Fs {
-        let off = core::mem::offset_of!(Fs, disk_sb) + MutexNoio::<c::bch_sb_handle>::PROTECTED_OFFSET;
+        let off = core::mem::offset_of!(Fs, sb) + MutexNoio::<c::bch_sb_handle, c::bch_sb_cpu>::PROTECTED_OFFSET;
         unsafe { Self::borrow_raw(sb.byte_sub(off).cast_mut().cast()) }
     }
 
     /// The metadata version the filesystem is at: C's c->sb.version, the
     /// in-memory copy, which is what decides version-gated behaviour.
     pub fn version(&self) -> c::bcachefs_metadata_version {
-        c::bcachefs_metadata_version(self.sb.version as u32)
+        c::bcachefs_metadata_version(self.sb.version.get() as u32)
     }
 
     /// The version the last upgrade completed to: c->sb.version_upgrade_complete.
     /// Below version() while an upgrade's migrations are still running.
     pub fn version_upgrade_complete(&self) -> c::bcachefs_metadata_version {
-        c::bcachefs_metadata_version(self.sb.version_upgrade_complete as u32)
+        c::bcachefs_metadata_version(self.sb.version_upgrade_complete.get() as u32)
     }
 
     /// Whether btree @id lost data - topology repair dropped nodes - so
     /// repairs may reconstruct what it's missing: c->sb.btrees_lost_data.
     pub fn btree_lost_data(&self, id: c::btree_id) -> bool {
-        self.sb.btrees_lost_data & (1u64 << id.0) != 0
+        self.sb.btrees_lost_data.get() & (1u64 << id.0) != 0
     }
 
     /// Whether this is an image made with `bcachefs dump --sanitize`, which
     /// scrubs dirent names without rehashing them: c->sb.dirents_sanitized.
     pub fn dirents_sanitized(&self) -> bool {
-        self.sb.dirents_sanitized
+        self.sb.dirents_sanitized.get()
     }
 
     /// Whether filesystem flag @f (BCH_FS_*) is set: C's test_bit() on
@@ -176,7 +177,7 @@ impl Fs {
     }
 
     pub fn sb_lock(&self) -> SbLockGuard<'_> {
-        self.disk_sb.lock()
+        self.sb.lock()
     }
 
     /// sb_lock, as C calling in holds it.
@@ -184,7 +185,7 @@ impl Fs {
     /// # Safety
     /// The caller holds sb_lock, for as long as the guard lives.
     pub unsafe fn sb_lock_held(&self) -> SbLockGuard<'_> {
-        unsafe { self.disk_sb.held() }
+        unsafe { self.sb.held() }
     }
 
     /// c->capacity.mark_lock, C's - C initializes and frees it.
@@ -283,7 +284,7 @@ impl Fs {
 
     /// Number of devices in the filesystem superblock.
     pub fn nr_devices(&self) -> u32 {
-        self.sb.nr_devices as u32
+        self.sb.nr_devices.get() as u32
     }
 
     /// Run an option's pre-set hook; None dev = filesystem scope.
@@ -342,7 +343,7 @@ impl Fs {
     pub fn request_incompat_feature(&self, version: c::bcachefs_metadata_version)
         -> Result<(), BchError>
     {
-        if version.0 <= self.sb.version_incompat.into() {
+        if version.0 <= self.sb.version_incompat.get().into() {
             return Ok(());
         }
         self.set_version_incompat(version)
@@ -351,7 +352,7 @@ impl Fs {
     /// Whether the filesystem uses @feature: c->sb.features, the in-memory
     /// copy.
     pub fn feature(&self, feature: c::bch_sb_feature) -> bool {
-        self.sb.features & (1u64 << feature.0) != 0
+        self.sb.features.get() & (1u64 << feature.0) != 0
     }
 
     /// Mark the filesystem as using @feature, writing the superblock if it
@@ -390,7 +391,7 @@ impl Fs {
     /// Apply in-memory superblock edits to the in-memory state derived from
     /// it (c->sb, member info) without writing - for an open that will start
     /// and persist them then.
-    pub fn sb_update(&self, sb: &SbLockGuard) {
+    pub fn sb_update(&self, sb: &mut SbLockGuard) {
         crate::sb::io::sb_update(self, sb)
     }
 
@@ -497,12 +498,12 @@ impl Fs {
     pub fn time_to_timespec(&self, time: i64) -> c::timespec64 {
         const NSEC_PER_SEC: i64 = 1_000_000_000;
 
-        let sb = unsafe { &(*self.as_ptr()).sb };
-        let time = time.wrapping_add(sb.time_base_lo as i64);
-        let units = sb.time_units_per_sec as i64;
+        let sb = &self.sb;
+        let time = time.wrapping_add(sb.time_base_lo.get() as i64);
+        let units = sb.time_units_per_sec.get() as i64;
 
         let mut sec  = time / units;
-        let mut nsec = (time % units) * sb.nsec_per_time_unit as i64;
+        let mut nsec = (time % units) * sb.nsec_per_time_unit.get() as i64;
 
         // set_normalized_timespec64()
         while nsec >= NSEC_PER_SEC {
@@ -524,11 +525,11 @@ impl Fs {
     // targets
     #[allow(clippy::unnecessary_cast)]
     pub fn timespec_to_time(&self, ts: c::timespec64) -> i64 {
-        let sb = unsafe { &(*self.as_ptr()).sb };
+        let sb = &self.sb;
         // C's (int) tv_nsec / nsec_per_time_unit: an unsigned division
-        (ts.tv_sec as i64).wrapping_mul(sb.time_units_per_sec as i64)
-            .wrapping_add((ts.tv_nsec as i32 as u32 / sb.nsec_per_time_unit) as i64)
-            .wrapping_sub(sb.time_base_lo as i64)
+        (ts.tv_sec as i64).wrapping_mul(sb.time_units_per_sec.get() as i64)
+            .wrapping_add((ts.tv_nsec as i32 as u32 / sb.nsec_per_time_unit.get()) as i64)
+            .wrapping_sub(sb.time_base_lo.get() as i64)
     }
 
     /// In the filesystem's time units.

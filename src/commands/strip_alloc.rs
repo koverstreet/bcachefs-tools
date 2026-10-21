@@ -23,7 +23,7 @@ fn cmd_strip_alloc(cli: Cli) -> anyhow::Result<()> {
         let fs = crate::device_scan::open_scan(&devs, opts)
             .map_err(|e| anyhow::anyhow!("Error opening filesystem: {}", e))?;
 
-        if unsafe { (*fs.as_ptr()).sb.clean } == 0 {
+        if fs.sb.clean.get() == 0 {
             println!("Filesystem not clean, running recovery");
             let ret = unsafe { c::bch2_fs_start(fs.as_ptr()) };
             if ret != 0 {

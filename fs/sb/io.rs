@@ -4,6 +4,7 @@ use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::members;
 use crate::util::bitmap::LeBitmap;
+use crate::util::projections::{AtomicWord, Volatile, VolatileWriter};
 use crate::util::{Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64};
@@ -585,9 +586,9 @@ impl Fs {
     /// Whether features of @version may be used, without asking:
     /// bch2_incompat_feature_allowed().
     fn incompat_feature_allowed(&self, version: c::bcachefs_metadata_version) -> bool {
-        version.0 <= self.sb.version_incompat.into() ||
+        version.0 <= self.sb.version_incompat.get().into() ||
             (self.feature(c::bch_sb_feature::BCH_FEATURE_incompat_version_field) &&
-             version.0 <= self.sb.version_incompat_allowed.into())
+             version.0 <= self.sb.version_incompat_allowed.get().into())
     }
 
     /// Make the filesystem incompatible with versions before @version, if
@@ -596,7 +597,7 @@ impl Fs {
     pub fn set_version_incompat(&self, version: c::bcachefs_metadata_version) -> Result<(), BchError> {
         if self.incompat_feature_allowed(version) {
             let mut sb = self.sb_lock();
-            if version.0 > self.sb.version_incompat.into() {
+            if version.0 > self.sb.version_incompat.get().into() {
                 let s = sb.sb_mut();
                 let max = s.version_incompat().max(version.0.into());
                 s.set_version_incompat(max);
@@ -611,7 +612,7 @@ impl Fs {
         let requested = &self.incompat_versions_requested;
         if !requested.test(minor) && !requested.test_and_set(minor) {
             crate::bch_notice!(self, "requested incompat feature {} currently not enabled, allowed up to {}\n  set version_upgrade=incompatible to enable",
-                               version, self::version(self.sb.version_incompat_allowed));
+                               version, self::version(self.sb.version_incompat_allowed.get()));
         }
 
         self.throw(bch_errcode::BCH_ERR_may_not_use_incompat_feature)
@@ -632,7 +633,7 @@ impl Fs {
     /// runtime - bch2_sb_upgrade_incompat().
     fn upgrade_incompat(&self) {
         let mut sb = self.sb_lock();
-        let (v, allowed) = (self.sb.version, self.sb.version_incompat_allowed);
+        let (v, allowed) = (self.sb.version.get(), self.sb.version_incompat_allowed.get());
         if v == allowed {
             return;
         }
@@ -684,15 +685,15 @@ fn check_version_downgrade(fs: &Fs, sb: &mut SbLockGuard) -> bool {
     if s.version_incompat_allowed() > current.into() {
         s.set_version_incompat_allowed(current.into());
     }
-    if u32::from(fs.sb.version) > current {
+    if u32::from(fs.sb.version.get()) > current {
         s.version = Le16::new(current as u16);
     }
-    if u32::from(fs.sb.version_min) > current {
+    if u32::from(fs.sb.version_min.get()) > current {
         s.version_min = Le16::new(current as u16);
     }
     s.compat[0] = Le64::new(s.compat[0].get() & ((1 << c::bch_sb_compat::BCH_COMPAT_NR.0) - 1));
 
-    current < fs.sb.version.into()
+    current < fs.sb.version.get().into()
 }
 
 #[c_export]
@@ -1261,7 +1262,7 @@ impl bch_sb_handle {
             // SAFETY: the filesystem's handle, its disk_sb, under sb_lock -
             // the filesystem only for its devices, whose handles are theirs
             let fs = unsafe { Fs::from_disk_sb(self) };
-            fs.disk_sb.assert_held();
+            fs.sb.assert_held();
 
             // XXX: we're not checking that offline device have enough space
             for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_sb_field_resize) {
@@ -1343,60 +1344,87 @@ pub fn sb_field_get_minsize<F: SbField + ?Sized>(
 
 // ── The filesystem's copies ──────────────────────────────────────────────
 
-/// c->sb, what's read of the superblock without sb_lock, from the superblock:
-/// bch2_sb_update(). And ca->mi, each member's.
-pub(crate) fn sb_update(fs: &Fs, sb: &SbLockGuard) {
-    let src = sb.sb();
-    // SAFETY: under sb_lock, c->sb's writers'
-    let cpu = unsafe { &mut (*fs.as_ptr()).sb };
+/// c->sb's words of @a, as they are.
+fn get_all<T: AtomicWord, const N: usize>(a: &[Volatile<T>; N]) -> [T; N] {
+    a.each_ref().map(Volatile::get)
+}
 
-    cpu.uuid                     = src.uuid;
-    cpu.user_uuid                = src.user_uuid;
-    cpu.version                  = src.version.get();
-    cpu.version_incompat         = src.version_incompat() as u16;
-    cpu.version_incompat_allowed = src.version_incompat_allowed() as u16;
-    cpu.version_min              = src.version_min.get();
-    cpu.version_upgrade_complete = src.version_upgrade_complete() as u16;
-    cpu.nr_devices               = src.nr_devices;
-    cpu.clean                    = src.clean() as u8;
-    cpu.encryption_type          = src.encryption_type() as u8;
+/// c->sb's words of @a set to @v: @a as sb_lock's holder has it.
+pub(crate) fn set_all<T: AtomicWord, const N: usize>(a: &[VolatileWriter<T>; N], v: [T; N]) {
+    for (w, v) in a.iter().zip(v) {
+        w.set(v);
+    }
+}
 
-    cpu.extent_bp_shift = match src.extent_bp_shift() {
+/// c->sb: what's read of the superblock without sb_lock.
+impl c::bch_sb_cpu {
+    pub fn uuid(&self) -> c::__uuid_t {
+        c::__uuid_t { b: get_all(&self.uuid) }
+    }
+
+    pub fn user_uuid(&self) -> c::__uuid_t {
+        c::__uuid_t { b: get_all(&self.user_uuid) }
+    }
+
+    /// Each extent entry type's size, by type: extent_types_known of them.
+    pub fn extent_type_u64s(&self) -> [u8; 31] {
+        get_all(&self.extent_type_u64s)
+    }
+}
+
+/// c->sb, from the superblock: bch2_sb_update(). And ca->mi, each member's.
+pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard) {
+    let (handle, cpu) = sb.parts();
+    let src = handle.sb();
+
+    set_all(&cpu.uuid, src.uuid.b);
+    set_all(&cpu.user_uuid, src.user_uuid.b);
+    cpu.version                 .set(src.version.get());
+    cpu.version_incompat        .set(src.version_incompat() as u16);
+    cpu.version_incompat_allowed.set(src.version_incompat_allowed() as u16);
+    cpu.version_min             .set(src.version_min.get());
+    cpu.version_upgrade_complete.set(src.version_upgrade_complete() as u16);
+    cpu.nr_devices              .set(src.nr_devices);
+    cpu.clean                   .set(src.clean() as u8);
+    cpu.encryption_type         .set(src.encryption_type() as u8);
+
+    cpu.extent_bp_shift.set(match src.extent_bp_shift() {
         0 => c::BCH_SB_EXTENT_BP_SHIFT_DEFAULT as u8,
         shift => shift as u8,
-    };
+    });
 
-    cpu.nsec_per_time_unit = src.time_precision.get();
-    cpu.time_units_per_sec = (NSEC_PER_SEC / u64::from(cpu.nsec_per_time_unit)) as u32;
+    let nsec_per_time_unit = src.time_precision.get();
+    cpu.nsec_per_time_unit.set(nsec_per_time_unit);
+    cpu.time_units_per_sec.set((NSEC_PER_SEC / u64::from(nsec_per_time_unit)) as u32);
 
     /* XXX this is wrong, we need a 96 or 128 bit integer type */
-    cpu.time_base_lo = src.time_base_lo.get() / u64::from(cpu.nsec_per_time_unit);
-    cpu.time_base_hi = src.time_base_hi.get();
+    cpu.time_base_lo.set(src.time_base_lo.get() / u64::from(nsec_per_time_unit));
+    cpu.time_base_hi.set(src.time_base_hi.get());
 
-    cpu.features          = src.features[0].get();
-    cpu.compat            = src.compat[0].get();
-    cpu.multi_device      = src.multi_device();
-    cpu.dirents_sanitized = src.dirents_sanitized();
+    cpu.features         .set(src.features[0].get());
+    cpu.compat           .set(src.compat[0].get());
+    cpu.multi_device     .set(src.multi_device());
+    cpu.dirents_sanitized.set(src.dirents_sanitized());
 
-    match sb.field::<c::bch_sb_field_ext<Validated>>() {
+    match handle.field::<c::bch_sb_field_ext<Validated>>() {
         Some(e) => {
-            cpu.recovery_passes_required =
-                crate::init::passes::passes_from_stable(e.recovery_passes_required[0].get());
+            cpu.recovery_passes_required.set(
+                crate::init::passes::passes_from_stable(e.recovery_passes_required[0].get()));
 
             // the section's little-endian words as longs: le_bitvector_to_cpu()
             const _: () = assert!(size_of::<[core::ffi::c_ulong; bits_to_longs(c::BCH_FSCK_ERR_MAX as usize)]>()
                                   <= size_of::<[Le64; 8]>());
             let silent = LeBitmap::from_words(&e.errors_silent);
             let bits = core::ffi::c_ulong::BITS as usize;
-            for (i, d) in cpu.errors_silent.iter_mut().enumerate() {
-                *d = (0..bits).filter(|&b| silent.test(i * bits + b)).fold(0, |w, b| w | 1 << b);
+            for (i, w) in cpu.errors_silent.iter().enumerate() {
+                w.set((0..bits).filter(|&b| silent.test(i * bits + b)).fold(0, |w, b| w | 1 << b));
             }
 
-            cpu.btrees_lost_data = e.btrees_lost_data().get();
+            cpu.btrees_lost_data.set(e.btrees_lost_data().get());
             // grown since: 0 in an older version's section
-            cpu.btrees_clean = e.btrees_clean().get();
+            cpu.btrees_clean.set(e.btrees_clean().get());
         }
-        None => cpu.errors_silent.fill(0),
+        None => cpu.errors_silent.iter().for_each(|w| w.set(0)),
     }
 
     members::members_to_cpu(fs, sb);
@@ -1406,7 +1434,7 @@ pub(crate) fn sb_update(fs: &Fs, sb: &SbLockGuard) {
 pub fn bch2_sb_update(c: &Opaque<c::bch_fs>) {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
-    sb_update(fs, &unsafe { fs.sb_lock_held() })
+    sb_update(fs, &mut unsafe { fs.sb_lock_held() })
 }
 
 /// @src's header and sections into @dst - all but those each device has its
@@ -1459,7 +1487,7 @@ fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard, src: &bch_sb) -> Result<(), BchError>
     copy_super(sb, src)?;
     crate::alloc::replicas::sb_replicas_to_cpu(fs, sb)?;
     crate::alloc::disk_groups::sb_disk_groups_to_cpu(fs, sb)?;
-    crate::data::extents_sb::sb_extent_type_u64s_to_cpu(fs, sb);
+    crate::data::extents_sb::sb_extent_type_u64s_to_cpu(sb);
     sb_update(fs, sb);
     Ok(())
 }

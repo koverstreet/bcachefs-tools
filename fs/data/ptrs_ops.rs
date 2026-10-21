@@ -79,7 +79,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
         let ty = e.ty();
 
         bkey_fsck_err_on!(v, matches!(e, ExtentEntry::Invalid { .. }), id::extent_ptrs_invalid_entry,
-                          "invalid extent entry type (got {}, max {})", ty, fs.sb.extent_types_known)?;
+                          "invalid extent entry type (got {}, max {})", ty, fs.sb.extent_types_known.get())?;
 
         if let ExtentEntry::PastEnd { bytes, .. } = e {
             return Err(bkey_fsck_err!(v, id::extent_ptrs_entry_past_end,
@@ -343,7 +343,7 @@ pub(super) fn btree_ptr_v2_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchE
                       "min_key > key")?;
 
     if v.from.flags().contains(c::bch_validate_flags::BCH_VALIDATE_write) &&
-       u32::from(v.fs.sb.version_min) >= c::bcachefs_metadata_version::btree_ptr_sectors_written.0 {
+       u32::from(v.fs.sb.version_min.get()) >= c::bcachefs_metadata_version::btree_ptr_sectors_written.0 {
         bkey_fsck_err_on!(v, bp.v().sectors_written.get() == 0, id::btree_ptr_v2_written_0,
                           "sectors_written == 0")?;
     }

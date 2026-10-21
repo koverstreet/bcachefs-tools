@@ -9,7 +9,7 @@ use crate::c;
 use crate::data::ptrs::{extent_entry_type_name, extent_entry_type_u64s};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::sb::io::SbFieldOps;
+use crate::sb::io::{set_all, SbFieldOps};
 use crate::util::ffi::Opaque;
 use crate::util::vstructs::Head;
 use crate::util::Printbuf;
@@ -25,25 +25,27 @@ fn sizes(e: &c::bch_sb_field_extent_type_u64s) -> &[u8] {
     &e.d[..e.d.iter().position(|&u64s| u64s == 0).unwrap_or(e.d.len())]
 }
 
-/// As many of @theirs as the table holds, ours over the types we know.
-fn sizes_to_cpu(cpu: &mut c::bch_sb_cpu, theirs: &[u8]) {
-    let u64s = &mut cpu.extent_type_u64s;
+/// The table c->sb holds of @theirs - as many as it holds, ours over the
+/// types we know - and how many types it knows.
+fn sizes_to_cpu(theirs: &[u8]) -> ([u8; 31], u8) {
+    let mut u64s = [0; 31];
     let nr = theirs.len().min(u64s.len());
 
-    u64s.fill(0);
     u64s[..nr].copy_from_slice(&theirs[..nr]);
     for (d, s) in u64s.iter_mut().zip(ours()) {
         *d = s;
     }
-    cpu.extent_types_known = nr.max(c::BCH_EXTENT_ENTRY_MAX as usize) as u8;
+    (u64s, nr.max(c::BCH_EXTENT_ENTRY_MAX as usize) as u8)
 }
 
 /// c->sb's extent entry sizes, from the superblock's section.
-pub(crate) fn sb_extent_type_u64s_to_cpu(fs: &Fs, sb: &SbLockGuard) {
-    let theirs = sb.field::<c::bch_sb_field_extent_type_u64s>().map_or(&[][..], sizes);
+pub(crate) fn sb_extent_type_u64s_to_cpu(sb: &mut SbLockGuard) {
+    let (handle, cpu) = sb.parts();
+    let theirs = handle.field::<c::bch_sb_field_extent_type_u64s>().map_or(&[][..], sizes);
+    let (u64s, known) = sizes_to_cpu(theirs);
 
-    // SAFETY: under sb_lock, the in-memory superblock's writers'
-    sizes_to_cpu(unsafe { &mut (*fs.as_ptr()).sb }, theirs);
+    set_all(&cpu.extent_type_u64s, u64s);
+    cpu.extent_types_known.set(known);
 }
 
 fn sb_extent_type_u64s_from_cpu(fs: &Fs, sb: &mut SbLockGuard) -> Result<(), BchError> {
@@ -114,25 +116,23 @@ mod tests {
     /// win for the types we know, theirs are kept past them.
     #[test]
     fn to_cpu_ours_over_theirs() {
-        let mut cpu = c::bch_sb_cpu::default();
         let ours: Vec<u8> = ours().collect();
 
-        sizes_to_cpu(&mut cpu, &[9, 9, 9]);
-        assert_eq!(cpu.extent_type_u64s[..ours.len()], ours[..]);
-        assert_eq!(cpu.extent_types_known, c::BCH_EXTENT_ENTRY_MAX as u8);
+        let (u64s, known) = sizes_to_cpu(&[9, 9, 9]);
+        assert_eq!(u64s[..ours.len()], ours[..]);
+        assert_eq!(known, c::BCH_EXTENT_ENTRY_MAX as u8);
 
         let newer = [&ours[..], &[4, 5]].concat();
-        sizes_to_cpu(&mut cpu, &newer);
-        assert_eq!(cpu.extent_type_u64s[..newer.len()], newer[..]);
-        assert_eq!(usize::from(cpu.extent_types_known), newer.len());
+        let (u64s, known) = sizes_to_cpu(&newer);
+        assert_eq!(u64s[..newer.len()], newer[..]);
+        assert_eq!(usize::from(known), newer.len());
     }
 
     /// No more than the table holds, however long the section: C wrote past it.
     #[test]
     fn to_cpu_bounded() {
-        let mut cpu = c::bch_sb_cpu::default();
-        sizes_to_cpu(&mut cpu, &[1; 64]);
-        assert_eq!(usize::from(cpu.extent_types_known), cpu.extent_type_u64s.len());
+        let (u64s, known) = sizes_to_cpu(&[1; 64]);
+        assert_eq!(usize::from(known), u64s.len());
     }
 
     #[test]

@@ -583,7 +583,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
         let f = &mut sb.sb_mut().features[0];
         f.set(f.get() & !(1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64));
         // Also update the cached copy — c->sb.features is host-endian
-        (*fs_raw).sb.features &= !(1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64);
+        *sb.published().features.place() &= !(1u64 << c::bch_sb_feature::BCH_FEATURE_no_default_sb.0 as u64);
         fs.write_super_ret(&mut sb)
             .map_err(|e| anyhow!("Error writing superblock: {}", e))?;
 

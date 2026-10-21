@@ -94,8 +94,7 @@ impl Fs {
             if fsck_err!(self, c::bch_sb_error_id::BCH_FSCK_ERR_sb_clean_missing,
                          "superblock marked clean but clean section not present")? {
                 sb.sb_mut().set_clean(false);
-                // SAFETY: c->sb, which its writers change under sb_lock
-                unsafe { (*self.as_ptr()).sb.clean = 0 };
+                sb.published().clean.set(0);
             }
             return Err(bch_errcode::BCH_ERR_invalid_sb_clean.into());
         };
