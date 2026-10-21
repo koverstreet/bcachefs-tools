@@ -43,7 +43,7 @@ use crate::btree::iter::{bkey_s_c_to_result, is_restart, polonius_key, BtreeIter
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbFlush;
 use crate::c;
-use crate::data::ptrs::{crc_is_compressed, DecodedPtr, Ptrs};
+use crate::data::ptrs::{ptr_data_type, ptr_disk_sectors, DecodedPtr, Ptrs};
 use crate::debug::params as debug_params;
 use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
 use crate::fs::Fs;
@@ -210,35 +210,6 @@ pub fn bp_reconcile_phys(fs: &Fs, level: u32, dev: u32, k: BkeySC<'_>) -> c::rec
         return c::reconcile_work_id::RECONCILE_WORK_none;
     }
     k.reconcile_work_id(fs).phys()
-}
-
-fn ptr_data_type(fs: &Fs, k: BkeySC<'_>, d: &DecodedPtr<'_>) -> c::bch_data_type {
-    use c::bch_bkey_type as t;
-    use c::bch_data_type as dt;
-    match k.k.key_type() {
-        t::KEY_TYPE_btree_ptr | t::KEY_TYPE_btree_ptr_v2 => dt::BCH_DATA_btree,
-        t::KEY_TYPE_extent | t::KEY_TYPE_reflink_v =>
-            if d.p.has_ec { dt::BCH_DATA_stripe }
-            else if d.p.ptr.cached() != 0 { dt::BCH_DATA_cached }
-            else { dt::BCH_DATA_user },
-        t::KEY_TYPE_stripe => {
-            let s = k.arm::<c::Stripe>().expect("a stripe");
-            let block = s.ptrs(fs).position(|p| core::ptr::eq(p, d.ptr))
-                .expect("a pointer of the stripe's");
-            let s = s.v();
-            assert!(block < s.nr_blocks.into(), "stripe pointer past its blocks");
-            if block + usize::from(s.nr_redundant) >= s.nr_blocks.into() { dt::BCH_DATA_parity } else { dt::BCH_DATA_user }
-        }
-        _ => panic!("the data type of a pointer in a key without pointers"),
-    }
-}
-
-fn ptr_disk_sectors(sectors: u64, p: &c::extent_ptr_decoded) -> u64 {
-    if crc_is_compressed(&p.crc) {
-        (sectors * u64::from(p.crc.compressed_size)).div_ceil(p.crc.uncompressed_size.into())
-    } else {
-        sectors
-    }
 }
 
 /// A stripe's is past the end of its blocks, clear of its extents' backpointers.

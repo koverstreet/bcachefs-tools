@@ -771,6 +771,38 @@ pub struct DecodedPtr<'a> {
     pub pos: EntryPos,
 }
 
+/// What @d, a pointer of @k, points to - a stripe's parity blocks are parity,
+/// its others user data.
+pub fn ptr_data_type(fs: &Fs, k: BkeySC<'_>, d: &DecodedPtr<'_>) -> c::bch_data_type {
+    use c::bch_bkey_type as t;
+    use c::bch_data_type as dt;
+    match k.k.key_type() {
+        t::KEY_TYPE_btree_ptr | t::KEY_TYPE_btree_ptr_v2 => dt::BCH_DATA_btree,
+        t::KEY_TYPE_extent | t::KEY_TYPE_reflink_v =>
+            if d.p.has_ec { dt::BCH_DATA_stripe }
+            else if d.p.ptr.cached() != 0 { dt::BCH_DATA_cached }
+            else { dt::BCH_DATA_user },
+        t::KEY_TYPE_stripe => {
+            let s = k.arm::<c::Stripe>().expect("a stripe");
+            let block = s.ptrs(fs).position(|p| core::ptr::eq(p, d.ptr))
+                .expect("a pointer of the stripe's");
+            let s = s.v();
+            assert!(block < s.nr_blocks.into(), "stripe pointer past its blocks");
+            if block + usize::from(s.nr_redundant) >= s.nr_blocks.into() { dt::BCH_DATA_parity } else { dt::BCH_DATA_user }
+        }
+        _ => panic!("the data type of a pointer in a key without pointers"),
+    }
+}
+
+/// @sectors of @p's extent, as the sectors it takes on disk: compressed, if it is.
+pub fn ptr_disk_sectors(sectors: u64, p: &c::extent_ptr_decoded) -> u64 {
+    if crc_is_compressed(&p.crc) {
+        (sectors * u64::from(p.crc.compressed_size)).div_ceil(p.crc.uncompressed_size.into())
+    } else {
+        sectors
+    }
+}
+
 /// Where an entry is in its key's value, in u64s from the value's start: what
 /// a key's entries are edited by. Only the walk makes one, and it holds for as
 /// long as nothing before it is inserted or dropped.
