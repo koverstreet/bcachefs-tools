@@ -49,7 +49,7 @@ const MAX_LFS_FILESIZE: u64 = i64::MAX as u64;
 pub fn fpunch_snapshot(trans: &BtreeTrans<'_>, start: c::bpos, end: c::bpos) -> Result<(), BchError> {
     let fs = trans.fs();
     let res = DiskReservation::new(fs);
-    let mut iter = BtreeIter::new(trans, c::btree_id::extents, start, BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(trans, c::btree_id::extents, start, BtreeIterFlags::TRIM);
 
     iter.for_each_max_commit(trans, end, BtreeIterFlags::empty(), Some(&res), CommitFlags::NO_ENOSPC,
                              |t, iter, _| {
