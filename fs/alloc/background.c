@@ -1102,7 +1102,7 @@ int bch2_bucket_do_freespace_index(struct btree_trans *trans,
 
 	struct bpos pos = alloc_freespace_pos(alloc_k.k->p, *a);
 
-	CLASS(btree_iter, iter)(trans, BTREE_ID_freespace, pos, BTREE_ITER_intent);
+	CLASS(btree_iter, iter)(trans, BTREE_ID_freespace, pos, BTREE_ITER_intent|BTREE_ITER_trim);
 	struct bkey_s_c old = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
 	need_discard_or_freespace_err_on(ca->mi.freespace_initialized &&
