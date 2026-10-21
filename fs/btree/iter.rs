@@ -1508,6 +1508,7 @@ bitflags! {
         const JOURNAL_RECLAIM       = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_journal_reclaim.bits();
         const JOURNAL_REPLAY        = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_journal_replay.bits();
         const SKIP_ACCOUNTING_APPLY = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_skip_accounting_apply.bits();
+        const NO_WRITE_RATELIMIT    = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_write_ratelimit.bits();
     }
 }
 
