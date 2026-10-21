@@ -35,6 +35,12 @@
 // though not of c_extern!'s declarations, which rustc doesn't lint in what a
 // proc macro generates: c_extern! checks its own pointers are thin.
 #![cfg_attr(kernel, allow(improper_ctypes))]
+// A cfg the build doesn't declare is an error, not a warning: a misspelled
+// CONFIG_ is code silently compiled out. And the kernel version checks,
+// cfg(linux_ge = "X.Y"), are declared only by a kernel build: userspace has
+// no kernel version, so one there - not inside #[cfg(kernel)] - is a mistake.
+// (kbuild doesn't check cfgs; userspace's build.rs declares them.)
+#![deny(unexpected_cfgs)]
 
 #[cfg(kernel)]
 const __LOG_PREFIX: &[u8] = b"bcachefs\0";

@@ -169,6 +169,13 @@ RUSTFLAGS_mod.o += --cfg kernel --cfg __KERNEL__ $(bch-rust-gc-flags)
 # exists on one side only.
 RUSTFLAGS_mod.o += $(foreach f,$(bcachefs-config-cppflags),--cfg $(firstword $(subst =, ,$(patsubst -D%,%,$(f)))))
 
+# The kernel version checks, cfg(linux_ge = "7.3"): see the script.
+bch-linux-version-cfgs := $(shell $(CONFIG_SHELL) $(src)/scripts/linux-version-cfgs.sh '$(KERNELVERSION)' $(src))
+ifneq ($(.SHELLSTATUS),0)
+$(error linux-version-cfgs.sh failed, for kernel $(KERNELVERSION))
+endif
+RUSTFLAGS_mod.o += $(bch-linux-version-cfgs)
+
 # In kernel 7.3+, pin-init unified PinInit to use __init instead of __pinned_init
 # in-kernel.
 ifneq ($(bcachefs-vendor-rust),y)
