@@ -266,7 +266,7 @@ fn cmd_recover_super(cli: RecoverSuperCli) -> Result<()> {
     };
 
     let mut buf = Printbuf::new();
-    bcachefs_kernel::sb::io::sb_to_text(&mut buf, None, sb_buf.sb(), true, sb_field_type::members_v2.bit());
+    bcachefs_kernel::sb::io::sb_to_text(&mut buf, None, sb_buf.sb().as_unvalidated(), true, sb_field_type::members_v2.bit());
     println!("Found superblock:\n{}", buf);
 
     if cli.yes {

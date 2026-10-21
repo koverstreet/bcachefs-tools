@@ -25,17 +25,18 @@ pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef {
 impl<F: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef + ?Sized> SbField for F {}
 
 /// How a section type is validated and printed - by the sections! table, as
-/// its type says. validate() gets the section as read, Unvalidated, from a
-/// superblock that's Unvalidated too - validating is what finds out; to_text()
-/// gets it as Self, Validated. One too short to be read as its type fails
-/// validation before validate() is called, and isn't printed.
+/// its type says. Both get the section as read, Unvalidated, from a superblock
+/// that's Unvalidated too: validating is what finds out whether it's valid,
+/// and a printer prints one that isn't - the error saying it isn't does. One
+/// too short to be read as its type fails validation before validate() is
+/// called, and isn't printed.
 pub trait SbFieldOps: SbField + InState {
     fn validate(_sb: &bch_sb<Unvalidated>, _f: &Self::In<Unvalidated>, _flags: c::bch_validate_flags,
                 _err: &mut Printbuf) -> Result<(), BchError> {
         Ok(())
     }
 
-    fn to_text(_out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb, _f: &Self) {}
+    fn to_text(_out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>, _f: &Self::In<Unvalidated>) {}
 
     /// Where the whole entries of the section in @b - its bytes, its header's
     /// included - end: past that, rounded up to a u64, is a partial entry,
@@ -141,8 +142,12 @@ where
 }
 
 /// Section @f printed as an F - nothing, if it's too short to be one.
-fn to_text_as<F: SbFieldOps + ?Sized>(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb, f: &c::bch_sb_field) {
-    if let Some(f) = f.arm::<F>() {
+fn to_text_as<F: SbFieldOps + ?Sized>(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
+                                       f: &c::bch_sb_field<Unvalidated>)
+where
+    F::In<Unvalidated>: ArmOf<c::bch_sb_field<Unvalidated>, Tag = u32> + ArmRef,
+{
+    if let Some(f) = f.arm::<F::In<Unvalidated>>() {
         F::to_text(out, fs, sb, f);
     }
 }
@@ -198,7 +203,8 @@ macro_rules! sections {
 
         /// Section @f printed as its type - nothing, for a type this version
         /// doesn't know.
-        fn to_text_typed(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb, f: &c::bch_sb_field) {
+        fn to_text_typed(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
+                         f: &c::bch_sb_field<Unvalidated>) {
             let ty = f.type_.get();
             $(if ty == c::bch_sb_field_type::[<BCH_SB_FIELD_ $name>].0 {
                 return to_text_as::<$t>(out, fs, sb, f);
@@ -253,8 +259,8 @@ unsafe fn field_validate(sb: *mut Head<bch_sb>, f: *mut Head<c::bch_sb_field>,
         write!(err, "Invalid superblock section {name}: {}", field_err.as_str());
         err.newline();
         // SAFETY: the caller's
-        field_to_text(err, None, unsafe { bch_sb::<Validated>::from_ffi(sb) },
-                      unsafe { c::bch_sb_field::<Validated>::from_ffi(f) });
+        field_to_text(err, None, unsafe { bch_sb::<Unvalidated>::from_ffi(sb) },
+                      unsafe { c::bch_sb_field::<Unvalidated>::from_ffi(f) });
     } else if !field_err.as_str().is_empty() {
         // repaired as read: bch2_read_super() prints it
         write!(err, "Superblock section {name}: {}", field_err.as_str());
@@ -264,7 +270,8 @@ unsafe fn field_validate(sb: *mut Head<bch_sb>, f: *mut Head<c::bch_sb_field>,
 }
 
 /// Section @f as its type's ops print it.
-pub fn field_ops_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb, f: &c::bch_sb_field) {
+pub fn field_ops_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
+                         f: &c::bch_sb_field<Unvalidated>) {
     if out.nr_tabstops() == 0 {
         out.tabstop_push(32);
     }
@@ -273,7 +280,8 @@ pub fn field_ops_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb, f: &c
 }
 
 /// Section @f: its type, its size, and what it holds.
-pub fn field_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb, f: &c::bch_sb_field) {
+pub fn field_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
+                     f: &c::bch_sb_field<Unvalidated>) {
     let ty = c::bch_sb_field_type(f.type_.get());
     match ty.name() {
         Some(name) => write!(out, "{name}"),
@@ -768,7 +776,7 @@ pub fn layout_to_text(out: &mut Printbuf, l: &c::bch_sb_layout) {
 /// The superblock: its header, options, and - if @print_layout - its
 /// layout; then the sections whose types are in @fields.
 #[cold]
-pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb, print_layout: bool, fields: u32) {
+pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>, print_layout: bool, fields: u32) {
     if out.nr_tabstops() == 0 {
         out.tabstop_push(44);
     }
@@ -819,11 +827,10 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb, print_layout
     if sb.dirents_sanitized() {
         write!(out, "Dirents sanitized:\t1\n");
     }
-    // SAFETY: a validated superblock's
-    write!(out, "Devices:\t{}\n", unsafe { crate::sb::members::bch2_sb_nr_devices(sb.as_ffi()) });
+    write!(out, "Devices:\t{}\n", sb.number_of_devices());
 
     write!(out, "Sections:\t");
-    let have = sb.entries().fold(0u64, |m, f| m | 1u64.checked_shl(f.type_.get()).unwrap_or(0));
+    let have = sb.entries().map_while(Result::ok).fold(0u64, |m, f| m | 1u64.checked_shl(f.type_.get()).unwrap_or(0));
     out.bitflags(&FIELD_NAMES, have);
     out.newline();
 
@@ -866,7 +873,8 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb, print_layout
         layout_to_text(&mut out.indent(2), &sb.layout);
     }
 
-    for f in sb.entries().filter(|f| 1u32.checked_shl(f.type_.get()).is_some_and(|b| fields & b != 0)) {
+    let printed = |f: &&c::bch_sb_field<Unvalidated>| 1u32.checked_shl(f.type_.get()).is_some_and(|b| fields & b != 0);
+    for f in sb.entries().map_while(Result::ok).filter(printed) {
         out.newline();
         field_to_text(out, fs, sb, f);
     }
@@ -1839,7 +1847,7 @@ mod tests {
 
             let mut out = Printbuf::new();
             // SAFETY: the superblock and section above
-            let (sb, f) = unsafe { (c::bch_sb::<Validated>::from_ffi(sb), c::bch_sb_field::<Validated>::from_ffi(f)) };
+            let (sb, f) = unsafe { (c::bch_sb::<Unvalidated>::from_ffi(sb), c::bch_sb_field::<Unvalidated>::from_ffi(f)) };
             super::to_text_as::<F>(&mut out, None, sb, f);
             assert_eq!(out.as_str(), "");
             err.as_str().to_owned()

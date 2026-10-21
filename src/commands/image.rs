@@ -489,7 +489,7 @@ fn image_create_inner(
         buf.set_human_readable(true);
         // SAFETY: the superblock format() built, as long as its count says
         let sb = unsafe { c::bch_sb::<Validated>::from_ffi(sb) };
-        bcachefs_kernel::sb::io::sb_to_text(&mut buf, None, sb, false, sb_field_type::members_v2.bit());
+        bcachefs_kernel::sb::io::sb_to_text(&mut buf, None, sb.as_unvalidated(), false, sb_field_type::members_v2.bit());
         print!("{}", buf);
     }
 

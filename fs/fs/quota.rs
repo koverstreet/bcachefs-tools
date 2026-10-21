@@ -14,6 +14,7 @@
 
 use crate::btree::bkey::{BkeySC, BkeyWhole};
 use crate::c;
+use crate::util::vstructs::Unvalidated;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
@@ -30,7 +31,8 @@ const COUNTERS: [&str; c::Q_COUNTERS as usize] = ["space", "inodes"];
 // ── The superblock section ───────────────────────────────────────────────
 
 impl SbFieldOps for c::bch_sb_field_quota {
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, q: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                q: &c::bch_sb_field_quota<Unvalidated>) {
         for (t, name) in q.q.iter().zip(TYPES) {
             write!(out, "{name}: flags {:x}", t.flags.get());
             for (c, counter) in t.c.iter().zip(COUNTERS) {

@@ -36,12 +36,13 @@ const SECTION_HEAD: usize = size_of::<Head<Section>>();
 /// its end, are sb_field_validate()'s, and the entries themselves are
 /// validated late, with the filesystem - bch2_sb_clean_validate_late().
 impl SbFieldOps for Section {
-    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {
+    fn to_text(out: &mut Printbuf, fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                f: &c::bch_sb_field_clean<Unvalidated>) {
         write!(out, "flags:          {:x}\n", f.flags.get());
         write!(out, "journal_seq:    {}\n", f.journal_seq.get());
 
         let fs = fs.map_or(core::ptr::null_mut(), Fs::as_ptr);
-        for e in f.entries() {
+        for e in f.entries().map_while(Result::ok) {
             if e.type_ == c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_keys.0 as u8 && e.u64s() == 0 {
                 continue;
             }

@@ -59,12 +59,13 @@ impl SbFieldOps for Section {
         Ok(())
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                f: &c::bch_sb_field_downgrade<Unvalidated>) {
         if out.nr_tabstops() <= 1 {
             out.tabstop_push(16);
         }
 
-        for e in entries(f) {
+        for e in entries_read(f) {
             prt!(out, "version:\t{}\n", c::bcachefs_metadata_version(e.version.get().into()));
 
             write!(out, "recovery passes:\t");

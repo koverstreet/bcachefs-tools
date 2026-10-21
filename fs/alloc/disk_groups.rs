@@ -689,7 +689,8 @@ impl SbFieldOps for c::bch_sb_field_disk_groups {
         disk_groups_validate(sb, &f.entries, err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                f: &c::bch_sb_field_disk_groups<Unvalidated>) {
         for (i, g) in f.entries.iter().enumerate() {
             if i > 0 {
                 write!(out, " ");

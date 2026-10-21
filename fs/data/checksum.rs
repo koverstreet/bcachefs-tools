@@ -117,7 +117,8 @@ impl SbFieldOps for c::bch_sb_field_crypt {
         Ok(())
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, crypt: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                crypt: &c::bch_sb_field_crypt<Unvalidated>) {
         write!(out, "KFD:               {}\n", crypt.bch_crypt_kdf_type());
         write!(out, "scrypt n:          {}\n", crypt.bch_kdf_scrypt_n());
         write!(out, "scrypt r:          {}\n", crypt.bch_kdf_scrypt_r());

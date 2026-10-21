@@ -26,6 +26,7 @@ use core::ffi::c_int;
 use cstruct_macros::c_export;
 
 use crate::c;
+use crate::util::vstructs::Unvalidated;
 use crate::fs::Fs;
 use crate::prt;
 use crate::sb::io::{sb_field_u64s, SbFieldOps, COUNTERS};
@@ -262,7 +263,8 @@ impl Fs {
 }
 
 impl SbFieldOps for c::bch_sb_field_counters {
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                f: &c::bch_sb_field_counters<Unvalidated>) {
         for ctr in COUNTERS {
             if let Some(v) = f.d.get(ctr.stable_id as usize) {
                 prt!(out, "{} \t{}\n", ctr.name, v.get());

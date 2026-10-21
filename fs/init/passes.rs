@@ -53,7 +53,7 @@ use crate::util::kernel::{ktime_get_ns, ktime_get_real_seconds, NSEC_PER_SEC};
 use crate::util::kthread::Kthread;
 use crate::util::log::{log_cont, log_start, LogLevel, LogMsg};
 use crate::util::projections::AtomicWord;
-use crate::util::vstructs::{Head, Validated};
+use crate::util::vstructs::{Head, Validated, Unvalidated};
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::{bch_err, bch_info, c_function_name, inode, message, prt};
@@ -257,7 +257,8 @@ pub fn prt_stable(out: &mut Printbuf, stable: u64) {
 /// When each pass last ran and how long it took, by stable id: what
 /// ratelimiting a pass goes by.
 impl SbFieldOps for c::bch_sb_field_recovery_passes {
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, r: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                r: &c::bch_sb_field_recovery_passes<Unvalidated>) {
         while out.nr_tabstops() < 2 {
             out.tabstop_push(32);
         }

@@ -234,7 +234,8 @@ impl SbFieldOps for c::bch_sb_field_errors {
         validate(&f.entries, err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                f: &c::bch_sb_field_errors<Unvalidated>) {
         to_text(out, &f.entries)
     }
 }
@@ -245,7 +246,8 @@ impl SbFieldOps for c::bch_sb_field_errors_v2 {
         validate(&f.entries, err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                f: &c::bch_sb_field_errors_v2<Unvalidated>) {
         to_text(out, &f.entries)
     }
 }

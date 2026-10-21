@@ -71,7 +71,8 @@ impl SbFieldOps for c::bch_sb_field_journal {
         runs_validate(sb, runs, err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                f: &c::bch_sb_field_journal<Unvalidated>) {
         prt!(out, "Buckets: ");
         for b in &f.buckets {
             prt!(out, " {}", b.get());
@@ -95,7 +96,8 @@ impl SbFieldOps for c::bch_sb_field_journal_v2 {
         runs_validate(sb, runs, err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                f: &c::bch_sb_field_journal_v2<Unvalidated>) {
         prt!(out, "Buckets: ");
         for d in &f.d {
             prt!(out, " {}-{}", d.start.get(), d.start.get().wrapping_add(d.nr.get()));

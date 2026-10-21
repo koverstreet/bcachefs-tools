@@ -68,7 +68,8 @@ impl SbFieldOps for Section {
         Ok(())
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                f: &c::bch_sb_field_journal_seq_blacklist<Unvalidated>) {
         for (i, e) in f.start.iter().enumerate() {
             if i != 0 {
                 write!(out, " ");

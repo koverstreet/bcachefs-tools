@@ -83,7 +83,8 @@ impl SbFieldOps for c::bch_sb_field_extent_type_u64s {
         Ok(())
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, e: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                e: &c::bch_sb_field_extent_type_u64s<Unvalidated>) {
         for (ty, &u64s) in sizes(&e.d).iter().enumerate() {
             match extent_entry_type_name(ty as u32) {
                 Some(name) => write!(out, "{name}"),

@@ -68,10 +68,10 @@ pub fn member_exists<S: SbState>(sb: &c::bch_sb<S>, dev: u32) -> bool {
     dev < u32::from(S::head(sb).nr_devices) && sb_member(sb, dev).is_some_and(|m| m.alive())
 }
 
-impl c::bch_sb {
+impl<S: SbState> c::bch_sb<S> {
     /// Its members that exist, of nr_devices' slots.
     pub fn number_of_devices(&self) -> u32 {
-        (0..u32::from(self.nr_devices)).filter(|&i| member_exists(self, i)).count() as u32
+        (0..u32::from(S::head(self).nr_devices)).filter(|&i| member_exists(self, i)).count() as u32
     }
 }
 
@@ -450,7 +450,8 @@ impl SbFieldOps for c::bch_sb_field_members_v1 {
         members_validate(sb, members_in(f.as_bytes(), MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES), err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, sb: &c::bch_sb, f: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, sb: &c::bch_sb<Unvalidated>,
+                f: &c::bch_sb_field_members_v1<Unvalidated>) {
         members_to_text(out, sb, members_in(f.as_bytes(), MEMBERS_V1_HEAD, BCH_MEMBER_V1_BYTES));
     }
 }
@@ -461,7 +462,8 @@ impl SbFieldOps for c::bch_sb_field_members_v2 {
         members_validate(sb, members_in(f.as_bytes(), MEMBERS_V2_HEAD, f.member_bytes.get().into()), err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, sb: &c::bch_sb, f: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, sb: &c::bch_sb<Unvalidated>,
+                f: &c::bch_sb_field_members_v2<Unvalidated>) {
         members_to_text(out, sb, members_in(f.as_bytes(), MEMBERS_V2_HEAD, f.member_bytes.get().into()));
     }
 }

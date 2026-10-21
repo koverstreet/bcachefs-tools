@@ -13,7 +13,7 @@ use crate::sb::errors::prt_error_ids;
 use crate::sb::io::SbFieldOps;
 use crate::types::Le64;
 use crate::util::bitmap::LeBitmap;
-use crate::util::vstructs::Validated;
+use crate::util::vstructs::{Validated, Unvalidated};
 use crate::util::Printbuf;
 
 type Section = c::bch_sb_field_ext<Validated>;
@@ -34,7 +34,8 @@ fn has(e: &Section, off: usize) -> bool {
 /// Its validate is the arm's: a section shorter than the 88 bytes of the
 /// fields from before it grew isn't one.
 impl SbFieldOps for Section {
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, e: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                e: &c::bch_sb_field_ext<Unvalidated>) {
         write!(out, "Recovery passes required:\t");
         passes::prt_stable(out, e.recovery_passes_required[0].get());
         out.newline();
@@ -61,22 +62,25 @@ mod tests {
     use super::*;
     use crate::btree::types::btree_id_str;
     use crate::types::Le32;
-    use crate::util::vstructs::{Head, VStruct};
+    use crate::util::vstructs::{cast_plain_mut, plain_bytes_mut, Head, Unvalidated, VStruct};
 
     /// An ext section of @u64s, @buf's first, as the superblock's printer
     /// prints it - by its type.
     fn to_text(buf: &mut [u64], u64s: usize) -> String {
-        let mut sb = [0u64; 32];
+        // a superblock of no sections: its header
+        let mut sb = [0u64; size_of::<Head<c::bch_sb>>() / size_of::<u64>()];
+        let sb_bytes = plain_bytes_mut(&mut sb[..]);
+        cast_plain_mut::<Head<c::bch_sb>>(sb_bytes).unwrap().set_val_u64s(0);
+        let sb = c::bch_sb::<Unvalidated>::from_bytes(sb_bytes).unwrap();
+
+        let b = plain_bytes_mut(buf);
+        let f = cast_plain_mut::<Head<c::bch_sb_field>>(b).unwrap();
+        f.set_val_u64s(u64s);
+        f.type_ = Le32::new(c::bch_sb_field_type::BCH_SB_FIELD_ext.0);
+        let f = c::bch_sb_field::<Unvalidated>::from_bytes(b).unwrap();
+
         let mut out = Printbuf::new();
-        let f = buf.as_mut_ptr().cast::<Head<c::bch_sb_field>>();
-        // SAFETY: u64s, which any bytes are, aligned for a section, as many
-        // as its header says; to_text() reads nothing of @sb
-        unsafe {
-            (*f).set_val_u64s(u64s);
-            (*f).type_ = Le32::new(c::bch_sb_field_type::BCH_SB_FIELD_ext.0);
-            crate::sb::io::field_ops_to_text(&mut out, None, c::bch_sb::<Validated>::from_ffi(sb.as_mut_ptr().cast()),
-                                             c::bch_sb_field::<Validated>::from_ffi(f));
-        }
+        crate::sb::io::field_ops_to_text(&mut out, None, sb, f);
         out.as_str().to_owned()
     }
 

@@ -702,7 +702,8 @@ impl SbFieldOps for c::bch_sb_field_replicas {
         section_validate(sb, || v1_entries(f.as_bytes()), err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                f: &c::bch_sb_field_replicas<Unvalidated>) {
         section_to_text(out, v1_entries(f.as_bytes()))
     }
 
@@ -717,7 +718,8 @@ impl SbFieldOps for c::bch_sb_field_replicas_v0 {
         section_validate(sb, || v0_entries(f.as_bytes()), err)
     }
 
-    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb, f: &Self) {
+    fn to_text(out: &mut Printbuf, _fs: Option<&Fs>, _sb: &c::bch_sb<Unvalidated>,
+                f: &c::bch_sb_field_replicas_v0<Unvalidated>) {
         section_to_text(out, v0_entries(f.as_bytes()))
     }
 
