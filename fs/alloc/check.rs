@@ -638,7 +638,7 @@ fn check_alloc_to_lru_ref<'t>(
         if !per_dev_fragmentation_lru(fs) {
             lru_mod(t, pos, true)?;
         } else {
-            lru_check_set(t, pos, alloc_k, last_flushed.as_raw())?;
+            lru_check_set(t, pos, alloc_k, last_flushed.borrow())?;
         }
     }
 
@@ -652,7 +652,7 @@ fn check_alloc_to_lru_ref<'t>(
         }
 
         lru_check_set(t, LruPos::new(LruId::Read { dev }.id(), a.io_time[READ], target), alloc_k,
-                      last_flushed.as_raw())?;
+                      last_flushed.borrow())?;
     }
     Ok(())
 }

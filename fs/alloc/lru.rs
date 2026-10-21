@@ -22,7 +22,7 @@ use crate::btree::bkey::{pos, spos, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::cache::BtreeCachePins;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
                          TransAttempt, UpdateTriggerFlags};
-use crate::btree::write_buffer::WbMaybeFlush;
+use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
@@ -279,20 +279,17 @@ pub fn bch2_dev_remove_lrus(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) -> c_int {
 /// it has, is there: set it if not, as fsck says. The write buffer is flushed
 /// first, in case it's there, once per referring key - @last_flushed's.
 pub(crate) fn lru_check_set(
-    t:            &TransAttempt<'_, '_>,
-    pos:          LruPos,
-    referring_k:  BkeySC<'_>,
-    last_flushed: *mut c::wb_maybe_flush,
+    t:                &TransAttempt<'_, '_>,
+    pos:              LruPos,
+    referring_k:      BkeySC<'_>,
+    mut last_flushed: WbFlush<'_>,
 ) -> Result<(), BchError> {
     let fs = t.fs();
     let mut iter = BtreeIter::new(t, c::btree_id::lru, pos.to_bpos(), BtreeIterFlags::empty());
     let lru_k = iter.peek_slot(t)?.expect("a slot always has a key");
 
     if lru_k.k.type_ != c::bch_bkey_type::KEY_TYPE_set.0 as u8 {
-        // SAFETY: the caller's
-        ret_to_result_void(unsafe {
-            c::bch2_btree_write_buffer_maybe_flush(t.raw(), referring_k.into(), last_flushed)
-        })?;
+        last_flushed.maybe_flush(t, referring_k)?;
 
         if fsck_err!(t, id::alloc_key_to_missing_lru_entry, "missing {} lru entry at pos {}\n{}",
                      lru_type_str(pos.lru_id().lru_type()), iter.pos(), referring_k.to_text(fs))? {
@@ -314,6 +311,7 @@ pub unsafe extern "C" fn bch2_lru_check_set<'t>(
     last_flushed: *mut c::wb_maybe_flush,
 ) -> c_int {
     let t = unsafe { trans.attempt_in_progress() };
+    let last_flushed = unsafe { WbFlush::from_raw(last_flushed) }.expect("a wb_maybe_flush");
     ret_to_c(lru_check_set(&t, LruPos::new(lru_id, time, dev_bucket), referring_k, last_flushed))
 }
 

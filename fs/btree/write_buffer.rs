@@ -9,6 +9,7 @@ use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError};
+use core::marker::PhantomData;
 use core::ptr::NonNull;
 
 /// C's struct wb_maybe_flush: before an fsck pass calls a key missing that
@@ -33,16 +34,45 @@ impl WbMaybeFlush {
         Ok(Self(NonNull::new(alloc_pinned(init)?).expect("alloc_pinned() succeeded")))
     }
 
+    pub fn borrow(&mut self) -> WbFlush<'_> {
+        WbFlush(self.0, PhantomData)
+    }
+
     /// Count a key checked: wb_maybe_flush_inc().
     pub fn inc(&mut self) {
         // SAFETY: ours
         unsafe { self.0.as_mut().nr_done += 1 };
     }
 
+    pub fn maybe_flush(&mut self, t: &TransAttempt<'_, '_>, referring_k: BkeySC<'_>) -> Result<(), BchError> {
+        self.borrow().maybe_flush(t, referring_k)
+    }
+}
+
+/// A WbMaybeFlush borrowed - the pass's own, or the struct wb_maybe_flush C
+/// hands over. A handle, not a reference: a &mut to the struct would let it be
+/// moved out from under its bkey_buf's key.
+pub struct WbFlush<'a>(NonNull<c::wb_maybe_flush>, PhantomData<&'a mut c::wb_maybe_flush>);
+
+impl WbFlush<'_> {
+    /// None for NULL.
+    ///
+    /// # Safety
+    /// @f is NULL, or live and used through nothing else for the handle's
+    /// lifetime.
+    pub unsafe fn from_raw(f: *mut c::wb_maybe_flush) -> Option<Self> {
+        NonNull::new(f).map(|f| Self(f, PhantomData))
+    }
+
+    pub fn reborrow(&mut self) -> WbFlush<'_> {
+        WbFlush(self.0, PhantomData)
+    }
+
     /// Before calling what @referring_k refers to missing: flush the write
     /// buffer if it hasn't been for @referring_k, returning the restart that
     /// has the pass look again - bch2_btree_write_buffer_maybe_flush().
     pub fn maybe_flush(&mut self, t: &TransAttempt<'_, '_>, referring_k: BkeySC<'_>) -> Result<(), BchError> {
+        // SAFETY: borrowed, for the call
         ret_to_result_void(unsafe {
             c::bch2_btree_write_buffer_maybe_flush(t.raw(), referring_k.into(), self.0.as_ptr())
         })
