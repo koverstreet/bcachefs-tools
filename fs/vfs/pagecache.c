@@ -230,7 +230,7 @@ int bch2_folio_set(struct bch_fs *c,
 		for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_extents,
 				   POS(inode_inum(inode).inum, offset),
 				   POS(inode_inum(inode).inum, U64_MAX),
-				   inode_inum(inode).subvol, BTREE_ITER_slots, k, ({
+				   inode_inum(inode).subvol, BTREE_ITER_slots|BTREE_ITER_trim, k, ({
 			unsigned nr_ptrs = bch2_bkey_durability_safe(c, k).nr_overwritable;
 			unsigned state = bkey_to_sector_state(c, k);
 
