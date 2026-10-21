@@ -261,13 +261,10 @@ retry:
 	if (err)
 		goto err;
 
-	for_each_btree_key_norestart(trans, iter, BTREE_ID_extents,
-			   SPOS(inum.inum, offset, snapshot),
-			   BTREE_ITER_slots, k, err) {
+	for_each_btree_key_max_norestart(trans, iter, BTREE_ID_extents,
+			   SPOS(inum.inum, offset, snapshot), POS(inum.inum, end),
+			   BTREE_ITER_slots|BTREE_ITER_trim, k, err) {
 		offset = iter.pos.offset;
-
-		if (bkey_ge(bkey_start_pos(k.k), POS(inum.inum, end)))
-			break;
 
 		if (k.k->p.snapshot != snapshot ||
 		    nr_replicas > bch2_bkey_durability_safe(c, k).total ||
