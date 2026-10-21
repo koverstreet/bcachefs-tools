@@ -3,7 +3,7 @@ use crate::btree::bkey::BkeyI;
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
-use crate::locking::{Guard, Lock, Noio, PercpuRwsemNoio};
+use crate::locking::{Guard, Lock, MutexNoio, Noio, PercpuRwsemNoio};
 use crate::util::Printbuf;
 
 pub use crate::sb::members::DevRef;
@@ -102,6 +102,15 @@ impl Fs {
     /// always a live one.
     pub fn from_c(c: &crate::util::ffi::Opaque<c::bch_fs>) -> &Fs {
         unsafe { Self::borrow_raw(c.as_ptr()) }
+    }
+
+    /// The filesystem whose disk_sb @sb is: C's container_of().
+    ///
+    /// # Safety
+    /// @sb is a live filesystem's disk_sb - its fs_sb bit set.
+    pub unsafe fn from_disk_sb<'a>(sb: *const c::bch_sb_handle) -> &'a Fs {
+        let off = core::mem::offset_of!(Fs, disk_sb) + MutexNoio::<c::bch_sb_handle>::PROTECTED_OFFSET;
+        unsafe { Self::borrow_raw(sb.byte_sub(off).cast_mut().cast()) }
     }
 
     /// The metadata version the filesystem is at: C's c->sb.version, the

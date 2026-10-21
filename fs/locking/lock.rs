@@ -38,6 +38,15 @@ pub unsafe trait RawLock {
     unsafe fn destroy(_l: *mut Self) {}
 }
 
+/// A RawLock that can be tried: taken only if no one holds it.
+///
+/// # Safety
+/// try_lock() is RawLock's lock(), when it returns Some; when None, nothing's
+/// taken, and nothing's left to release.
+pub unsafe trait RawTryLock: RawLock {
+    unsafe fn try_lock(l: *mut Self) -> Option<Self::GuardState>;
+}
+
 /// A RawLock that readers can share: RawLock's lock() and unlock() are the
 /// writer's, alone.
 ///
@@ -97,10 +106,22 @@ impl<R: RawLock, G, P> Lock<R, G, P> {
         Guard { lock: self, state: Some(state), _not_send: PhantomData }
     }
 
+    /// lock(), if no one holds it.
+    pub fn try_lock(&self) -> Option<Guard<'_, R, G, P>>
+    where
+        R: RawTryLock,
+    {
+        let state = unsafe { R::try_lock(self.raw.get()) }?;
+        Some(Guard { lock: self, state: Some(state), _not_send: PhantomData })
+    }
+
     /// Held exclusively - by the writer, for a lock readers share.
     pub fn assert_held(&self) {
         unsafe { R::assert_held(self.raw.get()) }
     }
+
+    /// Where the G is in a Lock: for C's container_of() from it.
+    pub const PROTECTED_OFFSET: usize = core::mem::offset_of!(Self, protected);
 
     pub(super) fn raw(&self) -> *mut R {
         self.raw.get()

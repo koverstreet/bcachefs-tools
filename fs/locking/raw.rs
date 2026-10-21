@@ -17,6 +17,7 @@
 
 use super::RawLock;
 use super::RawRwLock;
+use super::RawTryLock;
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::ffi::{c_char, Opaque};
@@ -85,6 +86,12 @@ unsafe impl RawLock for c::mutex {
 
     unsafe fn assert_held(l: *mut Self) {
         unsafe { rust_mutex_assert_held(l) }
+    }
+}
+
+unsafe impl RawTryLock for c::mutex {
+    unsafe fn try_lock(l: *mut Self) -> Option<()> {
+        (unsafe { c::mutex_trylock(l.cast()) } as i32 != 0).then_some(())
     }
 }
 

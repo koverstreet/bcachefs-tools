@@ -23,7 +23,7 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{Lock, RawLock, RawRwLock};
+use super::{Lock, RawLock, RawRwLock, RawTryLock};
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::{c_uint, c_void, CStr};
@@ -82,6 +82,14 @@ unsafe impl<R: RawLock> RawLock for Noio<R> {
 
     unsafe fn destroy(l: *mut Self) {
         unsafe { R::destroy(l.cast()) }
+    }
+}
+
+unsafe impl<R: RawTryLock> RawTryLock for Noio<R> {
+    unsafe fn try_lock(l: *mut Self) -> Option<Self::GuardState> {
+        // not taken: dropped, so restored
+        let noio = MemallocFlags::noio();
+        Some((noio, unsafe { R::try_lock(l.cast()) }?))
     }
 }
 

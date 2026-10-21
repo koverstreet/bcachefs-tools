@@ -36,7 +36,7 @@ pub mod seqmutex;
 
 pub use crate::new_lock;
 pub use raw::{mutex, percpu_rw_semaphore, rw_semaphore, spinlock_t};
-pub use lock::{Guard, Lock, RawLock, RawRwLock, ReadGuard};
+pub use lock::{Guard, Lock, RawLock, RawRwLock, RawTryLock, ReadGuard};
 pub use noio::{mutex_noio, percpu_rwsem_noio, MemallocFlags, MutexNoio, Noio, PercpuRwsemNoio};
 pub use seqlock::SeqLock;
 pub use seqmutex::SeqMutexSeq;
