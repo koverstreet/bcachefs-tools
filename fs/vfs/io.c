@@ -897,7 +897,7 @@ static int quota_reserve_range(struct bch_inode_info *inode,
 	int ret = for_each_btree_key_in_subvolume_max(trans, iter,
 				BTREE_ID_extents,
 				POS(inode_inum(inode).inum, start),
-				POS(inode_inum(inode).inum, end - 1),
+				POS(inode_inum(inode).inum, end),
 				inode_inum(inode).subvol, 0, k, ({
 			if (bkey_extent_is_allocation(k.k)) {
 				u64 s = min(end, k.k->p.offset) -
