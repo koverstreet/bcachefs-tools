@@ -2338,7 +2338,7 @@ retry:
 
 	bch2_trans_iter_init(trans, &iter, BTREE_ID_extents,
 			     SPOS(op->pos.inode, op->pos.offset, snapshot),
-			     BTREE_ITER_slots);
+			     BTREE_ITER_slots|BTREE_ITER_trim);
 	while (1) {
 		struct bio *bio = &op->wbio.bio;
 
@@ -2347,7 +2347,8 @@ retry:
 			break;
 
 		bch2_btree_iter_set_pos(&iter, SPOS(op->pos.inode, op->pos.offset, snapshot));
-		k = bch2_btree_iter_peek_slot(&iter);
+		k = bch2_btree_iter_peek_slot_max(&iter,
+				POS(op->pos.inode, op->pos.offset + bio_sectors(bio)));
 		ret = bkey_err(k);
 		if (ret)
 			break;
@@ -2408,9 +2409,6 @@ retry:
 					op->flags |= BCH_WRITE_convert_unwritten;
 			}
 		}
-
-		bch2_cut_front(c, op->pos, op->insert_keys.top);
-		bch2_cut_back(POS(op->pos.inode, op->pos.offset + bio_sectors(bio)), op->insert_keys.top);
 
 		bio = &op->wbio.bio;
 		if (k.k->p.offset < op->pos.offset + bio_sectors(bio)) {
