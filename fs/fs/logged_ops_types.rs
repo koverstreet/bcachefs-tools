@@ -2,7 +2,9 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::locking::{new_mutex, Mutex};
+use crate::cstructs::c;
+use crate::locking::Lock;
+use crate::new_lock;
 use crate::types::{RustOnly, rust_only};
 use crate::util::alloc::KVVec;
 use core::sync::atomic::AtomicU32;
@@ -26,6 +28,6 @@ pub struct bch_fs_logged_ops {
      * ascending: see bch2_logged_ops_note_unfinished().
      */
     #[pin]
-    #[init(RustOnly::new(new_mutex!(KVVec::new())))]
-    pub(crate) unfinished: rust_only!(Mutex<KVVec<u64>>),
+    #[init(RustOnly::new(new_lock!(KVVec::new())))]
+    pub(crate) unfinished: rust_only!(Lock<c::mutex, KVVec<u64>>),
 }

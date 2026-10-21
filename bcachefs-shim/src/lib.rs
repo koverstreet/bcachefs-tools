@@ -64,5 +64,3 @@ macro_rules! pr_info {
         $crate::print::pr_info(::std::format_args!($($arg)*))
     };
 }
-
-pub mod sync;

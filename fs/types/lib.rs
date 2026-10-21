@@ -4,10 +4,10 @@
 //!
 //! A struct C shares is a normal #[repr(C)] Rust struct, #[derive(CStruct)]
 //! (fs/cstruct-macros); its fields with a C rendering are C's too, and the
-//! others - a Mutex<KVVec<u32>>, say - Rust's alone, which C reserves opaque
-//! storage for. Enums, constants, typedefs, x-macro lists, bitmask accessors
-//! and C not yet converted are macros there too: c_enum!, c_const!,
-//! c_typedef!, c_xmacro!, c_bitmask!, c_verbatim!.
+//! others - a Lock<c::mutex, KVVec<u32>>, say - Rust's alone, which C
+//! reserves opaque storage for. Enums, constants, typedefs, x-macro lists,
+//! bitmask accessors and C not yet converted are macros there too: c_enum!,
+//! c_const!, c_typedef!, c_xmacro!, c_bitmask!, c_verbatim!.
 //!
 //! And C's container types, which the types hold: DArray, GenRadix, Fifo,
 //! MinHeap - and c_opaque!, for the types only C's .c files define.
@@ -207,10 +207,10 @@ impl<T> Default for DArray<T> {
 
 // ---- Rust's own, in C's structs ---------------------------------------------
 
-/// A field of a struct C shares that's Rust's alone - a Mutex<KVVec<u32>>,
-/// say: C reserves its storage, as opaque bytes of its size and alignment,
-/// and never looks inside; Rust reaches it as a @T, by Deref. Declared with
-/// rust_only!(T), which sizes it.
+/// A field of a struct C shares that's Rust's alone - a Lock<c::mutex,
+/// KVVec<u32>>, say: C reserves its storage, as opaque bytes of its size and
+/// alignment, and never looks inside; Rust reaches it as a @T, by Deref.
+/// Declared with rust_only!(T), which sizes it.
 ///
 /// To C, and to improper_ctypes, it's @U64S u64s. The lint looks through the
 /// *mut bch_fs that extern blocks pass into every struct bch_fs holds, and a
@@ -224,7 +224,7 @@ impl<T> Default for DArray<T> {
 /// compile error, not a zeroed @T.
 #[repr(C)]
 pub struct RustOnly<T, const U64S: usize> {
-    /// UnsafeCell: a @T - a Mutex - may be written through a shared reference
+    /// UnsafeCell: a @T - a lock - may be written through a shared reference
     storage: core::cell::UnsafeCell<[core::mem::MaybeUninit<u64>; U64S]>,
     _t:      core::marker::PhantomData<T>,
 }
@@ -235,7 +235,7 @@ unsafe impl<T: Sync, const U64S: usize> Sync for RustOnly<T, U64S> {}
 
 // SAFETY: zeroed storage is a zeroed @T - which, @T being Zeroable, is a @T,
 // as new() would have made one. A @T with invariants zeroes can't satisfy -
-// a Mutex - isn't Zeroable, so neither is its RustOnly.
+// a lock - isn't Zeroable, so neither is its RustOnly.
 unsafe impl<T: ::pin_init::Zeroable, const U64S: usize> ::pin_init::Zeroable for RustOnly<T, U64S> {}
 
 impl<T, const U64S: usize> RustOnly<T, U64S> {

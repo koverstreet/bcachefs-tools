@@ -3,7 +3,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::locking::{new_mutex, Mutex};
+use crate::locking::Lock;
+use crate::new_lock;
 use crate::util::genradix::SharedGenRadix;
 use core::sync::atomic::AtomicU32;
 use cstruct_macros::{c_enum, CStruct, TypeInfo};
@@ -58,12 +59,12 @@ pub struct QuotaLimit {
 pub struct MemquotaType {
     pub limits:       [QuotaLimit; c::Q_COUNTERS as usize],
     #[pin]
-    pub(crate) lock:  Mutex<()>,
+    pub(crate) lock:  Lock<c::mutex>,
     pub(crate) table: SharedGenRadix<Memquota>,
 }
 
 impl MemquotaType {
-    fn new(lock: impl PinInit<Mutex<()>>) -> impl PinInit<Self> {
+    fn new(lock: impl PinInit<Lock<c::mutex>>) -> impl PinInit<Self> {
         pin_init!(Self {
             limits:  Default::default(),
             lock    <- lock,
@@ -84,14 +85,14 @@ pub struct Quotas {
 }
 
 impl Quotas {
-    /// No limits, and empty tables. A new_mutex!() each, so a lock class
+    /// No limits, and empty tables. A new_lock!() each, so a lock class
     /// each: they're taken together, in type order, as C's are with
     /// mutex_lock_nested().
     pub fn new() -> impl PinInit<Self> {
         pin_init!(Self {
-            usr <- MemquotaType::new(new_mutex!(())),
-            grp <- MemquotaType::new(new_mutex!(())),
-            prj <- MemquotaType::new(new_mutex!(())),
+            usr <- MemquotaType::new(new_lock!(())),
+            grp <- MemquotaType::new(new_lock!(())),
+            prj <- MemquotaType::new(new_lock!(())),
         })
     }
 

@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::locking::{new_mutex, Lock, Mutex};
+use crate::locking::Lock;
 use crate::new_lock;
 use crate::types::{DArray, RustOnly, bits_to_longs, rust_only};
 use crate::util::alloc::KVVec;
@@ -103,8 +103,8 @@ pub struct bch_fs_snapshots {
     pub table: c::SnapshotTable,
     /// The table's writers' lock: taken by table_write(), in snapshot.rs.
     #[pin]
-    #[init(RustOnly::new(new_mutex!(())))]
-    pub(crate) table_lock: rust_only!(Mutex<()>),
+    #[init(RustOnly::new(new_lock!(())))]
+    pub(crate) table_lock: rust_only!(Lock<c::mutex>),
     /* a topology repair invalidated descendants' is_ancestor bitmaps: */
     #[c("bool need_table_rebuild")]
     #[init(AtomicBool::new(false))]
@@ -123,8 +123,8 @@ pub struct bch_fs_snapshots {
     pub wait_for_pagecache_and_delete_work: crate::fs::FsWork,
     /// Subvolumes unlinked and waiting for the delete work: Rust's alone.
     #[pin]
-    #[init(RustOnly::new(new_mutex!(KVVec::new())))]
-    pub(crate) unlinked: rust_only!(Mutex<KVVec<u32>>),
+    #[init(RustOnly::new(new_lock!(KVVec::new())))]
+    pub(crate) unlinked: rust_only!(Lock<c::mutex, KVVec<u32>>),
 }
 
 #[repr(C)]

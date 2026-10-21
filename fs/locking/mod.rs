@@ -20,9 +20,6 @@
 //! Initializing a lock in place, new_lock!(), gives it a lockdep class of
 //! its own: one per call site, as C's mutex_init() is.
 //!
-//! Mutex is the kernel crate's in-kernel, the shim's copy of its API in
-//! userspace: a lock of Rust's own, over a T.
-//!
 //! The C side: locking.h, C's guards for the noio locks; seqmutex.h, C's
 //! seqmutex API; locking.c, the C that Rust calls where C has a macro, or a
 //! static inline in one build or the other.
@@ -33,11 +30,6 @@ mod noio;
 mod raw;
 mod seqlock;
 pub mod seqmutex;
-
-#[cfg(kernel)]
-pub use kernel::sync::{new_mutex, Mutex, MutexGuard};
-#[cfg(not(kernel))]
-pub use bcachefs_shim::sync::{new_mutex, Mutex, MutexGuard};
 
 pub use crate::new_lock;
 pub use lock::{Guard, Lock, RawLock, RawRwLock, ReadGuard};

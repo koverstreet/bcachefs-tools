@@ -77,8 +77,8 @@ mod vfs {
     use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, CommitOpts, LoopFlow,
                              TransAttempt, UpdateTriggerFlags};
     use crate::errcode::{bch_errcode, ret_to_class};
+    use crate::locking::Guard;
     use crate::util::kernel::ktime_get_real_seconds;
-    use crate::locking::MutexGuard;
     use crate::{bch_err_fn, bch_info, fs_inconsistent, inode};
     use crate::snapshots::snapshot;
     use core::ffi::c_uint;
@@ -247,7 +247,7 @@ mod vfs {
     struct Locked<'a> {
         qtype:  usize,
         q:      &'a c::MemquotaType,
-        _guard: MutexGuard<'a, ()>,
+        _guard: Guard<'a, c::mutex>,
     }
 
     impl<'a> Locked<'a> {

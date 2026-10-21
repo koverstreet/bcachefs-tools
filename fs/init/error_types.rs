@@ -3,7 +3,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::locking::{new_mutex, Mutex};
+use crate::locking::Lock;
+use crate::new_lock;
 use crate::types::{DArray, RustOnly, rust_only};
 use crate::util::alloc::KVVec;
 use crate::util::ffi::c_char;
@@ -42,8 +43,8 @@ pub struct bch_fs_errors {
 
     /* The superblock's error counts, by id: sb/errors.rs */
     #[pin]
-    #[init(RustOnly::new(new_mutex!(KVVec::new())))]
-    pub(crate) counts: rust_only!(Mutex<KVVec<c::bch_sb_error_entry_cpu>>),
+    #[init(RustOnly::new(new_lock!(KVVec::new())))]
+    pub(crate) counts: rust_only!(Lock<c::mutex, KVVec<c::bch_sb_error_entry_cpu>>),
 }
 
 c_extern! {

@@ -13,7 +13,8 @@
 
 use crate::c;
 use crate::errcode::{errptr_to_result, ret_to_class, BchError};
-use crate::locking::{new_mutex, Mutex};
+use crate::locking::Lock;
+use crate::new_lock;
 use crate::util::alloc::{alloc_pinned, free_pinned};
 use crate::util::ffi::c_char;
 use crate::util::Printbuf;
@@ -96,7 +97,7 @@ impl DerefMut for DebugOut<'_> {
 struct Open<F: DebugFile> {
     obj: NonNull<F::Obj>,
     #[pin]
-    state: Mutex<(F, Printbuf)>,
+    state: Lock<c::mutex, (F, Printbuf)>,
 }
 
 unsafe extern "C" fn open<F: DebugFile>(inode: *mut c::inode, file: *mut c::file) -> c_int {
@@ -109,7 +110,7 @@ unsafe extern "C" fn open<F: DebugFile>(inode: *mut c::inode, file: *mut c::file
 
     let open = alloc_pinned(pin_init!(Open::<F> {
         obj,
-        state <- new_mutex!((F::default(), buf)),
+        state <- new_lock!((F::default(), buf)),
     }? BchError));
     ret_to_class(open.map(|p| unsafe { (*file).private_data = p.cast() }))
 }

@@ -12,7 +12,7 @@
 //! Infallible. Then the fields initialized so far are dropped, and init()
 //! fails with it.
 //!
-//! Forgetting one is a compile error, not a zeroed Mutex: a field without
+//! Forgetting one is a compile error, not a zeroed lock: a field without
 //! `#[init]` gets `pin_init::init_zeroed()`, which only a Zeroable type
 //! takes - C's are, a Rust type with invariants, or a struct holding one,
 //! isn't.
@@ -23,7 +23,7 @@
 //!
 //! The struct needs `#[pin_data]` too, ahead of the derives - pin_init!()
 //! needs its projections - and `#[pin]` on a field whose initializer is a
-//! PinInit, not an Init: a kernel Mutex, a struct's init().
+//! PinInit, not an Init: a lock, a struct's init().
 
 use proc_macro::TokenStream;
 
