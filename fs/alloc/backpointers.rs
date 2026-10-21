@@ -187,6 +187,16 @@ impl c::Backpointer {
     pub fn btree(&self) -> c::btree_id {
         if self.stripe_ptr() { c::btree_id::stripe_backpointers } else { c::btree_id::backpointers }
     }
+
+    /// Its reconcile phys bits: its extent's work, for a pointer on a
+    /// rotational device - bp_reconcile_phys().
+    pub fn reconcile_work_phys(&self) -> c::reconcile_work_id {
+        c::reconcile_work_id(self.reconcile_phys() as u32)
+    }
+
+    pub fn set_reconcile_work_phys(&mut self, w: c::reconcile_work_id) {
+        self.set_reconcile_phys(w.0.into());
+    }
 }
 
 /// All but the reconcile phys bits: a cache of the extent's pending work, which
@@ -201,16 +211,10 @@ pub fn backpointers_match(l: &c::Backpointer, r: &c::Backpointer) -> bool {
 
 /// Pending work isn't tracked by bucket.
 pub fn bp_reconcile_phys(fs: &Fs, level: u32, dev: u32, k: BkeySC<'_>) -> c::reconcile_work_id {
-    use c::reconcile_work_id as w;
-
     if level != 0 || !fs.dev_rotational(dev) {
-        return w::RECONCILE_WORK_none;
+        return c::reconcile_work_id::RECONCILE_WORK_none;
     }
-
-    match unsafe { c::bch2_bkey_reconcile_work_id(fs.as_ptr(), k.into()) } {
-        w::RECONCILE_WORK_pending => w::RECONCILE_WORK_none,
-        id => id,
-    }
+    k.reconcile_work_id(fs).phys()
 }
 
 fn ptr_data_type(fs: &Fs, k: BkeySC<'_>, d: &DecodedPtr<'_>) -> c::bch_data_type {
@@ -275,22 +279,13 @@ pub fn extent_ptr_to_bp(fs: &Fs, btree: c::btree_id, level: u32, k: BkeySC<'_>, 
         pos:        k.k.p,
         ..Default::default()
     };
-    bp.v.set_reconcile_phys(bp_reconcile_phys(fs, level, dev, k).0.into());
+    bp.v.set_reconcile_work_phys(bp_reconcile_phys(fs, level, dev, k));
     bp.v.set_erasure_coded(d.p.has_ec);
     bp.v.set_stripe_ptr(d.p.has_ec && dev == c::BCH_SB_MEMBER_INVALID);
     bp
 }
 
 // ── Updating backpointers ────────────────────────────────────────────────
-
-fn reconcile_work_phys_btree(w: c::reconcile_work_id) -> c::btree_id {
-    use c::reconcile_work_id as r;
-    match w {
-        r::RECONCILE_WORK_hipri  => c::btree_id::reconcile_hipri_phys,
-        r::RECONCILE_WORK_normal => c::btree_id::reconcile_work_phys,
-        w => panic!("reconcile work {} has no phys btree", w.0),
-    }
-}
 
 /// check_extents_to_backpointers repairs this: schedule it, if it isn't going to run.
 #[cold]
@@ -350,9 +345,10 @@ fn bucket_backpointer_mod_nowritebuffer(t: &TransAttempt<'_, '_>, orig_k: BkeySC
 /// Also its reconcile phys btree entry. Deleting turns @bp into a deletion.
 pub fn bucket_backpointer_mod(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, bp: &mut BkeyI<c::Backpointer>,
                               insert: bool) -> Result<(), BchError> {
-    let phys = c::reconcile_work_id(bp.v.reconcile_phys() as u32);
+    let phys = bp.v.reconcile_work_phys();
     if phys != c::reconcile_work_id::RECONCILE_WORK_none {
-        t.bit_mod_buffered(reconcile_work_phys_btree(phys), bp.k.p, insert)?;
+        let btree = phys.phys_btree().expect("phys bits that are never pending: bp_reconcile_phys()'s");
+        t.bit_mod_buffered(btree, bp.k.p, insert)?;
     }
 
     if debug_params::backpointers_no_use_write_buffer() {
