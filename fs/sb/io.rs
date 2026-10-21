@@ -8,7 +8,7 @@ use crate::util::projections::{AtomicWord, Volatile, VolatileWriter};
 use crate::util::{Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64};
-use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
+use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
 use core::ffi::{c_int, c_uint, CStr};
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::NSEC_PER_SEC;
@@ -78,7 +78,7 @@ where
 /// with the next superblock write; unrepaired, a reader would find no
 /// section, or not all of it. The section itself doesn't move, so
 /// bch2_sb_validate()'s walk goes on from where the next one now is.
-fn sb_field_drop_partial(sb: &mut bch_sb, f: usize, len: usize, end: usize, err: &mut Printbuf) {
+fn sb_field_drop_partial(sb: &mut bch_sb<Unvalidated>, f: usize, len: usize, end: usize, err: &mut Printbuf) {
     let whole = end.next_multiple_of(size_of::<u64>());
     let dropped = len - whole;
 
@@ -94,14 +94,16 @@ fn sb_field_drop_partial(sb: &mut bch_sb, f: usize, len: usize, end: usize, err:
     write!(err, "{dropped} bytes past its last whole entry, dropped");
 }
 
-/// Section @f of @sb validated as an F: a partial entry at its end repaired
-/// at read, invalid at write; then its type's own checks.
-///
-/// # Safety
-/// @sb's sections' extents are checked, and @f is one of them.
-pub(crate) unsafe fn validate_as<F: SbFieldOps + ?Sized>(
-    sb:    *mut Head<bch_sb>,
-    f:     *mut Head<c::bch_sb_field>,
+/// The header of the section at @off of @sb, as read: its extent checked.
+fn field_head(sb: &bch_sb<Unvalidated>, off: usize) -> &Head<c::bch_sb_field> {
+    cast_plain(&sb.as_bytes()[off..]).expect("a section's header, its extent checked")
+}
+
+/// The section at @off of @sb validated as an F: a partial entry at its end
+/// repaired at read, invalid at write; then its type's own checks.
+pub(crate) fn validate_as<F: SbFieldOps + ?Sized>(
+    sb:    &mut bch_sb<Unvalidated>,
+    off:   usize,
     flags: c::bch_validate_flags,
     err:   &mut Printbuf,
 ) -> Result<(), BchError>
@@ -114,10 +116,8 @@ where
         invalid()
     };
 
-    // SAFETY: the caller's
-    let b = unsafe { c::bch_sb_field::<Validated>::from_ffi(f) }.as_bytes();
-    let len = b.len();
-    let Some(end) = F::entries_end(b) else {
+    let len = field_head(sb, off).bytes();
+    let Some(end) = F::entries_end(&sb.as_bytes()[off..off + len]) else {
         return too_short(err, len);
     };
     if end.next_multiple_of(size_of::<u64>()) < len {
@@ -125,16 +125,12 @@ where
             write!(err, "{} bytes past its last whole entry", len - end);
             return invalid();
         }
-        // SAFETY: the caller's - all of the superblock, which its walk holds
-        // no reference into; @f is a section of it
-        let sb_mut = unsafe { bch_sb::<Validated>::from_ffi_mut(sb) };
-        sb_field_drop_partial(sb_mut, f as usize - sb as usize, len, end, err);
+        sb_field_drop_partial(sb, off, len, end, err);
     }
 
-    // SAFETY: the caller's
-    let (sb, f) = unsafe {
-        (bch_sb::<Unvalidated>::from_ffi(sb), c::bch_sb_field::<Unvalidated>::from_ffi(f))
-    };
+    let sb = &*sb;
+    let f = c::bch_sb_field::<Unvalidated>::from_bytes(&sb.as_bytes()[off..])
+        .expect("a section, its extent checked");
     match f.arm::<F::In<Unvalidated>>() {
         Some(f) => F::validate(sb, f, flags, err),
         None => too_short(err, f.as_bytes().len()),
@@ -187,16 +183,13 @@ macro_rules! sections {
             assert!([$(stringify!($name)),*].len() == FIELD_NR, "sections!: a section type missing");
         };
 
-        /// Section @f validated as its type - nothing to do for a type this
-        /// version doesn't know.
-        ///
-        /// # Safety
-        /// As validate_as()'s.
-        unsafe fn validate_typed(sb: *mut Head<bch_sb>, f: *mut Head<c::bch_sb_field>,
-                                 flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
-            let ty = unsafe { (*f).type_.get() };
+        /// The section at @off validated as its type - nothing to do for a
+        /// type this version doesn't know.
+        fn validate_typed(sb: &mut bch_sb<Unvalidated>, off: usize,
+                          flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+            let ty = field_head(sb, off).type_.get();
             $(if ty == c::bch_sb_field_type::[<BCH_SB_FIELD_ $name>].0 {
-                return unsafe { validate_as::<$t>(sb, f, flags, err) };
+                return validate_as::<$t>(sb, off, flags, err);
             })*
             Ok(())
         }
@@ -241,26 +234,23 @@ impl c::bch_sb_field_type {
     }
 }
 
-/// The section at @f validated by its type's ops - and if it's invalid, said
-/// so in @err, with what it holds. A repair made as it's read is said too.
-///
-/// # Safety
-/// @sb is a superblock whose sections' extents are checked, @f one of them.
-unsafe fn field_validate(sb: *mut Head<bch_sb>, f: *mut Head<c::bch_sb_field>,
-                         flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
-    let ty = unsafe { (*f).type_.get() };
+/// The section at @off validated by its type's ops - and if it's invalid,
+/// said so in @err, with what it holds. A repair made as it's read is said
+/// too.
+fn field_validate(sb: &mut bch_sb<Unvalidated>, off: usize,
+                  flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
+    let ty = field_head(sb, off).type_.get();
     let name = c::bch_sb_field_type(ty).name().unwrap_or("(unknown)");
     let mut field_err = Printbuf::new();
 
-    // SAFETY: the caller's
-    let ret = unsafe { validate_typed(sb, f, flags, &mut field_err) };
+    let ret = validate_typed(sb, off, flags, &mut field_err);
 
     if ret.is_err() {
         write!(err, "Invalid superblock section {name}: {}", field_err.as_str());
         err.newline();
-        // SAFETY: the caller's
-        field_to_text(err, None, unsafe { bch_sb::<Unvalidated>::from_ffi(sb) },
-                      unsafe { c::bch_sb_field::<Unvalidated>::from_ffi(f) });
+        let f = c::bch_sb_field::<Unvalidated>::from_bytes(&sb.as_bytes()[off..])
+            .expect("a section, its extent checked");
+        field_to_text(err, None, sb, f);
     } else if !field_err.as_str().is_empty() {
         // repaired as read: bch2_read_super() prints it
         write!(err, "Superblock section {name}: {}", field_err.as_str());
@@ -379,132 +369,137 @@ pub fn bch2_sb_compatible(sb: &Head<c::bch_sb>, out: &mut Printbuf) -> c_int {
     ret_to_c(sb_compatible(sb, out))
 }
 
+macro_rules! feature_names {
+    ($(($name:ident, $nr:literal)),* $(,)?) => {
+        /// The features' names, by bit.
+        const FEATURE_NAMES: [&str; c::BCH_FEATURE_NR as usize] = [$(stringify!($name)),*];
+
+        // by bit, as C's table is by position: in order, from 0
+        const _: () = {
+            let mut i = 0;
+            $(assert!($nr == i, "BCH_SB_FEATURES(): bits out of order"); i += 1;)*
+            let _ = i;
+        };
+    };
+}
+c::BCH_SB_FEATURES!(feature_names);
+
 /// Superblock @sb checked - its header, its layout, every section - before
 /// anything trusts it: as read from @read_offset, or about to be written,
 /// BCH_VALIDATE_write. Read, a few things are repaired in place: an
 /// incompat_allowed older versions didn't downgrade, a partial entry at a
-/// section's end.
-///
-/// # Safety
-/// @sb is a superblock read whole into its buffer: its count's bytes are
-/// there, and nothing else uses it.
-pub unsafe fn validate(sb: *mut Head<bch_sb>, opts: &c::bch_opts, read_offset: u64,
-                       flags: c::bch_validate_flags, out: &mut Printbuf) -> Result<(), BchError> {
+/// section's end. What passes is Validated.
+pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_offset: u64,
+                    flags: c::bch_validate_flags, out: &mut Printbuf) -> Result<&'a mut bch_sb, BchError> {
     let write = flags.contains(c::bch_validate_flags::BCH_VALIDATE_write);
-    // SAFETY: the caller's - the header, which nothing else borrows
-    let h = unsafe { &mut *sb };
 
-    sb_compatible(h, out)?;
+    sb_compatible(sb, out)?;
 
     if opts.no_version_check == 0 {
-        let incompat = h.features[0].get() & (!0u64 << c::BCH_FEATURE_NR);
+        let incompat = sb.features[0].get() & (!0u64 << c::BCH_FEATURE_NR);
         let incompat_bit = if incompat != 0 {
             incompat.trailing_zeros()
-        } else if h.features[1].get() != 0 {
-            64 + h.features[1].get().trailing_zeros()
+        } else if sb.features[1].get() != 0 {
+            64 + sb.features[1].get().trailing_zeros()
         } else {
             0
         };
 
         if incompat_bit != 0 {
-            // SAFETY: C's table, BCH_FEATURE_NR names
-            let highest = unsafe { CStr::from_ptr(*c::bch2_sb_features.as_ptr().add(c::BCH_FEATURE_NR as usize - 1)) };
             write!(out, "Filesystem has incompatible feature bit {incompat_bit}, highest supported {} ({})",
-                   highest.to_str().unwrap_or("?"), c::BCH_FEATURE_NR - 1);
+                   FEATURE_NAMES[c::BCH_FEATURE_NR as usize - 1], c::BCH_FEATURE_NR - 1);
             return Err(bch_errcode::BCH_ERR_invalid_sb_features.into());
         }
 
         let current = c::bcachefs_metadata_version_current as u64;
-        if c::BCH_VERSION_MAJOR(h.version.get().into()) > c::BCH_VERSION_MAJOR(current) ||
-           h.version_incompat() > current {
+        if c::BCH_VERSION_MAJOR(sb.version.get().into()) > c::BCH_VERSION_MAJOR(current) ||
+           sb.version_incompat() > current {
             prt!(out, "Filesystem has incompatible version {}, current version {}",
-                 version(h.version.get()), version(current as u32));
+                 version(sb.version.get()), version(current as u32));
             return Err(bch_errcode::BCH_ERR_invalid_sb_features.into());
         }
     }
 
-    if h.user_uuid.b == [0; 16] {
+    if sb.user_uuid.b == [0; 16] {
         write!(out, "Bad user UUID (got zeroes)");
         return Err(bch_errcode::BCH_ERR_invalid_sb_uuid.into());
     }
 
-    if h.uuid.b == [0; 16] {
+    if sb.uuid.b == [0; 16] {
         write!(out, "Bad internal UUID (got zeroes)");
         return Err(bch_errcode::BCH_ERR_invalid_sb_uuid.into());
     }
 
-    if !write && h.offset.get() != read_offset {
-        write!(out, "Bad sb offset (got {}, read from {read_offset})", h.offset.get());
+    if !write && sb.offset.get() != read_offset {
+        write!(out, "Bad sb offset (got {}, read from {read_offset})", sb.offset.get());
         return Err(bch_errcode::BCH_ERR_invalid_sb_offset.into());
     }
 
-    if h.nr_devices == 0 || u32::from(h.nr_devices) > c::BCH_SB_MEMBERS_MAX {
-        write!(out, "Bad number of member devices {} (max {})", h.nr_devices, c::BCH_SB_MEMBERS_MAX);
+    if sb.nr_devices == 0 || u32::from(sb.nr_devices) > c::BCH_SB_MEMBERS_MAX {
+        write!(out, "Bad number of member devices {} (max {})", sb.nr_devices, c::BCH_SB_MEMBERS_MAX);
         return Err(bch_errcode::BCH_ERR_invalid_sb_too_many_members.into());
     }
 
-    if h.dev_idx >= h.nr_devices {
-        write!(out, "Bad dev_idx (got {}, nr_devices {})", h.dev_idx, h.nr_devices);
+    if sb.dev_idx >= sb.nr_devices {
+        write!(out, "Bad dev_idx (got {}, nr_devices {})", sb.dev_idx, sb.nr_devices);
         return Err(bch_errcode::BCH_ERR_invalid_sb_dev_idx.into());
     }
 
-    let precision = h.time_precision.get();
+    let precision = sb.time_precision.get();
     if precision == 0 || u64::from(precision) > NSEC_PER_SEC {
         write!(out, "Invalid time precision: {precision} (min 1, max {NSEC_PER_SEC})");
         return Err(bch_errcode::BCH_ERR_invalid_sb_time_precision.into());
     }
 
     // old versions didn't know to downgrade this field
-    if h.version_incompat_allowed() > h.version.get().into() {
-        h.set_version_incompat_allowed(h.version.get().into());
+    if sb.version_incompat_allowed() > sb.version.get().into() {
+        let v = sb.version.get().into();
+        sb.set_version_incompat_allowed(v);
     }
 
-    if h.version_incompat() > h.version_incompat_allowed() {
+    if sb.version_incompat() > sb.version_incompat_allowed() {
         prt!(out, "Invalid version_incompat {} > incompat_allowed {}",
-             version(h.version_incompat() as u32), version(h.version_incompat_allowed() as u32));
+             version(sb.version_incompat() as u32), version(sb.version_incompat_allowed() as u32));
         if write {
             return Err(bch_errcode::BCH_ERR_invalid_sb_version.into());
         }
-        h.set_version_incompat_allowed(h.version_incompat());
+        let v = sb.version_incompat();
+        sb.set_version_incompat_allowed(v);
     }
 
-    if h.nr_devices > 1 {
-        h.set_multi_device(true);
+    if sb.nr_devices > 1 {
+        sb.set_multi_device(true);
     }
 
     #[cfg(kernel)]
-    if h.shard_inums_nbits() == 0 {
-        let btree_node_bytes = h.btree_node_size() << 9;
-        // the members read through @sb, as C reads them - not yet validated
-        let nr = unsafe { crate::sb::members::bch2_sb_nr_devices(sb) };
-        let fs_size = (0..nr as i32).map(|i| {
-            // SAFETY: a member of the superblock's, i < its nr_devices
-            let m = unsafe { crate::sb::members::bch2_sb_member_get(sb, i) };
+    if sb.shard_inums_nbits() == 0 {
+        let btree_node_bytes = sb.btree_node_size() << 9;
+        // the members, as C reads them - not yet validated
+        let fs_size = (0..sb.number_of_devices()).map(|i| {
+            let m = crate::sb::members::sb_member(sb, i).unwrap_or_default();
             m.nbuckets.get() * u64::from(m.bucket_size.get())
         }).sum::<u64>();
         let bits = crate::inode::bch2_shard_inode_numbers_bits_default(
             crate::util::kernel::num_online_cpus(), fs_size << 9, btree_node_bytes);
-        // SAFETY: the header again, after the members' reads
-        unsafe { &mut *sb }.set_shard_inums_nbits(bits.into());
+        sb.set_shard_inums_nbits(bits.into());
     }
-    // SAFETY: as above
-    let h = unsafe { &*sb };
 
-    validate_layout(&h.layout, out)?;
+    validate_layout(&sb.layout, out)?;
 
     // every section within the superblock, before any is read
-    // SAFETY: the caller's
-    let end = unsafe { bch_sb::<Validated>::from_ffi(sb) }.as_bytes().len();
+    let b = sb.as_bytes();
     let mut off = size_of::<Head<bch_sb>>();
-    while off < end {
-        // SAFETY: within the superblock, which the caller says is there
-        let f = unsafe { &*field_at(sb, off) };
+    while off < b.len() {
+        let Some(f) = cast_plain::<Head<c::bch_sb_field>>(&b[off..]) else {
+            write!(out, "Invalid superblock: optional field extends past end of superblock");
+            return Err(bch_errcode::BCH_ERR_invalid_sb_field_size.into());
+        };
         if f.u64s.get() == 0 {
             write!(out, "Invalid superblock: optional field with size 0 (type {})", f.type_.get());
             return Err(bch_errcode::BCH_ERR_invalid_sb_field_size.into());
         }
         off += f.u64s.get() as usize * size_of::<u64>();
-        if off > end {
+        if off > b.len() {
             write!(out, "Invalid superblock: optional field extends past end of superblock (type {})",
                    f.type_.get());
             return Err(bch_errcode::BCH_ERR_invalid_sb_field_size.into());
@@ -512,48 +507,51 @@ pub unsafe fn validate(sb: *mut Head<bch_sb>, opts: &c::bch_opts, read_offset: u
     }
 
     // members must be validated first
-    // SAFETY: its sections' extents checked, just now
-    let s = unsafe { bch_sb::<Validated>::from_ffi(sb) };
-    let Some(mi) = field_offset(s, c::bch_sb_field_type::BCH_SB_FIELD_members_v2)
-        .or_else(|| field_offset(s, c::bch_sb_field_type::BCH_SB_FIELD_members_v1)) else {
+    let Some(mi) = field_offset(sb, c::bch_sb_field_type::BCH_SB_FIELD_members_v2)
+        .or_else(|| field_offset(sb, c::bch_sb_field_type::BCH_SB_FIELD_members_v1)) else {
         write!(out, "Invalid superblock: member info area missing");
         return Err(bch_errcode::BCH_ERR_invalid_sb_members_missing.into());
     };
-    // SAFETY: a section, extents checked
-    unsafe { field_validate(sb, field_at(sb, mi), flags, out)? };
+    field_validate(sb, mi, flags, out)?;
 
     // each section, members_v2 again: a section's validate may shrink it, the
     // sections after moved down, so its length is read after
     let mut off = size_of::<Head<bch_sb>>();
-    // SAFETY: the superblock, its count as validates leave it
-    while off < unsafe { bch_sb::<Validated>::from_ffi(sb) }.as_bytes().len() {
-        // SAFETY: a section, extents checked
-        let f = unsafe { field_at(sb, off) };
-        if unsafe { (*f).type_.get() } != c::bch_sb_field_type::BCH_SB_FIELD_members_v1.0 {
-            unsafe { field_validate(sb, f, flags, out)? };
+    while off < sb.as_bytes().len() {
+        if field_head(sb, off).type_.get() != c::bch_sb_field_type::BCH_SB_FIELD_members_v1.0 {
+            field_validate(sb, off, flags, out)?;
         }
-        off += unsafe { (*f).u64s.get() } as usize * size_of::<u64>();
+        off += field_head(sb, off).bytes();
     }
 
     if write {
-        // SAFETY: the header again - the sections' validates may have
-        // changed its count - and the members, validated
-        let h = unsafe { &*sb };
-        let m = unsafe { crate::sb::members::bch2_sb_member_get(sb, i32::from(h.dev_idx)) };
-        if m.seq != h.seq {
-            write!(out, "Invalid superblock: member seq {} != sb seq {}", m.seq.get(), h.seq.get());
+        let m = crate::sb::members::sb_member(sb, sb.dev_idx.into()).unwrap_or_default();
+        if m.seq != sb.seq {
+            write!(out, "Invalid superblock: member seq {} != sb seq {}", m.seq.get(), sb.seq.get());
             return Err(bch_errcode::BCH_ERR_invalid_sb_members_missing.into());
         }
     }
-    Ok(())
+
+    // SAFETY: what Validated says of it is true - every check above passed
+    Ok(unsafe { sb.assume_validated_mut() })
 }
 
-/// # Safety
-/// As validate()'s.
+/// validate(), of the superblock at the start of @buf - read into it whole:
+/// its count saying it's longer than @buf is an error too.
+pub fn validate_bytes<'a>(buf: &'a mut [u8], opts: &c::bch_opts, read_offset: u64,
+                          flags: c::bch_validate_flags, out: &mut Printbuf) -> Result<&'a mut bch_sb, BchError> {
+    let sb = bch_sb::<Unvalidated>::from_bytes_mut(buf).map_err(|e| {
+        write!(out, "Invalid superblock: {e}");
+        BchError::from(bch_errcode::BCH_ERR_invalid_sb_too_big)
+    })?;
+    validate(sb, opts, read_offset, flags, out)
+}
+
+/// For C's read and write paths: @sb's superblock, in its buffer.
 #[c_export]
-pub unsafe fn bch2_sb_validate(sb: *mut Head<c::bch_sb>, opts: &c::bch_opts, read_offset: u64,
-                               flags: c::bch_validate_flags, out: &mut Printbuf) -> c_int {
-    ret_to_c(unsafe { validate(sb, opts, read_offset, flags, out) })
+pub fn bch2_sb_validate(sb: &mut c::bch_sb_handle, opts: &c::bch_opts, read_offset: u64,
+                        flags: c::bch_validate_flags, out: &mut Printbuf) -> c_int {
+    ret_to_c(validate_bytes(sb.buffer_mut(), opts, read_offset, flags, out).map(drop))
 }
 
 // ── Versions ─────────────────────────────────────────────────────────────
@@ -1207,9 +1205,9 @@ fn field_bytes(sb: &bch_sb, ty: c::bch_sb_field_type) -> usize {
 }
 
 /// Where it is, in bytes from the superblock's start.
-fn field_offset(sb: &bch_sb, ty: c::bch_sb_field_type) -> Option<usize> {
+fn field_offset<S: SbState>(sb: &bch_sb<S>, ty: c::bch_sb_field_type) -> Option<usize> {
     let base = core::ptr::from_ref(sb).cast::<u8>() as usize;
-    field_get_id(sb, ty).map(|f| core::ptr::from_ref(f).cast::<u8>() as usize - base)
+    S::field(sb, ty).map(|f| f.as_bytes().as_ptr() as usize - base)
 }
 
 /// The section at @off in the superblock at @sb.
@@ -1775,6 +1773,13 @@ impl SbBuf {
         unsafe { core::slice::from_raw_parts(self.buf.as_ptr() as *const u8, self.bytes) }
     }
 
+    /// validate(), of its superblock as read from @read_offset.
+    pub fn validate(&mut self, opts: &c::bch_opts, read_offset: u64, flags: c::bch_validate_flags,
+                    out: &mut Printbuf) -> Result<(), BchError> {
+        validate_bytes(crate::util::vstructs::plain_bytes_mut(&mut self.buf[..]), opts, read_offset, flags, out)
+            .map(drop)
+    }
+
     pub fn field<F: SbField + ?Sized>(&self) -> Option<&F> {
         sb_field_get::<F>(self.sb())
     }
@@ -1787,9 +1792,22 @@ impl SbAccess for SbBuf {
     fn sb_bytes(&self) -> &[u8] { SbBuf::bytes(self) }
 }
 
+/// validate_as(), of @sb's section of type F, as a read or a write of it
+/// would: for tests.
+#[cfg(test)]
+pub(crate) fn validate_section<F: SbFieldOps + ?Sized>(sb: &mut bch_sb_handle, flags: c::bch_validate_flags,
+                                                       err: &mut Printbuf) -> Result<(), BchError>
+where
+    F::In<Unvalidated>: ArmOf<c::bch_sb_field<Unvalidated>, Tag = u32> + ArmRef,
+{
+    let off = field_offset(sb.sb(), F::FIELD_TYPE).expect("the section");
+    let s = bch_sb::<Unvalidated>::from_bytes_mut(sb.buffer_mut()).expect("a superblock within its buffer");
+    validate_as::<F>(s, off, flags, err)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{sb_field_u64s, validate_as, SbField};
+    use super::{sb_field_u64s, validate_section};
     use crate::c;
     use crate::types::Le32;
     use crate::util::vstructs::{Head, Unvalidated, Validated, VStruct, VStructError};
@@ -1834,21 +1852,17 @@ mod tests {
         where
             F::In<Unvalidated>: crate::types::ArmOf<c::bch_sb_field<Unvalidated>, Tag = u32> + crate::util::vstructs::ArmRef,
         {
-            // a superblock of no sections: its header
-            let mut sb = [0u64; size_of::<Head<c::bch_sb>>() / size_of::<u64>()];
-            let mut buf = [0u64; 16];
-            field(&mut buf, ty, u64s);
-            let (sb, f) = (sb.as_mut_ptr().cast(), buf.as_mut_ptr().cast());
+            let mut sb = c::bch_sb_handle::default();
+            sb.sb_realloc(0).unwrap();
+            sb.field_resize_id(ty, u64s as u32).unwrap();
 
             let mut err = Printbuf::new();
-            let flags = c::bch_validate_flags::from_bits_retain(0);
-            let ret = unsafe { validate_as::<F>(sb, f, flags, &mut err) };
+            let ret = validate_section::<F>(&mut sb, c::bch_validate_flags::empty(), &mut err);
             assert_eq!(crate::errcode::ret_to_c(ret), -(c::bch_errcode::BCH_ERR_invalid_sb_field_size.0 as i32));
 
             let mut out = Printbuf::new();
-            // SAFETY: the superblock and section above
-            let (sb, f) = unsafe { (c::bch_sb::<Unvalidated>::from_ffi(sb), c::bch_sb_field::<Unvalidated>::from_ffi(f)) };
-            super::to_text_as::<F>(&mut out, None, sb, f);
+            super::to_text_as::<F>(&mut out, None, sb.sb().as_unvalidated(),
+                                   super::field_get_id(sb.sb(), ty).unwrap().as_unvalidated());
             assert_eq!(out.as_str(), "");
             err.as_str().to_owned()
         }
@@ -1967,9 +1981,8 @@ mod tests {
         sb.field_resize::<E>(sb_field_u64s::<E>(2) + 1);
         assert!(sb.field::<E>().is_none());
 
-        let f = unsafe { crate::sb::io::bch2_sb_field_get_id(sb.sb, E::FIELD_TYPE) };
         let mut err = Printbuf::new();
-        let ret = crate::errcode::ret_to_c(unsafe { validate_as::<E>(sb.sb, f, flags, &mut err) });
+        let ret = crate::errcode::ret_to_c(validate_section::<E>(&mut sb, flags, &mut err));
         (sb, ret, err)
     }
 

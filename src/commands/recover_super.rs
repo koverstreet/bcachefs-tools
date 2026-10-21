@@ -63,14 +63,10 @@ fn sb_last_mount_time(sb: &c::bch_sb) -> u64 {
         .unwrap_or(0)
 }
 
-fn validate_sb(sb: &mut c::bch_sb, offset_sectors: u64) -> (i32, Printbuf) {
+fn validate_sb(sb: &mut SbBuf, offset_sectors: u64) -> Result<(), Printbuf> {
     let mut err = Printbuf::new();
-    let opts = c::bch_opts::default();
-    let ret = unsafe {
-        bcachefs_kernel::sb::io::bch2_sb_validate(sb.as_ffi_mut(), &opts, offset_sectors,
-                                                  c::bch_validate_flags::empty(), &mut err)
-    };
-    (ret, err)
+    sb.validate(&c::bch_opts::default(), offset_sectors, c::bch_validate_flags::empty(), &mut err)
+        .map_err(|_| err)
 }
 
 fn prt_offset(offset: u64) -> Printbuf {
@@ -87,8 +83,7 @@ fn probe_one_super(dev: &File, sb_size: usize, offset: u64, verbose: bool) -> Op
     }
 
     let mut sb = SbBuf::from_bytes(&buf).ok()?;
-    let (ret, _err) = validate_sb(sb.sb_mut(), offset >> 9);
-    if ret != 0 {
+    if validate_sb(&mut sb, offset >> 9).is_err() {
         return None;
     }
 
@@ -137,8 +132,7 @@ fn probe_sb_range(dev: &File, start: u64, end: u64, verbose: bool) -> Vec<SbBuf>
             }
         };
 
-        let (ret, err) = validate_sb(sb.sb_mut(), (start + offset as u64) >> 9);
-        if ret != 0 {
+        if let Err(err) = validate_sb(&mut sb, (start + offset as u64) >> 9) {
             eprintln!("found sb {} that failed to validate: {}", start + offset as u64, err);
             offset += 512;
             continue;

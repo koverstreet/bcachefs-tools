@@ -73,7 +73,7 @@
 
 use crate::cstructs::c;
 use crate::types::{c_default, Le16, Le32, Le64};
-use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, floored_by_self, vstruct, vstruct_container, Head, FlexArray, Validated};
+use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, floored_by_self, vstruct, vstruct_container, Head, FlexArray, Unvalidated};
 use cstruct_macros::{bitfield, c_bitmask, c_const, c_enum, c_verbatim, c_xmacro, grown, tagged_union,
                      unsized_vstruct, whole, CStruct, Plain, TypeInfo, SizedVal};
 #[cfg(__KERNEL__)]
@@ -1330,7 +1330,7 @@ vstruct!(unsized bch_sb, u64s);
 vstruct_container!(bch_sb, bch_sb_field);
 c_default!(bch_sb__head);
 
-impl bch_sb<Validated> {
+impl bch_sb<Unvalidated> {
     /// Its count less @u64s, for a section shrunk in place, the sections after
     /// it moved down: sb/io.rs's, as validate repairs one.
     pub(crate) fn sub_u64s(&mut self, u64s: u32) {

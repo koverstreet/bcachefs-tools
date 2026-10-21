@@ -532,7 +532,7 @@ static int read_super_and_backups(struct bch_sb_handle *sb,
 	}
 
 	sb->have_layout = true;
-	try(bch2_sb_validate(sb->sb, opts, sb_offset, 0, err));
+	try(bch2_sb_validate(sb, opts, sb_offset, 0, err));
 
 	if (primary_bad && (sb->mode & BLK_OPEN_WRITE)) {
 		int ret = rewrite_primary_super(sb);
@@ -782,7 +782,7 @@ static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs
 		struct bch_opts opts = bch2_opts_empty();
 		CLASS(printbuf, err)();
 
-		int ret = bch2_sb_validate(i->ca->disk_sb.sb, &opts, 0, BCH_VALIDATE_write, &err);
+		int ret = bch2_sb_validate(&i->ca->disk_sb, &opts, 0, BCH_VALIDATE_write, &err);
 		if (ret) {
 			bch2_fs_inconsistent(c, "sb invalid before write: %s", err.buf);
 			return 0;
