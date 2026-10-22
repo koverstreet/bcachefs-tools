@@ -45,6 +45,43 @@ impl c::bch_dev {
     }
 }
 
+// ── GC buckets ───────────────────────────────────────────────────────────
+
+impl c::bch_dev {
+    /// Bucket @b's gc state, if it's one of the device's: gc_bucket().
+    pub fn gc_bucket(&self, b: u64) -> Option<&c::bucket> {
+        self.bucket_valid(b).then(|| self.buckets_gc.get(b as usize)).flatten()
+    }
+}
+
+/// The fields a gc bucket shares with its alloc key.
+impl c::BucketData {
+    /// Into @a, the rest of @a as it was: __bucket_m_to_alloc().
+    pub fn to_alloc(self, a: &mut c::AllocV4) {
+        a.generation     = self.generation;
+        a.data_type      = self.data_type();
+        a.stripe_sectors = self.stripe_sectors;
+        a.dirty_sectors  = self.dirty_sectors;
+        a.cached_sectors = self.cached_sectors;
+    }
+
+    /// As an alloc key, the rest zeroed: bucket_m_to_alloc().
+    pub fn alloc(self) -> c::AllocV4 {
+        let mut a = c::AllocV4::default();
+        self.to_alloc(&mut a);
+        a
+    }
+
+    /// From @a: alloc_to_bucket().
+    pub fn set_alloc(&mut self, a: &c::AllocV4) {
+        self.generation     = a.generation;
+        self.set_data_type(a.data_type);
+        self.stripe_sectors = a.stripe_sectors;
+        self.dirty_sectors  = a.dirty_sectors;
+        self.cached_sectors = a.cached_sectors;
+    }
+}
+
 // ── Usage ────────────────────────────────────────────────────────────────
 
 impl c::bch_dev {
