@@ -280,7 +280,7 @@ fn test_peek_extent_past_leaf(fs: &Fs, nr: u64) -> TestRet {
         lockrestart_do(&trans, |t| {
             let mut iter = BtreeNodeIter::new(t, c::btree_id::extents, POS_MIN, 0, 0, BtreeIterFlags::empty());
             let b = iter.peek()?.expect("the extents btree has a leaf");
-            Ok({ b.key.k.p.offset })
+            Ok(b.key.k.p.offset)
         })?
     };
     assert!(leaf_end < nr, "one leaf, ending at {leaf_end}: nothing to straddle");
