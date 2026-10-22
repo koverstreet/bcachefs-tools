@@ -55,17 +55,14 @@ impl core::ops::DerefMut for bch_fs_sb {
 }
 
 nest! {
+    /// A device's superblock, and what reads and writes it: what changes
+    /// while the device is a filesystem's, under its sb_lock.
     #[repr(C)]
     #[derive(CStruct, TypeInfo)]
-    pub struct bch_sb_handle {
+    pub struct bch_sb_io {
         #[c_anon("struct bch_sb *sb; size_t buffer_size")]
         pub buf: c::bch_sb_buf,
-        pub s_bdev_file: *mut c::file,
-        pub bdev: *mut c::block_device,
-        pub sb_name: *mut c_char,
         pub bio: *mut c::bio,
-        pub holder: *mut c::bch_sb_handle_holder,
-        pub mode: c::blk_mode_t,
         #[c_bitfield]
         #>[bitfield(u8, ty = u32)]
         pub bits: pub struct bch_sb_handle_bits {
@@ -73,8 +70,34 @@ nest! {
             have_bio:    u1,
             __pad:       u6,
         },
+        /// The last seq written
         pub seq: u64,
     }
+}
+c_default!(bch_sb_io);
+
+/// The block device a superblock was read from, open: fixed while the
+/// device is a filesystem's.
+#[repr(C)]
+#[derive(CStruct, TypeInfo)]
+pub struct bch_sb_bdev {
+    pub s_bdev_file: *mut c::file,
+    pub bdev: *mut c::block_device,
+    pub sb_name: *mut c_char,
+    pub holder: *mut c::bch_sb_handle_holder,
+    pub mode: c::blk_mode_t,
+}
+c_default!(bch_sb_bdev);
+
+/// A superblock read from a device: bch2_read_super()'s. To C, one struct
+/// of both halves' members.
+#[repr(C)]
+#[derive(CStruct, TypeInfo)]
+pub struct bch_sb_handle {
+    #[c_anon]
+    pub io: bch_sb_io,
+    #[c_anon]
+    pub dev: bch_sb_bdev,
 }
 c_default!(bch_sb_handle);
 

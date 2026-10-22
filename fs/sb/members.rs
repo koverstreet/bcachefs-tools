@@ -1553,7 +1553,7 @@ impl c::bch_dev {
     /// Its block device's name, model and serial, and whether it's rotational.
     fn identity(&self) -> c::bch_dev_identity {
         let mut id = c::bch_dev_identity::default();
-        let bdev = self.disk_sb.bdev;
+        let bdev = self.disk_sb.dev.bdev;
         unsafe {
             c::bch2_dev_read_identity(bdev,
                                       id.name.as_mut_ptr(), id.name.len(),

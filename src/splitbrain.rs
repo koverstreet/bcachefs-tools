@@ -82,7 +82,7 @@ pub fn find(sbs: &[(PathBuf, bch_sb_handle)], opts: &c::bch_opts) -> Vec<Diverge
         let ret = unsafe {
             c::bch2_dev_in_fs(
                 best_handle.sb,
-                best_handle.bdev,
+                best_handle.dev.bdev,
                 handle as *const _ as *mut _,
                 &mut opts,
             )

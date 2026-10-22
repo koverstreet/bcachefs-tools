@@ -1006,63 +1006,13 @@ impl bch_sb_buf {
     }
 }
 
-impl bch_sb_handle {
+impl c::bch_sb_bdev {
     pub fn bdev(&self) -> &block_device {
         unsafe { &*self.bdev }
     }
 
-    /// Room for a superblock of @u64s - 0, the minimum - in a buffer a power
-    /// of two, at least the device's logical block; past what its layout
-    /// allows, -ENOSPC. And with it, a bio of as many bvecs as that maps to.
-    pub fn sb_realloc(&mut self, u64s: u32) -> Result<(), BchError> {
-        let mut bytes = size_of::<Head<bch_sb>>() + u64s as usize * size_of::<u64>();
-        if !self.bdev.is_null() {
-            bytes = bytes.max(crate::util::kernel::bdev_logical_block_size(self.bdev()) as usize);
-        }
-        let size = bytes.next_power_of_two();
-
-        if !self.buf.sb.is_null() && self.buf.buffer_size >= size {
-            return Ok(());
-        }
-
-        if !self.buf.sb.is_null() && self.bits.have_layout() != 0 {
-            let max = 512u64 << self.sb().layout.sb_max_size_bits;
-            if bytes as u64 > max {
-                let bdev = self.bdev();
-                crate::util::log::log_no_fs(crate::util::log::LogLevel::ERR, &crate::util::printbuf::Msg(|out: &mut Printbuf| {
-                    crate::util::printbuf::prt_bdevname(out, Some(bdev));
-                    write!(out, ": superblock too big: want {bytes} but have {max}");
-                }));
-                return Err(c::bch_errcode::BCH_ERR_ENOSPC_sb.into());
-            }
-        }
-
-        self.buf.grow(size).map_err(|_| BchError::from(c::bch_errcode::BCH_ERR_ENOMEM_sb_buf_realloc))?;
-
-        if self.bits.have_bio() != 0 {
-            use crate::util::bio::{Bio, BioBuf, RawBio};
-
-            let nr = crate::util::bio::buf_nr_bvecs(self.buf.sb.cast(), size);
-            let bio = BioBuf::<Bio>::new::<BchError, _>(nr.try_into().expect("a superblock's worth of bvecs"),
-                                                        core::ptr::null_mut(), 0, |b| b.init())
-                .map_err(|_| BchError::from(c::bch_errcode::BCH_ERR_ENOMEM_sb_bio_realloc))?;
-            if !self.bio.is_null() {
-                // SAFETY: the bio's ours, from the last sb_realloc()
-                drop(unsafe { BioBuf::<Bio>::from_raw(self.bio) });
-            }
-            self.bio = bio.into_raw();
-        }
-        Ok(())
-    }
-
-    /// What it holds released, and it zeroed: bch2_free_super().
-    pub fn free(&mut self) {
-        use crate::util::bio::{Bio, BioBuf, RawBio};
-
-        if !self.bio.is_null() {
-            // SAFETY: sb_realloc()'s
-            drop(unsafe { BioBuf::<Bio>::from_raw(self.bio) });
-        }
+    /// The device closed, and what names it freed.
+    fn free(&mut self) {
         // IS_ERR_OR_NULL(): an open that failed leaves its error here
         if !self.s_bdev_file.is_null() && (self.s_bdev_file as usize) < (-4095isize) as usize {
             // SAFETY: the file the device was opened with
@@ -1073,7 +1023,85 @@ impl bch_sb_handle {
             c::rust_kfree(self.holder.cast());
             c::rust_kfree(self.sb_name.cast());
         }
+    }
+}
+
+impl c::bch_sb_io {
+    /// Room for a superblock of @u64s - 0, the minimum - in a buffer a power
+    /// of two, at least @dev's logical block; past what its layout allows,
+    /// -ENOSPC. And with it, a bio of as many bvecs as that maps to: made
+    /// apart from the buffer, so one that failed is made again next time.
+    fn realloc(&mut self, dev: &c::bch_sb_bdev, u64s: u32) -> Result<(), BchError> {
+        let mut bytes = size_of::<Head<bch_sb>>() + u64s as usize * size_of::<u64>();
+        if !dev.bdev.is_null() {
+            bytes = bytes.max(crate::util::kernel::bdev_logical_block_size(dev.bdev()) as usize);
+        }
+        let size = bytes.next_power_of_two();
+
+        if self.buf.sb.is_null() || self.buf.buffer_size < size {
+            self.grow(dev, bytes, size)?;
+        }
+
+        if self.bits.have_bio() != 0 {
+            use crate::util::bio::{Bio, BioBuf, RawBio};
+
+            let nr = crate::util::bio::buf_nr_bvecs(self.buf.sb.cast(), self.buf.buffer_size);
+            // SAFETY: ours, from the last realloc(), idle
+            if !self.bio.is_null() && usize::from(unsafe { (*self.bio).bi_max_vecs }) >= nr {
+                return Ok(());
+            }
+
+            let bio = BioBuf::<Bio>::new::<BchError, _>(nr.try_into().expect("a superblock's worth of bvecs"),
+                                                        core::ptr::null_mut(), 0, |b| b.init())
+                .map_err(|_| BchError::from(c::bch_errcode::BCH_ERR_ENOMEM_sb_bio_realloc))?;
+            if !self.bio.is_null() {
+                // SAFETY: the bio's ours, from the last realloc()
+                drop(unsafe { BioBuf::<Bio>::from_raw(self.bio) });
+            }
+            self.bio = bio.into_raw();
+        }
+        Ok(())
+    }
+
+    /// The buffer grown to @size, for a superblock of @bytes: past what its
+    /// layout allows, -ENOSPC.
+    fn grow(&mut self, dev: &c::bch_sb_bdev, bytes: usize, size: usize) -> Result<(), BchError> {
+        if !self.buf.sb.is_null() && self.bits.have_layout() != 0 {
+            let max = 512u64 << self.buf.sb().layout.sb_max_size_bits;
+            if bytes as u64 > max {
+                let bdev = dev.bdev();
+                crate::util::log::log_no_fs(crate::util::log::LogLevel::ERR, &crate::util::printbuf::Msg(|out: &mut Printbuf| {
+                    crate::util::printbuf::prt_bdevname(out, Some(bdev));
+                    write!(out, ": superblock too big: want {bytes} but have {max}");
+                }));
+                return Err(c::bch_errcode::BCH_ERR_ENOSPC_sb.into());
+            }
+        }
+
+        self.buf.grow(size).map_err(|_| BchError::from(c::bch_errcode::BCH_ERR_ENOMEM_sb_buf_realloc))
+    }
+
+    /// The buffer and bio freed.
+    fn free(&mut self) {
+        use crate::util::bio::{Bio, BioBuf, RawBio};
+
+        if !self.bio.is_null() {
+            // SAFETY: realloc()'s
+            drop(unsafe { BioBuf::<Bio>::from_raw(self.bio) });
+        }
         self.buf.free();
+    }
+}
+
+impl bch_sb_handle {
+    pub fn sb_realloc(&mut self, u64s: u32) -> Result<(), BchError> {
+        self.io.realloc(&self.dev, u64s)
+    }
+
+    /// What it holds released, and it zeroed: bch2_free_super().
+    pub fn free(&mut self) {
+        self.io.free();
+        self.dev.free();
         // SAFETY: all zeroes is a handle that holds nothing
         unsafe { core::ptr::write_bytes(core::ptr::from_mut(self), 0, 1) };
     }
@@ -1083,13 +1111,13 @@ impl core::ops::Deref for bch_sb_handle {
     type Target = bch_sb_buf;
 
     fn deref(&self) -> &bch_sb_buf {
-        &self.buf
+        &self.io.buf
     }
 }
 
 impl core::ops::DerefMut for bch_sb_handle {
     fn deref_mut(&mut self) -> &mut bch_sb_buf {
-        &mut self.buf
+        &mut self.io.buf
     }
 }
 
@@ -1773,9 +1801,9 @@ impl SbAccess for bch_sb_buf {
 }
 
 impl SbAccess for bch_sb_handle {
-    fn sb(&self) -> &bch_sb { self.buf.sb() }
-    fn sb_mut(&mut self) -> &mut bch_sb { self.buf.sb_mut() }
-    fn sb_bytes(&self) -> &[u8] { self.buf.sb_bytes() }
+    fn sb(&self) -> &bch_sb { self.io.buf.sb() }
+    fn sb_mut(&mut self) -> &mut bch_sb { self.io.buf.sb_mut() }
+    fn sb_bytes(&self) -> &[u8] { self.io.buf.sb_bytes() }
 }
 
 /// An owned superblock, in state @S: Unvalidated as read, from_bytes();

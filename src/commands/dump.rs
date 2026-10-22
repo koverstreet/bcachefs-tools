@@ -560,7 +560,7 @@ fn write_dev_image(
     let outfile = open_opts.open(path)
         .map_err(|e| anyhow!("{}: {}", path, e))?;
 
-    let infd = unsafe { BorrowedFd::borrow_raw((*ca.disk_sb.bdev).bd_fd) };
+    let infd = unsafe { BorrowedFd::borrow_raw((*ca.disk_sb.dev.bdev).bd_fd) };
     let mut img = Qcow2Image::new(infd, outfile.as_fd(), block_size)?;
 
     img.write_ranges(&mut d.sb)?;
