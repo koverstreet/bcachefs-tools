@@ -111,12 +111,6 @@ struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c);
 void rust_journal_entries_put(struct bch_fs *c, struct rust_journal_entries *e);
 
 /*
- * Bitmap shim — set_bit() is atomic (locked bitops in the kernel),
- * can't be inlined through bindgen.
- */
-void rust_set_bit(unsigned long nr, unsigned long *addr);
-
-/*
  * Data IO shims — wraps static inlines not available through bindgen.
  * Data must be block-aligned and <= 1MB.
  */

@@ -12,6 +12,7 @@
 // bcachefs is using, and removing it would corrupt both filesystems.
 
 use std::ffi::{CString, c_char, c_ulong};
+use std::sync::atomic::AtomicUsize;
 use std::fs;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
@@ -21,6 +22,7 @@ use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::opt_set;
+use bcachefs_kernel::util::bitmap::AtomicBitmap;
 use bcachefs_kernel::util::vstructs::Head;
 use clap::Parser;
 
@@ -30,12 +32,6 @@ use crate::key::Passphrase;
 use crate::commands::format_util::{format_opts_default, DevOpts};
 use crate::util::fmt_bytes_human;
 use crate::wrappers::super_io;
-
-// ---- C shim declarations ----
-
-extern "C" {
-    fn rust_set_bit(nr: c_ulong, addr: *mut c_ulong);
-}
 
 use fiemap::FiemapExtentFlags;
 
@@ -154,10 +150,13 @@ fn bucket_to_sector(bucket_size: u32, bucket: u64) -> u64 {
 /// Mark a range of buckets as nouse.
 unsafe fn mark_nouse_range(ca: *const c::bch_dev, sector_from: u64, sector_to: u64) {
     let bucket_size = (*ca).mi.bucket_size as u32;
-    let nouse = (*ca).buckets_nouse;
+    // SAFETY: bch2_buckets_nouse_alloc()'s: a bit per bucket, in words
+    let nouse = AtomicBitmap::from_words(std::slice::from_raw_parts(
+        (*ca).buckets_nouse.cast::<AtomicUsize>(),
+        ((*ca).mi.nbuckets as usize).div_ceil(usize::BITS as usize)));
     let mut b = sector_to_bucket(bucket_size, sector_from);
     loop {
-        rust_set_bit(b as c_ulong, nouse);
+        nouse.set(b as usize);
         b += 1;
         if bucket_to_sector(bucket_size, b) >= sector_to {
             break;

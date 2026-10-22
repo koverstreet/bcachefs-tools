@@ -123,13 +123,6 @@ void rust_journal_entries_put(struct bch_fs *c, struct rust_journal_entries *e)
 }
 
 
-/* Bitmap shim — set_bit is atomic (locked bitops) */
-
-void rust_set_bit(unsigned long nr, unsigned long *addr)
-{
-	set_bit(nr, addr);
-}
-
 /*
  * Data IO shims — bridge Rust async IO to kernel closure-based completion.
  *
