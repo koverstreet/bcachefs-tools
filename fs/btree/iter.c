@@ -2609,6 +2609,14 @@ static struct bkey_s_c __bch2_btree_iter_peek(struct btree_iter *iter, struct bp
 	EBUG_ON(btree_iter_path(trans, iter)->cached);
 	bch2_btree_iter_verify(iter);
 
+	/*
+	 * The last leaf a key we want can be in: an extent is in the leaf its end
+	 * is in, and one starting before @end can end anywhere in @end's inode
+	 */
+	struct bpos last_leaf = iter->flags & BTREE_ITER_is_extents
+		? POS(end->inode, KEY_OFFSET_MAX)
+		: *end;
+
 	while (1) {
 		iter->path = bch2_btree_path_set_pos(trans, iter->path, search_key,
 					iter->flags & BTREE_ITER_intent,
@@ -2674,7 +2682,7 @@ static struct bkey_s_c __bch2_btree_iter_peek(struct btree_iter *iter, struct bp
 
 			/* in BTREE_ITER_filter_snapshots mode, we don't want a
 			 * precise comparison against @end */
-		} else if (likely(bkey_le(l->b->key.k.p, *end) &&
+		} else if (likely(bkey_le(l->b->key.k.p, last_leaf) &&
 				  bpos_lt(l->b->key.k.p, SPOS_MAX))) {
 			/* Advance to next leaf node: */
 			*search_key = bpos_successor(l->b->key.k.p);
