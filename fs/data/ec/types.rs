@@ -24,6 +24,7 @@ nest! {
     #[repr(C)]
     #[derive(Clone, Copy, Default, CStruct)]
     pub struct gc_stripe {
+        /* a ByteLock (locking/bytelock.rs) */
         pub lock: u8,
         #[c_bitfield]
         #>[bitfield(u8, ty = u32)]

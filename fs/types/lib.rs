@@ -528,14 +528,8 @@ pub const fn bits_to_longs(nr: usize) -> usize {
 #[derive(Clone, Copy, Default)]
 pub struct CacheAligned([u8; 0]);
 
-/// sizeof(long), as an alignment: as CacheAligned, C's __aligned(sizeof(long)).
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct LongAligned([core::ffi::c_long; 0]);
-
 // SAFETY: no bytes
 unsafe impl ::pin_init::Zeroable for CacheAligned {}
-unsafe impl ::pin_init::Zeroable for LongAligned {}
 
 /// C's atomic64_t, in a struct Rust defines: an AtomicI64 - its one s64 - and
 /// Zeroable, which pin_init has no impl of for atomics. Declared to C with

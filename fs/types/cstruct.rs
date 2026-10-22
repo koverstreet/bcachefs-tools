@@ -1458,7 +1458,6 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
 fn align_marker(ty: &str) -> Option<&'static str> {
     match ty.trim().rsplit("::").next()? {
         "CacheAligned" => Some("SMP_CACHE_BYTES"),
-        "LongAligned"  => Some("sizeof(long)"),
         _ => None,
     }
 }

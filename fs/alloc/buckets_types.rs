@@ -4,7 +4,6 @@
 
 use crate::cstructs::c;
 use crate::fs::Fs;
-use crate::types::{LongAligned, c_default};
 use crate::util::percpu::Counters;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, bitfield, c_const, c_extern, c_rcu_array, Fieldwise, TypeInfo};
@@ -15,48 +14,12 @@ c_const! {
     pub const BUCKET_JOURNAL_SEQ_BITS: u32 = 16;
 }
 
-/*
- * Ugly hack alert:
- *
- * We need to cram a spinlock in a single byte, because that's what we have left
- * in struct bucket, and we care about the size of these - during fsck, we need
- * in memory state for every single bucket on every device.
- *
- * We used to do
- *   while (xchg(&b->lock, 1) cpu_relax();
- * but, it turns out not all architectures support xchg on a single byte.
- *
- * So now we use bit_spin_lock(), with fun games since we can't burn a whole
- * ulong for this - we just need to make sure the lock bit always ends up in the
- * first byte.
- */
-
-#[cfg(target_endian = "little")]
-c_const! {
-    #[c_int]
-    pub const BUCKET_LOCK_BITNR: u32 = 0;
-}
-
-#[cfg(not(target_endian = "little"))]
-c_const! {
-    #[c_int]
-    pub const BUCKET_LOCK_BITNR: u32 = c::BITS_PER_LONG as u32 - 1;
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, CStruct)]
-pub union ulong_byte_assert {
-    #[c("ulong ulong")]
-    pub ulong: c::ulong,
-    pub byte: u8,
-}
-c_default!(ulong_byte_assert);
-
 nest! {
     #[repr(C)]
     #[derive(Clone, Copy, Default, CStruct)]
     pub struct bucket {
-        pub __align: LongAligned,
+        /* a ByteLock (locking/bytelock.rs): we care about the size of these -
+         * fsck has one for every bucket on every device */
         pub lock: u8,
         #[c_bitfield]
         #>[bitfield(u8)]

@@ -14,6 +14,7 @@
 #include <linux/percpu-rwsem.h>
 #include <linux/sched/mm.h>
 
+#include "locking/bytelock_gen.h"
 #include "locking/noio_gen.h"
 #include "locking/raw_gen.h"
 

@@ -66,17 +66,12 @@ static inline u64 dev_frac_to_offset(const struct bch_dev *ca, u64 frac)
 
 static inline void bucket_unlock(struct bucket *b)
 {
-	BUILD_BUG_ON(!((union ulong_byte_assert) { .ulong = 1UL << BUCKET_LOCK_BITNR }).byte);
-
-	clear_bit_unlock(BUCKET_LOCK_BITNR, (void *) &b->lock);
-	smp_mb__after_atomic();
-	wake_up_bit((void *) &b->lock, BUCKET_LOCK_BITNR);
+	bch2_byte_unlock(&b->lock);
 }
 
 static inline void bucket_lock(struct bucket *b)
 {
-	wait_on_bit_lock((void *) &b->lock, BUCKET_LOCK_BITNR,
-			 TASK_UNINTERRUPTIBLE);
+	bch2_byte_lock(&b->lock);
 }
 
 DEFINE_GUARD(bucket_lock, struct bucket *,
