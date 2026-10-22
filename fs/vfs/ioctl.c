@@ -1438,7 +1438,7 @@ static long bch2_ioc_set_reflink_p_may_update_opts(struct bch_fs *c,
 			POS(inum.inum, 0),
 			POS(inum.inum, U64_MAX),
 			inum.subvol,
-			BTREE_ITER_intent, k, ({
+			BTREE_ITER_intent|BTREE_ITER_trim, k, ({
 		int ret = 0;
 		bch2_disk_reservation_put(c, &res.r);
 
@@ -1480,7 +1480,7 @@ static long bch2_ioc_propagate_reflink_p_opts(struct bch_fs *c,
 			POS(inum.inum, 0),
 			POS(inum.inum, U64_MAX),
 			inum.subvol,
-			0, k, ({
+			BTREE_ITER_trim, k, ({
 		int ret = 0;
 		if (k.k->type == KEY_TYPE_reflink_p) {
 			if (REFLINK_P_MAY_UPDATE_OPTIONS(bkey_s_c_to_reflink_p(k).v)) {
