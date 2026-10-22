@@ -35,7 +35,7 @@ use cstruct_macros::CStruct;
  *  - Writing may be done blocking or nonblocking; in nonblocking mode, we only
  *    drop entire messages.
  *
- * To write, use stdio_redirect_printf()
+ * To write, use stdio_redirect_write()
  * To read, use stdio_redirect_read() or stdio_redirect_readline()
  */
 
