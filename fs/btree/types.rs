@@ -519,6 +519,7 @@ nest! {
     #[repr(C)]
     #[derive(CStruct)]
     #[c_name(btree_iter)]
+    #[cfg_attr(kernel, cfi_encoding = "10btree_iter")]
     pub struct BtreeIter<'t> {
         pub(in crate::btree) trans: *mut cs::btree_trans,
         pub(in crate::btree) path: cs::btree_path_idx_t,

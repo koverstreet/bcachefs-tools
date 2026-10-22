@@ -15,7 +15,7 @@
 use proc_macro::{Delimiter, Ident, TokenStream, TokenTree};
 
 use crate::cstruct::{field_type, parse_cstruct, parse_family_args, CFieldDef, CKind, CStructDef, FieldType};
-use crate::tokens;
+use crate::{cfi_encoding, tokens};
 
 /// #[derive(Plain)], on a struct - not a union, whose bytes past a short
 /// arm's end are no field's. An unsized vstruct's states aren't: they're its
@@ -1236,10 +1236,6 @@ fn rename_struct(item: TokenStream, def: &CStructDef, to: &str) -> Result<TokenS
                                if s.to_string() == "struct" && n.to_string() == name))
         .ok_or_else(|| format!("{name}: a family is made from a struct"))?;
     tts[at + 1] = TokenTree::Ident(Ident::new(to, tts[at + 1].span()));
-    // C's name: the item's #[c_name], which it keeps, or its own
-    if def.rust_name.is_some() {
-        return Ok(tts.into_iter().collect());
-    }
     let mut attrs_end = 0;
     while matches!((tts.get(attrs_end), tts.get(attrs_end + 1)),
                    (Some(TokenTree::Punct(p)), Some(TokenTree::Group(g)))
@@ -1247,7 +1243,11 @@ fn rename_struct(item: TokenStream, def: &CStructDef, to: &str) -> Result<TokenS
         attrs_end += 2;
     }
     let mut out: TokenStream = tts[..attrs_end].iter().cloned().collect();
-    out.extend(tokens(&format!("#[c_name({})]", def.name)));
+    // C's name: the item's #[c_name], which it keeps, or its own
+    if def.rust_name.is_none() {
+        out.extend(tokens(&format!("#[c_name({})]", def.name)));
+    }
+    out.extend(tokens(&cfi_encoding(&def.name)));
     out.extend(tts[attrs_end..].iter().cloned());
     Ok(out)
 }

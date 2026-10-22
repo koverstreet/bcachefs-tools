@@ -126,6 +126,14 @@ fn cfg_attr(cfg: &Option<cstruct::Cfg>) -> String {
     cfg.as_ref().map(|c| format!("#[cfg({})] ", c.to_rust())).unwrap_or_default()
 }
 
+/// For a type C knows as @c_name: kCFI hashes an extern "C" fn's repr(C)
+/// struct by its Rust name, and an enum or a transparent newtype as its
+/// integer - neither what C's prototype says. In the kernel only, where the
+/// feature's allowed (mod.rs).
+fn cfi_encoding(c_name: &str) -> String {
+    format!("#[cfg_attr(kernel, cfi_encoding = \"{}{c_name}\")]\n", c_name.len())
+}
+
 /// The record of @text, and @nums: Rust expressions, the numbers that go
 /// with it - see fs/types/lib.rs.
 fn record(text: &str, nums: &[String]) -> String {
@@ -983,11 +991,12 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
         None => repr.clone(),
     };
     if let Some(name) = &e.name {
+        let cfi = cfi_encoding(name);
         match e.kind {
             CEnumKind::Closed => {
                 out.push_str(&format!(
                     "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]\n\
-                     #[repr({repr})]\npub enum {name} {{\n"));
+                     #[repr({repr})]\n{cfi}pub enum {name} {{\n"));
                 for v in &names {
                     out.push_str(&format!("    {v} = {v},\n"));
                 }
@@ -1002,7 +1011,7 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
             CEnumKind::Open => {
                 out.push_str(&format!(
                     "#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]\n\
-                     #[repr(transparent)]\npub struct {name}(pub {repr});\n\
+                     #[repr(transparent)]\n{cfi}pub struct {name}(pub {repr});\n\
                      #[allow(non_upper_case_globals)]\nimpl {name} {{\n"));
                 for v in &names {
                     out.push_str(&format!("    pub const {v}: Self = Self({v});\n"));
@@ -1014,7 +1023,7 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
                 out.push_str(&format!(
                     "::bitflags::bitflags! {{\n\
                      #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]\n\
-                     #[repr(transparent)]\npub struct {name}: {repr} {{\n"));
+                     #[repr(transparent)]\n{cfi}pub struct {name}: {repr} {{\n"));
                 for v in &names {
                     out.push_str(&format!("    #[allow(non_upper_case_globals)]\n    const {v} = {v};\n"));
                 }

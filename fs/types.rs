@@ -535,6 +535,7 @@ c_enum! {
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init)]
 #[c_name(bch_fs)]
+#[cfg_attr(kernel, cfi_encoding = "6bch_fs")]
 pub struct Fs {
     pub cl: c::closure,
 
