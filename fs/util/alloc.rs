@@ -105,8 +105,41 @@ pub fn kvrealloc_zeroed(p: *mut u8, old: usize, new: usize) -> Result<core::ptr:
     }
 }
 
+/// @p, @old bytes of kvmalloc()'d memory - or none, null - as @new bytes,
+/// what was there kept: kvrealloc(). @gfp for where it can't sleep -
+/// GFP_NOWAIT, under a spinlock; elsewhere GFP_KERNEL, the caller's memalloc
+/// scope saying the rest. Aligned as kmalloc() aligns @new; kvfree_sized()
+/// takes it back.
+pub fn kvrealloc(p: *mut u8, old: usize, new: usize, gfp: Flags)
+    -> Result<core::ptr::NonNull<u8>, AllocError>
+{
+    #[cfg(kernel)]
+    {
+        use kernel::alloc::{allocator::KVmalloc, Allocator, NumaNode};
+
+        // SAFETY: @p is KVmalloc's, of @old bytes, or null
+        Ok(unsafe {
+            KVmalloc::realloc(core::ptr::NonNull::new(p), kv_layout(new)?, kv_layout(old)?,
+                              gfp, NumaNode::NO_NODE)
+        }?.cast())
+    }
+    // A new allocation and a copy: realloc() keeps the old one's alignment
+    #[cfg(not(kernel))]
+    // SAFETY: @p is std::alloc's, of @old bytes, or null
+    unsafe {
+        let _ = gfp;
+        let q = core::ptr::NonNull::new(std::alloc::alloc(kv_layout(new)?)).ok_or(AllocError)?;
+        if let Some(p) = core::ptr::NonNull::new(p) {
+            q.as_ptr().copy_from_nonoverlapping(p.as_ptr(), old.min(new));
+            std::alloc::dealloc(p.as_ptr(), kv_layout(old)?);
+        }
+        Ok(q)
+    }
+}
+
 /// # Safety
-/// @p is kvrealloc_zeroed()'s, of @size bytes, and nothing uses it after.
+/// @p is kvrealloc_zeroed()'s or kvrealloc()'s, of @size bytes, and nothing
+/// uses it after.
 pub unsafe fn kvfree_sized(p: core::ptr::NonNull<u8>, size: usize) {
     let layout = kv_layout(size).expect("its allocation's");
     // SAFETY: the caller's
