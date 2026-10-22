@@ -3515,8 +3515,8 @@ struct bkey_s_c bch2_btree_iter_next_slot(struct btree_iter *iter)
 
 struct bkey_s_c bch2_btree_iter_prev_slot(struct btree_iter *iter)
 {
-	/* reverse peeks don't trim - and peek_slot() would, at the back end */
-	EBUG_ON(iter->flags & BTREE_ITER_trim);
+	/* reverse slots aren't defined for extents: peek_slot() is the slot from @pos on */
+	BUG_ON(iter->flags & BTREE_ITER_is_extents);
 
 	if (!bch2_btree_iter_rewind(iter))
 		return bkey_s_c_null;
@@ -3751,6 +3751,13 @@ bool bch2_btree_iter_params_valid(enum btree_id btree, unsigned level,
 		    start.inode != end.inode)
 			return false;
 	}
+
+	/* Reverse slots aren't defined for extents: */
+	if ((flags & BTREE_ITER_prev) &&
+	    (flags & BTREE_ITER_slots) &&
+	    !(flags & (BTREE_ITER_all_snapshots|BTREE_ITER_not_extents)) &&
+	    btree_id_is_extents(btree))
+		return false;
 
 	return true;
 }
