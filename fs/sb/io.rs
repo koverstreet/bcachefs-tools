@@ -259,25 +259,25 @@ fn field_head(sb: &bch_sb<Unvalidated>, off: usize) -> &Head<c::bch_sb_field> {
     cast_plain(&sb.as_bytes()[off..]).expect("a section's header, its extent checked")
 }
 
-/// The section at @off of @sb validated as an F: a partial entry at its end
-/// repaired at read, invalid at write; then its type's own checks.
-pub(crate) fn validate_as<F: SbFieldOps + ?Sized>(
-    sb:    &mut bch_sb<Unvalidated>,
-    off:   usize,
-    flags: c::bch_validate_flags,
-    err:   &mut Printbuf,
-) -> Result<(), BchError>
-where
-    F::In<Unvalidated>: ArmOf<c::bch_sb_field<Unvalidated>, Tag = u32> + ArmRef,
+/// The section at @off of @sb validated as its type says: a partial entry at
+/// its end repaired at read, invalid at write; then its type's own checks.
+/// Nothing to do for a type this version doesn't know.
+fn validate_at(sb: &mut bch_sb<Unvalidated>, off: usize, flags: c::bch_validate_flags, err: &mut Printbuf)
+    -> Result<(), BchError>
 {
+    let ty = field_head(sb, off).type_.get();
+    let Some(&min_len) = SECTION_MIN_LEN.get(ty as usize) else { return Ok(()) };
+
     let invalid = || Err(bch_errcode::BCH_ERR_invalid_sb_field_size.into());
     let too_short = |err: &mut Printbuf, len| {
-        write!(err, "too short ({len} < {} bytes)", <F as ArmRef>::MIN_LEN);
+        write!(err, "too short ({len} < {min_len} bytes)");
         invalid()
     };
 
     let len = field_head(sb, off).bytes();
-    let Some(end) = F::entries_end(&sb.as_bytes()[off..off + len]) else {
+    let f = c::bch_sb_field::<Unvalidated>::from_bytes(&sb.as_bytes()[off..])
+        .expect("a section, its extent checked");
+    let Some(end) = f.entries_end() else {
         return too_short(err, len);
     };
     if end.next_multiple_of(size_of::<u64>()) < len {
@@ -291,21 +291,7 @@ where
     let sb = &*sb;
     let f = c::bch_sb_field::<Unvalidated>::from_bytes(&sb.as_bytes()[off..])
         .expect("a section, its extent checked");
-    match f.arm::<F::In<Unvalidated>>() {
-        Some(f) => F::validate(sb, f, flags, err),
-        None => too_short(err, f.as_bytes().len()),
-    }
-}
-
-/// Section @f printed as an F - nothing, if it's too short to be one.
-fn to_text_as<F: SbFieldOps + ?Sized>(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
-                                       f: &c::bch_sb_field<Unvalidated>)
-where
-    F::In<Unvalidated>: ArmOf<c::bch_sb_field<Unvalidated>, Tag = u32> + ArmRef,
-{
-    if let Some(f) = f.arm::<F::In<Unvalidated>>() {
-        F::to_text(out, fs, sb, f);
-    }
+    f.validate(sb, flags, err).unwrap_or_else(|| too_short(err, f.as_bytes().len()))
 }
 
 // ── The sections, by type ────────────────────────────────────────────────
@@ -327,59 +313,56 @@ macro_rules! sb_fields {
 }
 c::BCH_SB_FIELDS!(sb_fields);
 
-/// Each section type's Rust type, whose SbFieldOps validate and print it.
-macro_rules! sections {
-    ($($name:ident => $t:ty),* $(,)?) => { ::paste::paste! {
-        // each type the arm of its section, and every section a type
-        const _: () = {
-            $(assert!(<$t as SbField>::FIELD_TYPE.0 == c::bch_sb_field_type::[<BCH_SB_FIELD_ $name>].0,
-                      concat!(stringify!($t), ": not section ", stringify!($name)));)*
-            assert!([$(stringify!($name)),*].len() == FIELD_NR, "sections!: a section type missing");
-        };
+/// The type a section's SbFieldOps are of: its arm - ext's, a grown type's
+/// family, not its C struct.
+macro_rules! section_ops {
+    (ext)          => { c::bch_sb_field_ext<Validated> };
+    ($name:ident)  => { ::paste::paste! { c::[<bch_sb_field_ $name>] } };
+}
 
-        /// The section at @off validated as its type - nothing to do for a
-        /// type this version doesn't know.
-        fn validate_typed(sb: &mut bch_sb<Unvalidated>, off: usize,
-                          flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
-            let ty = field_head(sb, off).type_.get();
-            $(if ty == c::bch_sb_field_type::[<BCH_SB_FIELD_ $name>].0 {
-                return validate_as::<$t>(sb, off, flags, err);
-            })*
-            Ok(())
-        }
+/// The section union's ops: each arm's SbFieldOps, by its tag - typed().
+macro_rules! sb_field_ops {
+    ($(($name:ident, $nr:literal, $($desc:literal)*)),* $(,)?) => { ::paste::paste! {
+        /// Each type's shortest: what a section is too short to be read as
+        /// one under, to say so.
+        const SECTION_MIN_LEN: [usize; FIELD_NR] = [$(<section_ops!($name) as ArmRef>::MIN_LEN),*];
 
-        /// Section @f printed as its type - nothing, for a type this version
-        /// doesn't know.
-        fn to_text_typed(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
-                         f: &c::bch_sb_field<Unvalidated>) {
-            let ty = f.type_.get();
-            $(if ty == c::bch_sb_field_type::[<BCH_SB_FIELD_ $name>].0 {
-                return to_text_as::<$t>(out, fs, sb, f);
-            })*
+        /// Each type's entries_end(): by the tag, not typed() - it's what
+        /// finds a partial entry, which typed() can't read the arm past.
+        const SECTION_ENTRIES_END: [fn(&[u8]) -> Option<usize>; FIELD_NR] =
+            [$(<section_ops!($name) as SbFieldOps>::entries_end),*];
+
+        impl c::bch_sb_field<Unvalidated> {
+            /// Where its whole entries end, as its type says: None if it's
+            /// too short to be one, or of a type this version doesn't know.
+            fn entries_end(&self) -> Option<usize> {
+                SECTION_ENTRIES_END.get(self.type_.get() as usize)?(self.as_bytes())
+            }
+
+            /// Its type's validate(): None if it can't be read as one.
+            fn validate(&self, sb: &bch_sb<Unvalidated>, flags: c::bch_validate_flags, err: &mut Printbuf)
+                -> Option<Result<(), BchError>>
+            {
+                match self.typed() {
+                    $(Ok(c::BchSbFieldRef::$name(f)) =>
+                        Some(<section_ops!($name) as SbFieldOps>::validate(sb, f, flags, err)),)*
+                    Err(_) => None,
+                }
+            }
+
+            /// Its type's to_text(): nothing, if it's too short to be one, or
+            /// of a type this version doesn't know.
+            fn to_text(&self, out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>) {
+                match self.typed() {
+                    $(Ok(c::BchSbFieldRef::$name(f)) =>
+                        <section_ops!($name) as SbFieldOps>::to_text(out, fs, sb, f),)*
+                    Err(_) => {}
+                }
+            }
         }
     } };
 }
-
-sections! {
-    journal                 => c::bch_sb_field_journal,
-    members_v1              => c::bch_sb_field_members_v1,
-    crypt                   => c::bch_sb_field_crypt,
-    replicas_v0             => c::bch_sb_field_replicas_v0,
-    quota                   => c::bch_sb_field_quota,
-    disk_groups             => c::bch_sb_field_disk_groups,
-    clean                   => c::bch_sb_field_clean,
-    replicas                => c::bch_sb_field_replicas,
-    journal_seq_blacklist   => c::bch_sb_field_journal_seq_blacklist,
-    journal_v2              => c::bch_sb_field_journal_v2,
-    counters                => c::bch_sb_field_counters,
-    members_v2              => c::bch_sb_field_members_v2,
-    errors                  => c::bch_sb_field_errors,
-    ext                     => c::bch_sb_field_ext<Validated>,
-    downgrade               => c::bch_sb_field_downgrade,
-    recovery_passes         => c::bch_sb_field_recovery_passes,
-    extent_type_u64s        => c::bch_sb_field_extent_type_u64s,
-    errors_v2               => c::bch_sb_field_errors_v2,
-}
+c::BCH_SB_FIELDS!(sb_field_ops);
 
 impl c::bch_sb_field_type {
     /// Its name: None for a type this version doesn't know.
@@ -402,7 +385,7 @@ fn field_validate(sb: &mut bch_sb<Unvalidated>, off: usize,
     let name = c::bch_sb_field_type(ty).name().unwrap_or("(unknown)");
     let mut field_err = Printbuf::new();
 
-    let ret = validate_typed(sb, off, flags, &mut field_err);
+    let ret = validate_at(sb, off, flags, &mut field_err);
 
     if ret.is_err() {
         write!(err, "Invalid superblock section {name}: {}", field_err.as_str());
@@ -425,7 +408,7 @@ pub fn field_ops_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvali
         out.tabstop_push(32);
     }
 
-    to_text_typed(out, fs, sb, f);
+    f.to_text(out, fs, sb);
 }
 
 /// Section @f: its type, its size, and what it holds.
@@ -3083,17 +3066,14 @@ impl SbAccess for SbBuf {
     fn sb_bytes(&self) -> &[u8] { SbBuf::<Validated>::bytes(self) }
 }
 
-/// validate_as(), of @sb's section of type F, as a read or a write of it
+/// validate_at(), of @sb's section of type F, as a read or a write of it
 /// would: for tests.
 #[cfg(test)]
-pub(crate) fn validate_section<F: SbFieldOps + ?Sized>(sb: &mut bch_sb_handle, flags: c::bch_validate_flags,
-                                                       err: &mut Printbuf) -> Result<(), BchError>
-where
-    F::In<Unvalidated>: ArmOf<c::bch_sb_field<Unvalidated>, Tag = u32> + ArmRef,
-{
+pub(crate) fn validate_section<F: SbField + ?Sized>(sb: &mut bch_sb_handle, flags: c::bch_validate_flags,
+                                                    err: &mut Printbuf) -> Result<(), BchError> {
     let off = field_offset(sb.sb(), F::FIELD_TYPE).expect("the section");
     let s = bch_sb::<Unvalidated>::from_bytes_mut(sb.buffer_mut()).expect("a superblock within its buffer");
-    validate_as::<F>(s, off, flags, err)
+    validate_at(s, off, flags, err)
 }
 
 #[cfg(test)]
@@ -3140,10 +3120,7 @@ mod tests {
     fn sb_field_ops_short_section() {
         use crate::util::Printbuf;
 
-        fn short<F: super::SbFieldOps + ?Sized>(ty: c::bch_sb_field_type, u64s: usize) -> String
-        where
-            F::In<Unvalidated>: crate::types::ArmOf<c::bch_sb_field<Unvalidated>, Tag = u32> + crate::util::vstructs::ArmRef,
-        {
+        fn short<F: super::SbField + ?Sized>(ty: c::bch_sb_field_type, u64s: usize) -> String {
             let mut sb = c::bch_sb_handle::default();
             sb.sb_realloc(0).unwrap();
             sb.field_resize_id(ty, u64s as u32).unwrap();
@@ -3153,8 +3130,8 @@ mod tests {
             assert_eq!(crate::errcode::ret_to_c(ret), -(c::bch_errcode::BCH_ERR_invalid_sb_field_size.0 as i32));
 
             let mut out = Printbuf::new();
-            super::to_text_as::<F>(&mut out, None, sb.sb().as_unvalidated(),
-                                   super::field_get_id(sb.sb(), ty).unwrap().as_unvalidated());
+            super::field_get_id(sb.sb(), ty).unwrap().as_unvalidated()
+                .to_text(&mut out, None, sb.sb().as_unvalidated());
             assert_eq!(out.as_str(), "");
             err.as_str().to_owned()
         }
