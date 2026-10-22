@@ -363,6 +363,49 @@ pub fn bitfield(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand("#[bitfield]", || bitfield_expand(attr, item))
 }
 
+/// `#[vtable]`, on an impl of a trait whose methods are optional - one with
+/// `const HAS_FOO: bool = false` for each method foo: `const HAS_FOO: bool =
+/// true` for each the impl defines, unless it says otherwise itself. So a
+/// table of C function pointers made from the trait leaves out what isn't
+/// implemented. The kernel crate's #[vtable] does this too, but from 7.3 its
+/// impls name crate::LocalModule, which only a module!() crate has.
+#[proc_macro_attribute]
+pub fn vtable(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand("#[vtable]", || {
+        if !attr.is_empty() {
+            return Err("takes no arguments".into());
+        }
+        let mut head: Vec<TokenTree> = item.into_iter().collect();
+        let body = match head.pop() {
+            Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => g.stream(),
+            _ => return Err("on an impl".into()),
+        };
+
+        // The body's own fns and consts - not those inside a method's body,
+        // which is a group of its own
+        let items: Vec<TokenTree> = body.clone().into_iter().collect();
+        let mut fns = Vec::new();
+        let mut consts = Vec::new();
+        for w in items.windows(2) {
+            if let (TokenTree::Ident(kw), TokenTree::Ident(name)) = (&w[0], &w[1]) {
+                match kw.to_string().as_str() {
+                    "fn"    => fns.push(name.to_string()),
+                    "const" => consts.push(name.to_string()),
+                    _       => {}
+                }
+            }
+        }
+
+        let has: String = fns.iter()
+            .map(|f| format!("HAS_{}", f.to_uppercase()))
+            .filter(|c| !consts.contains(c))
+            .map(|c| format!("const {c}: bool = true;\n"))
+            .collect();
+        let head: TokenStream = head.into_iter().collect();
+        Ok(tokens(&format!("{head} {{ {body} {has} }}")))
+    })
+}
+
 /// `#[unsized_vstruct]`, on C's definition of a struct ending in a flexible
 /// array - or `#[unsized_vstruct(tail = [E])]`, `tail = NAME: [E]`, saying
 /// what follows its header: the family of its definitions, one per state -
