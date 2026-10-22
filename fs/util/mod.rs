@@ -1,4 +1,5 @@
 pub mod alloc;
+pub mod bio;
 pub mod bitmap;
 pub mod closure;
 pub mod darray;

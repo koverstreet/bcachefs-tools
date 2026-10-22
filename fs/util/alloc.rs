@@ -5,10 +5,13 @@
 //! An allocation failure is an AllocError to handle, never an abort.
 
 #[cfg(kernel)]
-pub use kernel::alloc::{flags, AllocError, Flags, KVVec};
+pub use kernel::alloc::{flags, AllocError, Flags, KBox, KVVec};
 
 #[cfg(not(kernel))]
 pub use bcachefs_shim::alloc::{flags, AllocError, Flags, KVVec};
+/// In userspace, a Box is a KBox.
+#[cfg(not(kernel))]
+pub type KBox<T> = std::boxed::Box<T>;
 
 /// A @T for C to hold, built in place by @init in memory that starts zeroed -
 /// padding too, as kvzalloc()'s did - and pinned there: a KVBox in-kernel,
@@ -39,6 +42,32 @@ pub fn kalloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E
 /// @p is from kalloc_pinned(), and nothing uses it after.
 pub unsafe fn kfree_pinned<T>(p: *mut T) {
     unsafe { free_in::<true, T>(p) }
+}
+
+/// @layout's worth of memory, zeroed, as a KBox allocates: for a KBox of an
+/// unsized type it can't make itself - a struct ending in a slice - by
+/// KBox::from_raw(). Or kfree(), if it's never made.
+pub fn kzalloc(layout: core::alloc::Layout) -> Result<core::ptr::NonNull<u8>, AllocError> {
+    #[cfg(kernel)]
+    {
+        use kernel::alloc::{allocator::Kmalloc, flags::__GFP_ZERO, Allocator, NumaNode};
+
+        Ok(Kmalloc::alloc(layout, flags::GFP_KERNEL | __GFP_ZERO, NumaNode::NO_NODE)?.cast())
+    }
+    // SAFETY: not zero sized, by the caller's use
+    #[cfg(not(kernel))]
+    core::ptr::NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }).ok_or(AllocError)
+}
+
+/// # Safety
+/// @p is kzalloc()'s, of @layout, and nothing uses it after.
+pub unsafe fn kfree(p: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
+    // SAFETY: the caller's
+    #[cfg(kernel)]
+    unsafe { <kernel::alloc::allocator::Kmalloc as kernel::alloc::Allocator>::free(p, layout) };
+    // SAFETY: the caller's
+    #[cfg(not(kernel))]
+    unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
 }
 
 /// @init run on @slot: PinInit's __init() - __pinned_init(), before the
