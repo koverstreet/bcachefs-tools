@@ -106,7 +106,7 @@ fn main() {
         // errnos, for bch2_err_matches() against a bare errno, or returning
         // one as C does (darray_push()'s -ENOMEM) - the kernel crate's
         // bindings have them in-kernel; add as needed:
-        .allowlist_var("ENOENT|ENOMEM|EINVAL|ENAMETOOLONG|ERANGE|ENODATA|E2BIG|EACCES")
+        .allowlist_var("ENOENT|ENOMEM|EINVAL|ENAMETOOLONG|ERANGE|ENODATA|E2BIG|EACCES|EBUSY")
         .allowlist_var("ECHILD|EROFS|EXDEV|ENOTDIR|EIO|ENOTEMPTY|EFBIG|ENOSPC|EINTR|EPERM|EFAULT")
         // The vendored C fs/ uses - closures - is the shim's too: not
         // bcachefs's, so not the fs crate's to define.

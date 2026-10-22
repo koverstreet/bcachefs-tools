@@ -12,7 +12,8 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past,
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_int, c_uint, CStr};
-use crate::util::ffi::Opaque;
+use crate::util::bio::{Bio, BioOwner};
+use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::NSEC_PER_SEC;
 use cstruct_macros::c_export;
 use core::mem::{size_of, size_of_val};
@@ -360,18 +361,6 @@ fn sb_compatible(sb: &Head<bch_sb>, out: &mut Printbuf) -> Result<(), BchError> 
     Ok(())
 }
 
-/// For C's read path, which checks a layout read from its own sector, and a
-/// superblock's version before it's read whole.
-#[c_export]
-pub fn bch2_sb_layout_validate(layout: &c::bch_sb_layout, out: &mut Printbuf) -> c_int {
-    ret_to_c(validate_layout(layout, out))
-}
-
-#[c_export]
-pub fn bch2_sb_compatible(sb: &Head<c::bch_sb>, out: &mut Printbuf) -> c_int {
-    ret_to_c(sb_compatible(sb, out))
-}
-
 macro_rules! feature_names {
     ($(($name:ident, $nr:literal)),* $(,)?) => {
         /// The features' names, by bit.
@@ -550,7 +539,7 @@ pub fn validate_bytes<'a>(buf: &'a mut [u8], opts: &c::bch_opts, read_offset: u6
     validate(sb, opts, read_offset, flags, out)
 }
 
-/// For C's read and write paths: @sb's superblock, in its buffer.
+/// For C's write path: @sb's superblock, in its buffer.
 #[c_export]
 pub fn bch2_sb_validate(sb: &mut c::bch_sb_handle, opts: &c::bch_opts, read_offset: u64,
                         flags: c::bch_validate_flags, out: &mut Printbuf) -> c_int {
@@ -1015,15 +1004,23 @@ impl c::bch_sb_bdev {
 
     /// The device closed, and what names it freed.
     fn free(&mut self) {
-        // IS_ERR_OR_NULL(): an open that failed leaves its error here
-        if !self.s_bdev_file.is_null() && (self.s_bdev_file as usize) < (-4095isize) as usize {
+        use crate::util::alloc::kfree;
+        use core::alloc::Layout;
+        use core::ptr::NonNull;
+
+        if !self.s_bdev_file.is_null() {
             // SAFETY: the file the device was opened with
             unsafe { c::bdev_fput(self.s_bdev_file) };
         }
-        // SAFETY: kzalloc()'d and kstrdup()'d, or null
+        // SAFETY: read_super_and_backups()'s kzalloc()s, or null
         unsafe {
-            c::rust_kfree(self.holder.cast());
-            c::rust_kfree(self.sb_name.cast());
+            if let Some(p) = NonNull::new(self.holder) {
+                kfree(p.cast(), Layout::new::<c::bch_sb_handle_holder>());
+            }
+            if let Some(p) = NonNull::new(self.sb_name) {
+                let len = CStr::from_ptr(p.as_ptr().cast()).to_bytes_with_nul().len();
+                kfree(p.cast(), Layout::array::<u8>(len).expect("the name's layout, as allocated"));
+            }
         }
     }
 }
@@ -1134,9 +1131,393 @@ pub fn bch2_free_super(sb: &mut c::bch_sb_handle) {
     sb.free();
 }
 
+// ── Reading a device's superblock ────────────────────────────────────────
+
+/// A handle's bio, borrowed apart from the buffer it reads into and writes
+/// from.
+struct HandleBio<'a>(&'a Bio);
+
+// SAFETY: the handle's, from realloc(): nothing else has it while the
+// handle's borrowed
+unsafe impl BioOwner for HandleBio<'_> {
+    fn bio(&self) -> &Bio {
+        self.0
+    }
+}
+
+impl c::bch_sb_io {
+    /// The bio, set up for an IO by @opf at @sector of @dev - with the
+    /// buffer it maps.
+    fn bio(&mut self, dev: &c::bch_sb_bdev, opf: u32, sector: u64) -> (HandleBio<'_>, &mut [u8]) {
+        assert!(!self.bio.is_null(), "superblock IO without a bio: have_bio wasn't set");
+        // SAFETY: realloc()'s, borrowed with us
+        let mut bio = HandleBio(unsafe { Bio::from_raw(self.bio) });
+        bio.reset(dev.bdev, opf);
+        bio.set_sector(sector);
+        (bio, self.buf.buffer_mut())
+    }
+
+    /// @bytes from @sector of @dev into the buffer.
+    fn read(&mut self, dev: &c::bch_sb_bdev, sector: u64, bytes: usize) -> Result<(), BchError> {
+        let (mut bio, buf) = self.bio(dev, c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META, sector);
+        // bound, so the Mapped drops before the bio it borrows
+        let ret = bio.map_read(&mut buf[..bytes]).submit_wait();
+        ret
+    }
+
+    /// The buffer's first @bytes to @sector of @dev, FUA.
+    fn write_fua(&mut self, dev: &c::bch_sb_bdev, sector: u64, bytes: usize) -> Result<(), BchError> {
+        let (mut bio, buf) = self.bio(dev, c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_META | c::REQ_FUA,
+                                      sector);
+        // as read()'s
+        let ret = bio.map_write(&buf[..bytes]).submit_wait();
+        ret
+    }
+}
+
+/// A superblock's checksum, of @bytes - all of it past the csum, its first
+/// field: csum_vstruct().
+fn sb_csum(ty: c::bch_csum_type, bytes: &[u8]) -> c::bch_csum {
+    let start = size_of::<c::bch_csum>();
+    // SAFETY: @bytes past the csum; no filesystem, so no key: @ty isn't an
+    // encryption type
+    unsafe {
+        c::bch2_checksum(core::ptr::null_mut(), ty.0, nonce::default(), bytes[start..].as_ptr().cast(),
+                         bytes.len() - start)
+    }
+}
+
+/// The superblock at @offset read into @sb's buffer - grown as it needs - and
+/// checked as far as that takes: that it's one, of a version we read, whole,
+/// and its checksum. Not validated.
+fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Result<(), BchError> {
+    loop {
+        let len = sb.io.buf.buffer_size;
+        sb.io.read(&sb.dev, offset, len).inspect_err(|e| prt!(err, "IO error: {}", -e.raw()))?;
+
+        let buf: &[u8] = sb.io.buf.buffer_mut();
+        let h = cast_plain::<Head<bch_sb>>(buf).expect("a superblock buffer, holding a header");
+
+        if h.magic.b != BCACHE_MAGIC && h.magic.b != BCHFS_MAGIC {
+            prt!(err, "Not a bcachefs superblock (got magic ");
+            err.uuid(&h.magic);
+            prt!(err, ")");
+            return Err(bch_errcode::BCH_ERR_invalid_sb_magic.into());
+        }
+
+        sb_compatible(h, err)?;
+
+        let bytes = size_of::<Head<bch_sb>>() + h.u64s() as usize * size_of::<u64>();
+        let max = 512u64 << u32::from(h.layout.sb_max_size_bits).min(c::BCH_SB_LAYOUT_SIZE_BITS_MAX);
+        if bytes as u64 > max {
+            prt!(err, "Invalid superblock: too big (got {bytes} bytes, layout max {max})");
+            return Err(bch_errcode::BCH_ERR_invalid_sb_too_big.into());
+        }
+
+        if bytes > buf.len() {
+            let u64s = h.u64s() as u32;
+            sb.sb_realloc(u64s)?;
+            continue;
+        }
+
+        let ty = c::bch_csum_type(h.csum_type() as u32);
+        if ty.0 >= c::bch_csum_type::BCH_CSUM_NR.0 || ty.is_encryption() {
+            prt!(err, "unknown checksum type {}", h.csum_type());
+            return Err(bch_errcode::BCH_ERR_invalid_sb_csum_type.into());
+        }
+
+        // XXX: verify MACs
+        let csum = sb_csum(ty, &buf[..bytes]);
+        if csum != h.csum {
+            crate::data::checksum::csum_err_msg(err, ty, h.csum, csum);
+            return Err(bch_errcode::BCH_ERR_invalid_sb_csum.into());
+        }
+
+        sb.io.seq = h.seq.get();
+        return Ok(());
+    }
+}
+
+/// The layout, from its own sector - read through @sb's buffer, aligned for
+/// IO as one on the stack isn't - and validated.
+fn read_layout_sector(sb: &mut bch_sb_handle, err: &mut Printbuf) -> Result<c::bch_sb_layout, BchError> {
+    sb.io.read(&sb.dev, c::BCH_SB_LAYOUT_SECTOR.into(), size_of::<c::bch_sb_layout>())?;
+    let layout = read_past::<c::bch_sb_layout>(sb.io.buf.buffer_mut(), 0);
+    validate_layout(&layout, err)?;
+    Ok(layout)
+}
+
+/// @layout's backups read - the primary's tried already, and valid if
+/// @primary_valid, in @sb's buffer - for the offset of the copy with the
+/// highest seq, of all of them: in the buffer, after.
+///
+/// Reading every copy defends against several failure modes:
+///   - a torn write to the primary: its csum fails; a backup at the same seq
+///     is taken
+///   - a stale primary, from a write that reached slot 1+ but not it: an
+///     older seq in slot 0; the backup with the higher one is taken
+///   - bit rot in a backup not read since its last write: noticed when the
+///     primary is down too
+///
+/// The last read wins a tie, so the common case - every slot at the same
+/// seq - reads nothing again.
+fn read_backup_supers(sb: &mut bch_sb_handle, layout: &c::bch_sb_layout, primary_valid: bool,
+                      err: &mut Printbuf) -> Result<u64, BchError> {
+    let primary = layout.sb_offset[0].get();
+    let mut best_seq = if primary_valid { sb.io.seq } else { 0 };
+    let mut best = primary;
+    let mut last_read = if primary_valid { primary } else { 0 };
+    let mut any_valid = primary_valid;
+
+    for o in &layout.sb_offset[1..usize::from(layout.nr_superblocks)] {
+        let offset = o.get();
+
+        let mut slot_err = Printbuf::new();
+        let ret = read_one_super(sb, offset, &mut slot_err);
+        // read into the buffer, valid or not
+        last_read = offset;
+        if ret.is_err() {
+            prt!(err, "  sb @ {offset}: ");
+            err.write_bytes(slot_err.as_bytes());
+            prt!(err, "\n");
+            continue;
+        }
+
+        any_valid = true;
+        if sb.io.seq >= best_seq {
+            best_seq = sb.io.seq;
+            best = offset;
+        }
+    }
+
+    if !any_valid {
+        return Err(bch_errcode::BCH_ERR_invalid.into());
+    }
+
+    if last_read != best {
+        read_one_super(sb, best, err)?;
+    }
+    Ok(best)
+}
+
+/// The primary was unreadable, failed validation, or was older than a
+/// backup. The good copy goes back in slot 0 now, rather than leaving it for
+/// the next superblock write - which reads back slot 0 first, and would take
+/// a torn primary for another writer's.
+fn rewrite_primary_super(sb: &mut bch_sb_handle) -> Result<(), BchError> {
+    let s = sb.io.buf.sb_mut();
+    s.offset = s.layout.sb_offset[0];
+    let (ty, sector) = (c::bch_csum_type(s.csum_type() as u32), s.offset.get());
+    let csum = sb_csum(ty, sb.io.buf.sb_bytes());
+    sb.io.buf.sb_mut().csum = csum;
+
+    let bytes = sb.io.buf.sb_bytes().len()
+        .next_multiple_of(crate::util::kernel::bdev_logical_block_size(sb.dev.bdev()) as usize);
+    sb.io.write_fua(&sb.dev, sector, bytes)
+}
+
+/// The shim's buffered open, without direct_io: nothing, in the kernel.
+fn open_buffered(opts: &c::bch_opts) -> c::blk_mode_t {
+    #[cfg(not(kernel))]
+    return if crate::opt_get!(opts, direct_io) == 0 { c::BLK_OPEN_BUFFERED } else { 0 };
+    #[cfg(kernel)]
+    {
+        let _ = opts;
+        0
+    }
+}
+
+/// For a device whose logical block is bigger than the filesystem's: in
+/// userspace, buffered IO instead - the read's to be retried, direct_io off.
+/// Whether it is.
+fn buffered_instead(opts: &mut c::bch_opts) -> bool {
+    #[cfg(not(kernel))]
+    {
+        crate::opt_set!(opts, direct_io, 0);
+        true
+    }
+    #[cfg(kernel)]
+    {
+        let _ = opts;
+        false
+    }
+}
+
+/// The header of what read_one_super() read, in @sb's buffer.
+fn header(sb: &mut bch_sb_handle) -> &Head<bch_sb> {
+    cast_plain(sb.io.buf.buffer_mut()).expect("a superblock buffer, holding a header")
+}
+
+fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, err: &mut Printbuf)
+    -> Result<bch_sb_handle, BchError>
+{
+    use crate::util::alloc::kzalloc;
+    use core::alloc::Layout;
+
+    let mut sb = bch_sb_handle::default();
+    sb.dev.mode = c::BLK_OPEN_READ;
+    sb.io.bits.set_have_bio(1);
+
+    let enomem = |_| BchError::from(c::ENOMEM);
+    sb.dev.holder = kzalloc(Layout::new::<c::bch_sb_handle_holder>()).map_err(enomem)?.as_ptr().cast();
+    let name = path.to_bytes_with_nul();
+    let p = kzalloc(Layout::array::<u8>(name.len()).map_err(|_| BchError::from(c::ENOMEM))?).map_err(enomem)?;
+    // SAFETY: name.len() bytes, just allocated
+    unsafe { core::ptr::copy_nonoverlapping(name.as_ptr(), p.as_ptr(), name.len()) };
+    sb.dev.sb_name = p.as_ptr().cast();
+
+    sb.dev.mode |= open_buffered(opts);
+    if crate::opt_get!(opts, noexcl) == 0 {
+        sb.dev.mode |= c::BLK_OPEN_EXCL;
+    }
+    if crate::opt_get!(opts, nochanges) == 0 {
+        sb.dev.mode |= c::BLK_OPEN_WRITE;
+    }
+
+    let open = |mode: c::blk_mode_t, holder: *mut c::bch_sb_handle_holder| {
+        // SAFETY: a C string, and our holder; the ops are static
+        let f = unsafe { c::bdev_file_open_by_path(path.as_ptr().cast(), mode, holder.cast(),
+                                                   &raw const c::bch2_sb_handle_bdev_ops) };
+        crate::errcode::errptr_to_result(core::ptr::NonNull::new(f).expect("bdev_file_open_by_path(): an ERR_PTR, not NULL"))
+    };
+
+    let mut file = open(sb.dev.mode, sb.dev.holder);
+    if matches!(&file, Err(e) if e.raw() == c::EACCES as i32) && crate::opt_get!(opts, read_only) != 0 {
+        sb.dev.mode &= !c::BLK_OPEN_WRITE;
+        file = open(sb.dev.mode, sb.dev.holder);
+        if file.is_ok() {
+            crate::opt_set!(opts, nochanges, 1);
+        }
+    }
+
+    let file = file.inspect_err(|e| {
+        // Detail only - bch2_read_super() has already printed the path and
+        // the errno, and repeating them here just gets the same words
+        // twice. The errno alone is not actionable: what the user needs is
+        // what we asked the block layer for, since that - not the device -
+        // is usually what's wrong.
+        prt!(err, "  requested {}{}\n",
+             if sb.dev.mode & c::BLK_OPEN_WRITE != 0 { "read-write" } else { "read-only" },
+             if sb.dev.mode & c::BLK_OPEN_EXCL != 0 { ", exclusive" } else { "" });
+
+        if e.raw() == c::EACCES as i32 {
+            prt!(err, "  insufficient privilege (try root), or a write protected device\n  (check blockdev --getro)\n");
+        } else if e.raw() == c::EBUSY as i32 {
+            prt!(err, "  device is in use: already mounted, or held by another process\n");
+        }
+    })?;
+
+    sb.dev.s_bdev_file = file.as_ptr();
+    // SAFETY: the file just opened
+    sb.dev.bdev = unsafe { c::file_bdev(file.as_ptr()) };
+
+    sb.sb_realloc(0)?;
+
+    let (sb_offset, primary_bad) = if crate::opt_defined!(opts, sb) {
+        // a superblock asked for, for recovery or debugging: that one, no
+        // scan or fallback
+        let offset = crate::opt_get!(opts, sb);
+        read_one_super(&mut sb, offset, err)?;
+        (offset, false)
+    } else {
+        // the primary first, for its layout; the layout's own sector if it
+        // can't be read
+        let mut primary_err = Printbuf::new();
+        match read_one_super(&mut sb, c::BCH_SB_SECTOR.into(), &mut primary_err) {
+            Ok(()) => {
+                let primary_seq = sb.io.seq;
+                let layout = header(&mut sb).layout;
+                validate_layout(&layout, err)?;
+                let offset = read_backup_supers(&mut sb, &layout, true, err)?;
+                (offset, primary_seq < sb.io.seq)
+            }
+            Err(_) => {
+                prt!(err, "primary superblock unreadable: ");
+                err.write_bytes(primary_err.as_bytes());
+                prt!(err, "\n");
+                let layout = read_layout_sector(&mut sb, err)?;
+                (read_backup_supers(&mut sb, &layout, false, err)?, true)
+            }
+        }
+    };
+
+    let block_bytes = u32::from(header(&mut sb).block_size.get()) << 9;
+    let dev_block = crate::util::kernel::bdev_logical_block_size(sb.dev.bdev());
+    if block_bytes < dev_block && crate::opt_get!(opts, direct_io) != 0 {
+        if buffered_instead(opts) {
+            return Err(c::EINTR.into());
+        }
+        prt!(err, "block size ({block_bytes}) smaller than device block size ({dev_block})");
+        return Err(bch_errcode::BCH_ERR_block_size_too_small.into());
+    }
+
+    sb.io.bits.set_have_layout(1);
+    validate_bytes(sb.buffer_mut(), opts, sb_offset, c::bch_validate_flags::empty(), err)?;
+
+    if primary_bad && sb.dev.mode & c::BLK_OPEN_WRITE != 0 {
+        match rewrite_primary_super(&mut sb) {
+            Ok(())  => prt!(err, "rewrote primary superblock from backup at {sb_offset}\n"),
+            Err(e)  => prt!(err, "error rewriting primary superblock from backup at {sb_offset}: {e}\n"),
+        }
+    }
+
+    Ok(sb)
+}
+
+/// read_super_and_backups(), again with buffered IO if direct IO can't.
+fn read_super_err(path: &CStr, opts: &mut c::bch_opts, err: &mut Printbuf) -> Result<bch_sb_handle, BchError> {
+    loop {
+        match read_super_and_backups(path, opts, err) {
+            Err(e) if e.raw() == c::EINTR as i32 => err.reset(),
+            r => return r,
+        }
+    }
+}
+
+/// The superblock of the device at @path, opened as @opts says - why not
+/// printed, and what reading a backup instead took: bch2_read_super().
+pub fn read_super(path: &CStr, opts: &mut c::bch_opts) -> Result<bch_sb_handle, BchError> {
+    use crate::util::log::{log_opts, LogLevel};
+    use crate::util::printbuf::Msg;
+
+    let mut err = Printbuf::new();
+    let ret = read_super_err(path, opts, &mut err);
+
+    // @err goes mid-message: a reason that came back unterminated would run
+    // into whatever's printed next
+    err.ensure_trailing_newline();
+
+    let name = path.to_bytes();
+    match &ret {
+        Err(e) => log_opts(opts, LogLevel::ERR, &Msg(|out: &mut Printbuf| {
+            prt!(out, "bcachefs (");
+            out.write_bytes(name);
+            prt!(out, "): error reading superblock: {e}\n");
+            out.write_bytes(err.as_bytes());
+        })),
+        Ok(_) if !err.as_bytes().is_empty() => log_opts(opts, LogLevel::NOTICE, &Msg(|out: &mut Printbuf| {
+            prt!(out, "bcachefs (");
+            out.write_bytes(name);
+            prt!(out, "): ");
+            out.write_bytes(err.as_bytes());
+            prt!(out, "successful read from backup\n");
+        })),
+        Ok(_) => {}
+    }
+    ret
+}
+
+/// read_super(), printing nothing: for mount.bcachefs.
+pub fn read_super_silent(path: &CStr, opts: &mut c::bch_opts) -> Result<bch_sb_handle, BchError> {
+    read_super_err(path, opts, &mut Printbuf::new())
+}
+
+/// # Safety
+/// @path is a C string; @sb holds nothing, and is written over.
 #[c_export]
-pub fn bch2_sb_realloc(sb: &mut c::bch_sb_handle, u64s: c_uint) -> c_int {
-    ret_to_c(sb.sb_realloc(u64s))
+pub unsafe fn bch2_read_super(path: *const c_char, opts: &mut c::bch_opts, sb: *mut c::bch_sb_handle) -> c_int {
+    // SAFETY: the caller's
+    ret_to_c(read_super(unsafe { CStr::from_ptr(path.cast()) }, opts).map(|h| unsafe { sb.write(h) }))
 }
 
 pub struct CounterInfo {

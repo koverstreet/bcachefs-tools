@@ -203,9 +203,6 @@ void bch2_print_str(struct bch_fs *, const char *, const char *);
 /* For a person rather than a log - see bch_fs.stdio_user_only. */
 void bch2_print_str_user(struct bch_fs *, const char *);
 
-__printf(2, 3)
-void bch2_print_opts(struct bch_opts *, const char *, ...);
-
 #include "bcachefs_gen.h"
 #include "util/log_gen.h"
 

@@ -7,17 +7,7 @@ pub fn read_super_opts(
     path: &std::path::Path,
     mut opts: c::bch_opts,
 ) -> anyhow::Result<c::bch_sb_handle> {
-    let path = path_to_cstr(path);
-    let mut sb = std::mem::MaybeUninit::zeroed();
-
-    let ret =
-        unsafe { c::bch2_read_super(path.as_ptr(), &mut opts, sb.as_mut_ptr()) };
-
-    if ret != 0 {
-        Err(anyhow!(BchError::from_raw(ret)))
-    } else {
-        Ok(unsafe { sb.assume_init() })
-    }
+    bcachefs_kernel::sb::io::read_super(&path_to_cstr(path), &mut opts).map_err(|e| anyhow!(e))
 }
 
 pub fn read_super(path: &std::path::Path) -> anyhow::Result<c::bch_sb_handle> {
@@ -29,16 +19,5 @@ pub fn read_super_silent(
     path: &std::path::Path,
     mut opts: c::bch_opts,
 ) -> Result<c::bch_sb_handle, BchError> {
-    let path = path_to_cstr(path);
-    let mut sb = std::mem::MaybeUninit::zeroed();
-
-    let ret = unsafe {
-        c::bch2_read_super_silent(path.as_ptr(), &mut opts, sb.as_mut_ptr())
-    };
-
-    if ret != 0 {
-        Err(BchError::from_raw(ret))
-    } else {
-        Ok(unsafe { sb.assume_init() })
-    }
+    bcachefs_kernel::sb::io::read_super_silent(&path_to_cstr(path), &mut opts)
 }

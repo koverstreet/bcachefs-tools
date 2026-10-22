@@ -213,16 +213,6 @@ static void bch2_print_maybe_redirect(struct stdio_redirect *stdio, const char *
 	vprintk(fmt, args);
 }
 
-void bch2_print_opts(struct bch_opts *opts, const char *fmt, ...)
-{
-	struct stdio_redirect *stdio = (void *)(unsigned long)opts->stdio;
-
-	va_list args;
-	va_start(args, fmt);
-	bch2_print_maybe_redirect(stdio, fmt, args);
-	va_end(args);
-}
-
 void __bch2_print(struct bch_fs *c, const char *fmt, ...)
 {
 	int loglevel = kern_soh_to_loglevel(fmt);

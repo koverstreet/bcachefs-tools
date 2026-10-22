@@ -80,10 +80,6 @@ c_extern! {
     pub fn bch2_write_super_replicas(c: *mut c::bch_fs) -> c_int;
     pub static bch2_sb_features: [*const c_char; 0];
     pub static bch2_sb_compat: [*const c_char; 0];
-    pub fn bch2_read_super(path: *const c_char, opts: *mut c::bch_opts,
-                           sb: *mut c::bch_sb_handle) -> c_int;
-    pub fn bch2_read_super_silent(path: *const c_char, opts: *mut c::bch_opts,
-                                  sb: *mut c::bch_sb_handle) -> c_int;
     pub fn bch2_write_super_flags(c: *mut c::bch_fs, flags: c::bch_sb_write_flags) -> c_int;
     pub fn bch2_write_super(c: *mut c::bch_fs) -> c_int;
 }
