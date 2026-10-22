@@ -8,7 +8,23 @@
  * (extern.c). Kernel headers only, as codegen binds nothing of bcachefs's.
  */
 
+#include <linux/blkdev.h>
 #include <linux/mm.h>
+
+#ifdef __BINDGEN__
+/*
+ * Macros with casts, which bindgen doesn't evaluate: as consts, which it
+ * binds - the kernel's bindings_helper.h has its own the same way, and
+ * codegen.rs strips the prefix as rust/Makefile does.
+ */
+const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_READ	= BLK_OPEN_READ;
+const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_WRITE	= BLK_OPEN_WRITE;
+const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_EXCL	= BLK_OPEN_EXCL;
+const blk_opf_t RUST_CONST_HELPER_REQ_SYNC		= REQ_SYNC;
+const blk_opf_t RUST_CONST_HELPER_REQ_META		= REQ_META;
+const blk_opf_t RUST_CONST_HELPER_REQ_IDLE		= REQ_IDLE;
+const blk_opf_t RUST_CONST_HELPER_REQ_FUA		= REQ_FUA;
+#endif
 
 static inline struct folio *rust_page_folio(struct page *page)
 {

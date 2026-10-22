@@ -49,7 +49,8 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",
                                   "xattr_handler"];
-const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default"];
+const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
+                                 "RUST_CONST_HELPER_.*"];
 
 /// Run the bindgen CLI and write `bindings.rs`, and `extern.c` - C wrappers for
 /// whatever of it is a static inline - into `out`. Kbuild supplies
@@ -114,7 +115,9 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String]) 
         std::process::exit(1);
     }
 
-    let mut bindings = String::from_utf8(result.stdout).expect("bindgen output utf8");
+    // codegen.h's consts, by the names of the macros they're of
+    let mut bindings = String::from_utf8(result.stdout).expect("bindgen output utf8")
+        .replace("pub const RUST_CONST_HELPER_", "pub const ");
     bindings += &opaque_arrays_zeroable(&bindings);
     std::fs::write(format!("{out}/bindings.rs"), bindings).expect("write bindings.rs");
 

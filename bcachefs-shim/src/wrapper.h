@@ -31,3 +31,19 @@
 #include "fs/vendor/closure.h"
 
 #include <errno.h>
+
+#ifdef __BINDGEN__
+/*
+ * Macros with casts, which bindgen doesn't evaluate: as consts, which it
+ * binds, by the names codegen.h's have in-kernel - build.rs strips the
+ * prefix. BLK_OPEN_BUFFERED is the shim's own.
+ */
+const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_READ	= BLK_OPEN_READ;
+const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_WRITE	= BLK_OPEN_WRITE;
+const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_EXCL	= BLK_OPEN_EXCL;
+const blk_mode_t RUST_CONST_HELPER_BLK_OPEN_BUFFERED	= BLK_OPEN_BUFFERED;
+const blk_opf_t RUST_CONST_HELPER_REQ_SYNC		= REQ_SYNC;
+const blk_opf_t RUST_CONST_HELPER_REQ_META		= REQ_META;
+const blk_opf_t RUST_CONST_HELPER_REQ_IDLE		= REQ_IDLE;
+const blk_opf_t RUST_CONST_HELPER_REQ_FUA		= REQ_FUA;
+#endif
