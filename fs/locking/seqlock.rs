@@ -8,6 +8,8 @@ use core::hint::spin_loop;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{fence, AtomicU32, Ordering};
 
+use crate::util::percpu::CpuGuard;
+
 /// A sequence lock over a T: readers copy the value out without taking
 /// anything, and retry a copy a write overlapped; writers have it alone.
 /// For small state read rarely and written often - a progress indicator
@@ -65,7 +67,14 @@ impl<T: Copy> SeqLock<T> {
     /// @f on the value, readers held off - shown what @f leaves, once it
     /// returns. A panic in @f leaves the sequence odd: write-held, so
     /// readers spin on it for good.
+    ///
+    /// With preemption off, as C's seqcount writers are: readers spin on an
+    /// odd sequence, and one that can't be preempted - under a spinlock, in
+    /// softirq - spinning on a writer preempted on its CPU never stops. So
+    /// @f mustn't sleep.
     pub fn write<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        let _cpu = CpuGuard::new();
+
         let mut seq = self.seq.load(Ordering::Relaxed);
         loop {
             if seq & 1 != 0 {
