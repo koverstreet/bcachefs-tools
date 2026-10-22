@@ -88,4 +88,6 @@ c_extern! {
     pub fn bch2_prt_units_u64(out: *mut c::printbuf, v: u64);
     pub fn bch2_prt_bitflags(out: *mut c::printbuf, list: *const *const c_char, flags: u64);
     pub fn rust_prt_bytes(out: *mut c::printbuf, b: *const c_void, n: c_uint);
+    #[c_printf(2, 3)]
+    pub fn bch2_prt_printf(out: *mut c::printbuf, fmt: *const c_char, ...);
 }

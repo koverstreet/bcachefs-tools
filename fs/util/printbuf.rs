@@ -372,6 +372,26 @@ impl Printbuf {
     }
 }
 
+/// @bdev's name: as the kernel's %pg prints it, its disk's and partition's;
+/// in userspace, the device's path, its last component. NULL is "(null)", as
+/// %pg prints it: C names the filesystem's superblock's device, which has
+/// none.
+#[cstruct_macros::c_export]
+pub fn prt_bdevname(out: &mut Printbuf, bdev: Option<&c::block_device>) {
+    let Some(bdev) = bdev else {
+        out.write_bytes(b"(null)");
+        return;
+    };
+    #[cfg(kernel)]
+    // SAFETY: a block device, as %pg takes
+    unsafe { c::bch2_prt_printf(out.as_raw(), c"%pg".as_ptr().cast(), core::ptr::from_ref(bdev)) };
+    #[cfg(not(kernel))]
+    {
+        let name = bdev.name.map(|c| c as u8);
+        out.write_bytes(CStr::from_bytes_until_nul(&name).map_or(&name[..], CStr::to_bytes));
+    }
+}
+
 impl fmt::Write for Printbuf {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         if self.0.atomic & Printbuf::FMT_JOB != 0 {

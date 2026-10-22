@@ -261,15 +261,6 @@ int bch2_save_backtrace(bch_stacktrace *stack, struct task_struct *, unsigned, g
 void bch2_prt_backtrace(struct printbuf *, bch_stacktrace *);
 int bch2_prt_task_backtrace(struct printbuf *, struct task_struct *, unsigned, gfp_t);
 
-static inline void prt_bdevname(struct printbuf *out, struct block_device *bdev)
-{
-#ifdef __KERNEL__
-	prt_printf(out, "%pg", bdev);
-#else
-	prt_str(out, bdev->name);
-#endif
-}
-
 void bch2_time_stats_to_text(struct printbuf *, struct bch2_time_stats *);
 void bch2_time_stats_json_to_text(struct printbuf *, struct bch2_time_stats *,
 				  const char *epoch_name, unsigned int flags);
