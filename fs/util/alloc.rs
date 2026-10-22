@@ -36,6 +36,13 @@ pub fn kalloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E
     alloc_in::<true, T, E>(init)
 }
 
+pub fn kbox_pin_init<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>)
+    -> Result<core::pin::Pin<KBox<T>>, E>
+{
+    // SAFETY: kalloc_pinned()'s is a KBox's allocation, pinned
+    Ok(unsafe { core::pin::Pin::new_unchecked(KBox::from_raw(kalloc_pinned(init)?)) })
+}
+
 /// Drop and free @p - from any context, if dropping it can be.
 ///
 /// # Safety

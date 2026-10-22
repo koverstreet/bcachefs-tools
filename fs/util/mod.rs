@@ -8,6 +8,7 @@ pub mod debugfs;
 pub mod eytzinger;
 pub mod ffi;
 pub mod fifo;
+pub mod file;
 pub mod futex;
 pub mod gather;
 pub mod genradix;

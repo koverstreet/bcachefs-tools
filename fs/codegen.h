@@ -10,6 +10,8 @@
 
 #include <linux/blkdev.h>
 #include <linux/mm.h>
+#include <linux/pagemap.h>
+#include <linux/poll.h>
 #include <asm/ioctl.h>
 
 #ifdef __BINDGEN__
@@ -40,6 +42,11 @@ const unsigned int RUST_CONST_HELPER__IOC_DIRSHIFT	= _IOC_DIRSHIFT;
 const unsigned int RUST_CONST_HELPER__IOC_NRMASK	= _IOC_NRMASK;
 const unsigned int RUST_CONST_HELPER__IOC_TYPEMASK	= _IOC_TYPEMASK;
 const unsigned int RUST_CONST_HELPER__IOC_SIZEMASK	= _IOC_SIZEMASK;
+
+const __poll_t RUST_CONST_HELPER_EPOLLIN		= EPOLLIN;
+const __poll_t RUST_CONST_HELPER_EPOLLOUT		= EPOLLOUT;
+const __poll_t RUST_CONST_HELPER_EPOLLERR		= EPOLLERR;
+const __poll_t RUST_CONST_HELPER_EPOLLHUP		= EPOLLHUP;
 #endif
 
 static inline struct folio *rust_page_folio(struct page *page)
@@ -57,6 +64,23 @@ static inline unsigned long rust_folio_page_idx(struct folio *folio, struct page
 static inline bool rust_refcount_inc_not_zero(refcount_t *r)
 {
 	return refcount_inc_not_zero(r);
+}
+
+/* a static inline */
+static inline void rust_poll_wait(struct file *file, wait_queue_head_t *q, poll_table *pt)
+{
+	poll_wait(file, q, pt);
+}
+
+/* not in the vendored crate's bindings: pagemap.h isn't */
+static inline size_t rust_fault_in_writeable(char __user *uaddr, size_t size)
+{
+	return fault_in_writeable(uaddr, size);
+}
+
+static inline size_t rust_fault_in_readable(const char __user *uaddr, size_t size)
+{
+	return fault_in_readable(uaddr, size);
 }
 
 /* a static inline: here rather than all of mm.h unblocklisted for it */

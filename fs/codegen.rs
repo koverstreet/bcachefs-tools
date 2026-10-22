@@ -22,6 +22,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/xattr.h",			// xattr_handler, which fs.h only declares
     "linux/posix_acl_xattr.h",		// nop_posix_acl_*, xattr.rs's ACL handlers
     "crypto/sha2.h",			// sha256(), siphash_old's string hash key
+    "linux/anon_inodes.h",		// anon_inode_getfile(), util/file's NewFile
 ];
 
 /// Headers under fs/ bound, by path - which the clang args have as an -I:
@@ -38,15 +39,17 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/xattr.h",
     "linux/posix_acl_xattr.h",
     "crypto/sha2.h",
+    "linux/anon_inodes.h",
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
-    "crc32c", "crc64_be", "sha256",
+    "crc32c", "crc64_be", "sha256", "anon_inode_getfile",
     "__genradix_ptr", "__genradix_ptr_alloc", "__genradix_iter_peek", "__genradix_free",
     "closure_get_not_zero", "closure_put",
     "rust_page_folio", "rust_folio_page_idx", "rust_folio_size",
     "rust_page_highmem", "rust_page_address",
-    "rust_refcount_inc_not_zero",
+    "rust_refcount_inc_not_zero", "rust_poll_wait", "rust_fault_in_writeable",
+    "rust_fault_in_readable",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",
                                   "xattr_handler"];
