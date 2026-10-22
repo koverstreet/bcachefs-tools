@@ -116,3 +116,13 @@ impl<T> DerefMut for KVVec<T> {
         &mut self.0
     }
 }
+
+/// As the kernel's Vec: its elements, by value.
+impl<T> IntoIterator for KVVec<T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
