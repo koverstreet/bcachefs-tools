@@ -34,20 +34,6 @@ static void bch2_extent_crc_pack(union bch_extent_crc *,
 
 /* Extent checksum entries: */
 
-/* returns true if not equal */
-static inline bool bch2_crc_unpacked_cmp(struct bch_extent_crc_unpacked l,
-					 struct bch_extent_crc_unpacked r)
-{
-	return (l.csum_type		!= r.csum_type ||
-		l.compression_type	!= r.compression_type ||
-		l.compressed_size	!= r.compressed_size ||
-		l.uncompressed_size	!= r.uncompressed_size ||
-		l.offset		!= r.offset ||
-		l.live_size		!= r.live_size ||
-		l.nonce			!= r.nonce ||
-		bch2_crc_cmp(l.csum, r.csum));
-}
-
 static union bch_extent_entry *bkey_crc_find(const struct bch_fs *c, struct bkey_i *k,
 					     struct bch_extent_crc_unpacked crc)
 {

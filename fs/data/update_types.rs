@@ -13,6 +13,7 @@ c_xmacro! {
         (other),
         (copygc),
         (reconcile),
+        (rechecksum),
         (promote),
         (self_heal),
         (scrub),
