@@ -274,8 +274,19 @@ impl SbFieldOps for c::bch_sb_field_counters {
         }
     }
 
-    /// The counters - memory's, read from here only at mount - with the
-    /// field grown to a slot for every stable id if it can be, else as it is.
+    /// The counts now; those it has no slot for are left as they are.
+    fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        let d: &[Le64] = sb.field::<c::bch_sb_field_counters>().map_or(&[], |f| &f.d);
+        for (i, ctr) in COUNTERS.iter().enumerate() {
+            if let Some(v) = d.get(ctr.stable_id as usize) {
+                fs.counters.set_now(i, v.get());
+            }
+        }
+        Ok(())
+    }
+
+    /// The counters - memory's - with the field grown to a slot for every
+    /// stable id if it can be, else as it is.
     fn from_cpu(fs: &Fs, guard: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         let mut sb = fs.sb_resize(guard);
 
@@ -321,17 +332,14 @@ impl RecentCounters {
 #[c_export]
 pub fn bch2_fs_counters_init(c: &Opaque<c::bch_fs>) -> c_int {
     let fs = Fs::from_c(c);
-    let sb = fs.sb_lock();
+    let mut sb = fs.sb_lock();
+    let _ = c::bch_sb_field_counters::to_cpu(fs, &mut sb);
+
     let d: &[Le64] = sb.field::<c::bch_sb_field_counters>().map_or(&[], |f| &f.d);
     let ctrs = fs.counters.raw();
-
     for (i, ctr) in COUNTERS.iter().enumerate() {
-        let v = d.get(ctr.stable_id as usize).map(|v| v.get());
-        if let Some(v) = v {
-            fs.counters.set_now(i, v);
-        }
         // SAFETY: filesystem init, before anything reads them
-        unsafe { (*ctrs).mount[i] = v.unwrap_or(0) };
+        unsafe { (*ctrs).mount[i] = d.get(ctr.stable_id as usize).map_or(0, |v| v.get()) };
     }
     0
 }

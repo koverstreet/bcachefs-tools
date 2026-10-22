@@ -252,9 +252,39 @@ impl SbFieldOps for c::bch_sb_field_errors_v2 {
         to_text(out, &f.entries)
     }
 
-    /// The counts - memory's, read from here only at mount, by
-    /// sb_errors_to_cpu() - and v1 deleted, which that merged in. If v2 can't
-    /// be grown, the superblock keeps what it had until the next write.
+    /// The counts, both sections'. Both present means the filesystem was
+    /// downgraded: writing v2 always deletes v1 in the same superblock write,
+    /// so a v1 alongside v2 was written by an old kernel since, and holds
+    /// exactly the counts accrued since. They're merged - nothing lost or
+    /// counted twice across a downgrade and upgrade - and the next superblock
+    /// write folds everything back into v2.
+    fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        let v2: &[c::bch_sb_field_error_entry_v2] = sb.field::<c::bch_sb_field_errors_v2>().map_or(&[], |f| &f.entries);
+        let v1: &[c::bch_sb_field_error_entry]    = sb.field::<c::bch_sb_field_errors>().map_or(&[], |f| &f.entries);
+
+        let mut counts = fs.errors.counts.lock();
+        counts.clear();
+        counts.reserve(v2.len() + v1.len(), GFP_KERNEL)?;
+
+        // validated strictly ascending by id: a sorted merge, a section
+        // that's run out reading as past every id
+        let (mut v2, mut v1) = (v2.iter().peekable(), v1.iter().peekable());
+        loop {
+            let a = v2.peek().map_or(u64::MAX, |e| e.id().0.into());
+            let b = v1.peek().map_or(u64::MAX, |e| e.id().0.into());
+            let e = match a.cmp(&b) {
+                Ordering::Less    => v2.next().unwrap().into(),
+                Ordering::Greater => v1.next().unwrap().into(),
+                Ordering::Equal if a == u64::MAX => return Ok(()),
+                Ordering::Equal   => merge(v2.next().unwrap().into(), v1.next().unwrap().into()),
+            };
+            counts.push(e, GFP_KERNEL)?;
+        }
+    }
+
+    /// The counts - memory's - and v1 deleted, which to_cpu() merged in. If
+    /// v2 can't be grown, the superblock keeps what it had until the next
+    /// write.
     fn from_cpu(fs: &Fs, guard: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         let mut sb = fs.sb_resize(guard);
         let counts = fs.errors.counts.lock();
@@ -376,37 +406,6 @@ impl Fs {
         }
     }
 
-    /// The superblock's counts into memory, at mount. Both sections present
-    /// means the filesystem was downgraded: writing v2 always deletes v1 in
-    /// the same superblock write, so a v1 alongside v2 was written by an old
-    /// kernel since, and holds exactly the counts accrued since. They're
-    /// merged - nothing lost or counted twice across a downgrade and upgrade
-    /// - and the next superblock write folds everything back into v2.
-    pub fn sb_errors_to_cpu(&self) -> Result<(), BchError> {
-        let sb = self.sb_lock();
-        let v2: &[c::bch_sb_field_error_entry_v2] = sb.field::<c::bch_sb_field_errors_v2>().map_or(&[], |f| &f.entries);
-        let v1: &[c::bch_sb_field_error_entry]    = sb.field::<c::bch_sb_field_errors>().map_or(&[], |f| &f.entries);
-
-        let mut counts = self.errors.counts.lock();
-        counts.clear();
-        counts.reserve(v2.len() + v1.len(), GFP_KERNEL)?;
-
-        // validated strictly ascending by id: a sorted merge, a section
-        // that's run out reading as past every id
-        let (mut v2, mut v1) = (v2.iter().peekable(), v1.iter().peekable());
-        loop {
-            let a = v2.peek().map_or(u64::MAX, |e| e.id().0.into());
-            let b = v1.peek().map_or(u64::MAX, |e| e.id().0.into());
-            let e = match a.cmp(&b) {
-                Ordering::Less    => v2.next().unwrap().into(),
-                Ordering::Greater => v1.next().unwrap().into(),
-                Ordering::Equal if a == u64::MAX => return Ok(()),
-                Ordering::Equal   => merge(v2.next().unwrap().into(), v1.next().unwrap().into()),
-            };
-            counts.push(e, GFP_KERNEL)?;
-        }
-    }
-
     /// The counts in memory, by id.
     pub fn errors_to_text(&self, out: &mut Printbuf) {
         for (i, w) in [48, 8, 16, 16].into_iter().enumerate() {
@@ -432,6 +431,7 @@ pub fn bch2_sb_error_count(c: &Opaque<c::bch_fs>, err: c::bch_sb_error_id) {
 
 #[c_export]
 pub fn bch2_sb_errors_to_cpu(c: &Opaque<c::bch_fs>) -> c_int {
-    ret_to_c(Fs::from_c(c).sb_errors_to_cpu())
+    let fs = Fs::from_c(c);
+    ret_to_c(c::bch_sb_field_errors_v2::to_cpu(fs, &mut fs.sb_lock()))
 }
 
