@@ -751,7 +751,7 @@ fn count_inode_keys(
 ) -> Result<u32, BchError> {
     let fs = t.fs();
     let mut nr_keys = 0;
-    let mut iter = BtreeIter::new(t, btree, inode_pos, BtreeIterFlags::empty());
+    let mut iter = BtreeIter::new(t, btree, inode_pos, BtreeIterFlags::TRIM);
 
     iter.for_each_max_norestart(t, pos(inode_pos.inode, u64::MAX), |_, k| {
         // Error keys count: they're placeholders for unreadable data,

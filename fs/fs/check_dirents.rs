@@ -306,7 +306,7 @@ fn maybe_reconstruct_inum(
                            (c::btree_id::dirents, "dir"),
                            (c::btree_id::xattrs,  "with xattrs")] {
         let has_contents = {
-            let mut iter = BtreeIter::new(t, btree, spos(inum, 0, snapshot), BtreeIterFlags::empty());
+            let mut iter = BtreeIter::new(t, btree, spos(inum, 0, snapshot), BtreeIterFlags::TRIM);
             iter.peek_max(t, pos(inum, u64::MAX))?.is_some()
         };
         if !has_contents {
