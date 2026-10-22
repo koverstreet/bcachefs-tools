@@ -30,6 +30,7 @@ use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::prt;
 use crate::util::ffi::Opaque;
+use crate::util::gather::GatherRef;
 use crate::util::{Printbuf, ToText};
 
 mod iter;
@@ -135,6 +136,17 @@ impl Bio {
             }
             assert!((*bio).bi_vcnt < (*bio).bi_max_vecs, "mapping {len} bytes: the bio's bvecs are full");
             c::bio_add_virt_nofail(bio, buf.cast(), len);
+        }
+    }
+
+    /// Its last IO's result, once it's complete: a BCH_ERR_BLK_STS_* errcode
+    /// for a failure - blk_status_to_bch_err().
+    pub fn status(&self) -> Result<(), BchError> {
+        // SAFETY: a bio, for as long as &self is
+        match unsafe { (*self.as_ptr()).bi_status } {
+            0  => Ok(()),
+            // SAFETY: a status
+            st => Err(unsafe { c::blk_status_to_bch_err(st) }.into()),
         }
     }
 
@@ -249,6 +261,30 @@ impl<O: BioOwner, B> Mapped<'_, O, B> {
     pub fn submit_wait(&mut self) -> Result<(), BchError> {
         self.owner.submit_wait()
     }
+
+    /// Submitted, @r put when it completes - one of the IOs its Gather
+    /// waits on together. The mapping's left for the IO: the bio's next
+    /// reset() drops it.
+    ///
+    /// # Safety
+    /// Nothing touches the bio, or the buffer it's mapped to, until @r's
+    /// Gather has been waited on.
+    pub unsafe fn submit_gathered(self, r: GatherRef<()>) {
+        let bio = core::mem::ManuallyDrop::new(self).owner.bio().as_ptr();
+        // SAFETY: the owner's, built for this IO; the caller keeps it, and
+        // the buffer, from being touched until it's done
+        unsafe {
+            (*bio).bi_private = r.into_raw().cast_mut().cast();
+            (*bio).bi_end_io = Some(gathered_endio);
+            c::submit_bio(bio);
+        }
+    }
+}
+
+/// submit_gathered()'s bi_end_io: its ref put.
+unsafe extern "C" fn gathered_endio(bio: *mut c::bio) {
+    // SAFETY: submit_gathered()'s, whose ref is bi_private
+    drop(unsafe { GatherRef::<()>::from_raw((*bio).bi_private.cast()) })
 }
 
 impl<O: BioOwner, B> Drop for Mapped<'_, O, B> {

@@ -685,4 +685,6 @@ c_extern! {
     pub fn bch2_err_str(err: c_int) -> *const c_char;
     pub fn __bch2_err_matches(err: c_int, class: c_int) -> bool;
     pub fn __bch2_err_class(bch_err: c_int) -> c_int;
+    // blk_status_t: a u8, which errcode_gen.h can name before blk_types.h has
+    pub fn blk_status_to_bch_err(err: u8) -> c::bch_errcode;
 }
