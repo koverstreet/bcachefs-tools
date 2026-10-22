@@ -51,7 +51,7 @@
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, MaybeUninit};
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 
 use crate::util::vstructs::{Native, Plain};
 
@@ -215,7 +215,8 @@ macro_rules! atomic_word {
         }
     )* };
 }
-atomic_word!(bool => AtomicBool, u8 => AtomicU8, u16 => AtomicU16, u32 => AtomicU32, u64 => AtomicU64);
+atomic_word!(bool => AtomicBool, u8 => AtomicU8, u16 => AtomicU16, u32 => AtomicU32, u64 => AtomicU64,
+             usize => AtomicUsize);
 
 /// A @T read by anyone, a word at a time, as C reads its fields, and written
 /// only by a writer had where writing it is serialized - a Lock's
