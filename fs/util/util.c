@@ -1037,7 +1037,7 @@ __cold void bch2_bio_to_text(struct printbuf *out, struct bio *bio)
 	prt_printf(out, "bi_iter.bi_sector\t%llu\n",	(u64) bio->bi_iter.bi_sector);
 	prt_printf(out, "bi_iter.bi_size\t%u\n",	bio->bi_iter.bi_size);
 	prt_printf(out, "bi_iter.bi_idx\t%u\n",		bio->bi_iter.bi_idx);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
+#if !defined(__KERNEL__) || LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
 	prt_printf(out, "bi_iter.bi_bvec_done\t%u\n",	bio->bi_iter.bi_bvec_done);
 #else
 	prt_printf(out, "bi_iter.bi_offset\t%u\n",	bio->bi_iter.bi_offset);

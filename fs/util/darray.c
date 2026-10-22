@@ -24,7 +24,7 @@ int __bch2_darray_resize_noprof(darray_char *d, size_t element_size, size_t new_
 			return -ENOMEM;
 
 		void *old = d->data;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6,18,0)
+#if defined(__KERNEL__) && LINUX_VERSION_CODE < KERNEL_VERSION(6,18,0)
 		void *new = likely(bytes < INT_MAX)
 			? kvmalloc_noprof(bytes, gfp)
 			: vmalloc_noprof(bytes);

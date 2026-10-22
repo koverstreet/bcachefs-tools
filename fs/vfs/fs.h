@@ -13,7 +13,7 @@
 #include <linux/stat.h>
 #include <linux/version.h>
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6,19,0)
+#if !defined(__KERNEL__) || LINUX_VERSION_CODE < KERNEL_VERSION(6,19,0)
 static inline unsigned inode_state_read(struct inode *inode)
 {
 	return inode->i_state;

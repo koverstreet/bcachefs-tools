@@ -1155,7 +1155,7 @@ static void bch2_read_endio(struct bio *bio)
 	if (rbio->bounce) {
 		rbio->bio.bi_iter.bi_size	= rbio->pick.crc.compressed_size << 9;
 		rbio->bio.bi_iter.bi_idx	= 0;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
+#if !defined(__KERNEL__) || LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
 		rbio->bio.bi_iter.bi_bvec_done	= 0;
 #else
 		rbio->bio.bi_iter.bi_offset	= 0;
