@@ -3,7 +3,7 @@
 //! sleep_until(): the loop every wait is - set the task state, check the
 //! condition, schedule() - with the condition a closure, and no wait queue.
 //! Whatever makes the condition true wakes the task itself: through a Waker
-//! it was handed (gather.rs's task_waker()), or a futex_wake().
+//! it was handed - task_waker(), below - or a futex_wake().
 //!
 //! The state is set before the check, so a wake landing between the check
 //! and schedule() makes schedule() return at once: no wakeup is lost. The
@@ -21,6 +21,7 @@ use crate::c;
 use core::convert::Infallible;
 use core::ffi::{c_long, c_uint, c_ulong};
 use core::marker::PhantomData;
+use core::task::{RawWaker, RawWakerVTable, Waker};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SleepError {
@@ -124,4 +125,42 @@ pub fn sleep_until<T, E: SleepEnd>(how: Sleep<E>, mut cond: impl FnMut() -> Opti
     };
     unsafe { c::bch2_set_current_state_running() };
     ret
+}
+
+/// A Waker for a blocking wait: wakes this task - current - and holds a ref
+/// on it, so whatever wakes it can do so after the waiter may have returned.
+pub fn task_waker() -> Waker {
+    // SAFETY: a ref on ourself, the Waker's
+    unsafe {
+        let task = c::bch2_current();
+        assert!(!task.is_null(), "a blocking wait needs a task - a kthread, in userspace");
+        c::get_task_struct(task);
+        Waker::from_raw(RawWaker::new(task.cast(), &TASK_WAKER))
+    }
+}
+
+static TASK_WAKER: RawWakerVTable = RawWakerVTable::new(task_clone, task_wake, task_wake_by_ref, task_drop);
+
+unsafe fn task_clone(p: *const ()) -> RawWaker {
+    // SAFETY: a task_waker()'s task, a ref held
+    unsafe { c::get_task_struct(p.cast_mut().cast()) };
+    RawWaker::new(p, &TASK_WAKER)
+}
+
+unsafe fn task_wake(p: *const ()) {
+    // SAFETY: an owned Waker: woken, then its ref put
+    unsafe {
+        task_wake_by_ref(p);
+        task_drop(p);
+    }
+}
+
+unsafe fn task_wake_by_ref(p: *const ()) {
+    // SAFETY: a ref held
+    unsafe { c::wake_up_process(p.cast_mut().cast()) };
+}
+
+unsafe fn task_drop(p: *const ()) {
+    // SAFETY: the Waker's ref
+    unsafe { c::put_task_struct(p.cast_mut().cast()) };
 }

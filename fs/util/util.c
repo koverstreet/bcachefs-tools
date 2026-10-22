@@ -1595,7 +1595,7 @@ bool bch2_kthread_should_stop(void)
 }
 
 /*
- * For util/sleep.rs and util/gather.rs: current, set_current_state() and
+ * For util/sleep.rs: current, set_current_state() and
  * signal_pending_state() are macros, or inlines over current.
  */
 struct task_struct *bch2_current(void)

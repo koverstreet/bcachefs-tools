@@ -50,9 +50,8 @@
 //! The Waker is woken in the last put's context - an endio's, interrupt
 //! context perhaps - so its wake must be safe there: the executor's is.
 
-use crate::c;
 use crate::errcode::BchError;
-use crate::util::sleep::{sleep_until, Sleep};
+use crate::util::sleep::{sleep_until, task_waker, Sleep};
 use crate::util::task::Resumable;
 use core::marker::PhantomPinned;
 use core::mem::ManuallyDrop;
@@ -203,44 +202,6 @@ impl Slot {
 unsafe fn waker_from((data, vtable): RawParts) -> Waker {
     // SAFETY: the caller's
     unsafe { Waker::from_raw(RawWaker::new(data, &*vtable)) }
-}
-
-/// A sync wait's Waker: wakes the waiting task - current - and holds a ref
-/// on it, so the last put can wake it after the waiter may have returned.
-fn task_waker() -> Waker {
-    // SAFETY: a ref on ourself, the Waker's
-    unsafe {
-        let task = c::bch2_current();
-        assert!(!task.is_null(), "a sync wait needs a task - a kthread, in userspace");
-        c::get_task_struct(task);
-        Waker::from_raw(RawWaker::new(task.cast(), &TASK_WAKER))
-    }
-}
-
-static TASK_WAKER: RawWakerVTable = RawWakerVTable::new(task_clone, task_wake, task_wake_by_ref, task_drop);
-
-unsafe fn task_clone(p: *const ()) -> RawWaker {
-    // SAFETY: a task_waker()'s task, a ref held
-    unsafe { c::get_task_struct(p.cast_mut().cast()) };
-    RawWaker::new(p, &TASK_WAKER)
-}
-
-unsafe fn task_wake(p: *const ()) {
-    // SAFETY: an owned Waker: woken, then its ref put
-    unsafe {
-        task_wake_by_ref(p);
-        task_drop(p);
-    }
-}
-
-unsafe fn task_wake_by_ref(p: *const ()) {
-    // SAFETY: a ref held
-    unsafe { c::wake_up_process(p.cast_mut().cast()) };
-}
-
-unsafe fn task_drop(p: *const ()) {
-    // SAFETY: the Waker's ref
-    unsafe { c::put_task_struct(p.cast_mut().cast()) };
 }
 
 impl<T: Fold, W: Width> Gather<T, W> {
