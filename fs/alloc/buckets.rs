@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::accounting::{bucket_data_type_mismatch, data_type, data_type_from_u8};
+use crate::accounting::{self, bucket_data_type_mismatch, data_type, data_type_from_u8};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeySC};
+use crate::btree::bkey_methods::TriggerOp;
 use crate::btree::iter::{BtreeTrans, TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::c::bch_errcode;
@@ -261,6 +262,74 @@ pub unsafe fn __bch2_bucket_ref_update<'t>(
     ret_to_c(t.bucket_ref_update_slowpath(ca, k, ptr, sectors, ptr_data_type, b_gen,
                                           bucket_data_type, bucket_sectors))
 }
+
+// ── Triggers ─────────────────────────────────────────────────────────────
+
+/// A reservation's sectors, by replica count - and in a snapshot, its key,
+/// and the sectors it reserves at all its replicas: reservations carry no
+/// pointers, so the snapshot's sectors, summed from extents' pointers, never
+/// had them. Its key counted here, with them, as an extent's is, not by
+/// trigger_snapshot_nr_keys(): bch2_trigger_reservation().
+fn trigger_reservation(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError> {
+    if !op.flags.intersects(UpdateTriggerFlags::TRANSACTIONAL | UpdateTriggerFlags::GC) {
+        return Ok(());
+    }
+    let gc = op.flags.contains(UpdateTriggerFlags::GC);
+
+    op.run_overwrite_then_insert(|k, flags| {
+        let nr_replicas = k.arm::<c::Reservation>().expect("a reservation").v().nr_replicas;
+        let nr: i64 = if flags.contains(UpdateTriggerFlags::OVERWRITE) { -1 } else { 1 };
+        let sectors = nr * i64::from(k.k.size);
+
+        accounting::add(t, &c::disk_accounting_pos::from_arm(c::bch_acct_persistent_reserved { nr_replicas }),
+                        &[sectors], gc)?;
+
+        if op.level == 0 && k.k.p.snapshot != 0 {
+            let acct = c::disk_accounting_pos::from_arm(c::bch_acct_snapshot { id: k.k.p.snapshot, btree: op.btree.0 });
+            accounting::add(t, &acct, &[nr, nr * k.k.bytes() as i64, sectors * i64::from(nr_replicas)], gc)?;
+        }
+        Ok(())
+    })
+}
+
+crate::key_trigger!(bch2_trigger_reservation => trigger_reservation);
+
+/// Whether @k counts in its snapshot's keys: not a whiteout - iteration skips
+/// those, so snapshot deletion never sees them - nor an extent or a
+/// reservation, which count themselves.
+fn snapshot_key_counted(k: &c::bkey) -> bool {
+    k.p.snapshot != 0 &&
+        !k.is_extent_whiteout() &&
+        !k.is::<c::Extent>() &&
+        !k.is::<c::Reservation>()
+}
+
+/// Each (snapshot, btree)'s leaf keys and their bytes, so snapshot deletion
+/// can check a node is empty before splicing it out: the delta from @op's old
+/// key to its new - the transactional dispatch passes a deleted key for the
+/// side not running, the gc and mem dispatch both real keys at once. Not in
+/// the atomic phase, which only applies deltas already staged:
+/// bch2_trigger_snapshot_nr_keys().
+fn trigger_snapshot_nr_keys(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Result<(), BchError> {
+    if op.level != 0 || op.flags.contains(UpdateTriggerFlags::ATOMIC) {
+        return Ok(());
+    }
+
+    let counted = |k: &c::bkey| snapshot_key_counted(k).then(|| k.bytes() as i64);
+    let (new, old) = (counted(op.new.k), counted(op.old.k));
+
+    let nr    = i64::from(new.is_some()) - i64::from(old.is_some());
+    let bytes = new.unwrap_or(0) - old.unwrap_or(0);
+    if nr == 0 && bytes == 0 {
+        return Ok(());
+    }
+
+    // [nr_keys, key_bytes, external_sectors]: extents and reservations count sectors
+    let acct = c::disk_accounting_pos::from_arm(c::bch_acct_snapshot { id: op.new.k.p.snapshot, btree: op.btree.0 });
+    accounting::add(t, &acct, &[nr, bytes, 0], op.flags.contains(UpdateTriggerFlags::GC))
+}
+
+crate::key_trigger!(bch2_trigger_snapshot_nr_keys => trigger_snapshot_nr_keys);
 
 // ── Usage ────────────────────────────────────────────────────────────────
 

@@ -38,7 +38,7 @@ static inline bool bch2_bkey_maybe_mergable(const struct bkey *l, const struct b
 
 bool bch2_bkey_merge(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 
-/* Defined in alloc/buckets.c; forward-declared here to avoid an include cycle. */
+/* Defined in alloc/buckets.rs; forward-declared here to avoid an include cycle. */
 int bch2_trigger_snapshot_nr_keys(struct btree_trans *, struct btree_trigger_op);
 
 static inline int bch2_key_trigger(struct btree_trans *trans,

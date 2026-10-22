@@ -379,20 +379,6 @@ static inline int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_d
 	return 0;
 }
 
-int bch2_trigger_reservation(struct btree_trans *, struct btree_trigger_op);
-int bch2_trigger_snapshot_nr_keys(struct btree_trans *, struct btree_trigger_op);
-
-#define trigger_run_overwrite_then_insert(_fn, _trans, _btree_id, _level, _old, _new, _flags)\
-({												\
-	int ret = 0;										\
-												\
-	if (_old.k->type)									\
-		ret = _fn(_trans, _btree_id, _level, _old, _flags & ~BTREE_TRIGGER_insert);	\
-	if (!ret && _new.k->type)								\
-		ret = _fn(_trans, _btree_id, _level, _new.s_c, _flags & ~BTREE_TRIGGER_overwrite);\
-	ret;											\
-})
-
 void bch2_trans_account_disk_usage_change(struct btree_trans *);
 
 int bch2_trans_mark_metadata_bucket(struct btree_trans *, struct bch_dev *, u64,
