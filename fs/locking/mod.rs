@@ -16,8 +16,9 @@
 //! Noio<R> (noio.rs) is any lock, held in a PF_MEMALLOC_NOIO scope - itself
 //! a RawLock, C's struct mutex_noio when R is a mutex. A seqmutex
 //! (seqmutex.rs) is a mutex that can be dropped and taken back only if no one
-//! took it meanwhile. SeqLock (seqlock.rs) is the one lock with no C state:
-//! atomics, its readers copying out.
+//! took it meanwhile. SeqLock (seqlock.rs) and ByteLock (bytelock.rs) have no
+//! C state: atomics - SeqLock's readers copying out, ByteLock a sleeping lock
+//! in one byte, on util/futex.rs.
 //!
 //! compat.rs is what exists because C owns the lock or holds it calling in,
 //! and goes as the C does.
@@ -29,6 +30,7 @@
 //! seqmutex API; locking.c, the C that Rust calls where C has a macro, or a
 //! static inline in one build or the other.
 
+pub mod bytelock;
 mod compat;
 mod lock;
 mod noio;
@@ -37,6 +39,7 @@ mod seqlock;
 pub mod seqmutex;
 
 pub use crate::new_lock;
+pub use bytelock::ByteLock;
 pub use raw::{mutex, percpu_rw_semaphore, rw_semaphore, spinlock_t};
 pub use lock::{Guard, Lock, LockedBy, RawLock, RawRwLock, RawTryLock, ReadGuard};
 pub use noio::{mutex_noio, percpu_rwsem_noio, MemallocFlags, MutexNoio, Noio, PercpuRwsemNoio};
