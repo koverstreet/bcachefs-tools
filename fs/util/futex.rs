@@ -201,3 +201,43 @@ pub fn futex_wake(addr: *const (), n: usize) -> usize {
         }
     }
 }
+
+/// wait_event(), on a futex: for a condition over state that isn't a futex
+/// word. Every change to the state is followed by a wake(), which bumps the
+/// count; a waiter reads the count before checking its condition, so a
+/// change after the check leaves the count moved and the wait returns.
+pub struct EventCount(AtomicU32);
+
+impl EventCount {
+    pub const fn new() -> Self {
+        EventCount(AtomicU32::new(0))
+    }
+
+    /// Read before checking the condition, for wait().
+    pub fn snapshot(&self) -> u32 {
+        self.0.load(Ordering::Acquire)
+    }
+
+    /// Sleep until a wake() after @seen - or at once, if there's been one.
+    pub fn wait<E: SleepEnd>(&self, seen: u32, how: Sleep<E>) -> Result<(), E> {
+        futex_wait(&self.0, seen, how)
+    }
+
+    pub fn wait_until<T, E: SleepEnd + Copy>(&self, how: Sleep<E>,
+                                             mut cond: impl FnMut() -> Option<T>)
+        -> Result<T, E>
+    {
+        loop {
+            let seen = self.snapshot();
+            if let Some(v) = cond() {
+                return Ok(v);
+            }
+            self.wait(seen, how)?;
+        }
+    }
+
+    pub fn wake(&self) {
+        self.0.fetch_add(1, Ordering::Release);
+        futex_wake(ptr::from_ref(&self.0).cast(), usize::MAX);
+    }
+}
