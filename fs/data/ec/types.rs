@@ -4,7 +4,8 @@
 
 use crate::cstructs::c;
 use crate::locking::{ByteLock, Lock};
-use crate::types::{GenRadix, c_default};
+use crate::types::{c_default, rust_only};
+use crate::util::genradix::SharedGenRadix;
 use core::ffi::c_long;
 use cstruct_macros::{bitfield, CStruct, TypeInfo};
 use nestify::nest;
@@ -92,6 +93,8 @@ pub struct bch_fs_ec {
 
     pub block_bioset: c::bio_set,
 
-    pub gc_stripes: GenRadix<c::gc_stripe>,
+    /// gc's copies of the stripes: trigger.rs's alone - allocated as the gc
+    /// triggers find them, from several threads at once.
+    pub(crate) gc_stripes: rust_only!(SharedGenRadix<c::gc_stripe>),
 }
 c_default!(bch_fs_ec);

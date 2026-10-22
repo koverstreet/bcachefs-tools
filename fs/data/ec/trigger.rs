@@ -17,6 +17,7 @@ use crate::data::ptrs::{bkey_ptrs_validate, extent_ptr_to_text};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
+use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::{cast_plain, ArmRef, Validated};
@@ -166,6 +167,42 @@ fn ptr_in_block(stripe_ptr: &c::bch_extent_ptr, data_ptr: &c::bch_extent_ptr, se
         data_ptr.generation() == stripe_ptr.generation() &&
         data_ptr.offset() >= stripe_ptr.offset() &&
         data_ptr.offset() < stripe_ptr.offset() + sectors
+}
+
+// ── gc's stripes ─────────────────────────────────────────────────────────
+
+impl c::bch_fs_ec {
+    /// gc's copy of stripe @idx, if it has one.
+    pub fn gc_stripe(&self, idx: u64) -> Option<&c::gc_stripe> {
+        // SAFETY: an entry - a Lock, all of whose state is behind its lock
+        self.gc_stripes.get_raw(idx as usize).map(|m| unsafe { m.as_ref() })
+    }
+
+    /// gc_stripe(), allocated - zeroed, not alive - if it wasn't.
+    pub fn gc_stripe_alloc(&self, idx: u64, gfp: c::gfp_t) -> Result<&c::gc_stripe, AllocError> {
+        self.gc_stripes.prealloc(idx as usize, gfp)?;
+        Ok(self.gc_stripe(idx).expect("an entry, allocated"))
+    }
+}
+
+#[c_export]
+pub fn bch2_gc_stripe_get(c: &Opaque<c::bch_fs>, idx: u64) -> *mut c::gc_stripe {
+    Fs::from_c(c).ec.gc_stripe(idx).map_or(core::ptr::null_mut(), |m| core::ptr::from_ref(m).cast_mut())
+}
+
+/// NULL if it couldn't be allocated.
+#[c_export]
+pub fn bch2_gc_stripe_alloc(c: &Opaque<c::bch_fs>, idx: u64, gfp: c::gfp_t) -> *mut c::gc_stripe {
+    Fs::from_c(c).ec.gc_stripe_alloc(idx, gfp).map_or(core::ptr::null_mut(), |m| core::ptr::from_ref(m).cast_mut())
+}
+
+/// # Safety
+/// gc is done with them: gc.pos is back to not_running. Not fenced from a
+/// commit's gc trigger that saw it running - as reflink's gc table isn't:
+/// see ReflinkGc.
+#[c_export]
+pub unsafe fn bch2_gc_stripes_free(c: &Opaque<c::bch_fs>) {
+    unsafe { Fs::from_c(c).ec.gc_stripes.free() }
 }
 
 /// @sectors added to block @idx's count in stripe @k, wrapping to a u16 as C's.

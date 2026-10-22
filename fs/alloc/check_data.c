@@ -377,7 +377,7 @@ static int bch2_check_fix_ptr(struct btree_trans *trans,
 	}
 
 	if (p.has_ec) {
-		struct gc_stripe *m = genradix_ptr(&c->ec.gc_stripes, p.ec.idx);
+		struct gc_stripe *m = bch2_gc_stripe_get(c, p.ec.idx);
 
 		if (ret_fsck_err_on(!m || !m->alive,
 				trans, ptr_to_missing_stripe,

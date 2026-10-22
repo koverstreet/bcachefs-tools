@@ -486,7 +486,7 @@ static int bch2_trigger_stripe_ptr(struct btree_trans *trans,
 	}
 
 	if (flags & BTREE_TRIGGER_gc) {
-		struct gc_stripe *m = genradix_ptr_alloc(&c->ec.gc_stripes, p.ec.idx, GFP_KERNEL);
+		struct gc_stripe *m = bch2_gc_stripe_alloc(c, p.ec.idx, GFP_KERNEL);
 		if (!m) {
 			bch_err(c, "error allocating memory for gc_stripes, idx %llu",
 				(u64) p.ec.idx);

@@ -456,7 +456,7 @@ int bch2_trigger_stripe(struct btree_trans *trans, struct btree_trigger_op op)
 
 		struct gc_stripe *gc = NULL;
 		if (op.flags & BTREE_TRIGGER_gc) {
-			gc = genradix_ptr_alloc(&c->ec.gc_stripes, idx, GFP_KERNEL);
+			gc = bch2_gc_stripe_alloc(c, idx, GFP_KERNEL);
 			if (!gc) {
 				bch_err(c, "error allocating memory for gc_stripes, idx %llu", idx);
 				return bch_err_throw(c, ENOMEM_mark_stripe);
@@ -518,7 +518,7 @@ int bch2_trigger_stripe(struct btree_trans *trans, struct btree_trigger_op op)
 static int __ec_stripe_mem_alloc(struct bch_fs *c, size_t idx, gfp_t gfp)
 {
 	if (c->gc.pos.phase != GC_PHASE_not_running &&
-	    !genradix_ptr_alloc(&c->ec.gc_stripes, idx, gfp))
+	    !bch2_gc_stripe_alloc(c, idx, gfp))
 		return bch_err_throw(c, ENOMEM_ec_stripe_mem_alloc);
 
 	return 0;
