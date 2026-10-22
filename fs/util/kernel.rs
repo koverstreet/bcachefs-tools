@@ -80,6 +80,37 @@ pub fn nsecs_to_jiffies(ns: u64) -> core::ffi::c_ulong {
     unsafe { c::nsecs_to_jiffies(ns) as core::ffi::c_ulong }
 }
 
+#[cfg(kernel)]
+pub struct Comm([u8; c::TASK_COMM_LEN as usize]);
+
+#[cfg(kernel)]
+impl Comm {
+    pub fn as_cstr(&self) -> &core::ffi::CStr {
+        core::ffi::CStr::from_bytes_until_nul(&self.0).expect("comm is NUL terminated")
+    }
+}
+
+#[cfg(kernel)]
+impl core::fmt::Display for Comm {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        use core::fmt::Write;
+        match self.as_cstr().to_str() {
+            Ok(s) => f.write_str(s),
+            // A comm is bytes: what isn't ASCII, escaped
+            Err(_) => self.as_cstr().to_bytes().iter().try_for_each(|&b| match b.is_ascii() {
+                true  => f.write_char(b as char),
+                false => write!(f, "\\x{b:02x}"),
+            }),
+        }
+    }
+}
+
+#[cfg(kernel)]
+pub fn current_comm() -> Comm {
+    // SAFETY: our own task's comm, which only we set
+    Comm(unsafe { (*c::get_current()).comm })
+}
+
 /// Whether this task has been sent a fatal signal: as
 /// fatal_signal_pending(current).
 pub fn fatal_signal_pending() -> bool {
