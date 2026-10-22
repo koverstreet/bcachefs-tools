@@ -191,8 +191,9 @@ fn test_iterate_extents(fs: &Fs, nr: u64) -> TestRet {
 }
 
 /// BtreeIterFlags::TRIM: each extent comes back cut to the window - the
-/// iterator's position to the end it's peeked to - while the walk still steps
-/// over whole keys; a slot peeked mid-extent starts where it was peeked.
+/// iterator's position to the end it's peeked to, or backwards the min it's
+/// peeked to up to the position - while the walk still steps over whole keys;
+/// a slot peeked mid-extent starts where it was peeked.
 fn test_iterate_extents_trim(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
@@ -255,6 +256,33 @@ fn test_iterate_extents_trim(fs: &Fs, nr: u64) -> TestRet {
         Ok(())
     })?;
     assert_eq!(i, end);
+
+    // Backwards: cut to [min, the iterator's position), each extent ending
+    // where the last started - the walk stepping over whole keys
+    let (min, end) = (4, nr - 4);
+    let mut i = end;
+    let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, end, u32::MAX),
+                                  BtreeIterFlags::TRIM);
+    iter.for_each_reverse(&trans, pos(0, min), |_, _, k| {
+        assert_eq!({ k.k.p.offset }, i, "{} isn't the extent ending at {i}", k.k);
+        assert!(k.k.start_offset() >= min, "{} before the min, {min}", k.k);
+        i = k.k.start_offset();
+        Ok(())
+    })?;
+    assert_eq!(i, min);
+
+    // One extent straddling both ends of the window, the iterator left at the
+    // end of what's returned; and an empty window, the iterator left at min
+    let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, 6, u32::MAX),
+                                  BtreeIterFlags::TRIM);
+    let peeks = lockrestart_do(&trans, |t| {
+        let k = iter.peek_prev_min(t, pos(0, 2))?.map(|k| (k.k.start_offset(), k.k.p.offset));
+        let k_pos = iter.pos().offset;
+        iter.set_pos(spos(0, 2, u32::MAX));
+        let empty = iter.peek_prev_min(t, pos(0, 2))?.is_none();
+        Ok(((k, k_pos), (empty, iter.pos().offset)))
+    })?;
+    assert_eq!(peeks, ((Some((2, 6)), 6), (true, 2)));
     Ok(())
 }
 

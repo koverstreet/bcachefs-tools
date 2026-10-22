@@ -3141,6 +3141,9 @@ static struct bkey_s_c btree_iter_peek_visible_at(struct btree_iter *iter, struc
 	return k;
 }
 
+static struct bkey_s_c __bch2_btree_iter_peek_slot(struct btree_iter *, struct bpos,
+						   unsigned long);
+
 /**
  * bch2_btree_iter_peek_prev_min() - returns first key less than or equal to
  * iterator's current position
@@ -3157,12 +3160,18 @@ static struct bkey_s_c btree_iter_peek_visible_at(struct btree_iter *iter, struc
  * position's versions furthest ancestor first; the nearest is found forwards
  * instead (btree_iter_peek_visible_at()), once per position that has one.
  *
+ * With BTREE_ITER_trim, an extent is cut to [@end, iter->pos), and iter->pos
+ * is left at the end of what's returned.
+ *
  * Returns:	key if found, or an error extractable with bkey_err().
  */
 struct bkey_s_c bch2_btree_iter_peek_prev_min(struct btree_iter *iter, struct bpos end)
 {
-	/* reverse peeks don't trim - and peek_slot() below would */
-	EBUG_ON(iter->flags & BTREE_ITER_trim);
+	/* trimming, the window is [@end, iter->pos): nothing in an empty one */
+	if (bch2_btree_iter_trims(iter) && bkey_le(iter->pos, end)) {
+		bch2_btree_iter_set_pos(iter, end);
+		return bkey_s_c_null;
+	}
 
 	if ((iter->flags & (BTREE_ITER_is_extents|BTREE_ITER_filter_snapshots)) &&
 	   !bkey_eq(iter->pos, POS_MAX) &&
@@ -3175,16 +3184,17 @@ struct bkey_s_c bch2_btree_iter_peek_prev_min(struct btree_iter *iter, struct bp
 		 *
 		 * Thus, for extents we need to search forward until we find a
 		 * real visible extents - easiest to just use peek_slot() (which
-		 * internally uses peek() for extents)
+		 * internally uses peek() for extents) - untrimmed, as that would
+		 * cut it to the wrong side of iter->pos
 		 */
-		struct bkey_s_c k = bch2_btree_iter_peek_slot(iter);
+		struct bkey_s_c k = __bch2_btree_iter_peek_slot(iter, SPOS_MAX, _RET_IP_);
 		if (bkey_err(k))
 			return k;
 
 		if (!bkey_deleted(k.k) &&
 		    (!(iter->flags & BTREE_ITER_is_extents) ||
 		     bkey_lt(bkey_start_pos(k.k), iter->pos)))
-			return k;
+			return btree_iter_maybe_trim(iter, k, end, iter->pos);
 	}
 
 	struct btree_trans *trans = iter->trans;
@@ -3277,6 +3287,8 @@ struct bkey_s_c bch2_btree_iter_peek_prev_min(struct btree_iter *iter, struct bp
 
 	if (iter->flags & BTREE_ITER_filter_snapshots)
 		iter->pos.snapshot = iter->snapshot;
+
+	k = btree_iter_maybe_trim(iter, k, end, iter->pos);
 out_no_locked:
 	bch2_btree_iter_verify_entry_exit(iter);
 	bch2_btree_iter_verify(iter);
