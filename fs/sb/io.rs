@@ -12,11 +12,15 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past,
 #[cfg(feature = "std")]
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_int, c_uint, CStr};
+use crate::util::alloc::KVVec;
 use crate::util::bio::{Bio, BioOwner};
+use crate::util::gather::Gather;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::NSEC_PER_SEC;
 use cstruct_macros::c_export;
 use core::mem::{size_of, size_of_val};
+use core::pin::Pin;
+use pin_init::PinInit;
 
 /// A superblock section's type: an arm of tagged_union! bch_sb_field, which
 /// gives its field type - handed out as its ArmRef says, a short one, written
@@ -1946,7 +1950,7 @@ impl SbResize for FsSbResize<'_> {
 pub struct DevSbMut<'a> {
     fs_sb: &'a bch_sb,
     io:    &'a mut c::bch_sb_io,
-    dev:   &'a c::bch_sb_bdev,
+    ca:    &'a c::bch_dev,
 }
 
 impl Fs {
@@ -1972,7 +1976,7 @@ impl Fs {
         // SAFETY: @sb holds sb_lock, which protects it - mutably borrowed, so
         // nothing else of it is
         let io = unsafe { ca.disk_sb.protected_mut() };
-        (!io.buf.sb.is_null()).then(|| DevSbMut { fs_sb: sb.sb(), io, dev: &ca.disk_sb })
+        (!io.buf.sb.is_null()).then(|| DevSbMut { fs_sb: sb.sb(), io, ca })
     }
 }
 
@@ -2012,7 +2016,7 @@ impl DevSbMut<'_> {
     }
 
     fn resize(&mut self) -> DevSbResize<'_> {
-        DevSbResize { io: self.io, dev: self.dev }
+        DevSbResize { io: self.io, dev: &self.ca.disk_sb }
     }
 }
 
@@ -2039,6 +2043,101 @@ impl core::ops::DerefMut for DevSbResize<'_> {
 impl SbResize for DevSbResize<'_> {
     fn sb_realloc(&mut self, u64s: u32) -> Result<(), BchError> {
         self.io.realloc(self.dev, u64s)
+    }
+}
+
+impl Fs {
+    /// @devs' superblocks, to edit together - as dev_sb_mut() gives each, and
+    /// None for one with none, not attached. Panics if one's twice in @devs.
+    pub fn dev_sbs_mut<'a, D: core::ops::Deref<Target = c::bch_dev>>(&self, sb: &'a mut SbLockGuard<'_>, devs: &'a [D])
+        -> impl Iterator<Item = Option<DevSbMut<'a>>>
+    {
+        let sb: &'a SbLockGuard<'_> = sb;
+        let mut seen = crate::c::DevsMask::default();
+        for ca in devs {
+            self.dev_sb_check(sb, ca);
+            assert!(!seen.test(ca.dev_idx.into()), "dev_sbs_mut(): device {} twice", ca.dev_idx);
+            seen.set(ca.dev_idx.into());
+        }
+
+        let fs_sb = sb.sb();
+        devs.iter().map(move |ca| {
+            // SAFETY: as dev_sb_mut()'s - each device's once, by @seen
+            let io = unsafe { ca.disk_sb.protected_mut() };
+            (!io.buf.sb.is_null()).then(|| DevSbMut { fs_sb, io, ca })
+        })
+    }
+}
+
+// ── Superblock IOs in flight together ────────────────────────────────────
+
+/// A device's superblock with an IO in flight on it - its bio, mapped to its
+/// buffer or to @buf: nothing of either reachable until SbIos::wait() hands
+/// it back.
+struct Frozen<'a> {
+    sb:  DevSbMut<'a>,
+    buf: Option<&'a mut [u8]>,
+}
+
+/// Superblock IOs to devices, submitted together and waited on together:
+/// C's c->sb_write, for __bch2_write_super()'s fan-outs - the read-backs,
+/// then each round of writes, a SbIos each. Submitting freezes the device's
+/// superblock; wait() hands each back, with its IO's result.
+#[pin_init::pin_data]
+pub struct SbIos<'a> {
+    // first: it waits for the IOs before what they're on is handed back
+    #[pin]
+    gather: Gather<()>,
+    frozen: KVVec<Frozen<'a>>,
+}
+
+impl<'a> SbIos<'a> {
+    pub fn new() -> impl PinInit<Self> {
+        pin_init::pin_init!(Self { gather <- Gather::new(), frozen: KVVec::new() })
+    }
+
+    /// @sb's first @bytes written to @sector of its device, FUA: a copy of it.
+    pub fn write(self: Pin<&mut Self>, sb: DevSbMut<'a>, sector: u64, bytes: usize) -> Result<(), BchError> {
+        // blk-wbt throttles all writes but those with REQ_SYNC and REQ_IDLE
+        let opf = c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_IDLE | c::REQ_META | c::REQ_FUA;
+        self.submit(Frozen { sb, buf: None }, opf, sector, bytes)
+    }
+
+    /// @buf read from @sector of @sb's device.
+    pub fn read(self: Pin<&mut Self>, sb: DevSbMut<'a>, sector: u64, buf: &'a mut [u8]) -> Result<(), BchError> {
+        let opf = c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META;
+        let bytes = buf.len();
+        self.submit(Frozen { sb, buf: Some(buf) }, opf, sector, bytes)
+    }
+
+    fn submit(self: Pin<&mut Self>, f: Frozen<'a>, opf: u32, sector: u64, bytes: usize) -> Result<(), BchError> {
+        let this = self.project();
+        this.frozen.push(f, crate::util::alloc::flags::GFP_KERNEL)
+            .map_err(|_| BchError::from(c::ENOMEM))?;
+        let f = this.frozen.last_mut().expect("just pushed");
+        let r = this.gather.get();
+
+        let (mut bio, sb_buf) = f.sb.io.bio(&f.sb.ca.disk_sb, opf, sector);
+        // SAFETY: frozen: nothing reaches its bio or buffer, or @buf, until
+        // wait() has waited on the gather
+        unsafe {
+            match &mut f.buf {
+                Some(buf) => bio.map_read(buf).submit_gathered(r),
+                None      => bio.map_write(&sb_buf[..bytes]).submit_gathered(r),
+            }
+        }
+        Ok(())
+    }
+
+    /// Every IO complete: each superblock back, with its IO's result.
+    pub fn wait(self: Pin<&mut Self>) -> impl Iterator<Item = (DevSbMut<'a>, Result<(), BchError>)> {
+        let this = self.project();
+        this.gather.wait_sync();
+        core::mem::take(this.frozen).into_iter().map(|f| {
+            // SAFETY: realloc()'s, the superblock's, idle
+            let ret = unsafe { Bio::from_raw(f.sb.io.bio) }.status();
+            (f.sb, ret)
+        })
     }
 }
 
