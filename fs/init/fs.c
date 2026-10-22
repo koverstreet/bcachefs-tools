@@ -77,6 +77,7 @@
 
 #include "util/clock.h"
 #include "util/enumerated_ref.h"
+#include "util/futex_gen.h"
 #include "util/thread_with_file.h"
 
 #include <linux/backing-dev.h>
@@ -1806,6 +1807,7 @@ static int __init bcachefs_init(void)
 {
 	bch2_bkey_pack_test();
 
+	bch2_futex_init();
 	bch2_dirent_init();
 
 	kobject_init(&bcachefs_kobj, &bcachefs_ktype);

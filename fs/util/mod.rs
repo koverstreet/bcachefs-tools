@@ -7,6 +7,7 @@ pub mod darray;
 pub mod debugfs;
 pub mod eytzinger;
 pub mod ffi;
+pub mod futex;
 pub mod gather;
 pub mod genradix;
 pub mod inline_vec;
