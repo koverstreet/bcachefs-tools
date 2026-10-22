@@ -22,9 +22,10 @@
 //!
 //! The types:
 //!
-//! - PerCpu<T> is the field. C allocates it at init and frees it at exit;
-//!   between, it's live for every possible CPU, which every operation takes
-//!   as given, as C's do. Not Copy: nothing holds it past its struct.
+//! - PerCpu<T> is the field. alloc() - or C - allocates it at init, and
+//!   free() frees it at exit; between, it's live for every possible CPU,
+//!   which every operation takes as given, as C's do. Not Copy: nothing holds
+//!   it past its struct.
 //! - PerCpuRef<'a, T> borrows it, or a part of it - at(i), percpu_field!() -
 //!   as every CPU's copy: sum() over all of them; add(), set(), xchg() and
 //!   cmpxchg() on this CPU's, each one operation.
@@ -72,9 +73,11 @@
 
 use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
-use core::mem::MaybeUninit;
+use core::mem::{align_of, size_of, MaybeUninit};
 use cstruct_macros::c_extern;
 
+use crate::c;
+use crate::util::alloc::AllocError;
 use crate::util::projections::{FakePlaceRef, FakePlaceWrite, FakePlaceRead};
 
 c_extern! {
@@ -250,7 +253,27 @@ impl<T> Clone for PerCpuRef<'_, T> {
 
 impl<T> Copy for PerCpuRef<'_, T> {}
 
+impl<T: ::pin_init::Zeroable> PerCpu<T> {
+    /// Every possible CPU's copy, zeroed: alloc_percpu().
+    pub fn alloc() -> Result<Self, AllocError> {
+        // In the kernel, __alloc_percpu() is a macro - alloc_hooks() over
+        // pcpu_alloc_noprof() - which kernel Rust calls directly, as its
+        // allocator does krealloc_noprof()
+        #[cfg(kernel)]
+        let p = unsafe { c::pcpu_alloc_noprof(size_of::<T>(), align_of::<T>(), false, c::GFP_KERNEL) };
+        #[cfg(not(kernel))]
+        let p = unsafe { c::__alloc_percpu(size_of::<T>(), align_of::<T>()) };
+        if p.is_null() { Err(AllocError) } else { Ok(PerCpu(p.cast())) }
+    }
+}
+
 impl<T> PerCpu<T> {
+    /// free_percpu(): unallocated after, as before alloc().
+    pub fn free(&mut self) {
+        unsafe { c::free_percpu(self.0.cast()) };
+        self.0 = core::ptr::null_mut();
+    }
+
     pub fn get(&self) -> PerCpuRef<'_, T> {
         PerCpuRef(self.0, PhantomData)
     }
