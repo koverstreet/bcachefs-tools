@@ -4,6 +4,7 @@
 
 use crate::cstructs::c;
 use crate::fs::Fs;
+use crate::locking::{ByteLock, Lock};
 use crate::util::percpu::Counters;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, bitfield, c_const, c_extern, c_rcu_array, Fieldwise, TypeInfo};
@@ -14,13 +15,21 @@ c_const! {
     pub const BUCKET_JOURNAL_SEQ_BITS: u32 = 16;
 }
 
+/// A bucket's gc state, in memory: fsck has one for every bucket on every
+/// device, so it's 16 bytes, the lock one of them.
+#[repr(C, align(4))]
+#[derive(CStruct)]
+pub struct bucket {
+    #[c_lock("u8 lock")]
+    pub lock: Lock<ByteLock, BucketData>,
+}
+
 nest! {
-    #[repr(C)]
+    /// What a bucket's lock protects. Packed, so it starts right after the
+    /// lock byte; laid out so the u32s are aligned all the same.
+    #[repr(C, packed)]
     #[derive(Clone, Copy, Default, CStruct)]
-    pub struct bucket {
-        /* a ByteLock (locking/bytelock.rs): we care about the size of these -
-         * fsck has one for every bucket on every device */
-        pub lock: u8,
+    pub struct BucketData {
         #[c_bitfield]
         #>[bitfield(u8)]
         pub bits: pub struct bucket_bits {
@@ -28,6 +37,7 @@ nest! {
             data_type: u7,
         },
         pub generation: u8,
+        pub __pad: u8,
         pub dirty_sectors: u32,
         pub cached_sectors: u32,
         pub stripe_sectors: u32,
