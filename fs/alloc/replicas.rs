@@ -161,8 +161,12 @@ pub unsafe fn bch2_replicas_entry_sort(e: *mut Head<c::bch_replicas_entry_v1>) {
     unsafe { from_ffi_mut::<Entry>(e) }.devs.sort_unstable();
 }
 
+/// An entry with room for a key's worth of devices, in bytes: EntryBuf's, and
+/// bch_replicas_padded's.
+const ENTRY_BYTES: usize = DEVS + c::BCH_BKEY_PTRS_MAX as usize;
+
 /// An entry being built, in room for a key's worth of devices.
-struct EntryBuf<'a>(&'a mut [u8; DEVS + c::BCH_BKEY_PTRS_MAX as usize]);
+struct EntryBuf<'a>(&'a mut [u8; ENTRY_BYTES]);
 
 impl EntryBuf<'_> {
     /// # Safety
@@ -234,6 +238,31 @@ fn bkey_to_replicas(fs: &Fs, e: &mut EntryBuf<'_>, k: BkeySC<'_>) {
         None => {}
     }
     e.sort();
+}
+
+/// The replicas accounting position for @data_type data on @devs, of which
+/// @nr_required are needed to read it.
+pub(crate) fn replicas_acct(data_type: c::bch_data_type, nr_required: u8, devs: &[u8]) -> c::disk_accounting_pos {
+    let mut e = Head::<c::bch_replicas_entry_v1>::default();
+    e.data_type   = data_type.0 as u8;
+    e.nr_devs     = devs.len() as u8;
+    e.nr_required = nr_required;
+    c::disk_accounting_pos::from_arm_tailed(e, devs).expect("a key's devices fit an accounting position")
+}
+
+/// replicas_acct() of the entry in @b - an EntryBuf's bytes, or a
+/// bch_replicas_padded's - for @data_type data, whatever type it says.
+pub(crate) fn entry_acct(b: &[u8; ENTRY_BYTES], data_type: c::bch_data_type) -> c::disk_accounting_pos {
+    let nr = usize::from(b[1]);
+    replicas_acct(data_type, b[2], &b[DEVS..DEVS + nr])
+}
+
+/// replicas_acct() of @k's entry, as bkey_to_replicas() makes it, for
+/// @data_type data.
+pub(crate) fn bkey_replicas_acct(fs: &Fs, k: BkeySC<'_>, data_type: c::bch_data_type) -> c::disk_accounting_pos {
+    let mut b = [0; ENTRY_BYTES];
+    bkey_to_replicas(fs, &mut EntryBuf(&mut b), k);
+    entry_acct(&b, data_type)
 }
 
 /// # Safety
