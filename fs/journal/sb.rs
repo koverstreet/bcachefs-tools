@@ -106,6 +106,18 @@ impl SbFieldOps for c::bch_sb_field_journal_v2 {
     }
 }
 
+impl c::journal_device {
+    /// Its journal buckets, in ring order: read as C reads them, without the
+    /// journal's lock - only resizing the journal replaces them.
+    pub fn buckets(&self) -> &[u64] {
+        match self.nr {
+            0 => &[],
+            // SAFETY: @nr of them, allocated with it
+            nr => unsafe { core::slice::from_raw_parts(self.buckets, nr as usize) },
+        }
+    }
+}
+
 /// @ca's journal buckets, in ring order, to its superblock: journal_v2, a
 /// run of contiguous buckets per entry, replacing v1.
 ///
