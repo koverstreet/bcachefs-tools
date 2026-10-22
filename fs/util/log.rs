@@ -285,6 +285,19 @@ macro_rules! bch_log_ratelimited {
     }};
 }
 
+/// A LogMsg at err, suppressed while this call site is ratelimited: C's
+/// CLASS(bch_log_msg_ratelimited).
+#[macro_export]
+macro_rules! log_msg_ratelimited {
+    ($fs:expr) => {{
+        static RATELIMIT: $crate::util::log::Ratelimit = $crate::util::log::Ratelimit::new();
+        let fs: &$crate::fs::Fs = $fs;
+        let mut msg = $crate::util::log::LogMsg::new(fs);
+        msg.set_suppressed(RATELIMIT.suppress(fs, $crate::c_function_name!()));
+        msg
+    }};
+}
+
 #[macro_export]
 macro_rules! bch_err_ratelimited {
     ($fs:expr, $($arg:tt)*) => {
