@@ -336,10 +336,59 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
     pub unsafe fn get_locked(&self) -> &[T] {
         unsafe { self.0.get_locked() }.map_or(&[], |b| &b.s)
     }
+
+    /// get_locked(), and the header.
+    ///
+    /// # Safety
+    /// As RcuBuf::get_locked().
+    pub unsafe fn get_head_locked(&self) -> Option<(&H, &[T])> {
+        unsafe { self.0.get_locked() }.map(|b| (&b.h, &b.s))
+    }
+
+    /// A zeroed buffer of exactly @nr elements, and header @h, filled by
+    /// @fill - the old one isn't copied - and published; if @fill fails,
+    /// freed unpublished. AllocError if there's no buffer, else @fill's
+    /// result.
+    ///
+    /// # Safety
+    /// As RcuBuf::replace(): the caller holds the writers' lock.
+    pub unsafe fn rebuild_head<E>(&self, nr: usize, h: H, fill: impl FnOnce(&mut [T]) -> Result<(), E>)
+        -> Result<Result<(), E>, AllocError>
+    {
+        const { assert!(size_of::<T>() != 0) };
+
+        let tail = RcuArrayBuf::<T, H>::TAIL;
+        let bytes = nr.checked_mul(size_of::<T>())
+            .and_then(|b| b.checked_add(tail))
+            .filter(|&b| b <= i32::MAX as usize)
+            .ok_or(AllocError)?;
+
+        let new = NonNull::new(unsafe { c::rust_kvzalloc(bytes) }.cast::<RcuArrayHead<H>>())
+            .ok_or(AllocError)?;
+
+        // SAFETY: @bytes are ours, zeroed - valid elements; no reader sees
+        // them until replace() publishes them
+        unsafe {
+            (*new.as_ptr()).nr = nr;
+            (&raw mut (*new.as_ptr()).h).write(h);
+            if let Err(e) = fill(core::slice::from_raw_parts_mut(new.as_ptr().byte_add(tail).cast::<T>(), nr)) {
+                c::rust_kvfree(new.as_ptr().cast());
+                return Ok(Err(e));
+            }
+            self.0.replace(new);
+        }
+        Ok(Ok(()))
+    }
+
+    /// # Safety
+    /// As RcuBuf::free().
+    pub unsafe fn free(&self) {
+        unsafe { self.0.free() }
+    }
 }
 
 /// Growing one without a header: a header's fields are its writer's to
-/// carry over, and the only writer of one with a header is C's.
+/// carry over, by rebuild_head().
 impl<T: RcuElement> RcuArray<T> {
 
     /// Room for at least @nr elements: if there isn't, a new buffer, sized to
@@ -370,37 +419,12 @@ impl<T: RcuElement> RcuArray<T> {
         }
     }
 
-    /// A zeroed buffer of exactly @nr elements, filled by @fill - the old one
-    /// isn't copied.
+    /// rebuild_head(), with no header.
     ///
     /// # Safety
     /// As RcuBuf::replace(): the caller holds the writers' lock.
     pub unsafe fn rebuild(&self, nr: usize, fill: impl FnOnce(&mut [T])) -> Result<(), AllocError> {
-        const { assert!(size_of::<T>() != 0) };
-
-        let tail = RcuArrayBuf::<T>::TAIL;
-        let bytes = nr.checked_mul(size_of::<T>())
-            .and_then(|b| b.checked_add(tail))
-            .filter(|&b| b <= i32::MAX as usize)
-            .ok_or(AllocError)?;
-
-        let new = NonNull::new(unsafe { c::rust_kvzalloc(bytes) }.cast::<RcuArrayHead>())
-            .ok_or(AllocError)?;
-
-        // SAFETY: @bytes are ours, zeroed - valid elements; no reader sees
-        // them until replace() publishes them
-        unsafe {
-            (*new.as_ptr()).nr = nr;
-            fill(core::slice::from_raw_parts_mut(new.as_ptr().byte_add(tail).cast::<T>(), nr));
-            self.0.replace(new);
-        }
-        Ok(())
-    }
-
-    /// # Safety
-    /// As RcuBuf::free().
-    pub unsafe fn free(&self) {
-        unsafe { self.0.free() }
+        unsafe { self.rebuild_head(nr, (), |s| Ok::<_, core::convert::Infallible>(fill(s))) }.map(|_| ())
     }
 }
 
