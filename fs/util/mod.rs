@@ -15,6 +15,7 @@ pub mod ioctl;
 pub mod jump_label;
 pub mod kernel;
 pub mod kthread;
+pub mod list;
 pub mod log;
 pub mod module_param;
 pub mod os_str;
