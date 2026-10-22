@@ -2366,6 +2366,24 @@ fn sb_io_result(fs: &Fs, ca: &c::bch_dev, rw: c::bch_member_error_type, ret: Res
     }
 }
 
+/// The devices a superblock write goes to: online, each with a read ref.
+type WriteDevs<'f> = [members::DevIoRef<'f, c::bch_dev_read_ref>];
+
+/// A copy of the superblock that didn't reach its device.
+struct CopyFailed {
+    dev:    u32,
+    offset: u64,
+    err:    BchError,
+}
+
+/// What a write's copies did: the devices any reached, and those that
+/// failed - all of them, if there was memory to list them.
+struct Copies {
+    written:    c::bch_devs_mask,
+    failed:     KVVec<CopyFailed>,
+    any_failed: bool,
+}
+
 /// Written to every online device - or just @devs - copy by copy: each
 /// layout slot to all of them at once, and waited on before the next.
 /// Read back first, to catch a write that was silently dropped, or another
@@ -2374,11 +2392,7 @@ fn sb_io_result(fs: &Fs, ca: &c::bch_dev, rw: c::bch_member_error_type, ret: Res
 fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_devs_mask>,
                       flags: c::bch_sb_write_flags) -> Result<(), BchError> {
     use c::bch_fs_flags as f;
-    use crate::sb::members::SbMembersMut;
-    const READ: c::bch_member_error_type = c::bch_member_error_type::BCH_MEMBER_ERROR_read;
-    const WRITE: c::bch_member_error_type = c::bch_member_error_type::BCH_MEMBER_ERROR_write;
     use crate::util::alloc::flags::GFP_KERNEL;
-    use crate::util::log::LogMsg;
 
     if !fs.flag(f::BCH_FS_may_upgrade_downgrade) {
         return Ok(());
@@ -2398,62 +2412,21 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
 
     fs.event_inc_trace(crate::sb::counters::events::write_super, |_| {});
 
-    let mut degraded_flags = c::BCH_FORCE_IF_DEGRADED;
-    if u32::from(fs.opts().degraded) == c::bch_degraded_actions::BCH_DEGRADED_very.0 {
-        degraded_flags |= c::BCH_FORCE_IF_LOST;
-    }
-
-    if sb.sb().has_journal() {
-        crate::sb::clean::fs_mark_dirty(sb);
-    } else {
-        crate::sb::clean::fs_mark_clean(fs, sb);
-    }
-
     // Note: we do writes to RO devices here, and we might want to change that
     // in the future. For now, we expect to be able to call write_super() when
     // we're not yet RW.
     let mut cas = KVVec::new();
-    let mut failures = KVVec::new();
     for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_write_super) {
         if devs.is_some_and(|d| !d.d.test(ca.dev_idx.into())) {
             continue;
         }
-        if cas.push(ca, GFP_KERNEL).is_err() || failures.push(KVVec::<(u64, BchError)>::new(), GFP_KERNEL).is_err() {
+        if cas.push(ca, GFP_KERNEL).is_err() {
             crate::fs_fatal_error!(fs, "error allocating online devices");
             return Err(c::ENOMEM.into());
         }
     }
 
-    // Make sure we're using the new magic numbers:
-    let s = sb.sb_mut();
-    s.magic.b = BCHFS_MAGIC;
-    s.layout.magic.b = BCHFS_MAGIC;
-    s.seq = Le64::new(s.seq.get() + 1);
-    let seq = s.seq;
-    for ca in cas.iter() {
-        sb.fs_member_mut(ca.dev_idx.into()).seq = seq;
-    }
-
-    let s = sb.sb_mut();
-    s.write_time = Le64::new(crate::util::kernel::ktime_get_real_seconds() as u64);
-    if fs.flag(f::BCH_FS_error) {
-        s.set_has_errors(true);
-    }
-    if fs.flag(f::BCH_FS_topology_error) {
-        s.set_has_topology_errors(true);
-    }
-    s.set_big_endian(cfg!(target_endian = "big"));
-
-    // each section's from_cpu() - sb_to_fs() made those that make their own
-    for from_cpu in section_fns(sb.sb(), |_| true, c::bch_sb_field::from_cpu_fn) {
-        from_cpu(fs, sb)?;
-    }
-    // members_v2's, mirrored - as C, failing doesn't stop the write
-    let _ = fs.sb_resize(sb).members_cpy_v2_v1();
-
-    for mut dev_sb in fs.dev_sbs_mut(sb, &cas).flatten() {
-        let _ = dev_sb.sync();
-    }
+    write_prepare(fs, sb, &cas)?;
 
     for mut dev_sb in fs.dev_sbs_mut(sb, &cas).flatten() {
         let mut err = Printbuf::new();
@@ -2489,55 +2462,118 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
         return fs.throw(bch_errcode::BCH_ERR_sb_not_downgraded);
     }
 
-    // Read back, to compare with what we last wrote
-    {
-        pin_init::stack_pin_init!(let ios = SbIos::new());
-        for dev_sb in fs.dev_sbs_mut(sb, &cas).flatten() {
-            let sector = dev_sb.io.buf.sb().layout.sb_offset[0].get();
-            // SAFETY: once, until its read's waited on
-            let scratch = unsafe { dev_sb.scratch() };
-            scratch.fill(0);
-            dev_sb.ca.io_done_add(crate::util::kernel::READ, c::bch_data_type::BCH_DATA_sb, (scratch.len() >> 9) as u64);
-            ios.as_mut().read(dev_sb, sector, scratch)?;
-        }
+    read_back(fs, sb, &cas)?;
+    let copies = write_copies(fs, sb, &cas)?;
+    write_report(fs, sb, devs, &cas, &copies)
+}
 
-        for (dev_sb, ret) in ios.as_mut().wait() {
-            let ca = dev_sb.ca;
-            if sb_io_result(fs, ca, READ, ret).is_err() {
-                continue;
-            }
+/// The superblock brought up to date for a write to @cas: marked dirty or
+/// clean, its seq - and its members' - the time and flags, each section's
+/// from_cpu(), and each device's copy synced from it.
+fn write_prepare(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs<'_>) -> Result<(), BchError> {
+    use c::bch_fs_flags as f;
+    use crate::sb::members::SbMembersMut;
 
-            // SAFETY: once - its read, which had it, waited on
-            let read = cast_plain::<Head<bch_sb>>(unsafe { dev_sb.scratch() }).expect("a header's worth").seq.get();
-            let expected = dev_sb.io.seq;
-
-            if read != expected {
-                let mut msg = LogMsg::new(fs);
-                crate::util::printbuf::prt_bdevname(&mut msg, Some(ca.disk_sb.bdev()));
-                if read < expected {
-                    prt!(msg, ": Superblock write was silently dropped! (seq {read} expected {expected})");
-                    let errors = u32::from(fs.opts().errors);
-                    if errors == c::bch_error_actions::BCH_ON_ERROR_continue.0 ||
-                       errors == c::bch_error_actions::BCH_ON_ERROR_fix_safe.0 {
-                        continue;
-                    }
-                } else {
-                    prt!(msg, ": Superblock modified by another process (seq {read} expected {expected})");
-                }
-                fs.emergency_read_only(&mut msg);
-                return fs.throw(bch_errcode::BCH_ERR_erofs_sb_err);
-            }
-        }
+    if sb.sb().has_journal() {
+        crate::sb::clean::fs_mark_dirty(sb);
+    } else {
+        crate::sb::clean::fs_mark_clean(fs, sb);
     }
 
-    let mut sb_written = c::bch_devs_mask::default();
-    let mut have_errors = false;
+    // Make sure we're using the new magic numbers:
+    let s = sb.sb_mut();
+    s.magic.b = BCHFS_MAGIC;
+    s.layout.magic.b = BCHFS_MAGIC;
+    s.seq = Le64::new(s.seq.get() + 1);
+    let seq = s.seq;
+    for ca in cas.iter() {
+        sb.fs_member_mut(ca.dev_idx.into()).seq = seq;
+    }
+
+    let s = sb.sb_mut();
+    s.write_time = Le64::new(crate::util::kernel::ktime_get_real_seconds() as u64);
+    if fs.flag(f::BCH_FS_error) {
+        s.set_has_errors(true);
+    }
+    if fs.flag(f::BCH_FS_topology_error) {
+        s.set_has_topology_errors(true);
+    }
+    s.set_big_endian(cfg!(target_endian = "big"));
+
+    // each section's from_cpu() - sb_to_fs() made those that make their own
+    for from_cpu in section_fns(sb.sb(), |_| true, c::bch_sb_field::from_cpu_fn) {
+        from_cpu(fs, sb)?;
+    }
+    // members_v2's, mirrored - as C, failing doesn't stop the write
+    let _ = fs.sb_resize(sb).members_cpy_v2_v1();
+
+    for mut dev_sb in fs.dev_sbs_mut(sb, cas).flatten() {
+        let _ = dev_sb.sync();
+    }
+    Ok(())
+}
+
+/// Each device's primary read back, its seq compared with what was last
+/// written there: a write silently dropped - unless errors=continue or
+/// fix_safe, which only say so - or another writer's, and the filesystem
+/// goes read-only.
+fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs<'_>) -> Result<(), BchError> {
+    use crate::util::log::LogMsg;
+    const READ: c::bch_member_error_type = c::bch_member_error_type::BCH_MEMBER_ERROR_read;
+
+    pin_init::stack_pin_init!(let ios = SbIos::new());
+    for dev_sb in fs.dev_sbs_mut(sb, cas).flatten() {
+        let sector = dev_sb.io.buf.sb().layout.sb_offset[0].get();
+        // SAFETY: once, until its read's waited on
+        let scratch = unsafe { dev_sb.scratch() };
+        scratch.fill(0);
+        dev_sb.ca.io_done_add(crate::util::kernel::READ, c::bch_data_type::BCH_DATA_sb, (scratch.len() >> 9) as u64);
+        ios.as_mut().read(dev_sb, sector, scratch)?;
+    }
+
+    for (dev_sb, ret) in ios.as_mut().wait() {
+        let ca = dev_sb.ca;
+        if sb_io_result(fs, ca, READ, ret).is_err() {
+            continue;
+        }
+
+        // SAFETY: once - its read, which had it, waited on
+        let read = cast_plain::<Head<bch_sb>>(unsafe { dev_sb.scratch() }).expect("a header's worth").seq.get();
+        let expected = dev_sb.io.seq;
+
+        if read != expected {
+            let mut msg = LogMsg::new(fs);
+            crate::util::printbuf::prt_bdevname(&mut msg, Some(ca.disk_sb.bdev()));
+            if read < expected {
+                prt!(msg, ": Superblock write was silently dropped! (seq {read} expected {expected})");
+                let errors = u32::from(fs.opts().errors);
+                if errors == c::bch_error_actions::BCH_ON_ERROR_continue.0 ||
+                   errors == c::bch_error_actions::BCH_ON_ERROR_fix_safe.0 {
+                    continue;
+                }
+            } else {
+                prt!(msg, ": Superblock modified by another process (seq {read} expected {expected})");
+            }
+            fs.emergency_read_only(&mut msg);
+            return fs.throw(bch_errcode::BCH_ERR_erofs_sb_err);
+        }
+    }
+    Ok(())
+}
+
+/// Each layout slot's copy to every device that has one, a slot at a time,
+/// each round waited on before the next.
+fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs<'_>) -> Result<Copies, BchError> {
+    use crate::util::alloc::flags::GFP_KERNEL;
+    const WRITE: c::bch_member_error_type = c::bch_member_error_type::BCH_MEMBER_ERROR_write;
+
+    let mut copies = Copies { written: Default::default(), failed: KVVec::new(), any_failed: false };
 
     for idx in 0.. {
         pin_init::stack_pin_init!(let ios = SbIos::new());
         let mut wrote = false;
 
-        for mut dev_sb in fs.dev_sbs_mut(sb, &cas).flatten() {
+        for mut dev_sb in fs.dev_sbs_mut(sb, cas).flatten() {
             if idx >= usize::from(dev_sb.io.buf.sb().layout.nr_superblocks) {
                 continue;
             }
@@ -2551,14 +2587,13 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
             let ca = dev_sb.ca;
             match sb_io_result(fs, ca, WRITE, ret) {
                 Ok(()) => {
-                    sb_written.d.set(ca.dev_idx.into());
+                    copies.written.d.set(ca.dev_idx.into());
                     dev_sb.io.seq = dev_sb.io.buf.sb().seq.get();
                 }
-                Err(e) => {
+                Err(err) => {
                     let offset = dev_sb.io.buf.sb().layout.sb_offset[idx].get();
-                    let i = cas.iter().position(|c| c.dev_idx == ca.dev_idx).expect("one of ours");
-                    let _ = failures[i].push((offset, e), GFP_KERNEL);
-                    have_errors = true;
+                    let _ = copies.failed.push(CopyFailed { dev: ca.dev_idx.into(), offset, err }, GFP_KERNEL);
+                    copies.any_failed = true;
                 }
             }
         }
@@ -2567,8 +2602,24 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
             break;
         }
     }
+    Ok(copies)
+}
 
-    let nr_wrote = sb_written.d.iter().count();
+/// Nothing, if every copy reached its device. Else, which did: a degraded
+/// write - fewer devices, but enough to mount - is warned of, ratelimited;
+/// one that reached too few to mount is an error, the filesystem going
+/// read-only.
+#[track_caller]
+fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&c::bch_devs_mask>, cas: &WriteDevs<'_>,
+                copies: &Copies) -> Result<(), BchError> {
+    use crate::util::log::LogMsg;
+
+    let mut degraded_flags = c::BCH_FORCE_IF_DEGRADED;
+    if u32::from(fs.opts().degraded) == c::bch_degraded_actions::BCH_DEGRADED_very.0 {
+        degraded_flags |= c::BCH_FORCE_IF_LOST;
+    }
+
+    let nr_wrote = copies.written.d.iter().count();
     let nr_members = match devs {
         Some(_) => cas.len(),
         None    => sb.sb().number_of_devices() as usize,
@@ -2581,9 +2632,9 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
     // previous superblock is still on every device, so the failure here is a
     // missed update, not a lost one.
     let fatal = nr_wrote == 0 ||
-        (devs.is_none() && !fs.can_read_fs_with_devs(&sb_written, degraded_flags, None));
+        (devs.is_none() && !fs.can_read_fs_with_devs(&copies.written, degraded_flags, None));
 
-    if !have_errors && !fatal {
+    if !copies.any_failed && !fatal {
         return Ok(());
     }
 
@@ -2605,17 +2656,19 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
         sb_unwritten.d.set(dev);
     }
 
-    for (ca, failures) in cas.iter().zip(failures.iter()) {
-        sb_unwritten.d.clear(ca.dev_idx.into());
-        crate::sb::members::dev_to_text_short(&mut msg, sb.sb(), ca.dev_idx.into());
+    for ca in cas.iter() {
+        let dev = u32::from(ca.dev_idx);
+        sb_unwritten.d.clear(dev as usize);
+        crate::sb::members::dev_to_text_short(&mut msg, sb.sb(), dev);
 
-        if failures.is_empty() {
+        let mut failed = copies.failed.iter().filter(|f| f.dev == dev).peekable();
+        if failed.peek().is_none() {
             prt!(msg, " (success)");
         } else {
-            for (offset, e) in failures.iter() {
-                prt!(msg, " {offset}={e}");
+            for f in failed {
+                prt!(msg, " {}={}", f.offset, f.err);
             }
-            if sb_written.d.test(ca.dev_idx.into()) {
+            if copies.written.d.test(dev as usize) {
                 prt!(msg, " (partial success)");
             } else {
                 prt!(msg, " (all failed)");
@@ -2634,7 +2687,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
     if fatal {
         prt!(msg, "Unable to write superblock to sufficient devices (from {})\n", core::panic::Location::caller());
         prt!(msg, "Would not be able to mount with written devices\n");
-        fs.can_read_fs_with_devs(&sb_written, degraded_flags, Some(&mut *msg));
+        fs.can_read_fs_with_devs(&copies.written, degraded_flags, Some(&mut *msg));
         fs.emergency_read_only(&mut msg);
         return fs.throw(bch_errcode::BCH_ERR_erofs_sb_err);
     }
