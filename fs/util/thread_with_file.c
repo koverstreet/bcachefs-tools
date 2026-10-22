@@ -255,22 +255,6 @@ static __poll_t thread_with_stdio_poll(struct file *file, struct poll_table_stru
 	return mask;
 }
 
-static __poll_t thread_with_stdout_poll(struct file *file, struct poll_table_struct *wait)
-{
-	struct thread_with_stdio *thr =
-		container_of(file->private_data, struct thread_with_stdio, thr);
-
-	poll_wait(file, &thr->stdio.output.wait, wait);
-
-	__poll_t mask = 0;
-
-	if (stdio_redirect_has_output(&thr->stdio))
-		mask |= EPOLLIN;
-	if (thr->thr.done)
-		mask |= EPOLLHUP|EPOLLERR;
-	return mask;
-}
-
 static int thread_with_stdio_flush(struct file *file, fl_owner_t id)
 {
 	struct thread_with_stdio *thr =
@@ -293,14 +277,6 @@ static const struct file_operations thread_with_stdio_fops = {
 	.read		= thread_with_stdio_read,
 	.write		= thread_with_stdio_write,
 	.poll		= thread_with_stdio_poll,
-	.flush		= thread_with_stdio_flush,
-	.release	= thread_with_stdio_release,
-	.unlocked_ioctl	= thread_with_stdio_ioctl,
-};
-
-static const struct file_operations thread_with_stdout_fops = {
-	.read		= thread_with_stdio_read,
-	.poll		= thread_with_stdout_poll,
 	.flush		= thread_with_stdio_flush,
 	.release	= thread_with_stdio_release,
 	.unlocked_ioctl	= thread_with_stdio_ioctl,
@@ -367,17 +343,6 @@ int bch2_stdio_redirect_get_fd(struct thread_with_stdio *thr,
 	fd_install(fd, file);
 	return fd;
 }
-
-int bch2_run_thread_with_stdout(struct thread_with_stdio *thr,
-				const struct thread_with_stdio_ops *ops)
-{
-	stdio_buf_init(&thr->stdio.input);
-	stdio_buf_init(&thr->stdio.output);
-	thr->ops = ops;
-
-	return bch2_run_thread_with_file(&thr->thr, &thread_with_stdout_fops, thread_with_stdio_fn);
-}
-EXPORT_SYMBOL_GPL(bch2_run_thread_with_stdout);
 
 int bch2_stdio_redirect_read(struct stdio_redirect *stdio, char *ubuf, size_t len)
 {

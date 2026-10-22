@@ -21,8 +21,6 @@ int bch2_run_thread_with_stdio(struct thread_with_stdio *,
 int bch2_stdio_redirect_get_fd(struct thread_with_stdio *,
 			       const struct thread_with_stdio_ops *,
 			       struct file **);
-int bch2_run_thread_with_stdout(struct thread_with_stdio *,
-				const struct thread_with_stdio_ops *);
 int bch2_stdio_redirect_read(struct stdio_redirect *, char *, size_t);
 
 int bch2_stdio_redirect_readline_timeout(struct stdio_redirect *, darray_char *, unsigned long);
