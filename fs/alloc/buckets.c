@@ -40,32 +40,6 @@ static u64 reserve_factor(u64 r)
 	return r + (round_up(r, (1 << RESERVE_FACTOR)) >> RESERVE_FACTOR);
 }
 
-__cold void bch2_dev_usage_to_text(struct printbuf *out,
-			    struct bch_dev *ca,
-			    struct bch_dev_usage_full *usage)
-{
-	if (out->nr_tabstops < 5) {
-		printbuf_tabstops_reset(out);
-		printbuf_tabstop_push(out, 12);
-		printbuf_tabstop_push(out, 16);
-		printbuf_tabstop_push(out, 16);
-		printbuf_tabstop_push(out, 16);
-		printbuf_tabstop_push(out, 16);
-	}
-
-	prt_printf(out, "\tbuckets\rsectors\rfragmented\r\n");
-
-	for (unsigned i = 0; i < BCH_DATA_NR; i++) {
-		bch2_prt_data_type(out, i);
-		prt_printf(out, "\t%llu\r%llu\r%llu\r\n",
-			   usage->d[i].buckets,
-			   usage->d[i].sectors,
-			   usage->d[i].fragmented);
-	}
-
-	prt_printf(out, "capacity\t%llu\r\n", ca->mi.nbuckets);
-}
-
 static int bucket_ref_update_err(struct btree_trans *trans, struct printbuf *buf,
 				 struct bkey_s_c k, bool fatal, enum bch_sb_error_id id)
 {

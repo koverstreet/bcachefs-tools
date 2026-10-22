@@ -237,8 +237,6 @@ static inline struct bch_dev_usage_full bch2_dev_usage_full_read(struct bch_dev 
 	return ret;
 }
 
-void bch2_dev_usage_to_text(struct printbuf *, struct bch_dev *, struct bch_dev_usage_full *);
-
 static inline u64 bch2_dev_buckets_reserved(struct bch_dev *ca, enum bch_watermark watermark)
 {
 	s64 reserved = 0;

@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use crate::accounting::data_type_from_u8;
 use crate::btree::bkey::pos;
 use crate::btree::iter::{TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
+use crate::opts::prt_data_type;
 use crate::percpu_field;
 use crate::util::ffi::Opaque;
 use crate::util::percpu::Counters;
 use crate::util::rcu::ReadGuard;
+use crate::util::Printbuf;
 use core::cell::UnsafeCell;
 use cstruct_macros::c_export;
 
@@ -126,6 +129,23 @@ impl c::bch_dev {
     pub fn usage_full_read_fast(&self) -> c::bch_dev_usage_full {
         self.usage.sum_nonnegative()
     }
+
+    /// @usage, of this device, as a table: bch2_dev_usage_to_text().
+    pub fn usage_to_text(&self, out: &mut Printbuf, usage: &c::bch_dev_usage_full) {
+        if out.nr_tabstops() < 5 {
+            out.tabstops_reset();
+            for spaces in [12, 16, 16, 16, 16] {
+                out.tabstop_push(spaces);
+            }
+        }
+
+        write!(out, "\tbuckets\rsectors\rfragmented\r\n");
+        for (i, u) in usage.d.iter().enumerate() {
+            prt_data_type(out, data_type_from_u8(i as u8));
+            write!(out, "\t{}\r{}\r{}\r\n", u.buckets, u.sectors, u.fragmented);
+        }
+        write!(out, "capacity\t{}\r\n", self.mi.nbuckets);
+    }
 }
 
 /// @r, and the margin charged on top of a reservation: reserve_factor().
@@ -170,6 +190,12 @@ pub unsafe fn bch2_dev_usage_read_fast(ca: &c::bch_dev, usage: *mut c::bch_dev_u
 #[c_export]
 pub unsafe fn bch2_dev_usage_full_read_fast(ca: &c::bch_dev, usage: *mut c::bch_dev_usage_full) {
     unsafe { usage.write(ca.usage_full_read_fast()) }
+}
+
+#[cold]
+#[c_export]
+pub fn bch2_dev_usage_to_text(out: &mut Printbuf, ca: &c::bch_dev, usage: &c::bch_dev_usage_full) {
+    ca.usage_to_text(out, usage)
 }
 
 #[c_export]
