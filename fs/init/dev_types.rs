@@ -18,17 +18,28 @@ pub struct bch_sb_handle_holder {
 }
 c_default!(bch_sb_handle_holder);
 
+/// A superblock in memory, in a buffer that grows: kvmalloc()'d, a power of
+/// two, zeroes past the superblock. Each of a device's superblock, the
+/// filesystem's copy, and what format builds.
+#[repr(C)]
+#[derive(CStruct, TypeInfo)]
+pub struct bch_sb_buf {
+    pub sb:          *mut Head<c::bch_sb>,
+    pub buffer_size: usize,
+}
+c_default!(bch_sb_buf);
+
 nest! {
     #[repr(C)]
     #[derive(CStruct, TypeInfo)]
     pub struct bch_sb_handle {
-        pub sb: *mut Head<c::bch_sb>,
+        #[c_anon("struct bch_sb *sb; size_t buffer_size")]
+        pub buf: c::bch_sb_buf,
         pub s_bdev_file: *mut c::file,
         pub bdev: *mut c::block_device,
         pub sb_name: *mut c_char,
         pub bio: *mut c::bio,
         pub holder: *mut c::bch_sb_handle_holder,
-        pub buffer_size: usize,
         pub mode: c::blk_mode_t,
         #[c_bitfield]
         #>[bitfield(u8, ty = u32)]
