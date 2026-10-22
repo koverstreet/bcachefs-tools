@@ -44,7 +44,7 @@ pub fn opt_table() -> &'static [c::bch_option] {
 #[macro_export]
 macro_rules! opt_set {
     ($opts:ident, $n:ident, $v:expr) => {
-        bcachefs_kernel::paste! {
+        $crate::paste! {
             $opts.$n = $v;
             $opts.[<set_ $n _defined>](true)
         }
@@ -54,7 +54,7 @@ macro_rules! opt_set {
 #[macro_export]
 macro_rules! opt_defined {
     ($opts:ident, $n:ident) => {
-        bcachefs_kernel::paste! {
+        $crate::paste! {
             $opts.[< $n _defined>]()
         }
     };
@@ -63,14 +63,14 @@ macro_rules! opt_defined {
 #[macro_export]
 macro_rules! opt_get {
     ($opts:ident, $n:ident) => {
-        if !bcachefs_kernel::opt_defined!($opts, $n) {
-            bcachefs_kernel::paste! {
+        if !$crate::opt_defined!($opts, $n) {
+            $crate::paste! {
                 unsafe {
-                    bcachefs_kernel::c::bch2_opts_default.$n
+                    $crate::c::bch2_opts_default.$n
                 }
             }
         } else {
-            bcachefs_kernel::paste! {
+            $crate::paste! {
                 $opts.$n
             }
         }
