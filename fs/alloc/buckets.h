@@ -381,13 +381,6 @@ static inline int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_d
 
 void bch2_trans_account_disk_usage_change(struct btree_trans *);
 
-int bch2_trans_mark_metadata_bucket(struct btree_trans *, struct bch_dev *, u64,
-				    enum bch_data_type, unsigned,
-				    enum btree_iter_update_trigger_flags);
-int bch2_trans_mark_dev_sbs_flags(struct bch_fs *,
-				    enum btree_iter_update_trigger_flags);
-int bch2_trans_mark_dev_sbs(struct bch_fs *);
-
 bool bch2_is_superblock_bucket(struct bch_dev *, u64);
 
 static inline const char *bch2_data_type_str(enum bch_data_type type)

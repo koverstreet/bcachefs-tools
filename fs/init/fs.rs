@@ -2,7 +2,7 @@ use crate::c;
 use crate::btree::bkey::BkeyI;
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
-use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIterFlags, CommitOpts};
 use crate::locking::{Guard, Lock, MutexNoio, Noio, PercpuRwsemNoio};
 use crate::util::Printbuf;
 
@@ -317,11 +317,6 @@ impl Fs {
 
     pub fn buckets_nouse_alloc(&self) -> Result<(), BchError> {
         ret_to_result(unsafe { c::bch2_buckets_nouse_alloc(self.as_ptr()) })
-    }
-
-    /// Mark device superblock buckets in btree metadata.
-    pub fn trans_mark_dev_sb(&self, ca: &DevRef, flags: UpdateTriggerFlags) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_trans_mark_dev_sb(self.as_ptr(), ca.as_mut_ptr(), c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits())) })
     }
 
     /// Flush the journal: everything committed before the call is on disk when

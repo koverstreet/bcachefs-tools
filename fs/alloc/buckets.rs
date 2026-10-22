@@ -6,7 +6,8 @@ use crate::alloc::replicas::{bkey_replicas_acct, entry_acct, replicas_acct};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeySC};
 use crate::btree::bkey_methods::TriggerOp;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, UpdateTriggerFlags};
+use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitOpts, TransAttempt,
+                         UpdateTriggerFlags, Watermark};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::ec::trigger::{ptr_matches_stripe, ptr_matches_stripe_m, stripe_blockcount_add};
@@ -15,7 +16,7 @@ use crate::data::reconcile::needs_reconcile::extent_trigger_set_needs_reconcile;
 use crate::data::reconcile::trigger::trigger_extent_reconcile;
 use crate::errcode::{ret_to_c, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
-use crate::init::error::{count_fsck_err, id};
+use crate::init::error::{count_fsck_err, fs_inconsistent, id};
 use crate::init::passes;
 use crate::opts::{data_type_str, prt_data_type};
 use crate::types::Le64;
@@ -24,9 +25,9 @@ use crate::util::log::LogMsg;
 use crate::util::percpu::Counters;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::{Printbuf, ToText};
-use crate::{bch_err, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
+use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
 use core::cell::UnsafeCell;
-use core::ffi::c_int;
+use core::ffi::{c_int, c_uint};
 use cstruct_macros::c_export;
 
 // ── Bucket addressing ────────────────────────────────────────────────────
@@ -626,6 +627,196 @@ fn trigger_snapshot_nr_keys(t: &TransAttempt<'_, '_>, op: &TriggerOp<'_>) -> Res
 }
 
 crate::key_trigger!(bch2_trigger_snapshot_nr_keys => trigger_snapshot_nr_keys);
+
+// ── Metadata buckets ─────────────────────────────────────────────────────
+
+/// Bucket @b of @ca as @sectors of @data_type in its alloc key - set, not
+/// added to, so marking again is a no-op: __bch2_trans_mark_metadata_bucket().
+fn trans_mark_metadata_bucket_key(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, b: u64,
+                                  data_type: c::bch_data_type, sectors: u32) -> Result<(), BchError> {
+    let fs = t.fs();
+    let mut iter = BtreeIter::new(t, c::btree_id::alloc, pos(ca.dev_idx.into(), b),
+                                  BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
+    let k = iter.peek_slot(t)?.expect("peek_slot() has a key at every position");
+    let mut a = t.alloc_to_v4_mut(k)?;
+
+    let cur = a.v().data_type;
+    if cur != 0 && data_type.0 != 0 && u32::from(cur) != data_type.0 {
+        let mut msg = LogMsg::new(fs);
+        prt!(&mut msg, "bucket {}:{b} gen {} different types of data in same bucket: {}, {}\nwhile marking {}\n",
+             ca.dev_idx, a.v().generation, data_type_str(data_type_from_u8(cur)),
+             data_type_str(data_type), data_type_str(data_type));
+        count_fsck_err(fs, id::bucket_metadata_type_mismatch, &mut msg);
+        passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_allocations,
+                             c::bch_run_recovery_pass_flags::from_bits_retain(0))?;
+        return fs.throw(bch_errcode::BCH_ERR_metadata_bucket_inconsistency);
+    }
+
+    if u32::from(cur) != data_type.0 || a.v().dirty_sectors != sectors {
+        a.v_mut().data_type     = data_type.0 as u8;
+        a.v_mut().dirty_sectors = sectors;
+        t.update(&iter, &a, UpdateTriggerFlags::empty())?;
+    }
+    Ok(())
+}
+
+/// trans_mark_metadata_bucket_key(), in gc's copy - which adds: gc counts
+/// each bucket's metadata once: bch2_mark_metadata_bucket().
+fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, b: u64, data_type: c::bch_data_type,
+                           sectors: u32, flags: UpdateTriggerFlags) -> Result<(), BchError> {
+    let fs = t.fs();
+    let Some(g) = ca.gc_bucket(b) else {
+        fs_inconsistent(fs, message!("reference to invalid bucket on device {} when marking metadata type {}",
+                                     ca.dev_idx, data_type_str(data_type)));
+        return fs.throw(bch_errcode::BCH_ERR_metadata_bucket_inconsistency);
+    };
+
+    t.gc_bucket_mod(ca, g, flags, |a| {
+        let cur = data_type_from_u8(a.data_type);
+        if a.data_type != 0 && cur != data_type {
+            fs_inconsistent(fs, message!("different types of data in same bucket: {}, {}",
+                                         data_type_str(cur), data_type_str(data_type)));
+            return fs.throw(bch_errcode::BCH_ERR_metadata_bucket_inconsistency);
+        }
+        if u64::from(a.dirty_sectors) + u64::from(sectors) > u64::from(ca.mi.bucket_size) {
+            fs_inconsistent(fs, message!(
+                "bucket {}:{b} gen {} data type {} sector count overflow: {} + {sectors} > bucket size",
+                ca.dev_idx, a.generation, data_type_str(if a.data_type != 0 { cur } else { data_type }),
+                a.dirty_sectors));
+            return fs.throw(bch_errcode::BCH_ERR_metadata_bucket_inconsistency);
+        }
+
+        a.data_type      = data_type.0 as u8;
+        a.dirty_sectors += sectors;
+        Ok(())
+    })
+}
+
+/// Bucket @b of @ca holds @sectors of metadata - superblock, journal, or free
+/// to unmark it: in its alloc key, committed, or in gc's copy:
+/// bch2_trans_mark_metadata_bucket(). The gc side runs in an attempt of its
+/// own; it's only reached on a transaction made for it.
+pub fn trans_mark_metadata_bucket(trans: &BtreeTrans<'_>, ca: &c::bch_dev, b: u64, data_type: c::bch_data_type,
+                                  sectors: u32, flags: UpdateTriggerFlags) -> Result<(), BchError> {
+    assert!(matches!(data_type, data_type::free | data_type::sb | data_type::journal),
+            "marking {} as metadata", data_type_str(data_type));
+
+    // a backup superblock can be past the end of the usable space
+    if b >= ca.mi.nbuckets {
+        return Ok(());
+    }
+
+    if flags.contains(UpdateTriggerFlags::GC) {
+        mark_metadata_bucket_gc(&trans.begin(), ca, b, data_type, sectors, flags)
+    } else if flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
+        commit_do(trans, None, CommitOpts::new().watermark(Watermark::BTREE),
+                  |t| trans_mark_metadata_bucket_key(t, ca, b, data_type, sectors))
+    } else {
+        panic!("marking metadata, neither gc nor transactional");
+    }
+}
+
+/// @range's sectors on @ca, metadata of @data_type, into @bucket - a bucket
+/// and its count so far - marking the bucket when the range moves past it:
+/// bch2_trans_mark_metadata_sectors().
+fn trans_mark_metadata_sectors(trans: &BtreeTrans<'_>, ca: &c::bch_dev, range: core::ops::Range<u64>,
+                               data_type: c::bch_data_type, bucket: &mut (u64, u32),
+                               flags: UpdateTriggerFlags) -> Result<(), BchError> {
+    let mut start = range.start;
+    loop {
+        let b = ca.sector_to_bucket(start);
+        let sectors = (ca.bucket_to_sector(b + 1).min(range.end) - start) as u32;
+
+        if b != bucket.0 && bucket.1 != 0 {
+            trans_mark_metadata_bucket(trans, ca, bucket.0, data_type, bucket.1, flags)?;
+            bucket.1 = 0;
+        }
+
+        bucket.0  = b;
+        bucket.1 += sectors;
+        start    += u64::from(sectors);
+        if start >= range.end {
+            return Ok(());
+        }
+    }
+}
+
+/// @ca's superblocks' buckets - the first's, from sector 0 - and its journal
+/// buckets: __bch2_trans_mark_dev_sb().
+fn trans_mark_dev_sb_in(trans: &BtreeTrans<'_>, ca: &c::bch_dev, flags: UpdateTriggerFlags)
+    -> Result<(), BchError>
+{
+    let fs = trans.fs();
+    let layout = {
+        let sb = fs.sb_lock();
+        fs.dev_sb(&sb, ca).expect("marking a device with no superblock").sb().layout
+    };
+    let sb_sectors = 1u64 << layout.sb_max_size_bits;
+    let sb_sector = u64::from(c::BCH_SB_SECTOR);
+    let mut bucket = (0, 0);
+
+    for offset in layout.sb_offset[..usize::from(layout.nr_superblocks)].iter().map(|o| o.get()) {
+        if offset == sb_sector {
+            trans_mark_metadata_sectors(trans, ca, 0..sb_sector, data_type::sb, &mut bucket, flags)?;
+        }
+        trans_mark_metadata_sectors(trans, ca, offset..offset + sb_sectors, data_type::sb, &mut bucket, flags)?;
+    }
+    if bucket.1 != 0 {
+        trans_mark_metadata_bucket(trans, ca, bucket.0, data_type::sb, bucket.1, flags)?;
+    }
+
+    for &b in ca.journal.buckets() {
+        trans_mark_metadata_bucket(trans, ca, b, data_type::journal, ca.mi.bucket_size.into(), flags)?;
+    }
+    Ok(())
+}
+
+impl Fs {
+    /// Device @ca's superblock and journal buckets marked as theirs, in the
+    /// alloc btree - or gc's copy, with gc: bch2_trans_mark_dev_sb().
+    pub fn trans_mark_dev_sb(&self, ca: &c::bch_dev, flags: UpdateTriggerFlags) -> Result<(), BchError> {
+        let trans = btree_trans!(self);
+        bch_err_fn!(self, trans_mark_dev_sb_in(&trans, ca, flags))
+    }
+
+    /// trans_mark_dev_sb() of every online device - each initialized first,
+    /// if it wasn't: bch2_trans_mark_dev_sbs_flags().
+    pub fn trans_mark_dev_sbs(&self, flags: UpdateTriggerFlags) -> Result<(), BchError> {
+        for ca in self.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_trans_mark_dev_sbs) {
+            // marked again, even if it was: harmless if not needed, and a
+            // superblock or journal bucket allocated twice would be painful
+            let ca_raw = core::ptr::from_ref::<c::bch_dev>(&ca).cast_mut();
+            ret_to_result(unsafe { c::bch2_dev_add_initialize(self.as_ptr(), ca_raw) })?;
+            self.trans_mark_dev_sb(&ca, flags)?;
+        }
+        Ok(())
+    }
+}
+
+#[c_export]
+pub fn bch2_trans_mark_metadata_bucket<'t>(trans: &'t BtreeTrans<'t>, ca: &c::bch_dev, b: u64,
+                                           data_type: c::bch_data_type, sectors: c_uint,
+                                           flags: c::btree_iter_update_trigger_flags) -> c_int {
+    ret_to_c(trans_mark_metadata_bucket(trans, ca, b, data_type, sectors,
+                                        UpdateTriggerFlags::from_bits_retain(flags.bits())))
+}
+
+#[c_export]
+pub fn bch2_trans_mark_dev_sb(c: &Opaque<c::bch_fs>, ca: &c::bch_dev, flags: c::btree_iter_update_trigger_flags)
+    -> c_int
+{
+    ret_to_c(Fs::from_c(c).trans_mark_dev_sb(ca, UpdateTriggerFlags::from_bits_retain(flags.bits())))
+}
+
+#[c_export]
+pub fn bch2_trans_mark_dev_sbs_flags(c: &Opaque<c::bch_fs>, flags: c::btree_iter_update_trigger_flags) -> c_int {
+    ret_to_c(Fs::from_c(c).trans_mark_dev_sbs(UpdateTriggerFlags::from_bits_retain(flags.bits())))
+}
+
+#[c_export]
+pub fn bch2_trans_mark_dev_sbs(c: &Opaque<c::bch_fs>) -> c_int {
+    ret_to_c(Fs::from_c(c).trans_mark_dev_sbs(UpdateTriggerFlags::TRANSACTIONAL))
+}
 
 // ── Usage ────────────────────────────────────────────────────────────────
 
