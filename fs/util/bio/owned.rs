@@ -19,7 +19,7 @@ use pin_init::PinInit;
 
 use super::{Bio, BioOwner};
 use crate::c;
-use crate::errcode::BchError;
+use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::alloc::{init_at, kfree, kzalloc, KBox};
 use crate::util::ffi::Opaque;
 
@@ -144,6 +144,20 @@ pub struct BioBox<T: HasBio>(NonNull<T>);
 // SAFETY: a T, as a Box's: what has the box has the T
 unsafe impl<T: HasBio + Send> Send for BioBox<T> {}
 
+// SAFETY: the T's bio, and back - container_of()
+unsafe impl<T: HasBio> RawBio for BioBox<T> {
+    fn into_raw(self) -> *mut c::bio {
+        let bio = bio_of(self.0.as_ptr());
+        core::mem::forget(self);
+        bio
+    }
+
+    unsafe fn from_raw(bio: *mut c::bio) -> Self {
+        // SAFETY: the caller's
+        Self(unsafe { NonNull::new_unchecked(of_bio::<T>(bio)) })
+    }
+}
+
 impl<T: HasBio> Deref for BioBox<T> {
     type Target = T;
 
@@ -242,9 +256,81 @@ unsafe impl<T: HasBio> BioOwner for BioBuf<T> {
     }
 }
 
+// SAFETY: the T's bio, and back: container_of(), and its bvecs' count -
+// bi_max_vecs, which bio_init() set from it and bio_reset() keeps
+unsafe impl<T: HasBio> RawBio for BioBuf<T> {
+    fn into_raw(self) -> *mut c::bio {
+        let this = core::mem::ManuallyDrop::new(self);
+        // SAFETY: the box, moved out of what's never dropped
+        let inline = KBox::into_raw(unsafe { core::ptr::read(&this.0) });
+        // SAFETY: the box's
+        bio_of(unsafe { &raw mut (*inline).t })
+    }
+
+    unsafe fn from_raw(bio: *mut c::bio) -> Self {
+        // SAFETY: the caller's - a BioBuf<T>'s bio
+        unsafe {
+            let nr = (*bio).bi_max_vecs as usize;
+            let inline = core::ptr::slice_from_raw_parts_mut(of_bio::<T>(bio).cast::<c::bio_vec>(), nr);
+            Self(KBox::from_raw(inline as *mut Inline<T>))
+        }
+    }
+}
+
 impl<T: HasBio> Drop for BioBuf<T> {
     fn drop(&mut self) {
         // SAFETY: its bio, idle: the box then drops the T, and frees it all
         unsafe { c::bio_uninit(self.bio().as_ptr()) }
     }
+}
+
+// ── Submission ───────────────────────────────────────────────────────────
+
+/// An owner given up to C as its bio, and taken back: by submit(), and the
+/// endio it arms.
+///
+/// # Safety
+/// from_raw() of into_raw()'s bio is the owner given up.
+pub unsafe trait RawBio: BioOwner + Sized {
+    /// Its bio, and with it the owner: for C, to give back by from_raw().
+    fn into_raw(self) -> *mut c::bio;
+
+    /// The owner @bio is.
+    ///
+    /// # Safety
+    /// @bio is into_raw()'s, of an owner of this type, not since taken back.
+    unsafe fn from_raw(bio: *mut c::bio) -> Self;
+
+    /// Given up to the block layer, until E::endio() has it back:
+    /// submit_bio(). Its owner's for as long as the IO takes, so 'static.
+    fn submit<E: Endio<Self>>(self)
+    where
+        Self: Send + 'static,
+    {
+        let bio = self.into_raw();
+        // SAFETY: the bio, the owner's: endio::<Self, E>() takes it back
+        unsafe {
+            (*bio).bi_end_io = Some(endio::<Self, E>);
+            c::submit_bio(bio);
+        }
+    }
+}
+
+/// What's done when an O's IO completes, given the owner submit() gave up
+/// and the IO's result. A type of its own, not O's: one struct's bios may
+/// complete differently by the path that submitted them.
+///
+/// It runs where the IO completes - softirq, or an interrupt - so it may not
+/// sleep, nor may T's Drop, if it drops the owner: what would goes to a
+/// workqueue, with the owner.
+pub trait Endio<O> {
+    fn endio(bio: O, ret: Result<(), BchError>);
+}
+
+/// The bi_end_io submit::<E>() arms: its owner back, to E.
+unsafe extern "C" fn endio<O: RawBio, E: Endio<O>>(bio: *mut c::bio) {
+    // SAFETY: armed by submit() alone, on an O's bio, given up with it
+    let (status, owner) = unsafe { ((*bio).bi_status, O::from_raw(bio)) };
+    // SAFETY: a status
+    E::endio(owner, ret_to_result_void(unsafe { c::blk_status_to_errno(status) }))
 }

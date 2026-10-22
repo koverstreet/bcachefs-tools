@@ -27,6 +27,7 @@ use core::marker::PhantomData;
 use core::ptr::NonNull;
 
 use crate::c;
+use crate::errcode::{ret_to_result_void, BchError};
 use crate::prt;
 use crate::util::ffi::Opaque;
 use crate::util::{Printbuf, ToText};
@@ -37,7 +38,7 @@ mod owned;
 #[cfg(kernel)]
 pub use iter::{FolioVec, Folios};
 pub use iter::{Chunk, Chunks, Segment, Segments, Walk};
-pub use owned::{BioBox, BioBuf, BioInPlace, BioSet, HasBio};
+pub use owned::{BioBox, BioBuf, BioInPlace, BioSet, Endio, HasBio, RawBio};
 
 // A bvec_iter's offset into its bvec, as a place: bi_offset - bi_bvec_done
 // before 7.3, and in the shim.
@@ -149,7 +150,7 @@ impl ToText for Bio {
 }
 
 /// What allocated a bio, and holds it: it may walk all of the bio's bvecs,
-/// wherever its position is.
+/// wherever its position is, and submit it.
 ///
 /// # Safety
 /// bio() is the implementor's own, which nothing else has - in flight, or
@@ -169,6 +170,13 @@ pub unsafe trait BioOwner {
             bio,
             iter: c::bvec_iter { bi_size: size, ..Default::default() },
         }
+    }
+
+    /// Submitted, and waited on: submit_bio_wait(). Borrowed for as long as
+    /// the IO takes.
+    fn submit_wait(&mut self) -> Result<(), BchError> {
+        // SAFETY: the owner's bio, held for the IO
+        ret_to_result_void(unsafe { c::submit_bio_wait(self.bio().as_ptr()) })
     }
 }
 
