@@ -805,7 +805,7 @@ fn trigger_reflink_v(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result
         check_indirect_extent_deleting(op);
     }
 
-    t.result(unsafe { c::bch2_trigger_extent(t.raw(), op.to_raw()) })
+    crate::alloc::buckets::trigger_extent(t, op)
 }
 
 crate::key_trigger!(bch2_trigger_reflink_v => trigger_reflink_v);

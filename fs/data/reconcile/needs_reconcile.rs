@@ -405,9 +405,10 @@ const SET_NEEDS_RECONCILE_ROOM: u32 = 1 + c::BCH_REPLICAS_MAX;
 
 /// The extent trigger's: the reconcile entry filled in on the key going in,
 /// so callers needn't - its room made here, as callers like extent split
-/// fragments don't reserve it. Its io options are looked up each time:
+/// fragments don't reserve it - @op's @new repointed, if the key was grown.
+/// Its io options are looked up each time:
 /// bch2_extent_trigger_set_needs_reconcile().
-fn extent_trigger_set_needs_reconcile(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
+pub(crate) fn extent_trigger_set_needs_reconcile(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
     let opts = get_io_opts(t, None, BkeySC::from(&op.new).untyped())?;
     let needed = u32::from(op.new.k.u64s) + SET_NEEDS_RECONCILE_ROOM;
     op.new_with_room(t, needed)?
@@ -463,20 +464,6 @@ pub unsafe fn bch2_bkey_set_needs_reconcile(trans: &BtreeTrans<'_>, s: Option<&m
     // SAFETY: the caller's - a struct bkey heads its struct bkey_i
     let mut k = unsafe { TransBkey::from_raw_room(&t, core::ptr::from_mut(k.k).cast(), buf_u64s) };
     ret_to_c(k.set_needs_reconcile(&t, s, opts, ctx, opt_change_cookie))
-}
-
-/// @op's @new and new_buf_u64s come back repointed, if the key was grown.
-///
-/// # Safety
-/// @op is the update the extent trigger is running for, in its commit.
-#[c_export]
-pub unsafe fn bch2_extent_trigger_set_needs_reconcile(trans: &BtreeTrans<'_>, op: &mut c::btree_trigger_op) -> c_int {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    let mut top = unsafe { TriggerOp::from_raw(op) };
-    let ret = extent_trigger_set_needs_reconcile(&t, &mut top);
-    *op = top.to_raw();
-    ret_to_c(ret)
 }
 
 /// # Safety

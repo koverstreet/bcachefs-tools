@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::accounting::{self, bucket_data_type_mismatch, data_type, data_type_from_u8};
+use crate::accounting::{self, bucket_data_type_mismatch, data_type, data_type_from_u8, mod_dev_cached_sectors};
+use crate::alloc::backpointers::{bucket_backpointer_mod, extent_ptr_to_bp};
+use crate::alloc::replicas::{bkey_replicas_acct, entry_acct, replicas_acct};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeySC};
 use crate::btree::bkey_methods::TriggerOp;
-use crate::btree::iter::{BtreeTrans, TransAttempt, UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::c::bch_errcode;
+use crate::data::ec::trigger::{ptr_matches_stripe, ptr_matches_stripe_m, stripe_blockcount_add};
+use crate::data::ptrs::{BkeyVPtrs, DecodedPtr, Ptrs};
+use crate::data::reconcile::needs_reconcile::extent_trigger_set_needs_reconcile;
+use crate::data::reconcile::trigger::trigger_extent_reconcile;
 use crate::errcode::{ret_to_c, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
@@ -18,7 +24,7 @@ use crate::util::log::LogMsg;
 use crate::util::percpu::Counters;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::{Printbuf, ToText};
-use crate::{fsck_err_on, message, percpu_field, prt};
+use crate::{bch_err, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
 use core::cell::UnsafeCell;
 use core::ffi::c_int;
 use cstruct_macros::c_export;
@@ -264,6 +270,296 @@ pub unsafe fn __bch2_bucket_ref_update<'t>(
 }
 
 // ── Triggers ─────────────────────────────────────────────────────────────
+
+/// A pointer's sectors added to its bucket's alloc key @a - the stripe, dirty
+/// or cached count, as the pointer is - and on insert, the bucket's data type
+/// set from it: __mark_pointer().
+#[allow(clippy::too_many_arguments)]
+fn mark_pointer(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, k: BkeySC<'_>, p: &c::extent_ptr_decoded,
+                sectors: i64, ptr_data_type: c::bch_data_type, a: &mut c::AllocV4, insert: bool)
+    -> Result<(), BchError>
+{
+    let (gen, mut bucket_data_type) = (a.generation, a.data_type);
+    let dst = if p.has_ec                { &mut a.stripe_sectors }
+              else if p.ptr.cached() == 0 { &mut a.dirty_sectors }
+              else                         { &mut a.cached_sectors };
+    let ret = t.bucket_ref_update(ca, k, &p.ptr, sectors, ptr_data_type, gen, &mut bucket_data_type, dst);
+    // as C's, even on error: a mismatch it let through is BCH_DATA_multiple
+    a.data_type = bucket_data_type;
+    ret?;
+
+    if insert {
+        a.set_data_type(ptr_data_type);
+    }
+    Ok(())
+}
+
+/// A pointer to a device the filesystem doesn't have: reported, ratelimited,
+/// and check_allocations scheduled - an error only if scheduling it is.
+#[cold]
+fn trigger_pointer_dev_missing(fs: &Fs, k: BkeySC<'_>, dev: u32, insert: bool) -> Result<(), BchError> {
+    // C's: thrown, so counted and traced, then overwritten by what the
+    // message returns
+    if insert {
+        let _ = fs.err(bch_errcode::BCH_ERR_trigger_pointer);
+    }
+
+    let mut msg = log_msg_ratelimited!(fs);
+    prt!(&mut msg, "Error while {} key:\n", if insert { "inserting" } else { "deleting" });
+    fs.dev_missing_bkey_msg(k, dev, &mut msg)
+}
+
+/// A pointer's bucket - its sectors and its backpointer - in the alloc key,
+/// and in gc's copy with gc: bch2_trigger_pointer(). Returns the pointer's
+/// sectors on disk, negative going out.
+fn trigger_pointer(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: BkeySC<'_>,
+                   d: &DecodedPtr<'_>, flags: UpdateTriggerFlags) -> Result<i64, BchError> {
+    let fs = t.fs();
+    let p = &d.p;
+    let insert = !flags.contains(UpdateTriggerFlags::OVERWRITE);
+
+    let mut bp = extent_ptr_to_bp(fs, btree, level, k, d);
+    let bp_data_type = data_type_from_u8(bp.v.data_type);
+    let sectors = if insert { i64::from(bp.v.bucket_len) } else { -i64::from(bp.v.bucket_len) };
+
+    let dev = u32::from(p.ptr.dev());
+    if dev == c::BCH_SB_MEMBER_INVALID {
+        if flags.contains(UpdateTriggerFlags::TRANSACTIONAL) && p.has_ec {
+            if !insert {
+                bp.k.type_ = c::bch_bkey_type::KEY_TYPE_deleted.0 as u8;
+                bp.k.set_val_bytes(0);
+            }
+            t.update_buffered(c::btree_id::stripe_backpointers, &t.bkey_copy(bp.as_ref())?)?;
+        }
+        return Ok(sectors);
+    }
+
+    let Some(ca) = fs.dev_get(dev) else {
+        trigger_pointer_dev_missing(fs, k, dev, insert)?;
+        return Ok(sectors);
+    };
+
+    let bucket = ca.ptr_bucket_pos(&p.ptr);
+    if !ca.bucket_valid(bucket.offset) {
+        if insert {
+            ca.bucket_missing(bucket.offset);
+            return fs.throw(bch_errcode::BCH_ERR_trigger_pointer);
+        }
+        return Ok(sectors);
+    }
+
+    if flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
+        let mut a = t.start_alloc_update(bucket, UpdateTriggerFlags::empty())?;
+        mark_pointer(t, &ca, k, p, sectors, bp_data_type, a.v_mut(), insert)?;
+        bucket_backpointer_mod(t, k, &mut bp, insert)?;
+    }
+
+    if flags.contains(UpdateTriggerFlags::GC) {
+        let g = ca.gc_bucket(bucket.offset).expect("gc has every valid bucket's");
+        t.gc_bucket_mod(&ca, g, flags, |a| mark_pointer(t, &ca, k, p, sectors, bp_data_type, a, insert))?;
+    }
+
+    Ok(sectors)
+}
+
+/// An extent's erasure coded pointer, to a stripe it isn't part of - gone, or
+/// with block pointers that don't match: logged, counted as an fsck error to
+/// fix, and check_allocations scheduled to recount the stripe's blocks. Its
+/// block isn't counted, rather than going emergency read-only.
+#[cold]
+fn mark_stripe_ptr_no_match(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, idx: u64) -> Result<(), BchError> {
+    let fs = t.fs();
+    let mut msg = log_msg_ratelimited!(fs);
+
+    prt!(&mut msg, "extent doesn't match stripe {idx}, not updating stripe block accounting\n  while marking {}\n",
+         k.to_text(fs));
+    count_fsck_err(fs, id::stripe_update_stale_stripe_ptr, &mut msg);
+    passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_allocations,
+                         c::bch_run_recovery_pass_flags::from_bits_retain(0))
+}
+
+/// An erasure coded pointer's sectors, in its block of the stripe - the key
+/// in the stripes btree, and gc's copy with gc - and in the stripe's
+/// replicas accounting: bch2_trigger_stripe_ptr().
+fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &c::extent_ptr_decoded,
+                      data_type: c::bch_data_type, sectors: i64, flags: UpdateTriggerFlags)
+    -> Result<(), BchError>
+{
+    let fs = t.fs();
+    let (idx, block) = (p.ec.idx(), p.ec.block());
+
+    if flags.contains(UpdateTriggerFlags::TRANSACTIONAL) {
+        // the stripe, queued as its update: bch2_bkey_get_mut_typed()
+        let mut iter = BtreeIter::new(t, c::btree_id::stripes, pos(0, idx),
+                                      BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
+        let s = match iter.peek_slot(t)?.and_then(|s| s.arm::<c::Stripe>()) {
+            Some(s) => Some(t.bkey_make_mut_noupdate(s)?),
+            None    => None,
+        };
+        if let Some(s) = &s {
+            t.update(&iter, s, UpdateTriggerFlags::empty())?;
+        }
+
+        // gone, or not this extent's: either way, not part of the stripe
+        let Some(mut s) = s.filter(|s| ptr_matches_stripe(s.as_sc(), p)) else {
+            return mark_stripe_ptr_no_match(t, k, idx);
+        };
+
+        s.v().csum_type_check(fs)?;
+        stripe_blockcount_add(&mut s, block.into(), sectors);
+
+        let acct = bkey_replicas_acct(fs, s.as_sc().untyped(), data_type);
+        return accounting::add(t, &acct, &[sectors], false);
+    }
+
+    if flags.contains(UpdateTriggerFlags::GC) {
+        let Ok(m) = fs.ec.gc_stripe_alloc(idx, c::GFP_KERNEL) else {
+            bch_err!(fs, "error allocating memory for gc_stripes, idx {idx}");
+            return fs.throw(bch_errcode::BCH_ERR_ENOMEM_mark_stripe_ptr);
+        };
+
+        let acct = {
+            let mut m = m.lock.lock();
+            if m.alive() == 0 || !ptr_matches_stripe_m(&m, p) {
+                drop(m);
+                return mark_stripe_ptr_no_match(t, k, idx);
+            }
+
+            // as C's, wrapping to the u16
+            let b = &mut m.block_sectors[usize::from(block)];
+            *b = (i64::from(*b) + sectors) as u16;
+
+            // SAFETY: the stripe's entry, as its trigger copied it in
+            entry_acct(unsafe { &m.r.bytes }, data_type)
+        };
+        accounting::add(t, &acct, &[sectors], true)?;
+    }
+
+    Ok(())
+}
+
+/// One key's part of the extent trigger, going in or out by @flags: each
+/// pointer's bucket and stripe, then the key's accounting - replicas,
+/// compression, its snapshot's, and its btree's or inode's: __trigger_extent().
+fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: BkeySC<'_>,
+                      flags: UpdateTriggerFlags) -> Result<(), BchError> {
+    let fs = t.fs();
+    let gc = flags.contains(UpdateTriggerFlags::GC);
+    let insert = !flags.contains(UpdateTriggerFlags::OVERWRITE);
+    let nr: i64 = if insert { 1 } else { -1 };
+    let data_type = if k.k.is_btree_ptr() { data_type::btree } else { data_type::user };
+
+    let mut replicas_sectors = 0i64;
+    let mut devs = [0u8; c::BCH_BKEY_PTRS_MAX as usize];
+    let mut nr_devs = 0;
+    let mut nr_required = 1;
+
+    // [extents, uncompressed sectors, compressed sectors], for each run of
+    // pointers of one compression type
+    let compression_add = |ty: u8, mut v: [i64; 3]| {
+        if !insert {
+            v = v.map(i64::wrapping_neg);
+        }
+        accounting::add(t, &c::disk_accounting_pos::from_arm(c::bch_acct_compression { type_: ty }), &v, gc)
+    };
+    let mut compression_type = 0;
+    let mut compression = [1, 0, 0];
+
+    for d in k.arm::<Ptrs>().expect("a key with pointers").ptrs_decoded(fs) {
+        let p = &d.p;
+        let disk_sectors = match trigger_pointer(t, btree, level, k, &d, flags) {
+            Ok(s) => s,
+            // only a cached pointer is ever stale: it isn't counted
+            Err(e) if e.matches(bch_errcode::BCH_ERR_cached_ptr_stale) => continue,
+            Err(e) => return Err(e),
+        };
+
+        if p.ptr.cached() != 0 {
+            mod_dev_cached_sectors(t, p.ptr.dev().into(), disk_sectors, gc)?;
+        } else if !p.has_ec {
+            replicas_sectors += disk_sectors;
+            devs[nr_devs] = p.ptr.dev();
+            nr_devs += 1;
+        } else {
+            trigger_stripe_ptr(t, k, p, data_type, disk_sectors, flags)?;
+            // with an erasure coded pointer, its other dirty pointers aren't
+            // needed to mount
+            nr_required = 0;
+        }
+
+        if compression_type != 0 && compression_type != p.crc.compression_type {
+            compression_add(compression_type, compression)?;
+            compression = [1, 0, 0];
+        }
+        compression_type = p.crc.compression_type;
+        if compression_type != 0 {
+            compression[1] += i64::from(p.crc.uncompressed_size);
+            compression[2] += i64::from(p.crc.compressed_size);
+        }
+    }
+
+    if nr_devs != 0 {
+        accounting::add(t, &replicas_acct(data_type, nr_required, &devs[..nr_devs]), &[replicas_sectors], gc)?;
+    }
+
+    // [keys, key bytes, sectors]: an extent counts its own key here, not by
+    // trigger_snapshot_nr_keys(), as part of the sectors it adds anyway
+    if level == 0 && k.k.p.snapshot != 0 {
+        let acct = c::disk_accounting_pos::from_arm(c::bch_acct_snapshot { id: k.k.p.snapshot, btree: btree.0 });
+        accounting::add(t, &acct, &[nr, nr * k.k.bytes() as i64, replicas_sectors], gc)?;
+    }
+
+    if compression_type != 0 {
+        compression_add(compression_type, compression)?;
+    }
+
+    if level != 0 {
+        // [sectors, nodes, interior nodes]
+        let interior = if level > 1 { nr } else { 0 };
+        let acct = c::disk_accounting_pos::from_arm(c::bch_acct_btree { id: btree.0 });
+        accounting::add(t, &acct, &[replicas_sectors, nr, interior], gc)
+    } else {
+        // [extents, sectors, sectors on disk]
+        let acct = c::disk_accounting_pos::from_arm(c::bch_acct_inum { inum: k.k.p.inode });
+        accounting::add(t, &acct, &[nr, nr * i64::from(k.k.size), replicas_sectors], gc)
+    }
+}
+
+/// The trigger of every key type with pointers: each key's pointers and
+/// accounting - the old one's out, the new one's in - if its pointers
+/// changed, and reconcile's part: bch2_trigger_extent().
+pub(crate) fn trigger_extent(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
+    {
+        let (old, new) = (op.old.arm::<Ptrs>(), BkeySC::from(&op.new).untyped().arm::<Ptrs>());
+        let old_entries = old.as_ref().map_or(&[][..], |k| k.entry_bytes());
+        let new_entries = new.as_ref().map_or(&[][..], |k| k.entry_bytes());
+        if old_entries == new_entries {
+            return Ok(());
+        }
+    }
+
+    if !op.flags.intersects(UpdateTriggerFlags::TRANSACTIONAL | UpdateTriggerFlags::GC) {
+        return Ok(());
+    }
+
+    if op.flags.contains(UpdateTriggerFlags::TRANSACTIONAL | UpdateTriggerFlags::INSERT) &&
+       !op.flags.contains(UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE) &&
+       op.level == 0 && !op.new.k.is_deleted() {
+        extent_trigger_set_needs_reconcile(t, op)?;
+    }
+
+    if !op.old.k.is_deleted() {
+        trigger_extent_key(t, op.btree, op.level, op.old, op.flags - UpdateTriggerFlags::INSERT)?;
+    }
+    if !op.new.k.is_deleted() {
+        trigger_extent_key(t, op.btree, op.level, BkeySC::from(&op.new).untyped(),
+                           op.flags - UpdateTriggerFlags::OVERWRITE)?;
+    }
+
+    trigger_extent_reconcile(t, op)
+}
+
+crate::key_trigger!(bch2_trigger_extent => trigger_extent);
 
 /// A reservation's sectors, by replica count - and in a snapshot, its key,
 /// and the sectors it reserves at all its replicas: reservations carry no

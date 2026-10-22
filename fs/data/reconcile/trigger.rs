@@ -9,16 +9,14 @@ use crate::{accounting, bkey_fsck_err_on, fsck_err};
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{bpos_max, bpos_min, pos, BkeySC, BkeyV};
 use crate::btree::bkey_methods::TriggerOp;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, NoRoom, TransAttempt, TransBkey,
-                         UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, NoRoom, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::util::vstructs::plain_bytes;
 use crate::util::Printbuf;
-use core::ffi::c_int;
 use core::mem::size_of;
 use cstruct_macros::c_export;
 
@@ -257,7 +255,7 @@ fn trigger_dev_counters(t: &TransAttempt<'_, '_>, sectors: Option<u32>, k: BkeyS
 /// - or a btree node pointer's reconcile backpointer, moved to its new work
 /// id's and recorded in its reconcile_bp entry - then the reconcile_work
 /// accounting and dev_leaving counters.
-fn trigger_extent_reconcile(t: &TransAttempt<'_, '_>, mut op: TriggerOp<'_>) -> Result<(), BchError> {
+pub(crate) fn trigger_extent_reconcile(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchError> {
     let fs = t.fs();
     let old_r = op.old.arm::<Ptrs>().and_then(|k| k.reconcile_opts(fs).copied());
     let new_r = BkeySC::from(&op.new).untyped().arm::<Ptrs>().and_then(|k| k.reconcile_opts(fs).copied());
@@ -432,11 +430,3 @@ pub fn bch2_bkey_get_reconcile_bp_pos(c: &Fs, k: BkeySC<'_>) -> c::bpos {
     k.arm::<Ptrs>().map_or(pos(0, 0), |k| k.reconcile_bp_pos(c))
 }
 
-/// # Safety
-/// @op is the update the extent trigger is running for, in its commit.
-#[c_export]
-pub unsafe fn bch2_trigger_extent_reconcile(trans: &BtreeTrans<'_>, mut op: c::btree_trigger_op) -> c_int {
-    // SAFETY: the caller's
-    let (t, op) = unsafe { (trans.attempt_in_progress(), TriggerOp::from_raw(&mut op)) };
-    ret_to_c(trigger_extent_reconcile(&t, op))
-}
