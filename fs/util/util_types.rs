@@ -80,7 +80,6 @@ c_extern! {
     pub fn bch2_rht_table(ht: *const c::rhashtable) -> *const c::bucket_table;
     pub fn bch2_rht_nr_buckets(tbl: *const c::bucket_table) -> c_uint;
     pub fn bch2_rht_bucket(tbl: *const c::bucket_table, hash: c_uint) -> *mut *mut c_void;
-    pub fn bch2_copy_to_user(to: *mut c_void, from: *const c_void, n: c_ulong) -> c_ulong;
     pub fn bch2_debugfs_create_file(name: *const c_char, mode: c::umode_t, parent: *mut c::dentry,
                                     data: *mut c_void, fops: *const c::file_operations) -> *mut c::dentry;
     pub fn bch2_strtoull_h(cp: *const c_char, res: *mut c_ulonglong) -> c_int;
@@ -97,34 +96,25 @@ c_extern! {
     pub fn bch2_fatal_signal_pending() -> bool;
     pub fn bch2_ktime_get_ns() -> u64;
     pub fn bch2_num_online_cpus() -> c_uint;
-    pub fn bch2_nsecs_to_jiffies(ns: u64) -> c_ulong;
     pub fn bch2_acc_u64s_percpu(acc: *mut u64, src: *const u64, nr: c_uint);
     pub fn bch2_bdev_rot(bdev: *mut c::block_device) -> bool;
     pub fn bch2_pr_time_units(out: *mut c::printbuf, ns: u64);
     pub fn bch2_prt_current_backtrace(out: *mut c::printbuf, skipnr: c_uint, gfp: c::gfp_t) -> c_int;
     pub fn bch2_get_random_u64() -> u64;
-    pub fn bch2_ktime_get_coarse_real_ts64(ts: *mut c::timespec64);
     pub fn bch2_queue_work(wq: *mut c::workqueue_struct, work: *mut c::work_struct) -> bool;
     pub fn bch2_init_delayed_work(dwork: *mut c::delayed_work,
                                   func: Option<unsafe extern "C" fn(*mut c::work_struct)>);
     pub fn bch2_queue_delayed_work(wq: *mut c::workqueue_struct, dwork: *mut c::delayed_work,
                                    delay: c_ulong) -> bool;
-    pub fn bch2_cancel_delayed_work_sync(dwork: *mut c::delayed_work) -> bool;
-    pub fn bch2_system_long_wq() -> *mut c::workqueue_struct;
     pub fn bch2_system_dfl_wq() -> *mut c::workqueue_struct;
     pub fn bch2_alloc_workqueue(name: *const c_char, flags: c_uint, max_active: c_int) -> *mut c::workqueue_struct;
-    pub fn bch2_destroy_workqueue(wq: *mut c::workqueue_struct);
     pub fn bch2_kthread_create(func: Option<unsafe extern "C" fn(*mut c_void) -> c_int>, data: *mut c_void,
                                name: *const c_char) -> *mut c::task_struct;
     pub fn bch2_kthread_stop(p: *mut c::task_struct) -> c_int;
     pub fn bch2_kthread_should_stop() -> bool;
-    pub fn bch2_wake_up_process(p: *mut c::task_struct);
-    pub fn bch2_get_task_struct(p: *mut c::task_struct);
-    pub fn bch2_put_task_struct(p: *mut c::task_struct);
     pub fn bch2_current() -> *mut c::task_struct;
     pub fn bch2_set_current_state_idle(freezable: bool);
     pub fn bch2_set_current_state_running();
-    pub fn bch2_schedule();
     pub fn bch2_init_work(work: *mut c::work_struct, func: Option<unsafe extern "C" fn(*mut c::work_struct)>);
     pub fn bch2_set_worker_desc(desc: *const c_char);
     pub fn bch2_capable(cap: c_int) -> bool;

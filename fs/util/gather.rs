@@ -211,7 +211,7 @@ fn task_waker() -> Waker {
     unsafe {
         let task = c::bch2_current();
         assert!(!task.is_null(), "a sync wait needs a task - a kthread, in userspace");
-        c::bch2_get_task_struct(task);
+        c::get_task_struct(task);
         Waker::from_raw(RawWaker::new(task.cast(), &TASK_WAKER))
     }
 }
@@ -220,7 +220,7 @@ static TASK_WAKER: RawWakerVTable = RawWakerVTable::new(task_clone, task_wake, t
 
 unsafe fn task_clone(p: *const ()) -> RawWaker {
     // SAFETY: a task_waker()'s task, a ref held
-    unsafe { c::bch2_get_task_struct(p.cast_mut().cast()) };
+    unsafe { c::get_task_struct(p.cast_mut().cast()) };
     RawWaker::new(p, &TASK_WAKER)
 }
 
@@ -234,12 +234,12 @@ unsafe fn task_wake(p: *const ()) {
 
 unsafe fn task_wake_by_ref(p: *const ()) {
     // SAFETY: a ref held
-    unsafe { c::bch2_wake_up_process(p.cast_mut().cast()) };
+    unsafe { c::wake_up_process(p.cast_mut().cast()) };
 }
 
 unsafe fn task_drop(p: *const ()) {
     // SAFETY: the Waker's ref
-    unsafe { c::bch2_put_task_struct(p.cast_mut().cast()) };
+    unsafe { c::put_task_struct(p.cast_mut().cast()) };
 }
 
 impl<T: Fold, W: Width> Gather<T, W> {
@@ -390,7 +390,7 @@ impl<T: Fold, W: Width> Gather<T, W> {
                 if self.done() {
                     break;
                 }
-                unsafe { c::bch2_schedule() };
+                unsafe { c::schedule() };
             }
             unsafe { c::bch2_set_current_state_running() };
         }

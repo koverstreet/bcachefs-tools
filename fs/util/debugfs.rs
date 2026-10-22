@@ -18,7 +18,7 @@ use crate::new_lock;
 use crate::util::alloc::{alloc_pinned, free_pinned};
 use crate::util::ffi::c_char;
 use crate::util::Printbuf;
-use core::ffi::{c_int, c_ulong, c_void, CStr};
+use core::ffi::{c_int, c_void, CStr};
 use core::marker::PhantomData;
 use core::ops::{ControlFlow, Deref, DerefMut};
 use core::ptr::NonNull;
@@ -54,7 +54,7 @@ impl DebugOut<'_> {
             let bytes = pending.len().min(self.size);
             // SAFETY: copy_to_user() checks the reader's buffer is theirs
             let uncopied = unsafe {
-                c::bch2_copy_to_user(self.ubuf, pending.as_ptr().cast(), bytes as c_ulong)
+                c::copy_to_user(self.ubuf, pending.as_ptr().cast_mut().cast(), bytes as _)
             } as usize;
             let copied = bytes - uncopied;
 

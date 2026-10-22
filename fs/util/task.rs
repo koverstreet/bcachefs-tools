@@ -290,7 +290,7 @@ impl<F: Future> Task<F> {
         if !hr.thread.is_null() {
             // done: its thread exits - it has its own ref
             // SAFETY: the task's ref on its thread
-            unsafe { c::bch2_wake_up_process(hr.thread) };
+            unsafe { c::wake_up_process(hr.thread) };
         }
         // SAFETY: the task's own ref
         unsafe { put_ref(h) };
@@ -306,7 +306,7 @@ impl<F: Future> Task<F> {
             let thread = (*task).head.header.thread;
             if !thread.is_null() {
                 c::bch2_kthread_stop(thread);
-                c::bch2_put_task_struct(thread);
+                c::put_task_struct(thread);
             }
             ManuallyDrop::drop(&mut *(*task).future.get());
             drop((*(*task).head.done_ref.get()).take());
@@ -416,7 +416,7 @@ where
                 // SAFETY: a ref on the thread, the task's; and one on the task,
                 // the thread's; both before it can run
                 Ok(thread) => unsafe {
-                    c::bch2_get_task_struct(thread.as_ptr());
+                    c::get_task_struct(thread.as_ptr());
                     let h = &raw mut (*task).head.header;
                     (*h).thread = thread.as_ptr();
                     (*h).state.fetch_add(REF, Ordering::Relaxed);
@@ -511,7 +511,7 @@ unsafe fn dispatch(h: NonNull<Header>, inline: bool) {
         if at == THREAD {
             hr.thread_go.store(true, Ordering::Release);
             // SAFETY: the task's ref on its thread
-            unsafe { c::bch2_wake_up_process(hr.thread) };
+            unsafe { c::wake_up_process(hr.thread) };
         } else {
             // SAFETY: a queue an await recorded, borrowed till it's done, or
             // the task's 'static one; the work's the task's, alive till it's
@@ -553,7 +553,7 @@ unsafe extern "C" fn run_thread(data: *mut c_void) -> c_int {
         if hr.state.load(Ordering::Acquire) & COMPLETE != 0 {
             break;
         }
-        unsafe { c::bch2_schedule() };
+        unsafe { c::schedule() };
     }
     unsafe { c::bch2_set_current_state_running() };
     // SAFETY: the thread's ref
@@ -628,7 +628,7 @@ unsafe fn put_ref(h: NonNull<Header>) {
     if hr.state.fetch_sub(REF, Ordering::AcqRel) & !(REF - 1) == REF {
         if !hr.thread.is_null() {
             // SAFETY: the task's ref on its thread - exited, or exiting
-            unsafe { c::bch2_put_task_struct(hr.thread) };
+            unsafe { c::put_task_struct(hr.thread) };
         }
         // SAFETY: the last ref
         unsafe { (hr.vtable.dealloc)(h) };

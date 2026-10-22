@@ -1492,11 +1492,6 @@ unsigned bch2_num_online_cpus(void)
 }
 #endif
 
-unsigned long bch2_nsecs_to_jiffies(u64 ns)
-{
-	return nsecs_to_jiffies(ns);
-}
-
 /* @src is a const u64 __percpu *: as bch2_this_cpu_add_u64()'s @pcp */
 void bch2_acc_u64s_percpu(u64 *acc, const u64 *src, unsigned nr)
 {
@@ -1516,11 +1511,6 @@ int bch2_prt_current_backtrace(struct printbuf *out, unsigned skipnr, gfp_t gfp)
 u64 bch2_get_random_u64(void)
 {
 	return get_random_u64();
-}
-
-void bch2_ktime_get_coarse_real_ts64(struct timespec64 *ts)
-{
-	ktime_get_coarse_real_ts64(ts);
 }
 
 /* queue_work() is a static inline in the kernel, a function in userspace: */
@@ -1545,16 +1535,6 @@ bool bch2_queue_delayed_work(struct workqueue_struct *wq, struct delayed_work *d
 	return queue_delayed_work(wq, dwork, delay);
 }
 
-bool bch2_cancel_delayed_work_sync(struct delayed_work *dwork)
-{
-	return cancel_delayed_work_sync(dwork);
-}
-
-struct workqueue_struct *bch2_system_long_wq(void)
-{
-	return system_long_wq;
-}
-
 struct workqueue_struct *bch2_system_dfl_wq(void)
 {
 	return system_dfl_wq;
@@ -1566,11 +1546,6 @@ struct workqueue_struct *bch2_alloc_workqueue(const char *name, unsigned flags, 
 	return alloc_workqueue("%s", flags, max_active, name);
 }
 
-void bch2_destroy_workqueue(struct workqueue_struct *wq)
-{
-	destroy_workqueue(wq);
-}
-
 /* util/workqueue.rs's WqFlags are C's WQ_* */
 static_assert(BCH_WQ_UNBOUND		== WQ_UNBOUND);
 static_assert(BCH_WQ_FREEZABLE		== WQ_FREEZABLE);
@@ -1578,10 +1553,7 @@ static_assert(BCH_WQ_MEM_RECLAIM	== WQ_MEM_RECLAIM);
 static_assert(BCH_WQ_HIGHPRI		== WQ_HIGHPRI);
 static_assert(BCH_WQ_CPU_INTENSIVE	== WQ_CPU_INTENSIVE);
 
-/*
- * For util/kthread.rs and util/task.rs: kthread_create() is a macro in the
- * kernel, a function in userspace; get/put_task_struct() are static inlines.
- */
+/* For util/kthread.rs: kthread_create() is a macro in the kernel, a function in userspace */
 struct task_struct *bch2_kthread_create(int (*fn)(void *), void *data, const char *name)
 {
 	return kthread_create(fn, data, "%s", name);
@@ -1595,21 +1567,6 @@ int bch2_kthread_stop(struct task_struct *p)
 bool bch2_kthread_should_stop(void)
 {
 	return (current->flags & PF_KTHREAD) && kthread_should_stop();
-}
-
-void bch2_wake_up_process(struct task_struct *p)
-{
-	wake_up_process(p);
-}
-
-void bch2_get_task_struct(struct task_struct *p)
-{
-	get_task_struct(p);
-}
-
-void bch2_put_task_struct(struct task_struct *p)
-{
-	put_task_struct(p);
 }
 
 /*
@@ -1630,11 +1587,6 @@ void bch2_set_current_state_idle(bool freezable)
 void bch2_set_current_state_running(void)
 {
 	__set_current_state(TASK_RUNNING);
-}
-
-void bch2_schedule(void)
-{
-	schedule();
 }
 
 /* For util/task.rs: INIT_WORK() is a macro, with a lockdep class in the kernel */
@@ -1677,13 +1629,7 @@ void **bch2_rht_bucket(const struct bucket_table *tbl, unsigned hash)
 	return (void **) rht_bucket(tbl, hash);
 }
 
-/* For util/debugfs.rs: copy_to_user() is a static inline in either build */
-unsigned long bch2_copy_to_user(void __user *to, const void *from, unsigned long n)
-{
-	return copy_to_user(to, (void *) from, n);
-}
-
-/* ...and debugfs_create_file(), in the kernel, a _Generic() over its fops' type */
+/* For util/debugfs.rs: debugfs_create_file() is, in the kernel, a _Generic() over its fops' type */
 struct dentry *bch2_debugfs_create_file(const char *name, umode_t mode, struct dentry *parent,
 					void *data, const struct file_operations *fops)
 {

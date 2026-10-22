@@ -532,7 +532,7 @@ impl Fs {
     /// In the filesystem's time units.
     pub fn current_time(&self) -> u64 {
         let mut now: c::timespec64 = pin_init::Zeroable::zeroed();
-        unsafe { c::bch2_ktime_get_coarse_real_ts64(&mut now) };
+        unsafe { c::ktime_get_coarse_real_ts64(&mut now) };
         self.timespec_to_time(now) as u64
     }
 

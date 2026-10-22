@@ -64,8 +64,10 @@ pub fn msleep(ms: u32) {
     unsafe { c::bch2_msleep(ms) }
 }
 
+/// The kernel's binding returns its own c_ulong, usize; the same width as
+/// core's.
 pub fn nsecs_to_jiffies(ns: u64) -> core::ffi::c_ulong {
-    unsafe { c::bch2_nsecs_to_jiffies(ns) }
+    unsafe { c::nsecs_to_jiffies(ns) as core::ffi::c_ulong }
 }
 
 /// Whether this task has been sent a fatal signal: as

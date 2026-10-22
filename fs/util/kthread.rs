@@ -62,14 +62,14 @@ impl Kthread {
 
         // Ours, so it can be stopped after it's exited
         // SAFETY: a task just made
-        unsafe { c::bch2_get_task_struct(task.as_ptr()) };
+        unsafe { c::get_task_struct(task.as_ptr()) };
         Ok(Kthread { task, thread: thread.cast(), free: free_thread::<F> })
     }
 
     /// Start it, or wake it from a sleep: wake_up_process().
     pub fn wake(&self) {
         // SAFETY: our task ref
-        unsafe { c::bch2_wake_up_process(self.task.as_ptr()) };
+        unsafe { c::wake_up_process(self.task.as_ptr()) };
     }
 
     /// The task, for C that wakes it by pointer.
@@ -95,7 +95,7 @@ impl Drop for Kthread {
         // closure, so it's ours to free
         unsafe {
             c::bch2_kthread_stop(self.task.as_ptr());
-            c::bch2_put_task_struct(self.task.as_ptr());
+            c::put_task_struct(self.task.as_ptr());
             (self.free)(self.thread);
         }
     }

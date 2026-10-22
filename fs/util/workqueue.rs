@@ -88,7 +88,7 @@ impl Drop for Workqueue {
     fn drop(&mut self) {
         if let Some(wq) = self.0.take() {
             // SAFETY: ours, and nothing queues on it after this
-            unsafe { c::bch2_destroy_workqueue(wq.as_ptr()) };
+            unsafe { c::destroy_workqueue(wq.as_ptr()) };
         }
     }
 }
@@ -116,7 +116,7 @@ impl Queue {
     /// system_long_wq: for work that may run long.
     pub fn system_long() -> &'static Queue {
         // SAFETY: the system's, for as long as there is a system
-        unsafe { Self::from_raw(c::bch2_system_long_wq()) }
+        unsafe { Self::from_raw(c::system_long_wq) }
     }
 
     /// system_dfl_wq: the default, unbound - system_unbound_wq before 6.17.
@@ -199,6 +199,6 @@ impl DelayedWork {
     /// Not queued any more, and not running - waiting out a run that is:
     /// cancel_delayed_work_sync(). Whether it was pending.
     pub fn cancel_sync(&self) -> bool {
-        unsafe { c::bch2_cancel_delayed_work_sync(self.as_ptr()) }
+        unsafe { c::cancel_delayed_work_sync(self.as_ptr()) }
     }
 }
