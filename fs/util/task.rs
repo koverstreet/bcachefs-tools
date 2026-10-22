@@ -63,7 +63,7 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
-use pin_init::{pin_data, pin_init, PinInit};
+use pin_init::{pin_data, pin_init};
 
 /// Where a task resumes, once what it awaits is done.
 #[derive(Clone, Copy)]
@@ -459,11 +459,7 @@ where
     // SAFETY: @init's own
     let init = unsafe {
         pin_init::pin_init_from_closure(move |slot| {
-            #[cfg(bch_pin_init_v2)]
-            let res = init.__init(slot);
-            #[cfg(not(bch_pin_init_v2))]
-            let res = init.__pinned_init(slot);
-            res.map_err(|e: core::convert::Infallible| match e {})
+            crate::util::alloc::init_at(init, slot).map_err(|e: core::convert::Infallible| match e {})
         })
     };
     let task = kalloc_pinned::<Task<F>, AllocError>(init)?;

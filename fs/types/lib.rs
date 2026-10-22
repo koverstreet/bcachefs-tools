@@ -252,11 +252,7 @@ impl<T, const U64S: usize> RustOnly<T, U64S> {
         // initializes the RustOnly; on Err, init left nothing to drop.
         unsafe {
             ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                #[cfg(bch_pin_init_v2)]
-                let res = init.__init(slot.cast::<T>());
-                #[cfg(not(bch_pin_init_v2))]
-                let res = init.__pinned_init(slot.cast::<T>());
-                res
+                crate::util::alloc::init_at(init, slot.cast::<T>())
             })
         }
     }

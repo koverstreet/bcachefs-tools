@@ -41,6 +41,20 @@ pub unsafe fn kfree_pinned<T>(p: *mut T) {
     unsafe { free_in::<true, T>(p) }
 }
 
+/// @init run on @slot: PinInit's __init() - __pinned_init(), before the
+/// kernel's pin-init v2 (7.3).
+///
+/// # Safety
+/// As PinInit's: @slot is a T's, and stays put if @init needs it to.
+pub unsafe fn init_at<T, E>(init: impl ::pin_init::PinInit<T, E>, slot: *mut T) -> Result<(), E> {
+    // SAFETY: the caller's
+    #[cfg(bch_pin_init_v2)]
+    return unsafe { init.__init(slot) };
+    // SAFETY: the caller's
+    #[cfg(not(bch_pin_init_v2))]
+    return unsafe { init.__pinned_init(slot) };
+}
+
 fn alloc_in<const KMALLOC: bool, T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>)
     -> Result<*mut T, E>
 {
@@ -69,7 +83,7 @@ fn alloc_in<const KMALLOC: bool, T, E: From<AllocError>>(init: impl ::pin_init::
             return Err(AllocError.into());
         }
         // SAFETY: valid for writes, and it won't move: it's C's from here
-        match unsafe { init.__pinned_init(p) } {
+        match unsafe { init_at(init, p) } {
             Ok(()) => Ok(p),
             Err(e) => {
                 // SAFETY: alloc_zeroed()'s, with this layout; a failed init
