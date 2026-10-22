@@ -2795,7 +2795,7 @@ impl Fs {
         let mut total = 0u64;
 
         for ca in self.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_write_super) {
-            let sectors = self.dev_usage_full_read(ca.dev_idx.into()).d[c::bch_data_type::BCH_DATA_btree.0 as usize].sectors;
+            let sectors = ca.usage_full_read_fast().d[c::bch_data_type::BCH_DATA_btree.0 as usize].sectors;
             if m.push((ca.dev_idx, sectors), crate::util::alloc::flags::GFP_KERNEL).is_err() {
                 return self.write_super_flags(sb, c::bch_sb_write_flags::empty());
             }

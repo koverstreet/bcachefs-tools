@@ -231,8 +231,8 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
     let mut buf = Printbuf::new();
     buf.set_human_readable(true);
 
-    let usage = fs.dev_usage_full_read(0);
     let ca = unsafe { &*fs.dev_raw(0) };
+    let usage = ca.usage_full_read_fast();
 
     print_data_type_usage(&mut buf, ca, &usage, data_type::sb);
     print_data_type_usage(&mut buf, ca, &usage, data_type::journal);

@@ -472,12 +472,6 @@ impl Fs {
         })
     }
 
-    pub fn dev_usage_full_read(&self, dev: u32) -> c::bch_dev_usage_full {
-        let mut usage: c::bch_dev_usage_full = pin_init::Zeroable::zeroed();
-        unsafe { c::bch2_dev_usage_full_read_fast(self.devs[dev as usize].as_ptr(), &mut usage) };
-        usage
-    }
-
     /// # Safety
     /// The device exists.
     pub unsafe fn dev_raw(&self, dev: u32) -> *mut c::bch_dev {
@@ -535,10 +529,6 @@ impl Fs {
         let mut now: c::timespec64 = pin_init::Zeroable::zeroed();
         unsafe { c::ktime_get_coarse_real_ts64(&mut now) };
         self.timespec_to_time(now) as u64
-    }
-
-    pub fn usage_read_short(&self) -> c::bch_fs_usage_short {
-        unsafe { c::bch2_fs_usage_read_short(self.as_ptr()) }
     }
 
     pub fn set_loglevel(&self, level: u32) {

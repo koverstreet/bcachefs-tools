@@ -221,7 +221,6 @@ static inline int dev_ptr_stale(struct bch_dev *ca, const struct bch_extent_ptr 
 
 /* Device usage: */
 
-void bch2_dev_usage_read_fast(struct bch_dev *, struct bch_dev_usage *);
 static inline struct bch_dev_usage bch2_dev_usage_read(struct bch_dev *ca)
 {
 	struct bch_dev_usage ret;
@@ -576,8 +575,6 @@ DEFINE_CLASS(disk_reservation, struct disk_reservation_destructable,
 	     bch2_disk_reservation_put(_T.c, &_T.r),
 	     (struct disk_reservation_destructable) { .c = c },
 	     struct bch_fs *c);
-
-#define RESERVE_FACTOR	6
 
 static inline u64 avail_factor(u64 r)
 {

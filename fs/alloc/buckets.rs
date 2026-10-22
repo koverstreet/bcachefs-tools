@@ -5,8 +5,12 @@ use crate::btree::iter::{TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
+use crate::percpu_field;
+use crate::util::ffi::Opaque;
+use crate::util::percpu::Counters;
 use crate::util::rcu::ReadGuard;
 use core::cell::UnsafeCell;
+use cstruct_macros::c_export;
 
 // ── Bucket addressing ────────────────────────────────────────────────────
 
@@ -107,10 +111,75 @@ impl c::bch_dev {
     /// Its buckets by data type, every CPU's count summed - not under any
     /// lock, so only near enough: bch2_dev_usage_read_fast().
     pub fn usage_read_fast(&self) -> c::bch_dev_usage {
+        // The allocator's: one sweep over the CPUs, reading only the bucket
+        // counts, a third of each CPU's usage
         let mut u = c::bch_dev_usage::default();
-        unsafe { c::bch2_dev_usage_read_fast(core::ptr::from_ref(self).cast_mut(), &mut u) };
-        u
+        for cpu in self.usage.get().cpus() {
+            for (i, b) in u.buckets.iter_mut().enumerate() {
+                *b = b.wrapping_add(percpu_field!(cpu, d[i].buckets).get());
+            }
+        }
+        u.clamp_nonnegative()
     }
+
+    /// All of its usage, as usage_read_fast(): bch2_dev_usage_full_read_fast().
+    pub fn usage_full_read_fast(&self) -> c::bch_dev_usage_full {
+        self.usage.sum_nonnegative()
+    }
+}
+
+/// @r, and the margin charged on top of a reservation: reserve_factor().
+fn reserve_factor(r: u64) -> u64 {
+    r + (r.next_multiple_of(1 << c::RESERVE_FACTOR) >> c::RESERVE_FACTOR)
+}
+
+impl Fs {
+    /// Sectors in use by kind, every CPU's count summed:
+    /// bch2_fs_usage_base_read().
+    pub fn usage_base(&self) -> c::bch_fs_usage_base {
+        percpu_field!(self.capacity.pcpu.get(), usage).sum_nonnegative()
+    }
+
+    /// Capacity, and how much of it is used and free, in sectors:
+    /// bch2_fs_usage_read_short().
+    pub fn usage_read_short(&self) -> c::bch_fs_usage_short {
+        let _mark = self.mark_lock().read();
+        // one sweep over the CPUs: sectors_available is summed too, and dropped
+        let b = self.capacity.pcpu.sum_nonnegative();
+
+        // a u64's, as C's: nothing keeps hidden below capacity
+        let capacity = self.capacity.capacity.wrapping_sub(b.usage.hidden);
+        let data     = b.usage.data + b.usage.btree;
+        // outstanding reservations are counted by replicas; all of them
+        let reserved = b.usage.reserved + b.online_reserved.iter().sum::<u64>();
+        let used     = capacity.min(data + reserve_factor(reserved));
+
+        c::bch_fs_usage_short { capacity, used, free: capacity - used }
+    }
+}
+
+/// # Safety
+/// @usage is writable.
+#[c_export]
+pub unsafe fn bch2_dev_usage_read_fast(ca: &c::bch_dev, usage: *mut c::bch_dev_usage) {
+    unsafe { usage.write(ca.usage_read_fast()) }
+}
+
+/// # Safety
+/// @usage is writable.
+#[c_export]
+pub unsafe fn bch2_dev_usage_full_read_fast(ca: &c::bch_dev, usage: *mut c::bch_dev_usage_full) {
+    unsafe { usage.write(ca.usage_full_read_fast()) }
+}
+
+#[c_export]
+pub fn bch2_fs_usage_base_read(c: &Opaque<c::bch_fs>) -> c::bch_fs_usage_base {
+    Fs::from_c(c).usage_base()
+}
+
+#[c_export]
+pub fn bch2_fs_usage_read_short(c: &Opaque<c::bch_fs>) -> c::bch_fs_usage_short {
+    Fs::from_c(c).usage_read_short()
 }
 
 /// The bucket @v encodes - device in the top 16 bits, bucket in the low 48 -

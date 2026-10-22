@@ -35,81 +35,9 @@
 
 #include <linux/preempt.h>
 
-void bch2_dev_usage_read_fast(struct bch_dev *ca, struct bch_dev_usage *usage)
-{
-	memset(usage, 0, sizeof(*usage));
-
-	/*
-	 * One sweep over the cpus instead of BCH_DATA_NR of them: each cpu's
-	 * usage is read once while its cache lines are hot. (We don't use the
-	 * full-struct reader here to avoid a bch_dev_usage_full sized temporary
-	 * on the allocation hot path.)
-	 */
-	int cpu;
-	for_each_possible_cpu(cpu) {
-		struct bch_dev_usage_full *u = per_cpu_ptr(ca->usage, cpu);
-
-		for (unsigned i = 0; i < BCH_DATA_NR; i++)
-			usage->buckets[i] += u->d[i].buckets;
-	}
-
-	/* as percpu_u64s_get_nonnegative(): a racing sum can be negative */
-	for (unsigned i = 0; i < BCH_DATA_NR; i++)
-		usage->buckets[i] = max_t(s64, usage->buckets[i], 0);
-}
-
-void bch2_dev_usage_full_read_fast(struct bch_dev *ca, struct bch_dev_usage_full *usage)
-{
-	percpu_u64s_get_nonnegative((u64 *) usage, (u64 __percpu *) ca->usage,
-				    sizeof(struct bch_dev_usage_full) / sizeof(u64));
-}
-
 static u64 reserve_factor(u64 r)
 {
 	return r + (round_up(r, (1 << RESERVE_FACTOR)) >> RESERVE_FACTOR);
-}
-
-static struct bch_fs_usage_short
-__bch2_fs_usage_read_short(struct bch_fs *c)
-{
-	/*
-	 * Sum the whole per-cpu struct in a single sweep (one cache line per
-	 * cpu); sectors_available is summed into the throwaway and ignored.
-	 */
-	struct bch_fs_capacity_pcpu b;
-	percpu_u64s_get_nonnegative((u64 *) &b, (u64 __percpu *) c->capacity.pcpu,
-				    sizeof(b) / sizeof(u64));
-
-	struct bch_fs_usage_short ret;
-	ret.capacity	= c->capacity.capacity - b.usage.hidden;
-
-	u64 data	= b.usage.data + b.usage.btree;
-	u64 reserved	= b.usage.reserved;
-
-	/* Outstanding reservations are tracked per replica count; total here */
-	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
-		reserved += b.online_reserved[i];
-
-	ret.used	= min(ret.capacity, data + reserve_factor(reserved));
-	ret.free	= ret.capacity - ret.used;
-
-	return ret;
-}
-
-struct bch_fs_usage_base bch2_fs_usage_base_read(struct bch_fs *c)
-{
-	struct bch_fs_usage_base b;
-
-	percpu_u64s_get_nonnegative(&b.hidden, &c->capacity.pcpu->usage.hidden,
-				    sizeof(b) / sizeof(u64));
-	return b;
-}
-
-struct bch_fs_usage_short
-bch2_fs_usage_read_short(struct bch_fs *c)
-{
-	guard(percpu_read_noio)(&c->capacity.mark_lock);
-	return __bch2_fs_usage_read_short(c);
 }
 
 __cold void bch2_dev_usage_to_text(struct printbuf *out,
