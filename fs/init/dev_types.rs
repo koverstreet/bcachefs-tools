@@ -26,6 +26,9 @@ c_default!(bch_sb_handle_holder);
 pub struct bch_sb_buf {
     pub sb:          *mut Head<c::bch_sb>,
     pub buffer_size: usize,
+    /// The section types edited since the last write, by bit: set by
+    /// field_mut() and resizing, for the filesystem's to_cpu() to read.
+    pub dirty:       u64,
 }
 c_default!(bch_sb_buf);
 
@@ -35,7 +38,7 @@ c_default!(bch_sb_buf);
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_sb {
-    #[c_anon("struct bch_sb *sb; size_t buffer_size")]
+    #[c_anon("struct bch_sb *sb; size_t buffer_size; u64 dirty")]
     buf: c::bch_sb_buf,
 }
 c_default!(bch_fs_sb);
@@ -60,7 +63,7 @@ nest! {
     #[repr(C)]
     #[derive(CStruct, TypeInfo)]
     pub struct bch_sb_io {
-        #[c_anon("struct bch_sb *sb; size_t buffer_size")]
+        #[c_anon("struct bch_sb *sb; size_t buffer_size; u64 dirty")]
         pub buf: c::bch_sb_buf,
         pub bio: *mut c::bio,
         #[c_bitfield]

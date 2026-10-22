@@ -155,6 +155,7 @@ use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::NSEC_PER_SEC;
 use cstruct_macros::{c_const, c_export};
 use core::mem::{size_of, size_of_val};
+use arrayvec::ArrayVec;
 use core::pin::Pin;
 use pin_init::PinInit;
 
@@ -297,6 +298,7 @@ fn validate_at(sb: &mut bch_sb<Unvalidated>, off: usize, flags: c::bch_validate_
 // ── The sections, by type ────────────────────────────────────────────────
 
 const FIELD_NR: usize = c::bch_sb_field_type::BCH_SB_FIELD_NR.0 as usize;
+const _: () = assert!(FIELD_NR <= 64, "bch_sb_buf.dirty: a bit per section type");
 
 macro_rules! sb_fields {
     ($(($name:ident, $nr:literal, $($desc:literal)*)),* $(,)?) => {
@@ -312,6 +314,9 @@ macro_rules! sb_fields {
     };
 }
 c::BCH_SB_FIELDS!(sb_fields);
+
+/// A section's to_cpu() or from_cpu(), as the union hands it out.
+pub type SbSyncFn = fn(&Fs, &mut SbLockGuard<'_>) -> Result<(), BchError>;
 
 /// The type a section's SbFieldOps are of: its arm - ext's, a grown type's
 /// family, not its C struct.
@@ -357,6 +362,15 @@ macro_rules! sb_field_ops {
                     $(Ok(c::BchSbFieldRef::$name(f)) =>
                         <section_ops!($name) as SbFieldOps>::to_text(out, fs, sb, f),)*
                     Err(_) => {}
+                }
+            }
+        }
+
+        impl c::bch_sb_field<Validated> {
+            /// Its type's to_cpu(): None for a type this version doesn't know.
+            fn to_cpu_fn(&self) -> Option<SbSyncFn> {
+                match self.typed().ok()? {
+                    $(c::BchSbFieldRef::$name(_) => Some(<section_ops!($name) as SbFieldOps>::to_cpu),)*
                 }
             }
         }
@@ -1093,8 +1107,15 @@ impl bch_sb_buf {
     /// To edit: a field past the section's end is no write it will carry -
     /// whole_mut() for all of it, if it's all there.
     pub fn field_mut<F: SbField + ?Sized>(&mut self) -> Option<&mut F> {
+        self.mark_dirty(F::FIELD_TYPE);
         // SAFETY: the handle's superblock, borrowed mutably with it
         unsafe { sb_field_get_raw_mut(self.sb) }
+    }
+
+    /// Section @ty edited: to_cpu() it, after the next write, if this is the
+    /// filesystem's.
+    fn mark_dirty(&mut self, ty: c::bch_sb_field_type) {
+        self.dirty |= 1 << ty.0;
     }
 
     /// The superblock's full vstruct extent as bytes.
@@ -1969,6 +1990,7 @@ pub trait SbResize: core::ops::DerefMut<Target = bch_sb_buf> {
     /// the superblock grown to hold it, and what's grown with it: its
     /// offset, None if there's no room.
     fn field_resize_id(&mut self, ty: c::bch_sb_field_type, u64s: u32) -> Option<usize> {
+        self.mark_dirty(ty);
         let d = u64s as isize - (field_bytes(self.sb(), ty) / size_of::<u64>()) as isize;
         let new = (self.sb().u64s() as isize + d) as u32;
 
@@ -1984,6 +2006,7 @@ pub trait SbResize: core::ops::DerefMut<Target = bch_sb_buf> {
 
     /// The section of type @ty, made or grown to at least @u64s.
     fn field_get_minsize_id(&mut self, ty: c::bch_sb_field_type, u64s: u32) -> Option<usize> {
+        self.mark_dirty(ty);
         if field_get_id(self.sb(), ty).is_some_and(|f| f.as_bytes().len() >= u64s as usize * size_of::<u64>()) {
             return field_offset(self.sb(), ty);
         }
@@ -2003,6 +2026,7 @@ pub trait SbResize: core::ops::DerefMut<Target = bch_sb_buf> {
     }
 
     fn field_delete(&mut self, ty: c::bch_sb_field_type) {
+        self.mark_dirty(ty);
         if let Some(off) = field_offset(self.sb(), ty) {
             self.field_resize_at(Some(off), 0);
         }
@@ -2614,17 +2638,47 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
 }
 
 /// write_super_locked(), then the new options made visible - after they're
-/// persistent - and timed: bch2_write_super_devs().
+/// persistent - and timed: bch2_write_super_devs(). And what memory has of
+/// each section edited since the last write, by to_cpu() - not of what the
+/// write's from_cpu()s edited, which is memory's already.
 #[track_caller]
 fn write_super_devs(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_devs_mask>,
                     flags: c::bch_sb_write_flags) -> Result<(), BchError> {
     let start = crate::util::kernel::local_clock();
 
+    let dirty = core::mem::take(&mut sb.dirty);
     let ret = write_super_locked(fs, sb, devs, flags);
+    sb.dirty = 0;
     sb_update(fs, sb);
+
+    // XXX enable after all sb access in Rust: C edits sections through raw
+    // pointers, which mark nothing - bch2_members_v2_get_mut(), all over -
+    // so sb_update() reads members back after every write. Then the explicit
+    // rebuilds go - sb_update()'s members, dev_group_set()'s disk groups,
+    // journal_seq_blacklist_add()'s - and the replicas table's writes, and
+    // the tools' strip_fs_alloc(), edit as from_cpu() does: marking nothing,
+    // replicas' to_cpu() being only for before the table has refs.
+    const TO_CPU_DIRTY: bool = false;
+    let ret = if TO_CPU_DIRTY { ret.and(sections_to_cpu(fs, sb, dirty)) } else { ret };
 
     fs.times[c::bch_time_stats::BCH_TIME_sb_write as usize].update(start);
     ret
+}
+
+/// to_cpu() for each section the superblock has that @dirty names, by bit:
+/// each, whichever fails. XXX: not one deleted since the last write.
+fn sections_to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>, dirty: u64) -> Result<(), BchError> {
+    let fns = section_fns(sb.sb(), |f| dirty & 1u64.checked_shl(f.type_.get()).unwrap_or(0) != 0,
+                          c::bch_sb_field::to_cpu_fn);
+    fns.into_iter().fold(Ok(()), |ret, f| ret.and(f(fs, sb)))
+}
+
+/// Of each section @sb has that @keep passes, its @f - collected, for the
+/// walk borrows the superblock, and what it collects is called with it.
+fn section_fns(sb: &bch_sb, keep: impl Fn(&c::bch_sb_field) -> bool,
+               f: impl Fn(&c::bch_sb_field) -> Option<SbSyncFn>) -> ArrayVec<SbSyncFn, FIELD_NR> {
+    // validated: one of each type at most
+    sb.entries().filter(|s| keep(s)).filter_map(f).take(FIELD_NR).collect()
 }
 
 /// How much of the filesystem's metadata we're willing to leave on devices a
