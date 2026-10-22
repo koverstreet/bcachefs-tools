@@ -373,6 +373,13 @@ macro_rules! sb_field_ops {
                     $(c::BchSbFieldRef::$name(_) => Some(<section_ops!($name) as SbFieldOps>::to_cpu),)*
                 }
             }
+
+            /// Its type's from_cpu(): None for a type this version doesn't know.
+            fn from_cpu_fn(&self) -> Option<SbSyncFn> {
+                match self.typed().ok()? {
+                    $(c::BchSbFieldRef::$name(_) => Some(<section_ops!($name) as SbFieldOps>::from_cpu),)*
+                }
+            }
         }
     } };
 }
@@ -863,11 +870,13 @@ pub fn bch2_check_version_downgrade(c: &Opaque<c::bch_fs>) -> bool {
 }
 
 /// The superblock at @new, and allowing incompatible features up to it if
-/// @incompat; a new major drops the downgrade section, which is for
-/// downgrades within one. bch2_sb_upgrade().
+/// @incompat; a new major empties the downgrade section, which is for
+/// downgrades within one - empties, not deletes: a write calls the from_cpu()
+/// of each section there is. bch2_sb_upgrade().
 fn sb_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, new: u32, incompat: bool) {
     if c::BCH_VERSION_MAJOR(new.into()) > c::BCH_VERSION_MAJOR(sb.sb().version.get().into()) {
-        fs.sb_resize(sb).field_resize::<c::bch_sb_field_downgrade>(0);
+        let empty = <c::bch_sb_field_downgrade as ArmRef>::MIN_LEN.div_ceil(size_of::<u64>());
+        fs.sb_resize(sb).field_resize::<c::bch_sb_field_downgrade>(empty as u32);
     }
 
     let s = sb.sb_mut();
@@ -2435,13 +2444,12 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
     }
     s.set_big_endian(cfg!(target_endian = "big"));
 
-    c::bch_sb_field_counters::from_cpu(fs, sb)?;
-    c::bch_sb_field_members_v2::from_cpu(fs, sb)?;
-    // as C: neither failing stops the write
+    // each section's from_cpu() - sb_to_fs() made those that make their own
+    for from_cpu in section_fns(sb.sb(), |_| true, c::bch_sb_field::from_cpu_fn) {
+        from_cpu(fs, sb)?;
+    }
+    // members_v2's, mirrored - as C, failing doesn't stop the write
     let _ = fs.sb_resize(sb).members_cpy_v2_v1();
-    c::bch_sb_field_errors_v2::from_cpu(fs, sb)?;
-    let _ = c::bch_sb_field_downgrade::from_cpu(fs, sb);
-    c::bch_sb_field_extent_type_u64s::from_cpu(fs, sb)?;
 
     for mut dev_sb in fs.dev_sbs_mut(sb, &cas).flatten() {
         let _ = dev_sb.sync();
@@ -2970,6 +2978,26 @@ fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &bch_sb) -> Result<(), BchEr
     let mut disk_sb = fs.sb_resize(sb);
     disk_sb.sb_realloc(0)?;
     copy_super(&mut disk_sb, src)?;
+
+    // The sections whose from_cpu() would make them, made now, empty: a
+    // write calls the from_cpu() of each section there is. One there's no
+    // room for is left out, as its from_cpu() would have left it - but the
+    // extent type sizes, whose from_cpu() failed the write without room,
+    // fail the open instead.
+    fn make<F: SbField + ?Sized>(sb: &mut FsSbResize<'_>) -> Result<(), BchError> {
+        sb.field_get_minsize::<F>(<F as ArmRef>::MIN_LEN.div_ceil(size_of::<u64>()) as u32)
+            .map(drop).ok_or(bch_errcode::BCH_ERR_ENOSPC_sb.into())
+    }
+    let _ = make::<c::bch_sb_field_counters>(&mut disk_sb);
+    let _ = make::<c::bch_sb_field_errors_v2>(&mut disk_sb);
+    let _ = make::<c::bch_sb_field_downgrade>(&mut disk_sb);
+    if make::<c::bch_sb_field_extent_type_u64s>(&mut disk_sb).is_err() {
+        crate::bch_err!(fs, "error allocating superblock space for extent_type_u64s");
+        return fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_extent_type_u64s);
+    }
+    // nothing to read back after the first write: init reads every section
+    sb.dirty = 0;
+
     c::bch_sb_field_replicas::to_cpu(fs, sb)?;
     c::bch_sb_field_disk_groups::to_cpu(fs, sb)?;
     c::bch_sb_field_extent_type_u64s::to_cpu(fs, sb)?;
