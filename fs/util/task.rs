@@ -52,6 +52,7 @@ use crate::errcode::{errptr_to_result, BchError};
 use crate::util::alloc::{kalloc_pinned, kfree_pinned, AllocError};
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::kthread::Kthread;
+use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
 use core::cell::UnsafeCell;
@@ -537,21 +538,20 @@ unsafe extern "C" fn run_thread(data: *mut c_void) -> c_int {
     let h = unsafe { NonNull::new_unchecked(data.cast::<Header>()) };
     let hr = unsafe { h.as_ref() };
     loop {
-        // the state set before the checks: a dispatch or completion after
-        // them wakes us
-        unsafe { c::bch2_set_current_state_idle(false) };
-        if hr.thread_go.swap(false, Ordering::AcqRel) {
-            unsafe { c::bch2_set_current_state_running() };
-            // SAFETY: dispatched here: SCHEDULED for us
-            unsafe { run(h, Here::At(THREAD)) };
-            continue;
-        }
-        if hr.state.load(Ordering::Acquire) & COMPLETE != 0 {
+        // woken by a dispatch here, or by the task completing
+        let Ok(go) = sleep_until(Sleep::IDLE, || {
+            if hr.thread_go.swap(false, Ordering::AcqRel) {
+                Some(true)
+            } else {
+                (hr.state.load(Ordering::Acquire) & COMPLETE != 0).then_some(false)
+            }
+        });
+        if !go {
             break;
         }
-        unsafe { c::schedule() };
+        // SAFETY: dispatched here: SCHEDULED for us
+        unsafe { run(h, Here::At(THREAD)) };
     }
-    unsafe { c::bch2_set_current_state_running() };
     // SAFETY: the thread's ref
     unsafe { put_ref(h) };
     0

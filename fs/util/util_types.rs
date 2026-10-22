@@ -112,8 +112,9 @@ c_extern! {
     pub fn bch2_kthread_stop(p: *mut c::task_struct) -> c_int;
     pub fn bch2_kthread_should_stop() -> bool;
     pub fn bch2_current() -> *mut c::task_struct;
-    pub fn bch2_set_current_state_idle(freezable: bool);
+    pub fn bch2_set_current_state(state: c_uint);
     pub fn bch2_set_current_state_running();
+    pub fn bch2_signal_pending_state(state: c_uint) -> bool;
     pub fn bch2_init_work(work: *mut c::work_struct, func: Option<unsafe extern "C" fn(*mut c::work_struct)>);
     pub fn bch2_set_worker_desc(desc: *const c_char);
     pub fn bch2_capable(cap: c_int) -> bool;

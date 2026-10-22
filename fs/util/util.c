@@ -1595,23 +1595,27 @@ bool bch2_kthread_should_stop(void)
 }
 
 /*
- * For util/gather.rs's sync wait, as closure_sync()'s: current and
- * set_current_state() are macros.
+ * For util/sleep.rs and util/gather.rs: current, set_current_state() and
+ * signal_pending_state() are macros, or inlines over current.
  */
 struct task_struct *bch2_current(void)
 {
 	return current;
 }
 
-/* TASK_IDLE: no hung task warnings, as closure_sync_unbounded() avoids them */
-void bch2_set_current_state_idle(bool freezable)
+void bch2_set_current_state(unsigned int state)
 {
-	set_current_state(TASK_IDLE|(freezable ? TASK_FREEZABLE : 0));
+	set_current_state(state);
 }
 
 void bch2_set_current_state_running(void)
 {
 	__set_current_state(TASK_RUNNING);
+}
+
+bool bch2_signal_pending_state(unsigned int state)
+{
+	return signal_pending_state(state, current);
 }
 
 /* For util/task.rs: INIT_WORK() is a macro, with a lockdep class in the kernel */

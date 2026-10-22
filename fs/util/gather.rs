@@ -52,6 +52,7 @@
 
 use crate::c;
 use crate::errcode::BchError;
+use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::task::Resumable;
 use core::marker::PhantomPinned;
 use core::mem::ManuallyDrop;
@@ -384,15 +385,8 @@ impl<T: Fold, W: Width> Gather<T, W> {
 
     fn wait_sync_state(&self, freezable: bool) -> T {
         if !self.start_wait() && self.register(task_waker()).is_ok() {
-            loop {
-                // the state set before the check: a wake after it isn't lost
-                unsafe { c::bch2_set_current_state_idle(freezable) };
-                if self.done() {
-                    break;
-                }
-                unsafe { c::schedule() };
-            }
-            unsafe { c::bch2_set_current_state_running() };
+            let how = if freezable { Sleep::IDLE.freezable() } else { Sleep::IDLE };
+            let Ok(()) = sleep_until(how, || self.done().then_some(()));
         }
         T::result(&self.acc)
     }
