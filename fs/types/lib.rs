@@ -360,7 +360,7 @@ macro_rules! typeinfo_opaque {
 }
 typeinfo_opaque!(DArray<T, N>, T, const N: usize);
 typeinfo_opaque!(GenRadix<T>, T);
-typeinfo_opaque!(Fifo<T, I>, T, I);
+typeinfo_opaque!(Fifo<T, I>, T, I: crate::util::fifo::FifoIdx);
 typeinfo_opaque!(MinHeap<T, N>, T, const N: usize);
 
 /// DEFINE_MIN_HEAP(T, name) - linux/min_heap.h: laid out as a darray, but a
@@ -376,10 +376,10 @@ pub struct MinHeap<T, const N: usize = 0> {
 // SAFETY: as DArray's: zeroed is empty, nothing allocated
 unsafe impl<T: ::pin_init::Zeroable, const N: usize> ::pin_init::Zeroable for MinHeap<T, N> {}
 
-/// FIFO(T), FIFO_U16_IDX(T)... - util/fifo.h: __FIFO(T, I).
+/// FIFO(T), FIFO_U16_IDX(T)... - util/fifo.h: __FIFO(T, I). Its methods are
+/// util/fifo.rs's.
 #[repr(C)]
-#[derive(Clone, Copy)]
-pub struct Fifo<T, I = usize> {
+pub struct Fifo<T, I: crate::util::fifo::FifoIdx = usize> {
     pub front: I,
     pub back:  I,
     pub size:  I,
@@ -388,7 +388,7 @@ pub struct Fifo<T, I = usize> {
 }
 
 // SAFETY: zeroed is empty, nothing allocated - as before init_fifo()
-unsafe impl<T, I: ::pin_init::Zeroable> ::pin_init::Zeroable for Fifo<T, I> {}
+unsafe impl<T, I: crate::util::fifo::FifoIdx + ::pin_init::Zeroable> ::pin_init::Zeroable for Fifo<T, I> {}
 
 /// XXX migration only: rip this out once the types are Rust's alone. It's
 /// here so the converted types keep the C layout exactly, where a run of C
