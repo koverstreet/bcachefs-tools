@@ -318,11 +318,15 @@ const _: () = assert!(PTRS_MUT_KEY_TYPES & !PTRS_KEY_TYPES == 0,
 /// The extent entries of a key with pointers, in whichever form it's held:
 /// any BkeyV whose value is a PtrsBkey - armed to Ptrs, or to one of them.
 pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
-    fn extent_entries(&self, fs: &Fs) -> impl Iterator<Item = ExtentEntry<'_>> {
+    /// Its extent entries' bytes, what bkey_ptrs_c() spans: empty for a value
+    /// too short to hold them.
+    fn entry_bytes(&self) -> &[u8] {
         let k = self.as_sc();
-        // Empty for a value too short to hold them
-        let b = k.val_bytes().get(<Self::V as PtrsBkey>::entry_range(k)).unwrap_or_default();
-        Entries { sizes: EntrySizes::of(fs), b }.map(|(ty, b, stop)| ExtentEntry::new(ty, b, stop))
+        k.val_bytes().get(<Self::V as PtrsBkey>::entry_range(k)).unwrap_or_default()
+    }
+
+    fn extent_entries(&self, fs: &Fs) -> impl Iterator<Item = ExtentEntry<'_>> {
+        Entries { sizes: EntrySizes::of(fs), b: self.entry_bytes() }.map(|(ty, b, stop)| ExtentEntry::new(ty, b, stop))
     }
 
     /// extent_entries(), each with where it is.
