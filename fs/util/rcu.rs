@@ -298,6 +298,9 @@ rcu_element!((), u8, u16, u32, u64, usize,
              core::sync::atomic::AtomicU32, core::sync::atomic::AtomicU64,
              core::sync::atomic::AtomicUsize);
 
+// SAFETY: as its elements
+unsafe impl<T: RcuElement, const N: usize> RcuElement for [T; N] {}
+
 /// An RcuBuf of an array, with header @H: see the top of the file.
 #[repr(transparent)]
 pub struct RcuArray<T: RcuElement, H: RcuElement = ()>(RcuBuf<RcuArrayBuf<T, H>>);
@@ -381,6 +384,12 @@ impl<T: RcuElement, H: RcuElement> RcuArray<T, H> {
     }
 
     /// # Safety
+    /// As RcuBuf::clear().
+    pub unsafe fn clear(&self) {
+        unsafe { self.0.clear() }
+    }
+
+    /// # Safety
     /// As RcuBuf::free().
     pub unsafe fn free(&self) {
         unsafe { self.0.free() }
@@ -456,8 +465,10 @@ impl<T: RcuElement> RcuArrayWriter<T> {
         // guard
         unsafe { self.0.rebuild(nr, fill) }
     }
+}
 
+impl<T: RcuElement, H: RcuElement> RcuArrayWriter<T, H> {
     pub fn clear(&self) {
-        unsafe { self.0 .0.clear() }
+        unsafe { self.0.clear() }
     }
 }
