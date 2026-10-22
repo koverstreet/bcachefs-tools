@@ -20,7 +20,6 @@ use crate::types::Le64;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
-use crate::sb::io::SbResize;
 
 fn invalid() -> BchError {
     bch_errcode::BCH_ERR_invalid_sb_journal.into()
@@ -117,11 +116,11 @@ impl SbFieldOps for c::bch_sb_field_journal_v2 {
 fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &c::bch_dev, buckets: &[u64])
     -> Result<(), BchError>
 {
-    let dev_sb = sb.dev_sb(ca);
+    let mut dev_sb = fs.dev_sb_mut(sb, ca).expect("journal buckets: a device with no superblock");
 
     if buckets.is_empty() {
-        dev_sb.field_delete(c::bch_sb_field_type::BCH_SB_FIELD_journal);
-        dev_sb.field_delete(c::bch_sb_field_type::BCH_SB_FIELD_journal_v2);
+        dev_sb.field_delete::<c::bch_sb_field_journal>();
+        dev_sb.field_delete::<c::bch_sb_field_journal_v2>();
         return Ok(());
     }
 
@@ -136,7 +135,7 @@ fn buckets_to_sb(fs: &Fs, sb: &mut SbLockGuard<'_>, ca: &c::bch_dev, buckets: &[
         d.nr    = Le64::new(run.len() as u64);
     }
 
-    dev_sb.field_delete(c::bch_sb_field_type::BCH_SB_FIELD_journal);
+    dev_sb.field_delete::<c::bch_sb_field_journal>();
     Ok(())
 }
 
@@ -168,10 +167,11 @@ pub fn bch2_sb_journal_sort(c: &Opaque<c::bch_fs>) -> c_int {
     let mut dirty = false;
 
     for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_sb_journal_sort) {
-        let Some(j) = ca.disk_sb.field::<c::bch_sb_field_journal_v2>() else { continue };
+        let Some(dev_sb) = fs.dev_sb(&sb, &ca) else { continue };
+        let Some(j) = dev_sb.field::<c::bch_sb_field_journal_v2>() else { continue };
 
         if !j.d.is_sorted_by_key(|d| d.start.get()) ||
-           ca.disk_sb.field::<c::bch_sb_field_journal>().is_some() {
+           dev_sb.field::<c::bch_sb_field_journal>().is_some() {
             let ja = &ca.journal;
             let buckets: &mut [u64] = match ja.nr {
                 0  => &mut [],

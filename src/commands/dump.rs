@@ -483,19 +483,23 @@ fn dump_node(fs: &Fs, devs: &mut [DumpDev], k: btree::BkeySC<'_>, btree_node_siz
 }
 
 fn get_sb_journal(fs: &Fs, ca: &c::bch_dev, entire_journal: bool, d: &mut DumpDev) {
-    let sb = ca.disk_sb.sb();
-    let sb_bytes = sb.bytes() as u64;
     let bucket_bytes = (ca.mi.bucket_size as u64) << 9;
 
-    // Superblock layout
-    range_add(&mut d.sb,
-              (c::BCH_SB_LAYOUT_SECTOR as u64) << 9,
-              std::mem::size_of::<c::bch_sb_layout>() as u64);
+    {
+        let guard = fs.sb_lock();
+        let sb = fs.dev_sb(&guard, ca).expect("an online device's superblock").sb();
+        let sb_bytes = sb.bytes() as u64;
 
-    // All superblock copies
-    for i in 0..sb.layout.nr_superblocks as usize {
-        let offset = sb.layout.sb_offset[i].get();
-        range_add(&mut d.sb, offset << 9, sb_bytes);
+        // Superblock layout
+        range_add(&mut d.sb,
+                  (c::BCH_SB_LAYOUT_SECTOR as u64) << 9,
+                  std::mem::size_of::<c::bch_sb_layout>() as u64);
+
+        // All superblock copies
+        for i in 0..sb.layout.nr_superblocks as usize {
+            let offset = sb.layout.sb_offset[i].get();
+            range_add(&mut d.sb, offset << 9, sb_bytes);
+        }
     }
 
     // Journal buckets
@@ -560,7 +564,7 @@ fn write_dev_image(
     let outfile = open_opts.open(path)
         .map_err(|e| anyhow!("{}: {}", path, e))?;
 
-    let infd = unsafe { BorrowedFd::borrow_raw((*ca.disk_sb.dev.bdev).bd_fd) };
+    let infd = unsafe { BorrowedFd::borrow_raw((*ca.disk_sb.bdev).bd_fd) };
     let mut img = Qcow2Image::new(infd, outfile.as_fd(), block_size)?;
 
     img.write_ranges(&mut d.sb)?;

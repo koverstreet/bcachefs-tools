@@ -257,7 +257,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                 eprintln!("damaging btree node ({:?}) on dev {} {} l={}\n  {}",
                     cli.error, dev, kill.btree, kill.level, k.to_text(&fs));
 
-                let fd = unsafe { (*ca.disk_sb.dev.bdev).bd_fd };
+                let fd = unsafe { (*ca.disk_sb.bdev).bd_fd };
                 let file = crate::wrappers::super_io::borrowed_file(fd);
                 let offset = ptr.offset() << 9;
 

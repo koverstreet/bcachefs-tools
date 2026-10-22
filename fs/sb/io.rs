@@ -22,6 +22,8 @@ use core::mem::{size_of, size_of_val};
 /// before its type grew, reading as zero past its end.
 pub trait SbField: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef {
     const FIELD_TYPE: c::bch_sb_field_type = c::bch_sb_field_type(Self::TAG);
+    /// Each device has its own: copy_super() leaves it.
+    const SINGLE_DEVICE: bool = c::BCH_SINGLE_DEVICE_SB_FIELDS & (1 << Self::TAG) != 0;
 }
 
 impl<F: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef + ?Sized> SbField for F {}
@@ -1549,13 +1551,118 @@ impl SbResize for FsSbResize<'_> {
     fn grow_with(&mut self, d: isize) -> Option<()> {
         // XXX: we're not checking that offline device have enough space
         for ca in self.fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_sb_field_resize) {
-            // SAFETY: changed only under sb_lock, which we hold
-            let sb = unsafe { &mut *(&raw const ca.disk_sb).cast_mut() };
-            sb.sb_realloc((sb.sb().u64s() as isize + d) as u32).ok()?;
+            // SAFETY: our devices', under the sb_lock we hold - mutably, and
+            // nothing else of it is borrowed meanwhile
+            let io = unsafe { ca.disk_sb.protected_mut() };
+            io.realloc(&ca.disk_sb, (io.buf.sb().u64s() as isize + d) as u32).ok()?;
         }
         Some(())
     }
 }
+
+/// A device's superblock, to edit: its shared contents only by sync(), from
+/// the filesystem's, its own directly - Fs::dev_sb_mut()'s.
+pub struct DevSbMut<'a> {
+    fs_sb: &'a bch_sb,
+    io:    &'a mut c::bch_sb_io,
+    dev:   &'a c::bch_sb_bdev,
+}
+
+impl Fs {
+    /// That @ca's superblock is the one @sb locks: sb_lock is ours, @ca ours.
+    fn dev_sb_check(&self, sb: &SbLockGuard<'_>, ca: &c::bch_dev) {
+        assert!(core::ptr::eq(sb.lock(), &self.sb), "dev_sb(): another filesystem's sb_lock");
+        assert!(core::ptr::eq(ca.fs, self), "dev_sb(): another filesystem's device {}", ca.dev_idx);
+    }
+
+    /// @ca's superblock, under sb_lock: None if it has none, not attached.
+    pub fn dev_sb<'a>(&self, sb: &'a SbLockGuard<'_>, ca: &'a c::bch_dev) -> Option<&'a bch_sb_buf> {
+        self.dev_sb_check(sb, ca);
+        // SAFETY: @sb holds sb_lock, which protects it - and every &mut of
+        // it is had through a guard borrowed mutably
+        let io = unsafe { ca.disk_sb.protected() };
+        (!io.buf.sb.is_null()).then_some(&io.buf)
+    }
+
+    /// @ca's superblock, to edit: None if it has none, not attached.
+    pub fn dev_sb_mut<'a>(&self, sb: &'a mut SbLockGuard<'_>, ca: &'a c::bch_dev) -> Option<DevSbMut<'a>> {
+        let sb: &'a SbLockGuard<'_> = sb;
+        self.dev_sb_check(sb, ca);
+        // SAFETY: @sb holds sb_lock, which protects it - mutably borrowed, so
+        // nothing else of it is
+        let io = unsafe { ca.disk_sb.protected_mut() };
+        (!io.buf.sb.is_null()).then(|| DevSbMut { fs_sb: sb.sb(), io, dev: &ca.disk_sb })
+    }
+}
+
+impl DevSbMut<'_> {
+    pub fn sb(&self) -> &bch_sb {
+        self.io.buf.sb()
+    }
+
+    /// The filesystem's superblock copied in, all but each device's own:
+    /// bch2_sb_from_fs().
+    pub fn sync(&mut self) -> Result<(), BchError> {
+        let src = self.fs_sb;
+        copy_super(&mut self.resize(), src)
+    }
+
+    /// Section @F, one each device has its own of, resized to @u64s - made if
+    /// there's none: None if there's no room.
+    pub fn field_resize<F: SbField + ?Sized>(&mut self, u64s: u32) -> Option<&mut F> {
+        const { assert!(F::SINGLE_DEVICE, "a section every device's superblock shares: the filesystem's to change") };
+        let off = self.resize().field_resize_id(F::FIELD_TYPE, u64s)?;
+        self.io.buf.arm_mut_at(off)
+    }
+
+    pub fn field_delete<F: SbField + ?Sized>(&mut self) {
+        const { assert!(F::SINGLE_DEVICE, "a section every device's superblock shares: the filesystem's to change") };
+        self.resize().field_delete(F::FIELD_TYPE)
+    }
+
+    pub fn layout_mut(&mut self) -> &mut c::bch_sb_layout {
+        &mut self.io.buf.sb_mut().layout
+    }
+
+    /// bch_sb_buf::edit_header(), for the tools: of what's shared, the next
+    /// sync() keeps nothing.
+    pub fn edit_header<R>(&mut self, f: impl FnOnce(&mut [u8]) -> R) -> Result<R, &'static str> {
+        self.io.buf.edit_header(f)
+    }
+
+    fn resize(&mut self) -> DevSbResize<'_> {
+        DevSbResize { io: self.io, dev: self.dev }
+    }
+}
+
+/// A device's superblock, resized as its own: only DevSbMut's.
+struct DevSbResize<'a> {
+    io:  &'a mut c::bch_sb_io,
+    dev: &'a c::bch_sb_bdev,
+}
+
+impl core::ops::Deref for DevSbResize<'_> {
+    type Target = bch_sb_buf;
+
+    fn deref(&self) -> &bch_sb_buf {
+        &self.io.buf
+    }
+}
+
+impl core::ops::DerefMut for DevSbResize<'_> {
+    fn deref_mut(&mut self) -> &mut bch_sb_buf {
+        &mut self.io.buf
+    }
+}
+
+impl SbResize for DevSbResize<'_> {
+    fn sb_realloc(&mut self, u64s: u32) -> Result<(), BchError> {
+        self.io.realloc(self.dev, u64s)
+    }
+}
+
+const _: () = assert!(size_of::<c::bch_sb_handle>() == size_of::<crate::locking::LockedBy<c::bch_sb_io, c::bch_sb_bdev>>(),
+                      "ca->disk_sb is a struct bch_sb_handle to C");
 
 /// # Safety
 /// @sb is a live filesystem's c->disk_sb, its sb_lock held.
@@ -1761,11 +1868,9 @@ pub unsafe fn bch2_sb_to_fs(c: &Opaque<c::bch_fs>, src: *mut Head<c::bch_sb>) ->
 pub fn bch2_sb_from_fs(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) -> c_int {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
-    let sb = unsafe { fs.sb_lock_held() };
-    // SAFETY: changed only under sb_lock, which we hold - and not the
-    // filesystem's, which is @sb's
-    let dst = unsafe { &mut *(&raw const ca.disk_sb).cast_mut() };
-    ret_to_c(copy_super(dst, sb.sb()))
+    let mut sb = unsafe { fs.sb_lock_held() };
+    let mut dst = fs.dev_sb_mut(&mut sb, ca).expect("bch2_sb_from_fs(): a device with no superblock");
+    ret_to_c(dst.sync())
 }
 
 // ── Superblocks in byte buffers ──────────────────────────────────────────

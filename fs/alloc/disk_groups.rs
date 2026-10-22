@@ -280,7 +280,7 @@ impl Fs {
                 let rcu = read_lock();
 
                 match self.dev_rcu(d, &rcu) {
-                    Some(ca) if !ca.disk_sb.dev.bdev.is_null() => {
+                    Some(ca) if !ca.disk_sb.bdev.is_null() => {
                         write!(out, "/dev/");
                         out.write_bytes(ca.name().to_bytes());
                     }

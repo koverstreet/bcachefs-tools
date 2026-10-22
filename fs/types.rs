@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::locking::{Lock, MutexNoio, PercpuRwsemNoio};
+use crate::locking::{Lock, LockedBy, MutexNoio, PercpuRwsemNoio};
 use crate::util::vstructs::Head;
 use crate::types::{Atomic64, GenRadix, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::util::ffi::c_char;
@@ -360,7 +360,10 @@ pub struct bch_dev {
     pub uuid: c::__uuid_t,
     pub name: [c_char; c::BDEVNAME_SIZE as usize],
 
-    pub disk_sb: c::bch_sb_handle,
+    /// Its superblock, sb_lock's - through Fs::dev_sb() - and the block
+    /// device it's on, fixed while it's attached.
+    #[c("struct bch_sb_handle disk_sb")]
+    pub disk_sb: LockedBy<c::bch_sb_io, c::bch_sb_bdev>,
     pub sb_read_scratch: *mut Head<c::bch_sb>,
     pub sb_write_error: c_int,
     pub dev: c::dev_t,

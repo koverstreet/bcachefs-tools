@@ -578,6 +578,13 @@ static struct bch_dev *__bch2_dev_alloc(struct bch_fs *c,
 	if (!ca)
 		return NULL;
 
+	/*
+	 * The filesystem's from the start, attached or not: bch2_dev_add()
+	 * writes its superblock before it has a slot, and what's below can
+	 * fail into code that reaches c through ca->fs.
+	 */
+	ca->fs = c;
+
 	kobject_init(&ca->kobj, &bch2_dev_ktype);
 	init_completion(&ca->ref_completion);
 	refcount_set(&ca->ref_outer, 1);
@@ -634,7 +641,6 @@ static void bch2_dev_attach(struct bch_fs *c, struct bch_dev *ca,
 	if (!ca->name[0])
 		scnprintf(ca->name, sizeof(ca->name), "dev-%u", dev_idx);
 
-	ca->fs = c;
 	rcu_assign_pointer(c->devs[ca->dev_idx], ca);
 
 	if (bch2_dev_sysfs_online(c, ca))
@@ -652,8 +658,6 @@ int bch2_dev_alloc(struct bch_fs *c, unsigned dev_idx)
 	ca = __bch2_dev_alloc(c, &member);
 	if (!ca)
 		return bch_err_throw(c, ENOMEM_dev_alloc);
-
-	ca->fs = c;
 
 	bch2_dev_attach(c, ca, dev_idx);
 	return 0;

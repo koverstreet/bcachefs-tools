@@ -840,10 +840,9 @@ fn sb_dev(fs: &Fs, dev: u32) -> Result<bcachefs_kernel::fs::DevRef> {
 fn cmd_sb_get(fs: &Fs, dev: Option<u32>, field: &str) -> Result<String> {
     let (r, bm) = sb_field(field)?;
     let ca = dev.map(|d| sb_dev(fs, d)).transpose()?;
-    // ca->disk_sb is sb_lock's too: bch2_write_super() writes it
     let sb = fs.sb_lock();
     let buf = match &ca {
-        Some(ca) => ca.disk_sb.sb_bytes(),
+        Some(ca) => fs.dev_sb(&sb, ca).ok_or_else(|| anyhow!("device {} has no superblock", ca.dev_idx))?.sb_bytes(),
         None     => sb.sb_bytes(),
     };
     let v = match bm {
@@ -859,12 +858,13 @@ fn cmd_sb_set(fs: &Fs, dev: Option<u32>, field: &str, v: u64) -> Result<String> 
 
     let mut sb = fs.sb_lock();
 
-    let edit: &mut bcachefs_kernel::c::bch_sb_buf = match &ca {
-        // SAFETY: ca->disk_sb is sb_lock's too, held
-        Some(ca) => unsafe { &mut (*ca.as_mut_ptr()).disk_sb },
-        None     => &mut *sb,
+    let edited = match &ca {
+        Some(ca) => fs.dev_sb_mut(&mut sb, ca)
+            .ok_or_else(|| anyhow!("device {} has no superblock", ca.dev_idx))?
+            .edit_header(|h| typeinfo::write(h, &target, v)),
+        None     => sb.edit_header(|h| typeinfo::write(h, &target, v)),
     };
-    edit.edit_header(|h| typeinfo::write(h, &target, v))
+    edited
         .map_err(|e| anyhow!("{field}: {e}"))?
         .map_err(|e| anyhow!("{field}: {e}"))?;
 
