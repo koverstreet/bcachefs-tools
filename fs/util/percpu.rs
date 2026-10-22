@@ -28,6 +28,9 @@
 //! - PerCpuRef<'a, T> borrows it, or a part of it - at(i), percpu_field!() -
 //!   as every CPU's copy: sum() over all of them; add(), set(), xchg() and
 //!   cmpxchg() on this CPU's, each one operation.
+//! - CpuCopy<'a, T> is one CPU's, from cpus(), read volatile: to sum part of
+//!   a T - percpu_field!() of each - in one sweep over the CPUs, where a sum
+//!   of each part would be a sweep apiece and sum() reads all of T.
 //! - ThisCpu<'g, T> is this CPU's copy, while a CpuGuard - preemption off -
 //!   keeps it this CPU: a place, as util/projections.rs's are, for a slot's
 //!   read-modify-write, or add() of a delta to a struct of counters.
@@ -290,6 +293,12 @@ impl<'a, T> PerCpuRef<'a, T> {
         PerCpuRef(self.0.wrapping_byte_add(field_offset(f)).cast(), PhantomData)
     }
 
+    /// Each possible CPU's copy.
+    #[inline]
+    pub fn cpus(self) -> impl Iterator<Item = CpuCopy<'a, T>> {
+        possible_cpus().map(move |cpu| CpuCopy(unsafe { bch2_per_cpu_ptr(self.0.cast(), cpu) }.cast(), PhantomData))
+    }
+
     pub fn this_cpu<'g>(self, g: &'g CpuGuard) -> ThisCpu<'g, T>
         where 'a: 'g
     {
@@ -315,15 +324,11 @@ impl<T: Counters> PerCpu<T> {
 }
 
 impl<T: Counters> PerCpuRef<'_, T> {
-    fn read(&self, cpu: c_uint) -> T {
-        unsafe { core::ptr::read_volatile(bch2_per_cpu_ptr(self.0.cast(), cpu).cast::<T>()) }
-    }
-
     /// Exact only with the adders excluded.
     pub fn sum(&self) -> T {
-        let mut cpus = possible_cpus();
+        let mut cpus = self.cpus().map(|c| c.get());
         let first = cpus.next().expect("CPU 0 is always possible");
-        cpus.fold(self.read(first), |acc, cpu| acc.wrapping_add(self.read(cpu)))
+        cpus.fold(first, T::wrapping_add)
     }
 
     /// For a read that races the adds.
@@ -363,6 +368,36 @@ impl PerCpuRef<'_, u64> {
             v if v == old => Ok(v),
             v             => Err(v),
         }
+    }
+}
+
+/// One CPU's copy, from PerCpuRef::cpus(): see the top of the file.
+pub struct CpuCopy<'a, T>(*const T, PhantomData<&'a PerCpu<T>>);
+
+impl<T> Clone for CpuCopy<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for CpuCopy<'_, T> {}
+
+impl<'a, T> CpuCopy<'a, T> {
+    /// percpu_field!()'s.
+    ///
+    /// # Safety
+    /// @f only projects @t to a field of it, reading nothing.
+    #[inline]
+    pub unsafe fn field<U>(self, f: impl FnOnce(*const T) -> *const U) -> CpuCopy<'a, U> {
+        CpuCopy(self.0.wrapping_byte_add(field_offset(f)).cast(), PhantomData)
+    }
+}
+
+impl<T: Copy> CpuCopy<'_, T> {
+    #[inline]
+    pub fn get(&self) -> T {
+        // SAFETY: a live CPU's copy, written as it's read
+        unsafe { core::ptr::read_volatile(self.0) }
     }
 }
 
