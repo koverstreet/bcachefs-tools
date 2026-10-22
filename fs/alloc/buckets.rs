@@ -1,18 +1,25 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::accounting::data_type_from_u8;
-use crate::btree::bkey::pos;
-use crate::btree::iter::{TransAttempt, UpdateTriggerFlags};
+use crate::accounting::{bucket_data_type_mismatch, data_type, data_type_from_u8};
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{pos, BkeySC};
+use crate::btree::iter::{BtreeTrans, TransAttempt, UpdateTriggerFlags};
 use crate::c;
-use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
+use crate::c::bch_errcode;
+use crate::errcode::{ret_to_c, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
-use crate::opts::prt_data_type;
-use crate::percpu_field;
+use crate::init::error::{count_fsck_err, id};
+use crate::init::passes;
+use crate::opts::{data_type_str, prt_data_type};
+use crate::types::Le64;
 use crate::util::ffi::Opaque;
+use crate::util::log::LogMsg;
 use crate::util::percpu::Counters;
-use crate::util::rcu::ReadGuard;
-use crate::util::Printbuf;
+use crate::util::rcu::{read_lock, ReadGuard};
+use crate::util::{Printbuf, ToText};
+use crate::{fsck_err_on, message, percpu_field, prt};
 use core::cell::UnsafeCell;
+use core::ffi::c_int;
 use cstruct_macros::c_export;
 
 // ── Bucket addressing ────────────────────────────────────────────────────
@@ -106,6 +113,153 @@ impl c::BucketData {
         self.dirty_sectors  = a.dirty_sectors;
         self.cached_sectors = a.cached_sectors;
     }
+}
+
+// ── Bucket references ────────────────────────────────────────────────────
+
+impl TransAttempt<'_, '_> {
+    /// Add @sectors - negative for a pointer going away - to @bucket_sectors,
+    /// one of the sector counts of the bucket @ptr points into, checking the
+    /// pointer against the bucket: its gen @b_gen, its @bucket_data_type. A
+    /// pointer that doesn't fit is fsck's to repair: an error on insert, and
+    /// ignored on overwrite, so deletion works; a stale cached pointer is
+    /// BCH_ERR_cached_ptr_stale: bch2_bucket_ref_update().
+    #[allow(clippy::too_many_arguments)]
+    pub fn bucket_ref_update(&self, ca: &c::bch_dev, k: BkeySC<'_>, ptr: &c::bch_extent_ptr,
+                             sectors: i64, ptr_data_type: c::bch_data_type, b_gen: u8,
+                             bucket_data_type: &mut u8, bucket_sectors: &mut u32) -> Result<(), BchError> {
+        assert!(sectors != 0);
+
+        // as C's: a negative @sectors past the count wraps, and is past U32_MAX
+        let new = u64::from(*bucket_sectors).wrapping_add(sectors as u64);
+        if b_gen != ptr.generation() ||
+           bucket_data_type_mismatch(data_type_from_u8(*bucket_data_type), ptr_data_type) ||
+           new > u64::from(u32::MAX) {
+            return self.bucket_ref_update_slowpath(ca, k, ptr, sectors, ptr_data_type, b_gen,
+                                                   bucket_data_type, bucket_sectors);
+        }
+
+        *bucket_sectors = new as u32;
+        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn bucket_ref_update_slowpath(&self, ca: &c::bch_dev, k: BkeySC<'_>, ptr: &c::bch_extent_ptr,
+                                  sectors: i64, ptr_data_type: c::bch_data_type, b_gen: u8,
+                                  bucket_data_type: &mut u8, bucket_sectors: &mut u32) -> Result<(), BchError> {
+        let fs = self.fs();
+        let (dev, b, ptr_gen) = (ptr.dev(), ca.ptr_bucket(ptr), ptr.generation());
+        let inserting = sectors > 0;
+        // the bucket's type, or the pointer's if it hasn't one
+        let type_str = |t: u8| data_type_str(if t != 0 { data_type_from_u8(t) } else { ptr_data_type });
+
+        assert!(sectors != 0);
+
+        if gen_after(ptr_gen, b_gen) > 0 {
+            return self.bucket_ref_update_err(k, inserting, id::ptr_gen_newer_than_bucket_gen, message!(
+                "bucket {dev}:{b} gen {b_gen} data type {}: ptr gen {ptr_gen} newer than bucket gen",
+                type_str(*bucket_data_type)));
+        }
+
+        if i32::from(gen_cmp(b_gen, ptr_gen)) > c::BUCKET_GC_GEN_MAX as i32 {
+            return self.bucket_ref_update_err(k, inserting, id::ptr_too_stale, message!(
+                "bucket {dev}:{b} gen {b_gen} data type {}: ptr gen {ptr_gen} too stale",
+                type_str(*bucket_data_type)));
+        }
+
+        if b_gen != ptr_gen && ptr.cached() != 0 {
+            let no_stale_ptrs = 1 << c::bch_sb_compat::BCH_COMPAT_no_stale_ptrs.0;
+            if fsck_err_on!(self, fs.sb.compat.get() & no_stale_ptrs != 0,
+                            id::stale_ptr_with_no_stale_ptrs_feature,
+                            "stale cached ptr, but have no_stale_ptrs feature\n{}", k.to_text(fs))? {
+                let mut sb = fs.sb_lock();
+                let compat = &mut sb.sb_mut().compat[0];
+                *compat = Le64::new(compat.get() & !no_stale_ptrs);
+                fs.write_super(&mut sb);
+            }
+            return Err(bch_errcode::BCH_ERR_cached_ptr_stale.into());
+        }
+
+        if b_gen != ptr_gen {
+            let mem_gen = ca.bucket_gen(b, &read_lock()).map_or(u32::MAX, u32::from);
+            return self.bucket_ref_update_err(k, inserting, id::stale_dirty_ptr, message!(
+                "bucket {dev}:{b} gen {b_gen} (mem gen {mem_gen}) data type {}: stale dirty ptr (gen {ptr_gen})",
+                type_str(*bucket_data_type)));
+        }
+
+        if bucket_data_type_mismatch(data_type_from_u8(*bucket_data_type), ptr_data_type) {
+            self.bucket_ref_update_err(k, false, id::ptr_bucket_data_type_mismatch, message!(
+                "bucket {dev}:{b} gen {b_gen} different types of data in same bucket: {}, {}",
+                data_type_str(data_type_from_u8(*bucket_data_type)), data_type_str(ptr_data_type)))?;
+            *bucket_data_type = data_type::multiple.0 as u8;
+        }
+
+        let new = u64::from(*bucket_sectors).wrapping_add(sectors as u64);
+        if new > u64::from(u32::MAX) {
+            return self.bucket_ref_update_err(k, inserting, id::bucket_sector_count_overflow, message!(
+                "bucket {dev}:{b} gen {b_gen} data type {} sector count overflow: {} + {sectors} > U32_MAX",
+                type_str(*bucket_data_type), *bucket_sectors));
+        }
+
+        *bucket_sectors = new as u32;
+        Ok(())
+    }
+
+    /// A pointer that doesn't fit its bucket: @msg, counted as fsck error
+    /// @err, and check_allocations scheduled to fix it. Inserting it - @fatal
+    /// - is an inconsistency; overwriting it isn't an error at all, so
+    /// deletion works.
+    fn bucket_ref_update_err(&self, k: BkeySC<'_>, fatal: bool, err: c::bch_sb_error_id, msg: &dyn ToText)
+        -> Result<(), BchError>
+    {
+        let fs = self.fs();
+        let mut buf = LogMsg::new(fs);
+
+        msg.to_text(&mut buf);
+        prt!(&mut buf, "\nwhile marking {}\n", k.to_text(fs));
+
+        let print = count_fsck_err(fs, err, &mut buf);
+        let ret = passes::run_explicit(fs, &mut buf, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_allocations,
+                                       c::bch_run_recovery_pass_flags::from_bits_retain(0));
+
+        let ret = if fatal {
+            unsafe {
+                c::bch2_trans_updates_to_text(buf.as_raw(), self.raw());
+                c::__bch2_inconsistent_error(fs.as_ptr(), buf.as_raw());
+            }
+            // a recovery in progress can have it go back a pass instead
+            ret.and_then(|()| fs.throw(bch_errcode::BCH_ERR_bucket_ref_update))
+        } else {
+            Ok(())
+        };
+
+        buf.set_suppressed(!(print || fatal));
+        ret
+    }
+}
+
+/// For C's bch2_bucket_ref_update(), past its checks.
+///
+/// # Safety
+/// @trans is in an attempt.
+#[c_export]
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn __bch2_bucket_ref_update<'t>(
+    trans:            &'t BtreeTrans<'t>,
+    ca:               &c::bch_dev,
+    k:                BkeySC<'_>,
+    ptr:              &c::bch_extent_ptr,
+    sectors:          i64,
+    ptr_data_type:    c::bch_data_type,
+    b_gen:            u8,
+    bucket_data_type: &mut u8,
+    bucket_sectors:   &mut u32,
+) -> c_int {
+    let t = unsafe { trans.attempt_in_progress() };
+    ret_to_c(t.bucket_ref_update_slowpath(ca, k, ptr, sectors, ptr_data_type, b_gen,
+                                          bucket_data_type, bucket_sectors))
 }
 
 // ── Usage ────────────────────────────────────────────────────────────────
@@ -222,10 +376,15 @@ pub fn bucket_to_u64(bucket: c::bpos) -> u64 {
 
 // ── Bucket generations ───────────────────────────────────────────────────
 
-/// How far generation @a is past @b, or 0 if it isn't - wrapping, as gens
-/// do: gen_after().
+/// How far generation @a is past @b - negative if it's before - wrapping, as
+/// gens do: gen_cmp().
+pub fn gen_cmp(a: u8, b: u8) -> i8 {
+    a.wrapping_sub(b) as i8
+}
+
+/// gen_cmp(), or 0 if @a isn't past @b: gen_after().
 pub fn gen_after(a: u8, b: u8) -> u8 {
-    (a.wrapping_sub(b) as i8).max(0) as u8
+    gen_cmp(a, b).max(0) as u8
 }
 
 /// A device's bucket generations, under RCU: alloc/buckets.h's.

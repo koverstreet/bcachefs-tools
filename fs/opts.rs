@@ -233,6 +233,16 @@ pub fn prt_data_type(out: &mut Printbuf, t: c::bch_data_type) {
     unsafe { c::bch2_prt_data_type(out.as_raw(), t) }
 }
 
+/// @t's name - "(invalid data type)" if it isn't one: bch2_data_type_str().
+pub fn data_type_str(t: c::bch_data_type) -> &'static str {
+    if t.0 >= c::BCH_DATA_NR as u32 {
+        return "(invalid data type)";
+    }
+    // SAFETY: one of the table's, a NUL-terminated name, static
+    let name = unsafe { core::ffi::CStr::from_ptr((*c::__bch2_data_types.as_ptr().add(t.0 as usize)).cast()) };
+    name.to_str().expect("data type names are ASCII")
+}
+
 pub fn prt_compression_type(out: &mut Printbuf, t: c::bch_compression_type) {
     unsafe { c::bch2_prt_compression_type(out.as_raw(), t) }
 }

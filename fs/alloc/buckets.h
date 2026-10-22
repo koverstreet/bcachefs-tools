@@ -360,10 +360,6 @@ void bch2_disk_reservation_caches_invalidate(struct bch_fs *);
 void bch2_disk_reservation_degraded(struct bch_fs *, unsigned, unsigned,
 				    u64, unsigned long);
 
-int __bch2_bucket_ref_update(struct btree_trans *, struct bch_dev *,
-			     struct bkey_s_c, const struct bch_extent_ptr *,
-			     s64, enum bch_data_type, u8, u8 *, u32 *);
-
 static inline int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
 					 struct bkey_s_c k,
 					 const struct bch_extent_ptr *ptr,
