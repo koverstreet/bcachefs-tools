@@ -2464,8 +2464,9 @@ fn proto_toks(toks: &[Tok], decl: String, konst: bool, last: bool,
               kind: &dyn Fn(&str) -> Option<String>)
     -> Option<String>
 {
-    // Head<T>, by any path: what C has of unsized T - C's T itself
-    if let Some(t) = head_arg(toks) {
+    // Head<T>, a family's C definition (util/vstructs.rs), and Volatile<T>, a
+    // published word (util/projections.rs): to C, T itself
+    if let Some(t) = arg_of(toks, "Head").or_else(|| arg_of(toks, "Volatile")) {
         return proto_toks(t, decl, konst, last, kind);
     }
     let q = if konst { "const " } else { "" };
@@ -2530,10 +2531,9 @@ fn base_decl(q: &str, base: &str, decl: &str) -> String {
     format!("{q}{base}{sep}{decl}").trim_end().to_string()
 }
 
-/// T, if @toks is Head<T> by any path: a family's C definition, which C has
-/// as the struct T itself (util/vstructs.rs).
-fn head_arg(toks: &[Tok]) -> Option<&[Tok]> {
-    let f = toks.iter().position(|t| t.is_ident("Head"))?;
+/// T, if @toks is @name<T> by any path.
+fn arg_of<'a>(toks: &'a [Tok], name: &str) -> Option<&'a [Tok]> {
+    let f = toks.iter().position(|t| t.is_ident(name))?;
     let path_ok = toks[..f].iter().all(|t| matches!(t, Tok::Ident(_) | Tok::Punct(':')));
     match &toks[f + 1..] {
         [Tok::Punct('<'), inner @ .., Tok::Punct('>')] if path_ok => Some(inner),
@@ -2548,7 +2548,7 @@ fn bkey_i_arg(toks: &[Tok], kind: &dyn Fn(&str) -> Option<String>) -> Option<Str
     let b = toks.iter().position(|t| t.is_ident("BkeyI"))?;
     let path_ok = toks[..b].iter().all(|t| matches!(t, Tok::Ident(_) | Tok::Punct(':')));
     let [Tok::Punct('<'), inner @ .., Tok::Punct('>')] = &toks[b + 1..] else { return None };
-    let inner = head_arg(inner).unwrap_or(inner);
+    let inner = arg_of(inner, "Head").unwrap_or(inner);
     let val_path_ok = inner.iter().all(|t| matches!(t, Tok::Ident(_) | Tok::Punct(':')));
     match inner {
         [.., Tok::Ident(v)] if path_ok && val_path_ok => kind(v)
