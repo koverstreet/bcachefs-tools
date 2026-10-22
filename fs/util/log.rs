@@ -84,10 +84,38 @@ pub fn log(fs: &Fs, level: LogLevel, msg: &dyn ToText) {
 /// @msg at @level, of no filesystem - there isn't one yet: pr_err() and the
 /// rest of printk().
 pub fn log_no_fs(level: LogLevel, msg: &dyn ToText) {
+    printk(level, &crate::util::printbuf::Msg(|out: &mut Printbuf| {
+        msg.to_text(out);
+        out.newline();
+    }))
+}
+
+/// @msg at @level, as it stands, where @opts says: its stdio redirect,
+/// in-kernel, if it has one - a fsck through the ioctl's - else printk().
+/// Of no filesystem, before there's one: bch2_print_opts().
+pub fn log_opts(opts: &c::bch_opts, level: LogLevel, msg: &dyn ToText) {
+    #[cfg(kernel)]
+    if opts.stdio != 0 {
+        let mut buf = Printbuf::new();
+        msg.to_text(&mut buf);
+        let b = buf.as_bytes();
+        // SAFETY: @opts' stdio is the fsck thread's redirect, live for as
+        // long as its opts are
+        unsafe {
+            c::bch2_stdio_redirect_write(opts.stdio as *mut c::stdio_redirect, true, b.as_ptr().cast(), b.len())
+        };
+        return;
+    }
+    #[cfg(not(kernel))]
+    let _ = opts;
+    printk(level, msg)
+}
+
+/// @msg at @level, as it stands.
+fn printk(level: LogLevel, msg: &dyn ToText) {
     let mut buf = Printbuf::new();
     buf.write_bytes(&[0x01, level.0]);
     msg.to_text(&mut buf);
-    buf.newline();
     let s = buf.as_c_str();
     // SAFETY: a format, and the string it takes
     #[cfg(kernel)]

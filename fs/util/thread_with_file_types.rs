@@ -4,7 +4,8 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use cstruct_macros::CStruct;
+use crate::util::ffi::c_char;
+use cstruct_macros::{c_extern, CStruct};
 
 #[repr(C)]
 #[derive(CStruct)]
@@ -22,4 +23,9 @@ pub struct stdio_redirect {
     pub input: c::stdio_buf,
     pub output: c::stdio_buf,
     pub done: bool,
+}
+
+c_extern! {
+    pub fn bch2_stdio_redirect_write(stdio: *mut c::stdio_redirect, nonblocking: bool,
+                                     buf: *const c_char, len: usize) -> isize;
 }
