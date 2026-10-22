@@ -149,8 +149,8 @@ pub fn ptr_matches_stripe(s: BkeySC<'_, c::Stripe<Validated>>, p: &c::extent_ptr
     ptr_in_block(sp, &p.ptr, u64::from(v.sectors.get()))
 }
 
-/// ptr_matches_stripe(), against gc's copy of the stripe.
-pub fn ptr_matches_stripe_m(m: &c::gc_stripe, p: &c::extent_ptr_decoded) -> bool {
+/// ptr_matches_stripe(), against gc's copy of the stripe, locked.
+pub fn ptr_matches_stripe_m(m: &c::GcStripeData, p: &c::extent_ptr_decoded) -> bool {
     assert!(p.has_ec, "matching a pointer without a stripe against one");
 
     // unsigned, as C's

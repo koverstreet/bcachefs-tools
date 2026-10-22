@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::locking::{ByteLock, Lock};
 use crate::types::{GenRadix, c_default};
 use core::ffi::c_long;
 use cstruct_macros::{bitfield, CStruct, TypeInfo};
@@ -20,12 +21,22 @@ pub struct stripe {
     pub disk_label: u8,
 }
 
+/// gc's copy of a stripe, which check_allocations counts its blocks' sectors
+/// into.
+#[repr(C)]
+#[derive(CStruct)]
+pub struct gc_stripe {
+    #[c_lock("u8 lock")]
+    pub lock: Lock<ByteLock, GcStripeData>,
+}
+
 nest! {
+    /// What a gc_stripe's lock protects. Not packed, as a bucket's is:
+    /// @ptrs are referenced, and there's one of these per stripe, not per
+    /// bucket.
     #[repr(C)]
     #[derive(Clone, Copy, Default, CStruct)]
-    pub struct gc_stripe {
-        /* a ByteLock (locking/bytelock.rs) */
-        pub lock: u8,
+    pub struct GcStripeData {
         #[c_bitfield]
         #>[bitfield(u8, ty = u32)]
         pub bits: pub struct gc_stripe_bits {
