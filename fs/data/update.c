@@ -855,9 +855,15 @@ void bch2_data_update_exit(struct data_update *update, int ret)
 		atomic_dec(&update->b->count);
 
 	if (update->ctxt) {
-		scoped_guard(mutex, &update->ctxt->lock)
+		struct moving_context *ctxt = update->ctxt;
+
+		scoped_guard(mutex, &ctxt->lock) {
 			list_del(&update->io_list);
-		wake_up(&update->ctxt->wait);
+			ctxt->io_seq_done = list_empty(&ctxt->ios)
+				? ctxt->io_seq
+				: list_first_entry(&ctxt->ios, struct data_update, io_list)->io_seq;
+		}
+		wake_up(&ctxt->wait);
 	}
 
 	bch2_bio_free_pages_pool(c, &update->op.wbio.bio);

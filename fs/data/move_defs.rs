@@ -43,6 +43,8 @@ pub struct moving_context {
     pub reads: c::list_head,
     pub ios: c::list_head,
     pub io_seq: u64,
+    /* Every IO numbered below this has completed: @ios' oldest, or @io_seq if none */
+    pub io_seq_done: u64,
 
     /* in flight sectors: */
     pub read_sectors: c::atomic_t,

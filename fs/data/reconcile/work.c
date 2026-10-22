@@ -885,15 +885,12 @@ static int do_reconcile_stripe(struct moving_context *ctxt,
 	return ret;
 }
 
+/* IO issued before the stripe was queued - its evacuation - still in flight? */
 static bool stripe_retry_must_wait(struct moving_context *ctxt,
 				   u64 stripe_io_seq)
 {
 	guard(mutex)(&ctxt->lock);
-	struct data_update *u = !list_empty(&ctxt->ios)
-		? list_last_entry(&ctxt->ios, struct data_update, io_list)
-		: NULL;
-
-	return u && u->io_seq <= stripe_io_seq;
+	return ctxt->io_seq_done < stripe_io_seq;
 }
 
 static int do_retry_stripe(struct moving_context *ctxt, u64 idx)
