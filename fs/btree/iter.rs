@@ -2788,7 +2788,8 @@ impl Fs {
         // SAFETY, throughout: the list, under its lock
         'restart: loop {
             let mut guard = lock.lock();
-            unsafe { list_sort_by_addr(head) };
+            unsafe { <crate::list!(c::btree_trans, list)>::from_c(head) }
+                .sort(|a, b| core::ptr::from_ref(a).cmp(&core::ptr::from_ref(b)));
 
             let mut pos = unsafe { (*head).next };
             while pos != head {
@@ -2816,38 +2817,6 @@ impl Fs {
                 pos = unsafe { (*pos).next };
             }
             return Ok(());
-        }
-    }
-}
-
-/// debug.c's list_sort(), by address: an insertion sort - the list is kept
-/// sorted, so only what's been added since moves.
-///
-/// # Safety
-/// @head is a list nothing else changes meanwhile.
-unsafe fn list_sort_by_addr(head: *mut c::list_head) {
-    unsafe {
-        let mut pos = (*head).next;
-        while pos != head {
-            while (*pos).next != head && pos > (*pos).next {
-                // list_del() the one after pos...
-                let next = (*pos).next;
-                (*pos).next = (*next).next;
-                (*(*next).next).prev = pos;
-
-                // ...and list_add_tail() it before the first above it: pos,
-                // at the latest
-                let mut pos2 = (*head).next;
-                while pos2 != head && next > pos2 {
-                    pos2 = (*pos2).next;
-                }
-                assert!(pos2 != head);
-                (*next).prev = (*pos2).prev;
-                (*next).next = pos2;
-                (*(*pos2).prev).next = next;
-                (*pos2).prev = next;
-            }
-            pos = (*pos).next;
         }
     }
 }
