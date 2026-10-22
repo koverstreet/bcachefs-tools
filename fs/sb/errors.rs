@@ -29,6 +29,7 @@ use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::ktime_get_real_seconds;
 use crate::util::{Printbuf, ToText};
+use crate::sb::io::SbResize;
 
 // ── Error ids, and their names ───────────────────────────────────────────────
 
@@ -419,7 +420,8 @@ pub fn bch2_sb_errors_to_cpu(c: &Opaque<c::bch_fs>) -> c_int {
 pub fn bch2_sb_errors_from_cpu(c: &Opaque<c::bch_fs>) {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock, from bch2_write_super()
-    let mut sb = unsafe { fs.sb_lock_held() };
+    let mut guard = unsafe { fs.sb_lock_held() };
+    let mut sb = fs.sb_resize(&mut guard);
     let counts = fs.errors.counts.lock();
 
     let u64s = sb_field_u64s::<c::bch_sb_field_errors_v2>(counts.len());

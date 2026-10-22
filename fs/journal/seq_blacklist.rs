@@ -47,6 +47,7 @@ use crate::util::eytzinger::Eytzinger0;
 use crate::util::ffi::Opaque;
 use crate::util::rcu::{RcuArray, RcuElement};
 use crate::util::Printbuf;
+use crate::sb::io::SbResize;
 
 type Section = c::bch_sb_field_journal_seq_blacklist;
 
@@ -149,7 +150,7 @@ impl JournalSeqBlacklist {
 
 /// [@start, @end) blacklisted in @sb's section, merged with the ranges it
 /// overlaps or touches, which go. False if there's no room for it.
-fn section_add(sb: &mut c::bch_sb_handle, mut start: u64, mut end: u64) -> bool {
+fn section_add(sb: &mut (impl SbResize + ?Sized), mut start: u64, mut end: u64) -> bool {
     // @i is where the merged range goes, @nr the ranges kept
     let (mut i, mut nr) = (0, 0);
     if let Some(f) = sb.field_mut::<Section>() {
@@ -206,7 +207,7 @@ impl Fs {
     /// Blacklist [@start, @end), and write the superblock.
     pub fn journal_seq_blacklist_add(&self, start: u64, end: u64) -> Result<(), BchError> {
         let mut sb = self.sb_lock();
-        if !section_add(&mut sb, start, end) {
+        if !section_add(&mut self.sb_resize(&mut sb), start, end) {
             return self.throw(bch_errcode::BCH_ERR_ENOSPC_sb_journal_seq_blacklist);
         }
         self.write_super_ret(&mut sb)?;
@@ -253,7 +254,8 @@ pub fn bch2_blacklist_table_initialize(c: &Opaque<c::bch_fs>) -> c_int {
 pub fn bch2_blacklist_entries_gc(c: &Opaque<c::bch_fs>) -> bool {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock, with recovery's last superblock update
-    let mut sb = unsafe { fs.sb_lock_held() };
+    let mut guard = unsafe { fs.sb_lock_held() };
+    let mut sb = fs.sb_resize(&mut guard);
     let Some(f) = sb.field_mut::<Section>() else { return false };
     let bl = &mut f.start;
     let nr = bl.len();

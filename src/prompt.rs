@@ -23,7 +23,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
-use bcachefs_kernel::c::bch_sb_handle;
 use log::debug;
 
 const ASK_PASSWORD_DIR: &str = "/run/systemd/ask-password";
@@ -32,7 +31,7 @@ pub const PROMPT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Its label, or its UUID - several filesystems come up at once at boot, and
 /// someone facing two questions needs to see whether they are the same disk.
-pub fn fs_name(sb: &bch_sb_handle) -> String {
+pub fn fs_name(sb: &bcachefs_kernel::c::bch_sb_buf) -> String {
     let label = String::from_utf8_lossy(sb.sb().label());
 
     if label.is_empty() {

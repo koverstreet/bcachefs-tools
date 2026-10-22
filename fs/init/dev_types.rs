@@ -29,6 +29,31 @@ pub struct bch_sb_buf {
 }
 c_default!(bch_sb_buf);
 
+/// The filesystem's superblock, c->disk_sb: what its devices' are copied
+/// from. Edited in place through its bch_sb_buf; resized only through
+/// Fs::sb_resize(), which grows its devices' with it.
+#[repr(C)]
+#[derive(CStruct, TypeInfo)]
+pub struct bch_fs_sb {
+    #[c_anon("struct bch_sb *sb; size_t buffer_size")]
+    buf: c::bch_sb_buf,
+}
+c_default!(bch_fs_sb);
+
+impl core::ops::Deref for bch_fs_sb {
+    type Target = c::bch_sb_buf;
+
+    fn deref(&self) -> &c::bch_sb_buf {
+        &self.buf
+    }
+}
+
+impl core::ops::DerefMut for bch_fs_sb {
+    fn deref_mut(&mut self) -> &mut c::bch_sb_buf {
+        &mut self.buf
+    }
+}
+
 nest! {
     #[repr(C)]
     #[derive(CStruct, TypeInfo)]
@@ -46,8 +71,7 @@ nest! {
         pub bits: pub struct bch_sb_handle_bits {
             have_layout: u1,
             have_bio:    u1,
-            fs_sb:       u1,
-            __pad:       u5,
+            __pad:       u6,
         },
         pub seq: u64,
     }
@@ -81,8 +105,8 @@ pub struct bch_devs_list {
 }
 
 c_extern! {
-    pub fn bch2_dev_in_fs(fs: *mut c::bch_sb_handle, sb: *mut c::bch_sb_handle,
-                          opts: *mut c::bch_opts) -> c_int;
+    pub fn bch2_dev_in_fs(fs: *mut Head<c::bch_sb>, fs_bdev: *mut c::block_device,
+                          sb: *mut c::bch_sb_handle, opts: *mut c::bch_opts) -> c_int;
     pub fn bch2_dev_add(c: *mut c::bch_fs, path: *const c_char, err: *mut c::printbuf) -> c_int;
     pub fn bch2_dev_resize(c: *mut c::bch_fs, ca: *mut c::bch_dev, nbuckets: u64,
                            err: *mut c::printbuf) -> c_int;

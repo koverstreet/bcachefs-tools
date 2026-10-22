@@ -177,7 +177,7 @@ impl<'a, R: RawLock, G, P> Guard<'a, R, G, P> {
         Guard { lock, state, _not_send: PhantomData }
     }
 
-    pub(super) fn lock(&self) -> &'a Lock<R, G, P> {
+    pub(crate) fn lock(&self) -> &'a Lock<R, G, P> {
         self.lock
     }
 }

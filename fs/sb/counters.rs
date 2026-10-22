@@ -36,6 +36,7 @@ use crate::util::kernel::{nsecs_to_jiffies, NSEC_PER_SEC};
 use crate::util::percpu::{percpu_u64_get, percpu_u64_set, this_cpu_add};
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
+use crate::sb::io::SbResize;
 
 /// What an event's counter counts.
 pub trait Kind {}
@@ -279,7 +280,8 @@ impl SbFieldOps for c::bch_sb_field_counters {
 pub fn bch2_sb_counters_from_cpu(c: &Opaque<c::bch_fs>) {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
-    let mut sb = unsafe { fs.sb_lock_held() };
+    let mut guard = unsafe { fs.sb_lock_held() };
+    let mut sb = fs.sb_resize(&mut guard);
 
     let u64s = sb_field_u64s::<c::bch_sb_field_counters>(NR_STABLE);
     let _ = sb.field_get_minsize::<c::bch_sb_field_counters>(u64s);

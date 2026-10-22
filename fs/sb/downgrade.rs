@@ -26,6 +26,7 @@ use crate::util::bitmap::LeBitmap;
 use crate::util::ffi::Opaque;
 use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, Validated, ValidatedEntries};
 use crate::util::Printbuf;
+use crate::sb::io::SbResize;
 
 type Section = c::bch_sb_field_downgrade;
 type Entry = c::bch_sb_field_downgrade_entry<Validated>;
@@ -193,13 +194,13 @@ const DOWNGRADE: &[UpDown] = table! {
 // ── Applying them ────────────────────────────────────────────────────────────
 
 /// Every superblock has one from mount on.
-fn ext(sb: &mut c::bch_sb_handle) -> &mut c::bch_sb_field_ext<Validated> {
+fn ext(sb: &mut c::bch_sb_buf) -> &mut c::bch_sb_field_ext<Validated> {
     sb.field_mut().expect("an ext section")
 }
 
 /// Upgrading from @old to @new: what each version past @old, up to @new,
 /// needs, into the ext section's recovery_passes_required and errors_silent.
-fn set_upgrade(sb: &mut c::bch_sb_handle, table: &[UpDown], old: u32, new: u32) {
+fn set_upgrade(sb: &mut c::bch_sb_buf, table: &[UpDown], old: u32, new: u32) {
     let ext = ext(sb);
     for i in table.iter().filter(|i| old < i.version.0 && i.version.0 <= new) {
         let fsck = if i.all_fsck { passes::fsck_passes() } else { 0 };
@@ -218,7 +219,7 @@ pub fn bch2_sb_set_upgrade(c: &Opaque<c::bch_fs>, old: c_uint, new: c_uint) {
 }
 
 /// set_upgrade(), by the table for allowing incompatible features.
-pub(crate) fn set_upgrade_incompat(sb: &mut c::bch_sb_handle, old: u32, new: u32) {
+pub(crate) fn set_upgrade_incompat(sb: &mut c::bch_sb_buf, old: u32, new: u32) {
     set_upgrade(sb, UPGRADE_INCOMPAT, old, new)
 }
 
@@ -361,6 +362,7 @@ impl Fs {
             return Ok(());
         }
 
+        let mut sb = self.sb_resize(sb);
         let d = sb.field_resize::<Section>((bytes / size_of::<u64>()) as u32)
             .ok_or_else(|| self.err(bch_errcode::BCH_ERR_ENOSPC_sb_downgrade))?;
         let d = &mut bytes_of_mut(d)[SECTION_HEAD..];

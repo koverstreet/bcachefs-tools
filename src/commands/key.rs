@@ -130,7 +130,7 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(OpenFs, bch_key)> {
 }
 
 /// Write a new encrypted key to the crypt superblock field.
-fn set_crypt_key(sb: &mut c::bch_sb_handle, key: c::bch_encrypted_key) {
+fn set_crypt_key(sb: &mut bcachefs_kernel::c::bch_sb_buf, key: c::bch_encrypted_key) {
     sb.field_mut::<c::bch_sb_field_crypt>()
         .expect("filesystem has no crypt field")
         .key = key;
@@ -138,7 +138,7 @@ fn set_crypt_key(sb: &mut c::bch_sb_handle, key: c::bch_encrypted_key) {
 
 /// Give the crypt field scrypt parameters, for a key that has never been
 /// wrapped with a passphrase: --no_passphrase leaves them unset.
-fn init_crypt_kdf(sb: &mut c::bch_sb_handle) {
+fn init_crypt_kdf(sb: &mut bcachefs_kernel::c::bch_sb_buf) {
     let crypt = sb.field_mut::<c::bch_sb_field_crypt>()
         .expect("filesystem has no crypt field");
     unsafe { c::bch_crypt_kdf_init(crypt) };

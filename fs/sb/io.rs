@@ -729,9 +729,9 @@ pub fn bch2_check_version_downgrade(c: &Opaque<c::bch_fs>) -> bool {
 /// The superblock at @new, and allowing incompatible features up to it if
 /// @incompat; a new major drops the downgrade section, which is for
 /// downgrades within one. bch2_sb_upgrade().
-fn sb_upgrade(sb: &mut SbLockGuard<'_>, new: u32, incompat: bool) {
+fn sb_upgrade(fs: &Fs, sb: &mut SbLockGuard<'_>, new: u32, incompat: bool) {
     if c::BCH_VERSION_MAJOR(new.into()) > c::BCH_VERSION_MAJOR(sb.sb().version.get().into()) {
-        sb.field_resize::<c::bch_sb_field_downgrade>(0);
+        fs.sb_resize(sb).field_resize::<c::bch_sb_field_downgrade>(0);
     }
 
     let s = sb.sb_mut();
@@ -745,8 +745,9 @@ fn sb_upgrade(sb: &mut SbLockGuard<'_>, new: u32, incompat: bool) {
 
 #[c_export]
 pub fn bch2_sb_upgrade(c: &Opaque<c::bch_fs>, new_version: c_uint, incompat: bool) {
+    let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
-    sb_upgrade(&mut unsafe { Fs::from_c(c).sb_lock_held() }, new_version, incompat)
+    sb_upgrade(fs, &mut unsafe { fs.sb_lock_held() }, new_version, incompat)
 }
 
 // ── Printing ─────────────────────────────────────────────────────────────
@@ -1008,24 +1009,6 @@ impl bch_sb_buf {
 impl bch_sb_handle {
     pub fn bdev(&self) -> &block_device {
         unsafe { &*self.bdev }
-    }
-
-    /// Resized to @u64s, made if there's none: at its (possibly new) place.
-    pub fn field_resize<F: SbField + ?Sized>(&mut self, u64s: u32) -> Option<&mut F> {
-        let off = self.field_resize_id(F::FIELD_TYPE, u64s)?;
-        self.arm_mut_at(off)
-    }
-
-    /// Made or grown to at least @min_u64s.
-    pub fn field_get_minsize<F: SbField + ?Sized>(&mut self, min_u64s: u32) -> Option<&mut F> {
-        let off = self.field_get_minsize_id(F::FIELD_TYPE, min_u64s)?;
-        self.arm_mut_at(off)
-    }
-
-    pub fn field_delete(&mut self, ty: c::bch_sb_field_type) {
-        if let Some(off) = field_offset(self.sb(), ty) {
-            self.field_resize_at(Some(off), 0);
-        }
     }
 
     /// Room for a superblock of @u64s - 0, the minimum - in a buffer a power
@@ -1432,29 +1415,29 @@ impl bch_sb_buf {
     }
 }
 
-impl bch_sb_handle {
+/// A superblock whose sections are resized: its buffer, how it makes room in
+/// it, and what else must make the same room - nothing, but for the
+/// filesystem's, whose devices' superblocks are copies of it. They're grown
+/// with it so that a resize fails, -ENOSPC or -ENOMEM, before anything
+/// depends on the section, not the superblock write after.
+pub trait SbResize: core::ops::DerefMut<Target = bch_sb_buf> {
+    /// Room for a superblock of @u64s - 0, the minimum.
+    fn sb_realloc(&mut self, u64s: u32) -> Result<(), BchError>;
+
+    /// Room in what else holds this superblock, grown by @d u64s.
+    fn grow_with(&mut self, _d: isize) -> Option<()> {
+        Some(())
+    }
+
     /// The section of type @ty resized to @u64s - made if there's none - with
-    /// the superblock grown to hold it, and if this is the filesystem's, each
-    /// online device's too: its offset, None if there's no room.
+    /// the superblock grown to hold it, and what's grown with it: its
+    /// offset, None if there's no room.
     fn field_resize_id(&mut self, ty: c::bch_sb_field_type, u64s: u32) -> Option<usize> {
         let d = u64s as isize - (field_bytes(self.sb(), ty) / size_of::<u64>()) as isize;
-        // each superblock grown by the section's change: a device's is its own size
-        let grow = |sb: &mut bch_sb_handle| sb.sb_realloc((sb.sb().u64s() as isize + d) as u32).ok();
+        let new = (self.sb().u64s() as isize + d) as u32;
 
-        grow(self)?;
-
-        if self.bits.fs_sb() != 0 {
-            // SAFETY: the filesystem's handle, its disk_sb, under sb_lock -
-            // the filesystem only for its devices, whose handles are theirs
-            let fs = unsafe { Fs::from_disk_sb(self) };
-            fs.sb.assert_held();
-
-            // XXX: we're not checking that offline device have enough space
-            for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_sb_field_resize) {
-                // SAFETY: changed only under sb_lock, which we hold
-                grow(unsafe { &mut *(&raw const ca.disk_sb).cast_mut() })?;
-            }
-        }
+        self.sb_realloc(new).ok()?;
+        self.grow_with(d)?;
 
         let at = field_offset(self.sb(), ty);
         let off = self.field_resize_at(at, u64s)?;
@@ -1470,22 +1453,112 @@ impl bch_sb_handle {
         }
         self.field_resize_id(ty, u64s)
     }
+
+    /// Resized to @u64s, made if there's none: at its (possibly new) place.
+    fn field_resize<F: SbField + ?Sized>(&mut self, u64s: u32) -> Option<&mut F> {
+        let off = self.field_resize_id(F::FIELD_TYPE, u64s)?;
+        self.arm_mut_at(off)
+    }
+
+    /// Made or grown to at least @min_u64s.
+    fn field_get_minsize<F: SbField + ?Sized>(&mut self, min_u64s: u32) -> Option<&mut F> {
+        let off = self.field_get_minsize_id(F::FIELD_TYPE, min_u64s)?;
+        self.arm_mut_at(off)
+    }
+
+    fn field_delete(&mut self, ty: c::bch_sb_field_type) {
+        if let Some(off) = field_offset(self.sb(), ty) {
+            self.field_resize_at(Some(off), 0);
+        }
+    }
 }
 
+/// A device's: its own limits - the logical block, the layout - and its bio.
+impl SbResize for bch_sb_handle {
+    fn sb_realloc(&mut self, u64s: u32) -> Result<(), BchError> {
+        bch_sb_handle::sb_realloc(self, u64s)
+    }
+}
+
+/// The filesystem's superblock, to resize: Fs::sb_resize()'s.
+pub struct FsSbResize<'a> {
+    fs:      &'a Fs,
+    disk_sb: &'a mut c::bch_fs_sb,
+}
+
+impl Fs {
+    /// The superblock @sb holds, to resize - and each online device's grown
+    /// with it, under the same sb_lock.
+    pub fn sb_resize<'a>(&'a self, sb: &'a mut SbLockGuard<'_>) -> FsSbResize<'a> {
+        assert!(core::ptr::eq(sb.lock(), &self.sb), "sb_resize(): another filesystem's sb_lock");
+        FsSbResize { fs: self, disk_sb: sb }
+    }
+}
+
+impl core::ops::Deref for FsSbResize<'_> {
+    type Target = bch_sb_buf;
+
+    fn deref(&self) -> &bch_sb_buf {
+        &**self.disk_sb
+    }
+}
+
+impl core::ops::DerefMut for FsSbResize<'_> {
+    fn deref_mut(&mut self) -> &mut bch_sb_buf {
+        &mut **self.disk_sb
+    }
+}
+
+impl SbResize for FsSbResize<'_> {
+    fn sb_realloc(&mut self, u64s: u32) -> Result<(), BchError> {
+        let size = (size_of::<Head<bch_sb>>() + u64s as usize * size_of::<u64>()).next_power_of_two();
+        if !self.sb.is_null() && self.buffer_size >= size {
+            return Ok(());
+        }
+        self.grow(size).map_err(|_| BchError::from(c::bch_errcode::BCH_ERR_ENOMEM_sb_buf_realloc))
+    }
+
+    fn grow_with(&mut self, d: isize) -> Option<()> {
+        // XXX: we're not checking that offline device have enough space
+        for ca in self.fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_sb_field_resize) {
+            // SAFETY: changed only under sb_lock, which we hold
+            let sb = unsafe { &mut *(&raw const ca.disk_sb).cast_mut() };
+            sb.sb_realloc((sb.sb().u64s() as isize + d) as u32).ok()?;
+        }
+        Some(())
+    }
+}
+
+/// # Safety
+/// @sb is a live filesystem's c->disk_sb, its sb_lock held.
 #[c_export]
-pub fn bch2_sb_field_resize_id(sb: &mut c::bch_sb_handle, ty: c::bch_sb_field_type, u64s: c_uint)
+pub unsafe fn bch2_sb_field_resize_id(sb: *mut c::bch_fs_sb, ty: c::bch_sb_field_type, u64s: c_uint)
     -> *mut Head<c::bch_sb_field>
 {
+    // SAFETY: the caller's
+    let (fs, mut guard) = unsafe { Fs::from_disk_sb(sb) };
+    let mut sb = fs.sb_resize(&mut guard);
     let off = sb.field_resize_id(ty, u64s);
     sb.field_ptr(off)
 }
 
+/// # Safety
+/// @sb is a live filesystem's c->disk_sb, its sb_lock held.
 #[c_export]
-pub fn bch2_sb_field_get_minsize_id(sb: &mut c::bch_sb_handle, ty: c::bch_sb_field_type, u64s: c_uint)
+pub unsafe fn bch2_sb_field_get_minsize_id(sb: *mut c::bch_fs_sb, ty: c::bch_sb_field_type, u64s: c_uint)
     -> *mut Head<c::bch_sb_field>
 {
+    // SAFETY: the caller's
+    let (fs, mut guard) = unsafe { Fs::from_disk_sb(sb) };
+    let mut sb = fs.sb_resize(&mut guard);
     let off = sb.field_get_minsize_id(ty, u64s);
     sb.field_ptr(off)
+}
+
+/// The filesystem's superblock's buffer freed: bch2_free_super(), for it.
+#[c_export]
+pub fn bch2_free_fs_sb(sb: &mut c::bch_fs_sb) {
+    sb.free();
 }
 
 /// The u64s section @F is with @nr of its tail's entries: for
@@ -1591,7 +1664,7 @@ pub fn bch2_sb_update(c: &Opaque<c::bch_fs>) {
 
 /// @src's header and sections into @dst - all but those each device has its
 /// own of, BCH_SINGLE_DEVICE_SB_FIELDS: __copy_super().
-fn copy_super(dst: &mut bch_sb_handle, src: &bch_sb) -> Result<(), BchError> {
+fn copy_super<T: SbResize + ?Sized>(dst: &mut T, src: &bch_sb) -> Result<(), BchError> {
     let d = dst.sb_mut();
     d.version        = src.version;
     d.version_min    = src.version_min;
@@ -1636,8 +1709,9 @@ fn copy_super(dst: &mut bch_sb_handle, src: &bch_sb) -> Result<(), BchError> {
 /// The filesystem's superblock from @src, and what it derives from it:
 /// bch2_sb_to_fs().
 fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &bch_sb) -> Result<(), BchError> {
-    sb.sb_realloc(0)?;
-    copy_super(sb, src)?;
+    let mut disk_sb = fs.sb_resize(sb);
+    disk_sb.sb_realloc(0)?;
+    copy_super(&mut disk_sb, src)?;
     crate::alloc::replicas::sb_replicas_to_cpu(fs, sb)?;
     crate::alloc::disk_groups::sb_disk_groups_to_cpu(fs, sb)?;
     crate::data::extents_sb::sb_extent_type_u64s_to_cpu(sb);
@@ -1805,6 +1879,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::SbResize;
     use super::{sb_field_u64s, validate_section};
     use crate::c;
     use crate::types::Le32;

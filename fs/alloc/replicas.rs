@@ -36,6 +36,7 @@ use core::fmt;
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicI32, Ordering};
 use cstruct_macros::c_export;
+use crate::sb::io::SbResize;
 
 type Entry = c::bch_replicas_entry_v1<Validated>;
 
@@ -585,9 +586,9 @@ impl ReplicasCpu {
     /// The superblock's replicas section made ours: replicas_v0, which older
     /// versions read, if every entry's nr_required is 1. False if there's no
     /// room.
-    fn to_sb(&self, sb: &mut c::bch_sb_handle) -> bool {
+    fn to_sb(&self, sb: &mut (impl SbResize + ?Sized)) -> bool {
         /// Section @F, resized, the other one deleted: its entries' bytes.
-        fn section<'a, F: SbField + Unsized + ?Sized + 'a>(sb: &'a mut c::bch_sb_handle, u64s: u32,
+        fn section<'a, F: SbField + Unsized + ?Sized + 'a>(sb: &'a mut (impl SbResize + ?Sized), u64s: u32,
                                                          other: c::bch_sb_field_type) -> Option<&'a mut [u8]> {
             sb.field_resize::<F>(u64s)?;
             sb.field_delete(other);
@@ -622,8 +623,8 @@ impl ReplicasCpu {
     }
 
     /// to_sb(), no room an error.
-    fn write_sb(&self, fs: &Fs, sb: &mut c::bch_sb_handle) -> Result<(), BchError> {
-        fs.ensure(self.to_sb(sb), bch_errcode::BCH_ERR_ENOSPC_sb_replicas)
+    fn write_sb(&self, fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        fs.ensure(self.to_sb(&mut fs.sb_resize(sb)), bch_errcode::BCH_ERR_ENOSPC_sb_replicas)
     }
 
     /// Validated as a section is, its entries against @sb's members: none
@@ -725,7 +726,7 @@ impl SbFieldOps for c::bch_sb_field_replicas_v0 {
 impl Fs {
     /// @r's slot @i dropped, and the superblock's entries rewritten without
     /// it - not written: the caller's.
-    fn replicas_kill(&self, r: &mut ReplicasCpu, sb: &mut c::bch_sb_handle, i: usize) {
+    fn replicas_kill(&self, r: &mut ReplicasCpu, sb: &mut SbLockGuard<'_>, i: usize) {
         r.remove(i);
         if let Err(e) = r.write_sb(self, sb) {
             warn(self, format_args!("bch2_cpu_replicas_to_sb_replicas() error: {e}"));

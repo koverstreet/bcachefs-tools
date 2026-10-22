@@ -859,7 +859,7 @@ fn cmd_sb_set(fs: &Fs, dev: Option<u32>, field: &str, v: u64) -> Result<String> 
 
     let mut sb = fs.sb_lock();
 
-    let edit = match &ca {
+    let edit: &mut bcachefs_kernel::c::bch_sb_buf = match &ca {
         // SAFETY: ca->disk_sb is sb_lock's too, held
         Some(ca) => unsafe { &mut (*ca.as_mut_ptr()).disk_sb },
         None     => &mut *sb,

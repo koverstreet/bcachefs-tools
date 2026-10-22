@@ -78,6 +78,7 @@ use crate::util::vstructs::{Head, Unvalidated, Validated};
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint, CStr};
 use cstruct_macros::c_export;
+use crate::sb::io::SbResize;
 
 // ── Targets ──────────────────────────────────────────────────────────────
 
@@ -194,7 +195,7 @@ fn group_find(groups: &[c::bch_disk_group], parent: u32, name: &[u8]) -> Option<
 
 /// At least @n deleted slots, growing the section if need be: so the adds
 /// after can't fail, and a path is made whole or not at all.
-fn groups_reserve(sb: &mut c::bch_sb_handle, n: usize) -> Result<(), BchError> {
+fn groups_reserve(sb: &mut (impl SbResize + ?Sized), n: usize) -> Result<(), BchError> {
     let groups = sb_groups(sb.sb());
     let nr = groups.len();
     let free = groups.iter().filter(|g| g.deleted()).count();
@@ -213,7 +214,7 @@ fn groups_reserve(sb: &mut c::bch_sb_handle, n: usize) -> Result<(), BchError> {
 }
 
 /// In the first deleted slot: groups_reserve() first.
-fn group_add(sb: &mut c::bch_sb_handle, parent: u32, name: &[u8]) -> u32 {
+fn group_add(sb: &mut (impl SbResize + ?Sized), parent: u32, name: &[u8]) -> u32 {
     let groups = sb.field_mut::<c::bch_sb_field_disk_groups>()
         .expect("disk groups section: reserved");
     let i = groups.entries.iter().position(|g| g.deleted())
@@ -229,7 +230,7 @@ fn group_add(sb: &mut c::bch_sb_handle, parent: u32, name: &[u8]) -> u32 {
     i as u32
 }
 
-impl c::bch_sb_handle {
+impl c::bch_sb_buf {
     pub fn disk_path_find(&self, name: &[u8]) -> Option<u32> {
         let groups = sb_groups(self.sb());
         // index + 1: path_labels() yields at least one label
@@ -238,30 +239,6 @@ impl c::bch_sb_handle {
             v = group_find(groups, v, l)? + 1;
         }
         Some(v - 1)
-    }
-
-    /// All or nothing: an error leaves the superblock as it was.
-    pub fn disk_path_find_or_create(&mut self, name: &[u8]) -> Result<u32, BchError> {
-        if !path_labels(name).all(label_valid) {
-            return Err(c::EINVAL.into());
-        }
-
-        let mut labels = path_labels(name).peekable();
-        let mut v = 0;
-        {
-            let groups = sb_groups(self.sb());
-            while let Some(g) = labels.peek().and_then(|l| group_find(groups, v, l)) {
-                v = g + 1;
-                labels.next();
-            }
-        }
-
-        groups_reserve(self, labels.clone().count())?;
-
-        for l in labels {
-            v = group_add(self, v, l) + 1;
-        }
-        Ok(v - 1)
     }
 }
 
@@ -320,6 +297,36 @@ impl Fs {
         self.dev_rcu(dev as u32, rcu).map_or(0, |ca| ca.mi.failure_domain)
     }
 }
+
+/// A superblock's disk groups added to: which superblock it is says what
+/// grows with it.
+pub trait SbDiskGroupsMut: SbResize {
+    /// All or nothing: an error leaves the superblock as it was.
+    fn disk_path_find_or_create(&mut self, name: &[u8]) -> Result<u32, BchError> {
+        if !path_labels(name).all(label_valid) {
+            return Err(c::EINVAL.into());
+        }
+
+        let mut labels = path_labels(name).peekable();
+        let mut v = 0;
+        {
+            let groups = sb_groups(self.sb());
+            while let Some(g) = labels.peek().and_then(|l| group_find(groups, v, l)) {
+                v = g + 1;
+                labels.next();
+            }
+        }
+
+        groups_reserve(self, labels.clone().count())?;
+
+        for l in labels {
+            v = group_add(self, v, l) + 1;
+        }
+        Ok(v - 1)
+    }
+}
+
+impl<T: SbResize + ?Sized> SbDiskGroupsMut for T {}
 
 fn disk_path_to_text(out: &mut Printbuf, fs: Option<&Fs>, v: u32) {
     let mut out = out.atomic();
@@ -394,13 +401,13 @@ pub unsafe fn bch2_fs_disk_groups_exit(c: &Opaque<c::bch_fs>) {
 }
 
 fn dev_group_set(fs: &Fs, sb: &mut SbLockGuard<'_>, dev: u32, name: &[u8]) -> Result<(), BchError> {
-    let v = dev_label_resolve(sb, name)?;
+    let v = dev_label_resolve(&mut fs.sb_resize(sb), name)?;
     sb.fs_member_mut(dev).set_group(v.into());
     sb_disk_groups_to_cpu(fs, sb)
 }
 
 /// As a member's group field: index + 1, 0 for none.
-fn dev_label_resolve(sb: &mut c::bch_sb_handle, name: &[u8]) -> Result<u32, BchError> {
+fn dev_label_resolve(sb: &mut (impl SbResize + ?Sized), name: &[u8]) -> Result<u32, BchError> {
     if name.is_empty() || name == b"none" {
         return Ok(0);
     }
@@ -600,7 +607,7 @@ pub unsafe fn bch2_opt_disk_label_parse(c: Option<&Opaque<c::bch_fs>>, val: *con
         Ok(a)  => a,
         Err(e) => return e,
     };
-    ret_to_c(dev_label_resolve(&mut fs.sb_lock(), val).map(|v| *res = v.into()))
+    ret_to_c(dev_label_resolve(&mut fs.sb_resize(&mut fs.sb_lock()), val).map(|v| *res = v.into()))
 }
 
 /// # Safety

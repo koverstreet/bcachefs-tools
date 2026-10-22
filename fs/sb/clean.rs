@@ -27,6 +27,7 @@ use crate::util::ffi::Opaque;
 use crate::util::vstructs::{bytes_of_mut, Head, Unvalidated, UnvalidatedEntriesMut, Validated, VstructRef};
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, fsck_err, mustfix_fsck_err_on, prt};
+use crate::sb::io::SbResize;
 
 type Section = c::bch_sb_field_clean;
 
@@ -262,7 +263,8 @@ pub fn bch2_fs_mark_dirty(c: &Opaque<c::bch_fs>) {
 pub fn bch2_fs_mark_clean(c: &Opaque<c::bch_fs>) {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock, from bch2_write_super()
-    let mut sb = unsafe { fs.sb_lock_held() };
+    let mut guard = unsafe { fs.sb_lock_held() };
+    let mut sb = fs.sb_resize(&mut guard);
     if sb.sb().clean() {
         return;
     }

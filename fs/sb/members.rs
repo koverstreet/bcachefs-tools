@@ -123,7 +123,7 @@ fn sb_member_alloc(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<u32, BchError> {
     let stride = usize::from(sb.field::<c::bch_sb_field_members_v2>().expect("members_v2").member_bytes.get());
     let u64s = (MEMBERS_V2_HEAD + stride * nr as usize).div_ceil(size_of::<u64>());
 
-    sb.field_resize::<c::bch_sb_field_members_v2>(u64s as u32)
+    fs.sb_resize(sb).field_resize::<c::bch_sb_field_members_v2>(u64s as u32)
         .ok_or(BchError::from(bch_errcode::BCH_ERR_ENOSPC_sb_members))?;
     sb.sb_mut().nr_devices = nr as u8;
     Ok(dev)
@@ -244,7 +244,7 @@ fn members_v2_mut(mi: &mut c::bch_sb_field_members_v2) -> Option<StridedMut<'_, 
     StridedMut::new(bytes_of_mut(mi).get_mut(MEMBERS_V2_HEAD..)?, stride)
 }
 
-impl c::bch_sb_handle {
+impl c::bch_sb_buf {
     /// Member @idx, to edit: None if there's no such member in the section,
     /// or it's shorter than a bch_member - written before it grew.
     pub fn member_mut(&mut self, idx: u32) -> Option<&mut c::bch_member> {
@@ -254,9 +254,19 @@ impl c::bch_sb_handle {
         members_v2_mut(self.field_mut::<c::bch_sb_field_members_v2>()?)?.into_whole_mut(idx as usize)
     }
 
+    fn put_member_v1<F: SbField + Unsized + ?Sized>(&mut self, start: usize, i: u32, m: &c::bch_member) {
+        let at = start + i as usize * BCH_MEMBER_V1_BYTES;
+        let f = bytes_of_mut(self.field_mut::<F>().expect("members: just sized"));
+        f[at..at + BCH_MEMBER_V1_BYTES].copy_from_slice(&plain_bytes(m)[..BCH_MEMBER_V1_BYTES]);
+    }
+}
+
+/// A superblock's members resized: which superblock it is says what grows
+/// with it - the filesystem's, its devices'.
+pub trait SbMembersMut: SbResize {
     /// members_v1, the mirror of members_v2 that versions before
     /// extent_flags read - or none, for a superblock they can't.
-    pub fn members_cpy_v2_v1(&mut self) -> Result<(), BchError> {
+    fn members_cpy_v2_v1(&mut self) -> Result<(), BchError> {
         if self.sb().version_incompat() > c::bcachefs_metadata_version::extent_flags.0.into() {
             self.field_resize::<c::bch_sb_field_members_v1>(0);
             return Ok(());
@@ -274,14 +284,8 @@ impl c::bch_sb_handle {
         Ok(())
     }
 
-    fn put_member_v1<F: SbField + Unsized + ?Sized>(&mut self, start: usize, i: u32, m: &c::bch_member) {
-        let at = start + i as usize * BCH_MEMBER_V1_BYTES;
-        let f = bytes_of_mut(self.field_mut::<F>().expect("members: just sized"));
-        f[at..at + BCH_MEMBER_V1_BYTES].copy_from_slice(&plain_bytes(m)[..BCH_MEMBER_V1_BYTES]);
-    }
-
     /// After, every member of members_v2 is whole. None if there isn't room.
-    pub fn members_v2_init(&mut self) -> Option<()> {
+    fn members_v2_init(&mut self) -> Option<()> {
         let nr = u32::from(self.sb().nr_devices);
         let member = size_of::<c::bch_member>();
         let u64s = ((MEMBERS_V2_HEAD + member * nr as usize).div_ceil(size_of::<u64>())) as u32;
@@ -308,20 +312,23 @@ impl c::bch_sb_handle {
     }
 }
 
+impl<T: SbResize + ?Sized> SbMembersMut for T {}
+
 #[c_export]
 pub fn bch2_sb_members_v2_init(c: &Opaque<c::bch_fs>) -> c_int {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
     let mut sb = unsafe { fs.sb_lock_held() };
-    ret_to_c(sb.members_v2_init().ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ENOSPC_sb_members_v2)))
+    ret_to_c(fs.sb_resize(&mut sb).members_v2_init().ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ENOSPC_sb_members_v2)))
 }
 
 /// # Safety
-/// @disk_sb is valid, and nothing else uses it meanwhile.
+/// @disk_sb is a live filesystem's c->disk_sb, its sb_lock held.
 #[c_export]
-pub unsafe fn bch2_sb_members_cpy_v2_v1(disk_sb: *mut c::bch_sb_handle) -> c_int {
+pub unsafe fn bch2_sb_members_cpy_v2_v1(disk_sb: *mut c::bch_fs_sb) -> c_int {
     // SAFETY: the caller's
-    ret_to_c(unsafe { &mut *disk_sb }.members_cpy_v2_v1())
+    let (fs, mut sb) = unsafe { Fs::from_disk_sb(disk_sb) };
+    ret_to_c(fs.sb_resize(&mut sb).members_cpy_v2_v1())
 }
 
 /// Member @i of members_v2, whole - as every one is, on an open filesystem.

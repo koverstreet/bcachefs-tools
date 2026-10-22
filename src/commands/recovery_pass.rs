@@ -8,6 +8,7 @@ use clap::Parser;
 use crate::util::read_flag_list;
 
 use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::sb::io::SbResize;
 
 /// List and manage scheduled recovery passes
 #[derive(Parser, Debug)]
@@ -54,7 +55,8 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
         let mut sb = fs.sb_lock();
 
         let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
-        let ext = sb.field_get_minsize::<c::bch_sb_field_ext>(ext_u64s)
+        let mut disk_sb = fs.sb_resize(&mut sb);
+        let ext = disk_sb.field_get_minsize::<c::bch_sb_field_ext>(ext_u64s)
             .ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))?;
 
         let r = &mut ext.recovery_passes_required[0];

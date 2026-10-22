@@ -754,7 +754,7 @@ static void __bch2_fs_free(struct bch_fs *c)
 	if (c->btree_update_wq)
 		destroy_workqueue(c->btree_update_wq);
 
-	bch2_free_super(&c->disk_sb);
+	bch2_free_fs_sb(&c->disk_sb);
 	bch2_fs_free_mem(c);
 	module_put(THIS_MODULE);
 }
@@ -1203,7 +1203,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	kobject_init(&c->counters_kobj, &bch2_fs_counters_ktype);
 
 	c->minor		= -1;
-	c->disk_sb.fs_sb	= true;
 
 	init_rwsem(&c->state_lock);
 	INIT_WORK(&c->read_only_work, bch2_fs_read_only_work);
@@ -1686,7 +1685,7 @@ int bch2_sbs_filter_dead(bch_sb_handles *sbs, struct bch_opts *opts, struct prin
 	for (size_t i = sbs->nr; i; --i) {
 		struct bch_sb_handle *sb = &sbs->data[i - 1];
 
-		ret = bch2_dev_in_fs(best, sb, opts);
+		ret = bch2_dev_in_fs(best->sb, best->bdev, sb, opts);
 
 		if (ret == -BCH_ERR_device_has_been_removed ||
 		    ret == -BCH_ERR_device_splitbrain) {

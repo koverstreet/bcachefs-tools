@@ -16,6 +16,7 @@ use bcachefs_kernel::util::vstructs::Unvalidated;
 use bcachefs_kernel::sb::members::sb_member;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::wrappers::super_io::{self, SUPERBLOCK_SIZE_DEFAULT};
+use bcachefs_kernel::sb::io::SbResize;
 
 /// Attempt to recover an overwritten superblock from backups
 #[derive(Parser, Debug)]

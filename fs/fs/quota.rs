@@ -77,6 +77,7 @@ mod vfs {
                              TransAttempt, UpdateTriggerFlags};
     use crate::errcode::{bch_errcode, ret_to_class};
     use crate::locking::Guard;
+    use crate::sb::io::SbResize;
     use crate::util::kernel::ktime_get_real_seconds;
     use crate::{bch_err_fn, bch_info, fs_inconsistent, inode};
     use crate::snapshots::snapshot;
@@ -495,7 +496,7 @@ mod vfs {
 
     /// The quota section, made with the default grace period if there isn't
     /// one.
-    fn sb_get_or_create_quota(sb: &mut c::bch_sb_handle) -> Option<&mut c::bch_sb_field_quota> {
+    fn sb_get_or_create_quota(sb: &mut (impl SbResize + ?Sized)) -> Option<&mut c::bch_sb_field_quota> {
         if sb.field::<c::bch_sb_field_quota>().is_some() {
             return sb.field_mut::<c::bch_sb_field_quota>();
         }
@@ -512,7 +513,7 @@ mod vfs {
     }
 
     /// The superblock's time and warning limits, into memory.
-    fn sb_quota_read(fs: &Fs, sb: &c::bch_sb_handle) {
+    fn sb_quota_read(fs: &Fs, sb: &c::bch_sb_buf) {
         let Some(sb_quota) = sb.field::<c::bch_sb_field_quota>() else {
             return;
         };
@@ -565,7 +566,7 @@ mod vfs {
     pub fn fs_quota_read(fs: &Fs) -> Result<(), BchError> {
         {
             let mut sb = fs.sb_lock();
-            if sb_get_or_create_quota(&mut sb).is_none() {
+            if sb_get_or_create_quota(&mut fs.sb_resize(&mut sb)).is_none() {
                 return fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_quota);
             }
 
@@ -609,7 +610,7 @@ mod vfs {
         flags & (1 << SB_RDONLY_BIT) != 0
     }
 
-    fn set_sb_quotas(sb: &mut c::bch_sb_handle, uflags: u32, on: bool) {
+    fn set_sb_quotas(sb: &mut c::bch_sb_buf, uflags: u32, on: bool) {
         let sb = sb.sb_mut();
         if uflags & c::FS_QUOTA_UDQ_ENFD != 0 {
             sb.set_usrquota(on);
@@ -648,7 +649,7 @@ mod vfs {
         }
 
         let mut sb = fs.sb_lock();
-        if sb_get_or_create_quota(&mut sb).is_none() {
+        if sb_get_or_create_quota(&mut fs.sb_resize(&mut sb)).is_none() {
             return bch_err_fn!(fs, fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_quota));
         }
 
@@ -763,7 +764,8 @@ mod vfs {
         }
 
         let mut sb = fs.sb_lock();
-        let Some(sb_quota) = sb_get_or_create_quota(&mut sb) else {
+        let mut disk_sb = fs.sb_resize(&mut sb);
+        let Some(sb_quota) = sb_get_or_create_quota(&mut disk_sb) else {
             return bch_err_fn!(fs, fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_quota));
         };
 

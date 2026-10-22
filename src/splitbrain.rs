@@ -81,7 +81,8 @@ pub fn find(sbs: &[(PathBuf, bch_sb_handle)], opts: &c::bch_opts) -> Vec<Diverge
         // non-const pointers are the C signature, not a licence.
         let ret = unsafe {
             c::bch2_dev_in_fs(
-                best_handle as *const _ as *mut _,
+                best_handle.sb,
+                best_handle.bdev,
                 handle as *const _ as *mut _,
                 &mut opts,
             )

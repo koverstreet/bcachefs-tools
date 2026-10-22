@@ -20,6 +20,7 @@ use crate::types::Le64;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
+use crate::sb::io::SbResize;
 
 fn invalid() -> BchError {
     bch_errcode::BCH_ERR_invalid_sb_journal.into()

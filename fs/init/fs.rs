@@ -10,7 +10,7 @@ pub use crate::sb::members::DevRef;
 
 /// sb_lock held: the superblock, through it - and c->sb, through its
 /// published().
-pub type SbLockGuard<'a> = Guard<'a, Noio<c::mutex>, c::bch_sb_handle, c::bch_sb_cpu>;
+pub type SbLockGuard<'a> = Guard<'a, Noio<c::mutex>, c::bch_fs_sb, c::bch_sb_cpu>;
 
 impl SbLockGuard<'_> {
     /// Member @dev_idx, of an open filesystem's superblock - where every one
@@ -97,13 +97,19 @@ impl Fs {
         unsafe { Self::borrow_raw(c.as_ptr()) }
     }
 
-    /// The filesystem whose disk_sb @sb is: C's container_of().
+    /// The filesystem whose disk_sb @sb is, C's container_of(), and its
+    /// sb_lock, which C holds: for C passing &c->disk_sb.
     ///
     /// # Safety
-    /// @sb is a live filesystem's disk_sb - its fs_sb bit set.
-    pub unsafe fn from_disk_sb<'a>(sb: *const c::bch_sb_handle) -> &'a Fs {
-        let off = core::mem::offset_of!(Fs, sb) + MutexNoio::<c::bch_sb_handle, c::bch_sb_cpu>::PROTECTED_OFFSET;
-        unsafe { Self::borrow_raw(sb.byte_sub(off).cast_mut().cast()) }
+    /// @sb is a live filesystem's disk_sb, and the caller holds its sb_lock
+    /// for 'a.
+    pub unsafe fn from_disk_sb<'a>(sb: *const c::bch_fs_sb) -> (&'a Fs, SbLockGuard<'a>) {
+        let off = core::mem::offset_of!(Fs, sb) + MutexNoio::<c::bch_fs_sb, c::bch_sb_cpu>::PROTECTED_OFFSET;
+        // SAFETY: the caller's
+        unsafe {
+            let fs: &'a Fs = Self::borrow_raw(sb.byte_sub(off).cast_mut().cast());
+            (fs, fs.sb_lock_held())
+        }
     }
 
     /// The metadata version the filesystem is at: C's c->sb.version, the

@@ -29,7 +29,7 @@ use crate::prompt::Prompt;
 use crate::ErrnoError;
 
 /// Check if a superblock has an encrypted passphrase set.
-pub fn sb_is_encrypted(sb: &bch_sb_handle) -> bool {
+pub fn sb_is_encrypted(sb: &bcachefs_kernel::c::bch_sb_buf) -> bool {
     sb.sb()
         .crypt()
         .map(|c| c.key().is_encrypted())
@@ -127,7 +127,7 @@ impl Unlocked {
 }
 
 impl UnlockPolicy {
-    pub fn apply(&self, sb: &bch_sb_handle) -> Result<Unlocked> {
+    pub fn apply(&self, sb: &bcachefs_kernel::c::bch_sb_buf) -> Result<Unlocked> {
         let uuid = sb.sb().uuid();
 
         info!("Using filesystem unlock policy '{self}' on {uuid}");
@@ -268,7 +268,7 @@ impl Passphrase {
             .ok_or_else(|| anyhow!("incorrect passphrase"))
     }
 
-    fn ask_from_systemd_and_check(sb: &bch_sb_handle) -> Result<PassphraseCorrect> {
+    fn ask_from_systemd_and_check(sb: &bcachefs_kernel::c::bch_sb_buf) -> Result<PassphraseCorrect> {
         let uuid = sb.sb().uuid();
         let label = crate::prompt::fs_name(sb);
         for i in 0..3 {
@@ -427,7 +427,7 @@ impl Passphrase {
     /// Returns the encrypted key suitable for writing to crypt->key.
     pub fn encrypt_key(
         &self,
-        sb: &bch_sb_handle,
+        sb: &bcachefs_kernel::c::bch_sb_buf,
         key: bch_key,
     ) -> Result<bch_encrypted_key> {
         let crypt = sb.sb().crypt().expect("called on encrypted fs");
@@ -447,7 +447,7 @@ impl Passphrase {
         Ok(new_key)
     }
 
-    pub fn check(&self, sb: &bch_sb_handle) -> Option<PassphraseCorrect> {
+    pub fn check(&self, sb: &bcachefs_kernel::c::bch_sb_buf) -> Option<PassphraseCorrect> {
         let crypt = sb
             .sb()
             .crypt()

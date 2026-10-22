@@ -14,6 +14,9 @@ use bcachefs_kernel::{metadata_version, opt_defined, opt_get, opt_set};
 use crate::wrappers::super_io::{die, SUPERBLOCK_SIZE_DEFAULT};
 use bcachefs_kernel::sb::io::BCHFS_MAGIC;
 use bcachefs_kernel::util::vstructs::Head;
+use bcachefs_kernel::sb::io::SbResize;
+use bcachefs_kernel::sb::members::SbMembersMut;
+use bcachefs_kernel::alloc::disk_groups::SbDiskGroupsMut;
 
 /// Device options for formatting — Rust replacement for C struct dev_opts.
 ///

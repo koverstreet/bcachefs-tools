@@ -15,6 +15,7 @@ use crate::util::vstructs::{Head, Unvalidated};
 use crate::util::Printbuf;
 use core::ffi::c_int;
 use cstruct_macros::c_export;
+use crate::sb::io::SbResize;
 
 fn ours() -> impl Iterator<Item = u8> {
     (0..c::BCH_EXTENT_ENTRY_MAX).map(|ty| extent_entry_type_u64s(ty).unwrap() as u8)
@@ -51,6 +52,7 @@ pub(crate) fn sb_extent_type_u64s_to_cpu(sb: &mut SbLockGuard<'_>) {
 fn sb_extent_type_u64s_from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
     let u64s = (size_of::<Head<c::bch_sb_field>>() + c::BCH_EXTENT_ENTRY_MAX as usize)
         .div_ceil(size_of::<u64>());
+    let mut sb = fs.sb_resize(sb);
     let e = sb.field_get_minsize::<c::bch_sb_field_extent_type_u64s>(u64s as u32);
     let Some(e) = e else {
         crate::bch_err!(fs, "error allocating superblock space for extent_type_u64s");

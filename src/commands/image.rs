@@ -37,6 +37,7 @@ use crate::key::Passphrase;
 use crate::util::parse_human_size;
 use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;
 use crate::wrappers::sysfs;
+use bcachefs_kernel::sb::io::SbResize;
 
 const BCH_REPLICAS_MAX: u32 = 4;
 const BTREE_MAX_DEPTH: u32 = 4;
@@ -411,7 +412,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
         .member_bytes.get();
     let u64s = (std::mem::size_of::<Head<c::bch_sb_field_members_v2>>() as u32 + member_bytes as u32)
         .div_ceil(8) as u32;
-    sb.field_resize::<c::bch_sb_field_members_v2>(u64s);
+    fs.sb_resize(&mut sb).field_resize::<c::bch_sb_field_members_v2>(u64s);
     sb.sb_mut().nr_devices = 1;
     sb.sb_mut().set_multi_device(false);
 

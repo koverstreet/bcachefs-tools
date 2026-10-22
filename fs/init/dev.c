@@ -288,43 +288,43 @@ struct bch_fs *bch2_dev_to_fs(dev_t dev)
 	return NULL;
 }
 
-int bch2_dev_in_fs(struct bch_sb_handle *fs,
+int bch2_dev_in_fs(struct bch_sb *fs, struct block_device *fs_bdev,
 		   struct bch_sb_handle *sb,
 		   struct bch_opts *opts)
 {
-	if (fs == sb)
+	if (fs == sb->sb)
 		return 0;
 
-	if (!uuid_equal(&fs->sb->uuid, &sb->sb->uuid))
+	if (!uuid_equal(&fs->uuid, &sb->sb->uuid))
 		return -BCH_ERR_device_not_a_member_of_filesystem;
 
-	if (!bch2_member_exists(fs->sb, sb->sb->dev_idx))
+	if (!bch2_member_exists(fs, sb->sb->dev_idx))
 		return -BCH_ERR_device_has_been_removed;
 
-	if (fs->sb->block_size != sb->sb->block_size)
+	if (fs->block_size != sb->sb->block_size)
 		return -BCH_ERR_mismatched_block_size;
 
-	if (le16_to_cpu(fs->sb->version) < bcachefs_metadata_version_member_seq ||
+	if (le16_to_cpu(fs->version) < bcachefs_metadata_version_member_seq ||
 	    le16_to_cpu(sb->sb->version) < bcachefs_metadata_version_member_seq)
 		return 0;
 
 	if (!opts->no_splitbrain_check &&
-	    fs->sb->seq == sb->sb->seq &&
-	    fs->sb->write_time != sb->sb->write_time) {
+	    fs->seq == sb->sb->seq &&
+	    fs->write_time != sb->sb->write_time) {
 		CLASS(printbuf, buf)();
 
 		prt_str(&buf, "Split brain detected between ");
 		prt_bdevname(&buf, sb->bdev);
 		prt_str(&buf, " and ");
-		prt_bdevname(&buf, fs->bdev);
+		prt_bdevname(&buf, fs_bdev);
 		prt_char(&buf, ':');
 		prt_newline(&buf);
 		prt_printf(&buf, "seq=%llu but write_time different, got", le64_to_cpu(sb->sb->seq));
 		prt_newline(&buf);
 
-		prt_bdevname(&buf, fs->bdev);
+		prt_bdevname(&buf, fs_bdev);
 		prt_char(&buf, ' ');
-		bch2_prt_datetime(&buf, le64_to_cpu(fs->sb->write_time));
+		bch2_prt_datetime(&buf, le64_to_cpu(fs->write_time));
 		prt_newline(&buf);
 
 		prt_bdevname(&buf, sb->bdev);
@@ -339,7 +339,7 @@ int bch2_dev_in_fs(struct bch_sb_handle *fs,
 		return -BCH_ERR_device_splitbrain;
 	}
 
-	struct bch_member m = bch2_sb_member_get(fs->sb, sb->sb->dev_idx);
+	struct bch_member m = bch2_sb_member_get(fs, sb->sb->dev_idx);
 	u64 seq_from_fs		= le64_to_cpu(m.seq);
 	u64 seq_from_member	= le64_to_cpu(sb->sb->seq);
 
@@ -350,11 +350,11 @@ int bch2_dev_in_fs(struct bch_sb_handle *fs,
 		prt_str(&buf, "Split brain detected between ");
 		prt_bdevname(&buf, sb->bdev);
 		prt_str(&buf, " and ");
-		prt_bdevname(&buf, fs->bdev);
+		prt_bdevname(&buf, fs_bdev);
 		prt_char(&buf, ':');
 		prt_newline(&buf);
 
-		prt_bdevname(&buf, fs->bdev);
+		prt_bdevname(&buf, fs_bdev);
 		prt_str(&buf, " believes seq of ");
 		prt_bdevname(&buf, sb->bdev);
 		prt_printf(&buf, " to be %llu, but ", seq_from_fs);
@@ -1370,7 +1370,7 @@ int bch2_dev_online(struct bch_fs *c, const char *path, struct printbuf *err)
 
 	unsigned dev_idx = sb.sb->dev_idx;
 
-	ret = bch2_dev_in_fs(&c->disk_sb, &sb, &c->opts);
+	ret = bch2_dev_in_fs(c->disk_sb.sb, NULL, &sb, &c->opts);
 	if (ret) {
 		prt_printf(err, "device not a member of fs: %s\n", bch2_err_str(ret));
 		return ret;

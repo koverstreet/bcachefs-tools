@@ -613,8 +613,8 @@ pub struct Fs {
     /// publishes.
     #[pin]
     #[init(crate::new_lock!(Default::default(), ::pin_init::zeroed(), "&c->sb_lock"))]
-    #[c_anon("struct mutex_noio sb_lock; struct bch_sb_handle disk_sb; struct bch_sb_cpu sb")]
-    pub sb: MutexNoio<c::bch_sb_handle, c::bch_sb_cpu>,
+    #[c_anon("struct mutex_noio sb_lock; struct bch_fs_sb disk_sb; struct bch_sb_cpu sb")]
+    pub sb: MutexNoio<c::bch_fs_sb, c::bch_sb_cpu>,
     #[c("unsigned long incompat_versions_requested[BITS_TO_LONGS(BCH_VERSION_MINOR(bcachefs_metadata_version_current))]")]
     pub incompat_versions_requested: crate::util::bitmap::AtomicBitArray<{
         bits_to_longs(c::BCH_VERSION_MINOR(c::bcachefs_metadata_version_current as u64) as usize) }>,

@@ -86,6 +86,7 @@ mod pass_fns {
     crate::c::BCH_RECOVERY_PASSES!(pass_fns);
 }
 use pass_fns::RUN;
+use crate::sb::io::SbResize;
 
 macro_rules! pass_table {
     ($(($name:ident, $stable:literal, $when:expr, $depends:expr, $($desc:literal)*)),* $(,)?) => {
@@ -297,11 +298,11 @@ fn entry(sb: &c::bch_sb, pass: Pass) -> Option<c::recovery_pass_entry> {
 fn entry_mut<'a>(fs: &Fs, sb: &'a mut SbLockGuard<'_>, pass: Pass) -> Option<&'a mut c::recovery_pass_entry> {
     let stable = pass.to_stable().0 as usize;
     let bytes = size_of::<Head<Section>>() + (stable + 1) * size_of::<c::recovery_pass_entry>();
-    let Some(r) = sb.field_get_minsize::<Section>((bytes / size_of::<u64>()) as u32) else {
+    if fs.sb_resize(sb).field_get_minsize::<Section>((bytes / size_of::<u64>()) as u32).is_none() {
         bch_err!(fs, "error creating recovery_passes sb section");
         return None;
-    };
-    Some(&mut r.start[stable])
+    }
+    Some(&mut sb.field_mut::<Section>().expect("recovery_passes: just made").start[stable])
 }
 
 /// Whether a pass that last ran as @e says should hold off: its last runtime
