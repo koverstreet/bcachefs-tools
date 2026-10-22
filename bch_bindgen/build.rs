@@ -219,6 +219,10 @@ fn main() {
         // inlines, not static inlines in headers.
         .wrap_static_fns(true)
         .wrap_static_fns_path(out_dir.join("extern.c"))
+        // bcachefs-shim wraps the shim headers' static inlines too, as
+        // NAME__extern: ours by a name of their own, so a binary linking both
+        // has one of each
+        .wrap_static_fns_suffix("__bch_bindgen_extern")
         .generate()
         .expect("BindGen Generation Failiure: [libbcachefs_wrapper]");
 
