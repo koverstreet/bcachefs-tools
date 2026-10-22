@@ -7,14 +7,14 @@
 //! an older one to read - bch2_sb_set_downgrade(), when an older version
 //! mounts a newer filesystem.
 
-use core::ffi::{c_int, c_uint, c_ulong};
+use core::ffi::{c_uint, c_ulong};
 use core::mem::size_of;
 use core::ptr::NonNull;
 
 use cstruct_macros::c_export;
 
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::init::passes;
 use crate::prt;
@@ -342,7 +342,7 @@ fn downgrade_entries(major: u64, version_incompat: u32, have_stripes: bool) -> R
 impl Fs {
     /// The downgrade section, from downgrade_entries() - for a superblock
     /// write.
-    fn sb_downgrade_update(&self, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+    pub(crate) fn sb_downgrade_update(&self, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
         // have_stripes() reads the btree roots
         if !self.flag(c::bch_fs_flags::BCH_FS_btree_running) {
             return Ok(());
@@ -370,12 +370,4 @@ impl Fs {
         d[table.len()..].fill(0);
         Ok(())
     }
-}
-
-/// For a superblock write.
-#[c_export]
-pub fn bch2_sb_downgrade_update(c: &Opaque<c::bch_fs>) -> c_int {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock, from bch2_write_super()
-    ret_to_c(fs.sb_downgrade_update(&mut unsafe { fs.sb_lock_held() }))
 }

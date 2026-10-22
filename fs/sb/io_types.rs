@@ -7,11 +7,11 @@ use crate::types::bits_to_longs;
 use crate::published;
 use crate::util::projections::Volatile;
 use crate::util::ffi::c_char;
-use core::ffi::{c_int, c_uint, c_ulong};
+use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::{CStruct, c_extern, TypeInfo};
 
 /*
- * Updated by bch2_sb_update(): what's read of the superblock without sb_lock,
+ * Updated by sb_update(): what's read of the superblock without sb_lock,
  * a field at a time - written only under it. sb_lock publishes it.
  */
 published! {
@@ -77,9 +77,6 @@ pub struct bch_sb_cpu {
 }
 
 c_extern! {
-    pub fn bch2_write_super_replicas(c: *mut c::bch_fs) -> c_int;
     pub static bch2_sb_features: [*const c_char; 0];
     pub static bch2_sb_compat: [*const c_char; 0];
-    pub fn bch2_write_super_flags(c: *mut c::bch_fs, flags: c::bch_sb_write_flags) -> c_int;
-    pub fn bch2_write_super(c: *mut c::bch_fs) -> c_int;
 }

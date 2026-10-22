@@ -48,6 +48,7 @@ pub struct bch_fs_errors {
 }
 
 c_extern! {
+    pub fn bch2_io_error(ca: *mut c::bch_dev, ty: c::bch_member_error_type);
     pub fn bch2_damage_record(trans: *mut c::btree_trans, pos: c::bpos, err: c::bch_sb_error_id) -> c_int;
     pub fn bch2_fsck_damaged_path_to_text(out: *mut c::printbuf, trans: *mut c::btree_trans,
                                           p: *const c::fsck_damaged_path);

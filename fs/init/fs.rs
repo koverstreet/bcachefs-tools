@@ -213,17 +213,18 @@ impl Fs {
         StateLockRead(self)
     }
 
-    /// It changes the superblock - its seq, its checksum - and calls back into
-    /// Rust that takes sb_lock as held: so @_sb, the lock held, is borrowed
-    /// mutably, and nothing in the superblock is borrowed across the write.
-    pub fn write_super(&self, _sb: &mut SbLockGuard<'_>) {
-        unsafe { c::bch2_write_super(self.as_ptr()) };
+    /// It changes the superblock - its seq, its checksum: so nothing in it is
+    /// borrowed across the write.
+    #[track_caller]
+    pub fn write_super(&self, sb: &mut SbLockGuard<'_>) {
+        let _ = self.write_super_ret(sb);
     }
 
     /// write_super(), for a write whose only reason is a replicas entry coming
     /// or going: it may leave the slow disks behind - bch2_write_super_replicas().
-    pub fn write_super_replicas(&self, _sb: &mut SbLockGuard<'_>) {
-        unsafe { c::bch2_write_super_replicas(self.as_ptr()) };
+    #[track_caller]
+    pub fn write_super_replicas(&self, sb: &mut SbLockGuard<'_>) {
+        let _ = self.write_super_replicas_ret(sb);
     }
 
     /// Throw @error, as C's bch_err_throw() does: counted in error_throw and
@@ -375,17 +376,17 @@ impl Fs {
         Ok(())
     }
 
-    pub fn write_super_ret(&self, _sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_write_super(self.as_ptr()) })
+    #[track_caller]
+    pub fn write_super_ret(&self, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        self.write_super_flags(sb, c::bch_sb_write_flags::empty())
     }
 
     /// A superblock write that's part of bringing the filesystem up, on a
     /// nostart open that will start it afterwards - allowed before start,
     /// like recovery's own.
-    pub fn write_super_bringup(&self, _sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        ret_to_result(unsafe {
-            c::bch2_write_super_flags(self.as_ptr(), c::bch_sb_write_flags::BCH_SB_WRITE_bringup)
-        })
+    #[track_caller]
+    pub fn write_super_bringup(&self, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        self.write_super_flags(sb, c::bch_sb_write_flags::BCH_SB_WRITE_bringup)
     }
 
     /// Apply in-memory superblock edits to the in-memory state derived from

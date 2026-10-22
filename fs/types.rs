@@ -354,7 +354,10 @@ pub struct bch_dev {
     pub btree_allocated_bitmap_gc: u64,
     #[c("atomic64_t errors[BCH_MEMBER_ERROR_NR]")]
     pub errors: [Atomic64; c::BCH_MEMBER_ERROR_NR as usize],
-    pub write_errors_start: c_ulong,
+    /// Written racing C's plain reads and stores, as C's are: atomic here,
+    /// so Rust's are through a shared bch_dev.
+    #[c("unsigned long write_errors_start")]
+    pub write_errors_start: crate::util::bitmap::AtomicULong,
     pub flags: c_ulong,
 
     pub uuid: c::__uuid_t,
@@ -365,7 +368,6 @@ pub struct bch_dev {
     #[c("struct bch_sb_handle disk_sb")]
     pub disk_sb: LockedBy<c::bch_sb_io, c::bch_sb_bdev>,
     pub sb_read_scratch: *mut Head<c::bch_sb>,
-    pub sb_write_error: c_int,
     pub dev: c::dev_t,
 
     pub self_mask: c::bch_devs_mask,
@@ -610,7 +612,6 @@ pub struct Fs {
     pub opt_change_cookie: u32,
     pub mount_opts: c::bch_opts_mask,
 
-    pub sb_write: c::closure,
     /// The superblock, c->disk_sb, behind sb_lock - Fs::sb_lock() is the way
     /// in - and what of it is read without the lock, c->sb, which it
     /// publishes.

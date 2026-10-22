@@ -18,7 +18,7 @@ use crate::btree::bkey::BkeySCToText;
 use crate::btree::interior::btree_roots_to_journal_entries;
 use crate::c;
 use crate::errcode::{bch_errcode, err_ptr, ret_to_c, ret_to_result_void as ret_to_result, BchError};
-use crate::fs::Fs;
+use crate::fs::{Fs, SbLockGuard};
 use crate::journal::entries::{EntryWriter, NoRoom};
 use crate::sb::io::{entries_end, SbFieldOps};
 use crate::types::{Le32, Le64};
@@ -245,10 +245,8 @@ pub unsafe fn bch2_journal_super_entries_add_common(c: &Opaque<c::bch_fs>, end: 
     unsafe { *end = (*end).byte_add(COMMON_BYTES) };
 }
 
-#[c_export]
-pub fn bch2_fs_mark_dirty(c: &Opaque<c::bch_fs>) {
-    // SAFETY: C calls it under sb_lock, from bch2_write_super()
-    let mut sb = unsafe { Fs::from_c(c).sb_lock_held() };
+/// Marked dirty, for a write with the journal in use.
+pub(crate) fn fs_mark_dirty(sb: &mut SbLockGuard<'_>) {
     let sb = sb.sb_mut();
     sb.set_clean(false);
     sb.features[0] |= c::BCH_SB_FEATURES_ALWAYS;
@@ -259,12 +257,8 @@ pub fn bch2_fs_mark_dirty(c: &Opaque<c::bch_fs>) {
 /// journal's seq now. The flag is set once the section is written and valid:
 /// on an error, logged, the superblock stays dirty, and the next mount reads
 /// the journal.
-#[c_export]
-pub fn bch2_fs_mark_clean(c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock, from bch2_write_super()
-    let mut guard = unsafe { fs.sb_lock_held() };
-    let mut sb = fs.sb_resize(&mut guard);
+pub(crate) fn fs_mark_clean(fs: &Fs, guard: &mut SbLockGuard<'_>) {
+    let mut sb = fs.sb_resize(guard);
     if sb.sb().clean() {
         return;
     }

@@ -1,6 +1,142 @@
+/* DOC_LATEX(superblock)
+ * \subsubsection{Layout and redundancy}
+ *
+ * The primary superblock is located at sector 8 (4\,KB from the start of the
+ * device). A \texttt{bch\_sb\_layout} structure at sector 7 records the locations
+ * of all superblock copies---typically three: the primary, one immediately
+ * following it, and one at the end of the device. Up to 61 backup locations can
+ * be recorded. The layout structure has its own magic number so that it can be
+ * found independently.
+ *
+ * Only the primary superblock and the layout structure are at fixed,
+ * known-without-context offsets. Backup superblock locations are recorded only
+ * inside the layout (and inside each superblock's own embedded layout copy);
+ * recovery from a lost layout therefore requires either falling back to a
+ * second known offset, or scanning the device. The end-of-device backup is at
+ * an offset computable from the device size, which gives a second escape valve
+ * when sector 7 itself is unreadable.
+ *
+ * The layout structure is intentionally minimal---a magic number, a small
+ * offset table, no checksum---and lives in its own 512-byte sector so that it
+ * shares a physical block with as little else as possible. All checksumming
+ * and validation logic lives in the superblock itself. The embedded
+ * \texttt{bch\_sb\_layout} inside each superblock is what's used in the
+ * common case (the standalone copy at sector 7 is consulted only when the
+ * primary superblock cannot be read).
+ *
+ * The superblock is written with a monotonically increasing sequence number
+ * (\texttt{seq}); on read, the copy with the highest valid sequence number is
+ * authoritative. The \texttt{bcachefs recover-super} command can reconstruct a
+ * device's superblock from backup copies or from another device in the same
+ * filesystem.
+ *
+ * \subsubsection{Threat model}
+ *
+ * Redundancy exists to survive several distinct failure modes, in roughly
+ * descending order of how often they're observed in practice:
+ *
+ * \begin{itemize}
+ * \item \textbf{Torn writes during power loss}. The actual superblock size
+ *   varies---a few kilobytes on a single-device laptop filesystem, larger on
+ *   big multi-device filesystems---but is generally well beyond a single
+ *   sector or physical block, and the on-disk reservation can grow to 32\,MB.
+ *   That's beyond any device's atomic write granularity, so power loss
+ *   mid-write can leave a torn superblock; the checksum catches it and a
+ *   backup is consulted. This was the original driver for redundant
+ *   superblocks.
+ * \item \textbf{Media errors and bit rot}. Bad sectors, single-sector unrecoverable
+ *   reads, slow long-term decay on backup copies that are written infrequently.
+ *   Front-of-device and end-of-device backups are physically separated on
+ *   rotating media, providing some independence.
+ * \item \textbf{Legacy bootloader coexistence and large physical block sizes}.
+ *   Sector 7 is adjacent to sector 0 (where ancient-style bootloaders live)
+ *   and the start of the primary superblock (sector 8). On disks with logical
+ *   sector size 512 and physical block size $\geq$\,4\,KB---increasingly
+ *   common, especially on SSDs reporting 8\,KB or 16\,KB physical blocks---a
+ *   sub-physical-block write triggers a read-modify-write of the whole
+ *   physical block. A torn RMW on physical block 0 can take out the boot
+ *   sector, the layout, and the start of the primary superblock together.
+ *   The end-of-device backup superblock is the escape valve here, since it
+ *   lives in its own physical block far away.
+ * \item \textbf{Whole-device failure}. A single device dropping out: covered
+ *   trivially by replication of the filesystem-wide state across all member
+ *   devices' superblocks.
+ * \end{itemize}
+ *
+ * \subsubsection{Fixed fields}
+ *
+ * The superblock header contains:
+ *
+ * \begin{itemize}
+ * \item \textbf{Identity}: filesystem UUID (immutable), user-visible UUID
+ *   (mutable), filesystem label (up to 32 bytes)
+ * \item \textbf{Geometry}: block size, btree node size, number of devices
+ * \item \textbf{Versioning}: current metadata version, minimum version of any
+ *   data still on disk (see the Metadata versions section)
+ * \item \textbf{State}: initialized and clean flags, sequence number, write
+ *   timestamp
+ * \item \textbf{Options}: all persistent filesystem options are encoded as
+ *   bitfields in the superblock flags---replication counts, checksum and
+ *   compression types, error handling policy, targets, quotas, journal
+ *   parameters, and more. Mount options override these at runtime;
+ *   \texttt{bcachefs set-fs-option} persists changes.
+ * \end{itemize}
+ *
+ * \subsubsection{Variable-length fields}
+ *
+ * The superblock is extensible via type-tagged variable-length fields
+ * (\texttt{BCH\_SB\_FIELD\_*}). Some are per-device (journal bucket lists);
+ * most are shared across all devices (members, encryption, replicas, disk
+ * groups, error log, recovery state). See the On disk format section for the
+ * complete field list.
+ *
+ * Key fields for operators:
+ *
+ * \begin{description}
+ * \item[\texttt{members\_v2}] Per-\hyperref[sec:devices]{device} metadata: UUID,
+ *   bucket count and size, state (rw/ro/evacuating/spare), durability,
+ *   data-type restrictions, error counters, performance measurements, and
+ *   hardware identifiers.
+ * \item[\texttt{disk\_groups}] Device label hierarchy and group definitions,
+ *   used for target-based allocation (see
+ *   \hyperref[sec:disk-groups]{Device labels and targets}).
+ * \item[\texttt{replicas}] All unique replication configurations in the
+ *   filesystem (see Replicas tracking).
+ * \item[\texttt{clean}] Written on clean shutdown: contains btree roots and
+ *   usage counters, allowing the next mount to skip
+ *   \hyperref[sec:journal]{journal} replay entirely.
+ * \item[\texttt{errors}] Persistent error log recording operational errors and
+ *   fsck findings across mounts.
+ * \item[\texttt{ext}] Extended metadata including required recovery passes and
+ *   silenced errors.
+ * \end{description}
+ *
+ * \subsubsection{Version upgrades}
+ *
+ * The superblock records both the current metadata version and the minimum
+ * version of any data still on disk. This two-version scheme allows the
+ * filesystem to upgrade incrementally: new data is written with the current
+ * version while old data retains the format it was written with. The
+ * \texttt{version\_upgrade} option controls upgrade behavior at mount time:
+ * \texttt{compatible} (allow new features), \texttt{incompatible} (upgrade to
+ * latest), or \texttt{none} (don't upgrade). Downgrade information is stored
+ * separately so that a filesystem can be safely used by older tools after an
+ * upgrade if no incompatible features have been used.
+ *
+ * \subsubsection{Consistency and self-healing}
+ *
+ * Every superblock copy is checksummed; reads validate the checksum and fall
+ * back to alternative copies on failure. The sequence number provides
+ * unambiguous ordering when copies disagree. The \texttt{recover-super} command
+ * can reconstruct a completely overwritten superblock from the backup copies on
+ * the same device or from any other device in the filesystem. Recovery passes
+ * \texttt{check\_alloc\_info} and \texttt{check\_topology} verify that
+ * superblock-recorded state matches the actual on-disk data.
+ */
+
 use crate::c;
 use crate::c::{bch_sb, bch_sb_buf, bch_sb_field_crypt, bch_sb_handle, block_device, nonce};
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::members;
 use crate::util::bitmap::LeBitmap;
@@ -17,7 +153,7 @@ use crate::util::bio::{Bio, BioOwner};
 use crate::util::gather::Gather;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::NSEC_PER_SEC;
-use cstruct_macros::c_export;
+use cstruct_macros::{c_const, c_export};
 use core::mem::{size_of, size_of_val};
 use core::pin::Pin;
 use pin_init::PinInit;
@@ -83,10 +219,10 @@ where
 /// whole ones, which end at @end - C's readers ignored one: shrunk to them,
 /// the rest of its last u64 zeroed as a writer leaves it, the sections after
 /// it moved down, and a warning in @err. Repaired as it's read, as
-/// bch2_sb_validate() repairs version_incompat_allowed, and written whole
+/// validate() repairs version_incompat_allowed, and written whole
 /// with the next superblock write; unrepaired, a reader would find no
 /// section, or not all of it. The section itself doesn't move, so
-/// bch2_sb_validate()'s walk goes on from where the next one now is.
+/// validate()'s walk goes on from where the next one now is.
 fn sb_field_drop_partial(sb: &mut bch_sb<Unvalidated>, f: usize, len: usize, end: usize, err: &mut Printbuf) {
     let whole = end.next_multiple_of(size_of::<u64>());
     let dropped = len - whole;
@@ -541,13 +677,6 @@ pub fn validate_bytes<'a>(buf: &'a mut [u8], opts: &c::bch_opts, read_offset: u6
         BchError::from(bch_errcode::BCH_ERR_invalid_sb_too_big)
     })?;
     validate(sb, opts, read_offset, flags, out)
-}
-
-/// For C's write path: @sb's superblock, in its buffer.
-#[c_export]
-pub fn bch2_sb_validate(sb: &mut c::bch_sb_handle, opts: &c::bch_opts, read_offset: u64,
-                        flags: c::bch_validate_flags, out: &mut Printbuf) -> c_int {
-    ret_to_c(validate_bytes(sb.buffer_mut(), opts, read_offset, flags, out).map(drop))
 }
 
 // ── Versions ─────────────────────────────────────────────────────────────
@@ -1181,14 +1310,12 @@ impl c::bch_sb_io {
 
 /// A superblock's checksum, of @bytes - all of it past the csum, its first
 /// field: csum_vstruct().
-fn sb_csum(ty: c::bch_csum_type, bytes: &[u8]) -> c::bch_csum {
+fn sb_csum(fs: Option<&Fs>, ty: c::bch_csum_type, bytes: &[u8]) -> c::bch_csum {
     let start = size_of::<c::bch_csum>();
-    // SAFETY: @bytes past the csum; no filesystem, so no key: @ty isn't an
+    let c = fs.map_or(core::ptr::null_mut(), Fs::as_ptr);
+    // SAFETY: @bytes past the csum; no filesystem, no key: then @ty isn't an
     // encryption type
-    unsafe {
-        c::bch2_checksum(core::ptr::null_mut(), ty.0, nonce::default(), bytes[start..].as_ptr().cast(),
-                         bytes.len() - start)
-    }
+    unsafe { c::bch2_checksum(c, ty.0, nonce::default(), bytes[start..].as_ptr().cast(), bytes.len() - start) }
 }
 
 /// The superblock at @offset read into @sb's buffer - grown as it needs - and
@@ -1231,7 +1358,7 @@ fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Re
         }
 
         // XXX: verify MACs
-        let csum = sb_csum(ty, &buf[..bytes]);
+        let csum = sb_csum(None, ty, &buf[..bytes]);
         if csum != h.csum {
             crate::data::checksum::csum_err_msg(err, ty, h.csum, csum);
             return Err(bch_errcode::BCH_ERR_invalid_sb_csum.into());
@@ -1312,7 +1439,7 @@ fn rewrite_primary_super(sb: &mut bch_sb_handle) -> Result<(), BchError> {
     let s = sb.io.buf.sb_mut();
     s.offset = s.layout.sb_offset[0];
     let (ty, sector) = (c::bch_csum_type(s.csum_type() as u32), s.offset.get());
-    let csum = sb_csum(ty, sb.io.buf.sb_bytes());
+    let csum = sb_csum(None, ty, sb.io.buf.sb_bytes());
     sb.io.buf.sb_mut().csum = csum;
 
     let bytes = sb.io.buf.sb_bytes().len()
@@ -1629,15 +1756,11 @@ impl<'a> SbWrite<'a> {
             return Ok(());
         }
         let (replicas, flags) = (w.replicas, w.flags);
-        // SAFETY: under sb_lock, which the write - and Rust it calls into,
-        // taking it as held - expects; nothing of the superblock is borrowed
-        ret_to_result_void(unsafe {
-            if replicas {
-                c::bch2_write_super_replicas(self.fs.as_ptr())
-            } else {
-                c::bch2_write_super_flags(self.fs.as_ptr(), flags)
-            }
-        })
+        if replicas {
+            self.fs.write_super_replicas_ret(&mut self.sb)
+        } else {
+            self.fs.write_super_flags(&mut self.sb, flags)
+        }
     }
 }
 
@@ -2080,9 +2203,10 @@ struct Frozen<'a> {
 }
 
 /// Superblock IOs to devices, submitted together and waited on together:
-/// C's c->sb_write, for __bch2_write_super()'s fan-outs - the read-backs,
-/// then each round of writes, a SbIos each. Submitting freezes the device's
-/// superblock; wait() hands each back, with its IO's result.
+/// what C's c->sb_write closure was for, the superblock write's fan-outs -
+/// the read-backs, then each round of writes, a SbIos each. Submitting
+/// freezes the device's superblock; wait() hands each back, with its IO's
+/// result.
 #[pin_init::pin_data]
 pub struct SbIos<'a> {
     // first: it waits for the IOs before what they're on is handed back
@@ -2139,6 +2263,480 @@ impl<'a> SbIos<'a> {
             (f.sb, ret)
         })
     }
+}
+
+// ── Writing the superblock ───────────────────────────────────────────────
+
+c_const! {
+    /// ca->sb_read_scratch's size: what a write reads back, the primary's
+    /// header and then some.
+    #[c_int]
+    pub const BCH_SB_READ_SCRATCH_BUF_SIZE: u32 = 4096;
+}
+
+impl DevSbMut<'_> {
+    /// Valid to be written, as validate() checks one about to be.
+    fn validate_write(&mut self, err: &mut Printbuf) -> Result<(), BchError> {
+        let opts = c::bch_opts::default();
+        validate_bytes(self.io.buf.buffer_mut(), &opts, 0, c::bch_validate_flags::BCH_VALIDATE_write, err)
+            .map(drop)
+    }
+
+    /// Made its copy for layout slot @idx - its offset, and its checksum, of
+    /// the type metadata_checksum is: that copy's sector and bytes, for
+    /// SbIos::write(). write_one_super().
+    fn copy_for(&mut self, fs: &Fs, idx: usize) -> (u64, usize) {
+        let s = self.io.buf.sb_mut();
+        s.offset = s.layout.sb_offset[idx];
+        let ty = c::bch_csum_opt(fs.opts().metadata_checksum.into()).to_type(fs, false);
+        s.set_csum_type(ty.0.into());
+        let sector = s.offset.get();
+
+        let csum = sb_csum(Some(fs), ty, self.io.buf.sb_bytes());
+        self.io.buf.sb_mut().csum = csum;
+
+        let block = crate::util::kernel::bdev_logical_block_size(self.ca.disk_sb.bdev()) as usize;
+        (sector, self.io.buf.sb_bytes().len().next_multiple_of(block))
+    }
+}
+
+impl<'a> DevSbMut<'a> {
+    /// ca->sb_read_scratch, what's read back into.
+    ///
+    /// # Safety
+    /// Not had twice at once.
+    unsafe fn scratch(&self) -> &'a mut [u8] {
+        // SAFETY: the device's, BCH_SB_READ_SCRATCH_BUF_SIZE bytes, kmalloc()'d
+        // at its alloc - used only by a superblock write, under the sb_lock
+        // we hold; once at a time, the caller's
+        unsafe {
+            core::slice::from_raw_parts_mut(self.ca.sb_read_scratch.cast::<u8>(), BCH_SB_READ_SCRATCH_BUF_SIZE as usize)
+        }
+    }
+}
+
+/// A device's result in a superblock write: its IO accounted, and what went
+/// wrong thrown - as the IO's endio did, in C.
+fn sb_io_result(fs: &Fs, ca: &c::bch_dev, rw: c::bch_member_error_type, ret: Result<(), BchError>)
+    -> Result<(), BchError>
+{
+    match ret {
+        Ok(()) => {
+            if rw == c::bch_member_error_type::BCH_MEMBER_ERROR_write {
+                ca.write_errors_start.store(0, core::sync::atomic::Ordering::Relaxed);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // SAFETY: a device, live as long as @ca is
+            unsafe { c::bch2_io_error(core::ptr::from_ref(ca).cast_mut(), rw) };
+            Err(fs.err(c::bch_errcode(e.raw() as u32)))
+        }
+    }
+}
+
+/// Written to every online device - or just @devs - copy by copy: each
+/// layout slot to all of them at once, and waited on before the next.
+/// Read back first, to catch a write that was silently dropped, or another
+/// writer. __bch2_write_super().
+#[track_caller]
+fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_devs_mask>,
+                      flags: c::bch_sb_write_flags) -> Result<(), BchError> {
+    use c::bch_fs_flags as f;
+    use crate::sb::members::SbMembersMut;
+    const READ: c::bch_member_error_type = c::bch_member_error_type::BCH_MEMBER_ERROR_read;
+    const WRITE: c::bch_member_error_type = c::bch_member_error_type::BCH_MEMBER_ERROR_write;
+    use crate::util::alloc::flags::GFP_KERNEL;
+    use crate::util::log::LogMsg;
+
+    if !fs.flag(f::BCH_FS_may_upgrade_downgrade) {
+        return Ok(());
+    }
+
+    // Before a start has begun, the in-memory superblock holds what the open
+    // decided - version upgrade/downgrade, last_mount - for a start to act
+    // on; an open that never starts mustn't persist that. So a write before
+    // start is either part of bringing the filesystem up (as recovery's own
+    // are), or from an open that said it will never start, which skips
+    // those decisions:
+    if !fs.flag(f::BCH_FS_start_begun) &&
+       fs.opts().will_not_start == 0 &&
+       !flags.contains(c::bch_sb_write_flags::BCH_SB_WRITE_bringup) {
+        return fs.throw(bch_errcode::BCH_ERR_erofs_sb_write_before_start);
+    }
+
+    fs.event_inc_trace(crate::sb::counters::events::write_super, |_| {});
+
+    let mut degraded_flags = c::BCH_FORCE_IF_DEGRADED;
+    if u32::from(fs.opts().degraded) == c::bch_degraded_actions::BCH_DEGRADED_very.0 {
+        degraded_flags |= c::BCH_FORCE_IF_LOST;
+    }
+
+    if sb.sb().has_journal() {
+        crate::sb::clean::fs_mark_dirty(sb);
+    } else {
+        crate::sb::clean::fs_mark_clean(fs, sb);
+    }
+
+    // Note: we do writes to RO devices here, and we might want to change that
+    // in the future. For now, we expect to be able to call write_super() when
+    // we're not yet RW.
+    let mut cas = KVVec::new();
+    let mut failures = KVVec::new();
+    for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_write_super) {
+        if devs.is_some_and(|d| !d.d.test(ca.dev_idx.into())) {
+            continue;
+        }
+        if cas.push(ca, GFP_KERNEL).is_err() || failures.push(KVVec::<(u64, BchError)>::new(), GFP_KERNEL).is_err() {
+            crate::fs_fatal_error!(fs, "error allocating online devices");
+            return Err(c::ENOMEM.into());
+        }
+    }
+
+    // Make sure we're using the new magic numbers:
+    let s = sb.sb_mut();
+    s.magic.b = BCHFS_MAGIC;
+    s.layout.magic.b = BCHFS_MAGIC;
+    s.seq = Le64::new(s.seq.get() + 1);
+    let seq = s.seq;
+    for ca in cas.iter() {
+        sb.fs_member_mut(ca.dev_idx.into()).seq = seq;
+    }
+
+    let s = sb.sb_mut();
+    s.write_time = Le64::new(crate::util::kernel::ktime_get_real_seconds() as u64);
+    if fs.flag(f::BCH_FS_error) {
+        s.set_has_errors(true);
+    }
+    if fs.flag(f::BCH_FS_topology_error) {
+        s.set_has_topology_errors(true);
+    }
+    s.set_big_endian(cfg!(target_endian = "big"));
+
+    crate::sb::counters::sb_counters_from_cpu(fs, sb);
+    crate::sb::members::sb_members_from_cpu(fs, sb);
+    // as C: neither failing stops the write
+    let _ = fs.sb_resize(sb).members_cpy_v2_v1();
+    crate::sb::errors::sb_errors_from_cpu(fs, sb);
+    let _ = fs.sb_downgrade_update(sb);
+    crate::data::extents_sb::sb_extent_type_u64s_from_cpu(fs, sb)?;
+
+    for mut dev_sb in fs.dev_sbs_mut(sb, &cas).flatten() {
+        let _ = dev_sb.sync();
+    }
+
+    for mut dev_sb in fs.dev_sbs_mut(sb, &cas).flatten() {
+        let mut err = Printbuf::new();
+        if dev_sb.validate_write(&mut err).is_err() {
+            crate::fs_inconsistent!(fs, "sb invalid before write: {err}");
+            return Ok(());
+        }
+    }
+
+    if fs.opts().nochanges != 0 {
+        return Ok(());
+    }
+
+    // Defer writing the superblock until filesystem initialization is
+    // complete - don't write out a partly initialized superblock.
+    //
+    // An offline edit (will_not_start) on a filesystem that has never been
+    // started has nothing to defer to: say so, rather than let it report
+    // success having written nothing.
+    if !sb.sb().initialized() {
+        if fs.opts().will_not_start == 0 {
+            return Ok(());
+        }
+        crate::bch_err!(fs, "filesystem has never been started, not writing superblock: mount it once first");
+        return fs.throw(bch_errcode::BCH_ERR_erofs_sb_never_started);
+    }
+
+    let version = u32::from(sb.sb().version.get());
+    if version > c::bcachefs_metadata_version_current {
+        crate::fs_fatal_error!(fs, ": attempting to write superblock that wasn't version downgraded ({} > {})",
+                               c::bcachefs_metadata_version(version),
+                               c::bcachefs_metadata_version(c::bcachefs_metadata_version_current));
+        return fs.throw(bch_errcode::BCH_ERR_sb_not_downgraded);
+    }
+
+    // Read back, to compare with what we last wrote
+    {
+        pin_init::stack_pin_init!(let ios = SbIos::new());
+        for dev_sb in fs.dev_sbs_mut(sb, &cas).flatten() {
+            let sector = dev_sb.io.buf.sb().layout.sb_offset[0].get();
+            // SAFETY: once, until its read's waited on
+            let scratch = unsafe { dev_sb.scratch() };
+            scratch.fill(0);
+            dev_sb.ca.io_done_add(crate::util::kernel::READ, c::bch_data_type::BCH_DATA_sb, (scratch.len() >> 9) as u64);
+            ios.as_mut().read(dev_sb, sector, scratch)?;
+        }
+
+        for (dev_sb, ret) in ios.as_mut().wait() {
+            let ca = dev_sb.ca;
+            if sb_io_result(fs, ca, READ, ret).is_err() {
+                continue;
+            }
+
+            // SAFETY: once - its read, which had it, waited on
+            let read = cast_plain::<Head<bch_sb>>(unsafe { dev_sb.scratch() }).expect("a header's worth").seq.get();
+            let expected = dev_sb.io.seq;
+
+            if read != expected {
+                let mut msg = LogMsg::new(fs);
+                crate::util::printbuf::prt_bdevname(&mut msg, Some(ca.disk_sb.bdev()));
+                if read < expected {
+                    prt!(msg, ": Superblock write was silently dropped! (seq {read} expected {expected})");
+                    let errors = u32::from(fs.opts().errors);
+                    if errors == c::bch_error_actions::BCH_ON_ERROR_continue.0 ||
+                       errors == c::bch_error_actions::BCH_ON_ERROR_fix_safe.0 {
+                        continue;
+                    }
+                } else {
+                    prt!(msg, ": Superblock modified by another process (seq {read} expected {expected})");
+                }
+                fs.emergency_read_only(&mut msg);
+                return fs.throw(bch_errcode::BCH_ERR_erofs_sb_err);
+            }
+        }
+    }
+
+    let mut sb_written = c::bch_devs_mask::default();
+    let mut have_errors = false;
+
+    for idx in 0.. {
+        pin_init::stack_pin_init!(let ios = SbIos::new());
+        let mut wrote = false;
+
+        for mut dev_sb in fs.dev_sbs_mut(sb, &cas).flatten() {
+            if idx >= usize::from(dev_sb.io.buf.sb().layout.nr_superblocks) {
+                continue;
+            }
+            let (sector, bytes) = dev_sb.copy_for(fs, idx);
+            dev_sb.ca.io_done_add(crate::util::kernel::WRITE, c::bch_data_type::BCH_DATA_sb, (bytes >> 9) as u64);
+            ios.as_mut().write(dev_sb, sector, bytes)?;
+            wrote = true;
+        }
+
+        for (dev_sb, ret) in ios.as_mut().wait() {
+            let ca = dev_sb.ca;
+            match sb_io_result(fs, ca, WRITE, ret) {
+                Ok(()) => {
+                    sb_written.d.set(ca.dev_idx.into());
+                    dev_sb.io.seq = dev_sb.io.buf.sb().seq.get();
+                }
+                Err(e) => {
+                    let offset = dev_sb.io.buf.sb().layout.sb_offset[idx].get();
+                    let i = cas.iter().position(|c| c.dev_idx == ca.dev_idx).expect("one of ours");
+                    let _ = failures[i].push((offset, e), GFP_KERNEL);
+                    have_errors = true;
+                }
+            }
+        }
+
+        if !wrote {
+            break;
+        }
+    }
+
+    let nr_wrote = sb_written.d.iter().count();
+    let nr_members = match devs {
+        Some(_) => cas.len(),
+        None    => sb.sb().number_of_devices() as usize,
+    };
+
+    // A restricted write is not trying to be readable on its own - by
+    // construction it skips devices that hold data. Asking
+    // can_read_fs_with_devs() about it would say no every time and take us
+    // read only. What matters is that the write landed somewhere: the
+    // previous superblock is still on every device, so the failure here is a
+    // missed update, not a lost one.
+    let fatal = nr_wrote == 0 ||
+        (devs.is_none() && !fs.can_read_fs_with_devs(&sb_written, degraded_flags, None));
+
+    if !have_errors && !fatal {
+        return Ok(());
+    }
+
+    let mut msg = LogMsg::new(fs);
+
+    // A degraded write (wrote to fewer devices, but still enough to mount)
+    // repeats on every superblock write while a device is failing, so
+    // ratelimit it. A fatal failure goes emergency read-only below and always
+    // prints.
+    if !fatal {
+        static RATELIMIT: crate::util::log::Ratelimit = crate::util::log::Ratelimit::new();
+        msg.set_suppressed(RATELIMIT.suppress(fs, c"write_super_locked"));
+    }
+
+    prt!(msg, "Error writing superblock, wrote to {nr_wrote}/{nr_members} devices:\n");
+
+    let mut sb_unwritten = c::bch_devs_mask::default();
+    for dev in 0..c::BCH_SB_MEMBERS_MAX as usize {
+        sb_unwritten.d.set(dev);
+    }
+
+    for (ca, failures) in cas.iter().zip(failures.iter()) {
+        sb_unwritten.d.clear(ca.dev_idx.into());
+        crate::sb::members::dev_to_text_short(&mut msg, sb.sb(), ca.dev_idx.into());
+
+        if failures.is_empty() {
+            prt!(msg, " (success)");
+        } else {
+            for (offset, e) in failures.iter() {
+                prt!(msg, " {offset}={e}");
+            }
+            if sb_written.d.test(ca.dev_idx.into()) {
+                prt!(msg, " (partial success)");
+            } else {
+                prt!(msg, " (all failed)");
+            }
+        }
+        msg.newline();
+    }
+
+    // For a restricted write the leftovers are the devices we deliberately
+    // skipped, not devices that went away - don't call them offline.
+    prt!(msg, "{}", if devs.is_some() { "Not written:\n" } else { "Offline devices:\n" });
+    msg.indent_add(2);
+    crate::sb::members::devs_mask_to_text(&mut msg, fs, sb.sb(), &sb_unwritten);
+    msg.indent_sub(2);
+
+    if fatal {
+        prt!(msg, "Unable to write superblock to sufficient devices (from {})\n", core::panic::Location::caller());
+        prt!(msg, "Would not be able to mount with written devices\n");
+        fs.can_read_fs_with_devs(&sb_written, degraded_flags, Some(&mut *msg));
+        fs.emergency_read_only(&mut msg);
+        return fs.throw(bch_errcode::BCH_ERR_erofs_sb_err);
+    }
+
+    // Not fatal: we wrote to fewer devices than we wanted, but enough that
+    // the filesystem still mounts. The superblock is on disk, so the caller
+    // got what it asked for - the message above is a warning, not a failure.
+    Ok(())
+}
+
+/// write_super_locked(), then the new options made visible - after they're
+/// persistent - and timed: bch2_write_super_devs().
+#[track_caller]
+fn write_super_devs(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_devs_mask>,
+                    flags: c::bch_sb_write_flags) -> Result<(), BchError> {
+    let start = crate::util::kernel::local_clock();
+
+    let ret = write_super_locked(fs, sb, devs, flags);
+    sb_update(fs, sb);
+
+    fs.times[c::bch_time_stats::BCH_TIME_sb_write as usize].update(start);
+    ret
+}
+
+/// How much of the filesystem's metadata we're willing to leave on devices a
+/// replicas superblock write skips. Tunable: lower is more conservative.
+const SB_SKIP_META_PCT: u64 = 10;
+
+impl Fs {
+    #[track_caller]
+    pub fn write_super_flags(&self, sb: &mut SbLockGuard<'_>, flags: c::bch_sb_write_flags) -> Result<(), BchError> {
+        write_super_devs(self, sb, None, flags)
+    }
+
+    /// Superblock write for a new replicas entry - the one that happens
+    /// constantly on a big multi device filesystem, because the journal
+    /// wanders and every device set it lands on is a new entry, and every
+    /// entry costs a barrier against the slowest disk in the fleet.
+    ///
+    /// Such a write may skip the devices that hold little metadata, because
+    /// an entry that doesn't reach them isn't lost: the previous superblock is
+    /// still on every device, the next fleet wide write catches them up, and a
+    /// mount that has only them rebuilds the replicas section from accounting
+    /// - see accounting_read_mem_fixups(), which does that on every mount
+    /// already.
+    ///
+    /// Start from every online device and drop rotating disks while the
+    /// metadata left behind stays under SB_SKIP_META_PCT. Dropping rather
+    /// than picking keeps the default on the safe side, and only a rotating
+    /// disk is ever dropped - an all-SSD filesystem keeps its whole fleet
+    /// however the metadata is spread.
+    ///
+    /// Cheapest first, because the number of devices dropped is the whole
+    /// point: with a budget of 10%, one disk holding 10% and ten holding 1%
+    /// each gets us one device unsorted and ten sorted. Sorted also lets us
+    /// stop at the first disk that doesn't fit - everything after it holds at
+    /// least as much.
+    ///
+    /// Metadata is btree only. Not journal: that's buckets allocated to the
+    /// journal, not the live entries in them, so it's both the wrong quantity
+    /// and a constantly moving one. Not sb either: every device has one and
+    /// they're all the same size, so it only dilutes the ranking - and on a
+    /// filesystem with little btree it would dominate, leaving every device
+    /// tied. Without it that case totals zero, and we write to everyone, which
+    /// is the right answer.
+    ///
+    /// This is the *only* caller allowed to write to a subset, which is why
+    /// it's named for the caller rather than for the mechanism: every other
+    /// superblock section stays fleet wide, so nothing else can go stale
+    /// behind us. bch2_write_super_replicas().
+    #[track_caller]
+    pub fn write_super_replicas_ret(&self, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        let mut m = KVVec::new();
+        let mut devs = c::bch_devs_mask::default();
+        let mut total = 0u64;
+
+        for ca in self.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_write_super) {
+            let sectors = self.dev_usage_full_read(ca.dev_idx.into()).d[c::bch_data_type::BCH_DATA_btree.0 as usize].sectors;
+            if m.push((ca.dev_idx, sectors), crate::util::alloc::flags::GFP_KERNEL).is_err() {
+                return self.write_super_flags(sb, c::bch_sb_write_flags::empty());
+            }
+            devs.d.set(ca.dev_idx.into());
+            total += sectors;
+        }
+
+        if total == 0 {
+            return self.write_super_flags(sb, c::bch_sb_write_flags::empty());
+        }
+
+        m.sort_unstable_by_key(|&(_, sectors)| sectors);
+
+        let budget = total / 100 * SB_SKIP_META_PCT;
+        let (mut skipped, mut nr_skipped) = (0, 0);
+        for &(dev, sectors) in m.iter() {
+            if !self.dev_rotational(dev.into()) {
+                continue;
+            }
+            if skipped + sectors > budget {
+                break;
+            }
+            skipped += sectors;
+            devs.d.clear(dev.into());
+            nr_skipped += 1;
+        }
+
+        if nr_skipped != 0 {
+            write_super_devs(self, sb, Some(&devs), c::bch_sb_write_flags::empty())
+        } else {
+            self.write_super_flags(sb, c::bch_sb_write_flags::empty())
+        }
+    }
+}
+
+#[c_export]
+pub fn bch2_write_super(c: &Opaque<c::bch_fs>) -> c_int {
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    ret_to_c(fs.write_super_flags(&mut unsafe { fs.sb_lock_held() }, c::bch_sb_write_flags::empty()))
+}
+
+#[c_export]
+pub fn bch2_write_super_flags(c: &Opaque<c::bch_fs>, flags: c::bch_sb_write_flags) -> c_int {
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    ret_to_c(fs.write_super_flags(&mut unsafe { fs.sb_lock_held() }, flags))
+}
+
+#[c_export]
+pub fn bch2_write_super_replicas(c: &Opaque<c::bch_fs>) -> c_int {
+    let fs = Fs::from_c(c);
+    // SAFETY: C calls it under sb_lock
+    ret_to_c(fs.write_super_replicas_ret(&mut unsafe { fs.sb_lock_held() }))
 }
 
 const _: () = assert!(size_of::<c::bch_sb_handle>() == size_of::<crate::locking::LockedBy<c::bch_sb_io, c::bch_sb_bdev>>(),
@@ -2268,13 +2866,6 @@ pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard<'_>) {
     }
 
     members::members_to_cpu(fs, sb);
-}
-
-#[c_export]
-pub fn bch2_sb_update(c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    sb_update(fs, &mut unsafe { fs.sb_lock_held() })
 }
 
 /// @src's header and sections into @dst - all but those each device has its

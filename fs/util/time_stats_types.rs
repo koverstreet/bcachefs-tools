@@ -107,11 +107,17 @@ c_extern! {
     pub fn bch2_time_stats_json_to_text(out: *mut c::printbuf, stats: *mut c::bch2_time_stats,
                                         epoch_name: *const c_char, flags: c_uint);
     pub fn bch2_time_stats_reset(stats: *mut c::bch2_time_stats);
+    pub fn __bch2_time_stats_update(stats: *mut c::bch2_time_stats, start: u64, end: u64);
 }
 
 impl bch2_time_stats {
     fn as_ptr(&self) -> *mut bch2_time_stats {
         core::ptr::from_ref(self).cast_mut()
+    }
+
+    /// An event from @start, a local_clock() time, to now: bch2_time_stats_update().
+    pub fn update(&self, start: u64) {
+        unsafe { __bch2_time_stats_update(self.as_ptr(), start, crate::util::kernel::local_clock()) }
     }
 
     /// As JSON.

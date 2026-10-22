@@ -128,7 +128,6 @@ bcachefs-y		:=			\
 	journal/write.o				\
 	locking/locking.o			\
 	opts.o					\
-	sb/io.o					\
 	sb/members.o				\
 	util/clock.o				\
 	util/cuckoo.o				\

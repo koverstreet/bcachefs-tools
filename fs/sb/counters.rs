@@ -27,7 +27,7 @@ use cstruct_macros::c_export;
 
 use crate::c;
 use crate::util::vstructs::Unvalidated;
-use crate::fs::Fs;
+use crate::fs::{Fs, SbLockGuard};
 use crate::prt;
 use crate::sb::io::{sb_field_u64s, SbFieldOps, COUNTERS};
 use crate::types::Le64;
@@ -276,12 +276,8 @@ impl SbFieldOps for c::bch_sb_field_counters {
 
 /// The counters into the superblock, for a superblock write - its field
 /// grown to a slot for every stable id if it can be, else as it is.
-#[c_export]
-pub fn bch2_sb_counters_from_cpu(c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    let mut guard = unsafe { fs.sb_lock_held() };
-    let mut sb = fs.sb_resize(&mut guard);
+pub(crate) fn sb_counters_from_cpu(fs: &Fs, guard: &mut SbLockGuard<'_>) {
+    let mut sb = fs.sb_resize(guard);
 
     let u64s = sb_field_u64s::<c::bch_sb_field_counters>(NR_STABLE);
     let _ = sb.field_get_minsize::<c::bch_sb_field_counters>(u64s);

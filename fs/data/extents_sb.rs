@@ -7,14 +7,11 @@
 
 use crate::c;
 use crate::data::ptrs::{extent_entry_type_name, extent_entry_type_u64s};
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{set_all, SbFieldOps};
-use crate::util::ffi::Opaque;
 use crate::util::vstructs::{Head, Unvalidated};
 use crate::util::Printbuf;
-use core::ffi::c_int;
-use cstruct_macros::c_export;
 use crate::sb::io::SbResize;
 
 fn ours() -> impl Iterator<Item = u8> {
@@ -49,7 +46,7 @@ pub(crate) fn sb_extent_type_u64s_to_cpu(sb: &mut SbLockGuard<'_>) {
     cpu.extent_types_known.set(known);
 }
 
-fn sb_extent_type_u64s_from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+pub(crate) fn sb_extent_type_u64s_from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
     let u64s = (size_of::<Head<c::bch_sb_field>>() + c::BCH_EXTENT_ENTRY_MAX as usize)
         .div_ceil(size_of::<u64>());
     let mut sb = fs.sb_resize(sb);
@@ -63,13 +60,6 @@ fn sb_extent_type_u64s_from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(),
         *d = s;
     }
     Ok(())
-}
-
-#[c_export]
-pub fn bch2_sb_extent_type_u64s_from_cpu(c: &Opaque<c::bch_fs>) -> c_int {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    ret_to_c(sb_extent_type_u64s_from_cpu(fs, &mut unsafe { fs.sb_lock_held() }))
 }
 
 impl SbFieldOps for c::bch_sb_field_extent_type_u64s {

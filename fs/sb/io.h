@@ -9,8 +9,6 @@
 
 #include <asm/byteorder.h>
 
-#define BCH_SB_READ_SCRATCH_BUF_SIZE		4096
-
 static inline bool bch2_version_compatible(u16 version)
 {
 	return BCH_VERSION_MAJOR(version) <= BCH_VERSION_MAJOR(bcachefs_metadata_version_current) &&
@@ -75,8 +73,6 @@ static inline __u64 bset_magic(struct bch_fs *c)
 {
 	return __le64_to_cpu(bch2_sb_magic(c) ^ BSET_MAGIC);
 }
-
-int bch2_write_super_replicas(struct bch_fs *);
 
 static inline void bch2_check_set_feature(struct bch_fs *c, unsigned feat)
 {

@@ -75,14 +75,6 @@ impl<S: SbState> c::bch_sb<S> {
     }
 }
 
-/// # Safety
-/// @sb is validated.
-#[c_export]
-pub unsafe fn bch2_sb_nr_devices(sb: *const Head<c::bch_sb>) -> c_uint {
-    // SAFETY: the caller's
-    unsafe { c::bch_sb::<Validated>::from_ffi(sb) }.number_of_devices()
-}
-
 /// A free member slot: past the last one in use if there's room, else the
 /// empty one least recently mounted - never BCH_SB_MEMBER_INVALID, the
 /// sentinel. Deleted ones aren't free until fsck clears them.
@@ -320,15 +312,6 @@ pub fn bch2_sb_members_v2_init(c: &Opaque<c::bch_fs>) -> c_int {
     // SAFETY: C calls it under sb_lock
     let mut sb = unsafe { fs.sb_lock_held() };
     ret_to_c(fs.sb_resize(&mut sb).members_v2_init().ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ENOSPC_sb_members_v2)))
-}
-
-/// # Safety
-/// @disk_sb is a live filesystem's c->disk_sb, its sb_lock held.
-#[c_export]
-pub unsafe fn bch2_sb_members_cpy_v2_v1(disk_sb: *mut c::bch_fs_sb) -> c_int {
-    // SAFETY: the caller's
-    let (fs, mut sb) = unsafe { Fs::from_disk_sb(disk_sb) };
-    ret_to_c(fs.sb_resize(&mut sb).members_cpy_v2_v1())
 }
 
 /// Member @i of members_v2, whole - as every one is, on an open filesystem.
@@ -600,14 +583,8 @@ fn member_to_text_short<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &
     has_data_to_text(out, sb, idx);
 }
 
-fn dev_to_text_short(out: &mut Printbuf, sb: &c::bch_sb, dev: u32) {
+pub(crate) fn dev_to_text_short(out: &mut Printbuf, sb: &c::bch_sb, dev: u32) {
     member_to_text_short(out, &sb_member(sb, dev).unwrap_or_default(), sb, dev);
-}
-
-#[c_export]
-pub fn bch2_member_to_text_short_locked(out: &mut Printbuf, c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {
-    // SAFETY: C calls it under sb_lock
-    dev_to_text_short(out, unsafe { Fs::from_c(c).sb_lock_held() }.sb(), ca.dev_idx.into());
 }
 
 #[c_export]
@@ -616,14 +593,11 @@ pub fn bch2_member_to_text_short(out: &mut Printbuf, c: &Opaque<c::bch_fs>, ca: 
     dev_to_text_short(out, fs.sb_lock().sb(), ca.dev_idx.into());
 }
 
-#[c_export]
-pub fn bch2_devs_mask_to_text_locked(out: &mut Printbuf, c: &Opaque<c::bch_fs>, devs: &c::bch_devs_mask) {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    let sb = unsafe { fs.sb_lock_held() };
+/// Each of @devs that's a device of @fs's, short: bch2_devs_mask_to_text_locked().
+pub(crate) fn devs_mask_to_text(out: &mut Printbuf, fs: &Fs, sb: &c::bch_sb, devs: &c::bch_devs_mask) {
     for dev in devs.d.iter() {
         if fs.dev_rcu(dev as u32, &read_lock()).is_some() {
-            dev_to_text_short(out, sb.sb(), dev as u32);
+            dev_to_text_short(out, sb, dev as u32);
         }
     }
 }
@@ -708,12 +682,7 @@ pub fn bch2_sb_members_to_cpu(c: &Opaque<c::bch_fs>) {
 }
 
 /// The error counts, into the superblock's members - for a superblock write.
-#[c_export]
-pub fn bch2_sb_members_from_cpu(c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    let mut sb = unsafe { fs.sb_lock_held() };
-
+pub(crate) fn sb_members_from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) {
     let rcu = read_lock();
     for ca in fs.devs_rcu(&rcu) {
         let m = sb.fs_member_mut(ca.dev_idx.into());
@@ -1548,6 +1517,14 @@ impl c::bch_dev {
             unsafe { acc_u64s_percpu(row, src.add(at)) };
         }
         ret
+    }
+
+    /// @sectors of IO of @data_type, reading or writing as @rw, counted in
+    /// io_done: this_cpu_add(ca->io_done->sectors[rw][data_type], sectors).
+    pub fn io_done_add(&self, rw: usize, data_type: c::bch_data_type, sectors: u64) {
+        let at = rw * c::BCH_DATA_NR as usize + data_type.0 as usize;
+        // SAFETY: as io_done()'s - a per-CPU address, offset, not dereferenced
+        unsafe { crate::util::percpu::this_cpu_add(self.io_done.cast::<u64>().wrapping_add(at), sectors) };
     }
 
     /// Its block device's name, model and serial, and whether it's rotational.

@@ -305,14 +305,6 @@ impl<S: SbState> c::bch_sb<S> {
     }
 }
 
-/// # Safety
-/// @sb is validated.
-#[c_export]
-pub unsafe fn bch2_sb_has_journal(sb: *const Head<c::bch_sb>) -> bool {
-    // SAFETY: the caller's
-    unsafe { c::bch_sb::<Validated>::from_ffi(sb) }.has_journal()
-}
-
 #[c_export]
 pub fn bch2_dev_has_data(_c: &Opaque<c::bch_fs>, ca: &c::bch_dev) -> c_uint {
     ca.has_data()

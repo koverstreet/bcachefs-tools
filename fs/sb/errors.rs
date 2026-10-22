@@ -22,7 +22,7 @@ use cstruct_macros::c_export;
 use crate::c;
 use crate::util::vstructs::Unvalidated;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
-use crate::fs::Fs;
+use crate::fs::{Fs, SbLockGuard};
 use crate::prt;
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
@@ -304,8 +304,8 @@ pub fn bch2_decompress_key_type_error(err: c_int) -> c::bch_key_type_errors {
 //
 // c->errors.counts, sorted by id: read in from the superblock at mount, counted
 // in as errors happen, and written out with every superblock write. Lock
-// order: sb_lock, then counts - bch2_sb_errors_from_cpu() takes counts under
-// bch2_write_super()'s sb_lock.
+// order: sb_lock, then counts - sb_errors_from_cpu() takes counts under
+// the superblock write's sb_lock.
 
 /// The largest in-memory count: nr is 48 bits.
 const CPU_NR_MAX: u64 = (1 << 48) - 1;
@@ -416,12 +416,8 @@ pub fn bch2_sb_errors_to_cpu(c: &Opaque<c::bch_fs>) -> c_int {
 /// For a superblock write: the counts in memory into v2, and v1 deleted -
 /// to_cpu() merged it in. If v2 can't be grown, the superblock keeps what it
 /// had until the next write.
-#[c_export]
-pub fn bch2_sb_errors_from_cpu(c: &Opaque<c::bch_fs>) {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock, from bch2_write_super()
-    let mut guard = unsafe { fs.sb_lock_held() };
-    let mut sb = fs.sb_resize(&mut guard);
+pub(crate) fn sb_errors_from_cpu(fs: &Fs, guard: &mut SbLockGuard<'_>) {
+    let mut sb = fs.sb_resize(guard);
     let counts = fs.errors.counts.lock();
 
     let u64s = sb_field_u64s::<c::bch_sb_field_errors_v2>(counts.len());
