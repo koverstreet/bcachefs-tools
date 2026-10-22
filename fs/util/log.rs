@@ -81,6 +81,22 @@ pub fn log(fs: &Fs, level: LogLevel, msg: &dyn ToText) {
     print(fs, level.0, true, msg, true)
 }
 
+/// @msg at @level, of no filesystem - there isn't one yet: pr_err() and the
+/// rest of printk().
+pub fn log_no_fs(level: LogLevel, msg: &dyn ToText) {
+    let mut buf = Printbuf::new();
+    buf.write_bytes(&[0x01, level.0]);
+    msg.to_text(&mut buf);
+    buf.newline();
+    let s = buf.as_c_str();
+    // SAFETY: a format, and the string it takes
+    #[cfg(kernel)]
+    unsafe { c::_printk(c"%s".as_ptr().cast(), s.as_ptr()) };
+    // SAFETY: as the kernel's
+    #[cfg(not(kernel))]
+    unsafe { c::printk(c"%s".as_ptr().cast(), s.as_ptr()) };
+}
+
 /// log(), without the newline: a line for log_cont() to finish - C's
 /// bch2_print(c, KERN_INFO bch2_log_msg(c, ...)).
 pub fn log_start(fs: &Fs, level: LogLevel, msg: &dyn ToText) {

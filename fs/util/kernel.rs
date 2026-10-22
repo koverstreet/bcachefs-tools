@@ -40,6 +40,16 @@ pub fn nr_cpu_ids() -> u32 {
     unsafe { c::bch2_nr_cpu_ids() }
 }
 
+/// The smallest IO @bdev takes: bdev_logical_block_size().
+pub fn bdev_logical_block_size(bdev: &c::block_device) -> u32 {
+    // SAFETY: a block device's queue, for as long as it's open
+    #[cfg(kernel)]
+    return unsafe { (*bdev.bd_queue).limits.logical_block_size };
+    // SAFETY: as the kernel's
+    #[cfg(not(kernel))]
+    return unsafe { c::bdev_logical_block_size(core::ptr::from_ref(bdev).cast_mut()) };
+}
+
 pub fn random_u64() -> u64 {
     unsafe { c::bch2_get_random_u64() }
 }

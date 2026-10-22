@@ -70,6 +70,53 @@ pub unsafe fn kfree(p: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
     unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
 }
 
+/// kmalloc()'s alignment of @n bytes: to the largest power of two in it, up
+/// to a page - what IO into it, O_DIRECT's in userspace, needs.
+fn kv_layout(n: usize) -> Result<core::alloc::Layout, AllocError> {
+    let align = if n == 0 { 1 } else { 1 << n.ilog2() };
+    let align = align.clamp(size_of::<u64>(), crate::util::kernel::PAGE_SIZE);
+    core::alloc::Layout::from_size_align(n, align).map_err(|_| AllocError)
+}
+
+/// @p, @old bytes of kvmalloc()'d memory - or none, null - as @new bytes,
+/// what was there kept and the rest zeroed: kvrealloc(), __GFP_ZERO.
+/// Aligned as kmalloc() aligns @new. kvfree_sized() takes it back.
+pub fn kvrealloc_zeroed(p: *mut u8, old: usize, new: usize) -> Result<core::ptr::NonNull<u8>, AllocError> {
+    #[cfg(kernel)]
+    {
+        use kernel::alloc::{allocator::KVmalloc, flags::__GFP_ZERO, Allocator, NumaNode};
+
+        // SAFETY: @p is KVmalloc's, of @old bytes, or null
+        Ok(unsafe {
+            KVmalloc::realloc(core::ptr::NonNull::new(p), kv_layout(new)?, kv_layout(old)?,
+                              flags::GFP_KERNEL | __GFP_ZERO, NumaNode::NO_NODE)
+        }?.cast())
+    }
+    // A new allocation and a copy: realloc() keeps the old one's alignment
+    #[cfg(not(kernel))]
+    // SAFETY: @p is std::alloc's, of @old bytes, or null
+    unsafe {
+        let q = core::ptr::NonNull::new(std::alloc::alloc_zeroed(kv_layout(new)?)).ok_or(AllocError)?;
+        if let Some(p) = core::ptr::NonNull::new(p) {
+            q.as_ptr().copy_from_nonoverlapping(p.as_ptr(), old.min(new));
+            std::alloc::dealloc(p.as_ptr(), kv_layout(old)?);
+        }
+        Ok(q)
+    }
+}
+
+/// # Safety
+/// @p is kvrealloc_zeroed()'s, of @size bytes, and nothing uses it after.
+pub unsafe fn kvfree_sized(p: core::ptr::NonNull<u8>, size: usize) {
+    let layout = kv_layout(size).expect("its allocation's");
+    // SAFETY: the caller's
+    #[cfg(kernel)]
+    unsafe { <kernel::alloc::allocator::KVmalloc as kernel::alloc::Allocator>::free(p, layout) };
+    // SAFETY: the caller's
+    #[cfg(not(kernel))]
+    unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
+}
+
 /// @init run on @slot: PinInit's __init() - __pinned_init(), before the
 /// kernel's pin-init v2 (7.3).
 ///

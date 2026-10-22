@@ -54,6 +54,19 @@ mod compat {
 #[cfg(not(kernel))]
 macro_rules! bi_offset { ($i:expr) => { $i.bi_bvec_done } }
 
+/// The bvecs @len bytes at @p map to: a page each, vmalloc memory; or one,
+/// the direct map's - buf_nr_bvecs().
+pub fn buf_nr_bvecs(p: *const u8, len: usize) -> usize {
+    use crate::util::kernel::PAGE_SIZE;
+    // SAFETY: an address, only compared
+    #[cfg(kernel)]
+    if unsafe { c::is_vmalloc_addr(p.cast()) } {
+        return (len + (p as usize & (PAGE_SIZE - 1))).div_ceil(PAGE_SIZE);
+    }
+    let _ = (p, len, PAGE_SIZE);
+    1
+}
+
 /// A block IO (struct bio): what to read or write, where, and the memory.
 #[repr(transparent)]
 pub struct Bio(Opaque<c::bio>);
