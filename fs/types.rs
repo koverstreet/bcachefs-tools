@@ -268,6 +268,7 @@ c_rcu_array! {
 crate::published! {
     /// A bucket_bitmap's bits: read without its lock - by copygc, while a
     /// check sets and frees them - so they're atomic words under RCU.
+    #[derive(CStruct)]
     pub struct BucketBits {
         pub buckets: c::BucketBitmapWords,
         /// Bits set
@@ -282,7 +283,7 @@ crate::published! {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct bucket_bitmap {
-    #[c_anon("struct mutex lock; struct bucket_bitmap_words __rcu *buckets; u64 nr")]
+    #[c_lock("struct mutex lock")]
     pub bits: Lock<c::mutex, (), BucketBits>,
 }
 c_default!(bucket_bitmap);

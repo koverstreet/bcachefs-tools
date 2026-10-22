@@ -52,7 +52,7 @@ c_default!(bch_recovery_runner);
 published! {
     /// What the runner publishes: read without its lock - by C, by the
     /// allocator, a word at a time - and written by the runner under it.
-    #[derive(::pin_init::Zeroable)]
+    #[derive(CStruct)]
     pub struct RecoveryWords {
         /* counterpart to c->sb.recovery_passes_required */
         pub scheduled_passes_ephemeral: Volatile<u64>,
@@ -79,13 +79,7 @@ pub struct bch_fs_recovery {
     /* the runner's state, under its lock, and what it publishes */
     #[pin]
     #[init(new_lock!(Default::default(), ::pin_init::zeroed(), "&c->recovery.lock"))]
-    #[c_anon("spinlock_t lock;
-	struct bch_recovery_runner runner;
-	u64 scheduled_passes_ephemeral;
-	u64 current_passes;
-	enum bch_recovery_pass current_pass;
-	enum bch_recovery_pass pass_done;
-	u64 passes_complete")]
+    #[c_lock("spinlock_t lock")]
     pub runner: Lock<c::spinlock_t, bch_recovery_runner, RecoveryWords>,
 
     /* passes run under it - and what runs as a pass, it serializes */
