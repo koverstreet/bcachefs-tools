@@ -558,7 +558,7 @@ pub struct Set {
 
 /* 128 bits, sufficient for cryptographic MACs: */
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, CStruct, Plain, TypeInfo)]
 #[c_packed]
 pub struct bch_csum {
     pub lo: Le64,

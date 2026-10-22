@@ -124,6 +124,24 @@ impl fmt::Display for c::bch_csum_type {
     }
 }
 
+impl c::bch_csum {
+    /// As many of its bytes as a @ty checksum has, in hex - all 16, for a
+    /// type this version doesn't know: bch2_csum_to_text().
+    pub fn to_text(&self, out: &mut Printbuf, ty: c::bch_csum_type) {
+        let bytes = crate::util::vstructs::plain_bytes(self);
+        for b in &bytes[..ty.bytes().unwrap_or(16) as usize] {
+            write!(out, "{b:02x}");
+        }
+    }
+}
+
+pub fn csum_err_msg(out: &mut Printbuf, ty: c::bch_csum_type, expected: c::bch_csum, got: c::bch_csum) {
+    write!(out, "checksum error, type {ty}: got ");
+    got.to_text(out, ty);
+    write!(out, " should be ");
+    expected.to_text(out, ty);
+}
+
 /// The nonce @offset bytes further into its stream - a whole number of
 /// ChaCha20 blocks: C's nonce_add().
 impl core::ops::Add<u32> for c::nonce {
