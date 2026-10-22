@@ -302,9 +302,12 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
 /// pin_init::MaybeZeroable, and the same way: the for<'__dummy> makes each
 /// bound a condition on the impl, not an error where it doesn't hold. So a
 /// struct holding a Rust type with invariants - a RustOnly - isn't, and
-/// #[derive(Init)] can't zero it.
+/// #[derive(Init)] can't zero it. core's atomics are, as their integers are,
+/// though pin_init has no impl for them, and the orphan rule allows none
+/// here: their fields aren't bounds.
 fn maybe_zeroable(def: &cstruct::CStructDef) -> String {
     let bounds: Vec<String> = def.fields.iter()
+        .filter(|f| !is_core_atomic(&f.ty))
         .map(|f| format!("{}: for<'__dummy> ::pin_init::Zeroable", f.ty))
         .collect();
     let whr = if bounds.is_empty() { String::new() } else { format!("where {}", bounds.join(",\n")) };
@@ -312,6 +315,13 @@ fn maybe_zeroable(def: &cstruct::CStructDef) -> String {
     format!("// SAFETY: every field is Zeroable, and padding may be zero\n\
              #[automatically_derived]\n\
              unsafe impl{generics} ::pin_init::Zeroable for {ty} {whr} {{}}\n")
+}
+
+/// One of core::sync::atomic's integer, bool or pointer atomics, by any path.
+fn is_core_atomic(ty: &str) -> bool {
+    let name = ty.trim().split('<').next().unwrap_or("").rsplit("::").next().unwrap_or("").trim();
+    matches!(name, "AtomicBool" | "AtomicPtr" | "AtomicU8" | "AtomicI8" | "AtomicU16" | "AtomicI16" |
+                   "AtomicU32" | "AtomicI32" | "AtomicU64" | "AtomicI64" | "AtomicUsize" | "AtomicIsize")
 }
 
 /// bitfield_struct::bitfield, recorded - and __NAME_forward!(STRUCT, field),
