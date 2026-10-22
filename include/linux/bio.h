@@ -412,4 +412,7 @@ static inline void bio_init(struct bio *bio,
 	bio->bi_max_vecs = max_vecs;
 }
 
+/* nothing to release here: no integrity, crypt or cgroup state */
+static inline void bio_uninit(struct bio *bio) {}
+
 #endif /* __LINUX_BIO_H */

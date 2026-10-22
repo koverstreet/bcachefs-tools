@@ -22,13 +22,16 @@
 
 #include <linux/kernel.h>
 #include <linux/bug.h>
+#include <linux/page.h>
 
 /*
- * was unsigned short, but we might as well be ready for > 64kB I/O pages
+ * As the kernel's, so Rust reads one the same in both builds. A page is its
+ * address here, so a bio_vec of contiguous memory may span many of them.
  */
 struct bio_vec {
-	void		*bv_addr;
+	struct page	*bv_page;
 	unsigned int	bv_len;
+	unsigned int	bv_offset;
 };
 
 struct bvec_iter {
@@ -54,11 +57,14 @@ struct bvec_iter_all {
 
 static inline void *bvec_virt(struct bio_vec *bv)
 {
-	return bv->bv_addr;
+	return page_address(bv->bv_page) + bv->bv_offset;
 }
 
-#define bvec_iter_addr(bvec, iter)				\
-	(__bvec_iter_bvec((bvec), (iter))->bv_addr + (iter).bi_bvec_done)
+#define bvec_iter_page(bvec, iter)				\
+	(__bvec_iter_bvec((bvec), (iter))->bv_page)
+
+#define bvec_iter_offset(bvec, iter)				\
+	(__bvec_iter_bvec((bvec), (iter))->bv_offset + (iter).bi_bvec_done)
 
 #define bvec_iter_len(bvec, iter)				\
 	min((iter).bi_size,					\
@@ -66,8 +72,9 @@ static inline void *bvec_virt(struct bio_vec *bv)
 
 #define bvec_iter_bvec(bvec, iter)				\
 ((struct bio_vec) {						\
-	.bv_addr	= bvec_iter_addr((bvec), (iter)),	\
+	.bv_page	= bvec_iter_page((bvec), (iter)),	\
 	.bv_len		= bvec_iter_len((bvec), (iter)),	\
+	.bv_offset	= bvec_iter_offset((bvec), (iter)),	\
 })
 
 static inline void bvec_iter_advance(const struct bio_vec *bv,

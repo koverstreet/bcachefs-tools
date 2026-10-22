@@ -81,7 +81,7 @@ void bio_copy_data_iter(struct bio *dst, struct bvec_iter *dst_iter,
 
 		unsigned bytes = min(src_bv.bv_len, dst_bv.bv_len);
 
-		memcpy(dst_bv.bv_addr, src_bv.bv_addr, bytes);
+		memcpy(bvec_virt(&dst_bv), bvec_virt(&src_bv), bytes);
 
 		bio_advance_iter(src, src_iter, bytes);
 		bio_advance_iter(dst, dst_iter, bytes);
@@ -110,7 +110,7 @@ void zero_fill_bio_iter(struct bio *bio, struct bvec_iter start)
 	struct bvec_iter iter;
 
 	__bio_for_each_segment(bv, bio, iter, start)
-		memset(bv.bv_addr, 0, bv.bv_len);
+		memset(bvec_virt(&bv), 0, bv.bv_len);
 }
 
 static int __bio_clone(struct bio *bio, struct bio *bio_src, gfp_t gfp)
@@ -199,8 +199,9 @@ void bio_add_virt_nofail(struct bio *bio, void *vaddr, unsigned len)
 	WARN_ON_ONCE(bio_flagged(bio, BIO_CLONED));
 	WARN_ON_ONCE(bio->bi_vcnt >= bio->bi_max_vecs);
 
-	bv->bv_addr = vaddr;
-	bv->bv_len = len;
+	bv->bv_page	= virt_to_page(vaddr);
+	bv->bv_offset	= offset_in_page(vaddr);
+	bv->bv_len	= len;
 
 	bio->bi_iter.bi_size += len;
 	bio->bi_vcnt++;

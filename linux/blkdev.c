@@ -135,14 +135,14 @@ void generic_make_request(struct bio *bio)
 		i = 0;
 		bio_for_each_segment(bv, bio, iter) {
 			iov[i++] = (struct iovec) {
-				.iov_base = bv.bv_addr,
+				.iov_base = bvec_virt(&bv),
 				.iov_len = bv.bv_len,
 			};
 
 #ifdef CONFIG_VALGRIND
 			/* To be pedantic it should only be on IO completion. */
 			if (bio_op(bio) == REQ_OP_READ)
-				VALGRIND_MAKE_MEM_DEFINED(bv.bv_addr, bv.bv_len);
+				VALGRIND_MAKE_MEM_DEFINED(bvec_virt(&bv), bv.bv_len);
 #endif
 		}
 	}

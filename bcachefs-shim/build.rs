@@ -82,6 +82,9 @@ fn main() {
         .default_enum_style(bindgen::EnumVariation::Rust {
             non_exhaustive: true,
         })
+        // As the kernel's bindings have it - req_op_REQ_OP_READ, a c_uint -
+        // so Rust names it the same in both builds.
+        .constified_enum("req_op")
         // Own only what's defined under include/ — the kernel-compat surface.
         // allowlist_recursively (default) pulls in the system primitives these
         // reference (__u64 etc.), so they're emitted here too.
