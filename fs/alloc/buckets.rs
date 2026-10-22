@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::bkey::pos;
+use crate::btree::iter::{TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
@@ -51,6 +52,24 @@ impl c::bch_dev {
     /// Bucket @b's gc state, if it's one of the device's: gc_bucket().
     pub fn gc_bucket(&self, b: u64) -> Option<&c::bucket> {
         self.bucket_valid(b).then(|| self.buckets_gc.get(b as usize)).flatten()
+    }
+}
+
+impl TransAttempt<'_, '_> {
+    /// Gc bucket @g's state, as an alloc key, edited by @f under its lock -
+    /// left as it was if @f fails - and device @ca's counters moved from the
+    /// old to the new after: a trigger's gc side, on a bucket.
+    pub fn gc_bucket_mod(&self, ca: &c::bch_dev, g: &c::bucket, flags: UpdateTriggerFlags,
+                         f: impl FnOnce(&mut c::AllocV4) -> Result<(), BchError>) -> Result<(), BchError> {
+        let (old, new) = {
+            let mut b = g.lock.lock();
+            let old = b.alloc();
+            let mut new = old;
+            f(&mut new)?;
+            b.set_alloc(&new);
+            (old, new)
+        };
+        self.alloc_key_to_dev_counters(ca, &old, &new, flags)
     }
 }
 
