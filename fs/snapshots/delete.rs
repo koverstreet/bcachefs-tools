@@ -60,7 +60,7 @@ use crate::btree::iter::{
 };
 use crate::c;
 use crate::c::bch_recovery_pass::*;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::damage;
 use crate::init::error::id;
@@ -71,14 +71,12 @@ use crate::snapshots::check_snapshots;
 use crate::snapshots::snapshot;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::eytzinger::Eytzinger1;
-use crate::util::ffi::Opaque;
 use crate::util::log::{self, LogLevel, LogMsg};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_info, bch_notice, fs_inconsistent, fsck_err, prt,
             trans_inconsistent};
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
-use cstruct_macros::c_export;
 use pin_init::{pin_data, pin_init, PinInit};
 
 crate::module_param! {
@@ -1392,11 +1390,6 @@ pub fn delete_dead_snapshots_forced(fs: &Fs) -> Result<(), BchError> {
     passes::set_no_ratelimit(fs, BCH_RECOVERY_PASS_check_snapshots);
 
     ret
-}
-
-#[c_export]
-pub fn __bch2_delete_dead_snapshots(c: &Opaque<c::bch_fs>) -> core::ffi::c_int {
-    ret_to_c(delete_dead_snapshots_forced(Fs::from_c(c)))
 }
 
 fn delete_dead_snapshots(fs: &Fs) -> Result<(), BchError> {

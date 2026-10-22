@@ -1086,7 +1086,7 @@ pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
         out.newline();
 
         // Nothing to show for a pass with no estimate of its own size
-        if crate::init::progress::bch2_progress_has_total(&r.progress) {
+        if r.progress.has_total() {
             write!(out, "Progress:\t");
             prt!(out, "{}", r.progress);
             out.newline();

@@ -133,17 +133,6 @@ pub fn get_snapshot_nowarn(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<u32,
 }
 
 #[c_export]
-pub fn __bch2_subvolume_get_snapshot(
-    trans:  &BtreeTrans<'_>,
-    subvol: u32,
-    snapid: &mut u32,
-    warn:   bool,
-) -> core::ffi::c_int {
-    ret_to_c(__get_snapshot(&unsafe { trans.attempt_in_progress() }, subvol, warn)
-             .map(|s| *snapid = s))
-}
-
-#[c_export]
 pub fn bch2_subvolume_get_snapshot(
     trans:  &BtreeTrans<'_>,
     subvol: u32,

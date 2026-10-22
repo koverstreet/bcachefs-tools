@@ -181,6 +181,11 @@ fn total_nodes(fs: &Fs, leaf_mask: u64, inner_mask: u64) -> u64 {
 }
 
 impl c::progress_indicator {
+    /// Whether it has a total - an estimate of its work's size - to show.
+    pub fn has_total(&self) -> bool {
+        self.status().2 != 0
+    }
+
     /// Start reporting a walk of @leaf_btrees' keys (and @inner_btrees'
     /// interior nodes), as @msg: as bch2_progress_init(). C passes __func__
     /// as @msg.
@@ -391,9 +396,4 @@ pub fn bch2_progress_status(s: &c::progress_indicator, units: &mut u32, seen: &m
     (*units, *seen, *total) = (u.0, n, t);
 }
 
-/// Whether it has a total - an estimate of its work's size - to show.
-#[c_export]
-pub fn bch2_progress_has_total(s: &c::progress_indicator) -> bool {
-    s.status().2 != 0
-}
 

@@ -480,7 +480,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
             let m = crate::sb::members::sb_member(sb, i).unwrap_or_default();
             m.nbuckets.get() * u64::from(m.bucket_size.get())
         }).sum::<u64>();
-        let bits = crate::inode::bch2_shard_inode_numbers_bits_default(
+        let bits = crate::inode::shard_bits_default(
             crate::util::kernel::num_online_cpus(), fs_size << 9, btree_node_bytes);
         sb.set_shard_inums_nbits(bits.into());
     }
@@ -991,7 +991,9 @@ impl bch_sb_handle {
     }
 
     pub fn field_delete(&mut self, ty: c::bch_sb_field_type) {
-        bch2_sb_field_delete(self, ty)
+        if let Some(off) = field_offset(self.sb(), ty) {
+            self.field_resize_at(Some(off), 0);
+        }
     }
 
     /// @u64s 0 for the minimum.
@@ -1375,13 +1377,6 @@ pub fn bch2_sb_field_get_minsize_id(sb: &mut c::bch_sb_handle, ty: c::bch_sb_fie
 {
     let off = sb.field_get_minsize_id(ty, u64s);
     sb.field_ptr(off)
-}
-
-#[c_export]
-pub fn bch2_sb_field_delete(sb: &mut c::bch_sb_handle, ty: c::bch_sb_field_type) {
-    if let Some(off) = field_offset(sb.sb(), ty) {
-        sb.field_resize_at(Some(off), 0);
-    }
 }
 
 /// The u64s section @F is with @nr of its tail's entries: for

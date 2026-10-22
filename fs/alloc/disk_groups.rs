@@ -418,13 +418,6 @@ pub unsafe fn __bch2_dev_group_set(c: &Opaque<c::bch_fs>, ca: &c::bch_dev, name:
     ret_to_c(dev_group_set(fs, &mut unsafe { fs.sb_lock_held() }, ca.dev_idx.into(), name.to_bytes()))
 }
 
-/// @c may be NULL: every label is invalid then.
-#[cold]
-#[c_export]
-pub fn bch2_disk_path_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>>, v: c_uint) {
-    disk_path_to_text(out, c.map(Fs::from_c), v);
-}
-
 /// # Safety
 /// @sb is a superblock that's been validated.
 #[cold]

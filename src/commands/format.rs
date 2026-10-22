@@ -606,9 +606,9 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
     warn_same_parent_disk_replicas(&cfg, &devices);
 
     // Default shard_inode_numbers_bits if the user didn't set it. The policy
-    // (cpu-scaled, fs-size-capped, clamped to [0, 8]) lives in C —
-    // bch2_shard_inode_numbers_bits_default() — so the format-time default and
-    // the kernel sb_validate rewrite of legacy bits=0 filesystems can't diverge.
+    // (cpu-scaled, fs-size-capped, clamped to [0, 8]) is shard_bits_default(),
+    // which superblock validate's rewrite of legacy bits=0 filesystems uses
+    // too, so the two can't diverge.
     if !bcachefs_kernel::opts::opt_defined_by_id(&cfg.fs_opts, opt_id::shard_inode_numbers_bits) {
         let nr_cpus = std::thread::available_parallelism()
             .map(|n| n.get())

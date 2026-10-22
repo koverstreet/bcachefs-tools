@@ -962,11 +962,6 @@ pub fn __bch2_snapshot_is_ancestor(trans: &BtreeTrans<'_>, id: u32, ancestor: u3
     is_ancestor_table(&unsafe { trans.attempt_in_progress() }, id, ancestor)
 }
 
-#[c_export]
-pub fn bch2_snapshot_skiplist_get(c: &Opaque<c::bch_fs>, id: u32) -> u32 {
-    Fs::from_c(c).snapshots.skiplist_get(id)
-}
-
 // ── Snapshot node keys ───────────────────────────────────────────────────
 
 /// Zero padded past the fields an older key lacks.
@@ -1063,11 +1058,6 @@ impl c::Snapshot<Whole> {
         }
         self.state = state.0.into();
     }
-}
-
-#[c_export]
-pub fn bch2_snapshot_state_set(s: &mut c::Snapshot, state: c::bch_snapshot_state) {
-    s.set_state(state)
 }
 
 impl fmt::Display for c::bch_snapshot_state {

@@ -221,16 +221,6 @@ pub unsafe extern "C" fn __bch2_logged_op_start(trans: &BtreeTrans<'_>, k: *mut 
     ret_to_c(unsafe { logged_op_start(&trans.attempt_in_progress(), k) })
 }
 
-/// # Safety
-/// @k is a key.
-#[c_export]
-pub unsafe extern "C" fn bch2_logged_op_start(trans: &BtreeTrans<'_>, k: *mut c::bkey_i) -> c_int {
-    let k = unsafe { &mut *BkeyI::from_raw_mut(k) };
-
-    // SAFETY: @k stays put across the commit_do(): it's the caller's
-    ret_to_c(commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| unsafe { logged_op_start(t, k) }))
-}
-
 /// Delete op @k, which returned @op_ret: @op_ret, unless the delete fails.
 ///
 /// Callers must hold a write ref (BCH_WRITE_REF_stripe_create,

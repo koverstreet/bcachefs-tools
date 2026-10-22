@@ -918,23 +918,6 @@ pub fn make_extent_indirect<'a>(
     unsafe { __make_extent_indirect(t, extent_iter, orig.as_ptr(), reflink_p_may_update_opts_field) }
 }
 
-/// For C's backpointers: __make_extent_indirect().
-///
-/// # Safety
-/// As __make_extent_indirect()'s.
-#[c_export]
-pub unsafe extern "C" fn bch2_make_extent_indirect<'t>(
-    trans:                           &'t BtreeTrans<'t>,
-    extent_iter:                     &mut BtreeIter<'t>,
-    orig:                            *mut c::bkey_i,
-    reflink_p_may_update_opts_field: bool,
-) -> c_int {
-    // SAFETY: C calls this in an attempt
-    let t = unsafe { trans.attempt_in_progress() };
-
-    ret_to_c(unsafe { __make_extent_indirect(&t, extent_iter, orig, reflink_p_may_update_opts_field) })
-}
-
 // ── remap ────────────────────────────────────────────────────────────────
 
 /// Point @dst_inum's range at @src_inum's data, as remap_file_range: each

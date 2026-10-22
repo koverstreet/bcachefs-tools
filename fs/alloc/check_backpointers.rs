@@ -309,20 +309,6 @@ pub fn check_bp_exists(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut Bk
     }
 }
 
-/// # Safety
-/// @trans is in an attempt; @bp is a backpointer key, all of it;
-/// @last_flushed is the caller's.
-#[c_export]
-pub unsafe fn bch2_check_bp_exists<'t>(trans: &'t BtreeTrans<'t>, extent: BkeySC<'_>,
-                                       bp: *mut c::bkey_i_backpointer,
-                                       last_flushed: *mut c::wb_maybe_flush) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    // SAFETY: C's struct bkey_i_backpointer is a BkeyI<Backpointer>
-    let bp = unsafe { &mut *bp.cast::<BkeyI<c::Backpointer>>() };
-    let last_flushed = unsafe { WbFlush::from_raw(last_flushed) }.expect("a wb_maybe_flush");
-    ret_to_c(check_bp_exists(&t, extent, bp, last_flushed))
-}
-
 // ── fsck: check_extents_to_backpointers ──────────────────────────────────
 //
 // Backpointers are checked by bucket, not one by one: each bucket's, of its

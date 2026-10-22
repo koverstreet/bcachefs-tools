@@ -200,13 +200,6 @@ fn ptrs(k: BkeyS<'_>) -> BkeyS<'_, Ptrs> {
     k.arm::<Ptrs>().expect("dropping pointers of a key without them")
 }
 
-/// @entry is one of @k's entries: only its address is used.
-#[c_export]
-pub fn bch2_bkey_extent_entry_drop_s(c: &Fs, k: BkeyS<'_>, entry: *mut c::bch_extent_entry) {
-    let at = entry_pos_of(k.as_sc(), entry.cast());
-    ptrs_mut(k).drop_entry(c, at);
-}
-
 /// @ptr is one of @k's pointers: only its address is used.
 #[c_export]
 pub fn bch2_bkey_drop_ptr_noerror(c: &Fs, k: BkeyS<'_>, ptr: *mut c::bch_extent_ptr) {
@@ -237,14 +230,6 @@ pub fn bch2_bkey_drop_device_noerror(c: &Fs, k: BkeyS<'_>, dev: c_uint) {
 #[c_export]
 pub fn bch2_bkey_drop_device(c: &Fs, k: BkeyS<'_>, dev: c_uint) {
     ptrs(k).drop_device(c, dev);
-}
-
-/// # Safety
-/// @k is a key the caller can edit.
-#[c_export]
-pub unsafe fn bch2_bkey_drop_ec(c: &Fs, k: *mut c::bkey_i, dev: c_uint) {
-    // SAFETY: the caller's
-    ptrs_mut(unsafe { bkey_i_s(k) }).drop_ec(c, dev);
 }
 
 /// # Safety

@@ -1041,8 +1041,7 @@ pub unsafe extern "C" fn bch2_fs_inode_shard_cpu_init(c: &Opaque<c::bch_fs>) {
     shard_cpu_init(Fs::from_c(c))
 }
 
-/// The default for shard_inode_numbers_bits, when it isn't set: as
-/// bch2_shard_inode_numbers_bits_default().
+/// The default for shard_inode_numbers_bits, when it isn't set.
 ///
 /// Scales with @nr_cpus - doubled, for oversubscribed threads - capped so the
 /// shard boundaries' btree nodes (four sharded btrees, a node per shard) stay
@@ -1058,16 +1057,6 @@ pub fn shard_bits_default(nr_cpus: u32, fs_size: u64, btree_node_bytes: u64) -> 
     let size_bits = if denom != 0 && fs_size >= denom { (fs_size / denom).ilog2() } else { 0 };
 
     cpu_bits.min(size_bits).min(8)
-}
-
-/// For C's superblock validate: bch2_shard_inode_numbers_bits_default().
-#[c_export]
-pub extern "C" fn bch2_shard_inode_numbers_bits_default(
-    nr_cpus:          core::ffi::c_uint,
-    fs_size:          u64,
-    btree_node_bytes: u64,
-) -> core::ffi::c_uint {
-    shard_bits_default(nr_cpus, fs_size, btree_node_bytes)
 }
 
 /// The inode numbers cursor @idx hands out: [min, max).

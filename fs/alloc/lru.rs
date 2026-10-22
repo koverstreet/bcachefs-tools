@@ -188,15 +188,6 @@ pub(crate) fn lru_mod(t: &TransAttempt<'_, '_>, pos: LruPos, set: bool) -> Resul
     t.bit_mod_buffered(c::btree_id::lru, pos.to_bpos(), set)
 }
 
-/// # Safety
-/// @trans is in an attempt.
-#[c_export]
-pub unsafe extern "C" fn bch2_lru_set<'t>(trans: &'t BtreeTrans<'t>, lru_id: u16,
-                                          dev_bucket: u64, time: u64) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(lru_mod(&t, LruPos::new(lru_id, time, dev_bucket), true))
-}
-
 /// Move @dev_bucket's entry in lru @lru_id from @old_time to @new_time:
 /// bch2_lru_change()'s slow path, with old_time != new_time.
 ///

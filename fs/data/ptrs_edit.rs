@@ -60,7 +60,7 @@ pub trait BkeyVPtrsMut: BkeyVMut<V = PtrsMut> {
     }
 
     /// Drop the stripe_ptr of the first pointer to @dev - the last one
-    /// before it, as C has it: bch2_bkey_drop_ec().
+    /// before it, as C's bch2_bkey_drop_ec() had it.
     ///
     /// XXX: C's - the stripe_ptr isn't forgotten at each pointer, so a
     /// pointer to @dev without its own would drop an earlier pointer's; and
