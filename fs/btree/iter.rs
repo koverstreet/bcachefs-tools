@@ -2645,7 +2645,7 @@ impl c::btree {
     {
         let b = self as *const _ as *mut c::btree;
         let mut node_iter = c::btree_node_iter::default();
-        let mut unpacked: c::bkey = unsafe { core::mem::zeroed() };
+        let mut unpacked: c::bkey = pin_init::Zeroable::zeroed();
 
         unsafe { c::bch2_btree_node_iter_init_from_start(&mut node_iter, b) };
 

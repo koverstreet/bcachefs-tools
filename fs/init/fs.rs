@@ -472,12 +472,9 @@ impl Fs {
     }
 
     pub fn dev_usage_full_read(&self, dev: u32) -> c::bch_dev_usage_full {
-        unsafe {
-            let ca = self.devs[dev as usize].as_ptr();
-            let mut usage: c::bch_dev_usage_full = core::mem::zeroed();
-            c::bch2_dev_usage_full_read_fast(ca, &mut usage);
-            usage
-        }
+        let mut usage: c::bch_dev_usage_full = pin_init::Zeroable::zeroed();
+        unsafe { c::bch2_dev_usage_full_read_fast(self.devs[dev as usize].as_ptr(), &mut usage) };
+        usage
     }
 
     /// # Safety
@@ -515,7 +512,7 @@ impl Fs {
             sec -= 1;
         }
 
-        let mut t: c::timespec64 = unsafe { core::mem::zeroed() };
+        let mut t: c::timespec64 = pin_init::Zeroable::zeroed();
         t.tv_sec  = sec as _;
         t.tv_nsec = nsec as _;
         t
@@ -534,7 +531,7 @@ impl Fs {
 
     /// In the filesystem's time units.
     pub fn current_time(&self) -> u64 {
-        let mut now: c::timespec64 = unsafe { core::mem::zeroed() };
+        let mut now: c::timespec64 = pin_init::Zeroable::zeroed();
         unsafe { c::bch2_ktime_get_coarse_real_ts64(&mut now) };
         self.timespec_to_time(now) as u64
     }

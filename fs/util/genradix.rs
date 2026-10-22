@@ -125,8 +125,7 @@ unsafe impl<T> Zeroable for SharedGenRadix<T> {}
 impl<T> SharedGenRadix<T> {
     /// Empty: as genradix_init().
     pub fn new() -> Self {
-        // SAFETY: Zeroable's
-        unsafe { core::mem::zeroed() }
+        Zeroable::zeroed()
     }
 }
 
