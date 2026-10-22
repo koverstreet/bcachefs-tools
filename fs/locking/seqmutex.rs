@@ -7,7 +7,7 @@
 
 #![allow(non_camel_case_types)]
 
-use super::{Guard, Lock, RawLock};
+use super::{Guard, Lock, RawLock, RawTryLock};
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::convert::Infallible;
@@ -19,14 +19,11 @@ use cstruct_macros::CStruct;
 #[derive(CStruct)]
 pub struct seqmutex {
     pub lock: c::mutex,
-    pub seq:  u32,
+    /* C writes it under the mutex */
+    #[c("u32 seq")]
+    pub seq:  AtomicU32,
 }
 c_default!(seqmutex);
-
-/// @l's count: a u32, aligned as one, that C writes under the mutex.
-unsafe fn seq<'a>(l: *mut seqmutex) -> &'a AtomicU32 {
-    unsafe { AtomicU32::from_ptr(&raw mut (*l).seq) }
-}
 
 unsafe impl RawLock for seqmutex {
     type GuardState = ();
@@ -34,24 +31,22 @@ unsafe impl RawLock for seqmutex {
 
     unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void) -> Result<(), Infallible> {
         unsafe {
-            (&raw mut (*l).seq).write(0);
-            <c::mutex as RawLock>::init(&raw mut (*l).lock, name, key)
+            (&raw mut (*l).seq).write(AtomicU32::new(0));
+            c::mutex::init(&raw mut (*l).lock, name, key)
         }
     }
 
-    unsafe fn lock(l: *mut Self) {
-        unsafe {
-            <c::mutex as RawLock>::lock(&raw mut (*l).lock);
-            seq(l).fetch_add(1, Ordering::Relaxed);
-        }
+    unsafe fn lock(&self) {
+        unsafe { self.lock.lock() };
+        self.seq.fetch_add(1, Ordering::Relaxed);
     }
 
-    unsafe fn unlock(l: *mut Self, _: ()) {
-        unsafe { <c::mutex as RawLock>::unlock(&raw mut (*l).lock, ()) }
+    unsafe fn unlock(&self, _: ()) {
+        unsafe { self.lock.unlock(()) }
     }
 
-    unsafe fn assert_held(l: *mut Self) {
-        unsafe { <c::mutex as RawLock>::assert_held(&raw mut (*l).lock) }
+    unsafe fn assert_held(&self) {
+        unsafe { self.lock.assert_held() }
     }
 }
 
@@ -62,16 +57,15 @@ impl<G, P> Lock<seqmutex, G, P> {
     /// Held again, if no one has taken it since the unlock that gave @at.
     pub fn relock(&self, at: SeqMutexSeq) -> Option<Guard<'_, seqmutex, G, P>> {
         let l = self.raw();
-        if unsafe { seq(l) }.load(Ordering::Relaxed) != at.0 {
+        if l.seq.load(Ordering::Relaxed) != at.0 {
             return None;
         }
 
-        if unsafe { c::mutex_trylock((&raw mut (*l).lock).cast()) } as i32 == 0 {
-            return None;
-        }
+        // retaken, not counted: no one else has taken it
+        unsafe { l.lock.try_lock() }?;
         let g = unsafe { Guard::from_held(self, Some(())) };
 
-        if unsafe { seq(l) }.load(Ordering::Relaxed) != at.0 {
+        if l.seq.load(Ordering::Relaxed) != at.0 {
             return None;    // unlocked, as the guard drops
         }
         Some(g)
@@ -81,6 +75,6 @@ impl<G, P> Lock<seqmutex, G, P> {
 impl<G, P> Guard<'_, seqmutex, G, P> {
     /// Released, with the count relock() takes.
     pub fn unlock(self) -> SeqMutexSeq {
-        SeqMutexSeq(unsafe { seq(self.lock().raw()) }.load(Ordering::Relaxed))
+        SeqMutexSeq(self.lock().raw().seq.load(Ordering::Relaxed))
     }
 }

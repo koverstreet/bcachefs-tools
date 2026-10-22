@@ -66,46 +66,46 @@ unsafe impl<R: RawLock> RawLock for Noio<R> {
         unsafe { R::init(l.cast(), name, key) }
     }
 
-    unsafe fn lock(l: *mut Self) -> Self::GuardState {
+    unsafe fn lock(&self) -> Self::GuardState {
         let noio = MemallocFlags::noio();
-        (noio, unsafe { R::lock(l.cast()) })
+        (noio, unsafe { self.0.lock() })
     }
 
-    unsafe fn unlock(l: *mut Self, (noio, g): Self::GuardState) {
-        unsafe { R::unlock(l.cast(), g) };
+    unsafe fn unlock(&self, (noio, g): Self::GuardState) {
+        unsafe { self.0.unlock(g) };
         drop(noio);
     }
 
-    unsafe fn assert_held(l: *mut Self) {
-        unsafe { R::assert_held(l.cast()) }
+    unsafe fn assert_held(&self) {
+        unsafe { self.0.assert_held() }
     }
 
-    unsafe fn destroy(l: *mut Self) {
-        unsafe { R::destroy(l.cast()) }
+    unsafe fn destroy(&self) {
+        unsafe { self.0.destroy() }
     }
 }
 
 unsafe impl<R: RawTryLock> RawTryLock for Noio<R> {
-    unsafe fn try_lock(l: *mut Self) -> Option<Self::GuardState> {
+    unsafe fn try_lock(&self) -> Option<Self::GuardState> {
         // not taken: dropped, so restored
         let noio = MemallocFlags::noio();
-        Some((noio, unsafe { R::try_lock(l.cast()) }?))
+        Some((noio, unsafe { self.0.try_lock() }?))
     }
 }
 
 unsafe impl<R: RawRwLock> RawRwLock for Noio<R> {
-    unsafe fn lock_shared(l: *mut Self) -> Self::GuardState {
+    unsafe fn lock_shared(&self) -> Self::GuardState {
         let noio = MemallocFlags::noio();
-        (noio, unsafe { R::lock_shared(l.cast()) })
+        (noio, unsafe { self.0.lock_shared() })
     }
 
-    unsafe fn unlock_shared(l: *mut Self, (noio, g): Self::GuardState) {
-        unsafe { R::unlock_shared(l.cast(), g) };
+    unsafe fn unlock_shared(&self, (noio, g): Self::GuardState) {
+        unsafe { self.0.unlock_shared(g) };
         drop(noio);
     }
 
-    unsafe fn assert_held_any(l: *mut Self) {
-        unsafe { R::assert_held_any(l.cast()) }
+    unsafe fn assert_held_any(&self) {
+        unsafe { self.0.assert_held_any() }
     }
 }
 

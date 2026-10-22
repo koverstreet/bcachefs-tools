@@ -76,22 +76,22 @@ unsafe impl RawLock for c::mutex {
         Ok(())
     }
 
-    unsafe fn lock(l: *mut Self) {
-        unsafe { c::mutex_lock(l.cast()) }
+    unsafe fn lock(&self) {
+        unsafe { c::mutex_lock(self.as_ptr().cast()) }
     }
 
-    unsafe fn unlock(l: *mut Self, _: ()) {
-        unsafe { c::mutex_unlock(l.cast()) }
+    unsafe fn unlock(&self, _: ()) {
+        unsafe { c::mutex_unlock(self.as_ptr().cast()) }
     }
 
-    unsafe fn assert_held(l: *mut Self) {
-        unsafe { rust_mutex_assert_held(l) }
+    unsafe fn assert_held(&self) {
+        unsafe { rust_mutex_assert_held(self.as_ptr().cast()) }
     }
 }
 
 unsafe impl RawTryLock for c::mutex {
-    unsafe fn try_lock(l: *mut Self) -> Option<()> {
-        (unsafe { c::mutex_trylock(l.cast()) } as i32 != 0).then_some(())
+    unsafe fn try_lock(&self) -> Option<()> {
+        (unsafe { c::mutex_trylock(self.as_ptr().cast()) } as i32 != 0).then_some(())
     }
 }
 
@@ -110,16 +110,16 @@ unsafe impl RawLock for c::spinlock_t {
         Ok(())
     }
 
-    unsafe fn lock(l: *mut Self) -> c_ulong {
-        unsafe { rust_spin_lock_irqsave(l) }
+    unsafe fn lock(&self) -> c_ulong {
+        unsafe { rust_spin_lock_irqsave(self.as_ptr().cast()) }
     }
 
-    unsafe fn unlock(l: *mut Self, flags: c_ulong) {
-        unsafe { rust_spin_unlock_irqrestore(l, flags) }
+    unsafe fn unlock(&self, flags: c_ulong) {
+        unsafe { rust_spin_unlock_irqrestore(self.as_ptr().cast(), flags) }
     }
 
-    unsafe fn assert_held(l: *mut Self) {
-        unsafe { rust_spin_lock_assert_held(l) }
+    unsafe fn assert_held(&self) {
+        unsafe { rust_spin_lock_assert_held(self.as_ptr().cast()) }
     }
 }
 
@@ -134,30 +134,30 @@ unsafe impl RawLock for c::rw_semaphore {
         Ok(())
     }
 
-    unsafe fn lock(l: *mut Self) {
-        unsafe { c::down_write(l.cast()) }
+    unsafe fn lock(&self) {
+        unsafe { c::down_write(self.as_ptr().cast()) }
     }
 
-    unsafe fn unlock(l: *mut Self, _: ()) {
-        unsafe { c::up_write(l.cast()) }
+    unsafe fn unlock(&self, _: ()) {
+        unsafe { c::up_write(self.as_ptr().cast()) }
     }
 
-    unsafe fn assert_held(l: *mut Self) {
-        unsafe { rust_rwsem_assert_held_write(l) }
+    unsafe fn assert_held(&self) {
+        unsafe { rust_rwsem_assert_held_write(self.as_ptr().cast()) }
     }
 }
 
 unsafe impl RawRwLock for c::rw_semaphore {
-    unsafe fn lock_shared(l: *mut Self) {
-        unsafe { c::down_read(l.cast()) }
+    unsafe fn lock_shared(&self) {
+        unsafe { c::down_read(self.as_ptr().cast()) }
     }
 
-    unsafe fn unlock_shared(l: *mut Self, _: ()) {
-        unsafe { c::up_read(l.cast()) }
+    unsafe fn unlock_shared(&self, _: ()) {
+        unsafe { c::up_read(self.as_ptr().cast()) }
     }
 
-    unsafe fn assert_held_any(l: *mut Self) {
-        unsafe { rust_rwsem_assert_held(l) }
+    unsafe fn assert_held_any(&self) {
+        unsafe { rust_rwsem_assert_held(self.as_ptr().cast()) }
     }
 }
 
@@ -172,33 +172,33 @@ unsafe impl RawLock for c::percpu_rw_semaphore {
         ret_to_result_void(unsafe { rust_percpu_init_rwsem(l, name.as_ptr().cast(), key) })
     }
 
-    unsafe fn lock(l: *mut Self) {
-        unsafe { rust_percpu_down_write(l) }
+    unsafe fn lock(&self) {
+        unsafe { rust_percpu_down_write(self.as_ptr().cast()) }
     }
 
-    unsafe fn unlock(l: *mut Self, _: ()) {
-        unsafe { rust_percpu_up_write(l) }
+    unsafe fn unlock(&self, _: ()) {
+        unsafe { rust_percpu_up_write(self.as_ptr().cast()) }
     }
 
-    unsafe fn assert_held(l: *mut Self) {
-        unsafe { rust_percpu_rwsem_assert_held_write(l) }
+    unsafe fn assert_held(&self) {
+        unsafe { rust_percpu_rwsem_assert_held_write(self.as_ptr().cast()) }
     }
 
-    unsafe fn destroy(l: *mut Self) {
-        unsafe { rust_percpu_free_rwsem(l) }
+    unsafe fn destroy(&self) {
+        unsafe { rust_percpu_free_rwsem(self.as_ptr().cast()) }
     }
 }
 
 unsafe impl RawRwLock for c::percpu_rw_semaphore {
-    unsafe fn lock_shared(l: *mut Self) {
-        unsafe { rust_percpu_down_read(l) }
+    unsafe fn lock_shared(&self) {
+        unsafe { rust_percpu_down_read(self.as_ptr().cast()) }
     }
 
-    unsafe fn unlock_shared(l: *mut Self, _: ()) {
-        unsafe { rust_percpu_up_read(l) }
+    unsafe fn unlock_shared(&self, _: ()) {
+        unsafe { rust_percpu_up_read(self.as_ptr().cast()) }
     }
 
-    unsafe fn assert_held_any(l: *mut Self) {
-        unsafe { rust_percpu_rwsem_assert_held(l) }
+    unsafe fn assert_held_any(&self) {
+        unsafe { rust_percpu_rwsem_assert_held(self.as_ptr().cast()) }
     }
 }

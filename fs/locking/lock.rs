@@ -11,9 +11,12 @@ use core::ops::{Deref, DerefMut};
 /// Backend is a marker over them.
 ///
 /// # Safety
-/// lock() excludes every other holder until unlock(); a lock is taken and
-/// released through a *mut, from any thread. Callers pass an initialized
-/// lock, except to init(), and unlock() the state their lock() returned.
+/// lock() excludes every other holder until unlock(). All of its state is
+/// interior-mutable - C's locks are Opaques, ours atomics - so it's taken and
+/// released through a shared reference, from any thread. Callers pass an
+/// initialized lock, except to init() - for a C lock, a & to one zeroed
+/// isn't one: a zeroed kernel mutex's wait list is null - and unlock() the
+/// state their lock() returned.
 pub unsafe trait RawLock {
     /// What releasing it needs: the interrupt state spin_lock_irqsave()
     /// saved, the memalloc flags a Noio saved, or nothing.
@@ -21,21 +24,23 @@ pub unsafe trait RawLock {
     /// init()'s, for a lock that allocates: Infallible otherwise.
     type InitError;
 
-    /// In lockdep class @key, named @name; @l is pinned from here on.
+    /// In lockdep class @key, named @name, at @l - uninitialized or zeroed
+    /// memory, which nothing else reaches until it returns; pinned from here
+    /// on.
     unsafe fn init(l: *mut Self, name: &'static CStr, key: *mut c_void)
         -> Result<(), Self::InitError>;
 
-    unsafe fn lock(l: *mut Self) -> Self::GuardState;
+    unsafe fn lock(&self) -> Self::GuardState;
 
-    unsafe fn unlock(l: *mut Self, g: Self::GuardState);
+    unsafe fn unlock(&self, g: Self::GuardState);
 
     /// That it's held exclusively - lockdep_assert_held(), and
     /// lockdep_assert_held_write() for a lock readers can share: a reader
     /// holding it isn't enough.
-    unsafe fn assert_held(l: *mut Self);
+    unsafe fn assert_held(&self);
 
     /// For a lock that allocates; nothing holds it or will.
-    unsafe fn destroy(_l: *mut Self) {}
+    unsafe fn destroy(&self) {}
 }
 
 /// A RawLock that can be tried: taken only if no one holds it.
@@ -44,7 +49,7 @@ pub unsafe trait RawLock {
 /// try_lock() is RawLock's lock(), when it returns Some; when None, nothing's
 /// taken, and nothing's left to release.
 pub unsafe trait RawTryLock: RawLock {
-    unsafe fn try_lock(l: *mut Self) -> Option<Self::GuardState>;
+    unsafe fn try_lock(&self) -> Option<Self::GuardState>;
 }
 
 /// A RawLock that readers can share: RawLock's lock() and unlock() are the
@@ -54,10 +59,10 @@ pub unsafe trait RawTryLock: RawLock {
 /// lock_shared() excludes the writer, and only the writer, until
 /// unlock_shared(); as RawLock's otherwise.
 pub unsafe trait RawRwLock: RawLock {
-    unsafe fn lock_shared(l: *mut Self) -> Self::GuardState;
-    unsafe fn unlock_shared(l: *mut Self, g: Self::GuardState);
+    unsafe fn lock_shared(&self) -> Self::GuardState;
+    unsafe fn unlock_shared(&self, g: Self::GuardState);
     /// lockdep_assert_held(): by a reader or the writer.
-    unsafe fn assert_held_any(l: *mut Self);
+    unsafe fn assert_held_any(&self);
 }
 
 /// Lock @R, over two things: @G, protected - reached only with it held, its
@@ -68,7 +73,7 @@ pub unsafe trait RawRwLock: RawLock {
 /// #[c_anon("struct mutex lock; G g")].
 #[repr(C)]
 pub struct Lock<R: RawLock, G = (), P = ()> {
-    raw:       UnsafeCell<R>,
+    raw:       R,
     protected: UnsafeCell<G>,
     published: P,
     // pinned - a kernel lock mustn't move - in a PhantomData: a bare
@@ -93,7 +98,7 @@ impl<R: RawLock, G, P> Lock<R, G, P> {
         // If init() fails, nothing's written to drop.
         unsafe {
             ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
-                R::init(UnsafeCell::raw_get(&raw const (*slot).raw), name, key)?;
+                R::init(&raw mut (*slot).raw, name, key)?;
                 (&raw mut (*slot).protected).write(UnsafeCell::new(g));
                 (&raw mut (*slot).published).write(p);
                 Ok(())
@@ -108,11 +113,11 @@ impl<R: RawLock, G, P> Lock<R, G, P> {
     /// Once, before anything takes it; zeroed is a valid G and P. @key is as
     /// new()'s.
     pub unsafe fn init_zeroed(&self, name: &'static CStr, key: *mut c_void) -> Result<(), R::InitError> {
-        unsafe { R::init(self.raw.get(), name, key) }
+        unsafe { R::init(core::ptr::from_ref(&self.raw).cast_mut(), name, key) }
     }
 
     pub fn lock(&self) -> Guard<'_, R, G, P> {
-        let state = unsafe { R::lock(self.raw.get()) };
+        let state = unsafe { self.raw.lock() };
         Guard { lock: self, state: Some(state), _not_send: PhantomData }
     }
 
@@ -121,20 +126,20 @@ impl<R: RawLock, G, P> Lock<R, G, P> {
     where
         R: RawTryLock,
     {
-        let state = unsafe { R::try_lock(self.raw.get()) }?;
+        let state = unsafe { self.raw.try_lock() }?;
         Some(Guard { lock: self, state: Some(state), _not_send: PhantomData })
     }
 
     /// Held exclusively - by the writer, for a lock readers share.
     pub fn assert_held(&self) {
-        unsafe { R::assert_held(self.raw.get()) }
+        unsafe { self.raw.assert_held() }
     }
 
     /// Where the G is in a Lock: for C's container_of() from it.
     pub const PROTECTED_OFFSET: usize = core::mem::offset_of!(Self, protected);
 
-    pub(super) fn raw(&self) -> *mut R {
-        self.raw.get()
+    pub(super) fn raw(&self) -> &R {
+        &self.raw
     }
 }
 
@@ -148,7 +153,7 @@ impl<R: RawLock, G, P> Deref for Lock<R, G, P> {
 
 impl<R: RawRwLock, G: Sync, P> Lock<R, G, P> {
     pub fn read(&self) -> ReadGuard<'_, R, G, P> {
-        let state = unsafe { R::lock_shared(self.raw.get()) };
+        let state = unsafe { self.raw.lock_shared() };
         ReadGuard { lock: self, state: Some(state), _not_send: PhantomData }
     }
 
@@ -157,13 +162,13 @@ impl<R: RawRwLock, G: Sync, P> Lock<R, G, P> {
     }
 
     pub fn assert_held_any(&self) {
-        unsafe { R::assert_held_any(self.raw.get()) }
+        unsafe { self.raw.assert_held_any() }
     }
 }
 
 impl<R: RawLock, G, P> Drop for Lock<R, G, P> {
     fn drop(&mut self) {
-        unsafe { R::destroy(self.raw.get()) }
+        unsafe { self.raw.destroy() }
     }
 }
 
@@ -237,7 +242,7 @@ impl<R: RawLock, G, P> DerefMut for Guard<'_, R, G, P> {
 impl<R: RawLock, G, P> Drop for Guard<'_, R, G, P> {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
-            unsafe { R::unlock(self.lock.raw.get(), state) }
+            unsafe { self.lock.raw.unlock(state) }
         }
     }
 }
@@ -271,7 +276,7 @@ impl<R: RawRwLock, G, P> Deref for ReadGuard<'_, R, G, P> {
 impl<R: RawRwLock, G, P> Drop for ReadGuard<'_, R, G, P> {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
-            unsafe { R::unlock_shared(self.lock.raw.get(), state) }
+            unsafe { self.lock.raw.unlock_shared(state) }
         }
     }
 }
