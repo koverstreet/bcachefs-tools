@@ -101,6 +101,14 @@ pub fn add(t: &TransAttempt<'_, '_>, pos: &c::disk_accounting_pos, d: &[i64], gc
     })
 }
 
+/// Add @sectors to device @dev's cached sectors, in @trans - the gc copy's,
+/// with @gc: bch2_mod_dev_cached_sectors().
+pub fn mod_dev_cached_sectors(t: &TransAttempt<'_, '_>, dev: u32, sectors: i64, gc: bool)
+    -> Result<(), BchError>
+{
+    ret_to_result(unsafe { c::bch2_mod_dev_cached_sectors(t.raw(), dev, sectors, gc) })
+}
+
 pub fn nr_inodes(fs: &Fs) -> u64 {
     let mut nr_inodes = 0;
     mem_read(

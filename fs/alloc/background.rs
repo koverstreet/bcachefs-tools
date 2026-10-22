@@ -13,7 +13,7 @@ use crate::accounting::{bucket_data_type, data_type, data_type_from_u8, data_typ
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC};
-use crate::btree::iter::{TransAttempt, TransBkey};
+use crate::btree::iter::{TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
 use crate::fs::Fs;
@@ -46,16 +46,40 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// - not queued as an update: bch2_alloc_to_v4_mut().
     pub fn alloc_to_v4_mut(&self, k: BkeySC<'_>) -> Result<TransBkey<'a, 't, c::AllocV4>, BchError> {
         // SAFETY: @k is a key
-        let a = unsafe { c::bch2_alloc_to_v4_mut(self.raw(), k.into()) };
+        self.alloc_v4_in_mem(unsafe { c::bch2_alloc_to_v4_mut(self.raw(), k.into()) })
+    }
+
+    /// The alloc key of bucket @pos, queued as its update, to edit: the
+    /// update already queued, if there is one - so triggers on one bucket
+    /// each edit the same key: bch2_trans_start_alloc_update().
+    pub fn start_alloc_update(&self, pos: c::bpos, flags: UpdateTriggerFlags)
+        -> Result<TransBkey<'a, 't, c::AllocV4>, BchError>
+    {
+        let flags = c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits());
+        self.alloc_v4_in_mem(unsafe { c::bch2_trans_start_alloc_update(self.raw(), pos, flags) })
+    }
+
+    /// An alloc_v4 key C made in transaction memory, or an ERR_PTR.
+    fn alloc_v4_in_mem(&self, a: *mut c::bkey_i_alloc_v4) -> Result<TransBkey<'a, 't, c::AllocV4>, BchError> {
         let a = errptr_to_result(NonNull::new(a).expect("an alloc_v4 in trans mem, or an error"))?.as_ptr();
 
-        // Grown to all of an alloc_v4, or as long as @k if it's longer:
+        // bch2_alloc_to_v4_mut() grows it to all of an alloc_v4, or leaves it
+        // as long as it was if that's longer - and an update already queued
+        // is one it made, as C's callers count on:
         let u64s = u32::from(unsafe { (*a).k.u64s })
             .max((size_of::<BkeyI<c::AllocV4>>() / size_of::<u64>()) as u32);
         // SAFETY: an alloc_v4 key in our memory, with @u64s u64s of room
         let a = unsafe { TransBkey::from_raw_room(self, a.cast(), u64s) };
         // SAFETY: all of an alloc_v4
         Ok(unsafe { a.whole_unchecked() })
+    }
+
+    /// Device @ca's bucket counts and sectors, for a bucket going from @old
+    /// to @new: bch2_alloc_key_to_dev_counters().
+    pub fn alloc_key_to_dev_counters(&self, ca: &c::bch_dev, old: &c::AllocV4, new: &c::AllocV4,
+                                     flags: UpdateTriggerFlags) -> Result<(), BchError> {
+        let ca = core::ptr::from_ref(ca).cast_mut();
+        self.result(unsafe { c::bch2_alloc_key_to_dev_counters(self.raw(), ca, old, new, flags.bits()) })
     }
 }
 
