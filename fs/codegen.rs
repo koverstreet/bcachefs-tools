@@ -24,9 +24,9 @@ const KERNEL_HEADERS: &[&str] = &[
     "crypto/sha2.h",			// sha256(), siphash_old's string hash key
 ];
 
-/// Vendored library code bound, by path under fs/ - which the clang args have
-/// as an -I.
-const VENDORED_HEADERS: &[&str] = &["vendor/closure.h"];
+/// Headers under fs/ bound, by path - which the clang args have as an -I:
+/// vendored library code, and codegen.h's wrappers of kernel macros.
+const VENDORED_HEADERS: &[&str] = &["vendor/closure.h", "codegen.h"];
 
 /// Under the kernel include trees, what isn't blocklisted: uapi/ (see
 /// blocklist_dir()), and KERNEL_HEADERS.
@@ -44,6 +44,8 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "crc32c", "crc64_be", "sha256",
     "__genradix_ptr", "__genradix_ptr_alloc", "__genradix_iter_peek", "__genradix_free",
     "closure_get_not_zero", "closure_put",
+    "rust_page_folio", "rust_folio_page_idx", "rust_folio_size",
+    "rust_page_highmem", "rust_page_address",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",
                                   "xattr_handler"];

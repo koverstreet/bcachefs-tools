@@ -144,10 +144,10 @@ quiet_cmd_bch_codegen = CODEGEN $(obj)/rust
 	--blocklist '$(bcachefs-codegen-blocklist)' \
 	-- $(bcachefs-codegen-cflags)
 
-# The vendored header it binds is a prerequisite: if_changed ignores FORCE, so
-# an edit to it wouldn't otherwise regenerate the bindings. (Kernel-header edits
-# ride in via a cflags or tool change, or a full rebuild.)
-$(obj)/rust/bindings.rs: $(obj)/codegen $(src)/vendor/closure.h FORCE
+# The headers under fs/ it binds are prerequisites: if_changed ignores FORCE,
+# so an edit to one wouldn't otherwise regenerate the bindings. (Kernel-header
+# edits ride in via a cflags or tool change, or a full rebuild.)
+$(obj)/rust/bindings.rs: $(obj)/codegen $(src)/vendor/closure.h $(src)/codegen.h FORCE
 	$(call if_changed,bch_codegen)
 
 # extern.c, from the same run: bindgen's wrappers have no prototypes, and its
