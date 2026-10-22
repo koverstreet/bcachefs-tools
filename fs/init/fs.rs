@@ -315,10 +315,6 @@ impl Fs {
         ret_to_result(unsafe { c::bch2_fs_start(self.as_ptr()) })
     }
 
-    pub fn buckets_nouse_alloc(&self) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_buckets_nouse_alloc(self.as_ptr()) })
-    }
-
     /// Flush the journal: everything committed before the call is on disk when
     /// it returns.
     pub fn journal_flush(&self) -> Result<(), BchError> {

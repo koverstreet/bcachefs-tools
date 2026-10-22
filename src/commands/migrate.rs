@@ -150,9 +150,9 @@ fn bucket_to_sector(bucket_size: u32, bucket: u64) -> u64 {
 /// Mark a range of buckets as nouse.
 unsafe fn mark_nouse_range(ca: *const c::bch_dev, sector_from: u64, sector_to: u64) {
     let bucket_size = (*ca).mi.bucket_size as u32;
-    // SAFETY: bch2_buckets_nouse_alloc()'s: a bit per bucket, in words
+    // SAFETY: buckets_nouse_alloc()'s: a bit per bucket, in words
     let nouse = AtomicBitmap::from_words(std::slice::from_raw_parts(
-        (*ca).buckets_nouse.cast::<AtomicUsize>(),
+        (*ca).buckets_nouse.load(std::sync::atomic::Ordering::Acquire).cast::<AtomicUsize>(),
         ((*ca).mi.nbuckets as usize).div_ceil(usize::BITS as usize)));
     let mut b = sector_to_bucket(bucket_size, sector_from);
     loop {

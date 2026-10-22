@@ -383,7 +383,9 @@ pub struct bch_dev {
     pub buckets_gc: GenRadix<c::bucket>,
     pub bucket_gens: c::BucketGensArray,
     pub oldest_gen: *mut u8,
-    pub buckets_nouse: *mut c_ulong,
+    /* allocated once, by migrate, and read without a lock: atomic, C's plain */
+    #[c("unsigned long *buckets_nouse")]
+    pub buckets_nouse: core::sync::atomic::AtomicPtr<c_ulong>,
 
     pub bucket_backpointer_mismatch: c::bucket_bitmap,
     pub bucket_backpointer_empty: c::bucket_bitmap,

@@ -19,15 +19,18 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, fs_inconsistent, id};
 use crate::init::passes;
 use crate::opts::{data_type_str, prt_data_type};
-use crate::types::Le64;
+use crate::locking::Lock;
+use crate::types::{bits_to_longs, Le64};
 use crate::util::ffi::Opaque;
 use crate::util::log::LogMsg;
-use crate::util::percpu::Counters;
+use crate::util::percpu::{Counters, PerCpu};
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
 use core::cell::UnsafeCell;
-use core::ffi::{c_int, c_uint};
+use core::ffi::{c_int, c_uint, c_ulong};
+use core::mem::size_of;
+use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
 
 // ── Bucket addressing ────────────────────────────────────────────────────
@@ -816,6 +819,101 @@ pub fn bch2_trans_mark_dev_sbs_flags(c: &Opaque<c::bch_fs>, flags: c::btree_iter
 #[c_export]
 pub fn bch2_trans_mark_dev_sbs(c: &Opaque<c::bch_fs>) -> c_int {
     ret_to_c(Fs::from_c(c).trans_mark_dev_sbs(UpdateTriggerFlags::TRANSACTIONAL))
+}
+
+// ── Startup and shutdown ─────────────────────────────────────────────────
+
+impl Fs {
+    /// Every device's buckets_nouse, a zeroed bit per bucket: for migrate, to
+    /// mark the space it can't use. bch2_buckets_nouse_alloc().
+    pub fn buckets_nouse_alloc(&self) -> Result<(), BchError> {
+        for ca in self.members() {
+            assert!(ca.buckets_nouse.load(Ordering::Relaxed).is_null(), "buckets_nouse allocated twice");
+
+            let p = unsafe { c::rust_kvzalloc(bits_to_longs(ca.mi.nbuckets as usize) * size_of::<c_ulong>()) };
+            if p.is_null() {
+                return self.throw(bch_errcode::BCH_ERR_ENOMEM_buckets_nouse);
+            }
+            ca.buckets_nouse.store(p.cast(), Ordering::Release);
+        }
+        Ok(())
+    }
+}
+
+impl c::bch_dev {
+    /// Its buckets' generations at @nbuckets - as many of the old copied as
+    /// both have - and its bucket bitmaps with them; nothing changed on
+    /// failure. A resize is under state_lock: bch2_dev_buckets_resize().
+    pub fn buckets_resize(&self, nbuckets: u64) -> Result<(), BchError> {
+        let fs = self.fs();
+        // SAFETY: we're the writer - at init, or under state_lock
+        let old = unsafe { self.bucket_gens.get_head_locked() }.map(|(_, gens)| gens);
+
+        if old.is_some() {
+            Lock::from_c(&fs.state_lock).assert_held_any();
+            if !self.buckets_nouse.load(Ordering::Relaxed).is_null() {
+                return fs.throw(bch_errcode::BCH_ERR_no_resize_with_buckets_nouse);
+            }
+        }
+
+        let head = c::BucketGensHead {
+            first_bucket:         self.mi.first_bucket,
+            nbuckets_minus_first: (nbuckets - u64::from(self.mi.first_bucket)) as usize,
+        };
+        // SAFETY: as above
+        unsafe {
+            self.bucket_gens.rebuild_head(nbuckets as usize, head, |gens| {
+                if let Some(old) = old {
+                    let n = gens.len().min(old.len());
+                    gens[..n].copy_from_slice(&old[..n]);
+                }
+                self.bucket_backpointer_mismatch.resize(self, nbuckets)?;
+                self.bucket_backpointer_empty.resize(self, nbuckets)
+            })
+        }.or_else(|_| fs.throw(bch_errcode::BCH_ERR_ENOMEM_bucket_gens))?
+    }
+
+    /// Its usage counters and bucket generations, as it's set up:
+    /// bch2_dev_buckets_alloc().
+    pub fn buckets_alloc(&mut self) -> Result<(), BchError> {
+        match PerCpu::alloc() {
+            Ok(u)  => self.usage = u,
+            Err(_) => return self.fs().throw(bch_errcode::BCH_ERR_ENOMEM_usage_init),
+        }
+        self.buckets_resize(self.mi.nbuckets)
+    }
+
+    /// What buckets_alloc() and buckets_nouse_alloc() allocated, as it's
+    /// freed: bch2_dev_buckets_free().
+    pub fn buckets_free(&mut self) {
+        unsafe {
+            c::rust_kvfree(self.buckets_nouse.swap(core::ptr::null_mut(), Ordering::Relaxed).cast());
+            self.bucket_gens.free();
+        }
+        self.usage.free();
+    }
+}
+
+#[c_export]
+pub fn bch2_buckets_nouse_alloc(c: &Opaque<c::bch_fs>) -> c_int {
+    ret_to_c(Fs::from_c(c).buckets_nouse_alloc())
+}
+
+#[c_export]
+pub fn bch2_dev_buckets_resize(_c: &Opaque<c::bch_fs>, ca: &c::bch_dev, nbuckets: u64) -> c_int {
+    ret_to_c(ca.buckets_resize(nbuckets))
+}
+
+/// @ca is being set up: nothing else has it yet.
+#[c_export]
+pub fn bch2_dev_buckets_alloc(_c: &Opaque<c::bch_fs>, ca: &mut c::bch_dev) -> c_int {
+    ret_to_c(ca.buckets_alloc())
+}
+
+/// @ca is being freed: nothing else has it any more.
+#[c_export]
+pub fn bch2_dev_buckets_free(ca: &mut c::bch_dev) {
+    ca.buckets_free()
 }
 
 // ── Usage ────────────────────────────────────────────────────────────────
