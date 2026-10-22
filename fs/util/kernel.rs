@@ -109,6 +109,7 @@ pub fn num_online_cpus() -> u32 {
 #[repr(i32)]
 pub enum Capability {
     Fowner = 3,
+    SysAdmin = 21,
 }
 
 /// Whether the current task has @cap: as capable(). Always, in userspace.

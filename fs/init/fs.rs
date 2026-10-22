@@ -826,6 +826,46 @@ impl Drop for WriteRef<'_> {
     }
 }
 
+/// A ref keeping @fs from being stopped: bch2_fs_stop() waits for these to be
+/// put before it tears the filesystem down. Dropping it puts it.
+#[cfg(kernel)]
+pub struct RoRef<'f>(&'f Fs);
+
+#[cfg(kernel)]
+impl Fs {
+    /// None once the filesystem's stopping.
+    pub fn ro_ref_tryget(&self) -> Option<RoRef<'_>> {
+        if self.flag(c::bch_fs_flags::BCH_FS_stopping) {
+            return None;
+        }
+        unsafe { c::rust_refcount_inc_not_zero(&raw mut (*self.as_ptr()).ro_ref) }
+            .then(|| RoRef(self))
+    }
+}
+
+#[cfg(kernel)]
+impl core::ops::Deref for RoRef<'_> {
+    type Target = Fs;
+
+    fn deref(&self) -> &Fs {
+        self.0
+    }
+}
+
+#[cfg(kernel)]
+impl Drop for RoRef<'_> {
+    fn drop(&mut self) {
+        let fs = self.0.as_ptr();
+        // SAFETY: the waitqueue's live while there's a ref to wait for
+        unsafe {
+            if c::refcount_dec_and_test(&raw mut (*fs).ro_ref) {
+                c::__wake_up(&raw mut (*fs).ro_ref_wait, kernel::task::TASK_NORMAL, 1,
+                             core::ptr::null_mut());
+            }
+        }
+    }
+}
+
 // Standalone helpers — pure Rust reimplementations of C static inlines.
 
 /// Build a hashed writepoint specifier (sets low bit to mark as hashed).

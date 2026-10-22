@@ -53,6 +53,12 @@ static inline unsigned long rust_folio_page_idx(struct folio *folio, struct page
 	return folio_page_idx(folio, page);
 }
 
+/* a static inline */
+static inline bool rust_refcount_inc_not_zero(refcount_t *r)
+{
+	return refcount_inc_not_zero(r);
+}
+
 /* a static inline: here rather than all of mm.h unblocklisted for it */
 static inline size_t rust_folio_size(struct folio *folio)
 {

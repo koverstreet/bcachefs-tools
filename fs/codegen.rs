@@ -46,6 +46,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "closure_get_not_zero", "closure_put",
     "rust_page_folio", "rust_folio_page_idx", "rust_folio_size",
     "rust_page_highmem", "rust_page_address",
+    "rust_refcount_inc_not_zero",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",
                                   "xattr_handler"];
