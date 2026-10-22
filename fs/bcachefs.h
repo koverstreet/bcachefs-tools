@@ -90,7 +90,6 @@
 #include "locking/seqmutex.h"
 #include "util/time_stats.h"
 #include "util/darray.h"
-#include "util/thread_with_file_gen.h"
 #include "util/util.h"
 
 #include "alloc/accounting_gen.h"

@@ -97,6 +97,8 @@ pub mod debug {
 #[path = "fs/dirent.rs"]       pub mod dirent;
 #[path = "init/fs.rs"]          pub mod fs;
 pub mod init {
+    #[cfg(kernel)]
+    #[path = "chardev.rs"] pub mod chardev;
     #[path = "damage.rs"] pub mod damage;
     #[path = "error.rs"] pub mod error;
     #[path = "passes.rs"] pub mod passes;
@@ -142,6 +144,7 @@ pub mod util;
 pub mod vfs {
     pub mod dentry;
     pub mod inode;
+    pub mod status_fd;
 }
 #[path = "fs/xattr.rs"]        pub mod xattr;
 pub mod data {

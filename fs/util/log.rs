@@ -98,12 +98,12 @@ pub fn log_opts(opts: &c::bch_opts, level: LogLevel, msg: &dyn ToText) {
     if opts.stdio != 0 {
         let mut buf = Printbuf::new();
         msg.to_text(&mut buf);
-        let b = buf.as_bytes();
         // SAFETY: @opts' stdio is the fsck thread's redirect, live for as
         // long as its opts are
-        unsafe {
-            c::bch2_stdio_redirect_write(opts.stdio as *mut c::stdio_redirect, true, b.as_ptr().cast(), b.len())
+        let stdio = unsafe {
+            crate::util::thread_with_file::StdioRedirect::from_c(opts.stdio as *mut c::stdio_redirect)
         };
+        let _ = stdio.write(true, buf.as_bytes());
         return;
     }
     #[cfg(not(kernel))]

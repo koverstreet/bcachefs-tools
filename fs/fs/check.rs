@@ -840,3 +840,245 @@ impl Default for SnapshotsSeen {
         Self::new()
     }
 }
+
+/// BCH_IOCTL_FSCK_OFFLINE and BCH_IOCTL_FSCK_ONLINE: fsck in the kernel, for
+/// the bcachefs fsck command. Each runs in a kthread behind a stdio file, its
+/// output read from the fd and its questions answered by writing to it; what
+/// it returns - an fsck(8) exit status, or an error - is what closing the fd
+/// returns.
+#[cfg(kernel)]
+pub mod ioctl {
+    use super::*;
+    use crate::errcode::errptr_to_result;
+    use crate::fs::{OpenFs, RoRef};
+    use crate::init::passes::{bch2_recovery_passes, passes_match, run_passes};
+    use crate::util::ffi::{c_char, Opaque};
+    use crate::util::kernel::{capable, Capability};
+    use crate::util::thread_with_file::{StdioRedirect, ThreadWithFile};
+    use crate::util::vstructs::Head;
+    use crate::{opt_defined, opt_set};
+    use core::mem::size_of;
+    use core::ptr::NonNull;
+    use cstruct_macros::c_export;
+    use kernel::ffi::{c_int, c_long};
+    use kernel::uaccess::{UserPtr, UserSlice};
+
+    /// C's darray_const_str of strings from strndup_user(): kfree()d, and the
+    /// darray, when dropped.
+    #[derive(Default)]
+    struct UserStrs(c::darray_const_str);
+
+    impl UserStrs {
+        fn push(&mut self, s: NonNull<c_char>) -> Result<(), BchError> {
+            // SAFETY: ours, kvmalloc()'d or empty
+            let mut v = unsafe { crate::util::alloc::DArrayLoan::new(&mut self.0) };
+            v.push(s.as_ptr().cast_const(), GFP_KERNEL).map_err(|e| {
+                unsafe { c::kfree(s.as_ptr().cast()) };
+                e.into()
+            })
+        }
+    }
+
+    impl Drop for UserStrs {
+        fn drop(&mut self) {
+            // SAFETY: each from strndup_user()
+            for i in 0..self.0.nr {
+                unsafe { c::kfree((*self.0.data.add(i)).cast()) };
+            }
+            unsafe { crate::util::alloc::darray_exit(&mut self.0) };
+        }
+    }
+
+    fn strndup_user(addr: u64, max: c_long) -> Result<NonNull<c_char>, BchError> {
+        let s = unsafe { c::strndup_user(addr as usize as *const c_char, max) };
+        errptr_to_result(NonNull::new(s).expect("a string, or an error"))
+    }
+
+    fn parse_mount_opts_user(addr: u64, opts: &mut c::bch_opts) -> Result<(), BchError> {
+        let optstr = strndup_user(addr, 1 << 16)?;
+        let ret = unsafe {
+            c::bch2_parse_mount_opts(core::ptr::null_mut(), opts, core::ptr::null_mut(),
+                                     optstr.as_ptr(), false)
+        };
+        unsafe { c::kfree(optstr.as_ptr().cast()) };
+        crate::errcode::ret_to_result_void(ret)
+    }
+
+    fn fsck_offline(user: UserPtr) -> Result<c_int, BchError> {
+        type Args = c::bch_ioctl_fsck_offline;
+        let arg: Head<Args> = UserSlice::new(user, size_of::<Head<Args>>()).reader().read()?;
+
+        if arg.flags != 0 {
+            return Err(bch_errcode::BCH_ERR_EINVAL_fsck_offline_bad_flags.into());
+        }
+
+        if !capable(Capability::SysAdmin) {
+            return Err(c::EPERM.into());
+        }
+
+        let mut opts = c::bch_opts::default();
+        if arg.opts != 0 {
+            parse_mount_opts_user(arg.opts, &mut opts)?;
+        }
+
+        let mut devs = UserStrs::default();
+        let user_devs = user.wrapping_byte_add(size_of::<Head<Args>>());
+        for i in 0..arg.nr_devs as usize {
+            let dev: u64 = UserSlice::new(user_devs.wrapping_byte_add(i * size_of::<u64>()),
+                                          size_of::<u64>()).reader().read()?;
+            devs.push(strndup_user(dev, c::PATH_MAX as c_long)?)?;
+        }
+
+        let thr = ThreadWithFile::new_stdio(Ok(()))?;
+
+        opt_set!(opts, stdio, thr.stdio().as_c() as u64);
+        opt_set!(opts, read_only, 1);
+        opt_set!(opts, ratelimit_errors, 0);
+        // We need request_key() to be called before we punt to kthread:
+        opt_set!(opts, nostart, 1);
+
+        let fs = unsafe { c::bch2_fs_open(&mut devs.0, &mut opts, core::ptr::null()) };
+        let fs = errptr_to_result(NonNull::new(fs).expect("a filesystem, or an error"))
+            .map(|fs| unsafe { OpenFs::from_raw(fs.cast()) });
+
+        if let Ok(fs) = &fs {
+            if fs.opts.errors == c::bch_error_actions::BCH_ON_ERROR_panic.0 as u8 {
+                unsafe { (*fs.as_ptr()).opts.errors = c::bch_error_actions::BCH_ON_ERROR_ro.0 as u8 };
+            }
+        }
+
+        thr.run_stdio(move |(), stdio| fsck_offline_thread(fs, stdio))
+            .inspect_err(|e| kernel::pr_err!("ret {}\n", e.msg()))
+    }
+
+    fn fsck_offline_thread(fs: Result<OpenFs, BchError>, stdio: &StdioRedirect) -> c_int {
+        let fs = match fs {
+            Ok(fs) => fs,
+            Err(e) => return -e.raw(),
+        };
+
+        unsafe { (*fs.as_ptr()).recovery_task = c::get_current() };
+
+        let mut buf = Printbuf::new();
+        let ret = match crate::errcode::ret_to_result_void(unsafe { c::bch2_fs_start(fs.as_ptr()) }) {
+            Err(e) => {
+                prt!(&mut buf, "{}: error starting filesystem: {}\n",
+                     fs.name().to_str().unwrap_or("?"), e.msg());
+                // What we return is an fsck(8) exit status, not an errcode -
+                // see bch2_fs_fsck_errcode(). A filesystem we couldn't start
+                // is an operational error, same as the online path reports
+                // for recovery passes that fail outright.
+                8
+            }
+            Ok(()) => unsafe { c::bch2_fs_fsck_errcode(fs.as_ptr(), buf.as_raw()) },
+        };
+        if ret != 0 {
+            let _ = stdio.write(false, buf.as_bytes());
+        }
+
+        fs.exit();
+        ret
+    }
+
+    #[c_export]
+    pub fn bch2_ioctl_fsck_offline(user: *mut Head<c::bch_ioctl_fsck_offline>) -> c_long {
+        match fsck_offline(UserPtr::from_ptr(user.cast())) {
+            Ok(fd)  => fd as c_long,
+            Err(e)  => -e.raw() as c_long,
+        }
+    }
+
+    fn fsck_online(fs: &Fs, arg: c::bch_ioctl_fsck_online) -> Result<c_int, BchError> {
+        if arg.flags != 0 {
+            return fs.throw(bch_errcode::BCH_ERR_EINVAL_fsck_online_bad_flags);
+        }
+
+        if !capable(Capability::SysAdmin) {
+            return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin);
+        }
+
+        let mut opts = c::bch_opts::default();
+        if arg.opts != 0 {
+            parse_mount_opts_user(arg.opts, &mut opts)?;
+        }
+
+        let fs_ref = fs.ro_ref_tryget().ok_or(BchError::from(c::EROFS))?;
+        // SAFETY: a ro_ref keeps the filesystem: bch2_fs_stop() waits for it
+        let fs_ref: RoRef<'static> = unsafe { core::mem::transmute(fs_ref) };
+
+        let thr = ThreadWithFile::new_stdio(Ok(()))?;
+        crate::bch_err_fn!(fs, thr.run_stdio(move |(), stdio| fsck_online_thread(fs_ref, opts, stdio)))
+    }
+
+    fn fsck_online_thread(fs: RoRef<'_>, opts: c::bch_opts, stdio: &StdioRedirect) -> c_int {
+        let mut buf = Printbuf::new();
+
+        let online = passes_match(c::PASS_ONLINE);
+        let mut passes = passes_match(c::PASS_FSCK) & online;
+
+        if opt_defined!(opts, recovery_passes) {
+            passes = opts.recovery_passes;
+
+            if passes & online != passes {
+                prt!(&mut buf, "Cannot run passes ");
+                // SAFETY: NULL terminated
+                unsafe { buf.prt_bitflags(bch2_recovery_passes.as_ptr().cast(), passes & !online) };
+                prt!(&mut buf, " online\n");
+                let _ = stdio.write(false, buf.as_bytes());
+                return -fs.err(bch_errcode::BCH_ERR_EINVAL_fsck_online_bad_passes).raw();
+            }
+        }
+
+        let mut ret = Err(BchError::from(c::EAGAIN));
+        if let Some(_run) = fs.recovery.run_lock.try_lock() {
+            let c = fs.as_ptr();
+            // SAFETY: as C's, under run_lock: online fsck's, while it runs
+            unsafe {
+                (*c).stdio_filter = c::get_current();
+                (*c).stdio = stdio.as_c();
+            }
+
+            // XXX: can we figure out a way to do this without mucking with c->opts?
+            let old_fix_errors = fs.opts.fix_errors;
+            unsafe {
+                (*c).opts.fix_errors = if opt_defined!(opts, fix_errors) {
+                    opts.fix_errors
+                } else {
+                    c::fsck_err_opts::FSCK_FIX_ask as u8
+                };
+                (*c).opts.fsck = 1;
+            }
+            fs.set_flag(c::bch_fs_flags::BCH_FS_in_fsck);
+
+            ret = run_passes(&fs, passes, true)
+                .map(|()| unsafe { c::bch2_fs_fsck_errcode(c, buf.as_raw()) });
+
+            fs.clear_flag(c::bch_fs_flags::BCH_FS_in_fsck);
+
+            unsafe {
+                (*c).stdio = core::ptr::null_mut();
+                (*c).stdio_filter = core::ptr::null_mut();
+                (*c).opts.fix_errors = old_fix_errors;
+            }
+        }
+
+        let ret = ret.unwrap_or_else(|e| {
+            prt!(&mut buf, "{}: error running recovery passes: {}\n",
+                 fs.name().to_str().unwrap_or("?"), e.msg());
+            8
+        });
+
+        if !buf.as_bytes().is_empty() {
+            let _ = stdio.write(false, buf.as_bytes());
+        }
+        ret
+    }
+
+    #[c_export]
+    pub fn bch2_ioctl_fsck_online(c: &Opaque<c::bch_fs>, arg: c::bch_ioctl_fsck_online) -> c_long {
+        match fsck_online(Fs::from_c(c), arg) {
+            Ok(fd)  => fd as c_long,
+            Err(e)  => -e.raw() as c_long,
+        }
+    }
+}

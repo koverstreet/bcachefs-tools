@@ -108,6 +108,8 @@ c_extern! {
                                 pred: c::move_pred_fn, arg: *mut c_void, btree_id: c::btree_id,
                                 level: c_uint) -> c_int;
     pub fn bch2_fs_moving_ctxts_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
+    pub fn bch2_data_job(c: *mut c::bch_fs, stats: *mut c::bch_move_stats,
+                         op: *mut c::bch_ioctl_data) -> c_int;
 }
 
 impl Fs {

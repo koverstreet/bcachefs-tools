@@ -10,7 +10,7 @@
 //! c_const!, c_typedef!, c_xmacro!, c_bitmask!, c_verbatim!.
 //!
 //! And C's container types, which the types hold: DArray, GenRadix, Fifo,
-//! MinHeap - and c_opaque!, for the types only C's .c files define.
+//! MinHeap - and c_opaque!, for the types C has only behind pointers.
 //!
 //! Only rustc knows a Rust type's layout, and only for the target it compiles
 //! for - so the C is written from what the target build of this crate says.
@@ -564,8 +564,10 @@ macro_rules! c_default {
 }
 pub(crate) use c_default;
 
-/// A type C declares, `struct NAME;`, and defines only in a .c file: Rust
-/// sees it only behind pointers. Not Send, Sync or Unpin - C's to say.
+/// A type C declares, `struct NAME;`, and has only behind pointers: one a .c
+/// file defines - Rust sees it only behind pointers too - or one Rust does,
+/// in a module of its own, that C passes around. Not Send, Sync or Unpin -
+/// the defining side's to say.
 macro_rules! c_opaque {
     ($name:ident) => {
         #[repr(C)]

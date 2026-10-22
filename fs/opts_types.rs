@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::util::vstructs::Head;
 use crate::cstructs::c::BCH_INODE_OPTS;
-use crate::types::{bits_to_longs, c_opaque, c_default};
+use crate::types::{bits_to_longs, c_default};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong};
 use cstruct_macros::{CStruct, c_const, c_enum, c_extern, c_xmacro, TypeInfo};
@@ -677,8 +677,6 @@ macro_rules! __bch_opts_1 {
 }
 BCH_OPTS!(__bch_opts_0 [#[c_anon("")] pub __bch_opts_align: [u32; 0],]);
 
-c_opaque!(bch_status_fd);
-
 #[repr(C)]
 #[derive(CStruct)]
 pub struct bch2_opts_parse {
@@ -696,12 +694,11 @@ pub struct bch2_opts_parse {
 
     /*
      * The status channel, when the caller asked for one with "status_fd" -
-     * see bch2_fs_parse_param(). @status is freed from the file's .release
-     * method, so we hold a reference to the file of our own for as long as
-     * the filesystem might still print there, and drop it in
+     * see bch2_fs_parse_param() and vfs/status_fd.rs. The file's .release
+     * frees the channel, so we hold a reference to the file of our own for
+     * as long as the filesystem might still print there, and drop it in
      * bch2_fs_context_free().
      */
-    pub status: *mut c::bch_status_fd,
     pub status_file: *mut c::file,
 
     /*

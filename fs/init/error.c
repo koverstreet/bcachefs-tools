@@ -13,7 +13,9 @@
 #include "init/passes.h"
 #include "init/fs.h"
 
-#include "util/thread_with_file.h"
+#ifdef __KERNEL__
+#include "util/thread_with_file_gen.h"
+#endif
 
 #define FSCK_ERR_RATELIMIT_NR	10
 

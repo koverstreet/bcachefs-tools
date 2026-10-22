@@ -120,7 +120,6 @@
 #[path = "util/rcu_pending_types.rs"] pub mod util_rcu_pending_types;
 #[path = "util/siphash_types.rs"] pub mod util_siphash_types;
 #[path = "util/six_types.rs"] pub mod util_six_types;
-#[path = "util/thread_with_file_defs.rs"] pub mod util_thread_with_file_defs;
 #[path = "util/thread_with_file_types.rs"] pub mod util_thread_with_file_types;
 #[path = "util/time_stats_types.rs"] pub mod util_time_stats_types;
 #[path = "util/two_state_shared_lock_types.rs"] pub mod util_two_state_shared_lock_types;
@@ -303,7 +302,6 @@ pub mod c {
     pub use crate::locking::seqmutex::seqmutex;
     pub use super::util_siphash_types::*;
     pub use super::util_six_types::*;
-    pub use super::util_thread_with_file_defs::*;
     pub use super::util_thread_with_file_types::*;
     pub use super::util_time_stats_types::*;
     pub use super::util_two_state_shared_lock_types::*;

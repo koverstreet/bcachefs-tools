@@ -16,7 +16,4 @@
 #include "fs/check_nlinks_gen.h"
 #include "fs/fix_reflink_p_gen.h"
 
-long bch2_ioctl_fsck_offline(struct bch_ioctl_fsck_offline __user *);
-long bch2_ioctl_fsck_online(struct bch_fs *, struct bch_ioctl_fsck_online);
-
 #endif /* _BCACHEFS_FSCK_H */

@@ -550,6 +550,10 @@ pub unsafe fn bch2_fs_free_mem(c: *mut c::bch_fs) {
 /// bch2_fs_exit() - stop it, and put the ref - on exit() or drop.
 pub struct OpenFs(core::ptr::NonNull<Fs>);
 
+// SAFETY: a &Fs is every thread's, and any may close it: offline fsck opens
+// it in the ioctl and closes it in its kthread
+unsafe impl Send for OpenFs {}
+
 impl OpenFs {
     /// # Safety
     /// @fs is from bch2_fs_open(), and this takes over its ref.

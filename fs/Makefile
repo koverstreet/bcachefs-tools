@@ -141,7 +141,6 @@ bcachefs-y		:=			\
 	util/rcu_pending.o			\
 	util/six.o				\
 	util/time_stats.o			\
-	util/thread_with_file.o			\
 	util/two_state_shared_lock.o		\
 	util/util.o				\
 	util/varint.o				\

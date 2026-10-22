@@ -78,7 +78,9 @@
 #include "util/clock.h"
 #include "util/enumerated_ref.h"
 #include "util/futex_gen.h"
-#include "util/thread_with_file.h"
+#ifdef __KERNEL__
+#include "util/thread_with_file_gen.h"
+#endif
 
 #include <linux/backing-dev.h>
 #include <linux/blkdev.h>

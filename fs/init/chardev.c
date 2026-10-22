@@ -22,10 +22,9 @@
 #include "sb/io.h"
 
 #include "init/chardev.h"
+#include "init/chardev_gen.h"
 #include "init/dev.h"
 #include "init/passes.h"
-
-#include "util/thread_with_file.h"
 
 #include <linux/cdev.h>
 #include <linux/device.h>
@@ -318,119 +317,6 @@ static long bch2_ioctl_disk_set_state_v2(struct bch_fs *c,
 
 	int ret = bch2_dev_set_state(c, ca, arg.new_state, arg.flags, &err);
 	return bch2_copy_ioctl_err_msg(&arg.err, &err, ret);
-}
-
-struct bch_data_ctx {
-	struct thread_with_file		thr;
-
-	struct bch_fs			*c;
-	struct bch_ioctl_data		arg;
-	struct bch_move_stats		stats;
-};
-
-static int bch2_data_thread(void *arg)
-{
-	struct bch_data_ctx *ctx = container_of(arg, struct bch_data_ctx, thr);
-
-	ctx->thr.ret = bch2_data_job(ctx->c, &ctx->stats, &ctx->arg);
-	if (ctx->thr.ret == -BCH_ERR_device_offline)
-		ctx->stats.ret = BCH_IOCTL_DATA_EVENT_RET_device_offline;
-	else {
-		ctx->stats.ret = BCH_IOCTL_DATA_EVENT_RET_done;
-		ctx->stats.data_type = (int) DATA_PROGRESS_DATA_TYPE_done;
-	}
-	enumerated_ref_put(&ctx->c->writes, BCH_WRITE_REF_ioctl_data);
-	return 0;
-}
-
-static int bch2_data_job_release(struct inode *inode, struct file *file)
-{
-	struct bch_data_ctx *ctx = container_of(file->private_data, struct bch_data_ctx, thr);
-
-	bch2_thread_with_file_exit(&ctx->thr);
-	kfree(ctx);
-	return 0;
-}
-
-static ssize_t bch2_data_job_read(struct file *file, char __user *buf,
-				  size_t len, loff_t *ppos)
-{
-	struct bch_data_ctx *ctx = container_of(file->private_data, struct bch_data_ctx, thr);
-	struct bch_fs *c = ctx->c;
-	struct bch_ioctl_data_event e = {
-		.type				= BCH_DATA_EVENT_PROGRESS,
-		.ret				= ctx->stats.ret,
-		.p.data_type			= ctx->stats.data_type,
-		.p.btree_id			= ctx->stats.pos.btree,
-		.p.pos				= ctx->stats.pos.pos,
-		.p.sectors_done			= atomic64_read(&ctx->stats.sectors_seen),
-		.p.sectors_error_corrected	= atomic64_read(&ctx->stats.sectors_error_corrected),
-		.p.sectors_error_uncorrected	= atomic64_read(&ctx->stats.sectors_error_uncorrected),
-	};
-
-	if (ctx->arg.op == BCH_DATA_OP_scrub) {
-		CLASS(bch2_dev_tryget_noerror, ca)(c, ctx->arg.scrub.dev);
-		if (ca) {
-			struct bch_dev_usage_full u;
-			bch2_dev_usage_full_read_fast(ca, &u);
-			for (unsigned i = BCH_DATA_btree; i < ARRAY_SIZE(u.d); i++)
-				if (ctx->arg.scrub.data_types & BIT(i))
-					e.p.sectors_total += u.d[i].sectors;
-		}
-	} else {
-		e.p.sectors_total	= bch2_fs_usage_read_short(c).used;
-	}
-
-	if (len < sizeof(e))
-		return bch_err_throw(c, EINVAL_ioctl_data_read_short_buf);
-
-	return copy_to_user_errcode(buf, &e, sizeof(e)) ?: sizeof(e);
-}
-
-static const struct file_operations bcachefs_data_ops = {
-	.release	= bch2_data_job_release,
-	.read		= bch2_data_job_read,
-};
-
-static long bch2_ioctl_data(struct bch_fs *c,
-			    struct bch_ioctl_data arg)
-{
-	struct bch_data_ctx *ctx;
-	int ret;
-
-	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_ioctl_data))
-		return -EROFS;
-
-	if (!capable(CAP_SYS_ADMIN)) {
-		ret = bch_err_throw(c, EPERM_non_admin);
-		goto put_ref;
-	}
-
-	if (arg.op >= BCH_DATA_OP_NR || arg.flags) {
-		ret = bch_err_throw(c, EINVAL_ioctl_data_bad_op);
-		goto put_ref;
-	}
-
-	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
-	if (!ctx) {
-		ret = -ENOMEM;
-		goto put_ref;
-	}
-
-	ctx->c = c;
-	ctx->arg = arg;
-
-	ret = bch2_run_thread_with_file(&ctx->thr,
-			&bcachefs_data_ops,
-			bch2_data_thread);
-	if (ret < 0)
-		goto cleanup;
-	return ret;
-cleanup:
-	kfree(ctx);
-put_ref:
-	enumerated_ref_put(&c->writes, BCH_WRITE_REF_ioctl_data);
-	return ret;
 }
 
 /*
