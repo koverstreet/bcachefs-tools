@@ -82,6 +82,36 @@ impl SbFieldOps for Section {
     fn entries_end(b: &[u8]) -> Option<usize> {
         entries_end::<Entry>(b, SECTION_HEAD, |_| true)
     }
+
+    /// downgrade_entries(): what this version knows.
+    fn from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        // have_stripes() reads the btree roots
+        if !fs.flag(c::bch_fs_flags::BCH_FS_btree_running) {
+            return Ok(());
+        }
+
+        let table = downgrade_entries(c::BCH_VERSION_MAJOR(sb.sb().version.get().into()),
+                                      fs.sb.version_incompat.get().into(), fs.have_stripes())?;
+
+        let bytes = (SECTION_HEAD + table.len()).next_multiple_of(size_of::<u64>());
+
+        // Larger than ours, it's a newer version's: what downgrading from
+        // that version costs, which only it knows and an older version reads
+        // when it's downgraded to. Rewriting it from our smaller table would
+        // lose the entries for the versions past ours - so a table of ours
+        // that shrank isn't written either, until the section is gone.
+        if sb.field::<Section>().is_some_and(|d| d.as_bytes().len() > bytes) {
+            return Ok(());
+        }
+
+        let mut sb = fs.sb_resize(sb);
+        let d = sb.field_resize::<Section>((bytes / size_of::<u64>()) as u32)
+            .ok_or_else(|| fs.err(bch_errcode::BCH_ERR_ENOSPC_sb_downgrade))?;
+        let d = &mut bytes_of_mut(d)[SECTION_HEAD..];
+        d[..table.len()].copy_from_slice(&table);
+        d[table.len()..].fill(0);
+        Ok(())
+    }
 }
 
 // ── The upgrade and downgrade tables ─────────────────────────────────────────
@@ -339,35 +369,3 @@ fn downgrade_entries(major: u64, version_incompat: u32, have_stripes: bool) -> R
     Ok(table)
 }
 
-impl Fs {
-    /// The downgrade section, from downgrade_entries() - for a superblock
-    /// write.
-    pub(crate) fn sb_downgrade_update(&self, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-        // have_stripes() reads the btree roots
-        if !self.flag(c::bch_fs_flags::BCH_FS_btree_running) {
-            return Ok(());
-        }
-
-        let table = downgrade_entries(c::BCH_VERSION_MAJOR(sb.sb().version.get().into()),
-                                      self.sb.version_incompat.get().into(), self.have_stripes())?;
-
-        let bytes = (SECTION_HEAD + table.len()).next_multiple_of(size_of::<u64>());
-
-        // Larger than ours, it's a newer version's: what downgrading from
-        // that version costs, which only it knows and an older version reads
-        // when it's downgraded to. Rewriting it from our smaller table would
-        // lose the entries for the versions past ours - so a table of ours
-        // that shrank isn't written either, until the section is gone.
-        if sb.field::<Section>().is_some_and(|d| d.as_bytes().len() > bytes) {
-            return Ok(());
-        }
-
-        let mut sb = self.sb_resize(sb);
-        let d = sb.field_resize::<Section>((bytes / size_of::<u64>()) as u32)
-            .ok_or_else(|| self.err(bch_errcode::BCH_ERR_ENOSPC_sb_downgrade))?;
-        let d = &mut bytes_of_mut(d)[SECTION_HEAD..];
-        d[..table.len()].copy_from_slice(&table);
-        d[table.len()..].fill(0);
-        Ok(())
-    }
-}

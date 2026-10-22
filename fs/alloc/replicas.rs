@@ -692,6 +692,18 @@ impl SbFieldOps for c::bch_sb_field_replicas {
         section_to_text(out, v1_entries(f.as_bytes()))
     }
 
+    /// The table, from this section or replicas_v0: at open - after, it
+    /// would lose the refs.
+    fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        assert!(!fs.flag(c::bch_fs_flags::BCH_FS_started), "replicas table rebuilt with refs held");
+
+        let mut new = ReplicasCpu::from_entries(|| sb_entries(sb.sb()), |t| !fs.replicas_obsolete(t))
+            .map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_cpu_replicas))?;
+        new.sort();
+        *fs.replicas.write() = new;
+        Ok(())
+    }
+
     fn entries_end(b: &[u8]) -> Option<usize> {
         entries_end::<Entry>(b, SECTION_HEAD, |e| e.data_type != 0)
     }
@@ -947,17 +959,6 @@ pub fn bch2_replicas_gc_reffed(c: &Opaque<c::bch_fs>) -> c_int {
 #[c_export]
 pub fn bch2_replicas_gc_accounted(c: &Opaque<c::bch_fs>) -> c_int {
     ret_to_c(Fs::from_c(c).replicas_gc_accounted())
-}
-
-/// The table, from the superblock: at open - after, it would lose the refs.
-pub(crate) fn sb_replicas_to_cpu(fs: &Fs, sb: &SbLockGuard<'_>) -> Result<(), BchError> {
-    assert!(!fs.flag(c::bch_fs_flags::BCH_FS_started), "replicas table rebuilt with refs held");
-
-    let mut new = ReplicasCpu::from_entries(|| sb_entries(sb.sb()), |t| !fs.replicas_obsolete(t))
-        .map_err(|_| BchError::from(bch_errcode::BCH_ERR_ENOMEM_cpu_replicas))?;
-    new.sort();
-    *fs.replicas.write() = new;
-    Ok(())
 }
 
 #[c_export]

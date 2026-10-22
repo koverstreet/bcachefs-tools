@@ -175,6 +175,9 @@ impl<F: ArmOf<c::bch_sb_field, Tag = u32> + ArmRef + ?Sized> SbField for F {}
 /// and a printer prints one that isn't - the error saying it isn't does. One
 /// too short to be read as its type fails validation before validate() is
 /// called, and isn't printed.
+///
+/// And which way it's kept in step with memory: to_cpu() where the superblock
+/// is the master copy, from_cpu() where memory is.
 pub trait SbFieldOps: SbField + InState {
     fn validate(_sb: &bch_sb<Unvalidated>, _f: &Self::In<Unvalidated>, _flags: c::bch_validate_flags,
                 _err: &mut Printbuf) -> Result<(), BchError> {
@@ -182,6 +185,18 @@ pub trait SbFieldOps: SbField + InState {
     }
 
     fn to_text(_out: &mut Printbuf, _fs: Option<&Fs>, _sb: &bch_sb<Unvalidated>, _f: &Self::In<Unvalidated>) {}
+
+    /// What memory has of the section, built from it.
+    fn to_cpu(_fs: &Fs, _sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        Ok(())
+    }
+
+    /// The section written from memory, at a superblock write: counted there,
+    /// too often to go through sb_lock, or regenerated from what this version
+    /// knows.
+    fn from_cpu(_fs: &Fs, _sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        Ok(())
+    }
 
     /// Where the whole entries of the section in @b - its bytes, its header's
     /// included - end: past that, rounded up to a u64, is a partial entry,
@@ -2413,13 +2428,13 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
     }
     s.set_big_endian(cfg!(target_endian = "big"));
 
-    crate::sb::counters::sb_counters_from_cpu(fs, sb);
-    crate::sb::members::sb_members_from_cpu(fs, sb);
+    c::bch_sb_field_counters::from_cpu(fs, sb)?;
+    c::bch_sb_field_members_v2::from_cpu(fs, sb)?;
     // as C: neither failing stops the write
     let _ = fs.sb_resize(sb).members_cpy_v2_v1();
-    crate::sb::errors::sb_errors_from_cpu(fs, sb);
-    let _ = fs.sb_downgrade_update(sb);
-    crate::data::extents_sb::sb_extent_type_u64s_from_cpu(fs, sb)?;
+    c::bch_sb_field_errors_v2::from_cpu(fs, sb)?;
+    let _ = c::bch_sb_field_downgrade::from_cpu(fs, sb);
+    c::bch_sb_field_extent_type_u64s::from_cpu(fs, sb)?;
 
     for mut dev_sb in fs.dev_sbs_mut(sb, &cas).flatten() {
         let _ = dev_sb.sync();
@@ -2865,7 +2880,7 @@ pub(crate) fn sb_update(fs: &Fs, sb: &mut SbLockGuard<'_>) {
         None => cpu.errors_silent.iter().for_each(|w| w.set(0)),
     }
 
-    members::members_to_cpu(fs, sb);
+    let _ = c::bch_sb_field_members_v2::to_cpu(fs, sb);
 }
 
 /// @src's header and sections into @dst - all but those each device has its
@@ -2918,9 +2933,9 @@ fn sb_to_fs(fs: &Fs, sb: &mut SbLockGuard<'_>, src: &bch_sb) -> Result<(), BchEr
     let mut disk_sb = fs.sb_resize(sb);
     disk_sb.sb_realloc(0)?;
     copy_super(&mut disk_sb, src)?;
-    crate::alloc::replicas::sb_replicas_to_cpu(fs, sb)?;
-    crate::alloc::disk_groups::sb_disk_groups_to_cpu(fs, sb)?;
-    crate::data::extents_sb::sb_extent_type_u64s_to_cpu(sb);
+    c::bch_sb_field_replicas::to_cpu(fs, sb)?;
+    c::bch_sb_field_disk_groups::to_cpu(fs, sb)?;
+    c::bch_sb_field_extent_type_u64s::to_cpu(fs, sb)?;
     sb_update(fs, sb);
     Ok(())
 }

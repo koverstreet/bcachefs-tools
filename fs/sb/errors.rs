@@ -251,6 +251,28 @@ impl SbFieldOps for c::bch_sb_field_errors_v2 {
                 f: &c::bch_sb_field_errors_v2<Unvalidated>) {
         to_text(out, &f.entries)
     }
+
+    /// The counts - memory's, read from here only at mount, by
+    /// sb_errors_to_cpu() - and v1 deleted, which that merged in. If v2 can't
+    /// be grown, the superblock keeps what it had until the next write.
+    fn from_cpu(fs: &Fs, guard: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        let mut sb = fs.sb_resize(guard);
+        let counts = fs.errors.counts.lock();
+
+        let u64s = sb_field_u64s::<c::bch_sb_field_errors_v2>(counts.len());
+        let Some(f) = sb.field_resize::<c::bch_sb_field_errors_v2>(u64s) else { return Ok(()) };
+
+        // every field of each entry is set: what the resize left there doesn't matter
+        for (d, s) in f.entries.iter_mut().zip(counts.iter()) {
+            d.v.set_id(s.id());
+            d.v.set_nr(s.nr().min(c::BCH_SB_ERROR_ENTRY_V2_NR_MAX) as u32);
+            d.v.set_first_error_time(s.first_error_time.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
+            d.v.set_last_error_time(s.last_error_time.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
+        }
+
+        sb.field_delete(c::bch_sb_field_type::BCH_SB_FIELD_errors);
+        Ok(())
+    }
 }
 
 // ── Which error an errcode is counted as ─────────────────────────────────────
@@ -413,23 +435,3 @@ pub fn bch2_sb_errors_to_cpu(c: &Opaque<c::bch_fs>) -> c_int {
     ret_to_c(Fs::from_c(c).sb_errors_to_cpu())
 }
 
-/// For a superblock write: the counts in memory into v2, and v1 deleted -
-/// to_cpu() merged it in. If v2 can't be grown, the superblock keeps what it
-/// had until the next write.
-pub(crate) fn sb_errors_from_cpu(fs: &Fs, guard: &mut SbLockGuard<'_>) {
-    let mut sb = fs.sb_resize(guard);
-    let counts = fs.errors.counts.lock();
-
-    let u64s = sb_field_u64s::<c::bch_sb_field_errors_v2>(counts.len());
-    let Some(f) = sb.field_resize::<c::bch_sb_field_errors_v2>(u64s) else { return };
-
-    // every field of each entry is set: what the resize left there doesn't matter
-    for (d, s) in f.entries.iter_mut().zip(counts.iter()) {
-        d.v.set_id(s.id());
-        d.v.set_nr(s.nr().min(c::BCH_SB_ERROR_ENTRY_V2_NR_MAX) as u32);
-        d.v.set_first_error_time(s.first_error_time.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
-        d.v.set_last_error_time(s.last_error_time.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
-    }
-
-    sb.field_delete(c::bch_sb_field_type::BCH_SB_FIELD_errors);
-}

@@ -79,6 +79,23 @@ impl SbFieldOps for Section {
         }
         out.newline();
     }
+
+    /// The table, below. A filesystem that's never blacklisted anything has
+    /// no section: nothing's published, and lookups find nothing.
+    fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        let Some(bl) = sb.field::<Section>() else { return Ok(()) };
+
+        // SAFETY: under sb_lock, the writers' lock
+        unsafe {
+            fs.journal_seq_blacklist.rebuild(bl.start.len(), |t| {
+                for (t, e) in t.iter_mut().zip(&bl.start) {
+                    t.start = e.start.get();
+                    t.end   = e.end.get();
+                }
+                Eytzinger0::sort_by(t, |l, r| l.start.cmp(&r.start));
+            })
+        }.map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_blacklist_table_init))
+    }
 }
 
 // ── The table, in memory ─────────────────────────────────────────────────────
@@ -186,24 +203,6 @@ impl Fs {
         self.journal_seq_blacklist.is_blacklisted(seq, dirty)
     }
 
-    /// The table, from the superblock's section. A filesystem that's never
-    /// blacklisted anything has none: nothing's published, and lookups find
-    /// nothing.
-    fn journal_seq_blacklist_rebuild(&self, sb: &SbLockGuard<'_>) -> Result<(), BchError> {
-        let Some(bl) = sb.field::<Section>() else { return Ok(()) };
-
-        // SAFETY: under sb_lock, the writers' lock
-        unsafe {
-            self.journal_seq_blacklist.rebuild(bl.start.len(), |t| {
-                for (t, e) in t.iter_mut().zip(&bl.start) {
-                    t.start = e.start.get();
-                    t.end   = e.end.get();
-                }
-                Eytzinger0::sort_by(t, |l, r| l.start.cmp(&r.start));
-            })
-        }.map_err(|_| self.err(bch_errcode::BCH_ERR_ENOMEM_blacklist_table_init))
-    }
-
     /// Blacklist [@start, @end), and write the superblock.
     pub fn journal_seq_blacklist_add(&self, start: u64, end: u64) -> Result<(), BchError> {
         let mut sb = self.sb_lock();
@@ -211,7 +210,7 @@ impl Fs {
             return self.throw(bch_errcode::BCH_ERR_ENOSPC_sb_journal_seq_blacklist);
         }
         self.write_super_ret(&mut sb)?;
-        self.journal_seq_blacklist_rebuild(&sb)
+        Section::to_cpu(self, &mut sb)
     }
 }
 
@@ -244,7 +243,7 @@ pub fn bch2_journal_seq_blacklist_add(c: &Opaque<c::bch_fs>, start: u64, end: u6
 #[c_export]
 pub fn bch2_blacklist_table_initialize(c: &Opaque<c::bch_fs>) -> c_int {
     let fs = Fs::from_c(c);
-    ret_to_c(fs.journal_seq_blacklist_rebuild(&fs.sb_lock()))
+    ret_to_c(Section::to_cpu(fs, &mut fs.sb_lock()))
 }
 
 /// At the end of recovery: drop the ranges nothing was found in that are

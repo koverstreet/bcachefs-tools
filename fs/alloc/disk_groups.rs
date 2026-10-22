@@ -352,18 +352,6 @@ fn target_to_text_sb(out: &mut Printbuf, sb: &c::bch_sb, target: Target) {
 
 // ── The table ────────────────────────────────────────────────────────────
 
-/// Without a disk groups section the table is left as it is.
-pub(crate) fn sb_disk_groups_to_cpu(fs: &Fs, sb: &SbLockGuard<'_>) -> Result<(), BchError> {
-    let Some(groups) = sb.field::<c::bch_sb_field_disk_groups>() else {
-        return Ok(());
-    };
-    let src = &groups.entries;
-
-    // SAFETY: under sb_lock, the table's writers'
-    unsafe { fs.disk_groups.rebuild(src.len(), |dst| groups_to_cpu(dst, src, sb.sb())) }
-        .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_disk_groups_to_cpu))
-}
-
 fn groups_to_cpu(dst: &mut [c::bch_disk_group_cpu], src: &[c::bch_disk_group], sb: &c::bch_sb) {
     for (d, s) in dst.iter_mut().zip(src.iter()) {
         d.deleted = s.bch_group_deleted();
@@ -389,7 +377,7 @@ fn groups_to_cpu(dst: &mut [c::bch_disk_group_cpu], src: &[c::bch_disk_group], s
 pub fn bch2_sb_disk_groups_to_cpu(c: &Opaque<c::bch_fs>) -> c_int {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
-    ret_to_c(sb_disk_groups_to_cpu(fs, &unsafe { fs.sb_lock_held() }))
+    ret_to_c(c::bch_sb_field_disk_groups::to_cpu(fs, &mut unsafe { fs.sb_lock_held() }))
 }
 
 /// # Safety
@@ -403,7 +391,7 @@ pub unsafe fn bch2_fs_disk_groups_exit(c: &Opaque<c::bch_fs>) {
 fn dev_group_set(fs: &Fs, sb: &mut SbLockGuard<'_>, dev: u32, name: &[u8]) -> Result<(), BchError> {
     let v = dev_label_resolve(&mut fs.sb_resize(sb), name)?;
     sb.fs_member_mut(dev).set_group(v.into());
-    sb_disk_groups_to_cpu(fs, sb)
+    c::bch_sb_field_disk_groups::to_cpu(fs, sb)
 }
 
 /// As a member's group field: index + 1, 0 for none.
@@ -704,6 +692,18 @@ impl SbFieldOps for c::bch_sb_field_disk_groups {
                 write!(out, "]");
             }
         }
+    }
+
+    /// The table. Without a disk groups section it's left as it is.
+    fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        let Some(groups) = sb.field::<c::bch_sb_field_disk_groups>() else {
+            return Ok(());
+        };
+        let src = &groups.entries;
+
+        // SAFETY: under sb_lock, the table's writers'
+        unsafe { fs.disk_groups.rebuild(src.len(), |dst| groups_to_cpu(dst, src, sb.sb())) }
+            .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_disk_groups_to_cpu))
     }
 }
 

@@ -36,32 +36,6 @@ fn sizes_to_cpu(theirs: &[u8]) -> ([u8; 31], u8) {
     (u64s, nr.max(c::BCH_EXTENT_ENTRY_MAX as usize) as u8)
 }
 
-/// c->sb's extent entry sizes, from the superblock's section.
-pub(crate) fn sb_extent_type_u64s_to_cpu(sb: &mut SbLockGuard<'_>) {
-    let (handle, cpu) = sb.parts();
-    let theirs = handle.field::<c::bch_sb_field_extent_type_u64s>().map_or(&[][..], |e| sizes(&e.d));
-    let (u64s, known) = sizes_to_cpu(theirs);
-
-    set_all(&cpu.extent_type_u64s, u64s);
-    cpu.extent_types_known.set(known);
-}
-
-pub(crate) fn sb_extent_type_u64s_from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
-    let u64s = (size_of::<Head<c::bch_sb_field>>() + c::BCH_EXTENT_ENTRY_MAX as usize)
-        .div_ceil(size_of::<u64>());
-    let mut sb = fs.sb_resize(sb);
-    let e = sb.field_get_minsize::<c::bch_sb_field_extent_type_u64s>(u64s as u32);
-    let Some(e) = e else {
-        crate::bch_err!(fs, "error allocating superblock space for extent_type_u64s");
-        return fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_extent_type_u64s);
-    };
-
-    for (d, s) in e.d.iter_mut().zip(ours()) {
-        *d = s;
-    }
-    Ok(())
-}
-
 impl SbFieldOps for c::bch_sb_field_extent_type_u64s {
     fn validate(_sb: &c::bch_sb<Unvalidated>, e: &c::bch_sb_field_extent_type_u64s<Unvalidated>,
                 _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
@@ -84,6 +58,34 @@ impl SbFieldOps for c::bch_sb_field_extent_type_u64s {
             }
             write!(out, ":\t{u64s}\n");
         }
+    }
+
+    /// c->sb's extent entry sizes.
+    fn to_cpu(_fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        let (handle, cpu) = sb.parts();
+        let theirs = handle.field::<c::bch_sb_field_extent_type_u64s>().map_or(&[][..], |e| sizes(&e.d));
+        let (u64s, known) = sizes_to_cpu(theirs);
+
+        set_all(&cpu.extent_type_u64s, u64s);
+        cpu.extent_types_known.set(known);
+        Ok(())
+    }
+
+    /// This version's sizes.
+    fn from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        let u64s = (size_of::<Head<c::bch_sb_field>>() + c::BCH_EXTENT_ENTRY_MAX as usize)
+            .div_ceil(size_of::<u64>());
+        let mut sb = fs.sb_resize(sb);
+        let e = sb.field_get_minsize::<c::bch_sb_field_extent_type_u64s>(u64s as u32);
+        let Some(e) = e else {
+            crate::bch_err!(fs, "error allocating superblock space for extent_type_u64s");
+            return fs.throw(bch_errcode::BCH_ERR_ENOSPC_sb_extent_type_u64s);
+        };
+
+        for (d, s) in e.d.iter_mut().zip(ours()) {
+            *d = s;
+        }
+        Ok(())
     }
 }
 

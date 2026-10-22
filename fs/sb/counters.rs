@@ -26,6 +26,7 @@ use core::ffi::c_int;
 use cstruct_macros::c_export;
 
 use crate::c;
+use crate::errcode::BchError;
 use crate::util::vstructs::Unvalidated;
 use crate::fs::{Fs, SbLockGuard};
 use crate::prt;
@@ -272,21 +273,22 @@ impl SbFieldOps for c::bch_sb_field_counters {
             }
         }
     }
-}
 
-/// The counters into the superblock, for a superblock write - its field
-/// grown to a slot for every stable id if it can be, else as it is.
-pub(crate) fn sb_counters_from_cpu(fs: &Fs, guard: &mut SbLockGuard<'_>) {
-    let mut sb = fs.sb_resize(guard);
+    /// The counters - memory's, read from here only at mount - with the
+    /// field grown to a slot for every stable id if it can be, else as it is.
+    fn from_cpu(fs: &Fs, guard: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        let mut sb = fs.sb_resize(guard);
 
-    let u64s = sb_field_u64s::<c::bch_sb_field_counters>(NR_STABLE);
-    let _ = sb.field_get_minsize::<c::bch_sb_field_counters>(u64s);
-    let Some(f) = sb.field_mut::<c::bch_sb_field_counters>() else { return };
+        let u64s = sb_field_u64s::<c::bch_sb_field_counters>(NR_STABLE);
+        let _ = sb.field_get_minsize::<c::bch_sb_field_counters>(u64s);
+        let Some(f) = sb.field_mut::<c::bch_sb_field_counters>() else { return Ok(()) };
 
-    for (i, ctr) in COUNTERS.iter().enumerate() {
-        if let Some(d) = f.d.get_mut(ctr.stable_id as usize) {
-            *d = Le64::new(fs.counters.now(i));
+        for (i, ctr) in COUNTERS.iter().enumerate() {
+            if let Some(d) = f.d.get_mut(ctr.stable_id as usize) {
+                *d = Le64::new(fs.counters.now(i));
+            }
         }
+        Ok(())
     }
 }
 

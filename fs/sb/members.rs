@@ -456,6 +456,38 @@ impl SbFieldOps for c::bch_sb_field_members_v2 {
                 f: &c::bch_sb_field_members_v2<Unvalidated>) {
         members_to_text(out, sb, members_in(f.as_bytes(), MEMBERS_V2_HEAD, f.member_bytes.get().into()));
     }
+
+    /// ca->mi, and the masks of rotational and removed devices.
+    fn to_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        for ca in fs.members() {
+            let dev = u32::from(ca.dev_idx);
+            let m = sb_member(sb.sb(), dev).unwrap_or_default();
+            let mut mi = m.to_cpu();
+            mi.failure_domain = failure_domain_id(sb.sb(), dev, &m);
+
+            ca.set_mi(sb, mi);
+            fs.devs_rotational.assign(dev as usize, mi.rotational != 0);
+        }
+
+        if let Some(mi2) = members_v2(sb.sb()) {
+            for i in 0..fs.nr_devices() {
+                fs.devs_removed.assign(i as usize, mi2.get(i).unwrap_or_default().deleted());
+            }
+        }
+        Ok(())
+    }
+
+    /// The devices' error counts - memory's, counted by bch2_io_error().
+    fn from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) -> Result<(), BchError> {
+        let rcu = read_lock();
+        for ca in fs.devs_rcu(&rcu) {
+            let m = sb.fs_member_mut(ca.dev_idx.into());
+            for (d, e) in m.errors.iter_mut().zip(&ca.errors) {
+                *d = (e.load(Ordering::Relaxed) as u64).into();
+            }
+        }
+        Ok(())
+    }
 }
 
 fn data_types_to_text(out: &mut Printbuf, types: u64) {
@@ -654,42 +686,11 @@ fn failure_domain_id(sb: &c::bch_sb, dev: u32, m: &c::bch_member) -> u16 {
         .map_or(0, |i| i as u16 + 1)
 }
 
-/// ca->mi, and the masks of rotational and removed devices, from the
-/// superblock.
-pub(crate) fn members_to_cpu(fs: &Fs, sb: &SbLockGuard<'_>) {
-    for ca in fs.members() {
-        let dev = u32::from(ca.dev_idx);
-        let m = sb_member(sb.sb(), dev).unwrap_or_default();
-        let mut mi = m.to_cpu();
-        mi.failure_domain = failure_domain_id(sb.sb(), dev, &m);
-
-        ca.set_mi(sb, mi);
-        fs.devs_rotational.assign(dev as usize, mi.rotational != 0);
-    }
-
-    if let Some(mi2) = members_v2(sb.sb()) {
-        for i in 0..fs.nr_devices() {
-            fs.devs_removed.assign(i as usize, mi2.get(i).unwrap_or_default().deleted());
-        }
-    }
-}
-
 #[c_export]
 pub fn bch2_sb_members_to_cpu(c: &Opaque<c::bch_fs>) {
     let fs = Fs::from_c(c);
     // SAFETY: C calls it under sb_lock
-    members_to_cpu(fs, &unsafe { fs.sb_lock_held() });
-}
-
-/// The error counts, into the superblock's members - for a superblock write.
-pub(crate) fn sb_members_from_cpu(fs: &Fs, sb: &mut SbLockGuard<'_>) {
-    let rcu = read_lock();
-    for ca in fs.devs_rcu(&rcu) {
-        let m = sb.fs_member_mut(ca.dev_idx.into());
-        for (d, e) in m.errors.iter_mut().zip(&ca.errors) {
-            *d = (e.load(Ordering::Relaxed) as u64).into();
-        }
-    }
+    let _ = c::bch_sb_field_members_v2::to_cpu(fs, &mut unsafe { fs.sb_lock_held() });
 }
 
 /// The worst IO latency seen, reading or writing as @rw, of @devs, in jiffies:
