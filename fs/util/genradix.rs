@@ -127,6 +127,14 @@ impl<T> SharedGenRadix<T> {
     pub fn new() -> Self {
         Zeroable::zeroed()
     }
+
+    /// Free every node, before drop: empty after, as new. As genradix_free().
+    ///
+    /// # Safety
+    /// Nothing is using it, nor any entry it handed out.
+    pub unsafe fn free(&self) {
+        unsafe { c::__genradix_free(&raw mut (*self.0.get()).tree) }
+    }
 }
 
 impl<T: Zeroable> SharedGenRadix<T> {
