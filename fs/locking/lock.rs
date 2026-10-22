@@ -101,6 +101,16 @@ impl<R: RawLock, G, P> Lock<R, G, P> {
         }
     }
 
+    /// For a Lock in zeroed memory that new() can't reach - a static: its
+    /// raw lock initialized in place, G and P as zeroed.
+    ///
+    /// # Safety
+    /// Once, before anything takes it; zeroed is a valid G and P. @key is as
+    /// new()'s.
+    pub unsafe fn init_zeroed(&self, name: &'static CStr, key: *mut c_void) -> Result<(), R::InitError> {
+        unsafe { R::init(self.raw.get(), name, key) }
+    }
+
     pub fn lock(&self) -> Guard<'_, R, G, P> {
         let state = unsafe { R::lock(self.raw.get()) };
         Guard { lock: self, state: Some(state), _not_send: PhantomData }
