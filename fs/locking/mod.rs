@@ -9,7 +9,9 @@
 //! protects: G, reached only with it held - its guard derefs to it - and P,
 //! published: read by anyone, held or not - the lock derefs to it - and
 //! written only by its holder. A plain mutex over a T is Lock<c::mutex, T>;
-//! readers share a RawRwLock's, through read().
+//! readers share a RawRwLock's, through read(). LockedBy<G, P> is the same two
+//! halves where they can't be in the lock: spread through the objects the
+//! lock's owner reaches, and reached through it.
 //!
 //! Noio<R> (noio.rs) is any lock, held in a PF_MEMALLOC_NOIO scope - itself
 //! a RawLock, C's struct mutex_noio when R is a mutex. A seqmutex
@@ -36,7 +38,7 @@ pub mod seqmutex;
 
 pub use crate::new_lock;
 pub use raw::{mutex, percpu_rw_semaphore, rw_semaphore, spinlock_t};
-pub use lock::{Guard, Lock, RawLock, RawRwLock, RawTryLock, ReadGuard};
+pub use lock::{Guard, Lock, LockedBy, RawLock, RawRwLock, RawTryLock, ReadGuard};
 pub use noio::{mutex_noio, percpu_rwsem_noio, MemallocFlags, MutexNoio, Noio, PercpuRwsemNoio};
 pub use seqlock::SeqLock;
 pub use seqmutex::SeqMutexSeq;

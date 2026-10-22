@@ -266,6 +266,58 @@ impl<R: RawRwLock, G, P> Drop for ReadGuard<'_, R, G, P> {
     }
 }
 
+/// Lock's two halves, for data that can't live in its lock: @G, reached only
+/// with that lock held, and @P, published - anyone's, it derefs to it. Which
+/// lock that is, only the owner of both knows: G is reached through the
+/// owner's methods, which check - here, only unsafely. Laid out as G then P,
+/// as Lock's are.
+#[repr(C)]
+pub struct LockedBy<G, P = ()> {
+    protected: UnsafeCell<G>,
+    published: P,
+}
+
+// As Lock's.
+unsafe impl<G: Send, P: Send> Send for LockedBy<G, P> {}
+unsafe impl<G: Send, P: Sync> Sync for LockedBy<G, P> {}
+
+// SAFETY: as each half
+unsafe impl<G: ::pin_init::Zeroable, P: ::pin_init::Zeroable> ::pin_init::Zeroable for LockedBy<G, P> {}
+
+impl<G, P> LockedBy<G, P> {
+    /// # Safety
+    /// The lock that protects it is held, for as long as the reference
+    /// lives, and nothing has a &mut of it.
+    pub unsafe fn protected(&self) -> &G {
+        unsafe { &*self.protected.get() }
+    }
+
+    /// # Safety
+    /// The lock that protects it is held, for as long as the reference
+    /// lives, and nothing else refers to it.
+    pub unsafe fn protected_mut(&self) -> &mut G {
+        unsafe { &mut *self.protected.get() }
+    }
+}
+
+impl<G, P> Deref for LockedBy<G, P> {
+    type Target = P;
+
+    fn deref(&self) -> &P {
+        &self.published
+    }
+}
+
+// Opaque to TypeInfo, size only: G is the owner's to read.
+impl<G, P> crate::typeinfo::TypeInfo for LockedBy<G, P> {
+    const INFO: &'static crate::typeinfo::StructInfo = &crate::typeinfo::StructInfo {
+        name:   "LockedBy",
+        size:   core::mem::size_of::<Self>(),
+        shape:  crate::typeinfo::Shape::Struct,
+        fields: &[],
+    };
+}
+
 /// A Lock initializer - new_lock!(g), new_lock!(g, p), either with a "name"
 /// last - over @g, publishing @p or nothing, with a lockdep class of its own,
 /// named @name or for the call site.
