@@ -580,6 +580,13 @@ static inline struct bkey_s_c bch2_btree_iter_peek(struct btree_iter *iter)
 	return bch2_btree_iter_peek_max(iter, &SPOS_MAX);
 }
 
+/* BTREE_ITER_trim is for extents, and ignored on any other iterator: */
+static inline bool bch2_btree_iter_trims(const struct btree_iter *iter)
+{
+	return (iter->flags & (BTREE_ITER_trim|BTREE_ITER_is_extents)) ==
+		(BTREE_ITER_trim|BTREE_ITER_is_extents);
+}
+
 static inline struct bkey_s_c bch2_btree_iter_peek_prev(struct btree_iter *iter)
 {
 	return bch2_btree_iter_peek_prev_min(iter, POS_MIN);
@@ -1079,8 +1086,7 @@ static inline struct bkey_s_c bch2_btree_iter_peek_max_type(struct btree_iter *i
 	 * Trimming, a slot is cut to the window, and an extents window ends where
 	 * @end starts: the slot there is past it.
 	 */
-	if ((iter->flags & (BTREE_ITER_trim|BTREE_ITER_is_extents)) ==
-	    (BTREE_ITER_trim|BTREE_ITER_is_extents)) {
+	if (bch2_btree_iter_trims(iter)) {
 		if (bkey_ge(iter->pos, end))
 			return bkey_s_c_null;
 

@@ -2819,41 +2819,52 @@ btree_iter_filter_snapshots(struct btree_trans *trans,
 }
 
 /*
- * BTREE_ITER_trim: an extent that straddles the window - the iterator's
- * position to @end - is returned cut to it, in a copy from the transaction's
- * memory. The btree's key is as it was, and so is iter->k, that the iterator
- * advances by: only what the caller sees is cut. An update of what it was
- * handed replaces only the window - the rest of the extent stays.
+ * BTREE_ITER_trim: an extent straddling the window [@start, @end) is returned
+ * cut to it, and iter->k is cut with it: stepping by it stops at the window's
+ * edge, where the walk ends. A key with no value is only its header, cut in
+ * iter->k; one with a value - pointers, a reflink_p's idx, inline data, which
+ * move with a cut - is cut in a copy in transaction memory. An update of what's
+ * returned replaces only the window.
  */
 static noinline struct bkey_s_c btree_iter_trim(struct btree_iter *iter, struct bkey_s_c k,
-						struct bpos end)
+						struct bpos start, struct bpos end)
 {
-	if (bkey_le(iter->pos, bkey_start_pos(k.k)) && bkey_le(k.k->p, end))
+	if (bkey_le(start, bkey_start_pos(k.k)) && bkey_le(k.k->p, end))
 		return k;
+
+	if (!bkey_val_bytes(k.k)) {
+		struct bkey *u = &iter->k;
+
+		*u = *k.k;
+		if (bkey_lt(bkey_start_pos(u), start))
+			u->size = u->p.offset - start.offset;
+		if (bkey_gt(u->p, end))
+			bch2_key_resize(u, end.offset - bkey_start_offset(u));
+		return (struct bkey_s_c) { u, k.v };
+	}
 
 	struct bkey_i *t = bch2_trans_kmalloc_nomemzero(iter->trans, bkey_bytes(k.k));
 	if (IS_ERR(t))
 		return bkey_s_c_err(PTR_ERR(t));
 
 	bkey_reassemble(t, k);
-	bch2_cut_front(iter->trans->c, iter->pos, t);
+	bch2_cut_front(iter->trans->c, start, t);
 	bch2_cut_back(end, t);
+	iter->k = t->k;
 	return bkey_i_to_s_c(t);
 }
 
 static inline struct bkey_s_c btree_iter_maybe_trim(struct btree_iter *iter, struct bkey_s_c k,
-						    struct bpos end)
+						    struct bpos start, struct bpos end)
 {
-	if (likely((iter->flags & (BTREE_ITER_trim|BTREE_ITER_is_extents)) !=
-		   (BTREE_ITER_trim|BTREE_ITER_is_extents)) ||
-	    !k.k || bkey_err(k))
+	if (likely(!bch2_btree_iter_trims(iter)) || !k.k || bkey_err(k))
 		return k;
 
-	k = btree_iter_trim(iter, k, end);
+	k = btree_iter_trim(iter, k, start, end);
 	/* what trimming promises: all of it in the window, and something */
 	EBUG_ON(!bkey_err(k) &&
 		(!k.k->size ||
-		 bkey_lt(bkey_start_pos(k.k), iter->pos) ||
+		 bkey_lt(bkey_start_pos(k.k), start) ||
 		 bkey_gt(k.k->p, end)));
 	return k;
 }
@@ -2956,7 +2967,7 @@ out_no_locked:
 
 	bch2_btree_iter_verify_entry_exit(iter);
 
-	k = btree_iter_maybe_trim(iter, k, *end);
+	k = btree_iter_maybe_trim(iter, k, iter->pos, *end);
 
 	event_trace_fn(trans->c, btree_iter_peek_max,
 		       __btree_iter_peek_max_trace(trans->c, k));
@@ -3468,8 +3479,6 @@ out:
 	ret = bch2_btree_iter_verify_ret(iter, k);
 	if (unlikely(ret))
 		k = bkey_s_c_err(ret);
-
-	k = btree_iter_maybe_trim(iter, k, end);
 out2:
 	event_trace_fn(trans->c, btree_iter_peek_slot,
 		       __btree_iter_peek_slot_trace(trans->c, k));
@@ -3486,7 +3495,9 @@ out2:
  */
 struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_iter *iter)
 {
-	return __bch2_btree_iter_peek_slot(iter, SPOS_MAX, _RET_IP_);
+	struct bkey_s_c k = __bch2_btree_iter_peek_slot(iter, SPOS_MAX, _RET_IP_);
+
+	return btree_iter_maybe_trim(iter, k, iter->pos, SPOS_MAX);
 }
 
 /**
@@ -3502,7 +3513,9 @@ struct bkey_s_c bch2_btree_iter_peek_slot_max(struct btree_iter *iter, struct bp
 {
 	EBUG_ON((iter->flags & BTREE_ITER_is_extents) && !bkey_lt(iter->pos, end));
 
-	return __bch2_btree_iter_peek_slot(iter, end, _RET_IP_);
+	struct bkey_s_c k = __bch2_btree_iter_peek_slot(iter, end, _RET_IP_);
+
+	return btree_iter_maybe_trim(iter, k, iter->pos, end);
 }
 
 struct bkey_s_c bch2_btree_iter_next_slot(struct btree_iter *iter)
