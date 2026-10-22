@@ -31,6 +31,12 @@
 //   fields are asserted as name.field; #[c_struct_group] for the kernel's
 //   struct_group(name, ...), its members both name's and the struct's own.
 //
+//   #[c_lock("u8 lock")] on a Lock<R, G, P> (locking/lock.rs): C gets the
+//   lock's declaration, then G and P - CStructs of the same file, unless ()
+//   - each an anonymous member, as Lock lays them out. The record carries
+//   R's size and Lock's offsets of G and P, so the lock and their fields are
+//   asserted where Rust has them, as the struct's own.
+//
 //   #[c_name(NAME)] on the struct: C's name for it, where Rust's differs - a
 //   family's C definition, X__head, whose name the family's type X<S> has in
 //   Rust (util/vstructs.rs). C knows it only as NAME.
@@ -279,6 +285,9 @@ pub struct CFieldDef {
     /// its members C's directly too.
     #[allow(dead_code)]
     pub group:    bool,
+    /// #[c_lock("...")], on a Lock<R, G, P>: the lock's C declaration, which
+    /// G's and P's members follow, written in its place.
+    pub lock:     Option<String>,
     /// #[c_bitfield]: its type is a bitfield-struct type, whose members C
     /// declares in its place.
     pub bitfield: bool,
@@ -1286,6 +1295,7 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
         let mut anon = false;
         let mut inline = false;
         let mut group = false;
+        let mut lock = None;
         let mut bitfield = false;
         let mut bits = None;
         let mut counted_by = None;
@@ -1322,6 +1332,12 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
                         }
                         _ => return Err(format!("{name}: #[{n}(...)] takes one string, a C declaration")),
                     }
+                }
+            }
+            if let Some(args) = attr_args(attr, "c_lock") {
+                match args {
+                    [Tok::Str(s, _)] => lock = Some(s.clone()),
+                    _ => return Err(format!("{name}: #[c_lock(...)] takes one string, the lock's C declaration")),
                 }
             }
             if let Some(args) = attr_args(attr, "counted_by") {
@@ -1388,7 +1404,18 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
             return Err(format!("{name}.{field}: #[c_inline] and #[c_struct_group] are the field's type, \
                                 written in its place - one of them, and not a #[c] or #[c_anon] too"));
         }
-        fields.push(CFieldDef { name: field, ty, vis, c_decl, anon, inline, group, bitfield, bits,
+        if let Some(decl) = &lock {
+            if anon || inline || group || c_decl.is_some() {
+                return Err(format!("{name}.{field}: #[c_lock] is the field's C, alone"));
+            }
+            if lock_args(&ty)?.is_none() {
+                return Err(format!("{name}.{field}: #[c_lock] is for a Lock<R, G, P>, not {ty}"));
+            }
+            if lock_name(decl).is_none() {
+                return Err(format!("{name}.{field}: #[c_lock(\"{decl}\")] must end with the lock's name"));
+            }
+        }
+        fields.push(CFieldDef { name: field, ty, vis, c_decl, anon, inline, group, lock, bitfield, bits,
                                 counted_by, init, cfg, c_align: None });
     }
 
@@ -2713,6 +2740,43 @@ fn in_place(f: &CFieldDef) -> bool {
     f.inline || f.group || (f.anon && f.c_decl.is_none())
 }
 
+/// A Lock<R, G, P>, as @ty, Rust source: R, G and P - G and P (), as Lock's
+/// defaults, when they're left out.
+pub fn lock_args(ty: &str) -> Result<Option<[String; 3]>, String> {
+    Ok(match container_args(ty, "Lock")?.as_deref() {
+        Some([r, rest @ ..]) if rest.len() <= 2 => {
+            let arg = |n: usize| rest.get(n).cloned().unwrap_or_else(|| "()".into());
+            Some([r.clone(), arg(0), arg(1)])
+        }
+        _ => None,
+    })
+}
+
+/// What #[c_lock] field @f's Lock protects and publishes, G and P: structs of
+/// @items, which C writes in its place, after the lock - None for ().
+pub fn lock_defs<'a>(f: &CFieldDef, items: &'a [CItem]) -> Result<[Option<&'a CStructDef>; 2], String> {
+    let [_, g, p] = lock_args(&f.ty)?.ok_or_else(|| format!("{}: #[c_lock] is for a Lock, not {}", f.name, f.ty))?;
+    let def = |ty: &str| -> Result<_, String> {
+        if ty == "()" {
+            return Ok(None);
+        }
+        items.iter()
+            .find_map(|i| match i {
+                CItem::Struct(d) if d.name == ty => Some(d),
+                _ => None,
+            })
+            .map(Some)
+            .ok_or_else(|| format!("{}: #[c_lock], but {ty} isn't a struct or union here", f.name))
+    };
+    Ok([def(&g)?, def(&p)?])
+}
+
+/// The name a #[c_lock] declaration gives the lock: its last word.
+pub fn lock_name(decl: &str) -> Option<&str> {
+    let name = decl.trim_end().rsplit(|ch: char| !(ch.is_alphanumeric() || ch == '_')).next()?;
+    (!name.is_empty() && !name.starts_with(|ch: char| ch.is_ascii_digit())).then_some(name)
+}
+
 /// Rust type @ty as an element type and C's array dimensions - `[[T; 2]; N]`
 /// is T and [N][2] - or @ty itself and none. None if a dimension has no C
 /// rendering.
@@ -2769,15 +2833,19 @@ pub fn in_place_types(items: &[CItem]) -> Vec<&str> {
             CItem::Struct(d) => Some(d),
             _ => None,
         })
-        .flat_map(|d| d.fields.iter())
-        .filter_map(|f| in_place_def(f, items));
+        .flat_map(|d| d.fields.iter());
+    let in_place = fields.clone().filter_map(|f| in_place_def(f, items));
+    // what a #[c_lock]'s Lock protects and publishes, written after the lock
+    let locked = fields
+        .filter(|f| f.lock.is_some())
+        .flat_map(|f| lock_defs(f, items).into_iter().flatten().flatten());
     // and a c_rcu_array!'s header, written in its struct
     let heads = items.iter()
         .filter_map(|i| match i {
             CItem::RcuArray(a) => rcu_array_head(a, items),
             _ => None,
         });
-    fields.chain(heads).map(|d| d.name.as_str()).collect()
+    in_place.chain(locked).chain(heads).map(|d| d.name.as_str()).collect()
 }
 
 /// @a's header's definition, if it has one and it's a struct of @items.
@@ -2882,6 +2950,17 @@ fn emit_members(def: &CStructDef, items: &[CItem],
     // one - a struct of only x[] is an error to gcc before 15 - so with none
     // it's x[0], as bch_val's __nothing was written
     let mut named = false;
+    // the members of @inner, a struct field @f's #[@attr] writes in its place
+    let nested = |f: &CFieldDef, attr: &str, inner: &CStructDef| -> Result<String, String> {
+        if !inner.repr_c() || inner.typedef.is_some() {
+            return Err(format!("{}.{}: #[{attr}]'s type {} must be #[repr(C)], and not a typedef",
+                               def.name, f.name, inner.name));
+        }
+        Ok(emit_members(inner, items, opaque, kind)?
+            .lines()
+            .map(|l| if l.starts_with('#') { format!("{l}\n") } else { format!("\t{l}\n") })
+            .collect())
+    };
     for (n, f) in def.fields.iter().enumerate() {
         let last = n + 1 == def.fields.len() && named;
         let text = if f.bitfield {
@@ -2891,6 +2970,15 @@ fn emit_members(def: &CStructDef, items: &[CItem],
             }).ok_or_else(|| format!("{}.{}: #[c_bitfield], but {} isn't a #[bitfield] type here",
                                      def.name, f.name, f.ty))?;
             emit_bitfield(bf, kind)?
+        } else if let Some(lock) = &f.lock {
+            // the lock, then what it protects, then what it publishes: as
+            // Lock lays them out
+            let mut text = format!("\t{lock};\n");
+            for inner in lock_defs(f, items).map_err(|e| format!("{}.{e}", def.name))?.into_iter().flatten() {
+                let members = nested(f, "c_lock", inner)?;
+                text += &format!("\t{} {{\n{members}\t}}{};\n", inner.kind.keyword(), c_attrs(inner)?);
+            }
+            text
         } else if in_place(f) {
             let attr = match (f.inline, f.group) {
                 (true, _) => "c_inline",
@@ -2899,14 +2987,7 @@ fn emit_members(def: &CStructDef, items: &[CItem],
             };
             let inner = in_place_def(f, items).ok_or_else(|| format!(
                 "{}.{}: #[{attr}], but {} isn't a struct or union here", def.name, f.name, f.ty))?;
-            if !inner.repr_c() || inner.typedef.is_some() {
-                return Err(format!("{}.{}: #[{attr}]'s type {} must be #[repr(C)], and not a typedef",
-                                   def.name, f.name, inner.name));
-            }
-            let members: String = emit_members(inner, items, opaque, kind)?
-                .lines()
-                .map(|l| if l.starts_with('#') { format!("{l}\n") } else { format!("\t{l}\n") })
-                .collect();
+            let members = nested(f, attr, inner)?;
             if f.group {
                 // the kernel's: a union of the members, and the same as a
                 // struct of that name

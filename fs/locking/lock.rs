@@ -70,7 +70,7 @@ pub unsafe trait RawRwLock: RawLock {
 /// held or not; written through the guard's published(), so the lock a
 /// writer holds is the one it's in. Laid out as C's members, the lock then G
 /// then P, so a struct C shares can declare it as them:
-/// #[c_anon("struct mutex lock; G g")].
+/// #[c_lock("struct mutex lock")].
 #[repr(C)]
 pub struct Lock<R: RawLock, G = (), P = ()> {
     raw:       R,
@@ -137,6 +137,9 @@ impl<R: RawLock, G, P> Lock<R, G, P> {
 
     /// Where the G is in a Lock: for C's container_of() from it.
     pub const PROTECTED_OFFSET: usize = core::mem::offset_of!(Self, protected);
+
+    /// Where the P is: for #[c_lock]'s asserts.
+    pub const PUBLISHED_OFFSET: usize = core::mem::offset_of!(Self, published);
 
     pub(super) fn raw(&self) -> &R {
         &self.raw

@@ -49,6 +49,9 @@ struct Layout {
     align:  u64,
     /// Each field's offset, size and alignment, in order.
     fields: Vec<(u64, u64, u64)>,
+    /// Each #[c_lock] field's lock size, and the offsets in its Lock of what
+    /// it protects and what it publishes, in order.
+    locks:  Vec<(u64, u64, u64)>,
 }
 
 fn records(mut b: &[u8]) -> Result<Vec<Record>, String> {
@@ -237,13 +240,16 @@ fn guard(header: &str) -> String {
 
 /// The layout of struct @def from @nums, checked against its fields.
 fn layout(def: &CStructDef, nums: &[u64]) -> Result<Layout, String> {
+    let n = def.fields.len();
+    let locks = def.fields.iter().filter(|f| f.lock.is_some()).count();
     match nums {
-        [size, align, fields @ ..] if fields.len() == 3 * def.fields.len() => Ok(Layout {
+        [size, align, rest @ ..] if rest.len() == 3 * (n + locks) => Ok(Layout {
             size:   *size,
             align:  *align,
-            fields: fields.chunks(3).map(|f| (f[0], f[1], f[2])).collect(),
+            fields: rest[..3 * n].chunks(3).map(|f| (f[0], f[1], f[2])).collect(),
+            locks:  rest[3 * n..].chunks(3).map(|l| (l[0], l[1], l[2])).collect(),
         }),
-        _ => Err(format!("{}: record has {} numbers for {} fields", def.name, nums.len(), def.fields.len())),
+        _ => Err(format!("{}: record has {} numbers for {n} fields, {locks} locks", def.name, nums.len())),
     }
 }
 
@@ -299,9 +305,22 @@ fn check_bitfield(bf: &CBitfieldDef, offset: u64, prev_end: u64, packed: bool,
 /// the first element's of an array of them, member[0].field.
 fn field_asserts(out: &mut String, ty: &str, def: &CStructDef, base: u64, prefix: &str,
                  items: &[CItem], layouts: &BTreeMap<String, Layout>) {
+    let mut locks = layouts[&def.name].locks.iter();
     for (f, (offset, size, _)) in def.fields.iter().zip(&layouts[&def.name].fields) {
         let offset = base + offset;
         let name = format!("{prefix}{}", f.name);
+        if let Some(decl) = &f.lock {
+            let &(lock_size, protected, published) = locks.next().expect("a lock's numbers for each #[c_lock]");
+            let lock = format!("{prefix}{}", lock_name(decl).expect("checked when parsed"));
+            member_asserts(out, ty, &lock, offset, lock_size);
+            let [g, p] = lock_defs(f, items).unwrap_or_else(|e| die(format!("{}.{e}", def.name)));
+            for (inner, at) in [(g, protected), (p, published)] {
+                if let Some(inner) = inner {
+                    field_asserts(out, ty, inner, offset + at, prefix, items, layouts);
+                }
+            }
+            continue;
+        }
         if let Some(inner) = in_place_def(f, items) {
             if f.inline || f.group {
                 member_asserts(out, ty, &name, offset, *size);

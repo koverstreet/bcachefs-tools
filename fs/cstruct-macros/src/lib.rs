@@ -205,14 +205,15 @@ macro_rules! one_item {
 /// a C declaration that doesn't name it. A bare `#[c_anon]` is the field's
 /// type written in its place, unnamed - C's anonymous struct or union - and
 /// `#[c_inline]` the same, named; `#[c_struct_group]` as the kernel's
-/// struct_group(). `#[c_bitfield]` marks a field of a #[bitfield] type, whose
-/// members C declares in its place. `#[counted_by(FIELD)]` on a trailing
+/// struct_group(); `#[c_lock("u8 lock")]` on a Lock<R, G, P>, the lock's C
+/// declaration, G's members and P's after it. `#[c_bitfield]` marks a field of a
+/// #[bitfield] type, whose members C declares in its place. `#[counted_by(FIELD)]` on a trailing
 /// `[T; 0]`: FIELD is its length - the struct's FlexArray (vstructs.rs).
 /// `#[c_typedef]` on the struct: C has it as a typedef - `typedef struct {
 /// ... } name`, or with `#[c_typedef(NAME)]`, `typedef struct name { ... }
 /// NAME`. `#[c_name(NAME)]` on the struct: C's name for it, where Rust's
 /// differs - a family's C definition (vstructs.rs).
-#[proc_macro_derive(CStruct, attributes(c, c_anon, c_bitfield, c_inline, c_name, c_packed, c_struct_group,
+#[proc_macro_derive(CStruct, attributes(c, c_anon, c_bitfield, c_inline, c_lock, c_name, c_packed, c_struct_group,
                                         c_typedef, counted_by))]
 pub fn derive_cstruct(input: TokenStream) -> TokenStream {
     expand("#[derive(CStruct)]", || cstruct_expand(input))
@@ -287,6 +288,14 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
         nums.push(format!("::core::mem::offset_of!({inst}, {field}) as u64"));
         nums.push(format!("crate::types::field_size({proj})"));
         nums.push(format!("crate::types::field_align({proj})"));
+    }
+    // a #[c_lock] field's, after every field's: the lock's size, and where
+    // in the Lock what it protects and what it publishes are
+    for f in def.fields.iter().filter(|f| f.lock.is_some()) {
+        let [r, ..] = cstruct::lock_args(&f.ty)?.expect("checked when parsed");
+        nums.push(format!("::core::mem::size_of::<{r}>() as u64"));
+        nums.push(format!("<{}>::PROTECTED_OFFSET as u64", f.ty));
+        nums.push(format!("<{}>::PUBLISHED_OFFSET as u64", f.ty));
     }
     // a pointer field C reads is a thin one: as c_extern!'s parameters
     let thin: String = def.fields.iter()
