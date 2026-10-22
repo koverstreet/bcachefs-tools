@@ -4,7 +4,8 @@
 //! SipHash-c-d, Aumasson and Bernstein's keyed hash ("SipHash: a fast
 //! short-input PRF"): c compression rounds per 8 byte block, d finalization
 //! rounds, a 128 bit key and a 64 bit result. The round counts are the type's:
-//! str_hash's is SipHash24, the full strength.
+//! str_hash's SipHash24, the full strength, and SipHash13 - hsiphash()'s
+//! rounds on 64-bit - for hash tables, util/cuckoo.rs's.
 //!
 //! Translated from util/siphash.c, OpenBSD's siphash.c 1.3, which it replaces -
 //! and like it, not quite SipHash when one input comes in several updates. An
@@ -15,10 +16,10 @@
 //! name of seven bytes or more hashes this way on disk, unless what it has past
 //! the seventh byte is a multiple of eight. The result is the format: kept as
 //! is, and checked against util/siphash.c before that went. One update hashes
-//! as SipHash does - every dirent's. A tail that doesn't fit where it's put - C
-//! wrote it into the byte count - is a bounds check here: the one hash in two
-//! updates, an xattr's, puts one byte in the block first, which leaves room for
-//! any tail.
+//! as SipHash does - every dirent, and the cuckoo table's. A tail that doesn't
+//! fit where it's put - C wrote it into the byte count - is a bounds check
+//! here: the one hash in two updates, an xattr's, puts one byte in the block
+//! first, which leaves room for any tail.
 
 /// SipHash with @C compression and @D finalization rounds, as it runs.
 #[derive(Clone)]
@@ -29,6 +30,7 @@ pub struct SipHasher<const C: usize, const D: usize> {
 }
 
 pub type SipHash24 = SipHasher<2, 4>;
+pub type SipHash13 = SipHasher<1, 3>;
 
 impl<const C: usize, const D: usize> SipHasher<C, D> {
     pub fn new(k0: u64, k1: u64) -> Self {

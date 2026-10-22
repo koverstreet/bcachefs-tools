@@ -28,6 +28,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 #[cfg(not(kernel))]
 use bcachefs_shim as kernel;
 
+#[cfg(CONFIG_BCACHEFS_TESTS)]
+mod cuckoo;
+
 type TestRet = Result<(), BchError>;
 type TestFn = fn(&Fs, u64) -> TestRet;
 
@@ -969,6 +972,8 @@ fn lookup_test(testname: &[u8]) -> Option<(&'static [u8], TestFn)> {
         (b"test_stripe_open_invalidates_update", test_stripe_open_invalidates_update),
         (b"test_snapshots", test_snapshots),
         (b"test_bkey_buf", test_bkey_buf),
+        #[cfg(CONFIG_BCACHEFS_TESTS)]
+        (b"test_cuckoo", cuckoo::test_cuckoo),
     ];
 
     TESTS.iter().copied().find(|(name, _)| testname == *name)

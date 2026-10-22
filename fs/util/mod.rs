@@ -2,6 +2,7 @@ pub mod alloc;
 pub mod bio;
 pub mod bitmap;
 pub mod closure;
+pub mod cuckoo;
 pub mod darray;
 #[cfg(CONFIG_DEBUG_FS)]
 pub mod debugfs;
