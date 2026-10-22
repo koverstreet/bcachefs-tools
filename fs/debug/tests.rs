@@ -261,6 +261,52 @@ fn test_iterate_extents_trim(fs: &Fs, nr: u64) -> TestRet {
     Ok(())
 }
 
+/// peek_max() of an extents btree, its end before the end of the leaf it's in:
+/// an extent starting before the end is in the leaf its end is in, which can be
+/// the next one - once what it overwrote in this one is gone.
+fn test_peek_extent_past_leaf(fs: &Fs, nr: u64) -> TestRet {
+    delete_test_keys(fs)?;
+
+    for i in (0..nr).step_by(8) {
+        let mut k = BkeyI::<c::Cookie>::new();
+        k.k.p.offset = i + 8;
+        k.k.p.snapshot = u32::MAX;
+        k.k.size = 8;
+        insert_cookie(fs, c::btree_id::extents, &mut k)?;
+    }
+
+    let leaf_end = {
+        let trans = crate::btree_trans!(fs);
+        lockrestart_do(&trans, |t| {
+            let mut iter = BtreeNodeIter::new(t, c::btree_id::extents, POS_MIN, 0, 0, BtreeIterFlags::empty());
+            let b = iter.peek()?.expect("the extents btree has a leaf");
+            Ok({ b.key.k.p.offset })
+        })?
+    };
+    assert!(leaf_end < nr, "one leaf, ending at {leaf_end}: nothing to straddle");
+
+    // Over the leaf's end: in the next leaf, as it ends there; this one keeps
+    // nothing ending past leaf_end - 4 but the overwritten key's whiteout
+    let mut k = BkeyI::<c::Cookie>::new();
+    k.k.p.offset = leaf_end + 4;
+    k.k.p.snapshot = u32::MAX;
+    k.k.size = 8;
+    insert_cookie(fs, c::btree_id::extents, &mut k)?;
+
+    // and written, not that
+    fs.journal_flush_outstanding_pins();
+
+    let trans = crate::btree_trans!(fs);
+    let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, leaf_end - 2, u32::MAX),
+                                  BtreeIterFlags::empty());
+    let found = lockrestart_do(&trans, |t| {
+        Ok(iter.peek_max(t, pos(0, leaf_end - 1))?.map(|k| (k.k.start_offset(), k.k.p.offset)))
+    })?;
+    assert_eq!(found, Some((leaf_end - 4, leaf_end + 4)),
+               "peek_max() from {} to {}, the leaf ending at {leaf_end}", leaf_end - 2, leaf_end - 1);
+    Ok(())
+}
+
 fn test_iterate_slots(fs: &Fs, nr: u64) -> TestRet {
     delete_test_keys(fs)?;
 
@@ -907,6 +953,7 @@ fn lookup_test(testname: &[u8]) -> Option<(&'static [u8], TestFn)> {
         (b"test_iterate", test_iterate),
         (b"test_iterate_extents", test_iterate_extents),
         (b"test_iterate_extents_trim", test_iterate_extents_trim),
+        (b"test_peek_extent_past_leaf", test_peek_extent_past_leaf),
         (b"test_iterate_slots", test_iterate_slots),
         (b"test_iterate_slots_extents", test_iterate_slots_extents),
         (b"test_peek_end", test_peek_end),
