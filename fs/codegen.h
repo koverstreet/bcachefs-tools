@@ -10,6 +10,7 @@
 
 #include <linux/blkdev.h>
 #include <linux/mm.h>
+#include <asm/ioctl.h>
 
 #ifdef __BINDGEN__
 /*
@@ -24,6 +25,21 @@ const blk_opf_t RUST_CONST_HELPER_REQ_SYNC		= REQ_SYNC;
 const blk_opf_t RUST_CONST_HELPER_REQ_META		= REQ_META;
 const blk_opf_t RUST_CONST_HELPER_REQ_IDLE		= REQ_IDLE;
 const blk_opf_t RUST_CONST_HELPER_REQ_FUA		= REQ_FUA;
+
+/*
+ * ioctl numbers' layout, the arch's own: powerpc, mips, sparc, alpha and
+ * parisc override asm-generic's (util/ioctl.rs)
+ */
+const unsigned int RUST_CONST_HELPER__IOC_NONE		= _IOC_NONE;
+const unsigned int RUST_CONST_HELPER__IOC_READ		= _IOC_READ;
+const unsigned int RUST_CONST_HELPER__IOC_WRITE		= _IOC_WRITE;
+const unsigned int RUST_CONST_HELPER__IOC_NRSHIFT	= _IOC_NRSHIFT;
+const unsigned int RUST_CONST_HELPER__IOC_TYPESHIFT	= _IOC_TYPESHIFT;
+const unsigned int RUST_CONST_HELPER__IOC_SIZESHIFT	= _IOC_SIZESHIFT;
+const unsigned int RUST_CONST_HELPER__IOC_DIRSHIFT	= _IOC_DIRSHIFT;
+const unsigned int RUST_CONST_HELPER__IOC_NRMASK	= _IOC_NRMASK;
+const unsigned int RUST_CONST_HELPER__IOC_TYPEMASK	= _IOC_TYPEMASK;
+const unsigned int RUST_CONST_HELPER__IOC_SIZEMASK	= _IOC_SIZEMASK;
 #endif
 
 static inline struct folio *rust_page_folio(struct page *page)

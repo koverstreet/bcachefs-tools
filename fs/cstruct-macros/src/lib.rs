@@ -1380,8 +1380,7 @@ pub fn c_const(input: TokenStream) -> TokenStream {
 /// Rust gets a marker type for each, named as the #define, implementing
 /// util::ioctl::Ioctl: the opcode, made by util::ioctl's _IO*() from the
 /// target's own constants, and the argument type. The record carries the
-/// opcodes, and the generated header asserts C's are the same. Userspace
-/// only, as util::ioctl is: the kernel build gets the #defines alone.
+/// opcodes, and the generated header asserts C's are the same.
 #[proc_macro]
 pub fn c_ioctl(input: TokenStream) -> TokenStream {
     expand("c_ioctl!", || {
@@ -1397,18 +1396,15 @@ pub fn c_ioctl(input: TokenStream) -> TokenStream {
                 None => ("()", format!("crate::util::ioctl::_IO({ty}, {nr})")),
             };
             out.push_str(&format!(
-                "#[cfg(not(kernel))]\n\
-                 #[allow(non_camel_case_types)]\n\
+                "#[allow(non_camel_case_types)]\n\
                  pub struct {name};\n\
-                 #[cfg(not(kernel))]\n\
                  impl crate::util::ioctl::Ioctl for {name} {{\n\
                      const OPCODE: u32 = {opcode};\n\
                      type Arg = {arg};\n\
                  }}\n"));
             opcodes.push(format!("<{name} as crate::util::ioctl::Ioctl>::OPCODE as u64"));
         }
-        Ok(tokens(&format!("{out}#[cfg(not(kernel))]\n{}#[cfg(kernel)]\n{}",
-                           record(&text, &opcodes), record(&text, &[]))))
+        Ok(tokens(&format!("{out}{}", record(&text, &opcodes))))
     })
 }
 

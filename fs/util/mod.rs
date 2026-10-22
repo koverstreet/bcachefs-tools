@@ -11,7 +11,6 @@ pub mod futex;
 pub mod gather;
 pub mod genradix;
 pub mod inline_vec;
-#[cfg(not(kernel))]
 pub mod ioctl;
 pub mod jump_label;
 pub mod kernel;

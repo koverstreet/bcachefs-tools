@@ -9,21 +9,23 @@
 //! every architecture. What varies is five constants - the widths of the size
 //! and direction fields, and the direction values - which powerpc, mips,
 //! sparc, alpha and parisc override in their asm/ioctl.h. Those come from
-//! linux-raw-sys, bindgen's view of each target's own headers; nothing here
-//! restates them. A hand-written opcode() that had asm-generic's layout
-//! everywhere got ppc64le ENOTTY (#904).
+//! bindgen's view of each target's own headers - linux-raw-sys's in
+//! userspace, codegen.h's in-kernel; nothing here restates them. A
+//! hand-written opcode() that had asm-generic's layout everywhere got ppc64le
+//! ENOTTY (#904).
+//!
+//! Not the kernel crate's kernel::ioctl: it has asm-generic's constants on
+//! powerpc from 6.4, where it arrived, through 7.2 - its uapi bindings
+//! included asm-generic/ioctl.h ahead of the arch's, until cdfcaa36ac93.
 //!
 //! The generated header asserts that C's _IO*() make the same numbers.
-//!
-//! Userspace only, for now: the kernel crate's equivalent, kernel::ioctl,
-//! has asm-generic's constants on powerpc from 6.4, where it arrived, through
-//! 7.2 - its uapi bindings included asm-generic/ioctl.h ahead of the arch's,
-//! until cdfcaa36ac93 - and no Rust in the kernel build makes an ioctl call
-//! yet.
 
 #![allow(non_snake_case)]
 
 use core::mem::size_of;
+#[cfg(kernel)]
+use crate::c as ioc;
+#[cfg(not(kernel))]
 use linux_raw_sys::general as ioc;
 
 /// An ioctl: its number, and its argument's type - () for _IO.
