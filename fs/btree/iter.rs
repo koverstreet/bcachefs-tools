@@ -1224,7 +1224,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         node:          BtreeNodeRef,
         key:           TransBkey<'_, 't, V>,
         flags:         impl Into<CommitOpts>,
-        iter_searched: bool,
+        skip_triggers: bool,
     ) -> Result<(), BchError> {
         let ret = unsafe {
             c::bch2_btree_node_update_key(
@@ -1233,7 +1233,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 node.as_ptr(),
                 key.as_ptr(),
                 flags.into().bits(),
-                iter_searched,
+                skip_triggers,
             )
         };
         self.result(ret)
