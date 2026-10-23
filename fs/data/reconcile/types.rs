@@ -45,9 +45,12 @@ pub struct bch_fs_reconcile {
      * carries on with everything else and goes idle once they're all
      * that's left, instead of retrying them back to back. Stripes have no
      * on-disk pending state, as extents do; in memory, a remount retries
-     * each once. Owned by the reconcile thread.
+     * each once. Under stripes_pending_lock: the reconcile thread parks and
+     * tests stripes, and so do its phys threads, one per rotational device,
+     * all at once, through stripes' backpointers.
      */
     pub stripes_pending: c::cuckoo_u64,
+    pub stripes_pending_lock: c::spinlock_t,
     pub stripes_pending_copygc_run_count: u32,
 
     pub on_battery: bool,

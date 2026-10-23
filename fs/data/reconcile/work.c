@@ -790,7 +790,14 @@ DEFINE_DARRAY(stripe_retry);
  */
 static void reconcile_stripe_park(struct bch_fs *c, u64 idx)
 {
+	guard(spinlock)(&c->reconcile.stripes_pending_lock);
 	cuckoo_u64_add(&c->reconcile.stripes_pending, idx, GFP_NOWAIT|__GFP_NOWARN);
+}
+
+static bool reconcile_stripe_parked(struct bch_fs *c, u64 idx)
+{
+	guard(spinlock)(&c->reconcile.stripes_pending_lock);
+	return cuckoo_u64_test(&c->reconcile.stripes_pending, idx);
 }
 
 /*
@@ -801,6 +808,7 @@ static void reconcile_stripe_park(struct bch_fs *c, u64 idx)
  */
 static void reconcile_stripes_unpark(struct bch_fs *c)
 {
+	guard(spinlock)(&c->reconcile.stripes_pending_lock);
 	cuckoo_u64_clear(&c->reconcile.stripes_pending);
 }
 
@@ -820,7 +828,7 @@ static int do_reconcile_stripe(struct moving_context *ctxt,
 	if (!s.v->needs_reconcile) /* write buffer race */
 		return 0;
 
-	if (cuckoo_u64_test(&c->reconcile.stripes_pending, k.k->p.offset))
+	if (reconcile_stripe_parked(c, k.k->p.offset))
 		return 0;
 
 	/*
@@ -2255,6 +2263,7 @@ int bch2_fs_reconcile_init(struct bch_fs *c)
 	struct bch_fs_reconcile *r = &c->reconcile;
 
 	mutex_init(&r->scans_in_flight_lock);
+	spin_lock_init(&r->stripes_pending_lock);
 	try(rhashtable_init(&r->scans_in_flight, &reconcile_scan_in_flight_params));
 	r->scans_in_flight_init_done = true;
 
