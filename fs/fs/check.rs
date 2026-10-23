@@ -878,33 +878,10 @@ pub mod ioctl {
     use crate::util::ffi::c_char;
     use crate::util::kernel::{capable, Capability};
     use crate::util::thread_with_file::{StdioRedirect, ThreadWithFile};
-    use crate::util::ioctl::UserVstruct;
+    use crate::util::ioctl::{UserStr, UserVstruct};
     use crate::{opt_defined, opt_set};
-    use core::ffi::CStr;
     use core::ptr::NonNull;
     use kernel::ffi::c_int;
-    use kernel::uaccess::{UserPtr, UserSlice};
-
-    /// A string from userspace, shorter than its limit: EINVAL if it isn't,
-    /// as strndup_user().
-    struct UserStr(KVVec<u8>);
-
-    impl UserStr {
-        fn read(addr: u64, max: usize) -> Result<Self, BchError> {
-            let mut buf = KVVec::from_elem(0u8, max + 1, GFP_KERNEL)?;
-            let len = UserSlice::new(UserPtr::from_addr(addr as usize), max + 1).reader()
-                .strcpy_into_buf(&mut buf)?.to_bytes().len();
-            if len >= max {
-                return Err(c::EINVAL.into());
-            }
-            buf.truncate(len + 1);
-            Ok(UserStr(buf))
-        }
-
-        fn as_cstr(&self) -> &CStr {
-            CStr::from_bytes_with_nul(&self.0).expect("read up to its NUL")
-        }
-    }
 
     /// The options at user address @addr, or none if it's 0.
     fn user_opts(addr: u64) -> Result<c::bch_opts, BchError> {

@@ -4,9 +4,6 @@
 
 #ifndef NO_BCACHEFS_FS
 
-struct printbuf;
-int bch2_copy_ioctl_err_msg(struct bch_ioctl_err_msg *, struct printbuf *, int);
-
 #include "init/chardev_gen.h"
 
 void bch2_fs_chardev_exit(struct bch_fs *);

@@ -96,8 +96,11 @@ pub use user::*;
 #[cfg(kernel)]
 mod user {
     use super::{dir, Ioctl};
+    use crate::c;
     use crate::errcode::BchError;
+    use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
     use crate::util::vstructs::{FlexArray, Head, Unsized};
+    use core::ffi::CStr;
     use core::marker::PhantomData;
     use core::mem::size_of;
     use kernel::ffi::{c_int, c_long};
@@ -164,6 +167,27 @@ mod user {
         R: IoctlRet,
     {
         Ok(f(UserVstruct { at: user, _t: PhantomData })?.ret())
+    }
+
+    /// A string from userspace, shorter than its limit: EINVAL if it isn't,
+    /// as strndup_user().
+    pub struct UserStr(KVVec<u8>);
+
+    impl UserStr {
+        pub fn read(addr: u64, max: usize) -> Result<Self, BchError> {
+            let mut buf = KVVec::from_elem(0u8, max + 1, GFP_KERNEL)?;
+            let len = UserSlice::new(UserPtr::from_addr(addr as usize), max + 1).reader()
+                .strcpy_into_buf(&mut buf)?.to_bytes().len();
+            if len >= max {
+                return Err(c::EINVAL.into());
+            }
+            buf.truncate(len + 1);
+            Ok(UserStr(buf))
+        }
+
+        pub fn as_cstr(&self) -> &CStr {
+            CStr::from_bytes_with_nul(&self.0).expect("read up to its NUL")
+        }
     }
 
     pub struct UserVstruct<T: ?Sized> {

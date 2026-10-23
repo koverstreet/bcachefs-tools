@@ -206,7 +206,7 @@ impl crate::util::vstructs::SelfSized for bch_ioctl_readdir_entry {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_err_msg {
     pub msg_ptr: u64,
     pub msg_len: u32,
@@ -275,7 +275,7 @@ c_default!(bch_ioctl_query_uuid);
  */
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_disk {
     pub flags: u32,
     pub pad: u32,
@@ -283,7 +283,7 @@ pub struct bch_ioctl_disk {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_v2 {
     pub flags: u32,
     pub pad: u32,
@@ -302,7 +302,7 @@ pub struct bch_ioctl_disk_v2 {
  * failed or spare) unless the appropriate BCH_FORCE_IF_* flags are set.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_set_state {
     pub flags: u32,
     pub new_state: u8,
@@ -311,7 +311,7 @@ pub struct bch_ioctl_disk_set_state {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_set_state_v2 {
     pub flags: u32,
     pub new_state: u8,
@@ -575,7 +575,7 @@ pub struct bch_ioctl_disk_get_idx {
  * @nbuckets	- new number of buckets
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_resize {
     pub flags: u32,
     pub pad: u32,
@@ -584,7 +584,7 @@ pub struct bch_ioctl_disk_resize {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_resize_v2 {
     pub flags: u32,
     pub pad: u32,
@@ -600,7 +600,7 @@ pub struct bch_ioctl_disk_resize_v2 {
  * @nbuckets	- new number of buckets
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_resize_journal {
     pub flags: u32,
     pub pad: u32,
@@ -609,7 +609,7 @@ pub struct bch_ioctl_disk_resize_journal {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_resize_journal_v2 {
     pub flags: u32,
     pub pad: u32,

@@ -1312,6 +1312,12 @@ pub fn bch2_dev_bucket_missing(ca: &c::bch_dev, bucket: u64) {
 pub struct DevRef(*mut c::bch_dev);
 
 impl DevRef {
+    /// # Safety
+    /// @ca holds a ref that's this one's now: bch2_dev_lookup()'s.
+    pub unsafe fn from_raw(ca: *mut c::bch_dev) -> Self {
+        DevRef(ca)
+    }
+
     /// For C functions taking *mut bch_dev.
     pub fn as_mut_ptr(&self) -> *mut c::bch_dev {
         self.0
@@ -1344,6 +1350,18 @@ impl Drop for DevRef {
 /// state_lock, where a DevRef mustn't be held: recheck ca.removing under the
 /// lock before touching member state.
 pub struct DevOuterRef(*mut c::bch_dev);
+
+impl DevOuterRef {
+    /// For C functions taking *mut bch_dev.
+    pub fn as_mut_ptr(&self) -> *mut c::bch_dev {
+        self.0
+    }
+
+    /// The ref, for a C function that puts it: bch2_dev_remove().
+    pub fn into_raw(self) -> *mut c::bch_dev {
+        core::mem::ManuallyDrop::new(self).0
+    }
+}
 
 impl core::ops::Deref for DevOuterRef {
     type Target = c::bch_dev;
