@@ -25,10 +25,6 @@ int bch2_data_update_index_update(struct bch_write_op *);
 void bch2_data_update_read_done(struct data_update *);
 bool bch2_data_update_read_err_benign(int);
 
-int bch2_can_do_data_update(struct btree_trans *, struct bch_inode_opts *,
-			    struct data_update_opts *, struct bkey_s_c,
-			    struct printbuf *);
-
 bool bch2_data_update_fail_should_trace(enum bch_data_update_types, int);
 
 void bch2_data_update_ec_alloc_failed(struct data_update *);

@@ -188,6 +188,8 @@ c_extern! {
     pub fn bch2_widen_cache_init(cache: *mut c::widen_cache) -> c_int;
     pub fn bch2_widen_cache_lookup(cache: *mut c::widen_cache, c: *mut c::bch_fs, disk_label: u8, sectors: u16,
                                    nr_devs: *mut c_uint) -> c_int;
+    pub fn bch2_stripe_repair(ctxt: *mut c::moving_context, iter: *mut c::btree_iter,
+                              s: c::bkey_s_c_stripe) -> c_int;
     pub fn bch2_can_form_ec_stripe(c: *mut c::bch_fs, target: c_uint, redundancy: c_uint,
                                    trace: *mut c::printbuf) -> bool;
 }

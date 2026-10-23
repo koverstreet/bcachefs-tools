@@ -21,6 +21,7 @@ use crate::locking::Lock;
 use crate::types::Atomic64;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError};
 use crate::util::ffi::{c_char, Opaque};
+use crate::util::vstructs::Validated;
 use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
@@ -161,6 +162,26 @@ impl<'a> MovingCtxt<'a> {
         assert!(ret <= 0, "bch2_move_extent() returned {ret}");
         t.restarts_handled();
         t.result(ret)
+    }
+
+    /// Repair stripe @s, at @iter, if it's degraded - a block on a device
+    /// that's missing, evacuating, or lost its durability: rebuilt at its
+    /// width if there are devices for it, narrowed if not, rebuilt around
+    /// what's left if it can't be reconstructed. bch2_stripe_repair().
+    ///
+    /// @iter must be intent locked - the stripe's held against its trigger
+    /// until it's open - and repair drops the locks to read and write, and
+    /// runs attempts of its own: so @s is a copy, not a key in the btree, and
+    /// if it did, the attempt ends in transaction_restart_nested
+    /// (relock_or_nested()). stripe_needs_block_evacuate: a block must be
+    /// evacuated first.
+    pub fn stripe_repair(&self, t: &TransAttempt<'_, 'a>, iter: &mut BtreeIter<'_>, s: BkeySC<'_, c::Stripe<Validated>>)
+        -> Result<(), BchError>
+    {
+        // SAFETY: in the attempt; @s the caller's copy, which the unlocks
+        // inside don't touch
+        ret_to_result_void(unsafe { c::bch2_stripe_repair(self.raw(), iter.raw_mut(), s.to_c_whole()) })?;
+        t.relock_or_nested()
     }
 
     pub fn io_mark(&self) -> IoMark {

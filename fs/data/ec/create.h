@@ -102,7 +102,6 @@ void bch2_ec_stripe_delete_work(struct work_struct *);
 
 void bch2_new_stripes_to_text(struct printbuf *, struct bch_fs *);
 
-int bch2_stripe_repair(struct moving_context *, struct btree_iter *, struct bkey_s_c_stripe);
 int bch2_stripe_repair_damaged(struct moving_context *, struct btree_iter *,
 			       struct bkey_s_c_stripe, unsigned);
 

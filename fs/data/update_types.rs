@@ -5,6 +5,9 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::{c_int, c_uint};
+use crate::btree::bkey::BkeySC;
+use crate::btree::iter::TransAttempt;
+use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::util::Printbuf;
 use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro};
@@ -124,6 +127,9 @@ c_extern! {
                                          io_opts: *mut c::bch_inode_opts, data_opts: *mut c::data_update_opts);
     pub fn bch2_data_update_in_flight(c: *mut c::bch_fs, pos: *mut c::bbpos,
                                       type_: c::bch_data_update_types) -> bool;
+    pub fn bch2_can_do_data_update(trans: *mut c::btree_trans, opts: *mut c::bch_inode_opts,
+                                   data_opts: *mut c::data_update_opts, k: c::bkey_s_c,
+                                   trace: *mut c::printbuf) -> c_int;
 }
 
 impl Fs {
@@ -141,5 +147,23 @@ impl Fs {
             bch2_data_update_opts_to_text(out.as_raw(), self.as_ptr(), core::ptr::from_ref(io_opts).cast_mut(),
                                           core::ptr::from_ref(data_opts).cast_mut())
         }
+    }
+}
+
+impl TransAttempt<'_, '_> {
+    /// Whether the update @data_opts says can be done to @k now: the
+    /// durability it would keep, devices to write it to, and for must_ec a
+    /// stripe head. If not, why - a data_update_fail_* or ec_alloc_failed
+    /// error, and into @trace. Getting the stripe head takes mutexes, which
+    /// can restart the attempt.
+    pub fn can_do_data_update(&self, opts: &c::bch_inode_opts, data_opts: &c::data_update_opts,
+                              k: BkeySC<'_>, trace: Option<&mut Printbuf>) -> Result<(), BchError> {
+        let trace = trace.map_or(core::ptr::null_mut(), |t| core::ptr::from_mut(t.as_raw()));
+        // SAFETY: in the attempt; @opts and @data_opts only read, @trace NULL
+        // or ours
+        ret_to_result_void(unsafe {
+            bch2_can_do_data_update(self.raw(), core::ptr::from_ref(opts).cast_mut(),
+                                    core::ptr::from_ref(data_opts).cast_mut(), k.into(), trace)
+        })
     }
 }
