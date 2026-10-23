@@ -469,9 +469,10 @@ struct SnapshotTreeReply {
  * BCH_IOCTL_SNAPSHOT_TREE and _v2: the nodes of snapshot tree @tree_id - 0
  * for the tree of @subvol, the file's; another is an admin's to ask - that
  * aren't deleted, each with its accounting summed over the snapshotted
- * btrees. @size of them are returned, @node_size bytes of each, at nodes(i):
- * a v1 node is a prefix of a v2's. ERANGE if there were more, the reply
- * written regardless.
+ * btrees - memory's, current without a write buffer flush. @size of them
+ * are returned, @node_size bytes of each, at nodes(i): a v1 node is a
+ * prefix of a v2's. ERANGE if there were more, the reply written
+ * regardless.
  */
 fn snapshot_tree(fs: &Fs, subvol: u32, tree_id: u32, size: u32, node_size: usize,
                  nodes: impl Fn(u32) -> UserSlice,
@@ -498,8 +499,6 @@ fn snapshot_tree(fs: &Fs, subvol: u32, tree_id: u32, size: u32, node_size: usize
     let mut r = SnapshotTreeReply { tree, nr: 0, total: 0 };
     {
         let trans = btree_trans!(fs);
-        trans.write_buffer_flush_sync()?;
-
         let mut iter = BtreeIter::new(&trans, c::btree_id::snapshots, bkey::POS_MIN,
                                       BtreeIterFlags::PREFETCH);
         iter.for_each(&trans, |t, _, k| {
