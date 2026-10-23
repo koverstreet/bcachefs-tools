@@ -568,6 +568,8 @@ static long bch2_ioctl_read_super(struct bch_fs *c,
 	if (arg.flags & BCH_READ_DEV) {
 		ca = errptr_try(bch2_device_lookup(c, arg.dev, arg.flags));
 		sb = ca->disk_sb.sb;
+		if (!sb)
+			return bch_err_throw(c, device_offline);
 	} else {
 		sb = c->disk_sb.sb;
 	}
