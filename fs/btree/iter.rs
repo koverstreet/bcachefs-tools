@@ -17,6 +17,7 @@ use crate::util::log::CFnName;
 use crate::util::{Printbuf, ToText};
 use crate::SPOS_MAX;
 use bitflags::bitflags;
+use core::cell::Cell;
 use core::fmt;
 use core::marker::PhantomData;
 use core::mem::{size_of, MaybeUninit};
@@ -179,6 +180,7 @@ impl<'f> BtreeTrans<'f> {
         TransAttempt {
             trans:         self,
             restart_count: unsafe { (*self.raw()).restart_count },
+            spent:         Cell::new(false),
             t:             PhantomData,
         }
     }
@@ -209,6 +211,7 @@ impl<'f> BtreeTrans<'f> {
         TransAttempt {
             trans:         self,
             restart_count: self.begin_raw(),
+            spent:         Cell::new(false),
             t:             PhantomData,
         }
     }
@@ -274,6 +277,8 @@ impl<'f> BtreeTrans<'f> {
 pub struct TransAttempt<'a, 't> {
     trans:         &'a BtreeTrans<'t>,
     restart_count: u32,
+    /// ended by ignore_restarts()
+    spent:         Cell<bool>,
     t:             PhantomData<&'a mut ()>,
 }
 
@@ -483,7 +488,46 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     pub fn verify_not_restarted(&self) {
-        self.trans.verify_not_restarted(self.restart_count);
+        if !self.spent.get() {
+            self.trans.verify_not_restarted(self.restart_count);
+        }
+    }
+
+    /// Run @f - transactions of its own, top-level loops beginning and
+    /// committing as they go - from inside this attempt, and end the attempt
+    /// as though its step had: C's saving and restoring trans->restart_count
+    /// around a nested loop.
+    ///
+    /// @f's first begin ends this attempt, so the attempt must be finished
+    /// when @f starts: nothing queued, and nothing it holds used again - its
+    /// keys, its iterators' positions, its locks, which @f's attempts have
+    /// had since. After @f it's spent: verify_not_restarted() passes, and the
+    /// loop running it steps its iterator and begins anew, by is_spent().
+    ///
+    /// Checked: nothing queued, and no relock or commit of a spent attempt.
+    ///
+    /// Not checked - the caller's to see to, until it can be verified:
+    /// nothing borrowed from this attempt is used after @f. The key a step
+    /// was given points into a btree node the attempt had locked; @f's
+    /// attempts drop those locks, and by the time @f returns the node may
+    /// have been rewritten, split, or freed and reused - reading the key then
+    /// reads memory that isn't it any more. The types don't stop it: the
+    /// key's borrow is of the attempt, which is still alive, so the key is
+    /// still in scope after @f. Nor an update queued after @f, at the step's
+    /// iterator: nothing commits a spent attempt, so the next begin drops it
+    /// - with a warning under CONFIG_BCACHEFS_DEBUG, as any update never
+    /// committed.
+    pub fn ignore_restarts<T>(&self, f: impl FnOnce(&'a BtreeTrans<'t>) -> Result<T, BchError>)
+        -> Result<T, BchError>
+    {
+        assert!(!self.has_updates(), "ignore_restarts() with updates queued: @f's begin would drop them");
+        self.spent.set(true);
+        f(self.trans)
+    }
+
+    /// Ended by ignore_restarts(): the loop running it must begin anew.
+    pub fn is_spent(&self) -> bool {
+        self.spent.get()
     }
 
     /// For what a step does to the transaction itself - a write buffer flush, a
@@ -498,6 +542,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     pub fn relock(&self) -> Result<(), BchError> {
+        assert!(!self.spent.get(), "relock of an attempt ignore_restarts() ended");
         self.trans.relock()
     }
 
@@ -557,6 +602,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         disk_res: Option<&DiskReservation<'_>>,
         flags:    impl Into<CommitOpts>,
     ) -> Result<(), BchError> {
+        assert!(!self.spent.get(), "commit in an attempt ignore_restarts() ended");
         self.trans.commit(disk_res, flags)
     }
 
@@ -2419,7 +2465,9 @@ impl<'t> BtreeIter<'t> {
                 Err(e) => return Err(e),
             }
 
-            if let Some((disk_res, flags)) = commit {
+            // a spent attempt's step has nothing queued: what ignore_restarts()
+            // ran committed for itself
+            if let Some((disk_res, flags)) = commit.filter(|_| !t.is_spent()) {
                 match t.commit(disk_res, flags) {
                     Err(e) if is_restart(&e) => continue,
                     r => r?,

@@ -196,7 +196,8 @@ pub fn require_no_children(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), 
 /// Walk @iter to @end at @subvol's snapshot, calling @f on each key until it
 /// breaks. A restart re-reads the snapshot and retries the current key, so @f
 /// must not restart after doing something it can't redo. @f may unlock: the
-/// next peek relocks.
+/// next peek relocks. An attempt @f ends with ignore_restarts() is followed
+/// by a new one, as a restart's is.
 pub fn for_each_in_subvolume_max_in_trans<'t, F, R>(
     trans:  &BtreeTrans<'t>,
     iter:   &mut BtreeIter<'t>,
@@ -215,6 +216,11 @@ where
     let mut snapshot = 0;
 
     loop {
+        if t.is_spent() {
+            t = trans.begin();
+            snapshot = 0;
+        }
+
         let ret = (|| -> Result<Step<R::Break>, BchError> {
             t.relock()?;
             if snapshot == 0 {
