@@ -96,7 +96,7 @@ crate::vfs_ops! {
     pub trait FileOps: Send + Sync for c::file_operations, FileVTable<P: FileData> = P::Ops, |ops| {
         assert!(!<P::Ops>::HAS_OPEN || P::OPENABLE, "open() makes the ops' type, not the private data");
         ops.release = Some(Self::release);
-        #[cfg(kernel)]
+        #[cfg(all(kernel, MODULE))]
         {
             ops.owner = &raw mut kernel::bindings::__this_module;
         }
