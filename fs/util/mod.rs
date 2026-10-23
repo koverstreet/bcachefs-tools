@@ -1,6 +1,7 @@
 pub mod alloc;
 pub mod bio;
 pub mod bitmap;
+pub mod clock;
 pub mod closure;
 pub mod cuckoo;
 pub mod darray;

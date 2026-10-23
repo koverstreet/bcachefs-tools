@@ -58,6 +58,8 @@ pub struct io_clock {
 c_default!(io_clock);
 
 c_extern! {
+    pub fn bch2_io_timer_add(clock: *mut c::io_clock, timer: *mut c::io_timer);
+    pub fn bch2_io_timer_del(clock: *mut c::io_clock, timer: *mut c::io_timer);
     pub fn bch2_io_timers_to_text(out: *mut c::printbuf, clock: *mut c::io_clock);
 }
 
