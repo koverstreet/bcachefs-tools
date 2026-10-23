@@ -356,7 +356,12 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
             return Ok(fix | PtrFix::DROP);
         }
 
-        g.lock.lock().set_data_type(dt::BCH_DATA_multiple.0 as u8);
+        // Left to check_extents_to_backpointers() to resolve; counted as
+        // `multiple` meanwhile, as the alloc key gc writes will say
+        t.gc_bucket_mod(&ca, g, UpdateTriggerFlags::GC, |a| {
+            a.data_type = dt::BCH_DATA_multiple.0 as u8;
+            Ok(())
+        })?;
     }
 
     if p.has_ec {
