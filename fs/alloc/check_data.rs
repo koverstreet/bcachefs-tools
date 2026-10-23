@@ -97,8 +97,11 @@ fn btree_ptr_unreadable<'a>(t: &TransAttempt<'a, '_>, btree: c::btree_id, level:
 pub fn bkey_drop_device_and_update(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: BkeySC<'_>,
                                    dev: u32, error: c::bch_key_type_errors) -> Result<(), BchError> {
     let fs = t.fs();
-    let mut n = t.bkey_make_mut_noupdate(k)?;
+    let mut n = t.bkey_reassemble_room(k, KEY_ROOM)?;
     n.reborrow().arm::<Ptrs>().expect("a key with pointers").drop_device(fs, dev);
+
+    let opts = get_io_opts(t, None, k)?;
+    n.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
 
     if n.k().is_btree_ptr() {
         if n.as_sc().can_read(fs) {
