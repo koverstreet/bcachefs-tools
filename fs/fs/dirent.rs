@@ -601,7 +601,7 @@ pub fn readdir(
                                   BtreeIterFlags::empty());
 
     subvolume::for_each_in_subvolume_max_in_trans(&trans, &mut iter, pos(dir.inum, u64::MAX),
-                                                  dir.subvol as u32, BtreeIterFlags::empty(), |t, k| {
+                                                  dir.subvol as u32, BtreeIterFlags::empty(), |t, _, k| {
         let Some(d) = Dirent::new(k) else { return Ok(ControlFlow::Continue(())) };
 
         let mut need_second_pass = false;

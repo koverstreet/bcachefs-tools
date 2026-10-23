@@ -534,7 +534,7 @@ mod vfs {
 
         let ret = subvolume::for_each_in_subvolume_max_in_trans(
             &trans, &mut iter, pos(inum.inum, u64::MAX), inum.subvol as u32,
-            BtreeIterFlags::empty(), |_, k| {
+            BtreeIterFlags::empty(), |_, _, k| {
                 if k.k.type_ != c::bch_bkey_type::KEY_TYPE_xattr.0 as u8 {
                     return Ok(());
                 }

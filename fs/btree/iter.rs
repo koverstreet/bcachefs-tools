@@ -2188,6 +2188,15 @@ impl<'t> BtreeIter<'t> {
         self.peek_raw(t, |raw| unsafe { (*raw).peek_max_type_raw(end, flags) })
     }
 
+    /// peek_max_type(), and the iterator with the key, shared: for a loop
+    /// whose step updates at the key's position, as for_each()'s do.
+    pub fn peek_max_type_with<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>, end: bpos,
+                                  flags: BtreeIterFlags)
+        -> Result<Option<(&'k BtreeIter<'t>, BkeySC<'k>)>, BchError>
+    {
+        self.peek_with(t, &mut |raw| unsafe { (*raw).peek_max_type_raw(end, flags) })
+    }
+
     pub fn peek<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>)
         -> Result<Option<BkeySC<'k>>, BchError>
     {

@@ -193,11 +193,12 @@ pub fn require_no_children(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), 
     }
 }
 
-/// Walk @iter to @end at @subvol's snapshot, calling @f on each key until it
-/// breaks. A restart re-reads the snapshot and retries the current key, so @f
-/// must not restart after doing something it can't redo. @f may unlock: the
-/// next peek relocks. An attempt @f ends with ignore_restarts() is followed
-/// by a new one, as a restart's is.
+/// Walk @iter to @end at @subvol's snapshot, calling @f on each key - with
+/// the iterator, to update at - until it breaks. A restart re-reads the
+/// snapshot and retries the current key, so @f must not restart after doing
+/// something it can't redo. @f may unlock: the next peek relocks. An attempt
+/// @f ends with ignore_restarts() is followed by a new one, as a restart's
+/// is.
 pub fn for_each_in_subvolume_max_in_trans<'t, F, R>(
     trans:  &BtreeTrans<'t>,
     iter:   &mut BtreeIter<'t>,
@@ -207,7 +208,7 @@ pub fn for_each_in_subvolume_max_in_trans<'t, F, R>(
     mut f:  F,
 ) -> Result<R::Break, BchError>
 where
-    F: FnMut(&TransAttempt<'_, 't>, BkeySC<'_>) -> Result<R, BchError>,
+    F: FnMut(&TransAttempt<'_, 't>, &BtreeIter<'t>, BkeySC<'_>) -> Result<R, BchError>,
     R: LoopControl,
 {
     // One attempt for the walk, not one per key - readdir doesn't need a
@@ -227,8 +228,8 @@ where
                 snapshot = get_snapshot(&t, subvol)?;
                 iter.set_snapshot(snapshot);
             }
-            Ok(match iter.peek_max_type(&t, end, flags)? {
-                Some(k) => f(&t, k)?.into_step(),
+            Ok(match iter.peek_max_type_with(&t, end, flags)? {
+                Some((iter, k)) => f(&t, iter, k)?.into_step(),
                 None    => Step::Break(Default::default()),
             })
         })();
