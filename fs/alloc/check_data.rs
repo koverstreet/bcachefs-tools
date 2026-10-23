@@ -206,8 +206,9 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: c::btree_id
                     checksum bad or wrong btree node - dropping:\n{btree} {}\n{other_btree} {}",
          k.to_text(fs), other_k.to_text(fs));
 
-    // only an extents position names an inum; elsewhere report without recording
-    let damage_pos = if btree == c::btree_id::BTREE_ID_extents { k.k.p } else { POS_MIN };
+    // only an extent's position names an inum - not a btree node pointer's,
+    // in the extents btree or not; elsewhere report without recording
+    let damage_pos = if btree == c::btree_id::BTREE_ID_extents && !is_btree_ptr { k.k.p } else { POS_MIN };
 
     if inode_fsck_err!(t, damage_pos, id::dup_backpointer_to_bad_csum_extent, "{}", msg)? {
         bkey_drop_device_and_update(t, btree, level, k, dev,
