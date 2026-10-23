@@ -82,7 +82,7 @@ static u64 reconcile_scan_encode(struct reconcile_scan s)
 	case RECONCILE_SCAN_stripes:
 		return RECONCILE_SCAN_COOKIE_stripes;
 	case RECONCILE_SCAN_device:
-		return RECONCILE_SCAN_COOKIE_device + s.dev;
+		return RECONCILE_SCAN_COOKIE_device + s.device;
 	case RECONCILE_SCAN_inum:
 		return s.inum;
 	default:
@@ -97,7 +97,7 @@ static struct reconcile_scan reconcile_scan_decode(struct bch_fs *c, u64 v)
 	if (v >= RECONCILE_SCAN_COOKIE_device)
 		return (struct reconcile_scan) {
 			.type = RECONCILE_SCAN_device,
-			.dev =  v - RECONCILE_SCAN_COOKIE_device,
+			.device = v - RECONCILE_SCAN_COOKIE_device,
 		};
 	if (v == RECONCILE_SCAN_COOKIE_pending)
 		return (struct reconcile_scan) { .type = RECONCILE_SCAN_pending };
@@ -119,7 +119,7 @@ static __cold void reconcile_scan_to_text(struct printbuf *out,
 	switch (s.type) {
 	case RECONCILE_SCAN_device:
 		prt_str(out, ": ");
-		bch2_prt_member_name(out, c, s.dev);
+		bch2_prt_member_name(out, c, s.device);
 		break;
 	case RECONCILE_SCAN_inum:
 		prt_str(out, ": ");
@@ -1216,11 +1216,11 @@ static int do_reconcile_scan_bps(struct moving_context *ctxt,
 	struct bch_fs *c = trans->c;
 	struct bch_fs_reconcile *r = &c->reconcile;
 
-	r->scan_start	= BBPOS(BTREE_ID_backpointers, POS(s.dev, 0));
-	r->scan_end	= BBPOS(BTREE_ID_backpointers, POS(s.dev, U64_MAX));
+	r->scan_start	= BBPOS(BTREE_ID_backpointers, POS(s.device, 0));
+	r->scan_end	= BBPOS(BTREE_ID_backpointers, POS(s.device, U64_MAX));
 
 	return backpointer_scan_for_each(trans, iter, BTREE_ID_backpointers,
-					 POS(s.dev, 0), POS(s.dev, U64_MAX),
+					 POS(s.device, 0), POS(s.device, U64_MAX),
 				  last_flushed, NULL, bp, ({
 		ctxt->stats->pos = BBPOS(BTREE_ID_backpointers, iter.pos);
 

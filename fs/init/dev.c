@@ -883,7 +883,7 @@ int __bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
 
 	struct reconcile_scan s = new_state == BCH_MEMBER_STATE_rw
 		? (struct reconcile_scan) { .type = RECONCILE_SCAN_pending }
-		: (struct reconcile_scan) { .type = RECONCILE_SCAN_device, .dev = ca->dev_idx };
+		: (struct reconcile_scan) { .type = RECONCILE_SCAN_device, .device = ca->dev_idx };
 
 	/* empty stripes hold their buckets until deleted: */
 	if (new_state == BCH_MEMBER_STATE_evacuating)

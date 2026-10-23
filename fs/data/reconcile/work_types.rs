@@ -9,8 +9,7 @@ use crate::types::c_default;
 use crate::util::ffi::c_char;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, c_const, c_enum, c_extern, c_xmacro};
-use nestify::nest;
+use cstruct_macros::{CStruct, TypeInfo, c_const, c_enum, c_extern, c_typedef, c_xmacro, tagged_union};
 
 c_xmacro! {
     RECONCILE_SCAN_TYPES(x) {
@@ -30,20 +29,36 @@ c_enum! {
     }
 }
 
-nest! {
-    #[derive(Clone, Copy, CStruct)]*
-    #[repr(C)]*
-    pub struct reconcile_scan {
-        pub type_: c::reconcile_scan_type,
+c_typedef! {
+    pub type reconcile_scan_device = c_uint;
+}
 
-        #[c_anon]
-        pub id: pub union reconcile_scan_id {
-            pub dev: c_uint,
-            pub inum: u64,
-        },
+c_typedef! {
+    pub type reconcile_scan_inum = u64;
+}
+
+tagged_union! {
+    #[derive(Clone, Copy, CStruct)]*
+    /// A scan reconcile's asked for - of what, and for a device's or an
+    /// inode's, which.
+    #[derive(TypeInfo)]
+    pub struct reconcile_scan {
+        tag type_: enum c::reconcile_scan_type,
+        arms from RECONCILE_SCAN_TYPES(x) => x: reconcile_scan_ ## x = c::reconcile_scan_type::RECONCILE_SCAN_ ## x,
+        pad: [u64; 2],
+        size: pad,
+        plain,
+
+        #[repr(C)]
+        pub struct reconcile_scan_fs {},
+        #[repr(C)]
+        pub struct reconcile_scan_metadata {},
+        #[repr(C)]
+        pub struct reconcile_scan_pending {},
+        #[repr(C)]
+        pub struct reconcile_scan_stripes {},
     }
 }
-c_default!(reconcile_scan);
 
 c_const! {
     /* No opt change touches more than one bracketed reconcile scan today: */
@@ -87,10 +102,7 @@ impl Fs {
     /// Have reconcile scan for pending work, and kick it: as
     /// bch2_reconcile_pending_wakeup().
     pub fn reconcile_pending_wakeup(&self) -> Result<(), BchError> {
-        let scan = c::reconcile_scan {
-            type_: c::reconcile_scan_type::RECONCILE_SCAN_pending,
-            ..Default::default()
-        };
+        let scan = c::reconcile_scan::from_arm(c::reconcile_scan_pending {});
         ret_to_result_void(unsafe { bch2_set_reconcile_needs_scan(self.as_ptr(), scan, true) })
     }
 

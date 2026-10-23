@@ -618,11 +618,7 @@ pub fn bch2_logged_op_inode_opt_propagate_to_text(out: &mut Printbuf, _c: &Opaqu
 /// A reconcile scan of @inum's data, for options it may have that its data
 /// doesn't.
 fn needs_scan(t: &TransAttempt<'_, '_>, inum: u64) -> Result<(), BchError> {
-    let scan = c::reconcile_scan {
-        type_: c::reconcile_scan_type::RECONCILE_SCAN_inum,
-        id:    c::reconcile_scan_id { inum },
-    };
-
+    let scan = c::reconcile_scan::from_arm::<c::reconcile_scan_inum>(inum);
     t.result(unsafe { c::bch2_set_reconcile_needs_scan_trans(t.raw(), scan) })
 }
 

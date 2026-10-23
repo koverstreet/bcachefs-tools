@@ -633,7 +633,7 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 	case Opt_metadata_checksum:
 	case Opt_metadata_replicas:
 		try(reconcile_scan_bracket(c,
-			(struct reconcile_scan) { .type = RECONCILE_SCAN_metadata, .dev = inum }, post, scope));
+			(struct reconcile_scan) { .type = RECONCILE_SCAN_metadata }, post, scope));
 		break;
 	case Opt_durability:
 		if (!post && v > ca->mi.durability)
@@ -641,7 +641,7 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 				(struct reconcile_scan) { .type = RECONCILE_SCAN_pending}, false));
 
 		try(reconcile_scan_bracket(c,
-			(struct reconcile_scan) { .type = RECONCILE_SCAN_device, .dev = ca->dev_idx }, post, scope));
+			(struct reconcile_scan) { .type = RECONCILE_SCAN_device, .device = ca->dev_idx }, post, scope));
 		break;
 	case Opt_ec_max_data_blocks:
 		/*
@@ -674,7 +674,7 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 				(struct reconcile_scan) { .type = RECONCILE_SCAN_pending }, post, scope));
 			/* Data on the device may now be outside its target. */
 			try(reconcile_scan_bracket(c,
-				(struct reconcile_scan) { .type = RECONCILE_SCAN_device, .dev = ca->dev_idx }, post, scope));
+				(struct reconcile_scan) { .type = RECONCILE_SCAN_device, .device = ca->dev_idx }, post, scope));
 		}
 		break;
 	default:
