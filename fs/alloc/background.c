@@ -34,6 +34,7 @@
 
 #include <linux/kthread.h>
 #include <linux/math64.h>
+#include <linux/module.h>
 #include <linux/pagemap.h>
 #include <linux/sizes.h>
 #include <linux/random.h>
@@ -1596,6 +1597,29 @@ int bch2_dev_remove_alloc(struct bch_fs *c, struct bch_dev *ca)
 
 /* Bucket IO clocks: */
 
+/*
+ * A read from a cached pointer refreshes the bucket's io_time[READ], the LRU
+ * that cache invalidation evicts by. That is an alloc + lru btree update per
+ * cache hit, committed from the read path, so:
+ *
+ * - refresh only when the stored time is more than cache_hit_time_granularity
+ *   sectors of reads old (0: whenever the IO clock moved, the old behaviour);
+ *
+ * - never wait for btree writeback (cache_hit_time_skip_throttled): skip the
+ *   refresh while normal commits are throttled, and commit it without the
+ *   write ratelimit otherwise - the read would wait in
+ *   bch2_trans_commit_btree_write_ratelimit() for an LRU hint.
+ */
+static unsigned bch2_cache_hit_time_granularity = 1U << 21;
+module_param_named(cache_hit_time_granularity, bch2_cache_hit_time_granularity, uint, 0644);
+MODULE_PARM_DESC(cache_hit_time_granularity,
+		 "sectors of reads before a cache hit refreshes its bucket's LRU time (0: always)");
+
+static bool bch2_cache_hit_time_skip_throttled = true;
+module_param_named(cache_hit_time_skip_throttled, bch2_cache_hit_time_skip_throttled, bool, 0644);
+MODULE_PARM_DESC(cache_hit_time_skip_throttled,
+		 "skip a cache hit's LRU time refresh while btree commits are throttled");
+
 static int __bch2_bucket_io_time_reset(struct btree_trans *trans, unsigned dev,
 				size_t bucket_nr, int rw)
 {
@@ -1604,19 +1628,25 @@ static int __bch2_bucket_io_time_reset(struct btree_trans *trans, unsigned dev,
 		errptr_try(bch2_trans_start_alloc_update_noupdate(trans, &iter, POS(dev, bucket_nr)));
 
 	u64 now = bch2_current_io_time(trans->c, rw);
-	if (a->v.io_time[rw] == now)
+	if (now - a->v.io_time[rw] <= READ_ONCE(bch2_cache_hit_time_granularity))
 		return 0;
 
 	a->v.io_time[rw] = now;
 
 	try(bch2_trans_update(trans, &iter, &a->k_i, 0));
-	try(bch2_trans_commit(trans, NULL, NULL, 0));
+	try(bch2_trans_commit(trans, NULL, NULL,
+			      READ_ONCE(bch2_cache_hit_time_skip_throttled)
+			      ? BCH_TRANS_COMMIT_no_write_ratelimit : 0));
 	return 0;
 }
 
 int bch2_bucket_io_time_reset(struct btree_trans *trans, unsigned dev,
 			      size_t bucket_nr, int rw)
 {
+	if (READ_ONCE(bch2_cache_hit_time_skip_throttled) &&
+	    bch2_btree_cache_should_throttle(trans->c))
+		return 0;
+
 	if (bch2_trans_relock(trans))
 		bch2_trans_begin(trans);
 

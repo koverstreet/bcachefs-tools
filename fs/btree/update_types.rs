@@ -19,6 +19,9 @@ c_xmacro! {
          "instead of deadlocking if BCH_WATERMARK_reclaim not specified"),
         (journal_replay, "in journal replay"),
         (skip_accounting_apply, "we're in journal replay - accounting updates have already been applied"),
+        (no_write_ratelimit,
+         "completes work that was throttled at admission instead: "
+         "don't wait on the btree write ratelimit"),
     }
 }
 
