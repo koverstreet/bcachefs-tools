@@ -110,7 +110,6 @@ bcachefs-y		:=			\
 	debug/debug.o				\
 	debug/trace.o				\
 	errcode.o				\
-	fs/check.o				\
 	fs/dirent.o				\
 	init/chardev.o				\
 	init/dev.o				\

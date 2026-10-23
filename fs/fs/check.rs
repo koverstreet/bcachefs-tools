@@ -841,6 +841,28 @@ impl Default for SnapshotsSeen {
     }
 }
 
+impl Fs {
+    /// fsck(8)'s exit status for what the filesystem's errors came to - 1
+    /// fixed, 4 left, 8 a fatal error, ORed - each said in @out.
+    pub fn fsck_errcode(&self, out: &mut Printbuf) -> core::ffi::c_int {
+        use c::bch_fs_flags::*;
+
+        let mut ret = 0;
+        for (flag, bit, what) in [
+            (BCH_FS_errors_fixed, 1, "errors fixed"),
+            (BCH_FS_error,        4, "still has errors"),
+            (BCH_FS_emergency_ro, 8, "fatal error (went emergency read-only)"),
+        ] {
+            if self.flag(flag) {
+                out.write_bytes(self.name().to_bytes());
+                prt!(out, ": {what}\n");
+                ret |= bit;
+            }
+        }
+        ret
+    }
+}
+
 /// BCH_IOCTL_FSCK_OFFLINE and BCH_IOCTL_FSCK_ONLINE: fsck in the kernel, for
 /// the bcachefs fsck command. Each runs in a kthread behind a stdio file, its
 /// output read from the fd and its questions answered by writing to it; what
@@ -959,12 +981,12 @@ pub mod ioctl {
                 prt!(&mut buf, "{}: error starting filesystem: {}\n",
                      fs.name().to_str().unwrap_or("?"), e.msg());
                 // What we return is an fsck(8) exit status, not an errcode -
-                // see bch2_fs_fsck_errcode(). A filesystem we couldn't start
+                // see Fs::fsck_errcode(). A filesystem we couldn't start
                 // is an operational error, same as the online path reports
                 // for recovery passes that fail outright.
                 8
             }
-            Ok(()) => unsafe { c::bch2_fs_fsck_errcode(fs.as_ptr(), buf.as_raw()) },
+            Ok(()) => fs.fsck_errcode(&mut buf),
         };
         if ret != 0 {
             let _ = stdio.write(false, buf.as_bytes());
@@ -1037,7 +1059,7 @@ pub mod ioctl {
             fs.set_flag(c::bch_fs_flags::BCH_FS_in_fsck);
 
             ret = run_passes(&fs, passes, true)
-                .map(|()| unsafe { c::bch2_fs_fsck_errcode(c, buf.as_raw()) });
+                .map(|()| fs.fsck_errcode(&mut buf));
 
             fs.clear_flag(c::bch_fs_flags::BCH_FS_in_fsck);
 

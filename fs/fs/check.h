@@ -3,7 +3,6 @@
 #define _BCACHEFS_FSCK_H
 
 #include "str_hash.h"
-#include "fs/check_gen.h"
 
 /* The passes, each from its own file: */
 #include "fs/check_inodes_gen.h"
