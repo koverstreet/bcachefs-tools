@@ -6,6 +6,7 @@
 #include "alloc/disk_groups.h"
 
 #include "data/reconcile/work_gen.h"
+#include "data/reconcile/scan_gen.h"
 
 static inline struct opt_change_scope bch2_opt_change_scope_init(struct bch_fs *c)
 {
@@ -19,10 +20,8 @@ DEFINE_CLASS(opt_change_scope, struct opt_change_scope,
 
 extern const char * const bch2_reconcile_work_ids[];
 
-int bch2_set_reconcile_needs_scan(struct bch_fs *, struct reconcile_scan, bool);
 int bch2_set_reconcile_needs_scan_pre(struct bch_fs *, struct reconcile_scan, struct opt_change_scope *);
 int bch2_set_reconcile_needs_scan_post(struct bch_fs *, struct reconcile_scan);
-int bch2_set_fs_needs_reconcile(struct bch_fs *);
 
 static inline void bch2_reconcile_wakeup(struct bch_fs *c)
 {

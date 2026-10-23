@@ -196,20 +196,20 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_
         .then_some(NeedsReconcile { r, invalid_devs }))
 }
 
-/// Whether scan cookie @inum is set - remembered in @cache once it is: a set
+/// Whether @scan is requested - remembered in @cache once it is: a set
 /// cookie stays set while a walk runs, an unset one can be set any time.
 /// check_reconcile_scan_cookie().
-fn scan_cookie_set(t: &TransAttempt<'_, '_>, inum: u64, cache: Option<&mut bool>) -> Result<bool, BchError> {
+fn scan_cookie_set(t: &TransAttempt<'_, '_>, scan: c::reconcile_scan, cache: Option<&mut bool>)
+    -> Result<bool, BchError>
+{
     if cache.as_deref() == Some(&true) {
         return Ok(true);
     }
-    // SAFETY: the attempt's transaction
-    let ret = unsafe { c::bch2_reconcile_scan_cookie_is_set(t.raw(), inum) };
-    t.result(ret)?;
+    let set = t.scan_requested(scan)?;
     if let Some(cache) = cache {
-        *cache = ret != 0;
+        *cache = set;
     }
-    Ok(ret != 0)
+    Ok(set)
 }
 
 /// Whether a scan cookie is set for a device @k points to - @cache, the ones
@@ -224,7 +224,7 @@ fn dev_scan_cookie_set(t: &TransAttempt<'_, '_>, k: &impl BkeyVPtrs, cache: Opti
         return Ok(true);
     }
     for dev in devs() {
-        if scan_cookie_set(t, (c::RECONCILE_SCAN_COOKIE_device + dev).into(), None)? {
+        if scan_cookie_set(t, c::reconcile_scan::from_arm::<c::reconcile_scan_device>(dev), None)? {
             if let Some(m) = cache {
                 m.d.set(dev as usize);
             }
@@ -284,11 +284,11 @@ fn new_needs_rb_allowed(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot
 
     // btree node pointers follow the metadata options, so theirs is the
     // metadata cookie
-    if scan_cookie_set(t, c::RECONCILE_SCAN_COOKIE_fs.into(), fs_cookie)? ||
+    if scan_cookie_set(t, c::reconcile_scan::fs(), fs_cookie)? ||
         if k.k().is_btree_ptr() {
-            scan_cookie_set(t, c::RECONCILE_SCAN_COOKIE_metadata.into(), None)?
+            scan_cookie_set(t, c::reconcile_scan::from_arm(c::reconcile_scan_metadata {}), None)?
         } else {
-            scan_cookie_set(t, k.k().p.inode, inum_cookie)?
+            scan_cookie_set(t, c::reconcile_scan::from_arm::<c::reconcile_scan_inum>(k.k().p.inode), inum_cookie)?
         } {
         return Ok(());
     }

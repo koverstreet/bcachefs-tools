@@ -504,11 +504,7 @@ fn check_stripe_can_widen(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
 
     let mut cache = WidenCache::new()?;
     let scan_pending = lockrestart_do(trans, |t| {
-        // SAFETY: the attempt's transaction
-        let ret = unsafe {
-            c::bch2_reconcile_scan_cookie_is_set(t.raw(), c::RECONCILE_SCAN_COOKIE_stripes.into())
-        };
-        t.result(ret).map(|()| ret > 0)
+        t.scan_requested(c::reconcile_scan::from_arm(c::reconcile_scan_stripes {}))
     })?;
 
     let mut iter = BtreeIter::new(trans, c::btree_id::stripes, POS_MIN, BtreeIterFlags::PREFETCH);

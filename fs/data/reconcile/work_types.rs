@@ -3,12 +3,12 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::types::c_default;
 use crate::util::ffi::c_char;
 use crate::util::Printbuf;
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use cstruct_macros::{CStruct, TypeInfo, c_const, c_enum, c_extern, c_typedef, c_xmacro, tagged_union};
 
 c_xmacro! {
@@ -85,9 +85,6 @@ c_default!(opt_change_scope);
 c_extern! {
     pub static bch2_reconcile_opts: [*const c_char; 0];
     pub fn bch2_opt_change_scope_exit(scope: *mut c::opt_change_scope);
-    pub fn bch2_set_reconcile_needs_scan_trans(trans: *mut c::btree_trans, s: c::reconcile_scan) -> c_int;
-    pub fn bch2_set_reconcile_needs_scan(c: *mut c::bch_fs, s: c::reconcile_scan, wakeup: bool) -> c_int;
-    pub fn bch2_reconcile_scan_cookie_is_set(trans: *mut c::btree_trans, inum: u64) -> c_int;
     pub fn rust_bch2_reconcile_wakeup(c: *mut c::bch_fs);
     pub fn bch2_reconcile_status_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
     pub fn bch2_reconcile_scan_pending_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
@@ -102,8 +99,7 @@ impl Fs {
     /// Have reconcile scan for pending work, and kick it: as
     /// bch2_reconcile_pending_wakeup().
     pub fn reconcile_pending_wakeup(&self) -> Result<(), BchError> {
-        let scan = c::reconcile_scan::from_arm(c::reconcile_scan_pending {});
-        ret_to_result_void(unsafe { bch2_set_reconcile_needs_scan(self.as_ptr(), scan, true) })
+        self.request_scan(c::reconcile_scan::from_arm(c::reconcile_scan_pending {}), true)
     }
 
     pub fn reconcile_status_to_text(&self, out: &mut Printbuf) {

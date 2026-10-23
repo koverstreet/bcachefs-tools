@@ -60,105 +60,11 @@ const char * const bch2_reconcile_work_ids[] = {
 	NULL
 };
 
-static const char * const bch2_rebalance_scan_strs[] = {
-	RECONCILE_SCAN_TYPES()
-};
-
 static const char * const bch2_reconcile_phase_types[] = {
 	RECONCILE_PHASE_TYPES()
 };
 
 #undef x
-
-static u64 reconcile_scan_encode(struct reconcile_scan s)
-{
-	switch (s.type) {
-	case RECONCILE_SCAN_fs:
-		return RECONCILE_SCAN_COOKIE_fs;
-	case RECONCILE_SCAN_metadata:
-		return RECONCILE_SCAN_COOKIE_metadata;
-	case RECONCILE_SCAN_pending:
-		return RECONCILE_SCAN_COOKIE_pending;
-	case RECONCILE_SCAN_stripes:
-		return RECONCILE_SCAN_COOKIE_stripes;
-	case RECONCILE_SCAN_device:
-		return RECONCILE_SCAN_COOKIE_device + s.device;
-	case RECONCILE_SCAN_inum:
-		return s.inum;
-	default:
-		BUG();
-	}
-}
-
-static struct reconcile_scan reconcile_scan_decode(struct bch_fs *c, u64 v)
-{
-	if (v >= BCACHEFS_ROOT_INO)
-		return (struct reconcile_scan) { .type = RECONCILE_SCAN_inum, .inum = v, };
-	if (v >= RECONCILE_SCAN_COOKIE_device)
-		return (struct reconcile_scan) {
-			.type = RECONCILE_SCAN_device,
-			.device = v - RECONCILE_SCAN_COOKIE_device,
-		};
-	if (v == RECONCILE_SCAN_COOKIE_pending)
-		return (struct reconcile_scan) { .type = RECONCILE_SCAN_pending };
-	if (v == RECONCILE_SCAN_COOKIE_stripes)
-		return (struct reconcile_scan) { .type = RECONCILE_SCAN_stripes };
-	if (v == RECONCILE_SCAN_COOKIE_metadata)
-		return (struct reconcile_scan) { .type = RECONCILE_SCAN_metadata };
-	if (v == RECONCILE_SCAN_COOKIE_fs)
-		return (struct reconcile_scan) { .type = RECONCILE_SCAN_fs};
-
-	bch_err(c, "unknown reconcile scan cookie %llu", v);
-	return (struct reconcile_scan) { .type = RECONCILE_SCAN_fs};
-}
-
-static __cold void reconcile_scan_to_text(struct printbuf *out,
-				   struct bch_fs *c, struct reconcile_scan s)
-{
-	prt_str(out, bch2_rebalance_scan_strs[s.type]);
-	switch (s.type) {
-	case RECONCILE_SCAN_device:
-		prt_str(out, ": ");
-		bch2_prt_member_name(out, c, s.device);
-		break;
-	case RECONCILE_SCAN_inum:
-		prt_str(out, ": ");
-		bch2_trans_do(c, bch2_inum_snapshot_to_path(trans, s.inum, 0, NULL, out));
-		break;
-	default:
-		break;
-	}
-}
-
-int bch2_set_reconcile_needs_scan_trans(struct btree_trans *trans, struct reconcile_scan s)
-{
-	CLASS(btree_iter, iter)(trans, BTREE_ID_reconcile_scan,
-				POS(0, reconcile_scan_encode(s)),
-				BTREE_ITER_intent);
-	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
-
-	u64 v = k.k->type == KEY_TYPE_cookie
-		? le64_to_cpu(bkey_s_c_to_cookie(k).v->cookie)
-		: 0;
-
-	struct bkey_i_cookie *cookie = errptr_try(bch2_trans_kmalloc(trans, sizeof(*cookie)));
-
-	bkey_cookie_init(&cookie->k_i);
-	cookie->k.p = iter.pos;
-	cookie->v.cookie = cpu_to_le64(v + 1);
-
-	return bch2_trans_update(trans, &iter, &cookie->k_i, 0);
-}
-
-int bch2_set_reconcile_needs_scan(struct bch_fs *c, struct reconcile_scan s, bool wakeup)
-{
-	CLASS(btree_trans, trans)(c);
-	try(commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
-		      bch2_set_reconcile_needs_scan_trans(trans, s)));
-	if (wakeup)
-		bch2_reconcile_wakeup(c);
-	return 0;
-}
 
 /*
  * In-flight opt changes:
@@ -169,14 +75,12 @@ int bch2_set_reconcile_needs_scan(struct bch_fs *c, struct reconcile_scan s, boo
  * (delete) a scan cookie for a pass that overlapped a half-applied opt change:
  * such a pass scanned against the intermediate option value, and on the
  * ERO/error path nothing bumps the cookie afterwards to force another pass. So
- * an opt change registers the cookie it touches here for its duration;
- * bch2_clear_reconcile_needs_scan() refuses to delete a registered cookie.
+ * an opt change registers the cookie it touches here for its duration, before
+ * it bumps it, and the reconcile thread doesn't start a scan whose cookie is
+ * registered. A pass that started before can't complete either: the bump
+ * moved the cookie's generation (ScanCookie::complete(), scan.rs).
  *
  * Refcounted: more than one opt change can target the same cookie at once.
- *
- * Registration also lets the reconcile thread skip *starting* a scan it
- * couldn't complete anyway - but that's just sparing wasted work; the
- * don't-delete is what's load-bearing.
  */
 struct reconcile_scan_in_flight {
 	struct rhash_head	hash;
@@ -267,7 +171,7 @@ void bch2_opt_change_scope_exit(struct opt_change_scope *scope)
 int bch2_set_reconcile_needs_scan_pre(struct bch_fs *c, struct reconcile_scan s,
 				      struct opt_change_scope *scope)
 {
-	u64 cookie = reconcile_scan_encode(s);
+	u64 cookie = bch2_reconcile_scan_cookie(s);
 
 	try(reconcile_scan_in_flight_get(c, cookie));
 	opt_change_scope_push(scope, cookie);
@@ -290,47 +194,6 @@ int bch2_set_reconcile_needs_scan_post(struct bch_fs *c, struct reconcile_scan s
 
 	bch2_reconcile_wakeup(c);
 	return ret;
-}
-
-int bch2_set_fs_needs_reconcile(struct bch_fs *c)
-{
-	return bch2_set_reconcile_needs_scan(c,
-				(struct reconcile_scan) { .type = RECONCILE_SCAN_fs },
-				true);
-}
-
-int bch2_reconcile_scan_cookie_is_set(struct btree_trans *trans, u64 inum)
-{
-	CLASS(btree_iter, iter)(trans, BTREE_ID_reconcile_scan, POS(0, inum), 0);
-	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
-	return k.k->type == KEY_TYPE_cookie;
-}
-
-static int bch2_clear_reconcile_needs_scan(struct btree_trans *trans, struct bpos pos, u64 cookie)
-{
-	struct bch_fs *c = trans->c;
-	u64 v;
-
-	try(commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
-		CLASS(btree_iter, iter)(trans, BTREE_ID_reconcile_scan, pos, BTREE_ITER_intent);
-		struct bkey_s_c k = bch2_btree_iter_peek_slot(&iter);
-		bkey_err(k) ?: ({
-			v = k.k->type == KEY_TYPE_cookie
-				? le64_to_cpu(bkey_s_c_to_cookie(k).v->cookie)
-				: 0;
-			v == cookie
-				? bch2_btree_delete_at(trans, &iter, 0)
-				: 0;
-		});
-	})));
-
-	event_inc_trace(c, reconcile_clear_scan, buf, ({
-		reconcile_scan_to_text(&buf, c, reconcile_scan_decode(c, pos.offset));
-		prt_newline(&buf);
-		prt_printf(&buf, "scan started with cookie %llu now have %llu", cookie, v);
-		prt_printf(&buf, "%sdeleting scan cookie\n", v == cookie ? "" : "not ");
-	}));
-	return 0;
 }
 
 #define RECONCILE_WORK_BUF_NR		1024
@@ -1411,11 +1274,9 @@ static int do_reconcile_scan(struct moving_context *ctxt,
 	struct bch_fs_reconcile *r = &c->reconcile;
 
 	/*
-	 * If an opt change is still mid-flight for this cookie we couldn't
-	 * complete the scan anyway - bch2_clear_reconcile_needs_scan() would
-	 * refuse to delete the cookie - so don't burn a full pass on it;
-	 * bch2_set_reconcile_needs_scan_post()'s wakeup brings us back once the
-	 * change settles.
+	 * An opt change mid-flight for this cookie: a pass now would scan its
+	 * half-applied state, and could complete the cookie - so not until it
+	 * settles; bch2_set_reconcile_needs_scan_post()'s wakeup brings us back.
 	 */
 	if (reconcile_scan_in_flight(c, cookie_pos.offset))
 		return 0;
@@ -1423,7 +1284,7 @@ static int do_reconcile_scan(struct moving_context *ctxt,
 	bch2_move_stats_init(&r->scan_stats, "reconcile_scan");
 	ctxt->stats = &r->scan_stats;
 
-	struct reconcile_scan s = reconcile_scan_decode(c, cookie_pos.offset);
+	struct reconcile_scan s = bch2_reconcile_scan_decode(c, cookie_pos.offset);
 	if (s.type == RECONCILE_SCAN_fs) {
 		try(do_reconcile_scan_fs(ctxt, s, snapshot_io_opts, false));
 	} else if (s.type == RECONCILE_SCAN_metadata) {
@@ -1442,7 +1303,7 @@ static int do_reconcile_scan(struct moving_context *ctxt,
 
 	/* do_reconcile() clears the pending cookie after the pending phases. */
 	if (s.type != RECONCILE_SCAN_pending)
-		try(bch2_clear_reconcile_needs_scan(trans, cookie_pos, cookie));
+		try(bch2_reconcile_scan_complete(trans, cookie_pos, cookie));
 
 	*sectors_scanned += atomic64_read(&r->scan_stats.sectors_seen);
 	/*
@@ -1719,7 +1580,7 @@ static int do_reconcile_scan_key(struct reconcile_pass *p, struct bkey_s_c k)
 	struct btree_trans *trans = p->ctxt->trans;
 	struct bch_fs *c = trans->c;
 
-	if (reconcile_scan_decode(c, k.k->p.offset).type == RECONCILE_SCAN_pending) {
+	if (bch2_reconcile_scan_decode(c, k.k->p.offset).type == RECONCILE_SCAN_pending) {
 		bkey_reassemble(&p->pending_cookie->k_i, k);
 		/* What retries pending extents - device add, resize, state, label: */
 		reconcile_stripes_unpark(c);
@@ -1978,7 +1839,7 @@ out:
 	if (!ret &&
 	    r->phase == ARRAY_SIZE(reconcile_phases) &&
 	    !bkey_deleted(&pending_cookie.k))
-		try(bch2_clear_reconcile_needs_scan(trans,
+		try(bch2_reconcile_scan_complete(trans,
 				pending_cookie.k.p, pending_cookie.v.cookie));
 
 	/*
@@ -2096,8 +1957,8 @@ __cold void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c
 
 			if (phase.type == RECONCILE_PHASE_scan) {
 				prt_printf(out, "scanning: ");
-				struct reconcile_scan s = reconcile_scan_decode(c, work_pos.offset);
-				reconcile_scan_to_text(out, c, s);
+				struct reconcile_scan s = bch2_reconcile_scan_decode(c, work_pos.offset);
+				bch2_reconcile_scan_to_text(out, c, s);
 
 				if (s.type == RECONCILE_SCAN_fs ||
 				    s.type == RECONCILE_SCAN_metadata) {
