@@ -1220,6 +1220,12 @@ impl Fs {
         let slot = {
             let state = self.state_lock_write();
 
+            // Before dropping ref_outer: if another removal completed while we
+            // waited for state_lock, that ref is all that keeps ca allocated.
+            if ca.removing() {
+                return self.throw(bch_errcode::BCH_ERR_device_has_been_removed);
+            }
+
             /*
              * We consume the caller's ref_outer, regardless of whether we succeed
              * or fail - the lookup no longer takes a ca->ref, which we'd deadlock
