@@ -222,10 +222,10 @@ mod vfs {
         /// An ACL of @nr entries, to be filled in: unlocking @t to allocate
         /// if it has to - a restart then.
         fn alloc(t: &TransAttempt<'_, '_>, nr: u32) -> Result<PosixAcl, BchError> {
-            let acl = t.allocate_dropping_locks(|gfp| {
+            t.allocate_dropping_locks(|gfp| {
                 NonNull::new(unsafe { c::posix_acl_alloc(nr, gfp) }).map(PosixAcl)
-            })?;
-            acl.ok_or_else(|| t.fs().err(bch_errcode::BCH_ERR_ENOMEM_acl))
+                    .ok_or(BchError::from(bch_errcode::BCH_ERR_ENOMEM_acl))
+            })
         }
 
         /// @acl, which the caller holds a reference on - None for NULL.
@@ -266,7 +266,7 @@ mod vfs {
         /// a new one, as __posix_acl_chmod() makes, unlocking @t to allocate
         /// if it has to.
         fn chmod(self, t: &TransAttempt<'_, '_>, mode: c::umode_t) -> Result<PosixAcl, BchError> {
-            t.allocate_dropping_locks_errcode(|gfp| {
+            t.allocate_dropping_locks(|gfp| {
                 // __posix_acl_chmod() consumes the reference it's given -
                 // failing too - so each try gets its own:
                 let mut acl = self.clone().into_raw();

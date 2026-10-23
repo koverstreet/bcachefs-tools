@@ -300,8 +300,10 @@ pub struct TransAttempt<'a, 't> {
 /// Next steps, in order:
 /// - Iterators made only from a &TransAttempt: drop the &BtreeTrans and
 ///   &TransGuard impls, and the compiler lists the callers to convert.
-///   TransAttempt::unlock() consumes the attempt; drop_locks_do() for
-///   unlock, f, relock.
+///   Not further: an unlock that consumes the attempt, or drop_locks_do() on
+///   &mut, would reject keys used after a successful relock - which C relies
+///   on, and is right (a relock fails if a node's lock changed hands) - and
+///   spread &mut through every function that might unlock.
 /// - That's lifetimes standing in for the state, and approximately. What we
 ///   want is the verifier tracking it: locked, unlocked or in restart, a Cell
 ///   in BtreeTrans, changed only by begin(), relock(), unlock() and anything
@@ -679,53 +681,40 @@ impl<'a, 't> TransAttempt<'a, 't> {
         BchError::from_raw(-ret)
     }
 
-    /// What @alloc allocates, tried first without blocking - GFP_NOWAIT, the
-    /// locks held - and if that fails, again with them dropped, GFP_KERNEL,
-    /// then retaken: as C's allocate_dropping_locks(). None if it fails both
-    /// ways. A restart if the locks changed hands while they were dropped -
-    /// and what @alloc made then is dropped with it, where C has the caller
-    /// free it.
-    pub fn allocate_dropping_locks<T>(
-        &self,
-        mut alloc: impl FnMut(c::gfp_t) -> Option<T>,
-    ) -> Result<Option<T>, BchError> {
-        if let Some(p) = alloc(c::GFP_NOWAIT) {
-            return Ok(Some(p));
-        }
+    /// Drop the btree locks for @f - to block, sleep, do IO - and take them
+    /// back: C's drop_locks_do(). A restart if they changed hands meanwhile;
+    /// transaction_restart_nested, not relocked, if @f ran attempts of its
+    /// own, which end this one. @f's error is returned with the locks still
+    /// dropped.
+    ///
+    /// A key peeked before is good after only if this succeeds - a relock
+    /// fails if a node's lock changed hands - and not inside @f at all.
+    /// Nothing checks either: that's for the verifier (see TransRef).
+    pub fn drop_locks_do<T>(&self, f: impl FnOnce() -> Result<T, BchError>) -> Result<T, BchError> {
         self.unlock();
-        let p = alloc(c::GFP_KERNEL);
+        let v = f()?;
+        if self.trans.restart_count() != self.restart_count {
+            return Err(BchError::from(bch_errcode::BCH_ERR_transaction_restart_nested));
+        }
         self.relock()?;
-        Ok(p)
+        Ok(v)
     }
 
-    /// allocate_dropping_locks(), leaving the locks dropped: for the end of an
-    /// attempt, as C's allocate_dropping_locks_norelock().
-    pub fn allocate_dropping_locks_norelock<T>(&self, mut alloc: impl FnMut(c::gfp_t) -> Option<T>)
-        -> Option<T>
+    /// What @alloc makes: tried GFP_NOWAIT, the locks held, and on ENOMEM
+    /// again GFP_KERNEL with them dropped - drop_locks_do(). C's
+    /// allocate_dropping_locks() and its variants. @alloc names its ENOMEM
+    /// (an Option's None by .ok_or()), and it's thrown if the second try
+    /// fails too; any other error is returned as is.
+    pub fn allocate_dropping_locks<T>(&self, mut alloc: impl FnMut(c::gfp_t) -> Result<T, BchError>)
+        -> Result<T, BchError>
     {
-        if let Some(p) = alloc(c::GFP_NOWAIT) {
-            return Some(p);
-        }
-        self.unlock();
-        alloc(c::GFP_KERNEL)
-    }
-
-    /// allocate_dropping_locks(), for an @alloc that says it couldn't by
-    /// ENOMEM: as C's allocate_dropping_locks_errcode(). Another error from
-    /// the first try is returned as is; one from the second, with the locks
-    /// still dropped, as C's drop_locks_do() does.
-    pub fn allocate_dropping_locks_errcode<T>(
-        &self,
-        mut alloc: impl FnMut(c::gfp_t) -> Result<T, BchError>,
-    ) -> Result<T, BchError> {
         match alloc(c::GFP_NOWAIT) {
             Err(e) if e.matches(c::ENOMEM) => {}
             r => return r,
         }
-        self.unlock();
-        let p = alloc(c::GFP_KERNEL)?;
-        self.relock()?;
-        Ok(p)
+        self.drop_locks_do(|| alloc(c::GFP_KERNEL).map_err(|e| {
+            if e.matches(c::ENOMEM) { self.fs().err(bch_errcode(e.raw() as u32)) } else { e }
+        }))
     }
 
     /// Run @f as a nested transaction, as C's nested_lockrestart_do(): @f
