@@ -7,8 +7,6 @@ use crate::util::printbuf::Printbuf;
 use crate::util::vstructs::plain_bytes;
 use core::ffi::CStr;
 #[cfg(feature = "std")]
-use crate::util::ffi::c_char;
-#[cfg(feature = "std")]
 use std::ffi::CString;
 
 #[allow(non_camel_case_types)]
@@ -193,30 +191,27 @@ impl c::bch_option {
     }
 }
 
+/// @optstr parsed into fresh options: into @fs's too, with what can only
+/// be set on a running filesystem, if it's given.
+pub fn parse_mount_opts_cstr(fs: Option<&mut Fs>, optstr: &CStr, ignore_unknown: bool)
+        -> Result<c::bch_opts, BchError> {
+    let mut opts: c::bch_opts = Default::default();
+    // SAFETY: C parses a copy of @optstr, and only reads it
+    ret_to_result(unsafe {
+        c::bch2_parse_mount_opts(fs.map_or(core::ptr::null_mut(), |f| f.as_ptr()), &mut opts,
+                                 core::ptr::null_mut(), optstr.as_ptr().cast_mut().cast(),
+                                 ignore_unknown)
+    })?;
+    Ok(opts)
+}
+
 #[cfg(feature = "std")]
 pub fn parse_mount_opts(fs: Option<&mut Fs>, optstr: Option<&str>, ignore_unknown: bool)
-        -> Result<c::bch_opts, crate::errcode::BchError> {
-    let mut opts: c::bch_opts = Default::default();
-
-    if let Some(optstr) = optstr {
-        let optstr = CString::new(optstr).unwrap();
-        let optstr_ptr = optstr.as_ptr();
-
-        let ret = unsafe {
-            c::bch2_parse_mount_opts(fs.map_or(core::ptr::null_mut(), |f| f.as_ptr()),
-                                     &mut opts as *mut c::bch_opts,
-                                     core::ptr::null_mut(),
-                                     optstr_ptr as *mut c_char,
-                                     ignore_unknown)
-        };
-
-        drop(optstr);
-
-        if ret != 0 {
-            return Err(crate::errcode::BchError::from_raw(-ret));
-        }
+        -> Result<c::bch_opts, BchError> {
+    match optstr {
+        Some(s) => parse_mount_opts_cstr(fs, &CString::new(s).unwrap(), ignore_unknown),
+        None    => Ok(Default::default()),
     }
-    Ok(opts)
 }
 
 #[cfg(feature = "std")]

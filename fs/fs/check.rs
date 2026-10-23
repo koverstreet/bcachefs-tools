@@ -874,53 +874,44 @@ pub mod ioctl {
     use crate::errcode::errptr_to_result;
     use crate::fs::{OpenFs, RoRef};
     use crate::init::passes::{bch2_recovery_passes, passes_match, run_passes};
+    use crate::opts::parse_mount_opts_cstr;
     use crate::util::ffi::c_char;
     use crate::util::kernel::{capable, Capability};
     use crate::util::thread_with_file::{StdioRedirect, ThreadWithFile};
     use crate::util::ioctl::UserVstruct;
     use crate::{opt_defined, opt_set};
+    use core::ffi::CStr;
     use core::ptr::NonNull;
-    use kernel::ffi::{c_int, c_long};
+    use kernel::ffi::c_int;
+    use kernel::uaccess::{UserPtr, UserSlice};
 
-    /// C's darray_const_str of strings from strndup_user(): kfree()d, and the
-    /// darray, when dropped.
-    #[derive(Default)]
-    struct UserStrs(c::darray_const_str);
+    /// A string from userspace, shorter than its limit: EINVAL if it isn't,
+    /// as strndup_user().
+    struct UserStr(KVVec<u8>);
 
-    impl UserStrs {
-        fn push(&mut self, s: NonNull<c_char>) -> Result<(), BchError> {
-            // SAFETY: ours, kvmalloc()'d or empty
-            let mut v = unsafe { crate::util::alloc::DArrayLoan::new(&mut self.0) };
-            v.push(s.as_ptr().cast_const(), GFP_KERNEL).map_err(|e| {
-                unsafe { c::kfree(s.as_ptr().cast()) };
-                e.into()
-            })
-        }
-    }
-
-    impl Drop for UserStrs {
-        fn drop(&mut self) {
-            // SAFETY: each from strndup_user()
-            for i in 0..self.0.nr {
-                unsafe { c::kfree((*self.0.data.add(i)).cast()) };
+    impl UserStr {
+        fn read(addr: u64, max: usize) -> Result<Self, BchError> {
+            let mut buf = KVVec::from_elem(0u8, max + 1, GFP_KERNEL)?;
+            let len = UserSlice::new(UserPtr::from_addr(addr as usize), max + 1).reader()
+                .strcpy_into_buf(&mut buf)?.to_bytes().len();
+            if len >= max {
+                return Err(c::EINVAL.into());
             }
-            unsafe { crate::util::alloc::darray_exit(&mut self.0) };
+            buf.truncate(len + 1);
+            Ok(UserStr(buf))
+        }
+
+        fn as_cstr(&self) -> &CStr {
+            CStr::from_bytes_with_nul(&self.0).expect("read up to its NUL")
         }
     }
 
-    fn strndup_user(addr: u64, max: c_long) -> Result<NonNull<c_char>, BchError> {
-        let s = unsafe { c::strndup_user(addr as usize as *const c_char, max) };
-        errptr_to_result(NonNull::new(s).expect("a string, or an error"))
-    }
-
-    fn parse_mount_opts_user(addr: u64, opts: &mut c::bch_opts) -> Result<(), BchError> {
-        let optstr = strndup_user(addr, 1 << 16)?;
-        let ret = unsafe {
-            c::bch2_parse_mount_opts(core::ptr::null_mut(), opts, core::ptr::null_mut(),
-                                     optstr.as_ptr(), false)
-        };
-        unsafe { c::kfree(optstr.as_ptr().cast()) };
-        crate::errcode::ret_to_result_void(ret)
+    /// The options at user address @addr, or none if it's 0.
+    fn user_opts(addr: u64) -> Result<c::bch_opts, BchError> {
+        match addr {
+            0 => Ok(c::bch_opts::default()),
+            _ => parse_mount_opts_cstr(None, UserStr::read(addr, 1 << 16)?.as_cstr(), false),
+        }
     }
 
     pub fn fsck_offline(user: UserVstruct<c::bch_ioctl_fsck_offline>) -> Result<c_int, BchError> {
@@ -934,15 +925,16 @@ pub mod ioctl {
             return Err(c::EPERM.into());
         }
 
-        let mut opts = c::bch_opts::default();
-        if arg.opts != 0 {
-            parse_mount_opts_user(arg.opts, &mut opts)?;
-        }
+        let mut opts = user_opts(arg.opts)?;
 
-        let mut devs = UserStrs::default();
         let user_devs = user.tail(&arg);
+        let mut devs = KVVec::with_capacity(user_devs.len(), GFP_KERNEL)?;
+        let mut dev_ptrs = KVVec::with_capacity(user_devs.len(), GFP_KERNEL)?;
         for i in 0..user_devs.len() {
-            devs.push(strndup_user(user_devs.get(i)?, c::PATH_MAX as c_long)?)?;
+            devs.push(UserStr::read(user_devs.get(i)?, c::PATH_MAX as usize)?, GFP_KERNEL)?;
+        }
+        for d in devs.iter() {
+            dev_ptrs.push(d.as_cstr().as_ptr().cast::<c_char>(), GFP_KERNEL)?;
         }
 
         let thr = ThreadWithFile::new_stdio(Ok(()))?;
@@ -953,7 +945,11 @@ pub mod ioctl {
         // We need request_key() to be called before we punt to kthread:
         opt_set!(opts, nostart, 1);
 
-        let fs = unsafe { c::bch2_fs_open(&mut devs.0, &mut opts, core::ptr::null()) };
+        // C only reads the list, and read_super() keeps a copy of each path
+        let mut dev_list = c::darray_const_str {
+            nr: dev_ptrs.len(), size: dev_ptrs.len(), data: dev_ptrs.as_mut_ptr(), preallocated: [],
+        };
+        let fs = unsafe { c::bch2_fs_open(&mut dev_list, &mut opts, core::ptr::null()) };
         let fs = errptr_to_result(NonNull::new(fs).expect("a filesystem, or an error"))
             .map(|fs| unsafe { OpenFs::from_raw(fs.cast()) });
 
@@ -1005,10 +1001,7 @@ pub mod ioctl {
             return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin);
         }
 
-        let mut opts = c::bch_opts::default();
-        if arg.opts != 0 {
-            parse_mount_opts_user(arg.opts, &mut opts)?;
-        }
+        let opts = user_opts(arg.opts)?;
 
         let fs_ref = fs.ro_ref_tryget().ok_or(BchError::from(c::EROFS))?;
         // SAFETY: a ro_ref keeps the filesystem: bch2_fs_stop() waits for it
