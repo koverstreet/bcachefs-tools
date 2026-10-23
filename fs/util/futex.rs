@@ -219,7 +219,11 @@ pub fn futex_wake(addr: *const (), n: usize) -> usize {
 /// word. Every change to the state is followed by a wake(), which bumps the
 /// count; a waiter reads the count before checking its condition, so a
 /// change after the check leaves the count moved and the wait returns.
+#[repr(transparent)]
 pub struct EventCount(AtomicU32);
+
+// SAFETY: zeroed, it's new()'s
+unsafe impl ::pin_init::Zeroable for EventCount {}
 
 impl EventCount {
     pub const fn new() -> Self {

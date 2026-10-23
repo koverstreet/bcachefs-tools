@@ -5,6 +5,7 @@
 use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::types::c_default;
+use crate::util::futex::EventCount;
 use crate::util::Printbuf;
 use cstruct_macros::{CStruct, TypeInfo, c_extern};
 
@@ -29,7 +30,8 @@ pub struct bch_fs_copygc {
     pub running: bool,
     pub run_count: u32,
     pub kick_count: u32,
-    pub running_wq: c::wait_queue_head_t,
+    /// Woken as a run ends: data/copygc.rs
+    pub run_done: EventCount,
 
     /*
      * Devices over their fragmentation allowance, i.e. that copygc is trying

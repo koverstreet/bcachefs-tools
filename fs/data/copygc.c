@@ -804,7 +804,7 @@ static int bch2_copygc_thread(void *arg)
 		c->copygc.running = false;
 		c->copygc.run_count++;
 
-		wake_up(&c->copygc.running_wq);
+		bch2_copygc_run_done(c);
 
 		if (!wait && !did_work) {
 			u64 min_member_capacity = bch2_min_rw_member_capacity(c);
@@ -881,6 +881,5 @@ void bch2_fs_copygc_exit(struct bch_fs *c)
 
 void bch2_fs_copygc_init(struct bch_fs *c)
 {
-	init_waitqueue_head(&c->copygc.running_wq);
 	c->copygc.running = false;
 }
