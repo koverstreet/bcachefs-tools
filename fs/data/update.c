@@ -1536,7 +1536,18 @@ int bch2_data_update_init(struct btree_trans *trans,
 		 * replicas or durability settings have been changed since the extent
 		 * was written:
 		 */
-		if (!m->op.nr_replicas) {
+		/*
+		 * A self-heal from the read path (no iterator) that only kills
+		 * pointers without durability - a cached copy that failed its
+		 * checksum - has nothing to write either, but the killed
+		 * pointers still have to go: let it run, and
+		 * bch2_data_update_read_done() drops them through
+		 * data_update_index_update_nowrite().
+		 */
+		bool drop_only = !m->op.nr_replicas && !iter &&
+			data_opts.type == BCH_DATA_UPDATE_self_heal;
+
+		if (!m->op.nr_replicas && !drop_only) {
 			/* if iter == NULL, it's just a promote */
 			if (iter)
 				ret = bch2_extent_drop_ptrs(trans, iter, k, io_opts, &m->opts);
@@ -1558,7 +1569,7 @@ int bch2_data_update_init(struct btree_trans *trans,
 		 *   (i.e. trying to move a durability=2 replica to a target with a
 		 *   single durability=2 device)
 		 */
-		if (data_opts.type != BCH_DATA_UPDATE_copygc) {
+		if (data_opts.type != BCH_DATA_UPDATE_copygc && !drop_only) {
 			ret = __bch2_can_do_write(c, io_opts, &m->opts, &m->op.devs_have, k, NULL);
 			if (ret)
 				goto out;
