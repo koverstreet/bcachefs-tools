@@ -119,7 +119,7 @@ impl<T: ThreadFile> ThreadWithFile<T> {
         // file, it's stopped unrun, as the data is dropped
         let data: &'static T = unsafe { &*(&raw const self.0.data) };
 
-        let thread = Kthread::create(format_args!("{}", current_comm()), move || f(data))?;
+        let thread = Kthread::create(format_args!("{}", current_comm()), move |_| f(data))?;
         *self.0.as_mut().project().thread = Some(thread);
 
         let file = NewFile::new(self.0)?;
