@@ -60,6 +60,7 @@ nest! {
         pub read_flags: c::bch_read_flags,
         pub write_flags: c::bch_write_flags,
         pub commit_flags: c::bch_trans_commit_flags,
+        pub ioprio: u16,
     }
 }
 c_default!(data_update_opts);
