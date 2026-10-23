@@ -19,6 +19,7 @@ c_const! {
 c_extern! {
     pub fn bch2_dev_allocator_set_rw(c: *mut c::bch_fs, ca: *mut c::bch_dev, rw: bool);
     pub fn bch2_recalc_capacity(c: *mut c::bch_fs);
+    pub fn bch2_min_rw_member_capacity(c: *mut c::bch_fs) -> u64;
     pub fn bch2_bucket_do_freespace_index(trans: *mut c::btree_trans, ca: *mut c::bch_dev,
                                           alloc_k: c::bkey_s_c, a: *const c::AllocV4, set: bool) -> c_int;
     pub fn bch2_alloc_key_to_dev_counters(trans: *mut c::btree_trans, ca: *mut c::bch_dev,

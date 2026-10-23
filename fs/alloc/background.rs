@@ -209,6 +209,12 @@ impl Fs {
     pub fn current_io_time(&self, rw: usize) -> u64 {
         (self.io_clock[rw].now.load(Ordering::Relaxed) as u64 & c::LRU_TIME_MAX).max(1)
     }
+
+    /// The smallest rw device's capacity, in sectors - U64_MAX with none.
+    pub fn min_rw_member_capacity(&self) -> u64 {
+        // SAFETY: reads the devices under its own RCU lock
+        unsafe { c::bch2_min_rw_member_capacity(self.as_ptr()) }
+    }
 }
 
 impl<'a, 't> TransAttempt<'a, 't> {

@@ -45,7 +45,6 @@ unsigned bch2_disk_label_ec_devs(struct bch_fs *, unsigned, struct bch_devs_mask
 void bch2_disk_label_ec_rw_member_devs(struct bch_fs *, unsigned,
 				       struct bch_devs_mask *, unsigned);
 
-bool bch2_can_form_ec_stripe(struct bch_fs *, unsigned, unsigned, struct printbuf *);
 
 void bch2_ec_stripe_new_cancel(struct bch_fs *, struct ec_stripe_head *,
 			       struct ec_stripe_new *, int);

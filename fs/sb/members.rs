@@ -1086,6 +1086,21 @@ impl Fs {
         self.devs.get(..self.nr_devices() as usize)?.get(dev as usize)?.read(rcu)
     }
 
+    /// Device @dev's name - "(none)" for BCH_SB_MEMBER_INVALID, and for one
+    /// there isn't, its number: bch2_prt_member_name().
+    pub fn member_name_to_text(&self, out: &mut Printbuf, dev: u32) {
+        if dev == c::BCH_SB_MEMBER_INVALID {
+            write!(out, "(none)");
+            return;
+        }
+        let mut out = out.atomic();
+        let rcu = read_lock();
+        match self.dev_rcu(dev, &rcu) {
+            Some(ca) => out.write_bytes(ca.name().to_bytes()),
+            None     => write!(out, "(invalid device {dev})"),
+        }
+    }
+
     /// The filesystem's devices, for as long as @rcu's section:
     /// for_each_member_device_rcu().
     pub fn devs_rcu<'g>(&'g self, rcu: &'g ReadGuard) -> impl Iterator<Item = &'g c::bch_dev> {

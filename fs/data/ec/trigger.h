@@ -188,7 +188,6 @@ static inline void gc_stripe_lock(struct gc_stripe *s)
 
 int bch2_ec_stripe_mem_alloc(struct btree_trans *, struct btree_iter *);
 
-bool bch2_bucket_has_new_stripe(struct bch_fs *, u64);
 
 void bch2_stripe_new_buckets_add(struct bch_fs *c, struct ec_stripe_new *s);
 void bch2_stripe_new_buckets_del(struct bch_fs *, struct ec_stripe_new *);

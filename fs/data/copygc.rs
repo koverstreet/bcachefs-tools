@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! copygc.c's, for Rust and through Rust: waiting on copygc runs. A run ends
-//! with running cleared, run_count bumped, and run_done woken - an EventCount,
-//! where C had a waitqueue: what waits for a run is in Rust, its condition
-//! with it, and C calls in.
+//! copygc.c's, for Rust and through Rust: kicking copygc, and waiting on its
+//! runs. A run ends with running cleared, run_count bumped, and run_done
+//! woken - an EventCount, where C had a waitqueue: what waits for a run is in
+//! Rust, its condition with it, and C calls in.
 //!
 //! running and run_count are plain fields the copygc thread writes, read here
 //! unlocked: read_volatile(), as C's READ_ONCE() would, until they're typed.
@@ -12,6 +12,7 @@
 use crate::c;
 use crate::fs::Fs;
 use crate::util::kthread::Kthread;
+use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
 use cstruct_macros::c_export;
 
@@ -24,6 +25,26 @@ impl c::bch_fs_copygc {
     fn run_count(&self) -> u32 {
         // SAFETY: a u32, written whole
         unsafe { core::ptr::read_volatile(&raw const self.run_count) }
+    }
+}
+
+impl Fs {
+    /// Kick copygc into a run: bch2_copygc_wakeup(). The kick count's bumped
+    /// as C's ++ is, racy - a kick lost to a concurrent one is still a kick,
+    /// and the thread's woken either way.
+    pub fn copygc_wakeup(&self) {
+        // SAFETY: the copygc fields, through the raw pointer, as C writes
+        // them; the thread pointer RCU's, read under it
+        unsafe {
+            let kick = &raw mut (*self.as_ptr()).copygc.kick_count;
+            core::ptr::write_volatile(kick, core::ptr::read_volatile(kick).wrapping_add(1));
+
+            let _rcu = read_lock();
+            let thread = core::ptr::read_volatile(&raw const (*self.as_ptr()).copygc.thread);
+            if !thread.is_null() {
+                c::wake_up_process(thread);
+            }
+        }
     }
 }
 

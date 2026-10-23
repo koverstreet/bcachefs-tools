@@ -5,7 +5,9 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, bitfield, c_enum, c_xmacro};
+use crate::fs::Fs;
+use crate::util::Printbuf;
+use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro};
 use nestify::nest;
 
 c_xmacro! {
@@ -116,3 +118,28 @@ pub struct promote_op {
     pub bi_inline_vecs: [c::bio_vec; 0], /* must be last */
 }
 c_default!(promote_op);
+
+c_extern! {
+    pub fn bch2_data_update_opts_to_text(out: *mut c::printbuf, c: *mut c::bch_fs,
+                                         io_opts: *mut c::bch_inode_opts, data_opts: *mut c::data_update_opts);
+    pub fn bch2_data_update_in_flight(c: *mut c::bch_fs, pos: *mut c::bbpos,
+                                      type_: c::bch_data_update_types) -> bool;
+}
+
+impl Fs {
+    /// Whether a data update at @pos keeps out one of @type: any update there,
+    /// but copygc's only by copygc's - a promote mustn't hold up an evacuation.
+    pub fn data_update_in_flight(&self, pos: c::bbpos, type_: c::bch_data_update_types) -> bool {
+        // SAFETY: @pos only read, under its own RCU lock
+        unsafe { bch2_data_update_in_flight(self.as_ptr(), core::ptr::from_ref(&pos).cast_mut(), type_) }
+    }
+
+    pub fn data_update_opts_to_text(&self, out: &mut Printbuf, io_opts: &c::bch_inode_opts,
+                                    data_opts: &c::data_update_opts) {
+        // SAFETY: read only
+        unsafe {
+            bch2_data_update_opts_to_text(out.as_raw(), self.as_ptr(), core::ptr::from_ref(io_opts).cast_mut(),
+                                          core::ptr::from_ref(data_opts).cast_mut())
+        }
+    }
+}

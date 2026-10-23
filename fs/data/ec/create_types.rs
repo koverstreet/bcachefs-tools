@@ -188,10 +188,21 @@ c_extern! {
     pub fn bch2_widen_cache_init(cache: *mut c::widen_cache) -> c_int;
     pub fn bch2_widen_cache_lookup(cache: *mut c::widen_cache, c: *mut c::bch_fs, disk_label: u8, sectors: u16,
                                    nr_devs: *mut c_uint) -> c_int;
+    pub fn bch2_can_form_ec_stripe(c: *mut c::bch_fs, target: c_uint, redundancy: c_uint,
+                                   trace: *mut c::printbuf) -> bool;
 }
 
 impl Fs {
     pub fn new_stripes_to_text(&self, out: &mut Printbuf) {
         unsafe { bch2_new_stripes_to_text(out.as_raw(), self.as_ptr()) }
+    }
+
+    /// Whether a stripe of @redundancy parity blocks can be made in @target
+    /// now: redundancy + 2 devices, in as many failure domains. Why not, into
+    /// @trace.
+    pub fn can_form_ec_stripe(&self, target: u32, redundancy: u32, trace: Option<&mut Printbuf>) -> bool {
+        let trace = trace.map_or(core::ptr::null_mut(), |t| core::ptr::from_mut(t.as_raw()));
+        // SAFETY: @trace NULL or ours
+        unsafe { bch2_can_form_ec_stripe(self.as_ptr(), target, redundancy, trace) }
     }
 }
