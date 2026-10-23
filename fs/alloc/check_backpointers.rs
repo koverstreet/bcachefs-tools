@@ -31,7 +31,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, B
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
 use crate::data::extents::Extents;
-use crate::data::ptrs::{extents_match, Ptrs};
+use crate::data::ptrs::{crc_is_compressed, extents_match, BkeyVPtrs, Ptrs};
 use crate::data::reflink::make_extent_indirect;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
@@ -252,9 +252,31 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::
             return Ok(()); // bps don't actually overlap
         }
 
-        let overlap_len = u64::from(overlap_sub_end - overlap_sub_start);
-        let k1_start = extent.k.start_offset() + u64::from(overlap_sub_start - bp_sub);
-        let k2_start = other_extent.k.start_offset() + u64::from(overlap_sub_start - other_bp_sub);
+        // The physical overlap is a logical one only for uncompressed data.
+        // Compressed data can't be split: two extents share it whole, if each
+        // is the same view of the same data, or can't be repaired here
+        let ptr_to_dev = |k: BkeySC<'_>| k.arm::<Ptrs>().expect("an extent")
+            .has_device_decode(fs, dev).expect("a pointer to the backpointer's device").p;
+        let (p1, p2) = (ptr_to_dev(extent), ptr_to_dev(other_extent));
+        let (k1_start, k2_start, overlap_len) = if crc_is_compressed(&p1.crc) || crc_is_compressed(&p2.crc) {
+            let same_view = p1.ptr.offset() == p2.ptr.offset() &&
+                p1.crc.compressed_size == p2.crc.compressed_size &&
+                p1.crc.offset == p2.crc.offset &&
+                p1.crc.live_size == p2.crc.live_size &&
+                extent.k.size == other_extent.k.size;
+            if !same_view {
+                let mut msg = LogMsg::new(fs);
+                prt!(&mut msg, "duplicate compressed extents pointing to overlapping space on dev {dev}, \
+                                not the same data - can't share them\n{}\n{}",
+                     extent.to_text(fs), other_extent.to_text(fs));
+                return fs.throw(bch_errcode::BCH_ERR_fsck_repair_unimplemented);
+            }
+            (extent.k.start_offset(), other_extent.k.start_offset(), u64::from(extent.k.size))
+        } else {
+            (extent.k.start_offset() + u64::from(overlap_sub_start - bp_sub),
+             other_extent.k.start_offset() + u64::from(overlap_sub_start - other_bp_sub),
+             u64::from(overlap_sub_end - overlap_sub_start))
+        };
 
         let mut buf = Printbuf::new();
         prt!(&mut buf, "duplicate extents pointing to overlapping space on dev {}, converting overlap to reflink\n{}\n{}",
