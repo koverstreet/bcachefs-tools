@@ -1458,7 +1458,12 @@ fn kvdb(cli: Cli) -> Result<()> {
     let history = std::env::var_os("HOME")
         .map(|home| PathBuf::from(home).join(".cache/bcachefs-kvdb-history"));
     if let Some(h) = &history {
-        let _ = rl.load_history(h);
+        match rl.load_history(h) {
+            Err(rustyline::error::ReadlineError::Io(e))
+                if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => log::warn!("loading history from {}: {e}", h.display()),
+            Ok(()) => {}
+        }
     }
     loop {
         let prompt = match repl.snapshot {
@@ -1468,7 +1473,9 @@ fn kvdb(cli: Cli) -> Result<()> {
         match rl.readline(&prompt) {
             Ok(line) => {
                 if !line.trim().is_empty() {
-                    let _ = rl.add_history_entry(&line);
+                    if let Err(e) = rl.add_history_entry(&line) {
+                        log::warn!("adding to history: {e}");
+                    }
                 }
                 INTERRUPTED.store(false, Ordering::Relaxed);
                 match run_line(&mut repl, &line) {
@@ -1483,10 +1490,12 @@ fn kvdb(cli: Cli) -> Result<()> {
         }
     }
     if let Some(h) = &history {
-        if let Some(dir) = h.parent() {
-            let _ = std::fs::create_dir_all(dir);
+        let saved = h.parent().map_or(Ok(()), std::fs::create_dir_all)
+            .map_err(rustyline::error::ReadlineError::from)
+            .and_then(|()| rl.save_history(h));
+        if let Err(e) = saved {
+            log::warn!("saving history to {}: {e}", h.display());
         }
-        let _ = rl.save_history(h);
     }
     Ok(())
 }
