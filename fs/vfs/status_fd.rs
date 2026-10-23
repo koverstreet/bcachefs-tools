@@ -13,6 +13,7 @@
 
 use crate::c;
 use crate::fs::Fs;
+use crate::init::chardev::{fs_ioctl, ioctl_ret};
 use crate::locking::Lock;
 use crate::new_lock;
 use crate::util::ffi::Opaque;
@@ -21,13 +22,10 @@ use crate::util::thread_with_file::{Stdio, StdioFile, ThreadWithFile};
 use core::ffi::c_void;
 use core::mem::size_of;
 use core::ptr::NonNull;
-use cstruct_macros::{c_export, c_extern};
+use cstruct_macros::c_export;
 use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
+use kernel::uaccess::UserPtr;
 use pin_init::{pin_data, pin_init};
-
-c_extern! {
-    pub fn bch2_fs_ioctl(c: *mut c::bch_fs, cmd: c_uint, arg: *mut c_void) -> c_long;
-}
 
 #[pin_data]
 struct StatusFd {
@@ -66,11 +64,11 @@ impl StdioFile for StatusFd {
             // anything - bcachefs<N>-ctl exists by now, but nothing knows the
             // minor.
             //
-            // Safe to pass everything through: __bch2_fs_ioctl() answers the
+            // Safe to pass everything through: the dispatch answers the
             // read-only queries and then refuses anything else until
             // BCH_FS_started, which isn't set until recovery is done.
             if cmd != <c::BCH_IOCTL_RECOVERY_STATUS as Ioctl>::OPCODE {
-                return unsafe { bch2_fs_ioctl(fs.as_ptr().cast(), cmd, arg as *mut c_void) };
+                return ioctl_ret(fs_ioctl(fs, cmd, UserPtr::from_addr(arg as usize)));
             }
 
             // Whoever's asking is drawing it: keep it off the console.

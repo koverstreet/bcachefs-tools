@@ -1438,12 +1438,15 @@ pub fn c_ioctl(input: TokenStream) -> TokenStream {
                 Some(a) => (a.as_str(), format!("crate::util::ioctl::{dir}::<{a}>({ty}, {nr})")),
                 None => ("()", format!("crate::util::ioctl::_IO({ty}, {nr})")),
             };
+            // _IOWR -> dir::WR, _IO -> dir::IO
+            let dir_ty = dir.strip_prefix("_IO").filter(|d| !d.is_empty()).unwrap_or("IO");
             out.push_str(&format!(
                 "#[allow(non_camel_case_types)]\n\
                  pub struct {name};\n\
                  impl crate::util::ioctl::Ioctl for {name} {{\n\
                      const OPCODE: u32 = {opcode};\n\
                      type Arg = {arg};\n\
+                     type Dir = crate::util::ioctl::dir::{dir_ty};\n\
                  }}\n"));
             opcodes.push(format!("<{name} as crate::util::ioctl::Ioctl>::OPCODE as u64"));
         }

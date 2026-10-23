@@ -7,7 +7,7 @@
 struct printbuf;
 int bch2_copy_ioctl_err_msg(struct bch_ioctl_err_msg *, struct printbuf *, int);
 
-long bch2_fs_ioctl(struct bch_fs *, unsigned, void __user *);
+#include "init/chardev_gen.h"
 
 void bch2_fs_chardev_exit(struct bch_fs *);
 int bch2_fs_chardev_init(struct bch_fs *);

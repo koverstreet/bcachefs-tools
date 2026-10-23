@@ -353,29 +353,17 @@ pub fn bch2_fs_counters_exit(c: &Opaque<c::bch_fs>) {
 
 #[cfg(not(NO_BCACHEFS_CHARDEV))]
 pub mod ioctl {
-    use core::ffi::c_long;
-    use core::mem::{offset_of, size_of};
-
-    use kernel::transmute::AsBytes;
-    use kernel::uaccess::{UserPtr, UserSlice};
-
     use super::*;
-    use crate::errcode::{bch_errcode, ret_to_c, BchError};
-    use crate::util::vstructs::Head;
-
-    /// The ioctl's argument, short of d[], the counters.
-    type Args = Head<c::bch_ioctl_query_counters>;
-
-    /// @v to the user's memory at @at.
-    fn put<T: AsBytes>(at: UserPtr, v: T) -> Result<(), BchError> {
-        Ok(UserSlice::new(at, size_of::<T>()).writer().write(&v)?)
-    }
+    use crate::errcode::{bch_errcode, BchError};
+    use crate::util::ioctl::UserVstruct;
 
     /// The counters, by stable id, up to the user's @nr of them: now, or at
     /// mount (BCH_IOCTL_QUERY_COUNTERS_MOUNT). @nr comes back as the number
     /// filled.
-    fn query_counters(fs: &Fs, user: UserPtr) -> Result<(), BchError> {
-        let arg: Args = UserSlice::new(user, size_of::<Args>()).reader().read()?;
+    pub fn query_counters(fs: &Fs, user: UserVstruct<c::bch_ioctl_query_counters>)
+        -> Result<(), BchError>
+    {
+        let mut arg = user.head()?;
 
         let flags = u32::from(arg.flags);
         if flags & !c::BCH_IOCTL_QUERY_COUNTERS_MOUNT != 0 || arg.pad != 0 {
@@ -383,23 +371,16 @@ pub mod ioctl {
         }
         let mount = flags & c::BCH_IOCTL_QUERY_COUNTERS_MOUNT != 0;
 
-        let nr = arg.nr.min(NR_STABLE as u16);
-        put(user.wrapping_byte_add(offset_of!(Args, nr)), nr)?;
+        arg.nr = arg.nr.min(NR_STABLE as u16);
+        user.set_head(&arg)?;
 
-        // d[] follows the head
-        let d = user.wrapping_byte_add(size_of::<Args>());
+        let d = user.tail(&arg);
         for (i, ctr) in COUNTERS.iter().enumerate() {
-            if ctr.stable_id < nr {
+            if ctr.stable_id < arg.nr {
                 let v = if mount { fs.counters.mount[i] } else { fs.counters.now(i) };
-                put(d.wrapping_byte_add(usize::from(ctr.stable_id) * size_of::<u64>()), v)?;
+                d.set(ctr.stable_id.into(), &v)?;
             }
         }
         Ok(())
-    }
-
-    #[c_export]
-    pub fn bch2_ioctl_query_counters(c: &Opaque<c::bch_fs>,
-                                     user: *mut Head<c::bch_ioctl_query_counters>) -> c_long {
-        ret_to_c(query_counters(Fs::from_c(c), UserPtr::from_ptr(user.cast()))).into()
     }
 }

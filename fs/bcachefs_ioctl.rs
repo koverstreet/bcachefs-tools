@@ -385,6 +385,12 @@ nest! {
 }
 c_default!(bch_ioctl_data);
 
+// SAFETY: integers, and a union of structs of integers: any bytes are one of
+// its values - all reading it from userspace needs. Not Plain, whose AsBytes
+// a union's short arms would break.
+#[cfg(kernel)]
+unsafe impl kernel::transmute::FromBytes for bch_ioctl_data {}
+
 c_enum! {
     #[open]
     pub enum bch_data_event: u32 {
@@ -664,7 +670,7 @@ pub struct bch_ioctl_fsck_offline {
  * but with the kernel's implementation of fsck:
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_fsck_online {
     pub flags: u64,
     pub opts: u64, /* string */

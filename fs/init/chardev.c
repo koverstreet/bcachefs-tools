@@ -83,25 +83,6 @@ DEFINE_CLASS(bch2_device_lookup_outer, struct bch_dev *,
       bch2_device_lookup_outer(c, dev, flags),
       struct bch_fs *c, u64 dev, unsigned flags);
 
-static long bch2_global_ioctl(unsigned cmd, void __user *arg)
-{
-	long ret;
-
-	switch (cmd) {
-	case BCH_IOCTL_FSCK_OFFLINE: {
-		ret = bch2_ioctl_fsck_offline(arg);
-		break;
-	}
-	default:
-		ret = -ENOTTY;
-		break;
-	}
-
-	if (ret < 0)
-		ret = bch2_err_class(ret);
-	return ret;
-}
-
 static long bch2_ioctl_query_uuid(struct bch_fs *c,
 			struct bch_ioctl_query_uuid __user *user_arg)
 {
@@ -764,7 +745,8 @@ do {									\
 	return bch2_ioctl_##_name(c, i);				\
 } while (0)
 
-static long __bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
+/* What the Rust dispatch, bch2_fs_ioctl(), hasn't converted yet */
+long __bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg, bool started)
 {
 	switch (cmd) {
 	case BCH_IOCTL_QUERY_UUID:
@@ -781,7 +763,7 @@ static long __bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
 		BCH_IOCTL(disk_get_idx, struct bch_ioctl_disk_get_idx);
 	}
 
-	if (!test_bit(BCH_FS_started, &c->flags))
+	if (!started)
 		return bch_err_throw(c, EINVAL_ioctl_not_started);
 
 	switch (cmd) {
@@ -805,8 +787,6 @@ static long __bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
 		BCH_IOCTL(disk_set_state, struct bch_ioctl_disk_set_state);
 	case BCH_IOCTL_DISK_SET_STATE_v2:
 		BCH_IOCTL(disk_set_state_v2, struct bch_ioctl_disk_set_state_v2);
-	case BCH_IOCTL_DATA:
-		BCH_IOCTL(data, struct bch_ioctl_data);
 	case BCH_IOCTL_DISK_RESIZE:
 		BCH_IOCTL(disk_resize, struct bch_ioctl_disk_resize);
 	case BCH_IOCTL_DISK_RESIZE_v2:
@@ -815,27 +795,15 @@ static long __bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
 		BCH_IOCTL(disk_resize_journal, struct bch_ioctl_disk_resize_journal);
 	case BCH_IOCTL_DISK_RESIZE_JOURNAL_v2:
 		BCH_IOCTL(disk_resize_journal_v2, struct bch_ioctl_disk_resize_journal_v2);
-	case BCH_IOCTL_FSCK_ONLINE:
-		BCH_IOCTL(fsck_online, struct bch_ioctl_fsck_online);
 	case BCH_IOCTL_QUERY_ACCOUNTING:
 		return bch2_ioctl_query_accounting(c, arg);
 	case BCH_IOCTL_QUERY_ACCOUNTING_v2:
 		return bch2_ioctl_query_accounting_v2(c, arg);
-	case BCH_IOCTL_QUERY_COUNTERS:
-		return bch2_ioctl_query_counters(c, arg);
 	case BCH_IOCTL_QUERY_BTREE_KEYS:
 		return bch2_ioctl_query_btree_keys(c, arg);
 	default:
 		return -ENOTTY;
 	}
-}
-
-long bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
-{
-	long ret = __bch2_fs_ioctl(c, cmd, arg);
-	if (ret < 0)
-		ret = bch2_err_class(ret);
-	return ret;
 }
 
 /*

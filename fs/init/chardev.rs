@@ -1,21 +1,87 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The control device's ioctls, as they're converted from chardev.c: each
-//! called by its dispatch there.
+//! The control device's ioctls: their dispatch, and each ioctl as it's
+//! converted from chardev.c. chardev.c finds the filesystem, by the device's
+//! minor, and holds a ro_ref on it across the call; bch2_fs_ioctl() and
+//! bch2_global_ioctl(), without one, are the dispatch. What isn't converted
+//! yet it hands back to C, __bch2_fs_ioctl().
+//!
+//! Before a filesystem's started, only its queries are answered: anything
+//! else is EINVAL_ioctl_not_started. BCH_FS_started is read once, here, and
+//! given to __bch2_fs_ioctl(), so the two halves of the dispatch can't
+//! disagree on it.
 
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, WriteRef};
 use crate::util::ffi::Opaque;
 use crate::util::file::{File, FileOps, UserBuf};
+use crate::util::ioctl::{input, vstruct, Ioctl};
 use crate::util::kernel::{capable, Capability};
 use crate::util::thread_with_file::{ThreadFile, ThreadWithFile};
 use core::cell::UnsafeCell;
 use core::mem::size_of;
 use core::ptr::{read_volatile, NonNull};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{c_export, vtable};
-use kernel::ffi::{c_int, c_long};
+use core::ffi::c_void;
+use cstruct_macros::{c_export, c_extern, vtable};
+use kernel::ffi::{c_int, c_long, c_uint};
+use kernel::uaccess::UserPtr;
+
+/* The dispatch */
+
+c_extern! {
+    pub fn __bch2_fs_ioctl(c: *mut c::bch_fs, cmd: c_uint, arg: *mut c_void, started: bool) -> c_long;
+}
+
+fn c_fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr, started: bool) -> Result<c_long, BchError> {
+    let ret = unsafe { __bch2_fs_ioctl(fs.as_ptr().cast(), cmd, user.as_mut_ptr(), started) };
+    if ret < 0 { Err(BchError::from_raw(-ret as i32)) } else { Ok(ret) }
+}
+
+pub fn fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError> {
+    use crate::check::ioctl::fsck_online;
+    use crate::sb::counters::ioctl::query_counters;
+
+    let started = fs.flag(c::bch_fs_flags::BCH_FS_started);
+    match cmd {
+        _ if !started => c_fs_ioctl(fs, cmd, user, started),
+
+        <c::BCH_IOCTL_DATA as Ioctl>::OPCODE =>
+            input::<c::BCH_IOCTL_DATA, _>(user, |arg| data(fs, arg)),
+        <c::BCH_IOCTL_FSCK_ONLINE as Ioctl>::OPCODE =>
+            input::<c::BCH_IOCTL_FSCK_ONLINE, _>(user, |arg| fsck_online(fs, arg)),
+        <c::BCH_IOCTL_QUERY_COUNTERS as Ioctl>::OPCODE =>
+            vstruct::<c::BCH_IOCTL_QUERY_COUNTERS, _, _>(user, |arg| query_counters(fs, arg)),
+
+        _ => c_fs_ioctl(fs, cmd, user, started),
+    }
+}
+
+fn global_ioctl(cmd: c_uint, user: UserPtr) -> Result<c_long, BchError> {
+    use crate::check::ioctl::fsck_offline;
+
+    match cmd {
+        <c::BCH_IOCTL_FSCK_OFFLINE as Ioctl>::OPCODE =>
+            vstruct::<c::BCH_IOCTL_FSCK_OFFLINE, _, _>(user, fsck_offline),
+        _ => Err(c::ENOTTY.into()),
+    }
+}
+
+/// What the syscall returns: an error as its class.
+pub fn ioctl_ret(ret: Result<c_long, BchError>) -> c_long {
+    ret.unwrap_or_else(|e| e.class() as c_long)
+}
+
+#[c_export]
+pub fn bch2_fs_ioctl(c: &Opaque<c::bch_fs>, cmd: c_uint, arg: *mut c_void) -> c_long {
+    ioctl_ret(fs_ioctl(Fs::from_c(c), cmd, UserPtr::from_ptr(arg)))
+}
+
+#[c_export]
+pub fn bch2_global_ioctl(cmd: c_uint, arg: *mut c_void) -> c_long {
+    ioctl_ret(global_ioctl(cmd, UserPtr::from_ptr(arg)))
+}
 
 /* BCH_IOCTL_DATA */
 
@@ -133,12 +199,4 @@ fn data(fs: &Fs, arg: c::bch_ioctl_data) -> Result<c_int, BchError> {
         stats: UnsafeCell::new(unsafe { core::mem::zeroed() }),
     }))?;
     job.run(move |job| data_job(job, write_ref))
-}
-
-#[c_export]
-pub fn bch2_ioctl_data(c: &Opaque<c::bch_fs>, arg: c::bch_ioctl_data) -> c_long {
-    match data(Fs::from_c(c), arg) {
-        Ok(fd) => fd as c_long,
-        Err(e) => -e.raw() as c_long,
-    }
 }

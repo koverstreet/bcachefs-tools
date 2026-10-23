@@ -852,16 +852,13 @@ pub mod ioctl {
     use crate::errcode::errptr_to_result;
     use crate::fs::{OpenFs, RoRef};
     use crate::init::passes::{bch2_recovery_passes, passes_match, run_passes};
-    use crate::util::ffi::{c_char, Opaque};
+    use crate::util::ffi::c_char;
     use crate::util::kernel::{capable, Capability};
     use crate::util::thread_with_file::{StdioRedirect, ThreadWithFile};
-    use crate::util::vstructs::Head;
+    use crate::util::ioctl::UserVstruct;
     use crate::{opt_defined, opt_set};
-    use core::mem::size_of;
     use core::ptr::NonNull;
-    use cstruct_macros::c_export;
     use kernel::ffi::{c_int, c_long};
-    use kernel::uaccess::{UserPtr, UserSlice};
 
     /// C's darray_const_str of strings from strndup_user(): kfree()d, and the
     /// darray, when dropped.
@@ -904,9 +901,8 @@ pub mod ioctl {
         crate::errcode::ret_to_result_void(ret)
     }
 
-    fn fsck_offline(user: UserPtr) -> Result<c_int, BchError> {
-        type Args = c::bch_ioctl_fsck_offline;
-        let arg: Head<Args> = UserSlice::new(user, size_of::<Head<Args>>()).reader().read()?;
+    pub fn fsck_offline(user: UserVstruct<c::bch_ioctl_fsck_offline>) -> Result<c_int, BchError> {
+        let arg = user.head()?;
 
         if arg.flags != 0 {
             return Err(bch_errcode::BCH_ERR_EINVAL_fsck_offline_bad_flags.into());
@@ -922,11 +918,9 @@ pub mod ioctl {
         }
 
         let mut devs = UserStrs::default();
-        let user_devs = user.wrapping_byte_add(size_of::<Head<Args>>());
-        for i in 0..arg.nr_devs as usize {
-            let dev: u64 = UserSlice::new(user_devs.wrapping_byte_add(i * size_of::<u64>()),
-                                          size_of::<u64>()).reader().read()?;
-            devs.push(strndup_user(dev, c::PATH_MAX as c_long)?)?;
+        let user_devs = user.tail(&arg);
+        for i in 0..user_devs.len() {
+            devs.push(strndup_user(user_devs.get(i)?, c::PATH_MAX as c_long)?)?;
         }
 
         let thr = ThreadWithFile::new_stdio(Ok(()))?;
@@ -980,15 +974,7 @@ pub mod ioctl {
         ret
     }
 
-    #[c_export]
-    pub fn bch2_ioctl_fsck_offline(user: *mut Head<c::bch_ioctl_fsck_offline>) -> c_long {
-        match fsck_offline(UserPtr::from_ptr(user.cast())) {
-            Ok(fd)  => fd as c_long,
-            Err(e)  => -e.raw() as c_long,
-        }
-    }
-
-    fn fsck_online(fs: &Fs, arg: c::bch_ioctl_fsck_online) -> Result<c_int, BchError> {
+    pub fn fsck_online(fs: &Fs, arg: c::bch_ioctl_fsck_online) -> Result<c_int, BchError> {
         if arg.flags != 0 {
             return fs.throw(bch_errcode::BCH_ERR_EINVAL_fsck_online_bad_flags);
         }
@@ -1072,13 +1058,5 @@ pub mod ioctl {
             let _ = stdio.write(false, buf.as_bytes());
         }
         ret
-    }
-
-    #[c_export]
-    pub fn bch2_ioctl_fsck_online(c: &Opaque<c::bch_fs>, arg: c::bch_ioctl_fsck_online) -> c_long {
-        match fsck_online(Fs::from_c(c), arg) {
-            Ok(fd)  => fd as c_long,
-            Err(e)  => -e.raw() as c_long,
-        }
     }
 }
