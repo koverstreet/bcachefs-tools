@@ -55,6 +55,7 @@ const KERNEL_CONFIG: &[&str] = &[
     "CONFIG_JUMP_LABEL",
     "CONFIG_POWER_SUPPLY",
     "CONFIG_TRACEPOINTS",
+    "MODULE",
 ];
 
 /// Make the configuration's CONFIG_* defines Rust cfgs, as the kernel's
