@@ -968,6 +968,12 @@ impl Fs {
         percpu_field!(self.capacity.pcpu.get(), usage).sum_nonnegative()
     }
 
+    /// Sectors reserved for writes in flight, every CPU's count summed:
+    /// bch2_online_reserved().
+    pub fn online_reserved(&self) -> u64 {
+        percpu_field!(self.capacity.pcpu.get(), online_reserved).sum_nonnegative().iter().sum()
+    }
+
     /// Capacity, and how much of it is used and free, in sectors:
     /// bch2_fs_usage_read_short().
     pub fn usage_read_short(&self) -> c::bch_fs_usage_short {

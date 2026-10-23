@@ -285,6 +285,16 @@ pub unsafe fn darray_exit<T>(d: &mut crate::types::DArray<T>) {
     *unsafe { DArrayLoan::new(d) } = KVVec::new();
 }
 
+/// What darray @d holds, now a KVVec's, @d left empty: for a darray C filled
+/// for Rust.
+///
+/// # Safety
+/// As DArrayLoan::new().
+pub unsafe fn darray_take<T>(d: &mut crate::types::DArray<T>) -> KVVec<T> {
+    // SAFETY: the caller's; an empty vector given back for it
+    core::mem::replace(&mut *unsafe { DArrayLoan::new(d) }, KVVec::new())
+}
+
 /// Insert @v at @idx, moving what's after it up one: neither build's KVVec
 /// has insert(), so it's a push and a rotate.
 pub fn kvvec_insert<T>(vec: &mut KVVec<T>, idx: usize, v: T) -> Result<(), AllocError> {

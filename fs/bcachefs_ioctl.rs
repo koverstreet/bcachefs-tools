@@ -221,7 +221,7 @@ pub struct bch_ioctl_err_msg {
  * this UUID.
  */
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(Clone, Copy, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_query_uuid {
     pub uuid: c::__uuid_t,
 }
@@ -385,6 +385,21 @@ nest! {
 }
 c_default!(bch_ioctl_data);
 
+// SAFETY: integers, then an empty array starting where they end: any bytes
+// are a value, and none are padding
+#[cfg(kernel)]
+unsafe impl kernel::transmute::FromBytes for bch_ioctl_query_accounting {}
+#[cfg(kernel)]
+unsafe impl kernel::transmute::AsBytes for bch_ioctl_query_accounting {}
+#[cfg(kernel)]
+unsafe impl kernel::transmute::FromBytes for bch_ioctl_query_accounting_v2 {}
+#[cfg(kernel)]
+unsafe impl kernel::transmute::AsBytes for bch_ioctl_query_accounting_v2 {}
+const _: () = assert!(core::mem::size_of::<bch_ioctl_query_accounting>() ==
+                      core::mem::offset_of!(bch_ioctl_query_accounting, accounting));
+const _: () = assert!(core::mem::size_of::<bch_ioctl_query_accounting_v2>() ==
+                      core::mem::offset_of!(bch_ioctl_query_accounting_v2, accounting));
+
 // SAFETY: integers, and a union of structs of integers: any bytes are one of
 // its values - all reading it from userspace needs. Not Plain, whose AsBytes
 // a union's short arms would break.
@@ -471,7 +486,7 @@ pub struct bch_replicas_usage {
  * Returns -ERANGE if @replica_entries_bytes was too small
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_fs_usage {
     pub capacity: u64,
     pub used: u64,
@@ -500,7 +515,7 @@ pub struct bch_ioctl_dev_usage_type {
  * sectors.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_dev_usage {
     pub dev: u64,
     pub flags: u32,
@@ -547,7 +562,7 @@ pub struct bch_ioctl_dev_usage_v2 {
  * Returns -ERANGE if buffer provided is too small
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_read_super {
     pub flags: u32,
     pub pad: u32,
@@ -563,7 +578,7 @@ pub struct bch_ioctl_read_super {
  * Returns -ENOENT if not found
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_disk_get_idx {
     pub dev: u64,
 }
@@ -1083,7 +1098,7 @@ c_const! {
  * Returns -ERANGE if @buf_size is too small to hold even one key.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_query_btree_keys {
     pub btree: u32,
     pub level: u32,

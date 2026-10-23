@@ -16,6 +16,8 @@ c_enum! {
 }
 
 c_extern! {
+    pub fn bch2_fs_replicas_usage_read(c: *mut c::bch_fs, usage: *mut c::darray_char) -> c_int;
+    pub fn bch2_fs_accounting_read(c: *mut c::bch_fs, out: *mut c::darray_char, types_mask: c_uint) -> c_int;
     pub fn bch2_disk_accounting_mod_normal(trans: *mut c::btree_trans,
                                            k: *mut c::disk_accounting_pos, d: *mut i64,
                                            nr: c_uint) -> c_int;

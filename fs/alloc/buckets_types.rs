@@ -129,4 +129,5 @@ c_extern! {
     pub fn rust_bch2_disk_reservation_add(c: *mut c::bch_fs, res: *mut c::disk_reservation,
                                           sectors: u64, nr_replicas: c_uint, flags: c_int) -> c_int;
     pub fn rust_bch2_disk_reservation_put(c: *mut c::bch_fs, res: *mut c::disk_reservation);
+    pub fn bch2_fs_sectors_placeable(c: *mut c::bch_fs, out: *mut u64, out_now: *mut u64);
 }

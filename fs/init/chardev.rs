@@ -1,15 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The control device's ioctls: their dispatch, and each ioctl as it's
-//! converted from chardev.c. chardev.c finds the filesystem, by the device's
-//! minor, and holds a ro_ref on it across the call; bch2_fs_ioctl() and
-//! bch2_global_ioctl(), without one, are the dispatch. What isn't converted
-//! yet it hands back to C, __bch2_fs_ioctl().
+//! The control device's ioctls, and their dispatch. chardev.c finds the
+//! filesystem, by the device's minor, and holds a ro_ref on it across the
+//! call to bch2_fs_ioctl() - or calls bch2_global_ioctl(), without one; a
+//! mounted filesystem's file ioctls end up in bch2_fs_ioctl() too.
 //!
 //! Before a filesystem's started, only its queries are answered: anything
-//! else is EINVAL_ioctl_not_started. BCH_FS_started is read once, here, and
-//! given to __bch2_fs_ioctl(), so the two halves of the dispatch can't
-//! disagree on it.
+//! else is EINVAL_ioctl_not_started. The usage queries read in-memory
+//! accounting, there once the accounting_read recovery pass has run - not
+//! BCH_FS_started - or from the start, on a new filesystem, which runs no
+//! passes; before, they're EINVAL_*_accounting_not_read, "no data yet" and
+//! not zeroes. passes_complete only grows, so reading it without the lock can
+//! only be stale toward not ready: one more poll, never a wrong answer.
+//!
+//! Some arguments point into userspace - read_super's sb, query_btree_keys'
+//! buf, a v2's error message: what's written there is bounded by the length
+//! the argument gives, as C's copy_to_user()s were.
 //!
 //! The device ioctls come in pairs, a v1 and a v2 whose argument is v1's and
 //! a buffer for the error message: one handler each, given an ErrMsg, which
@@ -22,7 +28,15 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, WriteRef};
 use crate::util::ffi::Opaque;
 use crate::util::file::{File, FileOps, UserBuf};
-use crate::util::ioctl::{input, vstruct, Ioctl, UserStr};
+use crate::util::ioctl::{arg, inout, input, output, vstruct, Ioctl, UserArg, UserStr, UserVstruct};
+use crate::util::alloc::{darray_take, flags::GFP_KERNEL, KVVec};
+use crate::util::rcu::read_lock;
+use crate::util::vstructs::plain_bytes;
+use crate::accounting;
+use crate::btree::iter::{BtreeIter, BtreeIterFlags};
+use crate::btree_trans;
+use core::mem::offset_of;
+use core::ops::ControlFlow;
 use crate::util::Printbuf;
 use crate::errcode::{errptr_to_result, ret_to_c, ret_to_result_void};
 use crate::sb::members::{DevOuterRef, DevRef};
@@ -34,20 +48,11 @@ use core::mem::size_of;
 use core::ptr::{read_volatile, NonNull};
 use core::sync::atomic::Ordering::Relaxed;
 use core::ffi::c_void;
-use cstruct_macros::{c_export, c_extern, vtable};
+use cstruct_macros::{c_export, vtable};
 use kernel::ffi::{c_int, c_long, c_uint};
 use kernel::uaccess::{UserPtr, UserSlice};
 
 /* The dispatch */
-
-c_extern! {
-    pub fn __bch2_fs_ioctl(c: *mut c::bch_fs, cmd: c_uint, arg: *mut c_void, started: bool) -> c_long;
-}
-
-fn c_fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr, started: bool) -> Result<c_long, BchError> {
-    let ret = unsafe { __bch2_fs_ioctl(fs.as_ptr().cast(), cmd, user.as_mut_ptr(), started) };
-    if ret < 0 { Err(BchError::from_raw(-ret as i32)) } else { Ok(ret) }
-}
 
 pub fn fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError> {
     use crate::check::ioctl::fsck_online;
@@ -55,9 +60,27 @@ pub fn fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError>
 
     use bch_errcode as E;
 
-    let started = fs.flag(c::bch_fs_flags::BCH_FS_started);
     match cmd {
-        _ if !started => c_fs_ioctl(fs, cmd, user, started),
+        <c::BCH_IOCTL_QUERY_UUID as Ioctl>::OPCODE =>
+            output::<c::BCH_IOCTL_QUERY_UUID>(user, || query_uuid(fs)),
+        <c::BCH_IOCTL_FS_USAGE as Ioctl>::OPCODE =>
+            arg::<c::BCH_IOCTL_FS_USAGE, _>(user, |a| fs_usage(fs, a)),
+        <c::BCH_IOCTL_DEV_USAGE as Ioctl>::OPCODE => {
+            // before the argument's read, as C had it
+            if !accounting_read_done(fs) {
+                return fs.throw(E::BCH_ERR_EINVAL_ioctl_dev_usage_accounting_not_read);
+            }
+            inout::<c::BCH_IOCTL_DEV_USAGE, _>(user, |a| dev_usage(fs, a))
+        }
+        <c::BCH_IOCTL_DEV_USAGE_V2 as Ioctl>::OPCODE =>
+            vstruct::<c::BCH_IOCTL_DEV_USAGE_V2, _, _>(user, |a| dev_usage_v2(fs, a)),
+        <c::BCH_IOCTL_READ_SUPER as Ioctl>::OPCODE =>
+            input::<c::BCH_IOCTL_READ_SUPER, _>(user, |a| read_super(fs, a)),
+        <c::BCH_IOCTL_DISK_GET_IDX as Ioctl>::OPCODE =>
+            input::<c::BCH_IOCTL_DISK_GET_IDX, _>(user, |a| disk_get_idx(fs, a)),
+
+        _ if !fs.flag(c::bch_fs_flags::BCH_FS_started) =>
+            fs.throw(E::BCH_ERR_EINVAL_ioctl_not_started),
 
         <c::BCH_IOCTL_DATA as Ioctl>::OPCODE =>
             input::<c::BCH_IOCTL_DATA, _>(user, |arg| data(fs, arg)),
@@ -97,7 +120,14 @@ pub fn fs_ioctl(fs: &Fs, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError>
             input::<c::BCH_IOCTL_DISK_RESIZE_JOURNAL_v2, _>(user, |a| { let (a, m) = a.split(); disk_resize_journal(fs, a, m,
                 E::BCH_ERR_EINVAL_ioctl_disk_resize_journal_v2_bad_flags, E::BCH_ERR_EINVAL_ioctl_disk_resize_journal_v2_too_big) }),
 
-        _ => c_fs_ioctl(fs, cmd, user, started),
+        <c::BCH_IOCTL_QUERY_ACCOUNTING as Ioctl>::OPCODE =>
+            arg::<c::BCH_IOCTL_QUERY_ACCOUNTING, _>(user, |a| query_accounting_v1(fs, a)),
+        <c::BCH_IOCTL_QUERY_ACCOUNTING_v2 as Ioctl>::OPCODE =>
+            arg::<c::BCH_IOCTL_QUERY_ACCOUNTING_v2, _>(user, |a| query_accounting_v2(fs, a)),
+        <c::BCH_IOCTL_QUERY_BTREE_KEYS as Ioctl>::OPCODE =>
+            inout::<c::BCH_IOCTL_QUERY_BTREE_KEYS, _>(user, |a| query_btree_keys(fs, a)),
+
+        _ => Err(c::ENOTTY.into()),
     }
 }
 
@@ -124,6 +154,299 @@ pub fn bch2_fs_ioctl(c: &Opaque<c::bch_fs>, cmd: c_uint, arg: *mut c_void) -> c_
 #[c_export]
 pub fn bch2_global_ioctl(cmd: c_uint, arg: *mut c_void) -> c_long {
     ioctl_ret(global_ioctl(cmd, UserPtr::from_ptr(arg)))
+}
+
+/* The queries */
+
+fn accounting_read_done(fs: &Fs) -> bool {
+    fs.flag(c::bch_fs_flags::BCH_FS_new_fs) ||
+        fs.recovery.runner.passes_complete.get() &
+            (1 << c::bch_recovery_pass::BCH_RECOVERY_PASS_accounting_read as u32) != 0
+}
+
+fn query_uuid(fs: &Fs) -> Result<c::bch_ioctl_query_uuid, BchError> {
+    Ok(c::bch_ioctl_query_uuid { uuid: c::uuid_t { b: fs.sb.user_uuid.each_ref().map(|b| b.get()) } })
+}
+
+fn fs_usage(fs: &Fs, user: UserArg<c::bch_ioctl_fs_usage>) -> Result<(), BchError> {
+    if !accounting_read_done(fs) {
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_fs_usage_accounting_not_read);
+    }
+    let entries_bytes = user.read()?.replica_entries_bytes;
+
+    let mut d = c::darray_char::default();
+    let ret = ret_to_result_void(unsafe { c::bch2_fs_replicas_usage_read(fs.as_ptr().cast(), &mut d) });
+    // SAFETY: C's darray, filled
+    let replicas = unsafe { darray_take(&mut d) };
+    ret?;
+    if (entries_bytes as usize) < replicas.len() {
+        return Err(c::ERANGE.into());
+    }
+    user.bytes_at(offset_of!(c::bch_ioctl_fs_usage, replicas), replicas.len()).writer().write_slice(&replicas)?;
+
+    let u = fs.usage_read_short();
+    let mut arg = c::bch_ioctl_fs_usage {
+        capacity:              u.capacity,
+        used:                  u.used,
+        online_reserved:       fs.online_reserved(),
+        replica_entries_bytes: replicas.len() as u32,
+        ..Default::default()
+    };
+    for (i, r) in arg.persistent_reserved.iter_mut().enumerate() {
+        let pos = c::disk_accounting_pos::from_arm(c::bch_acct_persistent_reserved { nr_replicas: i as u8 });
+        accounting::mem_read(fs, &pos, core::slice::from_mut(r));
+    }
+    user.write(&arg)
+}
+
+/// Both versions: @arg's inputs in, its outputs out, the accounting keys to
+/// @dst. v1's outputs are a prefix of v2's.
+fn query_accounting(fs: &Fs, arg: &mut c::bch_ioctl_query_accounting_v2,
+                    dst: impl FnOnce(usize) -> UserSlice) -> Result<(), BchError> {
+    use c::disk_accounting_type as T;
+
+    if !accounting_read_done(fs) {
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_query_accounting_not_read);
+    }
+
+    /*
+     * Per-inode and per-snapshot accounting expose per-object usage - other
+     * users' file sizes (logical and on-disk, keyed by inode number) and the
+     * existence and size of snapshots - so they're admin-only. The remaining
+     * types are fs-wide or per-device aggregates and stay unprivileged, so
+     * 'bcachefs fs usage' still works for normal users. This ioctl is
+     * reachable by any user via the file ioctl path, not just the root-owned
+     * control device.
+     */
+    let privileged = 1 << T::BCH_DISK_ACCOUNTING_inum.0 | 1 << T::BCH_DISK_ACCOUNTING_snapshot.0;
+    if arg.accounting_types_mask & privileged != 0 && !capable(Capability::SysAdmin) {
+        return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin);
+    }
+
+    /*
+     * The stripe fragmentation counters have no upgrade entry: on a
+     * filesystem predating them, and until check_allocations has recomputed
+     * accounting, zero is indistinguishable from never-computed. The compat
+     * bit is what says they mean something, so without it don't return them
+     * at all - an absent entry is a reading userspace can act on, a zero
+     * would be a lie.
+     */
+    if fs.sb.compat.get() & 1 << c::bch_sb_compat::BCH_COMPAT_stripe_frag_accounting.0 == 0 {
+        arg.accounting_types_mask &= !(1 << T::BCH_DISK_ACCOUNTING_stripe_frag.0 |
+                                       1 << T::BCH_DISK_ACCOUNTING_dev_stripe_frag.0);
+    }
+
+    let mut d = c::darray_char::default();
+    let ret = ret_to_result_void(unsafe {
+        c::bch2_fs_accounting_read(fs.as_ptr().cast(), &mut d, arg.accounting_types_mask)
+    });
+    // SAFETY: C's darray, filled
+    let keys = unsafe { darray_take(&mut d) };
+    ret?;
+    if (arg.accounting_u64s as usize) * size_of::<u64>() < keys.len() {
+        return Err(c::ERANGE.into());
+    }
+    dst(keys.len()).writer().write_slice(&keys)?;
+
+    arg.capacity        = fs.capacity.capacity.wrapping_sub(fs.usage_base().hidden);
+    arg.used            = fs.usage_read_short().used;
+    arg.online_reserved = fs.online_reserved();
+    arg.accounting_u64s = (keys.len() / size_of::<u64>()) as u32;
+
+    const R: usize = c::BCH_REPLICAS_MAX as usize;
+    const { assert!(R <= c::BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR as usize) };
+    let (mut free, mut free_now) = ([0u64; R], [0u64; R]);
+    unsafe { c::bch2_fs_sectors_placeable(fs.as_ptr().cast(), free.as_mut_ptr(), free_now.as_mut_ptr()) };
+    arg.free     = Default::default();
+    arg.free_now = Default::default();
+    arg.free[..R].copy_from_slice(&free);
+    arg.free_now[..R].copy_from_slice(&free_now);
+    Ok(())
+}
+
+fn query_accounting_v1(fs: &Fs, user: UserArg<c::bch_ioctl_query_accounting>) -> Result<(), BchError> {
+    let mut arg = user.read()?;
+    let mut v2 = c::bch_ioctl_query_accounting_v2 {
+        accounting_u64s:       arg.accounting_u64s,
+        accounting_types_mask: arg.accounting_types_mask,
+        ..Default::default()
+    };
+    query_accounting(fs, &mut v2,
+        |len| user.bytes_at(offset_of!(c::bch_ioctl_query_accounting, accounting), len))?;
+
+    arg.capacity        = v2.capacity;
+    arg.used            = v2.used;
+    arg.online_reserved = v2.online_reserved;
+    arg.accounting_u64s = v2.accounting_u64s;
+    user.write(&arg)
+}
+
+fn query_accounting_v2(fs: &Fs, user: UserArg<c::bch_ioctl_query_accounting_v2>) -> Result<(), BchError> {
+    let mut arg = user.read()?;
+    query_accounting(fs, &mut arg,
+        |len| user.bytes_at(offset_of!(c::bch_ioctl_query_accounting_v2, accounting), len))?;
+    user.write(&arg)
+}
+
+/* obsolete, didn't allow for new data types: */
+fn dev_usage(fs: &Fs, arg: &mut c::bch_ioctl_dev_usage) -> Result<(), BchError> {
+    if arg.flags & !c::BCH_BY_INDEX != 0 || arg.pad[..3] != [0; 3] {
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_dev_usage_bad_flags);
+    }
+    let ca = dev_lookup(fs, arg.dev, arg.flags)?;
+    let src = ca.usage_full_read_fast();
+
+    arg.state       = ca.mi.state;
+    arg.bucket_size = ca.mi.bucket_size.into();
+    arg.nr_buckets  = ca.mi.nbuckets - u64::from(ca.mi.first_bucket);
+    for (d, s) in arg.d.iter_mut().zip(&src.d) {
+        d.buckets    = s.buckets;
+        d.sectors    = s.sectors;
+        d.fragmented = s.fragmented;
+    }
+    Ok(())
+}
+
+fn dev_usage_v2(fs: &Fs, user: UserVstruct<c::bch_ioctl_dev_usage_v2>) -> Result<(), BchError> {
+    if !accounting_read_done(fs) {
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_dev_usage_v2_accounting_not_read);
+    }
+    let mut arg = user.head()?;
+    if arg.flags & !c::BCH_BY_INDEX != 0 || arg.pad[..3] != [0; 3] {
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_dev_usage_v2_bad_flags);
+    }
+    let ca = dev_lookup(fs, arg.dev, arg.flags)?;
+    let src = ca.usage_full_read_fast();
+
+    arg.state         = ca.mi.state;
+    arg.bucket_size   = ca.mi.bucket_size.into();
+    arg.nr_data_types = arg.nr_data_types.min(c::BCH_DATA_NR as u8);
+    arg.nr_buckets    = ca.mi.nbuckets - u64::from(ca.mi.first_bucket);
+    user.set_head(&arg)?;
+
+    let d = user.tail(&arg);
+    for i in 0..d.len() {
+        d.set(i, &c::bch_ioctl_dev_usage_type {
+            buckets:    src.d[i].buckets,
+            sectors:    src.d[i].sectors,
+            fragmented: src.d[i].fragmented,
+        })?;
+    }
+    Ok(())
+}
+
+fn read_super(fs: &Fs, arg: c::bch_ioctl_read_super) -> Result<(), BchError> {
+    admin(fs)?;
+    if arg.flags & !(c::BCH_BY_INDEX | c::BCH_READ_DEV) != 0 || arg.pad != 0 {
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_read_super_bad_flags);
+    }
+
+    let sb_lock = fs.sb_lock();
+    let ca;
+    let sb = if arg.flags & c::BCH_READ_DEV != 0 {
+        ca = dev_lookup(fs, arg.dev, arg.flags)?;
+        match fs.dev_sb(&sb_lock, &ca) {
+            Some(sb) => sb,
+            None     => return fs.throw(bch_errcode::BCH_ERR_device_offline),
+        }
+    } else {
+        &**sb_lock
+    };
+
+    let bytes = sb.sb_bytes();
+    if bytes.len() as u64 > arg.size {
+        return Err(c::ERANGE.into());
+    }
+    UserSlice::new(UserPtr::from_addr(arg.sb as usize), bytes.len()).writer().write_slice(bytes)?;
+    Ok(())
+}
+
+/// The dev_t userspace's encoding @dev names, as the kernel's
+/// huge_decode_dev(): new_decode_dev()'s layout, major in bits 8-19, minor
+/// in 0-7 and 20-31.
+fn huge_decode_dev(dev: u64) -> u32 {
+    let dev = dev as u32;
+    let major = (dev & 0xfff00) >> 8;
+    let minor = (dev & 0xff) | ((dev >> 12) & 0xfff00);
+    major << c::MINORBITS | minor
+}
+
+fn disk_get_idx(fs: &Fs, arg: c::bch_ioctl_disk_get_idx) -> Result<c_int, BchError> {
+    let dev = huge_decode_dev(arg.dev);
+    admin(fs)?;
+    if dev == 0 {
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_disk_get_idx_bad_dev);
+    }
+
+    let rcu = read_lock();
+    let idx = fs.online_devs_rcu(&rcu).find(|ca| ca.dev == dev).map(|ca| ca.dev_idx);
+    match idx {
+        Some(idx) => Ok(idx.into()),
+        None      => fs.throw(bch_errcode::BCH_ERR_ENOENT_dev_idx_not_found),
+    }
+}
+
+fn query_btree_keys(fs: &Fs, arg: &mut c::bch_ioctl_query_btree_keys) -> Result<(), BchError> {
+    const FLAGS: [(u32, BtreeIterFlags); 4] = [
+        (c::BCH_IOCTL_QUERY_BTREE_KEYS_slots,              BtreeIterFlags::SLOTS),
+        (c::BCH_IOCTL_QUERY_BTREE_KEYS_prev,               BtreeIterFlags::PREV),
+        (c::BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots,      BtreeIterFlags::ALL_SNAPSHOTS),
+        (c::BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts, BtreeIterFlags::NOFILTER_WHITEOUTS),
+    ];
+
+    /*
+     * Exposes all filesystem metadata - dirents, inodes, xattrs - and is
+     * reachable by any user via the file ioctl path, so admin only:
+     */
+    admin(fs)?;
+
+    if arg.flags & !FLAGS.iter().fold(0, |m, (f, _)| m | f) != 0 {
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_query_btree_keys_bad_flags);
+    }
+    let mut flags = FLAGS.iter()
+        .filter(|(f, _)| arg.flags & f != 0)
+        .fold(BtreeIterFlags::empty(), |m, (_, i)| m | *i);
+
+    /* Interior nodes aren't extents - only meaningful at level 0: */
+    if arg.level != 0 {
+        flags |= BtreeIterFlags::NOT_EXTENTS;
+    }
+
+    // an id past the last is what bch2_btree_iter_params_valid() refuses first
+    let valid = c::btree_id::from_raw(arg.btree).is_some_and(|btree| unsafe {
+        c::bch2_btree_iter_params_valid(btree, arg.level, arg.start, arg.end,
+            c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()))
+    });
+    if !valid {
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_query_btree_keys_bad_params);
+    }
+
+    /* bound per-call kernel allocation; the caller loops anyways */
+    let buf_size = arg.buf_size.min(1 << 20) as usize;
+
+    let mut out = KVVec::<u8>::new();
+    let full = {
+        let trans = btree_trans!(fs);
+        let mut iter = BtreeIter::new_level(&*trans, arg.btree, arg.start, arg.level, flags);
+        iter.for_each_max(&trans, arg.end, |_, iter, k| {
+            /* if the buffer fills before this key, resume at it: */
+            arg.start = iter.pos();
+
+            let bytes = k.k.u64s as usize * size_of::<u64>();
+            if out.len() + bytes > buf_size {
+                /* buffer full - or, if empty, can't fit even one key: */
+                return if out.is_empty() { Err(c::ERANGE.into()) } else { Ok(ControlFlow::Break(true)) };
+            }
+            out.extend_from_slice(plain_bytes(k.k), GFP_KERNEL)?;
+            out.extend_from_slice(k.val_bytes(), GFP_KERNEL)?;
+            Ok(ControlFlow::Continue(()))
+        })?
+    };
+
+    arg.done = (!full).into();
+    arg.used = out.len() as u32;
+    UserSlice::new(UserPtr::from_addr(arg.buf as usize), out.len()).writer().write_slice(&out)?;
+    Ok(())
 }
 
 /* The device ioctls */

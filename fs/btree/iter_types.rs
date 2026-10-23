@@ -55,6 +55,8 @@ c_extern! {
     pub fn bch2_set_btree_iter_dontneed(iter: *mut c::btree_iter);
     pub fn bch2_btree_iter_prev_slot(iter: *mut c::btree_iter) -> c::bkey_s_c;
     pub fn bch2_btree_iter_advance(iter: *mut c::btree_iter) -> bool;
+    pub fn bch2_btree_iter_params_valid(btree: c::btree_id, level: c_uint, start: c::bpos, end: c::bpos,
+                                        flags: c::btree_iter_update_trigger_flags) -> bool;
     pub fn bch2_btree_iter_rewind(iter: *mut c::btree_iter) -> bool;
     pub fn bch2_trans_iter_exit(iter: *mut c::btree_iter);
     pub fn bch2_trans_iter_init_outlined(trans: *mut c::btree_trans, iter: *mut c::btree_iter,

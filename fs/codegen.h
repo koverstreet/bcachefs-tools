@@ -32,6 +32,7 @@ const blk_opf_t RUST_CONST_HELPER_REQ_FUA		= REQ_FUA;
  * ioctl numbers' layout, the arch's own: powerpc, mips, sparc, alpha and
  * parisc override asm-generic's (util/ioctl.rs)
  */
+const unsigned int RUST_CONST_HELPER_MINORBITS		= MINORBITS;
 const unsigned int RUST_CONST_HELPER__IOC_NONE		= _IOC_NONE;
 const unsigned int RUST_CONST_HELPER__IOC_READ		= _IOC_READ;
 const unsigned int RUST_CONST_HELPER__IOC_WRITE		= _IOC_WRITE;

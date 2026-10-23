@@ -29,7 +29,10 @@
 //! BCH_IOCTL_QUERY_COUNTERS's does: vstruct() hands the handler a
 //! UserVstruct, which reads and writes the head, and the array as the head
 //! counts it - where it starts, what it holds and how many, by the type's
-//! #[counted] field - no further. What a handler returns, IoctlRet, is the
+//! #[counted] field - no further. An argument whose array the type doesn't
+//! count - entries of varying size, the head giving their bytes - is arg()'s:
+//! a UserArg, read and written whole, and the bytes at its array's offset.
+//! What a handler returns, IoctlRet, is the
 //! syscall's value; its errors are returned by the dispatch, as their class.
 
 #![allow(non_snake_case)]
@@ -187,6 +190,39 @@ mod user {
 
         pub fn as_cstr(&self) -> &CStr {
             CStr::from_bytes_with_nul(&self.0).expect("read up to its NUL")
+        }
+    }
+
+    pub fn arg<I, R>(user: UserPtr, f: impl FnOnce(UserArg<I::Arg>) -> Result<R, BchError>)
+        -> Result<c_long, BchError>
+    where
+        I: Ioctl,
+        R: IoctlRet,
+    {
+        Ok(f(UserArg { at: user, _t: PhantomData })?.ret())
+    }
+
+    pub struct UserArg<T> {
+        at: UserPtr,
+        _t: PhantomData<T>,
+    }
+
+    impl<T> UserArg<T> {
+        /// @len bytes from offset @off: its array's, from offset_of!().
+        pub fn bytes_at(&self, off: usize, len: usize) -> UserSlice {
+            UserSlice::new(self.at.wrapping_byte_add(off), len)
+        }
+    }
+
+    impl<T: FromBytes> UserArg<T> {
+        pub fn read(&self) -> Result<T, BchError> {
+            Ok(UserSlice::new(self.at, size_of::<T>()).reader().read()?)
+        }
+    }
+
+    impl<T: AsBytes> UserArg<T> {
+        pub fn write(&self, v: &T) -> Result<(), BchError> {
+            Ok(UserSlice::new(self.at, size_of::<T>()).writer().write(v)?)
         }
     }
 
