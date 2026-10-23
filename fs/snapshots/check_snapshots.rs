@@ -501,16 +501,9 @@ fn ptr_available(t: &TransAttempt<'_, '_>, n: &c::Snapshot, n_id: u32, role: Rol
 
 /// Whether snapshot @id owns anything: any nonzero counter in any snapshotted
 /// btree. Keys as well as sectors: a snapshot of only dirents or xattrs has no
-/// sectors. In memory, so current without a write buffer flush.
+/// sectors.
 fn has_accounting(fs: &Fs, id: u32) -> bool {
-    crate::BTREE_IDS_KNOWN.iter()
-        .filter(|&&btree| crate::BTREE_HAS_SNAPSHOTS_MASK & (1 << btree.0) != 0)
-        .any(|&btree| {
-            let acc = c::bch_acct_snapshot { id, btree: btree.0 };
-            let mut v = [0u64; 3];
-            accounting::mem_read(fs, &c::disk_accounting_pos::from_arm(acc), &mut v);
-            v.iter().any(|&x| x != 0)
-        })
+    accounting::snapshot_btrees(fs, id).any(|v| v.iter().any(|&x| x != 0))
 }
 
 /// Commit an edge repair, have the table rebuilt, and restart: decisions

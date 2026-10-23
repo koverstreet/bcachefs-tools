@@ -83,6 +83,18 @@ pub fn mem_read(fs: &Fs, pos: &c::disk_accounting_pos, counters: &mut [u64]) {
     }
 }
 
+/// Snapshot @id's counters - keys, key bytes, sectors - in each snapshotted
+/// btree. In memory, so current without a write buffer flush.
+pub fn snapshot_btrees(fs: &Fs, id: u32) -> impl Iterator<Item = [u64; 3]> + '_ {
+    crate::BTREE_IDS_KNOWN.iter()
+        .filter(|&&btree| crate::BTREE_HAS_SNAPSHOTS_MASK & (1 << btree.0) != 0)
+        .map(move |&btree| {
+            let mut v = [0; 3];
+            mem_read(fs, &c::disk_accounting_pos::from_arm(c::bch_acct_snapshot { id, btree: btree.0 }), &mut v);
+            v
+        })
+}
+
 /// Add @d to accounting key @pos's counters, in @trans - the gc copy's, with
 /// @gc: as bch2_disk_accounting_mod(). For triggers.
 pub fn add(t: &TransAttempt<'_, '_>, pos: &c::disk_accounting_pos, d: &[i64], gc: bool)
