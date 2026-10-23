@@ -11,9 +11,6 @@
 #include "snapshots/snapshot.h"
 #include "snapshots/subvolume.h"
 
-#include "data/reconcile/trigger.h"
-#include "data/reflink_format_gen.h"
-
 #include "init/chardev.h"
 #include "init/fs.h"
 
@@ -418,117 +415,6 @@ static long bch2_ioctl_subvolume_destroy_v2(struct bch_fs *c, struct file *filp,
 	return bch2_copy_ioctl_err_msg(&arg.err, &err, ret);
 }
 
-static int bch2_propagate_opts_to_reflink_v(struct btree_trans *trans,
-					    struct bch_inode_opts *opts,
-					    struct bkey_s_c_reflink_p p)
-{
-	u64 idx = REFLINK_P_IDX(p.v) - le32_to_cpu(p.v->front_pad);
-	u64 end = REFLINK_P_IDX(p.v) + p.k->size + le32_to_cpu(p.v->back_pad);
-	u32 restart_count = trans->restart_count;
-
-	/*
-	 * Raising the replica count pads the key with invalid-device pointers,
-	 * and the reconcile trigger charges extra_disk_res for them - the
-	 * commit needs a reservation to put that in. Released per key so it
-	 * can't accumulate across the range.
-	 */
-	CLASS(disk_reservation, res)(trans->c);
-
-	int ret = for_each_btree_key_commit(trans, iter, BTREE_ID_reflink,
-				POS(0, idx),
-				BTREE_ITER_intent|BTREE_ITER_not_extents, k,
-				&res.r, NULL, BCH_TRANS_COMMIT_no_enospc, ({
-		bch2_disk_reservation_put(trans->c, &res.r);
-
-		if (bpos_ge(bkey_start_pos(k.k), POS(0, end)))
-			break;
-
-		bch2_update_reconcile_opts(trans, NULL, opts, &iter, 0, k,
-					   SET_NEEDS_RECONCILE_opt_change);
-	}));
-
-	/* suppress trans_was_restarted() check */
-	trans->restart_count = restart_count;
-	return ret;
-}
-
-static long bch2_ioc_set_reflink_p_may_update_opts(struct bch_fs *c,
-						   struct file *file,
-						   struct bch_inode_info *inode)
-{
-	if (!capable(CAP_SYS_ADMIN))
-		return bch_err_throw(c, EPERM_non_admin);
-
-	try(bch2_request_incompat_feature(c, bcachefs_metadata_version_reflink_p_may_update_opts));
-
-	subvol_inum inum = inode_inum(inode);
-
-	CLASS(btree_trans, trans)(c);
-	CLASS(disk_reservation, res)(c);
-
-	return for_each_btree_key_in_subvolume_max(trans, iter,
-			BTREE_ID_extents,
-			POS(inum.inum, 0),
-			POS(inum.inum, U64_MAX),
-			inum.subvol,
-			BTREE_ITER_intent|BTREE_ITER_trim, k, ({
-		int ret = 0;
-		bch2_disk_reservation_put(c, &res.r);
-
-		if (k.k->type == KEY_TYPE_reflink_p &&
-		    !REFLINK_P_MAY_UPDATE_OPTIONS(bkey_s_c_to_reflink_p(k).v)) {
-			struct bkey_i_reflink_p *p =
-				bch2_bkey_make_mut_typed(trans, &iter, &k, 0, reflink_p);
-			ret = PTR_ERR_OR_ZERO(p);
-			if (!ret) {
-				SET_REFLINK_P_MAY_UPDATE_OPTIONS(&p->v, true);
-				ret = bch2_trans_commit(trans, &res.r, NULL,
-							BCH_TRANS_COMMIT_no_enospc);
-			}
-			if (!ret) {
-				struct bch_inode_opts opts;
-				ret = bch2_bkey_get_io_opts(trans, NULL, k, &opts) ?:
-				      bch2_propagate_opts_to_reflink_v(trans, &opts,
-								      bkey_s_c_to_reflink_p(k));
-			}
-		}
-		ret;
-	}));
-}
-
-static long bch2_ioc_propagate_reflink_p_opts(struct bch_fs *c,
-				       struct file *file,
-				       struct bch_inode_info *inode)
-{
-	if (!inode_owner_or_capable(file_mnt_idmap(file), &inode->v) &&
-	    !capable(CAP_SYS_ADMIN))
-		return bch_err_throw(c, EPERM_non_admin_or_owner);
-
-	subvol_inum inum = inode_inum(inode);
-
-	CLASS(btree_trans, trans)(c);
-
-	return for_each_btree_key_in_subvolume_max(trans, iter,
-			BTREE_ID_extents,
-			POS(inum.inum, 0),
-			POS(inum.inum, U64_MAX),
-			inum.subvol,
-			BTREE_ITER_trim, k, ({
-		int ret = 0;
-		if (k.k->type == KEY_TYPE_reflink_p) {
-			if (REFLINK_P_MAY_UPDATE_OPTIONS(bkey_s_c_to_reflink_p(k).v)) {
-				struct bch_inode_opts opts;
-				ret = bch2_bkey_get_io_opts(trans, NULL, k, &opts) ?:
-				      bch2_propagate_opts_to_reflink_v(trans, &opts,
-								      bkey_s_c_to_reflink_p(k));
-			} else if (!capable(CAP_SYS_ADMIN)) {
-				ret = bch_err_throw(c, reflink_p_may_update_options_unset);
-			}
-		}
-		ret;
-	}));
-}
-
 static long bch2_ioc_pread_raw(struct file *file,
 			       struct bch_inode_info *inode,
 			       struct bch_ioctl_pread_raw __user *uarg)
@@ -583,86 +469,6 @@ static long bch2_ioc_pread_raw(struct file *file,
 	return ret;
 }
 
-static int bch2_unpoison_extent(struct btree_trans *trans, struct btree_iter *iter,
-			       struct bkey_s_c k)
-{
-	u64 flags = bch2_bkey_extent_flags(k);
-	if (!(flags & BIT_ULL(BCH_EXTENT_FLAG_poisoned)))
-		return 0;
-
-	/* room for a flags entry, if it has none */
-	unsigned u64s = k.k->u64s + sizeof(struct bch_extent_flags) / sizeof(u64);
-	struct bkey_i *new = errptr_try(bch2_trans_kmalloc(trans, u64s * sizeof(u64)));
-
-	bkey_reassemble(new, k);
-	try(bch2_bkey_extent_flags_set(trans, new, u64s,
-				       flags & ~BIT_ULL(BCH_EXTENT_FLAG_poisoned)));
-	try(bch2_trans_update(trans, iter, new, 0));
-	return 0;
-}
-
-static int bch2_unpoison_reflink(struct btree_trans *trans,
-				 struct bkey_s_c_reflink_p p)
-{
-	u64 idx = REFLINK_P_IDX(p.v);
-	u64 end = idx + p.k->size;
-
-	struct bkey_s_c k;
-	int ret;
-	for_each_btree_key_norestart(trans, iter, BTREE_ID_reflink,
-			POS(0, idx), BTREE_ITER_intent, k, ret) {
-		if (bpos_ge(bkey_start_pos(k.k), POS(0, end)))
-			break;
-		try(bch2_unpoison_extent(trans, &iter, k));
-	}
-	return ret;
-}
-
-static long bch2_ioc_unpoison(struct bch_fs *c, struct file *file,
-			      struct bch_inode_info *inode,
-			      struct bch_ioctl_unpoison __user *uarg)
-{
-	struct bch_ioctl_unpoison arg;
-
-	if (copy_from_user(&arg, uarg, sizeof(arg)))
-		return -EFAULT;
-	if (arg.flags || arg.pad)
-		return -EINVAL;
-	if (!arg.len)
-		return 0;
-
-	if (!inode_owner_or_capable(file_mnt_idmap(file), &inode->v))
-		return bch_err_throw(c, EPERM_non_admin_or_owner);
-
-	subvol_inum inum = inode_inum(inode);
-	struct bpos start = POS(inum.inum, arg.offset >> 9);
-	struct bpos end   = POS(inum.inum, (arg.offset + arg.len) >> 9);
-
-	CLASS(btree_trans, trans)(c);
-
-	/*
-	 * Clearing the poison flag is not an allocation, but the reconcile
-	 * trigger may pad the key with invalid-device pointers to restore its
-	 * accounted durability, and charges extra_disk_res for those - so the
-	 * commit needs a reservation to put the charge in. Released per key so
-	 * it can't accumulate across the range.
-	 *
-	 * no_enospc because this is a recovery path: a full filesystem must not
-	 * be the reason the owner can't get at data that is still there.
-	 */
-	CLASS(disk_reservation, res)(c);
-
-	return for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_extents,
-			start, end, inum.subvol, BTREE_ITER_intent, k, ({
-		bch2_disk_reservation_put(c, &res.r);
-
-		(k.k->type == KEY_TYPE_reflink_p
-			? bch2_unpoison_reflink(trans, bkey_s_c_to_reflink_p(k))
-			: bch2_unpoison_extent(trans, &iter, k)) ?:
-		bch2_trans_commit(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc);
-	}));
-}
-
 /* What the Rust dispatch, bch2_fs_file_ioctl(), hasn't converted yet */
 long __bch2_fs_file_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 {
@@ -674,14 +480,6 @@ long __bch2_fs_file_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 	case BCHFS_IOC_REINHERIT_ATTRS:
 		ret = bch2_ioc_reinherit_attrs(c, file, inode,
 					       (void __user *) arg);
-		break;
-
-	case BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS:
-		ret = bch2_ioc_set_reflink_p_may_update_opts(c, file, inode);
-		break;
-
-	case BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS:
-		ret = bch2_ioc_propagate_reflink_p_opts(c, file, inode);
 		break;
 
 	case FS_IOC_SETVERSION:
@@ -727,11 +525,6 @@ long __bch2_fs_file_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 	case BCHFS_IOC_PREAD_RAW:
 		ret = bch2_ioc_pread_raw(file, inode,
 				(struct bch_ioctl_pread_raw __user *) arg);
-		break;
-
-	case BCHFS_IOC_UNPOISON:
-		ret = bch2_ioc_unpoison(c, file, inode,
-				(struct bch_ioctl_unpoison __user *) arg);
 		break;
 
 	default:

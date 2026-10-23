@@ -1054,7 +1054,7 @@ pub struct bch_ioctl_pread_raw {
  * poison flag, allowing the data to be read again normally.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_unpoison {
     pub offset: u64,
     pub len: u64,

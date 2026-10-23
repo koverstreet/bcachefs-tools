@@ -8,16 +8,22 @@
 use core::mem::offset_of;
 use core::mem::size_of;
 use core::ops::ControlFlow;
+use core::ops::Range;
 use crate::accounting;
+use crate::alloc::buckets::DiskReservation;
 use crate::bch_warn;
-use crate::btree::bkey;
-use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, TransAttempt};
+use crate::btree::bkey::prelude::*;
+use crate::btree::bkey::{self, BkeySC};
+use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree_trans;
 use crate::c;
+use crate::data::ptrs::{BkeyVPtrs, Ptrs, PtrsMut};
+use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::dirent::{self, Dirent};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::damage;
+use crate::inode_opts::get_io_opts;
 use crate::namei;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::Printbuf;
@@ -593,4 +599,159 @@ pub fn snapshot_tree_v2(fs: &Fs, subvol: u32, user: UserArg<c::bch_ioctl_snapsho
             user.write_at(offset_of!(Q, nr), &r.nr)?;
             user.write_at(offset_of!(Q, total), &r.total)
         })
+}
+
+/*
+ * A file's reflinked data, and its poisoned extents: walks over the file's
+ * extents, in its subvolume's snapshot, that update keys and commit each.
+ *
+ * Each commit has a disk reservation, released before the next key so it
+ * can't accumulate across the range: what a commit allocates isn't new
+ * data, but the reconcile trigger may pad a key with invalid-device
+ * pointers - raising its replica count, or restoring its accounted
+ * durability - and charges extra_disk_res for them.
+ *
+ * A reflink_p's options are its file's, and with may_update_options set
+ * they're propagated to the indirect extents it points at: a loop over the
+ * reflink btree of its own, run with ignore_restarts() once the reflink_p's
+ * key is done.
+ */
+
+/// Bring the indirect extents in @range of the reflink btree in line with
+/// @opts: their reconcile state, each commit its own.
+fn propagate_to_reflink_v(fs: &Fs, trans: &BtreeTrans<'_>, opts: &c::bch_inode_opts, range: Range<u64>)
+    -> Result<(), BchError>
+{
+    let res = DiskReservation::new(fs);
+    let flags = BtreeIterFlags::INTENT | BtreeIterFlags::NOT_EXTENTS;
+    let mut iter = BtreeIter::new(trans, c::btree_id::reflink, bkey::pos(0, range.start), flags);
+    iter.for_each_max_commit(trans, bkey::SPOS_MAX, flags, Some(&res), CommitFlags::NO_ENOSPC, |t, iter, k| {
+        res.put();
+        if bkey::bpos_ge(k.k.start_pos(), bkey::pos(0, range.end)) {
+            return Err(bch_errcode::BCH_ERR_fc_break.into());
+        }
+        update_reconcile_opts(t, None, opts, iter, 0, k,
+                              c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change)
+    })
+}
+
+/// BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS's: set may_update_options on
+/// @inum's reflink_ps, an admin's to do, and propagate their options.
+pub fn reflink_p_set_may_update_opts(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
+    if !capable(Capability::SysAdmin) {
+        return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin);
+    }
+    fs.request_incompat_feature(c::bcachefs_metadata_version::reflink_p_may_update_opts)?;
+
+    let trans = btree_trans!(fs);
+    let res = DiskReservation::new(fs);
+    let flags = BtreeIterFlags::INTENT | BtreeIterFlags::TRIM;
+    let mut iter = BtreeIter::new(&trans, c::btree_id::extents, bkey::pos(inum.inum, 0), flags);
+    subvolume::for_each_in_subvolume_max_in_trans(&trans, &mut iter, bkey::pos(inum.inum, u64::MAX),
+                                                  inum.subvol as u32, flags, |t, iter, k| {
+        res.put();
+        let Some(p) = k.arm::<c::ReflinkP>() else { return Ok(()) };
+        if p.v().may_update_options() {
+            return Ok(());
+        }
+
+        // before the commit: it's the key's last use
+        let (opts, range) = (get_io_opts(t, None, k)?, p.refd());
+
+        let mut n = t.bkey_make_mut(iter, p, UpdateTriggerFlags::empty())?;
+        n.v_mut().set_may_update_options(true);
+        t.commit(Some(&res), CommitFlags::NO_ENOSPC)?;
+
+        t.ignore_restarts(|trans| propagate_to_reflink_v(fs, trans, &opts, range))
+    })
+}
+
+/// BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS's: propagate the options of @inum's
+/// reflink_ps - all of them, which may update. A reflink_p that may not is
+/// skipped for an admin, and an error otherwise.
+pub fn reflink_p_propagate_opts(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
+    let trans = btree_trans!(fs);
+    let flags = BtreeIterFlags::TRIM;
+    let mut iter = BtreeIter::new(&trans, c::btree_id::extents, bkey::pos(inum.inum, 0), flags);
+    subvolume::for_each_in_subvolume_max_in_trans(&trans, &mut iter, bkey::pos(inum.inum, u64::MAX),
+                                                  inum.subvol as u32, flags, |t, _, k| {
+        let Some(p) = k.arm::<c::ReflinkP>() else { return Ok(()) };
+        if !p.v().may_update_options() {
+            return if capable(Capability::SysAdmin) {
+                Ok(())
+            } else {
+                fs.throw(bch_errcode::BCH_ERR_reflink_p_may_update_options_unset)
+            };
+        }
+
+        let (opts, range) = (get_io_opts(t, None, k)?, p.refd());
+        t.ignore_restarts(|trans| propagate_to_reflink_v(fs, trans, &opts, range))
+    })
+}
+
+/// Clear @k's poison flag, if it's poisoned: an update at @iter.
+fn unpoison_extent(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: BkeySC<'_>) -> Result<(), BchError> {
+    let fs = t.fs();
+    let poisoned = 1 << c::bch_extent_flags_e::BCH_EXTENT_FLAG_poisoned.0;
+    let flags = k.arm::<Ptrs>().map_or(0, |p| p.extent_flags(fs));
+    if flags & poisoned == 0 {
+        return Ok(());
+    }
+    fs.request_incompat_feature(c::bcachefs_metadata_version::extent_flags)?;
+
+    // room for a flags entry, if it has none
+    let room = (usize::from(k.k.u64s) + size_of::<c::bch_extent_flags>() / size_of::<u64>()) * size_of::<u64>();
+    let mut n = t.bkey_reassemble_room(k, room)?;
+    n.reborrow().arm::<PtrsMut>().expect("a key with extent flags: one whose entries can be edited")
+        .extent_flags_set(fs, flags & !poisoned).expect("room for a flags entry: reassembled with it");
+    t.update(iter, &n, UpdateTriggerFlags::empty())
+}
+
+/// unpoison_extent() each indirect extent reflink_p @p maps.
+fn unpoison_reflink(t: &TransAttempt<'_, '_>, p: BkeySC<'_, c::ReflinkP>) -> Result<(), BchError> {
+    let live = p.live();
+    let mut iter = BtreeIter::new(t, c::btree_id::reflink, bkey::pos(0, live.start), BtreeIterFlags::INTENT);
+    iter.for_each_norestart(t, |iter, k| {
+        if bkey::bpos_ge(k.k.start_pos(), bkey::pos(0, live.end)) {
+            return Ok(ControlFlow::Break(()));
+        }
+        unpoison_extent(t, iter, k)?;
+        Ok(ControlFlow::Continue(()))
+    })
+}
+
+/// BCHFS_IOC_UNPOISON's: clear the poison flag on @inum's extents in a
+/// range, and the indirect extents its reflink_ps there map. @owner, whether
+/// the caller owns the file - the VFS's to say - is asked once the
+/// argument's checked. no_enospc: it's a recovery path, and a full
+/// filesystem mustn't be why the owner can't get at data that's still
+/// there.
+pub fn unpoison(fs: &Fs, inum: c::subvol_inum, owner: impl FnOnce() -> bool, arg: c::bch_ioctl_unpoison)
+    -> Result<(), BchError>
+{
+    if arg.flags != 0 || arg.pad != 0 {
+        return Err(c::EINVAL.into());
+    }
+    if arg.len == 0 {
+        return Ok(());
+    }
+    if !owner() {
+        return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin_or_owner);
+    }
+
+    let start = bkey::pos(inum.inum, arg.offset >> 9);
+    let end   = bkey::pos(inum.inum, arg.offset.wrapping_add(arg.len) >> 9);
+
+    let trans = btree_trans!(fs);
+    let res = DiskReservation::new(fs);
+    let mut iter = BtreeIter::new(&trans, c::btree_id::extents, start, BtreeIterFlags::INTENT);
+    subvolume::for_each_in_subvolume_max_in_trans(&trans, &mut iter, end, inum.subvol as u32,
+                                                  BtreeIterFlags::INTENT, |t, iter, k| {
+        res.put();
+        match k.arm::<c::ReflinkP>() {
+            Some(p) => unpoison_reflink(t, p)?,
+            None    => unpoison_extent(t, iter, k)?,
+        }
+        t.commit(Some(&res), CommitFlags::NO_ENOSPC)
+    })
 }

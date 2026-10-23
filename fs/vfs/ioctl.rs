@@ -17,13 +17,13 @@ use crate::btree::iter::{commit_do, CommitFlags, TransAttempt};
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
 use crate::fs::Fs;
-use crate::ioctl::{get_damage, get_label, readdir_flags, snapshot_tree_v1, snapshot_tree_v2, subvolume_list, subvolume_to_path};
+use crate::ioctl::{get_damage, get_label, readdir_flags, reflink_p_propagate_opts, reflink_p_set_may_update_opts, snapshot_tree_v1, snapshot_tree_v2, subvolume_list, subvolume_to_path, unpoison};
 use crate::init::chardev::ioctl_ret;
 use crate::init::damage;
 use crate::namei;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::file::File;
-use crate::util::ioctl::{arg, dir, no_arg, output, vstruct, Ioctl, UserArg};
+use crate::util::ioctl::{arg, dir, input, no_arg, output, vstruct, Ioctl, UserArg};
 use crate::util::kernel::{capable, Capability};
 use crate::util::log::LogMsg;
 use crate::vfs::inode::{InodeInfo, InodeRef};
@@ -101,6 +101,19 @@ fn file_ioctl(file: &File, cmd: c_uint, user: UserPtr) -> Result<c_long, BchErro
             arg::<c::BCH_IOCTL_SNAPSHOT_TREE, _>(user, |a| snapshot_tree_v1(fs, subvol, a)),
         <c::BCH_IOCTL_SNAPSHOT_TREE_v2 as Ioctl>::OPCODE =>
             arg::<c::BCH_IOCTL_SNAPSHOT_TREE_v2, _>(user, |a| snapshot_tree_v2(fs, subvol, a)),
+        <c::BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS as Ioctl>::OPCODE =>
+            no_arg::<c::BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS, _>(||
+                reflink_p_set_may_update_opts(fs, inode.inum())),
+        <c::BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS as Ioctl>::OPCODE =>
+            no_arg::<c::BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS, _>(|| {
+                if !MntIdmap::of(file).owner_or_capable(&inode) && !capable(Capability::SysAdmin) {
+                    return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin_or_owner);
+                }
+                reflink_p_propagate_opts(fs, inode.inum())
+            }),
+        <c::BCHFS_IOC_UNPOISON as Ioctl>::OPCODE =>
+            input::<c::BCHFS_IOC_UNPOISON, _>(user, |a| unpoison(fs, inode.inum(),
+                || MntIdmap::of(file).owner_or_capable(&inode), a)),
         _ => {
             let ret = unsafe { __bch2_fs_file_ioctl(file.as_ptr(), cmd, user.as_mut_ptr() as c_ulong) };
             if ret < 0 { Err(BchError::from_raw(-ret as i32)) } else { Ok(ret) }

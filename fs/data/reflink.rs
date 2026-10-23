@@ -405,13 +405,13 @@ pub unsafe fn bch2_gc_reflink_free(c: &Opaque<c::bch_fs>) {
 
 impl BkeySC<'_, c::ReflinkP> {
     /// What it maps, in the reflink btree's offsets.
-    fn live(&self) -> Range<u64> {
+    pub(crate) fn live(&self) -> Range<u64> {
         let idx = self.v().idx();
         idx..idx + self.k.size as u64
     }
 
     /// What it holds references on: live(), and its pads.
-    fn refd(&self) -> Range<u64> {
+    pub(crate) fn refd(&self) -> Range<u64> {
         let (live, v) = (self.live(), self.v());
         live.start - v.front_pad.get() as u64..live.end + v.back_pad.get() as u64
     }
