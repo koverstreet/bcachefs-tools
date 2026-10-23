@@ -179,8 +179,14 @@ macro_rules! module_param {
             #[link_section = "__param"]
             #[used(compiler)]
             static PARAM: KernelParam = KernelParam(::kernel::bindings::kernel_param {
+                #[cfg(MODULE)]
                 name:  ::core::concat!(::core::stringify!($name), "\0").as_ptr().cast(),
+                #[cfg(not(MODULE))]
+                name:  ::core::concat!("bcachefs.", ::core::stringify!($name), "\0").as_ptr().cast(),
+                #[cfg(MODULE)]
                 mod_:  &raw mut ::kernel::bindings::__this_module,
+                #[cfg(not(MODULE))]
+                mod_:  ::core::ptr::null_mut(),
                 ops:   <$t as ParamType>::OPS,
                 perm:  verify_perm($perm),
                 level: -1,
