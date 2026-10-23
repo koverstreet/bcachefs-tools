@@ -2,14 +2,14 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::bkey::BkeyI;
 use crate::cstructs::c;
-use crate::types::{DArray, c_default};
-use cstruct_macros::{CStruct, c_extern, c_typedef};
+use crate::util::alloc::KVVec;
+use cstruct_macros::CStruct;
 
-c_typedef! {
-    pub type darray_bkey_i_backpointer = DArray<c::bkey_i_backpointer>;
-}
-
+/// A backpointer scan in progress - alloc/backpointers.rs's, which C's
+/// backpointer_scan_for_each() holds and inits through Rust: the batch is
+/// Rust's alone. C reads pos, for its progress.
 #[repr(C)]
 #[derive(CStruct)]
 pub struct bp_scan_iter {
@@ -18,11 +18,5 @@ pub struct bp_scan_iter {
     pub pos: c::bpos,
     pub nr_flushes: u64,
     pub progress: *mut c::progress_indicator,
-    pub bps: c::darray_bkey_i_backpointer,
-}
-c_default!(bp_scan_iter);
-
-c_extern! {
-    pub fn rust_bp_scan_iter_peek(trans: *mut c::btree_trans, iter: *mut c::bp_scan_iter, end: c::bpos,
-                                  last_flushed: *mut c::wb_maybe_flush) -> c::bkey_s_c;
+    pub batch: KVVec<BkeyI<c::Backpointer>>,
 }

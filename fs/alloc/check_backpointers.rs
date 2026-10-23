@@ -791,8 +791,7 @@ fn check_one_backpointer(t: &TransAttempt<'_, '_>, range: &RangeInclusive<c::bbp
                          bp: BkeySC<'_, c::Backpointer>, last_flushed: WbFlush<'_>)
     -> Result<(), BchError>
 {
-    let v = bp.v();
-    if !range.contains(&c::bbpos { btree: c::btree_id(v.btree_id.into()), pos: v.pos }) {
+    if !range.contains(&bp.v().target()) {
         return Ok(());
     }
 

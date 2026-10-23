@@ -15,11 +15,20 @@ pub struct AllocError;
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Flags(u32);
 
+impl core::ops::BitOr for Flags {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self {
+        Flags(self.0 | rhs.0)
+    }
+}
+
 pub mod flags {
     use super::Flags;
 
     pub const GFP_KERNEL: Flags = Flags(0);
     pub const GFP_NOWAIT: Flags = Flags(1);
+    pub const __GFP_NOWARN: Flags = Flags(2);
 }
 
 /// As the kernel's KVVec: a vector whose allocations can fail.
@@ -74,6 +83,10 @@ impl<T> KVVec<T> {
 
     pub fn truncate(&mut self, len: usize) {
         self.0.truncate(len)
+    }
+
+    pub fn pop(&mut self) -> Option<T> {
+        self.0.pop()
     }
 
     pub fn capacity(&self) -> usize {

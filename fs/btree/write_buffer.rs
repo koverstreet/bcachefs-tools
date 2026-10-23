@@ -78,6 +78,13 @@ impl WbFlush<'_> {
         })
     }
 
+    /// The write buffer flushes it's done: a copy of a key taken before the
+    /// count moved may be stale.
+    pub fn nr_flushes(&self) -> u64 {
+        // SAFETY: borrowed
+        unsafe { self.0.as_ref().nr_flushes }
+    }
+
     /// For C that takes a struct wb_maybe_flush *.
     pub fn as_raw(&mut self) -> *mut c::wb_maybe_flush {
         self.0.as_ptr()

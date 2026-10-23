@@ -34,12 +34,13 @@
 //! None for it - as looping on a restart wouldn't see the deletion without
 //! another flush: the caller moves on to the next backpointer.
 //!
-//! Still C's: bp_scan_iter's peek, which migrate.c and reconcile walk with
-//! too, and which begins the caller's attempt again inside it.
+//! migrate.c and reconcile scan with BpScanIter too, through
+//! backpointer_scan_for_each(): C holds the struct bp_scan_iter, its batch
+//! Rust's alone.
 
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC};
-use crate::btree::iter::{bkey_s_c_to_result, is_restart, polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans,
+use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyVal};
+use crate::btree::iter::{is_restart, polonius_key, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbFlush;
 use crate::c;
@@ -51,7 +52,9 @@ use crate::init::error::{id, BkeyValidate};
 use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::opts::prt_data_type;
+use crate::util::alloc::{flags::{GFP_KERNEL, __GFP_NOWARN}, KVVec};
 use crate::util::ffi::Opaque;
+use crate::util::kernel::PAGE_SIZE;
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::plain_bytes;
@@ -59,7 +62,8 @@ use crate::util::Printbuf;
 use crate::{bkey_fsck_err_on, fsck_err, prt};
 use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
-use core::ops::RangeInclusive;
+use core::mem::MaybeUninit;
+use core::ops::{ControlFlow, RangeInclusive};
 use cstruct_macros::c_export;
 
 /// A backpointer btree position, ordered as the bpos it's encoded in.
@@ -181,6 +185,11 @@ impl c::Backpointer {
     /// Stripe blocks on removed devices have a btree of their own.
     pub fn btree(&self) -> c::btree_id {
         if self.stripe_ptr() { c::btree_id::stripe_backpointers } else { c::btree_id::backpointers }
+    }
+
+    /// What it points to.
+    pub fn target(&self) -> c::bbpos {
+        c::bbpos { btree: c::btree_id(self.btree_id.into()), pos: self.pos }
     }
 
     /// Its reconcile phys bits: its extent's work, for a pointer on a
@@ -516,7 +525,7 @@ pub fn backpointer_get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, 
 }
 
 /// An error as an ERR_PTR().
-fn key_or_err_to_c(r: Result<Option<BkeySC<'_>>, BchError>) -> c::bkey_s_c {
+fn key_or_err_to_c<V: ?Sized + BkeyVal>(r: Result<Option<BkeySC<'_, V>>, BchError>) -> c::bkey_s_c {
     match r {
         Ok(Some(k)) => k.into(),
         Ok(None)    => c::bkey_s_c { k: core::ptr::null_mut(), v: core::ptr::null_mut() },
@@ -555,9 +564,97 @@ pub unsafe fn bch2_backpointer_get_node<'t>(trans: &'t BtreeTrans<'t>, bp: c::bk
 
 // ── Backpointers in the order of what they point to ──────────────────────
 
+impl c::bp_scan_iter {
+    fn new(btree: c::btree_id, pos: c::bpos, progress: *mut c::progress_indicator) -> Self {
+        Self { btree, pos, nr_flushes: 0, progress, batch: KVVec::new() }
+    }
+
+    /// The next backpointer, or None past @end: in the caller's attempt @t,
+    /// which a refill ends - see BpScanIter.
+    fn peek(&mut self, t: &TransAttempt<'_, '_>, end: c::bpos, last_flushed: &WbFlush<'_>)
+        -> Result<Option<BkeySC<'_, c::Backpointer>>, BchError>
+    {
+        if self.nr_flushes != last_flushed.nr_flushes() {
+            if let Some(pos) = self.batch.last().map(|bp| bp.k.p) {
+                let mut iter = BtreeIter::new(t, self.btree, pos, BtreeIterFlags::empty());
+                let bp = iter.peek_slot(t)?.and_then(BkeyI::from_key);
+                self.batch.pop();
+                if let Some(bp) = bp {
+                    self.batch.push(bp, GFP_KERNEL)?;
+                }
+            }
+            self.nr_flushes = last_flushed.nr_flushes();
+        }
+
+        if self.batch.is_empty() {
+            self.refill(t.trans(), end)?;
+            if !self.batch.is_empty() {
+                return Err(t.trans().begin().restart(bch_errcode::BCH_ERR_transaction_restart_nested));
+            }
+        }
+        Ok(self.batch.last().map(BkeySC::from))
+    }
+
+    fn advance(&mut self) {
+        self.batch.pop().expect("advancing a backpointer scan with nothing peeked");
+    }
+
+    /// The next batch, from pos to @end, sorted last to first by what they
+    /// point to - peek() takes from the end. At most a sixteenth of memory's
+    /// worth, grown as it's read with nothing locked: a page's worth, then
+    /// doubling. When it can't grow, the batch is what's been read - unless
+    /// that's nothing.
+    fn refill(&mut self, trans: &BtreeTrans<'_>, end: c::bpos) -> Result<(), BchError> {
+        let bp_size = size_of::<BkeyI<c::Backpointer>>();
+        // SAFETY: reads a counter
+        let max = unsafe { c::totalram_pages() } as usize * PAGE_SIZE / 16 / bp_size;
+        // SAFETY: init()'s caller's, which outlives the scan
+        let progress = unsafe { self.progress.as_ref() };
+
+        let mut iter = BtreeIter::new(trans, self.btree, self.pos, BtreeIterFlags::PREFETCH);
+        iter.for_each_max(trans, end, |t, iter, k| {
+            let Some(bp) = BkeyI::<c::Backpointer>::from_key(k) else {
+                return Ok(ControlFlow::Continue(()));
+            };
+            if self.batch.len() >= max {
+                return Ok(ControlFlow::Break(()));
+            }
+            if self.batch.len() == self.batch.capacity() {
+                // Dropping SRCU too means beginning again, from this key.
+                // NOWARN: past INT_MAX bytes kvmalloc() refuses with a
+                // warning, and a failed vmalloc() warns too
+                t.trans().unlock_long();
+                let more = self.batch.len().max(PAGE_SIZE / bp_size);
+                if self.batch.reserve(more, GFP_KERNEL | __GFP_NOWARN).is_ok() {
+                    return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_backpointer_scan_grow));
+                }
+                if self.batch.is_empty() {
+                    return t.fs().throw(bch_errcode::BCH_ERR_ENOMEM_backpointer_scan);
+                }
+                return Ok(ControlFlow::Break(()));
+            }
+            self.batch.push(bp, GFP_KERNEL)?;
+            self.pos = k.k.p.nosnap_successor();
+            if let Some(p) = progress {
+                p.update(t, iter)?;
+            }
+            Ok(ControlFlow::Continue(()))
+        })?;
+        trans.unlock_long();
+
+        self.batch.sort_unstable_by_key(|bp| core::cmp::Reverse(bp.v().target()));
+        Ok(())
+    }
+}
+
 /// A backpointer btree walked in the order of what its backpointers point to: read
 /// in batches as big as memory allows, sorted by target. What it hands out are
 /// copies in its batch, which a restart doesn't invalidate.
+///
+/// A peek is in its caller's attempt, and refilling the batch is a nested
+/// attempt: it walks the btree in attempts of its own, then returns
+/// transaction_restart_nested - and the caller's retry is served from the
+/// batch, so it converges.
 pub struct BpScanIter<'p> {
     raw:       c::bp_scan_iter,
     _progress: PhantomData<&'p c::progress_indicator>,
@@ -565,13 +662,8 @@ pub struct BpScanIter<'p> {
 
 impl<'p> BpScanIter<'p> {
     pub fn new(btree: c::btree_id, start: c::bpos, progress: Option<&'p Progress<'_>>) -> Self {
-        let raw = c::bp_scan_iter {
-            btree,
-            pos: start,
-            progress: progress.map_or(core::ptr::null_mut(), Progress::as_raw),
-            ..Default::default()
-        };
-        Self { raw, _progress: PhantomData }
+        let progress = progress.map_or(core::ptr::null_mut(), Progress::as_raw);
+        Self { raw: c::bp_scan_iter::new(btree, start, progress), _progress: PhantomData }
     }
 
     /// Each backpointer in an attempt of its own, retried on restart; the peek and @f
@@ -585,13 +677,9 @@ impl<'p> BpScanIter<'p> {
         loop {
             let t = trans.begin();
 
-            // What's peeked is in our batch, until advanced past
-            let bp = unsafe {
-                c::rust_bp_scan_iter_peek(trans.raw(), &mut self.raw, end, last_flushed.as_raw())
-            };
-            let bp = match unsafe { bkey_s_c_to_result(bp) } {
+            let bp = match self.raw.peek(&t, end, &last_flushed) {
                 Ok(None)                 => return Ok(()),
-                Ok(Some(bp))             => bp.arm::<c::Backpointer>().expect("a backpointer"),
+                Ok(Some(bp))             => bp,
                 Err(e) if is_restart(&e) => continue,
                 Err(e)                   => return Err(e),
             };
@@ -603,16 +691,39 @@ impl<'p> BpScanIter<'p> {
             }
 
             t.verify_not_restarted();
-            // bch2_bp_scan_iter_advance()
-            assert!(self.raw.bps.nr != 0, "advancing a backpointer scan with nothing peeked");
-            self.raw.bps.nr -= 1;
+            self.raw.advance();
         }
     }
 }
 
-impl Drop for BpScanIter<'_> {
-    fn drop(&mut self) {
-        // SAFETY: its batch, kvmalloc()ed by darray_push(), or NULL
-        unsafe { c::rust_kvfree(self.raw.bps.data.cast()) }
-    }
+/// backpointer_scan_for_each()'s: @iter is C's, uninitialized.
+#[c_export]
+pub fn bch2_bp_scan_iter_init(iter: &mut MaybeUninit<c::bp_scan_iter>, btree: c::btree_id, pos: c::bpos,
+                              progress: *mut c::progress_indicator) {
+    iter.write(c::bp_scan_iter::new(btree, pos, progress));
+}
+
+/// # Safety
+/// @iter is bch2_bp_scan_iter_init()'s, and nothing uses it after.
+#[c_export]
+pub unsafe fn bch2_bp_scan_iter_exit(iter: &mut c::bp_scan_iter) {
+    // SAFETY: the caller's
+    unsafe { core::ptr::drop_in_place(iter) }
+}
+
+/// NULL past @end, or an ERR_PTR().
+///
+/// # Safety
+/// @trans is in an attempt; @last_flushed is live.
+#[c_export]
+pub unsafe fn bch2_bp_scan_iter_peek<'t>(trans: &'t BtreeTrans<'t>, iter: &mut c::bp_scan_iter, end: c::bpos,
+                                         last_flushed: *mut c::wb_maybe_flush) -> c::bkey_s_c {
+    let t = unsafe { trans.attempt_in_progress() };
+    let last_flushed = unsafe { WbFlush::from_raw(last_flushed) }.expect("a wb_maybe_flush");
+    key_or_err_to_c(iter.peek(&t, end, &last_flushed))
+}
+
+#[c_export]
+pub fn bch2_bp_scan_iter_advance(iter: &mut c::bp_scan_iter) {
+    iter.advance()
 }
