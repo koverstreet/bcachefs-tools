@@ -220,7 +220,6 @@ impl Bcachefs {
             fc.set_sb_flags(c::SB_RDONLY as u32);
         }
 
-        // XXX: create an anonymous device for multi device filesystems
         let Some(bdev) = fs.online_members().next().and_then(|ca| NonNull::new(ca.disk_sb.bdev)) else {
             crate::bch_err!(&*fs, "mounting: no online device");
             return Err(c::ENODEV.into());
@@ -229,7 +228,7 @@ impl Bcachefs {
         let fs_ptr = fs.as_ptr();
         // SAFETY: a member's, which the filesystem holds open until kill_sb
         // exits it - unless that member's removed while it's mounted, which
-        // leaves s_bdev stale, as C's did: the XXX above
+        // leaves s_bdev stale, as C's did; s_dev is anonymous, and stays good
         let mut sb = unsafe { fc.create_super(fs, bdev) }?;
         // SAFETY: the superblock's now, live until kill_sb
         let fs = unsafe { Fs::borrow_raw(fs_ptr) };
@@ -275,7 +274,7 @@ impl Bcachefs {
             #[cfg(CONFIG_UNICODE)]
             if fs.casefold_enabled().is_ok() {
                 // SAFETY: the filesystem's, unloaded at its exit: after
-                // kill_sb's generic_shutdown_super()
+                // kill_sb's kill_anon_super()
                 unsafe { sb.set_encoding(fs.cf_encoding) };
             }
 

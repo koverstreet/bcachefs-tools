@@ -186,7 +186,7 @@ unsafe extern "C" fn kill_sb<T: FsType>(sb: *mut c::super_block) {
     // SAFETY: the superblock going away, s_umount held for writing; its
     // s_fs_info from create_super(), until here
     unsafe {
-        c::generic_shutdown_super(sb);
+        c::kill_anon_super(sb);
 
         if let Some(data) = NonNull::new((*sb).s_fs_info.cast()) {
             (*sb).s_fs_info = core::ptr::null_mut();

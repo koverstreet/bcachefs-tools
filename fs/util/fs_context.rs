@@ -8,10 +8,9 @@
 //! - find_super(): the superblock that holds this filesystem, if there is
 //!   one. sget_fc() with the test "s_fs_info is this", and a set that refuses
 //!   to create.
-//! - create_super(): a new one, given the filesystem to own and its block
-//!   device. sget_dev(), whose set registers that device - on 7.3, in the
-//!   super_dev table that user_get_super() searches, so quotactl() and
-//!   ustat() can find it.
+//! - create_super(): a new one, owning the filesystem. sget_fc() with no test,
+//!   and an anonymous s_dev - a member removed and mounted elsewhere doesn't
+//!   share it.
 //!
 //! The filesystem's identity is resolved before either, under the
 //! filesystem's own locks. sget_fc() calls test and set under sb_lock, a
@@ -19,7 +18,7 @@
 //!
 //! codegen binds fs_context.h: the kernel crate's fs_context is an opaque
 //! declaration. Ours shadows it in c, so the kernel crate's functions that
-//! take one, sget_fc() and sget_dev(), get a cast pointer.
+//! take one, sget_fc() and set_anon_super_fc(), get a cast pointer.
 
 use core::ffi::{c_int, CStr};
 use core::fmt;
@@ -28,7 +27,7 @@ use core::ptr::NonNull;
 
 use crate::c;
 use crate::util::ffi::Opaque;
-use kernel::error::code::{EBUSY, EINVAL, ENOMEM};
+use kernel::error::code::{EINVAL, ENOMEM};
 use kernel::error::{from_err_ptr, Error, Result};
 use kernel::str::CString;
 
@@ -170,9 +169,8 @@ impl<T: FsType> FsContext<T> {
         }
     }
 
-    /// A new superblock owning @data, on block device @bdev - s_bdev, and
-    /// s_dev its dev_t, which registers it there, so quotactl() and ustat()
-    /// find it by that device. On failure, @data is dropped.
+    /// A new superblock owning @data, s_bdev @bdev, with an anonymous s_dev.
+    /// On failure, @data is dropped.
     ///
     /// # Safety
     /// @bdev is live while the superblock is: @data's, say, a device it holds
@@ -183,34 +181,26 @@ impl<T: FsType> FsContext<T> {
         let key = data.into_raw();
         self.raw_mut().s_fs_info = key.as_ptr().cast();
 
-        let sb = unsafe { c::sget_dev(self.as_ptr().cast(), (*bdev.as_ptr()).bd_dev) };
+        /// sget_fc()'s set: an anonymous dev_t
+        unsafe extern "C" fn set_anon(sb: *mut c::super_block, fc: *mut kernel::bindings::fs_context) -> c_int {
+            unsafe { c::set_anon_super_fc(sb.cast(), fc) }
+        }
 
-        // sget_fc() moves fc->s_fs_info to a superblock it creates, and leaves
-        // it where it was otherwise
-        let fc = self.raw_mut();
-        let unclaimed = !fc.s_fs_info.is_null();
-        fc.s_fs_info = core::ptr::null_mut();
-
-        let reclaim = || drop(unsafe { T::Data::from_raw(key) });
+        // SAFETY: no test, so sget_fc() creates or fails: it moves
+        // fc->s_fs_info to the superblock it creates, and leaves it on failure
+        let sb = unsafe { c::sget_fc(self.as_ptr().cast(), None, Some(set_anon)) };
+        self.raw_mut().s_fs_info = core::ptr::null_mut();
 
         let sb = match from_err_ptr(sb) {
-            Ok(sb) => NonNull::new(sb).expect("sget_dev(): a superblock or an error"),
+            Ok(sb) => NonNull::new(sb).expect("sget_fc(): a superblock or an error"),
             Err(e) => {
-                reclaim();
+                drop(unsafe { T::Data::from_raw(key) });
                 return Err(e);
             }
         };
 
-        if unclaimed {
-            // An existing superblock on @dev: whoever created it owns its
-            // filesystem, so @data isn't one anything shares.
-            unsafe { c::deactivate_locked_super(sb.as_ptr().cast()) };
-            reclaim();
-            return Err(EBUSY);
-        }
-
-        // SAFETY: a superblock sget_fc() created, s_fs_info @data, s_dev
-        // @bdev's: s_bdev is that device, which the caller's keeping live
+        // SAFETY: a superblock sget_fc() created, s_fs_info @data: s_bdev is
+        // @bdev, which the caller's keeping live
         unsafe {
             (*sb.as_ptr().cast::<c::super_block>()).s_bdev = bdev.as_ptr().cast();
             Ok(NewSuper::from_raw(sb.cast()))
