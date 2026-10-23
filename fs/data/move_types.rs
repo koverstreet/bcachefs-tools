@@ -5,14 +5,14 @@
 use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::util::Printbuf;
-use crate::types::{DArray, c_default};
+use crate::types::{Atomic64, DArray, c_default};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_void};
 use cstruct_macros::{CStruct, c_extern, c_typedef, TypeInfo};
 use nestify::nest;
 
 nest! {
-    #[derive(Clone, Copy, CStruct, TypeInfo)]*
+    #[derive(CStruct, TypeInfo)]*
     #[repr(C)]*
     pub struct bch_move_stats {
         pub name: [c_char; 32],
@@ -20,7 +20,7 @@ nest! {
         pub ret: c::bch_ioctl_data_event_ret,
 
         #[c_anon]
-        pub at: pub union bch_move_stats_at {
+        pub at: #[derive(Clone, Copy)]* pub union bch_move_stats_at {
             #[c_anon]
             pub logical: pub struct bch_move_stats_logical {
                 pub data_type: c::bch_data_type,
@@ -33,13 +33,20 @@ nest! {
             },
         },
 
-        pub keys_moved: c::atomic64_t,
-        pub keys_raced: c::atomic64_t,
-        pub sectors_seen: c::atomic64_t,
-        pub sectors_moved: c::atomic64_t,
-        pub sectors_raced: c::atomic64_t,
-        pub sectors_error_corrected: c::atomic64_t,
-        pub sectors_error_uncorrected: c::atomic64_t,
+        #[c("atomic64_t keys_moved")]
+        pub keys_moved: Atomic64,
+        #[c("atomic64_t keys_raced")]
+        pub keys_raced: Atomic64,
+        #[c("atomic64_t sectors_seen")]
+        pub sectors_seen: Atomic64,
+        #[c("atomic64_t sectors_moved")]
+        pub sectors_moved: Atomic64,
+        #[c("atomic64_t sectors_raced")]
+        pub sectors_raced: Atomic64,
+        #[c("atomic64_t sectors_error_corrected")]
+        pub sectors_error_corrected: Atomic64,
+        #[c("atomic64_t sectors_error_uncorrected")]
+        pub sectors_error_uncorrected: Atomic64,
         pub devs_error_uncorrected: c::bch_devs_mask,
     }
 }

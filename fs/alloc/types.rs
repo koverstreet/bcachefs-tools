@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::util::Printbuf;
-use crate::types::{CacheAligned, DArray, c_default};
+use crate::types::{Atomic64, CacheAligned, DArray, c_default};
 use crate::util::percpu::{Counters, PerCpu};
 use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::{bitfield, c_const, c_enum, c_extern, c_typedef, c_xmacro, CStruct, Fieldwise, TypeInfo};
@@ -202,7 +202,8 @@ pub struct bch_fs_capacity {
     pub capacity_gen: u32,
     pub bucket_size_max: c_uint,
 
-    pub sectors_available: [c::atomic64_t; c::BCH_REPLICAS_MAX as usize],
+    #[c("atomic64_t sectors_available[BCH_REPLICAS_MAX]")]
+    pub sectors_available: [Atomic64; c::BCH_REPLICAS_MAX as usize],
     pub sectors_available_lock: c::spinlock_t,
 
     /*

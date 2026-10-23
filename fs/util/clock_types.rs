@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{MinHeap, c_default};
+use crate::types::{Atomic64, MinHeap, c_default};
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_uint, c_void};
 use cstruct_macros::{c_const, c_extern, c_typedef, CStruct};
@@ -46,7 +46,8 @@ c_typedef! {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct io_clock {
-    pub now: c::atomic64_t,
+    #[c("atomic64_t now")]
+    pub now: Atomic64,
     #[c("u16 __percpu *pcpu_buf")]
     pub pcpu_buf: *mut u16,
     pub max_slop: c_uint,

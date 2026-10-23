@@ -19,7 +19,7 @@ use crate::errcode::{errptr_to_result, BchError};
 use crate::fs::Fs;
 use crate::util::kernel::READ;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicI64, Ordering};
+use core::sync::atomic::Ordering;
 
 /// Alloc key @k, of whatever version, as a current one - one that isn't an
 /// alloc key, the slot of a bucket without one, as a zeroed one:
@@ -35,9 +35,7 @@ impl Fs {
     /// The io clock for @rw, as a bucket's io_time holds it - never 0, which
     /// is none: bch2_current_io_time().
     pub fn current_io_time(&self, rw: usize) -> u64 {
-        // SAFETY: an atomic64_t, which C updates: atomic64_read()
-        let now = unsafe { &*(&raw const self.io_clock[rw].now).cast::<AtomicI64>() };
-        (now.load(Ordering::Relaxed) as u64 & c::LRU_TIME_MAX).max(1)
+        (self.io_clock[rw].now.load(Ordering::Relaxed) as u64 & c::LRU_TIME_MAX).max(1)
     }
 }
 

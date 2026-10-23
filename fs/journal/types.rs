@@ -390,7 +390,8 @@ nest! {
         /* seq, last_seq from the most recent journal entry successfully written */
         pub seq_ondisk: u64,
         pub flushed_seq_ondisk: u64,
-        pub flushing_seq: c::atomic64_t,
+        #[c("atomic64_t flushing_seq")]
+        pub flushing_seq: Atomic64,
         pub last_seq_ondisk: u64,
         pub err_seq: u64,
         pub last_empty_seq: u64,

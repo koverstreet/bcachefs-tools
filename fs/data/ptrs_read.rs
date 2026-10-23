@@ -13,7 +13,7 @@ use super::*;
 use crate::debug::params as debug_params;
 use crate::errcode::bch_errcode;
 use crate::util::Printbuf;
-use core::sync::atomic::{AtomicI64, Ordering};
+use crate::util::kernel::READ;
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 crate::module_param! {
@@ -127,11 +127,7 @@ impl c::bch_io_failures {
 /// What a read from @ca costs: its read latency, or the most for no device -
 /// dev_latency().
 fn dev_latency(ca: Option<&c::bch_dev>) -> u64 {
-    ca.map_or(i64::MAX as u64, |ca| {
-        // SAFETY: an atomic64_t, which C updates: atomic64_read()
-        let l = unsafe { &*(&raw const ca.cur_latency[0]).cast::<AtomicI64>() };
-        l.load(Ordering::Relaxed) as u64
-    })
+    ca.map_or(i64::MAX as u64, |ca| ca.cur_latency(READ) as u64)
 }
 
 /// Whether @p1 is a better read than @p2, of latencies @l1 and @l2:

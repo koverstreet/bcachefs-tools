@@ -423,7 +423,8 @@ pub struct bch_dev {
     pub discard_fast: c::darray_u64,
     pub discard_fast_lock: c::mutex,
 
-    pub rebalance_work: c::atomic64_t,
+    #[c("atomic64_t rebalance_work")]
+    pub rebalance_work: Atomic64,
 
     pub journal: c::journal_device,
     pub prev_journal_sector: u64,
@@ -742,7 +743,8 @@ pub struct Fs {
     pub chacha20_key: c::bch_key,
     pub chacha20_key_set: bool,
 
-    pub key_version: c::atomic64_t,
+    #[c("atomic64_t key_version")]
+    pub key_version: Atomic64,
 
     /* MOVE.C */
     pub moving_context_list: c::list_head,

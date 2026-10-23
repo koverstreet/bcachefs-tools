@@ -6,7 +6,7 @@ use crate::c;
 use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
 use crate::errcode::{bch_errcode, BchError};
-use crate::types::{CacheAligned, DArray, NeBytes, bits_to_longs, c_default};
+use crate::types::{Atomic64, CacheAligned, DArray, NeBytes, bits_to_longs, c_default};
 use crate::util::vstructs::Head;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void, CStr};
@@ -1030,10 +1030,12 @@ c_const! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct btree_write_stats {
-    pub nr: cs::atomic64_t,
-    pub bytes: cs::atomic64_t,
+    #[c("atomic64_t nr")]
+    pub nr: Atomic64,
+    #[c("atomic64_t bytes")]
+    pub bytes: Atomic64,
 }
 c_default!(btree_write_stats);
 

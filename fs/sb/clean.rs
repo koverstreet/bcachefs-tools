@@ -9,7 +9,7 @@
 
 use core::ffi::c_int;
 use core::mem::size_of;
-use core::sync::atomic::{AtomicI64, Ordering::Relaxed};
+use core::sync::atomic::Ordering::Relaxed;
 
 use cstruct_macros::c_export;
 use zerocopy::IntoBytes;
@@ -202,12 +202,6 @@ pub unsafe fn bch2_verify_superblock_clean(c: &Opaque<c::bch_fs>, cleanp: *mut *
 
 // ── Writing it, at a clean shutdown ──────────────────────────────────────────
 
-/// C's atomic64_t, read: atomic64_read().
-fn atomic64_read(a: &c::atomic64_t) -> u64 {
-    // SAFETY: an atomic64_t is one s64, which C updates atomically
-    unsafe { &*(&raw const *a).cast::<AtomicI64>() }.load(Relaxed) as u64
-}
-
 /// The bytes super_entries_add_common() writes.
 const COMMON_BYTES: usize = size_of::<c::jset_entry_usage>() + 2 * size_of::<c::jset_entry_clock>();
 
@@ -217,14 +211,14 @@ fn super_entries_add_common(fs: &Fs, w: &mut EntryWriter<'_>) -> Result<(), NoRo
     let mut u = c::jset_entry_usage::default();
     u.entry.type_ = c::bch_jset_entry_type::BCH_JSET_ENTRY_usage.0 as u8;
     u.entry.btree_id = c::bch_fs_usage_type::BCH_FS_USAGE_key_version.0 as u8;
-    u.v = Le64::new(atomic64_read(&fs.key_version));
+    u.v = Le64::new(fs.key_version.load(Relaxed) as u64);
     w.push_entry(u)?;
 
     for (rw, clock) in fs.io_clock.iter().enumerate() {
         let mut e = c::jset_entry_clock::default();
         e.entry.type_ = c::bch_jset_entry_type::BCH_JSET_ENTRY_clock.0 as u8;
         e.rw = rw as u8;
-        e.time = Le64::new(atomic64_read(&clock.now));
+        e.time = Le64::new(clock.now.load(Relaxed) as u64);
         w.push_entry(e)?;
     }
     Ok(())

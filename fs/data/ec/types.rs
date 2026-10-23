@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::locking::{ByteLock, Lock};
-use crate::types::{c_default, rust_only};
+use crate::types::{Atomic64, c_default, rust_only};
 use crate::util::genradix::SharedGenRadix;
 use core::ffi::c_long;
 use cstruct_macros::{bitfield, CStruct, TypeInfo};
@@ -84,7 +84,8 @@ pub struct bch_fs_ec {
     pub stripe_new_list: c::list_head,
     pub stripe_new_lock: c::mutex,
     pub stripe_new_wait: c::wait_queue_head_t,
-    pub stripe_new_seq: c::atomic64_t,
+    #[c("atomic64_t stripe_new_seq")]
+    pub stripe_new_seq: Atomic64,
 
     pub stripe_create_wq: *mut c::workqueue_struct,
     pub stripe_hint: u64,
