@@ -147,12 +147,15 @@ unsafe impl ::pin_init::Zeroable for GcEntry {}
  *
  * Who uses it when - gc's phase, c->gc.pos, is what orders them:
  *
- *  - Built by gc_reflink_start(), in gc's own thread, gc.lock held for write
- *    and gc.pos still not_running. Nothing else reads it then: the readers are
- *    gc triggers, and commits run those only for keys gc_visited() - false
- *    while not_running. gc_pos_set() is a seqcount write, which the read in
- *    gc_visited() pairs with: a reader that sees gc running sees the table as
- *    built.
+ *  - Emptied by bch2_gc_reflink_start(), in gc's own thread, gc.lock held
+ *    for write and gc.pos still not_running; then built by gc_reflink_add(),
+ *    as gc walks the reflink btree - from each key as check_repair left it, so
+ *    a reflink_v repaired into an error key isn't in it. Nothing else reads
+ *    it then: the readers are reflink_ps' gc triggers, and commits run those
+ *    only for keys gc_visited(), and gc walks reflink before any btree with
+ *    reflink_ps - gc_btree_order(). gc_pos_set() is a seqcount write, which
+ *    the read in gc_visited() pairs with: a reader that sees gc past reflink
+ *    sees the table as built.
  *
  *  - Read while gc marks: by gc's thread, and by commits' gc triggers, at
  *    once. Only an entry's refcount changes - atomically; offset, size and the
@@ -197,14 +200,14 @@ impl ReflinkGc {
 
     /// # Safety
     /// gc's thread, with nothing else using the table: before gc.pos leaves
-    /// not_running, or after it's back.
+    /// not_running, while it's in the reflink btree, or after it's back.
     #[allow(clippy::mut_from_ref)]
     unsafe fn table_mut(&self) -> &mut GenRadix<GcEntry> {
         unsafe { &mut *self.table.get() }
     }
 
     fn nr(&self) -> usize {
-        // Relaxed: set before gc.pos is, whose seqcount publishes it; read
+        // Relaxed: set before gc.pos passes reflink, whose seqcount publishes it; read
         // after gc_reflink_done() zeroes it, it's 0, and nothing is counted
         self.nr.load(Relaxed)
     }
@@ -340,39 +343,49 @@ pub fn bch2_gc_reflink_done(c: &Opaque<c::bch_fs>) -> c_int {
     ret_to_c(gc_reflink_done(Fs::from_c(c)))
 }
 
-/// gc's start: a table entry for every indirect extent, its count zero.
-fn gc_reflink_start(fs: &Fs) -> Result<(), BchError> {
+/// gc's start: the table empty, for gc_reflink_add() to fill.
+#[c_export]
+pub fn bch2_gc_reflink_start(c: &Opaque<c::bch_fs>) -> c_int {
+    Fs::from_c(c).reflink_gc.nr.store(0, Relaxed);
+    0
+}
+
+/// A table entry for @k, its count zero, if it's an indirect extent: gc's walk
+/// of the reflink btree, in order, from each key as check_repair left it. A
+/// restart marks a key again, and its entry is the last.
+fn gc_reflink_add(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
+    if k.arm::<Indirect>().is_none() {
+        return Ok(());
+    }
+
     let gc = &fs.reflink_gc;
-    // SAFETY: gc's thread, gc.pos still not_running - see ReflinkGc
+    // SAFETY: gc's thread, gc.pos in the reflink btree - see ReflinkGc
     let table = unsafe { gc.table_mut() };
-    let trans = crate::btree_trans!(fs);
-    let mut iter = BtreeIter::new(&trans, c::btree_id::reflink, POS_MIN, BtreeIterFlags::PREFETCH);
-    let mut nr = 0;
+    let mut nr = gc.nr();
+    let offset = k.k.p.offset;
 
-    gc.nr.store(0, Relaxed);
-
-    let ret = iter.for_each(&trans, |_, _, k| {
-        if k.arm::<Indirect>().is_none() {
-            return Ok(());
+    if let Some(last) = nr.checked_sub(1).and_then(|i| table.get(i)) {
+        if last.offset == offset {
+            nr -= 1;
+        } else {
+            assert!(last.offset < offset, "reflink gc table built out of order: {offset} after {}",
+                    last.offset);
         }
+    }
 
-        let r = table.get_or_alloc(nr, c::GFP_KERNEL);
-        nr += 1;
-        gc.nr.store(nr, Relaxed);
-
-        let r = r.map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_gc_reflink_start))?;
-        r.offset   = k.k.p.offset;
-        r.size     = k.k.size;
-        r.refcount = AtomicI32::new(0);
-        Ok(())
-    });
-
-    bch_err_fn!(fs, ret)
+    let r = table.get_or_alloc(nr, c::GFP_KERNEL)
+        .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_gc_reflink_start))?;
+    r.offset   = offset;
+    r.size     = k.k.size;
+    r.refcount = AtomicI32::new(0);
+    gc.nr.store(nr + 1, Relaxed);
+    Ok(())
 }
 
 #[c_export]
-pub fn bch2_gc_reflink_start(c: &Opaque<c::bch_fs>) -> c_int {
-    ret_to_c(gc_reflink_start(Fs::from_c(c)))
+pub fn bch2_gc_reflink_add(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) -> c_int {
+    let fs = Fs::from_c(c);
+    ret_to_c(bch_err_fn!(fs, gc_reflink_add(fs, k)))
 }
 
 /// For bch2_gc_free(): the table, freed.

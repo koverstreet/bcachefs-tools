@@ -47,11 +47,18 @@ static inline struct gc_pos gc_pos_btree(enum btree_id btree, unsigned level,
 	};
 }
 
+/*
+ * reflink before the btrees with reflink_ps: gc's table of indirect extents is
+ * built walking it, after their repair, and the reflink_ps are counted against
+ * it - one a repair left nothing to point to is found missing in the same pass
+ */
 static inline int gc_btree_order(enum btree_id btree)
 {
 	if (btree == BTREE_ID_alloc)
-		return -2;
+		return -3;
 	if (btree == BTREE_ID_stripes)
+		return -2;
+	if (btree == BTREE_ID_reflink)
 		return -1;
 	return btree;
 }

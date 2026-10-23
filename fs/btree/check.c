@@ -830,6 +830,9 @@ static int bch2_gc_mark_key(struct btree_trans *trans, enum btree_id btree_id,
 			btree_trans_restart(trans, BCH_ERR_transaction_restart_commit);
 	}
 
+	if (btree_id == BTREE_ID_reflink && !level)
+		try(bch2_gc_reflink_add(c, k));
+
 	struct btree_trigger_op op = {
 		.btree		= btree_id,
 		.level		= level,
