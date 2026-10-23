@@ -23,6 +23,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/posix_acl_xattr.h",		// nop_posix_acl_*, xattr.rs's ACL handlers
     "crypto/sha2.h",			// sha256(), siphash_old's string hash key
     "linux/anon_inodes.h",		// anon_inode_getfile(), util/file's NewFile
+    "linux/hash.h",			// GOLDEN_RATIO_64, util/cuckoo.rs's hash_64()
     "linux/mm.h",			// totalram_pages(), a backpointer scan's batch limit
     "linux/mount.h",			// mnt_want_write_file(), vfs/ioctl.rs's
     "linux/blkdev.h",			// bdev_freeze(), vfs/ioctl.rs's goingdown
@@ -43,6 +44,7 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/posix_acl_xattr.h",
     "crypto/sha2.h",
     "linux/anon_inodes.h",
+    "linux/hash.h",
     "linux/mm.h",
     "linux/mount.h",
     "linux/blkdev.h",
@@ -61,7 +63,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",
                                   "xattr_handler"];
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
-                                 "RUST_CONST_HELPER_.*"];
+                                 "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*"];
 
 /// Run the bindgen CLI and write `bindings.rs`, and `extern.c` - C wrappers for
 /// whatever of it is a static inline - into `out`. Kbuild supplies
