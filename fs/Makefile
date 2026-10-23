@@ -68,7 +68,6 @@ bcachefs-y		:=			\
 	alloc/background.o			\
 	alloc/buckets.o				\
 	alloc/check.o				\
-	alloc/check_data.o			\
 	alloc/discard.o				\
 	alloc/foreground.o			\
 	btree/bkey.o				\

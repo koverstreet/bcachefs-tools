@@ -7,7 +7,8 @@
 //! domain, what's encrypted with it, so that btree nodes, journal entries and
 //! extents never share one; the first counts ChaCha20 blocks, which add()
 //! advances. A domain's nonce is made where its structure is: bset::nonce()
-//! in btree/read.rs, jset::nonce() in journal/read.rs.
+//! in btree/read.rs, jset::nonce() in journal/read.rs, extent_nonce() in
+//! data/ptrs.rs.
 //!
 //! C has its own in data/checksum.h: BCH_NONCE_*, nonce_add().
 //!

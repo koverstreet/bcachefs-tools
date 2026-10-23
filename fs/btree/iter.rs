@@ -1239,6 +1239,32 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.result(ret)
     }
 
+    /// The pointer at @level of @btree, at @key's position, made @key and
+    /// committed, its triggers not run - btree_node_update_key_at_pos(), for
+    /// a repair or an injection that does the accounting itself, or none.
+    pub fn btree_node_update_key_at_pos_raw<V: ?Sized>(&self, btree: c::btree_id, level: u32,
+                                                       key: TransBkey<'_, 't, V>) -> Result<(), BchError> {
+        let mut node_iter = BtreeNodeIter::new(self, btree, key.k().p, 0, level - 1, BtreeIterFlags::INTENT);
+        let b = node_iter.peek_ref()?.expect("the node a btree node pointer points to");
+        self.btree_node_update_key(node_iter.iter(), b, key, CommitFlags::NO_ENOSPC, true)
+    }
+
+    /// @node, which @iter is at, rewritten: bch2_btree_node_rewrite().
+    pub(crate) fn btree_node_rewrite(
+        &self,
+        iter:        &mut BtreeIter<'a>,
+        node:        BtreeNodeRef,
+        target:      u32,
+        flags:       impl Into<CommitOpts>,
+        write_flags: c::bch_write_flags,
+    ) -> Result<(), BchError> {
+        // SAFETY: our transaction; @node, held by @iter's path
+        self.result(unsafe {
+            c::bch2_btree_node_rewrite(self.raw(), iter.raw_mut(), node.as_ptr(), target,
+                                       flags.into().to_c(), write_flags)
+        })
+    }
+
     pub fn delete(
         &self,
         btree: impl Into<u32>,
@@ -1494,6 +1520,7 @@ bitflags! {
         const FILTER_SNAPSHOTS = c::btree_iter_update_trigger_flags::BTREE_ITER_filter_snapshots.bits();
         const NOFILTER_WHITEOUTS = c::btree_iter_update_trigger_flags::BTREE_ITER_nofilter_whiteouts.bits();
         const NOPRESERVE = c::btree_iter_update_trigger_flags::BTREE_ITER_nopreserve.bits();
+        const NOFILL = c::btree_iter_update_trigger_flags::BTREE_ITER_nofill.bits();
         const CACHED_NOFILL = c::btree_iter_update_trigger_flags::BTREE_ITER_cached_nofill.bits();
         const KEY_CACHE_FILL = c::btree_iter_update_trigger_flags::BTREE_ITER_key_cache_fill.bits();
         const COMMITTED = c::btree_iter_update_trigger_flags::BTREE_ITER_committed.bits();

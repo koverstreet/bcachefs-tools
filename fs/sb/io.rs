@@ -1097,6 +1097,14 @@ impl c::bch_sb__head {
     }
 }
 
+impl Fs {
+    /// The magic this filesystem's btree nodes carry, from c->sb's uuid:
+    /// bset_magic().
+    pub fn bset_magic(&self) -> u64 {
+        u64::from_le_bytes(core::array::from_fn(|i| self.sb.uuid[i].get())) ^ BSET_MAGIC
+    }
+}
+
 impl bch_sb_buf {
     pub fn sb(&self) -> &bch_sb {
         // SAFETY: C read and validated it, and owns its buffer while we're

@@ -124,6 +124,15 @@ fn write<'p>(buf: &mut [u8], field: &'p str, target: &FieldTarget, v: u64)
 }
 
 impl TransBkey<'_, '_> {
+    /// Made an error key, saying @err if the filesystem's version allows it:
+    /// bch2_set_bkey_error().
+    pub fn set_error(&mut self, fs: &Fs, err: c::bch_key_type_errors) {
+        assert!(self.as_u64s().len() * 8 >= size_of::<c::bkey>() + size_of::<c::Error>(),
+                "no room in the key's buffer for an error key");
+        // SAFETY: our key, with room for an error key
+        unsafe { c::bch2_set_bkey_error(fs.as_ptr(), self.as_ptr(), err) }
+    }
+
     /// The key's buffer must have room for the result: a value grown to reach
     /// the field, or the repacked inode.
     pub fn set<'p>(&mut self, fs: &Fs, field: &'p str, val: &'p str)

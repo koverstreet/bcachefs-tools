@@ -21,11 +21,12 @@
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{bkey_family, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut};
 use crate::btree::iter::{BtreeIter, TransAttempt, UpdateTriggerFlags};
+use crate::data::checksum::BCH_NONCE_EXTENT;
 use crate::errcode::BchError;
 use crate::c;
 use crate::fs::Fs;
 use crate::sb::counters::events;
-use crate::types::Le64;
+use crate::types::{Le32, Le64};
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, Validated};
 use arrayvec::ArrayVec;
@@ -956,6 +957,23 @@ pub fn crc_is_compressed(crc: &c::bch_extent_crc_unpacked) -> bool {
         crc.compression_type as u32 != c::bch_compression_type::BCH_COMPRESSION_TYPE_incompressible.0
 }
 
+/// The nonce of @crc's data, in an extent of version @version: extent_nonce().
+pub fn extent_nonce(version: c::bversion, crc: &c::bch_extent_crc_unpacked) -> c::nonce {
+    let compression_type = if crc_is_compressed(crc) { u32::from(crc.compression_type) } else { 0 };
+    let size = if compression_type != 0 { crc.uncompressed_size } else { 0 };
+    let (lo, hi) = (version.lo, version.hi);
+    let nonce = c::nonce {
+        d: [
+            Le32::new(size << 22),
+            Le32::new(lo as u32),
+            Le32::new((lo >> 32) as u32),
+            // C xors the domain into the word once it's little-endian
+            Le32::new((hi | compression_type << 24) ^ u32::from_le(BCH_NONCE_EXTENT)),
+        ],
+    };
+    nonce + (u32::from(crc.nonce) << 9)
+}
+
 /// Whether @crc's data is checksummed or compressed - read back whole, so
 /// bounded by encoded_extent_max.
 pub fn crc_is_encoded(crc: &c::bch_extent_crc_unpacked) -> bool {
@@ -1169,5 +1187,32 @@ mod tests {
 
         ops::entries_swab(sizes(&ours()), bytes(&mut other));
         assert_eq!(other, native);
+    }
+
+    /// The nonces C's extent_nonce() gives on little-endian - worked by hand,
+    /// as data on disk was encrypted with them. A wrong one shows only as
+    /// encrypted extents whose checksums never verify.
+    #[test]
+    fn extent_nonce_as_c_makes_it() {
+        let version = c::bversion { lo: 0x1122_3344_5566_7788, hi: 0x9a };
+        let words = |n: c::nonce| n.d.map(|w| w.get());
+
+        // not compressed: no size or compression type; crc.nonce 3 is three
+        // 512 byte sectors, 24 ChaCha20 blocks
+        let mut crc = crc(c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128, 128, 0, 3);
+        assert_eq!(words(extent_nonce(version, &crc)),
+                   [24, 0x5566_7788, 0x1122_3344, 0x1000_009a]);
+
+        // incompressible counts as not compressed
+        crc.compression_type = 5;
+        assert_eq!(words(extent_nonce(version, &crc)),
+                   [24, 0x5566_7788, 0x1122_3344, 0x1000_009a]);
+
+        // lz4 (3), 256 sectors uncompressed: the size at bit 22, the type at
+        // bit 24 of the last word, under the extent domain at 28
+        crc.compression_type = 3;
+        crc.uncompressed_size = 256;
+        assert_eq!(words(extent_nonce(version, &crc)),
+                   [(256 << 22) + 24, 0x5566_7788, 0x1122_3344, 0x1300_009a]);
     }
 }

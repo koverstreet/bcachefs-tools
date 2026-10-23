@@ -36,4 +36,5 @@ c_extern! {
     pub fn bch2_bpos_to_text(out: *mut c::printbuf, pos: c::bpos);
     pub fn bch2_bkey_to_text(out: *mut c::printbuf, k: *const c::bkey);
     pub fn bch2_bkey_val_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, k: c::bkey_s_c);
+    pub fn bch2_set_bkey_error(c: *mut c::bch_fs, k: *mut c::bkey_i, err: c::bch_key_type_errors);
 }

@@ -21,6 +21,7 @@ use crate::alloc::backpointers::{backpointer_del, backpointers_match, backpointe
                                  bucket_backpointer_mod, extent_ptr_to_bp, get_key, BackpointerPos,
                                  BpScanIter};
 use crate::alloc::buckets::DiskReservation;
+use crate::alloc::check_data::{bkey_drop_device_and_update, kill_replica_if_checksum_bad};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};
 use crate::btree::bkey_buf::BkeyBuf;
@@ -32,7 +33,7 @@ use crate::c;
 use crate::data::extents::Extents;
 use crate::data::ptrs::{extents_match, Ptrs};
 use crate::data::reflink::make_extent_indirect;
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::init::passes;
@@ -133,10 +134,8 @@ fn bkey_dev_ptr_stale(fs: &Fs, k: BkeySC<'_>, dev: u32) -> bool {
 fn drop_double_allocation(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u8, k: BkeySC<'_>, dev: u32)
     -> Result<(), BchError>
 {
-    t.result(unsafe {
-        c::bch2_bkey_drop_device_and_update(t.raw(), btree, level.into(), k.into(), dev,
-                                         c::bch_key_type_errors::KEY_TYPE_ERROR_double_allocation)
-    })
+    bkey_drop_device_and_update(t, btree, level.into(), k, dev,
+                                c::bch_key_type_errors::KEY_TYPE_ERROR_double_allocation)
 }
 
 /// One of two extents sharing physical space, and its logical range in the overlap.
@@ -220,19 +219,11 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::
         }
     }
 
-    let kill_replica_if_checksum_bad = |btree: c::btree_id, level: u8, k: BkeySC<'_>,
-                                        other_btree: c::btree_id, other_k: BkeySC<'_>| {
-        ret_to_result(unsafe {
-            c::bch2_kill_replica_if_checksum_bad(t.raw(), btree, level.into(), k.into(), other_btree,
-                                              other_k.into(), dev)
-        }).map(|killed| killed != 0)
-    };
-
     let btree = c::btree_id(bp.v.btree_id.into());
-    if kill_replica_if_checksum_bad(other_btree, ov.level, other_extent, btree, extent)? {
+    if kill_replica_if_checksum_bad(t, other_btree, ov.level.into(), other_extent, btree, extent, dev)? {
         return bp_missing(t, extent, bp, other_bp.untyped());
     }
-    if kill_replica_if_checksum_bad(btree, bp.v.level, extent, other_btree, other_extent)? {
+    if kill_replica_if_checksum_bad(t, btree, bp.v.level.into(), extent, other_btree, other_extent, dev)? {
         return Ok(());
     }
 
