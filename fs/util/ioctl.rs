@@ -226,6 +226,14 @@ mod user {
         }
     }
 
+    impl<T> UserArg<T> {
+        /// Write one field, at offset @off - offset_of!()'s: put_user(), for
+        /// what an ioctl returns of an argument it doesn't write back whole.
+        pub fn write_at<V: AsBytes>(&self, off: usize, v: &V) -> Result<(), BchError> {
+            Ok(self.bytes_at(off, size_of::<V>()).writer().write(v)?)
+        }
+    }
+
     pub struct UserVstruct<T: ?Sized> {
         at: UserPtr,
         _t: PhantomData<T>,
