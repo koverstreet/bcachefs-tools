@@ -144,7 +144,7 @@ impl<P: FileData> FileVTable<P> {
     const OPS: c::file_operations = {
         // SAFETY: zero is NULL, "not implemented"
         let mut ops: c::file_operations = unsafe { core::mem::zeroed() };
-        #[cfg(kernel)]
+        #[cfg(all(kernel, MODULE))]
         {
             ops.owner = &raw mut kernel::bindings::__this_module;
         }
