@@ -629,7 +629,7 @@ static long bch2_ioctl_disk_resize_v2(struct bch_fs *c,
 	    arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_resize_v2_bad_flags);
 
-	CLASS(bch2_device_lookup, ca)(c, arg.dev, arg.flags);
+	CLASS(bch2_device_lookup_outer, ca)(c, arg.dev, arg.flags);
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
@@ -671,7 +671,7 @@ static long bch2_ioctl_disk_resize_journal_v2(struct bch_fs *c,
 	if (arg.nbuckets > U32_MAX)
 		return bch_err_throw(c, EINVAL_ioctl_disk_resize_journal_v2_too_big);
 
-	CLASS(bch2_device_lookup, ca)(c, arg.dev, arg.flags);
+	CLASS(bch2_device_lookup_outer, ca)(c, arg.dev, arg.flags);
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
