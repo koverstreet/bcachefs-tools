@@ -10,12 +10,18 @@
 //!   then walks every btree's pointers into the buckets that come up short,
 //!   with the backpointer btree's nodes holding them pinned. The buckets are
 //!   recorded in each device's bucket bitmaps, which copygc reads too.
+//!   Two keys claiming the same space - a double allocation - are resolved
+//!   here: gc only marks the bucket `multiple`. A dropped loser's trigger
+//!   deletes the winner's backpointer, so the drop gets a commit of its own
+//!   and the winner's is written after it; and once the walk is done, a
+//!   `multiple` bucket whose backpointers agree gets their type.
 //! - check_backpointers_to_extents: every backpointer points to something
 //!   that points back - walked in target order, through BpScanIter.
 //!
 //! Before calling a key missing, a pass flushes the write buffer and looks
 //! again - see backpointers.rs.
 
+use crate::accounting::bucket_data_type;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_del, backpointers_match, backpointers_maybe_flush,
                                  bucket_backpointer_mod, extent_ptr_to_bp, get_key, BackpointerPos,
@@ -138,6 +144,28 @@ fn drop_double_allocation(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u
                                 c::bch_key_type_errors::KEY_TYPE_ERROR_double_allocation)
 }
 
+/// Of two keys claiming the same space, the loser's pointer has just been
+/// dropped, its update queued; @winner keeps the space. The drop's trigger
+/// deletes the loser's backpointer - blind, through the write buffer, and at
+/// the position the winner's is at. So the drop is committed on its own and
+/// the winner's backpointer written after it, the later write winning; then
+/// the walk restarts, its keys stale. The bucket gc left `multiple` is
+/// check_extents_to_backpointers()'s to recompute, at its end.
+fn double_allocation_dropped(t: &TransAttempt<'_, '_>, winner: BkeySC<'_>,
+                             mut winner_bp: BkeyI<c::Backpointer>) -> Result<(), BchError> {
+    let mut winner_k = BkeyBuf::new();
+    winner_k.reassemble(winner);
+
+    // the drop may pad the key back to its durability, charged to a reservation
+    let res = DiskReservation::new(t.fs());
+    t.commit(Some(&res), CommitFlags::NO_ENOSPC)?;
+
+    bucket_backpointer_mod(t, (&winner_k).into(), &mut winner_bp, true)?;
+    t.commit(None, CommitFlags::NO_ENOSPC)?;
+
+    Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))
+}
+
 /// One of two extents sharing physical space, and its logical range in the overlap.
 struct DupExtent<'k> {
     btree:   c::btree_id,
@@ -190,6 +218,7 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::
                 other_bp: BkeySC<'_, c::Backpointer>) -> Result<(), BchError> {
     let fs = t.fs();
     let dev = bp.k.p.inode as u32;
+    let btree = c::btree_id(bp.v.btree_id.into());
     let ov = *other_bp.v();
     let other_btree = c::btree_id(ov.btree_id.into());
 
@@ -202,8 +231,12 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::
         Ok(Some(k)) => k,
     };
 
+    let extent_bp = BkeyI { k: bp.k, v: bp.v };
+    let other_bp = BkeyI { k: *other_bp.k, v: ov };
+
     if bkey_dev_ptr_stale(fs, other_extent, dev) {
-        return drop_double_allocation(t, other_btree, ov.level, other_extent, dev);
+        drop_double_allocation(t, other_btree, ov.level, other_extent, dev)?;
+        return double_allocation_dropped(t, extent, extent_bp);
     }
 
     if extents_match(fs, extent, other_extent) {
@@ -211,20 +244,20 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::
         prt!(&mut msg, "duplicate versions of same extent, deleting smaller\n{}\n{}",
              extent.to_text(fs), other_extent.to_text(fs));
 
-        if other_extent.k.size <= extent.k.size {
-            return drop_double_allocation(t, other_btree, ov.level, other_extent, dev);
+        return if other_extent.k.size <= extent.k.size {
+            drop_double_allocation(t, other_btree, ov.level, other_extent, dev)?;
+            double_allocation_dropped(t, extent, extent_bp)
         } else {
-            drop_double_allocation(t, c::btree_id(bp.v.btree_id.into()), bp.v.level, extent, dev)?;
-            return bp_missing(t, extent, bp, other_bp.untyped());
-        }
+            drop_double_allocation(t, btree, bp.v.level, extent, dev)?;
+            double_allocation_dropped(t, other_extent, other_bp)
+        };
     }
 
-    let btree = c::btree_id(bp.v.btree_id.into());
     if kill_replica_if_checksum_bad(t, other_btree, ov.level.into(), other_extent, btree, extent, dev)? {
-        return bp_missing(t, extent, bp, other_bp.untyped());
+        return double_allocation_dropped(t, extent, extent_bp);
     }
     if kill_replica_if_checksum_bad(t, btree, bp.v.level.into(), extent, other_btree, other_extent, dev)? {
-        return Ok(());
+        return double_allocation_dropped(t, other_extent, other_bp);
     }
 
     // Both replicas verify clean: a physical region is referenced from two
@@ -640,6 +673,52 @@ fn check_extents_to_backpointers_pass(fs: &Fs, trans: &BtreeTrans<'_>, s: &mut E
     Ok(())
 }
 
+/// gc marks a bucket holding two types of data `multiple`, and leaves it to
+/// this pass to resolve; once it has, the bucket's backpointers agree on a
+/// type, and that is the bucket's again. They're read from the btree: the
+/// caller flushes the write buffer first.
+fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, bucket: u64) -> Result<(), BchError> {
+    use c::bch_data_type as dt;
+
+    let fs = t.fs();
+    let bucket = pos(ca.dev_idx.into(), bucket);
+    let mut iter = BtreeIter::new(t, c::btree_id::alloc, bucket, BtreeIterFlags::empty());
+    let a = alloc_to_v4(iter.peek_slot(t)?.expect("a slot always has a key"));
+
+    if c::bch_data_type(a.data_type.into()) != dt::BCH_DATA_multiple {
+        return Ok(());
+    }
+
+    let bp_range = BackpointerPos::bucket_range(ca, bucket);
+    let mut data_type = None;
+    let mut mixed = false;
+    let mut iter = BtreeIter::new(t, c::btree_id::backpointers, *bp_range.start(), BtreeIterFlags::empty());
+    iter.for_each_max_norestart(t, *bp_range.end(), |_, bp_k| {
+        let Some(bp) = bp_k.arm::<c::Backpointer>() else { return Ok(ControlFlow::Continue(())) };
+        if bp.v().bucket_gen != a.generation {
+            return Ok(ControlFlow::Continue(()));
+        }
+
+        let bp_type = c::bch_data_type(bp.v().data_type.into());
+        mixed = data_type.is_some_and(|d| bucket_data_type(d) != bucket_data_type(bp_type));
+        data_type.get_or_insert(bp_type);
+        Ok(if mixed { ControlFlow::Break(()) } else { ControlFlow::Continue(()) })
+    })?;
+
+    let Some(data_type) = data_type.filter(|_| !mixed) else { return Ok(()) };
+
+    let mut new = t.start_alloc_update(bucket, UpdateTriggerFlags::empty())?;
+    let a = new.v_mut();
+    a.data_type = dt::BCH_DATA_free.0 as u8;
+    a.set_data_type(data_type);
+
+    let mut msg = LogMsg::new(fs);
+    prt!(&mut msg, "bucket {}:{}: double allocation resolved, data type multiple -> ",
+         { bucket.inode }, { bucket.offset });
+    prt_data_type(&mut msg, c::bch_data_type(a.data_type.into()));
+    Ok(())
+}
+
 /// Buckets with none don't count - theirs are recreated without looking. A
 /// btree_ptr has no min_key, so might.
 fn backpointer_node_has_missing(fs: &Fs, k: BkeySC<'_>) -> bool {
@@ -783,10 +862,18 @@ fn check_extents_to_backpointers(fs: &Fs) -> Result<(), BchError> {
             check_extents_to_backpointers_pass(fs, &trans, &mut s)?;
 
             if end == SPOS_MAX {
-                return Ok(());
+                break;
             }
             start = end.successor();
         }
+
+        trans.write_buffer_flush_sync()?;
+        for ca in fs.members() {
+            for b in (0..ca.mi.nbuckets).filter(|&b| ca.bucket_backpointer_mismatch.test(b)) {
+                commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| bucket_multiple_resolved(t, &ca, b))?;
+            }
+        }
+        Ok(())
     })();
 
     for ca in fs.members() {
