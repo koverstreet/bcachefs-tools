@@ -16,7 +16,7 @@
 
 use crate::btree::bkey::prelude::*;
 use crate::alloc::buckets::DiskReservation;
-use crate::btree::bkey::{bkey_lt, bpos_max, pos, spos, BkeyI, BkeySC, BkeyWhole};
+use crate::btree::bkey::{bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole};
 use crate::btree::iter::{commit_do, is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
@@ -298,9 +298,9 @@ fn adjust_i_size(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, offset: u64, le
 }
 
 /*
- * The shift reached @k in an ancestor snapshot, where it stays - the ancestor
- * and its other descendants still see it - so moving it here is sharing it.
- * Returns the key to move, from @src_pos on.
+ * The shift reached @k, an extent with data, in an ancestor snapshot, where it
+ * stays - the ancestor and its other descendants still see it - so moving it
+ * here is sharing it. Returns the key to move.
  *
  * Data is shared by reflink, as remap does: the ancestor's extent becomes
  * indirect in place, in its own snapshot, and what moves is the reflink_p.
@@ -308,24 +308,11 @@ fn adjust_i_size(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, offset: u64, le
  * offsets in the same space with no reflink_v between them: backpointers
  * collide, the space is counted twice, and a move of one leaves the other
  * pointing at freed space.
- *
- * An unwritten extent isn't reflinked: its space moves here, and the
- * ancestor's key is deleted over the range that moves - reading as zeroes
- * either way, and the extent update machinery keeps the rest visible.
  */
-fn finsert_take_ancestor_extent<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>, src_pos: c::bpos)
+fn finsert_take_ancestor_extent<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>)
     -> Result<TransBkey<'a, 't>, BchError>
 {
     let fs = t.fs();
-
-    if k.extent_is_unwritten(fs) {
-        let start = bpos_max(k.k.start_pos(), src_pos);
-        let mut del = t.bkey_alloc_init::<c::Deleted>(0, k.k.p)?;
-        del.k_mut().size = (k.k.p.offset - start.offset) as u32;
-
-        t.insert(c::btree_id::extents, del, UpdateTriggerFlags::empty())?;
-        return t.bkey_make_mut_noupdate(k);
-    }
 
     /*
      * As remap; asked for only here, as it may set the superblock's
@@ -348,6 +335,22 @@ fn finsert_take_ancestor_extent<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>,
 
     /* @orig is now the ancestor's reflink_p, queued as its update */
     t.bkey_make_mut_noupdate(BkeySC::from(&orig))
+}
+
+/*
+ * The shift reached @k, an unwritten extent, in an ancestor snapshot. Its
+ * space is the ancestor's, and stays - a snapshot doesn't change under an op
+ * in a descendant - and there's no data to share. What moves is what
+ * fallocate promised: space reserved, reading as zeroes. A reservation, which
+ * the caller takes disk space for.
+ */
+fn finsert_ancestor_unwritten<'a, 't>(t: &TransAttempt<'a, 't>, k: BkeySC<'_>)
+    -> Result<TransBkey<'a, 't>, BchError>
+{
+    let mut r = t.bkey_alloc_init::<c::Reservation>(1, k.k.p)?;
+    r.k_mut().size = k.k.size;
+    r.v_mut().nr_replicas = k.durability_safe(t.fs()).total as u8;
+    Ok(r.into())
 }
 
 /// Errors are reported when there's @i_sectors_delta: not on resume.
@@ -425,12 +428,15 @@ fn __resume_finsert(
                 };
 
                 let from_ancestor = snapshot != k.k.p.snapshot;
-                let shared_data = from_ancestor && k.k.extent_is_direct_data();
+                let ancestor_unwritten = from_ancestor && k.extent_is_unwritten(fs);
+                let shared_data = from_ancestor && !ancestor_unwritten && k.k.extent_is_direct_data();
                 let k_start = k.k.start_pos();
                 let k_snapshot = k.k.p.snapshot;
 
                 let mut copy = if shared_data {
-                    finsert_take_ancestor_extent(&t, k, src_pos)?
+                    finsert_take_ancestor_extent(&t, k)?
+                } else if ancestor_unwritten {
+                    finsert_ancestor_unwritten(&t, k)?
                 } else {
                     t.bkey_make_mut_noupdate(k)?
                 };
@@ -440,9 +446,9 @@ fn __resume_finsert(
                 /*
                  * Only one of these fires: either the key lives in an ancestor
                  * snapshot and we're adding a reference to it here - a
-                 * reservation; shared data is a reflink_p now, or unwritten
-                 * space that moved - or it's already ours and only a split adds
-                 * anything.
+                 * reservation, the ancestor's unwritten extent's included;
+                 * shared data is a reflink_p now, adding no space - or it's
+                 * already ours and only a split adds anything.
                  */
                 if from_ancestor && !shared_data {
                     disk_res.add(copy.k().size as u64, nr_replicas, c::bch_reservation_flags::empty())?;
