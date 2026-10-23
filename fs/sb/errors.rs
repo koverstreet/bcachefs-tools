@@ -174,6 +174,18 @@ impl ErrorEntry for c::bch_sb_field_error_entry_v2 {
     }
 }
 
+/// Memory's count as v2 has it: saturated to v2's widths.
+impl From<&c::bch_sb_error_entry_cpu> for c::bch_sb_field_error_entry_v2 {
+    fn from(s: &c::bch_sb_error_entry_cpu) -> Self {
+        let mut d = Self::default();
+        d.v.set_id(s.id());
+        d.v.set_nr(s.nr().min(c::BCH_SB_ERROR_ENTRY_V2_NR_MAX) as u32);
+        d.v.set_first_error_time(s.first_error_time.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
+        d.v.set_last_error_time(s.last_error_time.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
+        d
+    }
+}
+
 fn invalid() -> Result<(), BchError> {
     Err(bch_errcode::BCH_ERR_invalid_sb_errors.into())
 }
@@ -292,12 +304,9 @@ impl SbFieldOps for c::bch_sb_field_errors_v2 {
         let u64s = sb_field_u64s::<c::bch_sb_field_errors_v2>(counts.len());
         let Some(f) = sb.field_resize::<c::bch_sb_field_errors_v2>(u64s) else { return Ok(()) };
 
-        // every field of each entry is set: what the resize left there doesn't matter
+        // what the resize left there doesn't matter: each entry is overwritten
         for (d, s) in f.entries.iter_mut().zip(counts.iter()) {
-            d.v.set_id(s.id());
-            d.v.set_nr(s.nr().min(c::BCH_SB_ERROR_ENTRY_V2_NR_MAX) as u32);
-            d.v.set_first_error_time(s.first_error_time.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
-            d.v.set_last_error_time(s.last_error_time.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
+            *d = s.into();
         }
 
         sb.field_delete(c::bch_sb_field_type::BCH_SB_FIELD_errors);
