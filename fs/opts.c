@@ -613,6 +613,16 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 
 	switch (id) {
 	case Opt_foreground_target:
+		/*
+		 * Reconcile sees foreground_target only through
+		 * background_target, which defaults to it
+		 * (bch2_io_opts_fixups()). With a filesystem-wide
+		 * background_target set, no extent's reconcile state depends
+		 * on it, and a scan would walk every extent for nothing:
+		 */
+		if (!inum && c->opts.background_target)
+			break;
+		fallthrough;
 	case Opt_background_target:
 	case Opt_promote_target:
 	case Opt_compression:
