@@ -159,6 +159,20 @@ fn print(fs: &Fs, level: u8, prefix: bool, msg: &dyn ToText, newline: bool) {
     }
 }
 
+/// @msg at @level after device @ca's name, as C's bch_dev_log() - in
+/// userspace too, unlike the filesystem's.
+pub fn log_dev(ca: &c::bch_dev, level: LogLevel, msg: &dyn ToText) {
+    let name = ca.name().to_str().unwrap_or("?");
+    let msg = crate::util::printbuf::Msg(|out: &mut Printbuf| {
+        #[cfg(kernel)]
+        write!(out, "bcachefs ({name}): ");
+        #[cfg(not(kernel))]
+        write!(out, "{name}: ");
+        msg.to_text(out);
+    });
+    print(ca.fs(), level.0, false, &msg, true)
+}
+
 /// Print @msg at @level as it stands, one line at a time with no prefix -
 /// C's bch2_print_str().
 pub fn print_str(fs: &Fs, level: LogLevel, msg: &mut Printbuf) {
@@ -508,6 +522,29 @@ macro_rules! bch_err_msg {
             if $crate::util::log::should_print_err(&e) {
                 $crate::bch_err!($fs, "{}(): error {} {}", $crate::function_name!(),
                                  $crate::message!($($arg)*), e.msg());
+            }
+        }
+        result
+    }};
+}
+
+#[macro_export]
+macro_rules! bch_err_dev {
+    ($ca:expr, $($arg:tt)*) => {
+        $crate::util::log::log_dev($ca, $crate::util::log::LogLevel::ERR, $crate::message!($($arg)*))
+    };
+}
+
+/// As C's bch_err_msg_dev(): bch_err_msg!(), after the device's name.
+#[macro_export]
+macro_rules! bch_err_msg_dev {
+    ($ca:expr, $result:expr, $($arg:tt)*) => {{
+        let result = $result;
+        if let Err(e) = &result {
+            let e: $crate::errcode::BchError = (*e).into();
+            if $crate::util::log::should_print_err(&e) {
+                $crate::bch_err_dev!($ca, "{}(): error {} {}", $crate::function_name!(),
+                                     $crate::message!($($arg)*), e.msg());
             }
         }
         result
