@@ -128,7 +128,10 @@ Commands:
 
 Positions are inode:offset[:snapshot], or POS_MIN/POS_MAX/SPOS_MAX. `-k` on
 the read commands prints keys only - type, position, size - without
-rendering values; useful when mapping out what exists.
+rendering values; useful when mapping out what exists. `-L <level>` on get,
+list and update works on the keys at that level of the btree instead of the
+leaves: the pointers to the nodes below, a btree node pointer at its node's
+max key.
 
 Fields are value-struct fields addressed by path (parent, children[1],
 btime.hi). Declared flag bits (LE*_BITMASK) resolve by name, qualified as
@@ -480,20 +483,27 @@ enum ReadOp {
     PeekPrev,
 }
 
-fn cmd_read(fs: &Fs, op: ReadOp, btree: c::btree_id, pos: c::bpos, filtered: bool,
+fn cmd_read(fs: &Fs, op: ReadOp, btree: c::btree_id, pos: c::bpos, level: u32, filtered: bool,
             how: Render<'_>) -> Result<String> {
     let trans = bcachefs_kernel::btree_trans!(fs);
     let mut user_err: Option<anyhow::Error> = None;
     let out = lockrestart_do(&trans, |t| {
-        let base = match op {
-            ReadOp::Get => RAW_EXACT,
-            _ => BtreeIterFlags::ALL_SNAPSHOTS,
-        };
-        let mut iter = BtreeIter::new(t, btree, pos, iter_flags(base, filtered));
-        let out = match op {
-            ReadOp::Get => iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS),
-            ReadOp::Peek => iter.peek(t),
-            ReadOp::PeekPrev => iter.peek_prev(t),
+        let mut iter;
+        let out = if level > 0 {
+            // h_read() takes -L for get only
+            iter = BtreeIter::new_level(t, btree, pos, level, BtreeIterFlags::empty());
+            iter.peek_slot(t)
+        } else {
+            let base = match op {
+                ReadOp::Get => RAW_EXACT,
+                _ => BtreeIterFlags::ALL_SNAPSHOTS,
+            };
+            iter = BtreeIter::new(t, btree, pos, iter_flags(base, filtered));
+            match op {
+                ReadOp::Get => iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS),
+                ReadOp::Peek => iter.peek(t),
+                ReadOp::PeekPrev => iter.peek_prev(t),
+            }
         }?;
         match out {
             Some(k) => render_read(fs, &k, how).map_err(|e| {
@@ -572,16 +582,16 @@ fn take_interrupt() -> bool {
     INTERRUPTED.swap(false, Ordering::Relaxed)
 }
 
-fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos,
+fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos, level: u32,
             filtered: bool, key_only: bool) -> Result<String> {
     let trans = bcachefs_kernel::btree_trans!(fs);
     let mut out = String::new();
-    let mut iter = BtreeIter::new(
-        &trans,
-        btree,
-        start,
-        iter_flags(BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::PREFETCH, filtered),
-    );
+    let flags = iter_flags(BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::PREFETCH, filtered);
+    let mut iter = if level > 0 {
+        BtreeIter::new_level(&trans, btree, start, level, flags)
+    } else {
+        BtreeIter::new(&trans, btree, start, flags)
+    };
     iter.for_each_max(&trans, end, |_, _, k| {
         if take_interrupt() {
             out.push_str("(interrupted)\n");
@@ -600,11 +610,11 @@ fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos,
 /// One key from a mounted filesystem, or None. get: slot iteration at an
 /// exact pos; peek/peek_prev: first key at/after (at/before) pos.
 fn online_one_key(handle: &BcachefsHandle, fs: &Fs,
-		  btree: c::btree_id, pos: c::bpos,
+		  btree: c::btree_id, pos: c::bpos, level: u32,
 		  flags: OnlineIterFlags, how: Render<'_>) -> Result<String> {
     // Small buffer: the kernel fills the whole thing per call, and we only
     // want one key (it grows automatically if the key doesn't fit):
-    let mut iter = OnlineBtreeIter::with_buf_size(handle, btree, 0, pos,
+    let mut iter = OnlineBtreeIter::with_buf_size(handle, btree, level, pos,
 					if flags.0 & OnlineIterFlags::PREV.0 != 0 { POS_MIN } else { SPOS_MAX },
 					flags, 4096);
     match iter.next().map_err(|e| anyhow!("BCH_IOCTL_QUERY_BTREE_KEYS: {e}"))? {
@@ -626,21 +636,21 @@ fn online_snapshots_flag(filtered: bool) -> OnlineIterFlags {
 }
 
 fn cmd_read_online(handle: &BcachefsHandle, fs: &Fs, op: ReadOp,
-		   btree: c::btree_id, pos: c::bpos, filtered: bool,
+		   btree: c::btree_id, pos: c::bpos, level: u32, filtered: bool,
 		   how: Render<'_>) -> Result<String> {
     let flags = online_snapshots_flag(filtered) | match op {
         ReadOp::Get => OnlineIterFlags::SLOTS,
         ReadOp::Peek => OnlineIterFlags(0),
         ReadOp::PeekPrev => OnlineIterFlags::PREV,
     };
-    online_one_key(handle, fs, btree, pos, flags, how)
+    online_one_key(handle, fs, btree, pos, level, flags, how)
 }
 
 fn cmd_list_online(handle: &BcachefsHandle, fs: &Fs,
-		   btree: c::btree_id, start: c::bpos, end: c::bpos,
+		   btree: c::btree_id, start: c::bpos, end: c::bpos, level: u32,
 		   filtered: bool, key_only: bool) -> Result<String> {
     let mut out = String::new();
-    let mut iter = OnlineBtreeIter::new(handle, btree, 0, start, end,
+    let mut iter = OnlineBtreeIter::new(handle, btree, level, start, end,
 					online_snapshots_flag(filtered));
     iter.for_each(|k| {
         if take_interrupt() {
@@ -665,6 +675,7 @@ fn cmd_update(
     fs: &Fs,
     btree: c::btree_id,
     pos: c::bpos,
+    level: u32,
     assigns: &[(&str, &str)],
     raw: bool,
 ) -> Result<String> {
@@ -676,13 +687,14 @@ fn cmd_update(
         None,
         CommitFlags::NO_ENOSPC,
         |t| {
-            let mut iter = BtreeIter::new(
-                t,
-                btree,
-                pos,
-                RAW_EXACT | BtreeIterFlags::INTENT,
-            );
-            let k = iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS)?;
+            let mut iter;
+            let k = if level > 0 {
+                iter = BtreeIter::new_level(t, btree, pos, level, BtreeIterFlags::INTENT);
+                iter.peek_slot(t)?
+            } else {
+                iter = BtreeIter::new(t, btree, pos, RAW_EXACT | BtreeIterFlags::INTENT);
+                iter.peek_max_flags(t, SPOS_MAX, BtreeIterFlags::SLOTS)?
+            };
             let Some(k) = k.filter(|k| !k.k.is_deleted()) else {
                 let (inode, offset, snapshot) = (pos.inode, pos.offset, pos.snapshot);
                 user_err = Some(anyhow!("no key at {inode}:{offset}:{snapshot}"));
@@ -694,6 +706,16 @@ fn cmd_update(
             new.k_mut().u64s = k.k.u64s;
 
             set_fields(fs, &mut new, assigns, raw, &mut user_err)?;
+
+            // A btree node pointer is its node's key, and updating it is an
+            // interior update, which commits itself
+            if level > 0 {
+                return if raw {
+                    t.btree_node_update_key_at_pos_raw(btree, level, new)
+                } else {
+                    t.btree_node_update_key_at_pos(btree, level, new)
+                };
+            }
 
             t.update(&iter, &new, raw_flags(UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE, raw))
         },
@@ -893,10 +915,14 @@ list [-k] <btree> [start] [end]                keys in range
           elements space-separated
           -r reads fields of the value as stored, not an inode's unpacked
           form - what update -r writes
+          -L <level>, before the other flags, on get and list: the keys at
+          that level, the pointers to the nodes below it
 update [-r] <btree> <pos> <field=val>...       modify fields of an existing key
           -r writes the value as stored, by its own struct's fields, and
           runs no triggers: states the inode packer or a trigger would
           correct (has_inode_opts, a future bi_journal_seq)
+          -L <level>, before -r: a btree node pointer at that level, updated
+          as its node's key - with -r, its triggers not run
 set  [-s][-r] <btree> <pos> <type> [field=val]... insert a whole new key
           values are integers; fields holding enum codewords (snapshot/
           subvolume state) also accept the value name, e.g. state=will_delete
@@ -954,21 +980,21 @@ impl KvdbFs {
         }
     }
 
-    fn read(&self, op: ReadOp, btree: c::btree_id, pos: c::bpos, filtered: bool,
+    fn read(&self, op: ReadOp, btree: c::btree_id, pos: c::bpos, level: u32, filtered: bool,
             how: Render<'_>) -> Result<String> {
         match self {
-            KvdbFs::Offline(fs) => cmd_read(fs, op, btree, pos, filtered, how),
+            KvdbFs::Offline(fs) => cmd_read(fs, op, btree, pos, level, filtered, how),
             KvdbFs::Online(handle, fs) =>
-                cmd_read_online(handle, fs, op, btree, pos, filtered, how),
+                cmd_read_online(handle, fs, op, btree, pos, level, filtered, how),
         }
     }
 
-    fn list(&self, btree: c::btree_id, start: c::bpos, end: c::bpos, filtered: bool,
+    fn list(&self, btree: c::btree_id, start: c::bpos, end: c::bpos, level: u32, filtered: bool,
             key_only: bool) -> Result<String> {
         match self {
-            KvdbFs::Offline(fs) => cmd_list(fs, btree, start, end, filtered, key_only),
+            KvdbFs::Offline(fs) => cmd_list(fs, btree, start, end, level, filtered, key_only),
             KvdbFs::Online(handle, fs) =>
-                cmd_list_online(handle, fs, btree, start, end, filtered, key_only),
+                cmd_list_online(handle, fs, btree, start, end, level, filtered, key_only),
         }
     }
 }
@@ -1005,7 +1031,7 @@ struct Cmd {
 }
 
 const COMMANDS: &[Cmd] = &[
-    Cmd { name: "get", aliases: &[], usage: "get [-k|-r] <btree> <pos> [<field>..]",
+    Cmd { name: "get", aliases: &[], usage: "get [-L <level>] [-k|-r] <btree> <pos> [<field>..]",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: false, needs_journal: false, handler: h_read },
     Cmd { name: "peek", aliases: &[], usage: "peek [-k] <btree> <pos> [<field>..]",
@@ -1014,10 +1040,10 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "peek_prev", aliases: &[], usage: "peek_prev [-k] <btree> <pos> [<field>..]",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: false, needs_journal: false, handler: h_read },
-    Cmd { name: "list", aliases: &[], usage: "list [-k] <btree> [start] [end]",
+    Cmd { name: "list", aliases: &[], usage: "list [-L <level>] [-k] <btree> [start] [end]",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: false, needs_journal: false, handler: h_list },
-    Cmd { name: "update", aliases: &[], usage: "update [-r] <btree> <pos> <field=val>...",
+    Cmd { name: "update", aliases: &[], usage: "update [-L <level>] [-r] <btree> <pos> <field=val>...",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: true, needs_journal: false, handler: h_update },
     Cmd { name: "set", aliases: &[], usage: "set [-s] [-r] <btree> <pos> <type> [field=val]...",
@@ -1070,7 +1096,18 @@ fn h_snapshot(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(
     }))
 }
 
+/// A leading `-L <level>`: the btree level a key command works at - 0, the
+/// leaves, without one.
+fn take_level<'a, 'b>(args: &'a [&'b str]) -> Result<(u32, &'a [&'b str])> {
+    match args {
+        ["-L", level, rest @ ..] =>
+            Ok((level.parse().map_err(|_| anyhow!("-L: '{level}' isn't a btree level"))?, rest)),
+        _ => Ok((0, args)),
+    }
+}
+
 fn h_read(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    let (level, args) = take_level(args)?;
     let (key_only, raw, args) = match args {
         ["-k", rest @ ..] => (true, false, rest),
         ["-r", rest @ ..] => (false, true, rest),
@@ -1100,10 +1137,14 @@ fn h_read(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), S
         "peek" => ReadOp::Peek,
         _ => ReadOp::PeekPrev,
     };
-    Ok(ControlFlow::Continue(repl.fs.read(op, btree, pos, filtered, how)?))
+    if level > 0 && op != ReadOp::Get {
+        bail!("{}: -L is for get, list and update", cmd.name);
+    }
+    Ok(ControlFlow::Continue(repl.fs.read(op, btree, pos, level, filtered, how)?))
 }
 
 fn h_list(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    let (level, args) = take_level(args)?;
     let (key_only, args) = match args {
         ["-k", rest @ ..] => (true, rest),
         _ => (false, args),
@@ -1125,10 +1166,11 @@ fn h_list(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), S
         start.snapshot = snap;
     }
     let filtered = ctx.is_some();
-    Ok(ControlFlow::Continue(repl.fs.list(btree, start, end, filtered, key_only)?))
+    Ok(ControlFlow::Continue(repl.fs.list(btree, start, end, level, filtered, key_only)?))
 }
 
 fn h_update(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    let (level, args) = take_level(args)?;
     let (raw, args) = match args {
         ["-r", rest @ ..] => (true, rest),
         _ => (false, args),
@@ -1146,7 +1188,7 @@ fn h_update(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(),
         .collect::<Result<Vec<_>>>()?;
     let btree = parse_btree(btree)?;
     let ctx = repl.snapshot.filter(|_| btree_uses_snapshots(btree));
-    Ok(ControlFlow::Continue(cmd_update(fs, btree, parse_pos_ctx(pos, ctx)?, &assigns, raw)?))
+    Ok(ControlFlow::Continue(cmd_update(fs, btree, parse_pos_ctx(pos, ctx)?, level, &assigns, raw)?))
 }
 
 fn h_set(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
