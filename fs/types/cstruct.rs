@@ -645,6 +645,13 @@ pub struct CTaggedArm {
 /// it; its arms' types are another's too. Or it's the tag's, `size: arm`,
 /// `union NAME in HEAD { .., size: arm }`: each value as long as the arm its
 /// tag selects, the head the start of every arm.
+///
+/// For a struct C hands over in memory rather than one read off disk -
+/// reconcile_scan, say - two more, both `size: pad`'s: `tag NAME: enum TYPE`,
+/// the tag a closed C enum, stored as it, the arms' values its variants;
+/// and `plain`, every arm plain data, an arm type not defined here a type of
+/// its own's - a typedef of an integer - rather than a #[counted] family's
+/// head.
 #[derive(Debug)]
 pub struct CTaggedUnion {
     pub cfg:       Option<Cfg>,
@@ -662,6 +669,13 @@ pub struct CTaggedUnion {
     /// `= TAG_ENUM`: the tag as handed out, a newtype over an integer the
     /// tag widens to - or empty, the tag as it is.
     pub tag_enum:  String,
+    /// `tag NAME: enum TYPE`: the tag is a C enum, closed - stored as it,
+    /// the arms' values its variants. Only in memory: no bytes from outside,
+    /// which could hold a value that isn't one.
+    pub tag_is_enum: bool,
+    /// `plain`: every arm is plain data - one not defined here a type of its
+    /// own's, not a #[counted] family's head.
+    pub plain:     bool,
     /// `arms from LIST(params) => template`.
     pub from:      Option<CFromList>,
     pub arms:      Vec<CTaggedArm>,
@@ -2173,7 +2187,8 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
     };
     let mut size = None;
     let mut tu = CTaggedUnion { cfg, name, union, storage, tag_field: String::new(),
-                                tag_ty: String::new(), tag_enum: String::new(), from: None,
+                                tag_ty: String::new(), tag_enum: String::new(), tag_is_enum: false,
+                                plain: false, from: None,
                                 arms: Vec::new(), pad: None, packed: false,
                                 size: CTaggedSize::Pad, defs: Vec::new() };
     for item in split_top(inner, ',') {
@@ -2185,12 +2200,20 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
                 tu.defs.push(CTaggedDef { name: ident_at(item, j + 1).unwrap().to_string() });
             }
             [Tok::Ident(kw), Tok::Ident(field), Tok::Punct(':'), rest @ ..] if kw == "tag" => {
+                let rest = match rest {
+                    [Tok::Ident(e), rest @ ..] if e == "enum" => {
+                        tu.tag_is_enum = true;
+                        rest
+                    }
+                    rest => rest,
+                };
                 let eq = rest.iter().position(|t| t.is_punct('=')).unwrap_or(rest.len());
                 tu.tag_field = field.clone();
                 tu.tag_ty = tokens_to_rust(&rest[..eq]);
                 tu.tag_enum = tokens_to_rust(rest.get(eq + 1..).unwrap_or_default());
-                if tu.tag_ty.is_empty() || (eq < rest.len() && tu.tag_enum.is_empty()) {
-                    return Err("tagged_union!: tag NAME: TYPE [= TAG_ENUM]".into());
+                if tu.tag_ty.is_empty() || (eq < rest.len() && tu.tag_enum.is_empty()) ||
+                   (tu.tag_is_enum && eq < rest.len()) {
+                    return Err("tagged_union!: tag NAME: TYPE [= TAG_ENUM], or tag NAME: enum TYPE".into());
                 }
             }
             [Tok::Ident(kw), Tok::Ident(from), rest @ ..] if kw == "arms" && from == "from" => {
@@ -2216,6 +2239,7 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
                 });
             }
             [Tok::Ident(kw)] if kw == "packed" => tu.packed = true,
+            [Tok::Ident(kw)] if kw == "plain" => tu.plain = true,
             _ => return Err(format!("tagged_union!: {} not understood", tokens_to_rust(item))),
         }
     }
@@ -2238,6 +2262,10 @@ fn parse_tagged_union(body: &[Tok], cfg: Option<Cfg>) -> Result<CTaggedUnion, St
                             arms run past its header as far as its count says - or `union NAME \
                             in HEAD {{ .., size: arm }}` - the head every arm starts with, each \
                             as long as its arm", tu.name));
+    }
+    if (tu.plain || tu.tag_is_enum) && tu.size != CTaggedSize::Pad {
+        return Err(format!("tagged_union! {}: `plain` and `tag NAME: enum TYPE` are for a \
+                            struct's own storage, `size: pad`", tu.name));
     }
     if tu.storage.is_some() {
         if let Some(d) = tu.defs.first() {
@@ -2386,7 +2414,8 @@ pub fn enum_text(e: &CEnumDef) -> String {
 #[allow(dead_code)]
 pub fn tagged_union_record_text(tu: &CTaggedUnion, arms: &[CTaggedArm]) -> String {
     let tag_enum = if tu.tag_enum.is_empty() { String::new() } else { format!(" = {}", tu.tag_enum) };
-    let mut t = format!("tagged_union! {{ {} {{ tag {}: {}{tag_enum}, ",
+    let enum_kw = if tu.tag_is_enum { "enum " } else { "" };
+    let mut t = format!("tagged_union! {{ {} {{ tag {}: {enum_kw}{}{tag_enum}, ",
                         tu.c_type(), tu.tag_field, tu.tag_ty);
     for a in arms {
         t.push_str(&format!("arm {}: {} = {}, ", a.name, a.ty, a.value));
@@ -2397,6 +2426,9 @@ pub fn tagged_union_record_text(tu: &CTaggedUnion, arms: &[CTaggedArm]) -> Strin
     t.push_str(&format!("size: {}, ", tu.size.keyword()));
     if tu.packed {
         t.push_str("packed, ");
+    }
+    if tu.plain {
+        t.push_str("plain, ");
     }
     t + "} }"
 }
