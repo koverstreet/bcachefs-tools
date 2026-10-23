@@ -56,7 +56,7 @@ const ROOT_SUBVOL_INUM: c::subvol_inum = c::subvol_inum {
     inum:   c::BCACHEFS_ROOT_INO as u64,
 };
 
-fn subvol_inum_eq(l: c::subvol_inum, r: c::subvol_inum) -> bool {
+pub(crate) fn subvol_inum_eq(l: c::subvol_inum, r: c::subvol_inum) -> bool {
     l.subvol == r.subvol && l.inum == r.inum
 }
 
@@ -66,7 +66,7 @@ fn is_root(inode: &c::bch_inode_unpacked) -> bool {
 
 /// The directory @inode, which is @inum, is named in: in the parent
 /// subvolume, for a subvolume's root.
-fn parent_inum(inum: c::subvol_inum, inode: &c::bch_inode_unpacked) -> c::subvol_inum {
+pub(crate) fn parent_inum(inum: c::subvol_inum, inode: &c::bch_inode_unpacked) -> c::subvol_inum {
     c::subvol_inum {
         subvol: if inode.bi_parent_subvol != 0 { inode.bi_parent_subvol as u64 } else { inum.subvol },
         inum:   inode.bi_dir,
@@ -987,7 +987,7 @@ pub extern "C" fn bch2_inum_snapshot_to_path(
 /// Whether @inum is @ancestor or below it: the walk from inum_to_path(),
 /// without the names - up through each inode's directory, crossing into
 /// parent subvolumes - until @ancestor or the root. A walk that's
-/// disconnected or loops isn't below anything. As bch2_inum_is_descendant().
+/// disconnected or loops isn't below anything.
 pub fn inum_is_descendant(
     t:        &TransAttempt<'_, '_>,
     inum:     c::subvol_inum,
@@ -1024,19 +1024,6 @@ pub fn inum_is_descendant(
             snapshot = subvolume::get_snapshot(t, subvol)?;
         }
         cur = inode.bi_dir;
-    }
-}
-
-/// For C's ioctls: bch2_inum_is_descendant() - 1 yes, 0 no.
-#[c_export]
-pub extern "C" fn bch2_inum_is_descendant(
-    trans:    &BtreeTrans<'_>,
-    inum:     c::subvol_inum,
-    ancestor: c::subvol_inum,
-) -> c_int {
-    match inum_is_descendant(&unsafe { trans.attempt_in_progress() }, inum, ancestor) {
-        Ok(yes) => yes as c_int,
-        Err(e)  => -e.raw(),
     }
 }
 

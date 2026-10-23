@@ -134,7 +134,6 @@
 #include "fs/logged_ops_gen.h"
 #include "fs/quota_gen.h"
 
-#include "init/damage_gen.h"
 #include "sb/errors_gen.h"
 #include "init/error_gen.h"
 #include "init/passes_gen.h"
@@ -144,6 +143,9 @@
 #include "sb/members_gen.h"
 
 #include "snapshots/types_gen.h"
+
+/* its prototypes take bch_sb_errors_cpu and subvol_inum */
+#include "init/damage_gen.h"
 
 #include "vfs/fdm.h"
 #include "vfs/types_gen.h"

@@ -13,19 +13,25 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::iter::{commit_do, CommitFlags, TransAttempt};
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
 use crate::fs::Fs;
-use crate::ioctl::get_label;
+use crate::ioctl::{get_damage, get_label, readdir_flags};
 use crate::init::chardev::ioctl_ret;
+use crate::init::damage;
+use crate::namei;
+use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::file::File;
-use crate::util::ioctl::{arg, dir, output, Ioctl, UserArg};
+use crate::util::ioctl::{arg, dir, no_arg, output, vstruct, Ioctl, UserArg};
 use crate::util::kernel::{capable, Capability};
 use crate::util::log::LogMsg;
-use crate::vfs::inode::InodeInfo;
-use crate::{bch_err, prt};
+use crate::vfs::inode::{InodeInfo, InodeRef};
+use crate::{bch_err, btree_trans, prt};
+use core::marker::PhantomData;
+use core::ptr::read_volatile;
 use cstruct_macros::{c_export, c_extern};
-use kernel::ffi::{c_long, c_uint, c_ulong};
+use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
 use kernel::uaccess::UserPtr;
 
 const FSLABEL_MAX: usize = c::FSLABEL_MAX as usize;
@@ -73,6 +79,16 @@ fn file_ioctl(file: &File, cmd: c_uint, user: UserPtr) -> Result<c_long, BchErro
             arg::<FS_IOC_SETFSLABEL, _>(user, |a| set_label(fs, file, a)),
         <c::FS_IOC_GOINGDOWN as Ioctl>::OPCODE =>
             arg::<c::FS_IOC_GOINGDOWN, _>(user, |a| goingdown(fs, a)),
+        <c::BCHFS_IOC_GET_DAMAGE as Ioctl>::OPCODE =>
+            vstruct::<c::BCHFS_IOC_GET_DAMAGE, _, _>(user, |a| get_damage(fs, inode.inum(), a)),
+        <c::BCHFS_IOC_CLEAR_DAMAGE as Ioctl>::OPCODE =>
+            no_arg::<c::BCHFS_IOC_CLEAR_DAMAGE, _>(|| clear_damage(file, &inode)),
+        <c::BCHFS_IOC_READDIR_FLAGS as Ioctl>::OPCODE => {
+            let (dir, idmap) = (inode.inum(), MntIdmap::of(file));
+            let is_dir = unsafe { (*inode.vinode()).i_mode } as u32 & c::S_IFMT == c::S_IFDIR;
+            arg::<c::BCHFS_IOC_READDIR_FLAGS, _>(user, |a| readdir_flags(fs, dir, is_dir,
+                |t, n| path_accessible(t, idmap, n, dir), a))
+        }
         _ => {
             let ret = unsafe { __bch2_fs_file_ioctl(file.as_ptr(), cmd, user.as_mut_ptr() as c_ulong) };
             if ret < 0 { Err(BchError::from_raw(-ret as i32)) } else { Ok(ret) }
@@ -88,6 +104,41 @@ pub unsafe fn bch2_fs_file_ioctl(file: *mut c::file, cmd: c_uint, arg: c_ulong) 
 }
 
 /* The handlers */
+
+/// The idmap of the mount a file was opened through, for as long as the file
+/// is borrowed: an open file pins its mount. Ownership and permission are
+/// as it maps the inode's ids.
+#[derive(Clone, Copy)]
+struct MntIdmap<'f>(*mut c::mnt_idmap, PhantomData<&'f File>);
+
+impl<'f> MntIdmap<'f> {
+    /// file_mnt_idmap()
+    fn of(file: &'f File) -> Self {
+        let file = file.as_ptr();
+        // SAFETY: an open file's mount. READ_ONCE(), as mnt_idmap(): the
+        // idmap is published by do_idmap_mount()'s smp_store_release()
+        let idmap = unsafe {
+            // 6.18 made f_path a const union member, __f_path its writable alias
+            #[cfg(linux_ge = "6.18")]
+            let mnt = (*file).__bindgen_anon_1.f_path.mnt;
+            #[cfg(not(linux_ge = "6.18"))]
+            let mnt = (*file).f_path.mnt;
+            read_volatile(&raw const (*mnt).mnt_idmap)
+        };
+        MntIdmap(idmap, PhantomData)
+    }
+
+    /// Whether the caller owns @inode, or has CAP_FOWNER.
+    fn owner_or_capable(self, inode: &InodeInfo<'_>) -> bool {
+        unsafe { c::inode_owner_or_capable(self.0, inode.vinode()) }
+    }
+
+    /// Whether the caller has @mask - MAY_* - on @inode, by the whole VFS
+    /// stack: ACLs and LSMs too.
+    fn permission(self, inode: &InodeInfo<'_>, mask: u32) -> bool {
+        unsafe { c::inode_permission(self.0, inode.vinode(), mask as c_int) == 0 }
+    }
+}
 
 /// Write access to a file's mount, for as long as this lives:
 /// mnt_want_write_file(), and mnt_drop_write_file() when it drops.
@@ -159,4 +210,59 @@ fn goingdown(fs: &Fs, user: UserArg<u32>) -> Result<(), BchError> {
         }
         _ => fs.throw(bch_errcode::BCH_ERR_EINVAL_goingdown_bad_flags),
     }
+}
+
+fn clear_damage(file: &File, inode: &InodeInfo<'_>) -> Result<(), BchError> {
+    // forensic metadata: erasing it takes ownership, as chattr does
+    if !MntIdmap::of(file).owner_or_capable(inode) {
+        return Err(c::EPERM.into());
+    }
+
+    let _write = WriteAccess::get(file)?;
+
+    let trans = btree_trans!(inode.fs());
+    commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| damage::clear(t, inode.inum()))
+}
+
+/// Whether the caller may see @n, which a recursive READDIR_FLAGS found under
+/// directory @dir without walking down to it: by the permissions that walk
+/// would have checked - MAY_READ on @n's parent, which lists it, and MAY_EXEC
+/// on each directory above that, up to @dir, which open() checked - the
+/// whole VFS stack. Not if the walk up doesn't get to @dir: a rename raced
+/// it, or an inode's gone.
+///
+/// The permissions are checked with the transaction unlocked: an ACL is
+/// read in a transaction of its own.
+fn path_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
+                   n: c::subvol_inum, dir: c::subvol_inum) -> Result<bool, BchError> {
+    let get = |inum| match InodeRef::get_trans(t, inum) {
+        Err(e) if e.matches(c::ENOENT) => Ok(None),
+        r => r.map(Some),
+    };
+    let parent = |i: &InodeRef, inum| namei::parent_inum(inum, i.info().inode());
+
+    let Some(inode) = get(n)? else { return Ok(false) };
+    let mut p = parent(&inode, n);
+    drop(inode);
+
+    let mut dirs: KVVec<InodeRef> = KVVec::new();
+    while !namei::subvol_inum_eq(p, dir) {
+        // inum_is_descendant() found no loop: the cap is for a rename since
+        if p.inum == 0 || dirs.len() >= 4096 {
+            return Ok(false);
+        }
+        let Some(i) = get(p)? else { return Ok(false) };
+        p = parent(&i, p);
+        dirs.push(i, GFP_KERNEL)?;
+    }
+
+    t.unlock();
+    for (k, i) in dirs.iter().enumerate() {
+        let mask = if k == 0 { c::MAY_READ } else { c::MAY_EXEC };
+        if !idmap.permission(&i.info(), mask) {
+            return Ok(false);
+        }
+    }
+    t.relock()?;
+    Ok(true)
 }

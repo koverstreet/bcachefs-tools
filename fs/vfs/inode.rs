@@ -19,8 +19,37 @@ use core::marker::PhantomData;
 
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
-use crate::errcode::{ret_to_c, ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{errptr_to_result, ret_to_c, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
+use core::ptr::NonNull;
+use cstruct_macros::c_extern;
+
+c_extern! {
+    pub fn bch2_vfs_inode_get_trans(trans: *mut c::btree_trans, inum: c::subvol_inum,
+                                    func: *const crate::util::ffi::c_char) -> *mut c::bch_inode_info;
+}
+
+/// A VFS inode Rust has a reference on, put - iput() - when it drops.
+pub struct InodeRef(NonNull<c::bch_inode_info>);
+
+impl InodeRef {
+    /// @inum's, looked up in @t, the inode cache first.
+    pub fn get_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<Self, BchError> {
+        let ei = unsafe { bch2_vfs_inode_get_trans(t.raw(), inum, crate::c_function_name!().as_ptr().cast()) };
+        Ok(InodeRef(errptr_to_result(NonNull::new(ei).expect("an inode, or an error"))?))
+    }
+
+    pub fn info(&self) -> InodeInfo<'_> {
+        // SAFETY: ours, referenced
+        unsafe { InodeInfo::from_ei(self.0.as_ptr()) }
+    }
+}
+
+impl Drop for InodeRef {
+    fn drop(&mut self) {
+        unsafe { c::iput(c::rust_ei_vinode(self.0.as_ptr())) }
+    }
+}
 
 /// <linux/fs.h>'s ATTR_*: what update_after_write() updates in the VFS
 /// inode, besides what it always does.

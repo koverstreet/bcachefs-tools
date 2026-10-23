@@ -621,7 +621,6 @@ c_xmacro! {
         (0, write_encoded_as_is, 596),
         (0, path_not_accessible, 597),
         (0, readdir_buf_full, 598),
-        (0, readdir_skip, 599),
         (0, fc_continue, 600),
         (0, fc_break, 601),
         (0, cached_ptr_stale, 602),

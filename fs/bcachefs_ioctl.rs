@@ -186,7 +186,7 @@ c_const! {
  * @used	- out: bytes of @buf filled
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_readdir_flags {
     pub pos: [u64; 2],
     pub buf: u64,
