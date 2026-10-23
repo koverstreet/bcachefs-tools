@@ -107,6 +107,8 @@ pub mod init {
 }
 #[path = "fs/inode.rs"]        pub mod inode;
 #[path = "fs/inode_opts.rs"]   pub mod inode_opts;
+#[cfg(kernel)]
+#[path = "fs/ioctl.rs"]        pub mod ioctl;
 #[path = "fs/logged_ops.rs"]   pub mod logged_ops;
 #[path = "fs/lostfound.rs"]    pub mod lostfound;
 #[path = "journal/read.rs"]     pub mod journal;
@@ -146,6 +148,7 @@ pub mod vfs {
     pub mod dentry;
     pub mod inode;
     pub mod status_fd;
+    pub mod ioctl;
 }
 #[path = "fs/xattr.rs"]        pub mod xattr;
 pub mod data {

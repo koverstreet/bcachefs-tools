@@ -24,6 +24,8 @@ const KERNEL_HEADERS: &[&str] = &[
     "crypto/sha2.h",			// sha256(), siphash_old's string hash key
     "linux/anon_inodes.h",		// anon_inode_getfile(), util/file's NewFile
     "linux/mm.h",			// totalram_pages(), a backpointer scan's batch limit
+    "linux/mount.h",			// mnt_want_write_file(), vfs/ioctl.rs's
+    "linux/blkdev.h",			// bdev_freeze(), vfs/ioctl.rs's goingdown
 ];
 
 /// Headers under fs/ bound, by path - which the clang args have as an -I:
@@ -42,10 +44,13 @@ const UNBLOCKLISTED: &[&str] = &[
     "crypto/sha2.h",
     "linux/anon_inodes.h",
     "linux/mm.h",
+    "linux/mount.h",
+    "linux/blkdev.h",
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
     "crc32c", "crc64_be", "sha256", "anon_inode_getfile",
+    "mnt_want_write_file", "mnt_drop_write_file", "bdev_freeze", "bdev_thaw",
     "__genradix_ptr", "__genradix_ptr_alloc", "__genradix_iter_peek", "__genradix_free",
     "closure_get_not_zero", "closure_put",
     "rust_page_folio", "rust_folio_page_idx", "rust_folio_size",

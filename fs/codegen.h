@@ -9,6 +9,8 @@
  */
 
 #include <linux/blkdev.h>
+#include <linux/fs.h>
+#include <linux/mount.h>
 #include <linux/mm.h>
 #include <linux/pagemap.h>
 #include <linux/poll.h>
@@ -33,6 +35,11 @@ const blk_opf_t RUST_CONST_HELPER_REQ_FUA		= REQ_FUA;
  * parisc override asm-generic's (util/ioctl.rs)
  */
 const unsigned int RUST_CONST_HELPER_MINORBITS		= MINORBITS;
+
+/* the VFS's own ioctl numbers, which vfs/ioctl.rs answers */
+const unsigned int RUST_CONST_HELPER_FS_IOC_GETVERSION	= FS_IOC_GETVERSION;
+const unsigned int RUST_CONST_HELPER_FS_IOC_GETFSLABEL	= FS_IOC_GETFSLABEL;
+const unsigned int RUST_CONST_HELPER_FS_IOC_SETFSLABEL	= FS_IOC_SETFSLABEL;
 const unsigned int RUST_CONST_HELPER__IOC_NONE		= _IOC_NONE;
 const unsigned int RUST_CONST_HELPER__IOC_READ		= _IOC_READ;
 const unsigned int RUST_CONST_HELPER__IOC_WRITE		= _IOC_WRITE;

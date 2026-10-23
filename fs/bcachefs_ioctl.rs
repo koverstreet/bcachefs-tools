@@ -93,6 +93,13 @@ c_ioctl! {
     BCH_IOCTL_QUERY_ACCOUNTING_v2	= _IOW(0xbc,	37, c::bch_ioctl_query_accounting_v2),
 }
 
+c_const! {
+    /* FS_IOC_GOINGDOWN's: */
+    pub const FSOP_GOING_FLAGS_DEFAULT: u32 = 0x0;	/* going down */
+    pub const FSOP_GOING_FLAGS_LOGFLUSH: u32 = 0x1;	/* flush log but not data */
+    pub const FSOP_GOING_FLAGS_NOLOGFLUSH: u32 = 0x2;	/* don't flush log nor data */
+}
+
 c_ioctl! {
     /* ioctl below act on a particular file, not the filesystem as a whole: */
 
@@ -102,6 +109,13 @@ c_ioctl! {
     BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS	= _IO(0xbc, 66),
     BCHFS_IOC_PREAD_RAW			= _IOWR(0xbc, 67, c::bch_ioctl_pread_raw),
     BCHFS_IOC_UNPOISON			= _IOW(0xbc, 68, c::bch_ioctl_unpoison),
+
+    /*
+     * XFS's number, which other filesystems answer too: _IOR as XFS has it,
+     * though it's the flags, FSOP_GOING_FLAGS_*, that the kernel reads.
+     */
+    #[c("__u32")]
+    FS_IOC_GOINGDOWN			= _IOR(0x58, 125, u32),
     BCHFS_IOC_GET_DAMAGE		= _IOWR(0xbc, 70, Head<c::bch_ioctl_get_damage>),
     /* 69: retired - READDIR_FLAGS before its entries had a reclen */
     BCHFS_IOC_READDIR_FLAGS		= _IOWR(0xbc, 72, c::bch_ioctl_readdir_flags),
