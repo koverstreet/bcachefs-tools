@@ -23,7 +23,7 @@
 //! In-kernel, the handlers' side. A handler never sees the user's pointer
 //! for an argument of fixed size: input(), output() and inout() copy it as
 //! its number's direction says - in, out, or in and back out on success -
-//! and a direction they don't take doesn't compile. A Head<T> argument is
+//! no_arg() is _IO's, and a direction they don't take doesn't compile. A Head<T> argument is
 //! the head of a variable-length one, and there the number's direction is
 //! the head's alone - an array after it may go either way, as
 //! BCH_IOCTL_QUERY_COUNTERS's does: vstruct() hands the handler a
@@ -135,6 +135,14 @@ mod user {
     {
         let arg = UserSlice::new(user, size_of::<I::Arg>()).reader().read()?;
         Ok(f(arg)?.ret())
+    }
+
+    pub fn no_arg<I, R>(f: impl FnOnce() -> Result<R, BchError>) -> Result<c_long, BchError>
+    where
+        I: Ioctl<Dir = dir::IO>,
+        R: IoctlRet,
+    {
+        Ok(f()?.ret())
     }
 
     pub fn output<I>(user: UserPtr, f: impl FnOnce() -> Result<I::Arg, BchError>)
