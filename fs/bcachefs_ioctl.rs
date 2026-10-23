@@ -182,7 +182,9 @@ c_const! {
  *		  past the last entry returned. Iterate until @used == 0.
  * @buf_size,
  * @buf		- userspace buffer, filled with struct
- *		  bch_ioctl_readdir_entry records
+ *		  bch_ioctl_readdir_entry records. ERANGE if the next
+ *		  entry is bigger than the whole buffer - a recursive
+ *		  listing's paths have no limit: retry with a bigger one
  * @used	- out: bytes of @buf filled
  */
 #[repr(C)]
@@ -825,7 +827,9 @@ impl crate::util::vstructs::SelfSized for bch_ioctl_subvol_dirent {
  * variable-length NUL-terminated path (relative to the parent subvolume
  * root), padded to 8-byte alignment.
  *
- * Returns 0 on success (used == 0 means no more entries).
+ * Returns 0 on success (used == 0 means no more entries); -ERANGE if the
+ * next entry is bigger than the whole buffer - a path has no limit: retry
+ * with a bigger one.
  */
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]

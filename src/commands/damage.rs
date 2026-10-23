@@ -121,24 +121,32 @@ struct Entry {
 
 /// One BCHFS_IOC_READDIR_FLAGS call, advancing the opaque cursor. An
 /// empty result means enumeration is complete; an entry that doesn't fit
-/// in what the kernel says it wrote, or has no name, is an error.
+/// in what the kernel says it wrote, or has no name, is an error. A
+/// recursive listing's paths have no limit: an entry bigger than the
+/// buffer is ERANGE, and the call is retried with twice the room.
 fn readdir_flags(fd: &OwnedFd, flags: u32, pos: &mut [u64; 2]) -> Result<Vec<Entry>> {
     // u64s: the kernel writes each entry at a multiple of 8 from the start,
     // aligned for one if the buffer is
-    let mut buf = Box::new([0u64; (64 << 10) / 8]);
-    let mut arg = c::bch_ioctl_readdir_flags {
-        pos: *pos,
-        buf: buf.as_mut_ptr() as u64,
-        buf_size: mem::size_of_val(&*buf) as u32,
-        flags,
-        used: 0,
-        pad: 0,
-    };
+    let mut buf = vec![0u64; (64 << 10) / 8];
+    let arg = loop {
+        let mut arg = c::bch_ioctl_readdir_flags {
+            pos: *pos,
+            buf: buf.as_mut_ptr() as u64,
+            buf_size: u32::try_from(mem::size_of_val(&*buf))
+                .context("an entry bigger than any buffer the ioctl can be given")?,
+            flags,
+            used: 0,
+            pad: 0,
+        };
 
-    ioctl_rw::<BCHFS_IOC_READDIR_FLAGS>(fd, &mut arg)?;
+        match ioctl_rw::<BCHFS_IOC_READDIR_FLAGS>(fd, &mut arg) {
+            Err(e) if e.raw_os_error() == Some(libc::ERANGE) => buf.resize(buf.len() * 2, 0),
+            r => { r?; break arg; }
+        }
+    };
     *pos = arg.pos;
 
-    let reply = plain_bytes(&*buf).get(..arg.used as usize)
+    let reply = plain_bytes(&buf[..]).get(..arg.used as usize)
         .ok_or_else(|| anyhow!("{} bytes used, of {}", arg.used, arg.buf_size))?;
 
     VstructRefEntries::<c::bch_ioctl_readdir_entry>::new(reply)

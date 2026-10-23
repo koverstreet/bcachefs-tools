@@ -56,17 +56,19 @@ pub fn get_label(fs: &Fs, user: UserArg<[u8; c::FSLABEL_MAX as usize]>) -> Resul
  * their next key.
  */
 
-/// The caller's buffer, @used bytes of it filled; @rec, an entry on its way.
+/// The caller's buffer, @used bytes of it filled, and whether an entry
+/// didn't fit; @rec, an entry on its way.
 struct Entries {
     buf:  u64,
     size: u32,
     used: u32,
+    full: bool,
     rec:  KVVec<u8>,
 }
 
 impl Entries {
     fn new(buf: u64, size: u32) -> Self {
-        Entries { buf, size, used: 0, rec: KVVec::new() }
+        Entries { buf, size, used: 0, full: false, rec: KVVec::new() }
     }
 
     /// Append an entry, @name after the header @hdr makes for its reclen, if
@@ -77,6 +79,7 @@ impl Entries {
         let hdr_bytes = size_of::<H>();
         let reclen = (hdr_bytes + name.len() + 1).next_multiple_of(8);
         if self.used as usize + reclen > self.size as usize {
+            self.full = true;
             return Ok(false);
         }
 
@@ -90,6 +93,11 @@ impl Entries {
         UserSlice::new(at, reclen).writer().write_slice(&self.rec)?;
         self.used += reclen as u32;
         Ok(true)
+    }
+
+    /// ERANGE if the next entry wouldn't fit even an empty buffer.
+    fn check_room(&self) -> Result<(), BchError> {
+        if self.full && self.used == 0 { Err(c::ERANGE.into()) } else { Ok(()) }
     }
 }
 
@@ -125,7 +133,8 @@ pub fn get_damage(fs: &Fs, inum: c::subvol_inum, user: UserVstruct<c::bch_ioctl_
  * BCHFS_IOC_READDIR_FLAGS lists a directory's entries that pass its filter
  * into the caller's buffer, as bch_ioctl_readdir_entry records, and returns
  * a cursor, pos, to resume from: a full buffer ends the call, not the
- * listing.
+ * listing - unless the next entry wouldn't fit even an empty one, which is
+ * ERANGE: a recursive listing's names are paths, of any length.
  *
  * Unrecursive, it's readdir with a filter, and the cursor is a dirent's
  * offset. Recursive, it doesn't walk the tree: it iterates its filter's
@@ -227,14 +236,6 @@ where
             return Ok(Emitted::Skipped);
         }
         let name = &path[if plen == 1 { 1 } else { plen + 1 }..];
-
-        /*
-         * Skipped, not truncated: the limit of the u16 name length the
-         * retired READDIR_FLAGS' entries had - these have none.
-         */
-        if name.len() + 1 > u16::MAX as usize {
-            return Ok(Emitted::Skipped);
-        }
 
         if !(self.accessible)(t, n)? {
             return Ok(Emitted::Skipped);
@@ -341,6 +342,7 @@ where
     // only what the call moved: an unrecursive cursor is one word
     if arg.flags & c::BCH_READDIR_recursive == 0 {
         let pos = readdir_plain(fs, dir, arg.flags, &mut out, arg.pos[0])?;
+        out.check_room()?;
         user.write_at(offset_of!(Q, pos), &pos)?;
         return user.write_at(offset_of!(Q, used), &out.used);
     }
@@ -352,6 +354,7 @@ where
         // unfiltered: an honest tree walk, not yet
         _ => return Err(c::EOPNOTSUPP.into()),
     };
+    r.out.check_room()?;
     user.write_at(offset_of!(Q, pos), &pos)?;
     user.write_at(offset_of!(Q, used), &r.out.used)
 }
@@ -369,7 +372,8 @@ fn relative(path: &[u8]) -> &[u8] {
 /// BCH_IOCTL_SUBVOLUME_LIST's: the subvolumes whose parent is @parent, the
 /// file's, by their paths from its root, as bch_ioctl_subvol_dirent entries -
 /// those @accessible says the caller may reach. The cursor is a subvolume
-/// id; a subvolume whose path can't be found is skipped.
+/// id; a subvolume whose path can't be found is skipped. ERANGE if the next
+/// entry wouldn't fit even an empty buffer: a path's length has no limit.
 pub fn subvolume_list<A>(fs: &Fs, parent: u32, mut accessible: A,
                          user: UserArg<c::bch_ioctl_subvol_readdir>) -> Result<(), BchError>
 where
@@ -424,6 +428,7 @@ where
         })?;
     }
 
+    out.check_room()?;
     user.write_at(offset_of!(Q, pos), &cursor)?;
     user.write_at(offset_of!(Q, used), &out.used)
 }

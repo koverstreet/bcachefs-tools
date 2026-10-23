@@ -235,23 +235,31 @@ impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query_v2 {
     }
 }
 
+/// One BCH_IOCTL_SUBVOLUME_LIST call, advancing the cursor; empty when the
+/// listing's done. A path has no limit: an entry bigger than the buffer is
+/// ERANGE, and the call is retried with twice the room.
 fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {
     // u64s: the kernel writes each dirent at a multiple of 8 from the start,
     // aligned for one if the buffer is
-    let mut buf = Box::new([0u64; (64 << 10) / 8]);
-    let mut arg = bch_ioctl_subvol_readdir {
-        pos: *pos,
-        buf_size: mem::size_of_val(&*buf) as u32,
-        buf: buf.as_mut_ptr() as u64,
-        used: 0,
-        pad: 0,
-    };
+    let mut buf = vec![0u64; (64 << 10) / 8];
+    let arg = loop {
+        let mut arg = bch_ioctl_subvol_readdir {
+            pos: *pos,
+            buf_size: u32::try_from(mem::size_of_val(&*buf))
+                .context("BCH_IOCTL_SUBVOLUME_LIST: an entry bigger than any buffer the ioctl can be given")?,
+            buf: buf.as_mut_ptr() as u64,
+            used: 0,
+            pad: 0,
+        };
 
-    ioctl_rw::<BCH_IOCTL_SUBVOLUME_LIST>(fd, &mut arg)
-        .context("BCH_IOCTL_SUBVOLUME_LIST")?;
+        match ioctl_rw::<BCH_IOCTL_SUBVOLUME_LIST>(fd, &mut arg) {
+            Err(e) if e.raw_os_error() == Some(libc::ERANGE) => buf.resize(buf.len() * 2, 0),
+            r => { r.context("BCH_IOCTL_SUBVOLUME_LIST")?; break arg; }
+        }
+    };
     *pos = arg.pos;
 
-    let reply = plain_bytes(&*buf).get(..arg.used as usize).ok_or_else(|| {
+    let reply = plain_bytes(&buf[..]).get(..arg.used as usize).ok_or_else(|| {
         anyhow!("BCH_IOCTL_SUBVOLUME_LIST: {} bytes used, of {}", arg.used, arg.buf_size)
     })?;
 
