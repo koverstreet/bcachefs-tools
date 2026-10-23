@@ -71,11 +71,11 @@ int bch2_bkey_drop_device_and_update(struct btree_trans *trans, enum btree_id bt
 		 * Flag the topology error: the returned error rewinds recovery
 		 * to run check_topology, which repairs the hole if it can.
 		 */
-		CLASS(printbuf, buf)();
-		prt_printf(&buf, "btree node with no readable replicas, dropping pointer:\n");
-		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(n));
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "btree node with no readable replicas, dropping pointer:\n");
+		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(n));
 		bch2_damage_note_lost_extents(c, btree, bkey_i_to_s_c(n));
-		return bch2_btree_lost_data(c, &buf, btree);
+		return bch2_btree_lost_data(c, &msg.m, btree);
 	}
 
 	/*
