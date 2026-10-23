@@ -27,6 +27,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/mm.h",			// totalram_pages(), a backpointer scan's batch limit
     "linux/mount.h",			// mnt_want_write_file(), vfs/ioctl.rs's
     "linux/blkdev.h",			// bdev_freeze(), vfs/ioctl.rs's goingdown
+    "linux/freezer.h",			// set_freezable(), a freezable kthread's
 ];
 
 /// Headers under fs/ bound, by path - which the clang args have as an -I:
@@ -48,6 +49,7 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/mm.h",
     "linux/mount.h",
     "linux/blkdev.h",
+    "linux/freezer.h",
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
@@ -58,7 +60,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "rust_page_folio", "rust_folio_page_idx", "rust_folio_size",
     "rust_page_highmem", "rust_page_address",
     "rust_refcount_inc_not_zero", "rust_poll_wait", "rust_fault_in_writeable",
-    "rust_fault_in_readable", "totalram_pages",
+    "rust_fault_in_readable", "totalram_pages", "set_freezable",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",
                                   "xattr_handler"];
