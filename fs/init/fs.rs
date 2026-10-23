@@ -301,13 +301,13 @@ impl Fs {
 
     /// Set an option in the superblock; None dev = filesystem scope.
     pub fn opt_set_sb(&self, dev: Option<&DevRef>, opt: &c::bch_option, v: u64,
-                      val_str: Option<&core::ffi::CStr>)
+                      val_str: Option<&core::ffi::CStr>) -> bool
     {
         unsafe {
             c::bch2_opt_set_sb(self.as_ptr(),
                 dev.map_or(core::ptr::null_mut(), |d| d.as_mut_ptr()),
                 opt, v,
-                val_str.map_or(core::ptr::null(), |s| s.as_ptr().cast()));
+                val_str.map_or(core::ptr::null(), |s| s.as_ptr().cast()))
         }
     }
 
