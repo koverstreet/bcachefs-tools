@@ -20,12 +20,14 @@
 
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{bkey_family, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut};
+use crate::btree::bkey_methods::SetError;
 use crate::btree::iter::{BtreeIter, TransAttempt, UpdateTriggerFlags};
 use crate::data::checksum::BCH_NONCE_EXTENT;
 use crate::errcode::BchError;
 use crate::c;
 use crate::fs::Fs;
 use crate::sb::counters::events;
+use crate::typeinfo::{AccessError, ResolveError};
 use crate::types::{Le32, Le64};
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::{cast_plain, cast_plain_mut, plain_bytes, ArmRef, Validated};
@@ -874,6 +876,26 @@ fn csum_bytes(csum: &c::bch_csum) -> [u8; 16] {
     b[..8].copy_from_slice(&csum.lo.get().to_le_bytes());
     b[8..].copy_from_slice(&csum.hi.get().to_le_bytes());
     b
+}
+
+impl c::bch_extent_ptr {
+    /// Its field @field, by C's name, set to @v: for kvdb, to make the keys
+    /// fsck repairs.
+    pub fn set_field<'p>(&mut self, field: &'p str, v: u64) -> Result<(), SetError<'p>> {
+        let (bits, set): (u8, fn(&mut Self, u64)) = match field {
+            "cached"    => (1,  |p, v| p.set_cached(v as u8)),
+            "unwritten" => (1,  |p, v| p.set_unwritten(v as u8)),
+            "offset"    => (44, |p, v| p.set_offset(v)),
+            "dev"       => (8,  |p, v| p.set_dev(v as u8)),
+            "gen"       => (8,  |p, v| p.set_generation(v as u8)),
+            _ => return Err(ResolveError::NoSuchField { st: "bch_extent_ptr", field }.into()),
+        };
+        if v >> bits != 0 {
+            return Err(SetError::Access { field, err: AccessError::BitsOverflow { bits, val: v } });
+        }
+        set(self, v);
+        Ok(())
+    }
 }
 
 impl c::bch_extent_crc32 {

@@ -18,8 +18,11 @@
 //!    bi_inum and bi_snapshot are just fields.
 //!  - dirents: the target, d_type and the name aren't fields typeinfo can
 //!    reach - dirent::set_field().
-//!  - extents: not yet. An entry's position depends on the entries before
-//!    it, and the entries are C bitfields, which typeinfo doesn't describe.
+//!  - pointers, of any key with them: an entry's position depends on the
+//!    entries before it, and the entries are C bitfields, which typeinfo
+//!    doesn't describe - so ptrs[N].field, N counting only the pointers,
+//!    found by the entry walk and set in place: bch_extent_ptr::set_field().
+//!    The other entries - crcs, an extent's stripe_ptr - can't be set yet.
 //!
 //! A value is an integer (decimal, 0x hex, or negative), or for an
 //! enum-coded field the codeword's name.
@@ -28,6 +31,7 @@ use crate::btree::bkey::{BkeyS, BkeySC};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{NoRoom, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
+use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::{dirent, inode};
@@ -138,7 +142,9 @@ impl TransBkey<'_, '_> {
     pub fn set<'p>(&mut self, fs: &Fs, field: &'p str, val: &'p str)
         -> Result<(), SetError<'p>>
     {
-        if inode::bkey_is_inode(self.k()) {
+        if field.starts_with("ptrs[") {
+            self.set_ptr_field(fs, field, val)
+        } else if inode::bkey_is_inode(self.k()) {
             self.set_inode(fs, field, val)
         } else if self.k().type_ as u32 == c::bch_bkey_type::KEY_TYPE_dirent.0 {
             dirent::set_field(self, fs, field, val)
@@ -150,8 +156,26 @@ impl TransBkey<'_, '_> {
     /// By the stored struct's field names: an inode isn't repacked, so what the
     /// packer recomputes (has_inode_opts) can be set wrong. For an inode, only
     /// bch_inode_v3's fixed fields.
-    pub fn set_raw<'p>(&mut self, field: &'p str, val: &'p str) -> Result<(), SetError<'p>> {
-        self.set_fixed(field, val)
+    pub fn set_raw<'p>(&mut self, fs: &Fs, field: &'p str, val: &'p str) -> Result<(), SetError<'p>> {
+        if field.starts_with("ptrs[") {
+            self.set_ptr_field(fs, field, val)
+        } else {
+            self.set_fixed(field, val)
+        }
+    }
+
+    /// ptrs[N].field: pointer N's, in place.
+    fn set_ptr_field<'p>(&mut self, fs: &Fs, field: &'p str, val: &'p str) -> Result<(), SetError<'p>> {
+        let type_ = self.k().type_;
+        let (idx, sub) = field.strip_prefix("ptrs[").and_then(|f| f.split_once("]."))
+            .ok_or(ResolveError::BadSyntax { at: field })?;
+        let idx: usize = idx.parse().map_err(|_| ResolveError::BadSyntax { at: idx })?;
+        let v = parse_val(type_, sub, val)?;
+
+        let mut k = self.reborrow().arm::<Ptrs>().ok_or(SetError::Unsupported { type_ })?;
+        let n = k.ptrs(fs).count();
+        let ptr = k.ptrs_mut(fs).nth(idx).ok_or(ResolveError::IndexOutOfBounds { field: "ptrs", idx, n })?;
+        ptr.set_field(sub, v)
     }
 
     /// In place; also dirent::set_field()'s fallback.

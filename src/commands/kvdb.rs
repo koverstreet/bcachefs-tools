@@ -133,8 +133,10 @@ rendering values; useful when mapping out what exists.
 Fields are value-struct fields addressed by path (parent, children[1],
 btime.hi). Declared flag bits (LE*_BITMASK) resolve by name, qualified as
 flags.subvol when a name collides, and fields holding enum codewords accept
-value names: state=will_delete. Values are decimal, 0x hex, or negative
-decimal. `set <btree> <pos> deleted` removes the exact key; with -s it
+value names: state=will_delete. A key's pointers - an extent's, a btree
+node pointer's, a stripe's - are set as ptrs[N].offset, .dev, .gen, .cached
+and .unwritten, N counting only the pointers. Values are decimal, 0x hex,
+or negative decimal. `set <btree> <pos> deleted` removes the exact key; with -s it
 deletes within pos's snapshot instead (inserting whiteouts, like a runtime
 delete).
 
@@ -403,7 +405,7 @@ fn set_fields(
     user_err: &mut Option<anyhow::Error>,
 ) -> Result<(), BchError> {
     for (field, val) in assigns {
-        let ret = if raw { k.set_raw(field, val) } else { k.set(fs, field, val) };
+        let ret = if raw { k.set_raw(fs, field, val) } else { k.set(fs, field, val) };
         if let Err(e) = ret {
             *user_err = Some(anyhow!("{e}"));
             return Err(no_key_err());
