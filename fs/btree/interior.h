@@ -105,8 +105,6 @@ int bch2_btree_node_rewrite_pos(struct btree_trans *,
 				enum bch_trans_commit_flags,
 				enum bch_write_flags);
 
-void bch2_async_btree_op(struct bch_fs *, struct btree *, enum async_btree_op);
-
 void bch2_btree_set_root_for_read(struct bch_fs *, struct btree *);
 
 int bch2_btree_root_alloc_fake_trans(struct btree_trans *, enum btree_id, unsigned);

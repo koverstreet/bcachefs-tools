@@ -84,6 +84,7 @@ c_extern! {
                                    target: c_uint, flags: c::bch_trans_commit_flags,
                                    write_flags: c::bch_write_flags) -> c_int;
     pub fn bch2_btree_reserve_cache_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
+    pub fn bch2_async_btree_op(c: *mut c::bch_fs, b: *mut c::btree, op: c::async_btree_op);
 }
 
 impl Fs {

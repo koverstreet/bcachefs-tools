@@ -468,7 +468,7 @@ impl BtreeNodeRef {
         self.raw.as_ptr() as usize
     }
 
-    fn as_ptr(&self) -> *mut c::btree {
+    pub(crate) fn as_ptr(&self) -> *mut c::btree {
         self.raw.as_ptr()
     }
 }

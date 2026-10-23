@@ -8,7 +8,9 @@
 //! claims. What can be repaired is: the bucket's, in gc's state; or the
 //! pointer's, done to a copy of the key that replaces it. gc owns alloc info
 //! and accounting while it runs, so the replacement is written without
-//! triggers; gc marks it when it restarts.
+//! triggers; gc marks it when it restarts. A key left with nothing to read
+//! is an error key, or for a btree node pointer, its node lost - or if it's
+//! cached, kept there until it can be rewritten, once we're rw.
 //!
 //! For check_backpointers, two keys claiming the same space: reading one's
 //! replica to see whether it's the bad one, and dropping a device's pointer
@@ -24,7 +26,7 @@ use crate::accounting::{bucket_data_type_mismatch, data_type_from_u8};
 use crate::alloc::buckets::gen_cmp;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{BkeySC, POS_MIN};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeTrans, CommitOpts,
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef, BtreeTrans, CommitOpts,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::c::bch_data_type as dt;
@@ -53,6 +55,40 @@ use cstruct_macros::c_export;
 /// for the reconcile entry and padding pointers set_needs_reconcile() may add.
 const KEY_ROOM: usize = c::BKEY_EXTENT_U64s_MAX * size_of::<u64>();
 
+/// Btree node pointer @n, at @level of @btree, with nothing left to read. A
+/// node still cached is the only copy, for @cached to save - true; else the
+/// node is lost: the pointer's deletion queued, and the btree flagged as
+/// having lost data, for topology repair to fill the hole.
+fn btree_ptr_unreadable<'a>(t: &TransAttempt<'a, '_>, btree: c::btree_id, level: u32, n: BkeySC<'_>,
+                            cached: impl FnOnce(&mut BtreeIter<'a>, BtreeNodeRef) -> Result<(), BchError>)
+    -> Result<bool, BchError>
+{
+    let fs = t.fs();
+
+    let mut node_iter = BtreeNodeIter::new(t, btree, n.k.p, level + 1, level - 1, BtreeIterFlags::NOFILL);
+    match node_iter.peek_ref() {
+        Ok(b) => {
+            cached(node_iter.iter(), b.expect("the node a btree node pointer points to"))?;
+            return Ok(true);
+        }
+        Err(e) if e.matches(bch_errcode::BCH_ERR_no_btree_node_nofill) => {}
+        Err(e) => return Err(e),
+    }
+
+    let mut del_iter = BtreeNodeIter::new(t, btree, n.k.p, 0, level, BtreeIterFlags::INTENT);
+    t.iter_traverse(del_iter.iter())?;
+    t.delete_at(del_iter.iter(), UpdateTriggerFlags::empty())?;
+
+    let mut msg = LogMsg::new(fs);
+    prt!(&mut msg, "btree node with no readable replicas, dropping pointer:\n{}", n.to_text(fs));
+    // SAFETY: @n and @msg, borrowed for the calls
+    ret_to_result_void(unsafe {
+        c::bch2_damage_note_lost_extents(fs.as_ptr(), btree, n.into());
+        c::bch2_btree_lost_data(fs.as_ptr(), msg.as_raw(), btree)
+    })?;
+    Ok(false)
+}
+
 /// @dev's pointers dropped from @k, a key at @level of @btree, and the key
 /// written back. One left with nothing to read is, for a btree node pointer,
 /// the node rewritten from memory if it's cached, or the pointer deleted and
@@ -68,28 +104,10 @@ pub fn bkey_drop_device_and_update(t: &TransAttempt<'_, '_>, btree: c::btree_id,
         if n.as_sc().can_read(fs) {
             return t.btree_node_update_key_at_pos(btree, level, n);
         }
-
-        let mut node_iter = BtreeNodeIter::new(t, btree, n.k().p, level + 1, level - 1, BtreeIterFlags::NOFILL);
-        match node_iter.peek_ref() {
-            Ok(b) => {
-                let b = b.expect("the node a btree node pointer points to");
-                return t.btree_node_rewrite(node_iter.iter(), b, 0, CommitOpts::new(), c::bch_write_flags::empty());
-            }
-            Err(e) if e.matches(bch_errcode::BCH_ERR_no_btree_node_nofill) => {}
-            Err(e) => return Err(e),
-        }
-
-        let mut del_iter = BtreeNodeIter::new(t, btree, n.k().p, 0, level, BtreeIterFlags::INTENT);
-        t.iter_traverse(del_iter.iter())?;
-        t.delete_at(del_iter.iter(), UpdateTriggerFlags::empty())?;
-
-        let mut msg = LogMsg::new(fs);
-        prt!(&mut msg, "btree node with no readable replicas, dropping pointer:\n{}", n.as_sc().to_text(fs));
-        // SAFETY: @n is in our transaction's memory
-        return ret_to_result_void(unsafe {
-            c::bch2_damage_note_lost_extents(fs.as_ptr(), btree, n.as_sc().into());
-            c::bch2_btree_lost_data(fs.as_ptr(), msg.as_raw(), btree)
-        });
+        // rw, so a cached node is written out now
+        return btree_ptr_unreadable(t, btree, level, n.as_sc(), |iter, b| {
+            t.btree_node_rewrite(iter, b, 0, CommitOpts::new(), c::bch_write_flags::empty())
+        }).map(|_| ());
     }
 
     if !n.as_sc().can_read(fs) {
@@ -328,9 +346,8 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
 
         // Data in a superblock bucket: every superblock write lands on it, so
         // it has been or will be overwritten - drop the pointer. If it was the
-        // last readable one, the next pass records the loss
-        // (no_valid_pointers_repair()). Seen after a resize freed the bucket
-        // holding a backup superblock (#785).
+        // last readable one, repair_ptrs() records the loss. Seen after a
+        // resize freed the bucket holding a backup superblock (#785).
         if bucket_type == dt::BCH_DATA_sb {
             return Ok(fix | PtrFix::DROP);
         }
@@ -357,14 +374,28 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
     Ok(fix)
 }
 
-/// @k, a key in @btree with nothing to read, rewritten without its triggers:
-/// a cached pointer that's still good made dirty, or if there's none, @k an
-/// error key. The rewrite is returned, to check in @k's place.
+/// @k, a key in @btree with nothing to read, rewritten without its triggers -
+/// no_valid_pointers_fix() - and returned, to check in @k's place.
 fn no_valid_pointers_repair<'a, 't>(t: &TransAttempt<'a, 't>, btree: c::btree_id, k: BkeySC<'_>)
     -> Result<TransBkey<'a, 't>, BchError>
 {
-    let fs = t.fs();
     let mut new = t.bkey_reassemble_room(k, KEY_ROOM)?;
+    no_valid_pointers_fix(t, btree, &mut new)?;
+
+    let mut iter = BtreeNodeIter::new(t, btree, new.k().p, 0, 0,
+                                      BtreeIterFlags::INTENT | BtreeIterFlags::ALL_SNAPSHOTS);
+    t.iter_traverse(iter.iter())?;
+    t.update(iter.iter(), &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::NORUN)?;
+    Ok(new)
+}
+
+/// @new, a key in @btree with nothing to read, repaired in place: a cached
+/// pointer that's still good made dirty, or if there's none, @new made an
+/// error key - the loss reported, and recorded against its file.
+fn no_valid_pointers_fix(t: &TransAttempt<'_, '_>, btree: c::btree_id, new: &mut TransBkey<'_, '_>)
+    -> Result<(), BchError>
+{
+    let fs = t.fs();
 
     // We can only flip a pointer from cached -> dirty without contortions
     // here, when we're also repairing alloc info - to do this at runtime we'd
@@ -400,12 +431,7 @@ fn no_valid_pointers_repair<'a, 't>(t: &TransAttempt<'a, 't>, btree: c::btree_id
 
         new.set_error(fs, c::bch_key_type_errors::KEY_TYPE_ERROR_no_valid_pointers_repair);
     }
-
-    let mut iter = BtreeNodeIter::new(t, btree, new.k().p, 0, 0,
-                                      BtreeIterFlags::INTENT | BtreeIterFlags::ALL_SNAPSHOTS);
-    t.iter_traverse(iter.iter())?;
-    t.update(iter.iter(), &new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::NORUN)?;
-    Ok(new)
+    Ok(())
 }
 
 fn check_fix_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: c::btree_id, level: u32, k: BkeySC<'_>)
@@ -470,8 +496,44 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: c::btree_i
         new.reborrow().arm::<Ptrs>().expect("a key with pointers").drop_ptrs_mask(fs, drop);
     }
 
+    // The drops can leave nothing to read - and no pointers at all is no
+    // valid key. An extent is repaired as one found that way would be. A
+    // btree node pointer's node is lost unless it's cached: then it's pinned
+    // there, its only copy, and rewritten once we're rw - a rewrite
+    // allocates, which gc, before journal replay, can't
+    if !new.as_sc().can_read(fs) {
+        if !new.k().is_btree_ptr() {
+            no_valid_pointers_fix(t, btree, &mut new)?;
+        } else if btree_ptr_unreadable(t, btree, level, new.as_sc(), |_, b| {
+            // SAFETY: a cached node, held by the iterator for the calls
+            unsafe {
+                c::bch2_node_pin(fs.as_ptr(), b.as_ptr());
+                c::bch2_async_btree_op(fs.as_ptr(), b.as_ptr(), c::async_btree_op::ASYNC_BTREE_rewrite);
+            }
+            Ok(())
+        })? {
+            let mut msg = LogMsg::new(fs);
+            prt!(&mut msg, "btree node with no readable replicas kept in cache, to be rewritten once rw:\n{}",
+                 new.as_sc().to_text(fs));
+        } else {
+            // gc commits the pointer's queued deletion, then restarts
+            return Ok(());
+        }
+    }
+
     let opts = get_io_opts(t, None, k)?;
     new.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
+
+    // A btree node pointer kept for its cached node, with no pointer left,
+    // gets one to BCH_SB_MEMBER_INVALID - which nothing reads or marks -
+    // until the node's rewrite replaces it. set_needs_reconcile() pads a key
+    // short of its replicas with those, but not a key at one replica
+    if new.as_sc().arm::<Ptrs>().is_some_and(|p| p.ptrs(fs).next().is_none()) {
+        let ptr = c::bch_extent_ptr::new().with_dev(c::BCH_SB_MEMBER_INVALID as u8);
+        let mut kp = new.reborrow().arm::<PtrsMut>().expect("a btree node pointer: entries to its end");
+        let end = kp.entries_end();
+        kp.insert_entry(end, &[ptr.into_bits().0]).expect("room for a pointer: the copy's made with it");
+    }
 
     // No triggers, at either level: gc owns alloc info and accounting here
     // and marks the new key itself when we restart. Transactional triggers
