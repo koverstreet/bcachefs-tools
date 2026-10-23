@@ -974,6 +974,10 @@ fn lookup_test(testname: &[u8]) -> Option<(&'static [u8], TestFn)> {
         (b"test_bkey_buf", test_bkey_buf),
         #[cfg(CONFIG_BCACHEFS_TESTS)]
         (b"test_cuckoo", cuckoo::test_cuckoo),
+        #[cfg(CONFIG_BCACHEFS_TESTS)]
+        (b"test_cuckoo_torture", cuckoo::test_cuckoo_torture),
+        #[cfg(CONFIG_BCACHEFS_TESTS)]
+        (b"test_cuckoo_bench", cuckoo::test_cuckoo_bench),
     ];
 
     TESTS.iter().copied().find(|(name, _)| testname == *name)
