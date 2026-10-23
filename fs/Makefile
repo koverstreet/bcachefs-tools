@@ -139,7 +139,6 @@ bcachefs-y		:=			\
 	util/printbuf.o				\
 	util/rcu.o				\
 	util/rcu_pending.o			\
-	util/siphash.o				\
 	util/six.o				\
 	util/time_stats.o			\
 	util/thread_with_file.o			\

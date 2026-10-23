@@ -17,6 +17,7 @@ use crate::snapshots::{snapshot, subvolume};
 use crate::util::ffi::Opaque;
 use crate::util::vstructs::{plain_bytes, plain_bytes_mut};
 use crate::util::os_str::OsStrExt;
+use crate::util::siphash::SipHash24;
 use crate::util::{Printbuf, ToText};
 use crate::util::log::LogMsg;
 use crate::{fsck_err, fsck_err_on, inode_fsck_err, prt};
@@ -61,7 +62,7 @@ pub type TableKey<'k, T> = BkeySC<'k, TableVal<T>>;
 enum StrHash {
     Crc32c(u32),
     Crc64(u64),
-    SipHash(c::SIPHASH_CTX),
+    SipHash(SipHash24),
 }
 
 impl StrHash {
@@ -75,9 +76,8 @@ impl StrHash {
             t if t == T::BCH_STR_HASH_crc64.0 => Self::Crc64(crc64_be(!0, &k0)),
             t if t == T::BCH_STR_HASH_siphash_old.0 ||
                  t == T::BCH_STR_HASH_siphash.0 => {
-                let mut ctx = c::SIPHASH_CTX::default();
-                unsafe { c::SipHash_Init(&mut ctx, &info.siphash_key) };
-                Self::SipHash(ctx)
+                let k = &info.siphash_key;
+                Self::SipHash(SipHash24::new(k.k0.get(), k.k1.get()))
             }
             t => panic!("bch_hash_info: str_hash type {t} isn't one"),
         }
@@ -87,9 +87,7 @@ impl StrHash {
         match self {
             Self::Crc32c(crc) => *crc = crc32c(*crc, data),
             Self::Crc64(crc) => *crc = crc64_be(*crc, data),
-            Self::SipHash(ctx) => unsafe {
-                c::SipHash_Update(ctx, 2, 4, data.as_ptr() as *const c_void, data.len())
-            },
+            Self::SipHash(h) => h.update(data),
         }
     }
 
@@ -98,7 +96,7 @@ impl StrHash {
         match self {
             Self::Crc32c(crc) => crc as u64,
             Self::Crc64(crc) => crc >> 1,
-            Self::SipHash(mut ctx) => unsafe { c::SipHash_End(&mut ctx, 2, 4) >> 1 },
+            Self::SipHash(h) => h.end() >> 1,
         }
     }
 }

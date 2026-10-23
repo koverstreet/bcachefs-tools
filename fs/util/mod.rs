@@ -26,6 +26,7 @@ pub mod printbuf;
 pub mod projections;
 pub mod rcu;
 pub mod rhashtable;
+pub mod siphash;
 pub mod sleep;
 pub mod strided;
 pub mod sysfs;
