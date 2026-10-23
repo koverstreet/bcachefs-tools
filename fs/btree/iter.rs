@@ -1932,10 +1932,10 @@ impl<'t> BtreeIter<'t> {
         unsafe { core::mem::zeroed() }
     }
 
-    /// The key pointing to @btree's root - none, if its root's below @level -
-    /// with this iterator initialized at it, and given back shared with the
-    /// key: bch2_btree_iter_peek_root(), for for_btree_root_key_at_level().
-    pub fn peek_root<'i>(&'i mut self, t: &TransAttempt<'_, 't>, btree: c::btree_id, level: u32)
+    /// The key pointing to @btree's root - none unless the root's just below
+    /// @level - with this iterator initialized at it, and given back shared
+    /// with the key: bch2_btree_iter_peek_root(), for BtreeLevels.
+    fn peek_root<'i>(&'i mut self, t: &TransAttempt<'_, 't>, btree: c::btree_id, level: u32)
         -> Result<Option<(&'i BtreeIter<'t>, BkeySC<'i>)>, BchError>
     {
         // SAFETY: the key, in the iterator's path, for as long as it's borrowed
@@ -2724,6 +2724,54 @@ impl<'t> BtreeNodeIter<'t> {
                 }
             }
         }
+    }
+}
+
+/// A btree's keys, level by level: at each of @levels, the keys from @start
+/// to @end. Above the leaves those are the pointers to the nodes a level
+/// below - and the root's comes first, if it's one of them. The root's
+/// pointer is in btree_root, not a node, so a walk of the level's keys alone
+/// misses it; taken first, a root that splits after is seen as its new root's
+/// keys. The root's is taken whatever @start and @end. Level 0 is the
+/// leaves', with no root key.
+pub struct BtreeLevels {
+    pub btree:  c::btree_id,
+    pub levels: core::ops::Range<u32>,
+    pub start:  bpos,
+    pub end:    bpos,
+}
+
+impl BtreeLevels {
+    /// Each key in an attempt of its own, committed after @f: as
+    /// for_each_max_commit(), @f told the level.
+    pub fn for_each_commit<'t, F>(
+        &self,
+        trans:    &'t BtreeTrans<'t>,
+        disk_res: Option<&DiskReservation<'_>>,
+        flags:    impl Into<CommitOpts>,
+        mut f:    F,
+    ) -> Result<(), BchError>
+    where
+        F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'t>, u32, BkeySC<'k>)
+            -> Result<(), BchError>,
+    {
+        let flags = flags.into();
+        let iter_flags = BtreeIterFlags::PREFETCH | BtreeIterFlags::NOT_EXTENTS | BtreeIterFlags::ALL_SNAPSHOTS;
+
+        for level in self.levels.clone() {
+            lockrestart_do(trans, |t| {
+                let mut iter = BtreeIter::uninit();
+                let Some((iter, k)) = iter.peek_root(t, self.btree, level)? else { return Ok(()) };
+                f(t, iter, level, k)?;
+                t.commit(disk_res, flags)
+            })?;
+
+            trans.begin_raw();
+            BtreeNodeIter::new(trans, self.btree, self.start, 0, level, iter_flags)
+                .iter()
+                .for_each_max_commit(trans, self.end, iter_flags, disk_res, flags, |t, iter, k| f(t, iter, level, k))?;
+        }
+        Ok(())
     }
 }
 

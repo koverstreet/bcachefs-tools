@@ -20,7 +20,7 @@ use crate::alloc::backpointers::{backpointer_get_key, backpointers_match, bp_rec
 use crate::alloc::buckets::DiskReservation;
 use crate::alloc::check_backpointers::check_bp_exists;
 use crate::btree::bkey::{bpos_ge, pos, BkeyI, BkeySC, BkeyV, POS_MIN};
-use crate::btree::iter::{commit_do, lockrestart_do, peek_parallel, BtreeIter, BtreeIterFlags, BtreeNodeIter,
+use crate::btree::iter::{commit_do, lockrestart_do, peek_parallel, BtreeIter, BtreeIterFlags, BtreeLevels,
                          BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
@@ -439,27 +439,13 @@ fn check_reconcile_work_btrees(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
         if fs.btree_id_root(btree).is_none() {
             continue;
         }
-        let btree = c::btree_id(btree);
-
-        for level in 1..c::BTREE_MAX_DEPTH {
-            lockrestart_do(trans, |t| {
-                let mut iter = BtreeIter::uninit();
-                let Some((iter, k)) = iter.peek_root(t, btree, level)? else { return Ok(()) };
-                assert!(k.k.is_btree_ptr(), "a btree root's key that isn't a btree pointer");
-
-                check_reconcile_work_btree_key(t, iter, level, k)?;
-                t.commit(Some(&res), NO_ENOSPC)
-            })?;
-
-            let mut node_iter = BtreeNodeIter::new(trans, btree, POS_MIN, 0, level,
-                                                   BtreeIterFlags::PREFETCH | BtreeIterFlags::NOT_EXTENTS |
-                                                   BtreeIterFlags::ALL_SNAPSHOTS);
-            node_iter.iter().for_each_commit(trans, Some(&res), NO_ENOSPC, |t, iter, k| {
-                res.put();
-                fs.recovery.progress.update(t, iter)?;
-                check_reconcile_work_btree_key(t, iter, level, k)
-            })?;
-        }
+        let ptrs = BtreeLevels { btree: c::btree_id(btree), levels: 1..c::BTREE_MAX_DEPTH,
+                                  start: POS_MIN, end: SPOS_MAX };
+        ptrs.for_each_commit(trans, Some(&res), NO_ENOSPC, |t, iter, level, k| {
+            res.put();
+            fs.recovery.progress.update(t, iter)?;
+            check_reconcile_work_btree_key(t, iter, level, k)
+        })?;
     }
     Ok(())
 }
