@@ -941,22 +941,11 @@ pub extern "C" fn bch2_inum_to_path(
     ret_to_c(inum_to_path(&unsafe { trans.attempt_in_progress() }, inum, out))
 }
 
-/// For C's ioctls: bch2_inum_to_path_in_subvol() - @inum's path from
-/// subvolume @stop_subvol's root, with INUM_TO_PATH_FAIL_ON_ERR an error if
-/// the walk can't get there.
-#[c_export]
-pub extern "C" fn bch2_inum_to_path_in_subvol(
-    trans:       &BtreeTrans<'_>,
-    inum:        c::subvol_inum,
-    stop_subvol: u32,
-    flags:       c_uint,
-    out:         &mut Printbuf,
-) -> c_int {
-    const INUM_TO_PATH_FAIL_ON_ERR: c_uint = 1 << 0;
-
-    ret_to_c(__inum_to_path(&unsafe { trans.attempt_in_progress() },
-                            inum.subvol as u32, inum.inum, 0,
-                            stop_subvol, flags & INUM_TO_PATH_FAIL_ON_ERR != 0, out))
+/// @inum's path from subvolume @stop_subvol's root: an error if the walk
+/// can't get there.
+pub fn inum_to_path_in_subvol(t: &TransAttempt<'_, '_>, inum: c::subvol_inum, stop_subvol: u32,
+                              out: &mut Printbuf) -> Result<(), BchError> {
+    __inum_to_path(t, inum.subvol as u32, inum.inum, 0, stop_subvol, true, out)
 }
 
 /// Print the path of inode @inum as seen in @snapshot: as

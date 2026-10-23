@@ -828,7 +828,7 @@ impl crate::util::vstructs::SelfSized for bch_ioctl_subvol_dirent {
  * Returns 0 on success (used == 0 means no more entries).
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_subvol_readdir {
     pub pos: u32,
     pub buf_size: u32,
@@ -852,7 +852,7 @@ pub struct bch_ioctl_subvol_readdir {
  * reachable from the fd, -ERANGE if the buffer is too small.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_subvol_to_path {
     pub subvolid: u32,
     pub buf_size: u32,

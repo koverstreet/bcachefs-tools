@@ -1281,15 +1281,6 @@ pub fn tree_lookup(t: &TransAttempt<'_, '_>, id: u32) -> Result<c::SnapshotTree,
         })
 }
 
-#[c_export]
-pub fn bch2_snapshot_tree_lookup(trans: &BtreeTrans<'_>, id: u32, s: &mut c::SnapshotTree) -> c_int {
-    // SAFETY: C looks up in the attempt it's in
-    match tree_lookup(&unsafe { trans.attempt_in_progress() }, id) {
-        Ok(v)  => { *s = v; 0 }
-        Err(e) => ret_to_c(Err(e)),
-    }
-}
-
 /// At an unused id, queued for the commit, for the caller to fill in.
 pub fn tree_create<'a, 't>(t: &TransAttempt<'a, 't>)
     -> Result<TransBkey<'a, 't, c::SnapshotTree>, BchError>

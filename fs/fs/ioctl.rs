@@ -8,13 +8,14 @@
 use core::mem::offset_of;
 use core::mem::size_of;
 use core::ops::ControlFlow;
+use crate::accounting;
 use crate::bch_warn;
 use crate::btree::bkey;
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, TransAttempt};
+use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, TransAttempt};
 use crate::btree_trans;
 use crate::c;
 use crate::dirent::{self, Dirent};
-use crate::errcode::BchError;
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::damage;
 use crate::namei;
@@ -22,6 +23,7 @@ use crate::snapshots::{snapshot, subvolume};
 use crate::util::Printbuf;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::ioctl::{UserArg, UserVstruct};
+use crate::util::kernel::{capable, Capability};
 use crate::util::os_str::OsStrExt;
 use crate::util::vstructs::{plain_bytes, Plain};
 use kernel::uaccess::{UserPtr, UserSlice};
@@ -352,4 +354,239 @@ where
     };
     user.write_at(offset_of!(Q, pos), &pos)?;
     user.write_at(offset_of!(Q, used), &r.out.used)
+}
+
+/*
+ * A file's subvolumes and snapshots: the subvolumes under the file's, a
+ * subvolume's path, and the file's snapshot tree - or any, for an admin.
+ * Paths come back relative: without inum_to_path()'s leading '/'.
+ */
+
+fn relative(path: &[u8]) -> &[u8] {
+    &path[path.iter().take_while(|&&b| b == b'/').count()..]
+}
+
+/// BCH_IOCTL_SUBVOLUME_LIST's: the subvolumes whose parent is @parent, the
+/// file's, by their paths from its root, as bch_ioctl_subvol_dirent entries -
+/// those @accessible says the caller may reach. The cursor is a subvolume
+/// id; a subvolume whose path can't be found is skipped.
+pub fn subvolume_list<A>(fs: &Fs, parent: u32, mut accessible: A,
+                         user: UserArg<c::bch_ioctl_subvol_readdir>) -> Result<(), BchError>
+where
+    A: FnMut(&TransAttempt<'_, '_>, c::subvol_inum, u32) -> Result<bool, BchError>,
+{
+    type Q = c::bch_ioctl_subvol_readdir;
+    let arg = user.read()?;
+    if arg.pad != 0 {
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_subvol_readdir_pad);
+    }
+
+    let mut out = Entries::new(arg.buf, arg.buf_size);
+    let mut cursor = arg.pos;
+    {
+        let trans = btree_trans!(fs);
+        let mut path = Printbuf::new();
+        let mut iter = BtreeIter::new(&trans, c::btree_id::subvolume_children,
+                                      bkey::pos(parent.into(), arg.pos.into()), BtreeIterFlags::PREFETCH);
+        iter.for_each(&trans, |t, _, k| {
+            if k.k.p.inode != u64::from(parent) {
+                return Ok(ControlFlow::Break(()));
+            }
+            let child = k.k.p.offset as u32;
+            let s = subvolume::get(t, child, true)?;
+            let root = c::subvol_inum { subvol: child.into(), inum: s.inode.get() };
+
+            let found = accessible(t, root, parent)? && {
+                path.reset();
+                match namei::inum_to_path_in_subvol(t, root, parent, &mut path) {
+                    Err(e) if !is_restart(&e) => false,
+                    r => { r?; true }
+                }
+            };
+
+            if found {
+                let otime = fs.time_to_timespec(s.otime.lo.get() as i64);
+                let hdr = |reclen| c::bch_ioctl_subvol_dirent {
+                    reclen,
+                    subvolid:        child,
+                    flags:           s.flags.get(),
+                    snapshot_parent: s.creation_parent.get(),
+                    otime_sec:       otime.tv_sec as u64,
+                    otime_nsec:      otime.tv_nsec as u32,
+                    ..Default::default()
+                };
+                if !out.emit(t, relative(path.as_bytes()), hdr)? {
+                    return Ok(ControlFlow::Break(()));
+                }
+            }
+            cursor = child.wrapping_add(1);
+            Ok(ControlFlow::Continue(()))
+        })?;
+    }
+
+    user.write_at(offset_of!(Q, pos), &cursor)?;
+    user.write_at(offset_of!(Q, used), &out.used)
+}
+
+/// BCH_IOCTL_SUBVOLUME_TO_PATH's: subvolume @subvolid's path from the
+/// filesystem's root, with its NUL; ERANGE if the buffer won't hold it.
+pub fn subvolume_to_path(fs: &Fs, user: UserArg<c::bch_ioctl_subvol_to_path>) -> Result<(), BchError> {
+    let arg = user.read()?;
+    if arg.buf_size == 0 {
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_subvol_to_path_no_buf);
+    }
+
+    let mut path = Printbuf::new();
+    {
+        let trans = btree_trans!(fs);
+        lockrestart_do(&trans, |t| {
+            path.reset();
+            let s = subvolume::get(t, arg.subvolid, false)?;
+            let root = c::subvol_inum { subvol: arg.subvolid.into(), inum: s.inode.get() };
+            namei::inum_to_path(t, root, &mut path)
+        })?;
+    }
+
+    let p = relative(path.as_bytes());
+    if p.len() + 1 > arg.buf_size as usize {
+        return Err(c::ERANGE.into());
+    }
+    let mut w = UserSlice::new(UserPtr::from_addr(arg.buf as usize), p.len() + 1).writer();
+    w.write_slice(p)?;
+    w.write_slice(&[0])?;
+    Ok(())
+}
+
+/// What a snapshot tree query answers besides its nodes: the tree, and how
+/// many nodes it has and were returned.
+struct SnapshotTreeReply {
+    tree:  c::SnapshotTree,
+    nr:    u32,
+    total: u32,
+}
+
+/*
+ * BCH_IOCTL_SNAPSHOT_TREE and _v2: the nodes of snapshot tree @tree_id - 0
+ * for the tree of @subvol, the file's; another is an admin's to ask - that
+ * aren't deleted, each with its accounting summed over the snapshotted
+ * btrees. @size of them are returned, @node_size bytes of each, at nodes(i):
+ * a v1 node is a prefix of a v2's. ERANGE if there were more, the reply
+ * written regardless.
+ */
+fn snapshot_tree(fs: &Fs, subvol: u32, tree_id: u32, size: u32, node_size: usize,
+                 nodes: impl Fn(u32) -> UserSlice,
+                 put: impl FnOnce(&SnapshotTreeReply) -> Result<(), BchError>) -> Result<(), BchError> {
+    if tree_id != 0 && !capable(Capability::SysAdmin) {
+        return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin);
+    }
+
+    let (tree_id, tree) = {
+        let trans = btree_trans!(fs);
+        lockrestart_do(&trans, |t| {
+            let tree_id = if tree_id != 0 {
+                tree_id
+            } else {
+                match fs.snapshots.tree(subvolume::get(t, subvol, false)?.snapshot.get()) {
+                    0  => return Err(c::ENOENT.into()),
+                    id => id,
+                }
+            };
+            Ok((tree_id, snapshot::tree_lookup(t, tree_id)?))
+        })?
+    };
+
+    let mut r = SnapshotTreeReply { tree, nr: 0, total: 0 };
+    {
+        let trans = btree_trans!(fs);
+        trans.write_buffer_flush_sync()?;
+
+        let mut iter = BtreeIter::new(&trans, c::btree_id::snapshots, bkey::POS_MIN,
+                                      BtreeIterFlags::PREFETCH);
+        iter.for_each(&trans, |t, _, k| {
+            let Some(s) = snapshot::val(k) else { return Ok(()) };
+            if s.tree() != tree_id || s.state_compat() == c::bch_snapshot_state::SNAPSHOT_STATE_deleted {
+                return Ok(());
+            }
+
+            let id = k.k.p.offset as u32;
+            let mut node = c::bch_ioctl_snapshot_node_v2 {
+                id,
+                parent:   s.parent(),
+                children: s.children(),
+                subvol:   s.subvol(),
+                flags:    s.flags.get(),
+                ..Default::default()
+            };
+            // summed as C did, wrapping: a corrupt counter is a wrong answer, not a panic
+            for v in accounting::snapshot_btrees(fs, id) {
+                node.nr_keys   = node.nr_keys.wrapping_add(v[0]);
+                node.key_bytes = node.key_bytes.wrapping_add(v[1]);
+                node.sectors   = node.sectors.wrapping_add(v[2]);
+            }
+
+            r.total += 1;
+            if r.nr < size {
+                t.unlock();
+                nodes(r.nr).writer().write_slice(&plain_bytes(&node)[..node_size])?;
+                r.nr += 1;
+            }
+            Ok(())
+        })?;
+    }
+
+    put(&r)?;
+    if size != 0 && size < r.total {
+        return Err(c::ERANGE.into());
+    }
+    Ok(())
+}
+
+/// BCH_IOCTL_SNAPSHOT_TREE's: see snapshot_tree().
+pub fn snapshot_tree_v1(fs: &Fs, subvol: u32, user: UserArg<c::bch_ioctl_snapshot_tree_query>)
+    -> Result<(), BchError>
+{
+    type Q = c::bch_ioctl_snapshot_tree_query;
+    const NODE: usize = size_of::<c::bch_ioctl_snapshot_node>();
+
+    let arg = user.read()?;
+    if arg.pad != 0 {
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_snapshot_tree_query_pad);
+    }
+
+    snapshot_tree(fs, subvol, arg.tree_id, arg.nr, NODE,
+        |i| user.bytes_at(offset_of!(Q, nodes) + i as usize * NODE, NODE),
+        |r| {
+            user.write_at(offset_of!(Q, master_subvol), &r.tree.master_subvol.get())?;
+            user.write_at(offset_of!(Q, root_snapshot), &r.tree.root_snapshot.get())?;
+            user.write_at(offset_of!(Q, nr), &r.nr)?;
+            user.write_at(offset_of!(Q, total), &r.total)
+        })
+}
+
+/// BCH_IOCTL_SNAPSHOT_TREE_v2's: see snapshot_tree().
+/// The node size is negotiated: the smaller of the caller's and ours, and
+/// ours returned first.
+pub fn snapshot_tree_v2(fs: &Fs, subvol: u32, user: UserArg<c::bch_ioctl_snapshot_tree_query_v2>)
+    -> Result<(), BchError>
+{
+    type Q = c::bch_ioctl_snapshot_tree_query_v2;
+    const NODE: usize = size_of::<c::bch_ioctl_snapshot_node_v2>();
+
+    let arg = user.read()?;
+    // a caller that doesn't say its node size can't be given nodes: we'd
+    // have to guess its stride
+    if arg.node_size == 0 {
+        return fs.throw(bch_errcode::BCH_ERR_EINVAL_snapshot_tree_query_pad);
+    }
+    let node_size = (arg.node_size as usize).min(NODE);
+    user.write_at(offset_of!(Q, node_size), &(NODE as u32))?;
+
+    snapshot_tree(fs, subvol, arg.tree_id, arg.nr, node_size,
+        |i| user.bytes_at(offset_of!(Q, nodes) + i as usize * node_size, node_size),
+        |r| {
+            user.write_at(offset_of!(Q, master_subvol), &r.tree.master_subvol.get())?;
+            user.write_at(offset_of!(Q, root_snapshot), &r.tree.root_snapshot.get())?;
+            user.write_at(offset_of!(Q, nr), &r.nr)?;
+            user.write_at(offset_of!(Q, total), &r.total)
+        })
 }

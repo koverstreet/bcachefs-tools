@@ -17,7 +17,7 @@ use crate::btree::iter::{commit_do, CommitFlags, TransAttempt};
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
 use crate::fs::Fs;
-use crate::ioctl::{get_damage, get_label, readdir_flags};
+use crate::ioctl::{get_damage, get_label, readdir_flags, snapshot_tree_v1, snapshot_tree_v2, subvolume_list, subvolume_to_path};
 use crate::init::chardev::ioctl_ret;
 use crate::init::damage;
 use crate::namei;
@@ -69,6 +69,7 @@ fn file_ioctl(file: &File, cmd: c_uint, user: UserPtr) -> Result<c_long, BchErro
     // SAFETY: an open file of ours: its inode's referenced while it's open
     let inode = unsafe { InodeInfo::from_inode((*file.as_ptr()).f_inode) };
     let fs = inode.fs();
+    let subvol = inode.inum().subvol as u32;
 
     match cmd {
         <FS_IOC_GETVERSION as Ioctl>::OPCODE =>
@@ -89,6 +90,17 @@ fn file_ioctl(file: &File, cmd: c_uint, user: UserPtr) -> Result<c_long, BchErro
             arg::<c::BCHFS_IOC_READDIR_FLAGS, _>(user, |a| readdir_flags(fs, dir, is_dir,
                 |t, n| path_accessible(t, idmap, n, dir), a))
         }
+        <c::BCH_IOCTL_SUBVOLUME_LIST as Ioctl>::OPCODE => {
+            let idmap = MntIdmap::of(file);
+            arg::<c::BCH_IOCTL_SUBVOLUME_LIST, _>(user, |a| subvolume_list(fs, subvol,
+                |t, root, parent| subvol_accessible(t, idmap, root, parent), a))
+        }
+        <c::BCH_IOCTL_SUBVOLUME_TO_PATH as Ioctl>::OPCODE =>
+            arg::<c::BCH_IOCTL_SUBVOLUME_TO_PATH, _>(user, |a| subvolume_to_path(fs, a)),
+        <c::BCH_IOCTL_SNAPSHOT_TREE as Ioctl>::OPCODE =>
+            arg::<c::BCH_IOCTL_SNAPSHOT_TREE, _>(user, |a| snapshot_tree_v1(fs, subvol, a)),
+        <c::BCH_IOCTL_SNAPSHOT_TREE_v2 as Ioctl>::OPCODE =>
+            arg::<c::BCH_IOCTL_SNAPSHOT_TREE_v2, _>(user, |a| snapshot_tree_v2(fs, subvol, a)),
         _ => {
             let ret = unsafe { __bch2_fs_file_ioctl(file.as_ptr(), cmd, user.as_mut_ptr() as c_ulong) };
             if ret < 0 { Err(BchError::from_raw(-ret as i32)) } else { Ok(ret) }
@@ -230,9 +242,6 @@ fn clear_damage(file: &File, inode: &InodeInfo<'_>) -> Result<(), BchError> {
 /// on each directory above that, up to @dir, which open() checked - the
 /// whole VFS stack. Not if the walk up doesn't get to @dir: a rename raced
 /// it, or an inode's gone.
-///
-/// The permissions are checked with the transaction unlocked: an ACL is
-/// read in a transaction of its own.
 fn path_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
                    n: c::subvol_inum, dir: c::subvol_inum) -> Result<bool, BchError> {
     let get = |inum| match InodeRef::get_trans(t, inum) {
@@ -256,9 +265,52 @@ fn path_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
         dirs.push(i, GFP_KERNEL)?;
     }
 
+    permitted(t, idmap, &dirs, c::MAY_READ)
+}
+
+/// Whether the caller may reach subvolume root @root from the root of its
+/// parent, @parent: MAY_EXEC on each directory of @parent's on the way. Not
+/// if the walk up from @root doesn't get there.
+fn subvol_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
+                     root: c::subvol_inum, parent: u32) -> Result<bool, BchError> {
+    let up = |i: &InodeRef| {
+        let info = i.info();
+        let bi = info.inode();
+        (bi.bi_subvol, bi.bi_parent_subvol, bi.bi_dir)
+    };
+
+    let (_, parent_sv, mut dir) = up(&InodeRef::get_trans(t, root)?);
+    if parent_sv == 0 {
+        return Err(c::EIO.into());
+    }
+
+    /*
+     * No loop detection yet: a bi_dir loop, from corruption, walks until
+     * memory runs out. bi_depth will make it cheap at runtime - every
+     * directory is deeper than its parent, so a step up that isn't
+     * shallower is the loop - but nothing checks it here yet.
+     */
+    let mut dirs: KVVec<InodeRef> = KVVec::new();
+    while dir != 0 {
+        let i = InodeRef::get_trans(t, c::subvol_inum { subvol: parent_sv.into(), inum: dir })?;
+        let (subvol, _, next) = up(&i);
+        dirs.push(i, GFP_KERNEL)?;
+        if subvol == parent {
+            return permitted(t, idmap, &dirs, c::MAY_EXEC);
+        }
+        dir = next;
+    }
+    Ok(false)
+}
+
+/// Whether the caller has @first on dirs[0] and MAY_EXEC on the rest, checked
+/// with the transaction unlocked: an ACL is read in a transaction of its own.
+fn permitted(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>, dirs: &[InodeRef], first: u32)
+    -> Result<bool, BchError>
+{
     t.unlock();
     for (k, i) in dirs.iter().enumerate() {
-        let mask = if k == 0 { c::MAY_READ } else { c::MAY_EXEC };
+        let mask = if k == 0 { first } else { c::MAY_EXEC };
         if !idmap.permission(&i.info(), mask) {
             return Ok(false);
         }
