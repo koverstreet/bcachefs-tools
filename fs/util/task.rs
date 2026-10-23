@@ -343,15 +343,16 @@ where
     F::Output: Send,
 {
     // SAFETY: 'static: it borrows nothing
-    Ok(unsafe { spawn_unstarted(Spawn::Thread(name), fut) }?.start())
+    Ok(unsafe { spawn_unstarted(Spawn::Thread { name, freezable: false }, fut) }?.start())
 }
 
 /// Where a spawned task's first polled, and resumed by a wake that hasn't
 /// said where: spawn()'s, or spawn_thread()'s.
 pub enum Spawn<'a> {
     Queue(&'a Queue),
-    /// A kthread of its own, named.
-    Thread(fmt::Arguments<'a>),
+    /// A kthread of its own, named; freezable, for a task that freezes in
+    /// place - see Kthread::set_freezable().
+    Thread { name: fmt::Arguments<'a>, freezable: bool },
 }
 
 /// A task made, to be started - or, dropped, discarded: its future dropped
@@ -397,7 +398,7 @@ where
 {
     let task = match at {
         Spawn::Queue(wq) => make(core::ptr::from_ref(wq) as usize, fut)?,
-        Spawn::Thread(name) => {
+        Spawn::Thread { name, freezable } => {
             let mut name_buf = Printbuf::new();
             write!(name_buf, "{name}");
 
@@ -406,7 +407,8 @@ where
             // if it's stopped unwoken, it doesn't touch it
             let thread = unsafe {
                 let h = &raw mut (*task).head.header;
-                c::bch2_kthread_create(Some(run_thread), h.cast(), name_buf.as_c_str().as_ptr().cast())
+                let run = if freezable { run_thread::<true> } else { run_thread::<false> };
+                c::bch2_kthread_create(Some(run), h.cast(), name_buf.as_c_str().as_ptr().cast())
             };
             match errptr_to_result(NonNull::new(thread).expect("kthread_create() gives a task or an error")) {
                 // SAFETY: just made, and nobody else has it
@@ -528,18 +530,24 @@ unsafe extern "C" fn run_work(work: *mut c::work_struct) {
 
 /// A task's kthread: runs it when it's dispatched here, till it's done -
 /// wherever that is. Holds a ref on it.
-unsafe extern "C" fn run_thread(data: *mut c_void) -> c_int {
+unsafe extern "C" fn run_thread<const FREEZABLE: bool>(data: *mut c_void) -> c_int {
     // Discarded, stopped before it was woken: the task's not ours to touch -
     // in userspace, a stopped kthread runs anyway
     if Kthread::should_stop() {
         return 0;
     }
+    let idle = if FREEZABLE {
+        Kthread::set_freezable();
+        Sleep::IDLE.freezable()
+    } else {
+        Sleep::IDLE
+    };
     // SAFETY: spawn_unstarted()'s, and our ref keeps it
     let h = unsafe { NonNull::new_unchecked(data.cast::<Header>()) };
     let hr = unsafe { h.as_ref() };
     loop {
         // woken by a dispatch here, or by the task completing
-        let Ok(go) = sleep_until(Sleep::IDLE, || {
+        let Ok(go) = sleep_until(idle, || {
             if hr.thread_go.swap(false, Ordering::AcqRel) {
                 Some(true)
             } else {

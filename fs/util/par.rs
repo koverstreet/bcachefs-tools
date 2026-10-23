@@ -18,8 +18,10 @@
 //! a job handed a scope of its own - is how it'd go.
 //!
 //! The join sleeps TASK_IDLE, without hung task warnings - as
-//! closure_sync_unbounded() does, what C's fan-outs mostly join with - and
-//! scope_freezable()'s is freezable too, for jobs that freeze in place.
+//! closure_sync_unbounded() does, what C's fan-outs mostly join with.
+//! scope_freezable() is for jobs that freeze in place: its join is
+//! freezable, and so are its kthreads (Kthread::set_freezable()); a
+//! workqueue's workers are as the queue is, WQ_FREEZABLE.
 //!
 //! A job can't borrow its caller's transaction - BtreeTrans isn't Sync - so
 //! each gets its own, as C's workers do.
@@ -59,11 +61,12 @@ enum Job {
 
 /// The body's: not Sync - only the body spawns.
 pub struct Scope<'scope, 'env: 'scope> {
-    backend: Backend<'env>,
+    backend:   Backend<'env>,
+    freezable: bool,
     /// What the body's spawned, in order.
-    jobs:    RefCell<KVVec<Job>>,
-    scope:   PhantomData<&'scope mut &'scope ()>,
-    env:     PhantomData<&'env mut &'env ()>,
+    jobs:      RefCell<KVVec<Job>>,
+    scope:     PhantomData<&'scope mut &'scope ()>,
+    env:       PhantomData<&'env mut &'env ()>,
 }
 
 /// Run @f, which spawns jobs on @backend that may borrow what outlives the
@@ -76,8 +79,8 @@ where
     run_scope(backend, false, f)
 }
 
-/// scope(), the join freezable: for jobs that freeze in place, whose caller
-/// must too.
+/// scope(), for jobs that freeze in place: their kthreads freezable, and the
+/// join, as their caller must be too.
 pub fn scope_freezable<'env, F>(backend: Backend<'env>, f: F) -> Ret
 where
     F: for<'scope> FnOnce(&'scope Scope<'scope, 'env>) -> Ret,
@@ -91,6 +94,7 @@ where
 {
     let scope = Scope {
         backend,
+        freezable,
         jobs:  RefCell::new(KVVec::new()),
         scope: PhantomData,
         env:   PhantomData,
@@ -130,7 +134,10 @@ impl<'scope, 'env> Scope<'scope, 'env> {
         // drops every job before 'scope ends; the queue is 'env's
         let job = unsafe {
             match self.backend {
-                Backend::Kthreads => spawn_unstarted(Spawn::Thread(name), async move { f() })?,
+                Backend::Kthreads => {
+                    let thread = Spawn::Thread { name, freezable: self.freezable };
+                    spawn_unstarted(thread, async move { f() })?
+                }
                 Backend::Workqueue(wq) => {
                     let desc = worker_desc(name);
                     spawn_unstarted(Spawn::Queue(wq), async move {

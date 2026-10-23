@@ -84,6 +84,16 @@ impl Kthread {
         unsafe { c::bch2_kthread_should_stop() }
     }
 
+    /// Make the current kthread one the freezer stops, as set_freezable():
+    /// it's frozen in place in a freezable sleep (Sleep::freezable()), so
+    /// every long sleep it does must be one, or it holds up suspend.
+    /// Userspace has no freezer.
+    pub fn set_freezable() {
+        // SAFETY: of the current task
+        #[cfg(kernel)]
+        let _ = unsafe { c::set_freezable() };
+    }
+
     /// Tell it to stop, and wait for it to: kthread_stop(). It may have
     /// returned already, or never have run.
     pub fn stop(self) {}
