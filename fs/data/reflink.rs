@@ -463,10 +463,15 @@ pub fn bch2_reflink_p_merge(_c: &Opaque<c::bch_fs>, mut l: BkeyS<'_>, r: BkeySC<
 
 // ── indirect extents ─────────────────────────────────────────────────────
 
-fn reflink_v_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+/// Either kind: reflink_ps' indices are offsets in inode 0, so nothing past it
+/// can be referenced - and gc's table, built in key order, is in offset order.
+fn indirect_pos_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     bkey_fsck_err_on!(v, bkey_gt(v.k.k.p, pos(0, c::ReflinkP::IDX_MAX)), id::reflink_v_pos_bad,
-                      "indirect extent above maximum position 0:{}", c::ReflinkP::IDX_MAX)?;
+                      "indirect extent above maximum position 0:{}", c::ReflinkP::IDX_MAX)
+}
 
+fn reflink_v_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
+    indirect_pos_validate(v)?;
     crate::data::ptrs::bkey_ptrs_validate(v)
 }
 
@@ -499,9 +504,9 @@ pub fn bch2_reflink_v_merge(c: &Opaque<c::bch_fs>, l: BkeyS<'_>, r: BkeySC<'_>) 
 // ── indirect inline data ─────────────────────────────────────────────────
 
 #[c_export]
-pub fn bch2_indirect_inline_data_validate(_c: &Opaque<c::bch_fs>, _k: BkeySC<'_>,
-                                          _from: &c::bkey_validate_context) -> c_int {
-    0
+pub fn bch2_indirect_inline_data_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>,
+                                          from: &c::bkey_validate_context) -> c_int {
+    ret_to_c(indirect_pos_validate(&BkeyValidate { fs: Fs::from_c(c), k, from }))
 }
 
 #[cold]
