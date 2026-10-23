@@ -24,6 +24,7 @@ use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::namei::inum_snapshot_to_path;
 use crate::fs::Fs;
+use crate::locking::Lock;
 use crate::sb::counters::events;
 use crate::util::Printbuf;
 use crate::bch_err;
@@ -183,11 +184,91 @@ impl ScanCookie {
     }
 }
 
+// ── Option changes in flight ─────────────────────────────────────────────
+//
+// An option change brackets itself with requests - pre and post - so writers'
+// triggers re-derive their keys' reconcile state as the new option lands. A
+// pass that scans while the change is half applied must not complete the
+// cookie: on the error path nothing requests it again. So pre registers the
+// cookie, then requests it, and the reconcile thread doesn't start a scan
+// whose cookie is registered; a pass that started before can't complete it
+// either, the request having moved its generation. The registrations are the
+// change's, dropped when it's done (OptChange).
+//
+// One change at a time - each holds opt_change_lock - so they're the cookies
+// of that one, OPT_CHANGE_SCANS_MAX at most; one cookie twice, from a
+// change that requests it for two options, is two.
+
+/// The most scans one option change requests.
+const OPT_CHANGE_SCANS_MAX: usize = 4;
+
+/// The scans the option change in progress has requested, by cookie.
+pub struct OptChangeScans {
+    nr:      usize,
+    cookies: [u64; OPT_CHANGE_SCANS_MAX],
+}
+
+impl OptChangeScans {
+    pub const fn new() -> Self {
+        OptChangeScans { nr: 0, cookies: [0; OPT_CHANGE_SCANS_MAX] }
+    }
+}
+
+impl Fs {
+    /// An option change is about to change what @scan covers: registered,
+    /// then requested, so writers re-derive against the new option as it
+    /// lands.
+    pub fn opt_change_scan_pre(&self, scan: c::reconcile_scan) -> Result<(), BchError> {
+        Lock::from_c(&self.opt_change_lock).assert_held();
+        {
+            let mut s = self.reconcile.opt_change_scans.lock();
+            assert!(s.nr < OPT_CHANGE_SCANS_MAX, "an option change requesting more than {OPT_CHANGE_SCANS_MAX} scans");
+            let nr = s.nr;
+            s.cookies[nr] = scan.cookie();
+            s.nr += 1;
+        }
+        let trans = crate::btree_trans!(self);
+        commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| t.request_scan(scan))
+    }
+
+    /// The option change has landed: @scan requested again, now against the
+    /// new option, and reconcile kicked - even if the request failed. Its
+    /// registration is dropped with the change, not here.
+    pub fn opt_change_scan_post(&self, scan: c::reconcile_scan) -> Result<(), BchError> {
+        let trans = crate::btree_trans!(self);
+        let ret = commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| t.request_scan(scan));
+        self.reconcile_wakeup();
+        ret
+    }
+
+    /// The option change is done, landed or not: OptChange's drop.
+    pub fn opt_change_scans_done(&self) {
+        self.reconcile.opt_change_scans.lock().nr = 0;
+    }
+
+    /// Whether the option change in progress has requested the scan of
+    /// @cookie: the reconcile thread doesn't start it.
+    pub fn scan_in_flight(&self, cookie: u64) -> bool {
+        let s = self.reconcile.opt_change_scans.lock();
+        s.cookies[..s.nr].contains(&cookie)
+    }
+}
+
 // ── C's, until work.c converts ───────────────────────────────────────────
 
 #[c_export]
-pub fn bch2_reconcile_scan_cookie(s: c::reconcile_scan) -> u64 {
-    s.cookie()
+pub fn bch2_set_reconcile_needs_scan_pre(c: &Fs, s: c::reconcile_scan) -> c_int {
+    ret_to_c(c.opt_change_scan_pre(s))
+}
+
+#[c_export]
+pub fn bch2_set_reconcile_needs_scan_post(c: &Fs, s: c::reconcile_scan) -> c_int {
+    ret_to_c(c.opt_change_scan_post(s))
+}
+
+#[c_export]
+pub fn bch2_reconcile_scan_in_flight(c: &Fs, cookie: u64) -> bool {
+    c.scan_in_flight(cookie)
 }
 
 #[c_export]
@@ -199,14 +280,6 @@ pub fn bch2_reconcile_scan_decode(c: &Fs, cookie: u64) -> c::reconcile_scan {
 #[c_export]
 pub fn bch2_reconcile_scan_to_text(out: &mut Printbuf, c: &Fs, s: c::reconcile_scan) {
     s.to_text(out, c)
-}
-
-/// # Safety
-/// C has an attempt in progress on @trans.
-#[c_export]
-pub unsafe fn bch2_set_reconcile_needs_scan_trans(trans: &BtreeTrans<'_>, s: c::reconcile_scan) -> c_int {
-    // SAFETY: the caller's
-    ret_to_c(unsafe { trans.attempt_in_progress() }.request_scan(s))
 }
 
 #[c_export]

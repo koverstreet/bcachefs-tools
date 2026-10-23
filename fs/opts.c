@@ -597,16 +597,15 @@ __cold void bch2_opts_to_text(struct printbuf *out,
 	}
 }
 
-static int reconcile_scan_bracket(struct bch_fs *c, struct reconcile_scan s, bool post,
-				  struct opt_change_scope *scope)
+static int reconcile_scan_bracket(struct bch_fs *c, struct reconcile_scan s, bool post)
 {
 	return post
 		? bch2_set_reconcile_needs_scan_post(c, s)
-		: bch2_set_reconcile_needs_scan_pre(c, s, scope);
+		: bch2_set_reconcile_needs_scan_pre(c, s);
 }
 
 static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_opt_id id,
-		       u64 v, bool post, struct opt_change_scope *scope)
+		       u64 v, bool post)
 {
 	if (!test_bit(BCH_FS_started, &c->flags))
 		return 0;
@@ -626,14 +625,14 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 			.inum = inum,
 		};
 
-		try(reconcile_scan_bracket(c, s, post, scope));
+		try(reconcile_scan_bracket(c, s, post));
 		break;
 	}
 	case Opt_metadata_target:
 	case Opt_metadata_checksum:
 	case Opt_metadata_replicas:
 		try(reconcile_scan_bracket(c,
-			(struct reconcile_scan) { .type = RECONCILE_SCAN_metadata }, post, scope));
+			(struct reconcile_scan) { .type = RECONCILE_SCAN_metadata }, post));
 		break;
 	case Opt_durability:
 		if (!post && v > ca->mi.durability)
@@ -641,7 +640,7 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 				(struct reconcile_scan) { .type = RECONCILE_SCAN_pending}, false));
 
 		try(reconcile_scan_bracket(c,
-			(struct reconcile_scan) { .type = RECONCILE_SCAN_device, .device = ca->dev_idx }, post, scope));
+			(struct reconcile_scan) { .type = RECONCILE_SCAN_device, .device = ca->dev_idx }, post));
 		break;
 	case Opt_ec_max_data_blocks:
 		/*
@@ -651,7 +650,7 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 		 * target.
 		 */
 		try(reconcile_scan_bracket(c,
-			(struct reconcile_scan) { .type = RECONCILE_SCAN_stripes }, post, scope));
+			(struct reconcile_scan) { .type = RECONCILE_SCAN_stripes }, post));
 		break;
 	case Opt_label:
 	case Opt_failure_domain:
@@ -671,10 +670,10 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 		 */
 		if (id == Opt_label) {
 			try(reconcile_scan_bracket(c,
-				(struct reconcile_scan) { .type = RECONCILE_SCAN_pending }, post, scope));
+				(struct reconcile_scan) { .type = RECONCILE_SCAN_pending }, post));
 			/* Data on the device may now be outside its target. */
 			try(reconcile_scan_bracket(c,
-				(struct reconcile_scan) { .type = RECONCILE_SCAN_device, .device = ca->dev_idx }, post, scope));
+				(struct reconcile_scan) { .type = RECONCILE_SCAN_device, .device = ca->dev_idx }, post));
 		}
 		break;
 	default:
@@ -685,7 +684,7 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 }
 
 int bch2_opt_hook_pre_set(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_opt_id id, u64 v,
-			  bool change, struct opt_change_scope *scope)
+			  bool change)
 {
 	switch (id) {
 	case Opt_state:
@@ -718,7 +717,7 @@ int bch2_opt_hook_pre_set(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum b
 	}
 
 	if (change)
-		try(opt_hook_io(c, ca, inum, id, v, false, scope));
+		try(opt_hook_io(c, ca, inum, id, v, false));
 
 	return 0;
 }
@@ -726,7 +725,7 @@ int bch2_opt_hook_pre_set(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum b
 int bch2_opts_hooks_pre_set(struct bch_fs *c)
 {
 	for (unsigned i = 0; i < bch2_opts_nr; i++)
-		try(bch2_opt_hook_pre_set(c, NULL, 0, i, bch2_opt_get_by_id(&c->opts, i), false, NULL));
+		try(bch2_opt_hook_pre_set(c, NULL, 0, i, bch2_opt_get_by_id(&c->opts, i), false));
 
 	return 0;
 }
@@ -745,7 +744,7 @@ void bch2_opt_hook_post_set(struct bch_fs *c, struct bch_dev *ca, u64 inum,
 		bch2_fs_log_msg(c, "%s", buf.buf);
 	}
 
-	opt_hook_io(c, ca, inum, id, v, true, NULL);
+	opt_hook_io(c, ca, inum, id, v, true);
 
 	switch (id) {
 	case Opt_reconcile_enabled:

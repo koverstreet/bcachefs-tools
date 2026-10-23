@@ -760,6 +760,8 @@ pub struct Fs {
     pub(crate) lost_extents_ranges: rust_only!(Lock<c::mutex, crate::util::alloc::KVVec<core::ops::Range<c::bpos>>>),
 
     pub compress: c::bch_fs_compress,
+    #[pin]
+    #[init(c::bch_fs_reconcile::init())]
     pub reconcile: c::bch_fs_reconcile,
     pub copygc: c::bch_fs_copygc,
     pub ec: c::bch_fs_ec,

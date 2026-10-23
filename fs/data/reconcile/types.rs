@@ -3,12 +3,17 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::c_default;
+use crate::data::reconcile::scan::OptChangeScans;
+use crate::locking::Lock;
+use crate::new_lock;
+use crate::types::{RustOnly, rust_only};
 use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, TypeInfo};
+use cstruct_macros::{CStruct, Init, TypeInfo};
+use pin_init::pin_data;
 
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_reconcile {
     #[c("struct task_struct __rcu *thread")]
     pub thread: *mut c::task_struct,
@@ -34,10 +39,13 @@ pub struct bch_fs_reconcile {
     pub scan_end: c::bbpos,
     pub scan_stats: c::bch_move_stats,
 
-    /* In-flight opt changes - see bch2_set_reconcile_needs_scan_pre/post() */
-    pub scans_in_flight: c::rhashtable,
-    pub scans_in_flight_init_done: bool,
-    pub scans_in_flight_lock: c::mutex,
+    /*
+     * The scans the option change in progress has requested: the reconcile
+     * thread doesn't start one of these - see data/reconcile/scan.rs
+     */
+    #[pin]
+    #[init(RustOnly::new(new_lock!(OptChangeScans::new())))]
+    pub(crate) opt_change_scans: rust_only!(Lock<c::spinlock_t, OptChangeScans>),
 
     /*
      * Stripes whose repair failed in a way only a change elsewhere can fix
@@ -57,4 +65,3 @@ pub struct bch_fs_reconcile {
     #[cfg(CONFIG_POWER_SUPPLY)]
     pub power_notifier: c::notifier_block,
 }
-c_default!(bch_fs_reconcile);

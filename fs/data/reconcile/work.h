@@ -8,20 +8,7 @@
 #include "data/reconcile/work_gen.h"
 #include "data/reconcile/scan_gen.h"
 
-static inline struct opt_change_scope bch2_opt_change_scope_init(struct bch_fs *c)
-{
-	return (struct opt_change_scope) { .c = c };
-}
-
-DEFINE_CLASS(opt_change_scope, struct opt_change_scope,
-	     bch2_opt_change_scope_exit(&_T),
-	     bch2_opt_change_scope_init(c),
-	     struct bch_fs *c);
-
 extern const char * const bch2_reconcile_work_ids[];
-
-int bch2_set_reconcile_needs_scan_pre(struct bch_fs *, struct reconcile_scan, struct opt_change_scope *);
-int bch2_set_reconcile_needs_scan_post(struct bch_fs *, struct reconcile_scan);
 
 static inline void bch2_reconcile_wakeup(struct bch_fs *c)
 {

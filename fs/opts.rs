@@ -285,19 +285,18 @@ impl c::bch_opt_id {
 
 // ── Changing options ─────────────────────────────────────────────────────
 
-/// An option change in progress: the option change lock held, and the scope
-/// the pre-set hooks record what the change needs into. Both are released on
-/// drop, the scope first.
+/// An option change in progress: the option change lock held, and the scans
+/// its pre-set hooks request registered as in flight - the reconcile thread
+/// doesn't start them (data/reconcile/scan.rs). Both are released on drop,
+/// the registrations first.
 pub struct OptChange<'f> {
-    fs:    &'f Fs,
-    scope: c::opt_change_scope,
+    fs: &'f Fs,
 }
 
 impl<'f> OptChange<'f> {
     pub fn new(fs: &'f Fs) -> Self {
         unsafe { c::bch2_opt_change_lock(fs.as_ptr()) };
-        // bch2_opt_change_scope_init(), a static inline:
-        OptChange { fs, scope: c::opt_change_scope { c: fs.as_ptr(), ..Default::default() } }
+        OptChange { fs }
     }
 
     /// Before setting option @id to @v - for device @ca, or inode @inum, or
@@ -307,7 +306,7 @@ impl<'f> OptChange<'f> {
         -> Result<(), BchError>
     {
         ret_to_result(unsafe {
-            c::bch2_opt_hook_pre_set(self.fs.as_ptr(), dev_ptr(ca), inum, id, v, true, &mut self.scope)
+            c::bch2_opt_hook_pre_set(self.fs.as_ptr(), dev_ptr(ca), inum, id, v, true)
         })
     }
 
@@ -338,9 +337,7 @@ impl<'f> OptChange<'f> {
 
 impl Drop for OptChange<'_> {
     fn drop(&mut self) {
-        unsafe {
-            c::bch2_opt_change_scope_exit(&mut self.scope);
-            c::bch2_opt_change_unlock(self.fs.as_ptr());
-        }
+        self.fs.opt_change_scans_done();
+        unsafe { c::bch2_opt_change_unlock(self.fs.as_ptr()) };
     }
 }

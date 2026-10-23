@@ -295,7 +295,7 @@ impl Fs {
         ret_to_result(unsafe {
             c::bch2_opt_hook_pre_set(self.as_ptr(),
                 dev.map_or(core::ptr::null_mut(), |d| d.as_mut_ptr()),
-                0, id, v, true, core::ptr::null_mut())
+                0, id, v, true)
         })
     }
 

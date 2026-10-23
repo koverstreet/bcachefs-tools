@@ -5,11 +5,10 @@
 use crate::cstructs::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
-use crate::types::c_default;
 use crate::util::ffi::c_char;
 use crate::util::Printbuf;
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, TypeInfo, c_const, c_enum, c_extern, c_typedef, c_xmacro, tagged_union};
+use cstruct_macros::{CStruct, TypeInfo, c_enum, c_extern, c_typedef, c_xmacro, tagged_union};
 
 c_xmacro! {
     RECONCILE_SCAN_TYPES(x) {
@@ -60,31 +59,8 @@ tagged_union! {
     }
 }
 
-c_const! {
-    /* No opt change touches more than one bracketed reconcile scan today: */
-    #[c_int]
-    pub const BCH_OPT_CHANGE_SCANS_MAX: u32 = 4;
-}
-
-/*
- * The reconcile-scan cookies an opt change registered as in-flight - see
- * bch2_set_reconcile_needs_scan_pre(). Constructed empty, populated by
- * bch2_opt_hook_pre_set(); the destructor unregisters them, so an opt change
- * that errors out (or never reaches bch2_opt_hook_post_set()) doesn't leak a
- * registration and wedge the reconcile thread on that cookie.
- */
-#[repr(C)]
-#[derive(Clone, Copy, CStruct)]
-pub struct opt_change_scope {
-    pub c: *mut c::bch_fs,
-    pub nr: c_uint,
-    pub cookies: [u64; c::BCH_OPT_CHANGE_SCANS_MAX as usize],
-}
-c_default!(opt_change_scope);
-
 c_extern! {
     pub static bch2_reconcile_opts: [*const c_char; 0];
-    pub fn bch2_opt_change_scope_exit(scope: *mut c::opt_change_scope);
     pub fn rust_bch2_reconcile_wakeup(c: *mut c::bch_fs);
     pub fn bch2_reconcile_status_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
     pub fn bch2_reconcile_scan_pending_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);

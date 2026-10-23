@@ -816,8 +816,7 @@ c_extern! {
     pub fn bch2_opt_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, sb: *mut Head<c::bch_sb>,
                             opt: *const c::bch_option, v: u64, flags: c_uint);
     pub fn bch2_opt_hook_pre_set(c: *mut c::bch_fs, ca: *mut c::bch_dev, inum: u64,
-                                 id: c::bch_opt_id, v: u64, change: bool,
-                                 scope: *mut c::opt_change_scope) -> c_int;
+                                 id: c::bch_opt_id, v: u64, change: bool) -> c_int;
     pub fn bch2_opt_hook_post_set(c: *mut c::bch_fs, ca: *mut c::bch_dev, inum: u64,
                                   id: c::bch_opt_id, v: u64);
     pub fn bch2_parse_mount_opts(c: *mut c::bch_fs, opts: *mut c::bch_opts,
