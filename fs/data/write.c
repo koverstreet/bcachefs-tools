@@ -1585,11 +1585,16 @@ static void init_append_extent(struct bch_write_op *op,
 {
 	struct bch_fs *c = op->c;
 
-	op->pos.offset += crc.uncompressed_size;
+	/*
+	 * The key covers the crc's live data, not all of it: an extent that won't
+	 * decompress is written as is, untrimmed - its crc's offset and
+	 * uncompressed size still those of the whole extent it was cut from:
+	 */
+	op->pos.offset += crc.live_size;
 
 	struct bkey_i_extent *e = bkey_extent_init(op->insert_keys.top);
 	e->k.p		= op->pos;
-	e->k.size	= crc.uncompressed_size;
+	e->k.size	= crc.live_size;
 	e->k.bversion	= version;
 
 	if (crc.csum_type ||
