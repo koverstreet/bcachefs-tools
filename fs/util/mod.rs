@@ -29,6 +29,7 @@ pub mod rcu;
 pub mod rhashtable;
 pub mod siphash;
 pub mod sleep;
+pub mod sort;
 pub mod strided;
 pub mod sysfs;
 pub mod task;

@@ -188,36 +188,24 @@ struct wb_maybe_flush;
 #include "alloc/backpointers_gen.h"
 #include "alloc/check_backpointers_gen.h"
 
-DEFINE_CLASS(backpointer_scan_iter, struct bp_scan_iter,
-	     darray_exit(&_T.bps),
-	     ((struct bp_scan_iter) { .btree = btree, .pos = pos, .progress = progress }),
-	     enum btree_id btree, struct bpos pos, struct progress_indicator *progress)
-
-struct bkey_s_c_backpointer bch2_bp_scan_iter_peek(struct btree_trans *, struct bp_scan_iter *,
-						   struct bpos, struct wb_maybe_flush *);
-
-static inline void bch2_bp_scan_iter_advance(struct bp_scan_iter *iter)
-{
-	BUG_ON(!iter->bps.nr);
-	--iter->bps.nr;
-}
-
 #define backpointer_scan_for_each(_trans, _bp_iter, _btree, _start, _end,			\
 				  _last_flushed, _progress, _bp, _do)				\
 ({												\
-	CLASS(backpointer_scan_iter, _bp_iter)(_btree, _start, _progress);			\
+	struct bp_scan_iter _bp_iter __cleanup(bch2_bp_scan_iter_exit);			\
+	bch2_bp_scan_iter_init(&_bp_iter, _btree, _start, _progress);				\
 	int _ret3 = 0;										\
 												\
 	while (true) {										\
 		u32 _restart_count = bch2_trans_begin(_trans);					\
 		_ret3 = 0;									\
 												\
-		struct bkey_s_c_backpointer _bp =						\
+		struct bkey_s_c _k =								\
 			bch2_bp_scan_iter_peek(_trans, &_bp_iter, _end, _last_flushed);		\
-		if (!_bp.k)									\
+		if (!_k.k)									\
 			break;									\
 												\
-		_ret3 = bkey_err(_bp) ?: (_do);							\
+		struct bkey_s_c_backpointer _bp = bkey_s_c_to_backpointer(_k);			\
+		_ret3 = bkey_err(_k) ?: (_do);							\
 		if (bch2_err_matches(_ret3, BCH_ERR_transaction_restart))			\
 			continue;								\
 		if (_ret3)									\
