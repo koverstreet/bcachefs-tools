@@ -682,10 +682,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     /// Drop the btree locks for @f - to block, sleep, do IO - and take them
-    /// back: C's drop_locks_do(). A restart if they changed hands meanwhile;
-    /// transaction_restart_nested, not relocked, if @f ran attempts of its
-    /// own, which end this one. @f's error is returned with the locks still
-    /// dropped.
+    /// back, relock_or_nested(): C's drop_locks_do(). @f's error is returned
+    /// with the locks still dropped.
     ///
     /// A key peeked before is good after only if this succeeds - a relock
     /// fails if a node's lock changed hands - and not inside @f at all.
@@ -693,11 +691,19 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn drop_locks_do<T>(&self, f: impl FnOnce() -> Result<T, BchError>) -> Result<T, BchError> {
         self.unlock();
         let v = f()?;
+        self.relock_or_nested()?;
+        Ok(v)
+    }
+
+    /// Retake the locks after what dropped them - drop_locks_do()'s @f, or a
+    /// call that drops them itself: a restart if they changed hands, or
+    /// transaction_restart_nested, not relocked, if it ran attempts of its
+    /// own, which end this one.
+    pub fn relock_or_nested(&self) -> Result<(), BchError> {
         if self.trans.restart_count() != self.restart_count {
             return Err(BchError::from(bch_errcode::BCH_ERR_transaction_restart_nested));
         }
-        self.relock()?;
-        Ok(v)
+        self.relock()
     }
 
     /// What @alloc makes: tried GFP_NOWAIT, the locks held, and on ENOMEM
