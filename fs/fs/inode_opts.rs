@@ -181,7 +181,7 @@ impl c::bch_inode_opts {
             self.background_target = self.foreground_target;
             self.set_background_target_from_inode(self.foreground_target_from_inode());
         }
-        if self.background_compression == 0 {
+        if self.background_compression == 0 && !self.background_compression_from_inode() {
             self.background_compression = self.compression;
             self.set_background_compression_from_inode(self.compression_from_inode());
         }
@@ -189,10 +189,15 @@ impl c::bch_inode_opts {
             self.erasure_code = 0;
         }
         if self.nocow != 0 {
+            let from_inode = self.nocow_from_inode();
             self.compression = 0;
             self.background_compression = 0;
             self.data_checksum = 0;
             self.erasure_code = 0;
+            self.set_compression_from_inode(from_inode);
+            self.set_background_compression_from_inode(from_inode);
+            self.set_data_checksum_from_inode(from_inode);
+            self.set_erasure_code_from_inode(from_inode);
         }
         /* We currently only support up to RAID6: */
         if self.erasure_code != 0 {

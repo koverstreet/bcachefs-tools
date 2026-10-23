@@ -109,7 +109,7 @@ static inline void bch2_io_opts_fixups(struct bch_inode_opts *opts)
 		opts->background_target = opts->foreground_target;
 		opts->background_target_from_inode = opts->foreground_target_from_inode;
 	}
-	if (!opts->background_compression) {
+	if (!opts->background_compression && !opts->background_compression_from_inode) {
 		opts->background_compression = opts->compression;
 		opts->background_compression_from_inode = opts->compression_from_inode;
 	}
@@ -119,6 +119,10 @@ static inline void bch2_io_opts_fixups(struct bch_inode_opts *opts)
 		opts->compression = opts->background_compression = 0;
 		opts->data_checksum = 0;
 		opts->erasure_code = 0;
+		opts->compression_from_inode =
+			opts->background_compression_from_inode =
+			opts->data_checksum_from_inode =
+			opts->erasure_code_from_inode = opts->nocow_from_inode;
 	}
 	/* We currently only support up to RAID6: */
 	if (opts->erasure_code)
