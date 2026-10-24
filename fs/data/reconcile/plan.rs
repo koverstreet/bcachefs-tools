@@ -46,9 +46,10 @@
 //!
 //! # Masks
 //!
-//! A pointer's bit in ptrs_kill and ptrs_kill_ec is its index among the key's
-//! pointers. The masks are u8s, as data_update_opts' are: a pointer past the
-//! eighth has no bit, as in C.
+//! ptrs_kill and ptrs_kill_ec are PtrMasks of the key planned for, made and
+//! combined under its brand, the drop simulation's copies adopted as it
+//! (ptrs_mask.rs). They're erased into data_update_opts' u8s: a pointer past
+//! the eighth has no bit there, as in C.
 
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};
@@ -56,7 +57,7 @@ use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{is_restart, BtreeIter, BtreeTrans, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::durability::BkeyVDurability;
-use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntryMut, Ptrs, PtrsMut};
+use crate::data::ptrs::{brand, BkeyVPtrs, Branded, ExtentEntryMut, PtrMask, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::rb_bit;
 use crate::data::reconcile::trigger::{rb_work_id, BkeyVReconcile};
 use crate::errcode::{ret_to_c, BchError};
@@ -65,7 +66,6 @@ use crate::{log_msg_ratelimited, warn_on_once};
 use crate::sb::counters::events;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::plain_bytes;
-use arrayvec::ArrayVec;
 use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
 use cstruct_macros::c_export;
@@ -129,51 +129,53 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
     let csum_type = fs.data_checksum_type_rb(&rb).0 as u8;
     let compression_type = c::bch_compression_opt::to_type(rb.background_compression(), fs).0 as u8;
 
-    let (mut kill, mut kill_ec) = if need(o::BCH_RECONCILE_data_replicas) {
-        ptrs_to_drop(t, k, &r)?
-    } else {
-        (0, 0)
-    };
-
-    if need(o::BCH_RECONCILE_erasure_code) {
-        if r.erasure_code() == 0 {
-            kill_ec |= mask(kp.ptrs_decoded(fs).map(|p| p.p.has_ec));
+    // Before the parking below, which doesn't need them: they're only read
+    let (kill, kill_ec) = brand(kp, |kb| -> Result<_, BchError> {
+        let (mut kill, mut kill_ec) = if need(o::BCH_RECONCILE_data_replicas) {
+            ptrs_to_drop(t, &kb, &r)?
         } else {
-            let target = r.background_target().into();
-            let redundancy = u32::from(r.data_replicas()).wrapping_sub(1);
+            (kb.none(), kb.none())
+        };
 
-            // If no stripe can form - too few RW devices in the target with
-            // a matching bucket size - an update would fail and requeue
-            // forever. With EC all there is to do, park: a device change
-            // will look again. Otherwise do the rest.
-            if !fs.can_form_ec_stripe(target, redundancy, None) {
-                if only(o::BCH_RECONCILE_erasure_code) {
-                    return Ok(Plan::Park(ParkReason::NoStripe { target, redundancy }));
-                }
-            } else {
-                // XXX: we'll need ratelimiting
-                if ec_pending(fs, &kp) {
-                    return Ok(Plan::Nothing);
-                }
-
-                d.extra_replicas = 1;
-                d.bits.set_no_devs_have(true);
-                if only(o::BCH_RECONCILE_erasure_code) {
-                    d.write_flags |= w::BCH_WRITE_must_ec;
-                }
-            }
+        if need(o::BCH_RECONCILE_erasure_code) && r.erasure_code() == 0 {
+            kill_ec |= kb.where_(fs, |p| p.p.has_ec);
         }
-    }
 
-    {
         let rcu = read_lock();
         let target = crate::alloc::disk_groups::Target::decode(r.background_target().into());
-        kill |= mask(kp.ptrs_decoded(fs).map(|p| {
+        kill |= kb.where_(fs, |p| {
             (need(o::BCH_RECONCILE_data_checksum) && p.p.crc.csum_type != csum_type) ||
             (need(o::BCH_RECONCILE_background_compression) && p.p.crc.compression_type != compression_type) ||
             (need(o::BCH_RECONCILE_background_target) && p.p.ptr.cached() == 0 &&
              !fs.dev_in_target(p.p.ptr.dev().into(), target, &rcu))
-        }));
+        });
+        Ok((kill.bits(), kill_ec.bits()))
+    })?;
+
+    if need(o::BCH_RECONCILE_erasure_code) && r.erasure_code() != 0 {
+        let target = r.background_target().into();
+        let redundancy = u32::from(r.data_replicas()).wrapping_sub(1);
+
+        // If no stripe can form - too few RW devices in the target with
+        // a matching bucket size - an update would fail and requeue
+        // forever. With EC all there is to do, park: a device change
+        // will look again. Otherwise do the rest.
+        if !fs.can_form_ec_stripe(target, redundancy, None) {
+            if only(o::BCH_RECONCILE_erasure_code) {
+                return Ok(Plan::Park(ParkReason::NoStripe { target, redundancy }));
+            }
+        } else {
+            // XXX: we'll need ratelimiting
+            if ec_pending(fs, &kp) {
+                return Ok(Plan::Nothing);
+            }
+
+            d.extra_replicas = 1;
+            d.bits.set_no_devs_have(true);
+            if only(o::BCH_RECONCILE_erasure_code) {
+                d.write_flags |= w::BCH_WRITE_must_ec;
+            }
+        }
     }
 
     d.ptrs_kill    = kill as u8;
@@ -200,11 +202,6 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
     Ok(Plan::Nothing)
 }
 
-/// The bits of the pointers @ptrs says.
-fn mask(ptrs: impl Iterator<Item = bool>) -> u32 {
-    ptrs.enumerate().filter(|&(_, b)| b).fold(0, |m, (i, _)| m | 1 << i)
-}
-
 /// Whether a stripe being made has a block in a bucket of @k's:
 /// extent_ec_pending().
 fn ec_pending(fs: &Fs, k: &impl BkeyVPtrs) -> bool {
@@ -215,22 +212,24 @@ fn ec_pending(fs: &Fs, k: &impl BkeyVPtrs) -> bool {
 /// @k's pointers to drop for data_replicas @r: kill and kill_ec, as masks.
 /// At or under: those on bad or evacuating devices. Over: the drop
 /// simulation, at the top of the file.
-fn ptrs_to_drop(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, r: &c::bch_extent_reconcile) -> Result<(u32, u32), BchError> {
+fn ptrs_to_drop<'id>(t: &TransAttempt<'_, '_>, k: &Branded<'id, BkeySC<'_, Ptrs>>, r: &c::bch_extent_reconcile)
+    -> Result<(PtrMask<'id>, PtrMask<'id>), BchError>
+{
     let fs = t.fs();
     let want = u32::from(r.data_replicas());
-    let durability = k.durability(t)?;
-    let kp = k.arm::<Ptrs>().expect("a key with a reconcile entry has pointers");
+    let durability = k.key().untyped().durability(t)?;
 
     if u32::from(durability.total) <= want {
         let rcu = read_lock();
-        return Ok((mask(kp.ptrs(fs).map(|p| fs.dev_bad_or_evacuating(p.dev().into(), &rcu))), 0));
+        return Ok((k.where_(fs, |p| fs.dev_bad_or_evacuating(p.ptr.dev().into(), &rcu)), k.none()));
     }
 
     let offline = |dev: u32| dev == c::BCH_SB_MEMBER_INVALID || !fs.devs_online.test(dev as usize);
 
-    let mut n = Sim::new(k);
+    let mut sim = Sim::new(k.key().untyped());
+    let mut n = k.adopt(fs, sim.key_mut());
     let mut cur = durability;
-    let (mut kill, mut kill_ec) = (0, 0);
+    let (mut kill, mut kill_ec) = (k.none(), k.none());
 
     for online_floor in [false, true] {
         // holding the total only matters if some durability's offline
@@ -239,38 +238,36 @@ fn ptrs_to_drop(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, r: &c::bch_extent_recon
         }
         let floor = |d: &c::bkey_durability| u32::from(if online_floor { d.online } else { d.total });
 
-        for i in 0..n.key().ptrs(fs).count() {
-            let ptr = n.ptr(fs, i);
+        for (i, bit) in n.all(fs).iter() {
+            let ptr = *n.key().ptrs(fs).nth(i).expect("a pointer of the copy's");
             let dev = u32::from(ptr.dev());
             if ptr.cached() != 0 || !(online_floor || offline(dev)) {
                 continue;
             }
 
             let force = fs.dev_bad_or_evacuating(dev, &read_lock());
-            n.set_cached(fs, i, true);
-            let d = n.durability(t)?;
+            n.ptrs_mut(fs).nth(i).expect("a pointer of the copy's").set_cached(1);
+            let d = n.key().untyped().durability(t)?;
 
             if floor(&d) >= want && (force || floor(&d) < floor(&cur)) {
-                kill |= 1 << i;
+                kill |= bit;
                 cur = d;
             } else {
-                n.set_cached(fs, i, false);
+                n.ptrs_mut(fs).nth(i).expect("a pointer of the copy's").set_cached(0);
             }
         }
 
-        let ec: ArrayVec<u32, { c::BCH_BKEY_PTRS_MAX as usize }> = n.key().ptrs_decoded(fs).enumerate()
-            .filter(|(_, p)| p.p.has_ec && p.p.ptr.cached() == 0 && (online_floor || offline(p.p.ptr.dev().into())))
-            .map(|(i, _)| 1 << i)
-            .collect();
+        let ec = n.where_(fs, |p| p.p.has_ec && p.p.ptr.cached() == 0 && (online_floor || offline(p.p.ptr.dev().into())));
 
-        for bit in ec {
-            let mut m = Sim::new(n.key().untyped());
-            m.key_mut().drop_ec_mask(fs, bit);
-            let d = m.durability(t)?;
+        for (_, bit) in ec.iter() {
+            let mut sim = Sim::new(n.key().untyped());
+            let mut m = n.adopt(fs, sim.key_mut());
+            m.drop_ec_mask(fs, bit);
+            let d = m.key().untyped().durability(t)?;
 
             if floor(&d) >= want {
                 kill_ec |= bit;
-                n.key_mut().drop_ec_mask(fs, bit);
+                n.drop_ec_mask(fs, bit);
                 cur = d;
             }
         }
@@ -279,6 +276,7 @@ fn ptrs_to_drop(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, r: &c::bch_extent_recon
 }
 
 /// A copy of a key with pointers, to drop them from: the drop simulation's.
+/// Its masks are the key's it's a copy of: it's adopted, as that key's brand.
 struct Sim(BkeyBuf);
 
 impl Sim {
@@ -286,25 +284,8 @@ impl Sim {
         Sim(BkeyBuf::from_key(k))
     }
 
-    fn key(&self) -> BkeySC<'_, Ptrs> {
-        BkeySC::from(&self.0).arm::<Ptrs>().expect("a copy of a key with pointers")
-    }
-
     fn key_mut(&mut self) -> &mut BkeyI<PtrsMut> {
         self.0.as_mut().arm::<PtrsMut>().expect("a copy of a key with pointers")
-    }
-
-    /// Its pointer @i.
-    fn ptr(&self, fs: &Fs, i: usize) -> c::bch_extent_ptr {
-        *self.key().ptrs(fs).nth(i).expect("a pointer of the copy's")
-    }
-
-    fn set_cached(&mut self, fs: &Fs, i: usize, cached: bool) {
-        self.key_mut().ptrs_mut(fs).nth(i).expect("a pointer of the copy's").set_cached(cached.into());
-    }
-
-    fn durability(&self, t: &TransAttempt<'_, '_>) -> Result<c::bkey_durability, BchError> {
-        BkeySC::from(&self.0).durability(t)
     }
 }
 

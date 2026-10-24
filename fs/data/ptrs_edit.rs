@@ -84,20 +84,6 @@ pub trait BkeyVPtrsMut: BkeyVMut<V = PtrsMut> {
             self.drop_entry(fs, ec);
         }
     }
-
-    /// drop_ec() for each pointer of @mask, by its index among the pointers:
-    /// bch2_bkey_drop_ec_mask(). Panics on a bit past the last pointer, where
-    /// C loops forever.
-    fn drop_ec_mask(&mut self, fs: &Fs, mut mask: u32) {
-        while mask != 0 {
-            let (bit, dev) = self.ptrs(fs).enumerate()
-                .find(|(i, _)| *i < 32 && mask & (1 << i) != 0)
-                .map(|(i, p)| (1u32 << i, u32::from(p.dev())))
-                .unwrap_or_else(|| panic!("dropping stripe_ptrs by mask {mask:#x}, past the key's pointers"));
-            self.drop_ec(fs, dev);
-            mask &= !bit;
-        }
-    }
 }
 
 impl<K: BkeyVMut<V = PtrsMut>> BkeyVPtrsMut for K {}

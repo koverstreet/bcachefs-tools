@@ -32,7 +32,7 @@ use crate::c;
 use crate::c::bch_data_type as dt;
 use crate::c::bch_errcode;
 use crate::data::ec::trigger::ptr_matches_stripe_m;
-use crate::data::ptrs::{extent_nonce, ptr_data_type, BkeyVPtrs, BkeyVPtrsMut, DecodedPtr, Ptrs, PtrsMut};
+use crate::data::ptrs::{brand, extent_nonce, ptr_data_type, BkeyVPtrs, BkeyVPtrsMut, DecodedPtr, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::init::damage;
@@ -223,9 +223,6 @@ bitflags! {
         const RESET_GEN   = 1 << 2;
     }
 }
-
-// repair_ptrs()'s masks: a bit per pointer
-const _: () = assert!(c::BCH_BKEY_PTRS_MAX as u32 <= u32::BITS);
 
 /// Pointer @d of @k checked against the bucket it points into, and what it
 /// needs. A bucket the alloc btree didn't have takes the pointer's gen; one of
@@ -468,32 +465,28 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: c::btree_i
     if fixes.iter().all(|f| f.is_empty()) {
         return Ok(());
     }
-    // the pointers that need @fix, by index among the pointers
-    let mask = |fix: PtrFix| fixes.iter().enumerate()
-        .filter(|(_, f)| f.contains(fix))
-        .fold(0u32, |m, (i, _)| m | 1 << i);
+    let new = brand(kp, |kb| -> Result<_, BchError> {
+        // the pointers that need @fix: @fixes is a fix per pointer, in order
+        let mask = |fix: PtrFix| {
+            let mut f = fixes.iter();
+            kb.where_(fs, |_| f.next().is_some_and(|f| f.contains(fix)))
+        };
 
-    let mut new = t.bkey_reassemble_room(kp, KEY_ROOM)?;
+        let mut new = kb.adopt(fs, t.bkey_reassemble_room(kb.key(), KEY_ROOM)?);
 
-    {
-        let rcu = read_lock();
-        for (ptr, _) in new.ptrs_mut(fs).zip(&fixes).filter(|(_, f)| f.contains(PtrFix::RESET_GEN)) {
-            let ca = fs.dev_rcu(ptr.dev().into(), &rcu).expect("the device the pointer was checked against");
-            let g = ca.gc_bucket(ca.ptr_bucket(ptr)).expect("the gc bucket the pointer was checked against");
-            ptr.set_generation(g.lock.lock().generation);
+        {
+            let rcu = read_lock();
+            for (ptr, _) in new.ptrs_mut(fs).zip(&fixes).filter(|(_, f)| f.contains(PtrFix::RESET_GEN)) {
+                let ca = fs.dev_rcu(ptr.dev().into(), &rcu).expect("the device the pointer was checked against");
+                let g = ca.gc_bucket(ca.ptr_bucket(ptr)).expect("the gc bucket the pointer was checked against");
+                ptr.set_generation(g.lock.lock().generation);
+            }
         }
-    }
 
-    let drop_stripe = mask(PtrFix::DROP_STRIPE);
-    if drop_stripe != 0 {
-        new.reborrow().arm::<PtrsMut>().expect("a key whose pointers can have stripes")
-            .drop_ec_mask(fs, drop_stripe);
-    }
+        new.drop_ec_mask(fs, mask(PtrFix::DROP_STRIPE));
 
-    let drop = mask(PtrFix::DROP);
-    if drop != 0 {
-        new.drop_ptrs_mask(fs, drop);
-    }
+        Ok(new.drop_ptrs_mask(fs, mask(PtrFix::DROP)))
+    })?;
 
     // The drops can leave nothing to read - and no pointers at all is no
     // valid key. An extent is repaired as one found that way would be. A

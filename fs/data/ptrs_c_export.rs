@@ -219,7 +219,10 @@ pub fn bch2_bkey_drop_ptr(c: &Fs, k: BkeyS<'_>, ptr: *mut c::bch_extent_ptr) {
 #[c_export]
 pub unsafe fn bch2_bkey_drop_ptrs_mask(c: &Fs, k: *mut c::bkey_i, mask: c_uint) {
     // SAFETY: the caller's
-    ptrs(unsafe { bkey_i_s(k) }).drop_ptrs_mask(c, mask);
+    brand(ptrs(unsafe { bkey_i_s(k) }), |k| {
+        let m = k.assume(c, mask);
+        k.drop_ptrs_mask(c, m);
+    });
 }
 
 #[c_export]
@@ -227,12 +230,18 @@ pub fn bch2_bkey_drop_device_noerror(c: &Fs, k: BkeyS<'_>, dev: c_uint) {
     ptrs(k).drop_device_noerror(c, dev);
 }
 
+/// Panics on a bit past the last pointer, where C loops forever.
+///
 /// # Safety
 /// @k is a key the caller can edit.
 #[c_export]
 pub unsafe fn bch2_bkey_drop_ec_mask(c: &Fs, k: *mut c::bkey_i, mask: c_uint) {
     // SAFETY: the caller's
-    ptrs_mut(unsafe { bkey_i_s(k) }).drop_ec_mask(c, mask);
+    brand(ptrs_mut(unsafe { bkey_i_s(k) }), |mut k| {
+        let m = k.assume(c, mask);
+        assert_eq!(u32::from(m.bits()), mask, "dropping stripe_ptrs by mask {mask:#x}, past the key's pointers");
+        k.drop_ec_mask(c, m);
+    });
 }
 
 #[c_export]

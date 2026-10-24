@@ -14,11 +14,11 @@
 //!
 //! The counts are bkey_durability's u8s, summed as C's are: wrapping.
 
-use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyV, BkeyVal};
+use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut, BkeyVal};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
 use crate::c;
 use crate::data::ec::trigger::{ptr_matches_stripe, stripe_block_ptrs};
-use crate::data::ptrs::{crc_is_compressed, BkeyVPtrs, BkeyVPtrsMut, BtreePtrs, Ptrs, PtrsMut};
+use crate::data::ptrs::{brand, crc_is_compressed, BkeyVPtrs, BkeyVPtrsMut, Branded, BtreePtrs, PtrMask, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::util::alloc::flags::GFP_KERNEL;
@@ -339,56 +339,56 @@ impl<K: BkeyV<V: BkeyVal<State = Validated>>> BkeyVDurability for K {}
 /// Of @k's pointers in @mask, by index, the ones it can do without, dropped
 /// (@kill) or made cached: bch2_bkey_drop_extra_durability(). Each is tried
 /// on a copy, the whole key's online durability recomputed - a per-pointer
-/// delta can't count devices pointers share.
-pub fn drop_extra_durability(t: &TransAttempt<'_, '_>, opts: &c::bch_inode_opts, mut k: BkeyS<'_, PtrsMut>,
-                             mask: u32, kill: bool) -> Result<(), BchError> {
-    if mask == 0 {
-        return Ok(());
+/// delta can't count devices pointers share. Either renumbers the pointers,
+/// so @k comes back unbranded.
+pub fn drop_extra_durability<'id, K: BkeyVMut<V = PtrsMut>>(t: &TransAttempt<'_, '_>, opts: &c::bch_inode_opts,
+                                                           k: Branded<'id, K>, mask: PtrMask<'id>, kill: bool)
+    -> Result<K, BchError>
+{
+    if mask.is_empty() {
+        return Ok(k.into_inner());
     }
     let fs = t.fs();
-    let mut n = t.bkey_make_mut_noupdate(k.as_sc())?;
-    let nr_ptrs = n.ptrs(fs).count().min(32);
-    let mut ptrs_kill = 0u32;
+    let mut n = k.adopt(fs, t.bkey_make_mut_noupdate(k.key())?);
+    let mut ptrs_kill = k.none();
 
-    for i in 0..nr_ptrs {
-        let bit = 1u32 << i;
-        let ptr = n.ptrs_mut(fs).nth(i).expect("a pointer counted");
-        if mask & bit == 0 || ptr.cached() != 0 {
+    for (i, bit) in mask.iter() {
+        let ptr = n.ptrs_mut(fs).nth(i).expect("a mask's pointer, within its key's");
+        if ptr.cached() != 0 {
             continue;
         }
         ptr.set_cached(1);
 
-        if n.as_sc().untyped().durability(t)?.online >= opts.data_replicas {
+        if n.key().untyped().durability(t)?.online >= opts.data_replicas {
             ptrs_kill |= bit;
         } else {
-            n.ptrs_mut(fs).nth(i).expect("a pointer counted").set_cached(0);
+            n.ptrs_mut(fs).nth(i).expect("a mask's pointer, within its key's").set_cached(0);
         }
     }
 
-    if kill {
-        k.drop_ptrs_mask(fs, ptrs_kill);
+    Ok(if kill {
+        k.drop_ptrs_mask(fs, ptrs_kill)
     } else {
-        k.set_ptrs_cached_mask(fs, opts, ptrs_kill);
-    }
-    Ok(())
+        k.set_ptrs_cached_mask(fs, opts, ptrs_kill)
+    })
 }
 
 /// Of @k's pointers in @mask, the stripe_ptrs it can do without, dropped -
 /// tried on a copy, as drop_extra_durability(): bch2_bkey_drop_extra_ec_durability().
 /// The devices are gathered first: dropping a stripe_ptr moves the entries.
-pub fn drop_extra_ec_durability(t: &TransAttempt<'_, '_>, opts: &c::bch_inode_opts, mut k: BkeyS<'_, PtrsMut>,
-                                mask: u32) -> Result<(), BchError> {
-    if mask == 0 {
+pub fn drop_extra_ec_durability<'id, K: BkeyVMut<V = PtrsMut>>(t: &TransAttempt<'_, '_>, opts: &c::bch_inode_opts,
+                                                              k: &mut Branded<'id, K>, mask: PtrMask<'id>)
+    -> Result<(), BchError>
+{
+    if mask.is_empty() {
         return Ok(());
     }
     let fs = t.fs();
-    let devs: ArrayVec<u32, { c::BCH_BKEY_PTRS_MAX as usize }> = k.ptrs(fs).enumerate()
-        .filter(|&(i, _)| i < 32 && mask & (1 << i) != 0)
-        .map(|(_, p)| u32::from(p.dev()))
-        .collect();
+    let devs: ArrayVec<u32, { c::BCH_BKEY_PTRS_MAX as usize }> =
+        k.ptrs_in(fs, mask).map(|p| u32::from(p.dev())).collect();
 
     for dev in devs {
-        let mut n = t.bkey_make_mut_noupdate(k.as_sc())?;
+        let mut n = t.bkey_make_mut_noupdate(k.key())?;
         n.drop_ec(fs, dev);
 
         if n.as_sc().untyped().durability(t)?.online >= opts.data_replicas {
@@ -468,7 +468,10 @@ pub unsafe fn bch2_bkey_drop_extra_durability(trans: &BtreeTrans<'_>, opts: &c::
                                               k: *mut c::bkey_i, mask: c_uint, kill: bool) -> c_int {
     // SAFETY: the caller's
     let (t, k) = unsafe { (trans.attempt_in_progress(), bkey_i_ptrs_mut(k)) };
-    k.map_or(0, |k| ret_to_c(drop_extra_durability(&t, opts, k, mask, kill)))
+    k.map_or(0, |k| brand(k, |k| {
+        let m = k.assume(t.fs(), mask);
+        ret_to_c(drop_extra_durability(&t, opts, k, m, kill).map(drop))
+    }))
 }
 
 /// A key without pointers has none to drop.
@@ -480,7 +483,10 @@ pub unsafe fn bch2_bkey_drop_extra_ec_durability(trans: &BtreeTrans<'_>, opts: &
                                                  k: *mut c::bkey_i, mask: c_uint) -> c_int {
     // SAFETY: the caller's
     let (t, k) = unsafe { (trans.attempt_in_progress(), bkey_i_ptrs_mut(k)) };
-    k.map_or(0, |k| ret_to_c(drop_extra_ec_durability(&t, opts, k, mask)))
+    k.map_or(0, |k| brand(k, |mut k| {
+        let m = k.assume(t.fs(), mask);
+        ret_to_c(drop_extra_ec_durability(&t, opts, &mut k, m))
+    }))
 }
 
 #[cfg(test)]

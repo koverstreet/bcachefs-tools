@@ -16,7 +16,8 @@
 //!
 //! The bkey methods - validate, to_text, swab - are ptrs_ops.rs's; editing a
 //! key's entries, ptrs_edit.rs's; picking a pointer to read, ptrs_read.rs's;
-//! C's names for all of it, ptrs_c_export.rs's.
+//! masks of a key's pointers, ptrs_mask.rs's; C's names for all of it,
+//! ptrs_c_export.rs's.
 
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{bkey_family, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut, FamilyVal, InFamily, KeyState};
@@ -44,8 +45,11 @@ mod read;
 mod ops;
 #[path = "ptrs_c_export.rs"]
 pub mod c_export;
+#[path = "ptrs_mask.rs"]
+mod mask;
 
 pub use edit::BkeyVPtrsMut;
+pub use mask::{brand, Branded, PtrMask};
 pub use read::BkeyVRead;
 pub use ops::{bkey_ptrs_to_text, bkey_ptrs_validate, btree_ptr_v2_compat, btree_ptr_v2_to_text, ptr_swab};
 pub(crate) use ops::extent_ptr_to_text;
@@ -584,20 +588,6 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
         self.drop_ptrs(fs, |p| u32::from(p.p.ptr.dev()) == dev);
     }
 
-    /// The pointers of @mask, by index among the pointers - the highest first,
-    /// so the lower are where they were: bch2_bkey_drop_ptrs_mask().
-    fn drop_ptrs_mask(&mut self, fs: &Fs, mut mask: u32)
-    where Self: BkeyVMut
-    {
-        while mask != 0 {
-            let drop = 31 - mask.leading_zeros();
-            let at = self.ptrs_decoded(fs).nth(drop as usize).map(|p| p.pos);
-            if let Some(at) = at {
-                self.drop_ptr_noerror(fs, at);
-            }
-            mask ^= 1 << drop;
-        }
-    }
 
     /// Drop its cached pointer at @at, with a cached_ptr_drop event saying
     /// @why: drop_cached_pointer_trace(). Not in a read-side section, as C's
@@ -697,23 +687,6 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
         };
         if let Some(why) = why {
             self.drop_cached_ptr(fs, at, why);
-        }
-    }
-
-    /// set_cached() each pointer of @mask, by index among the pointers, the
-    /// highest first: bch2_bkey_set_ptrs_cached_mask(). The mask is read as
-    /// devices before any is made cached - set_cached() can drop cached
-    /// pointers anywhere in the key, moving the ones after them.
-    fn set_ptrs_cached_mask(&mut self, fs: &Fs, opts: &c::bch_inode_opts, mask: u32)
-    where Self: BkeyVMut
-    {
-        let devs: ArrayVec<u32, { c::BCH_BKEY_PTRS_MAX as usize }> = self.ptrs(fs).enumerate()
-            .filter(|&(i, _)| i < 32 && mask & (1 << i) != 0)
-            .map(|(_, p)| u32::from(p.dev()))
-            .collect();
-
-        for dev in devs.into_iter().rev() {
-            self.set_cached(fs, opts, dev);
         }
     }
 
