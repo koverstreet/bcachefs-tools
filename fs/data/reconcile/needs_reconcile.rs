@@ -9,8 +9,7 @@ use crate::fsck_err;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeyS, BkeySC, BkeyV};
 use crate::btree::bkey_methods::TriggerOp;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeTrans, CommitFlags, TransAttempt, TransBkey,
-                         UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::ec::trigger::stripe_header_mut;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
@@ -442,11 +441,7 @@ pub fn update_reconcile_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_sna
         return t.update(iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE);
     }
 
-    let mut node_iter = BtreeNodeIter::new(t, iter.btree(), iter.pos(), 0, level - 1, BtreeIterFlags::empty());
-    let b = node_iter.peek_ref()?.expect("the node a btree node pointer points to");
-    let mut n = t.bkey_reassemble_room(b.key_sc(), c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?;
-    n.set_needs_reconcile(t, s, opts, ctx, 0)?;
-    t.btree_node_update_key(node_iter.iter(), b, n, CommitFlags::NO_ENOSPC, false)?;
+    t.btree_node_edit_key(iter.btree(), level, iter.pos(), |n| n.set_needs_reconcile(t, s, opts, ctx, 0))?;
     Err(t.restart(c::bch_errcode::BCH_ERR_transaction_restart_commit))
 }
 

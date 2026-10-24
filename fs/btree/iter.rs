@@ -1297,6 +1297,20 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.result(ret)
     }
 
+    /// The pointer at @level of @btree, at @pos, edited by @f - handed a copy
+    /// of the pointer the node below has, with room for any - and committed:
+    /// the node's key updated in place, as btree_node_update_key_at_pos().
+    pub fn btree_node_edit_key(&self, btree: c::btree_id, level: u32, pos: bpos,
+                               f: impl FnOnce(&mut TransBkey<'a, 't>) -> Result<(), BchError>)
+        -> Result<(), BchError>
+    {
+        let mut node_iter = BtreeNodeIter::new(self, btree, pos, 0, level - 1, BtreeIterFlags::empty());
+        let b = node_iter.peek_ref()?.expect("the node a btree node pointer points to");
+        let mut n = self.bkey_reassemble_room(b.key_sc(), c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?;
+        f(&mut n)?;
+        self.btree_node_update_key(node_iter.iter(), b, n, CommitFlags::NO_ENOSPC, false)
+    }
+
     /// The pointer at @level of @btree, at @key's position, made @key and
     /// committed, its triggers not run - btree_node_update_key_at_pos(), for
     /// a repair or an injection that does the accounting itself, or none.
