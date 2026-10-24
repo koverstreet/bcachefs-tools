@@ -3,8 +3,6 @@
 #define _BCACHEFS_DATA_EC_TRIGGER_H
 #include "data/ec/trigger_gen.h"
 
-int bch2_trigger_stripe(struct btree_trans *, struct btree_trigger_op);
-
 #define bch2_bkey_ops_stripe ((struct bkey_ops) {	\
 	.key_validate	= bch2_stripe_validate,		\
 	.val_to_text	= bch2_stripe_to_text,		\
@@ -185,9 +183,6 @@ static inline void gc_stripe_lock(struct gc_stripe *s)
 {
 	bch2_byte_lock(&s->lock);
 }
-
-int bch2_ec_stripe_mem_alloc(struct btree_trans *, struct btree_iter *);
-
 
 void bch2_stripe_new_buckets_add(struct bch_fs *c, struct ec_stripe_new *s);
 void bch2_stripe_new_buckets_del(struct bch_fs *, struct ec_stripe_new *);

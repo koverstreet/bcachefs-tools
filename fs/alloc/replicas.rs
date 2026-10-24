@@ -245,6 +245,14 @@ pub(crate) fn entry_acct(b: &[u8; ENTRY_BYTES], data_type: c::bch_data_type) -> 
     replicas_acct(data_type, b[2], &b[DEVS..DEVS + nr])
 }
 
+/// @k's entry, as bkey_to_replicas() makes it: what gc keeps of a stripe's.
+pub(crate) fn bkey_replicas_padded(fs: &Fs, k: BkeySC<'_>) -> c::bch_replicas_padded {
+    let mut r = c::bch_replicas_padded::default();
+    // SAFETY: any bytes are an entry's
+    bkey_to_replicas(fs, &mut EntryBuf(unsafe { &mut r.bytes }), k);
+    r
+}
+
 /// replicas_acct() of @k's entry, as bkey_to_replicas() makes it, for
 /// @data_type data.
 pub(crate) fn bkey_replicas_acct(fs: &Fs, k: BkeySC<'_>, data_type: c::bch_data_type) -> c::disk_accounting_pos {
