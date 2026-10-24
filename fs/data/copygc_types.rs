@@ -3,33 +3,30 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::fs::Fs;
-use crate::types::c_default;
+use crate::locking::Lock;
+use crate::new_lock;
+use crate::types::{RustOnly, rust_only};
 use crate::util::futex::EventCount;
-use crate::util::Printbuf;
-use cstruct_macros::{CStruct, TypeInfo, c_extern};
+use crate::util::kthread::Kthread;
+use crate::util::projections::Volatile;
+use crate::util::workqueue::Workqueue;
+use cstruct_macros::{CStruct, Init, TypeInfo};
+use pin_init::pin_data;
 
-c_extern! {
-    pub fn bch2_copygc_wait_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
-}
-
-impl Fs {
-    pub fn copygc_wait_to_text(&self, out: &mut Printbuf) {
-        unsafe { bch2_copygc_wait_to_text(out.as_raw(), self.as_ptr()) }
-    }
-}
-
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_copygc {
-    #[c("struct task_struct __rcu *thread")]
-    pub thread: *mut c::task_struct,
+    /* The thread, from start to stop: data/copygc.rs */
+    #[pin]
+    #[init(RustOnly::new(new_lock!(None)))]
+    pub(crate) thread: rust_only!(Lock<c::spinlock_t, Option<Kthread>>),
     pub write_point: c::write_point,
-    pub wait_at: i64,
-    pub wait: i64,
-    pub running: bool,
-    pub run_count: u32,
-    pub kick_count: u32,
+    /* The thread's, read unlocked - foreground.c's to_text, move.c: */
+    pub wait_at: Volatile<i64>,
+    pub wait: Volatile<i64>,
+    pub running: Volatile<bool>,
+    pub run_count: Volatile<u32>,
     /// Woken as a run ends: data/copygc.rs
     pub run_done: EventCount,
 
@@ -40,16 +37,18 @@ pub struct bch_fs_copygc {
      *
      * Not cleared when copygc is disabled: the devices are still full.
      */
-    pub wants_space: c::bch_devs_mask,
+    #[c("struct bch_devs_mask wants_space")]
+    pub wants_space: c::AtomicDevsMask,
 
     /*
      * Devices getting full, on a looser threshold than wants_space above -
      * a superset of it, same lifetime and locking. Read by EC stripe reuse;
      * see EC_REUSE_FREE_THRESHOLD_PCT.
      */
-    pub low_on_space: c::bch_devs_mask,
+    #[c("struct bch_devs_mask low_on_space")]
+    pub low_on_space: c::AtomicDevsMask,
 
     /* Dedicated workqueue for btree updates: */
-    pub wq: *mut c::workqueue_struct,
+    #[c("struct workqueue_struct *wq")]
+    pub wq: Workqueue,
 }
-c_default!(bch_fs_copygc);

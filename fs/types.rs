@@ -763,6 +763,8 @@ pub struct Fs {
     #[pin]
     #[init(c::bch_fs_reconcile::init())]
     pub reconcile: c::bch_fs_reconcile,
+    #[pin]
+    #[init(c::bch_fs_copygc::init())]
     pub copygc: c::bch_fs_copygc,
     pub ec: c::bch_fs_ec,
 

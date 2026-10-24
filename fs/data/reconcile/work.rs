@@ -802,7 +802,7 @@ impl<'f> Reconciler<'f, '_> {
             kick:            self.me.kicks(),
             pending:         None,
             sectors_scanned: 0,
-            copygc_runs:     fs.copygc.run_count(),
+            copygc_runs:     fs.copygc.run_count.get(),
         };
 
         let work_stats = MoveStats::from_c(&fs.reconcile.work_stats);
@@ -875,7 +875,7 @@ impl<'f> Reconciler<'f, '_> {
     /// The phases, once through: what interrupted them, if anything did.
     fn run_phases(&self, p: &mut Pass<'_, 'f>) -> Result<Option<Interrupt>, BchError> {
         // copygc may have freed the buckets a parked stripe needed
-        let runs = self.fs.copygc.run_count();
+        let runs = self.fs.copygc.run_count.get();
         if self.copygc_runs_unparked.replace(runs) != runs {
             self.fs.stripes_unpark();
         }

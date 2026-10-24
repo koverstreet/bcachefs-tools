@@ -18,7 +18,6 @@
 #include "btree/interior.h"
 #include "btree/update.h"
 
-#include "data/copygc.h"
 #include "data/ec/trigger.h"
 #include "data/extents.h"
 #include "data/reconcile/trigger.h"

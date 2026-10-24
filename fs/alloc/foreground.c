@@ -31,7 +31,6 @@
 #include "btree/update.h"
 #include "btree/check.h"
 
-#include "data/copygc.h"
 #include "data/ec/create.h"
 #include "data/ec/init.h"
 #include "data/nocow_locking.h"

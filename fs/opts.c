@@ -12,7 +12,6 @@
 #include "btree/update.h"
 
 #include "data/compress.h"
-#include "data/copygc.h"
 #include "data/reconcile/check.h"
 #include "data/reconcile/work.h"
 

@@ -58,7 +58,6 @@
 #include "btree/write_buffer.h"
 
 #include "data/checksum.h"
-#include "data/copygc.h"
 #include "data/ec/create.h"
 #include "data/ec/io.h"
 #include "data/ec/trigger.h"

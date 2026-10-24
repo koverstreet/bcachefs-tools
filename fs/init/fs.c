@@ -27,7 +27,6 @@
 
 #include "data/checksum.h"
 #include "data/compress.h"
-#include "data/copygc.h"
 #include "data/ec/create.h"
 #include "data/ec/init.h"
 #include "data/move.h"
@@ -1215,7 +1214,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	bch2_fs_allocator_foreground_init(c);
 	bch2_fs_btree_gc_init_early(c);
 	bch2_fs_btree_init_early(c);
-	bch2_fs_copygc_init(c);
 	bch2_fs_discards_init_early(c);
 	bch2_fs_ec_init_early(c);
 	bch2_fs_errors_init_early(c);

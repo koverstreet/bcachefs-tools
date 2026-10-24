@@ -8,6 +8,7 @@ use crate::util::Printbuf;
 use crate::types::{Atomic64, DArray, c_default};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_void};
+use core::sync::atomic::AtomicI32;
 use cstruct_macros::{CStruct, c_extern, c_typedef, TypeInfo};
 use nestify::nest;
 
@@ -53,22 +54,23 @@ nest! {
 c_default!(bch_move_stats);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, CStruct)]
 pub struct move_bucket_key {
     pub bucket: c::bpos,
     pub generation: c_uint,
 }
 
+/*
+ * A bucket copygc's evacuating, as the moves see it: each holds a count until
+ * its update is done. The rest of what copygc keeps of it is Rust's,
+ * data/copygc.rs.
+ */
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct move_bucket {
-    pub next: *mut c::move_bucket,
-    pub hash: c::rhash_head,
-    pub k: c::move_bucket_key,
-    pub sectors: c_uint,
-    pub count: c::atomic_t,
+    #[c("atomic_t count")]
+    pub count: AtomicI32,
 }
-c_default!(move_bucket);
 
 /*
  * What the journal scrub found wrong with an extent, for
