@@ -51,7 +51,10 @@ use crate::locking::Lock;
 use crate::new_lock;
 use crate::prt;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
-use crate::util::cuckoo::{Cuckoo, CuckooHash, CuckooItem, CuckooWriter, Entry, Faults, GoldenRatio, SipHash};
+use crate::util::cuckoo::{Cuckoo, CuckooItem, CuckooWriter, Entry, Faults};
+use crate::util::hash::GoldenRatio;
+use crate::util::siphash::SipHash13Key;
+use core::hash::BuildHasher;
 use crate::util::kernel::{cond_resched, local_clock, random_u64, random_u64_below};
 use crate::util::par::{self, Backend};
 use crate::util::printbuf::{HumanReadable, Printbuf};
@@ -163,7 +166,7 @@ type Map = Entry<TestEntry>;
 
 // ── The model test ───────────────────────────────────────────────────────
 
-fn model<I: TestItem, H: CuckooHash, const W: usize>(name: &str) -> TestRet {
+fn model<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(name: &str) -> TestRet {
     const NR: usize = 512;
     let key = |i: usize| (i as u64).wrapping_mul(0x9E3779B97F4A7C15);
     let mut keys = KVVec::new();
@@ -172,7 +175,7 @@ fn model<I: TestItem, H: CuckooHash, const W: usize>(name: &str) -> TestRet {
     }
     let pool = I::pool(&keys)?;
 
-    let mut t = Cuckoo::<I, H, W>::default();
+    let mut t = Cuckoo::<I, S, W>::default();
     let w = t.get_mut();
     // What each key's last op left it, and its ops so far, make()'s @seq: on
     // the heap, as a kernel stack is small
@@ -206,12 +209,12 @@ fn model<I: TestItem, H: CuckooHash, const W: usize>(name: &str) -> TestRet {
 }
 
 pub(super) fn test_cuckoo(_fs: &Fs, _nr: u64) -> TestRet {
-    model::<u64, SipHash, 2>("set, siphash, 2-way")?;
-    model::<u64, SipHash, 3>("set, siphash, 3-way")?;
+    model::<u64, SipHash13Key, 2>("set, siphash, 2-way")?;
+    model::<u64, SipHash13Key, 3>("set, siphash, 3-way")?;
     model::<u64, GoldenRatio, 2>("set, golden, 2-way")?;
     model::<u64, GoldenRatio, 3>("set, golden, 3-way")?;
-    model::<Map, SipHash, 2>("map, siphash, 2-way")?;
-    model::<Map, SipHash, 3>("map, siphash, 3-way")?;
+    model::<Map, SipHash13Key, 2>("map, siphash, 2-way")?;
+    model::<Map, SipHash13Key, 3>("map, siphash, 3-way")?;
     model::<Map, GoldenRatio, 2>("map, golden, 2-way")?;
     model::<Map, GoldenRatio, 3>("map, golden, 3-way")
 }
@@ -284,8 +287,8 @@ fn rounds() -> [(&'static str, Faults); 6] {
 /// The @nr'th writer op: on a key, bracketed by its @seq - or, now and then,
 /// clear(), bracketing every key.
 #[allow(clippy::too_many_arguments)]
-fn writer_op<I: TestItem, H: CuckooHash, const W: usize>(
-    w: &CuckooWriter<I, H, W>, items: &mut u64, keys: &[KeyState], pool: &I::Pool,
+fn writer_op<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(
+    w: &CuckooWriter<I, S, W>, items: &mut u64, keys: &[KeyState], pool: &I::Pool,
     fails: &Failures, injecting: bool, rng: &mut u64, nr: u64,
 ) {
     let r = xorshift(rng);
@@ -356,7 +359,7 @@ fn writer_op<I: TestItem, H: CuckooHash, const W: usize>(
 
 /// One round: a fresh table with @faults, two writers and the rest of the
 /// CPUs reading, for @secs.
-fn round<I: TestItem, H: CuckooHash, const W: usize>(table: &str, name: &str, faults: Faults, secs: u64)
+fn round<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(table: &str, name: &str, faults: Faults, secs: u64)
     -> TestRet
 {
     const WRITERS: u32 = 2;
@@ -373,11 +376,11 @@ fn round<I: TestItem, H: CuckooHash, const W: usize>(table: &str, name: &str, fa
     let pool = &pool;
 
     // The item count, the writers' to keep, with the table
-    pin_init::stack_pin_init!(let lock: Lock<c::mutex, u64, Cuckoo<I, H, W>> =
+    pin_init::stack_pin_init!(let lock: Lock<c::mutex, u64, Cuckoo<I, S, W>> =
                               new_lock!(0, Cuckoo::with_faults(faults)));
     pin_init::stack_pin_init!(let fails: Failures = new_lock!(None, pin_init::Zeroable::zeroed()));
-    let (lock, fails): (&Lock<c::mutex, u64, Cuckoo<I, H, W>>, &Failures) = (&lock, &fails);
-    let t: &Cuckoo<I, H, W> = lock;
+    let (lock, fails): (&Lock<c::mutex, u64, Cuckoo<I, S, W>>, &Failures) = (&lock, &fails);
+    let t: &Cuckoo<I, S, W> = lock;
 
     let writers_left = AtomicU32::new(WRITERS);
     let (checked, raced, ops) = (AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0));
@@ -481,17 +484,17 @@ fn round<I: TestItem, H: CuckooHash, const W: usize>(table: &str, name: &str, fa
     Ok(())
 }
 
-fn torture<I: TestItem, H: CuckooHash, const W: usize>(table: &str) -> TestRet {
+fn torture<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(table: &str) -> TestRet {
     for (name, faults) in rounds() {
-        round::<I, H, W>(table, name, faults, 5)?;
+        round::<I, S, W>(table, name, faults, 5)?;
     }
     Ok(())
 }
 
 pub(super) fn test_cuckoo_torture(_fs: &Fs, _nr: u64) -> TestRet {
-    torture::<Map, SipHash, 2>("map, siphash, 2-way")?;
+    torture::<Map, SipHash13Key, 2>("map, siphash, 2-way")?;
     torture::<Map, GoldenRatio, 3>("map, golden, 3-way")?;
-    torture::<u64, SipHash, 2>("set, siphash, 2-way")?;
+    torture::<u64, SipHash13Key, 2>("set, siphash, 2-way")?;
     torture::<u64, GoldenRatio, 3>("set, golden, 3-way")
 }
 
@@ -503,7 +506,7 @@ fn pick(keys: &[u64], rng: &mut u64) -> u64 {
 
 /// @nr lookups of @keys at random, timed, and how many were found - so they
 /// aren't optimized out.
-fn bench_lookups<H: CuckooHash, const W: usize>(t: &Cuckoo<u64, H, W>, keys: &[u64], nr: u64, rng: &mut u64)
+fn bench_lookups<S: BuildHasher + From<[u64; 2]>, const W: usize>(t: &Cuckoo<u64, S, W>, keys: &[u64], nr: u64, rng: &mut u64)
     -> (u64, u64)
 {
     let start = local_clock();
@@ -516,10 +519,10 @@ fn bench_lookups<H: CuckooHash, const W: usize>(t: &Cuckoo<u64, H, W>, keys: &[u
 /// to another @ms later: the readers' lookups a second, in millions, and the
 /// writer's ops a second. Counted in the window every thread is in, not
 /// timed by the slowest, so one descheduled reader doesn't skew the rest.
-fn bench_threads<H: CuckooHash, const W: usize>(
-    lock: &Lock<c::mutex, (), Cuckoo<u64, H, W>>, keys: &[u64], ms: u64, threads: u32, churn: Option<&[u64]>,
+fn bench_threads<S: BuildHasher + From<[u64; 2]>, const W: usize>(
+    lock: &Lock<c::mutex, (), Cuckoo<u64, S, W>>, keys: &[u64], ms: u64, threads: u32, churn: Option<&[u64]>,
 ) -> Result<(u64, u64), BchError> {
-    let t: &Cuckoo<u64, H, W> = lock;
+    let t: &Cuckoo<u64, S, W> = lock;
     let (lookups, writes) = (AtomicU64::new(0), AtomicU64::new(0));
     // Time for every thread to have started
     let start = local_clock() + 100 * 1_000_000;
@@ -571,7 +574,7 @@ fn bench_threads<H: CuckooHash, const W: usize>(
     Ok((lookups.into_inner() / (ms * 1000), writes.into_inner() * 1000 / ms))
 }
 
-fn bench<H: CuckooHash, const W: usize>(table: &str) -> TestRet {
+fn bench<S: BuildHasher + From<[u64; 2]>, const W: usize>(table: &str) -> TestRet {
     let cpus = nr_cpus();
 
     for shift in [10u32, 14, 18, 22] {
@@ -585,9 +588,9 @@ fn bench<H: CuckooHash, const W: usize>(table: &str) -> TestRet {
             misses.push(xorshift(&mut rng) & !1, GFP_KERNEL)?;
         }
 
-        pin_init::stack_pin_init!(let lock: Lock<c::mutex, (), Cuckoo<u64, H, W>> =
+        pin_init::stack_pin_init!(let lock: Lock<c::mutex, (), Cuckoo<u64, S, W>> =
                                   new_lock!((), Cuckoo::default()));
-        let lock: &Lock<c::mutex, (), Cuckoo<u64, H, W>> = &lock;
+        let lock: &Lock<c::mutex, (), Cuckoo<u64, S, W>> = &lock;
 
         let start = local_clock();
         {
@@ -635,8 +638,8 @@ fn bench<H: CuckooHash, const W: usize>(table: &str) -> TestRet {
 }
 
 pub(super) fn test_cuckoo_bench(_fs: &Fs, _nr: u64) -> TestRet {
-    bench::<SipHash, 2>("siphash, 2-way")?;
-    bench::<SipHash, 3>("siphash, 3-way")?;
+    bench::<SipHash13Key, 2>("siphash, 2-way")?;
+    bench::<SipHash13Key, 3>("siphash, 3-way")?;
     bench::<GoldenRatio, 2>("golden, 2-way")?;
     bench::<GoldenRatio, 3>("golden, 3-way")
 }

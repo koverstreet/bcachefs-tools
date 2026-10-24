@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! A cuckoo hash table looked up without a lock, under RCU: a set of u64s, or
-//! a map to entries that hold their own keys - generic over its hash,
-//! SipHash-1-3 or hash_64()'s golden ratio, and its ways, two or three. It
-//! replaces util/cuckoo.c once its users are Rust.
+//! a map to entries that hold their own keys - in two ways or three, and
+//! hashed by a BuildHasher, as std's HashMap is: SipHash-1-3, by default, or
+//! hash_64()'s golden ratio (util/hash.rs) where a lookup's cost matters more
+//! than keys with structure colliding.
 //!
 //! Keys are std's: an item - the u64, or the entry it points to - is Hash +
 //! Eq, and a lookup takes anything it Borrows, as HashSet::get() does; an
@@ -14,20 +15,17 @@
 //! # The buffer
 //!
 //! One RcuArray: the seeds, as its header, and 2^bits slots. A key has a slot
-//! in each way, which the hash gives (CuckooHash); a slot holds an item
+//! in each way, which its hash gives; a slot holds an item
 //! (CuckooItem) in one atomic word - a key, complemented, so the zeroes a
 //! buffer is allocated as are empty and u64::MAX can't be one, or a pointer
 //! to an entry, null for none. A lookup checks a slot per way: at most that
 //! many cache misses.
 //!
-//! The hashes. SipHash-1-3, keyed by the seeds, gives a key's slots as if
-//! independent, whatever structure the keys have: two from one hash - i, and
-//! i ^ delta, delta odd, so each is the other's other - and for three ways a
-//! third from a second hash. hash_64() of the key - its words folded into one,
-//! a u64 itself - xored with a seed per way is a multiply each, several times
-//! cheaper; but the ways are correlated, so keys with structure - positions,
-//! inode numbers - can collide in every way under every seed. It's for keys
-//! known to be spread, or where a lookup's cost matters more than a rehash's.
+//! The hasher's built from the seeds - S: From<[u64; 2]> - and keyed by them,
+//! so a key's slots are as if independent, whatever structure the keys have:
+//! two from one hash - i, and i ^ delta, delta odd, so each is the other's
+//! other - and for three ways a third from a second hasher, its key's first
+//! word another seed.
 //!
 //! The ways. Two fill to about half the table, three to most of it, so the
 //! table grows - a rehash, into a buffer twice the size with new seeds -
@@ -82,7 +80,7 @@
 
 use arrayvec::ArrayVec;
 use core::borrow::Borrow;
-use core::hash::{Hash, Hasher};
+use core::hash::{BuildHasher, Hash};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize};
@@ -90,11 +88,10 @@ use core::sync::atomic::Ordering::{self, Acquire, Relaxed, Release};
 
 use crate::types::CacheAligned;
 use crate::util::alloc::AllocError;
-use crate::util::hash::{hash_64, Fold};
 use crate::util::kernel::random_u64;
 use crate::util::projections::Publish;
 use crate::util::rcu::{read_lock, RcuArray, RcuElement, ReadGuard};
-use crate::util::siphash::SipHash13;
+use crate::util::siphash::SipHash13Key;
 
 /// The longest chain of moves an insert follows before it rehashes.
 const MAX_KICKS: usize = 32;
@@ -113,45 +110,25 @@ macro_rules! saw {
     };
 }
 
-/// A hash's seeds: SipHash's key and a second key's half, or one per way.
+/// A buffer's hashers' keys: its first, and a third way's first word.
 type Seeds = [u64; 3];
 
-// ── The hashes ───────────────────────────────────────────────────────────
+// ── The hash ─────────────────────────────────────────────────────────────
 
-/// How a table finds a key's slots: see the top of the file.
-pub trait CuckooHash {
-    /// @key's slot in each of @W ways, in a table of 2^@bits. For zero @bits -
-    /// a Mirror not yet written - any index, in the table or past it.
-    fn slots<const W: usize, K: ?Sized + Hash>(seeds: &Seeds, bits: u32, key: &K) -> [usize; W];
-}
-
-pub struct SipHash;
-
-impl CuckooHash for SipHash {
-    fn slots<const W: usize, K: ?Sized + Hash>(seeds: &Seeds, bits: u32, key: &K) -> [usize; W] {
-        let hash = |k0| {
-            let mut h = SipHash13::new(k0, seeds[1]);
-            key.hash(&mut h);
-            h.finish()
-        };
-        let mask = (1usize << bits) - 1;
-        let h = hash(seeds[0]);
-        let i = h as usize & mask;
-        core::array::from_fn(|w| match w {
-            0 => i,
-            1 => i ^ (((h >> 32) as usize | 1) & mask),
-            _ => hash(seeds[2]) as usize & mask,
-        })
-    }
-}
-
-pub struct GoldenRatio;
-
-impl CuckooHash for GoldenRatio {
-    fn slots<const W: usize, K: ?Sized + Hash>(seeds: &Seeds, bits: u32, key: &K) -> [usize; W] {
-        let f = Fold::of(key);
-        core::array::from_fn(|w| hash_64(f ^ seeds[w], bits) as usize)
-    }
+/// @key's slot in each of @W ways, in a table of 2^@bits hashed by @S keyed
+/// with @seeds. For zero @bits - a Mirror not yet written - any index, in the
+/// table or past it.
+fn slots<const W: usize, S: BuildHasher + From<[u64; 2]>, K: ?Sized + Hash>(seeds: Seeds, bits: u32, key: &K) -> [usize; W] {
+    let hash = |k0| S::from([k0, seeds[1]]).hash_one(key);
+    let mask = (1usize << bits) - 1;
+    let h = hash(seeds[0]);
+    // the top bits: a multiplicative hash's best
+    let i = h.wrapping_shr(64 - bits) as usize & mask;
+    core::array::from_fn(|w| match w {
+        0 => i,
+        1 => i ^ (((h >> 32) as usize | 1) & mask),
+        _ => hash(seeds[2]).wrapping_shr(64 - bits) as usize & mask,
+    })
 }
 
 // ── What a table holds ───────────────────────────────────────────────────
@@ -258,11 +235,9 @@ struct Slot<I: CuckooItem>(I::Atomic);
 unsafe impl<I: CuckooItem> RcuElement for Slot<I> {}
 
 impl<I: CuckooItem> Slot<I> {
-    /// @key's item, if this holds it.
-    fn get<Q: ?Sized + Eq>(&self, key: &Q) -> Option<I>
-    where I::Target: Borrow<Q>
-    {
-        I::load(&self.0, Acquire).filter(|i| i.target().borrow() == key)
+    /// A reader's view.
+    fn load(&self) -> Option<I> {
+        I::load(&self.0, Acquire)
     }
 
     /// The writer's view.
@@ -309,16 +284,17 @@ fn fits<const W: usize>(bits: u32, nr: usize, faults: &Faults) -> bool {
     }
 }
 
-/// A buffer's seeds and slots, as a reader - or the writer - has them.
-struct Table<'a, I: CuckooItem, H, const W: usize> {
-    seeds:  &'a Seeds,
+/// A buffer's seeds and slots, as a reader has them in its read-side section,
+/// or the writer: so its items are live.
+struct Table<'a, I: CuckooItem, S, const W: usize> {
+    seeds:  Seeds,
     slots:  &'a [Slot<I>],
     faults: &'a Faults,
-    hash:   PhantomData<fn() -> H>,
+    hash:   PhantomData<fn() -> S>,
 }
 
-impl<'a, I: CuckooItem, H: CuckooHash, const W: usize> Table<'a, I, H, W> {
-    fn new(seeds: &'a Seeds, slots: &'a [Slot<I>], faults: &'a Faults) -> Self {
+impl<'a, I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> Table<'a, I, S, W> {
+    fn new(seeds: Seeds, slots: &'a [Slot<I>], faults: &'a Faults) -> Self {
         Self { seeds, slots, faults, hash: PhantomData }
     }
 
@@ -327,7 +303,18 @@ impl<'a, I: CuckooItem, H: CuckooHash, const W: usize> Table<'a, I, H, W> {
     }
 
     fn index<K: ?Sized + Hash>(&self, key: &K) -> [usize; W] {
-        H::slots(self.seeds, self.bits(), key)
+        slots::<W, S, K>(self.seeds, self.bits(), key)
+    }
+
+    fn key<'i>(&self, i: &'i I) -> &'i I::Target {
+        i.target()
+    }
+
+    /// @key's item, if slot @i - which may be past this buffer - holds it.
+    fn get<Q: ?Sized + Eq>(&self, i: usize, key: &Q) -> Option<I>
+    where I::Target: Borrow<Q>
+    {
+        self.slots.get(i)?.load().filter(|it| self.key(it).borrow() == key)
     }
 
     /// @key's item, from the slots this buffer's seeds name: for a lookup
@@ -337,7 +324,7 @@ impl<'a, I: CuckooItem, H: CuckooHash, const W: usize> Table<'a, I, H, W> {
     where I::Target: Borrow<Q>
     {
         saw!(self.faults, raced);
-        self.index(key).into_iter().find_map(|i| self.slots[i].get(key))
+        self.index(key).into_iter().find_map(|i| self.get(i, key))
     }
 
     /// Writer: the slot holding @key.
@@ -346,11 +333,11 @@ impl<'a, I: CuckooItem, H: CuckooHash, const W: usize> Table<'a, I, H, W> {
     {
         self.index(key).into_iter()
             .map(|i| &self.slots[i])
-            .find(|s| s.load_locked().is_some_and(|i| i.target().borrow() == key))
+            .find(|s| s.load_locked().is_some_and(|i| self.key(&i).borrow() == key))
     }
 
     /// Writer: what the table holds.
-    fn iter_locked(&self) -> impl Iterator<Item = I> + use<'a, I, H, W> {
+    fn iter_locked(&self) -> impl Iterator<Item = I> + use<'a, I, S, W> {
         self.slots.iter().filter_map(Slot::load_locked)
     }
 
@@ -382,7 +369,7 @@ impl<'a, I: CuckooItem, H: CuckooHash, const W: usize> Table<'a, I, H, W> {
             }
             let Some(item) = self.slots[s].load_locked() else { return true };
 
-            let others = self.index(item.target()).into_iter().filter(|&o| !path.contains(&(o as u32)));
+            let others = self.index(self.key(&item)).into_iter().filter(|&o| !path.contains(&(o as u32)));
             let empty = others.clone().find(|&o| self.slots[o].load_locked().is_none());
             let Some(n) = empty.or_else(|| others.last()) else { return false };
             s = n;
@@ -394,7 +381,7 @@ impl<'a, I: CuckooItem, H: CuckooHash, const W: usize> Table<'a, I, H, W> {
     /// chain.
     fn insert(&self, item: I, moves: &AtomicU64) -> bool {
         let mut path = Path::new();
-        if !self.find_path(item.target(), &mut path) {
+        if !self.find_path(self.key(&item), &mut path) {
             return false;
         }
 
@@ -411,14 +398,14 @@ impl<'a, I: CuckooItem, H: CuckooHash, const W: usize> Table<'a, I, H, W> {
     }
 }
 
-/// See the top of the file: of @I - u64s, or Entry<E> - hashed by @H, in
-/// @W ways, two or three. Zeroed, it's empty, with no buffer: the first
-/// insert allocates one.
+/// See the top of the file: of @I - u64s, or Entry<E> - hashed by @S, in @W
+/// ways, two or three. Zeroed, it's empty, with no buffer: the first insert
+/// allocates one.
 ///
 /// repr(C): what a hit reads, which only a rehash writes - and the faults, in
 /// a test - apart from what the writer writes on every insert.
 #[repr(C)]
-pub struct Cuckoo<I: CuckooItem = u64, H: CuckooHash = SipHash, const W: usize = 2> {
+pub struct Cuckoo<I: CuckooItem = u64, S = SipHash13Key, const W: usize = 2> {
     mirror:  Mirror,
     table:   RcuArray<Slot<I>, Seeds>,
     faults:  Faults,
@@ -427,20 +414,20 @@ pub struct Cuckoo<I: CuckooItem = u64, H: CuckooHash = SipHash, const W: usize =
     moves:   AtomicU64,
     /// Items, for when to grow.
     nr:      AtomicUsize,
-    hash:    PhantomData<fn() -> H>,
+    hash:    PhantomData<fn() -> S>,
 }
 
 // SAFETY: atomics, an RcuArray, no bytes, Faults' integers and atomics, and a
 // PhantomData: all valid zeroed
-unsafe impl<I: CuckooItem, H: CuckooHash, const W: usize> ::pin_init::Zeroable for Cuckoo<I, H, W> {}
+unsafe impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> ::pin_init::Zeroable for Cuckoo<I, S, W> {}
 
-impl<I: CuckooItem, H: CuckooHash, const W: usize> Default for Cuckoo<I, H, W> {
+impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> Default for Cuckoo<I, S, W> {
     fn default() -> Self {
         ::pin_init::Zeroable::zeroed()
     }
 }
 
-impl<I: CuckooItem, H: CuckooHash, const W: usize> Cuckoo<I, H, W> {
+impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> Cuckoo<I, S, W> {
     const WAYS: () = assert!(W == 2 || W == 3, "cuckoo: two ways or three");
 
     /// @key's item, in a read-side section of its own.
@@ -460,9 +447,9 @@ impl<I: CuckooItem, H: CuckooHash, const W: usize> Cuckoo<I, H, W> {
     pub fn get_rcu<Q: ?Sized + Hash + Eq>(&self, key: &Q, g: &ReadGuard) -> Option<I>
     where I::Target: Borrow<Q>
     {
-        let () = Self::WAYS;
         let mirror = self.mirror.load();
-        let slots = H::slots::<W, Q>(&mirror.0, mirror.1, key);
+        let () = Self::WAYS;
+        let slots = slots::<W, S, Q>(mirror.0, mirror.1, key);
 
         if let Some(i) = self.probe(key, g, mirror, slots) {
             return Some(i);
@@ -487,11 +474,11 @@ impl<I: CuckooItem, H: CuckooHash, const W: usize> Cuckoo<I, H, W> {
     where I::Target: Borrow<Q>
     {
         let (seeds, buf) = self.table.read_head(g)?;
-        let t = Table::<I, H, W>::new(seeds, buf, &self.faults);
+        let t = Table::<I, S, W>::new(*seeds, buf, &self.faults);
 
         let hit = slots.into_iter().find_map(|i| {
             self.faults.read_window();
-            buf.get(i)?.get(key)
+            t.get(i, key)
         });
         hit.or_else(|| (mirror != (*seeds, t.bits())).then(|| t.get_raced(key)).flatten())
     }
@@ -513,13 +500,13 @@ impl<I: CuckooItem, H: CuckooHash, const W: usize> Cuckoo<I, H, W> {
     }
 
     /// The writer's methods, with the table to ourselves.
-    pub fn get_mut(&mut self) -> &CuckooWriter<I, H, W> {
+    pub fn get_mut(&mut self) -> &CuckooWriter<I, S, W> {
         // SAFETY: laid out as Self (Publish), and exclusive: the one writer
-        unsafe { &*core::ptr::from_mut(self).cast::<CuckooWriter<I, H, W>>() }
+        unsafe { &*core::ptr::from_mut(self).cast::<CuckooWriter<I, S, W>>() }
     }
 }
 
-impl<E: Hash + Eq + Sync, H: CuckooHash, const W: usize> Cuckoo<Entry<E>, H, W> {
+impl<E: Hash + Eq + Sync, S: BuildHasher + From<[u64; 2]>, const W: usize> Cuckoo<Entry<E>, S, W> {
     /// @key's entry, for as long as @g's read-side section.
     pub fn get_entry<'g, Q: ?Sized + Hash + Eq>(&self, key: &Q, g: &'g ReadGuard) -> Option<&'g E>
     where E: Borrow<Q>
@@ -532,8 +519,8 @@ impl<E: Hash + Eq + Sync, H: CuckooHash, const W: usize> Cuckoo<Entry<E>, H, W> 
 
 // SAFETY: CuckooWriter is a Cuckoo; its writes are the ones at the top of the
 // file, which a reader may overlap
-unsafe impl<I: CuckooItem, H: CuckooHash, const W: usize> Publish for Cuckoo<I, H, W> {
-    type Writer = CuckooWriter<I, H, W>;
+unsafe impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> Publish for Cuckoo<I, S, W> {
+    type Writer = CuckooWriter<I, S, W>;
 }
 
 /// A Cuckoo, as its one writer has it: the holder of the lock it's published
@@ -541,36 +528,36 @@ unsafe impl<I: CuckooItem, H: CuckooHash, const W: usize> Publish for Cuckoo<I, 
 /// be two writers - and one's rehash() frees the buffer the other's locked()
 /// is looking at.
 #[repr(transparent)]
-pub struct CuckooWriter<I: CuckooItem = u64, H: CuckooHash = SipHash, const W: usize = 2>(
-    Cuckoo<I, H, W>,
+pub struct CuckooWriter<I: CuckooItem = u64, S = SipHash13Key, const W: usize = 2>(
+    Cuckoo<I, S, W>,
     PhantomData<*const ()>,
 );
 
-impl<I: CuckooItem, H: CuckooHash, const W: usize> core::ops::Deref for CuckooWriter<I, H, W> {
-    type Target = Cuckoo<I, H, W>;
+impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> core::ops::Deref for CuckooWriter<I, S, W> {
+    type Target = Cuckoo<I, S, W>;
 
-    fn deref(&self) -> &Cuckoo<I, H, W> {
+    fn deref(&self) -> &Cuckoo<I, S, W> {
         &self.0
     }
 }
 
-impl<I: CuckooItem, H: CuckooHash, const W: usize> CuckooWriter<I, H, W> {
+impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> CuckooWriter<I, S, W> {
     /// Not to be kept past a rehash() or clear(): see the top of the file.
-    fn locked(&self) -> Option<Table<'_, I, H, W>> {
+    fn locked(&self) -> Option<Table<'_, I, S, W>> {
         // SAFETY: we're the writer - had only through a lock's guard or a
         // &mut - and no replace() comes while the view is in use
         unsafe { self.0.table.get_head_locked() }
-            .map(|(seeds, slots)| Table::new(seeds, slots, &self.0.faults))
+            .map(|(seeds, slots)| Table::new(*seeds, slots, &self.0.faults))
     }
 
     /// @item, in place of what had its key, if anything: that. Fails, with
     /// the table unchanged, only if it can't allocate.
     pub fn insert(&self, item: I) -> Result<Option<I>, AllocError> {
-        let () = Cuckoo::<I, H, W>::WAYS;
+        let () = Cuckoo::<I, S, W>::WAYS;
         assert!(item.storable(), "cuckoo: an item that can't be in a table");
 
         let t = self.locked();
-        if let Some(s) = t.as_ref().and_then(|t| t.find_locked(item.target())) {
+        if let Some(s) = t.as_ref().and_then(|t| t.find_locked(t.key(&item))) {
             let old = s.load_locked().expect("found: occupied");
             s.set(item);
             return Ok(Some(old));
@@ -612,7 +599,7 @@ impl<I: CuckooItem, H: CuckooHash, const W: usize> CuckooWriter<I, H, W> {
 
         for s in t.slots {
             let Some(i) = s.load_locked() else { continue };
-            match t.find_locked(i.target()) {
+            match t.find_locked(t.key(&i)) {
                 None => return Err("cuckoo: an item in a slot it doesn't hash to"),
                 Some(f) if !core::ptr::eq(f, s) => return Err("cuckoo: an item in two slots"),
                 Some(_) => nr += 1,
@@ -650,7 +637,7 @@ impl<I: CuckooItem, H: CuckooHash, const W: usize> CuckooWriter<I, H, W> {
                 // us, and nothing reads them past the replace()
                 let fit = unsafe {
                     self.0.table.rebuild_head(1 << bits, seeds, |slots| {
-                        let t = Table::<I, H, W>::new(&seeds, slots, &unpublished);
+                        let t = Table::<I, S, W>::new(seeds, slots, &unpublished);
                         old.iter().flat_map(Table::iter_locked).chain([item])
                             .all(|i| t.insert(i, &moves))
                             .then_some(()).ok_or(())
@@ -680,22 +667,22 @@ impl<I: CuckooItem, H: CuckooHash, const W: usize> CuckooWriter<I, H, W> {
 /// The table's a pointer, not a borrow: a borrow's lifetime would be in the
 /// entry's type, so in the table's, and a table can't be borrowed for a
 /// lifetime its own type names - it has drop glue.
-pub struct Registration<K, E, H = SipHash, const W: usize = 2>
-where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, H: CuckooHash
+pub struct Registration<K, E, S = SipHash13Key, const W: usize = 2>
+where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
 {
-    table: NonNull<CuckooWriter<Entry<E>, H, W>>,
+    table: NonNull<CuckooWriter<Entry<E>, S, W>>,
     entry: NonNull<E>,
     key:   K,
 }
 
 // SAFETY: shared, it gives out only the key; @entry is compared, never
 // followed. Not Send: its drop is a write, the writer's.
-unsafe impl<K, E, H, const W: usize> Sync for Registration<K, E, H, W>
-where K: Hash + Eq + Sync, E: Hash + Eq + Sync + Borrow<K>, H: CuckooHash
+unsafe impl<K, E, S, const W: usize> Sync for Registration<K, E, S, W>
+where K: Hash + Eq + Sync, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
 {}
 
-impl<K, E, H, const W: usize> Registration<K, E, H, W>
-where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, H: CuckooHash
+impl<K, E, S, const W: usize> Registration<K, E, S, W>
+where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
 {
     /// @e, in @table under @key - which mustn't be in it - until this is
     /// dropped: made in place, as a field of @e, so the insert hashes @e
@@ -707,8 +694,8 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, H: CuckooHash
     /// and @e is the entry this is a field of, being pin-initialized -
     /// pin-init's &this - with this its first field, so dropped first, and
     /// initialized last.
-    pub unsafe fn new<'w>(table: &'w CuckooWriter<Entry<E>, H, W>, key: K, e: NonNull<E>)
-        -> impl ::pin_init::PinInit<Self, AllocError> + use<'w, K, E, H, W>
+    pub unsafe fn new<'w>(table: &'w CuckooWriter<Entry<E>, S, W>, key: K, e: NonNull<E>)
+        -> impl ::pin_init::PinInit<Self, AllocError> + use<'w, K, E, S, W>
     {
         let init = move |slot: *mut Self| {
             assert!(!table.locked().is_some_and(|t| t.find_locked(&key).is_some()),
@@ -732,8 +719,8 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, H: CuckooHash
     }
 }
 
-impl<K, E, H, const W: usize> Drop for Registration<K, E, H, W>
-where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, H: CuckooHash
+impl<K, E, S, const W: usize> Drop for Registration<K, E, S, W>
+where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
 {
     /// Out, if the slot is still this entry's: an insert() of its key may
     /// have put another in its place.
