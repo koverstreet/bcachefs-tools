@@ -1351,7 +1351,12 @@ int bch2_gc_gens(struct bch_fs *c)
 				BCH_TRANS_COMMIT_no_enospc, ({
 			ca = bch2_dev_iterate(c, ca, k.k->p.inode);
 			if (!ca) {
-				bch2_btree_iter_set_pos(&iter, POS(k.k->p.inode + 1, 0));
+				/*
+				 * for_each_btree_key() will still advance iterator - in
+				 * Rust, LoopFlow::ContinueFrom(POS(inode + 1, 0)), which
+				 * resumes there:
+				 */
+				bch2_btree_iter_set_pos(&iter, bpos_predecessor(POS(k.k->p.inode + 1, 0)));
 				continue;
 			}
 			bch2_alloc_write_oldest_gen(trans, ca, &iter, k);
