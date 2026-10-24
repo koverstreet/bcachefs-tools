@@ -326,8 +326,11 @@ fn maybe_zeroable(def: &cstruct::CStructDef) -> String {
              unsafe impl{generics} ::pin_init::Zeroable for {ty} {whr} {{}}\n")
 }
 
-/// One of core::sync::atomic's integer, bool or pointer atomics, by any path.
-fn is_core_atomic(ty: &str) -> bool {
+/// One of core::sync::atomic's integer, bool or pointer atomics, by any path
+/// - or an array of one.
+pub(crate) fn is_core_atomic(ty: &str) -> bool {
+    let ty = ty.trim();
+    let ty = ty.strip_prefix('[').and_then(|t| t.split(';').next()).unwrap_or(ty);
     let name = ty.trim().split('<').next().unwrap_or("").rsplit("::").next().unwrap_or("").trim();
     matches!(name, "AtomicBool" | "AtomicPtr" | "AtomicU8" | "AtomicI8" | "AtomicU16" | "AtomicI16" |
                    "AtomicU32" | "AtomicI32" | "AtomicU64" | "AtomicI64" | "AtomicUsize" | "AtomicIsize")

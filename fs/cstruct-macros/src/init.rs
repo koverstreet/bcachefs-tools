@@ -15,7 +15,9 @@
 //! Forgetting one is a compile error, not a zeroed lock: a field without
 //! `#[init]` gets `pin_init::init_zeroed()`, which only a Zeroable type
 //! takes - C's are, a Rust type with invariants, or a struct holding one,
-//! isn't.
+//! isn't. core's atomics are zeroed as values: they're as Zeroable as their
+//! integers, but pin_init has no impl for them, and the orphan rule allows
+//! none here.
 //!
 //! The struct is dropped whole, after C's teardown: so a C type's Rust Drop
 //! must do nothing to what C's teardown left - printbuf's does, as
@@ -42,8 +44,14 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
         if let Some(cfg) = &f.cfg {
             fields.push_str(&format!("#[cfg({})] ", cfg.to_rust()));
         }
-        let init = f.init.as_deref().unwrap_or("::pin_init::init_zeroed()");
-        fields.push_str(&format!("{} <- {init},\n", f.rust_name()));
+        match f.init.as_deref() {
+            Some(init) => fields.push_str(&format!("{} <- {init},\n", f.rust_name())),
+            // SAFETY: core's atomics are their integers, and zero is one -
+            // Zeroable, but for the impl the orphan rule doesn't allow us
+            None if crate::is_core_atomic(&f.ty) =>
+                fields.push_str(&format!("{}: unsafe {{ ::core::mem::zeroed() }},\n", f.rust_name())),
+            None => fields.push_str(&format!("{} <- ::pin_init::init_zeroed(),\n", f.rust_name())),
+        }
     }
 
     Ok(tokens(&format!(
