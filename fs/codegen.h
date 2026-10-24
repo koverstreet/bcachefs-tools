@@ -12,6 +12,7 @@
 #include <linux/fs.h>
 #include <linux/mount.h>
 #include <linux/mm.h>
+#include <linux/notifier.h>
 #include <linux/pagemap.h>
 #include <linux/poll.h>
 #include <asm/ioctl.h>
@@ -35,6 +36,9 @@ const blk_opf_t RUST_CONST_HELPER_REQ_FUA		= REQ_FUA;
  * parisc override asm-generic's (util/ioctl.rs)
  */
 const unsigned int RUST_CONST_HELPER_MINORBITS		= MINORBITS;
+
+/* a notifier's answer, as reconcile's power supply notifier gives it */
+const int RUST_CONST_HELPER_NOTIFY_OK			= NOTIFY_OK;
 
 /* the VFS's own ioctl numbers, which vfs/ioctl.rs answers */
 const unsigned int RUST_CONST_HELPER_FS_IOC_GETVERSION	= FS_IOC_GETVERSION;

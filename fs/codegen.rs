@@ -28,6 +28,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/mount.h",			// mnt_want_write_file(), vfs/ioctl.rs's
     "linux/blkdev.h",			// bdev_freeze(), vfs/ioctl.rs's goingdown
     "linux/freezer.h",			// set_freezable(), a freezable kthread's
+    "linux/power_supply.h",		// power_supply_reg_notifier(), reconcile on battery
 ];
 
 /// Headers under fs/ bound, by path - which the clang args have as an -I:
@@ -50,6 +51,7 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/mount.h",
     "linux/blkdev.h",
     "linux/freezer.h",
+    "linux/power_supply.h",
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
@@ -61,6 +63,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "rust_page_highmem", "rust_page_address",
     "rust_refcount_inc_not_zero", "rust_poll_wait", "rust_fault_in_writeable",
     "rust_fault_in_readable", "totalram_pages", "set_freezable",
+    "power_supply_reg_notifier", "power_supply_unreg_notifier", "power_supply_is_system_supplied",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",
                                   "xattr_handler"];
