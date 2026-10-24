@@ -35,6 +35,7 @@ use crate::data::ec::trigger::ptr_matches_stripe_m;
 use crate::data::ptrs::{extent_nonce, ptr_data_type, BkeyVPtrs, BkeyVPtrsMut, DecodedPtr, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;
+use crate::init::damage;
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
 use crate::opts::data_type_str;
@@ -81,11 +82,9 @@ fn btree_ptr_unreadable<'a>(t: &TransAttempt<'a, '_>, btree: c::btree_id, level:
 
     let mut msg = LogMsg::new(fs);
     prt!(&mut msg, "btree node with no readable replicas, dropping pointer:\n{}", n.to_text(fs));
-    // SAFETY: @n and @msg, borrowed for the calls
-    ret_to_result_void(unsafe {
-        c::bch2_damage_note_lost_extents(fs.as_ptr(), btree, n.into());
-        c::bch2_btree_lost_data(fs.as_ptr(), msg.as_raw(), btree)
-    })?;
+    damage::note_lost_extents(fs, btree, n);
+    // SAFETY: @msg, borrowed for the call
+    ret_to_result_void(unsafe { c::bch2_btree_lost_data(fs.as_ptr(), msg.as_raw(), btree) })?;
     Ok(false)
 }
 
@@ -115,10 +114,7 @@ pub fn bkey_drop_device_and_update(t: &TransAttempt<'_, '_>, btree: c::btree_id,
 
     if !n.as_sc().can_read(fs) {
         n.set_error(fs, error);
-        // SAFETY: our transaction
-        ret_to_result_void(unsafe {
-            c::bch2_damage_record_data_loss(t.raw(), btree, n.k().p, id::data_lost_double_allocation)
-        })?;
+        damage::record_data_loss(t, btree, n.k().p, id::data_lost_double_allocation)?;
     }
 
     let mut iter = BtreeNodeIter::new(t, btree, n.k().p, 0, level, BtreeIterFlags::INTENT);

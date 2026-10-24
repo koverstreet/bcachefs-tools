@@ -113,7 +113,6 @@ bcachefs-y		:=			\
 	fs/dirent.o				\
 	init/chardev.o				\
 	init/dev.o				\
-	init/damage.o				\
 	init/error.o				\
 	init/fs.o				\
 	init/recovery.o				\

@@ -41,6 +41,7 @@ use crate::data::ptrs::{crc_is_compressed, extents_match, BkeyVPtrs, Ptrs};
 use crate::data::reflink::make_extent_indirect;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
+use crate::init::damage;
 use crate::init::error::id;
 use crate::init::passes;
 use crate::init::progress::Progress;
@@ -320,7 +321,7 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::
         // the first inode; record the second explicitly (KEY_TYPE_extent only
         // lives in the extents btree, so both attribute):
         if inode_fsck_err!(t, extent.k.p, id::dup_extents_to_reflink, "{}", buf)? {
-            t.result(unsafe { c::bch2_damage_record(t.raw(), other_extent.k.p, id::dup_extents_to_reflink) })?;
+            damage::record(t, other_extent.k.p, id::dup_extents_to_reflink)?;
             extents_to_reflink(t,
                 &DupExtent { btree, level: bp.v.level, k: extent, overlap: k1_start..k1_start + overlap_len },
                 &DupExtent { btree: other_btree, level: ov.level, k: other_extent,

@@ -754,9 +754,10 @@ pub struct Fs {
     pub scrub_journal_repairs: c::darray_scrub_journal_repair,
     pub scrub_journal_repairs_lock: c::mutex,
 
-    /* Extents btree ranges from lost btree nodes, awaiting attribution */
-    pub lost_extents_ranges: c::darray_lost_extents_range,
-    pub lost_extents_ranges_lock: c::mutex,
+    /* Extents btree ranges from lost btree nodes, awaiting attribution: init/damage.rs */
+    #[pin]
+    #[init(RustOnly::new(crate::new_lock!(crate::util::alloc::KVVec::new())))]
+    pub(crate) lost_extents_ranges: rust_only!(Lock<c::mutex, crate::util::alloc::KVVec<core::ops::Range<c::bpos>>>),
 
     pub compress: c::bch_fs_compress,
     pub reconcile: c::bch_fs_reconcile,
