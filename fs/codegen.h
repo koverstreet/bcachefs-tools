@@ -10,6 +10,7 @@
 
 #include <linux/blkdev.h>
 #include <linux/fs.h>
+#include <linux/kallsyms.h>
 #include <linux/mount.h>
 #include <linux/mm.h>
 #include <linux/notifier.h>
@@ -39,6 +40,9 @@ const unsigned int RUST_CONST_HELPER_MINORBITS		= MINORBITS;
 
 /* a notifier's answer, as reconcile's power supply notifier gives it */
 const int RUST_CONST_HELPER_NOTIFY_OK			= NOTIFY_OK;
+
+/* room for one symbol as %pB prints it, util/backtrace.rs's frames */
+const size_t RUST_CONST_HELPER_KSYM_SYMBOL_LEN		= KSYM_SYMBOL_LEN;
 
 /* the VFS's own ioctl numbers, which vfs/ioctl.rs answers */
 const unsigned int RUST_CONST_HELPER_FS_IOC_GETVERSION	= FS_IOC_GETVERSION;

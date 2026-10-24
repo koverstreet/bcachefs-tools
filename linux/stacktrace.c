@@ -1,11 +1,16 @@
 #define UNW_LOCAL_ONLY
 #include <libunwind.h>
 
+#include <dlfcn.h>
 #include <pthread.h>
 #include <signal.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <linux/sched.h>
+
+#include "util/printbuf.h"
+#include "util/util.h"
 
 /*
  * Userspace shim for stack_trace_save_tsk(): unwind another thread of
@@ -142,4 +147,122 @@ unsigned int stack_trace_save_tsk(struct task_struct *task,
 	pthread_mutex_unlock(&bt_lock);
 
 	return r.nr_captured;
+}
+
+/*
+ * Userspace shim for %pB, for util/backtrace.rs: an address's symbol, its
+ * name as the binary has it - util/backtrace.rs demangles it, for the kernel's
+ * frames too.
+ *
+ * The name and offset from libunwind, which reads .symtab when it's there, so
+ * static functions resolve in a binary that isn't stripped. File and line from
+ * libdw, dlopened on first use: best effort - an initramfs without libdw.so.1,
+ * or without debuginfo, gets name+offset.
+ */
+
+struct Dwfl;
+struct Dwfl_Module;
+struct Dwfl_Line;
+
+struct dwfl_callbacks {
+	int  (*find_elf)(struct Dwfl_Module *, void **, const char *,
+			 unsigned long, char **, void **);
+	int  (*find_debuginfo)(struct Dwfl_Module *, void **, const char *,
+			       unsigned long, const char *, const char *,
+			       unsigned long, char **);
+	int  (*section_address)(struct Dwfl_Module *, void **, const char *,
+				unsigned long, const char *, unsigned long,
+				const void *, unsigned long *);
+	char **debuginfo_path;
+};
+
+static struct {
+	bool			initialized;
+	struct Dwfl		*dwfl;
+	struct Dwfl_Module	*(*addrmodule)(struct Dwfl *, unsigned long);
+	struct Dwfl_Line	*(*module_getsrc)(struct Dwfl_Module *, unsigned long);
+	const char		*(*lineinfo)(struct Dwfl_Line *, unsigned long *,
+					     int *, int *, void *, void *);
+} dw;
+
+static pthread_once_t dw_once = PTHREAD_ONCE_INIT;
+
+static void dw_init(void)
+{
+	void *h = dlopen("libdw.so.1", RTLD_LAZY);
+	if (!h)
+		return;
+
+	struct Dwfl		*(*dwfl_begin)(const struct dwfl_callbacks *);
+	int			(*dwfl_linux_proc_report)(struct Dwfl *, pid_t);
+	int			(*dwfl_report_end)(struct Dwfl *,
+				int (*)(struct Dwfl_Module *, void *,
+					const char *, unsigned long, void *),
+				void *);
+	int			(*find_elf)();
+	int			(*find_debuginfo)();
+
+	dwfl_begin		= dlsym(h, "dwfl_begin");
+	dwfl_linux_proc_report	= dlsym(h, "dwfl_linux_proc_report");
+	dwfl_report_end		= dlsym(h, "dwfl_report_end");
+	find_elf		= dlsym(h, "dwfl_linux_proc_find_elf");
+	find_debuginfo		= dlsym(h, "dwfl_standard_find_debuginfo");
+	dw.addrmodule		= dlsym(h, "dwfl_addrmodule");
+	dw.module_getsrc	= dlsym(h, "dwfl_module_getsrc");
+	dw.lineinfo		= dlsym(h, "dwfl_lineinfo");
+
+	if (!dwfl_begin || !dwfl_linux_proc_report || !dwfl_report_end ||
+	    !find_elf || !find_debuginfo ||
+	    !dw.addrmodule || !dw.module_getsrc || !dw.lineinfo)
+		return;
+
+	static struct dwfl_callbacks cb;
+	cb.find_elf		= (void *) find_elf;
+	cb.find_debuginfo	= (void *) find_debuginfo;
+
+	dw.dwfl = dwfl_begin(&cb);
+	if (!dw.dwfl)
+		return;
+
+	if (dwfl_linux_proc_report(dw.dwfl, getpid()) ||
+	    dwfl_report_end(dw.dwfl, NULL, NULL))
+		return;
+
+	dw.initialized = true;
+}
+
+static const char *dw_addr_to_src(unsigned long addr, int *lineno)
+{
+	pthread_once(&dw_once, dw_init);
+	if (!dw.initialized)
+		return NULL;
+
+	struct Dwfl_Module *mod = dw.addrmodule(dw.dwfl, addr);
+	if (!mod)
+		return NULL;
+	struct Dwfl_Line *line = dw.module_getsrc(mod, addr);
+	if (!line)
+		return NULL;
+	return dw.lineinfo(line, NULL, lineno, NULL, NULL, NULL);
+}
+
+void bch2_prt_symbol(struct printbuf *out, unsigned long addr)
+{
+	char name[512];
+	unw_word_t off;
+
+	if (!unw_get_proc_name_by_ip(unw_local_addr_space, addr,
+				     name, sizeof(name), &off, NULL))
+		prt_printf(out, "%s+0x%lx", name, (unsigned long) off);
+	else
+		prt_printf(out, "0x%lx", addr);
+
+	/*
+	 * A frame's address is where the call returns to, which can be the next
+	 * line, or no line at all: the call is the byte before, as %pB has it
+	 */
+	int lineno = 0;
+	const char *src = dw_addr_to_src(addr - 1, &lineno);
+	if (src)
+		prt_printf(out, " %s:%d", src, lineno);
 }

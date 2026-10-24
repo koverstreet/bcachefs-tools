@@ -40,7 +40,6 @@ rustix = { version = "1.1.4", features = ["event", "fs", "mount", "param", "pipe
 owo-colors = "4"
 crossterm = { version = "0.29", default-features = false, features = ["events"] }
 tiny_http = "0.12.0"
-rustc-demangle = "0.1"
 chrono = { version = "0.4.43", default-features = false, features = ["clock"] }
 fuser = { version = "0.17", optional = true }
 # rustyline 18 requires home 0.5.12, which requires rustc 1.88 (> our 1.85 MSRV)

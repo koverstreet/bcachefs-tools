@@ -330,14 +330,6 @@ int bch2_save_backtrace(bch_stacktrace *stack, struct task_struct *task, unsigne
 #endif
 }
 
-void bch2_prt_backtrace(struct printbuf *out, bch_stacktrace *stack)
-{
-	darray_for_each(*stack, i) {
-		prt_printf(out, "[<0>] %pB", (void *) *i);
-		prt_newline(out);
-	}
-}
-
 int bch2_prt_task_backtrace(struct printbuf *out, struct task_struct *task, unsigned skipnr, gfp_t gfp)
 {
 	skipnr += task == current;

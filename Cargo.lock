@@ -163,7 +163,6 @@ dependencies = [
  "libc",
  "log",
  "owo-colors",
- "rustc-demangle",
  "rustix",
  "rustyline",
  "serde",
