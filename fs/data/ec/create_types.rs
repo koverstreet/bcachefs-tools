@@ -7,6 +7,7 @@ use crate::fs::Fs;
 use crate::util::Printbuf;
 use crate::types::{DArray, bits_to_longs, c_default};
 use core::ffi::{c_int, c_uint, c_ulong};
+use core::sync::atomic::AtomicI32;
 use cstruct_macros::{bitfield, c_enum, c_extern, c_xmacro, CStruct, c_typedef};
 use nestify::nest;
 
@@ -82,7 +83,7 @@ nest! {
         pub work: c::work_struct,
         pub cl: c::closure,
 
-        pub ref_: [c::atomic_t; c::STRIPE_REF_NR as usize],
+        pub ref_: [AtomicI32; c::STRIPE_REF_NR as usize],
 
         /* seq is only assigned once the refs are gone, so it can't give an age */
         pub start_time: u64,

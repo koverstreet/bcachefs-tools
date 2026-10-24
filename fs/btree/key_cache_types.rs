@@ -6,10 +6,11 @@ use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::{Printbuf, ToText};
 use core::ffi::{c_uint, c_ulong};
+use core::sync::atomic::AtomicIsize;
 use cstruct_macros::{CStruct, TypeInfo, c_extern};
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo)]
 pub struct bch_fs_btree_key_cache {
     pub table: c::rhashtable,
     pub table_init_done: bool,
@@ -22,8 +23,8 @@ pub struct bch_fs_btree_key_cache {
     #[c("size_t __percpu *nr_pending")]
     pub nr_pending: *mut usize,
 
-    pub nr_keys: c::atomic_long_t,
-    pub nr_dirty: c::atomic_long_t,
+    pub nr_keys: AtomicIsize,
+    pub nr_dirty: AtomicIsize,
 
     /* shrinker stats */
     pub requested_to_free: c_ulong,

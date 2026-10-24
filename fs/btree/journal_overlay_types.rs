@@ -7,6 +7,7 @@ use crate::types::{DArray, NeBytes, c_default};
 use crate::util::vstructs::Head;
 use cstruct_macros::{bitfield, CStruct};
 use nestify::nest;
+use core::sync::atomic::AtomicI32;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -88,7 +89,7 @@ pub struct journal_keys {
      * This means that sequential insertions are O(n) instead of O(n^2).
      */
     pub gap: usize,
-    pub ref_: c::atomic_t,
+    pub ref_: AtomicI32,
     pub initial_ref_held: bool,
 
     /*

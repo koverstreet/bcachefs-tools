@@ -6,6 +6,7 @@ use crate::cstructs::c;
 use crate::types::c_default;
 use crate::util::futex::EventCount;
 use core::ffi::{c_int, c_void};
+use core::sync::atomic::AtomicI32;
 use cstruct_macros::{c_typedef, CStruct};
 
 /*
@@ -48,10 +49,10 @@ pub struct moving_context {
     pub io_seq_done: u64,
 
     /* in flight sectors: */
-    pub read_sectors: c::atomic_t,
-    pub write_sectors: c::atomic_t,
-    pub read_ios: c::atomic_t,
-    pub write_ios: c::atomic_t,
+    pub read_sectors: AtomicI32,
+    pub write_sectors: AtomicI32,
+    pub read_ios: AtomicI32,
+    pub write_ios: AtomicI32,
 
     pub wait: c::wait_queue_head_t,
     /* Woken with @wait - bch2_moving_ctxt_wake() - for Rust's waits: data/moving.rs */

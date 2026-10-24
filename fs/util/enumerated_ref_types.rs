@@ -18,7 +18,7 @@ pub struct enumerated_ref {
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     pub dying: bool,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub refs: *mut c::atomic_long_t,
+    pub refs: *mut core::sync::atomic::AtomicIsize,
     #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
     pub ref_: c::percpu_ref,
     pub stop_fn: Option<unsafe extern "C" fn(*mut c::enumerated_ref)>,

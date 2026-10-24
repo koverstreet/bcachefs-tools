@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::types::{CacheAligned, DArray, Fifo, c_default};
 use crate::util::vstructs::Head;
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
-use core::sync::atomic::AtomicI64;
+use core::sync::atomic::{AtomicI32, AtomicI64};
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct};
 use nestify::nest;
 
@@ -125,7 +125,7 @@ nest! {
     #[repr(C)]*
     pub struct journal_entry_pin_list {
         pub lock: c::spinlock_t,
-        pub count: c::atomic_t,
+        pub count: AtomicI32,
         pub unflushed: [c::list_head; c::JOURNAL_PIN_TYPE_NR as usize],
         pub flushed: c::list_head,
         pub unreplayed: bool,

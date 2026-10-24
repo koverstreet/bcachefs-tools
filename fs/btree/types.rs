@@ -10,7 +10,7 @@ use crate::types::{CacheAligned, DArray, NeBytes, bits_to_longs, c_default};
 use crate::util::vstructs::Head;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void, CStr};
-use core::sync::atomic::AtomicI64;
+use core::sync::atomic::{AtomicI64, AtomicIsize};
 use core::fmt;
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, TypeInfo};
 use nestify::nest;
@@ -306,8 +306,8 @@ pub struct bch_fs_btree_cache {
     pub nr_by_btree: [usize; cs::BTREE_ID_NR as usize],
 
     /* Number of nodes with BTREE_NODE_write_in_flight set. */
-    pub nr_in_flight: cs::atomic_long_t,
-    pub nr_in_flight_inner: cs::atomic_long_t,
+    pub nr_in_flight: AtomicIsize,
+    pub nr_in_flight_inner: AtomicIsize,
     pub nr_in_flight_wait: cs::closure_waitlist,
     pub __should_throttle_align: CacheAligned,
     pub should_throttle: bool,

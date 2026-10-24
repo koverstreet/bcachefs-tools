@@ -5,6 +5,7 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::{c_int, c_uint};
+use core::sync::atomic::AtomicI32;
 use cstruct_macros::{c_const, c_enum, c_typedef, CStruct};
 
 c_enum! {
@@ -65,7 +66,7 @@ c_const! {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct six_lock {
-    pub state: c::atomic_t,
+    pub state: AtomicI32,
     pub seq: u32,
     #[c("unsigned __percpu *readers")]
     pub readers: *mut c_uint,

@@ -6,6 +6,7 @@ use crate::cstructs::c;
 use crate::types::{CacheAligned, c_default};
 use crate::util::{Printbuf, ToText};
 use cstruct_macros::{c_const, c_extern, CStruct};
+use core::sync::atomic::AtomicI32;
 
 c_const! {
     #[c_int]
@@ -23,7 +24,7 @@ pub struct nocow_lock_bucket {
     pub wait: c::closure_waitlist,
     pub lock: c::spinlock_t,
     pub b: [u64; c::NOCOW_LOCK_BUCKET_SIZE as usize],
-    pub l: [c::atomic_t; c::NOCOW_LOCK_BUCKET_SIZE as usize],
+    pub l: [AtomicI32; c::NOCOW_LOCK_BUCKET_SIZE as usize],
 }
 c_default!(nocow_lock_bucket);
 

@@ -8,6 +8,7 @@ use crate::cstructs::c;
 use crate::types::{DArray, c_default};
 use cstruct_macros::{bitfield, c_enum, c_typedef, c_xmacro, CStruct, TypeInfo};
 use nestify::nest;
+use core::sync::atomic::AtomicI32;
 
 c_typedef! {
     #[c("DARRAY(struct folio *) folios")]
@@ -51,7 +52,7 @@ nest! {
 #[derive(CStruct, TypeInfo)]
 pub struct bch_folio {
     pub lock: c::spinlock_t,
-    pub write_count: c::atomic_t,
+    pub write_count: AtomicI32,
     /* is s[] up to date with the btree? says nothing about the data */
     pub state_uptodate: bool,
     /* the count s[].replicas_reserved is charged at, and released at */

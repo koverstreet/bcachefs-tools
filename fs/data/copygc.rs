@@ -86,12 +86,6 @@ use core::sync::atomic::{AtomicI32, Ordering::{Acquire, Relaxed}};
 use cstruct_macros::c_export;
 use pin_init::{pin_data, pin_init, PinInit};
 
-/// copygc_in_flight, and the like: a C atomic_t, as what it is.
-fn atomic(a: &c::atomic_t) -> &AtomicI32 {
-    // SAFETY: an atomic_t is an int, only ever accessed atomically
-    unsafe { AtomicI32::from_ptr((&raw const a.counter).cast_mut()) }
-}
-
 // ── Buckets in flight ────────────────────────────────────────────────────
 
 /// A bucket's count in its device's copygc_in_flight, while it's in flight:
@@ -105,7 +99,7 @@ impl<'f> DevInFlight<'f> {
     fn add(&self, d: i32) {
         let rcu = read_lock();
         if let Some(ca) = self.fs.dev_rcu(self.dev, &rcu) {
-            atomic(&ca.copygc_in_flight).fetch_add(d, Relaxed);
+            ca.copygc_in_flight.fetch_add(d, Relaxed);
         }
     }
 
@@ -269,7 +263,7 @@ fn dev_wait_amount(ca: &c::bch_dev) -> (i64, bool) {
 /// comparison flips constantly and says nothing about whether space is
 /// coming. mark_lock held, as dev_wait_amount().
 fn can_make_progress(ca: &c::bch_dev) -> bool {
-    atomic(&ca.copygc_in_flight).load(Relaxed) != 0 || dev_wait_amount(ca).0 <= 0
+    ca.copygc_in_flight.load(Relaxed) != 0 || dev_wait_amount(ca).0 <= 0
 }
 
 // ── Picking buckets ──────────────────────────────────────────────────────

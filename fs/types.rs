@@ -9,7 +9,7 @@ use crate::util::vstructs::Head;
 use crate::types::{GenRadix, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
-use core::sync::atomic::AtomicI64;
+use core::sync::atomic::{AtomicI32, AtomicI64};
 use cstruct_macros::{c_const, c_enum, c_rcu_array, c_xmacro, CStruct, Fieldwise, Init, TypeInfo};
 use pin_init::pin_data;
 
@@ -316,7 +316,7 @@ c_const! {
 pub struct bch_dev {
     pub kobj: c::kobject,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub ref_: c::atomic_long_t,
+    pub ref_: core::sync::atomic::AtomicIsize,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     pub dying: bool,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -405,10 +405,10 @@ pub struct bch_dev {
      * full alloc retry. Fs-wide wakes bump allocator.wake_all_counter
      * instead (see bch2_alloc_wake_all()).
      */
-    pub alloc_wake_counter: c::atomic_t,
+    pub alloc_wake_counter: AtomicI32,
 
     /* Buckets copygc has queued for evacuation on this device: */
-    pub copygc_in_flight: c::atomic_t,
+    pub copygc_in_flight: AtomicI32,
 
     pub nr_open_buckets: c_uint,
     pub nr_partial_buckets: c_uint,
@@ -434,7 +434,7 @@ pub struct bch_dev {
     pub cur_latency: [AtomicI64; 2],
     pub io_latency: [c::bch2_time_stats_quantiles; 2],
 
-    pub congested: c::atomic_t,
+    pub congested: AtomicI32,
     pub congested_last: u64,
 
     #[c("struct io_count __percpu *io_done")]

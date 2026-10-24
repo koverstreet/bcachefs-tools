@@ -7,6 +7,7 @@ use crate::fs::Fs;
 use crate::types::c_default;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
+use core::sync::atomic::AtomicI32;
 use cstruct_macros::{CStruct, c_const, c_extern, TypeInfo};
 
 #[repr(C)]
@@ -65,7 +66,7 @@ pub struct bch_fs_btree_node_rewrites {
     pub pending: c::list_head,
     pub lock: c::spinlock_t,
     pub wait: c::closure_waitlist,
-    pub nr: c::atomic_t,
+    pub nr: AtomicI32,
     pub table: c::rhashtable,
     pub table_init_done: bool,
     pub worker: *mut c::workqueue_struct,

@@ -8,7 +8,7 @@ use crate::util::Printbuf;
 use crate::types::{CacheAligned, DArray, c_default};
 use crate::util::percpu::{Counters, PerCpu};
 use core::ffi::{c_uint, c_ulong};
-use core::sync::atomic::AtomicI64;
+use core::sync::atomic::{AtomicI32, AtomicI64};
 use cstruct_macros::{bitfield, c_const, c_enum, c_extern, c_typedef, c_xmacro, CStruct, Fieldwise, TypeInfo};
 use nestify::nest;
 
@@ -58,7 +58,7 @@ nest! {
     #[derive(CStruct)]
     pub struct open_bucket {
         pub lock: c::spinlock_t,
-        pub pin: c::atomic_t,
+        pub pin: AtomicI32,
         pub freelist: c::open_bucket_idx_t,
         pub hash: c::open_bucket_idx_t,
 
@@ -236,7 +236,7 @@ pub struct bch_fs_allocator {
     pub rw_devs_change_count: c_ulong,
 
     /* fs-wide allocator wake generation; see bch2_alloc_wake_all() */
-    pub wake_all_counter: c::atomic_t,
+    pub wake_all_counter: AtomicI32,
 
     pub freelist_lock: c::spinlock_t,
     pub freelist_wait: c::closure_waitlist,
