@@ -9,7 +9,7 @@ use crate::btree::bkey::BkeySC;
 use crate::btree::iter::TransAttempt;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro};
 use nestify::nest;
 
@@ -123,6 +123,7 @@ pub struct promote_op {
 c_default!(promote_op);
 
 c_extern! {
+    pub fn bch2_data_update_to_text(out: *mut c::printbuf, m: *mut c::data_update);
     pub fn bch2_data_update_opts_to_text(out: *mut c::printbuf, c: *mut c::bch_fs,
                                          io_opts: *mut c::bch_inode_opts, data_opts: *mut c::data_update_opts);
     pub fn bch2_data_update_in_flight(c: *mut c::bch_fs, pos: *mut c::bbpos,
@@ -130,6 +131,13 @@ c_extern! {
     pub fn bch2_can_do_data_update(trans: *mut c::btree_trans, opts: *mut c::bch_inode_opts,
                                    data_opts: *mut c::data_update_opts, k: c::bkey_s_c,
                                    trace: *mut c::printbuf) -> c_int;
+}
+
+impl ToText for c::data_update {
+    fn to_text(&self, out: &mut Printbuf) {
+        // SAFETY: read only
+        unsafe { bch2_data_update_to_text(out.as_raw(), core::ptr::from_ref(self).cast_mut()) }
+    }
 }
 
 impl Fs {

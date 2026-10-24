@@ -2,7 +2,10 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::btree::bkey::BkeyI;
+use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::cstructs::c;
+use crate::errcode::BchError;
 use crate::types::{NeBytes, c_default};
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro, TypeInfo};
@@ -198,6 +201,10 @@ nest! {
 c_default!(bch_write_op);
 
 c_extern! {
+    pub fn bch2_sum_sector_overwrites(trans: *mut c::btree_trans, extent_iter: *mut c::btree_iter,
+                                      new: *mut c::bkey_i, usage_increasing: *mut bool,
+                                      i_sectors_delta: *mut i64, disk_sectors_delta: *mut i64,
+                                      new_nr_replicas: *mut c_uint) -> c_int;
     pub fn bch2_extent_update(trans: *mut c::btree_trans, inum: c::subvol_inum,
                               iter: *mut c::btree_iter, k: *mut c::bkey_i, k_buf_u64s: c_uint,
                               disk_res: *mut c::disk_reservation, new_i_size: u64,
@@ -205,4 +212,33 @@ c_extern! {
                               change_cookie: u32, flush: *mut c::closure) -> c_int;
     #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
     pub fn bch2_latency_acct(ca: *mut c::bch_dev, submit_time: u64, rw: c_int);
+}
+
+/// What writing @new over what it overwrites does to the inode and the disk:
+/// bch2_sum_sector_overwrites().
+pub struct SectorOverwrites {
+    /// Whether it takes space the overwritten keys don't give back: a
+    /// snapshot's overwrite, more replicas, or uncompressed over compressed.
+    /// An enospc check is due.
+    pub usage_increasing:   bool,
+    pub i_sectors_delta:    i64,
+    pub disk_sectors_delta: i64,
+    /// What disk_sectors_delta is weighted by: what topping a reservation up
+    /// to cover it charges at.
+    pub new_nr_replicas:    u32,
+}
+
+impl TransAttempt<'_, '_> {
+    /// @new's SectorOverwrites, from @iter at @new's start.
+    pub fn sum_sector_overwrites(&self, iter: &BtreeIter<'_>, new: &BkeyI) -> Result<SectorOverwrites, BchError> {
+        let mut s = SectorOverwrites {
+            usage_increasing: false, i_sectors_delta: 0, disk_sectors_delta: 0, new_nr_replicas: 0,
+        };
+        // SAFETY: @iter only copied, @new only read
+        let ret = unsafe {
+            bch2_sum_sector_overwrites(self.raw(), iter.raw(), new.as_ffi().cast_mut(), &mut s.usage_increasing,
+                                       &mut s.i_sectors_delta, &mut s.disk_sectors_delta, &mut s.new_nr_replicas)
+        };
+        self.result(ret).map(|()| s)
+    }
 }
