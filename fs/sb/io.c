@@ -1331,14 +1331,19 @@ static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs
 			continue;
 
 		/*
-		 * #918 G9 fix layer 3: during going-RO, skip devices
-		 * whose freeze gate is closed — their block device may
-		 * be dm-suspended and closure_bio_submit would block
-		 * forever.  The previous superblock is still on the
-		 * device; journal replay reconciles on next mount.
+		 * #918 G9 fix layer 3+6: during going-RO, skip devices
+		 * that may be unreachable.  Two conditions:
+		 *  (a) gate closed -- bcachefs froze the device
+		 *  (b) emergency_ro -- an external agent (dm-suspend)
+		 *      made the device unreachable; bcachefs does not
+		 *      know which device, so skip ALL to avoid blocking
+		 *      forever in closure_bio_submit.
+		 * The previous superblock is still on disk; journal
+		 * replay reconciles on next mount.
 		 */
 		if (unlikely(test_bit(BCH_FS_going_ro, &c->flags) &&
-			     !bch2_dev_idx_freeze_gate_open(c, ca->dev_idx)))
+			     (test_bit(BCH_FS_emergency_ro, &c->flags) ||
+			      !bch2_dev_idx_freeze_gate_open(c, ca->dev_idx))))
 			continue;
 
 		int ret = darray_push(&online_devices, ((write_sb_dev) { ca }));

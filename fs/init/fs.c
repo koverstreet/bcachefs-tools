@@ -502,7 +502,7 @@ void bch2_fs_read_only(struct bch_fs *c)
 		bch_verbose(c, "finished waiting for writes to stop");
 
 	clear_bit(BCH_FS_write_disable_complete, &c->flags);
-	clear_bit(BCH_FS_going_ro, &c->flags);
+	/* #918 G9 fix: going_ro cleared after write_super (moved below) */
 	clear_bit(BCH_FS_rw, &c->flags);
 
 	if (!bch2_journal_error(&c->journal) &&
@@ -528,6 +528,10 @@ void bch2_fs_read_only(struct bch_fs *c)
 
 		bch_verbose(c, "done going read-only, filesystem not clean");
 	}
+
+	/* #918 G9 fix: clear going_ro AFTER write_super so the
+	 * emergency-RO skip in __bch2_write_super can fire */
+	clear_bit(BCH_FS_going_ro, &c->flags);
 }
 
 static void bch2_fs_read_only_work(struct work_struct *work)
