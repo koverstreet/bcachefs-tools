@@ -2573,6 +2573,12 @@ void __bch2_wait_on_allocator(struct btree_trans *trans,
 		long t = until - jiffies;
 
 		if (t > 0 && trans_closure_sync_timeout(trans, cl, t)) {
+			/* every one, though the dump below is one in two minutes: */
+			event_inc_trace(c, allocator_stuck, buf, ({
+				prt_printf(&buf, "err %s\n", bch2_err_str(err));
+				bch2_alloc_request_to_text(&buf, c, req);
+			}));
+
 			/*
 			 * Timed out — cl is still on freelist_wait.
 			 *
