@@ -264,7 +264,7 @@ pub fn stripe_header_mut(k: &mut impl BkeyVMut) -> &mut c::Stripe {
 /// @nr_redundant parity blocks - the pool's widening target - capped at
 /// BCH_BKEY_PTRS_MAX, and at @max_data_blocks if that's set (the
 /// ec_max_data_blocks option): stripe_widen_target_nr_data().
-pub fn stripe_widen_target_nr_data(nr_devs: u32, nr_redundant: u32, max_data_blocks: u32) -> u32 {
+fn stripe_widen_target_nr_data(nr_devs: u32, nr_redundant: u32, max_data_blocks: u32) -> u32 {
     if nr_devs <= nr_redundant {
         return 0;
     }
@@ -275,8 +275,19 @@ pub fn stripe_widen_target_nr_data(nr_devs: u32, nr_redundant: u32, max_data_blo
 
 /// What a stripe's can_widen holds: target - actual data blocks, clamped to
 /// its three bits - stripe_widen_value().
-pub fn stripe_widen_value(target_nr_data: u32, actual_nr_data: u32) -> u8 {
+fn stripe_widen_value(target_nr_data: u32, actual_nr_data: u32) -> u8 {
     (target_nr_data as i32).wrapping_sub(actual_nr_data as i32).clamp(0, 7) as u8
+}
+
+impl c::Stripe {
+    /// The can_widen it should have, with @nr_devs RW members in its disk
+    /// label and ec_max_data_blocks @max_data_blocks: how many more data
+    /// blocks they'd let it have.
+    pub fn want_can_widen(&self, nr_devs: u32, max_data_blocks: u32) -> u8 {
+        // unsigned, as C's - nr_redundant past nr_blocks is damage
+        let nr_data = u32::from(self.nr_blocks).wrapping_sub(self.nr_redundant.into());
+        stripe_widen_value(stripe_widen_target_nr_data(nr_devs, self.nr_redundant.into(), max_data_blocks), nr_data)
+    }
 }
 
 fn stripe_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {

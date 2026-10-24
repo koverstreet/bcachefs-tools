@@ -5,7 +5,6 @@
 //! trigger calls.
 
 use crate::c;
-use crate::data::ec::trigger::{stripe_widen_target_nr_data, stripe_widen_value};
 use crate::errcode::{ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::util::alloc::darray_exit;
@@ -56,11 +55,7 @@ impl WidenCache {
     /// its disk label's RW members would let it have.
     pub fn can_widen(&mut self, fs: &Fs, s: &c::Stripe) -> Result<u8, BchError> {
         let nr_devs = self.lookup(fs, s.disk_label, s.sectors.get())?;
-        // unsigned, as C's - nr_redundant past nr_blocks is damage
-        let nr_data = u32::from(s.nr_blocks).wrapping_sub(s.nr_redundant.into());
-        Ok(stripe_widen_value(
-            stripe_widen_target_nr_data(nr_devs, s.nr_redundant.into(), fs.opts().ec_max_data_blocks.into()),
-            nr_data))
+        Ok(s.want_can_widen(nr_devs, fs.opts().ec_max_data_blocks.into()))
     }
 }
 
