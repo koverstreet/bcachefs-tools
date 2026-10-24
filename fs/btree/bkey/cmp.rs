@@ -1,8 +1,17 @@
 //! Comparing positions: Bpos's Ord, and C's bpos_*() - every field - and
-//! bkey_*() - inode and offset, the snapshot field ignored.
+//! bkey_*() - inode and offset, the snapshot field ignored. Its Hash is of
+//! every field too, as its Eq.
 
 use crate::c::bpos as Bpos;
 use core::cmp::Ordering;
+use core::hash::{Hash, Hasher};
+
+impl Hash for Bpos {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        // packed: the fields by value
+        (self.inode, self.offset, self.snapshot).hash(h)
+    }
+}
 
 impl PartialEq for Bpos {
     fn eq(&self, other: &Self) -> bool {
