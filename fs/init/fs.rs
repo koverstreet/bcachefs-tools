@@ -877,6 +877,11 @@ pub fn writepoint_hashed(v: usize) -> c::write_point_specifier {
     c::write_point_specifier { v: (v | 1) as _ }
 }
 
+/// A specifier for write point @wp itself: writepoint_ptr().
+pub fn writepoint_ptr(wp: &c::write_point) -> c::write_point_specifier {
+    c::write_point_specifier { v: core::ptr::from_ref(wp) as _ }
+}
+
 pub fn btree_id_is_alloc(id: u32) -> bool {
     matches!(
         c::btree_id::from_raw(id),
