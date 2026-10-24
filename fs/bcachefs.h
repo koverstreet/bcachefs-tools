@@ -125,7 +125,6 @@
 #include "data/move_defs_gen.h"
 #include "data/move_gen.h"
 #include "init/progress.h"
-#include "util/cuckoo.h"
 #include "data/reconcile/types_gen.h"
 
 #include "debug/async_objs_gen.h"

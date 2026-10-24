@@ -125,7 +125,6 @@ bcachefs-y		:=			\
 	opts.o					\
 	sb/members.o				\
 	util/clock.o				\
-	util/cuckoo.o				\
 	util/darray.o				\
 	util/enumerated_ref.o			\
 	util/eytzinger.o			\

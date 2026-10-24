@@ -19,7 +19,6 @@ mod util;
 mod wrappers;
 pub mod http;
 #[cfg(test)]
-mod cuckoo_test;
 #[cfg(test)]
 mod eytzinger_test;
 #[cfg(test)]
