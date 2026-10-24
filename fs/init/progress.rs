@@ -7,10 +7,10 @@
 //!
 //! An indicator is wherever its work keeps it: c->recovery.progress, which
 //! recovery passes share - Progress::recovery() - reconcile's, snapshot
-//! deletion's, a local. Its state is a SeqLock's: the work is its one writer,
-//! updating it as it goes, and readers copy it out whole, never half an
-//! update - which C's unlocked reads of the same fields could get. C goes
-//! through the functions here, C's API as it was, and
+//! deletion's, a local - Progress::new(). Its state is a SeqLock's: the work
+//! is its one writer, updating it as it goes, and readers copy it out whole,
+//! never half an update - which C's unlocked reads of the same fields could
+//! get. C goes through the functions here, C's API as it was, and
 //! bch2_progress_status() for what the ioctl copies out.
 //!
 //! A zeroed indicator is a valid one, never initialized - as bch_fs embeds
@@ -180,6 +180,14 @@ fn total_nodes(fs: &Fs, leaf_mask: u64, inner_mask: u64) -> u64 {
     total
 }
 
+impl Default for c::progress_indicator {
+    fn default() -> Self {
+        // SAFETY: zeroed, an indicator is valid, and nothing in it - a SeqLock
+        // of plain data - cares where it lives
+        unsafe { core::mem::zeroed() }
+    }
+}
+
 impl c::progress_indicator {
     /// Whether it has a total - an estimate of its work's size - to show.
     pub fn has_total(&self) -> bool {
@@ -288,13 +296,22 @@ impl ToText for c::progress_indicator {
     }
 }
 
-/// The filesystem's recovery pass progress indicator, c->recovery.progress -
-/// one for the whole filesystem, as passes run one at a time.
+/// An indicator, init()ed: the filesystem's recovery pass one,
+/// c->recovery.progress - one for the whole filesystem, as passes run one at a
+/// time - or the caller's own.
 pub struct Progress<'f> {
     p: &'f c::progress_indicator,
 }
 
 impl<'f> Progress<'f> {
+    /// @p, init()ed: its btrees as masks, a bit per btree id.
+    pub fn new(p: &'f c::progress_indicator, fs: &Fs, msg: &'static CStr, leaf_mask: u64, inner_mask: u64)
+        -> Self
+    {
+        p.init_masks(fs, Some(msg), leaf_mask, inner_mask);
+        Progress { p }
+    }
+
     /// c->recovery.progress, init()ed.
     pub fn recovery(
         fs:           &'f Fs,
@@ -309,10 +326,7 @@ impl<'f> Progress<'f> {
     }
 
     pub fn recovery_masks(fs: &'f Fs, msg: &'static CStr, leaf_mask: u64, inner_mask: u64) -> Self {
-        let p = &fs.recovery.progress;
-
-        p.init_masks(fs, Some(msg), leaf_mask, inner_mask);
-        Progress { p }
+        Self::new(&fs.recovery.progress, fs, msg, leaf_mask, inner_mask)
     }
 
     /// Report the walk reaching @iter's position.
