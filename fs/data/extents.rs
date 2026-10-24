@@ -3,14 +3,16 @@
 //! them, are data/ptrs.rs's.
 
 use crate::bkey_fsck_err_on;
-use crate::btree::bkey::{bkey_family, bkey_ge, bkey_gt, bkey_le, bkey_lt, BkeyS, BkeySC, BkeyV, BkeyVMut};
+use crate::btree::bkey::{bkey_family, bkey_ge, bkey_gt, bkey_le, bkey_lt, BkeyFamily, BkeyS, BkeySC, BkeyV, BkeyVal,
+                         BkeyVMut};
 use crate::c;
-use crate::data::ptrs::{crc_is_compressed, crc_unpack, BkeyVPtrs, ExtentEntry, ExtentEntryMut, Ptrs};
+use crate::data::ptrs::{crc_is_compressed, crc_unpack, BkeyVPtrs, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::util::ffi::Opaque;
 use crate::util::rcu::{read_lock, ReadGuard};
+use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use core::ffi::c_int;
 use cstruct_macros::c_export;
@@ -68,29 +70,11 @@ impl c::bkey {
         matches!(self.key_type(), t::KEY_TYPE_extent | t::KEY_TYPE_inline_data | t::KEY_TYPE_reservation)
     }
 
-    /// Whether its value is pointers to its data, and not to another key's.
+    /// Whether its value is pointers to its data, and not to another key's:
+    /// a PtrsMut key - every type with pointers but a stripe.
     pub fn extent_is_direct_data(&self) -> bool {
-        use c::bch_bkey_type as t;
-
-        matches!(self.key_type(),
-                 t::KEY_TYPE_btree_ptr | t::KEY_TYPE_btree_ptr_v2 | t::KEY_TYPE_extent |
-                 t::KEY_TYPE_reflink_v)
+        <PtrsMut as BkeyFamily>::contains(self)
     }
-}
-
-impl BkeySC<'_> {
-    /// Whether it has space allocated and not yet written: an unwritten
-    /// pointer.
-    pub fn extent_is_unwritten(self, fs: &Fs) -> bool {
-        self.arm::<Ptrs>().is_some_and(|k| k.ptrs(fs).any(|p| p.unwritten() != 0))
-    }
-
-    /// Whether it reserves space rather than holding data - a reservation, or
-    /// an extent with unwritten pointers.
-    pub fn extent_is_reservation(self, fs: &Fs) -> bool {
-        self.k.key_type() == c::bch_bkey_type::KEY_TYPE_reservation || self.extent_is_unwritten(fs)
-    }
-
 }
 
 /*
@@ -100,8 +84,25 @@ impl BkeySC<'_> {
  * still an extent.
  */
 
-/// What an extent, armed to Extents, does in whichever form it's held.
+/// What a key does as an extent, in whichever form it's held: any key's
+/// unwritten and reservation tests, and an extent's cuts - one armed to Extents.
 pub trait BkeyVExtents: BkeyV {
+    /// Whether it has space allocated and not yet written: an unwritten
+    /// pointer.
+    fn extent_is_unwritten(&self, fs: &Fs) -> bool
+    where Self::V: BkeyVal<State = Validated>
+    {
+        self.as_sc().arm::<Ptrs>().is_some_and(|k| k.ptrs(fs).any(|p| p.unwritten() != 0))
+    }
+
+    /// Whether it reserves space rather than holding data - a reservation, or
+    /// an extent with unwritten pointers.
+    fn extent_is_reservation(&self, fs: &Fs) -> bool
+    where Self::V: BkeyVal<State = Validated>
+    {
+        self.k().key_type() == c::bch_bkey_type::KEY_TYPE_reservation || self.extent_is_unwritten(fs)
+    }
+
     /// Cut to start at @where_: bch2_cut_front_s().
     fn cut_front(mut self, fs: &Fs, where_: c::bpos) -> Option<Self>
     where Self: BkeyVMut<V = Extents>

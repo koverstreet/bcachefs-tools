@@ -7,7 +7,7 @@
 
 use crate::{accounting, bkey_fsck_err_on, fsck_err};
 use crate::alloc::disk_groups::Target;
-use crate::btree::bkey::{bpos_max, bpos_min, pos, BkeySC, BkeyV};
+use crate::btree::bkey::{bpos_max, bpos_min, pos, BkeySC, BkeyV, BkeyVal};
 use crate::btree::bkey_methods::TriggerOp;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, NoRoom, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
@@ -15,7 +15,7 @@ use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Pt
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
-use crate::util::vstructs::plain_bytes;
+use crate::util::vstructs::{plain_bytes, Validated};
 use crate::util::Printbuf;
 use core::mem::size_of;
 use cstruct_macros::c_export;
@@ -108,10 +108,13 @@ impl core::fmt::Display for c::reconcile_work_id {
     }
 }
 
-/// What a key with pointers carries for reconcile.
-pub trait BkeyVReconcile: BkeyVPtrs {
+/// What a key carries for reconcile: a key with pointers' entries, and any
+/// key's work btree.
+pub trait BkeyVReconcile: BkeyV {
     /// Its reconcile entry: bch2_bkey_reconcile_opts().
-    fn reconcile_opts(&self, fs: &Fs) -> Option<&c::bch_extent_reconcile> {
+    fn reconcile_opts(&self, fs: &Fs) -> Option<&c::bch_extent_reconcile>
+    where Self: BkeyVPtrs
+    {
         self.extent_entries(fs).find_map(|e| match e {
             ExtentEntry::reconcile(r) => Some(r),
             _ => None,
@@ -120,7 +123,9 @@ pub trait BkeyVReconcile: BkeyVPtrs {
 
     /// The index its reconcile_bp entry has, 0 without one:
     /// bch2_bkey_get_reconcile_bp().
-    fn reconcile_bp_idx(&self, fs: &Fs) -> u64 {
+    fn reconcile_bp_idx(&self, fs: &Fs) -> u64
+    where Self: BkeyVPtrs
+    {
         self.extent_entries(fs).find_map(|e| match e {
             ExtentEntry::reconcile_bp(bp) => Some(bp.idx()),
             _ => None,
@@ -129,27 +134,30 @@ pub trait BkeyVReconcile: BkeyVPtrs {
 
     /// Its reconcile backpointer's position: its work id, and its
     /// reconcile_bp entry's index. bch2_bkey_get_reconcile_bp_pos().
-    fn reconcile_bp_pos(&self, fs: &Fs) -> c::bpos {
+    fn reconcile_bp_pos(&self, fs: &Fs) -> c::bpos
+    where Self: BkeyVPtrs
+    {
         pos(rb_work_id(self.reconcile_opts(fs)).0.into(), self.reconcile_bp_idx(fs))
     }
-}
 
-impl<K: BkeyVPtrs> BkeyVReconcile for K {}
-
-impl BkeySC<'_> {
     /// The work btree it's tracked in - a stripe's by its needs_reconcile, as
     /// stripes have no reconcile entry: bch2_bkey_reconcile_work_id().
-    pub fn reconcile_work_id(self, fs: &Fs) -> c::reconcile_work_id {
-        if let Some(s) = self.arm::<c::Stripe>() {
+    fn reconcile_work_id(&self, fs: &Fs) -> c::reconcile_work_id
+    where Self::V: BkeyVal<State = Validated>
+    {
+        let key = self.as_sc();
+        if let Some(s) = key.arm::<c::Stripe>() {
             return if s.v().needs_reconcile() != 0 {
                 c::reconcile_work_id::RECONCILE_WORK_hipri
             } else {
                 c::reconcile_work_id::RECONCILE_WORK_none
             };
         }
-        self.arm::<Ptrs>().map_or(c::reconcile_work_id::RECONCILE_WORK_none, |k| rb_work_id(k.reconcile_opts(fs)))
+        key.arm::<Ptrs>().map_or(c::reconcile_work_id::RECONCILE_WORK_none, |k| rb_work_id(k.reconcile_opts(fs)))
     }
 }
+
+impl<K: BkeyV> BkeyVReconcile for K {}
 
 impl TransBkey<'_, '_, PtrsMut> {
     /// Its reconcile_bp entry made @idx - dropped for 0, appended if it has

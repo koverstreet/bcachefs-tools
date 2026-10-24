@@ -5,6 +5,7 @@
 use super::*;
 use crate::{bkey_fsck_err, bkey_fsck_err_on};
 use crate::btree::bkey::{bkey_eq, bpos_ge, POS_MIN};
+use crate::data::durability::BkeyVDurability;
 use crate::data::reconcile::trigger::{extent_rebalance_v1_to_text, extent_reconcile_to_text,
                                       extent_reconcile_validate};
 use crate::init::error::{id, BkeyValidate};

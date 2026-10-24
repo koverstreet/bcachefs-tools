@@ -182,17 +182,19 @@ fn ptr_better(fs: &Fs, p1: &c::extent_ptr_decoded, mut l1: u64, p2: &c::extent_p
     unsafe { c::bch2_get_random_u64_below(l1.wrapping_add(l2)) > l1 }
 }
 
-impl BkeySC<'_> {
+/// Which replica of a key to read, in whichever form it's held, of any type.
+pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
     /// Which of its pointers to read - preferring @preferred_dev, and with
     /// BCH_READ_hard_require_read_device only it - against @failed, what
     /// failed reading it so far: bch2_bkey_pick_read_device(). None if there's
     /// nothing to read: it's unwritten, or has no pointers but cached ones, or
     /// none. An error is why nothing could be picked.
-    pub fn pick_read_device(self, fs: &Fs, failed: Option<&c::bch_io_failures>, preferred_dev: u32,
-                            flags: c::bch_read_flags) -> Result<Option<c::extent_ptr_decoded>, BchError> {
+    fn pick_read_device(&self, fs: &Fs, failed: Option<&c::bch_io_failures>, preferred_dev: u32,
+                        flags: c::bch_read_flags) -> Result<Option<c::extent_ptr_decoded>, BchError> {
         use c::bch_errcode as e;
+        let key = self.as_sc();
 
-        if self.k.key_type() == c::bch_bkey_type::KEY_TYPE_error {
+        if key.k.key_type() == c::bch_bkey_type::KEY_TYPE_error {
             return fs.throw(e::BCH_ERR_key_type_error);
         }
 
@@ -200,7 +202,7 @@ impl BkeySC<'_> {
         let mut have_dirty_ptrs = false;
         let mut pick: Option<(c::extent_ptr_decoded, u64)> = None;
 
-        if let Some(k) = self.arm::<Ptrs>() {
+        if let Some(k) = key.arm::<Ptrs>() {
             let mut rcu = read_lock();
 
             for d in k.ptrs_decoded(fs) {
@@ -221,7 +223,7 @@ impl BkeySC<'_> {
                 let missing = fs.dev_rcu(dev, &rcu).is_none() && dev != c::BCH_SB_MEMBER_INVALID;
                 if missing {
                     drop(rcu);
-                    fs.dev_missing_bkey(self, dev)?;
+                    fs.dev_missing_bkey(key.untyped(), dev)?;
                     rcu = read_lock();
                 }
                 let ca = if missing { None } else { fs.dev_rcu(dev, &rcu) };
@@ -276,7 +278,7 @@ impl BkeySC<'_> {
         }
 
         use c::bch_bkey_type as t;
-        if !have_dirty_ptrs && !matches!(self.k.key_type(), t::KEY_TYPE_btree_ptr | t::KEY_TYPE_btree_ptr_v2) {
+        if !have_dirty_ptrs && !matches!(key.k.key_type(), t::KEY_TYPE_btree_ptr | t::KEY_TYPE_btree_ptr_v2) {
             return Ok(None);
         }
         if have_missing_devs || !have_dirty_ptrs {
@@ -292,3 +294,5 @@ impl BkeySC<'_> {
         fs.throw(e::BCH_ERR_no_devices_valid)
     }
 }
+
+impl<K: BkeyV<V: BkeyVal<State = Validated>>> BkeyVRead for K {}

@@ -45,6 +45,7 @@ use crate::btree::iter::{is_restart, polonius_key, BtreeIter, BtreeIterFlags, Bt
 use crate::btree::write_buffer::WbFlush;
 use crate::c;
 use crate::data::ptrs::{ptr_data_type, ptr_disk_sectors, DecodedPtr, Ptrs};
+use crate::data::reconcile::trigger::BkeyVReconcile;
 use crate::debug::params as debug_params;
 use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
 use crate::fs::Fs;

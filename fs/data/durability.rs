@@ -14,7 +14,7 @@
 //!
 //! The counts are bkey_durability's u8s, summed as C's are: wrapping.
 
-use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyV};
+use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyV, BkeyVal};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
 use crate::c;
 use crate::data::ec::trigger::{ptr_matches_stripe, stripe_block_ptrs};
@@ -25,6 +25,7 @@ use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::ffi::Opaque;
 use crate::util::inline_vec::InlineVec;
 use crate::util::rcu::{read_lock, ReadGuard};
+use crate::util::vstructs::Validated;
 use arrayvec::ArrayVec;
 use core::ffi::{c_int, c_uint};
 use core::mem::MaybeUninit;
@@ -214,18 +215,21 @@ fn count_ptr(ret: &mut c::bkey_durability, p: &c::extent_ptr_decoded) {
     }
 }
 
-impl BkeySC<'_> {
+/// A key's durability and whether it can be read, in whichever form it's
+/// held, of any type.
+pub trait BkeyVDurability: BkeyV<V: BkeyVal<State = Validated>> {
     /// Its durability, total and online - each device counted once - with its
     /// replica and pointer counts, the per-pointer sum of desired durability
     /// (acct) and the least of it (min_durability, an evacuating device's
     /// none): bch2_bkey_durability(). Its stripes are looked up in @t.
-    pub fn durability(self, t: &TransAttempt<'_, '_>) -> Result<c::bkey_durability, BchError> {
-        if let Some(r) = reservation_durability(self) {
+    fn durability(&self, t: &TransAttempt<'_, '_>) -> Result<c::bkey_durability, BchError> {
+        let key = self.as_sc();
+        if let Some(r) = reservation_durability(key.untyped()) {
             return Ok(r);
         }
 
         let mut ret = c::bkey_durability { min_durability: u8::MAX, ..Default::default() };
-        let Some(k) = self.arm::<Ptrs>() else { return Ok(ret) };
+        let Some(k) = key.arm::<Ptrs>() else { return Ok(ret) };
         let fs = t.fs();
         let mut seen = Seen::default();
 
@@ -266,13 +270,14 @@ impl BkeySC<'_> {
     /// erasure coded pointer counts as its redundancy plus one, and online
     /// isn't counted. bch2_bkey_durability_safe(), for reserving space to
     /// rewrite a key: tolerates bad pointers.
-    pub fn durability_safe(self, fs: &Fs) -> c::bkey_durability {
-        if let Some(r) = reservation_durability(self) {
+    fn durability_safe(&self, fs: &Fs) -> c::bkey_durability {
+        let key = self.as_sc();
+        if let Some(r) = reservation_durability(key.untyped()) {
             return r;
         }
 
         let mut ret = c::bkey_durability { min_durability: u8::MAX, ..Default::default() };
-        let Some(k) = self.arm::<Ptrs>() else { return ret };
+        let Some(k) = key.arm::<Ptrs>() else { return ret };
         let rcu = read_lock();
 
         for d in k.ptrs_decoded(fs) {
@@ -296,13 +301,14 @@ impl BkeySC<'_> {
     /// A btree node pointer's durability, total and online - each pointer's
     /// device counted, unlike a data key's, as often as it's pointed to:
     /// bch2_btree_ptr_durability().
-    pub fn btree_ptr_durability(self, fs: &Fs) -> c::bkey_durability {
+    fn btree_ptr_durability(&self, fs: &Fs) -> c::bkey_durability {
+        let key = self.as_sc();
         use c::bch_bkey_type as t;
-        assert!(matches!(self.k.key_type(), t::KEY_TYPE_btree_ptr | t::KEY_TYPE_btree_ptr_v2),
-                "btree_ptr_durability() of a {:?}", self.k.key_type());
+        assert!(matches!(key.k.key_type(), t::KEY_TYPE_btree_ptr | t::KEY_TYPE_btree_ptr_v2),
+                "btree_ptr_durability() of a {:?}", key.k.key_type());
 
         let mut ret = c::bkey_durability::default();
-        let k = self.arm::<Ptrs>().expect("a btree node pointer has pointers");
+        let k = key.arm::<Ptrs>().expect("a btree node pointer has pointers");
         let rcu = read_lock();
 
         for ptr in k.ptrs(fs) {
@@ -320,8 +326,8 @@ impl BkeySC<'_> {
 
     /// Whether any of it can be read: a pointer not cached, to a device or
     /// with a stripe - bch2_bkey_can_read().
-    pub fn can_read(self, fs: &Fs) -> bool {
-        self.arm::<Ptrs>().is_some_and(|k| {
+    fn can_read(&self, fs: &Fs) -> bool {
+        self.as_sc().arm::<Ptrs>().is_some_and(|k| {
             k.ptrs_decoded(fs).any(|d| {
                 d.p.ptr.cached() == 0 &&
                     (u32::from(d.p.ptr.dev()) != c::BCH_SB_MEMBER_INVALID || d.p.has_ec)
@@ -329,6 +335,8 @@ impl BkeySC<'_> {
         })
     }
 }
+
+impl<K: BkeyV<V: BkeyVal<State = Validated>>> BkeyVDurability for K {}
 
 // ── dropping what isn't needed ───────────────────────────────────────────
 

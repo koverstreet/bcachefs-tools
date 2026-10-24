@@ -7,10 +7,11 @@
 
 use crate::fsck_err;
 use crate::alloc::disk_groups::Target;
-use crate::btree::bkey::{BkeyS, BkeySC, BkeyV};
+use crate::btree::bkey::{BkeyS, BkeySC, BkeyV, BkeyVal};
 use crate::btree::bkey_methods::TriggerOp;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
+use crate::data::durability::BkeyVDurability;
 use crate::data::ec::trigger::stripe_header_mut;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
 use crate::data::reconcile::trigger::{extent_reconcile_to_text, BkeyVReconcile};
@@ -19,6 +20,7 @@ use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
 use crate::util::printbuf::Msg;
 use crate::util::rcu::read_lock;
+use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
@@ -56,7 +58,7 @@ struct NeedsReconcile {
 /// pointers need, and which are moving - and the padding pointers it should
 /// gain or lose; None if it has them already: bch2_bkey_needs_reconcile().
 /// A stripe goes by its needs_reconcile bit: data_replicas work, or none.
-fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts)
+fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_, Ptrs>, opts: &c::bch_inode_opts)
     -> Result<Option<NeedsReconcile>, BchError>
 {
     use c::bch_reconcile_opts as o;
@@ -67,11 +69,10 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_
         return Ok(None);
     }
 
-    let kp = k.arm::<Ptrs>().expect("direct data or a stripe: a key with pointers");
     let mut r = c::bch_extent_reconcile::from_io_opts(opts);
     let need = |r: &mut c::bch_extent_reconcile, opt| r.update_need_rb(|n| n | rb_bit(opt));
 
-    let poisoned = kp.extent_flags(fs) & 1 << c::bch_extent_flags_e::BCH_EXTENT_FLAG_poisoned.0 != 0;
+    let poisoned = k.extent_flags(fs) & 1 << c::bch_extent_flags_e::BCH_EXTENT_FLAG_poisoned.0 != 0;
     let compression_type = c::bch_compression_opt::to_type(r.background_compression(), fs);
     let csum_type = if opts.nocow == 0 { fs.data_checksum_type_rb(&r) } else { c::bch_csum_type::BCH_CSUM_none };
     let stripe = k.k.key_type() == c::bch_bkey_type::KEY_TYPE_stripe;
@@ -80,7 +81,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_
     let (mut invalid, mut ec_redundancy) = (0u32, 0u32);
     {
         let rcu = read_lock();
-        for (i, d) in kp.ptrs_decoded(fs).enumerate() {
+        for (i, d) in k.ptrs_decoded(fs).enumerate() {
             let p = &d.p;
             let dev = u32::from(p.ptr.dev());
 
@@ -178,7 +179,7 @@ fn needs_reconcile(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_
         invalid_devs = 0;
     }
 
-    let old = kp.reconcile_opts(fs);
+    let old = k.reconcile_opts(fs);
     if let Some(old) = old.filter(|old| old.need_rb() & !r.need_rb() == 0) {
         r.set_pending(old.pending());
         if r.hipri() != 0 && old.hipri() == 0 {
@@ -313,7 +314,8 @@ fn new_needs_rb_allowed(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot
     Ok(())
 }
 
-impl TransBkey<'_, '_> {
+/// Of a key of any type, typed or not.
+impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
     /// Its reconcile state brought in line with options @opts: a stripe's
     /// needs_reconcile bit; a data key's reconcile entry set, or dropped if
     /// it needs none, and its padding pointers to BCH_SB_MEMBER_INVALID added
@@ -324,20 +326,16 @@ impl TransBkey<'_, '_> {
                                opt_change_cookie: u32) -> Result<(), BchError> {
         let fs = t.fs();
 
-        if !self.k().extent_is_direct_data() && self.k().key_type() != c::bch_bkey_type::KEY_TYPE_stripe {
-            return Ok(());
-        }
-
-        let Some(NeedsReconcile { r: new, mut invalid_devs }) = needs_reconcile(t, self.as_sc(), opts)? else {
+        let Some(kp) = self.as_sc().arm::<Ptrs>() else { return Ok(()) };
+        let Some(NeedsReconcile { r: new, mut invalid_devs }) = needs_reconcile(t, kp, opts)? else {
             return Ok(());
         };
 
-        if self.k().key_type() == c::bch_bkey_type::KEY_TYPE_stripe {
-            return set_needs_reconcile_stripe(t, s, self.reborrow(),
+        let Some(mut k) = self.reborrow().arm::<PtrsMut>() else {
+            let stripe = self.reborrow().arm::<c::Stripe>().expect("with pointers, and not PtrsMut: a stripe");
+            return set_needs_reconcile_stripe(t, s, stripe,
                 new.need_rb() & rb_bit(c::bch_reconcile_opts::BCH_RECONCILE_data_replicas) != 0);
-        }
-
-        let mut k = self.reborrow().arm::<PtrsMut>().expect("direct data: a key whose entries can be edited");
+        };
         let old = k.reconcile_opts(fs).copied();
         let new_need_rb = new.need_rb() & !old.map_or(0, |old| old.need_rb());
 
@@ -385,14 +383,10 @@ impl TransBkey<'_, '_> {
 /// devices have no scan pending to explain it, an fsck error:
 /// set_needs_reconcile_stripe().
 fn set_needs_reconcile_stripe(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>,
-                              mut k: TransBkey<'_, '_>, needs: bool) -> Result<(), BchError> {
-    {
-        let stripe = k.reborrow().arm::<c::Stripe>().expect("a stripe");
-        if needs && stripe.v().needs_reconcile() == 0 &&
-            !dev_scan_cookie_set(t, &stripe, s.map(|s| &mut s.dev_cookie))? {
-            fsck_err!(t, id::stripe_needs_reconcile_not_set, "stripe with needs_reconcile incorrectly unset\n{}",
-                      k.as_sc().to_text(t.fs()))?;
-        }
+                              mut k: TransBkey<'_, '_, c::Stripe<Validated>>, needs: bool) -> Result<(), BchError> {
+    if needs && k.v().needs_reconcile() == 0 && !dev_scan_cookie_set(t, &k, s.map(|s| &mut s.dev_cookie))? {
+        fsck_err!(t, id::stripe_needs_reconcile_not_set, "stripe with needs_reconcile incorrectly unset\n{}",
+                  k.to_text(t.fs()))?;
     }
     stripe_header_mut(&mut k).bits.set_needs_reconcile(needs.into());
     Ok(())
@@ -427,10 +421,8 @@ pub fn update_reconcile_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_sna
     assert!(!flags.contains(BtreeIterFlags::FILTER_SNAPSHOTS),
             "update_reconcile_opts() on a snapshot filtering iterator");
 
-    if !k.k.extent_is_direct_data() && k.k.key_type() != c::bch_bkey_type::KEY_TYPE_stripe {
-        return Ok(());
-    }
-    if needs_reconcile(t, k, opts)?.is_none() {
+    let Some(kp) = k.arm::<Ptrs>() else { return Ok(()) };
+    if needs_reconcile(t, kp, opts)?.is_none() {
         return Ok(());
     }
 

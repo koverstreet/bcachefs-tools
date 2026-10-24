@@ -23,6 +23,7 @@ use crate::btree::bkey::{bkey_family, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut};
 use crate::btree::bkey_methods::SetError;
 use crate::btree::iter::{BtreeIter, TransAttempt, UpdateTriggerFlags};
 use crate::data::checksum::BCH_NONCE_EXTENT;
+use crate::data::extents::BkeyVExtents;
 use crate::errcode::BchError;
 use crate::c;
 use crate::fs::Fs;
@@ -45,6 +46,7 @@ mod ops;
 pub mod c_export;
 
 pub use edit::BkeyVPtrsMut;
+pub use read::BkeyVRead;
 pub use ops::{bkey_ptrs_to_text, bkey_ptrs_validate, btree_ptr_v2_compat, btree_ptr_v2_to_text, ptr_swab};
 pub(crate) use ops::extent_ptr_to_text;
 

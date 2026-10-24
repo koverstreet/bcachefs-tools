@@ -55,6 +55,7 @@ use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{is_restart, BtreeIter, BtreeTrans, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
+use crate::data::durability::BkeyVDurability;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntryMut, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::rb_bit;
 use crate::data::reconcile::trigger::{rb_work_id, BkeyVReconcile};

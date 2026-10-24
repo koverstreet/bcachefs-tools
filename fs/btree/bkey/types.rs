@@ -345,6 +345,7 @@ pub trait BkeyVMut: BkeyV {
 
 pub mod prelude {
     pub use super::{BkeyV, BkeyVMut};
+    pub use crate::data::durability::BkeyVDurability;
     pub use crate::data::extents::BkeyVExtents;
     pub use crate::data::ptrs::BkeyVPtrs;
 }
