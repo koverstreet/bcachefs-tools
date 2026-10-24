@@ -1344,6 +1344,9 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 		try(darray_push(&flushes, le64_to_cpu(i->j.seq)));
 	}
 
+	event_inc_trace(c, journal_scrub, buf,
+			prt_printf(&buf, "%zu flush entries in the window", flushes.nr));
+
 	if (!flushes.nr) {
 		bch_info(c, "%s(): No journal flushes found", __func__);
 		return 0;
@@ -1378,6 +1381,10 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 	for (int f = flushes.nr - 1; f > 0; f--) {
 		u64 range_start = flushes.data[f - 1];
 		u64 range_end   = flushes.data[f];
+
+		event_inc_trace(c, journal_scrub_range, buf,
+				prt_printf(&buf, "seq %llu-%llu", range_start + 1, range_end));
+
 		u64 errors_before = atomic64_read(&stats.sectors_error_uncorrected);
 		memset(&stats.devs_error_uncorrected, 0, sizeof(stats.devs_error_uncorrected));
 		int move_ret = 0;
@@ -1530,6 +1537,9 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 	}
 
 	if (!bitmap_empty(lost_nodes.btrees, BTREE_ID_NR)) {
+		event_inc_trace(c, journal_scrub_lost_btree_nodes, buf,
+				prt_printf(&buf, "%u btree nodes", atomic_read(&lost_nodes.nr)));
+
 		CLASS(bch_log_msg, msg)(c);
 		prt_printf(&msg.m, "journal scrub: %u btree nodes with no good replica, "
 			   "repairing topology before journal replay\n",
@@ -1684,6 +1694,10 @@ int bch2_scrub_journal_do_repairs(struct bch_fs *c)
 		/* Ignore errors - don't want them blocking mount */
 		lockrestart_do(ctxt.trans, scrub_journal_repair_one(&ctxt, r, &outcome));
 		nr[outcome]++;
+
+		if (outcome == SCRUB_JOURNAL_repaired)
+			event_inc_trace(c, journal_scrub_repaired, buf,
+					bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&r->k)));
 	}
 
 	bch_info(c, "journal scrub: repairing %u extents/btree nodes from good replicas; "

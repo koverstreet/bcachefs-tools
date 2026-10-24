@@ -981,6 +981,10 @@ impl Fs {
         let t = Kthread::create(format_args!("bch-reconcile/{}", self.name().to_str().unwrap_or("?")),
                                 move |me| {
             if let Err(e) = thread(fs, me) {
+                // going read-only isn't an error, as do_reconcile() has it
+                if !e.matches(c::EROFS) {
+                    fs.event_inc_trace(events::reconcile_error, |out| write!(out, "{e}"));
+                }
                 fs.reconcile.thread_exit_ret.store(e.raw(), Relaxed);
             }
         }).inspect_err(|e| bch_err!(self, "error creating reconcile thread: {e}"))?;
