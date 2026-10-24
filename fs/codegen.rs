@@ -27,7 +27,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/mm.h",			// totalram_pages(), a backpointer scan's batch limit
     "linux/mount.h",			// mnt_want_write_file(), vfs/ioctl.rs's
     "linux/blkdev.h",			// bdev_freeze(), vfs/ioctl.rs's goingdown
-    "linux/freezer.h",			// set_freezable(), a freezable kthread's
+    "linux/freezer.h",			// set_freezable(), freezing(), try_to_freeze(): a freezable kthread's
     "linux/power_supply.h",		// power_supply_reg_notifier(), reconcile on battery
 ];
 
@@ -62,7 +62,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "rust_page_folio", "rust_folio_page_idx", "rust_folio_size",
     "rust_page_highmem", "rust_page_address",
     "rust_refcount_inc_not_zero", "rust_poll_wait", "rust_fault_in_writeable",
-    "rust_fault_in_readable", "totalram_pages", "set_freezable",
+    "rust_fault_in_readable", "totalram_pages", "set_freezable", "freezing", "try_to_freeze",
     "power_supply_reg_notifier", "power_supply_unreg_notifier", "power_supply_is_system_supplied",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",

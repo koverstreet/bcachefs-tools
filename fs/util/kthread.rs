@@ -141,6 +141,30 @@ impl Kthread {
         let _ = unsafe { c::set_freezable() };
     }
 
+    /// Whether the freezer wants the current thread: freezing(current). A
+    /// freezable kthread that can go a long while without a freezable sleep
+    /// - copygc, when there's always more to move - checks between pieces of
+    /// work, and stops to try_to_freeze().
+    pub fn freezing() -> bool {
+        // SAFETY: of the current task
+        #[cfg(kernel)]
+        let f = unsafe { c::freezing(c::bch2_current()) };
+        #[cfg(not(kernel))]
+        let f = false;
+        f
+    }
+
+    /// Freeze here, if the freezer wants us, until thawed: try_to_freeze().
+    /// Whether it froze. With no locks held - they'd stay held till the thaw.
+    pub fn try_to_freeze() -> bool {
+        // SAFETY: of the current task
+        #[cfg(kernel)]
+        let f = unsafe { c::try_to_freeze() };
+        #[cfg(not(kernel))]
+        let f = false;
+        f
+    }
+
     /// Tell it to stop, and wait for it to: kthread_stop(). It may have
     /// returned already, or never have run.
     pub fn stop(self) {}
