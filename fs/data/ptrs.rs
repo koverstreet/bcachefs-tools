@@ -1022,12 +1022,11 @@ pub fn drop_stale_ptrs<'a, 't>(
     k:    BkeySC<'_>,
 ) -> Result<(), BchError> {
     let fs = t.fs();
-    if !k.arm::<Ptrs>().is_some_and(|p| p.has_stale_ptrs(fs)) {
+    let Some(k) = k.arm::<Ptrs>().filter(|p| p.has_stale_ptrs(fs)) else {
         return Ok(());
-    }
+    };
 
-    let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
-    BkeyS::from(&mut u).arm::<Ptrs>().expect("a key with pointers, as checked").drop_stale_ptrs(fs);
+    t.bkey_make_mut(iter, k, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?.drop_stale_ptrs(fs);
     Ok(())
 }
 
@@ -1070,15 +1069,14 @@ pub fn extents_match(fs: &Fs, k1: BkeySC<'_>, k2: BkeySC<'_>) -> bool {
     if k1.k.key_type() != k2.k.key_type() {
         return false;
     }
-    if !k1.k.extent_is_direct_data() {
+    // of one type: both direct data, or neither
+    let (Some(p1), Some(p2)) = (k1.arm::<PtrsMut>(), k2.arm::<PtrsMut>()) else {
         return true;
-    }
+    };
     if k1.extent_is_unwritten(fs) != k2.extent_is_unwritten(fs) {
         return false;
     }
 
-    let p1 = k1.arm::<Ptrs>().expect("a key with direct data has pointers");
-    let p2 = k2.arm::<Ptrs>().expect("a key with direct data has pointers");
     let matched = p1.ptrs_decoded(fs).any(|a| p2.ptrs_decoded(fs).any(|b| ptrs_match(k1.k, &a.p, k2.k, &b.p)));
     matched
 }

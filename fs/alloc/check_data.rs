@@ -93,13 +93,16 @@ fn btree_ptr_unreadable<'a>(t: &TransAttempt<'a, '_>, btree: c::btree_id, level:
 /// the node rewritten from memory if it's cached, or the pointer deleted and
 /// the btree flagged as having lost data; for any other key, an error key of
 /// type @error, the loss counted and recorded against its file.
-pub fn bkey_drop_device_and_update(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: BkeySC<'_>,
-                                   dev: u32, error: c::bch_key_type_errors) -> Result<(), BchError> {
+pub fn bkey_drop_device_and_update(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32,
+                                   k: BkeySC<'_, Ptrs>, dev: u32, error: c::bch_key_type_errors)
+    -> Result<(), BchError>
+{
     let fs = t.fs();
     let mut n = t.bkey_reassemble_room(k, KEY_ROOM)?;
-    n.reborrow().arm::<Ptrs>().expect("a key with pointers").drop_device(fs, dev);
+    n.drop_device(fs, dev);
+    let mut n: TransBkey<'_, '_> = n.into();
 
-    let opts = get_io_opts(t, None, k)?;
+    let opts = get_io_opts(t, None, k.into())?;
     n.set_needs_reconcile(t, None, &opts, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
 
     if n.k().is_btree_ptr() {
@@ -155,13 +158,12 @@ fn btree_node_bad(fs: &Fs, buf: &[u8], k: BkeySC<'_>) -> bool {
 /// wrong - or for a btree node, not the node @k points to. @other_k, in
 /// @other_btree, is the key with a replica in the same space, for the report.
 /// Unchecksummed data, and a device that can't be read, can't say: false.
-pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: BkeySC<'_>,
-                                    other_btree: c::btree_id, other_k: BkeySC<'_>, dev: u32)
+pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: BkeySC<'_, Ptrs>,
+                                    other_btree: c::btree_id, other_k: BkeySC<'_, Ptrs>, dev: u32)
     -> Result<bool, BchError>
 {
     let fs = t.fs();
-    let p = k.arm::<Ptrs>()
-        .and_then(|kp| kp.ptrs_decoded(fs).find(|d| u32::from(d.p.ptr.dev()) == dev).map(|d| d.p))
+    let p = k.ptrs_decoded(fs).find(|d| u32::from(d.p.ptr.dev()) == dev).map(|d| d.p)
         .expect("a pointer to the device whose replica it is");
     let is_btree_ptr = k.k.is_btree_ptr();
 
@@ -187,7 +189,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: c::btree_id
     bio.map_read(&mut buf).submit_wait()?;
 
     let bad = if is_btree_ptr {
-        btree_node_bad(fs, &buf, k)
+        btree_node_bad(fs, &buf, k.into())
     } else {
         // SAFETY: @buf, @bytes long
         let csum = unsafe {
@@ -381,11 +383,10 @@ fn check_fix_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, d: &DecodedPtr<'_>) ->
 
 /// @k, a key in @btree with nothing to read, rewritten without its triggers -
 /// no_valid_pointers_fix() - and returned, to check in @k's place.
-fn no_valid_pointers_repair<'a, 't>(t: &TransAttempt<'a, 't>, btree: c::btree_id, k: BkeySC<'_>)
+fn no_valid_pointers_repair<'a, 't>(t: &TransAttempt<'a, 't>, btree: c::btree_id, k: BkeySC<'_, Ptrs>)
     -> Result<TransBkey<'a, 't>, BchError>
 {
-    let mut new = t.bkey_reassemble_room(k, KEY_ROOM)?;
-    no_valid_pointers_fix(t, btree, &mut new)?;
+    let new = no_valid_pointers_fix(t, btree, t.bkey_reassemble_room(k, KEY_ROOM)?)?;
 
     let mut iter = BtreeNodeIter::new(t, btree, new.k().p, 0, 0,
                                       BtreeIterFlags::INTENT | BtreeIterFlags::ALL_SNAPSHOTS);
@@ -396,9 +397,10 @@ fn no_valid_pointers_repair<'a, 't>(t: &TransAttempt<'a, 't>, btree: c::btree_id
 
 /// @new, a key in @btree with nothing to read, repaired in place: a cached
 /// pointer that's still good made dirty, or if there's none, @new made an
-/// error key - the loss reported, and recorded against its file.
-fn no_valid_pointers_fix(t: &TransAttempt<'_, '_>, btree: c::btree_id, new: &mut TransBkey<'_, '_>)
-    -> Result<(), BchError>
+/// error key - the loss reported, and recorded against its file. Given back
+/// untyped, as an error key has no pointers.
+fn no_valid_pointers_fix<'a, 't>(t: &TransAttempt<'_, '_>, btree: c::btree_id, mut new: TransBkey<'a, 't, Ptrs>)
+    -> Result<TransBkey<'a, 't>, BchError>
 {
     let fs = t.fs();
 
@@ -407,9 +409,8 @@ fn no_valid_pointers_fix(t: &TransAttempt<'_, '_>, btree: c::btree_id, new: &mut
     // have to pin the bucket with an open_bucket
     let found_good_cached_ptr = {
         let rcu = read_lock();
-        let mut kp = new.reborrow().arm::<Ptrs>().expect("a key with pointers");
         let mut found = false;
-        for ptr in kp.ptrs_mut(fs) {
+        for ptr in new.ptrs_mut(fs) {
             if ptr.cached() != 0 &&
                fs.dev_rcu(ptr.dev().into(), &rcu).is_some_and(|ca| ca.ptr_stale(ptr, &rcu) == Some(0)) {
                 ptr.set_cached(0);
@@ -418,6 +419,7 @@ fn no_valid_pointers_fix(t: &TransAttempt<'_, '_>, btree: c::btree_id, new: &mut
         }
         found
     };
+    let mut new: TransBkey<'a, 't> = new.into();
 
     // Inode-scoped when we can attribute it: an extents btree position names
     // an inum, so the error records damage against the file. An indirect
@@ -436,11 +438,11 @@ fn no_valid_pointers_fix(t: &TransAttempt<'_, '_>, btree: c::btree_id, new: &mut
 
         new.set_error(fs, c::bch_key_type_errors::KEY_TYPE_ERROR_no_valid_pointers_repair);
     }
-    Ok(())
+    Ok(new)
 }
 
-fn check_fix_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: c::btree_id, level: u32, k: BkeySC<'_>)
-    -> Result<(), BchError>
+fn check_fix_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: c::btree_id, level: u32,
+                  k: BkeySC<'_, Ptrs>) -> Result<(), BchError>
 {
     let fs = t.fs();
 
@@ -451,7 +453,7 @@ fn check_fix_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: c::btre
         let repaired = no_valid_pointers_repair(t, btree, k)?;
         return repair_ptrs(t, iter, btree, level, repaired.as_sc());
     }
-    repair_ptrs(t, iter, btree, level, k)
+    repair_ptrs(t, iter, btree, level, k.into())
 }
 
 /// check_fix_ptrs(), past a key with nothing to read - which may now be an
@@ -478,12 +480,11 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: c::btree_i
         .filter(|(_, f)| f.contains(fix))
         .fold(0u32, |m, (i, _)| m | 1 << i);
 
-    let mut new = t.bkey_reassemble_room(k, KEY_ROOM)?;
+    let mut new = t.bkey_reassemble_room(kp, KEY_ROOM)?;
 
     {
         let rcu = read_lock();
-        let mut kp = new.reborrow().arm::<Ptrs>().expect("a key with pointers");
-        for (ptr, _) in kp.ptrs_mut(fs).zip(&fixes).filter(|(_, f)| f.contains(PtrFix::RESET_GEN)) {
+        for (ptr, _) in new.ptrs_mut(fs).zip(&fixes).filter(|(_, f)| f.contains(PtrFix::RESET_GEN)) {
             let ca = fs.dev_rcu(ptr.dev().into(), &rcu).expect("the device the pointer was checked against");
             let g = ca.gc_bucket(ca.ptr_bucket(ptr)).expect("the gc bucket the pointer was checked against");
             ptr.set_generation(g.lock.lock().generation);
@@ -498,7 +499,7 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: c::btree_i
 
     let drop = mask(PtrFix::DROP);
     if drop != 0 {
-        new.reborrow().arm::<Ptrs>().expect("a key with pointers").drop_ptrs_mask(fs, drop);
+        new.drop_ptrs_mask(fs, drop);
     }
 
     // The drops can leave nothing to read - and no pointers at all is no
@@ -506,10 +507,14 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: c::btree_i
     // btree node pointer's node is lost unless it's cached: then it's pinned
     // there, its only copy, and rewritten once we're rw - a rewrite
     // allocates, which gc, before journal replay, can't
-    if !new.as_sc().can_read(fs) {
-        if !new.k().is_btree_ptr() {
-            no_valid_pointers_fix(t, btree, &mut new)?;
-        } else if btree_ptr_unreadable(t, btree, level, new.as_sc(), |_, b| {
+    let readable = new.as_sc().can_read(fs);
+    let mut new = if !readable && !new.k().is_btree_ptr() {
+        no_valid_pointers_fix(t, btree, new)?
+    } else {
+        new.into()
+    };
+    if !readable && new.k().is_btree_ptr() {
+        if btree_ptr_unreadable(t, btree, level, new.as_sc(), |_, b| {
             // SAFETY: a cached node, held by the iterator for the calls
             unsafe {
                 c::bch2_node_pin(fs.as_ptr(), b.as_ptr());
@@ -563,5 +568,6 @@ pub fn bch2_check_fix_ptrs<'t>(
 ) -> c_int {
     // SAFETY: C calls check_repair in an attempt
     let t = unsafe { trans.attempt_in_progress() };
+    let k = k.arm::<Ptrs>().expect("the check_repair of a key type with pointers");
     ret_to_c(check_fix_ptrs(&t, iter, btree, level, k))
 }

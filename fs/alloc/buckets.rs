@@ -445,7 +445,7 @@ fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &c::extent_ptr
 /// One key's part of the extent trigger, going in or out by @flags: each
 /// pointer's bucket and stripe, then the key's accounting - replicas,
 /// compression, its snapshot's, and its btree's or inode's: __trigger_extent().
-fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: BkeySC<'_>,
+fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: BkeySC<'_, Ptrs>,
                       flags: UpdateTriggerFlags) -> Result<(), BchError> {
     let fs = t.fs();
     let gc = flags.contains(UpdateTriggerFlags::GC);
@@ -469,9 +469,9 @@ fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, 
     let mut compression_type = 0;
     let mut compression = [1, 0, 0];
 
-    for d in k.arm::<Ptrs>().expect("a key with pointers").ptrs_decoded(fs) {
+    for d in k.ptrs_decoded(fs) {
         let p = &d.p;
-        let disk_sectors = match trigger_pointer(t, btree, level, k, &d, flags) {
+        let disk_sectors = match trigger_pointer(t, btree, level, k.into(), &d, flags) {
             Ok(s) => s,
             // only a cached pointer is ever stale: it isn't counted
             Err(e) if e.matches(bch_errcode::BCH_ERR_cached_ptr_stale) => continue,
@@ -485,7 +485,7 @@ fn trigger_extent_key(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, 
             devs[nr_devs] = p.ptr.dev();
             nr_devs += 1;
         } else {
-            trigger_stripe_ptr(t, k, p, data_type, disk_sectors, flags)?;
+            trigger_stripe_ptr(t, k.into(), p, data_type, disk_sectors, flags)?;
             // with an erasure coded pointer, its other dirty pointers aren't
             // needed to mount
             nr_required = 0;
@@ -552,12 +552,12 @@ pub(crate) fn trigger_extent(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -
         extent_trigger_set_needs_reconcile(t, op)?;
     }
 
-    if !op.old.k.is_deleted() {
-        trigger_extent_key(t, op.btree, op.level, op.old, op.flags - UpdateTriggerFlags::INSERT)?;
+    // either deleted, or of this trigger's type
+    if let Some(old) = op.old.arm::<Ptrs>() {
+        trigger_extent_key(t, op.btree, op.level, old, op.flags - UpdateTriggerFlags::INSERT)?;
     }
-    if !op.new.k.is_deleted() {
-        trigger_extent_key(t, op.btree, op.level, BkeySC::from(&op.new).untyped(),
-                           op.flags - UpdateTriggerFlags::OVERWRITE)?;
+    if let Some(new) = BkeySC::from(&op.new).arm::<Ptrs>() {
+        trigger_extent_key(t, op.btree, op.level, new, op.flags - UpdateTriggerFlags::OVERWRITE)?;
     }
 
     trigger_extent_reconcile(t, op)

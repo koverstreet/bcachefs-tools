@@ -129,16 +129,16 @@ fn bp_missing(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::Ba
 }
 
 /// A pointer to a bucket @dev doesn't have counts as stale.
-fn bkey_dev_ptr_stale(fs: &Fs, k: BkeySC<'_>, dev: u32) -> bool {
+fn bkey_dev_ptr_stale(fs: &Fs, k: BkeySC<'_, Ptrs>, dev: u32) -> bool {
     let rcu = read_lock();
     let Some(ca) = fs.dev_rcu(dev, &rcu) else { return false };
-    let Some(kp) = k.arm::<Ptrs>() else { return false };
 
-    let stale = kp.ptrs(fs).any(|p| u32::from(p.dev()) == dev && ca.ptr_stale(p, &rcu).is_none_or(|s| s != 0));
+    let stale = k.ptrs(fs).any(|p| u32::from(p.dev()) == dev && ca.ptr_stale(p, &rcu).is_none_or(|s| s != 0));
     stale
 }
 
-fn drop_double_allocation(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u8, k: BkeySC<'_>, dev: u32)
+fn drop_double_allocation(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u8, k: BkeySC<'_, Ptrs>,
+                          dev: u32)
     -> Result<(), BchError>
 {
     bkey_drop_device_and_update(t, btree, level.into(), k, dev,
@@ -214,7 +214,7 @@ fn extents_to_reflink<'a>(t: &TransAttempt<'a, '_>, e1: &DupExtent<'_>, e2: &Dup
     t.update(&iter2, &rp, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
 }
 
-fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::Backpointer>,
+fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut BkeyI<c::Backpointer>,
                 other_bp: BkeySC<'_, c::Backpointer>) -> Result<(), BchError> {
     let fs = t.fs();
     let dev = bp.k.p.inode as u32;
@@ -225,10 +225,10 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::
     let mut other_extent_iter = BtreeIter::uninit();
     let other_extent = match get_key(t, other_bp, &mut other_extent_iter, BtreeIterFlags::empty(), None, false) {
         Err(e) if e.matches(bch_errcode::BCH_ERR_backpointer_to_overwritten_btree_node) =>
-            return bp_missing(t, extent, bp, other_bp.untyped()),
+            return bp_missing(t, extent.into(), bp, other_bp.into()),
         Err(e)      => return Err(e),
-        Ok(None)    => return bp_missing(t, extent, bp, other_bp.untyped()),
-        Ok(Some(k)) => k,
+        Ok(None)    => return bp_missing(t, extent.into(), bp, other_bp.into()),
+        Ok(Some(k)) => k.arm::<Ptrs>().expect("a key a backpointer matches has pointers"),
     };
 
     let extent_bp = BkeyI { k: bp.k, v: bp.v };
@@ -236,28 +236,28 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::
 
     if bkey_dev_ptr_stale(fs, other_extent, dev) {
         drop_double_allocation(t, other_btree, ov.level, other_extent, dev)?;
-        return double_allocation_dropped(t, extent, extent_bp);
+        return double_allocation_dropped(t, extent.into(), extent_bp);
     }
 
-    if extents_match(fs, extent, other_extent) {
+    if extents_match(fs, extent.into(), other_extent.into()) {
         let mut msg = LogMsg::new(fs);
         prt!(&mut msg, "duplicate versions of same extent, deleting smaller\n{}\n{}",
              extent.to_text(fs), other_extent.to_text(fs));
 
         return if other_extent.k.size <= extent.k.size {
             drop_double_allocation(t, other_btree, ov.level, other_extent, dev)?;
-            double_allocation_dropped(t, extent, extent_bp)
+            double_allocation_dropped(t, extent.into(), extent_bp)
         } else {
             drop_double_allocation(t, btree, bp.v.level, extent, dev)?;
-            double_allocation_dropped(t, other_extent, other_bp)
+            double_allocation_dropped(t, other_extent.into(), other_bp)
         };
     }
 
     if kill_replica_if_checksum_bad(t, other_btree, ov.level.into(), other_extent, btree, extent, dev)? {
-        return double_allocation_dropped(t, extent, extent_bp);
+        return double_allocation_dropped(t, extent.into(), extent_bp);
     }
     if kill_replica_if_checksum_bad(t, btree, bp.v.level.into(), extent, other_btree, other_extent, dev)? {
-        return double_allocation_dropped(t, other_extent, other_bp);
+        return double_allocation_dropped(t, other_extent.into(), other_bp);
     }
 
     // Both replicas verify clean: a physical region is referenced from two
@@ -268,7 +268,7 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::
     // a regular extent.
     //
     // Only valid for leaf extents; btree pointers can't be reflinked.
-    let is_extent = |k: BkeySC<'_>| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_extent;
+    let is_extent = |k: BkeySC<'_, Ptrs>| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_extent;
     if is_extent(extent) && is_extent(other_extent) {
         let (bp_sub, other_bp_sub) = {
             let rcu = read_lock();
@@ -288,8 +288,8 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::
         // The physical overlap is a logical one only for uncompressed data.
         // Compressed data can't be split: two extents share it whole, if each
         // is the same view of the same data, or can't be repaired here
-        let ptr_to_dev = |k: BkeySC<'_>| k.arm::<Ptrs>().expect("an extent")
-            .has_device_decode(fs, dev).expect("a pointer to the backpointer's device").p;
+        let ptr_to_dev = |k: BkeySC<'_, Ptrs>| k.has_device_decode(fs, dev)
+            .expect("a pointer to the backpointer's device").p;
         let (p1, p2) = (ptr_to_dev(extent), ptr_to_dev(other_extent));
         let (k1_start, k2_start, overlap_len) = if crc_is_compressed(&p1.crc) || crc_is_compressed(&p2.crc) {
             let same_view = p1.ptr.offset() == p2.ptr.offset() &&
@@ -322,8 +322,8 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::
         if inode_fsck_err!(t, extent.k.p, id::dup_extents_to_reflink, "{}", buf)? {
             damage::record(t, other_extent.k.p, id::dup_extents_to_reflink)?;
             extents_to_reflink(t,
-                &DupExtent { btree, level: bp.v.level, k: extent, overlap: k1_start..k1_start + overlap_len },
-                &DupExtent { btree: other_btree, level: ov.level, k: other_extent,
+                &DupExtent { btree, level: bp.v.level, k: extent.into(), overlap: k1_start..k1_start + overlap_len },
+                &DupExtent { btree: other_btree, level: ov.level, k: other_extent.into(),
                              overlap: k2_start..k2_start + overlap_len })?;
         }
         return Ok(());
@@ -337,18 +337,18 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::
 
 /// Repairs as check_extents_to_backpointers does: makes a missing one, resolves
 /// one that's someone else's.
-pub fn check_bp_exists(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::Backpointer>,
+pub fn check_bp_exists(t: &TransAttempt<'_, '_>, extent: BkeySC<'_, Ptrs>, bp: &mut BkeyI<c::Backpointer>,
                        mut last_flushed: WbFlush<'_>) -> Result<(), BchError> {
     let mut bp_iter = BtreeIter::new(t, bp.v.bp_btree(), bp.k.p, BtreeIterFlags::empty());
     let bp_found = bp_iter.peek_slot(t)?.expect("a slot always has a key");
 
     match bp_found.arm::<c::Backpointer>() {
         None => {
-            last_flushed.maybe_flush(t, extent)?;
-            bp_missing(t, extent, bp, bp_found)
+            last_flushed.maybe_flush(t, extent.into())?;
+            bp_missing(t, extent.into(), bp, bp_found)
         }
         Some(found) if !backpointers_match(found.v(), &bp.v) => {
-            last_flushed.maybe_flush(t, extent)?;
+            last_flushed.maybe_flush(t, extent.into())?;
             check_bp_dup(t, extent, bp, found)
         }
         Some(_) => Ok(()),
@@ -593,7 +593,7 @@ fn check_extent_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToBpSta
 
         if dev == c::BCH_SB_MEMBER_INVALID {
             if d.p.has_ec {
-                check_bp_exists(t, k, &mut bp, s.last_flushed.borrow())?;
+                check_bp_exists(t, kp, &mut bp, s.last_flushed.borrow())?;
             }
             continue;
         }
@@ -618,7 +618,7 @@ fn check_extent_to_backpointers(t: &TransAttempt<'_, '_>, s: &mut ExtentsToBpSta
         }
 
         if !empty {
-            check_bp_exists(t, k, &mut bp, s.last_flushed.borrow())?;
+            check_bp_exists(t, kp, &mut bp, s.last_flushed.borrow())?;
         } else {
             bucket_backpointer_mod(t, k, &mut bp, true)?;
         }

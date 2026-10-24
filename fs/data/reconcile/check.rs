@@ -140,7 +140,7 @@ fn check_extent_reconcile_phys(t: &TransAttempt<'_, '_>, btree: c::btree_id, k: 
         // up, and a stale backpointer's can. Missing too: replacing a stale
         // one deletes it, committing, and a restart loses the insert.
         let Some(bp) = bp_k.arm::<c::Backpointer>().filter(|bp| backpointers_match(bp.v(), &want.v)) else {
-            check_bp_exists(t, k, &mut want, last_flushed.borrow())?;
+            check_bp_exists(t, kp, &mut want, last_flushed.borrow())?;
             continue;
         };
 

@@ -203,39 +203,27 @@ impl EntryBuf<'_> {
 /// stripe's blocks'. A key with no data leaves the data type as it was, and
 /// no devices.
 fn bkey_to_replicas(fs: &Fs, e: &mut EntryBuf<'_>, k: BkeySC<'_>) {
-    type K = c::bch_bkey_type;
     type D = c::bch_data_type;
 
-    let data_type = match c::bch_bkey_type(k.k.type_.into()) {
-        K::KEY_TYPE_btree_ptr | K::KEY_TYPE_btree_ptr_v2   => Some(D::BCH_DATA_btree),
-        K::KEY_TYPE_extent | K::KEY_TYPE_reflink_v         => Some(D::BCH_DATA_user),
-        K::KEY_TYPE_stripe                                => Some(D::BCH_DATA_parity),
-        _                                                 => None,
-    };
     e.0[1] = 0;
 
-    match data_type {
-        Some(D::BCH_DATA_parity) => {
-            let s = k.arm::<c::Stripe>().expect("a stripe");
-            e.start(D::BCH_DATA_parity, s.v().nr_blocks.wrapping_sub(s.v().nr_redundant));
-            for ptr in stripe_block_ptrs(s) {
-                e.add_dev(ptr.dev());
+    if let Some(s) = k.arm::<c::Stripe>() {
+        e.start(D::BCH_DATA_parity, s.v().nr_blocks.wrapping_sub(s.v().nr_redundant));
+        for ptr in stripe_block_ptrs(s) {
+            e.add_dev(ptr.dev());
+        }
+    } else if let Some(kp) = k.arm::<Ptrs>() {
+        e.start(if k.k.is_btree_ptr() { D::BCH_DATA_btree } else { D::BCH_DATA_user }, 1);
+        for p in kp.ptrs_decoded(fs) {
+            if p.ptr.cached() != 0 {
+                continue;
+            }
+            if p.p.has_ec {
+                e.set_nr_required(0);
+            } else {
+                e.add_dev(p.ptr.dev());
             }
         }
-        Some(t) => {
-            e.start(t, 1);
-            for p in k.arm::<Ptrs>().expect("a key with pointers").ptrs_decoded(fs) {
-                if p.ptr.cached() != 0 {
-                    continue;
-                }
-                if p.p.has_ec {
-                    e.set_nr_required(0);
-                } else {
-                    e.add_dev(p.ptr.dev());
-                }
-            }
-        }
-        None => {}
     }
     e.sort();
 }
