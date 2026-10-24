@@ -286,55 +286,14 @@ int bch2_alloc_sectors_req(struct btree_trans *, struct alloc_request *,
 			   struct write_point_specifier,
 			   struct write_point **);
 
+struct alloc_request *alloc_request_get(struct btree_trans *, unsigned, unsigned,
+					struct bch_devs_list *, unsigned, unsigned,
+					enum bch_watermark, enum bch_write_flags,
+					struct closure *);
+void alloc_request_put(struct alloc_request *);
+
 DEFINE_FREE(alloc_request_put, struct alloc_request *,
-	    if (!IS_ERR_OR_NULL(_T)) darray_exit(&_T->trace))
-
-static inline struct alloc_request *alloc_request_get(struct btree_trans *trans,
-						      unsigned target,
-						      unsigned erasure_code,
-						      struct bch_devs_list *devs_have,
-						      unsigned nr_replicas,
-						      unsigned ec_replicas,
-						      enum bch_watermark watermark,
-						      enum bch_write_flags flags,
-						      struct closure *cl)
-{
-	struct alloc_request *req = bch2_trans_kmalloc_nomemzero(trans, sizeof(*req));
-	if (IS_ERR(req))
-		return req;
-
-	if (ec_replicas < 2)
-		erasure_code = false;
-
-	/*
-	 * Zero first, then assign. This was a field-by-field init over
-	 * nomemzero memory, which is only correct while the list keeps pace
-	 * with the struct - and it hadn't. btree_bitmap indexes
-	 * ca->alloc_cursor[3] in bch2_bucket_alloc_early() and was assigned
-	 * nowhere but the retry at the bottom of bch2_bucket_alloc_trans(),
-	 * so the first attempt indexed that array with whatever the
-	 * transaction pool had left there. ec_max_data_blocks sizes stripes
-	 * in bch2_ec_stripe_head_get() and is set by two of the callers that
-	 * reach it, by hand, at their own call sites.
-	 *
-	 * The cost is one memset of a struct the allocator already builds
-	 * per-request; the alternative is that every field added here has to
-	 * be noticed by whoever adds it.
-	 */
-	memset(req, 0, sizeof(*req));
-
-	req->cl				= cl;
-	req->wake_all_counter_snapshot	= atomic_read(&trans->c->allocator.wake_all_counter);
-	req->nr_replicas		= nr_replicas;
-	req->ec_replicas		= ec_replicas;
-	req->ec				= erasure_code;
-	req->target			= target;
-	req->watermark			= watermark;
-	req->flags			= flags;
-	req->devs_have			= devs_have;
-	darray_init(&req->trace);
-	return req;
-}
+	    if (!IS_ERR_OR_NULL(_T)) alloc_request_put(_T))
 
 static inline int bch2_alloc_sectors_start_trans(struct btree_trans *trans,
 			     unsigned target,
@@ -354,7 +313,7 @@ static inline int bch2_alloc_sectors_start_trans(struct btree_trans *trans,
 								 ec_replicas,
 								 watermark, flags, cl));
 	int ret = bch2_alloc_sectors_req(trans, req, write_point, wp_ret);
-	darray_exit(&req->trace);
+	alloc_request_put(req);
 	return ret;
 }
 

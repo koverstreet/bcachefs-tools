@@ -149,7 +149,7 @@ nest! {
         pub new_nodes: c::btree_update_nodes,
 
         #[c("open_bucket_idx_t open_buckets[BTREE_UPDATE_NODES_MAX * BCH_REPLICAS_MAX]")]
-        pub open_buckets: [c::open_bucket_idx_t; c::BTREE_UPDATE_NODES_MAX as usize * c::BCH_REPLICAS_MAX as usize],
+        pub open_buckets: [Option<c::OpenBucketIdx>; c::BTREE_UPDATE_NODES_MAX as usize * c::BCH_REPLICAS_MAX as usize],
         pub nr_open_buckets: c::open_bucket_idx_t,
 
         /* Only here to reduce stack usage on recursive splits: */

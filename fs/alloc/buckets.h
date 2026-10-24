@@ -42,10 +42,8 @@ static inline u64 sector_to_bucket_and_offset(const struct bch_dev *ca, sector_t
  * Device position fractions: a device-relative sector offset as a 32.32
  * fixed point fraction of the device's size, for comparing and averaging
  * positions across devices of different sizes (same fraction ~= same zone
- * on rotational media):
+ * on rotational media). BCH_DEV_POS_FRAC_BITS is buckets_types.rs's.
  */
-#define BCH_DEV_POS_FRAC_BITS	32
-
 static inline u64 dev_offset_to_frac(const struct bch_dev *ca, u64 offset)
 {
 	return mul_u64_u64_div_u64(offset, 1ULL << BCH_DEV_POS_FRAC_BITS,

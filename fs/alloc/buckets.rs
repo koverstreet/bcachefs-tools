@@ -69,6 +69,14 @@ impl c::bch_dev {
     pub fn ptr_bucket_pos(&self, ptr: &c::bch_extent_ptr) -> c::bpos {
         pos(ptr.dev().into(), self.ptr_bucket(ptr))
     }
+
+    /// Sector @offset as a fraction of the device - 32.32 fixed point - for
+    /// comparing and averaging positions on devices of different sizes, where
+    /// the same fraction is about the same zone of rotational media.
+    pub fn offset_to_frac(&self, offset: u64) -> u64 {
+        let size = u128::from(self.bucket_to_sector(self.mi.nbuckets));
+        ((u128::from(offset) << c::BCH_DEV_POS_FRAC_BITS) / size) as u64
+    }
 }
 
 // ── GC buckets ───────────────────────────────────────────────────────────
