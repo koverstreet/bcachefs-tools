@@ -731,11 +731,16 @@ impl<'f> Reconciler<'f, '_> {
                     self.scan_step(p, cookie)
                 }
                 PhaseKind::Btree => {
-                    let next = next_key(trans, phase.btree, work_pos.pos, phase.end, BkeyI::<c::Backpointer>::from_key)?;
+                    // The backpointer is checked against its node's pointer in
+                    // the attempt that read it, its reconcile_scan leaf still
+                    // locked: a node rewrite deletes it there, and can't land
+                    // in between
+                    let t = trans.begin();
+                    let next = next_key(t.trans(), phase.btree, work_pos.pos, phase.end, BkeyI::<c::Backpointer>::from_key)?;
                     let Some((at, bp)) = next else { return Ok(()) };
                     work_pos.pos = at;
                     set_status(fs, Status::Running { phase: Some(phase), pos: at });
-                    p.w.btree(&trans.begin(), work_pos, &bp)
+                    p.w.btree(&t, work_pos, &bp)
                 }
                 PhaseKind::Normal => {
                     let Some(at) = p.w.work.next(trans, &mut work_pos, phase.end)? else { return Ok(()) };
