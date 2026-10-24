@@ -99,7 +99,6 @@ bcachefs-y		:=			\
 	data/extent_update.o			\
 	data/io_misc.o				\
 	data/keylist.o				\
-	data/migrate.o				\
 	data/move.o				\
 	data/nocow_locking.o			\
 	data/read.o				\

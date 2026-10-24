@@ -33,10 +33,6 @@
 //! deletes one commits inside the caller's attempt - and get_key() returns
 //! None for it - as looping on a restart wouldn't see the deletion without
 //! another flush: the caller moves on to the next backpointer.
-//!
-//! migrate.c and reconcile scan with BpScanIter too, through
-//! backpointer_scan_for_each(): C holds the struct bp_scan_iter, its batch
-//! Rust's alone.
 
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyVal};
@@ -64,7 +60,6 @@ use crate::util::Printbuf;
 use crate::{bkey_fsck_err_on, fsck_err, prt};
 use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
-use core::mem::MaybeUninit;
 use core::ops::{ControlFlow, RangeInclusive};
 use cstruct_macros::c_export;
 
@@ -553,22 +548,6 @@ pub unsafe fn bch2_backpointer_get_key<'t>(trans: &'t BtreeTrans<'t>, bp: c::bke
     key_or_err_to_c(get_key(&t, bp, iter, flags, unsafe { WbFlush::from_raw(last_flushed) }, true))
 }
 
-/// # Safety
-/// @trans is in an attempt; @last_flushed is NULL, or the caller's.
-#[c_export]
-pub unsafe fn bch2_backpointer_get_node<'t>(trans: &'t BtreeTrans<'t>, bp: c::bkey_s_c_backpointer,
-                                            iter: &mut BtreeIter<'t>, last_flushed: *mut c::wb_maybe_flush)
-    -> *mut c::btree
-{
-    let t = unsafe { trans.attempt_in_progress() };
-    let bp = c::bkey_s_c::from(bp);
-    let bp = unsafe { BkeySC::from_c(&bp) }.arm::<c::Backpointer>().expect("a backpointer");
-    match get_node(&t, bp, iter, unsafe { WbFlush::from_raw(last_flushed) }, true) {
-        Ok(b)  => b.map_or(core::ptr::null_mut(), |b| core::ptr::from_ref(b).cast_mut()),
-        Err(e) => err_ptr(e),
-    }
-}
-
 // ── Backpointers in the order of what they point to ──────────────────────
 
 impl c::bp_scan_iter {
@@ -702,36 +681,4 @@ impl<'p> BpScanIter<'p> {
             self.raw.advance();
         }
     }
-}
-
-/// backpointer_scan_for_each()'s: @iter is C's, uninitialized.
-#[c_export]
-pub fn bch2_bp_scan_iter_init(iter: &mut MaybeUninit<c::bp_scan_iter>, btree: c::btree_id, pos: c::bpos,
-                              progress: *mut c::progress_indicator) {
-    iter.write(c::bp_scan_iter::new(btree, pos, progress));
-}
-
-/// # Safety
-/// @iter is bch2_bp_scan_iter_init()'s, and nothing uses it after.
-#[c_export]
-pub unsafe fn bch2_bp_scan_iter_exit(iter: &mut c::bp_scan_iter) {
-    // SAFETY: the caller's
-    unsafe { core::ptr::drop_in_place(iter) }
-}
-
-/// NULL past @end, or an ERR_PTR().
-///
-/// # Safety
-/// @trans is in an attempt; @last_flushed is live.
-#[c_export]
-pub unsafe fn bch2_bp_scan_iter_peek<'t>(trans: &'t BtreeTrans<'t>, iter: &mut c::bp_scan_iter, end: c::bpos,
-                                         last_flushed: *mut c::wb_maybe_flush) -> c::bkey_s_c {
-    let t = unsafe { trans.attempt_in_progress() };
-    let last_flushed = unsafe { WbFlush::from_raw(last_flushed) }.expect("a wb_maybe_flush");
-    key_or_err_to_c(iter.peek(&t, end, &last_flushed))
-}
-
-#[c_export]
-pub fn bch2_bp_scan_iter_advance(iter: &mut c::bp_scan_iter) {
-    iter.advance()
 }

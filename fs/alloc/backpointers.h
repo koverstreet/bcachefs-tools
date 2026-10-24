@@ -188,34 +188,4 @@ struct wb_maybe_flush;
 #include "alloc/backpointers_gen.h"
 #include "alloc/check_backpointers_gen.h"
 
-#define backpointer_scan_for_each(_trans, _bp_iter, _btree, _start, _end,			\
-				  _last_flushed, _progress, _bp, _do)				\
-({												\
-	struct bp_scan_iter _bp_iter __cleanup(bch2_bp_scan_iter_exit);			\
-	bch2_bp_scan_iter_init(&_bp_iter, _btree, _start, _progress);				\
-	int _ret3 = 0;										\
-												\
-	while (true) {										\
-		u32 _restart_count = bch2_trans_begin(_trans);					\
-		_ret3 = 0;									\
-												\
-		struct bkey_s_c _k =								\
-			bch2_bp_scan_iter_peek(_trans, &_bp_iter, _end, _last_flushed);		\
-		if (!_k.k)									\
-			break;									\
-												\
-		struct bkey_s_c_backpointer _bp = bkey_s_c_to_backpointer(_k);			\
-		_ret3 = bkey_err(_k) ?: (_do);							\
-		if (bch2_err_matches(_ret3, BCH_ERR_transaction_restart))			\
-			continue;								\
-		if (_ret3)									\
-			break;									\
-												\
-		bch2_trans_verify_not_restarted(_trans, _restart_count);			\
-		bch2_bp_scan_iter_advance(&_bp_iter);						\
-	}											\
-												\
-	_ret3;											\
-})
-
 #endif /* _BCACHEFS_BACKPOINTERS_BACKGROUND_H */

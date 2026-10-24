@@ -162,6 +162,7 @@ pub mod data {
     pub mod extents;
     pub mod extents_sb;
     pub mod io_misc;
+    pub mod migrate;
     pub mod moving;
     pub mod ptrs;
     pub mod reconcile {

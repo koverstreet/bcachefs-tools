@@ -215,7 +215,7 @@
 
 #include "data/ec/create.h"
 #include "data/ec/init.h"
-#include "data/migrate.h"
+#include "data/migrate_gen.h"
 #include "data/reconcile/work.h"
 
 #include "debug/sysfs.h"

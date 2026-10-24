@@ -7,9 +7,7 @@ use crate::cstructs::c;
 use crate::util::alloc::KVVec;
 use cstruct_macros::CStruct;
 
-/// A backpointer scan in progress - alloc/backpointers.rs's, which C's
-/// backpointer_scan_for_each() holds and inits through Rust: the batch is
-/// Rust's alone. C reads pos, for its progress.
+/// A backpointer scan in progress: alloc/backpointers.rs's BpScanIter.
 #[repr(C)]
 #[derive(CStruct)]
 pub struct bp_scan_iter {

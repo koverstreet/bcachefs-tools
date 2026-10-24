@@ -227,11 +227,6 @@ pub fn bch2_bkey_drop_device_noerror(c: &Fs, k: BkeyS<'_>, dev: c_uint) {
     ptrs(k).drop_device_noerror(c, dev);
 }
 
-#[c_export]
-pub fn bch2_bkey_drop_device(c: &Fs, k: BkeyS<'_>, dev: c_uint) {
-    ptrs(k).drop_device(c, dev);
-}
-
 /// # Safety
 /// @k is a key the caller can edit.
 #[c_export]
