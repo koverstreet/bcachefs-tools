@@ -1207,7 +1207,7 @@ static void read_back_super(struct bch_fs *c, struct bch_dev *ca)
 	 * during going-RO so closure_bio_submit returns immediately
 	 * instead of blocking on a dm-suspended device.
 	 */
-	if (test_bit(BCH_FS_going_ro, &c->flags))
+	if (test_bit(BCH_FS_going_ro, &c->flags) || !test_bit(BCH_FS_rw, &c->flags))
 		bio->bi_opf |= REQ_NOWAIT;
 	bio->bi_iter.bi_sector	= le64_to_cpu(sb->layout.sb_offset[0]);
 	bio->bi_end_io		= write_super_endio;
@@ -1241,7 +1241,7 @@ static void write_one_super(struct bch_fs *c, struct bch_dev *ca, unsigned idx)
 	 * during going-RO so closure_bio_submit returns immediately
 	 * instead of blocking on a dm-suspended device.
 	 */
-	if (test_bit(BCH_FS_going_ro, &c->flags))
+	if (test_bit(BCH_FS_going_ro, &c->flags) || !test_bit(BCH_FS_rw, &c->flags))
 		bio->bi_opf |= REQ_NOWAIT;
 	bio->bi_iter.bi_sector	= le64_to_cpu(sb->offset);
 	bio->bi_end_io		= write_super_endio;
