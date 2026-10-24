@@ -53,14 +53,101 @@ c_typedef! {
     pub type open_bucket_idx_t = u16;
 }
 
+/// An open bucket's index in c->allocator.open_buckets - never 0, slot 0
+/// being the sentinel - so a field C has as an open_bucket_idx_t, 0 for none,
+/// is an Option<OpenBucketIdx>, laid out the same. A count stays an
+/// open_bucket_idx_t.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct OpenBucketIdx(core::num::NonZero<c::open_bucket_idx_t>);
+
+// SAFETY: None is all zeroes, as an Option of a NonZero is
+unsafe impl pin_init::ZeroableOption for OpenBucketIdx {}
+
+impl OpenBucketIdx {
+    /// # Safety
+    /// @idx isn't 0.
+    pub unsafe fn new_unchecked(idx: c::open_bucket_idx_t) -> Self {
+        // SAFETY: the caller's
+        OpenBucketIdx(unsafe { core::num::NonZero::new_unchecked(idx) })
+    }
+
+    pub fn get(self) -> usize {
+        self.0.get().into()
+    }
+}
+
+// The OpenBucketIdx we want is linear (util/linear.rs): an index that holds
+// a pin, which can't be copied or dropped - only consumed, into an OpenBucket
+// with the filesystem, or into a list that keeps the pin. Then every holder
+// of one - a write point's list, the partial list, a btree update, a stripe's
+// blocks - is checked for leaks, and OpenBucket::from_idx() needs no unsafe:
+// the index is the proof of the pin.
+//
+//     #[repr(transparent)]
+//     #[derive(PartialEq, Eq, Debug, Linear)]
+//     pub struct OpenBucketIdx(core::num::NonZero<c::open_bucket_idx_t>);
+//
+// Tried 2026-10-26: it compiles with small changes, and doesn't link. What it
+// needs:
+//
+// - A second, Copy type for the indices that are links, not pins:
+//   open_bucket's freelist and hash, and the allocator's freelist and hash
+//   chains. Only open_buckets.v, open_buckets_partial[] and a btree update's
+//   open_buckets[] hold pins.
+// - Filesystem teardown that consumes them: the lists that hold pins are in
+//   C-shared structs inside Fs - the allocator, btree, journal, copygc - and
+//   Fs's drop glue reaches every one.
+// - No linear value held across an .await: a future's drop glue for being
+//   cancelled there drops it.
+//
+// The last two are past what a link-time check can see. A verifier that
+// checks linearity - Aeneas, Verus - could follow ownership through
+// teardown and through futures; that's when to bring it back.
+
 nest! {
+    /// A slot of c->allocator.open_buckets: a bucket open to be written, or
+    /// free. Open from try_alloc_bucket_locked() - @pin 1 - until its last pin
+    /// is put; a pin holder reads what's fixed while it's open without a lock.
+    ///
+    /// What protects what:
+    ///
+    /// - @pin: atomic. The last put closes it - __bch2_open_bucket_put() -
+    ///   unless @ec is set: then it stays open for that stripe, which closes it.
+    /// - @lock: held to open it - @valid, @dev, @generation, @bucket,
+    ///   @sectors_free and @free_uncounted set - and to close it, @valid and
+    ///   @data_type cleared. Taken by what looks at slots it holds no pin on,
+    ///   to see @valid, @dev and @bucket together: bch2_dev_has_open_write_point(),
+    ///   bch2_open_buckets_to_text(), and bch2_bucket_set_discard_fast(),
+    ///   which sets @do_discards_fast under it; the close reads and clears that
+    ///   without it.
+    /// - @dev, @generation, @bucket: fixed from the open to the close.
+    /// - @idx: fixed from when the table's built.
+    /// - @sectors_free: set at the open, then its writer's - written under the
+    ///   lock of the write point that has it: bch2_alloc_sectors_req()'s
+    ///   alignment, bch2_alloc_sectors_append_ptrs_inlined(),
+    ///   bch2_alloc_sectors_retire_short(). Fixed once the writer's pin is put.
+    /// - @data_type: its holder's - set when it's handed out, and by
+    ///   bch2_open_bucket_get() under the write point's lock; cleared at the
+    ///   close.
+    /// - @freelist, @on_partial_list, @hash: the allocator's, under
+    ///   freelist_lock - @hash also read without it, by bch2_bucket_is_open(),
+    ///   and @on_partial_list by bch2_dev_has_open_write_point(), under @lock.
+    /// - @free_uncounted: set at the open; then under freelist_lock.
+    /// - @ec, @ec_idx: set when a stripe being made has a writer claim the
+    ///   bucket as one of its blocks - OpenBucket::claim(), under the stripe
+    ///   head's lock and the stripe's - before the writer has it; @ec cleared
+    ///   when the stripe closes it, EcOpenBucket's drop. Read by its pin
+    ///   holders, and by bch2_open_bucket_to_text() under @lock.
     #[repr(C)]
     #[derive(CStruct)]
     pub struct open_bucket {
         pub lock: c::spinlock_t,
         pub pin: AtomicI32,
-        pub freelist: c::open_bucket_idx_t,
-        pub hash: c::open_bucket_idx_t,
+        #[c("open_bucket_idx_t freelist")]
+        pub freelist: Option<OpenBucketIdx>,
+        #[c("open_bucket_idx_t hash")]
+        pub hash: Option<OpenBucketIdx>,
 
         /*
          * When an open bucket has an ec_stripe attached, this is the index of
@@ -80,6 +167,11 @@ nest! {
 
         pub dev: u8,
         pub generation: u8,
+        /*
+         * its own, in c->allocator.open_buckets: the way back to the
+         * filesystem. Raw, not an OpenBucketIdx: slot 0, the sentinel, has none.
+         */
+        pub idx: c::open_bucket_idx_t,
         pub sectors_free: u32,
         pub bucket: u64,
         pub ec: *mut c::ec_stripe_new,
@@ -91,7 +183,8 @@ c_default!(open_bucket);
 #[derive(Clone, Copy, Default, CStruct)]
 pub struct open_buckets {
     pub nr: c::open_bucket_idx_t,
-    pub v: [c::open_bucket_idx_t; c::BCH_BKEY_PTRS_MAX as usize],
+    #[c("open_bucket_idx_t v[BCH_BKEY_PTRS_MAX]")]
+    pub v: [Option<OpenBucketIdx>; c::BCH_BKEY_PTRS_MAX as usize],
 }
 
 /*
@@ -242,13 +335,16 @@ pub struct bch_fs_allocator {
     pub freelist_wait: c::closure_waitlist,
     pub last_stuck: c_ulong,
 
-    pub open_buckets_freelist: c::open_bucket_idx_t,
+    #[c("open_bucket_idx_t open_buckets_freelist")]
+    pub open_buckets_freelist: Option<OpenBucketIdx>,
     pub open_buckets_nr_free: c::open_bucket_idx_t,
     pub open_buckets_wait: c::closure_waitlist,
     pub open_buckets: [c::open_bucket; c::OPEN_BUCKETS_COUNT as usize],
-    pub open_buckets_hash: [c::open_bucket_idx_t; c::OPEN_BUCKETS_COUNT as usize],
+    #[c("open_bucket_idx_t open_buckets_hash[OPEN_BUCKETS_COUNT]")]
+    pub open_buckets_hash: [Option<OpenBucketIdx>; c::OPEN_BUCKETS_COUNT as usize],
 
-    pub open_buckets_partial: [c::open_bucket_idx_t; c::OPEN_BUCKETS_COUNT as usize],
+    #[c("open_bucket_idx_t open_buckets_partial[OPEN_BUCKETS_COUNT]")]
+    pub open_buckets_partial: [Option<OpenBucketIdx>; c::OPEN_BUCKETS_COUNT as usize],
     pub open_buckets_partial_nr: c::open_bucket_idx_t,
 
     pub write_points: [c::write_point; c::WRITE_POINT_MAX as usize],
@@ -260,6 +356,15 @@ pub struct bch_fs_allocator {
     pub reconcile_write_point: c::write_point,
 }
 c_default!(bch_fs_allocator);
+
+impl bch_fs_allocator {
+    /// How many times @rw_devs has changed - bumped as a device goes
+    /// read-write or read-only - read once, as C's READ_ONCE().
+    pub fn rw_devs_change_count(&self) -> c_ulong {
+        // SAFETY: read once, volatile
+        unsafe { core::ptr::read_volatile(&self.rw_devs_change_count) }
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]

@@ -122,7 +122,8 @@ nest! {
         pub blocks_allocated: [c_ulong; bits_to_longs(c::BCH_BKEY_PTRS_MAX as usize)],
         #[c("unsigned long blocks_moving[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)]")]
         pub blocks_moving: [c_ulong; bits_to_longs(c::BCH_BKEY_PTRS_MAX as usize)],
-        pub blocks: [c::open_bucket_idx_t; c::BCH_BKEY_PTRS_MAX as usize],
+        #[c("open_bucket_idx_t blocks[BCH_BKEY_PTRS_MAX]")]
+        pub blocks: [Option<c::OpenBucketIdx>; c::BCH_BKEY_PTRS_MAX as usize],
         pub res: c::disk_reservation,
 
         pub buckets: [c::ec_stripe_new_bucket; c::BCH_BKEY_PTRS_MAX as usize],

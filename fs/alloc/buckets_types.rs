@@ -14,6 +14,11 @@ c_const! {
     pub const BUCKET_JOURNAL_SEQ_BITS: u32 = 16;
     #[c_int]
     pub const RESERVE_FACTOR: u32 = 6;
+
+    /* A device position as a 32.32 fixed point fraction of its size: see
+     * bch_dev::offset_to_frac() */
+    #[c_int]
+    pub const BCH_DEV_POS_FRAC_BITS: u32 = 32;
 }
 
 /// A bucket's gc state, in memory: fsck has one for every bucket on every

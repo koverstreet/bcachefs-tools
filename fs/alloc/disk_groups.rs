@@ -252,6 +252,34 @@ impl Fs {
         self.disk_groups.read(rcu).get(g as usize).filter(|e| !e.deleted).map(|e| &e.devs)
     }
 
+    /// The devices that take @data_type writes now, in @target - all of them
+    /// if @target names no devices.
+    pub fn target_rw_devs(&self, data_type: c::bch_data_type, target: Target) -> c::bch_devs_mask {
+        let mut devs = c::bch_devs_mask { d: self.allocator.rw_devs[data_type.0 as usize].load() };
+        let rcu = read_lock();
+        if let Some(t) = self.target_to_mask(target, &rcu) {
+            devs.d.and(&t.d);
+        }
+        devs
+    }
+
+    /// How many distinct failure domains @devs spans: each set domain
+    /// counted once, at its first device, and each device with no domain as
+    /// its own. This caps stripe width when failure domains are a hard
+    /// requirement - a stripe can't have more blocks than domains to spread
+    /// them across.
+    pub fn target_nr_domains(&self, devs: &c::bch_devs_mask) -> u32 {
+        let rcu = read_lock();
+        let domain = |dev| self.dev_failure_domain(dev, &rcu);
+
+        devs.d.iter()
+            .filter(|&i| match domain(i) {
+                0 => true,
+                d => !devs.d.iter().take_while(|&j| j < i).any(|j| domain(j) == d),
+            })
+            .count() as u32
+    }
+
     pub fn target_to_mask<'g>(&'g self, target: Target, rcu: &'g ReadGuard) -> Option<&'g c::bch_devs_mask> {
         match target {
             Target::Null     => None,
@@ -488,23 +516,9 @@ pub fn bch2_dev_domain_key(c: &Opaque<c::bch_fs>, chosen: &c::bch_devs_mask, dev
     }
 }
 
-/// Number of distinct failure domains @devs spans: each set domain counted
-/// once, at its first device, and each device with no domain as its own.
-/// This caps stripe width when failure domains are a hard requirement - a
-/// stripe can't have more blocks than domains to spread them across.
 #[c_export]
 pub fn bch2_target_nr_domains(c: &Opaque<c::bch_fs>, devs: &c::bch_devs_mask) -> c_uint {
-    let fs = Fs::from_c(c);
-    let rcu = read_lock();
-    let domain = |dev| fs.dev_failure_domain(dev, &rcu);
-
-    let nr = devs.d.iter()
-        .filter(|&i| match domain(i) {
-            0 => true,
-            d => !devs.d.iter().take_while(|&j| j < i).any(|j| domain(j) == d),
-        })
-        .count();
-    nr as c_uint
+    Fs::from_c(c).target_nr_domains(devs)
 }
 
 #[cold]
