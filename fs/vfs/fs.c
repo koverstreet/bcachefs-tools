@@ -9,6 +9,7 @@
 
 #include "btree/update.h"
 
+#include "data/copygc.h"
 #include "data/reconcile/work.h"
 
 #include "fs/acl.h"
@@ -25,9 +26,11 @@
 #include "init/passes.h"
 
 #include "journal/journal.h"
+#include "journal/reclaim.h"
 
 #include "snapshots/snapshot.h"
 
+#include "util/enumerated_ref.h"
 #include "util/thread_with_file.h"
 
 #include "vfs/fs.h"
@@ -2768,7 +2771,51 @@ static int bch2_freeze(struct super_block *sb)
 	struct bch_fs *c = sb->s_fs_info;
 
 	guard(rwsem_write)(&c->state_lock);
-	bch2_fs_read_only(c);
+
+	if (!test_bit(BCH_FS_rw, &c->flags))
+		return 0;
+
+	BUG_ON(test_bit(BCH_FS_write_disable_complete, &c->flags));
+
+	bch_verbose(c, "freeze: quiescing writes");
+
+	/*
+	 * #918 v9 Bug B fix: lightweight freeze path.
+	 *
+	 * The previous code called bch2_fs_read_only() which tears down
+	 * enumerated refs (percpu refs for c->writes and device io_refs) and
+	 * clears BCH_FS_rw.  On thaw, bch2_fs_read_write() calls
+	 * enumerated_ref_start() which BUGs on the dead/torn-down refs.
+	 *
+	 * Instead, quiesce writes without full teardown:
+	 * - Block new writes (going_ro)
+	 * - Stop background reconciliation
+	 * - Drain in-flight writes (kill c->writes ref, wait for completion)
+	 * - Flush journal for on-disk consistency
+	 * Leave BCH_FS_rw set and device io_refs alive so thaw can restart
+	 * c->writes without a full fs read-write cycle.
+	 */
+	set_bit(BCH_FS_going_ro, &c->flags);
+	bch2_reconcile_stop(c);
+
+	/* Drain in-flight writes; bch2_writes_disabled() sets
+	 * BCH_FS_write_disable_complete and wakes bch2_read_only_wait. */
+	enumerated_ref_stop(&c->writes, bch2_write_refs);
+
+	/*
+	 * bch2_writes_disabled() (the stop_fn) set write_disable_complete.
+	 * Clear it so that bch2_fs_read_only() — if triggered by an
+	 * emergency-RO work item while the fs is frozen — does not hit
+	 * its BUG_ON(write_disable_complete) at entry.
+	 */
+	clear_bit(BCH_FS_write_disable_complete, &c->flags);
+
+	bch_verbose(c, "freeze: writes drained, flushing journal");
+
+	bch2_journal_flush_all_pins(&c->journal);
+	bch2_journal_meta(&c->journal);
+
+	bch_verbose(c, "freeze complete");
 	return 0;
 }
 
@@ -2780,7 +2827,29 @@ static int bch2_unfreeze(struct super_block *sb)
 		return 0;
 
 	guard(rwsem_write)(&c->state_lock);
-	return bch2_fs_read_write(c);
+
+	/*
+	 * If BCH_FS_rw is clear, we went through a full read-only transition
+	 * (e.g. emergency-RO during freeze).  Do the full restart.
+	 */
+	if (!test_bit(BCH_FS_rw, &c->flags))
+		return bch2_fs_read_write(c);
+
+	bch_verbose(c, "thaw: restarting writes");
+
+	/* Restart the writes ref (was killed in freeze, now drained) */
+	enumerated_ref_start(&c->writes);
+
+	/* Re-allow new writes */
+	clear_bit(BCH_FS_going_ro, &c->flags);
+
+	/* Restart background workers that freeze stopped */
+	if (!c->opts.read_only)
+		bch2_reconcile_start(c);
+	bch2_copygc_wakeup(c);
+
+	bch_verbose(c, "thaw complete");
+	return 0;
 }
 
 static const struct super_operations bch_super_operations = {

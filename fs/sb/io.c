@@ -1274,6 +1274,7 @@ static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs
 	struct closure *cl = &c->sb_write;
 	unsigned degraded_flags = BCH_FORCE_IF_DEGRADED;
 	CLASS(darray_write_sb_dev, online_devices)();
+	struct bch_devs_mask frozen_skipped = {};
 
 	if (!test_bit(BCH_FS_may_upgrade_downgrade, &c->flags))
 		return 0;
@@ -1327,8 +1328,10 @@ static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs
 		 * The previous superblock is still on disk; journal
 		 * replay reconciles on next mount.
 		 */
-		if (unlikely(!bch2_dev_idx_freeze_gate_open(c, ca->dev_idx)))
+		if (unlikely(!bch2_dev_idx_freeze_gate_open(c, ca->dev_idx))) {
+			__set_bit(ca->dev_idx, frozen_skipped.d);
 			continue;
+		}
 
 		int ret = darray_push(&online_devices, ((write_sb_dev) { ca }));
 		if (bch2_fs_fatal_err_on(ret, c, "%s: error allocating online devices", __func__)) {
@@ -1500,8 +1503,18 @@ static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs
 	 * the previous superblock is still on every device, so the failure
 	 * here is a missed update, not a lost one.
 	 */
+	/*
+	 * #918 v9: frozen devices still hold their previous valid superblock —
+	 * they are temporarily offline by design, not failed.  Include them in
+	 * the availability mask so the replicas sufficiency check does not
+	 * trigger emergency-RO for their absence.
+	 */
+	struct bch_devs_mask sb_available = sb_written;
+	bitmap_or(sb_available.d, sb_available.d, frozen_skipped.d,
+		  sizeof(sb_available.d) * BITS_PER_BYTE);
+
 	bool fatal = !nr_wrote ||
-		(!devs && !bch2_can_read_fs_with_devs(c, &sb_written, degraded_flags, NULL));
+		(!devs && !bch2_can_read_fs_with_devs(c, &sb_available, degraded_flags, NULL));
 
 	if (!have_errors && !fatal)
 		return 0;
@@ -1553,7 +1566,7 @@ static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs
 		prt_printf(&msg.m, "Unable to write superblock to sufficient devices (from %ps)\n",
 			   (void *) _RET_IP_);
 		prt_printf(&msg.m, "Would not be able to mount with written devices\n");
-		bch2_can_read_fs_with_devs(c, &sb_written, degraded_flags, &msg.m);
+		bch2_can_read_fs_with_devs(c, &sb_available, degraded_flags, &msg.m);
 		bch2_fs_emergency_read_only(c, &msg.m);
 		return bch_err_throw(c, erofs_sb_err);
 	}
