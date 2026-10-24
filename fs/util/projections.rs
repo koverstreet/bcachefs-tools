@@ -51,7 +51,8 @@
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, MaybeUninit};
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
+                         AtomicU64, AtomicU8, AtomicUsize, Ordering};
 
 use crate::util::vstructs::{Native, Plain};
 
@@ -216,25 +217,31 @@ macro_rules! atomic_word {
     )* };
 }
 atomic_word!(bool => AtomicBool, u8 => AtomicU8, u16 => AtomicU16, u32 => AtomicU32, u64 => AtomicU64,
-             usize => AtomicUsize);
+             usize => AtomicUsize, i8 => AtomicI8, i16 => AtomicI16, i32 => AtomicI32, i64 => AtomicI64,
+             isize => AtomicIsize);
 
-/// A @T read by anyone, a word at a time, as C reads its fields, and written
-/// only by a writer had where writing it is serialized - a Lock's
-/// guard: a VolatileWriter. Relaxed loads and stores, as C's plain ones: a
-/// reader sees each word as it was written, not two of them as of one
-/// moment. To C, a plain @T.
+/// A @T read by anyone, a word at a time, as C reads its fields. Relaxed
+/// loads and stores, as C's plain ones: a reader sees each word as it was
+/// written, not two of them as of one moment. To C, a plain @T.
 ///
 /// Volatile, not atomic: its writers don't race each other, only its
-/// readers, so a read-modify-write is a load and a store - place() - not an
-/// atomic one. A word several writers change at once is an atomic, written
-/// with its fetch_add()s, and never a FakePlaceWrite: a place's load and
-/// store would lose another writer's update between them.
+/// readers. set() is a store, for a field with one writer - a thread's own
+/// state, published - and a read-modify-write is a load and a store - place()
+/// - not an atomic one, so it's a VolatileWriter's: had where writing is
+/// serialized, a Lock's guard. A word several writers change at once is an
+/// atomic, written with its fetch_add()s, and never a FakePlaceWrite: a
+/// place's load and store would lose another writer's update between them.
 #[repr(transparent)]
 pub struct Volatile<T: AtomicWord>(T::Atomic);
 
 impl<T: AtomicWord> Volatile<T> {
     pub fn get(&self) -> T {
         T::load(&self.0)
+    }
+
+    /// Store @v, by its one writer.
+    pub fn set(&self, v: T) {
+        T::store(&self.0, v)
     }
 }
 
@@ -265,7 +272,7 @@ impl<T: AtomicWord> VolatileWriter<T> {
     }
 
     pub fn set(&self, v: T) {
-        T::store(&self.0.0, v)
+        self.0.set(v)
     }
 
     /// FakePlaceWrite::place(): *w.nr.place() += 1.
