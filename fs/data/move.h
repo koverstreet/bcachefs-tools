@@ -8,6 +8,7 @@
 #include "btree/iter.h"
 #include "data/update.h"
 #include "data/move_gen.h"
+#include "data/moving_gen.h"
 
 #include "data/move_defs_gen.h"
 

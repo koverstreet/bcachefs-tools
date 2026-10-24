@@ -155,6 +155,7 @@ static void move_read_endio(struct bio *bio)
 	u->read_done = true;
 
 	wake_up(&ctxt->wait);
+	bch2_moving_ctxt_wake(ctxt);
 	closure_put(&ctxt->cl);
 }
 

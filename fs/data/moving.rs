@@ -4,8 +4,12 @@
 //! returns once the read is issued, and the write, the index update and their
 //! failures happen in completions. Rust has flush_all(), which waits for all
 //! of it, ratelimit(), for enough of it, IoMark, for what was issued before a
-//! point, and MoveStats, which completions count into; move.c's lists of IOs
-//! stay in C.
+//! point, wait_until(), for a condition completions change, and MoveStats,
+//! which completions count into; move.c's lists of IOs stay in C.
+//!
+//! C's completions wake the context's wait queue, which C's waits sleep on;
+//! Rust's sleep on its events, an EventCount, which C wakes beside it -
+//! bch2_moving_ctxt_wake() - until move.c's waits are Rust and the queue goes.
 //!
 //! The context is pinned - it's on c->moving_context_list, its closure waited
 //! on in place - and owns its transaction, trans(), which ratelimit(),
@@ -21,12 +25,13 @@ use crate::locking::Lock;
 use crate::types::Atomic64;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError};
 use crate::util::ffi::{c_char, Opaque};
+use crate::util::sleep::Sleep;
 use crate::util::vstructs::Validated;
 use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::c_extern;
+use cstruct_macros::{c_export, c_extern};
 
 c_extern! {
     pub fn bch2_moving_ctxt_flush_all(ctxt: *mut c::moving_context);
@@ -35,6 +40,19 @@ c_extern! {
                             opts: *mut c::bch_inode_opts, data_opts: *mut c::data_update_opts,
                             iter: *mut c::btree_iter, level: c_uint, k: c::bkey_s_c) -> c_int;
     pub fn bch2_move_stats_init(stats: *mut c::bch_move_stats, name: *const c_char);
+    pub fn bch2_moving_ctxt_do_pending_writes(ctxt: *mut c::moving_context);
+    pub fn bch2_moving_ctxt_next_pending_write(ctxt: *mut c::moving_context) -> *mut c::data_update;
+}
+
+/// Wake what waits on @ctxt in Rust - its events, as wake_up(&ctxt->wait)
+/// wakes C's waits: called alongside it, from completions.
+///
+/// # Safety
+/// @ctxt is a live context.
+#[c_export]
+pub unsafe fn bch2_moving_ctxt_wake(ctxt: *mut c::moving_context) {
+    // SAFETY: the caller's; only the count is borrowed, which is atomic
+    unsafe { (*ctxt).events.wake() }
 }
 
 /// What moves are counted into - by their completions, as well as by who
@@ -140,6 +158,33 @@ impl<'a> MovingCtxt<'a> {
 
     pub fn flush_all(&self) {
         unsafe { bch2_moving_ctxt_flush_all(self.raw()) }
+    }
+
+    /// Until @cond, as move_ctxt_wait_event(): writing what's been read as it
+    /// completes, and asleep with the transaction unlocked. @cond runs in the
+    /// sleep's task state too, so it mustn't sleep.
+    pub fn wait_until<T>(&self, mut cond: impl FnMut() -> Option<T>) -> T {
+        // SAFETY: the context's, live until it's dropped; an atomic
+        let events = unsafe { &(*self.raw()).events };
+        loop {
+            unsafe { bch2_moving_ctxt_do_pending_writes(self.raw()) };
+            if let Some(v) = cond() {
+                return v;
+            }
+            self.trans().unlock_long();
+
+            // A read completed - its write to issue - or @cond
+            let Ok(v) = events.wait_until(Sleep::UNINTERRUPTIBLE.freezable(), || {
+                if unsafe { !bch2_moving_ctxt_next_pending_write(self.raw()).is_null() } {
+                    Some(None)
+                } else {
+                    cond().map(Some)
+                }
+            });
+            if let Some(v) = v {
+                return v;
+            }
+        }
     }
 
     /// Start moving @k, at @iter's position in the context's transaction, as

@@ -864,6 +864,7 @@ void bch2_data_update_exit(struct data_update *update, int ret)
 				: list_first_entry(&ctxt->ios, struct data_update, io_list)->io_seq;
 		}
 		wake_up(&ctxt->wait);
+		bch2_moving_ctxt_wake(ctxt);
 	}
 
 	bch2_bio_free_pages_pool(c, &update->op.wbio.bio);

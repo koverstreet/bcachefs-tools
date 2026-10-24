@@ -1055,6 +1055,7 @@ static void ec_stripe_create(struct ec_stripe_new *s)
 		atomic_sub(stripe_sectors, &s->ctxt->write_sectors);
 		atomic_dec(&s->ctxt->write_ios);
 		wake_up(&s->ctxt->wait);
+		bch2_moving_ctxt_wake(s->ctxt);
 		closure_put(&s->ctxt->cl);
 	}
 

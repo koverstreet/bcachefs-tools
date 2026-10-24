@@ -4,6 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
+use crate::util::futex::EventCount;
 use core::ffi::{c_int, c_void};
 use cstruct_macros::{c_typedef, CStruct};
 
@@ -53,6 +54,8 @@ pub struct moving_context {
     pub write_ios: c::atomic_t,
 
     pub wait: c::wait_queue_head_t,
+    /* Woken with @wait - bch2_moving_ctxt_wake() - for Rust's waits: data/moving.rs */
+    pub events: EventCount,
 }
 c_default!(moving_context);
 
