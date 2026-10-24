@@ -371,13 +371,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
     /// extent_entry_next_safe().
     fn ptrs_decoded(&self, fs: &Fs) -> impl Iterator<Item = DecodedPtr<'_>> {
         let k = self.k();
-        // bch2_extent_crc_unpack(k, NULL)
-        let mut crc = c::bch_extent_crc_unpacked {
-            compressed_size:   k.size,
-            uncompressed_size: k.size,
-            live_size:         k.size,
-            ..Default::default()
-        };
+        let mut crc = crc_none(k);
         let mut ec = None;
 
         self.extent_entries_at(fs).filter_map(move |(pos, e)| match e {
@@ -799,6 +793,17 @@ pub struct EntryPos(usize);
 
 /// @entry, if it's a crc entry of @k, unpacked: the sizes unbiased, the
 /// checksum's bytes where bch_csum has them.
+/// The crc of @k's pointers before any crc entry - none, the data as it is,
+/// all of it live: bch2_extent_crc_unpack(k, NULL).
+pub(crate) fn crc_none(k: &c::bkey) -> c::bch_extent_crc_unpacked {
+    c::bch_extent_crc_unpacked {
+        compressed_size:   k.size,
+        uncompressed_size: k.size,
+        live_size:         k.size,
+        ..Default::default()
+    }
+}
+
 pub(crate) fn crc_unpack(k: &c::bkey, entry: ExtentEntry<'_>) -> Option<c::bch_extent_crc_unpacked> {
     // The packed checksum bytes, at the start of a bch_csum word - C stores
     // them there through a cast, with no byte swap:

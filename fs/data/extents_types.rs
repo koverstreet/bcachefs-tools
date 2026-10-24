@@ -7,7 +7,8 @@ use cstruct_macros::{CStruct, bitfield, c_enum, c_xmacro, TypeInfo};
 use nestify::nest;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+/// Equal as bch2_crc_unpacked_cmp() says: every field.
+#[derive(Clone, Copy, Default, PartialEq, Eq, CStruct, TypeInfo)]
 pub struct bch_extent_crc_unpacked {
     pub compressed_size: u32,
     pub uncompressed_size: u32,

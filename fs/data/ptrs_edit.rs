@@ -146,4 +146,51 @@ impl TransBkey<'_, '_, PtrsMut> {
         let start = EntryPos(PtrsMut::entry_range(self.as_sc()).start / size_of::<u64>());
         self.insert_entry(start, &[c::bch_extent_flags::new().with_flags(flags).into_bits()])
     }
+
+    /// @p inserted where its crc applies: its pointer, after its stripe_ptr if
+    /// it has one. With no crc, first, after the extent flags entry if there
+    /// is one; with a crc the key has an entry for, just after that entry;
+    /// else after a new one, at the end. Only the last is an append: the
+    /// others go ahead of pointers already there, renumbering them. NoRoom if
+    /// the buffer can't hold it, and the key's as it was.
+    pub fn insert_decoded_ptr(&mut self, fs: &Fs, p: &c::extent_ptr_decoded) -> Result<(), NoRoom> {
+        let mut entries = ArrayVec::<u64, 5>::new();
+
+        let at = if p.crc == crc_none(self.k()) {
+            let start = EntryPos(PtrsMut::entry_range(self.as_sc()).start / size_of::<u64>());
+            match self.extent_entries(fs).next() {
+                Some(e @ ExtentEntry::flags(_)) => EntryPos(start.0 + e.bytes().len() / size_of::<u64>()),
+                _ => start,
+            }
+        } else if let Some(at) = self.extent_entries_at(fs)
+            .find(|&(_, e)| crc_unpack(self.k(), e) == Some(p.crc))
+            .map(|(at, e)| EntryPos(at.0 + e.bytes().len() / size_of::<u64>()))
+        {
+            at
+        } else {
+            entries.extend(crc_entry(&p.crc));
+            self.entries_end()
+        };
+
+        if p.has_ec {
+            entries.push(p.ec.into_bits());
+        }
+        entries.push(p.ptr.into_bits().0);
+        self.insert_entry(at, &entries)
+    }
+}
+
+/// @crc as the smallest crc entry it packs into, in u64s.
+fn crc_entry(crc: &c::bch_extent_crc_unpacked) -> ArrayVec<u64, 3> {
+    let words = |b: &[u8]| b.chunks(8).map(|w| u64::from_ne_bytes(w.try_into().unwrap())).collect();
+
+    if let Some(e) = c::bch_extent_crc32::pack(crc) {
+        [e.into_bits().0].into_iter().collect()
+    } else if let Some(e) = c::bch_extent_crc64::pack(crc) {
+        words(plain_bytes(&e))
+    } else {
+        let e = c::bch_extent_crc128::pack(crc)
+            .unwrap_or_else(|| panic!("a crc no entry holds: csum type {}", crc.csum_type));
+        words(plain_bytes(&e))
+    }
 }
