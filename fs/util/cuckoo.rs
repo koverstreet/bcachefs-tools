@@ -7,7 +7,9 @@
 //!
 //! Keys are std's: an item - the u64, or the entry it points to - is Hash +
 //! Eq, and a lookup takes anything it Borrows, as HashSet::get() does; an
-//! entry's Hash and Eq are its key's.
+//! entry's Hash and Eq are its key's. An entry the map doesn't own can hold
+//! its own place in it, and its key - a Registration - so that dropping the
+//! entry takes it out.
 //!
 //! # The buffer
 //!
@@ -216,9 +218,9 @@ unsafe impl<E: Sync> Sync for Entry<E> {}
 impl<E> Entry<E> {
     /// # Safety
     /// @e stays valid, its key - what its Hash and Eq see - unchanged, for as
-    /// long as it's in a table and
-    /// a grace period after: removed, it's freed only after synchronize_rcu(),
-    /// or by kfree_rcu().
+    /// long as it's in a table and a grace period after: removed, it's freed
+    /// only after synchronize_rcu(), or by kfree_rcu() - or at once, from a
+    /// table no other thread reads.
     pub unsafe fn new(e: NonNull<E>) -> Self {
         Self(e)
     }
@@ -663,6 +665,85 @@ impl<I: CuckooItem, H: CuckooHash, const W: usize> CuckooWriter<I, H, W> {
             }
             saw!(faults, grown);
             bits += 1;
+        }
+    }
+}
+
+// ── An entry's own registration ──────────────────────────────────────────
+
+/// An entry's place in a map, and its key, held by the entry: dropping it
+/// takes the entry out. A reference each way, owning neither - the table
+/// points to the entry, the entry to the table - so the entry is pinned while
+/// it's in, and leaves as it's dropped. The entry's Hash, Eq and Borrow<K>
+/// are key()'s, which nothing can change.
+///
+/// The table's a pointer, not a borrow: a borrow's lifetime would be in the
+/// entry's type, so in the table's, and a table can't be borrowed for a
+/// lifetime its own type names - it has drop glue.
+pub struct Registration<K, E, H = SipHash, const W: usize = 2>
+where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, H: CuckooHash
+{
+    table: NonNull<CuckooWriter<Entry<E>, H, W>>,
+    entry: NonNull<E>,
+    key:   K,
+}
+
+// SAFETY: shared, it gives out only the key; @entry is compared, never
+// followed. Not Send: its drop is a write, the writer's.
+unsafe impl<K, E, H, const W: usize> Sync for Registration<K, E, H, W>
+where K: Hash + Eq + Sync, E: Hash + Eq + Sync + Borrow<K>, H: CuckooHash
+{}
+
+impl<K, E, H, const W: usize> Registration<K, E, H, W>
+where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, H: CuckooHash
+{
+    /// @e, in @table under @key - which mustn't be in it - until this is
+    /// dropped: made in place, as a field of @e, so the insert hashes @e
+    /// through it. On an error the table is unchanged.
+    ///
+    /// # Safety
+    /// Entry::new()'s, but for the key, which is this one's; @table outlives
+    /// this, which is dropped by its writer - the lock's holder, or the &mut's;
+    /// and @e is the entry this is a field of, being pin-initialized -
+    /// pin-init's &this - with this its first field, so dropped first, and
+    /// initialized last.
+    pub unsafe fn new<'w>(table: &'w CuckooWriter<Entry<E>, H, W>, key: K, e: NonNull<E>)
+        -> impl ::pin_init::PinInit<Self, AllocError> + use<'w, K, E, H, W>
+    {
+        let init = move |slot: *mut Self| {
+            assert!(!table.locked().is_some_and(|t| t.find_locked(&key).is_some()),
+                    "cuckoo: registering a key that's in already");
+            // SAFETY: @slot is ours to write, pin-init's
+            unsafe { slot.write(Self { table: NonNull::from(table), entry: e, key }) };
+            // SAFETY: the caller's
+            let ret = table.insert(unsafe { Entry::new(e) }).map(|_| ());
+            if ret.is_err() {
+                // SAFETY: just written; its drop finds nothing to take out
+                unsafe { core::ptr::drop_in_place(slot) };
+            }
+            ret
+        };
+        // SAFETY: @slot is initialized on Ok, and not on Err; nothing moves it
+        unsafe { ::pin_init::pin_init_from_closure(init) }
+    }
+
+    pub fn key(&self) -> &K {
+        &self.key
+    }
+}
+
+impl<K, E, H, const W: usize> Drop for Registration<K, E, H, W>
+where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, H: CuckooHash
+{
+    /// Out, if the slot is still this entry's: an insert() of its key may
+    /// have put another in its place.
+    fn drop(&mut self) {
+        // SAFETY: it outlives us, and we're its writer (new())
+        let table = unsafe { self.table.as_ref() };
+        let Some(s) = table.locked().and_then(|t| t.find_locked(&self.key)) else { return };
+        if s.load_locked().is_some_and(|i| i.0 == self.entry) {
+            s.clear();
+            table.0.nr.fetch_sub(1, Relaxed);
         }
     }
 }
