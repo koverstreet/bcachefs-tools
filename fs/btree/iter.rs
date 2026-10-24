@@ -481,6 +481,14 @@ impl BtreeNodeRef {
     }
 }
 
+/// A node an iterator returned - backpointer_get_node()'s, say: held by that
+/// iterator's path, as peek_ref()'s is.
+impl From<&c::btree> for BtreeNodeRef {
+    fn from(b: &c::btree) -> Self {
+        Self { raw: NonNull::from(b) }
+    }
+}
+
 impl<'a, 't> TransAttempt<'a, 't> {
     pub fn raw(&self) -> *mut c::btree_trans {
         self.trans.raw()
