@@ -11,7 +11,9 @@
 //! can't be found - validate passes it on purpose, and only what would update
 //! it stops.
 
+use crate::alloc::buckets::bucket_to_u64;
 use crate::btree::bkey::{bkey_eq, bpos_gt, pos, BkeySC, BkeyV, BkeyVMut, POS_MIN};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
 use crate::c;
 use crate::data::ptrs::{bkey_ptrs_validate, extent_ptr_to_text};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
@@ -25,6 +27,7 @@ use crate::util::Printbuf;
 use crate::bkey_fsck_err_on;
 use core::ffi::c_int;
 use core::mem::{offset_of, size_of};
+use core::ops::ControlFlow;
 use cstruct_macros::{c_const, c_export};
 
 /// Where a stripe's pointers start: sizeof(struct bch_stripe).
@@ -167,6 +170,33 @@ fn ptr_in_block(stripe_ptr: &c::bch_extent_ptr, data_ptr: &c::bch_extent_ptr, se
         data_ptr.generation() == stripe_ptr.generation() &&
         data_ptr.offset() >= stripe_ptr.offset() &&
         data_ptr.offset() < stripe_ptr.offset() + sectors
+}
+
+// ── A bucket's stripes ───────────────────────────────────────────────────
+
+impl TransAttempt<'_, '_> {
+    /// How many stripes have a block in @bucket, by bucket_to_stripe:
+    /// bch2_bucket_nr_stripes().
+    pub fn bucket_nr_stripes(&self, bucket: c::bpos) -> Result<u32, BchError> {
+        let b = bucket_to_u64(bucket);
+        let mut nr = 0;
+        BtreeIter::new(self, c::btree_id::bucket_to_stripe, pos(b, 0), BtreeIterFlags::empty())
+            .for_each_max_norestart(self, pos(b, u64::MAX), |_, _| {
+                nr += 1;
+                Ok(ControlFlow::<()>::Continue(()))
+            })?;
+        Ok(nr)
+    }
+}
+
+/// The count, or an error.
+///
+/// # Safety
+/// @trans is in an attempt.
+#[c_export]
+pub unsafe fn bch2_bucket_nr_stripes<'t>(trans: &'t BtreeTrans<'t>, bucket: c::bpos) -> c_int {
+    let t = unsafe { trans.attempt_in_progress() };
+    t.bucket_nr_stripes(bucket).map_or_else(|e| e.raw(), |nr| nr as c_int)
 }
 
 // ── gc's stripes ─────────────────────────────────────────────────────────

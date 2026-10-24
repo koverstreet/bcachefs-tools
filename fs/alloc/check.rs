@@ -48,7 +48,6 @@ use cstruct_macros::c_export;
 
 // data/ec/init.c's, until it converts
 unsafe extern "C" {
-    fn bch2_bucket_nr_stripes(trans: *mut c::btree_trans, bucket: c::bpos) -> c_int;
     fn bch2_check_stripe_refs(trans: *mut c::btree_trans) -> c_int;
 }
 
@@ -289,9 +288,7 @@ fn check_alloc_key<'t>(
         t.update(bucket_gens_iter, &g, UpdateTriggerFlags::empty())?;
     }
 
-    let nr_stripes = unsafe { bch2_bucket_nr_stripes(t.raw(), bucket) };
-    ret_to_result_void(nr_stripes.min(0))?;
-    let nr_stripes = nr_stripes as u32;
+    let nr_stripes = t.bucket_nr_stripes(bucket)?;
 
     if fsck_err_on!(t, a.v().stripe_refcount != nr_stripes, id::alloc_key_stripe_refcount_wrong,
                     "alloc key with incorrect stripe_refcount, should be {}\n{}",

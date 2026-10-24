@@ -513,22 +513,6 @@ static int check_bucket_to_stripe_ref(struct btree_trans *trans, struct bpos ref
 	return 0;
 }
 
-int bch2_bucket_nr_stripes(struct btree_trans *trans, struct bpos bucket)
-{
-	struct bkey_s_c k;
-	unsigned nr = 0;
-	int ret = 0;
-
-	for_each_btree_key_max_norestart(trans, iter,
-				  BTREE_ID_bucket_to_stripe,
-				  POS(bucket_to_u64(bucket), 0),
-				  POS(bucket_to_u64(bucket), U64_MAX),
-				  0, k, ret)
-		nr++;
-
-	return ret ?: nr;
-}
-
 int bch2_check_stripe_refs(struct btree_trans *trans)
 {
 	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
