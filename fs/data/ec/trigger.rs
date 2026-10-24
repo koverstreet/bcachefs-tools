@@ -377,7 +377,7 @@ pub fn bch2_stripe_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, k: BkeySC<
 // ── The trigger ──────────────────────────────────────────────────────────
 
 /// A stripe, as the trigger sees one going in or out.
-type StripeK<'a> = BkeySC<'a, c::Stripe<Validated>>;
+pub(crate) type StripeK<'a> = BkeySC<'a, c::Stripe<Validated>>;
 
 /// @k's stripe, if it's one - not a deletion.
 fn stripe_of(k: BkeySC<'_>) -> Option<StripeK<'_>> {
@@ -395,7 +395,7 @@ fn needs_reconcile(s: Option<StripeK<'_>>) -> i64 {
 
 /// Its data blocks: each one's pointer and sector count, as far as the value
 /// goes. nr_data unsigned, as C's.
-fn data_blocks(s: StripeK<'_>) -> impl Iterator<Item = (&c::bch_extent_ptr, Option<u16>)> {
+pub(crate) fn data_blocks(s: StripeK<'_>) -> impl Iterator<Item = (&c::bch_extent_ptr, Option<u16>)> {
     let v = s.v();
     let nr_data = u32::from(v.nr_blocks).wrapping_sub(v.nr_redundant.into());
     (0..nr_data.min(v.nr_blocks.into()))
