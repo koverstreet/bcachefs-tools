@@ -135,6 +135,12 @@ fn slots<const W: usize, S: BuildHasher + From<[u64; 2]>, K: ?Sized + Hash>(seed
 
 /// What a table's slots hold, a word each.
 ///
+/// XXX: not cuckoo's. Atomic, load() and store() are util/projections'
+/// AtomicWord again - with orderings, and None for empty: an empty niche
+/// (Option<NonNull<E>>, NonZeroU64) would retire the complemented u64, and
+/// storable() with it. And target() is Borrow, but for an entry's deref
+/// being unsafe - which is the RCU types' to say: see Entry.
+///
 /// # Safety
 /// Atomic owns nothing, so a bytewise copy is another; all zeroes is empty;
 /// load() gives back what store() stored.
@@ -181,6 +187,10 @@ unsafe impl CuckooItem for u64 {
 }
 
 /// A pointer to an entry, as a map holds it.
+///
+/// XXX: not cuckoo's. A pointer to what's freed only after a grace period
+/// is an RCU type - the kernel's RcuBox/ForeignOwnableRcu, ours to have -
+/// and new()'s contract is what that type would make its own.
 pub struct Entry<E>(NonNull<E>);
 
 impl<E> Clone for Entry<E> {
