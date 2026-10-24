@@ -26,7 +26,7 @@ use crate::fs::Fs;
 use crate::init::error::id;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::alloc::{darray_exit, flags, DArrayLoan};
-use crate::util::ffi::Opaque;
+use crate::util::ffi::{c_str, Opaque};
 use crate::util::{Printbuf, ToText};
 use crate::{fsck_err_flags, inode, logged_ops, opts};
 use core::ffi::{c_int, CStr};
@@ -42,13 +42,6 @@ struct Desc {
     opt:  c::bch_opt_id,
     get:  fn(&c::bch_inode_unpacked) -> u64,
     set:  fn(&mut c::bch_inode_unpacked, u64),
-}
-
-const fn c_str(s: &'static str) -> &'static CStr {
-    match CStr::from_bytes_with_nul(s.as_bytes()) {
-        Ok(s)  => s,
-        Err(_) => panic!("not a C string"),
-    }
 }
 
 macro_rules! descs {

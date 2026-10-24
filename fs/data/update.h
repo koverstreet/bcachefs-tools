@@ -20,14 +20,11 @@ static inline bool data_update_is_scrub(enum bch_data_update_types type)
 void bch2_data_update_to_text(struct printbuf *, struct data_update *);
 void bch2_data_update_inflight_to_text(struct printbuf *, struct data_update *);
 
-int bch2_data_update_index_update(struct bch_write_op *);
-
 void bch2_data_update_read_done(struct data_update *);
 bool bch2_data_update_read_err_benign(int);
 
 bool bch2_data_update_fail_should_trace(enum bch_data_update_types, int);
 
-void bch2_data_update_ec_alloc_failed(struct data_update *);
 void bch2_data_update_exit(struct data_update *, int);
 int bch2_data_update_init(struct btree_trans *, struct btree_iter *,
 			  struct moving_context *,
@@ -35,8 +32,6 @@ int bch2_data_update_init(struct btree_trans *, struct btree_iter *,
 			  struct write_point_specifier,
 			  struct bch_inode_opts *, struct data_update_opts,
 			  enum btree_id, struct bkey_s_c);
-
-unsigned ptr_mask_remap(struct bch_fs *, struct bkey_s_c, unsigned, struct bkey_s_c);
 
 void bch2_fs_data_update_exit(struct bch_fs *);
 int bch2_fs_data_update_init(struct bch_fs *);

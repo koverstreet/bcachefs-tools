@@ -1404,7 +1404,7 @@ static void __bch2_write_index(struct bch_write_op *op)
 
 		ret = !(op->flags & BCH_WRITE_move)
 			? bch2_write_index_default(op)
-			: bch2_data_update_index_update(op);
+			: bch2_data_update_index_update(container_of(op, struct data_update, op));
 
 		BUG_ON(bch2_err_matches(ret, BCH_ERR_transaction_restart));
 		BUG_ON(keylist_sectors(keys) && !ret);

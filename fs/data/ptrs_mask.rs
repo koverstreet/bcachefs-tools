@@ -130,6 +130,33 @@ impl<'id, K: BkeyV<V: PtrsBkey>> Branded<'id, K> {
         PtrMask::of_bits(self.all(fs).bits & bits as u16)
     }
 
+    /// @m, of this key's pointers, as @new's: for each, the first of @new's
+    /// that ptrs_match() it - the same data, wherever each extent now starts
+    /// - and none if @new hasn't kept it.
+    pub fn remap<'n, N: BkeyV<V: PtrsBkey>>(&self, fs: &Fs, m: PtrMask<'id>, new: &Branded<'n, N>) -> PtrMask<'n> {
+        let (ok, nk) = (self.k.k(), new.k.k());
+        let bits = self.k.ptrs_decoded(fs).take(16).enumerate()
+            .filter(|(i, _)| m.contains(*i))
+            .filter_map(|(_, op)| new.k.ptrs_decoded(fs).take(16).position(|np| ptrs_match(ok, &op.p, nk, &np.p)))
+            .fold(0, |bits, j| bits | 1 << j);
+        PtrMask::of_bits(bits)
+    }
+
+    /// Its first pointer to @dev, if it has one there.
+    pub fn of_dev(&self, fs: &Fs, dev: u32) -> PtrMask<'id> {
+        let bits = self.k.ptrs(fs).take(16).position(|p| u32::from(p.dev()) == dev).map_or(0, |i| 1 << i);
+        PtrMask::of_bits(bits)
+    }
+
+    /// Its pointers on the devices of @other's pointers that @which takes:
+    /// of_dev() of each - which of this key's a write to them would conflict
+    /// with.
+    pub fn on_devs_of(&self, fs: &Fs, other: &impl BkeyVPtrs, mut which: impl FnMut(&c::bch_extent_ptr) -> bool)
+        -> PtrMask<'id>
+    {
+        other.ptrs(fs).filter(|p| which(p)).fold(self.none(), |m, p| m | self.of_dev(fs, p.dev().into()))
+    }
+
     /// The pointers of @m.
     pub fn ptrs_in<'a>(&'a self, fs: &'a Fs, m: PtrMask<'id>) -> impl Iterator<Item = &'a c::bch_extent_ptr> + 'a {
         let bits = m.bits;

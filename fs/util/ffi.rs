@@ -90,6 +90,15 @@ pub unsafe fn opt_bytes_mut<'a>(p: *mut c_void, size: usize) -> Option<&'a mut [
     (!p.is_null()).then(|| unsafe { core::slice::from_raw_parts_mut(p as *mut u8, size) })
 }
 
+/// @s, NUL terminated, as a C string - for a const table of them, built from
+/// concat!(.., "\0").
+pub const fn c_str(s: &'static str) -> &'static core::ffi::CStr {
+    match core::ffi::CStr::from_bytes_with_nul(s.as_bytes()) {
+        Ok(s)  => s,
+        Err(_) => panic!("not a C string"),
+    }
+}
+
 /// @f, given @s as a C string - a copy, NUL terminated, and as C would see
 /// it: up to a NUL in @s, if there's one.
 pub fn with_cstr<R>(s: &str, f: impl FnOnce(&core::ffi::CStr) -> R)
