@@ -14,6 +14,7 @@ pub mod file;
 pub mod futex;
 pub mod gather;
 pub mod genradix;
+pub mod hash;
 pub mod inline_vec;
 pub mod ioctl;
 pub mod jump_label;

@@ -23,7 +23,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/posix_acl_xattr.h",		// nop_posix_acl_*, xattr.rs's ACL handlers
     "crypto/sha2.h",			// sha256(), siphash_old's string hash key
     "linux/anon_inodes.h",		// anon_inode_getfile(), util/file's NewFile
-    "linux/hash.h",			// GOLDEN_RATIO_64, util/cuckoo.rs's hash_64()
+    "linux/hash.h",			// GOLDEN_RATIO_64, util/hash.rs's hash_64()
     "linux/mm.h",			// totalram_pages(), a backpointer scan's batch limit
     "linux/mount.h",			// mnt_want_write_file(), vfs/ioctl.rs's
     "linux/blkdev.h",			// bdev_freeze(), vfs/ioctl.rs's goingdown

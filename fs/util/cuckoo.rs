@@ -85,9 +85,9 @@ use core::ptr::NonNull;
 use core::sync::atomic::{fence, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize};
 use core::sync::atomic::Ordering::{self, Acquire, Relaxed, Release};
 
-use crate::c;
 use crate::types::CacheAligned;
 use crate::util::alloc::AllocError;
+use crate::util::hash::{hash_64, Fold};
 use crate::util::kernel::random_u64;
 use crate::util::projections::Publish;
 use crate::util::rcu::{read_lock, RcuArray, RcuElement, ReadGuard};
@@ -144,35 +144,10 @@ impl CuckooHash for SipHash {
 
 pub struct GoldenRatio;
 
-/// A key's words folded into one, by hash_64()'s multiply: a u64 key's is
-/// itself.
-struct Fold(u64);
-
-impl Hasher for Fold {
-    fn write(&mut self, bytes: &[u8]) {
-        for w in bytes.chunks(8) {
-            let mut b = [0; 8];
-            b[..w.len()].copy_from_slice(w);
-            self.write_u64(u64::from_le_bytes(b));
-        }
-    }
-
-    fn write_u64(&mut self, w: u64) {
-        self.0 = self.0.wrapping_mul(c::GOLDEN_RATIO_64) ^ w;
-    }
-
-    fn finish(&self) -> u64 {
-        self.0
-    }
-}
-
 impl CuckooHash for GoldenRatio {
     fn slots<const W: usize, K: ?Sized + Hash>(seeds: &Seeds, bits: u32, key: &K) -> [usize; W] {
-        let mut f = Fold(0);
-        key.hash(&mut f);
-        core::array::from_fn(|w| {
-            (f.0 ^ seeds[w]).wrapping_mul(c::GOLDEN_RATIO_64).wrapping_shr(64 - bits) as usize
-        })
+        let f = Fold::of(key);
+        core::array::from_fn(|w| hash_64(f ^ seeds[w], bits) as usize)
     }
 }
 
