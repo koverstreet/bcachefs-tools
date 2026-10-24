@@ -1295,26 +1295,11 @@ void bch2_submit_wbio_replicas(struct bch_write_bio *wbio, struct bch_fs *c,
 			 * going-RO flush is quiescing the fs and
 			 * journal replay reconciles on next mount.
 			 */
-			if (unlikely(test_bit(BCH_FS_going_ro, &c->flags) &&
-				     !bch2_dev_idx_freeze_gate_open(c, n->dev)))
+			if (unlikely(!bch2_dev_idx_freeze_gate_open(c, n->dev)))
 				bio_endio(&n->bio);
-			else {
-				/*
-				 * #918 G9 fix layer 0: non-blocking submit.
-				 *
-				 * If the target block device queue is frozen
-				 * (e.g. DM suspend), a normal submit_bio blocks
-				 * in blk_queue_enter while holding s_umount,
-				 * deadlocking fsfreeze.  REQ_NOWAIT makes the
-				 * block layer return BLK_STS_AGAIN instead of
-				 * blocking; the write completes with an error
-				 * that unblocks the task so freeze_super can
-				 * proceed.
-				 */
-				n->bio.bi_opf |= REQ_NOWAIT;
+			else
 				submit_bio(&n->bio);
-			}
-		} else if (unlikely(test_bit(BCH_FS_going_ro, &c->flags))) {
+		} else if (unlikely(test_bit(BCH_FS_going_ro, &c->flags) || !bch2_dev_idx_freeze_gate_open(c, n->dev))) {
 			/* going-RO: complete cleanly, not BLK_STS_REMOVED */
 			bio_endio(&n->bio);
 		} else {

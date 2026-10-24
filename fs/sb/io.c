@@ -1202,13 +1202,6 @@ static void read_back_super(struct bch_fs *c, struct bch_dev *ca)
 	memset(ca->sb_read_scratch, 0, BCH_SB_READ_SCRATCH_BUF_SIZE);
 
 	bio_reset(bio, ca->disk_sb.bdev, REQ_OP_READ|REQ_SYNC|REQ_META);
-	/*
-	 * #918 G9 fix layer 5: REQ_NOWAIT on superblock read-back
-	 * during going-RO so closure_bio_submit returns immediately
-	 * instead of blocking on a dm-suspended device.
-	 */
-	if (test_bit(BCH_FS_going_ro, &c->flags) || !test_bit(BCH_FS_rw, &c->flags))
-		bio->bi_opf |= REQ_NOWAIT;
 	bio->bi_iter.bi_sector	= le64_to_cpu(sb->layout.sb_offset[0]);
 	bio->bi_end_io		= write_super_endio;
 	bio->bi_private		= ca;
@@ -1236,13 +1229,6 @@ static void write_one_super(struct bch_fs *c, struct bch_dev *ca, unsigned idx)
 	 */
 
 	bio_reset(bio, ca->disk_sb.bdev, REQ_OP_WRITE|REQ_SYNC|REQ_IDLE|REQ_META|REQ_FUA);
-	/*
-	 * #918 G9 fix layer 5: REQ_NOWAIT on superblock write
-	 * during going-RO so closure_bio_submit returns immediately
-	 * instead of blocking on a dm-suspended device.
-	 */
-	if (test_bit(BCH_FS_going_ro, &c->flags) || !test_bit(BCH_FS_rw, &c->flags))
-		bio->bi_opf |= REQ_NOWAIT;
 	bio->bi_iter.bi_sector	= le64_to_cpu(sb->offset);
 	bio->bi_end_io		= write_super_endio;
 	bio->bi_private		= ca;
@@ -1341,9 +1327,7 @@ static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs
 		 * The previous superblock is still on disk; journal
 		 * replay reconciles on next mount.
 		 */
-		if (unlikely(test_bit(BCH_FS_going_ro, &c->flags) &&
-			     (test_bit(BCH_FS_emergency_ro, &c->flags) ||
-			      !bch2_dev_idx_freeze_gate_open(c, ca->dev_idx))))
+		if (unlikely(!bch2_dev_idx_freeze_gate_open(c, ca->dev_idx)))
 			continue;
 
 		int ret = darray_push(&online_devices, ((write_sb_dev) { ca }));
