@@ -86,7 +86,6 @@ use core::convert::Infallible;
 use core::ffi::c_int;
 use core::ops::ControlFlow;
 use core::pin::Pin;
-use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
 
@@ -993,11 +992,11 @@ impl Fs {
 
         r.thread_exit_ret.store(0, Relaxed);
 
-        let fs = FsPtr(NonNull::new(self.as_ptr()).expect("a filesystem"));
+        // SAFETY: the thread's stopped before the filesystem goes -
+        // reconcile_stop(), on the way to read-only
+        let fs: &'static Fs = unsafe { &*self.as_ptr() };
         let t = Kthread::create(format_args!("bch-reconcile/{}", self.name().to_str().unwrap_or("?")),
                                 move |me| {
-            // SAFETY: FsPtr's
-            let fs = unsafe { fs.get() };
             if let Err(e) = thread(fs, me) {
                 fs.reconcile.thread_exit_ret.store(e.raw(), Relaxed);
             }
@@ -1012,24 +1011,6 @@ impl Fs {
     pub fn reconcile_stop(&self) {
         let t = self.reconcile.thread.lock().take();
         drop(t);
-    }
-}
-
-/// The filesystem, for its thread, which can't borrow it: the thread's
-/// stopped before the filesystem goes - reconcile_stop(), on the way to
-/// read-only.
-struct FsPtr(NonNull<c::bch_fs>);
-
-// SAFETY: a filesystem is shared between threads, and this one's only
-// dereferenced while it lives
-unsafe impl Send for FsPtr {}
-
-impl FsPtr {
-    /// # Safety
-    /// On the thread, which the filesystem outlives.
-    unsafe fn get<'a>(&self) -> &'a Fs {
-        // SAFETY: the caller's
-        unsafe { Fs::borrow_raw(self.0.as_ptr()) }
     }
 }
 
