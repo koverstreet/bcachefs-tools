@@ -1316,6 +1316,17 @@ static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs
 		if (devs && !test_bit(ca->dev_idx, devs->d))
 			continue;
 
+		/*
+		 * #918 G9 fix layer 3: during going-RO, skip devices
+		 * whose freeze gate is closed — their block device may
+		 * be dm-suspended and closure_bio_submit would block
+		 * forever.  The previous superblock is still on the
+		 * device; journal replay reconciles on next mount.
+		 */
+		if (unlikely(test_bit(BCH_FS_going_ro, &c->flags) &&
+			     !bch2_dev_idx_freeze_gate_open(c, ca->dev_idx)))
+			continue;
+
 		int ret = darray_push(&online_devices, ((write_sb_dev) { ca }));
 		if (bch2_fs_fatal_err_on(ret, c, "%s: error allocating online devices", __func__)) {
 			enumerated_ref_put(&ca->io_ref[READ], BCH_DEV_READ_REF_write_super);

@@ -60,7 +60,22 @@ static inline void bch2_dev_idx_write_gate_wait(struct bch_fs *c, unsigned dev)
 {
 	if (likely(bch2_dev_idx_freeze_gate_open(c, dev)))
 		return;
-	wait_event(c->freeze_wait, bch2_dev_idx_freeze_gate_open(c, dev));
+
+	/*
+	 * #918 G9 fix: the gate is non-blocking.  The F*-generated C
+	 * (step_issue_write) never blocks a gate-closed write — it parks
+	 * (parked++, return) or steers.  A blocking wait_event here holds
+	 * VFS sb_writers: bch2_fs_bdev_freeze (from dmsetup suspend) closes
+	 * the gate while a user writer is mid-transaction, the writer blocks,
+	 * fsfreeze blocks on sb_writers, and the gate never reopens.
+	 *
+	 * With the gate non-blocking, writes to frozen devices fall through
+	 * to bch2_dev_get_ioref() — which returns NULL when the WRITE ref is
+	 * stopped (STEER freeze) — and take the clean-completion path in
+	 * bch2_submit_wbio_replicas.  For HOLD freeze (WRITE ref re-armed),
+	 * the bio is completed cleanly without submit_bio (the underlying
+	 * block device may be dm-suspended).  Journal replay reconciles.
+	 */
 }
 
 void bch2_devs_list_to_text(struct printbuf *, struct bch_fs *, struct bch_devs_list *);
