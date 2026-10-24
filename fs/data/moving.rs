@@ -42,6 +42,8 @@ c_extern! {
     pub fn bch2_move_stats_init(stats: *mut c::bch_move_stats, name: *const c_char);
     pub fn bch2_moving_ctxt_do_pending_writes(ctxt: *mut c::moving_context);
     pub fn bch2_moving_ctxt_next_pending_write(ctxt: *mut c::moving_context) -> *mut c::data_update;
+    pub fn bch2_evacuate_bucket(ctxt: *mut c::moving_context, bucket_in_flight: *mut c::move_bucket,
+                                bucket: c::bpos, gen: c_int, data_opts: c::data_update_opts) -> c_int;
 }
 
 /// Wake what waits on @ctxt in Rust - its events, as wake_up(&ctxt->wait)
@@ -227,6 +229,22 @@ impl<'a> MovingCtxt<'a> {
         // inside don't touch
         ret_to_result_void(unsafe { c::bch2_stripe_repair(self.raw(), iter.raw_mut(), s.to_c_whole()) })?;
         t.relock_or_nested()
+    }
+
+    /// Start moving everything off @key's bucket, while it's that
+    /// generation, as @data_opts say: its backpointers walked, each extent's
+    /// move issued - returning once the reads are. Each move holds a count on
+    /// @bucket_in_flight until its update is done.
+    ///
+    /// # Safety
+    /// @bucket_in_flight stays valid, where it is, until its count is back
+    /// to what it was.
+    pub unsafe fn evacuate_bucket(&self, bucket_in_flight: NonNull<c::move_bucket>, key: c::move_bucket_key,
+                                  data_opts: c::data_update_opts) -> Result<(), BchError> {
+        ret_to_result_void(unsafe {
+            bch2_evacuate_bucket(self.raw(), bucket_in_flight.as_ptr(), key.bucket, key.generation as c_int,
+                                 data_opts)
+        })
     }
 
     pub fn io_mark(&self) -> IoMark {
