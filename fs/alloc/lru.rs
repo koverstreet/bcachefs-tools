@@ -188,7 +188,19 @@ pub(crate) fn lru_mod(t: &TransAttempt<'_, '_>, pos: LruPos, set: bool) -> Resul
     t.bit_mod_buffered(c::btree_id::lru, pos.to_bpos(), set)
 }
 
-/// Move @dev_bucket's entry in lru @lru_id from @old_time to @new_time:
+/// Move @target's entry in lru @id from @old_time to @new_time:
+/// bch2_lru_change().
+pub fn lru_change(t: &TransAttempt<'_, '_>, id: LruId, target: u64, old_time: u64, new_time: u64)
+    -> Result<(), BchError>
+{
+    if old_time == new_time {
+        return Ok(());
+    }
+    let pos = |time| LruPos::new(id.id(), time, target);
+    lru_mod(t, pos(old_time), false)?;
+    lru_mod(t, pos(new_time), true)
+}
+
 /// bch2_lru_change()'s slow path, with old_time != new_time.
 ///
 /// # Safety
@@ -197,8 +209,7 @@ pub(crate) fn lru_mod(t: &TransAttempt<'_, '_>, pos: LruPos, set: bool) -> Resul
 pub unsafe extern "C" fn __bch2_lru_change<'t>(trans: &'t BtreeTrans<'t>, lru_id: u16,
                                                dev_bucket: u64, old_time: u64, new_time: u64) -> c_int {
     let t = unsafe { trans.attempt_in_progress() };
-    let pos = |time| LruPos::new(lru_id, time, dev_bucket);
-    ret_to_c(lru_mod(&t, pos(old_time), false).and_then(|()| lru_mod(&t, pos(new_time), true)))
+    ret_to_c(lru_change(&t, LruId::from(lru_id), dev_bucket, old_time, new_time))
 }
 
 // ── Removing a device ────────────────────────────────────────────────────
