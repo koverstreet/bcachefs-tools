@@ -44,6 +44,14 @@ if tmp=$(mktemp -d 2>/dev/null); then
 	rm -rf "$tmp"
 fi
 
+# rust-src: RUST_LIB_SRC overrides the sysroot's, as for the kernel's own
+# check. Both build compiler-builtins' integer intrinsics from it
+# (Makefile.rust's bch_builtins), which older rust-srcs don't have.
+lib_src=${RUST_LIB_SRC:-$("$RUSTC" --print sysroot 2>/dev/null)/lib/rustlib/src/rust/library}
+cb=$lib_src/compiler-builtins/compiler-builtins/src/lib.rs
+[ -r "$lib_src/core/src/lib.rs" ] && [ ! -r "$cb" ] &&
+	miss "rust-src has no compiler-builtins (no $cb): rustc $version is too old"
+
 case $1 in
 kernel)
 	# The kernel's own availability check first: its reason is the first
@@ -93,8 +101,6 @@ vendored)
 	   [ "$(printf '%s\n' "$RUSTC_MIN" "$version" | sort -V | head -1)" != "$RUSTC_MIN" ]; then
 		miss "rustc $version is older than $RUSTC_MIN"
 	fi
-	# RUST_LIB_SRC overrides the sysroot's, as for the kernel's own check
-	lib_src=${RUST_LIB_SRC:-$("$RUSTC" --print sysroot 2>/dev/null)/lib/rustlib/src/rust/library}
 	core=$lib_src/core/src/lib.rs
 	[ -r "$core" ] || miss "rust-src not found (no $core - with rustup: rustup component add rust-src; or set RUST_LIB_SRC)"
 	[ -r "$KERNEL_OBJ/include/generated/rustc_cfg" ] ||

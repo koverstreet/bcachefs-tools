@@ -303,6 +303,26 @@ $(obj)/rustc_demangle.o: private rs-edition := 2015
 $(obj)/rustc_demangle.o: $(src)/vendor/rustc-demangle/src/lib.rs FORCE
 	$(call if_changed_dep,bch_rlib)
 
+# Rust's library source - rust-src, which either path needs: RUST_LIB_SRC if
+# given, else rustc's - as the kernel's rust/Makefile, since some packagings
+# (nixpkgs) keep it outside the sysroot and pass it this way.
+RUST_LIB_SRC ?= $(shell $(RUSTC) --print sysroot)/lib/rustlib/src/rust/library
+
+# The integer intrinsics rustc calls that the kernel has none of: u128's
+# division, multiply and shifts, and on 32 bit u64's - __udivti3, __udivdi3
+# and the rest. Rust's own, compiler-builtins from rust-src: built as an
+# ordinary crate, not the #![compiler_builtins] one core binds to - the
+# kernel's, or the vendored copy, whose stubs panic - with only those global,
+# so rust.o's GC drops the rest of the crate, the soft float and libm nothing
+# calls. Its edition, and the features it declares, are this rust-src's own.
+bch-builtins := $(RUST_LIB_SRC)/compiler-builtins/compiler-builtins
+$(obj)/bch_builtins.o: private rs-edition := $(shell sed -n 's/^edition *= *"\(.*\)"/\1/p' $(bch-builtins)/Cargo.toml)
+$(obj)/bch_builtins.o: private rs-flags := --cap-lints=allow --cfg 'feature="unmangled-names"' \
+	-Zallow-features=$(shell sed -n 's/^#!\[feature(\([a-z0-9_]*\))\]$$/\1/p' $(bch-builtins)/src/lib.rs | paste -sd, -)
+$(obj)/bch_builtins.o: private rs-post = ; $(OBJCOPY) -w --keep-global-symbol='__*[sdt]i[234]' $@
+$(obj)/bch_builtins.o: $(bch-builtins)/src/lib.rs FORCE
+	$(call if_changed_dep,bch_rlib)
+
 # Asm from the kernel's own headers, as kbuild makes the kernel crate's
 # (generated_arch_*_asm.rs): the C preprocessor over a .rs.S with the C
 # build's flags, what precedes "// Cut here." the C and the rest Rust. Ours are
@@ -344,7 +364,7 @@ targets += codegen rust/bindings.rs libpaste.so \
 	$(addprefix rust-host/,libproc_macro2.rmeta libquote.rmeta libsyn.rmeta)
 
 # The Rust objects, linked into the module as one: rust.o, below.
-bch-rust-gc-in := mod.o arrayvec.o bitfield.o bitflags.o num_traits.o uuid.o rustc_demangle.o
+bch-rust-gc-in := mod.o arrayvec.o bitfield.o bitflags.o num_traits.o uuid.o rustc_demangle.o bch_builtins.o
 bcachefs-y += rust.o rust/extern.o
 
 # And what those rules write besides their targets: the rest of the codegen's
