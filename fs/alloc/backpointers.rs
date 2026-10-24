@@ -183,8 +183,9 @@ pub fn bch2_backpointer_swab(_c: Option<&Fs>, k: BkeyS<'_>) {
 // ── An extent pointer's backpointer ──────────────────────────────────────
 
 impl c::Backpointer {
-    /// Stripe blocks on removed devices have a btree of their own.
-    pub fn btree(&self) -> c::btree_id {
+    /// The btree it's in - not the one it points into, target()'s: stripe
+    /// blocks on removed devices have a btree of their own.
+    pub fn bp_btree(&self) -> c::btree_id {
         if self.stripe_ptr() { c::btree_id::stripe_backpointers } else { c::btree_id::backpointers }
     }
 
@@ -296,7 +297,7 @@ fn bucket_backpointer_mod_nowritebuffer(t: &TransAttempt<'_, '_>, orig_k: BkeySC
                                         bp: &mut BkeyI<c::Backpointer>, insert: bool)
     -> Result<(), BchError>
 {
-    let mut iter = BtreeIter::new(t, bp.v.btree(), bp.k.p, BtreeIterFlags::INTENT);
+    let mut iter = BtreeIter::new(t, bp.v.bp_btree(), bp.k.p, BtreeIterFlags::INTENT);
     let k = iter.peek_slot(t)?.expect("a slot always has a key");
 
     let wrong = if insert {
@@ -337,7 +338,7 @@ pub fn bucket_backpointer_mod(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, bp: 
     }
 
     let n = t.bkey_copy(bp.as_ref())?;
-    t.update_buffered(bp.v.btree(), &n)
+    t.update_buffered(bp.v.bp_btree(), &n)
 }
 
 /// # Safety
@@ -416,7 +417,7 @@ fn backpointer_target_not_found(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Back
     }
 
     if fsck_err!(t, id::backpointer_to_missing_ptr, "{}", buf)? {
-        backpointer_del(t, v.btree(), bp.k.p)?;
+        backpointer_del(t, v.bp_btree(), bp.k.p)?;
 
         // Normally, on transaction commit from inside a transaction, we'll
         // return -BCH_ERR_transaction_restart_nested, since a transaction

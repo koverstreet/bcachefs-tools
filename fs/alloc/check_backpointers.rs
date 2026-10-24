@@ -339,7 +339,7 @@ fn check_bp_dup(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::
 /// one that's someone else's.
 pub fn check_bp_exists(t: &TransAttempt<'_, '_>, extent: BkeySC<'_>, bp: &mut BkeyI<c::Backpointer>,
                        mut last_flushed: WbFlush<'_>) -> Result<(), BchError> {
-    let mut bp_iter = BtreeIter::new(t, bp.v.btree(), bp.k.p, BtreeIterFlags::empty());
+    let mut bp_iter = BtreeIter::new(t, bp.v.bp_btree(), bp.k.p, BtreeIterFlags::empty());
     let bp_found = bp_iter.peek_slot(t)?.expect("a slot always has a key");
 
     match bp_found.arm::<c::Backpointer>() {

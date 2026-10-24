@@ -132,7 +132,7 @@ fn check_extent_reconcile_phys(t: &TransAttempt<'_, '_>, btree: c::btree_id, k: 
 
         let mut want = extent_ptr_to_bp(fs, btree, 0, k, &d);
 
-        let mut bp_iter = BtreeIter::new(t, want.v.btree(), want.k.p, BtreeIterFlags::empty());
+        let mut bp_iter = BtreeIter::new(t, want.v.bp_btree(), want.k.p, BtreeIterFlags::empty());
         let bp_k = bp_iter.peek_slot(t)?.expect("a slot");
 
         // Someone else's, or stale: repaired as check_extents_to_backpointers
