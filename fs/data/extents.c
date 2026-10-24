@@ -209,7 +209,13 @@ void bch2_extent_ptr_decoded_append(const struct bch_fs *c, struct bkey_i *k,
 	union bch_extent_entry *pos;
 
 	if (!bch2_crc_unpacked_cmp(crc, p->crc)) {
-		pos = bch2_bkey_ptrs(bkey_i_to_s(k)).start;
+		struct bkey_ptrs ptrs = bch2_bkey_ptrs(bkey_i_to_s(k));
+
+		/* after the extent flags entry, which has to come first: */
+		pos = ptrs.start;
+		if (pos != ptrs.end &&
+		    extent_entry_type(pos) == BCH_EXTENT_ENTRY_flags)
+			pos = extent_entry_next(c, pos);
 	} else if ((pos = bkey_find_crc(c, bkey_i_to_s(k), p->crc))) {
 		pos = extent_entry_next(c, pos);
 	} else {
