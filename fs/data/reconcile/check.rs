@@ -25,7 +25,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, peek_parallel, BtreeIter, Bt
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::data::ec::create::WidenCache;
-use crate::data::ec::trigger::{stripe_header_mut, stripe_widen_target_nr_data, stripe_widen_value};
+use crate::data::ec::trigger::stripe_header_mut;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::data::reconcile::trigger::{add_reconcile_bp, data_to_rb_work_pos, rb_bp, rb_work_to_data_pos,
@@ -483,12 +483,7 @@ fn check_stripe_can_widen_one(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k:
     let Some(s) = k.arm::<c::Stripe>() else { return Ok(()) };
     let v = s.v();
 
-    let nr_devs = cache.lookup(fs, v.disk_label, v.sectors.get())?;
-    // unsigned, as C's - nr_redundant past nr_blocks is damage
-    let nr_data = u32::from(v.nr_blocks).wrapping_sub(v.nr_redundant.into());
-    let correct = stripe_widen_value(
-        stripe_widen_target_nr_data(nr_devs, v.nr_redundant.into(), fs.opts().ec_max_data_blocks.into()),
-        nr_data);
+    let correct = cache.can_widen(fs, v)?;
 
     if v.can_widen() == correct || scan_pending {
         return Ok(());
