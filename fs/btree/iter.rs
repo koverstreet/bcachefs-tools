@@ -324,16 +324,26 @@ pub struct TransAttempt<'a, 't> {
 ///   PCell and its permission); Aeneas, which we're leaning towards, first
 ///   needs UnsafeCell support - shared borrows of !Freeze types as heap
 ///   locations, reads and writes through them as effects.
+/// What an iterator's made from, two kinds as C's walks are. A transaction,
+/// outside any attempt, is a for_each_btree_key() walk's - each key its own
+/// attempt - and like the macro it's begun before the iterator's made. An
+/// attempt's is a _norestart walk's, inside it: nothing's begun.
 pub trait TransRef<'t> {
     fn trans_raw(&self) -> *mut c::btree_trans;
 }
 
 impl<'i, 'f> TransRef<'i> for &'i BtreeTrans<'f> {
-    fn trans_raw(&self) -> *mut c::btree_trans { self.raw() }
+    fn trans_raw(&self) -> *mut c::btree_trans {
+        self.begin_raw();
+        self.raw()
+    }
 }
 
 impl<'i, 'f> TransRef<'i> for &'i TransGuard<'f> {
-    fn trans_raw(&self) -> *mut c::btree_trans { self.raw() }
+    fn trans_raw(&self) -> *mut c::btree_trans {
+        self.begin_raw();
+        self.raw()
+    }
 }
 
 impl<'a, 't> TransRef<'a> for &TransAttempt<'a, 't> {
@@ -1033,7 +1043,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn bkey_get_val<K: BkeyWhole>(&self, btree: c::btree_id, pos: bpos, flags: BtreeIterFlags)
         -> Result<K, BchError>
     {
-        let mut iter = BtreeIter::new(self.trans, btree, pos, flags);
+        let mut iter = BtreeIter::new(self, btree, pos, flags);
         let k = iter.peek_slot_typed::<K>(self)?.untyped();
         Ok(K::val_copy_pad(k).expect("peek_slot_typed() checked the type"))
     }
@@ -1042,7 +1052,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn bkey_get_key<K: BkeyWhole>(&self, btree: c::btree_id, pos: bpos, flags: BtreeIterFlags)
         -> Result<BkeyI<K>, BchError>
     {
-        let mut iter = BtreeIter::new(self.trans, btree, pos, flags);
+        let mut iter = BtreeIter::new(self, btree, pos, flags);
         let k = iter.peek_slot_typed::<K>(self)?.untyped();
         Ok(BkeyI::from_key(k).expect("peek_slot_typed() checked the type"))
     }
@@ -1059,7 +1069,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         iter_flags: BtreeIterFlags,
         flags:      UpdateTriggerFlags,
     ) -> Result<TransBkey<'a, 't, K>, BchError> {
-        let mut iter = BtreeIter::new(self.trans, btree, pos, iter_flags | BtreeIterFlags::INTENT);
+        let mut iter = BtreeIter::new(self, btree, pos, iter_flags | BtreeIterFlags::INTENT);
         let k = iter.peek_slot_typed::<K>(self)?.untyped();
         let k = self.make_mut_noupdate(k, size_of::<BkeyI<K>>())?;
         self.update(&iter, &k, flags)?;
@@ -2823,7 +2833,6 @@ impl BtreeLevels {
                 t.commit(disk_res, flags)
             })?;
 
-            trans.begin_raw();
             BtreeNodeIter::new(trans, self.btree, self.start, 0, level, iter_flags)
                 .iter()
                 .for_each_max_commit(trans, self.end, iter_flags, disk_res, flags, |t, iter, k| f(t, iter, level, k))?;
