@@ -128,6 +128,7 @@ dependencies = [
  "num-traits",
  "paste 1.0.15",
  "pin-init",
+ "rustc-demangle",
  "uuid",
  "zerocopy",
  "zeroize",

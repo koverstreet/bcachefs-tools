@@ -267,7 +267,8 @@ bch-pmac-deps := $(bch-host)/libsyn.rmeta FORCE
 # own code is written, not whether someone else's is correct (as cargo does for
 # dependencies) - and a rustc bump would otherwise break the build (#830).
 # cstruct-macros is ours, and gets the lints.
-$(obj)/libpaste.so $(obj)/arrayvec.o $(obj)/bitfield.o $(obj)/bitflags.o $(obj)/num_traits.o $(obj)/uuid.o: private rs-flags := --cap-lints=allow
+$(obj)/libpaste.so $(obj)/arrayvec.o $(obj)/bitfield.o $(obj)/bitflags.o $(obj)/num_traits.o $(obj)/uuid.o \
+	$(obj)/rustc_demangle.o: private rs-flags := --cap-lints=allow
 $(obj)/libbitfield_struct.so $(obj)/libnestify.so: private rs-flags := $(bch-pmac)
 
 $(obj)/libpaste.so: $(src)/vendor/paste/src/lib.rs FORCE
@@ -297,6 +298,10 @@ $(obj)/num_traits.o: $(src)/vendor/num-traits/src/lib.rs FORCE
 	$(call if_changed_dep,bch_rlib)
 $(obj)/uuid.o: $(src)/vendor/uuid/src/lib.rs FORCE
 	$(call if_changed_dep,bch_rlib)
+# Rust symbol names demangled, for backtraces: kallsyms has them mangled.
+$(obj)/rustc_demangle.o: private rs-edition := 2015
+$(obj)/rustc_demangle.o: $(src)/vendor/rustc-demangle/src/lib.rs FORCE
+	$(call if_changed_dep,bch_rlib)
 
 # Asm from the kernel's own headers, as kbuild makes the kernel crate's
 # (generated_arch_*_asm.rs): the C preprocessor over a .rs.S with the C
@@ -320,13 +325,14 @@ bch-externs := paste:libpaste.so \
 	cstruct_macros:libcstruct_macros.so bitfield_struct:libbitfield_struct.so \
 	nestify:libnestify.so \
 	arrayvec:libarrayvec.rmeta bitfield:libbitfield.rmeta bitflags:libbitflags.rmeta \
-	num_traits:libnum_traits.rmeta uuid:libuuid.rmeta
+	num_traits:libnum_traits.rmeta uuid:libuuid.rmeta rustc_demangle:librustc_demangle.rmeta
 RUSTFLAGS_mod.o += $(foreach e,$(bch-externs),--extern $(subst :,=$(obj)/,$(e)))
 $(obj)/mod.o: export OUT_DIR := $(abspath $(obj)/rust)
 $(obj)/mod.o: export CARGO_MANIFEST_DIR := $(abspath $(src))
 $(obj)/mod.o: $(obj)/rust/bindings.rs $(addprefix $(obj)/,$(bch-arch-asm-rs)) $(obj)/libpaste.so \
 	$(obj)/libcstruct_macros.so $(obj)/libbitfield_struct.so $(obj)/libnestify.so \
-	$(obj)/arrayvec.o $(obj)/bitfield.o $(obj)/bitflags.o $(obj)/num_traits.o $(obj)/uuid.o
+	$(obj)/arrayvec.o $(obj)/bitfield.o $(obj)/bitflags.o $(obj)/num_traits.o $(obj)/uuid.o \
+	$(obj)/rustc_demangle.o
 
 # mod.o carries the records of the types defined in Rust that C shares
 # (types/lib.rs), in .discard.bch_cstruct: the headers are generated from them,
@@ -338,7 +344,7 @@ targets += codegen rust/bindings.rs libpaste.so \
 	$(addprefix rust-host/,libproc_macro2.rmeta libquote.rmeta libsyn.rmeta)
 
 # The Rust objects, linked into the module as one: rust.o, below.
-bch-rust-gc-in := mod.o arrayvec.o bitfield.o bitflags.o num_traits.o uuid.o
+bch-rust-gc-in := mod.o arrayvec.o bitfield.o bitflags.o num_traits.o uuid.o rustc_demangle.o
 bcachefs-y += rust.o rust/extern.o
 
 # And what those rules write besides their targets: the rest of the codegen's

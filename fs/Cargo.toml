@@ -32,6 +32,8 @@ bitflags = { path = "vendor/bitflags" }
 num-traits = { path = "vendor/num-traits", default-features = false }
 arrayvec = { path = "vendor/arrayvec", default-features = false }
 paste    = { path = "vendor/paste" }
+# As uuid: crates.io for cargo, vendor/ for the kernel build - the same version
+rustc-demangle = "0.1.27"
 uuid     = "1.2.2"
 # The target's ioctl number layout (util/ioctl.rs) and errnos (errcode.rs):
 # bindgen output of each architecture's own headers. Userspace only - the
