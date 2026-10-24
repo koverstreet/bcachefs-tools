@@ -31,6 +31,7 @@
 #include "include/linux/xattr.h"
 #include "include/crypto/sha2.h"	/* after linux/: it isn't self-contained */
 #include "fs/vendor/closure.h"
+#include "raid/raid.h"		/* raid_gen(), raid_rec(): the kernel's raid6/xor, in userspace */
 
 #include <errno.h>
 

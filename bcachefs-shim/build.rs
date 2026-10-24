@@ -111,6 +111,9 @@ fn main() {
         // The vendored C fs/ uses - closures - is the shim's too: not
         // bcachefs's, so not the fs crate's to define.
         .allowlist_file(format!("{}/vendor/closure.h", fs_dir.display()))
+        // The raid library: userspace's stand-in for the kernel's raid6 and
+        // xor, as fs/data/ec/io.c uses it.
+        .allowlist_function("raid_gen|raid_rec")
         // Never emit fs/ types: those are bcachefs-kernel's, and some (printbuf)
         // even carry Rust impls there. allowlist_recursively would otherwise
         // pull them in through an include/ reference. fs/vendor/ isn't

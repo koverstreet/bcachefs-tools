@@ -29,6 +29,8 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/blkdev.h",			// bdev_freeze(), vfs/ioctl.rs's goingdown
     "linux/freezer.h",			// set_freezable(), freezing(), try_to_freeze(): a freezable kthread's
     "linux/power_supply.h",		// power_supply_reg_notifier(), reconcile on battery
+    "linux/raid/pq.h",			// raid6_gen_syndrome(), a stripe's Q
+    "linux/raid/xor.h",			// xor_gen(), a stripe's P
 ];
 
 /// Headers under fs/ bound, by path - which the clang args have as an -I:
@@ -52,6 +54,8 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/blkdev.h",
     "linux/freezer.h",
     "linux/power_supply.h",
+    "linux/raid/pq.h",
+    "linux/raid/xor.h",
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
@@ -64,11 +68,16 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "rust_refcount_inc_not_zero", "rust_poll_wait", "rust_fault_in_writeable",
     "rust_fault_in_readable", "totalram_pages", "set_freezable", "freezing", "try_to_freeze",
     "power_supply_reg_notifier", "power_supply_unreg_notifier", "power_supply_is_system_supplied",
+    // the raid6 and xor APIs on both sides of 7.1's and 7.2's renames - each
+    // kernel has one set: data/ec/io.rs picks by cfg(linux_ge)
+    "raid6_gen_syndrome", "raid6_recov_2data", "raid6_recov_datap", "xor_gen", "xor_blocks",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",
                                   "xattr_handler"];
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
-                                 "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*"];
+                                 "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*",
+                                 // before 7.1/7.2, as above
+                                 "raid6_call", "raid6_2data_recov", "raid6_datap_recov", "MAX_XOR_BLOCKS"];
 
 /// Run the bindgen CLI and write `bindings.rs`, and `extern.c` - C wrappers for
 /// whatever of it is a static inline - into `out`. Kbuild supplies
