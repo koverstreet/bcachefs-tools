@@ -20,6 +20,10 @@
 //! fit where it's put - C wrote it into the byte count - is a bounds check
 //! here: the one hash in two updates, an xattr's, puts one byte in the block
 //! first, which leaves room for any tail.
+//!
+//! As a core::hash::Hasher - what a hash table's key is hashed into, a write
+//! per field - it's SipHash proper, whatever the writes: a key whose fields
+//! lost bytes to the above would hash alike under every key.
 
 /// SipHash with @C compression and @D finalization rounds, as it runs.
 #[derive(Clone)]
@@ -31,6 +35,27 @@ pub struct SipHasher<const C: usize, const D: usize> {
 
 pub type SipHash24 = SipHasher<2, 4>;
 pub type SipHash13 = SipHasher<1, 3>;
+
+/// A SipHash key, as a core::hash::BuildHasher: what a keyed table hashes
+/// with, hash_one() - drawn when the table's made, and again on a rehash.
+#[derive(Clone, Copy)]
+pub struct SipKey<const C: usize, const D: usize>([u64; 2]);
+
+pub type SipHash13Key = SipKey<1, 3>;
+
+impl<const C: usize, const D: usize> From<[u64; 2]> for SipKey<C, D> {
+    fn from(k: [u64; 2]) -> Self {
+        Self(k)
+    }
+}
+
+impl<const C: usize, const D: usize> core::hash::BuildHasher for SipKey<C, D> {
+    type Hasher = SipHasher<C, D>;
+
+    fn build_hasher(&self) -> SipHasher<C, D> {
+        SipHasher::new(self.0[0], self.0[1])
+    }
+}
 
 impl<const C: usize, const D: usize> SipHasher<C, D> {
     pub fn new(k0: u64, k1: u64) -> Self {
@@ -72,13 +97,21 @@ impl<const C: usize, const D: usize> SipHasher<C, D> {
         self.v[0] ^= m;
     }
 
-    pub fn update(&mut self, mut data: &[u8]) {
+    /// @data, as the format hashes it: see the top of the file.
+    pub fn update(&mut self, data: &[u8]) {
+        self.absorb(data, false)
+    }
+
+    /// @data; the tail after a block @data finished goes where the format puts
+    /// it, past where that block had been filled to, unless @exact.
+    fn absorb(&mut self, mut data: &[u8], exact: bool) {
         if data.is_empty() {
             return;
         }
 
         let used = self.bytes as usize % 8;
         self.bytes = self.bytes.wrapping_add(data.len() as u32);
+        let mut at = used;
 
         if used > 0 {
             let left = 8 - used;
@@ -89,15 +122,17 @@ impl<const C: usize, const D: usize> SipHasher<C, D> {
             self.buf[used..].copy_from_slice(&data[..left]);
             self.block(u64::from_le_bytes(self.buf));
             data = &data[left..];
+            if exact {
+                at = 0;
+            }
         }
 
         let mut blocks = data.chunks_exact(8);
         for b in &mut blocks {
             self.block(u64::from_le_bytes(b.try_into().expect("8 bytes")));
         }
-        // At @used, not the start: see the top of the file
         let tail = blocks.remainder();
-        self.buf[used..used + tail.len()].copy_from_slice(tail);
+        self.buf[at..at + tail.len()].copy_from_slice(tail);
     }
 
     pub fn end(mut self) -> u64 {
@@ -116,5 +151,15 @@ impl<const C: usize, const D: usize> SipHasher<C, D> {
         let mut h = Self::new(k0, k1);
         h.update(data);
         h.end()
+    }
+}
+
+impl<const C: usize, const D: usize> core::hash::Hasher for SipHasher<C, D> {
+    fn write(&mut self, bytes: &[u8]) {
+        self.absorb(bytes, true)
+    }
+
+    fn finish(&self) -> u64 {
+        self.clone().end()
     }
 }
