@@ -515,9 +515,14 @@ unsafe impl<I: CuckooItem, H: CuckooHash, const W: usize> Publish for Cuckoo<I, 
 }
 
 /// A Cuckoo, as its one writer has it: the holder of the lock it's published
-/// under, or of a &mut of it.
+/// under, or of a &mut of it. Not Sync: shared with another thread, it would
+/// be two writers - and one's rehash() frees the buffer the other's locked()
+/// is looking at.
 #[repr(transparent)]
-pub struct CuckooWriter<I: CuckooItem = u64, H: CuckooHash = SipHash, const W: usize = 2>(Cuckoo<I, H, W>);
+pub struct CuckooWriter<I: CuckooItem = u64, H: CuckooHash = SipHash, const W: usize = 2>(
+    Cuckoo<I, H, W>,
+    PhantomData<*const ()>,
+);
 
 impl<I: CuckooItem, H: CuckooHash, const W: usize> core::ops::Deref for CuckooWriter<I, H, W> {
     type Target = Cuckoo<I, H, W>;
