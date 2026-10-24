@@ -118,8 +118,7 @@ fn check_subvol_path(t: &TransAttempt<'_, '_>, k: BkeySC<'_>) -> Result<(), BchE
 
     // A copy: from the second step on the key is parent_iter's, whose unpacked
     // header looking up the parent overwrites
-    let mut cur = BkeyBuf::new();
-    cur.reassemble(k);
+    let mut cur = BkeyBuf::from_key(k);
 
     loop {
         let s = BkeySC::from(&cur);

@@ -64,6 +64,13 @@ impl BkeyBuf {
         self.heap = Some(p);
     }
 
+    /// A copy of @k.
+    pub fn from_key(k: BkeySC<'_>) -> Self {
+        let mut b = Self::new();
+        b.reassemble(k);
+        b
+    }
+
     /// Copy @k in, as bch2_bkey_buf_reassemble().
     pub fn reassemble(&mut self, k: BkeySC<'_>) {
         let u64s = k.k.u64s as usize;

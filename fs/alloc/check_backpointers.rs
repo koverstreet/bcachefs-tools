@@ -154,8 +154,7 @@ fn drop_double_allocation(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u
 /// check_extents_to_backpointers()'s to recompute, at its end.
 fn double_allocation_dropped(t: &TransAttempt<'_, '_>, winner: BkeySC<'_>,
                              mut winner_bp: BkeyI<c::Backpointer>) -> Result<(), BchError> {
-    let mut winner_k = BkeyBuf::new();
-    winner_k.reassemble(winner);
+    let winner_k = BkeyBuf::from_key(winner);
 
     // the drop may pad the key back to its durability, charged to a reservation
     let res = DiskReservation::new(t.fs());

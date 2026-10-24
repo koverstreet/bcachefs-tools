@@ -98,8 +98,7 @@ fn resume_logged_op(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, early: bool) -> Res
         return Ok(());
     }
 
-    let mut sk = BkeyBuf::new();
-    sk.reassemble(k);
+    let mut sk = BkeyBuf::from_key(k);
 
     /*
      * Fixing logs the error to the journal via the transaction: close()
