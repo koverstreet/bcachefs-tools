@@ -270,18 +270,17 @@ impl StatusDisplay for RecoveryDisplay<'_> {
     }
 
     fn draw(&mut self) -> io::Result<()> {
-        // The console isn't ours to measure - crossterm would be asking stderr,
-        // which is not where this is going - so assume the conservative width.
+        // The console isn't ours to measure - stderr is the one we could ask,
+        // and it's not where this is going - so assume the conservative width.
         let console = matches!(self.sink, Sink::Console { .. });
         let cols = if console {
             FALLBACK_COLS
         } else {
-            // Ok(0) is not a width. A terminal with no winsize set - a serial
-            // console, hvc0 under a VM - answers the query successfully and
-            // says zero, which truncate() turns into a block of " ..." with
-            // every line's content thrown away. Only a plausible answer counts.
-            crossterm::terminal::size()
-                .ok()
+            // A terminal with no winsize set - a serial console, hvc0 under a
+            // VM - says zero, which truncate() would turn into a block of
+            // " ..." with every line's content thrown away. Only a plausible
+            // answer counts.
+            crate::util::terminal_size(io::stderr())
                 .map(|(c, _)| c as usize)
                 .filter(|&c| c >= MIN_COLS)
                 .unwrap_or(FALLBACK_COLS)

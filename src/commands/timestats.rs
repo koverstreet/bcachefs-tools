@@ -535,7 +535,7 @@ fn render_frame(
     state: &mut TuiState,
     multi: bool,
 ) -> io::Result<()> {
-    let (_, term_h) = terminal::size().unwrap_or((120, 40));
+    let (_, term_h) = crate::util::terminal_size(io::stdout()).unwrap_or((120, 40));
     let visible = (term_h as usize).saturating_sub(1).max(1);
 
     let (lines, cursor_line) = build_frame(snaps, state, multi);
@@ -574,12 +574,12 @@ fn handle_key(state: &mut TuiState, key: KeyCode, modifiers: KeyModifiers, total
         KeyCode::Up     => state.cursor = state.cursor.saturating_sub(1),
         KeyCode::Down   => if total_rows > 0 { state.cursor = (state.cursor + 1).min(total_rows - 1) },
         KeyCode::PageUp   => {
-            let (_, h) = terminal::size().unwrap_or((120, 40));
+            let (_, h) = crate::util::terminal_size(io::stdout()).unwrap_or((120, 40));
             let step = (h as usize).saturating_sub(1).max(1);
             state.cursor = state.cursor.saturating_sub(step);
         }
         KeyCode::PageDown => if total_rows > 0 {
-            let (_, h) = terminal::size().unwrap_or((120, 40));
+            let (_, h) = crate::util::terminal_size(io::stdout()).unwrap_or((120, 40));
             let step = (h as usize).saturating_sub(1).max(1);
             state.cursor = (state.cursor + step).min(total_rows - 1);
         },

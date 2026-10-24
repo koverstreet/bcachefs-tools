@@ -227,7 +227,7 @@ impl Drop for TraceView {
 }
 
 fn render_trace(tv: &mut TraceView, stdout: &mut io::Stdout) -> io::Result<()> {
-    let (_, term_h) = terminal::size().unwrap_or((120, 40));
+    let (_, term_h) = crate::util::terminal_size(io::stdout()).unwrap_or((120, 40));
     let visible = (term_h as usize).saturating_sub(3).max(1);
     let total = tv.lines.len();
 
@@ -490,7 +490,7 @@ fn build_frame(state: &TopState, curr: &[u64], dev_io: &[DevIoEntry])
 fn render(state: &mut TopState, curr: &[u64], dev_io: &[DevIoEntry], stdout: &mut io::Stdout)
     -> io::Result<usize>
 {
-    let (_, term_h) = terminal::size().unwrap_or((120, 40));
+    let (_, term_h) = crate::util::terminal_size(io::stdout()).unwrap_or((120, 40));
     let visible = (term_h as usize).saturating_sub(1).max(1);
 
     let (lines, cursor_line, total_rows) = build_frame(state, curr, dev_io);
@@ -660,7 +660,7 @@ fn run_interactive(
 
         if event::poll(Duration::from_secs(state.interval_secs as u64))? {
             if let Event::Key(key) = event::read()? {
-                let (_, term_h) = terminal::size().unwrap_or((120, 40));
+                let (_, term_h) = crate::util::terminal_size(io::stdout()).unwrap_or((120, 40));
                 let page_step = (term_h as usize).saturating_sub(1).max(1);
 
                 state.status = None;    // any key clears a transient message

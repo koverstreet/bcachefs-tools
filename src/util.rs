@@ -232,6 +232,17 @@ where F: FnOnce(&mut io::Stdout) -> Result<()>
     result
 }
 
+/// The size of the terminal @fd is, (columns, rows): None if it isn't one, or
+/// doesn't know - a serial console answers zero.
+///
+/// Not crossterm's terminal::size(): when the ioctl gives it nothing, that
+/// forks and execs `tput cols` and `tput lines`, on every call - a display
+/// redrawing on a serial console was two execs a redraw, all its CPU.
+pub fn terminal_size(fd: impl std::os::fd::AsFd) -> Option<(u16, u16)> {
+    let ws = rustix::termios::tcgetwinsize(fd).ok()?;
+    (ws.ws_col != 0 && ws.ws_row != 0).then_some((ws.ws_col, ws.ws_row))
+}
+
 /// Run @f with stderr going to a scratch file, shown only if @f fails.
 ///
 /// Opening a filesystem in-process logs to stderr ("starting version",
