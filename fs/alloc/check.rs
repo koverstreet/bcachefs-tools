@@ -96,13 +96,6 @@ fn get_key_or_hole<'k, 't>(t: &'k TransAttempt<'_, 't>, iter: &'k mut BtreeIter<
     Ok(KeyOrHole::Hole { start, end: next })
 }
 
-/// @ca, the device for @dev: bch2_dev_iterate_noerror().
-fn dev_iterate(fs: &Fs, ca: &mut Option<DevRef>, dev: u32) {
-    if ca.as_ref().is_none_or(|ca| u32::from(ca.dev_idx) != dev) {
-        *ca = fs.dev_get(dev);
-    }
-}
-
 /// @bucket, moved up to @ca's first bucket - or, past its last, to the next
 /// device's first, @ca following: false if there's no next device.
 /// next_bucket().
@@ -141,7 +134,7 @@ fn get_key_or_real_bucket_hole<'k, 't>(
     loop {
         let (start, end) = match get_key_or_hole(t, iter, POS_MAX)? {
             KeyOrHole::Key(k) => {
-                dev_iterate(fs, ca, k.k.p.inode as u32);
+                fs.dev_iterate(ca, k.k.p.inode as u32);
                 // XXX polonius: returned here, @iter used below
                 let k = unsafe { polonius_key(k) };
                 return Ok(Some((&*iter, KeyOrHole::Key(k))));
@@ -149,7 +142,7 @@ fn get_key_or_real_bucket_hole<'k, 't>(
             KeyOrHole::Hole { start, end } => (start, end),
         };
 
-        dev_iterate(fs, ca, end.inode as u32);
+        fs.dev_iterate(ca, end.inode as u32);
 
         if !ca.as_ref().is_some_and(|ca| ca.bucket_valid(start.offset)) {
             let mut next = start;

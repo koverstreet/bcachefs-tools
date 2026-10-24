@@ -196,14 +196,6 @@ static inline bool bkey_is_alloc(const struct bkey *k)
 
 /* Alloc key operations */
 
-struct bkey_i_alloc_v4 *
-bch2_trans_start_alloc_update_noupdate(struct btree_trans *, struct btree_iter *, struct bpos);
-struct bkey_i_alloc_v4 *
-bch2_trans_start_alloc_update(struct btree_trans *, struct bpos,
-			      enum btree_iter_update_trigger_flags);
-
-void __bch2_alloc_to_v4(struct bkey_s_c, struct bch_alloc_v4 *);
-
 static inline const struct bch_alloc_v4 *bch2_alloc_to_v4(struct bkey_s_c k, struct bch_alloc_v4 *convert)
 {
 	if (likely(k.k->type == KEY_TYPE_alloc_v4)) {
@@ -216,21 +208,7 @@ static inline const struct bch_alloc_v4 *bch2_alloc_to_v4(struct bkey_s_c k, str
 	return convert;
 }
 
-struct bkey_i_alloc_v4 *bch2_alloc_to_v4_mut(struct btree_trans *, struct bkey_s_c);
-
 int bch2_bucket_io_time_reset(struct btree_trans *, unsigned, size_t, int);
-
-int bch2_alloc_v1_validate(struct bch_fs *, struct bkey_s_c,
-			   const struct bkey_validate_context *);
-int bch2_alloc_v2_validate(struct bch_fs *, struct bkey_s_c,
-			   const struct bkey_validate_context *);
-int bch2_alloc_v3_validate(struct bch_fs *, struct bkey_s_c,
-			   const struct bkey_validate_context *);
-int bch2_alloc_v4_validate(struct bch_fs *, struct bkey_s_c,
-			   const struct bkey_validate_context *);
-void bch2_alloc_v4_swab(const struct bch_fs *, struct bkey_s);
-void bch2_alloc_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
-void bch2_alloc_v4_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
 #define bch2_bkey_ops_alloc ((struct bkey_ops) {	\
 	.key_validate	= bch2_alloc_v1_validate,	\
@@ -257,18 +235,10 @@ void bch2_alloc_v4_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 	.trigger	= bch2_trigger_alloc,		\
 })
 
-int bch2_bucket_gens_validate(struct bch_fs *, struct bkey_s_c,
-			      const struct bkey_validate_context *);
-void bch2_bucket_gens_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
-
 #define bch2_bkey_ops_bucket_gens ((struct bkey_ops) {	\
 	.key_validate	= bch2_bucket_gens_validate,	\
 	.val_to_text	= bch2_bucket_gens_to_text,	\
 })
-
-int bch2_bucket_gens_init(struct bch_fs *);
-
-int bch2_alloc_read(struct bch_fs *);
 
 int bch2_bucket_do_freespace_index(struct btree_trans *, struct bch_dev *,
 				   struct bkey_s_c, const struct bch_alloc_v4 *, bool);

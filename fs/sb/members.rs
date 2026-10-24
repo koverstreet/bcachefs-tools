@@ -1133,6 +1133,14 @@ impl Fs {
         self.dev_rcu(dev, &read_lock()).map(c::bch_dev::get_ref)
     }
 
+    /// @ca made the ref on device @dev, for a walk by device - kept if it's
+    /// already that one's: bch2_dev_iterate_noerror().
+    pub fn dev_iterate(&self, ca: &mut Option<DevRef>, dev: u32) {
+        if ca.as_ref().is_none_or(|ca| u32::from(ca.dev_idx) != dev) {
+            *ca = self.dev_get(dev);
+        }
+    }
+
     /// The first device at index @dev or after, with a ref: __bch2_next_dev_idx().
     pub fn next_dev(&self, dev: u32) -> Option<DevRef> {
         (dev..self.nr_devices()).find_map(|i| self.dev_get(i))

@@ -771,6 +771,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
         }
     }
 
+    /// Whether @p is in memory this attempt has allocated: a key read back
+    /// from an update queued in it, rather than from a btree node.
+    pub fn in_mem(&self, p: *const u8) -> bool {
+        // SAFETY: our transaction's buffer bounds
+        let (mem, top) = unsafe { ((*self.raw()).mem as *const u8, (*self.raw()).mem_top as usize) };
+        (mem..mem.wrapping_add(top)).contains(&p)
+    }
+
     /// Freed when the transaction next begins.
     pub fn kmalloc(&self, bytes: usize) -> Result<&'a mut [u8], BchError> {
         let ptr = self.kmalloc_raw(bytes)?;
