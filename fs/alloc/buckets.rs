@@ -30,7 +30,7 @@ use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, 
 use core::cell::UnsafeCell;
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::mem::size_of;
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicU8, Ordering};
 use cstruct_macros::c_export;
 
 // ── Bucket addressing ────────────────────────────────────────────────────
@@ -863,9 +863,8 @@ impl c::bch_dev {
         // SAFETY: as above
         unsafe {
             self.bucket_gens.rebuild_head(nbuckets as usize, head, |gens| {
-                if let Some(old) = old {
-                    let n = gens.len().min(old.len());
-                    gens[..n].copy_from_slice(&old[..n]);
+                for (new, old) in gens.iter_mut().zip(old.unwrap_or_default()) {
+                    *new.get_mut() = old.load(Ordering::Relaxed);
                 }
                 self.bucket_backpointer_mismatch.resize(self, nbuckets)?;
                 self.bucket_backpointer_empty.resize(self, nbuckets)
@@ -1049,13 +1048,18 @@ pub fn gen_after(a: u8, b: u8) -> u8 {
 
 /// A device's bucket generations, under RCU: alloc/buckets.h's.
 impl c::bch_dev {
-    /// Bucket @b's generation, for as long as @rcu's section - None if it
-    /// isn't one of the device's: bucket_gen_get_rcu().
-    pub fn bucket_gen(&self, b: u64, rcu: &ReadGuard) -> Option<u8> {
+    /// Where bucket @b's generation is, for as long as @rcu's section - None
+    /// if it isn't one of the device's: bucket_gen().
+    pub fn bucket_gen_ref<'a>(&'a self, b: u64, rcu: &'a ReadGuard) -> Option<&'a AtomicU8> {
         let (h, gens) = self.bucket_gens.read_head(rcu)?;
         (b.wrapping_sub(h.first_bucket.into()) < h.nbuckets_minus_first as u64)
-            .then(|| gens.get(b as usize).copied())
+            .then(|| gens.get(b as usize))
             .flatten()
+    }
+
+    /// Bucket @b's generation: bucket_gen_get_rcu().
+    pub fn bucket_gen(&self, b: u64, rcu: &ReadGuard) -> Option<u8> {
+        self.bucket_gen_ref(b, rcu).map(|g| g.load(Ordering::Relaxed))
     }
 
     /// How many generations @ptr's bucket has moved on from it - None for a

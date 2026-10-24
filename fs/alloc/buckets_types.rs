@@ -58,8 +58,9 @@ pub struct BucketGensHead {
 unsafe impl crate::util::rcu::RcuElement for BucketGensHead {}
 
 c_rcu_array! {
-    /// ca->bucket_gens: a device's bucket generations, published under RCU.
-    pub type BucketGensArray = crate::util::rcu::RcuArray<u8, c::BucketGensHead>
+    /// ca->bucket_gens: a device's bucket generations, published under RCU -
+    /// atomics, written in place with readers looking.
+    pub type BucketGensArray = crate::util::rcu::RcuArray<core::sync::atomic::AtomicU8, c::BucketGensHead>
         as struct bucket_gens { nbuckets, b };
 }
 
