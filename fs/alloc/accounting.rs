@@ -2,6 +2,8 @@ use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
+use crate::util::eytzinger::Eytzinger0;
+use crate::util::percpu::PerCpuRef;
 use crate::util::vstructs::Unvalidated;
 
 pub use c::bch_data_type;
@@ -80,6 +82,31 @@ pub fn mem_read(fs: &Fs, pos: &c::disk_accounting_pos, counters: &mut [u64]) {
             counters.as_mut_ptr(),
             counters.len() as u32,
         );
+    }
+}
+
+/// mem_read(), mark_lock held - read or write - by the caller:
+/// bch2_accounting_mem_read_locked(). Taking it again, for read, could
+/// deadlock against a writer waiting on it. Zeroes for what isn't in the
+/// table, and past the counters an entry has.
+pub fn mem_read_locked(fs: &Fs, pos: &c::disk_accounting_pos, counters: &mut [u64]) {
+    fs.mark_lock_assert_held();
+    counters.fill(0);
+
+    let p = pos.to_bpos();
+    let acc = &fs.accounting.k;
+    if acc.nr == 0 {
+        return;
+    }
+    // SAFETY: as C's: the table changes under mark_lock for write - but for
+    // recovery's accounting_read(), which C relies on no reader racing
+    let entries = unsafe { core::slice::from_raw_parts(acc.data, acc.nr) };
+    let Some(idx) = Eytzinger0::find_by(entries, |e| e.pos.cmp(&p)) else { return };
+    let e = &entries[idx];
+
+    for (i, v) in counters.iter_mut().take(e.nr_counters as usize).enumerate() {
+        // SAFETY: the entry's counters, nr_counters u64s, percpu
+        *v = unsafe { PerCpuRef::from_raw(e.v[0].wrapping_add(i)) }.sum();
     }
 }
 

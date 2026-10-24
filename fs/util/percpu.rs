@@ -308,6 +308,14 @@ macro_rules! percpu_field {
 }
 
 impl<'a, T> PerCpuRef<'a, T> {
+    /// A C `T __percpu *` that isn't a PerCpu: a table's entry's counters.
+    ///
+    /// # Safety
+    /// @p is a percpu allocation of a @T, live for 'a.
+    pub unsafe fn from_raw(p: *mut T) -> Self {
+        PerCpuRef(p, PhantomData)
+    }
+
     /// percpu_field!()'s.
     ///
     /// # Safety
