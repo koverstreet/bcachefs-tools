@@ -48,8 +48,7 @@
 //!
 //! ptrs_kill and ptrs_kill_ec are PtrMasks of the key planned for, made and
 //! combined under its brand, the drop simulation's copies adopted as it
-//! (ptrs_mask.rs). They're erased into data_update_opts' u8s: a pointer past
-//! the eighth has no bit there, as in C.
+//! (ptrs_mask.rs), and erased into data_update_opts.
 
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};
@@ -178,8 +177,8 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
         }
     }
 
-    d.ptrs_kill    = kill as u8;
-    d.ptrs_kill_ec = kill_ec as u8;
+    d.ptrs_kill    = kill;
+    d.ptrs_kill_ec = kill_ec;
     if d.ptrs_kill != 0 || d.ptrs_kill_ec != 0 || d.extra_replicas != 0 {
         return Ok(Plan::Move(d));
     }

@@ -48,9 +48,9 @@ nest! {
     #[derive(Clone, Copy, CStruct)]
     pub struct data_update_opts {
         pub type_: c::bch_data_update_types,
-        pub ptrs_io_error: u8,
-        pub ptrs_kill: u8,
-        pub ptrs_kill_ec: u8,
+        pub ptrs_io_error: u16,
+        pub ptrs_kill: u16,
+        pub ptrs_kill_ec: u16,
         pub extra_replicas: u8,
         pub target: u16,
         #[c_bitfield]
