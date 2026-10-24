@@ -392,6 +392,12 @@ macro_rules! btree_has_snapshots {
     (BTREE_IS_snapshots $($rest:tt)*) => { true };
     ($first:tt $($rest:tt)*) => { btree_has_snapshots!($($rest)*) };
 }
+macro_rules! btree_has_snapshot_field {
+    () => { false };
+    (BTREE_IS_snapshots $($rest:tt)*) => { true };
+    (BTREE_IS_snapshot_field $($rest:tt)*) => { true };
+    ($first:tt $($rest:tt)*) => { btree_has_snapshot_field!($($rest)*) };
+}
 macro_rules! btree_is_extents {
     () => { false };
     (BTREE_IS_extents $($rest:tt)*) => { true };
@@ -410,6 +416,11 @@ macro_rules! btree_ids_known {
         pub const BTREE_HAS_SNAPSHOTS_MASK: u64 =
             0 $(| if btree_has_snapshots!($($flag)*) { 1u64 << $nr } else { 0 })*;
 
+        /// Btrees whose keys' positions have a snapshot field, snapshotted or
+        /// not; C's btree_has_snapshot_field_mask.
+        pub const BTREE_HAS_SNAPSHOT_FIELD_MASK: u64 =
+            0 $(| if btree_has_snapshot_field!($($flag)*) { 1u64 << $nr } else { 0 })*;
+
         /// Btrees of extents; C's btree_is_extents_mask.
         pub const BTREE_IS_EXTENTS_MASK: u64 =
             0 $(| if btree_is_extents!($($flag)*) { 1u64 << $nr } else { 0 })*;
@@ -425,6 +436,17 @@ impl c::btree_id {
     /// Whether its keys are extents, covering ranges: btree_id_is_extents().
     pub fn is_extents(self) -> bool {
         self.0 < 64 && BTREE_IS_EXTENTS_MASK & (1 << self.0) != 0
+    }
+
+    /// Whether its keys are snapshotted: btree_type_has_snapshots().
+    pub fn has_snapshots(self) -> bool {
+        self.0 < 64 && BTREE_HAS_SNAPSHOTS_MASK & (1 << self.0) != 0
+    }
+
+    /// Whether its keys' positions have a snapshot field:
+    /// btree_type_has_snapshot_field().
+    pub fn has_snapshot_field(self) -> bool {
+        self.0 < 64 && BTREE_HAS_SNAPSHOT_FIELD_MASK & (1 << self.0) != 0
     }
 
     /// Whether its keys point to data: btree_type_has_data_ptrs().
