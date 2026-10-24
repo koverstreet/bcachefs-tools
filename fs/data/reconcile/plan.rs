@@ -61,7 +61,7 @@ use crate::data::reconcile::needs_reconcile::rb_bit;
 use crate::data::reconcile::trigger::{rb_work_id, BkeyVReconcile};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
-use crate::log_msg_ratelimited;
+use crate::{log_msg_ratelimited, warn_on_once};
 use crate::sb::counters::events;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::plain_bytes;
@@ -189,8 +189,14 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
         return Ok(Plan::Park(ParkReason::Replicas(r.data_replicas().into())));
     }
 
-    let mut msg = log_msg_ratelimited!(fs);
-    write!(msg, "got extent to reconcile but nothing to do, confused\n  {}", k.to_text(fs));
+    // A bug: the key's reconcile entry asks for work this finds none of. The
+    // warning fails the CI test that gets here, making it a reproducer - once,
+    // as the same keys come back every pass.
+    {
+        let mut msg = log_msg_ratelimited!(fs);
+        write!(msg, "got extent to reconcile but nothing to do, confused\n  {}", k.to_text(fs));
+    }
+    warn_on_once!(true);
     Ok(Plan::Nothing)
 }
 
