@@ -1233,6 +1233,19 @@ void bch2_submit_wbio_replicas(struct bch_write_bio *wbio, struct bch_fs *c,
 		 * aren't retrying failed btree writes yet (due to device
 		 * removal/ro):
 		 */
+		/*
+		 * #918 per-device WRITE GATE (IssueWrite, DesignB.tla): a write
+		 * that targets a HOLD-frozen member parks here until the member
+		 * thaws (gate reopens) or escapes to read-only.  Done BEFORE
+		 * get_ioref so a parked writer pins no io_ref - an escape-to-ro's
+		 * WRITE-ref drain must be able to make progress against it.  A
+		 * STEERed member is not gated here: its WRITE ref is already
+		 * stopped, so get_ioref(WRITE) returns NULL below and the write
+		 * relocates to a peer or fails BLK_STS_REMOVED (contract
+		 * clause 2); only a no-peer HOLD member blocks (clause 3).
+		 */
+		bch2_dev_idx_write_gate_wait(c, ptr->dev);
+
 		struct bch_dev *ca = nocow
 			? cas[cas_idx++]
 			: bch2_dev_get_ioref(c, ptr->dev, ref_rw, ref_idx);

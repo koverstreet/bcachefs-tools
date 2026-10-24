@@ -415,6 +415,31 @@ static void __bch2_dev_read_only(struct bch_fs *c, struct bch_dev *ca)
 	 */
 	bch2_dev_io_ref_stop(ca, WRITE);
 
+	/*
+	 * #918 ESCAPE-TO-RO (candidate (c) sibling fix F2 = DesignB.tla
+	 * EscapeGateEarly=FALSE).  If this member was frozen, going read-only is
+	 * its escape exit: move it out of the freeze lifecycle to _ro and wake
+	 * any writers parked at its write gate so they re-resolve per member-ro
+	 * (relocate to a writable peer, else BLK_STS_REMOVED via
+	 * get_ioref(WRITE)=NULL).
+	 *
+	 * ORDERING IS LOAD-BEARING: the gate is reopened HERE, strictly AFTER
+	 * bch2_dev_io_ref_stop(ca, WRITE) above (never before it).  The TLA model
+	 * (EscapeToRoOpenGate, enabled only under EscapeGateEarly) shows the v7
+	 * bug of reopening the gate while the WRITE ref was still live: a btree
+	 * write riding io_ref[READ] (which get_ioref admits even when non-rw)
+	 * could then pass the reopened gate and land on a still-quiesced member
+	 * (the S1_Quiesce window G5).  Reopening only after the WRITE ref is
+	 * stopped and the allocator drained closes that window: no new write can
+	 * target the member, and in-flight writes drained in
+	 * bch2_dev_allocator_remove() above.
+	 */
+	if (atomic_read(&ca->freeze_state) != BCH_DEV_FREEZE_thawed) {
+		ca->freeze_mode = BCH_DEV_FREEZE_MODE_ro;
+		atomic_set(&ca->freeze_state, BCH_DEV_FREEZE_ro);
+		wake_up(&c->freeze_wait);
+	}
+
 	bch2_dev_journal_stop(&c->journal, ca);
 	bch2_do_discards_async(c);
 
@@ -442,6 +467,15 @@ static void __bch2_dev_read_write(struct bch_fs *c, struct bch_dev *ca)
 
 	if (enumerated_ref_is_zero(&ca->io_ref[WRITE]))
 		enumerated_ref_start(&ca->io_ref[WRITE]);
+
+	/*
+	 * #918 SetStateRw: a member coming back read-write leaves any freeze/ro
+	 * lifecycle (contract clause 4: `ro` is not terminal; set-state rw
+	 * restores it).  Clear the gate and wake parked writers.
+	 */
+	ca->freeze_mode = BCH_DEV_FREEZE_MODE_none;
+	atomic_set(&ca->freeze_state, BCH_DEV_FREEZE_thawed);
+	wake_up(&c->freeze_wait);
 
 	bch2_do_discards_async(c);
 }
@@ -584,6 +618,9 @@ static struct bch_dev *__bch2_dev_alloc(struct bch_fs *c,
 	init_completion(&ca->ref_outer_completion);
 
 	INIT_WORK(&ca->io_error_work, bch2_io_error_work);
+
+	atomic_set(&ca->freeze_state, BCH_DEV_FREEZE_thawed);	/* #918 */
+	ca->freeze_mode = BCH_DEV_FREEZE_MODE_none;
 
 	bch2_time_stats_quantiles_init(&ca->io_latency[READ]);
 	bch2_time_stats_quantiles_init(&ca->io_latency[WRITE]);
@@ -973,6 +1010,19 @@ static int __bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca,
 	int ret;
 
 	lockdep_assert_held(&c->state_lock);
+
+	/*
+	 * #918 contract clause 4: a graceful device remove while the member is
+	 * frozen is REFUSED (-EBUSY, "thaw first").  Remove must evacuate, which
+	 * a quiesced (frozen) member cannot service.  Refuse before consuming
+	 * ref_outer / touching any state, so nothing changed.  (Forced offline /
+	 * eject is a different path: it goes read-only via __bch2_dev_read_only,
+	 * the escape-to-ro exit.)
+	 */
+	if (atomic_read(&ca->freeze_state) != BCH_DEV_FREEZE_thawed) {
+		prt_printf(err, "device is frozen, thaw first\n");
+		return -EBUSY;
+	}
 
 	/*
 	 * We consume the caller's ref_outer, regardless of whether we succeed
@@ -1714,7 +1764,200 @@ static void bch2_fs_bdev_sync(struct block_device *bdev)
 	}
 }
 
+/*
+ * ========================= #918 per-device freeze/thaw ========================
+ * blk_holder_ops .freeze / .thaw.  Design B (per-device WRITE GATE + steer/hold),
+ * derived from DesignB.tla + the generated state machine (ExecFreeze.h) + the
+ * behaviour contract (PR clauses 1-8), independently of any prototype.
+ *
+ * The block layer nests freezes for us (bd_fsfreeze_count / FREEZE_MAY_NEST):
+ * it invokes .freeze only on the 0->1 count edge and .thaw only on the 1->0
+ * edge.  So these two callbacks implement the model's FreezeStart+FreezeDrain
+ * and ThawPhase1+ThawPhase2; the model's FreezeNest/ThawNest (pure count
+ * bumps) are the block layer's job and need no state here.  Whole-fs fsfreeze
+ * therefore nests over a device freeze (contract clause 7) via that same count.
+ */
+
+/*
+ * True if any member is HOLD-frozen.  The §4 SECOND-FREEZE REFUSAL
+ * (DesignB.tla HoldRefusal; proved load-bearing by NoCrossGateWedge): while a
+ * no-peer HOLD freeze is in force a new freeze is refused -EBUSY, so a steer
+ * freeze's drain can never wait on a nocow WRITE ref parked in the hold gate
+ * (the cross-gate D1 deadlock).
+ */
+static bool bch2_fs_any_dev_hold_frozen(struct bch_fs *c)
+{
+	lockdep_assert_held(&c->state_lock);
+
+	for_each_member_device(c, ca)
+		if (ca->freeze_mode == BCH_DEV_FREEZE_MODE_hold)
+			return true;	/* for_each_member_device auto-puts the ref */
+	return false;
+}
+
+static int __bch2_fs_bdev_freeze(struct bch_fs *c, struct bch_dev *ca)
+{
+	lockdep_assert_held(&c->state_lock);
+
+	/* FreezeStart guard: only a live, thawed member freezes (an already
+	 * frozen/escaped member is not re-entered here - the block-layer count
+	 * handles nesting). */
+	if (atomic_read(&ca->freeze_state) != BCH_DEV_FREEZE_thawed ||
+	    !bch2_dev_is_online(ca) ||
+	    ca->mi.state != BCH_MEMBER_STATE_rw)
+		return 0;
+
+	if (bch2_fs_any_dev_hold_frozen(c))
+		return -EBUSY;				/* §4 refusal */
+
+	/*
+	 * STEER vs HOLD (DesignB.tla FreezeMode / bch2_can_write_fs_with_devs):
+	 * can the fs still write with this member leaving the rw set?  Uses the
+	 * canonical 5-arg API with BCH_WRITE_CHECK_dev_leaving_rw, exactly as
+	 * bch2_dev_state_allowed() does for a member going read-only.
+	 */
+	struct bch_devs_mask new_rw_devs = c->allocator.rw_devs[0];
+	__clear_bit(ca->dev_idx, new_rw_devs.d);
+
+	CLASS(printbuf, err)();
+	bool can_steer = bch2_can_write_fs_with_devs(c, new_rw_devs,
+			BCH_WRITE_CHECK_dev_leaving_rw, 0, &err);
+
+	/* close the write gate: new writes targeting ca now park. */
+	ca->freeze_mode = can_steer ? BCH_DEV_FREEZE_MODE_steer
+				    : BCH_DEV_FREEZE_MODE_hold;
+	atomic_set(&ca->freeze_state, BCH_DEV_FREEZE_freezing);
+	smp_mb__after_atomic();		/* gate-close visible before the drain */
+
+	if (can_steer) {
+		/*
+		 * STEER: route writes to the peer(s) (contract clause 2).  Pull
+		 * ca from the allocator and stop its WRITE ref;
+		 * bch2_dev_allocator_remove() drains open_buckets - and thereby
+		 * in-flight write submits - before the ref is stopped (the
+		 * ordering __bch2_dev_read_only relies on).
+		 */
+		bch2_dev_allocator_remove(c, ca);
+		bch2_recalc_capacity(c);
+		bch2_dev_io_ref_stop(ca, WRITE);
+	} else {
+		/*
+		 * HOLD: the member is the sole/last write home, so it STAYS in
+		 * the allocator and keeps its WRITE ref live - a writer parked
+		 * at the gate must find the member writable the instant a
+		 * lock-free thaw reopens it (candidate (c) releases the going-RO
+		 * flush's parked btree write at _thawing, before any phase-2
+		 * re-add).  Quiesce in-flight writes by draining then re-arming
+		 * the WRITE ref; new writes are already parked at the gate and
+		 * never reach get_ioref() during the drain, so re-arming cannot
+		 * surface a spurious BLK_STS_REMOVED to a blocked write.
+		 *
+		 * #918 NEST FIX (contract clause 7 - whole-fs VFS fsfreeze nests
+		 * with a per-device freeze).  Re-arm the WRITE ref ONLY while the
+		 * whole fs is read-write.  bcachefs's invariant is that a member's
+		 * io_ref[WRITE] is live iff BCH_FS_rw is set: the whole-fs
+		 * read-only path (bch2_fs_read_only -> __bch2_dev_read_only) kills
+		 * every member's WRITE ref, and the go-read-write path
+		 * (__bch2_fs_read_write, fs/init/fs.c) UNCONDITIONALLY re-arms each
+		 * online-rw member's WRITE ref on the ro->rw edge.  If this HOLD
+		 * freeze nests UNDER an in-force whole-fs VFS fsfreeze - the fs is
+		 * already read-only, so can_steer is false (no rw peers) and we
+		 * land here - re-arming would leave the WRITE ref live while the
+		 * fs is ro, breaking the invariant.  The subsequent whole-fs thaw
+		 * (bch2_unfreeze -> __bch2_fs_read_write) would then call
+		 * enumerated_ref_start()=percpu_ref_reinit() on that still-live
+		 * percpu_ref, tripping the reinit/resurrect WARN_ON_ONCE's
+		 * (lib/percpu-refcount.c:443/470/471) and corrupting the refcount,
+		 * which hangs the thaw.  While the fs is ro, leave the WRITE ref
+		 * killed - consistent with every other member - and let the
+		 * whole-fs go-rw path re-arm it exactly once.  While the fs is rw
+		 * (a lone per-device HOLD freeze) this is unchanged: the ref is
+		 * re-armed here so a parked writer finds the sole home writable.
+		 */
+		bch2_dev_io_ref_stop(ca, WRITE);
+		if (test_bit(BCH_FS_rw, &c->flags))
+			enumerated_ref_start(&ca->io_ref[WRITE]);
+	}
+
+	/* FreezeDrain complete: report frozen (contract clause 1: success only
+	 * once quiesced). */
+	atomic_set(&ca->freeze_state, BCH_DEV_FREEZE_frozen);
+	return 0;
+}
+
+static int bch2_fs_bdev_freeze(struct block_device *bdev)
+{
+	CLASS(bdev_get_fs, c)(bdev);
+	if (!c)
+		return 0;
+
+	guard(rwsem_write)(&c->state_lock);
+
+	struct bch_dev *ca = bdev_to_bch_dev(c, bdev);
+	if (!ca)
+		return 0;
+
+	int ret = __bch2_fs_bdev_freeze(c, ca);	/* errno reaches caller (clause 8) */
+	bch2_dev_put(ca);
+	return ret;
+}
+
+static int bch2_fs_bdev_thaw(struct block_device *bdev)
+{
+	CLASS(bdev_get_fs, c)(bdev);
+	if (!c)
+		return 0;
+
+	struct bch_dev *ca = bdev_to_bch_dev(c, bdev);
+	if (!ca)
+		return 0;
+
+	/*
+	 * ThawPhase1 - candidate (c) (DesignB.tla ThawReopensLockFree=TRUE):
+	 * reopen the write gate + wake parked writers LOCK-FREE, BEFORE taking
+	 * c->state_lock.  This breaks the OF1 2-party state_lock cycle - the
+	 * whole-fs going-RO worker can hold state_lock while waiting on a btree
+	 * write parked at this member's closed gate; were .thaw to need
+	 * state_lock first (unfixed v7 order) the resume would hang on
+	 * down_write(&c->state_lock) forever.  Moving the member out of the
+	 * freeze lifecycle (_frozen -> _thawing) opens the gate
+	 * (bch2_dev_freeze_gate_open(_thawing) is true) so the parked write
+	 * completes, the worker's flush finishes and releases state_lock.
+	 */
+	if (atomic_read(&ca->freeze_state) == BCH_DEV_FREEZE_frozen) {
+		atomic_set(&ca->freeze_state, BCH_DEV_FREEZE_thawing);
+		wake_up(&c->freeze_wait);
+	}
+
+	/*
+	 * ThawPhase2 (DesignB.tla ThawPhase2): the allocator re-add runs UNDER
+	 * c->state_lock, which is now acquirable because phase 1 released the
+	 * wedge.  A steered member rejoins the allocator and restarts its WRITE
+	 * ref; a held member kept both, so this only settles the lifecycle.
+	 */
+	scoped_guard(rwsem_write, &c->state_lock) {
+		if (atomic_read(&ca->freeze_state) == BCH_DEV_FREEZE_thawing) {
+			if (ca->freeze_mode == BCH_DEV_FREEZE_MODE_steer &&
+			    bch2_dev_is_online(ca) &&
+			    ca->mi.state == BCH_MEMBER_STATE_rw) {
+				bch2_dev_allocator_add(c, ca);
+				bch2_recalc_capacity(c);
+				if (enumerated_ref_is_zero(&ca->io_ref[WRITE]))
+					enumerated_ref_start(&ca->io_ref[WRITE]);
+			}
+			ca->freeze_mode = BCH_DEV_FREEZE_MODE_none;
+			atomic_set(&ca->freeze_state, BCH_DEV_FREEZE_thawed);
+			wake_up(&c->freeze_wait);
+		}
+	}
+
+	bch2_dev_put(ca);
+	return 0;
+}
+
 const struct blk_holder_ops bch2_sb_handle_bdev_ops = {
 	.mark_dead		= bch2_fs_bdev_mark_dead,
 	.sync			= bch2_fs_bdev_sync,
+	.freeze			= bch2_fs_bdev_freeze,
+	.thaw			= bch2_fs_bdev_thaw,
 };

@@ -313,6 +313,18 @@ pub struct bch_dev {
     pub ref_outer_completion: c::completion,
     pub io_ref: [c::enumerated_ref; 2],
 
+    /*
+     * #918 per-device freeze/thaw.  freeze_state is the member's freeze
+     * lifecycle and the per-device WRITE GATE in one word: it is read
+     * lock-free (atomic_read) on the write-submit path and written under
+     * c->state_lock, EXCEPT the candidate-(c) lock-free thaw pre-reopen,
+     * which stores _thawing without the lock.  freeze_mode records
+     * steer vs hold for the duration of the freeze (under state_lock).
+     * See enum bch_dev_freeze_state / bch_dev_freeze_mode in init/dev.h.
+     */
+    pub freeze_state: c::atomic_t,
+    pub freeze_mode: u8,
+
     pub fs: *mut c::bch_fs,
 
     pub dev_idx: u8,
@@ -575,6 +587,12 @@ pub struct bch_fs {
      */
     pub ro_ref: c::refcount_t,
     pub ro_ref_wait: c::wait_queue_head_t,
+
+    /* #918: writers parked at a HOLD-frozen member's closed write gate wait
+     * here; thaw (lock-free) and escape-to-ro wake it.  Keyed by dev_idx so a
+     * parked writer holds no per-device ref while blocked (it must not, or a
+     * concurrent escape's io_ref drain would deadlock against it). */
+    pub freeze_wait: c::wait_queue_head_t,
     pub read_only_work: c::work_struct,
 
     #[c("struct bch_dev __rcu *devs[BCH_SB_MEMBERS_MAX]")]
