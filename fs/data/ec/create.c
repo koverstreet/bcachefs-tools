@@ -2097,9 +2097,14 @@ static int stripe_idx_alloc(struct btree_trans *trans, struct ec_stripe_new *s)
 		c->ec.stripe_hint = iter.pos.offset;
 
 		if (bkey_gt(k.k->p, POS(0, U32_MAX))) {
-			if (start_pos.offset) {
+			if (!bpos_eq(start_pos, min_pos)) {
 				start_pos = min_pos;
-				bch2_btree_iter_set_pos(&iter, start_pos);
+				/*
+				 * for_each_btree_key() will still advance iterator - in
+				 * Rust, LoopFlow::ContinueFrom(min_pos), which resumes
+				 * at min_pos:
+				 */
+				bch2_btree_iter_set_pos(&iter, bpos_predecessor(min_pos));
 				continue;
 			}
 
