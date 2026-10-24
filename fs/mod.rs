@@ -70,6 +70,7 @@ pub mod alloc {
     pub mod check_backpointers;
     pub mod check_data;
     pub mod disk_groups;
+    pub mod foreground;
     pub mod lru;
     pub mod replicas;
 }

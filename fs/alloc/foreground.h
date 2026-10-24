@@ -237,9 +237,7 @@ static inline void bch2_open_bucket_get(struct bch_fs *c,
 static inline open_bucket_idx_t *open_bucket_hashslot(struct bch_fs *c,
 						  unsigned dev, u64 bucket)
 {
-	return c->allocator.open_buckets_hash +
-		(jhash_3words(dev, bucket, bucket >> 32, 0) &
-		 (OPEN_BUCKETS_COUNT - 1));
+	return c->allocator.open_buckets_hash + bch2_open_bucket_hash(dev, bucket);
 }
 
 static inline struct open_bucket *bch2_bucket_is_open(struct bch_fs *c, unsigned dev, u64 bucket)
