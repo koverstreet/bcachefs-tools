@@ -124,7 +124,7 @@ pub fn bch2_prt_error_nr(out: &mut Printbuf, nr: u64) {
 // ── The sections ─────────────────────────────────────────────────────────────
 
 /// An entry of either section, as v2 has it: see the top of the file.
-trait ErrorEntry: Copy {
+pub(crate) trait ErrorEntry: Copy {
     /// v2's: a first time, and a count that saturates.
     const V2: bool;
 
@@ -174,15 +174,23 @@ impl ErrorEntry for c::bch_sb_field_error_entry_v2 {
     }
 }
 
-/// Memory's count as v2 has it: saturated to v2's widths.
+impl c::bch_sb_field_error_entry_v2 {
+    /// A count past its field's width is pinned at the most it holds, and so
+    /// is a time, as C's setters pin them: a wrapped one would be worse.
+    pub(crate) fn new(id: c::bch_sb_error_id, nr: u64, first: u64, last: u64) -> Self {
+        let mut e = Self::default();
+        e.v.set_id(id.0 as u16);
+        e.v.set_nr(nr.min(c::BCH_SB_ERROR_ENTRY_V2_NR_MAX) as u32);
+        e.v.set_first_error_time(first.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
+        e.v.set_last_error_time(last.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
+        e
+    }
+}
+
+/// Memory's count as v2 has it.
 impl From<&c::bch_sb_error_entry_cpu> for c::bch_sb_field_error_entry_v2 {
     fn from(s: &c::bch_sb_error_entry_cpu) -> Self {
-        let mut d = Self::default();
-        d.v.set_id(s.id());
-        d.v.set_nr(s.nr().min(c::BCH_SB_ERROR_ENTRY_V2_NR_MAX) as u32);
-        d.v.set_first_error_time(s.first_error_time.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
-        d.v.set_last_error_time(s.last_error_time.min(c::BCH_SB_ERROR_ENTRY_V2_TIME_MAX));
-        d
+        Self::new(c::bch_sb_error_id(s.id().into()), s.nr(), s.first_error_time, s.last_error_time)
     }
 }
 
@@ -390,7 +398,7 @@ impl<E: ErrorEntry> From<&E> for c::bch_sb_error_entry_cpu {
 
 /// One error's counts from both sections: summed, over the union of their
 /// time ranges.
-fn merge(a: c::bch_sb_error_entry_cpu, b: c::bch_sb_error_entry_cpu) -> c::bch_sb_error_entry_cpu {
+pub(crate) fn merge(a: c::bch_sb_error_entry_cpu, b: c::bch_sb_error_entry_cpu) -> c::bch_sb_error_entry_cpu {
     cpu_entry(c::bch_sb_error_id(a.id().into()), a.nr().saturating_add(b.nr()),
               a.first_error_time.min(b.first_error_time),
               a.last_error_time.max(b.last_error_time))
