@@ -1243,7 +1243,10 @@ int bch2_accounting_read(struct bch_fs *c)
 			if (jk < end)
 				next = bpos_min(next, journal_key_k(c, jk)->k.p);
 
-			/* for_each_btree_key() will still advance iterator: */
+			/*
+			 * for_each_btree_key() will still advance iterator - in
+			 * Rust, LoopFlow::ContinueFrom(next), which resumes at next:
+			 */
 			bch2_btree_iter_set_pos(&iter, bpos_predecessor(next));
 			continue;
 		}
@@ -1386,7 +1389,11 @@ void bch2_verify_accounting_clean(struct bch_fs *c)
 			struct disk_accounting_pos next;
 			memset(&next, 0, sizeof(next));
 			next.type = acc_k.type + 1;
-			bch2_btree_iter_set_pos(&iter, disk_accounting_pos_to_bpos(&next));
+			/*
+			 * for_each_btree_key() will still advance iterator - in
+			 * Rust, LoopFlow::ContinueFrom(next), which resumes at next:
+			 */
+			bch2_btree_iter_set_pos(&iter, bpos_predecessor(disk_accounting_pos_to_bpos(&next)));
 			continue;
 		}
 
