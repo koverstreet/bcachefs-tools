@@ -305,7 +305,7 @@ fn check_reconcile_work_phys_one<'t>(t: &TransAttempt<'_, 't>, bp_iter: &mut Btr
                 bp = None;
                 w = c::reconcile_work_id::RECONCILE_WORK_none;
             }
-            Some(k) => {
+            Some((_, k)) => {
                 let want = bp_reconcile_phys(fs, bp_v.v().level.into(), bp_v.k.p.inode as u32, k);
                 if want != w {
                     last_flushed.maybe_flush(t, bp_v.untyped())?;

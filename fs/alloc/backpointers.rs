@@ -509,13 +509,17 @@ pub(super) fn get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Bac
     }
 }
 
-/// None if there's nothing: reported, and the backpointer maybe deleted, committing.
+/// What @bp points to, and @iter, there - at its level, or for a btree node
+/// pointer at the node below: None if there's nothing, reported, and the
+/// backpointer maybe deleted, committing.
 pub fn backpointer_get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
                                    iter: &'i mut BtreeIter<'t>, flags: BtreeIterFlags,
                                    last_flushed: WbFlush<'_>)
-    -> Result<Option<BkeySC<'i>>, BchError>
+    -> Result<Option<(&'i BtreeIter<'t>, BkeySC<'i>)>, BchError>
 {
-    get_key(t, bp, iter, flags, Some(last_flushed), true)
+    // SAFETY: @iter is only read past here, shared with the key
+    let k = get_key(t, bp, iter, flags, Some(last_flushed), true)?.map(|k| unsafe { polonius_key(k) });
+    Ok(k.map(|k| (&*iter, k)))
 }
 
 pub fn backpointer_get_node<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Backpointer>,
