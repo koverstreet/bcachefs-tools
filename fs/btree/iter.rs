@@ -1683,6 +1683,13 @@ impl Watermark {
     pub const INTERIOR_UPDATES: Self = Watermark(c::bch_watermark::BCH_WATERMARK_interior_updates);
 }
 
+/// A C caller's: a struct's, say.
+impl From<c::bch_watermark> for Watermark {
+    fn from(w: c::bch_watermark) -> Self {
+        Watermark(w)
+    }
+}
+
 /// A Watermark and CommitFlags, C's one word. The commit functions take
 /// `impl Into<CommitOpts>`, so CommitFlags alone do, and a CommitOpts is only
 /// for a watermark:
