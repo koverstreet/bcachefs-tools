@@ -179,7 +179,7 @@ impl<'f> BtreeTrans<'f> {
     pub(crate) unsafe fn attempt_in_progress<'a>(&'a self) -> TransAttempt<'a, 'f> {
         TransAttempt {
             trans:         self,
-            restart_count: unsafe { (*self.raw()).restart_count },
+            restart_count: Cell::new(unsafe { (*self.raw()).restart_count }),
             spent:         Cell::new(false),
             t:             PhantomData,
         }
@@ -210,7 +210,7 @@ impl<'f> BtreeTrans<'f> {
     pub fn begin<'a>(&'a self) -> TransAttempt<'a, 'f> {
         TransAttempt {
             trans:         self,
-            restart_count: self.begin_raw(),
+            restart_count: Cell::new(self.begin_raw()),
             spent:         Cell::new(false),
             t:             PhantomData,
         }
@@ -276,7 +276,8 @@ impl<'f> BtreeTrans<'f> {
 
 pub struct TransAttempt<'a, 't> {
     trans:         &'a BtreeTrans<'t>,
-    restart_count: u32,
+    /// the transaction's when the attempt began - or when restarts_handled()
+    restart_count: Cell<u32>,
     /// ended by ignore_restarts()
     spent:         Cell<bool>,
     t:             PhantomData<&'a mut ()>,
@@ -491,8 +492,16 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     pub fn verify_not_restarted(&self) {
         if !self.spent.get() {
-            self.trans.verify_not_restarted(self.restart_count);
+            self.trans.verify_not_restarted(self.restart_count.get());
         }
+    }
+
+    /// The restarts since the attempt began were a callee's, run and handled
+    /// inside it - a read's own retries, under a data move: not this
+    /// attempt's, which goes on. C's restoring trans->restart_count after the
+    /// call.
+    pub fn restarts_handled(&self) {
+        self.restart_count.set(self.trans.restart_count());
     }
 
     /// Run @f - transactions of its own, top-level loops beginning and
@@ -700,7 +709,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// transaction_restart_nested, not relocked, if it ran attempts of its
     /// own, which end this one.
     pub fn relock_or_nested(&self) -> Result<(), BchError> {
-        if self.trans.restart_count() != self.restart_count {
+        if self.trans.restart_count() != self.restart_count.get() {
             return Err(BchError::from(bch_errcode::BCH_ERR_transaction_restart_nested));
         }
         self.relock()
