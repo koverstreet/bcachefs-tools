@@ -33,10 +33,10 @@ num-traits = { path = "vendor/num-traits", default-features = false }
 arrayvec = { path = "vendor/arrayvec", default-features = false }
 paste    = { path = "vendor/paste" }
 uuid     = "1.2.2"
-# The target's ioctl number layout (util/ioctl.rs): bindgen output of each
-# architecture's own headers. Userspace only - the kernel build has no
-# crates.io.
-linux-raw-sys = { version = "0.12", default-features = false, features = ["general", "no_std"] }
+# The target's ioctl number layout (util/ioctl.rs) and errnos (errcode.rs):
+# bindgen output of each architecture's own headers. Userspace only - the
+# kernel build has no crates.io.
+linux-raw-sys = { version = "0.12", default-features = false, features = ["errno", "general", "no_std"] }
 # Endian-typed integers for the on-disk format: byteorder::{little,big}_endian.
 zerocopy = "0.8"
 zeroize  = { version = "1", optional = true, features = ["std", "zeroize_derive"] }

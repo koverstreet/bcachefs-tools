@@ -1,6 +1,27 @@
+//! bcachefs error codes.
+//!
+//! The errcodes extend the errnos: BCH_ERRCODES() numbers bcachefs's own from
+//! BCH_ERR_START (2048) up, each with a parent - an errno, another errcode, or
+//! none. A code is thus a chain: ENOENT_inode -> ENOENT, and
+//! transaction_restart_relock -> transaction_restart. matches(class) asks
+//! whether @class is on the chain, errno() is its root: what the VFS and
+//! userspace see.
+//!
+//! ERRCODES, generated from BCH_ERRCODES(), holds each errcode's name and
+//! parent; errcode.c keeps C's own copy for its C callers. Parents are written
+//! as an errno or BCH_ERR_<name>, and `class` resolves both to numbers - the
+//! errnos from the kernel's bindings, or linux-raw-sys's in userspace. An
+//! errno's name is errname()'s, strerror()'s in userspace.
+//!
+//! A number with no entry has no parent and stands for itself. That includes
+//! codes past BCH_ERR_MAX: the tools and the DKMS module are versioned
+//! separately, and mount.bcachefs acts on the errcode a syscall returned, so a
+//! newer module can return one this build doesn't know.
+
 use crate::c;
 use core::ffi::{c_int, CStr};
 use core::fmt;
+use core::iter;
 use core::ptr::NonNull;
 
 pub use crate::c::bch_errcode;
@@ -14,6 +35,56 @@ macro_rules! errcode_names {
     )* } };
 }
 c::BCH_ERRCODES!(errcode_names);
+
+const START: u32 = bch_errcode::BCH_ERR_START.0;
+const N: usize = (bch_errcode::BCH_ERR_MAX.0 - START) as usize;
+
+#[allow(dead_code, non_upper_case_globals)]
+mod class {
+    #[cfg(kernel)]
+    pub(super) use crate::c::*;
+    #[cfg(not(kernel))]
+    pub(super) use linux_raw_sys::errno::*;
+
+    macro_rules! codes {
+        ($(($class:tt, $err:tt, $nr:tt)),* $(,)?) => { ::paste::paste! { $(
+            pub(super) const [<BCH_ERR_ $err>]: u32 = super::bch_errcode::[<BCH_ERR_ $err>].0;
+        )* } };
+    }
+    crate::c::BCH_ERRCODES!(codes);
+}
+
+macro_rules! class_of {
+    (0) => { 0 };
+    ($class:ident) => { class::$class as u32 };
+}
+
+macro_rules! errcode_table {
+    ($(($class:tt, $err:tt, $nr:tt)),* $(,)?) => {
+        static ERRCODES: [Option<(&str, u32)>; N] = {
+            let mut t = [None; N];
+            $(t[$nr] = Some((stringify!($err), class_of!($class)));)*
+            t
+        };
+    };
+}
+c::BCH_ERRCODES!(errcode_table);
+
+fn errcode(err: u32) -> Option<(&'static str, u32)> {
+    ERRCODES.get(err.checked_sub(START)? as usize).copied().flatten()
+}
+
+fn errname(err: u32) -> Option<&'static str> {
+    #[cfg(kernel)]
+    let p = unsafe { c::errname(err as c_int) };
+    #[cfg(not(kernel))]
+    let p = {
+        unsafe extern "C" { fn strerror(err: c_int) -> *const core::ffi::c_char; }
+        unsafe { strerror(err as c_int) }
+    };
+    // SAFETY: a static string, or NULL
+    (!p.is_null()).then(|| unsafe { CStr::from_ptr(p.cast()) }).and_then(|s| s.to_str().ok())
+}
 
 /// A bcachefs error code or errno, positive: errnos below BCH_ERR_START (2048),
 /// bcachefs's own above. Unlike bch_errcode, a raw errno never makes an invalid
@@ -46,40 +117,28 @@ impl BchError {
         -self.errno()
     }
 
-    /// Static: bch2_err_str()'s strings live for the process.
     pub fn msg(&self) -> &'static str {
-        unsafe { CStr::from_ptr(c::bch2_err_str(self.0).cast()) }
-            .to_str()
-            .unwrap_or("unknown error")
+        let name = match self.0.unsigned_abs() {
+            0              => Some("(No error)"),
+            e if e < START => errname(e),
+            e              => errcode(e).map(|(name, _)| name),
+        };
+        name.unwrap_or("(Invalid error)")
     }
 
-    /// The parent-chain walks index bch2_errcode_parents[] unchecked - fine for
-    /// codes we threw. But the tools and the DKMS module are versioned separately,
-    /// and mount.bcachefs acts on the errcode a syscall returned: a newer module can
-    /// name a code this build doesn't know, which mustn't abort the mount helper.
-    fn known(&self) -> bool {
-        self.0.unsigned_abs() < bch_errcode::BCH_ERR_MAX.0
+    fn chain(&self) -> impl Iterator<Item = u32> {
+        iter::successors(Some(self.0.unsigned_abs()), |&e| {
+            errcode(e).map(|(_, parent)| parent).filter(|&p| p != 0)
+        })
     }
 
-    /// Whether this is @class or derives from it; @class is an errcode or errno.
-    /// An unknown code matches nothing: its parent chain can't be seen.
     pub fn matches(&self, class: impl Into<BchError>) -> bool {
-        if self.0 != 0 && self.known() {
-            unsafe { c::__bch2_err_matches(self.0, class.into().0) }
-        } else {
-            false
-        }
+        let class = class.into().0.unsigned_abs();
+        self.0 != 0 && self.chain().any(|e| e == class)
     }
 
-    /// The errno at the root of the parent chain; an errno is itself. An unknown
-    /// code stands for itself, as it does to a caller that doesn't know bcachefs.
     pub fn errno(&self) -> i32 {
-        if self.0 == 0 || !self.known() {
-            self.0
-        } else {
-            // __bch2_err_class takes and returns negative error codes
-            -unsafe { c::__bch2_err_class(-self.0) }
-        }
+        self.chain().last().unwrap() as i32
     }
 }
 
