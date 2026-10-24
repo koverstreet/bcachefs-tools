@@ -171,6 +171,15 @@ impl<'f> BtreeTrans<'f> {
         }).map(|_| ())
     }
 
+    /// Flush what the btree write buffer holds, if anything - not waiting on
+    /// a flush already running, and erofs_no_writes if the filesystem's
+    /// going read-only. It may leave the transaction unlocked.
+    pub fn write_buffer_tryflush(&self) -> Result<(), BchError> {
+        crate::errcode::ret_to_result(unsafe {
+            c::bch2_btree_write_buffer_tryflush(self.raw())
+        }).map(|_| ())
+    }
+
     /// The attempt C began, for Rust that C calls partway through one.
     ///
     /// # Safety
