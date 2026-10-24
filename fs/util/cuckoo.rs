@@ -30,9 +30,10 @@
 //! The ways. Two fill to about half the table, three to most of it, so the
 //! table grows - a rehash, into a buffer twice the size with new seeds -
 //! before an insert would take it past 45%, for two, short of where inserts
-//! start to fail, or three quarters, for three. An insert that finds no room anyway rehashes with the item - new
-//! seeds at that size, then the next size up - and one that can't allocate
-//! fails with the table as it was. A table only shrinks by clear().
+//! start to fail, or three quarters, for three. An insert that finds no room
+//! anyway rehashes with the item - new seeds at that size, then the next size
+//! up - and one that can't allocate fails with the table as it was. A table
+//! only shrinks by clear().
 //!
 //! The seeds and bits are mirrored outside the buffer, so a lookup hashes
 //! while it follows the pointer, not after. A rehash can race that, pairing
@@ -379,17 +380,9 @@ impl<'a, I: CuckooItem, H: CuckooHash, const W: usize> Table<'a, I, H, W> {
             }
             let Some(item) = self.slots[s].load_locked() else { return true };
 
-            let mut next = None;
-            for o in self.index(item.target()) {
-                if path.contains(&(o as u32)) {
-                    continue;
-                }
-                next = Some(o);
-                if self.slots[o].load_locked().is_none() {
-                    break;
-                }
-            }
-            let Some(n) = next else { return false };
+            let others = self.index(item.target()).into_iter().filter(|&o| !path.contains(&(o as u32)));
+            let empty = others.clone().find(|&o| self.slots[o].load_locked().is_none());
+            let Some(n) = empty.or_else(|| others.last()) else { return false };
             s = n;
         }
     }
