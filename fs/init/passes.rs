@@ -1003,10 +1003,13 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
 
     /*
      * Defer passes that can be run online, and don't have dependents that
-     * can't be run online
+     * can't be run online - except in debug builds, where a recovery that
+     * fixed errors is run a second time to check it left the filesystem
+     * clean (bch2_fs_recovery()): that check needs the run it's checking
+     * finished, and its own run finished before it judges it.
      */
     let mut defer = 0;
-    if opts.fsck == 0 {
+    if opts.fsck == 0 && !cfg!(CONFIG_BCACHEFS_DEBUG) {
         for i in 0..NR {
             if passes & 1 << i != 0 &&
                opts.recovery_passes & 1 << i == 0 &&
