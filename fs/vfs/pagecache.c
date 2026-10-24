@@ -415,7 +415,7 @@ static void folio_reservation_set_nr_replicas(struct bch_fs *c, struct folio *fo
 	if (nr_replicas <= s->replicas_reserved_at)
 		return;
 
-	struct disk_reservation res = { .nr_replicas = s->replicas_reserved_at };
+	struct disk_reservation res = { .c = c, .nr_replicas = s->replicas_reserved_at };
 
 	for (unsigned i = 0; i < folio_sectors(folio); i++)
 		res.sectors += s->s[i].replicas_reserved;

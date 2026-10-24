@@ -1530,6 +1530,7 @@ bch2_btree_update_start(struct btree_trans *trans, btree_path_idx_t path_idx,
 	memset(as, 0, sizeof(*as));
 	closure_init(&as->cl, NULL);
 	as->c			= c;
+	as->disk_res.c		= c;
 	as->start_time		= start_time;
 	as->ip_started		= _RET_IP_;
 	as->mode		= BTREE_UPDATE_none;

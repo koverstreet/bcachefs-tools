@@ -74,7 +74,7 @@ pub struct bch_folio {
 c_default!(bch_folio);
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(CStruct)]
 pub struct bch2_folio_reservation {
     pub disk: c::disk_reservation,
     pub quota: c::quota_res,

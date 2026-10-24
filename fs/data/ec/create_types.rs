@@ -138,7 +138,6 @@ nest! {
         pub old_blocks_nr: u8,
     }
 }
-c_default!(ec_stripe_new);
 
 #[repr(C)]
 #[derive(CStruct)]

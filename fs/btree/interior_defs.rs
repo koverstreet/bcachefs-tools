@@ -163,7 +163,6 @@ nest! {
         pub inline_keys: [u64; c::BKEY_BTREE_PTR_U64s_MAX * 3],
     }
 }
-c_default!(btree_update);
 
 c_enum! {
     #[closed]

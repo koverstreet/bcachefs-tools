@@ -103,19 +103,20 @@ impl WriteOp {
         data: &[u8],
         new_i_size: u64,
     ) -> Self {
-        let state = Box::pin(WriteState {
-            op:         unsafe { std::mem::zeroed() },
-            bvecs:      unsafe { std::mem::zeroed() },
-            completed:  AtomicBool::new(false),
-            waker:      UnsafeCell::new(None),
-        });
+        // The op is initialized in place, by rust_write_submit()'s
+        // bch2_write_op_init(), before anything there can fail: until then
+        // it's no bch_write_op, its reservation's filesystem unset
+        let mut state = Box::<WriteState>::new_uninit();
+        let p = state.as_mut_ptr();
 
         let ret = unsafe {
-            let state_ptr = &*state as *const WriteState as *mut WriteState;
+            (&raw mut (*p).bvecs).write(std::mem::zeroed());
+            (&raw mut (*p).completed).write(AtomicBool::new(false));
+            (&raw mut (*p).waker).write(UnsafeCell::new(None));
             rust_write_submit(
                 fs.as_ptr(),
-                &raw mut (*state_ptr).op,
-                (*state_ptr).bvecs.as_mut_ptr(),
+                &raw mut (*p).op,
+                (&raw mut (*p).bvecs).cast(),
                 MAX_BVECS as u32,
                 data.as_ptr() as *const _,
                 data.len(),
@@ -129,7 +130,8 @@ impl WriteOp {
         };
 
         let submit_err = if ret != 0 { Some(ret) } else { None };
-        Self { state, submit_err }
+        // SAFETY: every field written, above
+        Self { state: Box::into_pin(unsafe { state.assume_init() }), submit_err }
     }
 }
 

@@ -198,7 +198,6 @@ nest! {
         pub wbio: c::bch_write_bio,
     }
 }
-c_default!(bch_write_op);
 
 c_extern! {
     pub fn bch2_sum_sector_overwrites(trans: *mut c::btree_trans, extent_iter: *mut c::btree_iter,

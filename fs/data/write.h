@@ -52,7 +52,7 @@ static inline void bch2_write_op_init(struct bch_write_op *op, struct bch_fs *c,
 	op->pos			= POS_MAX;
 	op->version		= ZERO_VERSION;
 	op->write_point		= (struct write_point_specifier) { 0 };
-	op->res			= (struct disk_reservation) { 0 };
+	op->res			= (struct disk_reservation) { .c = c };
 	op->new_i_size		= U64_MAX;
 	op->i_sectors_delta	= 0;
 	op->devs_need_flush	= NULL;

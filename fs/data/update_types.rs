@@ -105,7 +105,6 @@ pub struct data_update {
     pub op: c::bch_write_op,
     pub bvecs: *mut c::bio_vec,
 }
-c_default!(data_update);
 
 #[repr(C)]
 #[derive(CStruct)]
@@ -120,7 +119,6 @@ pub struct promote_op {
     pub write: c::data_update,
     pub bi_inline_vecs: [c::bio_vec; 0], /* must be last */
 }
-c_default!(promote_op);
 
 c_extern! {
     pub fn bch2_data_update_to_text(out: *mut c::printbuf, m: *mut c::data_update);

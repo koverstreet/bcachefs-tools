@@ -98,6 +98,7 @@ static inline void bch2_folio_reservation_init(struct bch_fs *c,
 {
 	memset(res, 0, sizeof(*res));
 
+	res->disk.c = c;
 	res->disk.nr_replicas = inode_nr_replicas(c, inode);
 }
 

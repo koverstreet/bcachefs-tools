@@ -27,7 +27,7 @@ use crate::util::percpu::{Counters, PerCpu};
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
-use core::cell::UnsafeCell;
+use core::cell::Cell;
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::mem::size_of;
 use core::sync::atomic::{AtomicU8, Ordering};
@@ -1108,62 +1108,53 @@ impl c::bch_dev {
     }
 }
 
-/// A disk space reservation.
-///
-/// The raw reservation lives behind an `UnsafeCell`: the commit path mutates it
-/// (in C) through the pointer installed on the transaction, while the holder may
-/// still inspect or grow it — shared, aliased, mutated-by-the-callee. `&mut`
-/// would falsely claim exclusivity the commit doesn't honor, so the mutating
-/// methods take `&self` and a reservation can be lent to `commit_do` (by shared
-/// ref) across many commits while the caller retains it.
-pub struct DiskReservation<'f> {
-    fs:  &'f Fs,
-    raw: UnsafeCell<c::disk_reservation>,
-}
+pub use c::DiskReservation;
 
 impl<'f> DiskReservation<'f> {
     pub fn new(fs: &'f Fs) -> Self {
-        DiskReservation {
-            fs,
-            raw: UnsafeCell::new(Default::default()),
-        }
+        DiskReservation { c: fs, sectors: Cell::new(0), generation: Cell::new(0), nr_replicas: Cell::new(0) }
     }
 
-    /// Reserve `sectors` of data at `nr_replicas` copies, on top of whatever
-    /// this reservation already holds.
-    pub fn add(
-        &self,
-        sectors:     u64,
-        nr_replicas: u32,
-        flags:       c::bch_reservation_flags,
-    ) -> Result<(), BchError> {
+    /// Reserve @sectors of data at @nr_replicas copies, on top of what it
+    /// already holds: bch2_disk_reservation_add().
+    pub fn add(&self, sectors: u64, nr_replicas: u32, flags: c::bch_reservation_flags) -> Result<(), BchError> {
+        // SAFETY: its fields are Cells
         ret_to_result(unsafe {
-            c::rust_bch2_disk_reservation_add(
-                self.fs.as_ptr(),
-                self.raw.get(),
-                sectors,
-                nr_replicas,
-                flags.bits() as i32,
-            )
+            c::rust_bch2_disk_reservation_add(self.c.as_ptr(), self.as_mut_ptr(), sectors, nr_replicas,
+                                              flags.bits() as i32)
         })
     }
 
-    /// Release what this reservation holds, keeping it usable: as
-    /// bch2_disk_reservation_put(). For a loop reserving per iteration.
-    pub fn put(&self) {
-        unsafe { c::rust_bch2_disk_reservation_put(self.fs.as_ptr(), self.raw.get()) };
+    /// Reserve @sectors physical - already weighted by replicas, not data
+    /// sectors to multiply - charged at @nr_replicas: __bch2_disk_reservation_add().
+    /// For a delta crediting back overwritten keys at their own counts:
+    /// sum_sector_overwrites()'s.
+    ///
+    /// XXX: the space arithmetic its callers do belongs elsewhere - with the
+    /// rest of buckets.c in Rust, this goes.
+    pub fn add_physical(&self, sectors: u64, nr_replicas: u32, flags: c::bch_reservation_flags)
+        -> Result<(), BchError>
+    {
+        // SAFETY: its fields are Cells
+        ret_to_result(unsafe {
+            c::rust_bch2_disk_reservation_add_physical(self.c.as_ptr(), self.as_mut_ptr(), sectors, nr_replicas,
+                                                       flags.bits() as i32)
+        })
     }
 
-    pub fn as_ptr(&self) -> *const c::disk_reservation {
-        self.raw.get()
+    /// Release what it holds, keeping it usable - for a loop reserving per
+    /// iteration: bch2_disk_reservation_put().
+    pub fn put(&self) {
+        // SAFETY: its fields are Cells
+        unsafe { c::rust_bch2_disk_reservation_put(self.c.as_ptr(), self.as_mut_ptr()) };
     }
 
     pub fn as_mut_ptr(&self) -> *mut c::disk_reservation {
-        self.raw.get()
+        core::ptr::from_ref(self).cast_mut().cast()
     }
 
     pub fn sectors(&self) -> u64 {
-        unsafe { (*self.raw.get()).sectors }
+        self.sectors.get()
     }
 }
 

@@ -3,7 +3,6 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::c_default;
 use cstruct_macros::{c_enum, CStruct};
 
 c_enum! {
@@ -15,9 +14,7 @@ c_enum! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct disk_reservation_destructable {
-    pub c: *mut c::bch_fs,
     pub r: c::disk_reservation,
 }
-c_default!(disk_reservation_destructable);

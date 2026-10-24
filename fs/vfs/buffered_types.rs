@@ -5,7 +5,6 @@
 #![cfg(not(NO_BCACHEFS_FS))]
 
 use crate::cstructs::c;
-use crate::types::c_default;
 use cstruct_macros::{CStruct, TypeInfo};
 
 #[repr(C)]
@@ -16,4 +15,3 @@ pub struct bch_writepage_io {
     /* must be last: */
     pub op: c::bch_write_op,
 }
-c_default!(bch_writepage_io);

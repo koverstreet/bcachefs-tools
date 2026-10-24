@@ -57,4 +57,3 @@ nest! {
         pub op: c::bch_write_op,
     }
 }
-c_default!(dio_write);

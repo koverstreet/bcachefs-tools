@@ -1335,6 +1335,7 @@ static struct ec_stripe_new *ec_new_stripe_alloc(struct bch_fs *c,
 	atomic_set(&s->ref[STRIPE_REF_stripe], 1);
 	atomic_set(&s->ref[STRIPE_REF_io], 1);
 	s->c		= c;
+	s->res.c	= c;
 	s->devs		= devs;
 	s->watermark	= watermark;
 	s->start_time	= local_clock();

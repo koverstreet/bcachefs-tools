@@ -3,8 +3,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::fs::Fs;
 use crate::locking::{ByteLock, Lock};
 use crate::util::percpu::Counters;
+use core::cell::Cell;
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, bitfield, c_const, c_extern, c_rcu_array, Fieldwise, TypeInfo};
 use nestify::nest;
@@ -122,18 +124,36 @@ pub struct bch_fs_usage_short {
  * the size of the data - and is charged to the online_reserved[] slot named by
  * @nr_replicas: charged sectors always have one, and changing it means moving
  * them, with disk_res_move_slot().
+ *
+ * Lent to a commit, which changes it through the transaction's pointer while
+ * its holder has it shared - so its fields are Cells.
+ *
+ * @c is the filesystem it reserves on, set where it's made, so a reservation
+ * releases what it holds when it's dropped. Rust has no zeroed one: nothing
+ * that embeds one is Default.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct disk_reservation {
-    pub sectors: u64,
-    pub generation: u32,
-    pub nr_replicas: c_uint,
+#[derive(CStruct)]
+#[c_name(disk_reservation)]
+pub struct DiskReservation<'f> {
+    #[c("struct bch_fs *c")]
+    pub c: &'f Fs,
+    #[c("u64 sectors")]
+    pub sectors: Cell<u64>,
+    #[c("u32 generation")]
+    pub generation: Cell<u32>,
+    #[c("unsigned nr_replicas")]
+    pub nr_replicas: Cell<c_uint>,
 }
+
+/// C's name, as FFI declarations and the structs embedding one spell it.
+pub type disk_reservation = DiskReservation<'static>;
 
 c_extern! {
     pub fn rust_bch2_disk_reservation_add(c: *mut c::bch_fs, res: *mut c::disk_reservation,
                                           sectors: u64, nr_replicas: c_uint, flags: c_int) -> c_int;
+    pub fn rust_bch2_disk_reservation_add_physical(c: *mut c::bch_fs, res: *mut c::disk_reservation,
+                                                   sectors: u64, nr_replicas: c_uint, flags: c_int) -> c_int;
     pub fn rust_bch2_disk_reservation_put(c: *mut c::bch_fs, res: *mut c::disk_reservation);
     pub fn bch2_fs_sectors_placeable(c: *mut c::bch_fs, out: *mut u64, out_now: *mut u64);
 }

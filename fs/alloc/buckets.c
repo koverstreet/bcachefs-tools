@@ -572,6 +572,12 @@ int rust_bch2_disk_reservation_add(struct bch_fs *c, struct disk_reservation *re
 	return bch2_disk_reservation_add(c, res, sectors, nr_replicas, flags);
 }
 
+int rust_bch2_disk_reservation_add_physical(struct bch_fs *c, struct disk_reservation *res,
+					    u64 sectors, unsigned nr_replicas, int flags)
+{
+	return __bch2_disk_reservation_add(c, res, sectors, nr_replicas, flags);
+}
+
 void rust_bch2_disk_reservation_put(struct bch_fs *c, struct disk_reservation *res)
 {
 	bch2_disk_reservation_put(c, res);
