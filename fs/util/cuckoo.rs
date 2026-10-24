@@ -144,7 +144,10 @@ pub unsafe trait CuckooItem: Copy {
     /// What it is, or points to: hashed and compared as its key.
     type Target: ?Sized + Hash + Eq;
 
-    fn target(&self) -> &Self::Target;
+    /// # Safety
+    /// The item's in a table: read from a slot in a read-side section, or
+    /// by the writer - an entry's valid until a grace period after it's out.
+    unsafe fn target(&self) -> &Self::Target;
 
     /// Whether it can go in a table at all.
     fn storable(self) -> bool {
@@ -160,7 +163,7 @@ unsafe impl CuckooItem for u64 {
     type Atomic = AtomicU64;
     type Target = u64;
 
-    fn target(&self) -> &u64 {
+    unsafe fn target(&self) -> &u64 {
         self
     }
 
@@ -212,10 +215,8 @@ unsafe impl<E: Hash + Eq + Sync> CuckooItem for Entry<E> {
     type Atomic = AtomicPtr<E>;
     type Target = E;
 
-    fn target(&self) -> &E {
-        // SAFETY: valid while in a table and a grace period after (new()): a
-        // reader had it from a slot in a read-side section, the writer from a
-        // slot or new()
+    unsafe fn target(&self) -> &E {
+        // SAFETY: the caller's, and new()'s
         unsafe { self.0.as_ref() }
     }
 
@@ -307,7 +308,8 @@ impl<'a, I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> Table<'
     }
 
     fn key<'i>(&self, i: &'i I) -> &'i I::Target {
-        i.target()
+        // SAFETY: a Table's items are live: see the struct
+        unsafe { i.target() }
     }
 
     /// @key's item, if slot @i - which may be past this buffer - holds it.
