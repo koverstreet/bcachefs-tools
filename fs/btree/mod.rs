@@ -7,6 +7,7 @@ pub mod compat;
 pub mod cow_key;
 pub mod interior;
 pub mod iter;
+pub mod locking;
 pub mod read;
 pub mod types;
 pub mod write_buffer;
