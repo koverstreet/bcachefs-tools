@@ -35,10 +35,12 @@ use crate::wrappers::ioctl::{
 };
 use crate::wrappers::sysfs::DevInfo;
 
-/// systemd repaints its own job line on the same row every 333ms
-/// (JOBS_IN_PROGRESS_PERIOD_USEC), and nothing arbitrates. 50ms is what
-/// systemd-fsck uses to win that race.
-const INTERVAL: Duration = Duration::from_millis(50);
+/// Twice a second: as fast as it can usefully be read. On the console systemd
+/// repaints its own job line on the same row every 333ms
+/// (JOBS_IN_PROGRESS_PERIOD_USEC) and nothing arbitrates, so its line can show
+/// over ours between redraws - systemd-fsck's 50ms wins that race, but isn't
+/// worth twenty redraws a second.
+const INTERVAL: Duration = Duration::from_millis(500);
 const BAR_WIDTH: usize = 20;
 
 /// Every line is truncated to the width: a wrapped line occupies two rows, and
