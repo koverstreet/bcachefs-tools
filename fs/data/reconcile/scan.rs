@@ -16,19 +16,29 @@
 //! version doesn't know - a newer one's - and is done as an fs scan, which
 //! covers anything narrower: a downgrade loses no scan.
 
+use crate::alloc::backpointers::{backpointer_get_key, BpScanIter};
+use crate::alloc::buckets::DiskReservation;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, BkeyI, BkeySC};
-use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
-                         TransAttempt, UpdateTriggerFlags};
+use crate::btree::bkey::{bpos_ge, pos, BkeyI, BkeySC, POS_MIN};
+use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeLevels, BtreeTrans,
+                         CommitFlags, TransAttempt, UpdateTriggerFlags};
+use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
+use crate::data::ec::create::WidenCache;
+use crate::data::ec::trigger::stripe_header_mut;
+use crate::data::moving::{MoveStats, MovingCtxt};
+use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::errcode::{ret_to_c, BchError};
 use crate::namei::inum_snapshot_to_path;
 use crate::fs::Fs;
+use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
 use crate::locking::Lock;
 use crate::sb::counters::events;
+use crate::util::kthread::Kthread;
 use crate::util::Printbuf;
-use crate::bch_err;
+use crate::{bch_err, SPOS_MAX};
 use core::ffi::c_int;
+use core::ops::Range;
 use cstruct_macros::c_export;
 
 /// The scan types' names, by type: C's bch2_rebalance_scan_strs[].
@@ -147,6 +157,7 @@ fn cookie_generation(k: BkeySC<'_>) -> u64 {
 
 /// A requested scan as the reconcile thread found it: its cookie, at the
 /// generation it was then.
+#[derive(Clone, Copy)]
 pub struct ScanCookie {
     pub scan:   c::reconcile_scan,
     pos:        c::bpos,
@@ -254,7 +265,223 @@ impl Fs {
     }
 }
 
-// ── C's, until work.c converts ───────────────────────────────────────────
+// ── Doing them ───────────────────────────────────────────────────────────
+//
+// A scan brings each key it covers in line with its options -
+// update_reconcile_opts(), which queues the work the key now needs - in an
+// attempt per key, committed. It stops (reconcile_scan_stop) if the thread's
+// told to or reconcile's been disabled, its cookie left for the next pass to
+// start again.
+//
+// Each scan counts what it saw in the scan stats, and sets their position as
+// it goes, for the moving contexts' listing - the pass made them the
+// context's.
+
+const NO_ENOSPC: CommitFlags = CommitFlags::NO_ENOSPC;
+
+fn scan_stats(fs: &Fs) -> &MoveStats {
+    MoveStats::from_c(&fs.reconcile.scan_stats)
+}
+
+fn stop(fs: &Fs) -> Result<(), BchError> {
+    if Kthread::should_stop() || !fs.reconcile_enabled() {
+        return Err(c::bch_errcode::BCH_ERR_reconcile_scan_stop.into());
+    }
+    Ok(())
+}
+
+impl ScanCookie {
+    /// Do the scan, then complete it - not a pending scan, which the pass
+    /// completes after its pending phases. The sectors it saw, plus one, so a
+    /// pass that made work for the next doesn't wait - none if it didn't run.
+    ///
+    /// Not a scan the option change in progress has requested: now it would
+    /// see the change half applied, and could complete the cookie - so not
+    /// until it's settled, and opt_change_scan_post()'s wakeup brings the
+    /// thread back.
+    pub fn run<'f>(self, ctxt: &MovingCtxt<'f>, s: &mut PerSnapshotIoOpts, last_flushed: &mut WbMaybeFlush)
+        -> Result<u64, BchError>
+    {
+        use c::ReconcileScanRef as S;
+        let fs: &'f Fs = ctxt.trans().fs();
+
+        if fs.scan_in_flight(self.pos.offset) {
+            return Ok(0);
+        }
+
+        let stats = scan_stats(fs);
+        stats.reset(c"reconcile_scan");
+        ctxt.set_stats(stats);
+
+        let scan = &self.scan;
+        match scan.get() {
+            Ok(S::fs(_))       => scan_fs(ctxt, scan, s, false)?,
+            Ok(S::metadata(_)) => scan_fs(ctxt, scan, s, true)?,
+            Ok(S::device(&d))  => scan_device(ctxt, scan, d, last_flushed)?,
+            Ok(S::stripes(_))  => scan_stripes(ctxt)?,
+            Ok(S::inum(&i))    => scan_btree(ctxt, scan, s, c::btree_id::extents, 0..1,
+                                             pos(i, 0), pos(i, u64::MAX))?,
+            Ok(S::pending(_)) | Err(_) => {}
+        }
+
+        if !matches!(scan.get(), Ok(S::pending(_))) {
+            self.complete(ctxt.trans())?;
+        }
+        Ok(stats.sectors_seen() + 1)
+    }
+}
+
+/// Every btree's node pointers, and with @metadata unset the extents' and
+/// reflink btrees' leaves.
+fn scan_fs(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, s: &mut PerSnapshotIoOpts, metadata: bool)
+    -> Result<(), BchError>
+{
+    let fs = ctxt.trans().fs();
+    fs.reconcile.progress.init_masks(fs, None, if metadata { 0 } else { !0 }, !0);
+
+    for btree in 0..fs.btree_id_nr_alive() {
+        if fs.btree_id_root(btree).is_none() {
+            continue;
+        }
+        let btree = c::btree_id(btree);
+        let leaves = !metadata && (btree == c::btree_id::extents || btree == c::btree_id::reflink);
+        scan_btree(ctxt, scan, s, btree, u32::from(!leaves)..c::BTREE_MAX_DEPTH, POS_MIN, SPOS_MAX)?;
+    }
+    Ok(())
+}
+
+/// @btree's keys at @levels, from @start to @end. An inode's - a scan of the
+/// extents from a nonzero inode - follows its reflink pointers that may
+/// update options, to the indirect extents they share.
+fn scan_btree(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, s: &mut PerSnapshotIoOpts, btree: c::btree_id,
+              levels: Range<u32>, start: c::bpos, end: c::bpos) -> Result<(), BchError>
+{
+    let trans = ctxt.trans();
+    let fs = trans.fs();
+    let res = DiskReservation::new(fs);
+
+    BtreeLevels { btree, levels, start, end }.for_each_commit(trans, Some(&res), NO_ENOSPC, |t, iter, level, k| {
+        ctxt.stats().set_pos(c::bbpos { btree: iter.btree(), pos: iter.pos() });
+        fs.reconcile.progress.update(t, iter)?;
+        scan_stats(fs).add_sectors_seen(if level == 0 { k.k.size.into() } else { fs.btree_sectors().into() });
+        res.put();
+        stop(fs)?;
+
+        let opts = get_io_opts(t, Some(&mut **s), k)?;
+        update_opts(t, Some(&mut **s), &opts, iter, level, k, scan)?;
+
+        if let Some(refs) = k.arm::<c::ReflinkP>()
+            .filter(|p| start.inode != 0 && p.v().may_update_options())
+            .map(|p| p.refd()) {
+            t.ignore_restarts(|trans| scan_indirect(trans, scan, &res, refs, s, &opts))?;
+        }
+        Ok(())
+    })
+}
+
+/// The indirect extents a reflink pointer holds references on, @refs, given
+/// @opts - its inode's: do_reconcile_scan_indirect().
+fn scan_indirect(trans: &BtreeTrans<'_>, scan: &c::reconcile_scan, res: &DiskReservation<'_>, refs: Range<u64>,
+                 s: &mut PerSnapshotIoOpts, opts: &c::bch_inode_opts) -> Result<(), BchError>
+{
+    let mut iter = BtreeIter::new(trans, c::btree_id::reflink, pos(0, refs.start),
+                                  BtreeIterFlags::INTENT | BtreeIterFlags::NOT_EXTENTS);
+    iter.for_each_commit(trans, Some(res), NO_ENOSPC, |t, iter, k| {
+        if bpos_ge(k.k.start_pos(), pos(0, refs.end)) {
+            return Err(c::bch_errcode::BCH_ERR_fc_break.into());
+        }
+        res.put();
+        update_opts(t, Some(&mut **s), opts, iter, 0, k, scan)
+    })
+}
+
+/// Device @dev's data, through its backpointers: what a change to its state
+/// or durability changes.
+fn scan_device(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, dev: u32, last_flushed: &mut WbMaybeFlush)
+    -> Result<(), BchError>
+{
+    let trans = ctxt.trans();
+    let fs = trans.fs();
+    let mut bps = BpScanIter::new(c::btree_id::backpointers, pos(dev.into(), 0), None);
+
+    bps.for_each(trans, pos(dev.into(), u64::MAX), last_flushed.borrow(), |t, bp, last_flushed| {
+        ctxt.stats().set_pos(c::bbpos { btree: c::btree_id::backpointers, pos: bp.k.p });
+        stop(fs)?;
+        scan_bp(t, scan, bp, last_flushed)?;
+        t.commit(Some(&DiskReservation::new(fs)), NO_ENOSPC)
+    })
+}
+
+/// What backpointer @bp points to - not an erasure coded extent: it's
+/// handled at its stripe.
+fn scan_bp(t: &TransAttempt<'_, '_>, scan: &c::reconcile_scan, bp: BkeySC<'_, c::Backpointer>,
+           last_flushed: WbFlush<'_>) -> Result<(), BchError>
+{
+    if bp.v().erasure_coded() {
+        return Ok(());
+    }
+
+    let fs = t.fs();
+    let level = bp.v().level.into();
+    let mut iter = BtreeIter::uninit();
+    let Some((iter, k)) = backpointer_get_key(t, bp, &mut iter, BtreeIterFlags::INTENT, last_flushed)? else {
+        return Ok(());
+    };
+
+    scan_stats(fs).add_sectors_seen(if level == 0 { k.k.size.into() } else { fs.btree_sectors().into() });
+    let opts = get_io_opts(t, None, k)?;
+    update_opts(t, None, &opts, iter, level, k, scan)
+}
+
+/// The stripes' can_widen, against the RW members their disk labels have
+/// now - what a device's state changing changes.
+fn scan_stripes(ctxt: &MovingCtxt<'_>) -> Result<(), BchError> {
+    let trans = ctxt.trans();
+    let fs = trans.fs();
+    let mut cache = WidenCache::new()?;
+    fs.reconcile.progress.init_masks(fs, None, 1 << c::btree_id::stripes.0, 0);
+
+    let mut iter = BtreeIter::new(trans, c::btree_id::stripes, POS_MIN, BtreeIterFlags::PREFETCH);
+    iter.for_each_commit(trans, None, NO_ENOSPC, |t, iter, k| {
+        ctxt.stats().set_pos(c::bbpos { btree: iter.btree(), pos: iter.pos() });
+        fs.reconcile.progress.update(t, iter)?;
+        scan_stats(fs).add_sectors_seen(fs.btree_sectors().into());
+        stop(fs)?;
+
+        let Some(s) = k.arm::<c::Stripe>() else { return Ok(()) };
+        let want = cache.can_widen(fs, s.v())?;
+        if s.v().can_widen() != want {
+            let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty())?;
+            stripe_header_mut(&mut u).bits.set_can_widen(want);
+        }
+        Ok(())
+    })
+}
+
+/// update_reconcile_opts(), for a scan: traced as the scan's.
+fn update_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>, opts: &c::bch_inode_opts,
+               iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>, scan: &c::reconcile_scan) -> Result<(), BchError>
+{
+    let fs = t.fs();
+    let sectors = if level == 0 { k.k.size.into() } else { fs.btree_sectors().into() };
+    let msg = |out: &mut Printbuf| write!(out, "{}", k.to_text(fs));
+
+    macro_rules! trace {
+        ($(($n:ident)),* $(,)?) => { crate::paste! {
+            match scan.type_() {
+                $(c::reconcile_scan_type::[<RECONCILE_SCAN_ $n>] =>
+                    fs.event_add_trace(events::[<reconcile_scan_ $n>], sectors, msg),)*
+            }
+        } };
+    }
+    c::RECONCILE_SCAN_TYPES!(trace);
+
+    update_reconcile_opts(t, s, opts, iter, level, k, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change)
+}
+
+// ── C's ──────────────────────────────────────────────────────────────────
+//
+// opts.c's and dev.c's, until they're Rust.
 
 #[c_export]
 pub fn bch2_set_reconcile_needs_scan_pre(c: &Fs, s: c::reconcile_scan) -> c_int {
@@ -267,22 +494,6 @@ pub fn bch2_set_reconcile_needs_scan_post(c: &Fs, s: c::reconcile_scan) -> c_int
 }
 
 #[c_export]
-pub fn bch2_reconcile_scan_in_flight(c: &Fs, cookie: u64) -> bool {
-    c.scan_in_flight(cookie)
-}
-
-#[c_export]
-pub fn bch2_reconcile_scan_decode(c: &Fs, cookie: u64) -> c::reconcile_scan {
-    c::reconcile_scan::at_cookie(c, cookie)
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_reconcile_scan_to_text(out: &mut Printbuf, c: &Fs, s: c::reconcile_scan) {
-    s.to_text(out, c)
-}
-
-#[c_export]
 pub fn bch2_set_reconcile_needs_scan(c: &Fs, s: c::reconcile_scan, wakeup: bool) -> c_int {
     ret_to_c(c.request_scan(s, wakeup))
 }
@@ -292,12 +503,4 @@ pub fn bch2_set_reconcile_needs_scan(c: &Fs, s: c::reconcile_scan, wakeup: bool)
 #[c_export]
 pub fn bch2_set_fs_needs_reconcile(c: &Fs) -> c_int {
     ret_to_c(c.request_scan(c::reconcile_scan::fs(), true))
-}
-
-/// The scan at @pos, started at @generation, done: ScanCookie::complete().
-#[c_export]
-pub fn bch2_reconcile_scan_complete(trans: &BtreeTrans<'_>, pos: c::bpos, generation: u64) -> c_int {
-    let fs = trans.fs();
-    let cookie = ScanCookie { scan: c::reconcile_scan::at_cookie(fs, pos.offset), pos, generation };
-    ret_to_c(cookie.complete(trans).map(|_| ()))
 }

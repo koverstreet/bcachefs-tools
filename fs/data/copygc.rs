@@ -22,7 +22,8 @@ impl c::bch_fs_copygc {
         unsafe { core::ptr::read_volatile(&raw const self.running) }
     }
 
-    fn run_count(&self) -> u32 {
+    /// The runs it's finished.
+    pub fn run_count(&self) -> u32 {
         // SAFETY: a u32, written whole
         unsafe { core::ptr::read_volatile(&raw const self.run_count) }
     }
@@ -46,6 +47,16 @@ impl Fs {
             }
         }
     }
+
+    /// Until a copygc run ends after @run_count, or this kthread's told to
+    /// stop: the run count then. Freezable, as copygc freezes in place; idle,
+    /// as a run can take longer than the hung task timeout.
+    pub fn copygc_wait_run(&self, run_count: u32) -> u32 {
+        let cg = &self.copygc;
+        let Ok(()) = cg.run_done.wait_until(Sleep::IDLE.freezable(),
+                                            || (cg.run_count() != run_count || Kthread::should_stop()).then_some(()));
+        cg.run_count()
+    }
 }
 
 /// A copygc run's ended - running cleared, run_count bumped: its waiters
@@ -63,15 +74,4 @@ pub fn bch2_copygc_wait_not_running(c: &Fs) {
     let cg = &c.copygc;
     let _ = cg.run_done.wait_until(Sleep::INTERRUPTIBLE.freezable(),
                                    || (!cg.running() || Kthread::should_stop()).then_some(()));
-}
-
-/// Until a copygc run ends after @run_count, or this kthread's told to stop:
-/// the run count then. Freezable, as copygc freezes in place; idle, as a run
-/// can take longer than the hung task timeout.
-#[c_export]
-pub fn bch2_copygc_wait_run(c: &Fs, run_count: u32) -> u32 {
-    let cg = &c.copygc;
-    let Ok(()) = cg.run_done.wait_until(Sleep::IDLE.freezable(),
-                                        || (cg.run_count() != run_count || Kthread::should_stop()).then_some(()));
-    cg.run_count()
 }

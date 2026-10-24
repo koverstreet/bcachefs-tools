@@ -649,7 +649,7 @@ pub fn resume_propagate(trans: &BtreeTrans<'_>, op_k: &mut BkeyI) -> Result<(), 
      * carry the new options would find nothing to do.
      */
     commit_do(trans, None, CommitFlags::NO_ENOSPC, |t| needs_scan(t, inum))?;
-    unsafe { c::rust_bch2_reconcile_wakeup(fs.as_ptr()) };
+    fs.reconcile_wakeup();
     Ok(())
 }
 
@@ -733,7 +733,7 @@ impl c::inode_opt_change {
         };
 
         if self.reconcile_changed {
-            unsafe { c::rust_bch2_reconcile_wakeup(trans.fs().as_ptr()) };
+            trans.fs().reconcile_wakeup();
         }
         ret
     }

@@ -399,9 +399,11 @@ pub fn extent_rebalance_v1_to_text(out: &mut Printbuf, fs: Option<&Fs>, r: &c::b
 
 /// What it needs, then its options: bch2_extent_reconcile_to_text().
 pub fn extent_reconcile_to_text(out: &mut Printbuf, fs: Option<&Fs>, r: &c::bch_extent_reconcile) {
+    macro_rules! names {
+        ($(($name:tt)),* $(,)?) => { [$(stringify!($name)),*] };
+    }
     write!(out, "need_rb=");
-    // SAFETY: C's NULL-terminated table of the BCH_RECONCILE_OPTS() names
-    unsafe { out.prt_bitflags(c::bch2_reconcile_opts.as_ptr(), r.need_rb().into()) };
+    out.bitflags(&c::BCH_RECONCILE_OPTS!(names), r.need_rb().into());
     if r.hipri() != 0 {
         write!(out, " hipri");
     }

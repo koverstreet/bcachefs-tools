@@ -25,7 +25,7 @@ use core::mem::size_of;
 use cstruct_macros::c_export;
 
 /// Option @o's need_rb bit.
-fn rb_bit(o: c::bch_reconcile_opts) -> u8 {
+pub(crate) fn rb_bit(o: c::bch_reconcile_opts) -> u8 {
     1 << o.0
 }
 

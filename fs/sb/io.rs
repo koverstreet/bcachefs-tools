@@ -751,7 +751,7 @@ pub fn bch2_latest_compatible_version(v: c::bcachefs_metadata_version) -> c::bca
 impl Fs {
     /// Whether features of @version may be used, without asking:
     /// bch2_incompat_feature_allowed().
-    fn incompat_feature_allowed(&self, version: c::bcachefs_metadata_version) -> bool {
+    pub(crate) fn incompat_feature_allowed(&self, version: c::bcachefs_metadata_version) -> bool {
         version.0 <= self.sb.version_incompat.get().into() ||
             (self.feature(c::bch_sb_feature::BCH_FEATURE_incompat_version_field) &&
              version.0 <= self.sb.version_incompat_allowed.get().into())

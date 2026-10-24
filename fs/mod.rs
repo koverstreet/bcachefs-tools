@@ -167,8 +167,10 @@ pub mod data {
     pub mod reconcile {
         pub mod check;
         pub mod needs_reconcile;
+        pub mod plan;
         pub mod scan;
         pub mod trigger;
+        pub mod work;
     }
     pub mod reflink;
 }

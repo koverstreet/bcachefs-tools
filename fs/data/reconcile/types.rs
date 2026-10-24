@@ -4,10 +4,15 @@
 
 use crate::cstructs::c;
 use crate::data::reconcile::scan::OptChangeScans;
-use crate::locking::Lock;
+use crate::data::reconcile::work::Status;
+use crate::locking::{Lock, SeqLock};
 use crate::new_lock;
+use crate::data::reconcile::work::{stripes_pending_new, StripesPending};
 use crate::types::{RustOnly, rust_only};
-use core::ffi::{c_int, c_uint};
+use crate::util::alloc::KBox;
+use crate::util::kthread::Kthread;
+use core::pin::Pin;
+use core::sync::atomic::{AtomicBool, AtomicI32};
 use cstruct_macros::{CStruct, Init, TypeInfo};
 use pin_init::pin_data;
 
@@ -15,28 +20,23 @@ use pin_init::pin_data;
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_reconcile {
-    #[c("struct task_struct __rcu *thread")]
-    pub thread: *mut c::task_struct,
     /*
-     * @thread being set means we started one and haven't stopped it, not
-     * that it's running: it also exits on its own if do_reconcile() fails.
-     * Nonzero iff it did.
+     * The thread, from start to stop - which doesn't mean it's running: it
+     * also exits on its own if a pass fails, with thread_exit_ret its error
      */
-    pub thread_exit_ret: c_int,
-    pub kick: u32,
+    #[pin]
+    #[init(RustOnly::new(new_lock!(None)))]
+    pub(crate) thread: rust_only!(Lock<c::spinlock_t, Option<Kthread>>),
+    #[pin]
+    #[init(RustOnly::new(AtomicI32::new(0)))]
+    pub(crate) thread_exit_ret: rust_only!(AtomicI32),
 
-    pub running: bool,
-    pub wait_iotime_start: u64,
-    pub wait_iotime_end: u64,
-    pub wait_wallclock_start: u64,
-
-    pub phase: c_uint,
-    pub work_pos: c::bbpos,
+    /* What it's doing, for sysfs */
+    #[pin]
+    #[init(RustOnly::new(SeqLock::new(Status::new())))]
+    pub(crate) status: rust_only!(SeqLock<Status>),
     pub work_stats: c::bch_move_stats,
     pub progress: c::progress_indicator,
-
-    pub scan_start: c::bbpos,
-    pub scan_end: c::bbpos,
     pub scan_stats: c::bch_move_stats,
 
     /*
@@ -53,15 +53,18 @@ pub struct bch_fs_reconcile {
      * carries on with everything else and goes idle once they're all
      * that's left, instead of retrying them back to back. Stripes have no
      * on-disk pending state, as extents do; in memory, a remount retries
-     * each once. Under stripes_pending_lock: the reconcile thread parks and
-     * tests stripes, and so do its phys threads, one per rotational device,
-     * all at once, through stripes' backpointers.
+     * each once. Read without the lock; the reconcile thread and its phys
+     * threads, one per rotational device, park stripes all at once, under
+     * it. Boxed: a Cuckoo is cacheline aligned, past what a RustOnly holds.
      */
-    pub stripes_pending: c::cuckoo_u64,
-    pub stripes_pending_lock: c::spinlock_t,
-    pub stripes_pending_copygc_run_count: u32,
+    #[pin]
+    #[init(RustOnly::new(stripes_pending_new()))]
+    pub(crate) stripes_pending: rust_only!(Pin<KBox<StripesPending>>),
 
-    pub on_battery: bool,
+    /* Written by the power supply notifier */
+    #[pin]
+    #[init(RustOnly::new(AtomicBool::new(false)))]
+    pub(crate) on_battery: rust_only!(AtomicBool),
     #[cfg(CONFIG_POWER_SUPPLY)]
     pub power_notifier: c::notifier_block,
 }

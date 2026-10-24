@@ -70,16 +70,6 @@ static inline struct bch_backpointer rb_bp(enum btree_id btree, unsigned level, 
 	};
 }
 
-static inline bool extent_has_rotational(struct bch_fs *c, struct bkey_s_c k)
-{
-	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
-
-	bkey_for_each_ptr(ptrs, ptr)
-		if (bch2_dev_rotational(c, ptr->dev))
-			return true;
-	return false;
-}
-
 static inline struct per_snapshot_io_opts per_snapshot_io_opts_init(struct bch_fs *c)
 {
 	return (struct per_snapshot_io_opts) {

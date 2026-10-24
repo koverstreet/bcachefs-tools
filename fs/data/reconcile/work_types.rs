@@ -3,12 +3,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::errcode::BchError;
-use crate::fs::Fs;
-use crate::util::ffi::c_char;
-use crate::util::Printbuf;
 use core::ffi::c_uint;
-use cstruct_macros::{CStruct, TypeInfo, c_enum, c_extern, c_typedef, c_xmacro, tagged_union};
+use cstruct_macros::{CStruct, TypeInfo, c_enum, c_typedef, c_xmacro, tagged_union};
 
 c_xmacro! {
     RECONCILE_SCAN_TYPES(x) {
@@ -59,30 +55,3 @@ tagged_union! {
     }
 }
 
-c_extern! {
-    pub static bch2_reconcile_opts: [*const c_char; 0];
-    pub fn rust_bch2_reconcile_wakeup(c: *mut c::bch_fs);
-    pub fn bch2_reconcile_status_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
-    pub fn bch2_reconcile_scan_pending_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
-}
-
-impl Fs {
-    /// Kick the reconcile thread.
-    pub fn reconcile_wakeup(&self) {
-        unsafe { rust_bch2_reconcile_wakeup(self.as_ptr()) }
-    }
-
-    /// Have reconcile scan for pending work, and kick it: as
-    /// bch2_reconcile_pending_wakeup().
-    pub fn reconcile_pending_wakeup(&self) -> Result<(), BchError> {
-        self.request_scan(c::reconcile_scan::from_arm(c::reconcile_scan_pending {}), true)
-    }
-
-    pub fn reconcile_status_to_text(&self, out: &mut Printbuf) {
-        unsafe { bch2_reconcile_status_to_text(out.as_raw(), self.as_ptr()) }
-    }
-
-    pub fn reconcile_scan_pending_to_text(&self, out: &mut Printbuf) {
-        unsafe { bch2_reconcile_scan_pending_to_text(out.as_raw(), self.as_ptr()) }
-    }
-}

@@ -204,7 +204,8 @@ impl c::progress_indicator {
         self.init_masks(fs, Some(msg), leaf_mask, inner_mask)
     }
 
-    fn init_masks(&self, fs: &Fs, msg: Option<&'static CStr>, leaf_mask: u64, inner_mask: u64) {
+    /// init_mask(), quietly with no @msg.
+    pub(crate) fn init_masks(&self, fs: &Fs, msg: Option<&'static CStr>, leaf_mask: u64, inner_mask: u64) {
         let total = total_nodes(fs, leaf_mask, inner_mask);
         let new = ProgressState::new(msg, c::bch_progress_units::BCH_PROGRESS_UNITS_nodes, total);
         self.state.write(|s| *s = new);

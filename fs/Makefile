@@ -104,7 +104,6 @@ bcachefs-y		:=			\
 	data/nocow_locking.o			\
 	data/read.o				\
 	data/reconcile/trigger.o		\
-	data/reconcile/work.o			\
 	data/update.o				\
 	data/write.o				\
 	debug/debug.o				\
