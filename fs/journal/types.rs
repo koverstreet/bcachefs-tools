@@ -3,9 +3,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{Atomic64, CacheAligned, DArray, Fifo, c_default};
+use crate::types::{CacheAligned, DArray, Fifo, c_default};
 use crate::util::vstructs::Head;
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
+use core::sync::atomic::AtomicI64;
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct};
 use nestify::nest;
 
@@ -383,15 +384,13 @@ nest! {
         pub discard_wq: *mut c::workqueue_struct,
 
         /* Sequence number of most recent journal entry (last entry in @pin) */
-        #[c("atomic64_t seq")]
-        pub seq: Atomic64,
+        pub seq: AtomicI64,
 
         pub seq_write_started: u64,
         /* seq, last_seq from the most recent journal entry successfully written */
         pub seq_ondisk: u64,
         pub flushed_seq_ondisk: u64,
-        #[c("atomic64_t flushing_seq")]
-        pub flushing_seq: Atomic64,
+        pub flushing_seq: AtomicI64,
         pub last_seq_ondisk: u64,
         pub err_seq: u64,
         pub last_empty_seq: u64,

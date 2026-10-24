@@ -22,7 +22,6 @@ use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::locking::Lock;
-use crate::types::Atomic64;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError};
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::sleep::Sleep;
@@ -30,7 +29,7 @@ use crate::util::vstructs::Validated;
 use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
-use core::sync::atomic::Ordering::Relaxed;
+use core::sync::atomic::{AtomicI64, Ordering::Relaxed};
 use cstruct_macros::{c_export, c_extern};
 
 c_extern! {
@@ -73,7 +72,7 @@ impl MoveStats {
         self.0.as_ptr()
     }
 
-    fn counter(&self, f: impl FnOnce(*mut c::bch_move_stats) -> *mut Atomic64) -> &Atomic64 {
+    fn counter(&self, f: impl FnOnce(*mut c::bch_move_stats) -> *mut AtomicI64) -> &AtomicI64 {
         // SAFETY: a field of the stats, which live as long as we do
         unsafe { &*f(self.raw()) }
     }

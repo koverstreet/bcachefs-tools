@@ -5,10 +5,10 @@
 use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::util::Printbuf;
-use crate::types::{Atomic64, DArray, c_default};
+use crate::types::{DArray, c_default};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_void};
-use core::sync::atomic::AtomicI32;
+use core::sync::atomic::{AtomicI32, AtomicI64};
 use cstruct_macros::{CStruct, c_extern, c_typedef, TypeInfo};
 use nestify::nest;
 
@@ -34,20 +34,13 @@ nest! {
             },
         },
 
-        #[c("atomic64_t keys_moved")]
-        pub keys_moved: Atomic64,
-        #[c("atomic64_t keys_raced")]
-        pub keys_raced: Atomic64,
-        #[c("atomic64_t sectors_seen")]
-        pub sectors_seen: Atomic64,
-        #[c("atomic64_t sectors_moved")]
-        pub sectors_moved: Atomic64,
-        #[c("atomic64_t sectors_raced")]
-        pub sectors_raced: Atomic64,
-        #[c("atomic64_t sectors_error_corrected")]
-        pub sectors_error_corrected: Atomic64,
-        #[c("atomic64_t sectors_error_uncorrected")]
-        pub sectors_error_uncorrected: Atomic64,
+        pub keys_moved: AtomicI64,
+        pub keys_raced: AtomicI64,
+        pub sectors_seen: AtomicI64,
+        pub sectors_moved: AtomicI64,
+        pub sectors_raced: AtomicI64,
+        pub sectors_error_corrected: AtomicI64,
+        pub sectors_error_uncorrected: AtomicI64,
         pub devs_error_uncorrected: c::bch_devs_mask,
     }
 }

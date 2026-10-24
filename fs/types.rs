@@ -6,9 +6,10 @@ use crate::cstructs::c;
 use crate::locking::{Lock, LockedBy, MutexNoio, PercpuRwsemNoio};
 use crate::util::percpu::{Counters, PerCpu};
 use crate::util::vstructs::Head;
-use crate::types::{Atomic64, GenRadix, RustOnly, bits_to_longs, c_default, rust_only};
+use crate::types::{GenRadix, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
+use core::sync::atomic::AtomicI64;
 use cstruct_macros::{c_const, c_enum, c_rcu_array, c_xmacro, CStruct, Fieldwise, Init, TypeInfo};
 use pin_init::pin_data;
 
@@ -355,8 +356,7 @@ pub struct bch_dev {
      */
     pub mi: c::bch_member_cpu,
     pub btree_allocated_bitmap_gc: u64,
-    #[c("atomic64_t errors[BCH_MEMBER_ERROR_NR]")]
-    pub errors: [Atomic64; c::BCH_MEMBER_ERROR_NR as usize],
+    pub errors: [AtomicI64; c::BCH_MEMBER_ERROR_NR as usize],
     /// Written racing C's plain reads and stores, as C's are: atomic here,
     /// so Rust's are through a shared bch_dev.
     #[c("unsigned long write_errors_start")]
@@ -423,8 +423,7 @@ pub struct bch_dev {
     pub discard_fast: c::darray_u64,
     pub discard_fast_lock: c::mutex,
 
-    #[c("atomic64_t rebalance_work")]
-    pub rebalance_work: Atomic64,
+    pub rebalance_work: AtomicI64,
 
     pub journal: c::journal_device,
     pub prev_journal_sector: u64,
@@ -432,8 +431,7 @@ pub struct bch_dev {
     pub io_error_work: c::work_struct,
 
     /* The rest of this all shows up in sysfs */
-    #[c("atomic64_t cur_latency[2]")]
-    pub cur_latency: [Atomic64; 2],
+    pub cur_latency: [AtomicI64; 2],
     pub io_latency: [c::bch2_time_stats_quantiles; 2],
 
     pub congested: c::atomic_t,
@@ -743,8 +741,7 @@ pub struct Fs {
     pub chacha20_key: c::bch_key,
     pub chacha20_key_set: bool,
 
-    #[c("atomic64_t key_version")]
-    pub key_version: Atomic64,
+    pub key_version: AtomicI64,
 
     /* MOVE.C */
     pub moving_context_list: c::list_head,
