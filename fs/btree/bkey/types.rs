@@ -741,6 +741,17 @@ macro_rules! bkey_family {
         crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs_mut =>
             crate::btree::bkey::bkey_family_members { crate::data::ptrs::PtrsMutTypes; }]);
     };
+    (BtreePtrs) => {
+        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_btree_ptr =>
+            crate::btree::bkey::bkey_family { @def
+                /// A btree node pointer, BKEY_TYPE_btree_ptr - a key above the
+                /// leaves, or a btree root's: a key armed to it is a
+                /// BkeySC<'_, BtreePtrs>, BkeyS<'_, BtreePtrs>, &BkeyI<BtreePtrs>.
+                BtreePtrs, |k| true;
+            }]);
+        crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_btree_ptr =>
+            crate::btree::bkey::bkey_family_members { crate::data::ptrs::BtreePtrsTypes; }]);
+    };
     (Extents) => {
         crate::c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_extent =>
             crate::btree::bkey::bkey_family { @def
@@ -893,4 +904,5 @@ c::BCH_BKEY_TYPES!(bkey_types);
 
 bkey_family_conv!(AllTypes);
 bkey_family_conv!(crate::data::ptrs::PtrsTypes);
+bkey_family_conv!(crate::data::ptrs::PtrsMutTypes);
 bkey_family_conv!(crate::data::reflink::IndirectTypes);

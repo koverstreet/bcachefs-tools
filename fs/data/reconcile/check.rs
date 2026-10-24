@@ -21,12 +21,12 @@ use crate::alloc::buckets::DiskReservation;
 use crate::alloc::check_backpointers::check_bp_exists;
 use crate::btree::bkey::{bpos_ge, pos, BkeyI, BkeySC, BkeyV, POS_MIN};
 use crate::btree::iter::{commit_do, lockrestart_do, peek_parallel, BtreeIter, BtreeIterFlags, BtreeLevels,
-                         BtreeTrans, CommitFlags, TransAttempt, UpdateTriggerFlags};
+                         BtreeTrans, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::data::ec::create::WidenCache;
 use crate::data::ec::trigger::stripe_header_mut;
-use crate::data::ptrs::{BkeyVPtrs, Ptrs, PtrsMut};
+use crate::data::ptrs::{BkeyVPtrs, BtreePtrs, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::data::reconcile::trigger::{add_reconcile_bp, data_to_rb_work_pos, rb_bp, rb_work_to_data_pos,
                                       BkeyVReconcile};
@@ -363,29 +363,28 @@ fn check_reconcile_work_phys(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
 /// btree node pointer @k, at @level in @iter's btree: its reconcile options
 /// brought up to date, and its reconcile backpointer there and its, or made:
 /// check_reconcile_work_btree_key().
-fn check_reconcile_work_btree_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32, k: BkeySC<'_>)
-    -> Result<(), BchError>
+fn check_reconcile_work_btree_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, level: u32,
+                                  k: BkeySC<'_, BtreePtrs>) -> Result<(), BchError>
 {
     let fs = t.fs();
     let btree = iter.btree();
     let room = c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>();
 
-    let opts = get_io_opts(t, None, k)?;
-    update_reconcile_opts(t, None, &opts, iter, level, k, c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other)?;
+    let opts = get_io_opts(t, None, k.into())?;
+    update_reconcile_opts(t, None, &opts, iter, level, k.into(),
+                          c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other)?;
 
-    let bp_pos = k.arm::<Ptrs>().map_or(pos(0, 0), |kp| kp.reconcile_bp_pos(fs));
+    let bp_pos = k.reconcile_bp_pos(fs);
     // @k, with its reconcile_bp entry made @idx, as the pointer to its node
     let set_bp = |idx: u64| -> Result<(), BchError> {
-        let mut n = t.bkey_reassemble_room(k, room)?;
-        n.reborrow().arm::<PtrsMut>().expect("a btree node pointer, whose entries can be edited")
-            .set_reconcile_bp(fs, idx)
-            .expect("room for a reconcile_bp entry: BKEY_BTREE_PTR_U64s_MAX");
+        let mut n: TransBkey<'_, '_, PtrsMut> = t.bkey_reassemble_room(k, room)?.into();
+        n.set_reconcile_bp(fs, idx).expect("room for a reconcile_bp entry: BKEY_BTREE_PTR_U64s_MAX");
         t.btree_node_update_key_at_pos(btree, level, n)
     };
 
     if fsck_err_on!(t, bp_pos.inode != 0 && bp_pos.offset == 0, id::btree_ptr_with_no_reconcile_bp,
                     "btree ptr with no reconcile \n{}", k.to_text(fs))? {
-        let bp = add_reconcile_bp(t, btree, level, k, bp_pos.inode)?;
+        let bp = add_reconcile_bp(t, btree, level, k.into(), bp_pos.inode)?;
         return set_bp(bp.offset);
     }
 
@@ -398,7 +397,7 @@ fn check_reconcile_work_btree_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>
         return Ok(());
     }
 
-    let want = rb_bp(btree, level, k);
+    let want = rb_bp(btree, level, k.into());
     let mut rb_iter = BtreeIter::new(t, c::btree_id::reconcile_scan, bp_pos, BtreeIterFlags::INTENT);
     let bp_k = rb_iter.peek_slot(t)?.expect("a slot");
     let is_bp = bp_k.k.key_type() == c::bch_bkey_type::KEY_TYPE_backpointer;
@@ -439,13 +438,12 @@ fn check_reconcile_work_btrees(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
         if fs.btree_id_root(btree).is_none() {
             continue;
         }
-        let ptrs = BtreeLevels { btree: c::btree_id(btree), levels: 1..c::BTREE_MAX_DEPTH,
-                                  start: POS_MIN, end: SPOS_MAX };
-        ptrs.for_each_commit(trans, Some(&res), NO_ENOSPC, |t, iter, level, k| {
-            res.put();
-            fs.recovery.progress.update(t, iter)?;
-            check_reconcile_work_btree_key(t, iter, level, k)
-        })?;
+        BtreeLevels { btree: c::btree_id(btree), levels: 1..c::BTREE_MAX_DEPTH, start: POS_MIN, end: SPOS_MAX }
+            .for_each_btree_ptr_commit(trans, Some(&res), NO_ENOSPC, |t, iter, level, k| {
+                res.put();
+                fs.recovery.progress.update(t, iter)?;
+                check_reconcile_work_btree_key(t, iter, level, k)
+            })?;
     }
     Ok(())
 }

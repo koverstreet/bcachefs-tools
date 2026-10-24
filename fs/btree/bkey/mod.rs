@@ -164,7 +164,6 @@ impl c::bkey {
     }
 
     pub fn is_btree_ptr(&self) -> bool {
-        matches!(self.key_type(),
-                 c::bch_bkey_type::KEY_TYPE_btree_ptr | c::bch_bkey_type::KEY_TYPE_btree_ptr_v2)
+        <crate::data::ptrs::BtreePtrs as BkeyFamily>::contains(self)
     }
 }

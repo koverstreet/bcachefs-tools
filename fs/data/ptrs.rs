@@ -19,7 +19,7 @@
 //! C's names for all of it, ptrs_c_export.rs's.
 
 use crate::alloc::disk_groups::Target;
-use crate::btree::bkey::{bkey_family, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut};
+use crate::btree::bkey::{bkey_family, BkeyS, BkeySC, BkeyV, BkeyVal, BkeyVMut, FamilyVal, InFamily, KeyState};
 use crate::btree::bkey_methods::SetError;
 use crate::btree::iter::{BtreeIter, TransAttempt, UpdateTriggerFlags};
 use crate::data::checksum::BCH_NONCE_EXTENT;
@@ -287,6 +287,7 @@ impl PtrsBkey for c::Stripe<Validated> {
 
 bkey_family!(Ptrs);
 bkey_family!(PtrsMut);
+bkey_family!(BtreePtrs);
 
 /// A family of key types with pointers is a PtrsBkey as its member is.
 macro_rules! ptrs_bkey {
@@ -308,6 +309,7 @@ macro_rules! ptrs_bkey {
 }
 c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs => ptrs_bkey { Ptrs, PtrsTyped; }]);
 c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs_mut => ptrs_bkey { PtrsMut, PtrsMutTyped; }]);
+c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_btree_ptr => ptrs_bkey { BtreePtrs, BtreePtrsTyped; }]);
 
 macro_rules! key_types_mask {
     ($mask:ident; $(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
@@ -316,9 +318,17 @@ macro_rules! key_types_mask {
 }
 c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs => key_types_mask { PTRS_KEY_TYPES; }]);
 c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs_mut => key_types_mask { PTRS_MUT_KEY_TYPES; }]);
+c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_btree_ptr => key_types_mask { BTREE_PTR_KEY_TYPES; }]);
 
 const _: () = assert!(PTRS_MUT_KEY_TYPES & !PTRS_KEY_TYPES == 0,
                       "a BKEY_TYPE_ptrs_mut type that isn't BKEY_TYPE_ptrs");
+const _: () = assert!(BTREE_PTR_KEY_TYPES & !PTRS_MUT_KEY_TYPES == 0,
+                      "a BKEY_TYPE_btree_ptr type that isn't BKEY_TYPE_ptrs_mut");
+
+// SAFETY: a btree node pointer's type is PtrsMut's, and Ptrs', by the asserts
+unsafe impl<S: KeyState> InFamily<PtrsTypes> for FamilyVal<BtreePtrsTypes, S> {}
+// SAFETY: as above
+unsafe impl<S: KeyState> InFamily<PtrsMutTypes> for FamilyVal<BtreePtrsTypes, S> {}
 
 /// The extent entries of a key with pointers, in whichever form it's held:
 /// any BkeyV whose value is a PtrsBkey - armed to Ptrs, or to one of them.

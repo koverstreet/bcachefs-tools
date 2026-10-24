@@ -27,6 +27,7 @@ use core::slice;
 use core::ops::ControlFlow;
 
 use c::bpos;
+use crate::data::ptrs::BtreePtrs;
 use crate::util::vstructs::{State, Validated};
 
 /// btree_trans!(fs): a transaction named for the function it's created in.
@@ -462,8 +463,8 @@ impl BtreeNodeRef {
         unsafe { self.raw.as_ref() }.key_i()
     }
 
-    pub(crate) fn key_sc(&self) -> BkeySC<'_> {
-        self.key().into()
+    pub(crate) fn key_sc(&self) -> BkeySC<'_, BtreePtrs> {
+        BkeySC::from(self.key()).arm::<BtreePtrs>().expect("a btree node's key, its pointer")
     }
 
     pub(crate) fn btree_id(&self) -> c::btree_id {
@@ -1314,7 +1315,8 @@ impl<'a, 't> TransAttempt<'a, 't> {
     {
         let mut node_iter = BtreeNodeIter::new(self, btree, pos, 0, level - 1, BtreeIterFlags::empty());
         let b = node_iter.peek_ref()?.expect("the node a btree node pointer points to");
-        let mut n = self.bkey_reassemble_room(b.key_sc(), c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?;
+        let mut n = self.bkey_reassemble_room(b.key_sc(), c::BKEY_BTREE_PTR_U64s_MAX as usize * size_of::<u64>())?
+            .into();
         f(&mut n)?;
         self.btree_node_update_key(node_iter.iter(), b, n, CommitFlags::NO_ENOSPC, false)
     }
@@ -2768,6 +2770,25 @@ pub struct BtreeLevels {
 }
 
 impl BtreeLevels {
+    /// for_each_commit() above the leaves, where every key is a btree node
+    /// pointer: @f gets it as one.
+    pub fn for_each_btree_ptr_commit<'t, F>(
+        &self,
+        trans:    &'t BtreeTrans<'t>,
+        disk_res: Option<&DiskReservation<'_>>,
+        flags:    impl Into<CommitOpts>,
+        mut f:    F,
+    ) -> Result<(), BchError>
+    where
+        F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'t>, u32, BkeySC<'k, BtreePtrs>)
+            -> Result<(), BchError>,
+    {
+        assert!(self.levels.start >= 1, "btree node pointers start at level 1, not {}", self.levels.start);
+        self.for_each_commit(trans, disk_res, flags, |t, iter, level, k| {
+            f(t, iter, level, k.arm::<BtreePtrs>().expect("a key above the leaves, a btree node pointer"))
+        })
+    }
+
     /// Each key in an attempt of its own, committed after @f: as
     /// for_each_max_commit(), @f told the level.
     pub fn for_each_commit<'t, F>(

@@ -326,6 +326,8 @@ c_enum! {
          * whose checksums and block counts follow them
          */
         BKEY_TYPE_ptrs_mut            = 1 << 4,
+        /* A btree node pointer: a key above the leaves, or a btree root's */
+        BKEY_TYPE_btree_ptr           = 1 << 5,
     }
 }
 
@@ -369,7 +371,7 @@ c_xmacro! {
         (hash_whiteout,         4,  BKEY_TYPE_strict_btree_checks, _,
          "Whiteout for hash table btrees (dirents, xattrs) that "
          "preserves hash chain integrity"),
-        (btree_ptr,             5,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut, _,
+        (btree_ptr,             5,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut | BKEY_TYPE_btree_ptr, _,
          "Btree node pointer (v1, legacy)"),
         (extent,                6,  BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut | BKEY_TYPE_extent, _,
          "File data extent with device pointers, checksums, and "
@@ -397,7 +399,7 @@ c_xmacro! {
          "Indirect extent with refcount in the reflink btree"),
         (inline_data,           17, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent, _,
          "Small file data stored inline in the btree"),
-        (btree_ptr_v2,          18, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut, _,
+        (btree_ptr_v2,          18, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_ptrs | BKEY_TYPE_ptrs_mut | BKEY_TYPE_btree_ptr, _,
          "Btree node pointer (v2) with sequence number and "
          "min_key for more efficient traversal"),
         (indirect_inline_data,  19, BKEY_TYPE_strict_btree_checks | BKEY_TYPE_extent | BKEY_TYPE_indirect, _,

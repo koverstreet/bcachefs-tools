@@ -513,8 +513,7 @@ fn test_btree_ptr_stale_dirty_key(
     let b = fs.require(iter.node_at_iter_level(t), ENOENT_bkey_type_mismatch)?;
     fs.ensure(b.level() == 0, ENOENT_bkey_type_mismatch)?;
 
-    let mut update = t.bkey_make_mut_noupdate(b.key_sc())?
-        .arm::<Ptrs>().expect("a btree node's key has pointers");
+    let mut update = t.bkey_make_mut_noupdate(b.key_sc())?;
 
     let mut updated = false;
     for ptr_entry in update.ptrs_mut(t.fs()) {

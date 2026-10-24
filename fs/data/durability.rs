@@ -18,7 +18,7 @@ use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyV, BkeyVal};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
 use crate::c;
 use crate::data::ec::trigger::{ptr_matches_stripe, stripe_block_ptrs};
-use crate::data::ptrs::{crc_is_compressed, BkeyVPtrs, BkeyVPtrsMut, Ptrs, PtrsMut};
+use crate::data::ptrs::{crc_is_compressed, BkeyVPtrs, BkeyVPtrsMut, BtreePtrs, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::util::alloc::flags::GFP_KERNEL;
@@ -301,17 +301,13 @@ pub trait BkeyVDurability: BkeyV<V: BkeyVal<State = Validated>> {
     /// A btree node pointer's durability, total and online - each pointer's
     /// device counted, unlike a data key's, as often as it's pointed to:
     /// bch2_btree_ptr_durability().
-    fn btree_ptr_durability(&self, fs: &Fs) -> c::bkey_durability {
-        let key = self.as_sc();
-        use c::bch_bkey_type as t;
-        assert!(matches!(key.k.key_type(), t::KEY_TYPE_btree_ptr | t::KEY_TYPE_btree_ptr_v2),
-                "btree_ptr_durability() of a {:?}", key.k.key_type());
-
+    fn btree_ptr_durability(&self, fs: &Fs) -> c::bkey_durability
+    where Self: BkeyV<V = BtreePtrs>
+    {
         let mut ret = c::bkey_durability::default();
-        let k = key.arm::<Ptrs>().expect("a btree node pointer has pointers");
         let rcu = read_lock();
 
-        for ptr in k.ptrs(fs) {
+        for ptr in self.ptrs(fs) {
             let dev = u32::from(ptr.dev());
             if ptr.cached() == 0 && dev != c::BCH_SB_MEMBER_INVALID {
                 let d = fs.dev_durability(dev, &rcu) as u8;
@@ -438,7 +434,7 @@ pub unsafe fn bch2_bkey_durability(trans: &BtreeTrans<'_>, k: BkeySC<'_>,
 
 #[c_export]
 pub fn bch2_btree_ptr_durability(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) -> c::bkey_durability {
-    k.btree_ptr_durability(Fs::from_c(c))
+    k.arm::<BtreePtrs>().expect("a btree node pointer").btree_ptr_durability(Fs::from_c(c))
 }
 
 #[c_export]
