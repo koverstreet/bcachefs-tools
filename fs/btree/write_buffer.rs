@@ -38,10 +38,8 @@ impl WbMaybeFlush {
         WbFlush(self.0, PhantomData)
     }
 
-    /// Count a key checked: wb_maybe_flush_inc().
     pub fn inc(&mut self) {
-        // SAFETY: ours
-        unsafe { self.0.as_mut().nr_done += 1 };
+        self.borrow().inc()
     }
 
     pub fn maybe_flush(&mut self, t: &TransAttempt<'_, '_>, referring_k: BkeySC<'_>) -> Result<(), BchError> {
@@ -66,6 +64,12 @@ impl WbFlush<'_> {
 
     pub fn reborrow(&mut self) -> WbFlush<'_> {
         WbFlush(self.0, PhantomData)
+    }
+
+    /// Count a key checked: wb_maybe_flush_inc().
+    pub fn inc(&mut self) {
+        // SAFETY: borrowed
+        unsafe { self.0.as_mut().nr_done += 1 };
     }
 
     /// Before calling what @referring_k refers to missing: flush the write
