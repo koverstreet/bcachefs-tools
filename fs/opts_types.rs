@@ -551,7 +551,7 @@ c_xmacro! {
          OPT_DEVICE | OPT_RUNTIME,
          OPT_STR(bch2_member_states),
          BCH_MEMBER_STATE,              BCH_MEMBER_STATE_rw,
-         "state",       "rw,ro,failed,spare"),
+         NULL,          "Device state"),
         (label,                         u16,
          OPT_DEVICE | OPT_FORMAT | OPT_RUNTIME,
          OPT_FN(bch2_opt_disk_label),
