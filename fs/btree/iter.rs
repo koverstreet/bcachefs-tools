@@ -1623,7 +1623,8 @@ bitflags! {
         const INTERNAL_SNAPSHOT_NODE   = c::btree_iter_update_trigger_flags::BTREE_UPDATE_internal_snapshot_node.bits();
         const NOJOURNAL                = c::btree_iter_update_trigger_flags::BTREE_UPDATE_nojournal.bits();
         const KEY_CACHE_RECLAIM        = c::btree_iter_update_trigger_flags::BTREE_UPDATE_key_cache_reclaim.bits();
-        const NORUN                    = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_norun.bits();
+        const OVERWRITE_TRIGGERED      = c::btree_iter_update_trigger_flags::BTREE_UPDATE_overwrite_triggered.bits();
+        const NORUN                   = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_norun.bits();
         const TRANSACTIONAL            = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_transactional.bits();
         const ATOMIC                   = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_atomic.bits();
         const GC                       = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_gc.bits();
