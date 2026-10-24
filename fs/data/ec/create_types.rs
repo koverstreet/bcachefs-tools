@@ -192,6 +192,9 @@ c_extern! {
                               s: c::bkey_s_c_stripe) -> c_int;
     pub fn bch2_can_form_ec_stripe(c: *mut c::bch_fs, target: c_uint, redundancy: c_uint,
                                    trace: *mut c::printbuf) -> bool;
+    pub fn bch2_disk_label_ec_rw_member_devs(c: *mut c::bch_fs, disk_label: c_uint, devs: *mut c::bch_devs_mask,
+                                             blocksize: c_uint);
+    pub fn bch2_do_stripe_deletes(c: *mut c::bch_fs);
 }
 
 impl Fs {

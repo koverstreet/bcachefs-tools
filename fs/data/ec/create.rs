@@ -1,13 +1,32 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! Making stripes - ec/create.c's, as it converts: so far, the widen cache,
-//! for reconcile's check pass and its stripes scan.
+//! for reconcile's check pass and its stripes scan, and what the stripe
+//! trigger calls.
 
 use crate::c;
 use crate::data::ec::trigger::{stripe_widen_target_nr_data, stripe_widen_value};
 use crate::errcode::{ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::util::alloc::darray_exit;
+
+impl Fs {
+    /// How many RW members disk label @disk_label has - durable, taking user
+    /// data, with buckets of @sectors - that a stripe there could have a
+    /// block on: bch2_disk_label_ec_rw_member_devs()'s, counted.
+    pub fn ec_rw_member_devs_nr(&self, disk_label: u8, sectors: u16) -> u32 {
+        let mut devs = c::bch_devs_mask::default();
+        // SAFETY: our mask, which it fills
+        unsafe { c::bch2_disk_label_ec_rw_member_devs(self.as_ptr(), disk_label.into(), &mut devs, sectors.into()) };
+        devs.d.weight()
+    }
+
+    /// Kick the worker that deletes empty stripes: bch2_do_stripe_deletes().
+    pub fn do_stripe_deletes(&self) {
+        // SAFETY: plain
+        unsafe { c::bch2_do_stripe_deletes(self.as_ptr()) }
+    }
+}
 
 /// How many RW members each (disk_label, sectors) has - the widening target
 /// a stripe there has - looked up once each: C's widen_cache, a darray.
