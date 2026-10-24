@@ -291,7 +291,7 @@ impl Fs {
     }
 
     fn stripe_parked(&self, idx: u64) -> bool {
-        self.reconcile.stripes_pending.contains(idx)
+        self.reconcile.stripes_pending.contains(&idx)
     }
 
     /// Something changed that might let a parked stripe's repair succeed:

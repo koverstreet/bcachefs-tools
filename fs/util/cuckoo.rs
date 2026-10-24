@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! A cuckoo hash table looked up without a lock, under RCU: a set of u64
-//! keys, or a map from u64 keys to entries that hold their own - generic over
-//! its hash, SipHash-1-3 or hash_64()'s golden ratio, and its ways, two or
-//! three. It replaces util/cuckoo.c once its users are Rust.
+//! A cuckoo hash table looked up without a lock, under RCU: a set of u64s, or
+//! a map to entries that hold their own keys - generic over its hash,
+//! SipHash-1-3 or hash_64()'s golden ratio, and its ways, two or three. It
+//! replaces util/cuckoo.c once its users are Rust.
+//!
+//! Keys are std's: an item - the u64, or the entry it points to - is Hash +
+//! Eq, and a lookup takes anything it Borrows, as HashSet::get() does; an
+//! entry's Hash and Eq are its key's.
 //!
 //! # The buffer
 //!
@@ -17,11 +21,11 @@
 //! The hashes. SipHash-1-3, keyed by the seeds, gives a key's slots as if
 //! independent, whatever structure the keys have: two from one hash - i, and
 //! i ^ delta, delta odd, so each is the other's other - and for three ways a
-//! third from a second hash. hash_64() of the key xored with a seed per way
-//! is a multiply each, several times cheaper; but the ways are correlated, so
-//! keys with structure - positions, inode numbers - can collide in every way
-//! under every seed. It's for keys known to be spread, or where a lookup's
-//! cost matters more than a rehash's.
+//! third from a second hash. hash_64() of the key - its words folded into one,
+//! a u64 itself - xored with a seed per way is a multiply each, several times
+//! cheaper; but the ways are correlated, so keys with structure - positions,
+//! inode numbers - can collide in every way under every seed. It's for keys
+//! known to be spread, or where a lookup's cost matters more than a rehash's.
 //!
 //! The ways. Two fill to about half the table, three to most of it, so the
 //! table grows - a rehash, into a buffer twice the size with new seeds -
@@ -74,6 +78,8 @@
 //! is zero sized and every hook a constant.
 
 use arrayvec::ArrayVec;
+use core::borrow::Borrow;
+use core::hash::{Hash, Hasher};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 use core::sync::atomic::{fence, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize};
@@ -113,31 +119,59 @@ type Seeds = [u64; 3];
 pub trait CuckooHash {
     /// @key's slot in each of @W ways, in a table of 2^@bits. For zero @bits -
     /// a Mirror not yet written - any index, in the table or past it.
-    fn slots<const W: usize>(seeds: &Seeds, bits: u32, key: u64) -> [usize; W];
+    fn slots<const W: usize, K: ?Sized + Hash>(seeds: &Seeds, bits: u32, key: &K) -> [usize; W];
 }
 
 pub struct SipHash;
 
 impl CuckooHash for SipHash {
-    fn slots<const W: usize>(seeds: &Seeds, bits: u32, key: u64) -> [usize; W] {
+    fn slots<const W: usize, K: ?Sized + Hash>(seeds: &Seeds, bits: u32, key: &K) -> [usize; W] {
+        let hash = |k0| {
+            let mut h = SipHash13::new(k0, seeds[1]);
+            key.hash(&mut h);
+            h.finish()
+        };
         let mask = (1usize << bits) - 1;
-        let m = key.to_le_bytes();
-        let h = SipHash13::hash(seeds[0], seeds[1], &m);
+        let h = hash(seeds[0]);
         let i = h as usize & mask;
         core::array::from_fn(|w| match w {
             0 => i,
             1 => i ^ (((h >> 32) as usize | 1) & mask),
-            _ => SipHash13::hash(seeds[2], seeds[1], &m) as usize & mask,
+            _ => hash(seeds[2]) as usize & mask,
         })
     }
 }
 
 pub struct GoldenRatio;
 
+/// A key's words folded into one, by hash_64()'s multiply: a u64 key's is
+/// itself.
+struct Fold(u64);
+
+impl Hasher for Fold {
+    fn write(&mut self, bytes: &[u8]) {
+        for w in bytes.chunks(8) {
+            let mut b = [0; 8];
+            b[..w.len()].copy_from_slice(w);
+            self.write_u64(u64::from_le_bytes(b));
+        }
+    }
+
+    fn write_u64(&mut self, w: u64) {
+        self.0 = self.0.wrapping_mul(c::GOLDEN_RATIO_64) ^ w;
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
 impl CuckooHash for GoldenRatio {
-    fn slots<const W: usize>(seeds: &Seeds, bits: u32, key: u64) -> [usize; W] {
+    fn slots<const W: usize, K: ?Sized + Hash>(seeds: &Seeds, bits: u32, key: &K) -> [usize; W] {
+        let mut f = Fold(0);
+        key.hash(&mut f);
         core::array::from_fn(|w| {
-            (key ^ seeds[w]).wrapping_mul(c::GOLDEN_RATIO_64).wrapping_shr(64 - bits) as usize
+            (f.0 ^ seeds[w]).wrapping_mul(c::GOLDEN_RATIO_64).wrapping_shr(64 - bits) as usize
         })
     }
 }
@@ -152,7 +186,10 @@ impl CuckooHash for GoldenRatio {
 pub unsafe trait CuckooItem: Copy {
     type Atomic: Send + Sync;
 
-    fn key(self) -> u64;
+    /// What it is, or points to: hashed and compared as its key.
+    type Target: ?Sized + Hash + Eq;
+
+    fn target(&self) -> &Self::Target;
 
     /// Whether it can go in a table at all.
     fn storable(self) -> bool {
@@ -166,8 +203,9 @@ pub unsafe trait CuckooItem: Copy {
 // SAFETY: an AtomicU64, holding the key complemented: zero is empty
 unsafe impl CuckooItem for u64 {
     type Atomic = AtomicU64;
+    type Target = u64;
 
-    fn key(self) -> u64 {
+    fn target(&self) -> &u64 {
         self
     }
 
@@ -182,11 +220,6 @@ unsafe impl CuckooItem for u64 {
     fn store(a: &AtomicU64, v: Option<u64>, o: Ordering) {
         a.store(v.map_or(0, |k| !k), o)
     }
-}
-
-/// An entry a map points to: its key, which doesn't change while it's in one.
-pub trait CuckooEntry: Sync {
-    fn key(&self) -> u64;
 }
 
 /// A pointer to an entry, as a map holds it.
@@ -206,7 +239,8 @@ unsafe impl<E: Sync> Sync for Entry<E> {}
 
 impl<E> Entry<E> {
     /// # Safety
-    /// @e stays valid, its key unchanged, for as long as it's in a table and
+    /// @e stays valid, its key - what its Hash and Eq see - unchanged, for as
+    /// long as it's in a table and
     /// a grace period after: removed, it's freed only after synchronize_rcu(),
     /// or by kfree_rcu().
     pub unsafe fn new(e: NonNull<E>) -> Self {
@@ -219,14 +253,15 @@ impl<E> Entry<E> {
 }
 
 // SAFETY: an AtomicPtr, null for empty
-unsafe impl<E: CuckooEntry> CuckooItem for Entry<E> {
+unsafe impl<E: Hash + Eq + Sync> CuckooItem for Entry<E> {
     type Atomic = AtomicPtr<E>;
+    type Target = E;
 
-    fn key(self) -> u64 {
+    fn target(&self) -> &E {
         // SAFETY: valid while in a table and a grace period after (new()): a
         // reader had it from a slot in a read-side section, the writer from a
         // slot or new()
-        unsafe { self.0.as_ref() }.key()
+        unsafe { self.0.as_ref() }
     }
 
     fn load(a: &AtomicPtr<E>, o: Ordering) -> Option<Self> {
@@ -246,8 +281,10 @@ unsafe impl<I: CuckooItem> RcuElement for Slot<I> {}
 
 impl<I: CuckooItem> Slot<I> {
     /// @key's item, if this holds it.
-    fn get(&self, key: u64) -> Option<I> {
-        I::load(&self.0, Acquire).filter(|i| i.key() == key)
+    fn get<Q: ?Sized + Eq>(&self, key: &Q) -> Option<I>
+    where I::Target: Borrow<Q>
+    {
+        I::load(&self.0, Acquire).filter(|i| i.target().borrow() == key)
     }
 
     /// The writer's view.
@@ -311,23 +348,27 @@ impl<'a, I: CuckooItem, H: CuckooHash, const W: usize> Table<'a, I, H, W> {
         self.slots.len().trailing_zeros()
     }
 
-    fn index(&self, key: u64) -> [usize; W] {
+    fn index<K: ?Sized + Hash>(&self, key: &K) -> [usize; W] {
         H::slots(self.seeds, self.bits(), key)
     }
 
     /// @key's item, from the slots this buffer's seeds name: for a lookup
     /// whose Mirror was another buffer's.
     #[cold]
-    fn get_raced(&self, key: u64) -> Option<I> {
+    fn get_raced<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> Option<I>
+    where I::Target: Borrow<Q>
+    {
         saw!(self.faults, raced);
         self.index(key).into_iter().find_map(|i| self.slots[i].get(key))
     }
 
     /// Writer: the slot holding @key.
-    fn find_locked(&self, key: u64) -> Option<&'a Slot<I>> {
+    fn find_locked<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> Option<&'a Slot<I>>
+    where I::Target: Borrow<Q>
+    {
         self.index(key).into_iter()
             .map(|i| &self.slots[i])
-            .find(|s| s.load_locked().is_some_and(|i| i.key() == key))
+            .find(|s| s.load_locked().is_some_and(|i| i.target().borrow() == key))
     }
 
     /// Writer: what the table holds.
@@ -337,7 +378,7 @@ impl<'a, I: CuckooItem, H: CuckooHash, const W: usize> Table<'a, I, H, W> {
 
     /// Where @key, which isn't in the table, can go, into @path: one of its
     /// slots, empty, or a chain from one - walk(). False if there's none.
-    fn find_path(&self, key: u64, path: &mut Path) -> bool {
+    fn find_path(&self, key: &I::Target, path: &mut Path) -> bool {
         let own = self.index(key);
         if let Some(&i) = own.iter().find(|&&i| self.slots[i].load_locked().is_none()) {
             path.push(i as u32);
@@ -364,7 +405,7 @@ impl<'a, I: CuckooItem, H: CuckooHash, const W: usize> Table<'a, I, H, W> {
             let Some(item) = self.slots[s].load_locked() else { return true };
 
             let mut next = None;
-            for o in self.index(item.key()) {
+            for o in self.index(item.target()) {
                 if path.contains(&(o as u32)) {
                     continue;
                 }
@@ -383,7 +424,7 @@ impl<'a, I: CuckooItem, H: CuckooHash, const W: usize> Table<'a, I, H, W> {
     /// chain.
     fn insert(&self, item: I, moves: &AtomicU64) -> bool {
         let mut path = Path::new();
-        if !self.find_path(item.key(), &mut path) {
+        if !self.find_path(item.target(), &mut path) {
             return false;
         }
 
@@ -400,7 +441,7 @@ impl<'a, I: CuckooItem, H: CuckooHash, const W: usize> Table<'a, I, H, W> {
     }
 }
 
-/// See the top of the file: of @I - u64 keys, or Entry<E> - hashed by @H, in
+/// See the top of the file: of @I - u64s, or Entry<E> - hashed by @H, in
 /// @W ways, two or three. Zeroed, it's empty, with no buffer: the first
 /// insert allocates one.
 ///
@@ -433,19 +474,25 @@ impl<I: CuckooItem, H: CuckooHash, const W: usize> Cuckoo<I, H, W> {
     const WAYS: () = assert!(W == 2 || W == 3, "cuckoo: two ways or three");
 
     /// @key's item, in a read-side section of its own.
-    pub fn get(&self, key: u64) -> Option<I> {
+    pub fn get<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> Option<I>
+    where I::Target: Borrow<Q>
+    {
         self.get_rcu(key, &read_lock())
     }
 
-    pub fn contains(&self, key: u64) -> bool {
+    pub fn contains<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> bool
+    where I::Target: Borrow<Q>
+    {
         self.get(key).is_some()
     }
 
     /// @key's item, under @g's section.
-    pub fn get_rcu(&self, key: u64, g: &ReadGuard) -> Option<I> {
+    pub fn get_rcu<Q: ?Sized + Hash + Eq>(&self, key: &Q, g: &ReadGuard) -> Option<I>
+    where I::Target: Borrow<Q>
+    {
         let () = Self::WAYS;
         let mirror = self.mirror.load();
-        let slots = H::slots::<W>(&mirror.0, mirror.1, key);
+        let slots = H::slots::<W, Q>(&mirror.0, mirror.1, key);
 
         if let Some(i) = self.probe(key, g, mirror, slots) {
             return Some(i);
@@ -465,7 +512,10 @@ impl<I: CuckooItem, H: CuckooHash, const W: usize> Cuckoo<I, H, W> {
 
     /// @key's item, from @slots - its, under @mirror, which may be another
     /// buffer's - or from the buffer's own if the mirror was stale.
-    fn probe(&self, key: u64, g: &ReadGuard, mirror: (Seeds, u32), slots: [usize; W]) -> Option<I> {
+    fn probe<Q: ?Sized + Hash + Eq>(&self, key: &Q, g: &ReadGuard, mirror: (Seeds, u32), slots: [usize; W])
+        -> Option<I>
+    where I::Target: Borrow<Q>
+    {
         let (seeds, buf) = self.table.read_head(g)?;
         let t = Table::<I, H, W>::new(seeds, buf, &self.faults);
 
@@ -499,9 +549,11 @@ impl<I: CuckooItem, H: CuckooHash, const W: usize> Cuckoo<I, H, W> {
     }
 }
 
-impl<E: CuckooEntry, H: CuckooHash, const W: usize> Cuckoo<Entry<E>, H, W> {
+impl<E: Hash + Eq + Sync, H: CuckooHash, const W: usize> Cuckoo<Entry<E>, H, W> {
     /// @key's entry, for as long as @g's read-side section.
-    pub fn get_entry<'g>(&self, key: u64, g: &'g ReadGuard) -> Option<&'g E> {
+    pub fn get_entry<'g, Q: ?Sized + Hash + Eq>(&self, key: &Q, g: &'g ReadGuard) -> Option<&'g E>
+    where E: Borrow<Q>
+    {
         // SAFETY: in the table during @g's section, so valid until it ends
         // (Entry::new())
         self.get_rcu(key, g).map(|e| unsafe { e.0.as_ref() })
@@ -545,10 +597,10 @@ impl<I: CuckooItem, H: CuckooHash, const W: usize> CuckooWriter<I, H, W> {
     /// the table unchanged, only if it can't allocate.
     pub fn insert(&self, item: I) -> Result<Option<I>, AllocError> {
         let () = Cuckoo::<I, H, W>::WAYS;
-        assert!(item.storable(), "cuckoo: {:#x} can't be in a table", item.key());
+        assert!(item.storable(), "cuckoo: an item that can't be in a table");
 
         let t = self.locked();
-        if let Some(s) = t.as_ref().and_then(|t| t.find_locked(item.key())) {
+        if let Some(s) = t.as_ref().and_then(|t| t.find_locked(item.target())) {
             let old = s.load_locked().expect("found: occupied");
             s.set(item);
             return Ok(Some(old));
@@ -564,7 +616,9 @@ impl<I: CuckooItem, H: CuckooHash, const W: usize> CuckooWriter<I, H, W> {
     }
 
     /// Take @key out: its item, if it was in.
-    pub fn remove(&self, key: u64) -> Option<I> {
+    pub fn remove<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> Option<I>
+    where I::Target: Borrow<Q>
+    {
         let s = self.locked()?.find_locked(key)?;
         let old = s.load_locked();
         s.clear();
@@ -588,7 +642,7 @@ impl<I: CuckooItem, H: CuckooHash, const W: usize> CuckooWriter<I, H, W> {
 
         for s in t.slots {
             let Some(i) = s.load_locked() else { continue };
-            match t.find_locked(i.key()) {
+            match t.find_locked(i.target()) {
                 None => return Err("cuckoo: an item in a slot it doesn't hash to"),
                 Some(f) if !core::ptr::eq(f, s) => return Err("cuckoo: an item in two slots"),
                 Some(_) => nr += 1,

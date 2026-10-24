@@ -51,8 +51,7 @@ use crate::locking::Lock;
 use crate::new_lock;
 use crate::prt;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
-use crate::util::cuckoo::{Cuckoo, CuckooEntry, CuckooHash, CuckooItem, CuckooWriter, Entry, Faults,
-                          GoldenRatio, SipHash};
+use crate::util::cuckoo::{Cuckoo, CuckooHash, CuckooItem, CuckooWriter, Entry, Faults, GoldenRatio, SipHash};
 use crate::util::kernel::{cond_resched, local_clock, random_u64, random_u64_below};
 use crate::util::par::{self, Backend};
 use crate::util::printbuf::{HumanReadable, Printbuf};
@@ -82,15 +81,30 @@ struct TestEntry {
     val: AtomicU64,
 }
 
-impl CuckooEntry for TestEntry {
-    fn key(&self) -> u64 {
-        self.key
+// A map's entry is hashed and compared by its key, and looked up by it
+impl core::hash::Hash for TestEntry {
+    fn hash<S: core::hash::Hasher>(&self, h: &mut S) {
+        self.key.hash(h)
+    }
+}
+
+impl PartialEq for TestEntry {
+    fn eq(&self, o: &Self) -> bool {
+        self.key == o.key
+    }
+}
+
+impl Eq for TestEntry {}
+
+impl core::borrow::Borrow<u64> for TestEntry {
+    fn borrow(&self) -> &u64 {
+        &self.key
     }
 }
 
 /// What the tests put in a table: an item for a key's op, and what an item
 /// found says - 0 for absent, else its value.
-trait TestItem: CuckooItem + Send + 'static {
+trait TestItem: CuckooItem<Target: core::borrow::Borrow<u64>> + Send + 'static {
     /// The entries a map's items point to: four a key, an op putting in the
     /// next, so the value it replaced is told from its own - and one isn't
     /// reused until three more ops on its key, which a lookup holding it sees
@@ -176,18 +190,18 @@ fn model<I: TestItem, H: CuckooHash, const W: usize>(name: &str) -> TestRet {
             assert_eq!(w.insert(item)?.map_or(0, I::value), *want, "{name}: insert of {k:#x}");
             *want = item.value();
         } else {
-            assert_eq!(w.remove(k).map_or(0, I::value), *want, "{name}: remove of {k:#x}");
+            assert_eq!(w.remove(&k).map_or(0, I::value), *want, "{name}: remove of {k:#x}");
             *want = 0;
         }
     }
 
     for (i, &(want, _)) in st.iter().enumerate() {
-        assert_eq!(w.get(key(i)).map_or(0, I::value), want, "{name}: lookup of {:#x}", key(i));
+        assert_eq!(w.get(&key(i)).map_or(0, I::value), want, "{name}: lookup of {:#x}", key(i));
     }
     assert_eq!(w.check().unwrap_or_else(|e| panic!("{name}: {e}")), st.iter().filter(|s| s.0 != 0).count());
 
     w.clear();
-    assert!(w.get(key(1)).is_none(), "{name}: cleared, but not empty");
+    assert!(w.get(&key(1)).is_none(), "{name}: cleared, but not empty");
     Ok(())
 }
 
@@ -317,7 +331,7 @@ fn writer_op<I: TestItem, H: CuckooHash, const W: usize>(
             }
         }
     } else {
-        (w.remove(k).map_or(0, I::value), 0)
+        (w.remove(&k).map_or(0, I::value), 0)
     };
     if got != want {
         fail(fails, "insert or remove", k, seq, want, got);
@@ -391,8 +405,8 @@ fn round<I: TestItem, H: CuckooHash, const W: usize>(table: &str, name: &str, fa
                         }
                         let want = st.expect.load(Relaxed);
                         let got = match &g {
-                            Some(g) => t.get_rcu(k, g),
-                            None    => t.get(k),
+                            Some(g) => t.get_rcu(&k, g),
+                            None    => t.get(&k),
                         }.map_or(0, I::value);
                         fence(Acquire);
                         if st.seq.load(Relaxed) != seq {
@@ -448,7 +462,7 @@ fn round<I: TestItem, H: CuckooHash, const W: usize>(table: &str, name: &str, fa
     let (items, w) = g.parts();
     for (i, st) in keys.iter().enumerate() {
         let k = key(i);
-        assert_eq!(w.get(k).map_or(0, I::value), st.expect.load(Relaxed),
+        assert_eq!(w.get(&k).map_or(0, I::value), st.expect.load(Relaxed),
                    "cuckoo torture, {table}, round {name}: {k:#x} at rest");
     }
     assert_eq!(w.check().unwrap_or_else(|e| panic!("{e}")) as u64, *items);
@@ -493,7 +507,7 @@ fn bench_lookups<H: CuckooHash, const W: usize>(t: &Cuckoo<u64, H, W>, keys: &[u
     -> (u64, u64)
 {
     let start = local_clock();
-    let found = (0..nr).filter(|_| t.get(pick(keys, rng)).is_some()).count() as u64;
+    let found = (0..nr).filter(|_| t.get(&pick(keys, rng)).is_some()).count() as u64;
     (local_clock() - start, core::hint::black_box(found))
 }
 
@@ -523,7 +537,7 @@ fn bench_threads<H: CuckooHash, const W: usize>(
                 wait_start();
                 while local_clock() < end {
                     for _ in 0..256 {
-                        found += t.get(pick(keys, &mut rng)).is_some() as u64;
+                        found += t.get(&pick(keys, &mut rng)).is_some() as u64;
                     }
                     n += 256;
                 }
@@ -542,7 +556,7 @@ fn bench_threads<H: CuckooHash, const W: usize>(
                     let k = pick(members, &mut rng);
                     let mut g = lock.lock();
                     let w = g.published();
-                    w.remove(k);
+                    w.remove(&k);
                     w.insert(k)?;
                     drop(g);
                     n += 2;
@@ -611,7 +625,7 @@ fn bench<H: CuckooHash, const W: usize>(table: &str) -> TestRet {
             let mut g = lock.lock();
             let w = g.published();
             for &k in keys.iter() {
-                w.remove(k);
+                w.remove(&k);
             }
         }
         prt!(&mut msg, "; remove {} ns\n", (local_clock() - start) / n as u64);
