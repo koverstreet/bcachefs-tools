@@ -620,7 +620,9 @@ pub struct Fs {
 
     pub opts: c::bch_opts,
     pub opt_change_lock: c::mutex,
-    pub opt_change_cookie: u32,
+    /// Odd while options change, bumped under opt_change_lock by
+    /// bch2_opt_change_lock()/unlock(); read without it.
+    pub opt_change_cookie: crate::util::projections::Volatile<u32>,
     pub mount_opts: c::bch_opts_mask,
 
     /// The superblock, c->disk_sb, behind sb_lock - Fs::sb_lock() is the way

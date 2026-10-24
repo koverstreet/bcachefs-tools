@@ -256,7 +256,7 @@ pub fn get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_opts {
         ret.set_background_compression_from_inode(false);
     }
 
-    ret.change_cookie = fs.opt_change_cookie;
+    ret.change_cookie = fs.opt_change_cookie.get();
 
     ret.fixups();
     ret
@@ -282,7 +282,7 @@ pub struct PerSnapshotIoOpts(c::per_snapshot_io_opts);
 impl PerSnapshotIoOpts {
     pub fn new(fs: &Fs) -> Self {
         let mut s = c::per_snapshot_io_opts::default();
-        s.fs_io_opts.change_cookie = fs.opt_change_cookie.wrapping_sub(1);
+        s.fs_io_opts.change_cookie = fs.opt_change_cookie.get().wrapping_sub(1);
         PerSnapshotIoOpts(s)
     }
 }
@@ -347,7 +347,7 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_o
             opts
         }
         Some(s) => {
-            if s.fs_io_opts.change_cookie != fs.opt_change_cookie || s.metadata != metadata {
+            if s.fs_io_opts.change_cookie != fs.opt_change_cookie.get() || s.metadata != metadata {
                 s.fs_io_opts = get_fs(fs, metadata);
                 s.metadata   = metadata;
                 s.cur_inum   = 0;

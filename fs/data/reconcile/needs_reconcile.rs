@@ -273,7 +273,7 @@ fn new_needs_rb_allowed(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot
         // the caller took @opt_change_cookie with its options: if they've
         // changed since, the write may rightly not match - and a scan for
         // the new ones is triggered on its own
-        if new_need_rb == 0 || opt_change_cookie != fs.opt_change_cookie {
+        if new_need_rb == 0 || opt_change_cookie != fs.opt_change_cookie.get() {
             return Ok(());
         }
     }
