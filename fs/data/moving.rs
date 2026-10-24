@@ -14,7 +14,9 @@
 //! The context is pinned - it's on c->moving_context_list, its closure waited
 //! on in place - and owns its transaction, trans(), which ratelimit(),
 //! flush_all() and move_extent() unlock: keys borrowed from it are stale
-//! after, as after any unlock.
+//! after, as after any unlock. MovingCtxt owns one; moving through it is
+//! Moving's, a borrow - of a MovingCtxt, or of a context C hands Rust. A write
+//! that outlives the borrow, counted in the context, is a MovingWrite.
 
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt};
@@ -24,7 +26,7 @@ use crate::fs::Fs;
 use crate::locking::Lock;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError};
 use crate::util::ffi::{c_char, Opaque};
-use crate::util::sleep::Sleep;
+use crate::util::sleep::{wake_up, Sleep};
 use crate::util::vstructs::Validated;
 use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
@@ -43,6 +45,9 @@ c_extern! {
     pub fn bch2_moving_ctxt_next_pending_write(ctxt: *mut c::moving_context) -> *mut c::data_update;
     pub fn bch2_evacuate_bucket(ctxt: *mut c::moving_context, bucket_in_flight: *mut c::move_bucket,
                                 bucket: c::bpos, gen: c_int, data_opts: c::data_update_opts) -> c_int;
+    pub fn bch2_evacuate_data(ctxt: *mut c::moving_context, dev: c_uint, start: u64, end: u64) -> c_int;
+    pub fn bch2_evacuate_ec_orphan(ctxt: *mut c::moving_context, ec_idx: u64, ec_block: c_uint,
+                                   start: u64, end: u64) -> c_int;
 }
 
 /// Wake what waits on @ctxt in Rust - its events, as wake_up(&ctxt->wait)
@@ -106,9 +111,42 @@ impl MoveStats {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IoMark(u64);
 
+/// Freed - once what's in flight is done - when it's dropped.
 pub struct MovingCtxt<'a> {
     ctxt: NonNull<c::moving_context>,
     life: PhantomData<(&'a Fs, &'a MoveStats)>,
+}
+
+#[repr(transparent)]
+pub struct Moving<'a>(Opaque<c::moving_context>, PhantomData<(&'a Fs, &'a MoveStats)>);
+
+/// Counted in write_sectors and write_ios, which ratelimit() throttles on,
+/// and a ref on the context's closure, which flush_all() and the context's
+/// teardown wait for. Dropped, it's done: the counts given back, the
+/// context's waiters woken, the ref put.
+#[must_use = "the write is done as soon as it's dropped"]
+pub struct MovingWrite {
+    ctxt:    NonNull<c::moving_context>,
+    sectors: u32,
+}
+
+// SAFETY: it touches only the context's counters, which are atomics, its wait
+// queue and its closure: any thread's. Its closure ref keeps the context.
+unsafe impl Send for MovingWrite {}
+
+impl Drop for MovingWrite {
+    fn drop(&mut self) {
+        let ctxt = self.ctxt.as_ptr();
+        // SAFETY: our closure ref keeps the context, until its put - the last
+        // touch
+        unsafe {
+            (*ctxt).write_sectors.fetch_sub(self.sectors as i32, Relaxed);
+            (*ctxt).write_ios.fetch_sub(1, Relaxed);
+            wake_up(&(*ctxt).wait);
+            bch2_moving_ctxt_wake(ctxt);
+            c::closure_put(&raw mut (*ctxt).cl);
+        }
+    }
 }
 
 impl<'a> MovingCtxt<'a> {
@@ -128,14 +166,46 @@ impl<'a> MovingCtxt<'a> {
         let ctxt = alloc_pinned(init)?;
         Ok(MovingCtxt { ctxt: NonNull::new(ctxt).expect("alloc_pinned() returns its allocation"), life: PhantomData })
     }
+}
+
+impl<'a> core::ops::Deref for MovingCtxt<'a> {
+    type Target = Moving<'a>;
+
+    fn deref(&self) -> &Moving<'a> {
+        // SAFETY: ours, live and pinned until we're dropped
+        unsafe { Moving::from_raw(self.ctxt.as_ptr()) }
+    }
+}
+
+impl<'a> Moving<'a> {
+    /// # Safety
+    /// @ctxt is initialized, and outlives the borrow, and its filesystem and
+    /// stats live for 'a.
+    pub unsafe fn from_raw<'r>(ctxt: *mut c::moving_context) -> &'r Self {
+        // SAFETY: the caller's; repr(transparent) over it
+        unsafe { &*ctxt.cast() }
+    }
 
     /// For C that takes the context: stripe repair, which moves through it.
     pub(crate) fn raw(&self) -> *mut c::moving_context {
-        self.ctxt.as_ptr()
+        self.0.as_ptr()
+    }
+
+    /// A write of @sectors, in flight in this context until the MovingWrite's
+    /// dropped.
+    pub fn write_start(&self, sectors: u32) -> MovingWrite {
+        let ctxt = self.raw();
+        // SAFETY: borrowed, live; the counters atomics
+        unsafe {
+            (*ctxt).write_sectors.fetch_add(sectors as i32, Relaxed);
+            (*ctxt).write_ios.fetch_add(1, Relaxed);
+            c::closure_get(&raw mut (*ctxt).cl);
+        }
+        MovingWrite { ctxt: NonNull::new(ctxt).expect("a context"), sectors }
     }
 
     pub fn trans(&self) -> &BtreeTrans<'a> {
-        // SAFETY: the context's, live until it's dropped
+        // SAFETY: the context's, live as long as it is
         unsafe { BtreeTrans::borrow_raw((*self.raw()).trans) }
     }
 
@@ -210,6 +280,21 @@ impl<'a> MovingCtxt<'a> {
         t.result(ret)
     }
 
+    /// Start moving the data in sectors @start..@end of device @dev off it,
+    /// found by backpointer - to the extents' background target - returning
+    /// once the moves are issued, ratelimit()ed, not done.
+    /// Runs attempts of its own in the context's transaction.
+    pub fn evacuate_data(&self, dev: u32, start: u64, end: u64) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { bch2_evacuate_data(self.raw(), dev, start, end) })
+    }
+
+    /// evacuate_data(), for block @block of stripe @idx, on a device that's
+    /// been removed: its extents found by their stripe_backpointers, the
+    /// pointers moved those that point to the block.
+    pub fn evacuate_ec_orphan(&self, idx: u64, block: u32, start: u64, end: u64) -> Result<(), BchError> {
+        ret_to_result_void(unsafe { bch2_evacuate_ec_orphan(self.raw(), idx, block, start, end) })
+    }
+
     /// Repair stripe @s, at @iter, if it's degraded - a block on a device
     /// that's missing, evacuating, or lost its durability: rebuilt at its
     /// width if there are devices for it, narrowed if not, rebuilt around
@@ -266,8 +351,8 @@ impl Drop for MovingCtxt<'_> {
         // SAFETY: ours, from new(); bch2_moving_ctxt_exit() waits for what's
         // in flight before taking it off the list and putting the transaction
         unsafe {
-            c::bch2_moving_ctxt_exit(self.raw());
-            free_pinned(self.raw());
+            c::bch2_moving_ctxt_exit(self.ctxt.as_ptr());
+            free_pinned(self.ctxt.as_ptr());
         }
     }
 }
