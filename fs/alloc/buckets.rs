@@ -918,6 +918,35 @@ pub fn bch2_dev_buckets_free(ca: &mut c::bch_dev) {
 // ── Usage ────────────────────────────────────────────────────────────────
 
 impl c::bch_dev {
+    /// The buckets held back from allocations at @watermark - for those at the
+    /// watermarks under it: bch2_dev_buckets_reserved().
+    pub fn buckets_reserved(&self, watermark: c::bch_watermark) -> u64 {
+        use c::bch_watermark as w;
+        let (some, btree) = (self.mi.nbuckets >> 6, u64::from(self.nr_btree_reserve));
+
+        match watermark {
+            w::BCH_WATERMARK_stripe => 2 * some + 2 * btree,
+            w::BCH_WATERMARK_normal => some + 2 * btree,
+            w::BCH_WATERMARK_copygc => 2 * btree,
+            w::BCH_WATERMARK_btree  => btree,
+            w::BCH_WATERMARK_btree_copygc |
+            w::BCH_WATERMARK_reclaim |
+            w::BCH_WATERMARK_interior_updates => 0,
+            w::BCH_WATERMARK_NR => panic!("buckets_reserved() of BCH_WATERMARK_NR"),
+        }
+    }
+
+    /// Its free buckets in @usage, less the open ones and @watermark's
+    /// reserve, at least 0: __dev_buckets_free(). nr_open_buckets is the
+    /// allocator's, read unlocked, as C does.
+    pub fn free_buckets_at(&self, usage: &c::bch_dev_usage, watermark: c::bch_watermark) -> u64 {
+        // SAFETY: a u32, written whole
+        let open = unsafe { core::ptr::read_volatile(&raw const self.nr_open_buckets) };
+        let free = usage.buckets[c::bch_data_type::BCH_DATA_free.0 as usize];
+        // as C's: u64s, then max_t(s64, 0, ..)
+        (free.wrapping_sub(open.into()).wrapping_sub(self.buckets_reserved(watermark)) as i64).max(0) as u64
+    }
+
     /// Its buckets by data type, every CPU's count summed - not under any
     /// lock, so only near enough: bch2_dev_usage_read_fast().
     pub fn usage_read_fast(&self) -> c::bch_dev_usage {
