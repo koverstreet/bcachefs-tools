@@ -325,6 +325,14 @@ impl Printbuf {
         unsafe { c::bch2_prt_human_readable_u64(&mut self.0, v) };
     }
 
+    /// As human_readable_u64(), signed: bch2_prt_human_readable_s64().
+    pub fn human_readable_s64(&mut self, v: i64) {
+        if v < 0 {
+            write!(self, "-");
+        }
+        self.human_readable_u64(v.unsigned_abs());
+    }
+
     /// @ns in the largest unit it has two of, truncated: bch2_pr_time_units().
     pub fn time_units(&mut self, ns: u64) {
         unsafe { c::bch2_pr_time_units(&mut self.0, ns) };
