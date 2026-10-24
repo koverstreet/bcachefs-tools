@@ -31,6 +31,20 @@ pub mod flags {
     pub const __GFP_NOWARN: Flags = Flags(2);
 }
 
+extern "C" {
+    fn realloc(p: *mut core::ffi::c_void, size: usize) -> *mut core::ffi::c_void;
+}
+
+/// krealloc(), as the shim's slab.h has it: realloc(), its memory what C's
+/// kfree() - free() - takes back. Null if it can't.
+///
+/// # Safety
+/// @p is null, or malloc()'s and not used after unless this fails.
+pub unsafe fn krealloc(p: *mut u8, size: usize) -> *mut u8 {
+    // SAFETY: the caller's
+    unsafe { realloc(p.cast(), size).cast() }
+}
+
 /// As the kernel's KVVec: a vector whose allocations can fail.
 pub struct KVVec<T>(Vec<T>);
 

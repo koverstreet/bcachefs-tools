@@ -4,9 +4,6 @@
 
 #include "data/keylist_gen.h"
 
-int bch2_keylist_realloc(struct keylist *, u64 *, size_t, size_t);
-void bch2_keylist_pop_front(struct keylist *);
-
 static inline void bch2_keylist_init(struct keylist *l, u64 *inline_keys)
 {
 	l->top_p = l->keys_p = inline_keys;
@@ -63,9 +60,7 @@ static inline u64 keylist_sectors(struct keylist *keys)
 	return ret;
 }
 
-#ifdef CONFIG_BCACHEFS_DEBUG
-void bch2_verify_keylist_sorted(struct keylist *);
-#else
+#ifndef CONFIG_BCACHEFS_DEBUG
 static inline void bch2_verify_keylist_sorted(struct keylist *l) {}
 #endif
 

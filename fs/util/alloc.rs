@@ -77,6 +77,27 @@ pub unsafe fn kfree(p: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
     unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
 }
 
+/// @p - kmalloc()'d, or null - as @new bytes, what was there kept: krealloc(),
+/// for a buffer C owns and kfree()s. Of no size the caller knows, as C's
+/// aren't. GFP_KERNEL, the caller's memalloc scope saying the rest.
+///
+/// # Safety
+/// @p is null, or kmalloc()'s and not used after unless this fails.
+pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<core::ptr::NonNull<u8>, AllocError> {
+    // Kmalloc::realloc() wants the old allocation's layout, which nobody has
+    #[cfg(kernel)]
+    {
+        use kernel::bindings::{krealloc_node_align, GFP_KERNEL, NUMA_NO_NODE};
+
+        // SAFETY: the caller's
+        core::ptr::NonNull::new(unsafe { krealloc_node_align(p.cast(), new, 1, GFP_KERNEL, NUMA_NO_NODE) }.cast())
+            .ok_or(AllocError)
+    }
+    // SAFETY: the caller's
+    #[cfg(not(kernel))]
+    core::ptr::NonNull::new(unsafe { bcachefs_shim::alloc::krealloc(p, new) }).ok_or(AllocError)
+}
+
 /// kmalloc()'s alignment of @n bytes: to the largest power of two in it, up
 /// to a page - what IO into it, O_DIRECT's in userspace, needs.
 fn kv_layout(n: usize) -> Result<core::alloc::Layout, AllocError> {
