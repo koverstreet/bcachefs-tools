@@ -106,6 +106,29 @@ impl<R: RawLock, G, P> Lock<R, G, P> {
         }
     }
 
+    /// new(), with @g initialized in place: for a G too big to build on the
+    /// stack and move in - new_lock!(<- init). For a lock whose init() can't
+    /// fail, so that nothing's left to undo if @g's does.
+    ///
+    /// # Safety
+    /// As new()'s.
+    #[doc(hidden)]
+    pub unsafe fn new_init<E>(g: impl ::pin_init::PinInit<G, E>, p: P, name: &'static CStr, key: *mut c_void)
+        -> impl ::pin_init::PinInit<Self, E>
+    where
+        R: RawLock<InitError = core::convert::Infallible>,
+    {
+        unsafe {
+            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
+                let Ok(()) = R::init(&raw mut (*slot).raw, name, key);
+                // UnsafeCell<G> is laid out as G
+                crate::util::alloc::init_at(g, (&raw mut (*slot).protected).cast::<G>())?;
+                (&raw mut (*slot).published).write(p);
+                Ok(())
+            })
+        }
+    }
+
     /// For a Lock in zeroed memory that new() can't reach - a static: its
     /// raw lock initialized in place, G and P as zeroed.
     ///
@@ -338,19 +361,30 @@ impl<G, P> crate::typeinfo::TypeInfo for LockedBy<G, P> {
 
 /// A Lock initializer - new_lock!(g), new_lock!(g, p), either with a "name"
 /// last - over @g, publishing @p or nothing, with a lockdep class of its own,
-/// named @name or for the call site.
+/// named @name or for the call site. new_lock!(<- init) initializes @g in
+/// place, by @init: Lock::new_init().
 #[macro_export]
 macro_rules! new_lock {
-    (@init $g:expr, $p:expr, $name:expr) => {{
+    (@key) => {{
         #[cfg(kernel)]
         let key = ::kernel::static_lock_class!().as_ptr().cast();
         #[cfg(not(kernel))]
         let key = ::core::ptr::null_mut();
-
+        key
+    }};
+    (@init $g:expr, $p:expr, $name:expr) => {{
+        let key = $crate::new_lock!(@key);
         let g = $g;
         let p = $p;
         let name = unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked($name.as_bytes()) };
         unsafe { $crate::locking::Lock::new(g, p, name, key) }
+    }};
+    (<- $g:expr $(,)?) => {{
+        let key = $crate::new_lock!(@key);
+        let g = $g;
+        let name = ::core::concat!(::core::file!(), ":", ::core::line!(), "\0");
+        let name = unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked(name.as_bytes()) };
+        unsafe { $crate::locking::Lock::new_init(g, (), name, key) }
     }};
     ($g:expr $(,)?) => {
         $crate::new_lock!(@init $g, (), ::core::concat!(::core::file!(), ":", ::core::line!(), "\0"))
