@@ -164,3 +164,15 @@ unsafe fn task_drop(p: *const ()) {
     // SAFETY: the Waker's ref
     unsafe { c::put_task_struct(p.cast_mut().cast()) };
 }
+
+/// Wake C's sleepers on @wq - wait_event() and the like: wake_up(), a
+/// function in userspace's shim, a macro the kernel's bindings don't have.
+pub fn wake_up(wq: &c::wait_queue_head_t) {
+    let wq = core::ptr::from_ref(wq).cast_mut();
+    // SAFETY: a waitqueue is woken through a shared pointer, under its own
+    // lock
+    #[cfg(kernel)]
+    unsafe { c::__wake_up(wq, ::kernel::task::TASK_NORMAL, 1, core::ptr::null_mut()) };
+    #[cfg(not(kernel))]
+    unsafe { c::wake_up(wq) };
+}
