@@ -66,11 +66,9 @@ use crate::data::reconcile::trigger::rb_work_to_data_pos;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{writepoint_ptr, Fs};
 use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
-use crate::locking::Lock;
-use crate::new_lock;
 use crate::sb::counters::events;
 use crate::util::alloc::flags::GFP_KERNEL;
-use crate::util::alloc::{init_at, kbox_pin_init, AllocError, KBox, KVVec};
+use crate::util::alloc::KVVec;
 use crate::util::cuckoo::Cuckoo;
 use crate::util::kernel::{cond_resched, ktime_get_ns, WRITE};
 use crate::util::kthread::{Kthread, KthreadSelf};
@@ -82,10 +80,8 @@ use crate::{bch_err, log_msg_ratelimited, warn_once, SPOS_MAX};
 use c::bch_errcode as err;
 use c::reconcile_work_id as w;
 use core::cell::Cell;
-use core::convert::Infallible;
 use core::ffi::c_int;
 use core::ops::ControlFlow;
-use core::pin::Pin;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
 
@@ -267,26 +263,13 @@ struct StripeRetry {
 type StripeRetries = KVVec<StripeRetry>;
 
 /// The parked stripes, by index: bch_fs_reconcile.stripes_pending.
-pub type StripesPending = Lock<c::mutex, (), Cuckoo>;
-
-/// The parked stripes, none yet, in an allocation of their own: a Cuckoo is
-/// cacheline aligned, past what a RustOnly holds.
-pub(crate) fn stripes_pending_new() -> Result<Pin<KBox<StripesPending>>, BchError> {
-    let init = new_lock!((), Cuckoo::default());
-    // SAFETY: @init's own - which can't fail
-    let init = unsafe {
-        pin_init::pin_init_from_closure(move |slot: *mut StripesPending| {
-            init_at::<_, Infallible>(init, slot).map_err(|e| match e {})
-        })
-    };
-    Ok(kbox_pin_init::<_, AllocError>(init)?)
-}
+pub type StripesPending = Cuckoo;
 
 impl Fs {
     /// Park stripe @idx: see the top of the file. If it can't be - no memory
     /// - it's tried again next pass, as it would have been.
     fn stripe_park(&self, idx: u64) {
-        let _ = self.reconcile.stripes_pending.lock().published().insert(idx);
+        let _ = self.reconcile.stripes_pending.insert(idx);
     }
 
     fn stripe_parked(&self, idx: u64) -> bool {
@@ -298,7 +281,7 @@ impl Fs {
     /// small, and a stripe that still can't be repaired parks again: retry
     /// them all.
     fn stripes_unpark(&self) {
-        self.reconcile.stripes_pending.lock().published().clear();
+        self.reconcile.stripes_pending.clear();
     }
 }
 

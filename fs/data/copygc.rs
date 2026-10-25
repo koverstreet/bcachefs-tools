@@ -68,7 +68,7 @@ use crate::sb::counters::events;
 use crate::types::Fifo;
 use crate::util::alloc::{flags::GFP_KERNEL, kbox_pin_init, KBox, KVVec};
 use crate::util::alloc::AllocError;
-use crate::util::cuckoo::{Cuckoo, CuckooWriter, Entry, Registration};
+use crate::util::cuckoo::{Cuckoo, Entry, Registration};
 use crate::util::kernel::{cond_resched, WRITE};
 use crate::util::kthread::{Kthread, KthreadSelf};
 use crate::util::rcu::read_lock;
@@ -126,7 +126,7 @@ struct InFlight<'f> {
     b:    c::move_bucket,
 }
 
-type InFlightSet<'f> = CuckooWriter<Entry<InFlight<'f>>>;
+type InFlightSet<'f> = Cuckoo<Entry<InFlight<'f>>>;
 
 impl<'f> InFlight<'f> {
     fn new<'w>(fs: &'f Fs, set: &'w InFlightSet<'f>, key: c::move_bucket_key)
@@ -137,9 +137,8 @@ impl<'f> InFlight<'f> {
             b:    c::move_bucket { count: AtomicI32::new(0) },
             // SAFETY: the set's the thread's: only it reads the set, so
             // Entry::new()'s grace period is none, and it drops every
-            // InFlight - the set's writer - before the set goes. This is the
-            // first field, initialized last, so the rest's there when it's
-            // hashed.
+            // InFlight before the set goes. This is the first field,
+            // initialized last, so the rest's there when it's hashed.
             reg <- unsafe { Registration::new(set, key, this) },
         }? AllocError)
     }
@@ -688,8 +687,8 @@ impl<'f, 'w> Copygc<'f, 'w> {
 
 fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
     // Before what holds an InFlight: it outlives every one registered in it
-    let mut set = Cuckoo::<Entry<InFlight<'_>>>::default();
-    let set = set.get_mut();
+    let set = InFlightSet::default();
+    let set = &set;
     let mut devs = KVVec::new();
     let mut kick = me.kicks();
 

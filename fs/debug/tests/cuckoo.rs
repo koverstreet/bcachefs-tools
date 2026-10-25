@@ -8,13 +8,16 @@
 //! test_cuckoo: one thread, against a model, through evictions, rehashes and
 //! clear() - every kind of table.
 //!
-//! test_cuckoo_torture: the table as its users will have it, published by a
-//! Lock - a mutex, so a writer can be preempted mid-op, which no reader may
-//! wait on - read through the lock, written through its guard. Two writers
-//! taking turns churn KEYS keys, key 0 and u64::MAX - 1 among them, through
-//! every path: eviction chains, rehashes as the table fills and empties,
-//! clear(). HOT of them are only ever inserted, so a map's entries for them
-//! are replaced under readers all the time. Readers on every other CPU look
+//! test_cuckoo_torture: WRITERS writers at once, with no lock but the
+//! table's, churn KEYS keys, key 0 and u64::MAX - 1 among them, through every
+//! path: eviction chains, rehashes as the table fills and empties. Each has
+//! its own share of the keys, so a key's ops are one writer's, in order, and
+//! its state below stays exact. HOT of them are only ever inserted, so a
+//! map's entries for them are replaced under readers all the time. Every
+//! EPOCH ops each, the writers meet: the last in checks the table against
+//! their counts, and now and then clear()s it - so clear() runs under
+//! readers, but not beside another writer's op, whose effect the per-key
+//! state couldn't follow. Readers on every other CPU look
 //! keys up, half on the hot keys, an eighth of their runs in one RCU section
 //! across 64 lookups, so a buffer replaced meanwhile must stay readable and
 //! right. Round by round, faults make the rare paths routine (rounds()), each
@@ -28,10 +31,9 @@
 //! it is - the count's Release after the op and the reader's Acquire put the
 //! op before the lookup, and the next op's fence after its odd store puts the
 //! lookup before anything it does - so a mismatch is a bug, never a race the
-//! test can't see. Writers check each result against the same state, and
-//! check() and the item count every 10000 ops; an allocation failure is a
-//! failure unless injected; at rest, every key is checked as its last op left
-//! it.
+//! test can't see. Writers check each result against the same state; an
+//! allocation failure is a failure unless injected; at rest, every key is
+//! checked as its last op left it.
 //!
 //! test_cuckoo_bench: for each hash and ways, on sets - the cost of an
 //! insert, a hit, a miss and a remove, at sizes from cache-resident to well
@@ -41,7 +43,7 @@
 //! odd keys, misses even ones.
 
 use core::ptr::NonNull;
-use core::sync::atomic::{fence, AtomicU32, AtomicU64, Ordering::{Acquire, Relaxed, Release}};
+use core::sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU64, Ordering::{AcqRel, Acquire, Relaxed, Release}};
 
 use super::TestRet;
 use crate::c;
@@ -51,7 +53,7 @@ use crate::locking::Lock;
 use crate::new_lock;
 use crate::prt;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
-use crate::util::cuckoo::{Cuckoo, CuckooItem, CuckooWriter, Entry, Faults};
+use crate::util::cuckoo::{Cuckoo, CuckooItem, Entry, Faults};
 use crate::util::hash::GoldenRatio;
 use crate::util::siphash::SipHash13Key;
 use core::hash::BuildHasher;
@@ -175,10 +177,10 @@ fn model<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(name: &st
     }
     let pool = I::pool(&keys)?;
 
-    let mut t = Cuckoo::<I, S, W>::default();
-    let w = t.get_mut();
-    // What each key's last op left it, and its ops so far, make()'s @seq: on
-    // the heap, as a kernel stack is small
+    let t = Cuckoo::<I, S, W>::default();
+    // What each key's last op left it, and its ops so far that changed it,
+    // make()'s @seq - so an op's item is never the entry in the table: on the
+    // heap, as a kernel stack is small
     let mut st = KVVec::new();
     for _ in 0..NR {
         st.push((0u64, 0u64), GFP_KERNEL)?;
@@ -188,23 +190,36 @@ fn model<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(name: &st
         let i = random_u64_below(NR as u64) as usize;
         let (k, (want, ops)) = (key(i), &mut st[i]);
         *ops += 1;
-        if random_u64_below(3) != 0 {
-            let item = I::make(&pool, i, k, *ops * 2, op | 1 << 63);
-            assert_eq!(w.insert(item)?.map_or(0, I::value), *want, "{name}: insert of {k:#x}");
-            *want = item.value();
-        } else {
-            assert_eq!(w.remove(&k).map_or(0, I::value), *want, "{name}: remove of {k:#x}");
-            *want = 0;
+        let item = I::make(&pool, i, k, *ops * 2, op | 1 << 63);
+        match random_u64_below(4) {
+            0 => {
+                assert_eq!(t.remove(&k).map_or(0, I::value), *want, "{name}: remove of {k:#x}");
+                *want = 0;
+            }
+            1 => match t.insert_new(item)? {
+                Ok(()) => {
+                    assert_eq!(*want, 0, "{name}: insert_new of {k:#x}, which was in");
+                    *want = item.value();
+                }
+                Err(had) => {
+                    assert_eq!(had.value(), *want, "{name}: insert_new of {k:#x}");
+                    *ops -= 1;
+                }
+            },
+            _ => {
+                assert_eq!(t.insert(item)?.map_or(0, I::value), *want, "{name}: insert of {k:#x}");
+                *want = item.value();
+            }
         }
     }
 
     for (i, &(want, _)) in st.iter().enumerate() {
-        assert_eq!(w.get(&key(i)).map_or(0, I::value), want, "{name}: lookup of {:#x}", key(i));
+        assert_eq!(t.get(&key(i)).map_or(0, I::value), want, "{name}: lookup of {:#x}", key(i));
     }
-    assert_eq!(w.check().unwrap_or_else(|e| panic!("{name}: {e}")), st.iter().filter(|s| s.0 != 0).count());
+    assert_eq!(t.check().unwrap_or_else(|e| panic!("{name}: {e}")), st.iter().filter(|s| s.0 != 0).count());
 
-    w.clear();
-    assert!(w.get(&key(1)).is_none(), "{name}: cleared, but not empty");
+    t.clear();
+    assert!(t.get(&key(1)).is_none(), "{name}: cleared, but not empty");
     Ok(())
 }
 
@@ -223,6 +238,9 @@ pub(super) fn test_cuckoo(_fs: &Fs, _nr: u64) -> TestRet {
 
 const KEYS: usize = 4096;
 const HOT: usize = 16;
+const WRITERS: usize = 4;
+/// Ops each writer does between meetings
+const EPOCH: u64 = 1024;
 
 /// A key's state: @seq odd while an op on it is in flight, and @expect what
 /// the last op left it - 0, absent.
@@ -284,33 +302,21 @@ fn rounds() -> [(&'static str, Faults); 6] {
     ]
 }
 
-/// The @nr'th writer op: on a key, bracketed by its @seq - or, now and then,
-/// clear(), bracketing every key.
+/// Writer @w's @nr'th op, on one of its keys, bracketed by the key's @seq.
 #[allow(clippy::too_many_arguments)]
 fn writer_op<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(
-    w: &CuckooWriter<I, S, W>, items: &mut u64, keys: &[KeyState], pool: &I::Pool,
+    t: &Cuckoo<I, S, W>, w: usize, items: &AtomicU64, keys: &[KeyState], pool: &I::Pool,
     fails: &Failures, injecting: bool, rng: &mut u64, nr: u64,
 ) {
     let r = xorshift(rng);
 
-    if r % 50_000 == 0 {
-        keys.iter().for_each(|st| { st.seq.fetch_add(1, Relaxed); });
-        fence(Release);
-        w.clear();
-        *items = 0;
-        keys.iter().for_each(|st| {
-            st.expect.store(0, Relaxed);
-            st.seq.fetch_add(1, Release);
-        });
-        return;
-    }
-
     // An eighth of the ops on the hot keys, which are only ever inserted - a
     // map's entry replaced under readers, after the first - the rest on any:
     // inserts mostly, then removes mostly, in turn, so the table fills and
-    // empties and rehashes
+    // empties and rehashes. Each key's writer is its index mod WRITERS.
     let hot = r & 7 == 0;
-    let i = (r >> 3) as usize % if hot { HOT } else { KEYS };
+    let share = if hot { HOT } else { KEYS } / WRITERS;
+    let i = (r >> 3) as usize % share * WRITERS + w;
     let filling = (nr / 25_000) % 2 == 0;
     let insert = hot || ((r >> 32) % 4 != 0) == filling;
 
@@ -322,7 +328,14 @@ fn writer_op<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(
     let want = st.expect.load(Relaxed);
     let (got, now) = if insert {
         let item = I::make(pool, i, k, seq + 2, val(k, seq + 2));
-        match w.insert(item) {
+        // Half the inserts of a key that's out by insert_new(), which puts
+        // it in: an item had back is got
+        let ret = if want == 0 && (r >> 40) & 1 != 0 {
+            t.insert_new(item).map(Result::err)
+        } else {
+            t.insert(item)
+        };
+        match ret {
             Ok(old) => (old.map_or(0, I::value), item.value()),
             // An insert of an item in the table never allocates: this one
             // wasn't, and still isn't
@@ -334,36 +347,79 @@ fn writer_op<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(
             }
         }
     } else {
-        (w.remove(&k).map_or(0, I::value), 0)
+        (t.remove(&k).map_or(0, I::value), 0)
     };
     if got != want {
         fail(fails, "insert or remove", k, seq, want, got);
     }
 
     match (want != 0, now != 0) {
-        (false, true) => *items += 1,
-        (true, false) => *items -= 1,
+        (false, true) => { items.fetch_add(1, Relaxed); }
+        (true, false) => { items.fetch_sub(1, Relaxed); }
         _             => {}
     }
     st.expect.store(now, Relaxed);
     st.seq.store(seq + 2, Release);
+}
 
-    if nr % 10_000 == 0 {
-        match w.check() {
-            Err(e) => fail(fails, e, 0, 0, 0, 0),
-            Ok(n) if n as u64 != *items => fail(fails, "item count", 0, 0, *items, n as u64),
-            Ok(_) => {}
+/// Where the writers meet, every EPOCH ops each.
+#[derive(Default)]
+struct Rendezvous {
+    arrived: AtomicU32,
+    /// Meetings so far
+    met:     AtomicU64,
+    stop:    AtomicBool,
+}
+
+impl Rendezvous {
+    /// Wait for every writer; the last in runs @f, with the rest stopped,
+    /// and its answer - whether they stop - is every writer's.
+    fn meet(&self, f: impl FnOnce() -> bool) -> bool {
+        let met = self.met.load(Acquire);
+        if self.arrived.fetch_add(1, AcqRel) + 1 == WRITERS as u32 {
+            self.stop.store(f(), Relaxed);
+            self.arrived.store(0, Relaxed);
+            self.met.store(met + 1, Release);
+        } else {
+            while self.met.load(Acquire) == met {
+                cond_resched();
+            }
         }
+        self.stop.load(Relaxed)
     }
 }
 
-/// One round: a fresh table with @faults, two writers and the rest of the
+/// With every writer stopped: the table checked, its count against theirs,
+/// and now and then cleared, bracketing every key. Whether to stop.
+fn writers_met<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(
+    t: &Cuckoo<I, S, W>, items: &[AtomicU64; WRITERS], keys: &[KeyState], fails: &Failures, end: u64,
+) -> bool {
+    let nr: u64 = items.iter().map(|n| n.load(Relaxed)).sum();
+    match t.check() {
+        Err(e) => fail(fails, e, 0, 0, 0, 0),
+        Ok(n) if n as u64 != nr => fail(fails, "item count", 0, 0, nr, n as u64),
+        Ok(_) => {}
+    }
+
+    if random_u64_below(12) == 0 {
+        keys.iter().for_each(|st| { st.seq.fetch_add(1, Relaxed); });
+        fence(Release);
+        t.clear();
+        items.iter().for_each(|n| n.store(0, Relaxed));
+        keys.iter().for_each(|st| {
+            st.expect.store(0, Relaxed);
+            st.seq.fetch_add(1, Release);
+        });
+    }
+    fails.get() != 0 || local_clock() >= end
+}
+
+/// One round: a fresh table with @faults, WRITERS writers and the rest of the
 /// CPUs reading, for @secs.
 fn round<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(table: &str, name: &str, faults: Faults, secs: u64)
     -> TestRet
 {
-    const WRITERS: u32 = 2;
-    let readers = nr_cpus().saturating_sub(WRITERS).clamp(2, 30);
+    let readers = nr_cpus().saturating_sub(WRITERS as u32).clamp(2, 30);
     let injecting = faults.alloc_fail != 0;
 
     let (mut keys, mut key_vals) = (KVVec::new(), KVVec::new());
@@ -375,14 +431,15 @@ fn round<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(table: &s
     let pool = I::pool(&key_vals)?;
     let pool = &pool;
 
-    // The item count, the writers' to keep, with the table
-    pin_init::stack_pin_init!(let lock: Lock<c::mutex, u64, Cuckoo<I, S, W>> =
-                              new_lock!(0, Cuckoo::with_faults(faults)));
+    let t = Cuckoo::<I, S, W>::with_faults(faults);
+    let t = &t;
     pin_init::stack_pin_init!(let fails: Failures = new_lock!(None, pin_init::Zeroable::zeroed()));
-    let (lock, fails): (&Lock<c::mutex, u64, Cuckoo<I, S, W>>, &Failures) = (&lock, &fails);
-    let t: &Cuckoo<I, S, W> = lock;
+    let fails: &Failures = &fails;
+    // Each writer's count of the items its keys have in the table
+    let items: &[AtomicU64; WRITERS] = &Default::default();
+    let meet = &Rendezvous::default();
 
-    let writers_left = AtomicU32::new(WRITERS);
+    let writers_left = AtomicU32::new(WRITERS as u32);
     let (checked, raced, ops) = (AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0));
     let start = local_clock();
     let end = start + secs * c::NSEC_PER_SEC as u64;
@@ -431,18 +488,18 @@ fn round<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(table: &s
             })?;
         }
 
-        for i in 0..WRITERS {
+        for w in 0..WRITERS {
             let (writers_left, ops) = (&writers_left, &ops);
-            s.spawn(format_args!("cuckoo torture writer[{i}]"), move || {
+            s.spawn(format_args!("cuckoo torture writer[{w}]"), move || {
                 let mut rng = random_u64() | 1;
                 let mut nr = 0;
-                while fails.get() == 0 && (nr % 256 != 0 || local_clock() < end) {
-                    let mut g = lock.lock();
-                    let (items, w) = g.parts();
-                    writer_op(w, items, keys, pool, fails, injecting, &mut rng, nr);
-                    drop(g);
+                loop {
+                    writer_op(t, w, &items[w], keys, pool, fails, injecting, &mut rng, nr);
                     nr += 1;
                     cond_resched();
+                    if nr % EPOCH == 0 && meet.meet(|| writers_met(t, items, keys, fails, end)) {
+                        break;
+                    }
                 }
                 ops.fetch_add(nr, Relaxed);
                 writers_left.fetch_sub(1, Release);
@@ -461,14 +518,13 @@ fn round<I: TestItem, S: BuildHasher + From<[u64; 2]>, const W: usize>(table: &s
     ret?;
 
     // Quiesced: every key as its last op left it
-    let mut g = lock.lock();
-    let (items, w) = g.parts();
     for (i, st) in keys.iter().enumerate() {
         let k = key(i);
-        assert_eq!(w.get(&k).map_or(0, I::value), st.expect.load(Relaxed),
+        assert_eq!(t.get(&k).map_or(0, I::value), st.expect.load(Relaxed),
                    "cuckoo torture, {table}, round {name}: {k:#x} at rest");
     }
-    assert_eq!(w.check().unwrap_or_else(|e| panic!("{e}")) as u64, *items);
+    assert_eq!(t.check().unwrap_or_else(|e| panic!("{e}")) as u64,
+               items.iter().map(|n| n.load(Relaxed)).sum::<u64>());
 
     let checked = checked.into_inner();
     assert!(checked > 0, "cuckoo torture, {table}, round {name}: no lookup ever checked");
@@ -520,9 +576,8 @@ fn bench_lookups<S: BuildHasher + From<[u64; 2]>, const W: usize>(t: &Cuckoo<u64
 /// writer's ops a second. Counted in the window every thread is in, not
 /// timed by the slowest, so one descheduled reader doesn't skew the rest.
 fn bench_threads<S: BuildHasher + From<[u64; 2]>, const W: usize>(
-    lock: &Lock<c::mutex, (), Cuckoo<u64, S, W>>, keys: &[u64], ms: u64, threads: u32, churn: Option<&[u64]>,
+    t: &Cuckoo<u64, S, W>, keys: &[u64], ms: u64, threads: u32, churn: Option<&[u64]>,
 ) -> Result<(u64, u64), BchError> {
-    let t: &Cuckoo<u64, S, W> = lock;
     let (lookups, writes) = (AtomicU64::new(0), AtomicU64::new(0));
     // Time for every thread to have started
     let start = local_clock() + 100 * 1_000_000;
@@ -557,11 +612,8 @@ fn bench_threads<S: BuildHasher + From<[u64; 2]>, const W: usize>(
                 wait_start();
                 while local_clock() < end {
                     let k = pick(members, &mut rng);
-                    let mut g = lock.lock();
-                    let w = g.published();
-                    w.remove(&k);
-                    w.insert(k)?;
-                    drop(g);
+                    t.remove(&k);
+                    t.insert(k)?;
                     n += 2;
                 }
                 writes.fetch_add(n, Relaxed);
@@ -588,23 +640,18 @@ fn bench<S: BuildHasher + From<[u64; 2]>, const W: usize>(table: &str) -> TestRe
             misses.push(xorshift(&mut rng) & !1, GFP_KERNEL)?;
         }
 
-        pin_init::stack_pin_init!(let lock: Lock<c::mutex, (), Cuckoo<u64, S, W>> =
-                                  new_lock!((), Cuckoo::default()));
-        let lock: &Lock<c::mutex, (), Cuckoo<u64, S, W>> = &lock;
+        let t = Cuckoo::<u64, S, W>::default();
+        let t = &t;
 
         let start = local_clock();
-        {
-            let mut g = lock.lock();
-            let w = g.published();
-            for &k in keys.iter() {
-                w.insert(k)?;
-            }
+        for &k in keys.iter() {
+            t.insert(k)?;
         }
         let insert_ns = (local_clock() - start) / n as u64;
 
-        let (hit_ns, found) = bench_lookups(lock, &keys, lookups, &mut rng);
+        let (hit_ns, found) = bench_lookups(t, &keys, lookups, &mut rng);
         assert_eq!(found, lookups, "cuckoo bench: a member not found");
-        let (miss_ns, found) = bench_lookups(lock, &misses, lookups, &mut rng);
+        let (miss_ns, found) = bench_lookups(t, &misses, lookups, &mut rng);
         assert!(found == 0, "cuckoo bench: a miss found");
 
         let mut msg = Printbuf::new();
@@ -613,23 +660,19 @@ fn bench<S: BuildHasher + From<[u64; 2]>, const W: usize>(table: &str) -> TestRe
 
         let mut threads = 1;
         while threads <= cpus {
-            let (m, _) = bench_threads(lock, &keys, 1000, threads, None)?;
+            let (m, _) = bench_threads(t, &keys, 1000, threads, None)?;
             prt!(&mut msg, "; {threads} readers {m} M/s");
             threads *= 2;
         }
         let readers = cpus.saturating_sub(1).max(1);
-        let (hits, w) = bench_threads(lock, &keys, 1000, readers, Some(&keys))?;
-        let (misses, _) = bench_threads(lock, &misses, 1000, readers, Some(&keys))?;
+        let (hits, w) = bench_threads(t, &keys, 1000, readers, Some(&keys))?;
+        let (misses, _) = bench_threads(t, &misses, 1000, readers, Some(&keys))?;
         prt!(&mut msg, "; {readers} readers + churning writer: hits {hits} M/s, misses {misses} M/s, writer {} ops/s",
              HumanReadable(w));
 
         let start = local_clock();
-        {
-            let mut g = lock.lock();
-            let w = g.published();
-            for &k in keys.iter() {
-                w.remove(&k);
-            }
+        for &k in keys.iter() {
+            t.remove(&k);
         }
         prt!(&mut msg, "; remove {} ns\n", (local_clock() - start) / n as u64);
         kernel::pr_info!("{}", msg.as_str());

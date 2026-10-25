@@ -41,10 +41,13 @@
 //! in the buffer - and only a miss compares mirror and buffer, looking again
 //! with the buffer's own seeds on the rare mismatch.
 //!
-//! # Readers and the writer
+//! # Readers and writers
 //!
-//! Writers are serialized by the lock that publishes the table (Publish), or
-//! by a &mut of it. A reader sees a key a write isn't touching, always:
+//! Writers take the table's lock, a ByteLock - a mutex, zeroed unlocked, so a
+//! table is still valid zeroed - so they're one at a time, each seeing slots
+//! only it changes, and a rehash allocates, and sleeps, under it. (One lock
+//! for now; lockless writers, by cmpxchg, are for later.) A reader takes
+//! nothing, and sees a key a write isn't touching, always:
 //!
 //! - A slot changes by one atomic store: an item into an empty slot, or empty
 //!   into one with an item. A reader loads it once and compares the key - the
@@ -64,11 +67,11 @@
 //!   one preempted mid-chain leaves every item findable - and a hit reads
 //!   nothing the writer writes but the slots.
 //!
-//! The writer's view of the buffer, locked(), is a borrow the types don't
-//! end: rehash() and clear() free the buffer after a grace period the writer
-//! isn't in, and take &self like everything else. So this file keeps to it:
+//! A writer's view of the buffer, locked(), is a borrow the types don't end:
+//! rehash() and clear() free the buffer after a grace period the writer isn't
+//! in, and take &self like everything else. So this file keeps to it:
 //! rehash() reads the old buffer only in its fill, before the replace, and
-//! insert() takes no view across one.
+//! put() takes no view across one.
 //!
 //! # Faults
 //!
@@ -86,10 +89,10 @@ use core::ptr::NonNull;
 use core::sync::atomic::{fence, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize};
 use core::sync::atomic::Ordering::{self, Acquire, Relaxed, Release};
 
+use crate::locking::{ByteLock, Guard, Lock};
 use crate::types::CacheAligned;
 use crate::util::alloc::AllocError;
 use crate::util::kernel::random_u64;
-use crate::util::projections::Publish;
 use crate::util::rcu::{read_lock, RcuArray, RcuElement, ReadGuard};
 use crate::util::siphash::SipHash13Key;
 
@@ -415,13 +418,15 @@ impl<'a, I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> Table<'
 /// allocates one.
 ///
 /// repr(C): what a hit reads, which only a rehash writes - and the faults, in
-/// a test - apart from what the writer writes on every insert.
+/// a test - apart from what writers write on every insert.
 #[repr(C)]
 pub struct Cuckoo<I: CuckooItem = u64, S = SipHash13Key, const W: usize = 2> {
     mirror:  Mirror,
     table:   RcuArray<Slot<I>, Seeds>,
     faults:  Faults,
     _writer: CacheAligned,
+    /// The writers'
+    lock:    Lock<ByteLock>,
     /// Items moved by inserts, ever: read only by a lookup that misses.
     moves:   AtomicU64,
     /// Items, for when to grow.
@@ -429,8 +434,11 @@ pub struct Cuckoo<I: CuckooItem = u64, S = SipHash13Key, const W: usize = 2> {
     hash:    PhantomData<fn() -> S>,
 }
 
-// SAFETY: atomics, an RcuArray, no bytes, Faults' integers and atomics, and a
-// PhantomData: all valid zeroed
+/// The writers' lock, held.
+type Held<'a> = Guard<'a, ByteLock>;
+
+// SAFETY: atomics, an RcuArray, no bytes, an unlocked ByteLock, Faults'
+// integers and atomics, and a PhantomData: all valid zeroed
 unsafe impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> ::pin_init::Zeroable for Cuckoo<I, S, W> {}
 
 impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> Default for Cuckoo<I, S, W> {
@@ -510,12 +518,6 @@ impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> Cuckoo<I, S
     pub fn moved(&self) -> u64 {
         self.moves.load(Relaxed)
     }
-
-    /// The writer's methods, with the table to ourselves.
-    pub fn get_mut(&mut self) -> &CuckooWriter<I, S, W> {
-        // SAFETY: laid out as Self (Publish), and exclusive: the one writer
-        unsafe { &*core::ptr::from_mut(self).cast::<CuckooWriter<I, S, W>>() }
-    }
 }
 
 impl<E: Hash + Eq + Sync, S: BuildHasher + From<[u64; 2]>, const W: usize> Cuckoo<Entry<E>, S, W> {
@@ -529,58 +531,51 @@ impl<E: Hash + Eq + Sync, S: BuildHasher + From<[u64; 2]>, const W: usize> Cucko
     }
 }
 
-// SAFETY: CuckooWriter is a Cuckoo; its writes are the ones at the top of the
-// file, which a reader may overlap
-unsafe impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> Publish for Cuckoo<I, S, W> {
-    type Writer = CuckooWriter<I, S, W>;
-}
+// ── Writers ──────────────────────────────────────────────────────────────
 
-/// A Cuckoo, as its one writer has it: the holder of the lock it's published
-/// under, or of a &mut of it. Not Sync: shared with another thread, it would
-/// be two writers - and one's rehash() frees the buffer the other's locked()
-/// is looking at.
-#[repr(transparent)]
-pub struct CuckooWriter<I: CuckooItem = u64, S = SipHash13Key, const W: usize = 2>(
-    Cuckoo<I, S, W>,
-    PhantomData<*const ()>,
-);
-
-impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> core::ops::Deref for CuckooWriter<I, S, W> {
-    type Target = Cuckoo<I, S, W>;
-
-    fn deref(&self) -> &Cuckoo<I, S, W> {
-        &self.0
-    }
-}
-
-impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> CuckooWriter<I, S, W> {
-    /// Not to be kept past a rehash() or clear(): see the top of the file.
-    fn locked(&self) -> Option<Table<'_, I, S, W>> {
-        // SAFETY: we're the writer - had only through a lock's guard or a
-        // &mut - and no replace() comes while the view is in use
-        unsafe { self.0.table.get_head_locked() }
-            .map(|(seeds, slots)| Table::new(*seeds, slots, &self.0.faults))
+impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> Cuckoo<I, S, W> {
+    /// The buffer, as the holder of the writers' lock, @g, has it: not to be
+    /// kept past a rehash() or clear() - see the top of the file.
+    fn locked<'a>(&'a self, g: &Held<'_>) -> Option<Table<'a, I, S, W>> {
+        debug_assert!(core::ptr::eq(g.lock(), &self.lock));
+        // SAFETY: we hold the writers' lock, and no replace() comes while the
+        // view is in use
+        unsafe { self.table.get_head_locked() }
+            .map(|(seeds, slots)| Table::new(*seeds, slots, &self.faults))
     }
 
     /// @item, in place of what had its key, if anything: that. Fails, with
     /// the table unchanged, only if it can't allocate.
     pub fn insert(&self, item: I) -> Result<Option<I>, AllocError> {
-        let () = Cuckoo::<I, S, W>::WAYS;
+        self.put(&self.lock.lock(), item, true)
+    }
+
+    /// @item, if nothing has its key: else what does, as the error, and @item
+    /// isn't in. Fails, with the table unchanged, only if it can't allocate.
+    pub fn insert_new(&self, item: I) -> Result<Result<(), I>, AllocError> {
+        Ok(self.put(&self.lock.lock(), item, false)?.map_or(Ok(()), Err))
+    }
+
+    /// insert(), or if not @replace insert_new(): what had @item's key.
+    fn put(&self, g: &Held<'_>, item: I, replace: bool) -> Result<Option<I>, AllocError> {
+        let () = Self::WAYS;
         assert!(item.storable(), "cuckoo: an item that can't be in a table");
 
-        let t = self.locked();
+        let t = self.locked(g);
         if let Some(s) = t.as_ref().and_then(|t| t.find_locked(t.key(&item))) {
             let old = s.load_locked().expect("found: occupied");
-            s.set(item);
+            if replace {
+                s.set(item);
+            }
             return Ok(Some(old));
         }
 
-        let nr = self.0.nr.load(Relaxed) + 1;
-        let room = t.filter(|t| fits::<W>(t.bits(), nr, &self.0.faults));
-        if !room.is_some_and(|t| t.insert(item, &self.0.moves)) {
-            return self.rehash(item).map(|()| None);
+        let nr = self.nr.load(Relaxed) + 1;
+        let room = t.filter(|t| fits::<W>(t.bits(), nr, &self.faults));
+        if !room.is_some_and(|t| t.insert(item, &self.moves)) {
+            return self.rehash(g, item).map(|()| None);
         }
-        self.0.nr.store(nr, Relaxed);
+        self.nr.store(nr, Relaxed);
         Ok(None)
     }
 
@@ -588,25 +583,28 @@ impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> CuckooWrite
     pub fn remove<Q: ?Sized + Hash + Eq>(&self, key: &Q) -> Option<I>
     where I::Target: Borrow<Q>
     {
-        let s = self.locked()?.find_locked(key)?;
+        let g = self.lock.lock();
+        let s = self.locked(&g)?.find_locked(key)?;
         let old = s.load_locked();
         s.clear();
-        self.0.nr.fetch_sub(1, Relaxed);
+        self.nr.fetch_sub(1, Relaxed);
         old
     }
 
     /// Empty it, freeing its buffer after a grace period.
     pub fn clear(&self) {
-        // SAFETY: we're the writer
-        unsafe { self.0.table.clear() }
-        self.0.nr.store(0, Relaxed);
+        let _g = self.lock.lock();
+        // SAFETY: we hold the writers' lock
+        unsafe { self.table.clear() }
+        self.nr.store(0, Relaxed);
     }
 
     /// The table's invariant, checked - every item in one of its slots, and in
     /// only one, and as many as it counts: how many, or what's broken. For
     /// tests, and debugging: it walks every slot.
     pub fn check(&self) -> Result<usize, &'static str> {
-        let Some(t) = self.locked() else { return Ok(0) };
+        let g = self.lock.lock();
+        let Some(t) = self.locked(&g) else { return Ok(0) };
         let mut nr = 0;
 
         for s in t.slots {
@@ -617,7 +615,7 @@ impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> CuckooWrite
                 Some(_) => nr += 1,
             }
         }
-        if nr != self.0.nr.load(Relaxed) {
+        if nr != self.nr.load(Relaxed) {
             return Err("cuckoo: an item count that isn't the items");
         }
         Ok(nr)
@@ -625,11 +623,11 @@ impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> CuckooWrite
 
     /// A new buffer with every item, and @item: see the top of the file. On
     /// an error the table is unchanged.
-    fn rehash(&self, item: I) -> Result<(), AllocError> {
-        let old = self.locked();
-        let nr = self.0.nr.load(Relaxed) + 1;
+    fn rehash(&self, g: &Held<'_>, item: I) -> Result<(), AllocError> {
+        let old = self.locked(g);
+        let nr = self.nr.load(Relaxed) + 1;
 
-        let faults = &self.0.faults;
+        let faults = &self.faults;
         let mut bits = old.as_ref().map_or(MIN_BITS, Table::bits);
         while !fits::<W>(bits, nr, faults) {
             bits += 1;
@@ -645,10 +643,10 @@ impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> CuckooWrite
             }
             for _ in 0..3 {
                 let seeds: Seeds = core::array::from_fn(|_| random_u64());
-                // SAFETY: we're the writer; @old's slots don't change under
-                // us, and nothing reads them past the replace()
+                // SAFETY: we hold the writers' lock; @old's slots don't
+                // change under us, and nothing reads them past the replace()
                 let fit = unsafe {
-                    self.0.table.rebuild_head(1 << bits, seeds, |slots| {
+                    self.table.rebuild_head(1 << bits, seeds, |slots| {
                         let t = Table::<I, S, W>::new(seeds, slots, &unpublished);
                         old.iter().flat_map(Table::iter_locked).chain([item])
                             .all(|i| t.insert(i, &moves))
@@ -657,8 +655,8 @@ impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> CuckooWrite
                 }?;
                 if fit.is_ok() {
                     saw!(faults, rehash);
-                    self.0.mirror.store(&seeds, bits);
-                    self.0.nr.store(nr, Relaxed);
+                    self.mirror.store(&seeds, bits);
+                    self.nr.store(nr, Relaxed);
                     return Ok(());
                 }
             }
@@ -682,13 +680,16 @@ impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> CuckooWrite
 pub struct Registration<K, E, S = SipHash13Key, const W: usize = 2>
 where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
 {
-    table: NonNull<CuckooWriter<Entry<E>, S, W>>,
+    table: NonNull<Cuckoo<Entry<E>, S, W>>,
     entry: NonNull<E>,
     key:   K,
 }
 
-// SAFETY: shared, it gives out only the key; @entry is compared, never
-// followed. Not Send: its drop is a write, the writer's.
+// SAFETY: shared or sent, it gives out only the key, and its drop takes the
+// table's lock; @entry is compared, never followed
+unsafe impl<K, E, S, const W: usize> Send for Registration<K, E, S, W>
+where K: Hash + Eq + Send, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
+{}
 unsafe impl<K, E, S, const W: usize> Sync for Registration<K, E, S, W>
 where K: Hash + Eq + Sync, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
 {}
@@ -702,25 +703,25 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
     ///
     /// # Safety
     /// Entry::new()'s, but for the key, which is this one's; @table outlives
-    /// this, which is dropped by its writer - the lock's holder, or the &mut's;
-    /// and @e is the entry this is a field of, being pin-initialized -
+    /// this; and @e is the entry this is a field of, being pin-initialized -
     /// pin-init's &this - with this its first field, so dropped first, and
     /// initialized last.
-    pub unsafe fn new<'w>(table: &'w CuckooWriter<Entry<E>, S, W>, key: K, e: NonNull<E>)
+    pub unsafe fn new<'w>(table: &'w Cuckoo<Entry<E>, S, W>, key: K, e: NonNull<E>)
         -> impl ::pin_init::PinInit<Self, AllocError> + use<'w, K, E, S, W>
     {
         let init = move |slot: *mut Self| {
-            assert!(!table.locked().is_some_and(|t| t.find_locked(&key).is_some()),
-                    "cuckoo: registering a key that's in already");
             // SAFETY: @slot is ours to write, pin-init's
             unsafe { slot.write(Self { table: NonNull::from(table), entry: e, key }) };
             // SAFETY: the caller's
-            let ret = table.insert(unsafe { Entry::new(e) }).map(|_| ());
-            if ret.is_err() {
-                // SAFETY: just written; its drop finds nothing to take out
-                unsafe { core::ptr::drop_in_place(slot) };
+            match table.insert_new(unsafe { Entry::new(e) }) {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(_)) => panic!("cuckoo: registering a key that's in already"),
+                Err(err) => {
+                    // SAFETY: just written; its drop finds nothing to take out
+                    unsafe { core::ptr::drop_in_place(slot) };
+                    Err(err)
+                }
             }
-            ret
         };
         // SAFETY: @slot is initialized on Ok, and not on Err; nothing moves it
         unsafe { ::pin_init::pin_init_from_closure(init) }
@@ -737,12 +738,13 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
     /// Out, if the slot is still this entry's: an insert() of its key may
     /// have put another in its place.
     fn drop(&mut self) {
-        // SAFETY: it outlives us, and we're its writer (new())
+        // SAFETY: it outlives us (new())
         let table = unsafe { self.table.as_ref() };
-        let Some(s) = table.locked().and_then(|t| t.find_locked(&self.key)) else { return };
+        let g = table.lock.lock();
+        let Some(s) = table.locked(&g).and_then(|t| t.find_locked(&self.key)) else { return };
         if s.load_locked().is_some_and(|i| i.0 == self.entry) {
             s.clear();
-            table.0.nr.fetch_sub(1, Relaxed);
+            table.nr.fetch_sub(1, Relaxed);
         }
     }
 }
@@ -754,8 +756,7 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
 #[derive(Default)]
 pub struct Faults {
     /// Spins inside each move, between its copy, its count and its emptying
-    /// - and a yield, the writer off CPU mid-chain: the writer must hold a
-    /// lock it can sleep under.
+    /// - and a yield, the writer off CPU mid-chain, holding the writers' lock.
     pub move_window: u32,
     /// Spins in a lookup before each slot it reads.
     pub read_window: u32,

@@ -7,11 +7,9 @@ use crate::data::reconcile::scan::OptChangeScans;
 use crate::data::reconcile::work::Status;
 use crate::locking::{Lock, SeqLock};
 use crate::new_lock;
-use crate::data::reconcile::work::{stripes_pending_new, StripesPending};
+use crate::data::reconcile::work::StripesPending;
 use crate::types::{RustOnly, rust_only};
-use crate::util::alloc::KBox;
 use crate::util::kthread::Kthread;
-use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, AtomicI32};
 use cstruct_macros::{CStruct, Init, TypeInfo};
 use pin_init::pin_data;
@@ -53,13 +51,12 @@ pub struct bch_fs_reconcile {
      * carries on with everything else and goes idle once they're all
      * that's left, instead of retrying them back to back. Stripes have no
      * on-disk pending state, as extents do; in memory, a remount retries
-     * each once. Read without the lock; the reconcile thread and its phys
-     * threads, one per rotational device, park stripes all at once, under
-     * it. Boxed: a Cuckoo is cacheline aligned, past what a RustOnly holds.
+     * each once. The reconcile thread and its phys threads, one per
+     * rotational device, park stripes all at once.
      */
     #[pin]
-    #[init(RustOnly::new(stripes_pending_new()))]
-    pub(crate) stripes_pending: rust_only!(Pin<KBox<StripesPending>>),
+    #[init(RustOnly::new(::pin_init::init_zeroed()))]
+    pub(crate) stripes_pending: rust_only!(StripesPending),
 
     /* Written by the power supply notifier */
     #[pin]
