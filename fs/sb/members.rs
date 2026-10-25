@@ -1425,6 +1425,11 @@ pub struct DevIoRef<'f, R: IoRefIdx> {
     ref_idx: R,
 }
 
+// SAFETY: a device is shared by every thread that does IO to it, and its io
+// refs are percpu refs, put from anywhere: one held by a task resumed on
+// another thread is as good as on this one
+unsafe impl<R: IoRefIdx> Send for DevIoRef<'_, R> {}
+
 impl<'f, R: IoRefIdx> DevIoRef<'f, R> {
     fn tryget(ca: &c::bch_dev, ref_idx: R) -> Option<Self> {
         // SAFETY: tryget only reads and counts
@@ -1551,6 +1556,53 @@ impl c::bch_dev {
     /// io_done: this_cpu_add(ca->io_done->sectors[rw][data_type], sectors).
     pub fn io_done_add(&self, rw: usize, data_type: c::bch_data_type, sectors: u64) {
         crate::percpu_field!(self.io_done.get(), sectors[rw][data_type.0 as usize]).add(sectors);
+    }
+
+    /// An IO of type @ty, submitted at @submit_time, completed: its latency -
+    /// unless it's a checksum check, which isn't IO - and a success, which
+    /// ends a run of write errors, or a failure, counted against the device.
+    /// From any context, an endio's included.
+    pub fn account_io_completion(&self, ty: c::bch_member_error_type, submit_time: u64, success: bool) {
+        use c::bch_member_error_type as T;
+
+        #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+        if ty != T::BCH_MEMBER_ERROR_checksum {
+            // SAFETY: a device; @ty is read or write, the rw it takes
+            unsafe { c::bch2_latency_acct(core::ptr::from_ref(self).cast_mut(), submit_time, ty.0 as c_int) };
+        }
+        #[cfg(CONFIG_BCACHEFS_NO_LATENCY_ACCT)]
+        let _ = submit_time;
+
+        if success {
+            if ty == T::BCH_MEMBER_ERROR_write && self.write_errors_start.load(Ordering::Relaxed) != 0 {
+                self.write_errors_start.store(0, Ordering::Relaxed);
+            }
+        } else {
+            self.io_error(ty);
+        }
+    }
+
+    /// Whether it's being removed - set by bch2_dev_remove() before the data
+    /// drop, cleared if the removal fails: read once, as C's READ_ONCE().
+    pub fn removing(&self) -> bool {
+        // SAFETY: read once, volatile
+        unsafe { core::ptr::read_volatile(&self.removing) }
+    }
+
+    /// An IO error of type @ty, counted against the device - which may set it
+    /// read-only, past its error threshold.
+    pub fn io_error(&self, ty: c::bch_member_error_type) {
+        // SAFETY: a device
+        unsafe { c::bch2_io_error(core::ptr::from_ref(self).cast_mut(), ty) };
+    }
+
+    /// A write completed that the device may still have in its volatile
+    /// cache, for the journal's next preflush.
+    pub fn write_unflushed(&self) {
+        let bit = 1 << c::bch_dev_flags::BCH_DEV_unflushed_writes as u32;
+        if self.flags.load(Ordering::Relaxed) & bit == 0 {
+            self.flags.fetch_or(bit, Ordering::Relaxed);
+        }
     }
 
     /// Its block device's name, model and serial, and whether it's rotational.
