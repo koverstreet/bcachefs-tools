@@ -361,7 +361,8 @@ pub struct bch_dev {
     /// so Rust's are through a shared bch_dev.
     #[c("unsigned long write_errors_start")]
     pub write_errors_start: crate::util::bitmap::AtomicULong,
-    pub flags: c_ulong,
+    /// BCH_DEV_FLAGS, by bit: C's set_bit() and test_bit()'s, so atomic
+    pub flags: crate::util::bitmap::AtomicULong,
 
     pub uuid: c::__uuid_t,
     pub name: [c_char; c::BDEVNAME_SIZE as usize],

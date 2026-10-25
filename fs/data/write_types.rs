@@ -203,4 +203,6 @@ c_extern! {
                               disk_res: *mut c::disk_reservation, new_i_size: u64,
                               i_sectors_delta_total: *mut i64, check_enospc: bool,
                               change_cookie: u32, flush: *mut c::closure) -> c_int;
+    #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+    pub fn bch2_latency_acct(ca: *mut c::bch_dev, submit_time: u64, rw: c_int);
 }

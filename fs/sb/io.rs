@@ -2342,8 +2342,7 @@ fn sb_io_result(fs: &Fs, ca: &c::bch_dev, rw: c::bch_member_error_type, ret: Res
             Ok(())
         }
         Err(e) => {
-            // SAFETY: a device, live as long as @ca is
-            unsafe { c::bch2_io_error(core::ptr::from_ref(ca).cast_mut(), rw) };
+            ca.io_error(rw);
             Err(fs.err(c::bch_errcode(e.raw() as u32)))
         }
     }
