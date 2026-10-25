@@ -358,20 +358,10 @@ struct bch_fs *bch2_uuid_to_fs(__uuid_t uuid)
  * - allocator depends on the journal (when it rewrites prios and gens)
  */
 
-static void __bch2_fs_read_only(struct bch_fs *c)
+static void bch2_fs_flush_until_clean(struct bch_fs *c)
 {
 	unsigned clean_passes = 0;
 	u64 seq = 0;
-
-	bch2_maybe_schedule_btree_bitmap_gc_stop(c);
-	bch2_fs_ec_stop(c);
-	bch2_open_buckets_stop(c, NULL, true);
-	bch2_copygc_stop(c);
-	bch2_btree_write_buffer_stop(c);
-	bch2_fs_ec_flush(c);
-
-	bch_verbose(c, "flushing journal and stopping allocators, journal seq %llu",
-		    journal_cur_seq(&c->journal));
 
 	do {
 		clean_passes++;
@@ -388,6 +378,31 @@ static void __bch2_fs_read_only(struct bch_fs *c)
 			clean_passes = 0;
 		}
 	} while (clean_passes < 2);
+}
+
+static void __bch2_fs_read_only(struct bch_fs *c)
+{
+	bch2_maybe_schedule_btree_bitmap_gc_stop(c);
+	bch2_fs_ec_stop(c);
+	bch2_open_buckets_stop(c, NULL, true);
+	bch2_copygc_stop(c);
+	bch2_btree_write_buffer_stop(c);
+	bch2_fs_ec_flush(c);
+
+	bch_verbose(c, "flushing journal and stopping allocators, journal seq %llu",
+		    journal_cur_seq(&c->journal));
+
+	bch2_fs_flush_until_clean(c);
+
+	/*
+	 * The going-RO discard work runs on its own: one queued during the
+	 * clean passes can still be running after the last one, and the alloc
+	 * keys it updates stay dirty in the key cache - bch2_fs_journal_stop()
+	 * would commit them after BCH_FS_clean_shutdown is set. Stop it, then
+	 * flush once more:
+	 */
+	bch2_do_discards_going_ro_stop(c);
+	bch2_fs_flush_until_clean(c);
 
 	/*
 	 * On a dead journal the clean-shutdown loop above can't make dirty
@@ -458,6 +473,7 @@ void bch2_fs_read_only(struct bch_fs *c)
 	 * reconcile kthread's child workers (which check this flag to break
 	 * out) see it while bch2_reconcile_stop() is blocked waiting on them.
 	 */
+	WRITE_ONCE(c->discards.going_ro_stopped, false);
 	set_bit(BCH_FS_going_ro, &c->flags);
 
 	/*

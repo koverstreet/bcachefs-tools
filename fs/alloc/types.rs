@@ -314,6 +314,11 @@ pub struct discard_state {
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_discards {
     pub work: c::work_struct,
+    /// Going read-only: discards for the allocator without a write ref.
+    pub going_ro_work: c::work_struct,
+    pub going_ro_stopped: bool,
+    /// One discard pass at a time.
+    pub worker_lock: c::mutex,
     pub bioset: c::bio_set,
 
     pub lock: c::spinlock_t,
@@ -346,8 +351,8 @@ impl Fs {
         unsafe { bch2_discards_to_text(out.as_raw(), self.as_ptr(), core::ptr::from_ref(s).cast_mut()) }
     }
 
-    /// Kick the discard worker - unless the filesystem is going read-only;
-    /// it takes its own write ref.
+    /// Kick the discard worker - it takes its own write ref; going
+    /// read-only, the going-RO discard work instead.
     pub fn do_discards_async(&self) {
         unsafe { bch2_do_discards_async(self.as_ptr()) }
     }

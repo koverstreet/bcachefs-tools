@@ -475,6 +475,9 @@ static void bch2_do_discards(struct bch_fs *c)
 	bool again;
 	unsigned flushed_wb = 0;
 
+	/* the going-RO work's pass may start while the last async one runs: */
+	guard(mutex)(&d->worker_lock);
+
 	CLASS(btree_trans, trans)(c);
 
 	do {
@@ -600,10 +603,41 @@ void bch2_do_discards_work(struct work_struct *work)
 	enumerated_ref_put(&c->writes, BCH_WRITE_REF_discard);
 }
 
+/*
+ * Going read-only stops c->writes before the final flushes, which still
+ * allocate btree nodes - and the discard worker takes a writes ref, so the
+ * buckets those flushes free stay in need_discard; the clean pass discards
+ * only between flushes. A flush that takes the last free buckets would wait
+ * on the allocator for good. So going read-only, bch2_do_discards_async()
+ * queues this work instead, which needs no writes ref;
+ * __bch2_fs_read_only() stops it before its final clean passes.
+ */
+static void bch2_do_discards_going_ro_work(struct work_struct *work)
+{
+	struct bch_fs *c = container_of(work, struct bch_fs, discards.going_ro_work);
+
+	/* queued after bch2_do_discards_going_ro_stop()'s cancel: */
+	if (READ_ONCE(c->discards.going_ro_stopped))
+		return;
+
+	bch2_do_discards(c);
+}
+
+void bch2_do_discards_going_ro_stop(struct bch_fs *c)
+{
+	WRITE_ONCE(c->discards.going_ro_stopped, true);
+	cancel_work_sync(&c->discards.going_ro_work);
+}
+
 void bch2_do_discards_async(struct bch_fs *c)
 {
-	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_discard))
+	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_discard)) {
+		if (test_bit(BCH_FS_going_ro, &c->flags) &&
+		    !test_bit(BCH_FS_emergency_ro, &c->flags) &&
+		    !READ_ONCE(c->discards.going_ro_stopped))
+			queue_work(system_long_wq, &c->discards.going_ro_work);
 		return;
+	}
 
 	if (queue_work(c->write_ref_wq, &c->discards.work))
 		return;
@@ -919,6 +953,7 @@ int bch2_dev_discards_init(struct bch_dev *ca)
 
 void bch2_fs_discards_exit(struct bch_fs *c)
 {
+	cancel_work_sync(&c->discards.going_ro_work);
 	darray_exit(&c->discards.in_flight);
 	bioset_exit(&c->discards.bioset);
 }
@@ -934,5 +969,7 @@ int bch2_fs_discards_init(struct bch_fs *c)
 void bch2_fs_discards_init_early(struct bch_fs *c)
 {
 	INIT_WORK(&c->discards.work, bch2_do_discards_work);
+	INIT_WORK(&c->discards.going_ro_work, bch2_do_discards_going_ro_work);
+	mutex_init(&c->discards.worker_lock);
 	spin_lock_init(&c->discards.lock);
 }

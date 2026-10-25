@@ -13,6 +13,7 @@ void bch2_discards_to_text(struct printbuf *, struct bch_fs *, struct discard_st
 void bch2_dev_do_discards(struct bch_dev *);
 void bch2_do_discards_going_ro(struct bch_fs *);
 void bch2_do_discards_async(struct bch_fs *);
+void bch2_do_discards_going_ro_stop(struct bch_fs *);
 
 void bch2_do_discards_work(struct work_struct *);
 void bch2_do_discards_fast_work(struct work_struct *);
