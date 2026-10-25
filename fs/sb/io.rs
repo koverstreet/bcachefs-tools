@@ -1219,8 +1219,9 @@ impl c::bch_sb_io {
                 return Ok(());
             }
 
-            let bio = BioBuf::<Bio>::new::<BchError, _>(nr.try_into().expect("a superblock's worth of bvecs"),
-                                                        core::ptr::null_mut(), 0, |b| b.init())
+            let bio = BioBuf::<Bio>::new::<BchError, _>(core::ptr::null_mut(),
+                                                        nr.try_into().expect("a superblock's worth of bvecs"),
+                                                        0, |b| b.init())
                 .map_err(|_| BchError::from(c::bch_errcode::BCH_ERR_ENOMEM_sb_bio_realloc))?;
             if !self.bio.is_null() {
                 // SAFETY: the bio's ours, from the last realloc()
@@ -1304,13 +1305,17 @@ pub fn bch2_free_super(sb: &mut c::bch_sb_handle) {
 
 /// A handle's bio, borrowed apart from the buffer it reads into and writes
 /// from.
-struct HandleBio<'a>(&'a Bio);
+struct HandleBio<'a>(Pin<&'a mut Bio>);
 
 // SAFETY: the handle's, from realloc(): nothing else has it while the
 // handle's borrowed
 unsafe impl BioOwner for HandleBio<'_> {
     fn bio(&self) -> &Bio {
-        self.0
+        &self.0
+    }
+
+    fn bio_mut(&mut self) -> Pin<&mut Bio> {
+        self.0.as_mut()
     }
 }
 
@@ -1320,9 +1325,9 @@ impl c::bch_sb_io {
     fn bio(&mut self, dev: &c::bch_sb_bdev, opf: u32, sector: u64) -> (HandleBio<'_>, &mut [u8]) {
         assert!(!self.bio.is_null(), "superblock IO without a bio: have_bio wasn't set");
         // SAFETY: realloc()'s, borrowed with us
-        let mut bio = HandleBio(unsafe { Bio::from_raw(self.bio) });
-        bio.reset(dev.bdev, opf);
-        bio.set_sector(sector);
+        let mut bio = HandleBio(unsafe { Bio::from_raw_mut(self.bio) });
+        bio.bio_mut().reset(dev.bdev, opf);
+        bio.bio_mut().set_sector(sector);
         (bio, self.buf.buffer_mut())
     }
 

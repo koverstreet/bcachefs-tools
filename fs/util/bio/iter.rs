@@ -37,8 +37,6 @@ unsafe fn nth_page(page: *mut c::page, n: usize) -> *mut c::page {
     return unsafe { page.byte_add(n * PAGE_SIZE) };
 }
 
-/// @page's address in the direct map: page_address().
-///
 /// # Safety
 /// @page is a page, not highmem.
 unsafe fn page_address(page: NonNull<c::page>) -> NonNull<u8> {
@@ -86,8 +84,6 @@ unsafe fn chunk_at(page: NonNull<c::page>, offset: u32, len: u32) -> (At, u32) {
 }
 
 impl BioRange<'_> {
-    /// Whether a walk has anything to yield: a discard, or a write of zeroes,
-    /// has a size and no bvecs.
     fn walkable(&self) -> bool {
         !self.is_empty() && !self.bio.no_advance_iter()
     }
@@ -106,7 +102,6 @@ impl BioRange<'_> {
     }
 }
 
-/// A walk over a range: what's left of it, and how a step of it is taken.
 pub struct Walk<'a, T> {
     rest: BioRange<'a>,
     step: fn(&mut BioRange<'a>) -> Option<T>,
@@ -122,7 +117,6 @@ impl<'a, T> Walk<'a, T> {
         Self { rest, step }
     }
 
-    /// What's left of the range: where the walk's got to.
     pub fn remaining(&self) -> BioRange<'a> {
         self.rest
     }
@@ -145,9 +139,6 @@ impl<T> FusedIterator for Walk<'_, T> {}
 
 // ── Chunks ───────────────────────────────────────────────────────────────
 
-/// Part of a bio's data that's virtually contiguous, borrowed from it: copied
-/// out of, copied into, zeroed, or its bytes handed over mapped.
-///
 /// Its memory may be written while it's read - a user's page under direct
 /// IO, a page another IO maps too - so it's never a &[u8]: copied, or handed
 /// over as a pointer.
@@ -176,8 +167,7 @@ impl Chunk<'_> {
         self.len == 0
     }
 
-    /// @f on its bytes, mapped: a pointer to them, and how many - which may
-    /// change under it, as said above.
+    /// The bytes may change under @f, as above.
     pub fn with_mapped<R>(&self, f: impl FnOnce(*mut u8, usize) -> R) -> R {
         match self.at {
             At::Direct(p) => f(p.as_ptr(), self.len as usize),
@@ -193,7 +183,7 @@ impl Chunk<'_> {
         }
     }
 
-    /// Its first bytes copied to @dst, as many as both have: how many.
+    /// As much as both have, copied: how much.
     pub fn copy_to(&self, dst: &mut [u8]) -> usize {
         // SAFETY: n of the chunk's bytes, mapped, into n of @dst
         self.with_mapped(|p, len| {
@@ -203,7 +193,7 @@ impl Chunk<'_> {
         })
     }
 
-    /// Its first bytes from @src, as many as both have: how many.
+    /// As copy_to().
     pub fn copy_from(&self, src: &[u8]) -> usize {
         // SAFETY: n of @src into n of the chunk's bytes, mapped
         self.with_mapped(|p, len| {
@@ -219,7 +209,6 @@ impl Chunk<'_> {
     }
 }
 
-/// A range's next chunk, the walk past it.
 pub(super) fn chunk<'a>(rest: &mut BioRange<'a>) -> Option<Chunk<'a>> {
     let (page, offset, len) = rest.head()?;
     // SAFETY: the bvec the walk is in, from where it's at
@@ -232,11 +221,9 @@ pub(super) fn chunk<'a>(rest: &mut BioRange<'a>) -> Option<Chunk<'a>> {
 
 // ── Segments ─────────────────────────────────────────────────────────────
 
-/// Part of a bvec of a bio's: __bio_for_each_bvec()'s - from @offset in
-/// @page, possibly running on into the pages after it.
+/// May run on from @page into the pages after it.
 pub struct Segment<'a> {
     pub page:   NonNull<c::page>,
-    /// Where in @page
     pub offset: u32,
     pub len:    u32,
     _bio:       PhantomData<&'a ()>,
@@ -250,17 +237,14 @@ pub(super) fn segment<'a>(rest: &mut BioRange<'a>) -> Option<Segment<'a>> {
 
 // ── Folios ───────────────────────────────────────────────────────────────
 
-/// Part of a folio of a bio's: a folio_vec.
 #[cfg(kernel)]
 pub struct FolioVec<'a> {
     pub folio:  NonNull<c::folio>,
-    /// Where in the folio
     pub offset: usize,
     pub len:    usize,
     _bio:       PhantomData<&'a ()>,
 }
 
-/// As much of the folio the range starts in as its bvec has.
 #[cfg(kernel)]
 pub(super) fn folio<'a>(rest: &mut BioRange<'a>) -> Option<FolioVec<'a>> {
     let (page, offset, len) = rest.head()?;
@@ -294,10 +278,10 @@ mod tests {
     #[test]
     fn ranges_and_chunks() {
         let (mut a, mut b, mut c_) = ([1u8; 8], [2u8; 4], [3u8; 6]);
-        let buf = BioBuf::<Bio>::new::<BchError, _>(3, core::ptr::null_mut(), 0, |bio| bio.init()).unwrap();
+        let mut buf = BioBuf::<Bio>::new::<BchError, _>(core::ptr::null_mut(), 3, 0, |bio| bio.init()).unwrap();
         for x in [&mut a[..], &mut b[..], &mut c_[..]] {
             // SAFETY: a buffer that outlives the bio, into one of its 3 bvecs
-            unsafe { c::bio_add_virt_nofail(buf.bio().as_ptr(), x.as_mut_ptr().cast(), x.len() as _) };
+            unsafe { buf.bio_mut().map(x.as_mut_ptr(), x.len()) };
         }
         let lens = |r: BioRange<'_>| r.into_iter().map(|s| s.len()).collect::<Vec<_>>();
         assert_eq!(lens(buf.range_all()), [8, 4, 6]);
@@ -323,12 +307,12 @@ mod tests {
         tail.advance(16);
         tail.zero();
 
-        // SAFETY: the bio's, not walked meanwhile
-        unsafe { (*buf.bio().as_ptr()).bi_iter.bi_size = 0 };
+        // what only the block layer does: the IO completed, then the bio a
+        // discard
+        buf.bio_mut().raw_mut().bi_iter.bi_size = 0;
         assert_eq!((lens(buf.bio().range()), lens(buf.range_all())), (vec![], vec![8, 4, 6]));
 
-        // SAFETY: as above
-        unsafe { (*buf.bio().as_ptr()).bi_opf = c::req_op_REQ_OP_DISCARD };
+        buf.bio_mut().raw_mut().bi_opf = c::req_op_REQ_OP_DISCARD;
         assert_eq!(lens(buf.range_all()), []);
 
         drop(buf);
@@ -340,7 +324,7 @@ mod tests {
     #[test]
     fn mapping_ends_with_its_borrow() {
         let buf = [5u8; 512];
-        let mut bio = BioBuf::<Bio>::new::<BchError, _>(1, core::ptr::null_mut(),
+        let mut bio = BioBuf::<Bio>::new::<BchError, _>(core::ptr::null_mut(), 1,
                                                         c::req_op_REQ_OP_WRITE, |b| b.init()).unwrap();
         let m = bio.map_write(&buf);
         assert_eq!(m.owner.range_all().len(), 512);

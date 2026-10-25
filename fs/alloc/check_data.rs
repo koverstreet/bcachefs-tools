@@ -180,9 +180,9 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: c::btree_id
     let mut buf = KVVec::from_elem(0u8, bytes, GFP_KERNEL).map_err(|_| BchError::from(c::ENOMEM))?;
 
     let nr_vecs = buf_nr_bvecs(buf.as_ptr(), bytes).try_into().expect("bvecs for a btree node or an extent");
-    let mut bio = BioBuf::<Bio>::new::<BchError, _>(nr_vecs, ca.disk_sb.bdev, c::req_op_REQ_OP_READ as u32,
+    let mut bio = BioBuf::<Bio>::new::<BchError, _>(ca.disk_sb.bdev, nr_vecs, c::req_op_REQ_OP_READ as u32,
                                                      |b| b.init())?;
-    bio.set_sector(p.ptr.offset());
+    bio.bio_mut().set_sector(p.ptr.offset());
     bio.map_read(&mut buf).submit_wait()?;
 
     let bad = if is_btree_ptr {

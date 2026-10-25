@@ -1,18 +1,27 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! What owns a bio: BioBox, a ref on one from a BioSet - a bioset of bios at
-//! the end of a T - and BioBuf, a T and its inline bvecs in memory of their
-//! own. Both deref to the T, shared only: its bio is never had by &mut, so
-//! never moved off the bvecs that may follow it.
+//! A bio's owners. Each owns a T that ends in its bio - HasBio: the bio is
+//! the T's last field, and the T is found from it by that offset.
+//!
+//! - BioBox<T>: a ref on a bio from a BioSet<T>, a bioset whose front_pad is
+//!   the rest of the T. bio_put() on drop.
+//! - BioBuf<T>: a T and its inline bvecs, in one allocation of their own.
+//!   BioBufPtr<T> is one as a thin pointer, for C's struct bio * fields.
+//!
+//! They deref to the T, and change it through Pin<&mut T>: the T holds its
+//! bio, which is pinned.
 //!
 //! A T is made around its bio: the bioset, or BioBuf::new(), puts the bio
-//! where it goes, then the caller's initializer does the rest of the T -
-//! its bio field from BioInPlace::init(), which writes nothing, the bio
-//! already being there.
+//! where it goes, then the caller's initializer does the rest of the T - its
+//! bio field from BioInPlace::init(), which writes nothing.
+//!
+//! Submitting (RawBio::submit()) turns the owner into its bio for the block
+//! layer; the endio turns it back, and hands it to Endio::endio().
 
 use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::ops::Deref;
+use core::pin::Pin;
 use core::ptr::NonNull;
 
 use pin_init::PinInit;
@@ -23,11 +32,11 @@ use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::alloc::{init_at, kfree, kzalloc, KBox};
 use crate::util::ffi::Opaque;
 
-/// A #[repr(C)] struct whose last field is a Bio: a bioset's front_pad is
-/// where that is, and the struct is found from its bio - container_of().
-///
 /// # Safety
-/// BIO_OFFSET is the offset of a Bio field that ends the struct.
+/// BIO_OFFSET is the offset of a Bio field that ends the struct, #[repr(C)]. If the
+/// struct projects its pinning - #[pin_data] - that field is #[pin]: so
+/// BioBox::as_mut()'s Pin<&mut Self> never hands it out unpinned, to be
+/// moved off its bvecs.
 pub unsafe trait HasBio: Sized {
     const BIO_OFFSET: usize;
 }
@@ -37,7 +46,8 @@ unsafe impl HasBio for Bio {
     const BIO_OFFSET: usize = 0;
 }
 
-/// HasBio for $t, by its Bio field $f: checked to be a Bio, and last.
+/// HasBio for $t, by its Bio field $f: checked to be a Bio, and last - not
+/// that it's #[pin], which HasBio asks of a struct with #[pin_data].
 #[macro_export]
 macro_rules! has_bio {
     ($t:ty, $f:ident) => {
@@ -54,13 +64,10 @@ macro_rules! has_bio {
     };
 }
 
-/// @t's bio.
 fn bio_of<T: HasBio>(t: *mut T) -> *mut c::bio {
     t.cast::<u8>().wrapping_add(T::BIO_OFFSET).cast()
 }
 
-/// The T @bio is the bio of.
-///
 /// # Safety
 /// @bio is a T's.
 unsafe fn of_bio<T: HasBio>(bio: *mut c::bio) -> *mut T {
@@ -68,12 +75,9 @@ unsafe fn of_bio<T: HasBio>(bio: *mut c::bio) -> *mut T {
     unsafe { bio.byte_sub(T::BIO_OFFSET).cast() }
 }
 
-/// A T's bio, made where it goes - by its bioset, or BioBuf::new() - for the
-/// T's initializer to initialize its bio field with.
 pub struct BioInPlace(*mut c::bio);
 
 impl BioInPlace {
-    /// The initializer of a T's bio field: writes nothing - the bio's there.
     pub fn init<E>(self) -> impl PinInit<Bio, E> {
         let bio = self.0;
         // SAFETY: writes nothing, the bio being there - its slot, checked
@@ -88,7 +92,8 @@ impl BioInPlace {
 
 // ── BioSet, BioBox ───────────────────────────────────────────────────────
 
-/// A bioset of T's: their bios at front_pad, where a T has its bio.
+/// Rust's, made by new() and destroyed on drop - in a struct C may share, as
+/// its struct bio_set - or C's, borrowed by from_c().
 #[repr(transparent)]
 pub struct BioSet<T: HasBio> {
     set: Opaque<c::bio_set>,
@@ -96,7 +101,20 @@ pub struct BioSet<T: HasBio> {
 }
 
 impl<T: HasBio> BioSet<T> {
-    /// C's bioset, as the bioset of T's it is: its front_pad is checked.
+    /// @pool_size bios held in reserve, and bvecs with them if @need_bvecs:
+    /// for bios allocated with more than fit inline. Nothing to undo if it
+    /// fails.
+    pub fn new(pool_size: u32, need_bvecs: bool) -> impl PinInit<Self, BchError> {
+        let flags = if need_bvecs { c::BIOSET_NEED_BVECS as i32 } else { 0 };
+        // SAFETY: initialized in place, where it stays - pinned
+        unsafe {
+            ::pin_init::pin_init_from_closure(move |slot: *mut Self| {
+                ret_to_result_void(c::bioset_init(slot.cast(), pool_size, T::BIO_OFFSET as u32, flags))
+            })
+        }
+    }
+
+    /// Panics if its front_pad isn't a T's.
     pub fn from_c(set: &c::bio_set) -> &Self {
         assert_eq!(set.front_pad as usize, T::BIO_OFFSET, "a bioset of another type's bios");
         // SAFETY: a transparent bio_set
@@ -104,14 +122,13 @@ impl<T: HasBio> BioSet<T> {
     }
 
     /// A T with a bio for @bdev, @opf, of @nr_vecs bvecs - inline, or the
-    /// set's - and its other fields from @init, given its bio:
-    /// bio_alloc_bioset(), GFP_KERNEL - NOIO or NOFS are the caller's
-    /// memalloc scope's. Fails only if @init does, or past BIO_MAX_VECS or
-    /// the set's bvec pool: the bio is a mempool's, so it waits for one.
+    /// set's - and its other fields from @init. GFP_KERNEL: NOIO or NOFS is
+    /// the caller's memalloc scope's. Fails only if @init does, or past
+    /// BIO_MAX_VECS or the set's bvec pool; otherwise it waits on the mempool.
     ///
-    /// Which deadlocks, if what it waits for is a bio this task already has
-    /// from the set and hasn't submitted: one at a time, or a pool big enough
-    /// for as many as are held at once.
+    /// Which deadlocks, if what it waits for is a bio this task holds from
+    /// the set, unsubmitted: one at a time, or a pool as big as how many are
+    /// held at once.
     pub fn alloc<E, I>(&self, bdev: *mut c::block_device, nr_vecs: u16, opf: u32,
                        init: impl FnOnce(BioInPlace) -> I) -> Result<BioBox<T>, E>
     where
@@ -138,7 +155,14 @@ impl<T: HasBio> BioSet<T> {
     }
 }
 
-/// A ref on a bio from a BioSet<T>, and the T around it: bio_put() on drop.
+impl<T: HasBio> Drop for BioSet<T> {
+    /// Its bios are all back: its owner's teardown waits for them.
+    fn drop(&mut self) {
+        // SAFETY: new()'s, never moved: a C bioset is only ever borrowed
+        unsafe { c::bioset_exit(self.set.as_ptr()) }
+    }
+}
+
 pub struct BioBox<T: HasBio>(NonNull<T>);
 
 // SAFETY: a T, as a Box's: what has the box has the T
@@ -167,11 +191,24 @@ impl<T: HasBio> Deref for BioBox<T> {
     }
 }
 
+impl<T: HasBio> BioBox<T> {
+    pub fn as_mut(&mut self) -> Pin<&mut T> {
+        // SAFETY: the T, live while it's had, and the box's alone - a bio in
+        // flight has given up its box; never moved from where its set made it
+        unsafe { Pin::new_unchecked(self.0.as_mut()) }
+    }
+}
+
 // SAFETY: the box's bio, its only ref
 unsafe impl<T: HasBio> BioOwner for BioBox<T> {
     fn bio(&self) -> &Bio {
         // SAFETY: the T's bio
         unsafe { Bio::from_raw(bio_of(self.0.as_ptr())) }
+    }
+
+    fn bio_mut(&mut self) -> Pin<&mut Bio> {
+        // SAFETY: as bio()'s, and the box's alone, as in as_mut()
+        unsafe { Bio::from_raw_mut(bio_of(self.0.as_ptr())) }
     }
 }
 
@@ -195,19 +232,16 @@ struct Inline<T> {
     vecs: [c::bio_vec],
 }
 
-/// A T and its bio's bvecs, inline, in a box of their own - bio_kmalloc()
-/// and bio_init(), in Rust: a DST, sized when made, bio_uninit() on drop.
-/// A KBox, not a KVBox: an endio may drop it, and kvfree() isn't safe in
-/// interrupt context.
+/// A DST, sized when made. A KBox, not a KVBox: an endio may drop it, and
+/// kvfree() isn't safe in interrupt context.
 pub struct BioBuf<T: HasBio>(KBox<Inline<T>>);
 
 // SAFETY: as BioBox's
 unsafe impl<T: HasBio + Send> Send for BioBuf<T> {}
 
 impl<T: HasBio> BioBuf<T> {
-    /// A T with a bio for @bdev, @opf, of @nr_vecs inline bvecs, and its
-    /// other fields from @init, given its bio.
-    pub fn new<E, I>(nr_vecs: u16, bdev: *mut c::block_device, opf: u32,
+    /// As BioSet::alloc(), the bvecs inline.
+    pub fn new<E, I>(bdev: *mut c::block_device, nr_vecs: u16, opf: u32,
                      init: impl FnOnce(BioInPlace) -> I) -> Result<Self, E>
     where
         I: PinInit<T, E>,
@@ -254,6 +288,11 @@ unsafe impl<T: HasBio> BioOwner for BioBuf<T> {
         // SAFETY: the T's bio
         unsafe { Bio::from_raw(bio_of(core::ptr::from_ref(&self.0.t).cast_mut())) }
     }
+
+    fn bio_mut(&mut self) -> Pin<&mut Bio> {
+        // SAFETY: the T's bio, had by &mut
+        unsafe { Bio::from_raw_mut(bio_of(&raw mut self.0.t)) }
+    }
 }
 
 // SAFETY: the T's bio, and back: container_of(), and its bvecs' count -
@@ -280,29 +319,67 @@ unsafe impl<T: HasBio> RawBio for BioBuf<T> {
 impl<T: HasBio> Drop for BioBuf<T> {
     fn drop(&mut self) {
         // SAFETY: its bio, idle: the box then drops the T, and frees it all
-        unsafe { c::bio_uninit(self.bio().as_ptr()) }
+        unsafe { c::bio_uninit(self.bio_mut().raw_mut()) }
+    }
+}
+
+/// For a field C shares as a struct bio *: an Option of one is a nullable
+/// pointer, zeroed None, where a BioBuf is a fat one. For as long as such
+/// structs are C's.
+#[repr(transparent)]
+pub struct BioBufPtr<T: HasBio>(NonNull<T>);
+
+// SAFETY: as BioBuf's
+unsafe impl<T: HasBio + Send> Send for BioBufPtr<T> {}
+
+impl<T: HasBio> From<BioBuf<T>> for BioBufPtr<T> {
+    fn from(b: BioBuf<T>) -> Self {
+        // SAFETY: a bio's T: into_raw()'s
+        BioBufPtr(unsafe { NonNull::new_unchecked(of_bio::<T>(b.into_raw())) })
+    }
+}
+
+impl<T: HasBio> Deref for BioBufPtr<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        // SAFETY: its T, live while it's had
+        unsafe { self.0.as_ref() }
+    }
+}
+
+// SAFETY: the buffer's bio, its own
+unsafe impl<T: HasBio> BioOwner for BioBufPtr<T> {
+    fn bio(&self) -> &Bio {
+        // SAFETY: the T's bio
+        unsafe { Bio::from_raw(bio_of(self.0.as_ptr())) }
+    }
+
+    fn bio_mut(&mut self) -> Pin<&mut Bio> {
+        // SAFETY: the T's bio, had by &mut
+        unsafe { Bio::from_raw_mut(bio_of(self.0.as_ptr())) }
+    }
+}
+
+impl<T: HasBio> Drop for BioBufPtr<T> {
+    fn drop(&mut self) {
+        // SAFETY: a BioBuf's bio, from into_raw(), given back once
+        drop(unsafe { BioBuf::<T>::from_raw(bio_of(self.0.as_ptr())) })
     }
 }
 
 // ── Submission ───────────────────────────────────────────────────────────
 
-/// An owner given up to C as its bio, and taken back: by submit(), and the
-/// endio it arms.
-///
 /// # Safety
 /// from_raw() of into_raw()'s bio is the owner given up.
 pub unsafe trait RawBio: BioOwner + Sized {
-    /// Its bio, and with it the owner: for C, to give back by from_raw().
     fn into_raw(self) -> *mut c::bio;
 
-    /// The owner @bio is.
-    ///
     /// # Safety
     /// @bio is into_raw()'s, of an owner of this type, not since taken back.
     unsafe fn from_raw(bio: *mut c::bio) -> Self;
 
-    /// Given up to the block layer, until E::endio() has it back:
-    /// submit_bio(). Its owner's for as long as the IO takes, so 'static.
+    /// 'static: the IO has it for as long as it takes.
     fn submit<E: Endio<Self>>(self)
     where
         Self: Send + 'static,
@@ -316,21 +393,17 @@ pub unsafe trait RawBio: BioOwner + Sized {
     }
 }
 
-/// What's done when an O's IO completes, given the owner submit() gave up
-/// and the IO's result. A type of its own, not O's: one struct's bios may
-/// complete differently by the path that submitted them.
+/// The result is bio().status(). A type of its own, not O's: one struct's
+/// bios may complete differently by the path that submitted them.
 ///
 /// It runs where the IO completes - softirq, or an interrupt - so it may not
 /// sleep, nor may T's Drop, if it drops the owner: what would goes to a
 /// workqueue, with the owner.
 pub trait Endio<O> {
-    fn endio(bio: O, ret: Result<(), BchError>);
+    fn endio(bio: O);
 }
 
-/// The bi_end_io submit::<E>() arms: its owner back, to E.
 unsafe extern "C" fn endio<O: RawBio, E: Endio<O>>(bio: *mut c::bio) {
     // SAFETY: armed by submit() alone, on an O's bio, given up with it
-    let (status, owner) = unsafe { ((*bio).bi_status, O::from_raw(bio)) };
-    // SAFETY: a status
-    E::endio(owner, ret_to_result_void(unsafe { c::blk_status_to_errno(status) }))
+    E::endio(unsafe { O::from_raw(bio) })
 }
