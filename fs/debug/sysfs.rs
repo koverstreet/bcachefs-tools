@@ -19,7 +19,7 @@
 //! The fs dir and internal/ are one filesystem's two views, debugging under
 //! internal/. A store to either is refused until the filesystem has started
 //! (EPERM). Triggers whose work needs the filesystem writable hold a write ref
-//! (BCH_WRITE_REF_sysfs) across it - writable(), EROFS without one; the rest -
+//! across it - writable(), EROFS without one; the rest -
 //! wakeups, cache shrinks, the logged-op knob, work that takes its own ref -
 //! need none.
 
@@ -648,7 +648,7 @@ fn started(c: &Fs) -> Result<(), BchError> {
 }
 
 fn write_ref(c: &Fs) -> Result<WriteRef<'_>, BchError> {
-    c.write_ref_tryget(c::bch_write_ref::BCH_WRITE_REF_sysfs)
+    WriteRef::tryget_live(c)
         .ok_or(c::EROFS.into())
 }
 

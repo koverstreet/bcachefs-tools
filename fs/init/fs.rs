@@ -5,6 +5,7 @@ use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts};
 use crate::locking::{Guard, Lock, MutexNoio, Noio, PercpuRwsemNoio};
 use crate::util::Printbuf;
+use crate::util::refcount::{RefGuard, Refcount, TryRefcount};
 
 pub use crate::sb::members::DevRef;
 
@@ -583,38 +584,61 @@ impl Drop for OpenFs {
     }
 }
 
-/// A write ref on @fs, of kind @idx: while one is held, the filesystem can't
-/// go read-only. Dropping it puts it.
-pub struct WriteRef<'f> {
-    fs:  &'f Fs,
-    idx: c::bch_write_ref,
-}
+/// c->writes: while a write ref is held, the filesystem can't finish going
+/// read-only, which stops writes and waits for every ref to be put. Rust's
+/// refs are one kind, BCH_WRITE_REF_rust: the kinds are a debugging aid, for
+/// C's.
+///
+/// It's killed in two steps, as a percpu_ref: tryget_live() fails once writes
+/// are being stopped - for anything new - and tryget() once they've stopped,
+/// for what has to finish once it's begun.
+pub enum Writes {}
+
+/// A write ref on a filesystem.
+pub type WriteRef<'f> = RefGuard<'f, Fs, Writes>;
+
+const RUST: u32 = c::bch_write_ref::BCH_WRITE_REF_rust as u32;
 
 impl Fs {
-    /// A write ref of kind @idx, unless the filesystem is going read-only: as
-    /// enumerated_ref_tryget(&c->writes, idx).
-    pub fn write_ref_tryget(&self, idx: c::bch_write_ref) -> Option<WriteRef<'_>> {
-        unsafe { c::rust_enumerated_ref_tryget(&raw mut (*self.as_ptr()).writes, idx as u32) }
-            .then(|| WriteRef { fs: self, idx })
+    fn writes_raw(&self) -> *mut c::enumerated_ref {
+        // SAFETY: the filesystem's, for as long as it is
+        unsafe { &raw mut (*self.as_ptr()).writes }
     }
 }
 
-impl<'f> WriteRef<'f> {
-    /// Take ownership of a ref handed over without a WriteRef - by
-    /// queue_work(), to the work it queues.
-    ///
-    /// # Safety
-    /// The caller owns a write ref of kind @idx on @fs, and hands it over.
-    pub unsafe fn adopt(fs: &'f Fs, idx: c::bch_write_ref) -> Self {
-        WriteRef { fs, idx }
+// SAFETY: an enumerated_ref, which the filesystem outlives
+unsafe impl Refcount<Writes> for Fs {
+    fn inc(&self) {
+        // SAFETY: c->writes
+        unsafe { c::rust_enumerated_ref_get(self.writes_raw(), RUST) }
     }
 
+    unsafe fn dec(&self) {
+        // SAFETY: c->writes; the caller's ref
+        unsafe { c::rust_enumerated_ref_put(self.writes_raw(), RUST) }
+    }
+}
+
+// SAFETY: an enumerated_ref's trygets take a ref when they succeed
+unsafe impl TryRefcount<Writes> for Fs {
+    fn try_inc(&self) -> bool {
+        // SAFETY: c->writes
+        unsafe { c::rust___enumerated_ref_tryget(self.writes_raw(), RUST) }
+    }
+
+    fn try_inc_live(&self) -> bool {
+        // SAFETY: c->writes
+        unsafe { c::rust_enumerated_ref_tryget(self.writes_raw(), RUST) }
+    }
+}
+
+impl RefGuard<'_, Fs, Writes> {
     /// Queue @work on @fs's write_ref_wq, handing it this ref - its function
     /// adopt()s it, and drops it when done. If @work is already queued, the
     /// run that's pending has a ref, and this one is put.
     pub fn queue_work(self, work: &FsWork) {
         // SAFETY: the filesystem's, for as long as it is
-        let wq = unsafe { crate::util::workqueue::Queue::from_raw((*self.fs.as_ptr()).write_ref_wq) };
+        let wq = unsafe { crate::util::workqueue::Queue::from_raw((*self.as_ptr()).write_ref_wq) };
         self.queue_work_on(wq, work)
     }
 
@@ -624,14 +648,14 @@ impl<'f> WriteRef<'f> {
         // SAFETY: FsWork is pinned and initialized; the filesystem it's in
         // outlives its run, which holds this ref
         if unsafe { wq.queue_work(work.as_ptr()) } {
-            core::mem::forget(self);
+            self.leak();
         }
     }
 }
 
 /// A work item in the filesystem, run holding a write ref - struct
-/// work_struct to C. fs_work!() declares one: what it runs, the field it's
-/// in, the ref kind it holds - see there.
+/// work_struct to C. fs_work!() declares one: what it runs, and the field
+/// it's in - see there.
 #[repr(transparent)]
 pub struct FsWork {
     work: core::cell::UnsafeCell<c::work_struct>,
@@ -687,15 +711,13 @@ impl FsWork {
 }
 
 /// A work item in bch_fs, queued holding a write ref: one declaration for its
-/// function, its queueing and its initializer, so the ref kind the work
-/// adopts is the one queue() took.
+/// function, its queueing and its initializer, so the work adopts the ref
+/// queue() took.
 ///
 /// ```text
 /// fs_work! {
 ///     /// What it does
-///     pub(crate) work SubvolDelete:
-///         field snapshots.wait_for_pagecache_and_delete_work,
-///         write_ref BCH_WRITE_REF_snapshot_delete_pagecache;
+///     pub(crate) work SubvolDelete: field snapshots.wait_for_pagecache_and_delete_work;
 ///
 ///     fn run(fs: &Fs) { ... }
 /// }
@@ -710,9 +732,7 @@ impl FsWork {
 macro_rules! fs_work {
     (
         $(#[$attr:meta])*
-        $vis:vis work $name:ident:
-            field $($field:ident).+,
-            write_ref $ref:ident;
+        $vis:vis work $name:ident: field $($field:ident).+;
 
         fn run($fs:ident: &Fs) $body:block
     ) => {
@@ -721,7 +741,7 @@ macro_rules! fs_work {
 
         impl $name {
             $vis fn queue(fs: &$crate::fs::Fs) -> Result<(), $crate::errcode::BchError> {
-                let r = fs.write_ref_tryget($crate::c::bch_write_ref::$ref)
+                let r = $crate::fs::WriteRef::tryget_live(fs)
                     .ok_or_else(|| $crate::errcode::BchError::from($crate::c::EROFS))?;
                 r.queue_work(&fs.$($field).+);
                 Ok(())
@@ -753,9 +773,7 @@ macro_rules! fs_work {
                         .cast::<$crate::c::bch_fs>()
                 };
                 let fs = unsafe { $crate::fs::Fs::borrow_raw(c) };
-                let _write_ref = unsafe {
-                    $crate::fs::WriteRef::adopt(fs, $crate::c::bch_write_ref::$ref)
-                };
+                let _write_ref = unsafe { $crate::fs::WriteRef::adopt(fs) };
                 Self::run(fs)
             }
         }
@@ -822,12 +840,6 @@ macro_rules! fs_delayed_work {
             }
         }
     };
-}
-
-impl Drop for WriteRef<'_> {
-    fn drop(&mut self) {
-        unsafe { c::rust_enumerated_ref_put(&raw mut (*self.fs.as_ptr()).writes, self.idx as u32) };
-    }
 }
 
 /// A ref keeping @fs from being stopped: bch2_fs_stop() waits for these to be

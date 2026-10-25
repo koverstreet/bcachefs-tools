@@ -38,7 +38,7 @@ use crate::c;
 use crate::data::extents::Extents;
 use crate::data::io_misc::fpunch_at;
 use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
-use crate::fs::Fs;
+use crate::fs::{Fs, WriteRef};
 use crate::init::error::{id, BkeyValidate};
 use crate::snapshots::subvolume;
 use crate::types::{GenRadix, Le32, Le64};
@@ -961,7 +961,7 @@ pub fn remap_range(
     let reflink_p_may_update_opts_field = fs.request_incompat_feature(
         c::bcachefs_metadata_version::bcachefs_metadata_version_reflink_p_may_update_opts).is_ok();
 
-    let Some(_write_ref) = fs.write_ref_tryget(c::bch_write_ref::BCH_WRITE_REF_reflink) else {
+    let Some(_write_ref) = WriteRef::tryget_live(fs) else {
         return fs.throw(bch_errcode::BCH_ERR_erofs_no_writes);
     };
 

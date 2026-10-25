@@ -127,6 +127,16 @@ int enumerated_ref_init(struct enumerated_ref *ref, unsigned nr,
 }
 
 /* For Rust: without ENUMERATED_REF_DEBUG these are static inlines */
+void rust_enumerated_ref_get(struct enumerated_ref *ref, unsigned idx)
+{
+	enumerated_ref_get(ref, idx);
+}
+
+bool rust___enumerated_ref_tryget(struct enumerated_ref *ref, unsigned idx)
+{
+	return __enumerated_ref_tryget(ref, idx);
+}
+
 bool rust_enumerated_ref_tryget(struct enumerated_ref *ref, unsigned idx)
 {
 	return enumerated_ref_tryget(ref, idx);

@@ -928,7 +928,7 @@ unsafe extern "C" fn async_work(work: *mut c::work_struct) {
     // SAFETY: recovery.work, of a live filesystem: run_async() queued it,
     // handing it a write ref
     let fs = unsafe { Fs::borrow_raw(work.byte_sub(offset_of!(c::bch_fs, recovery.work)).cast()) };
-    let _ref = unsafe { WriteRef::adopt(fs, c::bch_write_ref::BCH_WRITE_REF_async_recovery_passes) };
+    let _ref = unsafe { WriteRef::adopt(fs) };
 
     let Some(_run) = fs.recovery.run_lock.try_lock() else { return };
 
@@ -961,7 +961,7 @@ pub fn run_async(fs: &Fs) {
         return;
     }
 
-    if let Some(r) = fs.write_ref_tryget(c::bch_write_ref::BCH_WRITE_REF_async_recovery_passes) {
+    if let Some(r) = WriteRef::tryget_live(fs) {
         r.queue_work_on(Queue::system_long(), &fs.recovery.work);
     }
 }

@@ -781,7 +781,7 @@ impl FileOps for DataJob {
 }
 
 fn data(fs: &Fs, arg: c::bch_ioctl_data) -> Result<c_int, BchError> {
-    let write_ref = fs.write_ref_tryget(c::bch_write_ref::BCH_WRITE_REF_ioctl_data)
+    let write_ref = WriteRef::tryget_live(fs)
         .ok_or(BchError::from(c::EROFS))?;
 
     if !capable(Capability::SysAdmin) {

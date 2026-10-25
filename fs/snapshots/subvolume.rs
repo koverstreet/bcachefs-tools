@@ -808,10 +808,8 @@ fn evict_inodes(_fs: &Fs, _subvols: &[u32]) {}
 
 crate::fs_work! {
     /// Deletes unlinked subvolumes, once the VFS has let go of their inodes:
-    /// unlink() queues it, holding the snapshot_delete_pagecache write ref.
-    pub(crate) work SubvolDelete:
-        field snapshots.wait_for_pagecache_and_delete_work,
-        write_ref BCH_WRITE_REF_snapshot_delete_pagecache;
+    /// unlink() queues it, holding a write ref.
+    pub(crate) work SubvolDelete: field snapshots.wait_for_pagecache_and_delete_work;
 
     fn run(fs: &Fs) {
         loop {

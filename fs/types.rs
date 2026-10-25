@@ -508,8 +508,6 @@ c_xmacro! {
         (promote),
         (node_rewrite),
         (stripe_create),
-        (stripe_delete),
-        (reflink),
         (fallocate),
         (fsync),
         (dio_write),
@@ -519,12 +517,11 @@ c_xmacro! {
         (invalidate),
         (gc_gens),
         (presplit_shard_boundaries),
-        (snapshot_delete_pagecache),
-        (sysfs),
         (btree_write_buffer),
         (btree_node_scrub),
-        (async_recovery_passes),
-        (ioctl_data),
+        (stripe_delete),
+        /* every Rust user's: the kinds are a debugging aid, for C's */
+        (rust),
     }
 }
 
