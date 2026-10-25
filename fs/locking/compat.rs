@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! What exists because C owns the lock, or holds it calling in - to go as the
-//! C does: a C struct's lock borrowed as a Lock, and a Lock whose caller
-//! already holds it.
+//! C does: a C struct's lock borrowed as a Lock, a Lock whose caller already
+//! holds it, and a Lock C carries held from one Rust call to another.
 
 use super::{Guard, Lock, RawLock};
 use core::mem::{align_of, size_of};
@@ -29,5 +29,28 @@ impl<R: RawLock, G, P> Lock<R, G, P> {
     pub unsafe fn held(&self) -> Guard<'_, R, G, P> {
         self.assert_held();
         unsafe { Guard::from_held(self, None) }
+    }
+}
+
+// Carried by C between two Rust calls: a stripe head, from the head lookup
+// to bch2_ec_stripe_head_put(), until the C between them converts.
+
+impl<R: RawLock<GuardState = ()>, G, P> Guard<'_, R, G, P> {
+    /// Leave the lock held, for C to carry to assume_locked().
+    pub fn leave_locked(self) {
+        core::mem::forget(self)
+    }
+}
+
+impl<R: RawLock<GuardState = ()>, G, P> Lock<R, G, P> {
+    /// The lock, as a guard leave_locked() left it: released when the guard
+    /// is dropped.
+    ///
+    /// # Safety
+    /// This task holds the lock exclusively, by a guard leave_locked() left,
+    /// which nothing else takes back.
+    pub unsafe fn assume_locked(&self) -> Guard<'_, R, G, P> {
+        self.assert_held();
+        unsafe { Guard::from_held(self, Some(())) }
     }
 }
