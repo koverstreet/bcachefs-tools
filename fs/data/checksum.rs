@@ -71,6 +71,24 @@ impl c::bch_csum_type {
     pub fn valid(self, fs: &Fs) -> bool {
         self.0 < c::bch_csum_type::BCH_CSUM_NR.0 && (!self.is_encryption() || fs.chacha20_key_set)
     }
+
+    /// @data's checksum, of a type that takes no key - nor so a nonce, or a
+    /// filesystem. Not an encryption type's.
+    pub fn checksum_unkeyed(self, data: &[u8]) -> c::bch_csum {
+        assert!(!self.is_encryption(), "an unkeyed checksum, of encryption type {}", self.0);
+        // SAFETY: @data, for its length; no key used, so no filesystem
+        unsafe { c::bch2_checksum(core::ptr::null_mut(), self.0, c::nonce::default(), data.as_ptr().cast(), data.len()) }
+    }
+}
+
+impl Fs {
+    /// @data's checksum of type @ty, with @nonce - an encryption type's under
+    /// the filesystem's key. A type this version doesn't know checksums to
+    /// zero.
+    pub fn checksum(&self, ty: c::bch_csum_type, nonce: c::nonce, data: &[u8]) -> c::bch_csum {
+        // SAFETY: @data, for its length; the filesystem, for its key
+        unsafe { c::bch2_checksum(self.as_ptr(), ty.0, nonce, data.as_ptr().cast(), data.len()) }
+    }
 }
 
 impl c::bch_csum_opt {

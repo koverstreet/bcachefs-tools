@@ -141,11 +141,8 @@ fn btree_node_bad(fs: &Fs, buf: &[u8], k: BkeySC<'_>) -> bool {
         if end > buf.len() {
             return true;
         }
-        let start = size_of::<c::bch_csum>();
-        // SAFETY: @buf, from past the csum to its first bset's end
-        let csum = unsafe {
-            c::bch2_checksum(fs.as_ptr(), ty.0, bn.keys.nonce(0), buf[start..].as_ptr().cast(), end - start)
-        };
+        // from past the csum to its first bset's end
+        let csum = fs.checksum(ty, bn.keys.nonce(0), &buf[size_of::<c::bch_csum>()..end]);
         if csum != bn.csum {
             return true;
         }
@@ -191,12 +188,8 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: c::btree_id
     let bad = if is_btree_ptr {
         btree_node_bad(fs, &buf, k.into())
     } else {
-        // SAFETY: @buf, @bytes long
-        let csum = unsafe {
-            c::bch2_checksum(fs.as_ptr(), p.crc.csum_type.into(), extent_nonce(k.k.bversion, &p.crc),
-                             buf.as_ptr().cast(), bytes)
-        };
-        csum != p.crc.csum
+        let ty = c::bch_csum_type(p.crc.csum_type.into());
+        fs.checksum(ty, extent_nonce(k.k.bversion, &p.crc), &buf[..bytes]) != p.crc.csum
     };
     if !bad {
         return Ok(false);

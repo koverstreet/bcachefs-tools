@@ -1347,11 +1347,12 @@ impl c::bch_sb_io {
 /// A superblock's checksum, of @bytes - all of it past the csum, its first
 /// field: csum_vstruct().
 fn sb_csum(fs: Option<&Fs>, ty: c::bch_csum_type, bytes: &[u8]) -> c::bch_csum {
-    let start = size_of::<c::bch_csum>();
-    let c = fs.map_or(core::ptr::null_mut(), Fs::as_ptr);
-    // SAFETY: @bytes past the csum; no filesystem, no key: then @ty isn't an
-    // encryption type
-    unsafe { c::bch2_checksum(c, ty.0, nonce::default(), bytes[start..].as_ptr().cast(), bytes.len() - start) }
+    let data = &bytes[size_of::<c::bch_csum>()..];
+    match fs {
+        Some(fs) => fs.checksum(ty, nonce::default(), data),
+        // no filesystem, no key: then @ty isn't an encryption type
+        None     => ty.checksum_unkeyed(data),
+    }
 }
 
 /// The superblock at @offset read into @sb's buffer - grown as it needs - and
