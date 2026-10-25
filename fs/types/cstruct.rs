@@ -2657,6 +2657,10 @@ fn canon_base(toks: &[Tok]) -> Option<String> {
         [.., "c_short"] => "short", [.., "c_ushort"] => "unsigned short",
         [.., "c_int"] => "int", [.., "c_uint"] => "unsigned",
         [.., "c_long"] => "long", [.., "c_ulong"] => "unsigned long",
+        // C's atomic types, which its atomic_*() take: the signed ones - an
+        // unsigned atomic is a plain integer to C
+        [.., "AtomicI32"] => "atomic_t", [.., "AtomicI64"] => "atomic64_t",
+        [.., "AtomicIsize"] => "atomic_long_t",
         [.., "AtomicULong"] => "unsigned long",
         [.., "AtomicU8"] => "u8", [.., "AtomicU16"] => "u16",
         [.., "AtomicU32"] => "u32", [.., "AtomicU64"] => "u64",

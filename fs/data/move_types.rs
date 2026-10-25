@@ -68,7 +68,6 @@ pub struct move_bucket_key {
 #[repr(C)]
 #[derive(CStruct)]
 pub struct move_bucket {
-    #[c("atomic_t count")]
     pub count: AtomicI32,
 }
 
