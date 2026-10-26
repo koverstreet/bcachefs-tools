@@ -102,7 +102,6 @@ fn main() {
         .allowlist_var("BCH_BLK.*")
         .allowlist_var("BCH_FS_IOC_.*")
         .allowlist_var("BCH_SIZEOF_.*")
-        .allowlist_function("raid_init")
         .allowlist_function("linux_shrinkers_init")
         .allowlist_function("sysfs_.*")
         .allowlist_var("linux_page_size")

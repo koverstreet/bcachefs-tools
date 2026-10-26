@@ -9,7 +9,6 @@
 #include "tools-util.h"
 #include "crypto.h"
 #include "libbcachefs.h"
-#include "raid/raid.h"
 
 #include "c_src/fuse_shims.h"
 #include "c_src/rust_shims.h"
