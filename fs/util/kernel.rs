@@ -74,6 +74,11 @@ pub fn msleep(ms: u32) {
     unsafe { c::bch2_msleep(ms) }
 }
 
+/// The system's memory, in bytes: totalram_pages() of them.
+pub fn totalram_bytes() -> usize {
+    unsafe { c::totalram_pages() as usize * PAGE_SIZE }
+}
+
 /// The kernel's binding returns its own c_ulong, usize; the same width as
 /// core's.
 pub fn nsecs_to_jiffies(ns: u64) -> core::ffi::c_ulong {
