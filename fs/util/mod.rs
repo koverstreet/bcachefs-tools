@@ -30,6 +30,7 @@ pub mod par;
 pub mod percpu;
 pub mod printbuf;
 pub mod projections;
+pub mod raid;
 pub mod rcu;
 pub mod rhashtable;
 pub mod siphash;
