@@ -13,7 +13,8 @@
 //! fails with it.
 //!
 //! Forgetting one is a compile error, not a zeroed lock: a field without
-//! `#[init]` gets `pin_init::init_zeroed()`, which only a Zeroable type
+//! `#[init]` is zeroed - by place.rs's field_init(), unless a placed type
+//! lives there - which only a Zeroable type
 //! takes - C's are, a Rust type with invariants, or a struct holding one,
 //! isn't. core's atomics are zeroed as values: they're as Zeroable as their
 //! integers, but pin_init has no impl for them, and the orphan rule allows
@@ -26,10 +27,15 @@
 //! The struct needs `#[pin_data]` too, ahead of the derives - pin_init!()
 //! needs its projections - and `#[pin]` on a field whose initializer is a
 //! PinInit, not an Init: a lock, a struct's init().
+//!
+//! And each field is a Field<N>, one without #[init] is zeroed only if no
+//! placed type lives there, and a placed struct's init() takes its At: a
+//! value's place - place.rs.
 
 use proc_macro::TokenStream;
 
 use crate::cstruct::{parse_cstruct, CKind};
+use crate::place;
 use crate::tokens;
 
 pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
@@ -38,28 +44,50 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
         return Err(format!("{}: #[derive(Init)] is for a struct", def.name));
     }
     let inst = def.rust_ident();
+    let (impl_lts, inst_ty) = if def.lifetimes.is_empty() {
+        (String::new(), inst.to_string())
+    } else {
+        let l = def.lifetimes.join(", ");
+        (format!("<{l}>"), format!("{inst}<{l}>"))
+    };
 
     let mut fields = String::new();
+    let mut field_impls = String::new();
+    let mut at: Option<&str> = None;
     for f in &def.fields {
-        if let Some(cfg) = &f.cfg {
-            fields.push_str(&format!("#[cfg({})] ", cfg.to_rust()));
+        let cfg = f.cfg.as_ref().map(|c| format!("#[cfg({})] ", c.to_rust())).unwrap_or_default();
+        let name = f.rust_name();
+        fields.push_str(&cfg);
+        field_impls.push_str(&place::field_impl(&cfg, &impl_lts, &inst_ty, &name, &f.ty));
+
+        if place::is_at_field(f) {
+            at = Some(&f.ty);
+            fields.push_str(&format!("{name}: at,\n"));
+            continue;
         }
         match f.init.as_deref() {
-            Some(init) => fields.push_str(&format!("{} <- {init},\n", f.rust_name())),
+            Some(init) => fields.push_str(&format!("{name} <- {init},\n")),
             // SAFETY: core's atomics are their integers, and zero is one -
             // Zeroable, but for the impl the orphan rule doesn't allow us
             None if crate::is_core_atomic(&f.ty) =>
-                fields.push_str(&format!("{}: unsafe {{ ::core::mem::zeroed() }},\n", f.rust_name())),
-            None => fields.push_str(&format!("{} <- ::pin_init::init_zeroed(),\n", f.rust_name())),
+                fields.push_str(&format!("{name}: unsafe {{ ::core::mem::zeroed() }},\n")),
+            None => fields.push_str(&format!("{name} <- {},\n", place::field_init(&name))),
         }
     }
+
+    // An At is crate-private, as place.rs is - so is an init() taking one
+    let (vis, at_param) = match at {
+        Some(ty) => ("pub(crate)", format!("at: {ty}")),
+        None => ("pub", String::new()),
+    };
 
     Ok(tokens(&format!(
         "#[automatically_derived]\n\
          impl {inst} {{\n\
              /// Zeroed, but for its #[init] fields: see #[derive(Init)].\n\
-             pub fn init() -> impl ::pin_init::PinInit<Self, crate::errcode::BchError> {{\n\
+             {vis} fn init({at_param}) -> impl ::pin_init::PinInit<Self, crate::errcode::BchError> {{\n\
                  ::pin_init::pin_init!({inst} {{\n{fields}}}? crate::errcode::BchError)\n\
              }}\n\
-         }}\n")))
+         }}\n\
+         {field_impls}")))
 }

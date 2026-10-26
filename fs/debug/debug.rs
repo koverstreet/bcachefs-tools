@@ -10,7 +10,7 @@
 
 use core::convert::Infallible;
 use core::ffi::{c_int, CStr};
-use core::mem::{offset_of, size_of};
+use core::mem::offset_of;
 use core::ops::ControlFlow;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, Ordering};
@@ -28,6 +28,7 @@ use crate::locking::Lock;
 use crate::util::debugfs::{self, DebugFile, DebugOut};
 use crate::util::eytzinger::Eytzinger0;
 use crate::util::ffi::Opaque;
+use crate::util::place::Placed;
 use crate::util::{rcu, rhashtable, Printbuf};
 use crate::{btree_trans, prt, SPOS_MAX};
 
@@ -40,9 +41,7 @@ fn may_iterate(fs: &Fs) -> bool {
 impl c::btree_debug {
     /// The filesystem it's one of the btree_debug[] of.
     fn fs(&self) -> &Fs {
-        let offset = offset_of!(Fs, btree_debug) + self.id as usize * size_of::<Self>();
-        // SAFETY: a bch_fs's btree_debug[id], which bch2_fs_debug_init() numbered
-        unsafe { &*core::ptr::from_ref(self).byte_sub(offset).cast::<Fs>() }
+        self.container()
     }
 }
 
@@ -61,7 +60,7 @@ impl DebugFile for Keys {
         }
 
         let trans = btree_trans!(fs);
-        let mut iter = BtreeIter::new(&*trans, bd.id, self.from,
+        let mut iter = BtreeIter::new(&*trans, bd.id.get(), self.from,
                                       BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
         iter.for_each(&trans, |t, iter, k| {
             prt!(out, "{}\n", k.to_text(fs));
@@ -91,7 +90,7 @@ impl DebugFile for Formats {
 
         let trans = btree_trans!(fs);
         while self.level < c::BTREE_MAX_DEPTH as u32 {
-            let mut iter = BtreeNodeIter::new(&*trans, bd.id, self.from, 0, self.level,
+            let mut iter = BtreeNodeIter::new(&*trans, bd.id.get(), self.from, 0, self.level,
                                               BtreeIterFlags::empty());
             let full = iter.for_each(&trans, |b| {
                 prt!(out, "{}", b.to_text(fs));
@@ -133,7 +132,7 @@ impl DebugFile for BfloatFailed {
         }
 
         let trans = btree_trans!(fs);
-        let mut iter = BtreeIter::new(&*trans, bd.id, self.from,
+        let mut iter = BtreeIter::new(&*trans, bd.id.get(), self.from,
                                       BtreeIterFlags::PREFETCH | BtreeIterFlags::ALL_SNAPSHOTS);
         iter.for_each(&trans, |t, iter, _k| {
             // SAFETY: used before the unlock below
@@ -511,11 +510,8 @@ pub fn bch2_fs_debug_init(c: &Opaque<c::bch_fs>) {
     unsafe { (*c.as_ptr()).btree_debug_dir = dentry_ptr(btrees) };
     let Some(btrees) = btrees else { return };
 
-    for (id, bd) in fs.btree_debug.iter().enumerate() {
-        // what btree_debug::fs() goes by
-        unsafe { (*c.as_ptr()).btree_debug[id].id = id as u32 };
-
-        let name = unsafe { CStr::from_ptr(c::bch2_btree_id_str(c::btree_id(id as u32)).cast()) };
+    for bd in fs.btree_debug.iter() {
+        let name = unsafe { CStr::from_ptr(c::bch2_btree_id_str(c::btree_id(bd.id.get())).cast()) };
         let Some(dir) = debugfs::create_dir(name, Some(btrees)) else { continue };
 
         unsafe {

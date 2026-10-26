@@ -89,6 +89,11 @@ impl<T> KVVec<T> {
         self.0.pop()
     }
 
+    /// Keep what @f says to, in order; drop the rest.
+    pub fn retain(&mut self, f: impl FnMut(&mut T) -> bool) {
+        self.0.retain_mut(f)
+    }
+
     pub fn capacity(&self) -> usize {
         self.0.capacity()
     }

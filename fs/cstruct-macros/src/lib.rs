@@ -73,6 +73,7 @@ use cstruct::{enum_text, expand_enum_list, parse_c_export, parse_cstruct, parse_
 
 mod fieldwise;
 mod init;
+mod place;
 mod prt;
 mod tagged_union;
 mod typeinfo;
@@ -228,7 +229,7 @@ pub fn derive_type_info(input: TokenStream) -> TokenStream {
 
 /// `#[derive(Init)]`: `T::init()`, an initializer that zeroes every field but
 /// those with `#[init(EXPR)]` - see init.rs.
-#[proc_macro_derive(Init, attributes(init))]
+#[proc_macro_derive(Init, attributes(init, placed_at))]
 pub fn derive_init(input: TokenStream) -> TokenStream {
     expand("#[derive(Init)]", || init::derive(input))
 }
@@ -407,6 +408,15 @@ pub fn vtable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let head: TokenStream = head.into_iter().collect();
         Ok(tokens(&format!("{head} {{ {body} {has} }}")))
     })
+}
+
+/// `#[placed(Base.field)]`, ahead of `#[pin_data]` and the derives, on a
+/// struct that lives only at Base's field: its At, the field util/place.rs's
+/// Placed is had by, which `#[derive(Init)]` then gives its init() - see
+/// place.rs.
+#[proc_macro_attribute]
+pub fn placed(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand("#[placed]", || place::placed(attr, item))
 }
 
 /// `#[unsized_vstruct]`, on C's definition of a struct ending in a flexible

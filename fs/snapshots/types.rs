@@ -3,13 +3,14 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::fs::Fs;
 use crate::locking::Lock;
 use crate::new_lock;
 use crate::types::{DArray, RustOnly, bits_to_longs, rust_only};
 use crate::util::alloc::KVVec;
 use crate::util::bitmap::AtomicBitArray;
 use core::sync::atomic::{AtomicBool, AtomicU32};
-use cstruct_macros::{c_const, c_enum, c_rcu_array, CStruct, c_typedef, Init, TypeInfo};
+use cstruct_macros::{c_const, c_enum, c_rcu_array, placed, CStruct, c_typedef, Init, TypeInfo};
 use pin_init::pin_data;
 
 c_typedef! {
@@ -96,6 +97,7 @@ c_rcu_array! {
  * staleness window. Buffered writeback is fine too — each writeback insert
  * is atomic w.r.t. the snapshot transaction.
  */
+#[placed(Fs.snapshots)]
 #[pin_data]
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init)]

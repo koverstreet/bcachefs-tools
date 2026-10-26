@@ -311,6 +311,7 @@ use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
 use crate::util::bitmap::BitArray;
 use crate::util::rcu::RcuArray;
 use crate::util::ffi::Opaque;
+use crate::util::place::Placed;
 use crate::util::Printbuf;
 use core::ffi::c_int;
 use core::fmt;
@@ -600,10 +601,7 @@ fn mark_snapshot(fs: &Fs, k: BkeySC<'_>) -> Result<(), BchError> {
 impl c::bch_fs_snapshots {
     /// The filesystem these are in, whose errors they throw.
     fn fs(&self) -> &Fs {
-        unsafe {
-            Fs::borrow_raw((self as *const Self).byte_sub(core::mem::offset_of!(c::bch_fs, snapshots))
-                           .cast::<c::bch_fs>().cast_mut())
-        }
+        self.container()
     }
 
     /// @f on the table, in a read-side section for as long as it runs.

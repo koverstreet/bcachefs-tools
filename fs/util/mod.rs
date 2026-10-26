@@ -28,6 +28,7 @@ pub mod module_param;
 pub mod os_str;
 pub mod par;
 pub mod percpu;
+pub mod place;
 pub mod printbuf;
 pub mod projections;
 pub mod raid;

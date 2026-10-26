@@ -300,6 +300,10 @@ pub struct CFieldDef {
     /// fields without one.
     #[allow(dead_code)] // read by the macros, not rust_types_gen
     pub init:     Option<String>,
+    /// #[placed_at]: the field #[placed] added, its place's At - which
+    /// #[derive(Init)]'s init() takes. (cstruct-macros' place.rs.)
+    #[allow(dead_code)] // read by the macros, not rust_types_gen
+    pub placed_at: bool,
     pub cfg:      Option<Cfg>,
     /// C's __aligned() on the member: from an alignment marker before it.
     #[allow(dead_code)]
@@ -1314,8 +1318,12 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
         let mut bits = None;
         let mut counted_by = None;
         let mut init = None;
+        let mut placed_at = false;
         let mut cfg = None;
         while let Some((attr, next)) = attr_at(toks, i)? {
+            if matches!(attr, [Tok::Ident(n)] if n == "placed_at") {
+                placed_at = true;
+            }
             if matches!(attr, [Tok::Ident(n)] if n == "c_bitfield") {
                 bitfield = true;
             }
@@ -1430,7 +1438,7 @@ fn parse_struct(toks: &[Tok], i: usize, a: ItemAttrs) -> Result<Option<(CStructD
             }
         }
         fields.push(CFieldDef { name: field, ty, vis, c_decl, anon, inline, group, lock, bitfield, bits,
-                                counted_by, init, cfg, c_align: None });
+                                counted_by, init, placed_at, cfg, c_align: None });
     }
 
     // A field of an alignment marker type is no field of C's, but its

@@ -193,7 +193,7 @@ impl c::bch_option {
 
 /// @optstr parsed into fresh options: into @fs's too, with what can only
 /// be set on a running filesystem, if it's given.
-pub fn parse_mount_opts_cstr(fs: Option<&mut Fs>, optstr: &CStr, ignore_unknown: bool)
+pub fn parse_mount_opts_cstr(fs: Option<&Fs>, optstr: &CStr, ignore_unknown: bool)
         -> Result<c::bch_opts, BchError> {
     let mut opts: c::bch_opts = Default::default();
     // SAFETY: C parses a copy of @optstr, and only reads it
@@ -206,7 +206,7 @@ pub fn parse_mount_opts_cstr(fs: Option<&mut Fs>, optstr: &CStr, ignore_unknown:
 }
 
 #[cfg(feature = "std")]
-pub fn parse_mount_opts(fs: Option<&mut Fs>, optstr: Option<&str>, ignore_unknown: bool)
+pub fn parse_mount_opts(fs: Option<&Fs>, optstr: Option<&str>, ignore_unknown: bool)
         -> Result<c::bch_opts, BchError> {
     match optstr {
         Some(s) => parse_mount_opts_cstr(fs, &CString::new(s).unwrap(), ignore_unknown),

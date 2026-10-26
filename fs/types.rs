@@ -10,7 +10,7 @@ use crate::types::{GenRadix, RustOnly, bits_to_longs, c_default, rust_only};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
 use core::sync::atomic::{AtomicI32, AtomicI64};
-use cstruct_macros::{c_const, c_enum, c_rcu_array, c_xmacro, CStruct, Fieldwise, Init, TypeInfo};
+use cstruct_macros::{c_const, c_enum, c_rcu_array, c_xmacro, placed, CStruct, Fieldwise, Init, TypeInfo};
 use pin_init::pin_data;
 
 c_xmacro! {
@@ -488,11 +488,12 @@ c_enum! {
     }
 }
 
+#[cfg(CONFIG_DEBUG_FS)]
+#[placed(Fs.btree_debug[], index = id: c_uint)]
+#[pin_data]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct btree_debug {
-    pub id: c_uint,
-}
+#[derive(CStruct, Init)]
+pub struct btree_debug {}
 
 c_const! {
     pub const BCH_LINK_MAX: u32 = c::U32_MAX;
@@ -694,7 +695,6 @@ pub struct Fs {
     pub discards: c::bch_fs_discards,
 
     #[pin]
-    #[init(c::bch_fs_snapshots::init())]
     pub snapshots: c::bch_fs_snapshots,
 
     pub write_error_lock: c::spinlock_t,
@@ -785,6 +785,7 @@ pub struct Fs {
     #[cfg(CONFIG_DEBUG_FS)]
     pub async_obj_dir: *mut c::dentry,
     #[cfg(CONFIG_DEBUG_FS)]
+    #[pin]
     pub btree_debug: [c::btree_debug; c::BTREE_ID_NR as usize],
 }
 

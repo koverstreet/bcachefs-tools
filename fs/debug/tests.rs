@@ -22,8 +22,13 @@ use crate::prt;
 use crate::util::printbuf::{HumanReadable, Printbuf};
 use crate::c;
 
+use crate::util::alloc::{kbox_pin_init, KBox, KVVec};
+use crate::util::place::{Container, PlacedInit};
 use core::ops::ControlFlow;
+use core::pin::Pin;
 use core::sync::atomic::{AtomicU64, Ordering};
+use cstruct_macros::{placed, Init};
+use pin_init::{pin_data, pinned_drop};
 
 #[cfg(not(kernel))]
 use bcachefs_shim as kernel;
@@ -796,6 +801,60 @@ fn test_bkey_buf(_fs: &Fs, _nr: u64) -> TestRet {
     Ok(())
 }
 
+// ── util/place.rs's containers ───────────────────────────────────────────
+
+/// A parent with a Container: what its elements are placed in.
+#[pin_data]
+#[derive(Init)]
+struct PlacedParent {
+    #[pin]
+    elems: Container<PlacedElem, KVVec<Pin<KBox<PlacedElem>>>>,
+}
+
+/// An element, placed in PlacedParent's container: made only by its
+/// insert(), and counting its drops.
+#[placed(PlacedParent.elems[..])]
+#[pin_data(PinnedDrop)]
+struct PlacedElem {
+    n:     u64,
+    drops: *const AtomicU64,
+}
+
+impl PlacedElem {
+    fn new(n: u64, drops: &AtomicU64) -> impl PlacedInit<Self, BchError> + '_ {
+        crate::placed_init!(Self { n, drops: core::ptr::from_ref(drops) }? BchError)
+    }
+}
+
+#[pinned_drop]
+impl PinnedDrop for PlacedElem {
+    fn drop(self: Pin<&mut Self>) {
+        // SAFETY: the test's count, which outlives its elements
+        unsafe { &*self.drops }.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// A Container's elements: made by its insert(), dropped by retain() and
+/// with it - each once.
+fn test_placed_container(_fs: &Fs, _nr: u64) -> TestRet {
+    let drops = AtomicU64::new(0);
+    let mut p = kbox_pin_init(PlacedParent::init())?;
+
+    let elems = p.as_mut().project().elems.get_mut();
+    for n in 0..8 {
+        elems.insert(PlacedElem::new(n, &drops))?;
+    }
+    assert_eq!(elems.iter().map(|e| e.n).sum::<u64>(), 28);
+
+    elems.retain(|e| e.n % 2 == 0);
+    assert_eq!(drops.load(Ordering::Relaxed), 4);
+    assert!(elems.iter().map(|e| e.n).eq([0, 2, 4, 6]));
+
+    drop(p);
+    assert_eq!(drops.load(Ordering::Relaxed), 8);
+    Ok(())
+}
+
 fn test_rand() -> u64 {
     random_u64_below(u64::MAX)
 }
@@ -971,6 +1030,7 @@ fn lookup_test(testname: &[u8]) -> Option<(&'static [u8], TestFn)> {
         (b"test_stripe_open_invalidates_update", test_stripe_open_invalidates_update),
         (b"test_snapshots", test_snapshots),
         (b"test_bkey_buf", test_bkey_buf),
+        (b"test_placed_container", test_placed_container),
         #[cfg(CONFIG_BCACHEFS_TESTS)]
         (b"test_cuckoo", cuckoo::test_cuckoo),
         #[cfg(CONFIG_BCACHEFS_TESTS)]

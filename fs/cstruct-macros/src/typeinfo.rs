@@ -42,8 +42,10 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
 
     let mut fields = String::new();
     if def.kind == CKind::Struct {
-        let last = def.fields.len().saturating_sub(1);
-        for (i, f) in def.fields.iter().enumerate() {
+        // a place's At is zero bytes of nothing: not described
+        let described: Vec<_> = def.fields.iter().filter(|f| !crate::place::is_empty_at_field(f)).collect();
+        let last = described.len().saturating_sub(1);
+        for (i, f) in described.into_iter().enumerate() {
             let field = f.rust_name();
             fields.push_str(&format!(
                 "crate::typeinfo::FieldInfo {{ \
