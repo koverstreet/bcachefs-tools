@@ -1795,7 +1795,8 @@ static bool may_reuse_stripe(struct bch_fs *c,
 {
 	if (old->disk_label		!= new->new_stripe.key.v.disk_label ||
 	    old->algorithm		!= new->new_stripe.key.v.algorithm ||
-	    old->nr_redundant		!= new->new_stripe.key.v.nr_redundant)
+	    old->nr_redundant		!= new->new_stripe.key.v.nr_redundant ||
+	    old->sectors		!= new->new_stripe.key.v.sectors)
 		return false;
 
 	struct stripe_blocks b = stripe_blocks_get(c, old);
