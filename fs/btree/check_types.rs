@@ -55,6 +55,15 @@ pub struct bch_fs_gc {
 }
 c_default!(bch_fs_gc);
 
+impl bch_fs_gc {
+    /// Its phase - not_running, unless a gc is walking - read once, without
+    /// pos_lock: as C's reads of c->gc.pos.phase.
+    pub fn phase(&self) -> c::gc_phase {
+        // SAFETY: read once, volatile, as C's plain reads
+        unsafe { core::ptr::read_volatile(&self.pos.bits) }.phase()
+    }
+}
+
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_gc_gens {
