@@ -8,8 +8,8 @@
 //! refcount. The last put closes it: back on the freelist, or for a block of
 //! a stripe being made, its ->ec's io ref dropped. Pins move by index - an
 //! open_buckets list (a write point's, an alloc_request's) - and an
-//! OpenBucket is one Rust holds: into_idx() hands it to such a list,
-//! from_idx() takes one back. While it's pinned, a bucket's dev, generation
+//! OpenBucket is one Rust holds, a RefGuard on the bucket's pins: into_idx()
+//! hands it to such a list, from_idx() takes one back. While it's pinned, a bucket's dev, generation
 //! and bucket don't change; sectors_free is its writer's.
 //!
 //! A block of a stripe being made that a writer has claimed is open past its
@@ -36,10 +36,11 @@ use crate::util::closure::StackClosure;
 use crate::util::ffi::Opaque;
 use crate::util::hash::{hash_64, Fold};
 use crate::util::rcu::read_lock;
+use crate::util::refcount::{RefGuard, Refcount};
 use arrayvec::ArrayVec;
 use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
-use core::mem::{offset_of, size_of, ManuallyDrop};
+use core::mem::{offset_of, size_of};
 use core::ops::Deref;
 use core::ptr::{read_volatile, NonNull};
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
@@ -149,39 +150,51 @@ impl OpenBucketRef {
     }
 }
 
-/// A pointer to its slot - the filesystem's found from the slot, by its own
-/// index - borrowing the filesystem for 'f.
-pub struct OpenBucket<'f> {
-    ob:  NonNull<c::open_bucket>,
-    _fs: PhantomData<&'f Fs>,
-}
-
 // SAFETY: a pin is any thread's to hold and put: ->pin is atomic, the last
 // put takes the allocator's locks, and what's read while it's pinned is fixed
 // or read once, volatile
-unsafe impl Send for OpenBucket<'_> {}
-unsafe impl Sync for OpenBucket<'_> {}
+unsafe impl Sync for OpenBucketRef {}
 
-impl<'f> OpenBucket<'f> {
+// SAFETY: an OpenBucketRef is had only while it's held open - by a pin, or
+// its ->ec - so inc() is from a pin that's held; the last put closes it
+unsafe impl Refcount for OpenBucketRef {
+    fn inc(&self) {
+        // SAFETY: its pin field, atomic: atomic_inc()
+        unsafe { (*self.raw()).pin.fetch_add(1, Relaxed) };
+    }
+
+    unsafe fn dec(&self) {
+        // SAFETY: its pin field, atomic; the caller's to put. Fully ordered,
+        // as atomic_dec_and_test(). The filesystem's found from the slot, by
+        // its own index.
+        unsafe {
+            if (*self.raw()).pin.fetch_sub(1, SeqCst) == 1 {
+                __bch2_open_bucket_put(slot_fs(NonNull::from(self).cast()).as_ptr(), self.raw());
+            }
+        }
+    }
+}
+
+/// A pin on an open bucket: it's open while one's held.
+pub type OpenBucket<'f> = RefGuard<'f, OpenBucketRef>;
+
+impl<'f> RefGuard<'f, OpenBucketRef> {
     /// # Safety
     /// The caller holds a pin on open bucket @idx, and hands it over.
     pub unsafe fn from_idx(fs: &'f Fs, idx: c::OpenBucketIdx) -> Self {
-        // SAFETY: a slot of the allocator's table
-        let ob = unsafe { &raw mut (*fs.as_ptr()).allocator.open_buckets[idx.get()] };
-        OpenBucket { ob: NonNull::new(ob).expect("a slot of the table"), _fs: PhantomData }
+        // SAFETY: the caller's
+        unsafe { RefGuard::adopt(OpenBucketRef::from_idx(fs, idx)) }
     }
 
     pub fn into_idx(self) -> c::OpenBucketIdx {
-        ManuallyDrop::new(self).idx()
-    }
-
-    fn raw(&self) -> *mut c::open_bucket {
-        self.ob.as_ptr()
+        let idx = self.idx();
+        self.leak();
+        idx
     }
 
     fn fs(&self) -> &'f Fs {
         // SAFETY: a slot of the table of a filesystem borrowed for 'f
-        unsafe { slot_fs(self.ob) }
+        unsafe { slot_fs(NonNull::from(&**self).cast()) }
     }
 
     /// Held where no lifetime can say that the filesystem outlives it - in a
@@ -191,14 +204,19 @@ impl<'f> OpenBucket<'f> {
     /// # Safety
     /// The filesystem outlives it.
     pub unsafe fn unbound(self) -> OpenBucket<'static> {
-        OpenBucket { ob: ManuallyDrop::new(self).ob, _fs: PhantomData }
+        let ob = self.raw();
+        self.leak();
+        // SAFETY: the pin, handed over; the slot's, of a filesystem that
+        // outlives the guard - the caller's
+        unsafe { RefGuard::adopt(OpenBucketRef::from_c(ob)) }
     }
 
     /// Claimed by the writer of block @ec_idx of stripe @ec: its pin the
     /// writer's - the bucket, for it - and its ->ec what keeps it open for the
     /// stripe.
     pub fn claim(self, ec: *mut c::ec_stripe_new, ec_idx: u8) -> (EcOpenBucket<'f>, *mut c::open_bucket) {
-        let ob = ManuallyDrop::new(self).ob;
+        let ob = NonNull::from(&*self).cast::<c::open_bucket>();
+        self.leak();
         // SAFETY: ->ec and ->ec_idx are the pin's holder's to set, before the
         // bucket's handed on; its writer reads them once it has it
         unsafe {
@@ -218,27 +236,6 @@ impl<'f> OpenBucket<'f> {
             .with_dev(self.dev() as u8)
             .with_offset(ca.bucket_to_sector(self.bucket()) + u64::from(ca.mi.bucket_size) -
                          u64::from(self.sectors_free()))
-    }
-}
-
-impl Deref for OpenBucket<'_> {
-    type Target = OpenBucketRef;
-
-    fn deref(&self) -> &OpenBucketRef {
-        // SAFETY: its pin holds it open while it's borrowed
-        unsafe { OpenBucketRef::from_c(self.raw()) }
-    }
-}
-
-impl Drop for OpenBucket<'_> {
-    fn drop(&mut self) {
-        // SAFETY: its pin field, atomic; ours to put, and the last put closes
-        // it. Fully ordered, as atomic_dec_and_test().
-        unsafe {
-            if (*self.raw()).pin.fetch_sub(1, SeqCst) == 1 {
-                __bch2_open_bucket_put(self.fs().as_ptr(), self.raw());
-            }
-        }
     }
 }
 
