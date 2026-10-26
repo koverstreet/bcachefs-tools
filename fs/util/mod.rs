@@ -32,6 +32,7 @@ pub mod printbuf;
 pub mod projections;
 pub mod raid;
 pub mod rcu;
+pub mod refcount;
 pub mod rhashtable;
 pub mod siphash;
 pub mod sleep;
