@@ -16,6 +16,7 @@
 #include "sb/errors.h"
 
 #include <linux/string_choices.h>
+#include <linux/vmalloc.h>
 
 #ifdef __KERNEL__
 
@@ -223,8 +224,14 @@ int bch2_ec_stripe_buf_init(struct bch_fs *c,
 	buf->offset	= offset;
 	buf->size	= end - offset;
 
+	/*
+	 * vmalloc, not kvmalloc: a full block is a bucket (often 2 MiB), and
+	 * kvmalloc's physically contiguous first attempt wakes kswapd and
+	 * kcompactd whenever it fails - on a fragmented machine nearly every
+	 * time - before it falls back to vmalloc anyway:
+	 */
 	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++) {
-		buf->data[i] = kvmalloc(buf->size << 9, GFP_KERNEL);
+		buf->data[i] = vmalloc(buf->size << 9);
 		if (!buf->data[i]) {
 			bch2_ec_stripe_buf_exit(buf);
 			buf->c = NULL;
