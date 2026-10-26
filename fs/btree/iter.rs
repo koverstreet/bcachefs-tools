@@ -11,7 +11,8 @@ use crate::errcode::{
 };
 use crate::fs::Fs;
 use crate::locking::Lock;
-use crate::util::closure::{closure_get_not_zero, ClosureRef};
+use crate::util::closure::ClosureRef;
+use crate::util::refcount::TryRefcount;
 use crate::util::ffi::Opaque;
 use crate::util::log::CFnName;
 use crate::util::{Printbuf, ToText};
@@ -3012,7 +3013,7 @@ impl Fs {
                 if trans as usize > *cursor {
                     *cursor = trans as usize;
 
-                    let t = closure_get_not_zero(unsafe { &(*trans).ref_ })
+                    let t = unsafe { &(*trans).ref_ }.tryget()
                         .map(|r| ListedTrans { trans, _ref: r })
                         .filter(|t| pred(t));
 
