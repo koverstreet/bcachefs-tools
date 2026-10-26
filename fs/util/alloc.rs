@@ -157,6 +157,148 @@ pub unsafe fn kvfree_sized(p: core::ptr::NonNull<u8>, size: usize) {
     unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
 }
 
+// ── Aligned boxes ────────────────────────────────────────────────────────
+//
+// ABox<T, A>, and AVec<T, A> to build one: a Box, and a Vec, whose memory is
+// aligned to A - ConstAlign<N> - as IO into it needs. In userspace they're
+// aligned-vec's; in-kernel, which has no global allocator for the crate's,
+// the same API over kvmalloc - the part of it that's used. Memory's as the
+// task's memalloc scope allows: no flags.
+
+#[cfg(not(kernel))]
+pub use aligned_vec::{ABox, AVec, Alignment, ConstAlign};
+
+#[cfg(kernel)]
+pub use abox::{ABox, AVec, Alignment, ConstAlign};
+
+#[cfg(kernel)]
+mod abox {
+    use super::AllocError;
+    use core::alloc::Layout;
+    use core::marker::PhantomData;
+    use core::ptr::NonNull;
+    use kernel::alloc::{allocator::KVmalloc, flags::GFP_KERNEL, Allocator, NumaNode};
+
+    /// An alignment, as aligned-vec's: here only the compile-time one.
+    pub trait Alignment {
+        const ALIGN: usize;
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct ConstAlign<const ALIGN: usize>;
+
+    impl<const N: usize> Alignment for ConstAlign<N> {
+        const ALIGN: usize = N;
+    }
+
+    pub struct AVec<T, A: Alignment> {
+        p:   NonNull<T>,
+        len: usize,
+        cap: usize,
+        _a:  PhantomData<A>,
+    }
+
+    // SAFETY: owns its Ts, as a Vec does
+    unsafe impl<T: Send, A: Alignment> Send for AVec<T, A> {}
+    unsafe impl<T: Sync, A: Alignment> Sync for AVec<T, A> {}
+
+    fn layout<T, A: Alignment>(n: usize) -> Result<Layout, AllocError> {
+        Layout::array::<T>(n).and_then(|l| l.align_to(A::ALIGN)).map_err(|_| AllocError)
+    }
+
+    impl<T, A: Alignment> AVec<T, A> {
+        /// Empty: room's made as it's reserved. @align is A's, as the crate's.
+        pub fn new(_align: usize) -> Self {
+            const { assert!(size_of::<T>() != 0, "an AVec of a zero sized type") };
+            AVec { p: NonNull::dangling(), len: 0, cap: 0, _a: PhantomData }
+        }
+
+        pub fn len(&self) -> usize {
+            self.len
+        }
+
+        /// Room for exactly @additional more.
+        pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), AllocError> {
+            if additional <= self.cap - self.len {
+                return Ok(());
+            }
+            let cap = self.len.checked_add(additional).ok_or(AllocError)?;
+            let old = (self.cap != 0).then_some(self.p.cast());
+            // SAFETY: @old is KVmalloc's, of its layout, or none
+            let p = unsafe {
+                KVmalloc::realloc(old, layout::<T, A>(cap)?, layout::<T, A>(self.cap)?, GFP_KERNEL, NumaNode::NO_NODE)
+            }?;
+            self.p = p.cast();
+            self.cap = cap;
+            Ok(())
+        }
+
+        /// # Safety
+        /// @len is within its capacity, and that many of it initialized.
+        pub unsafe fn set_len(&mut self, len: usize) {
+            self.len = len;
+        }
+
+        /// As a boxed slice. Not one with room left: the crate's shrinks to
+        /// fit, which nothing here needs.
+        pub fn into_boxed_slice(self) -> ABox<[T], A> {
+            assert_eq!(self.len, self.cap, "into_boxed_slice() of an AVec with room left");
+            let this = core::mem::ManuallyDrop::new(self);
+            ABox { p: NonNull::slice_from_raw_parts(this.p, this.len), _a: PhantomData }
+        }
+    }
+
+    impl<T, A: Alignment> Drop for AVec<T, A> {
+        fn drop(&mut self) {
+            // SAFETY: its @len, initialized; its memory, of @cap, KVmalloc's
+            unsafe {
+                core::ptr::slice_from_raw_parts_mut(self.p.as_ptr(), self.len).drop_in_place();
+                if self.cap != 0 {
+                    KVmalloc::free(self.p.cast(), layout::<T, A>(self.cap).expect("its allocation's"));
+                }
+            }
+        }
+    }
+
+    pub struct ABox<T: ?Sized, A: Alignment> {
+        p:  NonNull<T>,
+        _a: PhantomData<A>,
+    }
+
+    // SAFETY: owns its T, as a Box does
+    unsafe impl<T: ?Sized + Send, A: Alignment> Send for ABox<T, A> {}
+    unsafe impl<T: ?Sized + Sync, A: Alignment> Sync for ABox<T, A> {}
+
+    impl<T: ?Sized, A: Alignment> core::ops::Deref for ABox<T, A> {
+        type Target = T;
+
+        fn deref(&self) -> &T {
+            // SAFETY: its own, live
+            unsafe { self.p.as_ref() }
+        }
+    }
+
+    impl<T: ?Sized, A: Alignment> core::ops::DerefMut for ABox<T, A> {
+        fn deref_mut(&mut self) -> &mut T {
+            // SAFETY: its own, live, borrowed mutably
+            unsafe { self.p.as_mut() }
+        }
+    }
+
+    impl<T: ?Sized, A: Alignment> Drop for ABox<T, A> {
+        fn drop(&mut self) {
+            // SAFETY: its own, live; KVmalloc's, laid out as it is, aligned to A
+            unsafe {
+                let layout = Layout::for_value(self.p.as_ref()).align_to(A::ALIGN).expect("its allocation's");
+                self.p.as_ptr().drop_in_place();
+                if layout.size() != 0 {
+                    KVmalloc::free(self.p.cast(), layout);
+                }
+            }
+        }
+    }
+}
+
 /// @init run on @slot: PinInit's __init() - __pinned_init(), before the
 /// kernel's pin-init v2 (7.3).
 ///
