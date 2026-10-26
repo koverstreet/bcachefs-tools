@@ -31,6 +31,14 @@
 //! And each field is a Field<N>, one without #[init] is zeroed only if no
 //! placed type lives there, and a placed struct's init() takes its At: a
 //! value's place - place.rs.
+//!
+//! A field `w: ReffedWork<f, R>` - a work item, running fn f, holding a ref
+//! on R's count - is made here too, with all it needs, as the field is the
+//! one place it's declared: f as a type, a braced struct beside the fn f in
+//! scope here, and its WorkFunc - the field's At, and run(), the call to f;
+//! and the field's initializer, ReffedWork::new() given the At, with a
+//! lockdep class of its own - a static in this generated code, one per
+//! field, as a static in ReffedWork's generic code wouldn't be.
 
 use proc_macro::TokenStream;
 
@@ -65,6 +73,14 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
             fields.push_str(&format!("{name}: at,\n"));
             continue;
         }
+        if let (None, Some(func)) = (&f.init, reffed_work_fn(&def.name, &name, &f.ty)?) {
+            if !def.lifetimes.is_empty() {
+                return Err(format!("{}.{name}: a ReffedWork's parent has no lifetimes", def.name));
+            }
+            field_impls.push_str(&work_func(&cfg, &inst_ty, &name, &func));
+            fields.push_str(&format!("{name} <- {},\n", work_init(&def.name, &name)));
+            continue;
+        }
         match f.init.as_deref() {
             Some(init) => fields.push_str(&format!("{name} <- {init},\n")),
             // SAFETY: core's atomics are their integers, and zero is one -
@@ -90,4 +106,56 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
              }}\n\
          }}\n\
          {field_impls}")))
+}
+
+// ── ReffedWork fields ───────────────────────────────────────────────────────
+
+/// f, if field type @ty is a ReffedWork<f, R>: f a bare name, the fn in
+/// scope here that it runs - its type is made here, beside it.
+fn reffed_work_fn(parent: &str, name: &str, ty: &str) -> Result<Option<String>, String> {
+    let ty: String = ty.chars().filter(|c| !c.is_whitespace()).collect();
+    let Some((path, args)) = ty.split_once('<') else { return Ok(None) };
+    if path.rsplit("::").next() != Some("ReffedWork") {
+        return Ok(None);
+    }
+    let f = args.split(',').next().unwrap_or_default();
+    if f.is_empty() || !f.chars().all(|c| c == '_' || c.is_ascii_alphanumeric()) {
+        return Err(format!("{parent}.{name}: a ReffedWork's function is named bare, as the fn in scope \
+                            here - its type is made beside it - not {f:?}: `use` it"));
+    }
+    Ok(Some(f.to_string()))
+}
+
+/// Field @name's work function f, as a type: f's struct, and its WorkFunc -
+/// the field's At, and the call.
+fn work_func(cfg: &str, inst_ty: &str, name: &str, f: &str) -> String {
+    format!(
+        "{cfg}#[doc(hidden)]\n\
+         #[allow(non_camel_case_types)]\n\
+         pub(crate) struct {f} {{}}\n\
+         {cfg}#[automatically_derived]\n\
+         // SAFETY: field {name}'s - the one of type ReffedWork<{f}, _>, its\n\
+         // initializer init()'s, below\n\
+         unsafe impl crate::util::workqueue::WorkFunc for {f} {{\n\
+             type At = crate::util::place::At<{inst_ty}, {{ crate::util::place::name({name:?}) }}>;\n\
+             fn run(p: &{inst_ty}) {{\n\
+                 {f}(p)\n\
+             }}\n\
+         }}\n")
+}
+
+/// Field @name's initializer, of @parent: the work, given its At, its
+/// lockdep class named for the field.
+fn work_init(parent: &str, name: &str) -> String {
+    format!(
+        "{{\n\
+             #[cfg(kernel)]\n\
+             let w = |at| crate::util::workqueue::ReffedWork::new(at, c\"{parent}.{name}\",\n\
+                                                                  ::kernel::static_lock_class!());\n\
+             #[cfg(not(kernel))]\n\
+             let w = |at| crate::util::workqueue::ReffedWork::new(at);\n\
+             // SAFETY: run into field {name}, by pin_init!()\n\
+             unsafe {{ crate::util::place::at::<Self, {{ crate::util::place::name({name:?}) }}, _, \
+                                                crate::errcode::BchError>(w) }}\n\
+         }}")
 }

@@ -6,9 +6,11 @@ use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::locking::Lock;
 use crate::new_lock;
+use crate::snapshots::subvolume::delete_unlinked;
 use crate::types::{DArray, RustOnly, bits_to_longs, rust_only};
 use crate::util::alloc::KVVec;
 use crate::util::bitmap::AtomicBitArray;
+use crate::util::workqueue::ReffedWork;
 use core::sync::atomic::{AtomicBool, AtomicU32};
 use cstruct_macros::{c_const, c_enum, c_rcu_array, placed, CStruct, c_typedef, Init, TypeInfo};
 use pin_init::pin_data;
@@ -121,8 +123,7 @@ pub struct bch_fs_snapshots {
     pub(crate) delete: rust_only!(crate::snapshots::delete::SnapshotDelete),
     #[c("struct work_struct wait_for_pagecache_and_delete_work")]
     #[pin]
-    #[init(crate::snapshots::subvolume::SubvolDelete::init())]
-    pub wait_for_pagecache_and_delete_work: crate::fs::FsWork,
+    pub(crate) wait_for_pagecache_and_delete_work: ReffedWork<delete_unlinked, crate::field!(super.writes)>,
     /// Subvolumes unlinked and waiting for the delete work: Rust's alone.
     #[pin]
     #[init(RustOnly::new(new_lock!(KVVec::new())))]

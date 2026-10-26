@@ -3,12 +3,15 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::fs::Fs;
+use crate::init::passes::async_runner;
 use crate::locking::Lock;
 use crate::new_lock;
 use crate::published;
 use crate::types::c_default;
 use crate::util::projections::Volatile;
-use cstruct_macros::{CStruct, Init, TypeInfo};
+use crate::util::workqueue::ReffedWork;
+use cstruct_macros::{placed, CStruct, Init, TypeInfo};
 use pin_init::pin_data;
 
 /// What the runner keeps under its lock - taken with interrupts off, as
@@ -65,6 +68,7 @@ published! {
     }
 }
 
+#[placed(Fs.recovery)]
 #[pin_data]
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init)]
@@ -90,7 +94,6 @@ pub struct bch_fs_recovery {
 
     /* the async runner: run_async() */
     #[pin]
-    #[init(crate::init::passes::async_work_init())]
     #[c("struct work_struct work")]
-    pub work: crate::fs::FsWork,
+    pub(crate) work: ReffedWork<async_runner, crate::field!(super.writes)>,
 }

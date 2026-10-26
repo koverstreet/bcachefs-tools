@@ -12,8 +12,8 @@
 //! #[placed(Fs.snapshots)] on the type is all that's written, on it or its
 //! parent - cstruct-macros' place.rs is what it makes:
 //!
-//! - Field<N> is a struct's field N, a hash of its name - field!(snapshots) -
-//!   with its type and offset: a field as a type, which the language doesn't
+//! - Field<N> is a struct's field N, a hash of its name - name("snapshots")
+//!   - with its type and offset: a field as a type, which the language doesn't
 //!   have yet. It's field representing types' Field (field_of!(), nightly),
 //!   faked as util/projections.rs's fakes are, to go when they arrive.
 //!   #[derive(Init)] makes one for each field of the structs it's on.
@@ -93,9 +93,10 @@
 //! with.
 //!
 //! A type lives at one place. One that lives at several, as a kobject or a
-//! work_struct does, isn't Placed: C hands those back as pointers, and how
-//! a pointer was made - projected from its container, by the only code that
-//! hands it to C - is what locates them.
+//! work_struct does, is given one by a type parameter: ReffedWork<F, R> is
+//! the work_struct of work function F, whose WorkFunc - from the parent's
+//! #[derive(Init)], for the one field of that type - gives it its At, Placed
+//! as any field's type is (util/workqueue.rs).
 
 use crate::errcode::BchError;
 use crate::util::alloc::{flags::GFP_KERNEL, kbox_pin_init, AllocError, KBox, KVVec};
@@ -118,13 +119,6 @@ pub const fn name(s: &str) -> u64 {
     h
 }
 
-/// Field @f's N, for Field<N> and At<B, N>: `At<Fs, { field!(snapshots) }>`.
-#[macro_export]
-macro_rules! field {
-    ($f:ident) => {
-        $crate::util::place::name(stringify!($f))
-    };
-}
 
 /// Self's field N: its type, and where it is.
 ///
@@ -366,6 +360,81 @@ pub(crate) unsafe fn container_of<'a, T: Placed>(p: *const T) -> &'a T::Parent {
     unsafe {
         let at = &*T::placed_at_raw(p);
         &*p.byte_sub(at.offset()).cast::<T::Parent>()
+    }
+}
+
+// ── Paths ────────────────────────────────────────────────────────────────
+
+/// A path from a value, as a type - for a field's type to name what's
+/// reached from the struct it's in: a ReffedWork's ref. Here is the value;
+/// Up<P> the parent of what P reaches, by its container(); FieldOf<P, N>
+/// field N of what P reaches, by Field<N>. field!() writes one: from
+/// bch_fs_snapshots, field!(super.writes) - FieldOf<Up<Here>, N> - is the
+/// write refs of its Fs.
+pub(crate) struct Here;
+
+pub(crate) struct Up<P>(PhantomData<P>);
+
+pub(crate) struct FieldOf<P, const N: u64>(PhantomData<P>);
+
+/// A path from the struct a field's in, as a type: its fields by name, and
+/// super for its parent - `field!(super.writes)`, `field!(super.super.c)`.
+#[macro_export]
+macro_rules! field {
+    ($($path:tt)+) => {
+        $crate::__field_path!($crate::util::place::Here; $($path)+)
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __field_path {
+    ($p:ty;) => {
+        $p
+    };
+    ($p:ty; super $(. $($rest:tt)+)?) => {
+        $crate::__field_path!($crate::util::place::Up<$p>; $($($rest)+)?)
+    };
+    ($p:ty; $f:ident $(. $($rest:tt)+)?) => {
+        $crate::__field_path!(
+            $crate::util::place::FieldOf<$p, { $crate::util::place::name(stringify!($f)) }>;
+            $($($rest)+)?)
+    };
+}
+
+/// What path Self reaches from a T.
+pub(crate) trait Path<T> {
+    type To;
+    fn get(t: &T) -> &Self::To;
+}
+
+impl<T> Path<T> for Here {
+    type To = T;
+    fn get(t: &T) -> &T {
+        t
+    }
+}
+
+impl<T, P: Path<T>> Path<T> for Up<P>
+where
+    P::To: Placed + 'static,
+{
+    type To = <P::To as Placed>::Parent;
+    fn get(t: &T) -> &Self::To {
+        P::get(t).container()
+    }
+}
+
+impl<T, P: Path<T>, const N: u64> Path<T> for FieldOf<P, N>
+where
+    P::To: Field<N> + 'static,
+{
+    type To = <P::To as Field<N>>::Type;
+    fn get(t: &T) -> &Self::To {
+        let b: *const P::To = P::get(t);
+        // SAFETY: Field<N>'s - its field of that type, at that offset - in
+        // a B borrowed for as long
+        unsafe { &*b.byte_add(<P::To as Field<N>>::OFFSET).cast() }
     }
 }
 

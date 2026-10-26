@@ -37,6 +37,7 @@ use crate::snapshots::snapshot;
 use crate::snapshot_states::SUBVOLUME_STATE_VALUES;
 use crate::util::alloc::KVVec;
 use crate::util::ffi::Opaque;
+use crate::util::place::Placed;
 use crate::util::Printbuf;
 use crate::util::log::{LogLevel, LogMsg};
 use crate::{bch_err, bch_err_msg, bkey_fsck_err_on, fs_inconsistent, fsck_err,
@@ -806,25 +807,22 @@ fn evict_inodes(fs: &Fs, subvols: &[u32]) {
 #[cfg(not(kernel))]
 fn evict_inodes(_fs: &Fs, _subvols: &[u32]) {}
 
-crate::fs_work! {
-    /// Deletes unlinked subvolumes, once the VFS has let go of their inodes:
-    /// unlink() queues it, holding a write ref.
-    pub(crate) work SubvolDelete: field snapshots.wait_for_pagecache_and_delete_work;
+/// Deletes unlinked subvolumes, once the VFS has let go of their inodes:
+/// unlink() queues it, holding a write ref.
+pub(crate) fn delete_unlinked(snapshots: &c::bch_fs_snapshots) {
+    let fs = snapshots.container();
+    loop {
+        let subvols = core::mem::replace(&mut *snapshots.unlinked.lock(), KVVec::new());
+        if subvols.is_empty() {
+            break;
+        }
 
-    fn run(fs: &Fs) {
-        loop {
-            let subvols = core::mem::replace(&mut *fs.snapshots.unlinked.lock(), KVVec::new());
-            if subvols.is_empty() {
-                break;
-            }
+        evict_inodes(fs, &subvols);
 
-            evict_inodes(fs, &subvols);
-
-            let trans = crate::btree_trans!(fs);
-            for &id in subvols.iter() {
-                if bch_err_msg!(fs, set_deleted(&trans, id), "deleting subvolume {id}").is_err() {
-                    return;
-                }
+        let trans = crate::btree_trans!(fs);
+        for &id in subvols.iter() {
+            if bch_err_msg!(fs, set_deleted(&trans, id), "deleting subvolume {id}").is_err() {
+                return;
             }
         }
     }
@@ -842,7 +840,10 @@ pub fn unlink(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<(), BchError> {
             }
         }
 
-        SubvolDelete::queue(fs)
+        if !fs.snapshots.wait_for_pagecache_and_delete_work.queue(fs.write_ref_wq()) {
+            return Err(c::EROFS.into());
+        }
+        Ok(())
     })?;
 
     set_state_trans(t, subvol, c::bch_subvolume_state::SUBVOLUME_STATE_unlinked)?;

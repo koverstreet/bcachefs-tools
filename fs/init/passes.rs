@@ -42,7 +42,7 @@ use crate::btree::iter::lockrestart_do;
 use crate::c;
 use crate::c::{bch_recovery_runner as Runner, RecoveryWords};
 use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
-use crate::fs::{Fs, FsWork, SbLockGuard, WriteRef};
+use crate::fs::{Fs, SbLockGuard};
 use crate::locking::Guard;
 use crate::sb::io::{SbFieldOps, SbWrite};
 use crate::snapshots::subvolume;
@@ -53,13 +53,13 @@ use crate::util::kernel::{ktime_get_ns, ktime_get_real_seconds, NSEC_PER_SEC};
 use crate::util::kthread::Kthread;
 use crate::util::log::{log_cont, log_start, LogLevel, LogMsg};
 use crate::util::projections::AtomicWord;
-use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::{Head, Validated, Unvalidated};
+use crate::util::place::Placed;
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::{bch_err, bch_info, c_function_name, inode, message, prt};
 use core::ffi::{c_int, c_uint, c_ulong};
-use core::mem::{offset_of, size_of};
+use core::mem::size_of;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cstruct_macros::c_export;
 
@@ -438,14 +438,6 @@ pub fn run_lock(fs: &Fs) -> Guard<'_, c::mutex> {
 pub fn bch2_recovery_set_pass_done(c: &Opaque<c::bch_fs>, pass: c::bch_recovery_pass) {
     let fs = Fs::from_c(c);
     lock(fs).published().pass_done.set(pass);
-}
-
-/// The async runner's work item, for bch_fs_recovery's init.
-pub fn async_work_init() -> impl ::pin_init::PinInit<FsWork> {
-    #[cfg(kernel)]
-    return FsWork::new(async_work, c"&c->recovery.work", ::kernel::static_lock_class!());
-    #[cfg(not(kernel))]
-    return FsWork::new(async_work);
 }
 
 // ── Scheduling ───────────────────────────────────────────────────────────────
@@ -924,14 +916,11 @@ pub fn bch2_run_recovery_passes(c: &Opaque<c::bch_fs>, passes: u64, failfast: bo
 }
 
 /// The async runner: the passes scheduled that can run online, unless a run
-/// is already going - then it picks them up.
-unsafe extern "C" fn async_work(work: *mut c::work_struct) {
-    // SAFETY: recovery.work, of a live filesystem: run_async() queued it,
-    // handing it a write ref
-    let fs = unsafe { Fs::borrow_raw(work.byte_sub(offset_of!(c::bch_fs, recovery.work)).cast()) };
-    let _ref = unsafe { WriteRef::adopt(&fs.writes) };
-
-    let Some(_run) = fs.recovery.run_lock.try_lock() else { return };
+/// is already going - then it picks them up. run_async() queues it, holding
+/// a write ref.
+pub(crate) fn async_runner(recovery: &c::bch_fs_recovery) {
+    let fs = recovery.container();
+    let Some(_run) = recovery.run_lock.try_lock() else { return };
 
     /*
      * A persistent pass is recorded by the same sb_lock section that kicks
@@ -945,7 +934,7 @@ unsafe extern "C" fn async_work(work: *mut c::work_struct) {
     };
 
     let ratelimiting = lock(fs).passes_ratelimiting;
-    let passes = (required | fs.recovery.runner.scheduled_passes_ephemeral.get()) & !ratelimiting & passes_match(c::PASS_ONLINE);
+    let passes = (required | recovery.runner.scheduled_passes_ephemeral.get()) & !ratelimiting & passes_match(c::PASS_ONLINE);
     let _ = run_passes(fs, passes, false);
 }
 
@@ -962,9 +951,7 @@ pub fn run_async(fs: &Fs) {
         return;
     }
 
-    if let Some(r) = fs.writes.tryget_live() {
-        r.queue_work_on(Queue::system_long(), &fs.recovery.work);
-    }
+    fs.recovery.work.queue(Queue::system_long());
 }
 
 /// Recovery at mount: the passes this mount needs, from @from on - those that

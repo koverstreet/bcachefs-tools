@@ -130,7 +130,7 @@ pub(crate) fn placed(attr: TokenStream, item: TokenStream) -> Result<TokenStream
 
     // Its At, and the field it's in: an element's index, as C names it, or
     // a field of no bytes
-    let n = format!("{{ crate::field!({field}) }}");
+    let n = format!("{{ crate::util::place::name({field:?}) }}");
     let (at, at_field, at_decl) = match &kind {
         Kind::Field => (
             format!("crate::util::place::At<{base}, {n}>"),

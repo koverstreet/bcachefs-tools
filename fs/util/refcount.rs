@@ -29,8 +29,13 @@
 //! more than one count, where those would be ambiguous - from the guard's,
 //! named by an alias: RoRef::tryget(fs). What an implementation
 //! supplies are the raw counting - inc(), dec(), try_inc() - which the
-//! guards are made from; only a ref handed across without a guard, as to a
-//! work item, is adopt()ed or leak()ed by hand.
+//! guards are made from.
+//!
+//! A ref handed across without a guard - into a C list, as an open bucket's
+//! pins are, or to a work item queued (ReffedWork, util/workqueue.rs) - is
+//! leak()ed and adopt()ed back, by what does the handing: the run adopts its
+//! ref, put as the run ends. What the run finds from where the work is must
+//! be kept by the ref, so its count is KeepsAlive.
 //!
 //! A guard's borrow needn't outlive its ref: what's counted may be valid
 //! only while a ref is held - an open bucket, held open by its pins; a
@@ -72,6 +77,11 @@ pub unsafe trait TryRefcount<K = ()>: Refcount<K> {
     }
 }
 
+/// # Safety
+/// While a ref on count K is held, the T isn't freed - nor, a placed count,
+/// anything it's in.
+pub unsafe trait KeepsAlive<K = ()>: Refcount<K> {}
+
 #[must_use = "the ref is put as soon as it's dropped"]
 pub struct RefGuard<'a, T: Refcount<K> + ?Sized, K = ()> {
     t:  &'a T,
@@ -88,12 +98,12 @@ impl<'a, T: Refcount<K> + ?Sized, K> RefGuard<'a, T, K> {
     ///
     /// # Safety
     /// The caller holds a ref on @t's count K, and gives it up to this.
-    pub unsafe fn adopt(t: &'a T) -> Self {
+    pub(crate) unsafe fn adopt(t: &'a T) -> Self {
         RefGuard { t, _k: PhantomData }
     }
 
     /// Its ref handed over without a guard, to be adopt()ed - not put.
-    pub fn leak(self) {
+    pub(crate) fn leak(self) {
         core::mem::forget(self);
     }
 }

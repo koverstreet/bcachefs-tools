@@ -675,7 +675,6 @@ pub struct Fs {
     pub(crate) journal_seq_blacklist: rust_only!(crate::journal::seq_blacklist::JournalSeqBlacklist),
 
     #[pin]
-    #[init(c::bch_fs_recovery::init())]
     pub recovery: c::bch_fs_recovery,
 
     #[pin]
