@@ -692,6 +692,7 @@ pub struct Fs {
     pub(crate) replicas: rust_only!(PercpuRwsemNoio<crate::alloc::replicas::ReplicasCpu>),
     pub disk_groups: c::DiskGroups,
     pub capacity: c::bch_fs_capacity,
+    #[pin]
     pub allocator: c::bch_fs_allocator,
     pub discards: c::bch_fs_discards,
 

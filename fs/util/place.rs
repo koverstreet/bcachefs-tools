@@ -340,19 +340,32 @@ pub(crate) unsafe trait Placed: Sized {
     #[doc(hidden)]
     type At: Place<Type = Self, Base = Self::Parent>;
 
-    /// Its At field.
+    /// Its At field, of the Self at @p.
+    ///
+    /// # Safety
+    /// @p points to a Self.
     #[doc(hidden)]
-    fn placed_at(&self) -> &Self::At;
+    unsafe fn placed_at_raw(p: *const Self) -> *const Self::At;
 
     /// The parent this is the field of.
     fn container(&self) -> &Self::Parent {
-        // SAFETY: Placed's - self is in a parent, its At's offset() in it;
-        // borrowed from it, so the parent's live while self is. Its known
-        // gap, the parent's discipline: see the file comment
-        unsafe {
-            &*core::ptr::from_ref(self).byte_sub(self.placed_at().offset())
-                .cast::<Self::Parent>()
-        }
+        // SAFETY: a Self, borrowed
+        unsafe { container_of(self) }
+    }
+}
+
+/// container(), from a pointer: for a placed value had only by one - behind
+/// an Opaque, which C writes through.
+///
+/// # Safety
+/// @p points to a live Self, initialized - had for 'a.
+pub(crate) unsafe fn container_of<'a, T: Placed>(p: *const T) -> &'a T::Parent {
+    // SAFETY: Placed's - p is in a parent, its At's offset() in it, the At
+    // fixed once made; had for 'a, so the parent's live for 'a. Its known
+    // gap, the parent's discipline: see the file comment
+    unsafe {
+        let at = &*T::placed_at_raw(p);
+        &*p.byte_sub(at.offset()).cast::<T::Parent>()
     }
 }
 

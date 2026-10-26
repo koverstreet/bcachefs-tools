@@ -213,8 +213,9 @@ pub(crate) fn placed(attr: TokenStream, item: TokenStream) -> Result<TokenStream
                  unsafe impl crate::util::place::Placed for {name} {{\n\
                      type Parent = {base};\n\
                      type At = {at};\n\
-                     fn placed_at(&self) -> &Self::At {{\n\
-                         &self.{at_field}\n\
+                     unsafe fn placed_at_raw(p: *const Self) -> *const Self::At {{\n\
+                         // SAFETY: the caller's\n\
+                         unsafe {{ &raw const (*p).{at_field} }}\n\
                      }}\n\
                  }}\n\
                  {}{no_drop}", init_at(&init))

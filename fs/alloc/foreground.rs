@@ -35,12 +35,12 @@ use crate::fs::Fs;
 use crate::util::closure::StackClosure;
 use crate::util::ffi::Opaque;
 use crate::util::hash::{hash_64, Fold};
+use crate::util::place::{self, Placed};
 use crate::util::rcu::read_lock;
 use crate::util::refcount::{RefGuard, Refcount};
 use arrayvec::ArrayVec;
 use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
-use core::mem::{offset_of, size_of};
 use core::ops::Deref;
 use core::ptr::{read_volatile, NonNull};
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
@@ -103,9 +103,22 @@ impl OpenBucketRef {
     }
 
     pub fn idx(&self) -> c::OpenBucketIdx {
-        // SAFETY: set when the table was built, and not 0: an open bucket
-        // isn't slot 0, the sentinel, which is never handed out
-        unsafe { c::OpenBucketIdx::new_unchecked((*self.raw()).idx) }
+        // SAFETY: its place's - written as the table was built, and fixed
+        // since - and not 0: an open bucket isn't slot 0, the sentinel, which
+        // is never handed out
+        unsafe { c::OpenBucketIdx::new_unchecked((*self.raw()).idx.get()) }
+    }
+
+    /// The allocator whose table it's a slot of: its place's container().
+    fn container(&self) -> &c::bch_fs_allocator {
+        // SAFETY: an open bucket - from_c()'s - so a live open_bucket,
+        // initialized. Widened from the Opaque: all of it interior mutable
+        unsafe { place::container_of(self.raw()) }
+    }
+
+    /// Its filesystem: its allocator's.
+    fn fs(&self) -> &Fs {
+        self.container().container()
     }
 
     pub fn dev(&self) -> u32 {
@@ -165,11 +178,10 @@ unsafe impl Refcount for OpenBucketRef {
 
     unsafe fn dec(&self) {
         // SAFETY: its pin field, atomic; the caller's to put. Fully ordered,
-        // as atomic_dec_and_test(). The filesystem's found from the slot, by
-        // its own index.
+        // as atomic_dec_and_test().
         unsafe {
             if (*self.raw()).pin.fetch_sub(1, SeqCst) == 1 {
-                __bch2_open_bucket_put(slot_fs(NonNull::from(self).cast()).as_ptr(), self.raw());
+                __bch2_open_bucket_put(self.fs().as_ptr(), self.raw());
             }
         }
     }
@@ -190,11 +202,6 @@ impl<'f> RefGuard<'f, OpenBucketRef> {
         let idx = self.idx();
         self.leak();
         idx
-    }
-
-    fn fs(&self) -> &'f Fs {
-        // SAFETY: a slot of the table of a filesystem borrowed for 'f
-        unsafe { slot_fs(NonNull::from(&**self).cast()) }
     }
 
     /// Held where no lifetime can say that the filesystem outlives it - in a
@@ -266,25 +273,12 @@ impl Drop for EcOpenBucket<'_> {
         // SAFETY: its pin field, atomic
         let pin = unsafe { (*ob).pin.load(SeqCst) };
         assert_eq!(pin, 0, "closing open bucket {}, claimed by a writer still holding its pin", self.idx().get());
-        // SAFETY: open only for its stripe, which this ends; a slot of the
-        // table of a filesystem borrowed for 'f
+        // SAFETY: open only for its stripe, which this ends
         unsafe {
             (*ob).ec = core::ptr::null_mut();
-            __bch2_open_bucket_put(slot_fs(self.ob).as_ptr(), ob);
+            __bch2_open_bucket_put(self.fs().as_ptr(), ob);
         }
     }
-}
-
-/// The filesystem whose table @ob is a slot of: container_of(), by its index.
-///
-/// # Safety
-/// @ob is a slot of the table of a filesystem live for 'f.
-unsafe fn slot_fs<'f>(ob: NonNull<c::open_bucket>) -> &'f Fs {
-    // SAFETY: the caller's
-    let idx = usize::from(unsafe { (*ob.as_ptr()).idx });
-    let off = offset_of!(c::bch_fs, allocator.open_buckets) + idx * size_of::<c::open_bucket>();
-    // SAFETY: the caller's
-    unsafe { Fs::borrow_raw(ob.as_ptr().byte_sub(off).cast()) }
 }
 
 impl c::open_buckets {
@@ -319,7 +313,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         let ob = errptr_to_result(NonNull::new(ob).expect("a bucket or an error"))?;
         // SAFETY: a slot in the table, the pin returned with it ours - not
         // slot 0, the sentinel, which is never handed out
-        unsafe { Ok(OpenBucket::from_idx(self.fs(), c::OpenBucketIdx::new_unchecked((*ob.as_ptr()).idx))) }
+        unsafe { Ok(OpenBucket::from_idx(self.fs(), c::OpenBucketIdx::new_unchecked((*ob.as_ptr()).idx.get()))) }
     }
 }
 

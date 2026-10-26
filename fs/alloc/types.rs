@@ -9,7 +9,8 @@ use crate::types::{CacheAligned, DArray, c_default};
 use crate::util::percpu::{Counters, PerCpu};
 use core::ffi::{c_uint, c_ulong};
 use core::sync::atomic::{AtomicI32, AtomicI64};
-use cstruct_macros::{bitfield, c_const, c_enum, c_extern, c_typedef, c_xmacro, CStruct, Fieldwise, TypeInfo};
+use cstruct_macros::{bitfield, c_const, c_enum, c_extern, c_typedef, c_xmacro, placed, CStruct, Fieldwise, Init, TypeInfo};
+use pin_init::pin_data;
 use nestify::nest;
 
 c_xmacro! {
@@ -139,11 +140,26 @@ nest! {
     ///   head's lock and the stripe's - before the writer has it; @ec cleared
     ///   when the stripe closes it, EcOpenBucket's drop. Read by its pin
     ///   holders, and by bch2_open_bucket_to_text() under @lock.
+    ///
+    /// Its index in the table - idx, the way back to the filesystem - is its
+    /// place's: placed last, the fields before it ordered so that it fills
+    /// what would be tail padding. Raw, not an OpenBucketIdx: slot 0, the
+    /// sentinel, has one too.
+    #[placed(bch_fs_allocator.open_buckets[], index = idx: c::open_bucket_idx_t)]
+    #[pin_data]
     #[repr(C)]
-    #[derive(CStruct)]
+    #[derive(CStruct, Init)]
     pub struct open_bucket {
         pub lock: c::spinlock_t,
         pub pin: AtomicI32,
+        /* handle already removed from ca->nr_open_buckets (bucket left free) */
+        pub free_uncounted: bool,
+        pub dev: u8,
+        pub generation: u8,
+        pub sectors_free: u32,
+        pub bucket: u64,
+        pub ec: *mut c::ec_stripe_new,
+
         #[c("open_bucket_idx_t freelist")]
         pub freelist: Option<OpenBucketIdx>,
         #[c("open_bucket_idx_t hash")]
@@ -162,22 +178,8 @@ nest! {
             on_partial_list:  bool,
             do_discards_fast: bool,
         },
-        /* handle already removed from ca->nr_open_buckets (bucket left free) */
-        pub free_uncounted: bool,
-
-        pub dev: u8,
-        pub generation: u8,
-        /*
-         * its own, in c->allocator.open_buckets: the way back to the
-         * filesystem. Raw, not an OpenBucketIdx: slot 0, the sentinel, has none.
-         */
-        pub idx: c::open_bucket_idx_t,
-        pub sectors_free: u32,
-        pub bucket: u64,
-        pub ec: *mut c::ec_stripe_new,
     }
 }
-c_default!(open_bucket);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -321,8 +323,10 @@ pub struct bch_fs_capacity {
 }
 c_default!(bch_fs_capacity);
 
+#[placed(Fs.allocator)]
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_allocator {
     #[c("struct bch_devs_mask rw_devs[BCH_DATA_NR]")]
     pub rw_devs: [c::AtomicDevsMask; c::BCH_DATA_NR as usize],
@@ -339,6 +343,7 @@ pub struct bch_fs_allocator {
     pub open_buckets_freelist: Option<OpenBucketIdx>,
     pub open_buckets_nr_free: c::open_bucket_idx_t,
     pub open_buckets_wait: c::closure_waitlist,
+    #[pin]
     pub open_buckets: [c::open_bucket; c::OPEN_BUCKETS_COUNT as usize],
     #[c("open_bucket_idx_t open_buckets_hash[OPEN_BUCKETS_COUNT]")]
     pub open_buckets_hash: [Option<OpenBucketIdx>; c::OPEN_BUCKETS_COUNT as usize],
@@ -355,7 +360,6 @@ pub struct bch_fs_allocator {
     pub btree_write_point: c::write_point,
     pub reconcile_write_point: c::write_point,
 }
-c_default!(bch_fs_allocator);
 
 impl bch_fs_allocator {
     /// How many times @rw_devs has changed - bumped as a device goes

@@ -2078,7 +2078,6 @@ void bch2_fs_allocator_foreground_init(struct bch_fs *c)
 		spin_lock_init(&ob->lock);
 		a->open_buckets_nr_free++;
 
-		ob->idx = ob - a->open_buckets;
 		ob->freelist = a->open_buckets_freelist;
 		a->open_buckets_freelist = ob - a->open_buckets;
 	}
