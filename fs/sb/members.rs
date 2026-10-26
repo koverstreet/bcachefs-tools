@@ -11,6 +11,7 @@ use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
 use crate::util::rcu::{read_lock, ReadGuard};
+use crate::util::refcount::{RefGuard, Refcount, TryRefcount};
 use crate::alloc::disk_groups;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::strided::{Strided, StridedMut};
@@ -770,7 +771,7 @@ pub fn bch2_dev_mi_field_upgrades(ca: &c::bch_dev) {
 #[c_export]
 pub fn bch2_fs_mi_field_upgrades(c: &Opaque<c::bch_fs>) {
     let fs = Fs::from_c(c);
-    for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_fs_mi_field_upgrades) {
+    for ca in fs.online_members() {
         /*
          * Reads sysfs, so it can't happen under sb_lock - which is why this
          * writes per dirty device instead of once at the end. Only the first
@@ -1196,13 +1197,20 @@ impl Fs {
         Ok(ca)
     }
 
-    /// An io ref on device @dev, as @ref_idx - for writing only if it's rw:
-    /// bch2_dev_get_ioref().
-    pub fn dev_get_ioref<R: IoRefIdx>(&self, dev: u32, ref_idx: R) -> Option<DevIoRef<'_, R>> {
+    /// An io ref on device @dev, for reading or writing as R is - for
+    /// writing only if it's rw: bch2_dev_get_ioref().
+    pub fn dev_get_ioref<R: IoRefIdx>(&self, dev: u32) -> Option<DevIoRef<'_, R>> {
         let rcu = read_lock();
-        let ca = DevIoRef::tryget(self.dev_rcu(dev, &rcu)?, ref_idx)?;
+        let ca = self.io_ref_tryget(self.dev_rcu(dev, &rcu)?)?;
         // then_some(), eager: a write ref on a device that isn't rw is put
         (R::RW == READ || ca.mi.state as u32 == c::bch_member_state::BCH_MEMBER_STATE_rw.0).then_some(ca)
+    }
+
+    /// An io ref on @ca, one of ours found under RCU: the ref keeps the device
+    /// past the section, and the guard hands it out only while it's held.
+    fn io_ref_tryget<R: IoRefIdx>(&self, ca: &c::bch_dev) -> Option<DevIoRef<'_, R>> {
+        // SAFETY: as above
+        DevIoRef::tryget_live(unsafe { &*core::ptr::from_ref(ca) })
     }
 
     /// What @f makes of each device it doesn't skip: each step its own RCU
@@ -1225,29 +1233,27 @@ impl Fs {
     }
 
     /// The devices in a state in @states (a mask of 1 << state), an io ref on
-    /// each taken as @ref_idx, put when it's dropped: __for_each_online_member().
-    pub fn io_members<R: IoRefIdx>(&self, states: u32, ref_idx: R) -> impl Iterator<Item = DevIoRef<'_, R>> {
+    /// each, put when it's dropped: __for_each_online_member().
+    pub fn io_members<R: IoRefIdx>(&self, states: u32) -> impl Iterator<Item = DevIoRef<'_, R>> {
         self.walk(move |ca| {
-            (states & 1 << ca.mi.state != 0).then(|| DevIoRef::tryget(ca, ref_idx)).flatten()
+            (states & 1 << ca.mi.state != 0).then(|| self.io_ref_tryget(ca)).flatten()
         })
     }
 
     /// Every online device, an io ref for reading on each: for_each_online_member().
-    pub fn online_members(&self, ref_idx: c::bch_dev_read_ref) -> impl Iterator<Item = DevIoRef<'_, c::bch_dev_read_ref>> {
-        self.io_members(!0, ref_idx)
+    pub fn online_members(&self) -> impl Iterator<Item = DevIoRef<'_, c::bch_dev_read_ref>> {
+        self.io_members(!0)
     }
 
     /// The rw devices, an io ref for writing on each: for_each_rw_member().
-    pub fn rw_members(&self, ref_idx: c::bch_dev_write_ref) -> impl Iterator<Item = DevIoRef<'_, c::bch_dev_write_ref>> {
-        self.io_members(1 << c::bch_member_state::BCH_MEMBER_STATE_rw.0, ref_idx)
+    pub fn rw_members(&self) -> impl Iterator<Item = DevIoRef<'_, c::bch_dev_write_ref>> {
+        self.io_members(1 << c::bch_member_state::BCH_MEMBER_STATE_rw.0)
     }
 
     /// The rw and ro devices, an io ref for reading on each: for_each_readable_member().
-    pub fn readable_members(&self, ref_idx: c::bch_dev_read_ref)
-        -> impl Iterator<Item = DevIoRef<'_, c::bch_dev_read_ref>>
-    {
+    pub fn readable_members(&self) -> impl Iterator<Item = DevIoRef<'_, c::bch_dev_read_ref>> {
         self.io_members(1 << c::bch_member_state::BCH_MEMBER_STATE_rw.0 |
-                        1 << c::bch_member_state::BCH_MEMBER_STATE_ro.0, ref_idx)
+                        1 << c::bch_member_state::BCH_MEMBER_STATE_ro.0)
     }
 }
 
@@ -1401,57 +1407,67 @@ impl Drop for DevOuterRef {
     }
 }
 
-/// What an io ref is taken as: a read ref's index is a bch_dev_read_ref, a
-/// write ref's a bch_dev_write_ref - so which of io_ref[] follows from it.
-pub trait IoRefIdx: Copy + 'static {
+/// Which of a device's io refs: bch_dev_read_ref for io_ref[READ],
+/// bch_dev_write_ref for io_ref[WRITE] - the kind enum names the count, as
+/// its Refcount's K. Rust's refs are one kind of each, BCH_DEV_*_REF_rust:
+/// the kinds are a debugging aid, for C's.
+pub trait IoRefIdx: 'static {
     const RW: usize;
-    fn idx(self) -> u32;
+    const RUST: u32;
 }
 
 impl IoRefIdx for c::bch_dev_read_ref {
     const RW: usize = READ;
-    fn idx(self) -> u32 { self as u32 }
+    const RUST: u32 = c::bch_dev_read_ref::BCH_DEV_READ_REF_rust as u32;
 }
 
 impl IoRefIdx for c::bch_dev_write_ref {
     const RW: usize = WRITE;
-    fn idx(self) -> u32 { self as u32 }
+    const RUST: u32 = c::bch_dev_write_ref::BCH_DEV_WRITE_REF_rust as u32;
 }
 
-/// An io ref on a device - io_ref[R::RW] as @ref_idx: its block device is
-/// open while this is held. Put on drop.
-pub struct DevIoRef<'f, R: IoRefIdx> {
-    ca:      &'f c::bch_dev,
-    ref_idx: R,
-}
-
-// SAFETY: a device is shared by every thread that does IO to it, and its io
-// refs are percpu refs, put from anywhere: one held by a task resumed on
-// another thread is as good as on this one
-unsafe impl<R: IoRefIdx> Send for DevIoRef<'_, R> {}
-
-impl<'f, R: IoRefIdx> DevIoRef<'f, R> {
-    fn tryget(ca: &c::bch_dev, ref_idx: R) -> Option<Self> {
-        // SAFETY: tryget only reads and counts
-        unsafe { c::rust_enumerated_ref_tryget((&raw const ca.io_ref[R::RW]).cast_mut(), ref_idx.idx()) }
-            // SAFETY: the io ref keeps it, past whatever section found it
-            .then(|| DevIoRef { ca: unsafe { &*(ca as *const c::bch_dev) }, ref_idx })
+impl c::bch_dev {
+    fn io_ref_raw(&self, rw: usize) -> *mut c::enumerated_ref {
+        (&raw const self.io_ref[rw]).cast_mut()
     }
 }
 
-impl<R: IoRefIdx> core::ops::Deref for DevIoRef<'_, R> {
-    type Target = c::bch_dev;
+// SAFETY: an enumerated_ref; the device is freed only after its io refs are
+// put
+unsafe impl<R: IoRefIdx> Refcount<R> for c::bch_dev {
+    fn inc(&self) {
+        // SAFETY: io_ref[R::RW]
+        unsafe { c::rust_enumerated_ref_get(self.io_ref_raw(R::RW), R::RUST) }
+    }
 
-    fn deref(&self) -> &c::bch_dev {
-        self.ca
+    unsafe fn dec(&self) {
+        // SAFETY: io_ref[R::RW]; the caller's ref
+        unsafe { c::rust_enumerated_ref_put(self.io_ref_raw(R::RW), R::RUST) }
     }
 }
 
-impl<R: IoRefIdx> Drop for DevIoRef<'_, R> {
-    fn drop(&mut self) {
-        unsafe { c::rust_enumerated_ref_put((&raw const self.ca.io_ref[R::RW]).cast_mut(), self.ref_idx.idx()) };
+// SAFETY: an enumerated_ref's trygets take a ref when they succeed
+unsafe impl<R: IoRefIdx> TryRefcount<R> for c::bch_dev {
+    fn try_inc(&self) -> bool {
+        // SAFETY: io_ref[R::RW]
+        unsafe { c::rust___enumerated_ref_tryget(self.io_ref_raw(R::RW), R::RUST) }
+    }
+
+    fn try_inc_live(&self) -> bool {
+        // SAFETY: io_ref[R::RW]
+        unsafe { c::rust_enumerated_ref_tryget(self.io_ref_raw(R::RW), R::RUST) }
     }
 }
+
+/// An io ref on a device - for reading or writing, as R is: its block
+/// device is open while it's held.
+pub type DevIoRef<'f, R> = RefGuard<'f, c::bch_dev, R>;
+
+// SAFETY: a device is every thread's that does IO to it, as its filesystem
+// is: its state behind its own locks, atomics and RCU - so a &bch_dev goes to
+// any thread too, and an io ref, a percpu ref, is put from anywhere. What
+// Rust reads through it is as synchronized as the C it reads.
+unsafe impl Sync for c::bch_dev {}
 
 /// The last device looked up, its ref kept while lookups keep hitting it:
 /// bch2_dev_iterate(), for walks whose keys mostly stay on one device.

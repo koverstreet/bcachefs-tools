@@ -610,7 +610,7 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
     let block_size = fs.opts().block_size as u32;
 
     let mut nr_online = 0u32;
-    for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_bch2_online_devs) {
+    for ca in fs.online_members() {
         if (sanitize || cli.single_replica) && (ca.mi.bucket_size as u32) % (block_size >> 9) != 0 {
             return Err(anyhow!("{} has unaligned buckets, cannot sanitize or de-replicate",
                                ca.name().to_string_lossy()));
@@ -649,7 +649,7 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
     }
 
     // Write qcow2 image(s)
-    for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_bch2_online_devs) {
+    for ca in fs.online_members() {
         let dev_idx = ca.dev_idx;
         let path = if nr_online > 1 {
             format!("{}.{}.qcow2", cli.output, dev_idx)

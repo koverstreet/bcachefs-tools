@@ -207,15 +207,10 @@ pub struct io_count {
 c_xmacro! {
     BCH_DEV_READ_REFS(x) {
         (bch2_online_devs),
-        (trans_mark_dev_sbs),
         (read_fua_test),
-        (sb_field_resize),
-        (write_super),
         (journal_read),
         (fs_journal_alloc),
         (fs_resize_on_mount),
-        (fs_mi_field_upgrades),
-        (sb_journal_sort),
         (btree_node_read),
         (btree_node_read_all_replicas),
         (btree_node_scrub),
@@ -224,8 +219,9 @@ c_xmacro! {
         (btree_verify_replicas),
         (btree_node_ondisk_to_text),
         (io_read),
-        (check_extent_checksums),
         (ec_block),
+        /* every Rust user's: the kinds are a debugging aid, for C's */
+        (rust),
     }
 }
 
@@ -249,6 +245,8 @@ c_xmacro! {
         (io_write),
         (ec_block),
         (ec_bucket_zero),
+        /* every Rust user's: the kinds are a debugging aid, for C's */
+        (rust),
     }
 }
 

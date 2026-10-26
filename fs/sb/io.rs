@@ -2073,7 +2073,7 @@ impl SbResize for FsSbResize<'_> {
 
     fn grow_with(&mut self, d: isize) -> Option<()> {
         // XXX: we're not checking that offline device have enough space
-        for ca in self.fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_sb_field_resize) {
+        for ca in self.fs.online_members() {
             // SAFETY: our devices', under the sb_lock we hold - mutably, and
             // nothing else of it is borrowed meanwhile
             let io = unsafe { ca.disk_sb.protected_mut() };
@@ -2398,7 +2398,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
     // in the future. For now, we expect to be able to call write_super() when
     // we're not yet RW.
     let mut cas = KVVec::new();
-    for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_write_super) {
+    for ca in fs.online_members() {
         if devs.is_some_and(|d| !d.d.test(ca.dev_idx.into())) {
             continue;
         }
@@ -2776,7 +2776,7 @@ impl Fs {
         let mut devs = c::bch_devs_mask::default();
         let mut total = 0u64;
 
-        for ca in self.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_write_super) {
+        for ca in self.online_members() {
             let sectors = ca.usage_full_read_fast().d[c::bch_data_type::BCH_DATA_btree.0 as usize].sectors;
             if m.push((ca.dev_idx, sectors), crate::util::alloc::flags::GFP_KERNEL).is_err() {
                 return self.write_super_flags(sb, c::bch_sb_write_flags::empty());

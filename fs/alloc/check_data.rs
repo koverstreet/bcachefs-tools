@@ -168,7 +168,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: c::btree_id
         return Ok(false);
     }
 
-    let Some(ca) = fs.dev_get_ioref(dev, c::bch_dev_read_ref::BCH_DEV_READ_REF_check_extent_checksums) else {
+    let Some(ca) = fs.dev_get_ioref::<c::bch_dev_read_ref>(dev) else {
         return Ok(false);
     };
 

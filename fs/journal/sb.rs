@@ -178,7 +178,7 @@ pub fn bch2_sb_journal_sort(c: &Opaque<c::bch_fs>) -> c_int {
     let mut sb = fs.sb_lock();
     let mut dirty = false;
 
-    for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_sb_journal_sort) {
+    for ca in fs.online_members() {
         let Some(dev_sb) = fs.dev_sb(&sb, &ca) else { continue };
         let Some(j) = dev_sb.field::<c::bch_sb_field_journal_v2>() else { continue };
 

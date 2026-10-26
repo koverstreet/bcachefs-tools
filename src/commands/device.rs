@@ -429,7 +429,7 @@ fn cmd_device_resize(cli: ResizeCli) -> Result<()> {
 /// Find the single online device in a filesystem.
 /// Offline operations (resize, resize-journal) require exactly one device.
 fn find_single_online_dev(fs: &Fs) -> Result<bcachefs_kernel::fs::DevRef> {
-    let mut online = fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_bch2_online_devs);
+    let mut online = fs.online_members();
     let Some(ca) = online.next() else {
         bail!("no online device found");
     };

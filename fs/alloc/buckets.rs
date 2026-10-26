@@ -793,7 +793,7 @@ impl Fs {
     /// trans_mark_dev_sb() of every online device - each initialized first,
     /// if it wasn't: bch2_trans_mark_dev_sbs_flags().
     pub fn trans_mark_dev_sbs(&self, flags: UpdateTriggerFlags) -> Result<(), BchError> {
-        for ca in self.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_trans_mark_dev_sbs) {
+        for ca in self.online_members() {
             // marked again, even if it was: harmless if not needed, and a
             // superblock or journal bucket allocated twice would be painful
             let ca_raw = core::ptr::from_ref::<c::bch_dev>(&ca).cast_mut();

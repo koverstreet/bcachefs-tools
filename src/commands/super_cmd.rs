@@ -76,7 +76,7 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
 
     // Use the per-device superblock, not c->disk_sb.sb — the filesystem-level
     // copy omits fields like magic and layout that __copy_super doesn't transfer.
-    for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_bch2_online_devs) {
+    for ca in fs.online_members() {
         // copied: printing it wants no sb_lock held
         let sb = bcachefs_kernel::sb::io::SbBuf::from_sb(
             fs.dev_sb(&fs.sb_lock(), &ca).expect("an online device's superblock").sb());

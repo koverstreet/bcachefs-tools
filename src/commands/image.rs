@@ -398,7 +398,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     sb.fs_member_mut(0).nbuckets = nbuckets.into();
 
     // Set resize_on_mount for all online members
-    for ca in fs.online_members(c::bch_dev_read_ref::BCH_DEV_READ_REF_bch2_online_devs) {
+    for ca in fs.online_members() {
         sb.fs_member_mut(ca.dev_idx as u32).set_resize_on_mount(true);
     }
 
