@@ -589,7 +589,9 @@ pub struct Fs {
     pub state_lock: c::rw_semaphore,
 
     /* Counts outstanding writes, for clean transition to read-only */
-    pub writes: c::enumerated_ref,
+    #[c("struct enumerated_ref writes")]
+    #[pin]
+    pub writes: crate::fs::WriteRefs,
 
     /*
      * Analagous to c->writes, for asynchronous ops that don't necessarily

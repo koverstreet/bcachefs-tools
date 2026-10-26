@@ -41,6 +41,7 @@ use crate::sb::members;
 use crate::util::ffi::{c_char, with_cstr};
 use crate::util::kernel::{READ, WRITE};
 use crate::util::log::LogMsg;
+use crate::util::refcount::TryRefcount;
 use crate::util::sysfs::{self, parse_human_u64, parse_int, Attr, Dir, Files, ListAttrs};
 use crate::util::{Printbuf, ToText};
 
@@ -106,7 +107,7 @@ const INTERNAL: &[Attr<Fs>] = &[
     Attr::ro(c"open_buckets",           |c, out| c.open_buckets_to_text(out, None)),
     Attr::ro(c"open_buckets_partial",   |c, out| c.open_buckets_partial_to_text(out)),
     Attr::ro(c"discards",               |c, out| c.discards_to_text(out, &c.discards.s)),
-    Attr::ro(c"write_refs",             |c, out| c.write_refs_to_text(out)),
+    Attr::ro(c"write_refs",             |c, out| c.writes.to_text(out)),
     Attr::ro(c"nocow_lock_table",       |c, out| c.nocow_locks.to_text(out)),
     Attr::ro(c"replicas",               |c, out| c.replicas.read().to_text(out)),
     Attr::ro(c"io_timers_read",         |c, out| c.io_clock[READ].to_text(out)),
@@ -648,7 +649,7 @@ fn started(c: &Fs) -> Result<(), BchError> {
 }
 
 fn write_ref(c: &Fs) -> Result<WriteRef<'_>, BchError> {
-    WriteRef::tryget_live(c)
+    c.writes.tryget_live()
         .ok_or(c::EROFS.into())
 }
 

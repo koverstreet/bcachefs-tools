@@ -31,6 +31,7 @@ use crate::util::file::{File, FileOps, UserBuf};
 use crate::util::ioctl::{arg, inout, input, output, vstruct, Ioctl, UserArg, UserStr, UserVstruct};
 use crate::util::alloc::{darray_take, flags::GFP_KERNEL, KVVec};
 use crate::util::rcu::read_lock;
+use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::plain_bytes;
 use crate::accounting;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags};
@@ -781,7 +782,7 @@ impl FileOps for DataJob {
 }
 
 fn data(fs: &Fs, arg: c::bch_ioctl_data) -> Result<c_int, BchError> {
-    let write_ref = WriteRef::tryget_live(fs)
+    let write_ref = fs.writes.tryget_live()
         .ok_or(BchError::from(c::EROFS))?;
 
     if !capable(Capability::SysAdmin) {

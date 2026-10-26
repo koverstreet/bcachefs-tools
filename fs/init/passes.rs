@@ -53,6 +53,7 @@ use crate::util::kernel::{ktime_get_ns, ktime_get_real_seconds, NSEC_PER_SEC};
 use crate::util::kthread::Kthread;
 use crate::util::log::{log_cont, log_start, LogLevel, LogMsg};
 use crate::util::projections::AtomicWord;
+use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::{Head, Validated, Unvalidated};
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
@@ -928,7 +929,7 @@ unsafe extern "C" fn async_work(work: *mut c::work_struct) {
     // SAFETY: recovery.work, of a live filesystem: run_async() queued it,
     // handing it a write ref
     let fs = unsafe { Fs::borrow_raw(work.byte_sub(offset_of!(c::bch_fs, recovery.work)).cast()) };
-    let _ref = unsafe { WriteRef::adopt(fs) };
+    let _ref = unsafe { WriteRef::adopt(&fs.writes) };
 
     let Some(_run) = fs.recovery.run_lock.try_lock() else { return };
 
@@ -961,7 +962,7 @@ pub fn run_async(fs: &Fs) {
         return;
     }
 
-    if let Some(r) = WriteRef::tryget_live(fs) {
+    if let Some(r) = fs.writes.tryget_live() {
         r.queue_work_on(Queue::system_long(), &fs.recovery.work);
     }
 }

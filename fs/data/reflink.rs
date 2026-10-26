@@ -38,12 +38,13 @@ use crate::c;
 use crate::data::extents::Extents;
 use crate::data::io_misc::fpunch_at;
 use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
-use crate::fs::{Fs, WriteRef};
+use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::snapshots::subvolume;
 use crate::types::{GenRadix, Le32, Le64};
 use crate::util::ffi::Opaque;
 use crate::util::kernel::fatal_signal_pending;
+use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Validated};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_fn, bkey_fsck_err_on, fsck_err_flags, fsck_err_on, inode, inode_fsck_err, prt};
@@ -961,7 +962,7 @@ pub fn remap_range(
     let reflink_p_may_update_opts_field = fs.request_incompat_feature(
         c::bcachefs_metadata_version::bcachefs_metadata_version_reflink_p_may_update_opts).is_ok();
 
-    let Some(_write_ref) = WriteRef::tryget_live(fs) else {
+    let Some(_write_ref) = fs.writes.tryget_live() else {
         return fs.throw(bch_errcode::BCH_ERR_erofs_no_writes);
     };
 
