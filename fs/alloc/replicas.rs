@@ -17,7 +17,6 @@
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::data::ec::trigger::stripe_block_ptrs;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::opts::prt_data_type;
@@ -208,8 +207,8 @@ fn bkey_to_replicas(fs: &Fs, e: &mut EntryBuf<'_>, k: BkeySC<'_>) {
     e.0[1] = 0;
 
     if let Some(s) = k.arm::<c::Stripe>() {
-        e.start(D::BCH_DATA_parity, s.v().nr_blocks.wrapping_sub(s.v().nr_redundant));
-        for ptr in stripe_block_ptrs(s) {
+        e.start(D::BCH_DATA_parity, s.v().nr_data() as u8);
+        for ptr in s.v().block_ptrs() {
             e.add_dev(ptr.dev());
         }
     } else if let Some(kp) = k.arm::<Ptrs>() {

@@ -46,11 +46,6 @@ use crate::c::bch_fsck_flags as F;
 use core::ffi::c_int;
 use cstruct_macros::c_export;
 
-// data/ec/init.c's, until it converts
-unsafe extern "C" {
-    fn bch2_check_stripe_refs(trans: *mut c::btree_trans) -> c_int;
-}
-
 const KEY_TYPE_SET: u8 = c::bch_bkey_type::KEY_TYPE_set.0 as u8;
 
 // ── Walking the alloc btree, holes and all ───────────────────────────────
@@ -661,7 +656,7 @@ fn check_alloc_to_lru_refs(fs: &Fs) -> Result<(), BchError> {
         check_alloc_to_lru_ref(t, iter, k, &mut last_flushed)
     })?;
 
-    ret_to_result_void(unsafe { bch2_check_stripe_refs(trans.raw()) })
+    crate::data::ec::check::check_stripe_refs(&trans)
 }
 
 crate::recovery_pass!(bch2_check_alloc_to_lru_refs => check_alloc_to_lru_refs);

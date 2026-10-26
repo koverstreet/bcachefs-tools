@@ -208,7 +208,7 @@ const _: () = assert!(COPYGC_FREE_THRESHOLD_PCT * 5 == 100);
 /// In C's arithmetic: sector counts are u64s, made s64s where C's are, and
 /// wrapping - a kernel build panics on overflow, and accounting gone wrong
 /// mustn't take the kernel with it.
-fn dev_wait_amount(ca: &c::bch_dev) -> (i64, bool) {
+pub(crate) fn dev_wait_amount(ca: &c::bch_dev) -> (i64, bool) {
     // SAFETY: a device's filesystem outlives it
     let fs = unsafe { Fs::borrow_raw(ca.fs) };
     let usage_full = ca.usage_full_read_fast();
@@ -261,7 +261,7 @@ fn dev_wait_amount(ca: &c::bch_dev) -> (i64, bool) {
 /// threshold copygc drives to zero, so on a device it is actively working the
 /// comparison flips constantly and says nothing about whether space is
 /// coming. mark_lock held, as dev_wait_amount().
-fn can_make_progress(ca: &c::bch_dev) -> bool {
+pub(crate) fn can_make_progress(ca: &c::bch_dev) -> bool {
     ca.copygc_in_flight.load(Relaxed) != 0 || dev_wait_amount(ca).0 <= 0
 }
 
@@ -481,7 +481,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let Some(s) = s_k.arm::<c::Stripe>() else { return Ok(None) };
 
         /* write buffer race? */
-        Ok((s.v().lru_pos(s.val_bytes()) == lru.time).then_some(s))
+        Ok((s.v().lru_pos() == lru.time).then_some(s))
     }
 
     fn get_stripe_buckets(&self, batch: &mut Batch<'f>) -> Result<(), BchError> {
@@ -494,7 +494,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
             let Some(s) = Self::lru_stripe(t, &mut s_iter, lru_k.k.p)? else { return Ok(LoopFlow::Continue) };
 
             for (ptr, sectors) in data_blocks(s) {
-                if !sectors.is_some_and(|n| n != 0) {
+                if sectors == 0 {
                     continue;
                 }
                 let Ok(Some(ca)) = t.fs().dev_bkey_tryget(s.into(), ptr.dev().into()) else { continue };
@@ -528,8 +528,8 @@ impl<'f, 'w> Copygc<'f, 'w> {
             let Some(s) = Self::lru_stripe(t, &mut s_iter, lru_k.k.p)? else { return Ok(LoopFlow::Continue) };
 
             let v = s.v();
-            let nr_data = u32::from(v.nr_blocks).wrapping_sub(v.nr_redundant.into());
-            let blocks_nonempty = data_blocks(s).filter(|(_, n)| n.is_some_and(|n| n != 0)).count() as u64;
+            let nr_data = v.nr_data();
+            let blocks_nonempty = data_blocks(s).filter(|(_, n)| *n != 0).count() as u64;
 
             /* stripe is pending delete */
             if blocks_nonempty == 0 {

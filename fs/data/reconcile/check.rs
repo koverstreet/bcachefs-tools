@@ -19,13 +19,12 @@
 use crate::alloc::backpointers::{backpointer_get_key, backpointers_match, bp_reconcile_phys, extent_ptr_to_bp};
 use crate::alloc::buckets::DiskReservation;
 use crate::alloc::check_backpointers::check_bp_exists;
-use crate::btree::bkey::{bpos_ge, pos, BkeyI, BkeySC, BkeyV, POS_MIN};
+use crate::btree::bkey::{bpos_ge, pos, BkeyI, BkeySC, BkeyV, BkeyVMut, POS_MIN};
 use crate::btree::iter::{commit_do, lockrestart_do, peek_parallel, BtreeIter, BtreeIterFlags, BtreeLevels,
                          BtreeTrans, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::data::ec::create::WidenCache;
-use crate::data::ec::trigger::stripe_header_mut;
 use crate::data::ptrs::{BkeyVPtrs, BtreePtrs, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::data::reconcile::trigger::{add_reconcile_bp, data_to_rb_work_pos, rb_bp, rb_work_to_data_pos,
@@ -489,8 +488,8 @@ fn check_stripe_can_widen_one(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k:
 
     if fsck_err!(t, id::stripe_can_widen_wrong, "stripe can_widen={}, should be {}\n{}",
                  v.can_widen(), correct, k.to_text(fs))? {
-        let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty())?;
-        stripe_header_mut(&mut u).bits.set_can_widen(correct);
+        let mut u = t.bkey_make_mut(iter, s, UpdateTriggerFlags::empty())?;
+        u.v_mut().bits.set_can_widen(correct);
     }
     Ok(())
 }
@@ -500,7 +499,7 @@ fn check_stripe_can_widen(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
     fs.recovery.progress.init(fs, c"check_stripe_can_widen", &[c::btree_id::stripes], &[]);
 
-    let mut cache = WidenCache::new()?;
+    let mut cache = WidenCache::new();
     let scan_pending = lockrestart_do(trans, |t| {
         t.scan_requested(c::reconcile_scan::from_arm(c::reconcile_scan_stripes {}))
     })?;

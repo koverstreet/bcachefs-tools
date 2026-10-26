@@ -57,6 +57,7 @@ use crate::btree::iter::{bkey_s_c_to_result, is_restart, lockrestart_do, poloniu
                          BtreeTrans, CommitFlags, TransAttempt};
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
+use crate::data::ec::create::{stripe_repair, StripeRepair};
 use crate::data::moving::{IoMark, MoveStats, MovingCtxt};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
@@ -252,8 +253,8 @@ fn next_key<T>(trans: &BtreeTrans<'_>, btree: c::btree_id, start: c::bpos, end: 
 
 // ── Stripes ──────────────────────────────────────────────────────────────
 
-/// A stripe whose repair needs a block evacuated first: retried once the
-/// IO issued before it - the evacuation - is done.
+/// A stripe whose repair said StripeRepair::Retry: retried once the IO issued
+/// before it - narrowing's evacuation - is done.
 #[derive(Clone, Copy)]
 struct StripeRetry {
     idx:  u64,
@@ -285,8 +286,8 @@ impl Fs {
     }
 }
 
-/// Repair stripe @k, at @iter - or, for a block that has to be evacuated
-/// first, queue it on @retry, if this isn't the retry: do_reconcile_stripe().
+/// Repair stripe @k, at @iter - or, for a repair to retry once its IO is
+/// done, queue it on @retry, if this isn't the retry.
 /// A stripe that can't be repaired is parked: one stripe must not end the
 /// thread, and with it all background data movement until the next start.
 fn reconcile_stripe(ctxt: &MovingCtxt<'_>, t: &TransAttempt<'_, '_>, iter: &mut BtreeIter<'_>, k: BkeySC<'_>,
@@ -306,28 +307,30 @@ fn reconcile_stripe(ctxt: &MovingCtxt<'_>, t: &TransAttempt<'_, '_>, iter: &mut 
     let s = BkeySC::from(&copy).arm::<c::Stripe>().expect("a copy of a stripe");
     let idx = s.k.p.offset;
 
-    let ret = ctxt.stripe_repair(t, iter, s);
+    let ret = stripe_repair(ctxt, t, iter, s);
 
     fs.event_add_trace(events::reconcile_stripe, u64::from(s.v().sectors.get()) * u64::from(s.v().nr_blocks), |out| {
         write!(out, "{}\nret ", s.to_text(fs));
         match &ret {
-            Ok(())  => write!(out, "success"),
-            Err(e)  => write!(out, "{e}"),
+            Ok(StripeRepair::Done)  => write!(out, "success"),
+            Ok(StripeRepair::Retry) => write!(out, "retry"),
+            Err(e)                  => write!(out, "{e}"),
         }
     });
 
-    // An error ends the stripe's step - the attempts repair ran were its
-    // own - and parking allocates, so not with our locks held
+    // A retry or an error ends the stripe's step - the attempts repair ran
+    // were its own - and parking allocates, so not with our locks held
     match ret {
-        Err(e) if e.matches(err::BCH_ERR_stripe_needs_block_evacuate) => {
+        Ok(StripeRepair::Done) => Ok(()),
+        Ok(StripeRepair::Retry) => {
             t.restarts_handled();
             if let Some(retry) = retry {
                 // not queued, for no memory: the next pass finds it again
                 let _ = retry.push(StripeRetry { idx, mark: ctxt.io_mark() }, GFP_KERNEL);
             } else {
-                // the evacuation waited for didn't empty the block
+                // what the retry waited for - an evacuation - didn't finish it
                 let mut msg = log_msg_ratelimited!(fs);
-                write!(msg, "error retrying stripe: {e}\n{}", s.to_text(fs));
+                write!(msg, "error retrying stripe: repair still not finished\n{}", s.to_text(fs));
                 t.unlock();
                 fs.stripe_park(idx);
             }
@@ -343,7 +346,7 @@ fn reconcile_stripe(ctxt: &MovingCtxt<'_>, t: &TransAttempt<'_, '_>, iter: &mut 
             fs.stripe_park(idx);
             Ok(())
         }
-        ret => ret,
+        Err(e) => Err(e),
     }
 }
 

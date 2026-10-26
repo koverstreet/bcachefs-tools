@@ -12,14 +12,14 @@ use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
                          TransAttempt, UpdateTriggerFlags};
 use crate::c;
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use crate::{fs_fatal_error, fsck_err_on};
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_int;
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
 
@@ -47,9 +47,7 @@ const LOGGED_OPS: [LoggedOp; 4] = {
         LoggedOp { name: "finsert", ty: T::KEY_TYPE_logged_op_finsert, early: false,
                    resume: crate::data::io_misc::resume_finsert },
         LoggedOp { name: "stripe_update", ty: T::KEY_TYPE_logged_op_stripe_update, early: true,
-                   resume: |trans, k| ret_to_result_void(unsafe {
-                       c::bch2_resume_logged_op_stripe_update(trans.raw(), k.as_ffi_mut())
-                   }) },
+                   resume: crate::data::ec::create::resume_logged_op },
         LoggedOp { name: "inode_opt_propagate", ty: T::KEY_TYPE_logged_op_inode_opt_propagate,
                    early: false, resume: crate::inode_opts::resume_propagate },
     ]
@@ -158,24 +156,9 @@ pub fn bch2_logged_ops_note_unfinished(c: &Opaque<c::bch_fs>) -> c_int {
 crate::recovery_pass!(bch2_resume_logged_ops_early => |fs| resume_logged_ops(fs, true));
 crate::recovery_pass!(bch2_resume_logged_ops => |fs| resume_logged_ops(fs, false));
 
-/// Queue @k as a new op, in the first empty slot - where @k's position is
-/// set to.
-///
-/// # Safety
-/// @k stays put until the commit.
-unsafe fn logged_op_start(t: &TransAttempt<'_, '_>, k: &mut BkeyI) -> Result<(), BchError> {
-    let mut iter = BtreeIter::uninit();
-    t.bkey_get_empty_slot(&mut iter, c::btree_id::logged_ops, POS_MIN, pos(INUM, u64::MAX))?;
-
-    k.k.p = iter.pos();
-
-    // SAFETY: the caller's - @k stays put until the commit
-    unsafe { t.update_key(&iter, k, UpdateTriggerFlags::empty()) }
-}
-
 /// Queue @k as a new op in the transaction, in the first empty slot - where
-/// @k's position is set to: as __bch2_logged_op_start(), the update a copy
-/// in transaction memory, so @k needn't outlive the call.
+/// @k's position is set to. The update is a copy in transaction memory, so
+/// @k needn't outlive the call.
 pub fn start(t: &TransAttempt<'_, '_>, k: &mut BkeyI) -> Result<(), BchError> {
     let mut iter = BtreeIter::uninit();
     t.bkey_get_empty_slot(&mut iter, c::btree_id::logged_ops, POS_MIN, pos(INUM, u64::MAX))?;
@@ -211,18 +194,9 @@ pub fn update(t: &TransAttempt<'_, '_>, op: &BkeyI) -> Result<(), BchError> {
                   UpdateTriggerFlags::empty())
 }
 
-/// # Safety
-/// @k is a key that stays put until the transaction commits.
-#[c_export]
-pub unsafe extern "C" fn __bch2_logged_op_start(trans: &BtreeTrans<'_>, k: *mut c::bkey_i) -> c_int {
-    let k = unsafe { &mut *BkeyI::from_raw_mut(k) };
-
-    ret_to_c(unsafe { logged_op_start(&trans.attempt_in_progress(), k) })
-}
-
 /// Delete op @k, which returned @op_ret: @op_ret, unless the delete fails.
 ///
-/// Callers must hold a write ref (BCH_WRITE_REF_stripe_create,
+/// Callers must hold a write ref (a stripe being made's, BCH_WRITE_REF_rust;
 /// BCH_WRITE_REF_fallocate, VFS sb->s_writers, or recovery context).
 ///
 /// We use no_check_rw because the logged operation has already completed
@@ -263,18 +237,4 @@ pub fn finish(
     })?;
 
     op_ret
-}
-
-/// # Safety
-/// @k is a key.
-#[c_export]
-pub unsafe extern "C" fn bch2_logged_op_finish(
-    trans:        &BtreeTrans<'_>,
-    k:            *mut c::bkey_i,
-    op_ret:       c_int,
-    commit_flags: c_uint,
-) -> c_int {
-    let k = unsafe { &*BkeyI::from_raw(k) };
-
-    ret_to_c(finish(&trans, k, ret_to_result_void(op_ret), CommitOpts::from_bits(commit_flags)))
 }

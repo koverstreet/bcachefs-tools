@@ -203,7 +203,6 @@ c_xmacro! {
         (EEXIST, EEXIST_subvolume_create, 154),
         (EAGAIN, open_buckets_empty, 155),
         (EAGAIN, freelist_empty, 156),
-        (EAGAIN, stripe_needs_block_evacuate, 157),
         (EAGAIN, stripe_insufficient_devices, 158),
         (EAGAIN, max_discards_in_flight, 159),
         (ENOSPC, ec_alloc_failed, 160),
@@ -646,6 +645,8 @@ c_xmacro! {
         (EINVAL, EINVAL_io_opt_too_big_for_reconcile, 625),
         (ENOMEM, ENOMEM_backpointer_scan, 626),
         (BCH_ERR_transaction_restart, transaction_restart_backpointer_scan_grow, 627),
+        (ENOMEM, ENOMEM_stripe_open, 628),
+        (ENOMEM, ENOMEM_stripe_new_bucket, 629),
     }
 }
 

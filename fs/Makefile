@@ -90,9 +90,6 @@ bcachefs-y		:=			\
 	btree/write_buffer.o			\
 	data/checksum.o				\
 	data/compress.o				\
-	data/ec/create.o			\
-	data/ec/init.o				\
-	data/ec/io.o				\
 	data/ec/trigger.o			\
 	data/extents.o				\
 	data/extent_update.o			\

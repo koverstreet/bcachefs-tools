@@ -7,12 +7,11 @@
 
 use crate::fsck_err;
 use crate::alloc::disk_groups::Target;
-use crate::btree::bkey::{BkeyS, BkeySC, BkeyV, BkeyVal};
+use crate::btree::bkey::{BkeyS, BkeySC, BkeyV, BkeyVMut, BkeyVal};
 use crate::btree::bkey_methods::TriggerOp;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::durability::BkeyVDurability;
-use crate::data::ec::trigger::stripe_header_mut;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
 use crate::data::reconcile::trigger::{extent_reconcile_to_text, BkeyVReconcile};
 use crate::errcode::{ret_to_c, BchError};
@@ -388,7 +387,7 @@ fn set_needs_reconcile_stripe(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_sn
         fsck_err!(t, id::stripe_needs_reconcile_not_set, "stripe with needs_reconcile incorrectly unset\n{}",
                   k.to_text(t.fs()))?;
     }
-    stripe_header_mut(&mut k).bits.set_needs_reconcile(needs.into());
+    k.v_mut().bits.set_needs_reconcile(needs.into());
     Ok(())
 }
 

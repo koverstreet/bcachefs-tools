@@ -329,7 +329,7 @@ fn expected_time(fs: &Fs, ty: c::bch_lru_type, k: BkeySC<'_>) -> u64 {
             let rcu = read_lock();
             fs.dev_rcu(k.k.p.inode as u32, &rcu).map_or(0, |ca| a.lru_idx_fragmentation(ca))
         }
-        T::BCH_LRU_stripes => k.arm::<c::Stripe>().map_or(0, |s| s.v().lru_pos(s.val_bytes())),
+        T::BCH_LRU_stripes => k.arm::<c::Stripe>().map_or(0, |s| s.v().lru_pos()),
         t => unreachable!("lru type {}", t.0),
     }
 }

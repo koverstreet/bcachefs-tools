@@ -158,7 +158,10 @@ pub mod data {
     pub mod copygc;
     pub mod durability;
     pub mod ec {
+        pub mod check;
         pub mod create;
+        pub mod io;
+        pub mod stripe_new;
         pub mod trigger;
     }
     pub mod extents;

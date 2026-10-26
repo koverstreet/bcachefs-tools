@@ -516,11 +516,6 @@ pub fn bch2_dev_domain_key(c: &Opaque<c::bch_fs>, chosen: &c::bch_devs_mask, dev
     }
 }
 
-#[c_export]
-pub fn bch2_target_nr_domains(c: &Opaque<c::bch_fs>, devs: &c::bch_devs_mask) -> c_uint {
-    Fs::from_c(c).target_nr_domains(devs)
-}
-
 #[cold]
 #[c_export]
 pub fn bch2_target_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, v: c_uint) {
