@@ -17,7 +17,7 @@
 use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut, BkeyVal};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
 use crate::c;
-use crate::data::ec::trigger::ptr_matches_stripe;
+use crate::data::ec::stripe::ptr_matches_stripe;
 use crate::data::ptrs::{brand, crc_is_compressed, BkeyVPtrs, BkeyVPtrsMut, Branded, BtreePtrs, PtrMask, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;

@@ -28,7 +28,6 @@
 #include "data/checksum.h"
 #include "data/compress.h"
 #include "data/ec/create.h"
-#include "data/ec/init.h"
 #include "data/move.h"
 #include "data/nocow_locking.h"
 #include "data/read.h"
@@ -1215,7 +1214,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	bch2_fs_btree_gc_init_early(c);
 	bch2_fs_btree_init_early(c);
 	bch2_fs_discards_init_early(c);
-	bch2_fs_ec_init_early(c);
 	bch2_fs_errors_init_early(c);
 	bch2_fs_journal_init_early(&c->journal);
 	bch2_fs_journal_keys_init(c);
@@ -1354,7 +1352,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	try(bch2_fs_counters_init(c));
 	try(bch2_fs_data_update_init(c));
 	try(bch2_fs_discards_init(c));
-	try(bch2_fs_ec_init(c));
 	try(bch2_fs_errors_init(c));
 	try(bch2_fs_encryption_init(c));
 	try(bch2_fs_io_read_init(c));

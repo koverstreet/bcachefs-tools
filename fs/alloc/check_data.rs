@@ -31,7 +31,7 @@ use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeNodeIter, BtreeNodeRef,
 use crate::c;
 use crate::c::bch_data_type as dt;
 use crate::c::bch_errcode;
-use crate::data::ec::trigger::ptr_matches_stripe_m;
+use crate::data::ec::stripe::ptr_matches_stripe_m;
 use crate::data::ptrs::{brand, extent_nonce, ptr_data_type, BkeyVPtrs, BkeyVPtrsMut, DecodedPtr, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
 use crate::fs::Fs;

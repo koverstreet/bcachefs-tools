@@ -60,7 +60,7 @@ use crate::btree::bkey::{pos, BkeyV};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, LoopFlow, TransAttempt};
 use crate::c;
 use crate::c::bch_errcode;
-use crate::data::ec::trigger::data_blocks;
+use crate::data::ec::stripe::data_blocks;
 use crate::data::moving::{MoveStats, MovingCtxt};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{writepoint_ptr, Fs};
@@ -208,7 +208,7 @@ const _: () = assert!(COPYGC_FREE_THRESHOLD_PCT * 5 == 100);
 /// In C's arithmetic: sector counts are u64s, made s64s where C's are, and
 /// wrapping - a kernel build panics on overflow, and accounting gone wrong
 /// mustn't take the kernel with it.
-fn dev_wait_amount(ca: &c::bch_dev) -> (i64, bool) {
+pub(crate) fn dev_wait_amount(ca: &c::bch_dev) -> (i64, bool) {
     // SAFETY: a device's filesystem outlives it
     let fs = unsafe { Fs::borrow_raw(ca.fs) };
     let usage_full = ca.usage_full_read_fast();
@@ -261,7 +261,7 @@ fn dev_wait_amount(ca: &c::bch_dev) -> (i64, bool) {
 /// threshold copygc drives to zero, so on a device it is actively working the
 /// comparison flips constantly and says nothing about whether space is
 /// coming. mark_lock held, as dev_wait_amount().
-fn can_make_progress(ca: &c::bch_dev) -> bool {
+pub(crate) fn can_make_progress(ca: &c::bch_dev) -> bool {
     ca.copygc_in_flight.load(Relaxed) != 0 || dev_wait_amount(ca).0 <= 0
 }
 
@@ -473,7 +473,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
     /// The stripe at @lru_k's lru entry, if it's still there and its entry's
     /// current - the lru is updated through the write buffer.
     fn lru_stripe<'k, 't>(t: &'k TransAttempt<'_, 't>, iter: &'k mut BtreeIter<'t>, lru_k: c::bpos)
-        -> Result<Option<crate::data::ec::trigger::StripeK<'k>>, BchError>
+        -> Result<Option<crate::data::ec::stripe::StripeK<'k>>, BchError>
     {
         let lru = LruPos::from_bpos(lru_k);
         iter.set_pos(pos(0, lru.target));

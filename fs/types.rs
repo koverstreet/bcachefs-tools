@@ -221,7 +221,6 @@ c_xmacro! {
         (btree_verify_replicas),
         (btree_node_ondisk_to_text),
         (io_read),
-        (ec_block),
     }
 }
 
@@ -242,10 +241,8 @@ c_xmacro! {
         (discard_bucket),
         (discard_one_bucket_fast),
         (do_invalidates),
-        (stripe_update_extents),
         (nocow_flush),
         (io_write),
-        (ec_block),
         (ec_bucket_zero),
     }
 }
@@ -516,7 +513,6 @@ c_xmacro! {
         (write),
         (promote),
         (node_rewrite),
-        (stripe_create),
         (fallocate),
         (fsync),
         (dio_write),
@@ -528,7 +524,6 @@ c_xmacro! {
         (presplit_shard_boundaries),
         (btree_write_buffer),
         (btree_node_scrub),
-        (stripe_delete),
     }
 }
 
@@ -772,6 +767,7 @@ pub struct Fs {
     #[pin]
     #[init(c::bch_fs_copygc::init())]
     pub copygc: c::bch_fs_copygc,
+    #[pin]
     pub ec: c::bch_fs_ec,
 
     /// gc's count of references to indirect extents: reflink.rs's alone.

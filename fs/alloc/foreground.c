@@ -32,7 +32,6 @@
 #include "btree/check.h"
 
 #include "data/ec/create.h"
-#include "data/ec/init.h"
 #include "data/nocow_locking.h"
 #include "data/write.h"
 
@@ -161,7 +160,7 @@ void __bch2_open_bucket_put(struct bch_fs *c, struct open_bucket *ob)
 	struct bch_dev *ca = ob_dev(c, ob);
 
 	if (ob->ec) {
-		ec_stripe_new_put(c, ob->ec, STRIPE_REF_io);
+		bch2_ec_stripe_new_put_io(ob->ec);
 		return;
 	}
 
@@ -1478,27 +1477,11 @@ static int bucket_alloc_cached(struct btree_trans *trans, struct alloc_request *
 static bool should_drop_bucket(struct open_bucket *ob, struct bch_fs *c,
 			       struct bch_dev *ca, bool ec)
 {
-	struct bch_fs_allocator *a = &c->allocator;
-
 	if (ec) {
 		return ob->ec != NULL;
 	} else if (ca) {
-		bool drop = ob->dev == ca->dev_idx;
-
-		if (!drop && ob->ec) {
-			guard(mutex)(&ob->ec->lock);
-			unsigned nr_blocks = ob->ec->new_stripe.key.v.nr_blocks;
-
-			for (unsigned i = 0; i < nr_blocks; i++) {
-				if (!ob->ec->blocks[i])
-					continue;
-
-				struct open_bucket *ob2 = a->open_buckets + ob->ec->blocks[i];
-				drop |= ob2->dev == ca->dev_idx;
-			}
-		}
-
-		return drop;
+		return ob->dev == ca->dev_idx ||
+			(ob->ec && bch2_ec_stripe_new_has_dev(c, ob->ec, ca->dev_idx));
 	} else {
 		return true;
 	}
@@ -2112,7 +2095,7 @@ __cold void bch2_open_bucket_to_text(struct printbuf *out, struct bch_fs *c, str
 		   ob->dev, ob->bucket, ob->generation,
 		   ca->mi.bucket_size - ob->sectors_free, ca->mi.bucket_size);
 	if (ob->ec)
-		prt_printf(out, " ec idx %llu", ob->ec->new_stripe.key.k.p.offset);
+		prt_printf(out, " ec idx %llu", bch2_ec_stripe_new_idx(ob->ec));
 	if (ob->on_partial_list)
 		prt_str(out, " partial");
 	prt_newline(out);

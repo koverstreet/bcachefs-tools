@@ -24,7 +24,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, B
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
-use crate::data::ec::create::WidenCache;
+use crate::data::ec::stripe::WidenCache;
 use crate::data::moving::MovingCtxt;
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::errcode::{ret_to_c, BchError};
@@ -433,7 +433,7 @@ fn scan_bp(t: &TransAttempt<'_, '_>, scan: &c::reconcile_scan, bp: BkeySC<'_, c:
 fn scan_stripes(ctxt: &MovingCtxt<'_>) -> Result<(), BchError> {
     let trans = ctxt.trans();
     let fs = trans.fs();
-    let mut cache = WidenCache::new()?;
+    let mut cache = WidenCache::new();
     fs.reconcile.progress.init_masks(fs, None, 1 << c::btree_id::stripes.0, 0);
 
     let mut iter = BtreeIter::new(trans, c::btree_id::stripes, POS_MIN, BtreeIterFlags::PREFETCH);

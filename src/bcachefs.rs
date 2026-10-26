@@ -336,8 +336,6 @@ fn main() -> ExitCode {
         }
     }
 
-    unsafe { c::raid_init() };
-
     let (cmd_name, argv) = if let Some(cmd) = symlink_cmd {
         let mut v = vec![cmd.to_string()];
         v.extend_from_slice(&args[1..]);

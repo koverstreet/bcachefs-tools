@@ -19,7 +19,6 @@
 #include "data/keylist.h"
 #include "data/extents.h"
 #include "data/ec/create.h"
-#include "data/ec/init.h"
 #include "data/ec/io.h"
 #include "data/ec/trigger.h"
 #include "data/move.h"
@@ -676,19 +675,19 @@ static int stripe_block_at_bp(struct bch_dev *ca, struct bkey_s_c_stripe s,
  * and may be needed if the stripe can't be reconstructed.
  */
 static int scrub_repair_stripe(struct moving_context *ctxt,
-			       struct ec_stripe_buf *buf, unsigned block,
+			       struct bkey_s_c_stripe read, unsigned block,
 			       bool *gone)
 {
 	struct btree_trans *trans = ctxt->trans;
 
-	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, buf->key.k.p, BTREE_ITER_intent);
+	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, read.k->p, BTREE_ITER_intent);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
 	/* deleted, or rewritten without that block, since we read it: */
 	if (k.k->type != KEY_TYPE_stripe ||
 	    block >= bkey_s_c_to_stripe(k).v->nr_blocks ||
 	    !bch2_extent_ptr_eq(bkey_s_c_to_stripe(k).v->ptrs[block],
-				buf->key.v.ptrs[block])) {
+				read.v->ptrs[block])) {
 		*gone = true;
 		return 0;
 	}
@@ -698,10 +697,7 @@ static int scrub_repair_stripe(struct moving_context *ctxt,
 	bch2_bkey_buf_init(&sk);
 	bch2_bkey_buf_reassemble(&sk, k);
 
-	int ret = bch2_stripe_repair_damaged(ctxt, &iter, bkey_i_to_s_c_stripe(sk.k), block);
-
-	/* narrowing: evacuating, and reconcile finishes it */
-	return ret == -BCH_ERR_stripe_needs_block_evacuate ? 0 : ret;
+	return bch2_stripe_repair_damaged(ctxt, &iter, bkey_i_to_s_c(sk.k), block);
 }
 
 static int scrub_stripe_block(struct moving_context *ctxt, struct bch_dev *ca,
@@ -720,16 +716,16 @@ static int scrub_stripe_block(struct moving_context *ctxt, struct bch_dev *ca,
 	if (block < 0 || bch2_stripe_is_open(c, k.k->p.offset))
 		return 0;
 
-	struct ec_stripe_buf *buf __free(ec_stripe_buf_free) = kzalloc(sizeof(*buf), GFP_KERNEL);
-	if (!buf)
-		return bch_err_throw(c, ENOMEM_stripe_buf);
+	/* Don't hold btree locks for IO: our own copy of the stripe */
+	struct bkey_buf read __cleanup(bch2_bkey_buf_exit);
+	bch2_bkey_buf_init(&read);
+	bch2_bkey_buf_reassemble(&read, k);
+	struct bkey_s_c_stripe s_read = bkey_s_c_to_stripe(bkey_i_to_s_c(read.k));
 
-	bkey_reassemble(&buf->key.k_i, k);
-
-	/* Don't hold btree locks for IO */
 	bch2_trans_unlock(trans);
 
-	s64 bad = bch2_ec_scrub_block(c, buf, block);
+	struct bch_csum want, got;
+	s64 bad = bch2_ec_scrub_block(c, s_read.s_c, block, &want, &got);
 
 	try(bch2_trans_relock(trans));
 
@@ -743,7 +739,7 @@ static int scrub_stripe_block(struct moving_context *ctxt, struct bch_dev *ca,
 
 	/* a restart goes back to the backpointer walk, which retries the block: */
 	bool gone = false;
-	int ret = scrub_repair_stripe(ctxt, buf, block, &gone);
+	int ret = scrub_repair_stripe(ctxt, s_read, block, &gone);
 	if (gone || bch2_err_matches(ret, BCH_ERR_transaction_restart))
 		return ret;
 
@@ -755,11 +751,11 @@ static int scrub_stripe_block(struct moving_context *ctxt, struct bch_dev *ca,
 	CLASS(bch_log_msg_ratelimited, msg)(c);
 	prt_printf(&msg.m, "scrub: stripe block %u on %s: %lli sectors don't match the stripe's checksums, expected ",
 		   block, ca->name, bad);
-	bch2_csum_to_text(&msg.m, buf->key.v.csum_type, buf->csum_good[block]);
+	bch2_csum_to_text(&msg.m, s_read.v->csum_type, want);
 	prt_str(&msg.m, " got ");
-	bch2_csum_to_text(&msg.m, buf->key.v.csum_type, buf->csum_bad[block]);
+	bch2_csum_to_text(&msg.m, s_read.v->csum_type, got);
 	prt_newline(&msg.m);
-	bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&buf->key.k_i));
+	bch2_bkey_val_to_text(&msg.m, c, s_read.s_c);
 	prt_newline(&msg.m);
 
 	if (ret)

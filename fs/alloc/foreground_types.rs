@@ -135,12 +135,7 @@ nest! {
         },
 
         pub scratch_nr_replicas: c_uint,
-        pub scratch_nr_effective: c_uint,
-        pub scratch_flags: c::bch_write_flags,
-        pub scratch_have_cache: bool,
-        pub scratch_data_type: c::bch_data_type,
         pub scratch_ptrs: c::open_buckets,
-        pub scratch_devs_may_alloc: c::bch_devs_mask,
 
         /* Allocation attempt trace — dumped on allocator stuck */
         pub trace: DArray<c::alloc_trace_entry, 16>,

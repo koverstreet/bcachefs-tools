@@ -24,41 +24,42 @@
 //! becomes an error key, its loss recorded. A btree node pointer is updated
 //! through the node it points to.
 //!
-//! Stripes are erasure coding's, still C: bch2_invalidate_stripe_to_dev() in
-//! the backpointer scan, and bch2_dev_remove_stripes(), the caller's, after
-//! dev_data_drop().
+//! A stripe with a block on the device is invalidated instead: the block's
+//! pointer set to BCH_SB_MEMBER_INVALID, by the same flags, and the stripe
+//! marked for reconcile to rebuild - its blocks' extents recorded lost first,
+//! if it can't be. By the backpointer scan, which meets them, and after
+//! dev_data_drop(), by the device's buckets' bucket_to_stripe entries -
+//! dev_remove_stripes(). An open stripe is skipped: the stripe being made or
+//! repaired is rewritten without the device, so the scan goes again until
+//! it's met none.
 
-use crate::accounting::{data_type_is_empty, data_type_is_hidden};
+use crate::accounting::{self, data_type_is_empty, data_type_is_hidden};
 use crate::alloc::backpointers::{backpointer_get_key, backpointer_get_node, BpScanIter};
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::buckets::{bucket_to_u64, DiskReservation};
+use crate::alloc::replicas::bkey_replicas_acct;
 use crate::btree::bkey::prelude::*;
-use crate::btree::bkey::{pos, BkeySC, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN, SPOS_MAX};
+use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeLevels, BtreeNodeIter, BtreeNodeRef, CommitFlags,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
 use crate::c::bch_errcode;
+use crate::data::ec::repair::record_lost_blocks;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
-use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::damage;
 use crate::init::error::id;
 use crate::init::progress::Progress;
-use crate::inode_opts::get_io_opts;
+use crate::inode_opts::{self, get_io_opts};
 use crate::util::ffi::Opaque;
+use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
 use crate::prt;
 use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
 use cstruct_macros::c_export;
-
-// data/ec/init.c's, until it converts
-unsafe extern "C" {
-    fn bch2_invalidate_stripe_to_dev(trans: *mut c::btree_trans, iter: *mut c::btree_iter, k: c::bkey_s_c,
-                                     dev_idx: c_uint, flags: c_uint, err: *mut c::printbuf,
-                                     had_open_stripe: *mut bool, recorded_stripe: *mut u64) -> c_int;
-    fn bch2_fs_ec_flush_outstanding(c: *mut c::bch_fs);
-}
 
 /// A backpointer to a node being replaced: its replacement isn't reachable
 /// yet, and has backpointers of its own for the next scan.
@@ -136,6 +137,120 @@ impl DevDrop<'_> {
         t.update(iter, &n, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
     }
 
+    /// Stripe @k, at @iter, intent locked, without its blocks on the device -
+    /// their pointers to BCH_SB_MEMBER_INVALID - and marked for reconcile to
+    /// rebuild them: bch2_invalidate_stripe_to_dev(). Not if it's open, which
+    /// @had_open says: the stripe being made, or repaired, is rewritten
+    /// without the device anyway, and the scan goes again until it's empty.
+    ///
+    /// If more of its blocks are gone than it can rebuild from, their
+    /// extents are recorded lost first, in transactions of their own -
+    /// @recorded, the stripe last recorded, so the restart that follows
+    /// doesn't record it again.
+    fn stripe<'a>(&mut self, t: &TransAttempt<'a, '_>, iter: &BtreeIter<'a>, k: BkeySC<'_>, had_open: &mut bool,
+                  recorded: &mut u64) -> Result<(), BchError> {
+        let fs = t.fs();
+        let Some(old) = k.arm::<c::Stripe>() else { return Ok(()) };
+        let idx = k.k.p.offset;
+
+        // With @k intent locked, as the stripe deleter's check: a create
+        // opens an existing stripe only under that lock, so it can't open it
+        // and load the key we're replacing before we commit. If our commit
+        // drops its locks, see bch2_stripe_tryget_existing().
+        if fs.stripe_is_open(idx) {
+            *had_open = true;
+            return Ok(());
+        }
+
+        // Two questions, which disagree on evacuating devices: @nr_good is
+        // the redundancy we'd be left with, which a device on its way out
+        // doesn't add to - the policy checks below; @lost is what's
+        // unreadable now, and an evacuating device still has its data.
+        let v = old.v();
+        let (mut nr_good, mut lost, mut newly_lost) = (0u32, 0u32, 0u32);
+        {
+            let rcu = read_lock();
+            for (i, p) in v.block_ptrs().iter().enumerate() {
+                let mut dev = u32::from(p.dev());
+                if dev == self.dev {
+                    dev = c::BCH_SB_MEMBER_INVALID;
+                    newly_lost |= 1 << i;
+                }
+                let ca = fs.dev_rcu(dev, &rcu);
+                nr_good += u32::from(ca.is_some_and(|ca| {
+                    u32::from(ca.mi.state) != c::bch_member_state::BCH_MEMBER_STATE_evacuating.0
+                }));
+                if ca.is_none() {
+                    lost |= 1 << i;
+                }
+            }
+        }
+
+        if nr_good < u32::from(v.nr_blocks) && self.flags & c::BCH_FORCE_IF_DATA_DEGRADED == 0 {
+            prt!(self.err, "cannot drop device without degrading\n  {}\n", k.to_text(fs));
+            return fs.throw(bch_errcode::BCH_ERR_remove_would_lose_data);
+        }
+        if nr_good < v.nr_data() && self.flags & c::BCH_FORCE_IF_DATA_LOST == 0 {
+            prt!(self.err, "cannot drop device without losing data\n  {}\n", k.to_text(fs));
+            return fs.throw(bch_errcode::BCH_ERR_remove_would_lose_data);
+        }
+
+        // More blocks gone than it can rebuild from: their extents have no
+        // other copy, and a stripe doesn't name an inode, so once it's
+        // invalidated the damage btree is all that ties them to their files.
+        // A block's extents are a bucket's worth, too many for the
+        // transaction that invalidates. A crash in between leaves the damage
+        // recorded a little early, the side to err on. The extents'
+        // backpointers are already re-keyed to the stripe's by now: its own
+        // backpointer sits at the end of its block's range, so the scan
+        // reaches the extents first.
+        let nr_redundant = u32::from(v.nr_redundant);
+        if lost.count_ones() > nr_redundant && *recorded != idx {
+            // all of them, if this removal is what killed it - every block
+            // invalidated before stops being reconstructible here; if it was
+            // dead already, those were recorded when it died
+            let record = if (lost & !newly_lost).count_ones() > nr_redundant { newly_lost } else { lost };
+
+            // the stripe as it'll be, so our blocks' extents are found
+            // re-keyed
+            let mut n = BkeyBuf::from_key(k);
+            let mut nk: &mut BkeyI = n.as_mut();
+            let mut s = nk.as_s().arm::<c::Stripe>().expect("a copy of a stripe");
+            for p in s.v_mut().block_ptrs_mut().iter_mut().filter(|p| u32::from(p.dev()) == self.dev) {
+                p.set_dev(c::BCH_SB_MEMBER_INVALID as u8);
+            }
+
+            *recorded = idx;
+            let n = BkeySC::from(&n).arm::<c::Stripe>().expect("a copy of a stripe");
+            // committed, and @k stale: the restart has the scan look again
+            return Err(t.close(CommitFlags::empty(), |trans| {
+                record_lost_blocks(trans, n, record, id::data_lost_device_removed, true, None);
+                Ok(())
+            }));
+        }
+
+        let Some(counts) = v.blockcounts() else {
+            return fs.throw(bch_errcode::BCH_ERR_stripe_unknown_csum_type);
+        };
+        let sectors: i64 = counts.iter().map(|n| i64::from(n.get())).sum();
+
+        let mut s = t.bkey_make_mut(iter, old, UpdateTriggerFlags::empty())?;
+        s.set_needs_reconcile(t, None, &inode_opts::get_fs(fs, false),
+                              c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_opt_change, 0)?;
+
+        let user = c::bch_data_type::BCH_DATA_user;
+        accounting::add(t, &bkey_replicas_acct(fs, s.as_sc().untyped(), user), &[-sectors], false)?;
+
+        for p in s.v_mut().block_ptrs_mut().iter_mut().filter(|p| u32::from(p.dev()) == self.dev) {
+            p.set_dev(c::BCH_SB_MEMBER_INVALID as u8);
+        }
+        // degraded, so it needs rebuilding, whatever set_needs_reconcile()
+        // made of the device
+        s.v_mut().bits.set_needs_reconcile(1u8.into());
+
+        accounting::add(t, &bkey_replicas_acct(fs, s.as_sc().untyped(), user), &[sectors], false)
+    }
+
     fn usrdata(&mut self, fs: &Fs, progress: &Progress<'_>) -> Result<(), BchError> {
         let trans = crate::btree_trans!(fs);
         let res = DiskReservation::new(fs);
@@ -201,11 +316,7 @@ impl DevDrop<'_> {
             let b = BtreeNodeRef::from(b);
             self.btree_node(t, &mut iter, b)
         } else if k.k.key_type() == c::bch_bkey_type::KEY_TYPE_stripe {
-            // XXX: pass flags arg to invalidate_stripe_to_dev and handle it properly
-            ret_to_result_void(unsafe {
-                bch2_invalidate_stripe_to_dev(t.raw(), iter.raw(), k.into(), self.dev, self.flags,
-                                              self.err.as_raw(), had_open_stripe, recorded_stripe)
-            })
+            self.stripe(t, iter, k.untyped(), had_open_stripe, recorded_stripe)
         } else {
             self.usrdata_key(t, iter, k)
         }
@@ -280,9 +391,54 @@ fn dev_data_drop_by_backpointers(fs: &Fs, ca: &c::bch_dev, mut d: DevDrop<'_>) -
 
         if had_open_stripe {
             trans.unlock();
-            unsafe { bch2_fs_ec_flush_outstanding(fs.as_ptr()) };
+            fs.ec_flush_outstanding();
         }
     }
+}
+
+/// Every stripe with a block on the device, by its buckets' bucket_to_stripe
+/// entries: DevDrop::stripe() - bch2_dev_remove_stripes(). Open stripes are
+/// skipped, so after a scan that met one, in-flight creates are flushed and
+/// it goes again: ten times, then remove_stripes_did_not_terminate.
+fn dev_remove_stripes(fs: &Fs, mut d: DevDrop<'_>) -> Result<(), BchError> {
+    const MAX_ITER: u32 = 10;
+
+    let trans = crate::btree_trans!(fs);
+    let dev = u64::from(d.dev);
+    let (start, end) = (pos(bucket_to_u64(pos(dev, 0)), 0), pos(bucket_to_u64(pos(dev, u64::MAX)), u64::MAX));
+    let mut recorded = 0;
+
+    for _ in 0..MAX_ITER {
+        let mut had_open = false;
+
+        BtreeIter::new(&trans, c::btree_id::bucket_to_stripe, start, BtreeIterFlags::INTENT)
+            .for_each_max_commit(&trans, end, BtreeIterFlags::empty(), None, CommitFlags::empty(), |t, _, r| {
+                // The stripe may be gone since: the flush lets creates
+                // finish, and a reshape deletes the old one - which no
+                // longer points to the device, success.
+                let mut iter = BtreeIter::new(t, c::btree_id::stripes, pos(0, r.k.p.offset), BtreeIterFlags::INTENT);
+                let (iter, k) = iter.peek_slot_shared(t)?;
+                d.stripe(t, iter, k, &mut had_open, &mut recorded)
+            })?;
+
+        if !had_open {
+            return Ok(());
+        }
+
+        trans.unlock();
+        fs.ec_flush_outstanding();
+    }
+
+    prt!(d.err, "bch2_dev_remove_stripes(): stripes still open after {MAX_ITER} iterations\n");
+    fs.throw(bch_errcode::BCH_ERR_remove_stripes_did_not_terminate)
+}
+
+#[c_export]
+pub extern "C" fn bch2_dev_remove_stripes(c: &Opaque<c::bch_fs>, dev_idx: c_uint, flags: c_uint, err: &mut Printbuf)
+    -> c_int
+{
+    let fs = Fs::from_c(c);
+    ret_to_c(crate::bch_err_fn!(fs, dev_remove_stripes(fs, DevDrop { dev: dev_idx, flags, err })))
 }
 
 #[c_export]

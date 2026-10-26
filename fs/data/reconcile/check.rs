@@ -24,7 +24,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, peek_parallel, BtreeIter, Bt
                          BtreeTrans, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
-use crate::data::ec::create::WidenCache;
+use crate::data::ec::stripe::WidenCache;
 use crate::data::ptrs::{BkeyVPtrs, BtreePtrs, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::data::reconcile::trigger::{add_reconcile_bp, data_to_rb_work_pos, rb_bp, rb_work_to_data_pos,
@@ -499,7 +499,7 @@ fn check_stripe_can_widen(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     let fs = trans.fs();
     fs.recovery.progress.init(fs, c"check_stripe_can_widen", &[c::btree_id::stripes], &[]);
 
-    let mut cache = WidenCache::new()?;
+    let mut cache = WidenCache::new();
     let scan_pending = lockrestart_do(trans, |t| {
         t.scan_requested(c::reconcile_scan::from_arm(c::reconcile_scan_stripes {}))
     })?;

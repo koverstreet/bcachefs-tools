@@ -18,7 +18,7 @@
 #include "btree/check.h"
 #include "btree/write_buffer.h"
 
-#include "data/ec/init.h"
+#include "data/ec/create.h"
 
 #include "journal/journal.h"
 

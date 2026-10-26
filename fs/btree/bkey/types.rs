@@ -112,16 +112,6 @@ impl<'a, V: ?Sized + BkeyVal> BkeySC<'a, V> {
     pub(crate) unsafe fn to_c(self) -> BkeySC<'static, V> {
         BkeySC { k: unsafe { &*(self.k as *const c::bkey) }, v: self.v, iter: PhantomData, val: PhantomData }
     }
-
-    /// to_c(), for a C function whose bkey_s_c_<type> is of family @K's
-    /// whole type - a key of K's, as validated: C reads it only as long as
-    /// its u64s say.
-    ///
-    /// # Safety
-    /// As to_c()'s.
-    pub(crate) unsafe fn to_c_whole<K: BkeyFamily<Validated = V> + BkeyVal + ?Sized>(self) -> BkeySC<'static, K> {
-        unsafe { self.to_c() }.cast()
-    }
 }
 
 impl<'a, V: ?Sized + BkeyVal + ArmRef> BkeySC<'a, V> {

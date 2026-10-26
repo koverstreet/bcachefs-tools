@@ -50,7 +50,6 @@
 #[path = "data/copygc_types.rs"] pub mod data_copygc_types;
 #[path = "data/ec/create_types.rs"] pub mod data_ec_create_types;
 #[path = "data/ec/format.rs"] pub mod data_ec_format;
-#[path = "data/ec/io_types.rs"] pub mod data_ec_io_types;
 #[path = "data/ec/types.rs"] pub mod data_ec_types;
 #[path = "data/extents_defs.rs"] pub mod data_extents_defs;
 #[path = "data/extents_format.rs"] pub mod data_extents_format;
@@ -226,7 +225,6 @@ pub mod c {
     pub use super::data_copygc_types::*;
     pub use super::data_ec_create_types::*;
     pub use super::data_ec_format::*;
-    pub use super::data_ec_io_types::*;
     pub use super::data_ec_types::*;
     pub use super::data_extents_defs::*;
     pub use super::data_extents_format::*;

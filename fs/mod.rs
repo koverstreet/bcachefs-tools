@@ -158,8 +158,19 @@ pub mod data {
     pub mod copygc;
     pub mod durability;
     pub mod ec {
-        pub mod create;
+        pub mod buf;
+        pub mod check;
+        pub mod delete;
+        pub mod head;
+        pub mod io;
+        pub mod open;
+        pub mod repair;
+        pub mod stripe;
+        pub mod stripe_new;
+        pub mod stripe_new_blocks;
+        pub mod stripe_new_tasks;
         pub mod trigger;
+        pub mod update;
     }
     pub mod extents;
     pub mod extents_sb;

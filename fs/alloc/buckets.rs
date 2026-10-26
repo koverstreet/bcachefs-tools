@@ -10,7 +10,7 @@ use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, Commi
                          UpdateTriggerFlags, Watermark};
 use crate::c;
 use crate::c::bch_errcode;
-use crate::data::ec::trigger::{ptr_matches_stripe, ptr_matches_stripe_m};
+use crate::data::ec::stripe::{ptr_matches_stripe, ptr_matches_stripe_m};
 use crate::data::ptrs::{BkeyVPtrs, DecodedPtr, Ptrs};
 use crate::data::reconcile::needs_reconcile::extent_trigger_set_needs_reconcile;
 use crate::data::reconcile::trigger::trigger_extent_reconcile;

@@ -8,12 +8,12 @@ use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
     CommitFlags, TransAttempt, UpdateTriggerFlags,
 };
+use crate::data::ec::open::OpenStripe;
 use crate::data::ptrs::{ExtentEntry, ExtentEntryMut, Ptrs};
 use crate::errcode::{
     bch_errcode,
     BchError,
     ENOENT_bkey_type_mismatch,
-    ret_to_result,
 };
 use crate::fs::Fs;
 use crate::util::kernel::{local_clock, random_u64_below};
@@ -627,7 +627,7 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
 /// deletes a stripe it finds empty and not open - but that decision is made in
 /// a trigger, and a commit that drops its locks (waiting on a journal
 /// reservation, say) relocks and retries without re-running triggers. So
-/// bch2_stripe_handle_tryget_existing() has to invalidate the relock of any
+/// bch2_stripe_tryget_existing() has to invalidate the relock of any
 /// transaction that has queued an update to the stripe key.
 ///
 /// The updater queues a no-op update through a plain iterator, so the test also
@@ -666,37 +666,24 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
         }
         updater.unlock();
 
-        // Safety: plain C struct, all-zeroes is its unclaimed state. The
-        // definition must be visible to bindgen (data/ec/types.h) - a forward
-        // declaration comes through as a zero-sized type.
-        let mut handle: c::ec_stripe_handle = unsafe { core::mem::zeroed() };
-        {
+        let opened = {
             let opener = crate::btree_trans!(fs);
             let mut o_iter = BtreeIter::new(&opener, c::btree_id::stripes, pos(0, idx),
                                             BtreeIterFlags::INTENT);
 
-            let mut attempt = 0;
-            let opened = lockrestart_do(&opener, |t| {
+            lockrestart_do(&opener, |t| {
                 let fs = t.fs();
                 fs.require(o_iter.peek_max(t, pos(0, idx))?, ENOENT_bkey_type_mismatch)?;
-
-                attempt += 1;
-                assert!(handle.idx == 0,
-                        "attempt {}: handle already claimed (idx {})", attempt, handle.idx);
-
-                ret_to_result(unsafe {
-                    c::bch2_stripe_handle_tryget_existing(o_iter.raw_mut(), &mut handle)
-                })
-            })?;
-
-            if opened != 1 {
-                kernel::pr_info!("stripe {} already open, can't test\n", idx);
-                return fs.throw(bch_errcode::BCH_ERR_EINVAL_test_stripe_already_open);
-            }
-        }
+                OpenStripe::tryget_existing(t, &o_iter)
+            })?
+        };
+        let Some(opened) = opened else {
+            kernel::pr_info!("stripe {} already open, can't test\n", idx);
+            return fs.throw(bch_errcode::BCH_ERR_EINVAL_test_stripe_already_open);
+        };
 
         let relocked = updater.relock_notrace();
-        unsafe { c::bch2_stripe_handle_put(fs.as_ptr(), &mut handle) };
+        drop(opened);
 
         if relocked.is_ok() {
             kernel::pr_info!("opening stripe {} didn't invalidate a queued update's relock\n",
