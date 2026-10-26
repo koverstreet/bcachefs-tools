@@ -210,12 +210,14 @@ impl<T> Default for DArray<T> {
 /// A field of a struct C shares that's Rust's alone - a Lock<c::mutex,
 /// KVVec<u32>>, say: C reserves its storage, as opaque bytes of its size and
 /// alignment, and never looks inside; Rust reaches it as a @T, by Deref.
-/// Declared with rust_only!(T), which sizes it.
+/// Declared with rust_only!(T), which sizes and aligns it.
 ///
-/// To C, and to improper_ctypes, it's @U64S u64s. The lint looks through the
-/// *mut bch_fs that extern blocks pass into every struct bch_fs holds, and a
-/// @T - not FFI-safe, and none of C's business - would fail every one of
-/// them; @T is only a PhantomData, which the lint doesn't inspect.
+/// To C, it's bytes of its size, aligned as a @T is: the generator declares
+/// it from Rust's layout. To improper_ctypes it's @U64S u64s and an alignment
+/// marker. The lint looks through the *mut bch_fs that extern blocks pass
+/// into every struct bch_fs holds, and a @T - not FFI-safe, and none of C's
+/// business - would fail every one of them; so @T is only a PhantomData,
+/// which the lint doesn't inspect, and its alignment an AlignMarker's.
 ///
 /// Rust allocates the struct holding it, with the struct's init() - see
 /// #[derive(Init)] - and new() is the field's initializer there, its
@@ -223,26 +225,34 @@ impl<T> Default for DArray<T> {
 /// It isn't Zeroable, whatever @T is: a field of it with no #[init] is a
 /// compile error, not a zeroed @T.
 #[repr(C)]
-pub struct RustOnly<T, const U64S: usize> {
+pub struct RustOnly<T, const U64S: usize, const ALIGN: usize = 8>
+where
+    Align<ALIGN>: AlignMarker,
+{
+    _align:  <Align<ALIGN> as AlignMarker>::Marker,
     /// UnsafeCell: a @T - a lock - may be written through a shared reference
     storage: core::cell::UnsafeCell<[core::mem::MaybeUninit<u64>; U64S]>,
     _t:      core::marker::PhantomData<T>,
 }
 
 // SAFETY: it's a @T, behind the storage C reserved
-unsafe impl<T: Send, const U64S: usize> Send for RustOnly<T, U64S> {}
-unsafe impl<T: Sync, const U64S: usize> Sync for RustOnly<T, U64S> {}
+unsafe impl<T: Send, const U64S: usize, const ALIGN: usize> Send for RustOnly<T, U64S, ALIGN>
+    where Align<ALIGN>: AlignMarker {}
+unsafe impl<T: Sync, const U64S: usize, const ALIGN: usize> Sync for RustOnly<T, U64S, ALIGN>
+    where Align<ALIGN>: AlignMarker {}
 
 // SAFETY: zeroed storage is a zeroed @T - which, @T being Zeroable, is a @T,
 // as new() would have made one. A @T with invariants zeroes can't satisfy -
 // a lock - isn't Zeroable, so neither is its RustOnly.
-unsafe impl<T: ::pin_init::Zeroable, const U64S: usize> ::pin_init::Zeroable for RustOnly<T, U64S> {}
+unsafe impl<T: ::pin_init::Zeroable, const U64S: usize, const ALIGN: usize> ::pin_init::Zeroable
+    for RustOnly<T, U64S, ALIGN> where Align<ALIGN>: AlignMarker {}
 
-impl<T, const U64S: usize> RustOnly<T, U64S> {
-    /// The storage holds a @T: rust_only!() sizes it, and u64 alignment is
-    /// all it has.
-    const FITS: () = assert!(core::mem::size_of::<T>() <= U64S * 8 &&
-                             core::mem::align_of::<T>() <= core::mem::align_of::<u64>(),
+impl<T, const U64S: usize, const ALIGN: usize> RustOnly<T, U64S, ALIGN>
+where
+    Align<ALIGN>: AlignMarker,
+{
+    /// The storage holds a @T: rust_only!() sizes and aligns it.
+    const FITS: () = assert!(core::mem::size_of::<T>() <= U64S * 8 && core::mem::align_of::<T>() <= ALIGN,
                              "RustOnly: storage too small, or too little aligned, for its T");
 
     /// A RustOnly holding the @T @init makes, in place - it's pinned there.
@@ -258,14 +268,20 @@ impl<T, const U64S: usize> RustOnly<T, U64S> {
     }
 }
 
-impl<T, const U64S: usize> Drop for RustOnly<T, U64S> {
+impl<T, const U64S: usize, const ALIGN: usize> Drop for RustOnly<T, U64S, ALIGN>
+where
+    Align<ALIGN>: AlignMarker,
+{
     fn drop(&mut self) {
         // SAFETY: a @T, as new() made it - and nothing reaches it after
         unsafe { core::ptr::drop_in_place(self.storage.get().cast::<T>()) }
     }
 }
 
-impl<T, const U64S: usize> core::ops::Deref for RustOnly<T, U64S> {
+impl<T, const U64S: usize, const ALIGN: usize> core::ops::Deref for RustOnly<T, U64S, ALIGN>
+where
+    Align<ALIGN>: AlignMarker,
+{
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -276,12 +292,39 @@ impl<T, const U64S: usize> core::ops::Deref for RustOnly<T, U64S> {
     }
 }
 
-/// RustOnly<@T>, its storage sized for a @T.
+/// RustOnly<@T>, its storage sized and aligned for a @T.
 macro_rules! rust_only {
     ($t:ty) => {
-        $crate::types::RustOnly<$t, { core::mem::size_of::<$t>().div_ceil(8) }>
+        $crate::types::RustOnly<$t, { core::mem::size_of::<$t>().div_ceil(8) },
+                                    { $crate::types::rust_only_align(core::mem::align_of::<$t>()) }>
     };
 }
+
+/// A RustOnly's alignment: its @T's, or a u64's, its storage's element.
+pub const fn rust_only_align(align: usize) -> usize {
+    if align > 8 { align } else { 8 }
+}
+
+/// An alignment, as a type: a field of its Marker - zero-sized, aligned to
+/// @N - aligns its struct as repr(align(N)) would, which takes only a
+/// literal. FFI-safe, as CacheAligned is, so RustOnly can carry its @T's
+/// alignment where improper_ctypes looks.
+pub struct Align<const N: usize>;
+
+pub trait AlignMarker {
+    type Marker;
+}
+
+macro_rules! align_markers {
+    ($($n:literal $m:ident),* $(,)?) => {$(
+        #[repr(C, align($n))]
+        pub struct $m([u8; 0]);
+        impl AlignMarker for Align<$n> {
+            type Marker = $m;
+        }
+    )*};
+}
+align_markers!(8 Align8, 16 Align16, 32 Align32, 64 Align64, 128 Align128, 256 Align256);
 pub(crate) use rust_only;
 
 // ---- Rust's own, that C reads ------------------------------------------------
