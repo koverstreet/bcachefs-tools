@@ -51,7 +51,7 @@ use crate::init::progress::Progress;
 use crate::opts::prt_data_type;
 use crate::util::alloc::{flags::{GFP_KERNEL, __GFP_NOWARN}, KVVec};
 use crate::util::ffi::Opaque;
-use crate::util::kernel::PAGE_SIZE;
+use crate::util::kernel::{totalram_bytes, PAGE_SIZE};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::util::sort::heapsort_by;
@@ -592,8 +592,7 @@ impl c::bp_scan_iter {
     /// that's nothing.
     fn refill(&mut self, trans: &BtreeTrans<'_>, end: c::bpos) -> Result<(), BchError> {
         let bp_size = size_of::<BkeyI<c::Backpointer>>();
-        // SAFETY: reads a counter
-        let max = unsafe { c::totalram_pages() } as usize * PAGE_SIZE / 16 / bp_size;
+        let max = totalram_bytes() / 16 / bp_size;
         // SAFETY: init()'s caller's, which outlives the scan
         let progress = unsafe { self.progress.as_ref() };
 
