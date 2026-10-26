@@ -149,7 +149,7 @@ use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past,
 use crate::util::vstructs::VStructError;
 use core::ffi::{c_int, c_uint, CStr};
 use crate::util::alloc::KVVec;
-use crate::util::bio::{Bio, BioOwner};
+use crate::util::bio::{Bio, BioBuf, BioBufPtr, BioOwner};
 use crate::util::gather::Gather;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::NSEC_PER_SEC;
@@ -1211,11 +1211,8 @@ impl c::bch_sb_io {
         }
 
         if self.bits.have_bio() != 0 {
-            use crate::util::bio::{Bio, BioBuf, RawBio};
-
             let nr = crate::util::bio::buf_nr_bvecs(self.buf.sb.cast(), self.buf.buffer_size);
-            // SAFETY: ours, from the last realloc(), idle
-            if !self.bio.is_null() && usize::from(unsafe { (*self.bio).bi_max_vecs }) >= nr {
+            if self.bio.as_ref().is_some_and(|b| usize::from(b.bio().raw().bi_max_vecs) >= nr) {
                 return Ok(());
             }
 
@@ -1223,11 +1220,7 @@ impl c::bch_sb_io {
                                                         nr.try_into().expect("a superblock's worth of bvecs"),
                                                         0, |b| b.init())
                 .map_err(|_| BchError::from(c::bch_errcode::BCH_ERR_ENOMEM_sb_bio_realloc))?;
-            if !self.bio.is_null() {
-                // SAFETY: the bio's ours, from the last realloc()
-                drop(unsafe { BioBuf::<Bio>::from_raw(self.bio) });
-            }
-            self.bio = bio.into_raw();
+            self.bio = Some(bio.into());
         }
         Ok(())
     }
@@ -1252,12 +1245,7 @@ impl c::bch_sb_io {
 
     /// The buffer and bio freed.
     fn free(&mut self) {
-        use crate::util::bio::{Bio, BioBuf, RawBio};
-
-        if !self.bio.is_null() {
-            // SAFETY: realloc()'s
-            drop(unsafe { BioBuf::<Bio>::from_raw(self.bio) });
-        }
+        self.bio = None;
         self.buf.free();
     }
 }
@@ -1303,29 +1291,11 @@ pub fn bch2_free_super(sb: &mut c::bch_sb_handle) {
 
 // ── Reading a device's superblock ────────────────────────────────────────
 
-/// A handle's bio, borrowed apart from the buffer it reads into and writes
-/// from.
-struct HandleBio<'a>(Pin<&'a mut Bio>);
-
-// SAFETY: the handle's, from realloc(): nothing else has it while the
-// handle's borrowed
-unsafe impl BioOwner for HandleBio<'_> {
-    fn bio(&self) -> &Bio {
-        &self.0
-    }
-
-    fn bio_mut(&mut self) -> Pin<&mut Bio> {
-        self.0.as_mut()
-    }
-}
-
 impl c::bch_sb_io {
     /// The bio, set up for an IO by @opf at @sector of @dev - with the
-    /// buffer it maps.
-    fn bio(&mut self, dev: &c::bch_sb_bdev, opf: u32, sector: u64) -> (HandleBio<'_>, &mut [u8]) {
-        assert!(!self.bio.is_null(), "superblock IO without a bio: have_bio wasn't set");
-        // SAFETY: realloc()'s, borrowed with us
-        let mut bio = HandleBio(unsafe { Bio::from_raw_mut(self.bio) });
+    /// buffer it maps, borrowed apart.
+    fn bio(&mut self, dev: &c::bch_sb_bdev, opf: u32, sector: u64) -> (&mut BioBufPtr<Bio>, &mut [u8]) {
+        let bio = self.bio.as_mut().expect("superblock IO without a bio: have_bio wasn't set");
         bio.bio_mut().reset(dev.bdev, opf);
         bio.bio_mut().set_sector(sector);
         (bio, self.buf.buffer_mut())
@@ -1333,7 +1303,7 @@ impl c::bch_sb_io {
 
     /// @bytes from @sector of @dev into the buffer.
     fn read(&mut self, dev: &c::bch_sb_bdev, sector: u64, bytes: usize) -> Result<(), BchError> {
-        let (mut bio, buf) = self.bio(dev, c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META, sector);
+        let (bio, buf) = self.bio(dev, c::req_op_REQ_OP_READ | c::REQ_SYNC | c::REQ_META, sector);
         // bound, so the Mapped drops before the bio it borrows
         let ret = bio.map_read(&mut buf[..bytes]).submit_wait();
         ret
@@ -1341,8 +1311,8 @@ impl c::bch_sb_io {
 
     /// The buffer's first @bytes to @sector of @dev, FUA.
     fn write_fua(&mut self, dev: &c::bch_sb_bdev, sector: u64, bytes: usize) -> Result<(), BchError> {
-        let (mut bio, buf) = self.bio(dev, c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_META | c::REQ_FUA,
-                                      sector);
+        let (bio, buf) = self.bio(dev, c::req_op_REQ_OP_WRITE | c::REQ_SYNC | c::REQ_META | c::REQ_FUA,
+                                  sector);
         // as read()'s
         let ret = bio.map_write(&buf[..bytes]).submit_wait();
         ret
@@ -2286,7 +2256,7 @@ impl<'a> SbIos<'a> {
         let f = this.frozen.last_mut().expect("just pushed");
         let r = this.gather.get();
 
-        let (mut bio, sb_buf) = f.sb.io.bio(&f.sb.ca.disk_sb, opf, sector);
+        let (bio, sb_buf) = f.sb.io.bio(&f.sb.ca.disk_sb, opf, sector);
         // SAFETY: frozen: nothing reaches its bio or buffer, or @buf, until
         // wait() has waited on the gather
         unsafe {
@@ -2303,8 +2273,7 @@ impl<'a> SbIos<'a> {
         let this = self.project();
         this.gather.wait_sync();
         core::mem::take(this.frozen).into_iter().map(|f| {
-            // SAFETY: realloc()'s, the superblock's, idle
-            let ret = unsafe { Bio::from_raw(f.sb.io.bio) }.status();
+            let ret = f.sb.io.bio.as_ref().expect("an IO's bio").bio().status();
             (f.sb, ret)
         })
     }

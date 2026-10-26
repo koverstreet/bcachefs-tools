@@ -98,9 +98,7 @@ impl Bio {
 
     /// # Safety
     /// As from_raw()'s, and nothing else has it for 'a.
-    // XXX: pub(crate) for sb/io's handle bio, a raw pointer with no owner
-    // until it's a BioBufPtr - the next commit - which makes this private
-    pub(crate) unsafe fn from_raw_mut<'a>(ptr: *mut c::bio) -> Pin<&'a mut Self> {
+    unsafe fn from_raw_mut<'a>(ptr: *mut c::bio) -> Pin<&'a mut Self> {
         // SAFETY: the caller's; a bio never moves
         unsafe { Pin::new_unchecked(&mut *ptr.cast()) }
     }

@@ -5,6 +5,7 @@
 use crate::cstructs::c;
 use crate::util::vstructs::Head;
 use crate::types::{DArray, bits_to_longs, c_default};
+use crate::util::bio::{Bio, BioBufPtr};
 use crate::util::bitmap::{AtomicBitArray, BitArray};
 use crate::util::ffi::c_char;
 use core::ffi::c_int;
@@ -65,7 +66,9 @@ nest! {
     pub struct bch_sb_io {
         #[c_anon("struct bch_sb *sb; size_t buffer_size; u64 dirty")]
         pub buf: c::bch_sb_buf,
-        pub bio: *mut c::bio,
+        /// Its bio, as big as the buffer, if @have_bio: Rust's alone
+        #[c("struct bio *bio")]
+        pub bio: Option<BioBufPtr<Bio>>,
         #[c_bitfield]
         #>[bitfield(u8, ty = u32)]
         pub bits: pub struct bch_sb_handle_bits {
@@ -77,7 +80,12 @@ nest! {
         pub seq: u64,
     }
 }
-c_default!(bch_sb_io);
+
+impl Default for bch_sb_io {
+    fn default() -> Self {
+        bch_sb_io { buf: Default::default(), bio: None, bits: bch_sb_handle_bits::new(), seq: 0 }
+    }
+}
 
 /// The block device a superblock was read from, open: fixed while the
 /// device is a filesystem's.
@@ -102,7 +110,12 @@ pub struct bch_sb_handle {
     #[c_anon]
     pub dev: bch_sb_bdev,
 }
-c_default!(bch_sb_handle);
+
+impl Default for bch_sb_handle {
+    fn default() -> Self {
+        bch_sb_handle { io: Default::default(), dev: Default::default() }
+    }
+}
 
 c_typedef! {
     #[c("DARRAY(struct bch_sb_handle) bch_sb_handles")]
