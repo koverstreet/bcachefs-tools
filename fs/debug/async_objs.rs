@@ -11,7 +11,6 @@
 //! excluded.
 
 use core::ffi::CStr;
-use core::mem::{offset_of, size_of};
 use core::ptr::NonNull;
 
 use crate::c;
@@ -19,14 +18,13 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::debugfs::{self, DebugFile, DebugOut};
 use crate::util::ffi::Opaque;
+use crate::util::place::Placed;
 use crate::util::rcu;
 
 impl c::async_obj_list {
     /// The filesystem it's one of the async_objs[] of.
     fn fs(&self) -> &Fs {
-        let offset = offset_of!(Fs, async_objs) + self.idx as usize * size_of::<Self>();
-        // SAFETY: a bch_fs's async_objs[idx], which bch2_fs_async_obj_init() numbered
-        unsafe { &*core::ptr::from_ref(self).byte_sub(offset).cast::<Fs>() }
+        self.container()
     }
 }
 

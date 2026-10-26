@@ -2,9 +2,17 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
-use core::ffi::{c_uint, c_void};
-use cstruct_macros::{c_enum, c_xmacro, CStruct};
+use cstruct_macros::{c_enum, c_xmacro};
+
+// The list's, in the kernel with debugfs: where Fs has them
+#[cfg(all(__KERNEL__, CONFIG_DEBUG_FS))]
+use {
+    crate::cstructs::c,
+    crate::fs::Fs,
+    core::ffi::{c_uint, c_void},
+    cstruct_macros::{placed, CStruct, Init},
+    pin_init::pin_data,
+};
 
 c_xmacro! {
     BCH_ASYNC_OBJ_LISTS(x) {
@@ -24,10 +32,12 @@ c_enum! {
     }
 }
 
+#[cfg(all(__KERNEL__, CONFIG_DEBUG_FS))]
+#[placed(Fs.async_objs[], index = idx: c_uint)]
+#[pin_data]
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(CStruct, Init)]
 pub struct async_obj_list {
     pub list: c::fast_list,
     pub obj_to_text: Option<unsafe extern "C" fn(*mut c::printbuf, *mut c::bch_fs, *mut c_void)>,
-    pub idx: c_uint,
 }

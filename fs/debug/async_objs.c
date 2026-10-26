@@ -64,7 +64,6 @@ int bch2_fs_async_obj_init(struct bch_fs *c)
 	for (unsigned i = 0; i < ARRAY_SIZE(c->async_objs); i++) {
 		if (fast_list_init(&c->async_objs[i].list))
 			return -BCH_ERR_ENOMEM_async_obj_init;
-		c->async_objs[i].idx = i;
 	}
 
 #define x(n) c->async_objs[BCH_ASYNC_OBJ_LIST_##n].obj_to_text = n##_obj_to_text;
