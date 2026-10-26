@@ -980,7 +980,7 @@ pub mod ioctl {
 
         let opts = user_opts(arg.opts)?;
 
-        let fs_ref = fs.ro_ref_tryget().ok_or(BchError::from(c::EROFS))?;
+        let fs_ref = RoRef::tryget(fs).ok_or(BchError::from(c::EROFS))?;
         // SAFETY: a ro_ref keeps the filesystem: bch2_fs_stop() waits for it
         let fs_ref: RoRef<'static> = unsafe { core::mem::transmute(fs_ref) };
 

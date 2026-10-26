@@ -842,43 +842,51 @@ macro_rules! fs_delayed_work {
     };
 }
 
-/// A ref keeping @fs from being stopped: bch2_fs_stop() waits for these to be
-/// put before it tears the filesystem down. Dropping it puts it.
+/// c->ro_ref: while a ref is held, the filesystem can't be stopped -
+/// bch2_fs_stop() waits for every ref to be put before it tears the
+/// filesystem down. Its tryget() fails once it's stopping.
 #[cfg(kernel)]
-pub struct RoRef<'f>(&'f Fs);
+pub enum RoRefs {}
+
+/// A ref keeping a filesystem from being stopped.
+#[cfg(kernel)]
+pub type RoRef<'f> = RefGuard<'f, Fs, RoRefs>;
 
 #[cfg(kernel)]
 impl Fs {
-    /// None once the filesystem's stopping.
-    pub fn ro_ref_tryget(&self) -> Option<RoRef<'_>> {
-        if self.flag(c::bch_fs_flags::BCH_FS_stopping) {
-            return None;
-        }
-        unsafe { c::rust_refcount_inc_not_zero(&raw mut (*self.as_ptr()).ro_ref) }
-            .then(|| RoRef(self))
+    fn ro_ref_raw(&self) -> *mut c::refcount_t {
+        // SAFETY: the filesystem's, for as long as it is
+        unsafe { &raw mut (*self.as_ptr()).ro_ref }
     }
 }
 
+// SAFETY: a refcount_t, which the filesystem outlives
 #[cfg(kernel)]
-impl core::ops::Deref for RoRef<'_> {
-    type Target = Fs;
-
-    fn deref(&self) -> &Fs {
-        self.0
+unsafe impl Refcount<RoRefs> for Fs {
+    fn inc(&self) {
+        // SAFETY: c->ro_ref
+        unsafe { c::refcount_inc(self.ro_ref_raw()) }
     }
-}
 
-#[cfg(kernel)]
-impl Drop for RoRef<'_> {
-    fn drop(&mut self) {
-        let fs = self.0.as_ptr();
-        // SAFETY: the waitqueue's live while there's a ref to wait for
+    unsafe fn dec(&self) {
+        // SAFETY: c->ro_ref, the caller's ref; the waitqueue's live while
+        // there's a ref to wait for
         unsafe {
-            if c::refcount_dec_and_test(&raw mut (*fs).ro_ref) {
-                c::__wake_up(&raw mut (*fs).ro_ref_wait, kernel::task::TASK_NORMAL, 1,
+            if c::refcount_dec_and_test(self.ro_ref_raw()) {
+                c::__wake_up(&raw mut (*self.as_ptr()).ro_ref_wait, kernel::task::TASK_NORMAL, 1,
                              core::ptr::null_mut());
             }
         }
+    }
+}
+
+// SAFETY: refcount_inc_not_zero() takes a ref when it succeeds
+#[cfg(kernel)]
+unsafe impl TryRefcount<RoRefs> for Fs {
+    fn try_inc(&self) -> bool {
+        // SAFETY: c->ro_ref
+        !self.flag(c::bch_fs_flags::BCH_FS_stopping) &&
+            unsafe { c::rust_refcount_inc_not_zero(self.ro_ref_raw()) }
     }
 }
 
