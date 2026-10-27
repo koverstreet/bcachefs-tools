@@ -301,9 +301,11 @@ pub(crate) struct Internal {
     /// Its buckets in ec.stripes_new_buckets: buckets_add()'s
     buckets:                     ArrayVec<u64, MAX_BLOCKS>,
 
+    /// Its key: at its slot, once it has one
     pub(crate) new_stripe:       StripeKey,
     pub(crate) new_buf:          Option<KBox<StripeBuf>>,
-    pub(crate) new_stripe_open:  Option<StripeClaim>,
+    /// Its slot, held open: stripe_idx_alloc()'s
+    pub(crate) slot_claim:       Option<StripeClaim>,
 
     /// The old stripe it reuses, if it does
     pub(crate) reuse:            Option<KBox<Reuse>>,
@@ -527,7 +529,7 @@ impl Internal {
             buckets:             ArrayVec::new(),
             new_stripe           <- pin_init::init_zeroed(),
             new_buf:             None,
-            new_stripe_open:     None,
+            slot_claim:          None,
             reuse:               None,
         })
     }
@@ -607,7 +609,7 @@ impl PinnedDrop for StripeNew {
         s.res = None;
         s.buckets_del(fs);
 
-        if let Some(claim) = s.new_stripe_open.take() {
+        if let Some(claim) = s.slot_claim.take() {
             claim.put(fs);
         }
         if let Some(r) = s.reuse.take() {

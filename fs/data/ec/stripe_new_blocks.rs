@@ -392,8 +392,8 @@ pub(crate) fn new_stripe_key(fs: &Fs, key: &mut StripeKey, algorithm: u8, nr_dat
 // ── A new stripe ─────────────────────────────────────────────────────────
 
 /// A slot for @s's new stripe - the first free one from the hint, wrapping
-/// round once - opened, into its new_stripe_open, with gc's copy
-/// allocated. ENOSPC_stripe_create if none's free below U32_MAX.
+/// round once - held open, its slot_claim, and its key put there, with gc's
+/// copy allocated. ENOSPC_stripe_create if none's free below U32_MAX.
 ///
 /// XXX: we're going to need a bitrange btree of free stripes
 pub(crate) fn stripe_idx_alloc(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Result<(), BchError> {
@@ -416,8 +416,8 @@ pub(crate) fn stripe_idx_alloc(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Re
         if k.k.is_deleted() {
             if let Some(h) = OpenStripe::tryget(fs, k.k.p.offset)? {
                 ec_stripe_mem_alloc(t, iter)?;
-                assert!(s.new_stripe_open.is_none(), "a stripe being made with two slots");
-                s.new_stripe_open = Some(h.into_claim());
+                assert!(s.slot_claim.is_none(), "a stripe being made with two slots");
+                s.slot_claim = Some(h.into_claim());
                 s.new_stripe.k_mut().p = iter.pos();
                 return Ok(LoopFlow::Break(()));
             }
@@ -458,7 +458,7 @@ fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, 
 pub(crate) fn stripe_alloc_or_reuse(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request,
                                     dev_stripe: &c::ec_dev_stripe_state, s: &mut Internal,
                                     stripe_fs: &BackRef<Fs>) -> Result<(), BchError> {
-    if s.new_stripe.idx() == 0 {
+    if s.slot_claim.is_none() {
         stripe_idx_alloc(t, s)?;
     }
     alloc_or_reuse_buckets(t, req, dev_stripe, s, stripe_fs)?;
