@@ -206,6 +206,8 @@ pub struct io_count {
 
 c_xmacro! {
     BCH_DEV_READ_REFS(x) {
+        /* kind 0, so it stays first: every Rust ref's - util/enumerated_ref.rs */
+        (rust),
         (bch2_online_devs),
         (read_fua_test),
         (journal_read),
@@ -220,8 +222,6 @@ c_xmacro! {
         (btree_node_ondisk_to_text),
         (io_read),
         (ec_block),
-        /* every Rust user's: the kinds are a debugging aid, for C's */
-        (rust),
     }
 }
 
@@ -235,6 +235,8 @@ c_enum! {
 
 c_xmacro! {
     BCH_DEV_WRITE_REFS(x) {
+        /* kind 0, so it stays first: every Rust ref's - util/enumerated_ref.rs */
+        (rust),
         (journal_write),
         (journal_discard),
         (discard_bucket),
@@ -245,8 +247,6 @@ c_xmacro! {
         (io_write),
         (ec_block),
         (ec_bucket_zero),
-        /* every Rust user's: the kinds are a debugging aid, for C's */
-        (rust),
     }
 }
 
@@ -335,7 +335,8 @@ pub struct bch_dev {
      */
     pub ref_outer: c::refcount_t,
     pub ref_outer_completion: c::completion,
-    pub io_ref: [c::enumerated_ref; 2],
+    #[c("struct enumerated_ref io_ref[2]")]
+    pub io_ref: [crate::util::enumerated_ref::EnumeratedRef; 2],
 
     pub fs: *mut c::bch_fs,
 
@@ -501,6 +502,8 @@ c_const! {
 
 c_xmacro! {
     BCH_WRITE_REFS(x) {
+        /* kind 0, so it stays first: every Rust ref's - util/enumerated_ref.rs */
+        (rust),
         (journal),
         (trans),
         (write),
@@ -519,8 +522,6 @@ c_xmacro! {
         (btree_write_buffer),
         (btree_node_scrub),
         (stripe_delete),
-        /* every Rust user's: the kinds are a debugging aid, for C's */
-        (rust),
     }
 }
 
@@ -591,7 +592,7 @@ pub struct Fs {
     /* Counts outstanding writes, for clean transition to read-only */
     #[c("struct enumerated_ref writes")]
     #[pin]
-    pub writes: crate::fs::WriteRefs,
+    pub writes: crate::util::enumerated_ref::EnumeratedRef,
 
     /*
      * Analagous to c->writes, for asynchronous ops that don't necessarily

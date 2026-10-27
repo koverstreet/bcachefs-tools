@@ -2,13 +2,12 @@
 
 //! Refcounts, and refs on them.
 //!
-//! Refcount<K> is a count on a T. A count that's a type of its own, placed
-//! at its field (util/place.rs), protects what it's in: c->writes is
-//! WriteRefs, at Fs.writes, and a write ref's container() is the Fs. One
-//! that isn't, yet, is a count K on the T that has it, K a marker type
-//! naming which: c->ro_ref is Fs's Refcount<RoRefs>. A count that's a thing
-//! of its own - a closure's, an open bucket's pins - is Refcount<()>, K's
-//! default.
+//! Refcount<K> is a count on a T. A count that's a type of its own -
+//! EnumeratedRef, c->writes and ca->io_ref[]; a closure's; an open bucket's
+//! pins - is Refcount<()>, K's default. One that isn't, yet, is a count K on
+//! the T that has it, K a marker type naming which: c->ro_ref is Fs's
+//! Refcount<RoRefs>. A count whose refs keep what it's in from being freed is
+//! KeepsAlive: an EnumeratedRef, its owner stopping it before it frees it.
 //!
 //! get() takes a ref that can't fail. A TryRefcount can also be tried for:
 //! tryget() fails once the count is dead - or has never started.
@@ -23,8 +22,8 @@
 //! TryRefcount, rather than having a tryget() that can't fail.
 //!
 //! Refs are RefGuards: a RefGuard<T, K> is a ref on T's count K, and derefs
-//! to the T - the count itself, for a placed count, its container() what
-//! it protects. Cloning one takes another, dropping it puts it.
+//! to the T - the count itself, for a count that's a type of its own.
+//! Cloning one takes another, dropping it puts it.
 //! They're had from the trait's get() and tryget()s, or - for a T with
 //! more than one count, where those would be ambiguous - from the guard's,
 //! named by an alias: RoRef::tryget(fs). What an implementation
@@ -78,8 +77,7 @@ pub unsafe trait TryRefcount<K = ()>: Refcount<K> {
 }
 
 /// # Safety
-/// While a ref on count K is held, the T isn't freed - nor, a placed count,
-/// anything it's in.
+/// While a ref on count K is held, the T isn't freed - nor anything it's in.
 pub unsafe trait KeepsAlive<K = ()>: Refcount<K> {}
 
 #[must_use = "the ref is put as soon as it's dropped"]

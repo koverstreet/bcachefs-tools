@@ -126,25 +126,28 @@ int enumerated_ref_init(struct enumerated_ref *ref, unsigned nr,
 #endif
 }
 
-/* For Rust: without ENUMERATED_REF_DEBUG these are static inlines */
-void rust_enumerated_ref_get(struct enumerated_ref *ref, unsigned idx)
+/*
+ * For Rust: without ENUMERATED_REF_DEBUG these are static inlines. Rust's refs
+ * are kind 0 - every kind list has rust first:
+ */
+void rust_enumerated_ref_get(struct enumerated_ref *ref)
 {
-	enumerated_ref_get(ref, idx);
+	enumerated_ref_get(ref, 0);
 }
 
-bool rust___enumerated_ref_tryget(struct enumerated_ref *ref, unsigned idx)
+bool rust___enumerated_ref_tryget(struct enumerated_ref *ref)
 {
-	return __enumerated_ref_tryget(ref, idx);
+	return __enumerated_ref_tryget(ref, 0);
 }
 
-bool rust_enumerated_ref_tryget(struct enumerated_ref *ref, unsigned idx)
+bool rust_enumerated_ref_tryget(struct enumerated_ref *ref)
 {
-	return enumerated_ref_tryget(ref, idx);
+	return enumerated_ref_tryget(ref, 0);
 }
 
-void rust_enumerated_ref_put(struct enumerated_ref *ref, unsigned idx)
+void rust_enumerated_ref_put(struct enumerated_ref *ref)
 {
-	enumerated_ref_put(ref, idx);
+	enumerated_ref_put(ref, 0);
 }
 
 bool rust_enumerated_ref_is_zero(struct enumerated_ref *ref)

@@ -5,7 +5,6 @@
 use crate::cstructs::c;
 use crate::util::Printbuf;
 use crate::types::c_default;
-use core::ffi::c_uint;
 use cstruct_macros::{c_extern, CStruct};
 
 #[repr(C)]
@@ -14,7 +13,7 @@ pub struct enumerated_ref {
     /* C's ENUMERATED_REF_DEBUG, which bcachefs.h defines from this: rustc
      * sees only the configuration, not what a header derives from it */
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub nr: c_uint,
+    pub nr: core::ffi::c_uint,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     pub dying: bool,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -27,10 +26,10 @@ pub struct enumerated_ref {
 c_default!(enumerated_ref);
 
 c_extern! {
-    pub fn rust_enumerated_ref_get(r: *mut c::enumerated_ref, idx: c_uint);
-    pub fn rust___enumerated_ref_tryget(r: *mut c::enumerated_ref, idx: c_uint) -> bool;
-    pub fn rust_enumerated_ref_tryget(r: *mut c::enumerated_ref, idx: c_uint) -> bool;
-    pub fn rust_enumerated_ref_put(r: *mut c::enumerated_ref, idx: c_uint);
+    pub fn rust_enumerated_ref_get(r: *mut c::enumerated_ref);
+    pub fn rust___enumerated_ref_tryget(r: *mut c::enumerated_ref) -> bool;
+    pub fn rust_enumerated_ref_tryget(r: *mut c::enumerated_ref) -> bool;
+    pub fn rust_enumerated_ref_put(r: *mut c::enumerated_ref);
     pub fn rust_enumerated_ref_is_zero(r: *mut c::enumerated_ref) -> bool;
     pub fn enumerated_ref_to_text(out: *mut c::printbuf, r: *mut c::enumerated_ref,
                                   names: *const *const crate::util::ffi::c_char);

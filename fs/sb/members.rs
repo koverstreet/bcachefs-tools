@@ -1409,53 +1409,38 @@ impl Drop for DevOuterRef {
 
 /// Which of a device's io refs: bch_dev_read_ref for io_ref[READ],
 /// bch_dev_write_ref for io_ref[WRITE] - the kind enum names the count, as
-/// its Refcount's K. Rust's refs are one kind of each, BCH_DEV_*_REF_rust:
-/// the kinds are a debugging aid, for C's.
+/// its Refcount's K.
 pub trait IoRefIdx: 'static {
     const RW: usize;
-    const RUST: u32;
 }
 
 impl IoRefIdx for c::bch_dev_read_ref {
     const RW: usize = READ;
-    const RUST: u32 = c::bch_dev_read_ref::BCH_DEV_READ_REF_rust as u32;
 }
 
 impl IoRefIdx for c::bch_dev_write_ref {
     const RW: usize = WRITE;
-    const RUST: u32 = c::bch_dev_write_ref::BCH_DEV_WRITE_REF_rust as u32;
 }
 
-impl c::bch_dev {
-    fn io_ref_raw(&self, rw: usize) -> *mut c::enumerated_ref {
-        (&raw const self.io_ref[rw]).cast_mut()
-    }
-}
-
-// SAFETY: an enumerated_ref; the device is freed only after its io refs are
-// put
+// SAFETY: io_ref[R::RW]'s
 unsafe impl<R: IoRefIdx> Refcount<R> for c::bch_dev {
     fn inc(&self) {
-        // SAFETY: io_ref[R::RW]
-        unsafe { c::rust_enumerated_ref_get(self.io_ref_raw(R::RW), R::RUST) }
+        self.io_ref[R::RW].inc()
     }
 
     unsafe fn dec(&self) {
-        // SAFETY: io_ref[R::RW]; the caller's ref
-        unsafe { c::rust_enumerated_ref_put(self.io_ref_raw(R::RW), R::RUST) }
+        unsafe { self.io_ref[R::RW].dec() }
     }
 }
 
-// SAFETY: an enumerated_ref's trygets take a ref when they succeed
+// SAFETY: io_ref[R::RW]'s
 unsafe impl<R: IoRefIdx> TryRefcount<R> for c::bch_dev {
     fn try_inc(&self) -> bool {
-        // SAFETY: io_ref[R::RW]
-        unsafe { c::rust___enumerated_ref_tryget(self.io_ref_raw(R::RW), R::RUST) }
+        self.io_ref[R::RW].try_inc()
     }
 
     fn try_inc_live(&self) -> bool {
-        // SAFETY: io_ref[R::RW]
-        unsafe { c::rust_enumerated_ref_tryget(self.io_ref_raw(R::RW), R::RUST) }
+        self.io_ref[R::RW].try_inc_live()
     }
 }
 
@@ -1697,8 +1682,7 @@ impl c::bch_dev {
 
     /// Whether its block device is open for IO: bch2_dev_is_online().
     pub fn is_online(&self) -> bool {
-        // SAFETY: only read
-        !unsafe { c::rust_enumerated_ref_is_zero((&raw const self.io_ref[READ]).cast_mut()) }
+        !self.io_ref[READ].is_zero()
     }
 
     /// Whether the allocator writes to it: bch2_dev_is_rw().

@@ -5,9 +5,10 @@ use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts};
 use crate::locking::{Guard, Lock, MutexNoio, Noio, PercpuRwsemNoio};
 use crate::util::Printbuf;
-use crate::util::refcount::{KeepsAlive, RefGuard, Refcount, TryRefcount};
-use cstruct_macros::{placed, Init};
-use pin_init::pin_data;
+use crate::util::enumerated_ref::EnumeratedRef;
+use crate::util::refcount::RefGuard;
+#[cfg(kernel)]
+use crate::util::refcount::{Refcount, TryRefcount};
 
 pub use crate::sb::members::DevRef;
 
@@ -581,70 +582,17 @@ impl Drop for OpenFs {
     }
 }
 
-/// c->writes: while a write ref is held, the filesystem can't finish going
-/// read-only, which stops writes and waits for every ref to be put - so
-/// what a write ref keeps is the Fs it's placed in. Rust's refs are one
-/// kind, BCH_WRITE_REF_rust: the kinds are a debugging aid, for C's.
-///
-/// It's killed in two steps, as a percpu_ref: tryget_live() fails once writes
-/// are being stopped - for anything new - and tryget() once they've stopped,
-/// for what has to finish once it's begun.
-///
-/// Zeroed with Fs, for C's bch2_fs_init() to initialize.
-#[placed(Fs.writes)]
-#[pin_data]
-#[repr(C)]
-#[derive(Init)]
-pub struct WriteRefs {
-    r: core::cell::UnsafeCell<c::enumerated_ref>,
-}
+/// A write ref, on c->writes: while one is held, the filesystem can't finish
+/// going read-only, which stops writes and waits for every ref to be put.
+pub type WriteRef<'f> = RefGuard<'f, EnumeratedRef>;
 
-// SAFETY: an enumerated_ref is got and put from any thread
-unsafe impl Send for WriteRefs {}
-unsafe impl Sync for WriteRefs {}
-
-impl WriteRefs {
-    /// The refs held, by kind.
-    pub fn to_text(&self, out: &mut Printbuf) {
+impl Fs {
+    /// The write refs held, by kind.
+    pub fn write_refs_to_text(&self, out: &mut Printbuf) {
         // SAFETY: bch2_write_refs names c->writes' kinds
-        unsafe { (*self.r.get()).to_text(out, c::bch2_write_refs.as_ptr()) }
+        unsafe { self.writes.to_text(out, c::bch2_write_refs.as_ptr()) }
     }
 }
-
-/// A write ref on a filesystem: its container() is the filesystem.
-pub type WriteRef<'f> = RefGuard<'f, WriteRefs>;
-
-const RUST: u32 = c::bch_write_ref::BCH_WRITE_REF_rust as u32;
-
-// SAFETY: an enumerated_ref
-unsafe impl Refcount for WriteRefs {
-    fn inc(&self) {
-        // SAFETY: c->writes
-        unsafe { c::rust_enumerated_ref_get(self.r.get(), RUST) }
-    }
-
-    unsafe fn dec(&self) {
-        // SAFETY: c->writes; the caller's ref
-        unsafe { c::rust_enumerated_ref_put(self.r.get(), RUST) }
-    }
-}
-
-// SAFETY: an enumerated_ref's trygets take a ref when they succeed
-unsafe impl TryRefcount for WriteRefs {
-    fn try_inc(&self) -> bool {
-        // SAFETY: c->writes
-        unsafe { c::rust___enumerated_ref_tryget(self.r.get(), RUST) }
-    }
-
-    fn try_inc_live(&self) -> bool {
-        // SAFETY: c->writes
-        unsafe { c::rust_enumerated_ref_tryget(self.r.get(), RUST) }
-    }
-}
-
-// SAFETY: the filesystem's freed only once it's stopped - read-only, its
-// write refs drained
-unsafe impl KeepsAlive for WriteRefs {}
 
 impl Fs {
     /// write_ref_wq: for work queued holding a write ref, which going

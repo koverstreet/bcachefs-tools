@@ -176,7 +176,7 @@ pub(crate) type Parent<F> = <<F as WorkFunc>::At as Place>::Base;
 /// The parent's #[derive(Init)] makes it in place, holding the field's At:
 /// so C's pointer to it is had back as the ReffedWork, and its container()
 /// as the parent. Queued, it holds a ref on R's count until the run's done.
-/// The path never leaves what the parent is in, and a placed count's ref
+/// The path never leaves what the parent is in, and a ref on R's count
 /// keeps all it's in, KeepsAlive: so the parent outlives the run.
 ///
 /// C has it by address - on the workqueue's lists while it's pending, no
