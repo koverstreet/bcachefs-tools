@@ -52,10 +52,22 @@ fn remove_bcachefs_attr(path: &Path, attr_name: &str) {
 }
 
 fn do_setattr(path: &Path, opts: &[(String, String)], remove_all: bool) -> Result<()> {
+    let is_dir = std::fs::metadata(path)
+        .with_context(|| format!("stat {}", path.display()))?
+        .is_dir();
+
     if remove_all {
+        let nonempty_dir = is_dir &&
+            std::fs::read_dir(path)
+                .with_context(|| format!("reading directory {}", path.display()))?
+                .next().is_some();
+
         for name in opts::bch_option_names(c::opt_flags::OPT_INODE.bits()) {
-            // casefold only works on empty directories
-            if name == "casefold" { continue }
+            // These change how a directory's names hash: the kernel refuses
+            // to change them on a nonempty directory, and casefold is
+            // directory-only
+            if nonempty_dir && (name == "casefold" || name == "inodes_32bit") { continue }
+            if !is_dir && name == "casefold" { continue }
             remove_bcachefs_attr(path, &format!("bcachefs.{}", name));
         }
     }
@@ -71,10 +83,7 @@ fn do_setattr(path: &Path, opts: &[(String, String)], remove_all: bool) -> Resul
         }
     }
 
-    if std::fs::metadata(path)
-        .with_context(|| format!("stat {}", path.display()))?
-        .is_dir()
-    {
+    if is_dir {
         propagate_recurse(path);
     }
     Ok(())
