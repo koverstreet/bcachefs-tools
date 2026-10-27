@@ -176,15 +176,16 @@ fn get_old_stripe(t: &TransAttempt<'_, '_>, s: &mut Internal, idx: u64)
     Ok(Some(b))
 }
 
-/// Lay @s out from its old stripe: blocks in @carry come forward in place,
-/// blocks in @move_ get new buckets, any other block is left behind - and the
-/// buckets @s had are put, as they may clash with the old stripe's. A repair
-/// may carry every data block; reuse leaves room for a new one.
+/// Lay @s out from its old stripe: data blocks in @carry come forward in
+/// place, data blocks in @move_ get new buckets, any other block is left
+/// behind - and the buckets @s had are put, as they may clash with the old
+/// stripe's. A repair may carry every data block; reuse leaves room for a new
+/// one.
 pub(crate) fn init_new_stripe_from_old(s: &mut Internal, carry: u32, move_: u32, repair: bool) {
-    let old_stripe = &s.reuse.as_ref().expect("a new stripe laid out from an old one it doesn't have").stripe;
+    let old_stripe = s.reuse.as_ref().expect("a new stripe laid out from an old one it doesn't have").stripe.stripe();
     let new = s.new_stripe.stripe().v();
     let (nr_blocks, nr_data) = (usize::from(new.nr_blocks), new.nr_data());
-    assert_eq!(old_stripe.stripe().v().nr_redundant, new.nr_redundant, "a new stripe from an old one of other redundancy");
+    assert_eq!(old_stripe.v().nr_redundant, new.nr_redundant, "a new stripe from an old one of other redundancy");
     debug_assert!(carry & move_ == 0, "blocks {:#x} both carried and moved", carry & move_);
 
     for b in &mut s.blocks[..nr_blocks] {
@@ -193,13 +194,16 @@ pub(crate) fn init_new_stripe_from_old(s: &mut Internal, carry: u32, move_: u32,
     }
 
     for (j, i) in blocks_in(carry | move_).enumerate() {
-        let old = i as u8;
-        s.blocks[j] = if carry & 1 << i != 0 { Slot::Carried { old } } else { Slot::Moving { old, bucket: None } };
-
-        let p = old_stripe.stripe().v().block_ptrs()[i];
-        s.new_stripe.stripe_mut().block_ptrs_mut()[j] = p;
+        let b = old_stripe.data_block(i).unwrap_or_else(|| {
+            let idx = old_stripe.k.p.offset;
+            panic!("a new stripe laid out from block {i} of stripe {idx}, not one of its data blocks")
+        });
         assert!(j as u32 + 1 + u32::from(!repair) <= nr_data,
                 "a new stripe of {nr_data} data blocks, from {} of an old one", j + 1);
+
+        let old = b.idx();
+        s.blocks[j] = if carry & 1 << i != 0 { Slot::Carried { old } } else { Slot::Moving { old, bucket: None } };
+        s.new_stripe.stripe_mut().block_ptrs_mut()[j] = b.ptr();
     }
 }
 

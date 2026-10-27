@@ -33,6 +33,7 @@ use crate::util::rcu::read_lock;
 use crate::util::vstructs::{cast_mut, cast_plain, cast_plain_mut, cast_plain_slice, cast_plain_slice_mut, plain_bytes,
                             plain_bytes_mut, Validated};
 use crate::util::Printbuf;
+use arrayvec::ArrayVec;
 use core::ffi::c_int;
 use core::mem::{offset_of, size_of};
 use core::ops::Range;
@@ -344,7 +345,7 @@ pub(crate) type StripeK<'a> = BkeySC<'a, c::Stripe<Validated>>;
 /// A block of a stripe: the stripe, and one of its blocks by index - one it
 /// has, as only the stripe makes them. The index travels with its stripe, so
 /// it can't be used with another: what's wanted of a block - its pointer, its
-/// sector count - is asked of the Block.
+/// number, its sector count - is asked of the Block.
 #[derive(Clone, Copy)]
 pub(crate) struct Block<'k> {
     s:   StripeK<'k>,
@@ -359,9 +360,22 @@ impl<'k> StripeK<'k> {
         let nr = (v.nr_data() as usize).min(v.block_ptrs().len());
         (0..nr as u8).map(move |idx| Block { s: self, idx })
     }
+
+    /// Data block @i, if it has one.
+    pub(crate) fn data_block(self, i: usize) -> Option<Block<'k>> {
+        self.data_blocks().nth(i)
+    }
 }
 
 impl<'k> Block<'k> {
+    pub(crate) fn stripe(self) -> StripeK<'k> {
+        self.s
+    }
+
+    pub(crate) fn idx(self) -> u8 {
+        self.idx
+    }
+
     pub(crate) fn ptr(self) -> c::bch_extent_ptr {
         self.s.v().block_ptrs()[usize::from(self.idx)]
     }
@@ -373,6 +387,29 @@ impl<'k> Block<'k> {
         let counts = self.s.v().blockcounts().expect("a stripe of a checksum type this version knows");
         counts[usize::from(self.idx)].get()
     }
+}
+
+/// The blocks of @old that block map @map says @new carries - data block j
+/// of @new is @old's map[j], for the first map.len() - checked against the
+/// two: each one of @old's data blocks, none twice, and no more than @new has
+/// data blocks. A stripe update's map is checked here, as a crashed one's
+/// comes from disk.
+pub(crate) fn carried_blocks<'k>(map: &[u8], old: StripeK<'k>, new: StripeK<'_>)
+    -> Result<ArrayVec<Block<'k>, MAX_BLOCKS>, &'static str>
+{
+    if map.len() > new.data_blocks().count() {
+        return Err("more blocks mapped than the new stripe has data blocks");
+    }
+
+    let mut carried: ArrayVec<Block<'k>, MAX_BLOCKS> = ArrayVec::new();
+    for &i in map {
+        let b = old.data_block(i.into()).ok_or("a block mapped that isn't one of the old stripe's data blocks")?;
+        if carried.iter().any(|c| c.idx == i) {
+            return Err("an old block mapped twice");
+        }
+        carried.push(b);
+    }
+    Ok(carried)
 }
 
 

@@ -13,7 +13,7 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, 
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::data::durability::drop_extra_durability;
-use crate::data::ec::stripe::ptr_in_block;
+use crate::data::ec::stripe::{carried_blocks, ptr_in_block, Block};
 use crate::data::ptrs::{brand, BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, Ptrs, PtrsMut};
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
@@ -108,15 +108,12 @@ fn count(c: &mut (u32, u32), bp: BkeySC<'_, c::Backpointer>) {
     c.1 += bp.v().bucket_len;
 }
 
-/// Block @old_blocknr of @old, to be block @new_blocknr of @new - the same
-/// stripe, for a new one's own blocks.
+/// Block @old, to be block @new - of the same stripe, for a new one's own
+/// blocks.
 struct BlockUpdate<'o, 'n> {
-    old:         BkeySC<'o, c::Stripe<Validated>>,
-    new:         BkeySC<'n, c::Stripe<Validated>>,
-    old_block:   c::bch_extent_ptr,
-    new_block:   c::bch_extent_ptr,
-    new_blocknr: u32,
-    stats:       UpdateStats,
+    old:   Block<'o>,
+    new:   Block<'n>,
+    stats: UpdateStats,
 }
 
 /// Point an extent in a block of a reused stripe at the new one: its stripe
@@ -126,8 +123,10 @@ struct BlockUpdate<'o, 'n> {
 fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, bp: BkeySC<'_, c::Backpointer>,
                         ext: Extent<'_, '_>) -> Result<(), BchError> {
     let fs = t.fs();
-    let (old_idx, new_idx) = (u.old.k.p.offset, u.new.k.p.offset);
-    let (old_dev, new_dev) = (u32::from(u.old_block.dev()), u32::from(u.new_block.dev()));
+    let (old, new) = (u.old.stripe(), u.new.stripe());
+    let (old_idx, new_idx) = (old.k.p.offset, new.k.p.offset);
+    let (old_block, new_block) = (u.old.ptr(), u.new.ptr());
+    let (old_dev, new_dev) = (u32::from(old_block.dev()), u32::from(new_block.dev()));
 
     if bp.v().level != 0 {
         fs_inconsistent!(fs, "found btree node in erasure coded bucket:\n{}", bp.untyped().to_text(fs));
@@ -139,18 +138,18 @@ fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, b
         // would say so for sure, but there's no need
         count(&mut u.stats.bp_to_deleted, bp);
         fs.event_inc_trace(events::stripe_update_extent_fail, |out| {
-            prt!(out, "backpointer race\n{}\n{}", bp.untyped().to_text(fs), u.new.untyped().to_text(fs));
+            prt!(out, "backpointer race\n{}\n{}", bp.untyped().to_text(fs), new.untyped().to_text(fs));
         });
         return Ok(());
     };
 
     let p = k.arm::<Ptrs>().and_then(|kp| kp.has_device_decode(fs, old_dev).map(|d| d.p))
-        .filter(|p| ptr_in_block(&u.old_block, &p.ptr, u.old.v().sectors.get().into()));
+        .filter(|p| ptr_in_block(&old_block, &p.ptr, old.v().sectors.get().into()));
     let Some(p) = p else {
         count(&mut u.stats.no_match, bp);
         fs.event_inc_trace(events::stripe_update_extent_fail, |out| {
-            prt!(out, "block {}: nomatch\n{}\n{}\n{}", u.new_blocknr, bp.untyped().to_text(fs), k.to_text(fs),
-                 u.new.untyped().to_text(fs));
+            prt!(out, "block {}: nomatch\n{}\n{}\n{}", u.new.idx(), bp.untyped().to_text(fs), k.to_text(fs),
+                 new.untyped().to_text(fs));
         });
         return Ok(());
     };
@@ -172,7 +171,7 @@ fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, b
         assert!(!p.has_ec, "a cached pointer with a stripe");
         count(&mut u.stats.cached, bp);
         fs.event_inc_trace(events::stripe_update_extent_fail, |out| {
-            prt!(out, "block {}: cached pointer\n{}\n{}", u.new_blocknr, k.to_text(fs), u.new.untyped().to_text(fs));
+            prt!(out, "block {}: cached pointer\n{}\n{}", u.new.idx(), k.to_text(fs), new.untyped().to_text(fs));
         });
         return Ok(());
     }
@@ -203,15 +202,15 @@ fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, b
         }
 
         let ptr = kp.ptrs_mut(fs).find(|ptr| u32::from(ptr.dev()) == old_dev).expect("the pointer to the old block");
-        ptr.set_dev(u.new_block.dev());
-        ptr.set_offset(ptr.offset() - u.old_block.offset() + u.new_block.offset());
-        ptr.set_generation(u.new_block.generation());
+        ptr.set_dev(new_block.dev());
+        ptr.set_offset(ptr.offset() - old_block.offset() + new_block.offset());
+        ptr.set_generation(new_block.generation());
 
         let at = kp.ptrs_decoded(fs).find(|d| u32::from(d.ptr.dev()) == new_dev).map(|d| d.pos)
             .expect("the pointer just moved");
         let stripe_ptr = c::bch_extent_stripe_ptr::new()
-            .with_block(u.new_blocknr as u8)
-            .with_redundancy(u.new.v().nr_redundant)
+            .with_block(u.new.idx())
+            .with_redundancy(new.v().nr_redundant)
             .with_idx(new_idx);
         kp.insert_entry(at, &[stripe_ptr.into_bits()]).expect("room: the copy's made with an extent's");
 
@@ -231,28 +230,21 @@ fn stripe_update_extent(t: &TransAttempt<'_, '_>, u: &mut BlockUpdate<'_, '_>, b
     Ok(())
 }
 
-/// Every extent of block @old_blocknr of @old pointed at block @new_blocknr of
-/// @new.
-fn stripe_update_bucket(trans: &BtreeTrans<'_>, old: BkeySC<'_, c::Stripe<Validated>>,
-                        new: BkeySC<'_, c::Stripe<Validated>>, old_blocknr: u32, new_blocknr: u32,
-                        watermark: Watermark) -> Result<(), BchError> {
+/// Every extent of block @old pointed at block @new.
+fn stripe_update_bucket(trans: &BtreeTrans<'_>, old: Block<'_>, new: Block<'_>, watermark: Watermark)
+    -> Result<(), BchError>
+{
     let fs = trans.fs();
-    let mut u = BlockUpdate {
-        old, new,
-        old_block:   old.v().block_ptrs()[old_blocknr as usize],
-        new_block:   new.v().block_ptrs()[new_blocknr as usize],
-        new_blocknr,
-        stats:       UpdateStats::default(),
-    };
+    let mut u = BlockUpdate { old, new, stats: UpdateStats::default() };
     let res = DiskReservation::new(fs);
 
-    block_for_each_extent(trans, old, old_blocknr, Some(&res),
+    block_for_each_extent(trans, old.stripe(), old.idx().into(), Some(&res),
                           CommitOpts::new().watermark(watermark).flags(CommitFlags::NO_CHECK_RW | CommitFlags::NO_ENOSPC),
                           |t, bp, ext| stripe_update_extent(t, &mut u, bp, ext))?;
 
     let s = &u.stats;
     fs.event_inc_trace(events::stripe_update_bucket, |out| {
-        prt!(out, "Updating block {new_blocknr}\n{}\n", new.untyped().to_text(fs));
+        prt!(out, "Updating block {}\n{}\n", new.idx(), new.stripe().untyped().to_text(fs));
         prt!(out, "bp_to_deleted:\t{} {}\n", s.bp_to_deleted.0, s.bp_to_deleted.1);
         prt!(out, "no_match:\t{} {}\n", s.no_match.0, s.no_match.1);
         prt!(out, "cached:\t{} {}\n", s.cached.0, s.cached.1);
@@ -284,25 +276,27 @@ fn stripe_update_inject_crash(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
 }
 
 /// Each data block's extents pointed at @new: the first @old_block_map.len()
-/// carried from @old - block old_block_map[i] there - the rest @new's own.
-pub(crate) fn stripe_update_extents(trans: &BtreeTrans<'_>, old: BkeySC<'_, c::Stripe<Validated>>,
-                                    new: BkeySC<'_, c::Stripe<Validated>>, old_block_map: &[u8], watermark: Watermark)
+/// carried from @old - block old_block_map[j] there - the rest @new's own. A
+/// map that doesn't fit the two - a damaged op, resumed - is an error.
+pub(crate) fn stripe_update_extents<'k>(trans: &BtreeTrans<'_>, old: BkeySC<'k, c::Stripe<Validated>>,
+                                        new: BkeySC<'k, c::Stripe<Validated>>, old_block_map: &[u8],
+                                        watermark: Watermark)
     -> Result<(), BchError>
 {
-    let nr_data = new.v().nr_data();
-    let old_blocks_nr = old_block_map.len() as u32;
+    let fs = trans.fs();
+    let carried = carried_blocks(old_block_map, old, new).or_else(|why| {
+        bch_err!(fs, "stripe update: block map {old_block_map:?}: {why}\nold: {}\nnew: {}",
+                 old.untyped().to_text(fs), new.untyped().to_text(fs));
+        fs.throw(bch_errcode::BCH_ERR_erasure_coding_stripe_update_err)
+    })?;
 
     trans.write_buffer_flush_sync()?;
 
-    for i in 0..nr_data {
-        if old_blocks_nr != 0 && i == old_blocks_nr {
+    for (j, b) in new.data_blocks().enumerate() {
+        if j != 0 && j == carried.len() {
             stripe_update_inject_crash(trans)?;
         }
-
-        match old_block_map.get(i as usize) {
-            Some(&old_blocknr) => stripe_update_bucket(trans, old, new, old_blocknr.into(), i, watermark)?,
-            None               => stripe_update_bucket(trans, new, new, i, i, watermark)?,
-        }
+        stripe_update_bucket(trans, carried.get(j).copied().unwrap_or(b), b, watermark)?;
     }
     Ok(())
 }
