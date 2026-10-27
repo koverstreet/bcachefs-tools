@@ -26,14 +26,12 @@ use crate::util::file::File;
 use crate::util::ioctl::{arg, dir, input, no_arg, output, vstruct, Ioctl, UserArg};
 use crate::util::kernel::{capable, Capability};
 use crate::util::log::LogMsg;
+use crate::vfs::idmap::MntIdmap;
 use crate::vfs::inode::{InodeInfo, InodeRef};
 use crate::vfs::mount::WriteAccess;
-use crate::vfs::vfs_inode::VfsInode;
 use crate::{bch_err, btree_trans, prt};
-use core::marker::PhantomData;
-use core::ptr::read_volatile;
 use cstruct_macros::{c_export, c_extern};
-use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
+use kernel::ffi::{c_long, c_uint, c_ulong};
 use kernel::uaccess::UserPtr;
 
 const FSLABEL_MAX: usize = c::FSLABEL_MAX as usize;
@@ -131,41 +129,6 @@ pub unsafe fn bch2_fs_file_ioctl(file: *mut c::file, cmd: c_uint, arg: c_ulong) 
 }
 
 /* The handlers */
-
-/// The idmap of the mount a file was opened through, for as long as the file
-/// is borrowed: an open file pins its mount. Ownership and permission are
-/// as it maps the inode's ids.
-#[derive(Clone, Copy)]
-struct MntIdmap<'f>(*mut c::mnt_idmap, PhantomData<&'f File>);
-
-impl<'f> MntIdmap<'f> {
-    /// file_mnt_idmap()
-    fn of(file: &'f File) -> Self {
-        let file = file.as_ptr();
-        // SAFETY: an open file's mount. READ_ONCE(), as mnt_idmap(): the
-        // idmap is published by do_idmap_mount()'s smp_store_release()
-        let idmap = unsafe {
-            // 6.18 made f_path a const union member, __f_path its writable alias
-            #[cfg(linux_ge = "6.18")]
-            let mnt = (*file).__bindgen_anon_1.f_path.mnt;
-            #[cfg(not(linux_ge = "6.18"))]
-            let mnt = (*file).f_path.mnt;
-            read_volatile(&raw const (*mnt).mnt_idmap)
-        };
-        MntIdmap(idmap, PhantomData)
-    }
-
-    /// Whether the caller owns @inode, or has CAP_FOWNER.
-    fn owner_or_capable(self, inode: &VfsInode) -> bool {
-        unsafe { c::inode_owner_or_capable(self.0, inode.as_ptr()) }
-    }
-
-    /// Whether the caller has @mask - MAY_* - on @inode, by the whole VFS
-    /// stack: ACLs and LSMs too.
-    fn permission(self, inode: &VfsInode, mask: u32) -> bool {
-        unsafe { c::inode_permission(self.0, inode.as_ptr(), mask as c_int) == 0 }
-    }
-}
 
 fn set_label(fs: &Fs, file: &File, user: UserArg<[u8; FSLABEL_MAX]>) -> Result<(), BchError> {
     if !capable(Capability::SysAdmin) {
