@@ -14,7 +14,7 @@
 //! wait(), a JoinHandle - isn't a Future until .resume_on() makes it one:
 //!
 //! ```ignore
-//! let ret = g.as_mut().wait().resume_on(Resume::Queue(wq)).await;
+//! let ret = g.wait().resume_on(Resume::Queue(wq)).await;
 //! ```
 //!
 //! Resume::Queue resumes the task on that workqueue; Resume::Thread on the
@@ -757,10 +757,9 @@ pub struct JoinHandle<T> {
 unsafe impl<T: Send> Send for JoinHandle<T> {}
 
 impl<T> JoinHandle<T> {
-    fn done(&mut self) -> Pin<&'static mut Gather<()>> {
-        // SAFETY: pinned in the task, which our ref keeps; ours alone, as the
-        // JoinHandle is
-        unsafe { Pin::new_unchecked(&mut (*self.head.as_ptr()).done) }
+    fn done(&self) -> &'static Gather<()> {
+        // SAFETY: in the task, which our ref keeps
+        unsafe { &(*self.head.as_ptr()).done }
     }
 
     /// # Safety
@@ -801,12 +800,9 @@ impl<T> Resumable for JoinHandle<T> {
 
     fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
         let this = self.get_mut();
-        if this.wait.is_none() {
-            this.wait = Some(this.done().wait());
-        }
-        // SAFETY: @wait's in its Option, not moved while it's there
-        let wait = unsafe { Pin::new_unchecked(this.wait.as_mut().unwrap()) };
-        match wait.poll_resume(cx) {
+        let done = this.done();
+        let wait = this.wait.get_or_insert_with(|| done.wait());
+        match Pin::new(wait).poll_resume(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(()) => {
                 this.wait = None;

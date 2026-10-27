@@ -11,14 +11,16 @@
 //!     stack_pin_init!(let g = Gather::<Result<(), BchError>>::new());
 //!     let r = g.get();                // one more in flight
 //!     r.put(ret);                     // folded in; dropped unput, nothing is
-//!     let ret = g.as_mut().wait_sync();   // or g.as_mut().wait().resume_on(..).await
+//!     let ret = g.wait_sync();        // or g.wait().resume_on(..).await
 //!
-//! The Gather is its owner's, and so is the wait: it takes the Gather by
-//! Pin<&mut>, so there's only ever one waiter. What's in flight holds refs -
-//! GatherRef, Send and Sync - got from the owner before it waits, or from a
-//! ref. Made, a Gather holds one ref of its own, the owner's, as
-//! closure_init()'s; the wait drops it, so the count only reaches zero once
-//! the owner waits, and never goes from zero back up.
+//! It's waited on by & - everything in it is atomic - so one in something
+//! shared is waited on by whoever's job that is: a task's, by its
+//! JoinHandle. One wait at a time, as there's one slot for the waiter: a
+//! second, while one's under way, is a bug, and panics. What's in flight
+//! holds refs - GatherRef, Send and Sync - got from the owner before it
+//! waits, or from a ref. Made, a Gather holds one ref of its own, the
+//! owner's, as closure_init()'s; the wait drops it, so the count only
+//! reaches zero once the owner waits, and never goes from zero back up.
 //!
 //! A ref has no lifetime. What keeps the Gather there for it is that a
 //! Gather is only ever made pinned (PinInit), so its Drop runs before its
@@ -34,7 +36,7 @@
 //!
 //! The waiter is a Waker in a slot, as raw parts: an await's, or a sync
 //! wait's - which sleeps as closure_sync() does - waking its task, with a ref
-//! on it. The owner fills it, then sets WAITING; the last put reads it, then
+//! on it. The waiter fills it, then sets WAITING; the last put reads it, then
 //! clears WAITING with the cmpxchg that takes the count to zero. That
 //! cmpxchg is the putter's last touch of the Gather - after it the owner may
 //! see zero, return and free it - and gives the putter the Waker: it wakes
@@ -44,8 +46,8 @@
 //! WAITING - and refills the slot, setting WAITING again and bumping a
 //! generation in the same word: a put that read the slot before the refill
 //! fails its cmpxchg, rather than taking a slot that changed under it. An
-//! await dropped takes its Waker back the same way; one forgotten, the next
-//! wait does.
+//! await dropped takes its Waker back the same way. One forgotten keeps the
+//! wait - another panics - till the Gather's drop takes both back.
 //!
 //! The Waker is woken in the last put's context - an endio's, interrupt
 //! context perhaps - so its wake must be safe there: the executor's is.
@@ -106,8 +108,8 @@ impl Fold for Result<(), BchError> {
 }
 
 /// The width of a Gather's state word: its low half counts refs, and above
-/// that are two flags and a generation. usize by default; u32 to save
-/// space, where 2^16 refs and a 14 bit generation will do; u64 for 2^32
+/// that are three flags and a generation. usize by default; u32 to save
+/// space, where 2^16 refs and a 13 bit generation will do; u64 for 2^32
 /// refs on 32 bit targets that have 64 bit atomics. Worked in as u64.
 pub trait Width: sealed::Sealed {
     type Atomic: Send + Sync;
@@ -154,8 +156,8 @@ width!(u32, AtomicU32);
 width!(u64, core::sync::atomic::AtomicU64);
 width!(usize, AtomicUsize);
 
-/// Everything in it is atomic: refs reach it through a pointer while the
-/// owner has it by Pin<&mut> - which a !Unpin type's doesn't make unique.
+/// Everything in it is atomic: refs reach it through a pointer, and its
+/// waiter by &.
 #[pin_data(PinnedDrop)]
 pub struct Gather<T: Fold, W: Width = usize> {
     state:  W::Atomic,
@@ -165,7 +167,7 @@ pub struct Gather<T: Fold, W: Width = usize> {
     _pin:   PhantomPinned,
 }
 
-/// The waiter's Waker, as raw parts, for the last put: written by the owner
+/// The waiter's Waker, as raw parts, for the last put: written by the waiter
 /// only with WAITING clear, read by a put only after seeing it set.
 struct Slot {
     data:   AtomicPtr<()>,
@@ -212,8 +214,11 @@ impl<T: Fold, W: Width> Gather<T, W> {
     const WAITING: u64 = 1 << (W::BITS / 2);
     /// The owner has waited: its ref is dropped.
     const WAITED:  u64 = Self::WAITING << 1;
+    /// A wait is under way - a Wait, or a sync wait - and the slot is its:
+    /// one at a time.
+    const IN_WAIT: u64 = Self::WAITING << 2;
     /// Bumped each time the slot is filled; wraps out of the word's top.
-    const GEN:     u64 = Self::WAITING << 2;
+    const GEN:     u64 = Self::WAITING << 3;
 
     pub fn new() -> impl PinInit<Self> {
         pin_init!(Self {
@@ -245,7 +250,7 @@ impl<T: Fold, W: Width> Gather<T, W> {
         }
     }
 
-    /// Fold @v in, if there's one, and drop a ref: the last wakes the owner.
+    /// Fold @v in, if there's one, and drop a ref: the last wakes the waiter.
     fn put(&self, v: Option<T>) {
         if let Some(v) = v {
             T::fold(&self.acc, v);
@@ -272,6 +277,26 @@ impl<T: Fold, W: Width> Gather<T, W> {
                 }
                 Err(cur) => old = cur,
             }
+        }
+    }
+
+    /// A wait begun: the slot ours, till end_wait().
+    fn begin_wait(&self) {
+        // checked before it's changed: a panic leaves the word as it was
+        let mut old = W::load(&self.state, Ordering::Relaxed);
+        loop {
+            assert!(old & Self::IN_WAIT == 0, "Gather waited on twice at once");
+            match W::compare_exchange_weak(&self.state, old, old | Self::IN_WAIT) {
+                Ok(_)    => return,
+                Err(cur) => old = cur,
+            }
+        }
+    }
+
+    fn end_wait(&self) {
+        let mut old = W::load(&self.state, Ordering::Relaxed);
+        while let Err(cur) = W::compare_exchange_weak(&self.state, old, old & !Self::IN_WAIT) {
+            old = cur;
         }
     }
 
@@ -334,26 +359,29 @@ impl<T: Fold, W: Width> Gather<T, W> {
 
     /// Wait for every ref to be put, sleeping TASK_IDLE - no hung task
     /// warnings - and take the result.
-    pub fn wait_sync(self: Pin<&mut Self>) -> T {
+    pub fn wait_sync(&self) -> T {
         self.wait_sync_state(false)
     }
 
     /// wait_sync(), freezable: for refs whose holders freeze in place - kthreads
     /// that do - whose owner must too.
-    pub fn wait_sync_freezable(self: Pin<&mut Self>) -> T {
+    pub fn wait_sync_freezable(&self) -> T {
         self.wait_sync_state(true)
     }
 
     fn wait_sync_state(&self, freezable: bool) -> T {
+        self.begin_wait();
         if !self.start_wait() && self.register(task_waker()).is_ok() {
             let how = if freezable { Sleep::IDLE.freezable() } else { Sleep::IDLE };
             let Ok(()) = sleep_until(how, || self.done().then_some(()));
         }
+        self.end_wait();
         T::result(&self.acc)
     }
 
     /// Wait for every ref to be put, asynchronously, for the result.
-    pub fn wait(self: Pin<&mut Self>) -> Wait<'_, T, W> {
+    pub fn wait(&self) -> Wait<'_, T, W> {
+        self.begin_wait();
         Wait { g: self, registered: false }
     }
 }
@@ -363,8 +391,11 @@ impl<T: Fold, W: Width> PinnedDrop for Gather<T, W> {
     fn drop(self: Pin<&mut Self>) {
         // Not waited on - its owner returned early, or an await of it was
         // dropped - and refs may be out, raw ones in C's hands: wait them
-        // out. It's pinned, so it's where they point until it's freed.
+        // out. It's pinned, so it's where they point until it's freed. A
+        // Wait forgotten still has the wait: nothing waits on what's being
+        // dropped, so it's ours.
         if !self.done() {
+            self.end_wait();
             self.wait_sync_state(false);
         }
     }
@@ -421,7 +452,7 @@ impl<T: Fold, W: Width> Drop for GatherRef<T, W> {
 /// resume_on(). Dropped unfinished, it takes its Waker back.
 #[must_use = "a wait does nothing unless awaited"]
 pub struct Wait<'a, T: Fold, W: Width = usize> {
-    g:          Pin<&'a mut Gather<T, W>>,
+    g:          &'a Gather<T, W>,
     /// Our Waker is in the slot.
     registered: bool,
 }
@@ -431,7 +462,7 @@ impl<T: Fold, W: Width> Resumable for Wait<'_, T, W> {
 
     fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
         let this = self.get_mut();
-        let g = this.g.as_ref().get_ref();
+        let g = this.g;
         if g.start_wait() {
             return Poll::Ready(T::result(&g.acc));
         }
@@ -453,7 +484,8 @@ impl<T: Fold, W: Width> Resumable for Wait<'_, T, W> {
 impl<T: Fold, W: Width> Drop for Wait<'_, T, W> {
     fn drop(&mut self) {
         if self.registered {
-            self.g.as_ref().get_ref().unregister();
+            self.g.unregister();
         }
+        self.g.end_wait();
     }
 }
