@@ -126,7 +126,7 @@
 
 use crate::alloc::buckets::{bucket_to_u64, DiskReservation};
 use crate::alloc::foreground::{EcOpenBucket, OpenBucket, OpenBucketRef};
-use crate::btree::bkey::{pos, BkeyV};
+use crate::btree::bkey::{pos, BkeySC, BkeyV};
 use crate::c;
 use crate::data::ec::buf::StripeBuf;
 use crate::data::ec::open::StripeClaim;
@@ -137,7 +137,7 @@ use crate::data::moving::MovingWrite;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::{Guard, Lock};
-use crate::util::alloc::{kbox_pin_init, AllocError, KBox, KVVec};
+use crate::util::alloc::{kbox_into_inner, kbox_pin_init, AllocError, KBox, KVVec};
 use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::backref::BackRef;
 use crate::util::ffi::Opaque;
@@ -146,6 +146,7 @@ use crate::util::kernel::local_clock;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
 use crate::util::task::{spawn_unstarted, Spawn, Unstarted};
+use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use crate::{new_lock, prt};
 use arrayvec::ArrayVec;
@@ -154,7 +155,7 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use cstruct_macros::c_export;
-use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
+use pin_init::{init, init_zeroed, pin_data, pin_init, pinned_drop, Init, PinInit};
 use c::ec_stripe_new_state as State;
 
 // ── A stripe being made ──────────────────────────────────────────────────
@@ -270,6 +271,65 @@ impl Slot {
     }
 }
 
+/// The old stripe a stripe being made reuses - a stripe it's packed into, or
+/// the one a repair rebuilds: held open, its key, and its buffer, which the
+/// carried blocks are folded in from. Which of its blocks come forward is in
+/// the new stripe's slots - Slot::Carried and Moving.
+///
+/// Boxed: it's mostly the key, kilobytes, and Some(Reuse) made by value would
+/// be a copy through the stack of the allocation path. The box is only there
+/// because pin-init can't initialize an Option in place.
+pub(crate) struct Reuse {
+    pub(crate) stripe: StripeKey,
+    /// The old stripe held open: put with the stripe being made
+    open:              StripeClaim,
+    pub(crate) buf:    Option<KBox<StripeBuf>>,
+    pub(crate) read:   OldRead,
+}
+
+/// What's been read of the old stripe.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OldRead {
+    /// Nothing, and no buffer for it yet
+    NoBuf,
+    /// Its buffer's allocated: the task reads it, and folds the carried
+    /// blocks in
+    ToRead,
+    /// Every block's in its buffer, read: a repair's, which carried them
+    Read,
+}
+
+impl Reuse {
+    /// @old, held open by @open: nothing of it read yet - or the claim
+    /// back, for the caller to put, if it can't be allocated.
+    pub(crate) fn new(old: BkeySC<'_, c::Stripe<Validated>>, open: StripeClaim)
+        -> Result<KBox<Self>, StripeClaim>
+    {
+        // the initializer runs only once there's memory for it: until then
+        // the claim's ours to give back
+        let mut open = Some(open);
+        let claim = &mut open;
+        let init = init!(Reuse {
+            stripe <- init_zeroed(),
+            open:   claim.take().expect("a claim, taken once"),
+            buf:    None,
+            read:   OldRead::NoBuf,
+        }? BchError).chain(|r| {
+            r.stripe.set(old);
+            Ok(())
+        });
+        match kbox_pin_init(init) {
+            Ok(r) => Ok(Pin::into_inner(r)),
+            Err(_) => Err(open.expect("a claim the initializer didn't run to take")),
+        }
+    }
+
+    fn put(self: KBox<Self>, fs: &Fs) {
+        let Reuse { open, .. } = kbox_into_inner(self);
+        open.put(fs);
+    }
+}
+
 impl core::ops::Deref for StripeBlock {
     type Target = OpenBucketRef;
 
@@ -291,12 +351,7 @@ pub(crate) struct Internal {
     pub(crate) devs:      c::bch_devs_mask,
     pub(crate) watermark: c::bch_watermark,
 
-    pub(crate) have_old_stripe:     bool,
     pub(crate) allocated:           bool,
-    /// The old stripe's buffer's allocated: its task reads it
-    pub(crate) old_stripe_read:                bool,
-    /// ... and every block's in it: there's nothing for the task to read
-    pub(crate) old_stripe_read_all:            bool,
 
     pub(crate) blocks:           [Slot; MAX_BLOCKS],
     /// Its parity's, once reserve_parity()'s made it
@@ -307,11 +362,10 @@ pub(crate) struct Internal {
 
     pub(crate) new_stripe:       StripeKey,
     pub(crate) new_buf:          Option<KBox<StripeBuf>>,
-    pub(crate) old_stripe:       StripeKey,
-    pub(crate) old_buf:                     Option<KBox<StripeBuf>>,
-
     pub(crate) new_stripe_open:  Option<StripeClaim>,
-    pub(crate) old_stripe_open:  Option<StripeClaim>,
+
+    /// The old stripe it reuses, if it does
+    pub(crate) reuse:            Option<KBox<Reuse>>,
 }
 
 /// A stripe being made, owned: pinned, as its task, its writers' open buckets
@@ -526,19 +580,14 @@ impl Internal {
             task:                None,
             devs,
             watermark,
-            have_old_stripe:     false,
             allocated:           false,
-            old_stripe_read:     false,
-            old_stripe_read_all: false,
             blocks:              Default::default(),
             res:                 None,
             buckets:             ArrayVec::new(),
             new_stripe           <- pin_init::init_zeroed(),
             new_buf:             None,
-            old_stripe           <- pin_init::init_zeroed(),
-            old_buf:             None,
             new_stripe_open:     None,
-            old_stripe_open:     None,
+            reuse:               None,
         })
     }
 
@@ -617,8 +666,11 @@ impl PinnedDrop for StripeNew {
         s.res = None;
         s.buckets_del(fs);
 
-        for claim in [s.new_stripe_open.take(), s.old_stripe_open.take()].into_iter().flatten() {
+        if let Some(claim) = s.new_stripe_open.take() {
             claim.put(fs);
+        }
+        if let Some(r) = s.reuse.take() {
+            r.put(fs);
         }
         drop(s.write.take());
     }

@@ -17,7 +17,7 @@ use crate::btree::bkey::BkeyV;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
 use crate::data::ec::buf::{MemWait, StripeBuf};
-use crate::data::ec::stripe_new::{self, Internal, Slot, StripeBlock, StripeNew, StripeNewBox};
+use crate::data::ec::stripe_new::{self, Internal, OldRead, Slot, StripeBlock, StripeNew, StripeNewBox};
 use crate::data::ec::stripe_new_blocks::stripe_alloc_or_reuse;
 use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
 use crate::fs::Fs;
@@ -493,8 +493,8 @@ fn head_stage(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, h: &c::ec_st
 
         fs.event_inc_trace(events::stripe_alloc, |out| {
             prt!(out, "\nnew: {}", i.new_stripe.stripe().to_text(fs));
-            if i.have_old_stripe {
-                prt!(out, "\nold: {}", i.old_stripe.stripe().to_text(fs));
+            if let Some(r) = &i.reuse {
+                prt!(out, "\nold: {}", r.stripe.stripe().to_text(fs));
             }
         });
     }
@@ -504,9 +504,9 @@ fn head_stage(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, h: &c::ec_st
         i.new_buf = Some(StripeBuf::new_whole(fs, i.new_stripe.stripe(), wait)?);
     }
 
-    if !i.old_stripe_read && i.have_old_stripe {
-        i.old_buf = Some(StripeBuf::new_whole(fs, i.old_stripe.stripe(), MemWait::Never)?);
-        i.old_stripe_read = true;
+    if let Some(r) = i.reuse.as_mut().filter(|r| r.read == OldRead::NoBuf) {
+        r.buf = Some(StripeBuf::new_whole(fs, r.stripe.stripe(), MemWait::Never)?);
+        r.read = OldRead::ToRead;
     }
 
     s.launch(&mut i);

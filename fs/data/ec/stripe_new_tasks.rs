@@ -14,7 +14,7 @@ use crate::data::ec::delete::stripe_delete;
 use crate::data::ec::io::BlockIo;
 use crate::data::ec::repair::record_lost_blocks;
 use crate::data::ec::stripe::{StripeKey, MAX_BLOCKS};
-use crate::data::ec::stripe_new::{new_stripes_take, Internal, StripeNew, StripePtr};
+use crate::data::ec::stripe_new::{new_stripes_take, Internal, OldRead, Reuse, StripeNew, StripePtr};
 use crate::data::ec::update::{create_watermark, stripe_update_extents};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
@@ -48,11 +48,8 @@ pub(crate) async fn stripe_task(fs: &Fs, p: StripePtr) {
     let s = unsafe { &*p.as_ptr() };
 
     // set before its start, by its head or repair
-    let (read, read_all) = {
-        let i = s.lock();
-        (i.old_stripe_read, i.old_stripe_read_all)
-    };
-    let fold = if read && !read_all { old_stripe_fold(fs, s, w, at).await } else { Ok(()) };
+    let to_read = s.lock().reuse.as_ref().is_some_and(|r| r.read == OldRead::ToRead);
+    let fold = if to_read { old_stripe_fold(fs, s, w, at).await } else { Ok(()) };
 
     s.in_flight.wait().resume_on(at).await;
 
@@ -100,23 +97,23 @@ pub(crate) fn old_stripe_carry(s: &mut Internal, old: &mut StripeBuf) {
 /// reconstructing what's bad if it can be, and its blocks carried - or the
 /// ones we wanted that are lost said, for create to record damage against.
 async fn old_stripe_fold(fs: &Fs, s: &StripeNew, w: &mut Working, at: Resume<'_>) -> Result<(), OldStripeLost> {
-    // The old stripe's key and buffer, to read with across the awaits; the
-    // buffer back after
+    // The old stripe, its key and buffer, to read with across the awaits;
+    // back after
     let required = {
         let mut i = s.lock();
-        w.old_stripe.copy_from(&i.old_stripe);
-        core::mem::swap(&mut w.old_buf, &mut i.old_buf);
+        core::mem::swap(&mut w.reuse, &mut i.reuse);
         old_stripe_required(&i)
     };
 
-    let buf = w.old_buf.as_mut().expect("the old stripe's buffer");
-    let ret = old_stripe_read(fs, &w.old_stripe, buf, required, at).await;
+    let r = w.reuse.as_deref_mut().expect("a stripe it reuses");
+    let buf = r.buf.as_mut().expect("the old stripe's buffer");
+    let ret = old_stripe_read(fs, &r.stripe, buf, required, at).await;
 
     let mut i = s.lock();
     if ret.is_ok() {
         old_stripe_carry(&mut i, buf);
     }
-    core::mem::swap(&mut w.old_buf, &mut i.old_buf);
+    core::mem::swap(&mut w.reuse, &mut i.reuse);
     ret
 }
 
@@ -186,13 +183,11 @@ fn stripe_key_update(t: &TransAttempt<'_, '_>, k: BkeySC<'_, c::Stripe<Validated
 struct Working {
     new_stripe:      StripeKey,
     new_buf:         Option<KBox<StripeBuf>>,
-    old_stripe:      StripeKey,
-    old_buf:         Option<KBox<StripeBuf>>,
+    reuse:           Option<KBox<Reuse>>,
     res:             Option<DiskReservation<'static>>,
     /// The new blocks moved from the old stripe, to be written
     moving:          c::StripeBlockMask,
     old_block_map:   ArrayVec<u8, MAX_BLOCKS>,
-    have_old_stripe: bool,
     allocated:       bool,
     watermark:       c::bch_watermark,
 }
@@ -203,12 +198,10 @@ impl Working {
         init!(Working {
             new_stripe      <- init_zeroed(),
             new_buf:        None,
-            old_stripe      <- init_zeroed(),
-            old_buf:        None,
+            reuse:          None,
             res:            None,
             moving          <- init_zeroed(),
             old_block_map:  ArrayVec::new(),
-            have_old_stripe: false,
             allocated:      false,
             watermark       <- init_zeroed(),
         })
@@ -218,7 +211,6 @@ impl Working {
     /// them; its buffers and reservation swapped in.
     fn take(&mut self, i: &mut Internal) {
         self.new_stripe.copy_from(&i.new_stripe);
-        self.old_stripe.copy_from(&i.old_stripe);
         self.moving          = Default::default();
         for (j, b) in i.blocks.iter().enumerate() {
             if b.moving() {
@@ -226,7 +218,6 @@ impl Working {
             }
         }
         self.old_block_map   = i.old_block_map();
-        self.have_old_stripe = i.have_old_stripe;
         self.allocated       = i.allocated;
         self.watermark       = i.watermark;
         self.swap(i);
@@ -241,7 +232,7 @@ impl Working {
 
     fn swap(&mut self, i: &mut Internal) {
         core::mem::swap(&mut self.new_buf, &mut i.new_buf);
-        core::mem::swap(&mut self.old_buf, &mut i.old_buf);
+        core::mem::swap(&mut self.reuse, &mut i.reuse);
         core::mem::swap(&mut self.res, &mut i.res);
     }
 }
@@ -299,8 +290,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
         let v = w.new_stripe.stripe().v();
         (v.nr_data() as usize, usize::from(v.nr_blocks))
     };
-    let Working { new_stripe, new_buf, old_stripe, old_buf, moving, old_block_map, have_old_stripe, allocated,
-                  watermark, res } = w;
+    let Working { new_stripe, new_buf, reuse, moving, old_block_map, allocated, watermark, res } = w;
     let buf = new_buf.as_mut().expect("a new stripe's buffer");
 
     stack_pin_init!(let io = BlockIo::write(fs, buf));
@@ -336,9 +326,10 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
         // its output instead, which says nothing about what's on disk.
         let as_read = lost.err == BchError::from(bch_errcode::BCH_ERR_stripe_reconstruct_insufficient_blocks);
         let trans = btree_trans!(fs);
-        record_lost_blocks(&trans, old_stripe.stripe(), lost.blocks,
+        let r = reuse.as_ref().expect("a fold's old stripe");
+        record_lost_blocks(&trans, r.stripe.stripe(), lost.blocks,
                            c::bch_sb_error_id::BCH_FSCK_ERR_stripe_reconstruct_failed, false,
-                           old_buf.as_deref().filter(|_| as_read));
+                           r.buf.as_deref().filter(|_| as_read));
         return Err(lost.err);
     }
 
@@ -366,7 +357,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
     }
 
     let new = new_stripe.stripe();
-    let old_idx = if *have_old_stripe { old_stripe.idx() } else { 0 };
+    let old_idx = reuse.as_ref().map_or(0, |r| r.stripe.idx());
     let new_idx = new_stripe.idx();
 
     let mut op = BkeyI::<c::LoggedOpStripeUpdate>::new();
@@ -390,7 +381,10 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
     let trans = btree_trans!(fs);
     let map = &old_block_map[..];
     // no old stripe, if it isn't a reuse: nothing's carried from it
-    let old = if map.is_empty() { new } else { old_stripe.stripe() };
+    let old = match reuse {
+        Some(r) if !map.is_empty() => r.stripe.stripe(),
+        _ => new,
+    };
     let ret = stripe_update_extents(&trans, old, new, map, watermark);
     logged_ops::finish(&trans, op.as_ref(), ret, CommitOpts::new().watermark(watermark))?;
 
@@ -417,8 +411,8 @@ fn create_done(fs: &Fs, s: &StripeNew, ret: Result<(), BchError>) {
                 prt!(out, "error {e}\n{}", new.to_text(fs));
             });
         }
-        Ok(()) if i.have_old_stripe => fs.event_inc_trace(events::stripe_reuse, |out| {
-            let ov = i.old_stripe.stripe();
+        Ok(()) if i.reuse.is_some() => fs.event_inc_trace(events::stripe_reuse, |out| {
+            let ov = i.reuse.as_ref().expect("just seen").stripe.stripe();
             prt!(out, "Reused {}/{} data blocks\n", i.old_block_map().len(), ov.v().nr_data());
             prt!(out, "\nOld: {}", ov.to_text(fs));
             prt!(out, "\nNew: {}", new.to_text(fs));

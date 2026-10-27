@@ -18,7 +18,7 @@ use crate::data::ec::delete::stripe_delete;
 use crate::data::ec::head::dev_stripe_state_get;
 use crate::data::ec::io::read_sync;
 use crate::data::ec::open::OpenStripe;
-use crate::data::ec::stripe_new::{discard, new_stripes_take, StripeNew};
+use crate::data::ec::stripe_new::{discard, new_stripes_take, OldRead, Reuse, StripeNew};
 use crate::data::ec::stripe_new_blocks::{init_new_stripe_from_old, new_stripe_alloc_buckets, stripe_idx_alloc};
 use crate::data::ec::stripe_new_tasks::old_stripe_carry;
 use crate::data::ec::update::{block_for_each_extent, Extent};
@@ -557,8 +557,15 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
     // allocation's transactions
     let mut i = ns.lock();
 
-    i.old_stripe_open = Some(h.into_claim());
-    i.old_stripe.set(s);
+    match Reuse::new(s, h.into_claim()) {
+        Ok(r) => i.reuse = Some(r),
+        Err(claim) => {
+            claim.put(fs);
+            drop(i);
+            discard(new_stripes_take(fs, p));
+            return fs.throw(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc);
+        }
+    }
 
     init_new_stripe_from_old(&mut i, carry, move_, true);
 
@@ -599,7 +606,7 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
     if let Err(e) = ret {
         let mut msg = log_msg_ratelimited!(fs);
         write!(msg, "stripe repair: error allocating buckets for the new stripe: {e}");
-        prt!(&mut msg, "\nold: {}", i.old_stripe.stripe().to_text(fs));
+        prt!(&mut msg, "\nold: {}", s.to_text(fs));
         prt!(&mut msg, "\nnew: {}", i.new_stripe.stripe().to_text(fs));
         drop(msg);
 
@@ -624,10 +631,10 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
 
     // As ec_old_stripe_read(), for an old stripe the caller has already read,
     // with every block we carry good: ec_old_stripe_take().
-    i.old_stripe_read = true;
-    i.old_stripe_read_all = true;
     old_stripe_carry(&mut i, &mut read);
-    i.old_buf = Some(read);
+    let r = i.reuse.as_mut().expect("a rebuild's old stripe");
+    r.read = OldRead::Read;
+    r.buf = Some(read);
 
     let v = i.new_stripe.stripe().v();
     let stripe_sectors = u32::from(v.sectors.get()) * u32::from(v.nr_blocks);

@@ -13,7 +13,7 @@ use crate::data::ec::buf::blocks_in;
 use crate::data::ec::open::OpenStripe;
 use crate::data::ec::repair::StripeBlocks;
 use crate::data::ec::stripe::{StripeKey, STRIPE_LRU_POS_EMPTY};
-use crate::data::ec::stripe_new::{Internal, Slot, StripeBlock};
+use crate::data::ec::stripe_new::{Internal, Reuse, Slot, StripeBlock};
 use crate::data::ec::trigger::ec_stripe_mem_alloc;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
@@ -402,8 +402,8 @@ pub(crate) fn new_stripe_key(fs: &Fs, key: &mut StripeKey, algorithm: u8, nr_dat
 // is good, moved to a new bucket if not. Its empty blocks and its parity are
 // left behind, and new buckets fill out the rest.
 //
-// The old stripe is held open from when it's picked - in the new stripe's
-// old_stripe_open, put by its teardown - so the stripe trigger and other
+// The old stripe is held open from when it's picked - its Reuse's claim,
+// put by the new stripe's teardown - so the stripe trigger and other
 // reusers stay off it. Its blocks are read, and the carried ones folded into
 // the new stripe, by the new stripe's task: stripe_new_tasks.rs.
 
@@ -428,10 +428,9 @@ fn may_reuse_stripe(s: &Internal, old: &c::Stripe<Validated>, b: StripeBlocks) -
     b.live.count_ones() < new.nr_data() && devs.d.weight() > new.nr_redundant.into()
 }
 
-/// Stripe @idx, if @s may be packed into it: opened, into @s's
-/// old_stripe_open, its key in @s's old_stripe - and its blocks. None if
-/// it's gone - the lru races with the write buffer - can't be reused, or is
-/// open already. get_old_stripe().
+/// Stripe @idx, if @s may be packed into it: opened, with its key, as @s's
+/// Reuse - and its blocks. None if it's gone - the lru races with the write
+/// buffer - can't be reused, or is open already. get_old_stripe().
 ///
 /// An empty one that isn't open is deleted, and one whose can_widen is too
 /// high is demoted: each a commit, and transaction_restart_commit, for the
@@ -476,9 +475,14 @@ fn get_old_stripe(t: &TransAttempt<'_, '_>, s: &mut Internal, idx: u64)
         return Ok(None);
     }
     let Some(h) = OpenStripe::tryget_existing(t, iter)? else { return Ok(None) };
-    assert!(s.old_stripe_open.is_none(), "a stripe being made with two old stripes");
-    s.old_stripe_open = Some(h.into_claim());
-    s.old_stripe.set(old);
+    assert!(s.reuse.is_none(), "a stripe being made with two old stripes");
+    match Reuse::new(old, h.into_claim()) {
+        Ok(r) => s.reuse = Some(r),
+        Err(claim) => {
+            claim.put(fs);
+            return fs.throw(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc);
+        }
+    }
     Ok(Some(b))
 }
 
@@ -487,9 +491,10 @@ fn get_old_stripe(t: &TransAttempt<'_, '_>, s: &mut Internal, idx: u64)
 /// buckets @s had are put, as they may clash with the old stripe's. A repair
 /// may carry every data block; reuse leaves room for a new one.
 pub(crate) fn init_new_stripe_from_old(s: &mut Internal, carry: u32, move_: u32, repair: bool) {
+    let old_stripe = &s.reuse.as_ref().expect("a new stripe laid out from an old one it doesn't have").stripe;
     let new = s.new_stripe.stripe().v();
     let (nr_blocks, nr_data) = (usize::from(new.nr_blocks), new.nr_data());
-    assert_eq!(s.old_stripe.stripe().v().nr_redundant, new.nr_redundant, "a new stripe from an old one of other redundancy");
+    assert_eq!(old_stripe.stripe().v().nr_redundant, new.nr_redundant, "a new stripe from an old one of other redundancy");
     debug_assert!(carry & move_ == 0, "blocks {:#x} both carried and moved", carry & move_);
 
     for b in &mut s.blocks[..nr_blocks] {
@@ -501,13 +506,11 @@ pub(crate) fn init_new_stripe_from_old(s: &mut Internal, carry: u32, move_: u32,
         let old = i as u8;
         s.blocks[j] = if carry & 1 << i != 0 { Slot::Carried { old } } else { Slot::Moving { old, bucket: None } };
 
-        let p = s.old_stripe.stripe().v().block_ptrs()[i];
+        let p = old_stripe.stripe().v().block_ptrs()[i];
         s.new_stripe.stripe_mut().block_ptrs_mut()[j] = p;
         assert!(j as u32 + 1 + u32::from(!repair) <= nr_data,
                 "a new stripe of {nr_data} data blocks, from {} of an old one", j + 1);
     }
-
-    s.have_old_stripe = true;
 }
 
 /// Pack @s into the first stripe in the stripe lru it may be packed into:
@@ -596,7 +599,7 @@ pub(crate) fn stripe_idx_alloc(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Re
 /// devices are low on space.
 fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, dev_stripe: &c::ec_dev_stripe_state,
                           s: &mut Internal, stripe_fs: &BackRef<Fs>) -> Result<(), BchError> {
-    if !s.have_old_stripe && should_reuse_stripe(t.fs(), s) {
+    if s.reuse.is_none() && should_reuse_stripe(t.fs(), s) {
         try_stripe_reuse(t, s)?;
     }
 
@@ -611,7 +614,7 @@ fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, 
         ret => return ret,
     }
 
-    if !s.have_old_stripe {
+    if s.reuse.is_none() {
         try_stripe_reuse(t, s)?;
     }
     new_stripe_alloc_buckets(t, req, dev_stripe, s, stripe_fs, true)

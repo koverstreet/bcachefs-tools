@@ -36,6 +36,15 @@ pub fn kalloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E
     alloc_in::<true, T, E>(init)
 }
 
+/// @b's value, out of its box: *b, for a std Box - which the kernel's isn't,
+/// so it has into_inner().
+pub fn kbox_into_inner<T>(b: KBox<T>) -> T {
+    #[cfg(kernel)]
+    { KBox::into_inner(b) }
+    #[cfg(not(kernel))]
+    { *b }
+}
+
 pub fn kbox_pin_init<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>)
     -> Result<core::pin::Pin<KBox<T>>, E>
 {
