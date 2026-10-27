@@ -69,13 +69,13 @@ fn a_blocking_task_does_not_own_the_queue() {
 
         // A synchronous wait inside the poll, deliberately: work items are
         // allowed to block, and this executor's tasks are work items.
-        spawn(q, async move {
+        spawn(q, move || async move {
             blocked.recv().unwrap();
             finish.send(()).unwrap();
         })
         .unwrap();
 
-        spawn(q, async move {
+        spawn(q, move || async move {
             release.send(()).unwrap();
         })
         .unwrap();
@@ -159,9 +159,9 @@ fn never_polled_concurrently(inline: bool) {
             finish,
         };
         if inline {
-            spawn(Queue::system_dfl(), async move { task.resume_on(Resume::Inline).await }).unwrap();
+            spawn(Queue::system_dfl(), move || async move { task.resume_on(Resume::Inline).await }).unwrap();
         } else {
-            spawn(Queue::system_dfl(), task).unwrap();
+            spawn(Queue::system_dfl(), move || task).unwrap();
         }
 
         finished.recv().unwrap();

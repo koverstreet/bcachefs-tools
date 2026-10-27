@@ -136,11 +136,11 @@ impl<'scope, 'env> Scope<'scope, 'env> {
             match self.backend {
                 Backend::Kthreads => {
                     let thread = Spawn::Thread { name, freezable: self.freezable };
-                    spawn_unstarted(thread, async move { f() })?
+                    spawn_unstarted(thread, move || async move { f() })?
                 }
                 Backend::Workqueue(wq) => {
                     let desc = worker_desc(name);
-                    spawn_unstarted(Spawn::Queue(wq), async move {
+                    spawn_unstarted(Spawn::Queue(wq), move || async move {
                         c::bch2_set_worker_desc(desc.as_ptr().cast());
                         f()
                     })?

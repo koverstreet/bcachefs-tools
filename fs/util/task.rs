@@ -2,6 +2,13 @@
 
 //! An async executor: spawn() a future as a task on a workqueue, and await
 //! its JoinHandle - or join_sync() it from a thread - for what it returns.
+//! What's spawned is what makes the future, `move || work(fs, x)`: it's
+//! made in place, in the task's allocation, and never moved after - so a big
+//! one is never on the spawner's stack, which may be deep in a write path.
+//! An awaited future isn't: rustc makes it on the stack of whoever polls,
+//! and moves it into its awaiter. So what's big is the spawned future's own
+//! - its locals, made in place with stack_pin_init!() - and what it awaits
+//! borrows it.
 //!
 //! Every await says where its task resumes: what we await - a Gather's
 //! wait(), a JoinHandle - isn't a Future until .resume_on() makes it one:
@@ -231,7 +238,9 @@ struct TaskHead<T> {
 struct Task<F: Future> {
     #[pin]
     head:   TaskHead<F::Output>,
-    future: UnsafeCell<ManuallyDrop<F>>,
+    /// Made here, pinned; None once it's returned - dropped in place.
+    #[pin]
+    future: Option<F>,
 }
 
 impl<F: Future> Task<F> {
@@ -241,19 +250,29 @@ impl<F: Future> Task<F> {
         dealloc: Self::dealloc,
     };
 
+    /// The future, pinned in the task.
+    ///
+    /// # Safety
+    /// @task is live, and the future ours: RUNNING, or never started.
+    unsafe fn future<'a>(task: *mut Self) -> Pin<&'a mut Option<F>> {
+        // SAFETY: the caller's; made in the task, which never moves
+        unsafe { Pin::new_unchecked(&mut (*task).future) }
+    }
+
     /// # Safety
     /// @h is a Task<F>'s, and we're its one poller: RUNNING is ours.
     unsafe fn poll(h: NonNull<Header>, cx: &mut Context<'_>) -> Poll<()> {
         let task = h.cast::<Self>().as_ptr();
-        // SAFETY: the caller's; pinned where it was made
-        let future = unsafe { Pin::new_unchecked(&mut **(*task).future.get()) };
-        match future.poll(cx) {
+        // SAFETY: the caller's
+        let mut future = unsafe { Self::future(task) };
+        let f = future.as_mut().as_pin_mut().expect("a task polled after it returned");
+        match f.poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(v) => {
-                // SAFETY: ours; never polled again
+                future.set(None);
+                // SAFETY: ours, and never polled again
                 unsafe {
                     (*(*task).head.output.get()).write(v);
-                    ManuallyDrop::drop(&mut *(*task).future.get());
                     Self::complete(h);
                 }
                 Poll::Ready(())
@@ -309,7 +328,7 @@ impl<F: Future> Task<F> {
                 c::bch2_kthread_stop(thread);
                 c::put_task_struct(thread);
             }
-            ManuallyDrop::drop(&mut *(*task).future.get());
+            Self::future(task).set(None);
             drop((*(*task).head.done_ref.get()).take());
             kfree_pinned(task);
         }
@@ -323,27 +342,30 @@ impl<F: Future> Task<F> {
     }
 }
 
-/// Spawn @fut on @wq - first polled there, and resumed there by a wake
-/// that hasn't said where - for its JoinHandle.
-pub fn spawn<F>(wq: &'static Queue, fut: F) -> Result<JoinHandle<F::Output>, BchError>
+/// Spawn the future @make makes on @wq - first polled there, and resumed
+/// there by a wake that hasn't said where - for its JoinHandle.
+pub fn spawn<M, F>(wq: &'static Queue, make: M) -> Result<JoinHandle<F::Output>, BchError>
 where
+    M: FnOnce() -> F + Send + 'static,
     F: Future + Send + 'static,
     F::Output: Send,
 {
     // SAFETY: 'static: it borrows nothing
-    Ok(unsafe { spawn_unstarted(Spawn::Queue(wq), fut) }?.start())
+    Ok(unsafe { spawn_unstarted(Spawn::Queue(wq), make) }?.start())
 }
 
-/// Spawn @fut on a kthread of its own, named @name - first polled there,
-/// and resumed there by Resume::Thread, or a wake that hasn't said where.
-/// The thread's the task's till it's done, sleeping while it runs elsewhere.
-pub fn spawn_thread<F>(name: fmt::Arguments<'_>, fut: F) -> Result<JoinHandle<F::Output>, BchError>
+/// Spawn the future @make makes on a kthread of its own, named @name - first
+/// polled there, and resumed there by Resume::Thread, or a wake that hasn't
+/// said where. The thread's the task's till it's done, sleeping while it runs
+/// elsewhere.
+pub fn spawn_thread<M, F>(name: fmt::Arguments<'_>, make: M) -> Result<JoinHandle<F::Output>, BchError>
 where
+    M: FnOnce() -> F + Send + 'static,
     F: Future + Send + 'static,
     F::Output: Send,
 {
     // SAFETY: 'static: it borrows nothing
-    Ok(unsafe { spawn_unstarted(Spawn::Thread { name, freezable: false }, fut) }?.start())
+    Ok(unsafe { spawn_unstarted(Spawn::Thread { name, freezable: false }, make) }?.start())
 }
 
 /// Where a spawned task's first polled, and resumed by a wake that hasn't
@@ -384,25 +406,26 @@ impl<T> Drop for Unstarted<T> {
     }
 }
 
-/// A task for @fut, made - its thread too, if it's to have one - to be
-/// started.
+/// A task for the future @make makes, made - its thread too, if it's to have
+/// one - to be started.
 ///
 /// # Safety
-/// What @fut borrows, and @at's Queue, outlive the task: whoever made it
-/// joins it - or drops it unstarted - before they're gone. spawn() and
-/// spawn_thread() are this for what's 'static.
-pub unsafe fn spawn_unstarted<F>(at: Spawn<'_>, fut: F) -> Result<Unstarted<F::Output>, BchError>
+/// What @make and its future borrow, and @at's Queue, outlive the task:
+/// whoever made it joins it - or drops it unstarted - before they're gone.
+/// spawn() and spawn_thread() are this for what's 'static.
+pub unsafe fn spawn_unstarted<M, F>(at: Spawn<'_>, make: M) -> Result<Unstarted<F::Output>, BchError>
 where
+    M: FnOnce() -> F + Send,
     F: Future + Send,
     F::Output: Send,
 {
     let task = match at {
-        Spawn::Queue(wq) => make(core::ptr::from_ref(wq) as usize, fut)?,
+        Spawn::Queue(wq) => self::make(core::ptr::from_ref(wq) as usize, make)?,
         Spawn::Thread { name, freezable } => {
             let mut name_buf = Printbuf::new();
             write!(name_buf, "{name}");
 
-            let task = make(THREAD, fut)?;
+            let task = self::make(THREAD, make)?;
             // SAFETY: just made; the thread's data, from when it's woken - and
             // if it's stopped unwoken, it doesn't touch it
             let thread = unsafe {
@@ -433,8 +456,9 @@ where
 }
 
 /// A task made, not yet started: its own ref and its JoinHandle's.
-fn make<F>(spawned: usize, fut: F) -> Result<*mut Task<F>, AllocError>
+fn make<M, F>(spawned: usize, make: M) -> Result<*mut Task<F>, AllocError>
 where
+    M: FnOnce() -> F + Send,
     F: Future + Send,
     F::Output: Send,
 {
@@ -455,7 +479,8 @@ where
             done_ref: UnsafeCell::new(None),
             output: UnsafeCell::new(MaybeUninit::uninit()),
         }),
-        future: UnsafeCell::new(ManuallyDrop::new(fut)),
+        // written straight into the task, by @make: never on our stack
+        future: Some(make()),
     });
     // kmalloc()'d: the last ref may go in an endio. Its error - there's
     // none - made the allocation's
