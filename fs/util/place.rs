@@ -369,8 +369,12 @@ pub(crate) unsafe fn container_of<'a, T: Placed>(p: *const T) -> &'a T::Parent {
 /// reached from the struct it's in: a ReffedWork's ref. Here is the value;
 /// Up<P> the parent of what P reaches, by its container(); FieldOf<P, N>
 /// field N of what P reaches, by Field<N>; ElemOf<P, I> element I of the
-/// array P reaches. field!() writes one: from bch_fs_snapshots,
-/// field!(super.writes) - FieldOf<Up<Here>, N> - is the write refs of its Fs.
+/// array P reaches; Through<P> what the pointer P reaches points to - a
+/// BackRef. field!() writes one: from bch_fs_snapshots, field!(super.writes)
+/// - FieldOf<Up<Here>, N> - is the write refs of its Fs.
+///
+/// A path of every step but Through stays within what the value it starts
+/// from is in: Within.
 pub(crate) struct Here;
 
 pub(crate) struct Up<P>(PhantomData<P>);
@@ -378,6 +382,17 @@ pub(crate) struct Up<P>(PhantomData<P>);
 pub(crate) struct FieldOf<P, const N: u64>(PhantomData<P>);
 
 pub(crate) struct ElemOf<P, const I: usize>(PhantomData<P>);
+
+pub(crate) struct Through<P>(PhantomData<P>);
+
+/// A path within what the value it starts from is in: no Through - so a ref
+/// on a count it reaches keeps the value.
+pub(crate) trait Within {}
+
+impl Within for Here {}
+impl<P: Within> Within for Up<P> {}
+impl<P: Within, const N: u64> Within for FieldOf<P, N> {}
+impl<P: Within, const I: usize> Within for ElemOf<P, I> {}
 
 /// Each of the path types: one path, where a tuple of them is several. An
 /// impl for one and an impl for a tuple can't overlap through this, as they
@@ -389,10 +404,12 @@ impl OnePath for Here {}
 impl<P> OnePath for Up<P> {}
 impl<P, const N: u64> OnePath for FieldOf<P, N> {}
 impl<P, const I: usize> OnePath for ElemOf<P, I> {}
+impl<P> OnePath for Through<P> {}
 
 /// A path from the struct a field's in, as a type: its fields by name,
-/// elements of an array field by index, and super for its parent -
-/// `field!(super.writes)`, `field!(super.super.c)`, `field!(io_ref[WRITE])`.
+/// elements of an array field by index, what a pointer field points to by ->,
+/// and super for its parent - `field!(super.writes)`, `field!(super.super.c)`,
+/// `field!(io_ref[WRITE])`, `field!(fs->writes)`.
 #[macro_export]
 macro_rules! field {
     ($($path:tt)+) => {
@@ -408,6 +425,12 @@ macro_rules! __field_path {
     };
     ($p:ty; super $(. $($rest:tt)+)?) => {
         $crate::__field_path!($crate::util::place::Up<$p>; $($($rest)+)?)
+    };
+    ($p:ty; $f:ident -> $($rest:tt)+) => {
+        $crate::__field_path!(
+            $crate::util::place::Through<
+                $crate::util::place::FieldOf<$p, { $crate::util::place::name(stringify!($f)) }>>;
+            $($rest)+)
     };
     ($p:ty; $f:ident [ $i:expr ] $(. $($rest:tt)+)?) => {
         $crate::__field_path!(
@@ -467,6 +490,17 @@ where
     fn get(t: &T) -> &E {
         const { assert!(I < N, "an array path's index past its end") };
         &P::get(t)[I]
+    }
+}
+
+impl<T, P: Path<T>> Path<T> for Through<P>
+where
+    P::To: core::ops::Deref + 'static,
+    <P::To as core::ops::Deref>::Target: Sized,
+{
+    type To = <P::To as core::ops::Deref>::Target;
+    fn get(t: &T) -> &Self::To {
+        P::get(t)
     }
 }
 

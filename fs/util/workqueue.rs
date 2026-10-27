@@ -24,7 +24,7 @@
 use crate::c;
 use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
-use crate::util::place::{OnePath, Path, Place, Placed};
+use crate::util::place::{OnePath, Path, Place, Placed, Within};
 use crate::util::refcount::{RefGuard, TryRefcount};
 use crate::util::Printbuf;
 use bitflags::bitflags;
@@ -229,10 +229,10 @@ where
 }
 
 /// The refs a ReffedWork holds, by their paths from its parent P: one, or a
-/// pair. The first's path is within what the parent is in, so its ref keeps
-/// the parent for the run; a second's count need only outlive the parent.
-/// Taken in order; put in reverse, the parent's keeper last - Held's drop
-/// order.
+/// pair. The first's path is Within what the parent is in, so its ref keeps
+/// the parent for the run; a second's count need only outlive the parent -
+/// its path may go Through a BackRef. Taken in order; put in reverse, the
+/// parent's keeper last - Held's drop order.
 ///
 /// # Safety
 /// Held is guards on the refs tryget_live() takes, and adopt() makes.
@@ -249,7 +249,7 @@ pub(crate) unsafe trait WorkRefs<P> {
 }
 
 // SAFETY: its guard
-unsafe impl<P, R: Path<P> + OnePath> WorkRefs<P> for R
+unsafe impl<P, R: Path<P> + OnePath + Within> WorkRefs<P> for R
 where
     R::To: TryRefcount,
 {
@@ -265,7 +265,7 @@ where
 }
 
 // SAFETY: their guards, B's first - so it's put first
-unsafe impl<P, A: Path<P>, B: Path<P>> WorkRefs<P> for (A, B)
+unsafe impl<P, A: Path<P> + Within, B: Path<P>> WorkRefs<P> for (A, B)
 where
     A::To: TryRefcount,
     B::To: TryRefcount,
