@@ -47,9 +47,9 @@
 
 //! Stripes being made - ec/create.c's ec_stripe_new: a new stripe's life,
 //! from the stripe head that stages it (head.rs) to its creation. Its
-//! blocks' buckets are stripe_new_blocks.rs's, and its task
-//! stripe_new_tasks.rs's; repair's rebuild (repair.rs) makes one from the
-//! stripe it replaces.
+//! blocks' buckets are stripe_new_blocks.rs's, the old stripe it reuses
+//! stripe_new_reuse.rs's, and its task stripe_new_tasks.rs's; repair's
+//! rebuild (repair.rs) makes one from the stripe it replaces.
 //!
 //! A stripe being made is a StripeNew; C has it only by pointer, an open
 //! bucket's ->ec, as ec_stripe_new. It's owned boxed - a StripeNewBox,
@@ -126,18 +126,19 @@
 
 use crate::alloc::buckets::{bucket_to_u64, DiskReservation};
 use crate::alloc::foreground::{EcOpenBucket, OpenBucket, OpenBucketRef};
-use crate::btree::bkey::{pos, BkeySC, BkeyV};
+use crate::btree::bkey::{pos, BkeyV};
 use crate::c;
 use crate::data::ec::buf::StripeBuf;
 use crate::data::ec::open::StripeClaim;
 use crate::data::ec::stripe::{StripeKey, MAX_BLOCKS};
 use crate::data::ec::stripe_new_blocks::new_stripe_key;
+use crate::data::ec::stripe_new_reuse::Reuse;
 use crate::data::ec::stripe_new_tasks::stripe_task;
 use crate::data::moving::MovingWrite;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::{Guard, Lock};
-use crate::util::alloc::{kbox_into_inner, kbox_pin_init, AllocError, KBox, KVVec};
+use crate::util::alloc::{kbox_pin_init, AllocError, KBox, KVVec};
 use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::backref::BackRef;
 use crate::util::ffi::Opaque;
@@ -146,7 +147,6 @@ use crate::util::kernel::local_clock;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
 use crate::util::task::{spawn_unstarted, Spawn, Unstarted};
-use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use crate::{new_lock, prt};
 use arrayvec::ArrayVec;
@@ -155,7 +155,7 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use cstruct_macros::c_export;
-use pin_init::{init, init_zeroed, pin_data, pin_init, pinned_drop, Init, PinInit};
+use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 use c::ec_stripe_new_state as State;
 
 // ── A stripe being made ──────────────────────────────────────────────────
@@ -202,6 +202,17 @@ impl StripeBlock {
     pub(crate) unsafe fn new(ob: OpenBucket<'_>, fs: &BackRef<Fs>) -> Self {
         // SAFETY: the caller's
         StripeBlock::Pinned(unsafe { ob.bind(fs) })
+    }
+}
+
+impl core::ops::Deref for StripeBlock {
+    type Target = OpenBucketRef;
+
+    fn deref(&self) -> &OpenBucketRef {
+        match self {
+            StripeBlock::Pinned(ob)  => ob,
+            StripeBlock::Claimed(ob) => ob,
+        }
     }
 }
 
@@ -267,76 +278,6 @@ impl Slot {
             Slot::Empty => *self = Slot::Bucket(b),
             Slot::Moving { bucket: bucket @ None, .. } => *bucket = Some(b),
             _ => panic!("filling a stripe block that has its bucket"),
-        }
-    }
-}
-
-/// The old stripe a stripe being made reuses - a stripe it's packed into, or
-/// the one a repair rebuilds: held open, its key, and its buffer, which the
-/// carried blocks are folded in from. Which of its blocks come forward is in
-/// the new stripe's slots - Slot::Carried and Moving.
-///
-/// Boxed: it's mostly the key, kilobytes, and Some(Reuse) made by value would
-/// be a copy through the stack of the allocation path. The box is only there
-/// because pin-init can't initialize an Option in place.
-pub(crate) struct Reuse {
-    pub(crate) stripe: StripeKey,
-    /// The old stripe held open: put with the stripe being made
-    open:              StripeClaim,
-    pub(crate) buf:    Option<KBox<StripeBuf>>,
-    pub(crate) read:   OldRead,
-}
-
-/// What's been read of the old stripe.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OldRead {
-    /// Nothing, and no buffer for it yet
-    NoBuf,
-    /// Its buffer's allocated: the task reads it, and folds the carried
-    /// blocks in
-    ToRead,
-    /// Every block's in its buffer, read: a repair's, which carried them
-    Read,
-}
-
-impl Reuse {
-    /// @old, held open by @open: nothing of it read yet - or the claim
-    /// back, for the caller to put, if it can't be allocated.
-    pub(crate) fn new(old: BkeySC<'_, c::Stripe<Validated>>, open: StripeClaim)
-        -> Result<KBox<Self>, StripeClaim>
-    {
-        // the initializer runs only once there's memory for it: until then
-        // the claim's ours to give back
-        let mut open = Some(open);
-        let claim = &mut open;
-        let init = init!(Reuse {
-            stripe <- init_zeroed(),
-            open:   claim.take().expect("a claim, taken once"),
-            buf:    None,
-            read:   OldRead::NoBuf,
-        }? BchError).chain(|r| {
-            r.stripe.set(old);
-            Ok(())
-        });
-        match kbox_pin_init(init) {
-            Ok(r) => Ok(Pin::into_inner(r)),
-            Err(_) => Err(open.expect("a claim the initializer didn't run to take")),
-        }
-    }
-
-    fn put(self: KBox<Self>, fs: &Fs) {
-        let Reuse { open, .. } = kbox_into_inner(self);
-        open.put(fs);
-    }
-}
-
-impl core::ops::Deref for StripeBlock {
-    type Target = OpenBucketRef;
-
-    fn deref(&self) -> &OpenBucketRef {
-        match self {
-            StripeBlock::Pinned(ob)  => ob,
-            StripeBlock::Claimed(ob) => ob,
         }
     }
 }

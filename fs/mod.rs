@@ -168,6 +168,7 @@ pub mod data {
         pub mod stripe;
         pub mod stripe_new;
         pub mod stripe_new_blocks;
+        pub mod stripe_new_reuse;
         pub mod stripe_new_tasks;
         pub mod trigger;
         pub mod update;
