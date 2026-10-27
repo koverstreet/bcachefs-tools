@@ -108,6 +108,11 @@
 
 bool bch2_mm_avoid_compaction = true;
 module_param_named(mm_avoid_compaction, bch2_mm_avoid_compaction, bool, 0644);
+
+unsigned bch2_btree_write_io_limit = 64;
+module_param_named(btree_write_io_limit, bch2_btree_write_io_limit, uint, 0644);
+MODULE_PARM_DESC(btree_write_io_limit,
+		 "btree node writes in flight before journal reclaim waits and commits are throttled (8-4096)");
 MODULE_PARM_DESC(force_read_device, "");
 
 const char * const bch2_btree_node_flags[] = {

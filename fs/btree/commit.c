@@ -1447,6 +1447,7 @@ int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags f
 		goto out_reset;
 
 	if ((flags & BCH_WATERMARK_MASK) <= BCH_WATERMARK_normal &&
+	    !(flags & BCH_TRANS_COMMIT_no_write_ratelimit) &&
 	    likely(test_bit(JOURNAL_replay_done, &c->journal.flags)) &&
 	    unlikely(bch2_btree_cache_should_throttle(c))) {
 		ret = bch2_trans_commit_btree_write_ratelimit(trans);

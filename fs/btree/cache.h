@@ -184,7 +184,15 @@ static inline unsigned btree_blocks(const struct bch_fs *c)
 	return btree_sectors(c) >> c->block_bits;
 }
 
-#define BTREE_WRITE_IO_LIMIT(c)			64
+extern unsigned bch2_btree_write_io_limit;
+
+/*
+ * btree node writes in flight before journal reclaim waits and normal commits
+ * are throttled (bch2_trans_commit_btree_write_ratelimit()): module parameter
+ * btree_write_io_limit, runtime tunable, clamped to 8..4096
+ */
+#define BTREE_WRITE_IO_LIMIT(c)			\
+	clamp_t(unsigned, READ_ONCE(bch2_btree_write_io_limit), 8, 4096)
 
 static inline bool bch2_btree_cache_should_throttle(struct bch_fs *c)
 {
