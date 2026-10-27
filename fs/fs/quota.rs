@@ -66,8 +66,38 @@ pub fn bch2_quota_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<
     }
 }
 
+/// The quota types the mount options turn on.
+pub fn enabled_qtypes(fs: &Fs) -> u32 {
+    (fs.opts.usrquota as u32) << c::quota_types::QTYP_USR.0 |
+    (fs.opts.grpquota as u32) << c::quota_types::QTYP_GRP.0 |
+    (fs.opts.prjquota as u32) << c::quota_types::QTYP_PRJ.0
+}
+
+/// The quota types in mask @qtypes.
+pub fn set_qtypes(qtypes: u32) -> impl Iterator<Item = usize> {
+    (0..c::QTYP_NR as usize).filter(move |i| qtypes & (1 << i) != 0)
+}
+
+/// The ids an inode's usage is charged to.
+pub fn qid(u: &c::bch_inode_unpacked) -> c::bch_qid {
+    c::bch_qid { q: [u.bi_uid, u.bi_gid, u.bi_project.saturating_sub(1)] }
+}
+
 #[cfg(CONFIG_BCACHEFS_QUOTA)]
 pub use vfs::*;
+
+/// Without quotas, nothing's counted.
+#[cfg(not(CONFIG_BCACHEFS_QUOTA))]
+pub fn acct(_fs: &Fs, _qid: c::bch_qid, _counter: usize, _v: i64, _mode: c::quota_acct_mode)
+    -> Result<(), BchError> {
+    Ok(())
+}
+
+#[cfg(not(CONFIG_BCACHEFS_QUOTA))]
+pub fn transfer(_fs: &Fs, _qtypes: u32, _dst: c::bch_qid, _src: c::bch_qid, _space: u64,
+                _mode: c::quota_acct_mode) -> Result<(), BchError> {
+    Ok(())
+}
 
 #[cfg(CONFIG_BCACHEFS_QUOTA)]
 mod vfs {
@@ -121,22 +151,6 @@ mod vfs {
                          d_spc_hardlimit d_spc_softlimit d_ino_hardlimit d_ino_softlimit
                          d_space d_ino_count d_ino_timer d_spc_timer d_ino_warns d_spc_warns)
         }
-    }
-
-    /// As quota.h's bch_qid(), which vfs/fs.c still calls.
-    pub fn qid(u: &c::bch_inode_unpacked) -> c::bch_qid {
-        c::bch_qid { q: [u.bi_uid, u.bi_gid, u.bi_project.saturating_sub(1)] }
-    }
-
-    /// As quota.h's enabled_qtypes(), which C still calls.
-    pub fn enabled_qtypes(fs: &Fs) -> u32 {
-        (fs.opts.usrquota as u32) << c::quota_types::QTYP_USR.0 |
-        (fs.opts.grpquota as u32) << c::quota_types::QTYP_GRP.0 |
-        (fs.opts.prjquota as u32) << c::quota_types::QTYP_PRJ.0
-    }
-
-    fn set_qtypes(qtypes: u32) -> impl Iterator<Item = usize> {
-        (0..QTYP_NR).filter(move |i| qtypes & (1 << i) != 0)
     }
 
     // ── Enforcement ─────────────────────────────────────────────────────
