@@ -48,5 +48,6 @@ pub struct bch_fs_vfs {
     pub nocow_flush_bioset: c::bio_set,
     pub writepage_buf_pool: c::mempool_t,
     pub writeback_wq: *mut c::workqueue_struct,
+    pub check_dirents_work: c::work_struct,
 }
 c_default!(bch_fs_vfs);
