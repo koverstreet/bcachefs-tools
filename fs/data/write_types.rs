@@ -6,6 +6,7 @@ use crate::btree::bkey::BkeyI;
 use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::cstructs::c;
 use crate::errcode::BchError;
+use crate::fs::Fs;
 use crate::types::{NeBytes, c_default};
 use core::ffi::{c_int, c_uint};
 use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro, TypeInfo};
@@ -94,7 +95,8 @@ nest! {
     #[derive(CStruct, TypeInfo)]
     pub struct bch_write_op {
         pub cl: c::closure,
-        pub c: *mut c::bch_fs,
+        #[c("struct bch_fs *c")]
+        pub c: &'static Fs,
         pub end_io: Option<unsafe extern "C" fn(*mut c::bch_write_op)>,
         pub start_time: u64,
 
