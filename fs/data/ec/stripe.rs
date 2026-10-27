@@ -341,14 +341,38 @@ pub fn bch2_stripe_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, k: BkeySC<
 pub(crate) type StripeK<'a> = BkeySC<'a, c::Stripe<Validated>>;
 
 
-/// Its data blocks: each one's pointer and sector count. Of a stripe of a
-/// checksum type this version knows: one the trigger's csum_type_check()
-/// passed, or one in the stripe lru - copygc's - which lru_pos() keeps the
-/// others out of.
-pub(crate) fn data_blocks(s: StripeK<'_>) -> impl Iterator<Item = (&c::bch_extent_ptr, u16)> {
-    let v = s.v();
-    let counts = v.blockcounts().expect("a stripe of a checksum type this version knows");
-    v.block_ptrs().iter().zip(counts).map(|(p, n)| (p, n.get())).take(v.nr_data() as usize)
+/// A block of a stripe: the stripe, and one of its blocks by index - one it
+/// has, as only the stripe makes them. The index travels with its stripe, so
+/// it can't be used with another: what's wanted of a block - its pointer, its
+/// sector count - is asked of the Block.
+#[derive(Clone, Copy)]
+pub(crate) struct Block<'k> {
+    s:   StripeK<'k>,
+    idx: u8,
+}
+
+impl<'k> StripeK<'k> {
+    /// Its data blocks, as far as it has pointers: nr_redundant past
+    /// nr_blocks, damage validate passes, would wrap nr_data().
+    pub(crate) fn data_blocks(self) -> impl Iterator<Item = Block<'k>> {
+        let v = self.v();
+        let nr = (v.nr_data() as usize).min(v.block_ptrs().len());
+        (0..nr as u8).map(move |idx| Block { s: self, idx })
+    }
+}
+
+impl<'k> Block<'k> {
+    pub(crate) fn ptr(self) -> c::bch_extent_ptr {
+        self.s.v().block_ptrs()[usize::from(self.idx)]
+    }
+
+    /// Its sector count. Of a stripe of a checksum type this version knows:
+    /// one the trigger's csum_type_check() passed, or one in the stripe lru -
+    /// copygc's - which lru_pos() keeps the others out of.
+    pub(crate) fn sectors(self) -> u16 {
+        let counts = self.s.v().blockcounts().expect("a stripe of a checksum type this version knows");
+        counts[usize::from(self.idx)].get()
+    }
 }
 
 

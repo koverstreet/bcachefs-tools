@@ -19,7 +19,7 @@ use crate::btree::bkey::{pos, BkeyS, BkeySC, BkeyV, BkeyVMut};
 use crate::btree::bkey_methods::TriggerOp;
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt, UpdateTriggerFlags};
 use crate::c;
-use crate::data::ec::stripe::{data_blocks, StripeK, STRIPE_LRU_POS_EMPTY};
+use crate::data::ec::stripe::{StripeK, STRIPE_LRU_POS_EMPTY};
 use crate::data::ptrs::BkeyVPtrs;
 use crate::data::reconcile::trigger::data_to_rb_work_pos;
 use crate::errcode::{bch_errcode, BchError};
@@ -128,8 +128,8 @@ fn refresh_can_widen(fs: &Fs, new: &mut BkeyS<'_>) {
 fn stripe_frag_acct(t: &TransAttempt<'_, '_>, s: Option<StripeK<'_>>, gc: bool, sign: i64) -> Result<(), BchError> {
     let Some(s) = s else { return Ok(()) };
     let sectors = i64::from(s.v().sectors.get());
-    let nr_data = data_blocks(s).count() as i64;
-    let nr_empty = data_blocks(s).filter(|(_, n)| *n == 0).count();
+    let nr_data = s.data_blocks().count() as i64;
+    let nr_empty = s.data_blocks().filter(|b| b.sectors() == 0).count();
 
     let acct = c::disk_accounting_pos::from_arm(c::bch_acct_stripe_frag { nr_empty: nr_empty as u8 });
     accounting::add(t, &acct, &[sign * nr_data * sectors, sign * nr_empty as i64 * sectors], gc)
@@ -147,13 +147,14 @@ fn dev_stripe_frag_acct(t: &TransAttempt<'_, '_>, old: Option<StripeK<'_>>, new:
         let Some(s) = s else { return };
         let sectors = i64::from(s.v().sectors.get());
 
-        for (ptr, n) in data_blocks(s) {
-            let i = match d.iter().position(|e| e.0 == ptr.dev()) {
+        for b in s.data_blocks() {
+            let dev = b.ptr().dev();
+            let i = match d.iter().position(|e| e.0 == dev) {
                 Some(i) => i,
-                None    => { d.push((ptr.dev(), 0, 0)); d.len() - 1 }
+                None    => { d.push((dev, 0, 0)); d.len() - 1 }
             };
             d[i].1 += sign * sectors;
-            d[i].2 += if n == 0 { sign * sectors } else { 0 };
+            d[i].2 += if b.sectors() == 0 { sign * sectors } else { 0 };
         }
     }
 

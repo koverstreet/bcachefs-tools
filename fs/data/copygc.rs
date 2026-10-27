@@ -60,7 +60,6 @@ use crate::btree::bkey::{pos, BkeyV};
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, LoopFlow, TransAttempt};
 use crate::c;
 use crate::c::bch_errcode;
-use crate::data::ec::stripe::data_blocks;
 use crate::data::moving::{MoveStats, MovingCtxt};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{writepoint_ptr, Fs};
@@ -493,13 +492,11 @@ impl<'f, 'w> Copygc<'f, 'w> {
             let mut s_iter = BtreeIter::new(t, c::btree_id::stripes, c::bpos::default(), BtreeIterFlags::empty());
             let Some(s) = Self::lru_stripe(t, &mut s_iter, lru_k.k.p)? else { return Ok(LoopFlow::Continue) };
 
-            for (ptr, sectors) in data_blocks(s) {
-                if sectors == 0 {
-                    continue;
-                }
+            for b in s.data_blocks().filter(|b| b.sectors() != 0) {
+                let ptr = b.ptr();
                 let Ok(Some(ca)) = t.fs().dev_bkey_tryget(s.into(), ptr.dev().into()) else { continue };
 
-                self.try_add(t, batch, ca.ptr_bucket_pos(ptr), u64::MAX)?;
+                self.try_add(t, batch, ca.ptr_bucket_pos(&ptr), u64::MAX)?;
 
                 if batch_full(batch, self.in_flight.len()) {
                     return Ok(LoopFlow::Break(()));
@@ -529,7 +526,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
 
             let v = s.v();
             let nr_data = v.nr_data();
-            let blocks_nonempty = data_blocks(s).filter(|(_, n)| *n != 0).count() as u64;
+            let blocks_nonempty = s.data_blocks().filter(|b| b.sectors() != 0).count() as u64;
 
             /* stripe is pending delete */
             if blocks_nonempty == 0 {
