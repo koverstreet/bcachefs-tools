@@ -32,13 +32,13 @@ use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
 use crate::fs::Fs;
+use crate::util::backref::BackRef;
 use crate::util::closure::StackClosure;
 use crate::util::ffi::Opaque;
 use crate::util::hash::{hash_64, Fold};
 use crate::util::place::{self, Placed};
 use crate::util::rcu::read_lock;
 use crate::util::refcount::{RefGuard, Refcount};
-use arrayvec::ArrayVec;
 use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
 use core::ops::Deref;
@@ -204,17 +204,18 @@ impl<'f> RefGuard<'f, OpenBucketRef> {
         idx
     }
 
-    /// Held where no lifetime can say that the filesystem outlives it - in a
-    /// stripe being made, which the filesystem owns: as util/backref.rs's
-    /// BackRef, and to be made safe the same way.
+    /// Its borrow of the filesystem traded for @fs's promise, that the
+    /// filesystem outlives what holds @fs: for a stripe being made, which
+    /// the filesystem owns, to hold its pins by.
     ///
     /// # Safety
-    /// The filesystem outlives it.
-    pub unsafe fn unbound(self) -> OpenBucket<'static> {
+    /// As BackRef::get()'s: the pin is drained with @fs's holder.
+    pub unsafe fn bind(self, fs: &BackRef<Fs>) -> OpenBucket<'static> {
+        assert!(core::ptr::eq(self.fs(), &**fs), "open bucket {} bound to another filesystem", self.idx().get());
         let ob = self.raw();
         self.leak();
         // SAFETY: the pin, handed over; the slot's, of a filesystem that
-        // outlives the guard - the caller's
+        // outlives the guard
         unsafe { RefGuard::adopt(OpenBucketRef::from_c(ob)) }
     }
 
@@ -282,12 +283,35 @@ impl Drop for EcOpenBucket<'_> {
 }
 
 impl c::open_buckets {
-    /// Its pins, taken - a list holds one on each of its buckets - leaving it
-    /// empty.
-    pub fn take<'f>(&mut self, fs: &'f Fs) -> ArrayVec<OpenBucket<'f>, { c::BCH_BKEY_PTRS_MAX as usize }> {
+    /// Its pins, taken one by one - a list holds one on each of its buckets -
+    /// leaving it empty: the rest put when the iterator's dropped. Not
+    /// collected: a list of them is a copy, on the stack, of what the list
+    /// already has.
+    pub fn drain<'f>(&mut self, fs: &'f Fs) -> OpenBucketsDrain<'f, '_> {
         let nr = core::mem::take(&mut self.nr) as usize;
-        // SAFETY: the list's pins, which it no longer has
-        self.v[..nr].iter().map(|&idx| unsafe { OpenBucket::from_idx(fs, idx.expect("a bucket of the list")) }).collect()
+        OpenBucketsDrain { fs, idxs: self.v[..nr].iter() }
+    }
+}
+
+/// open_buckets::drain()'s: pins the list no longer has.
+pub struct OpenBucketsDrain<'f, 'l> {
+    fs:   &'f Fs,
+    idxs: core::slice::Iter<'l, Option<c::OpenBucketIdx>>,
+}
+
+impl<'f> Iterator for OpenBucketsDrain<'f, '_> {
+    type Item = OpenBucket<'f>;
+
+    fn next(&mut self) -> Option<OpenBucket<'f>> {
+        let idx = self.idxs.next()?.expect("a bucket of the list");
+        // SAFETY: the list's pin, which it no longer has, handed out once
+        Some(unsafe { OpenBucket::from_idx(self.fs, idx) })
+    }
+}
+
+impl Drop for OpenBucketsDrain<'_, '_> {
+    fn drop(&mut self) {
+        self.for_each(drop);
     }
 }
 
