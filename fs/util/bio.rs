@@ -181,6 +181,11 @@ impl Bio {
         self.raw_mut().bi_iter.bi_sector = sector;
     }
 
+    /// Its size, for a bio with no data to size it by: a discard's.
+    pub fn set_size(self: Pin<&mut Self>, bytes: u32) {
+        self.raw_mut().bi_iter.bi_size = bytes;
+    }
+
     /// Its completed IO's result: a BCH_ERR_BLK_STS_* errcode on failure.
     pub fn status(&self) -> Result<(), BchError> {
         match self.bio.bi_status {

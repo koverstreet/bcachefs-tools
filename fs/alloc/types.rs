@@ -4,12 +4,17 @@
 
 use crate::cstructs::c;
 use crate::fs::Fs;
-use crate::util::Printbuf;
-use crate::types::{CacheAligned, DArray, c_default};
+use crate::alloc::discard::{do_discards_work, DiscardBio, DiscardState};
+use crate::util::alloc::KVVec;
+use crate::locking::{Lock, SeqLock};
+use crate::new_lock;
+use crate::types::{CacheAligned, RustOnly, c_default, rust_only};
+use crate::util::bio::BioSet;
+use crate::util::workqueue::ReffedWork;
 use crate::util::percpu::{Counters, PerCpu};
 use core::ffi::{c_uint, c_ulong};
 use core::sync::atomic::{AtomicI32, AtomicI64};
-use cstruct_macros::{bitfield, c_const, c_enum, c_extern, c_typedef, c_xmacro, placed, CStruct, Fieldwise, Init, TypeInfo};
+use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, placed, CStruct, Fieldwise, Init, TypeInfo};
 use pin_init::pin_data;
 use nestify::nest;
 
@@ -370,99 +375,28 @@ impl bch_fs_allocator {
     }
 }
 
+/// The discard worker's: its work, its bios, the discards in flight - see
+/// alloc/discard.rs.
+#[placed(Fs.discards)]
+#[pin_data]
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
-#[c_typedef]
-pub struct discard_in_flight {
-    pub dev_bucket: u64,
-    /*
-     * Stashed at add time so completion doesn't have to re-derive ca via
-     * c->devs[idx], which dev_remove may have cleared while our io_ref
-     * still pins the dev object.
-     */
-    pub ca: *mut c::bch_dev,
-    pub complete: bool,
-    pub marking_free: bool,
-}
-c_default!(discard_in_flight);
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct discard_release {
-    pub buffer: u64,
-    pub pending_need_flush: u64,
-    pub pending_need_rewind_advance: u64,
-    pub pending_total: u64,
-    pub free: u64,
-    pub reserve: u64,
-    pub buffer_clamped: u64,
-    pub release: i64,
-    pub new_rewind_seq: u64,
-    pub flush_journal: bool,
-    pub flush_wb: bool,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct discard_state {
-    pub seen: u64,
-    pub not_rw: u64,
-    pub eexist: u64,
-    pub eagain: u64,
-    pub open: u64,
-    pub need_journal_commit: u64,
-    pub need_rewind_advance: u64,
-    pub bad_data_type: u64,
-    pub discarded: u64,
-    pub committed: u64,
-    pub pos: c::bpos,
-    pub r: c::discard_release,
-}
-
-#[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_discards {
-    pub work: c::work_struct,
-    pub bioset: c::bio_set,
+    #[c("struct work_struct work")]
+    #[pin]
+    pub(crate) work: ReffedWork<do_discards_work, crate::field!(super.writes)>,
+    #[c("struct bio_set bioset")]
+    #[pin]
+    #[init(BioSet::new(4, false))]
+    pub(crate) bioset: BioSet<DiscardBio>,
 
-    pub lock: c::spinlock_t,
-    pub in_flight: DArray<c::discard_in_flight>,
-    pub ready: u32,
-    pub ref_: u32,
-    pub refs: [u8; c::BCH_SB_MEMBERS_MAX as usize],
-    pub wait: c::closure_waitlist,
+    /// Buckets with a discard issued, by any worker, not yet marked free.
+    #[pin]
+    #[init(RustOnly::new(new_lock!(KVVec::new())))]
+    pub(crate) in_flight: rust_only!(Lock<c::mutex, KVVec<u64>>),
 
-    pub s: c::discard_state,
-}
-c_default!(bch_fs_discards);
-
-c_extern! {
-    pub fn bch2_discards_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, s: *mut c::discard_state);
-    pub fn bch2_do_discards_async(c: *mut c::bch_fs);
-    pub fn bch2_do_invalidates(c: *mut c::bch_fs);
-    pub fn bch2_fast_discards_to_text(out: *mut c::printbuf, ca: *mut c::bch_dev);
-}
-
-impl c::bch_dev {
-    /// Its discards in flight - the fast path's.
-    pub fn fast_discards_to_text(&self, out: &mut Printbuf) {
-        unsafe { bch2_fast_discards_to_text(out.as_raw(), core::ptr::from_ref(self).cast_mut()) }
-    }
-}
-
-impl Fs {
-    pub fn discards_to_text(&self, out: &mut Printbuf, s: &c::discard_state) {
-        unsafe { bch2_discards_to_text(out.as_raw(), self.as_ptr(), core::ptr::from_ref(s).cast_mut()) }
-    }
-
-    /// Kick the discard worker - unless the filesystem is going read-only;
-    /// it takes its own write ref.
-    pub fn do_discards_async(&self) {
-        unsafe { bch2_do_discards_async(self.as_ptr()) }
-    }
-
-    /// Kick each device's invalidate worker - which takes its own refs.
-    pub fn do_invalidates(&self) {
-        unsafe { bch2_do_invalidates(self.as_ptr()) }
-    }
+    /// The worker's progress, for sysfs and the allocator's stuck report.
+    #[pin]
+    #[init(RustOnly::new(SeqLock::new(DiscardState::default())))]
+    pub(crate) s: rust_only!(SeqLock<DiscardState>),
 }

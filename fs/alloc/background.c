@@ -935,7 +935,7 @@ int bch2_trigger_alloc(struct btree_trans *trans, struct btree_trigger_op op)
 
 		if (statechange_to(a->data_type == BCH_DATA_cached) &&
 		    !bch2_bucket_is_open(c, op.new.k->p.inode, op.new.k->p.offset) &&
-		    should_invalidate_buckets(ca, bch2_dev_usage_read(ca)))
+		    bch2_should_invalidate_buckets(ca, bch2_dev_usage_read(ca)))
 			bch2_dev_do_invalidates(ca);
 
 		if (statechange_to(a->data_type == BCH_DATA_need_gc_gens))

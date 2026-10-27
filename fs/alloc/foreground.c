@@ -818,7 +818,7 @@ again:
 	if (req->usage.buckets[BCH_DATA_need_gc_gens] > avail)
 		bch2_gc_gens_async(c);
 
-	if (should_invalidate_buckets(ca, req->usage))
+	if (bch2_should_invalidate_buckets(ca, req->usage))
 		bch2_dev_do_invalidates(ca);
 
 	if (!avail) {
@@ -2295,7 +2295,7 @@ __cold void bch2_dev_alloc_debug_to_text(struct printbuf *out, struct bch_dev *c
 
 	prt_printf(out, "open buckets\t%i\r\n",	ca->nr_open_buckets);
 	prt_printf(out, "buckets to invalidate\t%llu\r\n",
-		   should_invalidate_buckets(ca, bch2_dev_usage_read(ca)));
+		   bch2_should_invalidate_buckets(ca, bch2_dev_usage_read(ca)));
 }
 
 static void dev_alloc_debug_header(struct printbuf *out, struct bch_dev *ca)
@@ -2462,7 +2462,7 @@ static noinline void bch2_print_allocator_stuck(struct bch_fs *c, struct alloc_r
 		if (need_discard > max(0, (s64) (free - reserve * 4))) {
 			prt_printf(&buf, "Discard debug:\n");
 			guard(printbuf_indent)(&buf);
-			bch2_discards_to_text(&buf, c, &c->discards.s);
+			bch2_discards_to_text(&buf, c);
 		}
 
 		prt_printf(&buf, "Copygc debug:\n");

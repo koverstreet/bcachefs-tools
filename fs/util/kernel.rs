@@ -50,6 +50,19 @@ pub fn bdev_logical_block_size(bdev: &c::block_device) -> u32 {
     return unsafe { c::bdev_logical_block_size(core::ptr::from_ref(bdev).cast_mut()) };
 }
 
+/// The most @bdev discards at once, in sectors - 0 if it doesn't:
+/// bdev_max_discard_sectors(). Userspace discards nothing, as its shim says.
+pub fn bdev_max_discard_sectors(bdev: &c::block_device) -> u32 {
+    // SAFETY: a block device's queue, for as long as it's open
+    #[cfg(kernel)]
+    return unsafe { (*bdev.bd_queue).limits.max_discard_sectors };
+    #[cfg(not(kernel))]
+    {
+        let _ = bdev;
+        0
+    }
+}
+
 pub fn random_u64() -> u64 {
     unsafe { c::bch2_get_random_u64() }
 }

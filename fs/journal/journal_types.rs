@@ -37,6 +37,7 @@ c_default!(journal_block);
 
 c_extern! {
     pub fn bch2_journal_flush(j: *mut c::journal) -> c_int;
+    pub fn bch2_journal_advance_rewind_seq(j: *mut c::journal, seq: u64);
     pub fn bch2_journal_meta(j: *mut c::journal) -> c_int;
     pub fn bch2_journal_do_writes(j: *mut c::journal);
     pub fn bch2_journal_debug_to_text(out: *mut c::printbuf, j: *mut c::journal);
@@ -53,6 +54,12 @@ impl Fs {
     /// it to be flushed.
     pub fn journal_meta(&self) -> Result<(), BchError> {
         ret_to_result_void(unsafe { bch2_journal_meta(&raw mut (*self.as_ptr()).journal) })
+    }
+
+    /// Advance the rewind limit to @seq: buckets emptied before it may be
+    /// discarded, once a journal flush has the limit on disk.
+    pub fn journal_advance_rewind_seq(&self, seq: u64) {
+        unsafe { bch2_journal_advance_rewind_seq(&raw mut (*self.as_ptr()).journal, seq) }
     }
 
     /// Start writes of whatever's ready to be written.

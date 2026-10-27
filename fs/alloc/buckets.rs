@@ -47,6 +47,19 @@ impl c::bch_dev {
         b * u64::from(self.mi.bucket_size)
     }
 
+    /// Whether the allocator mustn't use bucket @b - migrate marks the space
+    /// it can't: bch2_bucket_nouse().
+    pub fn bucket_nouse(&self, b: u64) -> bool {
+        let p = self.buckets_nouse.load(Ordering::Acquire);
+        !p.is_null() && {
+            let bits = c_ulong::BITS as u64;
+            // SAFETY: its bitmap, a bit per bucket, freed with the device; its
+            // words set atomically, as test_bit() reads them
+            let w = unsafe { &*p.add((b / bits) as usize).cast::<core::sync::atomic::AtomicUsize>() };
+            w.load(Ordering::Relaxed) & 1 << (b % bits) != 0
+        }
+    }
+
     /// The bucket sector @s is in, and how far into it:
     /// sector_to_bucket_and_offset().
     pub fn sector_to_bucket_and_offset(&self, s: u64) -> (u64, u32) {

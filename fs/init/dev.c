@@ -503,7 +503,6 @@ void bch2_dev_free(struct bch_dev *ca)
 	bch2_bucket_bitmap_free(&ca->bucket_backpointer_empty);
 
 	bch2_free_super(&ca->disk_sb);
-	bch2_dev_discards_exit(ca);
 	bch2_dev_journal_exit(ca);
 
 	free_percpu(ca->io_done);
@@ -611,7 +610,6 @@ static struct bch_dev *__bch2_dev_alloc(struct bch_fs *c,
 	    enumerated_ref_init(&ca->io_ref[WRITE], BCH_DEV_WRITE_REF_NR, NULL) ||
 	    !(ca->sb_read_scratch = kmalloc(BCH_SB_READ_SCRATCH_BUF_SIZE, GFP_KERNEL)) ||
 	    bch2_dev_buckets_alloc(c, ca) ||
-	    bch2_dev_discards_init(ca) ||
 	    !(ca->io_done	= alloc_percpu(*ca->io_done)))
 		goto err;
 

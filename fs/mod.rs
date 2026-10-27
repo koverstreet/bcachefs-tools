@@ -69,6 +69,7 @@ pub mod alloc {
     pub mod check;
     pub mod check_backpointers;
     pub mod check_data;
+    pub mod discard;
     pub mod disk_groups;
     pub mod foreground;
     pub mod lru;

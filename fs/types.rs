@@ -2,7 +2,12 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::alloc::discard::{do_discards_fast, do_invalidates_work};
 use crate::cstructs::c;
+use crate::new_lock;
+use crate::util::alloc::KVVec;
+use crate::util::kernel::WRITE;
+use crate::util::workqueue::ReffedWork;
 use crate::locking::{Lock, LockedBy, MutexNoio, PercpuRwsemNoio};
 use crate::util::percpu::{Counters, PerCpu};
 use crate::util::vstructs::Head;
@@ -429,11 +434,24 @@ pub struct bch_dev {
     /* this device's share of c->capacity.reserved, which is their sum */
     pub reserved_sectors: u64,
 
-    pub invalidate_work: c::work_struct,
+    #[c("struct work_struct invalidate_work")]
+    #[pin]
+    pub(crate) invalidate_work:
+        ReffedWork<do_invalidates_work, (crate::field!(io_ref[WRITE]), crate::field!(fs->writes))>,
 
-    pub discard_fast_work: c::work_struct,
-    pub discard_fast: c::darray_u64,
-    pub discard_fast_lock: c::mutex,
+    #[c("struct work_struct discard_fast_work")]
+    #[pin]
+    pub(crate) discard_fast_work:
+        ReffedWork<do_discards_fast, (crate::field!(io_ref[WRITE]), crate::field!(fs->writes))>,
+    /// Buckets queued for fast discard: alloc/discard.rs's alone.
+    #[pin]
+    #[init(RustOnly::new(new_lock!(KVVec::new())))]
+    pub(crate) discard_fast: rust_only!(Lock<c::mutex, KVVec<u64>>),
+    /// Discards in flight on it, by every worker: a futex word, a worker at
+    /// the limit sleeping on it.
+    #[pin]
+    #[init(RustOnly::new(core::sync::atomic::AtomicU8::new(0)))]
+    pub(crate) discards_in_flight: rust_only!(core::sync::atomic::AtomicU8),
 
     pub rebalance_work: AtomicI64,
 
@@ -707,6 +725,7 @@ pub struct Fs {
     pub capacity: c::bch_fs_capacity,
     #[pin]
     pub allocator: c::bch_fs_allocator,
+    #[pin]
     pub discards: c::bch_fs_discards,
 
     #[pin]

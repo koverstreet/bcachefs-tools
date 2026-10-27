@@ -514,7 +514,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
 
 /// Schedules check_extents_to_backpointers - ratelimited from copygc, until 1/128
 /// of the device's buckets are short.
-fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: &c::bch_dev, bucket: u64,
+pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: &c::bch_dev, bucket: u64,
                                          copygc: bool, mut last_flushed: WbFlush<'_>)
     -> Result<(), BchError>
 {
