@@ -61,6 +61,11 @@ const DESCS: [Desc; NR] = c::BCH_INODE_OPTS!(descs);
 pub struct InodeOpt(c::inode_opt_id);
 
 impl InodeOpt {
+    pub const fn of(id: c::inode_opt_id) -> Self {
+        assert!(id.0 < c::inode_opt_id::Inode_opt_nr.0, "not an inode option");
+        InodeOpt(id)
+    }
+
     pub fn all() -> impl Iterator<Item = InodeOpt> {
         (0..c::inode_opt_id::Inode_opt_nr.0).map(|i| InodeOpt(c::inode_opt_id(i)))
     }
