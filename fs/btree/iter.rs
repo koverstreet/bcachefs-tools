@@ -818,6 +818,18 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(unsafe { core::slice::from_raw_parts_mut(ptr, bytes) })
     }
 
+    /// A @T in this attempt's memory, zeroed: kmalloc()'s, typed. The memory
+    /// is freed when the transaction next begins, without running
+    /// destructors, so @T has none.
+    pub fn alloc_zeroed<T: ::pin_init::Zeroable>(&self) -> Result<&'a mut T, BchError> {
+        // bch2_trans_kmalloc() gives 8 byte alignment:
+        const { assert!(core::mem::align_of::<T>() <= 8 && !core::mem::needs_drop::<T>()) };
+
+        let p = self.kmalloc_raw(size_of::<T>())? as *mut T;
+        // SAFETY: zeroed, and all-zeroes is a @T; aligned, and this attempt's
+        unsafe { Ok(&mut *p) }
+    }
+
     /// @bytes of zeroed transaction memory, rounded up to u64s: off the top of
     /// the transaction's buffer, or __bch2_trans_kmalloc() grows it - which
     /// restarts the transaction if it had a buffer already. As
