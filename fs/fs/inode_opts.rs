@@ -737,11 +737,6 @@ impl c::inode_opt_change {
     }
 }
 
-#[c_export]
-pub fn bch2_inode_opt_change_finish(trans: &BtreeTrans<'_>, ch: &mut c::inode_opt_change) -> c_int {
-    ret_to_c(ch.finish(trans))
-}
-
 /// Check that @inode's options have been pushed up to its ancestor snapshots,
 /// repairing if not: as bch2_check_inode_opts_propagated().
 ///

@@ -29,24 +29,4 @@ static inline int dirent_points_to_inode_nowarn(struct bch_fs *c,
 	return bch_err_throw(c, ENOENT_dirent_doesnt_match_inode);
 }
 
-static inline bool inode_points_to_dirent(struct bch_inode_unpacked *inode,
-					  struct bkey_s_c_dirent d)
-{
-	return  inode->bi_dir		== d.k->p.inode &&
-		inode->bi_dir_offset	== d.k->p.offset;
-}
-
-static inline int bch2_check_dirent_target(struct btree_trans *trans,
-					   struct btree_iter *dirent_iter,
-					   struct bkey_s_c_dirent d,
-					   struct bch_inode_unpacked *target,
-					   bool in_fsck)
-{
-	if (likely(inode_points_to_dirent(target, d) &&
-		   d.v->d_type == inode_d_type(target)))
-		return 0;
-
-	return __bch2_check_dirent_target(trans, dirent_iter, d, target, in_fsck);
-}
-
 #endif /* _BCACHEFS_NAMEI_H */

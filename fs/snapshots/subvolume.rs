@@ -163,16 +163,6 @@ pub fn is_ro_trans(t: &TransAttempt<'_, '_>, subvol: u32) -> Result<u32, BchErro
     Ok(s.snapshot())
 }
 
-#[c_export]
-pub fn bch2_subvol_is_ro_trans(
-    trans:  &BtreeTrans<'_>,
-    subvol: u32,
-    snapid: &mut u32,
-) -> core::ffi::c_int {
-    ret_to_c(is_ro_trans(&unsafe { trans.attempt_in_progress() }, subvol)
-             .map(|s| *snapid = s))
-}
-
 pub fn is_ro(fs: &Fs, subvol: u32) -> Result<(), BchError> {
     let trans = crate::btree_trans!(fs);
     lockrestart_do(&trans, |t| is_ro_trans(t, subvol).map(|_| ()))

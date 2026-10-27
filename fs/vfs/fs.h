@@ -139,11 +139,16 @@ static inline void bch2_dir_casefold_changed(struct dentry *dentry) {}
 
 #include "vfs/attr_gen.h"
 #include "vfs/inode_gen.h"
+#include "vfs/namei_gen.h"
 
 struct bch_inode_info *bch2_vfs_inode_get_trans(struct btree_trans *, subvol_inum, const char *);
-struct inode *bch2_vfs_inode_get(struct bch_fs *, subvol_inum, const char *);
 
-int __bch2_unlink(struct inode *, struct dentry *, bool);
+/* For Rust's lookup, until the inode cache is Rust: */
+struct bch_inode_info *bch2_inode_hash_find(struct bch_fs *, struct btree_trans *, subvol_inum);
+struct bch_inode_info *bch2_inode_hash_init_insert(struct btree_trans *, subvol_inum,
+						   struct bch_inode_unpacked *,
+						   struct bch_subvolume *);
+struct inode *bch2_vfs_inode_get(struct bch_fs *, subvol_inum, const char *);
 
 int bch2_fiemap(struct inode *, struct fiemap_extent_info *, u64, u64);
 

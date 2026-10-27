@@ -302,8 +302,8 @@ pub unsafe extern "C" fn bch2_create_trans(
 }
 
 /// Link inode @inum into directory @dir as @name - not across subvolumes,
-/// or into a directory whose options it would have to take on: as
-/// bch2_link_trans(). @dir_u and @inode_u are read and returned.
+/// or into a directory whose options it would have to take on. @dir_u and
+/// @inode_u are read and returned.
 pub fn link_trans(
     t:       &TransAttempt<'_, '_>,
     dir:     c::subvol_inum,
@@ -347,23 +347,6 @@ pub fn link_trans(
     inode::write(t, &mut inode_iter, inode_u)
 }
 
-/// For C's VFS: bch2_link_trans().
-///
-/// # Safety
-/// @name valid for the call.
-#[c_export]
-pub unsafe extern "C" fn bch2_link_trans(
-    trans:   &BtreeTrans<'_>,
-    dir:     c::subvol_inum,
-    dir_u:   &mut c::bch_inode_unpacked,
-    inum:    c::subvol_inum,
-    inode_u: &mut c::bch_inode_unpacked,
-    name:    &c::qstr,
-) -> c_int {
-    ret_to_c(link_trans(&unsafe { trans.attempt_in_progress() }, dir, dir_u, inum,
-                        inode_u, unsafe { qstr_name(name) }))
-}
-
 /// The VFS asked to unlink @wanted as @name, and @name names @got: the
 /// dcache and the btree disagree, and neither can be trusted - go emergency
 /// read-only, and say so with @wanted's path.
@@ -391,8 +374,7 @@ fn report_bad_unlink(
 
 /// Unlink @name from directory @dir - inode @inode, if the caller knows
 /// which it should be; with @deleting_subvol, a subvolume's root, deleting
-/// the subvolume: as bch2_unlink_trans(). @dir_u and @inode_u are read and
-/// returned.
+/// the subvolume. @dir_u and @inode_u are read and returned.
 #[allow(clippy::too_many_arguments)]
 pub fn unlink_trans(
     t:               &TransAttempt<'_, '_>,
@@ -477,24 +459,6 @@ pub fn unlink_trans(
     inode::write(t, &mut inode_iter, inode_u)
 }
 
-/// For C's VFS: bch2_unlink_trans().
-///
-/// # Safety
-/// @name valid for the call.
-#[c_export]
-pub unsafe extern "C" fn bch2_unlink_trans(
-    trans:           &BtreeTrans<'_>,
-    dir:             c::subvol_inum,
-    dir_u:           &mut c::bch_inode_unpacked,
-    inode:           c::subvol_inum,
-    inode_u:         &mut c::bch_inode_unpacked,
-    name:            &c::qstr,
-    deleting_subvol: bool,
-) -> c_int {
-    ret_to_c(unlink_trans(&unsafe { trans.attempt_in_progress() }, dir, dir_u, inode,
-                          inode_u, unsafe { qstr_name(name) }, deleting_subvol))
-}
-
 /// Subvolume @subvol's path in the filesystem now starts in subvolume
 /// @new_parent.
 fn subvol_update_parent(t: &TransAttempt<'_, '_>, subvol: u32, new_parent: u32)
@@ -508,12 +472,12 @@ fn subvol_update_parent(t: &TransAttempt<'_, '_>, subvol: u32, new_parent: u32)
 
 /// Rename @src_name in directory @src_dir to @dst_name in @dst_dir - for
 /// BCH_RENAME_OVERWRITE replacing what's there, for BCH_RENAME_EXCHANGE
-/// swapping the two: as bch2_rename_trans(). The directories and inodes are
-/// read and returned; @dst_dir_u isn't touched if it's the same directory.
+/// swapping the two. The directories and inodes are read and returned;
+/// @dst_dir_u isn't touched if it's the same directory.
 ///
 /// An inode moved to another directory takes on its options, and if that
 /// changes what its data should be, @src_opt_change and @dst_opt_change say
-/// so: rename_opt_changes_finish(), after the commit, acts on them.
+/// so: their finish(), after the commit, acts on them.
 #[allow(clippy::too_many_arguments)]
 pub fn rename_trans(
     t:              &TransAttempt<'_, '_>,
@@ -706,44 +670,6 @@ pub fn rename_trans(
     }
 
     Ok(())
-}
-
-/// For C's VFS: bch2_rename_trans().
-///
-/// # Safety
-/// The names valid for the call; the inodes four different ones, as their
-/// &muts say.
-#[c_export]
-#[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn bch2_rename_trans(
-    trans:          &BtreeTrans<'_>,
-    src_dir:        c::subvol_inum,
-    src_dir_u:      &mut c::bch_inode_unpacked,
-    dst_dir:        c::subvol_inum,
-    dst_dir_u:      &mut c::bch_inode_unpacked,
-    src_inode_u:    &mut c::bch_inode_unpacked,
-    dst_inode_u:    &mut c::bch_inode_unpacked,
-    src_name:       &c::qstr,
-    dst_name:       &c::qstr,
-    mode:           c::bch_rename_mode,
-    src_opt_change: &mut c::inode_opt_change,
-    dst_opt_change: &mut c::inode_opt_change,
-) -> c_int {
-    ret_to_c(rename_trans(&unsafe { trans.attempt_in_progress() }, src_dir, src_dir_u,
-                          dst_dir, dst_dir_u, src_inode_u, dst_inode_u,
-                          unsafe { qstr_name(src_name) }, unsafe { qstr_name(dst_name) },
-                          mode, src_opt_change, dst_opt_change))
-}
-
-/// After rename_trans() has committed: what it left in @src and @dst to do.
-pub fn rename_opt_changes_finish(
-    fs:  &Fs,
-    src: &mut c::inode_opt_change,
-    dst: &mut c::inode_opt_change,
-) -> Result<(), BchError> {
-    let trans = crate::btree_trans!(fs);
-    src.finish(&trans)?;
-    dst.finish(&trans)
 }
 
 // ── From an inode to its path ────────────────────────────────────────────
@@ -1194,7 +1120,7 @@ fn check_dirent_inode_dirent(
     Ok(())
 }
 
-/// The slow path of check_dirent_target(): as __bch2_check_dirent_target().
+/// The slow path of check_dirent_target().
 fn __check_dirent_target(
     t:           &TransAttempt<'_, '_>,
     dirent_iter: &BtreeIter<'_>,
@@ -1232,8 +1158,7 @@ fn __check_dirent_target(
 
 /// Check that @d, a dirent at @iter, and @target, the inode it points at,
 /// agree - the inode's backpointer and the dirent's d_type - repairing
-/// whichever is wrong, as fsck: as bch2_check_dirent_target(), with
-/// @in_fsck.
+/// whichever is wrong, as fsck does with @in_fsck.
 pub fn check_dirent_target(
     t:       &TransAttempt<'_, '_>,
     iter:    &BtreeIter<'_>,
@@ -1246,26 +1171,6 @@ pub fn check_dirent_target(
     }
 
     __check_dirent_target(t, iter, d, target, in_fsck)
-}
-
-/// For C's VFS lookup, through namei.h's bch2_check_dirent_target():
-/// __bch2_check_dirent_target().
-///
-/// # Safety
-/// @d a dirent from the btree, valid for the call.
-#[c_export]
-pub unsafe extern "C" fn __bch2_check_dirent_target<'t>(
-    trans:       &'t BtreeTrans<'t>,
-    dirent_iter: &mut BtreeIter<'t>,
-    d:           c::bkey_s_c_dirent,
-    target:      &mut c::bch_inode_unpacked,
-    in_fsck:     bool,
-) -> c_int {
-    let k = c::bkey_s_c::from(d);
-
-    ret_to_c(__check_dirent_target(&unsafe { trans.attempt_in_progress() }, dirent_iter,
-                                   Dirent::new(unsafe { BkeySC::from_c(&k) }).expect("a dirent"),
-                                   target, in_fsck))
 }
 
 // ── BCH_INODE_has_case_insensitive ───────────────────────────────────────

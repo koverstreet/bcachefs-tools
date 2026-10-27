@@ -49,6 +49,7 @@ use crate::c;
 use crate::errcode::{errptr_to_result, ret_to_c, ret_to_class, ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::inode;
+use crate::inode_opts::InodeOpt;
 use crate::locking::{Guard, Lock};
 use crate::quota;
 use crate::util::ffi::Opaque;
@@ -62,6 +63,12 @@ pub use c::InodeInfo;
 c_extern! {
     pub fn bch2_vfs_inode_get_trans(trans: *mut c::btree_trans, inum: c::subvol_inum,
                                     func: *const crate::util::ffi::c_char) -> *mut c::bch_inode_info;
+    // fs.c's inode cache, for lookup:
+    fn bch2_inode_hash_find(c: *mut c::bch_fs, trans: *mut c::btree_trans,
+                            inum: c::subvol_inum) -> *mut c::bch_inode_info;
+    fn bch2_inode_hash_init_insert(trans: *mut c::btree_trans, inum: c::subvol_inum,
+                                   bi: *mut c::bch_inode_unpacked,
+                                   subvol: *mut c::Subvolume) -> *mut c::bch_inode_info;
 }
 
 pub type InodeRef = ARef<InodeInfo>;
@@ -113,6 +120,28 @@ impl InodeInfo {
     /// @inum's, looked up in @t, the inode cache first.
     pub fn get_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<InodeRef, BchError> {
         unsafe { Self::from_c(bch2_vfs_inode_get_trans(t.raw(), inum, crate::c_function_name!().as_ptr().cast())) }
+    }
+
+    /// @inum's, if the inode cache has it. It waits out one being evicted,
+    /// unlocking @t: a restart then.
+    pub(crate) fn cache_find(t: &TransAttempt<'_, '_>, inum: c::subvol_inum)
+        -> Result<Option<InodeRef>, BchError>
+    {
+        let ei = unsafe { bch2_inode_hash_find(t.fs().as_ptr(), t.raw(), inum) };
+        if ei.is_null() {
+            return Ok(None);
+        }
+        unsafe { Self::from_c(ei) }.map(Some)
+    }
+
+    /// A new VFS inode for @inum, made from @bi and put in the inode cache -
+    /// or the one already there, if another lookup got there first. No
+    /// restart is taken from here on: commit what the caller has first.
+    pub(crate) fn cache_insert(t: &TransAttempt<'_, '_>, inum: c::subvol_inum,
+                               bi: &mut c::bch_inode_unpacked, subvol: &mut c::Subvolume)
+        -> Result<InodeRef, BchError>
+    {
+        unsafe { Self::from_c(bch2_inode_hash_init_insert(t.raw(), inum, bi, subvol)) }
     }
 
     pub fn raw(&self) -> *mut c::bch_inode_info {
@@ -294,6 +323,17 @@ impl<'i> UpdateLock<'i> {
         qid.q[c::quota_types::QTYP_PRJ.0 as usize] = projid;
 
         self.quota_transfer(qid, 1 << c::quota_types::QTYP_PRJ.0, c::quota_acct_mode::KEY_TYPE_QUOTA_PREALLOC)
+    }
+
+    /// Move the inode to @dir's project, if moving it into @dir would: it has
+    /// no project of its own, and @dir's is different.
+    pub fn inherit_project(&self, dir: &InodeInfo) -> Result<(), BchError> {
+        let project = InodeOpt::of(c::inode_opt_id::Inode_opt_project);
+        let (bi, dir_bi) = (self.inode.inode(), dir.inode());
+        if project.is_own(&bi) || project.get(&dir_bi) == project.get(&bi) {
+            return Ok(());
+        }
+        self.set_projid(dir.ei_quota.lock().ei_qid.q[c::quota_types::QTYP_PRJ.0 as usize])
     }
 
     /// Change the inode with @set, in a transaction of its own that's

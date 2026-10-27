@@ -23,7 +23,7 @@ use crate::btree::iter::{
     UpdateTriggerFlags,
 };
 use crate::c;
-use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, BchError};
 #[cfg(CONFIG_UNICODE)]
 use crate::errcode::ret_to_result_void as ret_to_result;
 use crate::fs::Fs;
@@ -374,8 +374,8 @@ pub unsafe extern "C" fn bch2_dirent_get_name(d: c::bkey_s_c_dirent) -> c::qstr 
 }
 
 /// What @d, a dirent in directory @dir, points at - an inode in @dir's
-/// subvolume, or a subvolume's root: as bch2_dirent_read_target(). None for a
-/// subvolume's dirent that lists in another subvolume.
+/// subvolume, or a subvolume's root. None for a subvolume's dirent that lists
+/// in another subvolume.
 pub fn read_target(
     t:   &TransAttempt<'_, '_>,
     dir: c::subvol_inum,
@@ -417,7 +417,7 @@ pub unsafe extern "C" fn bch2_dirent_read_target(
 }
 
 /// What a lookup found: its target - ENOENT for a dirent @dir doesn't list.
-fn lookup_target(
+pub fn lookup_target(
     t:   &TransAttempt<'_, '_>,
     dir: c::subvol_inum,
     k:   BkeySC<'_, c::Dirent>,
@@ -456,29 +456,6 @@ pub fn lookup_key<'i, 'a>(
 ) -> Result<BkeySC<'i, c::Dirent>, BchError> {
     let lookup_name = maybe_casefold(t, hash_info, name)?;
     str_hash::lookup::<Dirents>(t, iter, hash_info, dir, lookup_name, flags)
-}
-
-/// For C's VFS lookup, which goes on to check the dirent against its inode:
-/// lookup_key(), the key or an error.
-///
-/// # Safety
-/// @name valid for the call.
-#[c_export]
-pub unsafe extern "C" fn bch2_dirent_lookup_key<'t>(
-    trans:     &'t BtreeTrans<'t>,
-    iter:      &mut BtreeIter<'t>,
-    dir:       c::subvol_inum,
-    hash_info: &c::bch_hash_info,
-    name:      &c::qstr,
-) -> c::bkey_s_c {
-    match lookup_key(&unsafe { trans.attempt_in_progress() }, iter,
-                     dir, hash_info, unsafe { qstr_name(name) }, BtreeIterFlags::empty()) {
-        Ok(k)  => k.into(),
-        Err(e) => c::bkey_s_c {
-            k: err_ptr(e),
-            v: core::ptr::null_mut(),
-        },
-    }
 }
 
 /// What @name in directory @dir points at: as bch2_dirent_lookup_trans().

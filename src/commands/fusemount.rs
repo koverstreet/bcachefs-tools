@@ -377,7 +377,10 @@ fn fuse_rename(
         },
     )?;
 
-    namei::rename_opt_changes_finish(fs, &mut src_opt_change, &mut dst_opt_change)?;
+    // What the rename left to do, after its commit
+    let trans = bcachefs_kernel::btree_trans!(fs);
+    src_opt_change.finish(&trans)?;
+    dst_opt_change.finish(&trans)?;
     Ok(dst_inode_u)
 }
 

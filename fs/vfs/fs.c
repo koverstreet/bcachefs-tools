@@ -195,8 +195,8 @@ static void __wait_on_freeing_inode(struct bch_fs *c,
 	finish_wait(wq, &wait.wq_entry);
 }
 
-static struct bch_inode_info *bch2_inode_hash_find(struct bch_fs *c, struct btree_trans *trans,
-						   subvol_inum inum)
+struct bch_inode_info *bch2_inode_hash_find(struct bch_fs *c, struct btree_trans *trans,
+					    subvol_inum inum)
 {
 	struct bch_inode_info *inode;
 repeat:
@@ -434,10 +434,10 @@ static struct bch_inode_info *bch2_new_inode(struct btree_trans *trans)
 	return inode;
 }
 
-static struct bch_inode_info *bch2_inode_hash_init_insert(struct btree_trans *trans,
-							  subvol_inum inum,
-							  struct bch_inode_unpacked *bi,
-							  struct bch_subvolume *subvol)
+struct bch_inode_info *bch2_inode_hash_init_insert(struct btree_trans *trans,
+						   subvol_inum inum,
+						   struct bch_inode_unpacked *bi,
+						   struct bch_subvolume *subvol)
 {
 	struct bch_inode_info *inode = bch2_new_inode(trans);
 	if (IS_ERR(inode))
@@ -691,88 +691,6 @@ err_before_quota:
 
 /* methods */
 
-static int dirent_to_missing_inode(struct btree_trans *trans,
-				   struct bkey_s_c_dirent d,
-				   subvol_inum dir,
-				   subvol_inum inum,
-				   u32 snapshot,
-				   int ret)
-{
-	struct bch_fs *c = trans->c;
-	CLASS(bch_log_msg, msg)(c);
-
-	prt_printf(&msg.m, "dirent to missing inode: (%s)\n", bch2_err_str(ret));
-	bch2_bkey_val_to_text(&msg.m, c, d.s_c);
-	prt_str(&msg.m, "\n in: ");
-	try(bch2_inum_to_path(trans, dir, &msg.m));
-	prt_printf(&msg.m, "\ndir subvol %llu inum subvol %llu snapshot %u\n",
-		   dir.subvol, inum.subvol, snapshot);
-
-	/*
-	 * Not a reason to take the whole filesystem read only: log it,
-	 * schedule check_dirents, and the lookup returns ENOENT.
-	 *
-	 * Scheduling the pass takes sb_lock and may write the superblock;
-	 * we're on the error return path, nothing here needs btree locks:
-	 */
-	bch2_trans_unlock(trans);
-	return bch2_run_explicit_recovery_pass(c, &msg.m,
-					       BCH_RECOVERY_PASS_check_dirents, 0);
-}
-
-static struct bch_inode_info *bch2_lookup_trans(struct btree_trans *trans,
-			subvol_inum dir, struct bch_hash_info *dir_hash_info,
-			const struct qstr *name)
-{
-	struct bch_fs *c = trans->c;
-	subvol_inum inum = {};
-
-	CLASS(btree_iter_uninit, dirent_iter)(trans);
-	struct bkey_s_c k = bch2_dirent_lookup_key(trans, &dirent_iter, dir, dir_hash_info, name);
-	int ret = bkey_err(k);
-	if (ret)
-		return ERR_PTR(ret);
-
-	struct bkey_s_c_dirent d = bkey_s_c_to_dirent(k);
-
-	ret = bch2_dirent_read_target(trans, dir, d, &inum);
-	if (ret > 0)
-		ret = -ENOENT;
-	if (ret)
-		return ERR_PTR(ret);
-
-	struct bch_inode_info *inode = bch2_inode_hash_find(c, trans, inum);
-	if (inode)
-		return inode;
-
-	/*
-	 * Note: if check/repair needs it, we commit before
-	 * bch2_inode_hash_init_insert(), as after that point we can't take a
-	 * restart - not in the top level loop with a commit_do(), like we
-	 * usually do:
-	 */
-
-	struct bch_subvolume subvol;
-	struct bch_inode_unpacked inode_u;
-	ret =   bch2_subvolume_get(trans, inum.subvol, true, &subvol) ?:
-		bch2_inode_find_by_inum_snapshot(trans, inum.inum, le32_to_cpu(subvol.snapshot),
-						 &inode_u, BTREE_ITER_cached) ?:
-		bch2_check_dirent_target(trans, &dirent_iter, d, &inode_u, false) ?:
-		bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
-		PTR_ERR_OR_ZERO(inode = bch2_inode_hash_init_insert(trans, inum, &inode_u, &subvol));
-
-	/*
-	 * don't remove it: check_inodes might find another inode that points
-	 * back to this dirent
-	 */
-	if (bch2_err_matches(ret, ENOENT))
-		ret = dirent_to_missing_inode(trans, d, dir, inum,
-					      le32_to_cpu(subvol.snapshot),
-					      ret) ?: ret;
-
-	return ret ? ERR_PTR(ret) : inode;
-}
-
 #if IS_ENABLED(CONFIG_UNICODE)
 /*
  * Per-directory casefold d_ops: directory dentries that may become casefolded
@@ -865,47 +783,6 @@ void bch2_dir_casefold_changed(struct dentry *dentry)
 }
 #endif
 
-static struct dentry *bch2_lookup(struct inode *vdir, struct dentry *dentry,
-				  unsigned int flags)
-{
-	struct bch_fs *c = vdir->i_sb->s_fs_info;
-	struct bch_inode_info *dir = to_bch_ei(vdir);
-
-	struct bch_hash_info hash;
-	int ret = bch2_hash_info_init(c, &dir->ei_inode, &hash);
-	bch_err_fn(c, ret);
-	if (ret)
-		return d_splice_alias(NULL, dentry);
-
-	struct bch_inode_info *inode;
-	bch2_trans_do(c,
-		PTR_ERR_OR_ZERO(inode = bch2_lookup_trans(trans, inode_inum(dir),
-							  &hash, &dentry->d_name)));
-	if (IS_ERR(inode))
-		inode = NULL;
-
-	if (!inode && IS_CASEFOLDED(vdir)) {
-		/*
-		 * Do not cache a negative dentry in casefolded directories
-		 * as it would need to be invalidated in the following situation:
-		 * - Lookup file "blAH" in a casefolded directory
-		 * - Creation of file "BLAH" in a casefolded directory
-		 * - Lookup file "blAH" in a casefolded directory
-		 * which would fail if we had a negative dentry.
-		 *
-		 * We should come back to this when VFS has a method to handle
-		 * this edgecase.
-		 */
-		return NULL;
-	}
-
-	struct inode *vinode = inode ? &inode->v : NULL;
-
-	if (vinode)
-		bch2_dentry_set_casefold_ops(dentry, vinode);
-	return d_splice_alias(vinode, dentry);
-}
-
 static int bch2_mknod(struct mnt_idmap *idmap,
 		      struct inode *vdir, struct dentry *dentry,
 		      umode_t mode, dev_t rdev)
@@ -935,32 +812,6 @@ static int bch2_create(struct mnt_idmap *idmap,
 	return bch2_mknod(idmap, vdir, dentry, mode|S_IFREG, 0);
 }
 
-static int __bch2_link(struct bch_fs *c,
-		       struct bch_inode_info *inode,
-		       struct bch_inode_info *dir,
-		       struct dentry *dentry)
-{
-	struct bch_inode_unpacked dir_u, inode_u;
-	int ret;
-
-	guard(mutex)(&inode->ei_update_lock);
-	CLASS(btree_trans, trans)(c);
-
-	ret = commit_do(trans, NULL, NULL, 0,
-			bch2_link_trans(trans,
-					inode_inum(dir),   &dir_u,
-					inode_inum(inode), &inode_u,
-					&dentry->d_name));
-
-	if (likely(!ret)) {
-		bch2_inode_update_after_write(trans, dir, &dir_u,
-					      ATTR_MTIME|ATTR_CTIME|ATTR_SIZE);
-		bch2_inode_update_after_write(trans, inode, &inode_u, ATTR_CTIME);
-	}
-
-	return ret;
-}
-
 static int bch2_link(struct dentry *old_dentry, struct inode *vdir,
 		     struct dentry *dentry)
 {
@@ -973,52 +824,13 @@ static int bch2_link(struct dentry *old_dentry, struct inode *vdir,
 
 	ret   = bch2_subvol_is_ro(c, inode_inum(dir).subvol) ?:
 		bch2_subvol_is_ro(c, inode_inum(inode).subvol) ?:
-		__bch2_link(c, inode, dir, dentry);
+		__bch2_link(inode, dir, &dentry->d_name);
 	if (unlikely(ret))
 		return bch2_err_class(ret);
 
 	ihold(&inode->v);
 	d_instantiate(dentry, &inode->v);
 	return 0;
-}
-
-int __bch2_unlink(struct inode *vdir, struct dentry *dentry,
-		  bool deleting_snapshot)
-{
-	struct bch_fs *c = vdir->i_sb->s_fs_info;
-	struct bch_inode_info *dir = to_bch_ei(vdir);
-	struct bch_inode_info *inode = to_bch_ei(dentry->d_inode);
-	struct bch_inode_unpacked dir_u, inode_u;
-	int ret;
-
-	bch2_lock_inodes(INODE_UPDATE_LOCK, dir, inode);
-	{
-		CLASS(btree_trans, trans)(c);
-
-		ret = commit_do(trans, NULL, NULL,
-				BCH_TRANS_COMMIT_no_enospc,
-			bch2_unlink_trans(trans,
-					  inode_inum(dir),	&dir_u,
-					  inode_inum(inode),	&inode_u, &dentry->d_name,
-					  deleting_snapshot));
-		if (likely(!ret)) {
-			bch2_inode_update_after_write(trans, dir, &dir_u,
-						      ATTR_MTIME|ATTR_CTIME|ATTR_SIZE);
-			bch2_inode_update_after_write(trans, inode, &inode_u,
-						      ATTR_CTIME);
-		}
-	}
-	bch2_unlock_inodes(INODE_UPDATE_LOCK, dir, inode);
-
-	/*
-	 * d_invalidate() waits for other threads killing child dentries, and
-	 * evicting a deleted child takes btree locks: call it with none of ours
-	 * held, as vfs_rmdir() does shrink_dcache_parent()
-	 */
-	if (!ret && IS_CASEFOLDED(vdir))
-		d_invalidate(dentry);
-
-	return ret;
 }
 
 static int bch2_unlink(struct inode *vdir, struct dentry *dentry)
@@ -1031,7 +843,6 @@ static int bch2_symlink(struct mnt_idmap *idmap,
 			struct inode *vdir, struct dentry *dentry,
 			const char *symname)
 {
-	struct bch_fs *c = vdir->i_sb->s_fs_info;
 	struct bch_inode_info *dir = to_bch_ei(vdir), *inode;
 	int ret;
 
@@ -1049,7 +860,7 @@ static int bch2_symlink(struct mnt_idmap *idmap,
 	if (unlikely(ret))
 		goto err;
 
-	ret = __bch2_link(c, inode, dir, dentry);
+	ret = __bch2_link(inode, dir, &dentry->d_name);
 	if (unlikely(ret))
 		goto err;
 
@@ -1064,154 +875,6 @@ static struct dentry *bch2_mkdir(struct mnt_idmap *idmap,
 				 struct inode *vdir, struct dentry *dentry, umode_t mode)
 {
 	return ERR_PTR(bch2_mknod(idmap, vdir, dentry, mode|S_IFDIR, 0));
-}
-
-static int bch2_rename2(struct mnt_idmap *idmap,
-			struct inode *src_vdir, struct dentry *src_dentry,
-			struct inode *dst_vdir, struct dentry *dst_dentry,
-			unsigned flags)
-{
-	struct bch_fs *c = src_vdir->i_sb->s_fs_info;
-	struct bch_inode_info *src_dir = to_bch_ei(src_vdir);
-	struct bch_inode_info *dst_dir = to_bch_ei(dst_vdir);
-	struct bch_inode_info *src_inode = to_bch_ei(src_dentry->d_inode);
-	struct bch_inode_info *dst_inode = to_bch_ei(dst_dentry->d_inode);
-	struct bch_inode_unpacked dst_dir_u, src_dir_u;
-	struct bch_inode_unpacked src_inode_u, dst_inode_u, *whiteout_inode_u;
-	/* On the stack: they have to outlive the commit that inserts them */
-	struct inode_opt_change src_opt_change, dst_opt_change;
-	enum bch_rename_mode mode = flags & RENAME_EXCHANGE
-		? BCH_RENAME_EXCHANGE
-		: dst_dentry->d_inode
-		? BCH_RENAME_OVERWRITE : BCH_RENAME;
-	bool whiteout = !!(flags & RENAME_WHITEOUT);
-	int ret;
-
-	if (flags & ~(RENAME_NOREPLACE|RENAME_EXCHANGE|RENAME_WHITEOUT))
-		return bch_err_throw(c, EINVAL_rename_bad_flags);
-
-	if (mode == BCH_RENAME_OVERWRITE)
-		try(filemap_write_and_wait_range(src_inode->v.i_mapping, 0, LLONG_MAX));
-
-	bch2_lock_inodes(INODE_UPDATE_LOCK,
-			 src_dir,
-			 dst_dir,
-			 src_inode,
-			 dst_inode);
-
-	CLASS(btree_trans, trans)(c);
-
-	u32 src_snapshot, dst_snapshot;
-
-	ret = lockrestart_do(trans,
-		bch2_subvol_is_ro_trans(trans, inode_inum(src_dir).subvol, &src_snapshot) ?:
-		bch2_subvol_is_ro_trans(trans, inode_inum(dst_dir).subvol, &dst_snapshot));
-	if (ret)
-		goto err;
-
-	if (inode_attr_changing(dst_dir, src_inode, Inode_opt_project)) {
-		ret = bch2_fs_quota_transfer(c, src_inode,
-					     dst_dir->ei_qid,
-					     1 << QTYP_PRJ,
-					     KEY_TYPE_QUOTA_PREALLOC);
-		if (ret)
-			goto err;
-	}
-
-	if (mode == BCH_RENAME_EXCHANGE &&
-	    inode_attr_changing(src_dir, dst_inode, Inode_opt_project)) {
-		ret = bch2_fs_quota_transfer(c, dst_inode,
-					     src_dir->ei_qid,
-					     1 << QTYP_PRJ,
-					     KEY_TYPE_QUOTA_PREALLOC);
-		if (ret)
-			goto err;
-	}
-retry:
-	bch2_trans_begin(trans);
-
-	ret = bch2_rename_trans(trans,
-				inode_inum(src_dir), &src_dir_u,
-				inode_inum(dst_dir), &dst_dir_u,
-				&src_inode_u,
-				&dst_inode_u,
-				&src_dentry->d_name,
-				&dst_dentry->d_name,
-				mode,
-				&src_opt_change,
-				&dst_opt_change);
-	if (unlikely(ret))
-		goto err_tx_restart;
-
-	if (whiteout) {
-		whiteout_inode_u = bch2_trans_kmalloc_nomemzero(trans, sizeof(*whiteout_inode_u));
-		ret = PTR_ERR_OR_ZERO(whiteout_inode_u);
-		if (unlikely(ret))
-			goto err_tx_restart;
-		bch2_inode_init_early(c, whiteout_inode_u);
-
-		struct bch_subvolume new_subvol;
-		ret = bch2_create_trans(trans,
-					inode_inum(src_dir), &src_dir_u,
-					whiteout_inode_u, &new_subvol,
-					&src_dentry->d_name,
-					from_kuid(i_user_ns(&src_dir->v), current_fsuid()),
-					from_kgid(i_user_ns(&src_dir->v), current_fsgid()),
-					S_IFCHR|WHITEOUT_MODE, 0,
-					NULL, NULL, (subvol_inum) { 0 }, 0) ?:
-		      (!test_bit(EI_INODE_SNAPSHOT, &src_dir->ei_flags)
-		       ? bch2_quota_acct(c, bch_qid(whiteout_inode_u), Q_INO, 1,
-					 KEY_TYPE_QUOTA_PREALLOC) : 0);
-		if (unlikely(ret))
-			goto err_tx_restart;
-	}
-
-	ret = bch2_trans_commit(trans, NULL, NULL, 0);
-	if (unlikely(ret)) {
-err_tx_restart:
-		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
-			goto retry;
-		goto err;
-	}
-
-	BUG_ON(inode_inum(src_inode).inum != src_inode_u.bi_inum);
-	BUG_ON(dst_inode &&
-	       inode_inum(dst_inode).inum != dst_inode_u.bi_inum);
-
-	bch2_inode_update_after_write(trans, src_dir, &src_dir_u,
-				      ATTR_MTIME|ATTR_CTIME|ATTR_SIZE);
-
-	if (src_dir != dst_dir)
-		bch2_inode_update_after_write(trans, dst_dir, &dst_dir_u,
-					      ATTR_MTIME|ATTR_CTIME|ATTR_SIZE);
-
-	bch2_inode_update_after_write(trans, src_inode, &src_inode_u,
-				      ATTR_CTIME);
-
-	if (dst_inode)
-		bch2_inode_update_after_write(trans, dst_inode, &dst_inode_u,
-					      ATTR_CTIME);
-
-	ret = bch2_inode_opt_change_finish(trans, &src_opt_change) ?:
-	      bch2_inode_opt_change_finish(trans, &dst_opt_change);
-err:
-	bch2_fs_quota_transfer(c, src_inode,
-			       bch_qid(&src_inode->ei_inode),
-			       1 << QTYP_PRJ,
-			       KEY_TYPE_QUOTA_NOCHECK);
-	if (dst_inode)
-		bch2_fs_quota_transfer(c, dst_inode,
-				       bch_qid(&dst_inode->ei_inode),
-				       1 << QTYP_PRJ,
-				       KEY_TYPE_QUOTA_NOCHECK);
-
-	bch2_unlock_inodes(INODE_UPDATE_LOCK,
-			   src_dir,
-			   dst_dir,
-			   src_inode,
-			   dst_inode);
-
-	return bch2_err_class(ret);
 }
 
 static int bch2_setattr(struct mnt_idmap *idmap,
@@ -1990,9 +1653,9 @@ static void bch2_evict_inode(struct inode *vinode)
 	/*
 	 * Disabled: bch2_inode_find_by_inum() starts a new btree_trans, but
 	 * eviction can be called from inside an existing transaction — e.g.
-	 * discard_new_inode() from bch2_inode_hash_insert() during
-	 * bch2_lookup_trans(). The deadlock detector can't see locks held
-	 * by the outer transaction, so cycles involving both transactions
+	 * discard_new_inode() from bch2_inode_hash_insert() during a
+	 * lookup. The deadlock detector can't see locks held by the
+	 * outer transaction, so cycles involving both transactions
 	 * go undetected. Observed as a three-way deadlock between
 	 * btree_node_write_work, __bch2_unlink, and bch2_lookup (github
 	 * issue #1046).

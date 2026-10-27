@@ -541,9 +541,8 @@ pub fn peek_snapshot<'a>(
     __peek_snapshot(t, iter, inum, snapshot, flags, None)
 }
 
-/// Inode @inum as seen in @snapshot: as bch2_inode_find_by_inum_snapshot().
-/// ENOENT_inode if there's no inode there. In the caller's transaction
-/// attempt.
+/// Inode @inum as seen in @snapshot: ENOENT_inode if there's no inode there.
+/// In the caller's transaction attempt.
 pub fn find_by_inum_snapshot(
     t:        &TransAttempt<'_, '_>,
     inum:     u64,
@@ -552,20 +551,6 @@ pub fn find_by_inum_snapshot(
 ) -> Result<c::bch_inode_unpacked, BchError> {
     let mut iter = BtreeIter::new(t, c::btree_id::inodes, spos(0, inum, snapshot), flags);
     peek_slot(t, &mut iter)
-}
-
-/// For C's VFS and reconcile: bch2_inode_find_by_inum_snapshot().
-#[c_export]
-pub extern "C" fn bch2_inode_find_by_inum_snapshot(
-    trans:    &BtreeTrans<'_>,
-    inum:     u64,
-    snapshot: u32,
-    inode:    &mut MaybeUninit<c::bch_inode_unpacked>,
-    flags:    core::ffi::c_uint,
-) -> core::ffi::c_int {
-    ret_to_c(find_by_inum_snapshot(&unsafe { trans.attempt_in_progress() }, inum,
-                                   snapshot, BtreeIterFlags::from_bits_retain(flags))
-             .map(|i| { inode.write(i); }))
 }
 
 /// For C's VFS: bch2_inode_find_by_inum_snapshot2() - inode @inum, in its
