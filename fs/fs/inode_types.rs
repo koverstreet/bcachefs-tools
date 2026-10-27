@@ -6,6 +6,8 @@ use crate::cstructs::c;
 use crate::cstructs::c::BCH_INODE_FIELDS_v3;
 use crate::types::{c_default, Le64};
 use crate::btree::bkey::BkeyI;
+use crate::util::projections::Volatile;
+use core::mem::{align_of, offset_of, size_of};
 use cstruct_macros::{CStruct, c_bitmask, c_typedef, c_verbatim, TypeInfo};
 
 c_typedef! {
@@ -13,13 +15,47 @@ c_typedef! {
 }
 
 macro_rules! __bch_inode_unpacked_0 {
-    ([$($acc:tt)*] $(($_name:tt, $_bits:tt)),* $(,)?) => { ::paste::paste! {
+    ([$(pub $f:ident: $ft:ty),* $(,)?] $(($_name:tt, $_bits:tt)),* $(,)?) => { ::paste::paste! {
         #[repr(C)]
         #[derive(Clone, Copy, Debug, Default, CStruct, TypeInfo)]
         pub struct bch_inode_unpacked {
-            $($acc)*
+            $(pub $f: $ft,)*
             $(pub $_name: [<u $_bits>],)*
         }
+
+        /// A bch_inode_unpacked shared - a VFS inode's ei_inode: written by
+        /// one writer at a time, read without a lock, field by field - and
+        /// laid out as it is, so C has it as one.
+        #[repr(C)]
+        #[derive(TypeInfo)]
+        pub struct VolatileInodeUnpacked {
+            $(pub $f: Volatile<$ft>,)*
+            $(pub $_name: Volatile<[<u $_bits>]>,)*
+        }
+
+        impl VolatileInodeUnpacked {
+            /// Each field as it is: not all of them as of one moment, if
+            /// it's written meanwhile.
+            pub fn get(&self) -> bch_inode_unpacked {
+                bch_inode_unpacked {
+                    $($f: self.$f.get(),)*
+                    $($_name: self.$_name.get(),)*
+                }
+            }
+
+            /// By its one writer.
+            pub fn set(&self, v: &bch_inode_unpacked) {
+                $(self.$f.set(v.$f);)*
+                $(self.$_name.set(v.$_name);)*
+            }
+        }
+
+        const _: () = {
+            assert!(size_of::<VolatileInodeUnpacked>() == size_of::<bch_inode_unpacked>());
+            assert!(align_of::<VolatileInodeUnpacked>() == align_of::<bch_inode_unpacked>());
+            $(assert!(offset_of!(VolatileInodeUnpacked, $f) == offset_of!(bch_inode_unpacked, $f));)*
+            $(assert!(offset_of!(VolatileInodeUnpacked, $_name) == offset_of!(bch_inode_unpacked, $_name));)*
+        };
     } };
 }
 BCH_INODE_FIELDS_v3!(__bch_inode_unpacked_0 [
