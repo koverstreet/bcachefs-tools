@@ -3410,28 +3410,4 @@ int rust_ei_set_projid(struct bch_fs *c, struct bch_inode_info *inode, u32 proji
 	return bch2_set_projid(c, inode, projid);
 }
 
-struct bch_inode_info *rust_dentry_ei(struct dentry *dentry)
-{
-	return to_bch_ei(dentry->d_inode);
-}
-
-/*
- * Inode option @id of @dentry's parent directory, in @v - false at the root,
- * which has none.
- */
-bool rust_dentry_parent_inode_opt(struct dentry *dentry, unsigned id, u64 *v)
-{
-	guard(spinlock)(&dentry->d_lock);
-	if (IS_ROOT(dentry))
-		return false;
-
-	*v = bch2_inode_opt_get(&to_bch_ei(d_inode(dentry->d_parent))->ei_inode, id);
-	return true;
-}
-
-void rust_dir_casefold_changed(struct dentry *dentry)
-{
-	bch2_dir_casefold_changed(dentry);
-}
-
 #endif /* NO_BCACHEFS_FS */
