@@ -769,6 +769,13 @@ mod vfs {
         {
             let lock = v.update_lock();
 
+            // Removing an option the inode doesn't set itself is a no-op -
+            // and must not reach inode_opt_set(), which would enable what
+            // the option needs
+            if !defined && !inode_opt.is_own(v.inode()) {
+                return Err(BchError::from(c::ENODATA));
+            }
+
             // inode fields accessible via the xattr interface are stored
             // with a +1 bias, so that 0 means unset:
             if inode_opt.id() == c::inode_opt_id::Inode_opt_project {
