@@ -126,6 +126,12 @@ mod user {
         }
     }
 
+    impl IoctlRet for c_long {
+        fn ret(self) -> c_long {
+            self
+        }
+    }
+
     pub fn input<I, R>(user: UserPtr, f: impl FnOnce(I::Arg) -> Result<R, BchError>)
         -> Result<c_long, BchError>
     where

@@ -148,11 +148,6 @@ pub fn reinherit_attrs(dst: &mut c::bch_inode_unpacked, src: &c::bch_inode_unpac
     ret
 }
 
-#[c_export]
-pub fn bch2_reinherit_attrs(dst_u: &mut c::bch_inode_unpacked, src_u: &c::bch_inode_unpacked) -> bool {
-    reinherit_attrs(dst_u, src_u)
-}
-
 /// Those @inode sets, with the +1 bias removed.
 pub fn inode_opts_to_opts(inode: &c::bch_inode_unpacked) -> c::bch_opts {
     let mut ret = c::bch_opts::default();

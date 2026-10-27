@@ -261,14 +261,6 @@ pub fn bch2_inode_update_after_write(trans: &BtreeTrans<'_>, inode: &c::bch_inod
     inode.update_after_write(trans, bi, fields)
 }
 
-/// For C's quota transfers, until they're Rust.
-#[c_export]
-pub fn bch2_fs_quota_transfer(_c: &Opaque<c::bch_fs>, inode: &c::bch_inode_info, qid: c::bch_qid,
-                              qtypes: c_uint, mode: c::quota_acct_mode) -> c_int {
-    // SAFETY: every C caller holds @inode's ei_update_lock
-    ret_to_c(unsafe { UpdateLock::held(inode) }.quota_transfer(qid, qtypes, mode))
-}
-
 /// ei_update_lock, held.
 pub struct UpdateLock<'i> {
     inode:  &'i InodeInfo,

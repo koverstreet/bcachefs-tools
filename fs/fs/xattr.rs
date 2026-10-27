@@ -748,7 +748,7 @@ mod vfs {
             // Set on the parent: switched back to inheriting from it.
             //
             // rename() also has to deal with keeping inherited options
-            // up to date - see bch2_reinherit_attrs()
+            // up to date - see reinherit_attrs()
             inode_v = parent;
         }
 

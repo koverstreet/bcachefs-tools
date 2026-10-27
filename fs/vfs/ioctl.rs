@@ -3,9 +3,17 @@
 //! A mounted filesystem's file ioctls, and their dispatch,
 //! bch2_fs_file_ioctl() - the filesystem's file_operations'. Here are those
 //! tied to the VFS: to the file, its inode, the mount. Those that only need
-//! the filesystem are fs/fs/ioctl.rs's; what isn't converted yet is handed
-//! back to C, __bch2_fs_file_ioctl(), whose own default is the filesystem's
-//! dispatch, bch2_fs_ioctl().
+//! the filesystem are fs/fs/ioctl.rs's, and the rest go to the filesystem's
+//! dispatch, fs_ioctl().
+//!
+//! A subvolume is created as mkdir(2) makes a directory - the same lookup,
+//! permission and security checks, the caller's umask - and destroyed as
+//! rmdir(2) removes one, with MAY_WRITE on the subvolume's root; the path
+//! handling is path.rs's. Each takes create_lock, for write, around the
+//! create: a snapshot is of the subvolume as written, so new dirtiers are
+//! held off and the dirty pages flushed - writeback write-protects every
+//! mapping of a dirty folio, so a store through mmap traps to page_mkwrite,
+//! which takes create_lock for read, and waits.
 //!
 //! FS_IOC_GETVERSION and FS_IOC_{GET,SET}FSLABEL are the VFS's numbers, bound
 //! from the kernel's headers, so their Ioctl impls are here: bcachefs_ioctl.rs's
@@ -13,23 +21,34 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::btree::iter::{commit_do, CommitFlags, TransAttempt};
+use crate::btree::iter::{commit_do, lockrestart_do, CommitFlags, TransAttempt};
 use crate::c;
+use crate::dirent;
 use crate::errcode::{bch_errcode, ret_to_result_void, BchError};
 use crate::fs::Fs;
+use crate::inode_opts::reinherit_attrs as reinherit;
+use crate::str_hash;
+use crate::util::os_str::{OsStr, OsStrExt};
 use crate::ioctl::{get_damage, get_label, readdir_flags, reflink_p_propagate_opts, reflink_p_set_may_update_opts, snapshot_tree_v1, snapshot_tree_v2, subvolume_list, subvolume_to_path, unpoison};
 use crate::init::chardev::ioctl_ret;
 use crate::init::damage;
 use crate::namei;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::file::File;
-use crate::util::ioctl::{arg, dir, input, no_arg, output, vstruct, Ioctl, UserArg};
-use crate::util::kernel::{capable, Capability};
+use crate::util::ioctl::{arg, dir, input, no_arg, output, vstruct, Ioctl, UserArg, UserStr};
+use crate::util::kernel::{capable, current_fsgid, current_fsuid, Capability};
 use crate::util::log::LogMsg;
+use crate::util::printbuf::Printbuf;
+use crate::init::chardev::{copy_err_msg, fs_ioctl, ErrMsg, V2};
+use crate::locking::{Lock, RawLock};
+use crate::vfs::dentry::Dentry;
 use crate::vfs::idmap::MntIdmap;
 use crate::vfs::inode::{InodeInfo, InodeRef};
 use crate::vfs::mount::WriteAccess;
+use crate::vfs::path::{Creating, Removing, UserPath};
 use crate::{bch_err, btree_trans, prt};
+use core::ffi::{c_int, c_void};
+use core::mem::{offset_of, MaybeUninit};
 use cstruct_macros::{c_export, c_extern};
 use kernel::ffi::{c_long, c_uint, c_ulong};
 use kernel::uaccess::UserPtr;
@@ -62,7 +81,9 @@ impl Ioctl for FS_IOC_SETFSLABEL {
 /* The dispatch */
 
 c_extern! {
-    pub fn __bch2_fs_file_ioctl(file: *mut c::file, cmd: c_uint, arg: c_ulong) -> c_long;
+    // direct.c's, until it's Rust:
+    fn bch2_direct_IO_read(req: *mut c::kiocb, iter: *mut c::iov_iter, flags: c::bch_read_flags,
+                           err_report: *mut c::bch_read_err_report) -> c_int;
 }
 
 fn file_ioctl(file: &File, inode: &InodeInfo, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError> {
@@ -112,10 +133,29 @@ fn file_ioctl(file: &File, inode: &InodeInfo, cmd: c_uint, user: UserPtr) -> Res
         <c::BCHFS_IOC_UNPOISON as Ioctl>::OPCODE =>
             input::<c::BCHFS_IOC_UNPOISON, _>(user, |a| unpoison(fs, inode.inum(),
                 || MntIdmap::of(file).owner_or_capable(inode.vfs()), a)),
-        _ => {
-            let ret = unsafe { __bch2_fs_file_ioctl(file.as_ptr(), cmd, user.as_mut_ptr() as c_ulong) };
-            if ret < 0 { Err(BchError::from_raw(-ret as i32)) } else { Ok(ret) }
+        // The argument is the name's address
+        <c::BCHFS_IOC_REINHERIT_ATTRS as Ioctl>::OPCODE => {
+            let name = UserStr::read(user.as_mut_ptr() as u64, c::BCH_NAME_MAX as usize + 1)?;
+            reinherit_attrs(file, inode, OsStr::from_bytes(name.as_cstr().to_bytes()))
         }
+        c::FS_IOC_SETVERSION => Err(c::ENOTTY.into()),
+        <c::BCH_IOCTL_SUBVOLUME_CREATE as Ioctl>::OPCODE =>
+            input::<c::BCH_IOCTL_SUBVOLUME_CREATE, _>(user, |a| subvolume_create(fs, file, a, ErrMsg::Log)),
+        <c::BCH_IOCTL_SUBVOLUME_CREATE_v2 as Ioctl>::OPCODE =>
+            input::<c::BCH_IOCTL_SUBVOLUME_CREATE_v2, _>(user, |a| {
+                let (a, err) = a.split();
+                subvolume_create(fs, file, a, err)
+            }),
+        <c::BCH_IOCTL_SUBVOLUME_DESTROY as Ioctl>::OPCODE =>
+            input::<c::BCH_IOCTL_SUBVOLUME_DESTROY, _>(user, |a| subvolume_destroy(fs, file, a, ErrMsg::Log)),
+        <c::BCH_IOCTL_SUBVOLUME_DESTROY_v2 as Ioctl>::OPCODE =>
+            input::<c::BCH_IOCTL_SUBVOLUME_DESTROY_v2, _>(user, |a| {
+                let (a, err) = a.split();
+                subvolume_destroy(fs, file, a, err)
+            }),
+        <c::BCHFS_IOC_PREAD_RAW as Ioctl>::OPCODE =>
+            arg::<c::BCHFS_IOC_PREAD_RAW, _>(user, |a| pread_raw(file, inode, a)),
+        _ => fs_ioctl(fs, cmd, user),
     }
 }
 
@@ -123,6 +163,21 @@ pub(crate) fn fs_file_ioctl(file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
     // SAFETY: an open file of ours: its inode's referenced while it's open
     let inode = unsafe { InodeInfo::from_inode((*file.as_ptr()).f_inode) };
     ioctl_ret(file_ioctl(file, inode, cmd, UserPtr::from_addr(arg as usize)))
+}
+
+/// A 32-bit caller's: the ioctls whose numbers differ only by their
+/// argument's size - misnamed, they take an int either way - as the native
+/// ones, and the label's.
+#[cfg(CONFIG_COMPAT)]
+pub(crate) fn fs_file_compat_ioctl(file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
+    let cmd = match cmd {
+        c::FS_IOC32_GETFLAGS   => c::FS_IOC_GETFLAGS,
+        c::FS_IOC32_SETFLAGS   => c::FS_IOC_SETFLAGS,
+        c::FS_IOC32_GETVERSION => c::FS_IOC_GETVERSION,
+        c::FS_IOC_GETFSLABEL | c::FS_IOC_SETFSLABEL => cmd,
+        _ => return -(c::ENOIOCTLCMD as c_long),
+    };
+    fs_file_ioctl(file, cmd, unsafe { c::rust_compat_ptr(arg as u32) } as c_ulong)
 }
 
 /// For C's file ops, until they're Rust.
@@ -134,7 +189,237 @@ pub unsafe fn bch2_fs_file_ioctl(file: *mut c::file, cmd: c_uint, arg: c_ulong) 
     fs_file_ioctl(unsafe { File::from_raw(file) }, cmd, arg)
 }
 
+/// # Safety
+/// As bch2_fs_file_ioctl()'s.
+#[cfg(CONFIG_COMPAT)]
+#[c_export]
+pub unsafe fn bch2_compat_fs_ioctl(file: *mut c::file, cmd: c_uint, arg: c_ulong) -> c_long {
+    fs_file_compat_ioctl(unsafe { File::from_raw(file) }, cmd, arg)
+}
+
 /* The handlers */
+
+/// BCHFS_IOC_REINHERIT_ATTRS: the inode named @name in @dir takes on again the
+/// options it would inherit from @dir - and the project, quota and all.
+fn reinherit_attrs(file: &File, dir: &InodeInfo, name: &OsStr) -> Result<c_long, BchError> {
+    let fs = dir.fs();
+    let hash = str_hash::hash_info_init(fs, &dir.inode())?;
+    let inum = dirent::lookup(fs, dir.inum(), &hash, name)?;
+    let trans = btree_trans!(fs);
+    let inode = lockrestart_do(&trans, |t| InodeInfo::get_trans(t, inum))?;
+    // Ended before the update locks, which are taken outside transactions
+    drop(trans);
+
+    let _write = WriteAccess::get(file)?;
+    let locks = InodeInfo::update_lock_all([dir, &inode]);
+    let lock = locks.get(&inode);
+
+    lock.inherit_project(dir)?;
+    lock.write_inode_if(0, |_, bi| Ok(reinherit(bi, &dir.inode())))?;
+    // C's "did work": always, as bch2_write_inode() returned 0 whether or
+    // not it wrote
+    Ok(1)
+}
+
+impl V2 for c::bch_ioctl_subvolume_v2 {
+    type V1 = c::bch_ioctl_subvolume;
+    fn split(self) -> (c::bch_ioctl_subvolume, ErrMsg) {
+        (c::bch_ioctl_subvolume { flags: self.flags, dirfd: self.dirfd, mode: self.mode, pad: self.pad,
+                                  dst_ptr: self.dst_ptr, src_ptr: self.src_ptr },
+         ErrMsg::User(self.err))
+    }
+}
+
+fn subvolume_create(fs: &Fs, file: &File, a: c::bch_ioctl_subvolume, err: ErrMsg)
+    -> Result<(), BchError>
+{
+    let mut msg = Printbuf::new();
+    let ret = create_subvolume(fs, file, a, &mut msg);
+    err.report(&mut msg, ret, |ret, msg| crate::bch_err_msg!(fs, ret, "{}", msg))
+}
+
+/// BCH_IOCTL_SUBVOLUME_CREATE: a subvolume at @a.dst_ptr - with
+/// BCH_SUBVOL_SNAPSHOT_CREATE a snapshot, of the subvolume @a.src_ptr is in,
+/// or else the one the new directory's in.
+fn create_subvolume(fs: &Fs, file: &File, mut a: c::bch_ioctl_subvolume, err: &mut Printbuf)
+    -> Result<(), BchError>
+{
+    use bch_errcode as E;
+    use c::{BCH_SUBVOL_SNAPSHOT_CREATE as SNAPSHOT, BCH_SUBVOL_SNAPSHOT_RO as RO};
+
+    if a.flags & !(SNAPSHOT | RO) != 0 {
+        prt!(err, "invalid flags");
+        return fs.throw(E::BCH_ERR_EINVAL_subvol_create_bad_flags);
+    }
+    if a.flags & SNAPSHOT == 0 && (a.src_ptr != 0 || a.flags & RO != 0) {
+        prt!(err, "invalid flags");
+        return fs.throw(E::BCH_ERR_EINVAL_subvol_create_flags_mismatch);
+    }
+
+    let mut create_flags = c::BCH_CREATE_SUBVOL;
+    if a.flags & SNAPSHOT != 0 {
+        create_flags |= c::BCH_CREATE_SNAPSHOT;
+    }
+    if a.flags & RO != 0 {
+        create_flags |= c::BCH_CREATE_SNAPSHOT_RO;
+    }
+
+    // Held until the snapshot's made, as C held it
+    let src = (a.src_ptr != 0).then(|| UserPath::at(a.dirfd as c_int, a.src_ptr, c::LOOKUP_FOLLOW))
+        .transpose()?;
+    let mut snapshot_src = c::subvol_inum::default();
+    if let Some(src) = &src {
+        if !src.on(fs) {
+            prt!(err, "src_path not on dst filesystem");
+            return Err(c::EXDEV.into());
+        }
+        // SAFETY: a positive dentry of ours, held by @src
+        snapshot_src = unsafe { InodeInfo::from_inode((*src.dentry()).d_inode) }.inum();
+    }
+
+    let dst = Creating::start(a.dirfd as c_int, a.dst_ptr)?;
+    if !dst.on(fs) {
+        prt!(err, "dst_path not on dst filesystem");
+        return Err(c::EXDEV.into());
+    }
+    // SAFETY: held by @dst, which holds its parent, @dir, locked
+    let (dentry, dir) = unsafe {
+        (Dentry::borrow_raw(dst.dentry), InodeInfo::from_inode((*dst.path.dentry).d_inode))
+    };
+    if dentry.inode_opt().is_some() {
+        return fs.throw(E::BCH_ERR_EEXIST_subvolume_create);
+    }
+    if dir.vfs().flag(c::S_DEAD) {
+        return fs.throw(E::BCH_ERR_ENOENT_directory_dead);
+    }
+
+    // SAFETY: a mounted superblock's
+    let sb = unsafe { &*(*dir.vfs().as_ptr()).i_sb };
+    if !unsafe { c::kuid_has_mapping(sb.s_user_ns, current_fsuid()) &&
+                 c::kgid_has_mapping(sb.s_user_ns, current_fsgid()) } {
+        prt!(err, "current uid/gid not mapped into fs namespace");
+        return Err(c::EOVERFLOW.into());
+    }
+
+    let idmap = MntIdmap::of(file);
+    idmap.permission(dir.vfs(), c::MAY_WRITE | c::MAY_EXEC)?;
+
+    if sb.s_flags as u64 & c::SB_POSIXACL == 0 {
+        a.mode &= !(unsafe { c::current_umask() } as u16);
+    }
+    ret_to_result_void(unsafe { c::security_path_mkdir(&dst.path, dst.dentry, a.mode) })?;
+
+    if a.flags & SNAPSHOT != 0 && a.src_ptr == 0 {
+        snapshot_src.subvol = dir.inum().subvol;
+    }
+
+    let inode = {
+        let _create = fs.snapshots.create_lock.write();
+        if a.flags & SNAPSHOT != 0 {
+            // SAFETY: the mounted superblock's, the kernel's rw_semaphore
+            let s_umount = unsafe { &*(&raw const (*fs.vfs_sb).s_umount).cast::<c::rw_semaphore>() };
+            let _umount = Lock::from_c(s_umount).read();
+            unsafe { c::sync_inodes_sb(fs.vfs_sb) };
+        }
+        dir.create(idmap, dentry, a.mode | c::S_IFDIR as u16, 0, snapshot_src, create_flags)?
+    };
+
+    dentry.set_casefold_ops(inode.vfs());
+    dentry.instantiate(inode);
+    unsafe { c::fsnotify_mkdir(dir.vfs().as_ptr(), dst.dentry) };
+    Ok(())
+}
+
+/// BCH_IOCTL_SUBVOLUME_DESTROY: the subvolume whose root is @a.dst_ptr,
+/// unlinked, and deleted.
+fn subvolume_destroy(fs: &Fs, file: &File, a: c::bch_ioctl_subvolume, err: ErrMsg)
+    -> Result<(), BchError>
+{
+    let ret = (|| {
+        if a.flags != 0 {
+            return fs.throw(bch_errcode::BCH_ERR_EINVAL_subvol_destroy_bad_flags);
+        }
+
+        let r = Removing::start(a.dirfd as c_int, a.dst_ptr)?;
+        if !r.on(fs) {
+            return Err(c::EXDEV.into());
+        }
+        // SAFETY: held by @r, which holds its parent, @dir, locked
+        let (victim, dir) = unsafe {
+            (Dentry::borrow_raw(r.victim), InodeInfo::from_inode((*r.path.dentry).d_inode))
+        };
+
+        MntIdmap::of(file).permission(victim.inode().vfs(), c::MAY_WRITE)?;
+        dir.unlink(victim, true)?;
+        unsafe { c::fsnotify_rmdir(dir.vfs().as_ptr(), r.victim) };
+        victim.invalidate();
+        Ok(())
+    })();
+    // Nothing here says more than the error: no message, to log or copy
+    err.report(&mut Printbuf::new(), ret, |ret, _| ret)
+}
+
+/// BCHFS_IOC_PREAD_RAW: an O_DIRECT read that reports the errors it hit -
+/// checksum, I/O, decompression - rather than failing on them, and with
+/// BCH_PREAD_RAW_no_poison_check, reads poisoned extents. The bytes read.
+fn pread_raw(file: &File, inode: &InodeInfo, user: UserArg<c::bch_ioctl_pread_raw>)
+    -> Result<c_long, BchError>
+{
+    let fs = inode.fs();
+    let a = user.read()?;
+    if a.flags & !c::BCH_PREAD_RAW_no_poison_check != 0 || a.err.pad != 0 {
+        return Err(c::EINVAL.into());
+    }
+    if a.len == 0 {
+        return Ok(0);
+    }
+    if file.flags() & c::O_DIRECT == 0 {
+        return Err(c::EINVAL.into());
+    }
+    if !MntIdmap::of(file).owner_or_capable(inode.vfs()) {
+        return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin_or_owner);
+    }
+
+    let pos = a.offset as c::loff_t;
+    ret_to_result_void(unsafe { c::rw_verify_area(c::READ as c_int, file.as_ptr(), &pos, a.len as usize) })?;
+
+    let mut iter = MaybeUninit::<c::iov_iter>::uninit();
+    ret_to_result_void(unsafe {
+        c::import_ubuf(c::ITER_DEST as c_int, a.buf as usize as *mut c_void, a.len as usize, iter.as_mut_ptr())
+    })?;
+    let mut kiocb = MaybeUninit::<c::kiocb>::uninit();
+    unsafe {
+        c::init_sync_kiocb(kiocb.as_mut_ptr(), file.as_ptr());
+        (*kiocb.as_mut_ptr()).ki_pos = pos;
+    }
+
+    let flags = if a.flags & c::BCH_PREAD_RAW_no_poison_check != 0 {
+        c::bch_read_flags::BCH_READ_no_poison_check
+    } else {
+        c::bch_read_flags::empty()
+    };
+
+    // The reads' completions add to it, under its lock: initialized where it
+    // stays, for the call
+    let mut report = c::bch_read_err_report::default();
+    report.msg = c::printbuf::new();
+    unsafe { <c::mutex as RawLock>::init(&raw mut report.lock, c"bch_read_err_report", crate::new_lock!(@key)) };
+
+    let ret = unsafe { bch2_direct_IO_read(kiocb.as_mut_ptr(), iter.as_mut_ptr(), flags, &mut report) };
+    let mut ret = if ret < 0 { Err(BchError::from_raw(-ret)) } else { Ok(ret as c_long) };
+
+    if user.write_at(offset_of!(c::bch_ioctl_pread_raw, errors), &report.errors).is_err() {
+        ret = Err(c::EFAULT.into());
+    }
+    // SAFETY: the report's, ours again
+    let msg = unsafe { Printbuf::borrow_raw(&mut report.msg) };
+    // The message's copy fails the call only if the read succeeded but read
+    // nothing, as C had it
+    if let (Err(e), Ok(0)) = (copy_err_msg(&a.err, msg, ret.map(|_| ())), &ret) {
+        ret = Err(e);
+    }
+    ret
+}
 
 fn set_label(fs: &Fs, file: &File, user: UserArg<[u8; FSLABEL_MAX]>) -> Result<(), BchError> {
     if !capable(Capability::SysAdmin) {
@@ -277,7 +562,7 @@ fn permitted(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>, dirs: &[InodeRef], f
     t.unlock();
     for (k, i) in dirs.iter().enumerate() {
         let mask = if k == 0 { first } else { c::MAY_EXEC };
-        if !idmap.permission(i.vfs(), mask) {
+        if idmap.permission(i.vfs(), mask).is_err() {
             return Ok(false);
         }
     }

@@ -650,7 +650,7 @@ pub struct bch_ioctl_disk_resize_journal_v2 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_subvolume {
     pub flags: u32,
     pub dirfd: u32,
@@ -661,7 +661,7 @@ pub struct bch_ioctl_subvolume {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_subvolume_v2 {
     pub flags: u32,
     pub dirfd: u32,
@@ -1036,7 +1036,7 @@ c_const! {
  * extent poisoning so corrupted data can be recovered.
  */
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_ioctl_pread_raw {
     pub offset: u64,
     pub len: u64,

@@ -102,27 +102,6 @@ static inline struct bch_inode_info *file_bch_inode(struct file *file)
 	return to_bch_ei(file_inode(file));
 }
 
-static inline bool inode_attr_changing(struct bch_inode_info *dir,
-				struct bch_inode_info *inode,
-				enum inode_opt_id id)
-{
-	return !(inode->ei_inode.bi_fields_set & (1 << id)) &&
-		bch2_inode_opt_get(&dir->ei_inode, id) !=
-		bch2_inode_opt_get(&inode->ei_inode, id);
-}
-
-static inline bool inode_attrs_changing(struct bch_inode_info *dir,
-				 struct bch_inode_info *inode)
-{
-	unsigned id;
-
-	for (id = 0; id < Inode_opt_nr; id++)
-		if (inode_attr_changing(dir, inode, id))
-			return true;
-
-	return false;
-}
-
 #ifndef NO_BCACHEFS_FS
 
 struct bch_inode_info *

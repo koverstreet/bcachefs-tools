@@ -27,7 +27,7 @@
 //! VFS's: the actor, emit32(), translates each entry and hands it on.
 //!
 //! Dir's FileOps are the directory file_operations, bch2_dir_file_ops;
-//! fsync and the compat ioctl are still C's.
+//! fsync is still C's.
 
 use core::ffi::{c_int, c_uint};
 use core::pin::Pin;
@@ -49,12 +49,6 @@ use super::ioctl::fs_file_ioctl;
 c_extern! {
     // io.c's, until it's Rust:
     fn bch2_fsync(file: *mut c::file, start: c::loff_t, end: c::loff_t, datasync: c_int) -> c_int;
-}
-
-#[cfg(CONFIG_COMPAT)]
-c_extern! {
-    // ioctl.c's, until it's Rust - built only with CONFIG_COMPAT:
-    fn bch2_compat_fs_ioctl(file: *mut c::file, cmd: c_uint, arg: c_ulong) -> c_long;
 }
 
 const READDIR_32_FIRST: i64 = 2;
@@ -226,7 +220,7 @@ impl FileOps for Dir {
 
     #[cfg(CONFIG_COMPAT)]
     fn compat_ioctl(&self, file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
-        unsafe { bch2_compat_fs_ioctl(file.as_ptr(), cmd, arg) }
+        super::ioctl::fs_file_compat_ioctl(file, cmd, arg)
     }
 }
 

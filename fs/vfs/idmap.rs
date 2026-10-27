@@ -55,8 +55,8 @@ impl<'f> MntIdmap<'f> {
 
     /// Whether the caller has @mask - MAY_* - on @inode, by the whole VFS
     /// stack: ACLs and LSMs too.
-    pub fn permission(self, inode: &VfsInode, mask: u32) -> bool {
-        unsafe { c::inode_permission(self.0, inode.as_ptr(), mask as c_int) == 0 }
+    pub fn permission(self, inode: &VfsInode, mask: u32) -> Result<(), BchError> {
+        ret_to_result(unsafe { c::inode_permission(self.0, inode.as_ptr(), mask as c_int) })
     }
 
     /// @inode's owner as the mount's users see it, as stat(2) has it: a

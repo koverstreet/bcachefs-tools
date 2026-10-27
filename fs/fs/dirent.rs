@@ -31,8 +31,7 @@ use crate::inode;
 use crate::snapshots::subvolume;
 use crate::str_hash::{self, HashTable};
 use crate::util::ffi::Opaque;
-use crate::util::os_str::{qstr, qstr_name, OsStr, OsStrExt};
-use core::mem::MaybeUninit;
+use crate::util::os_str::{qstr, OsStr, OsStrExt};
 use core::ffi::c_int;
 use core::marker::PhantomData;
 use core::ops::ControlFlow;
@@ -446,7 +445,7 @@ pub fn lookup_trans<'a>(
     lookup_target(t, dir, lookup_key(t, iter, dir, hash_info, name, flags)?)
 }
 
-/// What @name in directory @dir points at: as bch2_dirent_lookup().
+/// What @name in directory @dir points at.
 pub fn lookup(
     fs:        &Fs,
     dir:       c::subvol_inum,
@@ -459,22 +458,6 @@ pub fn lookup(
         let mut iter = BtreeIter::uninit();
         lookup_trans(t, &mut iter, dir, hash_info, name, BtreeIterFlags::empty())
     })
-}
-
-/// For C's VFS and ioctls: bch2_dirent_lookup().
-///
-/// # Safety
-/// @name valid for the call.
-#[c_export]
-pub unsafe extern "C" fn bch2_dirent_lookup(
-    c:         &Opaque<c::bch_fs>,
-    dir:       c::subvol_inum,
-    hash_info: &c::bch_hash_info,
-    name:      &c::qstr,
-    inum:      &mut MaybeUninit<c::subvol_inum>,
-) -> c_int {
-    ret_to_c(lookup(Fs::from_c(c), dir, hash_info, unsafe { qstr_name(name) })
-             .map(|i| { inum.write(i); }))
 }
 
 /// Whether directory @dir is empty as seen in @snapshot - subvolume

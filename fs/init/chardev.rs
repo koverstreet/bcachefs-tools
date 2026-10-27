@@ -464,7 +464,7 @@ fn query_btree_keys(fs: &Fs, arg: &mut c::bch_ioctl_query_btree_keys) -> Result<
 
 /* The device ioctls */
 
-enum ErrMsg {
+pub(crate) enum ErrMsg {
     Log,
     User(c::bch_ioctl_err_msg),
 }
@@ -472,7 +472,7 @@ enum ErrMsg {
 impl ErrMsg {
     /// @ret, @err logged by @log if this is v1's, else copied to the user's
     /// buffer, @ret's error after it.
-    fn report(self, err: &mut Printbuf, ret: Result<(), BchError>,
+    pub(crate) fn report(self, err: &mut Printbuf, ret: Result<(), BchError>,
               log: impl FnOnce(Result<(), BchError>, &Printbuf) -> Result<(), BchError>)
         -> Result<(), BchError>
     {
@@ -485,7 +485,7 @@ impl ErrMsg {
 
 /// What fits of @err, @ret's error appended, to the user's buffer @dst: @ret,
 /// or the copy's error.
-fn copy_err_msg(dst: &c::bch_ioctl_err_msg, err: &mut Printbuf, ret: Result<(), BchError>)
+pub(crate) fn copy_err_msg(dst: &c::bch_ioctl_err_msg, err: &mut Printbuf, ret: Result<(), BchError>)
     -> Result<(), BchError>
 {
     if let Err(e) = &ret {
@@ -499,17 +499,8 @@ fn copy_err_msg(dst: &c::bch_ioctl_err_msg, err: &mut Printbuf, ret: Result<(), 
     ret
 }
 
-/// # Safety
-/// @dst and @src are live.
-#[c_export]
-pub unsafe fn bch2_copy_ioctl_err_msg(dst: *mut c::bch_ioctl_err_msg, src: *mut c::printbuf,
-                                      ret: c_int) -> c_int {
-    let (dst, src) = unsafe { (&*dst, Printbuf::borrow_raw(src)) };
-    ret_to_c(copy_err_msg(dst, src, ret_to_result_void(ret)))
-}
-
 /// A v2 device ioctl's argument: its v1's, and the error message's buffer.
-trait V2 {
+pub(crate) trait V2 {
     type V1;
     fn split(self) -> (Self::V1, ErrMsg);
 }

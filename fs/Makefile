@@ -132,7 +132,6 @@ bcachefs-y		:=			\
 	vendor/min_heap.o			\
 	vfs/fiemap.o				\
 	vfs/fs.o				\
-	vfs/ioctl.o				\
 	vfs/io.o				\
 	vfs/buffered.o				\
 	vfs/direct.o				\

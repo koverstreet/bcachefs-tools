@@ -49,13 +49,16 @@ const DIR_ENTRIES_CHANGED: u32 = ATTR_MTIME | ATTR_CTIME | ATTR_SIZE;
 
 impl InodeInfo {
     /// A new inode in this directory for @dentry, in the btree and the inode
-    /// cache - linked, unless @flags has BCH_CREATE_TMPFILE. The reference is
-    /// ours, not yet the dentry's.
-    fn create(&self, idmap: MntIdmap<'_>, dentry: Dentry<'_>, mode: c::umode_t, rdev: c::dev_t,
-              flags: u32) -> Result<InodeRef, BchError> {
+    /// cache - linked, unless @flags has BCH_CREATE_TMPFILE; a subvolume's
+    /// root, a snapshot of @snapshot_src's subvolume, with BCH_CREATE_SUBVOL
+    /// and BCH_CREATE_SNAPSHOT. The reference is ours, not yet the dentry's.
+    pub(crate) fn create(&self, idmap: MntIdmap<'_>, dentry: Dentry<'_>, mode: c::umode_t,
+                         rdev: c::dev_t, snapshot_src: c::subvol_inum, flags: u32)
+        -> Result<InodeRef, BchError>
+    {
         unsafe {
             InodeInfo::from_c(__bch2_create(idmap.as_ptr(), self.raw(), dentry.as_ptr(), mode, rdev,
-                                            c::subvol_inum::default(), flags))
+                                            snapshot_src, flags))
         }
     }
 
@@ -202,7 +205,7 @@ impl InodeOps for DirOps {
         -> Result<(), BchError>
     {
         let inode = dir.create(idmap, dentry, (c::S_IFLNK | c::S_IRWXUGO) as c::umode_t, 0,
-                               c::BCH_CREATE_TMPFILE)?;
+                               Default::default(), c::BCH_CREATE_TMPFILE)?;
         let len = target.to_bytes_with_nul().len() as c_int;
         ret_to_result_void(unsafe { c::page_symlink(inode.vfs().as_ptr(), target.as_ptr().cast(), len) })?;
         inode.vfs().write_and_wait()?;
@@ -224,7 +227,7 @@ impl InodeOps for DirOps {
     fn mknod(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, mode: c::umode_t,
              rdev: c::dev_t) -> Result<(), BchError>
     {
-        let inode = dir.create(idmap, dentry, mode, rdev, 0)?;
+        let inode = dir.create(idmap, dentry, mode, rdev, Default::default(), 0)?;
         dentry.set_casefold_ops(inode.vfs());
         dentry.instantiate(inode);
         Ok(())
@@ -342,7 +345,7 @@ impl InodeOps for DirOps {
     {
         // SAFETY: the file being opened's, referenced by it
         let dentry = unsafe { Dentry::borrow_raw(file.dentry()) };
-        let inode = dir.create(idmap, dentry, mode, 0, c::BCH_CREATE_TMPFILE)?;
+        let inode = dir.create(idmap, dentry, mode, 0, Default::default(), c::BCH_CREATE_TMPFILE)?;
         unsafe { c::d_mark_tmpfile(file.as_ptr(), inode.vfs().as_ptr()) };
         dentry.instantiate(inode);
         ret_to_result_void(unsafe { c::finish_open_simple(file.as_ptr(), 0) })
