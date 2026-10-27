@@ -28,6 +28,12 @@
 //! needs its projections - and `#[pin]` on a field whose initializer is a
 //! PinInit, not an Init: a lock, a struct's init().
 //!
+//! `#[init_args(PARAMS)]` on the struct: parameters init() takes, for its
+//! fields' #[init] initializers to use - what a field can't be zeroed
+//! before, as a BackRef to its owner: `#[init_args(fs: &Fs)]`, init(fs). The
+//! initializer borrows them: one parameter that's a reference, so its
+//! lifetime is the elided one.
+//!
 //! And each field is a Field<N>, one without #[init] is zeroed only if no
 //! placed type lives there, and a placed struct's init() takes its At: a
 //! value's place - place.rs.
@@ -40,13 +46,14 @@
 //! lockdep class of its own - a static in this generated code, one per
 //! field, as a static in ReffedWork's generic code wouldn't be.
 
-use proc_macro::TokenStream;
+use proc_macro::{TokenStream, TokenTree};
 
 use crate::cstruct::{parse_cstruct, CKind};
 use crate::place;
 use crate::tokens;
 
 pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
+    let args = init_args(&input);
     let def = parse_cstruct(&input.to_string())?;
     if def.kind != CKind::Struct {
         return Err(format!("{}: #[derive(Init)] is for a struct", def.name));
@@ -93,19 +100,43 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
 
     // An At is crate-private, as place.rs is - so is an init() taking one
     let (vis, at_param) = match at {
-        Some(ty) => ("pub(crate)", format!("at: {ty}")),
-        None => ("pub", String::new()),
+        Some(ty) => ("pub(crate)", Some(format!("at: {ty}"))),
+        None => ("pub", None),
     };
+    let params: Vec<String> = at_param.into_iter().chain(args.clone()).collect();
+    let borrows = if args.is_some() { " + '_" } else { "" };
 
     Ok(tokens(&format!(
         "#[automatically_derived]\n\
          impl {inst} {{\n\
              /// Zeroed, but for its #[init] fields: see #[derive(Init)].\n\
-             {vis} fn init({at_param}) -> impl ::pin_init::PinInit<Self, crate::errcode::BchError> {{\n\
+             {vis} fn init({params}) -> impl ::pin_init::PinInit<Self, crate::errcode::BchError>{borrows} {{\n\
                  ::pin_init::pin_init!({inst} {{\n{fields}}}? crate::errcode::BchError)\n\
              }}\n\
          }}\n\
-         {field_impls}")))
+         {field_impls}", params = params.join(", "))))
+}
+
+/// #[init_args(PARAMS)] on the struct, if it has it: PARAMS.
+fn init_args(input: &TokenStream) -> Option<String> {
+    let mut toks = input.clone().into_iter();
+    while let Some(t) = toks.next() {
+        match t {
+            TokenTree::Punct(p) if p.as_char() == '#' => {
+                let Some(TokenTree::Group(attr)) = toks.next() else { continue };
+                let mut a = attr.stream().into_iter();
+                if let (Some(TokenTree::Ident(name)), Some(TokenTree::Group(params))) = (a.next(), a.next()) {
+                    if name.to_string() == "init_args" {
+                        return Some(params.stream().to_string());
+                    }
+                }
+            }
+            // the struct's own attributes are all before it
+            TokenTree::Ident(i) if i.to_string() == "struct" => break,
+            _ => {}
+        }
+    }
+    None
 }
 
 // ── ReffedWork fields ───────────────────────────────────────────────────────

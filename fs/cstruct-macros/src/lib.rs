@@ -229,7 +229,7 @@ pub fn derive_type_info(input: TokenStream) -> TokenStream {
 
 /// `#[derive(Init)]`: `T::init()`, an initializer that zeroes every field but
 /// those with `#[init(EXPR)]` - see init.rs.
-#[proc_macro_derive(Init, attributes(init, placed_at))]
+#[proc_macro_derive(Init, attributes(init, init_args, placed_at))]
 pub fn derive_init(input: TokenStream) -> TokenStream {
     expand("#[derive(Init)]", || init::derive(input))
 }
