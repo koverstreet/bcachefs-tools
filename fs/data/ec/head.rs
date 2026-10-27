@@ -20,7 +20,7 @@ use crate::data::ec::buf::{MemWait, StripeBuf};
 use crate::data::ec::stripe_new::{self, Internal, Slot, StripeBlock, StripeNew, StripeNewBox};
 use crate::data::ec::stripe_new_reuse::OldRead;
 use crate::data::ec::stripe_new_blocks::stripe_alloc_or_reuse;
-use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, err_ptr, BchError};
 use crate::fs::Fs;
 use crate::locking::Guard;
 use crate::sb::counters::events;
@@ -32,7 +32,6 @@ use crate::util::Printbuf;
 use crate::{bch_err, new_lock, prt};
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::ptr::NonNull;
-use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
 use pin_init::pin_init;
 
@@ -189,7 +188,7 @@ fn head_stripe<'g>(g: &'g HeadGuard<'_>) -> Option<&'g StripeNew> {
 fn stripe_head_detach(fs: &Fs, g: &mut HeadGuard<'_>, err: Option<BchError>) {
     let s = g.s.take().expect("detaching a stripe head's stripe, with none");
     if let Some(err) = err {
-        s.err.store(ret_to_c(Err(err)), Ordering::Relaxed);
+        s.err.set(err);
     }
     set_pending(fs, s);
 }
@@ -446,7 +445,7 @@ fn alloc_for_head(fs: &Fs, h: &c::ec_stripe_head, g: &mut HeadGuard<'_>, max_dat
 pub(crate) fn set_pending(fs: &Fs, b: StripeNewBox) {
     {
         let i = b.lock();
-        assert!(i.allocated || b.err.load(Ordering::Relaxed) != 0,
+        assert!(i.allocated || b.err.get().is_some(),
                 "stripe {} handed on, neither allocated nor cancelled", i.new_stripe.idx());
     }
 

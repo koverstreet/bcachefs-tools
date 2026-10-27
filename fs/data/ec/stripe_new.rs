@@ -135,7 +135,7 @@ use crate::data::ec::stripe_new_blocks::new_stripe_key;
 use crate::data::ec::stripe_new_reuse::Reuse;
 use crate::data::ec::stripe_new_tasks::stripe_task;
 use crate::data::moving::MovingWrite;
-use crate::errcode::{bch_errcode, BchError};
+use crate::errcode::{bch_errcode, ret_to_result_void, BchError, FirstErr};
 use crate::fs::Fs;
 use crate::locking::{Guard, Lock};
 use crate::util::alloc::{kbox_pin_init, AllocError, KBox, KVVec};
@@ -176,8 +176,9 @@ pub struct StripeNew {
     #[pin]
     pub(crate) in_flight:            Gather<()>,
     seq:                  AtomicU64,
-    /// Why it's cancelled: an errcode, negative, as C's
-    pub(crate) err:       AtomicI32,
+    /// Why it's cancelled - a writer's IO failed, or its head gave up on it:
+    /// the first error
+    pub(crate) err:       FirstErr,
     /// An ec_stripe_new_state
     state:                AtomicU32,
 
@@ -415,7 +416,7 @@ impl StripeNew {
             io_refs:    AtomicI32::new(1),
             in_flight   <- Gather::new(),
             seq:        AtomicU64::new(0),
-            err:        AtomicI32::new(0),
+            err:        FirstErr::new(),
             state:      AtomicU32::new(State::EC_STRIPE_NEW_open as u32),
             internal    <- new_lock!(<- Internal::new(devs, watermark)),
         }? BchError))?;
@@ -656,8 +657,9 @@ pub unsafe fn bch2_ec_stripe_new_put_io(s: *mut c::ec_stripe_new) {
 pub unsafe fn bch2_ec_bucket_cancel(_c: &Opaque<c::bch_fs>, ob: &c::open_bucket, err: c_int) {
     // SAFETY: the caller's
     let ob = unsafe { OpenBucketRef::from_c(ob) };
+    let Err(err) = ret_to_result_void(err) else { panic!("a stripe block's write cancelled without an error") };
     // SAFETY: its io ref keeps it
-    unsafe { StripeNew::from_c(ob.ec()) }.err.store(err, Ordering::Relaxed);
+    unsafe { StripeNew::from_c(ob.ec()) }.err.set(err);
 }
 
 /// Where @wp's write goes in its stripe's buffer, if one of its open buckets

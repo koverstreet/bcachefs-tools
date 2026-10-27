@@ -17,7 +17,7 @@ use crate::data::ec::stripe::{StripeKey, MAX_BLOCKS};
 use crate::data::ec::stripe_new::{new_stripes_take, Internal, StripeNew, StripePtr};
 use crate::data::ec::stripe_new_reuse::{OldRead, Reuse};
 use crate::data::ec::update::{create_watermark, stripe_update_extents};
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::sb::counters::events;
 use crate::sb::members::DevIoRef;
@@ -28,7 +28,6 @@ use crate::util::task::{Resumable, Resume};
 use crate::util::vstructs::Validated;
 use crate::{bch_err, btree_trans, fs_inconsistent, inode_opts, logged_ops, prt};
 use arrayvec::ArrayVec;
-use core::sync::atomic::Ordering;
 use pin_init::{init, init_zeroed, stack_pin_init, Init};
 
 // ── Its task ─────────────────────────────────────────────────────────────
@@ -268,9 +267,7 @@ async fn create_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Result<(),
 async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Result<(), OldStripeLost>,
                             at: Resume<'_>) -> Result<(), BchError>
 {
-    let e = s.err.load(Ordering::Relaxed);
-    if e != 0 {
-        let e = BchError::from_raw(-e);
+    if let Some(e) = s.err.get() {
         if !e.matches(c::EROFS) {
             bch_err!(fs, "error creating stripe: error writing data buckets");
         }
@@ -405,9 +402,7 @@ fn create_done(fs: &Fs, s: &StripeNew, ret: Result<(), BchError>) {
     let new = i.new_stripe.stripe();
     match ret {
         Err(e) => {
-            if s.err.load(Ordering::Relaxed) == 0 {
-                s.err.store(ret_to_c(Err(e)), Ordering::Relaxed);
-            }
+            s.err.set(e);
             fs.event_inc_trace(events::stripe_create_fail, |out| {
                 prt!(out, "error {e}\n{}", new.to_text(fs));
             });
