@@ -13,7 +13,7 @@ use crate::data::ec::buf::blocks_in;
 use crate::data::ec::open::OpenStripe;
 use crate::data::ec::repair::StripeBlocks;
 use crate::data::ec::stripe::{StripeKey, STRIPE_LRU_POS_EMPTY};
-use crate::data::ec::stripe_new::{Internal, StripeBlock};
+use crate::data::ec::stripe_new::{Internal, Slot, StripeBlock};
 use crate::data::ec::trigger::ec_stripe_mem_alloc;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
@@ -35,13 +35,13 @@ use core::sync::atomic::Ordering;
 // Their pins are the stripe's, in blocks[], by block. With too few devices
 // to fill it, a stripe may shrink to the blocks it got.
 
-/// The centroid of @v's blocks so far, @gotten: stripe_blocks_centroid(). 0
-/// for none.
-fn blocks_centroid(fs: &Fs, v: &c::Stripe<Validated>, gotten: &Bitmap) -> u64 {
+/// The centroid of @v's blocks so far, those of @blocks that have one:
+/// stripe_blocks_centroid(). 0 for none.
+fn blocks_centroid(fs: &Fs, v: &c::Stripe<Validated>, blocks: &[Slot]) -> u64 {
     let rcu = read_lock();
-    let (sum, nr) = gotten.iter()
-        .filter(|&i| i < usize::from(v.nr_blocks))
-        .map(|i| v.block_ptrs()[i])
+    let (sum, nr) = blocks.iter().enumerate()
+        .filter(|(i, b)| *i < usize::from(v.nr_blocks) && b.gotten())
+        .map(|(i, _)| v.block_ptrs()[i])
         .filter(|p| u32::from(p.dev()) != c::BCH_SB_MEMBER_INVALID)
         .filter_map(|p| fs.dev_rcu(p.dev().into(), &rcu).map(|ca| ca.offset_to_frac(p.offset())))
         .fold((0u64, 0u64), |(sum, nr), f| (sum.wrapping_add(f), nr + 1));
@@ -52,9 +52,8 @@ fn blocks_centroid(fs: &Fs, v: &c::Stripe<Validated>, gotten: &Bitmap) -> u64 {
 /// spreading: one at a time, the centroid moving as they're placed.
 #[allow(clippy::too_many_arguments)]
 fn alloc_blocks(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripe: &mut c::dev_stripe_state,
-                v: &mut c::Stripe<Validated>, blocks: &mut [Option<StripeBlock>], stripe_fs: &BackRef<Fs>,
-                gotten: &mut c::StripeBlockMask, data_type: c::bch_data_type, slots: core::ops::Range<usize>,
-                have: &mut usize)
+                v: &mut c::Stripe<Validated>, blocks: &mut [Slot], stripe_fs: &BackRef<Fs>,
+                data_type: c::bch_data_type, slots: core::ops::Range<usize>, have: &mut usize)
     -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -64,16 +63,15 @@ fn alloc_blocks(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripe: &m
         req.nr_replicas = (*have + 1) as u8;
         req.nr_effective = *have as c_uint;
         req.data_type = data_type;
-        req.target_frac = blocks_centroid(fs, v, gotten);
+        req.target_frac = blocks_centroid(fs, v, blocks);
 
         let ret = t.bucket_alloc_set(req, stripe);
         for ob in req.ptrs.drain(fs) {
-            let j = gotten.next_zero(slots.start, slots.end).expect("a block left to fill");
+            let j = slots.clone().find(|&j| !blocks[j].gotten()).expect("a block left to fill");
             req.devs_may_alloc.d.clear(ob.dev() as usize);
             v.block_ptrs_mut()[j] = ob.ptr();
             // SAFETY: @blocks is a stripe being made's, alloc_buckets()' caller's
-            blocks[j] = Some(unsafe { StripeBlock::new(ob, stripe_fs) });
-            gotten.set(j);
+            blocks[j].fill(unsafe { StripeBlock::new(ob, stripe_fs) });
             *have += 1;
         }
         ret?;
@@ -103,7 +101,7 @@ fn alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripes: 
     req.devs_may_alloc.d.and(&fs.allocator.rw_devs[c::bch_data_type::BCH_DATA_user.0 as usize].load());
 
     let (mut have_data, mut have_parity) = (0, 0);
-    for i in s.blocks_gotten.iter().filter(|&i| i < nr_blocks) {
+    for i in (0..nr_blocks).filter(|&i| s.blocks[i].gotten()) {
         let dev = v.block_ptrs()[i].dev();
         // a block on a failed or removed device isn't repaired here: that
         // needs its extents updated, by backpointer
@@ -117,10 +115,10 @@ fn alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripes: 
     assert!(have_data <= nr_data && have_parity <= nr_parity,
             "new stripe with {have_data}/{nr_data} data blocks and {have_parity}/{nr_parity} parity");
 
-    let (blocks, gotten) = (&mut s.blocks, &mut s.blocks_gotten);
-    alloc_blocks(t, req, &mut stripes.parity_stripe, v, blocks, stripe_fs, gotten,
+    let blocks = &mut s.blocks;
+    alloc_blocks(t, req, &mut stripes.parity_stripe, v, blocks, stripe_fs,
                  c::bch_data_type::BCH_DATA_parity, nr_data..nr_blocks, &mut have_parity)?;
-    alloc_blocks(t, req, &mut stripes.block_stripe, v, blocks, stripe_fs, gotten,
+    alloc_blocks(t, req, &mut stripes.block_stripe, v, blocks, stripe_fs,
                  c::bch_data_type::BCH_DATA_user, 0..nr_data, &mut have_data)
 }
 
@@ -128,7 +126,7 @@ fn alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripes: 
 /// from it - by the mean absolute deviation of the others - tried again,
 /// nearer, and kept if that halves its distance.
 /// Only the new ones: those @had - a reused stripe's, carried over - are
-/// anchors, and those a writer's claimed (blocks_allocated) can't move. Best
+/// anchors, and those a writer's claimed (Slot::allocated()) can't move. Best
 /// effort, so it never makes things worse: an allocation that fails keeps the
 /// original - but a restart, which ends the attempt.
 fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, s: &mut Internal,
@@ -141,7 +139,7 @@ fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, s: 
     {
         let v = s.new_stripe.stripe().v();
         let rcu = read_lock();
-        for i in s.blocks_gotten.iter().filter(|&i| i < MAX) {
+        for i in (0..MAX).filter(|&i| s.blocks[i].gotten()) {
             let Some(p) = v.block_ptrs().get(i) else { continue };
             if u32::from(p.dev()) != c::BCH_SB_MEMBER_INVALID {
                 frac[i] = fs.dev_rcu(p.dev().into(), &rcu).map(|ca| ca.offset_to_frac(p.offset()));
@@ -160,7 +158,7 @@ fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, s: 
 
     for i in 0..MAX {
         let Some(fi) = frac[i] else { continue };
-        if had.test(i) || s.blocks_allocated.test(i) {
+        if had.test(i) || s.blocks[i].allocated() {
             continue;
         }
 
@@ -198,8 +196,8 @@ fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, s: 
         // new bucket
         if new_frac.abs_diff(centroid) < dist / 2 {
             // SAFETY: into @s's blocks[], a stripe being made's
-            let old = s.blocks[i].replace(unsafe { StripeBlock::new(ob, stripe_fs) });
-            drop(old.expect("a gotten block's bucket"));
+            let old = core::mem::replace(&mut s.blocks[i], Slot::Bucket(unsafe { StripeBlock::new(ob, stripe_fs) }));
+            assert!(matches!(old, Slot::Bucket(_)), "reallocating a stripe block that isn't a new bucket");
             sum = sum.wrapping_add(new_frac).wrapping_sub(fi);
             frac[i] = Some(new_frac);
             s.new_stripe.stripe_mut().block_ptrs_mut()[i] = new_ptr;
@@ -234,35 +232,32 @@ fn will_not_allocate(fs: &Fs, req: &mut c::alloc_request, s: &Internal) -> bool 
 /// pointers the key is zero: checksums are written at creation.
 fn shrink_to_gotten(s: &mut Internal, nr_blocks: usize, nr_parity: usize) {
     let old_nr_data = nr_blocks - nr_parity;
-    let parity_gotten = (old_nr_data..nr_blocks).filter(|&i| s.blocks_gotten.test(i)).count();
-    let new_nr_data = s.blocks_gotten.weight() as usize - parity_gotten;
+    let parity_gotten = s.blocks[old_nr_data..nr_blocks].iter().filter(|b| b.gotten()).count();
+    let new_nr_data = s.blocks.iter().filter(|b| b.gotten()).count() - parity_gotten;
     let new_nr_blocks = new_nr_data + parity_gotten;
 
-    assert!(s.blocks[new_nr_data..old_nr_data].iter().all(Option::is_none),
-            "shrinking a new stripe to {new_nr_data} data blocks, with a bucket for a block past them");
+    // The data blocks it got are a prefix - the old stripe's first, all of
+    // them with their buckets, as they're allocated lowest first - so what's
+    // past them is empty
+    assert!(s.blocks[new_nr_data..old_nr_data].iter().all(|b| matches!(b, Slot::Empty)),
+            "shrinking a new stripe to {new_nr_data} data blocks, with a block past them");
 
-    // down, in order: each to a block that's empty, or was moved from
+    // down, in order: each to a block that's empty
     for k in 0..parity_gotten {
-        s.blocks[new_nr_data + k] = s.blocks[old_nr_data + k].take();
+        s.blocks[new_nr_data + k] = core::mem::take(&mut s.blocks[old_nr_data + k]);
     }
-    assert!(s.blocks[new_nr_blocks..].iter().all(Option::is_none),
-            "shrinking a new stripe to {new_nr_blocks} blocks, with a bucket for a block past them");
+    assert!(s.blocks[new_nr_blocks..].iter().all(|b| matches!(b, Slot::Empty)),
+            "shrinking a new stripe to {new_nr_blocks} blocks, with a block past them");
 
     let v = s.new_stripe.stripe_mut();
     v.block_ptrs_mut().copy_within(old_nr_data..old_nr_data + parity_gotten, new_nr_data);
-    for i in old_nr_data..nr_blocks {
-        s.blocks_gotten.clear(i);
-    }
-    for i in new_nr_data..new_nr_blocks {
-        s.blocks_gotten.set(i);
-    }
     v.block_ptrs_mut()[new_nr_blocks..].fill(c::bch_extent_ptr::from_bits(Align8U64(0)));
     v.nr_blocks = new_nr_blocks as u8;
     v.nr_redundant = parity_gotten as u8;
 
     let mut devs = c::bch_devs_list::default();
     for (b, p) in s.blocks.iter().zip(v.block_ptrs()) {
-        let ob_dev = b.as_ref().map(|b| b.dev());
+        let ob_dev = b.bucket().map(|b| b.dev());
         assert!(ob_dev.is_none_or(|d| d == u32::from(p.dev())), "a shrunk stripe's block not on its bucket's device");
         assert!(!devs.has(p.dev()), "a shrunk stripe with two blocks on device {}", p.dev());
         devs.add(p.dev());
@@ -280,7 +275,7 @@ pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::al
     -> Result<(), BchError>
 {
     let fs = t.fs();
-    let gotten = |s: &Internal, n: usize| s.blocks_gotten.iter().filter(|&i| i < n).count();
+    let gotten = |s: &Internal, n: usize| s.blocks[..n].iter().filter(|b| b.gotten()).count();
     let (nr_blocks, nr_parity) = {
         let v = s.new_stripe.stripe().v();
         (usize::from(v.nr_blocks), usize::from(v.nr_redundant))
@@ -289,7 +284,7 @@ pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::al
         return Ok(());
     }
 
-    let had = s.blocks_gotten;
+    let had = s.gotten();
     let mut shrunk = false;
     let saved = t.alloc_zeroed::<ReqSaved>()?;
     saved.save(req);
@@ -307,12 +302,12 @@ pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::al
         .filter(|&e| may_shrink && (e == blocked || e == BchError::from(bch_errcode::BCH_ERR_freelist_empty)))
         .filter(|_| will_not_allocate(fs, req, s));
     if let Some(err) = full {
-        let moving = s.blocks_moving.weight() as usize;
+        let moving = s.blocks.iter().filter(|b| b.moving()).count();
         // a data block at least, unless a block's being moved - and two, or
         // replication does better
-        let need = moving + nr_parity + usize::from(moving == 0) + usize::from(s.old_blocks_nr == 0);
+        let need = moving + nr_parity + usize::from(moving == 0) + usize::from(s.old_block_map().is_empty());
 
-        if s.blocks.iter().flatten().count() >= need {
+        if s.blocks.iter().filter_map(Slot::bucket).count() >= need {
             shrink_to_gotten(s, nr_blocks, nr_parity);
             ret = Ok(());
             shrunk = true;
@@ -497,27 +492,19 @@ pub(crate) fn init_new_stripe_from_old(s: &mut Internal, carry: u32, move_: u32,
     assert_eq!(s.old_stripe.stripe().v().nr_redundant, new.nr_redundant, "a new stripe from an old one of other redundancy");
     debug_assert!(carry & move_ == 0, "blocks {:#x} both carried and moved", carry & move_);
 
-    for i in s.blocks_gotten.iter().filter(|&i| i < nr_blocks) {
-        drop(s.blocks[i].take().expect("a gotten block's bucket"));
+    for b in &mut s.blocks[..nr_blocks] {
+        assert!(matches!(b, Slot::Empty | Slot::Bucket(_)), "a new stripe laid out from an old one twice");
+        *b = Slot::Empty;
     }
-    s.blocks_gotten = Default::default();
-    s.blocks_allocated = Default::default();
 
-    for i in blocks_in(carry | move_) {
-        let j = usize::from(s.old_blocks_nr);
-        if carry & 1 << i != 0 {
-            s.blocks_gotten.set(j);
-        } else {
-            s.blocks_moving.set(j);
-        }
-        s.blocks_allocated.set(j);
+    for (j, i) in blocks_in(carry | move_).enumerate() {
+        let old = i as u8;
+        s.blocks[j] = if carry & 1 << i != 0 { Slot::Carried { old } } else { Slot::Moving { old, bucket: None } };
 
         let p = s.old_stripe.stripe().v().block_ptrs()[i];
         s.new_stripe.stripe_mut().block_ptrs_mut()[j] = p;
-        s.old_block_map[j] = i as u8;
-        s.old_blocks_nr += 1;
-        assert!(u32::from(s.old_blocks_nr) + u32::from(!repair) <= nr_data,
-                "a new stripe of {nr_data} data blocks, from {} of an old one", s.old_blocks_nr);
+        assert!(j as u32 + 1 + u32::from(!repair) <= nr_data,
+                "a new stripe of {nr_data} data blocks, from {} of an old one", j + 1);
     }
 
     s.have_old_stripe = true;

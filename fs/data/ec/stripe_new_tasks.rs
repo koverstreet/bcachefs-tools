@@ -72,26 +72,26 @@ pub(crate) async fn stripe_task(fs: &Fs, p: StripePtr) {
 /// old stripe is discarded at the fold, parity included, and regenerated at
 /// create.
 fn old_stripe_required(s: &Internal) -> u32 {
-    s.old_block_map[..usize::from(s.old_blocks_nr)].iter().fold(0, |m, &b| m | 1 << b)
+    s.old_block_map().iter().fold(0, |m, &b| m | 1 << b)
 }
 
 /// The old stripe's blocks we're carrying forward, in @old, checked out: take
 /// them - their buffers swapped into the new stripe's, whose carried slots
-/// are no writer's, as they're in blocks_allocated.
+/// are no writer's, as they're Slot::Carried or Moving.
 pub(crate) fn old_stripe_carry(s: &mut Internal, old: &mut StripeBuf) {
-    let Internal { new_buf, old_block_map, old_blocks_nr, .. } = s;
-    let new = new_buf.as_mut().expect("a new stripe's buffer");
+    let map = s.old_block_map();
+    let new = s.new_buf.as_mut().expect("a new stripe's buffer");
     assert_eq!((new.offset, new.size), (old.offset, old.size),
                "carrying blocks between stripe buffers of other sizes");
 
-    for (i, &j) in old_block_map[..usize::from(*old_blocks_nr)].iter().enumerate() {
+    for (i, &j) in map.iter().enumerate() {
         core::mem::swap(&mut new.data[i], &mut old.data[usize::from(j)]);
     }
 }
 
 /// Fold the blocks we're carrying forward into the new stripe as soon as the
 /// old stripe's read lands, instead of at create: ec_old_stripe_read() and
-/// ec_old_stripe_fold(). The carried blocks are set in blocks_allocated, so
+/// ec_old_stripe_fold(). The carried blocks are Slot::Carried or Moving, so
 /// the sector allocator will never hand one to a writer, and the data we
 /// swap in can't be overwritten while the rest of the stripe fills.
 ///
@@ -189,9 +189,9 @@ struct Working {
     old_stripe:      StripeKey,
     old_buf:         Option<KBox<StripeBuf>>,
     res:             Option<DiskReservation<'static>>,
-    blocks_moving:   c::StripeBlockMask,
-    old_block_map:   [u8; MAX_BLOCKS],
-    old_blocks_nr:   u8,
+    /// The new blocks moved from the old stripe, to be written
+    moving:          c::StripeBlockMask,
+    old_block_map:   ArrayVec<u8, MAX_BLOCKS>,
     have_old_stripe: bool,
     allocated:       bool,
     watermark:       c::bch_watermark,
@@ -206,9 +206,8 @@ impl Working {
             old_stripe      <- init_zeroed(),
             old_buf:        None,
             res:            None,
-            blocks_moving   <- init_zeroed(),
-            old_block_map   <- init_zeroed(),
-            old_blocks_nr:  0,
+            moving          <- init_zeroed(),
+            old_block_map:  ArrayVec::new(),
             have_old_stripe: false,
             allocated:      false,
             watermark       <- init_zeroed(),
@@ -220,9 +219,13 @@ impl Working {
     fn take(&mut self, i: &mut Internal) {
         self.new_stripe.copy_from(&i.new_stripe);
         self.old_stripe.copy_from(&i.old_stripe);
-        self.blocks_moving   = i.blocks_moving;
-        self.old_block_map   = i.old_block_map;
-        self.old_blocks_nr   = i.old_blocks_nr;
+        self.moving          = Default::default();
+        for (j, b) in i.blocks.iter().enumerate() {
+            if b.moving() {
+                self.moving.set(j);
+            }
+        }
+        self.old_block_map   = i.old_block_map();
         self.have_old_stripe = i.have_old_stripe;
         self.allocated       = i.allocated;
         self.watermark       = i.watermark;
@@ -296,16 +299,16 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
         let v = w.new_stripe.stripe().v();
         (v.nr_data() as usize, usize::from(v.nr_blocks))
     };
-    let Working { new_stripe, new_buf, old_stripe, old_buf, blocks_moving, old_block_map, old_blocks_nr,
-                  have_old_stripe, allocated, watermark, res } = w;
+    let Working { new_stripe, new_buf, old_stripe, old_buf, moving, old_block_map, have_old_stripe, allocated,
+                  watermark, res } = w;
     let buf = new_buf.as_mut().expect("a new stripe's buffer");
 
     stack_pin_init!(let io = BlockIo::write(fs, buf));
 
     // the rest of each data bucket zeroed: zero_out_rest_of_ec_bucket()
-    for i in usize::from(*old_blocks_nr)..nr_data {
+    for i in old_block_map.len()..nr_data {
         // its writer done with it
-        let Some((dev, sectors_free)) = s.lock().blocks[i].as_ref().map(|b| (b.dev(), b.sectors_free())) else {
+        let Some((dev, sectors_free)) = s.lock().blocks[i].bucket().map(|b| (b.dev(), b.sectors_free())) else {
             continue
         };
         if sectors_free == 0 {
@@ -345,8 +348,8 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
     generate_checksums(new_stripe, io.as_mut().buf());
 
     // write out data blocks that moved
-    for i in 0..usize::from(*old_blocks_nr) {
-        if blocks_moving.test(i) {
+    for i in 0..old_block_map.len() {
+        if moving.test(i) {
             io.as_mut().submit(new_stripe.stripe(), i);
         }
     }
@@ -369,8 +372,8 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
     let mut op = BkeyI::<c::LoggedOpStripeUpdate>::new();
     op.v.old_idx       = old_idx.into();
     op.v.new_idx       = new_idx.into();
-    op.v.old_blocks_nr = *old_blocks_nr;
-    op.v.old_block_map = *old_block_map;
+    op.v.old_blocks_nr = old_block_map.len() as u8;
+    op.v.old_block_map[..old_block_map.len()].copy_from_slice(old_block_map);
 
     let watermark: Watermark = create_watermark(*watermark).into();
     let opts = CommitOpts::new().watermark(watermark).flags(CommitFlags::NO_CHECK_RW | CommitFlags::NO_ENOSPC);
@@ -385,7 +388,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
     })?;
 
     let trans = btree_trans!(fs);
-    let map = &old_block_map[..usize::from(*old_blocks_nr)];
+    let map = &old_block_map[..];
     // no old stripe, if it isn't a reuse: nothing's carried from it
     let old = if map.is_empty() { new } else { old_stripe.stripe() };
     let ret = stripe_update_extents(&trans, old, new, map, watermark);
@@ -416,7 +419,7 @@ fn create_done(fs: &Fs, s: &StripeNew, ret: Result<(), BchError>) {
         }
         Ok(()) if i.have_old_stripe => fs.event_inc_trace(events::stripe_reuse, |out| {
             let ov = i.old_stripe.stripe();
-            prt!(out, "Reused {}/{} data blocks\n", i.old_blocks_nr, ov.v().nr_data());
+            prt!(out, "Reused {}/{} data blocks\n", i.old_block_map().len(), ov.v().nr_data());
             prt!(out, "\nOld: {}", ov.to_text(fs));
             prt!(out, "\nNew: {}", new.to_text(fs));
         }),

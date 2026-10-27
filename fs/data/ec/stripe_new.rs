@@ -204,6 +204,72 @@ impl StripeBlock {
     }
 }
 
+/// A block of a stripe being made, by what it holds: a new bucket, or a block
+/// of the old stripe it reuses - carried in place, or moved to a new bucket.
+/// What C kept as blocks_gotten, blocks_allocated, blocks_moving, blocks[]
+/// and old_block_map, each a view of this.
+///
+/// The old stripe's blocks are a prefix, in order: init_new_stripe_from_old()
+/// lays them out, so the map to them - old_block_map() - is the slots up to
+/// the first that isn't one.
+#[derive(Default)]
+pub(crate) enum Slot {
+    /// Nothing yet: a bucket's to be allocated for it.
+    #[default]
+    Empty,
+    /// A new bucket: Pinned until a writer claims it - only data blocks'
+    /// are - then Claimed.
+    Bucket(StripeBlock),
+    /// Block @old of the old stripe, in place: its bucket is the old
+    /// stripe's, so no open bucket of ours.
+    Carried { old: u8 },
+    /// Block @old of the old stripe, its data to a new bucket - once it's
+    /// allocated, Pinned, and never a writer's.
+    Moving { old: u8, bucket: Option<StripeBlock> },
+}
+
+impl Slot {
+    /// Whether it has its block: a bucket, or the old stripe's in place.
+    pub(crate) fn gotten(&self) -> bool {
+        !matches!(self, Slot::Empty | Slot::Moving { bucket: None, .. })
+    }
+
+    /// Whether it's no writer's to be given: one has it, or it's the old
+    /// stripe's.
+    pub(crate) fn allocated(&self) -> bool {
+        matches!(self, Slot::Bucket(StripeBlock::Claimed(_)) | Slot::Carried { .. } | Slot::Moving { .. })
+    }
+
+    pub(crate) fn moving(&self) -> bool {
+        matches!(self, Slot::Moving { .. })
+    }
+
+    /// Its bucket, if it's a new one.
+    pub(crate) fn bucket(&self) -> Option<&StripeBlock> {
+        match self {
+            Slot::Bucket(b) | Slot::Moving { bucket: Some(b), .. } => Some(b),
+            _ => None,
+        }
+    }
+
+    /// The old stripe's block it carries forward, in place or moved.
+    pub(crate) fn old(&self) -> Option<u8> {
+        match *self {
+            Slot::Carried { old } | Slot::Moving { old, .. } => Some(old),
+            _ => None,
+        }
+    }
+
+    /// A new bucket, for a slot that hasn't got its block.
+    pub(crate) fn fill(&mut self, b: StripeBlock) {
+        match self {
+            Slot::Empty => *self = Slot::Bucket(b),
+            Slot::Moving { bucket: bucket @ None, .. } => *bucket = Some(b),
+            _ => panic!("filling a stripe block that has its bucket"),
+        }
+    }
+}
+
 impl core::ops::Deref for StripeBlock {
     type Target = OpenBucketRef;
 
@@ -232,10 +298,7 @@ pub(crate) struct Internal {
     /// ... and every block's in it: there's nothing for the task to read
     pub(crate) old_stripe_read_all:            bool,
 
-    pub(crate) blocks_gotten:    c::StripeBlockMask,
-    pub(crate) blocks_allocated: c::StripeBlockMask,
-    pub(crate) blocks_moving:    c::StripeBlockMask,
-    pub(crate) blocks:           [Option<StripeBlock>; MAX_BLOCKS],
+    pub(crate) blocks:           [Slot; MAX_BLOCKS],
     /// Its parity's, once reserve_parity()'s made it
     pub(crate) res:              Option<DiskReservation<'static>>,
 
@@ -249,9 +312,6 @@ pub(crate) struct Internal {
 
     pub(crate) new_stripe_open:  Option<StripeClaim>,
     pub(crate) old_stripe_open:  Option<StripeClaim>,
-
-    pub(crate) old_block_map:    [u8; MAX_BLOCKS],
-    pub(crate) old_blocks_nr:    u8,
 }
 
 /// A stripe being made, owned: pinned, as its task, its writers' open buckets
@@ -470,10 +530,7 @@ impl Internal {
             allocated:           false,
             old_stripe_read:     false,
             old_stripe_read_all: false,
-            blocks_gotten:       Default::default(),
-            blocks_allocated:    Default::default(),
-            blocks_moving:       Default::default(),
-            blocks:              [const { None }; MAX_BLOCKS],
+            blocks:              Default::default(),
             res:                 None,
             buckets:             ArrayVec::new(),
             new_stripe           <- pin_init::init_zeroed(),
@@ -482,13 +539,28 @@ impl Internal {
             old_buf:             None,
             new_stripe_open:     None,
             old_stripe_open:     None,
-            old_block_map:       [0; MAX_BLOCKS],
-            old_blocks_nr:       0,
         })
     }
 
     pub(crate) fn nr_data(&self) -> u32 {
         self.new_stripe.stripe().v().nr_data()
+    }
+
+    /// Its blocks that have one: a bucket, or the old stripe's in place.
+    pub(crate) fn gotten(&self) -> c::StripeBlockMask {
+        let mut m = c::StripeBlockMask::default();
+        for (i, b) in self.blocks.iter().enumerate() {
+            if b.gotten() {
+                m.set(i);
+            }
+        }
+        m
+    }
+
+    /// The old stripe's blocks it carries forward, by new block: block i is
+    /// the old stripe's old_block_map()[i].
+    pub(crate) fn old_block_map(&self) -> ArrayVec<u8, MAX_BLOCKS> {
+        self.blocks.iter().map_while(Slot::old).collect()
     }
 
     /// Its parity's disk reservation: the stripe's sectors for each parity
@@ -508,7 +580,7 @@ impl Internal {
     pub(crate) fn buckets_add(&mut self, fs: &Fs) -> Result<(), BchError> {
         let nr = self.new_stripe.stripe().v().nr_blocks.into();
 
-        for b in self.blocks[..nr].iter().flatten() {
+        for b in self.blocks[..nr].iter().filter_map(Slot::bucket) {
             let bucket = bucket_to_u64(pos(b.dev().into(), b.bucket()));
 
             match fs.ec.stripes_new_buckets.insert_new(bucket) {
@@ -630,7 +702,7 @@ pub unsafe fn bch2_ec_stripe_new_has_dev(_c: &Opaque<c::bch_fs>, s: *const c::ec
     // SAFETY: the caller's
     let s = unsafe { StripeNew::from_c(s) }.lock();
     let nr_blocks = s.new_stripe.stripe().v().nr_blocks as usize;
-    s.blocks[..nr_blocks].iter().flatten().any(|b| b.dev() == dev)
+    s.blocks[..nr_blocks].iter().filter_map(Slot::bucket).any(|b| b.dev() == dev)
 }
 
 /// @s's slot, for open_bucket_to_text() - under spinlocks, so not by its
@@ -717,13 +789,13 @@ pub(crate) fn new_stripe_to_text(out: &mut Printbuf, fs: &Fs, s: &StripeNew) {
     let v = i.new_stripe.stripe().v();
     prt!(out, "\tidx {} blocks {}+{} allocated {} ref {} {} {} obs",
          i.new_stripe.idx(), v.nr_data(), v.nr_redundant,
-         (0..v.nr_data() as usize).filter(|&b| i.blocks_allocated.test(b)).count(),
+         i.blocks[..v.nr_data() as usize].iter().filter(|b| b.allocated()).count(),
          s.io_refs.load(Ordering::Relaxed), i.watermark.name(), STATE_NAMES[s.state() as usize]);
 
-    for b in i.blocks_gotten.iter().filter(|&b| b < usize::from(v.nr_blocks)) {
-        prt!(out, " {}", i.blocks[b].as_ref().map_or(0, |ob| ob.idx().get()));
+    for b in i.blocks[..usize::from(v.nr_blocks)].iter().filter(|b| b.gotten()) {
+        prt!(out, " {}", b.bucket().map_or(0, |ob| ob.idx().get()));
 
-        let Some(StripeBlock::Claimed(ob)) = &i.blocks[b] else { continue };
+        let Slot::Bucket(StripeBlock::Claimed(ob)) = b else { continue };
         let rcu = read_lock();
         if let Some(ca) = fs.dev_rcu(ob.dev(), &rcu) {
             let bucket_size = u32::from(ca.mi.bucket_size);

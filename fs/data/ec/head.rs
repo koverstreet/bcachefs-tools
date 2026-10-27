@@ -17,7 +17,7 @@ use crate::btree::bkey::BkeyV;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
 use crate::data::ec::buf::{MemWait, StripeBuf};
-use crate::data::ec::stripe_new::{self, Internal, StripeBlock, StripeNew, StripeNewBox};
+use crate::data::ec::stripe_new::{self, Internal, Slot, StripeBlock, StripeNew, StripeNewBox};
 use crate::data::ec::stripe_new_blocks::stripe_alloc_or_reuse;
 use crate::errcode::{bch_errcode, err_ptr, ret_to_c, BchError};
 use crate::fs::Fs;
@@ -282,7 +282,7 @@ pub(crate) fn stripe_head_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32, alg
 pub(crate) fn stripe_head_put(fs: &Fs, mut g: HeadGuard<'_>) {
     let full = head_stripe(&g).is_some_and(|s| {
         let s = s.lock();
-        s.allocated && (0..s.nr_data() as usize).all(|i| s.blocks_allocated.test(i))
+        s.allocated && s.blocks[..s.nr_data() as usize].iter().all(Slot::allocated)
     });
     if full {
         stripe_head_detach(fs, &mut g, None);
@@ -307,11 +307,11 @@ fn stripe_on_dev(s: &Internal, ca: Option<&c::bch_dev>) -> bool {
     let v = s.new_stripe.stripe().v();
 
     (0..usize::from(v.nr_blocks)).any(|i| {
-        let ob_dev = s.blocks[i].as_ref().map(|b| b.dev());
-        // a reused block isn't in blocks[]: init_new_stripe_from_old()
+        let ob_dev = s.blocks[i].bucket().map(|b| b.dev());
+        // a reused block has no bucket of ours: init_new_stripe_from_old()
         // copies the old pointer into the key
         ob_dev == Some(ca.dev_idx.into()) ||
-            (s.blocks_allocated.test(i) && v.block_ptrs()[i].dev() == ca.dev_idx)
+            (s.blocks[i].allocated() && v.block_ptrs()[i].dev() == ca.dev_idx)
     })
 }
 
@@ -357,7 +357,7 @@ pub fn bch2_fs_ec_exit(c: &Opaque<c::bch_fs>) {
         if let Some(s) = head_stripe(&g) {
             let s = s.lock();
             let nr_blocks = usize::from(s.new_stripe.stripe().v().nr_blocks);
-            assert!(s.blocks[..nr_blocks].iter().all(Option::is_none),
+            assert!(s.blocks[..nr_blocks].iter().all(|b| b.bucket().is_none()),
                     "shutting down with a stripe head's stripe holding buckets");
             drop(s);
             stripe_new::head_stripe_free(fs, g.s.take().expect("just seen"));
@@ -460,13 +460,13 @@ fn claim_bucket(req: &c::alloc_request, s: &StripeNew, i: &mut Internal) -> *mut
     let nr_data = i.nr_data() as usize;
     for &dev in &req.devs_sorted.data[..req.devs_sorted.nr as usize] {
         for ec_idx in 0..nr_data {
-            let Some(b) = &i.blocks[ec_idx] else { continue };
-            if b.dev() == u32::from(dev) && !i.blocks_allocated.test_and_set(ec_idx) {
-                let Some(StripeBlock::Pinned(b)) = i.blocks[ec_idx].take() else {
-                    panic!("stripe {} block {ec_idx} claimed twice", s.idx.load(Ordering::Relaxed))
+            let Slot::Bucket(StripeBlock::Pinned(b)) = &i.blocks[ec_idx] else { continue };
+            if b.dev() == u32::from(dev) {
+                let Slot::Bucket(StripeBlock::Pinned(b)) = core::mem::take(&mut i.blocks[ec_idx]) else {
+                    unreachable!()
                 };
                 let (claimed, ob) = b.claim(s.as_c(), ec_idx as u8);
-                i.blocks[ec_idx] = Some(StripeBlock::Claimed(claimed));
+                i.blocks[ec_idx] = Slot::Bucket(StripeBlock::Claimed(claimed));
                 s.io_get();
                 return ob;
             }
