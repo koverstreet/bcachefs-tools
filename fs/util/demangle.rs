@@ -655,9 +655,21 @@ fn v0(out: &mut Printbuf, sym: &str) -> Result<(), Raw> {
     Ok(())
 }
 
+/// A legacy name, _ZN...: std's, prebuilt, in userspace - rustc_demangle's
+/// legacy demangling doesn't recurse.
+#[cfg(not(kernel))]
+fn prt_other(out: &mut Printbuf, sym: &str) {
+    write!(out, "{:#}", rustc_demangle::demangle(sym));
+}
+
+/// In the kernel every Rust name is v0: anything else is C's.
+#[cfg(kernel)]
+fn prt_other(out: &mut Printbuf, sym: &str) {
+    let _ = out.write_str(sym);
+}
+
 /// @sym demangled to @out, as rustc_demangle's {:#}: a v0 name here, on the
-/// heap; a legacy one by rustc_demangle, whose legacy demangling doesn't
-/// recurse; anything else, or a v0 name that can't be, as it is.
+/// heap - as it is, if it can't be - and anything else by prt_other().
 pub fn prt_demangled(out: &mut Printbuf, sym: &str) {
     // ThinLTO's renaming of internal symbols, which rustc_demangle drops
     let sym = match sym.find(".llvm.") {
@@ -672,6 +684,6 @@ pub fn prt_demangled(out: &mut Printbuf, sym: &str) {
             let _ = out.write_str(sym);
         }
     } else {
-        write!(out, "{:#}", rustc_demangle::demangle(sym));
+        prt_other(out, sym);
     }
 }

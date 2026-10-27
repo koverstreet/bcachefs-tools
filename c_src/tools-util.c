@@ -37,7 +37,7 @@ void die(const char *fmt, ...)
 
 /*
  * Fatal-signal handler: print signal name and a unified backtrace via
- * bch2_prt_task_backtrace (libunwind + rustc-demangle + libdw line info),
+ * bch2_prt_task_backtrace (libunwind + util/demangle.rs + libdw line info),
  * then re-raise. SA_RESETHAND means our handler ran once and the default
  * disposition is restored, so re-raising terminates with the kernel's
  * default action (core dump if ulimit -c permits).
