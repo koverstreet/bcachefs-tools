@@ -332,6 +332,10 @@ pub struct BioBufPtr<T: HasBio>(NonNull<T>);
 // SAFETY: as BioBuf's
 unsafe impl<T: HasBio + Send> Send for BioBufPtr<T> {}
 
+// SAFETY: a NonNull, repr(transparent): an Option of one is a nullable
+// pointer, all zeroes None
+unsafe impl<T: HasBio> ::pin_init::ZeroableOption for BioBufPtr<T> {}
+
 impl<T: HasBio> From<BioBuf<T>> for BioBufPtr<T> {
     fn from(b: BioBuf<T>) -> Self {
         // SAFETY: a bio's T: into_raw()'s

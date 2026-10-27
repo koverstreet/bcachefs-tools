@@ -277,15 +277,17 @@ crate::published! {
 
 /// One bit per bucket of a device, allocated when the first is set:
 /// check_extents_to_backpointers' buckets whose backpointers don't add up, and
-/// those with none. The lock serializes setting, growing and freeing; C only
-/// initializes it, and calls Rust for the rest.
+/// those with none. The lock serializes setting, growing and freeing; C calls
+/// Rust for all of it.
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(CStruct, Init)]
 pub struct bucket_bitmap {
     #[c_lock("struct mutex lock")]
+    #[pin]
+    #[init(crate::new_lock!((), ::pin_init::zeroed(), "&ca->bucket_bitmap.lock"))]
     pub bits: Lock<c::mutex, (), BucketBits>,
 }
-c_default!(bucket_bitmap);
 
 c_xmacro! {
     /*
@@ -309,8 +311,9 @@ c_const! {
     pub const CONGESTED_MAX: u32 = 1024;
 }
 
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo, Init)]
 pub struct bch_dev {
     pub kobj: c::kobject,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -387,7 +390,11 @@ pub struct bch_dev {
     #[c("unsigned long *buckets_nouse")]
     pub buckets_nouse: core::sync::atomic::AtomicPtr<c_ulong>,
 
+    #[pin]
+    #[init(c::bucket_bitmap::init())]
     pub bucket_backpointer_mismatch: c::bucket_bitmap,
+    #[pin]
+    #[init(c::bucket_bitmap::init())]
     pub bucket_backpointer_empty: c::bucket_bitmap,
 
     #[c("struct bch_dev_usage_full __percpu *usage")]

@@ -470,7 +470,7 @@ static void bch2_dev_release(struct kobject *kobj)
 {
 	struct bch_dev *ca = container_of(kobj, struct bch_dev, kobj);
 
-	kfree(ca);
+	bch2_dev_free_mem(ca);
 }
 
 KTYPE(bch2_dev);
@@ -574,7 +574,7 @@ static struct bch_dev *__bch2_dev_alloc(struct bch_fs *c,
 	struct bch_dev *ca;
 	unsigned i;
 
-	ca = kzalloc(sizeof(*ca), GFP_KERNEL);
+	ca = bch2_dev_alloc_mem();
 	if (!ca)
 		return NULL;
 
@@ -612,9 +612,6 @@ static struct bch_dev *__bch2_dev_alloc(struct bch_fs *c,
 #else
 	atomic_long_set(&ca->ref, 1);
 #endif
-
-	mutex_init(&ca->bucket_backpointer_mismatch.lock);
-	mutex_init(&ca->bucket_backpointer_empty.lock);
 
 	bch2_dev_journal_init_early(ca);
 

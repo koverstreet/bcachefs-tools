@@ -102,6 +102,7 @@ pub mod init {
     #[cfg(kernel)]
     #[path = "chardev.rs"] pub mod chardev;
     #[path = "damage.rs"] pub mod damage;
+    #[path = "dev.rs"] pub mod dev;
     #[path = "error.rs"] pub mod error;
     #[path = "passes.rs"] pub mod passes;
     #[path = "progress.rs"] pub mod progress;
