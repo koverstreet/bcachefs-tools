@@ -25,13 +25,13 @@ use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::locking::Lock;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError};
-use crate::util::ffi::{c_char, Opaque};
+use crate::util::ffi::Opaque;
 use crate::util::sleep::{wake_up, Sleep};
 use crate::util::vstructs::Validated;
 use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicI64, Ordering::Relaxed};
+use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::{c_export, c_extern};
 
 c_extern! {
@@ -40,7 +40,6 @@ c_extern! {
     pub fn bch2_move_extent(ctxt: *mut c::moving_context, bucket: *mut c::move_bucket,
                             opts: *mut c::bch_inode_opts, data_opts: *mut c::data_update_opts,
                             iter: *mut c::btree_iter, level: c_uint, k: c::bkey_s_c) -> c_int;
-    pub fn bch2_move_stats_init(stats: *mut c::bch_move_stats, name: *const c_char);
     pub fn bch2_moving_ctxt_do_pending_writes(ctxt: *mut c::moving_context);
     pub fn bch2_moving_ctxt_next_pending_write(ctxt: *mut c::moving_context) -> *mut c::data_update;
     pub fn bch2_evacuate_bucket(ctxt: *mut c::moving_context, bucket_in_flight: *mut c::move_bucket,
@@ -61,48 +60,46 @@ pub unsafe fn bch2_moving_ctxt_wake(ctxt: *mut c::moving_context) {
     unsafe { (*ctxt).events.wake() }
 }
 
-/// What moves are counted into - by their completions, as well as by who
-/// issued them: C's struct bch_move_stats, shared, its counters atomic.
-#[repr(transparent)]
-pub struct MoveStats(Opaque<c::bch_move_stats>);
+pub use c::MoveStats;
 
 impl MoveStats {
-    pub fn from_c(stats: &c::bch_move_stats) -> &MoveStats {
-        // SAFETY: repr(transparent) over an UnsafeCell of it: C writes through
-        // it while it's borrowed, as it does through a &MoveStats
-        unsafe { &*core::ptr::from_ref(stats).cast() }
-    }
-
-    fn raw(&self) -> *mut c::bch_move_stats {
-        self.0.as_ptr()
-    }
-
-    fn counter(&self, f: impl FnOnce(*mut c::bch_move_stats) -> *mut AtomicI64) -> &AtomicI64 {
-        // SAFETY: a field of the stats, which live as long as we do
-        unsafe { &*f(self.raw()) }
-    }
-
-    /// Zeroed, and named @name for the moving contexts' listing.
+    /// Zeroed, and named @name for the moving contexts' listing, as
+    /// bch2_move_stats_init() - field by field, as it may be read meanwhile.
     pub fn reset(&self, name: &core::ffi::CStr) {
-        unsafe { bch2_move_stats_init(self.raw(), name.as_ptr().cast()) }
+        let name = name.to_bytes();
+        let len = name.len().min(self.name.len() - 1);
+        for (i, b) in self.name.iter().enumerate() {
+            b.set(if i < len { name[i] } else { 0 });
+        }
+        self.phys.set(false);
+        self.ret.set(c::bch_ioctl_data_event_ret(0));
+        self.at.data_type.set(c::bch_data_type::BCH_DATA_user);
+        self.at.pos.set(c::bbpos::default());
+        self.at.dev.set(0);
+        self.at.offset.set(0);
+
+        for n in [&self.keys_moved, &self.keys_raced, &self.sectors_seen, &self.sectors_moved,
+                  &self.sectors_raced, &self.sectors_error_corrected, &self.sectors_error_uncorrected] {
+            n.store(0, Relaxed);
+        }
+        self.devs_error_uncorrected.store(&Default::default());
     }
 
     pub fn sectors_seen(&self) -> u64 {
-        self.counter(|s| unsafe { &raw mut (*s).sectors_seen }).load(Relaxed) as u64
+        self.sectors_seen.load(Relaxed) as u64
     }
 
     pub fn add_sectors_seen(&self, sectors: u64) {
-        self.counter(|s| unsafe { &raw mut (*s).sectors_seen }).fetch_add(sectors as i64, Relaxed);
+        self.sectors_seen.fetch_add(sectors as i64, Relaxed);
     }
 
     pub fn sectors_moved(&self) -> u64 {
-        self.counter(|s| unsafe { &raw mut (*s).sectors_moved }).load(Relaxed) as u64
+        self.sectors_moved.load(Relaxed) as u64
     }
 
-    /// Where whoever's moving through it is, for the listing: read racily, as
-    /// C's are.
+    /// Where whoever's moving through it is, for the listing.
     pub fn set_pos(&self, pos: c::bbpos) {
-        unsafe { (&raw mut (*self.raw()).at.logical.pos).write(pos) }
+        self.at.pos.set(pos);
     }
 }
 
@@ -158,7 +155,8 @@ impl<'a> MovingCtxt<'a> {
         // SAFETY: bch2_moving_ctxt_init() initializes all of it, in place
         let init = unsafe {
             ::pin_init::pin_init_from_closure(move |slot: *mut c::moving_context| {
-                c::bch2_moving_ctxt_init(slot, fs.as_ptr(), core::ptr::null_mut(), stats.raw(),
+                c::bch2_moving_ctxt_init(slot, fs.as_ptr(), core::ptr::null_mut(),
+                                         core::ptr::from_ref(stats).cast_mut(),
                                          wp, wait_on_copygc);
                 Ok::<(), AllocError>(())
             })
@@ -212,12 +210,12 @@ impl<'a> Moving<'a> {
     /// Count moves from here on into @stats - as the listing has it, which
     /// reads the pointer racily, as it does in C.
     pub fn set_stats(&self, stats: &'a MoveStats) {
-        unsafe { (*self.raw()).stats = stats.raw() }
+        unsafe { (*self.raw()).stats = core::ptr::from_ref(stats).cast_mut() }
     }
 
     pub fn stats(&self) -> &MoveStats {
         // SAFETY: set from a &'a MoveStats, in new() or set_stats()
-        unsafe { &*(*self.raw()).stats.cast() }
+        unsafe { &*(*self.raw()).stats }
     }
 
     /// Wait until fewer than the filesystem's limits are in flight - and, if

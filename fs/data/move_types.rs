@@ -6,32 +6,36 @@ use crate::cstructs::c;
 use crate::fs::Fs;
 use crate::util::Printbuf;
 use crate::types::{DArray, c_default};
-use crate::util::ffi::c_char;
+use crate::util::projections::Volatile;
 use core::ffi::{c_int, c_uint, c_void};
 use core::sync::atomic::{AtomicI32, AtomicI64};
 use cstruct_macros::{CStruct, c_extern, c_typedef, TypeInfo};
 use nestify::nest;
 
 nest! {
+    /// What moves count into - whoever issues them, and their completions,
+    /// on any thread - and what the moving contexts' listing and a data job's
+    /// progress read as it goes. Shared throughout, so every field is a
+    /// Volatile, written one writer at a time, or an atomic, by many.
     #[derive(CStruct, TypeInfo)]*
     #[repr(C)]*
-    pub struct bch_move_stats {
-        pub name: [c_char; 32],
-        pub phys: bool,
-        pub ret: c::bch_ioctl_data_event_ret,
+    #[c_name(bch_move_stats)]
+    pub struct MoveStats {
+        #[c("char name[32]")]
+        pub name: [Volatile<u8>; 32],
+        pub phys: Volatile<bool>,
+        #[c("enum bch_ioctl_data_event_ret ret")]
+        pub ret: Volatile<c::bch_ioctl_data_event_ret>,
 
+        /* Where the walk is: data_type and pos, or for phys, dev and offset */
         #[c_anon]
-        pub at: #[derive(Clone, Copy)]* pub union bch_move_stats_at {
-            #[c_anon]
-            pub logical: pub struct bch_move_stats_logical {
-                pub data_type: c::bch_data_type,
-                pub pos: c::bbpos,
-            },
-            #[c_anon]
-            pub phys: pub struct bch_move_stats_phys {
-                pub dev: c_uint,
-                pub offset: u64,
-            },
+        pub at: pub struct bch_move_stats_at {
+            #[c("enum bch_data_type data_type")]
+            pub data_type: Volatile<c::bch_data_type>,
+            #[c("struct bbpos pos")]
+            pub pos: Volatile<c::bbpos>,
+            pub dev: Volatile<c_uint>,
+            pub offset: Volatile<u64>,
         },
 
         pub keys_moved: AtomicI64,
@@ -41,10 +45,14 @@ nest! {
         pub sectors_raced: AtomicI64,
         pub sectors_error_corrected: AtomicI64,
         pub sectors_error_uncorrected: AtomicI64,
-        pub devs_error_uncorrected: c::bch_devs_mask,
+        #[c("struct bch_devs_mask devs_error_uncorrected")]
+        pub devs_error_uncorrected: c::AtomicDevsMask,
     }
 }
-c_default!(bch_move_stats);
+c_default!(MoveStats);
+
+/// C's name, as FFI declarations and the structs pointing at one spell it.
+pub type bch_move_stats = MoveStats;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, CStruct)]

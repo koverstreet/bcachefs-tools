@@ -436,7 +436,7 @@ impl<'a, 'f> Walker<'a, 'f> {
         }
 
         let fs = t.fs();
-        ctxt.set_stats(MoveStats::from_c(&fs.reconcile.work_stats));
+        ctxt.set_stats(&fs.reconcile.work_stats);
 
         let mut opts = get_io_opts(t, Some(&mut *self.s), k)?;
         update_reconcile_opts(t, Some(&mut *self.s), &opts, iter, level, k,
@@ -577,9 +577,8 @@ impl<'a, 'f> Walker<'a, 'f> {
 /// Phase @phase's work on device @dev, in its own moving context, until it's
 /// done - or anything fails: the next pass tries again. reconcile_phys_dev().
 fn phys_dev(fs: &Fs, phase: &Phase, dev: u32) -> Result<(), BchError> {
-    let stats = c::bch_move_stats::default();
-    let ctxt = MovingCtxt::new(fs, MoveStats::from_c(&stats), writepoint_ptr(&fs.allocator.reconcile_write_point),
-                               true)?;
+    let stats = MoveStats::default();
+    let ctxt = MovingCtxt::new(fs, &stats, writepoint_ptr(&fs.allocator.reconcile_write_point), true)?;
     let mut walker = Walker::new(&ctxt)?;
     let mut work_pos = c::bbpos { btree: phase.btree, pos: pos(dev.into(), 0) };
 
@@ -788,7 +787,7 @@ impl<'f> Reconciler<'f, '_> {
             copygc_runs:     fs.copygc.run_count.get(),
         };
 
-        let work_stats = MoveStats::from_c(&fs.reconcile.work_stats);
+        let work_stats = &fs.reconcile.work_stats;
         work_stats.reset(c"reconcile_work");
         self.ctxt.flush_all();
         set_status(fs, Status::Running { phase: None, pos: POS_MIN });
@@ -937,8 +936,8 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
         return Ok(());
     }
 
-    let ctxt = MovingCtxt::new(fs, MoveStats::from_c(&fs.reconcile.work_stats),
-                               writepoint_ptr(&fs.allocator.reconcile_write_point), true)?;
+    let ctxt = MovingCtxt::new(fs, &fs.reconcile.work_stats, writepoint_ptr(&fs.allocator.reconcile_write_point),
+                               true)?;
     let r = Reconciler { fs, me, ctxt, copygc_runs_unparked: Cell::new(0) };
 
     while !Kthread::should_stop() {

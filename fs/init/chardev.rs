@@ -44,9 +44,9 @@ use crate::sb::members::{DevOuterRef, DevRef};
 use crate::{bch_err, bch_err_dev, bch_err_msg, bch_err_msg_dev, prt};
 use crate::util::kernel::{capable, Capability};
 use crate::util::thread_with_file::{ThreadFile, ThreadWithFile};
-use core::cell::UnsafeCell;
+use crate::data::moving::MoveStats;
 use core::mem::size_of;
-use core::ptr::{read_volatile, NonNull};
+use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use core::ffi::c_void;
 use cstruct_macros::{c_export, vtable};
@@ -699,11 +699,11 @@ struct DataJob {
     /// a use after free, as it was in C
     fs:    NonNull<Fs>,
     arg:   c::bch_ioctl_data,
-    /// The thread's, read() reads as it goes: racily, as C does
-    stats: UnsafeCell<c::bch_move_stats>,
+    /// The thread's, read() reads as it goes
+    stats: MoveStats,
 }
 
-// SAFETY: the filesystem's every thread's; stats are read racily, as above
+// SAFETY: the filesystem's every thread's
 unsafe impl Send for DataJob {}
 unsafe impl Sync for DataJob {}
 
@@ -711,17 +711,14 @@ impl ThreadFile for DataJob {}
 
 fn data_job(job: &DataJob, _write_ref: WriteRef<'_>) {
     let mut arg = job.arg;
-    let stats = job.stats.get();
-    let ret = unsafe { c::bch2_data_job(job.fs.as_ptr().cast(), stats, &mut arg) };
+    let stats = &job.stats;
+    let ret = unsafe { c::bch2_data_job(job.fs.as_ptr().cast(), core::ptr::from_ref(stats).cast_mut(), &mut arg) };
 
-    // SAFETY: the thread's; read() reads it racily
-    unsafe {
-        if ret == -(bch_errcode::BCH_ERR_device_offline.0 as c_int) {
-            (*stats).ret = c::bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_device_offline;
-        } else {
-            (*stats).ret = c::bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_done;
-            (*stats).at.logical.data_type = c::bch_data_type(c::DATA_PROGRESS_DATA_TYPE_done);
-        }
+    if ret == -(bch_errcode::BCH_ERR_device_offline.0 as c_int) {
+        stats.ret.set(c::bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_device_offline);
+    } else {
+        stats.ret.set(c::bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_done);
+        stats.at.data_type.set(c::bch_data_type(c::DATA_PROGRESS_DATA_TYPE_done));
     }
 }
 
@@ -729,15 +726,8 @@ fn data_job(job: &DataJob, _write_ref: WriteRef<'_>) {
 impl FileOps for DataJob {
     fn read(&self, _file: &File, buf: &mut UserBuf) -> Result<(), BchError> {
         let fs = unsafe { self.fs.as_ref() };
-        // Never a & of the whole: the job's thread writes the plain fields as
-        // we read. Those are READ_ONCE()s, racy as C's - pos may tear - and
-        // a data job's stats are logical; the counters are atomics.
-        let stats = self.stats.get();
-        let (ret, data_type, pos) = unsafe {(
-            read_volatile(&raw const (*stats).ret),
-            read_volatile(&raw const (*stats).at.logical.data_type),
-            read_volatile(&raw const (*stats).at.logical.pos),
-        )};
+        let stats = &self.stats;
+        let (ret, data_type, pos) = (stats.ret.get(), stats.at.data_type.get(), stats.at.pos.get());
 
         let mut e = c::bch_ioctl_data_event::default();
         e.type_ = c::BCH_DATA_EVENT_PROGRESS as u8;
@@ -747,9 +737,9 @@ impl FileOps for DataJob {
         p.data_type                 = data_type.0 as u8;
         p.btree_id                  = pos.btree.0 as u8;
         p.pos                       = pos.pos;
-        p.sectors_done              = unsafe { &(*stats).sectors_seen }.load(Relaxed) as u64;
-        p.sectors_error_corrected   = unsafe { &(*stats).sectors_error_corrected }.load(Relaxed) as u64;
-        p.sectors_error_uncorrected = unsafe { &(*stats).sectors_error_uncorrected }.load(Relaxed) as u64;
+        p.sectors_done              = stats.sectors_seen.load(Relaxed) as u64;
+        p.sectors_error_corrected   = stats.sectors_error_corrected.load(Relaxed) as u64;
+        p.sectors_error_uncorrected = stats.sectors_error_uncorrected.load(Relaxed) as u64;
 
         if u32::from(self.arg.op) == c::BCH_DATA_OP_scrub {
             // SAFETY: scrub's
@@ -801,7 +791,7 @@ fn data(fs: &Fs, arg: c::bch_ioctl_data) -> Result<c_int, BchError> {
         fs:    NonNull::from(fs),
         arg,
         // SAFETY: integers, and the zeroed state bch2_data_job() inits it from
-        stats: UnsafeCell::new(unsafe { core::mem::zeroed() }),
+        stats: MoveStats::default(),
     }))?;
     job.run(move |job| data_job(job, write_ref))
 }

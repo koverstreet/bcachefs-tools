@@ -25,7 +25,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, B
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
 use crate::data::ec::create::WidenCache;
-use crate::data::moving::{MoveStats, MovingCtxt};
+use crate::data::moving::MovingCtxt;
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::errcode::{ret_to_c, BchError};
 use crate::namei::inum_snapshot_to_path;
@@ -278,10 +278,6 @@ impl Fs {
 
 const NO_ENOSPC: CommitFlags = CommitFlags::NO_ENOSPC;
 
-fn scan_stats(fs: &Fs) -> &MoveStats {
-    MoveStats::from_c(&fs.reconcile.scan_stats)
-}
-
 fn stop(fs: &Fs) -> Result<(), BchError> {
     if Kthread::should_stop() || !fs.reconcile_enabled() {
         return Err(c::bch_errcode::BCH_ERR_reconcile_scan_stop.into());
@@ -308,7 +304,7 @@ impl ScanCookie {
             return Ok(0);
         }
 
-        let stats = scan_stats(fs);
+        let stats = &fs.reconcile.scan_stats;
         stats.reset(c"reconcile_scan");
         ctxt.set_stats(stats);
 
@@ -362,7 +358,7 @@ fn scan_btree(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, s: &mut PerSnapsh
     BtreeLevels { btree, levels, start, end }.for_each_commit(trans, Some(&res), NO_ENOSPC, |t, iter, level, k| {
         ctxt.stats().set_pos(c::bbpos { btree: iter.btree(), pos: iter.pos() });
         fs.reconcile.progress.update(t, iter)?;
-        scan_stats(fs).add_sectors_seen(if level == 0 { k.k.size.into() } else { fs.btree_sectors().into() });
+        fs.reconcile.scan_stats.add_sectors_seen(if level == 0 { k.k.size.into() } else { fs.btree_sectors().into() });
         res.put();
         stop(fs)?;
 
@@ -427,7 +423,7 @@ fn scan_bp(t: &TransAttempt<'_, '_>, scan: &c::reconcile_scan, bp: BkeySC<'_, c:
         return Ok(());
     };
 
-    scan_stats(fs).add_sectors_seen(if level == 0 { k.k.size.into() } else { fs.btree_sectors().into() });
+    fs.reconcile.scan_stats.add_sectors_seen(if level == 0 { k.k.size.into() } else { fs.btree_sectors().into() });
     let opts = get_io_opts(t, None, k)?;
     update_opts(t, None, &opts, iter, level, k, scan)
 }
@@ -444,7 +440,7 @@ fn scan_stripes(ctxt: &MovingCtxt<'_>) -> Result<(), BchError> {
     iter.for_each_commit(trans, None, NO_ENOSPC, |t, iter, k| {
         ctxt.stats().set_pos(c::bbpos { btree: iter.btree(), pos: iter.pos() });
         fs.reconcile.progress.update(t, iter)?;
-        scan_stats(fs).add_sectors_seen(fs.btree_sectors().into());
+        fs.reconcile.scan_stats.add_sectors_seen(fs.btree_sectors().into());
         stop(fs)?;
 
         let Some(s) = k.arm::<c::Stripe>() else { return Ok(()) };

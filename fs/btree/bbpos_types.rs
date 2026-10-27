@@ -3,15 +3,19 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use cstruct_macros::{CStruct, bitfield};
+use cstruct_macros::{CStruct, Plain, bitfield};
 use nestify::nest;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
+#[derive(Clone, Copy, Default, CStruct, Plain)]
 pub struct bbpos {
     pub btree: c::btree_id,
     pub pos: c::bpos,
 }
+
+// Torn, a mix of two positions - not necessarily between them: harmless in
+// what reads one racily, a walk's progress, shown
+crate::tear_safe!(bbpos);
 
 /*
  * Layout is padding-free (bpos is __packed __aligned(4)), so a blbpos can be

@@ -99,7 +99,9 @@ pub struct data_update {
     pub io_seq: u64,
     pub b: *mut c::move_bucket,
     pub ctxt: *mut c::moving_context,
-    pub stats: *mut c::bch_move_stats,
+    /* the mover's, if it keeps any - which outlive its updates */
+    #[c("struct bch_move_stats *stats")]
+    pub stats: Option<&'static c::MoveStats>,
 
     pub rbio: c::bch_read_bio,
     pub op: c::bch_write_op,

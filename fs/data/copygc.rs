@@ -708,10 +708,9 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
         return Ok(());
     }
 
-    let stats = c::bch_move_stats::default();
-    let stats = MoveStats::from_c(&stats);
+    let stats = MoveStats::default();
     stats.reset(c"copygc");
-    let ctxt = bch_err_msg!(fs, MovingCtxt::new(fs, stats, writepoint_ptr(&fs.copygc.write_point), false),
+    let ctxt = bch_err_msg!(fs, MovingCtxt::new(fs, &stats, writepoint_ptr(&fs.copygc.write_point), false),
                             "allocating copygc's moving context")?;
     let mut cg = Copygc { fs, me, ctxt, set, in_flight: Fifo::new() };
     let clock = &fs.io_clock[WRITE];
