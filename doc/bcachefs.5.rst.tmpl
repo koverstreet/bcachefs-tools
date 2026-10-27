@@ -34,6 +34,20 @@ command (which internally mostly works via the extended attribute interface, but
 the set-file-option command takes care to propagate options to children
 correctly).
 
+Filesystem UUIDs
+----------------
+Bcachefs superblocks have both an internal UUID and a user-visible filesystem
+UUID. The user-visible UUID is reported by blkid and is used for ``UUID=``
+mounts; it can be selected at format time with ``bcachefs format --uuid`` and
+changed later, while the filesystem is unmounted, with:
+
+.. code-block:: bash
+
+  bcachefs set-fs-uuid <new-uuid> <device>
+
+For multi-device filesystems, all member devices must be present so every
+member superblock can be updated together. The internal UUID is not changed.
+
 OPTIONS
 -------
 OPTIONS_TABLE
