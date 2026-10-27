@@ -142,6 +142,12 @@ impl Bitmap {
         self.zip_mut(o, |a, b| a & !b)
     }
 
+    /// bitmap_andnot() the other way, into this one: @o's bits that this one
+    /// hasn't.
+    pub fn not_and(&mut self, o: &Bitmap) {
+        self.zip_mut(o, |a, b| !a & b)
+    }
+
     /// bitmap_intersects().
     pub fn intersects(&self, o: &Bitmap) -> bool {
         self.0.iter().zip(&o.0).any(|(a, b)| a & b != 0)
