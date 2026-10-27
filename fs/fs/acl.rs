@@ -278,7 +278,7 @@ mod vfs {
         }
 
         /// Cache this - or None, for no ACL - as @v's ACL of @ty.
-        fn set_cached(acl: Option<&PosixAcl>, v: &InodeInfo<'_>, ty: AclType) {
+        fn set_cached(acl: Option<&PosixAcl>, v: &InodeInfo, ty: AclType) {
             let acl = acl.map_or(core::ptr::null_mut(), PosixAcl::as_raw);
             unsafe { c::rust_set_cached_acl(v.vinode(), ty as c_int, acl) }
         }
@@ -364,7 +364,7 @@ mod vfs {
         let ty = AclType::from_vfs(type_);
         let v = unsafe { InodeInfo::from_inode(vinode) };
         let fs = v.fs();
-        let inode = v.inode();
+        let inode = &v.inode();
         let inum = v.inum();
 
         // The flag clear means there's no ACL xattr: skip the lookup, and have

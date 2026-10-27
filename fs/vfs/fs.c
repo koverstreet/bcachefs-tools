@@ -3405,41 +3405,6 @@ err:
 
 /* For Rust - see vfs/rust_types.rs: */
 
-struct bch_inode_info *rust_to_bch_ei(struct inode *vinode)
-{
-	return to_bch_ei(vinode);
-}
-
-struct inode *rust_ei_vinode(struct bch_inode_info *inode)
-{
-	return &inode->v;
-}
-
-struct bch_fs *rust_ei_fs(struct bch_inode_info *inode)
-{
-	return inode->v.i_sb->s_fs_info;
-}
-
-struct bch_inode_unpacked *rust_ei_inode(struct bch_inode_info *inode)
-{
-	return &inode->ei_inode;
-}
-
-subvol_inum rust_ei_inum(struct bch_inode_info *inode)
-{
-	return inode_inum(inode);
-}
-
-void rust_ei_update_lock(struct bch_inode_info *inode)
-{
-	mutex_lock(&inode->ei_update_lock);
-}
-
-void rust_ei_update_unlock(struct bch_inode_info *inode)
-{
-	mutex_unlock(&inode->ei_update_lock);
-}
-
 int rust_ei_set_projid(struct bch_fs *c, struct bch_inode_info *inode, u32 projid)
 {
 	return bch2_set_projid(c, inode, projid);

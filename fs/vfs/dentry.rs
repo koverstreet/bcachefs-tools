@@ -27,9 +27,9 @@ impl<'a> Dentry<'a> {
         Dentry { raw, _ref: PhantomData }
     }
 
-    pub fn inode(&self) -> InodeInfo<'a> {
+    pub fn inode(&self) -> &'a InodeInfo {
         // A positive dentry of ours, as borrow_raw() was promised:
-        unsafe { InodeInfo::from_ei(c::rust_dentry_ei(self.raw)) }
+        unsafe { &*c::rust_dentry_ei(self.raw) }
     }
 
     /// Inode option @opt of the parent directory - None at the root, which

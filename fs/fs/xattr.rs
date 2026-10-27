@@ -544,8 +544,8 @@ mod vfs {
                     None         => Ok(()),
                 }
             })
-            .and_then(|_| list_bcachefs(v.inode(), &mut buf, false))
-            .and_then(|_| list_bcachefs(v.inode(), &mut buf, true));
+            .and_then(|_| list_bcachefs(&v.inode(), &mut buf, false))
+            .and_then(|_| list_bcachefs(&v.inode(), &mut buf, true));
 
         match ret {
             Ok(())  => buf.used as isize,
@@ -572,7 +572,7 @@ mod vfs {
 
         let trans = crate::btree_trans!(v.fs());
         let ret = lockrestart_do(&trans, |t| {
-            get_trans(t, v.inode(), v.inum(), ty, name, buffer.as_deref_mut())
+            get_trans(t, &v.inode(), v.inum(), ty, name, buffer.as_deref_mut())
         });
 
         match ret {
@@ -620,11 +620,11 @@ mod vfs {
     /// The value of option @name on @vinode, as text, into @buffer: as
     /// __bch2_xattr_bcachefs_get(). Only an option set on the inode itself
     /// counts, without @all; with it, an inherited one does too.
-    fn bcachefs_get(v: &InodeInfo<'_>, name: &CStr, buffer: Option<&mut [u8]>, all: bool)
+    fn bcachefs_get(v: &InodeInfo, name: &CStr, buffer: Option<&mut [u8]>, all: bool)
         -> Result<usize, BchError>
     {
         let fs = v.fs();
-        let inode = v.inode();
+        let inode = &v.inode();
         let inode_opts = inode_opts::inode_opts_to_opts(inode);
 
         let Some((id, opt)) = opts::opt_lookup(name)
@@ -725,7 +725,7 @@ mod vfs {
 
     /// Set option @name on @dentry's inode to @value, or with None, go back
     /// to inheriting it from the parent: as __bch2_xattr_bcachefs_set().
-    fn bcachefs_set(dentry: Dentry<'_>, v: &InodeInfo<'_>, name: &CStr, value: Option<&[u8]>)
+    fn bcachefs_set(dentry: Dentry<'_>, v: &InodeInfo, name: &CStr, value: Option<&[u8]>)
         -> Result<(), BchError>
     {
         let fs = v.fs();
@@ -772,7 +772,7 @@ mod vfs {
             // Removing an option the inode doesn't set itself is a no-op -
             // and must not reach inode_opt_set(), which would enable what
             // the option needs
-            if !defined && !inode_opt.is_own(v.inode()) {
+            if !defined && !inode_opt.is_own(&v.inode()) {
                 return Err(BchError::from(c::ENODATA));
             }
 

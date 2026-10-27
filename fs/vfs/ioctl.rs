@@ -154,13 +154,13 @@ impl<'f> MntIdmap<'f> {
     }
 
     /// Whether the caller owns @inode, or has CAP_FOWNER.
-    fn owner_or_capable(self, inode: &InodeInfo<'_>) -> bool {
+    fn owner_or_capable(self, inode: &InodeInfo) -> bool {
         unsafe { c::inode_owner_or_capable(self.0, inode.vinode()) }
     }
 
     /// Whether the caller has @mask - MAY_* - on @inode, by the whole VFS
     /// stack: ACLs and LSMs too.
-    fn permission(self, inode: &InodeInfo<'_>, mask: u32) -> bool {
+    fn permission(self, inode: &InodeInfo, mask: u32) -> bool {
         unsafe { c::inode_permission(self.0, inode.vinode(), mask as c_int) == 0 }
     }
 }
@@ -237,7 +237,7 @@ fn goingdown(fs: &Fs, user: UserArg<u32>) -> Result<(), BchError> {
     }
 }
 
-fn clear_damage(file: &File, inode: &InodeInfo<'_>) -> Result<(), BchError> {
+fn clear_damage(file: &File, inode: &InodeInfo) -> Result<(), BchError> {
     // forensic metadata: erasing it takes ownership, as chattr does
     if !MntIdmap::of(file).owner_or_capable(inode) {
         return Err(c::EPERM.into());
@@ -261,7 +261,7 @@ fn path_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
         Err(e) if e.matches(c::ENOENT) => Ok(None),
         r => r.map(Some),
     };
-    let parent = |i: &InodeRef, inum| namei::parent_inum(inum, i.info().inode());
+    let parent = |i: &InodeRef, inum| namei::parent_inum(inum, &i.info().inode());
 
     let Some(inode) = get(n)? else { return Ok(false) };
     let mut p = parent(&inode, n);
@@ -324,7 +324,7 @@ fn permitted(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>, dirs: &[InodeRef], f
     t.unlock();
     for (k, i) in dirs.iter().enumerate() {
         let mask = if k == 0 { first } else { c::MAY_EXEC };
-        if !idmap.permission(&i.info(), mask) {
+        if !idmap.permission(i.info(), mask) {
             return Ok(false);
         }
     }

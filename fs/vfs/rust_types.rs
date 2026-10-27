@@ -3,10 +3,9 @@
 //! The VFS, for Rust: shims out of line in vfs/fs.c, as locking/locking.c's are.
 //! C gets the prototypes, in vfs/rust_gen.h. Kernel only, as the VFS is.
 //!
-//! struct bch_inode_info is kernel types all the way down - struct inode,
-//! locks, the pagecache - so Rust doesn't bind its layout: it's opaque there,
-//! and reached through these. Nor does Rust call kernel functions that aren't
-//! in the kernel crate's bindings, posix_acl's among them: those are here too.
+//! What's here is what Rust can't reach itself: fs.c's statics -
+//! bch2_set_projid() - the dentry's internals, and kernel functions that
+//! aren't in the kernel crate's bindings, posix_acl's among them.
 
 #![allow(non_camel_case_types)]
 // The VFS's: kernel only, as C's #ifndef NO_BCACHEFS_FS
@@ -18,13 +17,6 @@ use cstruct_macros::c_extern;
 
 c_extern! {
     /* bch_inode_info: */
-    pub fn rust_to_bch_ei(inode: *mut c::inode) -> *mut c::bch_inode_info;
-    pub fn rust_ei_vinode(ei: *mut c::bch_inode_info) -> *mut c::inode;
-    pub fn rust_ei_fs(ei: *mut c::bch_inode_info) -> *mut c::bch_fs;
-    pub fn rust_ei_inode(ei: *mut c::bch_inode_info) -> *mut c::bch_inode_unpacked;
-    pub fn rust_ei_inum(ei: *mut c::bch_inode_info) -> c::subvol_inum;
-    pub fn rust_ei_update_lock(ei: *mut c::bch_inode_info);
-    pub fn rust_ei_update_unlock(ei: *mut c::bch_inode_info);
     pub fn rust_ei_set_projid(c: *mut c::bch_fs, ei: *mut c::bch_inode_info, projid: u32) -> c_int;
 
     /* dentries: */

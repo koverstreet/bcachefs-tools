@@ -1,28 +1,32 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! The VFS's inode, struct bch_inode_info, for Rust's VFS entry points -
-//! xattr's and acl's.
+//! The VFS's inode, InodeInfo - C's struct bch_inode_info - for Rust's VFS
+//! entry points. One borrowed for a VFS call is a &InodeInfo: the call holds
+//! a reference on the inode for as long as it runs. InodeRef is one Rust holds
+//! a reference on itself.
 //!
-//! It's kernel types all the way down - struct inode, its locks, the
-//! pagecache - so Rust doesn't bind its layout: it's opaque, and reached
-//! through vfs/rust_types.rs's shims. An InodeInfo is one borrowed for a VFS call,
-//! which holds a reference on the inode for as long as it runs: that's 'a.
+//! ei_inode, the inode as last written, is read without a lock: its writers
+//! are serialized by the inode's btree position, which a transaction still
+//! holds locked after its commit, through update_after_write().
 //!
-//! ei_update_lock serializes updates to the inode from the VFS side - read
-//! the inode, change it, write it back. Nothing asserts it's held; what needs
-//! it hangs off the guard, UpdateLock, so it can't be called without.
-//! ei_inode itself is protected by the btree node lock, not this one - see
-//! bch2_write_inode_trans().
+//! ei_update_lock, UpdateLock, serializes what the btree doesn't: a project
+//! quota transfer and the inode write that goes with it - set_projid(),
+//! rename's and the reinherit ioctl's - so the inode and its quota agree on
+//! the project.
 
 use core::ffi::{c_int, c_void};
-use core::marker::PhantomData;
+use core::mem::offset_of;
+use core::ptr::NonNull;
+use core::sync::atomic::Ordering::Relaxed;
 
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
 use crate::errcode::{errptr_to_result, ret_to_c, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
-use core::ptr::NonNull;
+use crate::locking::{Guard, Lock};
 use cstruct_macros::c_extern;
+
+pub use c::InodeInfo;
 
 c_extern! {
     pub fn bch2_vfs_inode_get_trans(trans: *mut c::btree_trans, inum: c::subvol_inum,
@@ -30,7 +34,7 @@ c_extern! {
 }
 
 /// A VFS inode Rust has a reference on, put - iput() - when it drops.
-pub struct InodeRef(NonNull<c::bch_inode_info>);
+pub struct InodeRef(NonNull<InodeInfo>);
 
 impl InodeRef {
     /// @inum's, looked up in @t, the inode cache first.
@@ -39,62 +43,61 @@ impl InodeRef {
         Ok(InodeRef(errptr_to_result(NonNull::new(ei).expect("an inode, or an error"))?))
     }
 
-    pub fn info(&self) -> InodeInfo<'_> {
+    pub fn info(&self) -> &InodeInfo {
         // SAFETY: ours, referenced
-        unsafe { InodeInfo::from_ei(self.0.as_ptr()) }
+        unsafe { self.0.as_ref() }
     }
 }
 
 impl Drop for InodeRef {
     fn drop(&mut self) {
-        unsafe { c::iput(c::rust_ei_vinode(self.0.as_ptr())) }
+        unsafe { c::iput(self.info().vinode()) }
     }
 }
 
-/// <linux/fs.h>'s ATTR_*: what update_after_write() updates in the VFS
-/// inode, besides what it always does.
+/// <linux/fs.h>'s ATTR_*: an iattr's ia_valid, and update_after_write()'s
+/// @fields.
 pub const ATTR_MODE:  u32 = 1 << 0;
 pub const ATTR_CTIME: u32 = 1 << 6;
 
-pub struct InodeInfo<'a> {
-    ei:   *mut c::bch_inode_info,
-    fs:   &'a Fs,
-    _ref: PhantomData<&'a c::bch_inode_info>,
-}
+// to_bch_ei(): an InodeInfo is where its struct inode is
+const _: () = assert!(offset_of!(InodeInfo, v) == 0);
 
-impl InodeInfo<'_> {
+impl InodeInfo {
     /// # Safety
-    /// @ei is an inode the VFS holds a reference on, for 'a.
-    pub unsafe fn from_ei(ei: *mut c::bch_inode_info) -> Self {
-        InodeInfo { ei, fs: unsafe { Fs::borrow_raw(c::rust_ei_fs(ei)) }, _ref: PhantomData }
-    }
-
-    /// # Safety
-    /// As from_ei(): @vinode is one of ours.
-    pub unsafe fn from_inode(vinode: *mut c::inode) -> Self {
-        unsafe { Self::from_ei(c::rust_to_bch_ei(vinode)) }
+    /// @vinode is one of ours, live for 'a: the VFS holds a reference on it,
+    /// or otherwise keeps it from eviction.
+    pub unsafe fn from_inode<'a>(vinode: *mut c::inode) -> &'a InodeInfo {
+        // SAFETY: the caller's; @v is first
+        unsafe { &*vinode.cast::<InodeInfo>() }
     }
 
     pub fn raw(&self) -> *mut c::bch_inode_info {
-        self.ei
+        core::ptr::from_ref(self).cast_mut()
     }
 
-    /// The struct inode embedded in it, for the VFS's own functions.
+    /// The struct inode, for the VFS's own functions.
     pub fn vinode(&self) -> *mut c::inode {
-        unsafe { c::rust_ei_vinode(self.ei) }
+        self.v.as_ptr()
     }
 
     pub fn fs(&self) -> &Fs {
-        self.fs
+        // SAFETY: one of ours: its superblock's s_fs_info is our filesystem,
+        // which outlives its inodes
+        unsafe { Fs::borrow_raw((*(*self.vinode()).i_sb).s_fs_info.cast()) }
     }
 
     pub fn inum(&self) -> c::subvol_inum {
-        unsafe { c::rust_ei_inum(self.ei) }
+        self.ei_inum_hash.inum
     }
 
-    /// The inode as last written, as the VFS inode caches it: ei_inode.
-    pub fn inode(&self) -> &c::bch_inode_unpacked {
-        unsafe { &*c::rust_ei_inode(self.ei) }
+    /// A copy of ei_inode.
+    pub fn inode(&self) -> c::bch_inode_unpacked {
+        self.ei_inode.get()
+    }
+
+    pub fn flag(&self, f: c::bch_inode_info_flags) -> bool {
+        self.ei_flags.load(Relaxed) & (1 << f as u32) != 0
     }
 
     /// Update the VFS inode to @inode, just written and committed in attempt
@@ -102,26 +105,25 @@ impl InodeInfo<'_> {
     /// ATTR_* that changed.
     pub fn update_after_write(&self, t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked,
                               fields: u32) {
-        unsafe { c::bch2_inode_update_after_write(t.raw(), self.ei, inode, fields) }
+        unsafe { c::bch2_inode_update_after_write(t.raw(), self.raw(), inode, fields) }
     }
 
-    /// Take ei_update_lock, until the guard is dropped.
     pub fn update_lock(&self) -> UpdateLock<'_> {
-        unsafe { c::rust_ei_update_lock(self.ei) };
-        UpdateLock { inode: self }
+        UpdateLock { inode: self, _guard: Lock::from_c(&self.ei_update_lock).lock() }
     }
 }
 
 /// ei_update_lock, held.
 pub struct UpdateLock<'i> {
-    inode: &'i InodeInfo<'i>,
+    inode:  &'i InodeInfo,
+    _guard: Guard<'i, c::mutex>,
 }
 
 impl UpdateLock<'_> {
     /// Move the inode to project @projid, quota and all.
     pub fn set_projid(&self, projid: u32) -> Result<(), BchError> {
         let inode = self.inode;
-        ret_to_result(unsafe { c::rust_ei_set_projid(inode.fs.as_ptr(), inode.ei, projid) })
+        ret_to_result(unsafe { c::rust_ei_set_projid(inode.fs().as_ptr(), inode.raw(), projid) })
     }
 
     /// Change the inode with @set, in a transaction of its own that's
@@ -149,14 +151,8 @@ impl UpdateLock<'_> {
 
         let inode = self.inode;
         ret_to_result(unsafe {
-            c::bch2_write_inode(inode.fs.as_ptr(), inode.ei, Some(set_fn::<F>),
+            c::bch2_write_inode(inode.fs().as_ptr(), inode.raw(), Some(set_fn::<F>),
                                 &mut set as *mut F as *mut c_void, fields)
         })
-    }
-}
-
-impl Drop for UpdateLock<'_> {
-    fn drop(&mut self) {
-        unsafe { c::rust_ei_update_unlock(self.inode.ei) }
     }
 }

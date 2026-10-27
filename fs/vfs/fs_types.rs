@@ -3,7 +3,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
+use crate::locking::Lock;
 use crate::types::c_default;
+use crate::util::bitmap::AtomicULong;
+use crate::util::ffi::Opaque;
 use core::ffi::{c_uint, c_ulong};
 #[cfg(not(NO_BCACHEFS_FS))]
 use core::ffi::{c_int, c_void};
@@ -11,10 +14,19 @@ use cstruct_macros::{c_enum, CStruct, TypeInfo};
 #[cfg(not(NO_BCACHEFS_FS))]
 use cstruct_macros::{c_extern, c_typedef};
 
+/*
+ * The VFS's inode, and what we keep beside it. Shared - the kernel and C use it
+ * while Rust has a &InodeInfo - so what Rust touches is typed for that: @v,
+ * the struct inode the kernel writes, an Opaque; ei_inode a
+ * VolatileInodeUnpacked; ei_update_lock C's mutex, borrowed as a Lock;
+ * ei_quota_lock a Lock over what it protects.
+ */
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
-pub struct bch_inode_info {
-    pub v: c::inode,
+#[c_name(bch_inode_info)]
+pub struct InodeInfo {
+    #[c("struct inode v")]
+    pub v: Opaque<c::inode>,
     pub hash: c::rhash_head,
     /*
      * Read it with inode_inum(); the layout is private so that
@@ -44,15 +56,21 @@ pub struct bch_inode_info {
     pub ei_reserved_lock: c::spinlock_t,
 
     pub ei_inodes_idx: c_uint,
-    pub ei_flags: c_ulong,
+    /// bch_inode_info_flags, by bit: C's set_bit() and test_bit()'s, so atomic
+    pub ei_flags: AtomicULong,
 
     pub ei_update_lock: c::mutex,
-    pub ei_quota_reserved: u64,
     pub ei_last_dirtied: c_ulong,
     pub ei_pagecache_lock: c::two_state_lock_t,
 
-    pub ei_quota_lock: c::mutex,
-    pub ei_qid: c::bch_qid,
+    /*
+     * The quota the inode's usage is charged to: i_blocks + ei_quota_reserved
+     * is charged to ei_qid. i_blocks, the VFS inode's, changes under the lock
+     * too. ei_qid changes with ei_update_lock held as well, so C reads it
+     * under either.
+     */
+    #[c_lock("struct mutex ei_quota_lock")]
+    pub ei_quota: Lock<c::mutex, InodeQuota>,
 
     /*
      * When we've been doing nocow writes we'll need to issue flushes to the
@@ -65,12 +83,53 @@ pub struct bch_inode_info {
      */
     pub ei_devs_need_flush: c::bch_devs_mask,
 
-    /* copy of inode in btree: */
-    pub ei_inode: c::bch_inode_unpacked,
+    /*
+     * copy of inode in btree: written after a commit, the inode's btree
+     * position still locked - which serializes its writers, not
+     * ei_update_lock - and read without a lock
+     */
+    #[c("struct bch_inode_unpacked ei_inode")]
+    pub ei_inode: c::VolatileInodeUnpacked,
 
     pub ei_writeback_timer: c::delayed_work,
 }
-c_default!(bch_inode_info);
+c_default!(InodeInfo);
+
+/// C's name, as FFI declarations spell it.
+pub type bch_inode_info = InodeInfo;
+
+c_enum! {
+    #[closed]
+    pub enum bch_inode_info_flags: u32 {
+        /*
+         * A btree error on this inode: the VFS inode and the btree's may
+         * disagree
+         */
+        EI_INODE_ERROR = 0,
+        /* in a snapshot subvolume, which quotas don't count */
+        EI_INODE_SNAPSHOT = 1,
+        /*
+         * in the inode cache: tested by a lookup and cleared by removal under
+         * i_lock; set before the insert, and cleared if it loses the race,
+         * while the inode is ours alone
+         */
+        EI_INODE_HASHED = 2,
+        /*
+         * set by a truncate of a nonempty file to 0: start writeback on
+         * close - see DOC(replace-in-place) in fs.c
+         */
+        EI_INODE_FLUSH_ON_CLOSE = 3,
+    }
+}
+
+/// An inode's quota accounting, under ei_quota_lock.
+#[repr(C)]
+#[derive(CStruct, TypeInfo)]
+pub struct InodeQuota {
+    pub ei_qid: c::bch_qid,
+    /// sectors reserved for writes, charged to ei_qid ahead of i_blocks
+    pub ei_quota_reserved: u64,
+}
 
 c_enum! {
     #[flags]
