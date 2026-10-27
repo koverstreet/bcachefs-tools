@@ -132,11 +132,7 @@ static inline void bch2_dentry_set_casefold_ops(struct dentry *dentry, struct in
 static inline void bch2_dir_casefold_changed(struct dentry *dentry) {}
 #endif
 
-int bch2_fs_quota_transfer(struct bch_fs *,
-			   struct bch_inode_info *,
-			   struct bch_qid,
-			   unsigned,
-			   enum quota_acct_mode);
+#include "vfs/inode_gen.h"
 
 static inline int bch2_set_projid(struct bch_fs *c,
 				  struct bch_inode_info *inode,

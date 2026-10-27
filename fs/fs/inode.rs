@@ -1983,11 +1983,10 @@ pub extern "C" fn bch2_inode_set_casefold(
 }
 
 /// @inode's reconcile options - the ones reconcile moves its data to match,
-/// and for each whether @inode set it or inherited it: as
-/// bch2_inode_reconcile_opts_get(). An option too big for its field in
-/// bch_extent_reconcile - only a corrupt inode's - is warned about and
-/// truncated, as C's bitfield assignments truncate: the write it's read for
-/// goes ahead, the one that corrects it too.
+/// and for each whether @inode set it or inherited it. An option too big for
+/// its field in bch_extent_reconcile - only a corrupt inode's - is warned
+/// about and truncated, as C's bitfield assignments truncate: the write it's
+/// read for goes ahead, the one that corrects it too.
 pub fn reconcile_opts_get(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_extent_reconcile {
     let opts = crate::inode_opts::get_inode(fs, inode);
 

@@ -52,6 +52,15 @@ pub unsafe trait RawTryLock: RawLock {
     unsafe fn try_lock(&self) -> Option<Self::GuardState>;
 }
 
+/// A RawLock that can be taken as one of several of its lockdep class held
+/// at once - the others' order keeping them apart - each a subclass.
+///
+/// # Safety
+/// lock_nested() is RawLock's lock(), but for what lockdep is told.
+pub unsafe trait RawNestedLock: RawLock {
+    unsafe fn lock_nested(&self, subclass: u32) -> Self::GuardState;
+}
+
 /// A RawLock that readers can share: RawLock's lock() and unlock() are the
 /// writer's, alone.
 ///
@@ -141,6 +150,16 @@ impl<R: RawLock, G, P> Lock<R, G, P> {
 
     pub fn lock(&self) -> Guard<'_, R, G, P> {
         let state = unsafe { self.raw.lock() };
+        Guard { lock: self, state: Some(state), _not_send: PhantomData }
+    }
+
+    /// lock(), as lockdep subclass @subclass: for locks of one class taken
+    /// together, always in the same order.
+    pub fn lock_nested(&self, subclass: u32) -> Guard<'_, R, G, P>
+    where
+        R: RawNestedLock,
+    {
+        let state = unsafe { self.raw.lock_nested(subclass) };
         Guard { lock: self, state: Some(state), _not_send: PhantomData }
     }
 

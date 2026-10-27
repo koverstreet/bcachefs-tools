@@ -34,7 +34,6 @@
 #include "vfs/buffered.h"
 #include "vfs/direct.h"
 #include "vfs/pagecache.h"
-#include "vfs/rust_gen.h"
 #include "vfs/status_fd_gen.h"
 
 #include <linux/aio.h>
@@ -61,56 +60,6 @@ static void bch2_vfs_inode_init(struct btree_trans *, subvol_inum,
 				struct bch_inode_info *,
 				struct bch_inode_unpacked *,
 				struct bch_subvolume *);
-
-/* Set VFS inode flags from bcachefs inode: */
-static inline void bch2_inode_flags_to_vfs(struct bch_fs *c, struct bch_inode_info *inode)
-{
-	static const __maybe_unused unsigned bch_flags_to_vfs[] = {
-		[__BCH_INODE_sync]		= S_SYNC,
-		[__BCH_INODE_immutable]		= S_IMMUTABLE,
-		[__BCH_INODE_append]		= S_APPEND,
-		[__BCH_INODE_noatime]		= S_NOATIME,
-	};
-
-	set_flags(bch_flags_to_vfs, inode->ei_inode.bi_flags, inode->v.i_flags);
-
-	if (bch2_inode_casefold(c, &inode->ei_inode))
-		inode->v.i_flags |= S_CASEFOLD;
-	else
-		inode->v.i_flags &= ~S_CASEFOLD;
-}
-
-void bch2_inode_update_after_write(struct btree_trans *trans,
-				   struct bch_inode_info *inode,
-				   struct bch_inode_unpacked *bi,
-				   unsigned fields)
-{
-	struct bch_fs *c = trans->c;
-
-	BUG_ON(bi->bi_inum != inode_inum(inode).inum);
-
-	bch2_assert_pos_locked(trans, BTREE_ID_inodes, POS(0, bi->bi_inum));
-
-	set_nlink(&inode->v, bch2_inode_nlink_get(bi));
-	i_uid_write(&inode->v, bi->bi_uid);
-	i_gid_write(&inode->v, bi->bi_gid);
-	inode->v.i_mode	= bi->bi_mode;
-
-	if (fields & ATTR_SIZE)
-		i_size_write(&inode->v, bi->bi_size);
-
-	if (fields & ATTR_ATIME)
-		inode_set_atime_to_ts(&inode->v, bch2_time_to_timespec(c, bi->bi_atime));
-	if (fields & ATTR_MTIME)
-		inode_set_mtime_to_ts(&inode->v, bch2_time_to_timespec(c, bi->bi_mtime));
-	if (fields & ATTR_CTIME)
-		inode_set_ctime_to_ts(&inode->v, bch2_time_to_timespec(c, bi->bi_ctime));
-
-	inode->ei_inode		= *bi;
-
-	bch2_inode_flags_to_vfs(c, inode);
-}
-
 /*
  * The VFS inode - not the btree - is the source of truth for atime, and ONLY
  * atime: a btree transaction per atime update would be too expensive, so the
@@ -139,99 +88,6 @@ static void bch2_inode_fold_atime(struct bch_inode_info *inode,
 	inode_u->bi_atime = timespec_to_bch2_time(c, inode_get_atime(&inode->v));
 }
 
-static int bch2_write_inode_trans(struct btree_trans *trans,
-				  struct bch_inode_info *inode,
-				  inode_set_fn set,
-				  void *p, unsigned fields,
-				  struct inode_opt_change *opt_change)
-{
-	struct bch_fs *c = trans->c;
-	CLASS(btree_iter_uninit, iter)(trans);
-	struct bch_inode_unpacked inode_u;
-
-	bch2_inode_opt_change_init(opt_change);
-
-	try(bch2_inode_peek(trans, &iter, &inode_u, inode_inum(inode), BTREE_ITER_intent));
-
-	struct bch_extent_reconcile old_r = bch2_inode_reconcile_opts_get(c, &inode_u);
-
-	bch2_inode_fold_atime(inode, &inode_u);
-
-	if (set)
-	       try(set(trans, inode, &inode_u, p));
-
-	/*
-	 * iter.snapshot, not inode_u.bi_snapshot: peek() can find the key at an
-	 * ancestor, but we write here
-	 */
-	try(bch2_inode_opt_change_trans(trans, &old_r, &inode_u, iter.snapshot, opt_change));
-
-	try(bch2_inode_write(trans, &iter, &inode_u));
-	try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
-
-	/*
-	 * the btree node lock protects inode->ei_inode, not ei_update_lock;
-	 * this is important for inode updates via bchfs_write_index_update
-	 */
-	bch2_inode_update_after_write(trans, inode, &inode_u, fields);
-	return 0;
-}
-
-int __must_check bch2_write_inode(struct bch_fs *c,
-				  struct bch_inode_info *inode,
-				  inode_set_fn set,
-				  void *p, unsigned fields)
-{
-	CLASS(btree_trans, trans)(c);
-	/* On the stack: it has to outlive the commit that inserts it */
-	struct inode_opt_change opt_change;
-
-	int ret = lockrestart_do(trans, bch2_write_inode_trans(trans, inode, set, p, fields,
-							       &opt_change));
-
-	bch2_fs_fatal_err_on(bch2_err_matches(ret, ENOENT), c,
-			     "%s: inode %llu:%llu not found when updating",
-			     bch2_err_str(ret),
-			     inode_inum(inode).subvol,
-			     inode_inum(inode).inum);
-
-	if (!ret)
-		ret = bch2_inode_opt_change_finish(trans, &opt_change);
-
-	return ret < 0 ? ret : 0;
-}
-
-int bch2_fs_quota_transfer(struct bch_fs *c,
-			   struct bch_inode_info *inode,
-			   struct bch_qid new_qid,
-			   unsigned qtypes,
-			   enum quota_acct_mode mode)
-{
-	qtypes &= enabled_qtypes(c);
-
-	for (unsigned i = 0; i < QTYP_NR; i++)
-		if (new_qid.q[i] == inode->ei_qid.q[i])
-			qtypes &= ~(1U << i);
-
-	if (!qtypes)
-		return 0;
-
-	guard(mutex)(&inode->ei_quota_lock);
-
-	/* Quotas don't count snapshot inodes: only the qid changes. */
-	int ret = test_bit(EI_INODE_SNAPSHOT, &inode->ei_flags) ? 0 :
-		bch2_quota_transfer(c, qtypes, new_qid,
-				    inode->ei_qid,
-				    inode->v.i_blocks +
-				    inode->ei_quota_reserved,
-				    mode);
-	if (!ret)
-		for (unsigned i = 0; i < QTYP_NR; i++)
-			if (qtypes & (1 << i))
-				inode->ei_qid.q[i] = new_qid.q[i];
-
-	return ret;
-}
 
 static u32 bch2_vfs_inode_hash_fn(const void *data, u32 len, u32 seed)
 {
@@ -2441,34 +2297,6 @@ static void bch2_free_inode(struct inode *vinode)
 	kmem_cache_free(bch2_inode_cache, to_bch_ei(vinode));
 }
 
-static int inode_update_times_fn(struct btree_trans *trans,
-				 struct bch_inode_info *inode,
-				 struct bch_inode_unpacked *bi,
-				 void *p)
-{
-	struct bch_fs *c = inode->v.i_sb->s_fs_info;
-
-	bi->bi_atime	= timespec_to_bch2_time(c, inode_get_atime(&inode->v));
-	bi->bi_mtime	= timespec_to_bch2_time(c, inode_get_mtime(&inode->v));
-	bi->bi_ctime	= timespec_to_bch2_time(c, inode_get_ctime(&inode->v));
-
-	return 0;
-}
-
-static int bch2_vfs_write_inode(struct inode *vinode,
-				struct writeback_control *wbc)
-{
-	struct bch_fs *c = vinode->i_sb->s_fs_info;
-	struct bch_inode_info *inode = to_bch_ei(vinode);
-
-	guard(mutex)(&inode->ei_update_lock);
-
-	int ret = bch2_write_inode(c, inode, inode_update_times_fn, NULL,
-				   ATTR_ATIME|ATTR_MTIME|ATTR_CTIME);
-
-	return bch2_err_class(ret);
-}
-
 #if 0
 static bool verify_i_size_at_evict;
 
@@ -3401,13 +3229,6 @@ int __init bch2_vfs_init(void)
 err:
 	bch2_vfs_exit();
 	return ret;
-}
-
-/* For Rust - see vfs/rust_types.rs: */
-
-int rust_ei_set_projid(struct bch_fs *c, struct bch_inode_info *inode, u32 projid)
-{
-	return bch2_set_projid(c, inode, projid);
 }
 
 #endif /* NO_BCACHEFS_FS */

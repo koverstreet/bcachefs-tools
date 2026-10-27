@@ -127,7 +127,6 @@
 #[path = "vfs/fs_types.rs"] pub mod vfs_fs_types;
 #[path = "vfs/io_types.rs"] pub mod vfs_io_types;
 #[path = "vfs/pagecache_types.rs"] pub mod vfs_pagecache_types;
-#[path = "vfs/rust_types.rs"] pub mod vfs_rust_types;
 #[path = "vfs/types.rs"] pub mod vfs_types;
 #[path = "alloc/background_types.rs"] pub mod alloc_background_types;
 #[path = "btree/cache_types.rs"] pub mod btree_cache_types;
@@ -307,8 +306,6 @@ pub mod c {
     pub use super::vfs_io_types::*;
     #[cfg(not(NO_BCACHEFS_FS))]
     pub use super::vfs_pagecache_types::*;
-    #[cfg(not(NO_BCACHEFS_FS))]
-    pub use super::vfs_rust_types::*;
     pub use super::vfs_types::*;
     pub use super::alloc_background_types::*;
     pub use super::btree_cache_types::*;

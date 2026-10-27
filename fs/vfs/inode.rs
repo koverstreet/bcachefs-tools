@@ -12,22 +12,47 @@
 //! Its struct inode is @v, a VfsInode (vfs_inode.rs): what Rust does of the
 //! VFS inode, it does through that.
 //!
-//! ei_update_lock, UpdateLock, serializes what the btree doesn't: a project
-//! quota transfer and the inode write that goes with it - set_projid(),
-//! rename's and the reinherit ioctl's - so the inode and its quota agree on
-//! the project.
+//! ei_update_lock, UpdateLock, serializes what the btree doesn't: a quota
+//! transfer and the inode write that goes with it - set_projid(), setattr's,
+//! rename's and the reinherit ioctl's - so the inode and its quota agree.
+//!
+//! ei_quota_lock, ei_quota, serializes the inode's quota accounting -
+//! reservations and i_sectors_acct, against a transfer. ei_qid changes only
+//! with both held, so either is enough to read it.
+//!
+//! The times go both ways. The btree's writes set them - a namespace
+//! operation's, setattr's - and update_after_write() copies them in; the VFS
+//! sets them itself - atime on access, mtime and ctime on a data write
+//! (file_update_time()) - and dirties the inode, and ->write_inode writes
+//! them back: write_vfs_times(). Every other field is the btree's, never
+//! copied from the VFS inode.
+//!
+//! atime is written lazily (I_DIRTY_TIME) - a transaction per access would
+//! cost too much - by ->write_inode: sync, eviction, dirtytime expiry. That
+//! leaves lazytime's "inode written for an unrelated change" (mount(8)),
+//! which other filesystems get from setattr dirtying the inode and ours, out
+//! of band, never do: so every inode write folds the VFS's atime in -
+//! fold_atime() - and it lands with the change, no writeback window between
+//! (generic/622: atime update, chmod, crash). Assigned, not max()ed: atime
+//! can be set backwards (utimensat), and the VFS's is the truth. Folded
+//! before the write's own changes, so a setattr of atime still wins.
 
-use core::ffi::{c_int, c_void};
+use arrayvec::ArrayVec;
+use core::ffi::{c_int, c_uint, c_void};
 use core::mem::offset_of;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 
-use crate::btree::iter::{BtreeTrans, TransAttempt};
+use crate::btree::bkey::pos;
+use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt};
 use crate::c;
-use crate::errcode::{errptr_to_result, ret_to_c, ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{errptr_to_result, ret_to_c, ret_to_class, ret_to_result, BchError};
 use crate::fs::Fs;
+use crate::inode;
 use crate::locking::{Guard, Lock};
-use cstruct_macros::c_extern;
+use crate::quota;
+use crate::util::ffi::Opaque;
+use cstruct_macros::{c_export, c_extern};
 use kernel::sync::aref::{ARef, AlwaysRefCounted};
 
 use super::vfs_inode::VfsInode;
@@ -115,17 +140,108 @@ impl InodeInfo {
         self.ei_flags.load(Relaxed) & (1 << f as u32) != 0
     }
 
-    /// Update the VFS inode to @inode, just written and committed in attempt
-    /// @t, which still holds the inode's btree position locked. @fields: the
-    /// ATTR_* that changed.
-    pub fn update_after_write(&self, t: &TransAttempt<'_, '_>, inode: &mut c::bch_inode_unpacked,
-                              fields: u32) {
-        unsafe { c::bch2_inode_update_after_write(t.raw(), self.raw(), inode, fields) }
+    /// Update the VFS inode to @bi, just committed in @trans - which still
+    /// holds the inode's btree position locked. @fields: the ATTR_* that
+    /// changed.
+    pub fn update_after_write(&self, trans: &BtreeTrans<'_>, bi: &c::bch_inode_unpacked, fields: u32) {
+        assert_eq!(bi.bi_inum, self.inum().inum, "updating the VFS inode {} to inode {}",
+                   self.inum().inum, bi.bi_inum);
+        trans.assert_pos_locked(c::btree_id::inodes, pos(0, bi.bi_inum));
+
+        let fs = self.fs();
+        let v = self.vfs();
+        v.set_nlink(bi.nlink());
+        v.set_uid(bi.bi_uid);
+        v.set_gid(bi.bi_gid);
+        v.set_mode(bi.bi_mode);
+
+        if fields & ATTR_SIZE != 0 {
+            v.set_size(bi.bi_size as i64);
+        }
+        if fields & ATTR_ATIME != 0 {
+            v.set_atime(fs.time_to_timespec(bi.bi_atime as i64));
+        }
+        if fields & ATTR_MTIME != 0 {
+            v.set_mtime(fs.time_to_timespec(bi.bi_mtime as i64));
+        }
+        if fields & ATTR_CTIME != 0 {
+            v.set_ctime(fs.time_to_timespec(bi.bi_ctime as i64));
+        }
+
+        use c::bch_inode_flags as F;
+        for (on, flag) in [(bi.flag(F::BCH_INODE_sync),      c::S_SYNC),
+                           (bi.flag(F::BCH_INODE_immutable), c::S_IMMUTABLE),
+                           (bi.flag(F::BCH_INODE_append),    c::S_APPEND),
+                           (bi.flag(F::BCH_INODE_noatime),   c::S_NOATIME),
+                           (bi.casefold(fs),                 c::S_CASEFOLD)] {
+            v.set_flag(flag, on);
+        }
+
+        self.ei_inode.set(bi);
+    }
+
+    /// @bi, about to be written, with the VFS's atime: see the file comment.
+    pub(crate) fn fold_atime(&self, bi: &mut c::bch_inode_unpacked) {
+        bi.bi_atime = self.fs().timespec_to_time(self.vfs().atime()) as u64;
+    }
+
+    /// ->write_inode(): the VFS inode's times written - its atime, which it's
+    /// the truth for, and the mtime and ctime it dirties the inode for.
+    pub fn write_vfs_times(&self) -> Result<(), BchError> {
+        let (fs, v) = (self.fs(), self.vfs());
+        self.update_lock().write_inode(ATTR_ATIME | ATTR_MTIME | ATTR_CTIME, |_, bi| {
+            bi.bi_mtime = fs.timespec_to_time(v.mtime()) as u64;
+            bi.bi_ctime = fs.timespec_to_time(v.ctime()) as u64;
+            Ok(())
+        })
     }
 
     pub fn update_lock(&self) -> UpdateLock<'_> {
         UpdateLock { inode: self, _guard: Lock::from_c(&self.ei_update_lock).lock() }
     }
+
+    /// Take the update locks of @inodes, together: in address order, each
+    /// once, each a lockdep subclass of its own - as C's bch2_lock_inodes()
+    /// does, so the two can't deadlock.
+    pub fn update_lock_all<const N: usize>(mut inodes: [&InodeInfo; N]) -> UpdateLocks<'_, N> {
+        inodes.sort_unstable_by_key(|i| core::ptr::from_ref(*i));
+
+        let mut locks = ArrayVec::new();
+        for (i, inode) in inodes.iter().enumerate() {
+            if i > 0 && core::ptr::eq(*inode, inodes[i - 1]) {
+                continue;
+            }
+            // C's subclasses start at 1
+            let guard = Lock::from_c(&inode.ei_update_lock).lock_nested(i as u32 + 1);
+            locks.push(UpdateLock { inode, _guard: guard });
+        }
+        UpdateLocks(locks)
+    }
+}
+
+pub struct UpdateLocks<'i, const N: usize>(ArrayVec<UpdateLock<'i>, N>);
+
+impl<'i, const N: usize> UpdateLocks<'i, N> {
+    /// @inode's, one of those locked.
+    pub fn get(&self, inode: &InodeInfo) -> &UpdateLock<'i> {
+        self.0.iter().find(|l| core::ptr::eq(l.inode, inode))
+            .expect("UpdateLocks::get() of an inode not locked")
+    }
+}
+
+/// For C's VFS ops, until they're Rust.
+#[c_export]
+pub fn bch2_inode_update_after_write(trans: &BtreeTrans<'_>, inode: &c::bch_inode_info,
+                                     bi: &c::bch_inode_unpacked, fields: c_uint) {
+    inode.update_after_write(trans, bi, fields)
+}
+
+/// For C's quota transfers, until they're Rust.
+#[c_export]
+pub fn bch2_fs_quota_transfer(_c: &Opaque<c::bch_fs>, inode: &c::bch_inode_info, qid: c::bch_qid,
+                              qtypes: c_uint, mode: c::quota_acct_mode) -> c_int {
+    // SAFETY: every C caller holds @inode's ei_update_lock
+    ret_to_c(unsafe { UpdateLock::held(inode) }.quota_transfer(qid, qtypes, mode))
 }
 
 /// ei_update_lock, held.
@@ -134,40 +250,130 @@ pub struct UpdateLock<'i> {
     _guard: Guard<'i, c::mutex>,
 }
 
-impl UpdateLock<'_> {
+impl<'i> UpdateLock<'i> {
+    /// ei_update_lock, held by the caller - C, calling in.
+    ///
+    /// # Safety
+    /// The caller holds @inode's ei_update_lock for 'i.
+    pub unsafe fn held(inode: &'i InodeInfo) -> Self {
+        UpdateLock { inode, _guard: unsafe { Lock::from_c(&inode.ei_update_lock).held() } }
+    }
+
+    /// Move the inode's quota charges - its usage, i_blocks +
+    /// ei_quota_reserved, and the inode itself - to @qid, in the quota types
+    /// of @qtypes that are accounted.
+    pub fn quota_transfer(&self, qid: c::bch_qid, qtypes: u32, mode: c::quota_acct_mode)
+        -> Result<(), BchError>
+    {
+        let inode = self.inode;
+        let fs = inode.fs();
+        let mut q = inode.ei_quota.lock();
+
+        let qtypes = quota::set_qtypes(qtypes & quota::enabled_qtypes(fs))
+            .filter(|&i| qid.q[i] != q.ei_qid.q[i])
+            .fold(0, |m, i| m | 1 << i);
+        if qtypes == 0 {
+            return Ok(());
+        }
+
+        // Quotas don't count snapshot inodes: only the qid changes.
+        if !inode.flag(c::bch_inode_info_flags::EI_INODE_SNAPSHOT) {
+            // blocks(): stable, under ei_quota_lock
+            quota::transfer(fs, qtypes, qid, q.ei_qid, inode.vfs().blocks() + q.ei_quota_reserved, mode)?;
+        }
+
+        for i in quota::set_qtypes(qtypes) {
+            q.ei_qid.q[i] = qid.q[i];
+        }
+        Ok(())
+    }
+
     /// Move the inode to project @projid, quota and all.
     pub fn set_projid(&self, projid: u32) -> Result<(), BchError> {
-        let inode = self.inode;
-        ret_to_result(unsafe { c::rust_ei_set_projid(inode.fs().as_ptr(), inode.raw(), projid) })
+        let mut qid = self.inode.ei_quota.lock().ei_qid;
+        qid.q[c::quota_types::QTYP_PRJ.0 as usize] = projid;
+
+        self.quota_transfer(qid, 1 << c::quota_types::QTYP_PRJ.0, c::quota_acct_mode::KEY_TYPE_QUOTA_PREALLOC)
     }
 
     /// Change the inode with @set, in a transaction of its own that's
     /// committed, then update the VFS inode - @fields, the ATTR_* that
-    /// changed. @set runs in each attempt, on the inode as it is in the btree.
+    /// changed. @set runs in each attempt, on the inode as it is in the btree,
+    /// its atime the VFS's.
     pub fn write_inode<F>(&self, fields: u32, mut set: F) -> Result<(), BchError>
     where
         F: FnMut(&TransAttempt<'_, '_>, &mut c::bch_inode_unpacked) -> Result<(), BchError>,
     {
-        unsafe extern "C" fn set_fn<F>(
-            trans: *mut c::btree_trans,
-            _ei:   *mut c::bch_inode_info,
-            bi:    *mut c::bch_inode_unpacked,
-            p:     *mut c_void,
-        ) -> c_int
-        where
-            F: FnMut(&TransAttempt<'_, '_>, &mut c::bch_inode_unpacked) -> Result<(), BchError>,
-        {
-            // @p is write_inode()'s @set, for the call:
-            let set = unsafe { &mut *(p as *mut F) };
-            let trans = unsafe { BtreeTrans::borrow_raw(trans) };
-            // SAFETY: bch2_write_inode() calls @set in its attempt
-            ret_to_c(set(&unsafe { trans.attempt_in_progress() }, unsafe { &mut *bi }))
-        }
-
-        let inode = self.inode;
-        ret_to_result(unsafe {
-            c::bch2_write_inode(inode.fs().as_ptr(), inode.raw(), Some(set_fn::<F>),
-                                &mut set as *mut F as *mut c_void, fields)
-        })
+        self.write_inode_if(fields, |t, bi| set(t, bi).map(|()| true)).map(|_| ())
     }
+
+    /// write_inode(), but @set says whether there's anything to write: if
+    /// not, nothing's written or updated. Whether it wrote.
+    pub fn write_inode_if<F>(&self, fields: u32, mut set: F) -> Result<bool, BchError>
+    where
+        F: FnMut(&TransAttempt<'_, '_>, &mut c::bch_inode_unpacked) -> Result<bool, BchError>,
+    {
+        let inode = self.inode;
+        let fs = inode.fs();
+        let trans = crate::btree_trans!(fs);
+        // Outside the attempt: the propagate it starts is finished after the
+        // commit
+        let mut opt_change = c::inode_opt_change::new();
+
+        let wrote = lockrestart_do(&trans, |t| {
+            opt_change = c::inode_opt_change::new();
+
+            let mut iter = BtreeIter::uninit();
+            let mut bi = inode::__peek(t, &mut iter, inode.inum(), BtreeIterFlags::INTENT,
+                                       Some(crate::c_function_name!()))?;
+            let old_r = inode::reconcile_opts_get(fs, &bi);
+
+            inode.fold_atime(&mut bi);
+            if !set(t, &mut bi)? {
+                return Ok(false);
+            }
+
+            // iter's snapshot, not bi_snapshot: peek can find the inode at an
+            // ancestor, but it's written here
+            opt_change.record(t, &old_r, &bi, iter.snapshot())?;
+            inode::write(t, &mut iter, &mut bi)?;
+            t.commit(None, CommitFlags::NO_ENOSPC)?;
+
+            inode.update_after_write(t.trans(), &bi, fields);
+            Ok(true)
+        })?;
+
+        if wrote {
+            opt_change.finish(&trans)?;
+        }
+        Ok(wrote)
+    }
+}
+
+/// For C's inode writes, until they're Rust: @set, if not NULL, with @p -
+/// its error, or 0 to write the inode, or positive for nothing to write.
+#[must_use]
+#[c_export]
+pub fn bch2_write_inode(_c: &Opaque<c::bch_fs>, inode: &c::bch_inode_info, set: c::inode_set_fn,
+                        p: *mut c_void, fields: c_uint) -> c_int {
+    // SAFETY: every C caller holds @inode's ei_update_lock
+    let l = unsafe { UpdateLock::held(inode) };
+    ret_to_c(l.write_inode_if(fields, |t, bi| match set {
+        // SAFETY: C's callback, given the transaction it runs in, the
+        // inode, the inode being written, and its @p
+        Some(set) => ret_to_result(unsafe { set(t.raw(), inode.raw(), bi, p) })
+            .map(|r| r == 0),
+        None      => Ok(true),
+    }).map(|_| ()))
+}
+
+/// ->write_inode()
+///
+/// # Safety
+/// The VFS's arguments: @vinode one of ours, live for the call.
+#[c_export]
+pub unsafe fn bch2_vfs_write_inode(vinode: *mut c::inode, _wbc: *mut c::writeback_control) -> c_int {
+    // SAFETY: not always a reference - iput_final() writes one back with
+    // i_count 0 - but I_SYNC or I_WILL_FREE keeps it from eviction meanwhile
+    ret_to_class(unsafe { InodeInfo::from_inode(vinode) }.write_vfs_times())
 }

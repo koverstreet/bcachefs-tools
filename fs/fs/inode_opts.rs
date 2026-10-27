@@ -738,22 +738,6 @@ impl c::inode_opt_change {
 }
 
 #[c_export]
-pub fn bch2_inode_opt_change_init(ch: &mut c::inode_opt_change) {
-    *ch = c::inode_opt_change::new();
-}
-
-#[c_export]
-pub fn bch2_inode_opt_change_trans(
-    trans:    &BtreeTrans<'_>,
-    old_r:    &c::bch_extent_reconcile,
-    inode_u:  &c::bch_inode_unpacked,
-    snapshot: u32,
-    ch:       &mut c::inode_opt_change,
-) -> c_int {
-    ret_to_c(ch.record(&unsafe { trans.attempt_in_progress() }, old_r, inode_u, snapshot))
-}
-
-#[c_export]
 pub fn bch2_inode_opt_change_finish(trans: &BtreeTrans<'_>, ch: &mut c::inode_opt_change) -> c_int {
     ret_to_c(ch.finish(trans))
 }

@@ -482,7 +482,7 @@ mod vfs {
             inode::write(t, &mut inode_iter, &mut inode)?;
             t.commit(None, CommitFlags::empty())?;
 
-            v.update_after_write(t, &mut inode, ATTR_CTIME | ATTR_MODE);
+            v.update_after_write(t.trans(), &inode, ATTR_CTIME | ATTR_MODE);
             v.vfs().set_cached_acl(ty, acl.as_deref());
             Ok(())
         });

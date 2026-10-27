@@ -609,7 +609,7 @@ mod vfs {
         let ret = lockrestart_do(&trans, |t| {
             set_trans(t, v.inum(), &mut inode, name, value, ty, flags)?;
             t.commit(None, CommitFlags::empty())?;
-            v.update_after_write(t, &mut inode, ATTR_CTIME);
+            v.update_after_write(t.trans(), &inode, ATTR_CTIME);
             Ok(())
         });
         ret_to_class(ret)

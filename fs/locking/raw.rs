@@ -17,7 +17,7 @@
 
 use super::RawLock;
 use super::RawRwLock;
-use super::RawTryLock;
+use super::{RawNestedLock, RawTryLock};
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::util::ffi::{c_char, Opaque};
@@ -92,6 +92,19 @@ unsafe impl RawLock for c::mutex {
 unsafe impl RawTryLock for c::mutex {
     unsafe fn try_lock(&self) -> Option<()> {
         (unsafe { c::mutex_trylock(self.as_ptr().cast()) } as i32 != 0).then_some(())
+    }
+}
+
+// Without lockdep's lock tracking, mutex_lock_nested() is a macro, mutex_lock()
+unsafe impl RawNestedLock for c::mutex {
+    #[cfg(CONFIG_DEBUG_LOCK_ALLOC)]
+    unsafe fn lock_nested(&self, subclass: u32) {
+        unsafe { c::mutex_lock_nested(self.as_ptr().cast(), subclass) }
+    }
+
+    #[cfg(not(CONFIG_DEBUG_LOCK_ALLOC))]
+    unsafe fn lock_nested(&self, _subclass: u32) {
+        unsafe { self.lock() }
     }
 }
 

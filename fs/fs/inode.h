@@ -135,14 +135,6 @@ static inline unsigned bch2_inode_nlink_get(struct bch_inode_unpacked *bi)
 
 #include "data/reconcile/trigger.h"
 
-static inline struct bch_extent_reconcile
-bch2_inode_reconcile_opts_get(struct bch_fs *c, struct bch_inode_unpacked *inode)
-{
-	struct bch_inode_opts io_opts;
-	bch2_inode_opts_get_inode(c, inode, &io_opts);
-	return io_opts_to_reconcile_opts(c, &io_opts);
-}
-
 #define BCACHEFS_ROOT_SUBVOL_INUM					\
 	((subvol_inum) { BCACHEFS_ROOT_SUBVOL,	BCACHEFS_ROOT_INO })
 
