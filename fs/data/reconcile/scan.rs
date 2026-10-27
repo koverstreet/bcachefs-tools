@@ -25,7 +25,6 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, B
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
 use crate::data::ec::create::WidenCache;
-use crate::data::ec::trigger::stripe_header_mut;
 use crate::data::moving::{MoveStats, MovingCtxt};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::errcode::{ret_to_c, BchError};
@@ -451,8 +450,8 @@ fn scan_stripes(ctxt: &MovingCtxt<'_>) -> Result<(), BchError> {
         let Some(s) = k.arm::<c::Stripe>() else { return Ok(()) };
         let want = cache.can_widen(fs, s.v())?;
         if s.v().can_widen() != want {
-            let mut u = t.bkey_make_mut(iter, k, UpdateTriggerFlags::empty())?;
-            stripe_header_mut(&mut u).bits.set_can_widen(want);
+            let mut u = t.bkey_make_mut(iter, s, UpdateTriggerFlags::empty())?;
+            u.v_mut().bits.set_can_widen(want);
         }
         Ok(())
     })

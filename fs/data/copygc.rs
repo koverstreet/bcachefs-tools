@@ -481,7 +481,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let Some(s) = s_k.arm::<c::Stripe>() else { return Ok(None) };
 
         /* write buffer race? */
-        Ok((s.v().lru_pos(s.val_bytes()) == lru.time).then_some(s))
+        Ok((s.v().lru_pos() == lru.time).then_some(s))
     }
 
     fn get_stripe_buckets(&self, batch: &mut Batch<'f>) -> Result<(), BchError> {
@@ -494,7 +494,7 @@ impl<'f, 'w> Copygc<'f, 'w> {
             let Some(s) = Self::lru_stripe(t, &mut s_iter, lru_k.k.p)? else { return Ok(LoopFlow::Continue) };
 
             for (ptr, sectors) in data_blocks(s) {
-                if !sectors.is_some_and(|n| n != 0) {
+                if sectors == 0 {
                     continue;
                 }
                 let Ok(Some(ca)) = t.fs().dev_bkey_tryget(s.into(), ptr.dev().into()) else { continue };
@@ -528,8 +528,8 @@ impl<'f, 'w> Copygc<'f, 'w> {
             let Some(s) = Self::lru_stripe(t, &mut s_iter, lru_k.k.p)? else { return Ok(LoopFlow::Continue) };
 
             let v = s.v();
-            let nr_data = u32::from(v.nr_blocks).wrapping_sub(v.nr_redundant.into());
-            let blocks_nonempty = data_blocks(s).filter(|(_, n)| n.is_some_and(|n| n != 0)).count() as u64;
+            let nr_data = v.nr_data();
+            let blocks_nonempty = data_blocks(s).filter(|(_, n)| *n != 0).count() as u64;
 
             /* stripe is pending delete */
             if blocks_nonempty == 0 {

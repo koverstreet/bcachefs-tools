@@ -10,7 +10,7 @@ use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, Commi
                          UpdateTriggerFlags, Watermark};
 use crate::c;
 use crate::c::bch_errcode;
-use crate::data::ec::trigger::{ptr_matches_stripe, ptr_matches_stripe_m, stripe_blockcount_add};
+use crate::data::ec::trigger::{ptr_matches_stripe, ptr_matches_stripe_m};
 use crate::data::ptrs::{BkeyVPtrs, DecodedPtr, Ptrs};
 use crate::data::reconcile::needs_reconcile::extent_trigger_set_needs_reconcile;
 use crate::data::reconcile::trigger::trigger_extent_reconcile;
@@ -418,7 +418,9 @@ fn trigger_stripe_ptr(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, p: &c::extent_ptr
         };
 
         s.v().csum_type_check(fs)?;
-        stripe_blockcount_add(&mut s, block.into(), sectors);
+        // wrapping to a u16, as C's
+        let n = &mut s.v_mut().blockcounts_mut().expect("a checksum type this version knows")[usize::from(block)];
+        n.set((i64::from(n.get()) + sectors) as u16);
 
         let acct = bkey_replicas_acct(fs, s.as_sc().untyped(), data_type);
         return accounting::add(t, &acct, &[sectors], false);

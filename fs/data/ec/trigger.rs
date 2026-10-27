@@ -36,74 +36,133 @@ use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::init::passes;
+use crate::types::Le16;
 use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
-use crate::util::vstructs::{cast_plain, plain_bytes, ArmRef, Validated};
+use crate::util::vstructs::{cast, cast_plain_slice, cast_plain_slice_mut, plain_bytes, plain_bytes_mut, Validated};
 use crate::util::Printbuf;
 use crate::{bch_err, bkey_fsck_err_on, fs_inconsistent, fsck_err_on, prt};
 use arrayvec::ArrayVec;
 use core::ffi::c_int;
 use core::mem::{offset_of, size_of};
-use core::ops::ControlFlow;
+use core::ops::{ControlFlow, Range};
 use cstruct_macros::{c_const, c_export};
 
 /// Where a stripe's pointers start: sizeof(struct bch_stripe).
 const STRIPE_PTRS: usize = offset_of!(c::Stripe, repr.ptrs);
 
-/// The offsets of a stripe's parts in its value: ec/trigger.h's inlines. In
-/// C's unsigned arithmetic; csum_granularity_bits is under 31, as validate
-/// checks first.
+/// The header: its shape, and the sizes of the sections after it - ec/trigger.h's
+/// inlines. In C's unsigned arithmetic: nr_redundant past nr_blocks is damage
+/// validate doesn't catch, and wraps nr_data; csum_granularity_bits is under 31,
+/// as validate checks first. Offsets are into the value's tail, after the header.
 impl c::Stripe {
+    pub fn nr_data(&self) -> u32 {
+        u32::from(self.nr_blocks).wrapping_sub(self.nr_redundant.into())
+    }
+
+    /// A checksum type this version doesn't know is an error, not a guess.
+    pub fn csum_type_check(&self, fs: &Fs) -> Result<(), BchError> {
+        if u32::from(self.csum_type) >= c::bch_csum_type::BCH_CSUM_NR.0 {
+            return fs.throw(bch_errcode::BCH_ERR_stripe_unknown_csum_type);
+        }
+        Ok(())
+    }
+
+    /// The can_widen it should have, with @nr_devs RW members in its disk
+    /// label and ec_max_data_blocks @max_data_blocks: how many more data
+    /// blocks they'd let it have.
+    pub fn want_can_widen(&self, nr_devs: u32, max_data_blocks: u32) -> u8 {
+        stripe_widen_value(stripe_widen_target_nr_data(nr_devs, self.nr_redundant.into(), max_data_blocks),
+                           self.nr_data())
+    }
+
     /// stripe_csums_per_device().
-    fn csums_per_device(&self) -> u32 {
+    pub(crate) fn csums_per_device(&self) -> u32 {
         u32::from(self.sectors.get()).div_ceil(1 << self.csum_granularity_bits)
     }
 
-    /// A checksum's size - for a type this version doesn't know, the widest
-    /// it does: stripe_csum_bytes().
-    fn csum_bytes(&self) -> u32 {
-        c::bch_csum_type(self.csum_type.into()).bytes().unwrap_or(16)
+    /// A checksum's size - None for a type this version doesn't know:
+    /// stripe_csum_bytes().
+    fn csum_bytes(&self) -> Option<u32> {
+        c::bch_csum_type(self.csum_type.into()).bytes()
     }
 
-    /// stripe_csum_offset().
-    fn csum_offset(&self, dev: u32, csum_idx: u32) -> u32 {
-        STRIPE_PTRS as u32 + size_of::<c::bch_extent_ptr>() as u32 * u32::from(self.nr_blocks) +
-            (dev * self.csums_per_device() + csum_idx) * self.csum_bytes()
+    fn ptrs_bytes(&self) -> usize {
+        usize::from(self.nr_blocks) * size_of::<c::bch_extent_ptr>()
     }
 
-    /// stripe_blockcount_offset().
-    fn blockcount_offset(&self, idx: u32) -> u32 {
-        self.csum_offset(self.nr_blocks.into(), 0) + size_of::<u16>() as u32 * idx
+    fn csums_at(&self) -> Option<Range<usize>> {
+        let start = self.ptrs_bytes();
+        Some(start..start + (u32::from(self.nr_blocks) * self.csums_per_device() * self.csum_bytes()?) as usize)
     }
 
-    /// stripe_val_u64s().
-    fn val_u64s(&self) -> u32 {
-        self.blockcount_offset(self.nr_blocks.into()).div_ceil(8)
+    fn blockcounts_at(&self) -> Option<Range<usize>> {
+        let start = self.csums_at()?.end;
+        Some(start..start + usize::from(self.nr_blocks) * size_of::<u16>())
     }
 
-    /// Block @idx's sector count, in @val, this stripe's value - if it's long
-    /// enough to hold it: stripe_blockcount_get().
-    fn blockcount(&self, val: &[u8], idx: u32) -> Option<u16> {
-        let at = self.blockcount_offset(idx) as usize;
-        val.get(at..at + 2).map(|n| u16::from_le_bytes([n[0], n[1]]))
+    /// stripe_val_u64s(), as validate has it: for a checksum type this version
+    /// doesn't know, as though it were 16 bytes wide, the widest it knows.
+    pub(crate) fn val_u64s(&self) -> u32 {
+        let csums = u32::from(self.nr_blocks) * self.csums_per_device() * self.csum_bytes().unwrap_or(16);
+        (STRIPE_PTRS as u32 + self.ptrs_bytes() as u32 + csums + u32::from(self.nr_blocks) * 2).div_ceil(8)
+    }
+}
+
+/// A stripe's sections: its blocks' pointers, the checksums, a 2D array of
+/// [block][granule] of the type's size, and a u16 sector count per block - as
+/// long as validate checks they are. Everything past the pointers is found
+/// through csum_type: for one this version doesn't know - a newer version's
+/// stripe, which validate passes on purpose - csums() and blockcounts() are
+/// None, and the stripe can't be updated.
+impl c::Stripe<Validated> {
+    pub fn block_ptrs(&self) -> &[c::bch_extent_ptr] {
+        cast_plain_slice(&self.ptrs[..self.ptrs_bytes()]).expect("a stripe's pointers, aligned")
     }
 
-    /// Its time in the stripe lru, @val its value: 0, not in it, if it has
-    /// no room for new data; STRIPE_LRU_POS_EMPTY if it has no data, for the
-    /// stripe_delete worker; else earlier the more it can take - empty data
-    /// blocks, and blocks it could be widened by - to be reused first.
+    pub fn block_ptrs_mut(&mut self) -> &mut [c::bch_extent_ptr] {
+        let n = self.ptrs_bytes();
+        cast_plain_slice_mut(&mut self.ptrs[..n]).expect("a stripe's pointers, aligned")
+    }
+
+    /// The checksums, a 2D array of [block][granule] - None for a checksum
+    /// type this version doesn't know.
+    pub fn csums(&self) -> Option<StripeCsums<&[u8]>> {
+        let at = self.csums_at()?;
+        Some(StripeCsums { bytes: &self.ptrs[at], csum_bytes: self.csum_bytes()? as usize,
+                           per_device: self.csums_per_device() as usize })
+    }
+
+    pub fn csums_mut(&mut self) -> Option<StripeCsums<&mut [u8]>> {
+        let (at, csum_bytes, per_device) = (self.csums_at()?, self.csum_bytes()? as usize,
+                                            self.csums_per_device() as usize);
+        Some(StripeCsums { bytes: &mut self.ptrs[at], csum_bytes, per_device })
+    }
+
+    pub fn blockcounts(&self) -> Option<&[Le16]> {
+        let at = self.blockcounts_at()?;
+        Some(cast_plain_slice(&self.ptrs[at]).expect("a stripe's block counts, aligned"))
+    }
+
+    pub fn blockcounts_mut(&mut self) -> Option<&mut [Le16]> {
+        let at = self.blockcounts_at()?;
+        Some(cast_plain_slice_mut(&mut self.ptrs[at]).expect("a stripe's block counts, aligned"))
+    }
+
+    /// Its time in the stripe lru: 0, not in it, if it has no room for new
+    /// data; STRIPE_LRU_POS_EMPTY if it has no data, for the stripe_delete
+    /// worker; else earlier the more it can take - empty data blocks, and
+    /// blocks it could be widened by - to be reused first. Not in it either
+    /// with a checksum type this version doesn't know: it can't be reused or
+    /// deleted, which would update it.
     ///
-    /// Written by the stripe trigger, checked by check_lrus. nr_data is
-    /// unsigned, as C's: nr_redundant past nr_blocks is damage validate
-    /// doesn't catch, and only blocks the value has are counted.
-    pub fn lru_pos(&self, val: &[u8]) -> u64 {
-        let nr_blocks = u32::from(self.nr_blocks);
-        let nr_data = nr_blocks.wrapping_sub(self.nr_redundant.into());
-        let blocks_empty = (0..nr_data.min(nr_blocks))
-            .filter(|&i| self.blockcount(val, i) == Some(0))
-            .count() as u32;
+    /// Written by the stripe trigger, checked by check_lrus.
+    pub fn lru_pos(&self) -> u64 {
+        let Some(counts) = self.blockcounts() else { return 0 };
+        let nr_data = self.nr_data();
+        let blocks_empty = counts.iter().take(nr_data as usize).filter(|n| n.get() == 0).count() as u32;
 
         if blocks_empty == nr_data {
             return STRIPE_LRU_POS_EMPTY;
@@ -116,9 +175,43 @@ impl c::Stripe {
     }
 }
 
+/// A stripe's checksums: a 2D array of [block][granule], each csum_bytes
+/// wide - the low bytes of a bch_csum.
+pub struct StripeCsums<B> {
+    bytes:      B,
+    csum_bytes: usize,
+    per_device: usize,
+}
+
+impl<B> StripeCsums<B> {
+    fn at(&self, block: u32, granule: u32) -> Range<usize> {
+        debug_assert!((granule as usize) < self.per_device);
+        let start = (block as usize * self.per_device + granule as usize) * self.csum_bytes;
+        start..start + self.csum_bytes
+    }
+}
+
+impl<B: AsRef<[u8]>> StripeCsums<B> {
+    /// stripe_csum_get().
+    pub fn get(&self, block: u32, granule: u32) -> c::bch_csum {
+        let mut csum = c::bch_csum::default();
+        plain_bytes_mut(&mut csum)[..self.csum_bytes].copy_from_slice(&self.bytes.as_ref()[self.at(block, granule)]);
+        csum
+    }
+}
+
+impl<B: AsMut<[u8]>> StripeCsums<B> {
+    /// stripe_csum_set().
+    pub fn set(&mut self, block: u32, granule: u32, csum: c::bch_csum) {
+        let at = self.at(block, granule);
+        self.bytes.as_mut()[at].copy_from_slice(&plain_bytes(&csum)[..self.csum_bytes]);
+    }
+}
+
 c_const! {
     pub const STRIPE_LRU_POS_EMPTY: u64 = 1;
 }
+
 
 /// Stripe::lru_pos(), for C.
 ///
@@ -136,23 +229,9 @@ c_const! {
 #[c_export]
 pub unsafe extern "C" fn stripe_lru_pos(s: *const c::Stripe) -> u64 {
     // SAFETY: the caller's
-    let Some(s) = (unsafe { s.as_ref() }) else { return 0 };
-    let val = unsafe { core::slice::from_raw_parts((s as *const c::Stripe).cast::<u8>(),
-                                                   s.val_u64s() as usize * 8) };
-    s.lru_pos(val)
-}
-
-/// Block @i's pointer, in stripe value @val - if it's long enough to hold it,
-/// as validate checks it is.
-fn block_ptr(val: &[u8], i: u32) -> Option<&c::bch_extent_ptr> {
-    let at = STRIPE_PTRS + size_of::<c::bch_extent_ptr>() * i as usize;
-    val.get(at..at + size_of::<c::bch_extent_ptr>()).and_then(cast_plain)
-}
-
-/// Each block's pointer, as far as the value goes.
-pub fn stripe_block_ptrs<'a>(s: BkeySC<'a, c::Stripe<Validated>>) -> impl Iterator<Item = &'a c::bch_extent_ptr> {
-    let val = s.val_bytes();
-    (0..u32::from(s.v().nr_blocks)).map_while(move |i| block_ptr(val, i))
+    let Some(h) = (unsafe { s.as_ref() }) else { return 0 };
+    let val = unsafe { core::slice::from_raw_parts(s.cast::<u8>(), h.val_u64s() as usize * 8) };
+    cast::<c::Stripe<Validated>>(val).expect("a stripe's value").lru_pos()
 }
 
 /// Whether @p is the data block its stripe_ptr names in @s:
@@ -161,13 +240,11 @@ pub fn ptr_matches_stripe(s: BkeySC<'_, c::Stripe<Validated>>, p: &c::extent_ptr
     assert!(p.has_ec, "matching a pointer without a stripe against one");
 
     let v = s.v();
-    // unsigned, as C's: nr_redundant past nr_blocks is damage
-    let nr_data = u32::from(v.nr_blocks).wrapping_sub(v.nr_redundant.into());
     let block = u32::from(p.ec.block());
-    if block >= nr_data {
+    if block >= v.nr_data() {
         return false;
     }
-    let Some(sp) = block_ptr(s.val_bytes(), block) else { return false };
+    let Some(sp) = v.block_ptrs().get(block as usize) else { return false };
 
     ptr_in_block(sp, &p.ptr, u64::from(v.sectors.get()))
 }
@@ -238,31 +315,6 @@ pub unsafe fn bch2_gc_stripes_free(c: &Opaque<c::bch_fs>) {
     unsafe { Fs::from_c(c).ec.gc_stripes.free() }
 }
 
-/// @sectors added to block @idx's count in stripe @k, wrapping to a u16 as C's.
-pub fn stripe_blockcount_add(k: &mut impl BkeyVMut, idx: u32, sectors: i64) {
-    let at = stripe_header_mut(k).blockcount_offset(idx) as usize;
-    let n = &mut k.val_bytes_mut()[at..at + 2];
-    let v = (i64::from(u16::from_le_bytes([n[0], n[1]])) + sectors) as u16;
-    n.copy_from_slice(&v.to_le_bytes());
-}
-
-impl c::Stripe {
-    /// A checksum type this version doesn't know is an error, not a guess.
-    pub fn csum_type_check(&self, fs: &Fs) -> Result<(), BchError> {
-        if u32::from(self.csum_type) >= c::bch_csum_type::BCH_CSUM_NR.0 {
-            return fs.throw(bch_errcode::BCH_ERR_stripe_unknown_csum_type);
-        }
-        Ok(())
-    }
-}
-
-/// Stripe @k's header, the sized part of its value, to edit in place: the
-/// value is a DST, and its pointers and checksums after the header aren't
-/// touched.
-pub fn stripe_header_mut(k: &mut impl BkeyVMut) -> &mut c::Stripe {
-    <c::Stripe as ArmRef>::arm_mut(k.val_bytes_mut()).expect("a stripe's header")
-}
-
 /// How many data blocks @nr_devs devices could give a stripe with
 /// @nr_redundant parity blocks - the pool's widening target - capped at
 /// BCH_BKEY_PTRS_MAX, and at @max_data_blocks if that's set (the
@@ -280,17 +332,6 @@ fn stripe_widen_target_nr_data(nr_devs: u32, nr_redundant: u32, max_data_blocks:
 /// its three bits - stripe_widen_value().
 fn stripe_widen_value(target_nr_data: u32, actual_nr_data: u32) -> u8 {
     (target_nr_data as i32).wrapping_sub(actual_nr_data as i32).clamp(0, 7) as u8
-}
-
-impl c::Stripe {
-    /// The can_widen it should have, with @nr_devs RW members in its disk
-    /// label and ec_max_data_blocks @max_data_blocks: how many more data
-    /// blocks they'd let it have.
-    pub fn want_can_widen(&self, nr_devs: u32, max_data_blocks: u32) -> u8 {
-        // unsigned, as C's - nr_redundant past nr_blocks is damage
-        let nr_data = u32::from(self.nr_blocks).wrapping_sub(self.nr_redundant.into());
-        stripe_widen_value(stripe_widen_target_nr_data(nr_devs, self.nr_redundant.into(), max_data_blocks), nr_data)
-    }
 }
 
 fn stripe_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
@@ -330,11 +371,10 @@ pub fn bch2_stripe_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, k: BkeySC<
     // before calling this - but not what's after it
     let s = k.arm::<c::Stripe>().expect("a stripe").v();
     let val = k.val_bytes();
-    // unsigned, as C's - nr_redundant > nr_blocks is damage, printed as is
-    let nr_data = u32::from(s.nr_blocks).wrapping_sub(s.nr_redundant.into());
 
+    // nr_redundant past nr_blocks is damage, printed as is
     write!(out, "algo {} sectors {} blocks {}:{} csum {} gran ",
-           s.algorithm(), s.sectors.get(), nr_data, s.nr_redundant, c::bch_csum_type(s.csum_type.into()));
+           s.algorithm(), s.sectors.get(), s.nr_data(), s.nr_redundant, c::bch_csum_type(s.csum_type.into()));
     match 1u64.checked_shl(s.csum_granularity_bits.into()) {
         Some(gran) => write!(out, "{gran}"),
         None => write!(out, "(invalid shift {})", s.csum_granularity_bits),
@@ -358,18 +398,17 @@ pub fn bch2_stripe_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, k: BkeySC<
     let mut out = out.atomic();
     let rcu = read_lock();
 
-    let counts_found = s.csum_type < c::bch_csum_type::BCH_CSUM_NR.0 as u8 && s.csum_granularity_bits < 31;
+    let tail = &val[STRIPE_PTRS..];
+    let ptrs = &tail[..s.ptrs_bytes().min(tail.len()) / 8 * 8];
+    let ptrs: &[c::bch_extent_ptr] = cast_plain_slice(ptrs).expect("a stripe's pointers, aligned");
+    let counts = if s.csum_granularity_bits < 31 { s.blockcounts_at() } else { None };
 
-    for i in 0..u32::from(s.nr_blocks) {
-        let Some(ptr) = block_ptr(val, i) else { break };
-
+    for (i, ptr) in ptrs.iter().enumerate() {
         out.newline();
         extent_ptr_to_text(&mut out, Some(fs), ptr, &rcu);
 
-        if counts_found {
-            if let Some(n) = s.blockcount(val, i) {
-                write!(out, "#{n}");
-            }
+        if let Some(n) = counts.as_ref().and_then(|at| tail.get(at.start + 2 * i..at.start + 2 * i + 2)) {
+            write!(out, "#{}", u16::from_le_bytes([n[0], n[1]]));
         }
     }
 }
@@ -386,31 +425,31 @@ fn stripe_of(k: BkeySC<'_>) -> Option<StripeK<'_>> {
 
 /// Its time in the stripe lru - none for no stripe.
 fn lru_pos(s: Option<StripeK<'_>>) -> u64 {
-    s.map_or(0, |s| s.v().lru_pos(s.val_bytes()))
+    s.map_or(0, |s| s.v().lru_pos())
 }
 
 fn needs_reconcile(s: Option<StripeK<'_>>) -> i64 {
     s.map_or(0, |s| s.v().needs_reconcile().into())
 }
 
-/// Its data blocks: each one's pointer and sector count, as far as the value
-/// goes. nr_data unsigned, as C's.
-pub(crate) fn data_blocks(s: StripeK<'_>) -> impl Iterator<Item = (&c::bch_extent_ptr, Option<u16>)> {
+/// Its data blocks: each one's pointer and sector count. Of a stripe of a
+/// checksum type this version knows: one the trigger's csum_type_check()
+/// passed, or one in the stripe lru - copygc's - which lru_pos() keeps the
+/// others out of.
+pub(crate) fn data_blocks(s: StripeK<'_>) -> impl Iterator<Item = (&c::bch_extent_ptr, u16)> {
     let v = s.v();
-    let nr_data = u32::from(v.nr_blocks).wrapping_sub(v.nr_redundant.into());
-    (0..nr_data.min(v.nr_blocks.into()))
-        .map_while(move |i| block_ptr(s.val_bytes(), i).map(|p| (p, s.v().blockcount(s.val_bytes(), i))))
+    let counts = v.blockcounts().expect("a stripe of a checksum type this version knows");
+    v.block_ptrs().iter().zip(counts).map(|(p, n)| (p, n.get())).take(v.nr_data() as usize)
 }
 
 /// Whether going from @old to @new changes no block's bucket or backpointer.
 fn blocks_unchanged(old: StripeK<'_>, new: StripeK<'_>) -> bool {
     let (o, n) = (old.v(), new.v());
-    let ptrs = STRIPE_PTRS..STRIPE_PTRS + usize::from(n.nr_blocks) * size_of::<c::bch_extent_ptr>();
 
     o.needs_reconcile() == n.needs_reconcile() &&
         o.nr_blocks == n.nr_blocks &&
         o.nr_redundant == n.nr_redundant &&
-        old.val_bytes().get(ptrs.clone()) == new.val_bytes().get(ptrs)
+        plain_bytes(o.block_ptrs()) == plain_bytes(n.block_ptrs())
 }
 
 /// Refresh @new's can_widen from the RW members its disk label has now,
@@ -418,12 +457,12 @@ fn blocks_unchanged(old: StripeK<'_>, new: StripeK<'_>) -> bool {
 /// stripes scan passed the stripe would keep a stale one, and the scan's
 /// cookie be cleared with it wrong.
 fn refresh_can_widen(fs: &Fs, new: &mut BkeyS<'_>) {
-    let Some(s) = stripe_of(BkeySC::from(&*new)) else { return };
+    let Some(mut s) = new.as_s().arm::<c::Stripe>() else { return };
     let v = s.v();
     let want = v.want_can_widen(fs.ec_rw_member_devs_nr(v.disk_label, v.sectors.get()),
                                 fs.opts().ec_max_data_blocks.into());
     if v.can_widen() != want {
-        stripe_header_mut(new).set_can_widen(want);
+        s.v_mut().bits.set_can_widen(want);
     }
 }
 
@@ -435,7 +474,7 @@ fn stripe_frag_acct(t: &TransAttempt<'_, '_>, s: Option<StripeK<'_>>, gc: bool, 
     let Some(s) = s else { return Ok(()) };
     let sectors = i64::from(s.v().sectors.get());
     let nr_data = data_blocks(s).count() as i64;
-    let nr_empty = data_blocks(s).filter(|(_, n)| *n == Some(0)).count();
+    let nr_empty = data_blocks(s).filter(|(_, n)| *n == 0).count();
 
     let acct = c::disk_accounting_pos::from_arm(c::bch_acct_stripe_frag { nr_empty: nr_empty as u8 });
     accounting::add(t, &acct, &[sign * nr_data * sectors, sign * nr_empty as i64 * sectors], gc)
@@ -459,7 +498,7 @@ fn dev_stripe_frag_acct(t: &TransAttempt<'_, '_>, old: Option<StripeK<'_>>, new:
                 None    => { d.push((ptr.dev(), 0, 0)); d.len() - 1 }
             };
             d[i].1 += sign * sectors;
-            d[i].2 += if n == Some(0) { sign * sectors } else { 0 };
+            d[i].2 += if n == 0 { sign * sectors } else { 0 };
         }
     }
 
@@ -518,8 +557,8 @@ fn mark_stripe_bucket_alloc(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, s: Stripe
     use c::bch_data_type as D;
     let fs = t.fs();
     let v = s.v();
-    let ptr = block_ptr(s.val_bytes(), i).expect("a block of the stripe's");
-    let parity = i >= u32::from(v.nr_blocks).wrapping_sub(v.nr_redundant.into());
+    let ptr = &s.v().block_ptrs()[i as usize];
+    let parity = i >= v.nr_data();
     let data_type = if parity { D::BCH_DATA_parity } else { D::BCH_DATA_stripe };
 
     let sectors = if parity { i64::from(v.sectors.get()) } else { 0 };
@@ -587,7 +626,7 @@ fn mark_stripe_bucket(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, deleting
     -> Result<(), BchError>
 {
     let fs = t.fs();
-    let ptr = block_ptr(s.val_bytes(), i).expect("a block of the stripe's");
+    let ptr = &s.v().block_ptrs()[i as usize];
     let dev = u32::from(ptr.dev());
 
     // C's bch2_dev_bkey_tryget() drops the error of scheduling the repair
@@ -634,7 +673,7 @@ fn mark_stripe_bp(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, insert: bool
 fn mark_stripe_buckets(t: &TransAttempt<'_, '_>, old: Option<StripeK<'_>>, new: Option<StripeK<'_>>,
                        flags: UpdateTriggerFlags) -> Result<(), BchError> {
     fn block<'a>(s: Option<StripeK<'a>>, i: u32) -> Option<&'a c::bch_extent_ptr> {
-        s.filter(|s| i < u32::from(s.v().nr_blocks)).and_then(|s| block_ptr(s.val_bytes(), i))
+        s.and_then(|s| s.v().block_ptrs().get(i as usize))
     }
     let nr_blocks = |s: Option<StripeK<'_>>| s.map_or(0, |s| u32::from(s.v().nr_blocks));
     let reconcile_changed = needs_reconcile(old) != needs_reconcile(new);
@@ -765,7 +804,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchEr
         d.sectors      = v.sectors.get();
         d.nr_blocks    = v.nr_blocks;
         d.nr_redundant = v.nr_redundant;
-        for (i, p) in stripe_block_ptrs(new).enumerate() {
+        for (i, p) in v.block_ptrs().iter().enumerate() {
             d.ptrs[i] = *p;
         }
         // gc counts them from the stripe pointers

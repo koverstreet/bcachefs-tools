@@ -888,6 +888,23 @@ pub fn cast_plain_mut<T: Plain>(b: &mut [u8]) -> Option<&mut T> {
         .then(|| unsafe { &mut *b.as_mut_ptr().cast::<T>() })
 }
 
+/// @b as a slice of Plain @T: None if they're not aligned for one, or not a
+/// whole number of them.
+pub fn cast_plain_slice<T: Plain>(b: &[u8]) -> Option<&[T]> {
+    // SAFETY: aligned, and exactly that many T's bytes; T is Plain, so any
+    // bytes are one
+    (b.as_ptr() as usize % align_of::<T>() == 0 && b.len() % size_of::<T>() == 0)
+        .then(|| unsafe { core::slice::from_raw_parts(b.as_ptr().cast::<T>(), b.len() / size_of::<T>()) })
+}
+
+/// cast_plain_slice(), mutably.
+pub fn cast_plain_slice_mut<T: Plain>(b: &mut [u8]) -> Option<&mut [T]> {
+    // SAFETY: as cast_plain_slice(); Plain has no padding, so writing a T
+    // leaves no byte of @b uninitialized
+    (b.as_ptr() as usize % align_of::<T>() == 0 && b.len() % size_of::<T>() == 0)
+        .then(|| unsafe { core::slice::from_raw_parts_mut(b.as_mut_ptr().cast::<T>(), b.len() / size_of::<T>()) })
+}
+
 /// A Plain @v's bytes, every one - to write it into bytes that needn't be
 /// aligned for it; or a slice's, to read records out of a buffer of u64s.
 pub fn plain_bytes<T: Plain + ?Sized>(v: &T) -> &[u8] {

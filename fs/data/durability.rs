@@ -17,7 +17,7 @@
 use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut, BkeyVal};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
 use crate::c;
-use crate::data::ec::trigger::{ptr_matches_stripe, stripe_block_ptrs};
+use crate::data::ec::trigger::ptr_matches_stripe;
 use crate::data::ptrs::{brand, crc_is_compressed, BkeyVPtrs, BkeyVPtrsMut, Branded, BtreePtrs, PtrMask, Ptrs, PtrsMut};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
@@ -98,7 +98,7 @@ fn stripe_durability(t: &TransAttempt<'_, '_>, p: &c::extent_ptr_decoded, ret: &
     devs.reserve(v.nr_blocks.into(), GFP_KERNEL)?;
     {
         let rcu = read_lock();
-        for sp in stripe_block_ptrs(s) {
+        for sp in s.v().block_ptrs() {
             let dev = u32::from(sp.dev());
             devs.push(StripeDev {
                 dev:                sp.dev(),
