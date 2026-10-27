@@ -30,7 +30,9 @@
 //!
 //! - Volatile words: Volatile, a word read by anyone and written one writer
 //!   at a time - not an atomic, whose writers race each other - and
-//!   VolatileWriter, it as its writer has it. They stay; their places go.
+//!   VolatileWriter, it as its writer has it. A value of more words is one
+//!   only if it's TearSafe: a reader may see it torn, and its type says
+//!   that's fine. They stay; their places go.
 //!
 //! - Views: View and ViewMut, a value as many of its bytes as there are -
 //!   fewer, for one written before its type grew: a superblock section,
@@ -48,6 +50,7 @@
 //! They have their getters, set_x() and update_x(f) until the real ones
 //! arrive.
 
+use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, MaybeUninit};
 use core::ops::{Deref, DerefMut};
@@ -188,7 +191,8 @@ macro_rules! published {
 
 // ── Volatile words ───────────────────────────────────────────────────────
 
-/// A value with an atomic of its own size: what a Volatile is stored as.
+/// A value with an atomic of its own size: what a Volatile is stored as - or,
+/// for a TearSafe value of more than a word, Torn.
 ///
 /// # Safety
 /// Atomic is laid out as Self is, and all zeroes is a Self: a Volatile in
@@ -219,6 +223,124 @@ macro_rules! atomic_word {
 atomic_word!(bool => AtomicBool, u8 => AtomicU8, u16 => AtomicU16, u32 => AtomicU32, u64 => AtomicU64,
              usize => AtomicUsize, i8 => AtomicI8, i16 => AtomicI16, i32 => AtomicI32, i64 => AtomicI64,
              isize => AtomicIsize);
+
+/// A value of more than a word whose readers are fine with seeing it torn -
+/// each word as some write left it, not all from the same one: a position
+/// read for progress, say. That a torn one is a valid value is Plain's -
+/// memory safety; that it's an acceptable one is the type's to say, and
+/// can't be wrong in a way that's unsafe. tear_safe!() says it, and makes
+/// the type an AtomicWord whose storage is Torn, so a Volatile of it is read
+/// and written a word at a time. A one-word value can't tear: it's an
+/// AtomicWord of its own.
+pub trait TearSafe: Plain + Copy {}
+
+/// A TearSafe value as a Volatile holds it: loaded and stored a word at a
+/// time - of its alignment, up to a u64 - by relaxed atomics.
+#[repr(transparent)]
+pub struct Torn<T>(UnsafeCell<T>);
+
+// SAFETY: every access is a word's atomic load or store
+unsafe impl<T: TearSafe + Send> Sync for Torn<T> {}
+
+trait Word: Copy {
+    /// # Safety
+    /// @p is an aligned, live word, accessed only atomically meanwhile.
+    unsafe fn load(p: *mut Self) -> Self;
+    /// # Safety
+    /// As load()'s.
+    unsafe fn store(p: *mut Self, v: Self);
+}
+
+macro_rules! word {
+    ($($t:ty => $a:ty),*) => { $(
+        impl Word for $t {
+            unsafe fn load(p: *mut $t) -> $t {
+                // SAFETY: the caller's
+                unsafe { <$a>::from_ptr(p) }.load(Ordering::Relaxed)
+            }
+
+            unsafe fn store(p: *mut $t, v: $t) {
+                // SAFETY: the caller's
+                unsafe { <$a>::from_ptr(p) }.store(v, Ordering::Relaxed)
+            }
+        }
+    )* };
+}
+word!(u8 => AtomicU8, u16 => AtomicU16, u32 => AtomicU32, u64 => AtomicU64);
+
+/// # Safety
+/// @src and @dst are @n word-aligned words each.
+unsafe fn load_words<W: Word>(src: *mut W, dst: *mut W, n: usize) {
+    for i in 0..n {
+        // SAFETY: the caller's
+        unsafe { dst.add(i).write(W::load(src.add(i))) }
+    }
+}
+
+/// # Safety
+/// As load_words()'s.
+unsafe fn store_words<W: Word>(src: *const W, dst: *mut W, n: usize) {
+    for i in 0..n {
+        // SAFETY: the caller's
+        unsafe { W::store(dst.add(i), src.add(i).read()) }
+    }
+}
+
+impl<T: TearSafe> Torn<T> {
+    /// A word: T's alignment, up to a u64's - which a T is a whole number of.
+    const WORD: usize = if align_of::<T>() < size_of::<u64>() { align_of::<T>() } else { size_of::<u64>() };
+    const WORDS: usize = size_of::<T>() / Self::WORD;
+
+    pub fn load(&self) -> T {
+        let mut v = MaybeUninit::<T>::uninit();
+        let (src, dst) = (self.0.get(), v.as_mut_ptr());
+        // SAFETY: the cell's words, aligned as T is, into @v's; T is Plain, so
+        // every byte written, whatever the words are is a T
+        unsafe {
+            match Self::WORD {
+                1 => load_words::<u8>(src.cast(), dst.cast(), Self::WORDS),
+                2 => load_words::<u16>(src.cast(), dst.cast(), Self::WORDS),
+                4 => load_words::<u32>(src.cast(), dst.cast(), Self::WORDS),
+                _ => load_words::<u64>(src.cast(), dst.cast(), Self::WORDS),
+            }
+            v.assume_init()
+        }
+    }
+
+    pub fn store(&self, v: T) {
+        let (src, dst) = (core::ptr::from_ref(&v), self.0.get());
+        // SAFETY: @v's words, into the cell's, as load()'s
+        unsafe {
+            match Self::WORD {
+                1 => store_words::<u8>(src.cast(), dst.cast(), Self::WORDS),
+                2 => store_words::<u16>(src.cast(), dst.cast(), Self::WORDS),
+                4 => store_words::<u32>(src.cast(), dst.cast(), Self::WORDS),
+                _ => store_words::<u64>(src.cast(), dst.cast(), Self::WORDS),
+            }
+        }
+    }
+}
+
+/// @T is TearSafe, and a Volatile of it is loaded and stored a word at a time.
+#[macro_export]
+macro_rules! tear_safe {
+    ($($t:ty),* $(,)?) => { $(
+        impl $crate::util::projections::TearSafe for $t {}
+
+        // SAFETY: Torn is laid out as @T is, and @T is Plain: zeroes are one
+        unsafe impl $crate::util::projections::AtomicWord for $t {
+            type Atomic = $crate::util::projections::Torn<$t>;
+
+            fn load(a: &Self::Atomic) -> $t {
+                a.load()
+            }
+
+            fn store(a: &Self::Atomic, v: $t) {
+                a.store(v)
+            }
+        }
+    )* };
+}
 
 /// A @T read by anyone, a word at a time, as C reads its fields. Relaxed
 /// loads and stores, as C's plain ones: a reader sees each word as it was

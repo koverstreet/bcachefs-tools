@@ -1001,7 +1001,8 @@ fn xmacro(input: TokenStream, recorded: bool) -> Result<TokenStream, String> {
 ///
 ///   #[closed]  a Rust enum
 ///   #[open]    a newtype over the integer, the values its constants: a value
-///              from outside can be anything
+///              from outside can be anything, so it's Plain, and a word a
+///              Volatile can hold
 ///   #[flags]   a bitflags type
 ///
 /// Any of them can be a #[bitfield]'s member, as C's `enum btree_id
@@ -1103,6 +1104,18 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
                 }
                 out.push_str(&format!("    pub const fn from_bits(v: {repr}) -> Self {{ Self(v) }}\n"));
                 out.push_str(&format!("    pub const fn into_bits(self) -> {repr} {{ self.0 }}\n}}\n"));
+                out.push_str(&format!("// SAFETY: its integer, every value of which is one\n\
+                                       unsafe impl crate::util::vstructs::Plain for {name} {{}}\n\
+                                       // SAFETY: its integer's atomic, which zeroes are a value of\n\
+                                       unsafe impl crate::util::projections::AtomicWord for {name} {{\n\
+                                       \x20   type Atomic = <{repr} as crate::util::projections::AtomicWord>::Atomic;\n\
+                                       \x20   fn load(a: &Self::Atomic) -> Self {{\n\
+                                       \x20       Self(<{repr} as crate::util::projections::AtomicWord>::load(a))\n\
+                                       \x20   }}\n\
+                                       \x20   fn store(a: &Self::Atomic, v: Self) {{\n\
+                                       \x20       <{repr} as crate::util::projections::AtomicWord>::store(a, v.0)\n\
+                                       \x20   }}\n\
+                                       }}\n"));
             }
             CEnumKind::Flags => {
                 out.push_str(&format!(
