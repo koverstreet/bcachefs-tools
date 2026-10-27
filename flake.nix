@@ -27,6 +27,12 @@
       url = "github:nix-community/nix-github-actions";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # Rust MIR, as Charon's LLBC: what a function's locals and temporaries
+    # are, and what's moved by value - for looking at stack frames, and the
+    # front end of Aeneas. Not following our nixpkgs: it pins the nightly
+    # rustc it's built against.
+    charon.url = "github:AeneasVerif/charon";
   };
 
   outputs =
@@ -39,6 +45,7 @@
       rust-overlay,
       flake-compat,
       nix-github-actions,
+      charon,
     }:
     let
       # i686-linux dropped: no real consumers, and cross sqlite tcltest
@@ -230,6 +237,7 @@
               cargo-audit
               cargo-outdated
               clang-tools
+              charon.packages.${system}.default
               (rust-bin.stable.latest.minimal.override {
                 extensions = [
                   "rust-analyzer"
