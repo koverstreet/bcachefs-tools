@@ -52,14 +52,14 @@
 //! The Waker is woken in the last put's context - an endio's, interrupt
 //! context perhaps - so its wake must be safe there: the executor's is.
 
-use crate::errcode::BchError;
+use crate::errcode::{BchError, FirstErr};
 use crate::util::sleep::{sleep_until, task_waker, Sleep};
 use crate::util::task::Resumable;
 use core::marker::PhantomPinned;
 use core::mem::ManuallyDrop;
 use core::pin::Pin;
 use core::ptr::{null_mut, NonNull};
-use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use pin_init::{pin_data, pin_init, PinInit};
 
@@ -87,23 +87,20 @@ impl Fold for () {
 
 /// The first error put, or Ok.
 impl Fold for Result<(), BchError> {
-    type Acc = AtomicI32;
+    type Acc = FirstErr;
 
-    fn acc() -> AtomicI32 {
-        AtomicI32::new(0)
+    fn acc() -> FirstErr {
+        FirstErr::new()
     }
 
-    fn fold(acc: &AtomicI32, v: Self) {
+    fn fold(acc: &FirstErr, v: Self) {
         if let Err(e) = v {
-            let _ = acc.compare_exchange(0, e.raw(), Ordering::Relaxed, Ordering::Relaxed);
+            acc.set(e);
         }
     }
 
-    fn result(acc: &AtomicI32) -> Self {
-        match acc.load(Ordering::Relaxed) {
-            0 => Ok(()),
-            e => Err(BchError::from_raw(e)),
-        }
+    fn result(acc: &FirstErr) -> Self {
+        acc.result()
     }
 }
 

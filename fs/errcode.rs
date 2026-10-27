@@ -23,6 +23,7 @@ use core::ffi::{c_int, CStr};
 use core::fmt;
 use core::iter;
 use core::ptr::NonNull;
+use core::sync::atomic::{AtomicI32, Ordering};
 
 pub use crate::c::bch_errcode;
 
@@ -207,6 +208,39 @@ impl From<crate::util::alloc::AllocError> for BchError {
 impl From<kernel::error::Error> for BchError {
     fn from(e: kernel::error::Error) -> BchError {
         BchError(-e.to_errno())
+    }
+}
+
+/// An error set from anywhere, once: the first set is kept, later ones
+/// dropped - why something was cancelled, or what a fork-join's jobs ran
+/// into first.
+pub struct FirstErr(AtomicI32);
+
+impl FirstErr {
+    pub const fn new() -> Self {
+        FirstErr(AtomicI32::new(0))
+    }
+
+    /// @e, unless there's one already.
+    pub fn set(&self, e: impl Into<BchError>) {
+        let _ = self.0.compare_exchange(0, e.into().raw(), Ordering::Relaxed, Ordering::Relaxed);
+    }
+
+    pub fn get(&self) -> Option<BchError> {
+        match self.0.load(Ordering::Relaxed) {
+            0 => None,
+            e => Some(BchError(e)),
+        }
+    }
+
+    pub fn result(&self) -> Result<(), BchError> {
+        self.get().map_or(Ok(()), Err)
+    }
+}
+
+impl Default for FirstErr {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
