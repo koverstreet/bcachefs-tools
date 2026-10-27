@@ -107,6 +107,15 @@ impl AsMut<BkeyI> for BkeyBuf {
     }
 }
 
+/// C's, once bch2_bkey_buf_init() has run: @k is a whole key, in @onstack or
+/// the heap buffer bch2_bkey_buf_realloc() made.
+impl c::bkey_buf {
+    pub fn key(&self) -> &BkeyI {
+        // SAFETY: as C keeps it, for as long as it's borrowed
+        unsafe { &*BkeyI::from_raw(self.k) }
+    }
+}
+
 impl Default for BkeyBuf {
     fn default() -> Self {
         Self::new()
