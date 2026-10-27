@@ -368,17 +368,20 @@ pub(crate) unsafe fn container_of<'a, T: Placed>(p: *const T) -> &'a T::Parent {
 /// A path from a value, as a type - for a field's type to name what's
 /// reached from the struct it's in: a ReffedWork's ref. Here is the value;
 /// Up<P> the parent of what P reaches, by its container(); FieldOf<P, N>
-/// field N of what P reaches, by Field<N>. field!() writes one: from
-/// bch_fs_snapshots, field!(super.writes) - FieldOf<Up<Here>, N> - is the
-/// write refs of its Fs.
+/// field N of what P reaches, by Field<N>; ElemOf<P, I> element I of the
+/// array P reaches. field!() writes one: from bch_fs_snapshots,
+/// field!(super.writes) - FieldOf<Up<Here>, N> - is the write refs of its Fs.
 pub(crate) struct Here;
 
 pub(crate) struct Up<P>(PhantomData<P>);
 
 pub(crate) struct FieldOf<P, const N: u64>(PhantomData<P>);
 
-/// A path from the struct a field's in, as a type: its fields by name, and
-/// super for its parent - `field!(super.writes)`, `field!(super.super.c)`.
+pub(crate) struct ElemOf<P, const I: usize>(PhantomData<P>);
+
+/// A path from the struct a field's in, as a type: its fields by name,
+/// elements of an array field by index, and super for its parent -
+/// `field!(super.writes)`, `field!(super.super.c)`, `field!(io_ref[WRITE])`.
 #[macro_export]
 macro_rules! field {
     ($($path:tt)+) => {
@@ -394,6 +397,13 @@ macro_rules! __field_path {
     };
     ($p:ty; super $(. $($rest:tt)+)?) => {
         $crate::__field_path!($crate::util::place::Up<$p>; $($($rest)+)?)
+    };
+    ($p:ty; $f:ident [ $i:expr ] $(. $($rest:tt)+)?) => {
+        $crate::__field_path!(
+            $crate::util::place::ElemOf<
+                $crate::util::place::FieldOf<$p, { $crate::util::place::name(stringify!($f)) }>,
+                { $i }>;
+            $($($rest)+)?)
     };
     ($p:ty; $f:ident $(. $($rest:tt)+)?) => {
         $crate::__field_path!(
@@ -435,6 +445,17 @@ where
         // SAFETY: Field<N>'s - its field of that type, at that offset - in
         // a B borrowed for as long
         unsafe { &*b.byte_add(<P::To as Field<N>>::OFFSET).cast() }
+    }
+}
+
+impl<T, P, E, const I: usize, const N: usize> Path<T> for ElemOf<P, I>
+where
+    P: Path<T, To = [E; N]>,
+{
+    type To = E;
+    fn get(t: &T) -> &E {
+        const { assert!(I < N, "an array path's index past its end") };
+        &P::get(t)[I]
     }
 }
 
