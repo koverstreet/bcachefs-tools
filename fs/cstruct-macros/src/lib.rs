@@ -300,7 +300,7 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
     }
     // a pointer field C reads is a thin one: as c_extern!'s parameters
     let thin: String = def.fields.iter()
-        .map(|f| thin_pointers(name, &f.cfg, &[(f.rust_name(), f.ty.clone())], None))
+        .map(|f| thin_pointers(name, &f.cfg, &[(f.rust_name(), static_lifetimes(&f.ty, &def.lifetimes))], None))
         .collect();
     let flex = vstructs::flex_array(&def)?;
     let zeroable = maybe_zeroable(&def);
@@ -1236,6 +1236,23 @@ pub fn c_extern(input: TokenStream) -> TokenStream {
                             {cfg}const _: () = {{\n{asserts}}};\n\
                             {}", record(&text, &[]))))
     })
+}
+
+/// @ty, a field's type, with @lifetimes - its struct's - 'static: for a check
+/// outside the struct's generics, of what no lifetime changes.
+fn static_lifetimes(ty: &str, lifetimes: &[String]) -> String {
+    let mut out = String::new();
+    let mut rest = ty;
+    while let Some(i) = rest.find('\'') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        let len = after.find(|ch: char| !(ch.is_alphanumeric() || ch == '_')).unwrap_or(after.len());
+        let lt = &rest[i..i + 1 + len];
+        out.push_str(if lifetimes.iter().any(|l| l == lt) { "'static" } else { lt });
+        rest = &after[len..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// That each pointer fn @name passes C - parameters @params, return type
