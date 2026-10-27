@@ -90,37 +90,31 @@ pub struct ec_stripe_head {
     pub watermark: c::bch_watermark,
 }
 
-/// What a stripe head's lock protects: the devices it makes stripes on, as of
-/// the allocator's rw_devs_change_count, and the stripe being filled - the
-/// head's, till it hands it on.
+/// The devices a stripe head makes stripes on - its disk label's, as
+/// disk_label_ec_devs() has them - and what follows from them, all as of one
+/// count of the allocator's RW device changes: set together, by
+/// stripe_head_devs_update(), whenever that's moved on.
 #[repr(C)]
-#[derive(CStruct)]
-pub struct HeadState {
-    pub insufficient_devs: bool,
+#[derive(Default, CStruct)]
+pub struct HeadDevs {
+    /// The allocator's rw_devs_change_count they're as of
+    pub change_count: c_ulong,
+    pub mask:         c::bch_devs_mask,
+    pub nr_active:    c_uint,
+    pub blocksize:    c_uint,
+    /// Too few for the head's redundancy: it makes no stripes
+    pub insufficient: bool,
+}
 
-    pub rw_devs_change_count: c_ulong,
+/// What a stripe head's lock protects: the devices it makes stripes on, and
+/// the stripe being filled - the head's, till it hands it on.
+#[repr(C)]
+#[derive(Default, CStruct)]
+pub struct HeadState {
+    pub devs: HeadDevs,
 
     pub nr_created: u64,
 
-    pub devs: c::bch_devs_mask,
-    pub nr_active_devs: c_uint,
-
-    pub blocksize: c_uint,
-
     #[c("struct ec_stripe_new *s")]
     pub s: Option<StripeNewBox>,
-}
-
-impl Default for HeadState {
-    fn default() -> Self {
-        HeadState {
-            insufficient_devs:    false,
-            rw_devs_change_count: 0,
-            nr_created:           0,
-            devs:                 Default::default(),
-            nr_active_devs:       0,
-            blocksize:            0,
-            s:                    None,
-        }
-    }
 }

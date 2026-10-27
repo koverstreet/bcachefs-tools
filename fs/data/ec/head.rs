@@ -30,7 +30,7 @@ use crate::util::ffi::Opaque;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::Printbuf;
 use crate::{bch_err, new_lock, prt};
-use core::ffi::{c_int, c_uint};
+use core::ffi::{c_int, c_uint, c_ulong};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
@@ -194,16 +194,19 @@ fn stripe_head_detach(fs: &Fs, g: &mut HeadGuard<'_>, err: Option<BchError>) {
     set_pending(fs, s);
 }
 
-/// @h's devices, after the allocator's RW devices changed: a stripe not yet
-/// allocated that some have left is cancelled.
-fn stripe_head_devs_update(fs: &Fs, h: &c::ec_stripe_head, g: &mut HeadGuard<'_>) {
-    let old = g.devs;
-    (g.devs, g.blocksize) = fs.disk_label_ec_devs(h.disk_label, 0);
-    g.nr_active_devs = g.devs.d.weight();
-    g.insufficient_devs = !fs.ec_devs_sufficient(&g.devs, h.disk_label, h.redundancy, None);
+/// @h's devices, as of the allocator's RW device changes @change_count: a
+/// stripe not yet allocated that some have left is cancelled.
+fn stripe_head_devs_update(fs: &Fs, h: &c::ec_stripe_head, g: &mut HeadGuard<'_>, change_count: c_ulong) {
+    let (mask, blocksize) = fs.disk_label_ec_devs(h.disk_label, 0);
+    let mut leaving = mask;
+    leaving.d.not_and(&g.devs.mask.d);
 
-    let mut leaving = old;
-    leaving.d.andnot(&g.devs.d);
+    g.devs.change_count = change_count;
+    g.devs.nr_active    = mask.d.weight();
+    g.devs.insufficient = !fs.ec_devs_sufficient(&mask, h.disk_label, h.redundancy, None);
+    g.devs.blocksize    = blocksize;
+    g.devs.mask         = mask;
+
     if head_stripe(g).is_some_and(|s| !s.lock().allocated) && !leaving.d.is_empty() {
         stripe_head_detach(fs, g, Some(BchError::from(c::EINTR)));
     }
@@ -267,12 +270,11 @@ pub(crate) fn stripe_head_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32, alg
     };
 
     let count = fs.allocator.rw_devs_change_count();
-    if g.rw_devs_change_count != count {
-        stripe_head_devs_update(fs, h, &mut g);
-        g.rw_devs_change_count = count;
+    if g.devs.change_count != count {
+        stripe_head_devs_update(fs, h, &mut g, count);
     }
 
-    if g.insufficient_devs {
+    if g.devs.insufficient {
         return fs.throw(bch_errcode::BCH_ERR_ec_alloc_failed_insufficient_devs);
     }
     Ok((h, g))
@@ -417,11 +419,11 @@ pub(crate) fn dev_stripe_state_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32
 fn alloc_for_head(fs: &Fs, h: &c::ec_stripe_head, g: &mut HeadGuard<'_>, max_data_blocks: u32)
     -> Result<StripeNewBox, BchError>
 {
-    let active = g.nr_active_devs.min(c::BCH_BKEY_PTRS_MAX);
+    let active = g.devs.nr_active.min(c::BCH_BKEY_PTRS_MAX);
     let nr_data = (active - h.redundancy).min(if max_data_blocks != 0 { max_data_blocks } else { !0 });
 
-    // insufficient_devs was checked - at least redundancy + 2 domains:
-    let nr_domains = fs.target_nr_domains(&g.devs);
+    // insufficiency was checked - at least redundancy + 2 domains:
+    let nr_domains = fs.target_nr_domains(&g.devs.mask);
     let nr_data = nr_data.min(nr_domains - h.redundancy);
 
     let failed = || {
@@ -430,7 +432,7 @@ fn alloc_for_head(fs: &Fs, h: &c::ec_stripe_head, g: &mut HeadGuard<'_>, max_dat
     };
     // its room in new_stripes, for when it's handed on
     fs.ec.new_stripes.lock().reserve_for_head().map_err(|_| failed())?;
-    let s = StripeNew::alloc(fs, g.devs, h.watermark, h.disk_label, h.algo, nr_data, h.redundancy, g.blocksize)
+    let s = StripeNew::alloc(fs, g.devs.mask, h.watermark, h.disk_label, h.algo, nr_data, h.redundancy, g.devs.blocksize)
         .map_err(|_| {
             fs.ec.new_stripes.lock().release_for_head();
             failed()
