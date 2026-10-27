@@ -269,6 +269,15 @@ impl<'f> BtreeTrans<'f> {
         unsafe { c::bch2_trans_unlock_long(self.raw()) };
     }
 
+    /// That a path of this transaction has @pos in @btree locked - as one an
+    /// update went through stays, after its commit, until the transaction's
+    /// unlocked. A panic if not, with debug_check_iterators on.
+    pub fn assert_pos_locked(&self, btree: c::btree_id, pos: c::bpos) {
+        if cfg!(CONFIG_BCACHEFS_DEBUG) && crate::debug::params::debug_check_iterators() {
+            unsafe { c::__bch2_assert_pos_locked(self.raw(), btree, pos) }
+        }
+    }
+
     pub fn commit(
         &self,
         disk_res: Option<&DiskReservation<'_>>,
@@ -2291,6 +2300,14 @@ impl<'t> BtreeIter<'t> {
         -> Result<Option<BkeySC<'k>>, BchError>
     {
         self.peek_raw(t, |raw| unsafe { (*raw).peek_max_type_raw(end, flags) })
+    }
+
+    /// peek_slot(), and the iterator with the key, shared: for an update at
+    /// the key's position.
+    pub fn peek_slot_with<'k>(&'k mut self, t: &'k TransAttempt<'_, 't>)
+        -> Result<Option<(&'k BtreeIter<'t>, BkeySC<'k>)>, BchError>
+    {
+        self.peek_with(t, &mut |raw| unsafe { c::bch2_btree_iter_peek_slot(raw) })
     }
 
     /// peek_max_type(), and the iterator with the key, shared: for a loop

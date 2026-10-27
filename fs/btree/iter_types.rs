@@ -43,6 +43,7 @@ c_extern! {
                                 ip: c_ulong) -> *mut c_void;
     pub fn bch2_trans_unlock(trans: *mut c::btree_trans);
     pub fn bch2_trans_unlock_long(trans: *mut c::btree_trans);
+    pub fn __bch2_assert_pos_locked(trans: *mut c::btree_trans, id: c::btree_id, pos: c::bpos);
     pub fn bch2_trans_restart_error(trans: *mut c::btree_trans, restart_count: u32) -> !;
     pub fn bch2_trans_restart_ip(trans: *mut c::btree_trans, err: c_int, ip: c_ulong) -> c_int;
     #[must_use]
