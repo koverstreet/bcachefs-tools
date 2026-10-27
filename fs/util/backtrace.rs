@@ -12,11 +12,15 @@
 //! scripts/decode_stacktrace.sh runs one offline. So the name is demangled
 //! here, for both, and the rest of the line printed as it came.
 //!
-//! The kernel's scratch for a symbol is on the stack: callers print a lock
-//! owner's stack from lock debugging, where nothing may allocate.
+//! Callers print a lock owner's stack from lock debugging - anywhere, as deep
+//! as the stack goes - so a symbol costs the stack little: the kernel's
+//! scratch for it is on the stack, a symbol's length, and demangling is on
+//! the heap (util/demangle.rs), GFP_NOWAIT, the name printed raw if that
+//! fails.
 
 use crate::c;
 use crate::prt;
+use crate::util::demangle::prt_demangled;
 use crate::util::Printbuf;
 use core::ffi::c_ulong;
 use cstruct_macros::{c_export, c_extern};
@@ -33,8 +37,8 @@ c_extern! {
 fn prt_symbol_demangled(out: &mut Printbuf, sym: &str) {
     let (name, rest) = sym.split_at(sym.find('+').unwrap_or(sym.len()));
 
-    // {:#}: without the crate disambiguators v0 carries, the hash legacy does
-    prt!(out, "{:#}{}", rustc_demangle::demangle(name), rest);
+    prt_demangled(out, name);
+    prt!(out, "{rest}");
 }
 
 /// @addr's symbol, demangled, to @out.

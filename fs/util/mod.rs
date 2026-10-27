@@ -9,6 +9,7 @@ pub mod cuckoo;
 pub mod darray;
 #[cfg(CONFIG_DEBUG_FS)]
 pub mod debugfs;
+pub mod demangle;
 pub mod enumerated_ref;
 pub mod eytzinger;
 pub mod ffi;
