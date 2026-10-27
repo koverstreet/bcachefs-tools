@@ -197,9 +197,7 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
         let mut msg = log_msg_ratelimited!(fs);
         write!(msg, "data update tried to replace non cached data with cached:\n");
         key_to_text(&mut msg, fs, u, k.as_sc(), new.as_sc(), insert.as_sc());
-        // XXX (C's): not past the key - the update comes back to it, to the
-        // same end, for as long as the key's there
-        return Ok(iter.pos());
+        return Ok(next_pos);
     }
 
     if !u.opts.bits.no_devs_have() {
