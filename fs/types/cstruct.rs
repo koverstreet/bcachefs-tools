@@ -69,11 +69,14 @@ pub enum Cfg {
 }
 
 impl Cfg {
-    /// The C preprocessor condition: a name is defined(NAME); target_endian
-    /// is __BYTE_ORDER__, target_pointer_width __BITS_PER_LONG.
+    /// The C preprocessor condition: a CONFIG_ name is IS_ENABLED(NAME) -
+    /// what rustc_cfg's cfg(CONFIG_X) is, true for =m too, which defines only
+    /// CONFIG_X_MODULE - and any other name defined(NAME); target_endian is
+    /// __BYTE_ORDER__, target_pointer_width __BITS_PER_LONG.
     #[allow(dead_code)]
     pub fn to_c(&self) -> Result<String, String> {
         Ok(match self {
+            Cfg::Name(n) if n.starts_with("CONFIG_") => format!("IS_ENABLED({n})"),
             Cfg::Name(n) => format!("defined({n})"),
             Cfg::KeyValue(k, v) if k == "target_endian" && (v == "little" || v == "big") =>
                 format!("__BYTE_ORDER__ == __ORDER_{}_ENDIAN__", v.to_uppercase()),
