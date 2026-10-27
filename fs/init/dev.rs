@@ -9,12 +9,13 @@
 
 use crate::c;
 
-/// The memory of a new bch_dev: bch_dev::init()'s - its Rust-typed fields'
-/// initializers run, everything else zeroed - for __bch2_dev_alloc() to go
-/// on with. NULL if out of memory.
+/// The memory of a new bch_dev of @c: bch_dev::init()'s - its Rust-typed
+/// fields' initializers run, everything else zeroed - for __bch2_dev_alloc()
+/// to go on with. NULL if out of memory.
 #[cstruct_macros::c_export]
-pub fn bch2_dev_alloc_mem() -> *mut c::bch_dev {
-    crate::util::alloc::alloc_pinned(c::bch_dev::init()).unwrap_or(core::ptr::null_mut())
+pub fn bch2_dev_alloc_mem(c: &crate::util::ffi::Opaque<c::bch_fs>) -> *mut c::bch_dev {
+    crate::util::alloc::alloc_pinned(c::bch_dev::init(crate::fs::Fs::from_c(c)))
+        .unwrap_or(core::ptr::null_mut())
 }
 
 /// Drop @ca and free it, from its kobject's release.

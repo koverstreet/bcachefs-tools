@@ -1496,8 +1496,7 @@ impl Fs {
 impl c::bch_dev {
     /// Its filesystem.
     pub fn fs(&self) -> &Fs {
-        // SAFETY: a device's filesystem outlives it
-        unsafe { Fs::borrow_raw(self.fs) }
+        &self.fs
     }
 
     /// ca->mi made @mi: see "In memory" above.
@@ -1687,9 +1686,7 @@ impl c::bch_dev {
 
     /// Whether the allocator writes to it: bch2_dev_is_rw().
     pub fn is_rw(&self) -> bool {
-        // SAFETY: a device's filesystem outlives it
-        let fs = unsafe { &*self.fs };
-        fs.allocator.rw_devs[c::bch_data_type::BCH_DATA_free.0 as usize].test(self.dev_idx.into())
+        self.fs.allocator.rw_devs[c::bch_data_type::BCH_DATA_free.0 as usize].test(self.dev_idx.into())
     }
 
     /// What a new copy written to it would be worth - nothing unless it's rw:

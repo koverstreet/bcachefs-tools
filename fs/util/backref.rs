@@ -32,6 +32,8 @@
 use core::ops::Deref;
 use core::ptr::NonNull;
 
+/// A pointer, to C: repr(transparent), for a field C reads as T *.
+#[repr(transparent)]
 pub struct BackRef<T: ?Sized + Sync>(NonNull<T>);
 
 impl<T: ?Sized + Sync> BackRef<T> {

@@ -208,8 +208,7 @@ const _: () = assert!(COPYGC_FREE_THRESHOLD_PCT * 5 == 100);
 /// wrapping - a kernel build panics on overflow, and accounting gone wrong
 /// mustn't take the kernel with it.
 pub(crate) fn dev_wait_amount(ca: &c::bch_dev) -> (i64, bool) {
-    // SAFETY: a device's filesystem outlives it
-    let fs = unsafe { Fs::borrow_raw(ca.fs) };
+    let fs = ca.fs();
     let usage_full = ca.usage_full_read_fast();
     let mut usage = c::bch_dev_usage::default();
     for (b, d) in usage.buckets.iter_mut().zip(&usage_full.d) {

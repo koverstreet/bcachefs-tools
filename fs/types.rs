@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::locking::{Lock, LockedBy, MutexNoio, PercpuRwsemNoio};
 use crate::util::percpu::{Counters, PerCpu};
 use crate::util::vstructs::Head;
-use crate::types::{GenRadix, RustOnly, bits_to_longs, c_default, rust_only};
+use crate::types::{GenRadix, RustOnly, bits_to_longs, rust_only};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
 use core::sync::atomic::{AtomicI32, AtomicI64};
@@ -311,6 +311,7 @@ c_const! {
 #[pin_data]
 #[repr(C)]
 #[derive(CStruct, TypeInfo, Init)]
+#[init_args(fs: &crate::fs::Fs)]
 pub struct bch_dev {
     pub kobj: c::kobject,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
@@ -338,7 +339,14 @@ pub struct bch_dev {
     #[c("struct enumerated_ref io_ref[2]")]
     pub io_ref: [crate::util::enumerated_ref::EnumeratedRef; 2],
 
-    pub fs: *mut c::bch_fs,
+    /// Its filesystem, from the start, attached or not: bch2_dev_add()
+    /// writes its superblock before it has a slot, and what fails before then
+    /// reaches the filesystem through it. A device is freed before its
+    /// filesystem - bch2_dev_free(), in the filesystem's teardown, drains
+    /// ref_outer's holders first - so the filesystem outlives every use.
+    #[c("struct bch_fs *fs")]
+    #[init(unsafe { crate::util::backref::BackRef::new(fs) })]
+    pub fs: crate::util::backref::BackRef<crate::fs::Fs>,
 
     pub dev_idx: u8,
     /*
@@ -444,7 +452,6 @@ pub struct bch_dev {
     #[c("struct io_count __percpu *io_done")]
     pub io_done: PerCpu<c::io_count>,
 }
-c_default!(bch_dev);
 
 c_xmacro! {
     /*

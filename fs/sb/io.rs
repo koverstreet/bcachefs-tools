@@ -2095,7 +2095,7 @@ impl Fs {
     /// That @ca's superblock is the one @sb locks: sb_lock is ours, @ca ours.
     fn dev_sb_check(&self, sb: &SbLockGuard<'_>, ca: &c::bch_dev) {
         assert!(core::ptr::eq(sb.lock(), &self.sb), "dev_sb(): another filesystem's sb_lock");
-        assert!(core::ptr::eq(ca.fs, self), "dev_sb(): another filesystem's device {}", ca.dev_idx);
+        assert!(core::ptr::eq(ca.fs(), self), "dev_sb(): another filesystem's device {}", ca.dev_idx);
     }
 
     /// @ca's superblock, under sb_lock: None if it has none, not attached.

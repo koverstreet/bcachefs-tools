@@ -573,16 +573,9 @@ static struct bch_dev *__bch2_dev_alloc(struct bch_fs *c,
 	struct bch_dev *ca;
 	unsigned i;
 
-	ca = bch2_dev_alloc_mem();
+	ca = bch2_dev_alloc_mem(c);
 	if (!ca)
 		return NULL;
-
-	/*
-	 * The filesystem's from the start, attached or not: bch2_dev_add()
-	 * writes its superblock before it has a slot, and what's below can
-	 * fail into code that reaches c through ca->fs.
-	 */
-	ca->fs = c;
 
 	kobject_init(&ca->kobj, &bch2_dev_ktype);
 	init_completion(&ca->ref_completion);
