@@ -14,7 +14,7 @@ use crate::data::ec::delete::stripe_delete;
 use crate::data::ec::io::BlockIo;
 use crate::data::ec::repair::record_lost_blocks;
 use crate::data::ec::stripe::{StripeKey, MAX_BLOCKS};
-use crate::data::ec::stripe_new::{new_stripes_take, Internal, StripeNew, StripePtr};
+use crate::data::ec::stripe_new::{new_stripes_take, Internal, StripeNew};
 use crate::data::ec::stripe_new_reuse::{OldRead, Reuse};
 use crate::data::ec::update::{create_watermark, stripe_update_extents};
 use crate::errcode::{bch_errcode, BchError};
@@ -22,12 +22,14 @@ use crate::fs::Fs;
 use crate::sb::counters::events;
 use crate::sb::members::DevIoRef;
 use crate::util::alloc::KBox;
+use crate::util::backref::BackRef;
 use crate::util::rcu::read_lock;
 use crate::util::refcount::Refcount;
 use crate::util::task::{Resumable, Resume};
 use crate::util::vstructs::Validated;
 use crate::{bch_err, btree_trans, fs_inconsistent, inode_opts, logged_ops, prt};
 use arrayvec::ArrayVec;
+use core::ptr::NonNull;
 use pin_init::{init, init_zeroed, stack_pin_init, Init};
 
 // ── Its task ─────────────────────────────────────────────────────────────
@@ -39,13 +41,12 @@ struct OldStripeLost {
     blocks: u32,
 }
 
-pub(crate) async fn stripe_task(fs: &Fs, p: StripePtr) {
+pub(crate) async fn stripe_task(fs: &Fs, p: BackRef<StripeNew>) {
     let at = Resume::Queue(&fs.ec.stripe_create_wq);
     stack_pin_init!(let w = Working::new());
     let w = w.get_mut();
 
-    // SAFETY: the filesystem owns it until teardown(), below
-    let s = unsafe { &*p.as_ptr() };
+    let s: &StripeNew = &p;
 
     // set before its start, by its head or repair
     let to_read = s.lock().reuse.as_ref().is_some_and(|r| r.read == OldRead::ToRead);
@@ -61,7 +62,7 @@ pub(crate) async fn stripe_task(fs: &Fs, p: StripePtr) {
 
     let ret = create(fs, s, w, fold, at).await;
     create_done(fs, s, ret);
-    // SAFETY: nothing after this touches it
+    // SAFETY: in flight
     unsafe { teardown(fs, p) };
 }
 
@@ -420,18 +421,17 @@ fn create_done(fs: &Fs, s: &StripeNew, ret: Result<(), BchError>) {
 }
 
 /// Its buckets given back, and it out of new_stripes and freed - a repair's
-/// writes done with it - then the flushes woken.
+/// writes done with it - then the flushes woken. @p is the task's, given up:
+/// what borrowed the stripe from it can't be used after.
 ///
 /// # Safety
-/// The task's, in flight; nothing touches it after.
-unsafe fn teardown(fs: &Fs, p: StripePtr) {
-    {
-        // SAFETY: the caller's
-        let mut s = unsafe { &*p.as_ptr() }.lock();
-        // its writers done: the blocks they claimed closed, the rest put
-        s.blocks = Default::default();
-    }
+/// It's in flight: every writer's io ref put, so nothing else has it.
+unsafe fn teardown(fs: &Fs, p: BackRef<StripeNew>) {
+    // its writers done: the blocks they claimed closed, the rest put
+    p.lock().blocks = Default::default();
 
-    drop(new_stripes_take(fs, p.as_non_null()));
+    let s = NonNull::from(&*p);
+    drop(p);
+    drop(new_stripes_take(fs, s));
     fs.ec.new_stripes_changed.wake();
 }

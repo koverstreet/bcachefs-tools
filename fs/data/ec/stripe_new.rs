@@ -382,22 +382,6 @@ impl core::ops::Deref for NewStripes {
     }
 }
 
-/// Its task's pointer to it: Send, as the file comment argues.
-#[derive(Clone, Copy)]
-pub(crate) struct StripePtr(NonNull<StripeNew>);
-
-// SAFETY: the filesystem owns what it points to, which outlives the task
-unsafe impl Send for StripePtr {}
-
-impl StripePtr {
-    pub(crate) fn as_ptr(self) -> *mut StripeNew {
-        self.0.as_ptr()
-    }
-
-    pub(crate) fn as_non_null(self) -> NonNull<StripeNew> {
-        self.0
-    }
-}
 
 impl StripeNew {
     /// A new stripe of @nr_data data blocks and @nr_parity parity of
@@ -421,7 +405,11 @@ impl StripeNew {
             internal    <- new_lock!(<- Internal::new(devs, watermark)),
         }? BchError))?;
 
-        let p = StripePtr(NonNull::from(&*b));
+        // SAFETY: its owner - its head, then new_stripes - holds it until its
+        // task's teardown(), which drops this first; or drops it, its task
+        // unstarted and this unused, in discard(). Its state's interior: it's
+        // shared from here, and only discard()'s drop has it by &mut
+        let p = unsafe { BackRef::new(&*b) };
         {
             let mut s = b.lock();
             new_stripe_key(fs, &mut s.new_stripe, algorithm as u8, nr_data as u8, nr_parity as u8,
