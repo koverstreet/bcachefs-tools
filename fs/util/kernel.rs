@@ -129,6 +129,19 @@ pub fn current_comm() -> Comm {
     Comm(unsafe { (*c::get_current()).comm })
 }
 
+/// The ids this task's new files are owned by. Its credentials are read as
+/// current_cred() reads them, without RCU: only the task itself replaces its
+/// own, so they live while it looks.
+#[cfg(kernel)]
+pub fn current_fsuid() -> c::kuid_t {
+    unsafe { (*(*c::get_current()).cred).fsuid }
+}
+
+#[cfg(kernel)]
+pub fn current_fsgid() -> c::kgid_t {
+    unsafe { (*(*c::get_current()).cred).fsgid }
+}
+
 /// Whether this task has been sent a fatal signal: as
 /// fatal_signal_pending(current).
 pub fn fatal_signal_pending() -> bool {
