@@ -7,13 +7,13 @@
 //! null until it's made. Queue is one by reference, what work is queued on: a
 //! Workqueue's, a system queue, or one C made.
 //!
-//! ReffedWork<F, R> is struct work_struct, queued and run holding a ref,
+//! ReffedWork<F, R> is struct work_struct, queued and run holding refs,
 //! its field's type saying all of it: F the function it runs, a plain fn of
-//! the parent, and R the ref it takes, a path from the parent -
+//! the parent, and R the refs it takes, a path from the parent -
 //! field!(super.writes), the write refs of the Fs it's in (util/place.rs's
-//! paths). Its parent's #[derive(Init)] makes it, placed at its field: so
-//! C's pointer to it is had back as the ReffedWork, and its container() as
-//! the parent F runs on.
+//! paths) - or a pair of them. Its parent's #[derive(Init)] makes it, placed
+//! at its field: so C's pointer to it is had back as the ReffedWork, and its
+//! container() as the parent F runs on.
 //!
 //! DelayedWork is struct delayed_work, in a struct Rust defines and C may
 //! share. The kernel crate's DelayedWork is for Arc-owned work items, and
@@ -24,7 +24,7 @@
 use crate::c;
 use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
-use crate::util::place::{Path, Place, Placed};
+use crate::util::place::{OnePath, Path, Place, Placed};
 use crate::util::refcount::{RefGuard, TryRefcount};
 use crate::util::Printbuf;
 use bitflags::bitflags;
@@ -164,8 +164,8 @@ pub(crate) unsafe trait WorkFunc: Sized + 'static {
 /// The struct F's ReffedWork is the field of.
 pub(crate) type Parent<F> = <<F as WorkFunc>::At as Place>::Base;
 
-/// struct work_struct, queued and run holding a ref; its field's type says
-/// what: F the function, R the ref, by its path from the struct it's in -
+/// struct work_struct, queued and run holding refs; its field's type says
+/// what: F the function, R the refs, by their paths from the struct it's in -
 ///
 /// ```text
 /// wait_for_pagecache_and_delete_work: ReffedWork<delete_unlinked, field!(super.writes)>,
@@ -175,9 +175,8 @@ pub(crate) type Parent<F> = <<F as WorkFunc>::At as Place>::Base;
 ///
 /// The parent's #[derive(Init)] makes it in place, holding the field's At:
 /// so C's pointer to it is had back as the ReffedWork, and its container()
-/// as the parent. Queued, it holds a ref on R's count until the run's done.
-/// The path never leaves what the parent is in, and a ref on R's count
-/// keeps all it's in: so the parent outlives the run.
+/// as the parent. Queued, it holds R's refs until the run's done - and the
+/// first keeps the parent: see WorkRefs.
 ///
 /// C has it by address - on the workqueue's lists while it's pending, no
 /// borrow held - so it's never copied, cloned or moved: it's not Copy or
@@ -229,35 +228,88 @@ where
     }
 }
 
-impl<F: WorkFunc, R: Path<Parent<F>>> ReffedWork<F, R>
+/// The refs a ReffedWork holds, by their paths from its parent P: one, or a
+/// pair. The first's path is within what the parent is in, so its ref keeps
+/// the parent for the run; a second's count need only outlive the parent.
+/// Taken in order; put in reverse, the parent's keeper last - Held's drop
+/// order.
+///
+/// # Safety
+/// Held is guards on the refs tryget_live() takes, and adopt() makes.
+pub(crate) unsafe trait WorkRefs<P> {
+    /// The refs, held: put when it's dropped.
+    type Held;
+
+    fn tryget_live(p: &P) -> Option<Self::Held>;
+
+    /// # Safety
+    /// The refs are held, from a tryget_live() whose Held was forgotten, and
+    /// given up to this.
+    unsafe fn adopt(p: &P) -> Self::Held;
+}
+
+// SAFETY: its guard
+unsafe impl<P, R: Path<P> + OnePath> WorkRefs<P> for R
 where
-    F::At: Place<Type = Self>,
     R::To: TryRefcount,
 {
-    /// Run F on @wq, holding a ref on R's count: false if there's none to
-    /// be had - tryget_live(). Queued already, the pending run's ref is the
-    /// one there'll be.
+    type Held = RefGuard<R::To>;
+
+    fn tryget_live(p: &P) -> Option<Self::Held> {
+        R::get(p).tryget_live()
+    }
+
+    unsafe fn adopt(p: &P) -> Self::Held {
+        unsafe { RefGuard::adopt(R::get(p)) }
+    }
+}
+
+// SAFETY: their guards, B's first - so it's put first
+unsafe impl<P, A: Path<P>, B: Path<P>> WorkRefs<P> for (A, B)
+where
+    A::To: TryRefcount,
+    B::To: TryRefcount,
+{
+    type Held = (RefGuard<B::To>, RefGuard<A::To>);
+
+    fn tryget_live(p: &P) -> Option<Self::Held> {
+        let a = A::get(p).tryget_live()?;
+        Some((B::get(p).tryget_live()?, a))
+    }
+
+    unsafe fn adopt(p: &P) -> Self::Held {
+        unsafe { (RefGuard::adopt(B::get(p)), RefGuard::adopt(A::get(p))) }
+    }
+}
+
+impl<F: WorkFunc, R: WorkRefs<Parent<F>>> ReffedWork<F, R>
+where
+    F::At: Place<Type = Self>,
+{
+    /// Run F on @wq, holding R's refs: false if they can't all be had -
+    /// tryget_live(). Queued already, the pending run's refs are the ones
+    /// there'll be.
     pub(crate) fn queue(&self, wq: &Queue) -> bool {
-        // taken first: the run can start, and put it, as soon as it's queued
-        let Some(r) = R::get(self.container()).tryget_live() else { return false };
-        // SAFETY: made in place, by new(); the ref keeps it, for the run
+        // taken first: the run can start, and put them, as soon as it's queued
+        let Some(r) = R::tryget_live(self.container()) else { return false };
+        // SAFETY: made in place, by new(); the refs keep it, for the run
         if unsafe { wq.queue_work(self.work.get()) } {
-            // the run's, which adopts it
-            r.leak();
+            // the run's, which adopts them
+            core::mem::forget(r);
         }
         // else put: the pending run has its own
         true
     }
 
     /// # Safety
-    /// @work is a ReffedWork<F, R>'s, queued by queue(), holding its ref.
+    /// @work is a ReffedWork<F, R>'s, queued by queue(), holding its refs.
     unsafe extern "C" fn work_fn(work: *mut c::work_struct) {
         // SAFETY: only a ReffedWork<F, R> runs its work_fn - its work_struct
-        // first - and the ref it holds keeps its parent
+        // first - and the refs it holds keep its parent
         let p = unsafe { (*work.cast::<Self>()).container() };
-        // SAFETY: the ref queue() took for this run: put as it ends, its last
-        // touch of the parent
-        let _r = unsafe { RefGuard::adopt(R::get(p)) };
+        // SAFETY: the refs queue() took for this run: put as it ends, their
+        // last touch of the parent
+        let _r = unsafe { R::adopt(p) };
         F::run(p);
     }
 

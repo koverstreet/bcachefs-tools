@@ -379,6 +379,17 @@ pub(crate) struct FieldOf<P, const N: u64>(PhantomData<P>);
 
 pub(crate) struct ElemOf<P, const I: usize>(PhantomData<P>);
 
+/// Each of the path types: one path, where a tuple of them is several. An
+/// impl for one and an impl for a tuple can't overlap through this, as they
+/// could through Path<T>: a downstream crate could implement Path<ItsType>
+/// for a tuple.
+pub(crate) trait OnePath {}
+
+impl OnePath for Here {}
+impl<P> OnePath for Up<P> {}
+impl<P, const N: u64> OnePath for FieldOf<P, N> {}
+impl<P, const I: usize> OnePath for ElemOf<P, I> {}
+
 /// A path from the struct a field's in, as a type: its fields by name,
 /// elements of an array field by index, and super for its parent -
 /// `field!(super.writes)`, `field!(super.super.c)`, `field!(io_ref[WRITE])`.
