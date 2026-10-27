@@ -114,3 +114,23 @@ fn parse_accounting_entries(data: &[u8]) -> anyhow::Result<Vec<AccountingEntry>>
         })
         .collect()
 }
+
+/// Decode the native-endian u64 counters stored in an accounting bkey value.
+pub(crate) fn parse_accounting_counters(data: &[u8]) -> Vec<u64> {
+    data.chunks_exact(8)
+        .map(|bytes| u64::from_ne_bytes(bytes.try_into().unwrap()))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_accounting_counters;
+
+    #[test]
+    fn accounting_counters_decode_native_u64_values() {
+        let values = [3u64, 8, 16, u64::MAX];
+        let bytes: Vec<_> = values.iter().flat_map(|value| value.to_ne_bytes()).collect();
+        assert_eq!(parse_accounting_counters(&bytes), values);
+        assert!(parse_accounting_counters(&[]).is_empty());
+    }
+}
