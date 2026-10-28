@@ -254,7 +254,7 @@ async fn create_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Result<(),
                        at: Resume<'_>) -> Result<(), BchError> {
     // Kept by device, not by c->devs[idx]: dev_remove may clear that slot
     // while our io ref still pins the device.
-    let mut cas: ArrayVec<DevIoRef<'_, c::bch_dev_write_ref>, MAX_BLOCKS> = ArrayVec::new();
+    let mut cas: ArrayVec<DevIoRef<c::bch_dev_write_ref>, MAX_BLOCKS> = ArrayVec::new();
     for ptr in w.new_stripe.stripe().v().block_ptrs() {
         let Some(ca) = fs.dev_get_ioref::<c::bch_dev_write_ref>(ptr.dev().into()) else {
             return fs.throw(bch_errcode::BCH_ERR_stripe_create_device_offline);

@@ -192,8 +192,8 @@ pub struct StripeNew {
 /// once a writer's claimed the block - the bucket's ->ec. Given back when
 /// it's dropped: the pin put, the claimed bucket closed.
 pub(crate) enum StripeBlock {
-    Pinned(OpenBucket<'static>),
-    Claimed(EcOpenBucket<'static>),
+    Pinned(OpenBucket),
+    Claimed(EcOpenBucket),
 }
 
 impl StripeBlock {
@@ -202,7 +202,7 @@ impl StripeBlock {
     /// # Safety
     /// It goes in a stripe being made's blocks[]: the filesystem drains them
     /// before it goes.
-    pub(crate) unsafe fn new(ob: OpenBucket<'_>, fs: &BackRef<Fs>) -> Self {
+    pub(crate) unsafe fn new(ob: OpenBucket, fs: &BackRef<Fs>) -> Self {
         // SAFETY: the caller's
         StripeBlock::Pinned(unsafe { ob.bind(fs) })
     }
@@ -479,7 +479,7 @@ impl StripeNew {
 pub(crate) enum IoRefs {}
 
 /// An io ref on a stripe being made.
-pub(crate) type IoRef<'a> = RefGuard<'a, StripeNew, IoRefs>;
+pub(crate) type IoRef = RefGuard<StripeNew, IoRefs>;
 
 // SAFETY: @io_refs counts them. The last dec() puts the io refs' ref on
 // @in_flight, the last touch: the task may free the stripe after it - while

@@ -25,7 +25,7 @@ use crate::c;
 use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
 use crate::util::place::{Path, Place, Placed};
-use crate::util::refcount::{KeepsAlive, RefGuard, TryRefcount};
+use crate::util::refcount::{RefGuard, TryRefcount};
 use crate::util::Printbuf;
 use bitflags::bitflags;
 use core::cell::UnsafeCell;
@@ -177,7 +177,7 @@ pub(crate) type Parent<F> = <<F as WorkFunc>::At as Place>::Base;
 /// so C's pointer to it is had back as the ReffedWork, and its container()
 /// as the parent. Queued, it holds a ref on R's count until the run's done.
 /// The path never leaves what the parent is in, and a ref on R's count
-/// keeps all it's in, KeepsAlive: so the parent outlives the run.
+/// keeps all it's in: so the parent outlives the run.
 ///
 /// C has it by address - on the workqueue's lists while it's pending, no
 /// borrow held - so it's never copied, cloned or moved: it's not Copy or
@@ -232,7 +232,7 @@ where
 impl<F: WorkFunc, R: Path<Parent<F>>> ReffedWork<F, R>
 where
     F::At: Place<Type = Self>,
-    R::To: TryRefcount + KeepsAlive,
+    R::To: TryRefcount,
 {
     /// Run F on @wq, holding a ref on R's count: false if there's none to
     /// be had - tryget_live(). Queued already, the pending run's ref is the

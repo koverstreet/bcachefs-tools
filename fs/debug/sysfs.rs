@@ -648,7 +648,7 @@ fn started(c: &Fs) -> Result<(), BchError> {
     }
 }
 
-fn write_ref(c: &Fs) -> Result<WriteRef<'_>, BchError> {
+fn write_ref(c: &Fs) -> Result<WriteRef, BchError> {
     c.writes.tryget_live()
         .ok_or(c::EROFS.into())
 }

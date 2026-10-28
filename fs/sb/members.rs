@@ -1199,7 +1199,7 @@ impl Fs {
 
     /// An io ref on device @dev, for reading or writing as R is - for
     /// writing only if it's rw: bch2_dev_get_ioref().
-    pub fn dev_get_ioref<R: IoRefIdx>(&self, dev: u32) -> Option<DevIoRef<'_, R>> {
+    pub fn dev_get_ioref<R: IoRefIdx>(&self, dev: u32) -> Option<DevIoRef<R>> {
         let rcu = read_lock();
         let ca = self.io_ref_tryget(self.dev_rcu(dev, &rcu)?)?;
         // then_some(), eager: a write ref on a device that isn't rw is put
@@ -1208,7 +1208,7 @@ impl Fs {
 
     /// An io ref on @ca, one of ours found under RCU: the ref keeps the device
     /// past the section, and the guard hands it out only while it's held.
-    fn io_ref_tryget<R: IoRefIdx>(&self, ca: &c::bch_dev) -> Option<DevIoRef<'_, R>> {
+    fn io_ref_tryget<R: IoRefIdx>(&self, ca: &c::bch_dev) -> Option<DevIoRef<R>> {
         // SAFETY: as above
         DevIoRef::tryget_live(unsafe { &*core::ptr::from_ref(ca) })
     }
@@ -1234,24 +1234,24 @@ impl Fs {
 
     /// The devices in a state in @states (a mask of 1 << state), an io ref on
     /// each, put when it's dropped: __for_each_online_member().
-    pub fn io_members<R: IoRefIdx>(&self, states: u32) -> impl Iterator<Item = DevIoRef<'_, R>> {
+    pub fn io_members<R: IoRefIdx>(&self, states: u32) -> impl Iterator<Item = DevIoRef<R>> + '_ {
         self.walk(move |ca| {
             (states & 1 << ca.mi.state != 0).then(|| self.io_ref_tryget(ca)).flatten()
         })
     }
 
     /// Every online device, an io ref for reading on each: for_each_online_member().
-    pub fn online_members(&self) -> impl Iterator<Item = DevIoRef<'_, c::bch_dev_read_ref>> {
+    pub fn online_members(&self) -> impl Iterator<Item = DevIoRef<c::bch_dev_read_ref>> + '_ {
         self.io_members(!0)
     }
 
     /// The rw devices, an io ref for writing on each: for_each_rw_member().
-    pub fn rw_members(&self) -> impl Iterator<Item = DevIoRef<'_, c::bch_dev_write_ref>> {
+    pub fn rw_members(&self) -> impl Iterator<Item = DevIoRef<c::bch_dev_write_ref>> + '_ {
         self.io_members(1 << c::bch_member_state::BCH_MEMBER_STATE_rw.0)
     }
 
     /// The rw and ro devices, an io ref for reading on each: for_each_readable_member().
-    pub fn readable_members(&self) -> impl Iterator<Item = DevIoRef<'_, c::bch_dev_read_ref>> {
+    pub fn readable_members(&self) -> impl Iterator<Item = DevIoRef<c::bch_dev_read_ref>> + '_ {
         self.io_members(1 << c::bch_member_state::BCH_MEMBER_STATE_rw.0 |
                         1 << c::bch_member_state::BCH_MEMBER_STATE_ro.0)
     }
@@ -1446,7 +1446,7 @@ unsafe impl<R: IoRefIdx> TryRefcount<R> for c::bch_dev {
 
 /// An io ref on a device - for reading or writing, as R is: its block
 /// device is open while it's held.
-pub type DevIoRef<'f, R> = RefGuard<'f, c::bch_dev, R>;
+pub type DevIoRef<R> = RefGuard<c::bch_dev, R>;
 
 // SAFETY: a device is every thread's that does IO to it, as its filesystem
 // is: its state behind its own locks, atomics and RCU - so a &bch_dev goes to

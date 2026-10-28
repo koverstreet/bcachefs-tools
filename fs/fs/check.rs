@@ -981,14 +981,12 @@ pub mod ioctl {
         let opts = user_opts(arg.opts)?;
 
         let fs_ref = RoRef::tryget(fs).ok_or(BchError::from(c::EROFS))?;
-        // SAFETY: a ro_ref keeps the filesystem: bch2_fs_stop() waits for it
-        let fs_ref: RoRef<'static> = unsafe { core::mem::transmute(fs_ref) };
 
         let thr = ThreadWithFile::new_stdio(Ok(()))?;
         crate::bch_err_fn!(fs, thr.run_stdio(move |(), stdio| fsck_online_thread(fs_ref, opts, stdio)))
     }
 
-    fn fsck_online_thread(fs: RoRef<'_>, opts: c::bch_opts, stdio: &StdioRedirect) -> c_int {
+    fn fsck_online_thread(fs: RoRef, opts: c::bch_opts, stdio: &StdioRedirect) -> c_int {
         let mut buf = Printbuf::new();
 
         let online = passes_match(c::PASS_ONLINE);

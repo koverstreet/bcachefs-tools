@@ -8,7 +8,7 @@
 //! so all of Rust's refs are kind 0.
 
 use crate::c;
-use crate::util::refcount::{KeepsAlive, Refcount, TryRefcount};
+use crate::util::refcount::{Refcount, TryRefcount};
 use crate::util::Printbuf;
 
 const _: () = assert!(c::bch_write_ref::BCH_WRITE_REF_rust as u32 == 0);
@@ -44,7 +44,10 @@ impl EnumeratedRef {
 }
 
 // SAFETY: C's get and put, of kind 0 - first in every kind list, so the
-// debug build's count of it, refs[0], is always there
+// debug build's count of it, refs[0], is always there. What an
+// enumerated_ref is in is freed only once it's been stopped, which waits out
+// every ref: the filesystem going read-only for c->writes, a device going
+// offline for its io refs - bch2_dev_free() warns if one's still held
 unsafe impl Refcount for EnumeratedRef {
     fn inc(&self) {
         unsafe { c::rust_enumerated_ref_get(self.r.get()) }
@@ -65,9 +68,3 @@ unsafe impl TryRefcount for EnumeratedRef {
         unsafe { c::rust_enumerated_ref_tryget(self.r.get()) }
     }
 }
-
-// SAFETY: what an enumerated_ref is in is freed only once it's been stopped,
-// which waits out every ref: the filesystem going read-only for c->writes,
-// a device going offline for its io refs - bch2_dev_free() warns if one's
-// still held
-unsafe impl KeepsAlive for EnumeratedRef {}

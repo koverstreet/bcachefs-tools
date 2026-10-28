@@ -127,7 +127,7 @@ impl Endio<BioBox<EcBio>> for BlockEndio {
 
 /// A bio's IO, on block pointer @ptr, accounted against its device - @ca, its
 /// io ref, put as this returns: its error, or its pointer gone stale.
-fn block_done<R: IoRefIdx>(ca: DevIoRef<'_, R>, ptr: &c::bch_extent_ptr, submit_time: u64,
+fn block_done<R: IoRefIdx>(ca: DevIoRef<R>, ptr: &c::bch_extent_ptr, submit_time: u64,
                            status: Result<(), BchError>) -> Option<BchError> {
     use c::bch_member_error_type as T;
     let write = R::RW == WRITE;

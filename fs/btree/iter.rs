@@ -2975,12 +2975,12 @@ crate::display_via_to_text!(BtreeNodeOndiskToText<'_, '_>);
 // ── The filesystem's transactions: c->btree.trans.list ──────────────────────
 
 /// A transaction off the list, kept live - its paths, its task - by the ref.
-pub struct ListedTrans<'a> {
+pub struct ListedTrans {
     trans: *mut c::btree_trans,
-    _ref:  ClosureRef<'a>,
+    _ref:  ClosureRef,
 }
 
-impl ListedTrans<'_> {
+impl ListedTrans {
     /// Whether it holds the SRCU lock btree nodes are freed under.
     pub fn srcu_held(&self) -> bool {
         // its own thread changes it: READ_ONCE()
@@ -3000,7 +3000,7 @@ impl ListedTrans<'_> {
     }
 }
 
-impl ToText for ListedTrans<'_> {
+impl ToText for ListedTrans {
     fn to_text(&self, out: &mut Printbuf) {
         unsafe { c::bch2_btree_trans_to_text(out.as_raw(), self.trans) }
     }
@@ -3015,8 +3015,8 @@ impl Fs {
     pub fn for_each_trans_from<E>(
         &self,
         cursor: &mut usize,
-        pred:   impl Fn(&ListedTrans<'_>) -> bool,
-        mut f:  impl FnMut(ListedTrans<'_>) -> Result<ControlFlow<()>, E>,
+        pred:   impl Fn(&ListedTrans) -> bool,
+        mut f:  impl FnMut(ListedTrans) -> Result<ControlFlow<()>, E>,
     ) -> Result<(), E> {
         let lock = Lock::from_c(&self.btree.trans.lock);
         let head = (&raw const self.btree.trans.list).cast_mut();

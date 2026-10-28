@@ -709,7 +709,7 @@ unsafe impl Sync for DataJob {}
 
 impl ThreadFile for DataJob {}
 
-fn data_job(job: &DataJob, _write_ref: WriteRef<'_>) {
+fn data_job(job: &DataJob, _write_ref: WriteRef) {
     let mut arg = job.arg;
     let stats = &job.stats;
     let ret = unsafe { c::bch2_data_job(job.fs.as_ptr().cast(), core::ptr::from_ref(stats).cast_mut(), &mut arg) };
@@ -782,10 +782,6 @@ fn data(fs: &Fs, arg: c::bch_ioctl_data) -> Result<c_int, BchError> {
     if u32::from(arg.op) >= c::BCH_DATA_OP_NR || arg.flags != 0 {
         return fs.throw(bch_errcode::BCH_ERR_EINVAL_ioctl_data_bad_op);
     }
-
-    // SAFETY: a write ref keeps the filesystem: it can't go read-only, let
-    // alone be freed, until the ref's put - when the job's thread returns
-    let write_ref: WriteRef<'static> = unsafe { core::mem::transmute(write_ref) };
 
     let job = ThreadWithFile::new(Ok(DataJob {
         fs:    NonNull::from(fs),

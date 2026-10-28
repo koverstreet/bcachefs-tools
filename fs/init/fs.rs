@@ -584,7 +584,7 @@ impl Drop for OpenFs {
 
 /// A write ref, on c->writes: while one is held, the filesystem can't finish
 /// going read-only, which stops writes and waits for every ref to be put.
-pub type WriteRef<'f> = RefGuard<'f, EnumeratedRef>;
+pub type WriteRef = RefGuard<EnumeratedRef>;
 
 impl Fs {
     /// The write refs held, by kind.
@@ -673,7 +673,7 @@ pub enum RoRefs {}
 
 /// A ref keeping a filesystem from being stopped.
 #[cfg(kernel)]
-pub type RoRef<'f> = RefGuard<'f, Fs, RoRefs>;
+pub type RoRef = RefGuard<Fs, RoRefs>;
 
 #[cfg(kernel)]
 impl Fs {

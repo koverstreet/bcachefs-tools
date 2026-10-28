@@ -20,7 +20,7 @@ use pin_init::{pin_data, pinned_drop, PinInit};
 
 /// A ref on a closure. Its tryget() is closure_get_not_zero(): it fails once
 /// the closure has none left - it's finished, or finishing.
-pub type ClosureRef<'a> = RefGuard<'a, c::closure>;
+pub type ClosureRef = RefGuard<c::closure>;
 
 // SAFETY: a closure's refcount is atomic, changed through a shared pointer;
 // closure_get() and a closure_get_not_zero() that succeeds take a ref

@@ -2349,7 +2349,7 @@ fn sb_io_result(fs: &Fs, ca: &c::bch_dev, rw: c::bch_member_error_type, ret: Res
 }
 
 /// The devices a superblock write goes to: online, each with a read ref.
-type WriteDevs<'f> = [members::DevIoRef<'f, c::bch_dev_read_ref>];
+type WriteDevs = [members::DevIoRef<c::bch_dev_read_ref>];
 
 /// A copy of the superblock that didn't reach its device.
 struct CopyFailed {
@@ -2452,7 +2452,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
 /// The superblock brought up to date for a write to @cas: marked dirty or
 /// clean, its seq - and its members' - the time and flags, each section's
 /// from_cpu(), and each device's copy synced from it.
-fn write_prepare(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs<'_>) -> Result<(), BchError> {
+fn write_prepare(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), BchError> {
     use c::bch_fs_flags as f;
     use crate::sb::members::SbMembersMut;
 
@@ -2499,7 +2499,7 @@ fn write_prepare(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs<'_>) -> Resu
 /// written there: a write silently dropped - unless errors=continue or
 /// fix_safe, which only say so - or another writer's, and the filesystem
 /// goes read-only.
-fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs<'_>) -> Result<(), BchError> {
+fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), BchError> {
     use crate::util::log::LogMsg;
     const READ: c::bch_member_error_type = c::bch_member_error_type::BCH_MEMBER_ERROR_read;
 
@@ -2545,7 +2545,7 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs<'_>) -> Result<(
 
 /// Each layout slot's copy to every device that has one, a slot at a time,
 /// each round waited on before the next.
-fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs<'_>) -> Result<Copies, BchError> {
+fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<Copies, BchError> {
     use crate::util::alloc::flags::GFP_KERNEL;
     const WRITE: c::bch_member_error_type = c::bch_member_error_type::BCH_MEMBER_ERROR_write;
 
@@ -2592,7 +2592,7 @@ fn write_copies(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs<'_>) -> Resul
 /// one that reached too few to mount is an error, the filesystem going
 /// read-only.
 #[track_caller]
-fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&c::bch_devs_mask>, cas: &WriteDevs<'_>,
+fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&c::bch_devs_mask>, cas: &WriteDevs,
                 copies: &Copies) -> Result<(), BchError> {
     use crate::util::log::LogMsg;
 

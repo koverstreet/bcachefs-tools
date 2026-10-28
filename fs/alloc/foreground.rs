@@ -40,7 +40,6 @@ use crate::util::place::{self, Placed};
 use crate::util::rcu::read_lock;
 use crate::util::refcount::{RefGuard, Refcount};
 use core::ffi::{c_int, c_uint};
-use core::marker::PhantomData;
 use core::ops::Deref;
 use core::ptr::{read_volatile, NonNull};
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
@@ -188,12 +187,12 @@ unsafe impl Refcount for OpenBucketRef {
 }
 
 /// A pin on an open bucket: it's open while one's held.
-pub type OpenBucket<'f> = RefGuard<'f, OpenBucketRef>;
+pub type OpenBucket = RefGuard<OpenBucketRef>;
 
-impl<'f> RefGuard<'f, OpenBucketRef> {
+impl RefGuard<OpenBucketRef> {
     /// # Safety
     /// The caller holds a pin on open bucket @idx, and hands it over.
-    pub unsafe fn from_idx(fs: &'f Fs, idx: c::OpenBucketIdx) -> Self {
+    pub unsafe fn from_idx(fs: &Fs, idx: c::OpenBucketIdx) -> Self {
         // SAFETY: the caller's
         unsafe { RefGuard::adopt(OpenBucketRef::from_idx(fs, idx)) }
     }
@@ -210,7 +209,7 @@ impl<'f> RefGuard<'f, OpenBucketRef> {
     ///
     /// # Safety
     /// As BackRef::get()'s: the pin is drained with @fs's holder.
-    pub unsafe fn bind(self, fs: &BackRef<Fs>) -> OpenBucket<'static> {
+    pub unsafe fn bind(self, fs: &BackRef<Fs>) -> OpenBucket {
         assert!(core::ptr::eq(self.fs(), &**fs), "open bucket {} bound to another filesystem", self.idx().get());
         let ob = self.raw();
         self.leak();
@@ -222,7 +221,7 @@ impl<'f> RefGuard<'f, OpenBucketRef> {
     /// Claimed by the writer of block @ec_idx of stripe @ec: its pin the
     /// writer's - the bucket, for it - and its ->ec what keeps it open for the
     /// stripe.
-    pub fn claim(self, ec: *mut c::ec_stripe_new, ec_idx: u8) -> (EcOpenBucket<'f>, *mut c::open_bucket) {
+    pub fn claim(self, ec: *mut c::ec_stripe_new, ec_idx: u8) -> (EcOpenBucket, *mut c::open_bucket) {
         let ob = NonNull::from(&*self).cast::<c::open_bucket>();
         self.leak();
         // SAFETY: ->ec and ->ec_idx are the pin's holder's to set, before the
@@ -231,7 +230,7 @@ impl<'f> RefGuard<'f, OpenBucketRef> {
             (*ob.as_ptr()).ec_idx = ec_idx;
             (*ob.as_ptr()).ec = ec;
         }
-        (EcOpenBucket { ob, _fs: PhantomData }, ob.as_ptr())
+        (EcOpenBucket { ob }, ob.as_ptr())
     }
 
     /// Where its free space starts.
@@ -249,17 +248,16 @@ impl<'f> RefGuard<'f, OpenBucketRef> {
 
 /// Closed when it's dropped, once the stripe's done with it:
 /// __bch2_open_bucket_put() with ->ec cleared.
-pub struct EcOpenBucket<'f> {
-    ob:  NonNull<c::open_bucket>,
-    _fs: PhantomData<&'f Fs>,
+pub struct EcOpenBucket {
+    ob: NonNull<c::open_bucket>,
 }
 
 // SAFETY: as OpenBucket's: closing it takes the allocator's locks, and what's
 // read while it's open is fixed
-unsafe impl Send for EcOpenBucket<'_> {}
-unsafe impl Sync for EcOpenBucket<'_> {}
+unsafe impl Send for EcOpenBucket {}
+unsafe impl Sync for EcOpenBucket {}
 
-impl Deref for EcOpenBucket<'_> {
+impl Deref for EcOpenBucket {
     type Target = OpenBucketRef;
 
     fn deref(&self) -> &OpenBucketRef {
@@ -268,7 +266,7 @@ impl Deref for EcOpenBucket<'_> {
     }
 }
 
-impl Drop for EcOpenBucket<'_> {
+impl Drop for EcOpenBucket {
     fn drop(&mut self) {
         let ob = self.ob.as_ptr();
         // SAFETY: its pin field, atomic
@@ -300,9 +298,9 @@ pub struct OpenBucketsDrain<'f, 'l> {
 }
 
 impl<'f> Iterator for OpenBucketsDrain<'f, '_> {
-    type Item = OpenBucket<'f>;
+    type Item = OpenBucket;
 
-    fn next(&mut self) -> Option<OpenBucket<'f>> {
+    fn next(&mut self) -> Option<OpenBucket> {
         let idx = self.idxs.next()?.expect("a bucket of the list");
         // SAFETY: the list's pin, which it no longer has, handed out once
         Some(unsafe { OpenBucket::from_idx(self.fs, idx) })
@@ -328,7 +326,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
     }
 
     /// A bucket for @req on @ca.
-    pub fn bucket_alloc(&self, req: &mut c::alloc_request, ca: &c::bch_dev) -> Result<OpenBucket<'t>, BchError> {
+    pub fn bucket_alloc(&self, req: &mut c::alloc_request, ca: &c::bch_dev) -> Result<OpenBucket, BchError> {
         req.ca = core::ptr::from_ref(ca).cast_mut();
         // SAFETY: in the attempt; @req ours, its device live while it's borrowed
         let ob = unsafe { bch2_bucket_alloc_trans(self.raw(), req) };
