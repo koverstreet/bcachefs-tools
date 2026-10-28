@@ -532,7 +532,7 @@ fn check_subvol<'a, 't>(
         // Repairs above may still be queued: commit them, and rerun
         // check_subvol() - whose fixes are then in, and don't refire -
         // before deleting. Free when nothing's queued.
-        t.commit_lazy(CommitFlags::NO_ENOSPC)?;
+        t.commit_lazy(None, CommitFlags::NO_ENOSPC)?;
         return Err(t.close(CommitFlags::NO_ENOSPC, |trans|
             bch_err_msg!(fs, set_deleted(trans, id as u32), "deleting subvolume {id}")));
     }

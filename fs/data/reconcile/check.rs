@@ -173,7 +173,7 @@ fn check_reconcile_work_one<'t>(t: &TransAttempt<'_, 't>, data_iter: &mut BtreeI
     let [rb_w, rb_h, rb_p] = rb;
     if rb_w.peek(t)?.is_some_and(|k| k.k.key_type() == c::bch_bkey_type::KEY_TYPE_cookie) {
         t.delete_at(rb_w, UpdateTriggerFlags::empty())?;
-        t.commit_lazy(NO_ENOSPC)?;
+        t.commit_lazy(None, NO_ENOSPC)?;
     }
 
     // what the data btree has at the walk's position, if it's ahead: for the

@@ -861,7 +861,7 @@ fn process_key<'a>(t: &TransAttempt<'a, '_>, iter: &BtreeIter<'a>, k: BkeySC<'_>
 
     if !fs.snapshots.exists(k.k.p.snapshot) &&
        check_snapshots::check_key_has_snapshot(t, Some(iter), k)? {
-        return t.commit_lazy(CommitFlags::NO_ENOSPC);
+        return t.commit_lazy(None, CommitFlags::NO_ENOSPC);
     }
 
     let Some(dying) = snapshot_id_dying(run, k.k.p.snapshot) else {

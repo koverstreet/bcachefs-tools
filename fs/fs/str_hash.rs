@@ -534,7 +534,7 @@ pub fn repair_inode_hash_info(
     bad_inode.set_inode_str_hash(snapshot_root.inode_str_hash());
 
     inode::fsck_write(t, bad_inode)?;
-    t.commit_lazy(CommitFlags::NO_ENOSPC)
+    t.commit_lazy(None, CommitFlags::NO_ENOSPC)
 }
 
 /// Whether dirent @d points at something that exists, as seen from its
@@ -731,7 +731,7 @@ impl Repair<'_> {
                                       BtreeIterFlags::SLOTS);
         t.iter_traverse(&mut iter)?;
         delete_at::<T>(t, self.hash_info, &mut iter, UpdateTriggerFlags::empty())?;
-        t.commit_lazy(CommitFlags::NO_ENOSPC)
+        t.commit_lazy(None, CommitFlags::NO_ENOSPC)
     }
 
     /// Put @k in its proper location - unless a key of the same name is
@@ -769,7 +769,7 @@ impl Repair<'_> {
         delete_at::<T>(t, self.hash_info, &mut k_iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)?;
 
         self.update_backpointers::<T>(t, k.k.p, new.as_ref())?;
-        t.commit_lazy(CommitFlags::NO_ENOSPC)
+        t.commit_lazy(None, CommitFlags::NO_ENOSPC)
     }
 
     /// @k can't be found by lookup - it's before the slot @hash it hashes

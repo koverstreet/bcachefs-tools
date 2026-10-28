@@ -619,7 +619,7 @@ fn indirect_extent_missing_error(
         t.insert(c::btree_id::extents, new, UpdateTriggerFlags::NORUN)?;
 
         if should_commit {
-            t.commit_lazy(CommitFlags::NO_ENOSPC)?;
+            t.commit_lazy(None, CommitFlags::NO_ENOSPC)?;
         }
     }
 

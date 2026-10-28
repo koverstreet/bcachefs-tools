@@ -748,12 +748,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
     /// Commit what's queued, if anything - and having committed, return
     /// transaction_restart_commit, so the caller's loop re-runs against the
     /// committed state.
-    pub fn commit_lazy(&self, flags: impl Into<CommitOpts>) -> Result<(), BchError> {
+    pub fn commit_lazy(&self, disk_res: Option<&DiskReservation<'_>>, flags: impl Into<CommitOpts>)
+        -> Result<(), BchError>
+    {
         if !self.has_updates() {
             return Ok(());
         }
 
-        self.trans.commit_inner(None, flags.into(), true)
+        self.trans.commit_inner(disk_res, flags.into(), true)
     }
 
     /// Close this attempt, for work at the transaction level - work that runs
@@ -795,7 +797,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         if unsafe { (*self.raw()).mem_top } < c::BTREE_TRANS_MEM_MAX / 4 {
             return Ok(());
         }
-        self.commit_lazy(flags)
+        self.commit_lazy(None, flags)
     }
 
     pub fn result(&self, ret: i32) -> Result<(), BchError> {

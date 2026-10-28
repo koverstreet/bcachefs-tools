@@ -144,7 +144,7 @@ fn get_old_stripe(t: &TransAttempt<'_, '_>, s: &mut Internal, idx: u64)
             return Ok(None);
         }
         t.delete_at(iter, UpdateTriggerFlags::empty())?;
-        return t.commit_lazy(CommitFlags::NO_ENOSPC).map(|()| None);
+        return t.commit_lazy(None, CommitFlags::NO_ENOSPC).map(|()| None);
     }
 
     // A can_widen gone stale-high - its label's RW members shrank since the
@@ -157,7 +157,7 @@ fn get_old_stripe(t: &TransAttempt<'_, '_>, s: &mut Internal, idx: u64)
                                 fs.opts().ec_max_data_blocks.into());
     if v.can_widen() > want {
         t.bkey_make_mut(iter, old, UpdateTriggerFlags::empty())?.v_mut().bits.set_can_widen(want);
-        return t.commit_lazy(CommitFlags::NO_ENOSPC).map(|()| None);
+        return t.commit_lazy(None, CommitFlags::NO_ENOSPC).map(|()| None);
     }
 
     let b = StripeBlocks::get(fs, old)?;

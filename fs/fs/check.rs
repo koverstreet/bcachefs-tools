@@ -454,7 +454,7 @@ impl InodeWalker {
         // fsck_write(), not the self-committing write: inside the caller's commit
         // loop that eats restarts, and leaks the advanced restart_count to the caller
         inode::fsck_write(t, &mut self.inodes_mut()[fix].inode)?;
-        t.commit_lazy(CommitFlags::NO_ENOSPC)
+        t.commit_lazy(None, CommitFlags::NO_ENOSPC)
     }
 
     /// Refetch on the next walk and recount the per-inode sums: the inodes

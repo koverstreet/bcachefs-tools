@@ -222,7 +222,7 @@ fn create_or_restore_lostfound(
         };
 
     lostfound_dir_link(t, root_inum.inum, dirent_snapshot)?;
-    t.commit_lazy(CommitFlags::NO_ENOSPC)?;
+    t.commit_lazy(None, CommitFlags::NO_ENOSPC)?;
     Ok(lostfound)
 }
 
