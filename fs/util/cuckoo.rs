@@ -92,6 +92,7 @@ use core::sync::atomic::Ordering::{self, Acquire, Relaxed, Release};
 use crate::locking::{ByteLock, Guard, Lock};
 use crate::types::CacheAligned;
 use crate::util::alloc::AllocError;
+use crate::util::backref::BackRef;
 use crate::util::kernel::random_u64;
 use crate::util::rcu::{read_lock, RcuArray, RcuElement, ReadGuard};
 use crate::util::siphash::SipHash13Key;
@@ -674,13 +675,11 @@ impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> Cuckoo<I, S
 /// it's in, and leaves as it's dropped. The entry's Hash, Eq and Borrow<K>
 /// are key()'s, which nothing can change.
 ///
-/// The table's a pointer, not a borrow: a borrow's lifetime would be in the
-/// entry's type, so in the table's, and a table can't be borrowed for a
-/// lifetime its own type names - it has drop glue.
+/// The table is a BackRef: it outlives its entries.
 pub struct Registration<K, E, S = SipHash13Key, const W: usize = 2>
 where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
 {
-    table: NonNull<Cuckoo<Entry<E>, S, W>>,
+    table: BackRef<Cuckoo<Entry<E>, S, W>>,
     entry: NonNull<E>,
     key:   K,
 }
@@ -724,8 +723,9 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
         -> impl ::pin_init::PinInit<Self, RegisterError> + use<'w, K, E, S, W>
     {
         let init = move |slot: *mut Self| {
-            // SAFETY: @slot is ours to write, pin-init's
-            unsafe { slot.write(Self { table: NonNull::from(table), entry: e, key }) };
+            // SAFETY: @slot is ours to write, pin-init's; @table outlives
+            // this, the caller's
+            unsafe { slot.write(Self { table: BackRef::new(table), entry: e, key }) };
             // SAFETY: the caller's
             let err = match table.insert_new(unsafe { Entry::new(e) }) {
                 Ok(Ok(())) => return Ok(()),
@@ -752,8 +752,7 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
     /// Out, if the slot is still this entry's: an insert() of its key may
     /// have put another in its place.
     fn drop(&mut self) {
-        // SAFETY: it outlives us (new())
-        let table = unsafe { self.table.as_ref() };
+        let table = &*self.table;
         let g = table.lock.lock();
         let Some(s) = table.locked(&g).and_then(|t| t.find_locked(&self.key)) else { return };
         if s.load_locked().is_some_and(|i| i.0 == self.entry) {
