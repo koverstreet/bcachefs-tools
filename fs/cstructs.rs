@@ -129,7 +129,6 @@
 #[path = "vfs/types.rs"] pub mod vfs_types;
 #[path = "alloc/background_types.rs"] pub mod alloc_background_types;
 #[path = "btree/cache_types.rs"] pub mod btree_cache_types;
-#[path = "data/checksum_types.rs"] pub mod data_checksum_types;
 #[path = "data/ec/trigger_types.rs"] pub mod data_ec_trigger_types;
 #[path = "fs/namei_types.rs"] pub mod fs_namei_types;
 #[path = "init/fs_types.rs"] pub mod init_fs_types;
@@ -307,7 +306,6 @@ pub mod c {
     pub use super::vfs_types::*;
     pub use super::alloc_background_types::*;
     pub use super::btree_cache_types::*;
-    pub use super::data_checksum_types::*;
     pub use super::data_ec_trigger_types::*;
     pub use super::fs_namei_types::*;
     pub use super::init_fs_types::*;

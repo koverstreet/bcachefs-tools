@@ -84,7 +84,6 @@ bcachefs-y		:=			\
 	btree/update.o				\
 	btree/write.o				\
 	btree/write_buffer.o			\
-	data/checksum.o				\
 	data/ec/trigger.o			\
 	data/extents.o				\
 	data/extent_update.o			\

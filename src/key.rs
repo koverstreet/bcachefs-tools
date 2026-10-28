@@ -12,10 +12,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, ensure, Result};
-use bcachefs_kernel::c::{
-    bch_key, bch_sb_handle,
-    bch2_chacha20, bch_encrypted_key, bch_sb_field_crypt,
-};
+use bcachefs_kernel::c::{bch_key, bch_sb_handle, bch_encrypted_key, bch_sb_field_crypt};
 use bch_bindgen::keyutils::{self, keyctl_search};
 use log::info;
 use rustix::termios;
@@ -433,16 +430,8 @@ impl Passphrase {
         let crypt = sb.sb().crypt().expect("called on encrypted fs");
         let mut new_key = bch_encrypted_key::new_unencrypted(key);
 
-        let mut passphrase_key: bch_key = self.derive(crypt)?;
-
-        unsafe {
-            bch2_chacha20(
-                ptr::addr_of_mut!(passphrase_key),
-                sb.sb().nonce(),
-                ptr::addr_of_mut!(new_key).cast(),
-                mem::size_of_val(&new_key),
-            )
-        };
+        let passphrase_key: bch_key = self.derive(crypt)?;
+        new_key.chacha20(&passphrase_key, sb.sb().nonce());
 
         Ok(new_key)
     }
@@ -461,19 +450,12 @@ impl Passphrase {
         // it, so the KDF parameters exist. Failing here means a corrupt
         // superblock, not a wrong passphrase - returning None would report it
         // as the latter.
-        let mut passphrase_key: bch_key = self
+        let passphrase_key: bch_key = self
             .derive(crypt)
             .expect("sb key is encrypted, so its KDF parameters must be usable");
 
         let mut cleartext_sb_key = crypt.key().clone();
-        unsafe {
-            bch2_chacha20(
-                ptr::addr_of_mut!(passphrase_key),
-                sb.sb().nonce(),
-                ptr::addr_of_mut!(cleartext_sb_key).cast(),
-                mem::size_of_val(&cleartext_sb_key),
-            )
-        };
+        cleartext_sb_key.chacha20(&passphrase_key, sb.sb().nonce());
         if cleartext_sb_key.is_encrypted() {
             return None;
         }

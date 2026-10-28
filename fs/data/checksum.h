@@ -23,9 +23,6 @@ static inline bool bch2_checksum_mergeable(unsigned type)
 	}
 }
 
-struct bch_csum bch2_checksum_merge(unsigned, struct bch_csum,
-				    struct bch_csum, size_t);
-
 #define BCH_NONCE_EXTENT	cpu_to_le32(1 << 28)
 #define BCH_NONCE_BTREE		cpu_to_le32(2 << 28)
 #define BCH_NONCE_JOURNAL	cpu_to_le32(3 << 28)
@@ -67,20 +64,6 @@ static inline void bch2_csum_err_msg(struct printbuf *out,
 	bch2_csum_to_text(out, type, expected);
 }
 
-int bch2_request_key(struct bch_sb *, struct bch_key *);
-
-struct bch_csum bch2_checksum_bio(struct bch_fs *, unsigned,
-				  struct nonce, struct bio *);
-
-int bch2_rechecksum_bio(struct bch_fs *, struct bio *, struct bversion,
-			struct bch_extent_crc_unpacked,
-			struct bch_extent_crc_unpacked *,
-			struct bch_extent_crc_unpacked *,
-			unsigned, unsigned, unsigned);
-
-int __bch2_encrypt_bio(struct bch_fs *, unsigned,
-		       struct nonce, struct bio *);
-
 static inline int bch2_encrypt_bio(struct bch_fs *c, unsigned type,
 				   struct nonce nonce, struct bio *bio)
 {
@@ -88,17 +71,6 @@ static inline int bch2_encrypt_bio(struct bch_fs *c, unsigned type,
 		? __bch2_encrypt_bio(c, type, nonce, bio)
 		: 0;
 }
-
-int bch2_decrypt_sb_key(struct bch_fs *, struct bch_sb_field_crypt *,
-			struct bch_key *);
-
-#if 0
-int bch2_disable_encryption(struct bch_fs *);
-int bch2_enable_encryption(struct bch_fs *, bool);
-#endif
-
-void bch2_fs_encryption_exit(struct bch_fs *);
-int bch2_fs_encryption_init(struct bch_fs *);
 
 static inline enum bch_csum_type bch2_csum_opt_to_type(enum bch_csum_opt type,
 						       bool data)

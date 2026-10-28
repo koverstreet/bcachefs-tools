@@ -365,13 +365,14 @@ pub mod c {
     #[cfg(feature = "std")]
     impl ZeroizeOnDrop for bch_encrypted_key {}
 
-    // In-kernel: no `zeroize` crate. Overwrite the bytes with volatile writes +
-    // a compiler fence so the store can't be optimized away as dead — the wipe
-    // is the point (same technique the `zeroize` crate uses internally).
-    #[cfg(not(feature = "std"))]
-    fn wipe<T>(v: &mut T) {
+    // memzero_explicit(): volatile writes + a compiler fence, so the store
+    // can't be optimized away as dead - the wipe is the point (the technique
+    // the `zeroize` crate uses internally). The keys' Drop in-kernel, which
+    // has no `zeroize`; and in both builds, key material that isn't a bch_key.
+    pub(crate) fn wipe<T: ?Sized>(v: &mut T) {
+        let len = core::mem::size_of_val(v);
         let p = (v as *mut T).cast::<u8>();
-        for i in 0..core::mem::size_of::<T>() {
+        for i in 0..len {
             unsafe { core::ptr::write_volatile(p.add(i), 0) };
         }
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);

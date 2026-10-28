@@ -5,7 +5,8 @@
 
 use crate::c;
 use crate::data::checksum::{BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::errcode::BchError;
+use crate::fs::Fs;
 use crate::types::Le32;
 use crate::util::vstructs::Head;
 use core::mem::offset_of;
@@ -36,7 +37,8 @@ impl c::bset__head {
 /// @i points to a bset and the u64s of keys it says it has, at byte @offset
 /// of a btree node: at offset 0, the bset of a struct btree_node.
 pub unsafe fn bset_encrypt(c: *mut c::bch_fs, i: *mut Head<c::bset>, offset: u32) -> Result<(), BchError> {
-    let csum_type = (*i).csum_type() as u32;
+    let fs = Fs::borrow_raw(c);
+    let csum_type = c::bch_csum_type((*i).csum_type() as u32);
     let mut nonce = (*i).nonce(offset);
 
     if offset == 0 {
@@ -45,12 +47,11 @@ pub unsafe fn bset_encrypt(c: *mut c::bch_fs, i: *mut Head<c::bset>, offset: u32
         let start = offset_of!(Head<c::btree_node>, flags);
         let bytes = keys - start;
 
-        ret_to_result_void(c::bch2_encrypt(c, csum_type, nonce, bn.byte_add(start).cast(), bytes))?;
+        fs.encrypt(csum_type, nonce, core::slice::from_raw_parts_mut(bn.byte_add(start).cast(), bytes))?;
         nonce = nonce + (bytes as u32).next_multiple_of(CHACHA_BLOCK_SIZE);
     }
 
     // its keys: its tail, past its header
-    ret_to_result_void(c::bch2_encrypt(c, csum_type, nonce,
-                                       i.byte_add(size_of::<Head<c::bset>>()).cast(),
-                                       (*i).u64s() * 8))
+    fs.encrypt(csum_type, nonce,
+               core::slice::from_raw_parts_mut(i.byte_add(size_of::<Head<c::bset>>()).cast(), (*i).u64s() * 8))
 }

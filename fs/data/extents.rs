@@ -418,12 +418,11 @@ pub fn extent_merge(fs: &Fs, l: BkeyS<'_>, r: BkeySC<'_>) -> bool {
                 use_right_ptr = true;
             }
             CrcMerge::Both => {
-                // SAFETY: plain values. The csum type is mergeable, as
-                // bch2_checksum_merge() BUG()s if it isn't: ptrs_mergeable()
-                // checked it, with the pointer after this entry - validate
-                // has one after every crc entry
-                cl.csum = unsafe { c::bch2_checksum_merge(cl.csum_type.into(), cl.csum, cr.csum,
-                                                          (cr.uncompressed_size << 9) as usize) };
+                // The csum type is mergeable, as merge() panics if it isn't:
+                // ptrs_mergeable() checked it, with the pointer after this
+                // entry - validate has one after every crc entry
+                cl.csum = c::bch_csum_type(cl.csum_type.into())
+                    .merge(cl.csum, cr.csum, (cr.uncompressed_size << 9) as usize);
                 cl.uncompressed_size += cr.uncompressed_size;
                 cl.compressed_size += cr.compressed_size;
                 el.set_crc(&cl).expect("a merged crc fits: its size was checked against the entry's");

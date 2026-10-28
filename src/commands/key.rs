@@ -175,7 +175,7 @@ fn cmd_set_passphrase(cli: SetPassphraseCli) -> Result<()> {
     let encrypted_key = new_passphrase.encrypt_key(&sb, raw_key)?;
 
     set_crypt_key(&mut sb, encrypted_key);
-    unsafe { c::bch2_revoke_key(sb.sb) };
+    let _ = bcachefs_kernel::data::checksum::revoke_key(sb.sb());
     write_crypt_super(&fs, &mut sb)
 }
 

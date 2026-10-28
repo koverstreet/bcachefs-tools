@@ -10,7 +10,7 @@ use bcachefs_kernel::btree;
 use bcachefs_kernel::btree::bkey::{BkeyI, BkeyS};
 use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::c;
-use bcachefs_kernel::errcode::{ret_to_result_void, BchError};
+use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::{entry_type, journal_entry_type};
 use bcachefs_kernel::util::vstructs::{assume_validated, cast_plain, Head, SelfSized, Unvalidated};
@@ -32,18 +32,15 @@ fn jset_encrypt(fs: &Fs, j: &mut c::jset<Unvalidated>, csum_type: u32) -> Result
     let off = std::mem::offset_of!(Head<c::jset>, encrypted_start);
     let (nonce, len) = (j.nonce(), size_of_val(j) - off);
     // SAFETY: the jset's bytes, past encrypted_start: its pointer reaches all of them
-    ret_to_result_void(unsafe {
-        c::bch2_encrypt(fs.as_ptr(), csum_type, nonce, j.as_ffi_mut().cast::<u8>().add(off).cast(), len)
-    })
+    fs.encrypt(c::bch_csum_type(csum_type), nonce,
+               unsafe { std::slice::from_raw_parts_mut(j.as_ffi_mut().cast::<u8>().add(off), len) })
 }
 
 fn jset_csum_set(fs: &Fs, j: &mut c::jset<Unvalidated>, csum_type: u32) {
     let off = std::mem::size_of::<c::bch_csum>();
     // SAFETY: the jset's bytes, past its csum: its pointer reaches all of them
-    j.csum = unsafe {
-        c::bch2_checksum(fs.as_ptr(), csum_type, j.nonce(), j.as_ffi().cast::<u8>().add(off).cast(),
-                         size_of_val(j) - off)
-    };
+    let bytes = unsafe { std::slice::from_raw_parts(j.as_ffi().cast::<u8>().add(off), size_of_val(j) - off) };
+    j.csum = fs.checksum(c::bch_csum_type(csum_type), j.nonce(), bytes);
 }
 
 /// @node points at the btree_node (first bset) or btree_node_entry, whose first
@@ -52,9 +49,8 @@ fn bset_csum_set(fs: &Fs, node: *mut u8, i: *mut Head<c::bset>, offset: u32,
                  csum_type: u32, vstruct_bytes: usize) {
     let off = std::mem::size_of::<c::bch_csum>();
     let csum = unsafe {
-        c::bch2_checksum(fs.as_ptr(), csum_type, (*i).nonce(offset),
-                         node.add(off) as *const core::ffi::c_void,
-                         vstruct_bytes - off)
+        fs.checksum(c::bch_csum_type(csum_type), (*i).nonce(offset),
+                    std::slice::from_raw_parts(node.add(off), vstruct_bytes - off))
     };
     unsafe { *(node as *mut c::bch_csum) = csum };
 }
