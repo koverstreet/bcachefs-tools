@@ -532,6 +532,21 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self.trans.fs()
     }
 
+    /// What the commit in progress changes usage by, as its triggers
+    /// accounted it.
+    pub fn fs_usage_delta(&self) -> c::bch_fs_usage_base {
+        // SAFETY: the transaction's, ours while we have it
+        unsafe { (*self.raw()).fs_usage_delta }
+    }
+
+    /// The disk reservation the commit in progress charges, if it was given
+    /// one.
+    pub fn disk_res(&self) -> Option<&DiskReservation<'t>> {
+        // SAFETY: commit()'s caller's, which outlives the commit - and the
+        // attempt
+        unsafe { (*self.raw()).disk_res.as_ref() }
+    }
+
     pub fn verify_not_restarted(&self) {
         if !self.spent.get() {
             self.trans.verify_not_restarted(self.restart_count.get());
