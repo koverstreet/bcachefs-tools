@@ -27,6 +27,7 @@ pub mod kthread;
 pub mod list;
 pub mod log;
 pub mod module_param;
+pub mod ops;
 pub mod os_str;
 pub mod par;
 pub mod percpu;

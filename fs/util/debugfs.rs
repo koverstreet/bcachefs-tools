@@ -151,7 +151,7 @@ pub unsafe fn create_file<F: DebugFile>(name: &CStr, parent: NonNull<c::dentry>,
     unsafe {
         c::bch2_debugfs_create_file(name.as_ptr().cast(), 0o400, parent.as_ptr(),
                                     core::ptr::from_ref(obj).cast_mut().cast(),
-                                    FileVTable::<Open<F>>::ops());
+                                    &FileVTable::<Open<F>>::OPS);
     }
 }
 

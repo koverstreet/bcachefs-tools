@@ -29,13 +29,15 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::util::alloc::KBox;
 use crate::util::ffi::{c_char, Opaque};
-use core::marker::PhantomData;
+use crate::util::ops::{from_raw, SelfOf};
+use core::ffi::c_int;
 use core::pin::Pin;
 
 #[cfg(kernel)]
 use {
     crate::errcode::errptr_to_result,
-    core::ffi::c_void,
+    core::ffi::{c_uint, c_void},
+    core::marker::PhantomData,
     core::mem::MaybeUninit,
     core::ptr::NonNull,
     kernel::fs::file::FileDescriptorReservation,
@@ -43,12 +45,9 @@ use {
     crate::util::kernel::current_comm,
 };
 
-use core::ffi::{c_int, c_uint};
 // long, as the bindings have it: the kernel's is isize, core's i64
 #[cfg(kernel)]
 use kernel::ffi::{c_long as CLong, c_ulong as CUlong};
-#[cfg(not(kernel))]
-use core::ffi::{c_long as CLong, c_ulong as CUlong};
 
 #[repr(transparent)]
 pub struct File(Opaque<c::file>);
@@ -64,50 +63,112 @@ impl File {
         self.0.as_ptr()
     }
 
+    /// The dentry it was opened by.
+    #[cfg(kernel)]
+    pub fn dentry(&self) -> *mut c::dentry {
+        // 6.18 made f_path a const union member, __f_path its writable alias
+        #[cfg(linux_ge = "6.18")]
+        unsafe { (*self.as_ptr()).__bindgen_anon_1.f_path.dentry }
+        #[cfg(not(linux_ge = "6.18"))]
+        unsafe { (*self.as_ptr()).f_path.dentry }
+    }
+
+    /// FMODE_*: set at open.
+    #[cfg(kernel)]
+    pub fn mode(&self) -> c::fmode_t {
+        unsafe { (*self.as_ptr()).f_mode }
+    }
+
+    /// O_*: as READ_ONCE(), as fcntl() changes them.
+    #[cfg(kernel)]
+    pub fn flags(&self) -> u32 {
+        unsafe { core::ptr::read_volatile(&raw const (*self.as_ptr()).f_flags) }
+    }
+
     #[cfg(kernel)]
     pub fn nonblock(&self) -> bool {
-        // SAFETY: as READ_ONCE(): fcntl() changes it
-        let flags = unsafe { core::ptr::read_volatile(&raw const (*self.as_ptr()).f_flags) };
-        flags & c::O_NONBLOCK != 0
+        self.flags() & c::O_NONBLOCK != 0
     }
 }
 
-/// Implemented with cstruct_macros' #[vtable], which sets HAS_* for the ops
-/// an impl has.
-pub trait FileOps: Sized + Send + Sync + 'static {
-    const HAS_OPEN:  bool = false;
-    const HAS_READ:  bool = false;
-    const HAS_WRITE: bool = false;
-    const HAS_POLL:  bool = false;
-    const HAS_FLUSH: bool = false;
-    const HAS_IOCTL: bool = false;
+crate::vfs_ops! {
+    pub trait FileOps: Send + Sync for c::file_operations, FileVTable<P: FileData> = P::Ops, |ops| {
+        assert!(!<P::Ops>::HAS_OPEN || P::OPENABLE, "open() makes the ops' type, not the private data");
+        ops.release = Some(Self::release);
+        #[cfg(kernel)]
+        {
+            ops.owner = &raw mut kernel::bindings::__this_module;
+        }
+    };
 
     /// For a file opened by path: its private data.
-    fn open(_inode: &Opaque<c::inode>, _file: &File) -> Result<Pin<KBox<Self>>, BchError> {
-        unreachable!("not in the vtable")
-    }
-
-    fn read(&self, _file: &File, _buf: &mut UserBuf) -> Result<(), BchError> {
-        unreachable!("not in the vtable")
-    }
-
-    fn write(&self, _file: &File, _buf: &mut UserBuf) -> Result<(), BchError> {
-        unreachable!("not in the vtable")
-    }
-
+    fn open(inode: &Opaque<c::inode>, file: &File) -> Result<Pin<KBox<Self>>, BchError>
+        => extern (inode: *mut c::inode, file: *mut c::file) -> c_int
+    {
+        // SAFETY: a file being opened, and its inode
+        let (i, f) = unsafe { (&*inode.cast::<Opaque<c::inode>>(), File::from_raw(file)) };
+        match <P::Ops>::open(i, f) {
+            Ok(p) => {
+                unsafe { (*file).private_data = into_private(P::opened(p)) };
+                0
+            }
+            Err(e) => e.class(),
+        }
+    };
+    fn read(&self = file, file: &File, buf: &mut UserBuf) -> Result<(), BchError>
+        => extern (file: *mut c::file, buf: *mut c_char, len: usize, _ppos: *mut c::loff_t) -> isize
+    {
+        let mut u = UserBuf::new(buf, len);
+        // SAFETY: an open file of P's
+        let r = unsafe { file_data::<P>(file).ops().read(File::from_raw(file), &mut u) };
+        u.ret(r)
+    };
     #[cfg(kernel)]
-    fn poll(&self, _file: &File, _pt: &PollTable<'_>) -> u32 {
-        unreachable!("not in the vtable")
-    }
-
+    fn write(&self = file, file: &File, buf: &mut UserBuf) -> Result<(), BchError>
+        => extern (file: *mut c::file, buf: *const c_char, len: usize, _ppos: *mut c::loff_t) -> isize
+    {
+        let mut u = UserBuf::new(buf, len);
+        // SAFETY: an open file of P's
+        let r = unsafe { file_data::<P>(file).ops().write(File::from_raw(file), &mut u) };
+        u.ret(r)
+    };
+    #[cfg(kernel)]
+    fn poll(&self = file, file: &File, pt: PollTable<'_>) -> u32;
     /// What close(2) returns.
-    fn flush(&self, _file: &File) -> c_int {
-        unreachable!("not in the vtable")
-    }
+    #[cfg(kernel)]
+    fn flush(&self = file, file: &File) -> c_int
+        => extern (file: *mut c::file, _id: c::fl_owner_t) -> c_int
+    {
+        // SAFETY: an open file of P's
+        unsafe { file_data::<P>(file).ops().flush(File::from_raw(file)) }
+    };
+    #[cfg(kernel)]
+    fn unlocked_ioctl(&self = file, file: &File, cmd: c_uint, arg: CUlong) -> CLong;
+    #[cfg(kernel)]
+    fn compat_ioctl(&self = file, file: &File, cmd: c_uint, arg: CUlong) -> CLong;
+    /// The new position.
+    #[cfg(kernel)]
+    fn llseek(&self = file, file: &File, offset: i64, whence: c_int) -> c::loff_t;
+    #[cfg(kernel)]
+    fn iterate_shared(&self = file, file: &File, ctx: *mut c::dir_context) -> Result<(), BchError>;
+    #[cfg(kernel)]
+    fn fsync(&self = file, file: &File, start: i64, end: i64, datasync: c_int)
+        -> Result<(), BchError>;
+}
 
-    fn ioctl(&self, _file: &File, _cmd: c_uint, _arg: CUlong) -> CLong {
-        unreachable!("not in the vtable")
-    }
+from_raw! {
+    &'a File = *mut c::file => |r| File::from_raw(r);
+}
+
+#[cfg(kernel)]
+from_raw! {
+    PollTable<'a> = *mut c::poll_table => |r| PollTable(r, PhantomData);
+}
+
+// SAFETY: SelfOf's: the private data of a file of FileVTable::<P>'s is a P
+impl<P: FileData> SelfOf<P> for *mut c::file {
+    type Out = P::Ops;
+    unsafe fn self_of<'a>(&self) -> &'a P::Ops { unsafe { file_data::<P>(*self).ops() } }
 }
 
 /// A file's private data: the T whose ops the file has, or something holding
@@ -138,98 +199,11 @@ impl<T: FileOps> FileData for T {
     }
 }
 
-pub struct FileVTable<P>(PhantomData<P>);
-
 impl<P: FileData> FileVTable<P> {
-    const OPS: c::file_operations = {
-        // SAFETY: zero is NULL, "not implemented"
-        let mut ops: c::file_operations = unsafe { core::mem::zeroed() };
-        #[cfg(kernel)]
-        {
-            ops.owner = &raw mut kernel::bindings::__this_module;
-        }
-        ops.release = Some(Self::release);
-        if <P::Ops>::HAS_OPEN {
-            assert!(P::OPENABLE, "open() makes the ops' type, not the private data");
-            ops.open = Some(Self::open);
-        }
-        if <P::Ops>::HAS_READ {
-            ops.read = Some(Self::read);
-        }
-        // the shim's file_operations has only open, release and read
-        #[cfg(kernel)]
-        {
-            if <P::Ops>::HAS_WRITE {
-                ops.write = Some(Self::write);
-            }
-            if <P::Ops>::HAS_POLL {
-                ops.poll = Some(Self::poll);
-            }
-            if <P::Ops>::HAS_FLUSH {
-                ops.flush = Some(Self::flush);
-            }
-            if <P::Ops>::HAS_IOCTL {
-                ops.unlocked_ioctl = Some(Self::ioctl);
-            }
-        }
-        ops
-    };
-
-    pub fn ops() -> &'static c::file_operations {
-        &Self::OPS
-    }
-
-    unsafe extern "C" fn open(inode: *mut c::inode, file: *mut c::file) -> c_int {
-        // SAFETY: a file being opened, and its inode
-        let (inode, f) = unsafe { (&*inode.cast::<Opaque<c::inode>>(), File::from_raw(file)) };
-        match <P::Ops>::open(inode, f) {
-            Ok(p) => {
-                unsafe { (*file).private_data = into_private(P::opened(p)) };
-                0
-            }
-            Err(e) => e.class(),
-        }
-    }
-
     unsafe extern "C" fn release(_inode: *mut c::inode, file: *mut c::file) -> c_int {
         // SAFETY: open()'s or NewFile::new()'s, and the file's last use
         drop(unsafe { from_private::<P>((*file).private_data) });
         0
-    }
-
-    unsafe extern "C" fn read(file: *mut c::file, buf: *mut c_char, len: usize,
-                              _ppos: *mut c::loff_t) -> isize {
-        let mut u = UserBuf::new(buf, len);
-        // SAFETY: an open file of P's
-        let r = unsafe { file_data::<P>(file).ops().read(File::from_raw(file), &mut u) };
-        u.ret(r)
-    }
-
-    #[cfg(kernel)]
-    unsafe extern "C" fn write(file: *mut c::file, buf: *const c_char, len: usize,
-                               _ppos: *mut c::loff_t) -> isize {
-        let mut u = UserBuf::new(buf, len);
-        // SAFETY: an open file of P's
-        let r = unsafe { file_data::<P>(file).ops().write(File::from_raw(file), &mut u) };
-        u.ret(r)
-    }
-
-    #[cfg(kernel)]
-    unsafe extern "C" fn poll(file: *mut c::file, pt: *mut c::poll_table) -> c::__poll_t {
-        // SAFETY: an open file of P's, and the table it's polled with
-        unsafe { file_data::<P>(file).ops().poll(File::from_raw(file), &PollTable(pt, PhantomData)) }
-    }
-
-    #[cfg(kernel)]
-    unsafe extern "C" fn flush(file: *mut c::file, _id: c::fl_owner_t) -> c_int {
-        // SAFETY: an open file of P's
-        unsafe { file_data::<P>(file).ops().flush(File::from_raw(file)) }
-    }
-
-    #[cfg(kernel)]
-    unsafe extern "C" fn ioctl(file: *mut c::file, cmd: c_uint, arg: CUlong) -> CLong {
-        // SAFETY: an open file of P's
-        unsafe { file_data::<P>(file).ops().ioctl(File::from_raw(file), cmd, arg) }
     }
 }
 
@@ -274,7 +248,7 @@ impl<P: FileData> NewFile<P> {
 
         let p = into_private(data);
         let file = unsafe {
-            c::anon_inode_getfile(name.as_cstr().as_ptr().cast(), FileVTable::<P>::ops(), p, flags as c_int)
+            c::anon_inode_getfile(name.as_cstr().as_ptr().cast(), &FileVTable::<P>::OPS, p, flags as c_int)
         };
         match errptr_to_result(NonNull::new(file).expect("a file, or an error")) {
             // SAFETY: anon_inode_getfile()'s ref, now ours

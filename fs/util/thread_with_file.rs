@@ -425,15 +425,15 @@ impl<T: StdioFile> FileOps for Stdio<T> {
         self.redirect.write_user(buf, file.nonblock())
     }
 
-    fn poll(&self, file: &File, pt: &PollTable<'_>) -> u32 {
-        self.redirect.poll(file, pt)
+    fn poll(&self, file: &File, pt: PollTable<'_>) -> u32 {
+        self.redirect.poll(file, &pt)
     }
 
     fn flush(&self, _file: &File) -> c_int {
         self.ret.load(Ordering::Relaxed)
     }
 
-    fn ioctl(&self, _file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
+    fn unlocked_ioctl(&self, _file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
         self.data.ioctl(cmd, arg)
     }
 }

@@ -326,6 +326,10 @@ unsafe impl<G: Send, P: Sync> Sync for LockedBy<G, P> {}
 unsafe impl<G: ::pin_init::Zeroable, P: ::pin_init::Zeroable> ::pin_init::Zeroable for LockedBy<G, P> {}
 
 impl<G, P> LockedBy<G, P> {
+    pub const fn new(protected: G, published: P) -> Self {
+        LockedBy { protected: UnsafeCell::new(protected), published }
+    }
+
     /// # Safety
     /// The lock that protects it is held, for as long as the reference
     /// lives, and nothing has a &mut of it.
