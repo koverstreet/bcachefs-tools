@@ -368,33 +368,60 @@ pub struct bch_fs_allocator {
     /* fs-wide allocator wake generation; see bch2_alloc_wake_all() */
     pub wake_all_counter: AtomicI32,
 
+    /* the open buckets not in use, and the partial list */
     #[pin]
-    #[init(new_lock!((), "&c->allocator.freelist_lock"))]
-    #[c("spinlock_t freelist_lock")]
-    pub freelist_lock: Lock<c::spinlock_t>,
+    #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&c->allocator.freelist_lock"))]
+    #[c_lock("spinlock_t freelist_lock")]
+    pub freelist_lock: Lock<c::spinlock_t, OpenBucketsFree, OpenBucketsFreeNr>,
     pub freelist_wait: c::closure_waitlist,
     pub last_stuck: c_ulong,
 
-    #[c("open_bucket_idx_t open_buckets_freelist")]
-    pub open_buckets_freelist: Option<OpenBucketIdx>,
-    pub open_buckets_nr_free: c::open_bucket_idx_t,
     pub open_buckets_wait: c::closure_waitlist,
     #[pin]
     pub open_buckets: [c::open_bucket; c::OPEN_BUCKETS_COUNT as usize],
     #[c("open_bucket_idx_t open_buckets_hash[OPEN_BUCKETS_COUNT]")]
     pub open_buckets_hash: [Option<OpenBucketIdx>; c::OPEN_BUCKETS_COUNT as usize],
 
-    #[c("open_bucket_idx_t open_buckets_partial[OPEN_BUCKETS_COUNT]")]
-    pub open_buckets_partial: [Option<OpenBucketIdx>; c::OPEN_BUCKETS_COUNT as usize],
-    pub open_buckets_partial_nr: c::open_bucket_idx_t,
-
     pub write_points: [c::write_point; c::WRITE_POINT_MAX as usize],
     pub write_points_hash: [c::hlist_head; c::WRITE_POINT_HASH_NR as usize],
-    pub write_points_hash_lock: c::mutex,
-    pub write_points_nr: c_uint,
+    /* the hash's writers - its readers are RCU's - and write_points_nr */
+    #[pin]
+    #[init(new_lock!((), ::pin_init::zeroed(), "&c->allocator.write_points_hash_lock"))]
+    #[c_lock("struct mutex write_points_hash_lock")]
+    pub write_points_hash_lock: Lock<c::mutex, (), WritePointsNr>,
 
     pub btree_write_point: c::write_point,
     pub reconcile_write_point: c::write_point,
+}
+
+/* freelist_lock's: the open buckets not in use, and the partial list */
+#[repr(C)]
+#[derive(CStruct)]
+pub struct OpenBucketsFree {
+    #[c("open_bucket_idx_t open_buckets_freelist")]
+    pub open_buckets_freelist: Option<OpenBucketIdx>,
+    #[c("open_bucket_idx_t open_buckets_partial[OPEN_BUCKETS_COUNT]")]
+    pub open_buckets_partial: [Option<OpenBucketIdx>; c::OPEN_BUCKETS_COUNT as usize],
+}
+
+published! {
+    /// How many there are of each, read without freelist_lock: whether
+    /// there's an open bucket to be had, whether the partial list is worth
+    /// taking the lock for.
+    #[derive(CStruct)]
+    pub struct OpenBucketsFreeNr {
+        pub open_buckets_nr_free: Volatile<c::open_bucket_idx_t>,
+        pub open_buckets_partial_nr: Volatile<c::open_bucket_idx_t>,
+    }
+}
+
+published! {
+    /// The write points in use, of write_points[], read without
+    /// write_points_hash_lock.
+    #[derive(CStruct)]
+    pub struct WritePointsNr {
+        pub write_points_nr: Volatile<c_uint>,
+    }
 }
 
 /// The discard worker's: its work, its bios, the discards in flight - see
