@@ -86,7 +86,7 @@ KBUILD_RUSTFLAGS := $(filter-out $(bch-vr-fp-flag) $(bch-vr-uwt-flag),$(KBUILD_R
 # there's no LTO (init/Kconfig); outside that our DWARF breaks the module's BTF
 # (#1086), so build without debuginfo.
 ifdef CONFIG_DEBUG_INFO_BTF_MODULES
-ifneq ($(CONFIG_PAHOLE_HAS_LANG_EXCLUDE)$(CONFIG_LTO),y)
+ifneq ($(CONFIG_PAHOLE_HAS_LANG_EXCLUDE):$(CONFIG_LTO),y:)
 KBUILD_RUSTFLAGS := $(filter-out $(DEBUG_RUSTFLAGS),$(KBUILD_RUSTFLAGS)) -Cdebuginfo=0
 endif
 endif
