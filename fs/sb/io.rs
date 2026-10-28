@@ -141,6 +141,7 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::sb::members;
 use crate::util::bitmap::LeBitmap;
 use crate::util::projections::{AtomicWord, Volatile, VolatileWriter};
+use crate::util::names::{self, Names};
 use crate::util::{Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64};
@@ -300,21 +301,6 @@ fn validate_at(sb: &mut bch_sb<Unvalidated>, off: usize, flags: c::bch_validate_
 const FIELD_NR: usize = c::bch_sb_field_type::BCH_SB_FIELD_NR.0 as usize;
 const _: () = assert!(FIELD_NR <= 64, "bch_sb_buf.dirty: a bit per section type");
 
-macro_rules! sb_fields {
-    ($(($name:ident, $nr:literal, $($desc:literal)*)),* $(,)?) => {
-        /// By type.
-        const FIELD_NAMES: [&str; FIELD_NR] = [$(stringify!($name)),*];
-
-        // by type, as C's table is by position: in order, from 0
-        const _: () = {
-            let mut i = 0;
-            $(assert!($nr == i, "BCH_SB_FIELDS(): types out of order"); i += 1;)*
-            let _ = i;
-        };
-    };
-}
-c::BCH_SB_FIELDS!(sb_fields);
-
 /// A section's to_cpu() or from_cpu(), as the union hands it out.
 pub type SbSyncFn = fn(&Fs, &mut SbLockGuard<'_>) -> Result<(), BchError>;
 
@@ -386,14 +372,9 @@ macro_rules! sb_field_ops {
 c::BCH_SB_FIELDS!(sb_field_ops);
 
 impl c::bch_sb_field_type {
-    /// Its name: None for a type this version doesn't know.
-    pub fn name(self) -> Option<&'static str> {
-        FIELD_NAMES.get(self.0 as usize).copied()
-    }
-
     /// The type named @name.
     pub fn from_name(name: &str) -> Option<Self> {
-        FIELD_NAMES.iter().position(|&n| n == name).map(|t| Self(t as u32))
+        Self::ENTRIES.iter().find(|&&(n, _)| n == name).map(|&(_, t)| Self(t as u32))
     }
 }
 
@@ -435,11 +416,7 @@ pub fn field_ops_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvali
 /// Section @f: its type, its size, and what it holds.
 pub fn field_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
                      f: &c::bch_sb_field<Unvalidated>) {
-    let ty = c::bch_sb_field_type(f.type_.get());
-    match ty.name() {
-        Some(name) => write!(out, "{name}"),
-        None => write!(out, "(unknown field {})", ty.0),
-    }
+    write!(out, "{}", c::bch_sb_field_type(f.type_.get()));
     write!(out, " (size {}):", f.as_bytes().len());
     out.newline();
 
@@ -520,21 +497,6 @@ fn sb_compatible(sb: &Head<bch_sb>, out: &mut Printbuf) -> Result<(), BchError> 
     Ok(())
 }
 
-macro_rules! feature_names {
-    ($(($name:ident, $nr:literal)),* $(,)?) => {
-        /// The features' names, by bit.
-        const FEATURE_NAMES: [&str; c::BCH_FEATURE_NR as usize] = [$(stringify!($name)),*];
-
-        // by bit, as C's table is by position: in order, from 0
-        const _: () = {
-            let mut i = 0;
-            $(assert!($nr == i, "BCH_SB_FEATURES(): bits out of order"); i += 1;)*
-            let _ = i;
-        };
-    };
-}
-c::BCH_SB_FEATURES!(feature_names);
-
 /// Superblock @sb checked - its header, its layout, every section - before
 /// anything trusts it: as read from @read_offset, or about to be written,
 /// BCH_VALIDATE_write. Read, a few things are repaired in place: an
@@ -558,7 +520,7 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
 
         if incompat_bit != 0 {
             write!(out, "Filesystem has incompatible feature bit {incompat_bit}, highest supported {} ({})",
-                   FEATURE_NAMES[c::BCH_FEATURE_NR as usize - 1], c::BCH_FEATURE_NR - 1);
+                   c::bch_sb_feature(c::BCH_FEATURE_NR - 1), c::BCH_FEATURE_NR - 1);
             return Err(bch_errcode::BCH_ERR_invalid_sb_features.into());
         }
 
@@ -971,7 +933,7 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
 
     write!(out, "Sections:\t");
     let have = sb.entries().map_while(Result::ok).fold(0u64, |m, f| m | 1u64.checked_shl(f.type_.get()).unwrap_or(0));
-    out.bitflags(&FIELD_NAMES, have);
+    names::prt_set::<c::bch_sb_field_type>(out, have);
     out.newline();
 
     write!(out, "Features:\t");

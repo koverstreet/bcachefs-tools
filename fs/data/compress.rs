@@ -48,7 +48,7 @@ use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
 use crate::util::{alloc::{flags::{GFP_KERNEL, GFP_NOWAIT, __GFP_NOWARN}, kmalloc, KVVec}, bio::{Bio, BioRange},
                   ffi::Opaque, kernel::{READ, WRITE}, log::LogMsg, mempool::Mempool,
-                  volatile::VolatileSlice, Printbuf};
+                  volatile::VolatileSlice, Printbuf, ToText};
 use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
@@ -62,11 +62,6 @@ crate::module_param! {
 
 const OPT_NR: usize = opts::BCH_COMPRESSION_OPT_NR.0 as usize;
 
-macro_rules! names {
-    ($(($t:ident, $n:literal)),* $(,)?) => { [$(::core::stringify!($t)),*] };
-}
-const OPT_NAMES: [&str; OPT_NR] = c::BCH_COMPRESSION_OPTS!(names);
-const TYPE_NAMES: [&str; ty::BCH_COMPRESSION_TYPE_NR.0 as usize] = c::BCH_COMPRESSION_TYPES!(names);
 
 /// The opt whose pools decompress type @t.
 fn type_to_opt(t: ty) -> usize {
@@ -344,7 +339,7 @@ fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice<'_>, crc: 
      */
     if !fs.compress.workspace[opt].initialized() {
         if !fsck_err!(fs, id::compression_type_not_marked_in_sb,
-                      "compression type {} set but not marked in superblock", TYPE_NAMES[t.0 as usize])? {
+                      "compression type {} set but not marked in superblock", t)? {
             return fs.throw(e::BCH_ERR_compression_workspace_not_initialized);
         }
         check_set_has_compressed_data(fs, opt as u8)?;
@@ -603,7 +598,7 @@ fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], sr
 
     if !fs.compress.workspace[t].initialized() {
         let fix = fsck_err!(fs, id::compression_opt_not_marked_in_sb,
-                            "compression opt {} set but not marked in superblock", OPT_NAMES[t]);
+                            "compression opt {} set but not marked in superblock", opts(t as u32));
         // not to fix, fsck_err() failing, or no memory for the pools: don't compress
         if !matches!(fix, Ok(true)) || check_set_has_compressed_data(fs, t as u8).is_err() {
             return ty::BCH_COMPRESSION_TYPE_none;
@@ -687,7 +682,7 @@ fn verify(fs: &Fs, dst: VolatileSlice<'_>, src: &[u8], t: ty, pos: c::bpos) -> b
     }
 
     let mut msg = LogMsg::new(fs);
-    write!(msg, "Decompressing compressed data did not produce the same result ({})", TYPE_NAMES[t.0 as usize]);
+    write!(msg, "Decompressing compressed data did not produce the same result ({})", t);
     let trans = btree_trans!(fs);
     let _ = lockrestart_do(&trans, |t| {
         // SAFETY: the transaction's, and the message's
@@ -829,7 +824,8 @@ fn opt_parse(val: Option<&[u8]>, err: Option<&mut Printbuf>) -> Result<u64, BchE
     };
     let colon = s.iter().position(|&b| b == b':');
 
-    let Some(t) = OPT_NAMES.iter().position(|n| n.as_bytes() == &s[..colon.unwrap_or(s.len())]) else {
+    let names: &[&str] = crate::names_by_value!(opts);
+    let Some(t) = names.iter().position(|n| n.as_bytes() == &s[..colon.unwrap_or(s.len())]) else {
         if let Some(err) = err {
             writeln!(err, "invalid compression type");
         }
@@ -857,10 +853,7 @@ fn opt_parse(val: Option<&[u8]>, err: Option<&mut Printbuf>) -> Result<u64, BchE
 
 pub fn opt_to_text(out: &mut Printbuf, v: u64) {
     let bits = bch_compression_opt::bits(v as u8);
-    match OPT_NAMES.get(bits.type_() as usize) {
-        Some(name) => write!(out, "{name}"),
-        None => write!(out, "(unknown compression opt {})", bits.type_()),
-    };
+    opts(bits.type_().into()).to_text(out);
     if bits.level() != 0 {
         write!(out, ":{}", bits.level());
     }

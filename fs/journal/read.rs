@@ -68,10 +68,6 @@ pub fn entry_type(entry: &Head<c::jset_entry>) -> c::bch_jset_entry_type {
     c::bch_jset_entry_type(entry.type_ as u32)
 }
 
-pub fn entry_type_is_known(t: c::bch_jset_entry_type) -> bool {
-    t.0 < journal_entry_type::nr.0
-}
-
 /// Convert entry btree_id byte to the enum, if it's a known btree.
 pub fn entry_btree_id(entry: &Head<c::jset_entry>) -> Option<c::btree_id> {
     c::btree_id::from_raw(entry.btree_id as u32)

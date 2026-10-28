@@ -4,7 +4,7 @@ use bch_bindgen::c;
 use bcachefs_kernel::{BbposRange, bbpos_range_parse};
 use bcachefs_kernel::journal::{
     entry_type, entry_btree_id, entry_log_str_eq,
-    entry_type_is_known, journal_entry_type,
+    journal_entry_type,
 };
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::util::ToText;
@@ -320,11 +320,7 @@ fn journal_entry_indent(entry: &c::jset_entry) -> u32 {
 fn journal_entry_keys_noval_to_text(out: &mut Printbuf, entry: &c::jset_entry) {
     for k in entry.entries() {
         let t = entry_type(entry);
-        if entry_type_is_known(t) {
-            t.to_text(out);
-        } else {
-            write!(out, "(unknown jset entry {})", entry.type_);
-        }
+        t.to_text(out);
         write!(out, ": ");
         if let Some(btree) = entry_btree_id(entry) {
             unsafe {

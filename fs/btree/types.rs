@@ -1126,10 +1126,7 @@ impl From<c::btree_id> for u32 {
 /// Get a btree ID name string.
 #[cfg(feature = "std")]
 pub fn btree_id_str(id: u32) -> String {
-    match c::btree_id::from_raw(id) {
-        Some(btree_id) => format!("{}", btree_id),
-        None => format!("(unknown btree {})", id),
-    }
+    c::btree_id(id).to_string()
 }
 
 #[cfg(feature = "std")]

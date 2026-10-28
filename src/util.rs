@@ -122,10 +122,7 @@ pub fn subvol_root(path: &Path) -> Result<std::path::PathBuf> {
 /// The name of a bch_sb_error_id - the same table fsck and the
 /// superblock error counters use.
 pub fn sb_error_name(id: u32) -> String {
-    match c::bch_sb_error_id(id).name() {
-        Some(n) => n.to_owned(),
-        None => format!("(unknown error {id})"),
-    }
+    c::bch_sb_error_id(id).to_string()
 }
 
 /// Parse a human-readable size string (e.g. "1G", "512M") via bch2_strtoull_h.

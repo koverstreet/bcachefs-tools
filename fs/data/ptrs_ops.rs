@@ -238,28 +238,6 @@ fn crc_unpacked_to_text(out: &mut Printbuf, crc: &c::bch_extent_crc_unpacked) {
     c::bch_compression_type(crc.compression_type.into()).to_text(out);
 }
 
-/// An extent's flags, by name, as prt_bitflags() prints them: from the
-/// lowest, stopping at the first one without a name.
-fn extent_flags_to_text(out: &mut Printbuf, mut flags: u64) {
-    macro_rules! extent_flag_names {
-        ($(($name:tt, $n:expr)),* $(,)?) => {
-            const NAMES: &[&str] = &[$(stringify!($name),)*];
-        };
-    }
-    c::BCH_EXTENT_FLAGS!(extent_flag_names);
-
-    let mut first = true;
-    while flags != 0 {
-        let Some(name) = NAMES.get(flags.trailing_zeros() as usize) else { break };
-        if !first {
-            write!(out, ",");
-        }
-        first = false;
-        write!(out, "{name}");
-        flags &= flags - 1;
-    }
-}
-
 /// A key with pointers' entries, a line each: bch2_bkey_ptrs_to_text(). It
 /// prints keys validate rejected - that's what it's for - so an entry past
 /// the end of the value is reported, not read, and one of a type this code
@@ -301,7 +279,7 @@ pub fn bkey_ptrs_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>) {
             ExtentEntry::stripe_ptr(ec) => write!(out, "idx {} block {}", ec.idx(), ec.block()),
             ExtentEntry::rebalance_v1(r) => extent_rebalance_v1_to_text(&mut out, Some(fs), r),
             ExtentEntry::reconcile(r) => extent_reconcile_to_text(&mut out, Some(fs), r),
-            ExtentEntry::flags(f) => extent_flags_to_text(&mut out, f.flags()),
+            ExtentEntry::flags(f) => crate::util::names::prt_set::<c::bch_extent_flags_e>(&mut out, f.flags()),
             ExtentEntry::reconcile_bp(r) => write!(out, "idx {}", r.idx()),
             ExtentEntry::Unknown { bytes, .. } | ExtentEntry::Invalid { bytes, .. } |
             ExtentEntry::PastEnd { bytes, .. } => {

@@ -52,16 +52,6 @@ fn maybe_delay() {
 const PRINT_INTERVAL: u64 = 10 * 1_000_000_000;
 
 /// BCH_PROGRESS_UNITS()'s names, by value.
-macro_rules! progress_units {
-    ($(($name:tt, $value:expr $(, $($rest:tt)*)?)),* $(,)?) => {
-        const UNITS: &[(&str, u32)] = &[$((stringify!($name), $value),)*];
-    };
-}
-crate::c::BCH_PROGRESS_UNITS!(progress_units);
-
-fn units_str(units: c::bch_progress_units) -> &'static str {
-    UNITS.iter().find(|&&(_, v)| v == units.0).map_or("(unknown units)", |&(n, _)| n)
-}
 
 /// What an indicator says - copied out of the SeqLock whole.
 #[derive(Clone, Copy, ::pin_init::Zeroable)]
@@ -118,7 +108,7 @@ impl ToText for ProgressState {
         } else {
             0
         };
-        write!(out, "{percent}%, done {}/{} {}", self.seen, self.total, units_str(self.units));
+        write!(out, "{percent}%, done {}/{} {}", self.seen, self.total, self.units);
 
         // No node means no position: a counter-based indicator, or nothing seen yet
         if self.last_node != 0 {

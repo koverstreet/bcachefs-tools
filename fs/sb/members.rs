@@ -30,16 +30,8 @@ use super::io::*;
 // to edit one, bch_sb_handle::member_mut(), for a member that's all there.
 // ---------------------------------------------------------------------------
 
-// Member state names, by value: from BCH_MEMBER_STATES()
-macro_rules! member_state_names {
-    ($(($name:tt $(, $($rest:tt)*)?)),* $(,)?) => {
-        pub const MEMBER_STATE_NAMES: &[&str] = &[$(stringify!($name),)*];
-    };
-}
-c::BCH_MEMBER_STATES!(member_state_names);
-
 pub fn member_state_str(state: u8) -> &'static str {
-    MEMBER_STATE_NAMES.get(state as usize).copied().unwrap_or("unknown")
+    c::bch_member_state(state.into()).name().unwrap_or("unknown")
 }
 
 const BCH_MEMBER_V1_BYTES: usize = c::BCH_MEMBER_V1_BYTES as usize;
@@ -340,15 +332,9 @@ pub unsafe fn bch2_sb_member_get(sb: *mut Head<c::bch_sb>, i: c_int) -> c::bch_m
 
 // ── Validating, and printing ─────────────────────────────────────────────
 
-macro_rules! member_error_names {
-    ($(($name:tt, $n:tt)),* $(,)?) => { const MEMBER_ERROR_NAMES: &[&str] = &[$(stringify!($name),)*]; };
-}
-c::BCH_MEMBER_ERROR_TYPES!(member_error_names);
-
-macro_rules! iops_names {
-    ($(($name:tt, $n:tt)),* $(,)?) => { const IOPS_NAMES: &[&str] = &[$(stringify!($name),)*]; };
-}
-c::BCH_IOPS_MEASUREMENTS!(iops_names);
+/// By value, as a member's arrays of them are.
+const MEMBER_ERROR_NAMES: &[&str] = crate::names_by_value!(c::bch_member_error_type);
+const IOPS_NAMES: &[&str] = crate::names_by_value!(c::bch_iops_measurement);
 
 /// A __nonstring field: NUL terminated only if shorter than the field.
 fn nonstring(b: &[u8]) -> &[u8] {

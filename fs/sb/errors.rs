@@ -28,70 +28,17 @@ use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::ktime_get_real_seconds;
+use crate::util::names;
 use crate::util::{Printbuf, ToText};
 use crate::sb::io::SbResize;
 
 // ── Error ids, and their names ───────────────────────────────────────────────
 
-/// The ids, MAX's included: it's an entry, as C's table has it.
-const NR: usize = c::bch_sb_error_id::BCH_FSCK_ERR_MAX.0 as usize + 1;
-
-macro_rules! names {
-    ($(($name:ident, $id:literal $(, $($rest:tt)*)?)),* $(,)?) => {
-        /// By id, NUL terminated for C - BCH_SB_ERRS() has them in no order.
-        /// Evaluated at build time, so an id past MAX, a reused id or a gap
-        /// fails the build.
-        const NAMES: [&str; NR] = {
-            let mut by_id: [Option<&str>; NR] = [None; NR];
-            $(
-                assert!(by_id[$id].is_none(), concat!("sb error id reused: ", stringify!($name)));
-                by_id[$id] = Some(concat!(stringify!($name), "\0"));
-            )*
-
-            let mut names = [""; NR];
-            let mut i = 0;
-            while i < NR {
-                names[i] = match by_id[i] {
-                    Some(n) => n,
-                    None => panic!("sb error ids have a gap"),
-                };
-                i += 1;
-            }
-            names
-        };
-    };
-}
-c::BCH_SB_ERRS!(names);
-
+/// The ids' names, as C's table has them.
 #[c_export]
 #[c("const char * const bch2_sb_error_strs[]")]
-pub static bch2_sb_error_strs: [*const c_char; NR] = {
-    let mut strs = [core::ptr::null(); NR];
-    let mut i = 0;
-    while i < NR {
-        strs[i] = NAMES[i].as_ptr().cast();
-        i += 1;
-    }
-    strs
-};
-
-impl c::bch_sb_error_id {
-    /// Its BCH_SB_ERRS() name: None for one this version doesn't know, as a
-    /// newer version may have written.
-    pub fn name(self) -> Option<&'static str> {
-        let n = NAMES[..NR - 1].get(self.0 as usize)?;
-        Some(&n[..n.len() - 1])
-    }
-}
-
-impl ToText for c::bch_sb_error_id {
-    fn to_text(&self, out: &mut Printbuf) {
-        match self.name() {
-            Some(n) => write!(out, "{n}"),
-            None => write!(out, "(unknown error {})", self.0),
-        }
-    }
-}
+pub static bch2_sb_error_strs: [*const c_char; names::c_table_len::<c::bch_sb_error_id>()] =
+    crate::c_names_table!(c::bch_sb_error_id);
 
 #[c_export]
 pub fn bch2_sb_error_id_to_text(out: &mut Printbuf, id: c::bch_sb_error_id) {
