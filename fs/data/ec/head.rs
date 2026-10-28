@@ -13,6 +13,7 @@
 //! and coming back doesn't have reconcile rewrite every stripe's.
 
 use crate::alloc::disk_groups::Target;
+use crate::alloc::foreground::OpenBucket;
 use crate::btree::bkey::BkeyV;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
@@ -458,7 +459,7 @@ pub(crate) fn set_pending(fs: &Fs, b: StripeNewBox) {
 /// device we may allocate from that nobody else has taken - its io ref, the
 /// writer's. NULL means this stripe has nothing for us: its free blocks are
 /// all on devices we're excluded from.
-fn claim_bucket(req: &c::alloc_request, s: &StripeNew, i: &mut Internal) -> *mut c::open_bucket {
+fn claim_bucket(req: &c::alloc_request, s: &StripeNew, i: &mut Internal) -> Option<OpenBucket> {
     let nr_data = i.nr_data() as usize;
     for &dev in &req.devs_sorted.data[..req.devs_sorted.nr as usize] {
         for ec_idx in 0..nr_data {
@@ -469,21 +470,20 @@ fn claim_bucket(req: &c::alloc_request, s: &StripeNew, i: &mut Internal) -> *mut
                 };
                 let (claimed, ob) = b.claim(s.as_c(), ec_idx as u8);
                 i.blocks[ec_idx] = Slot::Bucket(StripeBlock::Claimed(claimed));
-                // the writer's, handed to C with the open bucket: its put
-                // adopts it
+                // the writer's, with the open bucket: its last put adopts it
                 IoRef::get(s).leak();
-                return ob;
+                return Some(ob);
             }
         }
     }
-    core::ptr::null_mut()
+    None
 }
 
 /// @h's stripe staged - allocated, its buffers, its task started - and a
-/// block of it claimed for this write, if @want_ob: NULL if it has none for
-/// us.
+/// block of it claimed for this write, if it's given @wp_stripe, its write
+/// point's: None if it has none for us.
 fn head_stage(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, h: &c::ec_stripe_head, g: &mut HeadGuard<'_>,
-              want_ob: bool) -> Result<*mut c::open_bucket, BchError> {
+              wp_stripe: Option<&mut c::dev_stripe_state>) -> Result<Option<OpenBucket>, BchError> {
     let fs = t.fs();
     if g.s.is_none() {
         let s = alloc_for_head(fs, h, g, req.ec_max_data_blocks.into())?;
@@ -517,24 +517,22 @@ fn head_stage(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, h: &c::ec_st
 
     // Has to come after the stripe's own allocation: that runs the bucket
     // allocator against the stripe's device mask, clobbering devs_sorted.
-    let ob = if want_ob {
-        // SAFETY: the write's write point, the caller's, locked
-        fs.dev_alloc_list(&mut unsafe { (*req.wp).alloc.lock.held() }.stripe, req);
+    let ob = wp_stripe.and_then(|stripe| {
+        fs.dev_alloc_list(stripe, req);
         claim_bucket(req, s, &mut i)
-    } else {
-        core::ptr::null_mut()
-    };
+    });
 
     t.verify_not_restarted();
     Ok(ob)
 }
 
 /// The stripe head for @req's erasure coding, locked, with a block of its
-/// stripe claimed for this write in @ob - if @ob isn't NULL, and it had one
-/// for us: or the error, an ec_alloc_failed subtype naming the reason.
-/// bch2_ec_stripe_head_get().
-pub(crate) fn head_get<'f>(t: &TransAttempt<'_, 'f>, req: &mut c::alloc_request, algo: u32, want_ob: bool)
-    -> Result<(&'f c::ec_stripe_head, HeadGuard<'f>, *mut c::open_bucket), BchError>
+/// stripe claimed for this write - if it's given @wp_stripe, its write
+/// point's, and it had one for us: or the error, an ec_alloc_failed subtype
+/// naming the reason. bch2_ec_stripe_head_get().
+pub(crate) fn head_get<'f>(t: &TransAttempt<'_, 'f>, req: &mut c::alloc_request, algo: u32,
+                           wp_stripe: Option<&mut c::dev_stripe_state>)
+    -> Result<(&'f c::ec_stripe_head, HeadGuard<'f>, Option<OpenBucket>), BchError>
 {
     let fs = t.fs();
     let redundancy = u32::from(req.ec_replicas).wrapping_sub(1);
@@ -545,7 +543,7 @@ pub(crate) fn head_get<'f>(t: &TransAttempt<'_, 'f>, req: &mut c::alloc_request,
     };
 
     let (h, mut g) = stripe_head_get(t, disk_label, algo, redundancy, req.watermark)?;
-    match head_stage(t, req, h, &mut g, want_ob) {
+    match head_stage(t, req, h, &mut g, wp_stripe) {
         Ok(ob) => Ok((h, g, ob)),
         Err(e) => {
             stripe_head_put(fs, g);
@@ -562,21 +560,27 @@ pub(crate) fn head_get<'f>(t: &TransAttempt<'_, 'f>, req: &mut c::alloc_request,
 /// head_get(), for C: the head locked, until bch2_ec_stripe_head_put().
 ///
 /// # Safety
-/// @trans in an attempt; @req the caller's, its write point too; @ob NULL,
-/// or where to put the block claimed.
+/// @trans in an attempt; @req the caller's; @ob NULL, or where to put the
+/// block claimed - and @req's write point locked.
 #[c_export]
 pub unsafe fn bch2_ec_stripe_head_get<'t>(trans: &'t BtreeTrans<'t>, req: &mut c::alloc_request, algo: c_uint,
                                           ob: *mut *mut c::open_bucket) -> *mut c::ec_stripe_head {
     // SAFETY: the caller's
     let t = unsafe { trans.attempt_in_progress() };
-    if let Some(ob) = unsafe { ob.as_mut() } {
-        *ob = core::ptr::null_mut();
+    let fs = t.fs();
+    let mut ob = unsafe { ob.as_mut() };
+    if let Some(ob) = ob.as_mut() {
+        **ob = core::ptr::null_mut();
     }
-    match head_get(&t, req, algo, !ob.is_null()) {
+    // SAFETY: the caller's, with @ob
+    let mut wp = ob.is_some().then(|| unsafe { (*req.wp).alloc.lock.held() });
+    match head_get(&t, req, algo, wp.as_mut().map(|wp| &mut wp.stripe)) {
         Ok((h, g, got)) => {
             g.leave_locked();
-            if let Some(ob) = unsafe { ob.as_mut() } {
-                *ob = got;
+            if let Some(ob) = ob.as_mut() {
+                **ob = got.map_or(core::ptr::null_mut(), |got| {
+                    core::ptr::from_ref(&fs.allocator.open_buckets[got.into_idx().get()]).cast_mut()
+                });
             }
             core::ptr::from_ref(h).cast_mut()
         }

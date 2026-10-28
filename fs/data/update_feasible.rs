@@ -245,7 +245,7 @@ impl TransAttempt<'_, '_> {
             // from the options; this probe runs uncapped
             req.ec_max_data_blocks = 0;
 
-            let (_, g, _) = head_get(self, &mut req, 0, false)?;
+            let (_, g, _) = head_get(self, &mut req, 0, None)?;
             stripe_head_put(fs, g);
         }
         Ok(())

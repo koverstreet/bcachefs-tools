@@ -203,19 +203,18 @@ impl RefGuard<OpenBucketRef> {
         idx
     }
 
-    /// Claimed by the writer of block @ec_idx of stripe @ec: its pin the
-    /// writer's - the bucket, for it - and its ->ec what keeps it open for the
-    /// stripe.
-    pub fn claim(self, ec: *mut c::ec_stripe_new, ec_idx: u8) -> (EcOpenBucket, *mut c::open_bucket) {
+    /// Claimed by the writer of block @ec_idx of stripe @ec: its pin, given
+    /// back, the writer's - the bucket, for it - and its ->ec what keeps it
+    /// open for the stripe.
+    pub fn claim(self, ec: *mut c::ec_stripe_new, ec_idx: u8) -> (EcOpenBucket, Self) {
         let ob = NonNull::from(&*self).cast::<c::open_bucket>();
-        self.leak();
         // SAFETY: ->ec and ->ec_idx are the pin's holder's to set, before the
         // bucket's handed on; its writer reads them once it has it
         unsafe {
             (*ob.as_ptr()).ec_idx.set(ec_idx);
             (*ob.as_ptr()).ec.store(ec, Relaxed);
         }
-        (EcOpenBucket { ob }, ob.as_ptr())
+        (EcOpenBucket { ob }, self)
     }
 
     /// Where its free space starts.
