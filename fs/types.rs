@@ -721,6 +721,8 @@ pub struct Fs {
     #[init(c::bch_fs_logged_ops::init())]
     pub logged_ops: c::bch_fs_logged_ops,
 
+    #[pin]
+    #[init(c::bch_fs_btree::init())]
     pub btree: c::bch_fs_btree,
 
     pub gc: c::bch_fs_gc,

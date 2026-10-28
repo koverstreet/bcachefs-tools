@@ -4,11 +4,14 @@
 
 use crate::cstructs::c;
 use crate::fs::Fs;
+use crate::locking::Lock;
+use crate::new_lock;
 use crate::types::c_default;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint};
 use core::sync::atomic::AtomicI32;
-use cstruct_macros::{CStruct, c_const, c_extern, TypeInfo};
+use cstruct_macros::{CStruct, Init, c_const, c_extern, TypeInfo};
+use pin_init::pin_data;
 
 #[repr(C)]
 #[derive(Default, CStruct)]
@@ -35,14 +38,22 @@ c_const! {
  * reserves fail halfway through) - instead, we can stick them here:
  */
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
-pub struct bch_fs_btree_reserve_cache {
-    pub lock: c::mutex,
+#[derive(CStruct)]
+pub struct BtreeReserveCache {
     pub nr: c_uint,
     #[c("struct btree_alloc data[BTREE_NODE_RESERVE * 2]")]
     pub data: [c::btree_alloc; c::BTREE_NODE_RESERVE as usize * 2],
 }
-c_default!(bch_fs_btree_reserve_cache);
+
+#[pin_data]
+#[repr(C)]
+#[derive(CStruct, TypeInfo, Init)]
+pub struct bch_fs_btree_reserve_cache {
+    #[pin]
+    #[init(new_lock!(<- ::pin_init::init_zeroed(), (), "&c->btree.reserve_cache.lock"))]
+    #[c_lock("struct mutex lock")]
+    pub lock: Lock<c::mutex, BtreeReserveCache>,
+}
 
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]

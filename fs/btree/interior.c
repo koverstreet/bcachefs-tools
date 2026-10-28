@@ -3947,7 +3947,6 @@ void bch2_fs_btree_interior_update_exit(struct bch_fs *c)
 
 void bch2_fs_btree_interior_update_init_early(struct bch_fs *c)
 {
-	mutex_init(&c->btree.reserve_cache.lock);
 	INIT_LIST_HEAD(&c->btree.interior_updates.list);
 	INIT_LIST_HEAD(&c->btree.interior_updates.unwritten);
 	mutex_init(&c->btree.interior_updates.lock);

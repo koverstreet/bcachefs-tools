@@ -11,7 +11,8 @@ use crate::util::vstructs::Head;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicIsize};
-use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, TypeInfo};
+use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, Init, TypeInfo};
+use pin_init::pin_data;
 use nestify::nest;
 #[cfg(feature = "std")]
 use std::{ffi::CString, str::FromStr};
@@ -1038,8 +1039,9 @@ pub struct btree_write_stats {
 }
 c_default!(btree_write_stats);
 
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_btree {
     pub foreground_merge_threshold: u16,
 
@@ -1093,12 +1095,13 @@ pub struct bch_fs_btree {
      */
     pub write_buffer_flush_wait: cs::closure_waitlist,
     pub trans: cs::bch_fs_btree_trans,
+    #[pin]
+    #[init(cs::bch_fs_btree_reserve_cache::init())]
     pub reserve_cache: cs::bch_fs_btree_reserve_cache,
     pub interior_updates: cs::bch_fs_btree_interior_updates,
     pub node_rewrites: cs::bch_fs_btree_node_rewrites,
     pub node_scan: cs::find_btree_nodes,
 }
-c_default!(bch_fs_btree);
 
 /* Btree ID properties: */
 c_enum! {
