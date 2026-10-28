@@ -291,6 +291,8 @@ pub(crate) struct Internal {
     pub(crate) write:                Option<MovingWrite>,
     /// Its task, until it's started
     task:                 Option<Unstarted<()>>,
+    /// Its maker's io ref - its head's or repair's - till fill() puts it
+    maker:                Option<IoRef>,
 
     pub(crate) devs:      c::bch_devs_mask,
     pub(crate) watermark: c::bch_watermark,
@@ -389,7 +391,7 @@ impl StripeNew {
     /// A new stripe of @nr_data data blocks and @nr_parity parity of
     /// @blocksize sectors, in @disk_label, by @algorithm, on @devs - and its
     /// task, made - open: ec_new_stripe_alloc(). Its one io ref is its
-    /// maker's.
+    /// maker's, in @maker.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn alloc(fs: &Fs, devs: c::bch_devs_mask, watermark: c::bch_watermark, disk_label: u32, algorithm: u32,
              nr_data: u32, nr_parity: u32, blocksize: u32) -> Result<StripeNewBox, BchError> {
@@ -399,7 +401,7 @@ impl StripeNew {
             fs:         unsafe { BackRef::new(fs) },
             start_time: local_clock(),
             idx:        AtomicU64::new(0),
-            io_refs:    AtomicI32::new(1),
+            io_refs:    AtomicI32::new(0),
             in_flight   <- Gather::new(),
             seq:        AtomicU64::new(0),
             err:        FirstErr::new(),
@@ -419,6 +421,7 @@ impl StripeNew {
 
             // SAFETY: what the task borrows outlives it - see the file comment
             s.task = Some(unsafe { spawn_unstarted(Spawn::Queue(&fs.ec.stripe_create_wq), move || stripe_task(fs, p)) }?);
+            s.maker = Some(IoRef::get(&b));
         }
 
         // the io refs': their last put puts it
@@ -468,10 +471,12 @@ impl StripeNew {
     /// which takes it out to free it, can't before we're done.
     pub(crate) fn fill(&self, _v: &NewStripes) {
         self.state.store(State::EC_STRIPE_NEW_filling as u32, Ordering::Relaxed);
-        self.launch(&mut self.lock());
-        // SAFETY: its maker's io ref, held since alloc(); new_stripes is
-        // locked
-        drop(unsafe { IoRef::adopt(self) });
+        let maker = {
+            let mut i = self.lock();
+            self.launch(&mut i);
+            i.maker.take().expect("a stripe handed on twice")
+        };
+        drop(maker);
     }
 }
 
@@ -517,6 +522,7 @@ impl Internal {
         pin_init!(Internal {
             write:               None,
             task:                None,
+            maker:               None,
             devs,
             watermark,
             allocated:           false,
@@ -600,6 +606,7 @@ impl PinnedDrop for StripeNew {
     fn drop(self: Pin<&mut Self>) {
         let fs = &*self.fs;
         let mut s = self.lock();
+        assert!(s.maker.is_none(), "stripe {} freed holding its maker's io ref", self.idx.load(Ordering::Relaxed));
 
         s.blocks = Default::default();
         s.res = None;
@@ -620,6 +627,8 @@ impl PinnedDrop for StripeNew {
 /// and its task, never started, goes with it.
 pub(crate) fn discard(b: StripeNewBox) {
     assert!(b.lock().task.is_some(), "discarding stripe {} with its task started", b.idx.load(Ordering::Relaxed));
+    // given up without its put: never launched, it's not taken in flight
+    b.lock().maker.take().expect("discarding a stripe handed on").leak();
     let v = b.io_refs.swap(0, Ordering::Relaxed);
     assert_eq!(v, 1, "discarding stripe {} with writers' io refs", b.idx.load(Ordering::Relaxed));
     // SAFETY: the io refs' ref on its Gather, which its drop waits for
