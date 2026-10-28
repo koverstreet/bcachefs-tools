@@ -221,4 +221,9 @@ impl FileOps for Dir {
 }
 
 #[c_export]
-pub static bch2_dir_file_ops: c::file_operations = FileVTable::<Dir>::OPS;
+pub static bch2_dir_file_ops: c::file_operations = {
+    let mut ops = FileVTable::<Dir>::OPS;
+    // As a regular file's (file.rs): no module reference by each open
+    ops.owner = core::ptr::null_mut();
+    ops
+};
