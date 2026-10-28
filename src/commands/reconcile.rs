@@ -17,6 +17,7 @@ use crate::wrappers::accounting::{disk_accounting_type, reconcile_accounting_typ
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
 use crate::wrappers::handle::BcachefsHandle;
 use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::util::ToText;
 use crate::wrappers::sysfs;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -130,7 +131,7 @@ fn reconcile_status_to_text(
         let idx = t.as_c().0 as usize;
         if idx < nr {
             write!(out, "  ");
-            bcachefs_kernel::opts::prt_reconcile_type(out, t.as_c());
+            t.as_c().to_text(out);
             write!(out, ":\t");
             out.units_sectors(v[idx][0]);
             write!(out, "\r");

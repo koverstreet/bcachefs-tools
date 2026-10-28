@@ -797,7 +797,7 @@ impl Fs {
     /// Allow incompatible features up to the filesystem's version, as an
     /// upgrade to it would have: version_upgrade=incompatible, set at
     /// runtime - bch2_sb_upgrade_incompat().
-    fn upgrade_incompat(&self) {
+    pub(crate) fn upgrade_incompat(&self) {
         let mut sb = self.sb_lock();
         let (v, allowed) = (self.sb.version.get(), self.sb.version_incompat_allowed.get());
         if v == allowed {
@@ -827,11 +827,6 @@ pub fn bch2_set_version_incompat(c: &Opaque<c::bch_fs>, version: c::bcachefs_met
 #[c_export]
 pub fn __bch2_check_set_feature(c: &Opaque<c::bch_fs>, feat: c_uint) {
     Fs::from_c(c).set_feature(c::bch_sb_feature(feat))
-}
-
-#[c_export]
-pub fn bch2_sb_upgrade_incompat(c: &Opaque<c::bch_fs>) {
-    Fs::from_c(c).upgrade_incompat()
 }
 
 /// A superblock newer than this version brought down to it - what it's at
@@ -979,34 +974,24 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
     out.bitflags(&FIELD_NAMES, have);
     out.newline();
 
-    // SAFETY: C's tables, NULL terminated
-    unsafe {
-        write!(out, "Features:\t");
-        out.prt_bitflags(c::bch2_sb_features.as_ptr(), sb.features[0].get());
-        out.newline();
+    write!(out, "Features:\t");
+    crate::util::names::prt_set::<c::bch_sb_feature>(out, sb.features[0].get());
+    out.newline();
 
-        write!(out, "Compat features:\t");
-        out.prt_bitflags(c::bch2_sb_compat.as_ptr(), sb.compat[0].get());
-        out.newline();
-    }
+    write!(out, "Compat features:\t");
+    crate::util::names::prt_set::<c::bch_sb_compat>(out, sb.compat[0].get());
+    out.newline();
 
     out.newline();
     write!(out, "Options:");
     out.newline();
     {
         let mut out = out.indent(2);
-        let sb_ptr = sb.as_ffi() as *mut _;
-        for (id, opt) in crate::opts::opt_table().iter().enumerate() {
-            if opt.get_sb.is_none() && opt.get_ext.is_none() {
-                continue;
-            }
-            // SAFETY: an option of the table, of a validated superblock
-            unsafe {
-                let v = c::bch2_opt_from_sb(sb_ptr, c::bch_opt_id(id as u32), -1);
-                write!(out, "{}:\t", CStr::from_ptr(opt.attr.name.cast()).to_str().unwrap_or("?"));
-                c::bch2_opt_to_text(out.as_raw(), core::ptr::null_mut(), sb_ptr, opt, v,
-                                    c::OPT_HUMAN_READABLE | c::OPT_SHOW_FULL_LIST);
-            }
+        for opt in crate::opts::OPTS.iter().filter(|o| o.fs_field().is_some()) {
+            let v = crate::opts::opt_from_sb(sb, opt.id, None);
+            write!(out, "{}:\t", opt.name);
+            crate::opts::opt_to_text(&mut out, None, Some(sb), opt, v,
+                                     c::OPT_HUMAN_READABLE | c::OPT_SHOW_FULL_LIST);
             out.newline();
         }
     }

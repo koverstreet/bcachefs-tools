@@ -1,4 +1,3 @@
-use std::ffi::CString;
 
 use anyhow::{bail, Result};
 use bcachefs_kernel::c;
@@ -180,9 +179,8 @@ fn set_option_offline(
             continue;
         }
 
-        let c_value = CString::new(value.as_str())?;
         let mut err = Printbuf::new();
-        let Ok(val) = bcachefs_kernel::opts::opt_parse(Some(&fs), opt, &c_value, Some(&mut err)) else {
+        let Ok(val) = bcachefs_kernel::opts::opt_parse(Some(&fs), opt, Some(value.as_bytes()), Some(&mut err)) else {
             match err.as_str().trim_end() {
                 ""  => eprintln!("Error parsing {name}={value}"),
                 msg => eprintln!("Error parsing {name}={value}: {msg}"),
@@ -197,7 +195,7 @@ fn set_option_offline(
                 failed.insert(name.as_str());
                 continue;
             }
-            fs.opt_set_sb(None, opt, val, Some(&c_value));
+            fs.opt_set_sb(None, opt, val, Some(value.as_bytes()));
             modified = true;
         }
 
@@ -233,12 +231,12 @@ fn set_option_offline(
                     continue;
                 };
 
-                if let Err(e) = fs.opt_hook_pre_set(Some(&ca), opt_id, val) {
+                if let Err(e) = fs.opt_hook_pre_set(Some(&*ca), opt_id, val) {
                     eprintln!("Error setting {name}: {e}");
                     failed.insert(name.as_str());
                     continue;
                 }
-                fs.opt_set_sb(Some(&ca), opt, val, Some(&c_value));
+                fs.opt_set_sb(Some(&*ca), opt, val, Some(value.as_bytes()));
                 modified = true;
             }
         }

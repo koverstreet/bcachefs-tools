@@ -650,7 +650,7 @@ pub struct Fs {
     pub opts: c::bch_opts,
     pub opt_change_lock: c::mutex,
     /// Odd while options change, bumped under opt_change_lock by
-    /// bch2_opt_change_lock()/unlock(); read without it.
+    /// OptChange, taking it and dropping it; read without it.
     pub opt_change_cookie: crate::util::projections::Volatile<u32>,
     pub mount_opts: c::bch_opts_mask,
 

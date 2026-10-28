@@ -45,12 +45,11 @@ use crate::init::damage;
 use crate::init::error::id;
 use crate::init::passes;
 use crate::init::progress::Progress;
-use crate::opts::prt_data_type;
 use crate::types::bits_to_longs;
 use crate::util::bitmap::{AtomicBitmap, AtomicULong};
 use crate::util::log::{log_msg_start, print_str, LogLevel, LogMsg, Ratelimit};
 use crate::util::rcu::{read_lock, ReadGuard};
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 use crate::{fsck_err, inode_fsck_err, prt};
 use core::ffi::c_int;
 use core::ops::{ControlFlow, RangeInclusive};
@@ -467,7 +466,7 @@ fn check_bucket_backpointer_mismatch(t: &TransAttempt<'_, '_>, alloc_k: BkeySC<'
         let mut msg = LogMsg::new(fs);
         prt!(&mut msg, "backpointer sectors > bucket sectors, but found no bad backpointers\n\
                         bucket {}:{} data type ", { p.inode }, { p.offset });
-        prt_data_type(&mut msg, c::bch_data_type(a.data_type.into()));
+        c::bch_data_type(a.data_type.into()).to_text(&mut msg);
         prt!(&mut msg, ", counters\n");
         if sectors.dirty > have.dirty {
             prt!(&mut msg, "dirty: {} > {}\n", sectors.dirty, have.dirty);
@@ -715,7 +714,7 @@ fn bucket_multiple_resolved(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, bucket: u
     let mut msg = LogMsg::new(fs);
     prt!(&mut msg, "bucket {}:{}: double allocation resolved, data type multiple -> ",
          { bucket.inode }, { bucket.offset });
-    prt_data_type(&mut msg, c::bch_data_type(a.data_type.into()));
+    c::bch_data_type(a.data_type.into()).to_text(&mut msg);
     Ok(())
 }
 

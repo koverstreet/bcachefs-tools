@@ -61,14 +61,4 @@ static inline bool bch2_dev_in_target(struct bch_fs *c, unsigned dev, unsigned t
 	return bch2_dev_in_target_rcu(c, dev, target);
 }
 
-#define bch2_opt_target (struct bch_opt_fn) {		\
-	.parse		= bch2_opt_target_parse,	\
-	.to_text	= bch2_opt_target_to_text,	\
-}
-
-#define bch2_opt_disk_label (struct bch_opt_fn) {	\
-	.parse		= bch2_opt_disk_label_parse,	\
-	.to_text	= bch2_opt_disk_label_to_text,	\
-}
-
 #endif /* _BCACHEFS_DISK_GROUPS_H */

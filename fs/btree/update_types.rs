@@ -39,6 +39,8 @@ c_enum! {
 }
 
 c_extern! {
+    #[c_printf(2, 3)]
+    pub fn bch2_fs_log_msg(c: *mut c::bch_fs, fmt: *const core::ffi::c_char, ...) -> c_int;
     pub fn bch2_trans_log_msg(trans: *mut c::btree_trans, buf: *mut c::printbuf) -> c_int;
     pub fn bch2_trans_log_str(trans: *mut c::btree_trans, str: *const core::ffi::c_char) -> c_int;
     pub fn bch2_trans_log_bkey(trans: *mut c::btree_trans, btree: c::btree_id, level: c_uint,

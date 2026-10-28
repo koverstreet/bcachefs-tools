@@ -155,7 +155,7 @@ pub fn inode_opts_to_opts(inode: &c::bch_inode_unpacked) -> c::bch_opts {
     for opt in InodeOpt::all() {
         let v = opt.get(inode);
         if v != 0 {
-            opts::opt_set_by_id(&mut ret, opt.opt_id(), v - 1);
+            ret.set(opt.opt_id(), v - 1);
         }
     }
 
@@ -199,14 +199,43 @@ impl c::bch_inode_opts {
     }
 }
 
-/// The filesystem's io options, or for metadata its metadata options:
-/// bch2_inode_opts_get().
+/// The filesystem's io options, or for metadata its metadata options.
 pub fn get_fs(fs: &Fs, metadata: bool) -> c::bch_inode_opts {
-    let mut opts = MaybeUninit::uninit();
-    // SAFETY: the filesystem, live as @fs is; @opts written, from a memset()
-    unsafe {
-        c::bch2_inode_opts_get(fs.as_ptr().cast(), opts.as_mut_ptr(), metadata);
-        opts.assume_init()
+    let o = &fs.opts;
+    let mut ret = c::bch_inode_opts::default();
+    macro_rules! get {
+        ($(($name:ident, $bits:tt)),* $(,)?) => { $(ret.$name = o.$name as _;)* };
+    }
+    c::BCH_INODE_OPTS!(get);
+    ret.change_cookie = fs.opt_change_cookie.get();
+
+    if metadata {
+        ret.background_target = if o.metadata_target != 0 { o.metadata_target } else { o.foreground_target };
+        ret.data_replicas = o.metadata_replicas;
+        ret.data_checksum = o.metadata_checksum;
+        ret.compression = 0;
+        ret.background_compression = 0;
+        ret.erasure_code = 0;
+    } else {
+        ret.fixups();
+    }
+    ret
+}
+
+/// Each, name=value, comma separated.
+#[cold]
+pub fn opts_to_text(out: &mut Printbuf, fs: &Fs, opts: &c::bch_inode_opts) {
+    macro_rules! values {
+        ($(($name:ident, $bits:tt)),* $(,)?) => { crate::paste! {
+            [$((c::bch_opt_id::[<Opt_ $name>], opts.$name as u64)),*]
+        } };
+    }
+    for (i, (id, v)) in c::BCH_INODE_OPTS!(values).into_iter().enumerate() {
+        if i != 0 {
+            write!(out, ",");
+        }
+        write!(out, "{}=", id.opt().name);
+        opts::opt_to_text(out, Some(fs), None, id.opt(), v, 0);
     }
 }
 

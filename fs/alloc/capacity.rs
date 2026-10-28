@@ -193,11 +193,6 @@ impl Fs {
     }
 }
 
-#[c_export]
-pub fn bch2_dev_allocator_set_rw(c: &Opaque<c::bch_fs>, ca: &c::bch_dev, rw: bool) {
-    dev_allocator_set_rw(Fs::from_c(c), ca, rw)
-}
-
 /// Whether an open bucket on @ca is a write point's - not on the partial
 /// list, which doesn't keep writes in flight.
 fn dev_has_open_write_point(fs: &Fs, ca: &c::bch_dev) -> bool {

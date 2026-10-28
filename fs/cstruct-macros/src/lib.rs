@@ -1278,13 +1278,13 @@ pub fn c_same(input: TokenStream) -> TokenStream {
 ///
 ///   c_extern! {
 ///       pub fn bch2_trans_begin(trans: *mut c::btree_trans) -> u32;
-///       pub static bch2_opt_table: [c::bch_option; 0];
+///       pub static bch2_bkey_ops: [c::bkey_ops; 0];
 ///   }
 ///
 /// Rust gets the extern "C" block; C the prototypes, generated into the
 /// header the C ones are in - see CExtern. A static that isn't mut is C's
-/// const, and [T; 0] its unsized array: `extern const struct bch_option
-/// bch2_opt_table[];`.
+/// const, and [T; 0] its unsized array: `extern const struct bkey_ops
+/// bch2_bkey_ops[];`.
 #[proc_macro]
 pub fn c_extern(input: TokenStream) -> TokenStream {
     expand("c_extern!", || {

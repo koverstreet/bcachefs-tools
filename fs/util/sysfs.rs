@@ -99,15 +99,25 @@ unsafe impl<const N: usize> Sync for ListAttrs<N> {}
 
 impl<const N: usize> ListAttrs<N> {
     pub const fn new(names: &[&'static CStr; N], mode: u16) -> Self {
+        Self::with_modes(names, &[mode; N])
+    }
+
+    /// Each entry's file, with a mode of its own.
+    pub const fn with_modes(names: &[&'static CStr; N], modes: &[u16; N]) -> Self {
         // SAFETY: as Attr::new()'s
         let mut attrs: [c::attribute; N] = unsafe { core::mem::zeroed() };
         let mut i = 0;
         while i < N {
             attrs[i].name = names[i].as_ptr().cast();
-            attrs[i].mode = mode;
+            attrs[i].mode = modes[i];
             i += 1;
         }
         ListAttrs(attrs)
+    }
+
+    /// Entry @i's attribute.
+    pub fn get(&'static self, i: usize) -> &'static c::attribute {
+        &self.0[i]
     }
 
     /// The entry @attr is the file of, if it's one of these.

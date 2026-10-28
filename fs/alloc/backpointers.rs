@@ -48,7 +48,6 @@ use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::init::passes;
 use crate::init::progress::Progress;
-use crate::opts::prt_data_type;
 use crate::util::alloc::{flags::{GFP_KERNEL, __GFP_NOWARN}, KVVec};
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{totalram_bytes, PAGE_SIZE};
@@ -56,7 +55,7 @@ use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::util::sort::heapsort_by;
 use crate::util::vstructs::plain_bytes;
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 use crate::{bkey_fsck_err_on, fsck_err, prt};
 use core::ffi::{c_int, c_uint};
 use core::marker::PhantomData;
@@ -151,7 +150,7 @@ pub fn bch2_backpointer_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>
 
     unsafe { c::bch2_btree_id_level_to_text(out.as_raw(), c::btree_id(v.btree_id.into()), v.level.into()) };
     prt!(out, " data_type=");
-    prt_data_type(out, c::bch_data_type(v.data_type.into()));
+    c::bch_data_type(v.data_type.into()).to_text(out);
     match fs {
         Some(fs) => prt!(out, " suboffset={} len={} gen={} pos=",
                          BackpointerPos::from_bpos(fs, p).suboffset, { v.bucket_len }, v.bucket_gen),

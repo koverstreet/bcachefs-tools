@@ -1145,13 +1145,8 @@ impl FromStr for c::btree_id {
     type Err = BchError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = CString::new(s)
-            .map_err(|_| BchError::from(bch_errcode::BCH_ERR_EINVAL_parse_btree_id))?;
-        let p = s.as_ptr();
-
-        let v =
-            unsafe { c::match_string(c::__bch2_btree_ids[..].as_ptr(), (-1_isize) as usize, p) };
-        c::btree_id::from_raw(v as u32)
+        <c::btree_id as crate::util::names::Names>::ENTRIES.iter().find(|&&(n, _)| n == s)
+            .and_then(|&(_, v)| c::btree_id::from_raw(v as u32))
             .ok_or(bch_errcode::BCH_ERR_EINVAL_parse_btree_id.into())
     }
 }

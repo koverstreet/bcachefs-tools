@@ -1450,6 +1450,28 @@ c_bitmask! {
     }
 }
 
+/// The compression options, each in two fields: _HI is the bits it grew -
+/// bcachefs_format.h's BCH_SB_COMPRESSION_TYPE() for C.
+impl bch_sb__head {
+    pub fn compression_type(&self) -> u64 {
+        self.compression_type_lo() | self.compression_type_hi() << 4
+    }
+
+    pub fn background_compression_type(&self) -> u64 {
+        self.background_compression_type_lo() | self.background_compression_type_hi() << 4
+    }
+
+    pub fn set_compression_type(&mut self, v: u64) {
+        self.set_compression_type_lo(v);
+        self.set_compression_type_hi(v >> 4);
+    }
+
+    pub fn set_background_compression_type(&mut self, v: u64) {
+        self.set_background_compression_type_lo(v);
+        self.set_background_compression_type_hi(v >> 4);
+    }
+}
+
 c_bitmask! {
     LE64_BITMASK(struct Head<bch_sb>, flags[5]), strip BCH_SB_ {
         BCH_SB_VERSION_UPGRADE_COMPLETE(0, 16),

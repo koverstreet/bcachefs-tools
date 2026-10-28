@@ -18,7 +18,7 @@ use crate::errcode::{ret_to_c, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, fs_inconsistent, id};
 use crate::init::passes;
-use crate::opts::{data_type_str, prt_data_type};
+use crate::opts::data_type_str;
 use crate::locking::Lock;
 use crate::types::{bits_to_longs, Le64};
 use crate::util::ffi::Opaque;
@@ -1019,7 +1019,7 @@ impl c::bch_dev {
 
         write!(out, "\tbuckets\rsectors\rfragmented\r\n");
         for (i, u) in usage.d.iter().enumerate() {
-            prt_data_type(out, data_type_from_u8(i as u8));
+            data_type_from_u8(i as u8).to_text(out);
             write!(out, "\t{}\r{}\r{}\r\n", u.buckets, u.sectors, u.fragmented);
         }
         write!(out, "capacity\t{}\r\n", self.mi.nbuckets);

@@ -613,20 +613,21 @@ mod vfs {
         let inode = &v.inode();
         let inode_opts = inode_opts::inode_opts_to_opts(inode);
 
-        let Some((id, opt)) = opts::opt_lookup(name)
-            .filter(|(id, _)| id.is_inode_opt()) else {
+        let Some(opt) = name.to_str().ok().and_then(opts::opt_lookup)
+            .filter(|opt| opt.id.is_inode_opt()) else {
             return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_xattr_get_bad_opt));
         };
+        let id = opt.id;
         let Some(inode_opt) = id.inode_opt() else {
             return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_xattr_get_not_inode_opt));
         };
 
-        if !opts::opt_defined_by_id(&inode_opts, id) || !(all || inode_opt.is_own(inode)) {
+        if !inode_opts.defined(id) || !(all || inode_opt.is_own(inode)) {
             return Err(BchError::from(c::ENODATA));
         }
 
         let mut out = Printbuf::new();
-        opts::opt_to_text(&mut out, fs, opt, opts::opt_get_by_id(&inode_opts, id), 0);
+        opts::opt_to_text(&mut out, Some(fs), None, opt, inode_opts.get(id), 0);
 
         if out.as_raw().allocation_failure() {
             return Err(BchError::from(c::ENOMEM));
@@ -716,9 +717,10 @@ mod vfs {
     {
         let fs = v.fs();
 
-        let Some((opt_id, opt)) = opts::opt_lookup(name) else {
+        let Some(opt) = name.to_str().ok().and_then(opts::opt_lookup) else {
             return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_xattr_set_bad_opt));
         };
+        let opt_id = opt.id;
         let Some(inode_opt) = opt_id.inode_opt() else {
             return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_xattr_set_not_inode_opt));
         };
@@ -731,15 +733,10 @@ mod vfs {
         let mut change = OptChange::new(fs);
 
         if let Some(value) = value {
-            let mut buf = crate::util::alloc::KVVec::new();
-            buf.extend_from_slice(value, crate::util::alloc::flags::GFP_KERNEL)
-                .map_err(|_| BchError::from(c::ENOMEM))?;
-            buf.push(0, crate::util::alloc::flags::GFP_KERNEL)
-                .map_err(|_| BchError::from(c::ENOMEM))?;
-            let value = CStr::from_bytes_until_nul(&buf).expect("NUL terminated");
+            // as a C string: up to a NUL
+            let value = value.split(|&b| b == 0).next().unwrap_or_default();
 
-            v_parsed = opts::opt_parse(Some(fs), opt, value, None)
-                .map_err(|ret| BchError::from_raw(-ret))?;
+            v_parsed = opts::opt_parse(Some(fs), opt, Some(value), None)?;
             change.pre_set(None, v.inode().bi_inum, opt_id, v_parsed)?;
 
             // +1 bias for inode options:

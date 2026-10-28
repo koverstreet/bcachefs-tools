@@ -7,6 +7,7 @@ use bcachefs_kernel::journal::{
     entry_type_is_known, journal_entry_type,
 };
 use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::util::ToText;
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::util::vstructs::SelfSized;
 use clap::Parser;
@@ -320,7 +321,7 @@ fn journal_entry_keys_noval_to_text(out: &mut Printbuf, entry: &c::jset_entry) {
     for k in entry.entries() {
         let t = entry_type(entry);
         if entry_type_is_known(t) {
-            unsafe { c::bch2_prt_jset_entry_type(out.as_raw(), t) };
+            t.to_text(out);
         } else {
             write!(out, "(unknown jset entry {})", entry.type_);
         }
@@ -699,7 +700,7 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
 
     if let Some(ref btree_arg) = cli.btree {
         let (sign, rest) = parse_sign(btree_arg);
-        f.btree_filter = read_flag_list(rest, unsafe { &c::__bch2_btree_ids }, "btree id")?;
+        f.btree_filter = read_flag_list(rest, bcachefs_kernel::names_by_value!(bcachefs_kernel::c::btree_id), "btree id")?;
         if sign < 0 {
             f.btree_filter = !f.btree_filter;
         }

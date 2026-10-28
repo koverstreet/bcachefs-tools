@@ -33,11 +33,11 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
     let mut passes_to_unset: u64 = 0;
 
     for s in &cli.set {
-        passes_to_set |= read_flag_list(s, &passes::bch2_recovery_passes[..], "recovery pass")?;
+        passes_to_set |= read_flag_list(s, bcachefs_kernel::names_by_value!(bcachefs_kernel::c::bch_recovery_pass), "recovery pass")?;
     }
 
     for s in &cli.unset {
-        passes_to_unset |= read_flag_list(s, &passes::bch2_recovery_passes[..], "recovery pass")?;
+        passes_to_unset |= read_flag_list(s, bcachefs_kernel::names_by_value!(bcachefs_kernel::c::bch_recovery_pass), "recovery pass")?;
     }
 
     passes_to_set = passes::passes_to_stable(passes_to_set);

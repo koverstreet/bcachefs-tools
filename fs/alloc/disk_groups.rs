@@ -70,6 +70,7 @@
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
+use crate::opts::OptFn;
 use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState};
 use crate::sb::members;
 use crate::util::ffi::{c_char, Opaque};
@@ -387,11 +388,11 @@ fn disk_path_to_text(out: &mut Printbuf, fs: Option<&Fs>, v: u32) {
     disk_path_to_text_in(&mut out, groups, v);
 }
 
-fn target_to_text_sb(out: &mut Printbuf, sb: &c::bch_sb, target: Target) {
+fn target_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, target: Target) {
     match target {
         Target::Null => write!(out, "none"),
         Target::Dev(d) => {
-            let m = members::sb_member(sb, d).filter(|m| d < u32::from(sb.nr_devices) && m.alive());
+            let m = members::sb_member(sb, d).filter(|m| d < u32::from(S::head(sb).nr_devices) && m.alive());
             match m {
                 Some(m) => write!(out, "Device {} ({d})", uuid::Uuid::from_bytes(m.uuid.b)),
                 None    => write!(out, "Bad device {d}"),
@@ -422,13 +423,6 @@ fn groups_to_cpu(dst: &mut [c::bch_disk_group_cpu], src: &[c::bch_disk_group], s
             g = d.parent as usize;
         }
     }
-}
-
-#[c_export]
-pub fn bch2_sb_disk_groups_to_cpu(c: &Opaque<c::bch_fs>) -> c_int {
-    let fs = Fs::from_c(c);
-    // SAFETY: C calls it under sb_lock
-    ret_to_c(c::bch_sb_field_disk_groups::to_cpu(fs, &mut unsafe { fs.sb_lock_held() }))
 }
 
 /// # Safety
@@ -576,76 +570,50 @@ fn opt_target_parse(fs: &Fs, val: &[u8], err: Option<&mut Printbuf>) -> Result<T
     fs.throw(bch_errcode::BCH_ERR_EINVAL_opt_target_parse_not_found)
 }
 
-/// # Safety
-/// @val is a C string, or NULL.
-unsafe fn opt_parse_args<'a>(c: Option<&'a Opaque<c::bch_fs>>, val: *const c_char)
-    -> Result<(&'a Fs, &'a [u8]), c_int>
-{
-    if val.is_null() {
-        return Err(-(c::EINVAL as c_int));
-    }
-    let Some(c) = c else {
-        return Err(-(bch_errcode::BCH_ERR_option_needs_open_fs.0 as c_int));
-    };
-    // SAFETY: the caller's
-    Ok((Fs::from_c(c), unsafe { CStr::from_ptr(val.cast()) }.to_bytes()))
+/// A target's, a label's value: none is EINVAL, and the filesystem's names
+/// are needed.
+fn opt_parse_args<'a>(fs: Option<&'a Fs>, val: Option<&'a [u8]>) -> Result<(&'a Fs, &'a [u8]), BchError> {
+    let val = val.ok_or(BchError::from(c::EINVAL))?;
+    let fs = fs.ok_or(BchError::from(bch_errcode::BCH_ERR_option_needs_open_fs))?;
+    Ok((fs, val))
 }
 
-/// # Safety
-/// @val is a C string, or NULL.
-#[c_export]
-pub unsafe fn bch2_opt_target_parse(c: Option<&Opaque<c::bch_fs>>, val: *const c_char,
-                                    res: &mut u64, err: Option<&mut Printbuf>) -> c_int {
-    // SAFETY: the caller's
-    let (fs, val) = match unsafe { opt_parse_args(c, val) } {
-        Ok(a)  => a,
-        Err(e) => return e,
-    };
-    ret_to_c(opt_target_parse(fs, val, err).map(|t| *res = t.encode().into()))
-}
+/// metadata_target= and the rest: a device, a disk label, or none.
+pub const TARGET_OPT: OptFn = OptFn {
+    parse: |fs, val, err| {
+        let (fs, val) = opt_parse_args(fs, val)?;
+        Ok(opt_target_parse(fs, val, err)?.encode().into())
+    },
+    to_text: |out, fs, sb, v| {
+        let t = Target::decode(v as u32);
+        match (fs, sb) {
+            (Some(fs), _)    => fs.target_to_text(out, t),
+            (None, Some(sb)) => target_to_text_sb(out, sb, t),
+            (None, None)     => write!(out, "{v}"),
+        }
+    },
+    validate: None,
+};
 
-/// # Safety
-/// @sb is a validated superblock, if @c is NULL.
-#[cold]
-#[c_export]
-pub unsafe fn bch2_opt_target_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>>,
-                                      sb: *mut Head<c::bch_sb>, v: u64) {
-    match c {
-        Some(c) => Fs::from_c(c).target_to_text(out, Target::decode(v as u32)),
-        // SAFETY: the caller's
-        None    => target_to_text_sb(out, unsafe { c::bch_sb::<Validated>::from_ffi(sb) }, Target::decode(v as u32)),
-    }
-}
-
-/// # Safety
-/// @val is a C string, or NULL.
-#[c_export]
-pub unsafe fn bch2_opt_disk_label_parse(c: Option<&Opaque<c::bch_fs>>, val: *const c_char,
-                                        res: &mut u64, _err: Option<&mut Printbuf>) -> c_int {
-    // SAFETY: the caller's
-    let (fs, val) = match unsafe { opt_parse_args(c, val) } {
-        Ok(a)  => a,
-        Err(e) => return e,
-    };
-    ret_to_c(dev_label_resolve(&mut fs.sb_resize(&mut fs.sb_lock()), val).map(|v| *res = v.into()))
-}
-
-/// # Safety
-/// @sb is a validated superblock, if @c is NULL.
-#[cold]
-#[c_export]
-pub unsafe fn bch2_opt_disk_label_to_text(out: &mut Printbuf, c: Option<&Opaque<c::bch_fs>>,
-                                          sb: *mut Head<c::bch_sb>, v: u64) {
-    let Some(v) = (v as u32).checked_sub(1) else {
-        write!(out, "none");
-        return;
-    };
-    match c {
-        Some(c) => Fs::from_c(c).disk_path_to_text(out, v),
-        // SAFETY: the caller's
-        None    => disk_path_to_text_in(out, sb_groups(unsafe { c::bch_sb::<Validated>::from_ffi(sb) }), v),
-    }
-}
+/// label=: a device's disk label, by path - created if it's new.
+pub const LABEL_OPT: OptFn = OptFn {
+    parse: |fs, val, _| {
+        let (fs, val) = opt_parse_args(fs, val)?;
+        Ok(dev_label_resolve(&mut fs.sb_resize(&mut fs.sb_lock()), val)?.into())
+    },
+    to_text: |out, fs, sb, v| {
+        let Some(v) = (v as u32).checked_sub(1) else {
+            write!(out, "none");
+            return;
+        };
+        match (fs, sb) {
+            (Some(fs), _)    => fs.disk_path_to_text(out, v),
+            (None, Some(sb)) => disk_path_to_text_in(out, sb_groups(sb), v),
+            (None, None)     => write!(out, "{v}"),
+        }
+    },
+    validate: None,
+};
 
 // ── The superblock section ───────────────────────────────────────────────
 

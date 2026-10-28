@@ -492,8 +492,7 @@ impl SbFieldOps for c::bch_sb_field_members_v2 {
 
 fn data_types_to_text(out: &mut Printbuf, types: u64) {
     match types {
-        // SAFETY: a NULL terminated table of names
-        t if t != 0 => unsafe { out.prt_bitflags(c::__bch2_data_types.as_ptr(), t) },
+        t if t != 0 => crate::util::names::prt_set::<c::bch_data_type>(out, t),
         _           => write!(out, "(none)"),
     }
 }

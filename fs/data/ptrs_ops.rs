@@ -9,9 +9,8 @@ use crate::data::durability::BkeyVDurability;
 use crate::data::reconcile::trigger::{extent_rebalance_v1_to_text, extent_reconcile_to_text,
                                       extent_reconcile_validate};
 use crate::init::error::{id, BkeyValidate};
-use crate::opts::prt_compression_type;
 use crate::util::rcu::ReadGuard;
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 
 // ── validate ─────────────────────────────────────────────────────────────
 
@@ -236,7 +235,7 @@ fn crc_unpacked_to_text(out: &mut Printbuf, crc: &c::bch_extent_crc_unpacked) {
            crc.compressed_size, crc.uncompressed_size, crc.offset, crc.nonce,
            c::bch_csum_type(crc.csum_type.into()),
            csum_word_raw(crc.csum.hi), csum_word_raw(crc.csum.lo));
-    prt_compression_type(out, c::bch_compression_type(crc.compression_type.into()));
+    c::bch_compression_type(crc.compression_type.into()).to_text(out);
 }
 
 /// An extent's flags, by name, as prt_bitflags() prints them: from the

@@ -122,19 +122,12 @@ fn parse_target(
 }
 
 /// Set all sb options from a bch_opts struct.
-fn opt_set_sb_all(sb: &mut c::bch_sb, dev_idx: i32, opts: &mut c::bch_opts) {
+fn opt_set_sb_all(sb: &mut c::bch_sb_buf, dev_idx: Option<u32>, opts: &mut c::bch_opts) {
     use bcachefs_kernel::opts;
 
-    for (id, opt) in opts::opt_table().iter().enumerate() {
-        let opt_id = opts::opt_id(id);
-
-        let v = if opts::opt_defined_by_id(opts, opt_id) {
-            opts::opt_get_by_id(opts, opt_id)
-        } else {
-            opts::opt_get_by_id(opts::opts_default(), opt_id)
-        };
-
-        opts::opt_set_sb(sb, dev_idx, opt, v);
+    for opt in &opts::OPTS {
+        let v = if opts.defined(opt.id) { opts.get(opt.id) } else { opts::DEFAULTS.get(opt.id) };
+        opts::opt_set_sb(sb, dev_idx, opt, v, None);
     }
 }
 
@@ -187,7 +180,7 @@ pub fn format(
 
     // Calculate btree node size
     if !opt_defined!(fs_opts, btree_node_size) {
-        let mut s = bcachefs_kernel::opts::opts_default().btree_node_size;
+        let mut s = bcachefs_kernel::opts::DEFAULTS.btree_node_size;
         for dev in dev_slice.iter() {
             s = s.min(dev.opts.bucket_size);
         }
@@ -251,7 +244,7 @@ pub fn format(
     let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
     sb.field_get_minsize::<c::bch_sb_field_ext>(ext_u64s);
 
-    opt_set_sb_all(sb.sb_mut(), -1, &mut fs_opts);
+    opt_set_sb_all(&mut sb, None, &mut fs_opts);
 
     // Time
     let now = std::time::SystemTime::now()
@@ -284,7 +277,7 @@ pub fn format(
             opt_set!(opts, rotational, !nonrot as u8);
         }
 
-        opt_set_sb_all(sb.sb_mut(), idx as i32, &mut dev.opts);
+        opt_set_sb_all(&mut sb, Some(idx as u32), &mut dev.opts);
         sb.member_mut(idx as u32).unwrap().set_rotational_set(true);
     }
 

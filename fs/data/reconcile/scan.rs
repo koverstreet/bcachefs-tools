@@ -468,17 +468,7 @@ fn update_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_opts>
 
 // ── C's ──────────────────────────────────────────────────────────────────
 //
-// opts.c's and dev.c's, until they're Rust.
-
-#[c_export]
-pub fn bch2_set_reconcile_needs_scan_pre(c: &Fs, s: c::reconcile_scan) -> c_int {
-    ret_to_c(c.opt_change_scan_pre(s))
-}
-
-#[c_export]
-pub fn bch2_set_reconcile_needs_scan_post(c: &Fs, s: c::reconcile_scan) -> c_int {
-    ret_to_c(c.opt_change_scan_post(s))
-}
+// dev.c's, until it's Rust.
 
 #[c_export]
 pub fn bch2_set_reconcile_needs_scan(c: &Fs, s: c::reconcile_scan, wakeup: bool) -> c_int {

@@ -34,7 +34,7 @@ use crate::types::{c_default, Le32, Le64};
 use crate::util::ffi::Opaque;
 use crate::util::os_str::{OsStr, OsStrExt};
 use crate::util::Printbuf;
-use core::ffi::{c_int, CStr};
+use core::ffi::c_int;
 use core::mem::offset_of;
 use cstruct_macros::{bitfield, c_const, c_export, CStruct, TypeInfo, SizedVal};
 use nestify::nest;
@@ -292,15 +292,10 @@ pub fn to_text(out: &mut Printbuf, k: BkeySC<'_>) {
 
 /// @d_type's name: as bch2_d_type_str().
 pub fn d_type_str(d_type: u8) -> &'static str {
-    let name = if (d_type as u32) < c::BCH_DT_MAX {
-        unsafe { *(&raw const c::bch2_d_types).cast::<*const core::ffi::c_char>().add(d_type as usize) }
-    } else {
-        core::ptr::null()
-    };
-    if name.is_null() {
-        return "(bad d_type)";
+    match crate::opts::D_TYPES.get(d_type as usize) {
+        Some(&name) if !name.is_empty() => name,
+        _ => "(bad d_type)",
     }
-    unsafe { CStr::from_ptr(name) }.to_str().unwrap_or("(invalid)")
 }
 
 /// For C's bkey_ops: bch2_dirent_to_text().

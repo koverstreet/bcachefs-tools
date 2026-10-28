@@ -16,7 +16,7 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::util::vstructs::{plain_bytes, Validated};
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 use core::mem::size_of;
 use cstruct_macros::c_export;
 
@@ -373,8 +373,7 @@ macro_rules! reconcile_opts_to_text {
         from_inode(out, r.data_replicas_from_inode());
 
         write!(out, " checksum=");
-        // SAFETY: @out's printbuf, borrowed
-        unsafe { c::bch2_prt_csum_opt(out.as_raw(), c::bch_csum_opt(r.data_checksum().into())) };
+        c::bch_csum_opt(r.data_checksum().into()).to_text(out);
         from_inode(out, r.data_checksum_from_inode());
 
         if r.background_compression() != 0 || r.background_compression_from_inode() != 0 {

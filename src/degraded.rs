@@ -35,10 +35,10 @@ use uuid::Uuid;
 
 use crate::device_scan;
 
-fn sb_opts(sb: &bch_sb_handle) -> Option<bch_opts> {
+fn sb_opts(sb: &bch_sb_handle) -> bch_opts {
     let mut opts: bch_opts = Default::default();
-
-    (unsafe { c::bch2_opts_from_sb(&mut opts, sb.sb) } == 0).then_some(opts)
+    bcachefs_kernel::opts::opts_from_sb(&mut opts, sb.sb().as_unvalidated());
+    opts
 }
 
 /// What the filesystem says to do about a missing device, unless the caller
@@ -49,7 +49,7 @@ fn degraded_action(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> u8 
     }
 
     sbs.first()
-        .and_then(|(_, sb)| sb_opts(sb))
+        .map(|(_, sb)| sb_opts(sb))
         .map(|o| opt_get!(o, degraded))
         .unwrap_or(c::bch_degraded_actions::BCH_DEGRADED_ask.0 as u8)
 }

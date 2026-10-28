@@ -60,8 +60,7 @@ fn btrees_to_text(out: &mut Printbuf, want: Option<c::btree_id>, set: u64) {
         None    => write!(out, "(none)"),
     }
     write!(out, "\nbut set in: ");
-    // SAFETY: C's NULL-terminated table of the btree names
-    unsafe { out.prt_bitflags(c::__bch2_btree_ids.as_ptr(), set) };
+    crate::util::names::prt_set::<c::btree_id>(out, set);
 }
 
 /// The bit at @pos in work btree @iter's made whether it's @want's:
@@ -529,10 +528,8 @@ pub fn bch2_check_reconcile_work(c: &Opaque<c::bch_fs>) -> c_int {
 /// Flipping device @ca's rotational flag leaves the reconcile phys bits of
 /// backpointers made under the old setting stale, and deletes after it miss
 /// their phys btree entries - expected, not damage: check_reconcile_work is
-/// scheduled to repair them, quietly. bch2_reconcile_rotational_changed().
-#[c_export]
-pub fn bch2_reconcile_rotational_changed(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {
-    let fs = Fs::from_c(c);
+/// scheduled to repair them, quietly.
+pub fn rotational_changed(fs: &Fs, ca: &c::bch_dev) {
     let mut msg = LogMsg::with_level(fs, LogLevel::INFO);
     write!(msg, "{}: rotational changed, repairing backpointer reconcile phys bits\n",
            ca.name().to_str().unwrap_or("?"));

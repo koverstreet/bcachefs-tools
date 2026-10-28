@@ -34,9 +34,8 @@ use crate::locking::Lock;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError, Flags};
 use crate::util::list::List;
 use crate::util::closure::ClosureRef;
-use crate::opts::prt_data_type;
 use crate::util::ffi::Opaque;
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 use crate::util::refcount::Refcount;
 use crate::util::kthread::Kthread;
 use crate::util::task::RunQueue;
@@ -105,7 +104,7 @@ impl MoveStats {
         }
         let len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
         write!(out, "{}: data type==", core::str::from_utf8(&name[..len]).unwrap_or("(invalid name)"));
-        prt_data_type(out, self.at.data_type.get());
+        self.at.data_type.get().to_text(out);
         write!(out, " pos={}\n", self.at.pos.get());
 
         let mut out = out.indent(2);

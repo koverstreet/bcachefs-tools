@@ -35,10 +35,10 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, WriteRef};
 use crate::init::passes;
 use crate::locking::{Lock, MemallocFlags};
-use crate::opts::{self, prt_compression_type, prt_data_type, OptChange};
+use crate::opts::{self, OptChange, OptType};
 use crate::sb::io::COUNTERS;
 use crate::sb::members;
-use crate::util::ffi::{c_char, with_cstr};
+use crate::util::ffi::{c_char, c_str};
 use crate::util::kernel::{READ, WRITE};
 use crate::util::log::LogMsg;
 use crate::util::refcount::TryRefcount;
@@ -418,19 +418,42 @@ pub static bch2_fs_counters_sysfs_ops: c::sysfs_ops = sysfs::ops::<CountersDir>(
 
 // ── options/ ────────────────────────────────────────────────────────────────
 //
-// An option's file is its bch_option's attribute, added at runtime -
+// An option's file is its attribute in OPT_FILES, added at runtime -
 // bch2_opts_create_sysfs_files() - to options/ for the filesystem options,
 // and to a device's dir for the device options, among its own files.
+
+macro_rules! opt_file_names {
+    ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => { [$(c_str(concat!(stringify!($name), "\0"))),*] };
+}
+
+/// Each option's file, by bch_opt_id - which option a file is, from where
+/// its attribute is: writable if it may be set at runtime.
+static OPT_FILES: ListAttrs<{ opts::NR }> = ListAttrs::with_modes(&c::BCH_OPTS!(opt_file_names), &{
+    let mut modes = [0o444; opts::NR];
+    let mut i = 0;
+    while i < opts::NR {
+        if opts::OPT_LIST[i].flags.bits() & c::opt_flags::OPT_RUNTIME.bits() != 0 {
+            modes[i] = 0o644;
+        }
+        i += 1;
+    }
+    modes
+});
+
+/// The option @attr is the file of, if it's one.
+fn opt_from_attr(attr: &c::attribute) -> Option<c::bch_opt_id> {
+    OPT_FILES.index(attr).map(|i| c::bch_opt_id(i as u32))
+}
 
 fn opt_show(c: &Fs, ca: Option<&c::bch_dev>, id: c::bch_opt_id, out: &mut Printbuf)
     -> Result<(), BchError>
 {
-    let opt = &opts::opt_table()[id.0 as usize];
+    let opt = id.opt();
 
     let sb = c.sb_lock();
 
     let v = match ca {
-        Some(ca) if opt.type_ == c::opt_type::BCH_OPT_STR_MEMBER => {
+        Some(ca) if matches!(opt.ty, OptType::StrMember { .. }) => {
             // The value lives in the member, not a u64 - render it here:
             let Some(m) = members::sb_member(sb.sb(), ca.dev_idx as u32) else {
                 return c.throw(bch_errcode::BCH_ERR_ENOENT_dev_idx_not_found);
@@ -440,61 +463,59 @@ fn opt_show(c: &Fs, ca: Option<&c::bch_dev>, id: c::bch_opt_id, out: &mut Printb
             return Ok(());
         }
         Some(ca) => {
-            if !(opt.has(c::opt_flags::OPT_DEVICE) && opt.get_member.is_some()) {
+            if !(opt.has(c::opt_flags::OPT_DEVICE) && opt.member_field().is_some()) {
                 return c.throw(bch_errcode::BCH_ERR_EINVAL_sysfs_opt_not_found);
             }
-            opts::opt_from_sb(sb.sb(), id, ca.dev_idx as u32)
+            opts::opt_from_sb(sb.sb().as_unvalidated(), id, Some(ca.dev_idx.into()))
         }
         None => {
             if !opt.has(c::opt_flags::OPT_FS) {
                 return c.throw(bch_errcode::BCH_ERR_EINVAL_sysfs_opt_not_found);
             }
-            opts::opt_get_by_id(&c.opts, id)
+            c.opts.get(id)
         }
     };
 
-    opts::opt_to_text(out, c, opt, v, c::OPT_SHOW_FULL_LIST);
+    opts::opt_to_text(out, Some(c), None, opt, v, c::OPT_SHOW_FULL_LIST);
     out.write_bytes(b"\n");
     Ok(())
 }
 
 fn opt_store(c: &Fs, ca: Option<&c::bch_dev>, id: c::bch_opt_id, s: &str) -> Result<(), BchError> {
-    let opt = &opts::opt_table()[id.0 as usize];
+    let opt = id.opt();
     // strim()
-    let val = s.trim_matches(|ch| matches!(ch, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r'));
+    let val = s.trim_matches(|ch| matches!(ch, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r')).as_bytes();
 
-    with_cstr(val, |val| {
-        // We don't need c->writes for correctness, but it eliminates an
-        // unsightly error message in the dmesg log when we're RO:
-        let _ref = write_ref(c)?;
-        let _noio = MemallocFlags::noio();
-        let mut change = OptChange::new(c);
+    // We don't need c->writes for correctness, but it eliminates an
+    // unsightly error message in the dmesg log when we're RO:
+    let _ref = write_ref(c)?;
+    let _noio = MemallocFlags::noio();
+    let mut change = OptChange::new(c);
 
-        let v = opts::opt_parse(Some(c), opt, val, None).map_err(|e| BchError::from_raw(-e))?;
-        change.pre_set(ca, 0, id, v)?;
+    let v = opts::opt_parse(Some(c), opt, Some(val), None)?;
+    change.pre_set(ca, 0, id, v)?;
 
-        let changed = if opt.in_sb() {
-            change.set_sb(ca, opt, v, val)
-        } else if ca.is_none() {
-            opts::opt_get_by_id(&c.opts, id) != v
-        } else {
-            panic!("device option {:?} isn't a superblock option: not supported", opt.name())
-        };
+    let changed = if opt.in_sb() {
+        change.set_sb(ca, opt, v, val)
+    } else if ca.is_none() {
+        c.opts.get(id) != v
+    } else {
+        panic!("device option {} isn't a superblock option: not supported", opt.name)
+    };
 
-        if changed {
-            if ca.is_none() {
-                change.set_fs_opt(id, v);
-            }
-            change.post_set(ca, 0, id, v);
+    if changed {
+        if ca.is_none() {
+            change.set_fs_opt(id, v);
         }
-        Ok(())
-    })?
+        change.post_set(ca, 0, id, v);
+    }
+    Ok(())
 }
 
 /// The option @attr is the file of: only options' files are added where
 /// this is asked.
 fn attr_opt(attr: &c::attribute) -> Result<c::bch_opt_id, BchError> {
-    opts::opt_from_attr(attr).ok_or(c::EINVAL.into())
+    opt_from_attr(attr).ok_or(c::EINVAL.into())
 }
 
 struct OptsDir;
@@ -528,7 +549,7 @@ pub static bch2_fs_opts_dir_sysfs_ops: c::sysfs_ops = sysfs::ops::<OptsDir>();
 pub unsafe extern "C" fn bch2_opts_create_sysfs_files(kobj: *mut c::kobject, ty: c_uint) -> c_int {
     let fs_opts = ty == c::opt_flags::OPT_FS.bits();
 
-    for opt in opts::opt_table() {
+    for opt in &opts::OPTS {
         if opt.has(c::opt_flags::OPT_HIDDEN) || opt.flags.bits() & ty == 0 {
             continue;
         }
@@ -546,7 +567,7 @@ pub unsafe extern "C" fn bch2_opts_create_sysfs_files(kobj: *mut c::kobject, ty:
         }
 
         // SAFETY: the caller's; an option's attribute is static
-        if let Err(e) = unsafe { sysfs::create_file(kobj, &opt.attr) } {
+        if let Err(e) = unsafe { sysfs::create_file(kobj, OPT_FILES.get(opt.id.0 as usize)) } {
             return -e.raw();
         }
     }
@@ -563,8 +584,7 @@ const DEV: &[Attr<c::bch_dev>] = &[
     Attr::ro(c"nbuckets",               |ca, out| writeln!(out, "{}", ca.mi.nbuckets)),
 
     Attr::ro(c"has_data",               |ca, out| {
-        // SAFETY: the data types' names, NULL terminated
-        unsafe { out.prt_bitflags(c::__bch2_data_types.as_ptr(), ca.has_data() as u64) };
+        crate::util::names::prt_set::<c::bch_data_type>(out, ca.has_data() as u64);
         out.newline();
     }),
     Attr::ro(c"io_done",                io_done_to_text),
@@ -600,7 +620,7 @@ fn io_done_to_text(ca: &c::bch_dev, out: &mut Printbuf) {
         writeln!(out, "  \"{name}\": {{");
         for i in 1..nr {
             write!(out, "    \"");
-            prt_data_type(out, c::bch_data_type(i as u32));
+            c::bch_data_type(i as u32).to_text(out);
             writeln!(out, "\": {}{}", done.sectors[rw][i] << 9, if i < nr - 1 { "," } else { "" });
         }
         writeln!(out, "  }}{}", if rw == READ { "," } else { "" });
@@ -615,7 +635,7 @@ unsafe impl Dir for DevDir {
     const KOBJ: usize = offset_of!(c::bch_dev, kobj);
 
     fn show(ca: &c::bch_dev, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
-        match opts::opt_from_attr(attr) {
+        match opt_from_attr(attr) {
             Some(id) => opt_show(ca.fs(), Some(ca), id, out),
             // SAFETY: a device's files that aren't options' are DEV's
             None     => unsafe { sysfs::attr_show(ca, attr, out) },
@@ -623,7 +643,7 @@ unsafe impl Dir for DevDir {
     }
 
     fn store(ca: &c::bch_dev, attr: &c::attribute, s: &str) -> Result<(), BchError> {
-        match opts::opt_from_attr(attr) {
+        match opt_from_attr(attr) {
             Some(id) => opt_store(ca.fs(), Some(ca), id, s),
             // SAFETY: as show()'s
             None     => unsafe { sysfs::attr_store(ca, attr, s) },
@@ -674,7 +694,7 @@ fn compression_stats_to_text(c: &Fs, out: &mut Printbuf) {
         accounting::mem_read(c, &pos, &mut v);
         let [nr_extents, sectors_uncompressed, sectors_compressed] = v;
 
-        prt_compression_type(out, c::bch_compression_type(i));
+        c::bch_compression_type(i).to_text(out);
         out.tab();
 
         out.human_readable_u64(sectors_compressed << 9);

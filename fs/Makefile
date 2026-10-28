@@ -108,7 +108,6 @@ bcachefs-y		:=			\
 	journal/validate.o			\
 	journal/write.o				\
 	locking/locking.o			\
-	opts.o					\
 	sb/members.o				\
 	util/clock.o				\
 	util/darray.o				\

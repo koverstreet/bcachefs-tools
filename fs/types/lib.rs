@@ -549,7 +549,7 @@ pub fn c_bit(b: &[u8], i: usize) -> bool {
     b[i / 8] & c_bit_mask(i) != 0
 }
 
-pub fn set_c_bit(b: &mut [u8], i: usize, v: bool) {
+pub const fn set_c_bit(b: &mut [u8], i: usize, v: bool) {
     if v {
         b[i / 8] |= c_bit_mask(i);
     } else {

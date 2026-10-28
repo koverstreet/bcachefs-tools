@@ -47,9 +47,9 @@ use crate::errcode::{ret_to_c, BchError};
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
 use crate::util::{alloc::{flags::{GFP_KERNEL, GFP_NOWAIT, __GFP_NOWARN}, kmalloc, KVVec}, bio::{Bio, BioRange},
-                  ffi::{c_char, Opaque}, kernel::{READ, WRITE}, log::LogMsg, mempool::Mempool,
-                  volatile::VolatileSlice, vstructs::Head, Printbuf};
-use core::ffi::{c_int, c_uint, c_void, CStr};
+                  ffi::Opaque, kernel::{READ, WRITE}, log::LogMsg, mempool::Mempool,
+                  volatile::VolatileSlice, Printbuf};
+use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
@@ -745,7 +745,7 @@ pub unsafe fn bch2_bio_compress(c: &Opaque<c::bch_fs>, dst: *mut c::bio, dst_len
 
 // ── Setup ────────────────────────────────────────────────────────────────
 
-fn check_set_has_compressed_data(fs: &Fs, compression_opt: u8) -> Result<(), BchError> {
+pub(crate) fn check_set_has_compressed_data(fs: &Fs, compression_opt: u8) -> Result<(), BchError> {
     let t = bch_compression_opt::bits(compression_opt).type_() as usize;
     assert!(t < OPT_NR, "compression opt {compression_opt:#x}");
     if t == 0 {
@@ -765,11 +765,6 @@ fn check_set_has_compressed_data(fs: &Fs, compression_opt: u8) -> Result<(), Bch
     sb.sb_mut().features[0] |= f;
     fs.write_super(&mut sb);
     Ok(())
-}
-
-#[c_export]
-pub fn bch2_check_set_has_compressed_data(c: &Opaque<c::bch_fs>, compression_opt: c_uint) -> c_int {
-    ret_to_c(check_set_has_compressed_data(Fs::from_c(c), compression_opt as u8))
 }
 
 /// The pools @features' types need, set up if they aren't.
@@ -818,42 +813,42 @@ pub fn bch2_fs_compress_init(c: &Opaque<c::bch_fs>) -> c_int {
 
 // ── Options ──────────────────────────────────────────────────────────────
 
-/// # Safety
-/// @val is a C string, or NULL.
-#[c_export]
-pub unsafe fn bch2_opt_compression_parse(_c: Option<&Opaque<c::bch_fs>>, val: *const c_char,
-                                         res: &mut u64, err: Option<&mut Printbuf>) -> c_int {
-    let einval = -(c::EINVAL as c_int);
-    if val.is_null() {
-        return -(c::ENOMEM as c_int);
-    }
-    // SAFETY: the caller's
-    let s = unsafe { CStr::from_ptr(val.cast()) }.to_bytes();
+/// compression=, background_compression=: a type, and a level - "zstd:3".
+pub const OPT: crate::opts::OptFn = crate::opts::OptFn {
+    parse:    |_, val, err| opt_parse(val, err),
+    to_text:  |out, _, _, v| opt_to_text(out, v),
+    validate: Some(opt_validate),
+};
+
+fn opt_parse(val: Option<&[u8]>, err: Option<&mut Printbuf>) -> Result<u64, BchError> {
+    // XXX: C's, for no value
+    let s = val.ok_or(BchError::from(c::ENOMEM))?;
     let colon = s.iter().position(|&b| b == b':');
 
     let Some(t) = OPT_NAMES.iter().position(|n| n.as_bytes() == &s[..colon.unwrap_or(s.len())]) else {
         if let Some(err) = err {
             writeln!(err, "invalid compression type");
         }
-        return einval;
+        return Err(c::EINVAL.into());
     };
 
     let mut level = 0;
     if let Some(i) = colon {
-        // SAFETY: the rest of the C string
-        let mut ret = unsafe { c::kstrtouint(val.add(i + 1).cast(), 10, &mut level) };
-        if ret == 0 && (level > 15 || (t == 0 && level != 0)) {
-            ret = einval;
-        }
-        if ret != 0 {
-            if let Some(err) = err {
-                writeln!(err, "invalid compression level");
+        let l = core::str::from_utf8(&s[i + 1..])
+            .map_err(|_| BchError::from(c::EINVAL))
+            .and_then(crate::util::sysfs::parse_int::<u32>)
+            .and_then(|l| if l > 15 || (t == 0 && l != 0) { Err(c::EINVAL.into()) } else { Ok(l) });
+        level = match l {
+            Ok(l)    => l,
+            Err(ret) => {
+                if let Some(err) = err {
+                    writeln!(err, "invalid compression level");
+                }
+                return Err(ret);
             }
-            return ret;
-        }
+        };
     }
-    *res = bch_compression_opt::value(t as u8, level as u8).into();
-    0
+    Ok(bch_compression_opt::value(t as u8, level as u8).into())
 }
 
 pub fn opt_to_text(out: &mut Printbuf, v: u64) {
@@ -867,18 +862,13 @@ pub fn opt_to_text(out: &mut Printbuf, v: u64) {
     }
 }
 
-#[cold]
-#[c_export]
-pub fn bch2_opt_compression_to_text(out: &mut Printbuf, _c: Option<&Opaque<c::bch_fs>>,
-                                    _sb: *mut Head<c::bch_sb>, v: u64) {
-    opt_to_text(out, v)
+fn opt_validate(v: u64, err: Option<&mut Printbuf>) -> Result<(), BchError> {
+    if !bch_compression_opt::valid(v as u8) {
+        if let Some(err) = err {
+            write!(err, "invalid compression opt {v}");
+        }
+        return Err(e::BCH_ERR_invalid_sb_opt_compression.into());
+    }
+    Ok(())
 }
 
-#[c_export]
-pub fn bch2_opt_compression_validate(v: u64, err: &mut Printbuf) -> c_int {
-    if !bch_compression_opt::valid(v as u8) {
-        write!(err, "invalid compression opt {v}");
-        return -(e::BCH_ERR_invalid_sb_opt_compression.0 as c_int);
-    }
-    0
-}

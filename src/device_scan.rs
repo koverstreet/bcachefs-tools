@@ -410,9 +410,7 @@ fn missing_dev_timeout(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) ->
     };
 
     let mut sb_opts: bch_opts = Default::default();
-    if unsafe { c::bch2_opts_from_sb(&mut sb_opts, sb.sb) } != 0 {
-        return DEFAULT_MISSING_DEV_TIMEOUT;
-    }
+    bcachefs_kernel::opts::opts_from_sb(&mut sb_opts, sb.sb().as_unvalidated());
 
     match opt_get!(sb_opts, missing_dev_timeout) {
         0 => DEFAULT_MISSING_DEV_TIMEOUT,

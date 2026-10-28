@@ -60,7 +60,6 @@ macro_rules! type_names {
 c::BCH_DATA_UPDATE_TYPES!(type_names);
 
 c_extern! {
-    fn bch2_inode_opts_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, opts: c::bch_inode_opts);
     fn __bch2_write_op_to_text(out: *mut c::printbuf, op: *mut c::bch_write_op);
     pub fn bch2_read_bio_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, rbio: *mut c::bch_read_bio);
 }
@@ -185,8 +184,7 @@ impl Fs {
         prt!(out, "checksum_paranoia:\t{}\n", u8::from(data_opts.bits.checksum_paranoia()));
 
         prt!(out, "io path options:\t");
-        // SAFETY: read only
-        unsafe { bch2_inode_opts_to_text(out.as_raw(), self.as_ptr(), *io_opts) };
+        crate::inode_opts::opts_to_text(out, self, io_opts);
         out.newline();
     }
 }

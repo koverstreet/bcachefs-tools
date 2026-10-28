@@ -431,7 +431,7 @@ impl ToText for StrHashType {
             3 => c::bch_str_hash_type::BCH_STR_HASH_siphash,
             n => return write!(out, "(invalid str_hash type {n})"),
         };
-        unsafe { c::bch2_prt_str_hash_type(out.as_raw(), t) }
+        t.to_text(out)
     }
 }
 crate::display_via_to_text!(StrHashType);

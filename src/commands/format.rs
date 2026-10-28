@@ -170,7 +170,7 @@ struct FormatConfig {
 }
 
 fn requested_replicas(fs_opts: &c::bch_opts) -> u8 {
-    let defaults = bcachefs_kernel::opts::opts_default();
+    let defaults = bcachefs_kernel::opts::DEFAULTS;
     let data = if fs_opts.data_replicas != 0 {
         fs_opts.data_replicas
     } else {
@@ -310,7 +310,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                         "0".to_string()
                     } else if let Some(v) = inline_val {
                         v.to_string()
-                    } else if opt.type_ != c::opt_type::BCH_OPT_BOOL {
+                    } else if !matches!(opt.ty, bcachefs_kernel::opts::OptType::Bool) {
                         take_opt_value(None, &argv, &mut i, raw_name)?
                     } else {
                         "1".to_string()
@@ -335,13 +335,13 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                             // Opt_failure_domain arm in format_util.rs).
                             // Routing the placeholder into bch_opts would drop
                             // the string silently:
-                            if opt.type_ == c::opt_type::BCH_OPT_STR_MEMBER {
+                            if matches!(opt.ty, bcachefs_kernel::opts::OptType::StrMember { .. }) {
                                 push_dev_opt_str!(opt_id, val_str);
                             } else if opt.flags.bits() & c::opt_flags::OPT_DEVICE.bits() != 0 {
-                                bcachefs_kernel::opts::opt_set_by_id(&mut cur_dev_opts, opt_id, v);
+                                cur_dev_opts.set(opt_id, v);
                                 unconsumed_dev_option = true;
                             } else if opt.flags.bits() & c::opt_flags::OPT_FS.bits() != 0 {
-                                bcachefs_kernel::opts::opt_set_by_id(&mut fs_opts, opt_id, v);
+                                fs_opts.set(opt_id, v);
                             }
                         }
                     }
@@ -609,7 +609,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
     // (cpu-scaled, fs-size-capped, clamped to [0, 8]) is shard_bits_default(),
     // which superblock validate's rewrite of legacy bits=0 filesystems uses
     // too, so the two can't diverge.
-    if !bcachefs_kernel::opts::opt_defined_by_id(&cfg.fs_opts, opt_id::shard_inode_numbers_bits) {
+    if !cfg.fs_opts.defined(opt_id::shard_inode_numbers_bits) {
         let nr_cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1) as u32;
@@ -634,11 +634,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
 
         let bits = bcachefs_kernel::inode::shard_bits_default(nr_cpus, total_fs_size,
                                                               btree_node_bytes) as u64;
-        bcachefs_kernel::opts::opt_set_by_id(
-            &mut cfg.fs_opts,
-            opt_id::shard_inode_numbers_bits,
-            bits,
-        );
+        cfg.fs_opts.set(opt_id::shard_inode_numbers_bits, bits);
     }
 
     let Some(sb) = crate::commands::format_util::format(fs_opt_strs, cfg.fs_opts, fmt_opts, &mut devices) else {

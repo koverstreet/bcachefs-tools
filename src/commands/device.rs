@@ -131,7 +131,7 @@ fn device_add_format(
     for (name, value) in &bch_opts {
         let Some((opt_id, opt)) = bch_opt_lookup(name) else { continue };
         match parse_opt_val(opt, value)? {
-            Some(val) => bcachefs_kernel::opts::opt_set_by_id(&mut dev_opts.opts, opt_id, val),
+            Some(val) => dev_opts.opts.set(opt_id, val),
             // Values that resolve against a superblock (labels) - the
             // new device's sb, once format_for_device_add builds it:
             None => dev_opts.opt_strs.push((opt_id, CString::new(value.as_str())?)),

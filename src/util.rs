@@ -2,7 +2,6 @@ use std::ffi::CString;
 use std::fs::File;
 use std::io;
 use std::os::fd::OwnedFd;
-use std::os::raw::c_char;
 use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 
@@ -206,15 +205,13 @@ pub fn file_size(f: &File) -> Result<u64> {
     }
 }
 
-/// Parse a comma-separated flag list against a C string table.
+/// Parse a comma-separated flag list against a table of names.
 ///
 /// Returns a bitmask of matched flags, or an error if any flag is unrecognized.
-pub fn read_flag_list(s: &str, list: &[*const c_char], what: &str) -> Result<u64> {
-    let c_str = CString::new(s)?;
-    let v = unsafe { c::bch2_read_flag_list(c_str.as_ptr(), list.as_ptr()) };
-    if v == u64::MAX {
+pub fn read_flag_list(s: &str, list: &[&str], what: &str) -> Result<u64> {
+    let Ok(v) = bcachefs_kernel::opts::read_flag_list(s.as_bytes(), list, u64::MAX) else {
         bail!("Bad {} {}", what, s);
-    }
+    };
     Ok(v)
 }
 

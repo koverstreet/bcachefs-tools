@@ -19,7 +19,6 @@ use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::opts::prt_data_type;
 use crate::sb::io::{entries_as_read, entries_end, SbField, SbFieldOps, SbState};
 use crate::sb::members::member_exists;
 use crate::util::ffi::Opaque;
@@ -87,7 +86,7 @@ impl<'a> From<&'a c::bch_replicas_entry_v0<Unvalidated>> for SbEntry<'a> {
 
 impl SbEntry<'_> {
     fn to_text(&self, out: &mut Printbuf) {
-        prt_data_type(out, c::bch_data_type(self.data_type.into()));
+        c::bch_data_type(self.data_type.into()).to_text(out);
         match self.nr_required {
             Some(r) => write!(out, ": {r}/{} [", self.devs.len()),
             None    => write!(out, ": {} [", self.devs.len()),

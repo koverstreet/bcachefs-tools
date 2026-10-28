@@ -6,9 +6,8 @@ use crate::cstructs::c;
 use crate::types::{bits_to_longs, rust_only};
 use crate::published;
 use crate::util::projections::{PublishedOnce, Volatile};
-use crate::util::ffi::c_char;
 use core::ffi::{c_uint, c_ulong};
-use cstruct_macros::{CStruct, c_extern, TypeInfo};
+use cstruct_macros::{CStruct, TypeInfo};
 
 /*
  * Updated by sb_update(): what's read of the superblock without sb_lock,
@@ -61,7 +60,4 @@ pub struct bch_sb_cpu {
 }
 }
 
-c_extern! {
-    pub static bch2_sb_features: [*const c_char; 0];
-    pub static bch2_sb_compat: [*const c_char; 0];
-}
+

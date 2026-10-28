@@ -162,7 +162,6 @@ fn main() {
         .blocklist_type("bch_[p-z].*")
         .blocklist_type("bch_opt_fn")
         .blocklist_type("bch_opt_id")
-        .blocklist_type("bch_option")
         .blocklist_type("bch_opts.*")
         .allowlist_var("KEY_SPEC_.*")
         .blocklist_item("bch2_bkey_ops")

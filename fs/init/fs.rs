@@ -291,29 +291,6 @@ impl Fs {
         self.sb.nr_devices.get() as u32
     }
 
-    /// Run an option's pre-set hook; None dev = filesystem scope.
-    pub fn opt_hook_pre_set(&self, dev: Option<&DevRef>, id: c::bch_opt_id, v: u64)
-        -> Result<(), BchError>
-    {
-        ret_to_result(unsafe {
-            c::bch2_opt_hook_pre_set(self.as_ptr(),
-                dev.map_or(core::ptr::null_mut(), |d| d.as_mut_ptr()),
-                0, id, v, true)
-        })
-    }
-
-    /// Set an option in the superblock; None dev = filesystem scope.
-    pub fn opt_set_sb(&self, dev: Option<&DevRef>, opt: &c::bch_option, v: u64,
-                      val_str: Option<&core::ffi::CStr>)
-    {
-        unsafe {
-            c::bch2_opt_set_sb(self.as_ptr(),
-                dev.map_or(core::ptr::null_mut(), |d| d.as_mut_ptr()),
-                opt, v,
-                val_str.map_or(core::ptr::null(), |s| s.as_ptr().cast()));
-        }
-    }
-
     pub fn start(&self) -> Result<(), BchError> {
         ret_to_result(unsafe { c::bch2_fs_start(self.as_ptr()) })
     }

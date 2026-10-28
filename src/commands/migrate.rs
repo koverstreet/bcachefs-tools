@@ -649,7 +649,7 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
                         "0".to_string()
                     } else if let Some(v) = inline_val {
                         v.to_string()
-                    } else if opt.type_ != c::opt_type::BCH_OPT_BOOL {
+                    } else if !matches!(opt.ty, bcachefs_kernel::opts::OptType::Bool) {
                         take_opt_value(None, &argv, &mut i, raw_name)?
                     } else {
                         "1".to_string()
@@ -657,7 +657,7 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
 
                     match parse_opt_val(opt, &val_str)? {
                         None => deferred_opts.push((opt_id, val_str)),
-                        Some(v) => bcachefs_kernel::opts::opt_set_by_id(&mut fs_opts, opt_id, v),
+                        Some(v) => fs_opts.set(opt_id, v),
                     }
                     i += 1;
                     continue;

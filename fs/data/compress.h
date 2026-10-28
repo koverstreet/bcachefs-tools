@@ -26,10 +26,4 @@ static inline enum bch_compression_type bch2_compression_opt_to_type(unsigned v)
 	return __bch2_compression_opt_to_type[opt.type];
 }
 
-#define bch2_opt_compression (struct bch_opt_fn) {		\
-	.parse		= bch2_opt_compression_parse,		\
-	.to_text	= bch2_opt_compression_to_text,		\
-	.validate	= bch2_opt_compression_validate,	\
-}
-
 #endif /* _BCACHEFS_DATA_COMPRESS_H */

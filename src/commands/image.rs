@@ -13,7 +13,7 @@ use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::accounting::{compression_type, data_type};
 use bcachefs_kernel::btree::bkey::bkey_type;
 use bcachefs_kernel::btree_id;
-use bcachefs_kernel::opts::{prt_compression_type, prt_data_type};
+use bcachefs_kernel::util::ToText;
 use bcachefs_kernel::btree::iter::{BtreeIter, lockrestart_do};
 use bch_bindgen::c;
 use bcachefs_kernel::util::vstructs::Head;
@@ -182,11 +182,11 @@ fn print_data_type_usage(
 ) {
     let d = &usage.d[data_type.0 as usize];
     if d.buckets != 0 {
-        prt_data_type(out, data_type);
+        data_type.to_text(out);
         prt_sectors(out, ca.bucket_to_sector(d.buckets));
     }
     if d.fragmented != 0 {
-        prt_data_type(out, data_type);
+        data_type.to_text(out);
         write!(out, " fragmented");
         prt_sectors(out, d.fragmented);
     }
@@ -272,7 +272,7 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
         let sectors_uncompressed = v[1];
         let sectors_compressed = v[2];
 
-        prt_compression_type(&mut buf, c::bch_compression_type(i));
+        c::bch_compression_type(i).to_text(&mut buf);
         write!(&mut buf, "\t");
 
         buf.human_readable_u64(sectors_compressed << 9);
@@ -749,7 +749,7 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                         "0".to_string()
                     } else if let Some(v) = inline_val {
                         v.to_string()
-                    } else if opt.type_ != c::opt_type::BCH_OPT_BOOL {
+                    } else if !matches!(opt.ty, bcachefs_kernel::opts::OptType::Bool) {
                         take_opt_value(None, &argv, &mut i, raw_name)?
                     } else {
                         "1".to_string()
@@ -759,9 +759,9 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                         None => deferred_opts.push((opt_id, val_str)),
                         Some(v) => {
                             if opt.flags.bits() & c::opt_flags::OPT_DEVICE.bits() != 0 {
-                                bcachefs_kernel::opts::opt_set_by_id(&mut dev_opts, opt_id, v);
+                                dev_opts.set(opt_id, v);
                             } else if opt.flags.bits() & c::opt_flags::OPT_FS.bits() != 0 {
-                                bcachefs_kernel::opts::opt_set_by_id(&mut fs_opts, opt_id, v);
+                                fs_opts.set(opt_id, v);
                             }
                         }
                     }

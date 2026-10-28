@@ -12,8 +12,8 @@ use bch_bindgen::c::DiskAccountingPosRef as Acct;
 use bcachefs_kernel::util::vstructs::ArmError;
 use crate::wrappers::handle::{BcachefsHandle, DevUsage};
 use bcachefs_kernel::{btree, metadata_version};
-use bcachefs_kernel::opts::{prt_data_type, prt_compression_type, prt_reconcile_type};
 use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::util::ToText;
 use crate::wrappers::sysfs::{self, DeviceNameMode, DevInfo, bcachefs_kernel_version};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -213,7 +213,7 @@ fn fs_usage_v1_to_text(
                         let dev_list = &r.devs;
                         let dur = replicas_durability(r.nr_devs, r.nr_required, dev_list, devs);
 
-                        prt_data_type(sub, data_type_from_u8(r.data_type));
+                        data_type_from_u8(r.data_type).to_text(sub);
                         write!(sub, ":\t{}/{}\t{}\t[", r.nr_required, r.nr_devs, dur.durability);
 
                         prt_dev_list(sub, dev_list, devs);
@@ -241,7 +241,7 @@ fn fs_usage_v1_to_text(
 
                 for entry in &compr {
                     if let Ok(Acct::compression(r)) = entry.pos.get() {
-                        prt_compression_type(sub, compression_type_from_u8(r.type_));
+                        compression_type_from_u8(r.type_).to_text(sub);
                         write!(sub, "\t");
 
                         let nr_extents = entry.counter(0);
@@ -302,7 +302,7 @@ fn fs_usage_v1_to_text(
                 write!(sub, "\nPending reconcile:\tdata\rmetadata\r\n");
                 for entry in &reconcile {
                     if let Ok(Acct::reconcile_work(r)) = entry.pos.get() {
-                        prt_reconcile_type(sub, reconcile_type_from_u8(r.type_));
+                        reconcile_type_from_u8(r.type_).to_text(sub);
                         write!(sub, ":\t");
                         sub.units_sectors(entry.counter(0));
                         write!(sub, "\r");
@@ -679,7 +679,7 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
             write!(sub, "\r\n");
 
             for (dt_type, dt) in u.iter_typed() {
-                prt_data_type(sub, dt_type);
+                dt_type.to_text(sub);
                 write!(sub, ":\t");
 
                 let sectors = if data_type_is_empty(dt_type) {

@@ -1,24 +1,24 @@
-use std::ffi::CString;
 use std::fmt::Write;
 
 use anyhow::{bail, Result};
 use bch_bindgen::c;
+use bcachefs_kernel::errcode::bch_errcode;
+use bcachefs_kernel::opts::{Opt, OptType};
 use bcachefs_kernel::util::printbuf::Printbuf;
 use clap::{Arg, ArgAction, ArgMatches};
 
-/// Leak a String to get a &'static str. Used for Clap args built from
-/// runtime C strings — allocated once at startup, lives for the process.
+/// Leak a String to get a &'static str. Used for Clap args built at
+/// runtime — allocated once at startup, lives for the process.
 fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
-/// Iterate bch2_opt_table entries matching flag_filter, calling f for each.
-fn for_each_opt(flag_filter: u32, mut f: impl FnMut(&'static str, &c::bch_option)) {
-    for opt in bcachefs_kernel::opts::opt_table() {
+/// Iterate the options matching flag_filter, calling f for each.
+fn for_each_opt(flag_filter: u32, mut f: impl FnMut(&'static str, &'static Opt)) {
+    for opt in &bcachefs_kernel::opts::OPTS {
         if opt.flags.bits() & flag_filter == 0 { continue }
         if opt.flags.bits() & c::opt_flags::OPT_HIDDEN.bits() != 0 { continue }
-        let Some(name) = opt.name() else { continue };
-        f(name, opt);
+        f(opt.name, opt);
     }
 }
 
@@ -30,13 +30,13 @@ pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
     const HELPCOL: usize = 32;
     let mut out = String::new();
 
-    for opt in bcachefs_kernel::opts::opt_table() {
+    for opt in &bcachefs_kernel::opts::OPTS {
         if opt.flags.bits() & flags_all != flags_all { continue }
         if opt.flags.bits() & flags_none != 0 { continue }
-        let Some(name) = opt.name() else { continue };
+        let name = opt.name;
 
         let mut col = 0;
-        let s = if opt.type_ == c::opt_type::BCH_OPT_BOOL {
+        let s = if matches!(opt.ty, OptType::Bool) {
             format!("      --{name}, --no{name}")
         } else {
             format!("      --{name}")
@@ -44,12 +44,11 @@ pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
         col += s.len();
         out.push_str(&s);
 
-        match opt.type_ {
-            c::opt_type::BCH_OPT_BOOL => {}
-            c::opt_type::BCH_OPT_STR => {
+        match opt.ty {
+            OptType::Bool => {}
+            OptType::Str(choices) => {
                 out.push_str("=(");
                 col += 2;
-                let choices = opt.choices();
                 for (j, ch) in choices.iter().enumerate() {
                     if j > 0 { out.push('|'); col += 1; }
                     out.push_str(ch);
@@ -59,14 +58,14 @@ pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
                 col += 1;
             }
             _ => {
-                if let Some(h) = opt.hint() {
+                if let Some(h) = opt.hint {
                     let _ = write!(out, "={h}");
                     col += 1 + h.len();
                 }
             }
         }
 
-        if let Some(help) = opt.help() {
+        if let Some(help) = opt.help {
             for (j, line) in help.split('\n').enumerate() {
                 if line.is_empty() && j > 0 { break; }
                 // help text starts at HELPCOL - 1: wrap unless there's room
@@ -91,7 +90,7 @@ pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
     out
 }
 
-/// Build Clap arguments from bch2_opt_table entries matching flag_filter.
+/// Build Clap arguments from the options matching flag_filter.
 ///
 /// `allow_remove` adds "-" as an accepted value for choice-typed (BCH_OPT_STR)
 /// options — the sentinel set-file-option uses to delete a per-file option.
@@ -107,12 +106,12 @@ pub fn bch_option_args(flag_filter: u32, allow_remove: bool) -> Vec<Arg> {
             arg = arg.visible_alias(leak(name.replace('_', "-")));
         }
 
-        if let Some(h) = opt.help() {
+        if let Some(h) = opt.help {
             arg = arg.help(h);
         }
 
-        match opt.type_ {
-            c::opt_type::BCH_OPT_BOOL => {
+        match opt.ty {
+            OptType::Bool => {
                 arg = arg.num_args(0..=1)
                          .default_missing_value("1")
                          .require_equals(true)
@@ -134,8 +133,8 @@ pub fn bch_option_args(flag_filter: u32, allow_remove: bool) -> Vec<Arg> {
 
                 args.push(no_arg);
             }
-            c::opt_type::BCH_OPT_STR => {
-                let mut choices = opt.choices();
+            OptType::Str(choices) => {
+                let mut choices = choices.to_vec();
                 if !choices.is_empty() {
                     if allow_remove {
                         choices.push("-");
@@ -143,14 +142,14 @@ pub fn bch_option_args(flag_filter: u32, allow_remove: bool) -> Vec<Arg> {
                     arg = arg.value_parser(choices);
                 }
             }
-            c::opt_type::BCH_OPT_BITFIELD => {
-                if let Some(h) = opt.hint() {
+            OptType::Bitfield { .. } => {
+                if let Some(h) = opt.hint {
                     arg = arg.value_name(h);
                 }
                 arg = arg.allow_hyphen_values(true);
             }
             _ => {
-                if let Some(h) = opt.hint() {
+                if let Some(h) = opt.hint {
                     arg = arg.value_name(h);
                 }
             }
@@ -164,19 +163,18 @@ pub fn bch_option_args(flag_filter: u32, allow_remove: bool) -> Vec<Arg> {
 
 /// Look up a bcachefs option by name, handling --nooption negation for booleans.
 /// Returns (opt_id, opt_ref, negated).
-pub fn bch_opt_lookup_negated(name: &str) -> Option<(c::bch_opt_id, &'static c::bch_option, bool)> {
+pub fn bch_opt_lookup_negated(name: &str) -> Option<(c::bch_opt_id, &'static Opt, bool)> {
     if let Some(r) = bch_opt_lookup(name) {
         return Some((r.0, r.1, false));
     }
     let rest = name.strip_prefix("no_").or_else(|| name.strip_prefix("no"))?;
     let (id, opt) = bch_opt_lookup(rest)?;
-    (opt.type_ == c::opt_type::BCH_OPT_BOOL).then_some((id, opt, true))
+    matches!(opt.ty, OptType::Bool).then_some((id, opt, true))
 }
 
 /// Look up a bcachefs option by name. Returns the typed option id and reference.
-pub fn bch_opt_lookup(name: &str) -> Option<(c::bch_opt_id, &'static c::bch_option)> {
-    let c_name = std::ffi::CString::new(name).ok()?;
-    bcachefs_kernel::opts::opt_lookup(&c_name)
+pub fn bch_opt_lookup(name: &str) -> Option<(c::bch_opt_id, &'static Opt)> {
+    bcachefs_kernel::opts::opt_lookup(name).map(|opt| (opt.id, opt))
 }
 
 /// Option names matching the filter.
@@ -192,7 +190,7 @@ pub fn bch_options_from_matches(matches: &ArgMatches, flag_filter: u32) -> Vec<(
     for_each_opt(flag_filter, |name, opt| {
         if let Some(val) = matches.get_one::<String>(name) {
             opts.push((name.to_string(), val.clone()));
-        } else if opt.type_ == c::opt_type::BCH_OPT_BOOL {
+        } else if matches!(opt.ty, OptType::Bool) {
             let no_name = format!("no{name}");
             if matches.get_flag(&no_name) {
                 opts.push((name.to_string(), "0".to_string()));
@@ -206,17 +204,16 @@ pub fn bch_options_from_matches(matches: &ArgMatches, flag_filter: u32) -> Vec<(
 ///
 /// Returns:
 ///   `Ok(None)` — option needs an open filesystem, should be deferred
-///   `Ok(Some(v))` — parsed value, ready to set with `bch2_opt_set_by_id`
+///   `Ok(Some(v))` — parsed value, ready to set with `bch_opts::set()`
 ///   `Err(...)` — parse error
 pub(crate) fn parse_opt_val(
-    opt: &c::bch_option,
+    opt: &Opt,
     val_str: &str,
 ) -> Result<Option<u64>> {
-    let c_val = CString::new(val_str)?;
     let mut err = Printbuf::new();
-    match bcachefs_kernel::opts::opt_parse(None, opt, &c_val, Some(&mut err)) {
+    match bcachefs_kernel::opts::opt_parse(None, opt, Some(val_str.as_bytes()), Some(&mut err)) {
         Ok(v) => Ok(Some(v)),
-        Err(e) if e == -(c::bch_errcode::BCH_ERR_option_needs_open_fs.0 as i32) => Ok(None),
+        Err(e) if e == bch_errcode::BCH_ERR_option_needs_open_fs.into() => Ok(None),
         Err(_) => {
             let msg = err.as_str();
             if msg.is_empty() {

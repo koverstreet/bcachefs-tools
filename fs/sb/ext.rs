@@ -20,8 +20,7 @@ type Section = c::bch_sb_field_ext<Validated>;
 
 fn prt_btrees(out: &mut Printbuf, what: &str, btrees: Le64) {
     write!(out, "{what}:\t");
-    // SAFETY: the names are C's, NULL terminated
-    unsafe { out.prt_bitflags(c::__bch2_btree_ids.as_ptr(), btrees.get()) };
+    crate::util::names::prt_set::<c::btree_id>(out, btrees.get());
     out.newline();
 }
 

@@ -485,14 +485,14 @@ use crate::c::bch_errcode;
 use crate::errcode::{err_ptr, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
-use crate::opts::{data_type_str, prt_data_type};
+use crate::opts::data_type_str;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{READ, WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::log::LogMsg;
 use crate::util::varint;
 use crate::util::vstructs::{ArmRef, Validated};
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 use crate::{bkey_fsck_err_on, btree_trans, prt};
 use core::ffi::{c_int, c_uint};
 use core::mem::{offset_of, size_of};
@@ -831,7 +831,7 @@ fn alloc_v4_to_text(out: &mut Printbuf, fs: Option<&Fs>, k: BkeySC<'_>, a: &c::A
     let ca = fs.and_then(|fs| fs.dev_get(k.k.p.inode as u32));
 
     prt!(out, "\ngen {} oldest_gen {} data_type ", a.generation, a.oldest_gen);
-    prt_data_type(out, a.data_type());
+    a.data_type().to_text(out);
     prt!(out, "\njournal_seq_nonempty {}\n", { a.journal_seq_nonempty });
     if has(offset_of!(c::AllocV4, repr.journal_seq_empty), size_of::<u64>()) {
         prt!(out, "journal_seq_empty    {}\n", { a.journal_seq_empty });
