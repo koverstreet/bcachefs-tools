@@ -13,6 +13,7 @@ use crate::util::bio::BioSet;
 use crate::util::workqueue::ReffedWork;
 use crate::util::percpu::{Counters, PerCpu};
 use crate::util::projections::Volatile;
+use crate::published;
 use core::ffi::{c_uint, c_ulong};
 use core::sync::atomic::{AtomicI32, AtomicI64};
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, placed, CStruct, Fieldwise, Init, TypeInfo};
@@ -281,6 +282,21 @@ pub struct write_point_specifier {
     pub v: c_ulong,
 }
 
+published! {
+    /// Where copies have to go, when free space is lopsided enough that it
+    /// decides how much fits: recomputed with the reservation caches - from
+    /// what it was, for hysteresis - and read without the lock by the
+    /// allocator, as a placement preference - see bch2_dev_alloc_required().
+    #[derive(CStruct)]
+    pub struct Placement {
+        /* bit n - 1: placement decides how much fits at n replicas */
+        pub placement_constrained: Volatile<c_ulong>,
+        /* at n replicas, the devices every such allocation has to use */
+        #[c("struct bch_devs_mask placement_required[BCH_REPLICAS_MAX]")]
+        pub placement_required: [Volatile<c::DevsMask>; c::BCH_REPLICAS_MAX as usize],
+    }
+}
+
 /* capacity.pcpu's counters: each CPU's a delta, summed over them */
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo, Fieldwise)]
@@ -321,24 +337,17 @@ pub struct bch_fs_capacity {
     pub bucket_size_max: crate::util::projections::Volatile<c_uint>,
 
     pub sectors_available: [AtomicI64; c::BCH_REPLICAS_MAX as usize],
+
+    /* the reservation caches' recompute, and the placement it decides */
     #[pin]
-    #[init(new_lock!((), "&c->capacity.sectors_available_lock"))]
-    #[c("spinlock_t sectors_available_lock")]
-    pub sectors_available_lock: Lock<c::spinlock_t>,
+    #[init(new_lock!((), ::pin_init::zeroed(), "&c->capacity.sectors_available_lock"))]
+    #[c_lock("spinlock_t sectors_available_lock")]
+    pub sectors_available_lock: Lock<c::spinlock_t, (), Placement>,
 
     /*
-     * Bit n - 1 set when free space is lopsided enough that where copies
-     * go decides how much fits at n replicas, and the devices every such
-     * allocation has to use - see bch2_dev_alloc_required(). Recomputed
-     * with the reservation caches; read without locking, it's a placement
-     * preference.
-     *
-     * placement_allowance: physical sectors we can allocate before that
-     * could change, and so the most the reservation caches hand out
-     * between recomputes.
+     * Physical sectors we can allocate before the placement could change,
+     * and so the most the reservation caches hand out between recomputes.
      */
-    pub placement_constrained: c_ulong,
-    pub placement_required: [c::bch_devs_mask; c::BCH_REPLICAS_MAX as usize],
     pub placement_allowance: u64,
 
     #[c("struct bch_fs_capacity_pcpu __percpu *pcpu")]
