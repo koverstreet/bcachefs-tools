@@ -26,12 +26,15 @@ pub fn alloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>
 /// # Safety
 /// @p is from alloc_pinned(), and nothing uses it after.
 pub unsafe fn free_pinned<T>(p: *mut T) {
-    unsafe { free_in::<false, T>(p) }
+    #[cfg(kernel)]
+    drop(unsafe { kernel::alloc::KVBox::from_raw(p) });
+    #[cfg(not(kernel))]
+    drop(unsafe { std::boxed::Box::from_raw(p) });
 }
 
 /// alloc_pinned(), kmalloc()'d - a KBox in-kernel - for what's freed from
 /// any context: kfree() is safe anywhere, and kvfree() isn't - vfree() may
-/// sleep, outside interrupt context. kfree_pinned() takes it back.
+/// sleep, outside interrupt context.
 pub fn kalloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>) -> Result<*mut T, E> {
     alloc_in::<true, T, E>(init)
 }
@@ -50,14 +53,6 @@ pub fn kbox_pin_init<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E
 {
     // SAFETY: kalloc_pinned()'s is a KBox's allocation, pinned
     Ok(unsafe { core::pin::Pin::new_unchecked(KBox::from_raw(kalloc_pinned(init)?)) })
-}
-
-/// Drop and free @p - from any context, if dropping it can be.
-///
-/// # Safety
-/// @p is from kalloc_pinned(), and nothing uses it after.
-pub unsafe fn kfree_pinned<T>(p: *mut T) {
-    unsafe { free_in::<true, T>(p) }
 }
 
 /// @layout's worth of memory, zeroed, as a KBox allocates: for a KBox of an
@@ -372,7 +367,7 @@ fn alloc_in<const KMALLOC: bool, T, E: From<AllocError>>(init: impl ::pin_init::
         use kernel::init::InPlaceInit;
 
         let gfp = flags::GFP_KERNEL | __GFP_ZERO;
-        // SAFETY: pinned still: given up to its holder, and back to free_in()
+        // SAFETY: pinned still: given up to its holder, which frees it
         Ok(unsafe {
             if KMALLOC {
                 KBox::into_raw(Pin::into_inner_unchecked(KBox::try_pin_init(init, gfp)?))
@@ -400,21 +395,6 @@ fn alloc_in<const KMALLOC: bool, T, E: From<AllocError>>(init: impl ::pin_init::
             }
         }
     }
-}
-
-/// # Safety
-/// @p is from alloc_in::<KMALLOC>(), and nothing uses it after.
-unsafe fn free_in<const KMALLOC: bool, T>(p: *mut T) {
-    #[cfg(kernel)]
-    unsafe {
-        if KMALLOC {
-            drop(kernel::alloc::KBox::from_raw(p));
-        } else {
-            drop(kernel::alloc::KVBox::from_raw(p));
-        }
-    }
-    #[cfg(not(kernel))]
-    drop(unsafe { std::boxed::Box::from_raw(p) });
 }
 
 /// A darray C owns, lent to Rust as a KVVec while this lives; given back -

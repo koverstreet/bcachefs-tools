@@ -55,7 +55,10 @@
 //! never drops it, so its future is never dropped from a waker's context. A
 //! task pending forever with nothing to wake it - a lost wakeup - is leaked,
 //! not freed. Its memory is kmalloc()'d: the last ref may be dropped in an
-//! endio, and kfree() is safe anywhere.
+//! endio. It's dropped there, and freed a grace period later, by
+//! kvfree_rcu() - safe anywhere - so what's in a task may be found under RCU:
+//! a data update's key in the in-flight table, by a lookup that read it
+//! before it left.
 //!
 //! What a task returns is the JoinHandle's; dropped, the task's detached,
 //! and what it returns is dropped when it completes, in its context. The
@@ -64,7 +67,7 @@
 
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
-use crate::util::alloc::{kalloc_pinned, kfree_pinned, AllocError};
+use crate::util::alloc::{kalloc_pinned, AllocError};
 use crate::util::futex::EventCount;
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::kthread::Kthread;
@@ -208,7 +211,8 @@ const THREAD: usize = 1;
 const RUNQ:   usize = 2;
 
 /// What every task is, whatever its future: its work first, so a
-/// work_struct pointer is one to it.
+/// work_struct pointer is one to it - and, once the task's dropped, the
+/// rcu_head kvfree_rcu() frees it with.
 #[repr(C)]
 struct Header {
     work:     c::work_struct,
@@ -346,15 +350,23 @@ impl<F: Future> Task<F> {
             }
             Self::future(task).set(None);
             drop((*(*task).head.done_ref.get()).take());
-            kfree_pinned(task);
+            Self::dealloc(h);
         }
     }
 
+    /// Dropped now, freed after a grace period: see the top of the file.
+    ///
     /// # Safety
     /// @h is a Task<F>'s, and its last ref's gone.
     unsafe fn dealloc(h: NonNull<Header>) {
-        // SAFETY: the caller's; kalloc_pinned()'s
-        unsafe { kfree_pinned(h.cast::<Self>().as_ptr()) }
+        let task = h.cast::<Self>().as_ptr();
+        // SAFETY: the caller's; kalloc_pinned()'s - kmalloc()'d, or in
+        // userspace malloc()'d, which kvfree_rcu() frees - with nothing after
+        // the drop reading its first bytes, the rcu_head
+        unsafe {
+            core::ptr::drop_in_place(task);
+            c::rust_kvfree_rcu(task.cast());
+        }
     }
 }
 
