@@ -474,13 +474,11 @@ fn repair_ptrs(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, btree: c::btree_i
 
         let mut new = kb.adopt(fs, t.bkey_reassemble_room(kb.key(), KEY_ROOM)?);
 
-        {
-            let rcu = read_lock();
-            for (ptr, _) in new.ptrs_mut(fs).zip(&fixes).filter(|(_, f)| f.contains(PtrFix::RESET_GEN)) {
-                let ca = fs.dev_rcu(ptr.dev().into(), &rcu).expect("the device the pointer was checked against");
-                let g = ca.gc_bucket(ca.ptr_bucket(ptr)).expect("the gc bucket the pointer was checked against");
-                ptr.set_generation(g.lock.lock().generation);
-            }
+        // a ref, not RCU: the bucket lock sleeps
+        for (ptr, _) in new.ptrs_mut(fs).zip(&fixes).filter(|(_, f)| f.contains(PtrFix::RESET_GEN)) {
+            let ca = fs.dev_get(ptr.dev().into()).expect("the device the pointer was checked against");
+            let g = ca.gc_bucket(ca.ptr_bucket(ptr)).expect("the gc bucket the pointer was checked against");
+            ptr.set_generation(g.lock.lock().generation);
         }
 
         new.drop_ec_mask(fs, mask(PtrFix::DROP_STRIPE));
