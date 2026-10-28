@@ -486,6 +486,10 @@ pub trait ToText {
     fn to_text(&self, out: &mut Printbuf);
 }
 
+/// `#[derive(ToText)]`: a fieldless enum, printed as its variant's name, or
+/// its `#[label("..")]` - and Display through it. With the trait, one name.
+pub use cstruct_macros::ToText;
+
 /// Display for a type that's ToText, from its to_text(), for a format string
 /// that isn't a message: text_fmt() - into the printbuf, for write!() into
 /// one; through a printbuf of its own for format!(), println!(). (Not a

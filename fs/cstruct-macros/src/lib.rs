@@ -76,6 +76,7 @@ mod init;
 mod place;
 mod prt;
 mod tagged_union;
+mod to_text;
 mod typeinfo;
 mod vstructs;
 mod xmacro_from_c;
@@ -239,6 +240,13 @@ pub fn derive_init(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Fieldwise, attributes(fieldwise))]
 pub fn derive_fieldwise(input: TokenStream) -> TokenStream {
     expand("#[derive(Fieldwise)]", || fieldwise::derive(input))
+}
+
+/// `#[derive(ToText)]`: a fieldless enum printed as its variant's name, or
+/// its `#[label("..")]` - see to_text.rs.
+#[proc_macro_derive(ToText, attributes(label))]
+pub fn derive_to_text(input: TokenStream) -> TokenStream {
+    expand("#[derive(ToText)]", || to_text::derive(input))
 }
 
 /// `#[derive(Plain)]`: util/vstructs.rs's Plain, checked at compile time -
