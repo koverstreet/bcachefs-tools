@@ -77,6 +77,14 @@ static inline void chacha20_crypt(struct chacha_state *state, u8 *dst, const u8 
 						iv[0] | ((u64) iv[1] << 32),
 						k);
 	BUG_ON(ret);
+
+	/*
+	 * libsodium's state is its arguments, so the counter goes on here, as
+	 * the kernel's chacha_crypt() takes it on: a block at a time, a partial
+	 * one too, in x[12] alone. Without it each call started the keystream
+	 * over - a bio encrypted in pieces had every piece's the first's.
+	 */
+	iv[0] += DIV_ROUND_UP(bytes, CHACHA_BLOCK_SIZE);
 }
 
 static inline void chacha_zeroize_state(struct chacha_state *state)
