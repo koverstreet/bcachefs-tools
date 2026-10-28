@@ -19,8 +19,9 @@
 //!
 //! Resume::Queue resumes the task on that workqueue; Resume::Thread on the
 //! task's own kthread - spawn_thread()'s, kept for its life, for work that
-//! blocks, seen in ps by its name. Resume::Inline resumes
-//! it right where it's woken - in the waker's context, an endio's - as C's
+//! blocks, seen in ps by its name; Resume::Spawned where it was spawned, for
+//! a future that may be spawned either way - an UpdateTask, on a run queue or
+//! a queue. Resume::Inline resumes it right where it's woken - in the waker's context, an endio's - as C's
 //! continue_at(cl, fn, NULL) does: no hop through a workqueue, for a
 //! continuation that's cheap and safe there. What runs inline is everything
 //! up to the next await, and the drops of the task's locals if it ends
@@ -34,6 +35,13 @@
 //! the tag dispatches there - or, for a future we didn't write, awaited
 //! without resume_on(), to where it was spawned. A thread's dispatch is a
 //! flag and wake_up_process(): safe from an endio, as queue_work() is.
+//!
+//! A RunQueue's tasks run only when its owner calls run() - in its waits - so
+//! on the owner's thread, between its own steps, rather than competing with
+//! it from a workqueue: a mover's updates are its tasks. A dispatch
+//! pushes the task on a lockless stack - from any context, an endio's - and
+//! wakes the queue's EventCount; run() takes the stack whole and runs it
+//! oldest first, in the order the tasks were woken.
 //!
 //! A task's state is one word: SCHEDULED, RUNNING, NOTIFIED, COMPLETE, and
 //! a refcount. It's what keeps a task from being polled twice at once - not
@@ -57,6 +65,7 @@
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
 use crate::util::alloc::{kalloc_pinned, kfree_pinned, AllocError};
+use crate::util::futex::EventCount;
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::kthread::Kthread;
 use crate::util::sleep::{sleep_until, Sleep};
@@ -66,10 +75,11 @@ use core::cell::UnsafeCell;
 use core::ffi::{c_int, c_void};
 use core::fmt;
 use core::future::Future;
+use core::marker::PhantomPinned;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::pin::Pin;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use pin_init::{pin_data, pin_init};
 
@@ -81,6 +91,8 @@ pub enum Resume<'a> {
     Queue(&'a Queue),
     /// On the task's own kthread: a task spawn_thread() made.
     Thread,
+    /// Where it was spawned - its Queue, its thread, its RunQueue.
+    Spawned,
 }
 
 /// What's awaited once it's said where to resume: resume_on() makes it a
@@ -147,6 +159,7 @@ impl<A: Resumable> Future for Resumed<'_, A> {
                         assert!(!hr.thread.is_null(), "Resume::Thread in a task without a thread: spawn_thread() it");
                         THREAD
                     }
+                    Resume::Spawned => hr.spawned,
                     Resume::Inline => unreachable!(),
                 };
                 hr.next.store(at, Ordering::Release);
@@ -190,8 +203,9 @@ const REF:             usize = 1 << 6;
 const INLINE: usize = 1;
 
 /// Where a task's to resume, or was spawned, or is: a Queue's address, or
-/// this - no Queue's - for its kthread.
+/// this - no Queue's - for its kthread, or a RunQueue's address tagged RUNQ.
 const THREAD: usize = 1;
+const RUNQ:   usize = 2;
 
 /// What every task is, whatever its future: its work first, so a
 /// work_struct pointer is one to it.
@@ -202,12 +216,14 @@ struct Header {
     /// Where a wake that isn't inline resumes it: what the await in
     /// progress recorded, or 0 for @spawned.
     next:     AtomicUsize,
-    /// A 'static Queue, or THREAD.
+    /// A Queue, THREAD, or a RunQueue | RUNQ.
     spawned:  usize,
     /// Its kthread, if spawn_thread() made it, and a ref on it.
     thread:   *mut c::task_struct,
     /// Dispatched to its thread: the thread runs it.
     thread_go: core::sync::atomic::AtomicBool,
+    /// Under it on a RunQueue's stack, while it's dispatched there.
+    rq_next:  AtomicPtr<Header>,
     vtable:   &'static TaskVTable,
 }
 
@@ -372,6 +388,8 @@ where
 /// said where: spawn()'s, or spawn_thread()'s.
 pub enum Spawn<'a> {
     Queue(&'a Queue),
+    /// Run by the queue's owner, when it calls run().
+    Run(Pin<&'a RunQueue>),
     /// A kthread of its own, named; freezable, for a task that freezes in
     /// place - see Kthread::set_freezable().
     Thread { name: fmt::Arguments<'a>, freezable: bool },
@@ -410,7 +428,7 @@ impl<T> Drop for Unstarted<T> {
 /// one - to be started.
 ///
 /// # Safety
-/// What @make and its future borrow, and @at's Queue, outlive the task:
+/// What @make and its future borrow, and @at's Queue or RunQueue, outlive the task:
 /// whoever made it joins it - or drops it unstarted - before they're gone.
 /// spawn() and spawn_thread() are this for what's 'static.
 pub unsafe fn spawn_unstarted<M, F>(at: Spawn<'_>, make: M) -> Result<Unstarted<F::Output>, BchError>
@@ -421,6 +439,7 @@ where
 {
     let task = match at {
         Spawn::Queue(wq) => self::make(core::ptr::from_ref(wq) as usize, make)?,
+        Spawn::Run(rq) => self::make(core::ptr::from_ref(rq.get_ref()) as usize | RUNQ, make)?,
         Spawn::Thread { name, freezable } => {
             let mut name_buf = Printbuf::new();
             write!(name_buf, "{name}");
@@ -473,6 +492,7 @@ where
                 spawned,
                 thread:    core::ptr::null_mut(),
                 thread_go: core::sync::atomic::AtomicBool::new(false),
+                rq_next:   AtomicPtr::new(core::ptr::null_mut()),
                 vtable:    &Task::<F>::VTABLE,
             },
             done <- Gather::new(),
@@ -508,7 +528,7 @@ where
 enum Here {
     /// In a waker's context.
     Inline,
-    /// On a Queue, by its address, or the task's thread: THREAD.
+    /// Where a target says: a Queue, the task's thread, a RunQueue.
     At(usize),
 }
 
@@ -536,6 +556,11 @@ unsafe fn dispatch(h: NonNull<Header>, inline: bool) {
             hr.thread_go.store(true, Ordering::Release);
             // SAFETY: the task's ref on its thread
             unsafe { c::wake_up_process(hr.thread) };
+        } else if at & RUNQ != 0 {
+            // SAFETY: the RunQueue it was spawned on - only Resume::Spawned
+            // records one - which outlives it, spawn_unstarted()'s contract;
+            // SCHEDULED, so not on its stack already
+            unsafe { (*((at & !RUNQ) as *const RunQueue)).push(h) };
         } else {
             // SAFETY: a queue an await recorded, borrowed till it's done, or
             // the task's 'static one; the work's the task's, alive till it's
@@ -740,6 +765,79 @@ unsafe fn waker_wake_by_ref(p: *const ()) {
 unsafe fn waker_drop(p: *const ()) {
     // SAFETY: an owned Waker's ref
     unsafe { put_ref(untag(p).0) };
+}
+
+/* Run queues */
+
+/// Pinned, as its tasks hold its address. Its owner joins them all before
+/// it's gone.
+pub struct RunQueue {
+    /// What's dispatched here, newest first, through rq_next.
+    head:    AtomicPtr<Header>,
+    /// Woken by every dispatch here: what the owner sleeps on.
+    events:  EventCount,
+    _pinned: PhantomPinned,
+}
+
+// SAFETY: a null stack and a zero count: an empty queue, as its owner's
+// zeroed init makes it
+unsafe impl ::pin_init::Zeroable for RunQueue {}
+
+impl RunQueue {
+    /// Woken by every dispatch, and whatever else the owner wakes it with.
+    pub fn events(&self) -> &EventCount {
+        &self.events
+    }
+
+    pub fn has_ready(&self) -> bool {
+        !self.head.load(Ordering::Acquire).is_null()
+    }
+
+    /// # Safety
+    /// @h is a live task's, SCHEDULED for here.
+    unsafe fn push(&self, h: NonNull<Header>) {
+        // SAFETY: the caller's: SCHEDULED, ours till it's run
+        let hr = unsafe { h.as_ref() };
+        let mut head = self.head.load(Ordering::Relaxed);
+        loop {
+            hr.rq_next.store(head, Ordering::Relaxed);
+            match self.head.compare_exchange_weak(head, h.as_ptr(), Ordering::Release, Ordering::Relaxed) {
+                Ok(_)    => break,
+                Err(cur) => head = cur,
+            }
+        }
+        self.events.wake();
+    }
+
+    /// Only one thread may run it. What's dispatched meanwhile waits for the
+    /// next run().
+    pub fn run(self: Pin<&Self>) {
+        let mut next = self.head.swap(core::ptr::null_mut(), Ordering::Acquire);
+
+        // pushed newest first: reversed, for the order they were woken
+        let mut oldest = core::ptr::null_mut::<Header>();
+        while let Some(h) = NonNull::new(next) {
+            // SAFETY: on our stack: dispatched here, and ours to run
+            let hr = unsafe { h.as_ref() };
+            next = hr.rq_next.load(Ordering::Relaxed);
+            hr.rq_next.store(oldest, Ordering::Relaxed);
+            oldest = h.as_ptr();
+        }
+
+        let here = Here::At(core::ptr::from_ref(self.get_ref()) as usize | RUNQ);
+        while let Some(h) = NonNull::new(oldest) {
+            // SAFETY: as above; read before it's run, and maybe freed
+            oldest = unsafe { h.as_ref() }.rq_next.load(Ordering::Relaxed);
+            // SAFETY: SCHEDULED for here, by its dispatch
+            unsafe { self::run(h, here) };
+        }
+    }
+}
+
+impl Drop for RunQueue {
+    fn drop(&mut self) {
+        assert!(!self.has_ready(), "RunQueue dropped with tasks dispatched to it");
+    }
 }
 
 /* JoinHandle */
