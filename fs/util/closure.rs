@@ -71,6 +71,12 @@ impl StackClosure {
         self.cl.get()
     }
 
+    /// As a closure C handed over: what's written for one takes this too.
+    pub fn as_opaque(&self) -> &Opaque<c::closure> {
+        // SAFETY: Opaque is a transparent UnsafeCell, as @cl is; initialized
+        unsafe { &*self.cl.get().cast::<Opaque<c::closure>>() }
+    }
+
     /// Its refs: one of its own, and one for each waitlist it's on.
     pub fn nr_remaining(&self) -> u32 {
         // SAFETY: initialized; the count is atomic
