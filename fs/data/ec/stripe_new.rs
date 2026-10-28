@@ -631,6 +631,17 @@ pub(crate) fn new_stripes_take(fs: &Fs, p: NonNull<StripeNew>) -> StripeNewBox {
 
 // ── Its writers' ───────────────────────────────────────────────────────────
 
+impl OpenBucketRef {
+    /// The stripe being made it's a block of, if a writer's claimed it for
+    /// one.
+    pub fn stripe(&self) -> Option<&StripeNew> {
+        let s = self.ec();
+        // SAFETY: its ->ec holds an io ref on the stripe while it's open,
+        // which it is while it's borrowed
+        (!s.is_null()).then(|| unsafe { StripeNew::from_c(s) })
+    }
+}
+
 /// A writer's io ref on @s put: its open bucket's last pin put.
 ///
 /// # Safety

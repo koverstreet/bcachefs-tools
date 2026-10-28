@@ -266,6 +266,14 @@ impl Drop for EcOpenBucket {
 }
 
 impl c::open_buckets {
+    /// Its buckets, borrowed: the list's pins keep them open while it is.
+    pub fn iter<'a>(&'a self, fs: &'a Fs) -> impl Iterator<Item = &'a OpenBucketRef> + 'a {
+        self.v[..usize::from(self.nr)].iter().map(move |&i| {
+            // SAFETY: the list's pin, held while the list's borrowed
+            unsafe { OpenBucketRef::from_idx(fs, i.expect("a bucket of the list")) }
+        })
+    }
+
     /// Its pins, taken one by one - a list holds one on each of its buckets -
     /// leaving it empty: the rest put when the iterator's dropped. Not
     /// collected: a list of them is a copy, on the stack, of what the list
