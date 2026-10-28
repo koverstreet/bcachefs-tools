@@ -427,12 +427,14 @@ pub struct bch_dev {
     /* Buckets copygc has queued for evacuation on this device: */
     pub copygc_in_flight: AtomicI32,
 
-    pub nr_open_buckets: c_uint,
+    /* open buckets still free: under freelist_lock, read without it */
+    pub nr_open_buckets: crate::util::projections::Volatile<c_uint>,
     pub nr_partial_buckets: c_uint,
     pub nr_btree_reserve: c_uint,
 
-    /* this device's share of c->capacity.reserved, which is their sum */
-    pub reserved_sectors: u64,
+    /* this device's share of c->capacity.reserved, which is their sum:
+     * recalc_capacity()'s, under state_lock, read without it */
+    pub reserved_sectors: crate::util::projections::Volatile<u64>,
 
     #[c("struct work_struct invalidate_work")]
     #[pin]

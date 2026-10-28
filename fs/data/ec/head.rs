@@ -268,7 +268,7 @@ pub(crate) fn stripe_head_get<'f>(t: &TransAttempt<'_, 'f>, disk_label: u32, alg
         }
     };
 
-    let count = fs.allocator.rw_devs_change_count();
+    let count = fs.allocator.rw_devs_change_count.get();
     if g.devs.change_count != count {
         stripe_head_devs_update(fs, h, &mut g, count);
     }

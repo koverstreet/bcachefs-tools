@@ -829,10 +829,7 @@ fn dev_is_rw(ca: &c::bch_dev) -> bool {
 /// with cached buckets sitting unreclaimed.
 #[c_export]
 pub fn bch2_should_invalidate_buckets(ca: &c::bch_dev, u: c::bch_dev_usage) -> u64 {
-    // SAFETY: a u64, written whole - bch2_recalc_capacity()'s, read unlocked
-    // as C's READ_ONCE()
-    let reserved_sectors = unsafe { core::ptr::read_volatile(&raw const ca.reserved_sectors) };
-    let reserved = reserved_sectors.div_ceil(ca.mi.bucket_size.into())
+    let reserved = ca.reserved_sectors.get().div_ceil(ca.mi.bucket_size.into())
         .max(ca.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe));
     let want_free = reserved + (ca.mi.nbuckets >> 5);
     let free = u.buckets[c::bch_data_type::BCH_DATA_free.0 as usize];

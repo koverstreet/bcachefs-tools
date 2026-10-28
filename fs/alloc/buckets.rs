@@ -963,8 +963,7 @@ impl c::bch_dev {
     /// reserve, at least 0: __dev_buckets_free(). nr_open_buckets is the
     /// allocator's, read unlocked, as C does.
     pub fn free_buckets_at(&self, usage: &c::bch_dev_usage, watermark: c::bch_watermark) -> u64 {
-        // SAFETY: a u32, written whole
-        let open = unsafe { core::ptr::read_volatile(&raw const self.nr_open_buckets) };
+        let open = self.nr_open_buckets.get();
         let free = usage.buckets[c::bch_data_type::BCH_DATA_free.0 as usize];
         // as C's: u64s, then max_t(s64, 0, ..)
         (free.wrapping_sub(open.into()).wrapping_sub(self.buckets_reserved(watermark)) as i64).max(0) as u64
@@ -1033,7 +1032,7 @@ impl Fs {
         let b = self.capacity.pcpu.sum_nonnegative();
 
         // a u64's, as C's: nothing keeps hidden below capacity
-        let capacity = self.capacity.capacity.wrapping_sub(b.usage.hidden);
+        let capacity = self.capacity.capacity.get().wrapping_sub(b.usage.hidden);
         let data     = b.usage.data + b.usage.btree;
         // outstanding reservations are counted by replicas; all of them
         let reserved = b.usage.reserved + b.online_reserved.iter().sum::<u64>();

@@ -249,7 +249,7 @@ fn query_accounting(fs: &Fs, arg: &mut c::bch_ioctl_query_accounting_v2,
     }
     dst(keys.len()).writer().write_slice(&keys)?;
 
-    arg.capacity        = fs.capacity.capacity.wrapping_sub(fs.usage_base().hidden);
+    arg.capacity        = fs.capacity.capacity.get().wrapping_sub(fs.usage_base().hidden);
     arg.used            = fs.usage_read_short().used;
     arg.online_reserved = fs.online_reserved();
     arg.accounting_u64s = (keys.len() / size_of::<u64>()) as u32;

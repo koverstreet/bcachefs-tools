@@ -157,8 +157,9 @@ nest! {
     pub struct open_bucket {
         pub lock: c::spinlock_t,
         pub pin: AtomicI32,
-        /* handle already removed from ca->nr_open_buckets (bucket left free) */
-        pub free_uncounted: bool,
+        /* handle already removed from ca->nr_open_buckets (bucket left free):
+         * under freelist_lock */
+        pub free_uncounted: crate::util::projections::Volatile<bool>,
         pub dev: u8,
         pub generation: u8,
         pub sectors_free: u32,
@@ -292,8 +293,9 @@ pub struct bch_fs_capacity_pcpu {
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
 pub struct bch_fs_capacity {
-    pub capacity: u64, /* sectors */
-    pub reserved: u64, /* sectors */
+    /* sectors: recalc_capacity()'s, under state_lock, read without it */
+    pub capacity: crate::util::projections::Volatile<u64>,
+    pub reserved: crate::util::projections::Volatile<u64>,
 
     /*
      * When capacity _decreases_ (due to a disk being removed), we
@@ -301,7 +303,7 @@ pub struct bch_fs_capacity {
      * and forces them to be revalidated
      */
     pub capacity_gen: u32,
-    pub bucket_size_max: c_uint,
+    pub bucket_size_max: crate::util::projections::Volatile<c_uint>,
 
     pub sectors_available: [AtomicI64; c::BCH_REPLICAS_MAX as usize],
     pub sectors_available_lock: c::spinlock_t,
@@ -335,7 +337,9 @@ c_default!(bch_fs_capacity);
 pub struct bch_fs_allocator {
     #[c("struct bch_devs_mask rw_devs[BCH_DATA_NR]")]
     pub rw_devs: [c::AtomicDevsMask; c::BCH_DATA_NR as usize],
-    pub rw_devs_change_count: c_ulong,
+    /* bumped as a device goes read-write or read-only, under state_lock;
+     * read without it */
+    pub rw_devs_change_count: crate::util::projections::Volatile<c_ulong>,
 
     /* fs-wide allocator wake generation; see bch2_alloc_wake_all() */
     pub wake_all_counter: AtomicI32,
@@ -364,15 +368,6 @@ pub struct bch_fs_allocator {
 
     pub btree_write_point: c::write_point,
     pub reconcile_write_point: c::write_point,
-}
-
-impl bch_fs_allocator {
-    /// How many times @rw_devs has changed - bumped as a device goes
-    /// read-write or read-only - read once, as C's READ_ONCE().
-    pub fn rw_devs_change_count(&self) -> c_ulong {
-        // SAFETY: read once, volatile
-        unsafe { core::ptr::read_volatile(&self.rw_devs_change_count) }
-    }
 }
 
 /// The discard worker's: its work, its bios, the discards in flight - see
