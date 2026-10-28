@@ -819,15 +819,25 @@ fn dev_is_rw(ca: &c::bch_dev) -> bool {
 // ── Invalidates ──────────────────────────────────────────────────────────
 
 /// How many buckets @ca should invalidate: what it's short of a 32nd of its
-/// buckets free, past the stripe watermark's reserve - at most its cached
-/// buckets.
+/// buckets free past what's held back - at most its cached buckets.
+///
+/// Held back is the reserve the free space accounting takes off,
+/// reserved_sectors - the device's share of the copygc reserve,
+/// gc_reserve_percent (bch2_recalc_capacity()) - or the stripe watermark's,
+/// where that's more. Invalidating is the cheapest way to free space, nothing
+/// moved: stopping short of reserved_sectors leaves no space writable now,
+/// with cached buckets sitting unreclaimed.
 #[c_export]
 pub fn bch2_should_invalidate_buckets(ca: &c::bch_dev, u: c::bch_dev_usage) -> u64 {
-    let want_free = ca.mi.nbuckets >> 5;
-    let free = (u.buckets[c::bch_data_type::BCH_DATA_free.0 as usize] as i64 -
-                ca.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe) as i64).max(0);
+    // SAFETY: a u64, written whole - bch2_recalc_capacity()'s, read unlocked
+    // as C's READ_ONCE()
+    let reserved_sectors = unsafe { core::ptr::read_volatile(&raw const ca.reserved_sectors) };
+    let reserved = reserved_sectors.div_ceil(ca.mi.bucket_size.into())
+        .max(ca.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe));
+    let want_free = reserved + (ca.mi.nbuckets >> 5);
+    let free = u.buckets[c::bch_data_type::BCH_DATA_free.0 as usize];
     let cached = u.buckets[c::bch_data_type::BCH_DATA_cached.0 as usize] as i64;
-    (want_free as i64 - free).clamp(0, cached) as u64
+    (want_free as i64 - free as i64).clamp(0, cached) as u64
 }
 
 /// Drop @ca's pointers from what backpointer @bp points to - its data's lost,
