@@ -23,6 +23,7 @@
 
 use crate::accounting::{bucket_data_type, data_type, data_type_from_u8, data_type_is_empty, data_type_movable};
 use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
+use crate::alloc::lru::dev_remove_lrus;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyWhole, POS_MIN};
 use crate::btree::iter::{commit_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, LoopFlow, TransAttempt,
@@ -39,7 +40,7 @@ use crate::util::varint;
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use crate::{bkey_fsck_err_on, btree_trans, prt};
-use core::ffi::c_int;
+use core::ffi::{c_int, c_uint};
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
@@ -787,4 +788,71 @@ mod tests {
         let (d, n) = varints(&[0, 0, 1 << 20]);
         assert!(AllocUnpacked::default().varint_fields(&d[..n - 1], 3).is_none());
     }
+}
+
+// ── Removing a device ────────────────────────────────────────────────────
+
+/// Device @dev's need_discard entries: keyed by journal seq, so found by
+/// scanning.
+fn dev_remove_need_discard(fs: &Fs, dev: u64) -> Result<(), BchError> {
+    let trans = btree_trans!(fs);
+    let mut iter = BtreeIter::new(&trans, c::btree_id::need_discard, POS_MIN,
+                                  BtreeIterFlags::INTENT | BtreeIterFlags::PREFETCH);
+    iter.for_each_commit(&trans, None, CommitFlags::NO_ENOSPC, |t, iter, k| {
+        if u64_to_bucket(k.k.p.offset).inode == dev {
+            t.delete_at(iter, UpdateTriggerFlags::NORUN)?;
+        }
+        Ok(())
+    })
+}
+
+/// Everything the alloc btrees have of device @ca, and its usage accounting,
+/// as it's removed - the lrus and need_discard first, so the invalidate and
+/// discard workers find nothing of it to race with.
+fn dev_remove_alloc(fs: &Fs, ca: &c::bch_dev) -> Result<(), BchError> {
+    let dev = u64::from(ca.dev_idx);
+
+    dev_remove_lrus(fs, ca)?;
+    dev_remove_need_discard(fs, dev)?;
+    for btree in [c::btree_id::freespace, c::btree_id::backpointers, c::btree_id::bucket_gens, c::btree_id::alloc] {
+        fs.btree_delete_range(btree, pos(dev, 0), pos(dev, u64::MAX), BtreeIterFlags::empty(),
+                              UpdateTriggerFlags::NORUN)?;
+    }
+    fs.dev_usage_remove(ca)
+}
+
+#[c_export]
+pub fn bch2_dev_remove_alloc(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) -> c_int {
+    ret_to_c(crate::bch_err_msg_dev!(ca, dev_remove_alloc(Fs::from_c(c), ca), "removing dev alloc info"))
+}
+
+// ── Bucket IO clocks ─────────────────────────────────────────────────────
+
+/// @bucket's io_time for @rw, made now: a read of its cached data, so its
+/// place in the read lru is as recently used.
+fn bucket_io_time_reset(t: &TransAttempt<'_, '_>, bucket: c::bpos, rw: usize) -> Result<(), BchError> {
+    let mut iter = BtreeIter::new(t, c::btree_id::alloc, bucket, BtreeIterFlags::CACHED | BtreeIterFlags::INTENT);
+    let k = iter.peek_slot(t)?.expect("a slot always has a key");
+    let mut a = t.alloc_to_v4_mut(k)?;
+
+    let now = t.fs().current_io_time(rw);
+    if a.v().io_time[rw] == now {
+        return Ok(());
+    }
+    a.v_mut().io_time[rw] = now;
+
+    t.update(&iter, &a, UpdateTriggerFlags::empty())?;
+    t.commit(None, CommitFlags::empty())
+}
+
+/// From the read path, partway through its attempt - begun again if its
+/// locks can't be had back - and a nested one of its own.
+///
+/// # Safety
+/// @trans has an attempt in progress.
+#[c_export]
+pub unsafe fn bch2_bucket_io_time_reset(trans: &BtreeTrans<'_>, dev: c_uint, bucket_nr: usize, rw: c_int) -> c_int {
+    let t = unsafe { trans.attempt_in_progress() };
+    let t = if t.relock().is_err() { trans.begin() } else { t };
+    ret_to_c(t.nested(|t| bucket_io_time_reset(t, pos(dev.into(), bucket_nr as u64), rw as usize)))
 }

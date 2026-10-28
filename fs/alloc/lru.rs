@@ -243,7 +243,7 @@ fn dev_remove_lru_range(fs: &Fs, id: LruId) -> Result<(), BchError> {
 /// has them - a device past the per-device lrus' ids has its entries found
 /// by scanning - and before per_dev_fragmentation_lru, the fs-wide
 /// fragmentation lru's, found by scanning.
-fn dev_remove_lrus(fs: &Fs, ca: &c::bch_dev) -> Result<(), BchError> {
+pub(crate) fn dev_remove_lrus(fs: &Fs, ca: &c::bch_dev) -> Result<(), BchError> {
     crate::btree_trans!(fs).write_buffer_flush_sync()?;
 
     let dev = u32::from(ca.dev_idx);
@@ -265,12 +265,6 @@ fn dev_remove_lrus(fs: &Fs, ca: &c::bch_dev) -> Result<(), BchError> {
 pub(crate) fn per_dev_fragmentation_lru(fs: &Fs) -> bool {
     fs.version_upgrade_complete().0 >=
         c::bcachefs_metadata_version::bcachefs_metadata_version_per_dev_fragmentation_lru.0
-}
-
-#[c_export]
-pub fn bch2_dev_remove_lrus(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) -> c_int {
-    let fs = Fs::from_c(c);
-    ret_to_c(crate::bch_err_fn!(fs, dev_remove_lrus(fs, ca)))
 }
 
 // ── fsck ─────────────────────────────────────────────────────────────────

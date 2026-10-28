@@ -208,8 +208,6 @@ static inline const struct bch_alloc_v4 *bch2_alloc_to_v4(struct bkey_s_c k, str
 	return convert;
 }
 
-int bch2_bucket_io_time_reset(struct btree_trans *, unsigned, size_t, int);
-
 #define bch2_bkey_ops_alloc ((struct bkey_ops) {	\
 	.key_validate	= bch2_alloc_v1_validate,	\
 	.val_to_text	= bch2_alloc_to_text,		\
@@ -247,8 +245,6 @@ int bch2_alloc_key_to_dev_counters(struct btree_trans *, struct bch_dev *,
 				   const struct bch_alloc_v4 *,
 				   const struct bch_alloc_v4 *, unsigned);
 int bch2_trigger_alloc(struct btree_trans *, struct btree_trigger_op);
-
-int bch2_dev_remove_alloc(struct bch_fs *, struct bch_dev *);
 
 void bch2_recalc_capacity(struct bch_fs *);
 unsigned long bch2_fs_ra_pages(struct bch_fs *);
