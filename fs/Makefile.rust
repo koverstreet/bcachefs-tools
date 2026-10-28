@@ -373,6 +373,16 @@ ifeq ($(bcachefs-vendor-rust),y)
 include $(src)/Makefile.rust.vendor
 endif
 
+# Line tables, not the kernel's full (or reduced) debuginfo: our crate is one
+# codegen unit, and its types' DWARF is most of what LLVM holds in memory - in
+# a 4G test VM, rustc was OOM-killed building it. pahole skips Rust units for
+# BTF anyway, so the types bought only a debugger's view; line tables keep
+# addresses decodable to file:line. After Makefile.rust.vendor, which may have
+# turned debuginfo off for BTF: this reads KBUILD_RUSTFLAGS now (rustflags-y is
+# simply expanded), and mustn't turn it back on.
+rustflags-remove-y += -Cdebuginfo=1 -Cdebuginfo=2
+rustflags-y += $(if $(filter -Cdebuginfo=1 -Cdebuginfo=2,$(KBUILD_RUSTFLAGS)),-Cdebuginfo=line-tables-only)
+
 # ---- rust.o: the Rust, less what nothing reaches ----------------------------
 # kbuild links a module without section GC, and rustc compiles everything a
 # crate's dependents could call - core's and the vendored crates' included:
