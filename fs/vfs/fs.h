@@ -137,8 +137,6 @@ struct inode *bch2_vfs_inode_get(struct bch_fs *, subvol_inum, const char *);
 void bch2_evict_inode(struct inode *);
 void bch2_free_inode(struct inode *);
 
-int bch2_fiemap(struct inode *, struct fiemap_extent_info *, u64, u64);
-
 void bch2_fs_vfs_exit(struct bch_fs *);
 int bch2_fs_vfs_init(struct bch_fs *);
 int bch2_fs_vfs_init_rw(struct bch_fs *);

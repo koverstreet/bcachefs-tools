@@ -9,32 +9,24 @@
 //! listxattr, the ACLs, fileattr - are provided, their HAS_* true unless an
 //! impl says otherwise; the rest are each table's. A directory's, DirOps,
 //! are the namespace operations, namei.rs's.
-//!
-//! fiemap is fiemap.c's, until it's Rust.
 
 use core::ffi::{c_uint, CStr};
 use core::mem::ManuallyDrop;
 
 use crate::acl::{self, AclType, PosixAcl};
 use crate::c;
-use crate::errcode::{ret_to_result_void, BchError};
+use crate::errcode::BchError;
 use crate::util::ffi::{c_char, opt_bytes_mut};
 use crate::util::file::File;
 use crate::util::ops::IntoRaw;
 use crate::xattr;
-use cstruct_macros::{c_export, c_extern, vtable};
+use cstruct_macros::{c_export, vtable};
 
 use super::dentry::Dentry;
 use super::idmap::MntIdmap;
 use super::inode::InodeInfo;
 use super::namei::DirOps;
 use super::path::Path;
-
-c_extern! {
-    // fiemap.c's, until it's Rust:
-    fn bch2_fiemap(vinode: *mut c::inode, info: *mut c::fiemap_extent_info, start: u64,
-                   len: u64) -> c_int;
-}
 
 crate::vfs_ops! {
     pub(crate) trait InodeOps for c::inode_operations, InodeVTable<T: InodeOps> = T;
@@ -128,7 +120,7 @@ impl InodeOps for FileInodeOps {
     fn fiemap(inode: &InodeInfo, info: &mut c::fiemap_extent_info, start: u64, len: u64)
         -> Result<(), BchError>
     {
-        ret_to_result_void(unsafe { bch2_fiemap(inode.vfs().as_ptr(), info, start, len) })
+        super::fiemap::fiemap(inode, info, start, len)
     }
 }
 

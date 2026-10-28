@@ -130,7 +130,6 @@ bcachefs-y		:=			\
 	vendor/bio_iov_iter.o			\
 	vendor/closure.o			\
 	vendor/min_heap.o			\
-	vfs/fiemap.o				\
 	vfs/fs.o				\
 	vfs/io.o				\
 	vfs/buffered.o				\
