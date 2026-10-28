@@ -73,6 +73,7 @@ use crate::c;
 use crate::errcode::{bch_errcode, ret_to_class, ret_to_result_void, BchError};
 use crate::fs::Fs;
 use crate::snapshots::subvolume;
+use crate::types::CStatic;
 use crate::util::file::{File, FileData, FileOps, FileVTable};
 use cstruct_macros::{c_export, c_extern, vtable};
 
@@ -92,12 +93,15 @@ c_extern! {
     fn bch2_page_mkwrite(vmf: *mut c::vm_fault) -> c::vm_fault_t;
 }
 
-static VM_OPS: c::vm_operations_struct = c::vm_operations_struct {
-    fault:        Some(bch2_page_fault),
-    map_pages:    Some(c::filemap_map_pages),
-    page_mkwrite: Some(bch2_page_mkwrite),
-    // SAFETY: zero is NULL, an op not implemented
-    ..unsafe { core::mem::zeroed() }
+// SAFETY, of the CStatic: immutable, its only parts that aren't Sync pointers
+static VM_OPS: CStatic<c::vm_operations_struct> = unsafe {
+    CStatic::new(c::vm_operations_struct {
+        fault:        Some(bch2_page_fault),
+        map_pages:    Some(c::filemap_map_pages),
+        page_mkwrite: Some(bch2_page_mkwrite),
+        // SAFETY: zero is NULL, an op not implemented
+        ..core::mem::zeroed()
+    })
 };
 
 /// A regular file's state: its inode's. Never made: there's nothing to make.
@@ -155,7 +159,7 @@ impl FileOps for InodeInfo {
         // SAFETY: the file being mapped: one of ours, open
         mmap_check(unsafe { <InodeFile as FileData>::ops_of(desc.file) }.fs(), flags)?;
         unsafe { c::file_accessed(desc.file) };
-        desc.vm_ops = &VM_OPS;
+        desc.vm_ops = &*VM_OPS;
         Ok(())
     }
 
@@ -164,7 +168,7 @@ impl FileOps for InodeInfo {
         // SAFETY: vm_flags and __vm_flags are the one word
         mmap_check(self.fs(), unsafe { vma.__bindgen_anon_2.vm_flags })?;
         unsafe { c::file_accessed(file.as_ptr()) };
-        vma.vm_ops = &VM_OPS;
+        vma.vm_ops = &*VM_OPS;
         Ok(())
     }
 

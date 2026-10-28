@@ -35,11 +35,14 @@ use super::inode::{InodeInfo, InodeRef};
 use super::vfs_inode::VfsInode;
 
 #[cfg(CONFIG_UNICODE)]
-static CASEFOLD_OPS: c::dentry_operations = c::dentry_operations {
-    d_hash:    Some(c::generic_ci_d_hash),
-    d_compare: Some(c::generic_ci_d_compare),
-    // SAFETY: zero is NULL, an op not implemented
-    ..unsafe { core::mem::zeroed() }
+// SAFETY, of the CStatic: immutable, its only parts that aren't Sync pointers
+static CASEFOLD_OPS: crate::types::CStatic<c::dentry_operations> = unsafe {
+    crate::types::CStatic::new(c::dentry_operations {
+        d_hash:    Some(c::generic_ci_d_hash),
+        d_compare: Some(c::generic_ci_d_compare),
+        // SAFETY: zero is NULL, an op not implemented
+        ..core::mem::zeroed()
+    })
 };
 
 #[derive(Clone, Copy)]
@@ -149,7 +152,7 @@ impl<'a> Dentry<'a> {
             let _d_lock = self.d_lock().lock();
             // SAFETY: referenced; d_op is set under d_lock, before the flags
             // that have it used
-            unsafe { (*self.raw).d_op = &CASEFOLD_OPS };
+            unsafe { (*self.raw).d_op = &*CASEFOLD_OPS };
             self.set_casefold_flags(inode);
         }
         #[cfg(not(CONFIG_UNICODE))]
