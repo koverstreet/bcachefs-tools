@@ -1024,6 +1024,12 @@ fn reserve_factor(r: u64) -> u64 {
 }
 
 impl Fs {
+    /// The disk reservation caches recomputed, after the devices change:
+    /// bch2_disk_reservation_caches_invalidate().
+    pub fn disk_reservation_caches_invalidate(&self) {
+        unsafe { c::bch2_disk_reservation_caches_invalidate(self.as_ptr()) }
+    }
+
     /// Sectors in use by kind, every CPU's count summed:
     /// bch2_fs_usage_base_read().
     pub fn usage_base(&self) -> c::bch_fs_usage_base {

@@ -145,6 +145,8 @@ c_default!(alloc_request);
 
 c_extern! {
     pub fn bch2_alloc_wake_all(c: *mut c::bch_fs);
+    pub fn bch2_alloc_wake_dev(ca: *mut c::bch_dev);
+    pub fn bch2_open_buckets_stop(c: *mut c::bch_fs, ca: *mut c::bch_dev, ec: bool);
     pub fn bch2_open_buckets_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, ca: *mut c::bch_dev);
     pub fn bch2_open_buckets_partial_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
     pub fn bch2_write_points_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
@@ -154,6 +156,11 @@ c_extern! {
 }
 
 impl c::bch_dev {
+    /// Wake what's waiting on the allocator for a bucket of it.
+    pub fn alloc_wake(&self) {
+        unsafe { bch2_alloc_wake_dev(core::ptr::from_ref(self).cast_mut()) }
+    }
+
     pub fn alloc_debug_to_text(&self, out: &mut Printbuf) {
         unsafe { bch2_dev_alloc_debug_to_text(out.as_raw(), core::ptr::from_ref(self).cast_mut()) }
     }
@@ -163,6 +170,12 @@ impl Fs {
     /// Wake everything waiting on the allocator.
     pub fn alloc_wake_all(&self) {
         unsafe { bch2_alloc_wake_all(self.as_ptr()) }
+    }
+
+    /// Close the open buckets - @ca's, or all of them - and with @ec, the
+    /// new stripes' too.
+    pub fn open_buckets_stop(&self, ca: Option<&c::bch_dev>, ec: bool) {
+        unsafe { bch2_open_buckets_stop(self.as_ptr(), crate::sb::members::dev_ptr(ca), ec) }
     }
 
     /// The open buckets - on @ca, or all of them.

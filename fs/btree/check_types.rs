@@ -75,11 +75,18 @@ c_default!(bch_fs_gc_gens);
 
 c_extern! {
     pub fn bch2_gc_gens(c: *mut c::bch_fs) -> c_int;
+    pub fn bch2_gc_gens_async(c: *mut c::bch_fs);
 }
 
 impl Fs {
     /// Recalculate each bucket's oldest gen, so gens can wrap.
     pub fn gc_gens(&self) -> Result<(), BchError> {
         ret_to_result_void(unsafe { bch2_gc_gens(self.as_ptr()) })
+    }
+
+    /// gc_gens(), from its work, holding a write ref - unless the
+    /// filesystem is going read-only.
+    pub fn gc_gens_async(&self) {
+        unsafe { bch2_gc_gens_async(self.as_ptr()) }
     }
 }

@@ -150,6 +150,7 @@ pub struct DiskReservation<'f> {
 pub type disk_reservation = DiskReservation<'static>;
 
 c_extern! {
+    pub fn bch2_disk_reservation_caches_invalidate(c: *mut c::bch_fs);
     pub fn rust_bch2_disk_reservation_add(c: *mut c::bch_fs, res: *mut c::disk_reservation,
                                           sectors: u64, nr_replicas: c_uint, flags: c_int) -> c_int;
     pub fn rust_bch2_disk_reservation_add_physical(c: *mut c::bch_fs, res: *mut c::disk_reservation,

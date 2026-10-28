@@ -202,3 +202,10 @@ pub fn bucket_data_type_mismatch(bucket: bch_data_type, ptr: bch_data_type) -> b
 pub fn data_type_movable(t: bch_data_type) -> bool {
     c::DATA_TYPES_MOVABLE & (1 << t.0) != 0
 }
+
+impl Fs {
+    /// Device @ca's usage accounting, deleted: as it's removed.
+    pub fn dev_usage_remove(&self, ca: &c::bch_dev) -> Result<(), BchError> {
+        ret_to_result(unsafe { c::bch2_dev_usage_remove(self.as_ptr(), core::ptr::from_ref(ca).cast_mut()) })
+    }
+}
