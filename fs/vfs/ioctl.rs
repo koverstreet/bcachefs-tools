@@ -49,7 +49,7 @@ use crate::vfs::path::{Creating, Removing, UserPath};
 use crate::{bch_err, btree_trans, prt};
 use core::ffi::{c_int, c_void};
 use core::mem::{offset_of, MaybeUninit};
-use cstruct_macros::{c_export, c_extern};
+use cstruct_macros::c_extern;
 use kernel::ffi::{c_long, c_uint, c_ulong};
 use kernel::uaccess::UserPtr;
 
@@ -178,23 +178,6 @@ pub(crate) fn fs_file_compat_ioctl(file: &File, cmd: c_uint, arg: c_ulong) -> c_
         _ => return -(c::ENOIOCTLCMD as c_long),
     };
     fs_file_ioctl(file, cmd, unsafe { c::rust_compat_ptr(arg as u32) } as c_ulong)
-}
-
-/// For C's file ops, until they're Rust.
-///
-/// # Safety
-/// @file is an open file of ours.
-#[c_export]
-pub unsafe fn bch2_fs_file_ioctl(file: *mut c::file, cmd: c_uint, arg: c_ulong) -> c_long {
-    fs_file_ioctl(unsafe { File::from_raw(file) }, cmd, arg)
-}
-
-/// # Safety
-/// As bch2_fs_file_ioctl()'s.
-#[cfg(CONFIG_COMPAT)]
-#[c_export]
-pub unsafe fn bch2_compat_fs_ioctl(file: *mut c::file, cmd: c_uint, arg: c_ulong) -> c_long {
-    fs_file_compat_ioctl(unsafe { File::from_raw(file) }, cmd, arg)
 }
 
 /* The handlers */

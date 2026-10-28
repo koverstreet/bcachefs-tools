@@ -37,7 +37,7 @@ use arrayvec::ArrayVec;
 use core::ffi::{c_int, c_uint, c_void};
 use core::mem::offset_of;
 use core::ptr::NonNull;
-use core::sync::atomic::Ordering::Relaxed;
+use core::sync::atomic::Ordering::{Relaxed, SeqCst};
 
 use crate::btree::bkey::pos;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt};
@@ -94,6 +94,14 @@ pub const ATTR_CTIME: u32 = 1 << 6;
 
 // to_bch_ei(): an InodeInfo is where its struct inode is
 const _: () = assert!(offset_of!(InodeInfo, v) == 0);
+
+// SAFETY: the kernel's inode, shared by every thread with it open or in a VFS
+// call. What Rust reaches through &InodeInfo is atomic, behind a lock, or the
+// VFS inode's, read and written as VfsInode has it. The plain fields -
+// ei_reserved_*, ei_last_dirtied, ei_inodes_idx, the inode cache's hash
+// entries - are C's, under its locks: Rust doesn't touch them.
+unsafe impl Send for InodeInfo {}
+unsafe impl Sync for InodeInfo {}
 
 impl InodeInfo {
     /// # Safety
@@ -172,6 +180,13 @@ impl InodeInfo {
 
     pub fn flag(&self, f: c::bch_inode_info_flags) -> bool {
         self.ei_flags.load(Relaxed) & (1 << f as u32) != 0
+    }
+
+    /// Clear flag @f, and whether it was set: C's test_and_clear_bit(),
+    /// fully ordered.
+    pub fn take_flag(&self, f: c::bch_inode_info_flags) -> bool {
+        let bit = 1 << f as u32;
+        self.ei_flags.fetch_and(!bit, SeqCst) & bit != 0
     }
 
     /// Update the VFS inode to @bi, just committed in @trans - which still

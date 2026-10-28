@@ -41,15 +41,11 @@ use crate::str_hash;
 use crate::util::alloc::{flags, KBox};
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::file::{File, FileOps, FileVTable, UserBuf};
-use cstruct_macros::{c_export, c_extern, vtable};
+use cstruct_macros::{c_export, vtable};
 
+use super::file::bch2_fsync;
 use super::inode::InodeInfo;
 use super::ioctl::fs_file_ioctl;
-
-c_extern! {
-    // io.c's, until it's Rust:
-    fn bch2_fsync(file: *mut c::file, start: c::loff_t, end: c::loff_t, datasync: c_int) -> c_int;
-}
 
 const READDIR_32_FIRST: i64 = 2;
 const READDIR_32_EOF: i64 = i32::MAX as i64;

@@ -29,7 +29,6 @@
 
 
 #include "vfs/fs.h"
-#include "vfs/ioctl.h"
 #include "vfs/buffered.h"
 #include "vfs/direct.h"
 #include "vfs/pagecache.h"
@@ -685,164 +684,6 @@ err_before_quota:
 
 /* methods */
 
-static const struct vm_operations_struct bch_vm_ops = {
-	.fault		= bch2_page_fault,
-	.map_pages	= filemap_map_pages,
-	.page_mkwrite   = bch2_page_mkwrite,
-};
-
-/*
- * No new mappings of a writable file after a shutdown, so writers get an error
- * from mmap() instead of SIGBUS from page_mkwrite. EIO, as ext4 and f2fs return
- * from a shut-down filesystem: mmap(2) documents neither EIO nor EROFS.
- */
-/*
- * A write fault on a shut-down filesystem can't get a disk reservation, so
- * page_mkwrite would SIGBUS: refuse the mapping instead, so the writer gets an
- * error from mmap(). Only shared writable mappings fault that way - a
- * read-only mapping of a file open for writing (xfs_io's default) never calls
- * page_mkwrite, and must still work: generic/743 maps read-only while its
- * error injection is taking the filesystem down. mprotect() can still make one
- * writable later; that case SIGBUSes, as it always did.
- */
-static int bch2_mmap_check(struct file *file, bool shared_writable)
-{
-	struct bch_fs *c = file_inode(file)->i_sb->s_fs_info;
-
-	if (shared_writable &&
-	    test_bit(BCH_FS_emergency_ro, &c->flags))
-		return bch2_err_class(bch_err_throw(c, mmap_emergency_ro));
-	return 0;
-}
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,17,0)
-static int bch2_mmap_prepare(struct vm_area_desc *desc)
-{
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(7,0,0)
-	bool shared_writable = vma_flags_test_all(&desc->vma_flags,
-						  VMA_SHARED_BIT, VMA_WRITE_BIT);
-#else
-	bool shared_writable = (desc->vm_flags & (VM_SHARED|VM_WRITE)) ==
-		(VM_SHARED|VM_WRITE);
-#endif
-	int ret = bch2_mmap_check(desc->file, shared_writable);
-	if (ret)
-		return ret;
-
-	file_accessed(desc->file);
-
-	desc->vm_ops = &bch_vm_ops;
-	return 0;
-}
-#else
-static int bch2_mmap(struct file *file, struct vm_area_struct *vma)
-{
-	int ret = bch2_mmap_check(file,
-			(vma->vm_flags & (VM_SHARED|VM_WRITE)) == (VM_SHARED|VM_WRITE));
-	if (ret)
-		return ret;
-
-	file_accessed(file);
-
-	vma->vm_ops = &bch_vm_ops;
-	return 0;
-}
-#endif
-
-static int bch2_open(struct inode *vinode, struct file *file)
-{
-	if (file->f_flags & (O_WRONLY|O_RDWR)) {
-		struct bch_inode_info *inode = to_bch_ei(vinode);
-		struct bch_fs *c = inode->v.i_sb->s_fs_info;
-
-		try(bch2_subvol_is_ro(c, inode_inum(inode).subvol));
-	}
-
-	file->f_mode |= FMODE_CAN_ODIRECT;
-
-	return generic_file_open(vinode, file);
-}
-
-/* DOC(replace-in-place)
- *
- * Applications commonly replace a file's contents in one of two ways, often
- * without fsync. POSIX promises nothing for either, but both get special
- * handling, as they do on ext4, XFS and btrfs - in one case more strongly.
- *
- * **Write a temporary file, then rename it over the original.** When a
- * rename overwrites an existing file, bcachefs first completes writeback of
- * the source file's data, so the data's extents are journalled before the
- * rename is. Combined with prefix consistency this makes the replacement
- * atomic and complete without any fsync: after a crash, either the old file
- * is intact, or the rename happened and all of the new file's data is
- * present; the empty-or-truncated-file outcome cannot occur. This orders the
- * rename behind the data but does not make the rename itself durable (no
- * journal flush is issued); an application that must know the replacement has
- * happened still needs fsync. Plain renames that don't overwrite anything get
- * no implicit writeback.
- *
- * This is stronger than the other filesystems: ext4 (`auto_da_alloc`) and
- * btrfs only start writeback of the source on an overwriting rename without
- * waiting for it, so a crash shortly afterwards can still recover an empty
- * file, and XFS does nothing here. The cost is that each overwriting rename
- * waits for its source's data to be written, which shows up in workloads that
- * replace many files this way, such as package managers.
- *
- * **Truncate and rewrite** (`O_TRUNC`). Some applications replace a file by
- * opening it with `O_TRUNC`, writing the new contents and closing it, without
- * fsync. The truncate is journalled within `journal_flush_delay` (default one
- * second), but the new data can stay in the page cache for the dirty writeback
- * delay (default thirty seconds). A crash in between recovers an empty file:
- * both the old and the new contents are lost.
- *
- * As a workaround, as on ext4, XFS and btrfs, truncating a nonempty file to
- * zero length makes the next close start writeback of the file's data.
- *
- * This is an implicit fsync on close, minus waiting for the writeback and
- * minus the journal commit, and it does not make the pattern safe. The file is
- * empty on disk from the moment the truncate is journalled until the new data
- * is written back, and a crash anywhere in that interval still loses both
- * versions; no flush can prevent that, it can only shorten the interval.
- *
- * Applications that do this and need the old or the new contents to survive a
- * crash are buggy, on every filesystem, and need to be fixed. The correct way
- * to replace a file is to write the new contents to a new file - a temporary
- * file, or an `O_TMPFILE` given a name with `linkat` - and rename it over the
- * old one, fsyncing the new file first if the new contents must be durable.
- */
-
-static int bch2_release(struct inode *vinode, struct file *file)
-{
-	struct bch_inode_info *inode = to_bch_ei(vinode);
-
-	if (test_and_clear_bit(EI_INODE_FLUSH_ON_CLOSE, &inode->ei_flags))
-		filemap_flush(vinode->i_mapping);
-	return 0;
-}
-
-static const struct file_operations bch_file_operations = {
-	.open		= bch2_open,
-	.release	= bch2_release,
-	.llseek		= bch2_llseek,
-	.read_iter	= bch2_read_iter,
-	.write_iter	= bch2_write_iter,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,17,0)
-	.mmap_prepare	= bch2_mmap_prepare,
-#else
-	.mmap		= bch2_mmap,
-#endif
-	.get_unmapped_area = thp_get_unmapped_area,
-	.fsync		= bch2_fsync,
-	.splice_read	= filemap_splice_read,
-	.splice_write	= iter_file_splice_write,
-	.fallocate	= bch2_fallocate_dispatch,
-	.unlocked_ioctl = bch2_fs_file_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl	= bch2_compat_fs_ioctl,
-#endif
-	.remap_file_range = bch2_remap_file_range,
-};
-
 static const struct address_space_operations bch_address_space_operations = {
 	.read_folio	= bch2_read_folio,
 	.writepages	= bch2_writepages,
@@ -886,7 +727,7 @@ static void bch2_vfs_inode_init(struct btree_trans *trans,
 	switch (inode->v.i_mode & S_IFMT) {
 	case S_IFREG:
 		inode->v.i_op	= &bch2_file_inode_ops;
-		inode->v.i_fop	= &bch_file_operations;
+		inode->v.i_fop	= &bch2_file_ops;
 		break;
 	case S_IFDIR:
 		inode->v.i_op	= &bch2_dir_inode_ops;

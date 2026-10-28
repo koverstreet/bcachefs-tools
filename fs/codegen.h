@@ -53,6 +53,8 @@ const size_t RUST_CONST_HELPER_KSYM_SYMBOL_LEN		= KSYM_SYMBOL_LEN;
 /* how a directory was opened: the cookies vfs/dir.rs's readdir hands out */
 const fmode_t RUST_CONST_HELPER_FMODE_32BITHASH		= FMODE_32BITHASH;
 const fmode_t RUST_CONST_HELPER_FMODE_64BITHASH		= FMODE_64BITHASH;
+/* and a regular file's: vfs/file.rs's open */
+const fmode_t RUST_CONST_HELPER_FMODE_CAN_ODIRECT		= FMODE_CAN_ODIRECT;
 
 /* the VFS's own ioctl numbers, which vfs/ioctl.rs answers */
 const unsigned int RUST_CONST_HELPER_FS_IOC_GETVERSION	= FS_IOC_GETVERSION;
@@ -130,6 +132,11 @@ static inline int rust_filemap_write_and_wait_range(struct address_space *mappin
 						    loff_t start, loff_t end)
 {
 	return filemap_write_and_wait_range(mapping, start, end);
+}
+
+static inline int rust_filemap_flush(struct address_space *mapping)
+{
+	return filemap_flush(mapping);
 }
 
 #ifdef CONFIG_COMPAT

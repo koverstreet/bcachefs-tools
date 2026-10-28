@@ -116,7 +116,7 @@ c_enum! {
         EI_INODE_HASHED = 2,
         /*
          * set by a truncate of a nonempty file to 0: start writeback on
-         * close - see DOC(replace-in-place) in fs.c
+         * close - see DOC(replace-in-place) in vfs/file.rs
          */
         EI_INODE_FLUSH_ON_CLOSE = 3,
     }
