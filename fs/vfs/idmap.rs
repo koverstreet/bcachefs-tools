@@ -55,6 +55,14 @@ impl<'f> MntIdmap<'f> {
         unsafe { c::inode_permission(self.0, inode.as_ptr(), mask as c_int) == 0 }
     }
 
+    /// @inode's owner as the mount's users see it, as stat(2) has it: a
+    /// vfsuid_t and vfsgid_t, in the kuid_t and kgid_t they're carried as.
+    pub fn owner(self, inode: &VfsInode) -> (c::kuid_t, c::kgid_t) {
+        let uid = unsafe { c::make_vfsuid(self.0, inode.user_ns(), inode.kuid()) };
+        let gid = unsafe { c::make_vfsgid(self.0, inode.user_ns(), inode.kgid()) };
+        (c::kuid_t { val: uid.val }, c::kgid_t { val: gid.val })
+    }
+
     pub fn kuid(self, inode: &VfsInode, vfsuid: c::vfsuid_t) -> c::kuid_t {
         unsafe { c::from_vfsuid(self.0, inode.user_ns(), vfsuid) }
     }

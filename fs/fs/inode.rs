@@ -1940,7 +1940,7 @@ pub fn cf_encoding(fs: &Fs, inode: &c::bch_inode_unpacked) -> *mut c::unicode_ma
 
 /// Set casefolding on directory @inode, @inum, to @v: it has to be empty -
 /// its dirents would need rehashing - and the filesystem able to casefold,
-/// which marks the filesystem as using it. As bch2_inode_set_casefold().
+/// which marks the filesystem as using it.
 pub fn set_casefold(
     t:     &TransAttempt<'_, '_>,
     inum:  c::subvol_inum,
@@ -1969,17 +1969,6 @@ pub fn set_casefold(
     inode.bi_fields_set |= 1 << c::inode_opt_id::Inode_opt_casefold.0;
 
     namei::maybe_propagate_has_case_insensitive(t, inum, inode)
-}
-
-/// For C's VFS: bch2_inode_set_casefold().
-#[c_export]
-pub extern "C" fn bch2_inode_set_casefold(
-    trans: &BtreeTrans<'_>,
-    inum:  c::subvol_inum,
-    inode: &mut c::bch_inode_unpacked,
-    v:     core::ffi::c_uint,
-) -> core::ffi::c_int {
-    ret_to_c(set_casefold(&unsafe { trans.attempt_in_progress() }, inum, inode, v))
 }
 
 /// @inode's reconcile options - the ones reconcile moves its data to match,

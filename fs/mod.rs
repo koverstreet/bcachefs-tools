@@ -149,6 +149,7 @@ pub mod util;
 /// #ifndef NO_BCACHEFS_FS - but for the struct inode type bch_inode_info
 /// holds, which both builds lay out.
 pub mod vfs {
+    #[cfg(kernel)] pub mod attr;
     #[cfg(kernel)] pub mod dentry;
     #[cfg(kernel)] pub mod iattr;
     #[cfg(kernel)] pub mod idmap;
@@ -260,6 +261,11 @@ pub mod c {
     // macro, which the kernel crate's bindings don't have.
     #[cfg(kernel)]
     pub type rcu_head = callback_head;
+    // And file_kattr, struct fileattr before 6.17: fs.h #defines the one
+    // name to the other, for C.
+    #[cfg(kernel)]
+    #[cfg(not(linux_ge = "6.17"))]
+    pub type file_kattr = fileattr;
 
 
     crate::impl_darray!(bch_sb_handles, bch_sb_handle);

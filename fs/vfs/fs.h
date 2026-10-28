@@ -30,6 +30,11 @@ static inline void inode_state_set_raw(struct inode *inode, unsigned flags)
 }
 #endif
 
+/* fileattr's struct, before 6.17: the Rust names it file_kattr too */
+#if defined(__KERNEL__) && LINUX_VERSION_CODE < KERNEL_VERSION(6,17,0)
+#define file_kattr fileattr
+#endif
+
 #include "vfs/fs_gen.h"
 
 #define bch2_pagecache_add_put(i)	bch2_two_state_unlock(&(i)->ei_pagecache_lock, 0)
@@ -132,27 +137,12 @@ static inline void bch2_dentry_set_casefold_ops(struct dentry *dentry, struct in
 static inline void bch2_dir_casefold_changed(struct dentry *dentry) {}
 #endif
 
+#include "vfs/attr_gen.h"
 #include "vfs/inode_gen.h"
-
-static inline int bch2_set_projid(struct bch_fs *c,
-				  struct bch_inode_info *inode,
-				  u32 projid)
-{
-	struct bch_qid qid = inode->ei_qid;
-
-	qid.q[QTYP_PRJ] = projid;
-
-	return bch2_fs_quota_transfer(c, inode, qid,
-				      1 << QTYP_PRJ,
-				      KEY_TYPE_QUOTA_PREALLOC);
-}
 
 struct bch_inode_info *bch2_vfs_inode_get_trans(struct btree_trans *, subvol_inum, const char *);
 struct inode *bch2_vfs_inode_get(struct bch_fs *, subvol_inum, const char *);
 
-int bch2_setattr_nonsize(struct mnt_idmap *,
-			 struct bch_inode_info *,
-			 struct iattr *);
 int __bch2_unlink(struct inode *, struct dentry *, bool);
 
 int bch2_fiemap(struct inode *, struct fiemap_extent_info *, u64, u64);

@@ -187,10 +187,10 @@ mod vfs {
     use core::ptr::NonNull;
     use cstruct_macros::c_export;
     use crate::bch_err;
-    use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
+    use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
                              TransAttempt, TransBkey, UpdateTriggerFlags};
     use crate::c;
-    use crate::errcode::{bch_errcode, err_ptr, ret_to_c, ret_to_class, ret_to_result_void as ret_to_result,
+    use crate::errcode::{bch_errcode, err_ptr, ret_to_class, ret_to_result_void as ret_to_result,
                          BchError};
     use crate::inode;
     use crate::snapshots::subvolume;
@@ -510,18 +510,5 @@ mod vfs {
         new.k_mut().p = iter.pos();
         t.update(&iter, &new, UpdateTriggerFlags::empty())?;
         Ok(Some(acl))
-    }
-
-    /// For C's setattr. @new_acl is left as it was if there's none.
-    #[c_export]
-    pub extern "C" fn bch2_acl_chmod(
-        trans:   &BtreeTrans<'_>,
-        inum:    c::subvol_inum,
-        inode:   &c::bch_inode_unpacked,
-        mode:    c::umode_t,
-        new_acl: &mut *mut c::posix_acl,
-    ) -> c_int {
-        ret_to_c(acl_chmod(&unsafe { trans.attempt_in_progress() }, inum, inode, mode)
-                 .map(|acl| if let Some(acl) = acl { *new_acl = acl.into_raw() }))
     }
 }

@@ -5,10 +5,10 @@
 //!
 //! The VFS, update_after_write() and i_sectors_acct write its fields while
 //! others read them, with no lock in common. Those read or written here
-//! directly - mode, flags, gid, generation, blocks - are read and written
-//! whole, as READ_ONCE() and WRITE_ONCE(), where C uses them plainly; the
-//! rest - the times, the size, the link count, the ids - go through the
-//! kernel's helpers.
+//! directly - mode, flags, generation, blocks, and reads of the ids and the
+//! link count - are read and written whole, as READ_ONCE() and WRITE_ONCE(),
+//! where C uses them plainly; the rest - the times, the size, writes of the
+//! ids and link count - go through the kernel's helpers.
 //!
 //! Its reference count, i_count, is AlwaysRefCounted's - ihold(), iput() - so
 //! an InodeRef, ARef<InodeInfo>, holds one.
@@ -76,6 +76,7 @@ impl VfsInode {
     accessors! {
         /// The user namespace its ids are stored in.
         user_ns() -> *mut c::user_namespace = i_user_ns;
+        kuid() -> c::kuid_t                 = READ_ONCE(i_uid);
         kgid() -> c::kgid_t                 = READ_ONCE(i_gid);
         set_uid(u32)                        = i_uid_write;
         set_gid(u32)                        = i_gid_write;
@@ -84,8 +85,12 @@ impl VfsInode {
         generation() -> u32                 = READ_ONCE(i_generation);
         /// Changed under ei_quota_lock: hold it for a stable value.
         blocks() -> u64                     = READ_ONCE(i_blocks);
+        nlink() -> u32                      = READ_ONCE(__bindgen_anon_1.i_nlink);
         set_nlink(u32)                      = set_nlink;
+        size() -> i64                       = i_size_read;
         set_size(i64)                       = i_size_write;
+        /// Now, at the granularity its times are kept at.
+        current_time() -> c::timespec64     = current_time;
         atime() -> c::timespec64            = inode_get_atime;
         mtime() -> c::timespec64            = inode_get_mtime;
         ctime() -> c::timespec64            = inode_get_ctime;
@@ -109,6 +114,15 @@ impl VfsInode {
 
     pub fn is_dir(&self) -> bool {
         self.mode() as u32 & c::S_IFMT == c::S_IFDIR
+    }
+
+    pub fn is_reg(&self) -> bool {
+        self.mode() as u32 & c::S_IFMT == c::S_IFREG
+    }
+
+    /// Set when it's made, and never changed.
+    pub fn rdev(&self) -> c::dev_t {
+        unsafe { (*self.as_ptr()).i_rdev }
     }
 
     pub fn flag(&self, flag: u32) -> bool {
