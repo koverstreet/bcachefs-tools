@@ -10,7 +10,7 @@ use nestify::nest;
 
 nest! {
     #[repr(C)]
-    #[derive(Clone, Copy, CStruct)]
+    #[derive(CStruct)]
     pub struct btree_read_bio {
         pub c: *mut c::bch_fs,
         pub ca: *mut c::bch_dev, /* stashed at submit; see bch_write_bio */

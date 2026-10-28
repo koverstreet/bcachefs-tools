@@ -19,7 +19,7 @@ pub struct bch_read_err_report {
 c_default!(bch_read_err_report);
 
 nest! {
-    #[derive(Clone, Copy, CStruct, TypeInfo)]*
+    #[derive(CStruct, TypeInfo)]*
     #[repr(C)]*
     pub struct bch_read_bio {
         pub c: *mut c::bch_fs,
@@ -54,9 +54,10 @@ nest! {
         #[c_anon]
         pub state: pub union bch_read_bio_state {
             #[c_anon]
+            #>[derive(Clone, Copy)]
             pub fields: pub struct bch_read_bio_state_fields {
                 #[c_bitfield]
-                #>[derive(Clone, Copy, CStruct, TypeInfo)]-
+                #>[derive(CStruct, TypeInfo)]-
                 #>[repr(C)]-
                 #>[bitfield(u16)]
                 pub bits: pub struct bch_read_bio_bits {

@@ -9,7 +9,7 @@ use crate::types::c_default;
 use cstruct_macros::CStruct;
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct nocow_flush {
     pub cl: *mut c::closure,
     pub ca: *mut c::bch_dev,

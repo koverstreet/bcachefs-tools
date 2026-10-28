@@ -273,7 +273,7 @@ c_enum! {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, CStruct)]
+#[derive(CStruct)]
 pub struct journal_bio {
     pub ca: *mut c::bch_dev,
     pub buf: *mut c::journal_buf,
