@@ -65,6 +65,10 @@ const unsigned int RUST_CONST_HELPER_FS_IOC32_GETFLAGS	= FS_IOC32_GETFLAGS;
 const unsigned int RUST_CONST_HELPER_FS_IOC32_SETFLAGS	= FS_IOC32_SETFLAGS;
 const unsigned int RUST_CONST_HELPER_FS_IOC32_GETVERSION	= FS_IOC32_GETVERSION;
 
+/* a dentry's: dentry_flags, an enum, in d_flags, an unsigned int */
+const unsigned int RUST_CONST_HELPER_DCACHE_OP_HASH	= DCACHE_OP_HASH;
+const unsigned int RUST_CONST_HELPER_DCACHE_OP_COMPARE	= DCACHE_OP_COMPARE;
+
 /* a path lookup's flag, and a superblock's: vfs/ioctl.rs's subvolume create */
 const unsigned int RUST_CONST_HELPER_LOOKUP_FOLLOW	= LOOKUP_FOLLOW;
 const unsigned long RUST_CONST_HELPER_SB_POSIXACL	= SB_POSIXACL;

@@ -108,15 +108,8 @@ struct bch_inode_info *
 __bch2_create(struct mnt_idmap *, struct bch_inode_info *,
 	      struct dentry *, umode_t, dev_t, subvol_inum, unsigned);
 
-#if IS_ENABLED(CONFIG_UNICODE)
-void bch2_dentry_set_casefold_ops(struct dentry *, struct inode *);
-void bch2_dir_casefold_changed(struct dentry *);
-#else
-static inline void bch2_dentry_set_casefold_ops(struct dentry *dentry, struct inode *vinode) {}
-static inline void bch2_dir_casefold_changed(struct dentry *dentry) {}
-#endif
-
 #include "vfs/attr_gen.h"
+#include "vfs/dentry_gen.h"
 #include "vfs/dir_gen.h"
 #include "vfs/export_gen.h"
 #include "vfs/inode_gen.h"
