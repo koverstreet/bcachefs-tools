@@ -60,6 +60,11 @@ c_extern! {
                              watermark: c::bch_watermark, flags: c::bch_write_flags,
                              cl: *mut c::closure) -> *mut c::alloc_request;
     pub fn alloc_request_put(req: *mut c::alloc_request);
+    fn bch2_alloc_sectors_req(trans: *mut c::btree_trans, req: *mut c::alloc_request,
+                              write_point: c::write_point_specifier, wp: *mut *mut c::write_point) -> c_int;
+    fn bch2_alloc_sectors_append_ptrs(c: *mut c::bch_fs, wp: *mut c::write_point, k: *mut c::bkey_i,
+                                      sectors: c_uint, cached: bool);
+    fn bch2_alloc_sectors_done(c: *mut c::bch_fs, wp: *mut c::write_point);
 }
 
 macro_rules! watermark_strs {
@@ -406,6 +411,70 @@ impl Drop for AllocRequest<'_> {
     fn drop(&mut self) {
         // SAFETY: ours, from alloc_request_get(), put once
         unsafe { alloc_request_put(self.0) }
+    }
+}
+
+// ── Allocating from a write point ────────────────────────────────────────
+
+/// A write point with room for a request, locked until it's dropped.
+/// Dropping it calls bch2_alloc_sectors_done(), which keeps what's left of its
+/// buckets for the next write.
+pub struct LockedWritePoint<'a> {
+    fs: &'a Fs,
+    wp: NonNull<c::write_point>,
+}
+
+impl<'a, 't> TransAttempt<'a, 't> {
+    /// Locks @write_point, with buckets allocated for @req.
+    pub fn alloc_sectors(&self, req: &mut c::alloc_request, write_point: c::write_point_specifier)
+        -> Result<LockedWritePoint<'a>, BchError>
+    {
+        let mut wp = core::ptr::null_mut();
+        // SAFETY: in the attempt; @req ours
+        self.result(unsafe { bch2_alloc_sectors_req(self.raw(), req, write_point, &mut wp) })?;
+        Ok(LockedWritePoint { fs: self.fs(), wp: NonNull::new(wp).expect("an allocation's write point") })
+    }
+}
+
+impl LockedWritePoint<'_> {
+    /// Takes a pin on each of its buckets, into @ptrs, for the data's writer
+    /// to hold until it's indexed.
+    pub fn open_buckets_get(&self, ptrs: &mut c::open_buckets) {
+        let wp = &self.alloc;
+        for idx in wp.ptrs.v[..wp.ptrs.nr as usize].iter() {
+            let idx = idx.expect("a bucket of the write point's");
+            // SAFETY: open, pinned by the write point, which we hold locked
+            let ob = unsafe { OpenBucketRef::from_idx(self.fs, idx) };
+            ob.set_data_type(wp.data_type);
+            ob.inc();
+            ptrs.v[ptrs.nr as usize] = Some(idx);
+            ptrs.nr += 1;
+        }
+    }
+
+    /// Appends pointers to @sectors of its buckets to @k.
+    ///
+    /// # Safety
+    /// @k is a key with room for them.
+    pub unsafe fn append_ptrs(&mut self, k: *mut c::bkey_i, sectors: u32) {
+        // SAFETY: the caller's; the write point ours, locked
+        unsafe { bch2_alloc_sectors_append_ptrs(self.fs.as_ptr(), self.wp.as_ptr(), k, sectors, false) }
+    }
+}
+
+impl Deref for LockedWritePoint<'_> {
+    type Target = c::write_point;
+
+    fn deref(&self) -> &c::write_point {
+        // SAFETY: locked: ours till we're dropped
+        unsafe { self.wp.as_ref() }
+    }
+}
+
+impl Drop for LockedWritePoint<'_> {
+    fn drop(&mut self) {
+        // SAFETY: locked by bch2_alloc_sectors_req(), and unlocked once, here
+        unsafe { bch2_alloc_sectors_done(self.fs.as_ptr(), self.wp.as_ptr()) }
     }
 }
 
