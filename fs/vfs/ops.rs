@@ -71,6 +71,18 @@ from_raw! {
     &'a mut NameBuf       = *mut c_char         => |r| &mut *r.cast();
 }
 
+#[cfg(linux_ge = "6.17")]
+from_raw! {
+    /// mmap_prepare's.
+    &'a mut c::vm_area_desc = *mut c::vm_area_desc => |r| &mut *r;
+}
+
+#[cfg(not(linux_ge = "6.17"))]
+from_raw! {
+    /// mmap's.
+    &'a mut c::vm_area_struct = *mut c::vm_area_struct => |r| &mut *r;
+}
+
 // ── Returns ──────────────────────────────────────────────────────────────
 
 /// @e, classed, as an ERR_PTR().

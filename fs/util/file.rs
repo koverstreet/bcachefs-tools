@@ -2,10 +2,11 @@
 
 //! A file's operations from a trait. A type implements FileOps, under
 //! #[vtable], and FileVTable::<P>::OPS is the file_operations of a file whose
-//! private data is P - that type, or one holding it (FileData): each op filled
-//! in only where it's implemented, release() always - it drops the private
-//! data - and in-kernel .owner this module, so it isn't unloaded under an
-//! open file. The kernel crate's own (MiscDevice,
+//! state is P (FileData): each op filled in only where it's implemented,
+//! release() always - FileData's - and in-kernel .owner this module, so it
+//! isn't unloaded under an open file. P is the file's private data - the
+//! ops' type, or one holding it - unless it says otherwise: a regular file's
+//! ops are its inode's (vfs/file.rs). The kernel crate's own (MiscDevice,
 //! debugfs's) are tied to their users; this is MiscDevice's shape, for any
 //! file, in both builds - the tools serve debugfs files over http, through
 //! the shim's debugfs and these same ops.
@@ -120,7 +121,7 @@ crate::vfs_ops! {
     {
         let mut u = UserBuf::new(buf, len);
         // SAFETY: an open file of P's
-        let r = unsafe { file_data::<P>(file).ops().read(File::from_raw(file), &mut u) };
+        let r = unsafe { P::ops_of(file).read(File::from_raw(file), &mut u) };
         u.ret(r)
     };
     #[cfg(kernel)]
@@ -129,7 +130,7 @@ crate::vfs_ops! {
     {
         let mut u = UserBuf::new(buf, len);
         // SAFETY: an open file of P's
-        let r = unsafe { file_data::<P>(file).ops().write(File::from_raw(file), &mut u) };
+        let r = unsafe { P::ops_of(file).write(File::from_raw(file), &mut u) };
         u.ret(r)
     };
     #[cfg(kernel)]
@@ -140,7 +141,7 @@ crate::vfs_ops! {
         => extern (file: *mut c::file, _id: c::fl_owner_t) -> c_int
     {
         // SAFETY: an open file of P's
-        unsafe { file_data::<P>(file).ops().flush(File::from_raw(file)) }
+        unsafe { P::ops_of(file).flush(File::from_raw(file)) }
     };
     #[cfg(kernel)]
     fn unlocked_ioctl(&self = file, file: &File, cmd: c_uint, arg: CUlong) -> CLong;
@@ -154,6 +155,13 @@ crate::vfs_ops! {
     #[cfg(kernel)]
     fn fsync(&self = file, file: &File, start: i64, end: i64, datasync: c_int)
         -> Result<(), BchError>;
+    /// A mapping about to be made: its vm_ops, and whether it may be.
+    #[cfg(kernel)]
+    #[cfg(linux_ge = "6.17")]
+    fn mmap_prepare(desc: &mut c::vm_area_desc) -> Result<(), BchError>;
+    #[cfg(kernel)]
+    #[cfg(not(linux_ge = "6.17"))]
+    fn mmap(&self = file, file: &File, vma: &mut c::vm_area_struct) -> Result<(), BchError>;
 }
 
 from_raw! {
@@ -165,21 +173,39 @@ from_raw! {
     PollTable<'a> = *mut c::poll_table => |r| PollTable(r, PhantomData);
 }
 
-// SAFETY: SelfOf's: the private data of a file of FileVTable::<P>'s is a P
+// SAFETY: SelfOf's: a file of FileVTable::<P>'s is P's, its ops P::ops_of()'s
 impl<P: FileData> SelfOf<P> for *mut c::file {
     type Out = P::Ops;
-    unsafe fn self_of<'a>(&self) -> &'a P::Ops { unsafe { file_data::<P>(*self).ops() } }
+    unsafe fn self_of<'a>(&self) -> &'a P::Ops { unsafe { P::ops_of(*self) } }
 }
 
-/// A file's private data: the T whose ops the file has, or something holding
-/// one - as a thread's file holds the thread, and what it runs on.
-pub trait FileData: Send + Sync + 'static {
+/// A file's state: by default its private data - the T whose ops the file
+/// has, or something holding one, as a thread's file holds the thread, and
+/// what it runs on - made by open() or NewFile::new(), dropped at release.
+pub trait FileData: Sized + Send + Sync + 'static {
     type Ops: FileOps;
 
     /// What FileOps::open() makes is the private data itself.
     const OPENABLE: bool = false;
 
     fn ops(&self) -> &Self::Ops;
+
+    /// The ops of @file.
+    ///
+    /// # Safety
+    /// @file is an open file of this type's - FileVTable::<Self>'s.
+    unsafe fn ops_of<'a>(file: *mut c::file) -> &'a Self::Ops {
+        unsafe { file_data::<Self>(file) }.ops()
+    }
+
+    /// The file's last use: its private data dropped.
+    ///
+    /// # Safety
+    /// As ops_of()'s, and nothing of @file used after.
+    unsafe fn release(file: *mut c::file) {
+        // SAFETY: open()'s or NewFile::new()'s
+        drop(unsafe { from_private::<Self>((*file).private_data) });
+    }
 
     fn opened(_p: Pin<KBox<Self::Ops>>) -> Pin<KBox<Self>> {
         unreachable!("not OPENABLE")
@@ -201,8 +227,8 @@ impl<T: FileOps> FileData for T {
 
 impl<P: FileData> FileVTable<P> {
     unsafe extern "C" fn release(_inode: *mut c::inode, file: *mut c::file) -> c_int {
-        // SAFETY: open()'s or NewFile::new()'s, and the file's last use
-        drop(unsafe { from_private::<P>((*file).private_data) });
+        // SAFETY: an open file of P's, its last use
+        unsafe { P::release(file) };
         0
     }
 }
