@@ -229,21 +229,21 @@ impl Fs {
     /// Sectors in use by kind, every CPU's count summed:
     /// bch2_fs_usage_base_read().
     pub fn usage_base(&self) -> c::bch_fs_usage_base {
-        percpu_field!(self.capacity.pcpu.get(), usage).sum_nonnegative()
+        percpu_field!(self.capacity.pcpu.get(), counters.usage).sum_nonnegative()
     }
 
     /// Sectors reserved for writes in flight, every CPU's count summed:
     /// bch2_online_reserved().
     pub fn online_reserved(&self) -> u64 {
-        percpu_field!(self.capacity.pcpu.get(), online_reserved).sum_nonnegative().iter().sum()
+        percpu_field!(self.capacity.pcpu.get(), counters.online_reserved).sum_nonnegative().iter().sum()
     }
 
     /// Capacity, and how much of it is used and free, in sectors:
     /// bch2_fs_usage_read_short().
     pub fn usage_read_short(&self) -> c::bch_fs_usage_short {
         let _mark = self.mark_lock().read();
-        // one sweep over the CPUs: sectors_available is summed too, and dropped
-        let b = self.capacity.pcpu.sum_nonnegative();
+        // one sweep over the CPUs, for both
+        let b = percpu_field!(self.capacity.pcpu.get(), counters).sum_nonnegative();
 
         // a u64's, as C's: nothing keeps hidden below capacity
         let capacity = self.capacity.capacity.get().wrapping_sub(b.usage.hidden);
@@ -328,7 +328,7 @@ impl Drop for DiskReservation<'_> {
 impl PinnedDrop for c::bch_fs_capacity {
     fn drop(self: Pin<&mut Self>) {
         if self.pcpu.allocated() {
-            let online_reserved = crate::percpu_field!(self.pcpu.get(), online_reserved).sum();
+            let online_reserved = crate::percpu_field!(self.pcpu.get(), counters.online_reserved).sum();
             for (i, &v) in online_reserved.iter().enumerate() {
                 if v != 0 {
                     log_no_fs(LogLevel::ERR,

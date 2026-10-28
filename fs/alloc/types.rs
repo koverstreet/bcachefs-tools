@@ -12,6 +12,7 @@ use crate::types::{CacheAligned, RustOnly, c_default, rust_only};
 use crate::util::bio::BioSet;
 use crate::util::workqueue::ReffedWork;
 use crate::util::percpu::{Counters, PerCpu};
+use crate::util::projections::Volatile;
 use core::ffi::{c_uint, c_ulong};
 use core::sync::atomic::{AtomicI32, AtomicI64};
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, placed, CStruct, Fieldwise, Init, TypeInfo};
@@ -280,14 +281,26 @@ pub struct write_point_specifier {
     pub v: c_ulong,
 }
 
-/* Indexed by disk_res_slot(); physical sectors, not data size */
+/* capacity.pcpu's counters: each CPU's a delta, summed over them */
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, TypeInfo, Fieldwise)]
 #[fieldwise(Counters::wrapping_add(rhs), Counters::clamp_nonnegative)]
-pub struct bch_fs_capacity_pcpu {
+pub struct bch_fs_capacity_counters {
     pub usage: c::bch_fs_usage_base,
-    pub sectors_available: [u64; c::BCH_REPLICAS_MAX as usize],
+    /* Indexed by disk_res_slot(); physical sectors, not data size */
     pub online_reserved: [u64; c::BCH_REPLICAS_MAX as usize],
+}
+
+#[repr(C)]
+#[derive(CStruct, TypeInfo)]
+pub struct bch_fs_capacity_pcpu {
+    #[c_anon]
+    pub counters: bch_fs_capacity_counters,
+    /*
+     * The reservation caches, by disk_res_slot(): slots, each changed by
+     * its own CPU and reset by a recompute's
+     */
+    pub sectors_available: [Volatile<u64>; c::BCH_REPLICAS_MAX as usize],
 }
 
 /// See alloc/capacity.rs.
