@@ -99,11 +99,6 @@ int bch2_btree_node_rewrite_key(struct btree_trans *,
 				enum btree_id, unsigned,
 				struct bkey_i *,
 				enum bch_trans_commit_flags);
-int bch2_btree_node_rewrite_pos(struct btree_trans *,
-				enum btree_id, unsigned,
-				struct bpos, unsigned,
-				enum bch_trans_commit_flags,
-				enum bch_write_flags);
 
 void bch2_btree_set_root_for_read(struct bch_fs *, struct btree *);
 

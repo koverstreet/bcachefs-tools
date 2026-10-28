@@ -17,21 +17,20 @@
 //! flush_all() waits on.
 
 use crate::btree::bkey::{BkeySC, BkeyV};
-use crate::btree::iter::BtreeIter;
+use crate::btree::iter::{BtreeIter, TransAttempt};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::moving::{Moving, MovingIo};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::update::{read_err_benign, IOPRIO_IDLE};
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::data::update_task::{Body, Update, UpdateTask};
-use crate::util::ffi::Opaque;
 use crate::util::refcount::{RefGuard, Refcount};
 use crate::util::alloc::gfp_flags;
 use crate::util::task::{Resumable, Resume, Spawn};
 use core::ffi::{c_int, c_uint};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{c_export, c_extern};
+use cstruct_macros::c_extern;
 
 c_extern! {
     fn __bch2_read_extent(trans: *mut c::btree_trans, rbio: *mut c::bch_read_bio, iter: c::bvec_iter,
@@ -111,24 +110,11 @@ unsafe extern "C" fn move_read_endio(bio: *mut c::bio) {
     }
 }
 
-/// Starts moving @k, returning once the read is issued - or at once, with 0,
-/// if there's nothing to read.
-///
-/// # Safety
-/// @ctxt's transaction is in an attempt.
-#[c_export]
-pub unsafe fn __bch2_move_extent(ctxt: &Opaque<c::moving_context>, bucket_in_flight: Option<&c::move_bucket>,
-                                 iter: &BtreeIter<'_>, k: BkeySC<'_>, io_opts: &c::bch_inode_opts,
-                                 data_opts: &c::data_update_opts) -> c_int {
-    let moving = Moving::from_c(ctxt);
-    // SAFETY: the caller's
-    let t = unsafe { moving.trans().attempt_in_progress() };
-    ret_to_c(move_extent(moving, &t, bucket_in_flight, iter, k, io_opts, data_opts))
-}
-
-fn move_extent(moving: &Moving<'_>, t: &crate::btree::iter::TransAttempt<'_, '_>,
-               bucket_in_flight: Option<&c::move_bucket>, iter: &BtreeIter<'_>, k: BkeySC<'_>,
-               io_opts: &c::bch_inode_opts, data_opts: &c::data_update_opts) -> Result<(), BchError> {
+/// Starts moving extent @k, returning once the read is issued - or at once if
+/// there's nothing to read.
+pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_in_flight: Option<&c::move_bucket>,
+                          iter: &BtreeIter<'_>, k: BkeySC<'_>, io_opts: &c::bch_inode_opts,
+                          data_opts: &c::data_update_opts) -> Result<(), BchError> {
     let btree = iter.btree();
 
     if let Some(stats) = moving.stats_opt() {

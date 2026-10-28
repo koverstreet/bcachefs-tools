@@ -3,13 +3,11 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::fs::Fs;
-use crate::util::Printbuf;
 use crate::types::{DArray, c_default};
 use crate::util::projections::Volatile;
-use core::ffi::{c_int, c_uint, c_void};
+use core::ffi::{c_int, c_uint};
 use core::sync::atomic::{AtomicI32, AtomicI64};
-use cstruct_macros::{CStruct, c_extern, c_typedef, TypeInfo};
+use cstruct_macros::{CStruct, c_typedef, TypeInfo};
 use nestify::nest;
 
 nest! {
@@ -99,19 +97,4 @@ c_default!(scrub_journal_repair);
 
 c_typedef! {
     pub type darray_scrub_journal_repair = DArray<c::scrub_journal_repair>;
-}
-
-c_extern! {
-    pub fn bch2_move_data_btree(ctxt: *mut c::moving_context, start: c::bpos, end: c::bpos,
-                                pred: c::move_pred_fn, arg: *mut c_void, btree_id: c::btree_id,
-                                level: c_uint) -> c_int;
-    pub fn bch2_fs_moving_ctxts_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
-    pub fn bch2_data_job(c: *mut c::bch_fs, stats: *mut c::bch_move_stats,
-                         op: *mut c::bch_ioctl_data) -> c_int;
-}
-
-impl Fs {
-    pub fn moving_ctxts_to_text(&self, out: &mut Printbuf) {
-        unsafe { bch2_fs_moving_ctxts_to_text(out.as_raw(), self.as_ptr()) }
-    }
 }

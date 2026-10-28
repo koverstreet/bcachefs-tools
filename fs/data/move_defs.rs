@@ -8,10 +8,9 @@ use crate::data::moving::InFlightUpdate;
 use crate::types::Fifo;
 use core::cell::{Cell, UnsafeCell};
 use crate::util::task::RunQueue;
-use core::ffi::{c_int, c_void};
 use core::sync::atomic::{AtomicI32, AtomicPtr};
 use crate::util::ffi::Opaque;
-use cstruct_macros::{c_typedef, CStruct};
+use cstruct_macros::CStruct;
 
 /*
  * Tracks in-flight data movement IO for ratelimiting.
@@ -21,10 +20,10 @@ use cstruct_macros::{c_typedef, CStruct};
  *    completed read
  *  - write_sectors/write_ios: then -> write completion
  *
- * bch2_move_ratelimit() blocks the caller until all counters are below
+ * Moving::ratelimit() blocks the caller until all counters are below
  * c->opts.move_bytes_in_flight / move_ios_in_flight.
  *
- * Extent moves (bch2_move_extent) and stripe repairs (bch2_stripe_repair)
+ * Moves (Moving::move_extent()) and stripe repairs (ec/repair.rs)
  * both account through these counters.
  *
  * Lifetime: every in-flight IO holds closure_get(&ctxt->cl).
@@ -53,7 +52,7 @@ pub struct moving_context {
 
     /*
      * Its updates' tasks, run in its waits - data/moving_update.rs - whose
-     * EventCount every completion wakes: bch2_moving_ctxt_wake()
+     * EventCount every completion wakes: Moving::wake()
      */
     pub runq: RunQueue,
     /*
@@ -74,9 +73,4 @@ pub struct moving_io_counts {
     pub write_sectors: AtomicI32,
     pub read_ios: AtomicI32,
     pub write_ios: AtomicI32,
-}
-
-c_typedef! {
-    pub type move_pred_fn = Option<unsafe extern "C" fn(*mut c::btree_trans, *mut c_void, c::btree_id, c::bkey_s_c,
-                                                        *mut c::bch_inode_opts, *mut c::data_update_opts) -> c_int>;
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! move.c's moving_context, for Rust. A move is asynchronous: move_extent()
+//! A moving context: what a mover's moves are issued and counted in - the
+//! walks that issue them are move_data.rs. A move is asynchronous: move_extent()
 //! returns once the read is issued, and the rest runs in the update's task
 //! (moving_update.rs) on the context's run queue. The run queue runs only in
 //! the context's waits, so all of a mover's updates run on its own thread,
@@ -21,55 +22,39 @@
 //! Moving's, a borrow - of a MovingCtxt, or of a context C hands Rust. IO that
 //! outlives the borrow, counted in the context, is a MovingIo.
 
-use crate::btree::bkey::BkeySC;
-use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt, TransFnName};
+use crate::btree::iter::{BtreeTrans, TransFnName};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::copygc::bch2_copygc_wait_not_running;
-use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::function_name;
 use crate::locking::Lock;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError, Flags};
 use crate::util::list::List;
 use crate::util::closure::ClosureRef;
+use crate::opts::prt_data_type;
 use crate::util::ffi::Opaque;
+use crate::util::Printbuf;
 use crate::util::refcount::Refcount;
 use crate::util::kthread::Kthread;
 use crate::util::task::RunQueue;
 use crate::util::sleep::Sleep;
 use crate::types::Fifo;
 use crate::util::gather::GatherRef;
-use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, AtomicPtr};
 use core::sync::atomic::Ordering::Relaxed;
-use cstruct_macros::{c_export, c_extern};
-
-c_extern! {
-    pub fn bch2_move_extent(ctxt: *mut c::moving_context, bucket: *mut c::move_bucket,
-                            opts: *mut c::bch_inode_opts, data_opts: *mut c::data_update_opts,
-                            iter: *mut c::btree_iter, level: c_uint, k: c::bkey_s_c) -> c_int;
-    pub fn bch2_evacuate_bucket(ctxt: *mut c::moving_context, bucket_in_flight: *mut c::move_bucket,
-                                bucket: c::bpos, gen: c_int, data_opts: c::data_update_opts) -> c_int;
-    pub fn bch2_evacuate_data(ctxt: *mut c::moving_context, dev: c_uint, start: u64, end: u64) -> c_int;
-    pub fn bch2_evacuate_ec_orphan(ctxt: *mut c::moving_context, ec_idx: u64, ec_block: c_uint,
-                                   start: u64, end: u64) -> c_int;
-}
-
-#[c_export]
-pub fn bch2_moving_ctxt_wake(ctxt: &Opaque<c::moving_context>) {
-    Moving::from_c(ctxt).wake()
-}
+use cstruct_macros::c_export;
 
 pub use c::MoveStats;
 
 impl MoveStats {
     /// Zeroed, and named @name for the moving contexts' listing, as
     /// bch2_move_stats_init() - field by field, as it may be read meanwhile.
-    pub fn reset(&self, name: &core::ffi::CStr) {
-        let name = name.to_bytes();
+    pub fn reset(&self, name: &str) {
+        let name = name.as_bytes();
         let len = name.len().min(self.name.len() - 1);
         for (i, b) in self.name.iter().enumerate() {
             b.set(if i < len { name[i] } else { 0 });
@@ -103,6 +88,29 @@ impl MoveStats {
     /// Where whoever's moving through it is, for the listing.
     pub fn set_pos(&self, pos: c::bbpos) {
         self.at.pos.set(pos);
+    }
+
+    /// For the moving contexts' listing.
+    #[cold]
+    pub fn to_text(&self, out: &mut Printbuf) {
+        let mut name = [0u8; 32];
+        for (b, n) in name.iter_mut().zip(&self.name) {
+            *b = n.get();
+        }
+        let len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+        write!(out, "{}: data type==", core::str::from_utf8(&name[..len]).unwrap_or("(invalid name)"));
+        prt_data_type(out, self.at.data_type.get());
+        write!(out, " pos={}\n", self.at.pos.get());
+
+        let mut out = out.indent(2);
+        write!(out, "keys moved:\t{}\n", self.keys_moved.load(Relaxed));
+        write!(out, "keys raced:\t{}\n", self.keys_raced.load(Relaxed));
+        let sectors = [("seen", &self.sectors_seen), ("moved", &self.sectors_moved), ("raced", &self.sectors_raced)];
+        for (what, n) in sectors {
+            write!(out, "bytes {what}:\t");
+            out.human_readable_u64((n.load(Relaxed) as u64) << 9);
+            out.newline();
+        }
     }
 }
 
@@ -494,68 +502,24 @@ impl<'a> Moving<'a> {
         unsafe { core::pin::Pin::new_unchecked(&self.0.runq) }
     }
 
-    /// Start moving @k, at @iter's position in the context's transaction, as
-    /// @data_opts say - returning once the read is issued. @k is copied
-    /// before the transaction is unlocked to issue it: past this the attempt
-    /// has no commit left to make. The read retries itself - restarts in its
-    /// erasure coded fallback - which aren't the attempt's.
-    pub fn move_extent(
-        &self,
-        t:         &TransAttempt<'_, 'a>,
-        opts:      &mut c::bch_inode_opts,
-        data_opts: &mut c::data_update_opts,
-        iter:      &mut BtreeIter<'_>,
-        level:     u32,
-        k:         BkeySC<'_>,
-    ) -> Result<(), BchError> {
-        let ret = unsafe {
-            bch2_move_extent(self.raw(), core::ptr::null_mut(), opts, data_opts, iter.raw_mut(), level, k.into())
-        };
-        assert!(ret <= 0, "bch2_move_extent() returned {ret}");
-        t.restarts_handled();
-        t.result(ret)
-    }
+    #[cold]
+    fn to_text(&self, out: &mut Printbuf) {
+        let opts = self.trans().fs().opts();
+        let (ios, sectors) = (opts.move_ios_in_flight, opts.move_bytes_in_flight >> 9);
 
-    /// Start moving what @pred picks of @btree at @level, @start to @end -
-    /// returning once the moves are issued.
-    ///
-    /// # Safety
-    /// @arg is what @pred takes.
-    pub unsafe fn move_data_btree(&self, start: c::bpos, end: c::bpos, pred: c::move_pred_fn, arg: *mut c_void,
-                                  btree: c::btree_id, level: u32) -> Result<(), BchError> {
-        // SAFETY: the caller's
-        ret_to_result_void(unsafe { c::bch2_move_data_btree(self.raw(), start, end, pred, arg, btree, level) })
-    }
+        if out.nr_tabstops() == 0 {
+            out.tabstop_push(32);
+        }
+        if let Some(stats) = self.stats_opt() {
+            stats.to_text(out);
+        }
 
-    /// Start moving the data in sectors @start..@end of device @dev off it,
-    /// found by backpointer - to the extents' background target - returning
-    /// once the moves are issued, ratelimit()ed, not done.
-    /// Runs attempts of its own in the context's transaction.
-    pub fn evacuate_data(&self, dev: u32, start: u64, end: u64) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { bch2_evacuate_data(self.raw(), dev, start, end) })
-    }
-
-    /// evacuate_data(), for block @block of stripe @idx, on a device that's
-    /// been removed: its extents found by their stripe_backpointers, the
-    /// pointers moved those that point to the block.
-    pub fn evacuate_ec_orphan(&self, idx: u64, block: u32, start: u64, end: u64) -> Result<(), BchError> {
-        ret_to_result_void(unsafe { bch2_evacuate_ec_orphan(self.raw(), idx, block, start, end) })
-    }
-
-    /// Start moving everything off @key's bucket, while it's that
-    /// generation, as @data_opts say: its backpointers walked, each extent's
-    /// move issued - returning once the reads are. Each move holds a count on
-    /// @bucket_in_flight until its update is done.
-    ///
-    /// # Safety
-    /// @bucket_in_flight stays valid, where it is, until its count is back
-    /// to what it was.
-    pub unsafe fn evacuate_bucket(&self, bucket_in_flight: NonNull<c::move_bucket>, key: c::move_bucket_key,
-                                  data_opts: c::data_update_opts) -> Result<(), BchError> {
-        ret_to_result_void(unsafe {
-            bch2_evacuate_bucket(self.raw(), bucket_in_flight.as_ptr(), key.bucket, key.generation as c_int,
-                                 data_opts)
-        })
+        let io = self.io();
+        let mut out = out.indent(2);
+        write!(out, "reads: ios {}/{ios} sectors {}/{sectors}\n",
+               io.read_ios.load(Relaxed), io.read_sectors.load(Relaxed));
+        write!(out, "writes: ios {}/{ios} sectors {}/{sectors}\n",
+               io.write_ios.load(Relaxed), io.write_sectors.load(Relaxed));
     }
 
     pub fn io_mark(&self) -> IoMark {
@@ -568,6 +532,22 @@ impl<'a> Moving<'a> {
     }
 }
 
+impl Fs {
+    /// The moving contexts' listing: every context, its stats and IO in flight.
+    #[cold]
+    pub fn moving_ctxts_to_text(&self, out: &mut Printbuf) {
+        self.moving_contexts(|l| {
+            let mut cursor = l.cursor_mut();
+            while let Some(ctxt) = cursor.current() {
+                // SAFETY: on the list from init() to exit(), which takes it
+                // off under the lock
+                unsafe { Moving::from_raw(core::ptr::from_ref(ctxt).cast_mut()) }.to_text(out);
+                cursor.move_next();
+            }
+        })
+    }
+}
+
 impl c::data_update {
     /// The moving context the update is in flight in, if it's a mover's.
     pub(crate) fn moving(&self) -> Option<&Moving<'_>> {
@@ -575,16 +555,6 @@ impl c::data_update {
         // and the context's flush_all() waits for it before the context goes
         NonNull::new(self.ctxt).map(|c| unsafe { Moving::from_raw(c.as_ptr()) })
     }
-}
-
-#[c_export]
-pub fn bch2_move_ratelimit(ctxt: &Opaque<c::moving_context>) -> c_int {
-    ret_to_c(Moving::from_c(ctxt).ratelimit())
-}
-
-#[c_export]
-pub fn bch2_move_ctxt_wait_for_io(ctxt: &Opaque<c::moving_context>) {
-    Moving::from_c(ctxt).wait_for_io()
 }
 
 #[c_export]

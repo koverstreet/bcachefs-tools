@@ -705,7 +705,7 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
     }
 
     let stats = MoveStats::default();
-    stats.reset(c"copygc");
+    stats.reset("copygc");
     let ctxt = bch_err_msg!(fs, MovingCtxt::new(fs, &stats, writepoint_ptr(&fs.copygc.write_point), false),
                             "allocating copygc's moving context")?;
     let mut cg = Copygc { fs, me, ctxt, set, in_flight: Fifo::new() };
@@ -925,7 +925,7 @@ pub fn bch2_copygc_wait_to_text(out: &mut Printbuf, c: &Fs) {
 }
 
 /// Until copygc isn't running, or this kthread's told to stop: for a moving
-/// context that waits on copygc, bch2_move_ratelimit()'s. Freezable - copygc
+/// context that waits on copygc, Moving::ratelimit()'s. Freezable - copygc
 /// freezes in place, mid run - and interruptible, as wait_event_freezable().
 #[c_export]
 pub fn bch2_copygc_wait_not_running(c: &Fs) {

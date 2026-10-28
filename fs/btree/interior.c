@@ -3413,22 +3413,6 @@ int bch2_btree_node_rewrite_key(struct btree_trans *trans,
 		: -ENOENT;
 }
 
-int bch2_btree_node_rewrite_pos(struct btree_trans *trans,
-				enum btree_id btree, unsigned level,
-				struct bpos pos,
-				unsigned target,
-				enum bch_trans_commit_flags commit_flags,
-				enum bch_write_flags write_flags)
-{
-	BUG_ON(!level);
-
-	/* Traverse one depth lower to get a pointer to the node itself: */
-	CLASS(btree_node_iter, iter)(trans, btree, pos, level + 1, level - 1, 0);
-	struct btree *b = errptr_try(bch2_btree_iter_peek_node(&iter));
-
-	return bch2_btree_node_rewrite(trans, &iter, b, target, commit_flags, write_flags);
-}
-
 /*
  * Async btree ops (rewrite on read error, merge of an underfull node)
  * identify their node by position plus the node's random cookie

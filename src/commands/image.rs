@@ -3,7 +3,7 @@
 // Uses a temporary second device for metadata, writes data sequentially to the
 // primary device, then migrates metadata to the primary and drops the temp device.
 
-use std::ffi::{CString, c_char, c_void};
+use std::ffi::{CString, c_char};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::process;
@@ -103,47 +103,11 @@ fn set_data_allowed_for_image_update(fs: &Fs) {
     fs.dev_allocator_set_rw(1, true);
 }
 
-/// Arguments passed through void* to the move predicate callback.
-struct MoveBtreeArgs {
-    move_alloc: bool,
-    target: u16,
-}
-
-/// Predicate for btree node moves — decides whether to move each btree node.
-unsafe extern "C" fn move_btree_pred(
-    _trans: *mut c::btree_trans,
-    arg: *mut c_void,
-    btree: c::btree_id,
-    k: c::bkey_s_c,
-    _io_opts: *mut c::bch_inode_opts,
-    data_opts: *mut c::data_update_opts,
-) -> i32 {
-    let args = &*(arg as *const MoveBtreeArgs);
-    let opts = &mut *data_opts;
-
-    opts.target = args.target;
-
-    if (*k.k).type_ != u32::from(bkey_type::btree_ptr_v2) as u8 {
-        return 0;
-    }
-
-    if !args.move_alloc && btree_id_is_alloc(u32::from(btree)) {
-        return 0;
-    }
-
-    opts.write_flags |= c::bch_write_flags::BCH_WRITE_only_specified_devs;
-    1
-}
-
 /// Move btree nodes to a target device. Flushes journal pins first.
 fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::Error> {
     fs.journal_flush_all_pins();
 
-    let mut args = MoveBtreeArgs {
-        move_alloc,
-        target: Target::Dev(target_dev).encode(),
-    };
-
+    let target = Target::Dev(target_dev).encode();
     let stats = MoveStats::default();
     let ctxt = MovingCtxt::new(fs, &stats, writepoint_hashed(1), false)
         .map_err(|_| anyhow!("allocating a moving context"))?;
@@ -156,19 +120,19 @@ fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::
 
         let btree_id = c::btree_id::from_raw(btree).expect("invalid btree id");
 
-        for level in 1..BTREE_MAX_DEPTH {
-            unsafe {
-                ctxt.move_data_btree(
-                    POS_MIN,
-                    SPOS_MAX,
-                    Some(move_btree_pred),
-                    &mut args as *mut MoveBtreeArgs as *mut c_void,
-                    btree_id,
-                    level,
-                )
+        ctxt.move_data_btree(btree_id, 1..BTREE_MAX_DEPTH, POS_MIN, SPOS_MAX, "move_btree_pred",
+                             |_, btree, k, _, opts| {
+            opts.target = target;
+
+            if k.k.type_ != u32::from(bkey_type::btree_ptr_v2) as u8 ||
+               (!move_alloc && btree_id_is_alloc(u32::from(btree))) {
+                return Ok(false);
             }
-            .map_err(|e| anyhow!("moving btree {}: {}", btree_id, e))?;
-        }
+
+            opts.write_flags |= c::bch_write_flags::BCH_WRITE_only_specified_devs;
+            Ok(true)
+        })
+        .map_err(|e| anyhow!("moving btree {}: {}", btree_id, e))?;
     }
 
     Ok(())

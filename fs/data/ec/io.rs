@@ -16,7 +16,6 @@ use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
 use crate::sb::members::{DevIoRef, IoRefIdx};
 use crate::util::bio::{Bio, BioBox, BioOwner, Endio, RawBio};
-use crate::util::ffi::Opaque;
 use crate::util::gather::{Fold, Gather, GatherRef};
 use crate::util::kernel::{local_clock, PAGE_SIZE, WRITE};
 use crate::util::rcu::read_lock;
@@ -24,7 +23,7 @@ use crate::util::task::{Resumable, Resume};
 use crate::util::vstructs::Validated;
 use crate::util::Printbuf;
 use crate::{log_msg_ratelimited, prt};
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_int;
 use core::marker::PhantomData;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicI32, Ordering};
@@ -300,7 +299,7 @@ pub struct Scrubbed {
 /// Scrub: block @block of stripe @s checked against the stripe's checksums
 /// for it, read a checksum granule at a time - parity, and data no extent
 /// references any more, are still inputs to reconstruct, and nothing else
-/// ever reads them: bch2_ec_scrub_block(). The error if the block couldn't
+/// ever reads them. The error if the block couldn't
 /// be read, including its pointer going stale: the stripe deleted, or
 /// reused, under us. Its buffer, of one granule, is its own.
 pub fn scrub_block(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: usize) -> Result<Scrubbed, BchError> {
@@ -453,19 +452,4 @@ fn read_extent(trans: &BtreeTrans<'_>, rbio: &mut c::bch_read_bio, msg: &mut Pri
 pub unsafe fn bch2_ec_read_extent(trans: &BtreeTrans<'_>, rbio: &mut c::bch_read_bio, _orig_k: BkeySC<'_>,
                                   msg: &mut Printbuf) -> c_int {
     ret_to_c(read_extent(trans, rbio, msg))
-}
-
-/// scrub_block(), for move.c's scrub: the bad sectors, the first bad
-/// granule's checksums into @want and @got - or the error.
-#[c_export]
-pub fn bch2_ec_scrub_block(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, block: c_uint, want: &mut c::bch_csum,
-                           got: &mut c::bch_csum) -> i64 {
-    let s = k.arm::<c::Stripe>().expect("a stripe");
-    match scrub_block(Fs::from_c(c), s, block as usize) {
-        Ok(r) => {
-            (*want, *got) = (r.want, r.got);
-            r.bad_sectors as i64
-        }
-        Err(e) => i64::from(ret_to_c(Err(e))),
-    }
 }

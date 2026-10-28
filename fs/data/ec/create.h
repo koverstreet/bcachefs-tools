@@ -7,7 +7,6 @@
 
 #include "data/ec/delete_gen.h"
 #include "data/ec/head_gen.h"
-#include "data/ec/repair_gen.h"
 #include "data/ec/stripe_new_gen.h"
 #include "data/ec/update_gen.h"
 

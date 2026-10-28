@@ -254,7 +254,8 @@ c_extern! {
 /// IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0): background IO yields to everyone else's.
 pub(crate) const IOPRIO_IDLE: u16 = 3 << 13;
 
-fn is_scrub(t: Type) -> bool {
+/// Both scrub types read to check, and must never rewrite what they're checking.
+pub(crate) fn is_scrub(t: Type) -> bool {
     matches!(t, Type::BCH_DATA_UPDATE_scrub | Type::BCH_DATA_UPDATE_scrub_no_repair)
 }
 

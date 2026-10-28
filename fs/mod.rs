@@ -194,6 +194,7 @@ pub mod data {
     pub mod io_misc;
     pub mod keylist;
     pub mod migrate;
+    pub mod move_data;
     pub mod moving;
     pub mod moving_update;
     pub mod nocow_locking;

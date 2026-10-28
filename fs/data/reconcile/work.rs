@@ -441,7 +441,7 @@ impl<'a, 'f> Walker<'a, 'f> {
         let fs = t.fs();
         ctxt.set_stats(&fs.reconcile.work_stats);
 
-        let mut opts = get_io_opts(t, Some(&mut *self.s), k)?;
+        let opts = get_io_opts(t, Some(&mut *self.s), k)?;
         update_reconcile_opts(t, Some(&mut *self.s), &opts, iter, level, k,
                               c::set_needs_reconcile_ctx::SET_NEEDS_RECONCILE_other)?;
 
@@ -483,7 +483,7 @@ impl<'a, 'f> Walker<'a, 'f> {
             }
         }
 
-        match ctxt.move_extent(t, &mut opts, &mut d, iter, level, k) {
+        match ctxt.move_extent(t, None, &opts, &d, iter, level, k) {
             Ok(()) => {}
             Err(e) if is_restart(&e) || e.matches(err::BCH_ERR_data_update_fail_need_copygc) => return Err(e),
             Err(e) => match parks_on(t, &opts, &d, k, e) {
@@ -791,7 +791,7 @@ impl<'f> Reconciler<'f, '_> {
         };
 
         let work_stats = &fs.reconcile.work_stats;
-        work_stats.reset(c"reconcile_work");
+        work_stats.reset("reconcile_work");
         self.ctxt.flush_all();
         set_status(fs, Status::Running { phase: None, pos: POS_MIN });
 

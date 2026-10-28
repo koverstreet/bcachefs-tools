@@ -299,7 +299,7 @@ impl ScanCookie {
         }
 
         let stats = &fs.reconcile.scan_stats;
-        stats.reset(c"reconcile_scan");
+        stats.reset("reconcile_scan");
         ctxt.set_stats(stats);
 
         let scan = &self.scan;

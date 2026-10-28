@@ -2953,13 +2953,31 @@ impl BtreeLevels {
         trans:    &'t BtreeTrans<'t>,
         disk_res: Option<&DiskReservation<'_>>,
         flags:    impl Into<CommitOpts>,
-        mut f:    F,
+        f:        F,
     ) -> Result<(), BchError>
     where
         F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'t>, u32, BkeySC<'k>)
             -> Result<(), BchError>,
     {
-        let flags = flags.into();
+        self.walk(trans, Some((disk_res, flags.into())), f)
+    }
+
+    /// for_each_commit() without the commit, @f committing for itself if
+    /// anything: for a body that leaves the transaction unlocked - a move's.
+    pub fn for_each<'t, F>(&self, trans: &'t BtreeTrans<'t>, f: F) -> Result<(), BchError>
+    where
+        F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'t>, u32, BkeySC<'k>)
+            -> Result<(), BchError>,
+    {
+        self.walk(trans, None, f)
+    }
+
+    fn walk<'t, F>(&self, trans: &'t BtreeTrans<'t>, commit: Option<(Option<&DiskReservation<'_>>, CommitOpts)>,
+                   mut f: F) -> Result<(), BchError>
+    where
+        F: for<'a, 'k> FnMut(&'k TransAttempt<'a, 't>, &'k BtreeIter<'t>, u32, BkeySC<'k>)
+            -> Result<(), BchError>,
+    {
         let iter_flags = BtreeIterFlags::PREFETCH | BtreeIterFlags::NOT_EXTENTS | BtreeIterFlags::ALL_SNAPSHOTS;
 
         for level in self.levels.clone() {
@@ -2967,12 +2985,17 @@ impl BtreeLevels {
                 let mut iter = BtreeIter::uninit();
                 let Some((iter, k)) = iter.peek_root(t, self.btree, level)? else { return Ok(()) };
                 f(t, iter, level, k)?;
-                t.commit(disk_res, flags)
+                commit.map_or(Ok(()), |(disk_res, flags)| t.commit(disk_res, flags))
             })?;
 
-            BtreeNodeIter::new(trans, self.btree, self.start, 0, level, iter_flags)
-                .iter()
-                .for_each_max_commit(trans, self.end, iter_flags, disk_res, flags, |t, iter, k| f(t, iter, level, k))?;
+            let mut node_iter = BtreeNodeIter::new(trans, self.btree, self.start, 0, level, iter_flags);
+            let iter = node_iter.iter();
+            match commit {
+                Some((disk_res, flags)) =>
+                    iter.for_each_max_commit(trans, self.end, iter_flags, disk_res, flags,
+                                             |t, iter, k| f(t, iter, level, k))?,
+                None => iter.for_each_max(trans, self.end, |t, iter, k| f(t, iter, level, k))?,
+            }
         }
         Ok(())
     }

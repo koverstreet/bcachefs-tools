@@ -4,19 +4,20 @@
 //! rebuilding around what's left of it - and recording, or taking out of
 //! the stripe, the extents of blocks that are lost.
 
+use crate::alloc::backpointers::BackpointerPos;
 use crate::alloc::capacity::DiskReservation;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt,
-                         UpdateTriggerFlags};
+use crate::btree::iter::{commit_do, is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags,
+                         TransAttempt, UpdateTriggerFlags};
 use crate::c;
 use crate::data::copygc;
 use crate::data::ec::buf::{blocks_good, blocks_in, validate_msg, MemWait, StripeBuf, PRE};
 use crate::data::ec::delete::stripe_delete;
 use crate::data::ec::head::dev_stripe_state_get;
-use crate::data::ec::io::read_sync;
+use crate::data::ec::io::{read_sync, scrub_block};
 use crate::data::ec::open::OpenStripe;
 use crate::data::ec::stripe_new::{discard, new_stripes_take, StripeNew};
 use crate::data::ec::stripe_new_blocks::{new_stripe_alloc_buckets, stripe_idx_alloc};
@@ -26,7 +27,7 @@ use crate::data::ec::update::{block_for_each_extent, Extent};
 use crate::data::moving::Moving;
 use crate::data::ptrs::{extent_nonce, BkeyVPtrs, BkeyVPtrsMut, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
-use crate::errcode::{bch_errcode, ret_to_c, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::init::damage;
 use crate::inode_opts::get_io_opts;
@@ -36,10 +37,9 @@ use crate::util::closure::StackClosure;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;
 use crate::{bch_err, c_function_name, log_msg_ratelimited, prt};
-use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
 use core::ptr::NonNull;
-use cstruct_macros::c_export;
+use core::sync::atomic::Ordering::Relaxed;
 use pin_init::stack_pin_init;
 
 // ── Recording the extents of blocks lost ──
@@ -479,27 +479,104 @@ pub fn stripe_repair(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, iter: &mut Btr
     Ok(StripeRepair::Done)
 }
 
-/// Scrub found block @block failing the stripe's checksums: repair @s as if it
-/// were degraded, with @block bad. Repair can't find it itself - it may be
-/// parity, or not live, and repair only reads the live data blocks.
-///
-/// # Safety
-/// @ctxt C's, in an attempt at @iter, which is intent locked; @s a copy.
-#[c_export]
-pub unsafe fn bch2_stripe_repair_damaged(ctxt: *mut c::moving_context, iter: &mut BtreeIter<'_>, s: BkeySC<'_>,
-                                         block: c_uint) -> c_int {
-    // SAFETY: the caller's
-    let ctxt = unsafe { Moving::from_raw(ctxt) };
-    let t = unsafe { ctxt.trans().attempt_in_progress() };
-    let s = s.arm::<c::Stripe>().expect("a stripe");
+// ── Scrub ────────────────────────────────────────────────────────────────
 
+/// The same pointer, as bch2_extent_ptr_eq(): all of it but its entry type.
+fn ptr_eq(a: &c::bch_extent_ptr, b: &c::bch_extent_ptr) -> bool {
+    a.cached() == b.cached() && a.unwritten() == b.unwritten() && a.offset() == b.offset() &&
+        a.dev() == b.dev() && a.generation() == b.generation()
+}
+
+/// The block of @s on @ca, in the bucket backpointer @bp is in.
+fn stripe_block_at_bp(ca: &c::bch_dev, s: BkeySC<'_, c::Stripe<Validated>>, bp: BkeySC<'_, c::Backpointer>)
+    -> Option<usize>
+{
+    let bucket = BackpointerPos::from_bpos(ca.fs(), bp.k.p).bucket(ca).offset;
+    s.v().block_ptrs().iter()
+        .position(|p| u32::from(p.dev()) == u32::from(ca.dev_idx) && ca.sector_to_bucket(p.offset()) == bucket)
+}
+
+/// Block @block of @read bad: the stripe repaired as if it were degraded,
+/// with the block bad - repair can't find it itself: it may be parity, or
+/// not live, and repair only reads the live data blocks. False if the stripe
+/// is gone, or rewritten without that block, since @read was read.
+fn repair_bad_block(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, read: BkeySC<'_, c::Stripe<Validated>>,
+                    block: usize) -> Result<bool, BchError> {
+    let mut iter = BtreeIter::new(t, c::btree_id::stripes, read.k.p, BtreeIterFlags::INTENT);
+    let Some(k) = iter.peek_slot(t)? else { return Ok(false) };
+    let want = &read.v().block_ptrs()[block];
+    if !k.arm::<c::Stripe>().is_some_and(|s| s.v().block_ptrs().get(block).is_some_and(|p| ptr_eq(p, want))) {
+        return Ok(false);
+    }
+
+    // repair drops our locks: it needs a copy
+    let sk = BkeyBuf::from_key(k);
+    let s = BkeySC::from(&sk).arm::<c::Stripe>().expect("a stripe");
+    let mut b = StripeBlocks::get(t.fs(), s)?;
+    b.bad |= 1 << block;
     // Retry is success, for scrub: narrowing's evacuation, which reconcile
     // finishes
-    ret_to_c(StripeBlocks::get(t.fs(), s).and_then(|mut b| {
-        b.bad |= 1 << block;
-        stripe_repair_blocks(ctxt, &t, iter, s, b).map(|_| ())
-    }))
+    let _ = stripe_repair_blocks(ctxt, t, &mut iter, s, b)?;
+    // the attempts repair ran are its own, and the walk's step is done with
+    // this one: it steps on and begins anew, as C's loop did
+    t.restarts_handled();
+    Ok(true)
 }
+
+/// Stripe @k, which a scrub's phys walk came to by backpointer @bp: its block
+/// on @ca checked against the stripe's checksums, and if it's bad the stripe
+/// repaired, as reconcile would a degraded one. Not by invalidating the
+/// block: its extents outside the bad granule are intact, and may be needed
+/// if the stripe can't be reconstructed. A restart is the walk's, which
+/// retries the block.
+pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, ca: &c::bch_dev,
+                                 bp: BkeySC<'_, c::Backpointer>, k: BkeySC<'_>) -> Result<(), BchError> {
+    let fs = t.fs();
+    let Some(s) = k.arm::<c::Stripe>() else { return Ok(()) };
+    // An open stripe's blocks are being written: its checksums aren't final
+    let Some(block) = stripe_block_at_bp(ca, s, bp).filter(|_| !fs.stripe_is_open(s.k.p.offset)) else {
+        return Ok(());
+    };
+
+    // our own copy of the stripe: no btree locks held for the IO
+    let read = BkeyBuf::from_key(k);
+    let s = BkeySC::from(&read).arm::<c::Stripe>().expect("a stripe");
+
+    let r = match t.drop_locks_do(|| Ok(scrub_block(fs, s, block)))? {
+        Ok(r) if r.bad_sectors > 0 => r,
+        Ok(_) => return Ok(()),
+        Err(e) if e == bch_errcode::BCH_ERR_ENOMEM_stripe_buf.into() => return Err(e),
+        // Couldn't read it: an IO error is counted by the device, and a
+        // stale pointer means the stripe went away under us
+        Err(_) => return Ok(()),
+    };
+
+    let ret = match repair_bad_block(ctxt, t, s, block) {
+        Ok(false) => return Ok(()),
+        Err(e) if is_restart(&e) => return Err(e),
+        r => r.map(|_| ()),
+    };
+
+    if let Some(stats) = ctxt.stats_opt() {
+        let n = if ret.is_ok() { &stats.sectors_error_corrected } else { &stats.sectors_error_uncorrected };
+        n.fetch_add(r.bad_sectors as i64, Relaxed);
+    }
+
+    let ty = c::bch_csum_type(s.v().csum_type.into());
+    let mut msg = log_msg_ratelimited!(fs);
+    write!(msg, "scrub: stripe block {block} on {}: {} sectors don't match the stripe's checksums, expected ",
+           ca.name().to_str().unwrap_or("(invalid name)"), r.bad_sectors);
+    r.want.to_text(&mut msg, ty);
+    write!(msg, " got ");
+    r.got.to_text(&mut msg, ty);
+    write!(msg, "\n{}\n", s.to_text(fs));
+    match ret {
+        Ok(()) => write!(msg, "repairing stripe\n"),
+        Err(e) => write!(msg, "error repairing stripe: {e}\n"),
+    };
+    ret
+}
+
 // ── Repair: reading the stripe, and rebuilding it ────────────────────────
 
 /// Read @s - which the caller has open - as the fold would: the blocks in

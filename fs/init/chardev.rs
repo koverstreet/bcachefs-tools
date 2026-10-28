@@ -693,7 +693,7 @@ fn disk_resize_journal(fs: &Fs, a: c::bch_ioctl_disk_resize_journal, msg: ErrMsg
 
 /* BCH_IOCTL_DATA */
 
-/// A data job - scrub, rereplicate, migrate...: bch2_data_job() in a
+/// A data job - scrub, rereplicate, migrate...: move_data.rs's data_job() in a
 /// kthread, and a file whose read() is its progress. Not a stdio file: each
 /// read is the progress now, an event, not the next of a stream.
 struct DataJob {
@@ -713,11 +713,11 @@ unsafe impl Sync for DataJob {}
 impl ThreadFile for DataJob {}
 
 fn data_job(job: &DataJob, _write_ref: WriteRef) {
-    let mut arg = job.arg;
     let stats = &job.stats;
-    let ret = unsafe { c::bch2_data_job(job.fs.as_ptr().cast(), core::ptr::from_ref(stats).cast_mut(), &mut arg) };
+    // SAFETY: the job's write ref keeps the filesystem
+    let ret = crate::data::move_data::data_job(unsafe { job.fs.as_ref() }, stats, &job.arg);
 
-    if ret == -(bch_errcode::BCH_ERR_device_offline.0 as c_int) {
+    if ret.err() == Some(bch_errcode::BCH_ERR_device_offline.into()) {
         stats.ret.set(c::bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_device_offline);
     } else {
         stats.ret.set(c::bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_done);
@@ -788,7 +788,7 @@ fn data(fs: &Fs, arg: c::bch_ioctl_data) -> Result<c_int, BchError> {
     let job = ThreadWithFile::new(Ok(DataJob {
         fs:    NonNull::from(fs),
         arg,
-        // SAFETY: integers, and the zeroed state bch2_data_job() inits it from
+        // SAFETY: integers, and the zeroed state data_job() resets it from
         stats: MoveStats::default(),
     }))?;
     job.run(move |job| data_job(job, write_ref))
