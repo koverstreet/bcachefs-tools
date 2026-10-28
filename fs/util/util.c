@@ -1543,11 +1543,6 @@ bool bch2_queue_delayed_work(struct workqueue_struct *wq, struct delayed_work *d
 	return queue_delayed_work(wq, dwork, delay);
 }
 
-struct workqueue_struct *bch2_system_dfl_wq(void)
-{
-	return system_dfl_wq;
-}
-
 /* For util/workqueue.rs: alloc_workqueue() is a macro, its name a format */
 struct workqueue_struct *bch2_alloc_workqueue(const char *name, unsigned flags, int max_active)
 {

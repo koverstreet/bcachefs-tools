@@ -129,10 +129,10 @@ impl Queue {
         unsafe { Self::from_raw(c::system_long_wq) }
     }
 
-    /// system_dfl_wq: the default, unbound - system_unbound_wq before 6.17.
+    /// system_dfl_wq: the default, unbound.
     pub fn system_dfl() -> &'static Queue {
         // SAFETY: the system's
-        unsafe { Self::from_raw(c::bch2_system_dfl_wq()) }
+        unsafe { Self::from_raw(c::system_dfl_wq) }
     }
 
     /// Run @work here: queue_work(). False if it was queued already - then

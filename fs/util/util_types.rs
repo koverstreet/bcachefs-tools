@@ -110,7 +110,6 @@ c_extern! {
                                   func: Option<unsafe extern "C" fn(*mut c::work_struct)>);
     pub fn bch2_queue_delayed_work(wq: *mut c::workqueue_struct, dwork: *mut c::delayed_work,
                                    delay: c_ulong) -> bool;
-    pub fn bch2_system_dfl_wq() -> *mut c::workqueue_struct;
     pub fn bch2_alloc_workqueue(name: *const c_char, flags: c_uint, max_active: c_int) -> *mut c::workqueue_struct;
     pub fn bch2_kthread_create(func: Option<unsafe extern "C" fn(*mut c_void) -> c_int>, data: *mut c_void,
                                name: *const c_char) -> *mut c::task_struct;
