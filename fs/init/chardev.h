@@ -6,12 +6,6 @@
 
 #include "init/chardev_gen.h"
 
-void bch2_fs_chardev_exit(struct bch_fs *);
-int bch2_fs_chardev_init(struct bch_fs *);
-
-void bch2_chardev_exit(void);
-int __init bch2_chardev_init(void);
-
 #else
 
 static inline long bch2_fs_ioctl(struct bch_fs *c,
