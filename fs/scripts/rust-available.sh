@@ -45,12 +45,8 @@ if tmp=$(mktemp -d 2>/dev/null); then
 fi
 
 # rust-src: RUST_LIB_SRC overrides the sysroot's, as for the kernel's own
-# check. Both build compiler-builtins' integer intrinsics from it
-# (Makefile.rust's bch_builtins), which older rust-srcs don't have.
+# check.
 lib_src=${RUST_LIB_SRC:-$("$RUSTC" --print sysroot 2>/dev/null)/lib/rustlib/src/rust/library}
-cb=$lib_src/compiler-builtins/compiler-builtins/src/lib.rs
-[ -r "$lib_src/core/src/lib.rs" ] && [ ! -r "$cb" ] &&
-	miss "rust-src has no compiler-builtins (no $cb): rustc $version is too old"
 
 # ...and it has to be this rustc's: another's fails to build core with a wall
 # of errors. Compiling it to find out takes seconds; instead, the metadata of

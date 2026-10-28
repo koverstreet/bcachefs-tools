@@ -304,19 +304,13 @@ $(obj)/uuid.o: $(src)/vendor/uuid/src/lib.rs FORCE
 # (nixpkgs) keep it outside the sysroot and pass it this way.
 RUST_LIB_SRC ?= $(shell $(RUSTC) --print sysroot)/lib/rustlib/src/rust/library
 
-# The integer intrinsics rustc calls that the kernel has none of: u128's
-# division, multiply and shifts, and on 32 bit u64's - __udivti3, __udivdi3
-# and the rest. Rust's own, compiler-builtins from rust-src: built as an
-# ordinary crate, not the #![compiler_builtins] one core binds to - the
-# kernel's, or the vendored copy, whose stubs panic - with only those global,
-# so rust.o's GC drops the rest of the crate, the soft float and libm nothing
-# calls. Its edition, and the features it declares, are this rust-src's own.
-bch-builtins := $(RUST_LIB_SRC)/compiler-builtins/compiler-builtins
-$(obj)/bch_builtins.o: private rs-edition := $(shell sed -n 's/^edition *= *"\(.*\)"/\1/p' $(bch-builtins)/Cargo.toml)
-$(obj)/bch_builtins.o: private rs-flags := --cap-lints=allow --cfg 'feature="unmangled-names"' \
-	-Zallow-features=$(shell sed -n 's/^#!\[feature(\([a-z0-9_]*\))\]$$/\1/p' $(bch-builtins)/src/lib.rs | paste -sd, -)
+# The integer intrinsics rustc calls that the kernel has none of: u128
+# division, __udivti3 and the rest - see vendor/bch_builtins. An ordinary
+# crate, not the #![compiler_builtins] one core binds to - the kernel's, or the
+# vendored copy, whose stubs panic - with only those global.
+$(obj)/bch_builtins.o: private rs-flags := --cap-lints=allow -Zallow-features=core_intrinsics
 $(obj)/bch_builtins.o: private rs-post = ; $(OBJCOPY) -w --keep-global-symbol='__*[sdt]i[234]' $@
-$(obj)/bch_builtins.o: $(bch-builtins)/src/lib.rs FORCE
+$(obj)/bch_builtins.o: $(src)/vendor/bch_builtins/lib.rs FORCE
 	$(call if_changed_dep,bch_rlib)
 
 # Asm from the kernel's own headers, as kbuild makes the kernel crate's
