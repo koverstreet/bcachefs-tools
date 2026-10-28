@@ -34,7 +34,9 @@ use crate::util::ffi::Opaque;
 use crate::util::os_str::{qstr, qstr_name, OsStr, OsStrExt};
 use core::mem::MaybeUninit;
 use core::ffi::c_int;
+use core::marker::PhantomData;
 use core::ops::ControlFlow;
+use core::ptr::NonNull;
 use cstruct_macros::c_export;
 
 // ── A valid dirent ───────────────────────────────────────────────────────
@@ -550,20 +552,29 @@ pub fn empty_dir_trans(t: &TransAttempt<'_, '_>, dir: c::subvol_inum) -> Result<
     empty_dir_snapshot(t, dir.inum, dir.subvol as u32, snapshot)
 }
 
-/// The VFS's dir_context, readdir's output.
-struct DirContext<'c>(&'c mut c::dir_context);
+/// A dir_context, readdir's output, held as the pointer it came as: its
+/// actor may take it to the struct it heads - container_of(), as getdents'
+/// does - and a &mut dir_context reaches only the dir_context.
+pub struct DirContext<'c>(NonNull<c::dir_context>, PhantomData<&'c mut c::dir_context>);
 
-impl DirContext<'_> {
+impl<'c> DirContext<'c> {
+    /// # Safety
+    /// @ctx is a dir_context for 'c, its actor valid to call - a pointer to
+    /// the whole of what it heads, cast, if the actor reaches past it.
+    pub unsafe fn from_raw(ctx: *mut c::dir_context) -> Self {
+        DirContext(NonNull::new(ctx).expect("a dir_context"), PhantomData)
+    }
+
     // The kernel's pos is a loff_t; only the userspace shim's is a u64
     #[allow(clippy::unnecessary_cast)]
     fn pos(&self) -> u64 {
-        self.0.pos as u64
+        unsafe { (*self.0.as_ptr()).pos as u64 }
     }
 
     /// Fault in getdents64's buffer up front, so emit()'s fast path, which
     /// writes holding locks, doesn't fault: as bch2_readdir_fault_in().
     fn fault_in(&mut self) {
-        unsafe { c::bch2_readdir_fault_in(self.0) }
+        unsafe { c::bch2_readdir_fault_in(self.0.as_ptr()) }
     }
 
     /// Emit @d, pointing at @target - which may unlock @trans: as
@@ -573,7 +584,7 @@ impl DirContext<'_> {
     {
         // SAFETY: for bch2_dir_emit(), which copies the entry out, not keeping it
         let d = unsafe { d.k().to_c() };
-        match unsafe { c::bch2_dir_emit(t.raw(), self.0, d, target) } {
+        match unsafe { c::bch2_dir_emit(t.raw(), self.0.as_ptr(), d, target) } {
             0              => Ok(true),
             ret if ret > 0 => Ok(false),
             ret            => Err(BchError::from_raw(-ret)),
@@ -591,9 +602,8 @@ pub fn readdir(
     fs:        &Fs,
     dir:       c::subvol_inum,
     hash_info: &mut c::bch_hash_info,
-    ctx:       &mut c::dir_context,
+    mut ctx:   DirContext<'_>,
 ) -> Result<(), BchError> {
-    let mut ctx = DirContext(ctx);
     ctx.fault_in();
 
     let trans = crate::btree_trans!(fs);
@@ -632,9 +642,9 @@ pub unsafe extern "C" fn bch2_readdir(
     c:         &Opaque<c::bch_fs>,
     dir:       c::subvol_inum,
     hash_info: &mut c::bch_hash_info,
-    ctx:       &mut c::dir_context,
+    ctx:       *mut c::dir_context,
 ) -> c_int {
-    ret_to_c(readdir(Fs::from_c(c), dir, hash_info, ctx))
+    ret_to_c(readdir(Fs::from_c(c), dir, hash_info, unsafe { DirContext::from_raw(ctx) }))
 }
 
 // ── Rename ───────────────────────────────────────────────────────────────

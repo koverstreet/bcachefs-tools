@@ -781,7 +781,9 @@ fn simple_readdir(
         entries: &mut entries,
     };
 
-    dirent::readdir(fs, dir_inum, &mut hash_info, &mut rctx.ctx)?;
+    // SAFETY: the actor reaches the rest of rctx: its pointer, not ctx's
+    let ctx = unsafe { dirent::DirContext::from_raw((&raw mut rctx).cast()) };
+    dirent::readdir(fs, dir_inum, &mut hash_info, ctx)?;
 
     // Sort by (type, name) like the C code
     entries.sort_by(|a, b| {
