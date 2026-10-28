@@ -196,6 +196,17 @@ impl<'a> MovingCtxt<'a> {
 /// c->moving_context_list, for the listing: every context, from init to exit.
 type ContextList = List<c::moving_context, { core::mem::offset_of!(c::moving_context, list) }>;
 
+impl Fs {
+    /// The moving contexts, @f's alone - under moving_context_lock - while it
+    /// runs.
+    fn moving_contexts<R>(&self, f: impl FnOnce(&mut ContextList) -> R) -> R {
+        let _lock = Lock::from_c(&self.moving_context_lock).lock();
+        // SAFETY: the list, locked, and no other borrow of it in Rust: they're
+        // all here, and @f can't reenter, as the lock isn't
+        f(unsafe { ContextList::from_c((&raw const self.moving_context_list).cast_mut()) })
+    }
+}
+
 /// A moving context at @ctxt: its moves counted into @stats, written to @wp,
 /// and with @wait_on_copygc, ratelimit() waiting while copygc runs.
 ///
@@ -217,10 +228,8 @@ pub unsafe fn bch2_moving_ctxt_init(ctxt: *mut c::moving_context, c: &Fs, stats:
         c::closure_init_stack((*ctxt).cl.as_ptr());
     }
 
-    let _lock = Lock::from_c(&c.moving_context_lock).lock();
-    // SAFETY: the list, locked; @ctxt stays where it is till exit() takes it
-    // off
-    unsafe { ContextList::from_c((&raw const c.moving_context_list).cast_mut()).push_back(&*ctxt) };
+    // SAFETY: @ctxt stays where it is till exit() takes it off, under the lock
+    c.moving_contexts(|l| unsafe { l.push_back(&*ctxt) });
 }
 
 /// bch2_moving_ctxt_init() undone, once what's in flight is done.
@@ -242,10 +251,8 @@ pub unsafe fn bch2_moving_ctxt_exit(ctxt: *mut c::moving_context) {
             }
         }
 
-        let fs = moving.trans().fs();
-        let _lock = Lock::from_c(&fs.moving_context_lock).lock();
-        // the list, locked
-        ContextList::from_c((&raw const fs.moving_context_list).cast_mut()).remove(&*ctxt);
+        // on this list, if any
+        moving.trans().fs().moving_contexts(|l| l.remove(&*ctxt));
         (*ctxt).trans
     };
 
