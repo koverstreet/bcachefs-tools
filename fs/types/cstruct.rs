@@ -3053,7 +3053,7 @@ fn emit_members(def: &CStructDef, items: &[CItem],
         let last = n + 1 == def.fields.len() && named;
         let text = if f.bitfield {
             let bf = items.iter().find_map(|i| match i {
-                CItem::Bitfield(b) if b.name == f.ty.trim() => Some(b),
+                CItem::Bitfield(b) if b.name == bitfield_type(&f.ty) => Some(b),
                 _ => None,
             }).ok_or_else(|| format!("{}.{}: #[c_bitfield], but {} isn't a #[bitfield] type here",
                                      def.name, f.name, f.ty))?;
@@ -3139,6 +3139,16 @@ fn emit_members(def: &CStructDef, items: &[CItem],
 
 /// @ty's type arguments, Rust source, if it's @name<...> - one of
 /// types/lib.rs's containers of C's, by any path.
+/// A #[c_bitfield] field's bitfield type, from its type @ty: the type, or a
+/// Volatile<T>'s T - a published word, read and written whole, whose members
+/// C declares in its place all the same.
+pub fn bitfield_type(ty: &str) -> String {
+    match container_args(ty, "Volatile") {
+        Ok(Some(args)) if args.len() == 1 => args[0].trim().to_string(),
+        _ => ty.trim().to_string(),
+    }
+}
+
 fn container_args(ty: &str, name: &str) -> Result<Option<Vec<String>>, String> {
     let toks = tokenize(ty)?;
     let Some(i) = toks.iter().rposition(|t| t.is_ident(name)) else {

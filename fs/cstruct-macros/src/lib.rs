@@ -68,7 +68,7 @@ use proc_macro::{Delimiter, Group, Punct, Spacing, Span, TokenStream, TokenTree}
 mod cstruct {
     include!("../../types/cstruct.rs");
 }
-use cstruct::{enum_text, expand_enum_list, parse_c_export, parse_cstruct, parse_items, rust_ident,
+use cstruct::{bitfield_type, enum_text, expand_enum_list, parse_c_export, parse_cstruct, parse_items, rust_ident,
               CEnumDef, CEnumKind, CEnumVariant, CItem, CXEntry};
 
 mod fieldwise;
@@ -289,9 +289,10 @@ fn cstruct_expand(input: TokenStream) -> Result<TokenStream, String> {
     let inst = def.rust_type();
     let inst = inst.as_str();
     // A #[c_bitfield] field's members, on the struct: its type's forwarders
-    // (#[bitfield]), by the type's own path.
+    // (#[bitfield]), by the type's own path. Not a Volatile one's: that's a
+    // word, read and written whole.
     let mut forward = String::new();
-    for f in def.fields.iter().filter(|f| f.bitfield) {
+    for f in def.fields.iter().filter(|f| f.bitfield && bitfield_type(&f.ty) == f.ty.trim()) {
         let ty = f.ty.trim();
         let (path, ty) = ty.rsplit_once("::").map_or(("", ty), |(p, t)| (p, t));
         let path = if path.is_empty() { String::new() } else { format!("{path}::") };

@@ -456,7 +456,7 @@ fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>,
             }
             let prev_end = i.checked_sub(1).map_or(0, |p| fields[p].0 + fields[p].1);
             let bf = items.iter().find_map(|i| match i {
-                CItem::Bitfield(b) if b.name == f.ty.trim() => Some(b),
+                CItem::Bitfield(b) if b.name == bitfield_type(&f.ty) => Some(b),
                 _ => None,
             }).ok_or_else(|| format!("{}.{}: #[c_bitfield], but {} isn't a #[bitfield] type in {header}",
                                      def.name, f.name, f.ty))?;
