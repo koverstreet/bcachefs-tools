@@ -157,6 +157,13 @@ pub fn fsck_err_flags(
     __fsck_err(ctx, pos, flags, err, msg)
 }
 
+/// Logged and counted, ignorable, with no repair offered - the caller
+/// repairs, or carries on, whatever's decided: C's log_fsck_err(). Its
+/// error, if fsck stops there.
+pub fn log_fsck_err(ctx: &impl FsckErrCtx, err: bch_sb_error_id, msg: &dyn ToText) -> Result<(), BchError> {
+    __fsck_err(ctx, POS_MIN, bch_fsck_flags::FSCK_CAN_IGNORE, err, msg).map(|_| ())
+}
+
 /// Without offering a repair, for damage another pass owns: counted in the
 /// superblock, and logged unless it's a repeat or being ratelimited.
 pub fn fsck_err_report(fs: &Fs, err: bch_sb_error_id, msg: &dyn ToText) {
@@ -294,6 +301,13 @@ macro_rules! mustfix_fsck_err_on {
 macro_rules! fsck_err_flags {
     ($ctx:expr, $pos:expr, $flags:expr, $err:expr, $($msg:tt)*) => {
         $crate::init::error::fsck_err_flags($ctx, $pos, $flags, $err, $crate::message!($($msg)*))
+    };
+}
+
+#[macro_export]
+macro_rules! log_fsck_err {
+    ($ctx:expr, $err:expr, $($msg:tt)*) => {
+        $crate::init::error::log_fsck_err($ctx, $err, $crate::message!($($msg)*))
     };
 }
 
