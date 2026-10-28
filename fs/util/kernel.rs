@@ -98,6 +98,18 @@ pub fn nsecs_to_jiffies(ns: u64) -> core::ffi::c_ulong {
     unsafe { c::nsecs_to_jiffies(ns) as core::ffi::c_ulong }
 }
 
+/// The jiffies count. In the kernel it's a variable the timer interrupt
+/// writes, read as READ_ONCE() would; in userspace C's macro computes it from
+/// sched_clock(), which is local_clock() there.
+pub fn jiffies() -> core::ffi::c_ulong {
+    #[cfg(kernel)]
+    // SAFETY: a word, written whole, so a volatile read can't tear
+    let j = unsafe { core::ptr::read_volatile(&raw const ::kernel::bindings::jiffies) as core::ffi::c_ulong };
+    #[cfg(not(kernel))]
+    let j = nsecs_to_jiffies(local_clock());
+    j
+}
+
 #[cfg(kernel)]
 pub struct Comm([u8; c::TASK_COMM_LEN as usize]);
 
@@ -142,6 +154,20 @@ pub fn current_fsgid() -> c::kgid_t {
     unsafe { (*(*c::get_current()).cred).fsgid }
 }
 
+/// A number identifying this task while it lives - C's (unsigned long)current
+/// - for hashing by task. In userspace, the thread's.
+pub fn current_id() -> usize {
+    #[cfg(kernel)]
+    // SAFETY: reads this CPU's current task, which is us
+    let id = unsafe { c::get_current() } as usize;
+    #[cfg(not(kernel))]
+    let id = {
+        std::thread_local!(static ME: u8 = const { 0 });
+        ME.with(|me| core::ptr::from_ref(me) as usize)
+    };
+    id
+}
+
 /// Whether this task has been sent a fatal signal: as
 /// fatal_signal_pending(current).
 pub fn fatal_signal_pending() -> bool {
@@ -158,10 +184,13 @@ pub fn ktime_get_ns() -> u64 {
     unsafe { c::bch2_ktime_get_ns() }
 }
 
-/// The CPUs online: num_online_cpus().
-#[cfg(kernel)]
+/// The number of CPUs online; in userspace, how many threads can run at once.
 pub fn num_online_cpus() -> u32 {
-    unsafe { c::bch2_num_online_cpus() }
+    #[cfg(kernel)]
+    let n = unsafe { c::bch2_num_online_cpus() };
+    #[cfg(not(kernel))]
+    let n = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
+    n
 }
 
 /// A capability, as the kernel's CAP_* - the values are ABI
