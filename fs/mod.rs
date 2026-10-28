@@ -194,6 +194,7 @@ pub mod data {
     pub mod keylist;
     pub mod migrate;
     pub mod moving;
+    pub mod nocow_locking;
     pub mod ptrs;
     pub mod reconcile {
         pub mod check;

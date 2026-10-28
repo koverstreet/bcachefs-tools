@@ -9,6 +9,7 @@
 
 #include "bcachefs.h"
 
+#include "alloc/background.h"
 #include "alloc/backpointers.h"
 #include "alloc/discard.h"
 #include "alloc/disk_groups.h"
@@ -715,7 +716,6 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_free_fsck_errs(c);
 	bch2_fs_vfs_exit(c);
 	bch2_fs_reconcile_exit(c);
-	bch2_fs_nocow_locking_exit(c);
 	bch2_fs_journal_exit(&c->journal);
 	bch2_fs_io_write_exit(c);
 	bch2_fs_io_read_exit(c);
@@ -1213,7 +1213,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	bch2_fs_journal_init_early(&c->journal);
 	bch2_fs_journal_keys_init(c);
 	bch2_fs_move_init(c);
-	bch2_fs_nocow_locking_init_early(c);
 
 	INIT_LIST_HEAD(&c->list);
 

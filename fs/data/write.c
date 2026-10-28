@@ -1514,7 +1514,7 @@ static void bch2_write_endio(struct bio *bio)
 	}
 
 	if (wbio->nocow) {
-		bch2_bucket_nocow_unlock(&c->nocow_locks,
+		bch2_bucket_nocow_unlock(c,
 					 POS(ca->dev_idx, wbio->nocow_bucket),
 					 BUCKET_NOCOW_LOCK_UPDATE);
 		if (!(bio->bi_opf & REQ_FUA))
@@ -2351,7 +2351,7 @@ retry:
 
 		bch2_trans_unlock(trans);
 
-		bch2_bkey_nocow_lock(c, trans, ptrs, cas, BUCKET_NOCOW_LOCK_UPDATE);
+		bch2_bkey_nocow_lock(c, trans, k, cas, BUCKET_NOCOW_LOCK_UPDATE);
 
 		/*
 		 * This could be handled better: If we're able to trylock the

@@ -20,6 +20,7 @@
 
 #include "bcachefs.h"
 
+#include "alloc/background.h"
 #include "alloc/backpointers.h"
 #include "alloc/buckets.h"
 #include "alloc/check.h"
@@ -265,7 +266,7 @@ static inline bool may_alloc_bucket(struct bch_fs *c,
 		return false;
 	}
 
-	if (bch2_bucket_nocow_is_locked(&c->nocow_locks, bucket)) {
+	if (bch2_bucket_nocow_is_locked(c, bucket)) {
 		req->counters.skipped_nocow++;
 		return false;
 	}

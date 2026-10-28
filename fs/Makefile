@@ -90,7 +90,6 @@ bcachefs-y		:=			\
 	data/extent_update.o			\
 	data/io_misc.o				\
 	data/move.o				\
-	data/nocow_locking.o			\
 	data/read.o				\
 	data/reconcile/trigger.o		\
 	data/update.o				\

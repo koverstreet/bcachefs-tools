@@ -767,7 +767,9 @@ pub struct Fs {
     /* allocated from through a shared reference: by C and util/bio/pages.rs */
     #[c("mempool_t bio_bounce_bufs")]
     pub bio_bounce_bufs: crate::util::ffi::Opaque<c::mempool_t>,
-    pub nocow_locks: c::bucket_nocow_lock_table,
+    #[pin]
+    #[init(RustOnly::new(crate::data::nocow_locking::NocowLocks::new()))]
+    pub(crate) nocow_locks: rust_only!(crate::data::nocow_locking::NocowLocks),
     pub update_table: c::rhltable,
 
     pub key_version: AtomicI64,

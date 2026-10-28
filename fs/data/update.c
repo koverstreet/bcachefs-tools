@@ -1035,7 +1035,7 @@ int bch2_data_update_init(struct btree_trans *trans,
 	bkey_get_dev_refs(c, k, m->cas);
 
 	if (c->opts.nocow_enabled) {
-		if (!bch2_bkey_nocow_trylock(c, ptrs, m->cas, 0)) {
+		if (!bch2_bkey_nocow_trylock(c, k, m->cas, 0)) {
 			if (!ctxt) {
 				/*
 				 * Promote path: we have @trans, but promotes must
@@ -1049,11 +1049,11 @@ int bch2_data_update_init(struct btree_trans *trans,
 			/* @trans == ctxt->trans here (see __bch2_move_extent) */
 			bool locked = false;
 			move_ctxt_wait_event(ctxt,
-				(locked = bch2_bkey_nocow_trylock(c, ptrs, m->cas, 0)) ||
+				(locked = bch2_bkey_nocow_trylock(c, k, m->cas, 0)) ||
 				list_empty(&ctxt->ios));
 			if (!locked) {
 				bch2_trans_unlock(trans);
-				bch2_bkey_nocow_lock(c, trans, ptrs, m->cas, 0);
+				bch2_bkey_nocow_lock(c, trans, k, m->cas, 0);
 			}
 		}
 	}
