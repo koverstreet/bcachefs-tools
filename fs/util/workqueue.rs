@@ -148,6 +148,54 @@ impl Queue {
 
 pub type WorkFn = unsafe extern "C" fn(*mut c::work_struct);
 
+/// INIT_WORK(): a C work_struct, in place, running C's @func - with a lockdep
+/// class of its own, @key, named @name: new_work!()'s.
+#[cfg(kernel)]
+#[doc(hidden)]
+pub fn work_init(
+    func: WorkFn,
+    name: &'static core::ffi::CStr,
+    key:  core::pin::Pin<&'static kernel::sync::LockClassKey>,
+) -> impl ::pin_init::PinInit<c::work_struct> {
+    // SAFETY: initialized in place, all of it
+    unsafe {
+        ::pin_init::pin_init_from_closure(move |slot: *mut c::work_struct| {
+            c::init_work_with_key(slot, Some(func), false, name.as_ptr().cast(), key.as_ptr());
+            Ok(())
+        })
+    }
+}
+
+/// INIT_WORK(), as the shim has it: no lockdep.
+#[cfg(not(kernel))]
+#[doc(hidden)]
+pub fn work_init(func: WorkFn) -> impl ::pin_init::PinInit<c::work_struct> {
+    // SAFETY: initialized in place, all of it
+    unsafe {
+        ::pin_init::pin_init_from_closure(move |slot: *mut c::work_struct| {
+            c::bch2_init_work(slot, Some(func));
+            Ok(())
+        })
+    }
+}
+
+/// A C work_struct's initializer, running C's @func, its lockdep class the
+/// call site's, named @name: INIT_WORK().
+#[macro_export]
+macro_rules! new_work {
+    ($func:expr, $name:literal $(,)?) => {{
+        #[cfg(kernel)]
+        let w = $crate::util::workqueue::work_init(
+            $func,
+            // SAFETY: NUL-terminated
+            unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked(::core::concat!($name, "\0").as_bytes()) },
+            ::kernel::static_lock_class!());
+        #[cfg(not(kernel))]
+        let w = $crate::util::workqueue::work_init($func);
+        w
+    }};
+}
+
 /// A ReffedWork's function as a type, and the field it runs from: for a
 /// field `w: ReffedWork<f, R>`, the parent's #[derive(Init)] makes f - a
 /// braced struct, a type only, beside the fn f - and this.
