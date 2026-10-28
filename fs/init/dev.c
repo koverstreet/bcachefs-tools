@@ -239,25 +239,6 @@ const char * const bch2_dev_write_refs[] = {
 };
 #undef x
 
-__cold void bch2_devs_list_to_text(struct printbuf *out,
-			    struct bch_fs *c,
-			    struct bch_devs_list *d)
-{
-	bch2_printbuf_make_room(out, 1024);
-	guard(rcu)();
-
-	darray_for_each(*d, i) {
-		if (i != d->data)
-			prt_char(out, ' ');
-
-		struct bch_dev *ca = bch2_dev_rcu_noerror(c, *i);
-		if (ca)
-			prt_str(out, ca->name);
-		else
-			prt_printf(out, "(invalid device %u)", *i);
-	}
-}
-
 static int bch2_dev_may_add(struct bch_sb *sb, struct bch_fs *c)
 {
 	struct bch_member m = bch2_sb_member_get(sb, sb->dev_idx);

@@ -2,8 +2,6 @@
 #ifndef _BCACHEFS_INIT_DEV_H
 #define _BCACHEFS_INIT_DEV_H
 
-void bch2_devs_list_to_text(struct printbuf *, struct bch_fs *, struct bch_devs_list *);
-
 struct bch_fs *bch2_dev_to_fs(dev_t);
 
 void bch2_dev_io_ref_stop(struct bch_dev *, int);
