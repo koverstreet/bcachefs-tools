@@ -20,6 +20,7 @@ pub mod c {
 		non_upper_case_globals,
 		non_snake_case,
 		dead_code,
+		unknown_lints,	// unnecessary_transmutes is rustc 1.88's
 		unnecessary_transmutes,
 		clippy::all	// bindgen's output
 	)]

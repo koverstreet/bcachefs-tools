@@ -28,19 +28,21 @@ macro_rules! extents_btrees_key_types {
             1 << c::bch_bkey_type::KEY_TYPE_deleted.0 $($(| 1 << c::bch_bkey_type::$t.0)+)*;
     };
 }
-c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_extents => extents_btrees_key_types]);
 
 macro_rules! extent_types {
     ($(($name:ident, $nr:literal, $($rest:tt)*)),* $(,)?) => {
         const EXTENT_KEY_TYPES: u64 = 0 $(| 1 << $nr)*;
     };
 }
-c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_extent => extent_types]);
+
+const _: () = {
+    c::BCH_BTREE_IDS!(cstruct_macros::xmacro_select [BTREE_IS_extents => extents_btrees_key_types]);
+    c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_extent => extent_types]);
+    assert!(EXTENT_KEY_TYPES == EXTENTS_BTREES_KEY_TYPES,
+            "BKEY_TYPE_extent isn't on exactly the key types BCH_BTREE_IDS()' extents btrees hold");
+};
 
 bkey_family!(Extents);
-
-const _: () = assert!(EXTENT_KEY_TYPES == EXTENTS_BTREES_KEY_TYPES,
-                      "BKEY_TYPE_extent isn't on exactly the key types BCH_BTREE_IDS()' extents btrees hold");
 
 impl c::bkey {
     /// Whether it's counted in its inode's i_sectors.

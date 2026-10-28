@@ -228,6 +228,7 @@ pub mod c {
     #![allow(non_camel_case_types)]
     #![allow(non_snake_case)]
     #![allow(unused)]
+    #![allow(unknown_lints)] // unnecessary_transmutes is rustc 1.88's
     #![allow(unnecessary_transmutes)]
 
     // The kernel's types and functions (bio, __u64, locks, …). Userspace

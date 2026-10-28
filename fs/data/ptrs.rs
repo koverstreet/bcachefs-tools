@@ -320,14 +320,15 @@ macro_rules! key_types_mask {
         const $mask: u64 = 0 $(| 1 << $nr)*;
     };
 }
-c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs => key_types_mask { PTRS_KEY_TYPES; }]);
-c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs_mut => key_types_mask { PTRS_MUT_KEY_TYPES; }]);
-c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_btree_ptr => key_types_mask { BTREE_PTR_KEY_TYPES; }]);
-
-const _: () = assert!(PTRS_MUT_KEY_TYPES & !PTRS_KEY_TYPES == 0,
-                      "a BKEY_TYPE_ptrs_mut type that isn't BKEY_TYPE_ptrs");
-const _: () = assert!(BTREE_PTR_KEY_TYPES & !PTRS_MUT_KEY_TYPES == 0,
-                      "a BKEY_TYPE_btree_ptr type that isn't BKEY_TYPE_ptrs_mut");
+const _: () = {
+    c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs => key_types_mask { PTRS_KEY_TYPES; }]);
+    c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_ptrs_mut => key_types_mask { PTRS_MUT_KEY_TYPES; }]);
+    c::BCH_BKEY_TYPES!(cstruct_macros::xmacro_select [BKEY_TYPE_btree_ptr => key_types_mask { BTREE_PTR_KEY_TYPES; }]);
+    assert!(PTRS_MUT_KEY_TYPES & !PTRS_KEY_TYPES == 0,
+            "a BKEY_TYPE_ptrs_mut type that isn't BKEY_TYPE_ptrs");
+    assert!(BTREE_PTR_KEY_TYPES & !PTRS_MUT_KEY_TYPES == 0,
+            "a BKEY_TYPE_btree_ptr type that isn't BKEY_TYPE_ptrs_mut");
+};
 
 // SAFETY: a btree node pointer's type is PtrsMut's, and Ptrs', by the asserts
 unsafe impl<S: KeyState> InFamily<PtrsTypes> for FamilyVal<BtreePtrsTypes, S> {}
