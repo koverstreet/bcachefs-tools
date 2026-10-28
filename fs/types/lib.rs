@@ -299,6 +299,18 @@ where
     }
 }
 
+/// Only for an Unpin @T: one that's pinned - a lock - mustn't be moved out.
+impl<T: Unpin, const U64S: usize, const ALIGN: usize> core::ops::DerefMut for RustOnly<T, U64S, ALIGN>
+where
+    Align<ALIGN>: AlignMarker,
+{
+    fn deref_mut(&mut self) -> &mut T {
+        let () = Self::FITS;
+        // SAFETY: as deref(), and borrowed uniquely
+        unsafe { &mut *self.storage.get().cast::<T>() }
+    }
+}
+
 /// RustOnly<@T>, its storage sized and aligned for a @T.
 macro_rules! rust_only {
     ($t:ty) => {
