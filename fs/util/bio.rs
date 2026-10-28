@@ -43,6 +43,7 @@ use crate::errcode::{ret_to_result_void, BchError};
 use crate::prt;
 use crate::util::gather::GatherRef;
 use crate::util::{Printbuf, ToText};
+use crate::util::volatile::VolatileSlice;
 
 mod iter;
 mod owned;
@@ -384,6 +385,37 @@ impl<'a> BioRange<'a> {
                 break;
             }
             done += chunk.copy_from(&src[done..]);
+        }
+        done
+    }
+
+    /// As much as both have, into @dst: as copy_to(), for memory that can't be
+    /// a slice.
+    pub fn copy_to_volatile(&self, dst: VolatileSlice<'_>) -> usize {
+        let mut done = 0;
+        for chunk in *self {
+            if done == dst.len() {
+                break;
+            }
+            let n = (chunk.len() as usize).min(dst.len() - done);
+            // SAFETY: n of the chunk's bytes, mapped, into n of @dst
+            chunk.with_mapped(|p, _| unsafe { core::ptr::copy_nonoverlapping(p, dst.as_ptr().add(done), n) });
+            done += n;
+        }
+        done
+    }
+
+    /// As copy_to_volatile().
+    pub fn copy_from_volatile(&self, src: VolatileSlice<'_>) -> usize {
+        let mut done = 0;
+        for chunk in *self {
+            if done == src.len() {
+                break;
+            }
+            let n = (chunk.len() as usize).min(src.len() - done);
+            // SAFETY: n of @src into n of the chunk's bytes, mapped
+            chunk.with_mapped(|p, _| unsafe { core::ptr::copy_nonoverlapping(src.as_ptr().add(done), p, n) });
+            done += n;
         }
         done
     }

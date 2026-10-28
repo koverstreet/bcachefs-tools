@@ -50,6 +50,7 @@ pub mod task;
 #[cfg(kernel)]
 pub mod thread_with_file;
 pub mod varint;
+pub mod volatile;
 pub mod vstructs;
 pub mod workqueue;
 
