@@ -34,7 +34,6 @@ use crate::init::error::{count_fsck_err, id, BkeyValidate};
 use crate::init::passes;
 use crate::inode;
 use crate::snapshots::snapshot;
-use crate::snapshot_states::SUBVOLUME_STATE_VALUES;
 use crate::util::alloc::KVVec;
 use crate::util::ffi::Opaque;
 use crate::util::place::Placed;
@@ -42,7 +41,6 @@ use crate::util::Printbuf;
 use crate::util::log::{LogLevel, LogMsg};
 use crate::{bch_err, bch_err_msg, bkey_fsck_err_on, fs_inconsistent, fsck_err,
             fsck_err_on, fsck_err_report, prt};
-use core::fmt;
 use core::mem::offset_of;
 use cstruct_macros::c_export;
 
@@ -251,15 +249,6 @@ where
 /// Zero padded past the fields an older key lacks.
 pub fn val(k: BkeySC<'_>) -> Option<c::Subvolume> {
     c::Subvolume::val_copy_pad(k)
-}
-
-impl fmt::Display for c::bch_subvolume_state {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = SUBVOLUME_STATE_VALUES.iter()
-            .find(|(_, v)| *v == self.0 as u64)
-            .map_or("(invalid state)", |(n, _)| n);
-        f.write_str(name)
-    }
 }
 
 const SUBVOLUME_STATES: [c::bch_subvolume_state; 3] = [

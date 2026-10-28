@@ -93,21 +93,6 @@ pub fn rb_work_to_data_pos(mut p: c::bpos) -> c::bbpos {
     c::bbpos { btree, pos: p }
 }
 
-/// Its name, from RECONCILE_WORK_IDS(): bch2_reconcile_work_ids[].
-impl core::fmt::Display for c::reconcile_work_id {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        macro_rules! names {
-            ($(($name:tt)),* $(,)?) => { const NAMES: &[&str] = &[$(stringify!($name),)*]; };
-        }
-        c::RECONCILE_WORK_IDS!(names);
-
-        match NAMES.get(self.0 as usize) {
-            Some(name) => f.write_str(name),
-            None => write!(f, "(unknown reconcile work id {})", self.0),
-        }
-    }
-}
-
 /// What a key carries for reconcile: a key with pointers' entries, and any
 /// key's work btree.
 pub trait BkeyVReconcile: BkeyV {

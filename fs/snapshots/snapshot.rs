@@ -1058,15 +1058,6 @@ impl c::Snapshot<Whole> {
     }
 }
 
-impl fmt::Display for c::bch_snapshot_state {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = crate::snapshot_states::SNAPSHOT_STATE_VALUES.iter()
-            .find(|(_, v)| *v == self.0 as u64)
-            .map_or("(invalid state)", |(n, _)| n);
-        f.write_str(name)
-    }
-}
-
 impl fmt::Display for c::Snapshot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "parent {:>10} children {:>10} {:>10} subvol {} tree {}",

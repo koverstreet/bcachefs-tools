@@ -36,7 +36,6 @@ use crate::util::bio::{Bio, BioRange};
 use crate::util::ffi::Opaque;
 use crate::util::Printbuf;
 use core::ffi::{c_int, c_uint, c_void};
-use core::fmt;
 use cstruct_macros::c_export;
 
 // ── Nonces ───────────────────────────────────────────────────────────────
@@ -240,23 +239,6 @@ impl c::bch_csum_type {
         }
         let lo = csum.finish().lo.get();
         c::bch_csum { lo: Le64::new(lo ^ b.lo.get()), hi: Le64::new(a.hi.get() ^ b.hi.get()) }
-    }
-}
-
-/// Its name, from BCH_CSUM_TYPES(): bch2_prt_csum_type().
-impl fmt::Display for c::bch_csum_type {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        macro_rules! csum_type_names {
-            ($(($name:tt, $n:expr)),* $(,)?) => {
-                const NAMES: &[(&str, u32)] = &[$((stringify!($name), $n),)*];
-            };
-        }
-        c::BCH_CSUM_TYPES!(csum_type_names);
-
-        match NAMES.iter().find(|&&(_, n)| n == self.0) {
-            Some((name, _)) => f.write_str(name),
-            None => write!(f, "(unknown csum_type {})", self.0),
-        }
     }
 }
 

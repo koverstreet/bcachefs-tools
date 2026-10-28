@@ -1171,8 +1171,9 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
 
 /// An enum from an x-macro list - with labelled variants - is named by the
 /// list: util/names.rs's Names, its labelled variants' names and values, a
-/// flags type's bits. An open or flags one prints through it, unless it's
-/// #[own_to_text]; a closed one derives ToText.
+/// flags type's bits. An open or flags one prints through it - ToText, and
+/// Display through that - unless it's #[own_to_text]; a closed one derives
+/// ToText.
 fn names_gen(e: &CEnumDef, name: &str) -> String {
     let labelled: Vec<(&str, &str)> = e.variants.iter()
         .filter_map(|v| v.label.as_deref().map(|l| (l, v.name.as_str())))
@@ -1216,7 +1217,8 @@ fn names_gen(e: &CEnumDef, name: &str) -> String {
             "impl crate::util::ToText for {name} {{\n\
              \x20   #[inline]\n\
              \x20   fn to_text(&self, out: &mut crate::util::Printbuf) {{ {body} }}\n\
-             }}\n"));
+             }}\n\
+             crate::display_via_to_text!({name});\n"));
     }
     out
 }

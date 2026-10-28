@@ -9,9 +9,8 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::types::{CacheAligned, DArray, NeBytes, bits_to_longs, c_default};
 use crate::util::vstructs::Head;
 use crate::util::ffi::c_char;
-use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void, CStr};
+use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI64, AtomicIsize};
-use core::fmt;
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, CStruct, TypeInfo};
 use nestify::nest;
 #[cfg(feature = "std")]
@@ -1130,13 +1129,6 @@ pub fn btree_id_str(id: u32) -> String {
     match c::btree_id::from_raw(id) {
         Some(btree_id) => format!("{}", btree_id),
         None => format!("(unknown btree {})", id),
-    }
-}
-
-impl fmt::Display for c::btree_id {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = unsafe { CStr::from_ptr(c::bch2_btree_id_str(*self).cast()) };
-        f.write_str(s.to_str().unwrap_or("(invalid btree name)"))
     }
 }
 
