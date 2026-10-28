@@ -73,6 +73,12 @@ pub struct BackpointerPos {
 }
 
 impl BackpointerPos {
+    /// In stripe_backpointers, the dev of block @block of stripe @idx, on a
+    /// removed device: bp_dev_for_ec_removed_dev().
+    pub fn ec_removed_dev(idx: u64, block: u32) -> u64 {
+        idx << 8 | u64::from(block)
+    }
+
     pub fn from_bpos(fs: &Fs, p: c::bpos) -> Self {
         let shift = fs.sb.extent_bp_shift.get();
         Self {
@@ -230,7 +236,7 @@ fn extent_ptr_to_bp_pos(fs: &Fs, k: BkeySC<'_>, p: &c::extent_ptr_decoded) -> c:
 
     let mut ret = pos(dev, (p.ptr.offset() << shift) + u64::from(p.crc.offset));
     if u32::from(p.ptr.dev()) == c::BCH_SB_MEMBER_INVALID && p.has_ec {
-        ret.inode = p.ec.idx() << 8 | u64::from(p.ec.block());
+        ret.inode = BackpointerPos::ec_removed_dev(p.ec.idx(), p.ec.block().into());
     }
     ret
 }

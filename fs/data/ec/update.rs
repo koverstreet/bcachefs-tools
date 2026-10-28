@@ -51,7 +51,7 @@ fn block_bps(fs: &Fs, s: BkeySC<'_, c::Stripe<Validated>>, block: u32) -> (c::bt
     match fs.dev_bkey_tryget(s.untyped(), ptr.dev().into()).unwrap_or(None) {
         Some(ca) => (c::btree_id::backpointers, BackpointerPos::bucket_range(&ca, ca.ptr_bucket_pos(ptr))),
         None => {
-            let dev = s.k.p.offset << 8 | u64::from(block);
+            let dev = BackpointerPos::ec_removed_dev(s.k.p.offset, block);
             (c::btree_id::stripe_backpointers, pos(dev, 0)..=pos(dev, u64::MAX))
         }
     }
