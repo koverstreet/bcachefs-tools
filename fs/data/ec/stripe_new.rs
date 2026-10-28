@@ -97,7 +97,8 @@
 //!
 //! Who touches it, and how: a StripeNew is its async state - io refs and the
 //! Gather, @seq, @state, @err, and @idx, its slot from launch - atomics,
-//! anyone's; and its internal state, Internal, under its lock (lock()).
+//! anyone's; and its internal state, Internal, under its lock (lock()),
+//! which publishes its blocks' devices (BlockDevs).
 //! Everyone has it by &: its head while it's open, its writers through their
 //! open buckets' ->ec, cancelling (@err), its task, to_text.
 //!
@@ -150,8 +151,9 @@ use crate::util::kernel::local_clock;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
 use crate::util::task::{spawn_unstarted, Spawn, Unstarted};
+use crate::util::projections::Volatile;
 use crate::util::Printbuf;
-use crate::{new_lock, prt};
+use crate::{new_lock, published, prt};
 use arrayvec::ArrayVec;
 use core::ffi::{c_int, c_uint, c_void};
 use core::pin::Pin;
@@ -188,8 +190,33 @@ pub struct StripeNew {
     state:                AtomicU32,
 
     #[pin]
-    internal:             Lock<c::mutex, Internal>,
+    internal:             Lock<c::mutex, Internal, BlockDevs>,
 }
+
+published! {
+    /// The devices its blocks' new buckets are on, for stopping a device -
+    /// under the allocator's spinlocks, where its lock can't be waited for.
+    /// A bucket's device is set as it's given a block, and never cleared: one
+    /// moved or dropped leaves its bit, and a stop drops a bucket it needn't
+    /// have, as stopping the filesystem drops them all.
+    #[derive(::pin_init::Zeroable)]
+    pub(crate) struct BlockDevs {
+        pub(crate) block_devs: Volatile<c::DevsMask>,
+    }
+}
+
+impl BlockDevsWriter {
+    /// @dev, given a block.
+    pub(crate) fn add(&self, dev: u32) {
+        let mut devs = self.block_devs.get();
+        devs.set(dev as usize);
+        self.block_devs.set(devs);
+    }
+}
+
+/// A stripe being made's lock, held: its internal state, and the writer of
+/// what it publishes.
+pub(crate) type InternalGuard<'a> = Guard<'a, c::mutex, Internal, BlockDevs>;
 
 /// What a stripe being made holds on one of its blocks' buckets: a pin, or -
 /// once a writer's claimed the block - the bucket's ->ec. Given back when
@@ -398,7 +425,7 @@ impl StripeNew {
             seq:        AtomicU64::new(0),
             err:        FirstErr::new(),
             state:      AtomicU32::new(State::EC_STRIPE_NEW_open as u32),
-            internal    <- new_lock!(<- Internal::new(devs, watermark)),
+            internal    <- new_lock!(<- Internal::new(devs, watermark), ::pin_init::zeroed(), "stripe_new.internal"),
         }? BchError))?;
 
         // SAFETY: its owner - its head, then new_stripes - holds it until its
@@ -439,7 +466,7 @@ impl StripeNew {
     /// Never held across an await
     /// - a mutex is released by the task that took it, and its task resumes
     /// on any worker - and, once it's launched, never long.
-    pub(crate) fn lock(&self) -> Guard<'_, c::mutex, Internal> {
+    pub(crate) fn lock(&self) -> InternalGuard<'_> {
         self.internal.lock()
     }
 
@@ -694,17 +721,16 @@ pub unsafe fn bch2_writepoint_ec_buf(c: &Opaque<c::bch_fs>, wp: &c::write_point)
     buf.block_mut(usize::from(ob.ec_idx()))[(offset as usize) << 9..].as_mut_ptr().cast()
 }
 
-/// Whether @s has a block on device @dev: for the allocator stopping it,
-/// which drops its writers' open buckets on a stripe that does.
+/// Whether @s has a block on device @dev - or had: BlockDevs. For the
+/// allocator stopping it, which drops its writers' open buckets on a stripe
+/// that does.
 ///
 /// # Safety
 /// @s is an open bucket's ->ec.
 #[c_export]
 pub unsafe fn bch2_ec_stripe_new_has_dev(_c: &Opaque<c::bch_fs>, s: *const c::ec_stripe_new, dev: c_uint) -> bool {
     // SAFETY: the caller's
-    let s = unsafe { StripeNew::from_c(s) }.lock();
-    let nr_blocks = s.new_stripe.stripe().v().nr_blocks as usize;
-    s.blocks[..nr_blocks].iter().filter_map(Slot::bucket).any(|b| b.dev() == dev)
+    unsafe { StripeNew::from_c(s) }.internal.block_devs.get().test(dev as usize)
 }
 
 /// @s's slot, for open_bucket_to_text() - under spinlocks, so not by its
