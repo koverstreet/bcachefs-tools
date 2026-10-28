@@ -18,7 +18,7 @@ use bcachefs_kernel::btree::iter::{BtreeIter, lockrestart_do};
 use bch_bindgen::c;
 use bcachefs_kernel::util::vstructs::Head;
 use crate::copy_fs::{CopyFsState, copy_fs};
-use bch_bindgen::data::moving::MovingContext;
+use bcachefs_kernel::data::moving::{MoveStats, MovingCtxt};
 use bcachefs_kernel::alloc::disk_groups::Target;
 use bcachefs_kernel::fs::{Fs, btree_id_is_alloc, writepoint_hashed};
 use bcachefs_kernel::opt_set;
@@ -144,7 +144,9 @@ fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::
         target: Target::Dev(target_dev).encode(),
     };
 
-    let mut ctxt = MovingContext::new(fs, writepoint_hashed(1), false);
+    let stats = MoveStats::default();
+    let ctxt = MovingCtxt::new(fs, &stats, writepoint_hashed(1), false)
+        .map_err(|_| anyhow!("allocating a moving context"))?;
     let btree_id_nr = u32::from(btree_id::nr);
 
     for btree in 0..btree_id_nr {

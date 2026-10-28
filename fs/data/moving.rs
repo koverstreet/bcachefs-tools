@@ -27,7 +27,7 @@ use crate::locking::Lock;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError};
 use crate::util::ffi::Opaque;
 use crate::util::sleep::{wake_up, Sleep};
-use core::ffi::{c_int, c_uint};
+use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
@@ -275,6 +275,17 @@ impl<'a> Moving<'a> {
         assert!(ret <= 0, "bch2_move_extent() returned {ret}");
         t.restarts_handled();
         t.result(ret)
+    }
+
+    /// Start moving what @pred picks of @btree at @level, @start to @end -
+    /// returning once the moves are issued.
+    ///
+    /// # Safety
+    /// @arg is what @pred takes.
+    pub unsafe fn move_data_btree(&self, start: c::bpos, end: c::bpos, pred: c::move_pred_fn, arg: *mut c_void,
+                                  btree: c::btree_id, level: u32) -> Result<(), BchError> {
+        // SAFETY: the caller's
+        ret_to_result_void(unsafe { c::bch2_move_data_btree(self.raw(), start, end, pred, arg, btree, level) })
     }
 
     /// Start moving the data in sectors @start..@end of device @dev off it,
