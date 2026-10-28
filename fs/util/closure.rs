@@ -11,6 +11,7 @@
 //!   memory, whose waiters are the write path's.
 
 use crate::c;
+use crate::util::ffi::Opaque;
 use crate::util::refcount::{RefGuard, Refcount, TryRefcount};
 use core::cell::UnsafeCell;
 use core::marker::PhantomPinned;
@@ -20,27 +21,30 @@ use pin_init::{pin_data, pinned_drop, PinInit};
 
 /// A ref on a closure. Its tryget() is closure_get_not_zero(): it fails once
 /// the closure has none left - it's finished, or finishing.
-pub type ClosureRef = RefGuard<c::closure>;
+///
+/// On an Opaque: whoever holds a ref may put it from any thread, writing the
+/// closure under every other holder's shared reference.
+pub type ClosureRef = RefGuard<Opaque<c::closure>>;
 
 // SAFETY: a closure's refcount is atomic, changed through a shared pointer;
 // closure_get() and a closure_get_not_zero() that succeeds take a ref
-unsafe impl Refcount for c::closure {
+unsafe impl Refcount for Opaque<c::closure> {
     fn inc(&self) {
         // SAFETY: as above
-        unsafe { c::closure_get(core::ptr::from_ref(self).cast_mut()) }
+        unsafe { c::closure_get(self.as_ptr()) }
     }
 
     unsafe fn dec(&self) {
         // SAFETY: the caller's ref
-        unsafe { c::closure_put(core::ptr::from_ref(self).cast_mut()) }
+        unsafe { c::closure_put(self.as_ptr()) }
     }
 }
 
 // SAFETY: as Refcount's
-unsafe impl TryRefcount for c::closure {
+unsafe impl TryRefcount for Opaque<c::closure> {
     fn try_inc(&self) -> bool {
         // SAFETY: as above
-        unsafe { c::closure_get_not_zero(core::ptr::from_ref(self).cast_mut()) }
+        unsafe { c::closure_get_not_zero(self.as_ptr()) }
     }
 }
 

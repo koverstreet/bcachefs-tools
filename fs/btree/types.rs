@@ -866,7 +866,8 @@ nest! {
         /* Entries before this are zeroed out on every bch2_trans_get() call */
 
         pub list: cs::list_head,
-        pub ref_: cs::closure,
+        #[c("struct closure ref")]
+        pub ref_: crate::util::ffi::Opaque<cs::closure>,
         pub rcu: cs::rcu_head,
 
         #[c("unsigned long _paths_allocated[BITS_TO_LONGS(BTREE_ITER_INITIAL)]")]

@@ -7,6 +7,7 @@ use crate::types::c_default;
 use crate::util::futex::EventCount;
 use core::ffi::{c_int, c_void};
 use core::sync::atomic::AtomicI32;
+use crate::util::ffi::Opaque;
 use cstruct_macros::{c_typedef, CStruct};
 
 /*
@@ -39,7 +40,8 @@ pub struct moving_context {
     pub wait_on_copygc: bool,
 
     /* For waiting on outstanding reads and writes: */
-    pub cl: c::closure,
+    #[c("struct closure cl")]
+    pub cl: Opaque<c::closure>,
 
     pub lock: c::mutex,
     pub reads: c::list_head,

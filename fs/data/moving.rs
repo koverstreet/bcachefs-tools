@@ -140,7 +140,7 @@ impl Drop for MovingWrite {
             (*ctxt).write_ios.fetch_sub(1, Relaxed);
             wake_up(&(*ctxt).wait);
             bch2_moving_ctxt_wake(ctxt);
-            c::closure_put(&raw mut (*ctxt).cl);
+            c::closure_put((*ctxt).cl.as_ptr());
         }
     }
 }
@@ -196,7 +196,7 @@ impl<'a> Moving<'a> {
         unsafe {
             (*ctxt).write_sectors.fetch_add(sectors as i32, Relaxed);
             (*ctxt).write_ios.fetch_add(1, Relaxed);
-            c::closure_get(&raw mut (*ctxt).cl);
+            c::closure_get((*ctxt).cl.as_ptr());
         }
         MovingWrite { ctxt: NonNull::new(ctxt).expect("a context"), sectors }
     }
