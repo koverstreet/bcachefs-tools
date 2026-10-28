@@ -865,6 +865,11 @@ fn invalidate_one_bp(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, bp: BkeySC<'_, c
 
 /// Invalidate @bucket of generation @gen: drop @ca's pointers from what each
 /// of its backpointers of that generation point to.
+///
+/// At the btree_copygc watermark: invalidating frees space and writes no
+/// data - it only shrinks keys - so it mustn't wait behind a reserve for a
+/// btree node. It's what copygc's btree node allocations get
+/// (btree_update_set_watermark_hipri()), and no bucket reserve is below it.
 fn invalidate_one_bucket_by_bps(trans: &BtreeTrans<'_>, ca: &c::bch_dev, bucket: c::bpos, gen: u8,
                                 last_flushed: &mut WbMaybeFlush) -> Result<(), BchError>
 {
@@ -873,7 +878,7 @@ fn invalidate_one_bucket_by_bps(trans: &BtreeTrans<'_>, ca: &c::bch_dev, bucket:
 
     BtreeIter::new(trans, c::btree_id::backpointers, *bp_range.start(), BtreeIterFlags::empty())
         .for_each_max_commit(trans, *bp_range.end(), BtreeIterFlags::empty(), Some(&res),
-                             CommitOpts::new().watermark(Watermark::BTREE).flags(CommitFlags::NO_ENOSPC),
+                             CommitOpts::new().watermark(Watermark::BTREE_COPYGC).flags(CommitFlags::NO_ENOSPC),
                              |t, _, k| {
             let Some(bp) = k.arm::<c::Backpointer>() else { return Ok(()) };
             if bp.v().bucket_gen != gen {
