@@ -48,6 +48,7 @@ use crate::sb::io::{SbFieldOps, SbWrite};
 use crate::snapshots::subvolume;
 use crate::types::{Le32, Le64};
 use crate::util::bitmap::LeBitmap;
+use crate::util::names;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::{ktime_get_ns, ktime_get_real_seconds, NSEC_PER_SEC};
 use crate::util::kthread::Kthread;
@@ -90,35 +91,23 @@ use pass_fns::RUN;
 use crate::sb::io::SbResize;
 
 macro_rules! pass_table {
-    ($(($name:ident, $stable:literal, $when:expr, $depends:expr, $($desc:literal)*)),* $(,)?) => {
-        /// By pass.
-        const NAMES: [&str; NR] = [$(stringify!($name)),*];
-
-        /// The names, NULL terminated, for C's option parsing and printing.
-        #[c_export]
-        #[c("const char * const bch2_recovery_passes[]")]
-        pub static bch2_recovery_passes: [*const c_char; NR + 1] =
-            [$(concat!(stringify!($name), "\0").as_ptr().cast(),)* core::ptr::null()];
-
+    ($(($name:ident, $stable:literal, $when:expr, [$($dep:ident),* $(,)?], $($desc:literal)*)),* $(,)?) => {
         /// Each pass's stable id, by pass.
         const TO_STABLE: [u8; NR] = [$($stable),*];
         /// When each pass runs - PASS_* - by pass.
-        const WHEN: [c_ulong; NR] = {
-            use c::*;
-            [$($when),*]
-        };
+        const WHEN: [c_ulong; NR] = [$($when),*];
         /// The passes each depends on, by pass: run first, if both are to be.
-        const DEPENDS: [u64; NR] = {
-            use c::*;
-            #[allow(non_snake_case)]
-            const fn BIT_ULL(nr: u32) -> u64 {
-                1 << nr
-            }
-            [$($depends),*]
-        };
+        const DEPENDS: [u64; NR] = [$(0 $(| 1 << ::paste::paste!(Pass::[<BCH_RECOVERY_PASS_ $dep>]) as u64)*),*];
     };
 }
+// What BCH_RECOVERY_PASSES()' when column names, which resolves here
+use c::{PASS_ALLOC, PASS_ALWAYS, PASS_FSCK, PASS_FSCK_ALLOC, PASS_NODEFER, PASS_ONLINE, PASS_SILENT};
 c::BCH_RECOVERY_PASSES!(pass_table);
+
+/// The names, as C's option parsing and printing has them.
+#[c_export]
+#[c("const char * const bch2_recovery_passes[]")]
+pub static bch2_recovery_passes: [*const c_char; names::c_table_len::<Pass>()] = crate::c_names_table!(Pass);
 
 // a mask of passes is a u64
 const _: () = assert!(NR <= 64);
@@ -139,7 +128,7 @@ impl c::bch_recovery_pass {
 
 /// Pass number @pass's name, if it's one this version has.
 pub fn name(pass: u32) -> Option<&'static str> {
-    NAMES.get(pass as usize).copied()
+    names::name_of(<Pass as names::Names>::ENTRIES, pass.into())
 }
 
 /// The passes that run at any of @flags, PASS_*.
@@ -242,7 +231,7 @@ pub fn bch2_recovery_passes_from_stable(v: u64) -> u64 {
 /// The recovery passes in @stable - bits of their stable index, as the
 /// superblock stores them - by name.
 pub fn prt_stable(out: &mut Printbuf, stable: u64) {
-    out.bitflags(&NAMES, passes_from_stable(stable))
+    names::prt_set::<Pass>(out, passes_from_stable(stable))
 }
 
 // ── The superblock section ───────────────────────────────────────────────────
@@ -258,7 +247,8 @@ impl SbFieldOps for c::bch_sb_field_recovery_passes {
 
         write!(out, "Pass\tLast run\tLast runtime\n");
         for (stable, e) in r.start.iter().enumerate().filter(|(_, e)| e.last_run.get() != 0) {
-            write!(out, "{}\t", NAMES[from_stable(stable)]);
+            names::prt_name(out, <Pass as names::Names>::ENTRIES, from_stable(stable) as u64);
+            write!(out, "\t");
             out.datetime(e.last_run.get() as i64);
             out.tab();
             out.time_units(u64::from(e.last_runtime.get()) * NSEC_PER_SEC);
@@ -1005,7 +995,7 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
     if defer != 0 {
         let mut msg = LogMsg::with_level(fs, LogLevel::NOTICE);
         write!(msg, "Running the following recovery passes in the background:\n");
-        msg.bitflags(&NAMES, defer);
+        names::prt_set::<Pass>(&mut msg, defer);
 
         *lock(fs).published().scheduled_passes_ephemeral.place() |= defer;
     }
@@ -1044,7 +1034,7 @@ pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
     };
     let line = |out: &mut Printbuf, what: &str, passes: u64| {
         write!(out, "{what}:\t");
-        out.bitflags(&NAMES, passes);
+        names::prt_set::<Pass>(out, passes);
         out.newline();
     };
 
