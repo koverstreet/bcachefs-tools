@@ -84,7 +84,8 @@ pub struct bch2_time_stats {
     pub max_freq: u64,
     pub min_freq: u64,
     pub last_event: u64,
-    pub last_event_start: u64,
+    /* a state change event in progress since: track_event_change()'s, unlocked */
+    pub last_event_start: crate::util::projections::Volatile<u64>,
     pub start_time: u64,
 
     pub duration_stats: c::mean_and_variance,
@@ -118,6 +119,24 @@ impl bch2_time_stats {
     /// An event from @start, a local_clock() time, to now: bch2_time_stats_update().
     pub fn update(&self, start: u64) {
         unsafe { __bch2_time_stats_update(self.as_ptr(), start, crate::util::kernel::local_clock()) }
+    }
+
+    /// The state it times is now @v - say, blocked or not: a change starts an
+    /// event or ends one. Whether one started. Unlocked, as C's
+    /// track_event_change(): racing changes may count one event as two, or
+    /// none.
+    pub fn track_event_change(&self, v: bool) -> bool {
+        let start = self.last_event_start.get();
+        if v == (start != 0) {
+            return false;
+        }
+        if v {
+            self.last_event_start.set(crate::util::kernel::local_clock().max(1));
+        } else {
+            self.update(start);
+            self.last_event_start.set(0);
+        }
+        v
     }
 
     /// As JSON.
