@@ -2296,7 +2296,7 @@ static int bch2_get_name(struct dentry *parent, char *name, struct dentry *child
 	int ret;
 
 	if (!S_ISDIR(dir->v.i_mode))
-		return bch_err_throw(c, EINVAL_get_name_not_dir);
+		return bch2_err_class(bch_err_throw(c, EINVAL_get_name_not_dir));
 
 	CLASS(btree_trans, trans)(c);
 	CLASS(btree_iter, iter1)(trans, BTREE_ID_dirents,
@@ -2361,6 +2361,8 @@ retry:
 			if (subvol_inum_eq(target, inode_inum(inode)))
 				goto found;
 		}
+		if (ret)
+			goto err;
 	}
 
 	ret = -ENOENT;
@@ -2375,7 +2377,7 @@ err:
 	if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 		goto retry;
 
-	return ret;
+	return bch2_err_class(ret);
 }
 
 static const struct export_operations bch_export_ops = {
