@@ -34,6 +34,10 @@
 //!   only if it's TearSafe: a reader may see it torn, and its type says
 //!   that's fine. They stay; their places go.
 //!
+//! - Published once: PublishedOnce, a value set once by its lock's holder
+//!   and read by anyone from then on - a key a running filesystem gains,
+//!   and never loses. Not a place: it's set, not stored to.
+//!
 //! - Views: View and ViewMut, a value as many of its bytes as there are -
 //!   fewer, for one written before its type grew: a superblock section,
 //!   journal entry or key value from an older version. A field past the end
@@ -416,6 +420,52 @@ impl<T: AtomicWord> FakePlaceWrite for VolatileWriter<T> {
     fn set(&self, v: T) {
         VolatileWriter::set(self, v)
     }
+}
+
+// ── Published once ───────────────────────────────────────────────────────
+
+#[cfg(kernel)]
+use kernel::sync::SetOnce;
+#[cfg(not(kernel))]
+use bcachefs_shim::sync::SetOnce;
+
+/// Unset, or set for good: read without the lock, set only by its holder,
+/// once - PublishedOnceWriter. Zeroed, it's unset.
+#[repr(transparent)]
+pub struct PublishedOnce<T>(SetOnce<T>);
+
+impl<T> PublishedOnce<T> {
+    pub fn get(&self) -> Option<&T> {
+        self.0.as_ref()
+    }
+}
+
+/// A PublishedOnce, as its lock's holder has it.
+#[repr(transparent)]
+pub struct PublishedOnceWriter<T>(SetOnce<T>);
+
+impl<T> PublishedOnceWriter<T> {
+    /// Whether this set it: if it was already, @v is dropped.
+    pub fn set(&self, v: T) -> bool {
+        self.0.populate(v)
+    }
+}
+
+// SAFETY: SetOnce's zeroes are its unset state
+unsafe impl<T> ::pin_init::Zeroable for PublishedOnce<T> {}
+
+// SAFETY: the same SetOnce, whose set is atomic
+unsafe impl<T> Publish for PublishedOnce<T> {
+    type Writer = PublishedOnceWriter<T>;
+}
+
+// SAFETY: a RustOnly of the same size and alignment: a @T, as its Writer has
+// it - laid out as it is, as Publish says
+unsafe impl<T: Publish, const U64S: usize, const ALIGN: usize> Publish for crate::types::RustOnly<T, U64S, ALIGN>
+where
+    crate::types::Align<ALIGN>: crate::types::AlignMarker,
+{
+    type Writer = crate::types::RustOnly<T::Writer, U64S, ALIGN>;
 }
 
 // ── Views ────────────────────────────────────────────────────────────────

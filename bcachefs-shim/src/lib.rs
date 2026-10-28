@@ -10,6 +10,7 @@
 
 pub mod alloc;
 mod compress;
+pub mod sync;
 
 pub mod c {
     #![allow(

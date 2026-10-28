@@ -82,8 +82,10 @@ impl Fs {
         unsafe { c::rust_bch2_inode_shard_idx(self.as_ptr()) }
     }
 
-    pub fn chacha20_key_set(&self) -> bool {
-        self.chacha20_key_set
+    /// The filesystem's key, once it's encrypted and has one: it's never
+    /// unset after.
+    pub fn encryption_key(&self) -> Option<&c::bch_key> {
+        self.sb.encryption_key.get()
     }
 
     /// # Safety

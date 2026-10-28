@@ -244,7 +244,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
         let mut modified = false;
 
         if c::bch_csum_type(csum_type).is_encryption() {
-            if !fs.chacha20_key_set() {
+            if fs.encryption_key().is_none() {
                 bail!("journal entry at {pos:#x} is encrypted, and the filesystem has no key to decrypt it");
             }
 
@@ -330,7 +330,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) ->
         let mut modified = false;
 
         if c::bch_csum_type(csum_type).is_encryption() {
-            if !fs.chacha20_key_set() {
+            if fs.encryption_key().is_none() {
                 bail!("btree node bset at {pos:#x} is encrypted, and the filesystem has no key to decrypt it");
             }
 

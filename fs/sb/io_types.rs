@@ -3,9 +3,9 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::bits_to_longs;
+use crate::types::{bits_to_longs, rust_only};
 use crate::published;
-use crate::util::projections::Volatile;
+use crate::util::projections::{PublishedOnce, Volatile};
 use crate::util::ffi::c_char;
 use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::{CStruct, c_extern, TypeInfo};
@@ -51,6 +51,13 @@ pub struct bch_sb_cpu {
     pub errors_silent: [Volatile<c_ulong>; bits_to_longs(c::BCH_FSCK_ERR_MAX as usize)],
     pub btrees_lost_data: Volatile<u64>,
     pub btrees_clean: Volatile<u64>,
+
+    /*
+     * The filesystem's key: the superblock's, decrypted at mount - or made
+     * when encryption is turned on, running. Set once, under sb_lock; read
+     * by every encrypted IO, without it.
+     */
+    pub encryption_key: rust_only!(PublishedOnce<c::bch_key>),
 }
 }
 

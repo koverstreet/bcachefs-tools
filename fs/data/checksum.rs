@@ -22,7 +22,7 @@
 //! The key is in the superblock's crypt section, encrypted under the user's
 //! key unless no passphrase was ever set - the user's derived from the
 //! passphrase by scrypt, its parameters in the section. At mount it's
-//! decrypted with the user's key: handed to us as c->user_key, or found in
+//! decrypted with the user's key: handed to us at mount, or found in
 //! the keyring under "bcachefs:<uuid>", or, in userspace, from a passphrase
 //! prompted for.
 
@@ -103,7 +103,10 @@ impl Csum {
                 let fs = fs.expect("an encryption type's checksum, with no filesystem for its key");
                 let mut key = [0u8; POLY1305_KEY_SIZE];
                 nonce.d[3] = Le32::new(nonce.d[3].get() ^ BCH_NONCE_POLY);
-                chacha20(&fs.chacha20_key, nonce, &mut key);
+                // as C's, with a key it hasn't - all zeroes - though callers
+                // check valid() first
+                let unset = c::bch_key::default();
+                chacha20(fs.encryption_key().unwrap_or(&unset), nonce, &mut key);
 
                 let mut ctx = c::poly1305_desc_ctx::default();
                 // SAFETY: a state, to set up with a key of its size
@@ -210,7 +213,7 @@ impl c::bch_csum_type {
     /// Whether @fs can use it - a type this version knows, and an encryption
     /// type only with the key loaded: bch2_checksum_type_valid().
     pub fn valid(self, fs: &Fs) -> bool {
-        self.0 < c::bch_csum_type::BCH_CSUM_NR.0 && (!self.is_encryption() || fs.chacha20_key_set)
+        self.0 < c::bch_csum_type::BCH_CSUM_NR.0 && (!self.is_encryption() || fs.encryption_key().is_some())
     }
 
     /// @data's checksum, of a type that takes no key - nor so a nonce, or a
@@ -377,11 +380,11 @@ impl Fs {
     /// The key to encrypt with: an encryption type without one is an
     /// inconsistency.
     fn chacha20_key(&self) -> Result<&c::bch_key, BchError> {
-        if !self.chacha20_key_set {
+        let Some(key) = self.encryption_key() else {
             crate::fs_inconsistent!(self, "attempting to encrypt without encryption key");
             return self.throw(bch_errcode::BCH_ERR_no_encryption_key);
-        }
-        Ok(&self.chacha20_key)
+        };
+        Ok(key)
     }
 
     /// @data encrypted with @ty under the filesystem's key - or decrypted,
@@ -674,8 +677,10 @@ pub fn revoke_key(sb: &c::bch_sb) -> Result<(), BchError> {
 }
 
 /// The filesystem's key: the superblock's, decrypted with the user's if a
-/// passphrase was ever set on it.
-fn decrypt_sb_key(fs: &Fs, sb: &c::bch_sb, crypt: &c::bch_sb_field_crypt) -> Result<c::bch_key, BchError> {
+/// passphrase was ever set on it - @user_key, or the keyring's.
+fn decrypt_sb_key(fs: &Fs, sb: &c::bch_sb, crypt: &c::bch_sb_field_crypt, user_key: Option<&c::bch_key>)
+    -> Result<c::bch_key, BchError>
+{
     let mut sb_key = crypt.key.clone();
     if sb_key.is_encrypted() {
         /*
@@ -689,10 +694,9 @@ fn decrypt_sb_key(fs: &Fs, sb: &c::bch_sb, crypt: &c::bch_sb_field_crypt) -> Res
          * `bcachefs unlock` ahead of time, mount(2), an agent that unlocked
          * the filesystem for us - so it stays as the fallback.
          */
-        let user_key = if fs.user_key_set {
-            fs.user_key.clone()
-        } else {
-            request_key(sb).inspect_err(|e| crate::bch_err!(fs, "error requesting encryption key: {e}"))?
+        let user_key = match user_key {
+            Some(k) => k.clone(),
+            None => request_key(sb).inspect_err(|e| crate::bch_err!(fs, "error requesting encryption key: {e}"))?,
         };
 
         sb_key.chacha20(&user_key, sb.nonce());
@@ -704,40 +708,27 @@ fn decrypt_sb_key(fs: &Fs, sb: &c::bch_sb, crypt: &c::bch_sb_field_crypt) -> Res
     Ok(sb_key.into_key())
 }
 
+/// The filesystem's key set, if it's encrypted: at mount, @user_key the key
+/// whoever opened it was handed - its owner's still, to wipe.
 #[c_export]
-pub fn bch2_fs_encryption_init(c: &Opaque<c::bch_fs>) -> c_int {
+pub fn bch2_fs_encryption_init(c: &Opaque<c::bch_fs>, user_key: Option<&c::bch_key>) -> c_int {
     let fs = Fs::from_c(c);
-    let key = {
-        let sb = fs.sb_lock();
-        sb.field::<c::bch_sb_field_crypt>().map(|crypt| decrypt_sb_key(fs, sb.sb(), crypt))
-    };
+    let mut sb = fs.sb_lock();
+    let Some(crypt) = sb.field::<c::bch_sb_field_crypt>() else { return 0 };
 
-    let raw = c.as_ptr();
-    // SAFETY: fs_alloc()'s, before anything else reads the keys
-    unsafe {
-        if let Some(Ok(key)) = &key {
-            (*raw).chacha20_key = key.clone();
-            (*raw).chacha20_key_set = true;
+    match decrypt_sb_key(fs, sb.sb(), crypt, user_key) {
+        Ok(key) => {
+            assert!(sb.published().encryption_key.set(key), "the filesystem's key set before mount");
+            0
         }
-
-        /*
-         * Done with the key we were handed however that went - including when
-         * there was nothing to unwrap, or a key given for a filesystem that is
-         * not encrypted would sit here for the life of the mount. On a wrong
-         * key especially: somebody is about to be told, and there is no second
-         * attempt that would want it. Its old value is wiped as it's dropped.
-         */
-        (*raw).user_key = c::bch_key::default();
-        (*raw).user_key_set = false;
+        Err(e) => ret_to_c(Err(e)),
     }
-    ret_to_c(key.transpose().map(drop))
 }
 
+/// Whether @c has its key - an encryption type is no use without it.
 #[c_export]
-pub fn bch2_fs_encryption_exit(c: &Opaque<c::bch_fs>) {
-    // SAFETY: the filesystem going away, nothing using its key: the old one
-    // wiped as it's dropped
-    unsafe { (*c.as_ptr()).chacha20_key = c::bch_key::default() }
+pub fn bch2_fs_has_encryption_key(c: &Opaque<c::bch_fs>) -> bool {
+    Fs::from_c(c).encryption_key().is_some()
 }
 
 // ── Turning encryption on and off ────────────────────────────────────────
@@ -759,7 +750,7 @@ pub fn disable_encryption(fs: &Fs) -> Result<(), BchError> {
     if crypt.key.is_encrypted() {
         return Ok(());
     }
-    let key = decrypt_sb_key(fs, sb.sb(), crypt)?;
+    let key = decrypt_sb_key(fs, sb.sb(), crypt, None)?;
 
     sb.field_mut::<c::bch_sb_field_crypt>().expect("its crypt section, just read").key =
         c::bch_encrypted_key::new_unencrypted(key);
@@ -795,13 +786,8 @@ pub fn enable_encryption(fs: &Fs, keyed: bool) -> Result<(), BchError> {
     sb.sb_mut().set_encryption_type(1);
 
     // C's setkey was given the key after it was encrypted under the user's,
-    // when @keyed: this is the key itself.
-    // SAFETY: XXX: none - IO may be reading it, unsynchronized, as C's setkey
-    // was
-    unsafe {
-        (*fs.as_ptr()).chacha20_key = key;
-        (*fs.as_ptr()).chacha20_key_set = true;
-    }
+    // when @keyed: this is the key itself
+    assert!(sb.published().encryption_key.set(key), "a key, on a filesystem with no crypt section");
     fs.write_super(&mut sb);
     Ok(())
 }

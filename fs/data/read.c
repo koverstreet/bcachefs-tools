@@ -1613,7 +1613,7 @@ int __bch2_read_extent(struct btree_trans *trans,
 	ret = 0;
 
 	if (bch2_csum_type_is_encryption(pick.crc.csum_type) &&
-	    unlikely(!c->chacha20_key_set))
+	    unlikely(!bch2_fs_has_encryption_key(c)))
 		return read_extent_no_encryption_key(trans, orig, read_pos, k, flags);
 
 	struct bch_dev *ca =

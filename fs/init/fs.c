@@ -720,7 +720,6 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_fs_io_write_exit(c);
 	bch2_fs_io_read_exit(c);
 	bch2_fs_errors_exit(c);
-	bch2_fs_encryption_exit(c);
 	bch2_fs_ec_exit(c);
 	bch2_fs_data_update_exit(c);
 	bch2_fs_move_exit(c);
@@ -1176,6 +1175,7 @@ static int bch2_fs_opt_version_init(struct bch_fs *c, struct printbuf *out)
 
 static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 			struct bch_opts *opts, bch_sb_handles *sbs,
+			const struct bch_key *user_key,
 			struct printbuf *out)
 {
 	CLASS(printbuf, name)();
@@ -1345,7 +1345,7 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	try(bch2_fs_counters_init(c));
 	try(bch2_fs_data_update_init(c));
 	try(bch2_fs_errors_init(c));
-	try(bch2_fs_encryption_init(c));
+	try(bch2_fs_encryption_init(c, user_key));
 	try(bch2_fs_io_read_init(c));
 	try(bch2_fs_journal_init(&c->journal));
 	try(bch2_fs_vfs_init(c));
@@ -1417,12 +1417,7 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 	if (!c)
 		return ERR_PTR(-BCH_ERR_ENOMEM_fs_alloc);
 
-	if (user_key) {
-		c->user_key = *user_key;
-		c->user_key_set = true;
-	}
-
-	int ret = bch2_fs_init(c, sb, opts, sbs, out);
+	int ret = bch2_fs_init(c, sb, opts, sbs, user_key, out);
 	if (ret) {
 		bch2_fs_exit(c);
 		return ERR_PTR(ret);

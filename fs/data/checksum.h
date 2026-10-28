@@ -129,13 +129,13 @@ static inline enum bch_csum_type bch2_meta_checksum_type(struct bch_fs *c)
 	return bch2_csum_opt_to_type(c->opts.metadata_checksum, false);
 }
 
-static inline bool bch2_checksum_type_valid(const struct bch_fs *c,
-					   unsigned type)
+static inline bool bch2_checksum_type_valid(struct bch_fs *c,
+					    unsigned type)
 {
 	if (type >= BCH_CSUM_NR)
 		return false;
 
-	if (bch2_csum_type_is_encryption(type) && !c->chacha20_key_set)
+	if (bch2_csum_type_is_encryption(type) && !bch2_fs_has_encryption_key(c))
 		return false;
 
 	return true;
