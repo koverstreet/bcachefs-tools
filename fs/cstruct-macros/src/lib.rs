@@ -1317,6 +1317,24 @@ pub fn c_export(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand("#[c_export]", || c_export_expand(attr, item))
 }
 
+/// @toks without their #[@name(..)] attributes.
+fn without_attr(toks: &[TokenTree], name: &str) -> TokenStream {
+    let is_attr = |t: &TokenTree| matches!(t, TokenTree::Group(g)
+        if g.delimiter() == Delimiter::Bracket &&
+           matches!(g.stream().into_iter().next(), Some(TokenTree::Ident(i)) if i.to_string() == name));
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < toks.len() {
+        if matches!(&toks[i], TokenTree::Punct(p) if p.as_char() == '#') && toks.get(i + 1).is_some_and(is_attr) {
+            i += 2;
+        } else {
+            out.push(toks[i].clone());
+            i += 1;
+        }
+    }
+    out.into_iter().collect()
+}
+
 fn c_export_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
     if !attr.is_empty() {
         return Err("takes no arguments".into());
@@ -1330,13 +1348,16 @@ fn c_export_expand(attr: TokenStream, item: TokenStream) -> Result<TokenStream, 
     if !matches!(sig.pop(), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace) {
         return Err("on a fn".into());
     }
-    let sig: TokenStream = sig.into_iter().collect();
-    let text = format!("#[c_export] {sig} {{}}").replace("$crate", "crate");
+    let text = |sig: TokenStream| format!("#[c_export] {sig} {{}}").replace("$crate", "crate");
 
-    let e = parse_c_export(&text)?;
+    let e = parse_c_export(&text(sig.iter().cloned().collect()))?;
     let f = &e.ex.fns[0];
     let cfg = cfg_attr(&f.cfg);
-    let record = format!("{cfg}{}", record(&text, &[]));
+    // The record is under the fn's #[cfg], so it exists only where that holds,
+    // and its text has none - which C would get as an #if: before rustc 1.89,
+    // an attribute macro is passed the #[cfg] in front of it, already true,
+    // and in C #[cfg(kernel)] is defined(kernel) - never.
+    let record = format!("{cfg}{}", record(&text(without_attr(&sig, "cfg")), &[]));
 
     // extern "C": the fn is C's symbol itself
     if e.extern_c {
@@ -1399,29 +1420,19 @@ fn c_export_static(item: TokenStream) -> Result<TokenStream, String> {
         return Err("expected static NAME: TYPE = EXPR;".into());
     }
 
-    let prefix = text_of(&toks[..s]);
     let ty = text_of(&toks[colon + 1..eq]);
     let expr = text_of(&toks[eq + 1..toks.len() - 1]);
 
-    let text = format!("#[c_export] {prefix} static {name}: {ty};").replace("$crate", "crate");
-    cstruct::parse_c_export(&text)?;
+    let text = |prefix: TokenStream|
+        format!("#[c_export] {prefix} static {name}: {ty};").replace("$crate", "crate");
+    let e = cstruct::parse_c_export(&text(toks[..s].iter().cloned().collect()))?;
+    // As a fn's record: under the static's #[cfg], not with it
+    let record = format!("{}{}", cfg_attr(&e.ex.statics[0].cfg),
+                         record(&text(without_attr(&toks[..s], "cfg")), &[]));
 
     // #[c("...")], C's declaration where the Rust type doesn't say it, is the
     // record's alone
-    let is_c_attr = |t: &TokenTree| matches!(t, TokenTree::Group(g)
-        if g.delimiter() == Delimiter::Bracket &&
-           matches!(g.stream().into_iter().next(), Some(TokenTree::Ident(i)) if i.to_string() == "c"));
-    let mut rust_prefix = Vec::new();
-    let mut i = 0;
-    while i < s {
-        if is_punct(&toks[i], '#') && toks.get(i + 1).is_some_and(is_c_attr) {
-            i += 2;
-        } else {
-            rust_prefix.push(toks[i].clone());
-            i += 1;
-        }
-    }
-    let rust_prefix = text_of(&rust_prefix);
+    let rust_prefix = without_attr(&toks[..s], "c");
 
     // SAFETY, of the CStatic: a static C reads is immutable, and its only
     // parts that aren't Sync are its pointers - to other statics, and fns
@@ -1430,7 +1441,7 @@ fn c_export_static(item: TokenStream) -> Result<TokenStream, String> {
          #[allow(non_upper_case_globals)]\n\
          {rust_prefix} static {name}: crate::types::CStatic<{ty}> =\n\
              unsafe {{ crate::types::CStatic::new({expr}) }};\n\
-         {}", record(&text, &[]))))
+         {record}")))
 }
 
 /// Integer constants - C's #defines: c_const! { pub const NAME: u32 = EXPR; ... }
