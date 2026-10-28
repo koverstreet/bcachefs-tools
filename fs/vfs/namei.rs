@@ -115,6 +115,8 @@ impl InodeInfo {
         let [mut dir_u, mut inode_u] = [c::bch_inode_unpacked::default(); 2];
 
         commit_do(&trans, None, CommitOpts::new(), |t| {
+            dir.fold_times_trans(t)?;
+            self.fold_times_trans(t)?;
             namei::link_trans(t, dir.inum(), &mut dir_u, self.inum(), &mut inode_u, name)
         })?;
 
@@ -132,6 +134,8 @@ impl InodeInfo {
             let [mut dir_u, mut inode_u] = [c::bch_inode_unpacked::default(); 2];
 
             commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| {
+                self.fold_times_trans(t)?;
+                inode.fold_times_trans(t)?;
                 namei::unlink_trans(t, self.inum(), &mut dir_u, inode.inum(), &mut inode_u,
                                     dentry.name(), deleting_subvol)
             })?;
@@ -286,6 +290,9 @@ impl InodeOps for DirOps {
             let mut dst_opt_change = c::inode_opt_change::new();
 
             lockrestart_do(&trans, |t| {
+                for inode in [src_dir, dst_dir, src_inode].into_iter().chain(dst_inode) {
+                    inode.fold_times_trans(t)?;
+                }
                 namei::rename_trans(t, src_dir.inum(), &mut src_dir_u, dst_dir.inum(), &mut dst_dir_u,
                                     &mut src_inode_u, &mut dst_inode_u,
                                     src_dentry.name(), dst_dentry.name(), mode,

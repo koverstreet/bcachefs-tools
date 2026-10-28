@@ -294,7 +294,7 @@ impl InodeInfo {
             let mut bi = inode::__peek(t, &mut iter, self.inum(), BtreeIterFlags::INTENT,
                                        Some(crate::c_function_name!()))?;
 
-            self.fold_atime(&mut bi);
+            self.fold_times(&mut bi);
             self.setattr_copy(idmap, attr, uid, kgid, &mut bi);
 
             let acl = if attr.mode().is_some() {

@@ -25,15 +25,13 @@
 //! access, mtime and ctime on a data write - and ->write_inode writes them
 //! back. Every other field is the btree's.
 //!
-//! atime is written lazily (I_DIRTY_TIME) - a transaction per access would
-//! cost too much - by ->write_inode: sync, eviction, dirtytime expiry. That
-//! leaves lazytime's "inode written for an unrelated change" (mount(8)),
-//! which other filesystems get from setattr dirtying the inode and ours, out
-//! of band, never do: so every inode write folds the VFS's atime in -
-//! fold_atime() - and it lands with the change, no writeback window between
-//! (generic/622: atime update, chmod, crash). Assigned, not max()ed: atime
-//! can be set backwards (utimensat), and the VFS's is the truth. Folded
-//! before the write's own changes, so a setattr of atime still wins.
+//! The VFS's updates reach the btree only at writeback - with lazytime, as
+//! late as sync or eviction - so an inode write made meanwhile has to carry
+//! them, or a crash can keep it and lose them (generic/622): fold_times(),
+//! before the write's own changes, which still win - assigned, not max()ed,
+//! as times can be set backwards. fs/namei.rs's writes peek the inode
+//! themselves: fold_times_trans() writes the folded times first, in the same
+//! transaction.
 
 use arrayvec::ArrayVec;
 use core::ffi::{c_int, c_uint, c_void};
@@ -216,9 +214,21 @@ impl InodeInfo {
         self.ei_inode.set(bi);
     }
 
-    /// @bi, about to be written, with the VFS's atime: see the file comment.
-    pub(crate) fn fold_atime(&self, bi: &mut c::bch_inode_unpacked) {
-        bi.bi_atime = self.fs().timespec_to_time(self.vfs().atime()) as u64;
+    /// @bi, about to be written, with the VFS's times: see the file comment.
+    pub(crate) fn fold_times(&self, bi: &mut c::bch_inode_unpacked) {
+        let (fs, v) = (self.fs(), self.vfs());
+        bi.bi_atime = fs.timespec_to_time(v.atime()) as u64;
+        bi.bi_mtime = fs.timespec_to_time(v.mtime()) as u64;
+        bi.bi_ctime = fs.timespec_to_time(v.ctime()) as u64;
+    }
+
+    /// fold_times(), written in @t: for a write of this inode later in @t,
+    /// whose peek sees it.
+    pub(crate) fn fold_times_trans(&self, t: &TransAttempt<'_, '_>) -> Result<(), BchError> {
+        let mut iter = BtreeIter::uninit();
+        let mut bi = inode::peek(t, &mut iter, self.inum(), BtreeIterFlags::INTENT)?;
+        self.fold_times(&mut bi);
+        inode::write(t, &mut iter, &mut bi)
     }
 
     pub fn update_lock(&self) -> UpdateLock<'_> {
@@ -327,7 +337,7 @@ impl<'i> UpdateLock<'i> {
     /// Change the inode with @set, in a transaction of its own that's
     /// committed, then update the VFS inode - @fields, the ATTR_* that
     /// changed. @set runs in each attempt, on the inode as it is in the btree,
-    /// its atime the VFS's.
+    /// its times the VFS's.
     pub fn write_inode<F>(&self, fields: u32, mut set: F) -> Result<(), BchError>
     where
         F: FnMut(&TransAttempt<'_, '_>, &mut c::bch_inode_unpacked) -> Result<(), BchError>,
@@ -356,7 +366,7 @@ impl<'i> UpdateLock<'i> {
                                        Some(crate::c_function_name!()))?;
             let old_r = inode::reconcile_opts_get(fs, &bi);
 
-            inode.fold_atime(&mut bi);
+            inode.fold_times(&mut bi);
             if !set(t, &mut bi)? {
                 return Ok(false);
             }

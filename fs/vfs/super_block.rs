@@ -110,12 +110,7 @@ impl SuperOps for Fs {
     }
 
     fn write_inode(&self, inode: &InodeInfo, _wbc: *mut c::writeback_control) -> Result<(), BchError> {
-        let (fs, v) = (inode.fs(), inode.vfs());
-        inode.update_lock().write_inode(ATTR_ATIME | ATTR_MTIME | ATTR_CTIME, |_, bi| {
-            bi.bi_mtime = fs.timespec_to_time(v.mtime()) as u64;
-            bi.bi_ctime = fs.timespec_to_time(v.ctime()) as u64;
-            Ok(())
-        })
+        inode.update_lock().write_inode(ATTR_ATIME | ATTR_MTIME | ATTR_CTIME, |_, _| Ok(()))
     }
 
     fn evict_inode(&self, inode: &InodeInfo) {
