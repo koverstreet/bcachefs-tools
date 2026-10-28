@@ -586,10 +586,13 @@ impl DevUsage {
     }
 
     /// Used buckets (excludes free/need_gc_gens/need_discard and hidden types).
+    /// Not unstriped either: those are stripe buckets that also hold data
+    /// outside the stripe, counted again - they're already in stripe's.
     pub fn used_buckets(&self) -> u64 {
         use super::accounting::{data_type_is_empty, data_type_is_hidden};
         self.iter_typed()
-            .filter(|(t, _)| !data_type_is_empty(*t) && !data_type_is_hidden(*t))
+            .filter(|(t, _)| !data_type_is_empty(*t) && !data_type_is_hidden(*t) &&
+                             *t != data_type::unstriped)
             .map(|(_, dt)| dt.buckets)
             .sum()
     }
