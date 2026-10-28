@@ -374,11 +374,11 @@ include $(src)/Makefile.rust.vendor
 endif
 
 # Line tables, not the kernel's full (or reduced) debuginfo: our crate is one
-# codegen unit, and its types' DWARF is most of what LLVM holds in memory - in
-# a 4G test VM, rustc was OOM-killed building it. pahole skips Rust units for
-# BTF anyway, so the types bought only a debugger's view; line tables keep
-# addresses decodable to file:line. After Makefile.rust.vendor, which may have
-# turned debuginfo off for BTF: this reads KBUILD_RUSTFLAGS now (rustflags-y is
+# codegen unit, so what rustc holds for it grows with the crate - enough to be
+# OOM-killed in a 4G test VM - and full debuginfo adds ~15% to that, for
+# nothing BTF uses: pahole skips Rust units. Line tables keep addresses
+# decodable to file:line. After Makefile.rust.vendor, which may have turned
+# debuginfo off for BTF: this reads KBUILD_RUSTFLAGS now (rustflags-y is
 # simply expanded), and mustn't turn it back on.
 rustflags-remove-y += -Cdebuginfo=1 -Cdebuginfo=2
 rustflags-y += $(if $(filter -Cdebuginfo=1 -Cdebuginfo=2,$(KBUILD_RUSTFLAGS)),-Cdebuginfo=line-tables-only)
