@@ -72,12 +72,13 @@
 //! it open past the writer's put. Given back when they're dropped: by
 //! teardown, its writers done, or with it.
 //!
-//! Its io refs: one per block a writer has claimed, put as the writer's open
-//! bucket closes - foreground.c's __bch2_open_bucket_put() - and one of its
-//! own, its head's or repair's, put by set_pending(). The last put takes it
-//! in flight, there and then - its seq assigned, the flushes woken - as C's
-//! did: a flush must see a stripe in flight as soon as its writers are done,
-//! not when its task next runs. It then puts the one ref on @in_flight, the
+//! Its io refs, IoRef - a count on the stripe (util/refcount.rs): one per
+//! block a writer has claimed, leaked to C with the block's open bucket and
+//! put as it closes - foreground.c's __bch2_open_bucket_put() - and one of its
+//! own, its head's or repair's, put by fill(). The last put takes it in
+//! flight, there and then - its seq assigned, the flushes woken - as C's did:
+//! a flush must see a stripe in flight as soon as its writers are done, not
+//! when its task next runs. It then puts the one ref on @in_flight, the
 //! Gather its task waits on.
 //!
 //! Its task, one: made with it, unstarted, so starting it can't fail - and
@@ -143,6 +144,7 @@ use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::backref::BackRef;
 use crate::util::ffi::Opaque;
 use crate::util::gather::{Gather, GatherRef};
+use crate::util::refcount::{RefGuard, Refcount};
 use crate::util::kernel::local_clock;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
@@ -467,26 +469,32 @@ impl StripeNew {
     pub(crate) fn fill(&self, _v: &NewStripes) {
         self.state.store(State::EC_STRIPE_NEW_filling as u32, Ordering::Relaxed);
         self.launch(&mut self.lock());
-        // SAFETY: its maker's io ref, ours; new_stripes is locked
-        unsafe { StripeNew::io_put(self) }
+        // SAFETY: its maker's io ref, held since alloc(); new_stripes is
+        // locked
+        drop(unsafe { IoRef::adopt(self) });
     }
+}
 
-    /// A writer's io ref, for the block it's claimed.
-    pub(crate) fn io_get(&self) {
+/// A stripe being made's io refs: see the file comment.
+pub(crate) enum IoRefs {}
+
+/// An io ref on a stripe being made.
+pub(crate) type IoRef<'a> = RefGuard<'a, StripeNew, IoRefs>;
+
+// SAFETY: @io_refs counts them. The last dec() puts the io refs' ref on
+// @in_flight, the last touch: the task may free the stripe after it - while
+// dec()'s &self is still on the stack, as Gather::put()'s is.
+unsafe impl Refcount<IoRefs> for StripeNew {
+    fn inc(&self) {
         self.io_refs.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// An io ref put: the last takes @p in flight - its seq the next, the
-    /// flushes woken - and has its task go on to create it.
-    ///
-    /// # Safety
-    /// @p is live, and holds the ref; after this, it may not be.
-    unsafe fn io_put(p: *const StripeNew) {
-        // SAFETY: the caller's
-        let s = unsafe { &*p };
-        let fs = &*s.fs;
-        let v = s.io_refs.fetch_sub(1, Ordering::AcqRel);
-        assert!(v > 0, "stripe {} io ref put with none held", s.idx.load(Ordering::Relaxed));
+    /// The last takes it in flight - its seq the next, the flushes woken -
+    /// and has its task go on to create it.
+    unsafe fn dec(&self) {
+        let fs = &*self.fs;
+        let v = self.io_refs.fetch_sub(1, Ordering::AcqRel);
+        assert!(v > 0, "stripe {} io ref put with none held", self.idx.load(Ordering::Relaxed));
         if v != 1 {
             return;
         }
@@ -495,12 +503,11 @@ impl StripeNew {
         // in_flight transition, after which the stripe completes without
         // needing anything from a writer; seq is the commit-ready marker
         // fs_ec_flush_outstanding() waits on.
-        s.state.store(State::EC_STRIPE_NEW_in_flight as u32, Ordering::Relaxed);
-        s.seq.store(fs.ec.stripe_new_seq.fetch_add(1, Ordering::Relaxed) as u64 + 1, Ordering::Release);
+        self.state.store(State::EC_STRIPE_NEW_in_flight as u32, Ordering::Relaxed);
+        self.seq.store(fs.ec.stripe_new_seq.fetch_add(1, Ordering::Relaxed) as u64 + 1, Ordering::Release);
         fs.ec.new_stripes_changed.wake();
-        // the last touch: the task may free it
         // SAFETY: the io refs' ref, alloc()'s
-        unsafe { GatherRef::from_raw(&s.in_flight) }.put(());
+        unsafe { GatherRef::from_raw(&self.in_flight) }.put(());
     }
 }
 
@@ -629,11 +636,12 @@ pub(crate) fn new_stripes_take(fs: &Fs, p: NonNull<StripeNew>) -> StripeNewBox {
 /// A writer's io ref on @s put: its open bucket's last pin put.
 ///
 /// # Safety
-/// @s is the open bucket's ->ec, whose io ref the caller drops.
+/// @s is the open bucket's ->ec, whose io ref - claim_bucket()'s, leaked to
+/// the open bucket - the caller gives up.
 #[c_export]
 pub unsafe fn bch2_ec_stripe_new_put_io(s: *mut c::ec_stripe_new) {
     // SAFETY: the caller's
-    unsafe { StripeNew::io_put(s.cast()) }
+    drop(unsafe { IoRef::adopt(StripeNew::from_c(s)) });
 }
 
 /// The stripe @ob is a block of is cancelled, with @err: the writer's IO

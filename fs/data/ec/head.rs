@@ -17,7 +17,7 @@ use crate::btree::bkey::BkeyV;
 use crate::btree::iter::{BtreeTrans, TransAttempt};
 use crate::c;
 use crate::data::ec::buf::{MemWait, StripeBuf};
-use crate::data::ec::stripe_new::{self, Internal, Slot, StripeBlock, StripeNew, StripeNewBox};
+use crate::data::ec::stripe_new::{self, Internal, IoRef, Slot, StripeBlock, StripeNew, StripeNewBox};
 use crate::data::ec::stripe_new_reuse::OldRead;
 use crate::data::ec::stripe_new_blocks::stripe_alloc_or_reuse;
 use crate::errcode::{bch_errcode, err_ptr, BchError};
@@ -469,7 +469,9 @@ fn claim_bucket(req: &c::alloc_request, s: &StripeNew, i: &mut Internal) -> *mut
                 };
                 let (claimed, ob) = b.claim(s.as_c(), ec_idx as u8);
                 i.blocks[ec_idx] = Slot::Bucket(StripeBlock::Claimed(claimed));
-                s.io_get();
+                // the writer's, handed to C with the open bucket: its put
+                // adopts it
+                IoRef::get(s).leak();
                 return ob;
             }
         }
