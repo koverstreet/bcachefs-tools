@@ -196,8 +196,9 @@
               cargo-test
               ;
 
-            # cargo clippy with the current minimum supported rust version
-            # according to Cargo.toml
+            # cargo test with the current minimum supported rust version
+            # according to Cargo.toml - warnings denied: one there is code
+            # nobody builds with that rustc otherwise sees
             msrv =
               let
                 rustVersion = cargoToml.package.rust-version;
@@ -206,8 +207,23 @@
               craneBuild.cargo-test.overrideAttrs (
                 final: prev: {
                   pname = "${prev.pname}-msrv";
+                  RUSTFLAGS = "-D warnings";
                 }
               );
+
+            # The module with that rustc: against a kernel built with
+            # nixpkgs', so from the vendored stack - as on a distro whose
+            # kernel's rustc isn't the one installed.
+            bcachefs-module-msrv =
+              let
+                rust = pkgs.rust-bin.stable.${cargoToml.package.rust-version}.minimal.override {
+                  extensions = [ "rust-src" ];
+                };
+              in
+              pkgs.linuxPackages_latest.callPackage self'.packages.bcachefs-tools.kernelModule {
+                moduleRustc = rust;
+                moduleRustLibSrc = "${rust}/lib/rustlib/src/rust/library";
+              };
 
             # The test derivation hardcodes "kvm" into requiredSystemFeatures
             # for any Linux test, which GitHub's hosted aarch64 runners don't

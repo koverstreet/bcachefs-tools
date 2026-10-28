@@ -28,7 +28,12 @@ bcachefs-tools:
   kernelModuleMakeFlags,
   kernel,
   rustPlatform,
-  rust-bindgen
+  rust-bindgen,
+  # The rustc to build with, and its rust-src: another than nixpkgs' -
+  # flake.nix's msrv check - builds bcachefs's Rust from the vendored stack,
+  # the kernel's having been built with nixpkgs'.
+  moduleRustc ? rustPlatform.rust.rustc,
+  moduleRustLibSrc ? rustPlatform.rustLibSrc,
 }:
 
 stdenv.mkDerivation {
@@ -44,7 +49,7 @@ stdenv.mkDerivation {
   # kernel without it builds bcachefs's Rust from the vendored stack, which
   # needs them all the same.
   nativeBuildInputs = kernel.moduleBuildDependencies ++ [
-    rustPlatform.rust.rustc
+    moduleRustc
     rust-bindgen
   ];
 
@@ -53,7 +58,9 @@ stdenv.mkDerivation {
   makeFlags = kernelModuleMakeFlags ++ [
     "KDIR=${kernel.dev}/lib/modules/${kernel.modDirVersion}/build"
     "INSTALL_MOD_PATH=${placeholder "out"}"
-    "RUST_LIB_SRC=${rustPlatform.rustLibSrc}"
+    # by name, not by PATH, where the kernel's rustc may come first
+    "RUSTC=${lib.getExe' moduleRustc "rustc"}"
+    "RUST_LIB_SRC=${moduleRustLibSrc}"
   ];
 
   postPatch = ''
