@@ -19,40 +19,27 @@ use bcachefs_kernel::POS_MIN;
 
 use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
 
-// Crypto for the sanitize path. These drive the wrapped bch2_encrypt /
-// bch2_checksum (and bset_encrypt) over the same byte ranges the kernel's
-// bset_encrypt() and csum_vstruct() macro cover, so the metadata dump can
-// decrypt, edit, and re-checksum bsets and journal entries without a C shim.
-// The checksum covers everything after the leading csum field, to the end of
-// the vstruct - a bset's @vstruct_bytes, a jset's reference's - and journal
-// encryption everything after the encrypted_start marker. Encryption is
-// symmetric, so the same call both decrypts and re-encrypts.
+// The sanitize path's crypto: a bset - a node's first, or a later entry's, at
+// byte @offset of the node - at the start of @buf, checked whole already.
 
-fn jset_encrypt(fs: &Fs, j: &mut c::jset<Unvalidated>, csum_type: u32) -> Result<(), BchError> {
-    let off = std::mem::offset_of!(Head<c::jset>, encrypted_start);
-    let (nonce, len) = (j.nonce(), size_of_val(j) - off);
-    // SAFETY: the jset's bytes, past encrypted_start: its pointer reaches all of them
-    fs.encrypt(c::bch_csum_type(csum_type), nonce,
-               unsafe { std::slice::from_raw_parts_mut(j.as_ffi_mut().cast::<u8>().add(off), len) })
+/// Decrypted, or encrypted again: ChaCha20 is its own inverse.
+fn bset_encrypt(fs: &Fs, buf: &mut [u8], first: bool, offset: u32) -> Result<(), BchError> {
+    if first {
+        c::btree_node::<Unvalidated>::from_bytes_mut(buf).expect("a btree node, checked whole").encrypt(fs)
+    } else {
+        c::btree_node_entry::<Unvalidated>::from_bytes_mut(buf).expect("a node entry, checked whole")
+            .encrypt(fs, offset)
+    }
 }
 
-fn jset_csum_set(fs: &Fs, j: &mut c::jset<Unvalidated>, csum_type: u32) {
-    let off = std::mem::size_of::<c::bch_csum>();
-    // SAFETY: the jset's bytes, past its csum: its pointer reaches all of them
-    let bytes = unsafe { std::slice::from_raw_parts(j.as_ffi().cast::<u8>().add(off), size_of_val(j) - off) };
-    j.csum = fs.checksum(c::bch_csum_type(csum_type), j.nonce(), bytes);
-}
-
-/// @node points at the btree_node (first bset) or btree_node_entry, whose first
-/// field is the csum; @i is the bset within it, at byte @offset from the node.
-fn bset_csum_set(fs: &Fs, node: *mut u8, i: *mut Head<c::bset>, offset: u32,
-                 csum_type: u32, vstruct_bytes: usize) {
-    let off = std::mem::size_of::<c::bch_csum>();
-    let csum = unsafe {
-        fs.checksum(c::bch_csum_type(csum_type), (*i).nonce(offset),
-                    std::slice::from_raw_parts(node.add(off), vstruct_bytes - off))
-    };
-    unsafe { *(node as *mut c::bch_csum) = csum };
+fn bset_csum_set(fs: &Fs, buf: &mut [u8], first: bool, offset: u32) {
+    if first {
+        let n = c::btree_node::<Unvalidated>::from_bytes_mut(buf).expect("a btree node, checked whole");
+        n.csum = n.checksum(fs);
+    } else {
+        let n = c::btree_node_entry::<Unvalidated>::from_bytes_mut(buf).expect("a node entry, checked whole");
+        n.csum = n.checksum(fs, offset);
+    }
 }
 
 // ---- Dump CLI ----
@@ -261,8 +248,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
                 bail!("journal entry at {pos:#x} is encrypted, and the filesystem has no key to decrypt it");
             }
 
-            jset_encrypt(&fs, j, csum_type)
-                .map_err(|e| anyhow!("decrypting journal entry at {pos:#x}: {e}"))?;
+            j.encrypt(&fs).map_err(|e| anyhow!("decrypting journal entry at {pos:#x}: {e}"))?;
             modified = true;
         }
 
@@ -285,10 +271,9 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
             // Re-encrypt (symmetric) if encrypted, then recompute the csum so
             // the entry stays checksum-valid instead of csum-cleared.
             if c::bch_csum_type(csum_type).is_encryption() {
-                jset_encrypt(&fs, j, csum_type)
-                    .map_err(|e| anyhow!("re-encrypting journal entry at {pos:#x}: {e}"))?;
+                j.encrypt(&fs).map_err(|e| anyhow!("re-encrypting journal entry at {pos:#x}: {e}"))?;
             }
-            jset_csum_set(&fs, j, csum_type);
+            j.csum = j.checksum(&fs);
         }
 
         pos += (j.sectors(block_bits) << 9).min(buf.len() - pos);
@@ -323,7 +308,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) ->
 
     while pos < buf.len() {
         // where the bset is, and the whole's bytes and sectors
-        let (bset_off, vstruct_bytes, sectors) = if first {
+        let (bset_off, vstruct_bytes, sectors, csum_type) = if first {
             let Some(n) = cast_plain::<Head<c::btree_node>>(&buf[pos..]) else { break };
             if n.magic.get() != bset_magic {
                 break;
@@ -331,17 +316,17 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) ->
             let n = c::btree_node::<Unvalidated>::from_bytes(&buf[pos..]).map_err(|e| overrun(pos, e))?;
             format_key_u64s = n.format.key_u64s as usize;
             seq = n.keys.seq.get();
-            (pos + std::mem::offset_of!(Head<c::btree_node>, keys), n.bytes(), n.sectors(block_bits))
+            (pos + std::mem::offset_of!(Head<c::btree_node>, keys), n.bytes(), n.sectors(block_bits),
+             n.keys.csum_type() as u32)
         } else {
             let Some(n) = cast_plain::<Head<c::btree_node_entry>>(&buf[pos..]) else { break };
             if n.keys.seq.get() != seq {
                 break;
             }
             let n = c::btree_node_entry::<Unvalidated>::from_bytes(&buf[pos..]).map_err(|e| overrun(pos, e))?;
-            (pos + std::mem::offset_of!(Head<c::btree_node_entry>, keys), n.bytes(), n.sectors(block_bits))
+            (pos + std::mem::offset_of!(Head<c::btree_node_entry>, keys), n.bytes(), n.sectors(block_bits),
+             n.keys.csum_type() as u32)
         };
-        // SAFETY: checked whole, above
-        let csum_type = unsafe { &*buf.as_ptr().add(bset_off).cast::<Head<c::bset>>() }.csum_type() as u32;
         let mut modified = false;
 
         if c::bch_csum_type(csum_type).is_encryption() {
@@ -349,11 +334,8 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) ->
                 bail!("btree node bset at {pos:#x} is encrypted, and the filesystem has no key to decrypt it");
             }
 
-            let ret = unsafe {
-                btree::read::bset_encrypt(fs.as_ptr(), buf.as_mut_ptr().add(bset_off) as *mut Head<c::bset>,
-                                          bset_byte_offset as u32)
-            };
-            ret.map_err(|e| anyhow!("decrypting btree node bset at {pos:#x}: {e}"))?;
+            bset_encrypt(&fs, &mut buf[pos..], first, bset_byte_offset as u32)
+                .map_err(|e| anyhow!("decrypting btree node bset at {pos:#x}: {e}"))?;
             modified = true;
         }
 
@@ -418,13 +400,11 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) ->
         if modified {
             // Re-encrypt (symmetric) if encrypted, then recompute the bset csum
             // over the btree_node (first bset) or btree_node_entry.
-            let bset = unsafe { buf.as_mut_ptr().add(bset_off) } as *mut Head<c::bset>;
             if c::bch_csum_type(csum_type).is_encryption() {
-                unsafe { btree::read::bset_encrypt(fs.as_ptr(), bset, bset_byte_offset as u32) }
+                bset_encrypt(&fs, &mut buf[pos..], first, bset_byte_offset as u32)
                     .map_err(|e| anyhow!("re-encrypting btree node bset at {pos:#x}: {e}"))?;
             }
-            let node = unsafe { buf.as_mut_ptr().add(pos) };
-            bset_csum_set(&fs, node, bset, bset_byte_offset as u32, csum_type, vstruct_bytes);
+            bset_csum_set(&fs, &mut buf[pos..], first, bset_byte_offset as u32);
         }
 
         first = false;

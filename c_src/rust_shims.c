@@ -27,13 +27,6 @@
 #include "fs/alloc/accounting.h"
 #include "rust_shims.h"
 
-struct bch_csum rust_csum_vstruct_sb(struct bch_sb *sb)
-{
-	struct nonce nonce = { 0 };
-
-	return csum_vstruct(NULL, BCH_SB_CSUM_TYPE(sb), nonce, sb);
-}
-
 
 void strip_fs_alloc(struct bch_fs *c)
 {

@@ -27,7 +27,7 @@
 //! prompted for.
 
 use crate::c;
-use crate::util::vstructs::Unvalidated;
+use crate::util::vstructs::{bytes_of, Unsized, Unvalidated};
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::sb::io::{SbFieldOps, SbResize};
@@ -159,6 +159,13 @@ impl Csum {
         };
         c::bch_csum { lo: Le64::new(lo), hi: Le64::new(0) }
     }
+}
+
+/// The checksum of vstruct @v whose first field is its checksum: of all of it
+/// after that field - C's csum_vstruct(). @fs for an encryption type's key.
+pub fn csum_vstruct<T: Unsized + ?Sized>(fs: Option<&Fs>, ty: c::bch_csum_type, nonce: c::nonce,
+                                         v: &T) -> c::bch_csum {
+    checksum(fs, ty, nonce, &bytes_of(v)[size_of::<c::bch_csum>()..])
 }
 
 /// @data's checksum: Fs::checksum()'s, and checksum_unkeyed()'s.

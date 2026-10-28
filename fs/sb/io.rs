@@ -1319,14 +1319,13 @@ impl c::bch_sb_io {
     }
 }
 
-/// A superblock's checksum, of @bytes - all of it past the csum, its first
-/// field: csum_vstruct().
-fn sb_csum(fs: Option<&Fs>, ty: c::bch_csum_type, bytes: &[u8]) -> c::bch_csum {
-    let data = &bytes[size_of::<c::bch_csum>()..];
-    match fs {
-        Some(fs) => fs.checksum(ty, nonce::default(), data),
-        // no filesystem, no key: then @ty isn't an encryption type
-        None     => ty.checksum_unkeyed(data),
+/// Its checksum, of its csum_type() - never an encryption type, which would
+/// want the key that's inside it.
+impl bch_sb<Unvalidated> {
+    pub fn checksum(&self) -> c::bch_csum {
+        let ty = c::bch_csum_type(self.csum_type() as u32);
+        assert!(!ty.is_encryption(), "a superblock checksum of encryption type {ty}");
+        crate::data::checksum::csum_vstruct(None, ty, nonce::default(), self)
     }
 }
 
@@ -1370,7 +1369,9 @@ fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Re
         }
 
         // XXX: verify MACs
-        let csum = sb_csum(None, ty, &buf[..bytes]);
+        let csum = bch_sb::<Unvalidated>::from_bytes(&buf[..bytes])
+            .expect("a superblock, as long as its u64s say, checked whole above")
+            .checksum();
         if csum != h.csum {
             crate::data::checksum::csum_err_msg(err, ty, h.csum, csum);
             return Err(bch_errcode::BCH_ERR_invalid_sb_csum.into());
@@ -1450,8 +1451,8 @@ fn read_backup_supers(sb: &mut bch_sb_handle, layout: &c::bch_sb_layout, primary
 fn rewrite_primary_super(sb: &mut bch_sb_handle) -> Result<(), BchError> {
     let s = sb.io.buf.sb_mut();
     s.offset = s.layout.sb_offset[0];
-    let (ty, sector) = (c::bch_csum_type(s.csum_type() as u32), s.offset.get());
-    let csum = sb_csum(None, ty, sb.io.buf.sb_bytes());
+    let sector = s.offset.get();
+    let csum = sb.io.buf.sb().as_unvalidated().checksum();
     sb.io.buf.sb_mut().csum = csum;
 
     let bytes = sb.io.buf.sb_bytes().len()
@@ -2310,7 +2311,7 @@ impl DevSbMut<'_> {
         s.set_csum_type(ty.0.into());
         let sector = s.offset.get();
 
-        let csum = sb_csum(Some(fs), ty, self.io.buf.sb_bytes());
+        let csum = self.io.buf.sb().as_unvalidated().checksum();
         self.io.buf.sb_mut().csum = csum;
 
         let block = crate::util::kernel::bdev_logical_block_size(self.ca.disk_sb.bdev()) as usize;

@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! Rust's part of reading btree nodes (btree/read.c): so far, a bset's
-//! encryption - its nonce, and bset_encrypt().
+//! checksum and encryption - its nonce, and a node's and a node entry's
+//! checksum() and encrypt().
 
 use crate::c;
-use crate::data::checksum::{BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
+use crate::data::checksum::{csum_vstruct, BCH_NONCE_BTREE, CHACHA_BLOCK_SIZE};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::types::Le32;
-use crate::util::vstructs::Head;
+use crate::util::vstructs::{Head, Unvalidated};
 use core::mem::offset_of;
 
 impl c::bset__head {
@@ -26,32 +27,48 @@ impl c::bset__head {
             ],
         }
     }
+
+    fn checksum_type(&self) -> c::bch_csum_type {
+        c::bch_csum_type(self.csum_type() as u32)
+    }
 }
 
-/// Encrypts bset @i, at byte @offset of its btree node - or decrypts it, as
-/// ChaCha20 is its own inverse. The keys are encrypted; in a node's first
-/// bset, offset 0, so is the btree_node header from flags to the bset, ahead
-/// of them, the keys' nonce starting at the next block after it.
-///
-/// # Safety
-/// @i points to a bset and the u64s of keys it says it has, at byte @offset
-/// of a btree node: at offset 0, the bset of a struct btree_node.
-pub unsafe fn bset_encrypt(c: *mut c::bch_fs, i: *mut Head<c::bset>, offset: u32) -> Result<(), BchError> {
-    let fs = Fs::borrow_raw(c);
-    let csum_type = c::bch_csum_type((*i).csum_type() as u32);
-    let mut nonce = (*i).nonce(offset);
+/// Where a bset's keys start in a node, or a node entry: its tail, past its
+/// header.
+const fn keys_offset(bset: usize) -> usize {
+    bset + size_of::<Head<c::bset>>()
+}
 
-    if offset == 0 {
-        let keys = offset_of!(Head<c::btree_node>, keys);
-        let bn = i.byte_sub(keys).cast::<Head<c::btree_node>>();
-        let start = offset_of!(Head<c::btree_node>, flags);
-        let bytes = keys - start;
-
-        fs.encrypt(csum_type, nonce, core::slice::from_raw_parts_mut(bn.byte_add(start).cast(), bytes))?;
-        nonce = nonce + (bytes as u32).next_multiple_of(CHACHA_BLOCK_SIZE);
+/// A node's first bset - its checksum covers the node from past its csum,
+/// and its encryption the node's header from flags on too, ahead of the keys,
+/// their nonce starting at the next ChaCha20 block after it.
+impl c::btree_node<Unvalidated> {
+    pub fn checksum(&self, fs: &Fs) -> c::bch_csum {
+        csum_vstruct(Some(fs), self.keys.checksum_type(), self.keys.nonce(0), self)
     }
 
-    // its keys: its tail, past its header
-    fs.encrypt(csum_type, nonce,
-               core::slice::from_raw_parts_mut(i.byte_add(size_of::<Head<c::bset>>()).cast(), (*i).u64s() * 8))
+    /// Or decrypted: ChaCha20 is its own inverse.
+    pub fn encrypt(&mut self, fs: &Fs) -> Result<(), BchError> {
+        let (ty, nonce) = (self.keys.checksum_type(), self.keys.nonce(0));
+        let (flags, keys) = (offset_of!(Head<c::btree_node>, flags), offset_of!(Head<c::btree_node>, keys));
+        let bytes = self.as_bytes_mut();
+
+        fs.encrypt(ty, nonce, &mut bytes[flags..keys])?;
+        let nonce = nonce + ((keys - flags) as u32).next_multiple_of(CHACHA_BLOCK_SIZE);
+        fs.encrypt(ty, nonce, &mut bytes[keys_offset(keys)..])
+    }
+}
+
+/// A later bset, at byte @offset of its node.
+impl c::btree_node_entry<Unvalidated> {
+    pub fn checksum(&self, fs: &Fs, offset: u32) -> c::bch_csum {
+        csum_vstruct(Some(fs), self.keys.checksum_type(), self.keys.nonce(offset), self)
+    }
+
+    /// Or decrypted, as a node's.
+    pub fn encrypt(&mut self, fs: &Fs, offset: u32) -> Result<(), BchError> {
+        let (ty, nonce) = (self.keys.checksum_type(), self.keys.nonce(offset));
+        let keys = keys_offset(offset_of!(Head<c::btree_node_entry>, keys));
+        fs.encrypt(ty, nonce, &mut self.as_bytes_mut()[keys..])
+    }
 }

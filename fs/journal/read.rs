@@ -3,9 +3,11 @@
 #[path = "seq_blacklist.rs"] pub mod seq_blacklist;
 
 use crate::c;
-use crate::data::checksum::BCH_NONCE_JOURNAL;
+use crate::data::checksum::{csum_vstruct, BCH_NONCE_JOURNAL};
+use crate::errcode::BchError;
+use crate::fs::Fs;
 use crate::types::Le32;
-use crate::util::vstructs::{Head, Validated};
+use crate::util::vstructs::{Head, Unvalidated, Validated};
 
 #[allow(non_camel_case_types)]
 pub type journal_entry_type = c::bch_jset_entry_type;
@@ -24,6 +26,25 @@ impl c::jset__head {
                 Le32::new(BCH_NONCE_JOURNAL),
             ],
         }
+    }
+
+    fn checksum_type(&self) -> c::bch_csum_type {
+        c::bch_csum_type(self.csum_type() as u32)
+    }
+}
+
+/// A journal entry's checksum covers all of it past its csum, and its
+/// encryption all of it from encrypted_start.
+impl c::jset<Unvalidated> {
+    pub fn checksum(&self, fs: &Fs) -> c::bch_csum {
+        csum_vstruct(Some(fs), self.checksum_type(), self.nonce(), self)
+    }
+
+    /// Or decrypted: ChaCha20 is its own inverse.
+    pub fn encrypt(&mut self, fs: &Fs) -> Result<(), BchError> {
+        let (ty, nonce) = (self.checksum_type(), self.nonce());
+        let start = core::mem::offset_of!(Head<c::jset>, encrypted_start);
+        fs.encrypt(ty, nonce, &mut self.as_bytes_mut()[start..])
     }
 }
 

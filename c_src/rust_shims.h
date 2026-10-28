@@ -73,14 +73,6 @@ static const size_t BCH_SIZEOF_FS_SYSFS_PATH = sizeof(struct fs_sysfs_path);
 static const unsigned long BCH_FS_IOC_FIEMAP = FS_IOC_FIEMAP;
 
 struct bch_fs;
-struct bch_sb;
-struct bch_csum;
-
-/*
- * Compute the checksum of an on-disk superblock, using the csum type
- * stored in the sb itself.  Wraps the csum_vstruct() macro.
- */
-struct bch_csum rust_csum_vstruct_sb(struct bch_sb *sb);
 
 /*
  * Strip alloc info from a clean filesystem: removes alloc btree roots

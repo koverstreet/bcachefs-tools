@@ -43,7 +43,7 @@ use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::bio::{buf_nr_bvecs, Bio, BioBuf, BioOwner};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
-use crate::util::vstructs::{cast_plain, Head, SelfSized};
+use crate::util::vstructs::{cast_plain, Head, Unvalidated};
 use crate::util::Printbuf;
 use crate::{bch_err, fsck_err, fsck_err_on, inode_fsck_err, prt};
 use arrayvec::ArrayVec;
@@ -135,15 +135,9 @@ fn btree_node_bad(fs: &Fs, buf: &[u8], k: BkeySC<'_>) -> bool {
         return true;
     }
 
-    let ty = c::bch_csum_type(bn.keys.csum_type() as u32);
-    if ty.valid(fs) {
-        let end = bn.bytes();
-        if end > buf.len() {
-            return true;
-        }
-        // from past the csum to its first bset's end
-        let csum = fs.checksum(ty, bn.keys.nonce(0), &buf[size_of::<c::bch_csum>()..end]);
-        if csum != bn.csum {
+    if c::bch_csum_type(bn.keys.csum_type() as u32).valid(fs) {
+        let Ok(n) = c::btree_node::<Unvalidated>::from_bytes(buf) else { return true };
+        if n.checksum(fs) != n.csum {
             return true;
         }
     }
