@@ -31,8 +31,8 @@
 //! `#[init_args(PARAMS)]` on the struct: parameters init() takes, for its
 //! fields' #[init] initializers to use - what a field can't be zeroed
 //! before, as a BackRef to its owner: `#[init_args(fs: &Fs)]`, init(fs). The
-//! initializer borrows them: one parameter that's a reference, so its
-//! lifetime is the elided one.
+//! initializer borrows them: of the parameters, at most one a reference, so
+//! its lifetime is the elided one.
 //!
 //! And each field is a Field<N>, one without #[init] is zeroed only if no
 //! placed type lives there, and a placed struct's init() takes its At: a
@@ -104,7 +104,7 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
         None => ("pub", None),
     };
     let params: Vec<String> = at_param.into_iter().chain(args.clone()).collect();
-    let borrows = if args.is_some() { " + '_" } else { "" };
+    let borrows = if args.as_deref().is_some_and(|a| a.contains('&')) { " + '_" } else { "" };
 
     Ok(tokens(&format!(
         "#[automatically_derived]\n\
