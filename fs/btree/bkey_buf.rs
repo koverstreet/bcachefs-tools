@@ -73,16 +73,23 @@ impl BkeyBuf {
 
     /// Copy @k in, as bch2_bkey_buf_reassemble().
     pub fn reassemble(&mut self, k: BkeySC<'_>) {
-        let u64s = k.k.u64s as usize;
-        self.realloc(u64s);
+        self.realloc(k.k.u64s as usize);
+        // SAFETY: realloc()'s room
+        unsafe { copy_key(self.buf_mut().as_mut_ptr(), k) }
+    }
+}
 
-        let buf = self.buf_mut();
-        unsafe {
-            core::ptr::copy_nonoverlapping(k.k as *const c::bkey as *const u64,
-                                           buf.as_mut_ptr(), BKEY_U64S);
-            core::ptr::copy_nonoverlapping(k.v as *const c::bch_val as *const u64,
-                                           buf[BKEY_U64S..].as_mut_ptr(), u64s - BKEY_U64S);
-        }
+/// Copies @k, header and value, to @dst.
+///
+/// # Safety
+/// @dst has room for @k's u64s.
+unsafe fn copy_key(dst: *mut u64, k: BkeySC<'_>) {
+    let u64s = k.k.u64s as usize;
+    // SAFETY: the caller's; a key's header and value are whole u64s
+    unsafe {
+        core::ptr::copy_nonoverlapping(core::ptr::from_ref(k.k).cast::<u64>(), dst, BKEY_U64S);
+        core::ptr::copy_nonoverlapping(k.v.cast::<u64>(), dst.add(BKEY_U64S),
+                                       u64s - BKEY_U64S);
     }
 }
 
@@ -107,12 +114,61 @@ impl AsMut<BkeyI> for BkeyBuf {
     }
 }
 
-/// C's, once bch2_bkey_buf_init() has run: @k is a whole key, in @onstack or
-/// the heap buffer bch2_bkey_buf_realloc() made.
+/// C's bkey_buf: @k points into @onstack while the key is small, so once
+/// init()ed it can't move. Used for a data update's key, which C reads.
 impl c::bkey_buf {
     pub fn key(&self) -> &BkeyI {
         // SAFETY: as C keeps it, for as long as it's borrowed
         unsafe { &*BkeyI::from_raw(self.k) }
+    }
+
+    fn onstack_ptr(&mut self) -> *mut c::bkey_i {
+        self.onstack.as_mut_ptr().cast()
+    }
+
+    /// # Safety
+    /// It isn't moved while it's in use: @k may point into it.
+    pub unsafe fn init(&mut self) {
+        self.k = self.onstack_ptr();
+        // SAFETY: @onstack, which has room for a header
+        unsafe { (*self.k).k = c::bkey::new() };
+    }
+
+    /// Copies @k in. A key too big for @onstack moves the buffer to the heap
+    /// (__GFP_NOFAIL), where it stays.
+    pub fn reassemble(&mut self, k: BkeySC<'_>) {
+        const { assert!(size_of::<[u64; ONSTACK_U64S]>() == size_of::<c::bkey_buf>() - size_of::<*mut c::bkey_i>()) };
+
+        if self.k == self.onstack_ptr() && k.k.u64s as usize > ONSTACK_U64S {
+            let p = unsafe { c::rust_kzalloc_nofail(HEAP_U64S * size_of::<u64>()) }.cast::<u64>();
+            assert!(!p.is_null(), "__GFP_NOFAIL allocation returned NULL");
+            // SAFETY: a fresh buffer, room for any key
+            unsafe { core::ptr::copy_nonoverlapping(self.onstack.as_ptr(), p, ONSTACK_U64S) };
+            self.k = p.cast();
+        }
+        // SAFETY: init()'s @k, which is @onstack with room for @k, or the
+        // heap buffer, with room for any key
+        unsafe { copy_key(self.k.cast(), k) }
+    }
+
+    pub fn exit(&mut self) {
+        if !self.k.is_null() && self.k != self.onstack_ptr() {
+            // SAFETY: reassemble()'s
+            unsafe { c::rust_kfree(self.k.cast()) };
+        }
+        self.k = core::ptr::null_mut();
+    }
+
+    /// exit(), for a key RCU readers may still be reading: the heap buffer is
+    /// freed a grace period later, and @k is left pointing at it - so this must
+    /// be the last thing done with the bkey_buf, and its memory freed no
+    /// sooner.
+    /// May sleep.
+    pub fn exit_rcu(&mut self) {
+        if !self.k.is_null() && self.k != self.onstack_ptr() {
+            // SAFETY: reassemble()'s, kmalloc()'d
+            unsafe { c::rust_kfree_rcu_mightsleep(self.k.cast()) };
+        }
     }
 }
 

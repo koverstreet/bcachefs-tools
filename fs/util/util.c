@@ -1465,6 +1465,11 @@ void rust_bio_pages_free(void *p, size_t size)
 	free_pages((unsigned long) p, get_order(size));
 }
 
+void rust_kfree_rcu_mightsleep(void *p)
+{
+	kfree_rcu_mightsleep(p);
+}
+
 /*
  * For Rust, what it can't call itself: static inlines and macros, and in
  * places which of the two differs between the kernel and userspace.
