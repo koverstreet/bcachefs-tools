@@ -25,6 +25,8 @@ use crate::util::ffi::Opaque;
 use crate::util::log::{log_no_fs, LogLevel};
 use crate::util::rcu::read_lock;
 use crate::percpu_field;
+use crate::sb::counters::events;
+use crate::util::percpu::{CpuGuard, PerCpuRef};
 use core::cell::Cell;
 use core::pin::Pin;
 use cstruct_macros::c_export;
@@ -268,43 +270,152 @@ pub fn bch2_fs_usage_read_short(c: &Opaque<c::bch_fs>) -> c::bch_fs_usage_short 
 
 pub use c::DiskReservation;
 
+/// The slot a reservation at @nr_replicas lives in. Counts above
+/// BCH_REPLICAS_MAX are real - durability is per device - and share the last
+/// slot, which is the conservative direction. 0 is a bug; the clamp only keeps
+/// it in bounds.
+fn disk_res_slot(nr_replicas: u32) -> usize {
+    debug_assert!(nr_replicas != 0);
+    nr_replicas.clamp(1, c::BCH_REPLICAS_MAX as u32) as usize - 1
+}
+
+impl Fs {
+    /// May we write fewer copies than were asked for, rather than returning
+    /// ENOSPC? See enum bch_write_degraded_actions for why the default is
+    /// what it is.
+    fn write_degraded_ok(&self) -> bool {
+        match c::bch_write_degraded_actions(self.opts.write_degraded.into()) {
+            c::bch_write_degraded_actions::BCH_WRITE_DEGRADED_yes => true,
+            c::bch_write_degraded_actions::BCH_WRITE_DEGRADED_no  => false,
+            _ => !self.flag(c::bch_fs_flags::BCH_FS_all_devs_rw),
+        }
+    }
+}
+
 impl<'f> DiskReservation<'f> {
     pub fn new(fs: &'f Fs) -> Self {
         DiskReservation { c: fs, sectors: Cell::new(0), generation: Cell::new(0), nr_replicas: Cell::new(0) }
     }
 
+    /// The count of sectors reserved at @nr_replicas, this CPU's of it.
+    fn online_reserved(&self, nr_replicas: u32) -> PerCpuRef<'f, u64> {
+        percpu_field!(self.c.capacity.pcpu.get(), counters.online_reserved).at(disk_res_slot(nr_replicas))
+    }
+
+    /// To count @nr_replicas: what it holds moves slot with it, the sub and
+    /// the add with preemption off between them.
+    fn move_slot(&self, nr_replicas: u32) {
+        let (old, sectors) = (self.nr_replicas.get(), self.sectors.get());
+
+        if sectors != 0 && disk_res_slot(old) != disk_res_slot(nr_replicas) {
+            let _cpu = CpuGuard::new();
+            self.online_reserved(old).add(sectors.wrapping_neg());
+            self.online_reserved(nr_replicas).add(sectors);
+        }
+        self.nr_replicas.set(nr_replicas);
+    }
+
+    /// Charging only ever raises the count: erring high reserves more than we
+    /// need, erring low reserves space we can't place. Only write_degraded
+    /// lowers it.
+    fn set_nr_replicas(&self, nr_replicas: u32) {
+        if nr_replicas > self.nr_replicas.get() {
+            self.move_slot(nr_replicas);
+        }
+    }
+
     /// Reserve @sectors of data at @nr_replicas copies, on top of what it
-    /// already holds: bch2_disk_reservation_add().
-    pub fn add(&self, sectors: u64, nr_replicas: u32, flags: c::bch_reservation_flags) -> Result<(), BchError> {
-        // SAFETY: its fields are Cells
-        ret_to_result(unsafe {
-            c::rust_bch2_disk_reservation_add(self.c.as_ptr(), self.as_mut_ptr(), sectors, nr_replicas,
-                                              flags.bits() as i32)
-        })
+    /// already holds. On ENOSPC, at fewer copies if write_degraded allows it:
+    /// its nr_replicas is then the count to write at.
+    #[track_caller]
+    pub fn add(&self, sectors: u64, mut nr_replicas: u32, flags: c::bch_reservation_flags) -> Result<(), BchError> {
+        let wanted = nr_replicas;
+        loop {
+            let ret = self.add_physical(sectors * u64::from(nr_replicas), nr_replicas, flags);
+            if ret.is_ok() && nr_replicas < wanted {
+                let from = core::panic::Location::caller();
+                self.c.event_add_trace(events::disk_reservation_degraded, sectors, |out| {
+                    crate::prt!(out, "wanted {wanted} replicas, got {nr_replicas}: {sectors} sectors from {from}");
+                });
+            }
+
+            match ret {
+                Err(e) if e.matches(c::ENOSPC) && nr_replicas > 1 && self.c.write_degraded_ok() => {
+                    // the failed attempt set the count; retry one lower
+                    nr_replicas -= 1;
+                    self.move_slot(nr_replicas);
+                }
+                r => return r,
+            }
+        }
     }
 
     /// Reserve @sectors physical - already weighted by replicas, not data
-    /// sectors to multiply - charged at @nr_replicas: __bch2_disk_reservation_add().
-    /// For a delta crediting back overwritten keys at their own counts:
-    /// sum_sector_overwrites()'s.
+    /// sectors to multiply - charged at @nr_replicas: for a delta crediting
+    /// back overwritten keys at their own counts, sum_sector_overwrites()'s.
     ///
-    /// XXX: the space arithmetic its callers do belongs elsewhere - with the
-    /// rest of buckets.c in Rust, this goes.
+    /// XXX: a smell - that arithmetic probably belongs elsewhere, and when it
+    /// goes, so does this.
     pub fn add_physical(&self, sectors: u64, nr_replicas: u32, flags: c::bch_reservation_flags)
         -> Result<(), BchError>
     {
+        self.set_nr_replicas(nr_replicas);
+
+        // Not a hard assert: bi_data_replicas isn't validated, so a damaged
+        // inode can reach here with a zero count
+        debug_assert!(sectors == 0 || self.nr_replicas.get() != 0);
+
+        // nothing to reserve: e.g. fallocate over a range that has enough copies
+        if sectors == 0 {
+            return Ok(());
+        }
+
+        // userspace always takes the slowpath, as C's does
+        #[cfg(kernel)]
+        if self.add_cached(sectors) {
+            return Ok(());
+        }
+        self.add_slowpath(sectors, flags)
+    }
+
+    /// @sectors from this CPU's cache for its slot, if it has that many.
+    #[cfg(kernel)]
+    fn add_cached(&self, sectors: u64) -> bool {
+        let nr_replicas = self.nr_replicas.get();
+        let cache = percpu_field!(self.c.capacity.pcpu.get(), sectors_available).at(disk_res_slot(nr_replicas)).word();
+
+        let mut old = cache.read();
+        loop {
+            if sectors > old {
+                return false;
+            }
+            match cache.cmpxchg(old, old - sectors) {
+                Ok(_)  => break,
+                Err(v) => old = v,
+            }
+        }
+
+        self.online_reserved(nr_replicas).add(sectors);
+        self.sectors.set(self.sectors.get() + sectors);
+        true
+    }
+
+    fn add_slowpath(&self, sectors: u64, flags: c::bch_reservation_flags) -> Result<(), BchError> {
         // SAFETY: its fields are Cells
         ret_to_result(unsafe {
-            c::rust_bch2_disk_reservation_add_physical(self.c.as_ptr(), self.as_mut_ptr(), sectors, nr_replicas,
-                                                       flags.bits() as i32)
+            c::bch2_disk_reservation_add_slowpath(self.c.as_ptr(), self.as_mut_ptr(), sectors, flags)
         })
     }
 
     /// Release what it holds, keeping it usable - for a loop reserving per
-    /// iteration: bch2_disk_reservation_put().
+    /// iteration.
     pub fn put(&self) {
-        // SAFETY: its fields are Cells
-        unsafe { c::rust_bch2_disk_reservation_put(self.c.as_ptr(), self.as_mut_ptr()) };
+        let sectors = self.sectors.replace(0);
+        if sectors != 0 {
+            // a lost count clamps to slot 0: these were charged elsewhere
+            crate::warn_on!(self.nr_replicas.get() == 0);
+            self.online_reserved(self.nr_replicas.get()).add(sectors.wrapping_neg());
+        }
     }
 
     pub fn as_mut_ptr(&self) -> *mut c::disk_reservation {
