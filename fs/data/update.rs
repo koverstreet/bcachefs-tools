@@ -360,9 +360,7 @@ impl c::data_update {
             c::bio_init(&mut self.op.wbio.bio, core::ptr::null_mut(), self.bvecs, nr_vecs as u16, 0);
         }
         if pages::alloc_pages(&mut self.op.wbio.bio, block_size, buf_bytes as usize, c::GFP_KERNEL).is_err() {
-            // SAFETY: kzalloc()'d, above
-            unsafe { c::rust_kfree(self.bvecs.cast()) };
-            self.bvecs = core::ptr::null_mut();
+            self.bios_free();
             return Err(c::ENOMEM.into());
         }
 
