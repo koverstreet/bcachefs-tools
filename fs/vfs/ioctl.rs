@@ -119,13 +119,19 @@ fn file_ioctl(file: &File, inode: &InodeInfo, cmd: c_uint, user: UserPtr) -> Res
     }
 }
 
+pub(crate) fn fs_file_ioctl(file: &File, cmd: c_uint, arg: c_ulong) -> c_long {
+    // SAFETY: an open file of ours: its inode's referenced while it's open
+    let inode = unsafe { InodeInfo::from_inode((*file.as_ptr()).f_inode) };
+    ioctl_ret(file_ioctl(file, inode, cmd, UserPtr::from_addr(arg as usize)))
+}
+
+/// For C's file ops, until they're Rust.
+///
 /// # Safety
 /// @file is an open file of ours.
 #[c_export]
 pub unsafe fn bch2_fs_file_ioctl(file: *mut c::file, cmd: c_uint, arg: c_ulong) -> c_long {
-    // SAFETY: an open file of ours: its inode's referenced while it's open
-    let inode = unsafe { InodeInfo::from_inode((*file).f_inode) };
-    ioctl_ret(file_ioctl(unsafe { File::from_raw(file) }, inode, cmd, UserPtr::from_addr(arg as usize)))
+    fs_file_ioctl(unsafe { File::from_raw(file) }, cmd, arg)
 }
 
 /* The handlers */

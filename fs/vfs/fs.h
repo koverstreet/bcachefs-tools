@@ -138,6 +138,7 @@ static inline void bch2_dir_casefold_changed(struct dentry *dentry) {}
 #endif
 
 #include "vfs/attr_gen.h"
+#include "vfs/dir_gen.h"
 #include "vfs/export_gen.h"
 #include "vfs/inode_gen.h"
 #include "vfs/namei_gen.h"
