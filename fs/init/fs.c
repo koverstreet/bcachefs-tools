@@ -727,7 +727,6 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_fs_counters_exit(c);
 	free_percpu(c->counters.now);
 	bch2_fs_copygc_exit(c);
-	bch2_fs_compress_exit(c);
 	bch2_io_clock_exit(&c->io_clock[WRITE]);
 	bch2_io_clock_exit(&c->io_clock[READ]);
 	bch2_fs_btree_exit(c);

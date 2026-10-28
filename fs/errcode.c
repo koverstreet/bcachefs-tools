@@ -116,20 +116,6 @@ enum bch_errcode blk_status_to_bch_err(blk_status_t err)
 	}
 }
 
-enum bch_errcode zstd_err_to_bch_err(ZSTD_ErrorCode err)
-{
-	if (!err)
-		return 0;
-
-	switch (err) {
-#undef ZSTD_error
-#define ZSTD_error(n, nr) case ZSTD_error_##n:	return BCH_ERR_ZSTD_error_##n;
-		ZSTD_ERRS()
-#undef ZSTD_error
-		default:		return BCH_ERR_ZSTD_error_unknown;
-	}
-}
-
 int __bch2_err_throw(struct bch_fs *c, int err)
 {
 	BUG_ON(err >= 0);

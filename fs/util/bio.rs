@@ -51,6 +51,8 @@ mod owned;
 #[cfg(kernel)]
 pub use iter::{FolioVec, Folios};
 pub use iter::{Chunk, Chunks, Segment, Segments, Walk};
+#[cfg(kernel)]
+pub(crate) use iter::nth_page;
 pub use owned::{BioBox, BioBuf, BioBufPtr, BioInPlace, BioSet, Endio, HasBio, RawBio};
 
 // A bvec_iter's offset into its bvec, as a place: bi_offset - bi_bvec_done

@@ -46,7 +46,6 @@
 #[path = "btree/write_buffer_types.rs"] pub mod btree_write_buffer_types;
 #[path = "btree/write_types.rs"] pub mod btree_write_types;
 #[path = "data/compress_defs.rs"] pub mod data_compress_defs;
-#[path = "data/compress_types.rs"] pub mod data_compress_types;
 #[path = "data/copygc_types.rs"] pub mod data_copygc_types;
 #[path = "data/ec/create_types.rs"] pub mod data_ec_create_types;
 #[path = "data/ec/format.rs"] pub mod data_ec_format;
@@ -219,7 +218,6 @@ pub mod c {
     pub use super::btree_write_buffer_types::*;
     pub use super::btree_write_types::*;
     pub use super::data_compress_defs::*;
-    pub use super::data_compress_types::*;
     pub use super::data_copygc_types::*;
     pub use super::data_ec_create_types::*;
     pub use super::data_ec_format::*;

@@ -795,7 +795,9 @@ pub struct Fs {
     #[init(RustOnly::new(crate::new_lock!(crate::util::alloc::KVVec::new())))]
     pub(crate) lost_extents_ranges: rust_only!(Lock<c::mutex, crate::util::alloc::KVVec<core::ops::Range<c::bpos>>>),
 
-    pub compress: c::bch_fs_compress,
+    #[pin]
+    #[init(RustOnly::new(::pin_init::zeroed::<crate::data::compress::Compress>()))]
+    pub(crate) compress: rust_only!(crate::data::compress::Compress),
     #[pin]
     #[init(c::bch_fs_reconcile::init())]
     pub reconcile: c::bch_fs_reconcile,

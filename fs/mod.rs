@@ -170,6 +170,7 @@ pub mod vfs {
 #[path = "fs/xattr.rs"]        pub mod xattr;
 pub mod data {
     pub mod checksum;
+    pub mod compress;
     pub mod copygc;
     pub mod durability;
     pub mod ec {

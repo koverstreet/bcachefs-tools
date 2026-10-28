@@ -28,7 +28,7 @@ use crate::util::kernel::PAGE_SIZE;
 ///
 /// # Safety
 /// @page is a bvec's, which has at least n + 1 pages.
-unsafe fn nth_page(page: *mut c::page, n: usize) -> *mut c::page {
+pub(crate) unsafe fn nth_page(page: *mut c::page, n: usize) -> *mut c::page {
     // SAFETY: the caller's
     #[cfg(kernel)]
     return unsafe { page.add(n) };

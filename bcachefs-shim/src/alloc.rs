@@ -62,6 +62,11 @@ impl<T> KVVec<T> {
         Ok(KVVec(v))
     }
 
+    /// Its room past its length: as yet anything.
+    pub fn spare_capacity_mut(&mut self) -> &mut [core::mem::MaybeUninit<T>] {
+        self.0.spare_capacity_mut()
+    }
+
     /// Make room for @additional more: grows to max(capacity * 2, len +
     /// additional), as the kernel's does.
     pub fn reserve(&mut self, additional: usize, _flags: Flags) -> Result<(), AllocError> {

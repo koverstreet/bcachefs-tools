@@ -35,6 +35,5 @@ enum bch_errcode blk_status_to_bch_err(blk_status_t);
 
 #include <linux/zstd_errors.h>
 
-enum bch_errcode zstd_err_to_bch_err(ZSTD_ErrorCode);
 
 #endif /* _BCACHFES_ERRCODE_H */

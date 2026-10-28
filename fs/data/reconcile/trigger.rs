@@ -379,8 +379,7 @@ macro_rules! reconcile_opts_to_text {
 
         if r.background_compression() != 0 || r.background_compression_from_inode() != 0 {
             write!(out, " background_compression=");
-            // SAFETY: @out's printbuf, borrowed
-            unsafe { c::bch2_compression_opt_to_text(out.as_raw(), r.background_compression().into()) };
+            crate::data::compress::opt_to_text(out, r.background_compression().into());
             from_inode(out, r.background_compression_from_inode());
         }
         if r.background_target() != 0 || r.background_target_from_inode() != 0 {
