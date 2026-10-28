@@ -32,7 +32,6 @@ use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
 use crate::fs::Fs;
-use crate::util::backref::BackRef;
 use crate::util::closure::StackClosure;
 use crate::util::ffi::Opaque;
 use crate::util::hash::{hash_64, Fold};
@@ -201,21 +200,6 @@ impl RefGuard<OpenBucketRef> {
         let idx = self.idx();
         self.leak();
         idx
-    }
-
-    /// Its borrow of the filesystem traded for @fs's promise, that the
-    /// filesystem outlives what holds @fs: for a stripe being made, which
-    /// the filesystem owns, to hold its pins by.
-    ///
-    /// # Safety
-    /// As BackRef::get()'s: the pin is drained with @fs's holder.
-    pub unsafe fn bind(self, fs: &BackRef<Fs>) -> OpenBucket {
-        assert!(core::ptr::eq(self.fs(), &**fs), "open bucket {} bound to another filesystem", self.idx().get());
-        let ob = self.raw();
-        self.leak();
-        // SAFETY: the pin, handed over; the slot's, of a filesystem that
-        // outlives the guard
-        unsafe { RefGuard::adopt(OpenBucketRef::from_c(ob)) }
     }
 
     /// Claimed by the writer of block @ec_idx of stripe @ec: its pin the

@@ -595,7 +595,7 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
         let dev_stripe = dev_stripe_state_get(t, v.disk_label.into())?;
         let mut req = t.alloc_request(target, false, core::ptr::null_mut(), 0, 0,
                                       c::bch_watermark::BCH_WATERMARK_normal, c::bch_write_flags::empty(), cl.as_ptr())?;
-        match new_stripe_alloc_buckets(t, &mut req, dev_stripe, &mut i, ns.fs_ref(), true) {
+        match new_stripe_alloc_buckets(t, &mut req, dev_stripe, &mut i, true) {
             Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {
                 t.wait_on_allocator(&mut req, e, &cl)?;
                 Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))

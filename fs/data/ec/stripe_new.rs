@@ -196,18 +196,6 @@ pub(crate) enum StripeBlock {
     Claimed(EcOpenBucket),
 }
 
-impl StripeBlock {
-    /// For the stripe being made whose filesystem @fs is.
-    ///
-    /// # Safety
-    /// It goes in a stripe being made's blocks[]: the filesystem drains them
-    /// before it goes.
-    pub(crate) unsafe fn new(ob: OpenBucket, fs: &BackRef<Fs>) -> Self {
-        // SAFETY: the caller's
-        StripeBlock::Pinned(unsafe { ob.bind(fs) })
-    }
-}
-
 impl core::ops::Deref for StripeBlock {
     type Target = OpenBucketRef;
 
@@ -440,7 +428,7 @@ impl StripeNew {
         core::ptr::from_ref(self).cast_mut().cast()
     }
 
-    /// Its filesystem, for StripeBlock::new() and reserve_parity().
+    /// Its filesystem, for reserve_parity().
     pub(crate) fn fs_ref(&self) -> &BackRef<Fs> {
         &self.fs
     }

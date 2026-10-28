@@ -49,8 +49,8 @@ fn blocks_centroid(fs: &Fs, v: &c::Stripe<Validated>, blocks: &[Slot]) -> u64 {
 /// spreading: one at a time, the centroid moving as they're placed.
 #[allow(clippy::too_many_arguments)]
 fn alloc_blocks(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripe: &mut c::dev_stripe_state,
-                v: &mut c::Stripe<Validated>, blocks: &mut [Slot], stripe_fs: &BackRef<Fs>,
-                data_type: c::bch_data_type, slots: core::ops::Range<usize>, have: &mut usize)
+                v: &mut c::Stripe<Validated>, blocks: &mut [Slot], data_type: c::bch_data_type,
+                slots: core::ops::Range<usize>, have: &mut usize)
     -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -67,8 +67,7 @@ fn alloc_blocks(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripe: &m
             let j = slots.clone().find(|&j| !blocks[j].gotten()).expect("a block left to fill");
             req.devs_may_alloc.d.clear(ob.dev() as usize);
             v.block_ptrs_mut()[j] = ob.ptr();
-            // SAFETY: @blocks is a stripe being made's, alloc_buckets()' caller's
-            blocks[j].fill(unsafe { StripeBlock::new(ob, stripe_fs) });
+            blocks[j].fill(StripeBlock::Pinned(ob));
             *have += 1;
         }
         ret?;
@@ -82,7 +81,7 @@ fn alloc_blocks(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripe: &m
 /// preference: the allocator won't use a device sharing a domain with a
 /// block already placed.
 fn alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripes: &mut c::DevStripes,
-                 s: &mut Internal, stripe_fs: &BackRef<Fs>) -> Result<(), BchError> {
+                 s: &mut Internal) -> Result<(), BchError> {
     let fs = t.fs();
     let v = s.new_stripe.stripe_mut();
     let (nr_blocks, nr_parity) = (usize::from(v.nr_blocks), usize::from(v.nr_redundant));
@@ -113,10 +112,10 @@ fn alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripes: 
             "new stripe with {have_data}/{nr_data} data blocks and {have_parity}/{nr_parity} parity");
 
     let blocks = &mut s.blocks;
-    alloc_blocks(t, req, &mut stripes.parity_stripe, v, blocks, stripe_fs,
-                 c::bch_data_type::BCH_DATA_parity, nr_data..nr_blocks, &mut have_parity)?;
-    alloc_blocks(t, req, &mut stripes.block_stripe, v, blocks, stripe_fs,
-                 c::bch_data_type::BCH_DATA_user, 0..nr_data, &mut have_data)
+    alloc_blocks(t, req, &mut stripes.parity_stripe, v, blocks, c::bch_data_type::BCH_DATA_parity,
+                 nr_data..nr_blocks, &mut have_parity)?;
+    alloc_blocks(t, req, &mut stripes.block_stripe, v, blocks, c::bch_data_type::BCH_DATA_user,
+                 0..nr_data, &mut have_data)
 }
 
 /// Once every block's allocated, the centroid's settled: each new block far
@@ -127,7 +126,7 @@ fn alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripes: 
 /// effort, so it never makes things worse: an allocation that fails keeps the
 /// original - but a restart, which ends the attempt.
 fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, s: &mut Internal,
-                       stripe_fs: &BackRef<Fs>, had: &Bitmap) -> Result<(), BchError> {
+                       had: &Bitmap) -> Result<(), BchError> {
     const MAX: usize = c::BCH_BKEY_PTRS_MAX as usize;
     let fs = t.fs();
 
@@ -192,8 +191,7 @@ fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, s: 
         // nothing's written to a new block yet: swapping it is a put and a
         // new bucket
         if new_frac.abs_diff(centroid) < dist / 2 {
-            // SAFETY: into @s's blocks[], a stripe being made's
-            let old = core::mem::replace(&mut s.blocks[i], Slot::Bucket(unsafe { StripeBlock::new(ob, stripe_fs) }));
+            let old = core::mem::replace(&mut s.blocks[i], Slot::Bucket(StripeBlock::Pinned(ob)));
             assert!(matches!(old, Slot::Bucket(_)), "reallocating a stripe block that isn't a new bucket");
             sum = sum.wrapping_add(new_frac).wrapping_sub(fi);
             frac[i] = Some(new_frac);
@@ -268,7 +266,7 @@ fn shrink_to_gotten(s: &mut Internal, nr_blocks: usize, nr_parity: usize) {
 /// write to fall back to replication. The request's left as it was.
 pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request,
                                        dev_stripe: &c::ec_dev_stripe_state, s: &mut Internal,
-                                       stripe_fs: &BackRef<Fs>, may_shrink: bool)
+                                       may_shrink: bool)
     -> Result<(), BchError>
 {
     let fs = t.fs();
@@ -291,7 +289,7 @@ pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::al
         req.flags |= c::bch_write_flags::BCH_WRITE_alloc_nowait;
     }
 
-    let mut ret = dev_stripe.lock.lock_trans(t).and_then(|mut g| alloc_buckets(t, req, g.protected(), s, stripe_fs));
+    let mut ret = dev_stripe.lock.lock_trans(t).and_then(|mut g| alloc_buckets(t, req, g.protected(), s));
 
     // as C's: the errors themselves, not their classes
     let blocked = BchError::from(bch_errcode::BCH_ERR_bucket_alloc_blocked);
@@ -319,7 +317,7 @@ pub(crate) fn new_stripe_alloc_buckets(t: &TransAttempt<'_, '_>, req: &mut c::al
     // not after shrinking, which moved blocks under @had: and a stripe we
     // could barely allocate has no spare buckets to do better with
     if ret.is_ok() && !shrunk && gotten(s, nr_blocks) == nr_blocks {
-        ret = reallocate_outliers(t, req, s, stripe_fs, &had);
+        ret = reallocate_outliers(t, req, s, &had);
     }
 
     saved.restore(req);
@@ -431,7 +429,7 @@ pub(crate) fn stripe_idx_alloc(t: &TransAttempt<'_, '_>, s: &mut Internal) -> Re
 /// stripe shrunk to what it got, if they can't be had. Packed first, where
 /// devices are low on space.
 fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, dev_stripe: &c::ec_dev_stripe_state,
-                          s: &mut Internal, stripe_fs: &BackRef<Fs>) -> Result<(), BchError> {
+                          s: &mut Internal) -> Result<(), BchError> {
     if s.reuse.is_none() && should_reuse_stripe(t.fs(), s) {
         try_stripe_reuse(t, s)?;
     }
@@ -439,7 +437,7 @@ fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, 
     let saved = (req.watermark, req.flags);
     req.watermark = c::bch_watermark::BCH_WATERMARK_stripe;
     req.flags |= c::bch_write_flags::BCH_WRITE_alloc_nowait;
-    let ret = new_stripe_alloc_buckets(t, req, dev_stripe, s, stripe_fs, false);
+    let ret = new_stripe_alloc_buckets(t, req, dev_stripe, s, false);
     (req.watermark, req.flags) = saved;
 
     match ret {
@@ -450,7 +448,7 @@ fn alloc_or_reuse_buckets(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, 
     if s.reuse.is_none() {
         try_stripe_reuse(t, s)?;
     }
-    new_stripe_alloc_buckets(t, req, dev_stripe, s, stripe_fs, true)
+    new_stripe_alloc_buckets(t, req, dev_stripe, s, true)
 }
 
 /// @s, unless it is already: a slot, buckets from @dev_stripe, the disk
@@ -461,7 +459,7 @@ pub(crate) fn stripe_alloc_or_reuse(t: &TransAttempt<'_, '_>, req: &mut c::alloc
     if s.slot_claim.is_none() {
         stripe_idx_alloc(t, s)?;
     }
-    alloc_or_reuse_buckets(t, req, dev_stripe, s, stripe_fs)?;
+    alloc_or_reuse_buckets(t, req, dev_stripe, s)?;
 
     if s.res.as_ref().is_none_or(|r| r.sectors() == 0) {
         // NOFAIL: it doesn't fail
