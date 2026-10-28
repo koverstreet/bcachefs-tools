@@ -379,7 +379,8 @@ pub struct bch_fs_allocator {
     #[c_lock("spinlock_t freelist_lock")]
     pub freelist_lock: Lock<c::spinlock_t, OpenBucketsFree, OpenBucketsFreeNr>,
     pub freelist_wait: c::closure_waitlist,
-    pub last_stuck: c_ulong,
+    /* jiffies at the last allocator stuck dump; claimed by cmpxchg */
+    pub last_stuck: crate::util::bitmap::AtomicULong,
 
     pub open_buckets_wait: c::closure_waitlist,
     #[pin]

@@ -28,6 +28,14 @@ c_extern! {
 }
 
 impl c::journal {
+    /// The lowest watermark it takes reservations at, read without the
+    /// journal's lock, which it's written under.
+    pub fn watermark(&self) -> c::bch_watermark {
+        // SAFETY: ours, only ever written with a watermark: read once, as
+        // READ_ONCE()
+        unsafe { core::ptr::read_volatile(&raw const self.fastpath.watermark) }
+    }
+
     /// The open bucket pool can't serve below @watermark - 0 for all of them:
     /// the journal throttles work that would need what it can't have. The
     /// unchanged case a compare, as C's bch2_journal_set_alloc_watermark()

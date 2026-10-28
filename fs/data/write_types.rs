@@ -47,6 +47,18 @@ c_enum! {
     }
 }
 
+macro_rules! write_flag_strs {
+    ($(($n:ident)),* $(,)?) => { [$(stringify!($n)),*] };
+}
+const WRITE_FLAG_STRS: &[&str] = &c::BCH_WRITE_FLAGS!(write_flag_strs);
+
+impl c::bch_write_flags {
+    /// As comma separated names.
+    pub fn to_text(self, out: &mut crate::util::Printbuf) {
+        out.bitflags(WRITE_FLAG_STRS, self.bits().into())
+    }
+}
+
 nest! {
     #[derive(CStruct, TypeInfo)]*
     #[repr(C)]*
