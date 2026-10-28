@@ -198,7 +198,7 @@ impl Fs {
 fn dev_has_open_write_point(fs: &Fs, ca: &c::bch_dev) -> bool {
     fs.allocator.open_buckets.iter().any(|ob| {
         let _l = Lock::from_c(&ob.lock).lock();
-        ob.bits.valid() && !ob.bits.on_partial_list() && ob.dev == ca.dev_idx
+        ob.bits.valid() && !ob.bits.on_partial_list() && ob.dev.get() == ca.dev_idx
     })
 }
 

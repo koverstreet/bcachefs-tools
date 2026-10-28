@@ -15,7 +15,7 @@ use crate::util::percpu::{Counters, PerCpu};
 use crate::util::projections::Volatile;
 use crate::published;
 use core::ffi::{c_uint, c_ulong};
-use core::sync::atomic::{AtomicI32, AtomicU64};
+use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU64};
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, placed, CStruct, Fieldwise, Init, TypeInfo};
 use pin_init::pin_data;
 use nestify::nest;
@@ -71,6 +71,10 @@ pub struct OpenBucketIdx(core::num::NonZero<c::open_bucket_idx_t>);
 
 // SAFETY: None is all zeroes, as an Option of a NonZero is
 unsafe impl pin_init::ZeroableOption for OpenBucketIdx {}
+
+// SAFETY: a u16, any of which is an Option of one - 0 None
+unsafe impl crate::util::vstructs::Plain for Option<OpenBucketIdx> {}
+crate::tear_safe!(Option<OpenBucketIdx>);
 
 impl OpenBucketIdx {
     /// # Safety
@@ -161,23 +165,24 @@ nest! {
         pub pin: AtomicI32,
         /* handle already removed from ca->nr_open_buckets (bucket left free):
          * under freelist_lock */
-        pub free_uncounted: crate::util::projections::Volatile<bool>,
-        pub dev: u8,
-        pub generation: u8,
-        pub sectors_free: u32,
-        pub bucket: u64,
-        pub ec: *mut c::ec_stripe_new,
+        pub free_uncounted: Volatile<bool>,
+        pub dev: Volatile<u8>,
+        pub generation: Volatile<u8>,
+        pub sectors_free: Volatile<u32>,
+        pub bucket: Volatile<u64>,
+        #[c("struct ec_stripe_new *ec")]
+        pub ec: AtomicPtr<c::ec_stripe_new>,
 
         #[c("open_bucket_idx_t freelist")]
-        pub freelist: Option<OpenBucketIdx>,
+        pub freelist: Volatile<Option<OpenBucketIdx>>,
         #[c("open_bucket_idx_t hash")]
-        pub hash: Option<OpenBucketIdx>,
+        pub hash: Volatile<Option<OpenBucketIdx>>,
 
         /*
          * When an open bucket has an ec_stripe attached, this is the index of
          * the block in the stripe this open_bucket corresponds to:
          */
-        pub ec_idx: u8,
+        pub ec_idx: Volatile<u8>,
         #[c_bitfield]
         #>[bitfield(u8)]
         pub bits: pub struct open_bucket_bits {
@@ -380,7 +385,7 @@ pub struct bch_fs_allocator {
     #[pin]
     pub open_buckets: [c::open_bucket; c::OPEN_BUCKETS_COUNT as usize],
     #[c("open_bucket_idx_t open_buckets_hash[OPEN_BUCKETS_COUNT]")]
-    pub open_buckets_hash: [Option<OpenBucketIdx>; c::OPEN_BUCKETS_COUNT as usize],
+    pub open_buckets_hash: [Volatile<Option<OpenBucketIdx>>; c::OPEN_BUCKETS_COUNT as usize],
 
     pub write_points: [c::write_point; c::WRITE_POINT_MAX as usize],
     pub write_points_hash: [c::hlist_head; c::WRITE_POINT_HASH_NR as usize],

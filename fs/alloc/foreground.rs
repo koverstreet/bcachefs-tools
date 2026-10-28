@@ -121,24 +121,24 @@ impl OpenBucketRef {
     }
 
     pub fn dev(&self) -> u32 {
-        // SAFETY: fixed while it's open
-        unsafe { (*self.raw()).dev }.into()
+        // SAFETY: a live open_bucket; fixed while it's open
+        unsafe { (*self.raw()).dev.get() }.into()
     }
 
     pub fn generation(&self) -> u8 {
-        // SAFETY: fixed while it's open
-        unsafe { (*self.raw()).generation }
+        // SAFETY: a live open_bucket; fixed while it's open
+        unsafe { (*self.raw()).generation.get() }
     }
 
     pub fn bucket(&self) -> u64 {
-        // SAFETY: fixed while it's open
-        unsafe { (*self.raw()).bucket }
+        // SAFETY: a live open_bucket; fixed while it's open
+        unsafe { (*self.raw()).bucket.get() }
     }
 
     /// Its free space - its writer's, while it's being written: read once.
     pub fn sectors_free(&self) -> u32 {
-        // SAFETY: read once, volatile, as C's
-        unsafe { read_volatile(&raw const (*self.raw()).sectors_free) }
+        // SAFETY: a live open_bucket
+        unsafe { (*self.raw()).sectors_free.get() }
     }
 
     /// Its pins, as of now.
@@ -150,15 +150,15 @@ impl OpenBucketRef {
     /// The stripe being made that it's a block of, once a writer's claimed
     /// it: null if none.
     pub fn ec(&self) -> *mut c::ec_stripe_new {
-        // SAFETY: set before its holders have it, cleared when the stripe
-        // closes it
-        unsafe { (*self.raw()).ec }
+        // SAFETY: a live open_bucket. Set before its holders have it, cleared
+        // when the stripe closes it
+        unsafe { (*self.raw()).ec.load(Relaxed) }
     }
 
     /// Which block of @ec it is.
     pub fn ec_idx(&self) -> u8 {
         // SAFETY: as ec()'s
-        unsafe { (*self.raw()).ec_idx }
+        unsafe { (*self.raw()).ec_idx.get() }
     }
 }
 
@@ -212,8 +212,8 @@ impl RefGuard<OpenBucketRef> {
         // SAFETY: ->ec and ->ec_idx are the pin's holder's to set, before the
         // bucket's handed on; its writer reads them once it has it
         unsafe {
-            (*ob.as_ptr()).ec_idx = ec_idx;
-            (*ob.as_ptr()).ec = ec;
+            (*ob.as_ptr()).ec_idx.set(ec_idx);
+            (*ob.as_ptr()).ec.store(ec, Relaxed);
         }
         (EcOpenBucket { ob }, ob.as_ptr())
     }
@@ -259,7 +259,7 @@ impl Drop for EcOpenBucket {
         assert_eq!(pin, 0, "closing open bucket {}, claimed by a writer still holding its pin", self.idx().get());
         // SAFETY: open only for its stripe, which this ends
         unsafe {
-            (*ob).ec = core::ptr::null_mut();
+            (*ob).ec.store(core::ptr::null_mut(), Relaxed);
             __bch2_open_bucket_put(self.fs().as_ptr(), ob);
         }
     }
@@ -484,14 +484,13 @@ impl Fs {
         // and racing the writer as C's do
         unsafe {
             let a = &raw const (*self.as_ptr()).allocator;
-            let mut ob_idx = read_volatile(&raw const (*a).open_buckets_hash[slot]);
+            let mut ob_idx = (*a).open_buckets_hash[slot].get();
             while let Some(i) = ob_idx {
                 let ob = &raw const (*a).open_buckets[i.get()];
-                if u32::from(read_volatile(&raw const (*ob).dev)) == dev &&
-                   read_volatile(&raw const (*ob).bucket) == bucket {
+                if u32::from((*ob).dev.get()) == dev && (*ob).bucket.get() == bucket {
                     return Some(&*ob);
                 }
-                ob_idx = read_volatile(&raw const (*ob).hash);
+                ob_idx = (*ob).hash.get();
             }
         }
         None
@@ -507,7 +506,7 @@ impl Fs {
     pub fn bucket_set_discard_fast(&self, dev: u32, bucket: u64) -> bool {
         let Some(ob) = self.open_bucket(dev, bucket) else { return false };
         let _l = crate::locking::Lock::from_c(&ob.lock).lock();
-        if u32::from(ob.dev) != dev || ob.bucket != bucket {
+        if u32::from(ob.dev.get()) != dev || ob.bucket.get() != bucket {
             return false;
         }
         // SAFETY: its bitfield byte, under its lock as C sets the bit
