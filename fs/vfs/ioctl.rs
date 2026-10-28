@@ -27,6 +27,7 @@ use crate::util::ioctl::{arg, dir, input, no_arg, output, vstruct, Ioctl, UserAr
 use crate::util::kernel::{capable, Capability};
 use crate::util::log::LogMsg;
 use crate::vfs::inode::{InodeInfo, InodeRef};
+use crate::vfs::mount::WriteAccess;
 use crate::{bch_err, btree_trans, prt};
 use core::marker::PhantomData;
 use core::ptr::read_volatile;
@@ -162,23 +163,6 @@ impl<'f> MntIdmap<'f> {
     /// stack: ACLs and LSMs too.
     fn permission(self, inode: &InodeInfo, mask: u32) -> bool {
         unsafe { c::inode_permission(self.0, inode.vinode(), mask as c_int) == 0 }
-    }
-}
-
-/// Write access to a file's mount, for as long as this lives:
-/// mnt_want_write_file(), and mnt_drop_write_file() when it drops.
-struct WriteAccess<'a>(&'a File);
-
-impl<'a> WriteAccess<'a> {
-    fn get(file: &'a File) -> Result<Self, BchError> {
-        ret_to_result_void(unsafe { c::mnt_want_write_file(file.as_ptr()) })?;
-        Ok(WriteAccess(file))
-    }
-}
-
-impl Drop for WriteAccess<'_> {
-    fn drop(&mut self) {
-        unsafe { c::mnt_drop_write_file(self.0.as_ptr()) }
     }
 }
 

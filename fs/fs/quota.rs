@@ -225,10 +225,15 @@ mod vfs {
         }
 
         fn flush(&self, fs: &Fs, qid: c::bch_qid) {
+            if self.nr == 0 {
+                return;
+            }
+            // Charged only through the VFS:
+            let sb = fs.vfs_super().expect("quota warnings, but not mounted");
             for &(qtype, msg) in &self.m[..self.nr] {
                 unsafe {
                     let kqid = c::make_kqid(&raw mut c::init_user_ns, qtype as c::quota_type, qid.q[qtype]);
-                    c::quota_send_warning(kqid, (*fs.vfs_sb).s_dev, msg as c_char)
+                    c::quota_send_warning(kqid, sb.dev(), msg as c_char)
                 }
             }
         }

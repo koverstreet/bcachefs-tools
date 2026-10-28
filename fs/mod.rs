@@ -150,8 +150,11 @@ pub mod util;
 #[cfg(kernel)]
 pub mod vfs {
     pub mod dentry;
+    pub mod iattr;
     pub mod inode;
+    pub mod mount;
     pub mod status_fd;
+    pub mod super_block;
     pub mod ioctl;
 }
 #[path = "fs/xattr.rs"]        pub mod xattr;
