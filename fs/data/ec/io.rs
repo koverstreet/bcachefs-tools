@@ -51,11 +51,12 @@ use pin_init::{pin_data, pin_init, stack_pin_init, PinInit};
 pub struct BlockErrs([Option<BchError>; MAX_BLOCKS]);
 
 impl Fold for BlockErrs {
+    type Item = Self;
     /// Each block's errcode, raw: 0 for none
     type Acc = [AtomicI32; MAX_BLOCKS];
 
-    fn acc() -> Self::Acc {
-        core::array::from_fn(|_| AtomicI32::new(0))
+    fn acc() -> impl PinInit<Self::Acc> {
+        core::array::from_fn::<_, MAX_BLOCKS, _>(|_| AtomicI32::new(0))
     }
 
     fn fold(acc: &Self::Acc, v: Self) {

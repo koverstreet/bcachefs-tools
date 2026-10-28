@@ -5,8 +5,8 @@
 //! closure_get() before each bio, closure_put() in its endio, closure_sync()
 //! - without the continuation, which is the executor's: a task awaits the
 //! Gather. A fork-join's jobs folding their errors, first one wins; a flush's
-//! shards summing their counters; or () for a barrier on IOs that free
-//! themselves.
+//! shards summing their counters; () for a barrier on IOs that free
+//! themselves; or a KVVec of what each put, taken as they come - reaped.
 //!
 //!     stack_pin_init!(let g = Gather::<Result<(), BchError>>::new());
 //!     let r = g.get();                // one more in flight
@@ -29,10 +29,17 @@
 //! and the owner's frame waits for it. Await or wait before it's dropped:
 //! that Drop sleeps.
 //!
-//! No lock: what's put folds into atomics - Fold, a trait on what's put -
+//! No lock: what's put folds into atomics - Fold, a trait on the result -
 //! from any context, an endio's included, and the count, whether the owner
 //! has waited and whether a waiter is registered are one word, changed by
 //! cmpxchg, as closure_sub() changes a closure's.
+//!
+//! A Gather<KVVec<T>> collects what's put instead: each put is pushed,
+//! under an irqsave spinlock, onto a vec that has room for it. A put can't
+//! allocate, so the owner makes the room, getting each ref by try_get() -
+//! which can fail, where get() can't; get() on one doesn't build. The owner
+//! take()s what's been put so far while refs are still out, without waiting
+//! for the rest: reaping.
 //!
 //! The waiter is a Waker in a slot, as raw parts: an await's, or a sync
 //! wait's - which sleeps as closure_sync() does - waking its task, with a ref
@@ -52,7 +59,11 @@
 //! The Waker is woken in the last put's context - an endio's, interrupt
 //! context perhaps - so its wake must be safe there: the executor's is.
 
+use crate::c;
 use crate::errcode::{BchError, FirstErr};
+use crate::locking::Lock;
+use crate::new_lock;
+use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
 use crate::util::sleep::{sleep_until, task_waker, Sleep};
 use crate::util::task::Resumable;
 use core::marker::{PhantomData, PhantomPinned};
@@ -63,33 +74,46 @@ use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use pin_init::{pin_data, pin_init, PinInit};
 
-/// What a Gather's refs put, and how it's folded into one result:
+/// A Gather's result, and how what its refs put is folded into it:
 /// concurrently, from any context - an endio's - so into atomics.
 pub trait Fold: Sized {
+    /// What a ref puts.
+    type Item;
     /// Where the puts fold in.
     type Acc: Sync;
 
+    /// Puts need room made for them, before each ref's got: try_get().
+    const RESERVES: bool = false;
+
     /// The accumulator, as it is with nothing put.
-    fn acc() -> Self::Acc;
-    fn fold(acc: &Self::Acc, v: Self);
+    fn acc() -> impl PinInit<Self::Acc>;
+    fn fold(acc: &Self::Acc, v: Self::Item);
     /// The result, once every ref is put - as often as it's asked for.
     fn result(acc: &Self::Acc) -> Self;
+
+    /// Room for @refs more puts than have been: from the owner, who alone
+    /// makes room, so it's not racing another's.
+    fn reserve(_acc: &Self::Acc, _refs: usize) -> Result<(), AllocError> {
+        Ok(())
+    }
 }
 
 /// Nothing to fold: a barrier.
 impl Fold for () {
+    type Item = ();
     type Acc = ();
 
-    fn acc() {}
+    fn acc() -> impl PinInit<()> {}
     fn fold(_: &(), _: ()) {}
     fn result(_: &()) {}
 }
 
 /// The first error put, or Ok.
 impl Fold for Result<(), BchError> {
+    type Item = Self;
     type Acc = FirstErr;
 
-    fn acc() -> FirstErr {
+    fn acc() -> impl PinInit<FirstErr> {
         FirstErr::new()
     }
 
@@ -101,6 +125,57 @@ impl Fold for Result<(), BchError> {
 
     fn result(acc: &FirstErr) -> Self {
         acc.result()
+    }
+}
+
+/// What each ref put, in the order put. The result is what's been put since
+/// it was last asked for - as Gather::take()'s, which has it while refs are
+/// still out.
+///
+/// Its room: a put pushes within capacity, and only the owner grows it - in
+/// reserve(), outside the lock, by a new vec it moves the puts into - so
+/// capacity is kept at least the puts so far plus the refs out. A ref
+/// counted when room's made either has put - in the vec - or hasn't, as a
+/// put pushes before its ref's dropped from the count.
+impl<T: Send> Fold for KVVec<T> {
+    type Item = T;
+    type Acc = Lock<c::spinlock_t, KVVec<T>>;
+
+    const RESERVES: bool = true;
+
+    fn acc() -> impl PinInit<Self::Acc> {
+        new_lock!(KVVec::new())
+    }
+
+    fn fold(acc: &Self::Acc, v: T) {
+        let pushed = acc.lock().push_within_capacity(v).is_ok();
+        assert!(pushed, "Gather<KVVec> put with no room: a ref not from try_get()");
+    }
+
+    fn result(acc: &Self::Acc) -> Self {
+        core::mem::take(&mut *acc.lock())
+    }
+
+    fn reserve(acc: &Self::Acc, refs: usize) -> Result<(), AllocError> {
+        let (len, cap) = {
+            let v = acc.lock();
+            (v.len(), v.capacity())
+        };
+        if len + refs <= cap {
+            return Ok(());
+        }
+
+        let mut new = KVVec::with_capacity((len + refs).max(cap * 2), GFP_KERNEL)?;
+        let mut v = acc.lock();
+        for x in v.drain_all() {
+            // puts since are no more than the refs that were out: they fit
+            let pushed = new.push_within_capacity(x).is_ok();
+            debug_assert!(pushed);
+        }
+        core::mem::swap(&mut *v, &mut new);
+        drop(v);
+        // the old buffer freed with the lock dropped
+        Ok(())
     }
 }
 
@@ -159,6 +234,7 @@ width!(usize, AtomicUsize);
 pub struct Gather<T: Fold, W: Width = usize> {
     state:  W::Atomic,
     waiter: Slot,
+    #[pin]
     acc:    T::Acc,
     #[pin]
     _pin:   PhantomPinned,
@@ -221,16 +297,33 @@ impl<T: Fold, W: Width> Gather<T, W> {
         pin_init!(Self {
             state:  W::new(1),
             waiter: Slot::new(),
-            acc:    T::acc(),
+            acc     <- T::acc(),
             _pin:   PhantomPinned,
         })
     }
 
     /// A ref: one more thing in flight - from the owner, before it waits.
     pub fn get(&self) -> GatherRef<T, W> {
-        assert!(W::load(&self.state, Ordering::Relaxed) & Self::WAITED == 0,
-                "Gather::get() after its owner waited: get from a ref");
+        const { assert!(!T::RESERVES, "this Gather's refs are try_get()") };
+        self.owner_get()
+    }
+
+    /// A ref, with room made for its put: for a Fold that RESERVES.
+    pub fn try_get(&self) -> Result<GatherRef<T, W>, AllocError> {
+        let state = W::load(&self.state, Ordering::Relaxed);
+        Self::assert_owner(state);
+        // the owner's ref counted too: one put it won't make, room to spare
+        T::reserve(&self.acc, (state & Self::COUNT) as usize + 1)?;
+        Ok(self.get_ref())
+    }
+
+    fn owner_get(&self) -> GatherRef<T, W> {
+        Self::assert_owner(W::load(&self.state, Ordering::Relaxed));
         self.get_ref()
+    }
+
+    fn assert_owner(state: u64) {
+        assert!(state & Self::WAITED == 0, "Gather::get() after its owner waited: get from a ref");
     }
 
     /// A ref, from someone holding one.
@@ -248,7 +341,7 @@ impl<T: Fold, W: Width> Gather<T, W> {
     }
 
     /// Fold @v in, if there's one, and drop a ref: the last wakes the waiter.
-    fn put(&self, v: Option<T>) {
+    fn put(&self, v: Option<T::Item>) {
         if let Some(v) = v {
             T::fold(&self.acc, v);
         }
@@ -383,6 +476,22 @@ impl<T: Fold, W: Width> Gather<T, W> {
     }
 }
 
+impl<T: Send, W: Width> Gather<KVVec<T>, W> {
+    /// What's been put since the last take, in @out - emptied first - with
+    /// refs still out: the puts move into the buffer @out had, which is
+    /// given the room theirs had, so any yet to come still fit.
+    pub fn take(&self, out: &mut KVVec<T>) -> Result<(), AllocError> {
+        out.clear();
+        // only the owner - us - changes it
+        let cap = self.acc.lock().capacity();
+        if out.capacity() < cap {
+            out.reserve(cap, GFP_KERNEL)?;
+        }
+        core::mem::swap(&mut *self.acc.lock(), out);
+        Ok(())
+    }
+}
+
 #[pin_init::pinned_drop]
 impl<T: Fold, W: Width> PinnedDrop for Gather<T, W> {
     fn drop(self: Pin<&mut Self>) {
@@ -403,9 +512,9 @@ impl<T: Fold, W: Width> PinnedDrop for Gather<T, W> {
 pub struct GatherRef<T: Fold, W: Width = usize>(NonNull<Gather<T, W>>);
 
 // SAFETY: a Gather is atomics, and stays where it is until every ref is put;
-// what's put crosses to the owner's thread, so T: Send
-unsafe impl<T: Fold + Send, W: Width> Send for GatherRef<T, W> {}
-unsafe impl<T: Fold + Send, W: Width> Sync for GatherRef<T, W> {}
+// what's put crosses to the owner's thread, so T::Item: Send
+unsafe impl<T: Fold, W: Width> Send for GatherRef<T, W> where T::Item: Send {}
+unsafe impl<T: Fold, W: Width> Sync for GatherRef<T, W> where T::Item: Send {}
 
 impl<T: Fold, W: Width> GatherRef<T, W> {
     fn gather(&self) -> &Gather<T, W> {
@@ -415,11 +524,12 @@ impl<T: Fold, W: Width> GatherRef<T, W> {
 
     /// Another ref, for something this one's holder starts.
     pub fn get(&self) -> GatherRef<T, W> {
+        const { assert!(!T::RESERVES, "this Gather's refs are try_get(), by its owner") };
         self.gather().get_ref()
     }
 
     /// Fold @v into the result, and drop the ref.
-    pub fn put(self, v: T) {
+    pub fn put(self, v: T::Item) {
         let g = ManuallyDrop::new(self);
         g.gather().put(Some(v));
     }

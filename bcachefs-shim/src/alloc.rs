@@ -45,6 +45,9 @@ pub unsafe fn krealloc(p: *mut u8, size: usize) -> *mut u8 {
     unsafe { realloc(p.cast(), size).cast() }
 }
 
+/// What push_within_capacity() gives back: there was no room for it.
+pub struct PushError<T>(pub T);
+
 /// As the kernel's KVVec: a vector whose allocations can fail.
 pub struct KVVec<T>(Vec<T>);
 
@@ -69,6 +72,21 @@ impl<T> KVVec<T> {
         self.0.try_reserve(1).map_err(|_| AllocError)?;
         self.0.push(v);
         Ok(())
+    }
+
+    /// @v pushed if there's room, else given back.
+    pub fn push_within_capacity(&mut self, v: T) -> Result<(), PushError<T>> {
+        if self.0.len() < self.0.capacity() {
+            self.0.push(v);
+            Ok(())
+        } else {
+            Err(PushError(v))
+        }
+    }
+
+    /// Every element, by value; the buffer's kept.
+    pub fn drain_all(&mut self) -> std::vec::Drain<'_, T> {
+        self.0.drain(..)
     }
 
     pub fn extend_from_slice(&mut self, other: &[T], _flags: Flags) -> Result<(), AllocError>
