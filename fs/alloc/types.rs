@@ -288,22 +288,62 @@ pub struct write_point {
     #[init(write_point_alloc::init())]
     pub alloc: write_point_alloc,
     #[c_anon]
+    #[pin]
+    #[init(write_point_io::init())]
     pub io: write_point_io,
 }
 
+/* writes_lock's: the writes waiting for their index updates, and the clock of
+ * the write point's state */
 #[repr(C)]
 #[derive(CStruct)]
+pub struct WritePointWrites {
+    pub writes: c::list_head,
+    pub last_state_change: u64,
+    pub last_runtime: u64,
+}
+
+impl WritePointWrites {
+    /// Empty: the list pointing at itself, INIT_LIST_HEAD() - in place, and
+    /// pinned, so it stays pointing there.
+    fn init() -> impl ::pin_init::PinInit<Self> {
+        // SAFETY: all of it written, in place
+        unsafe {
+            ::pin_init::pin_init_from_closure(|slot: *mut Self| {
+                let writes = &raw mut (*slot).writes;
+                (&raw mut (*writes).next).write(writes);
+                (&raw mut (*writes).prev).write(writes);
+                (&raw mut (*slot).last_state_change).write(0);
+                (&raw mut (*slot).last_runtime).write(0);
+                Ok(())
+            })
+        }
+    }
+}
+
+published! {
+    /// What state the write point's writes are in, and how long it's spent
+    /// in each: written under writes_lock, read without it - the state by
+    /// bch2_write_queue()'s check, the times by bch2_write_point_to_text().
+    #[derive(CStruct)]
+    pub struct WritePointState {
+        #[c("enum write_point_state state")]
+        pub state: Volatile<u32>,
+        pub time: [Volatile<u64>; c::WRITE_POINT_STATE_NR as usize],
+    }
+}
+
+#[pin_data]
+#[repr(C)]
+#[derive(CStruct, Init)]
 pub struct write_point_io {
     pub __align: CacheAligned,
     pub index_update_work: c::work_struct,
 
-    pub writes: c::list_head,
-    pub writes_lock: c::spinlock_t,
-
-    pub state: c::write_point_state,
-    pub last_state_change: u64,
-    pub time: [u64; c::WRITE_POINT_STATE_NR as usize],
-    pub last_runtime: u64,
+    #[pin]
+    #[init(new_lock!(<- WritePointWrites::init(), ::pin_init::zeroed(), "&wp->writes_lock"))]
+    #[c_lock("spinlock_t writes_lock")]
+    pub writes_lock: Lock<c::spinlock_t, WritePointWrites, WritePointState>,
 }
 
 #[repr(C)]
