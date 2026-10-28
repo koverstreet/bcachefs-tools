@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0
 #
-# What the Rust/C boundary still has that nothing crosses:
+# What the Rust/C boundary still has that nothing crosses, and the Rust that
+# nothing names:
 #
 #   scripts/unused-c-exports.sh
 #
@@ -13,11 +14,20 @@
 #  - a C fn declared to Rust, c_extern!, that no Rust calls: its declaration
 #    goes - and the fn too, if it was there for Rust and C doesn't call it.
 #    Not one C calls with no prototype but the declaration's own, in the
-#    generated header: that's C's header now.
+#    generated header: that's C's header now;
+#  - a pub fn that nothing names: rustc warns of a private fn no one calls,
+#    but a pub one is the crate's interface whether or not anything uses it.
+#    What's left once its callers moved on - the Rust behind an export the
+#    first check removed, a shim from before the conversion. Some are a C
+#    API translated whole, its other half not yet needed: that's a call to
+#    make, not a deletion.
 #
-# Both come from the build's own records, build/cstruct/records.bin -
-# macro-generated ones included, #[cfg] resolved - so this checks the
-# configuration that was built.
+# The first two come from the build's own records, build/cstruct/records.bin
+# - macro-generated ones included, #[cfg] resolved - so they check the
+# configuration that was built. The third reads the sources: a name is used
+# if it's anywhere in our Rust, comments stripped, but its definitions, or
+# anywhere in C - so it sees every configuration, and a fn behind a cfg this
+# build didn't take is still checked.
 #
 # A call through a C name is one of:
 #  - a reference from one of the build's C objects (nm -u), which sees names C
@@ -73,9 +83,10 @@ git ls-files -z '*.c' '*.h' | grep -zv '_gen\.h$' |
         done' sh |
     grep -ohE '\b[A-Za-z_][A-Za-z0-9_]*\b' > "$tmp/c_names" || true
 
-# Names the build's C objects reference
+# Names the build's C objects reference. if, not &&: a .c with no object -
+# kernel-only C - mustn't be the loop's status, or pipefail ends the script
 git ls-files '*.c' | sed 's|^|build/|; s|\.c$|.o|' |
-    while read -r o; do [ -f "$o" ] && echo "$o"; done |
+    while read -r o; do if [ -f "$o" ]; then echo "$o"; fi; done |
     xargs -r nm -u | awk '$1 == "U" { print $2 }' | sort -u > "$tmp/c_refs"
 
 # Rust's extern "C" declarations: literal names, and pasted ones as
@@ -155,5 +166,43 @@ for name in $(cat "$tmp/externs"); do
     echo "$(git grep -n -E "fn $name\s*\(" -- '*.rs' | head -n1 | cut -d: -f1,2): $name: declared to Rust, and no Rust calls it - $why"
     found=1
 done
+
+# A pub fn no one names. Our Rust, comments stripped - a doc naming a fn
+# isn't a call - as words, and each name's definitions, to subtract.
+git ls-files -z '*.rs' | grep -zv '^fs/vendor/' | xargs -0 perl -0777 -ne '
+    s{("(?:[^"\\]|\\.)*")|//[^\n]*|/\*.*?\*/}{defined $1 ? $1 : ""}gse;
+    print "$_\n" for /\b([A-Za-z_]\w*)\b/g;
+    print "def $_\n" for /\bfn\s+([A-Za-z_]\w*)/g;
+' > "$tmp/rust_words"
+grep -v '^def ' "$tmp/rust_words" | sort | uniq -c | awk '{ print $2, $1 }' > "$tmp/rust_word_counts"
+awk '$1 == "def" { print $2 }' "$tmp/rust_words" | sort | uniq -c | awk '{ print $2, $1 }' > "$tmp/rust_def_counts"
+
+# Not those something outside our Rust reaches by name: C, through an
+# export or a symbol name, or the compiler, as a proc macro. An attribute
+# runs until its brackets close. Not a name that runs into {, # or $ - a
+# template's, a fn a macro or a format string pastes together.
+git ls-files -z '*.rs' | grep -zv '^fs/vendor/' | xargs -0 perl -ne '
+    if ($open || /^\s*#\[/) {
+        $attrs .= $_;
+        $open += tr/[// - tr/]//;
+        next;
+    }
+    next if m{^\s*//};
+    print "$ARGV:$.:$1\n"
+        if /^\s*pub(?:\([^)]*\))?\s+(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?(?:extern\s+"[^"]*"\s+)?fn\s+([A-Za-z_]\w*)(?![\w{#\$])/ &&
+           $attrs !~ /\b(?:proc_macro\w*|c_export|no_mangle|export_name)\b/;
+    $attrs = "";
+} continue { if (eof) { close ARGV; $attrs = ""; $open = 0 }' > "$tmp/pub_fns"
+
+cat "$tmp/c_names_u" "$tmp/c_refs" > "$tmp/c_all"
+awk -F: '
+    FILENAME == ARGV[1] { split($0, w, " "); words[w[1]] = w[2]; next }
+    FILENAME == ARGV[2] { split($0, d, " "); defs[d[1]] = d[2];  next }
+    FILENAME == ARGV[3] { c[$0] = 1; next }
+    words[$3] + 0 <= defs[$3] + 0 && !($3 in c) {
+        print $1 ":" $2 ": " $3 ": pub, and nothing names it"
+    }' "$tmp/rust_word_counts" "$tmp/rust_def_counts" "$tmp/c_all" "$tmp/pub_fns" > "$tmp/unused_pub"
+cat "$tmp/unused_pub"
+[ -s "$tmp/unused_pub" ] && found=1
 
 [ "$found" = 0 ]
