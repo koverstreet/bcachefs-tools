@@ -356,6 +356,13 @@ impl<'a> BioRange<'a> {
         }
     }
 
+    /// Its first @bytes. Panics past its end.
+    pub fn take(mut self, bytes: u32) -> Self {
+        assert!(bytes <= self.len(), "the first {bytes} bytes of a bio range of {}", self.len());
+        self.iter.bi_size = bytes;
+        self
+    }
+
     pub fn segments(self) -> Segments<'a> {
         Walk::new(self, iter::segment)
     }
