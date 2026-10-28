@@ -114,8 +114,6 @@ fn main() {
         .allowlist_function("keyctl_search")
         .allowlist_function("match_string")
         .allowlist_function("bch2_add_key")
-        .allowlist_function("bch2_opt_strs_free")
-        .allowlist_function("bch2_parse_opts")
         .allowlist_function("bch2_passphrase_check")
         // tools-util and libbcachefs types/functions for Rust command conversions
         .allowlist_type("format_opts")
