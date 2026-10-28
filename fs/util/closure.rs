@@ -101,3 +101,27 @@ pub fn closure_wake_up(list: &c::closure_waitlist) {
     // SAFETY: as closure_wait()'s
     unsafe { c::closure_wake_up(core::ptr::from_ref(list).cast_mut()) }
 }
+
+/// Sleep until @cond, woken by @list's closure_wake_up()s: C's
+/// closure_wait_event(). @cond is checked on the list, so a wake between the
+/// check and the sleep isn't lost. For a list C wakes - a wait Rust has end
+/// to end is a futex's, util/futex.rs.
+pub fn closure_wait_event(list: &c::closure_waitlist, mut cond: impl FnMut() -> bool) {
+    if cond() {
+        return;
+    }
+
+    pin_init::stack_pin_init!(let cl = StackClosure::new());
+    let clp = NonNull::new(cl.as_ptr()).expect("a closure on the stack");
+    loop {
+        // SAFETY: ours, waiting on nothing else - each wake_up() puts the ref
+        // this takes before the next
+        unsafe { closure_wait(list, clp) };
+        if cond() {
+            break;
+        }
+        cl.sync();
+    }
+    // off the waitlist, before it goes
+    closure_wake_up(list);
+}
