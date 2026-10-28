@@ -694,12 +694,26 @@ unsafe impl<K, E, S, const W: usize> Sync for Registration<K, E, S, W>
 where K: Hash + Eq + Sync, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
 {}
 
+/// Why a Registration wasn't made: its key's in the table already - another
+/// entry's, which stays - or the table couldn't grow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegisterError {
+    Exists,
+    Alloc,
+}
+
+impl From<AllocError> for RegisterError {
+    fn from(_: AllocError) -> Self {
+        RegisterError::Alloc
+    }
+}
+
 impl<K, E, S, const W: usize> Registration<K, E, S, W>
 where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64; 2]>
 {
-    /// @e, in @table under @key - which mustn't be in it - until this is
-    /// dropped: made in place, as a field of @e, so the insert hashes @e
-    /// through it. On an error the table is unchanged.
+    /// Registers @e in @table under @key until this is dropped. It's made in
+    /// place as a field of @e, so the insert hashes @e through it. Fails,
+    /// leaving the table unchanged, if @key is in it already or it can't grow.
     ///
     /// # Safety
     /// Entry::new()'s, but for the key, which is this one's; @table outlives
@@ -707,21 +721,21 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
     /// pin-init's &this - with this its first field, so dropped first, and
     /// initialized last.
     pub unsafe fn new<'w>(table: &'w Cuckoo<Entry<E>, S, W>, key: K, e: NonNull<E>)
-        -> impl ::pin_init::PinInit<Self, AllocError> + use<'w, K, E, S, W>
+        -> impl ::pin_init::PinInit<Self, RegisterError> + use<'w, K, E, S, W>
     {
         let init = move |slot: *mut Self| {
             // SAFETY: @slot is ours to write, pin-init's
             unsafe { slot.write(Self { table: NonNull::from(table), entry: e, key }) };
             // SAFETY: the caller's
-            match table.insert_new(unsafe { Entry::new(e) }) {
-                Ok(Ok(())) => Ok(()),
-                Ok(Err(_)) => panic!("cuckoo: registering a key that's in already"),
-                Err(err) => {
-                    // SAFETY: just written; its drop finds nothing to take out
-                    unsafe { core::ptr::drop_in_place(slot) };
-                    Err(err)
-                }
-            }
+            let err = match table.insert_new(unsafe { Entry::new(e) }) {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(_)) => RegisterError::Exists,
+                Err(_)     => RegisterError::Alloc,
+            };
+            // SAFETY: just written; its drop finds nothing of ours to take
+            // out - an entry that's in already isn't @e
+            unsafe { core::ptr::drop_in_place(slot) };
+            Err(err)
         };
         // SAFETY: @slot is initialized on Ok, and not on Err; nothing moves it
         unsafe { ::pin_init::pin_init_from_closure(init) }

@@ -66,8 +66,7 @@ use crate::fs::{writepoint_ptr, Fs};
 use crate::sb::counters::events;
 use crate::types::Fifo;
 use crate::util::alloc::{flags::GFP_KERNEL, kbox_pin_init, KBox, KVVec};
-use crate::util::alloc::AllocError;
-use crate::util::cuckoo::{Cuckoo, Entry, Registration};
+use crate::util::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
 use crate::util::kernel::{cond_resched, WRITE};
 use crate::util::kthread::{Kthread, KthreadSelf};
 use crate::util::rcu::read_lock;
@@ -129,7 +128,7 @@ type InFlightSet<'f> = Cuckoo<Entry<InFlight<'f>>>;
 
 impl<'f> InFlight<'f> {
     fn new<'w>(fs: &'f Fs, set: &'w InFlightSet<'f>, key: c::move_bucket_key)
-        -> impl PinInit<Self, AllocError> + use<'f, 'w>
+        -> impl PinInit<Self, RegisterError> + use<'f, 'w>
     {
         pin_init!(&this in InFlight::<'f> {
             _dev: DevInFlight::new(fs, key.bucket.inode as u32),
@@ -139,7 +138,7 @@ impl<'f> InFlight<'f> {
             // InFlight before the set goes. This is the first field,
             // initialized last, so the rest's there when it's hashed.
             reg <- unsafe { Registration::new(set, key, this) },
-        }? AllocError)
+        }? RegisterError)
     }
 
     fn key(&self) -> &c::move_bucket_key {
@@ -402,12 +401,13 @@ impl<'f, 'w> Copygc<'f, 'w> {
         let Some(generation) = Self::bucket_is_movable(t, bucket, time)? else { return Ok(false) };
         let key = c::move_bucket_key { bucket, generation };
 
-        if self.set.contains(&key) {
-            return Ok(false);
-        }
-
         batch.reserve(1, GFP_KERNEL)?;
-        let b = kbox_pin_init(InFlight::new(self.fs, self.set, key))?;
+        let b = match kbox_pin_init(InFlight::new(self.fs, self.set, key)) {
+            Ok(b) => b,
+            // in flight already
+            Err(RegisterError::Exists) => return Ok(false),
+            Err(RegisterError::Alloc)  => return Err(c::ENOMEM.into()),
+        };
         batch.push(b, GFP_KERNEL).expect("reserved");
         Ok(true)
     }
