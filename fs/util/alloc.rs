@@ -107,6 +107,25 @@ pub unsafe fn krealloc(p: *mut u8, new: usize) -> Result<core::ptr::NonNull<u8>,
     core::ptr::NonNull::new(unsafe { bcachefs_shim::alloc::krealloc(p, new) }).ok_or(AllocError)
 }
 
+/// @size bytes kmalloc()'d, uninitialized, as @gfp says: for a buffer of no
+/// size anyone keeps - C's kfree(), or c::rust_kfree(), takes it back.
+pub fn kmalloc(size: usize, gfp: Flags) -> Result<core::ptr::NonNull<u8>, AllocError> {
+    #[cfg(kernel)]
+    {
+        use kernel::alloc::{allocator::Kmalloc, Allocator, NumaNode};
+
+        let layout = core::alloc::Layout::from_size_align(size, 1).map_err(|_| AllocError)?;
+        Ok(Kmalloc::alloc(layout, gfp, NumaNode::NO_NODE)?.cast())
+    }
+    // SAFETY: a new allocation
+    #[cfg(not(kernel))]
+    {
+        let _ = gfp;
+        core::ptr::NonNull::new(unsafe { bcachefs_shim::alloc::krealloc(core::ptr::null_mut(), size) })
+            .ok_or(AllocError)
+    }
+}
+
 /// kmalloc()'s alignment of @n bytes: to the largest power of two in it, up
 /// to a page - what IO into it, O_DIRECT's in userspace, needs.
 fn kv_layout(n: usize) -> Result<core::alloc::Layout, AllocError> {
