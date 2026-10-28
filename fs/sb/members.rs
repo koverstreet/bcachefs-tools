@@ -1338,18 +1338,19 @@ pub fn bch2_dev_bucket_missing(ca: &c::bch_dev, bucket: u64) {
 
 /// A ref on a device - ca->ref: it stays a member while this is held. Put
 /// on drop; cloned with bch2_dev_get().
-pub struct DevRef(*mut c::bch_dev);
+/// A NonNull, so Option<DevRef> has C's layout: a nullable bch_dev *.
+pub struct DevRef(core::ptr::NonNull<c::bch_dev>);
 
 impl DevRef {
     /// # Safety
     /// @ca holds a ref that's this one's now: bch2_dev_lookup()'s.
     pub unsafe fn from_raw(ca: *mut c::bch_dev) -> Self {
-        DevRef(ca)
+        DevRef(core::ptr::NonNull::new(ca).expect("a device ref on no device"))
     }
 
     /// For C functions taking *mut bch_dev.
     pub fn as_mut_ptr(&self) -> *mut c::bch_dev {
-        self.0
+        self.0.as_ptr()
     }
 }
 
@@ -1358,7 +1359,7 @@ impl core::ops::Deref for DevRef {
 
     fn deref(&self) -> &c::bch_dev {
         // SAFETY: the ref keeps it
-        unsafe { &*self.0 }
+        unsafe { self.0.as_ref() }
     }
 }
 
@@ -1370,7 +1371,7 @@ impl Clone for DevRef {
 
 impl Drop for DevRef {
     fn drop(&mut self) {
-        unsafe { c::rust_bch2_dev_put(self.0) };
+        unsafe { c::rust_bch2_dev_put(self.0.as_ptr()) };
     }
 }
 
@@ -1656,7 +1657,7 @@ impl c::bch_dev {
     pub fn get_ref(&self) -> DevRef {
         let ca = (self as *const c::bch_dev).cast_mut();
         unsafe { c::rust_bch2_dev_get(ca) };
-        DevRef(ca)
+        DevRef(core::ptr::NonNull::from(self))
     }
 
     /// An outer ref on it - bch2_dev_get_outer().
