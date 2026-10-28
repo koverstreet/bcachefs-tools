@@ -185,26 +185,23 @@ mod vfs {
     use core::ffi::c_int;
     use core::mem::ManuallyDrop;
     use core::ptr::NonNull;
-    use cstruct_macros::c_export;
     use crate::bch_err;
     use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags,
                              TransAttempt, TransBkey, UpdateTriggerFlags};
     use crate::c;
-    use crate::errcode::{bch_errcode, err_ptr, ret_to_class, ret_to_result_void as ret_to_result,
-                         BchError};
+    use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
     use crate::inode;
     use crate::snapshots::subvolume;
     use crate::str_hash;
     use crate::util::os_str::{OsStr, OsStrExt};
     use crate::util::vstructs::Validated;
-    use crate::vfs::dentry::Dentry;
     use crate::vfs::idmap::MntIdmap;
     use crate::vfs::inode::{InodeInfo, ATTR_CTIME, ATTR_MODE};
     use crate::xattr::{self, Xattrs};
 
     impl AclType {
         /// Anything else is a bug.
-        fn from_vfs(type_: c_int) -> Self {
+        pub(crate) fn from_vfs(type_: c_int) -> Self {
             match type_ {
                 t if t == Self::Access as c_int  => Self::Access,
                 t if t == Self::Default as c_int => Self::Default,
@@ -234,6 +231,11 @@ mod vfs {
         /// @acl is NULL or a live posix_acl, for as long as this is used.
         pub unsafe fn borrow_raw(acl: *mut c::posix_acl) -> Option<ManuallyDrop<PosixAcl>> {
             NonNull::new(acl).map(|acl| ManuallyDrop::new(PosixAcl(acl)))
+        }
+
+        /// Another borrow of what this one holds.
+        fn borrowed(&self) -> ManuallyDrop<PosixAcl> {
+            ManuallyDrop::new(PosixAcl(self.0))
         }
 
         /// Our reference, for C to keep.
@@ -369,20 +371,9 @@ mod vfs {
         }
     }
 
-    /// ->get_inode_acl(). NULL for none.
-    ///
-    /// # Safety
-    /// The arguments are the VFS's.
-    #[c_export]
-    pub unsafe extern "C" fn bch2_get_acl(vinode: *mut c::inode, type_: c_int, rcu: bool)
-        -> *mut c::posix_acl
-    {
-        if rcu {
-            return err_ptr(BchError::from(c::ECHILD));
-        }
-
-        let ty = AclType::from_vfs(type_);
-        let v = unsafe { InodeInfo::from_inode(vinode) };
+    /// ->get_inode_acl(): @v's ACL of @ty, None for none - and the VFS's cache
+    /// of it set.
+    pub fn get_acl(v: &InodeInfo, ty: AclType) -> Result<Option<PosixAcl>, BchError> {
         let fs = v.fs();
         let inode = &v.inode();
         let inum = v.inum();
@@ -391,20 +382,17 @@ mod vfs {
         // the VFS cache that there's none
         if inode.bi_flags & ty.inode_flag().bits() == 0 {
             v.vfs().set_cached_acl(ty, None);
-            return core::ptr::null_mut();
+            return Ok(None);
         }
 
         let trans = crate::btree_trans!(fs);
-        let acl = match lockrestart_do(&trans, |t| {
+        let acl = lockrestart_do(&trans, |t| {
             let mut iter = BtreeIter::uninit();
             PosixAcl::lookup(t, &mut iter, inode, inum, ty, BtreeIterFlags::empty())
-        }) {
-            Ok(acl) => acl,
-            Err(e)  => return err_ptr(e),
-        };
+        })?;
 
         v.vfs().set_cached_acl(ty, acl.as_ref());
-        acl.map_or(core::ptr::null_mut(), PosixAcl::into_raw)
+        Ok(acl)
     }
 
     /// Set inode @inum's ACL of @ty to @acl, or with None remove it, and its
@@ -439,29 +427,19 @@ mod vfs {
         Ok(())
     }
 
-    /// ->set_acl().
-    ///
-    /// # Safety
-    /// The arguments are the VFS's.
-    #[c_export]
-    pub unsafe extern "C" fn bch2_set_acl(
-        idmap:  *mut c::mnt_idmap,
-        dentry: *mut c::dentry,
-        acl:    *mut c::posix_acl,
-        type_:  c_int,
-    ) -> c_int {
-        let ty = AclType::from_vfs(type_);
-        let idmap = unsafe { MntIdmap::borrow_raw(idmap) };
-        let v = unsafe { Dentry::borrow_raw(dentry) }.inode();
+    /// ->set_acl(): @v's ACL of @ty to @acl, the VFS's - None to remove it - and
+    /// the mode with it, through @idmap.
+    pub(crate) fn set_acl(idmap: MntIdmap<'_>, v: &InodeInfo, acl: Option<&PosixAcl>, ty: AclType)
+        -> Result<(), BchError>
+    {
         let fs = v.fs();
         let inum = v.inum();
 
         let _lock = v.update_lock();
 
         let trans = crate::btree_trans!(fs);
-        let ret = lockrestart_do(&trans, |t| {
-            // The VFS's reference:
-            let mut acl = unsafe { PosixAcl::borrow_raw(acl) };
+        lockrestart_do(&trans, |t| {
+            let mut acl = acl.map(PosixAcl::borrowed);
 
             subvolume::is_ro_trans(t, inum.subvol as u32)?;
 
@@ -485,8 +463,7 @@ mod vfs {
             v.update_after_write(t.trans(), &inode, ATTR_CTIME | ATTR_MODE);
             v.vfs().set_cached_acl(ty, acl.as_deref());
             Ok(())
-        });
-        ret_to_class(ret)
+        })
     }
 
     /// Apply new mode @mode to inode @inum's access ACL, if it has one. The new

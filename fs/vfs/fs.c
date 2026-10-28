@@ -11,7 +11,6 @@
 
 #include "data/reconcile/work.h"
 
-#include "fs/acl.h"
 #include "fs/check.h"
 #include "fs/dirent.h"
 #include "fs/inode.h"
@@ -778,133 +777,6 @@ void bch2_dir_casefold_changed(struct dentry *dentry)
 }
 #endif
 
-static int bch2_mknod(struct mnt_idmap *idmap,
-		      struct inode *vdir, struct dentry *dentry,
-		      umode_t mode, dev_t rdev)
-{
-	struct bch_inode_info *inode =
-		__bch2_create(idmap, to_bch_ei(vdir), dentry, mode, rdev,
-			      (subvol_inum) { 0 }, 0);
-
-	if (IS_ERR(inode))
-		return bch2_err_class(PTR_ERR(inode));
-
-	bch2_dentry_set_casefold_ops(dentry, &inode->v);
-	d_instantiate(dentry, &inode->v);
-	return 0;
-}
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
-static int bch2_create(struct mnt_idmap *idmap,
-		       struct inode *vdir, struct dentry *dentry,
-		       umode_t mode, bool excl)
-#else
-static int bch2_create(struct mnt_idmap *idmap,
-		       struct inode *vdir, struct dentry *dentry,
-		       umode_t mode)
-#endif
-{
-	return bch2_mknod(idmap, vdir, dentry, mode|S_IFREG, 0);
-}
-
-static int bch2_link(struct dentry *old_dentry, struct inode *vdir,
-		     struct dentry *dentry)
-{
-	struct bch_fs *c = vdir->i_sb->s_fs_info;
-	struct bch_inode_info *dir = to_bch_ei(vdir);
-	struct bch_inode_info *inode = to_bch_ei(old_dentry->d_inode);
-	int ret;
-
-	lockdep_assert_held(&inode->v.i_rwsem);
-
-	ret   = bch2_subvol_is_ro(c, inode_inum(dir).subvol) ?:
-		bch2_subvol_is_ro(c, inode_inum(inode).subvol) ?:
-		__bch2_link(inode, dir, &dentry->d_name);
-	if (unlikely(ret))
-		return bch2_err_class(ret);
-
-	ihold(&inode->v);
-	d_instantiate(dentry, &inode->v);
-	return 0;
-}
-
-static int bch2_unlink(struct inode *vdir, struct dentry *dentry)
-{
-	int ret = __bch2_unlink(vdir, dentry, false);
-	return bch2_err_class(ret);
-}
-
-static int bch2_symlink(struct mnt_idmap *idmap,
-			struct inode *vdir, struct dentry *dentry,
-			const char *symname)
-{
-	struct bch_inode_info *dir = to_bch_ei(vdir), *inode;
-	int ret;
-
-	inode = __bch2_create(idmap, dir, dentry, S_IFLNK|S_IRWXUGO, 0,
-			      (subvol_inum) { 0 }, BCH_CREATE_TMPFILE);
-	if (IS_ERR(inode))
-		return bch2_err_class(PTR_ERR(inode));
-
-	ret = page_symlink(&inode->v, symname, strlen(symname) + 1);
-
-	if (unlikely(ret))
-		goto err;
-
-	ret = filemap_write_and_wait_range(inode->v.i_mapping, 0, LLONG_MAX);
-	if (unlikely(ret))
-		goto err;
-
-	ret = __bch2_link(inode, dir, &dentry->d_name);
-	if (unlikely(ret))
-		goto err;
-
-	d_instantiate(dentry, &inode->v);
-	return 0;
-err:
-	iput(&inode->v);
-	return bch2_err_class(ret);
-}
-
-static struct dentry *bch2_mkdir(struct mnt_idmap *idmap,
-				 struct inode *vdir, struct dentry *dentry, umode_t mode)
-{
-	return ERR_PTR(bch2_mknod(idmap, vdir, dentry, mode|S_IFDIR, 0));
-}
-
-static int bch2_setattr(struct mnt_idmap *idmap,
-			struct dentry *dentry, struct iattr *iattr)
-{
-	struct bch_inode_info *inode = to_bch_ei(dentry->d_inode);
-	struct bch_fs *c = inode->v.i_sb->s_fs_info;
-
-	lockdep_assert_held(&inode->v.i_rwsem);
-
-	int ret = bch2_subvol_is_ro(c, inode_inum(inode).subvol) ?:
-		setattr_prepare(idmap, dentry, iattr) ?:
-		(iattr->ia_valid & ATTR_SIZE
-		 ? bchfs_truncate(idmap, inode, iattr)
-		 : bch2_setattr_nonsize(idmap, inode, iattr));
-
-	return bch2_err_class(ret);
-}
-
-static int bch2_tmpfile(struct mnt_idmap *idmap,
-			struct inode *vdir, struct file *file, umode_t mode)
-{
-	struct bch_inode_info *inode =
-		__bch2_create(idmap, to_bch_ei(vdir),
-			      file->f_path.dentry, mode, 0,
-			      (subvol_inum) { 0 }, BCH_CREATE_TMPFILE);
-
-	if (IS_ERR(inode))
-		return bch2_err_class(PTR_ERR(inode));
-
-	d_mark_tmpfile(file, &inode->v);
-	d_instantiate(file->f_path.dentry, &inode->v);
-	return finish_open_simple(file, 0);
-}
-
 static const struct vm_operations_struct bch_vm_ops = {
 	.fault		= bch2_page_fault,
 	.map_pages	= filemap_map_pages,
@@ -1063,58 +935,6 @@ static const struct file_operations bch_file_operations = {
 	.remap_file_range = bch2_remap_file_range,
 };
 
-static const struct inode_operations bch_file_inode_operations = {
-	.getattr	= bch2_getattr,
-	.setattr	= bch2_setattr,
-	.fiemap		= bch2_fiemap,
-	.listxattr	= bch2_xattr_list,
-	.get_inode_acl	= bch2_get_acl,
-	.set_acl	= bch2_set_acl,
-	.fileattr_get	= bch2_fileattr_get,
-	.fileattr_set	= bch2_fileattr_set,
-};
-
-static const struct inode_operations bch_dir_inode_operations = {
-	.lookup		= bch2_lookup,
-	.create		= bch2_create,
-	.link		= bch2_link,
-	.unlink		= bch2_unlink,
-	.symlink	= bch2_symlink,
-	.mkdir		= bch2_mkdir,
-	.rmdir		= bch2_unlink,
-	.mknod		= bch2_mknod,
-	.rename		= bch2_rename2,
-	.getattr	= bch2_getattr,
-	.setattr	= bch2_setattr,
-	.tmpfile	= bch2_tmpfile,
-	.listxattr	= bch2_xattr_list,
-	.get_inode_acl	= bch2_get_acl,
-	.set_acl	= bch2_set_acl,
-	.fileattr_get	= bch2_fileattr_get,
-	.fileattr_set	= bch2_fileattr_set,
-};
-
-static const struct inode_operations bch_symlink_inode_operations = {
-	.get_link	= page_get_link,
-	.getattr	= bch2_getattr,
-	.setattr	= bch2_setattr,
-	.listxattr	= bch2_xattr_list,
-	.get_inode_acl	= bch2_get_acl,
-	.set_acl	= bch2_set_acl,
-	.fileattr_get	= bch2_fileattr_get,
-	.fileattr_set	= bch2_fileattr_set,
-};
-
-static const struct inode_operations bch_special_inode_operations = {
-	.getattr	= bch2_getattr,
-	.setattr	= bch2_setattr,
-	.listxattr	= bch2_xattr_list,
-	.get_inode_acl	= bch2_get_acl,
-	.set_acl	= bch2_set_acl,
-	.fileattr_get	= bch2_fileattr_get,
-	.fileattr_set	= bch2_fileattr_set,
-};
-
 static const struct address_space_operations bch_address_space_operations = {
 	.read_folio	= bch2_read_folio,
 	.writepages	= bch2_writepages,
@@ -1157,20 +977,20 @@ static void bch2_vfs_inode_init(struct btree_trans *trans,
 
 	switch (inode->v.i_mode & S_IFMT) {
 	case S_IFREG:
-		inode->v.i_op	= &bch_file_inode_operations;
+		inode->v.i_op	= &bch2_file_inode_ops;
 		inode->v.i_fop	= &bch_file_operations;
 		break;
 	case S_IFDIR:
-		inode->v.i_op	= &bch_dir_inode_operations;
+		inode->v.i_op	= &bch2_dir_inode_ops;
 		inode->v.i_fop	= &bch2_dir_file_ops;
 		break;
 	case S_IFLNK:
 		inode_nohighmem(&inode->v);
-		inode->v.i_op	= &bch_symlink_inode_operations;
+		inode->v.i_op	= &bch2_symlink_inode_ops;
 		break;
 	default:
 		init_special_inode(&inode->v, inode->v.i_mode, inode->v.i_rdev);
-		inode->v.i_op	= &bch_special_inode_operations;
+		inode->v.i_op	= &bch2_special_inode_ops;
 		break;
 	}
 

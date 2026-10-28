@@ -2,21 +2,24 @@
 
 //! The namespace operations as the VFS makes them: each takes the update
 //! locks of the inodes it changes, runs its transaction - fs/namei.rs's - and
-//! brings the VFS inodes up to date with what it wrote. Instantiating the
-//! dentries a link or create makes is still C's, in the inode ops.
+//! brings the VFS inodes up to date with what it wrote - and gives the dentry
+//! a link or create made its inode. They're a directory's inode ops, DirOps's
+//! InodeOps (inode_ops.rs), and InodeInfo's where something else calls them.
+//! Making the new inode is still fs.c's __bch2_create(), with the inode
+//! cache.
 //!
 //! Lookup writes nothing, unless a dirent and its inode disagree, which it
 //! repairs. The inodes it returns come from the inode cache, which is still
 //! fs.c's.
 
-use core::ffi::{c_int, c_uint};
+use core::ffi::{c_int, c_uint, CStr};
 
 use crate::btree::bkey::BkeyV;
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts,
                          TransAttempt};
 use crate::c;
 use crate::dirent::{self, Dirent};
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_class, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::init::passes;
 use crate::inode;
 use crate::namei;
@@ -25,15 +28,37 @@ use crate::snapshots::subvolume;
 use crate::str_hash;
 use crate::util::kernel::{current_fsgid, current_fsuid};
 use crate::util::log::LogMsg;
-use crate::util::os_str::{qstr_name, OsStr};
-use cstruct_macros::c_export;
+use crate::util::file::File;
+use crate::util::os_str::OsStr;
+use cstruct_macros::{c_export, c_extern, vtable};
+use kernel::sync::aref::ARef;
 
 use super::dentry::Dentry;
+use super::idmap::MntIdmap;
 use super::inode::{InodeInfo, InodeRef, ATTR_CTIME, ATTR_MTIME, ATTR_SIZE};
+use super::inode_ops::InodeOps;
+
+c_extern! {
+    // fs.c's, until the inode cache is Rust:
+    fn __bch2_create(idmap: *mut c::mnt_idmap, dir: *mut c::bch_inode_info, dentry: *mut c::dentry,
+                     mode: c::umode_t, rdev: c::dev_t, snapshot_src: c::subvol_inum,
+                     flags: c_uint) -> *mut c::bch_inode_info;
+}
 
 const DIR_ENTRIES_CHANGED: u32 = ATTR_MTIME | ATTR_CTIME | ATTR_SIZE;
 
 impl InodeInfo {
+    /// A new inode in this directory for @dentry, in the btree and the inode
+    /// cache - linked, unless @flags has BCH_CREATE_TMPFILE. The reference is
+    /// ours, not yet the dentry's.
+    fn create(&self, idmap: MntIdmap<'_>, dentry: Dentry<'_>, mode: c::umode_t, rdev: c::dev_t,
+              flags: u32) -> Result<InodeRef, BchError> {
+        unsafe {
+            InodeInfo::from_c(__bch2_create(idmap.as_ptr(), self.raw(), dentry.as_ptr(), mode, rdev,
+                                            c::subvol_inum::default(), flags))
+        }
+    }
+
     /// The inode @name in this directory names, through the inode cache - @hash
     /// is this directory's. ENOENT if there's no such name, or it's a subvolume
     /// this directory doesn't list.
@@ -122,14 +147,95 @@ impl InodeInfo {
         }
         Ok(())
     }
+}
 
-    /// Rename @src_dentry, in this directory, to @dst_dentry in @dst_dir:
-    pub fn rename(&self, src_dentry: Dentry<'_>, dst_dir: &InodeInfo, dst_dentry: Dentry<'_>,
-                  flags: u32) -> Result<(), BchError> {
+pub(crate) struct DirOps;
+
+#[vtable]
+impl InodeOps for DirOps {
+    /// Any error is a negative dentry, as C had it.
+    fn lookup(dir: &InodeInfo, dentry: Dentry<'_>, _flags: c_uint) -> *mut c::dentry {
+        let fs = dir.fs();
+
+        let Ok(hash) = crate::bch_err_fn!(fs, str_hash::hash_info_init(fs, &dir.inode())) else {
+            return dentry.splice_alias(None);
+        };
+        let inode = dir.lookup(&hash, dentry.name()).ok();
+
+        // No negative dentries in a casefolded directory: one for "blAH" would
+        // still say it isn't there once "BLAH" is created - until the VFS has a
+        // way to invalidate them
+        if inode.is_none() && dir.vfs().flag(c::S_CASEFOLD) {
+            return core::ptr::null_mut();
+        }
+        if let Some(inode) = &inode {
+            dentry.set_casefold_ops(inode.vfs());
+        }
+        dentry.splice_alias(inode)
+    }
+
+    fn create(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, mode: c::umode_t,
+              #[cfg(not(linux_ge = "7.3"))] _excl: bool) -> Result<(), BchError>
+    {
+        Self::mknod(idmap, dir, dentry, mode | c::S_IFREG as c::umode_t, 0)
+    }
+
+    fn link(old: Dentry<'_>, dir: &InodeInfo, dentry: Dentry<'_>) -> Result<(), BchError> {
+        let inode = old.inode();
+        inode.vfs().assert_locked();
+
+        let fs = dir.fs();
+        subvolume::is_ro(fs, dir.inum().subvol as u32)?;
+        subvolume::is_ro(fs, inode.inum().subvol as u32)?;
+        inode.link(dir, dentry.name())?;
+        dentry.instantiate(ARef::from(inode));
+        Ok(())
+    }
+
+    fn unlink(dir: &InodeInfo, dentry: Dentry<'_>) -> Result<(), BchError> {
+        dir.unlink(dentry, false)
+    }
+
+    /// The inode made unlinked, its @target written and flushed, then linked
+    /// - never a symlink with no target.
+    fn symlink(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, target: &CStr)
+        -> Result<(), BchError>
+    {
+        let inode = dir.create(idmap, dentry, (c::S_IFLNK | c::S_IRWXUGO) as c::umode_t, 0,
+                               c::BCH_CREATE_TMPFILE)?;
+        let len = target.to_bytes_with_nul().len() as c_int;
+        ret_to_result_void(unsafe { c::page_symlink(inode.vfs().as_ptr(), target.as_ptr().cast(), len) })?;
+        inode.vfs().write_and_wait()?;
+        inode.link(dir, dentry.name())?;
+        dentry.instantiate(inode);
+        Ok(())
+    }
+
+    fn mkdir(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, mode: c::umode_t)
+        -> Result<(), BchError>
+    {
+        Self::mknod(idmap, dir, dentry, mode | c::S_IFDIR as c::umode_t, 0)
+    }
+
+    fn rmdir(dir: &InodeInfo, dentry: Dentry<'_>) -> Result<(), BchError> {
+        dir.unlink(dentry, false)
+    }
+
+    fn mknod(idmap: MntIdmap<'_>, dir: &InodeInfo, dentry: Dentry<'_>, mode: c::umode_t,
+             rdev: c::dev_t) -> Result<(), BchError>
+    {
+        let inode = dir.create(idmap, dentry, mode, rdev, 0)?;
+        dentry.set_casefold_ops(inode.vfs());
+        dentry.instantiate(inode);
+        Ok(())
+    }
+
+    fn rename(_idmap: MntIdmap<'_>, src_dir: &InodeInfo, src_dentry: Dentry<'_>,
+              dst_dir: &InodeInfo, dst_dentry: Dentry<'_>, flags: c_uint) -> Result<(), BchError>
+    {
         use c::bch_rename_mode::*;
 
-        let fs = self.fs();
-        let src_dir = self;
+        let fs = src_dir.fs();
         let src_inode = src_dentry.inode();
         let dst_inode = dst_dentry.inode_opt();
         let mode = if flags & c::RENAME_EXCHANGE != 0 {
@@ -230,6 +336,17 @@ impl InodeInfo {
         }
         ret
     }
+
+    fn tmpfile(idmap: MntIdmap<'_>, dir: &InodeInfo, file: &File, mode: c::umode_t)
+        -> Result<(), BchError>
+    {
+        // SAFETY: the file being opened's, referenced by it
+        let dentry = unsafe { Dentry::borrow_raw(file.dentry()) };
+        let inode = dir.create(idmap, dentry, mode, 0, c::BCH_CREATE_TMPFILE)?;
+        unsafe { c::d_mark_tmpfile(file.as_ptr(), inode.vfs().as_ptr()) };
+        dentry.instantiate(inode);
+        ret_to_result_void(unsafe { c::finish_open_simple(file.as_ptr(), 0) })
+    }
 }
 
 /// Dirent @d, in @dir, points at @inum, which isn't there: @err, looking for
@@ -250,59 +367,6 @@ fn dirent_to_missing_inode(t: &TransAttempt<'_, '_>, d: Dirent<'_>, dir: c::subv
     t.unlock();
     passes::run_explicit(fs, &mut msg, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_dirents,
                          c::bch_run_recovery_pass_flags::empty())
-}
-
-/// The directory inode ops' lookup. Any error is a negative dentry, as C had
-/// it.
-///
-/// # Safety
-/// The VFS's, ours: the directory referenced and locked, and the dentry in it
-/// referenced, for the call.
-#[c_export]
-pub unsafe fn bch2_lookup(vdir: *mut c::inode, dentry: *mut c::dentry, _flags: c_uint) -> *mut c::dentry {
-    let dir = unsafe { InodeInfo::from_inode(vdir) };
-    let dentry = unsafe { Dentry::borrow_raw(dentry) };
-    let fs = dir.fs();
-
-    let Ok(hash) = crate::bch_err_fn!(fs, str_hash::hash_info_init(fs, &dir.inode())) else {
-        return dentry.splice_alias(None);
-    };
-    let inode = dir.lookup(&hash, dentry.name()).ok();
-
-    // No negative dentries in a casefolded directory: one for "blAH" would
-    // still say it isn't there once "BLAH" is created - until the VFS has a
-    // way to invalidate them
-    if inode.is_none() && dir.vfs().flag(c::S_CASEFOLD) {
-        return core::ptr::null_mut();
-    }
-    if let Some(inode) = &inode {
-        dentry.set_casefold_ops(inode.vfs());
-    }
-    dentry.splice_alias(inode)
-}
-
-/// For C's link, until the inode ops are Rust.
-///
-/// # Safety
-/// @name valid for the call.
-#[c_export]
-pub unsafe fn __bch2_link(inode: &c::bch_inode_info, dir: &c::bch_inode_info, name: &c::qstr) -> c_int {
-    ret_to_c(inode.link(dir, unsafe { qstr_name(name) }))
-}
-
-/// The directory inode ops' rename.
-///
-/// # Safety
-/// The VFS's, ours: the directories referenced and locked, the dentries
-/// referenced, for the call.
-#[c_export]
-pub unsafe fn bch2_rename2(_idmap: *mut c::mnt_idmap,
-                           src_vdir: *mut c::inode, src_dentry: *mut c::dentry,
-                           dst_vdir: *mut c::inode, dst_dentry: *mut c::dentry,
-                           flags: c_uint) -> c_int {
-    let (src_dir, dst_dir) = unsafe { (InodeInfo::from_inode(src_vdir), InodeInfo::from_inode(dst_vdir)) };
-    let (src_dentry, dst_dentry) = unsafe { (Dentry::borrow_raw(src_dentry), Dentry::borrow_raw(dst_dentry)) };
-    ret_to_class(src_dir.rename(src_dentry, dst_dir, dst_dentry, flags))
 }
 
 /// For C's unlink and rmdir, and subvolume deletion, until they're Rust.

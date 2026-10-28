@@ -21,22 +21,27 @@
 //! them checks the flags against the inode as the btree has it, not i_flags:
 //! the btree's locks are what keep two setters apart.
 
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_int;
 
 use crate::acl::{self, AclType};
-use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags};
+use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt};
 use crate::c;
-use crate::btree::iter::TransAttempt;
-use crate::errcode::{bch_errcode, ret_to_c, ret_to_class, BchError};
+use crate::errcode::{bch_errcode, ret_to_c, ret_to_result_void, BchError};
 use crate::inode;
 use crate::inode_opts::InodeOpt;
 use crate::snapshots::subvolume;
-use cstruct_macros::c_export;
+use cstruct_macros::{c_export, c_extern};
 
 use super::dentry::Dentry;
 use super::iattr::Iattr;
 use super::idmap::MntIdmap;
-use super::inode::{InodeInfo, ATTR_CTIME};
+use super::inode::{InodeInfo, ATTR_CTIME, ATTR_SIZE};
+
+c_extern! {
+    // io.c's, until it's Rust:
+    fn bchfs_truncate(idmap: *mut c::mnt_idmap, inode: *mut c::bch_inode_info,
+                      attr: *mut c::iattr) -> c_int;
+}
 
 use c::bch_inode_flags as F;
 
@@ -247,6 +252,23 @@ impl InodeInfo {
         }
     }
 
+    pub(crate) fn setattr(&self, idmap: MntIdmap<'_>, dentry: Dentry<'_>, attr: &mut c::iattr)
+        -> Result<(), BchError>
+    {
+        self.vfs().assert_locked();
+        subvolume::is_ro(self.fs(), self.inum().subvol as u32)?;
+        // The kernel crate's struct iattr, codegen's the same
+        ret_to_result_void(unsafe {
+            c::setattr_prepare(idmap.as_ptr(), dentry.as_ptr(), core::ptr::from_mut(attr).cast())
+        })?;
+
+        if attr.ia_valid & ATTR_SIZE != 0 {
+            ret_to_result_void(unsafe { bchfs_truncate(idmap.as_ptr(), self.raw(), attr) })
+        } else {
+            self.setattr_nonsize(idmap, Iattr::of(attr))
+        }
+    }
+
     /// The caller has checked it may: setattr_prepare().
     pub(crate) fn setattr_nonsize(&self, idmap: MntIdmap<'_>, attr: &Iattr) -> Result<(), BchError> {
         let lock = self.update_lock();
@@ -305,41 +327,7 @@ impl InodeInfo {
     }
 }
 
-/// The inode ops' getattr.
-///
-/// # Safety
-/// The VFS's: @idmap the mount's, and @path's dentry positive and ours, for
-/// the call.
-#[c_export]
-pub unsafe fn bch2_getattr(idmap: *mut c::mnt_idmap, path: *const c::path, stat: &mut c::kstat,
-                           request_mask: u32, _query_flags: c_uint) -> c_int {
-    let dentry = unsafe { Dentry::borrow_raw((*path).dentry) };
-    dentry.inode().getattr(unsafe { MntIdmap::borrow_raw(idmap) }, stat, request_mask);
-    0
-}
-
-/// The inode ops' fileattr_get.
-///
-/// # Safety
-/// The VFS's: @dentry positive and ours, for the call.
-#[c_export]
-pub unsafe fn bch2_fileattr_get(dentry: *mut c::dentry, fa: &mut c::file_kattr) -> c_int {
-    unsafe { Dentry::borrow_raw(dentry) }.inode().fileattr_get(fa);
-    0
-}
-
-/// The inode ops' fileattr_set.
-///
-/// # Safety
-/// The VFS's: @dentry positive and ours, for the call.
-#[c_export]
-pub unsafe fn bch2_fileattr_set(_idmap: *mut c::mnt_idmap, dentry: *mut c::dentry,
-                                fa: &mut c::file_kattr) -> c_int {
-    let dentry = unsafe { Dentry::borrow_raw(dentry) };
-    ret_to_class(dentry.inode().fileattr_set(dentry, fa))
-}
-
-/// For C's setattr and truncate, until they're Rust.
+/// For C's truncate, until it's Rust.
 ///
 /// # Safety
 /// @idmap is the mount's, for the call.

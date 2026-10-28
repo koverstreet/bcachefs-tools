@@ -510,23 +510,12 @@ mod vfs {
         Ok(())
     }
 
-    /// For the VFS: listxattr - bch2_xattr_list().
-    ///
-    /// # Safety
-    /// The arguments are the VFS's.
-    #[c_export]
-    pub unsafe extern "C" fn bch2_xattr_list(
-        dentry: *mut c::dentry,
-        buffer: *mut c_char,
-        size:   usize,
-    ) -> isize {
-        let dentry = unsafe { Dentry::borrow_raw(dentry) };
+    /// ->listxattr(): @dentry's xattrs' names, into @buffer - or, without one,
+    /// how long they'd be. ERANGE if they don't fit.
+    pub fn listxattr(dentry: Dentry<'_>, buffer: Option<&mut [u8]>) -> Result<usize, BchError> {
         let v = dentry.inode();
         let inum = v.inum();
-        let mut buf = XattrBuf {
-            buf:  unsafe { opt_bytes_mut(buffer as *mut c_void, size) },
-            used: 0,
-        };
+        let mut buf = XattrBuf { buf: buffer, used: 0 };
 
         let trans = crate::btree_trans!(v.fs());
         let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, pos(inum.inum, 0),
@@ -547,10 +536,7 @@ mod vfs {
             .and_then(|_| list_bcachefs(&v.inode(), &mut buf, false))
             .and_then(|_| list_bcachefs(&v.inode(), &mut buf, true));
 
-        match ret {
-            Ok(())  => buf.used as isize,
-            Err(e)  => e.class() as isize,
-        }
+        ret.map(|()| buf.used)
     }
 
     /// The user, trusted and security handlers' ->get().

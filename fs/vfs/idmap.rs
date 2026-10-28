@@ -45,6 +45,10 @@ impl<'f> MntIdmap<'f> {
         MntIdmap(idmap, PhantomData)
     }
 
+    pub fn as_ptr(self) -> *mut c::mnt_idmap {
+        self.0
+    }
+
     pub fn owner_or_capable(self, inode: &VfsInode) -> bool {
         unsafe { c::inode_owner_or_capable(self.0, inode.as_ptr()) }
     }

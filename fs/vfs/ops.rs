@@ -4,11 +4,11 @@
 //! return, as FromRaw and IntoRaw impls, and SelfOf's &self - what the
 //! superblock's s_fs_info points to, found from whatever the op is passed.
 
-use core::ffi::CStr;
+use core::ffi::{c_int, CStr};
 use core::mem::ManuallyDrop;
 use core::ptr::NonNull;
 
-use crate::acl::PosixAcl;
+use crate::acl::{AclType, PosixAcl};
 use crate::c;
 use crate::errcode::BchError;
 use crate::util::ffi::c_char;
@@ -57,6 +57,7 @@ from_raw! {
     /// One this thread is writing.
     &'a SeqFile           = *mut c::seq_file    => |r| SeqFile::from_raw(r);
     &'a CStr              = *const c_char       => |r| CStr::from_ptr(r.cast());
+    AclType               = c_int               => |r| AclType::from_vfs(r);
     /// The VFS's reference, None for no ACL.
     Option<ManuallyDrop<PosixAcl>> = *mut c::posix_acl => |r| PosixAcl::borrow_raw(r);
     &'a mut c::kstat      = *mut c::kstat       => |r| &mut *r;

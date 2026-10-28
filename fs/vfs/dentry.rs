@@ -44,6 +44,10 @@ impl<'a> Dentry<'a> {
         Dentry { raw, _ref: PhantomData }
     }
 
+    pub fn as_ptr(&self) -> *mut c::dentry {
+        self.raw
+    }
+
     /// Stable while its directory is locked, as the namespace operations
     /// hold it.
     pub fn name(&self) -> &'a OsStr {
@@ -118,6 +122,12 @@ impl<'a> Dentry<'a> {
     pub fn splice_alias(self, inode: Option<InodeRef>) -> *mut c::dentry {
         let inode = inode.map_or(core::ptr::null_mut(), |i| ARef::into_raw(i).as_ptr().cast());
         unsafe { c::d_splice_alias(inode, self.raw) }
+    }
+
+    /// Make this negative dentry @inode's: d_instantiate(), which takes the
+    /// reference.
+    pub fn instantiate(&self, inode: InodeRef) {
+        unsafe { c::d_instantiate(self.raw, ARef::into_raw(inode).as_ptr().cast()) }
     }
 
     /// A dentry for @inode, connected or not, as exportfs wants one - its

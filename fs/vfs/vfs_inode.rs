@@ -23,6 +23,7 @@ use {
     crate::errcode::{ret_to_result_void as ret_to_result, BchError},
     kernel::sync::aref::AlwaysRefCounted,
     super::super_block::SuperBlock,
+    crate::locking::Lock,
 };
 
 /// A struct inode of ours - one InodeInfo's - referenced while this is
@@ -138,6 +139,14 @@ impl VfsInode {
             let flags = read_volatile(p);
             write_volatile(p, if on { flags | flag } else { flags & !flag });
         }
+    }
+
+    /// i_rwsem held for write: inode_lock(), as the VFS takes it for a
+    /// namespace operation or setattr.
+    pub fn assert_locked(&self) {
+        // SAFETY: c::rw_semaphore is the kernel's, i_rwsem one
+        let l = unsafe { &*(&raw const (*self.as_ptr()).i_rwsem).cast::<c::rw_semaphore>() };
+        Lock::from_c(l).assert_held();
     }
 
     // ── ACLs ─────────────────────────────────────────────────────────────
