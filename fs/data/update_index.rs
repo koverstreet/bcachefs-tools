@@ -142,7 +142,7 @@ fn key_to_text(out: &mut Printbuf, fs: &Fs, u: &c::data_update, new: BkeySC<'_>,
 #[cold]
 #[inline(never)]
 fn count_key_fail(fs: &Fs, u: &c::data_update, new: BkeySC<'_>, wrote: BkeySC<'_>, insert: BkeySC<'_>, msg: &str) {
-    if let Some(stats) = u.stats {
+    if let Some(stats) = &u.stats {
         stats.keys_raced.fetch_add(1, Ordering::Relaxed);
         stats.sectors_raced.fetch_add(insert.k.size.into(), Ordering::Relaxed);
     }
@@ -421,7 +421,7 @@ fn index_update(trans: &BtreeTrans<'_>, u: &mut c::data_update) -> Result<(), Bc
 /// write op is done.
 #[c_export]
 pub fn bch2_data_update_index_update(u: &mut c::data_update) -> c_int {
-    let trans = crate::btree_trans!(u.op.c);
+    let trans = crate::btree_trans!(u.op.fs());
     ret_to_c(index_update(&trans, u))
 }
 
@@ -495,7 +495,7 @@ pub fn bch2_data_update_index_update_nowrite(trans: &BtreeTrans<'_>, u: &c::data
 /// list instead of the main scan.
 #[c_export]
 pub fn bch2_data_update_ec_alloc_failed(u: &mut c::data_update) {
-    let fs = u.op.c;
+    let fs = u.op.fs();
     let trans = crate::btree_trans!(fs);
     let old = BkeySC::from(u.k.key());
     let mut parked = false;

@@ -14,7 +14,7 @@ use crate::util::vstructs::Head;
 use crate::types::{GenRadix, RustOnly, bits_to_longs, rust_only};
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_uint, c_ulong, c_ushort};
-use core::sync::atomic::{AtomicI32, AtomicI64};
+use core::sync::atomic::{AtomicI32, AtomicI64, AtomicU64};
 use cstruct_macros::{c_const, c_enum, c_rcu_array, c_xmacro, placed, CStruct, Fieldwise, Init, TypeInfo};
 use pin_init::pin_data;
 
@@ -472,7 +472,9 @@ pub struct bch_dev {
     pub io_latency: [c::bch2_time_stats_quantiles; 2],
 
     pub congested: AtomicI32,
-    pub congested_last: u64,
+    /* written racily, by bch2_latency_acct() */
+    #[c("u64 congested_last")]
+    pub congested_last: AtomicU64,
 
     #[c("struct io_count __percpu *io_done")]
     pub io_done: PerCpu<c::io_count>,

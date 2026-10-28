@@ -96,7 +96,7 @@ nest! {
     pub struct bch_write_op {
         pub cl: c::closure,
         #[c("struct bch_fs *c")]
-        pub c: &'static Fs,
+        pub c: crate::util::backref::BackRef<Fs>,
         pub end_io: Option<unsafe extern "C" fn(*mut c::bch_write_op)>,
         pub start_time: u64,
 
@@ -230,18 +230,20 @@ pub struct SectorOverwrites {
 }
 
 impl c::bch_write_op {
-    /// # Safety
-    /// @fs outlives the op, which holds it as 'static, as C's struct does:
-    /// the op's done before the filesystem goes. Its reservation is
-    /// overwritten without being put: there's nothing in it yet.
+    /// The op's filesystem, as 'static: an op is done before its filesystem
+    /// goes, and what it hands out of it goes no further than the op.
+    pub fn fs(&self) -> &'static Fs {
+        // SAFETY: as above
+        unsafe { self.c.get() }
+    }
+
     /// # Safety
     /// @fs outlives the op. The reservation is overwritten without being put,
     /// so it must hold nothing yet.
     pub unsafe fn init(&mut self, fs: &Fs, opts: c::bch_inode_opts) {
         // SAFETY: the caller's
-        let fs: &'static Fs = unsafe { Fs::borrow_raw(fs.as_ptr()) };
-
-        self.c          = fs;
+        self.c          = unsafe { crate::util::backref::BackRef::new(fs) };
+        let fs = self.fs();
         self.end_io     = None;
         self.flags      = 0;
         self.io_error   = 0;

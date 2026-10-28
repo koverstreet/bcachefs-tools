@@ -5,6 +5,7 @@
 use crate::cstructs::c;
 use crate::types::c_default;
 use core::ffi::{c_int, c_uint};
+use core::sync::atomic::AtomicBool;
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::TransAttempt;
 use crate::errcode::{ret_to_result_void, BchError};
@@ -79,16 +80,16 @@ pub struct data_update {
     pub opts: c::data_update_opts,
 
     pub on_hashtable: bool,
-    pub read_done: bool,
+    /* read by the in-flight listing, racily */
+    #[c("bool read_done")]
+    pub read_done: AtomicBool,
     /*
-     * cas[i] is the bch_dev * for which we hold a ref (taken in
-     * bkey_get_dev_refs), parallel to the ptrs in @k.  Stashed so the
-     * exit path doesn't have to re-derive ca via c->devs[idx], which
-     * dev_remove may have cleared while our ref still pins the dev.
-     * NULL = no ref held for that ptr position; also serves as the
-     * "we locked this bucket" indicator for nocow lock/unlock.
+     * A ref on each pointer's device, parallel to the pointers in @k, none for
+     * a missing device: what the nocow locks go by, not c->devs[], which a
+     * device removal may clear while the ref pins the device
      */
-    pub cas: [*mut c::bch_dev; c::BCH_BKEY_PTRS_MAX as usize],
+    #[c("struct bch_dev *cas[BCH_BKEY_PTRS_MAX]")]
+    pub cas: [Option<crate::sb::members::DevRef>; c::BCH_BKEY_PTRS_MAX as usize],
 
     pub hash: c::rhlist_head,
     pub pos: c::bbpos,
@@ -101,7 +102,7 @@ pub struct data_update {
     pub ctxt: *mut c::moving_context,
     /* the mover's, if it keeps any - which outlive its updates */
     #[c("struct bch_move_stats *stats")]
-    pub stats: Option<&'static c::MoveStats>,
+    pub stats: Option<crate::util::backref::BackRef<c::MoveStats>>,
 
     pub rbio: c::bch_read_bio,
     pub op: c::bch_write_op,
