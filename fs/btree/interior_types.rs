@@ -93,6 +93,13 @@ impl Fs {
         unsafe { bch2_btree_reserve_cache_to_text(out.as_raw(), self.as_ptr()) }
     }
 
+    /// Waits for the interior updates in flight to finish - with no btree
+    /// locks held, as they may need them; whether there were any.
+    pub fn btree_interior_updates_flush(&self) -> bool {
+        // SAFETY: a live filesystem
+        unsafe { bch2_btree_interior_updates_flush(self.as_ptr()) }
+    }
+
     /// Run the interior update worker now.
     pub fn btree_interior_updates_kick(&self) {
         let u = &self.btree.interior_updates;

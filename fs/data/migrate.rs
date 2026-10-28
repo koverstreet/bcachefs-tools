@@ -292,7 +292,7 @@ impl DevDrop<'_> {
         }
 
         trans.unlock();
-        unsafe { c::bch2_btree_interior_updates_flush(fs.as_ptr()) };
+        fs.btree_interior_updates_flush();
         Ok(())
     }
 
@@ -361,7 +361,7 @@ fn dev_data_drop_by_backpointers(fs: &Fs, ca: &c::bch_dev, mut d: DevDrop<'_>) -
 
         // The flushes wait on other threads' updates, which may need our locks
         trans.unlock();
-        unsafe { c::bch2_btree_interior_updates_flush(fs.as_ptr()) };
+        fs.btree_interior_updates_flush();
         trans.write_buffer_flush_sync()?;
 
         BpScanIter::new(c::btree_id::backpointers, pos(d.dev.into(), 0), Some(&progress))
