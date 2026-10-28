@@ -265,9 +265,25 @@ impl<T: ::pin_init::Zeroable> PerCpu<T> {
         let p = unsafe { c::__alloc_percpu(size_of::<T>(), align_of::<T>()) };
         if p.is_null() { Err(AllocError) } else { Ok(PerCpu(p.cast())) }
     }
+
+    /// alloc(), as a field's initializer.
+    pub fn init() -> impl ::pin_init::Init<Self, AllocError> {
+        // SAFETY: the slot written, or nothing done
+        unsafe {
+            ::pin_init::init_from_closure(|slot: *mut Self| {
+                slot.write(Self::alloc()?);
+                Ok(())
+            })
+        }
+    }
 }
 
 impl<T> PerCpu<T> {
+    /// Whether it's been allocated - and not freed.
+    pub fn allocated(&self) -> bool {
+        !self.0.is_null()
+    }
+
     /// free_percpu(): unallocated after, as before alloc().
     pub fn free(&mut self) {
         unsafe { c::free_percpu(self.0.cast()) };
