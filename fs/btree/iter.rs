@@ -12,6 +12,9 @@ use crate::errcode::{
 use crate::fs::Fs;
 use crate::locking::Lock;
 use crate::util::closure::ClosureRef;
+use crate::util::futex::EventCount;
+use crate::util::kernel::{jiffies, nsecs_to_jiffies, NSEC_PER_SEC};
+use crate::util::sleep::Sleep;
 use crate::util::refcount::TryRefcount;
 use crate::util::ffi::Opaque;
 use crate::util::log::CFnName;
@@ -276,6 +279,42 @@ impl<'f> BtreeTrans<'f> {
         if cfg!(CONFIG_BCACHEFS_DEBUG) && crate::debug::params::debug_check_iterators() {
             unsafe { c::__bch2_assert_pos_locked(self.raw(), btree, pos) }
         }
+    }
+
+    /// Waits on @ev until @cond. For up to a second it keeps the SRCU lock
+    /// btree nodes are freed under, so a short wait can relock after; past
+    /// that it unlock_long()s, so a long wait doesn't hold up freeing. The
+    /// caller must have dropped its btree locks. @cond is called once per
+    /// wake, so it may be a trylock.
+    pub fn wait_until<T>(&self, ev: &EventCount, mut cond: impl FnMut() -> Option<T>) -> T {
+        loop {
+            let seen = ev.snapshot();
+            if let Some(v) = cond() {
+                return v;
+            }
+            match self.srcu_wait_budget() {
+                // timing out is only the budget running out
+                Some(left) => { let _ = ev.wait(seen, Sleep::UNINTERRUPTIBLE.timeout(left)); }
+                None       => { let Ok(()) = ev.wait(seen, Sleep::UNINTERRUPTIBLE); }
+            }
+        }
+    }
+
+    /// What's left of the second the SRCU lock may be held for, or None if
+    /// it isn't held - or if the second is used up, and it's dropped now.
+    fn srcu_wait_budget(&self) -> Option<core::ffi::c_ulong> {
+        // SAFETY: ours; only this thread changes either
+        let (held, since) = unsafe { ((*self.raw()).bits.srcu_held(), (*self.raw()).srcu_lock_time) };
+        if !held {
+            return None;
+        }
+        let second = nsecs_to_jiffies(NSEC_PER_SEC);
+        let elapsed = jiffies().wrapping_sub(since);
+        if elapsed >= second {
+            self.unlock_long();
+            return None;
+        }
+        Some(second - elapsed)
     }
 
     pub fn commit(
