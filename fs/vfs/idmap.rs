@@ -9,9 +9,12 @@
 
 use core::ffi::c_int;
 use core::marker::PhantomData;
+use core::mem::ManuallyDrop;
 use core::ptr::read_volatile;
 
+use crate::acl::PosixAcl;
 use crate::c;
+use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::util::file::File;
 use crate::vfs::vfs_inode::VfsInode;
 
@@ -58,6 +61,19 @@ impl<'f> MntIdmap<'f> {
 
     pub fn kgid(self, inode: &VfsInode, vfsgid: c::vfsgid_t) -> c::kgid_t {
         unsafe { c::from_vfsgid(self.0, inode.user_ns(), vfsgid) }
+    }
+
+    /// The mode @inode takes with @acl as its access ACL, into @mode: the
+    /// ACL's permissions, and setgid as setattr_copy() keeps it - and @acl
+    /// None if the mode says all it would.
+    pub fn acl_update_mode(self, inode: &VfsInode, mode: &mut c::umode_t,
+                                  acl: &mut Option<ManuallyDrop<PosixAcl>>) -> Result<(), BchError> {
+        let mut raw = acl.as_deref().map_or(core::ptr::null_mut(), PosixAcl::as_raw);
+        ret_to_result(unsafe { c::posix_acl_update_mode(self.0, inode.as_ptr(), mode, &mut raw) })?;
+        if raw.is_null() {
+            *acl = None;
+        }
+        Ok(())
     }
 
     pub fn in_group_or_capable(self, inode: &VfsInode, gid: c::kgid_t) -> bool {

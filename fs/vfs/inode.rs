@@ -94,11 +94,6 @@ impl InodeInfo {
         core::ptr::from_ref(self).cast_mut()
     }
 
-    /// The struct inode, for the VFS's own functions.
-    pub fn vinode(&self) -> *mut c::inode {
-        self.v.as_ptr()
-    }
-
     pub fn fs(&self) -> &Fs {
         self.vfs().sb().fs()
     }

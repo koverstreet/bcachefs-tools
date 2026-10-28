@@ -198,6 +198,7 @@ mod vfs {
     use crate::util::os_str::{OsStr, OsStrExt};
     use crate::util::vstructs::Validated;
     use crate::vfs::dentry::Dentry;
+    use crate::vfs::idmap::MntIdmap;
     use crate::vfs::inode::{InodeInfo, ATTR_CTIME, ATTR_MODE};
     use crate::xattr::{self, Xattrs};
 
@@ -240,7 +241,7 @@ mod vfs {
             ManuallyDrop::new(self).0.as_ptr()
         }
 
-        fn as_raw(&self) -> *mut c::posix_acl {
+        pub(crate) fn as_raw(&self) -> *mut c::posix_acl {
             self.0.as_ptr()
         }
 
@@ -300,12 +301,6 @@ mod vfs {
                 ret?;
                 Ok(acl.expect("__posix_acl_chmod() succeeded without an ACL"))
             })
-        }
-
-        /// Cache this - or None, for no ACL - as @v's ACL of @ty.
-        fn set_cached(acl: Option<&PosixAcl>, v: &InodeInfo, ty: AclType) {
-            let acl = acl.map_or(core::ptr::null_mut(), PosixAcl::as_raw);
-            unsafe { c::set_cached_acl(v.vinode(), ty as c_int, acl) }
         }
     }
 
@@ -395,7 +390,7 @@ mod vfs {
         // The flag clear means there's no ACL xattr: skip the lookup, and have
         // the VFS cache that there's none
         if inode.bi_flags & ty.inode_flag().bits() == 0 {
-            PosixAcl::set_cached(None, &v, ty);
+            v.vfs().set_cached_acl(ty, None);
             return core::ptr::null_mut();
         }
 
@@ -408,7 +403,7 @@ mod vfs {
             Err(e)  => return err_ptr(e),
         };
 
-        PosixAcl::set_cached(acl.as_ref(), &v, ty);
+        v.vfs().set_cached_acl(ty, acl.as_ref());
         acl.map_or(core::ptr::null_mut(), PosixAcl::into_raw)
     }
 
@@ -456,8 +451,8 @@ mod vfs {
         type_:  c_int,
     ) -> c_int {
         let ty = AclType::from_vfs(type_);
+        let idmap = unsafe { MntIdmap::borrow_raw(idmap) };
         let v = unsafe { Dentry::borrow_raw(dentry) }.inode();
-        let vinode = v.vinode();
         let fs = v.fs();
         let inum = v.inum();
 
@@ -465,7 +460,8 @@ mod vfs {
 
         let trans = crate::btree_trans!(fs);
         let ret = lockrestart_do(&trans, |t| {
-            let mut acl = acl;
+            // The VFS's reference:
+            let mut acl = unsafe { PosixAcl::borrow_raw(acl) };
 
             subvolume::is_ro_trans(t, inum.subvol as u32)?;
 
@@ -475,12 +471,8 @@ mod vfs {
             // The mode can say all an access ACL would: then there's none.
             let mut mode = inode.bi_mode;
             if ty == AclType::Access {
-                ret_to_result(unsafe {
-                    c::posix_acl_update_mode(idmap, vinode, &mut mode, &mut acl)
-                })?;
+                idmap.acl_update_mode(v.vfs(), &mut mode, &mut acl)?;
             }
-            // The VFS's reference:
-            let acl = unsafe { PosixAcl::borrow_raw(acl) };
 
             set_acl_trans(t, inum, &mut inode, acl.as_deref(), ty)?;
 
@@ -491,7 +483,7 @@ mod vfs {
             t.commit(None, CommitFlags::empty())?;
 
             v.update_after_write(t, &mut inode, ATTR_CTIME | ATTR_MODE);
-            PosixAcl::set_cached(acl.as_deref(), &v, ty);
+            v.vfs().set_cached_acl(ty, acl.as_deref());
             Ok(())
         });
         ret_to_class(ret)

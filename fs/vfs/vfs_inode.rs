@@ -17,8 +17,10 @@ use crate::c;
 use crate::util::ffi::Opaque;
 #[cfg(kernel)]
 use {
-    crate::errcode::{ret_to_result_void as ret_to_result, BchError},
+    core::ffi::c_int,
     core::ptr::{read_volatile, write_volatile, NonNull},
+    crate::acl::{AclType, PosixAcl},
+    crate::errcode::{ret_to_result_void as ret_to_result, BchError},
     kernel::sync::aref::AlwaysRefCounted,
     super::super_block::SuperBlock,
 };
@@ -122,6 +124,14 @@ impl VfsInode {
             let flags = read_volatile(p);
             write_volatile(p, if on { flags | flag } else { flags & !flag });
         }
+    }
+
+    // ── ACLs ─────────────────────────────────────────────────────────────
+
+    /// None caches that there's none. The cache takes a reference of its own.
+    pub fn set_cached_acl(&self, ty: AclType, acl: Option<&PosixAcl>) {
+        let acl = acl.map_or(core::ptr::null_mut(), PosixAcl::as_raw);
+        unsafe { c::set_cached_acl(self.as_ptr(), ty as c_int, acl) }
     }
 
     // ── The page cache ───────────────────────────────────────────────────
