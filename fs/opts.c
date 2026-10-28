@@ -963,6 +963,24 @@ int bch2_opts_from_sb(struct bch_opts *opts, struct bch_sb *sb)
 	return 0;
 }
 
+int bch2_opts_validate_sb(struct bch_sb *sb, struct printbuf *out)
+{
+	for (unsigned id = 0; id < bch2_opts_nr; id++) {
+		const struct bch_option *opt = bch2_opt_table + id;
+
+		if (opt->get_sb || opt->get_ext) {
+			CLASS(printbuf, err)();
+			int ret = bch2_opt_validate(opt, bch2_opt_from_sb(sb, id, -1), &err);
+			if (ret) {
+				prt_printf(out, "Invalid superblock option %s\n", err.buf);
+				return ret;
+			}
+		}
+	}
+
+	return 0;
+}
+
 bool __bch2_opt_set_sb(struct bch_sb *sb, int dev_idx,
 		       const struct bch_option *opt, u64 v, const char *val)
 {

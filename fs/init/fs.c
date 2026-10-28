@@ -1089,24 +1089,11 @@ static int bch2_fs_opt_version_init(struct bch_fs *c, struct printbuf *out)
 	bch2_version_to_text(out, c->sb.version);
 	prt_newline(out);
 
-	bool first = true;
-	for (enum bch_opt_id i = 0; i < bch2_opts_nr; i++) {
-		const struct bch_option *opt = &bch2_opt_table[i];
-		u64 v = bch2_opt_get_by_id(&c->opts, i);
-
-		if (!(opt->flags & OPT_MOUNT))
-			continue;
-
-		if (v == bch2_opt_get_by_id(&bch2_opts_default, i))
-			continue;
-
-		prt_str(out, first ? "with options: " : ",");
-		first = false;
-		bch2_opt_to_text(out, c, c->disk_sb.sb, opt, v, OPT_SHOW_MOUNT_STYLE);
-	}
-
-	if (!first)
-		prt_newline(out);
+	CLASS(printbuf, opts)();
+	bch2_opts_to_text(&opts, c->opts, c, c->disk_sb.sb, NULL,
+			  OPT_MOUNT, 0, OPT_SHOW_MOUNT_STYLE);
+	if (opts.pos)
+		prt_printf(out, "with options: %s\n", opts.buf);
 
 	if (c->sb.version_incompat_allowed != c->sb.version) {
 		prt_printf(out, "allowing incompatible features up to ");
@@ -1121,7 +1108,7 @@ static int bch2_fs_opt_version_init(struct bch_fs *c, struct printbuf *out)
 	}
 
 	if (c->sb.multi_device) {
-		first = true;
+		bool first = true;
 		prt_printf(out, "with devices: ");
 		for_each_online_member(c, ca, BCH_DEV_READ_REF_bch2_online_devs) {
 			if (!first)
@@ -1283,20 +1270,7 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 		    !BCH_SB_EXT_DISCARD_BUFFER(ext))
 			SET_BCH_SB_EXT_DISCARD_BUFFER(ext, 4);
 
-		for (unsigned opt_id = 0; opt_id < bch2_opts_nr; opt_id++) {
-			const struct bch_option *opt = bch2_opt_table + opt_id;
-
-			if (opt->get_sb || opt->get_ext) {
-				u64 v = bch2_opt_from_sb(sb, opt_id, -1);
-
-				CLASS(printbuf, err)();
-				int ret = bch2_opt_validate(opt, v, &err);
-				if (ret) {
-					prt_printf(out, "Invalid superblock option %s\n", err.buf);
-					return ret;
-				}
-			}
-		}
+		try(bch2_opts_validate_sb(sb, out));
 	}
 
 	c->opts = bch2_opts_default;

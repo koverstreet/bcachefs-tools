@@ -84,6 +84,7 @@ void bch2_opts_apply(struct bch_opts *, struct bch_opts);
 extern const struct bch_option bch2_opt_table[];
 
 u64 bch2_opt_from_sb(struct bch_sb *, enum bch_opt_id, int);
+int bch2_opts_validate_sb(struct bch_sb *, struct printbuf *);
 
 int bch2_opt_validate(const struct bch_option *, u64, struct printbuf *);
 
