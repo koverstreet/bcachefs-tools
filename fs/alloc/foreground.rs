@@ -409,8 +409,10 @@ pub fn bch2_open_bucket_hash(dev: c_uint, bucket: u64) -> c_uint {
 }
 
 impl Fs {
-    /// Whether @dev's @bucket is open: bch2_bucket_is_open().
-    pub fn bucket_is_open(&self, dev: u32, bucket: u64) -> bool {
+    /// The open bucket @dev's @bucket is, if it's open: bch2_bucket_is_open().
+    /// Found racing the allocator, as C's is - so under freelist_lock, which
+    /// opening and freeing hold, to rely on.
+    pub fn open_bucket(&self, dev: u32, bucket: u64) -> Option<&c::open_bucket> {
         let slot = bch2_open_bucket_hash(dev, bucket) as usize;
 
         // SAFETY: the allocator's, live with the filesystem; each read whole,
@@ -422,12 +424,35 @@ impl Fs {
                 let ob = &raw const (*a).open_buckets[i.get()];
                 if u32::from(read_volatile(&raw const (*ob).dev)) == dev &&
                    read_volatile(&raw const (*ob).bucket) == bucket {
-                    return true;
+                    return Some(&*ob);
                 }
                 ob_idx = read_volatile(&raw const (*ob).hash);
             }
         }
-        false
+        None
+    }
+
+    /// Whether @dev's @bucket is open: bch2_bucket_is_open().
+    pub fn bucket_is_open(&self, dev: u32, bucket: u64) -> bool {
+        self.open_bucket(dev, bucket).is_some()
+    }
+
+    /// @dev's open @bucket to be discarded as soon as it's freed - false if
+    /// it isn't open: bch2_bucket_set_discard_fast().
+    pub fn bucket_set_discard_fast(&self, dev: u32, bucket: u64) -> bool {
+        let Some(ob) = self.open_bucket(dev, bucket) else { return false };
+        let _l = crate::locking::Lock::from_c(&ob.lock).lock();
+        if u32::from(ob.dev) != dev || ob.bucket != bucket {
+            return false;
+        }
+        // SAFETY: its bitfield byte, under its lock as C sets the bit
+        unsafe {
+            let bits = (&raw const ob.bits).cast_mut();
+            let mut b = read_volatile(bits);
+            b.set_do_discards_fast(true);
+            core::ptr::write_volatile(bits, b);
+        }
+        true
     }
 
     /// bucket_is_open(), and if not, again under freelist_lock, which opening

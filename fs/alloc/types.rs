@@ -180,9 +180,9 @@ nest! {
         #>[bitfield(u8)]
         pub bits: pub struct open_bucket_bits {
             #[bits(5)] pub data_type: c::bch_data_type,
-            valid:            bool,
-            on_partial_list:  bool,
-            do_discards_fast: bool,
+            pub valid:            bool,
+            pub on_partial_list:  bool,
+            pub do_discards_fast: bool,
         },
     }
 }

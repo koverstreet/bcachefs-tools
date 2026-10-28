@@ -146,6 +146,19 @@ impl<'f> BtreeTrans<'f> {
         unsafe { (*self.raw()).journal_res.seq }
     }
 
+    /// The function that got it, for messages: trans->fn.
+    pub fn fn_name(&self) -> &str {
+        // SAFETY: a string literal, set when it's got
+        unsafe { core::ffi::CStr::from_ptr((*self.raw()).fn_.cast()) }.to_str().unwrap_or("?")
+    }
+
+    /// Journal space for keys a trigger adds in the commit's atomic phase,
+    /// through the write buffer, reserved with the transaction's own.
+    pub fn reserve_extra_journal_u64s(&self, u64s: u32) {
+        // SAFETY: the transaction's, ours while we have it
+        unsafe { (*self.raw()).extra_journal_u64s += u64s }
+    }
+
     /// Delete [@start, @end) in @btree, committing as it goes. It drives its
     /// own begin and commit loop, so it's on the transaction, not an attempt:
     /// transaction_restart_nested if it restarted along the way, for a caller

@@ -1180,6 +1180,11 @@ impl Fs {
         Ok(ca)
     }
 
+    /// Whether @bucket is one of its device's: bch2_dev_bucket_exists().
+    pub fn dev_bucket_exists(&self, bucket: c::bpos) -> bool {
+        self.dev_rcu(bucket.inode as u32, &read_lock()).is_some_and(|ca| ca.bucket_valid(bucket.offset))
+    }
+
     /// A ref on @bucket's device, if it's a device with that bucket:
     /// bch2_dev_bucket_tryget_noerror().
     pub fn dev_bucket_tryget_noerror(&self, bucket: c::bpos) -> Option<DevRef> {

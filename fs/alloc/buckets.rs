@@ -47,6 +47,18 @@ impl c::bch_dev {
         b * u64::from(self.mi.bucket_size)
     }
 
+    /// Whether it counts toward c->capacity: rw, with durability -
+    /// buckets.h's dev_has_capacity(). Whatever divides capacity up per
+    /// device must agree on which do.
+    pub fn has_capacity(&self) -> bool {
+        self.rw_durability() != 0
+    }
+
+    /// Its buckets, in sectors - past first_bucket.
+    pub fn capacity_sectors(&self) -> u64 {
+        self.bucket_to_sector(self.mi.nbuckets - u64::from(self.mi.first_bucket))
+    }
+
     /// Whether the allocator mustn't use bucket @b - migrate marks the space
     /// it can't: bch2_bucket_nouse().
     pub fn bucket_nouse(&self, b: u64) -> bool {
