@@ -43,7 +43,7 @@ fn prt_symbol_demangled(out: &mut Printbuf, sym: &str) {
 
 /// @addr's symbol, demangled, to @out.
 #[cfg(kernel)]
-fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
+pub(crate) fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
     let mut buf = [0u8; c::KSYM_SYMBOL_LEN as usize];
     // SAFETY: @buf outlives @sym, which writes nothing past it
     let mut sym = unsafe { Printbuf::new_extern(buf.as_mut_ptr().cast(), buf.len()) };
@@ -55,7 +55,7 @@ fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
 
 /// @addr's symbol, demangled, to @out.
 #[cfg(not(kernel))]
-fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
+pub(crate) fn prt_symbol(out: &mut Printbuf, addr: c_ulong) {
     let mut sym = Printbuf::new();
 
     // SAFETY: our printbuf
