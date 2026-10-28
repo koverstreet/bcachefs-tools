@@ -26,6 +26,7 @@ pub mod kernel;
 pub mod kthread;
 pub mod list;
 pub mod log;
+pub mod mempool;
 pub mod module_param;
 pub mod ops;
 pub mod os_str;
