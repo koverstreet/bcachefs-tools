@@ -401,6 +401,14 @@ nest! {
 }
 c_default!(bch_ioctl_data);
 
+impl bch_ioctl_data {
+    /// The scrub op's arguments.
+    pub fn scrub(&self) -> bch_ioctl_data_scrub {
+        // SAFETY: the union's members are all integers: any bytes are each
+        unsafe { self.args.scrub }
+    }
+}
+
 // SAFETY: integers, then an empty array starting where they end: any bytes
 // are a value, and none are padding
 #[cfg(kernel)]

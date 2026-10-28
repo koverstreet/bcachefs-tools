@@ -745,8 +745,7 @@ impl FileOps for DataJob {
         p.sectors_error_uncorrected = stats.sectors_error_uncorrected.load(Relaxed) as u64;
 
         if u32::from(self.arg.op) == c::BCH_DATA_OP_scrub {
-            // SAFETY: scrub's
-            let scrub = unsafe { self.arg.args.scrub };
+            let scrub = self.arg.scrub();
             if let Some(ca) = fs.dev_get(scrub.dev) {
                 let u = ca.usage_full_read_fast();
                 p.sectors_total = (c::BCH_DATA_btree as usize..u.d.len())
