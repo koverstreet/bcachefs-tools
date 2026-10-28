@@ -310,7 +310,8 @@ nest! {
          * btree write buffer allocates btree nodes after the journal -
          * otherwise we'd get HOL blocking and priority inversion:
          */
-        pub watermark_open_buckets: u8,
+        /* written under the journal's lock, read without it */
+        pub watermark_open_buckets: crate::util::projections::Volatile<u8>,
 
         pub flags: c_ulong,
         #[cfg(CONFIG_BCACHEFS_DEBUG)]
