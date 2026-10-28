@@ -78,25 +78,37 @@ impl Fold for BlockErrs {
 #[pin_data]
 #[repr(C)]
 pub struct EcBio {
-    /// Its block's device: the bio's io ref on it, read or write as @write -
-    /// leaked into it by submit_range(), adopted back by its endio
-    ca:          *const c::bch_dev,
+    /// Its block's device, kept by the bio's io ref on it, for the endio
+    ca:          Option<BlockDev>,
     /// A ref on the round's Gather, for the endio to put
     done:        Option<GatherRef<BlockErrs>>,
     /// The block's pointer, for the endio's staleness check
     ptr:         c::bch_extent_ptr,
     submit_time: u64,
     idx:         u8,
-    write:       bool,
     #[pin]
     bio:         Bio,
 }
 
 crate::has_bio!(EcBio, bio);
 
-// SAFETY: its device is reached by raw pointer from where the IO completes,
-// as C's is: its io ref, which it holds
-unsafe impl Send for EcBio {}
+/// A block IO's device, by its io ref: a read's, or a write's.
+pub(crate) enum BlockDev {
+    Read(DevIoRef<c::bch_dev_read_ref>),
+    Write(DevIoRef<c::bch_dev_write_ref>),
+}
+
+impl From<DevIoRef<c::bch_dev_read_ref>> for BlockDev {
+    fn from(ca: DevIoRef<c::bch_dev_read_ref>) -> Self {
+        BlockDev::Read(ca)
+    }
+}
+
+impl From<DevIoRef<c::bch_dev_write_ref>> for BlockDev {
+    fn from(ca: DevIoRef<c::bch_dev_write_ref>) -> Self {
+        BlockDev::Write(ca)
+    }
+}
 
 /// A round's bio done: its IO accounted against the device, and its block's
 /// error folded into the round's Gather - the device's, or its pointer gone
@@ -105,19 +117,16 @@ struct BlockEndio;
 
 impl Endio<BioBox<EcBio>> for BlockEndio {
     fn endio(mut bio: BioBox<EcBio>) {
-        let done = bio.as_mut().project().done.take().expect("a round's bio, with its ref");
-        let (ca, ptr, idx, write, submit_time) = (bio.ca, bio.ptr, bio.idx, bio.write, bio.submit_time);
+        let this = bio.as_mut().project();
+        let done = this.done.take().expect("a round's bio, with its ref");
+        let ca = this.ca.take().expect("a round's bio, with its device");
+        let (ptr, idx, submit_time) = (bio.ptr, bio.idx, bio.submit_time);
         let status = bio.bio.status();
         drop(bio);
 
-        // SAFETY: the bio's io ref, of @write's kind, leaked into it by
-        // submit_range()
-        let e = unsafe {
-            if write {
-                block_done(DevIoRef::<c::bch_dev_write_ref>::adopt(&*ca), &ptr, submit_time, status)
-            } else {
-                block_done(DevIoRef::<c::bch_dev_read_ref>::adopt(&*ca), &ptr, submit_time, status)
-            }
+        let e = match ca {
+            BlockDev::Read(ca)  => block_done(ca, &ptr, submit_time, status),
+            BlockDev::Write(ca) => block_done(ca, &ptr, submit_time, status),
         };
         let mut errs = BlockErrs::default();
         errs.0[usize::from(idx)] = e;
@@ -168,7 +177,10 @@ impl<'a> BlockIo<'a, c::bch_dev_write_ref> {
     }
 }
 
-impl<'a, R: IoRefIdx> BlockIo<'a, R> {
+impl<'a, R: IoRefIdx> BlockIo<'a, R>
+where
+    DevIoRef<R>: Into<BlockDev>,
+{
     fn new(fs: &'a Fs, buf: &'a mut StripeBuf) -> impl PinInit<Self> + 'a {
         pin_init!(Self { done <- Gather::new(), fs, buf, _r: PhantomData })
     }
@@ -223,14 +235,13 @@ impl<'a, R: IoRefIdx> BlockIo<'a, R> {
         while offset < bytes {
             let b = (bytes - offset).min(nr_vecs * PAGE_SIZE);
             let done = Some(this.done.get());
-            let ca_ptr = core::ptr::from_ref::<c::bch_dev>(&ca);
+            let dev = Some(ca.clone().into());
             let mut bio = set.alloc::<BchError, _>(ca.disk_sb.bdev, nr_vecs as u16, opf, |at| pin_init!(EcBio {
-                ca: ca_ptr,
+                ca: dev,
                 done,
                 ptr,
                 submit_time: local_clock(),
                 idx: idx as u8,
-                write,
                 bio <- at.init::<BchError>(),
             }? BchError)).expect("a bio from the stripe bioset's mempool");
 
@@ -238,8 +249,6 @@ impl<'a, R: IoRefIdx> BlockIo<'a, R> {
             // SAFETY: the block's buffer, which the round has until its wait,
             // after this bio's endio
             unsafe { bio.bio_mut().map(base.wrapping_add(offset), b) };
-            // the bio's io ref, which its endio adopts
-            ca.clone().leak();
             bio.submit::<BlockEndio>();
             offset += b;
         }
