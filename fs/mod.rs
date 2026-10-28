@@ -205,7 +205,7 @@ pub mod data {
         pub mod work;
     }
     pub mod reflink;
-    pub mod update;
+    pub mod update_index;
 }
 pub mod errcode;
 pub mod opts;
