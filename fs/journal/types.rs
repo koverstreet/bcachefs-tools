@@ -443,10 +443,13 @@ nest! {
         pub replay_journal_seq: u64,
         pub replay_journal_seq_end: u64,
 
-        pub wp: c::write_point,
         /*
-         * Failure domain keys scratch for journal_write_alloc() - like
-         * wp.stripe, protected by journal writes being allocated in order:
+         * The round robin over devices journal writes take - protected by
+         * journal writes being allocated in order:
+         */
+        pub stripe: c::dev_stripe_state,
+        /*
+         * Failure domain keys scratch for journal_write_alloc() - as stripe:
          */
         pub wp_domain_keys: [u64; c::BCH_SB_MEMBERS_MAX as usize],
         /*

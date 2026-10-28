@@ -92,7 +92,7 @@ static void __journal_write_alloc(struct journal *j,
 			__set_bit(ptr->dev, chosen.d);
 
 		struct dev_alloc_list devs_sorted;
-		bch2_dev_alloc_list_devs(c, &j->wp.stripe, devs,
+		bch2_dev_alloc_list_devs(c, &j->stripe, devs,
 					 &chosen, j->wp_domain_keys, &devs_sorted);
 
 		/* The lowest score in the best failure domain, ties in sort order: */
@@ -132,7 +132,7 @@ static void __journal_write_alloc(struct journal *j,
 
 		struct journal_device *ja = &ca->journal;
 
-		bch2_dev_stripe_increment(ca, &j->wp.stripe);
+		bch2_dev_stripe_increment(ca, &j->stripe);
 
 		u64 offset = bucket_to_sector(ca, ja->buckets[ja->cur_idx]) +
 			ca->mi.bucket_size - ja->sectors_free;
