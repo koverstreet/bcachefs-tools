@@ -12,13 +12,17 @@
 #include <linux/compat.h>
 #include <linux/fs.h>
 #include <linux/kallsyms.h>
+#include <linux/key.h>
+#include <linux/lz4.h>
 #include <linux/mount.h>
 #include <linux/namei.h>
 #include <linux/mm.h>
 #include <linux/notifier.h>
 #include <linux/pagemap.h>
 #include <linux/poll.h>
+#include <linux/vmalloc.h>
 #include <asm/ioctl.h>
+#include <keys/user-type.h>
 
 #ifdef __BINDGEN__
 /*
@@ -79,6 +83,9 @@ const __poll_t RUST_CONST_HELPER_EPOLLIN		= EPOLLIN;
 const __poll_t RUST_CONST_HELPER_EPOLLOUT		= EPOLLOUT;
 const __poll_t RUST_CONST_HELPER_EPOLLERR		= EPOLLERR;
 const __poll_t RUST_CONST_HELPER_EPOLLHUP		= EPOLLHUP;
+
+/* lz4's compression workspace: a sizeof() */
+const size_t RUST_CONST_HELPER_LZ4_MEM_COMPRESS		= LZ4_MEM_COMPRESS;
 #endif
 
 static inline struct folio *rust_page_folio(struct page *page)
@@ -147,6 +154,36 @@ static inline bool rust_page_highmem(struct page *page)
 static inline void *rust_page_address(struct page *page)
 {
 	return page_address(page);
+}
+
+/*
+ * A bio's pages mapped as one buffer. PAGE_KERNEL isn't a constant - on x86
+ * it has the memory encryption mask - and vmalloc.h stays blocklisted: it
+ * would bind a second struct vm_struct.
+ */
+static inline void *rust_vmap(struct page **pages, unsigned int count)
+{
+	return vmap(pages, count, VM_MAP, PAGE_KERNEL);
+}
+
+static inline void rust_vunmap(const void *addr)
+{
+	vunmap(addr);
+}
+
+/* request_key() is a static inline, of key_type_user, a var user-type.h declares */
+static inline struct key *rust_request_user_key(const char *description)
+{
+	return request_key(&key_type_user, description, NULL);
+}
+
+/* dereference_key_locked() is a macro: a user key's payload, its sem held */
+static inline const void *rust_user_key_data(struct key *key, unsigned short *len)
+{
+	const struct user_key_payload *ukp = dereference_key_locked(key);
+
+	*len = ukp->datalen;
+	return ukp->data;
 }
 
 #endif /* _BCACHEFS_CODEGEN_H */

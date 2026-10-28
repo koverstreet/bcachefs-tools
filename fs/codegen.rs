@@ -43,6 +43,12 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/power_supply.h",		// power_supply_reg_notifier(), reconcile on battery
     "linux/raid/pq.h",			// raid6_gen_syndrome(), a stripe's Q
     "linux/raid/xor.h",			// xor_gen(), a stripe's P
+    "linux/lz4.h",			// data/compress.rs's lz4
+    "linux/zlib.h",			// its gzip
+    "linux/zstd.h",			// its zstd
+    "linux/xxhash.h",			// data/checksum.rs's xxhash
+    "crypto/chacha.h",			// its encryption
+    "crypto/poly1305.h",		// and MACs
 ];
 
 /// Headers under fs/ bound, by path - which the clang args have as an -I:
@@ -82,6 +88,15 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/power_supply.h",
     "linux/raid/pq.h",
     "linux/raid/xor.h",
+    "linux/lz4.h",
+    "linux/zlib.h",
+    "linux/zconf.h",			// zlib.h's: MAX_WBITS, DEF_MEM_LEVEL
+    "linux/zstd.h",
+    "linux/zstd_lib.h",			// zstd.h's types: zstd_parameters is ZSTD_parameters
+    "linux/zstd_errors.h",		// and zstd_error_code ZSTD_ErrorCode
+    "linux/xxhash.h",
+    "crypto/chacha.h",
+    "crypto/poly1305.h",
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
@@ -116,9 +131,21 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     // the raid6 and xor APIs on both sides of 7.1's and 7.2's renames - each
     // kernel has one set: data/ec/io.rs picks by cfg(linux_ge)
     "raid6_gen_syndrome", "raid6_recov_2data", "raid6_recov_datap", "xor_gen", "xor_blocks",
+    "LZ4_decompress_safe_partial", "LZ4_compress_destSize", "LZ4_compress_HC",
+    "zlib_inflate_workspacesize", "zlib_inflateInit2", "zlib_inflate", "zlib_inflateEnd",
+    "zlib_deflate_workspacesize", "zlib_deflateInit2", "zlib_deflate", "zlib_deflateEnd",
+    "zstd_max_clevel", "zstd_get_params", "zstd_is_error", "zstd_get_error_code",
+    "zstd_cctx_workspace_bound", "zstd_init_cctx", "zstd_compress_cctx",
+    "zstd_dctx_workspace_bound", "zstd_init_dctx", "zstd_decompress_dctx",
+    "rust_vmap", "rust_vunmap",
+    "xxh64_reset", "xxh64_update", "xxh64_digest",
+    "chacha_init", "chacha20_crypt", "chacha_zeroize_state",
+    "poly1305_init", "poly1305_update", "poly1305_final",
+    "rust_request_user_key", "rust_user_key_data",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",
-                                  "xattr_handler", "kstatfs", "export_operations", "fid_type"];
+                                  "xattr_handler", "kstatfs", "export_operations", "fid_type",
+                                  "xxh64_state", "chacha_state", "poly1305_desc_ctx"];
 /// Structs in an unblocklisted header - defined there, or only declared, as
 /// uidgid.h declares user_namespace - that kernel::bindings binds: a second
 /// copy would be a different type - and bindgen, stopped at one, doesn't
@@ -129,7 +156,11 @@ const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "
                                  "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*",
                                  "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*",
                                  // before 7.1/7.2, as above
-                                 "raid6_call", "raid6_2data_recov", "raid6_datap_recov", "MAX_XOR_BLOCKS"];
+                                 "raid6_call", "raid6_2data_recov", "raid6_datap_recov", "MAX_XOR_BLOCKS",
+                                 "LZ4HC_MEM_COMPRESS", "LZ4HC_MIN_CLEVEL",
+                                 "MAX_WBITS", "DEF_MEM_LEVEL", "Z_OK", "Z_STREAM_END", "Z_FINISH",
+                                 "Z_DEFLATED", "Z_DEFAULT_STRATEGY", "Z_DEFAULT_COMPRESSION",
+                                 "Z_BEST_SPEED", "Z_BEST_COMPRESSION"];
 
 /// Run the bindgen CLI and write `bindings.rs`, and `extern.c` - C wrappers for
 /// whatever of it is a static inline - into `out`. Kbuild supplies

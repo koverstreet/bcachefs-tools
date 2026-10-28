@@ -52,6 +52,11 @@ fn main() {
     rerun_if_userspace_config_changed(&root);
     println!("cargo:rerun-if-changed={}", include_dir.display());
 
+    // What src/compress.rs calls: linked after this crate, as a link
+    // --as-needed only keeps a library that's needed by what comes before it
+    println!("cargo:rustc-link-lib=z");
+    println!("cargo:rustc-link-lib=lz4");
+
     let urcu = pkg_config::probe_library("liburcu").expect("Failed to find urcu lib");
     let target = std::env::var("TARGET").unwrap();
     let clang_target = clang_target_for_rust_target(&target);
@@ -88,6 +93,9 @@ fn main() {
         // As the kernel's bindings have it - req_op_REQ_OP_READ, a c_uint -
         // so Rust names it the same in both builds.
         .constified_enum("req_op")
+        // And a zstd error a u32, as in-kernel: a code from a newer libzstd
+        // than these bindings would be no value of a Rust enum.
+        .constified_enum("ZSTD_ErrorCode")
         // Own only what's defined under include/ — the kernel-compat surface.
         // allowlist_recursively (default) pulls in the system primitives these
         // reference (__u64 etc.), so they're emitted here too.
@@ -107,13 +115,24 @@ fn main() {
         // one as C does (darray_push()'s -ENOMEM) - the kernel crate's
         // bindings have them in-kernel; add as needed:
         .allowlist_var("ENOENT|ENOMEM|EINVAL|ENAMETOOLONG|ERANGE|ENODATA|E2BIG|EACCES|EBUSY")
-        .allowlist_var("ECHILD|EROFS|EXDEV|ENOTDIR|EIO|ENOTEMPTY|EFBIG|ENOSPC|EINTR|EPERM|EFAULT")
+        .allowlist_var("ECHILD|EROFS|EXDEV|ENOTDIR|EIO|ENOTEMPTY|EFBIG|ENOSPC|EINTR|EPERM|EFAULT|ENOKEY")
         // The vendored C fs/ uses - closures - is the shim's too: not
         // bcachefs's, so not the fs crate's to define.
         .allowlist_file(format!("{}/vendor/closure.h", fs_dir.display()))
         // The raid library: userspace's stand-in for the kernel's raid6 and
         // xor, as fs/util/raid.rs uses it.
         .allowlist_function("raid_init|raid_zero|raid_gen|raid_rec")
+        // The compression libraries: include/linux's lz4.h and zlib.h are
+        // macros onto them, which src/compress.rs gives the kernel's API.
+        // LZ4_decompress_safe_partial()'s signature is the kernel's.
+        .allowlist_function("LZ4_decompress_safe_partial")
+        .allowlist_type("z_stream")
+        .allowlist_var("ZLIB_VERSION|MAX_WBITS|Z_OK|Z_STREAM_END|Z_FINISH|Z_DEFLATED")
+        .allowlist_var("Z_DEFAULT_STRATEGY|Z_DEFAULT_COMPRESSION|Z_BEST_SPEED|Z_BEST_COMPRESSION")
+        // The keyring, which a key is looked for in (data/checksum.rs): the
+        // kernel's in-kernel, libkeyutils' here.
+        .allowlist_function("request_key|keyctl_read|keyctl_revoke")
+        .allowlist_var("KEY_SPEC_.*")
         // Never emit fs/ types: those are bcachefs-kernel's, and some (printbuf)
         // even carry Rust impls there. allowlist_recursively would otherwise
         // pull them in through an include/ reference. fs/vendor/ isn't
