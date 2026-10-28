@@ -503,7 +503,7 @@ pub fn bch2_fs_debug_init(c: &Opaque<c::bch_fs>) {
         debugfs::create_file::<Once<WritePoints>>(c"write_points", dir, fs);
     }
 
-    #[cfg(__KERNEL__)]
+    #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
     crate::debug::async_objs::debugfs_init(c, dir);
 
     let btrees = debugfs::create_dir(c"btrees", Some(dir));

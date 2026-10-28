@@ -19,8 +19,8 @@ pub struct btree_write_bio {
     pub data_bytes: c_uint,
     pub sector_offset: c_uint,
     pub start_time: u64,
-    /* C's CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS, which bcachefs.h defines from these */
-    #[cfg(all(__KERNEL__, CONFIG_DEBUG_FS))]
+    /* its slot on its async object list */
+    #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
     pub list_idx: c_uint,
     pub wbio: c::bch_write_bio,
 }

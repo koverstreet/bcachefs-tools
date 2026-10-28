@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! debugfs's async_objs/: a file per list of in-flight bios and write ops.
-//! The lists are async_objs.c's; kernel only, as they are.
+//! debugfs async_objs/: a file per list of in-flight objects. The lists are
+//! async_objs.c's, built in the kernel with debugfs, and always in
+//! userspace.
+//!
+//! Everything in flight is to be introspectable, even what's short-lived and
+//! high-rate: a fast_list makes listing an object about as cheap as taking a
+//! ref. A listable type implements AsyncObj - which list, how it's shown,
+//! and, the unsafe part, that it and what it's shown from are freed only a
+//! grace period after it's off the list. An object holds its place on the
+//! list in a field, an AsyncObjSlot, which takes it off when dropped.
 //!
 //! XXX: use after free, C's too: the walk is under RCU, but objects are freed
 //! at completion - bio_put(), end_io() - with no grace period. Needs
@@ -10,6 +18,117 @@
 //! list's objects RCU-freed, or refcounted against the walker, or removal
 //! excluded.
 
+use crate::c;
+use crate::fs::Fs;
+use crate::util::Printbuf;
+use core::ffi::c_void;
+#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+use core::ptr::NonNull;
+
+// ── Listing an object ────────────────────────────────────────────────────
+
+/// # Safety
+/// An object on a list is freed only a grace period after it's off it - and
+/// so is what its to_text() reads through it: the debugfs walk reads what it
+/// finds there under RCU.
+pub unsafe trait AsyncObj {
+    const LIST: c::bch_async_obj_lists;
+
+    fn to_text(&self, out: &mut Printbuf, fs: &Fs);
+}
+
+/// The obj_to_text() for @T's list.
+///
+/// # Safety
+/// @obj is a @T on its list, read under RCU; @out and @c live.
+pub unsafe extern "C" fn obj_to_text<T: AsyncObj>(out: *mut c::printbuf, c: *mut c::bch_fs, obj: *mut c_void) {
+    // SAFETY: the caller's
+    unsafe { (*obj.cast::<T>()).to_text(Printbuf::borrow_raw(out), Fs::borrow_raw(c)) }
+}
+
+#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+cstruct_macros::c_extern! {
+    fn fast_list_add(l: *mut c::fast_list, item: *mut c_void) -> core::ffi::c_int;
+    fn fast_list_remove(l: *mut c::fast_list, idx: core::ffi::c_uint);
+}
+
+/// An object's place on its list; empty without the lists configured.
+pub struct AsyncObjSlot {
+    #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+    list: Option<NonNull<c::fast_list>>,
+    #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+    idx:  core::ffi::c_uint,
+}
+
+// SAFETY: a list and a slot in it; the list's operations are lockless and
+// safe from any context, so any thread may take it off
+unsafe impl Send for AsyncObjSlot {}
+unsafe impl Sync for AsyncObjSlot {}
+
+impl AsyncObjSlot {
+    /// On no list: for an object not listed yet, or that couldn't be.
+    pub const fn none() -> Self {
+        AsyncObjSlot {
+            #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+            list: None,
+            #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+            idx:  0,
+        }
+    }
+
+    /// Puts @obj on its list, if there's room: the lists are a debugging aid,
+    /// so no room isn't an error - it's just not listed.
+    ///
+    /// # Safety
+    /// @obj stays where it is, and live, while this is held - it's a field of
+    /// it - and @fs outlives this.
+    #[allow(unused_variables)]
+    pub unsafe fn new<T: AsyncObj>(fs: &Fs, obj: &T) -> Self {
+        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+        {
+            let list = (&raw const fs.async_objs[T::LIST as usize].list).cast_mut();
+            // SAFETY: the filesystem's list; @obj the caller's
+            let ret = unsafe { fast_list_add(list, core::ptr::from_ref(obj).cast_mut().cast()) };
+            if ret > 0 {
+                return AsyncObjSlot { list: NonNull::new(list), idx: ret as core::ffi::c_uint };
+            }
+        }
+        Self::none()
+    }
+}
+
+impl Drop for AsyncObjSlot {
+    fn drop(&mut self) {
+        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+        if let Some(list) = self.list {
+            // SAFETY: new()'s slot on the filesystem's list, which outlives us
+            unsafe { fast_list_remove(list.as_ptr(), self.idx) };
+        }
+    }
+}
+
+/// Takes an object C listed off its list, for Rust that finishes it. @idx 0
+/// means it isn't listed.
+///
+/// # Safety
+/// @idx is the object's, from async_object_list_add() on that list.
+#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+pub unsafe fn list_del(fs: &Fs, list: c::bch_async_obj_lists, idx: &mut core::ffi::c_uint) {
+    if *idx != 0 {
+        let l = (&raw const fs.async_objs[list as usize].list).cast_mut();
+        // SAFETY: the caller's slot on the filesystem's list
+        unsafe { fast_list_remove(l, *idx) };
+        *idx = 0;
+    }
+}
+
+// ── The debugfs files ────────────────────────────────────────────────────
+
+#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+pub(crate) use files::debugfs_init;
+
+#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+mod files {
 use core::ffi::CStr;
 use core::ptr::NonNull;
 
@@ -84,4 +203,5 @@ pub(crate) fn debugfs_init(c: &Opaque<c::bch_fs>, parent: NonNull<c::dentry>) {
         // SAFETY: bch2_fs_debug_exit() removes them first
         unsafe { debugfs::create_file::<AsyncObjList>(name, dir, list) };
     }
+}
 }

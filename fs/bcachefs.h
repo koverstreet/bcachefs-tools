@@ -23,12 +23,6 @@
 #define ENUMERATED_REF_DEBUG
 #endif
 
-#ifdef __KERNEL__
-#ifdef CONFIG_DEBUG_FS
-#define CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS
-#endif
-#endif
-
 #ifndef dynamic_fault
 #define dynamic_fault(...)		0
 #endif

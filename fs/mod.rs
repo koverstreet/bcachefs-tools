@@ -78,7 +78,6 @@ pub mod alloc {
 }
 pub mod btree;
 pub mod debug {
-    #[cfg(all(__KERNEL__, CONFIG_DEBUG_FS))]
     pub mod async_objs;
     #[cfg(CONFIG_DEBUG_FS)]
     #[allow(clippy::module_inception)]

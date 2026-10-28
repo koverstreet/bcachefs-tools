@@ -4,8 +4,8 @@
 
 use cstruct_macros::{c_enum, c_xmacro};
 
-// The list's, in the kernel with debugfs: where Fs has them
-#[cfg(all(__KERNEL__, CONFIG_DEBUG_FS))]
+// The lists, where Fs has them: only with the lists configured
+#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
 use {
     crate::cstructs::c,
     crate::fs::Fs,
@@ -32,7 +32,7 @@ c_enum! {
     }
 }
 
-#[cfg(all(__KERNEL__, CONFIG_DEBUG_FS))]
+#[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
 #[placed(Fs.async_objs[], index = idx: c_uint)]
 #[pin_data]
 #[repr(C)]

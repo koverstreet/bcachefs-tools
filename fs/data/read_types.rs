@@ -75,8 +75,8 @@ nest! {
             pub _state: u16,
         },
         pub ret: i16,
-        /* C's CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS, which bcachefs.h defines from these */
-        #[cfg(all(__KERNEL__, CONFIG_DEBUG_FS))]
+        /* its slot on its async object list */
+        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
         pub list_idx: c_uint,
 
         pub pick: c::extent_ptr_decoded,
@@ -119,7 +119,7 @@ impl c::bch_read_bio {
         self.err_report   = core::ptr::null_mut();
         self.opts         = opts;
         self.bio.bi_end_io = end_io;
-        #[cfg(all(__KERNEL__, CONFIG_DEBUG_FS))]
+        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
         { self.list_idx = 0; }
     }
 }

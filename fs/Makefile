@@ -26,7 +26,8 @@ endif
 # defaults it, with CONFIG_QUOTA.
 bcachefs-config-cppflags := \
 	$(foreach o,DEBUG INJECT_TRANSACTION_RESTARTS TESTS,$(if $(BCACHEFS_$(o)),-DCONFIG_BCACHEFS_$(o)=1)) \
-	$(if $(CONFIG_QUOTA),-DCONFIG_BCACHEFS_QUOTA=1)
+	$(if $(CONFIG_QUOTA),-DCONFIG_BCACHEFS_QUOTA=1) \
+	$(if $(CONFIG_DEBUG_FS),-DCONFIG_BCACHEFS_ASYNC_OBJECT_LISTS=1)
 endif
 
 # bindgen and rustc get these too (Makefile.rust): some change struct layouts
