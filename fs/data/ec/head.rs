@@ -518,8 +518,8 @@ fn head_stage(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, h: &c::ec_st
     // Has to come after the stripe's own allocation: that runs the bucket
     // allocator against the stripe's device mask, clobbering devs_sorted.
     let ob = if want_ob {
-        // SAFETY: the write's write point, the caller's
-        fs.dev_alloc_list(unsafe { &mut (*req.wp).alloc.stripe }, req);
+        // SAFETY: the write's write point, the caller's, locked
+        fs.dev_alloc_list(&mut unsafe { (*req.wp).alloc.lock.held() }.stripe, req);
         claim_bucket(req, s, &mut i)
     } else {
         core::ptr::null_mut()

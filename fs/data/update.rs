@@ -452,7 +452,7 @@ impl c::data_update {
                         return Err(e);
                     }
                 };
-                let sectors = ((end.offset - op.pos.offset) as u32).min(wp.alloc.sectors_free);
+                let sectors = ((end.offset - op.pos.offset) as u32).min(wp.sectors_free());
                 // SAFETY: the keylist's room for the key, at top()
                 unsafe { (*e).k.resize(sectors) };
                 wp.open_buckets_get(&mut op.open_buckets);

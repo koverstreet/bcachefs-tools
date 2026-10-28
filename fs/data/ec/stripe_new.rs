@@ -702,9 +702,11 @@ pub unsafe fn bch2_ec_bucket_cancel(_c: &Opaque<c::bch_fs>, ob: &c::open_bucket,
 #[c_export]
 pub unsafe fn bch2_writepoint_ec_buf(c: &Opaque<c::bch_fs>, wp: &c::write_point) -> *mut c_void {
     let fs = Fs::from_c(c);
-    let ptrs = &wp.alloc.ptrs;
+    // SAFETY: the caller's
+    let wp = unsafe { wp.alloc.lock.held() };
+    let ptrs = &wp.ptrs;
     let Some(ob) = ptrs.v[..usize::from(ptrs.nr)].iter()
-        // SAFETY: the write point's pins, which its lock - the caller's - keeps
+        // SAFETY: the write point's pins, which its lock keeps
         .map(|&i| unsafe { OpenBucketRef::from_idx(fs, i.expect("a bucket of the list")) })
         .find(|ob| !ob.ec().is_null()) else { return core::ptr::null_mut() };
 

@@ -2037,7 +2037,6 @@ void bch2_alloc_sectors_done(struct bch_fs *c, struct write_point *wp)
 static inline void writepoint_init(struct write_point *wp,
 				   enum bch_data_type type)
 {
-	mutex_init(&wp->lock);
 	wp->data_type = type;
 
 	INIT_WORK(&wp->index_update_work, bch2_write_point_do_index_updates);

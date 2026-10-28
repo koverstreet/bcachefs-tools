@@ -241,45 +241,70 @@ c_enum! {
     }
 }
 
-nest! {
-    #[derive(CStruct)]*
-    #[repr(C)]*
-    pub struct write_point {
-        #[c_anon]
-        pub alloc: pub struct write_point_alloc {
-            pub __align: CacheAligned,
-            pub node: c::hlist_node,
-            pub lock: c::mutex,
-            pub last_used: u64,
-            pub write_point: c_ulong,
-            pub data_type: c::bch_data_type,
+/* the write point lock's: what a write allocating from it uses */
+#[repr(C)]
+#[derive(CStruct)]
+pub struct WritePointLocked {
+    /* calculated based on how many pointers we're actually going to use: */
+    pub sectors_free: c_uint,
+    pub prev_sectors_free: c_uint,
 
-            /* calculated based on how many pointers we're actually going to use: */
-            pub sectors_free: c_uint,
-            pub prev_sectors_free: c_uint,
+    pub ptrs: c::open_buckets,
+    pub stripe: c::dev_stripe_state,
 
-            pub ptrs: c::open_buckets,
-            pub stripe: c::dev_stripe_state,
+    pub sectors_allocated: u64,
+}
 
-            pub sectors_allocated: u64,
-        },
-
-        #[c_anon]
-        pub io: pub struct write_point_io {
-            pub __align: CacheAligned,
-            pub index_update_work: c::work_struct,
-
-            pub writes: c::list_head,
-            pub writes_lock: c::spinlock_t,
-
-            pub state: c::write_point_state,
-            pub last_state_change: u64,
-            pub time: [u64; c::WRITE_POINT_STATE_NR as usize],
-            pub last_runtime: u64,
-        },
+published! {
+    /// Which write point it is, and when it was last used: written under its
+    /// lock - and the identity under write_points_hash_lock too - and read
+    /// without either, to find one or the one to reuse.
+    #[derive(CStruct)]
+    pub struct WritePointId {
+        pub last_used: Volatile<u64>,
+        pub write_point: Volatile<c_ulong>,
     }
 }
-c_default!(write_point);
+
+#[pin_data]
+#[repr(C)]
+#[derive(CStruct, Init)]
+pub struct write_point_alloc {
+    pub __align: CacheAligned,
+    pub node: c::hlist_node,
+    pub data_type: c::bch_data_type,
+    #[pin]
+    #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&wp->lock"))]
+    #[c_lock("struct mutex lock")]
+    pub lock: Lock<c::mutex, WritePointLocked, WritePointId>,
+}
+
+#[pin_data]
+#[repr(C)]
+#[derive(CStruct, Init)]
+pub struct write_point {
+    #[c_anon]
+    #[pin]
+    #[init(write_point_alloc::init())]
+    pub alloc: write_point_alloc,
+    #[c_anon]
+    pub io: write_point_io,
+}
+
+#[repr(C)]
+#[derive(CStruct)]
+pub struct write_point_io {
+    pub __align: CacheAligned,
+    pub index_update_work: c::work_struct,
+
+    pub writes: c::list_head,
+    pub writes_lock: c::spinlock_t,
+
+    pub state: c::write_point_state,
+    pub last_state_change: u64,
+    pub time: [u64; c::WRITE_POINT_STATE_NR as usize],
+    pub last_runtime: u64,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -388,6 +413,8 @@ pub struct bch_fs_allocator {
     #[c("open_bucket_idx_t open_buckets_hash[OPEN_BUCKETS_COUNT]")]
     pub open_buckets_hash: [Volatile<Option<OpenBucketIdx>>; c::OPEN_BUCKETS_COUNT as usize],
 
+    #[pin]
+    #[init(::pin_init::pin_init_array_from_fn(|_| c::write_point::init()))]
     pub write_points: [c::write_point; c::WRITE_POINT_MAX as usize],
     pub write_points_hash: [c::hlist_head; c::WRITE_POINT_HASH_NR as usize],
     /* the hash's writers - its readers are RCU's - and write_points_nr */
@@ -396,7 +423,11 @@ pub struct bch_fs_allocator {
     #[c_lock("struct mutex write_points_hash_lock")]
     pub write_points_hash_lock: Lock<c::mutex, (), WritePointsNr>,
 
+    #[pin]
+    #[init(c::write_point::init())]
     pub btree_write_point: c::write_point,
+    #[pin]
+    #[init(c::write_point::init())]
     pub reconcile_write_point: c::write_point,
 }
 

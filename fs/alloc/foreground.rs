@@ -451,17 +451,21 @@ impl<'a, 't> TransAttempt<'a, 't> {
 }
 
 impl LockedWritePoint<'_> {
+    /// What its buckets have room for, for this write.
+    pub fn sectors_free(&self) -> u32 {
+        // SAFETY: held, from bch2_alloc_sectors_req() until we're dropped
+        unsafe { self.alloc.lock.held() }.sectors_free
+    }
+
     /// Takes a pin on each of its buckets, into @ptrs, for the data's writer
     /// to hold until it's indexed.
     pub fn open_buckets_get(&self, ptrs: &mut c::open_buckets) {
-        let wp = &self.alloc;
-        for idx in wp.ptrs.v[..wp.ptrs.nr as usize].iter() {
-            let idx = idx.expect("a bucket of the write point's");
-            // SAFETY: open, pinned by the write point, which we hold locked
-            let ob = unsafe { OpenBucketRef::from_idx(self.fs, idx) };
-            ob.set_data_type(wp.data_type);
+        // SAFETY: held, from bch2_alloc_sectors_req() until we're dropped
+        let g = unsafe { self.alloc.lock.held() };
+        for ob in g.ptrs.iter(self.fs) {
+            ob.set_data_type(self.alloc.data_type);
             ob.inc();
-            ptrs.v[ptrs.nr as usize] = Some(idx);
+            ptrs.v[ptrs.nr as usize] = Some(ob.idx());
             ptrs.nr += 1;
         }
     }
