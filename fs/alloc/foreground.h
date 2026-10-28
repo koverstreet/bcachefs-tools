@@ -265,20 +265,6 @@ static inline bool bch2_bucket_is_open_safe(struct bch_fs *c, unsigned dev, u64 
 	return bch2_bucket_is_open(c, dev, bucket);
 }
 
-static inline bool bch2_bucket_set_discard_fast(struct bch_fs *c, unsigned dev, u64 bucket)
-{
-	struct open_bucket *ob = bch2_bucket_is_open(c, dev, bucket);
-	if (ob) {
-		guard(spinlock)(&ob->lock);
-		if (ob->dev == dev && ob->bucket == bucket) {
-			ob->do_discards_fast = true;
-			return true;
-		}
-	}
-
-	return false;
-}
-
 int bch2_bucket_alloc_set_trans(struct btree_trans *, struct alloc_request *,
 				struct dev_stripe_state *);
 

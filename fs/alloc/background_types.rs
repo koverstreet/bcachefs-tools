@@ -6,20 +6,10 @@
 
 #![allow(non_camel_case_types)]
 
-use crate::cstructs::c;
-use core::ffi::{c_int, c_uint};
-use cstruct_macros::{c_const, c_extern};
+use cstruct_macros::c_const;
 
 c_const! {
     /// How far a bucket's generation may get past its oldest pointer's before
     /// it has to be gc'd: the gen is a u8, compared wrapping.
     pub const BUCKET_GC_GEN_MAX: u32 = 96;
-}
-
-c_extern! {
-    pub fn bch2_bucket_do_freespace_index(trans: *mut c::btree_trans, ca: *mut c::bch_dev,
-                                          alloc_k: c::bkey_s_c, a: *const c::AllocV4, set: bool) -> c_int;
-    pub fn bch2_alloc_key_to_dev_counters(trans: *mut c::btree_trans, ca: *mut c::bch_dev,
-                                          old: *const c::AllocV4, new: *const c::AllocV4,
-                                          flags: c_uint) -> c_int;
 }

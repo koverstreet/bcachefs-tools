@@ -22,7 +22,7 @@
 //! The injection tests for every error here: ktest's alloc-inject.ktest and
 //! lru-inject.ktest.
 
-use crate::alloc::background::{alloc_to_v4, BucketGensPos, FreespacePos, NeedDiscardPos};
+use crate::alloc::background::{alloc_to_v4, bucket_do_freespace_index, BucketGensPos, FreespacePos, NeedDiscardPos};
 use crate::alloc::buckets::bucket_to_u64;
 use crate::alloc::lru::{lru_check_set, lru_mod, per_dev_fragmentation_lru, LruId, LruPos};
 use crate::accounting::{data_type, data_type_from_u8};
@@ -32,7 +32,7 @@ use crate::btree::iter::{is_restart, lockrestart_do, polonius_key, BtreeIter, Bt
                          CommitFlags, TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
-use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::id;
 use crate::init::passes;
@@ -170,7 +170,7 @@ fn get_key_or_real_bucket_hole<'k, 't>(
 /// A bucket in alloc key @alloc_k incorrectly @set, or not, in need_discard
 /// (@discard) or freespace: reported, and, if @repair, offered to fix.
 /// Ok(false) - ignored, or not fixed - ends the check of @alloc_k.
-fn need_discard_or_freespace_err(
+pub(crate) fn need_discard_or_freespace_err(
     t:       &TransAttempt<'_, '_>,
     alloc_k: BkeySC<'_>,
     set:     bool,
@@ -671,11 +671,7 @@ fn dev_freespace_init_iter<'t>(t: &TransAttempt<'_, 't>, ca: &c::bch_dev, iter: 
     match get_key_or_hole(t, iter, end)? {
         // Live keys, one at a time:
         KeyOrHole::Key(k) => {
-            let a = alloc_to_v4(k);
-            ret_to_result_void(unsafe {
-                c::bch2_bucket_do_freespace_index(t.raw(), core::ptr::from_ref(ca).cast_mut(), k.into(),
-                                                  &a, true)
-            })?;
+            bucket_do_freespace_index(t, ca, k, &alloc_to_v4(k), true)?;
             t.commit(None, CommitFlags::NO_ENOSPC)?;
 
             iter.advance();

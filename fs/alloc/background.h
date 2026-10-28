@@ -39,46 +39,9 @@ static inline bool data_type_movable(enum bch_data_type type)
 	return (1U << type) & DATA_TYPES_MOVABLE;
 }
 
-/* Sector accounting */
-
-/*
- * It is my general preference to use unsigned types for unsigned quantities -
- * however, these helpers are used in disk accounting calculations run by
- * triggers where the output will be negated and added to an s64. unsigned is
- * right out even though all these quantities will fit in 32 bits, since it
- * won't be sign extended correctly; u64 will negate "correctly", but s64 is the
- * simpler option here.
- */
-static inline s64 bch2_bucket_sectors_total(struct bch_alloc_v4 a)
-{
-	return a.stripe_sectors + a.dirty_sectors + a.cached_sectors;
-}
-
 static inline s64 bch2_bucket_sectors_dirty(struct bch_alloc_v4 a)
 {
 	return a.stripe_sectors + a.dirty_sectors;
-}
-
-static inline s64 bch2_bucket_sectors(struct bch_alloc_v4 a)
-{
-	return a.data_type == BCH_DATA_cached
-		? a.cached_sectors
-		: bch2_bucket_sectors_dirty(a);
-}
-
-static inline s64 bch2_bucket_sectors_fragmented(struct bch_dev *ca,
-						 struct bch_alloc_v4 a)
-{
-	int d = bch2_bucket_sectors(a);
-
-	return d ? max(0, ca->mi.bucket_size - d)
-		 : !data_type_is_empty(a.data_type) ? ca->mi.bucket_size
-		 : 0;
-}
-
-static inline s64 bch2_bucket_sectors_unstriped(struct bch_alloc_v4 a)
-{
-	return a.data_type == BCH_DATA_stripe ? a.dirty_sectors : 0;
 }
 
 /*
@@ -114,85 +77,11 @@ static inline void alloc_data_type_set(struct bch_alloc_v4 *a, enum bch_data_typ
 	a->data_type = alloc_data_type(*a, data_type);
 }
 
-/* Auxiliary btree index helpers (LRU, freespace, bucket_gens) */
-
-static inline u64 alloc_lru_idx_read(struct bch_alloc_v4 a)
-{
-	return a.data_type == BCH_DATA_cached
-		? a.io_time[READ] & LRU_TIME_MAX
-		: 0;
-}
-
-static inline u64 alloc_lru_idx_fragmentation(struct bch_alloc_v4 a,
-					      struct bch_dev *ca)
-{
-	if (a.data_type >= BCH_DATA_NR)
-		return 0;
-
-	if (!data_type_movable(a.data_type) ||
-	    !bch2_bucket_sectors_fragmented(ca, a))
-		return 0;
-
-	/*
-	 * avoid overflowing LRU_TIME_BITS on a corrupted fs, when
-	 * bucket_sectors_dirty is (much) bigger than bucket_size
-	 */
-	u64 d = min_t(s64, bch2_bucket_sectors_dirty(a),
-		      ca->mi.bucket_size);
-
-	return div_u64(d * (1ULL << 31), ca->mi.bucket_size);
-}
-
 #define BCH_FREESPACE_GENBITS_NR	(((unsigned) U8_MAX >> 4) + 1)
 
 static inline u64 alloc_freespace_genbits(struct bch_alloc_v4 a)
 {
 	return ((u64) alloc_gc_gen(a) >> 4) << 56;
-}
-
-static inline struct bpos alloc_freespace_pos(struct bpos pos, struct bch_alloc_v4 a)
-{
-	pos.offset |= alloc_freespace_genbits(a);
-	return pos;
-}
-
-static inline struct bpos alloc_gens_pos(struct bpos pos, unsigned *offset)
-{
-	*offset = pos.offset & KEY_TYPE_BUCKET_GENS_MASK;
-
-	pos.offset >>= KEY_TYPE_BUCKET_GENS_BITS;
-	return pos;
-}
-
-static inline struct bpos bucket_gens_pos_to_alloc(struct bpos pos, unsigned offset)
-{
-	pos.offset <<= KEY_TYPE_BUCKET_GENS_BITS;
-	pos.offset += offset;
-	return pos;
-}
-
-static inline unsigned alloc_gen(struct bkey_s_c k, unsigned offset)
-{
-	return k.k->type == KEY_TYPE_bucket_gens
-		? bkey_s_c_to_bucket_gens(k).v->gens[offset]
-		: 0;
-}
-
-/* Key format and backpointers */
-
-static inline unsigned alloc_v4_u64s_noerror(const struct bch_alloc_v4 *a)
-{
-	return (BCH_ALLOC_V4_BACKPOINTERS_START(a) ?:
-			BCH_ALLOC_V4_U64s_V0) +
-		BCH_ALLOC_V4_NR_BACKPOINTERS(a) *
-		(sizeof(struct bch_backpointer) / sizeof(u64));
-}
-
-static inline bool bkey_is_alloc(const struct bkey *k)
-{
-	return  k->type == KEY_TYPE_alloc ||
-		k->type == KEY_TYPE_alloc_v2 ||
-		k->type == KEY_TYPE_alloc_v3;
 }
 
 /* Alloc key operations */
@@ -238,13 +127,5 @@ static inline const struct bch_alloc_v4 *bch2_alloc_to_v4(struct bkey_s_c k, str
 	.key_validate	= bch2_bucket_gens_validate,	\
 	.val_to_text	= bch2_bucket_gens_to_text,	\
 })
-
-int bch2_bucket_do_freespace_index(struct btree_trans *, struct bch_dev *,
-				   struct bkey_s_c, const struct bch_alloc_v4 *, bool);
-
-int bch2_alloc_key_to_dev_counters(struct btree_trans *, struct bch_dev *,
-				   const struct bch_alloc_v4 *,
-				   const struct bch_alloc_v4 *, unsigned);
-int bch2_trigger_alloc(struct btree_trans *, struct btree_trigger_op);
 
 #endif /* _BCACHEFS_ALLOC_BACKGROUND_H */
