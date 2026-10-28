@@ -1845,15 +1845,6 @@ where
     commit_do(&trans, disk_res, flags, f)
 }
 
-/// lockrestart_do() in a transaction of its own.
-pub fn trans_run<'t, T, F>(fs: &'t Fs, f: F) -> Result<T, BchError>
-where
-    F: for<'a> FnMut(&TransAttempt<'a, 't>) -> Result<T, BchError>,
-{
-    let trans = crate::btree_trans!(fs);
-    lockrestart_do(&trans, f)
-}
-
 /// @k as a @K, its value in place, if it's one: ENOENT_bkey_type_mismatch if
 /// it isn't.
 fn bkey_arm<'k, K: BkeyFamily + ?Sized>(fs: &Fs, k: BkeySC<'k>) -> Result<BkeySC<'k, K::Validated>, BchError> {
@@ -2695,22 +2686,6 @@ impl<'t> BtreeIter<'t> {
     {
         self.for_each_inner(trans,
             |raw| unsafe { c::bch2_btree_iter_peek_prev_min(raw, min) },
-            |raw| unsafe { c::bch2_btree_iter_rewind(raw) },
-            f)
-    }
-
-    pub fn for_each_reverse_flags<F, R>(
-        &mut self,
-        trans: &BtreeTrans<'t>,
-        flags: BtreeIterFlags,
-        f:     F,
-    ) -> Result<R::Break, BchError>
-    where
-        F: for<'a> FnMut(&'a TransAttempt<'_, 't>, &'a BtreeIter<'t>, BkeySC<'a>) -> Result<R, BchError>,
-        R: LoopControl,
-    {
-        self.for_each_inner(trans,
-            |raw| unsafe { (*raw).peek_prev_type_raw(flags) },
             |raw| unsafe { c::bch2_btree_iter_rewind(raw) },
             f)
     }

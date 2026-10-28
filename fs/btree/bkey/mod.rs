@@ -130,17 +130,8 @@ impl c::bkey {
         self.size = new_size;
     }
 
-    pub fn set_range(&mut self, inode: u64, start: u64, end: u64, snapshot: u32) {
-        self.p = spos(inode, end, snapshot);
-        self.size = (end - start) as u32;
-    }
-
     pub fn key_type(&self) -> c::bch_bkey_type {
         c::bch_bkey_type(self.type_ as u32)
-    }
-
-    pub fn set_version_lo(&mut self, version: u64) {
-        self.bversion.lo = version;
     }
 
     pub fn start_pos(&self) -> c::bpos {

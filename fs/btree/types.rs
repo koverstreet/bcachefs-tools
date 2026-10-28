@@ -1115,11 +1115,6 @@ impl c::btree_id {
     pub fn from_raw(id: u32) -> Option<Self> {
         crate::BTREE_IDS_KNOWN.get(id as usize).copied()
     }
-
-    /// Iterate over all known btree IDs.
-    pub fn iter_known() -> impl Iterator<Item = Self> {
-        crate::BTREE_IDS_KNOWN.iter().copied()
-    }
 }
 
 impl From<c::btree_id> for u32 {
