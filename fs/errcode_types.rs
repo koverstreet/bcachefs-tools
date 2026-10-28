@@ -642,7 +642,6 @@ c_xmacro! {
         (ESHUTDOWN, ioctl_fs_stopping, 622),
         (ENOMEM, ENOMEM_reconcile_stripes_pending, 623),
         (BCH_ERR_btree_node_validate_err, btree_node_validate_err_keys_lost, 624),
-        (EINVAL, EINVAL_io_opt_too_big_for_reconcile, 625),
         (ENOMEM, ENOMEM_backpointer_scan, 626),
         (BCH_ERR_transaction_restart, transaction_restart_backpointer_scan_grow, 627),
         (ENOMEM, ENOMEM_stripe_open, 628),

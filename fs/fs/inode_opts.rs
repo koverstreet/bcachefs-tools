@@ -705,7 +705,7 @@ impl c::inode_opt_change {
         inode:    &c::bch_inode_unpacked,
         snapshot: u32,
     ) -> Result<(), BchError> {
-        let new = inode::reconcile_opts_get(t.fs(), inode)?;
+        let new = inode::reconcile_opts_get(t.fs(), inode);
 
         self.reconcile_changed = old.into_bits() != new.into_bits();
         if !self.reconcile_changed {

@@ -1985,29 +1985,17 @@ pub extern "C" fn bch2_inode_set_casefold(
 /// @inode's reconcile options - the ones reconcile moves its data to match,
 /// and for each whether @inode set it or inherited it: as
 /// bch2_inode_reconcile_opts_get(). An option too big for its field in
-/// bch_extent_reconcile is warned about and an error, not truncated.
-pub fn reconcile_opts_get(fs: &Fs, inode: &c::bch_inode_unpacked)
-    -> Result<c::bch_extent_reconcile, BchError>
-{
+/// bch_extent_reconcile - only a corrupt inode's - is warned about and
+/// truncated, as C's bitfield assignments truncate: the write it's read for
+/// goes ahead, the one that corrects it too.
+pub fn reconcile_opts_get(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_extent_reconcile {
     let opts = crate::inode_opts::get_inode(fs, inode);
 
-    // io_opts_to_reconcile_opts()
-    let mut r = c::bch_extent_reconcile::default();
-    macro_rules! reconcile_opts {
-        ($(($name:tt)),* $(,)?) => { crate::paste! { $(
-            // an option already its field's type can't fail
-            #[allow(irrefutable_let_patterns)]
-            let Ok(v) = opts.$name.try_into() else {
-                bch_warn!(fs, "inode {}: io option {} = {} doesn't fit in bch_extent_reconcile",
-                          inode.bi_inum, stringify!($name), opts.$name);
-                return Err(BchError::from(bch_errcode::BCH_ERR_EINVAL_io_opt_too_big_for_reconcile));
-            };
-            r.[<set_ $name>](v);
-            r.[<set_ $name _from_inode>](opts.[<$name _from_inode>]().into());
-        )* } };
+    for (name, v) in c::bch_extent_reconcile::too_big(&opts) {
+        bch_warn!(fs, "inode {}: io option {name} = {v} doesn't fit in bch_extent_reconcile, truncated",
+                  inode.bi_inum);
     }
-    c::BCH_RECONCILE_OPTS!(reconcile_opts);
-    Ok(r)
+    c::bch_extent_reconcile::from_io_opts(&opts)
 }
 
 // ── The unpacked inode ───────────────────────────────────────────────────

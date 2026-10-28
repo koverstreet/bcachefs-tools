@@ -144,6 +144,19 @@ impl bch_extent_reconcile {
         r
     }
 
+    /// Each of @opts' reconcile options too big for its field - what
+    /// from_io_opts() truncates - as (name, value).
+    pub fn too_big(opts: &c::bch_inode_opts) -> impl Iterator<Item = (&'static str, u64)> {
+        macro_rules! opts {
+            ($(($name:tt)),* $(,)?) => { crate::paste! { [$(
+                (stringify!($name), u64::from(opts.$name), Self::[<$name:upper _BITS>]),
+            )*] } };
+        }
+        c::BCH_RECONCILE_OPTS!(opts).into_iter()
+            .filter(|&(_, v, bits)| v >> bits != 0)
+            .map(|(name, v, _)| (name, v))
+    }
+
     /// Pointer @i - by index among the key's pointers - marked moving; past
     /// ptrs_moving's bits it isn't tracked, as C's |= of the bit truncates.
     pub fn set_ptr_moving(&mut self, i: usize) {
