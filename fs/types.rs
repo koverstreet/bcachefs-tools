@@ -416,7 +416,8 @@ pub struct bch_dev {
     pub usage: PerCpu<c::bch_dev_usage_full>,
 
     /* Allocator: */
-    pub alloc_cursor: [u64; 3],
+    /* where each btree_bitmap kind of allocation scans from: racy, as in C */
+    pub alloc_cursor: [crate::util::projections::Volatile<u64>; 3],
 
     /*
      * Incremented by bch2_alloc_wake_dev() at every site that wakes

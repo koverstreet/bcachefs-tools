@@ -788,7 +788,7 @@ impl c::bch_dev {
     /// Whether all of [@start, @start + @sectors) is marked in its member's
     /// bitmap - and, @with_gc, in the one gc is rebuilding. members.h has
     /// C's, an inline the allocator calls.
-    fn btree_bitmap_marked_sectors(&self, start: u64, sectors: u32, with_gc: bool) -> bool {
+    pub(crate) fn btree_bitmap_marked_sectors(&self, start: u64, sectors: u32, with_gc: bool) -> bool {
         let shift = self.mi.btree_bitmap_shift;
         let end = start + u64::from(sectors);
         if end > 64u64 << shift {

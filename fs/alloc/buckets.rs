@@ -115,6 +115,12 @@ impl c::bch_dev {
         let size = u128::from(self.bucket_to_sector(self.mi.nbuckets));
         ((u128::from(offset) << c::BCH_DEV_POS_FRAC_BITS) / size) as u64
     }
+
+    /// offset_to_frac()'s inverse: dev_frac_to_offset().
+    pub fn frac_to_offset(&self, frac: u64) -> u64 {
+        let size = u128::from(self.bucket_to_sector(self.mi.nbuckets));
+        ((u128::from(frac) * size) >> c::BCH_DEV_POS_FRAC_BITS) as u64
+    }
 }
 
 // ── GC buckets ───────────────────────────────────────────────────────────

@@ -463,7 +463,7 @@ fn check_discard_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, last_flushe
 /// Who checks a freespace entry against its bucket's alloc key: how a bad
 /// one's reported, and repaired.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum FreespaceCheck {
+pub(crate) enum FreespaceCheck {
     /// check_alloc_info: deleted in place, the attempt restarted.
     Fsck,
     /// The allocator, about to take the bucket: committed state only, as
@@ -488,7 +488,7 @@ impl FreespaceCheck {
 /// and journal_seq_empty, if it's good. A bad one - for a bucket that doesn't
 /// exist, or isn't free, or of other gen bits - is reported, and if fsck says
 /// fix, deleted as @who repairs.
-fn check_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, who: FreespaceCheck)
+pub(crate) fn check_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, who: FreespaceCheck)
     -> Result<(u8, u64), BchError>
 {
     let fs = t.fs();
