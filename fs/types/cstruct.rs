@@ -468,9 +468,7 @@ pub struct CFromList {
 }
 
 /// c_enum!: an enum, and what its values can be. @name is None for an
-/// anonymous one: constants. A variant's value is Rust source, or none for
-/// the one after the last; the generator replaces them with what they
-/// evaluate to.
+/// anonymous one: constants.
 #[derive(Debug)]
 pub struct CEnumDef {
     pub cfg:      Option<Cfg>,
@@ -478,11 +476,23 @@ pub struct CEnumDef {
     pub name:     Option<String>,
     /// The integer type: u32, i32, u64.
     pub repr:     String,
-    pub variants: Vec<(String, Option<String>)>,
+    pub variants: Vec<CEnumVariant>,
     /// `LIST(params) => VARIANT [= value]`: variants from lists, each in
     /// place before the written one at its index - expand_enum_list() makes
     /// them, a list at a time.
     pub from:     Vec<(usize, CFromList)>,
+}
+
+/// A c_enum! variant. Its value is Rust source, or none for the one after the
+/// last; the generator replaces them with what they evaluate to. Its label is
+/// what it prints as, `#[label("..")]`: a list's variant's is the argument its
+/// template pastes into the name - `stripe`, of `BCH_WATERMARK_ ## name` - as
+/// C's string tables have it; none, its name.
+#[derive(Debug)]
+pub struct CEnumVariant {
+    pub name:  String,
+    pub value: Option<String>,
+    pub label: Option<String>,
 }
 
 /// c_typedef!: a type alias, C's typedef. @c_decl is its C declarator - the
@@ -1738,7 +1748,14 @@ fn parse_enum(body: &[Tok], cfg: Option<Cfg>) -> Result<CEnumDef, String> {
             from.push((variants.len(), f));
             continue;
         }
-        let j = skip_attrs(v, 0)?;
+        let mut label = None;
+        let mut j = 0;
+        while let Some((attr, next)) = attr_at(v, j)? {
+            if let Some([Tok::Str(l, _)]) = attr_args(attr, "label") {
+                label = Some(l.clone());
+            }
+            j = next;
+        }
         let Some(vname) = ident_at(v, j) else {
             return Err(format!("c_enum! {what}: expected a variant name"));
         };
@@ -1747,7 +1764,7 @@ fn parse_enum(body: &[Tok], cfg: Option<Cfg>) -> Result<CEnumDef, String> {
             [Tok::Punct('='), expr @ ..] if !expr.is_empty() => Some(tokens_to_rust(expr)),
             _ => return Err(format!("c_enum! {what}::{vname}: expected `= value`, or nothing")),
         };
-        variants.push((vname.to_string(), value));
+        variants.push(CEnumVariant { name: vname.to_string(), value, label });
     }
     Ok(CEnumDef { cfg, kind, name, repr, variants, from })
 }
@@ -2379,15 +2396,28 @@ pub fn expand_enum_list(e: &mut CEnumDef, entries: &[String]) -> Result<(), Stri
     }
     let (at, f) = e.from.remove(0);
     let mut variants = Vec::new();
+    // the parameter the template pastes into the name: its argument, the label
+    let template = tokenize(&f.template)?;
+    let label_param = template.split(|t| t.is_punct('=')).next().unwrap_or_default().iter()
+        .find_map(|t| match t {
+            Tok::Ident(s) => f.params.iter().position(|p| p == s),
+            _ => None,
+        });
     for entry in entries {
         let toks = from_list_entry(&f, entry)?;
-        variants.push(match &toks[..] {
+        let (name, value) = match &toks[..] {
             [Tok::Ident(name)] => (name.clone(), None),
             [Tok::Ident(name), Tok::Punct('='), v @ ..] if !v.is_empty() =>
                 (name.clone(), Some(format!("(({}) as {})", tokens_to_rust(v), e.repr))),
             _ => return Err(format!("{}: the template gives {} - not NAME [= value]",
                                     f.list, tokens_to_rust(&toks))),
-        });
+        };
+        let etoks = tokenize(entry)?;
+        let label = match label_param.and_then(|n| split_top(&etoks, ',').get(n).copied()) {
+            Some([Tok::Ident(l)]) => Some(l.clone()),
+            _ => None,
+        };
+        variants.push(CEnumVariant { name, value, label });
     }
     let n = variants.len();
     e.variants.splice(at..at, variants);
@@ -2410,11 +2440,14 @@ pub fn enum_text(e: &CEnumDef) -> String {
                                 f.template.replace("##", " ## ")));
         }
     };
-    for (i, (v, value)) in e.variants.iter().enumerate() {
+    for (i, v) in e.variants.iter().enumerate() {
         lists(&mut t, i);
-        match value {
-            Some(x) => t.push_str(&format!("{v} = {x}, ")),
-            None => t.push_str(&format!("{v}, ")),
+        if let Some(l) = &v.label {
+            t.push_str(&format!("#[label({l:?})] "));
+        }
+        match &v.value {
+            Some(x) => t.push_str(&format!("{} = {x}, ", v.name)),
+            None => t.push_str(&format!("{}, ", v.name)),
         }
     }
     lists(&mut t, e.variants.len());
@@ -3277,10 +3310,10 @@ pub fn emit_items(items: &[CItem],
             CItem::Enum(e) => {
                 let mut t = format!("enum {}{} {{\n", e.kind.marker(),
                                     e.name.as_deref().map(|n| format!(" {n}")).unwrap_or_default());
-                for (v, value) in &e.variants {
-                    match value {
-                        Some(x) => t.push_str(&format!("\t{v} = {x},\n")),
-                        None => t.push_str(&format!("\t{v},\n")),
+                for v in &e.variants {
+                    match &v.value {
+                        Some(x) => t.push_str(&format!("\t{} = {x},\n", v.name)),
+                        None => t.push_str(&format!("\t{},\n", v.name)),
                     }
                 }
                 under_cfg(&e.cfg, t + "};\n")?

@@ -132,10 +132,6 @@ fn bit(pass: Pass) -> u64 {
 }
 
 impl c::bch_recovery_pass {
-    pub fn name(self) -> &'static str {
-        NAMES[self as usize]
-    }
-
     fn when(self) -> c_ulong {
         WHEN[self as usize]
     }

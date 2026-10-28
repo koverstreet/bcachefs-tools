@@ -395,8 +395,8 @@ fn file_h(header: &str, records: &[&Record], structs: &BTreeMap<String, String>,
                     return Err(at(format!("{} values for {} variants", values.len(), e.variants.len())));
                 }
                 let signed = e.repr.starts_with('i');
-                for ((_, value), &v) in e.variants.iter_mut().zip(values) {
-                    *value = Some(match (e.kind, signed) {
+                for (variant, &v) in e.variants.iter_mut().zip(values) {
+                    variant.value = Some(match (e.kind, signed) {
                         (CEnumKind::Flags, _) => format!("{v:#x}"),
                         (_, true) => format!("{}", v as i64),
                         (_, false) => format!("{v}"),

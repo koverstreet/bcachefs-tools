@@ -40,12 +40,6 @@ use core::ffi::c_int;
 use core::ops::Range;
 use cstruct_macros::c_export;
 
-/// The scan types' names, by type: C's bch2_rebalance_scan_strs[].
-macro_rules! scan_type_strs {
-    ($(($n:ident)),* $(,)?) => { [$(stringify!($n)),*] };
-}
-const SCAN_TYPE_STRS: [&str; 6] = c::RECONCILE_SCAN_TYPES!(scan_type_strs);
-
 impl c::reconcile_scan {
     /// The scan for everything.
     pub fn fs() -> Self {
@@ -97,7 +91,7 @@ impl c::reconcile_scan {
     /// Its type, and which device - by name - or inode - by path, looked up
     /// in a transaction of its own.
     pub fn to_text(&self, out: &mut Printbuf, fs: &Fs) {
-        write!(out, "{}", SCAN_TYPE_STRS[self.type_().into_bits() as usize]);
+        write!(out, "{}", self.type_());
         match self.get() {
             Ok(c::ReconcileScanRef::device(&d)) => {
                 write!(out, ": ");

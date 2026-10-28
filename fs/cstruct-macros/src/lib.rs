@@ -69,7 +69,7 @@ mod cstruct {
     include!("../../types/cstruct.rs");
 }
 use cstruct::{enum_text, expand_enum_list, parse_c_export, parse_cstruct, parse_items, rust_ident,
-              CEnumDef, CEnumKind, CItem, CXEntry};
+              CEnumDef, CEnumKind, CEnumVariant, CItem, CXEntry};
 
 mod fieldwise;
 mod init;
@@ -1065,7 +1065,7 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
     let mut out = String::new();
     let mut base: Option<&str> = None;
     let mut n = 0;
-    for (v, value) in &e.variants {
+    for CEnumVariant { name: v, value, .. } in &e.variants {
         let value = match (value, base) {
             (Some(x), _) => {
                 base = Some(v);
@@ -1079,7 +1079,7 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
         n += 1;
     }
 
-    let names: Vec<&str> = e.variants.iter().map(|(v, _)| v.as_str()).collect();
+    let names: Vec<&str> = e.variants.iter().map(|v| v.name.as_str()).collect();
     let ty = match &e.name {
         Some(n) => n.clone(),
         None => repr.clone(),
@@ -1089,10 +1089,14 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
         match e.kind {
             CEnumKind::Closed => {
                 out.push_str(&format!(
-                    "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]\n\
+                    "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, crate::util::ToText)]\n\
                      #[repr({repr})]\n{cfi}pub enum {name} {{\n"));
-                for v in &names {
-                    out.push_str(&format!("    {v} = {v},\n"));
+                for v in &e.variants {
+                    // what it prints as: its list's name for it, as C's string table has it
+                    if let Some(l) = &v.label {
+                        out.push_str(&format!("    #[label({l:?})]\n"));
+                    }
+                    out.push_str(&format!("    {0} = {0},\n", v.name));
                 }
                 out.push_str(&format!("}}\nimpl {name} {{\n    pub const fn from_bits(v: {repr}) -> Self {{\n        match v {{\n"));
                 for v in &names {
@@ -1147,7 +1151,7 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
         // any integer is an open enum's or flags', a closed enum's only if a
         // variant is 0 - as written, or the first, counting from 0
         let has_zero = e.kind != CEnumKind::Closed || e.variants.iter().enumerate()
-            .any(|(i, (_, value))| match value {
+            .any(|(i, v)| match &v.value {
                 None    => i == 0,
                 Some(x) => x.trim() == "0",
             });

@@ -67,17 +67,6 @@ c_extern! {
     fn bch2_alloc_sectors_done(c: *mut c::bch_fs, wp: *mut c::write_point);
 }
 
-macro_rules! watermark_strs {
-    ($(($n:ident)),* $(,)?) => { [$(stringify!($n)),*] };
-}
-const WATERMARK_STRS: [&str; c::bch_watermark::BCH_WATERMARK_NR as usize] = c::BCH_WATERMARKS!(watermark_strs);
-
-impl c::bch_watermark {
-    pub fn name(self) -> &'static str {
-        WATERMARK_STRS.get(self as usize).copied().unwrap_or("(invalid)")
-    }
-}
-
 // ── Open buckets ─────────────────────────────────────────────────────────
 
 /// C writes through it while it's borrowed - @sectors_free is its writer's -

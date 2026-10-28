@@ -763,13 +763,6 @@ pub(crate) fn head_stripe_free(fs: &Fs, b: StripeNewBox) {
 
 // ── To text ──────────────────────────────────────────────────────────────
 
-const STATE_NAMES: [&str; State::EC_STRIPE_NEW_STATE_NR as usize] = {
-    macro_rules! names {
-        ($(($n:ident)),* $(,)?) => { [$(stringify!($n)),*] };
-    }
-    c::EC_STRIPE_NEW_STATES!(names)
-};
-
 /// @s: its key, its blocks, and how long it's been being made:
 /// bch2_new_stripe_to_text(). Blocks are listed when handed out, not when
 /// full, so per claimed block: is its bucket still checked out, and how much
@@ -781,7 +774,7 @@ pub(crate) fn new_stripe_to_text(out: &mut Printbuf, fs: &Fs, s: &StripeNew) {
     prt!(out, "\tidx {} blocks {}+{} allocated {} ref {} {} {} obs",
          i.new_stripe.idx(), v.nr_data(), v.nr_redundant,
          i.blocks[..v.nr_data() as usize].iter().filter(|b| b.allocated()).count(),
-         s.io_refs.load(Ordering::Relaxed), i.watermark.name(), STATE_NAMES[s.state() as usize]);
+         s.io_refs.load(Ordering::Relaxed), i.watermark, s.state());
 
     for b in i.blocks[..usize::from(v.nr_blocks)].iter().filter(|b| b.gotten()) {
         prt!(out, " {}", b.bucket().map_or(0, |ob| ob.idx().get()));
