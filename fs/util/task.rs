@@ -67,7 +67,7 @@
 
 use crate::c;
 use crate::errcode::{errptr_to_result, BchError};
-use crate::util::alloc::{kalloc_pinned, AllocError};
+use crate::util::alloc::{flags, kalloc_pinned_gfp, AllocError, Flags};
 use crate::util::futex::EventCount;
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::kthread::Kthread;
@@ -84,7 +84,7 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
-use pin_init::{pin_data, pin_init};
+use pin_init::{pin_data, pin_init, PinInit};
 
 /// Where a task resumes, once what it awaits is done.
 #[derive(Clone, Copy)]
@@ -258,9 +258,10 @@ struct TaskHead<T> {
 struct Task<F: Future> {
     #[pin]
     head:   TaskHead<F::Output>,
-    /// Made here, pinned; None once it's returned - dropped in place.
+    /// Made in place, pinned. Live until it returns - then dropped in place -
+    /// or, for a task never started, until it's discarded.
     #[pin]
-    future: Option<F>,
+    future: MaybeUninit<F>,
 }
 
 impl<F: Future> Task<F> {
@@ -270,26 +271,32 @@ impl<F: Future> Task<F> {
         dealloc: Self::dealloc,
     };
 
+    fn future_ptr(task: *mut Self) -> *mut F {
+        // SAFETY: a field of the task, by place
+        unsafe { (&raw mut (*task).future).cast() }
+    }
+
     /// The future, pinned in the task.
     ///
     /// # Safety
-    /// @task is live, and the future ours: RUNNING, or never started.
-    unsafe fn future<'a>(task: *mut Self) -> Pin<&'a mut Option<F>> {
+    /// @task is live, and its future live and ours: the task is RUNNING, or
+    /// was never started.
+    unsafe fn future<'a>(task: *mut Self) -> Pin<&'a mut F> {
         // SAFETY: the caller's; made in the task, which never moves
-        unsafe { Pin::new_unchecked(&mut (*task).future) }
+        unsafe { Pin::new_unchecked(&mut *Self::future_ptr(task)) }
     }
 
     /// # Safety
     /// @h is a Task<F>'s, and we're its one poller: RUNNING is ours.
     unsafe fn poll(h: NonNull<Header>, cx: &mut Context<'_>) -> Poll<()> {
         let task = h.cast::<Self>().as_ptr();
-        // SAFETY: the caller's
-        let mut future = unsafe { Self::future(task) };
-        let f = future.as_mut().as_pin_mut().expect("a task polled after it returned");
+        // SAFETY: the caller's - and run() polls only what isn't COMPLETE
+        let f = unsafe { Self::future(task) };
         match f.poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(v) => {
-                future.set(None);
+                // SAFETY: returned: dropped, where it is, and never polled again
+                unsafe { core::ptr::drop_in_place(Self::future_ptr(task)) };
                 // SAFETY: ours, and never polled again
                 unsafe {
                     (*(*task).head.output.get()).write(v);
@@ -348,7 +355,7 @@ impl<F: Future> Task<F> {
                 c::bch2_kthread_stop(thread);
                 c::put_task_struct(thread);
             }
-            Self::future(task).set(None);
+            core::ptr::drop_in_place(Self::future_ptr(task));
             drop((*(*task).head.done_ref.get()).take());
             Self::dealloc(h);
         }
@@ -449,14 +456,70 @@ where
     F: Future + Send,
     F::Output: Send,
 {
+    // written straight into the task, by @make: never on our stack
+    // SAFETY: @slot is the future's place in the task, ours to write
+    let init = unsafe {
+        pin_init::pin_init_from_closure(move |slot: *mut F| {
+            slot.write(make());
+            Ok::<(), core::convert::Infallible>(())
+        })
+    };
+    // SAFETY: the caller's
+    unsafe { spawn_init(at, init, flags::GFP_KERNEL) }.map(|(task, _)| task)
+}
+
+/// spawn_unstarted(), with the future made in place by @init, for the
+/// spawner to finish setting up before the task starts: for a future C
+/// points into before its first poll.
+///
+/// # Safety
+/// spawn_unstarted()'s.
+pub unsafe fn spawn_unstarted_in_place<F>(at: Spawn<'_>, init: impl PinInit<F>, gfp: Flags)
+    -> Result<UnstartedInPlace<F>, BchError>
+where
+    F: Future + Send,
+    F::Output: Send,
+{
+    // SAFETY: the caller's
+    let (task, future) = unsafe { spawn_init(at, init, gfp) }?;
+    Ok(UnstartedInPlace { task, future })
+}
+
+/// From spawn_unstarted_in_place(): the future is the spawner's until the
+/// task starts. What C is left pointing into after that is between C and the
+/// future.
+pub struct UnstartedInPlace<F: Future> {
+    task:   Unstarted<F::Output>,
+    future: NonNull<F>,
+}
+
+impl<F: Future> UnstartedInPlace<F> {
+    pub fn future(&mut self) -> Pin<&mut F> {
+        // SAFETY: pinned in the task, which isn't started: ours alone
+        unsafe { Pin::new_unchecked(self.future.as_mut()) }
+    }
+
+    pub fn start(self) -> JoinHandle<F::Output> {
+        self.task.start()
+    }
+}
+
+/// # Safety
+/// spawn_unstarted()'s.
+unsafe fn spawn_init<F>(at: Spawn<'_>, init: impl PinInit<F>, gfp: Flags)
+    -> Result<(Unstarted<F::Output>, NonNull<F>), BchError>
+where
+    F: Future + Send,
+    F::Output: Send,
+{
     let task = match at {
-        Spawn::Queue(wq) => self::make(core::ptr::from_ref(wq) as usize, make)?,
-        Spawn::Run(rq) => self::make(core::ptr::from_ref(rq.get_ref()) as usize | RUNQ, make)?,
+        Spawn::Queue(wq) => self::make(core::ptr::from_ref(wq) as usize, init, gfp)?,
+        Spawn::Run(rq) => self::make(core::ptr::from_ref(rq.get_ref()) as usize | RUNQ, init, gfp)?,
         Spawn::Thread { name, freezable } => {
             let mut name_buf = Printbuf::new();
             write!(name_buf, "{name}");
 
-            let task = self::make(THREAD, make)?;
+            let task = self::make(THREAD, init, gfp)?;
             // SAFETY: just made; the thread's data, from when it's woken - and
             // if it's stopped unwoken, it doesn't touch it
             let thread = unsafe {
@@ -483,16 +546,24 @@ where
         }
     };
     // SAFETY: just made
-    Ok(Unstarted { head: unsafe { NonNull::new_unchecked(&raw mut (*task).head) } })
+    unsafe {
+        Ok((Unstarted { head: NonNull::new_unchecked(&raw mut (*task).head) },
+            NonNull::new_unchecked(Task::<F>::future_ptr(task))))
+    }
 }
 
 /// A task made, not yet started: its own ref and its JoinHandle's.
-fn make<M, F>(spawned: usize, make: M) -> Result<*mut Task<F>, AllocError>
+fn make<F>(spawned: usize, future: impl PinInit<F>, gfp: Flags) -> Result<*mut Task<F>, AllocError>
 where
-    M: FnOnce() -> F + Send,
     F: Future + Send,
     F::Output: Send,
 {
+    // SAFETY: @slot is the future's place, a MaybeUninit<F> laid out as F
+    let future = unsafe {
+        pin_init::pin_init_from_closure(move |slot: *mut MaybeUninit<F>| {
+            crate::util::alloc::init_at(future, slot.cast::<F>())
+        })
+    };
     let init = pin_init!(Task::<F> {
         head <- pin_init!(TaskHead {
             header: Header {
@@ -511,8 +582,7 @@ where
             done_ref: UnsafeCell::new(None),
             output: UnsafeCell::new(MaybeUninit::uninit()),
         }),
-        // written straight into the task, by @make: never on our stack
-        future: Some(make()),
+        future <- future,
     });
     // kmalloc()'d: the last ref may go in an endio. Its error - there's
     // none - made the allocation's
@@ -522,7 +592,7 @@ where
             crate::util::alloc::init_at(init, slot).map_err(|e: core::convert::Infallible| match e {})
         })
     };
-    let task = kalloc_pinned::<Task<F>, AllocError>(init)?;
+    let task = kalloc_pinned_gfp::<Task<F>, AllocError>(init, gfp)?;
 
     // SAFETY: just made: nobody else has it
     unsafe {

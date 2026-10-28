@@ -18,7 +18,7 @@ pub type KBox<T> = std::boxed::Box<T>;
 /// given up to a raw pointer. free_pinned() takes it back. Fails with @init's
 /// error, or the allocation's.
 pub fn alloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>) -> Result<*mut T, E> {
-    alloc_in::<false, T, E>(init)
+    alloc_in::<false, T, E>(init, flags::GFP_KERNEL)
 }
 
 /// Drop and free @p.
@@ -36,7 +36,26 @@ pub unsafe fn free_pinned<T>(p: *mut T) {
 /// any context: kfree() is safe anywhere, and kvfree() isn't - vfree() may
 /// sleep, outside interrupt context.
 pub fn kalloc_pinned<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>) -> Result<*mut T, E> {
-    alloc_in::<true, T, E>(init)
+    alloc_in::<true, T, E>(init, flags::GFP_KERNEL)
+}
+
+/// The allocator's Flags for @gfp, which is GFP_NOWAIT or GFP_KERNEL - the
+/// two allocate_dropping_locks() tries.
+pub fn gfp_flags(gfp: crate::c::gfp_t) -> Flags {
+    if gfp == crate::c::GFP_NOWAIT {
+        flags::GFP_NOWAIT
+    } else {
+        assert!(gfp == crate::c::GFP_KERNEL, "gfp_flags() of a mask that's neither GFP_NOWAIT nor GFP_KERNEL");
+        flags::GFP_KERNEL
+    }
+}
+
+/// kalloc_pinned(), allocating as @gfp says - GFP_NOWAIT, say, with btree
+/// locks held. Userspace ignores it.
+pub fn kalloc_pinned_gfp<T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>, gfp: Flags)
+    -> Result<*mut T, E>
+{
+    alloc_in::<true, T, E>(init, gfp)
 }
 
 /// @b's value, out of its box: *b, for a std Box - which the kernel's isn't,
@@ -357,7 +376,8 @@ pub unsafe fn init_at<T, E>(init: impl ::pin_init::PinInit<T, E>, slot: *mut T) 
     return unsafe { init.__pinned_init(slot) };
 }
 
-fn alloc_in<const KMALLOC: bool, T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>)
+fn alloc_in<const KMALLOC: bool, T, E: From<AllocError>>(init: impl ::pin_init::PinInit<T, E>,
+                                                          #[allow(unused_variables)] gfp: Flags)
     -> Result<*mut T, E>
 {
     #[cfg(kernel)]
@@ -366,7 +386,7 @@ fn alloc_in<const KMALLOC: bool, T, E: From<AllocError>>(init: impl ::pin_init::
         use kernel::alloc::{flags::__GFP_ZERO, KBox, KVBox};
         use kernel::init::InPlaceInit;
 
-        let gfp = flags::GFP_KERNEL | __GFP_ZERO;
+        let gfp = gfp | __GFP_ZERO;
         // SAFETY: pinned still: given up to its holder, which frees it
         Ok(unsafe {
             if KMALLOC {
