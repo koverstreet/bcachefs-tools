@@ -785,6 +785,7 @@ static int __bch2_dev_attach_bdev(struct bch_fs *c, struct bch_dev *ca,
 
 	/* Commit: */
 	ca->disk_sb = *sb;
+	ca->sb_layout = sb->sb->layout;
 	memset(sb, 0, sizeof(*sb));
 
 	/*

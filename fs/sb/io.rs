@@ -2143,8 +2143,12 @@ impl DevSbMut<'_> {
         self.resize().field_delete(F::FIELD_TYPE)
     }
 
-    pub fn layout_mut(&mut self) -> &mut c::bch_sb_layout {
-        &mut self.io.buf.sb_mut().layout
+    /// Its layout, edited by @f - and the device's copy, sb_layout, with it.
+    pub fn edit_layout<R>(&mut self, f: impl FnOnce(&mut c::bch_sb_layout) -> R) -> R {
+        let layout = &mut self.io.buf.sb_mut().layout;
+        let ret = f(layout);
+        self.ca.sb_layout.set(*layout);
+        ret
     }
 
     /// bch_sb_buf::edit_header(), for the tools: of what's shared, the next

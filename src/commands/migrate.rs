@@ -602,7 +602,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
         assert_eq!(actual_sb_size, sb_size, "sb_max_size_bits mismatch after recovery");
 
         // Apply superblock layout changes (FS is already RW)
-        add_default_sb_layout(dev_sb.layout_mut())?;
+        dev_sb.edit_layout(add_default_sb_layout)?;
     }
 
     // Mark the new sb buckets in FS metadata

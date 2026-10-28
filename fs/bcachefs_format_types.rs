@@ -1271,6 +1271,10 @@ pub struct bch_sb_layout {
     pub sb_offset: [Le64; 61],
 }
 c_default!(bch_sb_layout);
+// bch_dev's copy is read without sb_lock - by the allocator, until the
+// superblock buckets are marked - and may be read mid-edit, each offset as
+// before or after
+crate::tear_safe!(bch_sb_layout);
 
 c_const! {
     #[c_int]

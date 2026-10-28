@@ -383,6 +383,11 @@ pub struct bch_dev {
     /// device it's on, fixed while it's attached.
     #[c("struct bch_sb_handle disk_sb")]
     pub disk_sb: LockedBy<c::bch_sb_io, c::bch_sb_bdev>,
+    /// Its superblock's layout, for what can't take sb_lock to read disk_sb -
+    /// whose buffer write_super can reallocate: the allocator, steering clear
+    /// of superblock buckets. Copied as it's attached, and as it's edited -
+    /// DevSbMut::edit_layout(), under sb_lock.
+    pub sb_layout: crate::util::projections::Volatile<c::bch_sb_layout>,
     pub sb_read_scratch: *mut Head<c::bch_sb>,
     pub dev: c::dev_t,
 
