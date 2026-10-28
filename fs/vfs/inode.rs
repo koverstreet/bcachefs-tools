@@ -63,6 +63,8 @@ pub use c::InodeInfo;
 c_extern! {
     pub fn bch2_vfs_inode_get_trans(trans: *mut c::btree_trans, inum: c::subvol_inum,
                                     func: *const crate::util::ffi::c_char) -> *mut c::bch_inode_info;
+    fn bch2_vfs_inode_get(c: *mut c::bch_fs, inum: c::subvol_inum,
+                          warn: *const crate::util::ffi::c_char) -> *mut c::inode;
     // fs.c's inode cache, for lookup:
     fn bch2_inode_hash_find(c: *mut c::bch_fs, trans: *mut c::btree_trans,
                             inum: c::subvol_inum) -> *mut c::bch_inode_info;
@@ -120,6 +122,13 @@ impl InodeInfo {
     /// @inum's, looked up in @t, the inode cache first.
     pub fn get_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<InodeRef, BchError> {
         unsafe { Self::from_c(bch2_vfs_inode_get_trans(t.raw(), inum, crate::c_function_name!().as_ptr().cast())) }
+    }
+
+    /// @inum's, the inode cache first, in a transaction of its own - and no
+    /// warning if it isn't there, as a file handle's may not be.
+    pub(crate) fn get(fs: &Fs, inum: c::subvol_inum) -> Result<InodeRef, BchError> {
+        // @v is an InodeInfo's, first
+        unsafe { Self::from_c(bch2_vfs_inode_get(fs.as_ptr(), inum, core::ptr::null()).cast()) }
     }
 
     /// @inum's, if the inode cache has it. It waits out one being evicted,

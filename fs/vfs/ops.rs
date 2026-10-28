@@ -16,6 +16,7 @@ use crate::util::ops::{from_raw, into_raw, SelfOf};
 use crate::util::seq_file::SeqFile;
 
 use super::dentry::Dentry;
+use super::export::NameBuf;
 use super::idmap::MntIdmap;
 use super::inode::InodeInfo;
 use super::path::Path;
@@ -65,6 +66,8 @@ from_raw! {
     &'a mut c::fiemap_extent_info = *mut c::fiemap_extent_info => |r| &mut *r;
     /// The kernel crate's is fs.h's declaration, opaque; codegen's the same.
     &'a mut c::kstatfs    = *mut kernel::bindings::kstatfs => |r| &mut *r.cast();
+    /// get_name's, NAME_MAX + 1 bytes.
+    &'a mut NameBuf       = *mut c_char         => |r| &mut *r.cast();
 }
 
 // ── Returns ──────────────────────────────────────────────────────────────

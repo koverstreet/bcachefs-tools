@@ -151,6 +151,7 @@ pub mod util;
 pub mod vfs {
     #[cfg(kernel)] pub mod attr;
     #[cfg(kernel)] pub mod dentry;
+    #[cfg(kernel)] pub mod export;
     #[cfg(kernel)] pub mod iattr;
     #[cfg(kernel)] pub mod idmap;
     #[cfg(kernel)] pub mod inode;

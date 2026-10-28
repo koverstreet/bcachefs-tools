@@ -19,7 +19,7 @@ use format::D_NAMES_OFFSET;
 
 use crate::btree::bkey::{pos, spos, BKEY_U64S, BkeyI, BkeyS, BkeySC};
 use crate::btree::iter::{
-    lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey,
+    lockrestart_do, BtreeIter, BtreeIterFlags, TransAttempt, TransBkey,
     UpdateTriggerFlags,
 };
 use crate::c;
@@ -388,31 +388,6 @@ pub fn read_target(
             Ok(Some(c::subvol_inum { subvol: child as u64, inum: s.inode.get() }))
         }
         DirentTarget::Inode(inum) => Ok(Some(c::subvol_inum { subvol: dir.subvol, inum })),
-    }
-}
-
-/// For C's VFS lookups: bch2_dirent_read_target(). 1 for a dirent @dir
-/// doesn't list.
-///
-/// # Safety
-/// @d a dirent from the btree, valid for the call.
-#[c_export]
-pub unsafe extern "C" fn bch2_dirent_read_target(
-    trans:  &BtreeTrans<'_>,
-    dir:    c::subvol_inum,
-    d:      c::bkey_s_c_dirent,
-    target: &mut MaybeUninit<c::subvol_inum>,
-) -> c_int {
-    let k = c::bkey_s_c::from(d);
-
-    match read_target(&unsafe { trans.attempt_in_progress() }, dir,
-                      Dirent::new(unsafe { BkeySC::from_c(&k) }).expect("a dirent")) {
-        Ok(Some(t)) => {
-            target.write(t);
-            0
-        }
-        Ok(None) => 1,
-        Err(e)   => -e.raw(),
     }
 }
 
