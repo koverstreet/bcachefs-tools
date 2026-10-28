@@ -18,7 +18,10 @@
 //!
 //! - Slots a CPU owns - capacity.pcpu's reservation caches, a cache of a
 //!   freed object: changed by their own CPU, by a read-modify-write or an
-//!   xchg or cmpxchg, and at most reset by another.
+//!   xchg or cmpxchg, and at most reset by another. A slot is a Volatile:
+//!   every access a relaxed atomic, so another CPU's reset is a store like
+//!   any other - each_cpu() reaches every CPU's - and one racing this CPU's
+//!   read-modify-write may be lost, which is what a slot is for.
 //!
 //! The types:
 //!
@@ -27,14 +30,14 @@
 //!   which every operation takes as given, as C's do. Not Copy: nothing holds
 //!   it past its struct.
 //! - PerCpuRef<'a, T> borrows it, or a part of it - at(i), percpu_field!() -
-//!   as every CPU's copy: sum() over all of them; add(), set(), xchg() and
-//!   cmpxchg() on this CPU's, each one operation.
+//!   as every CPU's copy: sum() over all of them; read(), add(), set(),
+//!   xchg() and cmpxchg() on this CPU's, each one operation.
 //! - CpuCopy<'a, T> is one CPU's, from cpus(), read volatile: to sum part of
 //!   a T - percpu_field!() of each - in one sweep over the CPUs, where a sum
 //!   of each part would be a sweep apiece and sum() reads all of T.
 //! - ThisCpu<'g, T> is this CPU's copy, while a CpuGuard - preemption off -
-//!   keeps it this CPU: a place, as util/projections.rs's are, for a slot's
-//!   read-modify-write, or add() of a delta to a struct of counters.
+//!   keeps it this CPU: a place, as util/projections.rs's are, or add() of a
+//!   delta to a struct of counters; a slot's, its Volatile.
 //!
 //! What's atomic is C's contract and no more: a this_cpu operation is whole
 //! against this CPU - its interrupts and preemption - not against another CPU
@@ -55,14 +58,14 @@
 //! patches at boot - arm64's tpidr_el1 or tpidr_el2, its LL/SC or LSE - is
 //! that kernel's, never a copy falling behind it.
 //!
-//! - x86_64: one %gs-relative instruction - add, cmpxchg, and xchg as C's
-//!   cmpxchg loop - none LOCKed.
-//! - arm64: this CPU's offset from tpidr, then the kernel's add, LSE's ldadd
-//!   or LL/SC, or util/atomic.rs's swp or cas for xchg and cmpxchg. The add
-//!   leaves preemption on, where C's disables it: a task moved between
-//!   reading the offset and adding adds, atomically, to the CPU it left -
-//!   right for a counter, which is only ever summed. xchg and cmpxchg disable
-//!   it, as C's do.
+//! - x86_64: one %gs-relative instruction - mov, add, cmpxchg, and xchg as
+//!   C's cmpxchg loop - none LOCKed.
+//! - arm64: this CPU's offset from tpidr, then a load, the kernel's add,
+//!   LSE's ldadd or LL/SC, or util/atomic.rs's swp or cas for xchg and
+//!   cmpxchg. The add leaves preemption on, where C's disables it: a task
+//!   moved between reading the offset and adding adds, atomically, to the
+//!   CPU it left - right for a counter, which is only ever summed. The load
+//!   likewise reads the CPU it left. xchg and cmpxchg disable it, as C's do.
 //! - Elsewhere, and in userspace - whose per-CPU areas are per thread, found
 //!   through a C thread-local - C's, out of line.
 //!
@@ -78,7 +81,7 @@ use cstruct_macros::c_extern;
 
 use crate::c;
 use crate::util::alloc::AllocError;
-use crate::util::projections::{FakePlaceRef, FakePlaceWrite, FakePlaceRead};
+use crate::util::projections::{AtomicWord, FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};
 
 c_extern! {
     pub fn bch2_this_cpu_add_u64(pcp: *mut u64, val: u64);
@@ -101,6 +104,16 @@ mod arch {
     use super::{bch2_this_cpu_ptr, CpuGuard};
 
     include!(concat!(env!("OUT_DIR"), "/percpu_asm.rs"));
+
+    #[inline(always)]
+    pub(super) unsafe fn this_cpu_read(pcp: *mut u64) -> u64 {
+        let val: u64;
+        unsafe {
+            core::arch::asm!(this_cpu_read_asm!(), ptr = in(reg) pcp, val = out(reg) val,
+                             options(att_syntax, nostack, readonly, preserves_flags));
+        }
+        val
+    }
 
     #[inline(always)]
     pub(super) unsafe fn this_cpu_add(pcp: *mut u64, val: u64) {
@@ -156,6 +169,11 @@ mod arch {
     }
 
     #[inline(always)]
+    pub(super) unsafe fn this_cpu_read(pcp: *mut u64) -> u64 {
+        unsafe { AtomicU64::from_ptr(my_cpu(pcp)) }.load(Ordering::Relaxed)
+    }
+
+    #[inline(always)]
     pub(super) unsafe fn this_cpu_add(pcp: *mut u64, val: u64) {
         unsafe {
             core::arch::asm!(this_cpu_add_asm!(), ptr = in(reg) my_cpu(pcp), val = in(reg) val,
@@ -189,6 +207,10 @@ mod arch {
     use super::{bch2_this_cpu_add_u64, bch2_this_cpu_cmpxchg_u64, bch2_this_cpu_ptr,
                 bch2_this_cpu_xchg_u64, CpuGuard};
 
+    pub(super) unsafe fn this_cpu_read(pcp: *mut u64) -> u64 {
+        unsafe { core::ptr::read_volatile(bch2_this_cpu_ptr(pcp.cast()).cast::<u64>()) }
+    }
+
     pub(super) unsafe fn this_cpu_add(pcp: *mut u64, val: u64) {
         unsafe { bch2_this_cpu_add_u64(pcp, val) }
     }
@@ -206,7 +228,7 @@ mod arch {
     }
 }
 
-use arch::{this_cpu_add, this_cpu_cmpxchg, this_cpu_ptr, this_cpu_xchg};
+use arch::{this_cpu_add, this_cpu_cmpxchg, this_cpu_ptr, this_cpu_read, this_cpu_xchg};
 
 /// Preemption off while it lives. Not Send or Sync: it's this CPU's.
 pub struct CpuGuard(PhantomData<*const ()>);
@@ -385,6 +407,13 @@ impl<T: Counters> PerCpuRef<'_, T> {
 }
 
 impl PerCpuRef<'_, u64> {
+    /// This CPU's, or the one the task was just on: for a cmpxchg() to start
+    /// from, which fails unless it's this CPU's value now.
+    #[inline(always)]
+    pub fn read(&self) -> u64 {
+        unsafe { this_cpu_read(self.0) }
+    }
+
     #[inline(always)]
     pub fn add(&self, v: u64) {
         unsafe { this_cpu_add(self.0, v) }
@@ -415,6 +444,23 @@ impl PerCpuRef<'_, u64> {
             v if v == old => Ok(v),
             v             => Err(v),
         }
+    }
+}
+
+impl<'a, T: AtomicWord, const N: usize> PerCpuRef<'a, [Volatile<T>; N]> {
+    /// Each possible CPU's slots: Volatiles, anyone's to load and store.
+    pub fn each_cpu(self) -> impl Iterator<Item = &'a [Volatile<T>; N]> {
+        // SAFETY: a live CPU's copy, for 'a; a Volatile's every access is
+        // atomic, so a shared reference races nothing
+        possible_cpus().map(move |cpu| unsafe { &*bch2_per_cpu_ptr(self.0.cast(), cpu).cast::<[Volatile<T>; N]>() })
+    }
+}
+
+impl<'a> PerCpuRef<'a, Volatile<u64>> {
+    /// The slot as a word: its read() and cmpxchg(), this CPU's.
+    pub fn word(self) -> PerCpuRef<'a, u64> {
+        // Volatile<u64> is laid out as a u64 (repr(transparent))
+        PerCpuRef(self.0.cast(), PhantomData)
     }
 }
 
@@ -466,6 +512,16 @@ impl<'g, T> ThisCpu<'g, T> {
     /// @f only projects @t to a field of it, reading nothing.
     pub unsafe fn field<U>(self, f: impl FnOnce(*const T) -> *const U) -> ThisCpu<'g, U> {
         ThisCpu(self.0.wrapping_byte_add(field_offset(f)).cast(), PhantomData)
+    }
+}
+
+impl<'g, T: AtomicWord> core::ops::Deref for ThisCpu<'g, Volatile<T>> {
+    type Target = Volatile<T>;
+
+    fn deref(&self) -> &Volatile<T> {
+        // SAFETY: this CPU's copy, live while the guard is; a Volatile's
+        // every access is atomic
+        unsafe { &*self.0 }
     }
 }
 

@@ -17,6 +17,10 @@
 
 #if defined(CONFIG_X86_64) && defined(CONFIG_SMP)
 
+macro_rules! this_cpu_read_asm {
+    () => { concat_literals!("movq %" __stringify(__percpu_seg) ":({ptr}), {val}") };
+}
+
 macro_rules! this_cpu_add_asm {
     () => { concat_literals!("addq {val}, %" __stringify(__percpu_seg) ":({ptr})") };
 }
@@ -32,6 +36,10 @@ macro_rules! this_cpu_xchg_asm {
 }
 
 #elif defined(CONFIG_X86_64)
+
+macro_rules! this_cpu_read_asm {
+    () => { concat_literals!("movq ({ptr}), {val}") };
+}
 
 macro_rules! this_cpu_add_asm {
     () => { concat_literals!("addq {val}, ({ptr})") };
