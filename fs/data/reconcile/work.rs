@@ -49,7 +49,7 @@
 //! frees space, or devices change.
 
 use crate::accounting;
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::alloc::backpointers::backpointer_get_key;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyV, POS_MIN};
 use crate::btree::bkey_buf::BkeyBuf;

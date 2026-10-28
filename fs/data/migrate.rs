@@ -35,7 +35,8 @@
 
 use crate::accounting::{self, data_type_is_empty, data_type_is_hidden};
 use crate::alloc::backpointers::{backpointer_get_key, backpointer_get_node, BpScanIter};
-use crate::alloc::buckets::{bucket_to_u64, DiskReservation};
+use crate::alloc::buckets::bucket_to_u64;
+use crate::alloc::capacity::DiskReservation;
 use crate::alloc::replicas::bkey_replicas_acct;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, POS_MIN, SPOS_MAX};

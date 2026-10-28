@@ -28,7 +28,7 @@
 //! it's held.
 
 use crate::btree::bkey::prelude::*;
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_eq, bkey_family, bkey_ge, bkey_gt, bkey_lt, pos, BkeyI, BkeyS, BkeySC,
                          BkeyV, BkeyVal, BkeyVMut, POS_MAX, POS_MIN};
 use crate::btree::bkey_methods::TriggerOp;

@@ -125,7 +125,8 @@
 //! new_stripes' before the stripe's, as to_text takes them, so nothing takes
 //! new_stripes' holding the stripe's.
 
-use crate::alloc::buckets::{bucket_to_u64, DiskReservation};
+use crate::alloc::buckets::bucket_to_u64;
+use crate::alloc::capacity::DiskReservation;
 use crate::alloc::foreground::{EcOpenBucket, OpenBucket, OpenBucketRef};
 use crate::btree::bkey::{pos, BkeyV};
 use crate::c;

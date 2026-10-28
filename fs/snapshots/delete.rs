@@ -51,7 +51,7 @@
 //! an RwSem and holds it for read until it's done; the progress indicator is
 //! outside it, with its own lock.
 
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, Typed, POS_MIN};
 use crate::btree::bkey::prelude::*;
 use crate::btree::iter::{

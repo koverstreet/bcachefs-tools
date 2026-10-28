@@ -26,7 +26,7 @@ use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_del, backpointers_match, backpointers_maybe_flush,
                                  bucket_backpointer_mod, extent_ptr_to_bp, get_key, BackpointerPos,
                                  BpScanIter};
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::alloc::check_data::{bkey_drop_device_and_update, kill_replica_if_checksum_bad};
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{pos, spos, BkeyI, BkeySC, POS_MAX, POS_MIN, SPOS_MAX};

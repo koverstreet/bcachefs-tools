@@ -1,7 +1,7 @@
 use crate::c;
 use crate::btree::bkey::BkeyI;
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
 use crate::locking::{Guard, MutexNoio, Noio, PercpuRwsemNoio};
 use crate::util::Printbuf;

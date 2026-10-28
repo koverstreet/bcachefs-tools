@@ -1,6 +1,6 @@
 use super::bkey::*;
 pub use super::types::BtreeIter;
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::c;
 use crate::errcode::{
     BchError,

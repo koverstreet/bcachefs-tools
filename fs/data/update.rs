@@ -28,7 +28,7 @@
 //! (the change cookie, reread after a barrier), one that would lose durability
 //! or have none takes the filesystem emergency read-only: it's a bug.
 
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_le, BkeyFamily, BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, LoopFlow, TransAttempt, TransBkey,
                          UpdateTriggerFlags};

@@ -30,7 +30,7 @@
 //! the error injection tests.
 
 use crate::btree::bkey::prelude::*;
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bpos_gt, pos, spos, BkeySC, POS_MIN};
 use crate::btree::iter::{
     is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, TransAttempt,

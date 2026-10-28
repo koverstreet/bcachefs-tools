@@ -45,7 +45,8 @@
 use crate::accounting::data_type;
 use crate::alloc::background::alloc_to_v4;
 use crate::alloc::backpointers::{backpointer_get_key, BackpointerPos};
-use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket, DiskReservation};
+use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
+use crate::alloc::capacity::DiskReservation;
 use crate::alloc::check_backpointers::check_one_bucket_backpointer_mismatch;
 use crate::alloc::lru::LruPos;
 use crate::btree::bkey::prelude::*;

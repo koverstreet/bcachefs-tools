@@ -15,7 +15,7 @@ use crate::inode;
 use crate::dirent::{Dirent, DirentTarget};
 use crate::errcode::Found;
 use crate::snapshots::{snapshot, subvolume};
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::Printbuf;
 use crate::{bch_err, bch_err_msg, bch_info, fsck_err_on, inode_fsck_err, prt};

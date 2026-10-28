@@ -10,7 +10,7 @@ use core::mem::size_of;
 use core::ops::ControlFlow;
 use core::ops::Range;
 use crate::accounting;
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::bch_warn;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{self, BkeySC};

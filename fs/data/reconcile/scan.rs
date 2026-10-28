@@ -17,7 +17,7 @@
 //! covers anything narrower: a downgrade loses no scan.
 
 use crate::alloc::backpointers::{backpointer_get_key, BpScanIter};
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::prelude::*;
 use crate::btree::bkey::{bpos_ge, pos, BkeyI, BkeySC, POS_MIN};
 use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeLevels, BtreeTrans,

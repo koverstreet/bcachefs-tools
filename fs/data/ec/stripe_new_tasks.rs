@@ -4,7 +4,7 @@
 //! waiting to be in flight, creating the stripe, and tearing it down - see
 //! stripe_new.rs.
 
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};
 use crate::btree::iter::{commit_do, trans_commit_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts, TransAttempt,
                          UpdateTriggerFlags, Watermark};

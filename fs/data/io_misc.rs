@@ -15,7 +15,7 @@
 //! snapshots.create_lock, for read.
 
 use crate::btree::bkey::prelude::*;
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole};
 use crate::btree::iter::{commit_do, is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans,
                          CommitFlags, CommitOpts, TransAttempt, TransBkey, UpdateTriggerFlags};

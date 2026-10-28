@@ -4,7 +4,7 @@
 //! rebuilding around what's left of it - and recording, or taking out of
 //! the stripe, the extents of blocks that are lost.
 
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{BkeySC, BkeyV};
 use crate::btree::bkey::prelude::*;

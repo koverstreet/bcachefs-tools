@@ -27,7 +27,6 @@ use crate::util::percpu::{Counters, PerCpu};
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, btree_trans, fsck_err_on, log_msg_ratelimited, message, percpu_field, prt};
-use core::cell::Cell;
 use core::ffi::{c_int, c_uint, c_ulong};
 use core::mem::size_of;
 use core::sync::atomic::{AtomicU8, Ordering};
@@ -1018,48 +1017,6 @@ impl c::bch_dev {
     }
 }
 
-/// @r, and the margin charged on top of a reservation: reserve_factor().
-fn reserve_factor(r: u64) -> u64 {
-    r + (r.next_multiple_of(1 << c::RESERVE_FACTOR) >> c::RESERVE_FACTOR)
-}
-
-impl Fs {
-    /// The disk reservation caches recomputed, after the devices change:
-    /// bch2_disk_reservation_caches_invalidate().
-    pub fn disk_reservation_caches_invalidate(&self) {
-        unsafe { c::bch2_disk_reservation_caches_invalidate(self.as_ptr()) }
-    }
-
-    /// Sectors in use by kind, every CPU's count summed:
-    /// bch2_fs_usage_base_read().
-    pub fn usage_base(&self) -> c::bch_fs_usage_base {
-        percpu_field!(self.capacity.pcpu.get(), usage).sum_nonnegative()
-    }
-
-    /// Sectors reserved for writes in flight, every CPU's count summed:
-    /// bch2_online_reserved().
-    pub fn online_reserved(&self) -> u64 {
-        percpu_field!(self.capacity.pcpu.get(), online_reserved).sum_nonnegative().iter().sum()
-    }
-
-    /// Capacity, and how much of it is used and free, in sectors:
-    /// bch2_fs_usage_read_short().
-    pub fn usage_read_short(&self) -> c::bch_fs_usage_short {
-        let _mark = self.mark_lock().read();
-        // one sweep over the CPUs: sectors_available is summed too, and dropped
-        let b = self.capacity.pcpu.sum_nonnegative();
-
-        // a u64's, as C's: nothing keeps hidden below capacity
-        let capacity = self.capacity.capacity.get().wrapping_sub(b.usage.hidden);
-        let data     = b.usage.data + b.usage.btree;
-        // outstanding reservations are counted by replicas; all of them
-        let reserved = b.usage.reserved + b.online_reserved.iter().sum::<u64>();
-        let used     = capacity.min(data + reserve_factor(reserved));
-
-        c::bch_fs_usage_short { capacity, used, free: capacity - used }
-    }
-}
-
 /// # Safety
 /// @usage is writable.
 #[c_export]
@@ -1078,16 +1035,6 @@ pub unsafe fn bch2_dev_usage_full_read_fast(ca: &c::bch_dev, usage: *mut c::bch_
 #[c_export]
 pub fn bch2_dev_usage_to_text(out: &mut Printbuf, ca: &c::bch_dev, usage: &c::bch_dev_usage_full) {
     ca.usage_to_text(out, usage)
-}
-
-#[c_export]
-pub fn bch2_fs_usage_base_read(c: &Opaque<c::bch_fs>) -> c::bch_fs_usage_base {
-    Fs::from_c(c).usage_base()
-}
-
-#[c_export]
-pub fn bch2_fs_usage_read_short(c: &Opaque<c::bch_fs>) -> c::bch_fs_usage_short {
-    Fs::from_c(c).usage_read_short()
 }
 
 /// The bucket @v encodes - device in the top 16 bits, bucket in the low 48 -
@@ -1135,61 +1082,5 @@ impl c::bch_dev {
     /// bucket the device doesn't have: dev_ptr_stale_rcu(), which is -1 there.
     pub fn ptr_stale(&self, ptr: &c::bch_extent_ptr, rcu: &ReadGuard) -> Option<u8> {
         Some(gen_after(self.bucket_gen(self.ptr_bucket(ptr), rcu)?, ptr.generation()))
-    }
-}
-
-pub use c::DiskReservation;
-
-impl<'f> DiskReservation<'f> {
-    pub fn new(fs: &'f Fs) -> Self {
-        DiskReservation { c: fs, sectors: Cell::new(0), generation: Cell::new(0), nr_replicas: Cell::new(0) }
-    }
-
-    /// Reserve @sectors of data at @nr_replicas copies, on top of what it
-    /// already holds: bch2_disk_reservation_add().
-    pub fn add(&self, sectors: u64, nr_replicas: u32, flags: c::bch_reservation_flags) -> Result<(), BchError> {
-        // SAFETY: its fields are Cells
-        ret_to_result(unsafe {
-            c::rust_bch2_disk_reservation_add(self.c.as_ptr(), self.as_mut_ptr(), sectors, nr_replicas,
-                                              flags.bits() as i32)
-        })
-    }
-
-    /// Reserve @sectors physical - already weighted by replicas, not data
-    /// sectors to multiply - charged at @nr_replicas: __bch2_disk_reservation_add().
-    /// For a delta crediting back overwritten keys at their own counts:
-    /// sum_sector_overwrites()'s.
-    ///
-    /// XXX: the space arithmetic its callers do belongs elsewhere - with the
-    /// rest of buckets.c in Rust, this goes.
-    pub fn add_physical(&self, sectors: u64, nr_replicas: u32, flags: c::bch_reservation_flags)
-        -> Result<(), BchError>
-    {
-        // SAFETY: its fields are Cells
-        ret_to_result(unsafe {
-            c::rust_bch2_disk_reservation_add_physical(self.c.as_ptr(), self.as_mut_ptr(), sectors, nr_replicas,
-                                                       flags.bits() as i32)
-        })
-    }
-
-    /// Release what it holds, keeping it usable - for a loop reserving per
-    /// iteration: bch2_disk_reservation_put().
-    pub fn put(&self) {
-        // SAFETY: its fields are Cells
-        unsafe { c::rust_bch2_disk_reservation_put(self.c.as_ptr(), self.as_mut_ptr()) };
-    }
-
-    pub fn as_mut_ptr(&self) -> *mut c::disk_reservation {
-        core::ptr::from_ref(self).cast_mut().cast()
-    }
-
-    pub fn sectors(&self) -> u64 {
-        self.sectors.get()
-    }
-}
-
-impl Drop for DiskReservation<'_> {
-    fn drop(&mut self) {
-        self.put();
     }
 }

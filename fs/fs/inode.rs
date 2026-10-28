@@ -1534,7 +1534,7 @@ fn delete_keys(trans: &BtreeTrans<'_>, inum: c::subvol_inum, btree: c::btree_id)
     // it, and the commit charges the split's extra_disk_res to our disk
     // reservation - so pass one in, or that charge dereferences a NULL
     // disk_reservation.
-    let res = crate::alloc::buckets::DiskReservation::new(fs);
+    let res = crate::alloc::capacity::DiskReservation::new(fs);
 
     let mut iter = BtreeIter::new(trans, btree, pos(inum.inum, 0),
                                   BtreeIterFlags::INTENT | BtreeIterFlags::TRIM);

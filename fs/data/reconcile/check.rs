@@ -17,7 +17,7 @@
 //! one.
 
 use crate::alloc::backpointers::{backpointer_get_key, backpointers_match, bp_reconcile_phys, extent_ptr_to_bp};
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::alloc::check_backpointers::check_bp_exists;
 use crate::btree::bkey::{bpos_ge, pos, BkeyI, BkeySC, BkeyV, BkeyVMut, POS_MIN};
 use crate::btree::iter::{commit_do, lockrestart_do, peek_parallel, BtreeIter, BtreeIterFlags, BtreeLevels,

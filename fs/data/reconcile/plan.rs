@@ -50,7 +50,7 @@
 //! combined under its brand, the drop simulation's copies adopted as it
 //! (ptrs_mask.rs), and erased into data_update_opts.
 
-use crate::alloc::buckets::DiskReservation;
+use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{is_restart, BtreeIter, BtreeTrans, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
