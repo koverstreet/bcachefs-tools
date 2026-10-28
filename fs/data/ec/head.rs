@@ -533,7 +533,7 @@ fn head_stage(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, h: &c::ec_st
 /// stripe claimed for this write in @ob - if @ob isn't NULL, and it had one
 /// for us: or the error, an ec_alloc_failed subtype naming the reason.
 /// bch2_ec_stripe_head_get().
-fn head_get<'f>(t: &TransAttempt<'_, 'f>, req: &mut c::alloc_request, algo: u32, want_ob: bool)
+pub(crate) fn head_get<'f>(t: &TransAttempt<'_, 'f>, req: &mut c::alloc_request, algo: u32, want_ob: bool)
     -> Result<(&'f c::ec_stripe_head, HeadGuard<'f>, *mut c::open_bucket), BchError>
 {
     let fs = t.fs();

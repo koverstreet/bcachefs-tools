@@ -194,7 +194,9 @@ pub mod data {
     pub mod keylist;
     pub mod migrate;
     pub mod moving;
+    pub mod moving_update;
     pub mod nocow_locking;
+    pub mod promote;
     pub mod ptrs;
     pub mod reconcile {
         pub mod check;
@@ -205,6 +207,9 @@ pub mod data {
         pub mod work;
     }
     pub mod reflink;
+    pub mod update;
+    pub mod update_feasible;
+    pub mod update_task;
     pub mod update_index;
 }
 pub mod errcode;

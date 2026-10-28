@@ -132,6 +132,32 @@ impl c::bch_read_bio {
         #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
         { self.list_idx = 0; }
     }
+
+    /// Initializes it as a split of @orig - all but the bio, which is the
+    /// caller's.
+    pub fn init_fragment(&mut self, orig: &mut c::bch_read_bio, failed: *mut c::bch_io_failures) {
+        self.c            = orig.c;
+        self.state._state = 0;
+        self.flags        = 0;
+        self.ret          = 0;
+        self.bits_mut().set_split(1);
+        self.opts         = orig.opts;
+        self.failed       = failed;
+        self.err_report   = orig.err_report;
+        self.completion.parent = core::ptr::from_mut(orig);
+        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+        { self.list_idx = 0; }
+    }
+
+    pub fn async_list_del(&mut self, fs: &crate::fs::Fs) {
+        #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
+        // SAFETY: its slot, from the read path's async_object_list_add()
+        unsafe {
+            crate::debug::async_objs::list_del(fs, c::bch_async_obj_lists::BCH_ASYNC_OBJ_LIST_rbio, &mut self.list_idx)
+        };
+        #[cfg(not(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS))]
+        let _ = fs;
+    }
 }
 
 c_extern! {

@@ -672,8 +672,9 @@ impl<I: CuckooItem, S: BuildHasher + From<[u64; 2]>, const W: usize> Cuckoo<I, S
 /// An entry's place in a map, and its key, held by the entry: dropping it
 /// takes the entry out. A reference each way, owning neither - the table
 /// points to the entry, the entry to the table - so the entry is pinned while
-/// it's in, and leaves as it's dropped. The entry's Hash, Eq and Borrow<K>
-/// are key()'s, which nothing can change.
+/// it's in, and leaves as it's dropped. Made by new(), the entry's Hash, Eq
+/// and Borrow<K> are key()'s, which nothing can change; an entry that holds
+/// its key itself is registered by register(), and this held beside it.
 ///
 /// The table is a BackRef: it outlives its entries.
 pub struct Registration<K, E, S = SipHash13Key, const W: usize = 2>
@@ -739,6 +740,24 @@ where K: Hash + Eq, E: Hash + Eq + Sync + Borrow<K>, S: BuildHasher + From<[u64;
         };
         // SAFETY: @slot is initialized on Ok, and not on Err; nothing moves it
         unsafe { ::pin_init::pin_init_from_closure(init) }
+    }
+
+    /// Registers @e in @table under @key until this is dropped, for an entry
+    /// that holds its key itself, rather than through this: it's inserted
+    /// first, and this is held beside it - an Option, say. The entry doesn't
+    /// move while it's in; this can. Fails as new() does.
+    ///
+    /// # Safety
+    /// Entry::new()'s, for @e, whose key is @key while it's in; and @table
+    /// outlives this.
+    pub unsafe fn register(table: &Cuckoo<Entry<E>, S, W>, key: K, e: NonNull<E>) -> Result<Self, RegisterError> {
+        // SAFETY: the caller's
+        match table.insert_new(unsafe { Entry::new(e) }) {
+            // SAFETY: the caller's
+            Ok(Ok(())) => Ok(Self { table: unsafe { BackRef::new(table) }, entry: e, key }),
+            Ok(Err(_)) => Err(RegisterError::Exists),
+            Err(_)     => Err(RegisterError::Alloc),
+        }
     }
 
     pub fn key(&self) -> &K {

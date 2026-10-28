@@ -639,7 +639,7 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
 
     let v = i.new_stripe.stripe().v();
     let stripe_sectors = u32::from(v.sectors.get()) * u32::from(v.nr_blocks);
-    i.write = Some(ctxt.write_start(stripe_sectors));
+    i.write = Some(ctxt.io_start(true, stripe_sectors));
     drop(i);
 
     // in new_stripes already: no head's

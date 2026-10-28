@@ -2,9 +2,8 @@
 
 //! Devices: dev.c's, as it converts.
 //!
-//! So far devs_list_to_text(), and a bch_dev's memory: Rust allocates it, as
-//! bch_fs's, so its
-//! Rust-typed fields have initializers - the bucket bitmaps' Locks - and it's
+//! So far devs_list_to_text(), its congestion, and a bch_dev's memory: Rust
+//! allocates it, as bch_fs's, so its Rust-typed fields have initializers - the bucket bitmaps' Locks - and it's
 //! dropped whole when it's freed: after C's teardown, which leaves what it
 //! freed nulled for those fields' Drops to find.
 
@@ -12,6 +11,7 @@ use crate::c;
 use crate::fs::Fs;
 use crate::util::rcu::read_lock;
 use crate::util::Printbuf;
+use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
 
 /// The memory of a new bch_dev of @c: bch_dev::init()'s - its Rust-typed
@@ -57,4 +57,28 @@ impl Fs {
 #[c_export]
 pub fn bch2_devs_list_to_text(out: &mut Printbuf, c: &Fs, d: &c::bch_devs_list) {
     c.devs_list_to_text(out, d)
+}
+
+// ── Congestion ───────────────────────────────────────────────────────────
+
+#[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+impl c::bch_dev {
+    /// The device's congestion at @now (local_clock()), out of CONGESTED_MAX:
+    /// what bch2_latency_acct() added for IO over the latency threshold,
+    /// decayed by the time since.
+    pub fn congested_read(&self, now: u64) -> u32 {
+        let mut congested = i64::from(self.congested.load(Relaxed));
+        let last = self.congested_last.load(Relaxed);
+        // now is after last, allowing for wrap
+        if (last.wrapping_sub(now) as i64) < 0 {
+            congested -= (now.wrapping_sub(last) >> 12) as i64;
+        }
+        congested.clamp(0, c::CONGESTED_MAX.into()) as u32
+    }
+}
+
+#[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+#[c_export]
+pub fn bch2_dev_congested_read(ca: &c::bch_dev, now: u64) -> u32 {
+    ca.congested_read(now)
 }

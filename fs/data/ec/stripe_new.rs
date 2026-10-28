@@ -136,7 +136,7 @@ use crate::data::ec::stripe::{StripeKey, MAX_BLOCKS};
 use crate::data::ec::stripe_new_blocks::new_stripe_key;
 use crate::data::ec::stripe_new_reuse::Reuse;
 use crate::data::ec::stripe_new_tasks::stripe_task;
-use crate::data::moving::MovingWrite;
+use crate::data::moving::MovingIo;
 use crate::errcode::{bch_errcode, ret_to_result_void, BchError, FirstErr};
 use crate::fs::Fs;
 use crate::locking::{Guard, Lock};
@@ -279,7 +279,7 @@ impl Slot {
 #[pin_data]
 pub(crate) struct Internal {
     /// A repair's: its writes, in flight in the repair's moving context
-    pub(crate) write:                Option<MovingWrite>,
+    pub(crate) write:                Option<MovingIo>,
     /// Its task, until it's started
     task:                 Option<Unstarted<()>>,
     /// Its maker's io ref - its head's or repair's - till fill() puts it

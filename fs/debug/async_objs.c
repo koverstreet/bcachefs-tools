@@ -12,32 +12,26 @@
 #include "btree/write.h"
 
 #include "data/read.h"
+#include "data/update_task_gen.h"
 #include "data/write.h"
 
 #include "debug/async_objs.h"
 
-static __cold void promote_obj_to_text(struct printbuf *out,
-				struct bch_fs *c,
-				void *obj)
-{
-	bch2_promote_op_to_text(out, c, obj);
-}
-
-static __cold void rbio_obj_to_text(struct printbuf *out,
+static __cold void bch2_rbio_obj_to_text(struct printbuf *out,
 			     struct bch_fs *c,
 			     void *obj)
 {
 	bch2_read_bio_to_text(out, c, obj);
 }
 
-static __cold void write_op_obj_to_text(struct printbuf *out,
+static __cold void bch2_write_op_obj_to_text(struct printbuf *out,
 				 struct bch_fs *c,
 				 void *obj)
 {
 	bch2_write_op_to_text(out, obj);
 }
 
-static __cold void btree_read_bio_obj_to_text(struct printbuf *out,
+static __cold void bch2_btree_read_bio_obj_to_text(struct printbuf *out,
 				       struct bch_fs *c,
 				       void *obj)
 {
@@ -45,7 +39,7 @@ static __cold void btree_read_bio_obj_to_text(struct printbuf *out,
 	bch2_btree_read_bio_to_text(out, rbio);
 }
 
-static __cold void btree_write_bio_obj_to_text(struct printbuf *out,
+static __cold void bch2_btree_write_bio_obj_to_text(struct printbuf *out,
 					struct bch_fs *c,
 					void *obj)
 {
@@ -66,7 +60,7 @@ int bch2_fs_async_obj_init(struct bch_fs *c)
 			return -BCH_ERR_ENOMEM_async_obj_init;
 	}
 
-#define x(n) c->async_objs[BCH_ASYNC_OBJ_LIST_##n].obj_to_text = n##_obj_to_text;
+#define x(n) c->async_objs[BCH_ASYNC_OBJ_LIST_##n].obj_to_text = bch2_##n##_obj_to_text;
 	BCH_ASYNC_OBJ_LISTS()
 #undef x
 

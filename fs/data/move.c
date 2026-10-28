@@ -63,183 +63,6 @@ static int evacuate_bucket_pred(struct btree_trans *, void *,
 				struct bch_inode_opts *,
 				struct data_update_opts *);
 
-static void data_update_free_rcu(struct rcu_head *rcu)
-{
-	struct data_update *u = container_of(rcu, struct data_update, rcu);
-
-	bch2_bkey_buf_exit(&u->k);
-	kfree(u);
-}
-
-static void move_write_done(struct bch_write_op *op)
-{
-	struct data_update *u = container_of(op, struct data_update, op);
-	struct moving_context *ctxt = u->ctxt;
-
-	atomic_sub(u->k.k->k.size, &ctxt->write_sectors);
-	atomic_dec(&ctxt->write_ios);
-
-	/*
-	 * EC allocation failed — the write never happened but the extent
-	 * still needs erasure coding. Mark it pending so reconcile retries
-	 * from the pending list instead of the main scan.
-	 *
-	 * Not the transient ones: nothing takes work off the pending list on
-	 * its own, so parking something a retry would have satisfied abandons
-	 * it.
-	 */
-	if (bch2_err_matches(op->error, BCH_ERR_ec_alloc_failed) &&
-	    !bch2_err_matches(op->error, BCH_ERR_ec_alloc_failed_transient))
-		bch2_data_update_ec_alloc_failed(u);
-
-	bch2_data_update_exit(u, op->error);
-	call_rcu(&u->rcu, data_update_free_rcu);
-	closure_put(&ctxt->cl);
-}
-
-static void move_write(struct data_update *u)
-{
-	struct moving_context *ctxt = u->ctxt;
-	struct bch_read_bio *rbio = &u->rbio;
-
-	if (ctxt->stats) {
-		/*
-		 * A poisoned extent is data we've already lost, even when it
-		 * reads back clean: a move gives it a new checksum over the bad
-		 * data. Not for the journal scrub, where uncorrected means a
-		 * rewind, and a rewind can't bring this back.
-		 */
-		bool poisoned = u->opts.type == BCH_DATA_UPDATE_scrub &&
-			(bch2_bkey_extent_flags(bkey_i_to_s_c(u->k.k)) &
-			 BIT_ULL(BCH_EXTENT_FLAG_poisoned));
-
-		/*
-		 * Not rbio->bvec_iter: that's only set when the read went
-		 * straight into this rbio, not through a bounce or a clone
-		 */
-		if (bch2_data_update_read_err_benign(rbio->ret)) {
-			/* nothing was read, and nothing was lost */
-		} else if (rbio->ret || poisoned) {
-			atomic64_add(u->k.k->k.size,
-				     &ctxt->stats->sectors_error_uncorrected);
-			set_bit(rbio->pick.ptr.dev,
-				ctxt->stats->devs_error_uncorrected.d);
-		} else if (rbio->saw_error)
-			atomic64_add(u->k.k->k.size,
-				     &ctxt->stats->sectors_error_corrected);
-	}
-
-	closure_get(&ctxt->cl);
-	atomic_add(u->k.k->k.size, &ctxt->write_sectors);
-	atomic_inc(&ctxt->write_ios);
-
-	bch2_data_update_read_done(u);
-}
-
-struct data_update *bch2_moving_ctxt_next_pending_write(struct moving_context *ctxt)
-{
-	struct data_update *u =
-		list_first_entry_or_null(&ctxt->reads, struct data_update, read_list);
-
-	return u && u->read_done ? u : NULL;
-}
-
-static void move_read_endio(struct bio *bio)
-{
-	struct data_update *u = container_of(bio, struct data_update, rbio.bio);
-	struct moving_context *ctxt = u->ctxt;
-
-	atomic_sub(u->k.k->k.size, &ctxt->read_sectors);
-	atomic_dec(&ctxt->read_ios);
-	u->read_done = true;
-
-	wake_up(&ctxt->wait);
-	bch2_moving_ctxt_wake(ctxt);
-	closure_put(&ctxt->cl);
-}
-
-void bch2_moving_ctxt_do_pending_writes(struct moving_context *ctxt)
-{
-	struct data_update *u;
-
-	while ((u = bch2_moving_ctxt_next_pending_write(ctxt))) {
-		bch2_trans_unlock_long(ctxt->trans);
-		list_del(&u->read_list);
-		move_write(u);
-	}
-}
-
-void bch2_move_ctxt_wait_for_io(struct moving_context *ctxt)
-{
-	unsigned sectors_pending = atomic_read(&ctxt->write_sectors);
-
-	move_ctxt_wait_event(ctxt,
-		!atomic_read(&ctxt->write_sectors) ||
-		atomic_read(&ctxt->write_sectors) != sectors_pending);
-}
-
-void bch2_moving_ctxt_flush_all(struct moving_context *ctxt)
-{
-	/*
-	 * Wait freezably for the IO itself; the closure_sync() after only
-	 * covers the closure_put() that follows each completion's wakeup.
-	 */
-	move_ctxt_wait_event(ctxt, list_empty(&ctxt->reads) &&
-			     !atomic_read(&ctxt->write_ios));
-	bch2_trans_unlock_long(ctxt->trans);
-	closure_sync(&ctxt->cl);
-}
-
-void bch2_moving_ctxt_exit(struct moving_context *ctxt)
-{
-	struct bch_fs *c = ctxt->trans->c;
-
-	bch2_moving_ctxt_flush_all(ctxt);
-
-	EBUG_ON(atomic_read(&ctxt->write_sectors));
-	EBUG_ON(atomic_read(&ctxt->write_ios));
-	EBUG_ON(atomic_read(&ctxt->read_sectors));
-	EBUG_ON(atomic_read(&ctxt->read_ios));
-
-	scoped_guard(mutex, &c->moving_context_lock)
-		list_del(&ctxt->list);
-
-	/*
-	 * Generally, releasing a transaction within a transaction restart means
-	 * an unhandled transaction restart: but this can happen legitimately
-	 * within the move code, e.g. when bch2_move_ratelimit() tells us to
-	 * exit before we've retried
-	 */
-	bch2_trans_begin(ctxt->trans);
-	bch2_trans_put(ctxt->trans);
-	memset(ctxt, 0, sizeof(*ctxt));
-}
-
-void bch2_moving_ctxt_init(struct moving_context *ctxt,
-			   struct bch_fs *c,
-			   struct bch_move_stats *stats,
-			   struct write_point_specifier wp,
-			   bool wait_on_copygc)
-{
-	memset(ctxt, 0, sizeof(*ctxt));
-
-	ctxt->trans	= bch2_trans_get(c);
-	ctxt->fn	= (void *) _RET_IP_;
-	ctxt->stats	= stats;
-	ctxt->wp	= wp;
-	ctxt->wait_on_copygc = wait_on_copygc;
-
-	closure_init_stack(&ctxt->cl);
-
-	mutex_init(&ctxt->lock);
-	INIT_LIST_HEAD(&ctxt->reads);
-	INIT_LIST_HEAD(&ctxt->ios);
-	init_waitqueue_head(&ctxt->wait);
-
-	scoped_guard(mutex, &c->moving_context_lock)
-		list_add(&ctxt->list, &c->moving_context_list);
-}
-
 void bch2_move_stats_exit(struct bch_move_stats *stats, struct bch_fs *c)
 {
 }
@@ -249,103 +72,6 @@ void bch2_move_stats_init(struct bch_move_stats *stats, const char *name)
 	memset(stats, 0, sizeof(*stats));
 	stats->data_type = BCH_DATA_user;
 	scnprintf(stats->name, sizeof(stats->name), "%s", name);
-}
-
-DEFINE_FREE(data_update_free, struct data_update *, if (_T) kfree_rcu(_T, rcu))
-
-static int __bch2_move_extent(struct moving_context *ctxt,
-		     struct move_bucket *bucket_in_flight,
-		     struct btree_iter *iter,
-		     struct bkey_s_c k,
-		     struct bch_inode_opts *io_opts,
-		     struct data_update_opts *data_opts)
-{
-	struct btree_trans *trans = ctxt->trans;
-	struct bch_fs *c = trans->c;
-	int ret = 0;
-
-	if (ctxt->stats)
-		ctxt->stats->pos = BBPOS(iter->btree_id, iter->pos);
-
-	struct data_update *u __free(data_update_free) =
-		allocate_dropping_locks(trans, ret, kzalloc(sizeof(struct data_update), _gfp));
-	if (!u && !ret)
-		ret = bch_err_throw(c, ENOMEM_move_extent);
-	if (ret)
-		return ret;
-
-	ret = bch2_data_update_init(trans, iter, ctxt, u, ctxt->wp,
-				    io_opts, *data_opts, iter->btree_id, k);
-	if (ret)
-		return bch2_err_matches(ret, BCH_ERR_data_update_done) ? 0 : ret;
-
-	k = bkey_i_to_s_c(u->k.k);
-
-	u->op.end_io		= move_write_done;
-	u->rbio.bio.bi_end_io	= move_read_endio;
-	u->rbio.bio.bi_ioprio	= IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
-
-	u32 size = k.k->size;
-
-	if (bucket_in_flight) {
-		u->b = bucket_in_flight;
-		atomic_inc(&u->b->count);
-	}
-
-	scoped_guard(mutex, &ctxt->lock) {
-		atomic_add(u->k.k->k.size, &ctxt->read_sectors);
-		atomic_inc(&ctxt->read_ios);
-
-		list_add_tail(&u->read_list, &ctxt->reads);
-		list_add_tail(&u->io_list, &ctxt->ios);
-
-		u->io_seq = ctxt->io_seq++;
-	}
-
-	/*
-	 * dropped by move_read_endio() - guards against use after free of
-	 * ctxt when doing wakeup
-	 */
-	closure_get(&ctxt->cl);
-	ret = __bch2_read_extent(trans, &u->rbio,
-				 u->rbio.bio.bi_iter,
-				 bkey_start_pos(k.k),
-				 iter->btree_id, k, 0,
-				 NULL,
-				 data_opts->read_flags|BCH_READ_last_fragment,
-				 data_opts->read_dev);
-	if (ret) {
-		/*
-		 * __bch2_read_extent() only returns an error synchronously
-		 * (transaction restart or ENOMEM during promote setup) before it
-		 * has touched the rbio - move_read_endio() never runs, so the
-		 * read-side setup above has to be unwound by hand.
-		 *
-		 * bch2_data_update_exit() reverses bch2_data_update_init() and
-		 * also drops the in-flight bucket count we took above (update->b
-		 * is its only decrement, tree-wide). What it does NOT cover is
-		 * move.c's own read-side state: the closure ref, the read
-		 * accounting, and read_list.
-		 */
-		closure_put(&ctxt->cl);
-
-		scoped_guard(mutex, &ctxt->lock) {
-			atomic_sub(u->k.k->k.size, &ctxt->read_sectors);
-			atomic_dec(&ctxt->read_ios);
-			list_del(&u->read_list);
-		}
-
-		bch2_data_update_exit(u, ret);
-		u = NULL;
-		return ret;
-	}
-	u = NULL;
-
-	if (ctxt->stats) {
-		atomic64_inc(&ctxt->stats->keys_moved);
-		atomic64_add(size, &ctxt->stats->sectors_moved);
-	}
-	return 0;
 }
 
 /*
@@ -492,37 +218,6 @@ static int bch2_move_extent_pred(struct moving_context *ctxt,
 		return ret;
 
 	return bch2_move_extent(ctxt, bucket_in_flight, &opts, &data_opts, iter, level, k);
-}
-
-int bch2_move_ratelimit(struct moving_context *ctxt)
-{
-	struct bch_fs *c = ctxt->trans->c;
-	if (ctxt->wait_on_copygc && c->copygc.running) {
-		bch2_moving_ctxt_flush_all(ctxt);
-		bch2_copygc_wait_not_running(c);
-	}
-
-	try(bch2_kthread_cancelled(c));
-
-	if (unlikely(test_bit(BCH_FS_going_ro, &c->flags)))
-		return bch_err_throw(c, erofs_no_writes);
-
-	if (unlikely(freezing(current))) {
-		bch2_trans_unlock_long(ctxt->trans);
-		try_to_freeze();
-	}
-
-	/*
-	 * XXX: these limits really ought to be per device, SSDs and hard drives
-	 * will want different limits
-	 */
-	move_ctxt_wait_event(ctxt,
-		atomic_read(&ctxt->write_sectors) < c->opts.move_bytes_in_flight >> 9 &&
-		atomic_read(&ctxt->read_sectors) < c->opts.move_bytes_in_flight >> 9 &&
-		atomic_read(&ctxt->write_ios) < c->opts.move_ios_in_flight &&
-		atomic_read(&ctxt->read_ios) < c->opts.move_ios_in_flight);
-
-	return 0;
 }
 
 int bch2_move_data_btree(struct moving_context *ctxt,
@@ -1749,24 +1444,16 @@ static __cold void bch2_moving_ctxt_to_text(struct printbuf *out, struct bch_fs 
 	guard(printbuf_indent)(out);
 
 	prt_printf(out, "reads: ios %u/%u sectors %u/%u\n",
-		   atomic_read(&ctxt->read_ios),
+		   atomic_read(&ctxt->io.read_ios),
 		   c->opts.move_ios_in_flight,
-		   atomic_read(&ctxt->read_sectors),
+		   atomic_read(&ctxt->io.read_sectors),
 		   c->opts.move_bytes_in_flight >> 9);
 
 	prt_printf(out, "writes: ios %u/%u sectors %u/%u\n",
-		   atomic_read(&ctxt->write_ios),
+		   atomic_read(&ctxt->io.write_ios),
 		   c->opts.move_ios_in_flight,
-		   atomic_read(&ctxt->write_sectors),
+		   atomic_read(&ctxt->io.write_sectors),
 		   c->opts.move_bytes_in_flight >> 9);
-
-	guard(printbuf_indent)(out);
-
-	scoped_guard(mutex, &ctxt->lock) {
-		struct data_update *u;
-		list_for_each_entry(u, &ctxt->ios, io_list)
-			bch2_data_update_inflight_to_text(out, u);
-	}
 }
 
 __cold void bch2_fs_moving_ctxts_to_text(struct printbuf *out, struct bch_fs *c)

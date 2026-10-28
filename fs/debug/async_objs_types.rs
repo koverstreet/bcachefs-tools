@@ -16,7 +16,7 @@ use {
 
 c_xmacro! {
     BCH_ASYNC_OBJ_LISTS(x) {
-        (promote),
+        (data_update),
         (rbio),
         (write_op),
         (btree_read_bio),

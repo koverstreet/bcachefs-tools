@@ -4,14 +4,9 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_uint;
 use core::sync::atomic::AtomicBool;
-use crate::btree::bkey::BkeySC;
-use crate::btree::iter::TransAttempt;
-use crate::errcode::{ret_to_result_void, BchError};
-use crate::fs::Fs;
-use crate::util::{Printbuf, ToText};
-use cstruct_macros::{CStruct, bitfield, c_enum, c_extern, c_xmacro};
+use cstruct_macros::{CStruct, bitfield, c_enum, c_xmacro};
 use nestify::nest;
 
 c_xmacro! {
@@ -70,6 +65,16 @@ nest! {
 }
 c_default!(data_update_opts);
 
+/// An update's key in the in-flight table: where it is, and whether it's
+/// copygc's - so one of each can be in flight at a position.
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, CStruct)]
+pub struct data_update_key {
+    pub btree: c::btree_id,
+    pub pos: c::bpos,
+    pub copygc: bool,
+}
+
 #[repr(C)]
 #[derive(CStruct)]
 pub struct data_update {
@@ -79,26 +84,14 @@ pub struct data_update {
     pub k: c::bkey_buf,
     pub opts: c::data_update_opts,
 
-    pub on_hashtable: bool,
     /* read by the in-flight listing, racily */
     #[c("bool read_done")]
     pub read_done: AtomicBool,
-    /*
-     * A ref on each pointer's device, parallel to the pointers in @k, none for
-     * a missing device: what the nocow locks go by, not c->devs[], which a
-     * device removal may clear while the ref pins the device
-     */
-    #[c("struct bch_dev *cas[BCH_BKEY_PTRS_MAX]")]
-    pub cas: [Option<crate::sb::members::DevRef>; c::BCH_BKEY_PTRS_MAX as usize],
+    /* its key in c->update_table, while it's in: Held's in_flight */
+    pub in_flight_key: c::data_update_key,
 
-    pub hash: c::rhlist_head,
-    pub pos: c::bbpos,
-
-    /* associated with @ctxt */
-    pub read_list: c::list_head,
-    pub io_list: c::list_head,
+    /* associated with @ctxt: its index in the context's updates */
     pub io_seq: u64,
-    pub b: *mut c::move_bucket,
     pub ctxt: *mut c::moving_context,
     /* the mover's, if it keeps any - which outlive its updates */
     #[c("struct bch_move_stats *stats")]
@@ -109,70 +102,3 @@ pub struct data_update {
     pub bvecs: *mut c::bio_vec,
 }
 
-#[repr(C)]
-#[derive(CStruct)]
-pub struct promote_op {
-    pub start_time: u64,
-    /* its slot on its async object list */
-    #[cfg(CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS)]
-    pub list_idx: c_uint,
-    pub cpu: c_int, /* for promote_limit */
-
-    pub work: c::work_struct,
-    pub write: c::data_update,
-    pub bi_inline_vecs: [c::bio_vec; 0], /* must be last */
-}
-
-c_extern! {
-    pub fn bch2_data_update_to_text(out: *mut c::printbuf, m: *mut c::data_update);
-    pub fn bch2_data_update_opts_to_text(out: *mut c::printbuf, c: *mut c::bch_fs,
-                                         io_opts: *mut c::bch_inode_opts, data_opts: *mut c::data_update_opts);
-    pub fn bch2_data_update_in_flight(c: *mut c::bch_fs, pos: *mut c::bbpos,
-                                      type_: c::bch_data_update_types) -> bool;
-    pub fn bch2_can_do_data_update(trans: *mut c::btree_trans, opts: *mut c::bch_inode_opts,
-                                   data_opts: *mut c::data_update_opts, k: c::bkey_s_c,
-                                   trace: *mut c::printbuf) -> c_int;
-}
-
-impl ToText for c::data_update {
-    fn to_text(&self, out: &mut Printbuf) {
-        // SAFETY: read only
-        unsafe { bch2_data_update_to_text(out.as_raw(), core::ptr::from_ref(self).cast_mut()) }
-    }
-}
-
-impl Fs {
-    /// Whether a data update at @pos keeps out one of @type: any update there,
-    /// but copygc's only by copygc's - a promote mustn't hold up an evacuation.
-    pub fn data_update_in_flight(&self, pos: c::bbpos, type_: c::bch_data_update_types) -> bool {
-        // SAFETY: @pos only read, under its own RCU lock
-        unsafe { bch2_data_update_in_flight(self.as_ptr(), core::ptr::from_ref(&pos).cast_mut(), type_) }
-    }
-
-    pub fn data_update_opts_to_text(&self, out: &mut Printbuf, io_opts: &c::bch_inode_opts,
-                                    data_opts: &c::data_update_opts) {
-        // SAFETY: read only
-        unsafe {
-            bch2_data_update_opts_to_text(out.as_raw(), self.as_ptr(), core::ptr::from_ref(io_opts).cast_mut(),
-                                          core::ptr::from_ref(data_opts).cast_mut())
-        }
-    }
-}
-
-impl TransAttempt<'_, '_> {
-    /// Whether the update @data_opts says can be done to @k now: the
-    /// durability it would keep, devices to write it to, and for must_ec a
-    /// stripe head. If not, why - a data_update_fail_* or ec_alloc_failed
-    /// error, and into @trace. Getting the stripe head takes mutexes, which
-    /// can restart the attempt.
-    pub fn can_do_data_update(&self, opts: &c::bch_inode_opts, data_opts: &c::data_update_opts,
-                              k: BkeySC<'_>, trace: Option<&mut Printbuf>) -> Result<(), BchError> {
-        let trace = trace.map_or(core::ptr::null_mut(), |t| core::ptr::from_mut(t.as_raw()));
-        // SAFETY: in the attempt; @opts and @data_opts only read, @trace NULL
-        // or ours
-        ret_to_result_void(unsafe {
-            bch2_can_do_data_update(self.raw(), core::ptr::from_ref(opts).cast_mut(),
-                                    core::ptr::from_ref(data_opts).cast_mut(), k.into(), trace)
-        })
-    }
-}

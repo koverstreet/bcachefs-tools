@@ -1341,6 +1341,9 @@ pub fn bch2_dev_bucket_missing(ca: &c::bch_dev, bucket: u64) {
 /// A NonNull, so Option<DevRef> has C's layout: a nullable bch_dev *.
 pub struct DevRef(core::ptr::NonNull<c::bch_dev>);
 
+// SAFETY: a ref on a Sync device, which C takes and puts from any thread
+unsafe impl Send for DevRef {}
+
 impl DevRef {
     /// # Safety
     /// @ca holds a ref that's this one's now: bch2_dev_lookup()'s.

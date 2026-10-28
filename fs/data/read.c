@@ -35,6 +35,7 @@
 #include "data/compress.h"
 #include "data/ec/io.h"
 #include "data/io_misc.h"
+#include "data/promote_gen.h"
 #include "data/read.h"
 #include "data/reconcile/trigger.h"
 #include "data/reflink.h"
@@ -79,38 +80,6 @@ static void bch2_read_bio_to_text_atomic(struct printbuf *, struct bch_read_bio 
 
 #ifndef CONFIG_BCACHEFS_NO_LATENCY_ACCT
 
-static inline u32 bch2_dev_congested_read(struct bch_dev *ca, u64 now)
-{
-	s64 congested = atomic_read(&ca->congested);
-	u64 last = READ_ONCE(ca->congested_last);
-	if (time_after64(now, last))
-		congested -= (now - last) >> 12;
-
-	return clamp(congested, 0LL, CONGESTED_MAX);
-}
-
-static bool bch2_target_congested(struct bch_fs *c, u16 target)
-{
-	const struct bch_devs_mask *devs;
-	unsigned d, nr = 0, total = 0;
-	u64 now = local_clock();
-
-	guard(rcu)();
-	devs = bch2_target_to_mask(c, target) ?:
-		&c->allocator.rw_devs[BCH_DATA_user];
-
-	for_each_set_bit(d, devs->d, BCH_SB_MEMBERS_MAX) {
-		struct bch_dev *ca = rcu_dereference(c->devs[d]);
-		if (!ca)
-			continue;
-
-		total += bch2_dev_congested_read(ca, now);
-		nr++;
-	}
-
-	return get_random_u32_below(nr * CONGESTED_MAX) < total;
-}
-
 __cold void bch2_dev_congested_to_text(struct printbuf *out, struct bch_dev *ca)
 {
 	printbuf_tabstop_push(out, 32);
@@ -146,16 +115,9 @@ __cold void bch2_dev_congested_to_text(struct printbuf *out, struct bch_dev *ca)
 	prt_newline(out);
 }
 
-#else
-
-static bool bch2_target_congested(struct bch_fs *c, u16 target)
-{
-	return false;
-}
-
 #endif
 
-/* Cache promotion on read */
+/* Read */
 
 static inline bool have_io_error(struct bch_io_failures *failed)
 {
@@ -170,285 +132,6 @@ static inline struct data_update *rbio_data_update(struct bch_read_bio *rbio)
 		? container_of(rbio, struct data_update, rbio)
 		: NULL;
 }
-
-static bool ptr_being_rewritten(struct bch_fs *c, struct bch_read_bio *orig, unsigned dev)
-{
-	struct data_update *u = rbio_data_update(orig);
-	if (!u)
-		return false;
-
-	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(bkey_i_to_s_c(u->k.k));
-	unsigned ptr_bit = 1;
-	bkey_for_each_ptr(ptrs, ptr) {
-		if (ptr->dev == dev && (u->opts.ptrs_kill & ptr_bit))
-			return true;
-		ptr_bit <<= 1;
-	}
-
-	return false;
-}
-
-static inline int should_promote(struct bch_fs *c, struct bkey_s_c k,
-				 struct bch_inode_opts opts,
-				 enum bch_read_flags flags)
-{
-	BUG_ON(!opts.promote_target);
-
-	if (bch2_bkey_has_target(c, k, opts.promote_target)) {
-		event_inc(c, data_read_nopromote_already_promoted);
-		return bch_err_throw(c, nopromote_already_promoted);
-	}
-
-	if (bkey_extent_is_unwritten(c, k)) {
-		event_inc(c, data_read_nopromote_unwritten);
-		return bch_err_throw(c, nopromote_unwritten);
-	}
-
-	if (bch2_target_congested(c, opts.promote_target)) {
-		event_inc(c, data_read_nopromote_congested);
-		return bch_err_throw(c, nopromote_congested);
-	}
-
-	return 0;
-}
-
-static void promote_free_rcu(struct rcu_head *rcu)
-{
-	struct promote_op *op = container_of(rcu, struct promote_op, write.rcu);
-
-	bch2_bkey_buf_exit(&op->write.k);
-	kfree(op);
-}
-
-static noinline void promote_free(struct bch_read_bio *rbio, int ret)
-{
-	struct promote_op *op = container_of(rbio, struct promote_op, write.rbio);
-	struct bch_fs *c = rbio->c;
-
-	async_object_list_del(c, promote, op->list_idx);
-	async_object_list_del(c, rbio, rbio->list_idx);
-
-	up(per_cpu_ptr(c->promote_limit, op->cpu));
-
-	bch2_data_update_exit(&op->write, ret);
-
-	enumerated_ref_put(&c->writes, BCH_WRITE_REF_promote);
-	call_rcu(&op->write.rcu, promote_free_rcu);
-}
-
-static void promote_done(struct bch_write_op *wop)
-{
-	struct promote_op *op = container_of(wop, struct promote_op, write.op);
-	struct bch_fs *c = op->write.rbio.c;
-
-	bch2_time_stats_update(&c->times[BCH_TIME_data_promote], op->start_time);
-	promote_free(&op->write.rbio, 0);
-}
-
-static void promote_start_work(struct work_struct *work)
-{
-	struct promote_op *op = container_of(work, struct promote_op, work);
-
-	bch2_data_update_read_done(&op->write);
-}
-
-static noinline void promote_start(struct bch_read_bio *rbio)
-{
-	struct promote_op *op = container_of(rbio, struct promote_op, write.rbio);
-	struct bch_fs *c = op->write.op.c;
-
-	event_add_trace(c, data_read_promote, op->write.k.k->k.size, buf, ({
-		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(op->write.k.k));
-	}));
-
-	INIT_WORK(&op->work, promote_start_work);
-	queue_work(rbio->c->promote_wq, &op->work);
-}
-
-static struct bch_read_bio *__promote_alloc(struct btree_trans *trans,
-					    enum btree_id btree_id,
-					    struct bkey_s_c k,
-					    struct bpos pos,
-					    struct extent_ptr_decoded *pick,
-					    enum bch_read_flags flags,
-					    unsigned sectors,
-					    struct bch_read_bio *orig,
-					    struct bch_inode_opts *opts,
-					    struct bch_io_failures *failed)
-{
-	struct bch_fs *c = trans->c;
-
-	int ret = !failed
-		? should_promote(c, k, *opts, flags)
-		: 0;
-	if (ret)
-		return ERR_PTR(ret);
-
-	struct data_update_opts update_opts = { .write_flags = BCH_WRITE_alloc_nowait };
-
-	if (!have_io_error(failed)) {
-		update_opts.type = BCH_DATA_UPDATE_promote;
-		update_opts.target = opts->promote_target;
-		update_opts.extra_replicas = 1;
-		update_opts.write_flags |= BCH_WRITE_cached;
-		update_opts.write_flags |= BCH_WRITE_only_specified_devs;
-	} else {
-		update_opts.type = BCH_DATA_UPDATE_self_heal;
-		update_opts.target = opts->background_target;
-
-		struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
-		unsigned ptr_bit = 1;
-		bkey_for_each_ptr(ptrs, ptr) {
-			if (bch2_dev_io_failures(failed, ptr->dev) &&
-			    !ptr_being_rewritten(c, orig, ptr->dev)) {
-				update_opts.ptrs_io_error |= ptr_bit;
-				update_opts.ptrs_kill |= ptr_bit;
-			}
-			ptr_bit <<= 1;
-		}
-
-		if (!update_opts.ptrs_kill)
-			return ERR_PTR(bch_err_throw(c, nopromote_no_rewrites));
-	}
-
-	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_promote))
-		return ERR_PTR(bch_err_throw(c, nopromote_no_writes));
-
-	int cpu = raw_smp_processor_id();
-	if (down_trylock(per_cpu_ptr(c->promote_limit, cpu))) {
-		ret = bch_err_throw(c, nopromote_ratelimited);
-		goto err_put;
-	}
-
-	struct promote_op *op = kzalloc(sizeof(*op), GFP_KERNEL);
-	if (!op) {
-		ret = bch_err_throw(c, nopromote_enomem);
-		goto err_up_limit;
-	}
-
-	op->start_time = local_clock();
-	op->cpu	= cpu;
-
-	ret = bch2_data_update_init(trans, NULL, NULL, &op->write,
-			writepoint_hashed((unsigned long) current),
-			opts,
-			update_opts,
-			btree_id, k);
-	/*
-	 * possible errors: -BCH_ERR_nocow_lock_blocked,
-	 * -BCH_ERR_ENOSPC_disk_reservation:
-	 */
-	if (ret)
-		goto err;
-
-	rbio_init_fragment(&op->write.rbio.bio, orig, failed);
-	op->write.rbio.bounce	= true;
-	op->write.rbio.promote	= true;
-	op->write.op.end_io = promote_done;
-	async_object_list_add(c, promote, op, &op->list_idx);
-
-	return &op->write.rbio;
-err:
-	bch2_bio_free_pages_pool(c, &op->write.op.wbio.bio);
-	/* We may have added to the rhashtable and thus need rcu freeing: */
-	kfree_rcu(op, write.rcu);
-err_up_limit:
-	up(per_cpu_ptr(c->promote_limit, cpu));
-err_put:
-	enumerated_ref_put(&c->writes, BCH_WRITE_REF_promote);
-	return ERR_PTR(ret);
-}
-
-noinline
-static struct bch_read_bio *promote_alloc(struct btree_trans *trans,
-					struct bvec_iter iter,
-					struct bkey_s_c k,
-					struct extent_ptr_decoded *pick,
-					enum bch_read_flags flags,
-					struct bch_read_bio *orig,
-					struct bch_inode_opts *opts,
-					bool *bounce,
-					bool *read_full,
-					struct bch_io_failures *failed)
-{
-	struct bch_fs *c = trans->c;
-
-	bool self_healing = failed != NULL;
-
-	/*
-	 * We're in the retry path, but we don't know what to repair yet, and we
-	 * don't want to do a promote here:
-	 */
-	if (self_healing && !failed->nr)
-		return NULL;
-
-	/*
-	 * We're already doing a data update, we don't need to kick off another
-	 * write here - we'll just propagate IO errors back to the parent
-	 * data_update:
-	 */
-	if (self_healing && orig->data_update)
-		return NULL;
-
-	/*
-	 * if failed != NULL we're not actually doing a promote, we're
-	 * recovering from an io/checksum error
-	 */
-	bool promote_full = (self_healing ||
-			     *read_full ||
-			     READ_ONCE(c->opts.promote_whole_extents));
-	/* data might have to be decompressed in the write path: */
-	unsigned sectors = promote_full
-		? max(pick->crc.compressed_size, pick->crc.live_size)
-		: bvec_iter_sectors(iter);
-	struct bpos pos = promote_full
-		? bkey_start_pos(k.k)
-		: POS(k.k->p.inode, iter.bi_sector);
-
-	struct bch_read_bio *promote =
-		__promote_alloc(trans,
-				k.k->type == KEY_TYPE_reflink_v
-				? BTREE_ID_reflink
-				: BTREE_ID_extents,
-				k, pos, pick, flags, sectors, orig, opts, failed);
-	int ret = PTR_ERR_OR_ZERO(promote);
-	if (unlikely(ret)) {
-		/*
-		 * A transaction restart can't be swallowed as a best-effort
-		 * nopromote - it would leave the transaction poisoned and panic
-		 * at bch2_trans_put. Return it so the read retries; this is the
-		 * only error promote_alloc passes back as an ERR_PTR.
-		 */
-		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
-			return ERR_PTR(ret);
-		event_inc_trace(c, data_read_nopromote, buf, ({
-			prt_printf(&buf, "%s\n", bch2_err_str(ret));
-			bch2_bkey_val_to_text(&buf, c, k);
-		}));
-		return NULL;
-	}
-
-	*bounce		= true;
-	*read_full	= promote_full;
-
-	orig->self_healing |= self_healing;
-	return promote;
-}
-
-__cold void bch2_promote_op_to_text(struct printbuf *out,
-			     struct bch_fs *c,
-			     struct promote_op *op)
-{
-	if (!op->write.read_done) {
-		prt_printf(out, "parent read: %px\n", op->write.rbio.parent);
-		guard(printbuf_indent)(out);
-		bch2_read_bio_to_text(out, c, op->write.rbio.parent);
-	}
-
-	bch2_data_update_to_text(out, &op->write);
-}
-
-/* Read */
 
 void bch2_read_err_msg_trans(struct btree_trans *trans, struct printbuf *out,
 			     struct bch_read_bio *rbio, struct bpos read_pos)
@@ -498,10 +181,7 @@ static inline struct bch_read_bio *bch2_rbio_free(struct bch_read_bio *rbio)
 		struct bch_read_bio *parent = rbio->parent;
 
 		if (unlikely(rbio->promote)) {
-			if (!rbio->ret)
-				promote_start(rbio);
-			else
-				promote_free(rbio, -EIO);
+			bch2_promote_read_done(rbio);
 		} else {
 			async_object_list_del(rbio->c, rbio, rbio->list_idx);
 
@@ -1315,8 +995,7 @@ static inline struct bch_read_bio *read_extent_rbio_alloc(struct btree_trans *tr
 		(opts->promote_target && (flags & BCH_READ_may_promote) &&
 		 !pick.do_ec_reconstruct) ||
 		have_io_error(failed)
-		? promote_alloc(trans, iter, k, &pick, flags, orig, opts,
-				&bounce, &read_full, failed)
+		? bch2_promote_alloc(trans, k, orig, opts, &bounce, &read_full, failed)
 		: NULL;
 	/*
 	 * An ERR_PTR here is a transaction restart, from promote setup or the
@@ -1965,7 +1644,6 @@ void bch2_fs_io_read_exit(struct bch_fs *c)
 	bioset_exit(&c->bio_read_split);
 	bioset_exit(&c->bio_read);
 	mempool_exit(&c->bio_bounce_bufs);
-	free_percpu(c->promote_limit);
 }
 
 static void *bio_bounce_buf_alloc_fn(gfp_t gfp, void *pool_data)
@@ -1980,14 +1658,6 @@ static void bio_bounce_buf_free_fn(void *p, void *pool_data)
 
 int bch2_fs_io_read_init(struct bch_fs *c)
 {
-	c->promote_limit = alloc_percpu(struct semaphore);
-	if (!c->promote_limit)
-		return bch_err_throw(c, ENOMEM_promote_limit_init);
-
-	int cpu;
-	for_each_possible_cpu(cpu)
-		sema_init(per_cpu_ptr(c->promote_limit, cpu), 32);
-
 	if (mempool_init(&c->bio_bounce_bufs,
 			 max_t(unsigned,
 			       c->opts.btree_node_size,

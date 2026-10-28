@@ -2,8 +2,8 @@
 
 //! The data update path's index update: once a data update's write is done,
 //! the replicas it wrote go into the extent, in place of the ones it was
-//! moving. The rest of the data update - setting it up, the read, tearing it
-//! down - is still update.c's.
+//! moving. Setting the update up, its read and its teardown are in
+//! update.rs.
 //!
 //! An update is of @old, the key as it was when the update was set up. The
 //! btree may have changed since - the extent cut or overwritten, pointers added
@@ -36,6 +36,7 @@ use crate::c;
 use crate::c::bch_errcode;
 use crate::data::durability::{drop_extra_durability, drop_extra_ec_durability, BkeyVDurability};
 use crate::data::extents::{BkeyVExtents, Extents};
+use crate::data::update::{ptr_bits_to_text, TYPE_NAMES};
 use crate::data::ptrs::{brand, extents_match, BkeyVPtrs, Branded, PtrMask, Ptrs, PtrsMut};
 use crate::data::reconcile::plan::pending_mod;
 use crate::errcode::{ret_to_c, BchError};
@@ -43,22 +44,13 @@ use crate::fs::Fs;
 use crate::init::error::{count_fsck_err, id};
 use crate::inode_opts::get_io_opts;
 use crate::sb::counters::events;
-use crate::util::ffi::c_str;
 use crate::util::log::LogMsg;
 use crate::util::{Printbuf, ToText};
 use crate::{bch_err_fn, log_msg_ratelimited};
-use core::ffi::{c_int, c_uint, CStr};
+use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
 use core::sync::atomic::{fence, Ordering};
 use cstruct_macros::c_export;
-
-macro_rules! type_names {
-    ($(($name:tt)),* $(,)?) => {
-        /// By type, for the journal's log entry: a C string.
-        const TYPE_NAMES: &[&CStr] = &[$(c_str(concat!(stringify!($name), "\0")),)*];
-    };
-}
-c::BCH_DATA_UPDATE_TYPES!(type_names);
 
 /// Room past a key for set_needs_reconcile(): an entry, and a padding pointer
 /// per replica.
@@ -109,14 +101,6 @@ fn remap_bits(fs: &Fs, old: BkeySC<'_>, bits: u32, new: BkeySC<'_>) -> u16 {
 #[c_export]
 pub fn ptr_mask_remap(c: &Fs, old: BkeySC<'_>, oldmask: c_uint, new: BkeySC<'_>) -> c_uint {
     remap_bits(c, old, oldmask, new).into()
-}
-
-/// A mask, in base 2, if it has any pointers: "@name ptrs:".
-fn ptr_bits_to_text(out: &mut Printbuf, bits: u16, name: &str) {
-    if bits != 0 {
-        write!(out, "{name} ptrs:\t{bits:b}");
-        out.newline();
-    }
 }
 
 /// Index update keys, for the key fail traces and the messages of an update
@@ -367,12 +351,6 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
     Ok(next_pos)
 }
 
-/// @u's index update, in @trans - bch2_update_unwritten_extent()'s.
-#[c_export]
-pub fn __bch2_data_update_index_update(trans: &BtreeTrans<'_>, u: &mut c::data_update) -> c_int {
-    ret_to_c(index_update(trans, u))
-}
-
 /// Whether @insert, the keylist's front, is an extent - all a data update's
 /// write writes - logged and counted as an fsck error if it isn't.
 fn insert_is_extent(fs: &Fs, insert: &BkeyI) -> bool {
@@ -388,7 +366,7 @@ fn insert_is_extent(fs: &Fs, insert: &BkeyI) -> bool {
     false
 }
 
-fn index_update(trans: &BtreeTrans<'_>, u: &mut c::data_update) -> Result<(), BchError> {
+pub(crate) fn index_update(trans: &BtreeTrans<'_>, u: &mut c::data_update) -> Result<(), BchError> {
     let fs = trans.fs();
     let Some(front) = u.op.insert_keys.front().filter(|k| insert_is_extent(fs, k)) else { return Ok(()) };
 
@@ -443,10 +421,9 @@ where
     })
 }
 
-/// The index update of a data update whose write didn't happen - a read that
-/// failed on every replica: its ptrs_kill dropped, logged. For read_done().
-#[c_export]
-pub fn bch2_data_update_index_update_nowrite(trans: &BtreeTrans<'_>, u: &c::data_update) -> c_int {
+/// The index update for a data update whose write didn't happen, because the
+/// read failed on every replica: drops its ptrs_kill, and logs it.
+pub(crate) fn index_update_nowrite(trans: &BtreeTrans<'_>, u: &c::data_update) -> Result<(), BchError> {
     let fs = trans.fs();
     let old = BkeySC::from(u.k.key());
     let old_p = old.arm::<Ptrs>().unwrap_or_else(|| panic!("data update of a key without pointers: {}", old.to_text(fs)));
@@ -462,7 +439,7 @@ pub fn bch2_data_update_index_update_nowrite(trans: &BtreeTrans<'_>, u: &c::data
     assert_eq!(u.opts.ptrs_kill_ec, 0, "a nowrite data update dropping stripe pointers");
     assert_ne!(u.opts.ptrs_kill, 0, "a nowrite data update with nothing to drop");
 
-    ret_to_c(for_each_old_slot(trans, u, Some(&res), |t, iter, k| {
+    for_each_old_slot(trans, u, Some(&res), |t, iter, k| {
         write!(msg, "k: {}", k.to_text(fs));
         msg.newline();
 
@@ -487,14 +464,13 @@ pub fn bch2_data_update_index_update_nowrite(trans: &BtreeTrans<'_>, u: &c::data
         write!(msg, "new: {}", new.as_sc().to_text(fs));
         msg.newline();
         Ok(())
-    }))
+    })
 }
 
 /// EC allocation failed - the write never happened, but the extent still
 /// needs erasure coding. Mark it pending so reconcile retries from the pending
 /// list instead of the main scan.
-#[c_export]
-pub fn bch2_data_update_ec_alloc_failed(u: &mut c::data_update) {
+pub(crate) fn ec_alloc_failed(u: &mut c::data_update) {
     let fs = u.op.fs();
     let trans = crate::btree_trans!(fs);
     let old = BkeySC::from(u.k.key());
@@ -518,7 +494,7 @@ pub fn bch2_data_update_ec_alloc_failed(u: &mut c::data_update) {
     /*
      * Nothing matched: the extent we were reconciling was rewritten or
      * deleted while our write was in flight, so there was nothing to park.
-     * Distinct error code so bch2_data_update_exit() still traces it -
+     * Distinct error code so the update's exit() still traces it -
      * ec_alloc_failed itself is suppressed there because it parks.
      */
     if ret.is_ok() && !parked {

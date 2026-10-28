@@ -280,6 +280,29 @@ impl Fs {
             .count() as u32
     }
 
+    /// Whether to skip a promote to @target: randomly, in proportion to its
+    /// devices' congestion. Never without latency accounting.
+    #[allow(unused_variables)]
+    pub fn target_congested(&self, target: u16) -> bool {
+        #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+        {
+            let now = crate::util::kernel::local_clock();
+            let rcu = read_lock();
+            let rw = c::bch_devs_mask { d: self.allocator.rw_devs[c::bch_data_type::BCH_DATA_user.0 as usize].load() };
+            let devs = self.target_to_mask(Target::decode(target.into()), &rcu).unwrap_or(&rw);
+
+            let (mut nr, mut total) = (0u64, 0u64);
+            for ca in self.devs_rcu_in(devs.d.iter(), &rcu) {
+                total += u64::from(ca.congested_read(now));
+                nr += 1;
+            }
+            // no devices: not congested
+            nr != 0 && crate::util::kernel::random_u64_below(nr * u64::from(c::CONGESTED_MAX)) < total
+        }
+        #[cfg(CONFIG_BCACHEFS_NO_LATENCY_ACCT)]
+        false
+    }
+
     pub fn target_to_mask<'g>(&'g self, target: Target, rcu: &'g ReadGuard) -> Option<&'g c::bch_devs_mask> {
         match target {
             Target::Null     => None,

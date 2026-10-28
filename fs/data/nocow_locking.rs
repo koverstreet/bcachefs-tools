@@ -28,6 +28,7 @@ use crate::alloc::buckets::{bucket_to_u64, u64_to_bucket};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::errcode::BchError;
 use crate::fs::Fs;
+use crate::sb::members::DevRef;
 use crate::locking::Lock;
 use crate::new_lock;
 use crate::types::CacheAligned;
@@ -305,27 +306,59 @@ impl ToText for NocowLocks {
 
 // ── For C ────────────────────────────────────────────────────────────────
 
-/// @k's buckets that @cas has a device for: a null cas[i] is a pointer not
-/// locked.
+/// The buckets of @k's pointers that @dev gives a device for, by pointer
+/// index; a pointer without one isn't locked.
+fn buckets<'a>(fs: &Fs, k: BkeySC<'_>, dev: impl Fn(usize) -> Option<&'a c::bch_dev>) -> Buckets {
+    let Some(k) = k.arm::<Ptrs>() else { return Buckets::new() };
+    k.ptrs(fs).enumerate()
+        .filter_map(|(i, ptr)| dev(i).map(|ca| bucket_to_u64(ca.ptr_bucket_pos(ptr))))
+        .collect()
+}
+
+/// buckets(), from C's cas[]: cas[i] is the device of @k's i'th pointer if
+/// the caller holds a ref on it, or NULL.
 ///
 /// # Safety
 /// @cas has an entry per pointer of @k, each NULL or a device the caller
 /// holds a ref on.
 unsafe fn cas_buckets(fs: &Fs, k: BkeySC<'_>, cas: *const *mut c::bch_dev) -> Buckets {
-    let Some(k) = k.arm::<Ptrs>() else { return Buckets::new() };
-    k.ptrs(fs).enumerate()
-        // SAFETY: the caller's
-        .filter_map(|(i, ptr)| unsafe { (*cas.add(i)).as_ref() }.map(|ca| bucket_to_u64(ca.ptr_bucket_pos(ptr))))
-        .collect()
+    // SAFETY: the caller's
+    buckets(fs, k, |i| unsafe { (*cas.add(i)).as_ref() })
 }
 
-/// # Safety
-/// As cas_buckets().
-#[c_export]
-pub unsafe fn bch2_bkey_nocow_trylock(c: &Fs, k: BkeySC<'_>, cas: *const *mut c::bch_dev, flags: c_int) -> bool {
-    // SAFETY: the caller's
-    let buckets = unsafe { cas_buckets(c, k, cas) };
-    c.nocow_locks.trylock(c, &buckets, NocowKind::from_flags(flags))
+fn devs_buckets(fs: &Fs, k: BkeySC<'_>, devs: &[Option<DevRef>]) -> Buckets {
+    buckets(fs, k, |i| devs.get(i).and_then(|d| d.as_deref()))
+}
+
+/// A key's buckets, locked one way: dropping it unlocks them. They're worked
+/// out once, as they're locked; unlocking needs nothing but them.
+pub(crate) struct Locked {
+    locks:   &'static NocowLocks,
+    buckets: Buckets,
+    kind:    NocowKind,
+}
+
+impl Drop for Locked {
+    fn drop(&mut self) {
+        self.locks.unlock(&self.buckets, self.kind)
+    }
+}
+
+/// Locks @k's buckets on the devices in @devs, which is parallel to its
+/// pointers - if they're all free to.
+pub(crate) fn bkey_trylock(fs: &'static Fs, k: BkeySC<'_>, devs: &[Option<DevRef>], kind: NocowKind)
+    -> Option<Locked>
+{
+    let buckets = devs_buckets(fs, k, devs);
+    fs.nocow_locks.trylock(fs, &buckets, kind).then(|| Locked { locks: &fs.nocow_locks, buckets, kind })
+}
+
+/// bkey_trylock(), waiting as NocowLocks::lock() does.
+pub(crate) fn bkey_lock(fs: &'static Fs, trans: Option<&BtreeTrans<'_>>, k: BkeySC<'_>, devs: &[Option<DevRef>],
+                        kind: NocowKind) -> Locked {
+    let buckets = devs_buckets(fs, k, devs);
+    fs.nocow_locks.lock(fs, trans, &buckets, kind);
+    Locked { locks: &fs.nocow_locks, buckets, kind }
 }
 
 /// # Safety

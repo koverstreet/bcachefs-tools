@@ -616,8 +616,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsBkey> {
         None
     }
 
-    /// Its cached pointers that shouldn't be, dropped:
-    /// bch2_bkey_drop_extra_cached_ptrs().
+    /// Drops the cached pointers it shouldn't have.
     fn drop_extra_cached_ptrs(&mut self, fs: &Fs, opts: &c::bch_inode_opts)
     where Self: BkeyVMut
     {

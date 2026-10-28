@@ -102,10 +102,6 @@ c_typedef! {
 }
 
 c_extern! {
-    pub fn bch2_moving_ctxt_exit(ctxt: *mut c::moving_context);
-    pub fn bch2_moving_ctxt_init(ctxt: *mut c::moving_context, c: *mut c::bch_fs,
-                                 stats: *mut c::bch_move_stats, wp: c::write_point_specifier,
-                                 wait_on_copygc: bool);
     pub fn bch2_move_data_btree(ctxt: *mut c::moving_context, start: c::bpos, end: c::bpos,
                                 pred: c::move_pred_fn, arg: *mut c_void, btree_id: c::btree_id,
                                 level: c_uint) -> c_int;

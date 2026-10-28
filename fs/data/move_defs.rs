@@ -4,9 +4,12 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use crate::util::futex::EventCount;
+use crate::data::moving::InFlightUpdate;
+use crate::types::Fifo;
+use core::cell::{Cell, UnsafeCell};
+use crate::util::task::RunQueue;
 use core::ffi::{c_int, c_void};
-use core::sync::atomic::AtomicI32;
+use core::sync::atomic::{AtomicI32, AtomicPtr};
 use crate::util::ffi::Opaque;
 use cstruct_macros::{c_typedef, CStruct};
 
@@ -14,8 +17,9 @@ use cstruct_macros::{c_typedef, CStruct};
  * Tracks in-flight data movement IO for ratelimiting.
  *
  * Four atomic counters track sectors and IOs in flight:
- *  - read_sectors/read_ios: extent read submit -> read completion
- *  - write_sectors/write_ios: read completion -> write completion
+ *  - read_sectors/read_ios: extent read submit -> its task taking the
+ *    completed read
+ *  - write_sectors/write_ios: then -> write completion
  *
  * bch2_move_ratelimit() blocks the caller until all counters are below
  * c->opts.move_bytes_in_flight / move_ios_in_flight.
@@ -31,10 +35,13 @@ use cstruct_macros::{c_typedef, CStruct};
 #[derive(CStruct)]
 pub struct moving_context {
     pub trans: *mut c::btree_trans,
-    pub list: c::list_head,
-    pub fn_: *mut c_void,
+    /* on c->moving_context_list, which other contexts' adds and dels write */
+    #[c("struct list_head list")]
+    pub list: Opaque<c::list_head>,
 
-    pub stats: *mut c::bch_move_stats,
+    /* set racily, read by the listing */
+    #[c("struct bch_move_stats *stats")]
+    pub stats: AtomicPtr<c::bch_move_stats>,
     pub wp: c::write_point_specifier,
     pub wait_on_copygc: bool,
 
@@ -42,24 +49,32 @@ pub struct moving_context {
     #[c("struct closure cl")]
     pub cl: Opaque<c::closure>,
 
-    pub lock: c::mutex,
-    pub reads: c::list_head,
-    pub ios: c::list_head,
-    pub io_seq: u64,
-    /* Every IO numbered below this has completed: @ios' oldest, or @io_seq if none */
-    pub io_seq_done: u64,
+    pub io: moving_io_counts,
 
-    /* in flight sectors: */
+    /*
+     * Its updates' tasks, run in its waits - data/moving_update.rs - whose
+     * EventCount every completion wakes: bch2_moving_ctxt_wake()
+     */
+    pub runq: RunQueue,
+    /*
+     * Its data updates in flight, in the order they were issued, by seq - an
+     * update's index in it - and the first whose write hasn't started. The
+     * mover's thread's alone: data/moving.rs
+     */
+    pub updates: UnsafeCell<Fifo<InFlightUpdate, u64>>,
+    pub write_next: Cell<u64>,
+}
+c_default!(moving_context);
+
+/* In flight: what ratelimit() throttles on, and flush_all() waits out */
+#[repr(C)]
+#[derive(CStruct, Default)]
+pub struct moving_io_counts {
     pub read_sectors: AtomicI32,
     pub write_sectors: AtomicI32,
     pub read_ios: AtomicI32,
     pub write_ios: AtomicI32,
-
-    pub wait: c::wait_queue_head_t,
-    /* Woken with @wait - bch2_moving_ctxt_wake() - for Rust's waits: data/moving.rs */
-    pub events: EventCount,
 }
-c_default!(moving_context);
 
 c_typedef! {
     pub type move_pred_fn = Option<unsafe extern "C" fn(*mut c::btree_trans, *mut c_void, c::btree_id, c::bkey_s_c,

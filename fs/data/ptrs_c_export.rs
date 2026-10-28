@@ -184,13 +184,6 @@ pub fn bch2_bkey_drop_ptr(c: &Fs, k: BkeyS<'_>, ptr: *mut c::bch_extent_ptr) {
     ptrs(k).drop_ptr(c, at);
 }
 
-#[c_export]
-pub fn bch2_bkey_drop_extra_cached_ptrs(c: &Fs, opts: &c::bch_inode_opts, k: BkeyS<'_>) {
-    if let Some(mut k) = k.arm::<Ptrs>() {
-        k.drop_extra_cached_ptrs(c, opts);
-    }
-}
-
 /// # Safety
 /// C has an attempt in progress on @trans.
 #[c_export]

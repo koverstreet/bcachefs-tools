@@ -92,7 +92,6 @@ bcachefs-y		:=			\
 	data/move.o				\
 	data/read.o				\
 	data/reconcile/trigger.o		\
-	data/update.o				\
 	data/write.o				\
 	debug/debug.o				\
 	debug/trace.o				\

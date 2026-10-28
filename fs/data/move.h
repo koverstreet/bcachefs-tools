@@ -9,66 +9,12 @@
 #include "data/update.h"
 #include "data/move_gen.h"
 #include "data/moving_gen.h"
+#include "data/moving_update_gen.h"
 
 #include "data/move_defs_gen.h"
 
-/*
- * Movers wait on IO they issued, and the completions (index updates) run on
- * freezable workqueues - which the freezer stops before it asks kernel threads
- * to freeze. An ordinary sleep here would wait on work that can't run until
- * after the freeze it is blocking; a freezable one is frozen in place, with
- * the IO still in flight. That is safe: device suspend drains the requests,
- * and the completions run after thaw (or from the hibernate image).
- *
- * Waiters must not hold locks; these macros unlock the btree_trans first.
- */
-#define MOVE_CTXT_WAIT_STATE	(TASK_UNINTERRUPTIBLE|TASK_FREEZABLE)
-
-#define move_ctxt_wait_event_timeout(_ctxt, _cond, _timeout)			\
-({										\
-	int _ret = 0;								\
-	while (true) {								\
-		bool cond_finished = false;					\
-		bch2_moving_ctxt_do_pending_writes(_ctxt);			\
-										\
-		if (_cond)							\
-			break;							\
-		bch2_trans_unlock_long((_ctxt)->trans);				\
-		_ret = ___wait_event((_ctxt)->wait,				\
-			     ___wait_cond_timeout(				\
-				bch2_moving_ctxt_next_pending_write(_ctxt) ||	\
-				(cond_finished = (_cond))),			\
-			     MOVE_CTXT_WAIT_STATE, 0, _timeout,			\
-			     __ret = schedule_timeout(__ret));			\
-		if (_ret || ( cond_finished))					\
-			break;							\
-	}									\
-	_ret;									\
-})
-
-#define move_ctxt_wait_event(_ctxt, _cond)				\
-do {									\
-	bool cond_finished = false;					\
-	bch2_moving_ctxt_do_pending_writes(_ctxt);			\
-									\
-	if (_cond)							\
-		break;							\
-	bch2_trans_unlock_long((_ctxt)->trans);				\
-	(void) ___wait_event((_ctxt)->wait,				\
-		     bch2_moving_ctxt_next_pending_write(_ctxt) ||	\
-		     (cond_finished = (_cond)),				\
-		     MOVE_CTXT_WAIT_STATE, 0, 0, schedule());		\
-	if (cond_finished)						\
-		break;							\
-} while (1)
-
 extern const char * const bch2_data_ops_strs[];
 
-struct data_update *bch2_moving_ctxt_next_pending_write(struct moving_context *);
-void bch2_moving_ctxt_do_pending_writes(struct moving_context *);
-void bch2_moving_ctxt_flush_all(struct moving_context *);
-void bch2_move_ctxt_wait_for_io(struct moving_context *);
-int bch2_move_ratelimit(struct moving_context *);
 
 int bch2_move_extent(struct moving_context *,
 		     struct move_bucket *,

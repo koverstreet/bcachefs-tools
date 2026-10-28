@@ -750,8 +750,8 @@ pub struct Fs {
     pub write_ref_wq: *mut c::workqueue_struct,
 
     pub promote_wq: *mut c::workqueue_struct,
-    #[c("struct semaphore __percpu *promote_limit")]
-    pub promote_limit: *mut c::semaphore,
+    /* Promotes in flight, against their limit: data/promote.rs */
+    pub promotes_in_flight: core::sync::atomic::AtomicU32,
 
     pub io_clock: [c::io_clock; 2],
     pub clock_journal_res: c::journal_entry_res,
@@ -770,7 +770,10 @@ pub struct Fs {
     #[pin]
     #[init(RustOnly::new(crate::data::nocow_locking::NocowLocks::new()))]
     pub(crate) nocow_locks: rust_only!(crate::data::nocow_locking::NocowLocks),
-    pub update_table: c::rhltable,
+    /// The data updates in flight, by data_update_key.
+    #[pin]
+    #[init(RustOnly::new(::pin_init::zeroed::<crate::data::update::InFlightTable>()))]
+    pub(crate) update_table: rust_only!(crate::data::update::InFlightTable),
 
     pub key_version: AtomicI64,
 

@@ -405,6 +405,7 @@ where
 
 /// Where a spawned task's first polled, and resumed by a wake that hasn't
 /// said where: spawn()'s, or spawn_thread()'s.
+#[derive(Clone, Copy)]
 pub enum Spawn<'a> {
     Queue(&'a Queue),
     /// Run by the queue's owner, when it calls run().

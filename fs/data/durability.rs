@@ -14,12 +14,12 @@
 //!
 //! The counts are bkey_durability's u8s, summed as C's are: wrapping.
 
-use crate::btree::bkey::{pos, BkeyI, BkeyS, BkeySC, BkeyV, BkeyVMut, BkeyVal};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt};
+use crate::btree::bkey::{pos, BkeySC, BkeyV, BkeyVMut, BkeyVal};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt};
 use crate::c;
 use crate::data::ec::stripe::ptr_matches_stripe;
-use crate::data::ptrs::{brand, crc_is_compressed, BkeyVPtrs, BkeyVPtrsMut, Branded, BtreePtrs, PtrMask, Ptrs, PtrsMut};
-use crate::errcode::{ret_to_c, BchError};
+use crate::data::ptrs::{crc_is_compressed, BkeyVPtrs, BkeyVPtrsMut, Branded, BtreePtrs, PtrMask, Ptrs, PtrsMut};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::ffi::Opaque;
@@ -27,8 +27,7 @@ use crate::util::inline_vec::InlineVec;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::Validated;
 use arrayvec::ArrayVec;
-use core::ffi::{c_int, c_uint};
-use core::mem::MaybeUninit;
+use core::ffi::c_uint;
 use cstruct_macros::c_export;
 
 impl Fs {
@@ -337,7 +336,7 @@ impl<K: BkeyV<V: BkeyVal<State = Validated>>> BkeyVDurability for K {}
 // ── dropping what isn't needed ───────────────────────────────────────────
 
 /// Of @k's pointers in @mask, by index, the ones it can do without, dropped
-/// (@kill) or made cached: bch2_bkey_drop_extra_durability(). Each is tried
+/// (@kill) or made cached. Each is tried
 /// on a copy, the whole key's online durability recomputed - a per-pointer
 /// delta can't count devices pointers share. Either renumbers the pointers,
 /// so @k comes back unbranded.
@@ -374,7 +373,7 @@ pub fn drop_extra_durability<'id, K: BkeyVMut<V = PtrsMut>>(t: &TransAttempt<'_,
 }
 
 /// Of @k's pointers in @mask, the stripe_ptrs it can do without, dropped -
-/// tried on a copy, as drop_extra_durability(): bch2_bkey_drop_extra_ec_durability().
+/// tried on a copy, as drop_extra_durability().
 /// The devices are gathered first: dropping a stripe_ptr moves the entries.
 pub fn drop_extra_ec_durability<'id, K: BkeyVMut<V = PtrsMut>>(t: &TransAttempt<'_, '_>, opts: &c::bch_inode_opts,
                                                               k: &mut Branded<'id, K>, mask: PtrMask<'id>)
@@ -405,33 +404,6 @@ pub fn bch2_dev_durability(c: &Opaque<c::bch_fs>, dev: c_uint) -> c_uint {
     Fs::from_c(c).dev_durability(dev, &read_lock())
 }
 
-/// # Safety
-/// C has an attempt in progress on @trans.
-#[c_export]
-pub unsafe fn bch2_extent_ptr_durability(trans: &BtreeTrans<'_>, p: &c::extent_ptr_decoded) -> c_int {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    extent_ptr_durability(&t, p).map_or_else(|e| -e.raw(), |d| d as c_int)
-}
-
-/// @ret is written, not read.
-///
-/// # Safety
-/// C has an attempt in progress on @trans.
-#[c_export]
-pub unsafe fn bch2_bkey_durability(trans: &BtreeTrans<'_>, k: BkeySC<'_>,
-                                   ret: &mut MaybeUninit<c::bkey_durability>) -> c_int {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    match k.durability(&t) {
-        Ok(d) => {
-            ret.write(d);
-            0
-        }
-        Err(e) => -e.raw(),
-    }
-}
-
 #[c_export]
 pub fn bch2_btree_ptr_durability(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) -> c::bkey_durability {
     k.arm::<BtreePtrs>().expect("a btree node pointer").btree_ptr_durability(Fs::from_c(c))
@@ -440,48 +412,6 @@ pub fn bch2_btree_ptr_durability(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) -> c::bke
 #[c_export]
 pub fn bch2_bkey_durability_safe(c: &Fs, k: BkeySC<'_>) -> c::bkey_durability {
     k.durability_safe(c)
-}
-
-/// @k, a key C hands as a struct bkey_i *, if it has pointers - which then
-/// must be ones that can be edited.
-///
-/// # Safety
-/// @k is a key, all of it, the caller's to edit for 'a.
-unsafe fn bkey_i_ptrs_mut<'a>(k: *mut c::bkey_i) -> Option<BkeyS<'a, PtrsMut>> {
-    // SAFETY: the caller's
-    let k = BkeyS::from(unsafe { &mut *BkeyI::from_raw_mut(k) });
-    k.as_sc().arm::<Ptrs>()?;
-    Some(k.arm::<PtrsMut>().expect("dropping the extra durability of a key whose pointers can't be edited"))
-}
-
-/// A key without pointers has none to drop.
-///
-/// # Safety
-/// C has an attempt in progress on @trans, and @k is a key it can edit.
-#[c_export]
-pub unsafe fn bch2_bkey_drop_extra_durability(trans: &BtreeTrans<'_>, opts: &c::bch_inode_opts,
-                                              k: *mut c::bkey_i, mask: c_uint, kill: bool) -> c_int {
-    // SAFETY: the caller's
-    let (t, k) = unsafe { (trans.attempt_in_progress(), bkey_i_ptrs_mut(k)) };
-    k.map_or(0, |k| brand(k, |k| {
-        let m = k.assume(t.fs(), mask);
-        ret_to_c(drop_extra_durability(&t, opts, k, m, kill).map(drop))
-    }))
-}
-
-/// A key without pointers has none to drop.
-///
-/// # Safety
-/// C has an attempt in progress on @trans, and @k is a key it can edit.
-#[c_export]
-pub unsafe fn bch2_bkey_drop_extra_ec_durability(trans: &BtreeTrans<'_>, opts: &c::bch_inode_opts,
-                                                 k: *mut c::bkey_i, mask: c_uint) -> c_int {
-    // SAFETY: the caller's
-    let (t, k) = unsafe { (trans.attempt_in_progress(), bkey_i_ptrs_mut(k)) };
-    k.map_or(0, |k| brand(k, |mut k| {
-        let m = k.assume(t.fs(), mask);
-        ret_to_c(drop_extra_ec_durability(&t, opts, &mut k, m))
-    }))
 }
 
 #[cfg(test)]
