@@ -821,8 +821,12 @@ pub const OPT: crate::opts::OptFn = crate::opts::OptFn {
 };
 
 fn opt_parse(val: Option<&[u8]>, err: Option<&mut Printbuf>) -> Result<u64, BchError> {
-    // XXX: C's, for no value
-    let s = val.ok_or(BchError::from(c::ENOMEM))?;
+    let Some(s) = val else {
+        if let Some(err) = err {
+            writeln!(err, "compression type required");
+        }
+        return Err(e::BCH_ERR_EINVAL_opt_parse_str_required.into());
+    };
     let colon = s.iter().position(|&b| b == b':');
 
     let Some(t) = OPT_NAMES.iter().position(|n| n.as_bytes() == &s[..colon.unwrap_or(s.len())]) else {

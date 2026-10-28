@@ -525,8 +525,8 @@ pub fn opt_validate(opt: &Opt, v: u64, mut err: Option<&mut Printbuf>) -> Result
 
 /// A bitfield option's value: the choices named, comma or semicolon
 /// separated - or with a leading '-', those allowed but not named.
-/// bch2_read_flag_list_mask().
-pub fn read_flag_list(val: &[u8], choices: &[&str], allowed: u64) -> Result<u64, BchError> {
+/// Err(a name that isn't one of the choices, or isn't allowed).
+pub fn read_flag_list<'a>(val: &'a [u8], choices: &[&str], allowed: u64) -> Result<u64, &'a [u8]> {
     let s = val.trim_ascii();
     let (invert, s) = match s.strip_prefix(b"-") {
         Some(s) => (true, s),
@@ -535,10 +535,9 @@ pub fn read_flag_list(val: &[u8], choices: &[&str], allowed: u64) -> Result<u64,
 
     let mut v = 0;
     for name in s.split(|&b| b == b',' || b == b';') {
-        // XXX: C returned -1 for a bad flag - EPERM
-        let bit = choices.iter().position(|c| c.as_bytes() == name).ok_or(BchError::from(c::EPERM))?;
+        let bit = choices.iter().position(|c| c.as_bytes() == name).ok_or(name)?;
         if allowed & 1 << bit == 0 {
-            return Err(c::EPERM.into());
+            return Err(name);
         }
         v |= 1 << bit;
     }
@@ -599,8 +598,14 @@ pub fn opt_parse(fs: Option<&Fs>, opt: &Opt, val: Option<&[u8]>, mut err: Option
             }
         }
         OptType::Bitfield { choices, allowed } => {
-            // XXX: C's kstrdup() of no value: ENOMEM
-            read_flag_list(val.ok_or(BchError::from(c::ENOMEM))?, choices, allowed)?
+            let Some(val) = val else {
+                fail!(bch_errcode::BCH_ERR_EINVAL_opt_parse_str_required, "required value");
+            };
+            match read_flag_list(val, choices, allowed) {
+                Ok(v)    => v,
+                Err(bad) => fail!(bch_errcode::BCH_ERR_opt_parse_error, "invalid flag {}",
+                                  core::str::from_utf8(bad).unwrap_or("(not UTF-8)")),
+            }
         }
         OptType::StrMember { size, .. } => {
             let Some(val) = val else {
