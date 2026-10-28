@@ -357,7 +357,6 @@ struct bio *bch2_bio_map_and_chain(struct block_device *, void *, size_t,
 				   sector_t, blk_opf_t, gfp_t,
 				   struct bio_set *);
 int bch2_bio_submit_buf_wait(struct block_device *, void *, size_t, sector_t, blk_opf_t);
-int bch2_bio_alloc_pages(struct bio *, unsigned, size_t, gfp_t);
 
 #define closure_bio_submit(bio, cl)					\
 do {									\

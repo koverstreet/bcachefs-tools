@@ -4,12 +4,11 @@
 
 #include "data/checksum.h"
 #include "data/write_gen.h"
+#include "util/bio/pages_gen.h"
 
 #define to_wbio(_bio)			\
 	container_of((_bio), struct bch_write_bio, bio)
 
-void bch2_bio_free_pages_pool(struct bch_fs *, struct bio *);
-void bch2_bio_alloc_pages_pool(struct bch_fs *, struct bio *, unsigned, size_t, gfp_t);
 
 void bch2_submit_wbio_replicas(struct bch_write_bio *, struct bch_fs *,
 			       enum bch_data_type, const struct bkey_i *,

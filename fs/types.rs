@@ -763,7 +763,9 @@ pub struct Fs {
     pub bio_write: c::bio_set,
     pub replica_set: c::bio_set,
     pub bio_bounce_pages_lock: c::mutex,
-    pub bio_bounce_bufs: c::mempool_t,
+    /* allocated from through a shared reference: by C and util/bio/pages.rs */
+    #[c("mempool_t bio_bounce_bufs")]
+    pub bio_bounce_bufs: crate::util::ffi::Opaque<c::mempool_t>,
     pub nocow_locks: c::bucket_nocow_lock_table,
     pub update_table: c::rhltable,
 

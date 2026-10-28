@@ -47,6 +47,7 @@ use crate::util::volatile::VolatileSlice;
 
 mod iter;
 mod owned;
+pub mod pages;
 
 #[cfg(kernel)]
 pub use iter::{FolioVec, Folios};

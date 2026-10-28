@@ -717,36 +717,6 @@ int bch2_bio_submit_buf_wait(struct block_device *bdev,
 	return ret;
 }
 
-int bch2_bio_alloc_pages(struct bio *bio, unsigned bs, size_t size, gfp_t gfp_mask)
-{
-	BUG_ON(!is_power_of_2(bs));
-	BUG_ON(size & (bs - 1));
-
-	unsigned max_alloc = max(bs, PAGE_SIZE << PAGE_ALLOC_COSTLY_ORDER);
-
-	while (bio->bi_iter.bi_size < size) {
-		unsigned b = min(size - bio->bi_iter.bi_size, max_alloc);
-
-		BUG_ON(b & (bs - 1));
-
-#ifdef __KERNEL__
-		/*
-		 * we don't know the device dma alignment, so in kernel make
-		 * sure allocations are page aligned
-		 */
-		void *p = (void *) __get_free_pages(gfp_mask, get_order(b));
-#else
-		void *p = kmalloc(b, gfp_mask);
-#endif
-		if (!p)
-			return -ENOMEM;
-
-		bio_add_virt_nofail(bio, p, b);
-	}
-
-	return 0;
-}
-
 u64 bch2_get_random_u64_below(u64 ceil)
 {
 	if (ceil <= U32_MAX)
@@ -1477,6 +1447,22 @@ struct rust_rcu_head_first {
 void rust_kvfree_rcu(void *p)
 {
 	kvfree_rcu((struct rust_rcu_head_first *) p, rcu);
+}
+
+/* For util/bio/pages.rs: __get_free_pages() is a macro */
+void *rust_bio_pages_alloc(size_t size, gfp_t gfp)
+{
+#ifdef __KERNEL__
+	/* page aligned: we don't know the device's dma alignment */
+	return (void *) __get_free_pages(gfp, get_order(size));
+#else
+	return kmalloc(size, gfp);
+#endif
+}
+
+void rust_bio_pages_free(void *p, size_t size)
+{
+	free_pages((unsigned long) p, get_order(size));
 }
 
 /*

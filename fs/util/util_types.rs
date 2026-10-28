@@ -92,6 +92,8 @@ c_extern! {
     pub fn rust_kvfree_rcu(p: *mut c_void);
     pub fn mempool_kvmalloc(gfp_mask: c::gfp_t, pool_data: *mut c_void) -> *mut c_void;
     pub fn mempool_kvfree(element: *mut c_void, pool_data: *mut c_void);
+    pub fn rust_bio_pages_alloc(size: usize, gfp: c::gfp_t) -> *mut c_void;
+    pub fn rust_bio_pages_free(p: *mut c_void, size: usize);
     pub fn bch2_local_clock() -> u64;
     pub fn bch2_cond_resched();
     pub fn bch2_msleep(ms: c_uint);

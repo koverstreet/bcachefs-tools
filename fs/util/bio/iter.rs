@@ -39,7 +39,7 @@ pub(crate) unsafe fn nth_page(page: *mut c::page, n: usize) -> *mut c::page {
 
 /// # Safety
 /// @page is a page, not highmem.
-unsafe fn page_address(page: NonNull<c::page>) -> NonNull<u8> {
+pub(super) unsafe fn page_address(page: NonNull<c::page>) -> NonNull<u8> {
     // SAFETY: the caller's
     #[cfg(kernel)]
     return NonNull::new(unsafe { c::rust_page_address(page.as_ptr()) }.cast())

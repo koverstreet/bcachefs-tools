@@ -816,47 +816,6 @@ void bch2_latency_acct(struct bch_dev *ca, u64 submit_time, int rw)
 
 /* Allocate, free from mempool: */
 
-void bch2_bio_free_pages_pool(struct bch_fs *c, struct bio *bio)
-{
-	for (struct bio_vec *bv = bio->bi_io_vec;
-	     bv < bio->bi_io_vec + bio->bi_vcnt;
-	     bv++) {
-		void *p = bvec_virt(bv);
-
-		if (bv->bv_len == BIO_BOUNCE_BUF_POOL_LEN)
-			mempool_free(p, &c->bio_bounce_bufs);
-		else
-			free_pages((unsigned long) p, get_order(bv->bv_len));
-	}
-	bio->bi_vcnt = 0;
-}
-
-static void __bch2_bio_alloc_pages_pool(struct bch_fs *c, struct bio *bio,
-					unsigned bs, size_t size,
-					gfp_t gfp_flags)
-{
-	mutex_lock(&c->bio_bounce_pages_lock);
-
-	while (bio->bi_iter.bi_size < size)
-		bio_add_virt_nofail(bio,
-				    mempool_alloc(&c->bio_bounce_bufs, gfp_flags),
-				    BIO_BOUNCE_BUF_POOL_LEN);
-
-	bio->bi_iter.bi_size = min(bio->bi_iter.bi_size, size);
-
-	mutex_unlock(&c->bio_bounce_pages_lock);
-}
-
-void bch2_bio_alloc_pages_pool(struct bch_fs *c, struct bio *bio,
-			       unsigned bs, size_t size,
-			       gfp_t gfp_flags)
-{
-	bch2_bio_alloc_pages(bio, c->opts.block_size, size, gfp_flags);
-
-	if (bio->bi_iter.bi_size < size)
-		__bch2_bio_alloc_pages_pool(c, bio, bs, size, gfp_flags);
-}
-
 /* Extent update path: */
 
 int bch2_sum_sector_overwrites(struct btree_trans *trans,
