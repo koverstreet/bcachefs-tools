@@ -648,6 +648,7 @@ fn image_update_inner(
         POS_MIN,
         SPOS_MAX,
         bcachefs_kernel::btree::iter::BtreeIterFlags::ALL_SNAPSHOTS,
+        bcachefs_kernel::btree::iter::UpdateTriggerFlags::empty(),
     )
     .map_err(|e| anyhow!("deleting xattrs: {}", e))?;
 

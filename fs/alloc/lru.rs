@@ -24,7 +24,7 @@ use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, 
                          TransAttempt, UpdateTriggerFlags};
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
-use crate::errcode::{ret_to_c, ret_to_result_void, BchError};
+use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::init::progress::Progress;
@@ -235,10 +235,8 @@ fn dev_remove_lru_range(fs: &Fs, id: LruId) -> Result<(), BchError> {
     // In a transaction of its own, not the trans's delete_range(), whose
     // transaction_restart_nested this has no attempt to begin again for. The
     // end is inclusive: lru_end(), not the next lru's start.
-    ret_to_result_void(unsafe {
-        c::bch2_btree_delete_range(fs.as_ptr(), c::btree_id::lru, range.start().to_bpos(),
-                                   range.end().to_bpos(), c::btree_iter_update_trigger_flags::empty())
-    })
+    fs.btree_delete_range(c::btree_id::lru, range.start().to_bpos(), range.end().to_bpos(),
+                          BtreeIterFlags::empty(), UpdateTriggerFlags::empty())
 }
 
 /// The entries of device @ca's buckets, as it's removed: its own lrus, if it

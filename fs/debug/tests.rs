@@ -52,6 +52,7 @@ fn delete_test_keys(fs: &Fs) -> TestRet {
         spos(0, 0, u32::MAX),
         pos(0, u64::MAX),
         BtreeIterFlags::empty(),
+        UpdateTriggerFlags::empty(),
     )?;
 
     fs.btree_delete_range(
@@ -59,6 +60,7 @@ fn delete_test_keys(fs: &Fs) -> TestRet {
         spos(0, 0, u32::MAX),
         pos(0, u64::MAX),
         BtreeIterFlags::empty(),
+        UpdateTriggerFlags::empty(),
     )
 }
 
@@ -982,6 +984,7 @@ fn seq_delete(fs: &Fs, _nr: u64) -> TestRet {
         spos(0, 0, u32::MAX),
         pos(0, u64::MAX),
         BtreeIterFlags::empty(),
+        UpdateTriggerFlags::empty(),
     )
 }
 

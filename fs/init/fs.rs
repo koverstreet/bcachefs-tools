@@ -2,7 +2,7 @@ use crate::c;
 use crate::btree::bkey::BkeyI;
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
-use crate::btree::iter::{BtreeIterFlags, CommitOpts};
+use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
 use crate::locking::{Guard, Lock, MutexNoio, Noio, PercpuRwsemNoio};
 use crate::util::Printbuf;
 use crate::util::enumerated_ref::EnumeratedRef;
@@ -412,16 +412,18 @@ impl Fs {
         unsafe { c::bch2_journal_flush_pins(&mut (*self.as_ptr()).journal, self.journal_cur_seq()) }
     }
 
+    /// Delete [@start, @end) in @btree_id, in a transaction of its own: its
+    /// iterator's flags and the deletes' - one set of flags, to C.
     pub fn btree_delete_range(
         &self,
-        btree_id: c::btree_id,
-        start: c::bpos,
-        end: c::bpos,
-        flags: BtreeIterFlags,
+        btree_id:     c::btree_id,
+        start:        c::bpos,
+        end:          c::bpos,
+        iter_flags:   BtreeIterFlags,
+        update_flags: UpdateTriggerFlags,
     ) -> Result<(), BchError> {
-        ret_to_result(unsafe {
-            c::bch2_btree_delete_range(self.as_ptr(), btree_id, start, end, c::btree_iter_update_trigger_flags::from_bits_retain(flags.bits()))
-        })
+        let flags = c::btree_iter_update_trigger_flags::from_bits_retain(iter_flags.bits() | update_flags.bits());
+        ret_to_result(unsafe { c::bch2_btree_delete_range(self.as_ptr(), btree_id, start, end, flags) })
     }
 
     /// @key, a validated key of any type, inserted in a transaction of its

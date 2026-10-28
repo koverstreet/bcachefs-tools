@@ -700,7 +700,8 @@ mod vfs {
             }
 
             fs.btree_delete_range(c::btree_id::quotas, pos(qtype.0 as u64, 0),
-                                  pos(qtype.0 as u64, u64::MAX), BtreeIterFlags::empty())?;
+                                  pos(qtype.0 as u64, u64::MAX), BtreeIterFlags::empty(),
+                                  UpdateTriggerFlags::empty())?;
         }
         Ok(())
     }
