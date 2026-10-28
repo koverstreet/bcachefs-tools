@@ -22,6 +22,12 @@ impl Fs {
 }
 
 impl SuperBlock {
+    /// # Safety
+    /// @sb is one of ours, live for 'a.
+    pub(crate) unsafe fn from_raw<'a>(sb: *mut c::super_block) -> &'a SuperBlock {
+        unsafe { &*sb.cast::<SuperBlock>() }
+    }
+
     fn as_ptr(&self) -> *mut c::super_block {
         self.0.as_ptr()
     }

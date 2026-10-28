@@ -38,6 +38,8 @@ pub mod raid;
 pub mod rcu;
 pub mod refcount;
 pub mod rhashtable;
+#[cfg(kernel)]
+pub mod seq_file;
 pub mod siphash;
 pub mod sleep;
 pub mod sort;

@@ -86,6 +86,7 @@ macro_rules! into_raw {
         }
     )*};
 }
+pub(crate) use into_raw;
 
 // What's passed as it's taken: the scalars, and raw pointers
 macro_rules! as_passed {
