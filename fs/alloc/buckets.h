@@ -9,6 +9,7 @@
 #define _BUCKETS_H
 
 #include "alloc/buckets_gen.h"
+#include "alloc/capacity_gen.h"
 #include "alloc/format_gen.h"
 #include "data/extents.h"
 #include "sb/members.h"
@@ -349,15 +350,6 @@ static inline u64 bch2_online_reserved(struct bch_fs *c)
 	return ret;
 }
 
-/*
- * What we'd grant at each replica count: @out[n - 1] is placeable at n or more,
- * @out_now (optional) the same without waiting for copygc.
- */
-void bch2_fs_sectors_placeable(struct bch_fs *, u64 *, u64 *);
-void bch2_disk_reservation_caches_invalidate(struct bch_fs *);
-void bch2_disk_reservation_degraded(struct bch_fs *, unsigned, unsigned,
-				    u64, unsigned long);
-
 static inline int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
 					 struct bkey_s_c k,
 					 const struct bch_extent_ptr *ptr,
@@ -376,8 +368,6 @@ static inline int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_d
 	*bucket_sectors += sectors;
 	return 0;
 }
-
-void bch2_trans_account_disk_usage_change(struct btree_trans *);
 
 bool bch2_is_superblock_bucket(struct bch_dev *, u64);
 
@@ -417,8 +407,6 @@ static inline void bch2_disk_reservation_put(struct bch_fs *c,
 
 #include "alloc/buckets_defs_gen.h"
 
-int bch2_disk_reservation_add_slowpath(struct bch_fs *, struct disk_reservation *,
-				       u64, enum bch_reservation_flags);
 
 /*
  * A reservation lives entirely in one slot, so changing its count moves what it

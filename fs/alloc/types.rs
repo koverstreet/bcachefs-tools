@@ -15,7 +15,7 @@ use crate::util::percpu::{Counters, PerCpu};
 use crate::util::projections::Volatile;
 use crate::published;
 use core::ffi::{c_uint, c_ulong};
-use core::sync::atomic::{AtomicI32, AtomicI64};
+use core::sync::atomic::{AtomicI32, AtomicU64};
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, placed, CStruct, Fieldwise, Init, TypeInfo};
 use pin_init::pin_data;
 use nestify::nest;
@@ -336,19 +336,13 @@ pub struct bch_fs_capacity {
     pub capacity_gen: u32,
     pub bucket_size_max: crate::util::projections::Volatile<c_uint>,
 
-    pub sectors_available: [AtomicI64; c::BCH_REPLICAS_MAX as usize],
+    pub sectors_available: [AtomicU64; c::BCH_REPLICAS_MAX as usize],
 
     /* the reservation caches' recompute, and the placement it decides */
     #[pin]
     #[init(new_lock!((), ::pin_init::zeroed(), "&c->capacity.sectors_available_lock"))]
     #[c_lock("spinlock_t sectors_available_lock")]
     pub sectors_available_lock: Lock<c::spinlock_t, (), Placement>,
-
-    /*
-     * Physical sectors we can allocate before the placement could change,
-     * and so the most the reservation caches hand out between recomputes.
-     */
-    pub placement_allowance: u64,
 
     #[c("struct bch_fs_capacity_pcpu __percpu *pcpu")]
     #[init(PerCpu::init())]

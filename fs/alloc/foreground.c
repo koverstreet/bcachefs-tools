@@ -2233,29 +2233,27 @@ __cold void bch2_fs_alloc_debug_to_text(struct printbuf *out, struct bch_fs *c)
 	 * Computed, not read back: "cached" below is only what the reservation
 	 * fast path has left, and reads zero until a slot has run dry once.
 	 */
-	u64 placeable[BCH_REPLICAS_MAX], placeable_now[BCH_REPLICAS_MAX];
-
-	bch2_fs_sectors_placeable(c, placeable, placeable_now);
+	struct bch_fs_placeable placeable = bch2_fs_sectors_placeable(c);
 
 	prt_printf(out, "sectors_available placeable\n");
 	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
-		prt_printf(out, "  %ux\t%llu\n", i + 1, placeable[i]);
+		prt_printf(out, "  %ux\t%llu\n", i + 1, placeable.eventual[i]);
 
 	prt_printf(out, "sectors_available now\n");
 	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
-		prt_printf(out, "  %ux\t%llu\n", i + 1, placeable_now[i]);
+		prt_printf(out, "  %ux\t%llu\n", i + 1, placeable.now[i]);
 
 	/* the exclusive partition underneath, which sums to the free space */
 	prt_printf(out, "sectors_available slots\n");
 	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
-		prt_printf(out, "  %ux\t%llu\n", i + 1, placeable[i] -
-			   (i + 1 < BCH_REPLICAS_MAX ? placeable[i + 1] : 0));
+		prt_printf(out, "  %ux\t%llu\n", i + 1, placeable.eventual[i] -
+			   (i + 1 < BCH_REPLICAS_MAX ? placeable.eventual[i + 1] : 0));
 
 	/* what the pools hold, which lags until a recalc */
 	prt_printf(out, "sectors_available cached\n");
 	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
 		prt_printf(out, "  %ux\t%llu\n", i + 1,
-			   atomic64_read(&c->capacity.sectors_available[i]));
+			   READ_ONCE(c->capacity.sectors_available[i]));
 
 	prt_newline(out);
 	prt_printf(out, "freelist_wait\t%s\n",			a->freelist_wait.list.first ? "waiting" : "empty");

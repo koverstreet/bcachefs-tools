@@ -256,12 +256,11 @@ fn query_accounting(fs: &Fs, arg: &mut c::bch_ioctl_query_accounting_v2,
 
     const R: usize = c::BCH_REPLICAS_MAX as usize;
     const { assert!(R <= c::BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR as usize) };
-    let (mut free, mut free_now) = ([0u64; R], [0u64; R]);
-    unsafe { c::bch2_fs_sectors_placeable(fs.as_ptr().cast(), free.as_mut_ptr(), free_now.as_mut_ptr()) };
+    let p = fs.sectors_placeable();
     arg.free     = Default::default();
     arg.free_now = Default::default();
-    arg.free[..R].copy_from_slice(&free);
-    arg.free_now[..R].copy_from_slice(&free_now);
+    arg.free[..R].copy_from_slice(&p.eventual);
+    arg.free_now[..R].copy_from_slice(&p.now);
     Ok(())
 }
 

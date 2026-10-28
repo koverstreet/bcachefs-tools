@@ -2658,10 +2658,9 @@ static int bch2_statfs(struct dentry *dentry, struct kstatfs *buf)
 	bch2_inode_opts_get_inode(c, &to_bch_ei(d_inode(dentry))->ei_inode, &opts);
 	unsigned nr_replicas = clamp_t(unsigned, opts.data_replicas, 1, BCH_REPLICAS_MAX);
 
-	u64 placeable[BCH_REPLICAS_MAX];
-	bch2_fs_sectors_placeable(c, placeable, NULL);
+	struct bch_fs_placeable placeable = bch2_fs_sectors_placeable(c);
 	buf->f_bavail	= div_u64(min(avail_factor(usage.free),
-				      placeable[nr_replicas - 1]),
+				      placeable.eventual[nr_replicas - 1]),
 				  nr_replicas) >> shift;
 
 	u64 nr_inodes = 0;

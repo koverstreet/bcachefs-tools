@@ -7,8 +7,8 @@ use crate::fs::Fs;
 use crate::locking::{ByteLock, Lock};
 use crate::util::percpu::Counters;
 use core::cell::Cell;
-use core::ffi::{c_int, c_uint};
-use cstruct_macros::{CStruct, bitfield, c_const, c_extern, c_rcu_array, Fieldwise, TypeInfo};
+use core::ffi::c_uint;
+use cstruct_macros::{CStruct, bitfield, c_const, c_rcu_array, Fieldwise, TypeInfo};
 use nestify::nest;
 
 c_const! {
@@ -119,6 +119,16 @@ pub struct bch_fs_usage_short {
     pub free: u64,
 }
 
+/* Free space by the replica count it's placeable at: [n - 1] at n or more */
+#[repr(C)]
+#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+pub struct bch_fs_placeable {
+    /* waiting on copygc, if need be */
+    pub eventual: [u64; c::BCH_REPLICAS_MAX as usize],
+    /* free buckets only */
+    pub now: [u64; c::BCH_REPLICAS_MAX as usize],
+}
+
 /*
  * A reservation for space on disk. @sectors is physical - total disk space, not
  * the size of the data - and is charged to the online_reserved[] slot named by
@@ -149,9 +159,3 @@ pub struct DiskReservation<'f> {
 /// C's name, as FFI declarations and the structs embedding one spell it.
 pub type disk_reservation = DiskReservation<'static>;
 
-c_extern! {
-    pub fn bch2_disk_reservation_caches_invalidate(c: *mut c::bch_fs);
-    pub fn bch2_disk_reservation_add_slowpath(c: *mut c::bch_fs, res: *mut c::disk_reservation,
-                                              sectors: u64, flags: c::bch_reservation_flags) -> c_int;
-    pub fn bch2_fs_sectors_placeable(c: *mut c::bch_fs, out: *mut u64, out_now: *mut u64);
-}
