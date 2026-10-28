@@ -12,12 +12,13 @@
 //! keys past a device's last bucket, and for devices that don't exist.
 //!
 //! An alloc key's check ends at a need_discard or freespace error that isn't
-//! fixed - declined, or fsck -n: need_discard_or_freespace_err() returned C's
-//! fsck_err_wrap() a 0 for it, which goes to the end of the function.
+//! fixed - declined, or fsck -n: need_discard_or_freespace_err()'s
+//! Ok(false).
 //!
-//! Still C: __bch2_check_freespace_key(), the freespace key check the
-//! allocator runs too - its repair, from the allocator, goes through a work
-//! item. check_alloc_info calls it for every freespace position.
+//! The freespace key check is the allocator's too, before it takes a bucket:
+//! check_freespace_key(), whose caller - FreespaceCheck - says how a bad
+//! entry's repaired. The allocator can't commit there, so it spawns a
+//! recheck that does.
 //!
 //! The injection tests for every error here: ktest's alloc-inject.ktest and
 //! lru-inject.ktest.
@@ -188,27 +189,6 @@ pub(crate) fn need_discard_or_freespace_err(
                           if set { "" } else { "un" }, btree, alloc_k.to_text(t.fs())) {
         Err(e) if e.matches(bch_errcode::BCH_ERR_fsck_errors_not_fixed) => Ok(false),
         r => r,
-    }
-}
-
-/// need_discard_or_freespace_err(), for C's fsck_err_wrap(): fsck_fix, or 0
-/// for an error not fixed - the end of the caller - or an error.
-///
-/// # Safety
-/// @trans is in an attempt.
-#[c_export]
-pub unsafe extern "C" fn bch2_need_discard_or_freespace_err<'t>(
-    trans:   &'t BtreeTrans<'t>,
-    alloc_k: BkeySC<'_>,
-    set:     bool,
-    discard: bool,
-    repair:  bool,
-) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    match need_discard_or_freespace_err(&t, alloc_k, set, discard, repair) {
-        Ok(true)  => -(bch_errcode::BCH_ERR_fsck_fix.0 as c_int),
-        Ok(false) => 0,
-        Err(e)    => ret_to_c(Err(e)),
     }
 }
 
@@ -478,19 +458,134 @@ fn check_discard_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, last_flushe
     Ok(())
 }
 
-/// Freespace position @iter, against the bucket's alloc key - a bad entry
-/// deleted, which ends the attempt - through C's __bch2_check_freespace_key(),
-/// until the allocator's async repair converts: bch2_check_freespace_key().
-fn check_freespace_key(t: &TransAttempt<'_, '_>, iter: &mut BtreeIter<'_>) -> Result<(), BchError> {
-    let mut bucket_gen = 0u8;
-    let ret = unsafe {
-        c::__bch2_check_freespace_key(t.raw(), iter.raw(), &mut bucket_gen, core::ptr::null_mut(),
-                                      F::empty(), core::ptr::null_mut())
-    };
-    match t.result(ret) {
-        Err(e) if e.matches(bch_errcode::BCH_ERR_bucket_not_allocatable) => Ok(()),
-        r => r,
+// ── Freespace entries ────────────────────────────────────────────────────
+
+/// Who checks a freespace entry against its bucket's alloc key: how a bad
+/// one's reported, and repaired.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FreespaceCheck {
+    /// check_alloc_info: deleted in place, the attempt restarted.
+    Fsck,
+    /// The allocator, about to take the bucket: committed state only, as
+    /// bucket_alloc_scan() reads it, and not logged. A commit here would
+    /// recurse into the allocator, so a recheck is spawned to repair it.
+    Allocator,
+    /// That recheck: silent.
+    Recheck,
+}
+
+impl FreespaceCheck {
+    fn fsck_flags(self) -> F {
+        F::FSCK_CAN_FIX | F::FSCK_CAN_IGNORE | match self {
+            Self::Fsck      => F::empty(),
+            Self::Allocator => F::FSCK_ERR_NO_LOG,
+            Self::Recheck   => F::FSCK_ERR_SILENT,
+        }
     }
+}
+
+/// Freespace entry @iter against its bucket's alloc key: the bucket's gen
+/// and journal_seq_empty, if it's good. A bad one - for a bucket that doesn't
+/// exist, or isn't free, or of other gen bits - is reported, and if fsck says
+/// fix, deleted as @who repairs.
+fn check_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, who: FreespaceCheck)
+    -> Result<(u8, u64), BchError>
+{
+    let fs = t.fs();
+    let flags = who.fsck_flags();
+    let pos = FreespacePos::from_bpos(iter.pos());
+    let bad = |fix: bool| Err(if fix {
+        delete_freespace_key(t, iter, who)
+    } else {
+        fs.err(bch_errcode::BCH_ERR_bucket_not_allocatable)
+    });
+
+    let mut alloc_iter = BtreeIter::new(t, c::btree_id::alloc, pos.bucket, match who {
+        FreespaceCheck::Allocator => BtreeIterFlags::CACHED | BtreeIterFlags::COMMITTED,
+        _                         => BtreeIterFlags::empty(),
+    });
+    let ret = (|| {
+        let alloc_k = alloc_iter.peek_slot(t)?.expect("a slot always has a key");
+
+        if !fs.dev_bucket_exists(pos.bucket) {
+            return bad(fsck_err_flags!(t, POS_MIN, flags, id::need_discard_freespace_key_to_invalid_dev_bucket,
+                                       "entry in {} btree for nonexistant dev:bucket {}:{}",
+                                       iter.btree(), { pos.bucket.inode }, { pos.bucket.offset })?);
+        }
+
+        let a = alloc_to_v4(alloc_k);
+        let want = FreespacePos::new(pos.bucket, &a);
+        if data_type_from_u8(a.data_type) != data_type::free || pos != want {
+            return bad(fsck_err_flags!(t, POS_MIN, flags, id::need_discard_freespace_key_bad,
+                                       "{}\nincorrectly set at {}:{}:{}:0 (genbits {} should be {})",
+                                       alloc_k.to_text(fs), iter.btree(), { iter.pos().inode },
+                                       { iter.pos().offset }, pos.genbits, want.genbits)?);
+        }
+
+        Ok((a.generation, a.journal_seq_empty))
+    })();
+    alloc_iter.set_dontneed();
+    ret
+}
+
+/// Bad freespace entry @iter deleted, and the error the check ends with: in
+/// place, the attempt restarted - or for the allocator, by a recheck spawned,
+/// and bucket_not_allocatable.
+fn delete_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, who: FreespaceCheck) -> BchError {
+    let fs = t.fs();
+    if who == FreespaceCheck::Allocator {
+        let pos = c::bbpos { btree: iter.btree(), pos: iter.pos() };
+        // No write ref - the filesystem is going read-only - and it is left for fsck
+        let _ = fs.spawn_write(move |fs| async move {
+            let _ = crate::bch_err_fn!(&*fs, recheck_freespace_key(&fs, pos));
+        });
+        return fs.err(bch_errcode::BCH_ERR_bucket_not_allocatable);
+    }
+
+    match t.bit_mod_iter(iter, false).and_then(|()| t.commit(None, CommitFlags::NO_ENOSPC)) {
+        Ok(()) => t.restart(bch_errcode::BCH_ERR_transaction_restart_commit),
+        Err(e) => e,
+    }
+}
+
+/// check_freespace_key(), repairing in place: an entry left bad - fsck said
+/// not to fix it - isn't an error.
+fn repair_freespace_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, who: FreespaceCheck)
+    -> Result<(), BchError>
+{
+    match check_freespace_key(t, iter, who) {
+        Err(e) if e.matches(bch_errcode::BCH_ERR_bucket_not_allocatable) => Ok(()),
+        r => r.map(|_| ()),
+    }
+}
+
+/// The allocator's repair: the freespace entry at @pos checked again, in a
+/// transaction of its own, if it's still there.
+fn recheck_freespace_key(fs: &Fs, pos: c::bbpos) -> Result<(), BchError> {
+    let trans = crate::btree_trans!(fs);
+    lockrestart_do(&trans, |t| {
+        let mut iter = BtreeIter::new(t, pos.btree, pos.pos, BtreeIterFlags::empty());
+        let k = iter.peek_slot(t)?.expect("a slot always has a key");
+        if k.k.key_type() != c::bch_bkey_type::KEY_TYPE_set {
+            return Ok(());
+        }
+        repair_freespace_key(t, &iter, FreespaceCheck::Recheck)
+    })
+}
+
+/// The allocator's check of the freespace entry at @iter, before it takes
+/// the bucket: its gen and journal_seq_empty, if it's good.
+///
+/// # Safety
+/// @trans is in an attempt.
+#[c_export]
+pub unsafe fn bch2_check_freespace_key_async(trans: &BtreeTrans<'_>, iter: &BtreeIter<'_>, gen: &mut u8,
+                                             journal_seq_empty: &mut u64) -> c_int {
+    let t = unsafe { trans.attempt_in_progress() };
+    ret_to_c(check_freespace_key(&t, iter, FreespaceCheck::Allocator).map(|(g, seq)| {
+        *gen = g;
+        *journal_seq_empty = seq;
+    }))
 }
 
 /// Bucket_gens key @k, at @iter, against the device's buckets - gens for
@@ -569,7 +664,7 @@ fn check_alloc_info(fs: &Fs) -> Result<(), BchError> {
                 Ok(Some(k)) => Ok(*k.k),
                 Err(e)      => Err(e),
             };
-            let ret = k.and_then(|k| check_freespace_key(&t, &mut iter).map(|()| k));
+            let ret = k.and_then(|k| repair_freespace_key(&t, &iter, FreespaceCheck::Fsck).map(|()| k));
 
             match ret {
                 Ok(_) => {}
