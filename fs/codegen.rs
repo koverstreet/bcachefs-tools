@@ -21,12 +21,24 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/generic-radix-tree.h",	// GenRadix<T>'s __genradix
     "linux/xattr.h",			// xattr_handler, which fs.h only declares
     "linux/posix_acl_xattr.h",		// nop_posix_acl_*, xattr.rs's ACL handlers
+    "linux/posix_acl.h",		// struct posix_acl, which fs.h only declares: fs/acl.rs's PosixAcl
+    "linux/uidgid.h",			// make_kuid() and the rest, an ACL entry's ids
+    "linux/quota.h",			// make_kqid(), quota_send_warning(): quota.rs's
     "crypto/sha2.h",			// sha256(), siphash_old's string hash key
     "linux/anon_inodes.h",		// anon_inode_getfile(), util/file's NewFile
     "linux/hash.h",			// GOLDEN_RATIO_64, util/hash.rs's hash_64()
     "linux/mm.h",			// totalram_pages(), a backpointer scan's batch limit
     "linux/mount.h",			// mnt_want_write_file(), vfs/ioctl.rs's
     "linux/blkdev.h",			// bdev_freeze(), vfs/ioctl.rs's goingdown
+    "linux/statfs.h",			// struct kstatfs, uuid_to_fsid(): vfs/super_block.rs's statfs
+    "linux/fileattr.h",			// struct file_kattr, fileattr_fill_xflags(): vfs/attr.rs's
+    "linux/compat.h",			// in_compat_syscall(): vfs/dir.rs's 32-bit readdir
+    "linux/exportfs.h",			// struct export_operations, enum fid_type: vfs/export.rs's
+    "linux/fiemap.h",			// fiemap_prep(), fiemap_fill_next_extent(): vfs/fiemap.rs's
+    "linux/namei.h",			// the path lookups: vfs/ioctl.rs's subvolume create and destroy
+    "linux/fsnotify.h",			// fsnotify_mkdir(), fsnotify_rmdir(): the same
+    "linux/security.h",			// security_path_mkdir(): subvolume create
+    "linux/fs_struct.h",		// current_umask(): subvolume create
     "linux/freezer.h",			// set_freezable(), freezing(), try_to_freeze(): a freezable kthread's
     "linux/power_supply.h",		// power_supply_reg_notifier(), reconcile on battery
     "linux/raid/pq.h",			// raid6_gen_syndrome(), a stripe's Q
@@ -46,12 +58,26 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/generic-radix-tree.h",
     "linux/xattr.h",
     "linux/posix_acl_xattr.h",
+    "linux/posix_acl.h",
+    "linux/uidgid.h",
+    "linux/quota.h",
     "crypto/sha2.h",
     "linux/anon_inodes.h",
     "linux/hash.h",
     "linux/mm.h",
+    "linux/fs.h",
     "linux/mount.h",
     "linux/blkdev.h",
+    "linux/statfs.h",
+    "linux/fileattr.h",
+    "linux/compat.h",
+    "linux/exportfs.h",
+    "linux/fiemap.h",
+    "linux/namei.h",
+    "linux/fsnotify.h",
+    "linux/security.h",
+    "linux/fs_struct.h",
+    "asm/compat.h",			// in_compat_syscall(), the arch's own
     "linux/freezer.h",
     "linux/power_supply.h",
     "linux/raid/pq.h",
@@ -68,14 +94,38 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "rust_page_highmem", "rust_page_address",
     "rust_refcount_inc_not_zero", "rust_poll_wait", "rust_fault_in_writeable",
     "rust_fault_in_readable", "totalram_pages", "set_freezable", "freezing", "try_to_freeze",
+    "i_uid_write", "i_gid_write", "i_size_read", "i_size_write", "uuid_to_fsid",
+    "fileattr_fill_xflags", "in_compat_syscall", "dir_emit_dots", "finish_open_simple",
+    "i_user_ns", "inode_get_atime", "inode_get_mtime", "inode_get_ctime",
+    "inode_set_atime_to_ts", "inode_set_mtime_to_ts", "inode_set_ctime_to_ts",
+    "posix_acl_alloc", "posix_acl_dup", "posix_acl_release", "__posix_acl_chmod",
+    "posix_acl_update_mode", "set_cached_acl",
+    // from_kuid() the kernel crate has
+    "make_kuid", "make_kgid", "from_kgid",
+    // a static inline; and a static inline without CONFIG_QUOTA_NETLINK_INTERFACE
+    "make_kqid", "quota_send_warning",
+    // the path lookups, as each kernel has them: before 6.18, from 6.18, from 7.2
+    "user_path_at", "user_path_create", "done_path_create", "user_path_locked_at",
+    "start_creating_user_path", "end_creating_path", "start_removing_user_path_at",
+    "end_removing_path", "start_removing_dentry",
+    "fsnotify_mkdir", "fsnotify_rmdir", "security_path_mkdir", "current_umask",
+    "kuid_has_mapping", "kgid_has_mapping", "init_sync_kiocb", "inode_lock", "inode_unlock",
+    "rust_compat_ptr", "fiemap_prep", "fiemap_fill_next_extent",
     "power_supply_reg_notifier", "power_supply_unreg_notifier", "power_supply_is_system_supplied",
     // the raid6 and xor APIs on both sides of 7.1's and 7.2's renames - each
     // kernel has one set: data/ec/io.rs picks by cfg(linux_ge)
     "raid6_gen_syndrome", "raid6_recov_2data", "raid6_recov_datap", "xor_gen", "xor_blocks",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",
-                                  "xattr_handler"];
+                                  "xattr_handler", "kstatfs", "export_operations", "fid_type"];
+/// Structs in an unblocklisted header - defined there, or only declared, as
+/// uidgid.h declares user_namespace - that kernel::bindings binds: a second
+/// copy would be a different type - and bindgen, stopped at one, doesn't
+/// follow its fields into the rest of the header.
+const BLOCKLIST_TYPE: &[&str] = &["inode", "file", "dir_context", "user_namespace", "kqid",
+                                     "fiemap_extent_info"];
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
+                                 "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*",
                                  "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*",
                                  // before 7.1/7.2, as above
                                  "raid6_call", "raid6_2data_recov", "raid6_datap_recov", "MAX_XOR_BLOCKS"];
@@ -126,6 +176,7 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String]) 
     for x in ALLOWLIST_FUNCTION { flag!("--allowlist-function", *x); }
     for x in ALLOWLIST_TYPE     { flag!("--allowlist-type", *x); }
     for x in ALLOWLIST_VAR      { flag!("--allowlist-var", *x); }
+    for x in BLOCKLIST_TYPE     { flag!("--blocklist-type", *x); }
     for d in blocklist_dirs     { flag!("--blocklist-file", d.as_str()); }
 
     a.push("--".into());

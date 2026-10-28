@@ -108,6 +108,7 @@ mod vfs {
     use crate::errcode::{bch_errcode, ret_to_class};
     use crate::locking::Guard;
     use crate::sb::io::SbResize;
+    use crate::util::ffi::c_char;
     use crate::util::kernel::ktime_get_real_seconds;
     use crate::{bch_err_fn, bch_info, fs_inconsistent, inode};
     use crate::snapshots::snapshot;
@@ -226,8 +227,8 @@ mod vfs {
         fn flush(&self, fs: &Fs, qid: c::bch_qid) {
             for &(qtype, msg) in &self.m[..self.nr] {
                 unsafe {
-                    c::rust_quota_send_warning(qtype as c_uint, qid.q[qtype], (*fs.vfs_sb).s_dev,
-                                               msg as c_int)
+                    let kqid = c::make_kqid(&raw mut c::init_user_ns, qtype as c::quota_type, qid.q[qtype]);
+                    c::quota_send_warning(kqid, (*fs.vfs_sb).s_dev, msg as c_char)
                 }
             }
         }
@@ -858,7 +859,7 @@ mod vfs {
         };
 
         unsafe { *qdq = dqblk(mq) };
-        *kqid = unsafe { c::rust_make_kqid_current(ty as c_uint, pos as u32) };
+        *kqid = unsafe { c::make_kqid(c::current_user_ns(), ty, pos as u32) };
         0
     }
 

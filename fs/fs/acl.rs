@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! POSIX ACLs: their on-disk form, acl_format.rs's, read and written - and
-//! converted to and from the VFS's struct posix_acl, through the shims of
-//! vfs/rust_types.rs.
+//! converted to and from the VFS's struct posix_acl.
 //!
 //! An entry is an AclEntry, a tagged_union! as long as its arm. A tag it
 //! doesn't know is one there's no stepping past, so an ACL with one isn't an
@@ -174,8 +173,8 @@ impl AclType {
 #[cfg(kernel)]
 pub use vfs::*;
 
-/// struct posix_acl, in userspace: nothing makes one there - its shims are
-/// the VFS's - so there are none, and an Option<&PosixAcl> is always None.
+/// struct posix_acl, in userspace: nothing makes one there - the VFS does -
+/// so there are none, and an Option<&PosixAcl> is always None.
 #[cfg(not(kernel))]
 pub enum PosixAcl {}
 
@@ -245,21 +244,47 @@ mod vfs {
             self.0.as_ptr()
         }
 
+        fn count(&self) -> usize {
+            // SAFETY: the header, the struct_group the fields are in
+            unsafe { (*self.as_raw()).__bindgen_anon_1.hdr.as_ref().a_count as usize }
+        }
+
         /// Its entries - Err(the tag) for one with a tag ACLs don't have.
+        /// Their ids are in the initial user namespace, as on disk.
         fn entries(&self) -> impl Iterator<Item = Result<AclEntry, u16>> + '_ {
-            let nr = unsafe { c::rust_posix_acl_count(self.as_raw()) };
-            (0..nr).map(|i| {
-                let (mut tag, mut perm, mut id) = (0, 0, 0);
-                unsafe { c::rust_posix_acl_entry(self.as_raw(), i, &mut tag, &mut perm, &mut id) };
-                AclEntry::new(tag, perm, id)
+            // SAFETY: an ACL's entries follow it, a_count of them
+            let entries = unsafe { (*self.as_raw()).a_entries.as_slice(self.count()) };
+            entries.iter().map(|e| {
+                let tag = e.e_tag as u16;
+                // SAFETY: the union is the id the tag says, if it has one
+                let id = unsafe {
+                    match tag as u32 {
+                        c::ACL_USER  => c::from_kuid(&raw mut c::init_user_ns, *e.__bindgen_anon_1.e_uid.as_ref()),
+                        c::ACL_GROUP => c::from_kgid(&raw mut c::init_user_ns, *e.__bindgen_anon_1.e_gid.as_ref()),
+                        _            => 0,
+                    }
+                };
+                AclEntry::new(tag, e.e_perm, id)
             })
         }
 
-        /// Set entry @i - below the count it was allocated with.
-        fn set_entry(&mut self, i: u32, e: AclEntry) {
-            assert!(i < unsafe { c::rust_posix_acl_count(self.as_raw()) });
+        /// Set entry @i, of one alloc() just made - below the count it was
+        /// made with.
+        fn set_entry(&mut self, i: usize, e: AclEntry) {
+            assert!(i < self.count());
             let (tag, perm, id) = e.vfs();
-            unsafe { c::rust_posix_acl_set_entry(self.as_raw(), i, tag, perm, id) }
+            // SAFETY: in bounds; not yet shared, so ours to write
+            let raw = unsafe { &mut *(&raw mut (*self.as_raw()).a_entries).cast::<c::posix_acl_entry>().add(i) };
+            raw.e_tag  = tag as i16;
+            raw.e_perm = perm;
+            // SAFETY: the kernel's, which take any id
+            unsafe {
+                match tag as u32 {
+                    c::ACL_USER  => *raw.__bindgen_anon_1.e_uid.as_mut() = c::make_kuid(&raw mut c::init_user_ns, id),
+                    c::ACL_GROUP => *raw.__bindgen_anon_1.e_gid.as_mut() = c::make_kgid(&raw mut c::init_user_ns, id),
+                    _            => {}
+                }
+            }
         }
 
         /// This ACL with its permissions changed to match file mode @mode:
@@ -280,21 +305,21 @@ mod vfs {
         /// Cache this - or None, for no ACL - as @v's ACL of @ty.
         fn set_cached(acl: Option<&PosixAcl>, v: &InodeInfo, ty: AclType) {
             let acl = acl.map_or(core::ptr::null_mut(), PosixAcl::as_raw);
-            unsafe { c::rust_set_cached_acl(v.vinode(), ty as c_int, acl) }
+            unsafe { c::set_cached_acl(v.vinode(), ty as c_int, acl) }
         }
     }
 
     /// Another reference: posix_acl_dup().
     impl Clone for PosixAcl {
         fn clone(&self) -> Self {
-            PosixAcl(NonNull::new(unsafe { c::rust_posix_acl_dup(self.as_raw()) })
+            PosixAcl(NonNull::new(unsafe { c::posix_acl_dup(self.as_raw()) })
                      .expect("posix_acl_dup() of an ACL"))
         }
     }
 
     impl Drop for PosixAcl {
         fn drop(&mut self) {
-            unsafe { c::rust_posix_acl_release(self.as_raw()) }
+            unsafe { c::posix_acl_release(self.as_raw()) }
         }
     }
 
@@ -315,7 +340,7 @@ mod vfs {
 
             let mut acl = Self::alloc(t, nr as u32)?;
             for (i, e) in entries.enumerate() {
-                acl.set_entry(i as u32, e);
+                acl.set_entry(i, e);
             }
             Ok(Some(acl))
         }
@@ -451,7 +476,7 @@ mod vfs {
             let mut mode = inode.bi_mode;
             if ty == AclType::Access {
                 ret_to_result(unsafe {
-                    c::rust_posix_acl_update_mode(idmap, vinode, &mut mode, &mut acl)
+                    c::posix_acl_update_mode(idmap, vinode, &mut mode, &mut acl)
                 })?;
             }
             // The VFS's reference:

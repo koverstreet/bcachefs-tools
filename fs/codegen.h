@@ -9,9 +9,11 @@
  */
 
 #include <linux/blkdev.h>
+#include <linux/compat.h>
 #include <linux/fs.h>
 #include <linux/kallsyms.h>
 #include <linux/mount.h>
+#include <linux/namei.h>
 #include <linux/mm.h>
 #include <linux/notifier.h>
 #include <linux/pagemap.h>
@@ -44,10 +46,24 @@ const int RUST_CONST_HELPER_NOTIFY_OK			= NOTIFY_OK;
 /* room for one symbol as %pB prints it, util/backtrace.rs's frames */
 const size_t RUST_CONST_HELPER_KSYM_SYMBOL_LEN		= KSYM_SYMBOL_LEN;
 
+/* how a directory was opened: the cookies vfs/dir.rs's readdir hands out */
+const fmode_t RUST_CONST_HELPER_FMODE_32BITHASH		= FMODE_32BITHASH;
+const fmode_t RUST_CONST_HELPER_FMODE_64BITHASH		= FMODE_64BITHASH;
+
 /* the VFS's own ioctl numbers, which vfs/ioctl.rs answers */
 const unsigned int RUST_CONST_HELPER_FS_IOC_GETVERSION	= FS_IOC_GETVERSION;
 const unsigned int RUST_CONST_HELPER_FS_IOC_GETFSLABEL	= FS_IOC_GETFSLABEL;
 const unsigned int RUST_CONST_HELPER_FS_IOC_SETFSLABEL	= FS_IOC_SETFSLABEL;
+const unsigned int RUST_CONST_HELPER_FS_IOC_SETVERSION	= FS_IOC_SETVERSION;
+const unsigned int RUST_CONST_HELPER_FS_IOC_GETFLAGS	= FS_IOC_GETFLAGS;
+const unsigned int RUST_CONST_HELPER_FS_IOC_SETFLAGS	= FS_IOC_SETFLAGS;
+const unsigned int RUST_CONST_HELPER_FS_IOC32_GETFLAGS	= FS_IOC32_GETFLAGS;
+const unsigned int RUST_CONST_HELPER_FS_IOC32_SETFLAGS	= FS_IOC32_SETFLAGS;
+const unsigned int RUST_CONST_HELPER_FS_IOC32_GETVERSION	= FS_IOC32_GETVERSION;
+
+/* a path lookup's flag, and a superblock's: vfs/ioctl.rs's subvolume create */
+const unsigned int RUST_CONST_HELPER_LOOKUP_FOLLOW	= LOOKUP_FOLLOW;
+const unsigned long RUST_CONST_HELPER_SB_POSIXACL	= SB_POSIXACL;
 const unsigned int RUST_CONST_HELPER__IOC_NONE		= _IOC_NONE;
 const unsigned int RUST_CONST_HELPER__IOC_READ		= _IOC_READ;
 const unsigned int RUST_CONST_HELPER__IOC_WRITE		= _IOC_WRITE;
@@ -98,6 +114,17 @@ static inline size_t rust_fault_in_readable(const char __user *uaddr, size_t siz
 {
 	return fault_in_readable(uaddr, size);
 }
+
+#ifdef CONFIG_COMPAT
+/*
+ * compat_ptr()'s compat_uptr_t is the kernel crate's only with CONFIG_COMPAT:
+ * a binding of it would name a type there isn't
+ */
+static inline void __user *rust_compat_ptr(u32 uptr)
+{
+	return compat_ptr(uptr);
+}
+#endif
 
 /* a static inline: here rather than all of mm.h unblocklisted for it */
 static inline size_t rust_folio_size(struct folio *folio)
