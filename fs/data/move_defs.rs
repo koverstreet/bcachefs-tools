@@ -34,7 +34,6 @@ pub struct moving_context {
     pub list: c::list_head,
     pub fn_: *mut c_void,
 
-    pub rate: *mut c::bch_ratelimit,
     pub stats: *mut c::bch_move_stats,
     pub wp: c::write_point_specifier,
     pub wait_on_copygc: bool,

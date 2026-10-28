@@ -217,7 +217,6 @@ void bch2_moving_ctxt_exit(struct moving_context *ctxt)
 
 void bch2_moving_ctxt_init(struct moving_context *ctxt,
 			   struct bch_fs *c,
-			   struct bch_ratelimit *rate,
 			   struct bch_move_stats *stats,
 			   struct write_point_specifier wp,
 			   bool wait_on_copygc)
@@ -226,7 +225,6 @@ void bch2_moving_ctxt_init(struct moving_context *ctxt,
 
 	ctxt->trans	= bch2_trans_get(c);
 	ctxt->fn	= (void *) _RET_IP_;
-	ctxt->rate	= rate;
 	ctxt->stats	= stats;
 	ctxt->wp	= wp;
 	ctxt->wait_on_copygc = wait_on_copygc;
@@ -342,9 +340,6 @@ static int __bch2_move_extent(struct moving_context *ctxt,
 		return ret;
 	}
 	u = NULL;
-
-	if (ctxt->rate)
-		bch2_ratelimit_increment(ctxt->rate, size);
 
 	if (ctxt->stats) {
 		atomic64_inc(&ctxt->stats->keys_moved);
@@ -502,33 +497,20 @@ static int bch2_move_extent_pred(struct moving_context *ctxt,
 int bch2_move_ratelimit(struct moving_context *ctxt)
 {
 	struct bch_fs *c = ctxt->trans->c;
-	bool is_kthread = current->flags & PF_KTHREAD;
-	u64 delay;
-
 	if (ctxt->wait_on_copygc && c->copygc.running) {
 		bch2_moving_ctxt_flush_all(ctxt);
 		bch2_copygc_wait_not_running(c);
 	}
 
-	do {
-		delay = ctxt->rate ? bch2_ratelimit_delay(ctxt->rate) : 0;
+	try(bch2_kthread_cancelled(c));
 
-		try(bch2_kthread_cancelled(c));
+	if (unlikely(test_bit(BCH_FS_going_ro, &c->flags)))
+		return bch_err_throw(c, erofs_no_writes);
 
-		if (unlikely(test_bit(BCH_FS_going_ro, &c->flags)))
-			return bch_err_throw(c, erofs_no_writes);
-
-		if (delay)
-			move_ctxt_wait_event_timeout(ctxt,
-					freezing(current) ||
-					(is_kthread && kthread_should_stop()),
-					delay);
-
-		if (unlikely(freezing(current))) {
-			bch2_trans_unlock_long(ctxt->trans);
-			try_to_freeze();
-		}
-	} while (delay);
+	if (unlikely(freezing(current))) {
+		bch2_trans_unlock_long(ctxt->trans);
+		try_to_freeze();
+	}
 
 	/*
 	 * XXX: these limits really ought to be per device, SSDs and hard drives
@@ -577,9 +559,6 @@ int bch2_move_data_btree(struct moving_context *ctxt,
 				     BTREE_ITER_prefetch|
 				     BTREE_ITER_not_extents|
 				     BTREE_ITER_all_snapshots);
-
-	if (ctxt->rate)
-		bch2_ratelimit_reset(ctxt->rate);
 
 	int ret = 0;
 	while (!(ret = bch2_move_ratelimit(ctxt))) {
@@ -942,7 +921,6 @@ int bch2_move_data_phys(struct bch_fs *c,
 			u64 start,
 			u64 end,
 			unsigned data_types,
-			struct bch_ratelimit *rate,
 			struct bch_move_stats *stats,
 			struct write_point_specifier wp,
 			bool wait_on_copygc,
@@ -950,7 +928,7 @@ int bch2_move_data_phys(struct bch_fs *c,
 			move_pred_fn pred, void *arg)
 {
 	struct moving_context ctxt __cleanup(bch2_moving_ctxt_exit);
-	bch2_moving_ctxt_init(&ctxt, c, rate, stats, wp, wait_on_copygc);
+	bch2_moving_ctxt_init(&ctxt, c, stats, wp, wait_on_copygc);
 
 	if (ctxt.stats) {
 		ctxt.stats->phys = true;
@@ -1356,7 +1334,7 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 	bch2_move_stats_init(&stats, "journal_scrub");
 
 	struct moving_context ctxt __cleanup(bch2_moving_ctxt_exit);
-	bch2_moving_ctxt_init(&ctxt, c, NULL, &stats, (struct write_point_specifier) {}, false);
+	bch2_moving_ctxt_init(&ctxt, c, &stats, (struct write_point_specifier) {}, false);
 
 	struct btree_trans *trans = ctxt.trans;
 	struct journal_keys *keys = &c->journal_keys;
@@ -1678,7 +1656,7 @@ int bch2_scrub_journal_do_repairs(struct bch_fs *c)
 	bch2_move_stats_init(&stats, "journal_scrub_repair");
 
 	struct moving_context ctxt __cleanup(bch2_moving_ctxt_exit);
-	bch2_moving_ctxt_init(&ctxt, c, NULL, &stats,
+	bch2_moving_ctxt_init(&ctxt, c, &stats,
 			      writepoint_ptr(&c->allocator.reconcile_write_point),
 			      true);
 
@@ -1723,7 +1701,6 @@ int bch2_data_job(struct bch_fs *c,
 
 		ret = bch2_move_data_phys(c, op->scrub.dev, 0, U64_MAX,
 					  op->scrub.data_types,
-					  NULL,
 					  stats,
 					  writepoint_hashed((unsigned long) current),
 					  false,

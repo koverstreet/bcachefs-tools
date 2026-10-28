@@ -33,7 +33,6 @@ impl MovingContext {
                 &mut *raw.as_mut().get_unchecked_mut(),
                 fs.as_ptr(),
                 std::ptr::null_mut(),
-                std::ptr::null_mut(),
                 wp,
                 wait_on_copygc,
             );

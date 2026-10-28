@@ -154,7 +154,7 @@ impl<'a> MovingCtxt<'a> {
         // SAFETY: bch2_moving_ctxt_init() initializes all of it, in place
         let init = unsafe {
             ::pin_init::pin_init_from_closure(move |slot: *mut c::moving_context| {
-                c::bch2_moving_ctxt_init(slot, fs.as_ptr(), core::ptr::null_mut(),
+                c::bch2_moving_ctxt_init(slot, fs.as_ptr(),
                                          core::ptr::from_ref(stats).cast_mut(),
                                          wp, wait_on_copygc);
                 Ok::<(), AllocError>(())

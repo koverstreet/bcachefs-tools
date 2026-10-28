@@ -77,7 +77,7 @@ int bch2_move_extent(struct moving_context *,
 		     struct btree_iter *, unsigned, struct bkey_s_c);
 
 int bch2_move_data_phys(struct bch_fs *, unsigned, u64, u64, unsigned,
-			struct bch_ratelimit *, struct bch_move_stats *,
+			struct bch_move_stats *,
 			struct write_point_specifier, bool, bool,
 			move_pred_fn, void *);
 
