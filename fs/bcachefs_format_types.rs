@@ -1056,7 +1056,7 @@ pub struct bch_sb_field_ext {
 vstruct!(bch_sb_field_ext, field.u64s, start = 0);
 
 c_bitmask! {
-    LE64_BITMASK(struct bch_sb_field_ext, flags0) {
+    LE64_BITMASK(struct bch_sb_field_ext, flags0), strip BCH_SB_EXT_ {
         BCH_SB_EXT_DEV_READAHEAD(0, 20),
         BCH_SB_EXT_EC_STRIPE_BUF_LIMIT(20, 26),
         BCH_SB_EXT_SCRUB_MAX_REWIND_SECS(26, 38),
