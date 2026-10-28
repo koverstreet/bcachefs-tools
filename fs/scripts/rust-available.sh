@@ -52,6 +52,56 @@ cb=$lib_src/compiler-builtins/compiler-builtins/src/lib.rs
 [ -r "$lib_src/core/src/lib.rs" ] && [ ! -r "$cb" ] &&
 	miss "rust-src has no compiler-builtins (no $cb): rustc $version is too old"
 
+# ...and it has to be this rustc's: another's fails to build core with a wall
+# of errors. Compiling it to find out takes seconds; instead, the metadata of
+# the core rustc ships records a hash of each source file it was built from
+# (md5 by default; sha1 or sha256 if so built), in libcore-*.rmeta, or inside
+# the rlib where there's none. Several files, so that releases sharing one
+# can't pass; any of them a rust-src lacks is skipped. Skipped altogether
+# where rustc has no host core, or grep has no -P.
+#
+# grep matches within lines, -a or not: a hash with a newline byte in it
+# can't match a plain grep. Such a hash is looked for between NULs (-z)
+# instead - or, holding a NUL too, in the metadata with both made \001.
+core_hash_in()
+{
+	hash=$1; shift
+	pat=$(printf '%s' "$hash" | sed 's/../\\x&/g')
+	case " $(printf '%s' "$hash" | sed 's/../& /g')" in
+	*" 0a "*" 00 "*|*" 00 "*" 0a "*)
+		pat=$(printf '%s' "$pat" | sed -e 's/\\x0a/\\x01/g' -e 's/\\x00/\\x01/g')
+		cat "$@" | tr '\n\000' '\001\001' | LC_ALL=C grep -qaP "$pat";;
+	*" 0a "*)
+		LC_ALL=C grep -qazP "$pat" "$@";;
+	*)
+		LC_ALL=C grep -qaP "$pat" "$@";;
+	esac
+}
+
+core_src_matches()
+{
+	host=$("$RUSTC" -vV 2>/dev/null | sed -n 's/^host: //p')
+	set -- "$("$RUSTC" --print sysroot 2>/dev/null)/lib/rustlib/$host/lib"/libcore-*.r*
+	[ -n "$host" ] && [ -r "$1" ] || return 0
+
+	for f in lib.rs intrinsics/mod.rs macros/mod.rs; do
+		[ -r "$lib_src/core/src/$f" ] || continue
+		found=
+		for sum in md5sum sha1sum sha256sum; do
+			hash=$($sum "$lib_src/core/src/$f" 2>/dev/null | cut -d' ' -f1)
+			[ -n "$hash" ] || continue
+			core_hash_in "$hash" "$@" 2>/dev/null
+			case $? in
+			0) found=y; break;;
+			2) return 0;;
+			esac
+		done
+		[ -n "$found" ] || return 1
+	done
+}
+[ -n "$version" ] && [ -r "$lib_src/core/src/lib.rs" ] && ! core_src_matches &&
+	miss "rust-src in $lib_src isn't rustc $version's: its core/src isn't what this rustc's own core was built from${RUST_LIB_SRC:+ - RUST_LIB_SRC for another rustc?}"
+
 case $1 in
 kernel)
 	# The kernel's own availability check first: its reason is the first
