@@ -6,6 +6,7 @@
 #include "alloc/types_gen.h"
 #include "alloc/buckets.h"
 #include "alloc/background_gen.h"
+#include "alloc/capacity_gen.h"
 
 /* Bucket position helpers */
 
@@ -245,16 +246,5 @@ int bch2_alloc_key_to_dev_counters(struct btree_trans *, struct bch_dev *,
 				   const struct bch_alloc_v4 *,
 				   const struct bch_alloc_v4 *, unsigned);
 int bch2_trigger_alloc(struct btree_trans *, struct btree_trigger_op);
-
-void bch2_recalc_capacity(struct bch_fs *);
-unsigned long bch2_fs_ra_pages(struct bch_fs *);
-
-void bch2_dev_allocator_remove(struct bch_fs *, struct bch_dev *);
-void bch2_dev_allocator_add(struct bch_fs *, struct bch_dev *);
-
-void bch2_fs_allocator_background_init(struct bch_fs *);
-
-void bch2_fs_capacity_exit(struct bch_fs *);
-int bch2_fs_capacity_init(struct bch_fs *);
 
 #endif /* _BCACHEFS_ALLOC_BACKGROUND_H */

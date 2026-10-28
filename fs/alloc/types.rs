@@ -290,8 +290,10 @@ pub struct bch_fs_capacity_pcpu {
     pub online_reserved: [u64; c::BCH_REPLICAS_MAX as usize],
 }
 
+/// See alloc/capacity.rs.
+#[pin_data(PinnedDrop)]
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_capacity {
     /* sectors: recalc_capacity()'s, under state_lock, read without it */
     pub capacity: crate::util::projections::Volatile<u64>,
@@ -306,7 +308,10 @@ pub struct bch_fs_capacity {
     pub bucket_size_max: crate::util::projections::Volatile<c_uint>,
 
     pub sectors_available: [AtomicI64; c::BCH_REPLICAS_MAX as usize],
-    pub sectors_available_lock: c::spinlock_t,
+    #[pin]
+    #[init(new_lock!((), "&c->capacity.sectors_available_lock"))]
+    #[c("spinlock_t sectors_available_lock")]
+    pub sectors_available_lock: Lock<c::spinlock_t>,
 
     /*
      * Bit n - 1 set when free space is lopsided enough that where copies
@@ -324,11 +329,14 @@ pub struct bch_fs_capacity {
     pub placement_allowance: u64,
 
     #[c("struct bch_fs_capacity_pcpu __percpu *pcpu")]
+    #[init(PerCpu::init())]
     pub pcpu: PerCpu<c::bch_fs_capacity_pcpu>,
 
-    pub mark_lock: c::percpu_rwsem_noio,
+    #[pin]
+    #[init(new_lock!((), "&c->capacity.mark_lock"))]
+    #[c("struct percpu_rwsem_noio mark_lock")]
+    pub mark_lock: crate::locking::PercpuRwsemNoio,
 }
-c_default!(bch_fs_capacity);
 
 #[placed(Fs.allocator)]
 #[pin_data]
@@ -344,7 +352,10 @@ pub struct bch_fs_allocator {
     /* fs-wide allocator wake generation; see bch2_alloc_wake_all() */
     pub wake_all_counter: AtomicI32,
 
-    pub freelist_lock: c::spinlock_t,
+    #[pin]
+    #[init(new_lock!((), "&c->allocator.freelist_lock"))]
+    #[c("spinlock_t freelist_lock")]
+    pub freelist_lock: Lock<c::spinlock_t>,
     pub freelist_wait: c::closure_waitlist,
     pub last_stuck: c_ulong,
 

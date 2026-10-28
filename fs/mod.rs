@@ -66,6 +66,7 @@ pub mod alloc {
     pub mod background;
     pub mod backpointers;
     pub mod buckets;
+    pub mod capacity;
     pub mod check;
     pub mod check_backpointers;
     pub mod check_data;

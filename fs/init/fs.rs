@@ -3,7 +3,7 @@ use crate::btree::bkey::BkeyI;
 use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
-use crate::locking::{Guard, Lock, MutexNoio, Noio, PercpuRwsemNoio};
+use crate::locking::{Guard, MutexNoio, Noio, PercpuRwsemNoio};
 use crate::util::Printbuf;
 use crate::util::enumerated_ref::EnumeratedRef;
 use crate::util::refcount::RefGuard;
@@ -38,7 +38,7 @@ impl Drop for StateLockRead<'_> {
 impl StateLockRead<'_> {
     /// Recompute the filesystem's capacity from its devices.
     pub fn recalc_capacity(&self) {
-        unsafe { c::bch2_recalc_capacity(self.0.as_ptr()) }
+        crate::alloc::capacity::recalc_capacity(self.0)
     }
 }
 
@@ -192,9 +192,8 @@ impl Fs {
         unsafe { self.sb.held() }
     }
 
-    /// c->capacity.mark_lock, C's - C initializes and frees it.
     pub fn mark_lock(&self) -> &PercpuRwsemNoio {
-        Lock::from_c(&self.capacity.mark_lock)
+        &self.capacity.mark_lock
     }
 
     pub fn mark_lock_assert_held(&self) {
@@ -389,13 +388,6 @@ impl Fs {
 
     pub fn read_only(&self) {
         unsafe { c::bch2_fs_read_only(self.as_ptr()) };
-    }
-
-    pub fn dev_allocator_set_rw(&self, dev: u32, rw: bool) {
-        let ca = self.devs[dev as usize].as_ptr();
-        if !ca.is_null() {
-            unsafe { c::bch2_dev_allocator_set_rw(self.as_ptr(), ca, rw) };
-        }
     }
 
     pub fn journal_flush_all_pins(&self) {

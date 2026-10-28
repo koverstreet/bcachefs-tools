@@ -730,7 +730,6 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_fs_compress_exit(c);
 	bch2_io_clock_exit(&c->io_clock[WRITE]);
 	bch2_io_clock_exit(&c->io_clock[READ]);
-	bch2_fs_capacity_exit(c);
 	bch2_fs_btree_exit(c);
 	bch2_fs_accounting_exit(c);
 
@@ -1208,7 +1207,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	for (unsigned i = 0; i < BCH_TIME_STAT_NR; i++)
 		bch2_time_stats_init(&c->times[i]);
 
-	bch2_fs_allocator_background_init(c);
 	bch2_fs_allocator_foreground_init(c);
 	bch2_fs_btree_gc_init_early(c);
 	bch2_fs_btree_init_early(c);
@@ -1234,8 +1232,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	c->counters.now = __alloc_percpu(sizeof(u64) * BCH_COUNTER_NR, sizeof(u64));
 	if (!c->counters.now)
 		return -BCH_ERR_ENOMEM_fs_counters_init;
-
-	try(bch2_fs_capacity_init(c));
 
 	scoped_guard(mutex_noio, &c->sb_lock) {
 		try(bch2_sb_to_fs(c, sb));

@@ -459,7 +459,7 @@ impl Fs {
     /// a bucket holds: bch2_bucket_is_open_safe().
     pub fn bucket_is_open_safe(&self, dev: u32, bucket: u64) -> bool {
         self.bucket_is_open(dev, bucket) || {
-            let _freelist = crate::locking::Lock::from_c(&self.allocator.freelist_lock).lock();
+            let _freelist = self.allocator.freelist_lock.lock();
             self.bucket_is_open(dev, bucket)
         }
     }

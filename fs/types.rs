@@ -724,6 +724,8 @@ pub struct Fs {
     #[init(RustOnly::new(crate::new_lock!(crate::alloc::replicas::ReplicasCpu::new(), "&c->replicas")))]
     pub(crate) replicas: rust_only!(PercpuRwsemNoio<crate::alloc::replicas::ReplicasCpu>),
     pub disk_groups: c::DiskGroups,
+    #[pin]
+    #[init(c::bch_fs_capacity::init())]
     pub capacity: c::bch_fs_capacity,
     #[pin]
     pub allocator: c::bch_fs_allocator,
