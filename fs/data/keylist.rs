@@ -37,6 +37,26 @@ use core::mem::size_of;
 use cstruct_macros::c_export;
 
 impl c::keylist {
+    /// # Safety
+    /// @inline_keys is a buffer that outlives the list, keys written at its
+    /// top() staying in it.
+    pub unsafe fn init(&mut self, inline_keys: *mut u64) {
+        self.keys_p = inline_keys;
+        self.top_p = inline_keys;
+    }
+
+    pub fn top(&self) -> *mut c::bkey_i {
+        self.top_p.cast()
+    }
+
+    /// # Safety
+    /// A whole key is at top(), in the list's buffer.
+    pub unsafe fn push(&mut self) {
+        // SAFETY: the caller's
+        let u64s = unsafe { (*self.top()).k.u64s };
+        self.top_p = unsafe { self.top_p.add(u64s.into()) };
+    }
+
     pub fn u64s(&self) -> usize {
         (self.top_p.addr() - self.keys_p.addr()) / size_of::<u64>()
     }

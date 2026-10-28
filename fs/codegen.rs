@@ -103,7 +103,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "crc32c", "crc64_be", "sha256", "anon_inode_getfile",
     "mnt_want_write_file", "mnt_drop_write_file", "bdev_freeze", "bdev_thaw",
     "__genradix_ptr", "__genradix_ptr_alloc", "__genradix_iter_peek", "__genradix_free",
-    "closure_get", "closure_get_not_zero", "closure_put", "closure_init_stack", "closure_sync",
+    "closure_get", "closure_get_not_zero", "closure_put", "closure_init_stack", "closure_sync", "closure_call",
     "bch2_closure_wait", "closure_wake_up", "closure_nr_remaining",
     "rust_page_folio", "rust_folio_page_idx", "rust_folio_size",
     "rust_page_highmem", "rust_page_address",

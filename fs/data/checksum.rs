@@ -299,6 +299,23 @@ impl c::bch_csum_opt {
 }
 
 impl Fs {
+    /// The checksum type data written with @opts gets - none for nocow, which
+    /// can't checksum what it overwrites in place, and encrypted on an
+    /// encrypted filesystem.
+    pub fn data_checksum_type(&self, opts: &c::bch_inode_opts) -> c::bch_csum_type {
+        if opts.nocow != 0 {
+            return c::bch_csum_type::BCH_CSUM_none;
+        }
+        if self.sb.encryption_type.get() != 0 {
+            return if self.opts().wide_macs != 0 {
+                c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128
+            } else {
+                c::bch_csum_type::BCH_CSUM_chacha20_poly1305_80
+            };
+        }
+        c::bch_csum_opt(opts.data_checksum.into()).to_type(self, true)
+    }
+
     /// The checksum type data reconciled to @r is written with - encrypted,
     /// whatever @r says, on an encrypted filesystem: bch2_data_checksum_type_rb().
     pub fn data_checksum_type_rb(&self, r: &c::bch_extent_reconcile) -> c::bch_csum_type {

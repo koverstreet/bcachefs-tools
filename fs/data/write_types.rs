@@ -229,6 +229,45 @@ pub struct SectorOverwrites {
     pub new_nr_replicas:    u32,
 }
 
+impl c::bch_write_op {
+    /// # Safety
+    /// @fs outlives the op, which holds it as 'static, as C's struct does:
+    /// the op's done before the filesystem goes. Its reservation is
+    /// overwritten without being put: there's nothing in it yet.
+    /// # Safety
+    /// @fs outlives the op. The reservation is overwritten without being put,
+    /// so it must hold nothing yet.
+    pub unsafe fn init(&mut self, fs: &Fs, opts: c::bch_inode_opts) {
+        // SAFETY: the caller's
+        let fs: &'static Fs = unsafe { Fs::borrow_raw(fs.as_ptr()) };
+
+        self.c          = fs;
+        self.end_io     = None;
+        self.flags      = 0;
+        self.io_error   = 0;
+        self.written    = 0;
+        self.error      = 0;
+        self.bits.set_csum_type(fs.data_checksum_type(&opts).0 as u8);
+        self.bits.set_compression_opt(opts.compression);
+        self.bits.set_nr_replicas(0);
+        self.bits.set_watermark(c::bch_watermark::BCH_WATERMARK_normal as u8);
+        self.bits.set_incompressible(0);
+        self.open_buckets.nr = 0;
+        self.devs_have.nr = 0;
+        self.target     = 0;
+        self.opts       = opts;
+        self.subvol     = 0;
+        self.pos        = crate::POS_MAX;
+        self.version    = c::bversion::default();
+        self.write_point = c::write_point_specifier { v: 0 };
+        // SAFETY: the caller's - not put, and not dropped
+        unsafe { core::ptr::write(&mut self.res, c::DiskReservation::new(fs)) };
+        self.new_i_size = u64::MAX;
+        self.i_sectors_delta = 0;
+        self.devs_need_flush = core::ptr::null_mut();
+    }
+}
+
 impl TransAttempt<'_, '_> {
     /// @new's SectorOverwrites, from @iter at @new's start.
     pub fn sum_sector_overwrites(&self, iter: &BtreeIter<'_>, new: &BkeyI) -> Result<SectorOverwrites, BchError> {

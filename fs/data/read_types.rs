@@ -107,6 +107,23 @@ nest! {
 }
 c_default!(bch_read_bio);
 
+impl c::bch_read_bio {
+    /// Initializes all but the bio, which is the caller's.
+    pub fn init(&mut self, fs: &crate::fs::Fs, opts: c::bch_inode_opts, end_io: c::bio_end_io_t) {
+        self.start_time   = crate::util::kernel::local_clock();
+        self.c            = fs.as_ptr();
+        self.state._state = 0;
+        self.flags        = 0;
+        self.ret          = 0;
+        self.failed       = core::ptr::null_mut();
+        self.err_report   = core::ptr::null_mut();
+        self.opts         = opts;
+        self.bio.bi_end_io = end_io;
+        #[cfg(all(__KERNEL__, CONFIG_DEBUG_FS))]
+        { self.list_idx = 0; }
+    }
+}
+
 c_extern! {
     #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
     pub fn bch2_dev_congested_to_text(out: *mut c::printbuf, ca: *mut c::bch_dev);

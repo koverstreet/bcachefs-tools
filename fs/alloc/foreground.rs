@@ -100,6 +100,13 @@ impl OpenBucketRef {
         self.0.as_ptr()
     }
 
+    /// Set under the write point's lock, as each write takes a pin.
+    pub fn set_data_type(&self, t: c::bch_data_type) {
+        // SAFETY: a plain field, written by the write point's holder - its
+        // lock - and read by the bucket's next user once it has it
+        unsafe { (*self.raw()).bits.set_data_type(t) }
+    }
+
     pub fn idx(&self) -> c::OpenBucketIdx {
         // SAFETY: its place's - written as the table was built, and fixed
         // since - and not 0: an open bucket isn't slot 0, the sentinel, which
