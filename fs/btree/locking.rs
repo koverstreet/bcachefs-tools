@@ -17,4 +17,14 @@ impl<R: RawTryLock, G, P> Lock<R, G, P> {
             None    => t.drop_locks_do(|| Ok(self.lock())),
         }
     }
+
+    /// lock_trans(), the btree locks left dropped if they were: for a caller
+    /// taking more than one, and relocking once after -
+    /// bch2_trans_mutex_lock_norelock().
+    pub fn lock_trans_norelock(&self, t: &TransAttempt<'_, '_>) -> Guard<'_, R, G, P> {
+        self.try_lock().unwrap_or_else(|| {
+            t.unlock();
+            self.lock()
+        })
+    }
 }
