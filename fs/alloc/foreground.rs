@@ -32,7 +32,7 @@ use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::errcode::{errptr_to_result, ret_to_result_void, BchError};
 use crate::fs::Fs;
-use crate::util::closure::StackClosure;
+use crate::util::closure::{closure_wait, StackClosure};
 use crate::util::ffi::Opaque;
 use crate::util::hash::{hash_64, Fold};
 use crate::util::place::{self, Placed};
@@ -379,6 +379,23 @@ impl<'a, 't> TransAttempt<'a, 't> {
             return fs.throw(crate::c::bch_errcode::BCH_ERR_emergency_ro);
         }
         Ok(())
+    }
+}
+
+impl c::alloc_request {
+    /// The devices already holding a copy, if its caller said.
+    pub fn devs_have(&self) -> Option<&c::bch_devs_list> {
+        // SAFETY: null, or the caller's list, which outlives the request
+        unsafe { self.devs_have.as_ref() }
+    }
+
+    /// Its closure waiting on @list, to retry when it's woken - or already
+    /// waiting: false if it has none, it's not to block.
+    pub fn closure_wait(&self, list: &c::closure_waitlist) -> bool {
+        NonNull::new(self.cl).inspect(|&cl| {
+            // SAFETY: its caller's closure, which outlives the request
+            unsafe { closure_wait(list, cl) };
+        }).is_some()
     }
 }
 
