@@ -93,7 +93,8 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "rust_page_folio", "rust_folio_page_idx", "rust_folio_size",
     "rust_page_highmem", "rust_page_address",
     "rust_refcount_inc_not_zero", "rust_poll_wait", "rust_fault_in_writeable",
-    "rust_fault_in_readable", "totalram_pages", "set_freezable", "freezing", "try_to_freeze",
+    "rust_fault_in_readable", "rust_filemap_write_and_wait_range",
+    "totalram_pages", "set_freezable", "freezing", "try_to_freeze",
     "i_uid_write", "i_gid_write", "i_size_read", "i_size_write", "uuid_to_fsid",
     "fileattr_fill_xflags", "in_compat_syscall", "dir_emit_dots", "finish_open_simple",
     "i_user_ns", "inode_get_atime", "inode_get_mtime", "inode_get_ctime",
@@ -123,7 +124,7 @@ const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "
 /// copy would be a different type - and bindgen, stopped at one, doesn't
 /// follow its fields into the rest of the header.
 const BLOCKLIST_TYPE: &[&str] = &["inode", "file", "dir_context", "user_namespace", "kqid",
-                                     "fiemap_extent_info"];
+                                     "fiemap_extent_info", "address_space"];
 const ALLOWLIST_VAR: &[&str] = &["GENRADIX_NODE_SIZE", "nop_posix_acl_access", "nop_posix_acl_default",
                                  "ACL_USER", "ACL_GROUP", "LOOKUP_FOLLOW", "FIEMAP_EXTENT_.*",
                                  "GOLDEN_RATIO_64", "RUST_CONST_HELPER_.*",

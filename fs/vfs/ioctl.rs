@@ -28,6 +28,7 @@ use crate::util::kernel::{capable, Capability};
 use crate::util::log::LogMsg;
 use crate::vfs::inode::{InodeInfo, InodeRef};
 use crate::vfs::mount::WriteAccess;
+use crate::vfs::vfs_inode::VfsInode;
 use crate::{bch_err, btree_trans, prt};
 use core::marker::PhantomData;
 use core::ptr::read_volatile;
@@ -66,15 +67,13 @@ c_extern! {
     pub fn __bch2_fs_file_ioctl(file: *mut c::file, cmd: c_uint, arg: c_ulong) -> c_long;
 }
 
-fn file_ioctl(file: &File, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError> {
-    // SAFETY: an open file of ours: its inode's referenced while it's open
-    let inode = unsafe { InodeInfo::from_inode((*file.as_ptr()).f_inode) };
+fn file_ioctl(file: &File, inode: &InodeInfo, cmd: c_uint, user: UserPtr) -> Result<c_long, BchError> {
     let fs = inode.fs();
     let subvol = inode.inum().subvol as u32;
 
     match cmd {
         <FS_IOC_GETVERSION as Ioctl>::OPCODE =>
-            output::<FS_IOC_GETVERSION>(user, || Ok(unsafe { (*inode.vinode()).i_generation })),
+            output::<FS_IOC_GETVERSION>(user, || Ok(inode.vfs().generation())),
         <FS_IOC_GETFSLABEL as Ioctl>::OPCODE =>
             arg::<FS_IOC_GETFSLABEL, _>(user, |a| get_label(fs, a)),
         <FS_IOC_SETFSLABEL as Ioctl>::OPCODE =>
@@ -84,10 +83,10 @@ fn file_ioctl(file: &File, cmd: c_uint, user: UserPtr) -> Result<c_long, BchErro
         <c::BCHFS_IOC_GET_DAMAGE as Ioctl>::OPCODE =>
             vstruct::<c::BCHFS_IOC_GET_DAMAGE, _, _>(user, |a| get_damage(fs, inode.inum(), a)),
         <c::BCHFS_IOC_CLEAR_DAMAGE as Ioctl>::OPCODE =>
-            no_arg::<c::BCHFS_IOC_CLEAR_DAMAGE, _>(|| clear_damage(file, &inode)),
+            no_arg::<c::BCHFS_IOC_CLEAR_DAMAGE, _>(|| clear_damage(file, inode)),
         <c::BCHFS_IOC_READDIR_FLAGS as Ioctl>::OPCODE => {
             let (dir, idmap) = (inode.inum(), MntIdmap::of(file));
-            let is_dir = unsafe { (*inode.vinode()).i_mode } as u32 & c::S_IFMT == c::S_IFDIR;
+            let is_dir = inode.vfs().is_dir();
             arg::<c::BCHFS_IOC_READDIR_FLAGS, _>(user, |a| readdir_flags(fs, dir, is_dir,
                 |t, n| path_accessible(t, idmap, n, dir), a))
         }
@@ -107,14 +106,14 @@ fn file_ioctl(file: &File, cmd: c_uint, user: UserPtr) -> Result<c_long, BchErro
                 reflink_p_set_may_update_opts(fs, inode.inum())),
         <c::BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS as Ioctl>::OPCODE =>
             no_arg::<c::BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS, _>(|| {
-                if !MntIdmap::of(file).owner_or_capable(&inode) && !capable(Capability::SysAdmin) {
+                if !MntIdmap::of(file).owner_or_capable(inode.vfs()) && !capable(Capability::SysAdmin) {
                     return fs.throw(bch_errcode::BCH_ERR_EPERM_non_admin_or_owner);
                 }
                 reflink_p_propagate_opts(fs, inode.inum())
             }),
         <c::BCHFS_IOC_UNPOISON as Ioctl>::OPCODE =>
             input::<c::BCHFS_IOC_UNPOISON, _>(user, |a| unpoison(fs, inode.inum(),
-                || MntIdmap::of(file).owner_or_capable(&inode), a)),
+                || MntIdmap::of(file).owner_or_capable(inode.vfs()), a)),
         _ => {
             let ret = unsafe { __bch2_fs_file_ioctl(file.as_ptr(), cmd, user.as_mut_ptr() as c_ulong) };
             if ret < 0 { Err(BchError::from_raw(-ret as i32)) } else { Ok(ret) }
@@ -126,7 +125,9 @@ fn file_ioctl(file: &File, cmd: c_uint, user: UserPtr) -> Result<c_long, BchErro
 /// @file is an open file of ours.
 #[c_export]
 pub unsafe fn bch2_fs_file_ioctl(file: *mut c::file, cmd: c_uint, arg: c_ulong) -> c_long {
-    ioctl_ret(file_ioctl(unsafe { File::from_raw(file) }, cmd, UserPtr::from_addr(arg as usize)))
+    // SAFETY: an open file of ours: its inode's referenced while it's open
+    let inode = unsafe { InodeInfo::from_inode((*file).f_inode) };
+    ioctl_ret(file_ioctl(unsafe { File::from_raw(file) }, inode, cmd, UserPtr::from_addr(arg as usize)))
 }
 
 /* The handlers */
@@ -155,14 +156,14 @@ impl<'f> MntIdmap<'f> {
     }
 
     /// Whether the caller owns @inode, or has CAP_FOWNER.
-    fn owner_or_capable(self, inode: &InodeInfo) -> bool {
-        unsafe { c::inode_owner_or_capable(self.0, inode.vinode()) }
+    fn owner_or_capable(self, inode: &VfsInode) -> bool {
+        unsafe { c::inode_owner_or_capable(self.0, inode.as_ptr()) }
     }
 
     /// Whether the caller has @mask - MAY_* - on @inode, by the whole VFS
     /// stack: ACLs and LSMs too.
-    fn permission(self, inode: &InodeInfo, mask: u32) -> bool {
-        unsafe { c::inode_permission(self.0, inode.vinode(), mask as c_int) == 0 }
+    fn permission(self, inode: &VfsInode, mask: u32) -> bool {
+        unsafe { c::inode_permission(self.0, inode.as_ptr(), mask as c_int) == 0 }
     }
 }
 
@@ -223,7 +224,7 @@ fn goingdown(fs: &Fs, user: UserArg<u32>) -> Result<(), BchError> {
 
 fn clear_damage(file: &File, inode: &InodeInfo) -> Result<(), BchError> {
     // forensic metadata: erasing it takes ownership, as chattr does
-    if !MntIdmap::of(file).owner_or_capable(inode) {
+    if !MntIdmap::of(file).owner_or_capable(inode.vfs()) {
         return Err(c::EPERM.into());
     }
 
@@ -241,11 +242,11 @@ fn clear_damage(file: &File, inode: &InodeInfo) -> Result<(), BchError> {
 /// it, or an inode's gone.
 fn path_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
                    n: c::subvol_inum, dir: c::subvol_inum) -> Result<bool, BchError> {
-    let get = |inum| match InodeRef::get_trans(t, inum) {
+    let get = |inum| match InodeInfo::get_trans(t, inum) {
         Err(e) if e.matches(c::ENOENT) => Ok(None),
         r => r.map(Some),
     };
-    let parent = |i: &InodeRef, inum| namei::parent_inum(inum, &i.info().inode());
+    let parent = |i: &InodeRef, inum| namei::parent_inum(inum, &i.inode());
 
     let Some(inode) = get(n)? else { return Ok(false) };
     let mut p = parent(&inode, n);
@@ -271,12 +272,11 @@ fn path_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
 fn subvol_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
                      root: c::subvol_inum, parent: u32) -> Result<bool, BchError> {
     let up = |i: &InodeRef| {
-        let info = i.info();
-        let bi = info.inode();
+        let bi = i.inode();
         (bi.bi_subvol, bi.bi_parent_subvol, bi.bi_dir)
     };
 
-    let (_, parent_sv, mut dir) = up(&InodeRef::get_trans(t, root)?);
+    let (_, parent_sv, mut dir) = up(&InodeInfo::get_trans(t, root)?);
     if parent_sv == 0 {
         return Err(c::EIO.into());
     }
@@ -289,7 +289,7 @@ fn subvol_accessible(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>,
      */
     let mut dirs: KVVec<InodeRef> = KVVec::new();
     while dir != 0 {
-        let i = InodeRef::get_trans(t, c::subvol_inum { subvol: parent_sv.into(), inum: dir })?;
+        let i = InodeInfo::get_trans(t, c::subvol_inum { subvol: parent_sv.into(), inum: dir })?;
         let (subvol, _, next) = up(&i);
         dirs.push(i, GFP_KERNEL)?;
         if subvol == parent {
@@ -308,7 +308,7 @@ fn permitted(t: &TransAttempt<'_, '_>, idmap: MntIdmap<'_>, dirs: &[InodeRef], f
     t.unlock();
     for (k, i) in dirs.iter().enumerate() {
         let mask = if k == 0 { first } else { c::MAY_EXEC };
-        if !idmap.permission(i.info(), mask) {
+        if !idmap.permission(i.vfs(), mask) {
             return Ok(false);
         }
     }

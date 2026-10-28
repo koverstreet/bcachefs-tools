@@ -9,6 +9,9 @@
 //! are serialized by the inode's btree position, which a transaction still
 //! holds locked after its commit, through update_after_write().
 //!
+//! Its struct inode is @v, a VfsInode (vfs_inode.rs): what Rust does of the
+//! VFS inode, it does through that.
+//!
 //! ei_update_lock, UpdateLock, serializes what the btree doesn't: a project
 //! quota transfer and the inode write that goes with it - set_projid(),
 //! rename's and the reinherit ioctl's - so the inode and its quota agree on
@@ -25,6 +28,9 @@ use crate::errcode::{errptr_to_result, ret_to_c, ret_to_result_void as ret_to_re
 use crate::fs::Fs;
 use crate::locking::{Guard, Lock};
 use cstruct_macros::c_extern;
+use kernel::sync::aref::{ARef, AlwaysRefCounted};
+
+use super::vfs_inode::VfsInode;
 
 pub use c::InodeInfo;
 
@@ -33,25 +39,16 @@ c_extern! {
                                     func: *const crate::util::ffi::c_char) -> *mut c::bch_inode_info;
 }
 
-/// A VFS inode Rust has a reference on, put - iput() - when it drops.
-pub struct InodeRef(NonNull<InodeInfo>);
+pub type InodeRef = ARef<InodeInfo>;
 
-impl InodeRef {
-    /// @inum's, looked up in @t, the inode cache first.
-    pub fn get_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<Self, BchError> {
-        let ei = unsafe { bch2_vfs_inode_get_trans(t.raw(), inum, crate::c_function_name!().as_ptr().cast()) };
-        Ok(InodeRef(errptr_to_result(NonNull::new(ei).expect("an inode, or an error"))?))
+// SAFETY: its count is its struct inode's, which is first
+unsafe impl AlwaysRefCounted for InodeInfo {
+    fn inc_ref(&self) {
+        self.vfs().inc_ref()
     }
 
-    pub fn info(&self) -> &InodeInfo {
-        // SAFETY: ours, referenced
-        unsafe { self.0.as_ref() }
-    }
-}
-
-impl Drop for InodeRef {
-    fn drop(&mut self) {
-        unsafe { c::iput(self.info().vinode()) }
+    unsafe fn dec_ref(obj: NonNull<Self>) {
+        unsafe { VfsInode::dec_ref(obj.cast()) }
     }
 }
 
@@ -77,6 +74,22 @@ impl InodeInfo {
         unsafe { &*vinode.cast::<InodeInfo>() }
     }
 
+    /// An inode C returns referenced, or an ERR_PTR(): the reference ours
+    /// now.
+    ///
+    /// # Safety
+    /// @ei is one of ours with a reference the caller hands over, or an
+    /// ERR_PTR().
+    pub(crate) unsafe fn from_c(ei: *mut c::bch_inode_info) -> Result<InodeRef, BchError> {
+        let ei = errptr_to_result(NonNull::new(ei).expect("an inode, or an error"))?;
+        Ok(unsafe { ARef::from_raw(ei) })
+    }
+
+    /// @inum's, looked up in @t, the inode cache first.
+    pub fn get_trans(t: &TransAttempt<'_, '_>, inum: c::subvol_inum) -> Result<InodeRef, BchError> {
+        unsafe { Self::from_c(bch2_vfs_inode_get_trans(t.raw(), inum, crate::c_function_name!().as_ptr().cast())) }
+    }
+
     pub fn raw(&self) -> *mut c::bch_inode_info {
         core::ptr::from_ref(self).cast_mut()
     }
@@ -87,9 +100,11 @@ impl InodeInfo {
     }
 
     pub fn fs(&self) -> &Fs {
-        // SAFETY: one of ours: its superblock's s_fs_info is our filesystem,
-        // which outlives its inodes
-        unsafe { Fs::borrow_raw((*(*self.vinode()).i_sb).s_fs_info.cast()) }
+        self.vfs().sb().fs()
+    }
+
+    pub fn vfs(&self) -> &VfsInode {
+        &self.v
     }
 
     pub fn inum(&self) -> c::subvol_inum {

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! The VFS's struct super_block, for Rust: the filesystem's, once it's
-//! mounted - Fs::vfs_super().
+//! mounted - Fs::vfs_super(), or an inode's, VfsInode::sb(). A SuperBlock is
+//! always one of ours: its s_fs_info is its Fs, set before it has an inode
+//! and live until the last is evicted.
 
 
 use crate::c;
@@ -22,6 +24,10 @@ impl Fs {
 impl SuperBlock {
     fn as_ptr(&self) -> *mut c::super_block {
         self.0.as_ptr()
+    }
+
+    pub fn fs(&self) -> &Fs {
+        unsafe { Fs::borrow_raw((*self.as_ptr()).s_fs_info.cast()) }
     }
 
     pub fn dev(&self) -> c::dev_t {

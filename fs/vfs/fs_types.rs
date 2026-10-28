@@ -6,7 +6,7 @@ use crate::cstructs::c;
 use crate::locking::Lock;
 use crate::types::c_default;
 use crate::util::bitmap::AtomicULong;
-use crate::util::ffi::Opaque;
+use crate::vfs::vfs_inode::VfsInode;
 use core::ffi::{c_uint, c_ulong};
 #[cfg(not(NO_BCACHEFS_FS))]
 use core::ffi::{c_int, c_void};
@@ -17,7 +17,7 @@ use cstruct_macros::{c_extern, c_typedef};
 /*
  * The VFS's inode, and what we keep beside it. Shared - the kernel and C use it
  * while Rust has a &InodeInfo - so what Rust touches is typed for that: @v,
- * the struct inode the kernel writes, an Opaque; ei_inode a
+ * the struct inode the kernel writes, a VfsInode; ei_inode a
  * VolatileInodeUnpacked; ei_update_lock C's mutex, borrowed as a Lock;
  * ei_quota_lock a Lock over what it protects.
  */
@@ -26,7 +26,7 @@ use cstruct_macros::{c_extern, c_typedef};
 #[c_name(bch_inode_info)]
 pub struct InodeInfo {
     #[c("struct inode v")]
-    pub v: Opaque<c::inode>,
+    pub v: VfsInode,
     pub hash: c::rhash_head,
     /*
      * Read it with inode_inum(); the layout is private so that

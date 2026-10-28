@@ -115,6 +115,12 @@ static inline size_t rust_fault_in_readable(const char __user *uaddr, size_t siz
 	return fault_in_readable(uaddr, size);
 }
 
+static inline int rust_filemap_write_and_wait_range(struct address_space *mapping,
+						    loff_t start, loff_t end)
+{
+	return filemap_write_and_wait_range(mapping, start, end);
+}
+
 #ifdef CONFIG_COMPAT
 /*
  * compat_ptr()'s compat_uptr_t is the kernel crate's only with CONFIG_COMPAT:

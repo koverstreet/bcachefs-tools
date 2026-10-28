@@ -146,16 +146,17 @@ pub mod locking;
 pub mod typeinfo;
 pub mod util;
 /// The VFS, for its Rust entry points - kernel only, as C's
-/// #ifndef NO_BCACHEFS_FS.
-#[cfg(kernel)]
+/// #ifndef NO_BCACHEFS_FS - but for the struct inode type bch_inode_info
+/// holds, which both builds lay out.
 pub mod vfs {
-    pub mod dentry;
-    pub mod iattr;
-    pub mod inode;
-    pub mod mount;
-    pub mod status_fd;
-    pub mod super_block;
-    pub mod ioctl;
+    #[cfg(kernel)] pub mod dentry;
+    #[cfg(kernel)] pub mod iattr;
+    #[cfg(kernel)] pub mod inode;
+    #[cfg(kernel)] pub mod mount;
+    #[cfg(kernel)] pub mod status_fd;
+    #[cfg(kernel)] pub mod super_block;
+    #[cfg(kernel)] pub mod ioctl;
+    pub mod vfs_inode;
 }
 #[path = "fs/xattr.rs"]        pub mod xattr;
 pub mod data {
