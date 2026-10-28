@@ -92,6 +92,9 @@ const __poll_t RUST_CONST_HELPER_EPOLLHUP		= EPOLLHUP;
 
 /* lz4's compression workspace: a sizeof() */
 const size_t RUST_CONST_HELPER_LZ4_MEM_COMPRESS		= LZ4_MEM_COMPRESS;
+
+/* jiffies a second, util/kernel.rs's */
+const unsigned long RUST_CONST_HELPER_HZ		= HZ;
 #endif
 
 static inline struct folio *rust_page_folio(struct page *page)

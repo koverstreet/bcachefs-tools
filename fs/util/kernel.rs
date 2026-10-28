@@ -92,6 +92,14 @@ pub fn totalram_bytes() -> usize {
     unsafe { c::totalram_pages() as usize * PAGE_SIZE }
 }
 
+/// Jiffies a second.
+pub const HZ: core::ffi::c_ulong = c::HZ as core::ffi::c_ulong;
+
+/// Whether jiffies @a is after @b, across a wrap: time_after().
+pub fn time_after(a: core::ffi::c_ulong, b: core::ffi::c_ulong) -> bool {
+    (b.wrapping_sub(a) as core::ffi::c_long) < 0
+}
+
 /// The kernel's binding returns its own c_ulong, usize; the same width as
 /// core's.
 pub fn nsecs_to_jiffies(ns: u64) -> core::ffi::c_ulong {
