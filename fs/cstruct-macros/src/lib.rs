@@ -1145,6 +1145,7 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
     }
 
     if let Some(name) = &e.name {
+        out.push_str(&names_gen(e, name));
         out.push_str(&typeinfo::info(name, "Enum", ""));
 
         // Zeroed is a value of it - so a struct holding one can be Zeroable:
@@ -1166,6 +1167,58 @@ fn c_enum_gen(e: &CEnumDef, text: &str) -> TokenStream {
     nums.extend(names.iter().map(|v| format!("{v} as u64")));
     out.push_str(&record(text, &nums));
     tokens(&out)
+}
+
+/// An enum from an x-macro list - with labelled variants - is named by the
+/// list: util/names.rs's Names, its labelled variants' names and values, a
+/// flags type's bits. An open or flags one prints through it, unless it's
+/// #[own_to_text]; a closed one derives ToText.
+fn names_gen(e: &CEnumDef, name: &str) -> String {
+    let labelled: Vec<(&str, &str)> = e.variants.iter()
+        .filter_map(|v| v.label.as_deref().map(|l| (l, v.name.as_str())))
+        .collect();
+    if labelled.is_empty() {
+        return String::new();
+    }
+
+    let n = "crate::util::names";
+    let index = |v: &str| match e.kind {
+        CEnumKind::Flags => format!("{n}::bit({v} as u64)"),
+        _                => format!("{v} as u64"),
+    };
+    let entries: Vec<String> = labelled.iter().map(|(l, v)| format!("({l:?}, {})", index(v))).collect();
+
+    let mut out = format!(
+        "impl {n}::Names for {name} {{\n\
+         \x20   const ENTRIES: &'static [(&'static str, u64)] = &[{}];\n\
+         }}\n",
+        entries.join(", "));
+
+    let to_text = match e.kind {
+        _ if e.own_to_text => None,
+        CEnumKind::Closed  => None,
+        CEnumKind::Open    => Some(format!(
+            "{n}::prt_name(out, <Self as {n}::Names>::ENTRIES, self.0 as u64)")),
+        CEnumKind::Flags   => Some(format!(
+            "{n}::prt_flags(out, <Self as {n}::Names>::ENTRIES, self.bits() as u64)")),
+    };
+    // A closed enum's derive gives it name(); an open one's is here
+    if e.kind == CEnumKind::Open && !e.own_to_text {
+        out.push_str(&format!(
+            "impl {name} {{\n\
+             \x20   /// Its name: None for a value this version has none for.\n\
+             \x20   #[inline]\n\
+             \x20   pub fn name(self) -> Option<&'static str> {{ {n}::name_of(<Self as {n}::Names>::ENTRIES, self.0 as u64) }}\n\
+             }}\n"));
+    }
+    if let Some(body) = to_text {
+        out.push_str(&format!(
+            "impl crate::util::ToText for {name} {{\n\
+             \x20   #[inline]\n\
+             \x20   fn to_text(&self, out: &mut crate::util::Printbuf) {{ {body} }}\n\
+             }}\n"));
+    }
+    out
 }
 
 /// A type alias - C's typedef: c_typedef! { pub type NAME = TYPE; }, with

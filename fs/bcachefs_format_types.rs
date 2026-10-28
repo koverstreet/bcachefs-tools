@@ -1241,6 +1241,7 @@ c_xmacro! {
 
 c_enum! {
     #[open]
+    #[own_to_text]
     pub enum bcachefs_metadata_version: u32 {
         bcachefs_metadata_version_min = 9,
         BCH_METADATA_VERSIONS(t, n, ..) => bcachefs_metadata_version_ ## t = n,

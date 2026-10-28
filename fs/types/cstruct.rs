@@ -481,6 +481,9 @@ pub struct CEnumDef {
     /// place before the written one at its index - expand_enum_list() makes
     /// them, a list at a time.
     pub from:     Vec<(usize, CFromList)>,
+    /// #[own_to_text]: it prints as more than its name - an open or flags
+    /// enum c_enum! otherwise gives ToText.
+    pub own_to_text: bool,
 }
 
 /// A c_enum! variant. Its value is Rust source, or none for the one after the
@@ -1712,6 +1715,7 @@ fn parse_ioctl(body: &[Tok], cfg: Option<Cfg>) -> Result<CIoctl, String> {
 /// - NAME `_` for an anonymous enum.
 fn parse_enum(body: &[Tok], cfg: Option<Cfg>) -> Result<CEnumDef, String> {
     let mut kind = None;
+    let mut own_to_text = false;
     let mut i = 0;
     while let Some((attr, next)) = attr_at(body, i)? {
         for (n, k) in [("open", CEnumKind::Open), ("closed", CEnumKind::Closed), ("flags", CEnumKind::Flags)] {
@@ -1719,6 +1723,7 @@ fn parse_enum(body: &[Tok], cfg: Option<Cfg>) -> Result<CEnumDef, String> {
                 kind = Some(k);
             }
         }
+        own_to_text |= matches!(attr, [Tok::Ident(a)] if a == "own_to_text");
         i = next;
     }
     i = skip_vis(body, i)?;
@@ -1766,7 +1771,7 @@ fn parse_enum(body: &[Tok], cfg: Option<Cfg>) -> Result<CEnumDef, String> {
         };
         variants.push(CEnumVariant { name: vname.to_string(), value, label });
     }
-    Ok(CEnumDef { cfg, kind, name, repr, variants, from })
+    Ok(CEnumDef { cfg, kind, name, repr, variants, from, own_to_text })
 }
 
 /// c_typedef!'s body: [#[c("C declarator")]] pub type NAME = TYPE;
@@ -2431,7 +2436,8 @@ pub fn expand_enum_list(e: &mut CEnumDef, entries: &[String]) -> Result<(), Stri
 /// place - with all expanded, the record's form.
 #[allow(dead_code)]
 pub fn enum_text(e: &CEnumDef) -> String {
-    let mut t = format!("#[{}] pub enum {}: {} {{ ", e.kind.attr(),
+    let mut t = format!("#[{}] {}pub enum {}: {} {{ ", e.kind.attr(),
+                        if e.own_to_text { "#[own_to_text] " } else { "" },
                         e.name.as_deref().unwrap_or("_"), e.repr);
     let lists = |t: &mut String, i: usize| for (at, f) in &e.from {
         if *at == i {

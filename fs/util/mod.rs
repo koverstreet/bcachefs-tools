@@ -28,6 +28,7 @@ pub mod list;
 pub mod log;
 pub mod mempool;
 pub mod module_param;
+pub mod names;
 pub mod ops;
 pub mod os_str;
 pub mod par;

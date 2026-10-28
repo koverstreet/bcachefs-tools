@@ -469,6 +469,7 @@ c_xmacro! {
 
 c_enum! {
     #[open]
+    #[own_to_text]
     pub enum bch_sb_error_id: u32 {
         BCH_SB_ERRS(t, n, ..) => BCH_FSCK_ERR_ ## t = n,
     }
