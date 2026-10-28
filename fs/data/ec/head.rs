@@ -331,9 +331,11 @@ fn stripe_heads_stop(fs: &Fs, ca: Option<&c::bch_dev>) {
     }
 }
 
+/// With no @ca, every stripe head's: bch2_open_buckets_stop() stopping the
+/// filesystem passes NULL.
 #[c_export]
-pub fn bch2_ec_stop_dev(c: &Opaque<c::bch_fs>, ca: &c::bch_dev) {
-    stripe_heads_stop(Fs::from_c(c), Some(ca))
+pub fn bch2_ec_stop_dev(c: &Opaque<c::bch_fs>, ca: Option<&c::bch_dev>) {
+    stripe_heads_stop(Fs::from_c(c), ca)
 }
 
 #[c_export]
