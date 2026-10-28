@@ -143,7 +143,7 @@ use crate::util::alloc::{kbox_pin_init, AllocError, KBox, KVVec};
 use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::backref::BackRef;
 use crate::util::ffi::Opaque;
-use crate::util::gather::{Gather, GatherRef};
+use crate::util::gather::{Gather, GatherRefSlot};
 use crate::util::refcount::{RefGuard, Refcount};
 use crate::util::kernel::local_clock;
 use crate::util::rcu::read_lock;
@@ -173,8 +173,10 @@ pub struct StripeNew {
     pub(crate) idx:                  AtomicU64,
 
     io_refs:              AtomicI32,
-    /// What its task waits on to be in flight: one ref, held while @io_refs
-    /// isn't zero
+    /// The io refs' ref on @in_flight, put by the last: before it, as a
+    /// Gather's drop waits for its refs
+    in_flight_ref:        GatherRefSlot<()>,
+    /// What its task waits on to be in flight
     #[pin]
     pub(crate) in_flight:            Gather<()>,
     seq:                  AtomicU64,
@@ -390,6 +392,7 @@ impl StripeNew {
             start_time: local_clock(),
             idx:        AtomicU64::new(0),
             io_refs:    AtomicI32::new(0),
+            in_flight_ref: GatherRefSlot::new(),
             in_flight   <- Gather::new(),
             seq:        AtomicU64::new(0),
             err:        FirstErr::new(),
@@ -412,8 +415,7 @@ impl StripeNew {
             s.maker = Some(IoRef::get(&b));
         }
 
-        // the io refs': their last put puts it
-        let _ = b.in_flight.get().into_raw();
+        b.in_flight_ref.set(b.in_flight.get());
         Ok(b)
     }
 
@@ -499,8 +501,7 @@ unsafe impl Refcount<IoRefs> for StripeNew {
         self.state.store(State::EC_STRIPE_NEW_in_flight as u32, Ordering::Relaxed);
         self.seq.store(fs.ec.stripe_new_seq.fetch_add(1, Ordering::Relaxed) as u64 + 1, Ordering::Release);
         fs.ec.new_stripes_changed.wake();
-        // SAFETY: the io refs' ref, alloc()'s
-        unsafe { GatherRef::from_raw(&self.in_flight) }.put(());
+        self.in_flight_ref.take().expect("the io refs' ref on its in flight, put once").put(());
     }
 }
 
@@ -619,8 +620,7 @@ pub(crate) fn discard(b: StripeNewBox) {
     b.lock().maker.take().expect("discarding a stripe handed on").leak();
     let v = b.io_refs.swap(0, Ordering::Relaxed);
     assert_eq!(v, 1, "discarding stripe {} with writers' io refs", b.idx.load(Ordering::Relaxed));
-    // SAFETY: the io refs' ref on its Gather, which its drop waits for
-    unsafe { GatherRef::from_raw(&b.in_flight) }.put(());
+    b.in_flight_ref.take().expect("the io refs' ref on its in flight").put(());
     drop(b);
 }
 

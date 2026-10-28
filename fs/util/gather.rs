@@ -55,7 +55,7 @@
 use crate::errcode::{BchError, FirstErr};
 use crate::util::sleep::{sleep_until, task_waker, Sleep};
 use crate::util::task::Resumable;
-use core::marker::PhantomPinned;
+use core::marker::{PhantomData, PhantomPinned};
 use core::mem::ManuallyDrop;
 use core::pin::Pin;
 use core::ptr::{null_mut, NonNull};
@@ -442,6 +442,40 @@ impl<T: Fold, W: Width> GatherRef<T, W> {
 impl<T: Fold, W: Width> Drop for GatherRef<T, W> {
     fn drop(&mut self) {
         self.gather().put(None);
+    }
+}
+
+/// A GatherRef with no one holder - a count's, put by the count's last put,
+/// from any context: so taken through &, once, by whoever takes it first.
+/// Send and Sync as the ref is.
+pub struct GatherRefSlot<T: Fold, W: Width = usize> {
+    r:  AtomicPtr<Gather<T, W>>,
+    _r: PhantomData<GatherRef<T, W>>,
+}
+
+impl<T: Fold, W: Width> GatherRefSlot<T, W> {
+    pub const fn new() -> Self {
+        GatherRefSlot { r: AtomicPtr::new(null_mut()), _r: PhantomData }
+    }
+
+    /// @r, to hold till it's taken: the slot's empty.
+    pub fn set(&self, r: GatherRef<T, W>) {
+        let p = r.into_raw().cast_mut();
+        let old = self.r.swap(p, Ordering::AcqRel);
+        assert!(old.is_null(), "a GatherRefSlot set twice");
+    }
+
+    /// Its ref, if it hasn't been taken.
+    pub fn take(&self) -> Option<GatherRef<T, W>> {
+        let p = self.r.swap(null_mut(), Ordering::AcqRel);
+        // SAFETY: set()'s into_raw(), swapped out once: ours alone
+        (!p.is_null()).then(|| unsafe { GatherRef::from_raw(p) })
+    }
+}
+
+impl<T: Fold, W: Width> Drop for GatherRefSlot<T, W> {
+    fn drop(&mut self) {
+        drop(self.take());
     }
 }
 
