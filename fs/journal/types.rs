@@ -4,6 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::{CacheAligned, DArray, Fifo, c_default};
+use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::sync::atomic::{AtomicI32, AtomicI64};
@@ -389,7 +390,7 @@ nest! {
         pub seq_write_started: u64,
         /* seq, last_seq from the most recent journal entry successfully written */
         pub seq_ondisk: u64,
-        pub flushed_seq_ondisk: u64,
+        pub flushed_seq_ondisk: Volatile<u64>,
         pub flushing_seq: AtomicI64,
         pub last_seq_ondisk: u64,
         pub err_seq: u64,
@@ -398,8 +399,8 @@ nest! {
 
         /* Oldest journal seq that is safe to rewind to — discards of buckets
          * freed at >= this seq have not yet been issued */
-        pub rewind_seq: u64,
-        pub rewind_seq_ondisk: u64,
+        pub rewind_seq: Volatile<u64>,
+        pub rewind_seq_ondisk: Volatile<u64>,
 
         /*
          * Rewind ranges: keys from journal entries with seq
