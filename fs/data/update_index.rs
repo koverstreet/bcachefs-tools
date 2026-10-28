@@ -30,8 +30,8 @@
 
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{bkey_le, BkeyFamily, BkeyI, BkeySC, BkeyV};
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, LoopFlow, TransAttempt, TransBkey,
-                         UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts, LoopFlow, TransAttempt,
+                         TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::durability::{drop_extra_durability, drop_extra_ec_durability, BkeyVDurability};
@@ -339,8 +339,8 @@ fn index_update_key<'t>(t: &TransAttempt<'_, 't>, u: &c::data_update, iter: &Btr
                                u.op.opts.change_cookie)?;
 
     t.update(iter, &insert, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE | UpdateTriggerFlags::SET_NEEDS_RECONCILE_DONE)?;
-    t.commit(Some(res), CommitFlags::NO_CHECK_RW | CommitFlags::NO_ENOSPC |
-                        CommitFlags::from_bits_retain(u.opts.commit_flags.bits()))?;
+    t.commit(Some(res), CommitOpts::from(u.opts.commit_flags)
+                        .flags(CommitFlags::NO_CHECK_RW | CommitFlags::NO_ENOSPC))?;
 
     fs.event_add_trace(events::data_update_key, new.k().size.into(), |out| {
         write!(out, "\nold: {}", old.to_text(fs));

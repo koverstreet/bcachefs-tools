@@ -1470,6 +1470,33 @@ impl<'a, 't> TransAttempt<'a, 't> {
         })
     }
 
+    /// The node @pos's pointer at @level of @btree points to, rewritten:
+    /// bch2_btree_node_rewrite_pos().
+    pub fn btree_node_rewrite_pos(
+        &self,
+        btree:       c::btree_id,
+        level:       u32,
+        pos:         bpos,
+        target:      u32,
+        flags:       impl Into<CommitOpts>,
+        write_flags: c::bch_write_flags,
+    ) -> Result<(), BchError> {
+        assert!(level > 0, "btree_node_rewrite_pos() of a leaf");
+        let mut node_iter = BtreeNodeIter::new(self, btree, pos, level + 1, level - 1, BtreeIterFlags::empty());
+        let b = node_iter.peek_ref()?.expect("the node a btree node pointer points to");
+        self.btree_node_rewrite(node_iter.iter(), b, target, flags, write_flags)
+    }
+
+    /// One replica of the node @k points to, on @dev, read and checked - the
+    /// node rewritten if it's bad. Async: the read is only submitted.
+    /// bch2_btree_node_scrub().
+    pub fn btree_node_scrub(&self, btree: c::btree_id, level: u32, k: BkeySC<'_>, dev: u32)
+        -> Result<(), BchError>
+    {
+        // SAFETY: our transaction; @k, which C copies
+        self.result(unsafe { c::bch2_btree_node_scrub(self.raw(), btree, level, k.into(), dev) })
+    }
+
     pub fn delete(
         &self,
         btree: impl Into<u32>,
@@ -1825,11 +1852,30 @@ impl CommitOpts {
     pub(crate) const fn to_c(self) -> c::bch_trans_commit_flags {
         c::bch_trans_commit_flags::from_bits_retain(self.0)
     }
+
+    /// A btree update's watermark: copygc's becomes btree_copygc, and below
+    /// btree, btree - btree_update_set_watermark_hipri().
+    pub fn watermark_hipri(self) -> Self {
+        use c::bch_watermark as wm;
+        let w = match wm::from_bits(self.0 & Self::WATERMARK_MASK) {
+            wm::BCH_WATERMARK_copygc                         => wm::BCH_WATERMARK_btree_copygc,
+            w if (w as u32) < wm::BCH_WATERMARK_btree as u32 => wm::BCH_WATERMARK_btree,
+            w                                                => w,
+        };
+        self.watermark(Watermark(w))
+    }
 }
 
 impl From<CommitFlags> for CommitOpts {
     fn from(flags: CommitFlags) -> Self {
         CommitOpts::new().flags(flags)
+    }
+}
+
+/// A C caller's: a struct's, say.
+impl From<c::bch_trans_commit_flags> for CommitOpts {
+    fn from(flags: c::bch_trans_commit_flags) -> Self {
+        CommitOpts(flags.bits())
     }
 }
 
