@@ -108,6 +108,16 @@ nest! {
 c_default!(bch_read_bio);
 
 impl c::bch_read_bio {
+    pub fn bits(&self) -> c::bch_read_bio_bits {
+        // SAFETY: the bits and _state are one u16, any value valid as either
+        unsafe { self.state.fields.bits }
+    }
+
+    pub fn bits_mut(&mut self) -> &mut c::bch_read_bio_bits {
+        // SAFETY: as bits()'s
+        unsafe { &mut self.state.fields.bits }
+    }
+
     /// Initializes all but the bio, which is the caller's.
     pub fn init(&mut self, fs: &crate::fs::Fs, opts: c::bch_inode_opts, end_io: c::bio_end_io_t) {
         self.start_time   = crate::util::kernel::local_clock();
