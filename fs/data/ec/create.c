@@ -1766,14 +1766,23 @@ static int new_stripe_alloc_buckets(struct btree_trans *trans,
 
 /*
  * What reuse and repair need to know of a stripe's blocks, as masks by block
- * index: which data blocks hold live data, and which blocks - data or parity -
- * are on a device that's lost its durability (missing, evacuating; see
- * bch2_stripe_block_dev_bad()).
+ * index: which data blocks hold live data, which blocks - data or parity - are
+ * on a device that's lost its durability (missing, evacuating; see
+ * bch2_stripe_block_dev_bad()), and which are on a device that keeps its
+ * durability but can't take writes (ro, spare, offline).
  */
 struct stripe_blocks {
 	u32	live;
 	u32	bad;
+	u32	nocarry;
 };
+
+static bool stripe_block_dev_rw(struct bch_fs *c, unsigned dev)
+{
+	guard(rcu)();
+	struct bch_dev *ca = bch2_dev_rcu_noerror(c, dev);
+	return ca && bch2_dev_is_rw(ca);
+}
 
 static struct stripe_blocks stripe_blocks_get(struct bch_fs *c, const struct bch_stripe *s)
 {
@@ -1781,13 +1790,36 @@ static struct stripe_blocks stripe_blocks_get(struct bch_fs *c, const struct bch
 	unsigned nr_data = s->nr_blocks - s->nr_redundant;
 
 	for (unsigned i = 0; i < s->nr_blocks; i++) {
+		unsigned dev = s->ptrs[i].dev;
+
 		if (i < nr_data && stripe_blockcount_get(s, i))
 			b.live |= BIT(i);
-		if (bch2_stripe_block_dev_bad(c, s->ptrs[i].dev))
+		if (bch2_stripe_block_dev_bad(c, dev))
 			b.bad |= BIT(i);
+		else if (!stripe_block_dev_rw(c, dev))
+			b.nocarry |= BIT(i);
 	}
 
 	return b;
+}
+
+/*
+ * The live data blocks reuse and repair carry forward in place, and those that
+ * get new buckets. The new stripe is committed under WRITE refs on every device
+ * it has a block on (stripe_get_iorefs()), so a block on a device that can't
+ * take writes moves, like one on a bad device: carried, the create would fail
+ * with stripe_create_device_offline after reading it, and reuse would pick the
+ * same stripe again. Durability, accounting and the repair trigger still go by
+ * bad alone: a read-only member is neither unreadable nor less durable.
+ */
+static u32 stripe_blocks_carried(struct stripe_blocks b)
+{
+	return b.live & ~(b.bad | b.nocarry);
+}
+
+static u32 stripe_blocks_moving(struct stripe_blocks b)
+{
+	return b.live & (b.bad | b.nocarry);
 }
 
 static bool may_reuse_stripe(struct bch_fs *c,
@@ -1802,7 +1834,7 @@ static bool may_reuse_stripe(struct bch_fs *c,
 	struct stripe_blocks b = stripe_blocks_get(c, old);
 	struct bch_devs_mask devs_may_alloc = new->devs;
 
-	unsigned long carried = b.live & ~b.bad;
+	unsigned long carried = stripe_blocks_carried(b);
 	unsigned i;
 	for_each_set_bit(i, &carried, BCH_BKEY_PTRS_MAX)
 		__clear_bit(old->ptrs[i].dev, devs_may_alloc.d);
@@ -2077,7 +2109,7 @@ static int stripe_reuse(struct btree_trans *trans, struct ec_stripe_new *s)
 		return ret ?: bch_err_throw(c, stripe_alloc_blocked);
 
 	struct stripe_blocks b = stripe_blocks_get(c, &s->old_stripe.key.v);
-	init_new_stripe_from_old(c, s, b.live & ~b.bad, b.live & b.bad, false);
+	init_new_stripe_from_old(c, s, stripe_blocks_carried(b), stripe_blocks_moving(b), false);
 	return 0;
 }
 
@@ -2675,7 +2707,7 @@ static void stripe_repair_usable_devs(struct bch_fs *c, const struct bch_stripe 
 				      struct stripe_blocks b, struct bch_devs_mask *devs)
 {
 	struct bch_devs_mask carried = {};
-	unsigned long carried_blocks = b.live & ~b.bad;
+	unsigned long carried_blocks = stripe_blocks_carried(b);
 	unsigned i;
 
 	for_each_set_bit(i, &carried_blocks, BCH_BKEY_PTRS_MAX)
@@ -2755,7 +2787,7 @@ static int stripe_repair_narrow(struct moving_context *ctxt,
 	 * Blocks on bad devices first: that's the data that has to move, and
 	 * the stripe narrows to the good blocks:
 	 */
-	unsigned long moving = b.live & b.bad, carried = b.live & ~b.bad;
+	unsigned long moving = stripe_blocks_moving(b), carried = stripe_blocks_carried(b);
 	unsigned i;
 
 	for_each_set_bit(i, &moving, BCH_BKEY_PTRS_MAX)
@@ -3115,7 +3147,7 @@ static int stripe_repair_unrebuildable(struct moving_context *ctxt,
 
 	/* clean blocks on devices that have lost their durability still move: */
 	return stripe_repair_rebuild(ctxt, s, h, buf, devs,
-				     b.live & ~b.bad, b.live & b.bad);
+				     stripe_blocks_carried(b), stripe_blocks_moving(b));
 }
 
 /*
@@ -3151,7 +3183,7 @@ static int stripe_repair_opened(struct moving_context *ctxt, struct bkey_s_c_str
 	}
 
 	return stripe_repair_rebuild(ctxt, s, h, buf, devs,
-				     b.live & ~b.bad, b.live & b.bad);
+				     stripe_blocks_carried(b), stripe_blocks_moving(b));
 }
 
 static int __stripe_repair(struct moving_context *ctxt, struct btree_iter *iter,
