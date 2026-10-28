@@ -5,8 +5,11 @@ use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
 use crate::locking::{Guard, MutexNoio, Noio, PercpuRwsemNoio};
 use crate::util::Printbuf;
+use crate::util::backref::BackRef;
 use crate::util::enumerated_ref::EnumeratedRef;
 use crate::util::refcount::RefGuard;
+use crate::util::workqueue::Queue;
+use core::future::Future;
 #[cfg(kernel)]
 use crate::util::refcount::{Refcount, TryRefcount};
 
@@ -594,6 +597,25 @@ impl Fs {
     pub fn write_ref_wq(&self) -> &crate::util::workqueue::Queue {
         // SAFETY: the filesystem's, for as long as it is
         unsafe { crate::util::workqueue::Queue::from_raw(self.write_ref_wq) }
+    }
+
+    /// The future @make makes, spawned on write_ref_wq and detached, holding
+    /// a write ref till it's done: EROFS if there's none to be had, the
+    /// filesystem going read-only.
+    pub fn spawn_write<M, F>(&self, make: M) -> Result<(), BchError>
+    where
+        M: FnOnce(BackRef<Fs>) -> F + Send + 'static,
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let w: WriteRef = RefGuard::tryget_live(&self.writes).ok_or(BchError::from(c::EROFS))?;
+        // SAFETY: going read-only waits for the task's write ref: the
+        // filesystem and its write_ref_wq outlive it
+        let (fs, wq) = unsafe { (BackRef::new(self), Queue::from_raw(self.write_ref_wq)) };
+        crate::util::task::spawn(wq, move || async move {
+            let _w = w;
+            make(fs).await
+        })?;
+        Ok(())
     }
 }
 
