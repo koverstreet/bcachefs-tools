@@ -71,6 +71,20 @@ impl c::bch_dev {
         }
     }
 
+    /// Whether bucket @b holds a superblock - bucket 0 does, from sector 0 to
+    /// the first - or journal. From sb_layout, as the allocator can't take
+    /// sb_lock.
+    pub fn is_superblock_bucket(&self, b: u64) -> bool {
+        let l = self.sb_layout.get();
+        let sb_sectors = 1u64 << l.sb_max_size_bits;
+        let (start, end) = (self.bucket_to_sector(b), self.bucket_to_sector(b + 1));
+
+        b == 0 ||
+            l.sb_offset.iter().take(usize::from(l.nr_superblocks))
+                .any(|o| o.get() < end && start < o.get() + sb_sectors) ||
+            self.journal.buckets().contains(&b)
+    }
+
     /// The bucket sector @s is in, and how far into it:
     /// sector_to_bucket_and_offset().
     pub fn sector_to_bucket_and_offset(&self, s: u64) -> (u64, u32) {
@@ -1029,6 +1043,11 @@ pub unsafe fn bch2_dev_usage_read_fast(ca: &c::bch_dev, usage: *mut c::bch_dev_u
 #[c_export]
 pub unsafe fn bch2_dev_usage_full_read_fast(ca: &c::bch_dev, usage: *mut c::bch_dev_usage_full) {
     unsafe { usage.write(ca.usage_full_read_fast()) }
+}
+
+#[c_export]
+pub fn bch2_is_superblock_bucket(ca: &c::bch_dev, b: u64) -> bool {
+    ca.is_superblock_bucket(b)
 }
 
 #[cold]

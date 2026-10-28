@@ -65,7 +65,6 @@ obj-$(CONFIG_BCACHEFS_FS)	+= bcachefs.o
 
 bcachefs-y		:=			\
 	alloc/accounting.o			\
-	alloc/buckets.o				\
 	alloc/foreground.o			\
 	btree/bkey.o				\
 	btree/bkey_methods.o			\

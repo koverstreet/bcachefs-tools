@@ -369,8 +369,6 @@ static inline int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_d
 	return 0;
 }
 
-bool bch2_is_superblock_bucket(struct bch_dev *, u64);
-
 static inline const char *bch2_data_type_str(enum bch_data_type type)
 {
 	return type < BCH_DATA_NR
