@@ -13,7 +13,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    ffi::{CStr, CString, c_char, OsString, OsStr},
+    ffi::{CStr, OsString, OsStr},
     fs,
     os::fd::{AsRawFd, BorrowedFd},
     os::unix::ffi::OsStringExt,
@@ -701,12 +701,6 @@ pub fn joined_device_str(sbs: &[(PathBuf, bch_sb_handle)]) -> OsString {
         .join(OsStr::new(":"))
 }
 
-pub fn scan_devices(device: &String, opts: &bch_opts) -> Result<OsString> {
-    let sbs = scan_sbs(device, opts)?;
-
-    Ok(joined_device_str(&sbs))
-}
-
 /// A filesystem opened either online (mounted: talk to the kernel via
 /// ioctl/sysfs) or offline (opened in userspace via libbcachefs):
 pub enum OpenedFs {
@@ -757,22 +751,6 @@ pub fn open_scan(devs: &[PathBuf], fs_opts: bch_opts) -> Result<OpenFs, BchError
     };
 
     Fs::open(&devs, fs_opts)
-}
-
-#[allow(dead_code)]
-pub fn bch2_scan_devices(device: *const c_char) -> *mut c_char {
-    let device = unsafe { CStr::from_ptr(device) };
-    let device = device.to_string_lossy().into_owned();
-
-    // how to initialize to default/empty?
-    let opts = bcachefs_kernel::opts::parse_mount_opts(None, None, true).unwrap_or_default();
-
-    let devs = scan_devices(&device, &opts).unwrap_or_else(|e| {
-        eprintln!("bcachefs ({}): error reading superblock: {}", device, e);
-        std::process::exit(-1);
-    });
-
-    CString::new(devs.into_vec()).unwrap().into_raw()
 }
 
 /// A udev monitor, and the question "have the missing members turned up?"
