@@ -124,6 +124,9 @@ c_typedef! {
 
 /// A set of devices, by index.
 pub type DevsMask = BitArray<{ bits_to_longs(c::BCH_SB_MEMBERS_MAX as usize) }>;
+// A mask written under a lock and read without it - a preference, the
+// allocator's placement - can be read mid-write, each word as before or after
+crate::tear_safe!(DevsMask);
 
 /// One changed under readers - c->devs_online, the allocator's rw_devs[] -
 /// declared as such where it's a field: still a struct bch_devs_mask to C.

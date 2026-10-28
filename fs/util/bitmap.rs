@@ -171,6 +171,9 @@ pub struct BitArray<const W: usize>([usize; W]);
 // SAFETY: integers; all zeroes is empty
 unsafe impl<const W: usize> ::pin_init::Zeroable for BitArray<W> {}
 
+// SAFETY: words, unpadded; any bits are a set
+unsafe impl<const W: usize> crate::util::vstructs::Plain for BitArray<W> {}
+
 impl<const W: usize> Default for BitArray<W> {
     fn default() -> Self {
         Self([0; W])
