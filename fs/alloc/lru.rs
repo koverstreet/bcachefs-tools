@@ -293,22 +293,6 @@ pub(crate) fn lru_check_set(
     Ok(())
 }
 
-/// # Safety
-/// @trans is in an attempt; @last_flushed is the pass's.
-#[c_export]
-pub unsafe extern "C" fn bch2_lru_check_set<'t>(
-    trans:        &'t BtreeTrans<'t>,
-    lru_id:       u16,
-    dev_bucket:   u64,
-    time:         u64,
-    referring_k:  BkeySC<'_>,
-    last_flushed: *mut c::wb_maybe_flush,
-) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    let last_flushed = unsafe { WbFlush::from_raw(last_flushed) }.expect("a wb_maybe_flush");
-    ret_to_c(lru_check_set(&t, LruPos::new(lru_id, time, dev_bucket), referring_k, last_flushed))
-}
-
 /// The time @k says its entry in an lru of type @ty is at - 0, none:
 /// bkey_lru_type_idx().
 fn expected_time(fs: &Fs, ty: c::bch_lru_type, k: BkeySC<'_>) -> u64 {

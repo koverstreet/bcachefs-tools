@@ -1311,11 +1311,6 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_dev_missing_bkey_msg(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, dev: c_uint, out: &mut Printbuf) -> c_int {
-    ret_to_c(Fs::from_c(c).dev_missing_bkey_msg(k, dev, out))
-}
-
-#[c_export]
 pub fn bch2_dev_missing_bkey(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, dev: c_uint) -> c_int {
     ret_to_c(Fs::from_c(c).dev_missing_bkey(k, dev))
 }

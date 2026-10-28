@@ -260,14 +260,6 @@ pub(crate) fn bkey_replicas_acct(fs: &Fs, k: BkeySC<'_>, data_type: c::bch_data_
     entry_acct(&b, data_type)
 }
 
-/// # Safety
-/// @e has room for BCH_BKEY_PTRS_MAX devices.
-#[c_export]
-pub unsafe fn bch2_bkey_to_replicas(c: &Opaque<c::bch_fs>, e: *mut Head<c::bch_replicas_entry_v1>, k: BkeySC<'_>) {
-    // SAFETY: the caller's
-    bkey_to_replicas(Fs::from_c(c), &mut unsafe { EntryBuf::from_c(e) }, k)
-}
-
 /// The entry for data of @data_type on @devs.
 ///
 /// # Safety

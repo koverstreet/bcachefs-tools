@@ -58,7 +58,7 @@ use crate::util::place::Placed;
 use crate::util::workqueue::Queue;
 use crate::util::Printbuf;
 use crate::{bch_err, bch_info, c_function_name, inode, message, prt};
-use core::ffi::{c_int, c_uint, c_ulong};
+use core::ffi::{c_int, c_ulong};
 use core::mem::size_of;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cstruct_macros::c_export;
@@ -154,11 +154,6 @@ pub fn passes_match(flags: c_ulong) -> u64 {
 /// The passes an fsck runs.
 pub fn fsck_passes() -> u64 {
     passes_match(c::PASS_FSCK)
-}
-
-#[c_export]
-pub fn bch2_recovery_passes_match(flags: c_uint) -> u64 {
-    passes_match(flags.into())
 }
 
 /// A placeholder, so scan_for_btree_nodes isn't pass 0.
@@ -908,11 +903,6 @@ pub fn run_passes(fs: &Fs, mut passes: u64, failfast: bool) -> Result<(), BchErr
 
     fs.clear_flag(c::bch_fs_flags::BCH_FS_running_recovery_passes);
     ret
-}
-
-#[c_export]
-pub fn bch2_run_recovery_passes(c: &Opaque<c::bch_fs>, passes: u64, failfast: bool) -> c_int {
-    ret_to_c(run_passes(Fs::from_c(c), passes, failfast))
 }
 
 /// The async runner: the passes scheduled that can run online, unless a run

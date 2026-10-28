@@ -438,11 +438,6 @@ pub fn bch2_btree_ptr_durability(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) -> c::bke
 }
 
 #[c_export]
-pub fn bch2_bkey_can_read(c: &Fs, k: BkeySC<'_>) -> bool {
-    k.can_read(c)
-}
-
-#[c_export]
 pub fn bch2_bkey_durability_safe(c: &Fs, k: BkeySC<'_>) -> c::bkey_durability {
     k.durability_safe(c)
 }

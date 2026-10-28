@@ -942,11 +942,6 @@ impl c::bch_dev {
 }
 
 #[c_export]
-pub fn bch2_buckets_nouse_alloc(c: &Opaque<c::bch_fs>) -> c_int {
-    ret_to_c(Fs::from_c(c).buckets_nouse_alloc())
-}
-
-#[c_export]
 pub fn bch2_dev_buckets_resize(_c: &Opaque<c::bch_fs>, ca: &c::bch_dev, nbuckets: u64) -> c_int {
     ret_to_c(ca.buckets_resize(nbuckets))
 }

@@ -278,11 +278,6 @@ impl Fs {
 }
 
 #[c_export]
-pub fn bch2_fs_usage_base_read(c: &Opaque<c::bch_fs>) -> c::bch_fs_usage_base {
-    Fs::from_c(c).usage_base()
-}
-
-#[c_export]
 pub fn bch2_fs_usage_read_short(c: &Opaque<c::bch_fs>) -> c::bch_fs_usage_short {
     Fs::from_c(c).usage_read_short()
 }

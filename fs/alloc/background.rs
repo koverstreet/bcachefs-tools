@@ -725,14 +725,6 @@ pub fn bch2_alloc_to_v4_mut<'t>(trans: &'t BtreeTrans<'t>, k: BkeySC<'_>) -> *mu
     alloc_v4_to_c(t.alloc_to_v4_mut(k))
 }
 
-#[c_export]
-pub fn bch2_trans_start_alloc_update<'t>(trans: &'t BtreeTrans<'t>, pos: c::bpos,
-                                         flags: c::btree_iter_update_trigger_flags) -> *mut c::bkey_i_alloc_v4 {
-    // SAFETY: C calls it in an attempt
-    let t = unsafe { trans.attempt_in_progress() };
-    alloc_v4_to_c(t.start_alloc_update(pos, UpdateTriggerFlags::from_bits_retain(flags.bits())))
-}
-
 // ── Alloc keys: validate, swab, to_text ──────────────────────────────────
 
 fn alloc_v1_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {

@@ -116,11 +116,6 @@ pub fn prt_error_nr(out: &mut Printbuf, nr: u64) {
     }
 }
 
-#[c_export]
-pub fn bch2_prt_error_nr(out: &mut Printbuf, nr: u64) {
-    prt_error_nr(out, nr)
-}
-
 // ── The sections ─────────────────────────────────────────────────────────────
 
 /// An entry of either section, as v2 has it: see the top of the file.

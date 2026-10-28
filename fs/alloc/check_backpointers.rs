@@ -1029,16 +1029,6 @@ impl c::bucket_bitmap {
 }
 
 #[c_export]
-pub fn bch2_bucket_bitmap_test(b: &c::bucket_bitmap, bucket: u64) -> bool {
-    b.test(bucket)
-}
-
-#[c_export]
-pub fn bch2_bucket_bitmap_resize(ca: &c::bch_dev, b: &c::bucket_bitmap, nbuckets: u64) -> c_int {
-    ret_to_c(b.resize(ca, nbuckets))
-}
-
-#[c_export]
 pub fn bch2_bucket_bitmap_free(b: &c::bucket_bitmap) {
     b.free()
 }

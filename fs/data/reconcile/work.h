@@ -5,7 +5,6 @@
 #include "data/compress.h"
 #include "alloc/disk_groups.h"
 
-#include "data/reconcile/plan_gen.h"
 #include "data/reconcile/scan_gen.h"
 #include "data/reconcile/work_gen.h"
 

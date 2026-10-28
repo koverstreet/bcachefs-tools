@@ -5,7 +5,6 @@
 
 use super::*;
 use super::ops::{btree_ptr_validate, btree_ptr_v2_validate};
-use crate::btree::bkey::BkeyI;
 use crate::btree::iter::{BtreeTrans, TransBkey};
 use crate::errcode::ret_to_c;
 use crate::init::error::BkeyValidate;
@@ -84,16 +83,6 @@ pub fn bch2_bkey_has_device_c(c: &Fs, k: BkeySC<'_>, dev: c_uint) -> *const c::b
         .unwrap_or(core::ptr::null())
 }
 
-/// @ret is written, not read: C's callers leave it uninitialized.
-#[c_export]
-pub fn bch2_bkey_has_device_decode(c: &Fs, k: BkeySC<'_>, dev: c_uint,
-                                   ret: &mut MaybeUninit<c::extent_ptr_decoded>) -> bool {
-    let Some(k) = k.arm::<Ptrs>() else { return false };
-    let Some(d) = k.has_device_decode(c, dev) else { return false };
-    ret.write(d.p);
-    true
-}
-
 #[c_export]
 pub fn bch2_bkey_devs_rw(c: &Opaque<c::bch_fs>, k: BkeySC<'_>) -> bool {
     k.arm::<Ptrs>().is_none_or(|k| k.devs_rw(Fs::from_c(c)))
@@ -112,12 +101,6 @@ pub fn bch2_bkey_in_target(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, target: c_uint)
 #[c_export]
 pub fn bch2_bkey_matches_ptr(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, m: c::bch_extent_ptr, offset: u64) -> bool {
     k.arm::<Ptrs>().is_some_and(|k| k.matches_ptr(Fs::from_c(c), &m, offset))
-}
-
-#[c_export]
-pub fn bch2_bkey_ptrs_match(k1: BkeySC<'_>, p1: c::extent_ptr_decoded,
-                            k2: BkeySC<'_>, p2: c::extent_ptr_decoded) -> bool {
-    ptrs_match(k1.k, &p1, k2.k, &p2)
 }
 
 #[c_export]
@@ -183,19 +166,6 @@ fn entry_pos_of(k: BkeySC<'_>, p: *const u8) -> EntryPos {
     EntryPos(off / size_of::<u64>())
 }
 
-/// A key C hands as a struct bkey_i *.
-///
-/// # Safety
-/// @k is a key, all of it, the caller's to edit for 'a.
-unsafe fn bkey_i_s<'a>(k: *mut c::bkey_i) -> BkeyS<'a> {
-    // SAFETY: the caller's
-    BkeyS::from(unsafe { &mut *BkeyI::from_raw_mut(k) })
-}
-
-fn ptrs_mut(k: BkeyS<'_>) -> BkeyS<'_, PtrsMut> {
-    k.arm::<PtrsMut>().expect("editing the entries of a key whose pointers can't be")
-}
-
 fn ptrs(k: BkeyS<'_>) -> BkeyS<'_, Ptrs> {
     k.arm::<Ptrs>().expect("dropping pointers of a key without them")
 }
@@ -212,36 +182,6 @@ pub fn bch2_bkey_drop_ptr_noerror(c: &Fs, k: BkeyS<'_>, ptr: *mut c::bch_extent_
 pub fn bch2_bkey_drop_ptr(c: &Fs, k: BkeyS<'_>, ptr: *mut c::bch_extent_ptr) {
     let at = entry_pos_of(k.as_sc(), ptr.cast());
     ptrs(k).drop_ptr(c, at);
-}
-
-/// # Safety
-/// @k is a key the caller can edit.
-#[c_export]
-pub unsafe fn bch2_bkey_drop_ptrs_mask(c: &Fs, k: *mut c::bkey_i, mask: c_uint) {
-    // SAFETY: the caller's
-    brand(ptrs(unsafe { bkey_i_s(k) }), |k| {
-        let m = k.assume(c, mask);
-        k.drop_ptrs_mask(c, m);
-    });
-}
-
-#[c_export]
-pub fn bch2_bkey_drop_device_noerror(c: &Fs, k: BkeyS<'_>, dev: c_uint) {
-    ptrs(k).drop_device_noerror(c, dev);
-}
-
-/// Panics on a bit past the last pointer, where C loops forever.
-///
-/// # Safety
-/// @k is a key the caller can edit.
-#[c_export]
-pub unsafe fn bch2_bkey_drop_ec_mask(c: &Fs, k: *mut c::bkey_i, mask: c_uint) {
-    // SAFETY: the caller's
-    brand(ptrs_mut(unsafe { bkey_i_s(k) }), |mut k| {
-        let m = k.assume(c, mask);
-        assert_eq!(u32::from(m.bits()), mask, "dropping stripe_ptrs by mask {mask:#x}, past the key's pointers");
-        k.drop_ec_mask(c, m);
-    });
 }
 
 #[c_export]
@@ -282,14 +222,4 @@ pub unsafe fn bch2_bkey_extent_flags_set(trans: &BtreeTrans<'_>, k: *mut c::bkey
             .extent_flags_set(fs, flags).expect("room for an extent flags entry: its caller allocates it");
         Ok(())
     })())
-}
-
-/// # Safety
-/// @dst is a key the caller can edit.
-#[c_export]
-pub unsafe fn bch2_bkey_propagate_incompressible(c: &Fs, dst: *mut c::bkey_i, src: BkeySC<'_>) {
-    // SAFETY: the caller's
-    if let Some(mut dst) = unsafe { bkey_i_s(dst) }.arm::<Ptrs>() {
-        dst.propagate_incompressible(c, src);
-    }
 }

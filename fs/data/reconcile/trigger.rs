@@ -425,11 +425,6 @@ pub fn extent_reconcile_to_text(out: &mut Printbuf, fs: Option<&Fs>, r: &c::bch_
 // ── C's ──────────────────────────────────────────────────────────────────
 
 #[c_export]
-pub fn bch2_bkey_reconcile_opts(c: &Fs, k: BkeySC<'_>) -> *const c::bch_extent_reconcile {
-    k.arm::<Ptrs>().and_then(|k| k.reconcile_opts(c).map(|r| r as *const _)).unwrap_or(core::ptr::null())
-}
-
-#[c_export]
 pub fn bch2_bkey_reconcile_work_id(c: &Fs, k: BkeySC<'_>) -> c::reconcile_work_id {
     k.reconcile_work_id(c)
 }

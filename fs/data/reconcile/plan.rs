@@ -53,21 +53,19 @@
 use crate::alloc::capacity::DiskReservation;
 use crate::btree::bkey::{BkeyI, BkeySC, BkeyV};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{is_restart, BtreeIter, BtreeTrans, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::btree::iter::{is_restart, BtreeIter, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::durability::BkeyVDurability;
 use crate::data::ptrs::{brand, BkeyVPtrs, Branded, ExtentEntryMut, PtrMask, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::rb_bit;
 use crate::data::reconcile::trigger::{rb_work_id, BkeyVReconcile};
-use crate::errcode::{ret_to_c, BchError};
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::{log_msg_ratelimited, warn_on_once};
 use crate::sb::counters::events;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::plain_bytes;
-use core::ffi::{c_int, c_uint};
 use core::mem::size_of;
-use cstruct_macros::c_export;
 
 /// Why a key's parked, for the trace.
 #[derive(Clone, Copy)]
@@ -392,14 +390,4 @@ fn node_key_eq(l: BkeySC<'_>, r: BkeySC<'_>) -> bool {
     };
     a.u64s == b.u64s && a.key_type() == b.key_type() && a.p == b.p && plain_bytes(&a.bversion) == plain_bytes(&b.bversion) &&
         a.size == b.size && l.val_bytes().get(skip..) == r.val_bytes().get(skip..)
-}
-
-/// # Safety
-/// C has an attempt in progress on @trans, @iter one of its iterators.
-#[c_export]
-pub unsafe fn bch2_extent_reconcile_pending_mod(trans: &BtreeTrans<'_>, iter: &mut BtreeIter<'_>, level: c_uint,
-                                                k: BkeySC<'_>, set: bool) -> c_int {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(pending_mod(&t, iter, level, k, set))
 }

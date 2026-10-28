@@ -10,8 +10,8 @@
 //! deletion's, a local - Progress::new(). Its state is a SeqLock's: the work
 //! is its one writer, updating it as it goes, and readers copy it out whole,
 //! never half an update - which C's unlocked reads of the same fields could
-//! get. C goes through the functions here, C's API as it was, and
-//! bch2_progress_status() for what the ioctl copies out.
+//! get. C goes through the functions here, C's API as it was; the ioctl
+//! copies out status().
 //!
 //! A zeroed indicator is a valid one, never initialized - as bch_fs embeds
 //! them, allocated zeroed; a C local is `= {}`.
@@ -395,20 +395,3 @@ pub fn bch2_progress_update_iter<'t>(
 pub fn bch2_progress_update_count(c: &Opaque<c::bch_fs>, s: &c::progress_indicator) {
     s.update_count(Fs::from_c(c))
 }
-
-/// bch2_progress_to_text().
-#[c_export]
-#[cold]
-pub fn bch2_progress_to_text(out: &mut c::printbuf, s: &c::progress_indicator) {
-    s.to_text(unsafe { Printbuf::borrow_raw(out) });
-}
-
-/// What BCH_IOCTL_RECOVERY_STATUS copies out, from one consistent read.
-#[c_export]
-pub fn bch2_progress_status(s: &c::progress_indicator, units: &mut u32, seen: &mut u64,
-                            total: &mut u64) {
-    let (u, n, t) = s.status();
-    (*units, *seen, *total) = (u.0, n, t);
-}
-
-

@@ -337,17 +337,6 @@ pub fn bucket_backpointer_mod(t: &TransAttempt<'_, '_>, orig_k: BkeySC<'_>, bp: 
     t.update_buffered(bp.v.bp_btree(), &n)
 }
 
-/// # Safety
-/// @trans is in an attempt; @bp is a backpointer key, all of it.
-#[c_export]
-pub unsafe fn bch2_bucket_backpointer_mod<'t>(trans: &'t BtreeTrans<'t>, orig_k: BkeySC<'_>,
-                                              bp: *mut c::bkey_i_backpointer, insert: bool) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    // SAFETY: C's struct bkey_i_backpointer is a BkeyI<Backpointer>
-    let bp = unsafe { &mut *bp.cast::<BkeyI<c::Backpointer>>() };
-    ret_to_c(bucket_backpointer_mod(&t, orig_k, bp, insert))
-}
-
 // ── What a backpointer points to ─────────────────────────────────────────
 
 fn extent_matches_bp(fs: &Fs, btree: c::btree_id, level: u32, k: BkeySC<'_>,

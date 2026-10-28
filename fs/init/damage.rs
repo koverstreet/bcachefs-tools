@@ -313,12 +313,6 @@ pub extern "C" fn bch2_damage_record_key_if_inode(trans: &BtreeTrans<'_>, btree:
     ret_to_c(record_key_if_inode(&unsafe { trans.attempt_in_progress() }, btree, pos, err))
 }
 
-#[c_export]
-pub extern "C" fn bch2_damage_record_data_loss(trans: &BtreeTrans<'_>, btree: c::btree_id, pos: c::bpos,
-                                           err: c::bch_sb_error_id) -> c_int {
-    ret_to_c(record_data_loss(&unsafe { trans.attempt_in_progress() }, btree, pos, err))
-}
-
 // ── Lost extents ─────────────────────────────────────────────────────────
 
 /// Next to bch2_btree_lost_data() at the sites that lose a node: @k is the
