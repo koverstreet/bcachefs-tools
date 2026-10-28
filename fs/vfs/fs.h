@@ -141,6 +141,7 @@ static inline void bch2_dir_casefold_changed(struct dentry *dentry) {}
 #include "vfs/export_gen.h"
 #include "vfs/inode_gen.h"
 #include "vfs/namei_gen.h"
+#include "vfs/super_block_gen.h"
 
 struct bch_inode_info *bch2_vfs_inode_get_trans(struct btree_trans *, subvol_inum, const char *);
 
@@ -150,6 +151,10 @@ struct bch_inode_info *bch2_inode_hash_init_insert(struct btree_trans *, subvol_
 						   struct bch_inode_unpacked *,
 						   struct bch_subvolume *);
 struct inode *bch2_vfs_inode_get(struct bch_fs *, subvol_inum, const char *);
+
+/* For Rust's super ops, until the inode cache is Rust: */
+void bch2_evict_inode(struct inode *);
+void bch2_free_inode(struct inode *);
 
 int bch2_fiemap(struct inode *, struct fiemap_extent_info *, u64, u64);
 

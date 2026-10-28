@@ -20,12 +20,10 @@
 //! reservations and i_sectors_acct, against a transfer. ei_qid changes only
 //! with both held, so either is enough to read it.
 //!
-//! The times go both ways. The btree's writes set them - a namespace
-//! operation's, setattr's - and update_after_write() copies them in; the VFS
-//! sets them itself - atime on access, mtime and ctime on a data write
-//! (file_update_time()) - and dirties the inode, and ->write_inode writes
-//! them back: write_vfs_times(). Every other field is the btree's, never
-//! copied from the VFS inode.
+//! The times go both ways: the btree's writes set them, and
+//! update_after_write() copies them in; the VFS sets them itself - atime on
+//! access, mtime and ctime on a data write - and ->write_inode writes them
+//! back. Every other field is the btree's.
 //!
 //! atime is written lazily (I_DIRTY_TIME) - a transaction per access would
 //! cost too much - by ->write_inode: sync, eviction, dirtytime expiry. That
@@ -46,7 +44,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use crate::btree::bkey::pos;
 use crate::btree::iter::{lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt};
 use crate::c;
-use crate::errcode::{errptr_to_result, ret_to_c, ret_to_class, ret_to_result, BchError};
+use crate::errcode::{errptr_to_result, ret_to_c, ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::inode;
 use crate::inode_opts::InodeOpt;
@@ -221,17 +219,6 @@ impl InodeInfo {
     /// @bi, about to be written, with the VFS's atime: see the file comment.
     pub(crate) fn fold_atime(&self, bi: &mut c::bch_inode_unpacked) {
         bi.bi_atime = self.fs().timespec_to_time(self.vfs().atime()) as u64;
-    }
-
-    /// ->write_inode(): the VFS inode's times written - its atime, which it's
-    /// the truth for, and the mtime and ctime it dirties the inode for.
-    pub fn write_vfs_times(&self) -> Result<(), BchError> {
-        let (fs, v) = (self.fs(), self.vfs());
-        self.update_lock().write_inode(ATTR_ATIME | ATTR_MTIME | ATTR_CTIME, |_, bi| {
-            bi.bi_mtime = fs.timespec_to_time(v.mtime()) as u64;
-            bi.bi_ctime = fs.timespec_to_time(v.ctime()) as u64;
-            Ok(())
-        })
     }
 
     pub fn update_lock(&self) -> UpdateLock<'_> {
@@ -414,15 +401,4 @@ pub fn bch2_write_inode(_c: &Opaque<c::bch_fs>, inode: &c::bch_inode_info, set: 
             .map(|r| r == 0),
         None      => Ok(true),
     }).map(|_| ()))
-}
-
-/// ->write_inode()
-///
-/// # Safety
-/// The VFS's arguments: @vinode one of ours, live for the call.
-#[c_export]
-pub unsafe fn bch2_vfs_write_inode(vinode: *mut c::inode, _wbc: *mut c::writeback_control) -> c_int {
-    // SAFETY: not always a reference - iput_final() writes one back with
-    // i_count 0 - but I_SYNC or I_WILL_FREE keeps it from eviction meanwhile
-    ret_to_class(unsafe { InodeInfo::from_inode(vinode) }.write_vfs_times())
 }

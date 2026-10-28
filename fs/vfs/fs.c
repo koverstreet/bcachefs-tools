@@ -364,11 +364,6 @@ retry:
 	}
 }
 
-static struct inode *bch2_alloc_inode(struct super_block *sb)
-{
-	BUG();
-}
-
 static void bch2_vfs_writeback_fn(struct work_struct *work)
 {
 	struct bch_inode_info *inode = container_of(work, struct bch_inode_info, ei_writeback_timer.work);
@@ -1374,7 +1369,7 @@ static void bch2_vfs_inode_init(struct btree_trans *trans,
 				    get_order(trans->c->opts.block_size));
 }
 
-static void bch2_free_inode(struct inode *vinode)
+void bch2_free_inode(struct inode *vinode)
 {
 	kmem_cache_free(bch2_inode_cache, to_bch_ei(vinode));
 }
@@ -1386,7 +1381,7 @@ module_param_named(verify_i_size_at_evict, verify_i_size_at_evict, bool, 0644);
 MODULE_PARM_DESC(verify_i_size_at_evict, "");
 #endif
 
-static void bch2_evict_inode(struct inode *vinode)
+void bch2_evict_inode(struct inode *vinode)
 {
 	struct bch_fs *c = vinode->i_sb->s_fs_info;
 	struct bch_inode_info *inode = to_bch_ei(vinode);
@@ -1539,80 +1534,6 @@ void bch2_evict_subvolume_inodes(struct bch_fs *c, snapshot_id_list *s)
 	rcu_read_unlock();
 }
 
-static int bch2_statfs(struct dentry *dentry, struct kstatfs *buf)
-{
-	struct super_block *sb = dentry->d_sb;
-	struct bch_fs *c = sb->s_fs_info;
-	struct bch_fs_usage_short usage = bch2_fs_usage_read_short(c);
-	unsigned shift = sb->s_blocksize_bits - 9;
-
-	/*
-	 * This assumes inodes take up 64 bytes, which is a decent average
-	 * number:
-	 *
-	 * Not anymore - bi_dir, bi_dir_offset came later and shouldn't have
-	 * been varint fields: seeing 144-160 byte inodes, so let's call it 256
-	 * bytes:
-	 */
-	u64 avail_inodes = ((usage.capacity - usage.used) << 1);
-
-	buf->f_type	= BCACHEFS_STATFS_MAGIC;
-	buf->f_bsize	= sb->s_blocksize;
-	buf->f_blocks	= usage.capacity >> shift;
-	buf->f_bfree	= usage.free >> shift;
-
-	/*
-	 * What this inode could actually write: a reservation at its replica
-	 * count, from placeable space (whole free buckets) - applications size
-	 * fallocate() from this. Never more than capacity - used.
-	 */
-	struct bch_inode_opts opts;
-	bch2_inode_opts_get_inode(c, &to_bch_ei(d_inode(dentry))->ei_inode, &opts);
-	unsigned nr_replicas = clamp_t(unsigned, opts.data_replicas, 1, BCH_REPLICAS_MAX);
-
-	struct bch_fs_placeable placeable = bch2_fs_sectors_placeable(c);
-	buf->f_bavail	= div_u64(min(avail_factor(usage.free),
-				      placeable.eventual[nr_replicas - 1]),
-				  nr_replicas) >> shift;
-
-	u64 nr_inodes = 0;
-	struct disk_accounting_pos k;
-	disk_accounting_key_init(k, nr_inodes);
-	bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&k), &nr_inodes, 1);
-
-	buf->f_files	= nr_inodes + avail_inodes;
-	buf->f_ffree	= avail_inodes;
-
-	buf->f_fsid	= uuid_to_fsid(c->sb.user_uuid.b);
-	buf->f_namelen	= BCH_NAME_MAX;
-
-	return 0;
-}
-
-static int bch2_sync_fs(struct super_block *sb, int wait)
-{
-	struct bch_fs *c = sb->s_fs_info;
-	u64 start = ktime_get_ns();
-	int ret = 0;
-
-	if (c->opts.journal_flush_disabled)
-		;
-	else if (!wait)
-		bch2_journal_flush_async(&c->journal, NULL);
-	else
-		ret = bch2_journal_flush(&c->journal);
-
-	event_inc_trace(c, sync_fs, buf, ({
-		prt_printf(&buf, "journal_flush_disabled: %u\n", c->opts.journal_flush_disabled);
-		prt_printf(&buf, "blocking: %u\n", wait);
-		prt_printf(&buf, "duration: ");
-		bch2_pr_time_units(&buf, ktime_get_ns() - start);
-		prt_newline(&buf);
-	}));
-
-	return bch2_err_class(ret);
-}
-
 static struct bch_fs *bch2_path_to_fs(const char *path)
 {
 	struct bch_fs *c;
@@ -1629,43 +1550,6 @@ static struct bch_fs *bch2_path_to_fs(const char *path)
 	return c ?: ERR_PTR(-ENOENT);
 }
 
-static int bch2_show_devname(struct seq_file *seq, struct dentry *root)
-{
-	struct bch_fs *c = root->d_sb->s_fs_info;
-	bool first = true;
-
-	guard(rcu)();
-	for_each_online_member_rcu(c, ca) {
-		if (!first)
-			seq_putc(seq, ':');
-		first = false;
-		seq_puts(seq, ca->disk_sb.sb_name);
-	}
-
-	return 0;
-}
-
-static int bch2_show_options(struct seq_file *seq, struct dentry *root)
-{
-	struct bch_fs *c = root->d_sb->s_fs_info;
-	CLASS(printbuf, buf)();
-
-	bch2_opts_to_text(&buf, c->opts, c, c->disk_sb.sb,
-			  &c->mount_opts,
-			  OPT_MOUNT, OPT_HIDDEN, OPT_SHOW_MOUNT_STYLE);
-	printbuf_nul_terminate(&buf);
-	seq_printf(seq, ",%s", buf.buf);
-
-	return buf.allocation_failure ? -ENOMEM : 0;
-}
-
-static void bch2_put_super(struct super_block *sb)
-{
-	struct bch_fs *c = sb->s_fs_info;
-
-	bch2_fs_stop(c);
-}
-
 /*
  * bcachefs doesn't currently integrate intwrite freeze protection but the
  * internal write references serve the same purpose. Therefore reuse the
@@ -1674,40 +1558,6 @@ static void bch2_put_super(struct super_block *sb)
  * the superblock is frozen. This is fine for now, but we should either add
  * blocking support or find a way to integrate sb_start_intwrite() and friends.
  */
-static int bch2_freeze(struct super_block *sb)
-{
-	struct bch_fs *c = sb->s_fs_info;
-
-	guard(rwsem_write)(&c->state_lock);
-	bch2_fs_read_only(c);
-	return 0;
-}
-
-static int bch2_unfreeze(struct super_block *sb)
-{
-	struct bch_fs *c = sb->s_fs_info;
-
-	if (test_bit(BCH_FS_emergency_ro, &c->flags))
-		return 0;
-
-	guard(rwsem_write)(&c->state_lock);
-	return bch2_fs_read_write(c);
-}
-
-static const struct super_operations bch_super_operations = {
-	.alloc_inode	= bch2_alloc_inode,
-	.free_inode	= bch2_free_inode,
-	.write_inode	= bch2_vfs_write_inode,
-	.evict_inode	= bch2_evict_inode,
-	.sync_fs	= bch2_sync_fs,
-	.statfs		= bch2_statfs,
-	.show_devname	= bch2_show_devname,
-	.show_options	= bch2_show_options,
-	.put_super	= bch2_put_super,
-	.freeze_fs	= bch2_freeze,
-	.unfreeze_fs	= bch2_unfreeze,
-};
-
 static int bch2_set_super(struct super_block *s, struct fs_context *fc)
 {
 	s->s_fs_info = fc->s_fs_info;
@@ -1846,7 +1696,7 @@ got_sb:
 	sb->s_blocksize		= block_bytes(c);
 	sb->s_blocksize_bits	= ilog2(block_bytes(c));
 	sb->s_maxbytes		= MAX_LFS_FILESIZE;
-	sb->s_op		= &bch_super_operations;
+	sb->s_op		= &bch2_super_ops;
 	sb->s_export_op		= &bch2_export_ops;
 #ifdef CONFIG_BCACHEFS_QUOTA
 	sb->s_qcop		= &bch2_quotactl_operations;

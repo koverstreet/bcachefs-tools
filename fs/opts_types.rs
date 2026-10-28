@@ -815,6 +815,9 @@ c_extern! {
                           res: *mut u64, err: *mut c::printbuf) -> c_int;
     pub fn bch2_opt_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, sb: *mut Head<c::bch_sb>,
                             opt: *const c::bch_option, v: u64, flags: c_uint);
+    pub fn bch2_opts_to_text(out: *mut c::printbuf, opts: c::bch_opts, c: *mut c::bch_fs,
+                             sb: *mut Head<c::bch_sb>, mask: *mut c::bch_opts_mask,
+                             show_mask: c_uint, hide_mask: c_uint, flags: c_uint);
     pub fn bch2_opt_hook_pre_set(c: *mut c::bch_fs, ca: *mut c::bch_dev, inum: u64,
                                  id: c::bch_opt_id, v: u64, change: bool) -> c_int;
     pub fn bch2_opt_hook_post_set(c: *mut c::bch_fs, ca: *mut c::bch_dev, inum: u64,

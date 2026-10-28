@@ -37,6 +37,7 @@ c_default!(journal_block);
 
 c_extern! {
     pub fn bch2_journal_flush(j: *mut c::journal) -> c_int;
+    pub fn bch2_journal_flush_async(j: *mut c::journal, parent: *mut c::closure);
     pub fn bch2_journal_advance_rewind_seq(j: *mut c::journal, seq: u64);
     pub fn bch2_journal_noflush_seq(j: *mut c::journal, start: u64, end: u64) -> bool;
     pub fn bch2_journal_meta(j: *mut c::journal) -> c_int;

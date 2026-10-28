@@ -245,7 +245,7 @@ fn reserve_factor(r: u64) -> u64 {
 }
 
 /// reserve_factor()'s inverse: what's free, less the margin.
-fn avail_factor(r: u64) -> u64 {
+pub(crate) fn avail_factor(r: u64) -> u64 {
     (r << c::RESERVE_FACTOR) / ((1 << c::RESERVE_FACTOR) + 1)
 }
 
