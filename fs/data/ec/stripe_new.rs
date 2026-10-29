@@ -138,7 +138,7 @@ use crate::data::ec::stripe_new_blocks::new_stripe_key;
 use crate::data::ec::stripe_new_reuse::Reuse;
 use crate::data::ec::stripe_new_tasks::stripe_task;
 use crate::data::moving::MovingIo;
-use crate::errcode::{bch_errcode, ret_to_result_void, BchError, FirstErr};
+use crate::errcode::{bch_errcode, BchError, FirstErr};
 use crate::fs::Fs;
 use crate::locking::{Guard, Lock};
 use crate::util::alloc::{kbox_pin_init, AllocError, KBox, KVVec};
@@ -148,14 +148,13 @@ use crate::util::ffi::Opaque;
 use crate::util::gather::{Gather, GatherRefSlot};
 use crate::util::refcount::{RefGuard, Refcount};
 use crate::util::kernel::local_clock;
-use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
 use crate::util::task::{spawn_unstarted, Spawn, Unstarted};
 use crate::util::projections::Volatile;
 use crate::util::Printbuf;
 use crate::{new_lock, published, prt};
 use arrayvec::ArrayVec;
-use core::ffi::{c_int, c_uint, c_void};
+use core::ffi::c_void;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
@@ -592,11 +591,12 @@ impl Internal {
         let nr = self.new_stripe.stripe().v().nr_blocks.into();
 
         for b in self.blocks[..nr].iter().filter_map(Slot::bucket) {
-            let bucket = bucket_to_u64(pos(b.dev().into(), b.bucket()));
+            let id = b.id();
+            let bucket = bucket_to_u64(pos(id.dev().into(), id.bucket()));
 
             match fs.ec.stripes_new_buckets.insert_new(bucket) {
                 Ok(Ok(())) => self.buckets.push(bucket),
-                Ok(Err(_)) => panic!("bucket {}:{} in two stripes being made", b.dev(), b.bucket()),
+                Ok(Err(_)) => panic!("bucket {}:{} in two stripes being made", id.dev(), id.bucket()),
                 Err(AllocError) => {
                     self.buckets_del(fs);
                     return fs.throw(bch_errcode::BCH_ERR_ENOMEM_stripe_new_bucket);
@@ -662,36 +662,28 @@ impl OpenBucketRef {
     /// The stripe being made it's a block of, if a writer's claimed it for
     /// one.
     pub fn stripe(&self) -> Option<&StripeNew> {
-        let s = self.ec();
+        let s = self.ec.load(Ordering::Relaxed);
         // SAFETY: its ->ec holds an io ref on the stripe while it's open,
         // which it is while it's borrowed
         (!s.is_null()).then(|| unsafe { StripeNew::from_c(s) })
     }
 }
 
-/// A writer's io ref on @s put: its open bucket's last pin put.
-///
-/// # Safety
-/// @s is the open bucket's ->ec, whose io ref - claim_bucket()'s, leaked to
-/// the open bucket - the caller gives up.
-#[c_export]
-pub unsafe fn bch2_ec_stripe_new_put_io(s: *mut c::ec_stripe_new) {
-    // SAFETY: the caller's
-    drop(unsafe { IoRef::adopt(StripeNew::from_c(s)) });
-}
+impl StripeNew {
+    /// A writer's io ref put: its open bucket's, at its last pin's put.
+    ///
+    /// # Safety
+    /// The caller has the io ref - claim_bucket()'s, leaked to the open
+    /// bucket's ->ec - and gives it up.
+    pub(crate) unsafe fn put_io(&self) {
+        // SAFETY: the caller's
+        drop(unsafe { IoRef::adopt(self) });
+    }
 
-/// The stripe @ob is a block of is cancelled, with @err: the writer's IO
-/// failed.
-///
-/// # Safety
-/// @ob is an open bucket with an ->ec, the caller's pin holding it open.
-#[c_export]
-pub unsafe fn bch2_ec_bucket_cancel(_c: &Opaque<c::bch_fs>, ob: &c::open_bucket, err: c_int) {
-    // SAFETY: the caller's
-    let ob = unsafe { OpenBucketRef::from_c(ob) };
-    let Err(err) = ret_to_result_void(err) else { panic!("a stripe block's write cancelled without an error") };
-    // SAFETY: its io ref keeps it
-    unsafe { StripeNew::from_c(ob.ec()) }.err.set(err);
+    /// Whether it has a block on device @dev - or had: BlockDevs.
+    pub(crate) fn has_dev(&self, dev: u32) -> bool {
+        self.internal.block_devs.get().test(dev as usize)
+    }
 }
 
 /// Where @wp's write goes in its stripe's buffer, if one of its open buckets
@@ -704,47 +696,18 @@ pub unsafe fn bch2_writepoint_ec_buf(c: &Opaque<c::bch_fs>, wp: &c::write_point)
     let fs = Fs::from_c(c);
     // SAFETY: the caller's
     let wp = unsafe { wp.alloc.lock.held() };
-    let ptrs = &wp.ptrs;
-    let Some(ob) = ptrs.v[..usize::from(ptrs.nr)].iter()
-        // SAFETY: the write point's pins, which its lock keeps
-        .map(|&i| unsafe { OpenBucketRef::from_idx(fs, i.expect("a bucket of the list")) })
-        .find(|ob| !ob.ec().is_null()) else { return core::ptr::null_mut() };
-
-    let offset = {
-        let rcu = read_lock();
-        let ca = fs.dev_rcu(ob.dev(), &rcu).expect("an open bucket's device");
-        u32::from(ca.mi.get().bucket_size) - ob.sectors_free()
+    // the write point's pins, which its lock keeps
+    let Some((ob, s)) = wp.ptrs.iter(fs).find_map(|ob| Some((ob, ob.stripe()?))) else {
+        return core::ptr::null_mut()
     };
 
-    // SAFETY: the write point's pin, and its io ref, keep its stripe
-    let mut s = unsafe { StripeNew::from_c(ob.ec()) }.lock();
+    let offset = u32::from(ob.ca().mi.get().bucket_size) - ob.sectors_free.get();
+    let mut s = s.lock();
     let buf = s.new_buf.as_mut().expect("a stripe with blocks claimed has its buffer");
     // its writer's to write, at its write point's free space
-    buf.block_mut(usize::from(ob.ec_idx()))[(offset as usize) << 9..].as_mut_ptr().cast()
+    buf.block_mut(usize::from(ob.ec_idx.get()))[(offset as usize) << 9..].as_mut_ptr().cast()
 }
 
-/// Whether @s has a block on device @dev - or had: BlockDevs. For the
-/// allocator stopping it, which drops its writers' open buckets on a stripe
-/// that does.
-///
-/// # Safety
-/// @s is an open bucket's ->ec.
-#[c_export]
-pub unsafe fn bch2_ec_stripe_new_has_dev(_c: &Opaque<c::bch_fs>, s: *const c::ec_stripe_new, dev: c_uint) -> bool {
-    // SAFETY: the caller's
-    unsafe { StripeNew::from_c(s) }.internal.block_devs.get().test(dev as usize)
-}
-
-/// @s's slot, for open_bucket_to_text() - under spinlocks, so not by its
-/// lock: launch() published it.
-///
-/// # Safety
-/// @s is an open bucket's ->ec.
-#[c_export]
-pub unsafe fn bch2_ec_stripe_new_idx(s: *const c::ec_stripe_new) -> u64 {
-    // SAFETY: the caller's
-    unsafe { StripeNew::from_c(s) }.idx.load(Ordering::Relaxed)
-}
 
 // ── Waiting for them ─────────────────────────────────────────────────────
 
@@ -773,7 +736,7 @@ impl Fs {
     /// still filling (seq 0) are skipped: they either complete after us, a
     /// later seq, or get cancelled via their io refs, which we shouldn't
     /// block on from under state_lock - the caller's own teardown
-    /// (bch2_ec_stop_dev(), say) cancels them before this.
+    /// (stripe_heads_stop(), say) cancels them before this.
     pub fn ec_flush_outstanding(&self) {
         let wait_seq = self.ec.stripe_new_seq.load(Ordering::Relaxed) as u64;
         self.new_stripes_wait(|v| !v.iter().any(|s| {
@@ -819,11 +782,8 @@ pub(crate) fn new_stripe_to_text(out: &mut Printbuf, fs: &Fs, s: &StripeNew) {
         prt!(out, " {}", b.bucket().map_or(0, |ob| ob.idx().get()));
 
         let Slot::Bucket(StripeBlock::Claimed(ob)) = b else { continue };
-        let rcu = read_lock();
-        if let Some(ca) = fs.dev_rcu(ob.dev(), &rcu) {
-            let bucket_size = u32::from(ca.mi.get().bucket_size);
-            prt!(out, "(pin {} {}/{})", ob.pin(), bucket_size - ob.sectors_free(), bucket_size);
-        }
+        let bucket_size = u32::from(ob.ca().mi.get().bucket_size);
+        prt!(out, "(pin {} {}/{})", ob.pin.load(Ordering::Relaxed), bucket_size - ob.sectors_free.get(), bucket_size);
     }
     out.newline();
     prt!(out, "{}", i.new_stripe.stripe().to_text(fs));

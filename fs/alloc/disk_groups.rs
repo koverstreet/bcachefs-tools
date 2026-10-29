@@ -517,26 +517,18 @@ pub fn bch2_dev_in_target_rcu(c: &Opaque<c::bch_fs>, dev: c_uint, target: c_uint
     Fs::from_c(c).dev_in_target(dev, Target::decode(target), &read_lock())
 }
 
-/// Spreading key for a candidate device: the number of already-chosen
-/// replicas in its failure domain. Sorting candidates by this ascending fills
-/// empty domains first, then doubles up - the failure-domain preference for
-/// replicated data. A device with no failure domain (id 0) always keys 0: it
-/// never shares a domain, so it sorts first and is never excluded.
-#[c_export]
-pub fn bch2_dev_domain_key(c: &Opaque<c::bch_fs>, chosen: &c::bch_devs_mask, dev: c_uint) -> u64 {
-    let fs = Fs::from_c(c);
-    let rcu = read_lock();
-
-    match fs.dev_failure_domain(dev as usize, &rcu) {
-        0 => 0,
-        d => chosen.d.iter().filter(|&i| fs.dev_failure_domain(i, &rcu) == d).count() as u64,
+impl Fs {
+    /// Spreading key for candidate device @dev: the number of copies already
+    /// chosen - @chosen - in its failure domain. Sorting candidates by this
+    /// ascending fills empty domains first, then doubles up. A device with no
+    /// failure domain (id 0) always keys 0: it never shares a domain, so it
+    /// sorts first and is never excluded.
+    pub(crate) fn dev_domain_key(&self, chosen: &c::bch_devs_mask, dev: u32, rcu: &ReadGuard) -> u64 {
+        match self.dev_failure_domain(dev as usize, rcu) {
+            0 => 0,
+            d => chosen.d.iter().filter(|&i| self.dev_failure_domain(i, rcu) == d).count() as u64,
+        }
     }
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_target_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>, v: c_uint) {
-    Fs::from_c(c).target_to_text(out, Target::decode(v));
 }
 
 // ── Options: target, and disk_label ──────────────────────────────────────

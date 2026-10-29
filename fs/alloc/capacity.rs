@@ -197,8 +197,8 @@ impl Fs {
 /// list, which doesn't keep writes in flight.
 fn dev_has_open_write_point(fs: &Fs, ca: &c::bch_dev) -> bool {
     fs.allocator.open_buckets.iter().any(|ob| {
-        let _l = Lock::from_c(&ob.lock).lock();
-        ob.bits.valid() && !ob.bits.on_partial_list() && ob.dev.get() == ca.dev_idx
+        let id = ob.id();
+        id.valid() && id.dev() == ca.dev_idx && !ob.flag(c::open_bucket::ON_PARTIAL_LIST)
     })
 }
 
@@ -270,11 +270,6 @@ impl Fs {
 
         c::bch_fs_usage_short { capacity, used, free: capacity - used }
     }
-}
-
-#[c_export]
-pub fn bch2_fs_usage_read_short(c: &Opaque<c::bch_fs>) -> c::bch_fs_usage_short {
-    Fs::from_c(c).usage_read_short()
 }
 
 /// The usage a committing transaction changes, under mark_lock: added to this
@@ -590,11 +585,6 @@ impl Fs {
         };
         c::bch_fs_placeable { eventual: at_or_above(&eventual), now: at_or_above(&now) }
     }
-}
-
-#[c_export]
-pub fn bch2_fs_sectors_placeable(c: &Opaque<c::bch_fs>) -> c::bch_fs_placeable {
-    Fs::from_c(c).sectors_placeable()
 }
 
 // ── Disk reservations ────────────────────────────────────────────────────

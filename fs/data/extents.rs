@@ -272,6 +272,25 @@ pub fn bch2_cut_back_s(where_: c::bpos, k: BkeyS<'_>) -> c_int {
     c_int::from(k.k().u64s) - u64s
 }
 
+// ── appending pointers ───────────────────────────────────────────────────
+
+/// @ptr after @k's value - its last entry - and @k a u64 longer.
+///
+/// # Safety
+/// @k is a key with pointers - btree_ptr, btree_ptr_v2, extent - with room
+/// after its value for one more, and @ptr is to a device it has none on.
+pub unsafe fn bkey_append_ptr(k: *mut c::bkey_i, ptr: c::bch_extent_ptr) {
+    // SAFETY: the caller's: a key, with the room
+    unsafe {
+        let t = u32::from((*k).k.type_);
+        assert!(matches!(t, c::KEY_TYPE_btree_ptr | c::KEY_TYPE_btree_ptr_v2 | c::KEY_TYPE_extent),
+                "a pointer appended to a key of type {t}");
+        let end = (&raw mut (*k).v).cast::<u8>().add((*k).k.val_bytes());
+        end.cast::<c::bch_extent_ptr>().write_unaligned(ptr);
+        (*k).k.u64s += 1;
+    }
+}
+
 // ── merging ──────────────────────────────────────────────────────────────
 
 /// Which crc covers two adjacent ranges' data merged.

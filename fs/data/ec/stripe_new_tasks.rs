@@ -297,7 +297,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
     // the rest of each data bucket zeroed: zero_out_rest_of_ec_bucket()
     for i in old_block_map.len()..nr_data {
         // its writer done with it
-        let Some((dev, sectors_free)) = s.lock().blocks[i].bucket().map(|b| (b.dev(), b.sectors_free())) else {
+        let Some((dev, sectors_free)) = s.lock().blocks[i].bucket().map(|b| (u32::from(b.id().dev()), b.sectors_free.get())) else {
             continue
         };
         if sectors_free == 0 {

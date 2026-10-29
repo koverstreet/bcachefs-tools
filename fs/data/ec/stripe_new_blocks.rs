@@ -65,9 +65,9 @@ fn alloc_blocks(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, stripe: &m
         let ret = t.bucket_alloc_set(req, stripe);
         for ob in req.ptrs.drain(fs) {
             let j = slots.clone().find(|&j| !blocks[j].gotten()).expect("a block left to fill");
-            req.devs_may_alloc.d.clear(ob.dev() as usize);
+            req.devs_may_alloc.d.clear(ob.id().dev().into());
             v.block_ptrs_mut()[j] = ob.ptr();
-            block_devs.add(ob.dev());
+            block_devs.add(ob.id().dev().into());
             blocks[j].fill(StripeBlock::Pinned(ob));
             *have += 1;
         }
@@ -194,7 +194,7 @@ fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, s: 
         // nothing's written to a new block yet: swapping it is a put and a
         // new bucket
         if new_frac.abs_diff(centroid) < dist / 2 {
-            block_devs.add(ob.dev());
+            block_devs.add(ob.id().dev().into());
             let old = core::mem::replace(&mut s.blocks[i], Slot::Bucket(StripeBlock::Pinned(ob)));
             assert!(matches!(old, Slot::Bucket(_)), "reallocating a stripe block that isn't a new bucket");
             sum = sum.wrapping_add(new_frac).wrapping_sub(fi);
@@ -256,7 +256,7 @@ fn shrink_to_gotten(s: &mut Internal, nr_blocks: usize, nr_parity: usize) {
 
     let mut devs = c::bch_devs_list::default();
     for (b, p) in s.blocks.iter().zip(v.block_ptrs()) {
-        let ob_dev = b.bucket().map(|b| b.dev());
+        let ob_dev = b.bucket().map(|b| u32::from(b.id().dev()));
         assert!(ob_dev.is_none_or(|d| d == u32::from(p.dev())), "a shrunk stripe's block not on its bucket's device");
         assert!(!devs.has(p.dev()), "a shrunk stripe with two blocks on device {}", p.dev());
         devs.add(p.dev());

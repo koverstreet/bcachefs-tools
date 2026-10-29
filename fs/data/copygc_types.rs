@@ -22,7 +22,7 @@ pub struct bch_fs_copygc {
     #[init(RustOnly::new(new_lock!(None)))]
     pub(crate) thread: rust_only!(Lock<c::spinlock_t, Option<Kthread>>),
     #[pin]
-    #[init(c::write_point::init())]
+    #[init(c::write_point::init(c::bch_data_type::BCH_DATA_user))]
     pub write_point: c::write_point,
     /* The thread's, read unlocked - foreground.c's to_text, move.c: */
     pub wait_at: Volatile<i64>,

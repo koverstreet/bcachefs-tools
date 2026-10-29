@@ -13,50 +13,12 @@
 #include <linux/hash.h>
 
 #include "alloc/foreground_gen.h"
+#include "alloc/dev_select_gen.h"
+#include "alloc/bucket_alloc_gen.h"
+#include "alloc/sector_alloc_gen.h"
+#include "alloc/write_point_gen.h"
 
 extern const char * const bch2_watermarks[];
-
-void bch2_reset_alloc_cursors(struct bch_fs *);
-
-/*
- * wake_counter_snapshot must be sampled by the caller *before* it adds
- * itself to freelist_wait via closure_wait(), otherwise a wake racing
- * between closure_wait() and the snapshot read is lost (we'd record the
- * already-bumped counter and then never notice the bump in the wait loop).
- */
-static inline int alloc_trace_add(struct alloc_request *req,
-				  u8 dev, int err,
-				  u32 wake_counter_snapshot,
-				  u64 free_buckets,
-				  bool copygc_can_make_progress)
-{
-	if (darray_push(&req->trace, ((alloc_trace_entry) {
-		.dev				= dev,
-		.new_stripe_alloc		= req->new_stripe_alloc,
-		.will_retry_all_devices		= req->will_retry_all_devices,
-		.will_retry_target_devices	= req->will_retry_target_devices,
-		.will_retry_set_devices		= req->will_retry_set_devices,
-		.copygc_can_make_progress	= copygc_can_make_progress,
-		.have_cl			= req->cl != NULL,
-		.err				= err,
-		.wake_counter_snapshot		= wake_counter_snapshot,
-		.free_buckets			= free_buckets,
-	    })))
-		req->trace_alloc_failed = true;
-
-	return err;
-}
-
-void bch2_dev_alloc_list_devs(struct bch_fs *,
-			      struct dev_stripe_state *,
-			      struct bch_devs_mask *,
-			      const struct bch_devs_mask *,
-			      u64 *,
-			      struct dev_alloc_list *);
-void bch2_dev_alloc_list(struct bch_fs *,
-			 struct dev_stripe_state *,
-			 struct alloc_request *);
-void bch2_dev_stripe_increment(struct bch_dev *, struct dev_stripe_state *);
 
 static inline struct bch_dev *ob_dev(struct bch_fs *c, struct open_bucket *ob)
 {
@@ -99,8 +61,6 @@ static inline unsigned bch2_open_buckets_starved_watermark(struct bch_fs *c)
 	return w;
 }
 
-struct open_bucket *bch2_bucket_alloc_trans(struct btree_trans *, struct alloc_request *);
-
 /*
  * freelist_wait wake helpers. Every wake_up site on
  * c->allocator.freelist_wait should go through these so the wake counters
@@ -120,9 +80,6 @@ struct open_bucket *bch2_bucket_alloc_trans(struct btree_trans *, struct alloc_r
  *       closure off the waitlist when we can't continue waiting. Real
  *       waiters see no counter advance and re-park silently.
  */
-void bch2_alloc_wake_dev(struct bch_dev *);
-void bch2_alloc_wake_all(struct bch_fs *);
-void bch2_alloc_waiters_unpark(struct bch_fs *);
 
 static inline void ob_push(struct bch_fs *c, struct open_buckets *obs,
 			   struct open_bucket *ob)
@@ -150,11 +107,6 @@ static inline struct open_bucket *ec_open_bucket(struct bch_fs *c,
 
 	return NULL;
 }
-
-void bch2_open_bucket_write_error(struct bch_fs *,
-			struct open_buckets *, unsigned, int);
-
-void __bch2_open_bucket_put(struct bch_fs *, struct open_bucket *);
 
 static inline void bch2_open_bucket_put(struct bch_fs *c, struct open_bucket *ob)
 {
@@ -265,18 +217,7 @@ static inline bool bch2_bucket_is_open_safe(struct bch_fs *c, unsigned dev, u64 
 	return bch2_bucket_is_open(c, dev, bucket);
 }
 
-int bch2_bucket_alloc_set_trans(struct btree_trans *, struct alloc_request *,
-				struct dev_stripe_state *);
 
-int bch2_alloc_sectors_req(struct btree_trans *, struct alloc_request *,
-			   struct write_point_specifier,
-			   struct write_point **);
-
-struct alloc_request *alloc_request_get(struct btree_trans *, unsigned, unsigned,
-					struct bch_devs_list *, unsigned, unsigned,
-					enum bch_watermark, enum bch_write_flags,
-					struct closure *);
-void alloc_request_put(struct alloc_request *);
 
 DEFINE_FREE(alloc_request_put, struct alloc_request *,
 	    if (!IS_ERR_OR_NULL(_T)) alloc_request_put(_T))
@@ -352,8 +293,6 @@ void bch2_alloc_sectors_append_ptrs(struct bch_fs *, struct write_point *,
 				    struct bkey_i *, unsigned, bool);
 void bch2_alloc_sectors_done(struct bch_fs *, struct write_point *);
 
-void bch2_open_buckets_stop(struct bch_fs *c, struct bch_dev *, bool);
-
 static inline struct write_point_specifier writepoint_hashed(unsigned long v)
 {
 	return (struct write_point_specifier) { .v = v | 1 };
@@ -364,22 +303,6 @@ static inline struct write_point_specifier writepoint_ptr(struct write_point *wp
 	return (struct write_point_specifier) { .v = (unsigned long) wp };
 }
 
-void bch2_fs_allocator_foreground_init(struct bch_fs *);
-
-void bch2_open_bucket_to_text(struct printbuf *, struct bch_fs *, struct open_bucket *);
-void bch2_open_buckets_to_text(struct printbuf *, struct bch_fs *, struct bch_dev *);
-void bch2_open_buckets_partial_to_text(struct printbuf *, struct bch_fs *);
-
-void bch2_write_points_to_text(struct printbuf *, struct bch_fs *);
-
-void bch2_fs_open_buckets_to_text(struct printbuf *, struct bch_fs *);
-void bch2_fs_alloc_debug_to_text(struct printbuf *, struct bch_fs *);
-void bch2_dev_alloc_debug_to_text(struct printbuf *, struct bch_dev *);
-
-void bch2_alloc_request_to_text(struct printbuf *, struct bch_fs *,
-				struct alloc_request *);
-void __bch2_wait_on_allocator(struct btree_trans *, struct alloc_request *,
-			      int, struct closure *);
 
 /*
  * Returns an error if the filesystem has gone emergency read-only: the

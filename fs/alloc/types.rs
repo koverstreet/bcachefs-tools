@@ -7,7 +7,7 @@ use crate::fs::Fs;
 use crate::alloc::discard::{do_discards_work, DiscardBio, DiscardState};
 use crate::util::alloc::KVVec;
 use crate::locking::{Lock, SeqLock};
-use crate::new_lock;
+use crate::{new_lock, new_work};
 use crate::types::{CacheAligned, RustOnly, c_default, rust_only};
 use crate::util::bio::BioSet;
 use crate::util::workqueue::ReffedWork;
@@ -15,7 +15,7 @@ use crate::util::percpu::{Counters, PerCpu};
 use crate::util::projections::Volatile;
 use crate::published;
 use core::ffi::{c_uint, c_ulong};
-use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU64};
+use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU64, AtomicU8};
 use cstruct_macros::{bitfield, c_const, c_enum, c_typedef, c_xmacro, placed, CStruct, Fieldwise, Init, TypeInfo};
 use pin_init::pin_data;
 use nestify::nest;
@@ -77,6 +77,11 @@ unsafe impl crate::util::vstructs::Plain for Option<OpenBucketIdx> {}
 crate::tear_safe!(Option<OpenBucketIdx>);
 
 impl OpenBucketIdx {
+    /// Slot @idx's index - None for 0, the sentinel's.
+    pub fn new(idx: c::open_bucket_idx_t) -> Option<Self> {
+        core::num::NonZero::new(idx).map(OpenBucketIdx)
+    }
+
     /// # Safety
     /// @idx isn't 0.
     pub unsafe fn new_unchecked(idx: c::open_bucket_idx_t) -> Self {
@@ -86,6 +91,29 @@ impl OpenBucketIdx {
 
     pub fn get(self) -> usize {
         self.0.get().into()
+    }
+}
+
+/// A write point's index in c->allocator.write_points, plus one: a link in
+/// the write point hash, which C has as a u8, 0 for none.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct WritePointIdx(core::num::NonZero<u8>);
+
+// SAFETY: None is all zeroes, as an Option of a NonZero is
+unsafe impl pin_init::ZeroableOption for WritePointIdx {}
+
+// SAFETY: a u8, any of which is an Option of one - 0 None
+unsafe impl crate::util::vstructs::Plain for Option<WritePointIdx> {}
+crate::tear_safe!(Option<WritePointIdx>);
+
+impl WritePointIdx {
+    pub fn new(idx: usize) -> Self {
+        WritePointIdx(u8::try_from(idx + 1).ok().and_then(core::num::NonZero::new).expect("a write point's index"))
+    }
+
+    pub fn get(self) -> usize {
+        usize::from(self.0.get()) - 1
     }
 }
 
@@ -126,14 +154,13 @@ nest! {
     ///
     /// - @pin: atomic. The last put closes it - __bch2_open_bucket_put() -
     ///   unless @ec is set: then it stays open for that stripe, which closes it.
-    /// - @lock: held to open it - @valid, @dev, @generation, @bucket,
-    ///   @sectors_free and @free_uncounted set - and to close it, @valid and
-    ///   @data_type cleared. Taken by what looks at slots it holds no pin on,
-    ///   to see @valid, @dev and @bucket together: bch2_dev_has_open_write_point(),
-    ///   bch2_open_buckets_to_text(), and bch2_bucket_set_discard_fast(),
-    ///   which sets @do_discards_fast under it; the close reads and clears that
-    ///   without it.
-    /// - @dev, @generation, @bucket: fixed from the open to the close.
+    /// - @lock: publishes its identity, OpenBucketId - valid, dev, generation
+    ///   and bucket, one word - set under it at the open, valid cleared under
+    ///   it at the close: fixed from the one to the other, and read whole
+    ///   without it. Held, the bucket stays open, or closed: taken by what
+    ///   looks at slots it holds no pin on - open_buckets_to_text(), and
+    ///   bucket_set_discard_fast(), which sets DO_DISCARDS_FAST under it; the
+    ///   close takes that without it.
     /// - @idx: fixed from when the table's built.
     /// - @sectors_free: set at the open, then its writer's - written under the
     ///   lock of the write point that has it: bch2_alloc_sectors_req()'s
@@ -142,9 +169,12 @@ nest! {
     /// - @data_type: its holder's - set when it's handed out, and by
     ///   bch2_open_bucket_get() under the write point's lock; cleared at the
     ///   close.
-    /// - @freelist, @on_partial_list, @hash: the allocator's, under
-    ///   freelist_lock - @hash also read without it, by bch2_bucket_is_open(),
-    ///   and @on_partial_list by bch2_dev_has_open_write_point(), under @lock.
+    /// - @freelist, ON_PARTIAL_LIST, @hash: the allocator's, under
+    ///   freelist_lock - @hash also read without it, by bucket_is_open(), and
+    ///   ON_PARTIAL_LIST by dev_has_open_write_point(), under @lock.
+    /// - @flags: ON_PARTIAL_LIST and DO_DISCARDS_FAST, set and cleared
+    ///   atomically - they're written under different locks, which a shared
+    ///   byte's read-modify-writes would lose each other's bits under.
     /// - @free_uncounted: set at the open; then under freelist_lock.
     /// - @ec, @ec_idx: set when a stripe being made has a writer claim the
     ///   bucket as one of its blocks - OpenBucket::claim(), under the stripe
@@ -161,15 +191,12 @@ nest! {
     #[repr(C)]
     #[derive(CStruct, Init)]
     pub struct open_bucket {
-        pub lock: c::spinlock_t,
+        #[pin]
+        #[init(new_lock!((), ::pin_init::zeroed(), "&ob->lock"))]
+        #[c_lock("spinlock_t lock")]
+        pub lock: Lock<c::spinlock_t, (), OpenBucketIdentity>,
         pub pin: AtomicI32,
-        /* handle already removed from ca->nr_open_buckets (bucket left free):
-         * under freelist_lock */
-        pub free_uncounted: Volatile<bool>,
-        pub dev: Volatile<u8>,
-        pub generation: Volatile<u8>,
         pub sectors_free: Volatile<u32>,
-        pub bucket: Volatile<u64>,
         #[c("struct ec_stripe_new *ec")]
         pub ec: AtomicPtr<c::ec_stripe_new>,
 
@@ -183,14 +210,44 @@ nest! {
          * the block in the stripe this open_bucket corresponds to:
          */
         pub ec_idx: Volatile<u8>,
+        /* enum bch_data_type */
+        pub data_type: Volatile<u8>,
+        /* handle already removed from ca->nr_open_buckets (bucket left free):
+         * under freelist_lock */
+        pub free_uncounted: Volatile<bool>,
+        pub flags: AtomicU8,
+    }
+}
+
+/// Which bucket an open bucket is, and whether it's open: one word, so that
+/// a reader without its lock sees all of it from one open.
+#[bitfield(u64)]
+pub struct OpenBucketId {
+    pub valid: bool,
+    pub dev: u8,
+    pub generation: u8,
+    pub bucket: u47,
+}
+
+// SAFETY: a u64, as AtomicU64 is laid out; zeroes are one, not valid
+unsafe impl crate::util::projections::AtomicWord for OpenBucketId {
+    type Atomic = AtomicU64;
+
+    fn load(a: &AtomicU64) -> Self {
+        Self::from_bits(a.load(core::sync::atomic::Ordering::Relaxed))
+    }
+
+    fn store(a: &AtomicU64, v: Self) {
+        a.store(v.into_bits(), core::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+published! {
+    /// An open bucket's identity: written under its lock, read without it.
+    #[derive(CStruct)]
+    pub struct OpenBucketIdentity {
         #[c_bitfield]
-        #>[bitfield(u8)]
-        pub bits: pub struct open_bucket_bits {
-            #[bits(5)] pub data_type: c::bch_data_type,
-            pub valid:            bool,
-            pub on_partial_list:  bool,
-            pub do_discards_fast: bool,
-        },
+        pub id: Volatile<OpenBucketId>,
     }
 }
 
@@ -269,9 +326,13 @@ published! {
 #[pin_data]
 #[repr(C)]
 #[derive(CStruct, Init)]
+#[init_args(data_type: c::bch_data_type)]
 pub struct write_point_alloc {
     pub __align: CacheAligned,
-    pub node: c::hlist_node,
+    /* the next in its hash chain: write_points_hash_lock's */
+    #[c("u8 hash_next")]
+    pub hash_next: Volatile<Option<WritePointIdx>>,
+    #[init(data_type)]
     pub data_type: c::bch_data_type,
     #[pin]
     #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&wp->lock"))]
@@ -282,10 +343,11 @@ pub struct write_point_alloc {
 #[pin_data]
 #[repr(C)]
 #[derive(CStruct, Init)]
+#[init_args(data_type: c::bch_data_type)]
 pub struct write_point {
     #[c_anon]
     #[pin]
-    #[init(write_point_alloc::init())]
+    #[init(write_point_alloc::init(data_type))]
     pub alloc: write_point_alloc,
     #[c_anon]
     #[pin]
@@ -324,7 +386,7 @@ impl WritePointWrites {
 published! {
     /// What state the write point's writes are in, and how long it's spent
     /// in each: written under writes_lock, read without it - the state by
-    /// bch2_write_queue()'s check, the times by bch2_write_point_to_text().
+    /// bch2_write_queue()'s check, the times by write_points_to_text().
     #[derive(CStruct)]
     pub struct WritePointState {
         #[c("enum write_point_state state")]
@@ -338,6 +400,8 @@ published! {
 #[derive(CStruct, Init)]
 pub struct write_point_io {
     pub __align: CacheAligned,
+    #[pin]
+    #[init(new_work!(c::bch2_write_point_do_index_updates, "&wp->index_update_work"))]
     pub index_update_work: c::work_struct,
 
     #[pin]
@@ -356,7 +420,7 @@ published! {
     /// Where copies have to go, when free space is lopsided enough that it
     /// decides how much fits: recomputed with the reservation caches - from
     /// what it was, for hysteresis - and read without the lock by the
-    /// allocator, as a placement preference - see bch2_dev_alloc_required().
+    /// allocator, as a placement preference - see dev_alloc_required().
     #[derive(CStruct)]
     pub struct Placement {
         /* bit n - 1: placement decides how much fits at n replicas */
@@ -454,20 +518,19 @@ pub struct bch_fs_allocator {
     pub open_buckets_hash: [Volatile<Option<OpenBucketIdx>>; c::OPEN_BUCKETS_COUNT as usize],
 
     #[pin]
-    #[init(::pin_init::pin_init_array_from_fn(|_| c::write_point::init()))]
+    #[init(::pin_init::pin_init_array_from_fn(|_| c::write_point::init(c::bch_data_type::BCH_DATA_user)))]
     pub write_points: [c::write_point; c::WRITE_POINT_MAX as usize],
-    pub write_points_hash: [c::hlist_head; c::WRITE_POINT_HASH_NR as usize],
-    /* the hash's writers - its readers are RCU's - and write_points_nr */
+    /* the write point hash's writers, and write_points_nr's */
     #[pin]
     #[init(new_lock!((), ::pin_init::zeroed(), "&c->allocator.write_points_hash_lock"))]
     #[c_lock("struct mutex write_points_hash_lock")]
-    pub write_points_hash_lock: Lock<c::mutex, (), WritePointsNr>,
+    pub write_points_hash_lock: Lock<c::mutex, (), WritePointsHash>,
 
     #[pin]
-    #[init(c::write_point::init())]
+    #[init(c::write_point::init(c::bch_data_type::BCH_DATA_btree))]
     pub btree_write_point: c::write_point,
     #[pin]
-    #[init(c::write_point::init())]
+    #[init(c::write_point::init(c::bch_data_type::BCH_DATA_user))]
     pub reconcile_write_point: c::write_point,
 }
 
@@ -493,11 +556,14 @@ published! {
 }
 
 published! {
-    /// The write points in use, of write_points[], read without
-    /// write_points_hash_lock.
+    /// The write points in use, of write_points[], and their hash, by the
+    /// specifier each was last used for: read without write_points_hash_lock
+    /// - write_point.rs.
     #[derive(CStruct)]
-    pub struct WritePointsNr {
+    pub struct WritePointsHash {
         pub write_points_nr: Volatile<c_uint>,
+        #[c("u8 write_points_hash[WRITE_POINT_HASH_NR]")]
+        pub write_points_hash: [Volatile<Option<WritePointIdx>>; c::WRITE_POINT_HASH_NR as usize],
     }
 }
 

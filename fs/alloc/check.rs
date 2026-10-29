@@ -573,21 +573,6 @@ fn recheck_freespace_key(fs: &Fs, pos: c::bbpos) -> Result<(), BchError> {
     })
 }
 
-/// The allocator's check of the freespace entry at @iter, before it takes
-/// the bucket: its gen and journal_seq_empty, if it's good.
-///
-/// # Safety
-/// @trans is in an attempt.
-#[c_export]
-pub unsafe fn bch2_check_freespace_key_async(trans: &BtreeTrans<'_>, iter: &BtreeIter<'_>, gen: &mut u8,
-                                             journal_seq_empty: &mut u64) -> c_int {
-    let t = unsafe { trans.attempt_in_progress() };
-    ret_to_c(check_freespace_key(&t, iter, FreespaceCheck::Allocator).map(|(g, seq)| {
-        *gen = g;
-        *journal_seq_empty = seq;
-    }))
-}
-
 /// Bucket_gens key @k, at @iter, against the device's buckets - gens for
 /// buckets that exist were checked against their alloc keys:
 /// bch2_check_bucket_gens_key().

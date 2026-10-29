@@ -15,13 +15,13 @@
 use crate::alloc::disk_groups::Target;
 use crate::alloc::foreground::OpenBucket;
 use crate::btree::bkey::BkeyV;
-use crate::btree::iter::{BtreeTrans, TransAttempt};
+use crate::btree::iter::TransAttempt;
 use crate::c;
 use crate::data::ec::buf::{MemWait, StripeBuf};
 use crate::data::ec::stripe_new::{self, Internal, IoRef, Slot, StripeBlock, StripeNew, StripeNewBox};
 use crate::data::ec::stripe_new_reuse::OldRead;
 use crate::data::ec::stripe_new_blocks::stripe_alloc_or_reuse;
-use crate::errcode::{bch_errcode, err_ptr, BchError};
+use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::locking::Guard;
 use crate::sb::counters::events;
@@ -31,7 +31,7 @@ use crate::util::ffi::Opaque;
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::Printbuf;
 use crate::{bch_err, new_lock, prt};
-use core::ffi::{c_int, c_uint, c_ulong};
+use core::ffi::{c_int, c_ulong};
 use core::ptr::NonNull;
 use cstruct_macros::c_export;
 use pin_init::pin_init;
@@ -168,10 +168,8 @@ impl Fs {
 // The sector allocator gets erasure coded buckets from a stripe head - one
 // per disk label, algorithm, redundancy and watermark - which stages the
 // stripe being filled. The head is locked from lookup until
-// bch2_ec_stripe_head_put(): bch2_ec_stripe_head_get(), below,
-// works under the lock between the two - allocating the stripe, its buffers,
-// claiming a bucket of it - and carries it held to C's caller
-// (Guard::leave_locked()), until the sector allocator converts.
+// stripe_head_put(): head_get(), below, works under the lock between the two
+// - allocating the stripe, its buffers, claiming a bucket of it.
 //
 // A head hands its stripe on - pending, to the create path - when every data
 // block's claimed, when its devices change under a stripe not yet allocated,
@@ -292,16 +290,6 @@ pub(crate) fn stripe_head_put(fs: &Fs, mut g: HeadGuard<'_>) {
     }
 }
 
-/// stripe_head_put(), for C.
-///
-/// # Safety
-/// @h locked, by bch2_ec_stripe_head_get().
-#[c_export]
-pub unsafe fn bch2_ec_stripe_head_put(c: &Opaque<c::bch_fs>, h: &c::ec_stripe_head) {
-    // SAFETY: the caller's
-    stripe_head_put(Fs::from_c(c), unsafe { h.lock.assume_locked() })
-}
-
 /// Whether stopping device @ca - None: the filesystem - cancels @s: one with a
 /// block on it, freshly allocated or carried from a reused stripe.
 /// should_cancel_stripe().
@@ -310,7 +298,7 @@ fn stripe_on_dev(s: &Internal, ca: Option<&c::bch_dev>) -> bool {
     let v = s.new_stripe.stripe().v();
 
     (0..usize::from(v.nr_blocks)).any(|i| {
-        let ob_dev = s.blocks[i].bucket().map(|b| b.dev());
+        let ob_dev = s.blocks[i].bucket().map(|b| u32::from(b.id().dev()));
         // a reused block has no bucket of ours: init_new_stripe_from_old()
         // copies the old pointer into the key
         ob_dev == Some(ca.dev_idx.into()) ||
@@ -321,7 +309,7 @@ fn stripe_on_dev(s: &Internal, ca: Option<&c::bch_dev>) -> bool {
 /// Cancel the stripes the heads are filling with a block on @ca - every one,
 /// for None: for the filesystem going read-only, which it's already set, so
 /// heads stay empty after.
-fn stripe_heads_stop(fs: &Fs, ca: Option<&c::bch_dev>) {
+pub(crate) fn stripe_heads_stop(fs: &Fs, ca: Option<&c::bch_dev>) {
     let heads = fs.ec.stripe_heads.lock();
     for h in heads.iter() {
         let mut g = h.lock.lock();
@@ -329,13 +317,6 @@ fn stripe_heads_stop(fs: &Fs, ca: Option<&c::bch_dev>) {
             stripe_head_detach(fs, &mut g, Some(BchError::from(bch_errcode::BCH_ERR_erofs_no_writes)));
         }
     }
-}
-
-/// With no @ca, every stripe head's: bch2_open_buckets_stop() stopping the
-/// filesystem passes NULL.
-#[c_export]
-pub fn bch2_ec_stop_dev(c: &Opaque<c::bch_fs>, ca: Option<&c::bch_dev>) {
-    stripe_heads_stop(Fs::from_c(c), ca)
 }
 
 #[c_export]
@@ -466,7 +447,7 @@ fn claim_bucket(req: &c::alloc_request, s: &StripeNew, i: &mut Internal) -> Opti
     for &dev in &req.devs_sorted.data[..req.devs_sorted.nr as usize] {
         for ec_idx in 0..nr_data {
             let Slot::Bucket(StripeBlock::Pinned(b)) = &i.blocks[ec_idx] else { continue };
-            if b.dev() == u32::from(dev) {
+            if b.id().dev() == dev {
                 let Slot::Bucket(StripeBlock::Pinned(b)) = core::mem::take(&mut i.blocks[ec_idx]) else {
                     unreachable!()
                 };
@@ -531,7 +512,7 @@ fn head_stage(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, h: &c::ec_st
 /// The stripe head for @req's erasure coding, locked, with a block of its
 /// stripe claimed for this write - if it's given @wp_stripe, its write
 /// point's, and it had one for us: or the error, an ec_alloc_failed subtype
-/// naming the reason. bch2_ec_stripe_head_get().
+/// naming the reason.
 pub(crate) fn head_get<'f>(t: &TransAttempt<'_, 'f>, req: &mut c::alloc_request, algo: u32,
                            wp_stripe: Option<&mut c::dev_stripe_state>)
     -> Result<(&'f c::ec_stripe_head, HeadGuard<'f>, Option<OpenBucket>), BchError>
@@ -559,33 +540,3 @@ pub(crate) fn head_get<'f>(t: &TransAttempt<'_, 'f>, req: &mut c::alloc_request,
     }
 }
 
-/// head_get(), for C: the head locked, until bch2_ec_stripe_head_put().
-///
-/// # Safety
-/// @trans in an attempt; @req the caller's; @ob NULL, or where to put the
-/// block claimed - and @req's write point locked.
-#[c_export]
-pub unsafe fn bch2_ec_stripe_head_get<'t>(trans: &'t BtreeTrans<'t>, req: &mut c::alloc_request, algo: c_uint,
-                                          ob: *mut *mut c::open_bucket) -> *mut c::ec_stripe_head {
-    // SAFETY: the caller's
-    let t = unsafe { trans.attempt_in_progress() };
-    let fs = t.fs();
-    let mut ob = unsafe { ob.as_mut() };
-    if let Some(ob) = ob.as_mut() {
-        **ob = core::ptr::null_mut();
-    }
-    // SAFETY: the caller's, with @ob
-    let mut wp = ob.is_some().then(|| unsafe { (*req.wp).alloc.lock.held() });
-    match head_get(&t, req, algo, wp.as_mut().map(|wp| &mut wp.stripe)) {
-        Ok((h, g, got)) => {
-            g.leave_locked();
-            if let Some(ob) = ob.as_mut() {
-                **ob = got.map_or(core::ptr::null_mut(), |got| {
-                    core::ptr::from_ref(&fs.allocator.open_buckets[got.into_idx().get()]).cast_mut()
-                });
-            }
-            core::ptr::from_ref(h).cast_mut()
-        }
-        Err(e) => err_ptr(e),
-    }
-}

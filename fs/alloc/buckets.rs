@@ -1014,7 +1014,7 @@ impl c::bch_dev {
         self.usage.sum_nonnegative()
     }
 
-    /// @usage, of this device, as a table: bch2_dev_usage_to_text().
+    /// @usage, of this device, as a table.
     pub fn usage_to_text(&self, out: &mut Printbuf, usage: &c::bch_dev_usage_full) {
         if out.nr_tabstops() < 5 {
             out.tabstops_reset();
@@ -1044,17 +1044,6 @@ pub unsafe fn bch2_dev_usage_read_fast(ca: &c::bch_dev, usage: *mut c::bch_dev_u
 #[c_export]
 pub unsafe fn bch2_dev_usage_full_read_fast(ca: &c::bch_dev, usage: *mut c::bch_dev_usage_full) {
     unsafe { usage.write(ca.usage_full_read_fast()) }
-}
-
-#[c_export]
-pub fn bch2_is_superblock_bucket(ca: &c::bch_dev, b: u64) -> bool {
-    ca.is_superblock_bucket(b)
-}
-
-#[cold]
-#[c_export]
-pub fn bch2_dev_usage_to_text(out: &mut Printbuf, ca: &c::bch_dev, usage: &c::bch_dev_usage_full) {
-    ca.usage_to_text(out, usage)
 }
 
 /// The bucket @v encodes - device in the top 16 bits, bucket in the low 48 -

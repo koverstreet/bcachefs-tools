@@ -421,13 +421,13 @@ pub struct bch_dev {
     pub alloc_cursor: [crate::util::projections::Volatile<u64>; 3],
 
     /*
-     * Incremented by bch2_alloc_wake_dev() at every site that wakes
+     * Incremented by alloc_wake() at every site that wakes
      * freelist_wait for a specific device. Waiters on
      * c->allocator.freelist_wait snapshot the counters for the devices
      * they need at park time and compare on wake: if none have advanced,
      * the wake didn't concern this waiter and it re-parks without the
      * full alloc retry. Fs-wide wakes bump allocator.wake_all_counter
-     * instead (see bch2_alloc_wake_all()).
+     * instead (see alloc_wake_all()).
      */
     pub alloc_wake_counter: AtomicI32,
 

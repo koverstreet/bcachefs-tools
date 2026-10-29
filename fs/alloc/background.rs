@@ -1000,7 +1000,10 @@ impl NeedDiscardPos {
 
 /// Where in a free bucket's offset, in the freespace btree, the high bits of
 /// its gc gen go.
-const FREESPACE_GENBITS_SHIFT: u32 = 56;
+pub(crate) const FREESPACE_GENBITS_SHIFT: u32 = 56;
+
+/// How many genbits there are: gc gens >> 4.
+pub(crate) const FREESPACE_GENBITS_NR: u64 = (u8::MAX >> 4) as u64 + 1;
 
 /// A free bucket's place in the freespace btree: the bucket, with the high
 /// bits of its gc gen in the top bits of the offset - alloc_freespace_pos().
@@ -1640,7 +1643,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
                 new_a.journal_seq_empty = 0;
 
                 if !fs.bucket_set_discard_fast(dev, b) {
-                    crate::alloc::discard::bch2_fast_discard_bucket_add(&ca, b);
+                    crate::alloc::discard::fast_discard_bucket_add(&ca, b);
                 }
             }
         }
@@ -1651,7 +1654,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
         }
 
         if became(is(data_type::cached), &old_a, new_a) && !fs.bucket_is_open(dev, b) &&
-           crate::alloc::discard::bch2_should_invalidate_buckets(&ca, ca.usage_read_fast()) != 0 {
+           ca.should_invalidate_buckets(&ca.usage_read_fast()) != 0 {
             ca.do_invalidates();
         }
 

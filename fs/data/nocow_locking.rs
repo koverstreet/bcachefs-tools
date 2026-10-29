@@ -386,7 +386,3 @@ pub fn bch2_bucket_nocow_unlock(c: &Fs, bucket: c::bpos, flags: c_int) {
     c.nocow_locks.unlock_bucket(bucket, NocowKind::from_flags(flags))
 }
 
-#[c_export]
-pub fn bch2_bucket_nocow_is_locked(c: &Fs, bucket: c::bpos) -> bool {
-    c.nocow_locks.is_locked(bucket)
-}

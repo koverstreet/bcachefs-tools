@@ -899,31 +899,6 @@ pub fn bch2_fs_copygc_exit(c: &Fs) {
     drop(unsafe { core::ptr::replace(&raw mut (*c.as_ptr()).copygc.wq, Workqueue::default()) });
 }
 
-/// mark_lock held.
-#[c_export]
-pub fn bch2_copygc_can_make_progress(ca: &c::bch_dev) -> bool {
-    can_make_progress(ca)
-}
-
-/// mark_lock held; @low_on_space, if not null, set.
-///
-/// # Safety
-/// @low_on_space is null, or a bool to write.
-#[c_export]
-pub unsafe fn bch2_copygc_dev_wait_amount(ca: &c::bch_dev, low_on_space: *mut bool) -> i64 {
-    let (wait, low) = dev_wait_amount(ca);
-    if !low_on_space.is_null() {
-        // SAFETY: the caller's
-        unsafe { *low_on_space = low };
-    }
-    wait
-}
-
-#[c_export]
-pub fn bch2_copygc_wait_to_text(out: &mut Printbuf, c: &Fs) {
-    c.copygc_wait_to_text(out)
-}
-
 /// Until copygc isn't running, or this kthread's told to stop: for a moving
 /// context that waits on copygc, Moving::ratelimit()'s. Freezable - copygc
 /// freezes in place, mid run - and interruptible, as wait_event_freezable().

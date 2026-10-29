@@ -32,25 +32,12 @@ impl<R: RawLock, G, P> Lock<R, G, P> {
     }
 }
 
-// Carried by C between two Rust calls: a stripe head, from the head lookup
-// to bch2_ec_stripe_head_put(), until the C between them converts.
+// Locked in Rust and released by C, which carries it between: until the C
+// between converts.
 
 impl<R: RawLock<GuardState = ()>, G, P> Guard<'_, R, G, P> {
-    /// Leave the lock held, for C to carry to assume_locked().
+    /// Leave the lock held, for C to release.
     pub fn leave_locked(self) {
         core::mem::forget(self)
-    }
-}
-
-impl<R: RawLock<GuardState = ()>, G, P> Lock<R, G, P> {
-    /// The lock, as a guard leave_locked() left it: released when the guard
-    /// is dropped.
-    ///
-    /// # Safety
-    /// This task holds the lock exclusively, by a guard leave_locked() left,
-    /// which nothing else takes back.
-    pub unsafe fn assume_locked(&self) -> Guard<'_, R, G, P> {
-        self.assert_held();
-        unsafe { Guard::from_held(self, Some(())) }
     }
 }

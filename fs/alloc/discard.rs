@@ -219,12 +219,6 @@ impl Fs {
     }
 }
 
-#[cold]
-#[c_export]
-pub fn bch2_discards_to_text(out: &mut Printbuf, c: &Opaque<c::bch_fs>) {
-    Fs::from_c(c).discards_to_text(out)
-}
-
 impl c::bch_dev {
     pub fn fast_discards_to_text(&self, out: &mut Printbuf) {
         prt!(out, "{}\n", self.discard_fast.lock().len());
@@ -800,9 +794,9 @@ pub(crate) fn do_discards_fast(ca: &c::bch_dev) {
 }
 
 /// Queue @bucket of @ca for fast discard, and kick its work: the alloc
-/// trigger's, for a bucket emptied by a transaction that needed no flush.
-#[c_export]
-pub fn bch2_fast_discard_bucket_add(ca: &c::bch_dev, bucket: u64) {
+/// trigger's, for a bucket emptied by a transaction that needed no flush -
+/// or the open bucket's close, if it was emptied while open.
+pub(crate) fn fast_discard_bucket_add(ca: &c::bch_dev, bucket: u64) {
     if ca.discard_fast.lock().push(bucket, GFP_KERNEL).is_err() {
         return;
     }
@@ -828,14 +822,15 @@ fn dev_is_rw(ca: &c::bch_dev) -> bool {
 /// where that's more. Invalidating is the cheapest way to free space, nothing
 /// moved: stopping short of reserved_sectors leaves no space writable now,
 /// with cached buckets sitting unreclaimed.
-#[c_export]
-pub fn bch2_should_invalidate_buckets(ca: &c::bch_dev, u: c::bch_dev_usage) -> u64 {
-    let reserved = ca.reserved_sectors.get().div_ceil(ca.mi.get().bucket_size.into())
-        .max(ca.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe));
-    let want_free = reserved + (ca.mi.get().nbuckets >> 5);
-    let free = u.buckets[c::bch_data_type::BCH_DATA_free.0 as usize];
-    let cached = u.buckets[c::bch_data_type::BCH_DATA_cached.0 as usize] as i64;
-    (want_free as i64 - free as i64).clamp(0, cached) as u64
+impl c::bch_dev {
+    pub fn should_invalidate_buckets(&self, u: &c::bch_dev_usage) -> u64 {
+        let reserved = self.reserved_sectors.get().div_ceil(self.mi.get().bucket_size.into())
+            .max(self.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe));
+        let want_free = reserved + (self.mi.get().nbuckets >> 5);
+        let free = u.buckets[c::bch_data_type::BCH_DATA_free.0 as usize];
+        let cached = u.buckets[c::bch_data_type::BCH_DATA_cached.0 as usize] as i64;
+        (want_free as i64 - free as i64).clamp(0, cached) as u64
+    }
 }
 
 /// Drop @ca's pointers from what backpointer @bp points to - its data's lost,
@@ -946,7 +941,7 @@ pub(crate) fn do_invalidates_work(ca: &c::bch_dev) {
         let mut last_flushed = WbMaybeFlush::new().map_err(|_| BchError::from(c::ENOMEM))?;
         let _ = trans.write_buffer_tryflush();
 
-        let mut nr = bch2_should_invalidate_buckets(ca, ca.usage_read_fast()) as i64;
+        let mut nr = ca.should_invalidate_buckets(&ca.usage_read_fast()) as i64;
         let dev = u16::from(ca.dev_idx);
         let end = LruPos::new(dev, c::LRU_TIME_MAX, u64::MAX).to_bpos();
         let now = (fs.current_io_time(READ) + u64::from(u32::MAX)) & c::LRU_TIME_MAX;
@@ -960,7 +955,7 @@ pub(crate) fn do_invalidates_work(ca: &c::bch_dev) {
                 .for_each_max(&trans, end, |t, _, k| {
                     invalidate_one_bucket(t, ca, k, &mut last_flushed, &mut nr)?;
                     if nr == 0 {
-                        nr = bch2_should_invalidate_buckets(ca, ca.usage_read_fast()) as i64;
+                        nr = ca.should_invalidate_buckets(&ca.usage_read_fast()) as i64;
                         if nr == 0 {
                             return Ok(LoopFlow::Break(()));
                         }
@@ -990,11 +985,6 @@ impl Fs {
             ca.do_invalidates();
         }
     }
-}
-
-#[c_export]
-pub fn bch2_dev_do_invalidates(ca: &c::bch_dev) {
-    ca.do_invalidates()
 }
 
 #[c_export]

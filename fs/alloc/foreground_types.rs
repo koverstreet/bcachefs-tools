@@ -3,11 +3,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::fs::Fs;
-use crate::types::{DArray, c_default};
-use crate::util::Printbuf;
+use crate::types::{c_default, rust_only};
+use crate::util::inline_vec::InlineVec;
 use core::ffi::c_uint;
-use cstruct_macros::{bitfield, c_enum, c_extern, CStruct};
+use cstruct_macros::{bitfield, c_enum, CStruct};
 use nestify::nest;
 
 #[repr(C)]
@@ -40,6 +39,10 @@ nest! {
         pub free_buckets: u64,
     }
 }
+
+/// alloc_request's trace: room for 16 attempts in the request itself, as
+/// C's DARRAY_PREALLOCATED(, 16) had.
+pub(crate) type AllocTrace = rust_only!(InlineVec<c::alloc_trace_entry, 16>);
 
 /*
  * alloc_request.btree_bitmap: whether the bucket must be in a region the
@@ -97,7 +100,7 @@ nest! {
          */
         pub devs_chosen: c::bch_devs_mask,
 
-        /* devices this allocation should use first, see bch2_dev_alloc_required() */
+        /* devices this allocation should use first, see dev_alloc_required() */
         pub devs_required: *const c::bch_devs_mask,
 
         /* bch2_bucket_alloc_set_trans(): */
@@ -123,7 +126,7 @@ nest! {
         pub btree_bitmap: c::alloc_btree_bitmap,
 
         #[c_inline]
-        #>[derive(Clone, Copy)]
+        #>[derive(Clone, Copy, Default)]
         pub counters: pub struct alloc_request_counters {
             pub buckets_seen: u64,
             pub skipped_open: u64,
@@ -134,64 +137,10 @@ nest! {
             pub skipped_mi_btree_bitmap: u64,
         },
 
-        pub scratch_nr_replicas: c_uint,
         pub scratch_ptrs: c::open_buckets,
 
         /* Allocation attempt trace — dumped on allocator stuck */
-        pub trace: DArray<c::alloc_trace_entry, 16>,
-    }
-}
-c_default!(alloc_request);
-
-c_extern! {
-    pub fn bch2_alloc_wake_all(c: *mut c::bch_fs);
-    pub fn bch2_alloc_wake_dev(ca: *mut c::bch_dev);
-    pub fn bch2_open_buckets_stop(c: *mut c::bch_fs, ca: *mut c::bch_dev, ec: bool);
-    pub fn bch2_open_buckets_to_text(out: *mut c::printbuf, c: *mut c::bch_fs, ca: *mut c::bch_dev);
-    pub fn bch2_open_buckets_partial_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
-    pub fn bch2_write_points_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
-    pub fn bch2_fs_open_buckets_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
-    pub fn bch2_fs_alloc_debug_to_text(out: *mut c::printbuf, c: *mut c::bch_fs);
-    pub fn bch2_dev_alloc_debug_to_text(out: *mut c::printbuf, ca: *mut c::bch_dev);
-}
-
-impl c::bch_dev {
-    /// Wake what's waiting on the allocator for a bucket of it.
-    pub fn alloc_wake(&self) {
-        unsafe { bch2_alloc_wake_dev(core::ptr::from_ref(self).cast_mut()) }
-    }
-
-    pub fn alloc_debug_to_text(&self, out: &mut Printbuf) {
-        unsafe { bch2_dev_alloc_debug_to_text(out.as_raw(), core::ptr::from_ref(self).cast_mut()) }
+        pub(crate) trace: AllocTrace,
     }
 }
 
-impl Fs {
-    /// Wake everything waiting on the allocator.
-    pub fn alloc_wake_all(&self) {
-        unsafe { bch2_alloc_wake_all(self.as_ptr()) }
-    }
-
-    /// Close the open buckets - @ca's, or all of them - and with @ec, the
-    /// new stripes' too.
-    pub fn open_buckets_stop(&self, ca: Option<&c::bch_dev>, ec: bool) {
-        unsafe { bch2_open_buckets_stop(self.as_ptr(), crate::sb::members::dev_ptr(ca), ec) }
-    }
-
-    /// The open buckets - on @ca, or all of them.
-    pub fn open_buckets_to_text(&self, out: &mut Printbuf, ca: Option<&c::bch_dev>) {
-        unsafe { bch2_open_buckets_to_text(out.as_raw(), self.as_ptr(), crate::sb::members::dev_ptr(ca)) }
-    }
-
-    pub fn open_buckets_partial_to_text(&self, out: &mut Printbuf) {
-        unsafe { bch2_open_buckets_partial_to_text(out.as_raw(), self.as_ptr()) }
-    }
-
-    pub fn fs_open_buckets_to_text(&self, out: &mut Printbuf) {
-        unsafe { bch2_fs_open_buckets_to_text(out.as_raw(), self.as_ptr()) }
-    }
-
-    pub fn alloc_debug_to_text(&self, out: &mut Printbuf) {
-        unsafe { bch2_fs_alloc_debug_to_text(out.as_raw(), self.as_ptr()) }
-    }
-}

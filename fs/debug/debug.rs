@@ -434,7 +434,7 @@ enum WritePoints {}
 
 impl PrintOnce for WritePoints {
     fn print(fs: &Fs, out: &mut Printbuf) {
-        unsafe { c::bch2_write_points_to_text(out.as_raw(), fs.as_ptr()) }
+        fs.write_points_to_text(out)
     }
 }
 

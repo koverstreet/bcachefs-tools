@@ -402,7 +402,7 @@ static void __bch2_dev_read_only(struct bch_fs *c, struct bch_dev *ca)
 	 * may_reuse_stripe() / init_new_stripe_from_old() check
 	 * bch2_dev_bad_or_evacuating at stripe allocation time, but state can
 	 * flip to non-rw between that check and the stripe commit. Stripes
-	 * still on a stripe head were cancelled by bch2_ec_stop_dev() via
+	 * still on a stripe head were cancelled by stripe_heads_stop() via
 	 * bch2_dev_allocator_remove() above; stripes that had moved to
 	 * stripe_new_list (commit in progress) may still commit with a ptr
 	 * to ca. Wait for them to finish so the subsequent data-drop pass

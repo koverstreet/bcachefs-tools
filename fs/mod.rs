@@ -65,16 +65,21 @@ macro_rules! concat_literals {
 pub mod alloc {
     pub mod background;
     pub mod backpointers;
+    pub mod bucket_alloc;
+    pub mod bucket_set;
     pub mod buckets;
     pub mod capacity;
     pub mod check;
     pub mod check_backpointers;
     pub mod check_data;
+    pub mod dev_select;
     pub mod discard;
     pub mod disk_groups;
     pub mod foreground;
     pub mod lru;
     pub mod replicas;
+    pub mod sector_alloc;
+    pub mod write_point;
 }
 pub mod btree;
 pub mod debug {

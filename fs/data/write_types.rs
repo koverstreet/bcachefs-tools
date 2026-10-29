@@ -214,6 +214,7 @@ nest! {
 }
 
 c_extern! {
+    pub fn bch2_write_point_do_index_updates(work: *mut c::work_struct);
     pub fn bch2_sum_sector_overwrites(trans: *mut c::btree_trans, extent_iter: *mut c::btree_iter,
                                       new: *mut c::bkey_i, usage_increasing: *mut bool,
                                       i_sectors_delta: *mut i64, disk_sectors_delta: *mut i64,
