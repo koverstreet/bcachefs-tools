@@ -234,6 +234,10 @@ impl Fs {
     /// traced, so errors started in Rust are as visible as errors started in C.
     /// Naming an error to compare or parse against isn't throwing it - that's
     /// BchError::from().
+    ///
+    /// Cold, so every path that throws is a slowpath to the compiler: C says
+    /// that with `unlikely(ret)` at each site, which `?` can't.
+    #[cold]
     pub fn err(&self, error: bch_errcode) -> BchError {
         BchError::from_raw(-unsafe { c::__bch2_err_throw(self.as_ptr(), -(error.0 as i32)) })
     }
