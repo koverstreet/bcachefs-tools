@@ -44,6 +44,12 @@ const blk_opf_t RUST_CONST_HELPER_REQ_FUA		= REQ_FUA;
  */
 const unsigned int RUST_CONST_HELPER_MINORBITS		= MINORBITS;
 
+/* util/super_block.rs and fs_context.rs: BIT()s, which bindgen can't evaluate */
+const unsigned long RUST_CONST_HELPER_SB_RDONLY		= SB_RDONLY;
+const unsigned long RUST_CONST_HELPER_SB_NOSEC		= SB_NOSEC;
+const unsigned long RUST_CONST_HELPER_SB_ACTIVE		= SB_ACTIVE;
+const loff_t RUST_CONST_HELPER_MAX_LFS_FILESIZE		= MAX_LFS_FILESIZE;
+
 /* a notifier's answer, as reconcile's power supply notifier gives it */
 const int RUST_CONST_HELPER_NOTIFY_OK			= NOTIFY_OK;
 

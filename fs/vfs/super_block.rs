@@ -24,7 +24,6 @@ use crate::inode_opts;
 use crate::locking::Lock;
 use crate::prt;
 use crate::sb::counters::events;
-use crate::util::ffi::Opaque;
 use crate::util::kernel::ktime_get_ns;
 use crate::util::{Nsecs, Printbuf};
 use crate::util::rcu::read_lock;
@@ -40,8 +39,8 @@ c_extern! {
     fn bch2_free_inode(vinode: *mut c::inode);
 }
 
-#[repr(transparent)]
-pub struct SuperBlock(Opaque<c::super_block>);
+/// One of ours: s_fs_info is its Fs. The type is util/super_block.rs's.
+pub type SuperBlock = crate::util::super_block::SuperBlock<Fs>;
 
 impl Fs {
     /// The VFS superblock it's mounted as: None while it isn't.
@@ -52,22 +51,8 @@ impl Fs {
 }
 
 impl SuperBlock {
-    /// # Safety
-    /// @sb is one of ours, live for 'a.
-    pub(crate) unsafe fn from_raw<'a>(sb: *mut c::super_block) -> &'a SuperBlock {
-        unsafe { &*sb.cast::<SuperBlock>() }
-    }
-
-    fn as_ptr(&self) -> *mut c::super_block {
-        self.0.as_ptr()
-    }
-
     pub fn fs(&self) -> &Fs {
-        unsafe { Fs::borrow_raw((*self.as_ptr()).s_fs_info.cast()) }
-    }
-
-    pub fn dev(&self) -> c::dev_t {
-        unsafe { (*self.as_ptr()).s_dev }
+        self.data()
     }
 }
 

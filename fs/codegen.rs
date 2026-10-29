@@ -49,6 +49,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/xxhash.h",			// data/checksum.rs's xxhash
     "crypto/chacha.h",			// its encryption
     "crypto/poly1305.h",		// and MACs
+    "linux/fs_context.h",		// struct fs_context, logfc(): util/fs_context.rs's - the kernel crate's is opaque
 ];
 
 /// Headers under fs/ bound, by path - which the clang args have as an -I:
@@ -97,6 +98,7 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/xxhash.h",
     "crypto/chacha.h",
     "crypto/poly1305.h",
+    "linux/fs_context.h",
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
@@ -143,10 +145,15 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "chacha_init", "chacha20_crypt", "chacha_zeroize_state",
     "poly1305_init", "poly1305_update", "poly1305_final",
     "rust_request_user_key", "rust_user_key_data",
+    // util/fs_context.rs and util/super_block.rs: static inlines, and the
+    // log behind errorfc() and invalf()
+    "logfc", "super_set_uuid", "super_set_sysfs_name_uuid",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",
                                   "xattr_handler", "kstatfs", "export_operations", "fid_type",
-                                  "xxh64_state", "chacha_state", "poly1305_desc_ctx"];
+                                  "xxh64_state", "chacha_state", "poly1305_desc_ctx",
+                                  // the kernel crate's fs_context and fs_parameter are opaque
+                                  "fs_context", "fs_parameter", "fs_context_operations"];
 /// Structs in an unblocklisted header - defined there, or only declared, as
 /// uidgid.h declares user_namespace - that kernel::bindings binds: a second
 /// copy would be a different type - and bindgen, stopped at one, doesn't

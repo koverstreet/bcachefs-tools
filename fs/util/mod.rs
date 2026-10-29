@@ -15,6 +15,10 @@ pub mod eytzinger;
 pub mod ffi;
 pub mod fifo;
 pub mod file;
+#[cfg(kernel)]
+pub mod fs_context;
+#[cfg(kernel)]
+pub mod fs_type;
 pub mod futex;
 pub mod gather;
 pub mod genradix;
@@ -46,6 +50,8 @@ pub mod siphash;
 pub mod sleep;
 pub mod sort;
 pub mod strided;
+#[cfg(kernel)]
+pub mod super_block;
 pub mod sysfs;
 pub mod task;
 #[cfg(kernel)]

@@ -175,3 +175,7 @@ unsafe impl AlwaysRefCounted for VfsInode {
         unsafe { c::iput(obj.as_ptr().cast()) }
     }
 }
+
+// SAFETY: a struct inode, repr(transparent), its reference i_count's
+#[cfg(kernel)]
+unsafe impl crate::util::super_block::IsInode for VfsInode {}
