@@ -946,6 +946,20 @@ impl<'a, 't> TransAttempt<'a, 't> {
         unsafe { Ok(&mut *p) }
     }
 
+    /// @init's T, in the attempt's memory. Never dropped - the transaction's
+    /// memory is reused without, as C's is - so a T owning anything is
+    /// emptied by whoever's done with it.
+    pub fn alloc_init<T, E: Into<BchError>>(&self, init: impl ::pin_init::Init<T, E>) -> Result<&'a mut T, BchError> {
+        // bch2_trans_kmalloc() gives 8 byte alignment:
+        const { assert!(core::mem::align_of::<T>() <= 8) };
+
+        let p = self.kmalloc_raw(size_of::<T>())?.cast::<T>();
+        // SAFETY: room for a @T, aligned, this attempt's: init writes it
+        unsafe { crate::util::alloc::init_at(init, p) }.map_err(Into::into)?;
+        // SAFETY: just made
+        Ok(unsafe { &mut *p })
+    }
+
     /// @bytes of zeroed transaction memory, rounded up to u64s: off the top of
     /// the transaction's buffer, or __bch2_trans_kmalloc() grows it - which
     /// restarts the transaction if it had a buffer already. As
