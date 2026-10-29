@@ -106,6 +106,13 @@ pub unsafe fn closure_wait(list: &c::closure_waitlist, cl: NonNull<c::closure>) 
     unsafe { c::bch2_closure_wait(core::ptr::from_ref(list).cast_mut(), cl.as_ptr()) }
 }
 
+/// Whether anything's waiting on @list - a hint, racing its adds and wakes.
+pub fn closure_has_waiters(list: &c::closure_waitlist) -> bool {
+    // SAFETY: a lockless list's head, which its adds and wakes swap: read
+    // once, as READ_ONCE()
+    !unsafe { core::ptr::read_volatile(&raw const list.list.first) }.is_null()
+}
+
 /// Each waiter's ref put.
 pub fn closure_wake_up(list: &c::closure_waitlist) {
     // SAFETY: as closure_wait()'s
