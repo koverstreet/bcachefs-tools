@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use bch_bindgen::c::bch_ioctl_query_counters;
-use bcachefs_kernel::sb::io::{COUNTERS, CounterInfo};
+use bcachefs_kernel::sb::counters::{COUNTERS, CounterInfo};
 use bcachefs_kernel::util::vstructs::Head;
 use clap::Parser;
 use crossterm::{

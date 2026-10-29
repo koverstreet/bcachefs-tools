@@ -6,7 +6,7 @@ use bch_bindgen::c;
 use bch_bindgen::c::bch_degraded_actions;
 use bch_bindgen::c::bch_persistent_counters::BCH_COUNTER_NR;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::sb::io::COUNTERS;
+use bcachefs_kernel::sb::counters::COUNTERS;
 use clap::Parser;
 
 fn match_counter(name: &str) -> Result<usize> {

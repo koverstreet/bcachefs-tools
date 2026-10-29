@@ -30,7 +30,7 @@ use crate::errcode::BchError;
 use crate::util::vstructs::Unvalidated;
 use crate::fs::{Fs, SbLockGuard};
 use crate::prt;
-use crate::sb::io::{sb_field_u64s, SbFieldOps, COUNTERS};
+use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::types::Le64;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::{nsecs_to_jiffies, NSEC_PER_SEC};
@@ -131,6 +131,27 @@ macro_rules! events {
     } };
 }
 c::BCH_PERSISTENT_COUNTERS!(events);
+
+pub struct CounterInfo {
+    pub name: &'static str,
+    pub stable_id: u16,
+    pub is_sectors: bool,
+}
+
+// From BCH_PERSISTENT_COUNTERS(): its entries are (name, stable id, type,
+// description).
+macro_rules! counter_is_sectors {
+    (TYPE_SECTORS) => { true };
+    ($other:tt) => { false };
+}
+macro_rules! counter_table {
+    ($(($name:tt, $id:tt, $ty:tt $(, $($rest:tt)*)?)),* $(,)?) => {
+        pub const COUNTERS: &[CounterInfo] = &[$(
+            CounterInfo { name: stringify!($name), stable_id: $id, is_sectors: counter_is_sectors!($ty) },
+        )*];
+    };
+}
+c::BCH_PERSISTENT_COUNTERS!(counter_table);
 
 impl Fs {
     /// Count @_e once: event_inc().

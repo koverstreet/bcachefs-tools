@@ -1535,27 +1535,6 @@ pub unsafe fn bch2_read_super(path: *const c_char, opts: &mut c::bch_opts, sb: *
     ret_to_c(read_super(unsafe { CStr::from_ptr(path.cast()) }, opts).map(|h| unsafe { sb.write(h) }))
 }
 
-pub struct CounterInfo {
-    pub name: &'static str,
-    pub stable_id: u16,
-    pub is_sectors: bool,
-}
-
-// From BCH_PERSISTENT_COUNTERS(): its entries are (name, stable id, type,
-// description).
-macro_rules! counter_is_sectors {
-    (TYPE_SECTORS) => { true };
-    ($other:tt) => { false };
-}
-macro_rules! counter_table {
-    ($(($name:tt, $id:tt, $ty:tt $(, $($rest:tt)*)?)),* $(,)?) => {
-        pub const COUNTERS: &[CounterInfo] = &[$(
-            CounterInfo { name: stringify!($name), stable_id: $id, is_sectors: counter_is_sectors!($ty) },
-        )*];
-    };
-}
-c::BCH_PERSISTENT_COUNTERS!(counter_table);
-
 // ── Writing it back ──────────────────────────────────────────────────────
 
 /// Permission to change the superblock, and what writes it back: C's

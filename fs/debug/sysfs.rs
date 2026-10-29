@@ -36,7 +36,7 @@ use crate::fs::{Fs, WriteRef};
 use crate::init::passes;
 use crate::locking::{Lock, MemallocFlags};
 use crate::opts::{self, OptChange, OptType};
-use crate::sb::io::COUNTERS;
+use crate::sb::counters::COUNTERS;
 use crate::sb::members;
 use crate::prt;
 use crate::util::ffi::c_char;
