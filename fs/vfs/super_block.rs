@@ -9,8 +9,8 @@
 //! is what s_fs_info points to - Fs - and each op gets it as &self, but
 //! free_inode(), which can run after the filesystem's freed.
 //!
-//! bch2_super_ops is ours, the table mount sets s_op to. evict_inode() and
-//! free_inode() are still fs.c's, with the inode cache.
+//! SUPER_OPS is ours, the table mount (vfs/fs_type.rs) sets s_op to.
+//! evict_inode() and free_inode() are still fs.c's, with the inode cache.
 
 use core::ffi::{c_int, CStr};
 use core::ptr::NonNull;
@@ -28,7 +28,7 @@ use crate::util::kernel::ktime_get_ns;
 use crate::util::{Nsecs, Printbuf};
 use crate::util::rcu::read_lock;
 use crate::util::seq_file::SeqFile;
-use cstruct_macros::{c_export, c_extern, vtable};
+use cstruct_macros::{c_extern, vtable};
 
 use super::dentry::Dentry;
 use super::inode::{InodeInfo, ATTR_ATIME, ATTR_CTIME, ATTR_MTIME};
@@ -184,6 +184,12 @@ impl SuperOps for Fs {
         unsafe { c::bch2_fs_stop(self.as_ptr()) };
     }
 
+    /// bcachefs doesn't integrate intwrite freeze protection, but the
+    /// internal write references serve the same purpose: so this reuses the
+    /// read-only transition for the quiesce. The caveat is there's no blocking
+    /// tasks that want a write reference while the superblock is frozen. Fine
+    /// for now; blocking support, or sb_start_intwrite() and friends, would
+    /// close it.
     fn freeze_fs(&self, _sb: &SuperBlock) -> Result<(), BchError> {
         let _state = Lock::from_c(&self.state_lock).write();
         self.read_only();
@@ -199,5 +205,4 @@ impl SuperOps for Fs {
     }
 }
 
-#[c_export]
-pub static bch2_super_ops: c::super_operations = SuperVTable::<Fs>::OPS;
+pub(crate) static SUPER_OPS: c::super_operations = SuperVTable::<Fs>::OPS;

@@ -32,6 +32,16 @@ impl SbLockGuard<'_> {
 /// method here.
 pub struct StateLockRead<'a>(&'a Fs);
 
+/// state_lock, held for write; up_write() on drop: the filesystem's state
+/// changes - read-only, read-write - under it.
+pub struct StateLockWrite<'a>(&'a Fs);
+
+impl Drop for StateLockWrite<'_> {
+    fn drop(&mut self) {
+        unsafe { c::up_write((&raw mut (*self.0.as_ptr()).state_lock).cast()) };
+    }
+}
+
 impl Drop for StateLockRead<'_> {
     fn drop(&mut self) {
         unsafe { c::up_read((&raw mut (*self.0.as_ptr()).state_lock).cast()) };
@@ -216,6 +226,11 @@ impl Fs {
         StateLockRead(self)
     }
 
+    pub fn state_lock_write(&self) -> StateLockWrite<'_> {
+        unsafe { c::down_write((&raw mut (*self.as_ptr()).state_lock).cast()) };
+        StateLockWrite(self)
+    }
+
     /// It changes the superblock - its seq, its checksum: so nothing in it is
     /// borrowed across the write.
     #[track_caller]
@@ -374,6 +389,16 @@ impl Fs {
 
     pub fn read_only(&self) {
         unsafe { c::bch2_fs_read_only(self.as_ptr()) };
+    }
+
+    pub fn read_write(&self) -> Result<(), BchError> {
+        ret_to_result(unsafe { c::bch2_fs_read_write(self.as_ptr()) })
+    }
+
+    /// Stopped: read-only, its background work stopped, offline - its exit
+    /// is still to come.
+    pub fn stop(&self) {
+        unsafe { c::bch2_fs_stop(self.as_ptr()) };
     }
 
     pub fn journal_flush_all_pins(&self) {
@@ -538,6 +563,34 @@ impl OpenFs {
     /// @fs is from bch2_fs_open(), and this takes over its ref.
     pub unsafe fn from_raw(fs: core::ptr::NonNull<Fs>) -> Self {
         OpenFs(fs)
+    }
+
+    /// The filesystem on @devs, opened with @opts - and @key, if its
+    /// superblock's key is to be unwrapped with it, not looked up.
+    /// bch2_fs_open() only reads the list: read_super() keeps a copy of each
+    /// path.
+    pub fn open<'a>(devs: impl ExactSizeIterator<Item = &'a core::ffi::CStr>, opts: &mut c::bch_opts,
+                    key: Option<&c::bch_key>) -> Result<OpenFs, BchError> {
+        use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
+
+        let mut ptrs = KVVec::with_capacity(devs.len(), GFP_KERNEL)?;
+        for d in devs {
+            ptrs.push(d.as_ptr().cast::<crate::util::ffi::c_char>(), GFP_KERNEL)?;
+        }
+        let mut list = c::darray_const_str {
+            nr: ptrs.len(), size: ptrs.len(), data: ptrs.as_mut_ptr(), preallocated: [],
+        };
+
+        let key = key.map_or(core::ptr::null(), |k| k);
+        let fs = unsafe { c::bch2_fs_open(&mut list, opts, key) };
+        // SAFETY: bch2_fs_open()'s, ours to exit
+        crate::errcode::errptr_to_result(core::ptr::NonNull::new(fs).expect("bch2_fs_open(): a filesystem or an error"))
+            .map(|fs| unsafe { OpenFs::from_raw(fs.cast()) })
+    }
+
+    /// Its ref, given up: from_raw() takes it back.
+    pub fn into_raw(self) -> core::ptr::NonNull<Fs> {
+        core::mem::ManuallyDrop::new(self).0
     }
 
     /// bch2_fs_exit()'s error, which Drop discards.

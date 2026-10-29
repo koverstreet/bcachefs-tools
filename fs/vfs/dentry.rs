@@ -27,7 +27,6 @@ use crate::errcode::{errptr_to_result, BchError};
 use crate::inode_opts::InodeOpt;
 use crate::locking::Lock;
 use crate::util::os_str::{qstr_name, OsStr};
-use cstruct_macros::c_export;
 
 use kernel::sync::aref::ARef;
 
@@ -195,13 +194,4 @@ impl<'a> Dentry<'a> {
     pub fn xattr_list_prefix(&self, ty: c::bch_xattr_type) -> Option<&'static CStr> {
         crate::xattr::list_prefix(ty, self.raw)
     }
-}
-
-/// For C's mount, until it's Rust: the root's.
-///
-/// # Safety
-/// @dentry and @vinode are ours, referenced, for the call.
-#[c_export]
-pub unsafe fn bch2_dentry_set_casefold_ops(dentry: *mut c::dentry, vinode: *mut c::inode) {
-    unsafe { Dentry::borrow_raw(dentry).set_casefold_ops(InodeInfo::from_inode(vinode).vfs()) }
 }

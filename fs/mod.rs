@@ -159,6 +159,7 @@ pub mod vfs {
     #[cfg(kernel)] pub mod export;
     #[cfg(kernel)] pub mod fiemap;
     #[cfg(kernel)] pub mod file;
+    #[cfg(kernel)] pub mod fs_type;
     #[cfg(kernel)] pub mod iattr;
     #[cfg(kernel)] pub mod idmap;
     #[cfg(kernel)] pub mod inode;

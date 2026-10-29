@@ -11,7 +11,7 @@ use crate::c::{
     BCH_REPLICAS_MAX, BCH_SB_SECTOR, BCH_STR_HASH_OPT_siphash,
     BCH_VERSION_UPGRADE_compatible, BCH_WRITE_DEGRADED_degraded,
 };
-use crate::types::{bits_to_longs, c_default};
+use crate::types::bits_to_longs;
 use core::ffi::c_ulong;
 use cstruct_macros::{CStruct, c_const, c_enum, c_xmacro, Options, TypeInfo};
 
@@ -622,41 +622,6 @@ pub struct bch_opts {
 
     pub defined: bch_opts_mask,
 }
-
-#[repr(C)]
-#[derive(CStruct)]
-pub struct bch2_opts_parse {
-    pub opts: c::bch_opts,
-
-    /* to save opts that can't be parsed before the FS is opened: */
-    pub parse_later: c::printbuf,
-
-    /*
-     * The devices to mount, accumulated across however many "source"
-     * parameters we were handed - see bch2_fs_parse_param(). Owned here
-     * and freed by bch2_fs_context_free(), not by whoever consumes it.
-     */
-    pub devs: c::darray_const_str,
-
-    /*
-     * The status channel, when the caller asked for one with "status_fd" -
-     * see bch2_fs_parse_param() and vfs/status_fd.rs. The file's .release
-     * frees the channel, so we hold a reference to the file of our own for
-     * as long as the filesystem might still print there, and drop it in
-     * bch2_fs_context_free().
-     */
-    pub status_file: *mut c::file,
-
-    /*
-     * The passphrase-derived key, when the caller handed it to us with
-     * "user_key" rather than leaving it in a keyring - see
-     * bch2_fs_parse_param(). Zeroed by bch2_fs_context_free() however the
-     * mount went.
-     */
-    pub user_key: c::bch_key,
-    pub user_key_set: bool,
-}
-c_default!(bch2_opts_parse);
 
 /* inode opts: */
 macro_rules! __bch_inode_opts_0 {

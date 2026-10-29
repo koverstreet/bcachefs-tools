@@ -923,8 +923,7 @@ mod vfs {
     }
 
     /// The VFS's: sb->s_qcop.
-    #[c_export]
-    pub static bch2_quotactl_operations: c::quotactl_ops = c::quotactl_ops {
+    pub(crate) static QUOTACTL_OPS: c::quotactl_ops = c::quotactl_ops {
         quota_enable:  Some(quota_enable),
         quota_disable: Some(quota_disable),
         rm_xquota:     Some(quota_remove),

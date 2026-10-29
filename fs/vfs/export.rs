@@ -30,7 +30,7 @@ use crate::inode;
 use crate::namei::subvol_inum_eq;
 use crate::snapshots::subvolume;
 use crate::util::os_str::OsStrExt;
-use cstruct_macros::{c_export, vtable};
+use cstruct_macros::vtable;
 
 use super::dentry::Dentry;
 use super::inode::{InodeInfo, InodeRef};
@@ -232,5 +232,4 @@ impl ExportOps for Fs {
     }
 }
 
-#[c_export]
-pub static bch2_export_ops: c::export_operations = ExportVTable::<Fs>::OPS;
+pub(crate) static EXPORT_OPS: c::export_operations = ExportVTable::<Fs>::OPS;

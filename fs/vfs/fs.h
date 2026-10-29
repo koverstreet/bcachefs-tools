@@ -109,10 +109,8 @@ __bch2_create(struct mnt_idmap *, struct bch_inode_info *,
 	      struct dentry *, umode_t, dev_t, subvol_inum, unsigned);
 
 #include "vfs/attr_gen.h"
-#include "vfs/dentry_gen.h"
 #include "vfs/dir_gen.h"
 #include "vfs/file_gen.h"
-#include "vfs/export_gen.h"
 #include "vfs/inode_gen.h"
 #include "vfs/inode_ops_gen.h"
 #include "vfs/namei_gen.h"

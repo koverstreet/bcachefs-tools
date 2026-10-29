@@ -34,7 +34,7 @@
 //! transaction.
 
 use arrayvec::ArrayVec;
-use core::ffi::{c_int, c_uint, c_void};
+use core::ffi::{c_int, c_uint, c_void, CStr};
 use core::mem::offset_of;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{Relaxed, SeqCst};
@@ -133,6 +133,12 @@ impl InodeInfo {
     pub(crate) fn get(fs: &Fs, inum: c::subvol_inum) -> Result<InodeRef, BchError> {
         // @v is an InodeInfo's, first
         unsafe { Self::from_c(bch2_vfs_inode_get(fs.as_ptr(), inum, core::ptr::null()).cast()) }
+    }
+
+    /// As get(), warning as @func if it isn't there: one that has to be, the
+    /// root at mount.
+    pub(crate) fn get_warn(fs: &Fs, inum: c::subvol_inum, func: &CStr) -> Result<InodeRef, BchError> {
+        unsafe { Self::from_c(bch2_vfs_inode_get(fs.as_ptr(), inum, func.as_ptr().cast()).cast()) }
     }
 
     /// @inum's, if the inode cache has it. It waits out one being evicted,

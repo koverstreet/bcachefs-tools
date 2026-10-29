@@ -12,17 +12,16 @@
 //! print there, and the file frees the channel when both are gone.
 
 use crate::c;
+use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::chardev::{fs_ioctl, ioctl_ret};
 use crate::locking::Lock;
 use crate::new_lock;
-use crate::util::ffi::Opaque;
 use crate::util::ioctl::Ioctl;
 use crate::util::thread_with_file::{Stdio, StdioFile, ThreadWithFile};
 use core::ffi::c_void;
 use core::mem::size_of;
 use core::ptr::NonNull;
-use cstruct_macros::c_export;
 use kernel::ffi::{c_int, c_long, c_uint, c_ulong};
 use kernel::uaccess::UserPtr;
 use pin_init::{pin_data, pin_init};
@@ -101,79 +100,67 @@ impl StdioFile for StatusFd {
     }
 }
 
-/// # Safety
-/// @file is bch2_status_fd_open()'s, its ref still held.
-unsafe fn status_of<'a>(file: *mut c::file) -> &'a Stdio<StatusFd> {
-    unsafe { ThreadWithFile::<Stdio<StatusFd>>::from_file(file) }
-}
+/// The mount's ref on a status channel's file: userspace holds the other, by
+/// its fd, and the file frees the channel when both are gone. Dropped when
+/// the mount's over, however it went: the channel is closed, so a reader gets
+/// EOF rather than waiting for a filesystem that isn't coming.
+pub(crate) struct StatusFile(NonNull<c::file>);
 
-/// A new status channel: its fd, for userspace, and in @filep a ref on its
-/// file, for the mount - put by bch2_status_fd_put().
-#[c_export]
-pub unsafe fn bch2_status_fd_open(filep: *mut *mut c::file) -> c_int {
-    let status = ThreadWithFile::new_stdio(pin_init!(StatusFd {
-        fs <- new_lock!(None),
-    }? crate::errcode::BchError));
+impl StatusFile {
+    /// A new status channel: its fd, for userspace, and the mount's ref.
+    pub(crate) fn open() -> Result<(c_int, StatusFile), BchError> {
+        let status = ThreadWithFile::new_stdio(pin_init!(StatusFd {
+            fs <- new_lock!(None),
+        }? BchError))?;
+        let (fd, file) = status.get_fd()?;
+        Ok((fd, StatusFile(file)))
+    }
 
-    match status.and_then(|s| s.get_fd()) {
-        Ok((fd, file)) => {
-            unsafe { *filep = file.as_ptr() };
-            fd
+    fn status(&self) -> &Stdio<StatusFd> {
+        // SAFETY: open()'s file, which this holds a ref on
+        unsafe { ThreadWithFile::<Stdio<StatusFd>>::from_file(self.0.as_ptr()) }
+    }
+
+    /// @fs starts up with the channel - what it prints for the user, and its
+    /// questions, go to it, and its ioctl answers for @fs - until the guard
+    /// returned drops: recovery's over, however it went.
+    pub(crate) fn attach<'a>(&'a self, fs: &'a Fs) -> Attached<'a> {
+        // SAFETY: as C's: set while the mount's in recovery, which is the
+        // mounting thread
+        unsafe {
+            (*fs.as_ptr()).stdio = self.status().redirect.as_c();
+            (*fs.as_ptr()).stdio_user_only = true;
         }
-        Err(e) => -e.raw(),
+        *self.status().data.fs.lock() = Some(NonNull::from(fs));
+        Attached { file: self, fs }
     }
 }
 
-/// @c starts up with the channel: what it prints for the user, and its
-/// questions, go to it, and its ioctl answers for @c.
-///
-/// # Safety
-/// @file is bch2_status_fd_open()'s, its ref held; @c is alive until
-/// bch2_status_fd_detach().
-#[c_export]
-pub unsafe fn bch2_status_fd_attach(file: *mut c::file, c: &Opaque<c::bch_fs>) {
-    let status = unsafe { status_of(file) };
-    let fs = Fs::from_c(c);
-
-    // SAFETY: as C's: set while the mount's in recovery, which is the
-    // mounting thread
-    unsafe {
-        (*fs.as_ptr()).stdio = status.redirect.as_c();
-        (*fs.as_ptr()).stdio_user_only = true;
-    }
-    *status.data.fs.lock() = Some(NonNull::from(fs));
-}
-
-/// Recovery's over, however it went: @c's no longer the channel's.
-///
-/// # Safety
-/// As bch2_status_fd_attach().
-#[c_export]
-pub unsafe fn bch2_status_fd_detach(file: *mut c::file, c: &Opaque<c::bch_fs>) {
-    let status = unsafe { status_of(file) };
-    let fs = Fs::from_c(c);
-
-    // Clearing the channel's filesystem first is what makes the reader flag
-    // safe to clear after it: the ioctl only sets it having seen a
-    // filesystem under this lock, so no further ioctl can set it.
-    *status.data.fs.lock() = None;
-
-    unsafe {
-        (*fs.as_ptr()).stdio = core::ptr::null_mut();
-        (*fs.as_ptr()).stdio_user_only = false;
-        core::ptr::write_volatile(&raw mut (*fs.as_ptr()).stdio_progress_reader, false);
+impl Drop for StatusFile {
+    fn drop(&mut self) {
+        self.status().redirect.set_done();
+        unsafe { c::fput(self.0.as_ptr()) };
     }
 }
 
-/// The mount is over however it went: close the channel, so a reader gets
-/// EOF rather than waiting for a filesystem that isn't coming, and put the
-/// mount's ref on the file - userspace holds the other, and the channel's
-/// freed when both are gone.
-///
-/// # Safety
-/// @file is bch2_status_fd_open()'s, its ref held, and put here.
-#[c_export]
-pub unsafe fn bch2_status_fd_put(file: *mut c::file) {
-    unsafe { status_of(file) }.redirect.set_done();
-    unsafe { c::fput(file) };
+/// A filesystem the channel is for: StatusFile::attach()'s.
+pub(crate) struct Attached<'a> {
+    file: &'a StatusFile,
+    fs:   &'a Fs,
+}
+
+impl Drop for Attached<'_> {
+    fn drop(&mut self) {
+        // Clearing the channel's filesystem first is what makes the reader
+        // flag safe to clear after it: the ioctl only sets it having seen a
+        // filesystem under this lock, so no further ioctl can set it.
+        *self.file.status().data.fs.lock() = None;
+
+        let fs = self.fs.as_ptr();
+        unsafe {
+            (*fs).stdio = core::ptr::null_mut();
+            (*fs).stdio_user_only = false;
+            core::ptr::write_volatile(&raw mut (*fs).stdio_progress_reader, false);
+        }
+    }
 }

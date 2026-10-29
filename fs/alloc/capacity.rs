@@ -136,7 +136,7 @@ pub fn bch2_recalc_capacity(c: &Opaque<c::bch_fs>) {
 
 /// Pages to read ahead: each device's dev_readahead, or the VM's default.
 #[cfg(kernel)]
-fn fs_ra_pages(fs: &Fs) -> usize {
+pub(crate) fn fs_ra_pages(fs: &Fs) -> usize {
     let per_dev = (fs.opts.dev_readahead >> kernel::page::PAGE_SHIFT) as usize;
     let rcu = read_lock();
     // SAFETY: a pointer, read whole - as C's READ_ONCE(): set and cleared
@@ -147,12 +147,6 @@ fn fs_ra_pages(fs: &Fs) -> usize {
         0 => (128 << 10) >> kernel::page::PAGE_SHIFT,
         n => n,
     }
-}
-
-#[cfg(kernel)]
-#[c_export]
-pub fn bch2_fs_ra_pages(c: &Opaque<c::bch_fs>) -> core::ffi::c_ulong {
-    fs_ra_pages(Fs::from_c(c)) as _
 }
 
 impl Fs {
