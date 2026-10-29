@@ -614,7 +614,7 @@ mod vfs {
         let inode_opts = inode_opts::inode_opts_to_opts(inode);
 
         let Some(opt) = name.to_str().ok().and_then(opts::opt_lookup)
-            .filter(|opt| opt.id.is_inode_opt()) else {
+            .filter(|opt| opt.id.inode_opt().is_some()) else {
             return Err(fs.err(bch_errcode::BCH_ERR_EINVAL_xattr_get_bad_opt));
         };
         let id = opt.id;

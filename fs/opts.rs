@@ -27,6 +27,7 @@
 //! enums' are theirs - util/names.rs.
 
 use crate::c;
+use crate::opt_id;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::inode_opts::InodeOpt;
@@ -39,9 +40,6 @@ use crate::util::names::{self, Names};
 use crate::util::printbuf::Printbuf;
 use crate::util::sysfs::{parse_human_u64, parse_int};
 use core::ffi::CStr;
-
-#[allow(non_camel_case_types)]
-pub type opt_id = c::bch_opt_id;
 
 pub const NR: usize = opt_id::bch2_opts_nr.0 as usize;
 
@@ -253,10 +251,6 @@ impl opt_id {
         &OPTS[self.0 as usize]
     }
 
-    pub fn is_inode_opt(self) -> bool {
-        InodeOpt::from_opt_id(self).is_some()
-    }
-
     pub fn inode_opt(self) -> Option<InodeOpt> {
         InodeOpt::from_opt_id(self)
     }
@@ -289,6 +283,36 @@ impl Opt {
             OptType::Str(c) | OptType::Bitfield { choices: c, .. } => c,
             _ => &[],
         }
+    }
+
+    /// Its value from its superblock field's: the field may hold it scaled.
+    pub fn from_sb_field(&self, v: u64) -> u64 {
+        let mut v = v;
+        if self.has(c::opt_flags::OPT_SB_FIELD_ONE_BIAS) {
+            v = v.wrapping_sub(1);
+        }
+        if self.has(c::opt_flags::OPT_SB_FIELD_ILOG2) {
+            v = 1u64.checked_shl(v as u32).unwrap_or(0);
+        }
+        if self.has(c::opt_flags::OPT_SB_FIELD_SECTORS) {
+            v <<= 9;
+        }
+        v
+    }
+
+    /// Its superblock field's value for @v: from_sb_field()'s inverse.
+    pub fn to_sb_field(&self, v: u64) -> u64 {
+        let mut v = v;
+        if self.has(c::opt_flags::OPT_SB_FIELD_SECTORS) {
+            v >>= 9;
+        }
+        if self.has(c::opt_flags::OPT_SB_FIELD_ILOG2) {
+            v = v.checked_ilog2().unwrap_or(0).into();
+        }
+        if self.has(c::opt_flags::OPT_SB_FIELD_ONE_BIAS) {
+            v = v.wrapping_add(1);
+        }
+        v
     }
 
     /// A BCH_OPT_STR_MEMBER option's value: the string in member @m's field,
@@ -683,18 +707,7 @@ pub fn opt_from_sb(sb: &c::bch_sb<Unvalidated>, id: opt_id, dev: Option<u32>) ->
             }
         },
     };
-
-    let mut v = v;
-    if opt.has(c::opt_flags::OPT_SB_FIELD_ONE_BIAS) {
-        v = v.wrapping_sub(1);
-    }
-    if opt.has(c::opt_flags::OPT_SB_FIELD_ILOG2) {
-        v = 1u64.checked_shl(v as u32).unwrap_or(0);
-    }
-    if opt.has(c::opt_flags::OPT_SB_FIELD_SECTORS) {
-        v <<= 9;
-    }
-    v
+    opt.from_sb_field(v)
 }
 
 /// The filesystem defaults @sb has, into @opts - every one it has,
@@ -721,17 +734,7 @@ pub fn opts_validate_sb(sb: &c::bch_sb<Unvalidated>, out: &mut Printbuf) -> Resu
 /// Set @opt in @sb, to @v - for a device option in member @dev's - @val its
 /// string for a member string option: whether it changed.
 pub fn opt_set_sb(sb: &mut c::bch_sb_buf, dev: Option<u32>, opt: &Opt, v: u64, val: Option<&[u8]>) -> bool {
-    let mut v = v;
-    if opt.has(c::opt_flags::OPT_SB_FIELD_SECTORS) {
-        v >>= 9;
-    }
-    if opt.has(c::opt_flags::OPT_SB_FIELD_ILOG2) {
-        v = v.checked_ilog2().unwrap_or(0).into();
-    }
-    if opt.has(c::opt_flags::OPT_SB_FIELD_ONE_BIAS) {
-        v = v.wrapping_add(1);
-    }
-
+    let v = opt.to_sb_field(v);
     let mut changed = false;
 
     if let (true, None, Some(f)) = (opt.has(c::opt_flags::OPT_FS), dev, opt.fs_field()) {
@@ -787,6 +790,5 @@ impl Fs {
 mod change;
 pub use change::OptChange;
 
-// After the macros it uses, which are in scope from where they're defined
 #[path = "opts_c_export.rs"]
 pub mod c_export;
