@@ -147,9 +147,13 @@ impl Fs {
         let in_label = |ca: &&c::bch_dev| label.is_none_or(|t| t.d.test(ca.dev_idx.into()));
 
         for ca in self.devs_rcu_in(0..self.nr_devices() as usize, &rcu).filter(in_label) {
-            if ca.rw_durability() != 0 &&
-               ca.mi.get().data_allowed & (1 << c::bch_data_type::BCH_DATA_user.0) != 0 &&
-               u32::from(ca.mi.get().bucket_size) == blocksize
+            let mi = ca.mi.get();
+            // its member state, not rw_durability(): that's the allocator's
+            // rw set, which a device leaves going offline
+            if mi.state as u32 == c::bch_member_state::BCH_MEMBER_STATE_rw.0 &&
+               mi.durability != 0 &&
+               mi.data_allowed & (1 << c::bch_data_type::BCH_DATA_user.0) != 0 &&
+               u32::from(mi.bucket_size) == blocksize
             {
                 devs.d.set(ca.dev_idx.into());
             }
