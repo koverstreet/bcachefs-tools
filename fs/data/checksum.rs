@@ -467,11 +467,7 @@ pub unsafe fn __bch2_encrypt_bio(c: &Opaque<c::bch_fs>, _type: c_uint, nonce: c:
     ret_to_c(Fs::from_c(c).encrypt_range(nonce, unsafe { Bio::from_raw(bio) }.range()))
 }
 
-/// @bio's data checksummed afresh, as @new_csum_type, in three: @len_a
-/// sectors into @crc_a, @len_b into @crc_b, and the rest - having checked it
-/// against @crc_old, what it was read with: the new checksums merged, if they
-/// merge, else it checksummed again whole. Can't encrypt or decrypt, so both
-/// types are encryption, or neither.
+/// Fs::rechecksum_bio(), for C.
 ///
 /// # Safety
 /// @bio is a bio, not in flight.
@@ -481,71 +477,85 @@ pub unsafe fn bch2_rechecksum_bio(c: &Opaque<c::bch_fs>, bio: *mut c::bio, versi
                                   crc_a: Option<&mut c::bch_extent_crc_unpacked>,
                                   crc_b: Option<&mut c::bch_extent_crc_unpacked>,
                                   len_a: c_uint, len_b: c_uint, new_csum_type: c_uint) -> c_int {
-    use crate::data::ptrs::{crc_is_compressed, extent_nonce};
-
-    let fs = Fs::from_c(c);
     // SAFETY: the caller's
     let bio = unsafe { Bio::from_raw(bio) };
-    let (old_ty, new_ty) = (c::bch_csum_type(crc_old.csum_type.into()), c::bch_csum_type(new_csum_type));
-    let sectors = bio.raw().bi_iter.bi_size >> 9;
+    ret_to_c(Fs::from_c(c).rechecksum_bio(bio, version, crc_old, crc_a, crc_b, len_a, len_b, new_csum_type))
+}
 
-    assert!(len_a + len_b <= sectors, "rechecksumming {len_a} + {len_b} sectors of a bio of {sectors}");
-    assert_eq!(crc_old.uncompressed_size, sectors, "rechecksumming a bio that isn't its crc's extent");
-    assert!(!crc_is_compressed(&crc_old), "rechecksumming compressed data");
-    assert_eq!(old_ty.is_encryption(), new_ty.is_encryption(),
-               "rechecksumming {old_ty} as {new_ty}: that would encrypt or decrypt");
+impl Fs {
+    /// @bio's data checksummed afresh, as @new_csum_type, in three: @len_a
+    /// sectors into @crc_a, @len_b into @crc_b, and the rest - having checked
+    /// it against @crc_old, what it was read with: the new checksums merged, if
+    /// they merge, else it checksummed again whole. Can't encrypt or decrypt,
+    /// so both types are encryption, or neither.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rechecksum_bio(&self, bio: &Bio, version: c::bversion, crc_old: c::bch_extent_crc_unpacked,
+                          crc_a: Option<&mut c::bch_extent_crc_unpacked>,
+                          crc_b: Option<&mut c::bch_extent_crc_unpacked>,
+                          len_a: u32, len_b: u32, new_csum_type: u32) -> Result<(), BchError> {
+        use crate::data::ptrs::{crc_is_compressed, extent_nonce};
+        let fs = self;
+        let (old_ty, new_ty) = (c::bch_csum_type(crc_old.csum_type.into()), c::bch_csum_type(new_csum_type));
+        let sectors = bio.raw().bi_iter.bi_size >> 9;
 
-    let mergeable = old_ty == new_ty && new_ty.mergeable();
-    let mut splits = [(crc_a, len_a), (crc_b, len_b), (None, sectors - len_a - len_b)]
-        .map(|(crc, len)| (crc, len, c::bch_csum::default()));
+        assert!(len_a + len_b <= sectors, "rechecksumming {len_a} + {len_b} sectors of a bio of {sectors}");
+        assert_eq!(crc_old.uncompressed_size, sectors, "rechecksumming a bio that isn't its crc's extent");
+        assert!(!crc_is_compressed(&crc_old), "rechecksumming compressed data");
+        assert_eq!(old_ty.is_encryption(), new_ty.is_encryption(),
+                   "rechecksumming {old_ty} as {new_ty}: that would encrypt or decrypt");
 
-    let (mut r, mut nonce) = (bio.range(), extent_nonce(version, &crc_old));
-    for (crc, len, csum) in &mut splits {
-        if mergeable || crc.is_some() {
-            *csum = fs.checksum_range(new_ty, nonce, r.take(*len << 9));
+        let mergeable = old_ty == new_ty && new_ty.mergeable();
+        let mut splits = [(crc_a, len_a), (crc_b, len_b), (None, sectors - len_a - len_b)]
+            .map(|(crc, len)| (crc, len, c::bch_csum::default()));
+
+        let (mut r, mut nonce) = (bio.range(), extent_nonce(version, &crc_old));
+        for (crc, len, csum) in &mut splits {
+            if mergeable || crc.is_some() {
+                *csum = fs.checksum_range(new_ty, nonce, r.take(*len << 9));
+            }
+            r.advance(*len << 9);
+            nonce = nonce + (*len << 9);
         }
-        r.advance(*len << 9);
-        nonce = nonce + (*len << 9);
+
+        let merged = if mergeable {
+            splits.iter().fold(c::bch_csum::default(), |m, (_, len, csum)| new_ty.merge(m, *csum, (*len << 9) as usize))
+        } else {
+            fs.checksum_range(old_ty, extent_nonce(version, &crc_old), bio.range())
+        };
+
+        // in constant time, as C's bch2_crc_cmp() means to be
+        let differ = ((merged.lo.get() ^ crc_old.csum.lo.get()) | (merged.hi.get() ^ crc_old.csum.hi.get())) != 0;
+        if differ && fs.opts().no_data_io.get() == 0 {
+            static RATELIMIT: crate::util::log::Ratelimit = crate::util::log::Ratelimit::new();
+            if !RATELIMIT.suppress(fs, crate::c_function_name!()) {
+                crate::bch_warn!(fs, "checksum error in bch2_rechecksum_bio() (memory corruption or bug?)\n  \
+                                      expected {:x}:{:x} got {:x}:{:x} (old type {old_ty} new type {new_ty})",
+                                 crc_old.csum.hi.get(), crc_old.csum.lo.get(), merged.hi.get(), merged.lo.get());
+                crate::warn_on!(true);
+            }
+            return fs.throw(bch_errcode::BCH_ERR_recompute_checksum);
+        }
+
+        let mut crc_nonce = u32::from(crc_old.nonce);
+        for (crc, len, csum) in splits {
+            if let Some(crc) = crc {
+                *crc = c::bch_extent_crc_unpacked {
+                    csum_type:          new_csum_type as u8,
+                    compression_type:   crc_old.compression_type,
+                    compressed_size:    len,
+                    uncompressed_size:  len,
+                    offset:             0,
+                    live_size:          len,
+                    nonce:              crc_nonce as u16,
+                    csum,
+                };
+            }
+            if new_ty.is_encryption() {
+                crc_nonce += len;
+            }
+        }
+        Ok(())
     }
-
-    let merged = if mergeable {
-        splits.iter().fold(c::bch_csum::default(), |m, (_, len, csum)| new_ty.merge(m, *csum, (*len << 9) as usize))
-    } else {
-        fs.checksum_range(old_ty, extent_nonce(version, &crc_old), bio.range())
-    };
-
-    // in constant time, as C's bch2_crc_cmp() means to be
-    let differ = ((merged.lo.get() ^ crc_old.csum.lo.get()) | (merged.hi.get() ^ crc_old.csum.hi.get())) != 0;
-    if differ && fs.opts().no_data_io.get() == 0 {
-        static RATELIMIT: crate::util::log::Ratelimit = crate::util::log::Ratelimit::new();
-        if !RATELIMIT.suppress(fs, crate::c_function_name!()) {
-            crate::bch_warn!(fs, "checksum error in bch2_rechecksum_bio() (memory corruption or bug?)\n  \
-                                  expected {:x}:{:x} got {:x}:{:x} (old type {old_ty} new type {new_ty})",
-                             crc_old.csum.hi.get(), crc_old.csum.lo.get(), merged.hi.get(), merged.lo.get());
-            crate::warn_on!(true);
-        }
-        return ret_to_c(fs.throw::<()>(bch_errcode::BCH_ERR_recompute_checksum));
-    }
-
-    let mut crc_nonce = u32::from(crc_old.nonce);
-    for (crc, len, csum) in splits {
-        if let Some(crc) = crc {
-            *crc = c::bch_extent_crc_unpacked {
-                csum_type:          new_csum_type as u8,
-                compression_type:   crc_old.compression_type,
-                compressed_size:    len,
-                uncompressed_size:  len,
-                offset:             0,
-                live_size:          len,
-                nonce:              crc_nonce as u16,
-                csum,
-            };
-        }
-        if new_ty.is_encryption() {
-            crc_nonce += len;
-        }
-    }
-    0
 }
 
 // ── The superblock's crypt section ───────────────────────────────────────
