@@ -38,6 +38,7 @@ use crate::util::closure::StackClosure;
 use crate::sb::members::DevRef;
 use crate::util::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
 use crate::util::ffi::{c_str, Opaque};
+use crate::util::kernel::unlikely;
 use crate::util::rcu::read_lock;
 use crate::util::{Printbuf, ToText};
 use crate::util::log::should_print_err;
@@ -547,7 +548,7 @@ impl c::data_update {
         let k = BkeySC::from(self.k.key());
 
         let snapshot = k.k.p.snapshot;
-        if type_ != Type::BCH_DATA_UPDATE_scrub_no_repair && snapshot != 0 && !fs.snapshots.exists(snapshot) {
+        if type_ != Type::BCH_DATA_UPDATE_scrub_no_repair && snapshot != 0 && unlikely(!fs.snapshots.exists(snapshot)) {
             let r = match crate::snapshots::check_snapshots::check_key_has_snapshot(t, iter, k) {
                 Ok(false) => Ok(()),
                 // the key was deleted
@@ -698,6 +699,68 @@ impl c::data_update {
         Ok(held)
     }
 
+    /// A failed read's error, recorded where the data is: at btree_id, not
+    /// the read path's read_pos, which for an indirect extent is a reflink
+    /// position. A scrub that can't repair queues it for the journal scrub,
+    /// which can't commit - see bch2_scrub_journal_queue().
+    #[cold]
+    #[inline(never)]
+    fn read_err_record(&self, e: BchError) {
+        if read_err_benign(e) {
+            return;
+        }
+        let fs = self.fs();
+        if self.opts.type_ == Type::BCH_DATA_UPDATE_scrub_no_repair {
+            let bit = dev_ptr_bit(fs, self.key(), self.rbio.pick.ptr.dev().into());
+            // SAFETY: its key, which the queue copies
+            unsafe { bch2_scrub_journal_queue(fs.as_ptr(), self.btree_id, 0, self.k.k, bit, self.rbio.ret.into()) };
+        } else {
+            // SAFETY: maps an error code; no pointers
+            let err = unsafe { bch2_data_read_sb_err(self.rbio.ret.into()) };
+            let (btree, pos) = (self.btree_id, self.key().k.p);
+            let r = trans_commit_do(fs, None, CommitFlags::NO_ENOSPC,
+                                    |t| crate::init::damage::record_key(t, btree, pos, err));
+            if let Err(e) = r {
+                if should_print_err(&e) {
+                    bch_err_ratelimited!(fs, "{}(): error recording a data update's read error: {e}",
+                                         function_name!());
+                }
+            }
+        }
+    }
+
+    /// The pointers ptrs_io_error names, that failed to read, killed - their
+    /// durability made up by the write. False if that leaves nothing to
+    /// write: the index update done without one, its result in op.error.
+    #[cold]
+    #[inline(never)]
+    fn ptrs_io_error_kill(&mut self) -> bool {
+        let fs = self.fs();
+        let trans = crate::btree_trans!(fs);
+        let k = BkeySC::from(self.k.key());
+        if let Some(kp) = k.arm::<Ptrs>() {
+            let mut nr = u32::from(self.op.bits.nr_replicas());
+            let mut bit = 1u32;
+            for d in kp.ptrs_decoded(fs) {
+                if bit & u32::from(self.opts.ptrs_io_error) != 0 && bit & u32::from(self.opts.ptrs_kill) == 0 {
+                    if let Ok(dur) = lockrestart_do(&trans, |t| extent_ptr_durability(t, &d.p)) {
+                        nr += dur;
+                    }
+                    self.opts.ptrs_kill |= bit as u16;
+                    self.op.devs_have.drop(d.p.ptr.dev());
+                }
+                bit <<= 1;
+            }
+            self.op.bits.set_nr_replicas(nr as u8);
+        }
+
+        if self.op.bits.nr_replicas() == 0 {
+            self.op.error = ret_to_c(crate::data::update_index::index_update_nowrite(&trans, self)) as i16;
+            return false;
+        }
+        true
+    }
+
     /// Whether there's a write for write() to issue. There isn't for a failed
     /// read, a scrub with nothing to repair, or IO errors that leave nothing to
     /// write: then op.error is the update's result.
@@ -706,37 +769,17 @@ impl c::data_update {
         let mut crc = self.rbio.pick.crc;
         let type_ = self.opts.type_;
 
-        // Before the bitrot fixup below, which clears rbio.ret. The damage is
-        // recorded at btree_id, not the read path's read_pos, which for an
-        // indirect extent is a reflink position
+        // before the bitrot fixup below, which clears rbio.ret
         if let Err(e) = ret_to_result_void(self.rbio.ret.into()) {
-            if !read_err_benign(e) {
-                if type_ == Type::BCH_DATA_UPDATE_scrub_no_repair {
-                    // the journal scrub can't commit: see bch2_scrub_journal_queue()
-                    let bit = dev_ptr_bit(fs, self.key(), self.rbio.pick.ptr.dev().into());
-                    // SAFETY: its key, which the queue copies
-                    unsafe { bch2_scrub_journal_queue(fs.as_ptr(), self.btree_id, 0, self.k.k, bit, self.rbio.ret.into()) };
-                } else {
-                    // SAFETY: maps an error code; no pointers
-                    let err = unsafe { bch2_data_read_sb_err(self.rbio.ret.into()) };
-                    let (btree, pos) = (self.btree_id, self.key().k.p);
-                    let r = trans_commit_do(fs, None, CommitFlags::NO_ENOSPC,
-                                            |t| crate::init::damage::record_key(t, btree, pos, err));
-                    if let Err(e) = r {
-                        if should_print_err(&e) {
-                            bch_err_ratelimited!(fs, "{}(): error recording a data update's read error: {e}",
-                                                 function_name!());
-                        }
-                    }
-                }
-            }
+            self.read_err_record(e);
         }
 
         // A bitrotted extent gets a new checksum so it can be moved; its
         // poison bit keeps reads of it returning errors
-        let poisoned = self.key().arm::<Ptrs>()
-            .is_some_and(|k| k.extent_flags(fs) & (1 << c::bch_extent_flags_e::BCH_EXTENT_FLAG_poisoned.0) != 0);
-        if i32::from(self.rbio.ret) == -(bch_errcode::BCH_ERR_data_read_csum_err.0 as i32) && poisoned {
+        if unlikely(i32::from(self.rbio.ret) == -(bch_errcode::BCH_ERR_data_read_csum_err.0 as i32) &&
+                    self.key().arm::<Ptrs>().is_some_and(|k| {
+                        k.extent_flags(fs) & (1 << c::bch_extent_flags_e::BCH_EXTENT_FLAG_poisoned.0) != 0
+                    })) {
             let nonce = crate::data::ptrs::extent_nonce(self.rbio.version, &crc);
             // SAFETY: the read's bio, done, its data in
             let bio = unsafe { crate::util::bio::Bio::from_raw(&self.rbio.bio) };
@@ -744,14 +787,14 @@ impl c::data_update {
             self.rbio.ret = 0;
         }
 
-        if self.rbio.ret != 0 {
+        if unlikely(self.rbio.ret != 0) {
             self.op.error = self.rbio.ret;
             return false;
         }
 
         if type_ == Type::BCH_DATA_UPDATE_scrub_no_repair {
             if self.opts.ptrs_io_error != 0 {
-                // SAFETY: as above
+                // SAFETY: its key, which the queue copies
                 unsafe {
                     bch2_scrub_journal_queue(fs.as_ptr(), self.btree_id, 0, self.k.k, self.opts.ptrs_io_error.into(), 0)
                 };
@@ -763,29 +806,8 @@ impl c::data_update {
             return false;
         }
 
-        if self.opts.ptrs_io_error != 0 {
-            let trans = crate::btree_trans!(fs);
-            let k = BkeySC::from(self.k.key());
-            if let Some(kp) = k.arm::<Ptrs>() {
-                let mut nr = u32::from(self.op.bits.nr_replicas());
-                let mut bit = 1u32;
-                for d in kp.ptrs_decoded(fs) {
-                    if bit & u32::from(self.opts.ptrs_io_error) != 0 && bit & u32::from(self.opts.ptrs_kill) == 0 {
-                        if let Ok(dur) = lockrestart_do(&trans, |t| extent_ptr_durability(t, &d.p)) {
-                            nr += dur;
-                        }
-                        self.opts.ptrs_kill |= bit as u16;
-                        self.op.devs_have.drop(d.p.ptr.dev());
-                    }
-                    bit <<= 1;
-                }
-                self.op.bits.set_nr_replicas(nr as u8);
-            }
-
-            if self.op.bits.nr_replicas() == 0 {
-                self.op.error = ret_to_c(crate::data::update_index::index_update_nowrite(&trans, self)) as i16;
-                return false;
-            }
+        if unlikely(self.opts.ptrs_io_error != 0) && !self.ptrs_io_error_kill() {
+            return false;
         }
 
         assert!(self.op.wbio.bio.bi_vcnt != 0, "a data update's write bio must own its pages");
