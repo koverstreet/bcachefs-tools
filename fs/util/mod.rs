@@ -55,7 +55,7 @@ pub mod volatile;
 pub mod vstructs;
 pub mod workqueue;
 
-pub use printbuf::{HumanReadable, Printbuf, ToText};
+pub use printbuf::{Bytes, DateTime, HumanReadable, Nsecs, Printbuf, Sectors, ToText};
 
 /// The largest value @_x's type holds: a field's, without naming its type -
 /// `max_of(&k.size)`, C's KEY_SIZE_MAX.

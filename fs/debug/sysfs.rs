@@ -38,12 +38,13 @@ use crate::locking::{Lock, MemallocFlags};
 use crate::opts::{self, OptChange, OptType};
 use crate::sb::io::COUNTERS;
 use crate::sb::members;
+use crate::prt;
 use crate::util::ffi::c_char;
 use crate::util::kernel::{READ, WRITE};
 use crate::util::log::LogMsg;
 use crate::util::refcount::TryRefcount;
 use crate::util::sysfs::{self, parse_human_u64, parse_int, Attr, Dir, Files, ListAttrs};
-use crate::util::{Printbuf, ToText};
+use crate::util::{HumanReadable, Printbuf, ToText};
 
 // ── the fs dir ──────────────────────────────────────────────────────────────
 
@@ -60,7 +61,7 @@ unsafe impl Dir for FsDir {
 
 const FS: &[Attr<Fs>] = &[
     Attr::ro(c"minor",                  |c, out| writeln!(out, "{}", c.minor)),
-    Attr::ro(c"btree_cache_size",       |c, out| out.human_readable_u64(c.btree_cache_size())),
+    Attr::ro(c"btree_cache_size",       |c, out| prt!(out, "{}", HumanReadable(c.btree_cache_size()))),
     Attr::ro(c"btree_write_stats",      |c, out| c.btree_write_stats_to_text(out)),
 
     Attr::ro(c"reconcile_status",       |c, out| c.reconcile_status_to_text(out)),
@@ -377,29 +378,16 @@ unsafe impl Dir for CountersDir {
 
     fn show(c: &Fs, attr: &c::attribute, out: &mut Printbuf) -> Result<(), BchError> {
         let i = counter_idx(attr)?;
-        let sectors = COUNTERS[i].is_sectors;
-
-        let mut count = c.counter_read(i);
-        let mut since_mount = count.wrapping_sub(c.counters.mount[i]);
-        if sectors {
-            count <<= 9;
-            since_mount <<= 9;
-        }
-
-        let prt = |out: &mut Printbuf, v: u64| if sectors {
-            out.human_readable_u64(v)
-        } else {
-            write!(out, "{v}")
-        };
+        let count = c.counter_read(i);
+        let since_mount = count.wrapping_sub(c.counters.mount[i]);
 
         out.tabstop_push(32);
-        write!(out, "since mount:\t");
-        prt(out, since_mount);
-        out.newline();
-
-        write!(out, "since filesystem creation:\t");
-        prt(out, count);
-        out.newline();
+        if COUNTERS[i].is_sectors {
+            prt!(out, "since mount:\t{}\nsince filesystem creation:\t{}\n",
+                 HumanReadable(since_mount << 9), HumanReadable(count << 9));
+        } else {
+            prt!(out, "since mount:\t{since_mount}\nsince filesystem creation:\t{count}\n");
+        }
         Ok(())
     }
 
@@ -690,18 +678,10 @@ fn compression_stats_to_text(c: &Fs, out: &mut Printbuf) {
         accounting::mem_read(c, &pos, &mut v);
         let [nr_extents, sectors_uncompressed, sectors_compressed] = v;
 
-        c::bch_compression_type(i).to_text(out);
-        out.tab();
-
-        out.human_readable_u64(sectors_compressed << 9);
-        out.tab_rjust();
-
-        out.human_readable_u64(sectors_uncompressed << 9);
-        out.tab_rjust();
-
-        out.human_readable_u64((sectors_uncompressed << 9).checked_div(nr_extents).unwrap_or(0));
-        out.tab_rjust();
-        out.newline();
+        prt!(out, "{}\t{}\r{}\r{}\r\n", c::bch_compression_type(i),
+             HumanReadable(sectors_compressed << 9),
+             HumanReadable(sectors_uncompressed << 9),
+             HumanReadable((sectors_uncompressed << 9).checked_div(nr_extents).unwrap_or(0)));
     }
 }
 

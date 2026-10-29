@@ -75,7 +75,7 @@ use crate::util::place::Placed;
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::util::sleep::Sleep;
-use crate::util::Printbuf;
+use crate::util::{HumanReadable, Printbuf};
 use crate::{bch_err_fn, bch_err_msg, fsck_err, has_bio, prt};
 use core::sync::atomic::Ordering;
 use cstruct_macros::c_export;
@@ -175,9 +175,7 @@ fn discard_state_to_text(out: &mut Printbuf, s: &DiscardState) {
 
 /// Sectors, as bytes - the release calculation's figures are all sectors.
 fn prt_sectors(out: &mut Printbuf, label: &str, sectors: i64) {
-    prt!(out, "{label}:\t");
-    out.human_readable_s64(sectors << 9);
-    out.newline();
+    prt!(out, "{label}:\t{}\n", HumanReadable(sectors << 9));
 }
 
 impl Fs {

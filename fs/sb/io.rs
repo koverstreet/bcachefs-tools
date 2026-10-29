@@ -142,7 +142,7 @@ use crate::sb::members;
 use crate::util::bitmap::LeBitmap;
 use crate::util::projections::{AtomicWord, Volatile, VolatileWriter};
 use crate::util::names::{self, Names};
-use crate::util::{Printbuf, ToText};
+use crate::util::{Bytes, DateTime, Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
@@ -855,22 +855,13 @@ pub fn bch2_sb_upgrade(c: &Opaque<c::bch_fs>, new_version: c_uint, incompat: boo
 // ── Printing ─────────────────────────────────────────────────────────────
 
 pub fn layout_to_text(out: &mut Printbuf, l: &c::bch_sb_layout) {
-    write!(out, "Type:                    {}", l.layout_type);
-    out.newline();
-
-    write!(out, "Superblock max size:     ");
-    out.units_u64(512 << l.sb_max_size_bits);
-    out.newline();
-
-    write!(out, "Nr superblocks:          {}", l.nr_superblocks);
-    out.newline();
+    prt!(out, "Type:                    {}\n", l.layout_type);
+    prt!(out, "Superblock max size:     {}\n", Bytes(512 << l.sb_max_size_bits));
+    prt!(out, "Nr superblocks:          {}\n", l.nr_superblocks);
 
     write!(out, "Offsets:                 ");
     for (i, o) in l.sb_offset[..usize::from(l.nr_superblocks)].iter().enumerate() {
-        if i != 0 {
-            write!(out, ", ");
-        }
-        write!(out, "{}", o.get());
+        write!(out, "{}{}", if i != 0 { ", " } else { "" }, o.get());
     }
     out.newline();
 }
@@ -906,47 +897,26 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
         prt!(out, "{what}:\t{}\n", version(v));
     }
 
-    write!(out, "Created:\t");
     match sb.time_base_lo.get() {
-        0 => write!(out, "(not set)"),
-        t => out.datetime((t / NSEC_PER_SEC) as i64),
+        0 => prt!(out, "Created:\t(not set)\n"),
+        t => prt!(out, "Created:\t{}\n", DateTime((t / NSEC_PER_SEC) as i64)),
     }
-    out.newline();
-
     write!(out, "Sequence number:\t{}\n", sb.seq.get());
-
-    write!(out, "Time of last write:\t");
-    out.datetime(sb.write_time.get() as i64);
-    out.newline();
-
-    write!(out, "Superblock size:\t");
-    out.units_u64(sb.as_bytes().len() as u64);
-    write!(out, "/");
-    out.units_u64(512u64 << sb.layout.sb_max_size_bits);
-    out.newline();
-
+    prt!(out, "Time of last write:\t{}\n", DateTime(sb.write_time.get() as i64));
+    prt!(out, "Superblock size:\t{}/{}\n",
+         Bytes(sb.as_bytes().len() as u64), Bytes(512u64 << sb.layout.sb_max_size_bits));
     write!(out, "Clean:\t{}\n", u8::from(sb.clean()));
     if sb.dirents_sanitized() {
         write!(out, "Dirents sanitized:\t1\n");
     }
     write!(out, "Devices:\t{}\n", sb.number_of_devices());
 
-    write!(out, "Sections:\t");
     let have = sb.entries().map_while(Result::ok).fold(0u64, |m, f| m | 1u64.checked_shl(f.type_.get()).unwrap_or(0));
-    names::prt_set::<c::bch_sb_field_type>(out, have);
-    out.newline();
+    prt!(out, "Sections:\t{}\n", names::set::<c::bch_sb_field_type>(have));
+    prt!(out, "Features:\t{}\n", names::set::<c::bch_sb_feature>(sb.features[0].get()));
+    prt!(out, "Compat features:\t{}\n", names::set::<c::bch_sb_compat>(sb.compat[0].get()));
 
-    write!(out, "Features:\t");
-    crate::util::names::prt_set::<c::bch_sb_feature>(out, sb.features[0].get());
-    out.newline();
-
-    write!(out, "Compat features:\t");
-    crate::util::names::prt_set::<c::bch_sb_compat>(out, sb.compat[0].get());
-    out.newline();
-
-    out.newline();
-    write!(out, "Options:");
-    out.newline();
+    prt!(out, "\nOptions:\n");
     {
         let mut out = out.indent(2);
         for opt in crate::opts::OPTS.iter().filter(|o| o.fs_field().is_some()) {
@@ -959,9 +929,7 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
     }
 
     if print_layout {
-        out.newline();
-        write!(out, "layout:");
-        out.newline();
+        prt!(out, "\nlayout:\n");
         layout_to_text(&mut out.indent(2), &sb.layout);
     }
 

@@ -29,10 +29,11 @@ use crate::c;
 use crate::data::ec::head::stripe_heads_stop;
 use crate::fs::Fs;
 use crate::locking::Guard;
+use crate::prt;
 use crate::util::ffi::Opaque;
 use crate::util::hash::hash_64;
 use crate::util::kernel::local_clock;
-use crate::util::{Printbuf, ToText};
+use crate::util::{HumanReadable, Nsecs, Printbuf, ToText};
 use core::ffi::{c_uint, c_ulong};
 use cstruct_macros::c_export;
 
@@ -289,15 +290,12 @@ impl Fs {
     fn write_point_to_text(&self, out: &mut Printbuf, wp: &c::write_point) {
         let g = wp.alloc.lock.lock();
 
-        write!(out, "{}: ", wp.alloc.lock.write_point.get());
-        out.human_readable_u64(g.sectors_allocated << 9);
-
-        write!(out, " last wrote: ");
-        out.time_units(local_clock().wrapping_sub(wp.alloc.lock.last_used.get()));
+        prt!(out, "{}: {} last wrote: {}", wp.alloc.lock.write_point.get(),
+             HumanReadable(g.sectors_allocated << 9),
+             Nsecs(local_clock().wrapping_sub(wp.alloc.lock.last_used.get())));
 
         for (i, t) in wp.io.writes_lock.time.iter().enumerate() {
-            write!(out, " {}: ", c::write_point_state::from_bits(i as u32));
-            out.time_units(t.get());
+            prt!(out, " {}: {}", c::write_point_state::from_bits(i as u32), Nsecs(t.get()));
         }
         writeln!(out);
 

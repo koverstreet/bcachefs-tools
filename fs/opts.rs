@@ -32,12 +32,13 @@ use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::inode_opts::InodeOpt;
 use crate::sb::io::SbState;
+use crate::prt;
 use crate::util::vstructs::{bytes_of_mut, cast_plain_mut, plain_bytes_mut, Unvalidated};
 use crate::sb::members;
 use crate::util::ffi::c_char;
 use crate::util::log::{log_no_fs, LogLevel};
 use crate::util::names::{self, Names};
-use crate::util::printbuf::Printbuf;
+use crate::util::{HumanReadable, Printbuf};
 use crate::util::sysfs::{parse_human_u64, parse_int};
 use core::ffi::CStr;
 
@@ -631,7 +632,7 @@ pub fn opt_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: Option<&c::bch_sb<Un
     }
 
     match opt.ty {
-        OptType::Bool | OptType::Uint if opt.has(c::opt_flags::OPT_HUMAN_READABLE) => out.human_readable_u64(v),
+        OptType::Bool | OptType::Uint if opt.has(c::opt_flags::OPT_HUMAN_READABLE) => prt!(out, "{}", HumanReadable(v)),
         OptType::Bool | OptType::Uint => write!(out, "{}", v as i64),
         OptType::Str(choices) => match choices.get(v as usize) {
             Some(_) if v < opt.min || v > opt.max => write!(out, "(invalid option {})", v as i64),

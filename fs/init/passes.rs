@@ -57,7 +57,7 @@ use crate::util::projections::AtomicWord;
 use crate::util::vstructs::{Head, Validated, Unvalidated};
 use crate::util::place::Placed;
 use crate::util::workqueue::Queue;
-use crate::util::Printbuf;
+use crate::util::{DateTime, Nsecs, Printbuf};
 use crate::{bch_err, bch_info, c_function_name, inode, message, prt};
 use core::ffi::{c_int, c_ulong};
 use core::mem::size_of;
@@ -248,14 +248,9 @@ impl SbFieldOps for c::bch_sb_field_recovery_passes {
         write!(out, "Pass\tLast run\tLast runtime\n");
         for (stable, e) in r.start.iter().enumerate().filter(|(_, e)| e.last_run.get() != 0) {
             names::prt_name(out, <Pass as names::Names>::ENTRIES, from_stable(stable) as u64);
-            write!(out, "\t");
-            out.datetime(e.last_run.get() as i64);
-            out.tab();
-            out.time_units(u64::from(e.last_runtime.get()) * NSEC_PER_SEC);
-            if e.bch_recovery_pass_no_ratelimit() {
-                write!(out, " (no ratelimit)");
-            }
-            out.newline();
+            prt!(out, "\t{}\t{}{}\n", DateTime(e.last_run.get() as i64),
+                 Nsecs(u64::from(e.last_runtime.get()) * NSEC_PER_SEC),
+                 if e.bch_recovery_pass_no_ratelimit() { " (no ratelimit)" } else { "" });
         }
     }
 }
@@ -1049,9 +1044,7 @@ pub fn status_to_text(fs: &Fs, out: &mut Printbuf) {
     if current != NONE {
         write!(out, "Currently running:\t{} ({})\n", current.name(), current as u32);
 
-        write!(out, "Elapsed:\t");
-        out.time_units(ktime_get_ns().wrapping_sub(start_time));
-        out.newline();
+        prt!(out, "Elapsed:\t{}\n", Nsecs(ktime_get_ns().wrapping_sub(start_time)));
 
         // Nothing to show for a pass with no estimate of its own size
         if r.progress.has_total() {

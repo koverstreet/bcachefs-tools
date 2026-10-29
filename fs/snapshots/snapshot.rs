@@ -295,6 +295,7 @@
 
 use crate::btree::bkey::{bkey_gt, bkey_lt, pos, spos, BkeyI, BkeySC, BkeyWhole, POS_MAX, POS_MIN};
 use crate::btree::bkey_methods::TriggerOp;
+use crate::prt;
 use crate::util::vstructs::{Validated, Whole};
 use crate::btree::iter::{is_restart, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans,
                          TransAttempt, TransBkey, UpdateTriggerFlags};
@@ -312,7 +313,7 @@ use crate::util::bitmap::BitArray;
 use crate::util::rcu::RcuArray;
 use crate::util::ffi::Opaque;
 use crate::util::place::Placed;
-use crate::util::Printbuf;
+use crate::util::{HumanReadable, Printbuf};
 use core::ffi::c_int;
 use core::fmt;
 use core::ops::ControlFlow;
@@ -1599,8 +1600,7 @@ fn node_to_text(out: &mut Printbuf, t: &TransAttempt<'_, '_>, id: u32) -> Result
             let mut v = [0u64; 3];
             crate::accounting::mem_read(t.fs(), &c::disk_accounting_pos::from_arm(
                     c::bch_acct_snapshot { id, btree: 0 }), &mut v);
-            out.human_readable_u64(v[2] << 9);
-            out.tab_rjust();
+            prt!(out, "{}\r", HumanReadable(v[2] << 9));
         }
     }
     out.newline();

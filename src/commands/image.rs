@@ -13,7 +13,7 @@ use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::accounting::{compression_type, data_type};
 use bcachefs_kernel::btree::bkey::bkey_type;
 use bcachefs_kernel::btree_id;
-use bcachefs_kernel::util::ToText;
+use bcachefs_kernel::util::{HumanReadable, ToText};
 use bcachefs_kernel::btree::iter::{BtreeIter, lockrestart_do};
 use bch_bindgen::c;
 use bcachefs_kernel::util::vstructs::Head;
@@ -167,9 +167,7 @@ fn get_nbuckets_used(fs: &Fs) -> Result<u64, anyhow::Error> {
 
 /// Print sector count formatted as human-readable bytes.
 fn prt_sectors(out: &mut Printbuf, v: u64) {
-    write!(out, "\t");
-    out.human_readable_u64(v << 9);
-    write!(out, "\r\n");
+    write!(out, "\t{}\r\n", HumanReadable(v << 9));
 }
 
 /// Print usage for a specific data type on a device.
@@ -271,18 +269,14 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
         let sectors_uncompressed = v[1];
         let sectors_compressed = v[2];
 
-        c::bch_compression_type(i).to_text(&mut buf);
-        write!(&mut buf, "\t");
-
-        buf.human_readable_u64(sectors_compressed << 9);
-        write!(&mut buf, "\r");
+        write!(&mut buf, "{}\t{}\r", c::bch_compression_type(i), HumanReadable(sectors_compressed << 9));
 
         if i == u32::from(compression_type::incompressible) {
             buf.newline();
             continue;
         }
 
-        buf.human_readable_u64(sectors_uncompressed << 9);
+        write!(&mut buf, "{}", HumanReadable(sectors_uncompressed << 9));
         if let Some(pct) = (sectors_compressed * 100).checked_div(sectors_uncompressed) {
             write!(&mut buf, "\r{pct}%\r\n");
         } else {

@@ -17,7 +17,7 @@ use crate::wrappers::accounting::{disk_accounting_type, reconcile_accounting_typ
 use bch_bindgen::c::DiskAccountingPosRef as Acct;
 use crate::wrappers::handle::BcachefsHandle;
 use bcachefs_kernel::util::printbuf::Printbuf;
-use bcachefs_kernel::util::ToText;
+use bcachefs_kernel::util::{Sectors, ToText};
 use crate::wrappers::sysfs;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -132,11 +132,7 @@ fn reconcile_status_to_text(
         if idx < nr {
             write!(out, "  ");
             t.as_c().to_text(out);
-            write!(out, ":\t");
-            out.units_sectors(v[idx][0]);
-            write!(out, "\r");
-            out.units_sectors(v[idx][1]);
-            write!(out, "\r\n");
+            write!(out, ":\t{}\r{}\r\n", Sectors(v[idx][0]), Sectors(v[idx][1]));
             if wait_types.contains(t) {
                 have_pending |= v[idx][0] != 0 || v[idx][1] != 0;
             }

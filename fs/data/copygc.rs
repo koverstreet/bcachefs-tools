@@ -65,6 +65,7 @@ use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{writepoint_ptr, Fs};
 use crate::sb::counters::events;
 use crate::types::Fifo;
+use crate::prt;
 use crate::util::alloc::{flags::GFP_KERNEL, kbox_pin_init, KBox, KVVec};
 use crate::util::cuckoo::{Cuckoo, Entry, RegisterError, Registration};
 use crate::util::kernel::{cond_resched, WRITE};
@@ -73,7 +74,7 @@ use crate::util::rcu::read_lock;
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::sort::heapsort_by;
 use crate::util::workqueue::{Workqueue, WqFlags};
-use crate::util::Printbuf;
+use crate::util::{HumanReadable, Printbuf};
 use crate::{bch_err_msg, fs_fatal_error};
 use core::borrow::Borrow;
 use core::ffi::c_int;
@@ -835,13 +836,10 @@ impl Fs {
         write!(out, "copygc_wait:\t{}\n", cg.wait.get() as u64);
         write!(out, "copygc_wait_at:\t{}\n", cg.wait_at.get() as u64);
 
-        write!(out, "Currently waiting for:\t");
-        out.human_readable_u64((cg.wait.get().wrapping_sub(now).max(0) as u64) << 9);
-        out.newline();
-
-        write!(out, "Currently waiting since:\t");
-        out.human_readable_u64((now.wrapping_sub(cg.wait_at.get()).max(0) as u64) << 9);
-        out.newline();
+        prt!(out, "Currently waiting for:\t{}\n",
+             HumanReadable((cg.wait.get().wrapping_sub(now).max(0) as u64) << 9));
+        prt!(out, "Currently waiting since:\t{}\n",
+             HumanReadable((now.wrapping_sub(cg.wait_at.get()).max(0) as u64) << 9));
 
         out.make_room_gfp(4096, c::GFP_KERNEL);
 
@@ -853,9 +851,7 @@ impl Fs {
             for ca in self.rw_devs_rcu(&rcu) {
                 write!(out, "  ");
                 out.write_bytes(ca.name().to_bytes());
-                write!(out, ":\t");
-                out.human_readable_s64(dev_wait_amount(ca).0);
-                out.newline();
+                prt!(out, ":\t{}\n", HumanReadable(dev_wait_amount(ca).0));
             }
         }
 

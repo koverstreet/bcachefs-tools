@@ -154,7 +154,7 @@ use crate::util::kernel::local_clock;
 use crate::util::sleep::Sleep;
 use crate::util::task::{spawn_home, Spawn, TaskHome, Unstarted};
 use crate::util::projections::Volatile;
-use crate::util::Printbuf;
+use crate::util::{HumanReadable, Nsecs, Printbuf};
 use crate::{new_lock, published, prt};
 use arrayvec::ArrayVec;
 use core::ffi::c_void;
@@ -804,12 +804,8 @@ pub(crate) fn new_stripe_to_text(out: &mut Printbuf, fs: &Fs, s: &StripeNew) {
         prt!(out, "(pin {} {}/{})", ob.pin.load(Ordering::Relaxed), bucket_size - ob.sectors_free.get(), bucket_size);
     }
     out.newline();
-    prt!(out, "{}", i.new_stripe.stripe().to_text(fs));
-    out.newline();
-
-    prt!(out, "age:\t");
-    out.time_units(local_clock() - s.start_time);
-    out.newline();
+    prt!(out, "{}\n", i.new_stripe.stripe().to_text(fs));
+    prt!(out, "age:\t{}\n", Nsecs(local_clock() - s.start_time));
 }
 
 impl Fs {
@@ -817,11 +813,7 @@ impl Fs {
     #[cold]
     pub fn new_stripes_to_text(&self, out: &mut Printbuf) {
         let (in_use, limit) = self.stripe_buf_mem();
-        prt!(out, "stripe buf memory: ");
-        out.human_readable_u64(in_use as u64);
-        prt!(out, "/");
-        out.human_readable_u64(limit as u64);
-        out.newline();
+        prt!(out, "stripe buf memory: {}/{}\n", HumanReadable(in_use as u64), HumanReadable(limit as u64));
 
         crate::data::ec::head::stripe_heads_to_text(out, self);
 

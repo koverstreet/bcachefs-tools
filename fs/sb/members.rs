@@ -4,9 +4,10 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
+use crate::prt;
 use crate::util::kernel::{ktime_get_real_seconds, nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
 use crate::util::workqueue::Queue;
-use crate::util::{HumanReadable, Printbuf};
+use crate::util::{Bytes, DateTime, HumanReadable, Nsecs, Printbuf, Sectors};
 use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
@@ -513,9 +514,7 @@ pub fn member_to_text<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &c:
     label_to_text(out, m, sb);
     failure_domain_to_text(out, m);
     write!(out, "UUID:\t{}\n", uuid::Uuid::from_bytes(m.uuid.b));
-    write!(out, "Size:\t");
-    out.units_u64((m.nbuckets.get() * bucket_size) << 9);
-    out.newline();
+    prt!(out, "Size:\t{}\n", Sectors(m.nbuckets.get() * bucket_size));
 
     for (name, e) in MEMBER_ERROR_NAMES.iter().zip(&m.errors) {
         write!(out, "{name} errors:\t{}\n", e.get());
@@ -524,18 +523,14 @@ pub fn member_to_text<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &c:
         write!(out, "{name} iops:\t{}\n", iops.get());
     }
 
-    write!(out, "Bucket size:\t");
-    out.units_u64(bucket_size << 9);
-    out.newline();
+    prt!(out, "Bucket size:\t{}\n", Sectors(bucket_size));
     write!(out, "First bucket:\t{}\n", m.first_bucket.get());
     write!(out, "Buckets:\t{}\n", m.nbuckets.get());
 
-    write!(out, "Last mount:\t");
     match m.last_mount.get() {
-        0 => write!(out, "(never)"),
-        t => out.datetime(t as i64),
+        0 => prt!(out, "Last mount:\t(never)\n"),
+        t => prt!(out, "Last mount:\t{}\n", DateTime(t as i64)),
     }
-    out.newline();
     write!(out, "Last superblock write:\t{}\n", m.seq.get());
 
     write!(out, "State:\t{}\n", member_state_str(m.state() as u8));
@@ -545,12 +540,10 @@ pub fn member_to_text<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &c:
     has_data_to_text(out, sb, idx);
     write!(out, "Rotational:\t{}\n", m.rotational() as u8);
 
-    write!(out, "Btree allocated bitmap blocksize:\t");
     match m.btree_bitmap_shift {
-        s if s < 64 => out.units_u64(1 << s),
-        s           => write!(out, "(invalid shift {s})"),
+        s if s < 64 => prt!(out, "Btree allocated bitmap blocksize:\t{}\n", Bytes(1 << s)),
+        s           => prt!(out, "Btree allocated bitmap blocksize:\t(invalid shift {s})\n"),
     }
-    out.newline();
     write!(out, "Btree allocated bitmap:\t");
     // SAFETY: only formats
     unsafe { c::bch2_prt_u64_base2_nbits(out.as_raw(), m.btree_allocated_bitmap.get(), 64) };
@@ -988,11 +981,8 @@ crate::fs_delayed_work! {
             let bitmap_sectors = u64::from(ca.mi.get().btree_allocated_bitmap.count_ones()) << ca.mi.get().btree_bitmap_shift;
 
             if btree_sectors * 4 < bitmap_sectors {
-                write!(msg, "{} has ", ca.name().to_str().unwrap_or("?"));
-                msg.human_readable_u64(btree_sectors << 9);
-                write!(msg, " btree buckets and ");
-                msg.human_readable_u64(bitmap_sectors << 9);
-                write!(msg, " marked in bitmap\n");
+                prt!(msg, "{} has {} btree buckets and {} marked in bitmap\n", ca.name().to_str().unwrap_or("?"),
+                     HumanReadable(btree_sectors << 9), HumanReadable(bitmap_sectors << 9));
                 want_schedule = true;
             }
         }
@@ -1511,9 +1501,7 @@ impl c::bch_dev {
         }
 
         let since = (ktime_get_real_seconds() as u64).wrapping_sub(m.errors_reset_time.get());
-        write!(out, "IO errors since ");
-        out.time_units(since.wrapping_mul(NSEC_PER_SEC));
-        write!(out, " ago\n");
+        prt!(out, "IO errors since {} ago\n", Nsecs(since.wrapping_mul(NSEC_PER_SEC)));
         {
             let mut out = out.indent(2);
             for ((name, n), at_reset) in errors().zip(&m.errors_at_reset) {

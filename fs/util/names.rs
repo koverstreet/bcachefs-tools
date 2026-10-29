@@ -13,9 +13,10 @@
 //! an enum nothing prints costs nothing.
 
 use core::ffi::CStr;
+use core::marker::PhantomData;
 
 use crate::util::ffi::c_char;
-use crate::util::Printbuf;
+use crate::util::{Printbuf, ToText};
 
 pub trait Names {
     /// Each labelled variant's name and value - a flags type's, its bit - in
@@ -97,6 +98,19 @@ pub const fn bit(mask: u64) -> u64 {
 #[inline]
 pub fn prt_set<T: Names>(out: &mut Printbuf, mask: u64) {
     prt_flags(out, T::ENTRIES, mask)
+}
+
+/// prt_set(), for a format string: `prt!(out, "{}", set::<T>(mask))`.
+pub fn set<T: Names>(mask: u64) -> Set<T> {
+    Set(mask, PhantomData)
+}
+
+pub struct Set<T>(u64, PhantomData<T>);
+
+impl<T: Names> ToText for Set<T> {
+    fn to_text(&self, out: &mut Printbuf) {
+        prt_set::<T>(out, self.0)
+    }
 }
 
 // ── C's string tables ────────────────────────────────────────────────────

@@ -13,7 +13,7 @@ use bcachefs_kernel::util::vstructs::ArmError;
 use crate::wrappers::handle::{BcachefsHandle, DevUsage};
 use bcachefs_kernel::{btree, metadata_version};
 use bcachefs_kernel::util::printbuf::Printbuf;
-use bcachefs_kernel::util::ToText;
+use bcachefs_kernel::util::{Bytes, Sectors, ToText};
 use crate::wrappers::sysfs::{self, DeviceNameMode, DevInfo, bcachefs_kernel_version};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -149,17 +149,9 @@ fn fs_usage_v1_to_text(
     writeln!(out, "Filesystem: {}", uuid.hyphenated());
 
     out.aligned(|sub| {
-        write!(sub, "Size:\t");
-        sub.units_sectors(result.capacity);
-        write!(sub, "\r\n");
-
-        write!(sub, "Used:\t");
-        sub.units_sectors(result.used);
-        write!(sub, "\r\n");
-
-        write!(sub, "Online reserved:\t");
-        sub.units_sectors(result.online_reserved);
-        write!(sub, "\r\n");
+        write!(sub, "Size:\t{}\r\n", Sectors(result.capacity));
+        write!(sub, "Used:\t{}\r\n", Sectors(result.used));
+        write!(sub, "Online reserved:\t{}\r\n", Sectors(result.online_reserved));
 
         // The vector is non-increasing, so stop after the first zero: that row
         // is the ceiling, and the ones above it say nothing new. Empty on a
@@ -176,10 +168,7 @@ fn fs_usage_v1_to_text(
                 write!(sub, "  at {} replicas:\t", i + 1);
             }
 
-            sub.units_sectors(*free);
-            write!(sub, "\r");
-            sub.units_sectors(result.free_now[i]);
-            write!(sub, "\r");
+            write!(sub, "{}\r{}\r", Sectors(*free), Sectors(result.free_now[i]));
 
             if i == 0 {
                 write!(sub, "writable now");
@@ -202,9 +191,7 @@ fn fs_usage_v1_to_text(
                     Ok(Acct::persistent_reserved(r)) => {
                         let sectors = entry.counter(0);
                         if sectors == 0 { continue; }
-                        write!(sub, "reserved:\t1/{}\t\t[]\t ", r.nr_replicas);
-                        sub.units_sectors(sectors);
-                        write!(sub, "\r\n");
+                        write!(sub, "reserved:\t1/{}\t\t[]\t {}\r\n", r.nr_replicas, Sectors(sectors));
                     }
                     Ok(Acct::replicas(r)) => {
                         let sectors = entry.counter(0);
@@ -217,10 +204,7 @@ fn fs_usage_v1_to_text(
                         write!(sub, ":\t{}/{}\t{}\t[", r.nr_required, r.nr_devs, dur.durability);
 
                         prt_dev_list(sub, dev_list, devs);
-                        write!(sub, "]\t");
-
-                        sub.units_sectors(sectors);
-                        write!(sub, "\r\n");
+                        write!(sub, "]\t{}\r\n", Sectors(sectors));
                     }
                     Err(e @ ArmError::Bad { .. }) => write!(sub, "{e}\r\n"),
                     _ => {}
@@ -248,14 +232,9 @@ fn fs_usage_v1_to_text(
                         let sectors_uncompressed = entry.counter(1);
                         let sectors_compressed = entry.counter(2);
 
-                        sub.units_sectors(sectors_compressed);
-                        write!(sub, "\r");
-                        sub.units_sectors(sectors_uncompressed);
-                        write!(sub, "\r");
-
                         let avg = (sectors_uncompressed << 9).checked_div(nr_extents).unwrap_or(0);
-                        sub.units_u64(avg);
-                        write!(sub, "\r\n");
+                        write!(sub, "{}\r{}\r{}\r\n", Sectors(sectors_compressed), Sectors(sectors_uncompressed),
+                               Bytes(avg));
                     }
                 }
             });
@@ -272,9 +251,7 @@ fn fs_usage_v1_to_text(
                 write!(sub, "\nBtree usage:\n");
                 for entry in &btrees {
                     if let Ok(Acct::btree(r)) = entry.pos.get() {
-                        write!(sub, "{}:\t", btree::types::btree_id_str(r.id));
-                        sub.units_sectors(entry.counter(0));
-                        write!(sub, "\r\n");
+                        write!(sub, "{}:\t{}\r\n", btree::types::btree_id_str(r.id), Sectors(entry.counter(0)));
                     }
                 }
             });
@@ -289,8 +266,7 @@ fn fs_usage_v1_to_text(
         if !rebalance.is_empty() {
             write!(out, "\nPending rebalance work:\n");
             for entry in &rebalance {
-                out.units_sectors(entry.counter(0));
-                out.newline();
+                write!(out, "{}\n", Sectors(entry.counter(0)));
             }
         }
 
@@ -303,11 +279,7 @@ fn fs_usage_v1_to_text(
                 for entry in &reconcile {
                     if let Ok(Acct::reconcile_work(r)) = entry.pos.get() {
                         reconcile_type_from_u8(r.type_).to_text(sub);
-                        write!(sub, ":\t");
-                        sub.units_sectors(entry.counter(0));
-                        write!(sub, "\r");
-                        sub.units_sectors(entry.counter(1));
-                        write!(sub, "\r\n");
+                        write!(sub, ":\t{}\r{}\r\n", Sectors(entry.counter(0)), Sectors(entry.counter(1)));
                     }
                 }
             });
@@ -410,7 +382,7 @@ fn prt_degraded_header(out: &mut Printbuf, max_degraded: usize) {
 fn prt_sector_row(out: &mut Printbuf, values: &[u64]) {
     for &val in values {
         if val != 0 {
-            out.units_sectors(val);
+            write!(out, "{}", Sectors(val));
         }
         write!(out, "\r");
     }
@@ -522,14 +494,10 @@ fn replicas_summary_to_text(
     if cached > 0 || reserved > 0 {
         out.aligned(|sub| {
             if cached > 0 {
-                write!(sub, "cached:\t");
-                sub.units_sectors(cached);
-                write!(sub, "\r\n");
+                write!(sub, "cached:\t{}\r\n", Sectors(cached));
             }
             if reserved > 0 {
-                write!(sub, "reserved:\t");
-                sub.units_sectors(reserved);
-                write!(sub, "\r\n");
+                write!(sub, "reserved:\t{}\r\n", Sectors(reserved));
             }
         });
     }
@@ -628,18 +596,11 @@ fn devs_usage_to_text(
                 let used = usage.used_sectors() - hidden;
                 let state = bcachefs_kernel::sb::members::member_state_str(usage.state);
 
-                write!(sub, "{}\t", state);
-
-                sub.units_sectors(capacity);
-                write!(sub, "\r");
-                sub.units_sectors(used);
-
                 let pct = (usage.used_buckets() * 100).checked_div(usage.nr_buckets).unwrap_or(0);
-                write!(sub, "\r{:>2}%\r", pct);
+                write!(sub, "{}\t{}\r{}\r{:>2}%\r", state, Sectors(capacity), Sectors(used), pct);
 
                 if d.leaving > 0 {
-                    sub.units_sectors(d.leaving);
-                    write!(sub, "\r");
+                    write!(sub, "{}\r", Sectors(d.leaving));
                 }
 
                 sub.newline();
@@ -687,30 +648,23 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
                 } else {
                     dt.sectors
                 };
-                sub.units_sectors(sectors);
-
-                write!(sub, "\r{}\r", dt.buckets);
+                write!(sub, "{}\r{}\r", Sectors(sectors), dt.buckets);
 
                 if dt.fragmented > 0 {
-                    sub.units_sectors(dt.fragmented);
+                    write!(sub, "{}", Sectors(dt.fragmented));
                 }
 
                 if let Some(empty) = d.stripe_empty {
                     write!(sub, "\r");
                     if dt_type == data_type::stripe {
-                        sub.units_sectors(empty);
+                        write!(sub, "{}", Sectors(empty));
                     }
                 }
                 write!(sub, "\r\n");
             }
 
-            write!(sub, "capacity:\t");
-            sub.units_sectors(u.capacity_sectors());
-            write!(sub, "\r{}\r\n", u.nr_buckets);
-
-            write!(sub, "bucket size:\t");
-            sub.units_sectors(u.bucket_size as u64);
-            write!(sub, "\r\n");
+            write!(sub, "capacity:\t{}\r{}\r\n", Sectors(u.capacity_sectors()), u.nr_buckets);
+            write!(sub, "bucket size:\t{}\r\n", Sectors(u.bucket_size as u64));
         }
     });
     out.newline();

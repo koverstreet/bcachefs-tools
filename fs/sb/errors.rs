@@ -29,7 +29,7 @@ use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::ktime_get_real_seconds;
 use crate::util::names;
-use crate::util::{Printbuf, ToText};
+use crate::util::{DateTime, Printbuf, ToText};
 use crate::sb::io::SbResize;
 
 // ── Error ids, and their names ───────────────────────────────────────────────
@@ -180,14 +180,11 @@ fn to_text<E: ErrorEntry>(out: &mut Printbuf, entries: &[E]) {
         prt!(out, "{}\t", e.id());
         if E::V2 {
             prt_error_nr(out, e.nr());
-            out.tab();
-            out.datetime(e.first() as i64);
+            prt!(out, "\t{}", DateTime(e.first() as i64));
         } else {
             write!(out, "{}", e.nr());
         }
-        out.tab();
-        out.datetime(e.last() as i64);
-        out.newline();
+        prt!(out, "\t{}\n", DateTime(e.last() as i64));
     }
 }
 
@@ -374,11 +371,8 @@ impl Fs {
         }
 
         for e in self.errors.counts.lock().iter() {
-            prt!(out, "{}\t{}\t", c::bch_sb_error_id(e.id().into()), e.nr());
-            out.datetime(e.first_error_time as i64);
-            out.tab();
-            out.datetime(e.last_error_time as i64);
-            out.newline();
+            prt!(out, "{}\t{}\t{}\t{}\n", c::bch_sb_error_id(e.id().into()), e.nr(),
+                 DateTime(e.first_error_time as i64), DateTime(e.last_error_time as i64));
         }
     }
 }

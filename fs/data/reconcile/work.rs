@@ -68,13 +68,14 @@ use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{writepoint_ptr, Fs};
 use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
 use crate::sb::counters::events;
+use crate::prt;
 use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::alloc::KVVec;
 use crate::util::cuckoo::Cuckoo;
 use crate::util::kernel::{cond_resched, ktime_get_ns, WRITE};
 use crate::util::kthread::{Kthread, KthreadSelf};
 use crate::util::par::{self, Backend};
-use crate::util::printbuf::ToText;
+use crate::util::{HumanReadable, Nsecs, ToText};
 use crate::util::sleep::{sleep_until, Sleep};
 use crate::util::Printbuf;
 use crate::{bch_err, log_msg_ratelimited, warn_once, SPOS_MAX};
@@ -1038,14 +1039,10 @@ impl Fs {
         match self.reconcile.status.read() {
             Status::Waiting { iotime_start, iotime_end, since } => {
                 let now = self.io_clock[WRITE].now.load(Relaxed) as u64;
-                write!(out, "waiting:\n");
-                write!(out, "io wait duration:\t");
-                out.human_readable_s64((iotime_end.wrapping_sub(iotime_start) << 9) as i64);
-                write!(out, "\nio wait remaining:\t");
-                out.human_readable_s64((iotime_end.wrapping_sub(now) << 9) as i64);
-                write!(out, "\nduration waited:\t");
-                out.time_units(ktime_get_ns().wrapping_sub(since));
-                write!(out, "\n");
+                prt!(out, "waiting:\n");
+                prt!(out, "io wait duration:\t{}\n", HumanReadable((iotime_end.wrapping_sub(iotime_start) << 9) as i64));
+                prt!(out, "io wait remaining:\t{}\n", HumanReadable((iotime_end.wrapping_sub(now) << 9) as i64));
+                prt!(out, "duration waited:\t{}\n", Nsecs(ktime_get_ns().wrapping_sub(since)));
             }
             Status::Running { phase: None, .. } => write!(out, "between phases\n"),
             Status::Running { phase: Some(phase), pos } if phase.kind == PhaseKind::Scan => {

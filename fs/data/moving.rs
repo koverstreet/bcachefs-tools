@@ -31,11 +31,12 @@ use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::function_name;
 use crate::locking::Lock;
+use crate::prt;
 use crate::util::alloc::{alloc_pinned, free_pinned, AllocError, Flags};
 use crate::util::list::List;
 use crate::util::closure::ClosureRef;
 use crate::util::ffi::Opaque;
-use crate::util::{Printbuf, ToText};
+use crate::util::{HumanReadable, Printbuf, ToText};
 use crate::util::refcount::Refcount;
 use crate::util::kthread::Kthread;
 use crate::util::task::RunQueue;
@@ -112,9 +113,7 @@ impl MoveStats {
         write!(out, "keys raced:\t{}\n", self.keys_raced.load(Relaxed));
         let sectors = [("seen", &self.sectors_seen), ("moved", &self.sectors_moved), ("raced", &self.sectors_raced)];
         for (what, n) in sectors {
-            write!(out, "bytes {what}:\t");
-            out.human_readable_u64((n.load(Relaxed) as u64) << 9);
-            out.newline();
+            prt!(out, "bytes {what}:\t{}\n", HumanReadable((n.load(Relaxed) as u64) << 9));
         }
     }
 }

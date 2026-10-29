@@ -9,8 +9,9 @@
 
 use crate::c;
 use crate::fs::Fs;
+use crate::prt;
 use crate::util::rcu::read_lock;
-use crate::util::Printbuf;
+use crate::util::{Nsecs, Printbuf};
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
 
@@ -87,19 +88,13 @@ impl c::bch_dev {
         out.tabstop_push(32);
         write!(out, "current:\t{}%\n", self.congested_read(now) * 100 / c::CONGESTED_MAX);
         write!(out, "raw:\t{}/{}\n", self.congested.load(Relaxed), c::CONGESTED_MAX);
-        write!(out, "last io over threshold:\t");
-        out.time_units(now.wrapping_sub(self.congested_last.load(Relaxed)));
-        out.newline();
+        prt!(out, "last io over threshold:\t{}\n", Nsecs(now.wrapping_sub(self.congested_last.load(Relaxed))));
 
         // the thresholds are bch2_latency_acct()'s
         for (what, rw, shift) in [("read", READ, 2), ("write", WRITE, 3)] {
             let q = &self.io_latency[rw].quantiles;
-            write!(out, "{what} latency threshold:\t");
-            out.time_units(q.at(1) << shift);
-            out.newline();
-            write!(out, "median {what} latency:\t");
-            out.time_units(q.at(7));
-            out.newline();
+            prt!(out, "{what} latency threshold:\t{}\n", Nsecs(q.at(1) << shift));
+            prt!(out, "median {what} latency:\t{}\n", Nsecs(q.at(7)));
         }
     }
 }

@@ -30,7 +30,7 @@ use bch_bindgen::c::DiskAccountingPosRef as Acct;
 use bcachefs_kernel::util::vstructs::ArmError;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs::{self, DeviceNameMode, DevInfo};
-use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::util::{Printbuf, Sectors};
 
 #[derive(Parser, Debug)]
 #[command(name = "failure-domains",
@@ -242,9 +242,7 @@ fn header_to_text(out: &mut Printbuf, e: &Exposure, devs: &[DevInfo]) {
     }
     writeln!(out);
 
-    write!(out, "Data: ");
-    out.units_sectors(e.total);
-    writeln!(out);
+    writeln!(out, "Data: {}", Sectors(e.total));
 }
 
 /// The same report as machine-readable JSON: what the tests and scripts
@@ -289,9 +287,8 @@ fn report_to_text(out: &mut Printbuf, e: &Exposure, devs: &[DevInfo]) {
         let what = if unlabeled { "device" } else { "failure domain" };
 
         if worst.score.lost != 0 {
-            write!(out, "Failure domain separation violated: ");
-            out.units_sectors(worst.score.lost);
-            writeln!(out, " lost if {} {} fails", what, worst.name);
+            writeln!(out, "Failure domain separation violated: {} lost if {} {} fails",
+                     Sectors(worst.score.lost), what, worst.name);
         } else {
             writeln!(out, "All data survives losing any one {}", what);
         }
@@ -309,11 +306,7 @@ fn report_to_text(out: &mut Printbuf, e: &Exposure, devs: &[DevInfo]) {
                 (None, 0)    => (),
                 (None, _)    => write!(sub, "0/1"),
             }
-            write!(sub, "\r");
-            sub.units_sectors(r.score.lost);
-            write!(sub, "\r");
-            sub.units_sectors(r.score.degraded);
-            write!(sub, "\r\n");
+            write!(sub, "\r{}\r{}\r\n", Sectors(r.score.lost), Sectors(r.score.degraded));
         }
     });
 }

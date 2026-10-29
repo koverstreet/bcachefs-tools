@@ -222,20 +222,6 @@ impl Printbuf {
         unsafe { c::bch2_prt_newline(&mut self.0) };
     }
 
-    /// Human-readable units if is_human_readable(), else raw.
-    pub fn units_u64(&mut self, v: u64) {
-        unsafe { c::bch2_prt_units_u64(&mut self.0, v) };
-    }
-
-    pub fn units_sectors(&mut self, sectors: u64) {
-        self.units_u64(sectors << 9);
-    }
-
-    /// A time in seconds since the epoch: bch2_prt_datetime().
-    pub fn datetime(&mut self, sec: i64) {
-        unsafe { c::bch2_prt_datetime(&mut self.0, sec) };
-    }
-
     pub fn is_human_readable(&self) -> bool {
         self.0.human_readable_units()
     }
@@ -319,23 +305,6 @@ impl Printbuf {
         if self.as_bytes().last().is_some_and(|&b| b != b'\n') {
             self.newline();
         }
-    }
-
-    pub fn human_readable_u64(&mut self, v: u64) {
-        unsafe { c::bch2_prt_human_readable_u64(&mut self.0, v) };
-    }
-
-    /// As human_readable_u64(), signed: bch2_prt_human_readable_s64().
-    pub fn human_readable_s64(&mut self, v: i64) {
-        if v < 0 {
-            write!(self, "-");
-        }
-        self.human_readable_u64(v.unsigned_abs());
-    }
-
-    /// @ns in the largest unit it has two of, truncated: bch2_pr_time_units().
-    pub fn time_units(&mut self, ns: u64) {
-        unsafe { c::bch2_pr_time_units(&mut self.0, ns) };
     }
 
     /// As comma-separated names.
@@ -465,16 +434,75 @@ impl ToText for Bpos {
 }
 crate::display_via_to_text!(Bpos);
 
-/// A size in bytes, in human-readable units whatever the printbuf's mode, for
-/// a format string: `prt!(out, "{}", HumanReadable(sectors << 9))`.
-pub struct HumanReadable(pub u64);
+// ── Values that print themselves ─────────────────────────────────────────
+//
+// A number's unit says how it's printed - a size in units, a time as a date
+// - so it goes in a format string as what it is: `prt!(out, "size:\t{}\n",
+// Sectors(s))`, with nothing printed piecemeal around it.
 
-impl ToText for HumanReadable {
+/// A size in bytes: in units if the printbuf is human-readable, else the
+/// number - bch2_prt_units_u64().
+pub struct Bytes(pub u64);
+
+/// A size in 512-byte sectors, printed as Bytes.
+pub struct Sectors(pub u64);
+
+/// A size in bytes, in human-readable units whatever the printbuf's mode -
+/// u64 or i64.
+pub struct HumanReadable<T = u64>(pub T);
+
+/// A time, in seconds since the epoch: bch2_prt_datetime().
+pub struct DateTime(pub i64);
+
+/// A duration in nanoseconds, in the largest unit it has two of, truncated:
+/// bch2_pr_time_units().
+pub struct Nsecs(pub u64);
+
+impl ToText for Bytes {
     fn to_text(&self, out: &mut Printbuf) {
-        out.human_readable_u64(self.0)
+        unsafe { c::bch2_prt_units_u64(&mut out.0, self.0) };
     }
 }
-crate::display_via_to_text!(HumanReadable);
+
+impl ToText for Sectors {
+    fn to_text(&self, out: &mut Printbuf) {
+        Bytes(self.0 << 9).to_text(out)
+    }
+}
+
+impl ToText for HumanReadable<u64> {
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { c::bch2_prt_human_readable_u64(&mut out.0, self.0) };
+    }
+}
+
+impl ToText for HumanReadable<i64> {
+    fn to_text(&self, out: &mut Printbuf) {
+        if self.0 < 0 {
+            write!(out, "-");
+        }
+        HumanReadable(self.0.unsigned_abs()).to_text(out)
+    }
+}
+
+impl ToText for DateTime {
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { c::bch2_prt_datetime(&mut out.0, self.0) };
+    }
+}
+
+impl ToText for Nsecs {
+    fn to_text(&self, out: &mut Printbuf) {
+        unsafe { c::bch2_pr_time_units(&mut out.0, self.0) };
+    }
+}
+
+crate::display_via_to_text!(Bytes);
+crate::display_via_to_text!(Sectors);
+crate::display_via_to_text!(HumanReadable<u64>);
+crate::display_via_to_text!(HumanReadable<i64>);
+crate::display_via_to_text!(DateTime);
+crate::display_via_to_text!(Nsecs);
 
 /// What prints itself to a Printbuf. A printbuf is a superset of a Formatter:
 /// tabstops, indent and modes (human-readable units) are its state, which a

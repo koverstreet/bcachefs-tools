@@ -39,7 +39,7 @@ use crate::init::error::{id, BkeyValidate};
 use crate::inode::{self, bkey_is_inode};
 use crate::sb::errors::{merge, prt_error_nr, ErrorEntry};
 use crate::snapshots::subvolume;
-use crate::util::Printbuf;
+use crate::util::{DateTime, Printbuf};
 use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::ffi::Opaque;
 use crate::util::kernel::ktime_get_real_seconds;
@@ -96,10 +96,7 @@ pub fn bch2_damage_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC
         }
         prt!(out, "{} nr ", e.id());
         prt_error_nr(out, e.nr());
-        prt!(out, " first ");
-        out.datetime(e.first() as i64);
-        prt!(out, " last ");
-        out.datetime(e.last() as i64);
+        prt!(out, " first {} last {}", DateTime(e.first() as i64), DateTime(e.last() as i64));
     }
 }
 

@@ -13,7 +13,7 @@ use crate::util::{file_size, parse_human_size};
 use bcachefs_kernel::sb::io::{SbBuf, BCACHE_MAGIC, BCHFS_MAGIC};
 use bcachefs_kernel::util::vstructs::Unvalidated;
 use bcachefs_kernel::sb::members::sb_member;
-use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::util::{HumanReadable, Printbuf};
 use crate::wrappers::super_io::{self, SUPERBLOCK_SIZE_DEFAULT};
 use bcachefs_kernel::sb::io::SbResize;
 
@@ -70,12 +70,6 @@ fn validate_sb(sb: SbBuf<Unvalidated>, offset_sectors: u64) -> Result<SbBuf, Pri
         .map_err(|_| err)
 }
 
-fn prt_offset(offset: u64) -> Printbuf {
-    let mut hr = Printbuf::new();
-    hr.human_readable_u64(offset);
-    hr
-}
-
 fn probe_one_super(dev: &File, sb_size: usize, offset: u64, verbose: bool) -> Option<SbBuf> {
     let mut buf = vec![0u8; sb_size];
     let r = dev.read_at(&mut buf, offset).ok()?;
@@ -86,7 +80,7 @@ fn probe_one_super(dev: &File, sb_size: usize, offset: u64, verbose: bool) -> Op
     let sb = validate_sb(SbBuf::from_bytes(&buf).ok()?, offset >> 9).ok()?;
 
     if verbose {
-        println!("found superblock at {}", prt_offset(offset));
+        println!("found superblock at {}", HumanReadable(offset));
     }
 
     Some(sb)
@@ -134,7 +128,7 @@ fn probe_sb_range(dev: &File, start: u64, end: u64, verbose: bool) -> Vec<SbBuf>
         };
 
         if verbose {
-            println!("found superblock at {}", prt_offset(start + offset as u64));
+            println!("found superblock at {}", HumanReadable(start + offset as u64));
         }
 
         results.push(sb);

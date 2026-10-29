@@ -26,7 +26,7 @@ use crate::prt;
 use crate::sb::counters::events;
 use crate::util::ffi::Opaque;
 use crate::util::kernel::ktime_get_ns;
-use crate::util::printbuf::Printbuf;
+use crate::util::{Nsecs, Printbuf};
 use crate::util::rcu::read_lock;
 use crate::util::seq_file::SeqFile;
 use cstruct_macros::{c_export, c_extern, vtable};
@@ -133,9 +133,7 @@ impl SuperOps for Fs {
         self.event_inc_trace(events::sync_fs, |out| {
             prt!(out, "journal_flush_disabled: {}\n", disabled as u32);
             prt!(out, "blocking: {}\n", wait);
-            prt!(out, "duration: ");
-            out.time_units(ktime_get_ns() - start);
-            out.newline();
+            prt!(out, "duration: {}\n", Nsecs(ktime_get_ns() - start));
         });
         ret
     }
