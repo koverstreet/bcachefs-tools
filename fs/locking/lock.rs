@@ -384,8 +384,9 @@ impl<G, P> crate::typeinfo::TypeInfo for LockedBy<G, P> {
 
 /// A Lock initializer - new_lock!(g), new_lock!(g, p), either with a "name"
 /// last - over @g, publishing @p or nothing, with a lockdep class of its own,
-/// named @name or for the call site. new_lock!(<- init) initializes @g in
-/// place, by @init: Lock::new_init().
+/// named @name or for the call site. new_lock!(<- init), and
+/// new_lock!(<- init, p, "name"), initialize @g in place, by @init:
+/// Lock::new_init().
 #[macro_export]
 macro_rules! new_lock {
     (@key) => {{
@@ -402,13 +403,19 @@ macro_rules! new_lock {
         let name = unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked($name.as_bytes()) };
         unsafe { $crate::locking::Lock::new(g, p, name, key) }
     }};
-    (<- $g:expr $(,)?) => {{
+    (@init_in_place $g:expr, $p:expr, $name:expr) => {{
         let key = $crate::new_lock!(@key);
         let g = $g;
-        let name = ::core::concat!(::core::file!(), ":", ::core::line!(), "\0");
-        let name = unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked(name.as_bytes()) };
-        unsafe { $crate::locking::Lock::new_init(g, (), name, key) }
+        let p = $p;
+        let name = unsafe { ::core::ffi::CStr::from_bytes_with_nul_unchecked($name.as_bytes()) };
+        unsafe { $crate::locking::Lock::new_init(g, p, name, key) }
     }};
+    (<- $g:expr $(,)?) => {
+        $crate::new_lock!(@init_in_place $g, (), ::core::concat!(::core::file!(), ":", ::core::line!(), "\0"))
+    };
+    (<- $g:expr, $p:expr, $name:literal $(,)?) => {
+        $crate::new_lock!(@init_in_place $g, $p, ::core::concat!($name, "\0"))
+    };
     ($g:expr $(,)?) => {
         $crate::new_lock!(@init $g, (), ::core::concat!(::core::file!(), ":", ::core::line!(), "\0"))
     };
