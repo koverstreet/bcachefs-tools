@@ -655,8 +655,8 @@ fn cmd_dump(cli: DumpCli) -> Result<()> {
     opts.set_read_only(true);
     opts.set_nochanges(true);
     opts.set_norecovery(true);
-    opts.set_degraded(c::bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
-    opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8);
+    opts.set_degraded(c::bch_degraded_actions::BCH_DEGRADED_very);
+    opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue);
     opts.set_fix_errors(c::fsck_err_opts::FSCK_FIX_no as u8);
 
     if cli.noexcl {

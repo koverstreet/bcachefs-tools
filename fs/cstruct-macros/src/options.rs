@@ -24,8 +24,9 @@
 //! bch_opts::DEFAULTS       each one's default, all defined
 //! get(), set(), defined(), apply()   by id; set() sets it defined, in the
 //!                          field `defined`, a bch_opts_mask
-//! name(), set_name()       each option's value - a bool option's as bool - and
-//!                          setting it, defined
+//! name(), set_name()       each option's value - a bool option's as bool, a
+//!                          string option's as its enum - and setting it,
+//!                          defined
 //! name_or_default()        its value, or its default if it isn't defined
 //! ```
 //!
@@ -230,6 +231,28 @@ fn option(f: &Field, args: &[Vec<TokenTree>]) -> Result<String, String> {
          }}"))
 }
 
+enum Accessor {
+    Bool,
+    /// A string option's choices' enum, through c_enum!'s from_bits() and
+    /// into_bits(): a closed enum's from_bits() panics on a value that isn't
+    /// one, and a string option's value is an index into its choices - so
+    /// one, unless something set it around the parser.
+    Enum(String),
+    Field,
+}
+
+/// What an option's accessors take and give: a bool option's a bool, a
+/// string option's its enum, the rest the field's own type.
+fn accessor_type(args: &[Vec<TokenTree>]) -> Accessor {
+    match args.first().map(Vec::as_slice) {
+        Some([TokenTree::Ident(k)]) if k.to_string() == "bool" => Accessor::Bool,
+        Some([TokenTree::Ident(k), TokenTree::Group(g)])
+            if matches!(k.to_string().as_str(), "str" | "str_nolimit") =>
+            Accessor::Enum(text(&g.stream().into_iter().collect::<Vec<_>>())),
+        _ => Accessor::Field,
+    }
+}
+
 /// The option's default, from its #[opt]: 0 without one.
 fn default(f: &Field, args: &[Vec<TokenTree>]) -> String {
     args[1..].iter()
@@ -262,18 +285,32 @@ pub(crate) fn derive(input: TokenStream) -> Result<TokenStream, String> {
              self.defined.set(bch_opt_id::Opt_{0});\n\
          }}\n", f.name)).collect();
     let accessors: String = opts.iter().map(|(f, a)| {
-        let (ty, get, v) = match a.first().map(|t| text(t)).as_deref() {
-            Some("bool") => ("bool", " != 0", format!("v as {}", f.ty)),
-            _            => (f.ty.as_str(), "", "v".to_string()),
+        // what the accessors take and give, and the field from and to it
+        let acc = accessor_type(a);
+        let ty = match &acc {
+            Accessor::Bool    => "bool".to_string(),
+            Accessor::Enum(e) => format!("c::{e}"),
+            Accessor::Field   => f.ty.clone(),
         };
-        format!("pub fn {0}(&self) -> {ty} {{ self.{0}{get} }}\n\
-                 pub fn {0}_or_default(&self) -> {ty} {{\n\
-                     if self.defined(bch_opt_id::Opt_{0}) {{ self.{0}{get} }} else {{ Self::DEFAULTS.{0}{get} }}\n\
+        let get = |x: &str| match &acc {
+            Accessor::Bool    => format!("{x} != 0"),
+            Accessor::Enum(e) => format!("c::{e}::from_bits({x} as _)"),
+            Accessor::Field   => x.to_string(),
+        };
+        let set = match &acc {
+            Accessor::Bool    => format!("v as {}", f.ty),
+            Accessor::Enum(_) => format!("v.into_bits() as {}", f.ty),
+            Accessor::Field   => "v".to_string(),
+        };
+        let n = &f.name;
+        format!("pub fn {n}(&self) -> {ty} {{ {} }}\n\
+                 pub fn {n}_or_default(&self) -> {ty} {{\n\
+                     if self.defined(bch_opt_id::Opt_{n}) {{ self.{n}() }} else {{ {} }}\n\
                  }}\n\
-                 pub fn set_{0}(&mut self, v: {ty}) {{\n\
-                     self.{0} = {v};\n\
-                     self.defined.set(bch_opt_id::Opt_{0});\n\
-                 }}\n", f.name)
+                 pub fn set_{n}(&mut self, v: {ty}) {{\n\
+                     self.{n} = {set};\n\
+                     self.defined.set(bch_opt_id::Opt_{n});\n\
+                 }}\n", get(&format!("self.{n}")), get(&format!("Self::DEFAULTS.{n}")))
     }).collect();
     let nr = opts.len();
 

@@ -2254,7 +2254,7 @@ impl DevSbMut<'_> {
     fn copy_for(&mut self, fs: &Fs, idx: usize) -> (u64, usize) {
         let s = self.io.buf.sb_mut();
         s.offset = s.layout.sb_offset[idx];
-        let ty = c::bch_csum_opt(fs.opts().metadata_checksum.into()).to_type(fs, false);
+        let ty = fs.opts().metadata_checksum().to_type(fs, false);
         s.set_csum_type(ty.0.into());
         let sector = s.offset.get();
 
@@ -2480,9 +2480,8 @@ fn read_back(fs: &Fs, sb: &mut SbLockGuard<'_>, cas: &WriteDevs) -> Result<(), B
             crate::util::printbuf::prt_bdevname(&mut msg, Some(ca.disk_sb.bdev()));
             if read < expected {
                 prt!(msg, ": Superblock write was silently dropped! (seq {read} expected {expected})");
-                let errors = u32::from(fs.opts().errors);
-                if errors == c::bch_error_actions::BCH_ON_ERROR_continue.0 ||
-                   errors == c::bch_error_actions::BCH_ON_ERROR_fix_safe.0 {
+                if matches!(fs.opts().errors(), c::bch_error_actions::BCH_ON_ERROR_continue |
+                                                c::bch_error_actions::BCH_ON_ERROR_fix_safe) {
                     continue;
                 }
             } else {
@@ -2549,7 +2548,7 @@ fn write_report(fs: &Fs, sb: &SbLockGuard<'_>, devs: Option<&c::bch_devs_mask>, 
     use crate::util::log::LogMsg;
 
     let mut degraded_flags = c::BCH_FORCE_IF_DEGRADED;
-    if u32::from(fs.opts().degraded) == c::bch_degraded_actions::BCH_DEGRADED_very.0 {
+    if fs.opts().degraded() == c::bch_degraded_actions::BCH_DEGRADED_very {
         degraded_flags |= c::BCH_FORCE_IF_LOST;
     }
 

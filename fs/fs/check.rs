@@ -930,8 +930,8 @@ pub mod ioctl {
             .map(|fs| unsafe { OpenFs::from_raw(fs.cast()) });
 
         if let Ok(fs) = &fs {
-            if fs.opts.errors == c::bch_error_actions::BCH_ON_ERROR_panic.0 as u8 {
-                unsafe { (*fs.as_ptr()).opts.errors = c::bch_error_actions::BCH_ON_ERROR_ro.0 as u8 };
+            if fs.opts.errors() == c::bch_error_actions::BCH_ON_ERROR_panic {
+                unsafe { (*fs.as_ptr()).opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_ro) };
             }
         }
 

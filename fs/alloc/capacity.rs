@@ -624,7 +624,7 @@ impl Fs {
     /// ENOSPC? See enum bch_write_degraded_actions for why the default is
     /// what it is.
     fn write_degraded_ok(&self) -> bool {
-        match c::bch_write_degraded_actions(self.opts.write_degraded.into()) {
+        match self.opts.write_degraded() {
             c::bch_write_degraded_actions::BCH_WRITE_DEGRADED_yes => true,
             c::bch_write_degraded_actions::BCH_WRITE_DEGRADED_no  => false,
             _ => !self.flag(c::bch_fs_flags::BCH_FS_all_devs_rw),

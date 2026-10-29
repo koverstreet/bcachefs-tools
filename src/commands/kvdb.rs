@@ -1331,7 +1331,7 @@ fn kvdb(cli: Cli) -> Result<()> {
     logging::setup(cli.verbose, cli.colorize);
 
     let mut fs_opts = c::bch_opts::default();
-    fs_opts.set_degraded(bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
+    fs_opts.set_degraded(bch_degraded_actions::BCH_DEGRADED_very);
     // An injection tool must not consume its own injections: background
     // workers in *this* fs instance would otherwise act on the state under
     // test the moment we go read-write. Snapshot deletion reaps a snapshot
@@ -1346,7 +1346,7 @@ fn kvdb(cli: Cli) -> Result<()> {
     // against: commit-only validation (invalid state codewords, subvolume ->
     // interior node references) stays off in this instance.
     fs_opts.set_no_commit_validate(true);
-    fs_opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8);
+    fs_opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue);
     if cli.verbose > 0 {
         fs_opts.set_verbose(true);
     }
@@ -1380,7 +1380,7 @@ fn kvdb(cli: Cli) -> Result<()> {
         // snapshot deletion that consumed the very node a test had staged is
         // what prompted this.) Whatever the superblock still requires stays
         // recorded and runs at the next real mount.
-        fs_opts.set_recovery_pass_last(c::bch_recovery_pass::BCH_RECOVERY_PASS_journal_replay as u8);
+        fs_opts.set_recovery_pass_last(c::bch_recovery_pass::BCH_RECOVERY_PASS_journal_replay);
     }
     if cli.journal {
         fs_opts.set_retain_recovery_info(true);

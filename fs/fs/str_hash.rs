@@ -364,17 +364,17 @@ pub fn delete<T: HashTable>(
 /// The hash type a new inode's dirents and xattrs get, from the str_hash
 /// option. A value that isn't an option is a bug.
 pub fn new_inode_type(fs: &Fs) -> c::bch_str_hash_type {
-    match fs.opts().str_hash as u32 {
-        o if o == c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc32c.0 => c::bch_str_hash_type::BCH_STR_HASH_crc32c,
-        o if o == c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc64.0  => c::bch_str_hash_type::BCH_STR_HASH_crc64,
-        o if o == c::bch_str_hash_opts::BCH_STR_HASH_OPT_siphash.0 => {
+    match fs.opts().str_hash() {
+        c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc32c  => c::bch_str_hash_type::BCH_STR_HASH_crc32c,
+        c::bch_str_hash_opts::BCH_STR_HASH_OPT_crc64   => c::bch_str_hash_type::BCH_STR_HASH_crc64,
+        c::bch_str_hash_opts::BCH_STR_HASH_OPT_siphash => {
             if fs.feature(c::bch_sb_feature::BCH_FEATURE_new_siphash) {
                 c::bch_str_hash_type::BCH_STR_HASH_siphash
             } else {
                 c::bch_str_hash_type::BCH_STR_HASH_siphash_old
             }
         }
-        o => panic!("str_hash option {o} isn't one"),
+        o => panic!("str_hash option {} isn't one", o.0),
     }
 }
 

@@ -357,7 +357,7 @@ fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
     let mut opts: c::bch_opts = Default::default();
     opts.set_nostart(true);
     opts.set_will_not_start(true);
-    opts.set_degraded(bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
+    opts.set_degraded(bch_degraded_actions::BCH_DEGRADED_very);
 
     // Read superblock to get dev_idx
     let sb_handle = bch_bindgen::sb::io::read_super_opts(Path::new(device), opts)
