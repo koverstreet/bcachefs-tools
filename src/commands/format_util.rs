@@ -363,7 +363,7 @@ pub fn format(
                 .unwrap_or_else(|e| die(&format!("zeroing start of disk: {}", e)));
         }
 
-        crate::wrappers::super_io::bch2_super_write(fd, &mut sb);
+        crate::wrappers::super_io::bch2_super_write(fd, sb.sb_mut());
     }
 
     let paths: Vec<&std::ffi::OsStr> = dev_slice

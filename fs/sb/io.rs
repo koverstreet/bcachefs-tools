@@ -1033,16 +1033,6 @@ impl bch_sb_buf {
         crate::util::vstructs::bytes_of_mut(self.sb_mut())[..N].copy_from_slice(&h);
         Ok(r)
     }
-
-    /// Read-only, bounds-checked access to members_v2.
-    pub fn members_v2(&self) -> Option<members::MembersV2<'_>> {
-        members::members_v2(self.sb())
-    }
-
-    /// Read-only, bounds-checked access to members_v1.
-    pub fn members_v1(&self) -> Option<members::MembersV1<'_>> {
-        members::members_v1(self.sb())
-    }
 }
 
 impl c::bch_sb_bdev {
@@ -2929,28 +2919,6 @@ pub const BCHFS_MAGIC: [u8; 16] = [
     0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef,
 ];
 
-/// Anything holding a valid superblock that can be viewed as bytes and
-/// mutated in place: SbBuf, and bch_sb_handle for C-owned superblocks.
-/// Superblock IO takes any of them.
-pub trait SbAccess {
-    fn sb(&self) -> &bch_sb;
-    fn sb_mut(&mut self) -> &mut bch_sb;
-    /// The superblock's full vstruct extent.
-    fn sb_bytes(&self) -> &[u8];
-}
-
-impl SbAccess for bch_sb_buf {
-    fn sb(&self) -> &bch_sb { bch_sb_buf::sb(self) }
-    fn sb_mut(&mut self) -> &mut bch_sb { bch_sb_buf::sb_mut(self) }
-    fn sb_bytes(&self) -> &[u8] { bch_sb_buf::sb_bytes(self) }
-}
-
-impl SbAccess for bch_sb_handle {
-    fn sb(&self) -> &bch_sb { self.io.buf.sb() }
-    fn sb_mut(&mut self) -> &mut bch_sb { self.io.buf.sb_mut() }
-    fn sb_bytes(&self) -> &[u8] { self.io.buf.sb_bytes() }
-}
-
 /// An owned superblock, in state @S: Unvalidated as read, from_bytes();
 /// Validated once validate() passes, or copied from one that's valid.
 #[cfg(feature = "std")]
@@ -3024,17 +2992,6 @@ impl SbBuf<Validated> {
         // SAFETY: as sb()'s
         unsafe { sb.assume_validated_mut() }
     }
-
-    pub fn bytes(&self) -> &[u8] {
-        self.sb().as_bytes()
-    }
-}
-
-#[cfg(feature = "std")]
-impl SbAccess for SbBuf {
-    fn sb(&self) -> &bch_sb { SbBuf::<Validated>::sb(self) }
-    fn sb_mut(&mut self) -> &mut bch_sb { SbBuf::<Validated>::sb_mut(self) }
-    fn sb_bytes(&self) -> &[u8] { SbBuf::<Validated>::bytes(self) }
 }
 
 /// validate_at(), of @sb's section of type F, as a read or a write of it

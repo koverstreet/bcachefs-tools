@@ -26,7 +26,7 @@ pub fn borrowed_file(fd: i32) -> std::mem::ManuallyDrop<std::fs::File> {
 /// Write superblock to all layout locations on disk.
 ///
 /// Exits on I/O errors (matches C `die()` behavior).
-pub fn bch2_super_write<S: SbAccess>(fd: i32, sb: &mut S) {
+pub fn bch2_super_write(fd: i32, sb: &mut c::bch_sb) {
     let file = borrowed_file(fd);
 
     let bs = crate::wrappers::bdev::get_blocksize_physical_hint(fd) as usize;
@@ -35,15 +35,15 @@ pub fn bch2_super_write<S: SbAccess>(fd: i32, sb: &mut S) {
         off..off + std::mem::size_of::<c::bch_sb_layout>()
     };
 
-    let nr_superblocks = sb.sb().layout.nr_superblocks as usize;
+    let nr_superblocks = sb.layout.nr_superblocks as usize;
     for i in 0..nr_superblocks {
-        let offset_le = sb.sb().layout.sb_offset[i];
+        let offset_le = sb.layout.sb_offset[i];
         let offset_sectors = offset_le.get();
 
-        sb.sb_mut().offset = offset_le;
-        sb.sb_mut().csum = sb.sb().as_unvalidated().checksum();
+        sb.offset = offset_le;
+        sb.csum = sb.as_unvalidated().checksum();
 
-        let sb_src = sb.sb_bytes();
+        let sb_src = sb.as_bytes();
         let sb_bytes = sb_src.len();
         let layout_src = &sb_src[layout_range.clone()];
 
@@ -114,7 +114,7 @@ fn pwrite_exact(file: &std::fs::File, buf: &[u8], offset: u64) {
         .unwrap_or_else(|e| die(&format!("pwrite failed at offset {}: {}", offset, e)));
 }
 
-use bcachefs_kernel::sb::io::{SbAccess, SbBuf};
+use bcachefs_kernel::sb::io::SbBuf;
 
 /// Default superblock size in 512-byte sectors
 pub const SUPERBLOCK_SIZE_DEFAULT: u32 = 2048;
