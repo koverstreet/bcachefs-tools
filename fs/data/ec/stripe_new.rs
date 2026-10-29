@@ -769,11 +769,18 @@ pub fn bch2_fs_ec_flush_outstanding(c: &Opaque<c::bch_fs>) {
     Fs::from_c(c).ec_flush_outstanding()
 }
 
-/// @b, a held stripe never handed on, freed and its room let go: a head's,
-/// taken from it at shutdown, with no stripe being made but the heads'.
-pub(crate) fn discard_held(fs: &Fs, b: StripeNewBox) {
+/// A held stripe's room let go, the stripe never handed on: the flushes
+/// woken, as one waiting for new_stripes to empty waits on that room too.
+pub(crate) fn release_held(fs: &Fs) {
     fs.ec.new_stripes.lock().release();
+    fs.ec.new_stripes_changed.wake();
+}
+
+/// @b, a held stripe never handed on, freed and its room let go: a head's,
+/// taken from it at shutdown, or a repair's rebuild that failed.
+pub(crate) fn discard_held(fs: &Fs, b: StripeNewBox) {
     discard(b);
+    release_held(fs);
 }
 
 // ── To text ──────────────────────────────────────────────────────────────

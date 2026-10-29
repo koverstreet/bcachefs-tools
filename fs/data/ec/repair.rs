@@ -19,7 +19,7 @@ use crate::data::ec::delete::stripe_delete;
 use crate::data::ec::head::{dev_stripe_state_get, set_pending};
 use crate::data::ec::io::{read_sync, scrub_block};
 use crate::data::ec::open::OpenStripe;
-use crate::data::ec::stripe_new::{discard_held, StripeNew};
+use crate::data::ec::stripe_new::{discard_held, release_held, StripeNew};
 use crate::data::ec::stripe_new_blocks::{new_stripe_alloc_buckets, stripe_idx_alloc};
 use crate::data::ec::stripe_new_reuse::{init_new_stripe_from_old, OldRead, Reuse};
 use crate::data::ec::stripe_new_tasks::old_stripe_carry;
@@ -617,7 +617,7 @@ fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: Ope
                                    v.bits.algorithm().into(), nr_new_data, v.nr_redundant.into(), v.sectors.get().into()) {
         Ok(b) => b,
         Err(_) => {
-            fs.ec.new_stripes.lock().release();
+            release_held(fs);
             return fs.throw(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc);
         }
     };

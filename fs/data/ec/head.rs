@@ -417,7 +417,7 @@ fn alloc_for_head(fs: &Fs, h: &c::ec_stripe_head, g: &mut HeadGuard<'_>, max_dat
     fs.ec.new_stripes.lock().reserve().map_err(|_| failed())?;
     let s = StripeNew::alloc(fs, g.devs.mask, h.watermark, h.disk_label, h.algo, nr_data, h.redundancy, g.devs.blocksize)
         .map_err(|_| {
-            fs.ec.new_stripes.lock().release();
+            stripe_new::release_held(fs);
             failed()
         })?;
     g.nr_created += 1;
