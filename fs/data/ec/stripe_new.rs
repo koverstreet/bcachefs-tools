@@ -55,7 +55,7 @@
 //! bucket's ->ec, as ec_stripe_new. It's owned boxed - a StripeNewBox,
 //! pinned, as its writers' open buckets and its task hold pointers to it: by
 //! its head while it's open, then, once it's handed on, by the filesystem
-//! until its task frees it - ec.new_stripes, NewStripes, which keeps room for
+//! until its task tears it down - ec.new_stripes, NewStripes, which keeps room for
 //! the heads' so handing one on can't fail. A repair's is in new_stripes from
 //! the start. It holds its slot and its old stripe open (StripeClaim), and
 //! its buckets in the new stripes' bucket table, till it's freed.
@@ -81,16 +81,19 @@
 //! when its task next runs. It then puts the one ref on @in_flight, the
 //! Gather its task waits on.
 //!
-//! Its task, one: made with it, unstarted, so starting it can't fail - and
-//! started when it's staged, or when it's handed on before. It folds the
-//! old stripe's carried blocks in, if it's reading one; waits to be in
-//! flight; creates the stripe; and tears it down, freeing it. Every await
+//! Its task, one: made with it, in its allocation (spawn_home()), unstarted,
+//! so starting it can't fail - and started when it's staged, or when it's
+//! handed on before. It folds the old stripe's carried blocks in, if it's
+//! reading one; waits to be in flight; creates the stripe; and tears it down:
+//! what it holds given back, and it out of new_stripes. Its memory goes with
+//! the task's last run - the last ref, the task's or its owner's. Every await
 //! resumes on stripe_create_wq. That's what makes its borrow of the
 //! filesystem sound: going read-only has the heads hand theirs on, and waits
 //! for new_stripes to empty and for the task's write ref, which it puts
 //! last; and stripe_create_wq, a Workqueue, is destroyed as the filesystem's
 //! freed, which drains the task's last run - so what the task does after
-//! freeing its stripe still has a filesystem. (C's fold ran on
+//! tearing its stripe down, the stripe's drop included, still has a
+//! filesystem. (C's fold ran on
 //! system_dfl_wq, as create waited for it on stripe_create_wq and would
 //! have waited on itself; here the fold is the same task, which waits by
 //! awaiting, holding no worker.)
@@ -141,7 +144,7 @@ use crate::data::moving::MovingIo;
 use crate::errcode::{bch_errcode, BchError, FirstErr};
 use crate::fs::Fs;
 use crate::locking::{Guard, Lock};
-use crate::util::alloc::{kbox_pin_init, AllocError, KBox, KVVec};
+use crate::util::alloc::{AllocError, KBox, KVVec};
 use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::backref::BackRef;
 use crate::util::ffi::Opaque;
@@ -149,7 +152,7 @@ use crate::util::gather::{Gather, GatherRefSlot};
 use crate::util::refcount::{RefGuard, Refcount};
 use crate::util::kernel::local_clock;
 use crate::util::sleep::Sleep;
-use crate::util::task::{spawn_unstarted, Spawn, Unstarted};
+use crate::util::task::{spawn_home, Spawn, TaskHome, Unstarted};
 use crate::util::projections::Volatile;
 use crate::util::Printbuf;
 use crate::{new_lock, published, prt};
@@ -334,8 +337,9 @@ pub(crate) struct Internal {
 }
 
 /// A stripe being made, owned: pinned, as its task, its writers' open buckets
-/// and its blocks point into it.
-pub(crate) type StripeNewBox = Pin<KBox<StripeNew>>;
+/// and its blocks point into it. Its task's in it - spawn_home() - so it goes
+/// with the last of this and its task's last run.
+pub(crate) type StripeNewBox = TaskHome<StripeNew>;
 
 /// The stripes being made that their heads have handed on, and repairs': in
 /// bch_fs_ec.new_stripes, each until its task is done with it. A head's
@@ -412,9 +416,10 @@ impl StripeNew {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn alloc(fs: &Fs, devs: c::bch_devs_mask, watermark: c::bch_watermark, disk_label: u32, algorithm: u32,
              nr_data: u32, nr_parity: u32, blocksize: u32) -> Result<StripeNewBox, BchError> {
-        let b = kbox_pin_init(pin_init!(StripeNew {
+        let init = pin_init!(StripeNew {
             // SAFETY: its head and new_stripes, which own it, are emptied
-            // going read-only
+            // going read-only, and its task's last run, which it lasts to,
+            // is drained with stripe_create_wq as the filesystem's freed
             fs:         unsafe { BackRef::new(fs) },
             start_time: local_clock(),
             idx:        AtomicU64::new(0),
@@ -425,20 +430,20 @@ impl StripeNew {
             err:        FirstErr::new(),
             state:      AtomicU32::new(State::EC_STRIPE_NEW_open as u32),
             internal    <- new_lock!(<- Internal::new(devs, watermark), ::pin_init::zeroed(), "stripe_new.internal"),
-        }? BchError))?;
+        }? BchError);
 
-        // SAFETY: its owner - its head, then new_stripes - holds it until its
-        // task's teardown(), which drops this first; or drops it, its task
-        // unstarted and this unused, in discard(). Its state's interior: it's
-        // shared from here, and only discard()'s drop has it by &mut
-        let p = unsafe { BackRef::new(&*b) };
+        // SAFETY: what the task borrows outlives it - see the file comment -
+        // and the stripe, which it's in, outlives its future. Its state's
+        // interior: it's shared from here
+        let (b, task) = unsafe {
+            spawn_home(Spawn::Queue(&fs.ec.stripe_create_wq), init,
+                       |s| stripe_task(fs, BackRef::new(s)), GFP_KERNEL)
+        }?;
         {
             let mut s = b.lock();
             new_stripe_key(fs, &mut s.new_stripe, algorithm as u8, nr_data as u8, nr_parity as u8,
                            blocksize as u16, disk_label as u8);
-
-            // SAFETY: what the task borrows outlives it - see the file comment
-            s.task = Some(unsafe { spawn_unstarted(Spawn::Queue(&fs.ec.stripe_create_wq), move || stripe_task(fs, p)) }?);
+            s.task = Some(task);
             s.maker = Some(IoRef::get(&b));
         }
 
@@ -614,16 +619,17 @@ impl Internal {
     }
 }
 
-#[pinned_drop]
-impl PinnedDrop for StripeNew {
-    /// Whatever it still holds given back: what a rebuild that failed has
-    /// got, and every stripe's slot claims and hashed buckets -
-    /// bch2_ec_stripe_new_free() and stripe_repair_rebuild_abort() - and a
-    /// repair's writes, done. Its buffers go with it.
-    fn drop(self: Pin<&mut Self>) {
+impl StripeNew {
+    /// What it holds of the filesystem's given back: its blocks' buckets,
+    /// its disk reservation, its buckets in the new stripes' bucket table,
+    /// its slot claim and old stripe - bch2_ec_stripe_new_free() and
+    /// stripe_repair_rebuild_abort() - and a repair's writes, done. By its
+    /// task's teardown, before it's out of new_stripes - its memory goes with
+    /// the task's last run, after its write ref, which going read-only waits
+    /// on - and by its drop, for one discarded.
+    pub(crate) fn release(&self) {
         let fs = &*self.fs;
         let mut s = self.lock();
-        assert!(s.maker.is_none(), "stripe {} freed holding its maker's io ref", self.idx.load(Ordering::Relaxed));
 
         s.blocks = Default::default();
         s.res = None;
@@ -639,11 +645,23 @@ impl PinnedDrop for StripeNew {
     }
 }
 
+#[pinned_drop]
+impl PinnedDrop for StripeNew {
+    /// release()d, if teardown hasn't; its buffers go with it.
+    fn drop(self: Pin<&mut Self>) {
+        assert!(self.lock().maker.is_none(), "stripe {} freed holding its maker's io ref",
+                self.idx.load(Ordering::Relaxed));
+        self.release();
+    }
+}
+
 /// @b, never launched, freed: a repair's rebuild that failed, or a head's
 /// stripe at shutdown. Only its own io ref is held - no writer has a block -
-/// and its task, never started, goes with it.
+/// and its task, never started, goes first: unstarted, its refs keep @b.
 pub(crate) fn discard(b: StripeNewBox) {
-    assert!(b.lock().task.is_some(), "discarding stripe {} with its task started", b.idx.load(Ordering::Relaxed));
+    let task = b.lock().task.take();
+    assert!(task.is_some(), "discarding stripe {} with its task started", b.idx.load(Ordering::Relaxed));
+    drop(task);
     // given up without its put: never launched, it's not taken in flight
     b.lock().maker.take().expect("discarding a stripe handed on").leak();
     let v = b.io_refs.swap(0, Ordering::Relaxed);

@@ -420,15 +420,16 @@ fn create_done(fs: &Fs, s: &StripeNew, ret: Result<(), BchError>) {
     }
 }
 
-/// Its buckets given back, and it out of new_stripes and freed - a repair's
-/// writes done with it - then the flushes woken. @p is the task's, given up:
-/// what borrowed the stripe from it can't be used after.
+/// What it holds given back - its writers done: the blocks they claimed
+/// closed, the rest put; a repair's writes done with it - and it out of
+/// new_stripes, then the flushes woken. Its memory goes with this task's last
+/// run. @p is the task's, given up: what borrowed the stripe from it can't be
+/// used after.
 ///
 /// # Safety
 /// It's in flight: every writer's io ref put, so nothing else has it.
 unsafe fn teardown(fs: &Fs, p: BackRef<StripeNew>) {
-    // its writers done: the blocks they claimed closed, the rest put
-    p.lock().blocks = Default::default();
+    p.release();
 
     let s = NonNull::from(&*p);
     drop(p);
