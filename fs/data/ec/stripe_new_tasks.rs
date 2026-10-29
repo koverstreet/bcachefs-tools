@@ -306,7 +306,7 @@ async fn create_with_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Resul
         let offset = {
             let rcu = read_lock();
             let ca = fs.dev_rcu(dev, &rcu).expect("an open bucket's device");
-            u32::from(ca.mi.bucket_size) - sectors_free
+            u32::from(ca.mi.get().bucket_size) - sectors_free
         };
         let start = (offset as usize) << 9;
         io.as_mut().buf().block_mut(i)[start..start + ((sectors_free as usize) << 9)].fill(0);

@@ -309,9 +309,9 @@ fn dev_usage(fs: &Fs, arg: &mut c::bch_ioctl_dev_usage) -> Result<(), BchError> 
     let ca = dev_lookup(fs, arg.dev, arg.flags)?;
     let src = ca.usage_full_read_fast();
 
-    arg.state       = ca.mi.state;
-    arg.bucket_size = ca.mi.bucket_size.into();
-    arg.nr_buckets  = ca.mi.nbuckets - u64::from(ca.mi.first_bucket);
+    arg.state       = ca.mi.get().state;
+    arg.bucket_size = ca.mi.get().bucket_size.into();
+    arg.nr_buckets  = ca.mi.get().nbuckets - u64::from(ca.mi.get().first_bucket);
     for (d, s) in arg.d.iter_mut().zip(&src.d) {
         d.buckets    = s.buckets;
         d.sectors    = s.sectors;
@@ -331,10 +331,10 @@ fn dev_usage_v2(fs: &Fs, user: UserVstruct<c::bch_ioctl_dev_usage_v2>) -> Result
     let ca = dev_lookup(fs, arg.dev, arg.flags)?;
     let src = ca.usage_full_read_fast();
 
-    arg.state         = ca.mi.state;
-    arg.bucket_size   = ca.mi.bucket_size.into();
+    arg.state         = ca.mi.get().state;
+    arg.bucket_size   = ca.mi.get().bucket_size.into();
     arg.nr_data_types = arg.nr_data_types.min(c::BCH_DATA_NR as u8);
-    arg.nr_buckets    = ca.mi.nbuckets - u64::from(ca.mi.first_bucket);
+    arg.nr_buckets    = ca.mi.get().nbuckets - u64::from(ca.mi.get().first_bucket);
     user.set_head(&arg)?;
 
     let d = user.tail(&arg);

@@ -235,7 +235,7 @@ impl c::bch_dev {
 
 fn dev_bucket_size(fs: &Fs, dev: u64) -> u64 {
     let rcu = read_lock();
-    fs.dev_rcu(dev as u32, &rcu).map_or(0, |ca| ca.mi.bucket_size.into())
+    fs.dev_rcu(dev as u32, &rcu).map_or(0, |ca| ca.mi.get().bucket_size.into())
 }
 
 /// Whether @bucket is one the allocator mustn't use - a device that isn't
@@ -251,7 +251,7 @@ fn discard_opt_enabled(fs: &Fs, ca: &c::bch_dev) -> bool {
     let on = if fs.flag(c::bch_fs_flags::BCH_FS_discard_mount_opt_set) {
         fs.opts.discard
     } else {
-        ca.mi.discard
+        ca.mi.get().discard
     };
     on != 0
 }
@@ -363,7 +363,7 @@ impl Discard {
         let ca = &self.ca;
         let bdev = ca.disk_sb.bdev;
         let sector = ca.bucket_to_sector(u64_to_bucket(self.dev_bucket).offset);
-        let size = u32::from(ca.mi.bucket_size) << 9;
+        let size = u32::from(ca.mi.get().bucket_size) << 9;
         // as C's GFP_NOIO: what this waits on mustn't be our own IO
         let _noio = MemallocFlags::noio();
         let mut bio = fs.discards.bioset
@@ -559,13 +559,13 @@ fn calculate_discard_sectors_to_release(trans: &BtreeTrans<'_>, s: &DiscardState
         let rcu = read_lock();
         for ca in fs.rw_devs_rcu(&rcu) {
             let u = ca.usage_read_fast();
-            let sectors = u64::from(ca.mi.bucket_size);
+            let sectors = u64::from(ca.mi.get().bucket_size);
             let buckets = |t: c::bch_data_type| u.buckets[t.0 as usize];
 
             let pending  = sectors * buckets(c::bch_data_type::BCH_DATA_need_discard);
             let free     = sectors * buckets(c::bch_data_type::BCH_DATA_free);
             let reserve  = sectors * ca.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe);
-            let capacity = sectors * ca.mi.nbuckets;
+            let capacity = sectors * ca.mi.get().nbuckets;
             let buffer   = capacity * u64::from(fs.opts.journal_rewind_discard_buffer_percent) / 100;
             let buffer_clamped = (buffer as i64).min((free as i64 - reserve as i64 * 4).max(0));
             let release  = pending as i64 - buffer_clamped;
@@ -780,7 +780,7 @@ pub(crate) fn do_discards_fast(ca: &c::bch_dev) {
         let Some(bucket) = ca.discard_fast.lock().pop() else { break };
         let bucket = pos(ca.dev_idx.into(), bucket);
         ret = loop {
-            match lockrestart_do(&trans, |t| w.one_bucket(t, bucket, ca.mi.bucket_size.into())) {
+            match lockrestart_do(&trans, |t| w.one_bucket(t, bucket, ca.mi.get().bucket_size.into())) {
                 Err(e) if e.matches(bch_errcode::BCH_ERR_max_discards_in_flight) => ca.discard_slot_wait(&trans, true),
                 r => break r,
             }
@@ -814,7 +814,7 @@ pub fn bch2_fast_discard_bucket_add(ca: &c::bch_dev, bucket: u64) {
 /// As bch2_dev_get_ioref() has it for a write ref: work queued holding one is
 /// for a device that's rw.
 fn dev_is_rw(ca: &c::bch_dev) -> bool {
-    ca.mi.state as u32 == c::bch_member_state::BCH_MEMBER_STATE_rw.0
+    ca.mi.get().state as u32 == c::bch_member_state::BCH_MEMBER_STATE_rw.0
 }
 
 // ── Invalidates ──────────────────────────────────────────────────────────
@@ -830,9 +830,9 @@ fn dev_is_rw(ca: &c::bch_dev) -> bool {
 /// with cached buckets sitting unreclaimed.
 #[c_export]
 pub fn bch2_should_invalidate_buckets(ca: &c::bch_dev, u: c::bch_dev_usage) -> u64 {
-    let reserved = ca.reserved_sectors.get().div_ceil(ca.mi.bucket_size.into())
+    let reserved = ca.reserved_sectors.get().div_ceil(ca.mi.get().bucket_size.into())
         .max(ca.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe));
-    let want_free = reserved + (ca.mi.nbuckets >> 5);
+    let want_free = reserved + (ca.mi.get().nbuckets >> 5);
     let free = u.buckets[c::bch_data_type::BCH_DATA_free.0 as usize];
     let cached = u.buckets[c::bch_data_type::BCH_DATA_cached.0 as usize] as i64;
     (want_free as i64 - free as i64).clamp(0, cached) as u64

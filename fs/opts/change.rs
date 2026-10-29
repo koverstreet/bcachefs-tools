@@ -57,7 +57,7 @@ fn opt_hook_io(fs: &Fs, ca: Option<&c::bch_dev>, inum: u64, id: opt_id, v: u64, 
         opt_id::Opt_metadata_checksum |
         opt_id::Opt_metadata_replicas => bracket(scan::from_arm(c::reconcile_scan_metadata {}))?,
         opt_id::Opt_durability => {
-            if !post && v > ca.expect("a device option").mi.durability.into() {
+            if !post && v > ca.expect("a device option").mi.get().durability.into() {
                 fs.request_scan(scan::from_arm(c::reconcile_scan_pending {}), false)?;
             }
             bracket(scan::from_arm::<c::reconcile_scan_device>(dev()))?;
@@ -111,7 +111,7 @@ fn opt_hook_pre_set(fs: &Fs, ca: Option<&c::bch_dev>, inum: u64, id: opt_id, v: 
         opt_id::Opt_rotational => {
             // Offline: there's no post hook, and nothing to race with
             if let Some(ca) = ca {
-                if change && v != u64::from(ca.mi.rotational) && !fs.flag(c::bch_fs_flags::BCH_FS_started) {
+                if change && v != u64::from(ca.mi.get().rotational) && !fs.flag(c::bch_fs_flags::BCH_FS_started) {
                     crate::data::reconcile::check::rotational_changed(fs, ca);
                 }
             }
@@ -176,7 +176,7 @@ fn opt_hook_post_set(fs: &Fs, ca: Option<&c::bch_dev>, inum: u64, id: opt_id, v:
             let state = fs.state_lock_read();
             if let Some(ca) = ca {
                 if fs.flag(c::bch_fs_flags::BCH_FS_rw) && ca.is_online() &&
-                   ca.mi.state == c::BCH_MEMBER_STATE_rw as u8 {
+                   ca.mi.get().state == c::BCH_MEMBER_STATE_rw as u8 {
                     fs.dev_allocator_set_rw(ca.dev_idx.into(), true);
                     state.recalc_capacity();
                 }

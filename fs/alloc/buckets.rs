@@ -38,12 +38,12 @@ use cstruct_macros::c_export;
 impl c::bch_dev {
     /// sector_to_bucket().
     pub fn sector_to_bucket(&self, s: u64) -> u64 {
-        s / u64::from(self.mi.bucket_size)
+        s / u64::from(self.mi.get().bucket_size)
     }
 
     /// bucket_to_sector().
     pub fn bucket_to_sector(&self, b: u64) -> u64 {
-        b * u64::from(self.mi.bucket_size)
+        b * u64::from(self.mi.get().bucket_size)
     }
 
     /// Whether it counts toward c->capacity: rw, with durability -
@@ -55,7 +55,7 @@ impl c::bch_dev {
 
     /// Its buckets, in sectors - past first_bucket.
     pub fn capacity_sectors(&self) -> u64 {
-        self.bucket_to_sector(self.mi.nbuckets - u64::from(self.mi.first_bucket))
+        self.bucket_to_sector(self.mi.get().nbuckets - u64::from(self.mi.get().first_bucket))
     }
 
     /// Whether the allocator mustn't use bucket @b - migrate marks the space
@@ -88,7 +88,7 @@ impl c::bch_dev {
     /// The bucket sector @s is in, and how far into it:
     /// sector_to_bucket_and_offset().
     pub fn sector_to_bucket_and_offset(&self, s: u64) -> (u64, u32) {
-        let size = u64::from(self.mi.bucket_size);
+        let size = u64::from(self.mi.get().bucket_size);
         (s / size, (s % size) as u32)
     }
 
@@ -112,13 +112,13 @@ impl c::bch_dev {
     /// comparing and averaging positions on devices of different sizes, where
     /// the same fraction is about the same zone of rotational media.
     pub fn offset_to_frac(&self, offset: u64) -> u64 {
-        let size = u128::from(self.bucket_to_sector(self.mi.nbuckets));
+        let size = u128::from(self.bucket_to_sector(self.mi.get().nbuckets));
         ((u128::from(offset) << c::BCH_DEV_POS_FRAC_BITS) / size) as u64
     }
 
     /// offset_to_frac()'s inverse: dev_frac_to_offset().
     pub fn frac_to_offset(&self, frac: u64) -> u64 {
-        let size = u128::from(self.bucket_to_sector(self.mi.nbuckets));
+        let size = u128::from(self.bucket_to_sector(self.mi.get().nbuckets));
         ((u128::from(frac) * size) >> c::BCH_DEV_POS_FRAC_BITS) as u64
     }
 }
@@ -735,7 +735,7 @@ fn mark_metadata_bucket_gc(t: &TransAttempt<'_, '_>, ca: &c::bch_dev, b: u64, da
                                          data_type_str(cur), data_type_str(data_type)));
             return fs.throw(bch_errcode::BCH_ERR_metadata_bucket_inconsistency);
         }
-        if u64::from(a.dirty_sectors) + u64::from(sectors) > u64::from(ca.mi.bucket_size) {
+        if u64::from(a.dirty_sectors) + u64::from(sectors) > u64::from(ca.mi.get().bucket_size) {
             fs_inconsistent(fs, message!(
                 "bucket {}:{b} gen {} data type {} sector count overflow: {} + {sectors} > bucket size",
                 ca.dev_idx, a.generation, data_type_str(if a.data_type != 0 { cur } else { data_type }),
@@ -759,7 +759,7 @@ pub fn trans_mark_metadata_bucket(trans: &BtreeTrans<'_>, ca: &c::bch_dev, b: u6
             "marking {} as metadata", data_type_str(data_type));
 
     // a backup superblock can be past the end of the usable space
-    if b >= ca.mi.nbuckets {
+    if b >= ca.mi.get().nbuckets {
         return Ok(());
     }
 
@@ -823,7 +823,7 @@ fn trans_mark_dev_sb_in(trans: &BtreeTrans<'_>, ca: &c::bch_dev, flags: UpdateTr
     }
 
     for &b in ca.journal.buckets() {
-        trans_mark_metadata_bucket(trans, ca, b, data_type::journal, ca.mi.bucket_size.into(), flags)?;
+        trans_mark_metadata_bucket(trans, ca, b, data_type::journal, ca.mi.get().bucket_size.into(), flags)?;
     }
     Ok(())
 }
@@ -884,7 +884,7 @@ impl Fs {
         for ca in self.members() {
             assert!(ca.buckets_nouse.load(Ordering::Relaxed).is_null(), "buckets_nouse allocated twice");
 
-            let p = unsafe { c::rust_kvzalloc(bits_to_longs(ca.mi.nbuckets as usize) * size_of::<c_ulong>()) };
+            let p = unsafe { c::rust_kvzalloc(bits_to_longs(ca.mi.get().nbuckets as usize) * size_of::<c_ulong>()) };
             if p.is_null() {
                 return self.throw(bch_errcode::BCH_ERR_ENOMEM_buckets_nouse);
             }
@@ -911,8 +911,8 @@ impl c::bch_dev {
         }
 
         let head = c::BucketGensHead {
-            first_bucket:         self.mi.first_bucket,
-            nbuckets_minus_first: (nbuckets - u64::from(self.mi.first_bucket)) as usize,
+            first_bucket:         self.mi.get().first_bucket,
+            nbuckets_minus_first: (nbuckets - u64::from(self.mi.get().first_bucket)) as usize,
         };
         // SAFETY: as above
         unsafe {
@@ -933,7 +933,7 @@ impl c::bch_dev {
             Ok(u)  => self.usage = u,
             Err(_) => return self.fs().throw(bch_errcode::BCH_ERR_ENOMEM_usage_init),
         }
-        self.buckets_resize(self.mi.nbuckets)
+        self.buckets_resize(self.mi.get().nbuckets)
     }
 
     /// What buckets_alloc() and buckets_nouse_alloc() allocated, as it's
@@ -971,7 +971,7 @@ impl c::bch_dev {
     /// watermarks under it: bch2_dev_buckets_reserved().
     pub fn buckets_reserved(&self, watermark: c::bch_watermark) -> u64 {
         use c::bch_watermark as w;
-        let (some, btree) = (self.mi.nbuckets >> 6, u64::from(self.nr_btree_reserve));
+        let (some, btree) = (self.mi.get().nbuckets >> 6, u64::from(self.nr_btree_reserve));
 
         match watermark {
             w::BCH_WATERMARK_stripe => 2 * some + 2 * btree,
@@ -1028,7 +1028,7 @@ impl c::bch_dev {
             data_type_from_u8(i as u8).to_text(out);
             write!(out, "\t{}\r{}\r{}\r\n", u.buckets, u.sectors, u.fragmented);
         }
-        write!(out, "capacity\t{}\r\n", self.mi.nbuckets);
+        write!(out, "capacity\t{}\r\n", self.mi.get().nbuckets);
     }
 }
 

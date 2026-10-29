@@ -2,11 +2,11 @@
 
 #![allow(non_camel_case_types)]
 
-use cstruct_macros::{CStruct, c_extern, TypeInfo};
+use cstruct_macros::{CStruct, c_extern, Plain, TypeInfo};
 use crate::cstructs::c;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, CStruct, TypeInfo)]
+#[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
 pub struct bch_member_cpu {
     pub nbuckets: u64, /* device size */
     pub nbuckets_minus_first: u64,
@@ -24,8 +24,13 @@ pub struct bch_member_cpu {
     pub rotational: u8,
     pub valid: u8,
     pub btree_bitmap_shift: u8,
+    /* explicit: copied a word at a time, it has no padding to copy */
+    pub __pad: [u8; 6],
     pub btree_allocated_bitmap: u64,
 }
+
+// ca->mi: read by anyone, a field at a time - a copy half made is one
+crate::tear_safe!(bch_member_cpu);
 
 c_extern! {
     pub fn rust_bch2_dev_put(ca: *mut c::bch_dev);

@@ -148,11 +148,11 @@ fn bucket_to_sector(bucket_size: u32, bucket: u64) -> u64 {
 
 /// Mark a range of buckets as nouse.
 unsafe fn mark_nouse_range(ca: *const c::bch_dev, sector_from: u64, sector_to: u64) {
-    let bucket_size = (*ca).mi.bucket_size as u32;
+    let bucket_size = (*ca).mi.get().bucket_size as u32;
     // SAFETY: buckets_nouse_alloc()'s: a bit per bucket, in words
     let nouse = AtomicBitmap::from_words(std::slice::from_raw_parts(
         (*ca).buckets_nouse.load(std::sync::atomic::Ordering::Acquire).cast::<AtomicUsize>(),
-        ((*ca).mi.nbuckets as usize).div_ceil(usize::BITS as usize)));
+        ((*ca).mi.get().nbuckets as usize).div_ceil(usize::BITS as usize)));
     let mut b = sector_to_bucket(bucket_size, sector_from);
     loop {
         nouse.set(b as usize);
@@ -167,8 +167,8 @@ unsafe fn mark_nouse_range(ca: *const c::bch_dev, sector_from: u64, sector_to: u
 /// plus the space for the default superblock layout.
 unsafe fn mark_unreserved_space(fs: *mut c::bch_fs, extents: &[CRange]) {
     let ca = (*fs).devs[0].as_ptr();
-    let bucket_size = (*ca).mi.bucket_size as u32;
-    let nbuckets = (*ca).mi.nbuckets;
+    let bucket_size = (*ca).mi.get().bucket_size as u32;
+    let nbuckets = (*ca).mi.get().nbuckets;
 
     // Byte-addressed max for hole iteration
     let max_bytes = bucket_to_sector(bucket_size, nbuckets) << 9;
@@ -470,7 +470,7 @@ fn migrate_fs(
 
     // Calculate reserve_start: round up (superblock_size * 2 + BCH_SB_SECTOR) sectors
     // to bucket boundary (in bytes)
-    let bucket_bytes = unsafe { (*(*fs.as_ptr()).devs[0].as_ptr()).mi.bucket_size as u64 } << 9;
+    let bucket_bytes = unsafe { (*(*fs.as_ptr()).devs[0].as_ptr()).mi.get().bucket_size as u64 } << 9;
     let reserve_start = (((superblock_size as u64 * 2 + c::BCH_SB_SECTOR as u64) << 9)
         .div_ceil(bucket_bytes)) * bucket_bytes;
 

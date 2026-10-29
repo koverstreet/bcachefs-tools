@@ -364,9 +364,10 @@ pub struct bch_dev {
     pub removing: bool,
     /*
      * Cached version of this device's member info from superblock
-     * Committed by bch2_write_super() -> bch_fs_mi_update()
+     * Committed by bch2_write_super() -> bch_fs_mi_update(): written under
+     * sb_lock, read without it
      */
-    pub mi: c::bch_member_cpu,
+    pub mi: crate::util::projections::Volatile<c::bch_member_cpu>,
     pub btree_allocated_bitmap_gc: u64,
     pub errors: [AtomicI64; c::BCH_MEMBER_ERROR_NR as usize],
     /// Written racing C's plain reads and stores, as C's are: atomic here,

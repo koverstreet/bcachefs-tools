@@ -47,7 +47,7 @@ impl Fs {
     /// The most common bucket size among @devs - on a tie, the smaller:
     /// pick_blocksize().
     fn ec_pick_blocksize(&self, devs: &c::bch_devs_mask, rcu: &ReadGuard) -> u32 {
-        let sizes = || self.devs_rcu_in(devs.d.iter(), rcu).map(|ca| u32::from(ca.mi.bucket_size));
+        let sizes = || self.devs_rcu_in(devs.d.iter(), rcu).map(|ca| u32::from(ca.mi.get().bucket_size));
 
         sizes()
             .map(|size| (sizes().filter(|&s| s == size).count(), size))
@@ -65,14 +65,14 @@ impl Fs {
         let rcu = read_lock();
 
         let all = devs;
-        for ca in self.devs_rcu_in(all.d.iter(), &rcu).filter(|ca| ca.mi.durability == 0) {
+        for ca in self.devs_rcu_in(all.d.iter(), &rcu).filter(|ca| ca.mi.get().durability == 0) {
             devs.d.clear(ca.dev_idx.into());
         }
 
         let blocksize = if blocksize != 0 { blocksize } else { self.ec_pick_blocksize(&devs, &rcu) };
 
         let all = devs;
-        for ca in self.devs_rcu_in(all.d.iter(), &rcu).filter(|ca| u32::from(ca.mi.bucket_size) != blocksize) {
+        for ca in self.devs_rcu_in(all.d.iter(), &rcu).filter(|ca| u32::from(ca.mi.get().bucket_size) != blocksize) {
             devs.d.clear(ca.dev_idx.into());
         }
         (devs, blocksize)
@@ -148,8 +148,8 @@ impl Fs {
 
         for ca in self.devs_rcu_in(0..self.nr_devices() as usize, &rcu).filter(in_label) {
             if ca.rw_durability() != 0 &&
-               ca.mi.data_allowed & (1 << c::bch_data_type::BCH_DATA_user.0) != 0 &&
-               u32::from(ca.mi.bucket_size) == blocksize
+               ca.mi.get().data_allowed & (1 << c::bch_data_type::BCH_DATA_user.0) != 0 &&
+               u32::from(ca.mi.get().bucket_size) == blocksize
             {
                 devs.d.set(ca.dev_idx.into());
             }

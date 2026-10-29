@@ -650,6 +650,7 @@ impl c::bch_member {
             rotational:             self.rotational() as u8,
             valid:                  self.alive() as u8,
             btree_bitmap_shift:     self.btree_bitmap_shift,
+            __pad:                  [0; 6],
             btree_allocated_bitmap: self.btree_allocated_bitmap.get(),
         }
     }
@@ -789,7 +790,7 @@ impl c::bch_dev {
     /// bitmap - and, @with_gc, in the one gc is rebuilding. members.h has
     /// C's, an inline the allocator calls.
     pub(crate) fn btree_bitmap_marked_sectors(&self, start: u64, sectors: u32, with_gc: bool) -> bool {
-        let shift = self.mi.btree_bitmap_shift;
+        let shift = self.mi.get().btree_bitmap_shift;
         let end = start + u64::from(sectors);
         if end > 64u64 << shift {
             return false;
@@ -797,7 +798,7 @@ impl c::bch_dev {
 
         let gc = if with_gc { self.btree_allocated_bitmap_gc } else { !0 };
         let want = bitmap_bits(start, end, shift);
-        self.mi.btree_allocated_bitmap & gc & want == want
+        self.mi.get().btree_allocated_bitmap & gc & want == want
     }
 
     /// ca->btree_allocated_bitmap_gc made @v: written under sb_lock, @_sb,
@@ -920,8 +921,8 @@ impl Fs {
             {
                 let rcu = read_lock();
                 for ca in self.devs_rcu(&rcu) {
-                    let shift = ca.mi.btree_bitmap_shift;
-                    old += u64::from(ca.mi.btree_allocated_bitmap.count_ones()) << shift;
+                    let shift = ca.mi.get().btree_bitmap_shift;
+                    old += u64::from(ca.mi.get().btree_allocated_bitmap.count_ones()) << shift;
                     new += u64::from(ca.btree_allocated_bitmap_gc.count_ones()) << shift;
 
                     sb.fs_member_mut(ca.dev_idx.into()).btree_allocated_bitmap = ca.btree_allocated_bitmap_gc.into();
@@ -984,7 +985,7 @@ crate::fs_delayed_work! {
         for ca in fs.members() {
             let u = ca.usage_read_fast();
             let btree_sectors = ca.bucket_to_sector(u.buckets[c::bch_data_type::BCH_DATA_btree.0 as usize]);
-            let bitmap_sectors = u64::from(ca.mi.btree_allocated_bitmap.count_ones()) << ca.mi.btree_bitmap_shift;
+            let bitmap_sectors = u64::from(ca.mi.get().btree_allocated_bitmap.count_ones()) << ca.mi.get().btree_bitmap_shift;
 
             if btree_sectors * 4 < bitmap_sectors {
                 write!(msg, "{} has ", ca.name().to_str().unwrap_or("?"));
@@ -1193,7 +1194,7 @@ impl Fs {
         let rcu = read_lock();
         let ca = self.io_ref_tryget(self.dev_rcu(dev, &rcu)?)?;
         // then_some(), eager: a write ref on a device that isn't rw is put
-        (R::RW == READ || ca.mi.state as u32 == c::bch_member_state::BCH_MEMBER_STATE_rw.0).then_some(ca)
+        (R::RW == READ || ca.mi.get().state as u32 == c::bch_member_state::BCH_MEMBER_STATE_rw.0).then_some(ca)
     }
 
     /// An io ref on @ca, one of ours found under RCU: the ref keeps the device
@@ -1226,7 +1227,7 @@ impl Fs {
     /// each, put when it's dropped: __for_each_online_member().
     pub fn io_members<R: IoRefIdx>(&self, states: u32) -> impl Iterator<Item = DevIoRef<R>> + '_ {
         self.walk(move |ca| {
-            (states & 1 << ca.mi.state != 0).then(|| self.io_ref_tryget(ca)).flatten()
+            (states & 1 << ca.mi.get().state != 0).then(|| self.io_ref_tryget(ca)).flatten()
         })
     }
 
@@ -1310,7 +1311,7 @@ impl c::bch_dev {
     /// inconsistency.
     pub fn bucket_missing(&self, bucket: u64) {
         crate::fs_inconsistent!(self.fs(), "pointer to nonexistent bucket {bucket} on device {} (valid range {}-{})",
-                                self.name().to_str().unwrap_or("?"), self.mi.first_bucket, self.mi.nbuckets);
+                                self.name().to_str().unwrap_or("?"), self.mi.get().first_bucket, self.mi.get().nbuckets);
     }
 }
 
@@ -1477,7 +1478,7 @@ impl Fs {
     /// Whether @dev is missing, or being evacuated: bch2_dev_bad_or_evacuating_rcu().
     pub fn dev_bad_or_evacuating(&self, dev: u32, rcu: &ReadGuard) -> bool {
         self.dev_rcu(dev, rcu).is_none_or(|ca| {
-            ca.mi.state as u32 == c::bch_member_state::BCH_MEMBER_STATE_evacuating.0
+            ca.mi.get().state as u32 == c::bch_member_state::BCH_MEMBER_STATE_evacuating.0
         })
     }
 }
@@ -1490,9 +1491,7 @@ impl c::bch_dev {
 
     /// ca->mi made @mi: see "In memory" above.
     fn set_mi(&self, _sb: &SbLockGuard<'_>, mi: c::bch_member_cpu) {
-        // SAFETY: sb_lock, held, is ca->mi's writers' lock; its readers take
-        // none, as in C
-        unsafe { (&raw const self.mi).cast_mut().write(mi) }
+        self.mi.set(mi)
     }
 
     /// Its IO errors, by kind: since the filesystem was made, and since they
@@ -1657,7 +1656,7 @@ impl c::bch_dev {
 
     /// Whether @b is one of its buckets: bucket_valid().
     pub fn bucket_valid(&self, b: u64) -> bool {
-        b.wrapping_sub(self.mi.first_bucket.into()) < self.mi.nbuckets_minus_first
+        b.wrapping_sub(self.mi.get().first_bucket.into()) < self.mi.get().nbuckets_minus_first
     }
 
     /// The block device's name - sdX and the like: up to its NUL, within the
@@ -1681,7 +1680,7 @@ impl c::bch_dev {
     /// What a new copy written to it would be worth - nothing unless it's rw:
     /// bch2_dev_rw_durability().
     pub fn rw_durability(&self) -> u32 {
-        if self.is_rw() { self.mi.durability.into() } else { 0 }
+        if self.is_rw() { self.mi.get().durability.into() } else { 0 }
     }
 }
 

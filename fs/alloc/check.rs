@@ -96,8 +96,8 @@ fn get_key_or_hole<'k, 't>(t: &'k TransAttempt<'_, 't>, iter: &'k mut BtreeIter<
 /// next_bucket().
 fn next_bucket(fs: &Fs, ca: &mut Option<DevRef>, bucket: &mut c::bpos) -> bool {
     if let Some(dev) = ca.as_ref() {
-        bucket.offset = bucket.offset.max(dev.mi.first_bucket.into());
-        if bucket.offset < dev.mi.nbuckets {
+        bucket.offset = bucket.offset.max(dev.mi.get().first_bucket.into());
+        if bucket.offset < dev.mi.get().nbuckets {
             return true;
         }
 
@@ -108,7 +108,7 @@ fn next_bucket(fs: &Fs, ca: &mut Option<DevRef>, bucket: &mut c::bpos) -> bool {
 
     *ca = fs.next_dev(bucket.inode as u32);
     if let Some(dev) = ca.as_ref() {
-        *bucket = pos(dev.dev_idx.into(), dev.mi.first_bucket.into());
+        *bucket = pos(dev.dev_idx.into(), dev.mi.get().first_bucket.into());
     }
     ca.is_some()
 }
@@ -159,7 +159,7 @@ fn get_key_or_real_bucket_hole<'k, 't>(
             continue;
         }
 
-        let nbuckets = ca.as_ref().expect("checked above").mi.nbuckets;
+        let nbuckets = ca.as_ref().expect("checked above").mi.get().nbuckets;
         let end = if end.offset > nbuckets { pos(end.inode, nbuckets) } else { end };
 
         return Ok(Some((&*iter, KeyOrHole::Hole { start, end })));
@@ -211,7 +211,7 @@ fn check_alloc_key<'t>(
     }
     let Some(ca) = ca else { return Ok(()) };
 
-    if ca.mi.freespace_initialized == 0 {
+    if ca.mi.get().freespace_initialized == 0 {
         return Ok(());
     }
 
@@ -283,7 +283,7 @@ fn check_alloc_hole_freespace<'t>(
     end:            &mut c::bpos,
     freespace_iter: &mut BtreeIter<'t>,
 ) -> Result<(), BchError> {
-    if ca.mi.freespace_initialized == 0 {
+    if ca.mi.get().freespace_initialized == 0 {
         return Ok(());
     }
 
@@ -607,8 +607,8 @@ fn check_bucket_gens_key(t: &TransAttempt<'_, '_>, iter: &BtreeIter<'_>, k: Bkey
         return Ok(());
     };
 
-    let first_bucket = u64::from(ca.mi.first_bucket);
-    let nbuckets = ca.mi.nbuckets;
+    let first_bucket = u64::from(ca.mi.get().first_bucket);
+    let nbuckets = ca.mi.get().nbuckets;
 
     if fsck_err_on!(t, end <= first_bucket || start >= nbuckets, id::bucket_gens_to_invalid_buckets,
                     "bucket_gens key for invalid buckets:\n{}", k.to_text(fs))? {
@@ -793,18 +793,18 @@ fn dev_freespace_init(fs: &Fs, ca: &c::bch_dev, bucket_start: u64, bucket_end: u
     let end = pos(dev.into(), bucket_end);
 
     assert!(bucket_start <= bucket_end, "bucket range {bucket_start}-{bucket_end}");
-    assert!(bucket_end <= ca.mi.nbuckets, "bucket {bucket_end} past {} buckets", ca.mi.nbuckets);
+    assert!(bucket_end <= ca.mi.get().nbuckets, "bucket {bucket_end} past {} buckets", ca.mi.get().nbuckets);
 
     let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, c::btree_id::alloc,
-                                  pos(dev.into(), bucket_start.max(ca.mi.first_bucket.into())),
+                                  pos(dev.into(), bucket_start.max(ca.mi.get().first_bucket.into())),
                                   BtreeIterFlags::PREFETCH);
 
     let mut last_updated = local_clock();
     while bkey_lt(iter.pos(), end) {
         if local_clock() > last_updated + 10 * u64::from(c::NSEC_PER_SEC) {
             bch_info!(fs, "{}: bch2_dev_freespace_init: currently at {}/{}",
-                      ca.name().to_str().unwrap_or("?"), { iter.pos().offset }, ca.mi.nbuckets);
+                      ca.name().to_str().unwrap_or("?"), { iter.pos().offset }, ca.mi.get().nbuckets);
             last_updated = local_clock();
         }
 
@@ -831,7 +831,7 @@ fn fs_freespace_init(fs: &Fs) -> Result<(), BchError> {
 
     let mut doing_init = false;
     for ca in fs.members() {
-        if ca.mi.freespace_initialized != 0 {
+        if ca.mi.get().freespace_initialized != 0 {
             continue;
         }
 
@@ -840,7 +840,7 @@ fn fs_freespace_init(fs: &Fs) -> Result<(), BchError> {
             doing_init = true;
         }
 
-        dev_freespace_init(fs, &ca, 0, ca.mi.nbuckets)?;
+        dev_freespace_init(fs, &ca, 0, ca.mi.get().nbuckets)?;
     }
 
     if doing_init {

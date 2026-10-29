@@ -732,7 +732,7 @@ fn cached_ptr_drop_reason(fs: &Fs, opts: &c::bch_inode_opts, d: &DecodedPtr<'_>,
     if ca.is_some_and(|ca| ca.ptr_stale(ptr, rcu) != Some(0)) {
         return Some("pointer is stale");
     }
-    if ca.is_none_or(|ca| u32::from(ca.mi.state) == c::bch_member_state::BCH_MEMBER_STATE_evacuating.0) {
+    if ca.is_none_or(|ca| u32::from(ca.mi.get().state) == c::bch_member_state::BCH_MEMBER_STATE_evacuating.0) {
         return Some("device bad or evacuating");
     }
 

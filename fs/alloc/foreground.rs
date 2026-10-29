@@ -225,7 +225,7 @@ impl RefGuard<OpenBucketRef> {
         c::bch_extent_ptr::new()
             .with_generation(self.generation())
             .with_dev(self.dev() as u8)
-            .with_offset(ca.bucket_to_sector(self.bucket()) + u64::from(ca.mi.bucket_size) -
+            .with_offset(ca.bucket_to_sector(self.bucket()) + u64::from(ca.mi.get().bucket_size) -
                          u64::from(self.sectors_free()))
     }
 }

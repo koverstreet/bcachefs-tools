@@ -179,7 +179,7 @@ impl DevDrop<'_> {
                 }
                 let ca = fs.dev_rcu(dev, &rcu);
                 nr_good += u32::from(ca.is_some_and(|ca| {
-                    u32::from(ca.mi.state) != c::bch_member_state::BCH_MEMBER_STATE_evacuating.0
+                    u32::from(ca.mi.get().state) != c::bch_member_state::BCH_MEMBER_STATE_evacuating.0
                 }));
                 if ca.is_none() {
                     lost |= 1 << i;

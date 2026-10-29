@@ -225,10 +225,10 @@ pub(crate) fn dev_wait_amount(ca: &c::bch_dev) -> (i64, bool) {
     }), &mut leaving);
     let leaving = (leaving[0] as i64).max(0);
 
-    let bucket_size = u64::from(ca.mi.bucket_size);
+    let bucket_size = u64::from(ca.mi.get().bucket_size);
     let free = usage.buckets[c::bch_data_type::BCH_DATA_free.0 as usize]
         .wrapping_mul(bucket_size).wrapping_add(leaving as u64) as i64;
-    let capacity = ca.mi.nbuckets.wrapping_mul(bucket_size) as i64;
+    let capacity = ca.mi.get().nbuckets.wrapping_mul(bucket_size) as i64;
 
     let low_on_space = free.wrapping_mul(100) <= capacity.wrapping_mul(EC_REUSE_FREE_THRESHOLD_PCT);
 

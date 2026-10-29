@@ -35,14 +35,14 @@ impl Fs {
     /// being evacuated. bch2_dev_durability().
     pub fn dev_durability(&self, dev: u32, rcu: &ReadGuard) -> u32 {
         self.dev_rcu(dev, rcu)
-            .filter(|ca| u32::from(ca.mi.state) != c::bch_member_state::BCH_MEMBER_STATE_evacuating.0)
-            .map_or(0, |ca| ca.mi.durability.into())
+            .filter(|ca| u32::from(ca.mi.get().state) != c::bch_member_state::BCH_MEMBER_STATE_evacuating.0)
+            .map_or(0, |ca| ca.mi.get().durability.into())
     }
 
     /// What a copy on @dev will be worth once it's back: its durability,
     /// evacuating or not - bch2_dev_durability_desired().
     pub fn dev_durability_desired(&self, dev: u32, rcu: &ReadGuard) -> u32 {
-        self.dev_rcu(dev, rcu).map_or(0, |ca| ca.mi.durability.into())
+        self.dev_rcu(dev, rcu).map_or(0, |ca| ca.mi.get().durability.into())
     }
 
     fn dev_online(&self, dev: u32) -> bool {
@@ -290,7 +290,7 @@ pub trait BkeyVDurability: BkeyV<V: BkeyVal<State = Validated>> {
             if p.has_ec {
                 ret.total = ret.total.wrapping_add(p.ec.redundancy()).wrapping_add(1);
             } else if dev != c::BCH_SB_MEMBER_INVALID {
-                let d = fs.dev_rcu(dev, &rcu).map_or(1, |ca| ca.mi.durability);
+                let d = fs.dev_rcu(dev, &rcu).map_or(1, |ca| ca.mi.get().durability);
                 ret.total = ret.total.wrapping_add(d);
             }
         }

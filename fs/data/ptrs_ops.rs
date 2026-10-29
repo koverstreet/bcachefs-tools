@@ -32,7 +32,7 @@ fn extent_ptr_validate(v: &BkeyValidate<'_, '_>, p: BkeySC<'_, Ptrs>, ptr: &c::b
         let rcu = read_lock();
         v.fs.dev_rcu(ptr.dev().into(), &rcu).map(|ca| {
             let (bucket, bucket_offset) = ca.sector_to_bucket_and_offset(ptr.offset());
-            (bucket, bucket_offset, ca.mi.first_bucket, ca.mi.nbuckets, ca.mi.bucket_size)
+            (bucket, bucket_offset, ca.mi.get().first_bucket, ca.mi.get().nbuckets, ca.mi.get().bucket_size)
         })
     };
     let Some((bucket, bucket_offset, first_bucket, nbuckets, bucket_size)) = dev else {
@@ -203,8 +203,8 @@ pub(crate) fn extent_ptr_to_text(out: &mut Printbuf, fs: Option<&Fs>, ptr: &c::b
             let (b, offset) = ca.sector_to_bucket_and_offset(ptr.offset());
             write!(out, "{:>6} {}:{}:{} gen {}", ca.name().to_str().unwrap_or("(invalid name)"),
                    ptr.dev(), b, offset, ptr.generation());
-            if ca.mi.durability != 1 {
-                write!(out, " d={}", ca.mi.durability);
+            if ca.mi.get().durability != 1 {
+                write!(out, " d={}", ca.mi.get().durability);
             }
 
             let gens_valid = fs.flag(c::bch_fs_flags::BCH_FS_new_fs) ||

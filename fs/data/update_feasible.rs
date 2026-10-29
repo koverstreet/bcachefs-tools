@@ -91,7 +91,7 @@ impl Fs {
 
             if let Some(out) = trace.as_deref_mut() {
                 write!(out, "{}: durability {} free {free} \n",
-                       ca.name().to_str().unwrap_or("?"), ca.mi.durability);
+                       ca.name().to_str().unwrap_or("?"), ca.mi.get().durability);
             }
         }
         ret
@@ -114,7 +114,7 @@ impl Fs {
         let rcu = read_lock();
         k.ptrs(self).any(|ptr| {
             self.dev_rcu(ptr.dev().into(), &rcu)
-                .is_some_and(|ca| u32::from(ca.mi.state) == c::bch_member_state::BCH_MEMBER_STATE_evacuating.0)
+                .is_some_and(|ca| u32::from(ca.mi.get().state) == c::bch_member_state::BCH_MEMBER_STATE_evacuating.0)
         })
     }
 

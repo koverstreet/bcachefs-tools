@@ -713,7 +713,7 @@ pub unsafe fn bch2_writepoint_ec_buf(c: &Opaque<c::bch_fs>, wp: &c::write_point)
     let offset = {
         let rcu = read_lock();
         let ca = fs.dev_rcu(ob.dev(), &rcu).expect("an open bucket's device");
-        u32::from(ca.mi.bucket_size) - ob.sectors_free()
+        u32::from(ca.mi.get().bucket_size) - ob.sectors_free()
     };
 
     // SAFETY: the write point's pin, and its io ref, keep its stripe
@@ -821,7 +821,7 @@ pub(crate) fn new_stripe_to_text(out: &mut Printbuf, fs: &Fs, s: &StripeNew) {
         let Slot::Bucket(StripeBlock::Claimed(ob)) = b else { continue };
         let rcu = read_lock();
         if let Some(ca) = fs.dev_rcu(ob.dev(), &rcu) {
-            let bucket_size = u32::from(ca.mi.bucket_size);
+            let bucket_size = u32::from(ca.mi.get().bucket_size);
             prt!(out, "(pin {} {}/{})", ob.pin(), bucket_size - ob.sectors_free(), bucket_size);
         }
     }

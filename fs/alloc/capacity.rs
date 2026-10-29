@@ -66,9 +66,9 @@ fn dev_reserved_sectors(ca: &c::bch_dev, gc_reserve: u64, capacity: u64) -> u64 
     let dev_sectors = ca.capacity_sectors();
 
     let alloc_reserve = (u64::from(ca.nr_btree_reserve) * 2 +
-                         (ca.mi.nbuckets >> 6) +    // copygc
+                         (ca.mi.get().nbuckets >> 6) +    // copygc
                          3)                         // btree, copygc, rebalance write points
-        * u64::from(ca.mi.bucket_size) * 2;
+        * u64::from(ca.mi.get().bucket_size) * 2;
 
     let gc_share = match capacity {
         0 => 0,
@@ -99,7 +99,7 @@ pub(crate) fn recalc_capacity(fs: &Fs) {
         ca.reserved_sectors.set(r.unwrap_or(0));
         if let Some(r) = r {
             reserved += r;
-            bucket_size_max = bucket_size_max.max(u32::from(ca.mi.bucket_size));
+            bucket_size_max = bucket_size_max.max(u32::from(ca.mi.get().bucket_size));
         }
     }
     drop(rcu);
@@ -158,7 +158,7 @@ impl Fs {
     /// The smallest rw device's capacity, in sectors - U64_MAX with none.
     pub fn min_rw_member_capacity(&self) -> u64 {
         let rcu = read_lock();
-        self.rw_devs_rcu(&rcu).map(|ca| ca.mi.nbuckets * u64::from(ca.mi.bucket_size)).min().unwrap_or(u64::MAX)
+        self.rw_devs_rcu(&rcu).map(|ca| ca.mi.get().nbuckets * u64::from(ca.mi.get().bucket_size)).min().unwrap_or(u64::MAX)
     }
 }
 
@@ -168,14 +168,14 @@ impl Fs {
 /// user data of a device of durability 0; the rest, what it allows, with
 /// durability.
 fn dev_allocator_set_rw(fs: &Fs, ca: &c::bch_dev, rw: bool) {
-    let allowed = |t: c::bch_data_type| u64::from(ca.mi.data_allowed) & (1 << t.0) != 0;
+    let allowed = |t: c::bch_data_type| u64::from(ca.mi.get().data_allowed) & (1 << t.0) != 0;
 
     for (i, devs) in fs.allocator.rw_devs.iter().enumerate() {
         let t = c::bch_data_type(i as u32);
         let data_type_rw = rw && match t {
             c::bch_data_type::BCH_DATA_free   => true,
-            c::bch_data_type::BCH_DATA_cached => allowed(c::bch_data_type::BCH_DATA_user) && ca.mi.durability == 0,
-            _                                 => allowed(t) && ca.mi.durability != 0,
+            c::bch_data_type::BCH_DATA_cached => allowed(c::bch_data_type::BCH_DATA_user) && ca.mi.get().durability == 0,
+            _                                 => allowed(t) && ca.mi.get().durability != 0,
         };
         devs.assign(ca.dev_idx.into(), data_type_rw);
     }
@@ -357,7 +357,7 @@ impl DevPlaceable {
 
         let f = ca.usage_full_read_fast();
         let buckets = |t: c::bch_data_type| f.d[t.0 as usize].buckets;
-        let bucket_size = u64::from(ca.mi.bucket_size);
+        let bucket_size = u64::from(ca.mi.get().bucket_size);
 
         // Not the allocator's free or available buckets: those take out open
         // buckets. An open bucket's space is already counted - as free if

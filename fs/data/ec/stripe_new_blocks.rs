@@ -175,7 +175,7 @@ fn reallocate_outliers(t: &TransAttempt<'_, '_>, req: &mut c::alloc_request, s: 
         let dev = s.new_stripe.stripe().v().block_ptrs()[i].dev();
         let Some(ca) = fs.dev_get(dev.into()) else { continue };
         // nothing nearer, within a bucket
-        if dist <= ca.offset_to_frac(ca.mi.bucket_size.into()) {
+        if dist <= ca.offset_to_frac(ca.mi.get().bucket_size.into()) {
             continue;
         }
 

@@ -615,7 +615,7 @@ fn phys_dev(fs: &Fs, phase: &Phase, dev: u32) -> Result<(), BchError> {
 /// do_reconcile_phys().
 fn reconcile_phys(fs: &Fs, phase: &'static Phase) -> Result<(), BchError> {
     let mut devs = KVVec::new();
-    for ca in fs.members().filter(|ca| ca.mi.rotational != 0 && ca.is_online()) {
+    for ca in fs.members().filter(|ca| ca.mi.get().rotational != 0 && ca.is_online()) {
         devs.push(u32::from(ca.dev_idx), GFP_KERNEL)?;
     }
     let name = fs.name().to_str().unwrap_or("?");

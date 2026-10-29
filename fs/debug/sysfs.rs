@@ -576,8 +576,8 @@ pub unsafe extern "C" fn bch2_opts_create_sysfs_files(kobj: *mut c::kobject, ty:
 
 const DEV: &[Attr<c::bch_dev>] = &[
     Attr::ro(c"uuid",                   |ca, out| { out.uuid(&ca.uuid); out.newline() }),
-    Attr::ro(c"first_bucket",           |ca, out| writeln!(out, "{}", ca.mi.first_bucket)),
-    Attr::ro(c"nbuckets",               |ca, out| writeln!(out, "{}", ca.mi.nbuckets)),
+    Attr::ro(c"first_bucket",           |ca, out| writeln!(out, "{}", ca.mi.get().first_bucket)),
+    Attr::ro(c"nbuckets",               |ca, out| writeln!(out, "{}", ca.mi.get().nbuckets)),
 
     Attr::ro(c"has_data",               |ca, out| {
         crate::util::names::prt_set::<c::bch_data_type>(out, ca.has_data() as u64);

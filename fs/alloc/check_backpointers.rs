@@ -542,12 +542,12 @@ pub(crate) fn check_one_bucket_backpointer_mismatch(trans: &BtreeTrans<'_>, ca: 
     }
 
     let nr = ca.bucket_backpointer_mismatch.nr();
-    let allowed = if copygc { ca.mi.nbuckets >> 7 } else { 0 };
+    let allowed = if copygc { ca.mi.get().nbuckets >> 7 } else { 0 };
 
     let mut buf = Printbuf::new();
     log_msg_start(&mut buf, ca.name());
     prt!(&mut buf, "Detected missing backpointers in bucket {bucket}, now have {nr}/{} with missing\n",
-         { ca.mi.nbuckets });
+         { ca.mi.get().nbuckets });
 
     let flags = if nr < allowed {
         c::bch_run_recovery_pass_flags::RUN_RECOVERY_PASS_ratelimit
@@ -731,7 +731,7 @@ fn backpointer_node_has_missing(fs: &Fs, k: BkeySC<'_>) -> bool {
             while p.inode <= k.k.p.inode && p.inode < u64::from(fs.sb.nr_devices.get()) {
                 if let Some(ca) = fs.dev_rcu(p.inode as u32, &rcu) {
                     let bucket = BackpointerPos::from_bpos(fs, p).bucket(ca);
-                    let nbuckets = ca.mi.nbuckets;
+                    let nbuckets = ca.mi.get().nbuckets;
                     let mismatch = ca.bucket_backpointer_mismatch.words(&rcu);
                     let empty = ca.bucket_backpointer_empty.words(&rcu);
 
@@ -829,7 +829,7 @@ fn check_extents_to_backpointers(fs: &Fs) -> Result<(), BchError> {
 
     let (mut nr_buckets, mut nr_mismatches, mut nr_empty) = (0u64, 0u64, 0u64);
     for ca in fs.members() {
-        nr_buckets += ca.mi.nbuckets;
+        nr_buckets += ca.mi.get().nbuckets;
         nr_mismatches += ca.bucket_backpointer_mismatch.nr();
         nr_empty += ca.bucket_backpointer_empty.nr();
     }
@@ -868,7 +868,7 @@ fn check_extents_to_backpointers(fs: &Fs) -> Result<(), BchError> {
 
         trans.write_buffer_flush_sync()?;
         for ca in fs.members() {
-            for b in (0..ca.mi.nbuckets).filter(|&b| ca.bucket_backpointer_mismatch.test(b)) {
+            for b in (0..ca.mi.get().nbuckets).filter(|&b| ca.bucket_backpointer_mismatch.test(b)) {
                 commit_do(&trans, None, CommitFlags::NO_ENOSPC, |t| bucket_multiple_resolved(t, &ca, b))?;
             }
         }
@@ -988,7 +988,7 @@ impl c::bucket_bitmap {
         let w = l.published();
 
         if w.buckets.with(|words| words.is_empty()) {
-            w.buckets.rebuild(bits_to_longs(ca.mi.nbuckets as usize), |_| ())
+            w.buckets.rebuild(bits_to_longs(ca.mi.get().nbuckets as usize), |_| ())
                 .or_else(|_| ca.fs().throw(bch_errcode::BCH_ERR_ENOMEM_backpointer_mismatches_bitmap))?;
         }
 

@@ -1007,7 +1007,7 @@ fn copy_dir(
 
 fn first_device_total_sectors(fs: &Fs) -> u64 {
     let ca = fs.dev_get(0).expect("device 0 should exist");
-    ca.mi.nbuckets * ca.mi.bucket_size as u64
+    ca.mi.get().nbuckets * ca.mi.get().bucket_size as u64
 }
 
 fn reserve_old_fs_space(

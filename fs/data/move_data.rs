@@ -416,7 +416,7 @@ impl Moving<'_> {
                 (c::btree_id::stripe_backpointers, BackpointerPos::ec_removed_dev(idx, block), None),
         };
 
-        let end = ca.as_ref().map_or(w.end, |ca| w.end.min(ca.bucket_to_sector(ca.mi.nbuckets)));
+        let end = ca.as_ref().map_or(w.end, |ca| w.end.min(ca.bucket_to_sector(ca.mi.get().nbuckets)));
         let shift = fs.sb.extent_bp_shift.get();
         let bp_end = pos(bp_dev, end << shift);
 
@@ -529,7 +529,7 @@ impl Moving<'_> {
 
         fs.event_inc_trace(events::evacuate_bucket, |out| {
             write!(out, "bucket: {bucket} gen: {generation} ret {}\n", BchError::from_raw(ret_to_c(ret)));
-            write!(out, "{sectors}/{} sectors\n", { ca.mi.bucket_size });
+            write!(out, "{sectors}/{} sectors\n", { ca.mi.get().bucket_size });
         });
         ret
     }

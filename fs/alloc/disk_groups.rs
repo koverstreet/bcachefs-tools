@@ -346,7 +346,7 @@ impl Fs {
 
     /// 0: no failure domain, or no such device.
     fn dev_failure_domain(&self, dev: usize, rcu: &ReadGuard) -> u16 {
-        self.dev_rcu(dev as u32, rcu).map_or(0, |ca| ca.mi.failure_domain)
+        self.dev_rcu(dev as u32, rcu).map_or(0, |ca| ca.mi.get().failure_domain)
     }
 }
 

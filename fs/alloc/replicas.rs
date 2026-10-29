@@ -391,14 +391,14 @@ fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::bch_write_che
 
     let rcu = read_lock();
     for ca in fs.devs_rcu_in(fs.allocator.rw_devs[0].iter(), &rcu) {
-        let durability = u32::from(ca.mi.durability);
+        let durability = u32::from(ca.mi.get().durability);
         if durability == 0 {
             continue;
         }
 
         let is_online = devs.d.test(ca.dev_idx.into());
         for (i, (h, o)) in have.iter_mut().zip(&mut online).enumerate() {
-            if u32::from(ca.mi.data_allowed) & 1 << i != 0 {
+            if u32::from(ca.mi.get().data_allowed) & 1 << i != 0 {
                 *h += durability;
                 *o += durability * is_online as u32;
             }

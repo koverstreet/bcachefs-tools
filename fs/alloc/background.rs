@@ -889,7 +889,7 @@ impl c::AllocV4 {
     /// the sectors as an int.
     fn sectors_fragmented(&self, ca: &c::bch_dev) -> i64 {
         let d = self.sectors() as i32;
-        let bucket_size = i32::from(ca.mi.bucket_size);
+        let bucket_size = i32::from(ca.mi.get().bucket_size);
 
         i64::from(if d != 0 {
             (bucket_size - d).max(0)
@@ -921,7 +921,7 @@ impl c::AllocV4 {
         }
 
         // on a corrupt fs, more dirty sectors than the bucket has
-        let bucket_size = u64::from(ca.mi.bucket_size);
+        let bucket_size = u64::from(ca.mi.get().bucket_size);
         let d = self.sectors_dirty().min(bucket_size as i64) as u64;
         d * (1 << 31) / bucket_size
     }
@@ -1144,7 +1144,7 @@ fn alloc_read(fs: &Fs) -> Result<(), BchError> {
             let start = BucketGensPos { key: k.k.p, idx: 0 }.bucket().offset;
             let end = BucketGensPos { key: k.k.p.nosnap_successor(), idx: 0 }.bucket().offset;
             let rcu = read_lock();
-            for b in start.max(ca.mi.first_bucket.into())..end.min(ca.mi.nbuckets) {
+            for b in start.max(ca.mi.get().first_bucket.into())..end.min(ca.mi.get().nbuckets) {
                 ca.bucket_gen_ref(b, &rcu).expect("one of the device's buckets")
                     .store(g.v().gens[(b & u64::from(c::KEY_TYPE_BUCKET_GENS_MASK)) as usize], Ordering::Relaxed);
             }
@@ -1157,10 +1157,10 @@ fn alloc_read(fs: &Fs) -> Result<(), BchError> {
             fs.dev_iterate(&mut ca, k.k.p.inode as u32);
             let Some(ca) = &ca else { return Ok(LoopFlow::ContinueFrom(pos(k.k.p.inode + 1, 0))) };
 
-            if k.k.p.offset < ca.mi.first_bucket.into() {
-                return Ok(LoopFlow::ContinueFrom(pos(k.k.p.inode, ca.mi.first_bucket.into())));
+            if k.k.p.offset < ca.mi.get().first_bucket.into() {
+                return Ok(LoopFlow::ContinueFrom(pos(k.k.p.inode, ca.mi.get().first_bucket.into())));
             }
-            if k.k.p.offset >= ca.mi.nbuckets {
+            if k.k.p.offset >= ca.mi.get().nbuckets {
                 return Ok(LoopFlow::ContinueFrom(pos(k.k.p.inode + 1, 0)));
             }
 
@@ -1317,7 +1317,7 @@ pub(crate) fn bucket_do_freespace_index(t: &TransAttempt<'_, '_>, ca: &c::bch_de
     let mut iter = BtreeIter::new(t, c::btree_id::freespace, pos, BtreeIterFlags::INTENT | BtreeIterFlags::TRIM);
     let old = iter.peek_slot(t)?.expect("a slot always has a key");
 
-    if ca.mi.freespace_initialized != 0 && (old.k.type_ == 0) != set &&
+    if ca.mi.get().freespace_initialized != 0 && (old.k.type_ == 0) != set &&
        !need_discard_or_freespace_err(t, alloc_k, set, false, false)? {
         return Ok(());
     }

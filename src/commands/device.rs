@@ -449,11 +449,11 @@ fn resize_offline(device: &str, size_sectors: u64) -> Result<()> {
 
     let ca = find_single_online_dev(&fs)?;
 
-    let nbuckets = size_sectors / ca.mi.bucket_size as u64;
+    let nbuckets = size_sectors / ca.mi.get().bucket_size as u64;
 
-    if nbuckets < ca.mi.nbuckets {
+    if nbuckets < ca.mi.get().nbuckets {
         bail!("shrinking not supported (requested {} buckets, have {})",
-            nbuckets, ca.mi.nbuckets);
+            nbuckets, ca.mi.get().nbuckets);
     }
 
     println!("resizing to {} buckets", nbuckets);
@@ -510,7 +510,7 @@ fn resize_journal_offline(device: &str, size_sectors: u64) -> Result<()> {
 
     let ca = find_single_online_dev(&fs)?;
 
-    let nbuckets = size_sectors / ca.mi.bucket_size as u64;
+    let nbuckets = size_sectors / ca.mi.get().bucket_size as u64;
 
     println!("resizing journal to {} buckets", nbuckets);
     let ret = unsafe {

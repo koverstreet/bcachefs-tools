@@ -458,7 +458,7 @@ fn dump_node(fs: &Fs, devs: &mut [DumpDev], k: btree::BkeySC<'_>, btree_node_siz
 }
 
 fn get_sb_journal(fs: &Fs, ca: &c::bch_dev, entire_journal: bool, d: &mut DumpDev) {
-    let bucket_bytes = (ca.mi.bucket_size as u64) << 9;
+    let bucket_bytes = (ca.mi.get().bucket_size as u64) << 9;
 
     {
         let guard = fs.sb_lock();
@@ -545,7 +545,7 @@ fn write_dev_image(
     img.write_ranges(&mut d.sb)?;
 
     let opts = SanitizeOpts { sanitize, sanitize_filenames, single_replica };
-    let bucket_bytes = (ca.mi.bucket_size as u64) << 9;
+    let bucket_bytes = (ca.mi.get().bucket_size as u64) << 9;
 
     // The journal carries the btree_root pointers, so it goes through the
     // modify path for --single-replica (to de-replicate them) as well as
@@ -586,7 +586,7 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
 
     let mut nr_online = 0u32;
     for ca in fs.online_members() {
-        if (sanitize || cli.single_replica) && (ca.mi.bucket_size as u32) % (block_size >> 9) != 0 {
+        if (sanitize || cli.single_replica) && (ca.mi.get().bucket_size as u32) % (block_size >> 9) != 0 {
             return Err(anyhow!("{} has unaligned buckets, cannot sanitize or de-replicate",
                                ca.name().to_string_lossy()));
         }
