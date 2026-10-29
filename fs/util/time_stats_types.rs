@@ -111,6 +111,14 @@ c_extern! {
     pub fn __bch2_time_stats_update(stats: *mut c::bch2_time_stats, start: u64, end: u64);
 }
 
+impl quantiles {
+    /// The @i'th quantile, in order: QUANTILE_IDX()'s entry's estimate.
+    pub fn at(&self, i: u32) -> u64 {
+        let e = crate::util::eytzinger::Eytzinger0::<u32>::new(c::NR_QUANTILES);
+        self.entries[e.from_inorder(i) as usize].m
+    }
+}
+
 impl bch2_time_stats {
     fn as_ptr(&self) -> *mut bch2_time_stats {
         core::ptr::from_ref(self).cast_mut()

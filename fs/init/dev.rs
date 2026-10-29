@@ -78,6 +78,33 @@ impl c::bch_dev {
 }
 
 #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
+impl c::bch_dev {
+    /// How congested its IO is - its latency, against what's expected.
+    #[cold]
+    pub fn congested_to_text(&self, out: &mut Printbuf) {
+        use crate::util::kernel::{local_clock, READ, WRITE};
+        let now = local_clock();
+        out.tabstop_push(32);
+        write!(out, "current:\t{}%\n", self.congested_read(now) * 100 / c::CONGESTED_MAX);
+        write!(out, "raw:\t{}/{}\n", self.congested.load(Relaxed), c::CONGESTED_MAX);
+        write!(out, "last io over threshold:\t");
+        out.time_units(now.wrapping_sub(self.congested_last.load(Relaxed)));
+        out.newline();
+
+        // the thresholds are bch2_latency_acct()'s
+        for (what, rw, shift) in [("read", READ, 2), ("write", WRITE, 3)] {
+            let q = &self.io_latency[rw].quantiles;
+            write!(out, "{what} latency threshold:\t");
+            out.time_units(q.at(1) << shift);
+            out.newline();
+            write!(out, "median {what} latency:\t");
+            out.time_units(q.at(7));
+            out.newline();
+        }
+    }
+}
+
+#[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
 #[c_export]
 pub fn bch2_dev_congested_read(ca: &c::bch_dev, now: u64) -> u32 {
     ca.congested_read(now)

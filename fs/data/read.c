@@ -78,45 +78,6 @@ MODULE_PARM_DESC(poison_extents_on_checksum_error,
 
 static void bch2_read_bio_to_text_atomic(struct printbuf *, struct bch_read_bio *);
 
-#ifndef CONFIG_BCACHEFS_NO_LATENCY_ACCT
-
-__cold void bch2_dev_congested_to_text(struct printbuf *out, struct bch_dev *ca)
-{
-	printbuf_tabstop_push(out, 32);
-
-	prt_printf(out, "current:\t%u%%\n",
-		   bch2_dev_congested_read(ca, local_clock()) *
-		   100 / CONGESTED_MAX);
-
-	prt_printf(out, "raw:\t%i/%u\n", atomic_read(&ca->congested), CONGESTED_MAX);
-
-	prt_printf(out, "last io over threshold:\t");
-	bch2_pr_time_units(out, local_clock() - ca->congested_last);
-	prt_newline(out);
-
-	prt_printf(out, "read latency threshold:\t");
-	bch2_pr_time_units(out,
-			   ca->io_latency[READ].quantiles.entries[QUANTILE_IDX(1)].m << 2);
-	prt_newline(out);
-
-	prt_printf(out, "median read latency:\t");
-	bch2_pr_time_units(out,
-			   ca->io_latency[READ].quantiles.entries[QUANTILE_IDX(7)].m);
-	prt_newline(out);
-
-	prt_printf(out, "write latency threshold:\t");
-	bch2_pr_time_units(out,
-			   ca->io_latency[WRITE].quantiles.entries[QUANTILE_IDX(1)].m << 3);
-	prt_newline(out);
-
-	prt_printf(out, "median write latency:\t");
-	bch2_pr_time_units(out,
-			   ca->io_latency[WRITE].quantiles.entries[QUANTILE_IDX(7)].m);
-	prt_newline(out);
-}
-
-#endif
-
 /* Read */
 
 static inline bool have_io_error(struct bch_io_failures *failed)

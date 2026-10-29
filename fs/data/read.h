@@ -9,10 +9,6 @@
 
 #define BIO_BOUNCE_BUF_POOL_LEN	(PAGE_SIZE << PAGE_ALLOC_COSTLY_ORDER)
 
-#ifndef CONFIG_BCACHEFS_NO_LATENCY_ACCT
-void bch2_dev_congested_to_text(struct printbuf *, struct bch_dev *);
-#endif
-
 #define BCH_READ_ERR_checksum		(1U << 0)
 #define BCH_READ_ERR_io			(1U << 1)
 #define BCH_READ_ERR_decompression	(1U << 2)
