@@ -348,41 +348,41 @@ pub(crate) type StripeNewBox = TaskHome<StripeNew>;
 /// bch_fs_ec.new_stripes, each until its task is done with it. A head's
 /// stripe is its head's until it's handed on, and comes here then - where
 /// nothing can fail - so room is kept for every stripe a head holds:
-/// capacity >= len + @heads_held.
+/// capacity >= len + @held.
 pub(crate) struct NewStripes {
     v:          KVVec<StripeNewBox>,
-    heads_held: usize,
+    held:       usize,
 }
 
 impl NewStripes {
     pub(crate) fn new() -> Self {
-        NewStripes { v: KVVec::new(), heads_held: 0 }
+        NewStripes { v: KVVec::new(), held: 0 }
     }
 
-    /// Room for one more stripe a head holds.
-    pub(crate) fn reserve_for_head(&mut self) -> Result<(), AllocError> {
-        self.v.reserve(self.heads_held + 1, GFP_KERNEL)?;
-        self.heads_held += 1;
+    /// Room for one more stripe, held by its maker until it's handed on.
+    pub(crate) fn reserve(&mut self) -> Result<(), AllocError> {
+        self.v.reserve(self.held + 1, GFP_KERNEL)?;
+        self.held += 1;
         Ok(())
     }
 
-    /// A head's stripe is gone without being handed on: its room is no
+    /// A held stripe is gone without being handed on: its room is no
     /// longer kept.
-    pub(crate) fn release_for_head(&mut self) {
-        self.heads_held = self.heads_held.checked_sub(1).expect("a head's stripe, room kept for it");
+    pub(crate) fn release(&mut self) {
+        self.held = self.held.checked_sub(1).expect("a held stripe, room kept for it");
     }
 
-    /// A head's stripe, handed on: into the room kept for it, so this can't
+    /// A held stripe, handed on: into the room kept for it, so this can't
     /// fail.
-    pub(crate) fn push_from_head(&mut self, b: StripeNewBox) {
-        self.release_for_head();
-        assert!(self.v.len() < self.v.capacity(), "no room kept for a head's stripe");
+    pub(crate) fn push_reserved(&mut self, b: StripeNewBox) {
+        self.release();
+        assert!(self.v.len() < self.v.capacity(), "no room kept for a held stripe");
         let Ok(()) = self.v.push(b, GFP_KERNEL) else { unreachable!("pushed within capacity") };
     }
 
     /// A repair's stripe, which isn't a head's: past the room kept for them.
     pub(crate) fn push(&mut self, b: StripeNewBox) -> Result<(), (AllocError, StripeNewBox)> {
-        if let Err(e) = self.v.reserve(self.heads_held + 1, GFP_KERNEL) {
+        if let Err(e) = self.v.reserve(self.held + 1, GFP_KERNEL) {
             return Err((e, b));
         }
         let Ok(()) = self.v.push(b, GFP_KERNEL) else { unreachable!("pushed within capacity") };
@@ -398,7 +398,7 @@ impl NewStripes {
 
     /// No stripes, and none a head holds.
     pub(crate) fn is_empty(&self) -> bool {
-        self.v.is_empty() && self.heads_held == 0
+        self.v.is_empty() && self.held == 0
     }
 }
 
@@ -777,10 +777,10 @@ pub fn bch2_fs_ec_flush_outstanding(c: &Opaque<c::bch_fs>) {
     Fs::from_c(c).ec_flush_outstanding()
 }
 
-/// At shutdown, with no stripe being made but the heads': @b, a head's
-/// stripe, taken from it, freed.
-pub(crate) fn head_stripe_free(fs: &Fs, b: StripeNewBox) {
-    fs.ec.new_stripes.lock().release_for_head();
+/// @b, a held stripe never handed on, freed and its room let go: a head's,
+/// taken from it at shutdown, with no stripe being made but the heads'.
+pub(crate) fn discard_held(fs: &Fs, b: StripeNewBox) {
+    fs.ec.new_stripes.lock().release();
     discard(b);
 }
 

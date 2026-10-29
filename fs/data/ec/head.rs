@@ -346,7 +346,7 @@ pub fn bch2_fs_ec_exit(c: &Opaque<c::bch_fs>) {
             assert!(s.blocks[..nr_blocks].iter().all(|b| b.bucket().is_none()),
                     "shutting down with a stripe head's stripe holding buckets");
             drop(s);
-            stripe_new::head_stripe_free(fs, g.s.take().expect("just seen"));
+            stripe_new::discard_held(fs, g.s.take().expect("just seen"));
         }
     }
     assert!(fs.ec.new_stripes.lock().is_empty(), "shutting down with stripes still being made, or room kept for them");
@@ -414,10 +414,10 @@ fn alloc_for_head(fs: &Fs, h: &c::ec_stripe_head, g: &mut HeadGuard<'_>, max_dat
         fs.err(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc)
     };
     // its room in new_stripes, for when it's handed on
-    fs.ec.new_stripes.lock().reserve_for_head().map_err(|_| failed())?;
+    fs.ec.new_stripes.lock().reserve().map_err(|_| failed())?;
     let s = StripeNew::alloc(fs, g.devs.mask, h.watermark, h.disk_label, h.algo, nr_data, h.redundancy, g.devs.blocksize)
         .map_err(|_| {
-            fs.ec.new_stripes.lock().release_for_head();
+            fs.ec.new_stripes.lock().release();
             failed()
         })?;
     g.nr_created += 1;
@@ -434,7 +434,7 @@ pub(crate) fn set_pending(fs: &Fs, b: StripeNewBox) {
     }
 
     let mut v = fs.ec.new_stripes.lock();
-    v.push_from_head(b);
+    v.push_reserved(b);
     v.last().expect("just pushed").fill(&v);
 }
 
