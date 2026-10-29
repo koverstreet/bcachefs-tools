@@ -54,11 +54,12 @@
 //! A stripe being made is a StripeNew; C has it only by pointer, an open
 //! bucket's ->ec, as ec_stripe_new. It's owned boxed - a StripeNewBox,
 //! pinned, as its writers' open buckets and its task hold pointers to it: by
-//! its head while it's open, then, once it's handed on, by the filesystem
-//! until its task tears it down - ec.new_stripes, NewStripes, which keeps room for
-//! the heads' so handing one on can't fail. A repair's is in new_stripes from
-//! the start. It holds its slot and its old stripe open (StripeClaim), and
-//! its buckets in the new stripes' bucket table, till it's freed.
+//! its maker while it's open - its head, or the repair rebuilding a stripe -
+//! then, once it's handed on, by the filesystem until its task tears it down
+//! - ec.new_stripes, NewStripes, which keeps room for the stripes held so
+//! handing one on can't fail. It holds its slot and its old stripe open
+//! (StripeClaim), and its buckets in the new stripes' bucket table, till it's
+//! freed.
 //!
 //! Its state:
 //! - open: its head's h->s, staged under the head's lock - a slot, buckets,
@@ -344,11 +345,10 @@ pub(crate) struct Internal {
 /// with the last of this and its task's last run.
 pub(crate) type StripeNewBox = TaskHome<StripeNew>;
 
-/// The stripes being made that their heads have handed on, and repairs': in
-/// bch_fs_ec.new_stripes, each until its task is done with it. A head's
-/// stripe is its head's until it's handed on, and comes here then - where
-/// nothing can fail - so room is kept for every stripe a head holds:
-/// capacity >= len + @held.
+/// The stripes being made that their heads and repairs have handed on: in
+/// bch_fs_ec.new_stripes, each until its task is done with it. A stripe is
+/// its maker's until it's handed on, and comes here then - where nothing can
+/// fail - so room is kept for every stripe held: capacity >= len + @held.
 pub(crate) struct NewStripes {
     v:          KVVec<StripeNewBox>,
     held:       usize,
@@ -380,15 +380,6 @@ impl NewStripes {
         let Ok(()) = self.v.push(b, GFP_KERNEL) else { unreachable!("pushed within capacity") };
     }
 
-    /// A repair's stripe, which isn't a head's: past the room kept for them.
-    pub(crate) fn push(&mut self, b: StripeNewBox) -> Result<(), (AllocError, StripeNewBox)> {
-        if let Err(e) = self.v.reserve(self.held + 1, GFP_KERNEL) {
-            return Err((e, b));
-        }
-        let Ok(()) = self.v.push(b, GFP_KERNEL) else { unreachable!("pushed within capacity") };
-        Ok(())
-    }
-
     fn take(&mut self, p: NonNull<StripeNew>) -> StripeNewBox {
         let i = self.v.iter().position(|b| core::ptr::eq(&**b, p.as_ptr())).expect("a stripe being made, in new_stripes");
         let last = self.v.len() - 1;
@@ -396,7 +387,7 @@ impl NewStripes {
         self.v.pop().expect("just found")
     }
 
-    /// No stripes, and none a head holds.
+    /// No stripes, and none held.
     pub(crate) fn is_empty(&self) -> bool {
         self.v.is_empty() && self.held == 0
     }
@@ -420,8 +411,9 @@ impl StripeNew {
     pub(crate) fn alloc(fs: &Fs, devs: c::bch_devs_mask, watermark: c::bch_watermark, disk_label: u32, algorithm: u32,
              nr_data: u32, nr_parity: u32, blocksize: u32) -> Result<StripeNewBox, BchError> {
         let init = pin_init!(StripeNew {
-            // SAFETY: its head and new_stripes, which own it, are emptied
-            // going read-only, and its task's last run, which it lasts to,
+            // SAFETY: its head, a repair on reconcile's thread - stopped
+            // first - and new_stripes, which own it, are emptied going
+            // read-only, and its task's last run, which it lasts to,
             // is drained with stripe_create_wq as the filesystem's freed
             fs:         unsafe { BackRef::new(fs) },
             start_time: local_clock(),

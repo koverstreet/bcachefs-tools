@@ -424,8 +424,9 @@ fn alloc_for_head(fs: &Fs, h: &c::ec_stripe_head, g: &mut HeadGuard<'_>, max_dat
     Ok(s)
 }
 
-/// Hand @b on to its task, as it is: it's no longer its head's, and goes in
-/// new_stripes, its own io ref put. The caller's lock - the head's - is held.
+/// Hand @b on to its task, as it is: it's no longer its maker's, and goes in
+/// new_stripes, into the room kept for it, its own io ref put. A head's
+/// caller holds the head's lock.
 pub(crate) fn set_pending(fs: &Fs, b: StripeNewBox) {
     {
         let i = b.lock();

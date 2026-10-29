@@ -91,10 +91,10 @@ pub struct bch_fs_ec {
     #[init(RustOnly::new(new_lock!(KVVec::new())))]
     pub(crate) dev_stripe_states: rust_only!(Lock<c::mutex, KVVec<Pin<KBox<c::ec_dev_stripe_state>>>>),
 
-    /// The stripes being made, once their heads hand them on - a repair's
-    /// from when it's allocated - until their task is done with them; and
-    /// room for those the heads hold. Boxed, as their users hold them without
-    /// this lock: Rust's alone. See stripe_new.rs.
+    /// The stripes being made, once their heads or repairs hand them on,
+    /// until their task is done with them; and room for those held. Boxed,
+    /// as their users hold them without this lock: Rust's alone. See
+    /// stripe_new.rs.
     #[pin]
     #[init(RustOnly::new(new_lock!(NewStripes::new())))]
     pub(crate) new_stripes: rust_only!(Lock<c::mutex, NewStripes>),

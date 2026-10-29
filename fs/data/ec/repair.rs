@@ -16,10 +16,10 @@ use crate::c;
 use crate::data::copygc;
 use crate::data::ec::buf::{blocks_good, blocks_in, validate_msg, MemWait, StripeBuf, PRE};
 use crate::data::ec::delete::stripe_delete;
-use crate::data::ec::head::dev_stripe_state_get;
+use crate::data::ec::head::{dev_stripe_state_get, set_pending};
 use crate::data::ec::io::{read_sync, scrub_block};
 use crate::data::ec::open::OpenStripe;
-use crate::data::ec::stripe_new::{discard, new_stripes_take, StripeNew};
+use crate::data::ec::stripe_new::{discard_held, StripeNew};
 use crate::data::ec::stripe_new_blocks::{new_stripe_alloc_buckets, stripe_idx_alloc};
 use crate::data::ec::stripe_new_reuse::{init_new_stripe_from_old, OldRead, Reuse};
 use crate::data::ec::stripe_new_tasks::old_stripe_carry;
@@ -38,7 +38,6 @@ use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;
 use crate::{bch_err, c_function_name, log_msg_ratelimited, prt};
 use core::mem::size_of;
-use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use pin_init::stack_pin_init;
 
@@ -619,23 +618,23 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
     let v = s.v();
     let (nr_data, nr_new_data) = (v.nr_data(), (carry | move_).count_ones());
 
-    let b = StripeNew::alloc(fs, devs, c::bch_watermark::BCH_WATERMARK_normal, v.disk_label.into(),
-                             v.bits.algorithm().into(), nr_new_data, v.nr_redundant.into(), v.sectors.get().into())
+    // Ours until it's set up, as a head holds its stripe until it's handed
+    // on: its room in new_stripes kept, so handing it on can't fail.
+    fs.ec.new_stripes.lock().reserve()
         .map_err(|_| fs.err(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc))?;
-    let p = NonNull::from(&*b);
-    // no head's: in new_stripes from the start
-    if let Err((_, b)) = fs.ec.new_stripes.lock().push(b) {
-        discard(b);
-        return fs.throw(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc);
-    }
-    // SAFETY: in new_stripes, which keeps it till it's discarded or its task
-    // frees it
-    let ns = unsafe { p.as_ref() };
+    let b = match StripeNew::alloc(fs, devs, c::bch_watermark::BCH_WATERMARK_normal, v.disk_label.into(),
+                                   v.bits.algorithm().into(), nr_new_data, v.nr_redundant.into(), v.sectors.get().into()) {
+        Ok(b) => b,
+        Err(_) => {
+            fs.ec.new_stripes.lock().release();
+            return fs.throw(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc);
+        }
+    };
+    let ns: &StripeNew = &b;
 
-    // Ours, unlaunched: no one else's to wait on. Locked in short sections,
-    // never across a transaction's begin - inside the allocation's
-    // transactions, after their btree locks, as a head's stripe is staged
-    // (head_stage()), or with the transaction unlocked.
+    // Locked in short sections, never across a transaction's begin - inside
+    // the allocation's transactions, after their btree locks, as a head's
+    // stripe is staged (head_stage()), or with the transaction unlocked.
     {
         let mut i = ns.lock();
         match Reuse::new(s, h.into_claim()) {
@@ -643,7 +642,7 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
             Err(claim) => {
                 claim.put(fs);
                 drop(i);
-                discard(new_stripes_take(fs, p));
+                discard_held(fs, b);
                 return fs.throw(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc);
             }
         }
@@ -667,7 +666,7 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
             .and_then(|()| if narrowing { i.reserve_parity(ns.fs_ref(), c::bch_reservation_flags::empty()) } else { Ok(()) })
     }.and_then(|()| lockrestart_do(trans, |t| stripe_idx_alloc(t, &mut ns.lock())));
     if let Err(e) = ret {
-        discard(new_stripes_take(fs, p));
+        discard_held(fs, b);
         return Err(e);
     }
 
@@ -694,7 +693,7 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
         prt!(&mut msg, "\nnew: {}", ns.lock().new_stripe.stripe().to_text(fs));
         drop(msg);
 
-        discard(new_stripes_take(fs, p));
+        discard_held(fs, b);
         return Err(e);
     }
 
@@ -703,7 +702,7 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
     let mut i = ns.lock();
     if let Err(e) = i.buckets_add(fs) {
         drop(i);
-        discard(new_stripes_take(fs, p));
+        discard_held(fs, b);
         return Err(e);
     }
     i.allocated = true;
@@ -725,7 +724,6 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
     i.write = Some(ctxt.io_start(true, stripe_sectors));
     drop(i);
 
-    // in new_stripes already: no head's
-    ns.fill(&fs.ec.new_stripes.lock());
+    set_pending(fs, b);
     Ok(())
 }
