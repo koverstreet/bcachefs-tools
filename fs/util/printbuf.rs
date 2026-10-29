@@ -241,16 +241,6 @@ impl Printbuf {
         self.0.set_suppress(v);
     }
 
-    /// A UUID as printk's %pU: lowercase, hyphenated.
-    pub fn uuid(&mut self, u: &c::__uuid_t) {
-        for (i, b) in u.b.iter().enumerate() {
-            if matches!(i, 4 | 6 | 8 | 10) {
-                self.write_bytes(b"-");
-            }
-            write!(self, "{b:02x}");
-        }
-    }
-
     /// Empty, to write again - its buffer kept: printbuf_reset().
     pub fn reset(&mut self) {
         let b = &mut self.0;
@@ -434,6 +424,15 @@ impl ToText for Bpos {
 }
 crate::display_via_to_text!(Bpos);
 
+/// As printk's %pU: lowercase, hyphenated.
+impl ToText for c::__uuid_t {
+    fn to_text(&self, out: &mut Printbuf) {
+        for (i, b) in self.b.iter().enumerate() {
+            write!(out, "{}{b:02x}", if matches!(i, 4 | 6 | 8 | 10) { "-" } else { "" });
+        }
+    }
+}
+
 // ── Values that print themselves ─────────────────────────────────────────
 //
 // A number's unit says how it's printed - a size in units, a time as a date
@@ -497,6 +496,18 @@ impl ToText for Nsecs {
     }
 }
 
+/// @iter's items with @sep between each: `prt!(out, "{}", Join(", ", offsets))`.
+pub struct Join<'s, I>(pub &'s str, pub I);
+
+impl<I: Iterator<Item: fmt::Display> + Clone> ToText for Join<'_, I> {
+    fn to_text(&self, out: &mut Printbuf) {
+        for (i, x) in self.1.clone().enumerate() {
+            write!(out, "{}{x}", if i != 0 { self.0 } else { "" });
+        }
+    }
+}
+
+crate::display_via_to_text!(impl[I: Iterator<Item: fmt::Display> + Clone] Join<'_, I>);
 crate::display_via_to_text!(Bytes);
 crate::display_via_to_text!(Sectors);
 crate::display_via_to_text!(HumanReadable<u64>);

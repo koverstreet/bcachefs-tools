@@ -142,7 +142,7 @@ use crate::sb::members;
 use crate::util::bitmap::LeBitmap;
 use crate::util::projections::{AtomicWord, Volatile, VolatileWriter};
 use crate::util::names::{self, Names};
-use crate::util::{Bytes, DateTime, Printbuf, ToText};
+use crate::util::{Bytes, DateTime, Join, Printbuf, ToText};
 use crate::prt;
 use crate::types::{bits_to_longs, ArmOf, Le16, Le32, Le64};
 use crate::util::vstructs::{bytes_of_mut, cast_plain, cast_plain_mut, read_past, ArmRef, Head, InState, Plain, SelfSized, State, Unsized, Unvalidated, UnvalidatedEntries, VStruct, Validated, ValidatedEntries};
@@ -859,11 +859,8 @@ pub fn layout_to_text(out: &mut Printbuf, l: &c::bch_sb_layout) {
     prt!(out, "Superblock max size:     {}\n", Bytes(512 << l.sb_max_size_bits));
     prt!(out, "Nr superblocks:          {}\n", l.nr_superblocks);
 
-    write!(out, "Offsets:                 ");
-    for (i, o) in l.sb_offset[..usize::from(l.nr_superblocks)].iter().enumerate() {
-        write!(out, "{}{}", if i != 0 { ", " } else { "" }, o.get());
-    }
-    out.newline();
+    prt!(out, "Offsets:                 {}\n",
+         Join(", ", l.sb_offset[..usize::from(l.nr_superblocks)].iter().map(|o| o.get())));
 }
 
 /// The superblock: its header, options, and - if @print_layout - its
@@ -874,10 +871,9 @@ pub fn sb_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidated>,
         out.tabstop_push(44);
     }
 
-    let uuid = |b: [u8; 16]| uuid::Uuid::from_bytes(b);
-    write!(out, "External UUID:\t{}\n", uuid(sb.user_uuid.b));
-    write!(out, "Internal UUID:\t{}\n", uuid(sb.uuid.b));
-    write!(out, "Magic number:\t{}\n", uuid(sb.magic.b));
+    prt!(out, "External UUID:\t{}\n", sb.user_uuid);
+    prt!(out, "Internal UUID:\t{}\n", sb.uuid);
+    prt!(out, "Magic number:\t{}\n", sb.magic);
     write!(out, "Device index:\t{}\n", sb.dev_idx);
 
     write!(out, "Label:\t");
@@ -1256,9 +1252,7 @@ fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Re
         let h = cast_plain::<Head<bch_sb>>(buf).expect("a superblock buffer, holding a header");
 
         if h.magic.b != BCACHE_MAGIC && h.magic.b != BCHFS_MAGIC {
-            prt!(err, "Not a bcachefs superblock (got magic ");
-            err.uuid(&h.magic);
-            prt!(err, ")");
+            prt!(err, "Not a bcachefs superblock (got magic {})", h.magic);
             return Err(bch_errcode::BCH_ERR_invalid_sb_magic.into());
         }
 

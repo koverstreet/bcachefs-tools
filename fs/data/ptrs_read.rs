@@ -87,7 +87,7 @@ impl c::bch_io_failures {
                     let mut out = out.atomic();
                     let rcu = read_lock();
                     match fs.dev_rcu(f.dev.into(), &rcu) {
-                        Some(ca) => out.write_bytes(ca.name().to_bytes()),
+                        Some(ca) => write!(out, "{ca}"),
                         None => write!(out, "(invalid device {})", f.dev),
                     }
                 }

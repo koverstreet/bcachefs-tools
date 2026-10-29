@@ -532,7 +532,7 @@ pub fn bch2_check_reconcile_work(c: &Opaque<c::bch_fs>) -> c_int {
 pub fn rotational_changed(fs: &Fs, ca: &c::bch_dev) {
     let mut msg = LogMsg::with_level(fs, LogLevel::INFO);
     write!(msg, "{}: rotational changed, repairing backpointer reconcile phys bits\n",
-           ca.name().to_str().unwrap_or("?"));
+           ca);
 
     // Silence first, in its own write: an online pass starts as soon as it's
     // scheduled, and has to see the silenced errors

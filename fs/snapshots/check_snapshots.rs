@@ -46,7 +46,7 @@ use crate::init::progress::Progress;
 use crate::inode;
 use crate::snapshots::{delete, snapshot, subvolume};
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
-use crate::util::{Printbuf, ToText};
+use crate::util::{Join, Printbuf, ToText};
 use crate::{bch_err, bch_err_fn, fsck_err, fsck_err_on, fsck_err_report, inode_fsck_err, prt};
 use core::fmt;
 use cstruct_macros::c_export;
@@ -1103,21 +1103,6 @@ crate::recovery_pass!(bch2_check_snapshots => check_snapshots);
 
 /* reconstruct_snapshots: */
 
-/// Space separated.
-struct IdList<'l>(&'l [u32]);
-
-impl fmt::Display for IdList<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, id) in self.0.iter().enumerate() {
-            if i != 0 {
-                f.write_str(" ")?;
-            }
-            write!(f, "{id}")?;
-        }
-        Ok(())
-    }
-}
-
 /// Which snapshot ids belong to the same tree, from the keys: every version
 /// of one inode is in one tree.
 struct TreeReconstruct {
@@ -1214,7 +1199,7 @@ fn reconstruct_node(t: &TransAttempt<'_, '_>, id: u32, tree: &[u32]) -> Result<(
 
     if fsck_err_on!(t, fs.snapshots.id_state(id) == IdState::SNAPSHOT_ID_empty,
                     id::snapshot_node_missing,
-                    "snapshot node {id} from tree {} missing, recreate?", IdList(tree))? {
+                    "snapshot node {id} from tree {} missing, recreate?", Join(" ", tree.iter()))? {
         if tree.len() > 1 {
             bch_err!(fs, "cannot reconstruct snapshot trees with multiple nodes");
             return Err(fs.err(bch_errcode::BCH_ERR_fsck_repair_unimplemented));

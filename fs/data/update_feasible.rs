@@ -91,7 +91,7 @@ impl Fs {
 
             if let Some(out) = trace.as_deref_mut() {
                 write!(out, "{}: durability {} free {free} \n",
-                       ca.name().to_str().unwrap_or("?"), ca.mi.get().durability);
+                       ca, ca.mi.get().durability);
             }
         }
         ret

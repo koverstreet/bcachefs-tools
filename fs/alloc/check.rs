@@ -789,7 +789,7 @@ fn dev_freespace_init(fs: &Fs, ca: &c::bch_dev, bucket_start: u64, bucket_end: u
     while bkey_lt(iter.pos(), end) {
         if local_clock() > last_updated + 10 * u64::from(c::NSEC_PER_SEC) {
             bch_info!(fs, "{}: bch2_dev_freespace_init: currently at {}/{}",
-                      ca.name().to_str().unwrap_or("?"), { iter.pos().offset }, ca.mi.get().nbuckets);
+                      ca, { iter.pos().offset }, ca.mi.get().nbuckets);
             last_updated = local_clock();
         }
 

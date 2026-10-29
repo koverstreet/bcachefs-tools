@@ -162,12 +162,11 @@ fn print(fs: &Fs, level: u8, prefix: bool, msg: &dyn ToText, newline: bool) {
 /// @msg at @level after device @ca's name, as C's bch_dev_log() - in
 /// userspace too, unlike the filesystem's.
 pub fn log_dev(ca: &c::bch_dev, level: LogLevel, msg: &dyn ToText) {
-    let name = ca.name().to_str().unwrap_or("?");
     let msg = crate::util::printbuf::Msg(|out: &mut Printbuf| {
         #[cfg(kernel)]
-        write!(out, "bcachefs ({name}): ");
+        write!(out, "bcachefs ({ca}): ");
         #[cfg(not(kernel))]
-        write!(out, "{name}: ");
+        write!(out, "{ca}: ");
         msg.to_text(out);
     });
     print(ca.fs(), level.0, false, &msg, true)

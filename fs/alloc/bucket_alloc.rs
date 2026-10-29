@@ -167,7 +167,7 @@ impl Fs {
             let _mark = self.mark_lock().read();
             dev_wait_amount(ca).0
         };
-        write!(out, "dev\t{} ({})\n", ca.name().to_str().unwrap_or("?"), ca.dev_idx);
+        write!(out, "dev\t{} ({})\n", ca, ca.dev_idx);
         write!(out, "avail\t{}\n", ca.free_buckets_at(&req.usage, req.watermark));
         write!(out, "copygc dev wait\t{copygc_dev_wait}\n");
         write!(out, "watermark\t{}\n", req.watermark.name());

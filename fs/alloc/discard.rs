@@ -785,7 +785,7 @@ pub(crate) fn do_discards_fast(ca: &c::bch_dev) {
     ret = w.finish(&trans).and(ret);
 
     fs.event_inc_trace(events::bucket_discard_fast_worker, |out| {
-        prt!(out, "dev {}: ret {}\n", ca.name().to_str().unwrap_or("?"),
+        prt!(out, "dev {}: ret {}\n", ca,
              ret.as_ref().map_or_else(|e| e.msg(), |()| "0"));
         discard_state_to_text(out, &s.read());
     });
@@ -964,7 +964,7 @@ pub(crate) fn do_invalidates_work(ca: &c::bch_dev) {
         }
         Ok(())
     })();
-    let _ = bch_err_msg!(fs, ret, "invalidating buckets on {}", ca.name().to_str().unwrap_or("?"));
+    let _ = bch_err_msg!(fs, ret, "invalidating buckets on {}", ca);
 }
 
 impl c::bch_dev {

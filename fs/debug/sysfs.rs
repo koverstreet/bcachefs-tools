@@ -156,7 +156,7 @@ const INTERNAL: &[Attr<Fs>] = &[
     Attr::ro(c"copy_gc_wait",           |c, out| c.copygc_wait_to_text(out)),
     Attr::ro(c"moving_ctxts",           |c, out| c.moving_ctxts_to_text(out)),
     Attr::ro(c"recent_counters",        |c, out| c.counters.recent_to_text(out)),
-    Attr::ro(c"internal_uuid",          |c, out| { out.uuid(&c.sb.uuid()); out.newline() }),
+    Attr::ro(c"internal_uuid",          |c, out| prt!(out, "{}\n", c.sb.uuid())),
     Attr::ro(c"disk_groups",            |c, out| c.disk_groups_to_text(out)),
     Attr::ro(c"alloc_debug",            |c, out| {
         c.alloc_debug_to_text(out);
@@ -563,7 +563,7 @@ pub unsafe extern "C" fn bch2_opts_create_sysfs_files(kobj: *mut c::kobject, ty:
 // Its own files, and the device options' - added at runtime, as options/'s.
 
 const DEV: &[Attr<c::bch_dev>] = &[
-    Attr::ro(c"uuid",                   |ca, out| { out.uuid(&ca.uuid); out.newline() }),
+    Attr::ro(c"uuid",                   |ca, out| prt!(out, "{}\n", ca.uuid)),
     Attr::ro(c"first_bucket",           |ca, out| writeln!(out, "{}", ca.mi.get().first_bucket)),
     Attr::ro(c"nbuckets",               |ca, out| writeln!(out, "{}", ca.mi.get().nbuckets)),
 

@@ -868,7 +868,7 @@ impl Fs {
     }
 
     fn dev_alloc_debug_header(out: &mut Printbuf, ca: &c::bch_dev) {
-        write!(out, "Dev {} ({}): {}", ca.name().to_str().unwrap_or("?"), ca.dev_idx, member_state_str(ca.mi.get().state));
+        write!(out, "Dev {} ({}): {}", ca, ca.dev_idx, member_state_str(ca.mi.get().state));
         if !ca.is_online() {
             write!(out, " (offline)");
         }

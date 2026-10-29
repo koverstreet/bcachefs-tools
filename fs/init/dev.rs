@@ -47,7 +47,7 @@ impl Fs {
                 write!(out, " ");
             }
             match self.dev_rcu(dev.into(), &rcu) {
-                Some(ca) => out.write_bytes(ca.name().to_bytes()),
+                Some(ca) => write!(out, "{ca}"),
                 None     => write!(out, "(invalid device {dev})"),
             }
         }

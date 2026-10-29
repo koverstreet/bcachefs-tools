@@ -849,9 +849,7 @@ impl Fs {
             let mut out = out.atomic();
             write!(out, "Currently calculated wait:\n");
             for ca in self.rw_devs_rcu(&rcu) {
-                write!(out, "  ");
-                out.write_bytes(ca.name().to_bytes());
-                prt!(out, ":\t{}\n", HumanReadable(dev_wait_amount(ca).0));
+                prt!(out, "  {}:\t{}\n", ca, HumanReadable(dev_wait_amount(ca).0));
             }
         }
 

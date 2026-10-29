@@ -565,7 +565,7 @@ pub(crate) fn scrub_stripe_block(ctxt: &Moving<'_>, t: &TransAttempt<'_, '_>, ca
     let ty = c::bch_csum_type(s.v().csum_type.into());
     let mut msg = log_msg_ratelimited!(fs);
     write!(msg, "scrub: stripe block {block} on {}: {} sectors don't match the stripe's checksums, expected ",
-           ca.name().to_str().unwrap_or("(invalid name)"), r.bad_sectors);
+           ca, r.bad_sectors);
     r.want.to_text(&mut msg, ty);
     write!(msg, " got ");
     r.got.to_text(&mut msg, ty);

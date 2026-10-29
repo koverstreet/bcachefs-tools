@@ -491,6 +491,7 @@ use crate::util::kernel::{READ, WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::log::LogMsg;
 use crate::util::varint;
+use crate::util::Join;
 use crate::util::vstructs::{ArmRef, Validated};
 use crate::util::{Printbuf, ToText};
 use crate::{bkey_fsck_err_on, btree_trans, prt};
@@ -1079,9 +1080,7 @@ pub fn bch2_bucket_gens_validate(c: &Opaque<c::bch_fs>, k: BkeySC<'_>, from: &c:
 #[c_export]
 pub fn bch2_bucket_gens_to_text(out: &mut Printbuf, _c: Option<&Opaque<c::bch_fs>>, k: BkeySC<'_>) {
     if let Some(g) = k.arm::<c::BucketGens>() {
-        for (i, gen) in g.v().gens.iter().enumerate() {
-            prt!(out, "{}{gen}", if i != 0 { " " } else { "" });
-        }
+        prt!(out, "{}", Join(" ", g.v().gens.iter()));
     }
 }
 

@@ -7,7 +7,7 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::prt;
 use crate::util::kernel::{ktime_get_real_seconds, nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
 use crate::util::workqueue::Queue;
-use crate::util::{Bytes, DateTime, HumanReadable, Nsecs, Printbuf, Sectors};
+use crate::util::{Bytes, DateTime, HumanReadable, Nsecs, Printbuf, Sectors, ToText};
 use crate::util::log::{print_str, LogLevel, LogMsg};
 use crate::init::error::{count_fsck_err, id};
 use crate::init::passes;
@@ -513,7 +513,7 @@ pub fn member_to_text<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &c:
 
     label_to_text(out, m, sb);
     failure_domain_to_text(out, m);
-    write!(out, "UUID:\t{}\n", uuid::Uuid::from_bytes(m.uuid.b));
+    prt!(out, "UUID:\t{}\n", m.uuid);
     prt!(out, "Size:\t{}\n", Sectors(m.nbuckets.get() * bucket_size));
 
     for (name, e) in MEMBER_ERROR_NAMES.iter().zip(&m.errors) {
@@ -981,7 +981,7 @@ crate::fs_delayed_work! {
             let bitmap_sectors = u64::from(ca.mi.get().btree_allocated_bitmap.count_ones()) << ca.mi.get().btree_bitmap_shift;
 
             if btree_sectors * 4 < bitmap_sectors {
-                prt!(msg, "{} has {} btree buckets and {} marked in bitmap\n", ca.name().to_str().unwrap_or("?"),
+                prt!(msg, "{} has {} btree buckets and {} marked in bitmap\n", *ca,
                      HumanReadable(btree_sectors << 9), HumanReadable(bitmap_sectors << 9));
                 want_schedule = true;
             }
@@ -1073,7 +1073,7 @@ impl Fs {
         let mut out = out.atomic();
         let rcu = read_lock();
         match self.dev_rcu(dev, &rcu) {
-            Some(ca) => out.write_bytes(ca.name().to_bytes()),
+            Some(ca) => write!(out, "{ca}"),
             None     => write!(out, "(invalid device {dev})"),
         }
     }
@@ -1301,7 +1301,7 @@ impl c::bch_dev {
     /// inconsistency.
     pub fn bucket_missing(&self, bucket: u64) {
         crate::fs_inconsistent!(self.fs(), "pointer to nonexistent bucket {bucket} on device {} (valid range {}-{})",
-                                self.name().to_str().unwrap_or("?"), self.mi.get().first_bucket, self.mi.get().nbuckets);
+                                self, self.mi.get().first_bucket, self.mi.get().nbuckets);
     }
 }
 
@@ -1671,6 +1671,14 @@ impl c::bch_dev {
         if self.is_rw() { self.mi.get().durability.into() } else { 0 }
     }
 }
+
+/// A device prints as its name, as C's messages name it.
+impl ToText for c::bch_dev {
+    fn to_text(&self, out: &mut Printbuf) {
+        out.write_bytes(self.name().to_bytes())
+    }
+}
+crate::display_via_to_text!(c::bch_dev);
 
 #[cfg(test)]
 mod tests {

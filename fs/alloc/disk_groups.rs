@@ -73,6 +73,7 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::opts::OptFn;
 use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState};
 use crate::sb::members;
+use crate::prt;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::{Head, Unvalidated, Validated};
@@ -333,8 +334,7 @@ impl Fs {
 
                 match self.dev_rcu(d, &rcu) {
                     Some(ca) if !ca.disk_sb.bdev.is_null() => {
-                        write!(out, "/dev/");
-                        out.write_bytes(ca.name().to_bytes());
+                        write!(out, "/dev/{ca}");
                     }
                     Some(_) => write!(out, "offline device {d}"),
                     None    => write!(out, "invalid device {d}"),
@@ -394,7 +394,7 @@ fn target_to_text_sb<S: SbState>(out: &mut Printbuf, sb: &c::bch_sb<S>, target: 
         Target::Dev(d) => {
             let m = members::sb_member(sb, d).filter(|m| d < u32::from(S::head(sb).nr_devices) && m.alive());
             match m {
-                Some(m) => write!(out, "Device {} ({d})", uuid::Uuid::from_bytes(m.uuid.b)),
+                Some(m) => prt!(out, "Device {} ({d})", m.uuid),
                 None    => write!(out, "Bad device {d}"),
             }
         }
@@ -489,8 +489,7 @@ impl Fs {
 
                 write!(out, " devs");
                 for ca in self.devs_rcu_in(e.devs.d.iter(), &rcu) {
-                    write!(out, " ");
-                    out.write_bytes(ca.name().to_bytes());
+                    write!(out, " {ca}");
                 }
             } else {
                 write!(out, "[deleted]");

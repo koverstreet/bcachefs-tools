@@ -16,7 +16,7 @@ use core::ffi::CStr;
 use core::marker::PhantomData;
 
 use crate::util::ffi::c_char;
-use crate::util::{Printbuf, ToText};
+use crate::util::{Join, Printbuf, ToText};
 
 pub trait Names {
     /// Each labelled variant's name and value - a flags type's, its bit - in
@@ -40,12 +40,7 @@ pub fn prt_name(out: &mut Printbuf, entries: &[(&'static str, u64)], v: u64) {
 /// The names of the bits set in @v, comma separated.
 pub fn prt_flags(out: &mut Printbuf, entries: &[(&'static str, u64)], v: u64) {
     let set = entries.iter().filter(|&&(_, bit)| bit < 64 && v & 1 << bit != 0);
-    for (i, (name, _)) in set.enumerate() {
-        if i != 0 {
-            write!(out, ",");
-        }
-        write!(out, "{name}");
-    }
+    write!(out, "{}", Join(",", set.map(|&(name, _)| name)));
 }
 
 /// The names of @T's values, indexed by value - "" for a value none has: a

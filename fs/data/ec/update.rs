@@ -23,7 +23,7 @@ use crate::sb::counters::events;
 use crate::util::ffi::Opaque;
 use crate::util::log::LogMsg;
 use crate::util::vstructs::Validated;
-use crate::util::Printbuf;
+use crate::util::{Join, Printbuf};
 use crate::{bch_err, fs_inconsistent, fsck_err_flags, logged_ops, prt};
 use core::mem::size_of;
 use core::ops::RangeInclusive;
@@ -361,8 +361,5 @@ pub fn bch2_logged_op_stripe_update_to_text(out: &mut Printbuf, _c: &Opaque<c::b
     prt!(out, " old_blocks_nr={}", op.old_blocks_nr);
 
     let nr = usize::from(op.old_blocks_nr).min(op.old_block_map.len());
-    prt!(out, " old_block_map=");
-    for (i, b) in op.old_block_map[..nr].iter().enumerate() {
-        prt!(out, "{}{}", if i != 0 { "," } else { "" }, b);
-    }
+    prt!(out, " old_block_map={}", Join(",", op.old_block_map[..nr].iter()));
 }
