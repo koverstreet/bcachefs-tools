@@ -435,8 +435,8 @@ pub struct bch_dev {
 
     /* open buckets still free: under freelist_lock, read without it */
     pub nr_open_buckets: crate::util::projections::Volatile<c_uint>,
-    /* on the partial list: under freelist_lock */
-    pub nr_partial_buckets: c_uint,
+    /* on the partial list: written under freelist_lock */
+    pub nr_partial_buckets: crate::util::projections::Volatile<c_uint>,
     pub nr_btree_reserve: c_uint,
 
     /* this device's share of c->capacity.reserved, which is their sum:
