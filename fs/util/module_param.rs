@@ -16,8 +16,11 @@
 //! C reads a module parameter: an untorn read of a value that may change
 //! underneath, ordered against nothing.
 //!
-//! Loadable only, as bcachefs is (DKMS): the name has no "bcachefs." prefix,
-//! and kernel_param.mod is __this_module, which only a module has.
+//! Loadable, as bcachefs ships (DKMS), or built in - cfg(MODULE), which kbuild
+//! sets for a module's objects. Built in, as C's moduleparam.h has it, there
+//! is no __this_module for kernel_param.mod, and the name and the .modinfo
+//! strings are prefixed "bcachefs.": MODULE_PARAM_PREFIX and
+//! __MODULE_INFO_PREFIX.
 //!
 //! The registration and the .modinfo strings are #[used(compiler)], as the
 //! kernel crate's are: plain #[used] is used(linker) from Rust 1.89, and the
@@ -143,6 +146,13 @@ pub const fn modinfo<const LEN: usize>(parts: &[&str]) -> [u8; LEN] {
     out
 }
 
+/// What C's __MODULE_INFO_PREFIX puts before a .modinfo tag: nothing in a
+/// module, the module's name built in.
+#[cfg(all(kernel, MODULE))]
+pub const MODINFO_PREFIX: &str = "";
+#[cfg(all(kernel, not(MODULE)))]
+pub const MODINFO_PREFIX: &str = "bcachefs.";
+
 /// A module parameter, as C's module_param_named() and MODULE_PARM_DESC():
 ///
 /// ```text
@@ -174,7 +184,7 @@ macro_rules! module_param {
         $(#[$reg])*
         const _: () = {
             use $crate::util::module_param::{modinfo, modinfo_len, verify_perm, KernelParam,
-                                             ParamType};
+                                             ParamType, MODINFO_PREFIX};
 
             #[link_section = "__param"]
             #[used(compiler)]
@@ -197,12 +207,13 @@ macro_rules! module_param {
             });
 
             const PARMTYPE: &[&str] =
-                &["parmtype=", ::core::stringify!($name), ":", <$t as ParamType>::C_NAME];
+                &[MODINFO_PREFIX, "parmtype=", ::core::stringify!($name), ":", <$t as ParamType>::C_NAME];
             #[link_section = ".modinfo"]
             #[used(compiler)]
             static PARMTYPE_INFO: [u8; modinfo_len(PARMTYPE)] = modinfo(PARMTYPE);
 
-            const PARM: &[&str] = &["parm=", ::core::stringify!($name), ":", $desc];
+            const PARM: &[&str] =
+                &[MODINFO_PREFIX, "parm=", ::core::stringify!($name), ":", $desc];
             #[link_section = ".modinfo"]
             #[used(compiler)]
             static PARM_INFO: [u8; modinfo_len(PARM)] = modinfo(PARM);
