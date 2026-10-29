@@ -1410,7 +1410,7 @@ fn rewrite_primary_super(sb: &mut bch_sb_handle) -> Result<(), BchError> {
 /// The shim's buffered open, without direct_io: nothing, in the kernel.
 fn open_buffered(opts: &c::bch_opts) -> c::blk_mode_t {
     #[cfg(not(kernel))]
-    return if crate::opt_get!(opts, direct_io) == 0 { c::BLK_OPEN_BUFFERED } else { 0 };
+    return if !opts.direct_io_or_default() { c::BLK_OPEN_BUFFERED } else { 0 };
     #[cfg(kernel)]
     {
         let _ = opts;
@@ -1424,7 +1424,7 @@ fn open_buffered(opts: &c::bch_opts) -> c::blk_mode_t {
 fn buffered_instead(opts: &mut c::bch_opts) -> bool {
     #[cfg(not(kernel))]
     {
-        crate::opt_set!(opts, direct_io, 0);
+        opts.set_direct_io(false);
         true
     }
     #[cfg(kernel)]
@@ -1458,10 +1458,10 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, err: &mut Printbu
     sb.dev.sb_name = p.as_ptr().cast();
 
     sb.dev.mode |= open_buffered(opts);
-    if crate::opt_get!(opts, noexcl) == 0 {
+    if !opts.noexcl_or_default() {
         sb.dev.mode |= c::BLK_OPEN_EXCL;
     }
-    if crate::opt_get!(opts, nochanges) == 0 {
+    if !opts.nochanges_or_default() {
         sb.dev.mode |= c::BLK_OPEN_WRITE;
     }
 
@@ -1473,11 +1473,11 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, err: &mut Printbu
     };
 
     let mut file = open(sb.dev.mode, sb.dev.holder);
-    if matches!(&file, Err(e) if e.raw() == c::EACCES as i32) && crate::opt_get!(opts, read_only) != 0 {
+    if matches!(&file, Err(e) if e.raw() == c::EACCES as i32) && opts.read_only_or_default() {
         sb.dev.mode &= !c::BLK_OPEN_WRITE;
         file = open(sb.dev.mode, sb.dev.holder);
         if file.is_ok() {
-            crate::opt_set!(opts, nochanges, 1);
+            opts.set_nochanges(true);
         }
     }
 
@@ -1504,10 +1504,10 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, err: &mut Printbu
 
     sb.sb_realloc(0)?;
 
-    let (sb_offset, primary_bad) = if crate::opt_defined!(opts, sb) {
+    let (sb_offset, primary_bad) = if opts.defined(c::bch_opt_id::Opt_sb) {
         // a superblock asked for, for recovery or debugging: that one, no
         // scan or fallback
-        let offset = crate::opt_get!(opts, sb);
+        let offset = opts.sb();
         read_one_super(&mut sb, offset, err)?;
         (offset, false)
     } else {
@@ -1534,7 +1534,7 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, err: &mut Printbu
 
     let block_bytes = u32::from(header(&mut sb).block_size.get()) << 9;
     let dev_block = crate::util::kernel::bdev_logical_block_size(sb.dev.bdev());
-    if block_bytes < dev_block && crate::opt_get!(opts, direct_io) != 0 {
+    if block_bytes < dev_block && opts.direct_io_or_default() {
         if buffered_instead(opts) {
             return Err(c::EINTR.into());
         }

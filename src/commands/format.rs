@@ -8,11 +8,12 @@
 // - Several options (--encrypted, --replicas, --label) have special handling
 //   that maps to multiple underlying C opts.
 //
-// The format flow: parse args → build bch_opt_strs → call bch2_format() →
-// optionally write encryption key → print superblock.
+// The format flow: parse args → collect the options resolved after the
+// superblock exists (targets, a device's label) → call format() → optionally
+// write encryption key → print superblock.
 //
 // Per-device options work by accumulating device entries with their own
-// bch_opt_strs. When a bare path argument is seen, it captures whatever
+// option strings. When a bare path argument is seen, it captures whatever
 // per-device options preceded it.
 
 use std::collections::HashMap;
@@ -27,8 +28,7 @@ use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::sb::sb_field_type;
-use bcachefs_kernel::{metadata_version, opt_id};
-use bcachefs_kernel::opt_set;
+use bcachefs_kernel::metadata_version;
 
 use crate::commands::format_util::DevOpts;
 use crate::commands::opts::{bch_opt_lookup_negated, opts_usage_str, parse_opt_val};
@@ -359,8 +359,8 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                     if v == 0 || v > BCH_REPLICAS_MAX {
                         bail!("invalid replicas");
                     }
-                    opt_set!(fs_opts, metadata_replicas, v as u8);
-                    opt_set!(fs_opts, data_replicas, v as u8);
+                    fs_opts.set_metadata_replicas(v as u8);
+                    fs_opts.set_data_replicas(v as u8);
                 }
                 "encrypted" => encrypted = true,
                 "passphrase_file" => {
@@ -567,13 +567,6 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         fmt_opts.passphrase = p.get().as_ptr() as *mut c_char;
     }
 
-    // Build bch_opt_strs for deferred options
-    let mut fs_opt_strs: c::bch_opt_strs = Default::default();
-    for &(id, ref val) in &cfg.deferred_opts {
-        let cstr = CString::new(val.as_str())?;
-        fs_opt_strs.set(id, &cstr);
-    }
-
     let mut devices: Vec<DevOpts> = cfg.devices.iter()
         .map(|dev| {
             let mut d = DevOpts::new(CString::new(dev.path.as_str())?);
@@ -609,7 +602,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
     // (cpu-scaled, fs-size-capped, clamped to [0, 8]) is shard_bits_default(),
     // which superblock validate's rewrite of legacy bits=0 filesystems uses
     // too, so the two can't diverge.
-    if !cfg.fs_opts.defined(opt_id::shard_inode_numbers_bits) {
+    if !cfg.fs_opts.defined(c::bch_opt_id::Opt_shard_inode_numbers_bits) {
         let nr_cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1) as u32;
@@ -633,11 +626,11 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         };
 
         let bits = bcachefs_kernel::inode::shard_bits_default(nr_cpus, total_fs_size,
-                                                              btree_node_bytes) as u64;
-        cfg.fs_opts.set(opt_id::shard_inode_numbers_bits, bits);
+                                                              btree_node_bytes);
+        cfg.fs_opts.set_shard_inode_numbers_bits(bits as u8);
     }
 
-    let Some(sb) = crate::commands::format_util::format(fs_opt_strs, cfg.fs_opts, fmt_opts, &mut devices) else {
+    let Some(sb) = crate::commands::format_util::format(&cfg.deferred_opts, cfg.fs_opts, fmt_opts, &mut devices) else {
         bail!("format failed");
     };
 
@@ -678,9 +671,6 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
             ret => Err(bcachefs_kernel::errcode::BchError::from_raw(ret)),
         }).map_err(|e| anyhow!("error shutting down {}: {}", dev_paths[0].display(), e))?;
     }
-
-    // Free deferred option strings
-    fs_opt_strs.free();
 
     Ok(())
 }

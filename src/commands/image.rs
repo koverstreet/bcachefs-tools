@@ -21,7 +21,6 @@ use crate::copy_fs::{CopyFsState, copy_fs};
 use bcachefs_kernel::data::moving::{MoveStats, MovingCtxt};
 use bcachefs_kernel::alloc::disk_groups::Target;
 use bcachefs_kernel::fs::{Fs, btree_id_is_alloc, writepoint_hashed};
-use bcachefs_kernel::opt_set;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::sb::sb_field_type;
 use bcachefs_kernel::{POS_MIN, SPOS_MAX, pos};
@@ -389,7 +388,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
 
 /// Create a new filesystem image from a directory.
 fn image_create_inner(
-    fs_opt_strs: c::bch_opt_strs,
+    fs_opt_strs: &[(c::bch_opt_id, String)],
     fs_opts: c::bch_opts,
     mut format_opts: c::format_opts,
     dev_opts: DevOpts,
@@ -419,15 +418,11 @@ fn image_create_inner(
 
     {
         let dev0_opts = &mut devs[0].opts;
-        opt_set!(dev0_opts, data_allowed, data_type::user.bit() as u8);
+        dev0_opts.set_data_allowed(data_type::user.bit() as u8);
     }
     {
         let meta_opts = &mut meta_dev.opts;
-        opt_set!(
-            meta_opts,
-            data_allowed,
-            (data_type::journal.bit() | data_type::btree.bit()) as u8
-        );
+        meta_opts.set_data_allowed((data_type::journal.bit() | data_type::btree.bit()) as u8);
     }
     devs.push(meta_dev);
 
@@ -467,9 +462,9 @@ fn image_create_inner(
     drop(devs);
 
     let mut opts: c::bch_opts = Default::default();
-    opt_set!(opts, copygc_enabled, 0u8);
-    opt_set!(opts, reconcile_enabled, 0u8);
-    opt_set!(opts, nostart, 1u8);
+    opts.set_copygc_enabled(false);
+    opts.set_reconcile_enabled(false);
+    opts.set_nostart(true);
 
     let fs = Fs::open(&device_paths, opts)
         .map_err(|e| anyhow!("error opening {}: {}", device_paths[0].display(), e))?;
@@ -548,9 +543,9 @@ fn image_update_inner(
 
     // Open filesystem
     let mut opts: c::bch_opts = Default::default();
-    opt_set!(opts, copygc_enabled, 0u8);
-    opt_set!(opts, reconcile_enabled, 0u8);
-    opt_set!(opts, nostart, 1u8);
+    opts.set_copygc_enabled(false);
+    opts.set_reconcile_enabled(false);
+    opts.set_nostart(true);
 
     let fs = Fs::open(&[PathBuf::from(dst_image)], opts)
         .map_err(|e| anyhow!("error opening image: {}", e))?;
@@ -782,8 +777,8 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                     if v == 0 || v > BCH_REPLICAS_MAX {
                         bail!("invalid replicas");
                     }
-                    opt_set!(fs_opts, metadata_replicas, v as u8);
-                    opt_set!(fs_opts, data_replicas, v as u8);
+                    fs_opts.set_metadata_replicas(v as u8);
+                    fs_opts.set_data_replicas(v as u8);
                 }
                 "encrypted" => encrypted = true,
                 "passphrase_file" => {
@@ -929,13 +924,6 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
         fmt_opts.passphrase = p.get().as_ptr() as *mut c_char;
     }
 
-    // Build bch_opt_strs for deferred options
-    let mut fs_opt_strs: c::bch_opt_strs = Default::default();
-    for &(id, ref val) in &deferred_opts {
-        let cstr = CString::new(val.as_str())?;
-        fs_opt_strs.set(id, &cstr);
-    }
-
     // Build DevOpts
     let mut d = DevOpts::new(path_cstr);
     d.fs_size = dev_fs_size;
@@ -944,19 +932,15 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
         d.opt_strs.push((c::bch_opt_id::Opt_label, l));
     }
 
-    let result = image_create_inner(
-        fs_opt_strs,
+    image_create_inner(
+        &deferred_opts,
         fs_opts,
         fmt_opts,
         d,
         &source,
         keep_alloc,
         verbosity,
-    );
-
-    fs_opt_strs.free();
-
-    result
+    )
 }
 
 /// Update a filesystem image, minimizing changes

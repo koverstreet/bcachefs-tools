@@ -26,7 +26,7 @@ use anyhow::{bail, Result};
 use crate::wrappers::sysfs::DevInfo;
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use bch_bindgen::fs::FsExt;
-use bcachefs_kernel::{c, opt_defined, opt_get, opt_set};
+use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::util::darray::DarrayVec;
@@ -40,9 +40,9 @@ use crate::device_multipath::{
 };
 
 pub fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> Result<bch_sb_handle, BchError> {
-    opt_set!(opts, noexcl, 1);
-    opt_set!(opts, nochanges, 1);
-    opt_set!(opts, no_version_check, 1);
+    opts.set_noexcl(true);
+    opts.set_nochanges(true);
+    opts.set_no_version_check(true);
 
     bch_bindgen::sb::io::read_super_silent(path.as_ref(), opts)
 }
@@ -243,7 +243,7 @@ pub fn filter_current_sbs(
 	// that was properly removed, leaving nothing to tell them apart afterwards.
 	// The short device count then reads as "a disk is missing", so mount asks
 	// whether to go degraded, and yes silently picks one of two histories.
-	if opt_get!(opts, no_splitbrain_check) == 0 {
+	if !opts.no_splitbrain_check_or_default() {
 		let divergent = crate::splitbrain::find(&sbs, &opts);
 		if !divergent.is_empty() {
 			// One warning, not one per line: the report is a single
@@ -401,8 +401,8 @@ fn have_every_device(sbs: &[(PathBuf, bch_sb_handle)]) -> bool {
 /// since every filesystem written before the option existed reads back zero, so
 /// it falls through to the same built-in as having found nothing at all.
 fn missing_dev_timeout(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> Duration {
-    if opt_defined!(cli_opts, missing_dev_timeout) {
-        return Duration::from_secs(opt_get!(cli_opts, missing_dev_timeout) as u64);
+    if cli_opts.defined(c::bch_opt_id::Opt_missing_dev_timeout) {
+        return Duration::from_secs(cli_opts.missing_dev_timeout() as u64);
     }
 
     let Some((_, sb)) = sbs.first() else {
@@ -412,7 +412,7 @@ fn missing_dev_timeout(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) ->
     let mut sb_opts: bch_opts = Default::default();
     bcachefs_kernel::opts::opts_from_sb(&mut sb_opts, sb.sb().as_unvalidated());
 
-    match opt_get!(sb_opts, missing_dev_timeout) {
+    match sb_opts.missing_dev_timeout_or_default() {
         0 => DEFAULT_MISSING_DEV_TIMEOUT,
         secs => Duration::from_secs(secs as u64),
     }
@@ -654,7 +654,7 @@ where
 fn scan_sbs_maybe_waiting(device: &String, opts: &bch_opts, wait: bool)
     -> Result<Vec<(PathBuf, bch_sb_handle)>>
 {
-    let udev = opt_get!(opts, mount_trusts_udev) != 0;
+    let udev = opts.mount_trusts_udev_or_default();
 
     if let Some(uuid) = parse_uuid_equals(device)? {
         return search(opts, wait, || get_devices_by_uuid(uuid, opts, udev));
@@ -666,9 +666,9 @@ fn scan_sbs_maybe_waiting(device: &String, opts: &bch_opts, wait: bool)
 
     if device.contains(':') {
         let mut opts = *opts;
-        opt_set!(opts, noexcl, 1);
-        opt_set!(opts, nochanges, 1);
-        opt_set!(opts, no_version_check, 1);
+        opts.set_noexcl(true);
+        opts.set_nochanges(true);
+        opts.set_no_version_check(true);
 
         // If the device string contains ":" we will assume the user knows the
         // entire list. If they supply a single device it could be either the FS

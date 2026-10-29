@@ -9,7 +9,7 @@ use std::os::unix::io::RawFd;
 
 use bch_bindgen::c;
 use bcachefs_kernel::alloc::disk_groups::Target;
-use bcachefs_kernel::{metadata_version, opt_defined, opt_get, opt_set};
+use bcachefs_kernel::metadata_version;
 
 use crate::wrappers::super_io::{die, SUPERBLOCK_SIZE_DEFAULT};
 use bcachefs_kernel::sb::io::BCHFS_MAGIC;
@@ -99,14 +99,12 @@ const BCH_SB_FEATURES_ALL: u64 = {
 fn parse_target(
     sb: &c::bch_sb_handle,
     devs: &[DevOpts],
-    s: *const std::os::raw::c_char,
+    s: Option<&str>,
 ) -> u16 {
-    if s.is_null() {
+    let Some(target_str) = s else {
         return 0;
-    }
-
-    let target_str = unsafe { CStr::from_ptr(s) };
-    let target_str_slice = target_str.to_bytes();
+    };
+    let target_str_slice = target_str.as_bytes();
 
     for (idx, dev) in devs.iter().enumerate() {
         if target_str_slice == dev.path.as_bytes() {
@@ -118,7 +116,7 @@ fn parse_target(
         return Target::Group(idx).encode();
     }
 
-    die(&format!("Invalid target {}", target_str.to_string_lossy()));
+    die(&format!("Invalid target {target_str}"));
 }
 
 /// Set all sb options from a bch_opts struct.
@@ -137,7 +135,7 @@ fn opt_set_sb_all(sb: &mut c::bch_sb_buf, dev_idx: Option<u32>, opts: &mut c::bc
 ///
 /// Exits on fatal errors (matching the C `die()` behavior).
 pub fn format(
-    fs_opt_strs: c::bch_opt_strs,
+    fs_opt_strs: &[(c::bch_opt_id, String)],
     mut fs_opts: c::bch_opts,
     mut opts: c::format_opts,
     dev_slice: &mut [DevOpts],
@@ -150,9 +148,9 @@ pub fn format(
         }
     }
 
-    if !opt_defined!(fs_opts, block_size) {
+    if !fs_opts.defined(c::bch_opt_id::Opt_block_size) {
         let block_size = pick_block_size(&fs_opts, dev_slice);
-        opt_set!(fs_opts, block_size, block_size as u16);
+        fs_opts.set_block_size(block_size as u16);
     }
 
     if fs_opts.block_size < 512 {
@@ -167,9 +165,9 @@ pub fn format(
 
     for dev in dev_slice.iter_mut() {
         let opts = &mut dev.opts;
-        if !opt_defined!(opts, bucket_size) {
+        if !opts.defined(c::bch_opt_id::Opt_bucket_size) {
             let clamped = dev_bucket_size_clamp(fs_opts, dev.fs_size, fs_bucket_size);
-            opt_set!(opts, bucket_size, clamped as u32);
+            opts.set_bucket_size(clamped as u32);
         }
     }
 
@@ -179,12 +177,12 @@ pub fn format(
     }
 
     // Calculate btree node size
-    if !opt_defined!(fs_opts, btree_node_size) {
+    if !fs_opts.defined(c::bch_opt_id::Opt_btree_node_size) {
         let mut s = bcachefs_kernel::opts::DEFAULTS.btree_node_size;
         for dev in dev_slice.iter() {
             s = s.min(dev.opts.bucket_size);
         }
-        opt_set!(fs_opts, btree_node_size, s);
+        fs_opts.set_btree_node_size(s);
     }
 
     if fs_opts.btree_node_size <= fs_opts.block_size as u32 {
@@ -272,9 +270,9 @@ pub fn format(
 
         let fd = dev.fd();
         let opts = &mut dev.opts;
-        if !opt_defined!(opts, rotational) {
+        if !opts.defined(c::bch_opt_id::Opt_rotational) {
             let nonrot = crate::wrappers::bdev::nonrot(fd);
-            opt_set!(opts, rotational, !nonrot as u8);
+            opts.set_rotational(!nonrot);
         }
 
         opt_set_sb_all(&mut sb, Some(idx as u32), &mut dev.opts);
@@ -308,11 +306,12 @@ pub fn format(
     }
 
     // Targets
-    let target_strs = unsafe { &fs_opt_strs.__bindgen_anon_1.__bindgen_anon_1 };
-    let foreground = parse_target(&sb, dev_slice, target_strs.foreground_target);
-    let background = parse_target(&sb, dev_slice, target_strs.background_target);
-    let promote    = parse_target(&sb, dev_slice, target_strs.promote_target);
-    let metadata   = parse_target(&sb, dev_slice, target_strs.metadata_target);
+    // the last given, as a later option overrides an earlier
+    let target_str = |id| fs_opt_strs.iter().rev().find(|(i, _)| *i == id).map(|(_, s)| s.as_str());
+    let foreground = parse_target(&sb, dev_slice, target_str(c::bch_opt_id::Opt_foreground_target));
+    let background = parse_target(&sb, dev_slice, target_str(c::bch_opt_id::Opt_background_target));
+    let promote    = parse_target(&sb, dev_slice, target_str(c::bch_opt_id::Opt_promote_target));
+    let metadata   = parse_target(&sb, dev_slice, target_str(c::bch_opt_id::Opt_metadata_target));
     sb.sb_mut().set_foreground_target(foreground as u64);
     sb.sb_mut().set_background_target(background as u64);
     sb.sb_mut().set_promote_target(promote as u64);
@@ -403,13 +402,12 @@ pub fn format_for_device_add(
     block_size: u32,
     btree_node_size: u32,
 ) -> i32 {
-    let fs_opt_strs: c::bch_opt_strs = Default::default();
     let mut fs_opts = c::bch_opts::default();
-    opt_set!(fs_opts, block_size, block_size as u16);
-    opt_set!(fs_opts, btree_node_size, btree_node_size);
+    fs_opts.set_block_size(block_size as u16);
+    fs_opts.set_btree_node_size(btree_node_size);
 
     let fmt_opts = format_opts_default();
-    format(fs_opt_strs, fs_opts, fmt_opts, std::slice::from_mut(dev));
+    format(&[], fs_opts, fmt_opts, std::slice::from_mut(dev));
 
     0
 }
@@ -450,7 +448,7 @@ fn dev_bucket_size_clamp(fs_opts: c::bch_opts, dev_size: u64, fs_bucket_size: u6
 
     // Largest bucket size that still gives >= 2048 buckets
     let mut max_size = rounddown_pow_of_two(dev_size / (min_nr_nbuckets * 4));
-    if opt_defined!(fs_opts, btree_node_size) {
+    if fs_opts.defined(c::bch_opt_id::Opt_btree_node_size) {
         max_size = max_size.max(fs_opts.btree_node_size as u64);
     }
     if max_size * min_nr_nbuckets > dev_size {
@@ -460,7 +458,7 @@ fn dev_bucket_size_clamp(fs_opts: c::bch_opts, dev_size: u64, fs_bucket_size: u6
     let mut dev_bucket_size = max_size.min(fs_bucket_size);
 
     // Buckets >= encoded_extent_max avoid fragmenting encoded extents
-    let extent_min = opt_get!(fs_opts, encoded_extent_max) as u64;
+    let extent_min = fs_opts.encoded_extent_max_or_default() as u64;
     while dev_bucket_size < extent_min && dev_bucket_size < max_size {
         dev_bucket_size *= 2;
     }
@@ -514,7 +512,7 @@ pub fn pick_block_size(_fs_opts: &c::bch_opts, dev_slice: &[DevOpts]) -> u32 {
 pub fn pick_bucket_size(opts: &c::bch_opts, devs: &[DevOpts]) -> u64 {
     // Hard minimum: bucket must hold a btree node
     let mut bucket_size = opts.block_size as u64;
-    if opt_defined!(opts, btree_node_size) {
+    if opts.defined(c::bch_opt_id::Opt_btree_node_size) {
         bucket_size = bucket_size.max(opts.btree_node_size as u64);
     }
 
@@ -541,7 +539,7 @@ pub fn pick_bucket_size(opts: &c::bch_opts, devs: &[DevOpts]) -> u64 {
     // Avoid fragmenting encoded (checksummed/compressed) extents
     // when they're moved — prefer buckets large enough for several
     // max-size extents
-    bucket_size = bucket_size.max(opt_get!(opts, encoded_extent_max) as u64 * 4);
+    bucket_size = bucket_size.max(opts.encoded_extent_max_or_default() as u64 * 4);
 
     // Prefer larger buckets up to 2MB — reduces allocator overhead.
     // Scales linearly with total filesystem size, reaching 2MB at 2TB
@@ -574,7 +572,7 @@ pub fn check_bucket_size(opts: &c::bch_opts, dev: &DevOpts) {
         ));
     }
 
-    if opt_defined!(opts, btree_node_size)
+    if opts.defined(c::bch_opt_id::Opt_btree_node_size)
         && dev.opts.bucket_size < opts.btree_node_size
     {
         die(&format!(

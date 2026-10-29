@@ -27,7 +27,7 @@ use crate::prompt::{fs_name, Choice, Prompt, Question, Watch, NO_ONE_TO_ASK, PRO
 
 use anyhow::Result;
 use bcachefs_kernel::errcode::{self, BchError};
-use bcachefs_kernel::{c, opt_defined, opt_get};
+use bcachefs_kernel::c;
 use c::bch_opts;
 use c::bch_sb_handle;
 use log::{info, warn};
@@ -44,13 +44,13 @@ fn sb_opts(sb: &bch_sb_handle) -> bch_opts {
 /// What the filesystem says to do about a missing device, unless the caller
 /// said otherwise on the command line.
 fn degraded_action(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> u8 {
-    if opt_defined!(cli_opts, degraded) {
-        return opt_get!(cli_opts, degraded);
+    if cli_opts.defined(c::bch_opt_id::Opt_degraded) {
+        return cli_opts.degraded();
     }
 
     sbs.first()
         .map(|(_, sb)| sb_opts(sb))
-        .map(|o| opt_get!(o, degraded))
+        .map(|o| o.degraded_or_default())
         .unwrap_or(c::bch_degraded_actions::BCH_DEGRADED_ask.0 as u8)
 }
 
@@ -180,7 +180,7 @@ impl Ask {
             missing:  expected - present,
             expected,
             opts:     *cli_opts,
-            use_udev: opt_get!(cli_opts, mount_trusts_udev) != 0,
+            use_udev: cli_opts.mount_trusts_udev_or_default(),
         })
     }
 

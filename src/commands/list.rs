@@ -7,7 +7,6 @@ use bcachefs_kernel::btree::iter::BtreeIter;
 use bcachefs_kernel::btree::iter::BtreeIterFlags;
 use bcachefs_kernel::btree::iter::BtreeNodeIter;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::opt_set;
 use bch_bindgen::c::bch_degraded_actions;
 use clap::Parser;
 use std::io::{stdout, IsTerminal};
@@ -235,28 +234,20 @@ pub struct Cli {
 fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
     let mut fs_opts = c::bch_opts::default();
 
-    opt_set!(fs_opts, noexcl, 1);
-    opt_set!(fs_opts, nochanges, 1);
-    opt_set!(fs_opts, read_only, 1);
-    opt_set!(fs_opts, norecovery, 1);
-    opt_set!(fs_opts, degraded, bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
-    opt_set!(
-        fs_opts,
-        errors,
-        c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8
-    );
+    fs_opts.set_noexcl(true);
+    fs_opts.set_nochanges(true);
+    fs_opts.set_read_only(true);
+    fs_opts.set_norecovery(true);
+    fs_opts.set_degraded(bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
+    fs_opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8);
 
     if opt.fsck {
-        opt_set!(
-            fs_opts,
-            fix_errors,
-            c::fsck_err_opts::FSCK_FIX_yes as u8
-        );
-        opt_set!(fs_opts, norecovery, 0);
+        fs_opts.set_fix_errors(c::fsck_err_opts::FSCK_FIX_yes as u8);
+        fs_opts.set_norecovery(false);
     }
 
     if opt.verbose > 0 {
-        opt_set!(fs_opts, verbose, 1);
+        fs_opts.set_verbose(true);
     }
 
     match crate::device_scan::open_online_or_offline(&opt.devices, fs_opts)? {
@@ -273,7 +264,7 @@ fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
             let devs = handle.member_devices()
                 .map_err(|e| anyhow::anyhow!("getting member devices from sysfs: {}", e))?;
 
-            opt_set!(fs_opts, nostart, 1);
+            fs_opts.set_nostart(true);
             let fs = crate::device_scan::open_scan(&devs, fs_opts)
                 .map_err(|e| anyhow::anyhow!(
                     "opening {:?} (noexcl/nostart, for formatting keys): {}", devs, e))?;

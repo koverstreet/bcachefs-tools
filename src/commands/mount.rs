@@ -11,7 +11,7 @@ use std::{
 use anyhow::{ensure, Result};
 use bcachefs_kernel::c::{bch_opts, bch_sb_handle};
 use bcachefs_kernel::errcode::BchError;
-use bcachefs_kernel::{c, opt_get, opt_set, path_to_cstr};
+use bcachefs_kernel::{c, path_to_cstr};
 use clap::Parser;
 use log::{debug, error, info, warn};
 use uuid::Uuid;
@@ -270,7 +270,7 @@ fn mount_fs_context(
 /// Best effort. The filesystem is mounted; failing to pick up a straggler is
 /// worth saying out loud but is not a reason to fail the mount.
 fn online_late_devices(uuid: Uuid, mounted: &HashSet<u8>, opts: &bch_opts) {
-    let use_udev = opt_get!(opts, mount_trusts_udev) != 0;
+    let use_udev = opts.mount_trusts_udev_or_default();
 
     let found = match device_scan::get_devices_by_uuid(uuid, opts, use_udev) {
         Ok(found) => found,
@@ -617,7 +617,7 @@ fn scan_or_ask_splitbrain(dev: &String, opts: &mut bch_opts)
     // both what to name in the question and what to mount if they say yes.
     // Not the waiting scan: the one above already waited, and everything it
     // is about to find is what that wait turned up.
-    opt_set!(opts, no_splitbrain_check, 1);
+    opts.set_no_splitbrain_check(true);
     let sbs = device_scan::scan_sbs(dev, opts)?;
 
     let Some((_, sb)) = sbs.first() else {
@@ -628,7 +628,7 @@ fn scan_or_ask_splitbrain(dev: &String, opts: &mut bch_opts)
         return Err(err);
     }
 
-    opt_set!(opts, degraded, c::bch_degraded_actions::BCH_DEGRADED_yes.0 as u8);
+    opts.set_degraded(c::bch_degraded_actions::BCH_DEGRADED_yes.0 as u8);
     Ok(sbs)
 }
 

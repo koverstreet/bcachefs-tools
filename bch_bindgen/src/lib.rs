@@ -53,7 +53,6 @@ pub mod c {
 pub mod data;
 pub mod fs;
 pub mod keyutils;
-pub mod opts;
 pub mod sb;
 
 pub use bcachefs_kernel::accounting;

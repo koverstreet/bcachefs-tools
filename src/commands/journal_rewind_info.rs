@@ -2,7 +2,6 @@ use std::fmt::Write;
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::c;
-use bcachefs_kernel::opt_set;
 use chrono::{TimeZone, Utc};
 use clap::Parser;
 
@@ -60,18 +59,18 @@ pub struct Cli {
 fn cmd_journal_rewind_info(cli: Cli) -> Result<()> {
     let mut opts = bcachefs_kernel::opts::parse_mount_opts_vec(&cli.opts, false)
         .map_err(|e| anyhow!("error parsing options: {}", crate::wrappers::bch_err_str(e.raw())))?;
-    opt_set!(opts, noexcl, 1);
-    opt_set!(opts, nochanges, 1);
-    opt_set!(opts, norecovery, 1);
-    opt_set!(opts, read_only, 1);
-    opt_set!(opts, degraded, c::bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
-    opt_set!(opts, errors, c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8);
-    opt_set!(opts, fix_errors, c::fsck_err_opts::FSCK_FIX_yes as u8);
-    opt_set!(opts, retain_recovery_info, 1);
-    opt_set!(opts, read_journal_only, 1);
-    opt_set!(opts, read_entire_journal, 1);
+    opts.set_noexcl(true);
+    opts.set_nochanges(true);
+    opts.set_norecovery(true);
+    opts.set_read_only(true);
+    opts.set_degraded(c::bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
+    opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8);
+    opts.set_fix_errors(c::fsck_err_opts::FSCK_FIX_yes as u8);
+    opts.set_retain_recovery_info(true);
+    opts.set_read_journal_only(true);
+    opts.set_read_entire_journal(true);
     if cli.verbose {
-        opt_set!(opts, verbose, 1);
+        opts.set_verbose(true);
     }
 
     if cli.devices.is_empty() {

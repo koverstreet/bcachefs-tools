@@ -4,7 +4,6 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::util::rcu;
-use bcachefs_kernel::opt_set;
 use clap::{Arg, ArgAction, Command};
 
 use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches};
@@ -53,8 +52,8 @@ fn cmd_set_option(argv: Vec<String>) -> Result<()> {
     let devs: Vec<std::path::PathBuf> = devices.iter().map(|d| d.as_str().into()).collect();
 
     let mut fs_opts = c::bch_opts::default();
-    opt_set!(fs_opts, nostart, 1);
-    opt_set!(fs_opts, will_not_start, 1);
+    fs_opts.set_nostart(true);
+    fs_opts.set_will_not_start(true);
 
     match crate::device_scan::open_online_or_offline(&devs, fs_opts)? {
         OpenedFs::Online(fs)  => set_option_online(fs, &devices, &dev_idxs, &opts),

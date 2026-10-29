@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use bch_bindgen::c;
-use bcachefs_kernel::opt_set;
 use anyhow::bail;
 use clap::Parser;
 use crate::wrappers::bch_err_str;
@@ -18,7 +17,7 @@ fn cmd_strip_alloc(cli: Cli) -> anyhow::Result<()> {
 
     loop {
         let mut opts: c::bch_opts = Default::default();
-        opt_set!(opts, nostart, 1);
+        opts.set_nostart(true);
 
         let fs = crate::device_scan::open_scan(&devs, opts)
             .map_err(|e| anyhow::anyhow!("Error opening filesystem: {}", e))?;

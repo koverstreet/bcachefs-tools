@@ -263,14 +263,75 @@ fn generate_cli_doc() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let path = dir.join("cli-reference.tex");
-    if let Err(e) = std::fs::write(&path, &out) {
-        eprintln!("error writing {}: {e}", path.display());
-        return ExitCode::FAILURE;
+    for (name, text) in [("cli-reference.tex", out), ("opts-table.tex", opts_table())] {
+        let path = dir.join(name);
+        if let Err(e) = std::fs::write(&path, &text) {
+            eprintln!("error writing {}: {e}", path.display());
+            return ExitCode::FAILURE;
+        }
+        eprintln!("wrote {}", path.display());
+    }
+    ExitCode::SUCCESS
+}
+
+/// The options reference, from the options table: those that may be set -
+/// not hidden, not internal plumbing set only by the code.
+fn opts_table() -> String {
+    use bcachefs_kernel::opts::{opt_to_text, OptType, DEFAULTS, OPTS};
+    use bcachefs_kernel::util::Printbuf;
+    use c::opt_flags as f;
+    use std::fmt::Write;
+
+    let scopes = [(f::OPT_FS, "fs"), (f::OPT_FORMAT, "format"), (f::OPT_MOUNT, "mount"),
+                  (f::OPT_RUNTIME, "runtime"), (f::OPT_DEVICE, "device"), (f::OPT_INODE, "inode")];
+
+    let mut out = String::new();
+    out.push_str("% Generated from the options table by bcachefs _doc_gen - do not edit\n\n");
+    out.push_str("\\small\n\\begin{description}\n");
+
+    for opt in &OPTS {
+        let scope: Vec<_> = scopes.iter().filter(|(s, _)| opt.has(*s)).map(|(_, n)| *n).collect();
+        if scope.is_empty() || opt.has(f::OPT_HIDDEN) || opt.has(f::OPT_NODOC) {
+            continue;
+        }
+
+        let ty = match opt.ty {
+            OptType::Bool => None,
+            OptType::Uint => Some("uint"),
+            OptType::Str(_) | OptType::StrMember { .. } => Some("str"),
+            OptType::Bitfield { .. } => Some("bitfield"),
+            OptType::Fn(_) => Some("fn"),
+        };
+        let v = DEFAULTS.get(opt.id);
+        let default = match opt.ty {
+            OptType::Bool => (if v != 0 { "true" } else { "false" }).to_string(),
+            _ => {
+                let mut p = Printbuf::new();
+                opt_to_text(&mut p, None, None, opt, v, 0);
+                p.as_str().to_string()
+            }
+        };
+
+        writeln!(out, "\\label{{opt:{}}}\\item[\\texttt{{{}}}] \\hfill \\\\",
+                 opt.name.replace('_', "-"), escape_latex(opt.name)).unwrap();
+        write!(out, "\t\\textit{{{}}}", scope.join(", ")).unwrap();
+        if let Some(ty) = ty {
+            write!(out, " \\quad {ty}").unwrap();
+        }
+        if !default.is_empty() && default != "0" {
+            write!(out, " \\quad default: {}", escape_latex(&default)).unwrap();
+        }
+        writeln!(out, " \\\\").unwrap();
+
+        let help: Vec<_> = opt.help.unwrap_or_default().split_whitespace().collect();
+        if !help.is_empty() {
+            writeln!(out, "\t{}", escape_latex(&help.join(" "))).unwrap();
+        }
+        out.push('\n');
     }
 
-    eprintln!("wrote {}", path.display());
-    ExitCode::SUCCESS
+    out.push_str("\\end{description}\n\\normalsize\n");
+    out
 }
 
 fn main() -> ExitCode {

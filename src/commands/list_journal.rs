@@ -8,7 +8,6 @@ use bcachefs_kernel::journal::{
 };
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::util::ToText;
-use bcachefs_kernel::opt_set;
 use bcachefs_kernel::util::vstructs::SelfSized;
 use clap::Parser;
 
@@ -625,30 +624,30 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
 
     let mut opts = bcachefs_kernel::opts::parse_mount_opts_vec(&cli.opts, false)
         .map_err(|e| anyhow!("error parsing options: {}", crate::wrappers::bch_err_str(e.raw())))?;
-    opt_set!(opts, noexcl, 1);
-    opt_set!(opts, nochanges, 1);
-    opt_set!(opts, norecovery, 1);
-    opt_set!(opts, read_only, 1);
-    opt_set!(opts, degraded, c::bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
-    opt_set!(opts, errors, c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8);
-    opt_set!(opts, fix_errors, c::fsck_err_opts::FSCK_FIX_yes as u8);
-    opt_set!(opts, retain_recovery_info, 1);
-    opt_set!(opts, read_journal_only, 1);
-    opt_set!(opts, read_entire_journal, 1);
+    opts.set_noexcl(true);
+    opts.set_nochanges(true);
+    opts.set_norecovery(true);
+    opts.set_read_only(true);
+    opts.set_degraded(c::bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
+    opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8);
+    opts.set_fix_errors(c::fsck_err_opts::FSCK_FIX_yes as u8);
+    opts.set_retain_recovery_info(true);
+    opts.set_read_journal_only(true);
+    opts.set_read_entire_journal(true);
 
     let mut contiguous_only = true;
     let mut seq_start = 0u64;
     let mut seq_end = u64::MAX;
 
     if cli.dirty_only {
-        opt_set!(opts, read_entire_journal, 0);
+        opts.set_read_entire_journal(false);
     }
 
     if let Some(nr) = cli.nr_entries {
         if nr == 0 {
             // keep default
         }
-        opt_set!(opts, read_entire_journal, 1);
+        opts.set_read_entire_journal(true);
     }
 
     if let Some(ref seq_arg) = cli.seq {
@@ -656,7 +655,7 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
         seq_start = s;
         seq_end = e;
         contiguous_only = false;
-        opt_set!(opts, read_entire_journal, 1);
+        opts.set_read_entire_journal(true);
     }
 
     if cli.all {
@@ -664,7 +663,7 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
     }
 
     if cli.verbose {
-        opt_set!(opts, verbose, 1);
+        opts.set_verbose(true);
     }
 
     // Build filter

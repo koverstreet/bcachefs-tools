@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0
 //! Options: mount options, the sysfs options/ files, format options, and the
-//! filesystem defaults the superblock keeps - one list, BCH_OPTS()
-//! (opts_types.rs), and OPTS, the table made from it.
+//! filesystem defaults the superblock keeps - one list, bch_opts' fields
+//! (opts_types.rs), and OPTS, the table #[derive(Options)] makes from them.
 //!
 //! Terms:
-//! - An option, Opt: what BCH_OPTS() says of one - its type and bounds, when
-//!   it may be set (flags, OPT_*), where the superblock keeps it, if it does.
-//!   OPTS is indexed by bch_opt_id.
+//! - An option, Opt: what its field's #[opt] says of one - its type and
+//!   bounds, when it may be set (flags, OPT_*), where the superblock keeps
+//!   it, if it does. OPTS is indexed by bch_opt_id.
 //! - A value is a u64, whatever the option's type: a bool's 0 or 1, a string
 //!   option's index into its choices, a bitfield's bits.
 //! - bch_opts: a value for each option, and whether it's defined - mount
 //!   options as parsed have only those given; c->opts has all of them.
-//!   DEFAULTS is BCH_OPTS()' defaults, all defined.
+//!   DEFAULTS is the #[opt]s' defaults, all defined. Each option's field
+//!   has a getter, name(), a setter that defines it, set_name(), and
+//!   name_or_default().
 //! - Where the superblock keeps an option: a bitfield of the superblock
-//!   itself, of its ext section, or of a member - BCH_OPTS() names the
+//!   itself, of its ext section, or of a member - its #[opt] names the
 //!   field's getter, and OptHost finds the struct it's on in a superblock.
 //!   The field may hold the value scaled: OPT_SB_FIELD_SECTORS (>> 9),
 //!   _ILOG2, _ONE_BIAS (0 is unset).
@@ -25,8 +27,6 @@
 //! enums' are theirs - util/names.rs.
 
 use crate::c;
-use crate::data::compress;
-use crate::alloc::disk_groups;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::Fs;
 use crate::inode_opts::InodeOpt;
@@ -40,22 +40,16 @@ use crate::util::printbuf::Printbuf;
 use crate::util::sysfs::{parse_human_u64, parse_int};
 use core::ffi::CStr;
 
-// What BCH_OPTS() names, which resolves where it's expanded: here
-use c::{
-    OPT_FS, OPT_DEVICE, OPT_INODE, OPT_FORMAT, OPT_MOUNT, OPT_RUNTIME, OPT_HUMAN_READABLE,
-    OPT_MUST_BE_POW_2, OPT_SB_FIELD_SECTORS, OPT_SB_FIELD_ILOG2, OPT_SB_FIELD_ONE_BIAS,
-    OPT_HIDDEN, OPT_MOUNT_OLD, OPT_NODOC,
-    BCH_REPLICAS_MAX, BCH_SB_SECTOR, BCACHEFS_VERBOSE_DEFAULT, RATELIMIT_ERRORS_DEFAULT,
-    BCH_ON_ERROR_fix_safe, BCH_CSUM_OPT_crc32c, BCH_COMPRESSION_OPT_none, BCH_STR_HASH_OPT_siphash,
-    BCH_DEGRADED_ask, BCH_WRITE_DEGRADED_degraded, FSCK_FIX_exit, BCH_VERSION_UPGRADE_compatible,
-    BCH_MEMBER_STATE_rw, BCH_DATA_journal, BCH_DATA_btree, BCH_DATA_user,
-    bch_member, bch_sb_field_ext,
-};
-
 #[allow(non_camel_case_types)]
 pub type opt_id = c::bch_opt_id;
 
 pub const NR: usize = opt_id::bch2_opts_nr.0 as usize;
+
+/// By bch_opt_id: bch_opts' #[opt]s.
+pub static OPTS: [Opt; NR] = c::bch_opts::TABLE;
+
+/// Each option's default, all defined.
+pub const DEFAULTS: c::bch_opts = c::bch_opts::DEFAULTS;
 
 
 // ── Names ────────────────────────────────────────────────────────────────
@@ -111,7 +105,7 @@ pub enum OptType {
     },
 }
 
-const fn size_of_field<T, F>(_: fn(&T) -> &F) -> usize {
+pub(crate) const fn size_of_field<T, F>(_: fn(&T) -> &F) -> usize {
     size_of::<F>()
 }
 
@@ -254,132 +248,6 @@ pub(crate) const FIX_ERRORS: OptFn = OptFn {
     validate: None,
 };
 
-macro_rules! opt_str {
-    (NULL) => { None };
-    ($($s:literal)+) => { Some(concat!($($s),+)) };
-}
-
-/// An option's OPT_*() type - and its bounds, which are the type's. A string
-/// or bitfield option names the enum its choices are.
-macro_rules! opt_type {
-    (OPT_BOOL()) => { (OptType::Bool, 0, 1) };
-    (OPT_UINT($min:expr, $max:expr)) => { (OptType::Uint, ($min) as u64, ($max) as u64) };
-    (OPT_STR($t:ident)) => {
-        (OptType::Str(crate::names_by_value!(c::$t)), 0, (crate::names_by_value!(c::$t).len() - 1) as u64)
-    };
-    (OPT_STR_NOLIMIT($t:ident)) => { (OptType::Str(crate::names_by_value!(c::$t)), 0, u64::MAX) };
-    (OPT_BITFIELD($t:ident)) => {
-        (OptType::Bitfield { choices: crate::names_by_value!(c::$t), allowed: u64::MAX }, 0, 0)
-    };
-    (OPT_BITFIELD_MASK($t:ident, $allowed:expr)) => {
-        (OptType::Bitfield { choices: crate::names_by_value!(c::$t), allowed: ($allowed) as u64 }, 0, 0)
-    };
-    (OPT_FN($f:path)) => { (OptType::Fn(&$f), 0, 0) };
-    (OPT_STR_MEMBER($field:ident)) => {
-        (OptType::StrMember {
-            get:     |m| &m.$field,
-            get_mut: |m| &mut m.$field,
-            size:    size_of_field::<c::bch_member, _>(|m| &m.$field),
-        }, 0, 0)
-    };
-}
-
-/// An option's superblock field: `_` for none, else its getter -
-/// `host::getter`, its setter set_getter, or `host::getter / setter`.
-macro_rules! opt_sb {
-    (_) => { None };
-    // the head: what either state of a superblock has its fields on
-    (bch_sb :: $get:ident $(/ $set:ident)?) => { opt_sb!(bch_sb__head :: $get $(/ $set)?) };
-    ($host:ident :: $get:ident) => { crate::paste! { opt_sb!($host :: $get / [<set_ $get>]) } };
-    ($host:ident :: $get:ident / $set:ident) => {
-        Some(&Field::<c::$host, _> { get: |t| t.$get(), set: |t, v| t.$set(v) } as &dyn SbOpt)
-    };
-}
-
-macro_rules! opts_table {
-    ($(($name:ident, $bits:ty, $flags:expr, $kind:ident $kind_args:tt,
-        $sb:tt $(:: $get:ident $(/ $set:ident)?)?, $default:expr, $hint:tt, $($help:tt)*)),* $(,)?) => {
-
-        /// By bch_opt_id: for const evaluation - OPTS is the table.
-        pub const OPT_LIST: [Opt; NR] = [$({
-            let (ty, min, max) = opt_type!($kind $kind_args);
-            crate::paste! { Opt {
-                id:    opt_id::[<Opt_ $name>],
-                name:  stringify!($name),
-                flags: c::opt_flags::from_bits_retain($flags),
-                ty,
-                min,
-                max,
-                sb:    opt_sb!($sb $(:: $get $(/ $set)?)?),
-                hint:  opt_str!($hint),
-                help:  opt_str!($($help)*),
-            } }
-        }),*];
-
-        pub static OPTS: [Opt; NR] = OPT_LIST;
-
-        /// Each option's default, all defined.
-        pub const DEFAULTS: c::bch_opts = {
-            // SAFETY: integers, and the defined bits'
-            let mut opts: c::bch_opts = unsafe { core::mem::zeroed() };
-            $(opts.$name = ($default) as $bits;)*
-            let mut i = 0;
-            while i < NR {
-                crate::types::set_c_bit(&mut opts.__bch_opts_bits, i, true);
-                i += 1;
-            }
-            opts
-        };
-
-        impl c::bch_opts {
-            /// Its value for @id - defined or not.
-            pub fn get(&self, id: opt_id) -> u64 {
-                crate::paste! { match id {
-                    $(opt_id::[<Opt_ $name>] => self.$name as u64,)*
-                    _ => panic!("not an option: {}", id.0),
-                } }
-            }
-
-            pub fn defined(&self, id: opt_id) -> bool {
-                crate::paste! { match id {
-                    $(opt_id::[<Opt_ $name>] => self.[<$name _defined>](),)*
-                    _ => panic!("not an option: {}", id.0),
-                } }
-            }
-
-            /// Set, and defined.
-            pub fn set(&mut self, id: opt_id, v: u64) {
-                crate::paste! { match id {
-                    $(opt_id::[<Opt_ $name>] => {
-                        self.$name = v as $bits;
-                        self.[<set_ $name _defined>](true);
-                    })*
-                    _ => panic!("not an option: {}", id.0),
-                } }
-            }
-
-            /// Those @src defines, set: bch2_opts_apply().
-            pub fn apply(&mut self, src: &Self) {
-                crate::paste! { $(
-                    if src.[<$name _defined>]() {
-                        self.$name = src.$name;
-                        self.[<set_ $name _defined>](true);
-                    }
-                )* }
-            }
-
-            $(opts_table!(@accessor $name, $bits, $kind);)*
-        }
-    };
-    (@accessor $name:ident, $bits:ty, OPT_BOOL) => {
-        pub fn $name(&self) -> bool { self.$name != 0 }
-    };
-    (@accessor $name:ident, $bits:ty, $kind:ident) => {
-        pub fn $name(&self) -> $bits { self.$name }
-    };
-}
-c::BCH_OPTS!(opts_table);
-
 impl opt_id {
     pub fn opt(self) -> &'static Opt {
         &OPTS[self.0 as usize]
@@ -435,36 +303,17 @@ impl Opt {
 
 // ── bch_opts ─────────────────────────────────────────────────────────────
 
-#[macro_export]
-macro_rules! opt_set {
-    ($opts:ident, $n:ident, $v:expr) => {
-        $crate::paste! {
-            $opts.$n = $v;
-            $opts.[<set_ $n _defined>](true)
-        }
-    };
-}
+impl c::bch_opts_mask {
+    pub const fn test(&self, id: opt_id) -> bool {
+        let (i, bits) = (id.0 as usize, core::ffi::c_ulong::BITS as usize);
+        self.d[i / bits] >> (i % bits) & 1 != 0
+    }
 
-#[macro_export]
-macro_rules! opt_defined {
-    ($opts:ident, $n:ident) => {
-        $crate::paste! {
-            $opts.[< $n _defined>]()
-        }
-    };
+    pub const fn set(&mut self, id: opt_id) {
+        let (i, bits) = (id.0 as usize, core::ffi::c_ulong::BITS as usize);
+        self.d[i / bits] |= 1 << (i % bits);
+    }
 }
-
-#[macro_export]
-macro_rules! opt_get {
-    ($opts:ident, $n:ident) => {
-        if $crate::opt_defined!($opts, $n) {
-            $opts.$n
-        } else {
-            $crate::opts::DEFAULTS.$n
-        }
-    };
-}
-
 
 // ── Parsing ──────────────────────────────────────────────────────────────
 
@@ -794,9 +643,7 @@ pub fn opts_to_text(out: &mut Printbuf, opts: &c::bch_opts, fs: Option<&Fs>, sb:
         if f & hide_mask != 0 || f & show_mask == 0 {
             continue;
         }
-        let i = opt.id.0 as usize;
-        let bits = core::ffi::c_ulong::BITS as usize;
-        if mask.is_some_and(|m| m.d[i / bits] >> (i % bits) & 1 == 0) {
+        if mask.is_some_and(|m| !m.test(opt.id)) {
             continue;
         }
 

@@ -12,6 +12,8 @@
 //! ToText for an open enum is a call to prt_name(), one copy, and #[inline] -
 //! an enum nothing prints costs nothing.
 
+use core::ffi::CStr;
+
 use crate::util::ffi::c_char;
 use crate::util::Printbuf;
 
@@ -152,6 +154,33 @@ pub const fn c_table<const N: usize>(buf: &'static [u8], entries: &[(&str, u64)]
     let (mut i, mut at) = (0, 0);
     while i < entries.len() {
         t[entries[i].1 as usize] = buf.as_ptr().wrapping_add(at).cast();
+        at += entries[i].0.len() + 1;
+        i += 1;
+    }
+    t
+}
+
+/// @T's names as C strings, by value - "" for a value none has: for what
+/// wants &CStr, sysfs's file names. Built at compile time, as
+/// c_names_table!'s.
+#[macro_export]
+macro_rules! cstr_names {
+    ($t:ty) => {{
+        const E: &[(&str, u64)] = <$t as $crate::util::names::Names>::ENTRIES;
+        static BUF: [u8; $crate::util::names::nul_len(E)] = $crate::util::names::nul_names(E);
+        $crate::util::names::cstr_table::<{ $crate::util::names::table_len(E) }>(&BUF, E)
+    }};
+}
+
+/// @entries' names, nul_names()'s @buf, as C strings, by value.
+pub const fn cstr_table<const N: usize>(buf: &'static [u8], entries: &[(&str, u64)]) -> [&'static CStr; N] {
+    let mut t = [c""; N];
+    let (mut i, mut at) = (0, 0);
+    while i < entries.len() {
+        t[entries[i].1 as usize] = match CStr::from_bytes_until_nul(buf.split_at(at).1) {
+            Ok(name) => name,
+            Err(_)   => panic!("nul_names() without its NUL"),
+        };
         at += entries[i].0.len() + 1;
         i += 1;
     }

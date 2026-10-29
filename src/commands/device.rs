@@ -13,7 +13,6 @@ use bch_bindgen::c::{
 };
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::metadata_version;
-use bcachefs_kernel::opt_set;
 use bcachefs_kernel::path_to_cstr;
 use clap::{Arg, ArgAction, Command, Parser, ValueEnum};
 
@@ -58,9 +57,9 @@ fn cmd_device_add(argv: Vec<String>) -> Result<()> {
     // approach as 'bcachefs image update'; works even when the allocator
     // is stuck and the filesystem can't mount normally:
     let mut offline_opts: c::bch_opts = Default::default();
-    opt_set!(offline_opts, nostart, 1u8);
-    opt_set!(offline_opts, copygc_enabled, 0u8);
-    opt_set!(offline_opts, reconcile_enabled, 0u8);
+    offline_opts.set_nostart(true);
+    offline_opts.set_copygc_enabled(false);
+    offline_opts.set_reconcile_enabled(false);
 
     match crate::device_scan::open_online_or_offline(&[PathBuf::from(fs_path)], offline_opts)
 	    .map_err(|e| anyhow!("opening filesystem '{}': {}", fs_path, e))? {
@@ -356,9 +355,9 @@ fn cmd_device_set_state(cli: SetStateCli) -> Result<()> {
 fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
 
     let mut opts: c::bch_opts = Default::default();
-    opt_set!(opts, nostart, 1);
-    opt_set!(opts, will_not_start, 1);
-    opt_set!(opts, degraded, bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
+    opts.set_nostart(true);
+    opts.set_will_not_start(true);
+    opts.set_degraded(bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
 
     // Read superblock to get dev_idx
     let sb_handle = bch_bindgen::sb::io::read_super_opts(Path::new(device), opts)

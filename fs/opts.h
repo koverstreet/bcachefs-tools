@@ -2,6 +2,7 @@
 #ifndef _BCACHEFS_OPTS_H
 #define _BCACHEFS_OPTS_H
 
+#include <linux/bitops.h>
 #include <linux/bug.h>
 #include <linux/log2.h>
 #include <linux/sizes.h>
@@ -12,14 +13,11 @@
 
 #include "opts_gen.h"
 
-#define opt_defined(_opts, _name)	((_opts)._name##_defined)
-
-#define opt_get(_opts, _name)						\
-	(opt_defined(_opts, _name) ? (_opts)._name : bch2_opts_default._name)
+#define opt_defined(_opts, _name)	test_bit(Opt_##_name, (_opts).defined.d)
 
 #define opt_set(_opts, _name, _v)					\
 do {									\
-	(_opts)._name##_defined = true;					\
+	__set_bit(Opt_##_name, (_opts).defined.d);			\
 	(_opts)._name = _v;						\
 } while (0)
 

@@ -72,6 +72,7 @@ use cstruct::{enum_text, expand_enum_list, parse_c_export, parse_cstruct, parse_
               CEnumDef, CEnumKind, CEnumVariant, CItem, CXEntry};
 
 mod fieldwise;
+mod options;
 mod init;
 mod place;
 mod prt;
@@ -215,6 +216,12 @@ macro_rules! one_item {
 /// ... } name`, or with `#[c_typedef(NAME)]`, `typedef struct name { ... }
 /// NAME`. `#[c_name(NAME)]` on the struct: C's name for it, where Rust's
 /// differs - a family's C definition (vstructs.rs).
+/// bch_opts' options, a field each: options.rs.
+#[proc_macro_derive(Options, attributes(opt))]
+pub fn derive_options(input: TokenStream) -> TokenStream {
+    expand("#[derive(Options)]", || options::derive(input))
+}
+
 #[proc_macro_derive(CStruct, attributes(c, c_anon, c_bitfield, c_inline, c_lock, c_name, c_packed, c_struct_group,
                                         c_typedef, counted_by))]
 pub fn derive_cstruct(input: TokenStream) -> TokenStream {

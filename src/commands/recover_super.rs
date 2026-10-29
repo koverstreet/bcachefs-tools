@@ -4,7 +4,6 @@ use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::c;
-use bcachefs_kernel::opt_set;
 use bcachefs_kernel::util::vstructs::Head;
 use bch_bindgen::sb::io as sb_io;
 use bch_bindgen::sb::sb_field_type;
@@ -172,8 +171,8 @@ fn recover_from_scan(
 
 fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<SbBuf> {
     let mut opts = c::bch_opts::default();
-    opt_set!(opts, noexcl, 1);
-    opt_set!(opts, nochanges, 1);
+    opts.set_noexcl(true);
+    opts.set_nochanges(true);
 
     let mut src_sb = sb_io::read_super_opts(Path::new(src_device), opts)
         .map_err(|e| anyhow!("Error opening {}: {}", src_device, e))?;

@@ -69,7 +69,6 @@ use bcachefs_kernel::{accounting, btree, dirent, namei, str_hash};
 use bcachefs_kernel::btree::iter::CommitFlags;
 use bcachefs_kernel::{inode, inode_opts};
 use bcachefs_kernel::snapshots::subvolume;
-use bcachefs_kernel::opt_set;
 
 use crate::util::AlignedBuf;
 
@@ -1809,12 +1808,12 @@ fn parse_fuse_mount_options(
         .unwrap_or_default();
     let mut bch_opts = bcachefs_kernel::opts::parse_mount_opts(None, parsed.fs_opts.as_deref(), true)?;
 
-    opt_set!(bch_opts, nostart, 1);
+    bch_opts.set_nostart(true);
 
     // read-only is both a fuser option (carried in parsed.fuse_options) and a
     // filesystem-open concern - the latter isn't a mount flag, so set it here:
     if parsed.flags & libc::MS_RDONLY != 0 {
-        opt_set!(bch_opts, read_only, 1);
+        bch_opts.set_read_only(true);
     }
 
     mount_options.extend(parsed.fuse_options);
@@ -2191,7 +2190,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     };
 
     if matches!(mount, FuseMount::Fuseblk { .. }) {
-        opt_set!(bch_opts, noexcl, 1);
+        bch_opts.set_noexcl(true);
     }
 
     // Held until destroy(), with the claims below: see lock_devices(). Across
@@ -2403,7 +2402,6 @@ pub const CMD: super::CmdDef = typed_cmd!("fusemount", "FUSE mount", Cli, cmd_fu
 mod tests {
     use super::{parse_fuse_mount_options, systime_to_ts, ts_to_systime, AtimeMode, AtimeOpts};
     use super::{NodeMap, ALT_NODE_BASE, BCACHEFS_ROOT_INO, BCACHEFS_ROOT_SUBVOL};
-    use bcachefs_kernel::opt_get;
     use bch_bindgen::c;
     use fuser::MountOption;
     use std::time::{Duration, UNIX_EPOCH};
@@ -2413,7 +2411,7 @@ mod tests {
         let (opts, mount_options, ms_flags) =
             parse_fuse_mount_options("/dev/test", Some("ro,norecovery")).unwrap();
 
-        assert_eq!(opt_get!(opts, read_only), 1);
+        assert!(opts.read_only_or_default());
         assert!(ms_flags & libc::MS_RDONLY != 0);
         assert!(mount_options.contains(&MountOption::RO));
         assert!(mount_options.contains(&MountOption::FSName("/dev/test".to_string())));

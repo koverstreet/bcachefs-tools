@@ -9,7 +9,6 @@ use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::c;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::metadata_version;
-use bcachefs_kernel::opt_set;
 use bcachefs_kernel::util::vstructs::Head;
 use clap::Parser;
 
@@ -104,10 +103,10 @@ fn should_use_kernel_fsck(devs: &[String]) -> bool {
 
     let dev_paths: Vec<std::path::PathBuf> = devs.iter().map(|d| d.as_str().into()).collect();
     let mut opts = c::bch_opts::default();
-    opt_set!(opts, nostart, 1);
-    opt_set!(opts, noexcl, 1);
-    opt_set!(opts, nochanges, 1);
-    opt_set!(opts, read_only, 1);
+    opts.set_nostart(true);
+    opts.set_noexcl(true);
+    opts.set_nochanges(true);
+    opts.set_read_only(true);
 
     let fs = match Fs::open(&dev_paths, opts) {
         Ok(fs) => fs,

@@ -14,7 +14,6 @@ use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::journal::{entry_type, journal_entry_type};
 use bcachefs_kernel::util::vstructs::{assume_validated, cast_plain, Head, SelfSized, Unvalidated};
-use bcachefs_kernel::opt_set;
 use bcachefs_kernel::POS_MIN;
 
 use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
@@ -652,19 +651,19 @@ fn cmd_dump(cli: DumpCli) -> Result<()> {
     // Open filesystem in read-only, no-recovery mode
     let devs: Vec<PathBuf> = cli.devices.iter().map(PathBuf::from).collect();
     let mut opts: c::bch_opts = Default::default();
-    opt_set!(opts, direct_io, 0);
-    opt_set!(opts, read_only, 1);
-    opt_set!(opts, nochanges, 1);
-    opt_set!(opts, norecovery, 1);
-    opt_set!(opts, degraded, c::bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
-    opt_set!(opts, errors, c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8);
-    opt_set!(opts, fix_errors, c::fsck_err_opts::FSCK_FIX_no as u8);
+    opts.set_direct_io(false);
+    opts.set_read_only(true);
+    opts.set_nochanges(true);
+    opts.set_norecovery(true);
+    opts.set_degraded(c::bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
+    opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8);
+    opts.set_fix_errors(c::fsck_err_opts::FSCK_FIX_no as u8);
 
     if cli.noexcl {
-        opt_set!(opts, noexcl, 1);
+        opts.set_noexcl(true);
     }
     if cli.verbose {
-        opt_set!(opts, verbose, 1);
+        opts.set_verbose(true);
     }
 
     let fs = crate::device_scan::open_scan(&devs, opts)?;

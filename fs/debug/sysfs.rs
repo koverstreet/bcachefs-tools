@@ -38,7 +38,7 @@ use crate::locking::{Lock, MemallocFlags};
 use crate::opts::{self, OptChange, OptType};
 use crate::sb::io::COUNTERS;
 use crate::sb::members;
-use crate::util::ffi::{c_char, c_str};
+use crate::util::ffi::c_char;
 use crate::util::kernel::{READ, WRITE};
 use crate::util::log::LogMsg;
 use crate::util::refcount::TryRefcount;
@@ -422,17 +422,13 @@ pub static bch2_fs_counters_sysfs_ops: c::sysfs_ops = sysfs::ops::<CountersDir>(
 // bch2_opts_create_sysfs_files() - to options/ for the filesystem options,
 // and to a device's dir for the device options, among its own files.
 
-macro_rules! opt_file_names {
-    ($(($name:ident $(, $($rest:tt)*)?)),* $(,)?) => { [$(c_str(concat!(stringify!($name), "\0"))),*] };
-}
-
 /// Each option's file, by bch_opt_id - which option a file is, from where
 /// its attribute is: writable if it may be set at runtime.
-static OPT_FILES: ListAttrs<{ opts::NR }> = ListAttrs::with_modes(&c::BCH_OPTS!(opt_file_names), &{
+static OPT_FILES: ListAttrs<{ opts::NR }> = ListAttrs::with_modes(&crate::cstr_names!(c::bch_opt_id), &{
     let mut modes = [0o444; opts::NR];
     let mut i = 0;
     while i < opts::NR {
-        if opts::OPT_LIST[i].flags.bits() & c::opt_flags::OPT_RUNTIME.bits() != 0 {
+        if c::bch_opts::TABLE[i].flags.bits() & c::opt_flags::OPT_RUNTIME.bits() != 0 {
             modes[i] = 0o644;
         }
         i += 1;

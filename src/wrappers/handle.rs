@@ -291,8 +291,8 @@ impl BcachefsHandle {
         use bcachefs_kernel::c;
 
         let mut opts = c::bch_opts::default();
-        bcachefs_kernel::opt_set!(opts, noexcl, 1);
-        bcachefs_kernel::opt_set!(opts, nochanges, 1);
+        opts.set_noexcl(true);
+        opts.set_nochanges(true);
 
         let sb = bch_bindgen::sb::io::read_super_opts(path, opts)
             .map_err(|e| match e.downcast::<BchError>() {

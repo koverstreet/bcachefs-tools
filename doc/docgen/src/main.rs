@@ -2,8 +2,11 @@
 //!
 //! Two extraction mechanisms:
 //!
-//!   1. X-macro tables — structured data (e.g. BCH_OPTS()) becomes LaTeX tables
+//!   1. X-macro tables — structured data (e.g. BCH_BTREE_IDS()) becomes LaTeX lists
 //!   2. DOC(key) comment blocks — prose in source becomes LaTeX fragments
+//!
+//! The options table and the CLI reference are `bcachefs _doc_gen`'s, from
+//! the tables in the binary; run it first.
 //!
 //! Generated fragments live in doc/generated/ and are pulled into the
 //! Principles of Operation via \bchdoc{key}.  The tool validates that every
@@ -121,6 +124,48 @@ fn split_xmacro_args(s: &str) -> Vec<String> {
         args.push(tail);
     }
     args
+}
+
+/// Extract the content of adjacent C string literals and unescape.
+fn join_c_strings(s: &str) -> String {
+    let mut result = String::new();
+    let mut in_string = false;
+    let mut chars = s.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '"' {
+            in_string = !in_string;
+        } else if in_string {
+            if ch == '\\' {
+                match chars.peek() {
+                    Some('n') => {
+                        result.push('\n');
+                        chars.next();
+                    }
+                    Some('t') => {
+                        result.push('\t');
+                        chars.next();
+                    }
+                    Some('\\') => {
+                        result.push('\\');
+                        chars.next();
+                    }
+                    Some('\'') => {
+                        result.push('\'');
+                        chars.next();
+                    }
+                    Some('"') => {
+                        result.push('"');
+                        chars.next();
+                    }
+                    _ => result.push(ch),
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -488,264 +533,6 @@ fn markup_to_latex(content: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// BCH_OPTS() → LaTeX table
-// ---------------------------------------------------------------------------
-
-struct OptEntry {
-    name: String,
-    opt_type: String,
-    scope: Vec<&'static str>,
-    default_display: String,
-    help: Option<String>,
-    hidden: bool,
-    nodoc: bool,
-    internal: bool,
-}
-
-fn parse_opt_flags(flags_str: &str) -> (Vec<&'static str>, bool, bool) {
-    let mut scope = Vec::new();
-    let mut hidden = false;
-    let mut nodoc = false;
-    for flag in flags_str.split('|') {
-        match flag.trim() {
-            "OPT_FS" => scope.push("fs"),
-            "OPT_FORMAT" => scope.push("format"),
-            "OPT_MOUNT" => scope.push("mount"),
-            "OPT_RUNTIME" => scope.push("runtime"),
-            "OPT_DEVICE" => scope.push("device"),
-            "OPT_INODE" => scope.push("inode"),
-            "OPT_HIDDEN" => hidden = true,
-            "OPT_NODOC" => nodoc = true,
-            _ => {}
-        }
-    }
-    (scope, hidden, nodoc)
-}
-
-fn parse_opt_type_str(s: &str) -> String {
-    let s = s.trim();
-    if s.starts_with("OPT_BOOL") {
-        "bool".into()
-    } else if s.starts_with("OPT_UINT") {
-        "uint".into()
-    } else if s.starts_with("OPT_STR") {
-        "str".into()
-    } else if s.starts_with("OPT_BITFIELD") {
-        "bitfield".into()
-    } else if s.starts_with("OPT_FN") {
-        "fn".into()
-    } else {
-        s.into()
-    }
-}
-
-/// Extract the content of adjacent C string literals and unescape.
-fn join_c_strings(s: &str) -> String {
-    let mut result = String::new();
-    let mut in_string = false;
-    let mut chars = s.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '"' {
-            in_string = !in_string;
-        } else if in_string {
-            if ch == '\\' {
-                match chars.peek() {
-                    Some('n') => {
-                        result.push('\n');
-                        chars.next();
-                    }
-                    Some('t') => {
-                        result.push('\t');
-                        chars.next();
-                    }
-                    Some('\\') => {
-                        result.push('\\');
-                        chars.next();
-                    }
-                    Some('\'') => {
-                        result.push('\'');
-                        chars.next();
-                    }
-                    Some('"') => {
-                        result.push('"');
-                        chars.next();
-                    }
-                    _ => result.push(ch),
-                }
-            } else {
-                result.push(ch);
-            }
-        }
-    }
-    result
-}
-
-fn humanize_default(s: &str) -> String {
-    let s = s.trim();
-    if s == "true" || s == "false" {
-        return s.into();
-    }
-
-    // Known enum prefixes → strip to get human-readable value
-    let prefixes = [
-        "BCH_ON_ERROR_",
-        "BCH_CSUM_OPT_",
-        "BCH_COMPRESSION_OPT_",
-        "BCH_STR_HASH_OPT_",
-        "BCH_DEGRADED_",
-        "BCH_VERSION_UPGRADE_",
-        "BCH_MEMBER_STATE_",
-        "FSCK_FIX_",
-    ];
-    for prefix in &prefixes {
-        if let Some(rest) = s.strip_prefix(prefix) {
-            return rest.into();
-        }
-    }
-
-    // Compile-time dependent
-    if s.contains("DEFAULT") {
-        return "(varies)".into();
-    }
-    if s == "BCH_SB_SECTOR" {
-        return "8".into();
-    }
-
-    // Shift expressions: "4 << 10" → human-readable size
-    if s.contains("<<") && !s.contains('|') {
-        if let Some(val) = eval_shift(s) {
-            return format_size(val);
-        }
-    }
-
-    // Bitfield defaults (BIT(...)|BIT(...)) — just use the help text
-    if s.contains("BIT(") {
-        return "(see description)".into();
-    }
-
-    s.into()
-}
-
-fn eval_shift(s: &str) -> Option<u64> {
-    let s = s.replace(['U', 'u', 'L', 'l'], "");
-    let parts: Vec<&str> = s.split("<<").collect();
-    if parts.len() == 2 {
-        let base: u64 = parts[0].trim().parse().ok()?;
-        let shift: u32 = parts[1].trim().parse().ok()?;
-        Some(base << shift)
-    } else {
-        None
-    }
-}
-
-fn format_size(bytes: u64) -> String {
-    if bytes >= (1 << 20) && bytes % (1 << 20) == 0 {
-        format!("{}M", bytes >> 20)
-    } else if bytes >= (1 << 10) && bytes % (1 << 10) == 0 {
-        format!("{}k", bytes >> 10)
-    } else {
-        format!("{bytes}")
-    }
-}
-
-fn parse_help(s: &str) -> Option<String> {
-    let s = s.trim();
-    if s == "NULL" {
-        return None;
-    }
-    // Normalize whitespace per-line, preserving intentional newlines (from \n)
-    let text = join_c_strings(s)
-        .lines()
-        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let text = text.trim().to_string();
-    if text.is_empty() {
-        None
-    } else {
-        Some(text)
-    }
-}
-
-fn parse_opts(entries: &[Vec<String>]) -> Vec<OptEntry> {
-    entries
-        .iter()
-        .filter_map(|e| {
-            if e.len() < 8 {
-                return None;
-            }
-            let name = e[0].clone();
-            let (scope, hidden, nodoc) = parse_opt_flags(&e[2]);
-            let opt_type = parse_opt_type_str(&e[3]);
-            let default_display = humanize_default(&e[5]);
-            let help = parse_help(&e[7]);
-            // Options with no scope flags are internal plumbing (set programmatically)
-            let internal = scope.is_empty();
-
-            Some(OptEntry {
-                name,
-                opt_type,
-                scope,
-                default_display,
-                help,
-                hidden,
-                nodoc,
-                internal,
-            })
-        })
-        .collect()
-}
-
-fn generate_opts_table(opts: &[OptEntry]) -> String {
-    let mut out = String::new();
-    out.push_str("% Auto-generated from BCH_OPTS() in fs/opts_types.h — do not edit\n");
-    out.push_str("% Regenerate with: cargo run -p bch-docgen\n\n");
-
-    out.push_str("\\small\n");
-    out.push_str("\\begin{description}\n");
-
-    for opt in opts {
-        if opt.hidden || opt.nodoc || opt.internal {
-            continue;
-        }
-
-        let name = escape_latex(&opt.name);
-        let scope = opt.scope.join(", ");
-        let default = escape_latex(&opt.default_display);
-        let desc = opt
-            .help
-            .as_ref()
-            .map(|h| escape_latex(&h.replace('\n', " ")))
-            .unwrap_or_default();
-
-        let label_name = opt.name.replace('_', "-");
-        out.push_str(&format!(
-            "\\label{{opt:{label_name}}}\\item[\\texttt{{{name}}}] \\hfill \\\\\n"
-        ));
-
-        // Metadata line: scope, type, default
-        let mut meta = format!("\\textit{{{scope}}}");
-        if opt.opt_type != "bool" {
-            meta.push_str(&format!(" \\quad {}", opt.opt_type));
-        }
-        if !opt.default_display.is_empty() && opt.default_display != "0" {
-            meta.push_str(&format!(" \\quad default: {default}"));
-        }
-        out.push_str(&format!("\t{meta} \\\\\n"));
-
-        if !desc.is_empty() {
-            out.push_str(&format!("\t{desc}\n"));
-        }
-        out.push('\n');
-    }
-
-    out.push_str("\\end{description}\n");
-    out.push_str("\\normalsize\n");
-    out
-}
-
-// ---------------------------------------------------------------------------
 // Simple enum lists from x-macros: x(name, value) → \item[{\tt name}]
 // ---------------------------------------------------------------------------
 
@@ -1085,14 +872,6 @@ fn main() {
             errors += 1;
         }
     }
-
-    // --- BCH_OPTS() table ---
-    let opts_source = fs::read_to_string(root.join("fs/opts_types.h")).unwrap();
-    let opts_entries = parse_xmacro(&opts_source, "BCH_OPTS");
-    let opts = parse_opts(&opts_entries);
-    let table = generate_opts_table(&opts);
-    fs::write(generated_dir.join("opts-table.tex"), &table).unwrap();
-    available_keys.insert("opts-table".into());
 
     // --- Simple enum lists ---
     for el in ENUM_LISTS {

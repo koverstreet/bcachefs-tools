@@ -12,7 +12,6 @@
 use anyhow::{anyhow, Result};
 use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::c;
-use bcachefs_kernel::opt_set;
 use bcachefs_kernel::sb::sb_field_type;
 use clap::Parser;
 
@@ -67,10 +66,10 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
     }
 
     let mut fs_opts = c::bch_opts::default();
-    opt_set!(fs_opts, noexcl, 1);
-    opt_set!(fs_opts, nochanges, 1);
-    opt_set!(fs_opts, no_version_check, 1);
-    opt_set!(fs_opts, nostart, 1);
+    fs_opts.set_noexcl(true);
+    fs_opts.set_nochanges(true);
+    fs_opts.set_no_version_check(true);
+    fs_opts.set_nostart(true);
 
     let fs = bcachefs_kernel::fs::Fs::open(&[std::path::PathBuf::from(&cli.device)], fs_opts)?;
 

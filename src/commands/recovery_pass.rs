@@ -2,7 +2,6 @@
 use anyhow::Result;
 use bcachefs_kernel::c;
 use bcachefs_kernel::init::passes;
-use bcachefs_kernel::opt_set;
 use clap::Parser;
 
 use crate::util::read_flag_list;
@@ -46,8 +45,8 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
     let devs: Vec<std::path::PathBuf> = cli.devices.iter().map(|d| d.as_str().into()).collect();
 
     let mut fs_opts = c::bch_opts::default();
-    opt_set!(fs_opts, nostart, 1);
-    opt_set!(fs_opts, will_not_start, 1);
+    fs_opts.set_nostart(true);
+    fs_opts.set_will_not_start(true);
 
     let fs = crate::device_scan::open_scan(&devs, fs_opts)?;
 

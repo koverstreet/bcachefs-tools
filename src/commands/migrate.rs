@@ -21,7 +21,6 @@ use anyhow::{anyhow, bail, Result};
 use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::opt_set;
 use bcachefs_kernel::util::bitmap::AtomicBitmap;
 use bcachefs_kernel::util::vstructs::Head;
 use clap::Parser;
@@ -347,7 +346,7 @@ Report bugs to <linux-bcachefs@vger.kernel.org>
 
 fn migrate_fs(
     fs_path: &str,
-    fs_opt_strs: c::bch_opt_strs,
+    fs_opt_strs: &[(c::bch_opt_id, String)],
     mut fs_opts: c::bch_opts,
     format_opts: c::format_opts,
     force: bool,
@@ -392,12 +391,12 @@ fn migrate_fs(
     c_dev.fs_size = dev_size;
 
     let block_size = crate::commands::format_util::pick_block_size(&fs_opts, std::slice::from_ref(&c_dev));
-    opt_set!(fs_opts, block_size, block_size as u16);
+    fs_opts.set_block_size(block_size as u16);
 
     let bucket_size = crate::commands::format_util::pick_bucket_size(&fs_opts, std::slice::from_ref(&c_dev));
     {
         let dev_opts = &mut c_dev.opts;
-        opt_set!(dev_opts, bucket_size, bucket_size as u32);
+        dev_opts.set_bucket_size(bucket_size as u32);
     }
     c_dev.nbuckets = c_dev.fs_size / c_dev.opts.bucket_size as u64;
 
@@ -443,11 +442,11 @@ fn migrate_fs(
     // Open the new filesystem
     let dev_path_pb = std::path::PathBuf::from(&dev_path);
     let mut opts: c::bch_opts = Default::default();
-    opt_set!(opts, sb, sb_offset_val);
-    opt_set!(opts, nostart, true as u8);
-    opt_set!(opts, noexcl, true as u8);
-    opt_set!(opts, reconcile_enabled, false as u8);
-    opt_set!(opts, copygc_enabled, false as u8);
+    opts.set_sb(sb_offset_val);
+    opts.set_nostart(true);
+    opts.set_noexcl(true);
+    opts.set_reconcile_enabled(false);
+    opts.set_copygc_enabled(false);
 
     let fs = Fs::open(std::slice::from_ref(&dev_path_pb), opts)
         .map_err(|e| anyhow!("Error opening new filesystem: {}", e))?;
@@ -499,10 +498,10 @@ fn migrate_fs(
     // Run fsck on the new filesystem
     println!("Migrate complete, running fsck:");
     let mut fsck_opts: c::bch_opts = Default::default();
-    opt_set!(fsck_opts, sb, sb_offset_val);
-    opt_set!(fsck_opts, noexcl, true as u8);
-    opt_set!(fsck_opts, nochanges, true as u8);
-    opt_set!(fsck_opts, read_only, true as u8);
+    fsck_opts.set_sb(sb_offset_val);
+    fsck_opts.set_noexcl(true);
+    fsck_opts.set_nochanges(true);
+    fsck_opts.set_read_only(true);
 
     let fs = Fs::open(std::slice::from_ref(&dev_path_pb), fsck_opts)
         .map_err(|e| anyhow!("Error opening new filesystem for fsck: {}", e))?;
@@ -559,10 +558,10 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
     // Open the filesystem with nostart + sb offset
     let dev_path_pb = std::path::PathBuf::from(dev_path);
     let mut opts: c::bch_opts = Default::default();
-    opt_set!(opts, nostart, true as u8);
-    opt_set!(opts, sb, sb_offset);
-    opt_set!(opts, reconcile_enabled, false as u8);
-    opt_set!(opts, copygc_enabled, false as u8);
+    opts.set_nostart(true);
+    opts.set_sb(sb_offset);
+    opts.set_reconcile_enabled(false);
+    opts.set_copygc_enabled(false);
 
     let fs = Fs::open(&[dev_path_pb], opts)
         .map_err(|e| anyhow!("Error opening filesystem: {}", e))?;
@@ -722,18 +721,7 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
         fmt_opts.passphrase = p.get().as_ptr() as *mut c_char;
     }
 
-    // Build bch_opt_strs for deferred options
-    let mut fs_opt_strs: c::bch_opt_strs = Default::default();
-    for &(id, ref val) in &deferred_opts {
-        let cstr = CString::new(val.as_str())?;
-        fs_opt_strs.set(id, &cstr);
-    }
-
-    let result = migrate_fs(&fs_path, fs_opt_strs, fs_opts, fmt_opts, force);
-
-    fs_opt_strs.free();
-
-    result
+    migrate_fs(&fs_path, &deferred_opts, fs_opts, fmt_opts, force)
 }
 
 /// Migrate superblock to standard location

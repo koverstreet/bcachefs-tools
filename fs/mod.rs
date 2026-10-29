@@ -433,7 +433,6 @@ macro_rules! newtype_enum_aliases {
     (@alias $prefix:ident $name:tt) => {};
 }
 c::BCH_METADATA_VERSIONS!(newtype_enum_aliases [bcachefs_metadata_version, bcachefs_metadata_version, max = bcachefs_metadata_version_max]);
-c::BCH_OPTS!(newtype_enum_aliases [bch_opt_id, Opt, nr = bch2_opts_nr]);
 c::BCH_BTREE_IDS!(newtype_enum_aliases [btree_id, BTREE_ID, nr = BTREE_ID_NR]);
 c::BCH_BKEY_TYPES!(newtype_enum_aliases [bch_bkey_type, KEY_TYPE, nr = KEY_TYPE_MAX]);
 c::BCH_DATA_TYPES!(newtype_enum_aliases [bch_data_type, BCH_DATA, nr = BCH_DATA_NR]);

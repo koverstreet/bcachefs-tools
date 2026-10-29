@@ -51,7 +51,6 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::{bch_errcode, BchError};
 use bcachefs_kernel::fs::{Fs, OpenFs};
 use bcachefs_kernel::inode;
-use bcachefs_kernel::opt_set;
 use bcachefs_kernel::typeinfo::{self, FieldTarget, StructInfo, TypeInfo};
 use bcachefs_kernel::util::vstructs::Head;
 use bch_bindgen::c::bch_degraded_actions;
@@ -1332,7 +1331,7 @@ fn kvdb(cli: Cli) -> Result<()> {
     logging::setup(cli.verbose, cli.colorize);
 
     let mut fs_opts = c::bch_opts::default();
-    opt_set!(fs_opts, degraded, bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
+    fs_opts.set_degraded(bch_degraded_actions::BCH_DEGRADED_very.0 as u8);
     // An injection tool must not consume its own injections: background
     // workers in *this* fs instance would otherwise act on the state under
     // test the moment we go read-write. Snapshot deletion reaps a snapshot
@@ -1340,32 +1339,28 @@ fn kvdb(cli: Cli) -> Result<()> {
     // sees the image; copygc evacuates fragmented buckets, rewriting
     // backpointers a test just staged or is about to read; reconcile
     // consumes pending needs_reconcile state.
-    opt_set!(fs_opts, auto_snapshot_deletion, 0);
-    opt_set!(fs_opts, copygc_enabled, 0);
-    opt_set!(fs_opts, reconcile_enabled, 0);
+    fs_opts.set_auto_snapshot_deletion(false);
+    fs_opts.set_copygc_enabled(false);
+    fs_opts.set_reconcile_enabled(false);
     // ...and the write path must not refuse the states fsck is being tested
     // against: commit-only validation (invalid state codewords, subvolume ->
     // interior node references) stays off in this instance.
-    opt_set!(fs_opts, no_commit_validate, 1);
-    opt_set!(
-        fs_opts,
-        errors,
-        c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8
-    );
+    fs_opts.set_no_commit_validate(true);
+    fs_opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_continue.0 as u8);
     if cli.verbose > 0 {
-        opt_set!(fs_opts, verbose, 1);
+        fs_opts.set_verbose(true);
     }
     // sb-only mode: open the sb but don't run recovery or touch the btree.
     if cli.nostart {
-        opt_set!(fs_opts, nostart, 1);
-        opt_set!(fs_opts, will_not_start, 1);
+        fs_opts.set_nostart(true);
+        fs_opts.set_will_not_start(true);
     }
     // Whatever repair the superblock has scheduled is not what we came for:
     // check_allocations is pass 5, so recovery_pass_last below is a ceiling it
     // sits under, not a filter that excludes it - a filesystem carrying an
     // upgrade's scheduled passes rebuilds accounting before the first command
     // runs. It stays scheduled, and runs at the next real mount.
-    opt_set!(fs_opts, recovery_passes_skip_scheduled, 1);
+    fs_opts.set_recovery_passes_skip_scheduled(true);
     if cli.rw && cli.norecovery {
         bail!("--rw and --norecovery are mutually exclusive");
     }
@@ -1374,7 +1369,7 @@ fn kvdb(cli: Cli) -> Result<()> {
     // nothing recovers there anyway, and the nochanges norecovery implies
     // would turn sb set into a silent no-op.
     if !cli.rw && !cli.nostart {
-        opt_set!(fs_opts, norecovery, 1);
+        fs_opts.set_norecovery(true);
     } else {
         // Go read-write, and stop there. Everything through journal_replay is
         // what makes the filesystem writable and consistent to write to -
@@ -1385,11 +1380,11 @@ fn kvdb(cli: Cli) -> Result<()> {
         // snapshot deletion that consumed the very node a test had staged is
         // what prompted this.) Whatever the superblock still requires stays
         // recorded and runs at the next real mount.
-        opt_set!(fs_opts, recovery_pass_last, c::bch_recovery_pass::BCH_RECOVERY_PASS_journal_replay as u8);
+        fs_opts.set_recovery_pass_last(c::bch_recovery_pass::BCH_RECOVERY_PASS_journal_replay as u8);
     }
     if cli.journal {
-        opt_set!(fs_opts, retain_recovery_info, 1);
-        opt_set!(fs_opts, read_entire_journal, 1);
+        fs_opts.set_retain_recovery_info(true);
+        fs_opts.set_read_entire_journal(true);
     }
 
     let kvdb_fs = match crate::device_scan::open_online_or_offline(&cli.devices, fs_opts)? {
@@ -1404,9 +1399,9 @@ fn kvdb(cli: Cli) -> Result<()> {
             let devs = handle.member_devices()
                 .map_err(|e| anyhow!("getting member devices from sysfs: {e}"))?;
 
-            opt_set!(fs_opts, noexcl, 1);
-            opt_set!(fs_opts, nostart, 1);
-            opt_set!(fs_opts, read_only, 1);
+            fs_opts.set_noexcl(true);
+            fs_opts.set_nostart(true);
+            fs_opts.set_read_only(true);
             let fs = crate::device_scan::open_scan(&devs, fs_opts)
                 .map_err(|e| anyhow!(
                     "opening {devs:?} (noexcl/nostart, for formatting keys): {e}"))?;

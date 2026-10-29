@@ -50,7 +50,6 @@ use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::BkeySC;
 use bcachefs_kernel::data::ptrs::Ptrs;
 use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter};
-use bcachefs_kernel::opt_set;
 use bcachefs_kernel::util::vstructs::{cast_plain, Head, SelfSized};
 use clap::Parser;
 
@@ -204,7 +203,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
 
     let mut fs_opts = c::bch_opts::default();
-    opt_set!(fs_opts, read_only, 1);
+    fs_opts.set_read_only(true);
 
     let fs = crate::device_scan::open_scan(&cli.devices, fs_opts)?;
 

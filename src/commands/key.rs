@@ -5,7 +5,6 @@ use bcachefs_kernel::c::{bch_key, bch_encrypted_key};
 use bch_bindgen::c;
 use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::fs::{Fs, OpenFs, SbLockGuard};
-use bcachefs_kernel::opt_set;
 use bch_bindgen::sb::io as sb_io;
 use clap::Parser;
 
@@ -87,8 +86,8 @@ fn parse_device_list(args: &[String]) -> Vec<PathBuf> {
 /// Open a filesystem for superblock modification: never started.
 fn open_nostart(devs: &[PathBuf], user_key: Option<&bch_key>) -> Result<OpenFs> {
     let mut opts = c::bch_opts::default();
-    opt_set!(opts, nostart, 1);
-    opt_set!(opts, will_not_start, 1);
+    opts.set_nostart(true);
+    opts.set_will_not_start(true);
     Fs::open_with_key(devs, opts, user_key)
         .map_err(|e| anyhow::anyhow!("Error opening {:?}: {}", devs, e))
 }

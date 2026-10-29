@@ -879,7 +879,6 @@ pub mod ioctl {
     use crate::util::kernel::{capable, Capability};
     use crate::util::thread_with_file::{StdioRedirect, ThreadWithFile};
     use crate::util::ioctl::{UserStr, UserVstruct};
-    use crate::{opt_defined, opt_set};
     use core::ptr::NonNull;
     use kernel::ffi::c_int;
 
@@ -916,11 +915,11 @@ pub mod ioctl {
 
         let thr = ThreadWithFile::new_stdio(Ok(()))?;
 
-        opt_set!(opts, stdio, thr.stdio().as_c() as u64);
-        opt_set!(opts, read_only, 1);
-        opt_set!(opts, ratelimit_errors, 0);
+        opts.set_stdio(thr.stdio().as_c() as u64);
+        opts.set_read_only(true);
+        opts.set_ratelimit_errors(false);
         // We need request_key() to be called before we punt to kthread:
-        opt_set!(opts, nostart, 1);
+        opts.set_nostart(true);
 
         // C only reads the list, and read_super() keeps a copy of each path
         let mut dev_list = c::darray_const_str {
@@ -992,7 +991,7 @@ pub mod ioctl {
         let online = passes_match(c::PASS_ONLINE);
         let mut passes = passes_match(c::PASS_FSCK) & online;
 
-        if opt_defined!(opts, recovery_passes) {
+        if opts.defined(c::bch_opt_id::Opt_recovery_passes) {
             passes = opts.recovery_passes;
 
             if passes & online != passes {
@@ -1017,7 +1016,7 @@ pub mod ioctl {
             // XXX: can we figure out a way to do this without mucking with c->opts?
             let old_fix_errors = fs.opts.fix_errors;
             unsafe {
-                (*c).opts.fix_errors = if opt_defined!(opts, fix_errors) {
+                (*c).opts.fix_errors = if opts.defined(c::bch_opt_id::Opt_fix_errors) {
                     opts.fix_errors
                 } else {
                     c::fsck_err_opts::FSCK_FIX_ask as u8
