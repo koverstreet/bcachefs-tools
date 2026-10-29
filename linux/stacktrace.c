@@ -248,6 +248,7 @@ static const char *dw_addr_to_src(unsigned long addr, int *lineno)
 
 void bch2_prt_symbol(struct printbuf *out, unsigned long addr)
 {
+#if UNW_VERSION_CODE(UNW_VERSION_MAJOR, UNW_VERSION_MINOR) >= UNW_VERSION_CODE(1, 7)
 	char name[512];
 	unw_word_t off;
 
@@ -256,6 +257,16 @@ void bch2_prt_symbol(struct printbuf *out, unsigned long addr)
 		prt_printf(out, "%s+0x%lx", name, (unsigned long) off);
 	else
 		prt_printf(out, "0x%lx", addr);
+#else
+	/* libunwind < 1.7 (e.g. Ubuntu 24.04) has no unw_get_proc_name_by_ip() */
+	Dl_info info;
+
+	if (dladdr((void *) addr, &info) && info.dli_sname)
+		prt_printf(out, "%s+0x%lx", info.dli_sname,
+			   addr - (unsigned long) info.dli_saddr);
+	else
+		prt_printf(out, "0x%lx", addr);
+#endif
 
 	/*
 	 * A frame's address is where the call returns to, which can be the next
