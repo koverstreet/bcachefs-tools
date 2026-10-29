@@ -47,9 +47,11 @@ extern "C" {
 
 // --- Core logic, converted from C ---
 
-/// Count logical data (non-hole) bytes in a single file.
+/// Count logical data (non-hole) bytes in a single file - all @size of it if
+/// the holes can't be found.
 fn file_data_bytes(path: &std::path::Path, size: u64) -> u64 {
     use rustix::fs::{seek, SeekFrom};
+    use rustix::io::Errno;
 
     let Ok(file) = std::fs::File::open(path) else {
         return size;
@@ -58,7 +60,12 @@ fn file_data_bytes(path: &std::path::Path, size: u64) -> u64 {
     let mut bytes = 0;
     let mut pos = 0;
     while pos < size {
-        let Ok(start) = seek(&file, SeekFrom::Data(pos)) else { break };
+        let start = match seek(&file, SeekFrom::Data(pos)) {
+            Ok(start) => start,
+            // no data past @pos: the rest is a hole
+            Err(Errno::NXIO) => break,
+            Err(_) => return size,
+        };
         let end = seek(&file, SeekFrom::Hole(start)).unwrap_or(size).min(size);
         if end <= start {
             break;
@@ -93,19 +100,16 @@ fn count_input_size(dir: &std::fs::File) -> u64 {
             Err(_) => continue,
         };
 
-        // Best-effort estimate of the future on-disk size of the file
-        // (as will be observed in the future image).
-        // We have to explicitly iterate over all non-hole regions because:
-        // - using on-disk size (meta.blocks()) directly will underestimate
-        //   image size for source filesystems with strong compression;
-        // - using total logical size (meta.size()) directly will overestimate
-        //   image size for heavily sparse files.
-        // However, we can avoid the expensive iteration if the two sizes match,
-        // i.e. it is known that none of these scenarios apply.
-        bytes += if meta.is_file() && meta.blocks() * 512 < meta.size() {
-            file_data_bytes(&entry.path(), meta.size())
+        // What the file will take in the image: its allocated size here -
+        // for a small file a block, which covers what each file costs in the
+        // image - unless that's less than its logical size: compressed here,
+        // which the image may not be, or sparse. Then the bytes outside holes,
+        // not st_size, which counts the holes too.
+        let allocated = meta.blocks() * 512;
+        bytes += if meta.is_file() && allocated < meta.size() {
+            file_data_bytes(&entry.path(), meta.size()).max(allocated)
         } else {
-            meta.size()
+            allocated
         };
 
         if meta.is_dir() {
