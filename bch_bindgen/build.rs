@@ -19,6 +19,27 @@ fn watch_dir(dir: &str) {
     }
 }
 
+/// The generated headers under build/ - rust_types_gen's, of the types the fs
+/// crate defines - which the wrapper includes through -I../build: a type moving
+/// to Rust changes one and not the sources, and bindgen has to rerun for it,
+/// or the bindings keep the C type it replaced. Only the headers: not the
+/// cargo target dir there (gen-headers), the records, or the object trees.
+fn watch_gen_headers(dir: &str) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else { continue };
+        let path = entry.path();
+        if file_type.is_dir() {
+            if matches!(entry.file_name().to_str(), Some("gen-headers" | "cstruct" | "objs" | "c_src" | "linux")) {
+                continue;
+            }
+            watch_gen_headers(&path.to_string_lossy());
+        } else if path.to_str().is_some_and(|p| p.ends_with("_gen.h")) {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
+}
+
 include!("../clang_target.rs");
 include!("../fs/build_config.rs");
 
@@ -34,6 +55,7 @@ fn main() {
     for dir in ["../fs", "../c_src", "../include"] {
         watch_dir(dir);
     }
+    watch_gen_headers("../build");
 
     let out_dir: PathBuf = std::env::var_os("OUT_DIR")
         .expect("ENV Var 'OUT_DIR' Expected")
