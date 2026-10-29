@@ -106,8 +106,8 @@
 //! open buckets' ->ec, cancelling (@err), its task, to_text.
 //!
 //! - The head stages it under the head's lock and its own - holding its own
-//!   across the allocation's transactions, before launch, when no writer can
-//!   have a block - and claims blocks for writers under both.
+//!   across the allocation, in the write's transaction, before launch, when
+//!   no writer can have a block - and claims blocks for writers under both.
 //! - Writers take it briefly, for their block's buffer - under their write
 //!   point's lock - and the allocator stopping a device, for its blocks. An
 //!   open bucket's to_text, under spinlocks, reads @idx and takes nothing.
@@ -124,10 +124,13 @@
 //!   it, beside writers reading theirs: no writer is ever given a carried
 //!   block.
 //!
-//! The order: a write point's lock, the head's, the stripe's, then btree
-//! locks - writers have dropped theirs before they ask for their buffer; and
-//! new_stripes' before the stripe's, as to_text takes them, so nothing takes
-//! new_stripes' holding the stripe's.
+//! The order: a write point's lock, the head's, btree locks, then the
+//! stripe's - a stripe is staged inside a transaction, a head's in the write's
+//! (head_stage()), repair's in its own: held across the transaction's work,
+//! never across its begin, which would take the btree's lock after it.
+//! Writers have dropped their btree locks before they ask for their buffer.
+//! And new_stripes' before the stripe's, as to_text takes them, so nothing
+//! takes new_stripes' holding the stripe's.
 
 use crate::alloc::buckets::bucket_to_u64;
 use crate::alloc::capacity::DiskReservation;

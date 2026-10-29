@@ -631,21 +631,25 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
     // SAFETY: in new_stripes, which keeps it till it's discarded or its task
     // frees it
     let ns = unsafe { p.as_ref() };
-    // ours, unlaunched: no one else's to wait on, held across the
-    // allocation's transactions
-    let mut i = ns.lock();
 
-    match Reuse::new(s, h.into_claim()) {
-        Ok(r) => i.reuse = Some(r),
-        Err(claim) => {
-            claim.put(fs);
-            drop(i);
-            discard(new_stripes_take(fs, p));
-            return fs.throw(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc);
+    // Ours, unlaunched: no one else's to wait on. Locked in short sections,
+    // never across a transaction's begin - inside the allocation's
+    // transactions, after their btree locks, as a head's stripe is staged
+    // (head_stage()), or with the transaction unlocked.
+    {
+        let mut i = ns.lock();
+        match Reuse::new(s, h.into_claim()) {
+            Ok(r) => i.reuse = Some(r),
+            Err(claim) => {
+                claim.put(fs);
+                drop(i);
+                discard(new_stripes_take(fs, p));
+                return fs.throw(bch_errcode::BCH_ERR_ENOMEM_ec_new_stripe_alloc);
+            }
         }
-    }
 
-    init_new_stripe_from_old(&mut i, carry, move_, true);
+        init_new_stripe_from_old(&mut i, carry, move_, true);
+    }
 
     stack_pin_init!(let cl = StackClosure::new());
 
@@ -656,12 +660,13 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
     // reservation below.
     let narrowing = nr_new_data < nr_data;
 
-    let ret = StripeBuf::new_whole(fs, i.new_stripe.stripe(), MemWait::Never)
-        .map(|buf| i.new_buf = Some(buf))
-        .and_then(|()| if narrowing { i.reserve_parity(ns.fs_ref(), c::bch_reservation_flags::empty()) } else { Ok(()) })
-        .and_then(|()| lockrestart_do(trans, |t| stripe_idx_alloc(t, &mut i)));
+    let ret = {
+        let mut i = ns.lock();
+        StripeBuf::new_whole(fs, i.new_stripe.stripe(), MemWait::Never)
+            .map(|buf| i.new_buf = Some(buf))
+            .and_then(|()| if narrowing { i.reserve_parity(ns.fs_ref(), c::bch_reservation_flags::empty()) } else { Ok(()) })
+    }.and_then(|()| lockrestart_do(trans, |t| stripe_idx_alloc(t, &mut ns.lock())));
     if let Err(e) = ret {
-        drop(i);
         discard(new_stripes_take(fs, p));
         return Err(e);
     }
@@ -672,7 +677,8 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
         let dev_stripe = dev_stripe_state_get(t, v.disk_label.into())?;
         let mut req = t.alloc_request(target, false, core::ptr::null_mut(), 0, 0,
                                       c::bch_watermark::BCH_WATERMARK_normal, c::bch_write_flags::empty(), cl.as_ptr())?;
-        match new_stripe_alloc_buckets(t, &mut req, dev_stripe, &mut i, true) {
+        let ret = new_stripe_alloc_buckets(t, &mut req, dev_stripe, &mut ns.lock(), true);
+        match ret {
             Err(e) if e.matches(bch_errcode::BCH_ERR_operation_blocked) => {
                 t.wait_on_allocator(&mut req, e, &cl)?;
                 Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_nested))
@@ -685,16 +691,16 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
         let mut msg = log_msg_ratelimited!(fs);
         write!(msg, "stripe repair: error allocating buckets for the new stripe: {e}");
         prt!(&mut msg, "\nold: {}", s.to_text(fs));
-        prt!(&mut msg, "\nnew: {}", i.new_stripe.stripe().to_text(fs));
+        prt!(&mut msg, "\nnew: {}", ns.lock().new_stripe.stripe().to_text(fs));
         drop(msg);
 
-        drop(i);
         discard(new_stripes_take(fs, p));
         return Err(e);
     }
 
     trans.unlock_long();
 
+    let mut i = ns.lock();
     if let Err(e) = i.buckets_add(fs) {
         drop(i);
         discard(new_stripes_take(fs, p));
