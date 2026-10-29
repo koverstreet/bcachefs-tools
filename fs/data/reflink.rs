@@ -43,7 +43,7 @@ use crate::init::error::{id, BkeyValidate};
 use crate::snapshots::subvolume;
 use crate::types::{GenRadix, Le32, Le64};
 use crate::util::ffi::Opaque;
-use crate::util::kernel::fatal_signal_pending;
+use crate::util::kernel::{fatal_signal_pending, unlikely};
 use crate::util::refcount::TryRefcount;
 use crate::util::vstructs::{cast_plain, cast_plain_mut, Validated};
 use crate::util::Printbuf;
@@ -538,6 +538,7 @@ pub fn bch2_indirect_inline_data_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_
 
 /// A reflink_p to an indirect extent that's there after all: its error flag
 /// cleared.
+#[cold]
 fn indirect_extent_not_missing(t: &TransAttempt<'_, '_>, p: BkeySC<'_, c::ReflinkP>, should_commit: bool)
     -> Result<(), BchError>
 {
@@ -557,6 +558,7 @@ fn indirect_extent_not_missing(t: &TransAttempt<'_, '_>, p: BkeySC<'_, c::Reflin
 /// @p refers to @missing, which the reflink btree has nothing in: an fsck
 /// error. Fixed by narrowing @p's pads, if it's only those that are missing,
 /// or else by flagging @p's missing part REFLINK_P_ERROR.
+#[cold]
 fn indirect_extent_missing_error(
     t:             &TransAttempt<'_, '_>,
     p:             BkeySC<'_, c::ReflinkP>,
@@ -647,12 +649,12 @@ pub fn lookup_indirect_extent<'a, 'k>(
     *iter = BtreeIter::new(t, c::btree_id::reflink, pos(0, reflink_offset), iter_flags);
     let k = iter.peek_slot(t)?.expect("peek_slot() returns a key");
 
-    if k.arm::<Indirect>().is_none() {
+    if unlikely(k.arm::<Indirect>().is_none()) {
         let missing_end = k.k.p.offset.min(refd.end);
         assert!(reflink_offset != missing_end);
 
         indirect_extent_missing_error(t, p, reflink_offset..missing_end, should_commit)?;
-    } else if p.v().error() {
+    } else if unlikely(p.v().error()) {
         indirect_extent_not_missing(t, p, should_commit)?;
     }
 

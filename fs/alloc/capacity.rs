@@ -43,6 +43,7 @@ use crate::sb::counters::events;
 use crate::util::backtrace::prt_symbol;
 use crate::util::closure::{closure_wait_event, closure_wake_up};
 use crate::util::ffi::Opaque;
+use crate::util::kernel::unlikely;
 use crate::util::log::{log_no_fs, LogLevel};
 use crate::util::percpu::{CpuGuard, PerCpuRef};
 use crate::util::rcu::read_lock;
@@ -288,7 +289,7 @@ fn account_disk_usage_change(t: &TransAttempt<'_, '_>) {
 
     // Not allowed to reduce sectors_available except by getting a reservation
     let should_not_have_added = added - res_sectors as i64;
-    if should_not_have_added > 0 {
+    if unlikely(should_not_have_added > 0) {
         // We can't tell which slot these came out of, so take them off all
         // of them: too much self-heals at the next recalc, too little would
         // overcommit
@@ -313,7 +314,7 @@ fn account_disk_usage_change(t: &TransAttempt<'_, '_>) {
         percpu_field!(fs.capacity.pcpu.this_cpu(&cpu), counters.usage).add(delta);
     }
 
-    if should_not_have_added > 0 && !WARNED.swap(true, Ordering::Relaxed) {
+    if unlikely(should_not_have_added > 0) && !WARNED.swap(true, Ordering::Relaxed) {
         trans_inconsistent(t, &crate::message!(
             "disk usage increased {should_not_have_added} more than {res_sectors} sectors reserved"));
     }
@@ -689,6 +690,8 @@ impl Fs {
     /// alternative - and if that's not enough, a recompute. It all lands in
     /// @res's slot's cache: a per-pool cache would never hit for 1x writes,
     /// since slot 1 is empty wherever every device can hold a copy.
+    #[cold]
+    #[inline(never)]
     fn disk_reservation_add_slowpath(&self, res: &DiskReservation<'_>, sectors: u64,
                                      flags: c::bch_reservation_flags) -> Result<(), BchError> {
         let slot = disk_res_slot(res.nr_replicas.get());
@@ -731,6 +734,7 @@ impl Fs {
     /// The caches recomputed, and @sectors for @res from what's free at its
     /// count of replicas or more - with PARTIAL, as much as there is; with
     /// NOFAIL, whether there is or not.
+    #[cold]
     fn disk_reservation_add_recompute(&self, res: &DiskReservation<'_>, mut sectors: u64,
                                       flags: c::bch_reservation_flags) -> Result<(), BchError> {
         use c::bch_reservation_flags as F;

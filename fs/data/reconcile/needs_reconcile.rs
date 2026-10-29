@@ -17,6 +17,7 @@ use crate::data::reconcile::trigger::{extent_reconcile_to_text, BkeyVReconcile};
 use crate::errcode::{ret_to_c, BchError};
 use crate::init::error::id;
 use crate::inode_opts::get_io_opts;
+use crate::util::kernel::unlikely;
 use crate::util::printbuf::Msg;
 use crate::util::rcu::read_lock;
 use crate::util::vstructs::Validated;
@@ -338,7 +339,7 @@ impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
         let old = k.reconcile_opts(fs).copied();
         let new_need_rb = new.need_rb() & !old.map_or(0, |old| old.need_rb());
 
-        if new_need_rb != 0 {
+        if unlikely(new_need_rb != 0) {
             new_needs_rb_allowed(t, s, &k, ctx, opt_change_cookie, old.as_ref(), &new, new_need_rb)?;
         }
 
@@ -357,13 +358,13 @@ impl<V: ?Sized + BkeyVal<State = Validated>> TransBkey<'_, '_, V> {
             None => {}
         }
 
-        if invalid_devs > 0 {
+        if unlikely(invalid_devs > 0) {
             k.drop_ptrs_noerror(fs, |p| {
                 let drop = p.p.ptr.dev() as u32 == c::BCH_SB_MEMBER_INVALID && !p.p.has_ec && invalid_devs > 0;
                 invalid_devs -= i32::from(drop);
                 drop
             });
-        } else if invalid_devs < 0 {
+        } else if unlikely(invalid_devs < 0) {
             let n = invalid_devs.unsigned_abs();
             let sectors: u64 = if k.k().is_btree_ptr() { fs.btree_sectors().into() } else { k.k().size.into() };
             t.extra_disk_res_add(u64::from(n) * sectors, n);

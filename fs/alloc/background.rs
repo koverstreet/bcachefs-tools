@@ -487,7 +487,7 @@ use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::opts::data_type_str;
 use crate::util::ffi::Opaque;
-use crate::util::kernel::{READ, WRITE};
+use crate::util::kernel::{unlikely, READ, WRITE};
 use crate::util::rcu::read_lock;
 use crate::util::log::LogMsg;
 use crate::util::varint;
@@ -1503,7 +1503,7 @@ fn trigger_alloc(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(),
         // a stripe's parity bucket - so not while it runs
         let in_fsck = fs.flag(c::bch_fs_flags::BCH_FS_in_fsck);
 
-        if !in_fsck && old_a.stripe_refcount != 0 && new_a.stripe_refcount == 0 {
+        if !in_fsck && unlikely(old_a.stripe_refcount != 0 && new_a.stripe_refcount == 0) {
             let new = new_key(new_a);
             alloc_check_no_stripe_refs(t, op.old, as_sc(&new))?;
         }

@@ -312,6 +312,7 @@ use crate::util::alloc::{flags::GFP_KERNEL, AllocError, KVVec};
 use crate::util::bitmap::BitArray;
 use crate::util::rcu::RcuArray;
 use crate::util::ffi::Opaque;
+use crate::util::kernel::{cold_path, likely, unlikely};
 use crate::util::place::Placed;
 use crate::util::{HumanReadable, Printbuf};
 use core::ffi::c_int;
@@ -329,7 +330,11 @@ struct Table<'g>(&'g [c::snapshot_t]);
 
 impl<'g> Table<'g> {
     fn entry(&self, id: u32) -> Option<&'g c::snapshot_t> {
-        self.0.get(table_idx(id))
+        let e = self.0.get(table_idx(id));
+        if e.is_none() {
+            cold_path();
+        }
+        e
     }
 
     /// 0 for none.
@@ -877,13 +882,13 @@ fn is_ancestor_table(t: &TransAttempt<'_, '_>, orig_id: u32, ancestor: u32) -> b
     let fs = t.fs();
     let bitmap = c::IS_ANCESTOR_BITMAP;
 
-    if passes::will_run(fs, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_snapshots) {
+    if unlikely(passes::will_run(fs, c::bch_recovery_pass::BCH_RECOVERY_PASS_check_snapshots)) {
         return fs.snapshots.is_ancestor_early(orig_id, ancestor);
     }
 
     let ret = fs.snapshots.with_table(|table| {
         let mut id = orig_id;
-        if ancestor >= bitmap {
+        if likely(ancestor >= bitmap) {
             while id != 0 && id < ancestor - bitmap {
                 id = table.ancestor_below(id, ancestor);
             }

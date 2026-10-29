@@ -21,6 +21,7 @@ use crate::c;
 use crate::fs::Fs;
 use crate::sb::counters::events;
 use crate::util::ffi::Opaque;
+use crate::util::kernel::likely;
 use crate::util::projections::Volatile;
 use crate::util::rcu::read_lock;
 use cstruct_macros::c_export;
@@ -36,7 +37,7 @@ impl c::dev_stripe_state {
     /// least hand of the rest - raised to it, never lowered, so one rejoining
     /// keeps its history, and doesn't win every tie while its siblings starve.
     fn sync(&mut self, devs: &c::bch_devs_mask) {
-        if self.cached_devs.d == devs.d {
+        if likely(self.cached_devs.d == devs.d) {
             return;
         }
 

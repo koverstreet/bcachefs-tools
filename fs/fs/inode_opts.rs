@@ -27,6 +27,7 @@ use crate::init::error::id;
 use crate::snapshots::{snapshot, subvolume};
 use crate::util::alloc::{darray_exit, flags, DArrayLoan};
 use crate::util::ffi::{c_str, Opaque};
+use crate::util::kernel::unlikely;
 use crate::util::{Printbuf, ToText};
 use crate::{fsck_err_flags, inode, logged_ops, opts};
 use core::ffi::{c_int, CStr};
@@ -265,15 +266,15 @@ pub fn get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_opts {
      * btree read time: that would reject valid inodes from newer
      * versions.)
      */
-    if ret.data_checksum as u32 >= c::bch_csum_opt::BCH_CSUM_OPT_NR.0 {
+    if unlikely(ret.data_checksum as u32 >= c::bch_csum_opt::BCH_CSUM_OPT_NR.0) {
         ret.data_checksum = fs.opts.data_checksum as _;
         ret.set_data_checksum_from_inode(false);
     }
-    if !c::bch_compression_opt::valid(ret.compression as u8) {
+    if unlikely(!c::bch_compression_opt::valid(ret.compression as u8)) {
         ret.compression = fs.opts.compression as _;
         ret.set_compression_from_inode(false);
     }
-    if !c::bch_compression_opt::valid(ret.background_compression as u8) {
+    if unlikely(!c::bch_compression_opt::valid(ret.background_compression as u8)) {
         ret.background_compression = fs.opts.background_compression as _;
         ret.set_background_compression_from_inode(false);
     }
@@ -343,7 +344,7 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_o
     } else if k.arm::<Indirect>().is_some() {
         Mode::Reflink
     } else if k.k.is_user_data() || k.k.key_type() == c::bch_bkey_type::KEY_TYPE_reflink_p {
-        if k.k.p.snapshot == 0 {
+        if unlikely(k.k.p.snapshot == 0) {
             crate::bch_err!(fs, "user data key with snapshot == 0\n{}", k.to_text(fs));
             crate::warn_on!(true);
             return Ok(get_fs(fs, false));
@@ -435,11 +436,11 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_o
         // A checksum or compression type we don't know is an incompat
         // feature, so shouldn't have mounted - this is for a versioning
         // mistake: the filesystem's options, as get_inode() falls back to.
-        if opts.data_checksum as u32 >= c::bch_csum_opt::BCH_CSUM_OPT_NR.0 {
+        if unlikely(opts.data_checksum as u32 >= c::bch_csum_opt::BCH_CSUM_OPT_NR.0) {
             opts.data_checksum = fs.opts.data_checksum as _;
             opts.set_data_checksum_from_inode(false);
         }
-        if !c::bch_compression_opt::valid(opts.background_compression as u8) {
+        if unlikely(!c::bch_compression_opt::valid(opts.background_compression as u8)) {
             opts.background_compression = fs.opts.background_compression as _;
             opts.set_background_compression_from_inode(false);
         }

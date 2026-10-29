@@ -22,6 +22,7 @@ use crate::opts::data_type_str;
 use crate::locking::Lock;
 use crate::types::{bits_to_longs, Le64};
 use crate::util::ffi::Opaque;
+use crate::util::kernel::unlikely;
 use crate::util::log::LogMsg;
 use crate::util::percpu::{Counters, PerCpu};
 use crate::util::rcu::{read_lock, ReadGuard};
@@ -379,7 +380,7 @@ fn trigger_pointer(t: &TransAttempt<'_, '_>, btree: c::btree_id, level: u32, k: 
     let sectors = if insert { i64::from(bp.v.bucket_len) } else { -i64::from(bp.v.bucket_len) };
 
     let dev = u32::from(p.ptr.dev());
-    if dev == c::BCH_SB_MEMBER_INVALID {
+    if unlikely(dev == c::BCH_SB_MEMBER_INVALID) {
         if flags.contains(UpdateTriggerFlags::TRANSACTIONAL) && p.has_ec {
             if !insert {
                 bp.k.type_ = c::bch_bkey_type::KEY_TYPE_deleted.0 as u8;

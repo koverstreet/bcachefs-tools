@@ -47,7 +47,7 @@ use crate::errcode::{ret_to_c, BchError};
 use crate::init::error::{count_fsck_err, id};
 use crate::sb::errors::bch2_decompress_sb_err;
 use crate::util::{alloc::{flags::{GFP_KERNEL, GFP_NOWAIT, __GFP_NOWARN}, kmalloc, KVVec}, bio::{Bio, BioRange},
-                  ffi::Opaque, kernel::{READ, WRITE}, log::LogMsg, mempool::Mempool,
+                  ffi::Opaque, kernel::{unlikely, READ, WRITE}, log::LogMsg, mempool::Mempool,
                   volatile::VolatileSlice, Printbuf, ToText};
 use core::ffi::{c_int, c_uint, c_void};
 use core::marker::PhantomData;
@@ -337,7 +337,7 @@ fn buf_uncompress(fs: &Fs, dst: VolatileSlice<'_>, src: VolatileSlice<'_>, crc: 
      * decompression workspace at all, so its decompress pool is never
      * initialized and can't stand in for the check.
      */
-    if !fs.compress.workspace[opt].initialized() {
+    if unlikely(!fs.compress.workspace[opt].initialized()) {
         if !fsck_err!(fs, id::compression_type_not_marked_in_sb,
                       "compression type {} set but not marked in superblock", t)? {
             return fs.throw(e::BCH_ERR_compression_workspace_not_initialized);
@@ -596,7 +596,7 @@ fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], sr
         panic!("compressing with opt {compression_opt:#x}");
     };
 
-    if !fs.compress.workspace[t].initialized() {
+    if unlikely(!fs.compress.workspace[t].initialized()) {
         let fix = fsck_err!(fs, id::compression_opt_not_marked_in_sb,
                             "compression opt {} set but not marked in superblock", opts(t as u32));
         // not to fix, fsck_err() failing, or no memory for the pools: don't compress
@@ -658,7 +658,7 @@ fn compress(fs: &Fs, dst: VolatileSlice<'_>, dst_len: &mut usize, src: &[u8], sr
     dst.sub(*dst_len..padded).fill(0);
     *dst_len = padded;
 
-    if verify_compress.get() && !verify(fs, dst.sub(0..*dst_len), &src[..*src_len], compression_type, write_pos) {
+    if unlikely(verify_compress.get()) && !verify(fs, dst.sub(0..*dst_len), &src[..*src_len], compression_type, write_pos) {
         return ty::BCH_COMPRESSION_TYPE_incompressible;
     }
     assert!(*dst_len % block == 0 && *src_len % block == 0,

@@ -62,7 +62,7 @@ use crate::util::closure::{closure_has_waiters, closure_wait, closure_wake_up, S
 use crate::util::ffi::Opaque;
 use crate::util::hash::{hash_64, Fold};
 use crate::util::inline_vec::InlineVec;
-use crate::util::kernel::{jiffies, time_after, HZ};
+use crate::util::kernel::{jiffies, time_after, unlikely, HZ};
 use crate::util::log::{print_str, LogLevel};
 use crate::util::place::Placed;
 use crate::util::projections::Volatile;
@@ -436,7 +436,7 @@ impl Fs {
 
         let mut g = a.freelist_lock.lock();
 
-        if u32::from(a.freelist_lock.open_buckets_nr_free.get()) <= open_buckets_reserved(req.watermark) {
+        if unlikely(u32::from(a.freelist_lock.open_buckets_nr_free.get()) <= open_buckets_reserved(req.watermark)) {
             times(c::bch_time_stats::BCH_TIME_blocked_allocate_open_bucket).track_event_change(true);
             return Err(self.err(match req.closure_wait(&a.open_buckets_wait) {
                 true  => bch_errcode::BCH_ERR_open_bucket_alloc_blocked,

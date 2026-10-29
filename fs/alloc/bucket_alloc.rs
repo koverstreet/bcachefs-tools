@@ -43,7 +43,7 @@ use crate::fs::Fs;
 use crate::opts::data_type_str;
 use crate::sb::counters::events;
 use crate::util::Printbuf;
-use crate::util::kernel::WRITE;
+use crate::util::kernel::{unlikely, WRITE};
 use crate::util::rcu::read_lock;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
@@ -109,10 +109,10 @@ impl Fs {
     fn try_alloc_bucket(&self, ca: &c::bch_dev, req: &mut c::alloc_request, b: u64, generation: u8)
         -> Result<Option<OpenBucket>, BchError>
     {
-        if self.superblock_bucket_unmarked(ca, b) {
+        if unlikely(self.superblock_bucket_unmarked(ca, b)) {
             return Ok(None);
         }
-        if ca.bucket_nouse(b) {
+        if unlikely(ca.bucket_nouse(b)) {
             req.counters.skipped_nouse += 1;
             return Ok(None);
         }

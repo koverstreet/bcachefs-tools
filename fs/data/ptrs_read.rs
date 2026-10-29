@@ -13,7 +13,7 @@ use super::*;
 use crate::debug::params as debug_params;
 use crate::errcode::bch_errcode;
 use crate::util::Printbuf;
-use crate::util::kernel::READ;
+use crate::util::kernel::{cold_path, unlikely, READ};
 
 #[cfg(CONFIG_BCACHEFS_DEBUG)]
 crate::module_param! {
@@ -137,11 +137,11 @@ fn ptr_better(fs: &Fs, p1: &c::extent_ptr_decoded, mut l1: u64, p2: &c::extent_p
     if debug_params::force_reconstruct_read() {
         return p1.do_ec_reconstruct > p2.do_ec_reconstruct;
     }
-    if p1.do_ec_reconstruct || p2.do_ec_reconstruct {
+    if unlikely(p1.do_ec_reconstruct || p2.do_ec_reconstruct) {
         return p1.do_ec_reconstruct < p2.do_ec_reconstruct;
     }
 
-    if p1.crc_retry_nr != p2.crc_retry_nr {
+    if unlikely(p1.crc_retry_nr != p2.crc_retry_nr) {
         return p1.crc_retry_nr < p2.crc_retry_nr;
     }
 
@@ -158,11 +158,11 @@ fn ptr_better(fs: &Fs, p1: &c::extent_ptr_decoded, mut l1: u64, p2: &c::extent_p
 
     // prefer extents with checksums
     let (c1, c2) = (p1.crc.csum_type != 0, p2.crc.csum_type != 0);
-    if c1 != c2 {
+    if unlikely(c1 != c2) {
         return c1;
     }
 
-    if flags.contains(c::bch_read_flags::BCH_READ_soft_require_read_device) {
+    if unlikely(flags.contains(c::bch_read_flags::BCH_READ_soft_require_read_device)) {
         if u32::from(p1.ptr.dev()) == preferred_dev {
             if fs.dev_rotational(p2.ptr.dev().into()) {
                 return true;
@@ -220,7 +220,7 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
                 }
 
                 // reported outside the read-side section; still not there
-                let missing = fs.dev_rcu(dev, &rcu).is_none() && dev != c::BCH_SB_MEMBER_INVALID;
+                let missing = unlikely(fs.dev_rcu(dev, &rcu).is_none() && dev != c::BCH_SB_MEMBER_INVALID);
                 if missing {
                     drop(rcu);
                     fs.dev_missing_bkey(key.untyped(), dev)?;
@@ -233,6 +233,7 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
                 }
 
                 if let Some(f) = failed.and_then(|f| f.dev(dev)) {
+                    cold_path();
                     let csum_nr = f.bits.csum_nr();
                     p.crc_retry_nr = csum_nr;
                     p.has_ec &= f.ec_errcode == 0;

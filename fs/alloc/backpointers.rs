@@ -50,7 +50,7 @@ use crate::init::passes;
 use crate::init::progress::Progress;
 use crate::util::alloc::{flags::{GFP_KERNEL, __GFP_NOWARN}, KVVec};
 use crate::util::ffi::Opaque;
-use crate::util::kernel::{totalram_bytes, PAGE_SIZE};
+use crate::util::kernel::{totalram_bytes, unlikely, PAGE_SIZE};
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
 use crate::util::sort::heapsort_by;
@@ -472,7 +472,7 @@ pub(super) fn get_key<'i, 't>(t: &'i TransAttempt<'t, '_>, bp: BkeySC<'_, c::Bac
     let v = *bp.v();
     let btree = c::btree_id(v.btree_id.into());
 
-    if u32::from(v.btree_id) >= fs.btree_id_nr_alive() {
+    if unlikely(u32::from(v.btree_id) >= fs.btree_id_nr_alive()) {
         return Ok(None);
     }
 

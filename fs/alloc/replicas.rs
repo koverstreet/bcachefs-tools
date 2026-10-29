@@ -22,6 +22,7 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::sb::io::{entries_as_read, entries_end, SbField, SbFieldOps, SbState};
 use crate::sb::members::member_exists;
 use crate::util::ffi::Opaque;
+use crate::util::kernel::{cold_path, likely};
 use crate::util::rcu::read_lock;
 use crate::util::alloc::{flags, AllocError, KVVec};
 use crate::util::eytzinger::Eytzinger0;
@@ -767,6 +768,7 @@ impl Fs {
 
     /// @e added, if it isn't there, and written to the superblock - and
     /// @refs taken on it.
+    #[cold]
     #[inline(never)]
     fn mark_replicas_slowpath(&self, e: &Entry, refs: i32) -> Result<(), BchError> {
         verify_entry(e);
@@ -794,7 +796,7 @@ impl Fs {
 
     /// @e marked in the superblock, if it isn't.
     pub fn mark_replicas(&self, e: &Entry) -> Result<(), BchError> {
-        if self.replicas_marked(e) { Ok(()) } else { self.mark_replicas_slowpath(e, 0) }
+        if likely(self.replicas_marked(e)) { Ok(()) } else { self.mark_replicas_slowpath(e, 0) }
     }
 
     /// Whether @e, a journal entry, has devices: only those are refcounted.
@@ -834,6 +836,7 @@ impl Fs {
                 Some(v) if v > 0 => return,
                 Some(0) => {}
                 _ => {
+                    cold_path();
                     warn(self, format_args!("refcount error putting {e}"));
                     return;
                 }

@@ -12,6 +12,33 @@ pub const PAGE_SIZE: usize = kernel::page::PAGE_SIZE;
 #[cfg(not(kernel))]
 pub const PAGE_SIZE: usize = 4096;
 
+/// C's unlikely(): @b, and the branch it decides is a slowpath to the
+/// compiler - laid out of line, kept out of the fastpath's registers.
+#[inline(always)]
+pub fn unlikely(b: bool) -> bool {
+    if b {
+        cold_path();
+    }
+    b
+}
+
+/// C's likely(): @b, and the branch it decides against is the slowpath.
+#[inline(always)]
+pub fn likely(b: bool) -> bool {
+    if !b {
+        cold_path();
+    }
+    b
+}
+
+/// The path that reaches this is rarely taken: core::hint::cold_path(), which
+/// is Rust 1.95 and our MSRV is below it. A call that survives MIR inlining,
+/// so both backends see it: LLVM deletes the call and keeps the branch weights,
+/// cg_clif marks the block cold.
+#[cold]
+#[inline(never)]
+pub fn cold_path() {}
+
 /// Ask @shrink to free @nr objects, as memory pressure would: its
 /// scan_objects(), GFP_KERNEL.
 ///

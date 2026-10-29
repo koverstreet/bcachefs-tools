@@ -28,6 +28,7 @@ use crate::init::error::id;
 use crate::init::passes;
 use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
+use crate::util::kernel::{cold_path, unlikely};
 use crate::util::log::LogMsg;
 use crate::util::vstructs::plain_bytes;
 use crate::{accounting, bch_err, fs_inconsistent, fsck_err_on, prt};
@@ -288,6 +289,7 @@ fn mark_stripe_bucket(t: &TransAttempt<'_, '_>, s: StripeK<'_>, i: u32, deleting
     // C's bch2_dev_bkey_tryget() drops the error of scheduling the repair
     // of a missing device it reports
     let Some(ca) = fs.dev_bkey_tryget(s.untyped(), dev).unwrap_or(None) else {
+        cold_path();
         if dev != c::BCH_SB_MEMBER_INVALID && !flags.contains(UpdateTriggerFlags::OVERWRITE) {
             return fs.throw(bch_errcode::BCH_ERR_mark_stripe);
         }
@@ -410,7 +412,7 @@ fn trigger(t: &TransAttempt<'_, '_>, op: &mut TriggerOp<'_>) -> Result<(), BchEr
         // the key cache's flush - editing @op.new into a deletion would
         // bypass it, and trip the commit's assert. The btree's delete runs
         // this trigger again, which cleans up after it.
-        if new_lru == STRIPE_LRU_POS_EMPTY && !fs.stripe_is_open(idx) {
+        if unlikely(new_lru == STRIPE_LRU_POS_EMPTY) && !fs.stripe_is_open(idx) {
             return t.delete(c::btree_id::stripes, op.new.k.p, F::OVERWRITE_TRIGGERED);
         }
 

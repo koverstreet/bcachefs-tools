@@ -70,7 +70,7 @@ use crate::util::bio::{Bio, BioBox, BioOwner, Endio, RawBio};
 use crate::util::ffi::Opaque;
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::gather::{Gather, GatherRef};
-use crate::util::kernel::{bdev_max_discard_sectors, local_clock, READ};
+use crate::util::kernel::{bdev_max_discard_sectors, local_clock, unlikely, READ};
 use crate::util::place::Placed;
 use crate::util::log::LogMsg;
 use crate::util::rcu::read_lock;
@@ -398,7 +398,7 @@ impl<'a> Worker<'a> {
     fn one_bucket(&self, t: &TransAttempt<'_, '_>, bucket: c::bpos, bucket_size: u64) -> Result<(), BchError> {
         let fs = t.fs();
 
-        if dev_bucket_nouse(fs, bucket) {
+        if unlikely(dev_bucket_nouse(fs, bucket)) {
             return Ok(());
         }
         if let Err(n) = fs.discards.check(bucket, self.fastpath) {

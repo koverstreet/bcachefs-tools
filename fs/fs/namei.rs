@@ -350,6 +350,7 @@ pub fn link_trans(
 /// The VFS asked to unlink @wanted as @name, and @name names @got: the
 /// dcache and the btree disagree, and neither can be trusted - go emergency
 /// read-only, and say so with @wanted's path.
+#[cold]
 fn report_bad_unlink(
     t:      &TransAttempt<'_, '_>,
     wanted: c::subvol_inum,

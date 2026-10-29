@@ -35,6 +35,7 @@ use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
 use crate::opts::data_type_str;
 use crate::sb::counters::events;
+use crate::util::kernel::unlikely;
 use core::ffi::c_int;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
@@ -232,7 +233,7 @@ impl<'f> TransAttempt<'_, 'f> {
         wp.prev_sectors_free = wp.sectors_free;
         wp.sectors_free -= wp.sectors_free % block_sectors;
 
-        if wp.sectors_free == 0 {
+        if unlikely(wp.sectors_free == 0) {
             return Ok(false);
         }
         assert!(wp.sectors_free != u32::MAX, "a write point with no buckets");

@@ -31,6 +31,7 @@ use crate::inode;
 use crate::snapshots::subvolume;
 use crate::str_hash::{self, HashTable};
 use crate::util::ffi::Opaque;
+use crate::util::kernel::likely;
 use crate::util::os_str::{qstr, OsStr, OsStrExt};
 use core::ffi::c_int;
 use core::marker::PhantomData;
@@ -353,7 +354,7 @@ pub fn maybe_casefold<'a>(
     info: &c::bch_hash_info,
     name: &'a OsStr,
 ) -> Result<&'a OsStr, BchError> {
-    if info.cf_encoding.is_null() {
+    if likely(info.cf_encoding.is_null()) {
         Ok(name)
     } else {
         casefold(t, info, name)
