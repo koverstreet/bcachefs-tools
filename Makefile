@@ -341,10 +341,14 @@ generate_version: .version version.h
 # linked or run, so cross builds work as native ones do. Its own target dir,
 # so switching between it and the tools build doesn't rebuild the crate each
 # time. One codegen unit, not incremental, so it's one object: in RUSTFLAGS,
-# because cargo puts those last, and a codegen-units there would win.
+# because cargo puts those last, and a codegen-units there would win. Not
+# optimized, no debuginfo: the records are constants rustc evaluates, the same
+# either way, and the release profile's opt-level=3 and debuginfo=2 add a
+# quarter to the peak memory of this one-unit build and double its time - it
+# was what a 4G CI VM ran out of memory on.
 build/cstruct/fs.o: force
 	$(Q)mkdir -p $(dir $@)
-	$(Q)CARGO_INCREMENTAL=0 RUSTFLAGS="$$RUSTFLAGS -C codegen-units=1 -C linker-plugin-lto=off" \
+	$(Q)CARGO_INCREMENTAL=0 RUSTFLAGS="$$RUSTFLAGS -C codegen-units=1 -C linker-plugin-lto=off -C opt-level=0 -C debuginfo=0" \
 		$(CARGO) rustc $(CARGO_BUILD_ARGS) -q \
 		--target-dir build/gen-headers -p bcachefs-kernel --lib -- \
 		--cfg bch_cstruct_records --emit=obj=$(abspath $@)
