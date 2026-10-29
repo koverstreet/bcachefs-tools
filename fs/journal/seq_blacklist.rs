@@ -36,6 +36,7 @@ use core::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 use cstruct_macros::c_export;
 
+use crate::sb_err_on;
 use crate::bch_verbose;
 use crate::c;
 use crate::util::vstructs::Unvalidated;
@@ -56,10 +57,8 @@ impl SbFieldOps for Section {
                 _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
         for (i, e) in f.start.iter().enumerate() {
             let (start, end) = (e.start.get(), e.end.get());
-            if start >= end {
-                write!(err, "entry {i} start >= end ({start} >= {end})");
-                return Err(bch_errcode::BCH_ERR_invalid_sb_journal_seq_blacklist.into());
-            }
+            sb_err_on!(err, start >= end, BCH_ERR_invalid_sb_journal_seq_blacklist,
+                       "entry {i} start >= end ({start} >= {end})")?;
 
             if let Some(next) = f.start.get(i + 1).filter(|n| end > n.start.get()) {
                 write!(err, "entry {} out of order with next entry ({end} > {})", i + 1, next.start.get());

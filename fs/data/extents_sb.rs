@@ -5,6 +5,7 @@
 //! in-memory copy is c->sb.extent_type_u64s, a fixed size array: the
 //! section's sizes, then ours over the types we know.
 
+use crate::sb_err_on;
 use crate::c;
 use crate::data::ptrs::{extent_entry_type_name, extent_entry_type_u64s};
 use crate::errcode::{bch_errcode, BchError};
@@ -40,11 +41,9 @@ impl SbFieldOps for c::bch_sb_field_extent_type_u64s {
     fn validate(_sb: &c::bch_sb<Unvalidated>, e: &c::bch_sb_field_extent_type_u64s<Unvalidated>,
                 _flags: c::bch_validate_flags, err: &mut Printbuf) -> Result<(), BchError> {
         for (ty, (&theirs, ours)) in sizes(&e.d).iter().zip(ours()).enumerate() {
-            if theirs != ours {
-                write!(err, "extent_type_u64s for {} does not match in-mem ({theirs} != {ours})",
-                       extent_entry_type_name(ty as u32).unwrap());
-                return Err(bch_errcode::BCH_ERR_invalid_sb_extent_type_u64s.into());
-            }
+            sb_err_on!(err, theirs != ours, BCH_ERR_invalid_sb_extent_type_u64s,
+                       "extent_type_u64s for {} does not match in-mem ({theirs} != {ours})",
+                       extent_entry_type_name(ty as u32).unwrap())?;
         }
         Ok(())
     }

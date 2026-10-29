@@ -23,7 +23,7 @@ use crate::c;
 use crate::util::vstructs::Unvalidated;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::prt;
+use crate::{prt, sb_err_on};
 use crate::sb::io::{sb_field_u64s, SbFieldOps};
 use crate::util::alloc::{flags::GFP_KERNEL, kvvec_insert, KVVec};
 use crate::util::ffi::{c_char, Opaque};
@@ -136,27 +136,16 @@ impl From<&c::bch_sb_error_entry_cpu> for c::bch_sb_field_error_entry_v2 {
     }
 }
 
-fn invalid() -> Result<(), BchError> {
-    Err(bch_errcode::BCH_ERR_invalid_sb_errors.into())
-}
-
 fn validate<E: ErrorEntry>(entries: &[E], err: &mut Printbuf) -> Result<(), BchError> {
     for (i, e) in entries.iter().enumerate() {
-        if e.nr() == 0 {
-            prt!(err, "entry with count 0 (id {})", e.id());
-            return invalid();
-        }
+        sb_err_on!(err, e.nr() == 0, BCH_ERR_invalid_sb_errors, "entry with count 0 (id {})", e.id())?;
 
         // never for v1, whose first is its last
-        if e.first() > e.last() {
-            prt!(err, "entry with first occurrence after last (id {})", e.id());
-            return invalid();
-        }
+        sb_err_on!(err, e.first() > e.last(), BCH_ERR_invalid_sb_errors,
+                   "entry with first occurrence after last (id {})", e.id())?;
 
-        if entries.get(i + 1).is_some_and(|n| e.id().0 >= n.id().0) {
-            write!(err, "entries out of order");
-            return invalid();
-        }
+        sb_err_on!(err, entries.get(i + 1).is_some_and(|n| e.id().0 >= n.id().0), BCH_ERR_invalid_sb_errors,
+                   "entries out of order")?;
     }
     Ok(())
 }

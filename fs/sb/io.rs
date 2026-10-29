@@ -210,6 +210,21 @@ pub trait SbFieldOps: SbField + InState {
     }
 }
 
+/// A check of a superblock, or of a section of one: if @cond, it's invalid,
+/// @err - a bch_errcode - and the message says why, in @out. As
+/// bkey_fsck_err_on!() is a key's: `sb_err_on!(out, cond, BCH_ERR_x, "...")?`.
+#[macro_export]
+macro_rules! sb_err_on {
+    ($out:expr, $cond:expr, $err:ident, $($msg:tt)*) => {
+        if $cond {
+            $crate::prt!($out, $($msg)*);
+            Err($crate::errcode::BchError::from($crate::c::bch_errcode::$err))
+        } else {
+            Ok(())
+        }
+    };
+}
+
 /// entries_end() for a section of variable-size entries @E, from @head on:
 /// up to the first that doesn't fit, or that @is_entry says ends the walk -
 /// a terminator, zeroes.
@@ -428,40 +443,24 @@ pub fn field_to_text(out: &mut Printbuf, fs: Option<&Fs>, sb: &bch_sb<Unvalidate
 fn validate_layout(layout: &c::bch_sb_layout, out: &mut Printbuf) -> Result<(), BchError> {
     const _: () = assert!(size_of::<c::bch_sb_layout>() == 512);
 
-    if layout.magic.b != BCACHE_MAGIC && layout.magic.b != BCHFS_MAGIC {
-        write!(out, "Not a bcachefs superblock layout");
-        return Err(bch_errcode::BCH_ERR_invalid_sb_layout.into());
-    }
-
-    if layout.layout_type != 0 {
-        write!(out, "Invalid superblock layout type {}", layout.layout_type);
-        return Err(bch_errcode::BCH_ERR_invalid_sb_layout_type.into());
-    }
-
-    if layout.nr_superblocks == 0 {
-        write!(out, "Invalid superblock layout: no superblocks");
-        return Err(bch_errcode::BCH_ERR_invalid_sb_layout_nr_superblocks.into());
-    }
-
-    if usize::from(layout.nr_superblocks) > layout.sb_offset.len() {
-        write!(out, "Invalid superblock layout: too many superblocks");
-        return Err(bch_errcode::BCH_ERR_invalid_sb_layout_nr_superblocks.into());
-    }
-
-    if u32::from(layout.sb_max_size_bits) > c::BCH_SB_LAYOUT_SIZE_BITS_MAX {
-        write!(out, "Invalid superblock layout: max_size_bits too high");
-        return Err(bch_errcode::BCH_ERR_invalid_sb_layout_sb_max_size_bits.into());
-    }
+    sb_err_on!(out, layout.magic.b != BCACHE_MAGIC && layout.magic.b != BCHFS_MAGIC,
+               BCH_ERR_invalid_sb_layout, "Not a bcachefs superblock layout")?;
+    sb_err_on!(out, layout.layout_type != 0, BCH_ERR_invalid_sb_layout_type,
+               "Invalid superblock layout type {}", layout.layout_type)?;
+    sb_err_on!(out, layout.nr_superblocks == 0, BCH_ERR_invalid_sb_layout_nr_superblocks,
+               "Invalid superblock layout: no superblocks")?;
+    sb_err_on!(out, usize::from(layout.nr_superblocks) > layout.sb_offset.len(),
+               BCH_ERR_invalid_sb_layout_nr_superblocks, "Invalid superblock layout: too many superblocks")?;
+    sb_err_on!(out, u32::from(layout.sb_max_size_bits) > c::BCH_SB_LAYOUT_SIZE_BITS_MAX,
+               BCH_ERR_invalid_sb_layout_sb_max_size_bits, "Invalid superblock layout: max_size_bits too high")?;
 
     let max_sectors = 1u64 << layout.sb_max_size_bits;
     let offsets = &layout.sb_offset[..usize::from(layout.nr_superblocks)];
     for (i, w) in offsets.windows(2).enumerate() {
         let (prev, offset) = (w[0].get(), w[1].get());
-        if offset < prev + max_sectors {
-            write!(out, "Invalid superblock layout: superblocks overlap\n  (sb {i} ends at {} next starts at {offset}",
-                   prev + max_sectors);
-            return Err(bch_errcode::BCH_ERR_invalid_sb_layout_superblocks_overlap.into());
-        }
+        sb_err_on!(out, offset < prev + max_sectors, BCH_ERR_invalid_sb_layout_superblocks_overlap,
+                   "Invalid superblock layout: superblocks overlap\n  (sb {i} ends at {} next starts at {offset}",
+                   prev + max_sectors)?;
     }
     Ok(())
 }
@@ -484,16 +483,12 @@ fn sb_compatible(sb: &Head<bch_sb>, out: &mut Printbuf) -> Result<(), BchError> 
                           version(c::bcachefs_metadata_version_current as u32));
 
     for (what, v) in [("version", v), ("version_min", v_min)] {
-        if !version_compatible(v) {
-            prt!(out, "Unsupported superblock {what} {} (min {min}, max {current})", version(v));
-            return Err(bch_errcode::BCH_ERR_invalid_sb_version.into());
-        }
+        sb_err_on!(out, !version_compatible(v), BCH_ERR_invalid_sb_version,
+                   "Unsupported superblock {what} {} (min {min}, max {current})", version(v))?;
     }
 
-    if v_min > v {
-        prt!(out, "Bad minimum version {}, greater than version field {}", version(v_min), version(v));
-        return Err(bch_errcode::BCH_ERR_invalid_sb_version.into());
-    }
+    sb_err_on!(out, v_min > v, BCH_ERR_invalid_sb_version,
+               "Bad minimum version {}, greater than version field {}", version(v_min), version(v))?;
     Ok(())
 }
 
@@ -518,51 +513,30 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
             0
         };
 
-        if incompat_bit != 0 {
-            write!(out, "Filesystem has incompatible feature bit {incompat_bit}, highest supported {} ({})",
-                   c::bch_sb_feature(c::BCH_FEATURE_NR - 1), c::BCH_FEATURE_NR - 1);
-            return Err(bch_errcode::BCH_ERR_invalid_sb_features.into());
-        }
+        sb_err_on!(out, incompat_bit != 0, BCH_ERR_invalid_sb_features,
+                   "Filesystem has incompatible feature bit {incompat_bit}, highest supported {} ({})",
+                   c::bch_sb_feature(c::BCH_FEATURE_NR - 1), c::BCH_FEATURE_NR - 1)?;
 
         let current = c::bcachefs_metadata_version_current as u64;
-        if c::BCH_VERSION_MAJOR(sb.version.get().into()) > c::BCH_VERSION_MAJOR(current) ||
-           sb.version_incompat() > current {
-            prt!(out, "Filesystem has incompatible version {}, current version {}",
-                 version(sb.version.get()), version(current as u32));
-            return Err(bch_errcode::BCH_ERR_invalid_sb_features.into());
-        }
+        sb_err_on!(out, c::BCH_VERSION_MAJOR(sb.version.get().into()) > c::BCH_VERSION_MAJOR(current) ||
+                        sb.version_incompat() > current, BCH_ERR_invalid_sb_features,
+                   "Filesystem has incompatible version {}, current version {}",
+                   version(sb.version.get()), version(current as u32))?;
     }
 
-    if sb.user_uuid.b == [0; 16] {
-        write!(out, "Bad user UUID (got zeroes)");
-        return Err(bch_errcode::BCH_ERR_invalid_sb_uuid.into());
-    }
-
-    if sb.uuid.b == [0; 16] {
-        write!(out, "Bad internal UUID (got zeroes)");
-        return Err(bch_errcode::BCH_ERR_invalid_sb_uuid.into());
-    }
-
-    if !write && sb.offset.get() != read_offset {
-        write!(out, "Bad sb offset (got {}, read from {read_offset})", sb.offset.get());
-        return Err(bch_errcode::BCH_ERR_invalid_sb_offset.into());
-    }
-
-    if sb.nr_devices == 0 || u32::from(sb.nr_devices) > c::BCH_SB_MEMBERS_MAX {
-        write!(out, "Bad number of member devices {} (max {})", sb.nr_devices, c::BCH_SB_MEMBERS_MAX);
-        return Err(bch_errcode::BCH_ERR_invalid_sb_too_many_members.into());
-    }
-
-    if sb.dev_idx >= sb.nr_devices {
-        write!(out, "Bad dev_idx (got {}, nr_devices {})", sb.dev_idx, sb.nr_devices);
-        return Err(bch_errcode::BCH_ERR_invalid_sb_dev_idx.into());
-    }
+    sb_err_on!(out, sb.user_uuid.b == [0; 16], BCH_ERR_invalid_sb_uuid, "Bad user UUID (got zeroes)")?;
+    sb_err_on!(out, sb.uuid.b == [0; 16], BCH_ERR_invalid_sb_uuid, "Bad internal UUID (got zeroes)")?;
+    sb_err_on!(out, !write && sb.offset.get() != read_offset, BCH_ERR_invalid_sb_offset,
+               "Bad sb offset (got {}, read from {read_offset})", sb.offset.get())?;
+    sb_err_on!(out, sb.nr_devices == 0 || u32::from(sb.nr_devices) > c::BCH_SB_MEMBERS_MAX,
+               BCH_ERR_invalid_sb_too_many_members, "Bad number of member devices {} (max {})",
+               sb.nr_devices, c::BCH_SB_MEMBERS_MAX)?;
+    sb_err_on!(out, sb.dev_idx >= sb.nr_devices, BCH_ERR_invalid_sb_dev_idx,
+               "Bad dev_idx (got {}, nr_devices {})", sb.dev_idx, sb.nr_devices)?;
 
     let precision = sb.time_precision.get();
-    if precision == 0 || u64::from(precision) > NSEC_PER_SEC {
-        write!(out, "Invalid time precision: {precision} (min 1, max {NSEC_PER_SEC})");
-        return Err(bch_errcode::BCH_ERR_invalid_sb_time_precision.into());
-    }
+    sb_err_on!(out, precision == 0 || u64::from(precision) > NSEC_PER_SEC, BCH_ERR_invalid_sb_time_precision,
+               "Invalid time precision: {precision} (min 1, max {NSEC_PER_SEC})")?;
 
     // old versions didn't know to downgrade this field
     if sb.version_incompat_allowed() > sb.version.get().into() {
@@ -607,16 +581,12 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
             write!(out, "Invalid superblock: optional field extends past end of superblock");
             return Err(bch_errcode::BCH_ERR_invalid_sb_field_size.into());
         };
-        if f.u64s.get() == 0 {
-            write!(out, "Invalid superblock: optional field with size 0 (type {})", f.type_.get());
-            return Err(bch_errcode::BCH_ERR_invalid_sb_field_size.into());
-        }
+        sb_err_on!(out, f.u64s.get() == 0, BCH_ERR_invalid_sb_field_size,
+                   "Invalid superblock: optional field with size 0 (type {})", f.type_.get())?;
         off += f.u64s.get() as usize * size_of::<u64>();
-        if off > b.len() {
-            write!(out, "Invalid superblock: optional field extends past end of superblock (type {})",
-                   f.type_.get());
-            return Err(bch_errcode::BCH_ERR_invalid_sb_field_size.into());
-        }
+        sb_err_on!(out, off > b.len(), BCH_ERR_invalid_sb_field_size,
+                   "Invalid superblock: optional field extends past end of superblock (type {})",
+                   f.type_.get())?;
     }
 
     // members must be validated first
@@ -639,10 +609,8 @@ pub fn validate<'a>(sb: &'a mut bch_sb<Unvalidated>, opts: &c::bch_opts, read_of
 
     if write {
         let m = crate::sb::members::sb_member(sb, sb.dev_idx.into()).unwrap_or_default();
-        if m.seq != sb.seq {
-            write!(out, "Invalid superblock: member seq {} != sb seq {}", m.seq.get(), sb.seq.get());
-            return Err(bch_errcode::BCH_ERR_invalid_sb_members_missing.into());
-        }
+        sb_err_on!(out, m.seq != sb.seq, BCH_ERR_invalid_sb_members_missing,
+                   "Invalid superblock: member seq {} != sb seq {}", m.seq.get(), sb.seq.get())?;
     }
 
     // SAFETY: what Validated says of it is true - every check above passed
@@ -1251,19 +1219,15 @@ fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Re
         let buf: &[u8] = sb.io.buf.buffer_mut();
         let h = cast_plain::<Head<bch_sb>>(buf).expect("a superblock buffer, holding a header");
 
-        if h.magic.b != BCACHE_MAGIC && h.magic.b != BCHFS_MAGIC {
-            prt!(err, "Not a bcachefs superblock (got magic {})", h.magic);
-            return Err(bch_errcode::BCH_ERR_invalid_sb_magic.into());
-        }
+        sb_err_on!(err, h.magic.b != BCACHE_MAGIC && h.magic.b != BCHFS_MAGIC, BCH_ERR_invalid_sb_magic,
+                   "Not a bcachefs superblock (got magic {})", h.magic)?;
 
         sb_compatible(h, err)?;
 
         let bytes = size_of::<Head<bch_sb>>() + h.u64s() as usize * size_of::<u64>();
         let max = 512u64 << u32::from(h.layout.sb_max_size_bits).min(c::BCH_SB_LAYOUT_SIZE_BITS_MAX);
-        if bytes as u64 > max {
-            prt!(err, "Invalid superblock: too big (got {bytes} bytes, layout max {max})");
-            return Err(bch_errcode::BCH_ERR_invalid_sb_too_big.into());
-        }
+        sb_err_on!(err, bytes as u64 > max, BCH_ERR_invalid_sb_too_big,
+                   "Invalid superblock: too big (got {bytes} bytes, layout max {max})")?;
 
         if bytes > buf.len() {
             let u64s = h.u64s() as u32;
@@ -1272,10 +1236,8 @@ fn read_one_super(sb: &mut bch_sb_handle, offset: u64, err: &mut Printbuf) -> Re
         }
 
         let ty = c::bch_csum_type(h.csum_type() as u32);
-        if ty.0 >= c::bch_csum_type::BCH_CSUM_NR.0 || ty.is_encryption() {
-            prt!(err, "unknown checksum type {}", h.csum_type());
-            return Err(bch_errcode::BCH_ERR_invalid_sb_csum_type.into());
-        }
+        sb_err_on!(err, ty.0 >= c::bch_csum_type::BCH_CSUM_NR.0 || ty.is_encryption(),
+                   BCH_ERR_invalid_sb_csum_type, "unknown checksum type {}", h.csum_type())?;
 
         // XXX: verify MACs
         let csum = bch_sb::<Unvalidated>::from_bytes(&buf[..bytes])

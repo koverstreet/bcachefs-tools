@@ -13,7 +13,7 @@ use crate::c;
 use crate::util::vstructs::Unvalidated;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::prt;
+use crate::{prt, sb_err_on};
 use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState};
 use crate::sb::members::sb_member;
 use crate::types::Le64;
@@ -37,20 +37,13 @@ fn runs_validate<S: SbState>(sb: &c::bch_sb<S>, mut runs: KVVec<Range<u64>>, err
     };
     let m = sb_member(sb, S::head(sb).dev_idx.into()).unwrap_or_default();
 
-    if first.start == 0 {
-        prt!(err, "journal bucket at sector 0");
-        return Err(invalid());
-    }
+    sb_err_on!(err, first.start == 0, BCH_ERR_invalid_sb_journal, "journal bucket at sector 0")?;
 
-    if first.start < m.first_bucket.get().into() {
-        prt!(err, "journal bucket {} before first bucket {}", first.start, m.first_bucket.get());
-        return Err(invalid());
-    }
+    sb_err_on!(err, first.start < m.first_bucket.get().into(), BCH_ERR_invalid_sb_journal,
+               "journal bucket {} before first bucket {}", first.start, m.first_bucket.get())?;
 
-    if last.end > m.nbuckets.get() {
-        prt!(err, "journal bucket {} past end of device (nbuckets {})", last.end - 1, m.nbuckets.get());
-        return Err(invalid());
-    }
+    sb_err_on!(err, last.end > m.nbuckets.get(), BCH_ERR_invalid_sb_journal,
+               "journal bucket {} past end of device (nbuckets {})", last.end - 1, m.nbuckets.get())?;
 
     if let Some(w) = runs.windows(2).find(|w| w[0].end > w[1].start) {
         prt!(err, "duplicate journal buckets in ranges {}-{}, {}-{}",

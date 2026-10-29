@@ -4,7 +4,7 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::c;
 use crate::errcode::{bch_errcode, ret_to_c, BchError};
 use crate::fs::{Fs, SbLockGuard};
-use crate::prt;
+use crate::{prt, sb_err_on};
 use crate::util::kernel::{ktime_get_real_seconds, nsecs_to_jiffies, NSEC_PER_SEC, READ, WRITE};
 use crate::util::workqueue::Queue;
 use crate::util::{Bytes, DateTime, HumanReadable, Nsecs, Printbuf, Sectors, ToText};
@@ -348,39 +348,29 @@ fn invalid() -> Result<(), BchError> {
 
 fn validate_member(err: &mut Printbuf, m: &c::bch_member, sb: &c::bch_sb<Unvalidated>, i: u32) -> Result<(), BchError> {
     let nbuckets = m.nbuckets.get();
-    if nbuckets > c::BCH_MEMBER_NBUCKETS_MAX.into() {
-        write!(err, "device {i}: too many buckets (got {nbuckets}, max {})", c::BCH_MEMBER_NBUCKETS_MAX);
-        return invalid();
-    }
+    sb_err_on!(err, nbuckets > c::BCH_MEMBER_NBUCKETS_MAX.into(), BCH_ERR_invalid_sb_members,
+               "device {i}: too many buckets (got {nbuckets}, max {})", c::BCH_MEMBER_NBUCKETS_MAX)?;
 
     // wrapping, as C's: a first_bucket past nbuckets isn't caught here
     let usable = nbuckets.wrapping_sub(m.first_bucket.get().into());
-    if usable < c::BCH_MIN_NR_NBUCKETS.into() {
-        write!(err, "device {i}: not enough buckets (got {usable}, min {})", c::BCH_MIN_NR_NBUCKETS);
-        return invalid();
-    }
+    sb_err_on!(err, usable < c::BCH_MIN_NR_NBUCKETS.into(), BCH_ERR_invalid_sb_members,
+               "device {i}: not enough buckets (got {usable}, min {})", c::BCH_MIN_NR_NBUCKETS)?;
 
     let (bucket_size, block_size) = (m.bucket_size.get(), sb.block_size.get());
-    if bucket_size < block_size {
-        write!(err, "device {i}: bucket size {bucket_size} smaller than block size {block_size}");
-        return invalid();
-    }
+    sb_err_on!(err, bucket_size < block_size, BCH_ERR_invalid_sb_members,
+               "device {i}: bucket size {bucket_size} smaller than block size {block_size}")?;
 
-    if u64::from(bucket_size) < sb.btree_node_size() {
-        write!(err, "device {i}: bucket size {bucket_size} smaller than btree node size {}", sb.btree_node_size());
-        return invalid();
-    }
+    sb_err_on!(err, u64::from(bucket_size) < sb.btree_node_size(), BCH_ERR_invalid_sb_members,
+               "device {i}: bucket size {bucket_size} smaller than btree node size {}",
+               sb.btree_node_size())?;
 
-    if u32::from(m.btree_bitmap_shift) >= c::BCH_MI_BTREE_BITMAP_SHIFT_MAX {
-        write!(err, "device {i}: invalid btree_bitmap_shift {}", m.btree_bitmap_shift);
-        return invalid();
-    }
+    sb_err_on!(err, u32::from(m.btree_bitmap_shift) >= c::BCH_MI_BTREE_BITMAP_SHIFT_MAX,
+               BCH_ERR_invalid_sb_members, "device {i}: invalid btree_bitmap_shift {}",
+               m.btree_bitmap_shift)?;
 
-    if m.freespace_initialized() &&
-       sb.features[0].get() & (1 << c::bch_sb_feature::BCH_FEATURE_no_alloc_info.0) != 0 {
-        write!(err, "device {i}: freespace initialized but fs has no alloc info");
-        return invalid();
-    }
+    let no_alloc_info = sb.features[0].get() & (1 << c::bch_sb_feature::BCH_FEATURE_no_alloc_info.0) != 0;
+    sb_err_on!(err, m.freespace_initialized() && no_alloc_info, BCH_ERR_invalid_sb_members,
+               "device {i}: freespace initialized but fs has no alloc info")?;
     Ok(())
 }
 

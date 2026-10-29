@@ -73,7 +73,7 @@ use crate::fs::{Fs, SbLockGuard};
 use crate::opts::OptFn;
 use crate::sb::io::{sb_field_u64s, SbFieldOps, SbState};
 use crate::sb::members;
-use crate::prt;
+use crate::{prt, sb_err_on};
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::rcu::{read_lock, ReadGuard};
 use crate::util::vstructs::{Head, Unvalidated, Validated};
@@ -638,17 +638,12 @@ fn disk_groups_validate<S: SbState>(sb: &c::bch_sb<S>, groups: &[c::bch_disk_gro
     let live = || groups.iter().enumerate().filter(|(_, g)| !g.deleted());
 
     for (i, g) in live() {
-        if g.label().is_empty() {
-            write!(err, "label {i} empty");
-            return invalid();
-        }
+        sb_err_on!(err, g.label().is_empty(), BCH_ERR_invalid_sb_disk_groups, "label {i} empty")?;
     }
 
     for (i, g) in live() {
-        if g.parent() as usize > nr {
-            write!(err, "label {i} has invalid parent {} (have {nr})", g.parent() - 1);
-            return invalid();
-        }
+        sb_err_on!(err, g.parent() as usize > nr, BCH_ERR_invalid_sb_disk_groups,
+                   "label {i} has invalid parent {} (have {nr})", g.parent() - 1)?;
     }
 
     for (i, g) in live() {

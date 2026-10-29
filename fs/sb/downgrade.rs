@@ -17,7 +17,7 @@ use crate::c;
 use crate::errcode::{bch_errcode, BchError};
 use crate::fs::{Fs, SbLockGuard};
 use crate::init::passes;
-use crate::prt;
+use crate::{prt, sb_err_on};
 use crate::sb::errors::prt_error_ids;
 use crate::sb::io::{entries_as_read, entries_end, SbFieldOps};
 use crate::types::Le64;
@@ -52,10 +52,8 @@ impl SbFieldOps for Section {
         let sb_major = c::BCH_VERSION_MAJOR(sb.version.get().into());
         for e in entries_read(f) {
             let major = c::BCH_VERSION_MAJOR(e.version.get().into());
-            if major != sb_major {
-                write!(err, "downgrade entry with mismatched major version ({major} != {sb_major})");
-                return Err(bch_errcode::BCH_ERR_invalid_sb_downgrade.into());
-            }
+            sb_err_on!(err, major != sb_major, BCH_ERR_invalid_sb_downgrade,
+                       "downgrade entry with mismatched major version ({major} != {sb_major})")?;
         }
         Ok(())
     }
