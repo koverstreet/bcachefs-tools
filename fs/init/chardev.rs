@@ -887,7 +887,13 @@ impl Fs {
             unsafe { c::device_unregister(dev) };
         }
         if minor >= 0 {
-            MINORS.lock().0[minor as usize] = None;
+            let mut minors = MINORS.lock();
+            minors.0[minor as usize] = None;
+            // The last one out frees the table: nothing else does, the static
+            // is never dropped
+            if minors.0.iter().all(Option::is_none) {
+                minors.0 = KVec::new();
+            }
         }
     }
 }
