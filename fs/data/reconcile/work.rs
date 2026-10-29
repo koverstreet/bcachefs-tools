@@ -58,7 +58,7 @@ use crate::btree::iter::{bkey_s_c_to_result, is_restart, lockrestart_do, poloniu
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::data::ec::repair::{stripe_repair, StripeRepair};
-use crate::data::moving::{IoMark, MoveStats, MovingCtxt};
+use crate::data::moving::{key_sectors, IoMark, MoveStats, MovingCtxt};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::data::reconcile::plan::{park, parks_on, pending_mod, plan, Plan};
@@ -483,7 +483,12 @@ impl<'a, 'f> Walker<'a, 'f> {
             }
         }
 
-        match ctxt.move_extent(t, None, &opts, &d, iter, level, k) {
+        let sectors = key_sectors(fs, k);
+        let ret = ctxt.move_extent(t, None, &opts, &d, iter, level, k);
+        if !matches!(&ret, Err(e) if is_restart(e)) {
+            ctxt.stats().walked(iter, sectors);
+        }
+        match ret {
             Ok(()) => {}
             Err(e) if is_restart(&e) || e.matches(err::BCH_ERR_data_update_fail_need_copygc) => return Err(e),
             Err(e) => match parks_on(t, &opts, &d, k, e) {

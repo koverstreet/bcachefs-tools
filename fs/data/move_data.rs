@@ -43,7 +43,7 @@ use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
 use crate::c::bch_errcode as err;
 use crate::data::ec::repair::scrub_stripe_block;
-use crate::data::moving::{MoveStats, Moving, MovingCtxt};
+use crate::data::moving::{key_sectors, MoveStats, Moving, MovingCtxt};
 use crate::data::moving_update;
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
@@ -115,8 +115,6 @@ impl<'a> Moving<'a> {
             return fs.throw(err::BCH_ERR_device_offline);
         }
 
-        let sectors = if k.k.is_btree_ptr() { fs.btree_sectors().into() } else { k.k.size.into() };
-
         let ret = if !k.k.is_btree_ptr() {
             moving_update::move_extent(self, t, bucket, iter, k, opts, data_opts)
         } else if !is_scrub(data_opts.type_) {
@@ -132,21 +130,14 @@ impl<'a> Moving<'a> {
         };
         t.restarts_handled();
 
-        let ret = match ret {
+        match ret {
             // wait for some IO to finish, and retry
             Err(e) if e.matches(c::ENOMEM) => {
                 self.wait_for_io();
                 Err(t.restart(err::BCH_ERR_transaction_restart_nested))
             }
             r => r,
-        };
-
-        if !matches!(&ret, Err(e) if is_restart(e)) {
-            if let Some(stats) = self.stats_opt().filter(|s| !s.phys.get()) {
-                stats.add_sectors_seen(sectors);
-            }
         }
-        ret
     }
 
     fn move_btree_node(&self, t: &TransAttempt<'_, 'a>, opts: &c::bch_inode_opts, data_opts: &c::data_update_opts,
@@ -181,7 +172,8 @@ impl<'a> Moving<'a> {
     }
 }
 
-/// For the journal scrub, until it's Rust.
+/// For the journal scrub, until it's Rust - its walk's progress counted here,
+/// as C's was.
 ///
 /// # Safety
 /// @ctxt's transaction is in an attempt, at @iter.
@@ -192,7 +184,14 @@ pub unsafe fn bch2_move_extent(ctxt: &Opaque<c::moving_context>, bucket: Option<
     let moving = Moving::from_c(ctxt);
     // SAFETY: the caller's
     let t = unsafe { moving.trans().attempt_in_progress() };
-    ret_to_c(moving.move_extent(&t, bucket, opts, data_opts, iter, level, k))
+    let sectors = key_sectors(t.fs(), k);
+    let ret = moving.move_extent(&t, bucket, opts, data_opts, iter, level, k);
+    if !matches!(&ret, Err(e) if is_restart(e)) {
+        if let Some(stats) = moving.stats_opt() {
+            stats.walked(iter, sectors);
+        }
+    }
+    ret_to_c(ret)
 }
 
 /// What a walk moves with: the context, the bucket each move holds a count on,
@@ -260,9 +259,7 @@ impl Moving<'_> {
         }
 
         BtreeLevels { btree, levels, start, end }.for_each(trans, |t, iter, level, k| {
-            if let Some(stats) = self.stats_opt() {
-                stats.set_pos(c::bbpos { btree: iter.btree(), pos: iter.pos() });
-            }
+            let sectors = key_sectors(fs, k);
 
             match mover.move_key(t, Some(&mut s), iter, level, k) {
                 Ok(()) => {}
@@ -273,6 +270,9 @@ impl Moving<'_> {
                 Err(e) => {
                     warn_once!(!e.matches(c::EAGAIN), fs, "unhandled error from move_extent: {e}");
                 }
+            }
+            if let Some(stats) = self.stats_opt() {
+                stats.walked(iter, sectors);
             }
             // between keys: it unlocks, and @k is done with
             self.ratelimit()
@@ -369,7 +369,7 @@ impl PhysWalker<'_, '_> {
             return ret;
         }
         if let Some(stats) = moving.stats_opt() {
-            stats.add_sectors_seen(bucket_len.into());
+            stats.walked(iter, bucket_len.into());
         }
         match ret {
             Ok(()) => Ok(()),
@@ -542,7 +542,6 @@ impl Moving<'_> {
 fn scrub(fs: &Fs, stats: &MoveStats, arg: c::bch_ioctl_data_scrub) -> Result<(), BchError> {
     let ctxt = MovingCtxt::new(fs, stats, writepoint_hashed(current_id()), false)
         .map_err(|_| BchError::from(c::ENOMEM))?;
-    stats.phys.set(true);
     stats.at.data_type.set(c::bch_data_type(c::DATA_PROGRESS_DATA_TYPE_phys));
 
     let _ = ctxt.trans().write_buffer_flush_sync();

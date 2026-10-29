@@ -25,7 +25,7 @@ use crate::btree::iter::{commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, B
 use crate::btree::write_buffer::{WbFlush, WbMaybeFlush};
 use crate::c;
 use crate::data::ec::stripe::WidenCache;
-use crate::data::moving::MovingCtxt;
+use crate::data::moving::{key_sectors, MovingCtxt};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::errcode::{ret_to_c, BchError};
 use crate::namei::inum_snapshot_to_path;
@@ -350,9 +350,8 @@ fn scan_btree(ctxt: &MovingCtxt<'_>, scan: &c::reconcile_scan, s: &mut PerSnapsh
     let res = DiskReservation::new(fs);
 
     BtreeLevels { btree, levels, start, end }.for_each_commit(trans, Some(&res), NO_ENOSPC, |t, iter, level, k| {
-        ctxt.stats().set_pos(c::bbpos { btree: iter.btree(), pos: iter.pos() });
+        ctxt.stats().walked(iter, key_sectors(fs, k));
         fs.reconcile.progress.update(t, iter)?;
-        fs.reconcile.scan_stats.add_sectors_seen(if level == 0 { k.k.size.into() } else { fs.btree_sectors().into() });
         res.put();
         stop(fs)?;
 
@@ -417,7 +416,7 @@ fn scan_bp(t: &TransAttempt<'_, '_>, scan: &c::reconcile_scan, bp: BkeySC<'_, c:
         return Ok(());
     };
 
-    fs.reconcile.scan_stats.add_sectors_seen(if level == 0 { k.k.size.into() } else { fs.btree_sectors().into() });
+    fs.reconcile.scan_stats.add_sectors_seen(key_sectors(fs, k));
     let opts = get_io_opts(t, None, k)?;
     update_opts(t, None, &opts, iter, level, k, scan)
 }
@@ -432,9 +431,8 @@ fn scan_stripes(ctxt: &MovingCtxt<'_>) -> Result<(), BchError> {
 
     let mut iter = BtreeIter::new(trans, c::btree_id::stripes, POS_MIN, BtreeIterFlags::PREFETCH);
     iter.for_each_commit(trans, None, NO_ENOSPC, |t, iter, k| {
-        ctxt.stats().set_pos(c::bbpos { btree: iter.btree(), pos: iter.pos() });
+        ctxt.stats().walked(iter, fs.btree_sectors().into());
         fs.reconcile.progress.update(t, iter)?;
-        fs.reconcile.scan_stats.add_sectors_seen(fs.btree_sectors().into());
         stop(fs)?;
 
         let Some(s) = k.arm::<c::Stripe>() else { return Ok(()) };

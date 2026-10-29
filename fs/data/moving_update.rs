@@ -117,10 +117,6 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
                           data_opts: &c::data_update_opts) -> Result<(), BchError> {
     let btree = iter.btree();
 
-    if let Some(stats) = moving.stats_opt() {
-        stats.set_pos(c::bbpos { btree, pos: iter.pos() });
-    }
-
     t.allocate_dropping_locks(|gfp| moving.updates_reserve(gfp_flags(gfp)).map_err(|_| c::ENOMEM.into()))
         .map_err(|e| if e.matches(c::ENOMEM) { t.fs().err(bch_errcode::BCH_ERR_ENOMEM_move_extent) } else { e })?;
 

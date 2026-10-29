@@ -22,7 +22,8 @@
 //! Moving's, a borrow - of a MovingCtxt, or of a context C hands Rust. IO that
 //! outlives the borrow, counted in the context, is a MovingIo.
 
-use crate::btree::iter::{BtreeTrans, TransFnName};
+use crate::btree::bkey::BkeySC;
+use crate::btree::iter::{BtreeIter, BtreeTrans, TransFnName};
 use crate::c;
 use crate::c::bch_errcode;
 use crate::data::copygc::bch2_copygc_wait_not_running;
@@ -59,7 +60,6 @@ impl MoveStats {
         for (i, b) in self.name.iter().enumerate() {
             b.set(if i < len { name[i] } else { 0 });
         }
-        self.phys.set(false);
         self.ret.set(c::bch_ioctl_data_event_ret(0));
         self.at.data_type.set(c::bch_data_type::BCH_DATA_user);
         self.at.pos.set(c::bbpos::default());
@@ -90,6 +90,12 @@ impl MoveStats {
         self.at.pos.set(pos);
     }
 
+    /// A walk's progress: at @iter's key, @sectors more seen.
+    pub fn walked(&self, iter: &BtreeIter<'_>, sectors: u64) {
+        self.set_pos(c::bbpos { btree: iter.btree(), pos: iter.pos() });
+        self.add_sectors_seen(sectors);
+    }
+
     /// For the moving contexts' listing.
     #[cold]
     pub fn to_text(&self, out: &mut Printbuf) {
@@ -112,6 +118,12 @@ impl MoveStats {
             out.newline();
         }
     }
+}
+
+/// @k's sectors, for a walk's progress: an extent's size, a btree node
+/// pointer's node's.
+pub fn key_sectors(fs: &Fs, k: BkeySC<'_>) -> u64 {
+    if k.k.is_btree_ptr() { fs.btree_sectors().into() } else { k.k.size.into() }
 }
 
 /// A point in a context's IO: io_done() says whether everything issued

@@ -21,7 +21,6 @@ nest! {
     pub struct MoveStats {
         #[c("char name[32]")]
         pub name: [Volatile<u8>; 32],
-        pub phys: Volatile<bool>,
         #[c("enum bch_ioctl_data_event_ret ret")]
         pub ret: Volatile<c::bch_ioctl_data_event_ret>,
 
