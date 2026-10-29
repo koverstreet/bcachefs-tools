@@ -347,17 +347,6 @@ fn stripe_repair_narrow(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, 
     Ok(StripeRepair::Retry)
 }
 
-/// Rebuild @s as a new stripe of the data blocks in @carry and @move_:
-/// repair_rebuild(), which takes over our @h and our read of the
-/// stripe, @buf, and hands the new stripe to its task for its writes.
-fn stripe_repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: OpenStripe<'_>,
-                         buf: KBox<StripeBuf>, devs: c::bch_devs_mask, carry: u32, move_: u32)
-    -> Result<StripeRepair, BchError>
-{
-    repair_rebuild(ctxt, s, h, buf, devs, carry, move_)?;
-    Ok(StripeRepair::Done)
-}
-
 /// Stripe @s, again, into @key: our own extent updates change its block
 /// counts.
 fn stripe_repair_reload(t: &TransAttempt<'_, '_>, key: &mut BkeyBuf, s: c::bpos) -> Result<(), BchError> {
@@ -408,7 +397,7 @@ fn stripe_repair_unrebuildable(ctxt: &Moving<'_>, h: OpenStripe<'_>, s: BkeySC<'
     }
 
     // clean blocks on devices that have lost their durability still move
-    stripe_repair_rebuild(ctxt, s, h, buf, devs, b.live & !b.bad, b.live & b.bad)
+    repair_rebuild(ctxt, s, h, buf, devs, b.live & !b.bad, b.live & b.bad)
 }
 
 /// With @s open, as @h: read it, and decide with what we found.
@@ -437,7 +426,7 @@ fn stripe_repair_opened(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, 
         return stripe_repair_narrow(ctxt, s, b, need_evacuate);
     }
 
-    stripe_repair_rebuild(ctxt, s, h, buf, devs, b.live & !b.bad, b.live & b.bad)
+    repair_rebuild(ctxt, s, h, buf, devs, b.live & !b.bad, b.live & b.bad)
 }
 
 /// stripe_repair(), of the blocks @b says - live, and bad.
@@ -611,8 +600,10 @@ pub(crate) fn repair_read(trans: &BtreeTrans<'_>, s: BkeySC<'_, c::Stripe<Valida
 /// Rebuild @s as a new stripe of the data blocks in @carry and @move_ - see
 /// init_new_stripe_from_old() - taking over the caller's claim @h and its
 /// read of the stripe, @read; its task does the writes.
-pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: OpenStripe<'_>,
-                             mut read: KBox<StripeBuf>, devs: c::bch_devs_mask, carry: u32, move_: u32) -> Result<(), BchError> {
+fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validated>>, h: OpenStripe<'_>,
+                  mut read: KBox<StripeBuf>, devs: c::bch_devs_mask, carry: u32, move_: u32)
+    -> Result<StripeRepair, BchError>
+{
     let trans = ctxt.trans();
     let fs = trans.fs();
     let v = s.v();
@@ -725,5 +716,5 @@ pub(crate) fn repair_rebuild(ctxt: &Moving<'_>, s: BkeySC<'_, c::Stripe<Validate
     drop(i);
 
     set_pending(fs, b);
-    Ok(())
+    Ok(StripeRepair::Done)
 }
