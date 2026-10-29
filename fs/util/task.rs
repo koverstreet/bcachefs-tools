@@ -60,6 +60,11 @@
 //! a data update's key in the in-flight table, by a lookup that read it
 //! before it left.
 //!
+//! Or a task's made in its home - spawn_home() - one allocation with what it's
+//! the task of, held from outside by a TaskHome: a ref on the task, so the
+//! two go with the last of them, and the task's free to run in its home to
+//! the end, its owner gone or not.
+//!
 //! What a task returns is the JoinHandle's; dropped, the task's detached,
 //! and what it returns is dropped when it completes, in its context. The
 //! JoinHandle's wait is a Gather - the task holds one ref, put when it
@@ -343,8 +348,11 @@ impl<F: Future> Task<F> {
         unsafe { put_ref(h) };
     }
 
+    /// Its future dropped, unpolled, and its refs - its own, its JoinHandle's,
+    /// its thread's - put: freed, unless its home's still held.
+    ///
     /// # Safety
-    /// @h is a Task<F>'s, made and never started, and nobody else's.
+    /// @h is a Task<F>'s, made and never started, and Unstarted's.
     unsafe fn discard(h: NonNull<Header>) {
         let task = h.cast::<Self>().as_ptr();
         // SAFETY: the caller's; its thread, if it has one, never woken: stopped,
@@ -354,10 +362,13 @@ impl<F: Future> Task<F> {
             if !thread.is_null() {
                 c::bch2_kthread_stop(thread);
                 c::put_task_struct(thread);
+                (*task).head.header.thread = core::ptr::null_mut();
+                put_ref(h);
             }
             core::ptr::drop_in_place(Self::future_ptr(task));
             drop((*(*task).head.done_ref.get()).take());
-            Self::dealloc(h);
+            put_ref(h);
+            put_ref(h);
         }
     }
 
@@ -373,6 +384,140 @@ impl<F: Future> Task<F> {
         unsafe {
             core::ptr::drop_in_place(task);
             c::rust_kvfree_rcu(task.cast());
+        }
+    }
+}
+
+// ── A task in its home ──────────────────────────────────────────────────
+
+/// A task made in what it's the task of - one allocation, @home first - for
+/// something outside the task that holds @home while the task runs in it:
+/// TaskHome, a ref on the task. Freed with the last ref, @home's or the task's
+/// own - so a home outlives its task's last run, and a task its home's owner.
+#[repr(C)]
+#[pin_data]
+struct WithTask<H, F: Future> {
+    #[pin]
+    home: H,
+    #[pin]
+    task: Task<F>,
+}
+
+impl<H, F: Future> WithTask<H, F> {
+    const VTABLE: TaskVTable = TaskVTable {
+        poll:    Task::<F>::poll,
+        discard: Task::<F>::discard,
+        dealloc: Self::dealloc,
+    };
+
+    /// Dropped, @home and all, now; freed after a grace period, as a task is.
+    ///
+    /// # Safety
+    /// @h is the task's of a WithTask<H, F>, and its last ref's gone.
+    unsafe fn dealloc(h: NonNull<Header>) {
+        // SAFETY: the caller's: the header is first in the task, at @task
+        unsafe {
+            let w = h.as_ptr().byte_sub(core::mem::offset_of!(Self, task)).cast::<Self>();
+            core::ptr::drop_in_place(w);
+            c::rust_kvfree_rcu(w.cast());
+        }
+    }
+}
+
+/// A task's home, owned: @H, pinned, with a ref on the task it's in - see
+/// WithTask. Dropped, the ref's put; @H itself is dropped with the last, where
+/// that is - the task's last run, perhaps.
+pub struct TaskHome<H> {
+    home: NonNull<H>,
+    task: NonNull<Header>,
+}
+
+// SAFETY: it's shared, &H - and dropped, perhaps, where the last ref goes:
+// what's Send and Sync is anyone's; and the ref is an atomic's
+unsafe impl<H: Send + Sync> Send for TaskHome<H> {}
+unsafe impl<H: Send + Sync> Sync for TaskHome<H> {}
+
+impl<H> TaskHome<H> {
+    pub fn as_pin(&self) -> Pin<&H> {
+        // SAFETY: made in place, and never moved: freed only with the last ref
+        unsafe { Pin::new_unchecked(self.home.as_ref()) }
+    }
+}
+
+impl<H> core::ops::Deref for TaskHome<H> {
+    type Target = H;
+
+    fn deref(&self) -> &H {
+        // SAFETY: our ref keeps it
+        unsafe { self.home.as_ref() }
+    }
+}
+
+impl<H> Drop for TaskHome<H> {
+    fn drop(&mut self) {
+        // SAFETY: our ref
+        unsafe { put_ref(self.task) };
+    }
+}
+
+/// spawn_unstarted(), the task made in one allocation with @home - which it
+/// can borrow: @make makes its future from it - for the TaskHome that holds
+/// it from outside.
+///
+/// # Safety
+/// spawn_unstarted()'s, but for @home: the future's dropped before it is.
+pub unsafe fn spawn_home<'h, H, M, F>(at: Spawn<'_>, home: impl PinInit<H, BchError>, make: M, gfp: Flags)
+    -> Result<(TaskHome<H>, Unstarted<F::Output>), BchError>
+where
+    H: Send + Sync + 'h,
+    M: FnOnce(&'h H) -> F,
+    F: Future + Send,
+    F::Output: Send,
+{
+    let made = core::cell::Cell::new(None);
+    let mk = |spawned| {
+        // SAFETY: @slot is the WithTask's, ours to write: @home first, then
+        // the task, whose future may borrow it - so @home's there to borrow
+        let init = unsafe {
+            pin_init::pin_init_from_closure(move |slot: *mut WithTask<H, F>| {
+                crate::util::alloc::init_at(home, &raw mut (*slot).home)?;
+                let future = make(&*(&raw const (*slot).home));
+                let future = pin_init::pin_init_from_closure(move |f: *mut F| {
+                    f.write(future);
+                    Ok::<(), core::convert::Infallible>(())
+                });
+                let task = task_init(spawned, future, &WithTask::<H, F>::VTABLE, 1);
+                crate::util::alloc::init_at(task, &raw mut (*slot).task).map_err(|e| match e {})
+            })
+        };
+        let w = kalloc_pinned_gfp::<WithTask<H, F>, BchError>(init, gfp)?;
+        // SAFETY: just made: nobody else has it
+        let task = unsafe {
+            let task = &raw mut (*w).task;
+            finish(task);
+            task
+        };
+        made.set(Some(w));
+        Ok(task)
+    };
+    // SAFETY: the caller's
+    match unsafe { spawn_init(at, mk) } {
+        Ok((unstarted, _)) => {
+            let w = made.get().expect("a task made");
+            // SAFETY: just made, with a ref for its home: this
+            let home = unsafe {
+                TaskHome { home: NonNull::new_unchecked(&raw mut (*w).home),
+                           task: NonNull::new_unchecked((&raw mut (*w).task).cast()) }
+            };
+            Ok((home, unstarted))
+        }
+        Err(e) => {
+            // made, then discarded - its thread failed: freed with its home's ref
+            if let Some(w) = made.get() {
+                // SAFETY: the home's ref, never handed out
+                unsafe { put_ref(NonNull::new_unchecked((&raw mut (*w).task).cast())) };
+            }
+            Err(e)
         }
     }
 }
@@ -466,7 +611,7 @@ where
         })
     };
     // SAFETY: the caller's
-    unsafe { spawn_init(at, init, flags::GFP_KERNEL) }.map(|(task, _)| task)
+    unsafe { spawn_init(at, |spawned| self::make(spawned, init, flags::GFP_KERNEL)) }.map(|(task, _)| task)
 }
 
 /// spawn_unstarted(), with the future made in place by @init, for the
@@ -482,7 +627,7 @@ where
     F::Output: Send,
 {
     // SAFETY: the caller's
-    let (task, future) = unsafe { spawn_init(at, init, gfp) }?;
+    let (task, future) = unsafe { spawn_init(at, |spawned| self::make(spawned, init, gfp)) }?;
     Ok(UnstartedInPlace { task, future })
 }
 
@@ -505,22 +650,25 @@ impl<F: Future> UnstartedInPlace<F> {
     }
 }
 
+/// The task @mk makes, given where it's spawned - its thread too, if it's to
+/// have one.
+///
 /// # Safety
 /// spawn_unstarted()'s.
-unsafe fn spawn_init<F>(at: Spawn<'_>, init: impl PinInit<F>, gfp: Flags)
+unsafe fn spawn_init<F>(at: Spawn<'_>, mk: impl FnOnce(usize) -> Result<*mut Task<F>, BchError>)
     -> Result<(Unstarted<F::Output>, NonNull<F>), BchError>
 where
     F: Future + Send,
     F::Output: Send,
 {
     let task = match at {
-        Spawn::Queue(wq) => self::make(core::ptr::from_ref(wq) as usize, init, gfp)?,
-        Spawn::Run(rq) => self::make(core::ptr::from_ref(rq.get_ref()) as usize | RUNQ, init, gfp)?,
+        Spawn::Queue(wq) => mk(core::ptr::from_ref(wq) as usize)?,
+        Spawn::Run(rq) => mk(core::ptr::from_ref(rq.get_ref()) as usize | RUNQ)?,
         Spawn::Thread { name, freezable } => {
             let mut name_buf = Printbuf::new();
             write!(name_buf, "{name}");
 
-            let task = self::make(THREAD, init, gfp)?;
+            let task = mk(THREAD)?;
             // SAFETY: just made; the thread's data, from when it's woken - and
             // if it's stopped unwoken, it doesn't touch it
             let thread = unsafe {
@@ -553,8 +701,10 @@ where
     }
 }
 
-/// A task made, not yet started: its own ref and its JoinHandle's.
-fn make<F>(spawned: usize, future: impl PinInit<F>, gfp: Flags) -> Result<*mut Task<F>, AllocError>
+/// A task, not yet started: its own ref and its JoinHandle's, and @refs more -
+/// its home's, for one made in a home.
+fn task_init<F>(spawned: usize, future: impl PinInit<F>, vtable: &'static TaskVTable, refs: usize)
+    -> impl PinInit<Task<F>>
 where
     F: Future + Send,
     F::Output: Send,
@@ -565,26 +715,48 @@ where
             crate::util::alloc::init_at(future, slot.cast::<F>())
         })
     };
-    let init = pin_init!(Task::<F> {
+    pin_init!(Task::<F> {
         head <- pin_init!(TaskHead {
             header: Header {
-                // SAFETY: plain C; bch2_init_work() below initializes it
+                // SAFETY: plain C; finish() initializes it
                 work:      unsafe { core::mem::zeroed() },
                 // dispatched by start()
-                state:     AtomicUsize::new(2 * REF | JOIN | SCHEDULED),
+                state:     AtomicUsize::new((2 + refs) * REF | JOIN | SCHEDULED),
                 next:      AtomicUsize::new(0),
                 spawned,
                 thread:    core::ptr::null_mut(),
                 thread_go: core::sync::atomic::AtomicBool::new(false),
                 rq_next:   AtomicPtr::new(core::ptr::null_mut()),
-                vtable:    &Task::<F>::VTABLE,
+                vtable,
             },
             done <- Gather::new(),
             done_ref: UnsafeCell::new(None),
             output: UnsafeCell::new(MaybeUninit::uninit()),
         }),
         future <- future,
-    });
+    })
+}
+
+/// task_init()'s, finished in place: its ref on @done, and its work.
+///
+/// # Safety
+/// @task is just made, and nobody else has it.
+unsafe fn finish<F: Future>(task: *mut Task<F>) {
+    // SAFETY: the caller's
+    unsafe {
+        let head = &raw mut (*task).head;
+        *(*head).done_ref.get() = Some((*head).done.get());
+        c::bch2_init_work(&raw mut (*head).header.work, Some(run_work));
+    }
+}
+
+/// A task made, not yet started: its own ref and its JoinHandle's.
+fn make<F>(spawned: usize, future: impl PinInit<F>, gfp: Flags) -> Result<*mut Task<F>, BchError>
+where
+    F: Future + Send,
+    F::Output: Send,
+{
+    let init = task_init(spawned, future, &Task::<F>::VTABLE, 0);
     // kmalloc()'d: the last ref may go in an endio. Its error - there's
     // none - made the allocation's
     // SAFETY: @init's own
@@ -594,13 +766,8 @@ where
         })
     };
     let task = kalloc_pinned_gfp::<Task<F>, AllocError>(init, gfp)?;
-
-    // SAFETY: just made: nobody else has it
-    unsafe {
-        let head = &raw mut (*task).head;
-        *(*head).done_ref.get() = Some((*head).done.get());
-        c::bch2_init_work(&raw mut (*head).header.work, Some(run_work));
-    }
+    // SAFETY: just made
+    unsafe { finish(task) };
     Ok(task)
 }
 
