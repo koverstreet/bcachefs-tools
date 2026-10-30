@@ -471,8 +471,10 @@ install_systemd: $(systemd_services)
 # A symlink, dispatched on argv[0] like mount.bcachefs - see the "generator"
 # arm in src/bcachefs.rs, which has to come before the "mount" one because this
 # name contains it.
+# After install_systemd: under make -j the two would create
+# $(DESTDIR)/usr/lib/systemd at once, and install -D can lose that race.
 .PHONY: install_systemd_generator
-install_systemd_generator:
+install_systemd_generator: install_systemd
 	$(INSTALL) -d $(DESTDIR)$(PKGCONFIG_GENERATORDIR)
 	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs \
 		$(DESTDIR)$(PKGCONFIG_GENERATORDIR)/bcachefs-mount-generator
