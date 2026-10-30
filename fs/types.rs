@@ -661,7 +661,10 @@ pub struct Fs {
     /// Odd while options change, bumped under opt_change_lock by
     /// OptChange, taking it and dropping it; read without it.
     pub opt_change_cookie: crate::util::projections::Volatile<u32>,
-    pub mount_opts: c::bch_opts_mask,
+    /// The options the mount set: what show_options lists. An option set
+    /// since is no longer one.
+    #[c("struct bch_opts_mask mount_opts")]
+    pub mount_opts: c::AtomicOptsMask,
 
     /// The superblock, c->disk_sb, behind sb_lock - Fs::sb_lock() is the way
     /// in - and what of it is read without the lock, c->sb, which it

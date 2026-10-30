@@ -262,14 +262,7 @@ impl<'f> OptChange<'f> {
 
         if changed && ca.is_none() {
             fs.opts_writer(&mut sb).set(opt.id, v);
-
-            let mount_opts = &fs.mount_opts.d;
-            // SAFETY: unsigned longs, which C changes with clear_bit()
-            let words = unsafe {
-                core::slice::from_raw_parts(mount_opts.as_ptr().cast::<core::sync::atomic::AtomicUsize>(),
-                                            mount_opts.len())
-            };
-            crate::util::bitmap::AtomicBitmap::from_words(words).clear(opt.id.0 as usize);
+            fs.mount_opts.clear(opt.id.0 as usize);
         }
         changed
     }

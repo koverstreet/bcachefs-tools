@@ -27,7 +27,6 @@
 
 use core::ffi::{c_int, CStr};
 use core::ptr::NonNull;
-use core::sync::atomic::AtomicUsize;
 
 use crate::c;
 use crate::errcode::{bch_errcode, BchError};
@@ -35,7 +34,6 @@ use crate::fs::Fs;
 use crate::fs::OpenFs;
 use crate::opt_id;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
-use crate::util::bitmap::AtomicBitmap;
 use crate::util::fs_context::{FsContext, FsParam, ParamValue};
 use crate::util::fs_type::{FsType, FsTypeTable, SuperData};
 use crate::util::printbuf::Printbuf;
@@ -117,17 +115,10 @@ fn wipe(b: &mut [u8]) {
     }
 }
 
-/// @opts' defined options, as set by the mount: what show_options lists.
+/// @opts' defined options, as the mount's.
 fn set_mount_opts(fs: &Fs, opts: &c::bch_opts) {
-    let mount_opts = &fs.mount_opts.d;
-    // SAFETY: unsigned longs, which C changes with set_bit()
-    let words = unsafe {
-        core::slice::from_raw_parts(mount_opts.as_ptr().cast::<AtomicUsize>(), mount_opts.len())
-    };
-    let bits = AtomicBitmap::from_words(words);
-
     for id in (0..crate::opts::NR).filter(|&id| opts.defined(c::bch_opt_id(id as u32))) {
-        bits.set(id);
+        fs.mount_opts.set(id);
     }
 }
 

@@ -169,7 +169,7 @@ impl SuperOps for Fs {
     fn show_options(&self, m: &SeqFile, _root: Dentry<'_>) -> Result<(), BchError> {
         let mut out = Printbuf::new();
         // No superblock: with the filesystem, every option's to_text reads it
-        crate::opts::opts_to_text(&mut out, &self.opts().load(), Some(self), None, Some(&self.mount_opts),
+        crate::opts::opts_to_text(&mut out, &self.opts().load(), Some(self), None, Some(&c::bch_opts_mask::load(&self.mount_opts)),
                                   c::opt_flags::OPT_MOUNT.bits(), c::opt_flags::OPT_HIDDEN.bits(),
                                   c::OPT_SHOW_MOUNT_STYLE);
         if out.allocation_failure() {
