@@ -186,8 +186,6 @@ pub fn fsck_err_report(fs: &Fs, err: bch_sb_error_id, msg: &dyn ToText) {
 /// Whether to log @msg: not if it's a repeat or being ratelimited. If this is
 /// where ratelimiting starts, @msg says so.
 pub fn count_fsck_err(fs: &Fs, err: bch_sb_error_id, msg: &mut Printbuf) -> bool {
-    fs.sb_error_count(err);
-
     let c = count_locked(fs, &mut fs.errors.state.lock(), err, msg.as_bytes()).1;
     if c.suppress {
         write!(msg, "Ratelimiting new instances of previous error\n");
