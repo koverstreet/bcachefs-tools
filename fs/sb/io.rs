@@ -1468,7 +1468,9 @@ fn read_super_and_backups(path: &CStr, opts: &mut c::bch_opts, err: &mut Printbu
     }
 
     let open = |mode: c::blk_mode_t, holder: *mut c::bch_sb_handle_holder| {
-        // SAFETY: a C string, and our holder; the ops are static
+        // the block layer takes any holder as an exclusive claim
+        let holder = if mode & c::BLK_OPEN_EXCL != 0 { holder } else { core::ptr::null_mut() };
+        // SAFETY: a C string, and our holder or none; the ops are static
         let f = unsafe { c::bdev_file_open_by_path(path.as_ptr().cast(), mode, holder.cast(),
                                                    &raw const c::bch2_sb_handle_bdev_ops) };
         crate::errcode::errptr_to_result(core::ptr::NonNull::new(f).expect("bdev_file_open_by_path(): an ERR_PTR, not NULL"))
