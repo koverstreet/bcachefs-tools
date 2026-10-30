@@ -162,11 +162,10 @@ pub fn fpunch_snapshot(trans: &BtreeTrans<'_>, start: c::bpos, end: c::bpos) -> 
         /* create the biggest key we can */
         let max_sectors = max_of(&delete.k().size) & (!0 << fs.block_bits());
         delete.k_mut().resize(max_sectors);
-        let delete = delete.arm::<Extents>().expect("sized just above")
+        let mut delete = delete.arm::<Extents>().expect("sized just above")
             .cut_back(end).expect("peek_max() of an extents btree stops at end: iter.pos() < end");
 
-        // trim_atomic() only reads @iter: it walks a copy
-        t.result(unsafe { c::bch2_extent_trim_atomic(t.raw(), iter.raw(), delete.as_ptr()) })?;
+        t.extent_trim_atomic(iter, &mut delete)?;
         t.update(iter, &delete, UpdateTriggerFlags::empty())
     })
 }

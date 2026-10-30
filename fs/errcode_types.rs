@@ -614,7 +614,6 @@ c_xmacro! {
         (0, reconcile_scan_stop, 592),
         (0, str_hash_key_repaired, 593),
         (0, delete_range_done, 594),
-        (0, extent_iters_max, 595),
         (0, write_encoded_as_is, 596),
         (0, fc_continue, 600),
         (0, fc_break, 601),

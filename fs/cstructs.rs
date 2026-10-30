@@ -53,7 +53,6 @@
 #[path = "data/extents_defs.rs"] pub mod data_extents_defs;
 #[path = "data/extents_format.rs"] pub mod data_extents_format;
 #[path = "data/extents_sb_format.rs"] pub mod data_extents_sb_format;
-#[path = "data/extent_update_types.rs"] pub mod data_extent_update_types;
 #[path = "data/extents_types.rs"] pub mod data_extents_types;
 #[path = "data/keylist_types.rs"] pub mod data_keylist_types;
 #[path = "data/move_defs.rs"] pub mod data_move_defs;
@@ -223,7 +222,6 @@ pub mod c {
     pub use super::data_extents_defs::*;
     pub use super::data_extents_format::*;
     pub use super::data_extents_sb_format::*;
-    pub use super::data_extent_update_types::*;
     pub use super::data_extents_types::*;
     pub use super::data_keylist_types::*;
     pub use super::data_move_defs::*;

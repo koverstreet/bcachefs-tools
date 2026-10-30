@@ -199,6 +199,7 @@ pub mod data {
         pub mod trigger;
         pub mod update;
     }
+    pub mod extent_update;
     pub mod extents;
     pub mod extents_sb;
     pub mod io_misc;
