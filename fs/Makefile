@@ -89,7 +89,6 @@ bcachefs-y		:=			\
 	data/extents.o				\
 	data/move.o				\
 	data/read.o				\
-	data/reconcile/trigger.o		\
 	data/write.o				\
 	debug/debug.o				\
 	debug/trace.o				\

@@ -4,7 +4,7 @@
 
 use crate::cstructs::c;
 use crate::types::DArray;
-use cstruct_macros::{c_enum, c_extern, CStruct};
+use cstruct_macros::{c_enum, CStruct};
 
 c_enum! {
     #[closed]
@@ -35,9 +35,4 @@ pub struct per_snapshot_io_opts {
 
     pub fs_io_opts: c::bch_inode_opts,
     pub d: DArray<c::snapshot_io_opts_entry>,
-}
-
-c_extern! {
-    pub fn reconcile_bp_get_key(trans: *mut c::btree_trans, iter: *mut c::btree_iter,
-                                bp: c::bkey_s_c_backpointer) -> c::bkey_s_c;
 }

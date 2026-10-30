@@ -9,13 +9,16 @@ use crate::{accounting, bkey_fsck_err_on, fsck_err};
 use crate::alloc::disk_groups::Target;
 use crate::btree::bkey::{bpos_max, bpos_min, pos, BkeySC, BkeyV, BkeyVal};
 use crate::btree::bkey_methods::TriggerOp;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, NoRoom, TransAttempt, TransBkey, UpdateTriggerFlags};
+use crate::btree::bkey_buf::BkeyBuf;
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitFlags, NoRoom, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::ptrs::{BkeyVPtrs, BkeyVPtrsMut, ExtentEntry, ExtentEntryMut, Ptrs, PtrsMut};
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::init::error::{id, BkeyValidate};
 use crate::util::vstructs::{plain_bytes, Validated};
+use crate::prt;
+use crate::util::printbuf::Msg;
 use crate::util::{Printbuf, ToText};
 use core::mem::size_of;
 use cstruct_macros::c_export;
@@ -400,6 +403,60 @@ pub fn extent_reconcile_to_text(out: &mut Printbuf, fs: Option<&Fs>, r: &c::bch_
     }
     write!(out, " ");
     reconcile_opts_to_text!(out, fs, r);
+}
+
+// ── A btree node backpointer's node ──────────────────────────────────────
+
+/// The btree node pointer reconcile_scan backpointer @bp is to, copied: None
+/// if the node isn't reachable yet, or the pointer isn't there - reported, and
+/// the backpointer deleted if fsck fixes it. @iter is made an iterator at
+/// @bp's level, the pointer's, for updating it: reconcile_bp_get_key().
+///
+/// The node is peeked a level down, so it's the node that's locked, not its
+/// parent - for btree_node_update_key() on a node not yet written - and it's
+/// copied while it is.
+pub(crate) fn reconcile_bp_get_key<'t>(t: &TransAttempt<'t, '_>, iter: &mut BtreeIter<'t>,
+                                       bp: BkeySC<'_, c::Backpointer>) -> Result<Option<BkeyBuf>, BchError> {
+    let fs = t.fs();
+    let v = *bp.v();
+    let btree = c::btree_id(v.btree_id.into());
+
+    if v.level == 0 {
+        if fsck_err!(t, id::reconcile_bp_to_leaf_node_key, "reconcile bp to leaf node key\n{}",
+                     bp.untyped().to_text(fs))? {
+            delete_bp(t, bp)?;
+        }
+        return Ok(None);
+    }
+
+    *iter = BtreeIter::new_level(t, btree, v.pos, v.level.into(), BtreeIterFlags::empty());
+
+    let mut node_iter = BtreeIter::new_level(t, btree, v.pos, u32::from(v.level) - 1, BtreeIterFlags::empty());
+    let b = node_iter.peek_node(t)?;
+    if let Some(b) = b {
+        if b.will_make_reachable() {
+            return Ok(None);
+        }
+        let k = BkeySC::from(b.key_i());
+        if bch2_bkey_get_reconcile_bp_pos(fs, k) == bp.k.p {
+            return Ok(Some(BkeyBuf::from_key(k)));
+        }
+    }
+
+    let node_key = Msg(|out: &mut Printbuf| match b {
+        Some(b) => prt!(out, "{}", BkeySC::from(b.key_i()).to_text(fs)),
+        None    => prt!(out, "(no key)"),
+    });
+    if fsck_err!(t, id::reconcile_bp_to_missing_btree_ptr, "reconcile backpointer to missing/incorrect btree ptr\n{}\n{}",
+                 bp.untyped().to_text(fs), node_key)? {
+        delete_bp(t, bp)?;
+    }
+    Ok(None)
+}
+
+fn delete_bp(t: &TransAttempt<'_, '_>, bp: BkeySC<'_, c::Backpointer>) -> Result<(), BchError> {
+    t.delete(c::btree_id::reconcile_scan, bp.k.p, UpdateTriggerFlags::empty())?;
+    t.commit(None, CommitFlags::NO_ENOSPC)
 }
 
 // ── C's ──────────────────────────────────────────────────────────────────

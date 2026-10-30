@@ -53,7 +53,7 @@ use crate::alloc::capacity::DiskReservation;
 use crate::alloc::backpointers::backpointer_get_key;
 use crate::btree::bkey::{pos, BkeyI, BkeySC, BkeyV, POS_MIN};
 use crate::btree::bkey_buf::BkeyBuf;
-use crate::btree::iter::{bkey_s_c_to_result, is_restart, lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags,
+use crate::btree::iter::{is_restart, lockrestart_do, polonius_key, BtreeIter, BtreeIterFlags,
                          BtreeTrans, CommitFlags, TransAttempt};
 use crate::btree::write_buffer::WbMaybeFlush;
 use crate::c;
@@ -63,7 +63,7 @@ use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
 use crate::data::reconcile::plan::{park, parks_on, pending_mod, plan, Plan};
 use crate::data::reconcile::scan::ScanCookie;
-use crate::data::reconcile::trigger::rb_work_to_data_pos;
+use crate::data::reconcile::trigger::{rb_work_to_data_pos, reconcile_bp_get_key};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{writepoint_ptr, Fs};
 use crate::inode_opts::{get_io_opts, PerSnapshotIoOpts};
@@ -563,13 +563,7 @@ impl<'a, 'f> Walker<'a, 'f> {
     {
         let fs = t.fs();
         let mut iter = BtreeIter::uninit();
-        // SAFETY: in the attempt; the key returned is the node's, copied
-        // before anything unlocks
-        let k = unsafe {
-            bkey_s_c_to_result(c::reconcile_bp_get_key(t.raw(), iter.raw_mut(), BkeySC::from(bp).to_c()))
-        }?;
-        let Some(k) = k else { return Ok(()) };
-        let copy = BkeyBuf::from_key(k);
+        let Some(copy) = reconcile_bp_get_key(t, &mut iter, BkeySC::from(bp))? else { return Ok(()) };
         let k = BkeySC::from(&copy);
 
         let moved = self.key(t, work, &mut iter, bp.v.level.into(), k, None)?;

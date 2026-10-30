@@ -27,7 +27,7 @@ use crate::c;
 use crate::data::ec::stripe::WidenCache;
 use crate::data::ptrs::{BkeyVPtrs, BtreePtrs, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::update_reconcile_opts;
-use crate::data::reconcile::trigger::{add_reconcile_bp, data_to_rb_work_pos, rb_bp, rb_work_to_data_pos,
+use crate::data::reconcile::trigger::{add_reconcile_bp, data_to_rb_work_pos, rb_bp, rb_work_to_data_pos, reconcile_bp_get_key,
                                       BkeyVReconcile};
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::Fs;
@@ -448,8 +448,8 @@ fn check_reconcile_work_btrees(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
 
 /// Each btree node backpointer in reconcile_scan - by work id, hipri to
 /// pending - against the node pointer it's to: check_reconcile_btree_bps(),
-/// through reconcile_bp_get_key(), C's still, which reports and deletes one
-/// whose pointer isn't there or isn't its.
+/// through reconcile_bp_get_key(), which reports and deletes one whose
+/// pointer isn't there or isn't its.
 fn check_reconcile_btree_bps(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
     use c::reconcile_work_id as w;
     let fs = trans.fs();
@@ -462,9 +462,7 @@ fn check_reconcile_btree_bps(trans: &BtreeTrans<'_>) -> Result<(), BchError> {
 
         let Some(bp) = k.arm::<c::Backpointer>() else { return Ok(()) };
         let mut node_iter = BtreeIter::uninit();
-        // SAFETY: @bp, for the call; the key returned isn't kept
-        let ret = unsafe { c::reconcile_bp_get_key(t.raw(), node_iter.raw_mut(), bp.to_c()) };
-        unsafe { crate::btree::iter::bkey_s_c_to_result(ret) }.map(|_| ())
+        reconcile_bp_get_key(t, &mut node_iter, bp).map(|_| ())
     })
 }
 
