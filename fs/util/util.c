@@ -263,49 +263,6 @@ void bch2_prt_u64_base2(struct printbuf *out, u64 v)
 	bch2_prt_u64_base2_nbits(out, v, fls64(v) ?: 1);
 }
 
-static bool string_is_spaces(const char *str, const char *end)
-{
-	while (str != end && *str == ' ')
-		str++;
-	return str == end;
-}
-
-static const char *get_lines_under(const char *lines, unsigned limit)
-{
-	const char *prev = lines, *prev_nonblank = NULL, *next;
-
-	while (true) {
-		next = strchrnul(prev, '\n');
-		if (!string_is_spaces(prev, next))
-			prev_nonblank = next;
-		if (!*next)
-			return prev_nonblank;
-		if (prev != lines && next > lines + limit)
-			return prev - 1;
-		prev = next + 1;
-	}
-}
-
-void bch2_print_string_as_lines(const char *prefix, const char *lines)
-{
-	if (!lines) {
-		printk("%s (null)\n", prefix);
-		return;
-	}
-
-	bool locked = console_trylock();
-	const char *next;
-
-	while ((next = get_lines_under(lines, 1024))) { /* printk limit */
-		printk("%s%.*s\n", prefix, (int) (next - lines), lines);
-		if (!*next)
-			break;
-		lines = next + 1;
-	}
-	if (locked)
-		console_unlock();
-}
-
 int bch2_save_backtrace(bch_stacktrace *stack, struct task_struct *task, unsigned skipnr,
 			gfp_t gfp)
 {

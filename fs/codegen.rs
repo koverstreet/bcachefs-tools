@@ -52,6 +52,7 @@ const KERNEL_HEADERS: &[&str] = &[
     "linux/fs_context.h",		// struct fs_context, logfc(): util/fs_context.rs's - the kernel crate's is opaque
     "linux/percpu-refcount.h",		// percpu_ref_get(), _put(): a DevRef's ca->ref, static inlines
     "linux/idr.h",			// ida_init(), ida_find_first(): fast_list.rs's slots - static inlines
+    "linux/console.h",			// console_trylock(): util/log.rs holds the console across a message
 ];
 
 /// Headers under fs/ bound, by path - which the clang args have as an -I:
@@ -103,6 +104,7 @@ const UNBLOCKLISTED: &[&str] = &[
     "linux/percpu-refcount.h",
     "linux/fs_context.h",
     "linux/idr.h",
+    "linux/console.h",
 ];
 
 const ALLOWLIST_FUNCTION: &[&str] = &[
@@ -156,6 +158,8 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "percpu_ref_get", "percpu_ref_put",
     // util/fast_list.rs: static inlines; the rest of the ida the kernel crate binds
     "ida_init", "ida_find_first",
+    // util/log.rs: a long message printk()ed in pieces, the console held across them
+    "console_trylock", "console_unlock",
 ];
 const ALLOWLIST_TYPE: &[&str] = &["closure", "closure_waitlist", "__genradix", "genradix_iter",
                                   "xattr_handler", "kstatfs", "export_operations", "fid_type",

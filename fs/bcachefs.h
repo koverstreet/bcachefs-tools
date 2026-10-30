@@ -192,11 +192,6 @@ BCH_DEBUG_PARAMS_ALL()
 
 #define bch2_fmt(_c, fmt)		bch2_log_msg(_c, fmt "\n")
 
-void bch2_print_str(struct bch_fs *, const char *, const char *);
-
-/* For a person rather than a log - see bch_fs.stdio_user_only. */
-void bch2_print_str_user(struct bch_fs *, const char *);
-
 #include "bcachefs_gen.h"
 #include "util/log_gen.h"
 

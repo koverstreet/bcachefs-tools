@@ -3,7 +3,8 @@
 //! Logging, as C's bch_log() family (bcachefs.h): a message is formatted
 //! here, then handed to __bch2_print() whole, so it goes where C's messages go -
 //! the filesystem's loglevel, a stdio redirect, the "previous loglevel" a
-//! continuation line inherits - without any of that being reimplemented.
+//! continuation line inherits. A message printed as it stands - print_str(),
+//! a LogMsg - is printed here: bch2_print_str(), which C calls too.
 //!
 //! In-kernel each message is prefixed with the filesystem's name, as
 //! bch2_log_msg() does under BCACHEFS_LOG_PREFIX; userspace prints it bare.
@@ -17,13 +18,13 @@ use crate::c;
 use crate::errcode::BchError;
 use crate::fs::Fs;
 use crate::types::c_default;
-use crate::util::ffi::c_char;
+use crate::util::ffi::{c_char, Opaque};
 use crate::util::{Printbuf, ToText};
 use core::cell::UnsafeCell;
 use core::ffi::{c_int, c_uint, CStr};
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
-use cstruct_macros::{CStruct, c_enum, c_extern, TypeInfo};
+use cstruct_macros::{CStruct, c_enum, c_export, c_extern, TypeInfo};
 
 #[repr(C)]
 #[derive(CStruct, TypeInfo)]
@@ -55,7 +56,6 @@ c_extern! {
     pub fn bch2_ratelimit_suppress(c: *mut c::bch_fs, rs: *mut c::ratelimit_state,
                                    func: *const c_char) -> bool;
     pub fn bch2_rust_warn(file: *const c_char, line: c_uint);
-    pub fn bch2_print_str_loglevel(c: *mut c::bch_fs, loglevel: c_int, str: *const c_char);
     pub fn __bch2_log_msg_start(fs_or_dev_name: *const c_char, out: *mut c::printbuf);
 }
 
@@ -71,8 +71,8 @@ impl LogLevel {
     pub const DEBUG:  Self = LogLevel(b'7');
 
     /// As C's LOGLEVEL_* numbers.
-    fn as_int(self) -> i32 {
-        (self.0 - b'0') as i32
+    fn num(self) -> u8 {
+        self.0 - b'0'
     }
 }
 
@@ -175,9 +175,186 @@ pub fn log_dev(ca: &c::bch_dev, level: LogLevel, msg: &dyn ToText) {
 /// Print @msg at @level as it stands, one line at a time with no prefix -
 /// C's bch2_print_str().
 pub fn print_str(fs: &Fs, level: LogLevel, msg: &mut Printbuf) {
-    let buf = msg.as_raw().buf;
-    if !buf.is_null() {
-        unsafe { bch2_print_str_loglevel(fs.as_ptr(), level.as_int(), buf) };
+    print_bytes(fs, Some(level.num()), msg.as_bytes())
+}
+
+// ── A message printed whole ─────────────────────────────────────────────
+//
+// A message is printed at a loglevel - or, given none, the previous one's: a
+// continuation - if the filesystem's loglevel lets it through, and goes to
+// the filesystem's stdio redirect if it has one: a fsck through the ioctl, or
+// a mount that asked for one. Otherwise it's printk()ed a chunk at a time,
+// whole lines up to printk's limit, with the console held across them if it's
+// free, so a long message isn't interleaved with another's.
+
+/// The most printk() takes at once.
+const PRINTK_LIMIT: usize = 1024;
+
+/// The filesystem's redirect, if it's to get this message - @user: one for
+/// the person running the fsck, which a mount that only wants those gets -
+/// and if this is the task it's for.
+#[cfg(kernel)]
+fn stdio_redirect(fs: &Fs, user: bool) -> Option<&crate::util::thread_with_file::StdioRedirect> {
+    if fs.stdio.is_null() ||
+       (!user && fs.stdio_user_only) ||
+       (!fs.stdio_filter.is_null() && fs.stdio_filter != unsafe { c::get_current() }) {
+        return None;
+    }
+    // SAFETY: the filesystem's redirect, set while it's attached
+    Some(unsafe { crate::util::thread_with_file::StdioRedirect::from_c(fs.stdio) })
+}
+
+/// @s at printk level @level - None, the previous message's - if the
+/// filesystem's loglevel lets it through. Indent left after the last newline
+/// isn't printed.
+pub fn print_bytes(fs: &Fs, level: Option<u8>, s: &[u8]) {
+    let trimmed = s.len() - s.iter().rev().take_while(|&&b| b == b' ').count();
+    let len = if trimmed == 0 || s[trimmed - 1] == b'\n' { trimmed } else { s.len() };
+    if len == 0 {
+        return;
+    }
+
+    // SAFETY: C's, written unlocked as C writes it
+    let prev = unsafe { &raw mut (*fs.as_ptr()).prev_loglevel };
+    let level = match level {
+        Some(l) => {
+            unsafe { *prev = l.into() };
+            u32::from(l)
+        }
+        None => unsafe { *prev },
+    };
+    let max = match fs.loglevel {
+        0 if fs.opts().verbose() => 7,
+        0 => 6,
+        l => l,
+    };
+    if level > max {
+        return;
+    }
+
+    #[cfg(kernel)]
+    if let Some(stdio) = stdio_redirect(fs, false) {
+        let _ = stdio.write(true, &s[..len]);
+        return;
+    }
+
+    #[cfg(kernel)]
+    let prefix: &[u8] = if level < 8 { &[0x01, b'0' + level as u8] } else { &[0x01] };
+    #[cfg(not(kernel))]
+    let prefix: &[u8] = &[];
+    print_lines(prefix, s)
+}
+
+/// @s for the person running the fsck - their redirect, if they have one,
+/// else the log at err.
+pub fn print_user(fs: &Fs, s: &[u8]) {
+    #[cfg(kernel)]
+    if let Some(stdio) = stdio_redirect(fs, true) {
+        let _ = stdio.write(true, s);
+        return;
+    }
+    print_bytes(fs, Some(LogLevel::ERR.num()), s)
+}
+
+/// The next chunk of @lines for printk(): whole lines, as many as fit in
+/// @limit bytes - the first, if it alone doesn't - and at the end, up to the
+/// last line that isn't blank. Its length; None if only blank lines are left.
+fn lines_under(lines: &[u8], limit: usize) -> Option<usize> {
+    let (mut start, mut nonblank) = (0, None);
+    loop {
+        let end = lines[start..].iter().position(|&b| b == b'\n').map_or(lines.len(), |i| start + i);
+        if lines[start..end].iter().any(|&b| b != b' ') {
+            nonblank = Some(end);
+        }
+        if end == lines.len() {
+            return nonblank;
+        }
+        if start != 0 && end > limit {
+            return Some(start - 1);
+        }
+        start = end + 1;
+    }
+}
+
+/// @lines to printk(), each chunk after @prefix.
+pub fn print_lines(prefix: &[u8], lines: &[u8]) {
+    // SAFETY: released below, if taken
+    #[cfg(kernel)]
+    let locked = unsafe { c::console_trylock() } != 0;
+
+    let mut rest = lines;
+    while let Some(n) = lines_under(rest, PRINTK_LIMIT) {
+        let fmt = c"%.*s%.*s\n".as_ptr().cast();
+        let (p, l) = (prefix.len() as c_int, n as c_int);
+        // SAFETY: a format, and the lengths and bytes it takes
+        #[cfg(kernel)]
+        unsafe { c::_printk(fmt, p, prefix.as_ptr(), l, rest.as_ptr()) };
+        #[cfg(not(kernel))]
+        unsafe { c::printk(fmt, p, prefix.as_ptr(), l, rest.as_ptr()) };
+
+        if n == rest.len() {
+            break;
+        }
+        rest = &rest[n + 1..];
+    }
+
+    #[cfg(kernel)]
+    if locked {
+        unsafe { c::console_unlock() };
+    }
+}
+
+/// C's string, or a printbuf that's never had any: nothing.
+unsafe fn c_bytes<'a>(s: *const c_char) -> Option<&'a [u8]> {
+    // SAFETY: the caller's
+    unsafe { crate::util::ffi::opt_cstr(s) }.map(CStr::to_bytes)
+}
+
+/// KERN_SOH and a level, as a C KERN_* prefix has them: None for any other
+/// prefix, a continuation.
+fn prefix_level(prefix: &[u8]) -> Option<u8> {
+    match prefix {
+        [0x01, d @ b'0'..=b'9', ..] => Some(d - b'0'),
+        _ => None,
+    }
+}
+
+/// # Safety
+/// @str is NULL or a string.
+#[c_export]
+pub unsafe fn bch2_print_str_loglevel(c: &Opaque<c::bch_fs>, loglevel: c_int, str: *const c_char) {
+    if let Some(s) = unsafe { c_bytes(str) } {
+        print_bytes(Fs::from_c(c), u8::try_from(loglevel).ok(), s)
+    }
+}
+
+/// # Safety
+/// @prefix a string; @str NULL or one.
+#[c_export]
+pub unsafe fn bch2_print_str(c: &Opaque<c::bch_fs>, prefix: *const c_char, str: *const c_char) {
+    if let Some(s) = unsafe { c_bytes(str) } {
+        let level = prefix_level(unsafe { c_bytes(prefix) }.unwrap_or_default());
+        print_bytes(Fs::from_c(c), level, s)
+    }
+}
+
+/// # Safety
+/// @str is NULL or a string.
+#[c_export]
+pub unsafe fn bch2_print_str_user(c: &Opaque<c::bch_fs>, str: *const c_char) {
+    if let Some(s) = unsafe { c_bytes(str) } {
+        print_user(Fs::from_c(c), s)
+    }
+}
+
+/// # Safety
+/// @prefix a string; @lines NULL or one.
+#[c_export]
+pub unsafe fn bch2_print_string_as_lines(prefix: *const c_char, lines: *const c_char) {
+    let prefix = unsafe { c_bytes(prefix) }.unwrap_or_default();
+    match unsafe { c_bytes(lines) } {
+        Some(lines) => print_lines(prefix, lines),
+        None        => print_lines(prefix, b" (null)"),
     }
 }
 
@@ -231,10 +408,7 @@ impl Drop for LogMsg<'_> {
         }
 
         self.msg.tabstop_align();
-        let buf = self.msg.as_raw().buf;
-        if !buf.is_null() {
-            unsafe { bch2_print_str_loglevel(self.fs.as_ptr(), self.level.as_int(), buf) };
-        }
+        print_bytes(self.fs, Some(self.level.num()), self.msg.as_bytes());
     }
 }
 
