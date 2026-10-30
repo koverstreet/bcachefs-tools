@@ -238,9 +238,8 @@ impl Working {
     }
 }
 
-/// Data buckets of the new stripe all written: create the stripe, with the
-/// device io refs it'll make references to - guarding against racing with
-/// device removal.
+/// Data buckets of the new stripe all written: create the stripe, with write
+/// refs on the devices of the blocks it writes.
 async fn create(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Result<(), OldStripeLost>, at: Resume<'_>)
     -> Result<(), BchError>
 {
@@ -252,10 +251,20 @@ async fn create(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Result<(), OldStr
 
 async fn create_iorefs(fs: &Fs, s: &StripeNew, w: &mut Working, fold: Result<(), OldStripeLost>,
                        at: Resume<'_>) -> Result<(), BchError> {
+    // What's written: the data blocks new to this stripe, the ones moving, and
+    // the parity. A block carried forward in place isn't, and its device may
+    // be read-only, or offline for now - it still holds the block, durably.
+    // Device removal is fenced by ->removing and fs_ec_flush_outstanding(),
+    // not by these refs.
+    //
     // Kept by device, not by c->devs[idx]: dev_remove may clear that slot
     // while our io ref still pins the device.
+    let carried = |i: usize| i < w.old_block_map.len() && !w.moving.test(i);
     let mut cas: ArrayVec<DevIoRef<c::bch_dev_write_ref>, MAX_BLOCKS> = ArrayVec::new();
-    for ptr in w.new_stripe.stripe().v().block_ptrs() {
+    for (i, ptr) in w.new_stripe.stripe().v().block_ptrs().iter().enumerate() {
+        if carried(i) {
+            continue;
+        }
         let Some(ca) = fs.dev_get_ioref::<c::bch_dev_write_ref>(ptr.dev().into()) else {
             return fs.throw(bch_errcode::BCH_ERR_stripe_create_device_offline);
         };
