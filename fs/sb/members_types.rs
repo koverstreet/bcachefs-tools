@@ -2,8 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
-use cstruct_macros::{CStruct, c_extern, Plain, TypeInfo};
-use crate::cstructs::c;
+use cstruct_macros::{CStruct, Plain, TypeInfo};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct, Plain, TypeInfo)]
@@ -31,10 +30,3 @@ pub struct bch_member_cpu {
 
 // ca->mi: read by anyone, a field at a time - a copy half made is one
 crate::tear_safe!(bch_member_cpu);
-
-c_extern! {
-    pub fn rust_bch2_dev_put(ca: *mut c::bch_dev);
-    pub fn rust_bch2_dev_get(ca: *mut c::bch_dev);
-    pub fn rust_bch2_dev_get_outer(ca: *mut c::bch_dev);
-    pub fn rust_bch2_dev_put_outer(ca: *mut c::bch_dev);
-}

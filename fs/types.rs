@@ -321,10 +321,11 @@ pub struct bch_dev {
     pub kobj: c::kobject,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     pub ref_: core::sync::atomic::AtomicIsize,
+    /* debug builds' ref checks, from any thread: members.h's and DevRef's */
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub dying: bool,
+    pub dying: crate::util::projections::Volatile<bool>,
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
-    pub last_put: c_ulong,
+    pub last_put: crate::util::projections::Volatile<c_ulong>,
     #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
     pub ref_: c::percpu_ref,
     pub ref_completion: c::completion,

@@ -1340,8 +1340,45 @@ impl Clone for DevRef {
 
 impl Drop for DevRef {
     fn drop(&mut self) {
-        unsafe { c::rust_bch2_dev_put(self.0.as_ptr()) };
+        // SAFETY: our ref, put once
+        unsafe { dev_put(self.0.as_ptr()) };
     }
+}
+
+/// bch2_dev_get(), as members.h's inline - which C still calls - is.
+fn dev_get(ca: &c::bch_dev) {
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    assert!(ca.ref_.fetch_add(1, Ordering::SeqCst) >= 1, "bch_dev->ref get with no ref held");
+
+    // SAFETY: a ref held, so it's live; C's to change
+    #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
+    unsafe { c::percpu_ref_get(core::ptr::addr_of!(ca.ref_).cast_mut()) };
+}
+
+/// bch2_dev_put(), as members.h's inline is. A raw pointer, not a reference:
+/// once it's put, the last ref's waiter may free the device.
+///
+/// # Safety
+/// @ca holds a ref, which this puts.
+unsafe fn dev_put(ca: *mut c::bch_dev) {
+    #[cfg(CONFIG_BCACHEFS_DEBUG)]
+    unsafe {
+        let r = (*ca).ref_.fetch_sub(1, Ordering::SeqCst) - 1;
+        if r < !(*ca).dying.get() as isize {
+            let mut out = Printbuf::new();
+            crate::util::backtrace::prt_symbol(&mut out, (*ca).last_put.get());
+            panic!("bch_dev->ref underflow, last put: {}", out.as_str());
+        }
+        // Not this put's caller, which Rust has no _THIS_IP_ for: that it was
+        // one of Rust's
+        (*ca).last_put.set(dev_put as *const () as usize as c_ulong);
+        if r == 0 {
+            c::complete(core::ptr::addr_of_mut!((*ca).ref_completion));
+        }
+    }
+
+    #[cfg(not(CONFIG_BCACHEFS_DEBUG))]
+    unsafe { c::percpu_ref_put(core::ptr::addr_of_mut!((*ca).ref_)) };
 }
 
 /// ca->ref_outer: keeps the bch_dev's memory alive and nothing else - its
@@ -1373,7 +1410,13 @@ impl core::ops::Deref for DevOuterRef {
 
 impl Drop for DevOuterRef {
     fn drop(&mut self) {
-        unsafe { c::rust_bch2_dev_put_outer(self.0) };
+        // SAFETY: our ref, put once; a raw pointer, as dev_put()'s is - the
+        // last one's waiter may free the device
+        unsafe {
+            if c::refcount_dec_and_test(core::ptr::addr_of_mut!((*self.0).ref_outer)) {
+                c::complete(core::ptr::addr_of_mut!((*self.0).ref_outer_completion));
+            }
+        }
     }
 }
 
@@ -1620,15 +1663,15 @@ impl c::bch_dev {
     /// A ref on it - bch2_dev_get(): the device is alive, being in hand, so
     /// the get can't fail.
     pub fn get_ref(&self) -> DevRef {
-        let ca = (self as *const c::bch_dev).cast_mut();
-        unsafe { c::rust_bch2_dev_get(ca) };
+        dev_get(self);
         DevRef(core::ptr::NonNull::from(self))
     }
 
     /// An outer ref on it - bch2_dev_get_outer().
     pub fn outer_ref(&self) -> DevOuterRef {
         let ca = (self as *const c::bch_dev).cast_mut();
-        unsafe { c::rust_bch2_dev_get_outer(ca) };
+        // SAFETY: the device is in hand, so live; C's to change
+        unsafe { c::refcount_inc(core::ptr::addr_of_mut!((*ca).ref_outer)) };
         DevOuterRef(ca)
     }
 
