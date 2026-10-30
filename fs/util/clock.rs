@@ -4,8 +4,8 @@
 //! clock's time is sectors of IO done: bch2_increment_clock() - an inline in
 //! clock.h, for the IO paths in C - adds to a per-CPU batch, and every
 //! IO_CLOCK_PCPU_SECTORS a CPU's batch goes to the clock, by
-//! __bch2_increment_clock(). So it's approximate: up to that many sectors a
-//! CPU behind.
+//! __bch2_increment_clock(); an IO that big goes to it at once. So it's
+//! approximate: up to that many sectors a CPU behind.
 //!
 //! A waiter - wait_until() - sleeps until the clock reaches its time, or its
 //! own condition says otherwise. While it waits it has a Timer on the clock:
@@ -161,8 +161,8 @@ impl io_clock {
     }
 }
 
-/// The clock moving on @sectors - a CPU's batch, from bch2_increment_clock():
-/// wakes the waiters it's passed.
+/// The clock moving on @sectors - a CPU's batch, or one IO bigger than a
+/// batch, from bch2_increment_clock(): wakes the waiters it's passed.
 #[c_export]
 pub fn __bch2_increment_clock(clock: &c::io_clock, sectors: u64) {
     let now = (clock.now.fetch_add(sectors as i64, Relaxed) as u64).wrapping_add(sectors);

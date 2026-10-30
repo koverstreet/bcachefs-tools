@@ -7,8 +7,11 @@ static inline void bch2_increment_clock(struct bch_fs *c, u64 sectors,
 {
 	struct io_clock *clock = &c->io_clock[rw];
 
-	if (unlikely(this_cpu_add_return(*clock->pcpu_buf, sectors) >=
-		   IO_CLOCK_PCPU_SECTORS))
+	/* Past the batch: it's a u16, which a whole bucket would wrap */
+	if (sectors >= IO_CLOCK_PCPU_SECTORS)
+		__bch2_increment_clock(clock, sectors);
+	else if (unlikely(this_cpu_add_return(*clock->pcpu_buf, sectors) >=
+			  IO_CLOCK_PCPU_SECTORS))
 		__bch2_increment_clock(clock, this_cpu_xchg(*clock->pcpu_buf, 0));
 }
 
