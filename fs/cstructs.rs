@@ -131,7 +131,6 @@
 #[path = "data/ec/trigger_types.rs"] pub mod data_ec_trigger_types;
 #[path = "fs/namei_types.rs"] pub mod fs_namei_types;
 #[path = "init/fs_types.rs"] pub mod init_fs_types;
-#[path = "init/recovery_types.rs"] pub mod init_recovery_types;
 #[path = "journal/init_types.rs"] pub mod journal_init_types;
 #[path = "journal/validate_types.rs"] pub mod journal_validate_types;
 
@@ -310,7 +309,6 @@ pub mod c {
     pub use super::data_ec_trigger_types::*;
     pub use super::fs_namei_types::*;
     pub use super::init_fs_types::*;
-    pub use super::init_recovery_types::*;
     pub use super::journal_init_types::*;
     pub use super::journal_validate_types::*;
 }

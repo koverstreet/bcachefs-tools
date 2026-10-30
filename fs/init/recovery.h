@@ -3,8 +3,6 @@
 #define _BCACHEFS_RECOVERY_H
 #include "init/recovery_gen.h"
 
-void bch2_ignore_journal_rewind_errors(struct bch_fs *);
-
 int bch2_set_may_go_rw(struct bch_fs *);
 int bch2_journal_replay(struct bch_fs *);
 

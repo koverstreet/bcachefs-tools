@@ -1603,6 +1603,38 @@ impl<'a> SbWrite<'a> {
         self.record(v & bit == 0)
     }
 
+    /// The ext section, all of it: mount grows it to its full size, so a
+    /// mounted filesystem's has every field.
+    pub fn ext_mut(&mut self) -> &mut c::bch_sb_field_ext__whole {
+        self.field_mut::<c::bch_sb_field_ext<Validated>>().and_then(|e| e.whole_mut())
+            .expect("a whole ext section: mount grows it to its full size")
+    }
+
+    /// Btree @btree flagged in an ext section bitmap, recorded: whether it
+    /// wasn't already.
+    fn set_ext_btree(&mut self, bitmap: impl FnOnce(&mut c::bch_sb_field_ext__whole) -> &mut Le64,
+                     btree: c::btree_id) -> bool {
+        let bitmap = bitmap(self.ext_mut());
+        let (v, bit) = (bitmap.get(), 1u64 << btree.0);
+        bitmap.set(v | bit);
+        self.record(v & bit == 0)
+    }
+
+    /// sb_set_btrees_lost_data()
+    pub fn set_btrees_lost_data(&mut self, btree: c::btree_id) -> bool {
+        self.set_ext_btree(|e| &mut e.btrees_lost_data, btree)
+    }
+
+    /// sb_set_btrees_lost_data_ever()
+    pub fn set_btrees_lost_data_ever(&mut self, btree: c::btree_id) -> bool {
+        self.set_ext_btree(|e| &mut e.btrees_lost_data_ever, btree)
+    }
+
+    /// Whether anything's dirtied it since it was last written.
+    pub fn is_dirty(&mut self) -> bool {
+        self.state().dirty
+    }
+
     /// Write now, if dirtied, for an error to report; after, nothing is to
     /// write until something is dirtied again.
     pub fn flush(&mut self) -> Result<(), BchError> {

@@ -345,13 +345,35 @@ pub fn btree_is_clean(fs: &Fs, btree: c::btree_id) -> bool {
 
 /// Record btree @btree as checked consistent: as bch2_set_btree_clean().
 pub fn set_btree_clean(fs: &Fs, btree: c::btree_id) {
-    unsafe { c::bch2_set_btree_clean(fs.as_ptr(), btree) }
+    set_btree_clean_to(fs, btree, true)
 }
 
 /// Btree @btree is being changed, so no longer known consistent: as
 /// bch2_clear_btree_clean().
 pub fn clear_btree_clean(fs: &Fs, btree: c::btree_id) {
-    unsafe { c::bch2_clear_btree_clean(fs.as_ptr(), btree) }
+    set_btree_clean_to(fs, btree, false)
+}
+
+/// The ext section's bit, and the in-memory copy btree_is_clean() reads,
+/// written straight through: the superblock is current without a clean
+/// shutdown. Checked before sb_lock as well as under it, so the common case -
+/// already as wanted - doesn't take it.
+fn set_btree_clean_to(fs: &Fs, btree: c::btree_id, clean: bool) {
+    if btree_is_clean(fs, btree) == clean {
+        return;
+    }
+    let mut w = fs.sb_write();
+    if btree_is_clean(fs, btree) == clean {
+        return;
+    }
+
+    let bit = 1u64 << btree.0;
+    let to = |v: u64| if clean { v | bit } else { v & !bit };
+    let ext = &mut w.ext_mut().btrees_clean;
+    ext.set(to(ext.get()));
+    let cpu = &w.published().btrees_clean;
+    cpu.set(to(cpu.get()));
+    w.dirty();
 }
 
 // ── The runner's state ───────────────────────────────────────────────────────
@@ -515,7 +537,7 @@ fn needs_set(fs: &Fs, r: &Recovery<'_>, pass: Pass, flags: &mut Flags, sb: Optio
 /// superblock - the caller's, under sb_lock - and None for an ephemeral
 /// schedule, which may come from a btree transaction commit, that can take
 /// neither: only in-memory scheduling is reachable then.
-fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags, w: Option<&mut SbWrite<'_>>)
+pub(crate) fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags, w: Option<&mut SbWrite<'_>>)
     -> Result<(), BchError>
 {
     debug_assert_eq!(w.is_none(), flags.contains(Flags::RUN_RECOVERY_PASS_ephemeral));

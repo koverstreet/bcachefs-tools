@@ -116,6 +116,7 @@ pub mod init {
     #[path = "error.rs"] pub mod error;
     #[path = "passes.rs"] pub mod passes;
     #[path = "progress.rs"] pub mod progress;
+    #[path = "recovery.rs"] pub mod recovery;
 }
 #[path = "fs/inode.rs"]        pub mod inode;
 #[path = "fs/inode_opts.rs"]   pub mod inode_opts;

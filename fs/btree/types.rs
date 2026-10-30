@@ -280,6 +280,16 @@ impl BtreeRoots {
         // SAFETY: roots_extra's nr are its elements
         (idx < self.roots_extra.nr).then(|| unsafe { &*self.roots_extra.data.add(idx) })
     }
+
+    pub fn get_mut(&mut self, id: u32) -> Option<&mut cs::btree_root> {
+        let nr_known = u32::from(cs::btree_id::nr);
+        if id < nr_known {
+            return Some(&mut self.roots_known[id as usize]);
+        }
+        let idx = (id - nr_known) as usize;
+        // SAFETY: as get()'s
+        (idx < self.roots_extra.nr).then(|| unsafe { &mut *self.roots_extra.data.add(idx) })
+    }
 }
 
 c_const! {

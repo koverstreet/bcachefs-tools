@@ -5,7 +5,7 @@
 use crate::cstructs::c;
 use crate::types::{DArray, NeBytes, c_default};
 use crate::util::vstructs::Head;
-use cstruct_macros::{bitfield, CStruct};
+use cstruct_macros::{bitfield, c_extern, CStruct};
 use nestify::nest;
 use core::sync::atomic::AtomicI32;
 
@@ -104,3 +104,8 @@ pub struct journal_keys {
     pub overwrites: DArray<c::journal_key_range_overwritten>,
 }
 c_default!(journal_keys);
+
+c_extern! {
+    pub fn bch2_shoot_down_journal_keys(c: *mut c::bch_fs, btree: c::btree_id, level_min: u32, level_max: u32,
+                                        start: c::bpos, end: c::bpos);
+}

@@ -83,8 +83,7 @@ fn btree_ptr_unreadable<'a>(t: &TransAttempt<'a, '_>, btree: c::btree_id, level:
     let mut msg = LogMsg::new(fs);
     prt!(&mut msg, "btree node with no readable replicas, dropping pointer:\n{}", n.to_text(fs));
     damage::note_lost_extents(fs, btree, n);
-    // SAFETY: @msg, borrowed for the call
-    ret_to_result_void(unsafe { c::bch2_btree_lost_data(fs.as_ptr(), msg.as_raw(), btree) })?;
+    crate::init::recovery::btree_lost_data(fs, &mut msg, btree)?;
     Ok(false)
 }
 
