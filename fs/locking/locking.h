@@ -10,6 +10,7 @@
  */
 
 #include <linux/cleanup.h>
+#include <linux/local_lock.h>
 #include <linux/mutex.h>
 #include <linux/percpu-rwsem.h>
 #include <linux/sched/mm.h>

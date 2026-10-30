@@ -50,6 +50,10 @@ c_extern! {
     pub fn rust_spin_unlock_irqrestore(lock: *mut c::spinlock_t, flags: c_ulong);
     pub fn rust_spin_lock_assert_held(lock: *mut c::spinlock_t);
 
+    pub fn rust_local_lock_init(lock: *mut c::local_lock_t);
+    pub fn rust_local_lock_irqsave(lock: *mut c::local_lock_t) -> c_ulong;
+    pub fn rust_local_unlock_irqrestore(lock: *mut c::local_lock_t, flags: c_ulong);
+
     pub fn rust_init_rwsem(sem: *mut c::rw_semaphore, name: *const c_char, key: *mut c_void);
     pub fn rust_rwsem_assert_held(sem: *mut c::rw_semaphore);
     pub fn rust_rwsem_assert_held_write(sem: *mut c::rw_semaphore);

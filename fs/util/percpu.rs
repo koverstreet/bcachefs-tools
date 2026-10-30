@@ -40,7 +40,7 @@
 //! - ThisCpu<'g, T> is this CPU's copy, while a Pinned guard keeps it this
 //!   CPU: a place, as util/projections.rs's are, or add() of a delta to a
 //!   struct of counters; a slot's, its Volatile. Pinned is a CpuGuard -
-//!   preemption off.
+//!   preemption off - or a LocalLockGuard, this CPU's local_lock_t held.
 //!
 //! What's atomic is C's contract and no more: a this_cpu operation is whole
 //! against this CPU - its interrupts and preemption - not against another CPU
@@ -79,13 +79,15 @@
 //! arm64. Around a ThisCpu on x86 that's three calls where C makes none - a
 //! cost for a slowpath, not yet for anything hotter.
 
-use core::ffi::{c_int, c_uint, c_void};
+use core::ffi::{c_int, c_uint, c_ulong, c_void};
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, MaybeUninit};
 use cstruct_macros::c_extern;
 
 use crate::c;
+use crate::locking::{rust_local_lock_init, rust_local_lock_irqsave, rust_local_unlock_irqrestore};
 use crate::util::alloc::AllocError;
+use crate::util::ffi::Opaque;
 use crate::util::projections::{AtomicWord, FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};
 
 c_extern! {
@@ -263,6 +265,28 @@ impl Drop for CpuGuard {
     }
 }
 
+/// This CPU's copy of a per-CPU local_lock_t, held: local_lock_irqsave(),
+/// from PerCpuRef::lock_irqsave(). It pins the task and keeps out this CPU's
+/// interrupts and other takers: interrupts off - or on PREEMPT_RT, a sleeping
+/// lock with migration off, so what it guards may take sleeping locks. A
+/// ThisCpu under it is whole only for what the lock guards.
+pub struct LocalLockGuard<'a> {
+    pcp:   *mut c::local_lock_t,
+    flags: c_ulong,
+    _p:    PhantomData<(&'a c::local_lock_t, *const ())>,
+}
+
+// SAFETY: migration's off while it's held - by the lock on RT, interrupts
+// off elsewhere
+unsafe impl Pinned for LocalLockGuard<'_> {}
+
+impl Drop for LocalLockGuard<'_> {
+    fn drop(&mut self) {
+        // SAFETY: this CPU's, which it took
+        unsafe { rust_local_unlock_irqrestore(self.pcp, self.flags) }
+    }
+}
+
 fn possible_cpus() -> impl Iterator<Item = c_uint> {
     let mut cpu: c_int = -1;
     core::iter::from_fn(move || {
@@ -401,6 +425,28 @@ impl<'a, T> PerCpuRef<'a, T> {
     }
 }
 
+// SAFETY: a zeroed local_lock_t is a valid uninitialized one, as in C's
+// alloc_percpu()'d struct; init() below initializes it
+unsafe impl ::pin_init::Zeroable for Opaque<c::local_lock_t> {}
+
+impl<'a> PerCpuRef<'a, Opaque<c::local_lock_t>> {
+    /// Each CPU's initialized: local_lock_init(), before any takes it.
+    pub fn init(self) {
+        for cpu in self.cpus() {
+            // SAFETY: a CPU's copy, which no one takes till it's initialized
+            unsafe { rust_local_lock_init(cpu.0.cast_mut().cast()) }
+        }
+    }
+
+    /// This CPU's, taken: local_lock_irqsave().
+    pub fn lock_irqsave(self) -> LocalLockGuard<'a> {
+        let pcp = self.0.cast::<c::local_lock_t>();
+        // SAFETY: live for 'a, and initialized
+        let flags = unsafe { rust_local_lock_irqsave(pcp) };
+        LocalLockGuard { pcp, flags, _p: PhantomData }
+    }
+}
+
 impl<'a, T, const N: usize> PerCpuRef<'a, [T; N]> {
     pub fn at(self, i: usize) -> PerCpuRef<'a, T> {
         assert!(i < N);
@@ -485,7 +531,7 @@ unsafe impl<T: AtomicWord> CpuShared for Volatile<T> {}
 // SAFETY: each element's
 unsafe impl<T: CpuShared, const N: usize> CpuShared for [T; N] {}
 // SAFETY: an UnsafeCell's
-unsafe impl<T> CpuShared for crate::util::ffi::Opaque<T> {}
+unsafe impl<T> CpuShared for Opaque<T> {}
 
 impl<'a, T: CpuShared> PerCpuRef<'a, T> {
     /// Each possible CPU's copy: slots, anyone's to load and store.

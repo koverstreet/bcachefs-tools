@@ -78,6 +78,29 @@ void rust_spin_lock_assert_held(spinlock_t *lock)
 	lockdep_assert_held(lock);
 }
 
+/*
+ * percpu.rs: local_lock_t - one cpu's copy initialized, and this cpu's taken
+ * irqsave, by its percpu pointer, as the util.c percpu helpers take theirs
+ */
+
+void rust_local_lock_init(local_lock_t *lock)
+{
+	local_lock_init(lock);
+}
+
+unsigned long rust_local_lock_irqsave(local_lock_t *pcp)
+{
+	unsigned long flags;
+
+	local_lock_irqsave((local_lock_t __percpu *) (unsigned long) pcp, flags);
+	return flags;
+}
+
+void rust_local_unlock_irqrestore(local_lock_t *pcp, unsigned long flags)
+{
+	local_unlock_irqrestore((local_lock_t __percpu *) (unsigned long) pcp, flags);
+}
+
 /* raw.rs: rw_semaphore */
 
 void rust_init_rwsem(struct rw_semaphore *sem, const char *name, void *key)
