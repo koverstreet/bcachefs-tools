@@ -364,6 +364,18 @@ impl<G, P> LockedBy<G, P> {
     }
 }
 
+impl<G, P: crate::util::projections::Publish> LockedBy<G, P> {
+    /// @P as its writer has it: the owner's to hand out, to whoever shows it
+    /// holds the lock.
+    ///
+    /// # Safety
+    /// The lock that publishes it is held, for as long as the reference lives.
+    pub unsafe fn published_writer(&self) -> &P::Writer {
+        // SAFETY: Publish's - a &P is a valid &P::Writer
+        unsafe { &*core::ptr::from_ref(&self.published).cast::<P::Writer>() }
+    }
+}
+
 impl<G, P> Deref for LockedBy<G, P> {
     type Target = P;
 
