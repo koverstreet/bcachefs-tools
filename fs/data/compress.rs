@@ -424,7 +424,10 @@ pub unsafe fn bch2_buf_uncompress(c: &Opaque<c::bch_fs>, dst: *mut c_void, src: 
  * answer.
  *
  * Not under no_data_io, where decompressing whatever was in the buffer is
- * expected to fail and says nothing about the filesystem.
+ * expected to fail and says nothing about the filesystem - and the same
+ * goes for data whose checksum failed, which the read path still tries to
+ * decompress: that's counted as the checksum error it is. So
+ * bch2_bio_uncompress() leaves the counting to its callers, which know.
  */
 fn decompress_err(fs: &Fs, ret: Result<(), BchError>) -> Result<(), BchError> {
     if let Err(err) = ret {
@@ -443,6 +446,9 @@ pub fn bch2_decompress_err(c: &Opaque<c::bch_fs>, ret: c_int) -> c_int {
 
 /// # Safety
 /// @src and @dst are bios, @dst_iter a position of @dst.
+///
+/// A failure isn't counted: the caller does that with bch2_decompress_err(),
+/// if the data's checksum was good.
 #[c_export]
 pub unsafe fn bch2_bio_uncompress(c: &Opaque<c::bch_fs>, src: *mut c::bio, dst: *mut c::bio,
                                   dst_iter: c::bvec_iter, crc: c::bch_extent_crc_unpacked) -> c_int {
@@ -457,7 +463,7 @@ pub unsafe fn bch2_bio_uncompress(c: &Opaque<c::bch_fs>, src: *mut c::bio, dst: 
                "decompressing a bio that isn't the compressed extent");
 
     if (crc.uncompressed_size.max(crc.compressed_size) as usize) << 9 > extent_max(fs) {
-        return ret_to_c(decompress_err(fs, fs.throw(e::BCH_ERR_decompress_exceeded_max_encoded_extent)));
+        return ret_to_c(fs.throw(e::BCH_ERR_decompress_exceeded_max_encoded_extent));
     }
 
     let dst_buf = if dst.len() as usize == dst_len {
@@ -467,7 +473,7 @@ pub unsafe fn bch2_bio_uncompress(c: &Opaque<c::bch_fs>, src: *mut c::bio, dst: 
     };
     let src_buf = map_or_bounce(fs, src.range(), READ);
 
-    let ret = decompress_err(fs, buf_uncompress(fs, dst_buf.data(), src_buf.data(), &crc));
+    let ret = buf_uncompress(fs, dst_buf.data(), src_buf.data(), &crc);
     if ret.is_ok() && !dst_buf.mapped() {
         dst.copy_from_volatile(dst_buf.data().sub(((crc.offset as usize) << 9)..dst_len));
     }
