@@ -315,12 +315,11 @@ pub trait TimeStats {
         *g
     }
 
-    /// Everything zeroed - the minimums too, as C's memset() did - and the
-    /// buffers emptied; not the quantiles.
+    /// As it started, the buffers emptied; not the quantiles.
     fn reset(&self) {
         let s = self.stats();
         let mut g = s.lock.lock();
-        *g = c::TimeStatsLocked::default();
+        *g = c::TimeStatsLocked::new();
         s.last_event_start.set(0);
         if let Some(pcpu) = s.buffer() {
             for b in pcpu.each_cpu() {
