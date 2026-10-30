@@ -53,6 +53,8 @@ c_extern! {
     pub fn rust_local_lock_init(lock: *mut c::local_lock_t);
     pub fn rust_local_lock_irqsave(lock: *mut c::local_lock_t) -> c_ulong;
     pub fn rust_local_unlock_irqrestore(lock: *mut c::local_lock_t, flags: c_ulong);
+    pub fn rust_local_irq_save() -> c_ulong;
+    pub fn rust_local_irq_restore(flags: c_ulong);
 
     pub fn rust_init_rwsem(sem: *mut c::rw_semaphore, name: *const c_char, key: *mut c_void);
     pub fn rust_rwsem_assert_held(sem: *mut c::rw_semaphore);

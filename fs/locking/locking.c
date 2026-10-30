@@ -101,6 +101,21 @@ void rust_local_unlock_irqrestore(local_lock_t *pcp, unsigned long flags)
 	local_unlock_irqrestore((local_lock_t __percpu *) (unsigned long) pcp, flags);
 }
 
+/* percpu.rs: IrqGuard - this cpu's interrupts off, for what they change too */
+
+unsigned long rust_local_irq_save(void)
+{
+	unsigned long flags;
+
+	local_irq_save(flags);
+	return flags;
+}
+
+void rust_local_irq_restore(unsigned long flags)
+{
+	local_irq_restore(flags);
+}
+
 /* raw.rs: rw_semaphore */
 
 void rust_init_rwsem(struct rw_semaphore *sem, const char *name, void *key)

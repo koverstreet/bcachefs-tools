@@ -40,7 +40,8 @@
 //! - ThisCpu<'g, T> is this CPU's copy, while a Pinned guard keeps it this
 //!   CPU: a place, as util/projections.rs's are, or add() of a delta to a
 //!   struct of counters; a slot's, its Volatile. Pinned is a CpuGuard -
-//!   preemption off - or a LocalLockGuard, this CPU's local_lock_t held.
+//!   preemption off - an IrqGuard, interrupts off, or a LocalLockGuard,
+//!   this CPU's local_lock_t held.
 //!
 //! What's atomic is C's contract and no more: a this_cpu operation is whole
 //! against this CPU - its interrupts and preemption - not against another CPU
@@ -85,7 +86,8 @@ use core::mem::{align_of, size_of, MaybeUninit};
 use cstruct_macros::c_extern;
 
 use crate::c;
-use crate::locking::{rust_local_lock_init, rust_local_lock_irqsave, rust_local_unlock_irqrestore};
+use crate::locking::{rust_local_irq_restore, rust_local_irq_save, rust_local_lock_init, rust_local_lock_irqsave,
+                     rust_local_unlock_irqrestore};
 use crate::util::alloc::AllocError;
 use crate::util::ffi::Opaque;
 use crate::util::projections::{AtomicWord, FakePlaceRef, FakePlaceWrite, FakePlaceRead, Volatile};
@@ -262,6 +264,31 @@ impl CpuGuard {
 impl Drop for CpuGuard {
     fn drop(&mut self) {
         unsafe { bch2_preempt_enable() };
+    }
+}
+
+/// This CPU's interrupts off while it lives, as local_irq_save(): for a slot
+/// interrupt handlers change too - a read bio's completion - which a
+/// CpuGuard's ThisCpu would race. Not Send or Sync: it's this CPU's.
+pub struct IrqGuard {
+    flags: c_ulong,
+    _p:    PhantomData<*const ()>,
+}
+
+// SAFETY: interrupts off, so no preemption either
+unsafe impl Pinned for IrqGuard {}
+
+impl IrqGuard {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        IrqGuard { flags: unsafe { rust_local_irq_save() }, _p: PhantomData }
+    }
+}
+
+impl Drop for IrqGuard {
+    fn drop(&mut self) {
+        // SAFETY: what new() saved, on this CPU
+        unsafe { rust_local_irq_restore(self.flags) }
     }
 }
 
