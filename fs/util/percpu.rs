@@ -278,13 +278,18 @@ impl<T> Copy for PerCpuRef<'_, T> {}
 impl<T: ::pin_init::Zeroable> PerCpu<T> {
     /// Every possible CPU's copy, zeroed: alloc_percpu().
     pub fn alloc() -> Result<Self, AllocError> {
-        // In the kernel, __alloc_percpu() is a macro - alloc_hooks() over
+        Self::alloc_gfp(c::GFP_KERNEL)
+    }
+
+    /// alloc(), allocating with @gfp: alloc_percpu_gfp().
+    pub fn alloc_gfp(gfp: c::gfp_t) -> Result<Self, AllocError> {
+        // In the kernel, __alloc_percpu_gfp() is a macro - alloc_hooks() over
         // pcpu_alloc_noprof() - which kernel Rust calls directly, as its
         // allocator does krealloc_noprof()
         #[cfg(kernel)]
-        let p = unsafe { c::pcpu_alloc_noprof(size_of::<T>(), align_of::<T>(), false, c::GFP_KERNEL) };
+        let p = unsafe { c::pcpu_alloc_noprof(size_of::<T>(), align_of::<T>(), false, gfp) };
         #[cfg(not(kernel))]
-        let p = unsafe { c::__alloc_percpu(size_of::<T>(), align_of::<T>()) };
+        let p = unsafe { c::__alloc_percpu_gfp(size_of::<T>(), align_of::<T>(), gfp) };
         if p.is_null() { Err(AllocError) } else { Ok(PerCpu(p.cast())) }
     }
 
@@ -304,6 +309,11 @@ impl<T> PerCpu<T> {
     /// Whether it's been allocated - and not freed.
     pub fn allocated(&self) -> bool {
         !self.0.is_null()
+    }
+
+    /// Its pointer, for a `T __percpu *` to own: freed with free_percpu().
+    pub fn into_raw(self) -> *mut T {
+        self.0
     }
 
     /// free_percpu(): unallocated after, as before alloc().
