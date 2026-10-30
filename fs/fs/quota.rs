@@ -68,9 +68,9 @@ pub fn bch2_quota_to_text(out: &mut Printbuf, _c: &Opaque<c::bch_fs>, k: BkeySC<
 
 /// The quota types the mount options turn on.
 pub fn enabled_qtypes(fs: &Fs) -> u32 {
-    (fs.opts.usrquota as u32) << c::quota_types::QTYP_USR.0 |
-    (fs.opts.grpquota as u32) << c::quota_types::QTYP_GRP.0 |
-    (fs.opts.prjquota as u32) << c::quota_types::QTYP_PRJ.0
+    (fs.opts.usrquota.get() as u32) << c::quota_types::QTYP_USR.0 |
+    (fs.opts.grpquota.get() as u32) << c::quota_types::QTYP_GRP.0 |
+    (fs.opts.prjquota.get() as u32) << c::quota_types::QTYP_PRJ.0
 }
 
 /// The quota types in mask @qtypes.
@@ -658,13 +658,13 @@ mod vfs {
         }
 
         /* Can't enable enforcement without accounting: */
-        if uflags & c::FS_QUOTA_UDQ_ENFD != 0 && fs.opts.usrquota == 0 {
+        if uflags & c::FS_QUOTA_UDQ_ENFD != 0 && fs.opts.usrquota.get() == 0 {
             return fs.throw(bch_errcode::BCH_ERR_EINVAL_quota_enable_usrquota);
         }
-        if uflags & c::FS_QUOTA_GDQ_ENFD != 0 && fs.opts.grpquota == 0 {
+        if uflags & c::FS_QUOTA_GDQ_ENFD != 0 && fs.opts.grpquota.get() == 0 {
             return fs.throw(bch_errcode::BCH_ERR_EINVAL_quota_enable_grpquota);
         }
-        if uflags & c::FS_QUOTA_PDQ_ENFD != 0 && fs.opts.prjquota == 0 {
+        if uflags & c::FS_QUOTA_PDQ_ENFD != 0 && fs.opts.prjquota.get() == 0 {
             return fs.throw(bch_errcode::BCH_ERR_EINVAL_quota_enable_prjquota);
         }
 
@@ -703,11 +703,11 @@ mod vfs {
         }
 
         let types = [
-            (c::FS_USER_QUOTA,  fs.opts.usrquota, c::quota_types::QTYP_USR,
+            (c::FS_USER_QUOTA,  fs.opts.usrquota.get(), c::quota_types::QTYP_USR,
              bch_errcode::BCH_ERR_EINVAL_quota_remove_usrquota),
-            (c::FS_GROUP_QUOTA, fs.opts.grpquota, c::quota_types::QTYP_GRP,
+            (c::FS_GROUP_QUOTA, fs.opts.grpquota.get(), c::quota_types::QTYP_GRP,
              bch_errcode::BCH_ERR_EINVAL_quota_remove_grpquota),
-            (c::FS_PROJ_QUOTA,  fs.opts.prjquota, c::quota_types::QTYP_PRJ,
+            (c::FS_PROJ_QUOTA,  fs.opts.prjquota.get(), c::quota_types::QTYP_PRJ,
              bch_errcode::BCH_ERR_EINVAL_quota_remove_prjquota),
         ];
 

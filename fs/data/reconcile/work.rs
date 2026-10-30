@@ -92,8 +92,8 @@ impl Fs {
     /// run on AC, not on battery. bch2_reconcile_enabled().
     pub fn reconcile_enabled(&self) -> bool {
         let o = self.opts();
-        o.read_only == 0 && o.reconcile_enabled != 0 &&
-            !(o.reconcile_on_ac_only != 0 && self.reconcile.on_battery.load(Relaxed))
+        o.read_only.get() == 0 && o.reconcile_enabled.get() != 0 &&
+            !(o.reconcile_on_ac_only.get() != 0 && self.reconcile.on_battery.load(Relaxed))
     }
 }
 
@@ -977,7 +977,7 @@ impl Fs {
         if r.thread_exit_ret.load(Relaxed) != 0 {
             self.reconcile_stop();
         }
-        if r.thread.lock().is_some() || self.opts().nochanges != 0 {
+        if r.thread.lock().is_some() || self.opts().nochanges.get() != 0 {
             return Ok(());
         }
 

@@ -321,7 +321,7 @@ fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     // errors for ids not in the table yet, and create() commits the subvolume
     // with its new snapshot nodes, before their trigger adds them.
     if v.from.from() == c::bkey_validate_from::BKEY_VALIDATE_commit &&
-       v.fs.opts().no_commit_validate == 0 {
+       v.fs.opts().no_commit_validate.get() == 0 {
         if has_field!(k, state) {
             bkey_fsck_err_on!(v, s.state != 0 && s.state_field().is_none(), id::subvol_state_bad,
                               "invalid state {:#x}", s.state.get())?;

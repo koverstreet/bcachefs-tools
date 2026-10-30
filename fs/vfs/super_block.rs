@@ -104,7 +104,7 @@ impl SuperOps for Fs {
 
     fn sync_fs(&self, _sb: &SuperBlock, wait: c_int) -> Result<(), BchError> {
         let start = ktime_get_ns();
-        let disabled = self.opts().journal_flush_disabled != 0;
+        let disabled = self.opts().journal_flush_disabled.get() != 0;
 
         let ret = if disabled {
             Ok(())
@@ -169,7 +169,7 @@ impl SuperOps for Fs {
     fn show_options(&self, m: &SeqFile, _root: Dentry<'_>) -> Result<(), BchError> {
         let mut out = Printbuf::new();
         // No superblock: with the filesystem, every option's to_text reads it
-        crate::opts::opts_to_text(&mut out, self.opts(), Some(self), None, Some(&self.mount_opts),
+        crate::opts::opts_to_text(&mut out, &self.opts().load(), Some(self), None, Some(&self.mount_opts),
                                   c::opt_flags::OPT_MOUNT.bits(), c::opt_flags::OPT_HIDDEN.bits(),
                                   c::OPT_SHOW_MOUNT_STYLE);
         if out.allocation_failure() {

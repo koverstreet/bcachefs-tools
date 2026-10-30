@@ -897,12 +897,14 @@ use_clean:
 
 	if (c->sb.features & BIT_ULL(BCH_FEATURE_small_image)) {
 		bch_info(c, "filesystem is an unresized image file, mounting ro");
-		c->opts.read_only = true;
+		scoped_guard(mutex_noio, &c->sb_lock)
+			c->opts.read_only = true;
 	}
 
 	if (c->sb.features & BIT_ULL(BCH_FEATURE_no_default_sb)) {
 		bch_info(c, "filesystem does not have default superblock layout, mounting ro");
-		c->opts.read_only = true;
+		scoped_guard(mutex_noio, &c->sb_lock)
+			c->opts.read_only = true;
 	}
 
 	if (!c->opts.read_only &&
@@ -927,6 +929,7 @@ use_clean:
 
 	if (c->sb.features & BIT_ULL(BCH_FEATURE_no_alloc_info)) {
 		/* We can't go RW to fix errors without alloc info */
+		guard(mutex_noio)(&c->sb_lock);
 		if (c->opts.fix_errors == FSCK_FIX_yes ||
 		    c->opts.fix_errors == FSCK_FIX_ask)
 			c->opts.fix_errors = FSCK_FIX_no;
@@ -1002,8 +1005,10 @@ use_clean:
 			prt_str(&msg.m, ")");
 
 			bch2_journal_log_msg(c, "%s", msg.m.buf);
-			c->opts.journal_rewind = rewind_seq;
-			c->opts.fsck = true;
+			scoped_guard(mutex_noio, &c->sb_lock) {
+				c->opts.journal_rewind = rewind_seq;
+				c->opts.fsck = true;
+			}
 
 			try(bch2_journal_add_rewind_range(c,
 					journal_start.replay_end,

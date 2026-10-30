@@ -204,8 +204,7 @@ impl Bcachefs {
         // Some options can't be parsed until after the fs is started:
         let mut later: c::bch_opts = Default::default();
         crate::opts::parse_mount_opts_into(Some(&fs), &mut later, None, p.parse_later.as_bytes(), false)?;
-        // SAFETY: c->opts of a filesystem not started, which nothing else has
-        unsafe { (*fs.as_ptr()).opts.apply(&later) };
+        fs.opts_writer(&mut fs.sb_lock()).apply(&later);
         set_mount_opts(&fs, &later);
 
         // The status channel is scoped to recovery: c->stdio mustn't outlive
@@ -226,7 +225,7 @@ impl Bcachefs {
         // We might be doing a RO mount because other options required it, or
         // we have no alloc info and it's a small image with no room to
         // regenerate it
-        if fs.opts().read_only != 0 {
+        if fs.opts().read_only.get() != 0 {
             fc.set_sb_flags(c::SB_RDONLY as u32);
         }
 
@@ -245,7 +244,7 @@ impl Bcachefs {
         let fs = unsafe { Fs::borrow_raw(fs_ptr) };
 
         let filled = (|| {
-            sb.set_blocksize(fs.opts().block_size as u32);
+            sb.set_blocksize(fs.opts().block_size.get() as u32);
             sb.set_maxbytes(c::MAX_LFS_FILESIZE);
             sb.set_ops(&super::super_block::SUPER_OPS);
             sb.set_export_ops(&super::export::EXPORT_OPS);
@@ -274,7 +273,7 @@ impl Bcachefs {
 
             unsafe { (*fs_ptr).dev = sb.sb().dev() };
 
-            if fs.opts().acl != 0 {
+            if fs.opts().acl.get() != 0 {
                 sb.set_flags(c::SB_POSIXACL as _);
             }
 
@@ -485,10 +484,11 @@ impl FsType for Bcachefs {
         }
 
         let want_ro = fc.ctx().opts.read_only;
-        if want_ro != fs.opts().read_only {
+        if want_ro != fs.opts().read_only.get() {
             let _lock = fs.state_lock_write();
-            // SAFETY: c->opts changes under state_lock, held
-            let opts = unsafe { &mut (*fs.as_ptr()).opts };
+            // Stored as C did, not set as an option; sb_lock for the store
+            // alone - going read-write writes the superblock
+            let set_ro = |v: u8| fs.opts_writer(&mut fs.sb_lock()).read_only.set(v);
 
             if want_ro != 0 {
                 sb.sync()?;
@@ -496,10 +496,10 @@ impl FsType for Bcachefs {
                 sb.set_rdonly(true);
             } else {
                 // __bch2_fs_read_write() gates reconcile on this:
-                opts.read_only = 0;
+                set_ro(0);
 
                 if let Err(e) = fs.read_write() {
-                    opts.read_only = 1;
+                    set_ro(1);
                     // bch_err() says which filesystem, errorfc() reaches the
                     // caller; the throw discards the errcode
                     crate::bch_err!(fs, "error going read-write: {}", e.msg());
@@ -509,12 +509,12 @@ impl FsType for Bcachefs {
                 sb.set_rdonly(false);
             }
 
-            opts.read_only = want_ro;
+            set_ro(want_ro);
         }
 
         let opts = &fc.ctx().opts;
         if opts.defined(opt_id::Opt_errors) {
-            unsafe { (*fs.as_ptr()).opts.errors = opts.errors };
+            fs.opts_writer(&mut fs.sb_lock()).errors.set(opts.errors);
         }
         Ok(())
     }

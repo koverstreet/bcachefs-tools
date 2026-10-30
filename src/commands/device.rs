@@ -99,8 +99,8 @@ fn cmd_device_add_offline(
     force: bool,
     matches: &clap::ArgMatches,
 ) -> Result<()> {
-    let block_size = fs.opts().block_size as u32;
-    let btree_node_size = fs.opts().btree_node_size;
+    let block_size = fs.opts().block_size.get() as u32;
+    let btree_node_size = fs.opts().btree_node_size.get();
 
     device_add_format(dev_path, force, matches,
         block_size, btree_node_size)?;

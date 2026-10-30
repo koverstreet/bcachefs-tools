@@ -521,7 +521,7 @@ fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags, w:
     debug_assert_eq!(w.is_none(), flags.contains(Flags::RUN_RECOVERY_PASS_ephemeral));
 
     let opts = fs.opts();
-    if opts.norecovery != 0 || opts.recovery_passes_exclude & bit(pass) != 0 {
+    if opts.norecovery.get() != 0 || opts.recovery_passes_exclude.get() & bit(pass) != 0 {
         return Ok(());
     }
 
@@ -556,7 +556,7 @@ fn run_explicit_sb(fs: &Fs, out: &mut Printbuf, pass: Pass, mut flags: Flags, w:
      * check_allocations is the one that bites. The requirement stays in the
      * superblock, so the next mount that isn't skipping does the work.
      */
-    if opts.recovery_passes_skip_scheduled != 0 {
+    if opts.recovery_passes_skip_scheduled.get() != 0 {
         return Ok(());
     }
 
@@ -918,7 +918,7 @@ pub fn run_async(fs: &Fs) {
      * so a background pass would fire when we're no longer rw. Don't schedule
      * them at all.
      */
-    if fs.opts().nochanges != 0 {
+    if fs.opts().nochanges.get() != 0 {
         return;
     }
 
@@ -932,11 +932,10 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
      * We can't allow set_may_go_rw to be excluded; that would cause us to
      * use the journal replay keys for updates where it's not expected.
      */
-    // SAFETY: mount's, before anything else reads it
-    unsafe { (*fs.as_ptr()).opts.recovery_passes_exclude &= !bit(Pass::BCH_RECOVERY_PASS_set_may_go_rw) };
+    *fs.opts_writer(&mut fs.sb_lock()).recovery_passes_exclude.place() &= !bit(Pass::BCH_RECOVERY_PASS_set_may_go_rw);
     let opts = fs.opts();
 
-    lock(fs).published().scheduled_passes_ephemeral.set(opts.recovery_passes);
+    lock(fs).published().scheduled_passes_ephemeral.set(opts.recovery_passes.get());
 
     /*
      * Scheduled passes are repair the superblock is asking for - an upgrade
@@ -948,15 +947,15 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
      */
     let mut passes = passes_match(c::PASS_ALWAYS)
         | if fs.sb.clean.get() == 0 { passes_match(c::PASS_UNCLEAN) } else { 0 }
-        | if opts.fsck != 0 { fsck_passes() } else { 0 }
-        | opts.recovery_passes
-        | if opts.recovery_passes_skip_scheduled == 0 { fs.sb.recovery_passes_required.get() } else { 0 };
+        | if opts.fsck.get() != 0 { fsck_passes() } else { 0 }
+        | opts.recovery_passes.get()
+        | if opts.recovery_passes_skip_scheduled.get() == 0 { fs.sb.recovery_passes_required.get() } else { 0 };
 
-    if opts.recovery_pass_last != 0 {
-        passes &= 1u64.checked_shl(u32::from(opts.recovery_pass_last) + 1).map_or(!0, |b| b - 1);
+    if opts.recovery_pass_last.get() != 0 {
+        passes &= 1u64.checked_shl(u32::from(opts.recovery_pass_last.get()) + 1).map_or(!0, |b| b - 1);
     }
 
-    passes &= !opts.recovery_passes_exclude;
+    passes &= !opts.recovery_passes_exclude.get();
 
     passes &= !(bit(from) - 1);
 
@@ -968,10 +967,10 @@ pub fn run_passes_startup(fs: &Fs, from: Pass) -> Result<(), BchError> {
      * finished, and its own run finished before it judges it.
      */
     let mut defer = 0;
-    if opts.fsck == 0 && !cfg!(CONFIG_BCACHEFS_DEBUG) {
+    if opts.fsck.get() == 0 && !cfg!(CONFIG_BCACHEFS_DEBUG) {
         for i in 0..NR {
             if passes & 1 << i != 0 &&
-               opts.recovery_passes & 1 << i == 0 &&
+               opts.recovery_passes.get() & 1 << i == 0 &&
                WHEN[i] & c::PASS_NODEFER == 0 &&
                should_defer(i, passes) {
                 defer |= 1 << i;

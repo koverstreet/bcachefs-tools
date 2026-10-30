@@ -480,7 +480,7 @@ fn fuse_truncate(fs: &Fs, inum: c::subvol_inum, new_size: u64) -> Result<(), Bch
 /// the journal only as far as the inode's last update; we don't track that,
 /// so we flush all of it: more than the minimum, never less.
 fn fuse_fsync(fs: &Fs) -> Result<(), BchError> {
-    if unsafe { (*fs.as_ptr()).opts.journal_flush_disabled } != 0 {
+    if fs.opts().journal_flush_disabled.get() != 0 {
         return Ok(());
     }
     fs.journal_flush()

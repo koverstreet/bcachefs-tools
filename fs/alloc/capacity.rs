@@ -87,8 +87,8 @@ pub(crate) fn recalc_capacity(fs: &Fs) {
     // the total first: the copygc reserve is shared out against it
     let capacity: u64 = fs.devs_rcu(&rcu).filter(|ca| ca.has_capacity()).map(|ca| ca.capacity_sectors()).sum();
 
-    let gc_reserve = match fs.opts.gc_reserve_bytes {
-        0 => capacity * u64::from(fs.opts.gc_reserve_percent) / 100,
+    let gc_reserve = match fs.opts.gc_reserve_bytes.get() {
+        0 => capacity * u64::from(fs.opts.gc_reserve_percent.get()) / 100,
         b => b >> 9,
     }.min(capacity);
 
@@ -137,7 +137,7 @@ pub fn bch2_recalc_capacity(c: &Opaque<c::bch_fs>) {
 /// Pages to read ahead: each device's dev_readahead, or the VM's default.
 #[cfg(kernel)]
 pub(crate) fn fs_ra_pages(fs: &Fs) -> usize {
-    let per_dev = (fs.opts.dev_readahead >> kernel::page::PAGE_SHIFT) as usize;
+    let per_dev = (fs.opts.dev_readahead.get() >> kernel::page::PAGE_SHIFT) as usize;
     let rcu = read_lock();
     // SAFETY: a pointer, read whole - as C's READ_ONCE(): set and cleared
     // as the device comes and goes

@@ -2233,7 +2233,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
     // are), or from an open that said it will never start, which skips
     // those decisions:
     if !fs.flag(f::BCH_FS_start_begun) &&
-       fs.opts().will_not_start == 0 &&
+       fs.opts().will_not_start.get() == 0 &&
        !flags.contains(c::bch_sb_write_flags::BCH_SB_WRITE_bringup) {
         return fs.throw(bch_errcode::BCH_ERR_erofs_sb_write_before_start);
     }
@@ -2264,7 +2264,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
         }
     }
 
-    if fs.opts().nochanges != 0 {
+    if fs.opts().nochanges.get() != 0 {
         return Ok(());
     }
 
@@ -2275,7 +2275,7 @@ fn write_super_locked(fs: &Fs, sb: &mut SbLockGuard<'_>, devs: Option<&c::bch_de
     // started has nothing to defer to: say so, rather than let it report
     // success having written nothing.
     if !sb.sb().initialized() {
-        if fs.opts().will_not_start == 0 {
+        if fs.opts().will_not_start.get() == 0 {
             return Ok(());
         }
         crate::bch_err!(fs, "filesystem has never been started, not writing superblock: mount it once first");

@@ -86,7 +86,7 @@ fn mode_to_type(mode: c::umode_t) -> u8 {
 /// filesystem's. Inode options are stored +1, 0 for unset.
 fn inodes_32bit(fs: &Fs, dir: &c::bch_inode_unpacked) -> bool {
     match dir.bi_inodes_32bit {
-        0 => fs.opts().inodes_32bit != 0,
+        0 => fs.opts().inodes_32bit.get() != 0,
         v => v - 1 != 0,
     }
 }

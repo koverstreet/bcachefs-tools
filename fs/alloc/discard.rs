@@ -242,7 +242,7 @@ fn dev_bucket_nouse(fs: &Fs, bucket: c::bpos) -> bool {
 /// own.
 fn discard_opt_enabled(fs: &Fs, ca: &c::bch_dev) -> bool {
     let on = if fs.flag(c::bch_fs_flags::BCH_FS_discard_mount_opt_set) {
-        fs.opts.discard
+        fs.opts.discard.get()
     } else {
         ca.mi.get().discard
     };
@@ -442,7 +442,7 @@ impl<'a> Worker<'a> {
 
         if !discard_opt_enabled(fs, &ca) ||
            bdev_max_discard_sectors(ca.disk_sb.bdev()) == 0 ||
-           fs.opts.nochanges != 0 {
+           fs.opts.nochanges.get() != 0 {
             return self.mark_free_key(t, &iter, a);
         }
 
@@ -559,7 +559,7 @@ fn calculate_discard_sectors_to_release(trans: &BtreeTrans<'_>, s: &DiscardState
             let free     = sectors * buckets(c::bch_data_type::BCH_DATA_free);
             let reserve  = sectors * ca.buckets_reserved(c::bch_watermark::BCH_WATERMARK_stripe);
             let capacity = sectors * ca.mi.get().nbuckets;
-            let buffer   = capacity * u64::from(fs.opts.journal_rewind_discard_buffer_percent) / 100;
+            let buffer   = capacity * u64::from(fs.opts.journal_rewind_discard_buffer_percent.get()) / 100;
             let buffer_clamped = (buffer as i64).min((free as i64 - reserve as i64 * 4).max(0));
             let release  = pending as i64 - buffer_clamped;
 

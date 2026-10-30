@@ -480,18 +480,7 @@ fn opt_store(c: &Fs, ca: Option<&c::bch_dev>, id: c::bch_opt_id, s: &str) -> Res
     let v = opts::opt_parse(Some(c), opt, Some(val), None)?;
     change.pre_set(ca, 0, id, v)?;
 
-    let changed = if opt.in_sb() {
-        change.set_sb(ca, opt, v, val)
-    } else if ca.is_none() {
-        c.opts.get(id) != v
-    } else {
-        panic!("device option {} isn't a superblock option: not supported", opt.name)
-    };
-
-    if changed {
-        if ca.is_none() {
-            change.set_fs_opt(id, v);
-        }
+    if change.set(ca, opt, v, val) {
         change.post_set(ca, 0, id, v);
     }
     Ok(())

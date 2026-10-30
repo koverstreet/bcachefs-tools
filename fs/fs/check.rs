@@ -918,7 +918,7 @@ pub mod ioctl {
 
         if let Ok(fs) = &fs {
             if fs.opts.errors() == c::bch_error_actions::BCH_ON_ERROR_panic {
-                unsafe { (*fs.as_ptr()).opts.set_errors(c::bch_error_actions::BCH_ON_ERROR_ro) };
+                fs.opts_writer(&mut fs.sb_lock()).set_errors(c::bch_error_actions::BCH_ON_ERROR_ro);
             }
         }
 
@@ -1001,14 +1001,16 @@ pub mod ioctl {
             }
 
             // XXX: can we figure out a way to do this without mucking with c->opts?
-            let old_fix_errors = fs.opts.fix_errors;
-            unsafe {
-                (*c).opts.fix_errors = if opts.defined(c::bch_opt_id::Opt_fix_errors) {
+            let old_fix_errors = fs.opts.fix_errors.get();
+            {
+                let mut sb = fs.sb_lock();
+                let w = fs.opts_writer(&mut sb);
+                w.fix_errors.set(if opts.defined(c::bch_opt_id::Opt_fix_errors) {
                     opts.fix_errors
                 } else {
                     c::fsck_err_opts::FSCK_FIX_ask as u8
-                };
-                (*c).opts.fsck = 1;
+                });
+                w.fsck.set(1);
             }
             fs.set_flag(c::bch_fs_flags::BCH_FS_in_fsck);
 
@@ -1020,8 +1022,8 @@ pub mod ioctl {
             unsafe {
                 (*c).stdio = core::ptr::null_mut();
                 (*c).stdio_filter = core::ptr::null_mut();
-                (*c).opts.fix_errors = old_fix_errors;
             }
+            fs.opts_writer(&mut fs.sb_lock()).fix_errors.set(old_fix_errors);
         }
 
         let ret = ret.unwrap_or_else(|e| {

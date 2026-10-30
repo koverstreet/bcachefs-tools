@@ -72,7 +72,7 @@ pub(crate) enum MemWait {
 
 impl Fs {
     fn stripe_buf_limit(&self) -> usize {
-        crate::util::kernel::totalram_bytes() / 100 * usize::from(self.opts().ec_stripe_buf_limit)
+        crate::util::kernel::totalram_bytes() / 100 * usize::from(self.opts().ec_stripe_buf_limit.get())
     }
 
     /// @bytes of stripe buffer memory, counted - unless that would go over

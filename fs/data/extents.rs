@@ -371,7 +371,7 @@ fn ptrs_mergeable(fs: &Fs, rcu: &ReadGuard, l: &c::extent_ptr_decoded, r: &c::ex
             u32::from(lc.offset) + lc.live_size == lc.compressed_size &&
             rc.offset == 0 &&
             (lc.csum_type == 0 ||
-             lc.uncompressed_size + rc.uncompressed_size <= fs.opts().encoded_extent_max >> 9),
+             lc.uncompressed_size + rc.uncompressed_size <= fs.opts().encoded_extent_max.get() >> 9),
     }
 }
 

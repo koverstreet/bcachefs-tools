@@ -242,23 +242,36 @@ impl<'f> OptChange<'f> {
         opt_hook_post_set(self.fs, ca, inum, id, v)
     }
 
-    /// As Fs::opt_set_sb().
-    pub fn set_sb(&self, ca: Option<&c::bch_dev>, opt: &Opt, v: u64, val: &[u8]) -> bool {
-        self.fs.opt_set_sb(ca, opt, v, Some(val))
-    }
+    /// Set @opt to @v - in the superblock if it's a field of it, @ca's member
+    /// for a device option - and for a filesystem option in c->opts, no longer
+    /// as mount set it; both under one sb_lock. Whether it changed.
+    pub fn set(&self, ca: Option<&c::bch_dev>, opt: &Opt, v: u64, val: &[u8]) -> bool {
+        let fs = self.fs;
+        let mut sb = fs.sb_lock();
 
-    /// Set filesystem option @id: c->opts, no longer as mount set it.
-    pub fn set_fs_opt(&self, id: opt_id, v: u64) {
-        // SAFETY: c->opts changes under the option change lock, which this holds
-        unsafe { (*self.fs.as_ptr()).opts.set(id, v) };
-
-        let mount_opts = &self.fs.mount_opts.d;
-        // SAFETY: unsigned longs, which C changes with clear_bit()
-        let words = unsafe {
-            core::slice::from_raw_parts(mount_opts.as_ptr().cast::<core::sync::atomic::AtomicUsize>(),
-                                        mount_opts.len())
+        let changed = if opt.in_sb() {
+            let changed = crate::opts::opt_set_sb(&mut sb, ca.map(|ca| ca.dev_idx.into()), opt, v, Some(val));
+            if changed {
+                fs.write_super(&mut sb);
+            }
+            changed
+        } else {
+            assert!(ca.is_none(), "device option {} isn't a superblock option: not supported", opt.name);
+            fs.opts().get(opt.id) != v
         };
-        crate::util::bitmap::AtomicBitmap::from_words(words).clear(id.0 as usize);
+
+        if changed && ca.is_none() {
+            fs.opts_writer(&mut sb).set(opt.id, v);
+
+            let mount_opts = &fs.mount_opts.d;
+            // SAFETY: unsigned longs, which C changes with clear_bit()
+            let words = unsafe {
+                core::slice::from_raw_parts(mount_opts.as_ptr().cast::<core::sync::atomic::AtomicUsize>(),
+                                            mount_opts.len())
+            };
+            crate::util::bitmap::AtomicBitmap::from_words(words).clear(opt.id.0 as usize);
+        }
+        changed
     }
 }
 

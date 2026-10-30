@@ -717,10 +717,10 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
         cg.trans().unlock_long();
         cond_resched();
 
-        if fs.opts().copygc_enabled == 0 {
+        if fs.opts().copygc_enabled.get() == 0 {
             cg.wait_done(true);
             let _ = sleep_until(Sleep::INTERRUPTIBLE.freezable(),
-                || (fs.opts().copygc_enabled != 0 || Kthread::should_stop()).then_some(()));
+                || (fs.opts().copygc_enabled.get() != 0 || Kthread::should_stop()).then_some(()));
         }
 
         /* Moves in flight stay tracked in @cg across the freeze */
@@ -780,7 +780,7 @@ impl Fs {
 
     /// And its workqueue, for the btree updates of its moves.
     pub fn copygc_start(&self) -> Result<(), BchError> {
-        if self.opts().nochanges != 0 {
+        if self.opts().nochanges.get() != 0 {
             return Ok(());
         }
 

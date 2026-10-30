@@ -768,7 +768,7 @@ fn btree_node_get_and_pin(t: &TransAttempt<'_, '_>, pins: &BtreeCachePins<'_>, k
 /// range ends.
 fn pin_backpointer_nodes_with_missing(fs: &Fs, trans: &BtreeTrans<'_>, pins: &BtreeCachePins<'_>,
                                       start: c::bpos) -> Result<c::bpos, BchError> {
-    let node_size = i64::from(fs.opts.btree_node_size);
+    let node_size = i64::from(fs.opts.btree_node_size.get());
     let mut tmp = BkeyBuf::new();
 
     pins.unpin();
@@ -850,7 +850,7 @@ fn check_extents_to_backpointers(fs: &Fs) -> Result<(), BchError> {
             if start == POS_MIN && end != SPOS_MAX {
                 crate::bch_info!(fs, "bch2_check_extents_to_backpointers(): alloc info does not fit in ram, \
                                       running in multiple passes with {} nodes per pass",
-                                 pins.budget() / u64::from(fs.opts.btree_node_size));
+                                 pins.budget() / u64::from(fs.opts.btree_node_size.get()));
             }
 
             if start != POS_MIN || end != SPOS_MAX {
@@ -948,7 +948,7 @@ fn check_backpointers_to_extents(fs: &Fs) -> Result<(), BchError> {
         if start == c::bbpos::MIN && end != c::bbpos::MAX {
             crate::bch_verbose!(fs, "bch2_check_backpointers_to_extents(): extents do not fit in ram, \
                                      running in multiple passes with {} nodes per pass",
-                                pins.budget() / u64::from(fs.opts.btree_node_size));
+                                pins.budget() / u64::from(fs.opts.btree_node_size.get()));
         }
 
         if start != c::bbpos::MIN || end != c::bbpos::MAX {

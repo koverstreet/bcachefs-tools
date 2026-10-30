@@ -74,7 +74,7 @@ pub fn __bch2_bio_alloc_pages_pool(c: &Opaque<c::bch_fs>, bio: &mut c::bio, _bs:
 #[c_export]
 pub fn bch2_bio_alloc_pages_pool(c: &Opaque<c::bch_fs>, bio: &mut c::bio, bs: c_uint, size: usize, gfp: c::gfp_t) {
     // short is fine: the pool has the rest
-    let _ = alloc_pages(bio, Fs::from_c(c).opts().block_size.into(), size, gfp);
+    let _ = alloc_pages(bio, Fs::from_c(c).opts().block_size.get().into(), size, gfp);
     if (bio.bi_iter.bi_size as usize) < size {
         __bch2_bio_alloc_pages_pool(c, bio, bs, size, gfp);
     }

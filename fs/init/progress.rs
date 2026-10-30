@@ -134,7 +134,7 @@ fn btree_mask(ids: &[c::btree_id]) -> u64 {
 fn total_nodes(fs: &Fs, leaf_mask: u64, inner_mask: u64) -> u64 {
     // This is only an estimation: nodes can have different replica counts
     let expected_node_disk_sectors =
-        fs.opts().metadata_replicas as u64 * (fs.opts().btree_node_size as u64 >> 9);
+        fs.opts().metadata_replicas.get() as u64 * (fs.opts().btree_node_size.get() as u64 >> 9);
 
     let mut total = 0u64;
     // The masks have a bit for each of the first 64 btrees

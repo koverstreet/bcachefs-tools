@@ -245,7 +245,7 @@ pub trait BkeyVRead: BkeyV<V: BkeyVal<State = Validated>> {
 
                     if p.has_ec && (f.errcode != 0 || csum_nr != 0) {
                         p.do_ec_reconstruct = true;
-                    } else if f.errcode != 0 || csum_nr > fs.opts().checksum_err_retry_nr {
+                    } else if f.errcode != 0 || csum_nr > fs.opts().checksum_err_retry_nr.get() {
                         continue;
                     }
                 }

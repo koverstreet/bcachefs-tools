@@ -290,7 +290,7 @@ impl Fs {
             return c::bch_csum_type::BCH_CSUM_none;
         }
         if self.sb.encryption_type.get() != 0 {
-            return if self.opts().wide_macs != 0 {
+            return if self.opts().wide_macs.get() != 0 {
                 c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128
             } else {
                 c::bch_csum_type::BCH_CSUM_chacha20_poly1305_80
@@ -303,7 +303,7 @@ impl Fs {
     /// whatever @r says, on an encrypted filesystem: bch2_data_checksum_type_rb().
     pub fn data_checksum_type_rb(&self, r: &c::bch_extent_reconcile) -> c::bch_csum_type {
         if self.sb.encryption_type.get() != 0 {
-            return if self.opts().wide_macs != 0 {
+            return if self.opts().wide_macs.get() != 0 {
                 c::bch_csum_type::BCH_CSUM_chacha20_poly1305_128
             } else {
                 c::bch_csum_type::BCH_CSUM_chacha20_poly1305_80
@@ -516,7 +516,7 @@ pub unsafe fn bch2_rechecksum_bio(c: &Opaque<c::bch_fs>, bio: *mut c::bio, versi
 
     // in constant time, as C's bch2_crc_cmp() means to be
     let differ = ((merged.lo.get() ^ crc_old.csum.lo.get()) | (merged.hi.get() ^ crc_old.csum.hi.get())) != 0;
-    if differ && fs.opts().no_data_io == 0 {
+    if differ && fs.opts().no_data_io.get() == 0 {
         static RATELIMIT: crate::util::log::Ratelimit = crate::util::log::Ratelimit::new();
         if !RATELIMIT.suppress(fs, crate::c_function_name!()) {
             crate::bch_warn!(fs, "checksum error in bch2_rechecksum_bio() (memory corruption or bug?)\n  \

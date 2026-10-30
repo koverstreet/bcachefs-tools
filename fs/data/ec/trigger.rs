@@ -116,7 +116,7 @@ fn refresh_can_widen(fs: &Fs, new: &mut BkeyS<'_>) {
     let Some(mut s) = new.as_s().arm::<c::Stripe>() else { return };
     let v = s.v();
     let want = v.want_can_widen(fs.ec_rw_member_devs_nr(v.disk_label, v.sectors.get()),
-                                fs.opts().ec_max_data_blocks.into());
+                                fs.opts().ec_max_data_blocks.get().into());
     if v.can_widen() != want {
         s.v_mut().bits.set_can_widen(want);
     }

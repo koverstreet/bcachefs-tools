@@ -205,15 +205,15 @@ pub fn get_fs(fs: &Fs, metadata: bool) -> c::bch_inode_opts {
     let o = &fs.opts;
     let mut ret = c::bch_inode_opts::default();
     macro_rules! get {
-        ($(($name:ident, $bits:tt)),* $(,)?) => { $(ret.$name = o.$name as _;)* };
+        ($(($name:ident, $bits:tt)),* $(,)?) => { $(ret.$name = o.$name.get() as _;)* };
     }
     c::BCH_INODE_OPTS!(get);
     ret.change_cookie = fs.opt_change_cookie.get();
 
     if metadata {
-        ret.background_target = if o.metadata_target != 0 { o.metadata_target } else { o.foreground_target };
-        ret.data_replicas = o.metadata_replicas;
-        ret.data_checksum = o.metadata_checksum;
+        ret.background_target = if o.metadata_target.get() != 0 { o.metadata_target.get() } else { o.foreground_target.get() };
+        ret.data_replicas = o.metadata_replicas.get();
+        ret.data_checksum = o.metadata_checksum.get();
         ret.compression = 0;
         ret.background_compression = 0;
         ret.erasure_code = 0;
@@ -251,7 +251,7 @@ pub fn get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_opts {
                 ret.$name = (inode.[<bi_ $name>] - 1) as _;
                 ret.[<set_ $name _from_inode>](true);
             } else {
-                ret.$name = fs.opts.$name as _;
+                ret.$name = fs.opts.$name.get() as _;
                 ret.[<set_ $name _from_inode>](false);
             }
         )* } };
@@ -267,15 +267,15 @@ pub fn get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_opts {
      * versions.)
      */
     if unlikely(ret.data_checksum as u32 >= c::bch_csum_opt::BCH_CSUM_OPT_NR.0) {
-        ret.data_checksum = fs.opts.data_checksum as _;
+        ret.data_checksum = fs.opts.data_checksum.get() as _;
         ret.set_data_checksum_from_inode(false);
     }
     if unlikely(!c::bch_compression_opt::valid(ret.compression as u8)) {
-        ret.compression = fs.opts.compression as _;
+        ret.compression = fs.opts.compression.get() as _;
         ret.set_compression_from_inode(false);
     }
     if unlikely(!c::bch_compression_opt::valid(ret.background_compression as u8)) {
-        ret.background_compression = fs.opts.background_compression as _;
+        ret.background_compression = fs.opts.background_compression.get() as _;
         ret.set_background_compression_from_inode(false);
     }
 
@@ -437,11 +437,11 @@ pub fn get_io_opts(t: &TransAttempt<'_, '_>, s: Option<&mut c::per_snapshot_io_o
         // feature, so shouldn't have mounted - this is for a versioning
         // mistake: the filesystem's options, as get_inode() falls back to.
         if unlikely(opts.data_checksum as u32 >= c::bch_csum_opt::BCH_CSUM_OPT_NR.0) {
-            opts.data_checksum = fs.opts.data_checksum as _;
+            opts.data_checksum = fs.opts.data_checksum.get() as _;
             opts.set_data_checksum_from_inode(false);
         }
         if unlikely(!c::bch_compression_opt::valid(opts.background_compression as u8)) {
-            opts.background_compression = fs.opts.background_compression as _;
+            opts.background_compression = fs.opts.background_compression.get() as _;
             opts.set_background_compression_from_inode(false);
         }
     }

@@ -421,8 +421,8 @@ fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::bch_write_che
     }
 
     let opts = fs.opts();
-    let journal_replicas = match opts.journal_replicas {
-        0 => opts.metadata_replicas,
+    let journal_replicas = match opts.journal_replicas.get() {
+        0 => opts.metadata_replicas.get(),
         r => r,
     };
     let want = |t: usize, force: u32, name: &str, replicas: u8, err: &mut Printbuf| {
@@ -434,8 +434,8 @@ fn can_write_with_devs(fs: &Fs, devs: &c::bch_devs_mask, check: c::bch_write_che
     };
 
     want(j, c::BCH_FORCE_IF_METADATA_DEGRADED, "journal", journal_replicas, err) &&
-    want(b, c::BCH_FORCE_IF_METADATA_DEGRADED, "btree", opts.metadata_replicas, err) &&
-    want(u, c::BCH_FORCE_IF_DATA_DEGRADED, "user data", opts.data_replicas, err)
+    want(b, c::BCH_FORCE_IF_METADATA_DEGRADED, "btree", opts.metadata_replicas.get(), err) &&
+    want(u, c::BCH_FORCE_IF_DATA_DEGRADED, "user data", opts.data_replicas.get(), err)
 }
 
 #[c_export]

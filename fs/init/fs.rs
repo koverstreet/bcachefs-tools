@@ -76,9 +76,16 @@ impl Fs {
         unsafe { core::ffi::CStr::from_ptr((*self.as_ptr()).name.as_ptr().cast()) }
     }
 
-    /// The filesystem's options, as resolved at open.
-    pub fn opts(&self) -> &c::bch_opts {
+    /// load() copies them all.
+    pub fn opts(&self) -> &c::PublishedOpts {
         &self.opts
+    }
+
+    /// The options, to change: sb_lock publishes them.
+    pub fn opts_writer<'a>(&'a self, sb: &'a mut SbLockGuard<'_>) -> &'a c::PublishedOptsWriter {
+        assert!(core::ptr::eq(sb.lock(), &self.sb), "opts_writer(): another filesystem's sb_lock");
+        // SAFETY: @sb holds sb_lock, and is borrowed mutably while this is
+        unsafe { self.opts.published_writer() }
     }
 
     /// log2 of the filesystem block size in 512-byte sectors.
@@ -360,7 +367,7 @@ impl Fs {
         if !cfg!(CONFIG_UNICODE) {
             return self.throw(bch_errcode::BCH_ERR_no_casefolding_without_utf8);
         }
-        if self.opts().casefold_disabled != 0 {
+        if self.opts().casefold_disabled.get() != 0 {
             return self.throw(bch_errcode::BCH_ERR_casefolding_disabled);
         }
         Ok(())
@@ -474,12 +481,12 @@ impl Fs {
     }
 
     pub fn block_bytes(&self) -> u64 {
-        self.opts().block_size as u64
+        self.opts().block_size.get() as u64
     }
 
     /// A btree node's size, in sectors: btree_sectors().
     pub fn btree_sectors(&self) -> u32 {
-        self.opts().btree_node_size >> 9
+        self.opts().btree_node_size.get() >> 9
     }
 
     pub fn time_to_timespec(&self, time: i64) -> c::timespec64 {

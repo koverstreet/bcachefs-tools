@@ -1393,7 +1393,7 @@ pub fn delete_dead_snapshots_forced(fs: &Fs) -> Result<(), BchError> {
 }
 
 fn delete_dead_snapshots(fs: &Fs) -> Result<(), BchError> {
-    if fs.opts().auto_snapshot_deletion == 0 {
+    if fs.opts().auto_snapshot_deletion.get() == 0 {
         return Ok(());
     }
 
@@ -1490,7 +1490,7 @@ fn delete_dead_interior_snapshots(fs: &Fs) -> Result<(), BchError> {
 }
 
 fn delete_dead_interior_snapshots_pass(fs: &Fs) -> Result<(), BchError> {
-    if fs.opts().auto_snapshot_deletion == 0 {
+    if fs.opts().auto_snapshot_deletion.get() == 0 {
         return Ok(());
     }
 

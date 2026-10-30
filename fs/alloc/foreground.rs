@@ -890,7 +890,7 @@ impl Fs {
         let mut buf = Printbuf::new();
         let out = &mut buf;
 
-        write!(out, "Allocator stuck? Waited for {} seconds, err {err}\n", self.opts.allocator_stuck_timeout);
+        write!(out, "Allocator stuck? Waited for {} seconds, err {err}\n", self.opts.allocator_stuck_timeout.get());
         out.tabstop_push(28);
         write!(out, "Allocation:\n");
         self.alloc_request_to_text(&mut out.indent(2), req);
@@ -959,7 +959,7 @@ impl BtreeTrans<'_> {
     fn sleep_on_allocator(&self, req: &mut c::alloc_request, err: BchError, cl: &Opaque<c::closure>) {
         let fs = self.fs();
         let blocked = err.matches(bch_errcode::BCH_ERR_bucket_alloc_blocked);
-        let until = jiffies().wrapping_add(c_ulong::from(fs.opts.allocator_stuck_timeout) * HZ);
+        let until = jiffies().wrapping_add(c_ulong::from(fs.opts.allocator_stuck_timeout.get()) * HZ);
 
         self.unlock();
 

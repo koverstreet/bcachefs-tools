@@ -247,7 +247,7 @@ pub unsafe fn bch2_promote_alloc(trans: &BtreeTrans<'_>, k: BkeySC<'_>, orig: &m
         return core::ptr::null_mut();
     }
 
-    let full = self_healing || *read_full || fs.opts().promote_whole_extents != 0;
+    let full = self_healing || *read_full || fs.opts().promote_whole_extents.get() != 0;
 
     let btree = if k.k.key_type() == c::bch_bkey_type::KEY_TYPE_reflink_v {
         c::btree_id::reflink

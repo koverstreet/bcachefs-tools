@@ -84,10 +84,10 @@ impl DevDrop<'_> {
         let fs = t.fs();
         let metadata = k.k.is_btree_ptr();
         let (replicas, lost, degraded, room) = if metadata {
-            (fs.opts.metadata_replicas, c::BCH_FORCE_IF_METADATA_LOST, c::BCH_FORCE_IF_METADATA_DEGRADED,
+            (fs.opts.metadata_replicas.get(), c::BCH_FORCE_IF_METADATA_LOST, c::BCH_FORCE_IF_METADATA_DEGRADED,
              c::BKEY_BTREE_PTR_U64s_MAX)
         } else {
-            (fs.opts.data_replicas, c::BCH_FORCE_IF_DATA_LOST, c::BCH_FORCE_IF_DATA_DEGRADED,
+            (fs.opts.data_replicas.get(), c::BCH_FORCE_IF_DATA_LOST, c::BCH_FORCE_IF_DATA_DEGRADED,
              c::BKEY_EXTENT_U64s_MAX)
         };
 

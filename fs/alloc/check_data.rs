@@ -167,7 +167,7 @@ pub fn kill_replica_if_checksum_bad(t: &TransAttempt<'_, '_>, btree: c::btree_id
     };
 
     let bytes = if is_btree_ptr {
-        fs.opts.btree_node_size as usize
+        fs.opts.btree_node_size.get() as usize
     } else {
         (p.crc.compressed_size as usize) << 9
     };

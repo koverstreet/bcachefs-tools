@@ -444,7 +444,7 @@ impl<'a> Moving<'a> {
         // XXX: these limits really ought to be per device, SSDs and hard
         // drives will want different limits
         let opts = fs.opts();
-        let (sectors, ios) = (opts.move_bytes_in_flight >> 9, opts.move_ios_in_flight);
+        let (sectors, ios) = (opts.move_bytes_in_flight.get() >> 9, opts.move_ios_in_flight.get());
         // compared unsigned, so a count gone negative is over the limit
         let under = |n: &core::sync::atomic::AtomicI32, max: u32| (n.load(Relaxed) as u32) < max;
         let io = self.io();
@@ -515,7 +515,7 @@ impl<'a> Moving<'a> {
     #[cold]
     fn to_text(&self, out: &mut Printbuf) {
         let opts = self.trans().fs().opts();
-        let (ios, sectors) = (opts.move_ios_in_flight, opts.move_bytes_in_flight >> 9);
+        let (ios, sectors) = (opts.move_ios_in_flight.get(), opts.move_bytes_in_flight.get() >> 9);
 
         if out.nr_tabstops() == 0 {
             out.tabstop_push(32);

@@ -653,7 +653,10 @@ pub struct Fs {
     #[c("struct bch_devs_mask devs_rotational")]
     pub devs_rotational: c::AtomicDevsMask,
 
-    pub opts: c::bch_opts,
+    /// The options: read by anyone, an option at a time - written under
+    /// sb_lock, which publishes them - Fs::opts_writer().
+    #[c("struct bch_opts opts")]
+    pub opts: LockedBy<(), c::PublishedOpts>,
     pub opt_change_lock: c::mutex,
     /// Odd while options change, bumped under opt_change_lock by
     /// OptChange, taking it and dropping it; read without it.

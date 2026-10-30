@@ -102,7 +102,7 @@ fn zstd_errcode(code: u32) -> e {
 }
 
 fn extent_max(fs: &Fs) -> usize {
-    fs.opts().encoded_extent_max as usize
+    fs.opts().encoded_extent_max.get() as usize
 }
 
 /// Compressing and decompressing want wildly different amounts of scratch
@@ -428,7 +428,7 @@ pub unsafe fn bch2_buf_uncompress(c: &Opaque<c::bch_fs>, dst: *mut c_void, src: 
  */
 fn decompress_err(fs: &Fs, ret: Result<(), BchError>) -> Result<(), BchError> {
     if let Err(err) = ret {
-        if fs.opts().no_data_io == 0 {
+        if fs.opts().no_data_io.get() == 0 {
             fs.sb_error_count(bch2_decompress_sb_err(err.raw()));
         }
     }
@@ -802,7 +802,7 @@ fn init_features(fs: &Fs, features: u64) -> Result<(), BchError> {
 pub fn bch2_fs_compress_init(c: &Opaque<c::bch_fs>) -> c_int {
     let fs = Fs::from_c(c);
     let opt = |v: u8| opt_feature(bch_compression_opt::bits(v).type_().into());
-    let f = fs.sb.features.get() | opt(fs.opts().compression) | opt(fs.opts().background_compression);
+    let f = fs.sb.features.get() | opt(fs.opts().compression.get()) | opt(fs.opts().background_compression.get());
     ret_to_c(init_features(fs, f))
 }
 

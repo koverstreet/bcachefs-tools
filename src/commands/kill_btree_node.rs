@@ -207,7 +207,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
 
     let fs = crate::device_scan::open_scan(&cli.devices, fs_opts)?;
 
-    let block_size = fs.opts().block_size as usize;
+    let block_size = fs.opts().block_size.get() as usize;
     let dev_idx = cli.dev.unwrap_or(-1);
 
     // O_DIRECT requires aligned buffers; bd_fd is opened with O_DIRECT

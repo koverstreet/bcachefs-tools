@@ -444,7 +444,7 @@ impl WidenCache {
     /// its disk label's RW members would let it have.
     pub fn can_widen(&mut self, fs: &Fs, s: &c::Stripe) -> Result<u8, BchError> {
         let nr_devs = self.lookup(fs, s.disk_label, s.sectors.get())?;
-        Ok(s.want_can_widen(nr_devs, fs.opts().ec_max_data_blocks.into()))
+        Ok(s.want_can_widen(nr_devs, fs.opts().ec_max_data_blocks.get().into()))
     }
 }
 

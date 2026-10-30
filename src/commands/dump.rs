@@ -581,8 +581,8 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
     let mut devs: Vec<DumpDev> = (0..nr_devices).map(|_| DumpDev::new()).collect();
 
     let entire_journal = !cli.nojournal;
-    let btree_node_size = fs.opts().btree_node_size as u64;
-    let block_size = fs.opts().block_size as u32;
+    let btree_node_size = fs.opts().btree_node_size.get() as u64;
+    let block_size = fs.opts().block_size.get() as u32;
 
     let mut nr_online = 0u32;
     for ca in fs.online_members() {

@@ -154,7 +154,7 @@ fn get_old_stripe(t: &TransAttempt<'_, '_>, s: &mut Internal, idx: u64)
     // members online or not, as the scan's is, so devices coming and going
     // don't churn every stripe's.
     let want = v.want_can_widen(fs.ec_rw_member_devs_nr(v.disk_label, v.sectors.get()),
-                                fs.opts().ec_max_data_blocks.into());
+                                fs.opts().ec_max_data_blocks.get().into());
     if v.can_widen() > want {
         t.bkey_make_mut(iter, old, UpdateTriggerFlags::empty())?.v_mut().bits.set_can_widen(want);
         return t.commit_lazy(None, CommitFlags::NO_ENOSPC).map(|()| None);

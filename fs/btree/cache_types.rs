@@ -52,6 +52,6 @@ impl Fs {
     /// Bytes of btree nodes cached.
     pub fn btree_cache_size(&self) -> u64 {
         let bc = &self.btree.cache;
-        ((bc.live[0].nr() + bc.live[1].nr()) * self.opts.btree_node_size as usize) as u64
+        ((bc.live[0].nr() + bc.live[1].nr()) * self.opts.btree_node_size.get() as usize) as u64
     }
 }

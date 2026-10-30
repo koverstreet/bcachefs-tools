@@ -69,7 +69,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     let entries_u64s = range.len() / 8;
 
     // btree_sectors(): a node's on-disk size, where a pointer has no crc
-    let mut size_ondisk = if is_btree_ptr { fs.opts().btree_node_size >> 9 } else { k.k.size };
+    let mut size_ondisk = if is_btree_ptr { fs.opts().btree_node_size.get() >> 9 } else { k.k.size };
     let mut nonce = None;
     let mut nr_ptrs = 0u32;
     let (mut have_written, mut have_unwritten, mut have_ec, mut crc_since_last_ptr) =
@@ -132,7 +132,7 @@ pub fn bkey_ptrs_validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
                                   id::ptr_crc_uncompressed_size_too_small,
                                   "checksum offset + key size > uncompressed size")?;
                 bkey_fsck_err_on!(v, crc_is_encoded(&crc) &&
-                                     crc.uncompressed_size > fs.opts().encoded_extent_max >> 9 &&
+                                     crc.uncompressed_size > fs.opts().encoded_extent_max.get() >> 9 &&
                                      v.from.flags().intersects(c::bch_validate_flags::BCH_VALIDATE_write |
                                                                c::bch_validate_flags::BCH_VALIDATE_commit),
                                   id::ptr_crc_uncompressed_size_too_big, "too large encoded extent")?;

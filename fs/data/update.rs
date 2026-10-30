@@ -347,7 +347,7 @@ impl c::data_update {
     /// the read filled in.
     fn bios_init(&mut self, io_opts: &c::bch_inode_opts, buf_bytes: u32) -> Result<(), BchError> {
         let fs = self.fs();
-        let block_size = u32::from(fs.opts().block_size);
+        let block_size = u32::from(fs.opts().block_size.get());
         let buf_bytes = buf_bytes.next_multiple_of(block_size);
         let nr_vecs = buf_bytes.div_ceil(crate::util::kernel::PAGE_SIZE as u32);
 
@@ -656,7 +656,7 @@ impl c::data_update {
             }
         }
 
-        if fs.opts().nocow_enabled != 0 {
+        if fs.opts().nocow_enabled.get() != 0 {
             let devs = &held.devs;
             held.nocow = Some(match nocow_locking::bkey_trylock(fs, k, devs, NocowKind::Copy) {
                 Some(l) => l,

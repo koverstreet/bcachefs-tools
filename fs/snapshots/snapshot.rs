@@ -1185,7 +1185,7 @@ fn validate(v: &BkeyValidate<'_, '_>) -> Result<(), BchError> {
     // to handle, gently). Zero state is legal - pre-upgrade keys are
     // rewritten with only their other fields touched:
     if v.from.from() == c::bkey_validate_from::BKEY_VALIDATE_commit &&
-       v.fs.opts().no_commit_validate == 0 {
+       v.fs.opts().no_commit_validate.get() == 0 {
         let state = if has_field!(k, state) { s.state.get() } else { 0 };
 
         bkey_fsck_err_on!(v, state != 0 && state_field(state).is_none(),

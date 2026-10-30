@@ -384,7 +384,7 @@ fn pin_backing(trans: &BtreeTrans<'_>, pins: &BtreeCachePins<'_>, lru: LruId) ->
         crate::bch_warn_ratelimited!(fs,
             "memory budget ({}% of ram) exhausted pinning btree {btree} at {}, requested range end {}; \
              continuing, lookups past this point will be uncached",
-            fs.opts.fsck_memory_usage_percent, pinned_end.pos, end.pos);
+            fs.opts.fsck_memory_usage_percent.get(), pinned_end.pos, end.pos);
     }
     Ok(())
 }

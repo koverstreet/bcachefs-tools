@@ -997,7 +997,7 @@ pub fn shard_cpu_init(fs: &Fs) {
     {
         use crate::util::kernel::{cpumask_local_spread, nr_cpu_ids};
 
-        let bits = fs.opts().shard_inode_numbers_bits as u32;
+        let bits = fs.opts().shard_inode_numbers_bits.get() as u32;
         if bits == 0 {
             return;
         }
@@ -1050,7 +1050,7 @@ fn cursor_range(fs: &Fs, idx: u64) -> (u64, u64) {
         (c::BLOCKDEV_INODE_MAX as u64, i32::MAX as u64)
     } else {
         let shard = idx - 1;
-        let bits = 63 - fs.opts().shard_inode_numbers_bits as u32;
+        let bits = 63 - fs.opts().shard_inode_numbers_bits.get() as u32;
 
         ((shard << bits).max(i32::MAX as u64 + 1),
          (shard << bits) | !(u64::MAX << bits))
@@ -1089,7 +1089,7 @@ fn alloc_cursor_get<'a, 't>(t: &TransAttempt<'a, 't>, is_32bit: bool)
     };
 
     let v = cursor.v_mut();
-    v.bits = fs.opts().shard_inode_numbers_bits;
+    v.bits = fs.opts().shard_inode_numbers_bits.get();
 
     if v.idx.get() < min {
         v.idx = min.into();
@@ -2000,7 +2000,7 @@ impl c::bch_inode_unpacked {
     /// bch2_inode_casefold(). Options are stored +1, 0 for unset.
     pub fn casefold(&self, fs: &Fs) -> bool {
         match self.bi_casefold {
-            0 => fs.opts().casefold != 0,
+            0 => fs.opts().casefold.get() != 0,
             v => v - 1 != 0,
         }
     }
