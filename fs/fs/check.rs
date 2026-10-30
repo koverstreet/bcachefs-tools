@@ -871,15 +871,12 @@ impl Fs {
 #[cfg(kernel)]
 pub mod ioctl {
     use super::*;
-    use crate::errcode::errptr_to_result;
     use crate::fs::{OpenFs, RoRef};
     use crate::init::passes::{bch2_recovery_passes, passes_match, run_passes};
     use crate::opts::parse_mount_opts_cstr;
-    use crate::util::ffi::c_char;
     use crate::util::kernel::{capable, Capability};
     use crate::util::thread_with_file::{StdioRedirect, ThreadWithFile};
     use crate::util::ioctl::{UserStr, UserVstruct};
-    use core::ptr::NonNull;
     use kernel::ffi::c_int;
 
     /// The options at user address @addr, or none if it's 0.
@@ -905,12 +902,8 @@ pub mod ioctl {
 
         let user_devs = user.tail(&arg);
         let mut devs = KVVec::with_capacity(user_devs.len(), GFP_KERNEL)?;
-        let mut dev_ptrs = KVVec::with_capacity(user_devs.len(), GFP_KERNEL)?;
         for i in 0..user_devs.len() {
             devs.push(UserStr::read(user_devs.get(i)?, c::PATH_MAX as usize)?, GFP_KERNEL)?;
-        }
-        for d in devs.iter() {
-            dev_ptrs.push(d.as_cstr().as_ptr().cast::<c_char>(), GFP_KERNEL)?;
         }
 
         let thr = ThreadWithFile::new_stdio(Ok(()))?;
@@ -921,13 +914,7 @@ pub mod ioctl {
         // We need request_key() to be called before we punt to kthread:
         opts.set_nostart(true);
 
-        // C only reads the list, and read_super() keeps a copy of each path
-        let mut dev_list = c::darray_const_str {
-            nr: dev_ptrs.len(), size: dev_ptrs.len(), data: dev_ptrs.as_mut_ptr(), preallocated: [],
-        };
-        let fs = unsafe { c::bch2_fs_open(&mut dev_list, &mut opts, core::ptr::null()) };
-        let fs = errptr_to_result(NonNull::new(fs).expect("a filesystem, or an error"))
-            .map(|fs| unsafe { OpenFs::from_raw(fs.cast()) });
+        let fs = OpenFs::open(devs.iter().map(UserStr::as_cstr), &mut opts, None);
 
         if let Ok(fs) = &fs {
             if fs.opts.errors() == c::bch_error_actions::BCH_ON_ERROR_panic {
