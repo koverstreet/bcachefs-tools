@@ -719,8 +719,9 @@ pub struct Fs {
     pub journal_replay_seq_end: u64,
     pub journal_entries: GenRadix<*mut c::journal_replay>,
     pub journal_entries_base_seq: u64,
+    #[pin]
+    #[init(c::journal_keys::init())]
     pub journal_keys: c::journal_keys,
-    pub journal_iters: c::list_head,
     /// The blacklist, in memory: journal/seq_blacklist.rs's alone.
     #[pin]
     #[init(RustOnly::new(::pin_init::zeroed::<crate::journal::seq_blacklist::JournalSeqBlacklist>()))]

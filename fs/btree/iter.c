@@ -1197,7 +1197,7 @@ static int btree_node_iter_and_journal_peek(struct btree_trans *trans,
 	struct bch_fs *c = trans->c;
 	struct btree_path_level *l = path_l(path);
 
-	struct btree_and_journal_iter jiter __cleanup(bch2_btree_and_journal_iter_exit);
+	struct btree_and_journal_iter jiter;
 	__bch2_btree_and_journal_iter_init_node_iter(trans, &jiter, l->b, l->iter, path->pos);
 
 	struct bkey_s_c k = bch2_btree_and_journal_iter_peek(c, &jiter);

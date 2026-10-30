@@ -7,14 +7,18 @@ use crate::types::c_default;
 use core::ffi::c_uint;
 use cstruct_macros::CStruct;
 
+/*
+ * A btree and level's journal keys, from @pos: at index @idx, as of the keys'
+ * seq @seq - after an insert, searched for again
+ */
 #[repr(C)]
 #[derive(Clone, Copy, CStruct)]
 pub struct journal_iter {
-    pub list: c::list_head,
     pub btree_id: c::btree_id,
     pub level: c_uint,
     pub idx: usize,
-    pub keys: *mut c::journal_keys,
+    pub seq: u64,
+    pub pos: c::bpos,
 }
 c_default!(journal_iter);
 

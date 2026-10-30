@@ -7,6 +7,7 @@ pub mod compat;
 pub mod cow_key;
 pub mod interior;
 pub mod iter;
+pub mod journal_overlay;
 pub mod locking;
 pub mod read;
 pub mod types;

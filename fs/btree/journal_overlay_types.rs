@@ -3,12 +3,17 @@
 #![allow(non_camel_case_types)]
 
 use crate::cstructs::c;
-use crate::types::{DArray, NeBytes, c_default};
+use crate::locking::Lock;
+use crate::types::{DArray, c_default};
 use crate::util::gap_buffer::GapBuffer;
+use crate::util::rcu::{RcuArray, RcuElement};
 use crate::util::vstructs::Head;
-use cstruct_macros::{bitfield, c_extern, CStruct};
+use crate::{new_lock, published};
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8, AtomicUsize};
+use cstruct_macros::{bitfield, CStruct, Init};
 use nestify::nest;
-use core::sync::atomic::AtomicI32;
+use pin_init::pin_data;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, CStruct)]
@@ -38,22 +43,17 @@ pub struct journal_replay {
 }
 c_default!(journal_replay);
 
-#[repr(C)]
-#[derive(Clone, Copy, Default, CStruct)]
-pub struct journal_key_range_overwritten {
-    pub start: usize,
-    pub end: usize,
-}
-
 nest! {
-    #[derive(Clone, Copy, CStruct)]*
+    #[derive(CStruct)]*
     #[repr(C)]
     pub struct journal_key {
         #[c_anon]
         #>[repr(C)]
+        #>[derive(Clone, Copy)]
         pub src: pub union journal_key_src {
             #[c_anon]
             #>[repr(C)]
+            #>[derive(Clone, Copy)]
             pub journal: pub struct journal_key_journal_pos {
                 pub journal_seq_offset: u32,
                 pub journal_offset: u32,
@@ -61,44 +61,87 @@ nest! {
             pub allocated_k: *mut c::bkey_i,
         },
         #[c_bitfield]
-        #>[derive(Clone, Copy, CStruct)]-
-        #>[bitfield(u32, repr = NeBytes<3>, from = NeBytes::<3>::from_u32, into = NeBytes::<3>::to_u32)]
-        pub bits: pub struct journal_key_bits {
+        #>[derive(CStruct)]-
+        #>[bitfield(u16)]
+        pub id: pub struct journal_key_id {
             #[bits(8)] pub btree_id: c::btree_id,
             level:       u8,
-            allocated:   bool,
-            overwritten: bool,
-            rewind:      bool,
-            __pad:       u13,
         },
-        pub overwritten_range: u32,
+        #[c_bitfield]
+        #>[derive(CStruct)]-
+        #>[bitfield(u8)]
+        pub flags: pub struct journal_key_flags {
+            allocated:   bool,
+            rewind:      bool,
+            __pad:       u6,
+        },
+        /*
+         * Set, and overwritten_range, under overwrite_lock, while the keys
+         * are read without it: in a byte of their own
+         */
+        pub overwritten: AtomicU8,
+        pub overwritten_range: AtomicU32,
     }
 }
 c_default!(journal_key);
 
+/// A run of overwritten keys, [start, end) by index, that a reader skips in
+/// one step: btree/journal_overlay.rs.
+#[repr(C)]
+#[derive(Default)]
+pub struct OverwriteRange {
+    pub start: AtomicUsize,
+    pub end:   AtomicUsize,
+}
+
+// SAFETY: atomics, valid zeroed, owning nothing
+unsafe impl RcuElement for OverwriteRange {}
+
+/* overwrite_lock's: how many of the ranges are in use, the first a sentinel */
 #[repr(C)]
 #[derive(CStruct)]
+pub struct OverwriteRanges {
+    pub overwrites_nr: usize,
+}
+
+published! {
+    /// The ranges, read without overwrite_lock under RCU: a key's
+    /// overwritten_range indexes them.
+    #[derive(CStruct)]
+    pub struct OverwriteRangesLive {
+        #[c_anon("void *overwrites")]
+        pub ranges: RcuArray<OverwriteRange>,
+    }
+}
+
+#[pin_data]
+#[repr(C)]
+#[derive(CStruct, Init)]
 pub struct journal_keys {
-    /* The keys, a gap buffer: util/gap_buffer.rs. C reads its fields as its own */
+    /*
+     * The keys, a gap buffer: util/gap_buffer.rs, whose fields C reads as
+     * its own. Written only where nothing else reads them: keys_mut()
+     */
     #[c_anon("size_t nr; size_t size; struct journal_key *data; struct journal_key preallocated[0]; size_t gap")]
-    pub keys: GapBuffer<c::journal_key>,
+    pub keys: UnsafeCell<GapBuffer<c::journal_key>>,
+    #[init(AtomicI32::new(1))]
     pub ref_: AtomicI32,
+    #[init(true)]
     pub initial_ref_held: bool,
+    /* Bumped by each insert: an iterator that saw another searches again */
+    pub seq: AtomicU64,
 
     /*
      * Keys inserted before journal_keys_sort() (e.g. from
      * bch2_dev_usage_init during offline device add). These survive
      * the reset in journal_keys_sort and get merged into the main
-     * array after sorting.
+     * array after sorting. Written as the keys are.
      */
-    pub pre_sort: DArray<c::journal_key>,
+    #[c_anon("DARRAY(struct journal_key) pre_sort")]
+    pub pre_sort: UnsafeCell<DArray<c::journal_key>>,
 
-    pub overwrite_lock: c::mutex,
-    pub overwrites: DArray<c::journal_key_range_overwritten>,
-}
-c_default!(journal_keys);
-
-c_extern! {
-    pub fn bch2_shoot_down_journal_keys(c: *mut c::bch_fs, btree: c::btree_id, level_min: u32, level_max: u32,
-                                        start: c::bpos, end: c::bpos);
+    #[pin]
+    #[init(new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&keys->overwrite_lock"))]
+    #[c_lock("struct mutex overwrite_lock")]
+    pub overwrites: Lock<c::mutex, OverwriteRanges, OverwriteRangesLive>,
 }

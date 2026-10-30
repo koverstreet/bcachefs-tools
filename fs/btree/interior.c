@@ -215,7 +215,7 @@ int bch2_btree_node_check_topology_msg(struct btree_trans *trans, struct btree *
 	struct bkey_buf prev __cleanup(bch2_bkey_buf_exit);
 	bch2_bkey_buf_init(&prev);
 
-	struct btree_and_journal_iter iter __cleanup(bch2_btree_and_journal_iter_exit);
+	struct btree_and_journal_iter iter;
 	bch2_btree_and_journal_iter_init_node_iter(trans, &iter, b);
 
 	/*

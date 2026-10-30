@@ -495,8 +495,6 @@ again:
 			 */
 			six_unlock_read(&cur->c.lock);
 			cur = NULL;
-
-			bch2_btree_and_journal_iter_exit(&iter);
 			goto again;
 		} else if (ret)
 			break;
@@ -525,8 +523,6 @@ again:
 
 	if (ret)
 		goto err;
-
-	bch2_btree_and_journal_iter_exit(&iter);
 
 	if (new_pass)
 		goto again;
@@ -586,8 +582,6 @@ fsck_err:
 		six_unlock_read(&prev->c.lock);
 	if (!IS_ERR_OR_NULL(cur))
 		six_unlock_read(&cur->c.lock);
-
-	bch2_btree_and_journal_iter_exit(&iter);
 
 	if (!ret && new_pass)
 		goto again;

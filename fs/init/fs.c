@@ -1107,7 +1107,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	bch2_fs_btree_gc_init_early(c);
 	bch2_fs_btree_init_early(c);
 	bch2_fs_journal_init_early(&c->journal);
-	bch2_fs_journal_keys_init(c);
 	bch2_fs_move_init(c);
 
 	INIT_LIST_HEAD(&c->list);
@@ -1115,8 +1114,6 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	mutex_init(&c->bio_bounce_pages_lock);
 
 	spin_lock_init(&c->write_error_lock);
-
-	INIT_LIST_HEAD(&c->journal_iters);
 
 	c->journal.flush_write_time	= &c->times[BCH_TIME_journal_flush_write];
 	c->journal.noflush_write_time	= &c->times[BCH_TIME_journal_noflush_write];

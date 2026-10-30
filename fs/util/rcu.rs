@@ -495,6 +495,12 @@ impl<T: RcuElement> RcuArrayWriter<T> {
         // guard
         unsafe { self.0.rebuild(nr, fill) }
     }
+
+    /// RcuArray::grow_to(): allocates, and may sleep.
+    pub fn grow_to(&self, nr: usize) -> Result<(), AllocError> {
+        // SAFETY: as rebuild()'s
+        unsafe { self.0.grow_to(nr) }
+    }
 }
 
 impl<T: RcuElement, H: RcuElement> RcuArrayWriter<T, H> {

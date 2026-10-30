@@ -6,6 +6,7 @@
 //! expected. Each is idempotent, so what it dirties is exactly what's new.
 
 use crate::btree::bkey::{POS_MIN, SPOS_MAX};
+use crate::btree::journal_overlay::shoot_down_journal_keys;
 use crate::c;
 use crate::errcode::{ret_to_c, BchError};
 use crate::fs::{btree_id_is_alloc, Fs};
@@ -165,9 +166,7 @@ fn reconstruct_alloc(fs: &Fs) {
 
     for btree in (0..fs.btree_id_nr_alive()).filter(|&b| btree_id_is_alloc(b)) {
         fs.btree.cache.roots.lock().get_mut(btree).expect("a btree below btree_id_nr_alive()").alive = 0;
-        // SAFETY: its keys, of btree @btree
-        unsafe { c::bch2_shoot_down_journal_keys(fs.as_ptr(), c::btree_id(btree), 0, c::BTREE_MAX_DEPTH,
-                                                 POS_MIN, SPOS_MAX) };
+        shoot_down_journal_keys(fs, c::btree_id(btree), 0, c::BTREE_MAX_DEPTH, POS_MIN, SPOS_MAX);
     }
 }
 

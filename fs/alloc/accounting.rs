@@ -1,5 +1,7 @@
+use crate::btree::bkey::BkeyI;
 use crate::btree::iter::TransAttempt;
 use crate::c;
+use core::mem::size_of;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::util::eytzinger::Eytzinger0;
@@ -171,6 +173,26 @@ pub struct AccountingEntry {
 impl AccountingEntry {
     pub fn counter(&self, i: usize) -> u64 {
         self.counters.get(i).copied().unwrap_or(0)
+    }
+}
+
+/// Accounting key @src's counters added to @dst's, as many as both have, and
+/// the newer version kept: bch2_accounting_accumulate().
+pub fn accumulate(dst: &mut BkeyI, src: &BkeyI) {
+    let n = dst.k.val_bytes().min(src.k.val_bytes()) / size_of::<u64>();
+    // SAFETY: an accounting key's value is its counters, u64s, as long as its
+    // header says
+    let (d, s) = unsafe {
+        (core::slice::from_raw_parts_mut((&raw mut dst.v).cast::<u64>(), n),
+         core::slice::from_raw_parts((&raw const src.v).cast::<u64>(), n))
+    };
+    for (d, s) in d.iter_mut().zip(s) {
+        *d = d.wrapping_add(*s);
+    }
+
+    let (dv, sv) = (dst.k.bversion, src.k.bversion);
+    if (dv.hi, dv.lo) < (sv.hi, sv.lo) {
+        dst.k.bversion = sv;
     }
 }
 

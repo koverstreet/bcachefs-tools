@@ -76,7 +76,6 @@ bcachefs-y		:=			\
 	btree/init.o				\
 	btree/interior.o			\
 	btree/iter.o				\
-	btree/journal_overlay.o			\
 	btree/key_cache.o			\
 	btree/locking.o				\
 	btree/node_scan.o			\
