@@ -6,7 +6,9 @@ use crate::c;
 use crate::cstructs::c as cs;
 #[cfg(feature = "std")]
 use crate::errcode::{bch_errcode, BchError};
+use crate::locking::Lock;
 use crate::types::{CacheAligned, DArray, NeBytes, bits_to_longs, c_default};
+use crate::util::projections::Volatile;
 use crate::util::vstructs::Head;
 use crate::util::ffi::c_char;
 use core::ffi::{c_int, c_long, c_uint, c_ulong, c_void};
@@ -245,39 +247,78 @@ pub struct btree_cache_list {
 }
 c_default!(btree_cache_list);
 
+/* On disk root - see async splits: */
 #[repr(C)]
 #[derive(CStruct)]
 pub struct btree_root {
-    pub b: *mut cs::btree,
-
-    /* On disk root - see async splits: */
     pub key: cs::bkey_i,
     pub key_pad: [u64; cs::BKEY_BTREE_PTR_VAL_U64s_MAX],
     pub level: u8,
     pub alive: u8,
-    pub error: i16,
 }
 c_default!(btree_root);
 
+/// root_lock's: each btree's root as the journal and the clean section
+/// record it - key, level, alive. The known btrees', and the rest's, which
+/// early journal replay adds as it finds them: the slots only move then.
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
-pub struct bch_fs_btree_cache {
-    /*
-     * Hot path: btree_path_lock_root reads root pointer + level per
-     * btree_id. We pack the level into the low 3 bits of the pointer so a
-     * single load yields both atomically (no torn read between b and
-     * b->c.level, no extra cacheline miss into the btree node to read
-     * level). See bch2_btree_root_{pack,unpack_b,unpack_level} in cache.h.
-     *
-     * Splitting this out of struct btree_root also keeps the read-side
-     * working set in a few cache lines instead of the full ~88 lines of
-     * roots_known[].
-     */
-    pub roots_b: [c_ulong; cs::BTREE_ID_NR as usize],
-
+#[derive(CStruct)]
+pub struct BtreeRoots {
     pub roots_known: [cs::btree_root; cs::BTREE_ID_NR as usize],
     pub roots_extra: DArray<cs::btree_root>,
-    pub root_lock: cs::mutex,
+}
+
+impl BtreeRoots {
+    /// Btree @id's: a known btree's, or past them, roots_extra's -
+    /// bch2_btree_id_root(). None for one past those.
+    pub fn get(&self, id: u32) -> Option<&cs::btree_root> {
+        let nr_known = u32::from(cs::btree_id::nr);
+        if id < nr_known {
+            return Some(&self.roots_known[id as usize]);
+        }
+        let idx = (id - nr_known) as usize;
+        // SAFETY: roots_extra's nr are its elements
+        (idx < self.roots_extra.nr).then(|| unsafe { &*self.roots_extra.data.add(idx) })
+    }
+}
+
+c_const! {
+    /* A packed root's level, in its node pointer's low bits */
+    #[c_int]
+    pub const BTREE_ROOT_LEVEL_BITS: u32 = 3;
+}
+
+crate::published! {
+    /// The roots as they're read without root_lock, by btree id: the root
+    /// node, packed with its level - so btree_path_lock_root() reads both in
+    /// one load, without a miss into the node - and the error reading it
+    /// left; and how many btrees there are past the known ones. Fixed at
+    /// BTREE_ID_NR_MAX, so nothing here moves when roots_extra grows.
+    #[derive(CStruct)]
+    pub struct BtreeRootsLive {
+        pub roots_b: [Volatile<c_ulong>; cs::BTREE_ID_NR_MAX as usize],
+        pub roots_error: [Volatile<i16>; cs::BTREE_ID_NR_MAX as usize],
+        pub roots_nr_extra: Volatile<u32>,
+    }
+}
+
+impl BtreeRootsLive {
+    /// Btree @id's root node: bch2_btree_id_root_b().
+    pub fn node(&self, id: u32) -> Option<&cs::btree> {
+        let b = self.roots_b.get(id as usize)?.get() & !((1 << cs::BTREE_ROOT_LEVEL_BITS) - 1);
+        // SAFETY: a root's node, live while it's the root
+        unsafe { (b as *const cs::btree).as_ref() }
+    }
+}
+
+#[pin_data]
+#[repr(C)]
+#[derive(CStruct, TypeInfo, Init)]
+pub struct bch_fs_btree_cache {
+    #[pin]
+    #[init(crate::new_lock!(<- ::pin_init::init_zeroed(), ::pin_init::zeroed(), "&bc->root_lock"))]
+    #[c_lock("struct mutex root_lock")]
+    pub roots: Lock<cs::mutex, BtreeRoots, BtreeRootsLive>,
 
     pub table: cs::rhashtable,
     pub table_init_done: bool,
@@ -339,7 +380,6 @@ pub struct bch_fs_btree_cache {
     /* btree id mask: 0 for leaves, 1 for interior */
     pub pinned_nodes_mask: [u64; 2],
 }
-c_default!(bch_fs_btree_cache);
 
 /* Iterator, update, and trigger flags: */
 
@@ -1068,6 +1108,8 @@ pub struct bch_fs_btree {
 
     pub root_journal_res: cs::journal_entry_res,
 
+    #[pin]
+    #[init(cs::bch_fs_btree_cache::init())]
     pub cache: cs::bch_fs_btree_cache,
     pub evicted_size: cs::btree_evicted_size,
     pub key_cache: cs::bch_fs_btree_key_cache,

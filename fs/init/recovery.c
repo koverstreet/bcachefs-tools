@@ -667,15 +667,18 @@ static int journal_replay_entry_early(struct bch_fs *c,
 				entry->btree_id, BTREE_ID_NR_MAX))
 			return 0;
 
+		guard(mutex)(&c->btree.cache.root_lock);
+
 		while (entry->btree_id >= c->btree.cache.roots_extra.nr + BTREE_ID_NR)
-			try(darray_push(&c->btree.cache.roots_extra, (struct btree_root) { NULL }));
+			try(darray_push(&c->btree.cache.roots_extra, (struct btree_root) {}));
+		WRITE_ONCE(c->btree.cache.roots_nr_extra, c->btree.cache.roots_extra.nr);
 
 		struct btree_root *r = bch2_btree_id_root(c, entry->btree_id);
 
 		r->level = entry->level;
 		bkey_copy(&r->key, (struct bkey_i *) entry->start);
-		r->error = 0;
 		r->alive = true;
+		WRITE_ONCE(c->btree.cache.roots_error[entry->btree_id], 0);
 		break;
 	}
 	case BCH_JSET_ENTRY_usage: {
@@ -760,16 +763,17 @@ static int read_btree_roots(struct bch_fs *c)
 		printbuf_reset(&buf);
 		bch2_btree_id_level_to_text(&buf, i, r->level);
 
-		if (mustfix_fsck_err_on((ret = r->error),
+		if (mustfix_fsck_err_on((ret = bch2_btree_id_root_error(c, i)),
 					c, btree_root_bkey_invalid,
 					"invalid btree root %s",
 					buf.buf) ||
-		    mustfix_fsck_err_on((ret = r->error = bch2_btree_root_read(c, i, &r->key, r->level)),
+		    mustfix_fsck_err_on((ret = bch2_btree_id_root_set_error(c, i,
+						bch2_btree_root_read(c, i, &r->key, r->level))),
 					c, btree_root_read_error,
 					"error reading btree root %s: %s",
 					buf.buf, bch2_err_str(ret))) {
 			if (btree_id_can_reconstruct(i))
-				r->error = 0;
+				bch2_btree_id_root_set_error(c, i, 0);
 			ret = 0;
 		}
 	}
@@ -777,7 +781,7 @@ static int read_btree_roots(struct bch_fs *c)
 	for (unsigned i = 0; i < BTREE_ID_NR; i++) {
 		struct btree_root *r = bch2_btree_id_root(c, i);
 
-		if (!r->b && !r->error) {
+		if (!bch2_btree_id_root_b(c, i) && !bch2_btree_id_root_error(c, i)) {
 			r->alive = false;
 			r->level = 0;
 			bch2_btree_root_alloc_fake(c, i, 0);

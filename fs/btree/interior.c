@@ -1664,12 +1664,9 @@ static void bch2_btree_set_root_inmem(struct bch_fs *c, struct btree *b)
 	scoped_guard(mutex_noio, &c->btree.cache.lock)
 		set_btree_node_permanent(b);
 
-	scoped_guard(mutex, &c->btree.cache.root_lock) {
-		bch2_btree_id_root(c, b->c.btree_id)->b = b;
-		if (likely(b->c.btree_id < BTREE_ID_NR))
-			WRITE_ONCE(c->btree.cache.roots_b[b->c.btree_id],
-				   bch2_btree_root_pack(b));
-	}
+	scoped_guard(mutex, &c->btree.cache.root_lock)
+		WRITE_ONCE(c->btree.cache.roots_b[b->c.btree_id],
+			   bch2_btree_root_pack(b));
 
 	bch2_recalc_btree_reserve(c);
 }
@@ -2373,7 +2370,7 @@ static int __btree_increase_depth(struct btree_update *as, struct btree_trans *t
 {
 	struct bch_fs *c = as->c;
 	struct btree_path *path = trans->paths + path_idx;
-	struct btree *b = bch2_btree_id_root(c, path->btree_id)->b;
+	struct btree *b = bch2_btree_id_root_b(c, path->btree_id);
 
 	int ret = bch2_btree_node_lock_write(trans, path, &b->c);
 	if (ret)
@@ -2418,7 +2415,7 @@ static int __btree_increase_depth(struct btree_update *as, struct btree_trans *t
 int bch2_btree_increase_depth(struct btree_trans *trans, btree_path_idx_t path, unsigned flags)
 {
 	struct bch_fs *c = trans->c;
-	struct btree *b = bch2_btree_id_root(c, trans->paths[path].btree_id)->b;
+	struct btree *b = bch2_btree_id_root_b(c, trans->paths[path].btree_id);
 
 	if (btree_node_fake(b))
 		return bch2_btree_split_leaf(trans, path, 0, flags);

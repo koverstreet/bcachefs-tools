@@ -604,18 +604,19 @@ static int bch2_topology_check_root(struct btree_trans *trans, enum btree_id btr
 {
 	struct bch_fs *c = trans->c;
 	struct btree_root *r = bch2_btree_id_root(c, btree);
+	int err = bch2_btree_id_root_error(c, btree);
 
-	if (!r->error)
+	if (!err)
 		return 0;
 
 	CLASS(bch_log_msg, msg)(c);
 	prt_printf(&msg.m, "btree root ");
 	bch2_btree_id_to_text(&msg.m, btree);
-	prt_printf(&msg.m, " unreadable: %s\n", bch2_err_str(r->error));
+	prt_printf(&msg.m, " unreadable: %s\n", bch2_err_str(err));
 
 	if (!btree_id_recovers_from_scan(btree)) {
 		r->alive = false;
-		r->error = 0;
+		bch2_btree_id_root_set_error(c, btree, 0);
 		bch2_btree_root_alloc_fake_trans(trans, btree, 0);
 		*reconstructed_root = true;
 
@@ -634,12 +635,12 @@ static int bch2_topology_check_root(struct btree_trans *trans, enum btree_id btr
 				       "%sbtree node scan found no nodes, continue?", msg.m.buf);
 
 			r->alive = false;
-			r->error = 0;
+			bch2_btree_id_root_set_error(c, btree, 0);
 			bch2_btree_root_alloc_fake_trans(trans, btree, 0);
 			*reconstructed_root = true;
 		} else {
 			r->alive = false;
-			r->error = 0;
+			bch2_btree_id_root_set_error(c, btree, 0);
 			bch2_btree_root_alloc_fake_trans(trans, btree, 1);
 			*reconstructed_root = true;
 
@@ -679,8 +680,7 @@ int bch2_check_topology(struct bch_fs *c)
 recover:
 		try(lockrestart_do(trans, bch2_topology_check_root(trans, i, &reconstructed_root)));
 
-		struct btree_root *r = bch2_btree_id_root(c, i);
-		struct btree *b = r->b;
+		struct btree *b = bch2_btree_id_root_b(c, i);
 
 		/*
 		 * XXX: _nofail() locks need to die in a fire.
@@ -725,11 +725,8 @@ recover:
 			 * node: the cache state machine BUG_ONs on reclaiming a
 			 * node that still says it's a root.
 			 */
-			scoped_guard(mutex, &c->btree.cache.root_lock) {
-				r->b = NULL;
-				if (likely(i < BTREE_ID_NR))
-					WRITE_ONCE(c->btree.cache.roots_b[i], 0);
-			}
+			scoped_guard(mutex, &c->btree.cache.root_lock)
+				WRITE_ONCE(c->btree.cache.roots_b[i], 0);
 
 			scoped_guard(mutex_noio, &c->btree.cache.lock)
 				clear_btree_node_permanent(b);
@@ -750,7 +747,7 @@ recover:
 			six_unlock_intent(&b->c.lock);
 
 			if (!reconstructed_root) {
-				r->error = -EIO;
+				bch2_btree_id_root_set_error(c, i, -EIO);
 				goto recover;
 			}
 
@@ -758,7 +755,7 @@ recover:
 			bch2_btree_id_to_text(&buf, i);
 			bch_err(c, "empty btree root %s", buf.buf);
 			bch2_btree_root_alloc_fake_trans(trans, i, 0);
-			r->alive = false;
+			bch2_btree_id_root(c, i)->alive = false;
 			ret = 0;
 		}
 
@@ -850,7 +847,7 @@ static int bch2_gc_btree_root(struct btree_trans *trans, enum btree_id btree, bo
 {
 	struct bch_fs *c = trans->c;
 	CLASS(btree_node_iter, iter)(trans, btree, POS_MIN, 0,
-				     bch2_btree_id_root(c, btree)->b->c.level, 0);
+				     bch2_btree_id_root_b(c, btree)->c.level, 0);
 	struct btree *b = errptr_try(bch2_btree_iter_peek_node(&iter));
 
 	if (b != btree_node_root(c, b))
@@ -901,7 +898,7 @@ static int bch2_gc_btrees(struct bch_fs *c)
 	for (unsigned i = 0; i < btree_id_nr_alive(c) && !ret; i++) {
 		unsigned btree = i < BTREE_ID_NR ? ids[i] : i;
 
-		if (IS_ERR_OR_NULL(bch2_btree_id_root(c, btree)->b))
+		if (IS_ERR_OR_NULL(bch2_btree_id_root_b(c, btree)))
 			continue;
 
 

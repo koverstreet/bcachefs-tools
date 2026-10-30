@@ -377,7 +377,7 @@ static void __bch2_btree_path_verify(struct btree_trans *trans,
 
 		if (!path->l[i].b) {
 			BUG_ON(!path->cached &&
-			       bch2_btree_id_root(c, path->btree_id)->b->c.level > i);
+			       bch2_btree_id_root_b(c, path->btree_id)->c.level > i);
 			break;
 		}
 
@@ -950,15 +950,17 @@ static inline int btree_path_lock_root(struct btree_trans *trans,
 		unsigned long root_packed = bch2_btree_id_root_packed(c, path->btree_id);
 		struct btree *b = bch2_btree_root_unpack_b(root_packed);
 		if (unlikely(!b)) {
-			struct btree_root *r = bch2_btree_id_root(c, path->btree_id);
-			if (!r || !test_bit(BCH_FS_btree_running, &c->flags))
+			if (path->btree_id >= btree_id_nr_alive(c) ||
+			    !test_bit(BCH_FS_btree_running, &c->flags))
 				return bch_err_throw(c, btree_not_started);
-			EBUG_ON(!r->error);
+
+			int err = bch2_btree_id_root_error(c, path->btree_id);
+			EBUG_ON(!err);
 			/*
 			 * Returning 0 here would spin: our caller loops until
 			 * the root is locked or we return an error
 			 */
-			return r->error ?: bch_err_throw(c, btree_root_error_unset);
+			return err ?: bch_err_throw(c, btree_root_error_unset);
 		}
 
 		path->level = bch2_btree_root_unpack_level(root_packed);
@@ -3571,7 +3573,7 @@ struct bkey_s_c bch2_btree_iter_peek_root(struct btree_trans *trans, struct btre
 {
 	struct bch_fs *c = trans->c;
 
-	while (level == bch2_btree_id_root(c, btree)->b->c.level + 1) {
+	while (level == bch2_btree_id_root_b(c, btree)->c.level + 1) {
 		bch2_trans_node_iter_init(trans, iter, btree, POS_MIN, 0, level - 1,
 					  BTREE_ITER_not_extents|
 					  BTREE_ITER_all_snapshots);
@@ -4185,13 +4187,13 @@ struct btree_trans *__bch2_trans_get(struct bch_fs *c, unsigned fn_idx)
 	struct btree_trans *trans = bch2_trans_alloc(c);
 
 	/*
-	 * Warm the btree root pointer cache lines: every btree access in this
-	 * trans goes through c->btree.cache.roots_b[], and the cold-line miss
+	 * Warm the known btrees' root pointer cache lines: every btree access in
+	 * this trans goes through c->btree.cache.roots_b[], and the cold-line miss
 	 * shows up as ~3-7% of cycles in bch2_btree_path_traverse_one's
 	 * lock_root path. Issuing the prefetches here lets them complete
 	 * during the rest of trans_get's setup work.
 	 */
-	for (unsigned i = 0; i < sizeof(c->btree.cache.roots_b); i += 64)
+	for (unsigned i = 0; i < BTREE_ID_NR * sizeof(c->btree.cache.roots_b[0]); i += 64)
 		prefetch((const char *) c->btree.cache.roots_b + i);
 
 	trans->c		= c;

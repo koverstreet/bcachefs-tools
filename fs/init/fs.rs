@@ -283,33 +283,13 @@ impl Fs {
         }
     }
 
-    /// Btree @id's root: a known btree's, or past them, roots_extra's -
-    /// bch2_btree_id_root(). None for one past those. An extra root moves when
-    /// roots_extra grows, which takes root_lock: as C's, it's for a caller
-    /// holding that, or before anything can grow it.
-    pub fn btree_root(&self, id: u32) -> Option<&c::btree_root> {
-        let cache = &self.btree.cache;
-        let nr_known = u32::from(c::btree_id::nr);
-
-        if id < nr_known {
-            return Some(&cache.roots_known[id as usize]);
-        }
-        let idx = (id - nr_known) as usize;
-        // SAFETY: roots_extra's nr are its elements; see above
-        (idx < cache.roots_extra.nr).then(|| unsafe { &*cache.roots_extra.data.add(idx) })
-    }
-
     pub fn btree_id_root(&self, id: u32) -> Option<&c::btree> {
-        // SAFETY: a root's node, live while it's the root
-        self.btree_root(id).and_then(|r| unsafe { r.b.as_ref() })
+        self.btree.cache.roots.node(id)
     }
 
     /// Total number of btree IDs (known + dynamic) on this filesystem.
     pub fn btree_id_nr_alive(&self) -> u32 {
-        unsafe {
-            let c = &*self.as_ptr();
-            u32::from(c::btree_id::nr) + c.btree.cache.roots_extra.nr as u32
-        }
+        u32::from(c::btree_id::nr) + self.btree.cache.roots.roots_nr_extra.get()
     }
 
     /// Number of devices in the filesystem superblock.

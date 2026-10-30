@@ -9,7 +9,6 @@
 
 use core::ffi::{c_uint, c_ulong};
 use core::mem::size_of;
-use core::ptr::NonNull;
 
 use cstruct_macros::c_export;
 
@@ -259,10 +258,8 @@ pub(crate) fn set_upgrade_incompat(sb: &mut c::bch_sb_buf, old: u32, new: u32) {
 impl Fs {
     /// Whether there's a stripes btree: a root read, not a fake one.
     fn have_stripes(&self) -> bool {
-        // NULL, or the root: a failed read is the root's error, not its node
-        let b = NonNull::new(self.btree.cache.roots_known[c::btree_id::BTREE_ID_stripes.0 as usize].b);
-        // SAFETY: a root node, live while it's the root
-        b.is_some_and(|b| !unsafe { b.as_ref() }.is_fake())
+        // None, or the root: a failed read is the root's error, not its node
+        self.btree_id_root(c::btree_id::BTREE_ID_stripes.0).is_some_and(|b| !b.is_fake())
     }
 
     /// What an upgrade past bucket_stripe_sectors needs on a filesystem with

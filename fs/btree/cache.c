@@ -124,14 +124,14 @@ void bch2_recalc_btree_reserve(struct bch_fs *c)
 {
 	unsigned reserve = 16;
 
-	if (!c->btree.cache.roots_known[0].b)
+	if (!bch2_btree_id_root_b(c, 0))
 		reserve += 8;
 
 	for (unsigned i = 0; i < btree_id_nr_alive(c); i++) {
-		struct btree_root *r = bch2_btree_id_root(c, i);
+		struct btree *b = bch2_btree_id_root_b(c, i);
 
-		if (r->b)
-			reserve += min_t(unsigned, 1, r->b->c.level) * 8;
+		if (b)
+			reserve += min_t(unsigned, 1, b->c.level) * 8;
 	}
 
 	c->btree.cache.nr_reserve = reserve;
@@ -1718,7 +1718,6 @@ out:
 
 void bch2_fs_btree_cache_init_early(struct bch_fs_btree_cache *bc)
 {
-	mutex_init(&bc->root_lock);
 	mutex_noio_init(&bc->lock);
 	for (unsigned i = 0; i < ARRAY_SIZE(bc->live); i++) {
 		bc->live[i].idx = i;
@@ -1976,9 +1975,9 @@ __cold void __bch2_btree_pos_to_text(struct printbuf *out, struct bch_fs *c,
 {
 	bch2_btree_id_to_text(out, btree);
 	prt_printf(out, " level %u/", level);
-	struct btree_root *r = bch2_btree_id_root(c, btree);
-	if (r)
-		prt_printf(out, "%u", r->level);
+	unsigned long root = bch2_btree_id_root_packed(c, btree);
+	if (root)
+		prt_printf(out, "%u", bch2_btree_root_unpack_level(root));
 	else
 		prt_printf(out, "(unknown)");
 	prt_newline(out);

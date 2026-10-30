@@ -213,9 +213,10 @@ static inline void bch2_btree_cache_update_throttle(struct bch_fs *c)
 
 static inline unsigned btree_id_nr_alive(struct bch_fs *c)
 {
-	return BTREE_ID_NR + c->btree.cache.roots_extra.nr;
+	return BTREE_ID_NR + READ_ONCE(c->btree.cache.roots_nr_extra);
 }
 
+/* A root's on-disk fields - key, level, alive: under root_lock */
 static inline struct btree_root *bch2_btree_id_root(struct bch_fs *c, unsigned id)
 {
 	if (likely(id < BTREE_ID_NR)) {
@@ -240,7 +241,6 @@ static inline struct btree_root *bch2_btree_id_root(struct bch_fs *c, unsigned i
  * and b->c.level — and avoids the cold-cacheline miss into the btree
  * node just to learn its level.
  */
-#define BTREE_ROOT_LEVEL_BITS	3
 #define BTREE_ROOT_LEVEL_MASK	((1UL << BTREE_ROOT_LEVEL_BITS) - 1)
 
 static inline unsigned long bch2_btree_root_pack(struct btree *b)
@@ -264,19 +264,14 @@ static inline unsigned bch2_btree_root_unpack_level(unsigned long v)
 }
 
 /*
- * Hot read of packed root pointer + level — avoids touching struct
- * btree_root, which is ~0xb0 (176 bytes) per entry, by reading from the
- * dedicated side-array. For id < BTREE_ID_NR this is a tight L1 access
- * (4 cache lines cover all standard btree roots); roots_extra still
- * falls through to the full struct.
+ * Hot read of packed root pointer + level, which root_lock publishes: for
+ * the known btrees, 4 cache lines.
  */
 static inline unsigned long bch2_btree_id_root_packed(struct bch_fs *c, unsigned btree_id)
 {
-	if (likely(btree_id < BTREE_ID_NR))
-		return READ_ONCE(c->btree.cache.roots_b[btree_id]);
-
-	struct btree_root *r = bch2_btree_id_root(c, btree_id);
-	return r ? bch2_btree_root_pack(READ_ONCE(r->b)) : 0;
+	return likely(btree_id < BTREE_ID_NR_MAX)
+		? READ_ONCE(c->btree.cache.roots_b[btree_id])
+		: 0;
 }
 
 static inline struct btree *bch2_btree_id_root_b(struct bch_fs *c, unsigned btree_id)
@@ -284,11 +279,24 @@ static inline struct btree *bch2_btree_id_root_b(struct bch_fs *c, unsigned btre
 	return bch2_btree_root_unpack_b(bch2_btree_id_root_packed(c, btree_id));
 }
 
+/* The error reading the root left, published as the root is */
+static inline int bch2_btree_id_root_error(struct bch_fs *c, unsigned btree_id)
+{
+	return likely(btree_id < BTREE_ID_NR_MAX)
+		? READ_ONCE(c->btree.cache.roots_error[btree_id])
+		: 0;
+}
+
+static inline int bch2_btree_id_root_set_error(struct bch_fs *c, unsigned btree_id, int err)
+{
+	guard(mutex)(&c->btree.cache.root_lock);
+	WRITE_ONCE(c->btree.cache.roots_error[btree_id], err);
+	return err;
+}
+
 static inline struct btree *btree_node_root(struct bch_fs *c, struct btree *b)
 {
-	struct btree_root *r = bch2_btree_id_root(c, b->c.btree_id);
-
-	return r ? r->b : NULL;
+	return bch2_btree_id_root_b(c, b->c.btree_id);
 }
 
 static inline bool btree_node_is_root(struct bch_fs *c, struct btree *b)
