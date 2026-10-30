@@ -888,11 +888,18 @@ pub struct btree_trans_buf {
 }
 c_default!(btree_trans_buf);
 
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct)]
+#[derive(CStruct, Init)]
 pub struct btree_transaction_stats {
+    #[pin]
+    #[init(cs::bch2_time_stats::init())]
     pub duration: cs::bch2_time_stats,
+    #[pin]
+    #[init(cs::bch2_time_stats::init())]
     pub lock_hold_times: cs::bch2_time_stats,
+    #[pin]
+    #[init(cs::bch2_time_stats::init())]
     pub lock_wait_times: cs::bch2_time_stats,
     pub lock: cs::mutex,
     pub nr_max_paths: c_uint,
@@ -901,15 +908,15 @@ pub struct btree_transaction_stats {
     pub trans_kmalloc_trace: cs::darray_trans_kmalloc_trace,
     pub max_paths_text: *mut c_char,
 }
-c_default!(btree_transaction_stats);
 
 c_const! {
     #[c_int]
     pub const BCH_TRANSACTIONS_NR: u32 = 128;
 }
 
+#[pin_data]
 #[repr(C)]
-#[derive(CStruct, TypeInfo)]
+#[derive(CStruct, TypeInfo, Init)]
 pub struct bch_fs_btree_trans {
     pub lock: cs::seqmutex,
     pub list: cs::list_head,
@@ -921,6 +928,8 @@ pub struct bch_fs_btree_trans {
     pub barrier: cs::srcu_struct,
     pub barrier_initialized: bool,
 
+    #[pin]
+    #[init(::pin_init::pin_init_array_from_fn(|_| cs::btree_transaction_stats::init()))]
     pub stats: [cs::btree_transaction_stats; cs::BCH_TRANSACTIONS_NR as usize],
 
     pub stats_json_lock: cs::mutex,
@@ -1094,6 +1103,8 @@ pub struct bch_fs_btree {
      * journal_keys_to_write_buffer_end after pin drops.
      */
     pub write_buffer_flush_wait: cs::closure_waitlist,
+    #[pin]
+    #[init(cs::bch_fs_btree_trans::init())]
     pub trans: cs::bch_fs_btree_trans,
     #[pin]
     #[init(cs::bch_fs_btree_reserve_cache::init())]

@@ -31,6 +31,7 @@ use crate::sb::counters::events;
 use crate::util::backref::BackRef;
 use crate::util::kernel::{current_id, local_clock, num_online_cpus};
 use crate::util::refcount::TryRefcount;
+use crate::util::time_stats::TimeStats;
 use crate::util::task::Spawn;
 use crate::util::workqueue::Queue;
 use crate::util::{Printbuf, ToText};

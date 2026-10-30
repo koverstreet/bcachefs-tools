@@ -55,6 +55,7 @@ pub mod strided;
 pub mod super_block;
 pub mod sysfs;
 pub mod task;
+pub mod time_stats;
 #[cfg(kernel)]
 pub mod thread_with_file;
 pub mod varint;

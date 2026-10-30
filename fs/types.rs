@@ -472,6 +472,8 @@ pub struct bch_dev {
 
     /* The rest of this all shows up in sysfs */
     pub cur_latency: [AtomicI64; 2],
+    #[pin]
+    #[init(::pin_init::pin_init_array_from_fn(|_| c::bch2_time_stats_quantiles::init()))]
     pub io_latency: [c::bch2_time_stats_quantiles; 2],
 
     pub congested: AtomicI32,
@@ -688,6 +690,8 @@ pub struct Fs {
     #[pin]
     #[init(crate::sb::counters::RecentCounters::init())]
     pub counters_recent: crate::util::workqueue::DelayedWork,
+    #[pin]
+    #[init(::pin_init::pin_init_array_from_fn(|_| c::bch2_time_stats::init()))]
     pub times: [c::bch2_time_stats; c::BCH_TIME_STAT_NR as usize],
     #[pin]
     #[init(c::bch_fs_errors::init())]

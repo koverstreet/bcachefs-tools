@@ -670,7 +670,7 @@ pub fn bch2_dev_latency_max(c: &Opaque<c::bch_fs>, devs: &c::bch_devs_mask, rw: 
     let fs = Fs::from_c(c);
     let rcu = read_lock();
     let ns = fs.devs_rcu_in(devs.d.iter(), &rcu)
-        .map(|ca| ca.io_latency[rw as usize].stats.max_duration)
+        .map(|ca| ca.io_latency[rw as usize].stats.lock.lock().max_duration)
         .max()
         .unwrap_or(0);
     nsecs_to_jiffies(ns)

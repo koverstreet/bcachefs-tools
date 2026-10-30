@@ -4536,9 +4536,6 @@ void bch2_fs_btree_iter_init_early(struct bch_fs *c)
 	for (s = c->btree.trans.stats;
 	     s < c->btree.trans.stats + ARRAY_SIZE(c->btree.trans.stats);
 	     s++) {
-		bch2_time_stats_init(&s->duration);
-		bch2_time_stats_init(&s->lock_hold_times);
-		bch2_time_stats_init(&s->lock_wait_times);
 		mutex_init(&s->lock);
 	}
 

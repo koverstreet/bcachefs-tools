@@ -102,7 +102,6 @@ c_extern! {
     pub fn bch2_ktime_get_ns() -> u64;
     pub fn bch2_num_online_cpus() -> c_uint;
     pub fn bch2_bdev_rot(bdev: *mut c::block_device) -> bool;
-    pub fn bch2_pr_time_units(out: *mut c::printbuf, ns: u64);
     pub fn bch2_prt_current_backtrace(out: *mut c::printbuf, skipnr: c_uint, gfp: c::gfp_t) -> c_int;
     pub fn bch2_get_random_u64() -> u64;
     pub fn bch2_queue_work(wq: *mut c::workqueue_struct, work: *mut c::work_struct) -> bool;

@@ -45,6 +45,7 @@ use crate::sb::counters::events;
 use crate::util::Printbuf;
 use crate::util::kernel::{unlikely, WRITE};
 use crate::util::rcu::read_lock;
+use crate::util::time_stats::TimeStats;
 use core::sync::atomic::Ordering::Relaxed;
 use cstruct_macros::c_export;
 

@@ -158,8 +158,6 @@ do {									\
 #define prt_bitflags(...)		bch2_prt_bitflags(__VA_ARGS__)
 #define prt_bitflags_vector(...)	bch2_prt_bitflags_vector(__VA_ARGS__)
 
-void bch2_pr_time_units(struct printbuf *, u64);
-
 #ifdef __KERNEL__
 static inline void uuid_unparse_lower(u8 *uuid, char *out)
 {
@@ -260,10 +258,6 @@ void bch2_print_string_as_lines(const char *, const char *);
 
 int bch2_save_backtrace(bch_stacktrace *stack, struct task_struct *, unsigned, gfp_t);
 int bch2_prt_task_backtrace(struct printbuf *, struct task_struct *, unsigned, gfp_t);
-
-void bch2_time_stats_to_text(struct printbuf *, struct bch2_time_stats *);
-void bch2_time_stats_json_to_text(struct printbuf *, struct bch2_time_stats *,
-				  const char *epoch_name, unsigned int flags);
 
 #define ewma_add(ewma, val, weight)					\
 ({									\

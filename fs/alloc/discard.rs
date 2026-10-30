@@ -68,6 +68,7 @@ use crate::sb::members::DevIoRef;
 use crate::util::alloc::{flags::GFP_KERNEL, KVVec};
 use crate::util::bio::{Bio, BioBox, BioOwner, Endio, RawBio};
 use crate::util::ffi::Opaque;
+use crate::util::time_stats::TimeStats;
 use crate::util::futex::{futex_wait, futex_wake};
 use crate::util::gather::{Gather, GatherRef};
 use crate::util::kernel::{bdev_max_discard_sectors, local_clock, unlikely, READ};

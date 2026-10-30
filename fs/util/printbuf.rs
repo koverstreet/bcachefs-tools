@@ -454,7 +454,7 @@ pub struct HumanReadable<T = u64>(pub T);
 pub struct DateTime(pub i64);
 
 /// A duration in nanoseconds, in the largest unit it has two of, truncated:
-/// bch2_pr_time_units().
+/// util/time_stats.rs's.
 pub struct Nsecs(pub u64);
 
 impl ToText for Bytes {
@@ -487,12 +487,6 @@ impl ToText for HumanReadable<i64> {
 impl ToText for DateTime {
     fn to_text(&self, out: &mut Printbuf) {
         unsafe { c::bch2_prt_datetime(&mut out.0, self.0) };
-    }
-}
-
-impl ToText for Nsecs {
-    fn to_text(&self, out: &mut Printbuf) {
-        unsafe { c::bch2_pr_time_units(&mut out.0, self.0) };
     }
 }
 

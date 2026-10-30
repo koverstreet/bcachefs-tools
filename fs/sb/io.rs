@@ -154,6 +154,7 @@ use crate::util::bio::{Bio, BioBuf, BioBufPtr, BioOwner};
 use crate::util::gather::Gather;
 use crate::util::ffi::{c_char, Opaque};
 use crate::util::kernel::NSEC_PER_SEC;
+use crate::util::time_stats::TimeStats;
 use cstruct_macros::{c_const, c_export};
 use core::mem::{size_of, size_of_val};
 use arrayvec::ArrayVec;

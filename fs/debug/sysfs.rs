@@ -42,6 +42,7 @@ use crate::prt;
 use crate::util::ffi::c_char;
 use crate::util::kernel::{READ, WRITE};
 use crate::util::log::LogMsg;
+use crate::util::time_stats::TimeStats;
 use crate::util::refcount::TryRefcount;
 use crate::util::sysfs::{self, parse_human_u64, parse_int, Attr, Dir, Files, ListAttrs};
 use crate::util::{HumanReadable, Printbuf, ToText};
@@ -577,10 +578,10 @@ const DEV: &[Attr<c::bch_dev>] = &[
 
     Attr::ro(c"io_latency_read",        |ca, out| writeln!(out, "{}", ca.cur_latency(READ))),
     Attr::ro(c"io_latency_write",       |ca, out| writeln!(out, "{}", ca.cur_latency(WRITE))),
-    Attr::ro(c"io_latency_stats_read",  |ca, out| ca.io_latency[READ].stats.to_text(out)),
-    Attr::ro(c"io_latency_stats_write", |ca, out| ca.io_latency[WRITE].stats.to_text(out)),
-    Attr::ro(c"io_latency_stats_read_json",  |ca, out| ca.io_latency[READ].stats.json_to_text(out)),
-    Attr::ro(c"io_latency_stats_write_json", |ca, out| ca.io_latency[WRITE].stats.json_to_text(out)),
+    Attr::ro(c"io_latency_stats_read",  |ca, out| ca.io_latency[READ].to_text(out)),
+    Attr::ro(c"io_latency_stats_write", |ca, out| ca.io_latency[WRITE].to_text(out)),
+    Attr::ro(c"io_latency_stats_read_json",  |ca, out| ca.io_latency[READ].json_to_text(out)),
+    Attr::ro(c"io_latency_stats_write_json", |ca, out| ca.io_latency[WRITE].json_to_text(out)),
     #[cfg(not(CONFIG_BCACHEFS_NO_LATENCY_ACCT))]
     Attr::ro(c"congested",              |ca, out| ca.congested_to_text(out)),
 

@@ -35,6 +35,7 @@ use crate::types::CacheAligned;
 use crate::util::futex::EventCount;
 use crate::util::hash::hash_64;
 use crate::util::kernel::local_clock;
+use crate::util::time_stats::TimeStats;
 use crate::util::sleep::Sleep;
 use crate::util::{Printbuf, ToText};
 use crate::warn_on_once;

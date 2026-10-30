@@ -59,6 +59,7 @@ use crate::types::RustOnly;
 use crate::util::alloc::flags::GFP_KERNEL;
 use crate::util::alloc::init_at;
 use crate::util::closure::{closure_has_waiters, closure_wait, closure_wake_up, StackClosure};
+use crate::util::time_stats::TimeStats;
 use crate::util::ffi::Opaque;
 use crate::util::hash::{hash_64, Fold};
 use crate::util::inline_vec::InlineVec;
